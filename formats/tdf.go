@@ -74,7 +74,10 @@ func ParseTDFWithLimits(data []byte, limits TDFLimits) (*Document, error) {
 	if len(data) > limits.MaxBytes {
 		return nil, fmt.Errorf("tdf: document size %d exceeds limit %d", len(data), limits.MaxBytes)
 	}
-	p := tdfParser{data: data, line: 1, column: 1, limits: limits}
+	// Comments are blanked to spaces before the grammar runs, preserving every
+	// character offset [02 §4]. The parser's own inline comment handling stays
+	// as a safety net for callers that pass pre-blanked text.
+	p := tdfParser{data: blankComments(data), line: 1, column: 1, limits: limits}
 	root := &Section{}
 	if err := p.parseBlock(root, false); err != nil {
 		return nil, err
@@ -244,13 +247,13 @@ func (p *tdfParser) parseBlock(section *Section, untilClose bool) error {
 		p.skipSpaceAndComments()
 		if p.pos >= len(p.data) {
 			if untilClose {
-				return p.errorf("unterminated section")
+				return p.diag(DiagNextBlock, section.OriginalName, "")
 			}
 			return nil
 		}
 		if p.data[p.pos] == '}' {
 			if !untilClose {
-				return p.errorf("unexpected '}'")
+				return p.diag(DiagNextBlock, section.OriginalName, "")
 			}
 			p.advance()
 			return nil
@@ -293,12 +296,12 @@ func (p *tdfParser) parseSection() (*Section, error) {
 	start := p.pos
 	for p.pos < len(p.data) && p.data[p.pos] != ']' {
 		if p.data[p.pos] == '\n' || p.data[p.pos] == '\r' {
-			return nil, p.errorf("section name crosses a line")
+			return nil, p.diag(DiagClosingBracket, strings.TrimSpace(string(p.data[start:p.pos])), "")
 		}
 		p.advance()
 	}
 	if p.pos >= len(p.data) {
-		return nil, p.errorf("unterminated section name")
+		return nil, p.diag(DiagClosingBracket, strings.TrimSpace(string(p.data[start:p.pos])), "")
 	}
 	original := strings.TrimSpace(string(p.data[start:p.pos]))
 	if p.pos-start > p.limits.MaxNameBytes {
@@ -307,7 +310,7 @@ func (p *tdfParser) parseSection() (*Section, error) {
 	p.advance() // ']'
 	p.skipSpaceAndComments()
 	if p.pos >= len(p.data) || p.data[p.pos] != '{' {
-		return nil, p.errorf("section %q is missing '{'", original)
+		return nil, p.diag(DiagOpeningBrace, original, "")
 	}
 	p.advance()
 	section := &Section{Name: foldName(original), OriginalName: original, Line: line, Column: column}
@@ -330,12 +333,12 @@ func (p *tdfParser) parseAssignment() (Item, error) {
 	start := p.pos
 	for p.pos < len(p.data) && p.data[p.pos] != '=' {
 		if p.data[p.pos] == '[' || p.data[p.pos] == '}' || p.data[p.pos] == ';' {
-			return Item{}, p.errorf("expected '=' after key")
+			return Item{}, p.diag(DiagEqualsNotFound, strings.TrimSpace(string(p.data[start:p.pos])), "")
 		}
 		p.advance()
 	}
 	if p.pos >= len(p.data) {
-		return Item{}, p.errorf("assignment is missing '='")
+		return Item{}, p.diag(DiagEqualsNotFound, strings.TrimSpace(string(p.data[start:p.pos])), "")
 	}
 	originalKey := strings.TrimSpace(string(p.data[start:p.pos]))
 	if p.pos-start > p.limits.MaxNameBytes {
@@ -400,7 +403,7 @@ func (p *tdfParser) readValue() (string, error) {
 		value.WriteByte(p.data[p.pos])
 		p.advance()
 	}
-	return "", p.errorf("assignment is missing ';'")
+	return "", p.diag(DiagSemicolonMissing, "", strings.TrimSpace(value.String()))
 }
 
 func (p *tdfParser) implicitValueBoundary(pos int) bool {
@@ -472,4 +475,13 @@ func (p *tdfParser) advance() {
 
 func (p *tdfParser) errorf(format string, args ...any) error {
 	return fmt.Errorf("tdf: line %d column %d: %s", p.line, p.column, fmt.Sprintf(format, args...))
+}
+
+// diag returns one of retail's five verbatim parse diagnostics [02 §4],
+// carrying the position and the partial name/value the tokenizer had scanned.
+func (p *tdfParser) diag(d ParseDiagnostic, name, value string) error {
+	return &ParseError{
+		Diagnostic: d, Name: name, Value: value,
+		Offset: p.pos, Line: p.line, Column: p.column,
+	}
 }

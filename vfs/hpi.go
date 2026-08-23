@@ -207,7 +207,7 @@ func (a *Archive) index() error {
 	// Key derivation uses only the low byte (02:132-135). Stored 0 means plain.
 	if headerKeyWord != 0 {
 		keyByte := byte(headerKeyWord & 0xFF)
-		derived := byte((keyByte>>6) | (keyByte << 2))
+		derived := byte((keyByte >> 6) | (keyByte << 2))
 		workingKeyByte := ^derived
 		workingKey := uint32(workingKeyByte)
 		// Transform every byte from offset 0x14 onward: plain = ((pos)&FF) XOR key XOR NOT cipher (02:140).

@@ -2,6 +2,7 @@ package formats
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -66,7 +67,7 @@ func LoadGUI(data []byte) (*GUI, error) {
 		return loadBinaryGUI(data), nil
 	}
 	repaired := false
-	if err != nil && strings.Contains(err.Error(), "unterminated section") {
+	if err != nil && isUnterminatedSection(err) {
 		// A retail SCORE.GUI ends after the final assignment without the
 		// enclosing gadget brace. Recover only this bounded EOF-tail case;
 		// other structural errors remain hard failures.
@@ -318,4 +319,16 @@ func makeSectionView(section *Section) *SectionView {
 		view.Child = append(view.Child, makeSectionView(item.Section))
 	}
 	return view
+}
+
+// isUnterminatedSection reports the bounded EOF-tail malformation retail's own
+// GUI files carry: a gadget section that runs to end of file without its
+// closing brace. The parser reports it as the verbatim end-of-file diagnostic
+// [02 §4].
+func isUnterminatedSection(err error) bool {
+	var parseErr *ParseError
+	if errors.As(err, &parseErr) {
+		return parseErr.Diagnostic == DiagNextBlock
+	}
+	return strings.Contains(err.Error(), "unterminated section")
 }

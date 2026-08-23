@@ -1,0 +1,53 @@
+package formats
+
+import "testing"
+
+// TestTypedAccessors locks the accessor family's rules [02 §4].
+func TestTypedAccessors(t *testing.T) {
+	document, err := ParseTDF([]byte("[A] { i=  -12abc; f=2.5xyz; fx=1.5; empty=; junk=zzz; }"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := document.Root.Section("a")
+
+	if got := section.IntValue("i", 99); got != -12 {
+		t.Fatalf("IntValue = %d, want -12 (trailing junk ignored)", got)
+	}
+	if got := section.IntValue("missing", 99); got != 99 {
+		t.Fatalf("absent IntValue = %d, want the caller default", got)
+	}
+	if got := section.IntValue("junk", 99); got != 0 {
+		t.Fatalf("unparsable IntValue = %d, want 0", got)
+	}
+	if got := section.FloatValue("f", 9); got != 2.5 {
+		t.Fatalf("FloatValue = %v, want 2.5", got)
+	}
+	// The fixed-point default is stored verbatim: it is already 16.16.
+	if got := section.FixedValue("fx", 65536); got != 98304 {
+		t.Fatalf("FixedValue(1.5) = %d, want 98304", got)
+	}
+	if got := section.FixedValue("missing", 65536); got != 65536 {
+		t.Fatalf("absent FixedValue = %d, want the verbatim default 65536", got)
+	}
+	// A string field distinguishes authored-empty from missing; a numeric one
+	// cannot distinguish authored-zero from missing.
+	if value, found := section.StringValue("empty", "fallback"); !found || value != "" {
+		t.Fatalf("StringValue(empty) = %q, found=%v; want authored empty", value, found)
+	}
+	if value, found := section.StringValue("missing", "fallback"); found || value != "fallback" {
+		t.Fatalf("StringValue(missing) = %q, found=%v", value, found)
+	}
+	if !section.BoolValue("i", false) || section.BoolValue("missing", false) {
+		t.Fatal("BoolValue must be numeric-nonzero with a caller default")
+	}
+}
+
+// TestFixedTruncatesTowardZero: the conversion truncates, it does not round.
+func TestFixedFromAuthoredTruncates(t *testing.T) {
+	if got := FixedFromAuthored(-1.5); got != -98304 {
+		t.Fatalf("FixedFromAuthored(-1.5) = %d, want -98304", got)
+	}
+	if got := FixedFromAuthored(0.0000001); got != 0 {
+		t.Fatalf("sub-unit value did not truncate to zero: %d", got)
+	}
+}

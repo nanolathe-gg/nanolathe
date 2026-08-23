@@ -77,7 +77,71 @@ type mountedProvider struct {
 type FS struct {
 	mounts    []mountedProvider
 	nextOrder int
+	mountedBy map[string]string // canonical full path -> provider already holding it
+	notes     []string          // mount-time observations worth reporting
 }
+
+// ProviderInfo identifies one mounted provider in precedence order.
+type ProviderInfo struct {
+	ID         string // archive path, or the directory root for a loose mount
+	Type       string // "hpi", "directory", ...
+	Priority   int
+	MountOrder int
+	Files      int
+}
+
+// Providers lists the mounted set, best-precedence first. Diagnostics name
+// providers with this rather than with per-entry source paths, which for a
+// loose mount are individual files.
+func (f *FS) Providers() []ProviderInfo {
+	ordered := f.orderedMounts()
+	infos := make([]ProviderInfo, 0, len(ordered))
+	for _, mount := range ordered {
+		info := ProviderInfo{Priority: mount.priority, MountOrder: mount.order}
+		for _, entry := range mount.provider.auditEntries() {
+			if entry.Path == "" && entry.IsDir {
+				// The provider's own root: for a loose mount this is the
+				// directory, which is the identity we want to report.
+				info.Type = entry.Source.ProviderType
+				info.ID = entry.Source.SourcePath
+				continue
+			}
+			if entry.IsDir {
+				continue
+			}
+			info.Files++
+			if info.Type == "" {
+				info.Type = entry.Source.ProviderType
+			}
+			if info.ID == "" {
+				if entry.Source.ProviderType == "directory" {
+					// Loose entries carry per-file host paths; recover the
+					// mount root by trimming the logical path, which is folded
+					// to lower case and so cannot be compared byte-for-byte.
+					host := filepath.ToSlash(entry.Source.SourcePath)
+					if n := len(host) - len(entry.Path); n > 0 &&
+						strings.EqualFold(host[n:], entry.Path) {
+						info.ID = strings.TrimSuffix(host[:n], "/")
+					} else {
+						info.ID = host
+					}
+				} else {
+					info.ID = entry.Source.SourcePath
+				}
+			}
+		}
+		if info.ID == "" {
+			info.ID = info.Type
+		}
+		infos = append(infos, info)
+	}
+	return infos
+}
+
+// Notes returns mount-time observations a caller should surface: suppressed
+// duplicate mounts, and the archive-count remark described in
+// docs/SPEC_CONFLICTS.md SC1.
+func (f *FS) Notes() []string { return append([]string(nil), f.notes...) }
 
 // MountTier is an explicit content-overlay tier. Higher tiers win. Retail
 // checks loose files first, then scans archive groups in GP3, CCX, UFO, HPI
@@ -287,6 +351,31 @@ func (f *FS) MountGameDirectory(root string) error {
 	return f.MountGameDirectoryWithPlan(root, DefaultRetailMountPlan())
 }
 
+// canonicalMountKey folds a provider path the way retail's mount dedup does:
+// full path, compared case-insensitively [02 §2].
+func canonicalMountKey(name string) string {
+	abs, err := filepath.Abs(name)
+	if err != nil {
+		abs = name
+	}
+	return strings.ToLower(filepath.Clean(abs))
+}
+
+// noteDuplicateMount records and reports a suppressed duplicate. Retail
+// suppresses the second mount of an equal full path [02 §2].
+func (f *FS) alreadyMounted(name string) bool {
+	key := canonicalMountKey(name)
+	if f.mountedBy == nil {
+		f.mountedBy = make(map[string]string)
+	}
+	if first, ok := f.mountedBy[key]; ok {
+		f.notes = append(f.notes, fmt.Sprintf("duplicate mount suppressed: %s (already mounted as %s)", name, first))
+		return true
+	}
+	f.mountedBy[key] = name
+	return false
+}
+
 func (f *FS) MountGameDirectoryWithPlan(root string, plan MountPlan) error {
 	if err := plan.Validate(); err != nil {
 		return err
@@ -316,6 +405,20 @@ func (f *FS) MountGameDirectoryWithPlan(root string, plan MountPlan) error {
 		}
 		return archives[i].Name() < archives[j].Name()
 	})
+	// Retail's documented ten-archive cap on local HPI [02 §2] is not applied:
+	// a full install carries thirteen and plays. Applying it would drop map and
+	// campaign archives. See docs/SPEC_CONFLICTS.md SC1.
+	localHPI := 0
+	for _, entry := range archives {
+		if strings.EqualFold(filepath.Ext(entry.Name()), ".hpi") {
+			localHPI++
+		}
+	}
+	if localHPI > 10 {
+		f.notes = append(f.notes, fmt.Sprintf(
+			"%d local HPI archives mounted; retail documents a cap of 10 (docs/SPEC_CONFLICTS.md SC1)", localHPI))
+	}
+
 	for _, entry := range archives {
 		extension := strings.ToLower(filepath.Ext(entry.Name()))
 		tier := plan.HPI
@@ -329,7 +432,11 @@ func (f *FS) MountGameDirectoryWithPlan(root string, plan MountPlan) error {
 		case ".ufo":
 			tier = plan.UFO
 		}
-		if _, err := f.MountArchive(filepath.Join(root, entry.Name()), int(tier)*10); err != nil {
+		full := filepath.Join(root, entry.Name())
+		if f.alreadyMounted(full) {
+			continue
+		}
+		if _, err := f.MountArchive(full, int(tier)*10); err != nil {
 			return err
 		}
 	}

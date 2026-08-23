@@ -22,8 +22,12 @@ func LoadPCX(data []byte) (*PCX, error) {
 	if len(data) < 128+769 {
 		return nil, fmt.Errorf("pcx: file is too small")
 	}
-	if data[0] != 0x0a || data[1] != 5 || data[2] != 1 || data[3] != 8 || data[65] != 1 {
-		return nil, fmt.Errorf("pcx: unsupported header (need version 5, 8bpp, one plane, RLE)")
+	// Retail validates ONLY the manufacturer byte and the version byte;
+	// encoding, pixel depth and plane count are unchecked because the RLE logic
+	// implies them [02 §7 "PCX"]. Checking them here would reject files retail
+	// accepts.
+	if data[0] != 0x0a || data[1] != 5 {
+		return nil, fmt.Errorf("pcx: unsupported header (manufacturer %#02x version %d, need 0x0a/5)", data[0], data[1])
 	}
 	xMin := binary.LittleEndian.Uint16(data[4:6])
 	yMin := binary.LittleEndian.Uint16(data[6:8])
@@ -44,10 +48,9 @@ func LoadPCX(data []byte) (*PCX, error) {
 	if width*height > uint64(^uint(0)>>1) || width*height > maxPCXPixels {
 		return nil, fmt.Errorf("pcx: image is too large")
 	}
+	// The palette is read by seeking to file size minus 768, without any check
+	// of the marker byte the format defines [02 §7 "PCX"].
 	trailer := len(data) - 769
-	if data[trailer] != 0x0c {
-		return nil, fmt.Errorf("pcx: missing palette marker")
-	}
 	pcx := &PCX{Width: uint16(width), Height: uint16(height), XMin: xMin, YMin: yMin, XMax: xMax, YMax: yMax, BytesPerLine: uint16(stride), Pixels: make([]byte, int(width*height))}
 	for i := 0; i < 256; i++ {
 		base := trailer + 1 + i*3
@@ -71,8 +74,11 @@ func LoadPCX(data []byte) (*PCX, error) {
 				value = data[position]
 				position++
 			}
+			// Every run is clamped to the remaining scanline width and the
+			// excess discarded, so malformed files cannot overflow a scanline
+			// [02 §7 "PCX"]. Retail does not fail here.
 			if decoded+run > int(stride) {
-				return nil, fmt.Errorf("pcx: RLE run exceeds scanline")
+				run = int(stride) - decoded
 			}
 			for i := 0; i < run; i++ {
 				if decoded+i < int(width) {
