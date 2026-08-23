@@ -1,0 +1,8 @@
+PLAN_*.md
+**.DS_Store
+**.test
+REVIEW*.md
+HANDOFF*
+.oracle/
+.claude/
+.worktrees/
