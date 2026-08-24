@@ -507,8 +507,11 @@ func TestAttackChaseOrbit(t *testing.T) {
 		if code == Code(7) {
 			t.Fatalf("substate %d should not cancel", expected)
 		}
-		if code != Code(2) {
-			t.Fatalf("orbit expected Code(2) got %d", code)
+		// The orbit cadence is unestablished (TODO(question) in the handler);
+		// it waits like its neighbours rather than returning Code(2), which
+		// would re-dispatch the same head forever.
+		if code != Code(3) {
+			t.Fatalf("orbit expected Code(3) got %d", code)
 		}
 	}
 	if n.Param2 != 0 {

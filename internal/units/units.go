@@ -40,8 +40,14 @@ type Unit struct {
 	X, Y, Z   numeric.Fixed
 	Health    int32 // current health; max from Def?
 	MaxHealth int32
-	Alive     bool // alive vs death mark separate [04 §2.4] C2
-	// Build progress remaining 1→0 [04 §2.3] C3
+	Alive     bool // slot valid; cleared only by post-tick cleanup [04 §2.4] C2
+	// Dying is the death mark, separate from Alive [04 §2.3] C2: Destroy sets
+	// it and the unit stays visible to the sweep and to Unit() until Cleanup
+	// frees the slot.
+	Dying      bool
+	DeathCause DeathCause
+	// Build progress remaining 1→0 [04 §2.3] C3. float32 per the I2 allowlist
+	// row "Construction remaining fraction" [05 "Construction target state"].
 	Remaining    float32
 	Flags        uint32       // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	Pending      uint32       // capability/pending word for gate intersection [04 §3.3] C6
@@ -104,7 +110,8 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 	return h, nil
 }
 
-// Destroy marks death; alive cleared during post-tick cleanup [04 §2.4] C2.
+// Destroy marks death; the slot stays alive and visible until post-tick
+// cleanup [04 §2.3][04 §2.4] C2.
 func (w *World) Destroy(h pool.Handle, cause DeathCause) {
 	if w == nil || w.pool == nil || !w.pool.Alive(h) {
 		return
@@ -114,20 +121,23 @@ func (w *World) Destroy(h pool.Handle, cause DeathCause) {
 		return
 	}
 	u := w.units[idx]
-	// Separate alive vs death mark: death sets flag but cleanup clears alive [C2].
-	u.Alive = false
-	_ = cause
+	if u.Dying {
+		return // already marked
+	}
+	u.Dying = true
+	u.DeathCause = cause
 }
 
-// Cleanup frees dead slots now that tick is done, matching retail deferral [04 §2.4].
-// Call after Tick sweep.
+// Cleanup frees death-marked slots now that tick is done, matching retail
+// deferral [04 §2.4]. Call after Tick sweep.
 func (w *World) Cleanup() {
 	if w == nil || w.pool == nil {
 		return
 	}
 	for i := 1; i < len(w.units); i++ {
 		u := w.units[i]
-		if u != nil && !u.Alive {
+		if u != nil && u.Dying {
+			u.Alive = false
 			w.units[i] = nil
 			w.pool.Free(pool.Handle(i))
 		}
@@ -180,7 +190,9 @@ func (w *World) Tick(tick uint32) {
 				continue
 			}
 			// TODO: per-unit tick: orders pump, COB drain etc. Phase 6 stub just advances Remaining if building.
-			// Remaining runs 1→0 [C3].
+			// Remaining runs 1→0 [C3]. The fixed 0.01 decrement is a Gate-2
+			// placeholder; the authoritative worker quantum and fractional
+			// carry are PLAN_08 C24's, not this package's.
 			if u.Remaining > 0 {
 				// Stub: decrement fraction by fixed worktime; not yet tied to economy.
 				u.Remaining -= 0.01

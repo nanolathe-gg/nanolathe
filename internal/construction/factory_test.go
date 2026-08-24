@@ -139,12 +139,11 @@ func TestSilentFifteen(t *testing.T) {
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 		terrain.Plot[i].SetOccupied(false)
 	}
-	// Mark cell (4,4) as occupied (factory exit will snap there)
+	// Mark cell (4,4) as mobile-occupied at the factory exit spot: yard bits
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// bit [04 §6.2].
 	idx := 4*10 + 4
-	terrain.Plot[idx].SetFlagByte(0x01) // Occupied bit
-	// Actually ValidatePlacement checks cell.Occupied() via plot cell's Occupied() which checks 0x01
-	// Ensure Plot's feature handling: we need Occupied to be true
-	terrain.Plot[idx].SetOccupied(true)
+	terrain.Plot[idx].SetOccupantA(1)
 
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	facDef := newFactoryDef("armfac", 2, 2, 300)
@@ -204,8 +203,8 @@ func TestSilentFifteen(t *testing.T) {
 	if len(svc.Messages()) != 0 {
 		t.Fatalf("still silent")
 	}
-	// Unblock: clear occupancy
-	terrain.Plot[idx].SetOccupied(false)
+	// Unblock: clear the layer-A occupancy stamp
+	terrain.Plot[idx].SetOccupantA(0)
 	// Next pump should succeed allocation (nanoframe)
 	tick = uint32(40)
 	svc.Pump(factory, tick)
@@ -397,7 +396,8 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	pq := orders.QueueForUnit(prod)
 	primProd := pq.Primary()
 	// Should have 3 inherited nodes in queue-traversal order: Move, Patrol, Move
-	// Factory queue after after-active inserts is LIFO: QMove3, QPatrol2, QMove1 [04 §3.3] so traversal yields 3,2,1
+	// The active marker moves to each inserted node [04 §3.3][05 "Queue
+	// insertion"], so traversal yields FIFO 1,2,3.
 	if len(primProd) != 3 {
 		// If product already had GetBuilt from earlier, it may have 1+3; but we created product directly without GetBuilt, so expect 3
 		t.Fatalf("product rally len %d want 3, got IDs %v", len(primProd), func() []orders.ID {
@@ -413,9 +413,9 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	if primProd[0].ID != moveID || primProd[1].ID != patrolID || primProd[2].ID != moveID {
 		t.Fatalf("rally order mismatch: got %v %v %v want Move Patrol Move", primProd[0].ID, primProd[1].ID, primProd[2].ID)
 	}
-	// Traversal order is LIFO due to after-active insertion: 3,2,1
-	if primProd[0].GoalX != world.CellToWorld(3) || primProd[1].GoalX != world.CellToWorld(2) || primProd[2].GoalX != world.CellToWorld(1) {
-		t.Fatalf("rally position copy failed: got %v %v %v want 3,2,1", primProd[0].GoalX.Raw(), primProd[1].GoalX.Raw(), primProd[2].GoalX.Raw())
+	// Traversal is FIFO because the marker moves to the inserted node.
+	if primProd[0].GoalX != world.CellToWorld(1) || primProd[1].GoalX != world.CellToWorld(2) || primProd[2].GoalX != world.CellToWorld(3) {
+		t.Fatalf("rally position copy failed: got %v %v %v want 1,2,3", primProd[0].GoalX.Raw(), primProd[1].GoalX.Raw(), primProd[2].GoalX.Raw())
 	}
 	// Test none => parks
 	w2 := newTestWorld(20)

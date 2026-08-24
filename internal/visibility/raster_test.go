@@ -162,6 +162,45 @@ func TestRayStrictTieNeverAdmits(t *testing.T) {
 	}
 }
 
+// TestRayExactEqualityTie locks the equality edge of C5's admission compare:
+// `retainedNum × stepDist == candidateDiff × retainedDen` is NOT admitted.
+// Horizon 20 at distance 1 meets a difference of 40 at distance 2 — both
+// sides are exactly 40 — and a step beyond it (difference 41) admits.
+func TestRayExactEqualityTie(t *testing.T) {
+	terrain := flatTerrain(64, 0)
+	set := func(cx, cz int32, h uint8) {
+		for dz := int32(0); dz < 2; dz++ {
+			for dx := int32(0); dx < 2; dx++ {
+				terrain.Plot[(cz*2+dz)*terrain.CellW+(cx*2+dx)].SetHeight(h)
+			}
+		}
+	}
+	set(10, 11, 20) // first step: horizon (20 @ distance 1)
+	set(10, 12, 40) // 20*2 == 40*1 — exact equality, never admits
+	set(10, 13, 61) // 20*3 < 61*1 — strictly greater, admits
+	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
+	s.SetRayTables(&content.LOSTables{
+		NumTables: 1,
+		Tables: []content.LOSTable{{
+			TableNum: 1, NumLines: 1,
+			Lines: [][]int32{{3, 0, 1, 0, 2, 0, 3}},
+		}},
+	})
+	s.Publish(0, 10, 10, 0, 32)
+
+	idx := func(x, z int32) int { return int(z*s.W + x) }
+	bit := cellBit(0)
+	if s.wordMask[idx(10, 11)]&bit == 0 {
+		t.Fatal("first step must be admitted")
+	}
+	if s.wordMask[idx(10, 12)]&bit != 0 {
+		t.Fatal("exact equality (20·2 == 40·1) must not admit [C5]")
+	}
+	if s.wordMask[idx(10, 13)]&bit == 0 {
+		t.Fatal("strictly-greater difference past the tie must admit")
+	}
+}
+
 // TestRayHighByteGatesHorizonUpdate locks the second half of C5: the high byte
 // is tested separately and decides whether the retained pair advances. With a
 // single-byte terrain word that test is algebraically dead.

@@ -58,9 +58,13 @@ func (f *FogCache) SetChannel(x, y int32, c0, c1 uint8) {
 // RebuildFog lazily rebuilds the two-channel cache [03 §3.3] C13.
 // The cache never writes word mask; values 15 are solid dark (channel0) or patterned fill (channel1).
 // Values 1..14 select GAF frame value-1 from variant families keyed by cell parity plus camera phase.
-// This implementation fills channels based on word mask and unexplored byte for tests: 15 if unexplored,
-// else 0 if visible else 7 (mid fog). Never touches word mask.
-// Caller must have cleared valid bit via C15 only for local player.
+// Channel one renders first.
+//
+// TODO(question): the engine-side conversion producing the cached channel
+// values is an unresolved residual of [03 §3.3] — how visible/hidden history
+// and current coverage map into the two nibbles, and which option bit selects
+// the patterned fill. The fill below is a placeholder (15 solid dark when not
+// currently visible, 0 otherwise); it is NOT attested retail output.
 func (s *Service) RebuildFog(cameraX, cameraY int32) {
 	if s == nil || s.fog.ch0 == nil {
 		return
@@ -86,8 +90,7 @@ func (s *Service) RebuildFog(cameraX, cameraY int32) {
 			}
 			var c0, c1 uint8
 			if !visible {
-				// Unexplored placeholder: plot flag byte 0x04 marks never-explored cleared &0xFB when drawn [C14].
-				// Map those to ch0=15 solid dark.
+				// Placeholder fill; see TODO(question) above — not attested.
 				c0 = 15
 				c1 = 0
 			} else {

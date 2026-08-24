@@ -118,7 +118,9 @@ func (s *Service) sample(viewer PlayerID, x, y, z numeric.Fixed) bool {
 	idx := int(v*int64(s.W) + u)
 	// Mode-selected source: the record's current-coverage byte grid when
 	// current coverage is enabled (any nonzero count is visible), otherwise
-	// the word grid at the local player's bit [03 §3.2] C8 step 4.
+	// the word grid at the LOCAL player's bit [03 §3.2] C8 step 4 — the
+	// reader literal is 1<<localPlayer, not 1<<viewer, so a query on behalf
+	// of another record still reads the local player's bit.
 	//
 	// Ally vision is never OR'd (C9): the writer sets only the source unit's
 	// own slot bit and this reader tests only one bit, so allied coverage
@@ -127,7 +129,7 @@ func (s *Service) sample(viewer PlayerID, x, y, z numeric.Fixed) bool {
 		grid := s.byteGrids[viewer]
 		return grid != nil && grid[idx] != 0
 	}
-	return s.wordMask[idx]&cellBit(viewer) != 0
+	return s.wordMask[idx]&cellBit(s.local) != 0
 }
 
 // seaLevelWorld returns the terrain's sea level in world units, or zero when

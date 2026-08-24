@@ -150,12 +150,12 @@ func TestNonReclaimableBlocksBitSix(t *testing.T) {
 }
 
 // TestOccupancyRespectsSelf locks bits 1-2: "reject any nonzero occupant other
-// than the passed self identity" [04 §6.2].
+// than the passed self identity" [04 §6.2]. Occupants live in the layer-A/B
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func TestOccupancyRespectsSelf(t *testing.T) {
 	yard := []YardCell{0x06, 0x06, 0x06, 0x06} // bits 1-2 only
 	ter := placementFixture(t, nil)
-	ter.Plot[1*6+1].SetOccupied(true)
-	ter.Plot[1*6+1].SetAnchorWord(42)
+	ter.Plot[1*6+1].SetOccupantA(42)
 
 	if err := ter.ValidatePlacement(1, 1, yard, 2, 2, 0); err == nil {
 		t.Fatal("an occupied cell was accepted during construction")
@@ -165,6 +165,12 @@ func TestOccupancyRespectsSelf(t *testing.T) {
 	}
 	if err := ter.ValidatePlacement(1, 1, yard, 2, 2, 42); err != nil {
 		t.Fatalf("a cell occupied by self was rejected: %v", err)
+	}
+	// Layer B rejects too.
+	ter.Plot[1*6+1].SetOccupantA(0)
+	ter.Plot[1*6+1].SetOccupantB(7)
+	if err := ter.ValidatePlacement(1, 1, yard, 2, 2, 0); err == nil {
+		t.Fatal("a layer-B occupant was accepted")
 	}
 }
 

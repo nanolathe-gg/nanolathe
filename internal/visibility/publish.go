@@ -47,7 +47,12 @@ func (s *Service) Unpublish(owner PlayerID, cx, cz int32, heightByte uint8, radi
 //
 // The -5 is an INDEX bias, not a radius reduction: shape k covers a radius of
 // k+5 tiles, so the subtraction is undone by the frame geometry. Reading the
-// result as a radius shrinks every unit's sight by five tiles.
+// spriteShapeIndex quantizes a sight radius to a shape index [03 §3.2] C2.
+// The -5 is an index bias, not part of the division: shape k covers radius
+// k+5, so reading the index as a radius would shrink every unit's sight by
+// five tiles. The division floors (retail: `s + (s>>31 & 0x1F)` then >>5),
+// which differs from truncation only for negative radii, where the clamp
+// absorbs the difference anyway — kept as plain division with that note.
 func (s *Service) spriteShapeIndex(radius int32) int {
 	n := s.shapes.Count()
 	if n == 0 {
@@ -155,6 +160,9 @@ func (s *Service) walkTerrainRay(cx, cz int32, heightByte uint8, radius int32, v
 			gx, gz := cx+step.dx, cz+step.dz
 			// Unsigned bounds BEFORE any terrain read [C5]. A spoke that leaves
 			// the map ends there — it does not resume on the far side.
+			// (The attested pseudocode `continue`s; on monotone radial
+			// spokes every later step is also out of bounds, so break is
+			// equivalent and cheaper.)
 			if uint32(gx) >= uint32(s.W) || uint32(gz) >= uint32(s.H) {
 				break
 			}

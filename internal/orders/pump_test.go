@@ -499,13 +499,21 @@ func TestPushAfterActive(t *testing.T) {
 	if q.primary[0].Flags&FlagActive == 0 {
 		t.Fatalf("first push should be active")
 	}
+	// The marker moves to each inserted node [04 §3.3][05 "Queue insertion"],
+	// so repeated interface adds queue FIFO behind the running order.
 	q.Push(moveID, Node{Param1: 2})
 	if len(q.primary) != 2 || q.primary[0].Param1 != 1 || q.primary[1].Param1 != 2 {
 		t.Fatalf("push after active order %v", q.primary)
 	}
+	if q.primary[1].Flags&FlagActive == 0 {
+		t.Fatalf("marker should move to the inserted node")
+	}
 	q.Push(moveID, Node{Param1: 3})
-	if q.primary[1].Param1 != 3 {
-		t.Fatalf("push after active not inserting after head got %d", q.primary[1].Param1)
+	if len(q.primary) != 3 || q.primary[0].Param1 != 1 || q.primary[1].Param1 != 2 || q.primary[2].Param1 != 3 {
+		t.Fatalf("repeated pushes must queue FIFO, got %v", q.primary)
+	}
+	if q.primary[2].Flags&FlagActive == 0 || q.primary[0].Flags&FlagActive != 0 || q.primary[1].Flags&FlagActive != 0 {
+		t.Fatalf("exactly the newest node carries the active marker")
 	}
 }
 

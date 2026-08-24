@@ -4,21 +4,24 @@ import "github.com/nanolathe/nanolathe/formats"
 
 // PlotCell is the 13-byte runtime terrain cell [03 §2.2][GAP T14].
 //
-// Layout per [02 "Terrain file"] and [GAP T14] (typed in doc 02 § Terrain file):
+// Layout per [02 "Terrain file"], [GAP T14] and the decompile writer model
+// (notes/terrain/01_attribute_cells.md §3.2):
 //
-//	0x00  2  loader-zeroed marker short; reproduction consumer requires zero
-//	0x02  2  // TODO(question): first two bytes and 0x02..0x03 not fully known [03 §2.2] — kept raw
+//	0x00  2  layer-A mobile occupancy short, signed LE; load zeroes it, unit
+//	         stomp/unstomp stamp and clear it
+//	0x02  2  layer-B mobile occupancy short, signed LE; same lifecycle
 //	0x04  1  height byte
-//	0x05  1  derived floor min  \
-//	0x06  1  derived floor max  / average is the sampled floor height [02 "Terrain file"]
+//	0x05  1  derived floor MAX \
+//	0x06  1  derived floor MIN / average is the sampled floor height [02 "Terrain file"]
 //	0x07  1  metal content byte (SurfaceMetal) [02 "Terrain file"]
 //	0x08  2  feature reference u16 LE: 0xFFFF none, 0xFFFE fringe, 0xFFFD void hole, <0xFFFB real index [GAP T14]
-//	0x0A  1  anchor DX (signed offset at fringe members) [02 "Terrain file"] — stored raw; interpret as int8 when resolving
-//	0x0B  1  anchor DZ
+//	0x0A  1  anchor DZ (signed offset at fringe members) — relocation scales this byte by the row stride
+//	0x0B  1  anchor DX
 //	0x0C  1  flags: bit 0 live instance, bit 2 never-seen fog, bits 3-6 placer nibble [02 "Terrain file"][03 §3.3][GAP T17]
 //
-// The first two bytes and several flag bits are not fully known — keep raw
-// and do not gate gameplay on them [PLAN_04 C6][PLAN_04 C13].
+// The first four bytes are typed by their runtime writers; several flag bits
+// remain not fully known — keep raw and do not gate gameplay on them
+// [PLAN_04 C6][PLAN_04 C13].
 // This byte-array layout is the deliberate exception to INVARIANTS I13.
 type PlotCell [13]byte
 
@@ -38,10 +41,14 @@ const (
 func (p PlotCell) Height() uint8 { return p[4] }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func (p PlotCell) MinHeight() uint8 { return p[5] }
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// (notes/terrain/01_attribute_cells.md §3.2 rows +5/+6; slope gates read +5 as
+// the max). TODO(question): the low two bits of hmin are masked off on init
+// (&0xFC) in the writer model — reservation purpose unknown.
+func (p PlotCell) MinHeight() uint8 { return p[6] }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func (p PlotCell) MaxHeight() uint8 { return p[6] }
+func (p PlotCell) MaxHeight() uint8 { return p[5] }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // Stored raw; placement metal extraction sums (cellMetal+1) at placement time.
@@ -74,17 +81,20 @@ func (p PlotCell) Feature() uint16 { return uint16(p[8]) | uint16(p[9])<<8 }
 // roles; this package only writes the fringe role.
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func (p PlotCell) AnchorDX() uint8 { return p[0xA] }
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// (notes/terrain/01_attribute_cells.md §3.2 rows +0xA/+0xB).
+func (p PlotCell) AnchorDX() uint8 { return p[0xB] }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func (p PlotCell) AnchorDZ() uint8 { return p[0xB] }
+func (p PlotCell) AnchorDZ() uint8 { return p[0xA] }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // members to reach the anchor cell [02 "Terrain file"].
-func (p PlotCell) AnchorDXSigned() int8 { return int8(p[0xA]) }
+func (p PlotCell) AnchorDXSigned() int8 { return int8(p[0xB]) }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func (p PlotCell) AnchorDZSigned() int8 { return int8(p[0xB]) }
+func (p PlotCell) AnchorDZSigned() int8 { return int8(p[0xA]) }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // cell's reading: the attached instance slot index, or the accumulated blast
@@ -136,9 +146,27 @@ func (p PlotCell) IsVoid() bool {
 func (p PlotCell) IsEmpty() bool { return p.Feature() == PlotFeatureNone }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// u16. The reproduction consumer requires it to be zero [02 "Terrain file"].
-// TODO(question): meaning otherwise open — keep raw [03 §2.2].
-func (p PlotCell) RawMarker() uint16 { return uint16(p[0]) | uint16(p[1])<<8 }
+// LE. Load zeroes it; unit stomp/unstomp stamp and clear it
+// (notes/terrain/01_attribute_cells.md §3.2 rows +0/+2). Yard-map bits 1-2
+// compare against it [04 §6.2].
+func (p PlotCell) OccupantA() int16 { return int16(uint16(p[0]) | uint16(p[1])<<8) }
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (p PlotCell) OccupantB() int16 { return int16(uint16(p[2]) | uint16(p[3])<<8) }
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (p *PlotCell) SetOccupantA(v int16) {
+	u := uint16(v)
+	p[0] = byte(u)
+	p[1] = byte(u >> 8)
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (p *PlotCell) SetOccupantB(v int16) {
+	u := uint16(v)
+	p[2] = byte(u)
+	p[3] = byte(u >> 8)
+}
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // [03 §2.2]. They are stored raw and never interpreted.
@@ -148,10 +176,10 @@ func (p PlotCell) RawUnknown() [2]byte { return [2]byte{p[2], p[3]} }
 func (p *PlotCell) SetHeight(v uint8) { p[4] = v }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func (p *PlotCell) SetMinHeight(v uint8) { p[5] = v }
+func (p *PlotCell) SetMinHeight(v uint8) { p[6] = v }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func (p *PlotCell) SetMaxHeight(v uint8) { p[6] = v }
+func (p *PlotCell) SetMaxHeight(v uint8) { p[5] = v }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (p *PlotCell) SetMetal(v uint8) { p[7] = v }
@@ -174,8 +202,11 @@ func (p *PlotCell) SetAnchor(dx, dz uint8) {
 // deltas to the anchor cell, the supported-inference interpretation at
 // fringe members [02 "Terrain file"].
 func (p *PlotCell) SetAnchorSigned(dx, dz int8) {
-	p[0xA] = uint8(dx)
-	p[0xB] = uint8(dz)
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// (notes/terrain/01_attribute_cells.md §3.2 rows +0xA/+0xB).
+	p[0xA] = uint8(dz)
+	p[0xB] = uint8(dx)
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -190,12 +221,6 @@ func (p *PlotCell) SetOccupied(v bool) {
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // the unexplored/placer semantics if needed [03 §3.3][GAP T17].
 func (p *PlotCell) SetFlagByte(v uint8) { p[0xC] = v }
-
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func (p *PlotCell) SetRawMarker(v uint16) {
-	p[0] = byte(v)
-	p[1] = byte(v >> 8)
-}
 
 // ResolveFeature resolves the feature-table index for the cell at (cx,cz)
 // in a row-major plot of dimensions cellW x cellH.
@@ -258,8 +283,9 @@ func ResolveFeature(plot []PlotCell, cellW, cellH int, cx, cz int) (uint16, bool
 //
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// [02 "Terrain file"]; the flag byte's fog bit is presentation state owned by
-// phase 5 [03 §3.3] (PLAN_04 C13).
+// 10 in the nibble — `&0xd7|0x50` per cell, preserving bits 0,1,2 and 7
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// unexplored marking is phase-5/composer state (PLAN_04 C13).
 func ExpandPlot(attrs []formats.TNTAttribute, cellW, cellH int) []PlotCell {
 	if cellW <= 0 || cellH <= 0 {
 		return nil
@@ -272,6 +298,10 @@ func ExpandPlot(attrs []formats.TNTAttribute, cellW, cellH int) []PlotCell {
 	for i := 0; i < limit; i++ {
 		plot[i][4] = attrs[i].Height
 		plot[i].SetFeature(attrs[i].Feature)
+		// Map load stamps placer value 10 into the flag byte's nibble,
+		// preserving bits 0,1,2,7: `&0xd7|0x50` [03 §3.3]; decompile writer
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		plot[i][0xC] = plot[i][0xC]&0xd7 | 0x50
 		// attrs[i].Unknown is byte +3 of the source cell: zero in all cells of
 		// all retail maps, meaning unknown [fmt tnt]. Not carried across.
 	}
@@ -313,8 +343,10 @@ func deriveFloorPair(plot []PlotCell, cellW, cellH int) {
 				}
 			}
 			cell := &plot[z*cellW+x]
-			cell[5] = lo
-			cell[6] = hi
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			cell[5] = hi
+			cell[6] = lo
 		}
 	}
 }

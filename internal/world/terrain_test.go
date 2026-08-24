@@ -139,21 +139,26 @@ func TestSurfaceMetalSeeding(t *testing.T) {
 
 // TestLOSHeightAggregates locks R8: the LOS query aggregates over the 2x2 cells
 // a 32-pixel visibility tile covers rather than sampling the tile origin
-// [03 §2.3], [03 §2.1].
+// [03 §2.3], [03 §2.1]. The high byte (horizon) is the tile maximum; the low
+// byte (admission) is the tile minimum.
 func TestLOSHeightAggregates(t *testing.T) {
 	attrs := flat(4, 4, 10)
 	attrs[1*4+1].Height = 90 // a ridge inside tile (0,0), not at its origin
 	ter := synth(t, 4, 4, attrs, nil)
 
-	if got := ter.LOSHeightAt(0, 0); got != 90 {
-		t.Fatalf("LOSHeightAt(0,0) = %d, want 90 (a ridge off the tile origin must still occlude)", got)
+	lo, hi := ter.LOSHeightWord(0, 0)
+	if hi != 90 {
+		t.Fatalf("LOSHeightWord(0,0) high = %d, want 90 (a ridge off the tile origin must still occlude)", hi)
 	}
-	if got := ter.LOSHeightAt(1, 1); got != 10 {
-		t.Fatalf("LOSHeightAt(1,1) = %d, want 10", got)
+	if lo != 10 {
+		t.Fatalf("LOSHeightWord(0,0) low = %d, want 10", lo)
+	}
+	if _, hi = ter.LOSHeightWord(1, 1); hi != 10 {
+		t.Fatalf("LOSHeightWord(1,1) high = %d, want 10", hi)
 	}
 	// It is a separate query from the bilinear one and must not be substituted.
 	if numeric := ter.HeightAt(0, 0); numeric == 90*65536 {
-		t.Fatal("HeightAt and LOSHeightAt must not agree on a ridge corner")
+		t.Fatal("HeightAt and LOSHeightWord must not agree on a ridge corner")
 	}
 }
 

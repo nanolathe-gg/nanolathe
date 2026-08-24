@@ -94,11 +94,12 @@ func (t *Terrain) ApplySchema(mh *content.MapHeader, schemaIndex int) error {
 	if value < 0 {
 		value = 0
 	}
-	if value > 255 {
-		value = 255 // the cell field is one unsigned byte [02 "Terrain file"]
-	}
+	// The cell field is one unsigned byte; retail stores the schema value
+	// through a char, i.e. it truncates rather than clamps
+	// (notes/terrain/01_attribute_cells.md +7).
+	cellByte := uint8(value)
 	for i := range t.Plot {
-		t.Plot[i][7] = uint8(value)
+		t.Plot[i][7] = cellByte
 	}
 	t.metalSeeded = true
 	return nil
@@ -213,16 +214,23 @@ func (t *Terrain) PlotAt(cx, cz int32) *PlotCell {
 // It samples four neighboring plot-cell heights and interpolates using the low four
 // bits of each cell-space coordinate with signed right-shift bias — never a float lerp.
 // World→cell conversion uses the floor-corrected helpers in coords.go [03 §2.1] I3.
-// Points outside the world rectangle sample nothing and return 0. Edge neighbors are
-// clamped to the available corners.
+//
+// There is no neighbour clamping: retail's guard requires `cx+1 < Width &&
+// cz+1 < Height` and otherwise returns the integer −1 sentinel
+// (notes/terrain/01_attribute_cells.md:434, notes/terrain/00_terrain_grids.md:128).
+// The sentinel is kept raw in the Fixed type — it is an out-of-band marker,
+// not a height; callers on the map's last row/column must tolerate it.
 func (t *Terrain) HeightAt(x, z numeric.Fixed) numeric.Fixed {
 	if t == nil || t.Plot == nil || t.CellW <= 0 || t.CellH <= 0 {
 		return 0
 	}
 	cx := WorldToCell(x) // floor semantics with sign correction [03 §2.1] C1
 	cz := WorldToCell(z) // floor semantics with sign correction [03 §2.1] C1
-	if cx < 0 || cz < 0 || cx >= t.CellW || cz >= t.CellH {
-		return 0
+	// Negative coordinates are the unsigned-compare case of the same guard:
+	// they must fail, not wrap into border cells.
+	if cx < 0 || cz < 0 || cx >= t.CellW || cz >= t.CellH ||
+		cx+1 >= t.CellW || cz+1 >= t.CellH {
+		return -1 // retail's raw −1 sentinel, see above
 	}
 	// Fractional position within the cell: low 4 bits of the cell-space
 	// coordinate (0..15) where one cell = 16 map pixels [03 §2.1][03 §2.3] C7.
@@ -233,26 +241,13 @@ func (t *Terrain) HeightAt(x, z numeric.Fixed) numeric.Fixed {
 	fzRaw := int64(z) - int64(cellOriginZ)
 	fx := int32(fxRaw / worldUnitsPerPixel) // 0..15
 	fz := int32(fzRaw / worldUnitsPerPixel)
-	// Four-corner heights with edge clamping [03 §2.3] C7.
+	// Four-corner heights; the guard above guarantees all four exist.
 	w := t.CellW
-	h := t.CellH
 	base := int(cz*w + cx)
 	h00 := int32(t.Plot[base].Height())
-	var h10, h01, h11 int32
-	h10 = h00
-	if cx+1 < w {
-		h10 = int32(t.Plot[int(cz*w+cx+1)].Height())
-	}
-	h01 = h00
-	h11 = h00
-	if cz+1 < h {
-		h01 = int32(t.Plot[int((cz+1)*w+cx)].Height())
-		if cx+1 < w {
-			h11 = int32(t.Plot[int((cz+1)*w+cx+1)].Height())
-		} else {
-			h11 = h01
-		}
-	}
+	h10 := int32(t.Plot[int(cz*w+cx+1)].Height())
+	h01 := int32(t.Plot[int((cz+1)*w+cx)].Height())
+	h11 := int32(t.Plot[int((cz+1)*w+cx+1)].Height())
 	// Two-stage axis interpolation with truncating bias [03 §2.3] C7.
 	// Each axis is a + trunc((b-a)*f/16) where negative deltas bias +15
 	// before the arithmetic shift to emulate truncate-toward-zero.
@@ -290,8 +285,8 @@ func (t *Terrain) CoarseHeightAt(cx, cz int32) numeric.Fixed {
 	return numeric.Fixed(int64(v) * 65536)
 }
 
-// LOSHeightAt returns the 32-pixel quantized height for visibility tile (vx,vz)
-// [03 §2.3] C8.
+// LOSHeightWord returns the aggregated two-byte terrain word for visibility
+// tile (vx,vz) as (low, high) [03 §3.2] C5.
 //
 // The LOS writer uses its own, coarser height representation: it "quantizes to
 // 32-pixel visibility tiles and reads aggregated terrain heights; it does not
@@ -299,28 +294,18 @@ func (t *Terrain) CoarseHeightAt(cx, cz int32) numeric.Fixed {
 // attribute cells [03 §2.1]. It must not be substituted for HeightAt, and a
 // tall feature does not raise it — only terrain data does [03 §2.3].
 //
-// TODO(question): [03 §2.3] establishes that the value is aggregated over the
-// tile but does not name the aggregate. This returns the maximum of the four
-// covered cells, which is the only choice that behaves like terrain occlusion:
-// a ridge crossing one cell of a tile must block the ray, and averaging would
-// let sight pass through it. Not attested — phase 5 owns the decision and
-// PLAN_05 records it as an open input.
-// LOSHeightWord returns the aggregated two-byte terrain word for visibility
-// tile (vx,vz) as (low, high) [03 §3.2] C5.
-//
 // The terrain-ray horizon rule uses both bytes for different things: the LOW
 // byte supplies the candidate difference that gates admission, and the HIGH
 // byte is tested with the identical comparison afterwards to decide whether the
 // retained horizon advances.
 //
-// TODO(question): [03 §2.3] establishes that the value is aggregated over the
-// tile and [03 §3.2] that the word has two distinct bytes, but neither names
-// the aggregates. This returns (minimum, maximum) over the tile's four cells,
-// which is the only pairing that makes both uses coherent — sight passes over
-// the lowest point of a tile, while the horizon it leaves behind rises to the
-// highest. Equal bytes would make the high-byte test algebraically identical
-// to the admission test and therefore dead, which is how the previous
-// single-byte implementation could never exercise it.
+// TODO(question): [03 §3.2/§2.3] establish that each byte is aggregated over
+// the tile but neither names the aggregates. This returns (minimum, maximum)
+// over the tile's four cells — minimum is the only choice that lets sight pass
+// over a tile's low point for admission, and maximum is the only choice that
+// makes the horizon occlude like terrain (a ridge crossing one cell of a tile
+// must block the ray; an average would let sight through it). Neither is
+// attested; PLAN_05 records the aggregate as an open input.
 func (t *Terrain) LOSHeightWord(vx, vz int32) (low, high uint8) {
 	if t == nil || t.Plot == nil || t.CellW <= 0 || t.CellH <= 0 {
 		return 0, 0
@@ -351,29 +336,6 @@ func (t *Terrain) LOSHeightWord(vx, vz int32) (low, high uint8) {
 		return 0, 0
 	}
 	return low, high
-}
-
-func (t *Terrain) LOSHeightAt(vx, vz int32) uint8 {
-	if t == nil || t.Plot == nil || t.CellW <= 0 || t.CellH <= 0 {
-		return 0
-	}
-	cx, cz := vx*2, vz*2
-	if cx < 0 || cz < 0 || cx >= t.CellW || cz >= t.CellH {
-		return 0
-	}
-	high := uint8(0)
-	for dz := int32(0); dz < 2; dz++ {
-		for dx := int32(0); dx < 2; dx++ {
-			px, pz := cx+dx, cz+dz
-			if px >= t.CellW || pz >= t.CellH {
-				continue
-			}
-			if h := t.Plot[pz*t.CellW+px].Height(); h > high {
-				high = h
-			}
-		}
-	}
-	return high
 }
 
 // gravityFromAuthored converts an authored OTA/TNT gravity integer into

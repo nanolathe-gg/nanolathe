@@ -78,18 +78,20 @@ func TestOpcodeDispatch(t *testing.T) {
 		}
 	}
 	// Spot-check that dispatched keys do NOT take kill path when properly formed.
-	// Use a non-terminating loop program for each key to keep thread alive after dispatch.
-	// For return opcode we avoid loop check because it terminates normally; we verify dispatch existence separately above.
-	// Pick a representative non-return opcode: move 0x10001000 needs piece+axis operands.
-	prog2 := synthProg([]uint32{0x10005000, 0, 0x10064000, 0}, []string{"base"}, 0, []int{0}) // show + jump loop
+	// show sets pieceFlags bit 0 [04 §4.3], so the flag proves dispatch: the
+	// kill path would clear the thread before the trailing return ever ran.
+	// (The runThread drain has no iteration cap — retail wedges on tight loops
+	// and so do we — so a jump-loop program must not be used here.)
+	prog2 := synthProg([]uint32{0x10005000, 0, 0x10065000}, []string{"base"}, 0, []int{0}) // show piece 0 + return
 	vm2 := NewVM(prog2)
 	vm2.Threads[0].Status = ThreadRunning
 	vm2.Threads[0].PC = 0
 	vm2.Drain(1)
-	// After Drain, thread should still be running (loop), not killed. It executed show then jump; the runThread loop caps at 10000 iterations but with jump loop it will stay running.
-	// If kill path were taken, it would be idle.
-	if vm2.Threads[0].Status == ThreadIdle {
-		t.Fatalf("dispatched show opcode incorrectly killed thread")
+	if vm2.Threads[0].Status == ThreadRunning {
+		t.Fatalf("dispatched program did not terminate")
+	}
+	if len(vm2.pieceFlags) == 0 || vm2.pieceFlags[0]&0x01 == 0 {
+		t.Fatalf("dispatched show opcode did not set the draw bit — kill path taken?")
 	}
 }
 
@@ -132,37 +134,35 @@ func TestStackUnderflowOverflow(t *testing.T) {
 	vm.Threads[0].PC = 0
 	vm.Threads[0].SP = 0
 	vm.Drain(1)
-	// After add underflow, stack should have one element 0 and thread then returned (killed). Check via separate non-return test:
-	prog2 := synthProg([]uint32{0x10031000, 0x10064000, 0}, []string{"base"}, 0, []int{0}) // add then jump loop
+	// After add underflow, the add must yield 0 without panicking. The
+	// program stores the result in static 0 and returns (the drain has no
+	// iteration cap — C14 — so no jump-loop programs).
+	prog2 := synthProg([]uint32{0x10031000, 0x10023004, 0, 0x10065000}, []string{"base"}, 1, []int{0}) // add, pop-static 0, return
 	vm2 := NewVM(prog2)
 	vm2.Threads[0].Status = ThreadRunning
 	vm2.Threads[0].PC = 0
 	vm2.Threads[0].SP = 0
 	vm2.Drain(1)
-	// Stay alive check already passes; verify stack depth 1 and top 0
-	if vm2.Threads[0].SP != 1 {
-		t.Fatalf("underflow add SP %d want 1", vm2.Threads[0].SP)
-	}
-	if vm2.Threads[0].Stack[0] != 0 {
-		t.Fatalf("underflow add result %d want 0", vm2.Threads[0].Stack[0])
+	if vm2.getStatic(0) != 0 {
+		t.Fatalf("underflow add result %d want 0", vm2.getStatic(0))
 	}
 
-	// Overflow: push 11 constants, stack depth 10 cap [04 §4.2] C13
+	// Overflow: push 11 constants, stack depth 10 cap [04 §4.2] C13.
+	// The top is captured into static 0 before returning so the assertion
+	// survives the return's own pop.
 	code := make([]uint32, 0, 24)
 	for i := 0; i < 11; i++ {
 		code = append(code, 0x10021001, uint32(i+1))
 	}
-	code = append(code, 0x10064000, 0) // jump loop to stay alive
-	prog3 := synthProg(code, []string{"base"}, 0, []int{0})
+	code = append(code, 0x10023004, 0) // pop-static 0
+	code = append(code, 0x10065000)    // return
+	prog3 := synthProg(code, []string{"base"}, 1, []int{0})
 	vm3 := NewVM(prog3)
 	vm3.Threads[0].Status = ThreadRunning
 	vm3.Threads[0].PC = 0
 	vm3.Drain(1)
-	if vm3.Threads[0].SP != 10 {
-		t.Fatalf("overflow SP %d want 10 [04 §4.2] C13", vm3.Threads[0].SP)
-	}
-	if vm3.Threads[0].Stack[9] != 10 {
-		t.Fatalf("overflow top %d want 10 (11th push discarded)", vm3.Threads[0].Stack[9])
+	if vm3.getStatic(0) != 10 {
+		t.Fatalf("overflow top %d want 10 (11th push discarded) [04 §4.2] C13", vm3.getStatic(0))
 	}
 	if vm3.Threads[0].Stack[0] != 1 {
 		t.Fatalf("overflow bottom %d want 1", vm3.Threads[0].Stack[0])
@@ -353,9 +353,11 @@ func TestSignalWake(t *testing.T) {
 	if vm.Threads[0].WaitThread != -1 {
 		t.Fatalf("wake did not clear WaitThread")
 	}
-	// Signal via opcode: thread2 signals
-	code2 := []uint32{0x10067000, 0x10064000, 0} // signal, jump 0
-	prog2 := synthProg(code2, []string{"base"}, 0, []int{0})
+	// Signal via opcode: thread2 signals, then proves it survived the signal
+	// by writing static 0 afterwards (the drain has no iteration cap — C14 —
+	// so a jump-loop program cannot be used to keep the thread alive).
+	code2 := []uint32{0x10067000, 0x10021001, 7, 0x10023004, 0, 0x10065000} // signal, push 7, pop-static 0, return
+	prog2 := synthProg(code2, []string{"base"}, 1, []int{0})
 	vm2 := NewVM(prog2)
 	vm2.Threads[3].Status = ThreadRunning
 	vm2.Threads[3].PC = 0
@@ -370,8 +372,8 @@ func TestSignalWake(t *testing.T) {
 	if vm2.Threads[3].Status != ThreadIdle {
 		t.Fatalf("opcode signal did not kill matching thread")
 	}
-	if vm2.Threads[2].Status == ThreadIdle {
-		t.Fatalf("opcode signal incorrectly killed self")
+	if vm2.getStatic(0) != 7 {
+		t.Fatalf("opcode signal incorrectly killed self (static %d want 7)", vm2.getStatic(0))
 	}
 	// Self-kill via signal
 	vm3 := NewVM(prog2)
@@ -414,7 +416,7 @@ func TestPieceMoveInterpolate(t *testing.T) {
 		0x10021001, 60, // speed
 		0x10021001, 10, // target
 		0x10001000, 0, 0, // move piece0 axis0 [04 §4.3]
-		0x10064000, 0, // jump loop
+		0x10065000, // return (no jump loop: the drain has no iteration cap, C14)
 	}, []string{"base"}, 0, []int{0})
 	vm := NewVM(prog)
 	vm.Threads[0].Status = ThreadRunning

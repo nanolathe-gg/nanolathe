@@ -105,10 +105,23 @@ func WithinCoverageSquare(shooterX, shooterZ, candX, candZ numeric.Fixed, covera
 type Candidate struct {
 	Handle   pool.Handle   // pool slot index, 0 null sentinel; iteration order is slot asc [06 §1.2] (I1) [01 §6.1]
 	X, Z     numeric.Fixed // current world X/Z [06 §3.2]
+	Y        numeric.Fixed // reference/top height, compared against sea level [06 §3.1] (I13)
 	Category uint32        // decoded category bitset for this candidate [06 §3.1] TODO(question): Category string parsing into bitset not in content catalog yet
 	Hostile  bool          // hostility for primary list [06 §3.1]
-	Visible  bool          // direct-visibility predicate [06 §3.1]
-	// TODO(question): additional gates not modeled here: cloaked, underwater status, to-air class, ballistic feasibility, water weapon depth/type, sonar/jammer [06 §3.1] missing/unknown.
+
+	// OwnSide marks a candidate belonging to the viewing player. The
+	// direct-visibility predicate accepts own-side units outright, without
+	// consulting the visibility state [06 §3.1].
+	OwnSide bool
+	// Cloaked units are rejected by the direct-visibility predicate [06 §3.1].
+	Cloaked bool
+	// Underwater units are rejected unless their dedicated status bit is set
+	// [06 §3.1]. The bit is the sensor phase's 0x200 underwater-exempt marking.
+	Underwater     bool
+	UnderwaterSeen bool
+	// AirTarget is the to-air target-status class, enforced when the slot
+	// requests it [06 §3.1].
+	AirTarget bool
 }
 
 // IsPreferredCategory reports whether candidate's category is clear of the slot's bad-target-category mask,
@@ -163,91 +176,199 @@ func selectPreferredWinner(bucket []Candidate, shooterX, shooterZ numeric.Fixed,
 	return bucket[bestIdx], true
 }
 
-// AcquireTarget performs ordinary automatic target acquisition for one weapon slot per [06 §3.1] [06 §3.2] [06 §3.3].
-// Candidates must be provided in deterministic pool-slot-asc order (I1); this function does not sort via maps.
-// Steps established per [06 §3]:
+// Acquisition carries one weapon slot's acquisition-time gates [06 §3.1].
 //
-//  1. Physical admission at acquisition time: for ordinary weapons, test planar range (and, when established, shooter height, to-air, ballistic, water depth predicates).
-//     For WU-09-1 only the planar range gate is implemented; other predicates are TODO(question) [06 §3.1] missing/unknown.
-//  2. Randomly sample and remove at most 50 candidates from the input set [06 §3.2]. For candidate counts ≤50 we preserve input order (no sampling); for >50 we sample deterministically via Simulation RNG (I4).
-//     TODO(question): precise retail removal order (swap-with-last vs. Fisher-Yates order) not fully closed; using swap-with-last per commentary.
-//  3. Partition into preferred (category clear of badMask) and fallback (matching) buckets [06 §3.1]; any preferred result wins over fallback [06 §3.1].
-//  4. Within each bucket, each candidate receives a shared-RNG score bounded by the sum of high halves of squared fixed deltas [06 §3.2]; bound<2 uses zero/no-advance [01 §7.1] I4; strictly lower wins, equal preserves first sampled [06 §3.2].
-//  5. Coverage vs engagement: ordinary acquisition uses weapon Range, not Coverage; Coverage is a separate scalar for projectile-target/interceptor square and drives overlay only [06 §3.3] [06 §2.1].
+// Acquisition-time physical admission is separate from retention and firing
+// [06 §3.1]: a non-water weapon requires shooter and candidate reference
+// heights above sea level, enforces the to-air target-status class when
+// requested, optionally requires a ballistic solution, and only then tests
+// planar range. A water weapon applies two candidate depth/type predicates and
+// planar range.
+type Acquisition struct {
+	ShooterX, ShooterZ numeric.Fixed
+	// ShooterY is the shooter's top/reference height, tested against sea level
+	// on the non-water branch [06 §3.1] [06 §3.3].
+	ShooterY numeric.Fixed
+	// SeaLevel is the map's sea level in world units [03 §2.2].
+	SeaLevel numeric.Fixed
+	// Range is the weapon's ordinary fire range. Coverage is a SEPARATE scalar
+	// for projectile-target/interceptor behavior and is not this radius
+	// [06 §3.3] [06 §2.1].
+	Range   int32
+	BadMask uint32
+
+	// WaterWeapon takes the water branch: the depth/type predicates and planar
+	// range, with no sea-level height requirement [06 §3.1].
+	WaterWeapon bool
+	// WaterAdmit is the water branch's two candidate depth/type predicates.
+	//
+	// TODO(question): [06 §3.1] establishes that a water weapon "applies two
+	// candidate depth/type predicates" but names neither. A water weapon with
+	// no port admits on range alone, which is the previous behavior; it is not
+	// a decoded gate and must not be read as one.
+	WaterAdmit func(c Candidate) bool
+
+	// ToAir requests the to-air target-status class [06 §3.1]: only candidates
+	// carrying that class are admitted.
+	ToAir bool
+
+	// Ballistic makes a ballistic solution a requirement of admission
+	// [06 §3.1]. It is a requirement, not a default pass: with no solver, a
+	// ballistic slot admits nothing rather than admitting everything.
+	Ballistic         bool
+	BallisticFeasible func(c Candidate) bool
+
+	// Visible completes the direct-visibility predicate by sampling the
+	// candidate's target-bounds points against the player's visibility state
+	// [06 §3.1] — visibility.IsVisible over the hull. The own-side, cloak and
+	// underwater parts of the predicate are decided here from the candidate's
+	// own fields; only the sampling needs the visibility service.
+	//
+	// A nil port samples nothing and admits, which is what a session with no
+	// visibility service wired has. Wiring it is the composition root's job.
+	Visible func(c Candidate) bool
+
+	RNG *rng.Simulation
+}
+
+// directlyVisible is the primary list's direct-visibility predicate
+// [06 §3.1]. It accepts own-side units, rejects cloaked units, rejects
+// underwater units without their dedicated status bit, and samples multiple
+// target-bounds points against the player's visibility state.
+func (a *Acquisition) directlyVisible(c Candidate) bool {
+	if c.OwnSide {
+		return true // accepted outright, before any other test [06 §3.1]
+	}
+	if c.Cloaked {
+		return false
+	}
+	if c.Underwater && !c.UnderwaterSeen {
+		return false
+	}
+	if a.Visible == nil {
+		return true
+	}
+	return a.Visible(c)
+}
+
+// admits runs acquisition-time physical admission in the established order
+// [06 §3.1]: heights against sea level, the to-air class, the ballistic
+// solution, then planar range.
+func (a *Acquisition) admits(c Candidate) bool {
+	if a.WaterWeapon {
+		// The water branch skips the sea-level height requirement entirely.
+		if a.WaterAdmit != nil && !a.WaterAdmit(c) {
+			return false
+		}
+		return WithinRange(a.ShooterX, a.ShooterZ, c.X, c.Z, a.Range)
+	}
+	// Non-water: both reference heights must be above sea level [06 §3.1].
+	if a.ShooterY <= a.SeaLevel || c.Y <= a.SeaLevel {
+		return false
+	}
+	if a.ToAir && !c.AirTarget {
+		return false // to-air target-status class enforced when requested [06 §3.1]
+	}
+	if a.Ballistic {
+		if a.BallisticFeasible == nil || !a.BallisticFeasible(c) {
+			return false // a required ballistic solution that cannot be produced [06 §3.1]
+		}
+	}
+	return WithinRange(a.ShooterX, a.ShooterZ, c.X, c.Z, a.Range) // [06 §3.3]
+}
+
+// AcquireTarget performs ordinary automatic target acquisition for one weapon
+// slot per [06 §3.1] [06 §3.2] [06 §3.3].
 //
-// Unstated details are marked TODO(question) per WU-09-1 scope.
-// Determinism: scan order fixed (pool slot asc) (I1); no map iteration; RNG draw order is authoritative (I4).
-func AcquireTarget(candidates []Candidate, shooterX, shooterZ numeric.Fixed, weaponRange int32, badMask uint32, rng *rng.Simulation) (pool.Handle, bool) {
-	// Step 1: filter by hostility and visibility (primary list gating) [06 §3.1] and planar range admission [06 §3.1] [06 §3.3].
-	// For WU-09-1 minimal, we require Hostile && Visible && WithinRange; other gates TODO.
+// Candidates must arrive in deterministic pool-slot-ascending order (I1); this
+// function does not sort via maps. Steps, in the order [06 §3] gives them:
+//
+//  1. The primary list requires hostility and the direct-visibility predicate
+//     [06 §3.1], then acquisition-time physical admission: heights above sea
+//     level, the to-air class, the ballistic solution, planar range.
+//  2. Randomly sample and remove at most 50 candidates from the input set
+//     [06 §3.2].
+//  3. Partition into preferred (category clear of BadMask) and fallback
+//     buckets; any preferred result wins over fallback [06 §3.1].
+//  4. Within each bucket, each candidate receives a shared-RNG score bounded
+//     by the sum of the high halves of its squared fixed deltas [06 §3.2];
+//     a bound below two uses the zero/no-advance path [01 §7.1] I4; strictly
+//     lower wins, so an equal score preserves the first sampled candidate.
+//
+// Determinism: scan order is fixed (pool slot asc) (I1); no map iteration; the
+// RNG draw order is authoritative (I4). Every gate above runs BEFORE the
+// sampling draw, so admitting a candidate that retail rejects does not merely
+// pick a different target — it advances the shared stream differently and
+// diverges everything downstream.
+func AcquireTarget(candidates []Candidate, a Acquisition) (pool.Handle, bool) {
+	// Step 1: primary list gating and physical admission [06 §3.1] [06 §3.3].
 	filtered := make([]Candidate, 0, len(candidates))
 	for _, c := range candidates {
-		if !c.Hostile || !c.Visible {
-			continue // [06 §3.1] primary list requires hostility + direct-visibility predicate
+		if !c.Hostile || !a.directlyVisible(c) {
+			continue // primary list requires hostility + direct visibility [06 §3.1]
 		}
-		if !WithinRange(shooterX, shooterZ, c.X, c.Z, weaponRange) { // [06 §3.3] range vs coverage established
-			continue // acquisition-time planar range [06 §3.1]
+		if !a.admits(c) {
+			continue
 		}
-		// TODO(question): [06 §3.1] additional acquisition-time gates not modeled: non-water requires shooter+ candidate heights above sea level, to-air class, optional ballistic solution; water applies depth/type predicates; some branches bypass.
 		filtered = append(filtered, c)
 	}
 	if len(filtered) == 0 {
+		// TODO(question): [06 §3.1] establishes a secondary status list
+		// consulted only when the primary in-radius set is empty AND the
+		// owning player holds an active targeting-upgrade aggregate from an
+		// allied or same-player unit with the corresponding definition flag.
+		// Its sensor name is explicitly not yet proved, so the list is not
+		// modeled. Note the asymmetry that IS established: if primary
+		// candidates exist but all fail selection, the secondary list is NOT
+		// retried.
 		return 0, false
 	}
 
 	// Step 2: random sample at most 50 candidates [06 §3.2].
-	// TODO(question): exact retail sampling algorithm (which RNG draws, removal swap order, whether sampling preserves original pool order vs sampled order) not fully closed; using deterministic swap-with-last sampling per I4/I1.
+	// TODO(question): exact retail sampling algorithm (which RNG draws, removal
+	// swap order, whether sampling preserves original pool order vs sampled
+	// order) not fully closed; using deterministic swap-with-last sampling per
+	// I4/I1.
 	var sampled []Candidate
 	if len(filtered) <= 50 {
-		// ≤50: keep all in deterministic pool-asc order (caller's order) — already stable per I1.
 		sampled = filtered
+		// Lock tie determinism to pool slot asc (I1) even if the caller
+		// supplied another order.
+		sort.SliceStable(sampled, func(i, j int) bool { return sampled[i].Handle < sampled[j].Handle })
 	} else {
-		// >50: randomly sample 50 without replacement via Simulation RNG [06 §3.2] (I4).
-		// Copy to mutable remaining slice sorted asc (I1) and draw indices.
 		remaining := make([]Candidate, len(filtered))
 		copy(remaining, filtered)
-		// Ensure deterministic iteration: sort remaining by Handle asc (stable) per I1 if caller violated order.
 		sort.SliceStable(remaining, func(i, j int) bool { return remaining[i].Handle < remaining[j].Handle })
 		sampled = make([]Candidate, 0, 50)
 		for i := 0; i < 50 && len(remaining) > 0; i++ {
 			var idx int
-			if rng != nil {
-				idx = int(rng.Uint32n(uint32(len(remaining)))) // bounded draw [01 §7.1] (I4)
-			} else {
-				idx = 0
+			if a.RNG != nil {
+				idx = int(a.RNG.Uint32n(uint32(len(remaining)))) // bounded draw [01 §7.1] (I4)
 			}
 			sampled = append(sampled, remaining[idx])
-			// Remove by swap-with-last to keep O(1) and determinism without preserving order of remaining.
 			remaining[idx] = remaining[len(remaining)-1]
 			remaining = remaining[:len(remaining)-1]
 		}
-		// Note: sampled order is now RNG-driven, not pool-asc; scoring's first-sampled preservation is therefore RNG-influenced [06 §3.2].
-		// For small sets where determinism on tied candidates is tested, we stay in ≤50 path so order remains pool-asc.
-	}
-
-	// Ensure sampled is at least deterministic for ≤50: sort if we didn't sample? Already pool-asc from input.
-	if len(filtered) <= 50 {
-		// Sort sampled by Handle asc to lock tie determinism to pool slot asc (I1).
-		// Input was promised asc but we enforce it so a test that shuffles still shows asc win.
-		sort.SliceStable(sampled, func(i, j int) bool { return sampled[i].Handle < sampled[j].Handle })
+		// Sampled order is now RNG-driven, not pool-asc; the scoring step's
+		// first-sampled preservation is therefore RNG-influenced [06 §3.2].
 	}
 
 	// Step 3: partition into preferred vs fallback [06 §3.1].
 	var preferred, fallback []Candidate
 	for _, c := range sampled {
-		if IsPreferredCategory(c.Category, badMask) { // [06 §3.1]
+		if IsPreferredCategory(c.Category, a.BadMask) {
 			preferred = append(preferred, c)
 		} else {
 			fallback = append(fallback, c)
 		}
 	}
 
-	// Step 4: scoring within each bucket [06 §3.2].
-	// Any preferred result wins over fallback [06 §3.1].
-	if winner, ok := selectPreferredWinner(preferred, shooterX, shooterZ, rng); ok {
-		return winner.Handle, true // [06 §3.1] preferred wins
+	// Step 4: scoring within each bucket; any preferred result wins over
+	// fallback [06 §3.1] [06 §3.2].
+	if winner, ok := selectPreferredWinner(preferred, a.ShooterX, a.ShooterZ, a.RNG); ok {
+		return winner.Handle, true
 	}
-	if winner, ok := selectPreferredWinner(fallback, shooterX, shooterZ, rng); ok {
+	if winner, ok := selectPreferredWinner(fallback, a.ShooterX, a.ShooterZ, a.RNG); ok {
 		return winner.Handle, true
 	}
 	return 0, false
@@ -283,11 +404,13 @@ func ShouldRetain(current Candidate, hostile bool, badMask uint32, stunned bool)
 	return true // retain without re-running physical/sensor gates [06 §3.2]
 }
 
-// IsValidAcquisitionCandidate is a test helper that mirrors the filter gate in AcquireTarget for unit tests.
-// It reports whether candidate would pass the acquisition-time admission for range (and hostility/visibility).
-func IsValidAcquisitionCandidate(c Candidate, shooterX, shooterZ numeric.Fixed, weaponRange int32) bool {
-	if !c.Hostile || !c.Visible {
+// IsValidAcquisitionCandidate reports whether a candidate passes the primary
+// list gate and acquisition-time physical admission for the given slot
+// [06 §3.1] [06 §3.3]. It is the same pair of predicates AcquireTarget filters
+// on, exposed for callers that want to test one candidate.
+func IsValidAcquisitionCandidate(c Candidate, a Acquisition) bool {
+	if !c.Hostile || !a.directlyVisible(c) {
 		return false
 	}
-	return WithinRange(shooterX, shooterZ, c.X, c.Z, weaponRange) // [06 §3.3] [06 §3.1]
+	return a.admits(c)
 }

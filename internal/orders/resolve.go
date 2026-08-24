@@ -431,6 +431,9 @@ func resolveAttack(actor *units.Unit, target *units.Unit) string {
 		}
 		return "AirToGround"
 	}
+	// TODO(question): [04 §3.4] says "the kamikaze variant for a unit flagged
+	// for it" without saying whether the flag is read off the attacker or the
+	// target; the attacker reading below is the working hypothesis.
 	if actor.Def != nil && actor.Def.Kamikaze {
 		return "Attack_Kamikaze"
 	}
@@ -577,8 +580,12 @@ func attackChaseHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 		if n.Param2 > 8 {
 			n.Param2 = 0 // wrap to zero [04 §3.5]
 		}
-		// TODO(question) orbit cadence not established; using continue vs waiting – return 2 to stay without jitter [04 §3.3]
-		return Code(2)
+		// TODO(question): the orbit cadence is not established — how long the
+		// handler stays on one orbit substate before advancing. Returning
+		// Code(2) re-dispatches the same head forever (the pump cascades until
+		// a waiting code appears), so the handler waits like its neighbours
+		// until a probe closes the question.
+		return Code(3) // wait 30+rand15 [04 §3.3]
 	case 3: // re-engage: rebind on range or release the fire slot, both waiting 30 ticks [04 §3.5]
 		// TODO(question) weapon rebinding needs WU-06-7 [WU-06-7]
 		return Code(3) // wait 30+rand15 [04 §3.3]

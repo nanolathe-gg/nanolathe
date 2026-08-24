@@ -197,10 +197,18 @@ func (t *Terrain) ValidatePlacement(cx, cz int32, yard []YardCell, footX, footZ 
 			// [04 §6.2]. It needs the placing player's visibility state, which
 			// phase 5 owns; this package has no player context.
 
-			// Bits 1-2: reject any nonzero occupant other than self [04 §6.2].
-			if y&0x06 != 0 && cell.Occupied() {
-				if self == 0 || cell.AnchorWord() != self {
-					return fmt.Errorf("world: cell %d,%d occupied [04 §6.2]", px, pz)
+			// Bits 1-2: reject any nonzero mobile occupant other than the
+			// requester [04 §6.2]. The occupants live in the layer-A/B
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// stomp/unstomp (notes/terrain/01_attribute_cells.md §3.2 rows
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// TODO(question): which of bit 1 / bit 2 maps to layer A vs B is
+			// not established; both layers reject until it is.
+			if y&0x06 != 0 {
+				for _, occ := range [2]int16{cell.OccupantA(), cell.OccupantB()} {
+					if occ != 0 && uint16(occ) != self {
+						return fmt.Errorf("world: cell %d,%d occupied [04 §6.2]", px, pz)
+					}
 				}
 			}
 

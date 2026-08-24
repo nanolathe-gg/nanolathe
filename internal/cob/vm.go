@@ -718,16 +718,13 @@ func (v *VM) runThreadSync(idx int) {
 // runThread executes the opcode stream for thread idx until it yields, blocks,
 // or is killed. It assumes the thread's pre-guards have already been handled
 // by Drain.
+//
+// There is no per-visit iteration cap: retail has none either, and a tight
+// non-yielding script loop wedges the drain exactly as it wedges retail
+// [04 §4.2] (PLAN_06 C14 reproduce-don't-defend).
 func (v *VM) runThread(idx int) {
 	t := &v.Threads[idx]
-	// Safety bound to prevent infinite loops within one Drain visit: retail
-	// can cascade phases in one pump until a waiting code appears, but for
-	// script drain we should cap iterations to avoid spinning on a tight
-	// non-yielding loop that would starve other threads. The doc's drain runs
-	// eight slots once, not per-opcode count, so a thread could in principle
-	// run many opcodes until a yield. We cap at a large but finite count for
-	// safety; retail has no such cap but terminates on loops via jump.
-	for iter := 0; iter < 10000; iter++ {
+	for {
 		if t.Status != ThreadRunning {
 			return
 		}
@@ -1015,9 +1012,11 @@ func (v *VM) runThread(idx int) {
 			case 4: // push static [04 §4.3]
 				t.stackPush(v.getStatic(int(operand)))
 			default:
-				// Any other sub-mode pushes uninitialized scratch [04 §4.3] C14
-				// Deterministic fallback: push 0 as garbage [04 §4.3].
-				t.stackPush(0)
+				// Any other sub-mode pushes uninitialized scratch [04 §4.3] C14.
+				// SP advances without a write, so the slot's stale frame
+				// contents show through on the next pop — there is no default
+				// branch pushing a fresh value.
+				t.stackPushScratch()
 			}
 			t.PC += 2
 		case 0x10022000: // alloc-local [04 §4.3]
@@ -1096,16 +1095,12 @@ func (v *VM) runThread(idx int) {
 		case 0x10041000: // random [04 §4.3]
 			high, _ := t.stackPop()
 			low, _ := t.stackPop()
-			bound := int64(high) - int64(low) + 1
-			var res int32
-			if bound <= 0 {
-				res = low
-			} else if bound == 1 {
-				res = low
-			} else {
-				r := v.simRandN(uint32(bound)) // [01 §7.1] I4
-				res = low + int32(r)
-			}
+			// The bound is computed in 32 bits and wraps when high < low,
+			// reproducing retail; the stream itself returns 0 without
+			// advancing for a bound below two [01 §7.1] I4, so the draw is
+			// unconditional here and the stream decides.
+			bound := uint32(int64(high) - int64(low) + 1)
+			res := low + int32(v.simRandN(bound))
 			t.stackPush(res)
 			t.PC += 1
 		case 0x10042000: // engine read 1-arg [04 §4.3]
@@ -1146,10 +1141,18 @@ func (v *VM) runThread(idx int) {
 			t.stackPush(out)
 			t.PC += 1
 		case 0x10045000: // engine read no-arg [04 §4.3] +1
-			// No pop, push one. Port is implied? For no-arg reads, the id is not on stack; retail uses a dedicated opcode per port? But doc groups them.
-			// We treat as no id, handler not called, push 0 as default engine value.
-			// To keep hook, we have no id to lookup; default 0.
-			t.stackPush(0)
+			// Ports 11 (unit height) and 17 (build percent left) are reads
+			// whose stack form carries no id [04 §4.4]; how the opcode names
+			// the port is unestablished.
+			// TODO(question): where does the no-arg engine read's port selector
+			// live? Hypothesis under test: the instruction's low byte, tried
+			// against the same hook the argument forms use; with no matching
+			// binding the read yields 0.
+			var out int32
+			if fn, ok := v.portFuncs[Port(word&0xFF)]; ok && fn != nil {
+				out = fn(nil)
+			}
+			t.stackPush(out)
 			t.PC += 1
 		case 0x10051000: // less-than signed [04 §4.3]
 			b, _ := t.stackPop()
@@ -1537,6 +1540,15 @@ func (t *Thread) stackPush(val int32) {
 		return // overflow: lose push deterministically; no kill
 	}
 	t.Stack[t.SP] = val
+	t.SP++
+}
+
+// stackPushScratch advances SP without writing so the slot's stale frame
+// contents surface on the next pop [04 §4.3] C14 "uninitialized scratch".
+func (t *Thread) stackPushScratch() {
+	if t.SP >= 10 { // [04 §4.2] C13 stack depth 10
+		return // overflow: lose push deterministically; no kill
+	}
 	t.SP++
 }
 

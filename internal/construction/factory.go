@@ -546,7 +546,8 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit) {
 	inherited := 0
 	pq := orders.QueueForUnit(product)
 	// Collect rally nodes in traversal order first, then tail-append to preserve order [05 C19].
-	// Using pq.Push would insert after active marker (LIFO) and reverse order, so we tail-append via reflection.
+	// Tail-appending (rather than pq.Push) also leaves an existing GetBuilt
+	// head and its active marker untouched.
 	var toAppend []*orders.Node
 	for _, n := range prim {
 		if n == nil {

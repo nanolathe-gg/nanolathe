@@ -111,6 +111,30 @@ func findActive(q *Queue) int {
 	return -1
 }
 
+// ensureSingleActive keeps the active-marker invariant: exactly one primary
+// node carries FlagActive [04 §3.3]. When none does the head takes it; when
+// several do (possible while the marker travels) later duplicates are cleared.
+// Insertion moves the mark to the inserted node and removal hands it to the
+// removed node's successor [04 §3.3][05 "Queue insertion"].
+func (q *Queue) ensureSingleActive() {
+	if q == nil || len(q.primary) == 0 {
+		return
+	}
+	first := -1
+	for i, n := range q.primary {
+		if n.Flags&FlagActive != 0 {
+			if first == -1 {
+				first = i
+			} else {
+				n.Flags &^= FlagActive
+			}
+		}
+	}
+	if first == -1 {
+		q.primary[0].Flags |= FlagActive
+	}
+}
+
 func newNode(id ID, n Node) *Node {
 	desc := DescriptorFor(id)
 	nn := n
@@ -246,6 +270,12 @@ func (q *Queue) Push(id ID, n Node) {
 		q.primary = append(q.primary, nil)
 		copy(q.primary[pos+1:], q.primary[pos:])
 		q.primary[pos] = node
+		// The marker moves to the inserted node, so repeated interface adds
+		// queue FIFO directly behind the running order [04 §3.3][05 "Queue
+		// insertion"]; the decompile confirms the mark relocates
+		// (notes/construction/04_factory_lifecycle.md).
+		q.primary[act].Flags &^= FlagActive
+		node.Flags |= FlagActive
 	} else {
 		q.primary = append(q.primary, node)
 		if len(q.primary) == 1 {
@@ -321,9 +351,7 @@ func (q *Queue) CancelTailMost(match func(Node) bool) bool {
 			cleanupNode(n) // [05 "Queue subtraction"]
 			copy(q.primary[i:], q.primary[i+1:])
 			q.primary = q.primary[:len(q.primary)-1]
-			if isHead && len(q.primary) > 0 {
-				q.primary[0].Flags |= FlagActive
-			}
+			q.ensureSingleActive() // mark moves to the successor [04 §3.3]
 			return true
 		}
 	}
@@ -400,21 +428,14 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 		case 5, 8:
 			cleanupNode(n) // [05 "Queue subtraction"]
 			q.primary = q.primary[1:]
-			if len(q.primary) > 0 {
-				q.primary[0].Flags |= FlagActive
-			}
+			q.ensureSingleActive() // mark moves to the successor [04 §3.3]
 			continue
 		case 6:
 			head := q.primary[0]
 			q.primary = q.primary[1:]
 			head.Flags &^= FlagActive
 			q.primary = append(q.primary, head) // move to tail [04 §3.3]
-			if len(q.primary) > 0 {
-				q.primary[0].Flags |= FlagActive
-				for i := 1; i < len(q.primary); i++ {
-					q.primary[i].Flags &^= FlagActive
-				}
-			}
+			q.ensureSingleActive()              // exactly one marker remains
 			continue
 		case 7:
 			q.cancelAll()
@@ -429,9 +450,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			}
 			cleanupNode(n)
 			q.primary = q.primary[1:]
-			if len(q.primary) > 0 {
-				q.primary[0].Flags |= FlagActive
-			}
+			q.ensureSingleActive() // mark moves to the successor [04 §3.3]
 			continue
 		default:
 			if code > 9 {

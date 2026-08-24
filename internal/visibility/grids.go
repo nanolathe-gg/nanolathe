@@ -171,10 +171,8 @@ func (s *Service) incByteGrid(idx int, owner PlayerID) bool {
 	if idx < 0 || idx >= len(s.byteGrids[owner]) {
 		return false
 	}
-	// Refcount saturates at 255; increment regardless of prior nonzero so overlapping units preserve visibility [03 §3.1].
-	if s.byteGrids[owner][idx] == 255 {
-		return false
-	}
+	// Raw u8 wrap, no saturation — the increment has no clamp in retail
+	// [03 §3.1]; the promoted raster notes confirm the wrap.
 	s.byteGrids[owner][idx]++
 	return true
 }
@@ -198,6 +196,12 @@ func (s *Service) decByteGrid(idx int, owner PlayerID) bool {
 // With history disabled word fills all-bits-set else zero; with current disabled byte grids fill 1 else zero.
 // Then all active footprints republish.
 func (s *Service) RebuildAll(observers []Observer) {
+	// Ownership note (PLAN_05 C16): at battle load retail runs this rebuild
+	// BEFORE the serialized mapping is read, and each reconstructed unit
+	// publishes synchronously before the loader returns — no empty-coverage
+	// first frame. The session/load path owns that ordering; it does not
+	// exist until phase 14 wires it, so callers today must not assume C16
+	// holds.
 	s.rebuildFills()
 	for _, ob := range observers {
 		s.Publish(ob.Owner, ob.CX, ob.CZ, ob.HeightByte, ob.Radius)

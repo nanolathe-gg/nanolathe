@@ -10,6 +10,18 @@ import (
 
 func fixed(v int) numeric.Fixed { return numeric.Fixed(int64(v) * 65536) }
 
+// acq builds the ordinary non-water acquisition gate for these fixtures. Sea
+// level is zero and every candidate sits at height 1, so the [06 §3.1]
+// above-sea-level requirement passes and the test is about selection, not
+// admission. The nil Visible port samples nothing and admits, which is what a
+// session with no visibility service wired has.
+func acq(sx, sz numeric.Fixed, weaponRange int32, badMask uint32, r *rng.Simulation) Acquisition {
+	return Acquisition{
+		ShooterX: sx, ShooterZ: sz, ShooterY: fixed(1),
+		SeaLevel: 0, Range: weaponRange, BadMask: badMask, RNG: r,
+	}
+}
+
 func TestAcquisitionOrderDeterminismTiedCandidates(t *testing.T) {
 	// Two candidates at same distance (0) → bound <2 → score 0 without RNG advance [06 §3.2] [01 §7.1] I4.
 	// Strictly lower wins, equal preserves first sampled [06 §3.2]; determinism requires pool slot asc (I1).
@@ -19,15 +31,15 @@ func TestAcquisitionOrderDeterminismTiedCandidates(t *testing.T) {
 	badMask := uint32(0)
 
 	candidates := []Candidate{
-		{Handle: pool.Handle(10), X: fixed(0), Z: fixed(0), Category: 0, Hostile: true, Visible: true},
-		{Handle: pool.Handle(5), X: fixed(0), Z: fixed(0), Category: 0, Hostile: true, Visible: true},
+		{Handle: pool.Handle(10), X: fixed(0), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},
+		{Handle: pool.Handle(5), X: fixed(0), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},
 	}
 	// Shuffle input order to prove determinism is by Handle asc, not input order.
 	// AcquireTarget sorts ≤50 sampled by Handle asc, so winner should be 5 regardless.
 	simRng := rng.NewSimulation(12345) // any seed; bound<2 path does not advance [01 §7.1]
 	// Use non-nil rng to exercise zero/no-advance path
 	var r rng.Simulation = simRng
-	h, ok := AcquireTarget(candidates, shooterX, shooterZ, weaponRange, badMask, &r)
+	h, ok := AcquireTarget(candidates, acq(shooterX, shooterZ, weaponRange, badMask, &r))
 	if !ok {
 		t.Fatalf("acquire failed, want ok")
 	}
@@ -36,11 +48,11 @@ func TestAcquisitionOrderDeterminismTiedCandidates(t *testing.T) {
 	}
 	// Reverse input order still yields same winner.
 	candidatesRev := []Candidate{
-		{Handle: pool.Handle(5), X: fixed(0), Z: fixed(0), Category: 0, Hostile: true, Visible: true},
-		{Handle: pool.Handle(10), X: fixed(0), Z: fixed(0), Category: 0, Hostile: true, Visible: true},
+		{Handle: pool.Handle(5), X: fixed(0), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},
+		{Handle: pool.Handle(10), X: fixed(0), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},
 	}
 	r2 := rng.NewSimulation(999)
-	h2, _ := AcquireTarget(candidatesRev, shooterX, shooterZ, weaponRange, badMask, &r2)
+	h2, _ := AcquireTarget(candidatesRev, acq(shooterX, shooterZ, weaponRange, badMask, &r2))
 	if h2 != pool.Handle(5) {
 		t.Fatalf("tied winner rev %d, want 5 [06 §3.2] I1", h2)
 	}
@@ -48,11 +60,11 @@ func TestAcquisitionOrderDeterminismTiedCandidates(t *testing.T) {
 	r3 := rng.NewSimulation(1)
 	r4 := rng.NewSimulation(1)
 	cands := []Candidate{
-		{Handle: pool.Handle(2), X: fixed(10), Z: fixed(0), Category: 0, Hostile: true, Visible: true},
-		{Handle: pool.Handle(3), X: fixed(10), Z: fixed(0), Category: 0, Hostile: true, Visible: true},
+		{Handle: pool.Handle(2), X: fixed(10), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},
+		{Handle: pool.Handle(3), X: fixed(10), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},
 	}
-	h3, _ := AcquireTarget(cands, shooterX, shooterZ, weaponRange, badMask, &r3)
-	h4, _ := AcquireTarget(cands, shooterX, shooterZ, weaponRange, badMask, &r4)
+	h3, _ := AcquireTarget(cands, acq(shooterX, shooterZ, weaponRange, badMask, &r3))
+	h4, _ := AcquireTarget(cands, acq(shooterX, shooterZ, weaponRange, badMask, &r4))
 	if h3 != h4 {
 		t.Fatalf("determinism failed: %d vs %d with same seed [06 §3.2] I1 I4", h3, h4)
 	}
@@ -75,10 +87,10 @@ func TestAcquisitionUsesRangeNotCoverage(t *testing.T) {
 		t.Fatalf("WithinCoverage true for distance 100 vs coverage 200, want true [06 §11.2]")
 	}
 	candidates := []Candidate{
-		{Handle: pool.Handle(1), X: candX, Z: candZ, Category: 0, Hostile: true, Visible: true},
+		{Handle: pool.Handle(1), X: candX, Z: candZ, Category: 0, Hostile: true, Y: fixed(1)},
 	}
 	r := rng.NewSimulation(1)
-	h, ok := AcquireTarget(candidates, shooterX, shooterZ, weaponRange, 0, &r)
+	h, ok := AcquireTarget(candidates, acq(shooterX, shooterZ, weaponRange, 0, &r))
 	if ok {
 		t.Fatalf("acquire succeeded with candidate outside range (%d), want fail (coverage vs engagement) [06 §3.3] ", h)
 	}
@@ -89,11 +101,11 @@ func TestAcquisitionUsesRangeNotCoverage(t *testing.T) {
 	}
 	// candidate at 30 is within range, even if coverage were 20 it would still be acquired — we test acquisition succeeds despite coverage miss.
 	candidates2 := []Candidate{
-		{Handle: pool.Handle(2), X: candX2, Z: candZ, Category: 0, Hostile: true, Visible: true},
+		{Handle: pool.Handle(2), X: candX2, Z: candZ, Category: 0, Hostile: true, Y: fixed(1)},
 	}
 	// Acquisition uses range, so should succeed; we pass same range 50 and ignore coverage param.
 	r2 := rng.NewSimulation(1)
-	h2, ok2 := AcquireTarget(candidates2, shooterX, shooterZ, weaponRange, 0, &r2)
+	h2, ok2 := AcquireTarget(candidates2, acq(shooterX, shooterZ, weaponRange, 0, &r2))
 	if !ok2 || h2 != pool.Handle(2) {
 		t.Fatalf("acquire failed for candidate within range 30 (coverage irrelevant), got %d ok %v [06 §3.3]", h2, ok2)
 	}
@@ -107,11 +119,11 @@ func TestAcquisitionPreferredOverFallback(t *testing.T) {
 
 	// Preferred candidate farther (distance 100) vs fallback closer (distance 10)
 	candidates := []Candidate{
-		{Handle: pool.Handle(1), X: fixed(10), Z: fixed(0), Category: 0x1, Hostile: true, Visible: true},  // fallback: matches bad
-		{Handle: pool.Handle(2), X: fixed(100), Z: fixed(0), Category: 0x0, Hostile: true, Visible: true}, // preferred
+		{Handle: pool.Handle(1), X: fixed(10), Z: fixed(0), Category: 0x1, Hostile: true, Y: fixed(1)},  // fallback: matches bad
+		{Handle: pool.Handle(2), X: fixed(100), Z: fixed(0), Category: 0x0, Hostile: true, Y: fixed(1)}, // preferred
 	}
 	r := rng.NewSimulation(1)
-	h, ok := AcquireTarget(candidates, shooterX, shooterZ, weaponRange, badMask, &r)
+	h, ok := AcquireTarget(candidates, acq(shooterX, shooterZ, weaponRange, badMask, &r))
 	if !ok {
 		t.Fatalf("acquire failed")
 	}
@@ -120,11 +132,11 @@ func TestAcquisitionPreferredOverFallback(t *testing.T) {
 	}
 	// If no preferred, fallback can win
 	candidates2 := []Candidate{
-		{Handle: pool.Handle(3), X: fixed(10), Z: fixed(0), Category: 0x1, Hostile: true, Visible: true},
-		{Handle: pool.Handle(4), X: fixed(20), Z: fixed(0), Category: 0x1, Hostile: true, Visible: true},
+		{Handle: pool.Handle(3), X: fixed(10), Z: fixed(0), Category: 0x1, Hostile: true, Y: fixed(1)},
+		{Handle: pool.Handle(4), X: fixed(20), Z: fixed(0), Category: 0x1, Hostile: true, Y: fixed(1)},
 	}
 	r2 := rng.NewSimulation(1)
-	h2, ok2 := AcquireTarget(candidates2, shooterX, shooterZ, weaponRange, badMask, &r2)
+	h2, ok2 := AcquireTarget(candidates2, acq(shooterX, shooterZ, weaponRange, badMask, &r2))
 	if !ok2 {
 		t.Fatalf("acquire fallback failed")
 	}
@@ -138,12 +150,12 @@ func TestAcquisitionVisibilityHostilityFiltering(t *testing.T) {
 	shooterX, shooterZ := fixed(0), fixed(0)
 	weaponRange := int32(1000)
 	candidates := []Candidate{
-		{Handle: pool.Handle(1), X: fixed(10), Z: fixed(0), Category: 0, Hostile: false, Visible: true}, // not hostile
-		{Handle: pool.Handle(2), X: fixed(10), Z: fixed(0), Category: 0, Hostile: true, Visible: false}, // not visible
-		{Handle: pool.Handle(3), X: fixed(10), Z: fixed(0), Category: 0, Hostile: true, Visible: true},  // valid
+		{Handle: pool.Handle(1), X: fixed(10), Z: fixed(0), Category: 0, Hostile: false, Y: fixed(1)},               // not hostile
+		{Handle: pool.Handle(2), X: fixed(10), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1), Cloaked: true}, // not visible
+		{Handle: pool.Handle(3), X: fixed(10), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},                // valid
 	}
 	r := rng.NewSimulation(1)
-	h, ok := AcquireTarget(candidates, shooterX, shooterZ, weaponRange, 0, &r)
+	h, ok := AcquireTarget(candidates, acq(shooterX, shooterZ, weaponRange, 0, &r))
 	if !ok || h != pool.Handle(3) {
 		t.Fatalf("filtering failed, got %d ok %v want 3 [06 §3.1]", h, ok)
 	}
@@ -151,7 +163,7 @@ func TestAcquisitionVisibilityHostilityFiltering(t *testing.T) {
 
 func TestTargetRetentionHysteresis(t *testing.T) {
 	// Retention rechecks hostility, badMask, stunned; otherwise keeps without rerunning range/sensor [06 §3.2].
-	cand := Candidate{Handle: pool.Handle(5), Category: 0, Hostile: true, Visible: true}
+	cand := Candidate{Handle: pool.Handle(5), Category: 0, Hostile: true, Y: fixed(1)}
 	if !ShouldRetain(cand, true, 0, false) {
 		t.Fatalf("retain true want true [06 §3.2]")
 	}
