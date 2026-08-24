@@ -1,5 +1,5 @@
 // Package content compiles retail's authored data into immutable definitions.
-// This file implements the movement class compiler [02 "Movement class record"].
+// This file implements the movement class compiler [02 "Movement class record"] [P1-03].
 package content
 
 import (
@@ -11,97 +11,110 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// MovementClass is a compiled movement profile [02 "Movement class record"].
+// MovementClass is a compiled movement profile [02 "Movement class record"] [P1-03].
 // DefinitionHeader must be the first field per catalog convention [02 §5].
 type MovementClass struct {
 	DefinitionHeader
 	// Footprint in cells [02 "Movement class record"] 1-2: FootPrintX/Z — integer, default 0, stored as 16-bit.
-	FootprintX int32 // 1: FootPrintX — integer, default 0, stored as 16-bit [02 "Movement class record"]
-	FootprintZ int32 // 2: FootPrintZ — integer, default 0, stored as 16-bit [02 "Movement class record"]
+	FootprintX int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	FootprintZ int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// Water depths [02 "Movement class record"] 3-4.
-	MaxWaterDepth int32 // 3: maxwaterdepth — integer, default: the profile's current value (0 for a fresh def) [02 "Movement class record"]
-	MinWaterDepth int32 // 4: minwaterdepth — integer, default: the profile's current value [02 "Movement class record"]
+	MaxWaterDepth int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	MinWaterDepth int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// Slopes [02 "Movement class record"] 5-8.
-	MaxSlope      int32 // 5: maxslope — integer, default: the profile's current value, stored as a byte [02 "Movement class record"]
-	BadSlope      int32 // 6: badslope — integer, default: half the maxslope value just read [02 "Movement class record"]
-	MaxWaterSlope int32 // 7: maxwaterslope — integer, default: the profile's current value, stored as a byte [02 "Movement class record"]
-	BadWaterSlope int32 // 8: badwaterslope — integer, default: half the maxwaterslope value just read [02 "Movement class record"]
+	MaxSlope      int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	BadSlope      int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	MaxWaterSlope int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	BadWaterSlope int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 }
 
-// compileMovementSection compiles a single CLASS section into a MovementClass.
-// It reads the eight keys in order with chained defaults and then applies the
-// three clamps in order [02 "Movement class record"].
+// compileMovementSection compiles a single CLASS section into a MovementClass [P1-03].
 //
-// Read order is the contract:
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// MinWaterDepth, MaxSlope, BadSlope (Max>>1 default), MaxWaterSlope,
+// BadWaterSlope (MaxWater>>1) [P1-03]. Defaults preserve prior value vs >>1
+// [P1-03]: FootPrint* default 0, depths/slopes preserve prior (BSS 0 on first),
+// Bad* default half of just-read Max via SHR AL,1.
 //
-//	1 FootPrintX default 0
-//	2 FootPrintZ default 0
-//	3 maxwaterdepth default 0 (profile current)
-//	4 minwaterdepth default 0
-//	5 maxslope default 0
-//	6 badslope default half the maxslope just read
-//	7 maxwaterslope default 0
-//	8 badwaterslope default half the maxwaterslope just read
+// Then three clamps run unconditionally per binary trace (no authored gate)
+// [P1-03][02 "Movement class record"]:
 //
-// Then three clamps in order:
-//
-//	1 if maxwaterslope < maxslope => maxslope = maxwaterslope
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 //	2 if maxslope < badslope => badslope = maxslope
 //	3 if maxwaterslope < badwaterslope => badwaterslope = maxwaterslope
 //
-// The clamps are conditioned on maxwaterslope having been authored. Retail's
-// spec states the defaults as "the profile's current value" which for a fresh
-// definition is 0, so an unconditional clamp would zero every land class that
-// omits MaxWaterSlope (12 of 15 retail classes). The conditional preserves
-// the retail file's intent and matches the openta-go compiler's
-// MaxWaterSlopePresent guard. If research later clarifies the intended
-// behaviour for an authored zero vs a missing key (integer cannot distinguish
-// [02 §4]), this can be adjusted with a TODO(question).
+// All comparisons are unsigned byte CMP/JB, strictly < not <= [P1-03].
+// BSS zero would destroy land MaxSlope (12 of 15 retail classes omit
+// maxwaterslope) — stock hypothesis is profile template 255 before parse
+// [P1-03]. Writer NEGATIVE-BOUNDED absent in 848/3901 scan [P1-03].
+// Nanolathe keeps gated divergence with A10 comment until writer proven [P1-03][SPEC_CONFLICTS SC5].
+//
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// slope via SeaLevel<=bMin branch swapping MaxSlope/MaxWaterSlope, passability
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// halfNeg = FootPrint*-0x100000/2, halfPos = FootPrint<<0x14/2, fullSpan = halfPos-halfNeg.
 func compileMovementSection(section *formats.Section, className string, prov Provenance) *MovementClass {
 	// Use only the typed accessors from formats/tdf_typed.go [02 §4].
-	footprintX := section.IntValue("FootPrintX", 0)
-	footprintZ := section.IntValue("FootPrintZ", 0)
-	maxWaterDepth := section.IntValue("maxwaterdepth", 0)
-	minWaterDepth := section.IntValue("minwaterdepth", 0)
-	maxSlope := section.IntValue("maxslope", 0)
-	// [02 "Movement class record"] badslope default is half the maxslope just read.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	footprintX := section.IntValue("FootPrintX", 0)       // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	footprintZ := section.IntValue("FootPrintZ", 0)       // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	maxWaterDepth := section.IntValue("maxwaterdepth", 0) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	minWaterDepth := section.IntValue("minwaterdepth", 0) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	maxSlope := section.IntValue("maxslope", 0)           // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// [02 "Movement class record"] badslope default is half the maxslope just read [P1-03] via SHR AL,1.
 	badSlopeDefault := maxSlope / 2
-	badSlope := section.IntValue("badslope", badSlopeDefault)
-	maxWaterSlope := section.IntValue("maxwaterslope", 0)
-	// [02 "Movement class record"] badwaterslope default is half the maxwaterslope just read.
+	badSlope := section.IntValue("badslope", badSlopeDefault) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	maxWaterSlope := section.IntValue("maxwaterslope", 0)     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// [02 "Movement class record"] badwaterslope default is half the maxwaterslope just read [P1-03].
 	badWaterSlopeDefault := maxWaterSlope / 2
-	badWaterSlope := section.IntValue("badwaterslope", badWaterSlopeDefault)
+	badWaterSlope := section.IntValue("badwaterslope", badWaterSlopeDefault) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 
-	// TODO(question): what is a movement profile's initial maxwaterslope,
-	// before the CLASS section is read?
+	// TODO(question): what is a movement profile's initial maxwaterslope
+	// before the CLASS section is read? Hypothesis is template 255 [P1-03].
 	//
-	// [02 "Movement class record"] runs three clamps unconditionally, and keys
-	// 3, 4, 5 and 7 default to "the profile's current value" rather than to
-	// zero. We use zero, which makes clamp 1 collapse maxslope to zero for every
-	// class that omits maxwaterslope — 12 of the reference install's 15, taking
-	// kbotsf2, kbotss2, tankbh3, tankds2, tanksh2 and tanksh3 with it. No land
-	// unit could climb anything.
+	// [02 "Movement class record"] runs three clamps unconditionally per binary
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// default, clamp 1 would set maxslope=0 for every class that omits
+	// maxwaterslope — 12 of 15 retail classes, taking kbotsf2, kbotss2, tankbh3
+	// etc with it, making land impassable — contradicting stock play. Stock
+	// ship data only authors MaxWaterSlope=255 for TANKHOVER3/4 [P1-03]; the
+	// other thirteen omit it yet remain land-passable, so template must carry
+	// large MaxWaterSlope (≈255) before parsing so absent preserves 255 and
+	// clamps are identity [P1-03]. Writer NEGATIVE-BOUNDED absent in 848/3901
+	// scan [P1-03].
 	//
-	// The presence branch below is a stand-in for that unknown default, not a
-	// reading of the spec: it is a documented divergence, SPEC_CONFLICTS SC5.
-	// If the profile is pre-initialized with a large maxwaterslope, all three
-	// clamps run unconditionally and produce retail's behaviour with no branch
-	// at all — that is the shape to aim for once the initial value is known.
+	// The presence branch below is a gated divergence per SPEC_CONFLICTS SC5 and
+	// A10, not a reading of the spec: it reproduces stock slopes with no
+	// template. If profile is pre-initialized with 255, all three clamps run
+	// unconditionally and produce retail's behaviour with no branch — that is
+	// the shape to aim for once initial value is known [P1-03].
 	//
-	// The string accessor is what distinguishes an absent key from an authored
-	// zero; the integer accessor cannot [02 §4].
+	// The string accessor distinguishes absent key from authored zero; the
+	// integer accessor cannot [02 §4][P1-03].
 	_, maxWaterSlopePresent := section.StringValue("maxwaterslope", "")
 
-	// Three clamps in order [02 "Movement class record"], gated per SC5.
-	if maxWaterSlopePresent && maxWaterSlope < maxSlope {
+	// Three clamps in order [02 "Movement class record"][P1-03], gated per SC5 A10.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// we gate clamps 1 and 3 on authored until template writer proven.
+	if maxWaterSlopePresent && maxWaterSlope < maxSlope { // clamp 1: MaxWaterSlope<MaxSlope→MaxSlope=MaxWaterSlope [P1-03] unsigned byte
 		maxSlope = maxWaterSlope
 	}
-	if maxSlope < badSlope {
+	if maxSlope < badSlope { // clamp 2: MaxSlope<BadSlope→BadSlope [P1-03] unconditional in retail, also here
 		badSlope = maxSlope
 	}
-	if maxWaterSlopePresent && maxWaterSlope < badWaterSlope {
+	if maxWaterSlopePresent && maxWaterSlope < badWaterSlope { // clamp 3: MaxWaterSlope<BadWaterSlope→BadWaterSlope [P1-03]
 		badWaterSlope = maxWaterSlope
 	}
+
+	// FBI materialization derives half-extents at 1<<20 scale [P1-03]:
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Validator via SeaLevel<=bMin branch swapping MaxSlope/MaxWaterSlope, pass < not <= [P1-03].
 
 	mc := &MovementClass{
 		DefinitionHeader: DefinitionHeader{
@@ -126,7 +139,7 @@ func compileMovementSection(section *formats.Section, className string, prov Pro
 }
 
 // CompileMovement compiles movement classes from gamedata/moveinfo.tdf
-// [02 "Movement class record"]. Discovery path is gamedata/moveinfo.tdf with
+// [02 "Movement class record"] [P1-03]. Discovery path is gamedata/moveinfo.tdf with
 // [CLASS*] sections. It returns a map keyed by CanonicalKey(class Name).
 func CompileMovement(fs vfs.FSOps) (map[string]*MovementClass, error) {
 	if fs == nil {

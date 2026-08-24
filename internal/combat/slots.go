@@ -283,7 +283,6 @@ func (s *Slot) RequiresAim() bool {
 //
 // Stockpile launch does not write reload [06 §4.2] C7 — caller must skip the store path for stockpile weapons.
 // Malformed states (zero maxHealth, negative health, overflow) are explicit unknowns per [06 §4.2] PLAN_09 Explicit unknowns.
-// TODO(question): [06 §4.2] zero maximum health, negative health, and out-of-range state remain untraced; guarded placeholders below.
 func ComputeStoredReload(health, maxHealth int32, kills int32, authoredReload int32) int32 {
 	// Tier: min(floor(unsigned kills/5),5) [06 §4.2] C7
 	tier := int32(uint32(kills) / 5) // unsigned division, floor [06 §4.2]
@@ -294,19 +293,19 @@ func ComputeStoredReload(health, maxHealth int32, kills int32, authoredReload in
 	veteranReload := int32((int64(100-6*tier) * int64(authoredReload)) / 100) // trunc toward zero [01 §8]
 
 	// healthFactor = 120 - floor(20*health/maxHealth) [06 §4.2] C7
-	// TODO(question): [06 §4.2] zero maximum health, negative health, overflow outside ordinary state remain malformed-state unknowns.
-	if maxHealth <= 0 {
-		// TODO(question): [06 §4.2] zero maxHealth malformed-state untraced; returning veteranReload as neutral placeholder until probe proves exact fault/divide behavior.
-		return veteranReload
+	// Zero maxHealth raises DIV fault after pool reservation not rolled back [P1-07 §2.7][GAP T5] I11.
+	// Stock MaxDamage is always >0, so fault is malformed-only; we reproduce as panic like retail #DE.
+	if maxHealth == 0 {
+		panic("combat: zero maxHealth divide fault in reload healthFactor [P1-07 §2.7][GAP T5]") // retail #DE [P1-07 §2.7]
+	}
+	if maxHealth < 0 {
+		// Negative max wraps as large unsigned; treat as fault path same as zero for determinism
+		panic("combat: negative maxHealth divide fault [P1-07 §2.7]")
 	}
 	// For ordinary positive health values, floor vs trunc agree; use trunc toward zero per I3 [01 §8].
-	// Preserve signed health handling for negative case but clamp to TODO placeholder.
-	h := health
-	if h < 0 {
-		// TODO(question): [06 §4.2] negative health outside ordinary state untraced; clamping to 0 as placeholder until retail trace proves signed divide handling.
-		h = 0
-	}
-	healthFactor := int32(120 - (int64(20)*int64(h))/int64(maxHealth)) // trunc toward zero [01 §8] [06 §4.2]
+	// Negative health is preserved modular via 16-bit wrap in damage path; for reload the signed
+	// health is used directly and trunc toward zero is the retail IDIV [P1-07 §2.7].
+	healthFactor := int32(120 - (int64(20)*int64(health))/int64(maxHealth)) // trunc toward zero [01 §8] [06 §4.2] [P1-07 §2.7]
 
 	// storedReload = floor(healthFactor*veteranReload/100) trunc toward zero [01 §8] [06 §4.2]
 	stored := int32((int64(healthFactor) * int64(veteranReload)) / 100) // trunc toward zero [01 §8]
@@ -326,16 +325,13 @@ func VeteranReloadForTest(kills int32, authoredReload int32) int32 {
 // HealthFactorForTest exposes the intermediate health factor for testing C7.
 // See ComputeStoredReload for malformed TODOs.
 func HealthFactorForTest(health, maxHealth int32) int32 {
-	if maxHealth <= 0 {
-		// TODO(question): zero maxHealth untraced [06 §4.2]
-		return 120
+	if maxHealth == 0 {
+		panic("combat: zero maxHealth divide fault in HealthFactorForTest [P1-07 §2.7]")
 	}
-	h := health
-	if h < 0 {
-		// TODO(question): negative health untraced [06 §4.2]
-		h = 0
+	if maxHealth < 0 {
+		panic("combat: negative maxHealth divide fault [P1-07 §2.7]")
 	}
-	return int32(120 - (int64(20)*int64(h))/int64(maxHealth)) // [06 §4.2] trunc [01 §8]
+	return int32(120 - (int64(20)*int64(health))/int64(maxHealth)) // [06 §4.2] trunc [01 §8] [P1-07 §2.7]
 }
 
 // ---------------------------------------------------------------------------

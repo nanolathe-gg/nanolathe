@@ -140,7 +140,7 @@ func (t *Terrain) classifyCell(cx, cz int32) (featureClass, *content.FeatureDef)
 
 // ValidatePlacement checks a building placement at cell (cx,cz) against the
 // terrain, using the unit's yard map and footprint rectangle [04 §6.2],
-// [05 "Geothermal requirement"].
+// [05 "Geothermal requirement"] [P1-10][P1-15].
 //
 // The validator bounds-checks the rectangle first, then applies the yard byte's
 // per-cell bits. Implemented here:
@@ -148,12 +148,16 @@ func (t *Terrain) classifyCell(cx, cz int32) (featureClass, *content.FeatureDef)
 //	bit 1-2  reject any nonzero occupant other than the passed self identity
 //	bit 5    the cell must be free of blocking features
 //	bit 6    fail when the resolved feature is not reclaimable
-//	bit 7    the geothermal requirement (character G)
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 //
 // Geothermal is the documented rule: "If any covered cell's yard byte has bit 7
 // set, validation succeeds only when at least one covered cell holds a feature
 // whose catalog entry carries the geothermal flag." An unresolvable reference
-// does not satisfy it [04 §6.2], [05 "Geothermal requirement"].
+// does not satisfy it [04 §6.2], [05 "Geothermal requirement"] [P1-10 at-least-one].
+// Persistence is read-only: vent remains in grid under plant and leaves grid on destruction with no restore [P1-10].
+//
+// Outside map rectangle: generic placement blocked (return error), mode 2 factory pad search passes [P1-15].
+// Use ValidatePlacementWithMode for mode-discriminated call.
 //
 // Not implemented, each with its own TODO below: bit 0 (enemy-visibility
 // occupancy), bit 3 (slope sampling), bit 4 (height tracking), and the
@@ -164,6 +168,13 @@ func (t *Terrain) classifyCell(cx, cz int32) (featureClass, *content.FeatureDef)
 // self is the placing unit's identity, or 0 during construction, where any
 // occupant rejects.
 func (t *Terrain) ValidatePlacement(cx, cz int32, yard []YardCell, footX, footZ int, self uint16) error {
+	return t.ValidatePlacementWithMode(cx, cz, yard, footX, footZ, self, 0)
+}
+
+// ValidatePlacementWithMode is the mode-discriminated validator [P1-15].
+// mode==2 is the factory exit pad search fallback where OOB returns pass (1) instead of blocked (0) [P1-15].
+// Generic mode (0) returns blocked for OOB. Yard and geothermal rules are identical in both modes.
+func (t *Terrain) ValidatePlacementWithMode(cx, cz int32, yard []YardCell, footX, footZ int, self uint16, mode int) error {
 	if t == nil {
 		return fmt.Errorf("world: nil terrain")
 	}
@@ -173,8 +184,11 @@ func (t *Terrain) ValidatePlacement(cx, cz int32, yard []YardCell, footX, footZ 
 	if len(yard) != footX*footZ {
 		return fmt.Errorf("world: yard length %d != footprint %dx%d=%d", len(yard), footX, footZ, footX*footZ)
 	}
-	// The validator bounds-checks the rectangle against the map first [04 §6.2].
+	// The validator bounds-checks the rectangle against the map first [04 §6.2][P1-15].
 	if cx < 0 || cz < 0 || cx+int32(footX) > t.CellW || cz+int32(footZ) > t.CellH {
+		if mode == 2 {
+			return nil // mode 2 factory pass allows OOB as fallback [P1-15]
+		}
 		return fmt.Errorf("world: placement %d,%d %dx%d out of bounds %dx%d", cx, cz, footX, footZ, t.CellW, t.CellH)
 	}
 	if t.Plot == nil || len(t.Plot) < int(t.CellW*t.CellH) {
@@ -252,17 +266,23 @@ func (t *Terrain) ValidatePlacement(cx, cz int32, yard []YardCell, footX, footZ 
 }
 
 // SampleMetal computes the metal a placed extractor samples from its footprint
-// [05 "Terrain metal extraction"]:
+// [05 "Terrain metal extraction"] [P1-10][P1-15]:
 //
 //	sampled metal = extracts-metal multiplier x sum(cell metal byte + 1)
 //
 // Every cell contributes at least one, so a zero-metal cell still adds one. The
-// result is stored on the unit instance at placement and never resampled: later
-// terrain or feature changes do not change an already stored amount.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// and never resampled [P1-10]:Σ(byte+1)*extractsMetal once, [P1-15] uniform char write.
+// Later terrain or feature changes do not change an already stored amount.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Pools 0x100 catalog / 0x800 anim slots / WH*0xD grid silent fail with successor 0xFFFF [P1-10][P1-15].
+// TNT unk3 byte uniformly 0 corpus-wide, not a metal raster [P1-15].
 //
 // The metal field must have been seeded by ApplySchema first; sampling before
 // that is an error rather than a plausible wrong number.
 //
+// TODO(question): varying per-cell metal file beyond uniform SurfaceMetal byte remains TODO(question) [P1-15];
+// per-cell metal beyond uniform not shipped (uniform SurfaceMetal seeds every cell via char write) [P1-15].
 // TODO(question): retail "performs the intermediate sum with fixed-point-shaped
 // integer arithmetic and then converts it to a single-precision value", and
 // notes that an exact compatibility mode must preserve that conversion and

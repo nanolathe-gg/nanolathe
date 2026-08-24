@@ -51,6 +51,8 @@ type Terrain struct {
 	// load failure — retail maps outlive their feature sets.
 	FeatureDefs []*content.FeatureDef
 
+	// PlayableWpix/Hpix are raw Wpix/Hpix; PlayRight/Bottom are Wpix-32/Hpix-128 [P1-15] used by camera clamp.
+
 	// metalSeeded records whether ApplySchema has run. SampleMetal refuses to
 	// answer before it has: an unseeded metal field reads as zero everywhere,
 	// which is indistinguishable from a genuinely metal-free map and silently
@@ -73,18 +75,16 @@ func (t *Terrain) FeatureDefAt(feature uint16) (*content.FeatureDef, bool) {
 }
 
 // ApplySchema seeds the per-cell metal byte from the mission's uniform surface
-// metal value [05 "Terrain metal extraction"]: "When the mission provides a
-// uniform surface-metal value, map loading initializes the cell metal field
-// from it; maps can also supply per-cell values."
+// metal value [05 "Terrain metal extraction"] [P1-15]: uniform SurfaceMetal scalar
+// via char write to every plot cell +7 (truncates via uint8), no W*H metal raster
+// allocated and TNT unk3 byte uniformly 0 corpus-wide [P1-15]. Per-cell varying
+// metal file beyond uniform remains TODO(question) [P1-15].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 //
 // The value is per-schema in the OTA, and schema selection is a battle-setup
 // decision [08], so it cannot happen inside Load. Battle setup must call this
 // before any extractor is placed; SampleMetal fails until it does.
-//
-// TODO(question): "maps can also supply per-cell values" is established, but
-// where a per-cell metal map is stored is not. No retail map in the reference
-// install carries one that we can identify, so only the uniform path exists
-// here.
 func (t *Terrain) ApplySchema(mh *content.MapHeader, schemaIndex int) error {
 	if t == nil {
 		return fmt.Errorf("world: nil terrain")
@@ -218,6 +218,8 @@ func (t *Terrain) PlotAt(cx, cz int32) *PlotCell {
 // It samples four neighboring plot-cell heights and interpolates using the low four
 // bits of each cell-space coordinate with signed right-shift bias — never a float lerp.
 // World→cell conversion uses the floor-corrected helpers in coords.go [03 §2.1] I3.
+// Quantization is floor >>4 for AOE tile phase (radius>>4+1) and >>20 for world→cell
+// (projX>>20 as arithmetic shift) [P1-07 §4] (1<<20 =16*65536).
 //
 // There is no neighbour clamping: retail's guard requires `cx+1 < Width &&
 // cz+1 < Height` and otherwise returns the integer −1 sentinel

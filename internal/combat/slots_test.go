@@ -193,14 +193,28 @@ func TestReloadTruncationVectors(t *testing.T) {
 			t.Fatalf("case %d stored %d, want %d (h %d/%d kills %d auth %d) [06 §4.2] I3", i, got, tc.wantStored, tc.health, tc.maxHealth, tc.kills, tc.authored)
 		}
 	}
-	// Malformed TODO cases documented: zero maxHealth returns veteran as placeholder [06 §4.2] TODO(question)
-	if got := ComputeStoredReload(100, 0, 0, 30); got != 30 {
-		t.Fatalf("zero maxHealth stored %d, want 30 placeholder [06 §4.2] TODO(question)", got)
-	}
-	// Negative health placeholder clamps to 0 factor 120
+	// Malformed: zero maxHealth raises divide fault [P1-07 §2.7][GAP T5] — retail #DE after reserve not rolled back
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatalf("zero maxHealth should panic divide fault [P1-07 §2.7]")
+			}
+		}()
+		ComputeStoredReload(100, 0, 0, 30)
+	}()
+	// Negative health uses signed IDIV trunc toward zero [P1-07 §2.7] — no clamp, factor 122 => 36
 	if got := ComputeStoredReload(-10, 100, 0, 30); got != 36 {
-		t.Fatalf("negative health stored %d, want 36 placeholder [06 §4.2] TODO(question)", got)
+		t.Fatalf("negative health stored %d, want 36 [P1-07 §2.7] signed trunc", got)
 	}
+	// HealthFactor zero max also faults
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatalf("HealthFactor zero max should panic [P1-07 §2.7]")
+			}
+		}()
+		HealthFactorForTest(100, 0)
+	}()
 	// Tier cap at 5: kills 100 should still tier 5
 	if got := VeteranReloadForTest(100, 100); got != 70 {
 		t.Fatalf("tier cap veteran %d, want 70 [06 §4.2]", got)

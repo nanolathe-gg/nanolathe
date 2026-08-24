@@ -454,19 +454,16 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			continue
 		default:
 			if code > 9 {
-				// TODO(question): [04 §3.3] and [05 "Queue pumping and result
-				// codes"] both say a code above nine "delegates to the order
-				// expiry helper" and returns, without saying what that helper
-				// does. [04 §3.3] separately records the observable consequence
-				// -- "a handler that returns an out-of-range phase code cancels
-				// the unit's ENTIRE queue" -- which is code 7's effect, not a
-				// single unlink.
+				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				// single-node unlink+cleanup+free, no RNG, no tail, not
+				// cancel-all [P0-08][04 §3.3]. Whole-queue cancel is
+				// exclusively code 7 [P0-08] A09.
 				//
-				// Implemented as the cancel-all that the consequence describes,
-				// because that is the only part of the behaviour research
-				// actually attests. The previous single unlink-and-free matched
-				// neither statement and was untagged.
-				q.cancelAll()
+				// Primary head is not tombstoned; secondary always is
+				// (BuildWeapon always tombstoned) [P0-07].
+				cleanupNode(n)
+				q.primary = q.primary[1:]
+				q.ensureSingleActive()
 				return
 			}
 		}

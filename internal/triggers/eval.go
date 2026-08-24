@@ -240,8 +240,13 @@ func (t *Trigger) Poll(c PollContext) bool {
 	// --- Timers --------------------------------------------------------------
 
 	case KindVictoryTimerRunsOut, KindDeathTimerRunsOut:
-		// Timers store seconds×30 as an absolute tick deadline and compare the
-		// authoritative tick count against it [08 "Evaluation"] C17.
+		// Timers store seconds×30 as an absolute tick deadline via IMUL 30
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// "Evaluation"] C17 [P1-01 §2.1][P1-01 §4]. Comparison is >= (not >)
+		// and uses signed int32 tick vs stored int ticks; seconds*30 stored
+		// as int ticks and compared >= [P1-01].
+		// TODO(question): signedness of deadline compare and overflow clamp
+		// for large seconds remain TODO(question) [P1-01 §8].
 		if int32(c.Tick) >= t.Args[0] {
 			t.Completed = true
 		}

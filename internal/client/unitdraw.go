@@ -308,3 +308,29 @@ func (c *Client) UIText(fnt *formats.FNT, text string, x, y int, color byte) {
 func (c *Client) WorldToScreenPx(x, y, z numeric.Fixed) (int32, int32) {
 	return c.cam.WorldToScreen(x, y, z)
 }
+
+// UIBlit stamps a decoded GAF frame into the indexed framebuffer at (x, y),
+// honoring GAF transparency and clipping to the framebuffer [fmt gaf].
+// Presentation only [I6].
+func (c *Client) UIBlit(f *formats.GAFFrame, x, y int) {
+	if f == nil {
+		return
+	}
+	for row := 0; row < int(f.Height); row++ {
+		py := y + row
+		if py < 0 || py >= c.height {
+			continue
+		}
+		for col := 0; col < int(f.Width); col++ {
+			px := x + col
+			if px < 0 || px >= c.width {
+				continue
+			}
+			b, ok := f.At(col, row)
+			if !ok {
+				continue
+			}
+			c.indexed[py*c.width+px] = b
+		}
+	}
+}

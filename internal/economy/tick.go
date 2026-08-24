@@ -22,10 +22,10 @@ func isSettlingState(s uint8) bool {
 }
 
 // statusPairPredicate is the literal status-pair predicate per [05 "Authoritative settlement order"] C4.
-// It is a nonzero halfword at one field OR a zero word at its neighbor — kept literal with TODO(question), no located writer.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func statusPairPredicate(half uint16, word uint16) bool {
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func statusPairPredicate(half int16, word int32) bool {
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	return half != 0 || word == 0
 }
@@ -253,12 +253,12 @@ func (s *Service) shareResource(ref int, res Res) {
 	switch res {
 	case Metal:
 		enabled = src.AutoShareMetal
-		threshold = src.MetalShareThreshold
-		ratio = 0.333333343 // [05 "Allied resource and sensor sharing"] metal ratio
+		threshold = src.MetalShareThreshold // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		ratio = 0.33333334                  // constant _004FD4B8 [P1-06] metal ratio via FLD 0.33333334
 	case Energy:
 		enabled = src.AutoShareEnergy
-		threshold = src.EnergyShareThreshold
-		ratio = 0.5 // [05 "Allied resource and sensor sharing"] energy ratio
+		threshold = src.EnergyShareThreshold // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		ratio = 0.5                          // constant _004FD4BC [P1-06] energy ratio
 	default:
 		return
 	}
@@ -325,4 +325,44 @@ func (s *Service) shareSensors(ref int) {
 		return
 	}
 	s.SensorShareCalls++
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Network receiver copies every field into participant state unconditionally, no comparison/threshold/abort — overwrite-sync.
+// Subtype 1 metal, 2 energy, 3 sensor; amount at +13 f32, src/dst DPID at +5/+9.
+// Over-cap gap clamp still applies via gap = capacity - current on receiver side? For overwrite-sync, receiver just applies amount via ShareTransfer without rechecking threshold, gap clamp still enforced via min(gap, amount) where amount from packet.
+// For P1-06, local deduction then remote copy latency via DirectPlay queue; we model immediate local effect.
+func ApplySharePacket(s *Service, subtype int, amount float32, srcIdx, dstIdx int) {
+	if s == nil || srcIdx < 0 || srcIdx >= 10 || dstIdx < 0 || dstIdx >= 10 {
+		return
+	}
+	// Overwrite-sync: no threshold/threshold gate, just transfer amount clamped by gap [P1-06].
+	// Note: archived snapshots bounded negative — no consumer [P1-06].
+	var res Res
+	switch subtype {
+	case 1:
+		res = Metal
+	case 2:
+		res = Energy
+	case 3:
+		// sensor sharing subtype 3 copies visibility bits, not stock — no economy stock change.
+		s.SensorShareCalls++
+		return
+	default:
+		return
+	}
+	src := &s.Players[srcIdx]
+	dst := &s.Players[dstIdx]
+	// Over-cap gap clamp: min(gap, amount) [P1-06].
+	gap := dst.Capacity[res] - dst.Stock[res]
+	if gap <= 0 {
+		return
+	}
+	if amount > gap {
+		amount = gap
+	}
+	if amount <= 0 {
+		return
+	}
+	ShareTransfer(src, dst, res, amount)
 }

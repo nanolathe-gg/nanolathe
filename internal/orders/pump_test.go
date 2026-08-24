@@ -324,25 +324,49 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code >9", func(t *testing.T) {
-		// "A handler that returns an out-of-range phase code cancels the unit's
-		// entire queue" [04 §3.3] — both segments, then return.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// single-node unlink+cleanup+free, no RNG, not cancel-all [P0-08].
+		// Whole-queue cancel is exclusively code 7 [P0-08] A09.
 		q := &Queue{}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(12) })
 		defer restore()
-		q.Push(moveID, Node{})
-		q.Push(moveID, Node{})
+		q.Push(moveID, Node{Param1: 1})
+		q.Push(moveID, Node{Param1: 2})
 		buildWeaponID := Lookup("BuildWeapon")
 		if buildWeaponID != 0 {
-			q.PushSecondary(buildWeaponID, Node{})
+			q.PushSecondary(buildWeaponID, Node{Param1: 10})
 		}
 		clearGates(q)
 		q.Pump(u, 10)
-		if len(q.primary) != 0 {
-			t.Fatalf("code>9 left %d primary records; it cancels the whole queue", len(q.primary))
+		if len(q.primary) != 1 || q.primary[0].Param1 != 2 {
+			t.Fatalf("code>9 should remove single head, left primary %v", func() []uint32 {
+				var out []uint32
+				for _, n := range q.primary {
+					out = append(out, n.Param1)
+				}
+				return out
+			}())
 		}
-		if len(q.secondary) != 0 {
-			t.Fatalf("code>9 left %d secondary records", len(q.secondary))
+		if len(q.secondary) != 1 {
+			t.Fatalf("code>9 should not touch secondary, got %d", len(q.secondary))
+		}
+	})
+	t.Run("code >9 single vs code7 cancel-all", func(t *testing.T) {
+		q := &Queue{}
+		u := newTestUnit()
+		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(7) })
+		defer restore()
+		q.Push(moveID, Node{Param1: 1})
+		q.Push(moveID, Node{Param1: 2})
+		buildWeaponID := Lookup("BuildWeapon")
+		if buildWeaponID != 0 {
+			q.PushSecondary(buildWeaponID, Node{Param1: 10})
+		}
+		clearGates(q)
+		q.Pump(u, 10)
+		if len(q.primary) != 0 || len(q.secondary) != 0 {
+			t.Fatalf("code7 should cancel-all, got primary %d secondary %d", len(q.primary), len(q.secondary))
 		}
 	})
 }
@@ -707,5 +731,87 @@ func TestNilHandlerDiagnostic(t *testing.T) {
 	}
 	if len(q.primary) != 1 {
 		t.Fatalf("nil handler should not remove node")
+	}
+}
+
+// SC8: code 3 and code 9-last share tick+30+RNG15 (30..44) not RNG30 [P0-08].
+func TestSC8_RNG15_30_44(t *testing.T) {
+	moveID := Lookup("Move_Ground")
+	rng.SeedGlobal(1, 0)
+	q := &Queue{}
+	u := newTestUnit()
+	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(3) })
+	defer restore()
+	q.Push(moveID, Node{})
+	clearGates(q)
+	q.Pump(u, 100)
+	if len(q.primary) != 1 {
+		t.Fatalf("code3 should remain")
+	}
+	dl := q.primary[0].Deadline
+	if dl < 130 || dl > 144 {
+		t.Fatalf("SC8 code3 deadline %d want 130..144 (tick+30+RNG15)", dl)
+	}
+	// code 9 last re-arms with same RNG15 bound
+	rng.SeedGlobal(99, 0)
+	q2 := &Queue{}
+	u2 := newTestUnit()
+	restore2 := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(9) })
+	defer restore2()
+	q2.Push(moveID, Node{Phase: 5})
+	clearGates(q2)
+	q2.Pump(u2, 50)
+	if len(q2.primary) != 1 || q2.primary[0].Phase != 0 {
+		t.Fatalf("code9 last should rearm phase 0")
+	}
+	dl2 := q2.primary[0].Deadline
+	if dl2 < 80 || dl2 > 94 {
+		t.Fatalf("SC8 code9 last deadline %d want 80..94 (tick+30+RNG15)", dl2)
+	}
+	if q2.primary[0].DynamicGate != 1 {
+		t.Fatalf("code9 last gate 1")
+	}
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func TestQueueModifiers_SegmentMapping(t *testing.T) {
+	moveID := Lookup("Move_Ground")
+	buildID := Lookup("BuildWeapon")
+	if moveID == 0 || buildID == 0 {
+		t.Fatalf("lookup")
+	}
+	// Replace (non-queued) purges unprotected primary, secondary untouched
+	q := &Queue{}
+	q.primary = []*Node{
+		{ID: moveID, Param1: 1, Flags: FlagPurgeSurvivor | FlagActive},
+		{ID: moveID, Param1: 2, Flags: 0},
+		{ID: moveID, Param1: 3, Flags: FlagPurgeSurvivor},
+	}
+	q.secondary = []*Node{{ID: buildID, Param1: 10, Flags: 0}}
+	q.PurgeUnprotected()
+	if len(q.primary) != 2 || len(q.secondary) != 1 {
+		t.Fatalf("replace should purge primary non-survivor only, got primary %d secondary %d", len(q.primary), len(q.secondary))
+	}
+	// Append/ShifQueue: queued insertion after active marker (primary) vs head-insert for secondary
+	q2 := &Queue{}
+	q2.Push(moveID, Node{Param1: 1})
+	clearGates(q2)
+	q2.Push(moveID, Node{Param1: 2})
+	if len(q2.primary) != 2 || q2.primary[1].Param1 != 2 {
+		t.Fatalf("append should insert after active, got %v", q2.primary)
+	}
+	// Secondary head-insert inherits auto flag
+	q3 := &Queue{}
+	q3.PushSecondary(buildID, Node{Flags: FlagAutoOp})
+	q3.PushSecondary(buildID, Node{})
+	if q3.secondary[0].Flags&FlagAutoOp == 0 {
+		t.Fatalf("secondary head-insert should inherit auto flag")
+	}
+	// Auto: pump empty creates auto-flagged node head-insert (verified via DropLeadingAutoOps)
+	q4 := &Queue{}
+	q4.primary = []*Node{{ID: moveID, Param1: 1, Flags: FlagAutoOp}, {ID: moveID, Param1: 2, Flags: 0}}
+	q4.DropLeadingAutoOps()
+	if len(q4.primary) != 1 || q4.primary[0].Param1 != 2 {
+		t.Fatalf("auto leading drop should remove head auto only")
 	}
 }

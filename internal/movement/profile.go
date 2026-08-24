@@ -217,24 +217,25 @@ func isFeatureBlocked(t *world.Terrain, cx, cz int32) bool {
 }
 
 // slopeAt returns the local slope at cell (cx,cz) in height units (0-255)
-// [04 §6.1][02 "Movement class record"]. Retail slope is compared against
-// MaxSlope/BadSlope and MaxWaterSlope/BadWaterSlope byte thresholds
-// [02 "Movement class record"] 5-8. The exact sampling (which neighbors, whether
-// Min/Max or corner heights) is not established in [04 §6.1]; we compute the
-// maximum absolute height difference to the 4 cardinal neighbors via PlotAt
-// heights with integer math, and cite the gap explicitly.
+// [04 §6.1][02 "Movement class record"][P1-03 §2.3-2.5].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// 2×2 neighbourhood at +5 (hmax) and +6 (hmin) per Plot13+0xD stride
+// [P1-03 §2.3][fmt tnt], handling edges via x+1<W and y<Height-1 guards,
+// then footprint aggregation bMin=min(hmin) bMax=max(hmax) bPeak=max(hmax)
+// where yard mask includes respective bits, slope=bMax-bMin unsigned byte
+// diff, pass when slope < limit (< not <=, equality passes) [P1-03 §2.5],
+// water vs land via SeaLevel <= bMin branch (entirely above water => land
+// slope else water slope) [P1-03 §2.4], BadSlope tier is penalized but
+// still passable (HOT cost, not validator block) TODO(question) [P1-03].
+// This per-cell helper approximates via max cardinal neighbor diff as fallback;
+// footprint aggregate form (CanOccupy/ValidateFootprint) is the one to replace
+// if probe shows DerivedFootprintRange mismatch [openta-go].
 //
-// TODO(question): what is the exact slope sampling? Research establishes that
-// the profile classifies against slope thresholds [04 §6.1] but does not name
-// whether slope is Max-Min over the footprint, max corner difference, or max
-// neighbor difference, nor the water-vs-land selection rule beyond
-// MaxWaterSlope applying "to any footprint touching water" [research/formats/tdf.md].
-// We use max cardinal neighbor height difference via HeightAt neighbors with
-// integer math as the requested fallback, and apply water slopes when the cell
-// itself is water (depth > 0), otherwise land slopes. If a probe shows a
-// different footprint aggregate (e.g., DerivedFootprintRange min HMin vs max
-// HMax [openta-go terrain.DerivedFootprintRange]), this is the one function to
-// change.
+// TODO(question): exact slope sampling for per-cell vs footprint aggregate
+// remains open; research establishes thresholds [04 §6.1] but footprint
+// aggregate is min(hmin) vs max(hmax) per P1-03, not max corner diff. We use
+// max cardinal neighbor height difference here as minimal non-inventing choice
+// and apply water slopes when cell itself is water (depth>0) else land slopes.
 func (p Profile) slopeAt(t *world.Terrain, cx, cz int32) uint8 {
 	if t == nil {
 		return 0
@@ -274,18 +275,22 @@ func (p Profile) slopeAt(t *world.Terrain, cx, cz int32) uint8 {
 	return uint8(maxDiff)
 }
 
-// Classify implements the three-state classifier [04 §6.1].
+// Classify implements the three-state classifier [04 §6.1][P1-03 §2.4-2.5].
 //
 // Returns ClassBlocked when the cell is outside the map, carries a blocking
 // feature or void sentinel [04 §6.2][fmt tnt], violates the water-depth
 // thresholds (MinWaterDepth lower bound and MaxWaterDepth upper bound, where a
 // zero threshold means no limit [02 "Movement class record"] as in
 // openta-go retailLegalCell), or exceeds the slope hard limit (MaxSlope over
-// land, MaxWaterSlope over water [research/formats/tdf.md]).
+// land, MaxWaterSlope over water [P1-03 §2.4][research/formats/tdf.md]).
+// Water-depth/slope interaction is SeaLevel <= bMin selects land slope else
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// bMax-bMin unsigned byte diff, equality passes (< not <=) [P1-03 §2.5].
 //
 // Returns ClassSteep when slope exceeds the soft BadSlope/BadWaterSlope but not
 // the hard Max, otherwise ClassClear. Both Steep and Clear are passable to the
-// search expansion [04 §6.1]; only Blocked rejects.
+// search expansion [04 §6.1]; BadSlope tier is HOT cost not blocker
+// TODO(question) [P1-03]. Only Blocked rejects.
 func (p Profile) Classify(t *world.Terrain, cx, cz int32) CellClass {
 	if t == nil || t.Plot == nil {
 		return ClassBlocked

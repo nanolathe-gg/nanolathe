@@ -71,6 +71,7 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 	s := &Session{
 		Catalog: cat,
 		Mission: m,
+		Latch:   NewEndLatch(),
 	}
 	// Gametype routing per C3 [08 "Session states"]: campaign is Gametype 1
 	// which selects StateLocalPreload (4) before the same StateLoading (5) path.
@@ -267,6 +268,26 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 			}
 			if up.IsImmune() {
 				u.Flags |= 1 << 15
+			}
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// Factory nanoframes sample in construction.allocateNanoframe; mission-placed extractors must sample here.
+			// Direct World.Create paths (e.g., save restore) remain TODO(question) if terrain not available at that site [P1-10][P1-15].
+			if def.ExtractsMetal != 0 && s.World != nil {
+				cx := world.WorldToCell(numeric.Fixed(int64(up.X)))
+				cz := world.WorldToCell(numeric.Fixed(int64(up.Z)))
+				footX := int(def.FootprintX)
+				footZ := int(def.FootprintZ)
+				if footX <= 0 {
+					footX = 1
+				}
+				if footZ <= 0 {
+					footZ = 1
+				}
+				cx -= int32(footX / 2)
+				cz -= int32(footZ / 2)
+				if v, err := s.World.SampleMetal(cx, cz, footX, footZ, float32(def.ExtractsMetal)); err == nil {
+					u.SpotMetal = v // once, never resampled [P1-10]
+				}
 			}
 		}
 	}

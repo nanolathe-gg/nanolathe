@@ -18,6 +18,7 @@ import "github.com/nanolathe/nanolathe/formats"
 //	0x0A  1  anchor DZ (signed offset at fringe members) — relocation scales this byte by the row stride
 //	0x0B  1  anchor DX
 //	0x0C  1  flags: bit 0 live instance, bit 2 never-seen fog, bits 3-6 placer nibble [02 "Terrain file"][03 §3.3][GAP T17]
+//	         bit 7 is preserved by &0xD7|0x50 but no isolated reader — TODO(T23) platform residual [P1-15].
 //
 // The first four bytes are typed by their runtime writers; several flag bits
 // remain not fully known — keep raw and do not gate gameplay on them
@@ -226,13 +227,17 @@ func (p *PlotCell) SetFlagByte(v uint8) { p[0xC] = v }
 // in a row-major plot of dimensions cellW x cellH.
 //
 //   - If the cell holds a real index (<0xFFFB) it is returned directly.
-//   - If it holds the fringe sentinel (0xFFFE) the signed anchor offsets at
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-//     when that anchor holds a real index.
+//   - If it holds the fringe sentinel (0xFFFE) the signed anchor offsets
+//     (runtime plot: cell+0xB X, cell+0x5 Z in decompile view [P1-07 §2.2],
+//     typed as AnchorDX 0xB / AnchorDZ 0xA with Z scaled by row stride) are
+//     followed to the anchor cell, whose feature is returned when that anchor
+//     holds a real index. Offsets are signed i8 [P1-07 §2.2] [02 "Terrain file"].
 //   - Otherwise (none/void/threshold or out-of-bounds anchor) it reports not found.
 //
 // This mirrors the retail indirection where fringe cells carry no index
 // themselves and are resolved through the anchor cell [GAP T14][02 "Terrain file"].
+// Floor quant is >>4 for AOE tile quant with floor bias and >>20 for world→cell
+// (1<<20 =16*65536) [P1-07 §4].
 func ResolveFeature(plot []PlotCell, cellW, cellH int, cx, cz int) (uint16, bool) {
 	if cellW <= 0 || cellH <= 0 {
 		return 0, false

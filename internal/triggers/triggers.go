@@ -189,7 +189,9 @@ type Trigger struct {
 // [08 "Evaluation"].
 
 // SecondsToTicks converts authored seconds to authoritative ticks at 30 Hz
-// [08 "Trigger object"] [08 "Evaluation"] [C17].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [P1-01 §2.1][P1-01 §4]. Comparison body is tick >= deadline (signed int
+// ticks, >= not >) [P1-01 §2.1] with seconds*30 stored as int ticks.
 func SecondsToTicks(seconds int32) int32 { return seconds * 30 }
 
 // New constructs a trigger of the given kind with type and up to three args.

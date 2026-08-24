@@ -63,6 +63,14 @@ type BurnWeaponEvent struct {
 	X, Y, Z numeric.Fixed
 }
 
+// Pool limits per [P1-10][P1-15]: catalog 0x100, anim slots 0x800, plot cell 0xD stride.
+const (
+	FeatureCatalogLimit  = 0x100  // 256 entries max [P1-10][P1-15]
+	FeatureAnimSlots     = 0x800  // 2048 burning anim slots [P1-10][P1-15]
+	PlotCellStride       = 0x0D   // 13 bytes per cell [P1-15]
+	FeatureSuccessorNone = 0xFFFF // sentinel no successor [P1-10][P1-15]
+)
+
 // Service is the features runtime [PLAN_08 WU-08-6].
 type Service struct {
 	Terrain *world.Terrain
@@ -86,7 +94,7 @@ type Service struct {
 	// [05 "Feature burning"], and the animation is a presentation asset this
 	// package does not own — hence a seam rather than a constant. A nil hook
 	// (or a zero result) means no length is known and the instance burns until
-	// something else clears it.
+	// something else clears it. Shipped finite lifetimes forced non-looping 46-282 visits [P1-10][P1-15].
 	BurnAnimationTicks func(*content.FeatureDef) int32
 }
 
@@ -251,10 +259,18 @@ func (s *Service) clearFootprint(cx, cz int, def *content.FeatureDef) {
 }
 
 // spawnFeatureAt stamps a feature through the common placement helper with no
-// position/velocity override and neutral side [06 §13.1].
+// position/velocity override and neutral side [06 §13.1] [P1-10][P1-15].
+// Pools 0x100 catalog / 0x800 anim slots / WH*0xD grid silent fail, successors 0xFFFF [P1-10][P1-15].
 func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance {
 	if s.Terrain == nil || def == nil {
 		return nil
+	}
+	// Pools 0x100/0x800 silent fail [P1-10][P1-15]: catalog 256, anim slots 2048.
+	if len(s.Terrain.FeatureDefs) >= FeatureCatalogLimit && s.featureIndexForDef(def) == world.PlotFeatureNone {
+		return nil // catalog pool 0x100 silent fail [P1-10][P1-15]
+	}
+	if len(s.instances) >= FeatureAnimSlots {
+		return nil // anim pool 0x800 silent fail [P1-10][P1-15]
 	}
 	w := int(s.Terrain.CellW)
 	h := int(s.Terrain.CellH)
@@ -275,6 +291,9 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 		// This keeps tests deterministic even when terrain was built without a catalog.
 		// We will assign 0 if terrain has at least one entry, else treat as error.
 		if len(s.Terrain.FeatureDefs) > 0 {
+			if len(s.Terrain.FeatureDefs) >= FeatureCatalogLimit {
+				return nil // catalog pool 0x100 silent fail [P1-10][P1-15]
+			}
 			// Try to append def to list for future resolves.
 			s.Terrain.FeatureDefs = append(s.Terrain.FeatureDefs, def)
 			featIdx = uint16(len(s.Terrain.FeatureDefs) - 1)
@@ -284,6 +303,7 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 			s.Terrain.FeatureDefs = []*content.FeatureDef{def}
 		}
 	}
+	// Plot grid WH*0xD already allocated; footprint clipping ensures no overflow [P1-15].
 	s.Terrain.Plot[idx].SetFeature(featIdx)
 	s.Terrain.Plot[idx].SetFlagByte(0)
 	// Create instance.

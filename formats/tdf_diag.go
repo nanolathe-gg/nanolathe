@@ -5,9 +5,10 @@ import (
 	"strings"
 )
 
-// ParseDiagnostic is one of retail's five TDF parse diagnostics [02 §4].
+// ParseDiagnostic is one of retail's five TDF parse diagnostics [02 §4][P1-12].
 // The strings are reproduced verbatim; the title and the detail line shape
-// belong to the same message-box family.
+// belong to the same message-box family. Failed load yields valid-but-empty
+// tree so caller decides fatal vs optional [P1-12][02 §4].
 type ParseDiagnostic string
 
 const (
@@ -18,7 +19,7 @@ const (
 	DiagNextBlock        ParseDiagnostic = "End of file - nextblock not zero"
 )
 
-// ParseErrorTitle is the exact title retail reports parse failures under.
+// ParseErrorTitle is the exact title retail reports parse failures under [P1-12][02 §4].
 const ParseErrorTitle = "Parse error in .TDF File!"
 
 // ParseError carries a diagnostic plus the context retail prints with it.
@@ -61,9 +62,10 @@ func (e *ParseError) WithFile(file string) *ParseError {
 
 // blankComments overwrites comment spans with ASCII spaces, preserving every
 // character offset so downstream offsets see text of unchanged length
-// [02 §4]. Newlines inside block comments are preserved so reported line
+// [02 §4][P1-12]. Newlines inside block comments are preserved so reported line
 // numbers stay meaningful; retail only guarantees offsets, and keeping the
-// newline preserves both.
+// newline preserves both. This is the verbatim comment-blanking contract
+// that preserves offsets for duplicate-section handling [P1-12].
 //
 // Rules: `//` blanks to end of line; `/* */` blanks the span; an unterminated
 // `/*` blanks everything through end of file. Comments cannot appear inside a

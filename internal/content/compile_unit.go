@@ -54,6 +54,7 @@ type UnitDef struct {
 	HealTime        int32   // healtime integer default 0 [02 "Unit record"]
 	CloakCost       int32   // cloakcost integer stored as floating default 0 [02 "Unit record"]
 	CloakCostMoving int32   // cloakcostmoving integer stored as floating default cloakcost just read [02 "Unit record"]
+	UnitLimit       int32   // unitlimit / maxthisunit per-def limit, -1 unlimited sentinel [P0-15][P0-16] TODO(question): writer/init site unsettled, default -1
 
 	// Movement and geometry [02 "Unit record"].
 	MaxVelocity         int32 // maxvelocity fixed default 0 [02 "Unit record"]
@@ -134,6 +135,13 @@ type UnitDef struct {
 	CantBeTransported  bool  // cantbetransported [02 "Unit record"]
 	Wacky              bool  // wacky [02 "Unit record"] — parsed into bit 16 of same packed flag word as norestrict, no reader but preserved [02 "Unit record"]
 
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// The FBI key mapping for this bit is not definitively established; presence
+	// of unitlimit/maxthisunit/limit is treated as enabled. Most retail units
+	// author no limit and remain unlimited.
+	LimitEnabled bool  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Limit        int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+
 	// Self-destruct countdown raw accessor — can distinguish authored vs absent [02 "Unit record"].
 	SelfDestructCountdown        string // raw value
 	SelfDestructCountdownPresent bool   // whether authored
@@ -173,7 +181,7 @@ func (u *UnitDef) UnknownKeysSorted() []string {
 // Anything not in this set is retained in Unknown (C14). Keys are foldName lowercased.
 var knownUnitKeys = map[string]struct{}{
 	"unitname": {}, "name": {}, "description": {}, "side": {}, "objectname": {}, "category": {}, "soundcategory": {}, "corpse": {}, "movementclass": {}, "weapon1": {}, "weapon2": {}, "weapon3": {}, "explodeas": {}, "selfdestructas": {}, "yardmap": {}, "defaultmissiontype": {}, "wpri_badtargetcategory": {}, "wsec_badtargetcategory": {}, "wspe_badtargetcategory": {}, "nochasecategory": {},
-	"buildcostenergy": {}, "buildcostmetal": {}, "energymake": {}, "energyuse": {}, "metalmake": {}, "extractsmetal": {}, "windgenerator": {}, "tidalgenerator": {}, "energystorage": {}, "metalstorage": {}, "makesmetal": {}, "buildtime": {}, "workertime": {}, "healtime": {}, "cloakcost": {}, "cloakcostmoving": {},
+	"buildcostenergy": {}, "buildcostmetal": {}, "energymake": {}, "energyuse": {}, "metalmake": {}, "extractsmetal": {}, "windgenerator": {}, "tidalgenerator": {}, "energystorage": {}, "metalstorage": {}, "makesmetal": {}, "buildtime": {}, "workertime": {}, "healtime": {}, "cloakcost": {}, "cloakcostmoving": {}, "unitlimit": {}, "maxthisunit": {}, "limit": {},
 	"maxvelocity": {}, "brakerate": {}, "acceleration": {}, "bankscale": {}, "pitchscale": {}, "damagemodifier": {}, "moverate1": {}, "moverate2": {}, "turnrate": {}, "waterline": {}, "cruisealt": {}, "transportsize": {}, "transportcapacity": {}, "buildangle": {}, "builddistance": {}, "sortbias": {}, "maneuverleashlength": {}, "attackrunlength": {}, "kamikazedistance": {}, "footprintx": {}, "footprintz": {},
 	"maxdamage": {}, "sightdistance": {}, "radardistance": {}, "sonardistance": {}, "radardistancejam": {}, "sonardistancejam": {}, "mincloakdistance": {},
 	"standingmoveorder": {}, "standingfireorder": {}, "init_cloaked": {}, "downloadable": {}, "builder": {}, "stealth": {}, "bmcode": {}, "zbuffer": {}, "isairbase": {}, "istargetingupgrade": {}, "teleporter": {}, "hidedamage": {}, "shootme": {}, "armoredstate": {}, "activatewhenbuilt": {}, "canfly": {}, "canhover": {}, "upright": {}, "floater": {}, "amphibious": {}, "isfeature": {}, "noshadow": {}, "immunetoparalyzer": {}, "hoverattack": {}, "antiweapons": {}, "digger": {}, "onoffable": {}, "mobilestandorders": {}, "firestandorders": {}, "canstop": {}, "canattack": {}, "canguard": {}, "canpatrol": {}, "canmove": {}, "canload": {}, "canreclamate": {}, "canresurrect": {}, "cancapture": {}, "candgun": {}, "kamikaze": {}, "norestrict": {}, "showplayername": {}, "commander": {}, "cantbetransported": {}, "wacky": {},
@@ -224,6 +232,15 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	buildTime := section.IntValue("buildtime", 0)
 	workerTime := section.IntValue("workertime", 0)
 	healTime := section.IntValue("healtime", 0)
+	unitLimit := section.IntValue("unitlimit", -1)
+	if unitLimit == -1 {
+		// also try maxthisunit / limit aliases
+		if v, ok := section.RawValue("maxthisunit"); ok && v != "" {
+			unitLimit = section.IntValue("maxthisunit", -1)
+		} else if v, ok := section.RawValue("limit"); ok && v != "" {
+			unitLimit = section.IntValue("limit", -1)
+		}
+	}
 	cloakCost := section.IntValue("cloakcost", 0)
 	// cloakcostmoving default is the value just read for cloakcost [02 "Unit record"].
 	cloakCostMoving := section.IntValue("cloakcostmoving", cloakCost)
@@ -306,6 +323,23 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	commander := section.BoolValue("commander", false)
 	cantBeTransported := section.BoolValue("cantbetransported", false)
 	wacky := section.BoolValue("wacky", false) // bit 16 same word as norestrict bit15 [02 "Unit record"]
+
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Known FBI spelling for this is not definitively established; treat
+	// unitlimit/maxthisunit/limit as enabled when present. Default unlimited.
+	limit := int32(-1)
+	limitEnabled := false
+	if _, ok := section.RawValue("unitlimit"); ok {
+		limit = section.IntValue("unitlimit", -1)
+		limitEnabled = true
+	} else if _, ok := section.RawValue("maxthisunit"); ok {
+		limit = section.IntValue("maxthisunit", -1)
+		limitEnabled = true
+	} else if _, ok := section.RawValue("limit"); ok {
+		// AI limit key in FBI context (rare) — treat as per-def if present
+		limit = section.IntValue("limit", -1)
+		limitEnabled = true
+	}
 
 	// Raw accessor for selfdestructcountdown so we can tell authored vs absent [02 "Unit record"].
 	selfDestructCountdown, selfDestructCountdownPresent := section.RawValue("selfdestructcountdown")
@@ -421,6 +455,7 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 		RadarDistanceJam:             radarDistanceJam,
 		SonarDistanceJam:             sonarDistanceJam,
 		MinCloakDistance:             minCloakDistance,
+		UnitLimit:                    int32(unitLimit),
 		StandingMoveOrder:            standingMoveOrder,
 		StandingFireOrder:            standingFireOrder,
 		InitCloaked:                  initCloaked,
@@ -466,6 +501,8 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 		Commander:                    commander,
 		CantBeTransported:            cantBeTransported,
 		Wacky:                        wacky,
+		LimitEnabled:                 limitEnabled,
+		Limit:                        limit,
 		SelfDestructCountdown:        selfDestructCountdown,
 		SelfDestructCountdownPresent: selfDestructCountdownPresent,
 		Unknown:                      unknown,
@@ -490,7 +527,7 @@ func writeUnitCanonical(u *UnitDef) []byte {
 	fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|", u.MaxVelocity, u.BrakeRate, u.Acceleration, u.BankScale, u.PitchScale, u.DamageModifier, u.MoveRate1, u.MoveRate2, u.TurnRate, u.Waterline)
 	fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|", u.CruiseAlt, u.TransportSize, u.TransportCapacity, u.BuildAngle, u.BuildDistance, u.SortBias, u.ManeuverLeashLength, u.AttackRunLength, u.KamikazeDistance, u.FootprintX)
 	fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|%d|", u.FootprintZ, u.MaxDamage, u.SightDistance, u.RadarDistance, u.SonarDistance, u.RadarDistanceJam, u.SonarDistanceJam)
-	fmt.Fprintf(&b, "%d|%d|%d|", u.MinCloakDistance, u.StandingMoveOrder, u.StandingFireOrder)
+	fmt.Fprintf(&b, "%d|%d|%d|%d|", u.MinCloakDistance, u.StandingMoveOrder, u.StandingFireOrder, u.UnitLimit)
 	flags := []bool{u.InitCloaked, u.Downloadable, u.Builder, u.Stealth, u.BMCode, u.ZBuffer, u.IsAirBase, u.IsTargetingUpgrade, u.Teleporter, u.HideDamage, u.ShootMe, u.ArmoredState, u.ActivateWhenBuilt, u.CanFly, u.CanHover, u.Upright, u.Floater, u.Amphibious, u.IsFeature, u.NoShadow, u.ImmuneToParalyzer, u.HoverAttack, u.AntiWeapons, u.Digger, u.OnOffable, u.MobileStandOrders, u.FireStandOrders, u.CanStop, u.CanAttack, u.CanGuard, u.CanPatrol, u.CanMove, u.CanLoad, u.CanReclamate, u.CanResurrect, u.CanCapture, u.CanDGun, u.Kamikaze, u.NoRestrict, u.ShowPlayerName, u.Commander, u.CantBeTransported, u.Wacky}
 	for _, f := range flags {
 		if f {
@@ -499,6 +536,13 @@ func writeUnitCanonical(u *UnitDef) []byte {
 			b.WriteString("0|")
 		}
 	}
+	// Limit fields [P0-16] included in canonical hash
+	if u.LimitEnabled {
+		b.WriteString("1|")
+	} else {
+		b.WriteString("0|")
+	}
+	fmt.Fprintf(&b, "%d|", u.Limit)
 	fmt.Fprintf(&b, "%s|%t|", u.SelfDestructCountdown, u.SelfDestructCountdownPresent)
 	b.WriteString("unknown|")
 	for _, k := range u.UnknownKeysSorted() {

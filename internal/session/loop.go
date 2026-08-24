@@ -54,6 +54,17 @@ type Session struct {
 	VictoryDone bool
 	DefeatDone  bool
 
+	// Latch is the global end-of-mission countdown and win/lose bits
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// bits 0x04 ending 0x10/0x20 win 0x40 lose (lose clears win) [P1-01].
+	// Latch never clears 0x04 once set [P1-01]. Settlement freeze gates
+	// countdown<0 && NOT latched [P1-01 §2.2].
+	Latch EndLatch
+
+	// Progress holds campaign W/L and BetweenMissions persistence
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Progress BankProgress
+
 	Wind *world.Wind
 
 	cadence uint32
@@ -62,6 +73,22 @@ type Session struct {
 	// alpha from the final snapshot pair. It is presentation-only; sim never
 	// reads it [PLAN_03 C15][PLAN_14 C6]. Tests set this to count renders.
 	OnRender func(alpha float32)
+}
+
+// humanCount returns the number of human players (ControllerState==1)
+// among economy slots [P1-01 §7.2] for the no-human post-loop path.
+func (s *Session) humanCount() int {
+	if s.Econ == nil {
+		return 0
+	}
+	n := 0
+	for i := 0; i < 10; i++ {
+		p := &s.Econ.Players[i]
+		if p.Exists && !p.IsObserver && p.ControllerState == 1 {
+			n++
+		}
+	}
+	return n
 }
 
 // RegisterAll centralizes subsystem registration in kernel phase order
@@ -156,8 +183,49 @@ func (s *Session) RegisterAll() {
 		}
 	})
 
-	// Phase 5c: economy + AI coordinator (session-owned player loop) [05 "Authoritative settlement order"][08 "Established AI-facing data and rooted planner"][PLAN_11 C11]
+	// Phase 5c: trigger evaluation before economy settlement [P1-01 §3]
+	// Victory is an AND, defeat an OR, victory first; polled once per
+	// 30 ticks in LOCAL player's slice only for mission type 1 [08
+	// "Evaluation"][P1-01 §3]. This must run before settlement so the
+	// latch freeze gates settlement same tick [P1-01 §2.2].
+	s.Kernel.Register(kernel.PhaseOrdersPathEconomy, "trigger-poll", func(tick uint32) {
+		if s.Mission == nil || s.Mission.Type != mission.TypeCampaign {
+			return
+		}
+		if len(s.Mission.Victory) == 0 && len(s.Mission.Defeat) == 0 {
+			return
+		}
+		if tick%30 != 0 {
+			return
+		}
+		ctx := triggers.PollContext{Tick: tick, World: s.Units, LocalOwner: 0, EnemyOwner: 1}
+		v, d := triggers.Evaluate(s.Mission.Victory, s.Mission.Defeat, ctx)
+		s.VictoryDone = s.VictoryDone || v
+		s.DefeatDone = s.DefeatDone || d
+		isDue := tick%30 == 0
+		if v {
+			s.Latch.AdvanceWin(isDue)
+		} else if d {
+			s.Latch.AdvanceLose(isDue)
+		}
+		if s.Econ != nil {
+			for i := 0; i < 10; i++ {
+				s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
+				s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
+			}
+		}
+	})
+
+	// Phase 5d: economy + AI coordinator (session-owned player loop) [05 "Authoritative settlement order"][08 "Established AI-facing data and rooted planner"][PLAN_11 C11]
 	s.Kernel.Register(kernel.PhaseOrdersPathEconomy, "economy-ai-coordinator", func(tick uint32) {
+		// Ensure latch propagation even when trigger poll didn't run (e.g., no triggers or not due)
+		// so coordinator's settlement gate sees latest latch.
+		if s.Econ != nil {
+			for i := 0; i < 10; i++ {
+				s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
+				s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
+			}
+		}
 		s.coordinatePlayers(tick)
 		if s.Econ != nil {
 			s.Econ.ShareTick(tick)
@@ -240,26 +308,37 @@ func (s *Session) RegisterAll() {
 		_ = tick
 	})
 
-	// Trigger evaluation site [08 "Evaluation"]: the LOCAL player's
-	// once-per-30-tick slice, mission type 1 only. Victory is an AND across
-	// its queue, defeat an OR, and victory evaluates first; unit-death
-	// notifications are fed exactly once via units.World.OnDeath.
-	// TODO(question): the exact retail kernel phase hosting this slice was
-	// never decompiled ([GAP T10] residual); it rides the barrier phase here.
-	s.Kernel.Register(kernel.PhaseBarrier, "trigger-poll", func(tick uint32) {
+	// Post-loop no-human countdown site at 0x4655E8 when humanCount==0
+	// [P1-01 §7.2]: decrements every tick, not per 30, so latch in 5
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// humanCount==0 [P1-01 §7.2]. Settlement still gated by same latch.
+	s.Kernel.Register(kernel.PhaseBarrier, "countdown-nohuman", func(tick uint32) {
 		if s.Mission == nil || s.Mission.Type != mission.TypeCampaign {
 			return
 		}
-		if len(s.Mission.Victory) == 0 && len(s.Mission.Defeat) == 0 {
+		if s.humanCount() != 0 {
 			return
 		}
-		if tick%30 != 0 {
-			return // once-per-30-ticks slice [08 "Evaluation"]
+		if s.Latch.Countdown < 0 && !s.Latch.IsEnding() {
+			// Not armed and no victory/defeat predicate: no latch yet.
+			// Retail post-loop site still arms to 4 when <0 before decrement
+			// on next predicate? We only decrement if already armed or if
+			// predicate would have armed. Keep armed check here.
+			return
 		}
-		ctx := triggers.PollContext{Tick: tick, World: s.Units, LocalOwner: 0, EnemyOwner: 1}
-		v, d := triggers.Evaluate(s.Mission.Victory, s.Mission.Defeat, ctx)
-		s.VictoryDone = s.VictoryDone || v
-		s.DefeatDone = s.DefeatDone || d
+		// If already armed (Countdown >=0) decrement every tick [P1-01 §7.2].
+		if s.Latch.Countdown >= 0 {
+			s.Latch.TickNoHuman()
+			if s.Latch.Countdown < 0 {
+				s.Latch.Bits |= LatchBitEnding
+			}
+			if s.Econ != nil {
+				for i := 0; i < 10; i++ {
+					s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
+					s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
+				}
+			}
+		}
 	})
 
 	// Phase 12: every-eight-sub-tick cadence flip [01 §4.4]

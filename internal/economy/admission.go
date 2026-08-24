@@ -173,10 +173,11 @@ func (s *Service) Settle(p int, tick uint32, w *units.World) {
 		s.OnSettle(p, tick)
 	}
 	// 1. Capacity is rebuilt from scratch each pass [05 "Storage capacity"] C14.
-	// It is a whole-world sweep because a player's capacity is the sum over its
-	// own completed units; running it per settled player is what retail's
-	// per-slot pass does.
 	RebuildCapacity(s, w)
+	// 1b. Per-unit production fills (maker stall, extractor, passive, negative refund) [P1-06].
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// It runs before pool sums so produced amounts are included in totalProduction for two-stage ratios.
+	s.PerUnitProductionFills(p, w)
 	// 2. Cloak upkeep debits live stock BEFORE the pool is formed, in unit slot
 	// order, so an earlier unit's debit can starve a later one [05 "Cloak
 	// debit"] C13.

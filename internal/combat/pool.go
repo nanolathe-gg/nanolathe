@@ -81,6 +81,17 @@ type Projectile struct {
 	CacheCellZ int32
 
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// collision after linked test as average of two cell height bytes; no reader
+	// found in bounded 1326 TU (NEGATIVE-BOUNDED) — preserve write for parity
+	// but no gameplay effect [P1-08 §2.5].
+	Scratch5E int16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// bits 0x30 (0x10|0x20) two-phase state [P1-08 §2.8] [06 §6.6]. Go bool fields
+	// mirror bits; raw byte kept for exact replay.
+	State69 uint8 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// Compaction writes each original record's old pool index into this field
 	// before copying survivors downward; the second repair pass searches live
 	// records for this marker to rewrite moved follower links [06 §5.2].
@@ -197,6 +208,37 @@ func (s *Service) ForEachAliveInEntrySpan(fn func(h pool.Handle, p *Projectile))
 		}
 		fn(h, &s.Records[i])
 	}
+}
+
+// ForEachInEntrySpanIncludingDead iterates ALL projectiles in the captured
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// vs families even for records whose dead bit was set before their turn
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (s *Service) ForEachInEntrySpanIncludingDead(fn func(h pool.Handle, p *Projectile, isDead bool)) {
+	if s == nil || fn == nil {
+		return
+	}
+	entry := s.Slots.Count() // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	for i := 0; i < entry; i++ {
+		h := pool.Handle(i + 1)
+		isDead := s.Slots.IsDead(h)  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		fn(h, &s.Records[i], isDead) // no dead filter [P1-07][P1-08 §2.2]
+	}
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (s *Service) ProjectileLinkAt(h pool.Handle) pool.Handle {
+	if s == nil || h == 0 {
+		return 0
+	}
+	idx := int(h) - 1
+	if idx < 0 || idx >= len(s.Records) || idx >= s.Slots.Count() {
+		return 0
+	}
+	return s.Records[idx].TargetProjectile // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 }
 
 // Compact performs the stable tail compaction described in [06 §5.2] and

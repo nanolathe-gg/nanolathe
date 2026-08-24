@@ -45,6 +45,7 @@ var (
 	ErrBadCount     = errors.New("construction: count must be > 0")
 	ErrNoQueue      = errors.New("construction: no queue")
 	ErrNoBuildOrder = errors.New("construction: build order descriptor not found")
+	ErrLimit        = errors.New(ErrLimitMessage) // pool/per-def limit [P0-15][P0-16] 300-tick retry
 )
 
 // LimitChecker is the hook for WU-08-5 nanoframe allocation per-def limit check [05 "Unit creation and limits"] C23.

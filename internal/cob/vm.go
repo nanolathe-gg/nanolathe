@@ -1,8 +1,14 @@
-// Package cob implements the COB VM [04 §4.2] [04 §4.3] [04 §4.6] [fmt cob].
+// Package cob implements the COB VM [04 §4.2] [04 §4.3] [04 §4.6] [fmt cob] [P1-11].
 //
 // Contracts C10–C14 plus the drain/signal piece surface are owned here.
 // Engine ports and callbacks (C15–C19) live in ports.go (WU-06-7); this file
 // defines only the minimal unexported hook Drain needs to call out.
+// P1-11 residuals implemented: legacy 0x10009000 two-pop no-op (empty unit
+// adapter stub), reserved 0x10063000 pop-count-and-continue (0 producer in
+// 835 scripts), bitwise word XOR raw a^b [P1-11], stack overflow kills thread
+// (status cleared), bad piece kills, alloc failure start-script retains args
+// / call-script wedges waitSlot=-1 [P1-11]; aim-ready closure, SetSpeed domain,
+// Killed variant, save blob size validation remain TODO(question) [P1-11].
 package cob
 
 import (
@@ -40,16 +46,24 @@ const (
 
 // Thread is one of the eight 164-byte retail records [01 §6.1] C13, [04 §4.2] (I13).
 // Go stores named fields; byte size is not reproduced, but capacities and
-// scan order are.
+// scan order are. Stack depth 10 [04 §4.2] C13; overflow kills thread
+// (status cleared, active count --, drain yields) per [P1-11] §2.4 — same as
+// illegal opcode kill path. Bad piece index (<0 or >=pieceCount) also kills
+// [P1-11] §2.4. Save blob size validation is statics*4+pieces*76+threads*164
+// with fatal vs skip branch TODO(question) [P1-11] §2.4.
+// TODO(question): exact save blob abort vs skip for piece vs thread count
+// mismatch remains open [P1-11]; TODO(question): Killed variant cell
+// unassigned and persistence [P1-11]; TODO(question): SetSpeed domain
+// (likely 16.16 vs 0x1AE/1B2 thresholds) [P1-11].
 type Thread struct {
 	Status     int // one of Thread* constants [04 §4.2]
 	PC         int // word index into Program.Code [04 §4.3] C12
 	Stack      [10]int32
-	SP         int // stack depth 0..10 [04 §4.2] C13
+	SP         int // stack depth 0..10 [04 §4.2] C13; overflow kills per [P1-11] §2.4
 	Sleep      int32
 	WaitPiece  int
 	WaitAxis   int
-	WaitThread int   // -1 leaked wait [04 §4.3] C14
+	WaitThread int   // -1 leaked wait [04 §4.3] C14 [P1-11] call-script wedges -1
 	SignalMask int32 // per-thread signal mask [04 §4.3]
 }
 
@@ -128,7 +142,7 @@ var dispatchKeys = []uint32{
 	0x10034000, // divide (unguarded) [04 §4.3] C14
 	0x10035000, // bitwise and [04 §4.3]
 	0x10036000, // bitwise or [04 §4.3]
-	0x10037000, // bitwise xor [04 §4.3] [fmt cob]
+	0x10037000, // bitwise xor raw a^b not bool [04 §4.3][P1-11] [fmt cob]
 	0x10038000, // bitwise not [04 §4.3]
 	0x10041000, // random [04 §4.3]
 	0x10042000, // engine read 1-arg [04 §4.3]
@@ -143,11 +157,11 @@ var dispatchKeys = []uint32{
 	0x10056000, // not-equal [04 §4.3]
 	0x10057000, // logical and [04 §4.3]
 	0x10058000, // logical or [04 §4.3]
-	0x10059000, // word xor [04 §4.3]
+	0x10059000, // word xor raw a^b (not boolean) [04 §4.3][P1-11]
 	0x1005a000, // logical not [04 §4.3]
-	0x10061000, // start-script [04 §4.3] E C14
-	0x10062000, // call-script [04 §4.3] E C14
-	0x10063000, // reserved pop-N [04 §4.3] E
+	0x10061000, // start-script E C14 retains args on no-slot/bad-id [P1-11] [04 §4.3]
+	0x10062000, // call-script E C14 wedges waitSlot=-1 on no-slot [P1-11] [04 §4.3]
+	0x10063000, // reserved pop-count-and-continue E: pop count discards, PC+=3, 0 producer 835 scripts [P1-11] [04 §4.3]
 	0x10064000, // jump [04 §4.3] D
 	0x10065000, // return [04 §4.3]
 	0x10066000, // jump-if-false [04 §4.3] D
@@ -181,6 +195,10 @@ func NewVM(prog *Program) *VM {
 
 // SetProgram binds prog to v, reallocating piece and static storage.
 // Callers that construct VM as a literal may call this after.
+// Save blob size validation is statics*4+pieces*76+threads*164 with fatal vs
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// expected = statics*4 + pieces*76 + threads*164; exact fatal vs skip branch
+// for piece vs thread count mismatch remains TODO(question) [P1-11].
 func (v *VM) SetProgram(prog *Program) {
 	v.prog = prog
 	if prog == nil {
@@ -752,13 +770,16 @@ func (v *VM) runThread(idx int) {
 			axis := int(v.prog.Code[t.PC+2])
 			target, _ := t.stackPop()
 			speed, _ := t.stackPop()
-			if piece >= 0 && piece < len(v.anims) && axis >= 0 && axis < 3 {
-				anim := &v.anims[piece].axes[axis]
-				anim.moveTarget = target
-				anim.moveSpeed = speed
-				anim.moveBusy = true
-				anim.spinActive = false // move cancels spin on same axis? Last writer wins [03 §2.4] C22 but keep both?
+			// Bad piece index kills thread (status cleared) [P1-11] §2.4.
+			if piece < 0 || piece >= len(v.anims) || axis < 0 || axis >= 3 {
+				v.killThread(idx)
+				return
 			}
+			anim := &v.anims[piece].axes[axis]
+			anim.moveTarget = target
+			anim.moveSpeed = speed
+			anim.moveBusy = true
+			anim.spinActive = false // move cancels spin on same axis? Last writer wins [03 §2.4] C22 but keep both?
 			t.PC += 3
 		case 0x10002000: // turn [04 §4.3]
 			if t.PC+2 >= len(v.prog.Code) {
@@ -769,13 +790,15 @@ func (v *VM) runThread(idx int) {
 			axis := int(v.prog.Code[t.PC+2])
 			target, _ := t.stackPop()
 			speed, _ := t.stackPop()
-			if piece >= 0 && piece < len(v.anims) && axis >= 0 && axis < 3 {
-				anim := &v.anims[piece].axes[axis]
-				anim.turnTarget = uint16(target) // masked to 16 bits [04 §4.3]
-				anim.turnSpeed = speed
-				anim.turnBusy = true
-				anim.spinActive = false
+			if piece < 0 || piece >= len(v.anims) || axis < 0 || axis >= 3 {
+				v.killThread(idx)
+				return
 			}
+			anim := &v.anims[piece].axes[axis]
+			anim.turnTarget = uint16(target) // masked to 16 bits [04 §4.3]
+			anim.turnSpeed = speed
+			anim.turnBusy = true
+			anim.spinActive = false
 			t.PC += 3
 		case 0x10003000: // spin [04 §4.3]
 			if t.PC+2 >= len(v.prog.Code) {
@@ -786,19 +809,21 @@ func (v *VM) runThread(idx int) {
 			axis := int(v.prog.Code[t.PC+2])
 			accel, _ := t.stackPop() // top accel [fmt cob] "spin ... speed S accelerate A" pushes speed then accel
 			speed, _ := t.stackPop()
-			if piece >= 0 && piece < len(v.anims) && axis >= 0 && axis < 3 {
-				anim := &v.anims[piece].axes[axis]
-				anim.spinTarget = speed
-				anim.spinAccel = accel
-				// If accel is 0, speed takes effect immediately [04 §4.6] immediate
-				if accel == 0 {
-					anim.spinSpeed = speed
-				} else if anim.spinSpeed == 0 && speed != 0 && accel != 0 {
-					// Keep current spinSpeed as is; interpolation will ramp.
-				}
-				anim.spinActive = true
-				anim.turnBusy = false
+			if piece < 0 || piece >= len(v.anims) || axis < 0 || axis >= 3 {
+				v.killThread(idx)
+				return
 			}
+			anim := &v.anims[piece].axes[axis]
+			anim.spinTarget = speed
+			anim.spinAccel = accel
+			// If accel is 0, speed takes effect immediately [04 §4.6] immediate
+			if accel == 0 {
+				anim.spinSpeed = speed
+			} else if anim.spinSpeed == 0 && speed != 0 && accel != 0 {
+				// Keep current spinSpeed as is; interpolation will ramp.
+			}
+			anim.spinActive = true
+			anim.turnBusy = false
 			t.PC += 3
 		case 0x10004000: // stop-spin [04 §4.3]
 			if t.PC+2 >= len(v.prog.Code) {
@@ -808,22 +833,24 @@ func (v *VM) runThread(idx int) {
 			piece := int(v.prog.Code[t.PC+1])
 			axis := int(v.prog.Code[t.PC+2])
 			dec, _ := t.stackPop()
-			if piece >= 0 && piece < len(v.anims) && axis >= 0 && axis < 3 {
-				anim := &v.anims[piece].axes[axis]
-				if dec == 0 {
-					// Sub-tick deceleration becomes immediate stop [04 §4.6]
-					anim.spinSpeed = 0
-					anim.spinTarget = 0
-					anim.spinAccel = 0
+			if piece < 0 || piece >= len(v.anims) || axis < 0 || axis >= 3 {
+				v.killThread(idx)
+				return
+			}
+			anim := &v.anims[piece].axes[axis]
+			if dec == 0 {
+				// Sub-tick deceleration becomes immediate stop [04 §4.6]
+				anim.spinSpeed = 0
+				anim.spinTarget = 0
+				anim.spinAccel = 0
+				anim.spinActive = false
+				anim.turnBusy = false
+			} else {
+				anim.spinTarget = 0
+				anim.spinAccel = dec
+				// spinActive remains true until speed reaches 0 via interpolate
+				if anim.spinSpeed == 0 {
 					anim.spinActive = false
-					anim.turnBusy = false
-				} else {
-					anim.spinTarget = 0
-					anim.spinAccel = dec
-					// spinActive remains true until speed reaches 0 via interpolate
-					if anim.spinSpeed == 0 {
-						anim.spinActive = false
-					}
 				}
 			}
 			t.PC += 3
@@ -833,9 +860,12 @@ func (v *VM) runThread(idx int) {
 				return
 			}
 			piece := int(v.prog.Code[t.PC+1])
-			if piece >= 0 && piece < len(v.pieceFlags) {
-				v.pieceFlags[piece] |= 0x01 // bit 0 draw [04 §4.3]
+			// Bad piece kills [P1-11] §2.4.
+			if piece < 0 || piece >= len(v.pieceFlags) {
+				v.killThread(idx)
+				return
 			}
+			v.pieceFlags[piece] |= 0x01 // bit 0 draw [04 §4.3]
 			t.PC += 2
 		case 0x10006000: // hide [04 §4.3]
 			if t.PC+1 >= len(v.prog.Code) {
@@ -843,9 +873,11 @@ func (v *VM) runThread(idx int) {
 				return
 			}
 			piece := int(v.prog.Code[t.PC+1])
-			if piece >= 0 && piece < len(v.pieceFlags) {
-				v.pieceFlags[piece] &^= 0x01
+			if piece < 0 || piece >= len(v.pieceFlags) {
+				v.killThread(idx)
+				return
 			}
+			v.pieceFlags[piece] &^= 0x01
 			t.PC += 2
 		case 0x10007000: // cache [04 §4.3]
 			if t.PC+1 >= len(v.prog.Code) {
@@ -853,9 +885,11 @@ func (v *VM) runThread(idx int) {
 				return
 			}
 			piece := int(v.prog.Code[t.PC+1])
-			if piece >= 0 && piece < len(v.pieceFlags) {
-				v.pieceFlags[piece] |= 0x02 // bit 1 [04 §4.3]
+			if piece < 0 || piece >= len(v.pieceFlags) {
+				v.killThread(idx)
+				return
 			}
+			v.pieceFlags[piece] |= 0x02 // bit 1 [04 §4.3]
 			t.PC += 2
 		case 0x10008000: // dont-cache [04 §4.3]
 			if t.PC+1 >= len(v.prog.Code) {
@@ -863,16 +897,18 @@ func (v *VM) runThread(idx int) {
 				return
 			}
 			piece := int(v.prog.Code[t.PC+1])
-			if piece >= 0 && piece < len(v.pieceFlags) {
-				v.pieceFlags[piece] &^= 0x02
+			if piece < 0 || piece >= len(v.pieceFlags) {
+				v.killThread(idx)
+				return
 			}
+			v.pieceFlags[piece] &^= 0x02
 			t.PC += 2
-		case 0x10009000: // legacy two-arg effect (no-op) [04 §4.3]
+		case 0x10009000: // legacy two-arg effect (no-op) [04 §4.3][P1-11] — empty unit adapter stub, two-pop no-op on units
 			if t.PC+1 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
 			}
-			// Pops two values [04 §4.3] but does nothing on units.
+			// Pops two values [04 §4.3][P1-11] but does nothing on units (empty adapter stub).
 			t.stackPop()
 			t.stackPop()
 			t.PC += 2
@@ -882,9 +918,11 @@ func (v *VM) runThread(idx int) {
 				return
 			}
 			piece := int(v.prog.Code[t.PC+1])
-			if piece >= 0 && piece < len(v.pieceFlags) {
-				v.pieceFlags[piece] &^= 0x08 // use bit 3 for shadow [04 §4.3]
+			if piece < 0 || piece >= len(v.pieceFlags) {
+				v.killThread(idx)
+				return
 			}
+			v.pieceFlags[piece] &^= 0x08 // use bit 3 for shadow [04 §4.3]
 			t.PC += 2
 		case 0x1000b000: // move-now [04 §4.3]
 			if t.PC+2 >= len(v.prog.Code) {
@@ -894,14 +932,16 @@ func (v *VM) runThread(idx int) {
 			piece := int(v.prog.Code[t.PC+1])
 			axis := int(v.prog.Code[t.PC+2])
 			target, _ := t.stackPop()
-			if piece >= 0 && piece < len(v.Pieces) && axis >= 0 && axis < 3 {
-				v.Pieces[piece].SetTrans(axis, fixedFromRaw(int64(target))) // [03 §2.4] C22
-				if piece < len(v.anims) {
-					anim := &v.anims[piece].axes[axis]
-					anim.moveBusy = false
-					anim.moveSpeed = 0
-					anim.moveTarget = target
-				}
+			if piece < 0 || piece >= len(v.Pieces) || axis < 0 || axis >= 3 {
+				v.killThread(idx)
+				return
+			}
+			v.Pieces[piece].SetTrans(axis, fixedFromRaw(int64(target))) // [03 §2.4] C22
+			if piece < len(v.anims) {
+				anim := &v.anims[piece].axes[axis]
+				anim.moveBusy = false
+				anim.moveSpeed = 0
+				anim.moveTarget = target
 			}
 			t.PC += 3
 		case 0x1000c000: // turn-now [04 §4.3]
@@ -912,15 +952,17 @@ func (v *VM) runThread(idx int) {
 			piece := int(v.prog.Code[t.PC+1])
 			axis := int(v.prog.Code[t.PC+2])
 			target, _ := t.stackPop()
-			if piece >= 0 && piece < len(v.Pieces) && axis >= 0 && axis < 3 {
-				v.Pieces[piece].SetAngle(axis, uint16(target)) // masked [04 §4.3]
-				if piece < len(v.anims) {
-					anim := &v.anims[piece].axes[axis]
-					anim.turnBusy = false
-					anim.turnSpeed = 0
-					anim.turnTarget = uint16(target)
-					anim.spinActive = false
-				}
+			if piece < 0 || piece >= len(v.Pieces) || axis < 0 || axis >= 3 {
+				v.killThread(idx)
+				return
+			}
+			v.Pieces[piece].SetAngle(axis, uint16(target)) // masked [04 §4.3]
+			if piece < len(v.anims) {
+				anim := &v.anims[piece].axes[axis]
+				anim.turnBusy = false
+				anim.turnSpeed = 0
+				anim.turnTarget = uint16(target)
+				anim.spinActive = false
 			}
 			t.PC += 3
 		case 0x1000d000: // shade [04 §4.3]
@@ -929,9 +971,11 @@ func (v *VM) runThread(idx int) {
 				return
 			}
 			piece := int(v.prog.Code[t.PC+1])
-			if piece >= 0 && piece < len(v.pieceFlags) {
-				v.pieceFlags[piece] |= 0x04 // bit 2 [04 §4.3]
+			if piece < 0 || piece >= len(v.pieceFlags) {
+				v.killThread(idx)
+				return
 			}
+			v.pieceFlags[piece] |= 0x04 // bit 2 [04 §4.3]
 			t.PC += 2
 		case 0x1000e000: // dont-shade [04 §4.3]
 			if t.PC+1 >= len(v.prog.Code) {
@@ -939,9 +983,11 @@ func (v *VM) runThread(idx int) {
 				return
 			}
 			piece := int(v.prog.Code[t.PC+1])
-			if piece >= 0 && piece < len(v.pieceFlags) {
-				v.pieceFlags[piece] &^= 0x04
+			if piece < 0 || piece >= len(v.pieceFlags) {
+				v.killThread(idx)
+				return
 			}
+			v.pieceFlags[piece] &^= 0x04
 			t.PC += 2
 		case 0x1000f000: // emit-sfx [04 §4.3]
 			if t.PC+1 >= len(v.prog.Code) {
@@ -1002,6 +1048,11 @@ func (v *VM) runThread(idx int) {
 				v.killThread(idx)
 				return
 			}
+			// Stack overflow kills thread (status cleared) [P1-11] §2.4.
+			if t.SP >= 10 {
+				v.killThread(idx)
+				return
+			}
 			mode := int(word & 0x7) // low three bits [04 §4.3] C10
 			operand := v.prog.Code[t.PC+1]
 			switch mode {
@@ -1020,10 +1071,13 @@ func (v *VM) runThread(idx int) {
 			}
 			t.PC += 2
 		case 0x10022000: // alloc-local [04 §4.3]
-			if t.SP < 10 {
-				// Raise depth without initializing [04 §4.3]
-				t.SP++
+			// Overflow kills thread [P1-11] §2.4 (divergence: prior code discarded).
+			if t.SP >= 10 {
+				v.killThread(idx)
+				return
 			}
+			// Raise depth without initializing [04 §4.3]
+			t.SP++
 			t.PC += 1
 		case 0x10023000: // pop [04 §4.3] F C14
 			if t.PC+1 >= len(v.prog.Code) {
@@ -1049,16 +1103,28 @@ func (v *VM) runThread(idx int) {
 		case 0x10031000: // add [04 §4.3]
 			b, _ := t.stackPop()
 			a, _ := t.stackPop()
+			if t.SP >= 10 { // overflow kills [P1-11] §2.4
+				v.killThread(idx)
+				return
+			}
 			t.stackPush(a + b) // wrap 32 bits
 			t.PC += 1
 		case 0x10032000: // subtract second-popped minus top [04 §4.3]
 			b, _ := t.stackPop()
 			a, _ := t.stackPop()
+			if t.SP >= 10 {
+				v.killThread(idx)
+				return
+			}
 			t.stackPush(a - b)
 			t.PC += 1
 		case 0x10033000: // multiply [04 §4.3]
 			b, _ := t.stackPop()
 			a, _ := t.stackPop()
+			if t.SP >= 10 {
+				v.killThread(idx)
+				return
+			}
 			t.stackPush(a * b)
 			t.PC += 1
 		case 0x10034000: // divide unguarded [04 §4.3] C14
@@ -1070,22 +1136,38 @@ func (v *VM) runThread(idx int) {
 			if a == -2147483648 && b == -1 {
 				panic("cob: divide overflow INT_MIN/-1") // [04 §4.3] C14
 			}
+			if t.SP >= 10 {
+				v.killThread(idx)
+				return
+			}
 			t.stackPush(a / b) // trunc toward zero [01 §8] I3
 			t.PC += 1
 		case 0x10035000: // and [04 §4.3]
 			b, _ := t.stackPop()
 			a, _ := t.stackPop()
+			if t.SP >= 10 {
+				v.killThread(idx)
+				return
+			}
 			t.stackPush(a & b)
 			t.PC += 1
 		case 0x10036000: // or [04 §4.3]
 			b, _ := t.stackPop()
 			a, _ := t.stackPop()
+			if t.SP >= 10 {
+				v.killThread(idx)
+				return
+			}
 			t.stackPush(a | b)
 			t.PC += 1
 		case 0x10037000: // xor [04 §4.3]
 			b, _ := t.stackPop()
 			a, _ := t.stackPop()
-			t.stackPush(a ^ b) // raw word xor [04 §4.3]
+			if t.SP >= 10 {
+				v.killThread(idx)
+				return
+			}
+			t.stackPush(a ^ b) // raw word xor [04 §4.3][P1-11]
 			t.PC += 1
 		case 0x10038000: // not in place [04 §4.3]
 			if t.SP > 0 {
@@ -1101,6 +1183,10 @@ func (v *VM) runThread(idx int) {
 			// unconditional here and the stream decides.
 			bound := uint32(int64(high) - int64(low) + 1)
 			res := low + int32(v.simRandN(bound))
+			if t.SP >= 10 {
+				v.killThread(idx)
+				return
+			}
 			t.stackPush(res)
 			t.PC += 1
 		case 0x10042000: // engine read 1-arg [04 §4.3]
@@ -1110,6 +1196,10 @@ func (v *VM) runThread(idx int) {
 				out = fn([]int32{id})
 			} else {
 				out = v.readPortDefault(id, []int32{id})
+			}
+			if t.SP >= 10 {
+				v.killThread(idx)
+				return
 			}
 			t.stackPush(out)
 			t.PC += 1
@@ -1128,6 +1218,10 @@ func (v *VM) runThread(idx int) {
 			} else {
 				out = v.readPortDefault(vals[0], vals)
 			}
+			if t.SP >= 10 {
+				v.killThread(idx)
+				return
+			}
 			t.stackPush(out)
 			t.PC += 1
 		case 0x10044000: // engine read single-arg port [04 §4.3]
@@ -1137,6 +1231,10 @@ func (v *VM) runThread(idx int) {
 				out = fn([]int32{id})
 			} else {
 				out = v.readPortDefault(id, []int32{id})
+			}
+			if t.SP >= 10 {
+				v.killThread(idx)
+				return
 			}
 			t.stackPush(out)
 			t.PC += 1
@@ -1151,6 +1249,10 @@ func (v *VM) runThread(idx int) {
 			var out int32
 			if fn, ok := v.portFuncs[Port(word&0xFF)]; ok && fn != nil {
 				out = fn(nil)
+			}
+			if t.SP >= 10 {
+				v.killThread(idx)
+				return
 			}
 			t.stackPush(out)
 			t.PC += 1
@@ -1356,13 +1458,14 @@ func (v *VM) runThread(idx int) {
 			t.Status = ThreadWaitCall
 			t.PC += 3
 			return
-		case 0x10063000: // reserved pop-N [04 §4.3]
+		case 0x10063000: // reserved pop-N [04 §4.3][P1-11] — pop-count-and-continue, opcode E shape: PC+1 script id (ignored), PC+2 count, pop count discards, PC+=3, 0 producer 835 scripts
 			if t.PC+2 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
 			}
 			argc := int(v.prog.Code[t.PC+2])
-			// Pop count values into discarded temporary [04 §4.3]
+			// Pop count values into discarded temporary [04 §4.3][P1-11].
+			// TODO(question): behavior when count > stackDepth (underflow) remains open [P1-11] §2.4 — pops min(count, depth) or reads garbage? Marked TODO.
 			for i := 0; i < argc; i++ {
 				t.stackPop()
 			}

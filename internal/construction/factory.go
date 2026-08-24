@@ -166,6 +166,13 @@ func (s *Service) SetBuilderLink(product, builder pool.Handle) {
 	s.builderLinks[product] = builder
 }
 
+// ClearBuilderLink clears builder link on completion [P0-14] (helper for test).
+func (s *Service) ClearBuilderLink(product pool.Handle) {
+	if s.builderLinks != nil {
+		delete(s.builderLinks, product)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // C24 Construction arithmetic [05 "Construction arithmetic"].
 // ---------------------------------------------------------------------------
@@ -396,10 +403,9 @@ func validatePlacement(s *Service, cx, cz int32, footX, footZ int, yard []world.
 		// No terrain => treat as pass-through for tests without terrain (assume unblocked).
 		return nil
 	}
-	// Factory class/state flag pair as MODE — pass through yard validator with null self identity 0 [05 C17].
-	// Terrain.ValidatePlacement already bounds-checks rectangle first [04 §6.2].
-	// Use null self identity 0 so any foreign occupant rejects [05 C17].
-	return s.Terrain.ValidatePlacement(cx, cz, yard, footX, footZ, 0)
+	// Factory exit-pad search fallback OOB mode 2→pass while generic blocked [P1-15].
+	// Acquires with factory class/state flag pair as MODE 2 and null self identity 0 [05 C17][P1-15].
+	return s.Terrain.ValidatePlacementWithMode(cx, cz, yard, footX, footZ, 0, 2)
 }
 
 // ---------------------------------------------------------------------------
@@ -411,8 +417,23 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, c
 		return nil, fmt.Errorf("construction: nil product def")
 	}
 	// Enforce per-def limit ONLY at allocation [05 C23][05 "Unit creation and limits"].
+	// Per-def limit -1 sentinel means unlimited [P0-15][P0-16]; 0 from Go zero-value also treated as unlimited for fixtures.
+	// TODO(question): Genuine limit 0 (no units allowed) vs Go zero-value unlimited not distinguished; fixtures use explicit -1 where needed.
+	if lim, limited := perDefLimit(def); limited && lim > 0 {
+		cnt := 0
+		if s.World != nil {
+			for _, u := range s.World.Iter() {
+				if u != nil && u.Alive && u.Def != nil && int(u.Owner) == int(factory.Owner) && u.Def.UnitName == def.UnitName {
+					cnt++
+				}
+			}
+		}
+		if int32(cnt) >= lim {
+			return nil, fmt.Errorf(ErrLimitMessage)
+		}
+	}
 	if !CheckLimit(factory, def.UnitName) {
-		return nil, fmt.Errorf(ErrLimitMessage) // verbatim [05 C18]
+		return nil, fmt.Errorf(ErrLimitMessage) // verbatim [05 C18] via hook [P0-14]
 	}
 	if s.Allocator != nil {
 		// Hook for tests: create at exit spot cell origin world coords.
@@ -421,7 +442,17 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, c
 		// Add half footprint offset to center? But spec says create AT exit spot with product def; exit spot is already snapped rectangle origin, but creation at exit spot world position is at that origin? For simplicity create at cell origin.
 		// Use Y from factory or terrain height.
 		y := factory.Y
-		return s.Allocator(factory.Owner, def, x, y, z)
+		prod, err := s.Allocator(factory.Owner, def, x, y, z)
+		if err != nil {
+			return nil, err
+		}
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if prod != nil && def.ExtractsMetal != 0 && s.Terrain != nil {
+			if v, err := s.Terrain.SampleMetal(cell.X, cell.Z, int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
+				prod.SpotMetal = v // once, never resampled [P1-10]
+			}
+		}
+		return prod, nil
 	}
 	if s.World == nil {
 		return nil, fmt.Errorf("construction: no world/allocator")
@@ -444,6 +475,12 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, c
 	prod.Flags &^= FlagInBuildStance // build stance cleared [05 C18]
 	// MaxHealth from def
 	prod.MaxHealth = int32(def.MaxDamage)
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	if def.ExtractsMetal != 0 && s.Terrain != nil {
+		if v, err := s.Terrain.SampleMetal(cell.X, cell.Z, int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
+			prod.SpotMetal = v // once, never resampled [P1-10]
+		}
+	}
 	return prod, nil
 }
 
@@ -460,6 +497,7 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	s.logMessage("Starting construction")
 
 	// Register builder link on product [05 C18].
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	s.SetBuilderLink(productHandle, factory.Handle)
 
 	// Copy standing-order bits 18-19/20-21 from factory class/state word [05 C18][05 "Rally inheritance"].
@@ -1108,6 +1146,11 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	if node.Target != 0 && s.World != nil {
 		product = s.World.Unit(node.Target)
 	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Note: product LOS after settlement phase5, targetable already phase3, GetBuilt same/next tick by slot [P0-14].
+	// Trigger BuildUnitType only on local 30-tick deadline [P0-14].
+	// Interrupt masks 2/8 bodies known, producers TODO(T25) [P0-14].
 	// Engine prints no text, lowers start-building edge, runs completion transition [05].
 	factory.Flags &^= FlagStartBuilding
 	if factory.Script != nil {
@@ -1130,23 +1173,24 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 		if node.Param2 > 0 {
 			node.Param2--
 		}
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if product != nil {
+			delete(s.builderLinks, product.Handle)
+		}
 		// Refresh interface [05].
 		if s != nil && s.OnRefresh != nil {
 			s.OnRefresh(factory)
 			s.OnRefresh(product)
 		}
 		// Return result 0 — state machine restarts at state0 within same pump pass, so coalesced counts build back-to-back [05].
-		// If count now zero, free node via state0 drop; else restart at state0.
+		// Back-to-back state0 restart count-- per unit, no repeat flag [P0-14].
 		if node.Param2 == 0 {
 			s.removeHead(factory, node)
 		} else {
 			node.Phase = uint8(State0)
 			node.DynamicGate = 0
 			node.Deadline = -1
-			// Clear target for next iteration? But product link should be cleared for next nanoframe? Actually node still held product handle; for next iteration we need to clear it to allow new allocation? Spec says completion clears presentation payload, decrements count, refreshes, returns 0 — machine restarts. The product link for next iteration should be cleared.
 			node.Target = 0
-			// Immediately handle state0 in same pass? To avoid gap, we could call handleState0 now if we want back-to-back with no gap.
-			// For test simplicity, we will not loop; next Pump will handle state0.
 		}
 	} else {
 		// No product? Still decrement and free?
@@ -1162,7 +1206,57 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	}
 }
 
+// PumpAll pumps all factories in stable order 0..9 players, slots asc 0x118 [P0-14].
+// Same-tick health/remaining visible immediate to later builders → lowest-slot wins [P0-14].
+// Fix: iterate slots by handle asc without snapshot — product allocated mid-sweep at slot after
+// builder is visible same tick. Snapshot via World.Iter() at player-loop start breaks lowest-slot wins.
+// Iterate per-player slices directly when sliced, else per-player scan of handles [P0-16][P0-14].
+func (s *Service) PumpAll(tick uint32) {
+	if s == nil || s.World == nil {
+		return
+	}
+	if s.World.IsSliced() {
+		for player := 0; player < 10; player++ {
+			start, end, ok := s.World.SliceForPlayer(player)
+			if !ok {
+				continue
+			}
+			for slot := start; slot <= end; slot++ {
+				u := s.World.Unit(pool.Handle(slot))
+				if u == nil || !u.Alive || int(u.Owner) != player {
+					continue
+				}
+				s.Pump(u, tick)
+			}
+		}
+		return
+	}
+	cap := s.World.Capacity()
+	if cap <= 0 {
+		cap = s.World.TotalRecords() - 1
+		if cap <= 0 {
+			cap = len(s.World.Iter()) + 10
+			if cap < 1 {
+				cap = 500
+			}
+		}
+	}
+	for player := 0; player < 10; player++ {
+		for slot := 1; slot <= cap; slot++ {
+			u := s.World.Unit(pool.Handle(slot))
+			if u == nil || !u.Alive || int(u.Owner) != player {
+				continue
+			}
+			s.Pump(u, tick)
+		}
+	}
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+
 // Pump implements the factory production handler entry per [05] with interrupt priority [PLAN_08].
+// Primary-only factory queue (68-desc census) — bit 0x40000 only on BuildWeapon/SelfDestruct [P0-14].
 func (s *Service) Pump(factory *units.Unit, tick uint32) {
 	if factory == nil {
 		return

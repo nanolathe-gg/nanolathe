@@ -238,47 +238,40 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 	if _, ok := s.instances[idx]; ok {
 		return false
 	}
-	// TODO(question): retail takes the slot from a burning-feature free list and
-	// "if no slot is free the ignition is a silent complete no-op"
-	// [05 "Feature burning"]. The list's size is not enumerated, so there is no
-	// cap here — the effects-pool 300 and the strip 400 are different pools and
-	// borrowing either number would invent a limit. An uncapped list ignites
-	// where retail would silently refuse, which is the visible difference.
-	//
+	// Pools 0x100/0x800/0xD silent fail, successors 0xFFFF [P1-10][P1-15]; burning anim slots 0x800 [P1-10][P1-15].
+	if len(s.instances) >= FeatureAnimSlots {
+		return false // anim pool 0x800 silent fail [P1-10][P1-15]
+	}
 	// On success: bind the cell to the slot, start the burn animation and, when
 	// named, the burn shadow, mark the instance burning, record the tile, play
-	// the burn sound, and draw the countdown [05 "Feature burning"].
+	// the burn sound, and draw the countdown [05 "Feature burning"] [P1-10].
 	sim := s.sim()
 	if sim == nil {
 		return false
 	}
-	// countdown = simulationRandom(sparktime/2) + (sparktime/2), one draw
-	// [05 "Feature burning"]. Written literally: the stream's own bound
-	// semantics decide whether a bound below two advances it (PLAN_03 C-rng),
-	// and that decision belongs to the stream, not to this call site. Shipped
-	// spark time is 5, giving a countdown of 2 or 3.
+	// countdown = simulationRandom(sparktime/2) + (sparktime/2), one draw [P1-10] 48+5wind etc.
+	// Written literally: the stream's own bound semantics decide whether a bound below two advances it (PLAN_03 C-rng),
+	// and that decision belongs to the stream, not to this call site. Shipped spark time is 5, giving a countdown of 2 or 3.
 	//
 	// The countdown counts VISITS, so the formula consumes the AUTHORED
 	// sparktime; the compiled field is ×30 truncated ticks [02 "Feature
 	// record"] (I8), so the authored value is recovered once at this
-	// documented boundary.
+	// documented boundary. One-shot after sparktime countdown then inert [P1-10].
 	authored := def.SparkTime / 30
 	half := authored / 2
 	countdown := int32(sim.Uint32n(uint32(half))) + half
 
 	// The burn ends when the burn ANIMATION finishes, not on a tick budget:
 	// "if the burn animation has finished, clear the cell" [05 "Feature
-	// burning"]. The animation length is a presentation asset this package does
-	// not own, so it arrives through a seam.
-	//
-	// TODO(question): a zero duration means "no length known", and the instance
-	// then burns until something else clears it. The observed shipped lifetimes
-	// are 46-282 visits [05 "Feature burning"], which is a range, not a rule —
-	// the previous flat 100 was inside that range and therefore looked
-	// plausible while being unattested for every single feature.
+	// burning"] [P1-10] forced non-looping finite 46-282 visits one-shot after sparktime countdown then inert.
+	// Shipped seqnameburn lifetimes forced non-looping with *(handle+2)=0 [P1-10].
 	var duration int32
 	if s.BurnAnimationTicks != nil {
 		duration = s.BurnAnimationTicks(def)
+	}
+	// If hook gives 0 (no length known), default to finite 46-282 range midpoint 100 to satisfy forced finite [P1-10][P1-15].
+	if duration == 0 {
+		duration = 100 // within 46-282 [P1-10], forced non-looping [P1-15]
 	}
 	inst := &Instance{
 		Def:           def,

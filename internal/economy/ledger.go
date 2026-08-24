@@ -50,9 +50,10 @@ type Player struct {
 	// Status-pair identity per the decompile (notes/economy/07_settlement_cadence_deadline.md
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	StatusHalfwordAt144 uint16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	StatusWordAt140     uint16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GameEnded           bool   // game-ended flag bit clear required [05 "Authoritative settlement order"]
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	StatusHalfwordAt144 int16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	StatusWordAt140     int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GameEnded           bool  // game-ended flag bit clear required [05 "Authoritative settlement order"]
 	// EndGameCountdown must be negative for settlement; initialized -1
 	// [05 "Authoritative settlement order"].
 	// TODO(question): the two arm/decrement sites that latch GameEnded and
@@ -81,6 +82,7 @@ type Service struct {
 	OnSettle         func(p int, tick uint32) // notification-only diagnostic seam fired at settlement entry (WU-08-2/08-3 merge); production wiring leaves it nil [05 "Authoritative settlement order"] C7
 	ReferencePlayer  int                      // reference/local player for ShareTick dispatcher [05 "Allied resource and sensor sharing"] C12
 	SensorShareCalls int                      // diagnostic: sensor sharing invocations at tick%450==0 [05]
+	EconomySelector  *int                     // global selector at 0x37EEE for negative energyUse refund discount [P1-06] 0=>-0.5 1=>-0.7
 
 	// CloakCost reports a unit's per-pass cloak upkeep, or zero when the unit
 	// is not cloaked [05 "Cloak debit"] C13. It is a seam rather than a field

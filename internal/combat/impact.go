@@ -110,6 +110,30 @@ func NoExplodeRetirement(noExplode bool, isOrdinaryImpactBranch bool, isOffMap b
 	return true
 }
 
+// CollisionSlotYGate distinguishes the two fixed collision slots [P1-07 §2.1].
+// Slot0 requires projectile height strictly below unit upper/reference bound and
+// has NO lower-bound test; slot1 requires inclusively between lower and upper
+// [P1-07 §2.1]. Visitation is slot0→slot1 [P1-07 §4].
+func CollisionSlotYGate(projectileY, lower, upper int32, slot int) bool {
+	if slot == 0 {
+		return projectileY < upper // [P1-07 §2.1] slot0: Y < upper, no lower gate
+	}
+	return lower <= projectileY && projectileY <= upper // [P1-07 §2.1] slot1: lower<=Y<=upper
+}
+
+// Floor quant helpers per [P1-07 §4]: AOE tile quant is floor(x>>4) with sign
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// point to cell is arithmetic Shift>>20 (1<<20 = 16*65536 world per cell) [P1-07 §4].
+// world.WorldToCell already implements floor >>20 via floorDiv [03 §2.1] I3.
+// BroadPhaseRadiusCells already implements (radius>>4)+1 via unsigned SAR 4.
+
+// Sentinel offsets for fringe resolution: feature sentinel 0xFFFE resolves via
+// signed offsets at cell+0xB (X) and cell+0x5 (Z) (decompile view) [P1-07 §2.2].
+// In typed PlotCell the bytes live at AnchorDX 0xB and AnchorDZ 0xA (DZ scaled
+// by row stride) — the 0x5 vs 0xA alias is TNT attribute vs runtime plot cell
+// indexing, but both are signed i8 subtraction from current cell to reach
+// anchor [P1-07 §2.2] [02 "Terrain file"] SC6.
+
 // FeatureCacheSuppressed reports whether a feature contact should be suppressed
 // due to cached quantized cell pair [06 §8.1] C28.
 //
@@ -128,6 +152,21 @@ func FeatureCacheSuppressed(cache *[2]int32, cellX, cellZ int32) bool {
 	cache[0] = cellX // new cell updates cache [06 §8.1]
 	cache[1] = cellZ
 	return false
+}
+
+// StampOrder is player 0..9 → pool 0x118 vacated reusable same tick [P1-07 §2.1].
+// Successful movement does Clear(oldFootprint) then Stamp(newFootprint) before
+// next slot so vacated cell reusable same tick; head-on both block because each
+// sees other occupant before either clears. This is implemented in
+// internal/movement/CollisionState.CommitSuccess and CommitSweep sorting by ID
+// asc which equals player 0..9 then pool 0x118 asc [P0-12][P1-07 §2.1] (I1).
+
+// LiquidForcedRetire reports whether the opaque liquid mode forces dead|2
+// regardless of noexplode [P1-07 §2.4] [06 §8.1][06 §13.2]. The mode is
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// unit — it retires and overrides the noexplode gate [P1-07 §4][06 §13.2].
+func LiquidForcedRetire(opaqueMode bool, isWaterCell bool, hasDirectUnit bool) bool {
+	return opaqueMode && isWaterCell && !hasDirectUnit // [P1-07 §2.4]
 }
 
 // ImpactLadderResult records which ladder branch produced impact for tests

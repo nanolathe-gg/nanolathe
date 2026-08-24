@@ -74,11 +74,31 @@ func clampAxis(camera, mapSize, viewSize int32) int32 { // [07 §10]
 }
 
 // Pan applies dx,dz to the camera and then clamps per [07 §10] C3.
+// When terrain is available, MapW/MapH are the playable extents PlayRight/PlayBottom
+// (Wpix-32/Hpix-128) set at void-fixup time [P1-15], not the raw Wpix/Hpix;
+// the clamp maximum is mapSize - viewSize, so the max origin is PlayRight-ViewW etc.
 func (c *Camera) Pan(dx, dz int32) { // [07 §10]
 	c.X += dx
 	c.Z += dz
 	c.X = clampAxis(c.X, c.MapW, c.ViewW)
 	c.Z = clampAxis(c.Z, c.MapH, c.ViewH)
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// PlayRight = Wpix-32, PlayBottom = Hpix-128 are the max extents set at void-fixup time [P1-15];
+// they are the clamp maxima, so MapW/MapH are set to PlayRight/PlayBottom when non-zero
+// (else fallback to raw terrainWpix/Hpix). The per-axis maximum is then MapW-ViewW / MapH-ViewH [07 §10].
+func NewFromTerrain(terrainWpix, terrainHpix, playRight, playBottom, viewW, viewH int32) *Camera {
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	mapW := terrainWpix
+	mapH := terrainHpix
+	if playRight != 0 {
+		mapW = playRight
+	}
+	if playBottom != 0 {
+		mapH = playBottom
+	}
+	return &Camera{MapW: mapW, MapH: mapH, ViewW: viewW, ViewH: viewH}
 }
 
 // Scroll moves the camera in dir by magnitude = setting * rawDelta capped at

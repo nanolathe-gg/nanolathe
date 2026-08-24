@@ -44,11 +44,25 @@ const StockpileMaxAmmo = 200 // [06 §11.1]
 // decrements reduce or unlink [06 §11.1] (orders.Queue.CoalesceTail).
 // Two distinct values are kept: the linked node's signed requested count and
 // the slot's byte-sized completed-round remainder [06 §11.1].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [P1-09 §2.1] — save preserves these plus the three slot bytes per unit
+// [P1-09 §2.2][06 §11.1]. Slot→node map is weaponId→slotIdx via scan of
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// object and is treated as no weapon / wait [P1-09 §2.3].
 type StockpileEntry struct {
 	Weapon   *content.WeaponDef // selected weapon; BuildTime is Weapon.ReloadTime [06 §11.1]
-	Count    int32              // signed requested count [06 §11.1]
-	Progress int32              // per-node progress 0..BuildTime, step 5 capped [06 §11.1]
+	Count    int32              // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Progress int32              // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	SlotIdx  int32              // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 }
+
+// StockpileNodeSize is the retail queue node size 0x56=86 bytes [P1-09 §2.1].
+const StockpileNodeSize = 0x56 // [P1-09 §2.1]
+
+// StockpileSlotByteCap is the >199 block threshold [P1-09 §2.2] [06 §11.1].
+// Slot byte 0..255 wraps 255→0 on inc [P1-09 §2.3]; >199 blocks with 300 wait.
+const StockpileSlotByteCap = 199 // [P1-09 §2.2]
 
 // BuildTime returns the compiled reload-time used as stockpile build time [06 §11.1].
 func StockpileBuildTime(w *content.WeaponDef) int32 {
@@ -60,19 +74,37 @@ func StockpileBuildTime(w *content.WeaponDef) int32 {
 
 // CanStartStockpileRound reports whether a new round may start given the slot's
 // byte-sized completed-round remainder [06 §11.1].
-// A new round is blocked when the slot byte is already greater than 199 [06 §11.1].
+// A new round is blocked when the slot byte is already greater than 199 [06 §11.1] [P1-09 §2.2].
+// Malformed slot byte 200..255 all block; byte inc wraps 255→0 [P1-09 §2.3].
 func CanStartStockpileRound(ammo int32) bool {
-	return ammo <= 199 // [06 §11.1] slot byte >199 blocked; ordinary path can reach 200 but does not start beyond it
+	return ammo <= StockpileSlotByteCap // [P1-09 §2.2] >199 blocked
 }
 
+// IsValidStockpileSlotIdx reports whether slotIdx is in 0..2 for the three
+// weapon slots [P1-09 §2.3]. Malformed ≥3 or negative aliases past the unit object
+// and must be treated as no weapon / wait without corrupting memory [P1-09 §2.3].
+func IsValidStockpileSlotIdx(slotIdx int32) bool {
+	return slotIdx >= 0 && slotIdx < NumSlots // 0..2 [P1-09 §2.3]
+}
+
+// QueueProducers enumerates the BUILDWEAPON queue producers per [P1-09 §2.1]:
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// plus fractional carry on cancel (progress retained in economy buckets,
+// not refunded) [P1-09 §5].
+var QueueProducers = []string{"[analysis omitted] HUD MAKENUKE/MAKEANTI", "[analysis omitted] Bw parser", "0x12 build", "0x2C completion"} // [P1-09 §2.1]
+
 // StockpileCostDelta computes the admitted delta for one resource for this visit
-// per [06 §11.1]:
+// per [06 §11.1] [P1-09 §2.4]:
 //
 //	energyDelta = trunc(next*energyCost/buildTime) - trunc(old*energyCost/buildTime)
 //	metalDelta  = trunc(next*metalCost/buildTime) - trunc(old*metalCost/buildTime)
 //
 // Both are independently truncated toward zero [01 §8] I3 [06 §11.1].
-// TODO(question): exact float truncation for fractional costs remains untraced beyond ordinary positive stock inputs; using truncate toward zero per [01 §8].
+// Fractional truncated-cumulative carry is preserved across visits without
+// explicit carry variable; after admission failure progress not advanced but
+// both requested amounts retained in economy buckets [P1-09 §4].
+// On cancel after partial progress the fractional carry remains in buckets
+// (not refunded) — cancellation just unlinks the node [P1-09 §5].
 func StockpileCostDelta(oldProg, newProg int32, cost float64, buildTime int32) float32 {
 	if buildTime <= 0 {
 		// TODO(question): [06 §11.1] build time <=0 (zero authored reload) with cost>0: divide behavior untraced; return full cost as placeholder until probe.
@@ -112,6 +144,10 @@ func TickStockpile(entry *StockpileEntry, slot *Slot, tick uint32, admit func(en
 	if entry.Count <= 0 {
 		return 0, false, 0
 	}
+	// Slot→node map malformed check: slotIdx out of 0..2 treated as no weapon / wait [P1-09 §2.3]
+	if entry.SlotIdx != 0 && !IsValidStockpileSlotIdx(entry.SlotIdx) {
+		return tick + StockpileRetryBlocked, false, 0 // malformed alias past object -> wait [P1-09 §2.3]
+	}
 	w := entry.Weapon
 	buildTime := StockpileBuildTime(w) // [06 §11.1]
 	if buildTime <= 0 {
@@ -131,12 +167,9 @@ func TickStockpile(entry *StockpileEntry, slot *Slot, tick uint32, admit func(en
 			return tick + StockpileRetryRejected, false, 0 // [06 §11.1] rejected 10
 		}
 		// Completion
-		slot.Ammo++ // [06 §11.1] byte-sized completed rounds increment
-		// Clamp to byte range 0..255? Retail byte wraps? Unknown, TODO(question) byte overflow or wrap for malformed preexisting values [06 §11.1] missing/unknown.
-		if slot.Ammo > 255 {
-			slot.Ammo = 255 // placeholder clamp
-		}
-		entry.Count-- // signed queue count decrement [06 §11.1]
+		slot.Ammo++       // [06 §11.1] byte-sized completed rounds increment, wraps 255→0 as u8 mod 256 [P1-09 §2.3]
+		slot.Ammo &= 0xFF // wrap [P1-09 §2.3]
+		entry.Count--     // signed queue count decrement [06 §11.1]
 		entry.Progress = 0
 		refreshed = true // selected-unit interface refresh [06 §11.1]
 		completedRounds = 1
@@ -149,9 +182,7 @@ func TickStockpile(entry *StockpileEntry, slot *Slot, tick uint32, admit func(en
 					return tick + StockpileRetryRejected, true, completedRounds
 				}
 				slot.Ammo++
-				if slot.Ammo > 255 {
-					slot.Ammo = 255
-				}
+				slot.Ammo &= 0xFF
 				entry.Count--
 				completedRounds++
 				// For zero buildTime, each iteration is one round; still need to break after one? Spec says <=5 can multi-complete, zero qualifies.
@@ -172,9 +203,9 @@ func TickStockpile(entry *StockpileEntry, slot *Slot, tick uint32, admit func(en
 	// Normal path with buildTime >0
 	completedRounds = 0
 	refreshed = false
-	// If slot blocked at entry, wait 300 [06 §11.1]
+	// If slot blocked at entry, wait 300 [06 §11.1] [P1-09 §2.2]
 	if !CanStartStockpileRound(slot.Ammo) {
-		return tick + StockpileRetryBlocked, false, 0 // [06 §11.1]
+		return tick + StockpileRetryBlocked, false, 0 // [06 §11.1] >199 block [P1-09 §2.2]
 	}
 	// Multi-completion loop for assets whose buildTime <=5 [06 §11.1]
 	for {
@@ -220,11 +251,9 @@ func TickStockpile(entry *StockpileEntry, slot *Slot, tick uint32, admit func(en
 			}
 			return tick + StockpileRetryAccepted, false, 0 // [06 §11.1]
 		}
-		// Completion: increment slot byte, decrement signed queue count, request refresh [06 §11.1]
-		slot.Ammo++ // byte-sized remainder increment [06 §11.1]
-		if slot.Ammo > 255 {
-			slot.Ammo = 255 // TODO(question): byte overflow wrap untraced [06 §11.1] unknown
-		}
+		// Completion: increment slot byte with wrap 255→0 [P1-09 §2.3], decrement signed queue count, request refresh [06 §11.1]
+		slot.Ammo++ // byte-sized remainder increment [06 §11.1] wraps [P1-09 §2.3]
+		slot.Ammo &= 0xFF
 		entry.Count--      // signed queue count decrement [06 §11.1]
 		entry.Progress = 0 // new round progress resets
 		completedRounds++

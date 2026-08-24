@@ -183,6 +183,7 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 		Snapshot: &snapshot.Buffer{},
 		Units:    units.New(600, cat),
 		Econ:     &economy.Service{},
+		Latch:    NewEndLatch(),
 	}
 	nPlayers := cfg.NumPlayers
 	if nPlayers < 0 {
@@ -530,6 +531,25 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		if u := s.Units.Unit(h); u != nil {
 			// Mark as commander? No extra flags here but preserve placement linkage for debugging
 			u.PlacementIdx = -1
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// Factory nanoframes sample in construction; mission-placed extractors sample here; direct World.Create remains TODO(question) if caller bypasses session [P1-10][P1-15].
+			if def.ExtractsMetal != 0 && s.World != nil {
+				cx := world.WorldToCell(x)
+				cz := world.WorldToCell(z)
+				footX := int(def.FootprintX)
+				footZ := int(def.FootprintZ)
+				if footX <= 0 {
+					footX = 1
+				}
+				if footZ <= 0 {
+					footZ = 1
+				}
+				cx -= int32(footX / 2)
+				cz -= int32(footZ / 2)
+				if v, err := s.World.SampleMetal(cx, cz, footX, footZ, float32(def.ExtractsMetal)); err == nil {
+					u.SpotMetal = v
+				}
+			}
 		}
 	}
 	// Also reconstruct any mission-placed units that are not commanders, at authored positions,
@@ -559,6 +579,24 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 					}
 					if up.IsImmune() {
 						u.Flags |= 1 << 15
+					}
+					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					if def.ExtractsMetal != 0 && s.World != nil {
+						cx := world.WorldToCell(numeric.Fixed(int64(up.X)))
+						cz := world.WorldToCell(numeric.Fixed(int64(up.Z)))
+						footX := int(def.FootprintX)
+						footZ := int(def.FootprintZ)
+						if footX <= 0 {
+							footX = 1
+						}
+						if footZ <= 0 {
+							footZ = 1
+						}
+						cx -= int32(footX / 2)
+						cz -= int32(footZ / 2)
+						if v, err := s.World.SampleMetal(cx, cz, footX, footZ, float32(def.ExtractsMetal)); err == nil {
+							u.SpotMetal = v // once, never resampled [P1-10]
+						}
 					}
 				}
 			}

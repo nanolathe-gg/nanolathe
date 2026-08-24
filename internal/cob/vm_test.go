@@ -147,9 +147,9 @@ func TestStackUnderflowOverflow(t *testing.T) {
 		t.Fatalf("underflow add result %d want 0", vm2.getStatic(0))
 	}
 
-	// Overflow: push 11 constants, stack depth 10 cap [04 §4.2] C13.
-	// The top is captured into static 0 before returning so the assertion
-	// survives the return's own pop.
+	// Overflow: push 11 constants, stack depth 10 cap [04 §4.2] C13
+	// Retail kills thread on overflow (status cleared) [P1-11] §2.4, not discard.
+	// 11th push should kill thread before pop-static, leaving statics 0.
 	code := make([]uint32, 0, 24)
 	for i := 0; i < 11; i++ {
 		code = append(code, 0x10021001, uint32(i+1))
@@ -161,11 +161,15 @@ func TestStackUnderflowOverflow(t *testing.T) {
 	vm3.Threads[0].Status = ThreadRunning
 	vm3.Threads[0].PC = 0
 	vm3.Drain(1)
-	if vm3.getStatic(0) != 10 {
-		t.Fatalf("overflow top %d want 10 (11th push discarded) [04 §4.2] C13", vm3.getStatic(0))
+	if vm3.Threads[0].Status != ThreadIdle {
+		t.Fatalf("overflow should kill thread (status cleared) [P1-11] §2.4, got %d want idle", vm3.Threads[0].Status)
 	}
-	if vm3.Threads[0].Stack[0] != 1 {
-		t.Fatalf("overflow bottom %d want 1", vm3.Threads[0].Stack[0])
+	if vm3.getStatic(0) != 0 {
+		t.Fatalf("overflow kill should not write static, got %d want 0 [P1-11]", vm3.getStatic(0))
+	}
+	// Under overflow kill, stack is cleared via killThread (SP=0). Verify.
+	if vm3.Threads[0].SP != 0 {
+		t.Fatalf("overflow kill SP %d want 0", vm3.Threads[0].SP)
 	}
 }
 

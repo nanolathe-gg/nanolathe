@@ -80,6 +80,39 @@ const (
 	KindNoReaction uint8 = 11 // subtracts health but skips reaction/callbacks [06 §9.1]
 )
 
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Bit7 (0x80) signed byte <0 doubles damage; bit8 (0x100) halves.
+// Order is *2 then /2, so both set nets to *1 [P1-07 §2.5] [06 §9.2] step4.
+const (
+	GlobalDoubleMask = 0x80  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GlobalHalfMask   = 0x100 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+)
+
+// ApplyGlobalGates applies the double/half gates in retail order *2 then /2
+// from the raw 0x37f2f word [P1-07 §2.5] [06 §9.2] step4.
+func ApplyGlobalGates(amount int32, rawFlags int) int32 {
+	if rawFlags&GlobalDoubleMask != 0 {
+		amount *= 2 // [P1-07 §2.5] signed <0 branch
+	}
+	if rawFlags&GlobalHalfMask != 0 {
+		amount /= 2 // [P1-07 §2.5] bit8
+	}
+	return amount
+}
+
+// IsDamagePacketKind reports whether kind is one of the four damage packet
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func IsDamagePacketKind(k uint8) bool {
+	return k == KindOrdinary || k == KindParalyzer || k == KindHeal || k == KindNoReaction // [P1-07 §2.6]
+}
+
+// IsDeathCause reports whether cause is one of the death causes 3..11 that
+// are dispatched through the death handler's cause producer table [P1-07 §2.6]
+// [06 §12.1]. Causes 12..15 have no local producer [06 §12.1].
+func IsDeathCause(c uint8) bool {
+	return c >= 3 && c <= 11 // [P1-07 §2.6] [06 §12.1] 3 self-destruct .. 11 water damage
+}
+
 // SelectBaseDamage selects the UnitName override or default damage [06 §9.2] C19.
 //
 // Weapons carry a sorted damage override table keyed by the target definition's
@@ -203,12 +236,13 @@ func ComputeScaledAmount(baseDamage int32, falloff float32, attackerKills int32,
 	amount = int32((int64(amount) * int64(100+6*tierA)) / 100) // truncate integer percentage [01 §8] [06 §9.2] step 3
 
 	// Step 4: apply recovered global double/half gates [06 §9.2] step 4.
-	// Exact named aliases not completely recovered [06 §9.2]; ordering is established.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// for half, in order *2 then /2 so both set nets *1 [P1-07 §2.5][06 §9.2].
 	if globalDouble {
-		amount = amount * 2 // [06 §9.2] global double
+		amount = amount * 2 // [06 §9.2] global double [P1-07 §2.5] 0x37f2f bit7
 	}
 	if globalHalf {
-		amount = amount / 2 // truncate toward zero [01 §8] [06 §9.2] global half
+		amount = amount / 2 // truncate toward zero [01 §8] [06 §9.2] global half [P1-07 §2.5] 0x37f2f bit8
 	}
 
 	if isHealing {
@@ -254,17 +288,28 @@ func ComputePacket(weapon *content.WeaponDef, targetUnitName string, falloff flo
 // directly by slot arithmetic with no liveness probe for attacker, and victim
 // acceptance requires alive+clear dead latch so reused slot accepts stale packet
 // [06 §5.1] C18. Attacker receives NO validation [06 §9.1] C18.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// (alive&~0x4000) [P1-07 §2.6] [06 §9.1]. Kinds 1/2/0xA/0xB are the damage kinds
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func ValidatePacketTarget(victim pool.Handle, isAlive func(pool.Handle) bool, isDeadLatch func(pool.Handle) bool) bool {
 	if victim == 0 {
 		return false // 0=null [06 §9.1] C18
 	}
 	if isAlive != nil && !isAlive(victim) {
-		return false // alive bit required [06 §9.1]
+		return false // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	}
 	if isDeadLatch != nil && isDeadLatch(victim) {
-		return false // clear dead latch required [06 §9.1]
+		return false // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	}
 	return true
+}
+
+// ValidatePacketKind reports whether kind is admissible for the damage intake
+// per [P1-07 §2.6] — damage kinds 1/2/0xA/0xB are the packet handlers at
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// This separates the two enums that share the packet byte position [06 §12.1].
+func ValidatePacketKind(kind uint8) bool {
+	return IsDamagePacketKind(kind) // [P1-07 §2.6] 1,2,10,11
 }
 
 // ApplyHealing performs the early healing path [06 §9.1]: adds packet's
@@ -293,4 +338,23 @@ func ApplyDamage(currentHealth int32, amount uint16) int32 {
 		r -= 0x10000
 	}
 	return r
+}
+
+// HealthPercentWithFault computes health*100/maxHealth with retail DIV fault
+// on zero max [P1-07 §2.7] [06 §9.1]. Stock MaxDamage is always >0, so the fault
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// the pool record already incremented (if ballistic) — count not rolled back
+// [P1-07 §4][GAP T5] I11. We reproduce as panic (Go divide fault).
+func HealthPercentWithFault(health, maxHealth int32) int32 {
+	if maxHealth == 0 {
+		panic("combat: zero maxHealth divide fault [P1-07 §2.7][GAP T5]") // retail #DE [P1-07 §4]
+	}
+	v := (int64(health) * 100) / int64(maxHealth) // unsigned DIV for positive domain [04 §5.1]
+	if v < 0 {
+		v = 0
+	}
+	if v > 100 {
+		v = 100
+	}
+	return int32(v)
 }

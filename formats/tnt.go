@@ -39,12 +39,13 @@ func DefaultTNTLimits() TNTLimits {
 	}
 }
 
-// TNTAttribute is one 16x16 source cell [P0-17] W*H*4 attribute records (height + u16 feature + unk0).
-// Feature is intentionally uint16: 0xfffc, 0xfffe and 0xffff are distinct source sentinels [P0-17][fmt tnt].
+// TNTAttribute is one 16x16 source cell [P0-17][P1-15] W*H*4 attribute records (height + u16 feature + unk0).
+// Feature is intentionally uint16: 0xfffc, 0xfffe and 0xffff are distinct source sentinels [P0-17][fmt tnt] and 0xFFFD derived void [P1-15].
+// Unknown (byte 3, unk3) is uniformly 0 corpus-wide [P1-15]; no per-cell metal raster allocated, metal derived via uniform SurfaceMetal char write [P1-15].
 type TNTAttribute struct {
 	Height  byte
 	Feature uint16
-	Unknown byte
+	Unknown byte // unk3==0 corpus [P1-15]
 }
 
 type TNTFeatureRecord struct {
@@ -109,6 +110,7 @@ func LoadTNT(data []byte) (*TNT, error) {
 }
 
 func LoadTNTWithLimits(data []byte, limits TNTLimits) (*TNT, error) {
+	// Mandatory TNT version 0x2000/0x1020 fatal, other versions fatal diagnostic [P1-02 §2.2][fmt tnt][03 §2.2].
 	if len(data) < 0x40 {
 		return nil, fmt.Errorf("tnt: file is too small")
 	}
@@ -155,9 +157,9 @@ func LoadTNTWithLimits(data []byte, limits TNTLimits) (*TNT, error) {
 			"the width of its attribute record is unrecovered "+
 			"[02 \"Terrain file\"], [03 §2.2] (map is %dx%d)", result.Width, result.Height)
 	default:
-		// [03 §2.2]: the loader accepts exactly two versions and rejects any
-		// other version word with a diagnostic.
-		return nil, fmt.Errorf("tnt: unsupported version 0x%04x, want 0x1020 or 0x2000 [03 §2.2]", result.Version)
+		// [03 §2.2][P1-02 §2.2]: the loader accepts exactly two versions and rejects any
+		// other version word with a diagnostic — mandatory TNT version 0x2000/0x1020 fatal.
+		return nil, fmt.Errorf("tnt: unsupported version 0x%04x, want 0x1020 or 0x2000 [03 §2.2][P1-02 §2.2]", result.Version)
 	}
 	if result.Width == 0 || result.Height == 0 || result.Width > limits.MaxWidth || result.Height > limits.MaxHeight {
 		return nil, fmt.Errorf("tnt: dimensions %dx%d exceed limits", result.Width, result.Height)

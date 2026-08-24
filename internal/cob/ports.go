@@ -213,13 +213,18 @@ func QueryLandingPadSeed() [4]int32 { return [4]int32{-1, -1, -1, -1} } // [GAP 
 // ---------------------------------------------------------------------------
 
 // AimSlot tracks the aim-ready handshake for one weapon slot [GAP T15] C16
-// [04 §5.3]. The producer clears the aim state to 0, stores commanded angles,
-// starts Aim* with the issue bit, and the completion receiver grants aim-ready
-// ONLY on a nonzero script return. Absent script, exhausted pool (delivery 0),
-// or zero return leave that weapon permanently unable to fire [GAP T15] C16.
+// [04 §5.3][P1-11] §2.5. The producer clears the aim state to 0, stores
+// commanded angles, starts Aim* with the issue bit, and the completion
+// receiver grants aim-ready ONLY on a nonzero script return via completion
+// callback that writes weapon ready bit (offset TODO(question) [P1-11]).
+// Absent script, exhausted pool (delivery 0), or zero return leave that
+// weapon permanently unable to fire [GAP T15] C16 [P1-11].
+// TODO(question): exact weapon ready bit offset in unit record remains
+// unassigned [P1-11] §2.5; TODO(question): Killed variant cell unassigned and
+// persistence [P1-11] §2.7.
 type AimSlot struct {
 	IssueBit bool // weapon-slot issue bit; start sets, TargetCleared or fail can clear [04 §5.3]
-	Ready    bool // granted only on nonzero Aim* return [GAP T15] C16
+	Ready    bool // granted only on nonzero Aim* return [GAP T15] C16 [P1-11] via completion callback TODO(question) offset
 }
 
 // StartAim arms the issue bit for an Aim* start. The caller cleared aim state
@@ -450,6 +455,10 @@ func StartWithImmediateBarrier(vm *VM, scriptName string, args []int32) bool {
 // the two words for the zero gate in magA/magB; this helper combines them.
 // If retail's magnitude is a different derived word (e.g., 3-D speed vs scalar),
 // change exactly this helper.
+// TODO(question): SetSpeed domain [P1-11] — whether SetSpeed argument is
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// 0x1B2 are likely 16.16 (moverate1 default twice maxVelocity) but unit not
+// closed; keep TODO until decompile of engine write port proves domain.
 func MoveRateCategory(inhibit, attached bool, magA, magZ int32, rate1, rate2 int32) int {
 	if inhibit || attached { // [GAP T15] C18 category 0 overrides
 		return 0 // [04 §5.2] inhibit bit or attached (carrier dword nonzero)

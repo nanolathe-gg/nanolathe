@@ -640,11 +640,11 @@ func NormalizeSAV(name string) string {
 }
 
 // WriteFile implements the retail write policy: open directly for
-// truncate-write (an existing file truncates at successful open); after open,
-// every write and close result is ignored and the caller sees success
-// [08 "File naming and write policy"].
+// truncate-write via w+b (existing file truncates at successful open);
+// after open, every write and close result is ignored and the caller sees
+// success [08 "File naming and write policy"][P1-13 §3].
 func WriteFile(path string, payload []byte) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}

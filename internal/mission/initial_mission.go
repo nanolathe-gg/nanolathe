@@ -26,6 +26,10 @@ var IsBuildingTypeHook func(name string) bool
 // units exist, for mission type 1 and BetweenMissions restores only.
 // It registers with no tick dispatcher; from the next tick the ordinary pump
 // consumes queued orders [04 §3.6] C9.
+// TODO(question): InitialMission does not create extractors itself, but units placed
+// via session reconstructUnits / save restore World.Create bypass SpotMetal sampling
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// verify coverage for any direct World.Create outside session.
 func RunInitialMissions(m *Mission, w *units.World) {
 	RunInitialMissionsWithCatalog(m, w, nil)
 }

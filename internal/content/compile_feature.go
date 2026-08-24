@@ -38,11 +38,12 @@ type FeatureDef struct {
 	Energy int32 // energy integer default 0 [02 "Feature record"]
 	Damage int32 // damage integer default 0 [02 "Feature record"]
 	// Fire / regrowth [02 "Feature record"] [05 "Feature reproduction"].
-	SpreadChance  int32  // spreadchance integer default 0 [02 "Feature record"]
-	Reproduce     int32  // reproduce integer default 0 [02 "Feature record"] [GAP T14]
-	ReproduceArea int32  // reproducearea integer default 0 [02 "Feature record"] [GAP T14]
-	SparkTime     int32  // sparktime floating default 0.0 *30 truncated ticks [02 "Feature record"]
-	BurnWeapon    string // burnweapon string empty [02 "Feature record"]
+	SpreadChance    int32  // spreadchance integer default 0 [02 "Feature record"]
+	Reproduce       int32  // reproduce integer default 0 [02 "Feature record"] [GAP T14]
+	ReproduceArea   int32  // reproducearea integer default 0 [02 "Feature record"] [GAP T14]
+	SparkTime       int32  // sparktime floating default 0.0 *30 truncated ticks [02 "Feature record"]
+	BurnWeapon      string // burnweapon string empty [02 "Feature record"]
+	ResurrectSpread uint8  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// Animation flags [02 "Feature record"].
 	Animating int32 // animating integer default 0 [02 "Feature record"]
 	AnimTrans int32 // animtrans integer default 0 [02 "Feature record"]
@@ -100,7 +101,7 @@ var knownFeatureKeys = map[string]struct{}{
 	"seqnameburn": {}, "seqnameburnshad": {}, "seqnamedie": {}, "seqnamedieshad": {},
 	"seqnamereclamate": {}, "seqnamereclamateshad": {},
 	"metal": {}, "energy": {}, "damage": {},
-	"spreadchance": {}, "reproduce": {}, "reproducearea": {}, "sparktime": {}, "burnweapon": {},
+	"spreadchance": {}, "reproduce": {}, "reproducearea": {}, "sparktime": {}, "burnweapon": {}, "resurrectspread": {}, "jitterspread": {}, "spread": {},
 	"animating": {}, "animtrans": {}, "shadtrans": {},
 	"flamable": {}, "geothermal": {}, "blocking": {}, "reclaimable": {}, "autoreclaimable": {},
 	"indestructible": {}, "nodisplayinfo": {}, "nodrawundergray": {},
@@ -141,6 +142,16 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 	// sparktime floating default 0.0 *30 truncated [02 "Feature record"].
 	sparktimeFloat := section.FloatValue("sparktime", 0)
 	sparktime := int32(sparktimeFloat * 30)
+
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	var resurrectSpread uint8
+	if _, ok := section.RawValue("resurrectspread"); ok {
+		resurrectSpread = uint8(section.IntValue("resurrectspread", 0))
+	} else if _, ok := section.RawValue("jitterspread"); ok {
+		resurrectSpread = uint8(section.IntValue("jitterspread", 0))
+	} else {
+		resurrectSpread = 0
+	}
 
 	// Behaviour flags — integer accessor default 0 consumed as bool, except autoreclaimable defaults 1 [02 "Feature record"].
 	flamable := section.BoolValue("flamable", false)
@@ -219,6 +230,7 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 		Indestructible:       indestructible,
 		NoDisplayInfo:        nodisplayinfo,
 		NoDrawUnderGray:      nodrawundergray,
+		ResurrectSpread:      resurrectSpread,
 		FeatureDead:          strings.TrimSpace(featuredead),
 		FeatureReclamate:     strings.TrimSpace(featurereclamate),
 		FeatureBurnt:         strings.TrimSpace(featureburnt),
@@ -232,6 +244,7 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|", fd.Object, fd.Filename, fd.SeqName, fd.SeqNameShad, fd.SeqNameBurn, fd.SeqNameBurnShad, fd.SeqNameDie, fd.SeqNameDieShad, fd.SeqNameReclamate, fd.SeqNameReclamateShad)
 	fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|", fd.Metal, fd.Energy, fd.Damage, fd.SpreadChance, fd.Reproduce, fd.ReproduceArea)
 	fmt.Fprintf(&b, "%d|%s|%d|%d|%d|", fd.SparkTime, fd.BurnWeapon, fd.Animating, fd.AnimTrans, fd.ShadTrans)
+	fmt.Fprintf(&b, "%d|", fd.ResurrectSpread)
 	// Flags as 0/1 in fixed order.
 	flags := []bool{fd.Flamable, fd.Geothermal, fd.Blocking, fd.Reclaimable, fd.Autoreclaimable, fd.Indestructible, fd.NoDisplayInfo, fd.NoDrawUnderGray}
 	for _, f := range flags {
