@@ -25,6 +25,7 @@ type Catalog struct {
 	Sounds   map[string]*SoundCategory // key = CanonicalKey(category name) [02 "Sound category record"]
 	Maps     map[string]*MapHeader     // key = CanonicalKey(basename) [02 "Map files"]
 	LOS      *LOSTables                // compiled gamedata/los.tdf [02 §6] C15 [PLAN_02]
+	Sight    *SightShapes              // compiled anims/vismask*.gaf sight shapes [03 §3.2]
 	Meteor   *MeteorDefaults           // compiled gamedata/meteor.tdf [02 §6] C15 [PLAN_02]
 
 	// AIProfiles holds ai/*.txt profiles (10 in retail, incl default.txt) [08 "Computer-controlled players"].
@@ -142,6 +143,12 @@ func Compile(fs vfs.FSOps) (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Authored sight shapes [03 §3.2]: the sprite-mask raster indexes these,
+	// it does not synthesize a circle.
+	sightShapes, err := CompileSightShapes(fs)
+	if err != nil {
+		return nil, err
+	}
 
 	// Stage 2: link cross-references so enumeration order cannot leak into identity [02 §5] C1.
 	// weapon1..3 on a unit resolve only after all weapons compile.
@@ -174,6 +181,7 @@ func Compile(fs vfs.FSOps) (*Catalog, error) {
 		Sounds:       sounds,
 		Maps:         maps,
 		LOS:          losTables,
+		Sight:        sightShapes,
 		Meteor:       meteorDefaults,
 		AIProfiles:   aiProfiles,
 		Aliases:      aliases,

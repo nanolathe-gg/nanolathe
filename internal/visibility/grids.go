@@ -3,6 +3,7 @@
 package visibility
 
 import (
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -31,6 +32,35 @@ type Service struct {
 	byteGrids [10][]uint8
 	fog       FogCache
 	local     PlayerID
+
+	// Authored raster inputs [03 §3.2]. Both nil means neither raster can
+	// publish, which is the correct answer for a fixture with no content.
+	shapes     *content.SightShapes
+	rayTables  *content.LOSTables
+	spokeCache [][][]step // per LOS table, built on first use
+
+	// footprints holds each observer's last published raster so the refresh
+	// throttle can compare against it [03 §3.2] C6.
+	footprints map[ObserverID]footprint
+
+	// surfaces receives the sensor phase's circles. They are separate from the
+	// word mask and wiped each tick [03 §3.4] C11.
+	surfaces SensorSurfaces
+}
+
+// ObserverID identifies one sight source across ticks — the owning unit's pool
+// slot. The refresh throttle needs stable identity, not the footprint values,
+// because it is precisely the values it compares [03 §3.2] C6.
+type ObserverID uint32
+
+// footprint is a stored raster: what was published, and where [03 §3.2] C6.
+type footprint struct {
+	owner      PlayerID
+	cx, cz     int32
+	heightByte uint8
+	radius     int32
+	quantized  int32 // shape index (sprite) or table index (ray)
+	live       bool
 }
 
 // New creates a Service for terrain t and mode [03 §3.1] C1.

@@ -10,9 +10,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// currentTick holds the tick of the current Pump dispatch for handler tick plumbing [04 §3.2].
-var currentTick uint32
-
 // Code is the handler result code [04 §3.3].
 type Code uint8
 
@@ -54,6 +51,12 @@ type Node struct {
 type Queue struct {
 	primary   []*Node
 	secondary []*Node
+
+	// diagnostics records dispatch failures for this unit's queue. It is per
+	// queue rather than package-global so two worlds in one process cannot
+	// interleave their logs and so a queue's diagnostics die with it
+	// [docs/ORCHESTRATION.md §7].
+	diagnostics []string
 }
 
 func (q *Queue) LenPrimary() int {
@@ -126,11 +129,45 @@ func newNode(id ID, n Node) *Node {
 	return node
 }
 
-var diagnostics []string
+// Diagnostics returns this queue's dispatch failures.
+func (q *Queue) Diagnostics() []string {
+	if q == nil {
+		return nil
+	}
+	return append([]string(nil), q.diagnostics...)
+}
 
-func Diagnostics() []string       { return append([]string(nil), diagnostics...) }
-func ClearDiagnostics()           { diagnostics = nil }
-func recordDiagnostic(msg string) { diagnostics = append(diagnostics, msg) }
+// ClearDiagnostics drops the recorded dispatch failures.
+func (q *Queue) ClearDiagnostics() {
+	if q != nil {
+		q.diagnostics = nil
+	}
+}
+
+func (q *Queue) recordDiagnostic(msg string) {
+	if q != nil {
+		q.diagnostics = append(q.diagnostics, msg)
+	}
+}
+
+// cancelAll frees every record on both segments [04 §3.3] result code 7 and
+// [05 "Queue pumping and result codes"]. Non-head primary records and every
+// secondary record are tombstoned, which is what suppresses their
+// weapon-target-clear notification [05 "Queue subtraction"].
+func (q *Queue) cancelAll() {
+	for i, n := range q.primary {
+		if i != 0 {
+			n.Flags |= FlagTombstone
+		}
+		cleanupNode(n)
+	}
+	for _, n := range q.secondary {
+		n.Flags |= FlagTombstone
+		cleanupNode(n)
+	}
+	q.primary = nil
+	q.secondary = nil // via the pair-removal helper [05]
+}
 
 func cleanupNode(n *Node) {
 	// [05 "Queue subtraction"] strict order:
@@ -311,7 +348,7 @@ func (q *Queue) Pump(u *units.Unit, tick uint32) {
 	if q == nil || u == nil {
 		return
 	}
-	currentTick = tick // [04 §3.2] deadline semantics – handlers observe current tick like retail's global
+
 	q.pumpPrimary(u, tick)
 	if len(q.primary) > 0 {
 		head := q.primary[0]
@@ -343,7 +380,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 		n.DynamicGate = 0
 		handler := DescriptorFor(n.ID).Handler
 		if handler == nil {
-			recordDiagnostic(fmt.Sprintf("orders: nil handler for %s", DescriptorFor(n.ID).Name)) // [docs/ORCHESTRATION.md §7] never spin
+			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for %s", DescriptorFor(n.ID).Name)) // [docs/ORCHESTRATION.md §7] never spin
 			return
 		}
 		code := handler(u, n, satisfied)
@@ -380,18 +417,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			}
 			continue
 		case 7:
-			for i, nn := range q.primary {
-				if i != 0 {
-					nn.Flags |= FlagTombstone
-				}
-				cleanupNode(nn)
-			}
-			for _, nn := range q.secondary {
-				nn.Flags |= FlagTombstone
-				cleanupNode(nn)
-			}
-			q.primary = nil
-			q.secondary = nil // [05] via pair-removal helper
+			q.cancelAll()
 			return
 		case 9:
 			n.Flags |= FlagRetryMark // [05] retry mark TODO(question) value
@@ -409,12 +435,20 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			continue
 		default:
 			if code > 9 {
-				cleanupNode(n)
-				q.primary = q.primary[1:]
-				if len(q.primary) > 0 {
-					q.primary[0].Flags |= FlagActive
-				}
-				return // [04 §3.3] delegate to expiry helper
+				// TODO(question): [04 §3.3] and [05 "Queue pumping and result
+				// codes"] both say a code above nine "delegates to the order
+				// expiry helper" and returns, without saying what that helper
+				// does. [04 §3.3] separately records the observable consequence
+				// -- "a handler that returns an out-of-range phase code cancels
+				// the unit's ENTIRE queue" -- which is code 7's effect, not a
+				// single unlink.
+				//
+				// Implemented as the cancel-all that the consequence describes,
+				// because that is the only part of the behaviour research
+				// actually attests. The previous single unlink-and-free matched
+				// neither statement and was untagged.
+				q.cancelAll()
+				return
 			}
 		}
 	}
@@ -441,7 +475,7 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 		n.DynamicGate = 0
 		handler := DescriptorFor(n.ID).Handler
 		if handler == nil {
-			recordDiagnostic(fmt.Sprintf("orders: nil handler for secondary %s", DescriptorFor(n.ID).Name))
+			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for secondary %s", DescriptorFor(n.ID).Name))
 			return
 		}
 		code := handler(u, n, satisfied)

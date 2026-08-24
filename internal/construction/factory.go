@@ -4,6 +4,7 @@ package construction
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"unsafe"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
@@ -11,6 +12,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -65,42 +67,10 @@ var GlobalModeSelector int
 // When nil, no player is special (normal add path).
 var IsSpecialSecondState func(owner uint8) bool
 
-// MessageLog collects verbatim messages for tests [05 C18][05 C21][05 C22].
-var MessageLog []string
-
-func logMessage(msg string) {
-	MessageLog = append(MessageLog, msg)
-}
-
-// ClearMessages clears the log.
-func ClearMessages() { MessageLog = nil }
-
-// BuilderLinks maps product handle -> builder handle for "register builder link on product" [05 C18].
-var BuilderLinks = make(map[int]int)
-
-func clearBuilderLinks() {
-	for k := range BuilderLinks {
-		delete(BuilderLinks, k)
-	}
-}
-
-// KillInfo captures the last kind-9 kill packet [05 C21].
-var LastKillDamage int32
-var LastKillSeverity int32
-var LastKillNoCorpse bool
-
-func clearKillInfo() {
-	LastKillDamage = 0
-	LastKillSeverity = 0
-	LastKillNoCorpse = false
-}
-
-// productID to defKey map for QueryBuildInfo snap [02 §5] [05 C16].
-var productIDToDefKey = make(map[uint32]string)
-
-func rememberProductID(defKey string, pid uint32) {
-	productIDToDefKey[pid] = defKey
-}
+// The message log, the builder links, the last kill packet and the product-id
+// index all used to be package-level vars. They are per-session state — the
+// builder link is authoritative under C18 and the product index feeds C16's
+// exit-spot snap — so they live on Service. See the Service fields below.
 
 // Service holds the factory lifecycle dependencies [PLAN_08].
 type Service struct {
@@ -114,11 +84,87 @@ type Service struct {
 	ModelForFactory func(factory *units.Unit) *model.Model
 	// OnRefresh is the interface refresh hook [05 C18][05 C21][05 C22].
 	OnRefresh func(*units.Unit)
+
+	// Per-session state. None of this may live in a package-level var: it is
+	// authoritative (BuilderLinks is C18's "register the builder link on the
+	// product"), it has to survive save/load through one owner, and two worlds
+	// in one process must not share it.
+	builderLinks map[pool.Handle]pool.Handle // product -> builder [05 C18]
+	productIndex map[uint32]string           // product id -> catalog key, built once
+	messages     []string                    // verbatim diagnostics [05 C18][05 C21][05 C22]
+	lastKill     KillInfo                    // most recent kind-9 kill packet [05 C21]
+}
+
+// KillInfo is the most recent kind-9 termination packet [05 C21].
+type KillInfo struct {
+	Damage   int32
+	Severity int32
+	NoCorpse bool
 }
 
 // NewService creates a Service with given dependencies.
 func NewService(terrain *world.Terrain, catalog *content.Catalog, w *units.World, econ *economy.Service) *Service {
-	return &Service{Terrain: terrain, Catalog: catalog, World: w, Economy: econ}
+	s := &Service{Terrain: terrain, Catalog: catalog, World: w, Economy: econ}
+	s.builderLinks = make(map[pool.Handle]pool.Handle)
+	s.buildProductIndex()
+	return s
+}
+
+// buildProductIndex materializes the product-id to catalog-key reverse map once
+// [05 C16]. It is built by walking the catalog's keys in sorted order so a hash
+// collision between two unit names resolves to the same key on every run — the
+// previous code ranged over the catalog map and broke on the first match, which
+// is a map-iteration order dependency on a simulation path (I1).
+func (s *Service) buildProductIndex() {
+	s.productIndex = make(map[uint32]string)
+	if s.Catalog == nil || s.Catalog.Units == nil {
+		return
+	}
+	keys := make([]string, 0, len(s.Catalog.Units))
+	for k := range s.Catalog.Units {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		id := factoryProductID(k)
+		if _, seen := s.productIndex[id]; !seen {
+			s.productIndex[id] = k // lowest key wins, deterministically
+		}
+	}
+}
+
+// rememberProductID records a product id mapping for callers that construct
+// order payloads directly (tests and the queue builder) [05 C16].
+func (s *Service) rememberProductID(defKey string, pid uint32) {
+	if s.productIndex == nil {
+		s.productIndex = make(map[uint32]string)
+	}
+	s.productIndex[pid] = defKey
+}
+
+// Messages returns the verbatim diagnostics emitted so far [05 C18][05 C21][05 C22].
+func (s *Service) Messages() []string { return append([]string(nil), s.messages...) }
+
+// ClearMessages drops the diagnostic log.
+func (s *Service) ClearMessages() { s.messages = nil }
+
+func (s *Service) logMessage(msg string) { s.messages = append(s.messages, msg) }
+
+// LastKill returns the most recent kind-9 termination packet [05 C21].
+func (s *Service) LastKill() KillInfo { return s.lastKill }
+
+// BuilderLink returns the builder registered on a product, if any [05 C18].
+func (s *Service) BuilderLink(product pool.Handle) (pool.Handle, bool) {
+	b, ok := s.builderLinks[product]
+	return b, ok
+}
+
+// SetBuilderLink registers the builder link on a product [05 C18].
+func (s *Service) SetBuilderLink(product, builder pool.Handle) {
+	if s.builderLinks == nil {
+		s.builderLinks = make(map[pool.Handle]pool.Handle)
+	}
+	s.builderLinks[product] = builder
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +240,7 @@ func snapBias(footX, footZ int) (int32, int32) { return int32(footX / 2), int32(
 // load product definition and snap to map cells using packed footprint extents each biased by half extent.
 // Signature per PLAN_08: QueryBuildInfo(factory *units.Unit, m *model.Model) (cell world.Cell, ok bool)
 // If a needed seam is missing (model+piece transform via cob/model), it is implemented here per plan.
-func QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cell, bool) {
+func (s *Service) QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cell, bool) {
 	if factory == nil || m == nil {
 		return world.Cell{}, false
 	}
@@ -255,50 +301,18 @@ func QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cell, bool) {
 	// 3. Store position on order node is done by caller (Pump state2) — not here.
 
 	// 4. Load product definition and snap using packed footprint extents each biased by half extent [05 C16].
-	footX, footZ := 1, 1 // default 1x1 if product unknown
+	footX, footZ := 1, 1 // default 1x1 when the product is unknown
 	if q := orders.QueueForUnit(factory); q != nil && q.LenPrimary() > 0 {
 		head := q.Primary()[0]
 		if pid := head.Param1; pid != 0 {
-			// Resolve product def via catalog iteration hashing each key [02 §5] — avoids needing reverse map.
-			var found *content.UnitDef
-			if lastService != nil && lastService.Catalog != nil {
-				for key, def := range lastService.Catalog.Units {
-					if factoryProductID(key) == pid {
-						found = def
-						break
-					}
+			if def := s.productDef(uint32(pid)); def != nil {
+				footX = int(def.FootprintX)
+				footZ = int(def.FootprintZ)
+				if footX <= 0 {
+					footX = 1
 				}
-				// Fallback to map if catalog iteration missed (e.g., test map direct)
-				if found == nil {
-					if defKey, ok := productIDToDefKey[uint32(pid)]; ok {
-						if def, ok := lastService.Catalog.Unit(defKey); ok && def != nil {
-							found = def
-						}
-					}
-				}
-				if found != nil {
-					footX = int(found.FootprintX)
-					footZ = int(found.FootprintZ)
-					if footX <= 0 {
-						footX = 1
-					}
-					if footZ <= 0 {
-						footZ = 1
-					}
-				}
-			} else {
-				// No catalog via service, try map fallback.
-				if defKey, ok := productIDToDefKey[uint32(pid)]; ok && lastService != nil && lastService.Catalog != nil {
-					if def, ok := lastService.Catalog.Unit(defKey); ok && def != nil {
-						footX = int(def.FootprintX)
-						footZ = int(def.FootprintZ)
-						if footX <= 0 {
-							footX = 1
-						}
-						if footZ <= 0 {
-							footZ = 1
-						}
-					}
+				if footZ <= 0 {
+					footZ = 1
 				}
 			}
 		}
@@ -307,11 +321,27 @@ func QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cell, bool) {
 	return cell, true
 }
 
-// lastService is the most recent Service for QueryBuildInfo catalog lookup [05 C16].
-var lastService *Service
-
-func setLastService(s *Service) {
-	lastService = s
+// productDef resolves an order payload's product id to its definition through
+// the reverse index built at Service construction [05 C16].
+//
+// The previous implementation ranged over the catalog's unit map hashing each
+// key and broke on the first match. Two names hashing to one id would resolve
+// differently between runs, which is a map-iteration dependency on a
+// simulation path (I1) — the exit-spot footprint, and therefore where the
+// nanoframe lands, would not be reproducible.
+func (s *Service) productDef(pid uint32) *content.UnitDef {
+	if s == nil || s.Catalog == nil {
+		return nil
+	}
+	key, ok := s.productIndex[pid]
+	if !ok {
+		return nil
+	}
+	def, ok := s.Catalog.Unit(key)
+	if !ok {
+		return nil
+	}
+	return def
 }
 
 // getVMProgram extracts *cob.Program from *cob.VM via reflection [04 §4.1] I13.
@@ -353,24 +383,15 @@ func fnvHash(s string) uint32 {
 	return hash
 }
 
-func getProductDefForNode(node *orders.Node, cat *content.Catalog) *content.UnitDef {
-	if node == nil || cat == nil {
+// getProductDefForNode resolves the product a build node names, through the
+// Service's deterministic reverse index [05 C16]. It ranged over the catalog
+// map and broke on the first match, which made the resolution depend on Go's
+// map iteration order whenever two unit names hash alike (I1).
+func (s *Service) getProductDefForNode(node *orders.Node) *content.UnitDef {
+	if node == nil {
 		return nil
 	}
-	pid := node.Param1
-	// Iterate catalog for matching productID [02 §5] — reverse map without extra state.
-	for key, def := range cat.Units {
-		if factoryProductID(key) == pid {
-			return def
-		}
-	}
-	// Fallback to global map for fixtures that bypass catalog.Units iteration (e.g., direct map)
-	if defKey, ok := productIDToDefKey[uint32(pid)]; ok {
-		if def, ok := cat.Unit(defKey); ok {
-			return def
-		}
-	}
-	return nil
+	return s.productDef(uint32(node.Param1))
 }
 
 func validatePlacement(s *Service, cx, cz int32, footX, footZ int, yard []world.YardCell) error {
@@ -439,10 +460,10 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	node.Target = productHandle
 
 	// Message "Starting construction" verbatim [05 C18].
-	logMessage("Starting construction")
+	s.logMessage("Starting construction")
 
 	// Register builder link on product [05 C18].
-	BuilderLinks[int(productHandle)] = int(factory.Handle)
+	s.SetBuilderLink(productHandle, factory.Handle)
 
 	// Copy standing-order bits 18-19/20-21 from factory class/state word [05 C18][05 "Rally inheritance"].
 	// Gates documented: both product and builder must carry mobile/class flag and neither may carry auto flag before copy.
@@ -602,7 +623,7 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 	// If no product attached, same epilogue runs with remaining=1 => refund 0 [05 C21].
 	if product == nil {
 		// Try to get metalCost from product def via node Param1
-		if def := getProductDefForNode(node, s.Catalog); def != nil {
+		if def := s.getProductDefForNode(node); def != nil {
 			metalCost = def.BuildCostMetal
 		}
 	}
@@ -643,9 +664,7 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 
 	// Send ordinary kill packet — kind-9 damage exactly 30000 unscaled because scaling requires damage <30000 [05 C21][06 §9.1].
 	// Note cause-9 deaths skip killed-severity query entirely (severity zero, no explosion, no corpse) [04 §5.1][05 C21].
-	LastKillDamage = Kind9Damage
-	LastKillSeverity = 0 // severity zero [05 C21]
-	LastKillNoCorpse = true
+	s.lastKill = KillInfo{Damage: Kind9Damage, Severity: 0, NoCorpse: true} // severity zero [05 C21]
 	if product != nil {
 		// Apply death: Alive false, but no corpse/explosion.
 		product.Alive = false
@@ -769,7 +788,7 @@ func setQueueSecondary(q *orders.Queue, sec []*orders.Node) {
 // ---------------------------------------------------------------------------
 
 func (s *Service) handleStop(factory *units.Unit, node *orders.Node, tick uint32) {
-	logMessage("Construction stopped") // verbatim [05 C22]
+	s.logMessage("Construction stopped") // verbatim [05 C22]
 	// Decrement node count ONCE [05 C22].
 	if node.Param2 > 0 {
 		node.Param2--
@@ -884,7 +903,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	// Exit-spot acquisition exact order [05 C16] is performed via QueryBuildInfo path.
 	// For handler we already have stored cell via QueryBuildInfo; but we need to compute again per tick?
 	// Use lastService for catalog lookup.
-	setLastService(s)
+
 	// Determine model for factory.
 	var m *model.Model
 	if s.ModelForFactory != nil {
@@ -895,7 +914,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	var cell world.Cell
 	var ok bool
 	if m != nil {
-		cell, ok = QueryBuildInfo(factory, m)
+		cell, ok = s.QueryBuildInfo(factory, m)
 		if !ok {
 			// Query failed => treat as blocked? For now retry 15.
 			node.DynamicGate = WakeBit2
@@ -904,7 +923,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		}
 	} else {
 		// No model: use factory world position snapped with product footprint.
-		def := getProductDefForNode(node, s.Catalog)
+		def := s.getProductDefForNode(node)
 		footX, footZ := 1, 1
 		if def != nil {
 			footX = int(def.FootprintX)
@@ -923,7 +942,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	node.GoalZ = world.CellToWorld(cell.Z)
 
 	// Load product definition and attempt silent blocked revalidation [05 C17].
-	def := getProductDefForNode(node, s.Catalog)
+	def := s.getProductDefForNode(node)
 	if def == nil {
 		// No product def => cannot proceed; stay and retry 15 silent? But spec says product def loaded after storing position.
 		// If missing, treat as blocked silent? For test we may not have product def; just skip validation and try allocation.
@@ -975,7 +994,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	product, err := s.allocateNanoframe(factory, def, cell)
 	if err != nil {
 		// Allocator refusal prints verbatim "Unable to create any more units", retries in exactly 300 ticks (not randomized), stays state2 [05 C18].
-		logMessage(ErrLimitMessage)
+		s.logMessage(ErrLimitMessage)
 		node.DynamicGate = WakeBit1 // TODO(question): wake bit for 300 retry not located; use Bit1
 		node.Deadline = int32(tick + 300)
 		// Stay in state2.
@@ -1147,7 +1166,7 @@ func (s *Service) Pump(factory *units.Unit, tick uint32) {
 	if factory == nil {
 		return
 	}
-	setLastService(s)
+
 	q := orders.QueueForUnit(factory)
 	if q == nil || q.LenPrimary() == 0 {
 		return

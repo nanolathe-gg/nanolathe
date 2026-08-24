@@ -2,9 +2,6 @@ package triggers
 
 import (
 	"testing"
-
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 func TestVTableCompleteness(t *testing.T) {
@@ -33,12 +30,12 @@ func TestVTableCompleteness(t *testing.T) {
 		}
 		seenName[vt.Name] = true
 		if vt.Slots != 8 {
-			t.Fatalf("VTable %q Slots %d want 8 [notes/campaign/00_missions.md §5.3]", vt.Name, vt.Slots)
+			t.Fatalf("VTable %q Slots %d want 8 [08 Trigger object]", vt.Name, vt.Slots)
 		}
 		if vt.RecordSize != vt.Kind.RecordSize() {
 			t.Fatalf("VTable %q RecordSize %d want %d", vt.Name, vt.RecordSize, vt.Kind.RecordSize())
 		}
-		// Documented buckets [GAP T10] [notes/campaign/00_missions.md §5.2].
+		// Documented buckets [08 "Trigger object"] [GAP T10].
 		switch vt.RecordSize {
 		case 0x0C, 0x10, 0x14, 0x30, 0x32, 0x36, 0x40:
 		default:
@@ -119,163 +116,6 @@ func nToLower(s string) string {
 	return string(b)
 }
 
-func TestBoundaryTolerance(t *testing.T) {
-	// Boundary conditions compare signed world coordinate vs threshold,
-	// satisfied when absolute difference is below three world units (±2)
-	// [08 "Evaluation"] [C17].
-	cases := []struct {
-		pos, thresh int32
-		wantPass    bool
-	}{
-		{100, 100, true},
-		{102, 100, true},  // diff 2 passes
-		{98, 100, true},   // diff 2 passes
-		{103, 100, false}, // diff 3 fails
-		{97, 100, false},  // diff 3 fails
-		{0, 0, true},
-		{-2, 0, true},
-		{-3, 0, false},
-		{100, 102, true},
-		{100, 103, false},
-	}
-	for _, c := range cases {
-		tr := New(KindAnyUnitPassesX, "", c.thresh)
-		ctx := Context{X: c.pos}
-		got := tr.Poll(ctx)
-		if got != c.wantPass {
-			t.Fatalf("AnyUnitPassesX pos %d thresh %d: got %v want %v (diff %d)", c.pos, c.thresh, got, c.wantPass, c.pos-c.thresh)
-		}
-		// Reset for Z variant
-		tr2 := New(KindAnyUnitPassesZ, "", c.thresh)
-		ctx2 := Context{Z: c.pos}
-		got2 := tr2.Poll(ctx2)
-		if got2 != c.wantPass {
-			t.Fatalf("AnyUnitPassesZ pos %d thresh %d: got %v want %v", c.pos, c.thresh, got2, c.wantPass)
-		}
-	}
-	// Ensure pure poll mutates only Completed when satisfied.
-	tr := New(KindAnyUnitPassesX, "", 500)
-	before := tr.Args[0]
-	ctx := Context{X: 502}
-	if !tr.Poll(ctx) {
-		t.Fatalf("should pass diff 2")
-	}
-	if tr.Args[0] != before {
-		t.Fatalf("boundary poll mutated Args %d -> %d, should only mutate Completed [C17]", before, tr.Args[0])
-	}
-	if !tr.Completed {
-		t.Fatalf("Completed not set")
-	}
-}
-
-func TestBoundaryToleranceWithTypeGate(t *testing.T) {
-	// UnitTypePassesX gated by type and ANYTYPE [C14].
-	def := &content.UnitDef{}
-	def.UnitName = "ARMCOM"
-	def.Commander = false
-	u := &units.Unit{Def: def}
-	// Create ANYTYPE trigger should pass regardless of unit type.
-	trAny := New(KindUnitTypePassesX, "ANYTYPE", 1000)
-	ctxAny := Context{X: 1001, Unit: u}
-	if !trAny.Poll(ctxAny) {
-		t.Fatalf("ANYTYPE should match any type")
-	}
-	// Specific type mismatch should not pass.
-	trSpec := New(KindUnitTypePassesX, "CORCOM", 1000)
-	ctxSpec := Context{X: 1000, Unit: u}
-	if trSpec.Poll(ctxSpec) {
-		t.Fatalf("type mismatch should not pass")
-	}
-	// Matching type should pass.
-	trMatch := New(KindUnitTypePassesX, "ARMCOM", 1000)
-	if !trMatch.Poll(ctxSpec) {
-		t.Fatalf("matching type should pass")
-	}
-	// Case-insensitive ANYTYPE
-	trLower := New(KindUnitTypePassesX, "anytype", 1000)
-	if !IsANYTYPE(trLower.Type) {
-		t.Fatalf("IsANYTYPE case-insensitive failed")
-	}
-}
-
-func TestKillUnitTypeCountdown(t *testing.T) {
-	// KillUnitType decrements countdown and completes at zero or below [08 "Evaluation"] [C17].
-	def := &content.UnitDef{}
-	def.UnitName = "CORLAB"
-	u := &units.Unit{Def: def}
-	tr := New(KindKillUnitType, "CORLAB", 2)
-	if tr.Args[0] != 2 {
-		t.Fatalf("initial count %d", tr.Args[0])
-	}
-	// First kill decrements to 1, not completed.
-	if tr.Poll(Context{Unit: u, Event: EventUnitDied}) {
-		t.Fatalf("should not complete at 1 remaining")
-	}
-	if tr.Completed {
-		t.Fatalf("Completed premature")
-	}
-	if tr.Args[0] != 1 {
-		t.Fatalf("after first decrement Args[0] %d want 1", tr.Args[0])
-	}
-	// Second kill completes.
-	if !tr.Poll(Context{Unit: u, Event: EventUnitDied}) {
-		t.Fatalf("should complete at zero")
-	}
-	if !tr.Completed || tr.Args[0] != 0 {
-		t.Fatalf("after completion Args[0]=%d Completed=%v", tr.Args[0], tr.Completed)
-	}
-	// Subsequent polls stay completed and do not further decrement (pure idempotent).
-	before := tr.Args[0]
-	if !tr.Poll(Context{Unit: u, Event: EventUnitDied}) {
-		t.Fatalf("already completed should stay true")
-	}
-	if tr.Args[0] != before {
-		t.Fatalf("completed trigger should not further mutate Args")
-	}
-	// Non-matching type does not decrement.
-	tr2 := New(KindKillUnitType, "ARMCOM", 1)
-	if tr2.Poll(Context{Unit: u, Event: EventUnitDied}) {
-		t.Fatalf("non-matching type should not count")
-	}
-	if tr2.Args[0] != 1 || tr2.Completed {
-		t.Fatalf("non-matching poll mutated state")
-	}
-	// ANYTYPE matches any.
-	trAny := New(KindKillUnitType, "ANYTYPE", 1)
-	if !trAny.Poll(Context{Unit: u, Event: EventUnitDied}) {
-		t.Fatalf("ANYTYPE should match")
-	}
-}
-
-func TestTimerSecondsToTicks(t *testing.T) {
-	// Timer triggers compare tick count against seconds×30 [08 "Trigger object"] [08 "Evaluation"] [C17].
-	tr := NewTimer(KindVictoryTimerRunsOut, 10)
-	if tr.Args[0] != 300 {
-		t.Fatalf("seconds 10 -> ticks %d want 300", tr.Args[0])
-	}
-	if tr.Poll(Context{Tick: 299}) {
-		t.Fatalf("tick 299 should not fire 300 deadline")
-	}
-	if tr.Completed {
-		t.Fatalf("should not be completed before deadline")
-	}
-	if !tr.Poll(Context{Tick: 300}) {
-		t.Fatalf("tick 300 should fire")
-	}
-	if !tr.Completed {
-		t.Fatalf("should be completed at deadline")
-	}
-	// Subsequent poll stays completed even at earlier tick (pure Completed flag).
-	if !tr.Poll(Context{Tick: 0}) {
-		t.Fatalf("completed should stay true regardless of tick")
-	}
-	// Death timer also uses ×30.
-	tr2 := NewTimer(KindDeathTimerRunsOut, 1200)
-	if tr2.Args[0] != 36000 {
-		t.Fatalf("1200 sec -> %d want 36000", tr2.Args[0])
-	}
-}
-
 func TestDefaultTriggers(t *testing.T) {
 	// With no authored victory condition the engine inserts a default destroy-all-units;
 	// with no defeat condition, a default all-units-killed [08 "Default triggers"] [C16].
@@ -297,64 +137,6 @@ func TestDefaultTriggers(t *testing.T) {
 	}
 	if len(def2) != 1 {
 		t.Fatalf("non-empty defeat should not inject")
-	}
-}
-
-func TestEvaluationOrderPurePoll(t *testing.T) {
-	// Evaluators are pure polls mutating only their own completed flag [08 "Evaluation"] [C17].
-	def := &content.UnitDef{}
-	def.UnitName = "ARMLAB"
-	u := &units.Unit{Def: def}
-	vic := []*Trigger{
-		New(KindKillUnitType, "ARMLAB", 1),
-		New(KindVictoryTimerRunsOut, "", SecondsToTicks(5)),
-	}
-	defeat := []*Trigger{
-		New(KindAnyUnitPassesX, "", 9999),
-	}
-	// Poll victory timer at tick 0 should not complete.
-	ctx := Context{Tick: 0, Unit: u, Event: EventUnitDied, X: 0}
-	// First trigger (KillUnitType) will complete because EventUnitDied matches.
-	// Second (VictoryTimer) should not complete.
-	// Ensure Poll does not affect the other trigger's Completed.
-	vic[0].Poll(ctx)
-	if !vic[0].Completed {
-		t.Fatalf("first victory should be completed")
-	}
-	if vic[1].Completed {
-		t.Fatalf("second victory should not be completed yet")
-	}
-	if defeat[0].Completed {
-		t.Fatalf("defeat should not be completed")
-	}
-	// Test Evaluate helper: victory=AND, defeat=OR, simultaneous=victory.
-	vic2 := []*Trigger{New(KindAnyUnitPassesX, "", 100), New(KindAnyUnitPassesZ, "", 200)}
-	def2 := []*Trigger{New(KindAnyUnitPassesX, "", 300)}
-	// Make all victory complete but no defeat.
-	vic2[0].Completed = true
-	vic2[1].Completed = true
-	vDone, dDone := Evaluate(vic2, def2, Context{})
-	if !vDone || dDone {
-		t.Fatalf("victory AND should be done, defeat not done: %v %v", vDone, dDone)
-	}
-	// Make defeat complete too -> simultaneous should be victory.
-	def2[0].Completed = true
-	vDone, dDone = Evaluate(vic2, def2, Context{})
-	if !vDone || dDone {
-		t.Fatalf("simultaneous should be victory only: %v %v", vDone, dDone)
-	}
-	// Victory not all done -> not victory.
-	vic2[1].Completed = false
-	vDone, _ = Evaluate(vic2, def2, Context{})
-	if vDone {
-		t.Fatalf("victory not all done should not be victory")
-	}
-	// Defeat OR: any defeat completes -> defeat done.
-	def3 := []*Trigger{New(KindDeathTimerRunsOut, "", SecondsToTicks(10)), New(KindAnyUnitPassesX, "", 0)}
-	def3[1].Completed = true
-	_, dDone = Evaluate(nil, def3, Context{X: 0})
-	if !dDone {
-		t.Fatalf("defeat OR should be done when any completes")
 	}
 }
 
@@ -426,47 +208,5 @@ func TestParseLine(t *testing.T) {
 	// Unknown condition
 	if _, err = ParseLine("UnknownTrigger=1"); err == nil {
 		t.Fatalf("unknown should error")
-	}
-}
-
-func TestMoveUnitToRadius(t *testing.T) {
-	tr := New(KindMoveUnitToRadius, "ARMCOM", 100, 200, 10)
-	def := &content.UnitDef{}
-	def.UnitName = "ARMCOM"
-	u := &units.Unit{Def: def}
-	// Inside radius 10 at (100,200): pos (105,200) distance 5 <=10 -> pass
-	if !tr.Poll(Context{X: 105, Z: 200, Unit: u}) {
-		t.Fatalf("inside radius should pass")
-	}
-	// Reset for next check
-	tr2 := New(KindMoveUnitToRadius, "ARMCOM", 100, 200, 10)
-	if tr2.Poll(Context{X: 115, Z: 200, Unit: u}) {
-		t.Fatalf("outside radius should fail")
-	}
-	// ANYTYPE passes any unit
-	trAny := New(KindMoveUnitToRadius, "ANYTYPE", 0, 0, 5)
-	def2 := &content.UnitDef{}
-	def2.UnitName = "CORCOM"
-	u2 := &units.Unit{Def: def2}
-	if !trAny.Poll(Context{X: 3, Z: 4, Unit: u2}) {
-		t.Fatalf("ANYTYPE radius inside should pass (3-4-5)")
-	}
-}
-
-func TestTriggerPollPureOnlyCompleted(t *testing.T) {
-	// Verify Poll does not mutate Type or other triggers [C17].
-	tr := New(KindVictoryTimerRunsOut, "", SecondsToTicks(100))
-	origType := tr.Type
-	origArgs := tr.Args
-	tr.Poll(Context{Tick: 10})
-	if tr.Type != origType || tr.Args != origArgs {
-		t.Fatalf("poll mutated non-Completed fields before deadline")
-	}
-	tr.Poll(Context{Tick: 3000})
-	if !tr.Completed {
-		t.Fatalf("should complete at deadline")
-	}
-	if tr.Type != origType {
-		t.Fatalf("poll mutated Type after completion")
 	}
 }

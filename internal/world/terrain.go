@@ -305,6 +305,54 @@ func (t *Terrain) CoarseHeightAt(cx, cz int32) numeric.Fixed {
 // a ridge crossing one cell of a tile must block the ray, and averaging would
 // let sight pass through it. Not attested — phase 5 owns the decision and
 // PLAN_05 records it as an open input.
+// LOSHeightWord returns the aggregated two-byte terrain word for visibility
+// tile (vx,vz) as (low, high) [03 §3.2] C5.
+//
+// The terrain-ray horizon rule uses both bytes for different things: the LOW
+// byte supplies the candidate difference that gates admission, and the HIGH
+// byte is tested with the identical comparison afterwards to decide whether the
+// retained horizon advances.
+//
+// TODO(question): [03 §2.3] establishes that the value is aggregated over the
+// tile and [03 §3.2] that the word has two distinct bytes, but neither names
+// the aggregates. This returns (minimum, maximum) over the tile's four cells,
+// which is the only pairing that makes both uses coherent — sight passes over
+// the lowest point of a tile, while the horizon it leaves behind rises to the
+// highest. Equal bytes would make the high-byte test algebraically identical
+// to the admission test and therefore dead, which is how the previous
+// single-byte implementation could never exercise it.
+func (t *Terrain) LOSHeightWord(vx, vz int32) (low, high uint8) {
+	if t == nil || t.Plot == nil || t.CellW <= 0 || t.CellH <= 0 {
+		return 0, 0
+	}
+	cx, cz := vx*2, vz*2
+	if cx < 0 || cz < 0 || cx >= t.CellW || cz >= t.CellH {
+		return 0, 0
+	}
+	low, high = 255, 0
+	seen := false
+	for dz := int32(0); dz < 2; dz++ {
+		for dx := int32(0); dx < 2; dx++ {
+			px, pz := cx+dx, cz+dz
+			if px >= t.CellW || pz >= t.CellH {
+				continue
+			}
+			h := t.Plot[pz*t.CellW+px].Height()
+			if h < low {
+				low = h
+			}
+			if h > high {
+				high = h
+			}
+			seen = true
+		}
+	}
+	if !seen {
+		return 0, 0
+	}
+	return low, high
+}
+
 func (t *Terrain) LOSHeightAt(vx, vz int32) uint8 {
 	if t == nil || t.Plot == nil || t.CellW <= 0 || t.CellH <= 0 {
 		return 0

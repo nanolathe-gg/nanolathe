@@ -312,26 +312,26 @@ func DistanceToBox(impact Vec3, u UnitForArea) int32 {
 	} else {
 		cz = 0
 	}
-	// Distance = trunc(sqrt(cx²+cy²+cz²)) with Fixed raw units?
-	// Convert from Fixed Raw (65536 per pixel) to world-distance value?
-	// Research: reduced to retail signed 16-bit world-distance value [06 §9.3].
-	// For determinism, compute in Raw domain then convert to integer world units via trunc toward zero /65536?
-	// Simplify: compute hypot in Raw float, trunc, then /65536? But research truncation is sqrt truncated toward zero.
-	// We'll compute Euclidean in Raw, sqrt, trunc, then Raw>>16? That's Floor? Need trunc toward zero per [01 §8].
-	// Since distances are non-negative, trunc==floor. So we can do /65536.
+	// The separation is the Euclidean distance from the impact point to the
+	// victim's box, reduced to a signed 16-bit world-distance value; a recipient
+	// is accepted only when that value is strictly below the radius [06 §9.3].
 	if cx == 0 && cy == 0 && cz == 0 {
-		return 0 // impact on or inside box has distance zero [06 §9.3]
+		return 0 // impact on or inside the box has distance zero [06 §9.3]
 	}
-	// Use float64 for sqrt; allowed per I2 ballot? Falloff uses float; distance truncated toward zero as well.
+	// float64 for the square root is on the I2 allowlist alongside the ballistic
+	// discriminant; the components convert out of 16.16 first so the result is
+	// already in world units, and the narrowing truncates toward zero [01 §8] I3.
+	// Distances here are non-negative, so truncation and flooring agree.
 	fx := float64(cx) / 65536.0
 	fy := float64(cy) / 65536.0
 	fz := float64(cz) / 65536.0
-	d := math.Sqrt(fx*fx + fy*fy + fz*fz) // truncated toward zero [06 §9.3]
-	// Truncate toward zero -> int32(d)
-	di := int32(d) // trunc [01 §8]
-	// Reduce to signed 16-bit world-distance value [06 §9.3] — clamp to 32767?
-	// Retail signed 16-bit would wrap; we clamp to int16 range for acceptance test? But spec says reduced to retail signed 16-bit world-distance value; recipient accepted only when value strictly < radius [06 §9.3].
-	// For test, we keep di as is, but cap to 32767 max for signed 16? We'll saturate? However wrap behavior is TODO(question) for high distances.
+	di := int32(math.Sqrt(fx*fx + fy*fy + fz*fz))
+	// TODO(question): [06 §9.3] says the value is "reduced to" a signed 16-bit
+	// world-distance, which on retail is a truncating narrowing and therefore
+	// WRAPS past 32,767 — a far-enough victim would read as near. This
+	// saturates instead, which is the safe reading and the wrong one if the
+	// wrap is ever observable. No shipped weapon has a radius anywhere near
+	// that, so the two readings cannot be distinguished by stock content.
 	if di > 32767 {
 		di = 32767
 	}

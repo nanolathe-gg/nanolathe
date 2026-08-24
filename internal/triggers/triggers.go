@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-
-	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // Kind identifies one of the eighteen victory/defeat trigger types
@@ -93,7 +91,7 @@ func (k Kind) IsDefeat() bool { return k >= KindCommanderKilled }
 // [08 "Trigger object"] [GAP T10] [08 "Trigger object"].
 // Observed buckets: 0xC flag-only (12), 0x10 timer (16), 0x14 boundary (20),
 // 0x30/0x32 string+count (48/50), 0x36 canonicalizing string (54), 0x40 radius (64)
-// [notes/campaign/00_missions.md §5.2] [GAP T10].
+// [GAP T10].
 // TODO(question): exact assignment of which string+count variant is 0x30 vs 0x32
 // is not closed beyond the bucket ranges; this mapping uses representative
 // values within the observed buckets and is one line to correct if a probe
@@ -101,7 +99,7 @@ func (k Kind) IsDefeat() bool { return k >= KindCommanderKilled }
 func (k Kind) RecordSize() int {
 	switch k {
 	case KindKillEnemyCommander, KindDestroyAllUnits, KindKillAllMobileUnits, KindCommanderKilled, KindAllUnitsKilled:
-		return 0x0C // 12 flag-only [GAP T10] [notes/campaign/00_missions.md §5.2]
+		return 0x0C // 12 flag-only [GAP T10]
 	case KindVictoryTimerRunsOut, KindDeathTimerRunsOut:
 		return 0x10 // 16 timer [GAP T10]
 	case KindUnitTypePassesX, KindUnitTypePassesZ, KindAnyUnitPassesX, KindAnyUnitPassesZ:
@@ -120,18 +118,19 @@ func (k Kind) RecordSize() int {
 }
 
 // VTable is the per-condition virtual table entry. Retail stores an 8-dword
-// table per trigger (shared destructor/helper slots plus one checker slot)
-// with the completed flag adjacent to the vtable pointer [08 "Trigger object"]
-// [notes/campaign/00_missions.md §5.3]. Go models the identity, not the
-// layout [I13].
+// table per trigger with the completed flag adjacent to the vtable pointer
+// [08 "Trigger object"]. Six of the slots are named: a poll, three event
+// notifications (unit died, capture/transfer, created), and save/load
+// [08 "Evaluation"]. Go models the identity, not the layout [I13] — the poll
+// and the notifications are methods on Trigger, in eval.go.
 type VTable struct {
 	Kind       Kind
 	Name       string
 	RecordSize int // bytes, see Kind.RecordSize
-	// TODO(question): exact 8-slot function identities beyond the checker
-	// slot are not needed for the poll contract; the table shape is
-	// preserved for completeness.
-	Slots int // always 8 per [notes/campaign/00_missions.md §5.3]
+	// TODO(question): the two slots beyond the six named ones are presumed to
+	// be the shared destructor/helper pair; their identities are not needed
+	// for the poll contract and are not established.
+	Slots int // always 8 [08 "Trigger object"]
 }
 
 // VTables is the eighteen-entry vtable map covering all condition types
@@ -185,29 +184,9 @@ type Trigger struct {
 	Completed bool     // adjacent to vtable pointer [08 "Trigger object"]
 }
 
-// Event classifies the context that caused a poll invocation.
-// Exact event taxonomy beyond death/capture/tick is residual
-// [08 "Evaluation"] TODO(question).
-type Event uint8
-
-const (
-	EventTick Event = iota // periodic poll with no unit event
-	EventUnitDied
-	EventUnitCaptured
-	EventUnitCreated
-	EventUnitBuilt
-)
-
-// Context is the per-poll input to a trigger checker.
-// Evaluators are pure polls taking the trigger and a context and mutating
-// only their own completed flag [08 "Evaluation"] [C17].
-// Coordinates are signed world units; thresholds compare with ±2 tolerance [C17].
-type Context struct {
-	Tick  uint32      // authoritative global tick [08 "Trigger object"] [08 "Evaluation"]
-	Unit  *units.Unit // subject unit, if any (may be nil for timer/boundary without unit) [08 "Evaluation"]
-	X, Z  int32       // signed world coordinate carried in context for boundary checks [08 "Evaluation"] [C17]
-	Event Event       // death/capture flag for type-gated checks [08 "Evaluation"]
-}
+// Evaluation lives in eval.go: the tick-driven poll slot, the three
+// notification slots, and the AND/OR combination of the two queues
+// [08 "Evaluation"].
 
 // SecondsToTicks converts authored seconds to authoritative ticks at 30 Hz
 // [08 "Trigger object"] [08 "Evaluation"] [C17].
@@ -276,7 +255,7 @@ func ParseArgs(s string) (typ string, args [3]int32, isFour bool, err error) {
 	if s == "" {
 		return "", args, false, fmt.Errorf("triggers: empty args")
 	}
-	// Split on comma. Retail uses scan format %[a-zA-Z],%i and %[a-zA-Z],%i,%i,%i [notes/campaign/00_missions.md §5.1].
+	// Split on comma. Retail uses scan format %[a-zA-Z],%i and %[a-zA-Z],%i,%i,%i [08 "Victory and defeat triggers"].
 	parts := strings.Split(s, ",")
 	for i := range parts {
 		parts[i] = strings.TrimSpace(parts[i])
@@ -404,260 +383,4 @@ func ParseLine(line string) (*Trigger, error) {
 		// Normalize timer-like count storage for MoveRadius: args are X,Z,Radius.
 		return t, nil
 	}
-}
-
-// Poll evaluates the trigger against the context and mutates only its own
-// completed flag (pure poll) [08 "Evaluation"] [C17]. It returns true when
-// the condition is now satisfied (Completed is set). Already-completed
-// triggers stay completed. Unstated details are TODO(question).
-//
-// Decoded bodies handled verbatim per [08 "Evaluation"] [C17]:
-//
-//	KillUnitType decrements countdown and completes at zero or below;
-//	boundary compares signed world coordinate vs threshold with abs-diff <3 (±2);
-//	timers compare tick count against seconds×30.
-//
-// Type-gated vs ANYTYPE handling per [08 "Victory and defeat triggers"] [C14].
-func (t *Trigger) Poll(c Context) bool {
-	if t == nil {
-		return false
-	}
-	if t.Completed {
-		return true
-	}
-	switch t.Kind {
-	case KindKillUnitType, KindUnitTypeKilled:
-		// Countdown: while subject unit type matches authored type,
-		// decrement count, completing at zero or below [08 "Evaluation"] [C17].
-		// ANYTYPE matches any type [C14].
-		if t.Type != "" && !IsANYTYPE(t.Type) {
-			if c.Unit == nil || c.Unit.Def == nil {
-				return false
-			}
-			if !strings.EqualFold(c.Unit.Def.UnitName, t.Type) {
-				// Also try Type string if present? UnitName is canonical.
-				// Fallback to Def.Name? Use UnitName as identity.
-				return false
-			}
-		}
-		// Only count when the event is a relevant kill/death?
-		// Doc says "while the subject unit's type matches the authored type it decrements"
-		// implying each Poll with matching unit decrements. We gate on EventUnitDied
-		// or EventUnitCaptured/Created where appropriate, but for purity allow any
-		// Poll with matching Unit to count. TODO(question): exact event gating for
-		// KillUnitType vs UnitTypeKilled alliance semantics [08 "Evaluation"].
-		if c.Event == EventUnitDied || c.Event == EventTick {
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			t.Args[0]--
-			if t.Args[0] <= 0 {
-				t.Completed = true
-				return true
-			}
-		}
-		return false
-
-	case KindBuildUnitType, KindCaptureUnitType, KindKillAllOfType, KindAllUnitsKilledOfType:
-		// Type-gated annihilation/capture checks [08 "Evaluation"]:
-		// compare trigger's type string against subject unit type together with
-		// death/capture event flags.
-		// TODO(question): alliance/team semantics, capture vs kill distinction,
-		// and whether Build checks creation events are not closed [08 "Evaluation"].
-		if t.Type != "" && !IsANYTYPE(t.Type) {
-			if c.Unit == nil || c.Unit.Def == nil {
-				return false
-			}
-			if !strings.EqualFold(c.Unit.Def.UnitName, t.Type) {
-				return false
-			}
-		}
-		switch t.Kind {
-		case KindBuildUnitType:
-			if c.Event == EventUnitCreated || c.Event == EventUnitBuilt {
-				// Type matched above; could also count via countdown if Args[0] holds count
-				// For now, single build completes when any matching unit appears unless count >1.
-				if t.Args[0] > 1 {
-					t.Args[0]--
-					return false
-				}
-				t.Completed = true
-				return true
-			}
-		case KindCaptureUnitType:
-			if c.Event == EventUnitCaptured {
-				if t.Args[0] > 1 {
-					t.Args[0]--
-					return false
-				}
-				t.Completed = true
-				return true
-			}
-		default: // KillAllOfType, AllUnitsKilledOfType
-			if c.Event == EventUnitDied {
-				if t.Args[0] > 1 {
-					// For KillAllOfType the Args[0] may be count, but AllUnitsKilledOfType has no count; treat as 1.
-					if t.Kind == KindAllUnitsKilledOfType {
-						t.Completed = true
-						return true
-					}
-					t.Args[0]--
-					return false
-				}
-				// TODO(question): need world scan to know if *all* of type are dead; stub counts single event.
-				t.Completed = true
-				return true
-			}
-		}
-		return false
-
-	case KindUnitTypePassesX, KindUnitTypePassesZ, KindAnyUnitPassesX, KindAnyUnitPassesZ:
-		// Boundary conditions compare signed world coordinate against threshold,
-		// satisfied when absolute difference is below three world units (±2)
-		// [08 "Evaluation"] [C17].
-		isX := t.Kind == KindUnitTypePassesX || t.Kind == KindAnyUnitPassesX
-		isAny := t.Kind == KindAnyUnitPassesX || t.Kind == KindAnyUnitPassesZ
-		if !isAny {
-			// Type-gated: check ANYTYPE wildcard [C14] [08 "Victory and defeat triggers"].
-			if t.Type != "" && !IsANYTYPE(t.Type) {
-				if c.Unit == nil || c.Unit.Def == nil {
-					return false
-				}
-				if !strings.EqualFold(c.Unit.Def.UnitName, t.Type) {
-					return false
-				}
-			}
-		}
-		var pos, thresh int32
-		if isX {
-			pos = c.X
-			thresh = t.Args[0]
-		} else {
-			pos = c.Z
-			thresh = t.Args[0]
-		}
-		// Abs diff <3 i.e. -2..+2 inclusive [C17].
-		diff := pos - thresh
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff < 3 {
-			t.Completed = true
-			return true
-		}
-		return false
-
-	case KindVictoryTimerRunsOut, KindDeathTimerRunsOut:
-		// Timer triggers compare tick count against stored seconds×30 deadline
-		// [08 "Trigger object"] [08 "Evaluation"] [C17].
-		if int32(c.Tick) >= t.Args[0] {
-			t.Completed = true
-			return true
-		}
-		return false
-
-	case KindMoveUnitToRadius:
-		// Largest record carrying X/Y/Z plus radius [08 "Trigger object"] [GAP T10].
-		// Evaluator body not fully decoded; implemented as 2D radius check with
-		// Euclidean distance <= radius, gated by type/ANYTYPE [C14].
-		// TODO(question): exact axis (X/Z vs X/Y) and distance metric not closed [08 "Evaluation"].
-		if t.Type != "" && !IsANYTYPE(t.Type) {
-			if c.Unit == nil || c.Unit.Def == nil {
-				return false
-			}
-			if !strings.EqualFold(c.Unit.Def.UnitName, t.Type) {
-				return false
-			}
-		}
-		cx := t.Args[0]
-		cz := t.Args[1]
-		rad := t.Args[2]
-		dx := c.X - cx
-		dz := c.Z - cz
-		// Use hypot without float: check dx*dx + dz*dz <= rad*rad.
-		// Guard against overflow with int64 [08 "Trigger object"] radius payload.
-		if int64(dx)*int64(dx)+int64(dz)*int64(dz) <= int64(rad)*int64(rad) {
-			// Also allow tolerance as for boundary? Not specified; keep strict.
-			// Provide small tolerance via <3? Not for radius. Keep exact.
-			t.Completed = true
-			return true
-		}
-		return false
-
-	case KindKillEnemyCommander, KindDestroyAllUnits, KindKillAllMobileUnits, KindCommanderKilled, KindAllUnitsKilled:
-		// Flag-only triggers; decoded evaluators for DestroyAllUnits show a
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// self-satisfied from first poll [notes/campaign/10_trigger_evaluator.md].
-		// Other flag-only bodies are pure polls checking global state.
-		// TODO(question): exact global scan semantics and team filtering not closed [08 "Evaluation"].
-		// Stub: for DestroyAllUnits / AllUnitsKilled etc, we require an explicit context hint via Event.
-		// If caller polls with Event completeness, we complete.
-		// For determinism, require EventUnitDied for defeat all-killed, etc.
-		switch t.Kind {
-		case KindKillEnemyCommander:
-			if c.Event == EventUnitDied && c.Unit != nil && c.Unit.Def != nil && c.Unit.Def.Commander {
-				// Commander died; check enemy vs own? Alliance semantics TODO(question).
-				t.Completed = true
-				return true
-			}
-		case KindCommanderKilled:
-			if c.Event == EventUnitDied && c.Unit != nil && c.Unit.Def != nil && c.Unit.Def.Commander {
-				t.Completed = true
-				return true
-			}
-		case KindDestroyAllUnits, KindKillAllMobileUnits, KindAllUnitsKilled:
-			// TODO(question): need world unit count scan; stub to complete only on explicit EventTick with hint?
-			// For now, never auto-complete except via external helper EvaluateAll that can check counts.
-			return false
-		}
-		return false
-	default:
-		return false
-	}
-}
-
-// Evaluate iterates the victory and defeat arrays calling each checker.
-// It is a helper for the tick site that was never decompiled and is inferred
-// from vtable layout [GAP T10] [08 "Evaluation"].
-// TODO(question): the tick site that iterates the victory/defeat arrays was
-// never decompiled; dispatch pattern is inferred [PLAN_10 explicit unknown].
-// Poll from a dedicated kernel registration and note at call site.
-func Evaluate(victory []*Trigger, defeat []*Trigger, c Context) (victoryDone bool, defeatDone bool) {
-	// Victory = AND across queue; defeat = OR; victory evaluated first ⇒ simultaneous = victory
-	// [notes/campaign/10_trigger_evaluator.md] TODO(question): ordering when multiple fire,
-	// short-circuit rules, and team semantics not fully closed [08 "Evaluation"].
-	for _, t := range victory {
-		if t == nil {
-			continue
-		}
-		t.Poll(c)
-	}
-	for _, t := range defeat {
-		if t == nil {
-			continue
-		}
-		t.Poll(c)
-	}
-	// Compute done: victory requires all completed (AND), defeat requires any completed (OR).
-	if len(victory) > 0 {
-		all := true
-		for _, t := range victory {
-			if t == nil || !t.Completed {
-				all = false
-				break
-			}
-		}
-		victoryDone = all
-	}
-	if len(defeat) > 0 {
-		for _, t := range defeat {
-			if t != nil && t.Completed {
-				defeatDone = true
-				break
-			}
-		}
-	}
-	// Simultaneous = victory (victory evaluated first) [notes/campaign/10_trigger_evaluator.md].
-	if victoryDone && defeatDone {
-		defeatDone = false
-	}
-	return victoryDone, defeatDone
 }

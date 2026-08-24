@@ -605,87 +605,53 @@ func (v *VM) interpolate(delta int) {
 			// Turn axis (including spin sharing)
 			// Spin active takes precedence over turn interpolation when spinActive [03 §2.4] C22.
 			if anim.spinActive {
-				// Advance spin speed toward target via acceleration [04 §4.6].
+				// Spin speed converges on its target by the acceleration
+				// magnitude and clamps on reaching or crossing it; a
+				// deceleration smaller than one tick's worth becomes an
+				// immediate stop [04 §4.6].
+				//
+				// The acceleration's sign is not the direction of travel — the
+				// direction is whichever way the target lies. Applying the
+				// authored sign directly walks away from the target whenever
+				// the two disagree.
 				if anim.spinSpeed != anim.spinTarget {
-					accStep := int64(anim.spinAccel) / 30 // [04 §4.6]
-					if accStep == 0 {
-						// Sub-tick deceleration becomes immediate stop [04 §4.6]
-						anim.spinSpeed = anim.spinTarget
+					accStep := int64(anim.spinAccel) / 30 // trunc toward zero [04 §4.6] I3
+					if accStep < 0 {
+						accStep = -accStep
+					}
+					step := accStep * int64(delta)
+					if step == 0 {
+						anim.spinSpeed = anim.spinTarget // sub-tick: immediate [04 §4.6]
 					} else {
-						dAcc := accStep * int64(delta)
 						cur := int64(anim.spinSpeed)
 						tgt := int64(anim.spinTarget)
-						if cur < tgt {
-							cur += dAcc
-							if cur >= tgt {
-								cur = tgt
+						if diff := tgt - cur; diff > 0 {
+							if diff <= step {
+								cur = tgt // clamp on reaching or crossing [04 §4.6]
+							} else {
+								cur += step
 							}
-						} else if cur > tgt {
-							cur += dAcc // dAcc may be negative if accel negative; but accel for stop is positive toward zero? handle magnitude
-							// If accel is positive but need to decrease, dAcc positive would increase away; we handle by direction.
-							// Correct by using sign of (tgt - cur) to apply magnitude of accStep.
-							// For now if we overshoot, clamp.
-							if cur <= tgt {
-								cur = tgt
-							}
-						}
-						// If accel sign mismatched (e.g., need decrease but acc positive), the above would not move toward target.
-						// Fix: use magnitude toward target regardless of accel sign when decreasing.
-						// If we still not moving toward target, clamp immediately.
-						// Simpler: compute magnitude of accStep and move toward target.
-						// This block will be revisited if needed; keep simple clamp.
-						if anim.spinAccel != 0 {
-							mag := accStep
-							if mag < 0 {
-								mag = -mag
-							}
-							mag *= int64(delta)
-							cur2 := int64(anim.spinSpeed)
-							if cur2 < tgt {
-								if tgt-cur2 <= mag {
-									cur = tgt
-								} else {
-									cur = cur2 + mag
-								}
-							} else if cur2 > tgt {
-								if cur2-tgt <= mag {
-									cur = tgt
-								} else {
-									cur = cur2 - mag
-								}
-							}
-							anim.spinSpeed = int32(cur)
 						} else {
-							anim.spinSpeed = anim.spinTarget
+							if -diff <= step {
+								cur = tgt
+							} else {
+								cur -= step
+							}
 						}
+						anim.spinSpeed = int32(cur)
 					}
-					// Update stored with the magnitude-correct value.
-					// Above dual logic duplicated; resolve by using second path only.
-					// To avoid confusion, recompute correctly:
-					// Already did magnitude path inside, so keep that result if accel !=0.
-					// The earlier cur update may be overwritten; ensure final is magnitude path.
-					// If accelStep ==0 we already set to target.
-					// So if accelStep !=0 we should have used magnitude path; the earlier simple add may have been wrong direction, but magnitude path overwrote.
-					// Keep magnitude path result.
-					// No-op: magnitude path already wrote anim.spinSpeed.
 				}
-				// Apply spin rotation: angle increment = trunc(spinSpeed/30) * delta [04 §4.6]
-				step := int64(anim.spinSpeed) / 30 // trunc toward zero [04 §4.6]
-				if step != 0 {
-					deltaAngle := uint16(int64(step) * int64(delta)) // wrap via uint16
-					v.Pieces[p].AddAngle(axis, deltaAngle)           // [03 §2.4] C22 (I2)
-				} else if anim.spinSpeed != 0 {
-					// Zero per-tick step while still spinning keeps dirty/busy but no motion [04 §4.6]
+				// Angle increment is trunc(spinSpeed/30) per tick [04 §4.6]. A
+				// speed below 30 yields a zero step: the piece stays busy and
+				// dirty but does not move, which is retail's behaviour and not
+				// a rounding bug to fix.
+				if step := int64(anim.spinSpeed) / 30; step != 0 {
+					v.Pieces[p].AddAngle(axis, uint16(step*int64(delta))) // wraps [03 §2.4] C22 (I2)
 				}
-				if anim.spinSpeed == anim.spinTarget && anim.spinAccel == 0 {
-					// If we reached target and no accel pending, keep spinning at target speed; do not clear spinActive.
-					// spinActive remains true until stop-spin clears it.
-				}
-				if anim.spinTarget == 0 && anim.spinSpeed == 0 && anim.spinAccel == 0 {
-					// Spin stopped; if stop-spin cleared, we may keep spinActive until explicitly stopped? Spec: stop-spin with 0 decel is immediate stop.
-					// We'll keep spinActive true even at 0 until overwritten by another motion? For now clear when speed 0 and target 0?
-					// Keep as is; do not auto-clear.
-				}
+				// spinActive stays set until stop-spin clears it, even at zero
+				// speed: a spin at rest is still a spin as far as the turn lane
+				// is concerned, and clearing it here would hand the axis back to
+				// turn interpolation [03 §2.4] C22.
 			} else if anim.turnBusy {
 				cur := v.Pieces[p].GetAngle(axis) // [03 §2.4] C21 uint16
 				target := anim.turnTarget

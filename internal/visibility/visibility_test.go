@@ -3,6 +3,7 @@ package visibility
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -13,10 +14,39 @@ func tileWorld(tile int64) numeric.Fixed {
 	return numeric.Fixed(tile * 32 * 65536)
 }
 
+// fixtureShapes builds a shape table with the same geometry as the shipped
+// visibility-mask GAF — ten frames of side 11, 13 … 29 anchored at the centre,
+// so shape k covers a radius of k+5 tiles [03 §3.2]. Frames are solid, which
+// makes coverage easy to reason about in a fixture; the real opacity pattern is
+// locked against the install in content.TestSightShapesFromInstall.
+func fixtureShapes() *content.SightShapes {
+	sh := &content.SightShapes{}
+	for k := int32(0); k < 10; k++ {
+		side := 11 + 2*k
+		s := content.SightShape{
+			W: side, H: side,
+			AnchorX: side / 2, AnchorY: side / 2,
+			Opaque: make([]bool, side*side),
+		}
+		for i := range s.Opaque {
+			s.Opaque[i] = true
+		}
+		sh.Shapes = append(sh.Shapes, s)
+	}
+	return sh
+}
+
+// newTestService builds a Service with the fixture shape table bound.
+func newTestService(t *world.Terrain, mode Mode) *Service {
+	s := New(t, mode)
+	s.SetShapes(fixtureShapes())
+	return s
+}
+
 func TestGridDimensions(t *testing.T) {
 	// 128x128-cell map yields 64x64 uint16 grid and 8192 bytes [PLAN_05 Tests].
 	terrain := &world.Terrain{CellW: 128, CellH: 128}
-	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
+	s := newTestService(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
 	w, h := s.GridDimensions()
 	if w != 64 || h != 64 {
 		t.Fatalf("grid dimensions %d x %d, want 64 x 64", w, h)
@@ -34,7 +64,7 @@ func TestAllyNotOred(t *testing.T) {
 	// are uninvolved. Viewer 0 must not see a unit owned by 2 standing inside
 	// player 1's footprint [03 §3.2] C9.
 	terrain := &world.Terrain{CellW: 128, CellH: 128}
-	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
+	s := newTestService(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
 	s.SetLocal(0)
 	s.Publish(1, 20, 20, 0, 320)
 
@@ -56,7 +86,7 @@ func TestAllyNotOred(t *testing.T) {
 // the raw 16.16 value puts every real unit outside the grid bounds.
 func TestProjectionUsesPixelComponents(t *testing.T) {
 	terrain := &world.Terrain{CellW: 128, CellH: 128}
-	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
+	s := newTestService(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
 	s.SetLocal(0)
 	s.Publish(0, 40, 40, 0, 320)
 
@@ -79,7 +109,7 @@ func TestProjectionUsesPixelComponents(t *testing.T) {
 // from the centre never projects onto that tile.
 func TestHullSamplesAccumulate(t *testing.T) {
 	terrain := &world.Terrain{CellW: 128, CellH: 128}
-	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
+	s := newTestService(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
 	s.SetLocal(0)
 	// Set one tile by hand so the fixture does not depend on the raster shape.
 	s.setWordBit(int(2*s.W+2), 0)
@@ -107,7 +137,7 @@ func TestHullSamplesAccumulate(t *testing.T) {
 
 func TestPredicateOrder(t *testing.T) {
 	terrain := &world.Terrain{CellW: 128, CellH: 128, SeaLevel: 20}
-	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
+	s := newTestService(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
 	s.SetLocal(0)
 	s.Publish(0, 10, 10, 0, 320)
 	at := func(o PlayerID) Target {
@@ -137,7 +167,7 @@ func TestPredicateOrder(t *testing.T) {
 // sea level of 20, so the two readings disagree on it.
 func TestSeaLevelIsHeaderByte(t *testing.T) {
 	terrain := &world.Terrain{CellW: 128, CellH: 128, SeaLevel: 20}
-	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
+	s := newTestService(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
 	s.SetLocal(0)
 	s.Publish(0, 10, 10, 0, 320)
 
@@ -192,7 +222,7 @@ func TestUnexploredBit(t *testing.T) {
 
 func TestFogLocalOnly(t *testing.T) {
 	terrain := &world.Terrain{CellW: 32, CellH: 32}
-	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
+	s := newTestService(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
 	s.SetLocal(0)
 	s.fog.valid = true
 	// Remote player publish should not dirty fog [C15]

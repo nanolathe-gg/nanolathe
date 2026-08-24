@@ -80,6 +80,14 @@ type Service struct {
 
 	// BurnWeaponsEmitted records burn weapon emissions for tests [05 "Feature burning"].
 	BurnWeaponsEmitted []BurnWeaponEvent
+
+	// BurnAnimationTicks reports how long a definition's burn animation runs.
+	// A burning feature clears its cell when that animation finishes
+	// [05 "Feature burning"], and the animation is a presentation asset this
+	// package does not own — hence a seam rather than a constant. A nil hook
+	// (or a zero result) means no length is known and the instance burns until
+	// something else clears it.
+	BurnAnimationTicks func(*content.FeatureDef) int32
 }
 
 // NewService creates a service bound to terrain.

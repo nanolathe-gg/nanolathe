@@ -5,6 +5,11 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
+// floorShift16 converts a 16.16 fixed value to its integer part, flooring
+// rather than truncating toward zero (I3). Go's arithmetic right shift on a
+// signed value is already floor, which is the point.
+func floorShift16(v int64) int64 { return v >> 16 }
+
 // burnTick implements the feature burning phase [05 "Feature burning"] [06 §13.1].
 // Smoke emission gated on tick%3==0, animation and countdown every tick,
 // animation-driven completion, one-shot spread+burnweapon event.
@@ -131,35 +136,30 @@ func (s *Service) fireBurnEvent(inst *Instance, idx int) {
 		dx := s.Wind.DirX
 		dz := s.Wind.DirZ
 		if dx != 0 || dz != 0 {
-			// Walk 5 steps in tile space: tile = cell/2 [03 §2.1].
-			// Use fixed 16.16 tile space: origin tile at (cx/2, cz/2) in fixed.
-			// Add 2*wind per step. Wind vectors from world.Wind are int32
-			// derived from strength; we treat them as tile deltas scaled.
-			// For determinism, we iterate 5 steps and test each tile's cell.
-			// Convert wind to tile delta: wind/65536 approx.
-			// Simplified: probe tile coordinate in fixed, convert to cell.
-			// This path is only exercised when wind nonzero; zero wind yields
-			// no draws as required for tests.
-			// We implement probe as integer cell steps with wind bias: step
-			// offset accumulates 2*wind/65536 cells.
-			// For now, approximate: tileFixedX = (cx*65536)/2, similarly Z.
-			// Then each step: tileFixed += 2*dir
-			// Tile -> cell = tile*2/65536
-			// This preserves zero-wind collapse property.
+			// The probe walks in 16.16 TILE space from the origin, adding twice
+			// each wind component per step, and tests the tile it lands on with
+			// the same legality chain and draw rule as the neighbourhood pass
+			// [05 "Feature burning"]. A tile is two cells on a side [03 §2.1],
+			// so the origin in tile space is the cell index halved.
+			//
+			// Zero wind collapses all five probes onto the origin tile, where
+			// they are skipped and no draws happen at all; the guard above
+			// keeps that exact by not walking.
+			//
+			// TODO(question): [05 "Feature burning"] describes both spread
+			// passes in tiles, while the 7x7 neighbourhood above is implemented
+			// over cells. Whether the legality chain reads one cell per tile or
+			// all four is not established; this tests the tile's origin cell.
 			tileFX := int64(cx) * 65536 / 2
 			tileFZ := int64(cz) * 65536 / 2
 			for step := 0; step < 5; step++ {
 				tileFX += int64(dx) * 2
 				tileFZ += int64(dz) * 2
-				// Tile to cell: cell = tile*2 /65536 ?
-				// Since tile unit is 32 pixels =2 cells, cell = tile*2
-				// Convert fixed tile to cell index.
-				pxTile := int(tileFX / 65536)
-				pzTile := int(tileFZ / 65536)
-				px := pxTile * 2
-				pz := pzTile * 2
-				// Probe tests the tile's cells; we test the cell at (px,pz)
-				// clamped to map.
+				// Tile space back to a cell index: floor the 16.16 tile
+				// coordinate, then scale by two. Flooring, not truncation —
+				// the two disagree west and north of the origin (I3).
+				px := int(floorShift16(tileFX)) * 2
+				pz := int(floorShift16(tileFZ)) * 2
 				if px < 0 || px >= w || pz < 0 || pz >= h {
 					continue
 				}
@@ -234,51 +234,41 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 	if _, ok := s.instances[idx]; ok {
 		return false
 	}
-	// Free list check: if we already have too many burning instances, silent no-op.
-	// Retail cap not enumerated; we allow 256 for tests, but enforce limiting to
-	// avoid unbounded growth? Use 400 as compositor limit analogy? For now unlimited.
-	// If we wanted to simulate cap, count burning.
-	// On success bind cell to slot, start burn animation and shadow, mark burning,
-	// record tile, play burn sound, draw burn countdown as
-	// simulationRandom(sparktime/2)+(sparktime/2) with single draw [05 ...].
+	// TODO(question): retail takes the slot from a burning-feature free list and
+	// "if no slot is free the ignition is a silent complete no-op"
+	// [05 "Feature burning"]. The list's size is not enumerated, so there is no
+	// cap here — the effects-pool 300 and the strip 400 are different pools and
+	// borrowing either number would invent a limit. An uncapped list ignites
+	// where retail would silently refuse, which is the visible difference.
+	//
+	// On success: bind the cell to the slot, start the burn animation and, when
+	// named, the burn shadow, mark the instance burning, record the tile, play
+	// the burn sound, and draw the countdown [05 "Feature burning"].
 	sim := s.sim()
 	if sim == nil {
 		return false
 	}
-	spark := def.SparkTime // already *30 truncated ticks [02 "Feature record"]
-	half := spark / 2
-	var countdown int32
-	if half >= 2 {
-		countdown = int32(sim.Uint32n(uint32(half))) + half // [05 "Feature burning"] single draw
-	} else if half == 1 {
-		// half 1 => bound 1 would return 0 without advancing (I4) but spec says single draw.
-		// For shipped spark 5 half 2, not this branch. Keep literal bound draws 0 when <2
-		// but still count as draw attempt? To preserve single draw guarantee we treat
-		// half 1 as bound 2 with adjusted result to keep 1..2 range? However spec says
-		// countdown = simRNG(sparktime/2)+(sparktime/2). With sparktime 1 half 0 => 0+0=0
-		// would be 0, which would fire immediately next tick. We'll follow literal.
-		countdown = int32(sim.Uint32n(uint32(half))) + half
-		if half == 1 && sim != nil {
-			// Ensure draw count: if bound 1 gave no draw, we have not consumed one.
-			// To match spec's single draw, consume one with bound 2 and map 0->1,1->1 ?
-			// But then countdown would be 1 or 2 vs 1. Hard to reconcile.
-			// Keep spec literal; tests use spark 4+ where half>=2.
-		}
-	} else {
-		countdown = half
-	}
-	// Burn duration: loader forces runtime loop byte to zero, finite lifetimes
-	// 46-282 visits [05 "Feature burning"]. Use spark-derived or default 100.
-	duration := int32(100)
-	// Allow test to set duration via Unknown? For now fixed 100 ticks, but if
-	// def has Unknown["burnduration"] we could parse. Keep 100.
-	// If spark is large, maybe duration = spark*20? But shipped spark 5 duration varies 46-282 not correlated to spark.
-	// So keep 100 for tests; test will override via setting instance after spawn if needed.
-	if def.BurnWeapon != "" && half == 0 {
-		// Ensure burning features with burnweapon but zero spark still have countdown?
-		if countdown == 0 {
-			countdown = 2
-		}
+	// countdown = simulationRandom(sparktime/2) + (sparktime/2), one draw
+	// [05 "Feature burning"]. Written literally: the stream's own bound
+	// semantics decide whether a bound below two advances it (PLAN_03 C-rng),
+	// and that decision belongs to the stream, not to this call site. Shipped
+	// spark time is 5, giving a countdown of 2 or 3.
+	half := def.SparkTime / 2 // SparkTime is already *30 truncated [02 "Feature record"]
+	countdown := int32(sim.Uint32n(uint32(half))) + half
+
+	// The burn ends when the burn ANIMATION finishes, not on a tick budget:
+	// "if the burn animation has finished, clear the cell" [05 "Feature
+	// burning"]. The animation length is a presentation asset this package does
+	// not own, so it arrives through a seam.
+	//
+	// TODO(question): a zero duration means "no length known", and the instance
+	// then burns until something else clears it. The observed shipped lifetimes
+	// are 46-282 visits [05 "Feature burning"], which is a range, not a rule —
+	// the previous flat 100 was inside that range and therefore looked
+	// plausible while being unattested for every single feature.
+	var duration int32
+	if s.BurnAnimationTicks != nil {
+		duration = s.BurnAnimationTicks(def)
 	}
 	inst := &Instance{
 		Def:           def,
@@ -299,19 +289,28 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 	if inst.FootprintZ <= 0 {
 		inst.FootprintZ = 1
 	}
-	inst.X = s.Terrain.CoarseHeightAt(int32(cx), int32(cz)) // placeholder; actual X/Z world
+	// World position of the cell: X and Z are the cell origin, Y is the terrain
+	// height there [03 §2.1]. These were all three assigned a HEIGHT, which put
+	// every burning instance on the diagonal at height-scale coordinates.
+	inst.X = world.CellToWorld(int32(cx))
+	inst.Z = world.CellToWorld(int32(cz))
 	inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
-	inst.Z = inst.Y
 	s.instances[idx] = inst
 	s.Terrain.Plot[idx].SetOccupied(true) // mark instance attached [05 ...]
 	// Record tile, play burn sound at tile's world position [05 ...] — presentation only.
 	return true
 }
 
-// Ignite is the weapon-driven ignition entry [05 "Feature burning"] [06 §13.1].
-// It checks global settings bit (assumed enabled), empty/indestructible, and
-// candidate conditions. Returns true if ignited.
-func (s *Service) Ignite(cx, cz int, weaponFirestarter int32) bool {
+// Ignite is the weapon-driven impact entry on a feature cell
+// [05 "Feature burning"] [06 §13.1]. It is the whole impact path, not only the
+// ignition half: a cell that is an ignition candidate with no instance attached
+// ignites and takes NO blast damage; every other case accumulates weaponDamage
+// instead. It reports whether the cell ignited.
+//
+// weaponDamage is a parameter because the alternative is fabricating one. The
+// non-ignition branch used to compute a literal 10 and discard it, so feature
+// health was never reduced by any weapon that does not start fires.
+func (s *Service) Ignite(cx, cz int, weaponFirestarter, weaponDamage int32) bool {
 	if s.Terrain == nil {
 		return false
 	}
@@ -348,35 +347,18 @@ func (s *Service) Ignite(cx, cz int, weaponFirestarter int32) bool {
 	// Ignition candidate when flammable && weapon firestarter nonzero [05 ...].
 	// There is no probability roll against firestarter — only nonzero test [05 ...][06 §13.1].
 	isCandidate := def.Flamable && weaponFirestarter != 0
-	if !isCandidate {
-		// Not candidate: impact accumulates damage.
-		// For cell with no attached instance, weapon damage added to cell's
-		// accumulated damage, feature dies when total reaches HP [05 ...].
-		// For cell whose instance attached and definition object-based, damage
-		// accumulates on instance instead [05 ...].
-		// Simplified: we track accumulated damage in Instance.Health or via
-		// cell AnchorWord when no instance [02 "Terrain file"].
-		// For tests, we implement basic accumulation.
-		damage := int32(10) // placeholder weapon damage; caller should pass real damage via DamageFeature helper
-		_ = damage
-		return false
-	}
-	// If cell is candidate and has no instance attached, ignite and impact
-	// deals no blast damage [05 ...].
-	if !cell.Occupied() {
-		if _, ok := s.instances[idx]; !ok {
+	if isCandidate && !cell.Occupied() {
+		if _, attached := s.instances[idx]; !attached {
+			// Ignites, and the impact deals no blast damage [05 "Feature burning"].
 			return s.igniteAt(cx, cz, def)
 		}
 	}
-	// Otherwise candidate with instance attached? Then? Spec says if candidate
-	// and has no instance attached ignite, otherwise impact accumulates damage.
-	// For attached instance case, we would accumulate damage but burning
-	// filename-based instances are immune to further blast [05 ...].
-	// For simplicity, if already burning, ignore.
-	if inst, ok := s.instances[idx]; ok && inst != nil && inst.IsBurning {
-		// immune to further blast [05 "Feature burning"].
-		return false
-	}
+	// Every other case accumulates damage: a cell with no attached instance
+	// accrues against the definition's hit points, and an attached
+	// object-based instance accrues on the instance. DamageFeature owns both,
+	// including the rule that a burning instance is immune to further blast
+	// [05 "Feature burning"].
+	s.DamageFeature(cx, cz, weaponDamage)
 	return false
 }
 

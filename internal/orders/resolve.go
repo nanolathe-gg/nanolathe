@@ -680,7 +680,7 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 			}
 			pushDedupArr(arr, wardH)
 			// TODO(question) 30-tick cadence behind dedup latch; Code 3 wait covers retry delay [04 §3.3]
-			_ = currentTick // handlers observe current tick like retail's global [04 §3.2]
+			// The retry deadline is set by result code 3, so the handler needs no tick [04 §3.3].
 			return Code(3)
 		}
 	}
@@ -710,7 +710,7 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 				q.Push(repID, Node{Target: n.Target, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z})
 			}
 			pushDedupArr(arr, wardH)
-			_ = currentTick
+
 			return Code(3)
 		}
 	}
@@ -738,7 +738,7 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 				q.Push(helpID, Node{Target: tgt, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z})
 			}
 			pushDedupArr(arr, wardH)
-			_ = currentTick
+
 			return Code(3)
 		}
 	}
@@ -748,7 +748,7 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 		standoff = int32(n.Param1)
 	}
 	setBandedGoalAroundWard(n, ward, standoff)
-	_ = currentTick
+
 	return Code(3) // wait 30 ticks [04 §3.3]
 }
 

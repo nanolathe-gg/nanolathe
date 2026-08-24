@@ -10,7 +10,6 @@ import (
 
 func TestMain(m *testing.M) {
 	rng.SeedGlobal(12345, 0)
-	ClearDiagnostics()
 	os.Exit(m.Run())
 }
 
@@ -48,7 +47,6 @@ func TestPumpResultCodes(t *testing.T) {
 	}
 	t.Run("code0", func(t *testing.T) {
 		rng.SeedGlobal(1, 0)
-		ClearDiagnostics()
 		q := &Queue{}
 		u := newTestUnit()
 		calls := 0
@@ -76,7 +74,6 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code1", func(t *testing.T) {
 		rng.SeedGlobal(2, 0)
-		ClearDiagnostics()
 		q := &Queue{}
 		u := newTestUnit()
 		calls := 0
@@ -100,7 +97,6 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code2", func(t *testing.T) {
 		rng.SeedGlobal(3, 0)
-		ClearDiagnostics()
 		q := &Queue{}
 		u := newTestUnit()
 		calls := 0
@@ -124,7 +120,6 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code3", func(t *testing.T) {
 		rng.SeedGlobal(42, 0)
-		ClearDiagnostics()
 		q := &Queue{}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(3) })
@@ -145,7 +140,6 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code4", func(t *testing.T) {
 		rng.SeedGlobal(4, 0)
-		ClearDiagnostics()
 		q := &Queue{}
 		u := newTestUnit()
 		calls := 0
@@ -168,7 +162,6 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code5", func(t *testing.T) {
-		ClearDiagnostics()
 		q := &Queue{}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(5) })
@@ -181,7 +174,6 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code6 primary", func(t *testing.T) {
-		ClearDiagnostics()
 		q := &Queue{}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
@@ -230,7 +222,6 @@ func TestPumpResultCodes(t *testing.T) {
 		_ = q
 	})
 	t.Run("code6 secondary", func(t *testing.T) {
-		ClearDiagnostics()
 		q := &Queue{}
 		u := newTestUnit()
 		restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code { return Code(6) })
@@ -244,7 +235,6 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code7 cancel all", func(t *testing.T) {
-		ClearDiagnostics()
 		q := &Queue{}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(7) })
@@ -259,7 +249,6 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code7 secondary", func(t *testing.T) {
-		ClearDiagnostics()
 		q := &Queue{}
 		u := newTestUnit()
 		restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code { return Code(7) })
@@ -287,7 +276,6 @@ func TestPumpResultCodes(t *testing.T) {
 		_ = q
 	})
 	t.Run("code8", func(t *testing.T) {
-		ClearDiagnostics()
 		q := &Queue{}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(8) })
@@ -301,7 +289,6 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code9 last rearm", func(t *testing.T) {
 		rng.SeedGlobal(99, 0)
-		ClearDiagnostics()
 		q := &Queue{}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(9) })
@@ -321,7 +308,6 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code9 not last", func(t *testing.T) {
-		ClearDiagnostics()
 		q := &Queue{}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(9) })
@@ -338,23 +324,30 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code >9", func(t *testing.T) {
-		ClearDiagnostics()
+		// "A handler that returns an out-of-range phase code cancels the unit's
+		// entire queue" [04 §3.3] — both segments, then return.
 		q := &Queue{}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(12) })
 		defer restore()
 		q.Push(moveID, Node{})
 		q.Push(moveID, Node{})
+		buildWeaponID := Lookup("BuildWeapon")
+		if buildWeaponID != 0 {
+			q.PushSecondary(buildWeaponID, Node{})
+		}
 		clearGates(q)
 		q.Pump(u, 10)
-		if len(q.primary) != 1 {
-			t.Fatalf("code>9 len %d want 1", len(q.primary))
+		if len(q.primary) != 0 {
+			t.Fatalf("code>9 left %d primary records; it cancels the whole queue", len(q.primary))
+		}
+		if len(q.secondary) != 0 {
+			t.Fatalf("code>9 left %d secondary records", len(q.secondary))
 		}
 	})
 }
 
 func TestPumpBlockedHeadStalls(t *testing.T) {
-	ClearDiagnostics()
 	q := &Queue{}
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
@@ -395,7 +388,6 @@ func TestPumpBlockedHeadStalls(t *testing.T) {
 }
 
 func TestDeadline(t *testing.T) {
-	ClearDiagnostics()
 	rng.SeedGlobal(1, 0)
 	q := &Queue{}
 	u := newTestUnit()
@@ -435,7 +427,6 @@ func TestDeadline(t *testing.T) {
 }
 
 func TestCoalesceTail(t *testing.T) {
-	ClearDiagnostics()
 	q := &Queue{}
 	buildID := Lookup("MobileBuild")
 	if buildID == 0 {
@@ -463,7 +454,6 @@ func TestCoalesceTail(t *testing.T) {
 }
 
 func TestCancelTailMostTombstone(t *testing.T) {
-	ClearDiagnostics()
 	q := &Queue{}
 	q.Push(Lookup("Move_Ground"), Node{Param1: 7, Param2: 1})
 	q.Push(Lookup("Patrol"), Node{Param1: 7, Param2: 1})
@@ -501,7 +491,6 @@ func TestCancelTailMostTombstone(t *testing.T) {
 }
 
 func TestPushAfterActive(t *testing.T) {
-	ClearDiagnostics()
 	q := &Queue{}
 	moveID := Lookup("Move_Ground")
 	q.Push(moveID, Node{Param1: 1})
@@ -521,7 +510,6 @@ func TestPushAfterActive(t *testing.T) {
 }
 
 func TestPushSecondaryAutoInherit(t *testing.T) {
-	ClearDiagnostics()
 	q := &Queue{}
 	buildID := Lookup("BuildWeapon")
 	q.PushSecondary(buildID, Node{Flags: FlagAutoOp})
@@ -535,7 +523,6 @@ func TestPushSecondaryAutoInherit(t *testing.T) {
 }
 
 func TestSecondarySkipsNotDue(t *testing.T) {
-	ClearDiagnostics()
 	rng.SeedGlobal(7, 0)
 	u := newTestUnit()
 	buildID := Lookup("BuildWeapon")
@@ -557,7 +544,6 @@ func TestSecondarySkipsNotDue(t *testing.T) {
 }
 
 func TestCascadeUntilWaiting(t *testing.T) {
-	ClearDiagnostics()
 	rng.SeedGlobal(10, 0)
 	q := &Queue{}
 	u := newTestUnit()
@@ -590,7 +576,6 @@ func TestCascadeUntilWaiting(t *testing.T) {
 }
 
 func TestBlockedFrontSkipsSecondary(t *testing.T) {
-	ClearDiagnostics()
 	q := &Queue{}
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
@@ -619,7 +604,6 @@ func TestBlockedFrontSkipsSecondary(t *testing.T) {
 }
 
 func TestCode7CleansSecondary(t *testing.T) {
-	ClearDiagnostics()
 	q := &Queue{}
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
@@ -641,7 +625,6 @@ func TestCode7CleansSecondary(t *testing.T) {
 }
 
 func TestPurgeUnprotected(t *testing.T) {
-	ClearDiagnostics()
 	q := &Queue{}
 	moveID := Lookup("Move_Ground")
 	q.Push(moveID, Node{Param1: 1, Flags: FlagPurgeSurvivor})
@@ -666,7 +649,6 @@ func TestPurgeUnprotected(t *testing.T) {
 }
 
 func TestDropLeadingAutoOps(t *testing.T) {
-	ClearDiagnostics()
 	q := &Queue{}
 	moveID := Lookup("Move_Ground")
 	buildID := Lookup("BuildWeapon")
@@ -705,7 +687,6 @@ func TestDropLeadingAutoOps(t *testing.T) {
 }
 
 func TestNilHandlerDiagnostic(t *testing.T) {
-	ClearDiagnostics()
 	q := &Queue{}
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
@@ -713,11 +694,10 @@ func TestNilHandlerDiagnostic(t *testing.T) {
 	q.Push(moveID, Node{})
 	clearGates(q)
 	q.Pump(u, 10)
-	if len(Diagnostics()) == 0 {
+	if len(q.Diagnostics()) == 0 {
 		t.Fatalf("nil handler should record diagnostic")
 	}
 	if len(q.primary) != 1 {
 		t.Fatalf("nil handler should not remove node")
 	}
-	ClearDiagnostics()
 }

@@ -201,6 +201,15 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, hea
 	return h, true
 }
 
+// recentred converts a draw in [0, bound) into a symmetric offset by
+// subtracting half the bound, which is the sampling shape [06 §4.3] gives for
+// spray and random decay. Halving truncates toward zero (I3), so an odd bound
+// leaves the window one step wider on the positive side — that asymmetry is
+// the integer division's, not a choice.
+func recentred(draw uint32, bound int32) int32 {
+	return int32(draw) - bound/2
+}
+
 // AdvanceBursts advances burst anchors for the projectile phase [06 §4.3] C8.
 //
 // While remaining>0 record takes burst branch instead of motion [06 §7.1].
@@ -276,25 +285,50 @@ func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weapons map
 		// Ensure clone's position is parent's refreshed position.
 		// Clone is ordinary moving projectile on next phase [06 §4.3]; captured entry prevents moving this tick [06 §5.1].
 
-		// Random decay changes successful clone's expiry [06 §4.3] C8.
+		// Random decay changes the successful clone's expiry [06 §4.3] C8.
 		if randomDecay != 0 && simRNG != nil {
-			// Consume one RNG draw for decay perturbation [06 §4.3] I4
-			_ = simRNG.Uint32n(uint32(randomDecay))
-			// Apply perturbation to clone expiry (truncated)
+			// One draw bounded by the authored field, re-centred by half its
+			// bound — the same sampling shape as the spray [06 §4.3].
+			//
+			// TODO(question): [06 §4.3] establishes that random decay adds "a
+			// second RNG-derived timing or velocity perturbation" and that the
+			// draw is consumed on every successful attempt, but not whether it
+			// is re-centred or one-sided, nor whether it lands on the expiry
+			// tick or on the velocity. Timing is chosen because the authored
+			// field is a tick count (randomdecay, *30 truncated
+			// [02 "Weapon record"]). The draw itself is what determinism
+			// depends on and that part is settled.
+			d := recentred(simRNG.Uint32n(uint32(randomDecay)), randomDecay)
 			if clone.ExpiryTick != 0 {
-				clone.ExpiryTick += 1 // placeholder perturbation
+				clone.ExpiryTick = uint32(int64(clone.ExpiryTick) + int64(d))
 			}
 		}
-		// Spray: clone copy happens before spray; spray changes parent velocity so it prepares next clone; first clone uses root's initially aimed velocity [06 §4.3] C8.
-		// Every successful attempt consumes spray sample when spray configured, including final attempt; final sample written to soon-retired parent [06 §4.3] C8.
+		// Spray. The clone copy happens BEFORE spray is calculated, so spray
+		// changes the parent/template velocity and prepares the velocity the
+		// NEXT successful clone inherits; the first clone uses the root's
+		// initially aimed velocity. Every successful attempt consumes a sample
+		// when spray is configured, including the final one, whose sample is
+		// written to the soon-retired parent and inherited by nobody
+		// [06 §4.3] C8.
 		if sprayAngle != 0 && simRNG != nil {
-			// Consume spray sample [06 §4.3] I4; spec up to two draws when spread nonzero, burst spray uses RNG and trig helpers.
-			simRNG.Uint32n(360)
-			simRNG.Uint32n(100)
-			// Mutate parent velocity for next pellet; dummy fixed-point nudge.
-			p.Velocity.X = p.Velocity.X.Add(numeric.FixedFromInt(1)) // placeholder spray mutation
-			p.Velocity.Z = p.Velocity.Z.Add(numeric.FixedFromInt(1))
-			_ = sprayAngle
+			// Two draws bounded by the authored spray field, each re-centred by
+			// half its bound, applied to the stored yaw and pitch; the velocity
+			// components are then RECOMPUTED from those angles through the
+			// fixed-point angle helpers rather than nudged in Cartesian space
+			// [06 §4.3].
+			//
+			// TODO(question): [06 §4.3] names the second bound as the wobble
+			// field adjacent to sprayangle in the weapon record. No authored
+			// key in the compiled WeaponDef has been identified as that field,
+			// so both draws use sprayangle here. The draw COUNT is established
+			// and is what the shared simulation sequence depends on; the second
+			// bound is one line to correct once the key is identified.
+			bound := uint32(sprayAngle)
+			yawOff := recentred(simRNG.Uint32n(bound), sprayAngle)
+			pitchOff := recentred(simRNG.Uint32n(bound), sprayAngle)
+			p.Yaw = numeric.Angle(uint16(int32(p.Yaw) + yawOff))
+			p.Pitch = numeric.Angle(uint16(int32(p.Pitch) + pitchOff))
+			p.Velocity = VelocityFromAngles(p.Yaw, p.Pitch, p.Speed)
 		}
 		// Burst clones do not rerun Fire or RockUnit [06 §4.1] C2.
 		clones++

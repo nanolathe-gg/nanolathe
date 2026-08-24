@@ -77,7 +77,6 @@ func newProductDef(name string, footX, footZ int32, metalCost int32, buildTime i
 
 // TestSnapHalfExtentBias verifies C16 half-extent bias vectors [05 "Factory production lifecycle"].
 func TestSnapHalfExtentBias(t *testing.T) {
-	ClearMessages()
 	// Vectors: foot 2x2 => bias 1,1 ; foot 3x3 => bias 1,1 ; foot 1x1 => 0,0 ; foot 4x2 => 2,1
 	cases := []struct {
 		footX, footZ   int
@@ -110,7 +109,6 @@ func TestSnapHalfExtentBias(t *testing.T) {
 	cat.Units[content.CanonicalKey("armflash")] = prodDef
 	// Also need factory queue with product so footprint resolved
 	svc := NewService(nil, cat, nil, nil)
-	setLastService(svc)
 	q := orders.QueueForUnit(factory)
 	// Push a building build node for armflash
 	bid := orders.Lookup("BuildingBuild")
@@ -118,7 +116,7 @@ func TestSnapHalfExtentBias(t *testing.T) {
 		bid = orders.Lookup("MobileBuild")
 	}
 	q.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 1, Phase: uint8(State2)})
-	cell, ok := QueryBuildInfo(factory, m)
+	cell, ok := svc.QueryBuildInfo(factory, m)
 	if !ok {
 		t.Fatalf("QueryBuildInfo failed")
 	}
@@ -134,9 +132,6 @@ func TestSnapHalfExtentBias(t *testing.T) {
 
 // TestSilentFifteen verifies C17 silent blocked revalidation 15-tick cadence [05 C17].
 func TestSilentFifteen(t *testing.T) {
-	ClearMessages()
-	clearBuilderLinks()
-	clearKillInfo()
 	// Terrain 10x10 with blocked cell at exit spot
 	terrain := &world.Terrain{CellW: 10, CellH: 10, Plot: make([]world.PlotCell, 100)}
 	// Initialize all cells to empty feature sentinel (0xFFFF) otherwise zero defaults to real index 0 => blocked by feature [04 §6.2]
@@ -185,7 +180,6 @@ func TestSilentFifteen(t *testing.T) {
 	head.Phase = uint8(State2)
 
 	svc := NewService(terrain, cat, w, &economy.Service{})
-	setLastService(svc)
 	// Pump at tick 10: should detect blocked and set retry 15
 	tick := uint32(10)
 	svc.Pump(factory, tick)
@@ -198,8 +192,8 @@ func TestSilentFifteen(t *testing.T) {
 	if head.Phase != uint8(State2) {
 		t.Fatalf("should stay state2")
 	}
-	if len(MessageLog) != 0 {
-		t.Fatalf("silent revalidation must be silent (no message), got %v", MessageLog)
+	if len(svc.Messages()) != 0 {
+		t.Fatalf("silent revalidation must be silent (no message), got %v", svc.Messages())
 	}
 	// Verify repeats every 15 while obstructed, no timeout
 	tick = uint32(25)
@@ -207,27 +201,26 @@ func TestSilentFifteen(t *testing.T) {
 	if head.Deadline != int32(tick+15) {
 		t.Fatalf("second retry deadline %d want %d", head.Deadline, tick+15)
 	}
-	if len(MessageLog) != 0 {
+	if len(svc.Messages()) != 0 {
 		t.Fatalf("still silent")
 	}
 	// Unblock: clear occupancy
 	terrain.Plot[idx].SetOccupied(false)
 	// Next pump should succeed allocation (nanoframe)
 	tick = uint32(40)
-	ClearMessages()
 	svc.Pump(factory, tick)
 	// Should have created product and advanced to state3, message "Starting construction"
 	if head.Phase != uint8(State3) {
 		t.Fatalf("after unblock should advance to state3, got %d", head.Phase)
 	}
 	found := false
-	for _, m := range MessageLog {
+	for _, m := range svc.Messages() {
 		if m == "Starting construction" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected Starting construction message, got %v", MessageLog)
+		t.Fatalf("expected Starting construction message, got %v", svc.Messages())
 	}
 	// Product should exist with remaining=1 health=0
 	if head.Target == 0 {
@@ -244,7 +237,6 @@ func TestSilentFifteen(t *testing.T) {
 
 // TestNanoframeCreationValues verifies C18 values [05 C18].
 func TestNanoframeCreationValues(t *testing.T) {
-	ClearMessages()
 	w := newTestWorld(10)
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	facDef := newFactoryDef("armfac", 2, 2, 300)
@@ -263,7 +255,6 @@ func TestNanoframeCreationValues(t *testing.T) {
 	head := q.Primary()[0]
 	head.Phase = uint8(State2)
 	svc := NewService(nil, cat, w, &economy.Service{})
-	setLastService(svc)
 	// Ensure terrain is nil => passes validation
 	svc.Pump(factory, 100)
 	if head.Target == 0 {
@@ -304,8 +295,8 @@ func TestNanoframeCreationValues(t *testing.T) {
 		t.Fatalf("GetBuilt not found in product queue")
 	}
 	// Builder link
-	if BuilderLinks[int(prod.Handle)] != int(factory.Handle) {
-		t.Fatalf("builder link not registered")
+	if b, ok := svc.BuilderLink(prod.Handle); !ok || b != factory.Handle {
+		t.Fatalf("builder link not registered: got %v ok=%v want %v", b, ok, factory.Handle)
 	}
 	// Standing-order bits copy
 	factory.Flags = StandingMoveMask | StandingFireMask
@@ -320,7 +311,6 @@ func TestNanoframeCreationValues(t *testing.T) {
 	head2 := q2.Primary()[0]
 	head2.Phase = uint8(State2)
 	svc2 := NewService(nil, cat, w2, &economy.Service{})
-	setLastService(svc2)
 	svc2.Pump(factory2, 200)
 	prod2 := w2.Unit(head2.Target)
 	if prod2.Flags&(StandingMoveMask|StandingFireMask) != (StandingMoveMask | StandingFireMask) {
@@ -331,7 +321,6 @@ func TestNanoframeCreationValues(t *testing.T) {
 		t.Fatalf("start-building edge not raised")
 	}
 	// Allocator-refusal path: test 300 tick retry
-	ClearMessages()
 	cat2 := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	cat2.Units[content.CanonicalKey("armfac")] = facDef
 	// product def not in catalog? Actually add but limit checker will refuse
@@ -349,10 +338,9 @@ func TestNanoframeCreationValues(t *testing.T) {
 	LimitChecker = func(f *units.Unit, key string) bool { return false }
 	defer func() { LimitChecker = orig }()
 	svc3 := NewService(nil, cat2, w3, &economy.Service{})
-	setLastService(svc3)
 	svc3.Pump(factory3, 300)
-	if len(MessageLog) == 0 || MessageLog[len(MessageLog)-1] != "Unable to create any more units" {
-		t.Fatalf("expected verbatim Unable to create any more units, got %v", MessageLog)
+	if len(svc3.Messages()) == 0 || svc3.Messages()[len(svc3.Messages())-1] != "Unable to create any more units" {
+		t.Fatalf("expected verbatim Unable to create any more units, got %v", svc3.Messages())
 	}
 	if head3.Deadline != int32(300+300) {
 		t.Fatalf("allocator refusal retry deadline %d want %d", head3.Deadline, 600)
@@ -364,7 +352,6 @@ func TestNanoframeCreationValues(t *testing.T) {
 
 // TestRallyInheritanceOrdering verifies C19 ordering [05 "Rally inheritance"].
 func TestRallyInheritanceOrdering(t *testing.T) {
-	ClearMessages()
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	facDef := newFactoryDef("armfac", 2, 2, 300)
 	cat.Units[content.CanonicalKey("armfac")] = facDef
@@ -455,8 +442,6 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 
 // TestRefundArithmetic verifies C21 inverted special-mode pairing [05 C21].
 func TestRefundArithmetic(t *testing.T) {
-	ClearMessages()
-	clearKillInfo()
 	// direct arithmetic test: refund = trunc((1 - remaining) * metalCost)
 	remaining := float32(0.25)
 	metalCost := int32(200)
@@ -532,8 +517,6 @@ func TestRefundArithmetic(t *testing.T) {
 
 // TestKind9Kill verifies C21 kill packet 30000 unscaled + severity-zero-no-corpse [05 C21][06 §9.1].
 func TestKind9Kill(t *testing.T) {
-	ClearMessages()
-	clearKillInfo()
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	facDef := newFactoryDef("armfac", 2, 2, 300)
 	prodDef := newProductDef("armflash", 2, 2, 100, 100)
@@ -561,13 +544,13 @@ func TestKind9Kill(t *testing.T) {
 	svc := NewService(nil, cat, w, econ)
 	svc.OnRefresh = func(u *units.Unit) {}
 	svc.handleCancelCurrent(factory, head, 100)
-	if LastKillDamage != 30000 {
-		t.Fatalf("kind-9 damage %d want 30000", LastKillDamage)
+	if svc.LastKill().Damage != 30000 {
+		t.Fatalf("kind-9 damage %d want 30000", svc.LastKill().Damage)
 	}
-	if LastKillSeverity != 0 {
-		t.Fatalf("severity %d want 0", LastKillSeverity)
+	if svc.LastKill().Severity != 0 {
+		t.Fatalf("severity %d want 0", svc.LastKill().Severity)
 	}
-	if !LastKillNoCorpse {
+	if !svc.LastKill().NoCorpse {
 		t.Fatalf("expected no corpse for cause-9")
 	}
 	if factory.Flags&(FlagDeactivate|FlagStartBuilding) != 0 {
@@ -582,8 +565,6 @@ func TestKind9Kill(t *testing.T) {
 		t.Fatalf("product should be dead")
 	}
 	// Test with no product attached => same epilogue, node still drops
-	ClearMessages()
-	clearKillInfo()
 	w2 := newTestWorld(10)
 	h2, _ := w2.Create(facDef, 0, 0, 0, 0)
 	factory2 := w2.Unit(h2)
@@ -596,8 +577,8 @@ func TestKind9Kill(t *testing.T) {
 	svc2 := NewService(nil, cat, w2, econ)
 	svc2.OnRefresh = func(u *units.Unit) {}
 	svc2.handleCancelCurrent(factory2, head2, 100)
-	if LastKillDamage != 30000 {
-		t.Fatalf("no-product kill damage %d", LastKillDamage)
+	if svc2.LastKill().Damage != 30000 {
+		t.Fatalf("no-product kill damage %d", svc2.LastKill().Damage)
 	}
 	if q2b := orders.QueueForUnit(factory2); q2b.LenPrimary() != 0 {
 		t.Fatalf("no-product node should drop")
@@ -609,7 +590,6 @@ func TestKind9Kill(t *testing.T) {
 
 // TestStopInterrupt verifies C22 survival + single decrement [05 C22].
 func TestStopInterrupt(t *testing.T) {
-	ClearMessages()
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	facDef := newFactoryDef("armfac", 2, 2, 300)
 	cat.Units[content.CanonicalKey("armfac")] = facDef
@@ -633,13 +613,13 @@ func TestStopInterrupt(t *testing.T) {
 	factory.Pending = InterruptStop
 	svc.Pump(factory, 100)
 	found := false
-	for _, m := range MessageLog {
+	for _, m := range svc.Messages() {
 		if m == "Construction stopped" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected Construction stopped message, got %v", MessageLog)
+		t.Fatalf("expected Construction stopped message, got %v", svc.Messages())
 	}
 	if head.Param2 != 2 {
 		t.Fatalf("stop should decrement once 3->2 got %d", head.Param2)
@@ -654,7 +634,6 @@ func TestStopInterrupt(t *testing.T) {
 		t.Fatalf("should refresh interface")
 	}
 	// Test single decrement when count 1 => 0 but still survives
-	ClearMessages()
 	head.Param2 = 1
 	factory.Pending = InterruptStop
 	svc.Pump(factory, 200)
@@ -740,7 +719,6 @@ func TestConstructionArithmeticCarry(t *testing.T) {
 
 // TestStateGates verifies state0/state1 gates [05 "Factory production lifecycle"].
 func TestStateGates(t *testing.T) {
-	ClearMessages()
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	facDef := newFactoryDef("armfac", 2, 2, 300)
 	facDef.YardMap = "oo\n00"

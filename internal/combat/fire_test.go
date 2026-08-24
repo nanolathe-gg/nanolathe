@@ -472,8 +472,13 @@ func TestBurstMuzzleRequeryAndSprayOrder(t *testing.T) {
 	if !ok {
 		t.Fatalf("fire")
 	}
-	// Set parent velocity to known value.
+	// Set parent velocity to a known value. Speed is the authoritative scalar
+	// the spray recompute reads back [06 §6.7], so give it one consistent with
+	// the velocity rather than leaving it zero.
 	svc.Records[0].Velocity = Vec3{X: numeric.FixedFromInt(10)}
+	svc.Records[0].Speed = numeric.FixedFromInt(10)
+	svc.Records[0].Yaw = 0
+	svc.Records[0].Pitch = 0
 	// Muzzle pos spy: returns distinct pos per piece.
 	muzzlePosCalls := 0
 	muzzlePos := func(piece int16) Vec3 {
@@ -489,14 +494,20 @@ func TestBurstMuzzleRequeryAndSprayOrder(t *testing.T) {
 	if muzzlePosCalls != 1 {
 		t.Fatalf("muzzle re-query should happen when interval>4 [06 §4.3], calls %d", muzzlePosCalls)
 	}
-	// Clone should have pre-spray velocity (10), parent post-spray (11)
-	cloneVel := svc.Records[1].Velocity.X.Int()
-	parentVel := svc.Records[0].Velocity.X.Int()
-	if cloneVel != 10 {
-		t.Fatalf("clone before spray [06 §4.3], clone vel %d want 10", cloneVel)
+	// The clone is copied BEFORE spray, so it keeps the pre-spray velocity;
+	// spray then mutates the parent, preparing the NEXT clone [06 §4.3] C8.
+	if cloneVel := svc.Records[1].Velocity.X.Int(); cloneVel != 10 {
+		t.Fatalf("clone copied after spray [06 §4.3]: clone vel %d want 10", cloneVel)
 	}
-	if parentVel != 11 {
-		t.Fatalf("parent after spray, vel %d want 11", parentVel)
+	// The parent's stored angles moved and its velocity was recomputed from
+	// them, rather than being nudged componentwise [06 §4.3].
+	if svc.Records[0].Yaw == 0 && svc.Records[0].Pitch == 0 {
+		t.Fatalf("spray did not perturb the parent's stored yaw/pitch")
+	}
+	wantVel := VelocityFromAngles(svc.Records[0].Yaw, svc.Records[0].Pitch, svc.Records[0].Speed)
+	if svc.Records[0].Velocity != wantVel {
+		t.Fatalf("parent velocity %v is not the recompute of its own angles %v",
+			svc.Records[0].Velocity, wantVel)
 	}
 	// RNG draws: successful spray consumes 2 draws
 	if r.Draws()-beforeDraws != 2 {
