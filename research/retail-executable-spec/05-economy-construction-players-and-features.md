@@ -473,15 +473,15 @@ normalized scalar. An eligible wind generator contributes:
 
 `energy production = current wind scalar × unit wind multiplier`
 
-The generation contract is closed. At battle setup the briefing seeds both
-strength and direction uniformly between the map's minimum and maximum wind
-from the CRT stream. During play a per-tick gate refills both: the next update
-is scheduled at `((draw % 10) + 5) * 30` ticks ahead — **150 to 420 ticks**,
-about five to fourteen seconds — then new strength is drawn uniformly between
-the map limits from the simulation stream and, when nonzero strength, a new
-direction uniformly over the full 16-bit angle domain. The change takes effect
-instantly (there is no interpolation), the world X/Z wind vectors are recomputed
-from direction and strength, and the normalized scalar fed to generators is
+The generation contract is closed. At battle setup the briefing seeds strength
+as `CRT() % (max-min+1) + min` and a six-bit direction as `CRT() & 0x3f`.
+The next update is scheduled from another CRT draw as
+`((CRT() * 10) / 0x8000 + 5) * 30` ticks ahead — **150 to 420 ticks**, about five
+to fourteen seconds. At the change, new strength is
+`simRand(maxWind-minWind)+minWind` and the new direction, when strength is
+nonzero, is `simRand(0x10000)` over the full 16-bit angle domain. The change
+takes effect instantly (there is no interpolation), the world X/Z wind vectors
+are recomputed from direction and strength, and the normalized scalar fed to generators is
 strength divided by a fixed 5000 denominator clamped to one. Wind-generator
 units receive `SetDirection`/`SetSpeed` script notifications only on change
 ticks — a burst of callbacks to every wind generator, not continuous polling —

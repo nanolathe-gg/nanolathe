@@ -187,10 +187,9 @@ Important corpus corrections reflected across the category documents include:
   reading had the two versions reversed;
 - interface anchors are corner rectangles named `x1`, `y1`, `x2`, `y2`, not
   origin-plus-size;
-- economy settlement is a per-tick pass with a game-end freeze gate: the gate
-  counter starts satisfied at session setup, only a mission-end confirmation
-  delay or the network game-over path closes it, so there is no cadence
-  ambiguity left;
+- economy settlement is gated by an absolute per-player deadline normally
+  advanced by 30 ticks; eligible per-tick helpers run before the deadline
+  compare, and a late player catches up one settlement per tick;
 - a script sleep costs at least one tick, never zero;
 - a script pop with an unrecognized addressing mode advances without popping
   rather than faulting;
@@ -206,9 +205,8 @@ Further corrections folded during the 2026-08-22 reconciliation pass:
   root record's velocity between copies, so every draw is relative to the
   original aim;
 - interceptor claim happens at spawn after a fire-time rescan; the aim scan
-  measures a square on the incoming projectile's stored aim point, and the
-  authored `coverage` value drives only the display overlay — never a gameplay
-  radius;
+  measures the separate interceptor-coverage square on the incoming
+  projectile's stored aim point, while the slot stores its current position;
 - unit status bits 0–1 mirror the runtime mover movement mode (stopped versus
   active locomotion), not a static unit family;
 - water damage applies on exactly every 30th tick to player-class 1/2 units at
@@ -222,9 +220,10 @@ Further corrections folded during the 2026-08-22 reconciliation pass:
   disables it;
 - factory products queue in the primary order list; coalescing of identical
   products is tail-only;
-- wind strength/direction refresh every `((draw % 10) + 5) * 30` ticks
-  (150–420) from the simulation stream, jumping instantly and notifying wind
-  generators through `SetDirection`/`SetSpeed` only on change ticks;
+- initial wind strength and six-bit direction use CRT draws; the next-change
+  interval is `((CRTdraw * 10) / 0x8000 + 5) * 30` ticks, while later strength
+  and full 16-bit heading use the simulation stream, jumping instantly and
+  notifying wind generators only on change ticks;
 - GAF frame-reference durations are whole simulation ticks;
 - the LOS mask carries per-source-player-slot bits and is never OR'd across
   allied players.

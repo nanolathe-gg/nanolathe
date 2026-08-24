@@ -16,7 +16,7 @@ Tactics + patch 3.1. Probed through this repo's `vfs` package.
 archives (the eleventh successful local HPI is not mounted)."
 
 **Observed:** the install has **13** local HPI archives — `tactics1..8.hpi`,
-`totala1..4.hpi`, `worlds.hpi` — plus three `.ccx`, eleven `.ufo`, and one
+`totala1..4.hpi`, `worlds.hpi` — plus five `.ccx`, eleven `.ufo`, and one
 `.gp3`, and it plays. A ten-archive cap must drop three of them. In our lexical
 tier order it would drop `totala3.hpi`, `totala4.hpi` (152 `camps/` files and
 100 maps) and `worlds.hpi` (837 map `sections/`), which would remove the

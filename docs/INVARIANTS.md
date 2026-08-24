@@ -30,10 +30,16 @@ Allowed floating point, exhaustively:
 
 | Where | Type | Citation |
 |---|---|---|
+| Immutable authored content definitions and compile-time parsing/conversion | source-appropriate `float32`/`float64`; consumers narrow at the documented boundary | `[02 §5]`, `[02 "Weapon record"]` |
 | Resource stocks, ledger carry, debt/accept ratios | `float32` | `[05 "Player slot"]`, `[05 "Two-stage settlement algorithm"]` |
+| Economy cumulative totals and waste counters | `float64` | `[05 "Stocks, counters, and waste"]` |
+| Construction remaining fraction and its proportional cost/health intermediates | `float32` | `[05 "Construction target state"]`, `[05 "Construction arithmetic"]` |
 | Wind scalar published to consumers (clamped to 1.0) | `float32` | `[01 §7.3]` |
 | Clock budget product `delta × speed + carry` | `float64` product, `float32` carry | `[01 §4.2]` |
 | Ballistic discriminant, `acos`, `sqrt` | `float64` | `[06 §3.3]` |
+| Flight brake integration temporaries (`hypot`, `h`, `b`, ratio) | `float64`, narrowed at the named fixed-point stores | `[04 §10.1]` |
+| AI resource-score expressions (`energyRaw`, `metalRaw`) | `float32` temporaries and inputs; `TODO(question)` on exact x87 spills | `[08 "Established AI-facing data and rooted planner"]` |
+| Simulation trig-table construction at initialization | `float64` transient; authoritative table entries are integers | `[04 §5.1]` |
 | Model piece rotation trig in the draw path | `float64`, round-to-nearest | `[03 §2.4]` |
 
 Everything else is integer. Simulation velocity integration uses the fixed-point
@@ -70,9 +76,10 @@ discarded**: a pool-full fire attempt still draws up to two spread values
 `reproduce=0` `[05 "Feature reproduction"]`; `bound < 2` returns 0 without
 advancing `[01 §7.1]`.
 
-Which stream: gameplay uses the simulation stream; meteor geometry `[06 §6.5]`,
-screen shake `[03 §5.6]`, audio variant selection `[03 §8.3]`, and briefing wind
-`[08 "Wind initialization"]` use the CRT stream.
+Which stream: gameplay normally uses the simulation stream; meteor geometry
+`[06 §6.5]`, screen shake `[03 §5.6]`, audio variant selection `[03 §8.3]`, and
+wind's briefing strength/direction plus next-change interval `[01 §7.3]` use the
+CRT stream. Later wind strength and 16-bit heading use the simulation stream.
 
 **Check.** `rng.Global.Draws()` is stable across two identical headless runs.
 
@@ -82,11 +89,13 @@ screen shake `[03 §5.6]`, audio variant selection `[03 §8.3]`, and briefing wi
 allocation, immediate reuse, no generation tags. A stale damage packet
 addressing a reused slot is accepted — that is retail `[06 §5.1]`.
 
-Capacities: units per `[01 §6.1]`, projectiles `300 × 107` bytes, COB threads
-`8 × 164`, order nodes 86 bytes, fixed effects `300 × 0x54`, effect strips
-evicting oldest-first above 400.
+Capacities: units per `[01 §6.1]`, 300 projectiles (107-byte retail identity),
+eight COB threads per unit (164-byte identity), order nodes (86-byte identity),
+300 fixed effects (0x54-byte identity), and effect strips evicting oldest-first
+above 400. Go records use named fields per I13.
 
-The projectile pool **appends at the tail** and never fills holes; dead records
+`pool.Projectiles` is the sole allocation/dead/count authority. The projectile
+pool **appends at the tail** and never fills holes; dead records
 set a flag without decrementing the count; compaction is stable and runs before
 presentation `[06 §5.2]`.
 
@@ -94,7 +103,7 @@ presentation `[06 §5.2]`.
 
 **Rule.** Sim never reads wall-clock time, input state, camera, or renderer
 state. Presentation never writes sim state. The only channel is
-`internal/snapshot`, published at the end of a tick and read by the renderer
+`internal/snapshot`, published after every completed sub-tick and read by the renderer
 with an interpolation `alpha`.
 
 **Why.** This is the one deliberate divergence from retail's draw path, which
@@ -171,7 +180,8 @@ plus `golang.org/x/image`.
 The exceptions — where byte layout *is* the contract, because bytes cross a
 boundary — are: file formats in `formats/`, the 13-byte plot cell (`[03 §2.2]`),
 the 28-byte game-time save box, `HAPIBANK` headers and account records, the
-9-byte damage packet's wire form if it is ever serialized, and route save
+versioned Nanolathe `StateV1` save codec, the 9-byte damage packet's wire form
+if it is ever serialized, and route save
 records. Everything else is a Go struct.
 
 **Why.** Pool capacities (300 projectiles, 8 COB threads, 86-byte order nodes)

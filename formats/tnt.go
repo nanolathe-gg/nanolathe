@@ -8,6 +8,14 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// Version is the TNT version word [03 §2.2] [fmt tnt].
+type Version uint32
+
+const (
+	VersionLegacy    Version = 0x1020 // [03 §2.2]
+	VersionCanonical Version = 0x2000 // [03 §2.2]
+)
+
 // TNTLimits bounds allocations made while decoding untrusted map data. The
 // defaults are deliberately large enough for the retail corpus, but finite.
 type TNTLimits struct {
