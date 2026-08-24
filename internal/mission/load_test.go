@@ -256,8 +256,9 @@ func TestOrderingSchemaBeforePlacement(t *testing.T) {
 		t.Fatalf("ordering load: %v", err)
 	}
 	order := m.Order()
-	// Expected order: schema, units, specials, features, wind, useonly [C4][C5]
-	wantOrder := []string{"schema", "units", "specials", "features", "wind", "useonly"}
+	// Expected order: schema, units, specials, features, wind, useonly, then the
+	// common tail's trigger objects [C4][C5] [08 "Mission type dispatch"].
+	wantOrder := []string{"schema", "units", "specials", "features", "wind", "useonly", "triggers"}
 	if len(order) != len(wantOrder) {
 		t.Fatalf("order length: got %v want %v", order, wantOrder)
 	}

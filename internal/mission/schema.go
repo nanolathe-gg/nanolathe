@@ -25,13 +25,36 @@ var (
 	ErrNoSuitableSchema = errors.New("No suitable schema type...")
 )
 
-// SelectSchema selects a schema per [08 "Schema choice"] (C3, C4).
-// It checks for [GlobalHeader] first (ErrNoGlobalHeader), then tries
-// campaign and network selection in an order determined by the OTA
-// contents, returning the first accepted Schema. Failure returns
-// ErrNoSuitableSchema. Selection is performed before placement records
-// are instantiated; the returned Schema.Name is fed to the placement
-// builder later (C4).
+// SelectSchemaForType selects a schema per [08 "Schema choice"] (C3, C4).
+//
+// The MODE decides which candidate list is tried, not the OTA's contents:
+// campaign mode tries the three difficulty literals in a difficulty-dependent
+// permutation, and skirmish/multiplayer modes try `Network 1` through
+// `Network 4`. An OTA carrying both families is common, and inferring the mode
+// from which family is present lets a skirmish load pick up `Easy` — with it,
+// the wrong placements, start positions and starting resources, and no error.
+//
+// Types 2 and 3 both join the raw OTA path directly [08 "Mission type
+// dispatch"] and so share the network candidate list.
+//
+// Selection is performed before placement records are instantiated; the
+// returned Schema.Name is fed to the placement builder later (C4).
+func SelectSchemaForType(o *formats.OTA, typ Type, difficulty, players int) (Schema, error) {
+	if o == nil || o.Global == nil {
+		return Schema{}, ErrNoGlobalHeader
+	}
+	if typ == TypeCampaign {
+		return SelectCampaignSchema(o, difficulty)
+	}
+	return SelectNetworkSchema(o, players)
+}
+
+// SelectSchema selects a schema without a mission type, inferring the mode
+// from which schema families the OTA carries.
+//
+// This is a diagnostic convenience for tools that hold an OTA and no session:
+// the load path calls SelectSchemaForType, because the mode is what retail
+// dispatches on. Prefer SelectSchemaForType wherever the type is known.
 func SelectSchema(o *formats.OTA, difficulty, players int) (Schema, error) {
 	if o == nil || o.Global == nil {
 		return Schema{}, ErrNoGlobalHeader

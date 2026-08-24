@@ -509,7 +509,7 @@ func composeMission(fs vfs.FSOps, typ Type, ota *formats.OTA, terrainKey string,
 	_ = fs
 	order := []string{}
 	// Schema selection happens before placement records are instantiated. [08 "Schema choice"] [C4]
-	selected, err := SelectSchema(ota, difficulty, playerCount)
+	selected, err := SelectSchemaForType(ota, typ, difficulty, playerCount)
 	order = append(order, "schema")
 	if err != nil {
 		if sink != nil {
@@ -552,6 +552,16 @@ func composeMission(fs vfs.FSOps, typ Type, ota *formats.OTA, terrainKey string,
 	useOnly := DecodeUseOnlyUnits(ota.Global)
 	order = append(order, "useonly")
 
+	// The common tail "builds trigger objects" [08 "Mission type dispatch"]:
+	// the authored end conditions are read out of [GlobalHeader] and the two
+	// defaults injected when a queue comes back empty, so every loaded mission
+	// has at least one way to win and one way to lose [08 "Default triggers"]
+	// [C14][C16]. A mission that reaches the tick site with empty queues can
+	// never end.
+	victory, defeat := DecodeTriggers(ota.Global)
+	victory, defeat = triggers.EnsureDefaults(victory, defeat)
+	order = append(order, "triggers")
+
 	m := &Mission{
 		Type:        typ,
 		OTA:         ota,
@@ -562,6 +572,8 @@ func composeMission(fs vfs.FSOps, typ Type, ota *formats.OTA, terrainKey string,
 		Features:    features,
 		WindBounds:  wind,
 		UseOnlyPath: useOnly,
+		Victory:     victory,
+		Defeat:      defeat,
 		order:       order,
 	}
 	_ = terrainKey
