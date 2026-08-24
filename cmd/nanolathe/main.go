@@ -77,6 +77,14 @@ func run(opts Options, out *os.File) error {
 	rng.SeedGlobal(simSeed, crtSeed)
 	fmt.Fprintf(out, "seed: sim=%d crt=%d\n", simSeed, crtSeed)
 
+	// --dump route: headless route diagnostic [PLAN_07] task C14–C16
+	if opts.Dump == "route" {
+		if opts.Map == "" {
+			return fmt.Errorf("nanolathe: --dump route requires --map")
+		}
+		return runGate2RouteDump(opts, content, out)
+	}
+
 	// Gate 2 walker slice: when --map is set and no dump, prefer the
 	// Gate-2 viewer/headless paths per PHASES Gate 2 (6 + 7-stub). Keep every
 	// existing flag/path intact: on failure fall through to Gate-1 / report.

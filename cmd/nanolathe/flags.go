@@ -48,7 +48,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.BoolVar(&opts.Headless, "headless", false, "run without a window")
 	set.IntVar(&opts.Ticks, "ticks", 0, "headless tick budget; 0 runs until the session ends")
 	set.Int64Var(&opts.Seed, "seed", -1, "simulation RNG seed; negative derives one from the clock")
-	set.StringVar(&opts.Dump, "dump", "", "headless diagnostic dump (manifest, catalog, providers)")
+	set.StringVar(&opts.Dump, "dump", "", "headless diagnostic dump (manifest, catalog, providers, route)")
 	set.Usage = func() {
 		fmt.Fprintf(out, "nanolathe — a reimplementation of the Total Annihilation engine\n\n")
 		fmt.Fprintf(out, "usage: nanolathe [flags]\n\nflags:\n")
@@ -57,6 +57,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		fmt.Fprintf(out, "  -dump manifest    every logical path, its winning provider and hash\n")
 		fmt.Fprintf(out, "  -dump providers   the mounted provider list in precedence order\n")
 		fmt.Fprintf(out, "  -dump rng         headless tick loop; both stream states and draw counts\n")
+		fmt.Fprintf(out, "  -dump route       gate2 route diagnostic: points ≤20 and save form ≤13 bytes [PLAN_07]\n")
 	}
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
