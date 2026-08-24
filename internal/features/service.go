@@ -144,8 +144,10 @@ func (s *Service) Reclaim(u *units.Unit, f *Instance, tick uint32) (metal, energ
 	if f == nil || f.Def == nil || s.Terrain == nil {
 		return 0, 0
 	}
-	// Burning filename-based features cannot be reclaimed [05 "Feature burning"].
-	if f.IsBurning {
+	// Burning FILENAME-BASED features cannot be reclaimed — the block is
+	// scoped to definitions that carry a filename (the shipped ignitables),
+	// not to every burning instance [05 "Feature burning"].
+	if f.IsBurning && f.Def.Filename != "" {
 		return 0, 0
 	}
 	def := f.Def

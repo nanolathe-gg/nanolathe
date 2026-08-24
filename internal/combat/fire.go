@@ -55,7 +55,12 @@ type FireEvents interface {
 type FirePorts struct {
 	// ShooterSide is the firing unit's side, recorded on the projectile so
 	// damage credit and hostility resolve against a real owner [06 §6.1].
+	// Shooterless paths (meteors) use NeutralSide (10) instead [06 §6.5].
 	ShooterSide uint8
+
+	// InterceptorRescan is the fire-time interceptor rescan a vertical-launch
+	// executor retains even on a pool-full failure [06 §4.4] C5. nil skips it.
+	InterceptorRescan func(slotIdx int, slot *Slot)
 
 	// Origin is the firing unit's world point. It is the muzzle the shot
 	// starts from when the COB query yields no piece, which is the normal
@@ -207,7 +212,11 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 
 	// C2 root allocation before callbacks [06 §4.1] [06 §5.1]; the pool-full
 	// check precedes common initialization and the Fire/RockUnit callbacks
-	// [06 §5.1].
+	// [06 §5.1]. Vertical launch retains its slot-angle rewrite (the muzzle
+	// query above) and the fire-time interceptor rescan on failure [06 §4.4] C5.
+	if fam == CreationVertical && ports.InterceptorRescan != nil {
+		ports.InterceptorRescan(slotIdx, slot)
+	}
 	h, ok := svc.Reserve()
 	if !ok {
 		// C4 fire callbacks not called when pool is full [06 §4.1].
@@ -323,10 +332,9 @@ func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weapons map
 	clones := 0
 	for i := 0; i < entry; i++ {
 		h := pool.Handle(i + 1)
-		if !s.Alive(h) {
-			// Note [06 §5.1] updater does not test dead flag at top, but burst branch is only for live anchors; dead anchors have remaining 0 or are dead.
-			continue
-		}
+		// [06 §5.1] the updater does NOT test the dead flag at the top of its
+		// captured-span loop: a record marked dead before its turn still takes
+		// the burst branch until compaction.
 		p := &s.Records[i]
 		if p.BurstRemaining <= 0 {
 			continue // zero follows ordinary moving path [06 §4.3] C8
@@ -376,6 +384,13 @@ func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weapons map
 		clone.BurstRemaining = 0 // ordinary moving projectile [06 §4.3] C8
 		clone.BurstDeadline = 0
 		clone.Dead = false
+		// The clone "has its creation/expiry state updated" after the copy
+		// [06 §4.3]: shift the parent's expiry by the elapsed root-to-clone
+		// delay so the pellet keeps the parent's remaining lifetime rather
+		// than inheriting time already spent.
+		if clone.ExpiryTick != 0 && tick != p.CreationTick {
+			clone.ExpiryTick += uint32(int64(tick) - int64(p.CreationTick))
+		}
 		// Ensure clone's position is parent's refreshed position.
 		// Clone is ordinary moving projectile on next phase [06 §4.3]; captured entry prevents moving this tick [06 §5.1].
 

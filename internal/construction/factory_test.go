@@ -185,8 +185,8 @@ func TestSilentFifteen(t *testing.T) {
 	if head.Deadline != int32(tick+15) {
 		t.Fatalf("silent retry deadline %d want %d", head.Deadline, tick+15)
 	}
-	if head.DynamicGate != WakeBit2 {
-		t.Fatalf("silent retry wake %d want %d", head.DynamicGate, WakeBit2)
+	if head.DynamicGate != WakeBit1|WakeBit2 {
+		t.Fatalf("silent retry wake %d want %d (bits 1+2)", head.DynamicGate, WakeBit1|WakeBit2)
 	}
 	if head.Phase != uint8(State2) {
 		t.Fatalf("should stay state2")
@@ -482,9 +482,10 @@ func TestRefundArithmetic(t *testing.T) {
 		head.Target = prod.Handle
 		head.Phase = uint8(State3)
 		// Set special state func
-		IsSpecialSecondState = func(owner uint8) bool { return special }
-		GlobalModeSelector = mode
+		svcIsSpecial := func(owner uint8) bool { return special }
 		svc := NewService(nil, cat, w, econ)
+		svc.IsSpecialSecondState = svcIsSpecial
+		svc.ModeSelector = mode
 		svc.OnRefresh = func(u *units.Unit) {}
 		svc.handleCancelCurrent(factory, head, 100)
 		return econ.Players[0].Mirror[economy.Metal].Production
@@ -510,9 +511,7 @@ func TestRefundArithmetic(t *testing.T) {
 	if got != 150 {
 		t.Fatalf("special mode 2 fallback got %v want 150", got)
 	}
-	// Reset globals
-	IsSpecialSecondState = nil
-	GlobalModeSelector = 0
+	// Special-mode selector now lives on Service; nothing to reset.
 }
 
 // TestKind9Kill verifies C21 kill packet 30000 unscaled + severity-zero-no-corpse [05 C21][06 §9.1].

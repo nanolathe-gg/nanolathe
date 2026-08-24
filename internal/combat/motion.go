@@ -184,15 +184,10 @@ func OrdinaryExpiry(now uint32, w *content.WeaponDef) uint32 {
 	}
 	// [06 §6.3] integer range shifted by fixed-point fraction / weapon velocity
 	// Range is integer world units default 32767 [02 "Weapon record"]; shift left 16 to Fixed.
-	// Truncate toward zero per [01 §8] I3; both operands positive in ordinary state.
+	// Truncate toward zero per [01 §8] I3.
 	r := int64(w.Range)
 	v := int64(w.WeaponVelocity) // Fixed raw 16.16 per tick
-	if v == 0 {
-		// Malformed zero velocity after reservation raises divide exception per [06 §6.4] [GAP T5] I11.
-		// TODO(question): G2 wrapping and hypot overflow elsewhere; here we return timer fallback placeholder.
-		return now + uint32(w.WeaponTimer)
-	}
-	ticks := (r * 65536) / v // trunc toward zero, Go / truncates
+	ticks := (r * 65536) / v     // trunc toward zero; a zero velocity divides by zero exactly as retail raises after reservation [06 §6.4][GAP T5] I11
 	// Wrap modulo 2^32 via uint32 conversion [06 §6.4] burn-blow deadlines wrap
 	return now + uint32(ticks)
 }
@@ -207,23 +202,18 @@ func BallisticBurnBlowExpiry(now uint32, muzzle, target Vec3, pitch numeric.Angl
 	// [GAP T5] X/Z delta components wrap as signed 32-bit before double conversion.
 	dx := int32((target.X.Raw() - muzzle.X.Raw()))
 	dz := int32((target.Z.Raw() - muzzle.Z.Raw()))
-	// [06 §6.4] wideDistance = trunc(hypot(...)) low 32 bits if overflow
-	wide := int32(math.Trunc(math.Hypot(float64(dx), float64(dz)))) // trunc toward zero, matches hypot truncated to i32
+	// [06 §6.4] wideDistance = trunc(hypot(...)) keeps the LOW 32 BITS on
+	// overflow [GAP T5]: truncate the double toward zero, then take low 32.
+	wide := int32(uint32(uint64(math.Trunc(math.Hypot(float64(dx), float64(dz))))))
 	// [06 §6.4] H = fixedCos(pitch, weaponVelocity)
 	cosPitch := numeric.Cos(pitch)
 	h := numeric.MulRound(cosPitch, weaponVelocity) // int32
-	if h == 0 {
-		// [06 §6.4] zero horizontal speed raises divide exception after pool reservation I11.
-		// TODO(question): retail faults; placeholder returns immediate expiry to force expiry visit.
-		return now
-	}
-	// [GAP T5] signed divide truncates toward zero; Go int32 division does.
-	// Handle INT_MIN / -1 overflow: Go does not panic for int32, but retail raises signed-divide overflow.
-	// We detect and return now as fault placeholder.
+	// [GAP T5] I11: an H of zero divides by zero exactly as retail raises
+	// after pool reservation — no guard, Go panics like the fault.
+	// INT_MIN / -1 raises a signed-divide overflow on x86 where Go wraps;
+	// reproduce the raise explicitly rather than the wrap.
 	if wide == -2147483648 && h == -1 {
-		// [GAP T5] INT_MIN / -1 raises
-		// TODO(question): retail raises exception; placeholder immediate expiry.
-		return now
+		panic("combat: INT_MIN / -1 signed divide overflow (retail faults)")
 	}
 	t := wide / h          // trunc toward zero [01 §8]
 	return now + uint32(t) // wraps modulo 2^32 [06 §6.4]
@@ -402,8 +392,10 @@ func AdvanceBallistic(p *Projectile, w *content.WeaponDef, tick uint32, wind Vec
 	if p == nil {
 		return AdvanceRetire
 	}
-	// [06 §6.4] ballistic with zero timer integrates without expiry test
-	if w != nil && w.WeaponTimer != 0 {
+	// [06 §6.4] ballistic with zero timer integrates without expiry test —
+	// EXCEPT burn-blow, whose lifetime is the computed ballistic deadline
+	// stored at creation [06 §6.4], so a zero authored timer still expires.
+	if w != nil && (w.WeaponTimer != 0 || w.BurnBlow) {
 		if tick >= p.ExpiryTick { // [06 §6.4] integrates only while tick < expiry when timer !=0
 			if w.BurnBlow {
 				// [06 §6.4] burn-blow calls central impact [06 §7.3]
@@ -457,23 +449,76 @@ func AdvanceMeteor(p *Projectile, w *content.WeaponDef, tick uint32) AdvanceResu
 	}
 	_ = w
 	_ = tick
-	// [06 §6.5] Each meteor tick adds velocity to current point, advances two visual orientation accumulators by (high16(velX)<<8) and (high16(velZ)<<8)
-	// Visual orientation not used for motion but we tick propeller as placeholder.
-	p.PropellerYaw = p.PropellerYaw.Add(1)
+	// [06 §6.5] Each meteor tick adds velocity to the current point and
+	// advances two visual orientation accumulators by (high16(velX)<<8) for
+	// yaw and (high16(velZ)<<8) for pitch, re-derived from velocity each
+	// tick; they feed only presentation rotation, never motion.
+	// TODO(question): [GAP T21] flags a meteor orientation reconcile between
+	// stored angular-rate shorts and this per-tick derivation; the derivation
+	// is implemented per PLAN_09's explicit unknown, the stored-rate reading
+	// noted as the alternative.
+	yawStep, pitchStep := MeteorAngularSteps(p.Velocity.X, p.Velocity.Z)
+	p.PropellerYaw = numeric.Angle(uint16(int32(p.PropellerYaw) + int32(int16(yawStep))))
+	p.MeteorPitch = numeric.Angle(uint16(int32(p.MeteorPitch) + int32(int16(pitchStep))))
 	// [06 §7.2] meteor adds velocity; [06 §6.5] does not apply wind/gravity/normal expiry
 	p.Pos.X = p.Pos.X.Add(p.Velocity.X)
 	p.Pos.Y = p.Pos.Y.Add(p.Velocity.Y)
 	p.Pos.Z = p.Pos.Z.Add(p.Velocity.Z)
-	// [06 §6.5] visual accumulators would advance here via high halves <<8; retained in PropellerYaw for test observability
-	// High 16 bits of velX/velZ <<8: effectively (Raw>>16 &0xFFFF)<<8 = (Raw>>8)&0xFFFF00 ; wrap modulo 2^16
-	// We expose via PropellerYaw progression already; full yaw accumulators remain TODO.
 
 	return AdvanceAlive
 }
 
+// steerToward implements [06 §6.7] guidance: pure pursuit of the pursuit
+// point, desired yaw and pitch in the signed 16-bit circle, yaw processed
+// before pitch. On each axis it snaps only when |err| is STRICTLY less than
+// the unsigned turn rate; otherwise (equality included) it steps by exactly
+// one turn rate. With burn-blow an error greater than 27,000 fails; a pitch
+// failure may occur after yaw was already updated. The caller invokes central
+// impact on failure and continues through visible motion.
+func steerToward(p *Projectile, w *content.WeaponDef, point Vec3) bool {
+	turn := uint32(w.TurnRate) // unsigned turn rate [06 §6.7]
+	// Yaw first.
+	desiredYaw := YawFromDelta(point.X.Sub(p.Pos.X), point.Z.Sub(p.Pos.Z))
+	errYaw := int16(desiredYaw - p.Yaw)
+	absYaw := uint32(absU16(uint16(errYaw)))
+	if absYaw < turn {
+		p.Yaw = desiredYaw // snap strictly inside the rate
+	} else if errYaw >= 0 {
+		p.Yaw = numeric.Angle(uint16(int32(p.Yaw) + int32(turn)))
+	} else {
+		p.Yaw = numeric.Angle(uint16(int32(p.Yaw) - int32(turn)))
+	}
+	if w.BurnBlow && absYaw > 27000 {
+		return true // steering failure [06 §6.7]
+	}
+	// Pitch second; a failure here may follow an applied yaw update.
+	desiredPitch := PitchFromDelta(point.X.Sub(p.Pos.X), point.Y.Sub(p.Pos.Y), point.Z.Sub(p.Pos.Z))
+	errPitch := int16(desiredPitch - p.Pitch)
+	absPitch := uint32(absU16(uint16(errPitch)))
+	if absPitch < turn {
+		p.Pitch = desiredPitch
+	} else if errPitch >= 0 {
+		p.Pitch = numeric.Angle(uint16(int32(p.Pitch) + int32(turn)))
+	} else {
+		p.Pitch = numeric.Angle(uint16(int32(p.Pitch) - int32(turn)))
+	}
+	if w.BurnBlow && absPitch > 27000 {
+		return true
+	}
+	return false
+}
+
+func absU16(v uint16) uint16 {
+	if v&0x8000 != 0 {
+		return uint16(-int16(v))
+	}
+	return v
+}
+
 // AdvanceSelfProp advances a self-propelled projectile per [06 §6.6] [06 §6.7] [06 §7.2] C16.
-// Handles acceleration, speed clamp, expiry phase switch, gravity fallback, and two-phase transition.
-func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity numeric.Fixed) AdvanceResult {
+// Handles acceleration, guidance, water-medium gating, speed clamp, expiry phase
+// switch, gravity fallback, and two-phase transition.
+func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity numeric.Fixed, seaLevel numeric.Fixed) AdvanceResult {
 	if p == nil || w == nil {
 		return AdvanceRetire
 	}
@@ -513,24 +558,19 @@ func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity n
 		return AdvanceAlive
 	}
 	// [06 §6.7] while live and eligible for propulsion, adds acceleration to scalar speed and clamps overshoot to weapon velocity
-	// Check water eligibility: non-water always eligible; water only when saved pre-motion height < sea level [06 §6.7] [06 §6.9]
-	// TODO(question): water medium check requires world height; placeholder always eligible for non-water.
-	eligible := true
-	if w.WaterWeapon {
-		// TODO(question): runtime medium check uses saved pre-motion height strictly below sea level [06 §6.7]; sea level not modeled here.
-		eligible = false // placeholder: water weapon skips acceleration/guidance and falls under gravity when not below water [06 §6.7]
-		// For WU-09-5 motion tests we assume non-water eligible; water case returns gravity path.
-		if !eligible {
-			// [06 §6.7] at or above sea level, skips acceleration/guidance, subtracts gravity, forces pitch to zero, then moves/collides
-			p.Pitch = 0 // [06 §6.7] forces pitch to zero
-			p.Velocity.Y = p.Velocity.Y.Sub(gravity)
-			p.Pos.X = p.Pos.X.Add(p.Velocity.X)
-			p.Pos.Y = p.Pos.Y.Add(p.Velocity.Y)
-			p.Pos.Z = p.Pos.Z.Add(p.Velocity.Z)
-			return AdvanceAlive
-		}
+	// Water medium check: a water weapon propels only STRICTLY below the sea
+	// plane; at or above it propulsion/guidance are disabled and gravity is
+	// applied with pitch forced to zero [06 §6.9].
+	eligible := !w.WaterWeapon || p.Pos.Y.Raw() < seaLevel.Raw()
+	if !eligible {
+		p.Pitch = 0 // [06 §6.9] forces pitch to zero above water
+		p.Velocity.Y = p.Velocity.Y.Sub(gravity)
+		p.Pos.X = p.Pos.X.Add(p.Velocity.X)
+		p.Pos.Y = p.Pos.Y.Add(p.Velocity.Y)
+		p.Pos.Z = p.Pos.Z.Add(p.Velocity.Z)
+		return AdvanceAlive
 	}
-	if eligible {
+	{
 		accel := numeric.Fixed(int64(w.WeaponAcceleration)) // [02 "Weapon record"] *65536/900
 		newSpeed := p.Speed.Add(accel)                      // [06 §6.7] adds acceleration to scalar speed
 		limit := numeric.Fixed(int64(w.WeaponVelocity))     // [02] weaponvelocity*65536/30
@@ -538,27 +578,41 @@ func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity n
 		if newSpeed.Raw() > limit.Raw() {
 			newSpeed = limit // clamp [06 §6.7]
 		}
-		// TODO: negative speed? Malformed negative acceleration? TODO(question) [06 §7.3] negative timer unknown.
+		// TODO(question): negative speed? Malformed negative acceleration? TODO(question) [06 §7.3] negative timer unknown.
 		p.Speed = newSpeed
-		// [06 §6.7] after optional guidance, recomputes all velocity components from scalar speed, yaw, pitch
-		// TODO(question): guidance pure pursuit not modeled here; yaw/pitch unchanged.
-		p.Velocity = VelocityFromAngles(p.Yaw, p.Pitch, p.Speed) // [06 §6.7]
-		p.Pos.X = p.Pos.X.Add(p.Velocity.X)                      // [06 §6.7] moves and performs collision [06 §7.2]
-		p.Pos.Y = p.Pos.Y.Add(p.Velocity.Y)
-		p.Pos.Z = p.Pos.Z.Add(p.Velocity.Z)
 	}
+	// [06 §6.7][06 §6.8] guidance pursues the stored target point; a lost unit
+	// target falls back to that stored point, so the pursuit point is always
+	// TargetPos until the driver refreshes it from a live linked record
+	// [06 §11.2].
+	if w.Guidance {
+		if failed := steerToward(p, w, p.TargetPos); failed {
+			// Burn-blow steering failure invokes central impact; the visible
+			// velocity/motion code still runs this visit [06 §6.7].
+			p.Velocity = VelocityFromAngles(p.Yaw, p.Pitch, p.Speed)
+			p.Pos.X = p.Pos.X.Add(p.Velocity.X)
+			p.Pos.Y = p.Pos.Y.Add(p.Velocity.Y)
+			p.Pos.Z = p.Pos.Z.Add(p.Velocity.Z)
+			return AdvanceImpact
+		}
+	}
+	// [06 §6.7] after optional guidance, recomputes all velocity components from scalar speed, yaw, pitch
+	p.Velocity = VelocityFromAngles(p.Yaw, p.Pitch, p.Speed) // [06 §6.7]
+	p.Pos.X = p.Pos.X.Add(p.Velocity.X)                      // [06 §6.7] moves and performs collision [06 §7.2]
+	p.Pos.Y = p.Pos.Y.Add(p.Velocity.Y)
+	p.Pos.Z = p.Pos.Z.Add(p.Velocity.Z)
 	return AdvanceAlive
 }
 
 // Advance dispatches to the appropriate per-family advance per [06 §6.2] motion ordering (C15).
 // Propeller presentation advances first [06 §6.2] is handled inside each family; this wrapper selects the family.
-func Advance(p *Projectile, w *content.WeaponDef, tick uint32, wind Vec3, gravity numeric.Fixed) AdvanceResult {
+func Advance(p *Projectile, w *content.WeaponDef, tick uint32, wind Vec3, gravity numeric.Fixed, seaLevel numeric.Fixed) AdvanceResult {
 	if p == nil || w == nil {
 		return AdvanceRetire
 	}
 	switch MotionFamilyForWeapon(w) { // [06 §6.2] selfProp → LOS → ballistic → dropped → meteor
 	case MotionSelfProp:
-		return AdvanceSelfProp(p, w, tick, gravity)
+		return AdvanceSelfProp(p, w, tick, gravity, seaLevel)
 	case MotionDirect:
 		return AdvanceDirect(p, w, tick)
 	case MotionBallistic:

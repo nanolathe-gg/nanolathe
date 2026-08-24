@@ -143,55 +143,29 @@ func isPassableWithBounds(c Cell, isPassable func(Cell) bool, hasBounds bool, bo
 	return isPassable(c)
 }
 
-// neighborsFirst returns the nine-entry first expansion (eight plus harmless duplicate) [04 §7.1] C2.
-// The duplicate is DirN (north) appended at the end — harmless because the second visit finds the node already open.
-func neighborsFirst(cur Cell) []Cell {
-	// 9 entries: visit order N,NW,W,SW,S,SE,E,NE plus duplicate N [04 §7.1] C2
-	out := make([]Cell, 0, 9)
-	for i := 0; i < 8; i++ {
-		d := dirDelta[i]
-		out = append(out, Cell{X: cur.X + d.X, Z: cur.Z + d.Z})
-	}
-	// duplicate N
-	out = append(out, Cell{X: cur.X + dirDelta[DirN].X, Z: cur.Z + dirDelta[DirN].Z})
-	return out
-}
+// startFanDir is the parent travel direction assumed for the search start,
+// which has no parent. TODO(question): [04 §7.1] and the decompile
+// (notes/movement/06_path_search.md §5, fanWidth init 4 → 9 attempts) give
+// the centered-loop mechanism but not where the START's center direction
+// comes from — plausibly the requesting unit's heading. North is the
+// hypothesis implemented here.
+const startFanDir = DirN
 
 // NeighborsForDir returns the expansion fan for a given parent travel direction [04 §7.1] C2.
-// isFirst true -> nine entries wide; false -> five-entry fan centered on dir [04 §7.1] C2.
-// Exposed for tests to lock fan shape without running full search.
+// The expansion is one centered loop `for off in [-fan..+fan]: dir =
+// (parentDir+off) & 7` — width 4 for the first expansion (nine attempts) and
+// width 2 afterwards (five-entry fan), per the decompile's single mechanism.
 func NeighborsForDir(cur Cell, dir uint8, isFirst bool) ([]Cell, []uint8) {
+	width := int(2)
 	if isFirst {
-		cells := make([]Cell, 0, 9)
-		dirs := make([]uint8, 0, 9)
-		for i := 0; i < 8; i++ {
-			d := uint8(i)
-			delta := dirDelta[d]
-			cells = append(cells, Cell{X: cur.X + delta.X, Z: cur.Z + delta.Z})
-			dirs = append(dirs, d)
+		width = 4
+		if dir == DirNone || dir > 7 {
+			dir = startFanDir
 		}
-		// duplicate DirN
-		cells = append(cells, Cell{X: cur.X + dirDelta[DirN].X, Z: cur.Z + dirDelta[DirN].Z})
-		dirs = append(dirs, DirN)
-		return cells, dirs
 	}
-	// directed five-entry fan centered on dir [04 §7.1] C2
-	if dir == DirNone {
-		// fallback to all eight if no direction (should not happen for non-first)
-		cells := make([]Cell, 0, 8)
-		dirs := make([]uint8, 0, 8)
-		for i := 0; i < 8; i++ {
-			d := uint8(i)
-			delta := dirDelta[d]
-			cells = append(cells, Cell{X: cur.X + delta.X, Z: cur.Z + delta.Z})
-			dirs = append(dirs, d)
-		}
-		return cells, dirs
-	}
-	// centered fan: dir-2, dir-1, dir, dir+1, dir+2 modulo 8 [04 §7.1] C2
-	cells := make([]Cell, 0, 5)
-	dirs := make([]uint8, 0, 5)
-	for offset := -2; offset <= 2; offset++ {
+	cells := make([]Cell, 0, 2*width+1)
+	dirs := make([]uint8, 0, 2*width+1)
+	for offset := -width; offset <= width; offset++ {
 		d := uint8((int(dir) + offset + 8) % 8)
 		delta := dirDelta[d]
 		cells = append(cells, Cell{X: cur.X + delta.X, Z: cur.Z + delta.Z})
@@ -201,21 +175,26 @@ func NeighborsForDir(cur Cell, dir uint8, isFirst bool) ([]Cell, []uint8) {
 }
 
 // rayWalk performs the greedy bidirectional ray walk storing minimum scaled h on frontier [04 §7.2] C9.
+// rayWalk performs the greedy ray walk storing minimum scaled h on frontier [04 §7.2] C9.
 // It walks greedily from start toward target, always stepping to the passable 8-neighbor minimizing scaled h.
 // Returns bestScaled (minimum scaled h among visited passable cells), connects (true if target reached), and hasBest.
+//
+// TODO(question): research describes a BIDIRECTIONAL walk following the
+// DX/DZ direction tables toward the other end, with a dir±2 side fan on
+// blockage, a meet test, and the minimum over both frontiers
+// (/tmp/ta-decompile/notes/movement/06_path_search.md §12). Only the forward
+// greedy half is implemented: a backward walk minimizing H-to-target hugs the
+// goal and would drag the write-once threshold down without attesting
+// anything. Every step strictly decreases scaled h, so the walk terminates
+// without an iteration cap.
 func rayWalk(start, target Cell, isPassable func(Cell) bool, hasBounds bool, bounds Rect, goal Goal, scale int32) (best int32, connects bool, hasBest bool) {
-	// Greedy walk forward from start [04 §7.2] C9.
-	// At each step pick the passable neighbor with minimal scaled h that improves over current.
-	// This captures side steps around a single blocked cell while not including beyond-wall cells for a full wall.
 	cur := start
-	// start must be passable to have been checked before; but compute best anyway
 	h0 := goal.H(cur)
 	best = ScaledHeuristic(h0, scale) // [04 §7.2] C6
 	hasBest = true
 	visited := make(map[Cell]struct{}, 64)
 	visited[cur] = struct{}{}
-	// limit steps to avoid infinite loop; 4k is safe for 10x10 grids
-	for iter := 0; iter < 4096; iter++ {
+	for {
 		if cur == target {
 			connects = true
 			break
@@ -252,70 +231,6 @@ func rayWalk(start, target Cell, isPassable func(Cell) bool, hasBounds bool, bou
 		visited[cur] = struct{}{}
 		if bestHs < best {
 			best = bestHs
-		}
-	}
-	// Bidirectional: also walk backward from target toward start and consider its frontier
-	// The minimum scaled h on either frontier is the write-once threshold [04 §7.2] C9.
-	// For simplicity, run same greedy from target toward start and take min.
-	cur = target
-	if !isPassableWithBounds(cur, isPassable, hasBounds, bounds) {
-		// target blocked, its frontier is neighbors; we already have best from forward walk,
-		// but also consider target's neighbors
-		for _, d := range dirDelta {
-			nb := Cell{X: cur.X + d.X, Z: cur.Z + d.Z}
-			if !isPassableWithBounds(nb, isPassable, hasBounds, bounds) {
-				continue
-			}
-			hs := ScaledHeuristic(goal.H(nb), scale)
-			if hs < best {
-				best = hs
-			}
-		}
-	} else {
-		// target passable, walk backward
-		visited2 := make(map[Cell]struct{}, 64)
-		visited2[cur] = struct{}{}
-		// best already includes target h if walk reached it; but if forward didn't reach, backward may find closer frontier near start
-		for iter := 0; iter < 4096; iter++ {
-			if cur == start {
-				connects = true
-				break
-			}
-			curHs := ScaledHeuristic(goal.H(cur), scale)
-			var bestNb Cell
-			bestHs := int32(1 << 30)
-			found := false
-			for _, d := range dirDelta {
-				nb := Cell{X: cur.X + d.X, Z: cur.Z + d.Z}
-				if _, ok := visited2[nb]; ok {
-					continue
-				}
-				if !isPassableWithBounds(nb, isPassable, hasBounds, bounds) {
-					continue
-				}
-				// For backward walk, heuristic still measured to target? Actually H is to target, so from target moving backward, H increases.
-				// To find frontier near start, we want minimal H among visited, which will be near target.
-				// So picking minimal H from target side will stay near target, not progress to start.
-				// Instead for backward walk we should minimize distance to start? But H is defined to target, so minimal is at target.
-				// So backward walk not useful for minimizing H; we keep forward walk's best.
-				hs := ScaledHeuristic(goal.H(nb), scale)
-				if !found || hs < bestHs {
-					bestHs = hs
-					bestNb = nb
-					found = true
-				}
-			}
-			if !found {
-				break
-			}
-			if bestHs >= curHs {
-				break
-			}
-			cur = bestNb
-			visited2[cur] = struct{}{}
-			if bestHs < best {
-				best = bestHs
-			}
 		}
 	}
 	return best, connects, hasBest
@@ -509,6 +424,10 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 		if !ok {
 			break
 		}
+		// Every raw pop counts toward the scheduler budget, including stale
+		// and closed entries [04 §7.3] C11 (decompile: each pop increments
+		// the scheduler counter, notes/movement/06_path_search.md §9).
+		s.popped++
 		node := ns.Get(id)
 		if node.Closed {
 			continue
@@ -520,8 +439,11 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			continue
 		}
 		ns.SetOpen(id, false)
+		// TODO(question): whether retail ever reopens a closed node on a
+		// better path (equal-g never reparents per C5, so reopening can only
+		// trigger on a strictly smaller g, which the write-once h makes
+		// unlikely). Closed is final here.
 		ns.SetClosed(id, true)
-		s.popped++
 
 		if goalFlag[id] {
 			pts := reconstructRoute(cfg.Start, node.Cell, ns, cfg.Bias)
@@ -655,7 +577,9 @@ func reconstructRoute(start, goal Cell, ns *NodeStore, bias Point) []Point {
 	// Find goal node ID
 	goalID, ok := ns.Find(goal)
 	if !ok {
-		// goal not in store; fallback to publish goal cell + start
+		// goal not in store; unreachable in retail, which reconstructs only
+		// off a popped goal node. Kept as a defensive [start,goal] fallback.
+		// TODO(question): confirm retail has no equivalent path.
 		ring[0] = goal
 		ring[1] = start
 		pts := make([]Point, 2)

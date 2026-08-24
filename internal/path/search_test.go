@@ -173,7 +173,8 @@ func TestHeuristicScaling(t *testing.T) {
 // TestExpansions verifies C2 neighbor order and fan shape [04 §7.1].
 func TestExpansions(t *testing.T) {
 	cur := Cell{5, 5}
-	// First expansion nine entries [04 §7.1] C2
+	// First expansion nine entries: the centered loop around startFanDir
+	// (north) with width 4 [04 §7.1] C2; dir numbering is 0=N counterclockwise.
 	cells, dirs := NeighborsForDir(cur, DirNone, true)
 	if len(cells) != 9 {
 		t.Fatalf("first expansion want 9 got %d [04 §7.1] C2", len(cells))
@@ -181,19 +182,15 @@ func TestExpansions(t *testing.T) {
 	if len(dirs) != 9 {
 		t.Fatalf("dirs len 9")
 	}
-	// First eight should be visit order N,NW,W,SW,S,SE,E,NE
-	wantOrder := []uint8{DirN, DirNW, DirW, DirSW, DirS, DirSE, DirE, DirNE}
-	for i := 0; i < 8; i++ {
+	// Centered on N with ±4: S,SE,E,NE,N,NW,W,SW,S — the ninth duplicates S.
+	wantOrder := []uint8{DirS, DirSE, DirE, DirNE, DirN, DirNW, DirW, DirSW, DirS}
+	for i := 0; i < 9; i++ {
 		if dirs[i] != wantOrder[i] {
 			t.Fatalf("first expansion order [%d] want %d got %d [04 §7.1] C2", i, wantOrder[i], dirs[i])
 		}
 	}
-	// ninth is duplicate N
-	if dirs[8] != DirN {
-		t.Fatalf("ninth (duplicate) want DirN got %d [04 §7.1] C2", dirs[8])
-	}
-	if cells[0] != (Cell{5, 4}) { // N
-		t.Fatalf("first cell N want (5,4) got %v", cells[0])
+	if cells[0] != (Cell{5, 6}) { // S
+		t.Fatalf("first cell S want (5,6) got %v", cells[0])
 	}
 	if cells[8] != cells[0] {
 		t.Fatalf("duplicate ninth should equal first N: got %v vs %v", cells[8], cells[0])

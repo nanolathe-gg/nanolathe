@@ -61,11 +61,16 @@ func (s *Service) sinkTick() {
 
 // StartSinking initiates sinking for a feature instance placed below waterline.
 // Submerged start latches vy to -11468 when terrain at or below sea level and
-// definition lacks isfeature flag [05 "Feature sinking and water interaction"].
-// Isfeature corpses get no velocity and never descend.
-func (s *Service) StartSinking(inst *Instance) {
+// the DYING definition lacks the isfeature flag [05 "Feature sinking and water
+// interaction"]. Isfeature corpses get no velocity and never descend. The flag
+// lives on the dying unit's FBI record ([02 "Unit record"], UnitDef.IsFeature),
+// so the death path passes it in as fromIsFeature.
+func (s *Service) StartSinking(inst *Instance, fromIsFeature bool) {
 	if inst == nil || s.Terrain == nil {
 		return
+	}
+	if fromIsFeature {
+		return // isfeature corpses never descend [05 "Feature sinking and water interaction"]
 	}
 	floor := s.Terrain.CoarseHeightAt(int32(inst.CX), int32(inst.CZ))
 	sea := s.Terrain.SeaLevelWorld()
@@ -73,11 +78,6 @@ func (s *Service) StartSinking(inst *Instance) {
 	// against sea-level byte — never unit's own elevation [05 ...].
 	// If terrain at or below sea level, submerged start.
 	if floor.Raw() <= sea.Raw() {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// isfeature check. Without that flag we latch for all non-geothermal
-		// sinking wrecks. Geothermal and isfeature corpses are exempt but
-		// that distinction is not in FeatureDef; we approximate by latched
-		// for all when submerged.
 		inst.Vy = sinkVelocity // [05 "Feature sinking and water interaction"] vy = -11468 fixed
 		inst.IsSinking = true
 		inst.Settled = false

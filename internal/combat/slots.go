@@ -109,19 +109,31 @@ func (s *Slot) CompleteAim(returnValue int32) bool {
 	return s.Aim.CompleteAim(returnValue) // [GAP T15] C16/C9
 }
 
-// RequiresAim reports whether this slot's weapon family requires an aim-ready gate per [06 §3.3].
-// Turret and vertical-launch families gate on aim-ready; non-turret LOS/self-propelled and dropped do not [06 §3.3].
-// TODO(question): guidance/tracks/cruise composability beyond turret/vlaunch gating remains open per [06 §3.3] missing/unknown.
+// aimRequirement reports the per-family readiness rule [06 §3.3]: turret
+// families need the Aim issue latch AND a nonzero result; vertical-launch
+// needs only the result; LOS/self-propelled and dropped need neither.
+// TODO(question): guidance/tracks/cruise composability beyond turret/vlaunch
+// gating remains open per [06 §3.3] missing/unknown.
+func aimRequirement(w *content.WeaponDef) (needLatch, needResult bool) {
+	if w == nil {
+		return false, false
+	}
+	if w.Turret {
+		return true, true // [06 §3.3]
+	}
+	if w.VLaunch {
+		return false, true // [06 §3.3]
+	}
+	return false, false
+}
+
+// RequiresAim reports whether this slot's weapon family requires an aim result per [06 §3.3].
 func (s *Slot) RequiresAim() bool {
-	if s == nil || s.Weapon == nil {
+	if s == nil {
 		return false
 	}
-	// [06 §3.3] turret family requires both Aim-request latch and nonzero async result; vertical-launch requires async result.
-	// We model "requires aim" as either turret or vlaunch flag requiring nonzero Ready.
-	if s.Weapon.Turret || s.Weapon.VLaunch { // [06 §3.3]
-		return true
-	}
-	return false
+	_, needResult := aimRequirement(s.Weapon)
+	return needResult
 }
 
 // ComputeStoredReload implements the integer-truncated reload computation [06 §4.2] C7 (I3) [01 §8].
@@ -194,14 +206,17 @@ func HealthFactorForTest(health, maxHealth int32) int32 {
 // ---------------------------------------------------------------------------
 
 // PipelineStep enumerates the established per-slot pipeline order [06 §4.1] C1 [06 §1.2].
-// Order is: decrement reload → aim-ready check → target validation → charge/fire (admission → spawner → store reload → debit).
-// Reload integer-truncation order per C7's citation [06 §4.2] is applied at the store-reload step where the pipeline touches it.
+// Order is: decrement reload → resolve/validate the current target → optional
+// Aim* dispatch → charge/fire (admission → spawner → store reload → debit).
+// Family readiness is a SPAWNER-side decision [06 §3.3]: turret needs the
+// issue latch AND a nonzero result; vertical-launch needs only the result;
+// LOS/self-propelled and dropped need neither.
 type PipelineStep int
 
 const (
 	StepDecrement      PipelineStep = iota // decrement nonzero reload [06 §4.1]
-	StepAimReadyCheck                      // aim-ready gate [GAP T15] C9 [06 §3.3]
 	StepTargetValidate                     // target validation / resolve [06 §3.1] [06 §3.2]
+	StepAimDispatch                        // Aim* dispatch / readiness wait [GAP T15] C9 [06 §3.3]
 	StepAdmission                          // range/medium/ballistic admission [06 §3.3]
 	StepSpawner                            // family spawner (allocation, Fire*/RockUnit per [06 §4.1] C2)
 	StepStoreReload                        // store reload and ammo per [06 §4.2] C7/C6 (int trunc order [06 §4.2])
@@ -213,10 +228,10 @@ func (p PipelineStep) String() string {
 	switch p {
 	case StepDecrement:
 		return "Decrement"
-	case StepAimReadyCheck:
-		return "AimReady"
 	case StepTargetValidate:
 		return "Target"
+	case StepAimDispatch:
+		return "AimDispatch"
 	case StepAdmission:
 		return "Admission"
 	case StepSpawner:
@@ -251,6 +266,9 @@ type PipelineEnv struct {
 	ValidateTarget func(slotIdx int, t Target) bool // [06 §3.1] [06 §3.2] target validation
 	CheckAdmission func(slotIdx int, s *Slot) bool  // [06 §3.3] range/medium/ballistic admission; coverage vs engagement distinction is established — coverage drives overlay only [06 §3.3]
 	TryFire        func(slotIdx int, s *Slot) bool  // family spawner + allocation per [06 §4.1]; returns true on successful spawner return [06 §4.2] C6
+	// DispatchAim starts the slot's Aim* script for this visit [GAP T15]
+	// C9/C16 [06 §3.3]. nil means the dispatch is a no-op (fixtures).
+	DispatchAim func(slotIdx int, s *Slot) bool
 
 	// Player is the firing unit's owner, debited at StepDebit [06 §4.2] C6.
 	// The pipeline is the sole owner of that payment: the spawner prechecks
@@ -264,7 +282,7 @@ type PipelineEnv struct {
 // It returns true if charge/fire completed (spawner succeeded, reload stored, debit performed) [06 §4.2] C6.
 // Pipeline order for test observability (spy) is recorded as:
 //
-//	StepDecrement → StepAimReadyCheck → StepTargetValidate → StepAdmission → StepSpawner → StepStoreReload → StepDebit
+//	StepDecrement → StepTargetValidate → StepAimDispatch → StepAdmission → StepSpawner → StepStoreReload → StepDebit
 //
 // Gates that fail short-circuit later steps but do not reorder earlier visits [06 §4.1].
 // Reload decrement occurs even when later gates fail [06 §1.2] [06 §4.1].
@@ -283,24 +301,37 @@ func TickSlot(slot *Slot, idx int, tick uint32, spy *PipelineSpy, env PipelineEn
 		spy.Record(StepDecrement)
 	}
 	slot.DecrementReload() // [06 §4.1] decrement nonzero before target resolve
-	// When reload is still nonzero after decrement, the remaining gates still run but spawner will be gated by reload>0 check at admission/spawner.
-	// For WU-09-1 pipeline order fixture, we model that as admission failing when reload>0 still; simplest is to let env decide.
-	// To preserve observable order, we always proceed to aim-ready check next.
-
-	// --- Step: aim-ready check [GAP T15] C9 [06 §3.3] ---
-	if spy != nil {
-		spy.Record(StepAimReadyCheck)
-	}
-	if slot.RequiresAim() && !slot.IsAimReady() {
-		// Aim-ready required but not granted (zero return never fires) [GAP T15] C9.
-		return false // short-circuit before target validation could still be observed? For pipeline order fixture we want the check recorded before returning.
-	}
 
 	// --- Step: target validation [06 §3.1] [06 §3.2] ---
+	// The pipeline resolves the CURRENT target before any Aim work [06 §1.2].
 	if spy != nil {
 		spy.Record(StepTargetValidate)
 	}
 	if env.ValidateTarget != nil && !env.ValidateTarget(idx, slot.Target) {
+		return false
+	}
+
+	// --- Step: optional Aim* dispatch [GAP T15] C9/C16 [06 §3.3] ---
+	// Family readiness is a spawner-side decision, but the DISPATCH belongs
+	// here: a family that needs an aim result which is not yet ready issues
+	// its Aim* (once — the issue bit latches) and the slot waits for the
+	// asynchronous completion this visit.
+	needLatch, needResult := aimRequirement(slot.Weapon)
+	if needResult && !slot.Aim.Ready {
+		if spy != nil {
+			spy.Record(StepAimDispatch)
+		}
+		if !slot.Aim.IssueBit {
+			slot.Aim.StartAim() // sets the issue latch [04 §5.3]
+			if env.DispatchAim != nil {
+				env.DispatchAim(idx, slot)
+			}
+		}
+		return false // fire waits for the asynchronous nonzero return
+	}
+	if needLatch && !slot.Aim.IssueBit {
+		// A turret whose issue latch was cleared (e.g. by TargetCleared)
+		// cannot fire even with a stale ready result [06 §3.3].
 		return false
 	}
 

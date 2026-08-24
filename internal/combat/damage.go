@@ -282,17 +282,15 @@ func ApplyHealing(currentHealth int32, maxHealth int32, amount uint16) int32 {
 }
 
 // ApplyDamage performs exact 16-bit modular subtraction from health [06 §9.1].
-// Returns new health after subtraction with 16-bit wrap semantics in health
-// storage (low 16 bits). Callers handle lethal mark vs clamp per movement
-// class [06 §9.1].
+// The health word wraps modulo 65,536 and the result is read as SIGNED 16-bit
+// (sign-extended for the caller): a non-positive signed result is what makes
+// the mobile controller classes latch death while preserving this modular
+// value [06 §9.1]. For ordinary health/amount pairs the wrap is unobservable;
+// it only shows on extreme amounts, exactly as in retail.
 func ApplyDamage(currentHealth int32, amount uint16) int32 {
-	// Exact 16-bit modular subtraction [06 §9.1].
-	// Health is signed 32-bit; subtraction is performed as 16-bit amount extended?
-	// Retail does modular subtraction: health - amount where amount is 16-bit.
-	// Use 32-bit int arithmetic then wrap low 16? Actually "performs exact
-	// 16-bit modular subtraction from health" suggests health treated as 16-bit?
-	// For determinism we implement as currentHealth - int32(amount) with 16-bit
-	// wrap on result low 16 preserved? But research says lethal marks preserve
-	// modular health value [06 §9.1]. So we keep full 32-bit result with low-16 semantics.
-	return currentHealth - int32(amount)
+	r := (currentHealth - int32(amount)) & 0xFFFF
+	if r >= 0x8000 {
+		r -= 0x10000
+	}
+	return r
 }

@@ -153,6 +153,10 @@ func (s *SteerState) UpdateHeading(desired uint16) { // [04 §8.1] C20
 // UpdateSpeed clamps the scalar speed to the pitch-derived cap [04 §8.1] C21.
 // It enforces the no-reverse rule: a negative target never produces a negative speed [04 §8.1] C20.
 // If target < 0 it is treated as 0; if target > cap it is clamped to cap.
+//
+// TODO(question): retail selects between acceleration and braking "from the
+// angle to the waypoint and the current speed" [04 §8.1] — that selection is
+// not modelled here; this entry only applies the cap.
 func (s *SteerState) UpdateSpeed(target int32, pitchDelta int32) { // [04 §8.1] C20 C21
 	if s == nil {
 		return

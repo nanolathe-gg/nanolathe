@@ -44,13 +44,22 @@ type Player struct {
 	ArchivedMirror [2]Bucket
 	// Control fields for deadline block and gate chain per [05 "Authoritative settlement order"].
 	// Retail offsets are identity per I13, not layout.
-	Exists               bool     // whether slot exists and participates [05 "Player slot"]
-	ControllerState      uint8    // controller/state byte; three values allow traversal, two allow settlement [05 "Authoritative settlement order"] TODO(question): semantic names unknown
-	IsObserver           bool     // observer byte excludes observers [05 "Authoritative settlement order"]
-	StatusHalfword       uint16   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	StatusWord           uint16   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GameEnded            bool     // game-ended flag bit clear required [05 "Authoritative settlement order"]
-	EndGameCountdown     int32    // end-of-game countdown must be negative; initialized -1 [05 "Authoritative settlement order"]
+	Exists          bool  // whether slot exists and participates [05 "Player slot"]
+	ControllerState uint8 // controller/state byte; three values allow traversal, two allow settlement [05 "Authoritative settlement order"] TODO(question): semantic names unknown
+	IsObserver      bool  // observer byte excludes observers [05 "Authoritative settlement order"]
+	// Status-pair identity per the decompile (notes/economy/07_settlement_cadence_deadline.md
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	StatusHalfwordAt144 uint16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	StatusWordAt140     uint16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GameEnded           bool   // game-ended flag bit clear required [05 "Authoritative settlement order"]
+	// EndGameCountdown must be negative for settlement; initialized -1
+	// [05 "Authoritative settlement order"].
+	// TODO(question): the two arm/decrement sites that latch GameEnded and
+	// drive this countdown were not dispatched to a phase yet — the victory/
+	// defeat transition (phase 14 session) owns them. Until then the gate is
+	// permanently satisfied, which matches an in-progress game.
+	EndGameCountdown     int32
 	Helper1Deadline      uint32   // private 30-tick counter for auxiliary player-level object update [05 "Authoritative settlement order"]
 	Helper2Deadline      uint32   // second helper private 30-tick gate [05 "Authoritative settlement order"]
 	Allies               [10]bool // alliance relations [05 "Player slot"]
@@ -231,7 +240,13 @@ func DebitCloak(p *Player, cost float32) bool {
 
 // ApplyCloakDebits sequentially debits cloak costs for all units of player in slot order
 // per [05 "Cloak debit"] C13. Earlier slots consume live stock before later slots are tested.
-func ApplyCloakDebits(s *Service, w *units.World, player int, getCost func(*units.Unit) float32) {
+//
+// The outcome drives transitions through the shared transition helper
+// [05 "Cloak debit"][05 "Activation and stall transitions"]: onSuccess /
+// onFailure receive the unit after each debit decision so the caller can
+// toggle the operational/building bit exactly where retail's transition call
+// sits. economy cannot import cob, so the helper arrives as a seam.
+func ApplyCloakDebits(s *Service, w *units.World, player int, getCost func(*units.Unit) float32, onSuccess, onFailure func(*units.Unit)) {
 	if s == nil || w == nil || getCost == nil {
 		return
 	}
@@ -241,7 +256,15 @@ func ApplyCloakDebits(s *Service, w *units.World, player int, getCost func(*unit
 	p := &s.Players[player]
 	ForEachUnitOrdered(w, player, func(u *units.Unit) {
 		cost := getCost(u)
-		DebitCloak(p, cost)
+		if DebitCloak(p, cost) {
+			if onSuccess != nil {
+				onSuccess(u)
+			}
+		} else {
+			if onFailure != nil {
+				onFailure(u)
+			}
+		}
 	})
 }
 

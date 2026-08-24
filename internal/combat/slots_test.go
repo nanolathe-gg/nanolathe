@@ -36,7 +36,7 @@ func TestPipelineOrderSpySequence(t *testing.T) {
 	if !fired {
 		t.Fatalf("expected fire to succeed")
 	}
-	want := []PipelineStep{StepDecrement, StepAimReadyCheck, StepTargetValidate, StepAdmission, StepSpawner, StepStoreReload, StepDebit}
+	want := []PipelineStep{StepDecrement, StepTargetValidate, StepAdmission, StepSpawner, StepStoreReload, StepDebit}
 	if len(spy.Steps) != len(want) {
 		t.Fatalf("steps len %d, want %d: got %v", len(spy.Steps), len(want), spy.Steps)
 	}
@@ -69,9 +69,9 @@ func TestPipelineOrderSpySequence(t *testing.T) {
 	if n != 3 {
 		t.Fatalf("fired %d, want 3", n)
 	}
-	// Expect 7*3 steps, with slot order preserved. Check first step of slot1 occurs after all steps of slot0.
-	if len(spy3.Steps) != 21 {
-		t.Fatalf("overall steps %d, want 21: %v", len(spy3.Steps), spy3.Steps)
+	// Expect 6*3 steps (no Aim step for non-aim families), slot order preserved.
+	if len(spy3.Steps) != 18 {
+		t.Fatalf("overall steps %d, want 18: %v", len(spy3.Steps), spy3.Steps)
 	}
 	// Verify slot indices via env callback order — we can check that ValidateTarget saw idx 0,1,2 in order.
 }
@@ -81,17 +81,14 @@ func poolHandle(v int) pool.Handle { return pool.Handle(v) }
 // Use real pool.Handle import for variant test below
 func TestPipelineOrderShortCircuitOnAimReady(t *testing.T) {
 	// Turret weapon requires aim-ready [06 §3.3] [GAP T15] C9; zero return never fires.
+	// Target resolution now precedes the Aim step; the slot dispatches Aim*
+	// (issue latch) and waits — admission and fire never run.
 	var slot Slot
 	slot.Weapon = weaponForTest(0, true, false) // turret requires aim
 	slot.Reload = 0
 	slot.Target = Target{Kind: TargetUnit, Unit: 1}
-	// Aim not ready
 	spy := &PipelineSpy{}
 	env := PipelineEnv{
-		ValidateTarget: func(idx int, tr Target) bool {
-			t.Fatalf("should not reach target validation when aim-ready fails")
-			return true
-		},
 		CheckAdmission: func(idx int, s *Slot) bool {
 			t.Fatalf("should not reach admission when aim-ready fails")
 			return true
@@ -105,9 +102,12 @@ func TestPipelineOrderShortCircuitOnAimReady(t *testing.T) {
 	if fired {
 		t.Fatalf("fired with aim-not-ready, want not fired [GAP T15] C9")
 	}
-	// Only decrement and aim check should have run
-	if len(spy.Steps) != 2 || spy.Steps[0] != StepDecrement || spy.Steps[1] != StepAimReadyCheck {
-		t.Fatalf("steps on short-circuit %v, want [Decrement AimReady]", spy.Steps)
+	if !slot.Aim.IssueBit {
+		t.Fatalf("Aim dispatch should have set the issue latch [04 §5.3]")
+	}
+	// Decrement, target validate, then the Aim dispatch/wait step.
+	if len(spy.Steps) != 3 || spy.Steps[0] != StepDecrement || spy.Steps[1] != StepTargetValidate || spy.Steps[2] != StepAimDispatch {
+		t.Fatalf("steps on short-circuit %v, want [Decrement Target AimDispatch]", spy.Steps)
 	}
 }
 

@@ -24,6 +24,7 @@ func isSettlingState(s uint8) bool {
 // statusPairPredicate is the literal status-pair predicate per [05 "Authoritative settlement order"] C4.
 // It is a nonzero halfword at one field OR a zero word at its neighbor — kept literal with TODO(question), no located writer.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func statusPairPredicate(half uint16, word uint16) bool {
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	return half != 0 || word == 0
@@ -130,7 +131,7 @@ func (s *Service) TickPlayer(player int, tick uint32, w *units.World, beforeDead
 	if p.IsObserver {
 		return
 	}
-	if !statusPairPredicate(p.StatusHalfword, p.StatusWord) {
+	if !statusPairPredicate(p.StatusHalfwordAt144, p.StatusWordAt140) {
 		return
 	}
 	if !isSettlingState(p.ControllerState) {

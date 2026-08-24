@@ -87,8 +87,8 @@ func makeGateEconomy(player uint8) economy.Service {
 	p.Exists = true
 	p.ControllerState = 2
 	p.IsObserver = false
-	p.StatusHalfword = 1
-	p.StatusWord = 0
+	p.StatusHalfwordAt144 = 1
+	p.StatusWordAt140 = 0
 	p.GameEnded = false
 	p.EndGameCountdown = -1
 	p.Stock[economy.Energy] = 800

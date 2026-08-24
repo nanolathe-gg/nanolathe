@@ -150,6 +150,10 @@ func (s *Service) fireBurnEvent(inst *Instance, idx int) {
 			// passes in tiles, while the 7x7 neighbourhood above is implemented
 			// over cells. Whether the legality chain reads one cell per tile or
 			// all four is not established; this tests the tile's origin cell.
+			// The step addition below also assumes the wind components are
+			// already in 16.16 tile units — if retail scales them differently
+			// the trajectory bends, though the draw count (five probes, zero
+			// at still air) does not change.
 			tileFX := int64(cx) * 65536 / 2
 			tileFZ := int64(cz) * 65536 / 2
 			for step := 0; step < 5; step++ {
@@ -253,7 +257,13 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 	// semantics decide whether a bound below two advances it (PLAN_03 C-rng),
 	// and that decision belongs to the stream, not to this call site. Shipped
 	// spark time is 5, giving a countdown of 2 or 3.
-	half := def.SparkTime / 2 // SparkTime is already *30 truncated [02 "Feature record"]
+	//
+	// The countdown counts VISITS, so the formula consumes the AUTHORED
+	// sparktime; the compiled field is ×30 truncated ticks [02 "Feature
+	// record"] (I8), so the authored value is recovered once at this
+	// documented boundary.
+	authored := def.SparkTime / 30
+	half := authored / 2
 	countdown := int32(sim.Uint32n(uint32(half))) + half
 
 	// The burn ends when the burn ANIMATION finishes, not on a tick budget:

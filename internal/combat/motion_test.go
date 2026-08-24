@@ -243,7 +243,7 @@ func TestSelfPropTwoPhaseTransition(t *testing.T) {
 	}
 	grav := fix(8192)
 	// tick 5 == expiry, twoPhase false, tracks false => transition
-	res := AdvanceSelfProp(&p, w, 5, grav)
+	res := AdvanceSelfProp(&p, w, 5, grav, fix(0x7FFFFFFF))
 	if res != AdvancePhaseTransition {
 		t.Fatalf("selfProp twoPhase at expiry expected phase transition got %v", res)
 	}
@@ -264,7 +264,7 @@ func TestSelfPropTwoPhaseTransition(t *testing.T) {
 	p2 := p
 	p2.Speed = fix(0)
 	p2.Velocity = Vec3{}
-	res = AdvanceSelfProp(&p2, w, 6, grav)
+	res = AdvanceSelfProp(&p2, w, 6, grav, fix(0x7FFFFFFF))
 	if res != AdvanceAlive {
 		t.Fatalf("selfProp after transition next tick expected alive")
 	}
@@ -272,7 +272,7 @@ func TestSelfPropTwoPhaseTransition(t *testing.T) {
 	p3 := p
 	p3.ExpiryTick = 15
 	// now at tick 15 again with TwoPhase already true => should be alive with gravity but not transition
-	res = AdvanceSelfProp(&p3, w, 15, grav)
+	res = AdvanceSelfProp(&p3, w, 15, grav, fix(0x7FFFFFFF))
 	if res == AdvancePhaseTransition {
 		t.Fatalf("selfProp second expiry should not transition again per [06 §6.6]")
 	}
@@ -293,7 +293,7 @@ func TestSelfPropTwoPhaseTracksPreservesTargets(t *testing.T) {
 	w := &content.WeaponDef{SelfProp: true, TwoPhase: true, Tracks: true, FlightTime: 10, WeaponTimer: 5, BurnBlow: false}
 	p := Projectile{ExpiryTick: 5, TwoPhase: false, TargetUnit: 5, TargetProjectile: 6}
 	grav := fix(0)
-	res := AdvanceSelfProp(&p, w, 5, grav)
+	res := AdvanceSelfProp(&p, w, 5, grav, fix(0x7FFFFFFF))
 	if res != AdvancePhaseTransition {
 		t.Fatalf("expected phase transition")
 	}
@@ -312,7 +312,7 @@ func TestSelfPropBurnBlowAtExpiryImpact(t *testing.T) {
 		TwoPhase:   false,
 	}
 	grav := fix(8192)
-	res := AdvanceSelfProp(&p, w, 5, grav)
+	res := AdvanceSelfProp(&p, w, 5, grav, fix(0x7FFFFFFF))
 	if res != AdvanceImpact {
 		t.Fatalf("selfProp burnBlow at expiry expected impact got %v", res)
 	}
@@ -493,12 +493,17 @@ func TestBallisticBurnBlowExpiry(t *testing.T) {
 	if expiry != 114 { // 100+14
 		t.Fatalf("burnBlow pitch45 expiry got %d want 114", expiry)
 	}
-	// zero H => immediate expiry placeholder per malformed handling
+	// Zero H raises the same unguarded-divide fault as retail after
+	// reservation [GAP T5] I11 — reproduced, not defended.
 	pitch90 := numeric.Angle(16384) // cos 0 => H 0
-	expiry = BallisticBurnBlowExpiry(100, muzzle, target, pitch90, vel)
-	if expiry != 100 {
-		t.Fatalf("zero H expiry should be immediate now, got %d", expiry)
-	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatalf("zero H should raise the divide fault [GAP T5] I11")
+			}
+		}()
+		BallisticBurnBlowExpiry(100, muzzle, target, pitch90, vel)
+	}()
 }
 
 // TestYawPitchDerivationTruncation per [06 §6.3] [06 §6.4] trunc towards zero.
@@ -628,35 +633,35 @@ func TestAdvanceDispatch(t *testing.T) {
 	wSelf := &content.WeaponDef{SelfProp: true, WeaponVelocity: 65536, WeaponAcceleration: 0, WeaponTimer: 10}
 	p := Projectile{Pos: Vec3{X: fix(0)}, Velocity: Vec3{X: fix(0)}, Speed: fix(0), Yaw: 0, Pitch: 0, ExpiryTick: 20}
 	// selfProp before expiry should recompute velocity and move
-	res := Advance(&p, wSelf, 5, Vec3{}, fix(0))
+	res := Advance(&p, wSelf, 5, Vec3{}, fix(0), fix(0))
 	if res != AdvanceAlive {
 		t.Fatalf("selfProp advance alive")
 	}
 
 	wDirect := &content.WeaponDef{LineOfSight: true, WeaponTimer: 10, Range: 10, WeaponVelocity: 65536}
 	p2 := Projectile{Pos: Vec3{X: fix(0)}, Velocity: Vec3{X: fix(65536)}, ExpiryTick: 20}
-	res = Advance(&p2, wDirect, 5, Vec3{}, fix(0))
+	res = Advance(&p2, wDirect, 5, Vec3{}, fix(0), fix(0))
 	if res != AdvanceAlive || p2.Pos.X.Raw() != 65536 {
 		t.Fatalf("direct dispatch failed")
 	}
 
 	wBal := &content.WeaponDef{Ballistic: true, WeaponTimer: 10, BurnBlow: false}
 	p3 := Projectile{Pos: Vec3{X: fix(0)}, Velocity: Vec3{X: fix(65536)}, ExpiryTick: 20}
-	res = Advance(&p3, wBal, 5, Vec3{}, fix(8192))
+	res = Advance(&p3, wBal, 5, Vec3{}, fix(8192), fix(0))
 	if res != AdvanceAlive || p3.Pos.X.Raw() != 65536 {
 		t.Fatalf("ballistic dispatch failed")
 	}
 
 	wDrop := &content.WeaponDef{Dropped: true}
 	p4 := Projectile{Pos: Vec3{X: fix(0)}, Velocity: Vec3{X: fix(65536)}, ExpiryTick: 0}
-	res = Advance(&p4, wDrop, 100, Vec3{}, fix(8192))
+	res = Advance(&p4, wDrop, 100, Vec3{}, fix(8192), fix(0))
 	if res != AdvanceAlive {
 		t.Fatalf("dropped dispatch should be alive")
 	}
 
 	wMet := &content.WeaponDef{Meteor: true}
 	p5 := Projectile{Pos: Vec3{X: fix(0)}, Velocity: Vec3{X: fix(65536)}}
-	res = Advance(&p5, wMet, 0, Vec3{X: fix(100000)}, fix(8192))
+	res = Advance(&p5, wMet, 0, Vec3{X: fix(100000)}, fix(8192), fix(0))
 	if p5.Pos.X.Raw() != 65536 {
 		t.Fatalf("meteor advance should ignore wind, pos got %d", p5.Pos.X.Raw())
 	}

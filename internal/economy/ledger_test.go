@@ -142,7 +142,7 @@ func TestCloakSequentialDebitTruncation(t *testing.T) {
 	getCost := func(u *units.Unit) float32 {
 		return costs[int(u.Handle)]
 	}
-	ApplyCloakDebits(&svc, w, 0, getCost)
+	ApplyCloakDebits(&svc, w, 0, getCost, nil, nil)
 	if svc.Players[0].Stock[Energy] != 4 {
 		t.Fatalf("C13 sequential: stock after first debit = %v want 4", svc.Players[0].Stock[Energy])
 	}

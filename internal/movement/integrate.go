@@ -21,7 +21,6 @@
 package movement
 
 import (
-	"math"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -370,19 +369,33 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 	_ = status
 }
 
-// headingFromDelta computes a uint16 heading for a ground delta dx (east) , dz (north)
+// headingFromDelta computes a uint16 heading for a ground delta dx (east), dz (north)
 // where heading 0 = north (+Z), 16384 = east (+X) [04 §5.1][04 §8.1] C20.
+//
+// Integer-only per I2: the angle is bisected against the simulation trig
+// tables (the same 512-entry round(8192·sin) family PLAN_03 C17 sanctions),
+// comparing the cross product of the delta with the candidate direction. The
+// result is exact on axis/diagonal boundaries and within one table step
+// (1/512 of a circle) elsewhere.
+// TODO(question): [04 §8.1] does not name retail's arctan method; this
+// bisection is our deterministic stand-in, not an attested sequence.
 func headingFromDelta(dx, dz int64) uint16 {
 	if dx == 0 && dz == 0 {
 		return 0
 	}
-	angle := math.Atan2(float64(dx), float64(dz))
-	if angle < 0 {
-		angle += 2 * math.Pi
+	lo, hi := int32(0), int32(65536)
+	for hi-lo > 1 {
+		mid := (lo + hi) / 2
+		// Direction at heading mid is (sin, cos): 0 points north, +Z.
+		cross := int64(numeric.Sin(numeric.Angle(mid)))*dz -
+			int64(numeric.Cos(numeric.Angle(mid)))*dx
+		if cross < 0 {
+			lo = mid // candidate is short of the target direction
+		} else {
+			hi = mid
+		}
 	}
-	// 65536 per circle
-	h := uint16(angle * 65536.0 / (2 * math.Pi))
-	return h
+	return uint16(lo)
 }
 
 // Tick runs the per-unit integration glue for all alive units in w. It must be
@@ -424,9 +437,14 @@ func (s *System) Tick(tick uint32, w *units.World) {
 		if route == nil || !route.Active {
 			continue
 		}
-		// Prune(mover pos) [04 §7.3] C15
-		moverCell := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
-		moverPt := Point{X: moverCell.X, Z: moverCell.Z}
+		// Prune(mover pos) [04 §7.3] C15. The stored points carry the
+		// half-footprint bias added at publication (SearchConfig.Bias), so
+		// the mover's position is compared in the same biased domain.
+		profile := s.resolveProfile(u)
+		moverPt := Point{
+			X: world.WorldToCell(u.X) + int32(profile.FootPrintX/2),
+			Z: world.WorldToCell(u.Z) + int32(profile.FootPrintZ/2),
+		}
 		route.Prune(moverPt)
 		if !route.Active || route.Count == 0 {
 			continue
@@ -502,8 +520,13 @@ func (s *System) Tick(tick uint32, w *units.World) {
 		}
 		// Update heading before integration [04 §8.1] C20
 		steer.UpdateHeading(desired)
-		// Pitch: flat for demo (delta 0) -> cap = MaxVelocity [04 §8.1] C21
-		pitchDelta := int32(0)
+		// Pitch input: the signed height difference toward the waypoint cell.
+		// TODO(question): [04 §8.1] does not name the exact operands feeding
+		// the >>11 shift; the waypoint's coarse floor against the unit's Y is
+		// the working reading (a one-height-byte step saturates the table).
+		biasX := int32(profile.FootPrintX / 2) // strip the publication bias to get the waypoint's own cell [04 §7.1] C1
+		biasZ := int32(profile.FootPrintZ / 2)
+		pitchDelta := int32(s.Terrain.CoarseHeightAt(wp.X-biasX, wp.Z-biasZ).Raw() - int64(u.Y.Raw()))
 		cap := steer.SpeedCap(pitchDelta)
 		steer.UpdateSpeed(cap, pitchDelta)
 		steer.Integrate()

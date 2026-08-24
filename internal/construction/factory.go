@@ -58,19 +58,9 @@ const (
 	Kind9Damage int32 = 30000 // unscaled, scaling requires damage <30000 [05 C21]
 )
 
-// GlobalModeSelector selects the special-player refund scaling [05 C21].
-// 0 => subtract 7/10, 1 => subtract 1/2, other => add fallback.
-// This pairing is INVERTED relative to the ledger's negative-energy-use refund site [05 C21].
-var GlobalModeSelector int
-
-// IsSpecialSecondState reports whether the referenced player object is in the special second state [05 C21].
-// When nil, no player is special (normal add path).
-var IsSpecialSecondState func(owner uint8) bool
-
-// The message log, the builder links, the last kill packet and the product-id
-// index all used to be package-level vars. They are per-session state — the
-// builder link is authoritative under C18 and the product index feeds C16's
-// exit-spot snap — so they live on Service. See the Service fields below.
+// The mode selector and the special-second-state predicate were package-level
+// vars; they are per-session configuration, so they live on Service
+// (ModeSelector / IsSpecialSecondState) [05 C21].
 
 // Service holds the factory lifecycle dependencies [PLAN_08].
 type Service struct {
@@ -84,6 +74,15 @@ type Service struct {
 	ModelForFactory func(factory *units.Unit) *model.Model
 	// OnRefresh is the interface refresh hook [05 C18][05 C21][05 C22].
 	OnRefresh func(*units.Unit)
+
+	// ModeSelector selects the special-player refund scaling [05 C21]:
+	// 0 => subtract 7/10, 1 => subtract 1/2, other => add fallback. This
+	// pairing is INVERTED relative to the ledger's negative-energy-use refund
+	// site [05 C21].
+	ModeSelector int
+	// IsSpecialSecondState reports whether the referenced player object is in
+	// the special second state [05 C21]. nil means no player is special.
+	IsSpecialSecondState func(owner uint8) bool
 
 	// Per-session state. None of this may live in a package-level var: it is
 	// authoritative (BuilderLinks is C18's "register the builder link on the
@@ -637,13 +636,13 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 		if pIdx >= 0 && pIdx < len(s.Economy.Players) {
 			player := &s.Economy.Players[pIdx]
 			isSpecial := false
-			if IsSpecialSecondState != nil {
-				isSpecial = IsSpecialSecondState(factory.Owner)
+			if s.IsSpecialSecondState != nil {
+				isSpecial = s.IsSpecialSecondState(factory.Owner)
 			}
 			if isSpecial {
-				// Global mode selector decides: 0 subtracts 7/10, 1 subtracts 1/2, other fallback to adding [05 C21].
+				// Mode selector decides: 0 subtracts 7/10, 1 subtracts 1/2, other fallback to adding [05 C21].
 				// This pairing is INVERTED vs ledger negative-energy site [05 C21] — do not harmonize.
-				switch GlobalModeSelector {
+				switch s.ModeSelector {
 				case 0:
 					player.Mirror[economy.Metal].Production += refund * -0.7 // subtract seven tenths [05 C21]
 				case 1:
@@ -977,8 +976,12 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 			}
 		}
 		if err := validatePlacement(s, cell.X, cell.Z, footX, footZ, yard); err != nil {
-			// Silent blocked revalidation: retry in exactly 15 ticks, wake bit2, stays — no message/sound/allocation; repeats every 15 while obstructed; NO timeout [05 C17].
-			node.DynamicGate = WakeBit2
+			// Silent blocked revalidation: retry in exactly 15 ticks, stays — no
+			// message/sound/allocation; repeats every 15 while obstructed; NO
+			// timeout [05 C17]. Wake mask is bits {1,2}: schedule(node,15) sets
+			// bit 1 + deadline and the caller adds bit 2
+			// (notes/construction/05_promotion_factory_contract.md F4).
+			node.DynamicGate = WakeBit1 | WakeBit2
 			node.Deadline = int32(tick + 15)
 			// No message, no allocation — silent.
 			return
@@ -996,7 +999,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	if err != nil {
 		// Allocator refusal prints verbatim "Unable to create any more units", retries in exactly 300 ticks (not randomized), stays state2 [05 C18].
 		s.logMessage(ErrLimitMessage)
-		node.DynamicGate = WakeBit1 // TODO(question): wake bit for 300 retry not located; use Bit1
+		node.DynamicGate = WakeBit2 // F6b: the allocator refusal wakes on bit 2 (notes/construction/05_promotion_factory_contract.md)
 		node.Deadline = int32(tick + 300)
 		// Stay in state2.
 		return

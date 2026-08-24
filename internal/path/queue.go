@@ -191,6 +191,13 @@ func (s *Scheduler) Submit(r Request) {
 // Each active request is limited to 100 heap pops per call, passed as budget to the injected search [04 §7.3] C11.
 // Requests are full-or-empty: budget exhaustion leaves heap+request ACTIVE without publication;
 // heap exhaustion publishes an empty route [04 §7.3] C12.
+//
+// TODO(question): the decompile shows ONE globally active search
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// over deficit counters (notes/movement/06_path_search.md §11.2); this
+// scheduler services every pending request of all ten players each Tick.
+// Deterministic and plan-compatible, but a different dispatch order under
+// load until a probe settles it.
 func (s *Scheduler) Tick(tick uint32) {
 	if s == nil {
 		return

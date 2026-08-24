@@ -11,8 +11,8 @@ func activePlayer(p *Player) {
 	p.Exists = true
 	p.ControllerState = 1 // settling state 1 ∈ both active and settling sets
 	p.IsObserver = false
-	p.StatusHalfword = 1 // nonzero so predicate true regardless of StatusWord
-	p.StatusWord = 0
+	p.StatusHalfwordAt144 = 1 // nonzero so predicate true regardless of StatusWord
+	p.StatusWordAt140 = 0
 	p.GameEnded = false
 	p.EndGameCountdown = -1
 	p.Helper1Deadline = 0
@@ -266,8 +266,8 @@ func TestGateChainIndependentlyBlocks(t *testing.T) {
 			name: "statusPair false",
 			mutate: func(p *Player) {
 				activePlayer(p)
-				p.StatusHalfword = 0 // halfword zero
-				p.StatusWord = 1     // neighbour non-zero => predicate false (0==0? 0!=0 false, 1==0 false => false)
+				p.StatusHalfwordAt144 = 0 // halfword zero
+				p.StatusWordAt140 = 1     // neighbour non-zero => predicate false (0==0? 0!=0 false, 1==0 false => false)
 			},
 		},
 		{

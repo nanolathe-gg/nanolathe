@@ -43,20 +43,17 @@ func (s *Service) reproduceTick() {
 	if !cell.IsRealFeature() {
 		return
 	}
-	// Animation bit 0 clear: cell's animation/status byte animated bit clear
-	// (GAF features at rest) [06 §13.1]. Check instance status if attached,
-	// else definition's Animating flag [02 "Feature record"].
+	// Animation bit 0 clear: the plot flag byte's bit 0 — the same byte
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// (notes/features/03_environmental_tails.md). A map-authored cell with the
+	// bit set must not reproduce even with no live instance, so the plot byte
+	// is the source of truth; the definition's Animating flag is only the
+	// fallback when the plot flag is clear.
+	if cell.FlagByte()&0x01 != 0 {
+		return
+	}
 	if inst, ok := s.instances[idx]; ok && inst != nil {
 		if inst.Status&0x01 != 0 {
-			return
-		}
-	} else {
-		// No live instance: use definition's Animating as proxy for GAF at rest.
-		if def, ok := s.Terrain.FeatureDefAt(cell.Feature()); ok && def != nil {
-			if def.Animating != 0 {
-				return
-			}
-		} else {
 			return
 		}
 	}

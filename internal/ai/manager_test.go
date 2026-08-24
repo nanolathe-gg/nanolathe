@@ -405,8 +405,8 @@ func TestWiringBeforeDeadline(t *testing.T) {
 	svc.Players[0].Exists = true
 	svc.Players[0].ControllerState = 2 // both outer and inner pass
 	svc.Players[0].IsObserver = false
-	svc.Players[0].StatusHalfword = 1
-	svc.Players[0].StatusWord = 0
+	svc.Players[0].StatusHalfwordAt144 = 1
+	svc.Players[0].StatusWordAt140 = 0
 	svc.Players[0].GameEnded = false
 	svc.Players[0].EndGameCountdown = -1
 	svc.Players[0].UpdateTime = 10

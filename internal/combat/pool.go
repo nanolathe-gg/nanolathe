@@ -10,6 +10,11 @@ import (
 // holes until compaction (I5).
 const ProjectileCapacity = pool.ProjectileCapacity
 
+// NeutralSide is the shooter-less side byte [06 §6.5]: meteors spawned through
+// the null-shooter path carry it so their explosions credit nobody. Side 0 is
+// a real side.
+const NeutralSide uint8 = 10
+
 // Vec3 is a fixed-point world position (16.16 per component, I2) [03 §2.1].
 type Vec3 struct {
 	X numeric.Fixed
@@ -52,7 +57,7 @@ type Projectile struct {
 
 	// Shooter and shooter side [06 §5.1]; owner side [06 §6.1].
 	Shooter     pool.Handle // shooter unit slot [06 §6.1] "shooter"
-	ShooterSide uint8       // owner side byte [06 §6.1]
+	ShooterSide uint8       // owner side byte [06 §6.1]; NeutralSide (10) for shooter-less records [06 §6.5]
 
 	// Muzzle-piece identity [06 §5.1] "muzzle-piece identity"; firing piece [06 §6.1] "firing piece, and shooter".
 	MuzzlePiece int16
@@ -69,6 +74,7 @@ type Projectile struct {
 	TwoPhase     bool          // two-phase state [06 §6.1]
 	Dead         bool          // dead state [06 §5.1] — shadow; authoritative flag lives in Slots (I5)
 	PropellerYaw numeric.Angle // visual propeller orientation [06 §6.1]
+	MeteorPitch  numeric.Angle // meteor visual pitch accumulator, advanced with yaw [06 §6.5]
 
 	// Collision cache [06 §5.1] "collision cache values" — quantized cell pair suppressing repeated feature contact [06 §8.1].
 	CacheCellX int32

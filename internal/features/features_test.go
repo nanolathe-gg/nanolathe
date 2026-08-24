@@ -280,7 +280,7 @@ func TestSinkVelocityAndFloor(t *testing.T) {
 	// Initiate sinking at submerged position
 	inst.Y = numeric.Fixed(30 * 65536) // start above sea? Actually start Y at 30, floor 15, sea 30 => Y == sea
 	// For submerged start, Y should be at floor+? But we will manually set IsSinking
-	svc.StartSinking(inst)
+	svc.StartSinking(inst, false)
 	if inst.Vy != -11468 {
 		t.Fatalf("sinking vy must be -11468 fixed [05 \"Feature sinking and water interaction\"], got %d", inst.Vy.Raw())
 	}
@@ -345,7 +345,7 @@ func TestBurningDamageCoupling(t *testing.T) {
 	burnDef.CanonicalKey = content.CanonicalKey("treeBurn")
 	burnDef.Flamable = true
 	burnDef.SeqNameBurn = "burnGaf"
-	burnDef.SparkTime = 4 // half 2 => countdown 2-3, needs 1 draw
+	burnDef.SparkTime = 120 // authored 4 (120/30): half 2 => countdown 2-3, one draw
 	burnDef.BurnWeapon = "burn_weapon"
 	burnDef.SpreadChance = 100
 	burnDef.FootprintX = 1
@@ -355,7 +355,7 @@ func TestBurningDamageCoupling(t *testing.T) {
 	candDef.CanonicalKey = content.CanonicalKey("cand")
 	candDef.Flamable = true
 	candDef.SeqNameBurn = "burnGaf2"
-	candDef.SparkTime = 4
+	candDef.SparkTime = 120
 	candDef.SpreadChance = 100 // always ignite when drawn [05 ...]
 	candDef.FootprintX = 1
 	candDef.FootprintZ = 1
@@ -541,7 +541,7 @@ func TestBurningSmokeOnlyGated(t *testing.T) {
 	def.CanonicalKey = content.CanonicalKey("burnSmoke")
 	def.Flamable = true
 	def.SeqNameBurn = "burn"
-	def.SparkTime = 4
+	def.SparkTime = 120
 	def.BurnWeapon = ""
 	sim := rng.SimulationFromState(1)
 	crt := rng.CRTFromState(1)
@@ -570,7 +570,7 @@ func TestWindEmbersZeroWindNoDraws(t *testing.T) {
 	burnDef.CanonicalKey = content.CanonicalKey("windBurn")
 	burnDef.Flamable = true
 	burnDef.SeqNameBurn = "burn"
-	burnDef.SparkTime = 4
+	burnDef.SparkTime = 120
 	burnDef.BurnWeapon = ""
 	sim := rng.SimulationFromState(500)
 	windZero := world.NewWind(0, 0)

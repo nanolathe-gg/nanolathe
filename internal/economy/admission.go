@@ -83,11 +83,10 @@ func (s *Service) settleOneResource(p int, res Res, w *units.World) {
 	var sumDebt float32
 	var sumAccepted float32
 
-	totalProduction = player.Mirror[res].Production
-	sumDebt = player.Mirror[res].Carry
-	sumAccepted = player.Mirror[res].Accepted
-
 	if w != nil {
+		// The unit slice accumulates FIRST; the player-level mirror bucket
+		// folds in only after the whole slice, matching retail's gather order
+		// [05 "Unit instance economy state"] (decompile: notes/economy/04 §3).
 		ForEachUnitOrdered(w, p, func(u *units.Unit) {
 			h := u.Handle
 			if h == 0 {
@@ -100,6 +99,9 @@ func (s *Service) settleOneResource(p int, res Res, w *units.World) {
 			sumAccepted = sumAccepted + b.Accepted
 		})
 	}
+	totalProduction = totalProduction + player.Mirror[res].Production
+	sumDebt = sumDebt + player.Mirror[res].Carry
+	sumAccepted = sumAccepted + player.Mirror[res].Accepted
 
 	opening := player.Stock[res]
 	pool, debtRatio, _, acceptRatio, closingStock := settlePure(opening, totalProduction, sumDebt, sumAccepted)
@@ -179,7 +181,7 @@ func (s *Service) Settle(p int, tick uint32, w *units.World) {
 	// order, so an earlier unit's debit can starve a later one [05 "Cloak
 	// debit"] C13.
 	if s.CloakCost != nil {
-		ApplyCloakDebits(s, w, p, s.CloakCost)
+		ApplyCloakDebits(s, w, p, s.CloakCost, nil, nil)
 	}
 	// 3. Energy and metal settle independently; there is no combined shortage
 	// ratio [05 "Two-stage settlement algorithm"] C8. Energy goes first because
