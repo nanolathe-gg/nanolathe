@@ -1,0 +1,225 @@
+// Package client terrain draw — tile blitter with source block plus intra-tile remainder.
+//
+// Terrain draw is the orthographic tile pass [03 §2.2] [03 §2.5] C1. The tile map
+// is row-major CellW/2 × CellH/2 16-bit indices into a 32×32 indexed tile set
+// (1,024 bytes per tile). The blitter computes source block plus intra-tile pixel
+// remainder, clips at map bounds, and handles partial edge rectangles — no depth
+// buffer, no water mesh [03 §2.2]. Projection is integer orthographic with half-
+// height shear: screenX = (worldX>>16)-cameraX+originX,
+// screenY = (worldZ>>16)-((worldY>>16)>>1)-cameraZ+originY [03 §2.5] C1. For
+// terrain at ground height the shear term is zero; the general form is kept so
+// height-aware consumers share the same helper (camera.WorldToScreen). Palette
+// lookups are logical→physical at present time only (C7) and happen in the
+// indexed→RGBA conversion, not in this blitter — this file writes palette
+// indices only, so palette animation stays possible.
+package client
+
+import (
+	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/world"
+)
+
+const (
+	terrainTileSize   = 32   // pixels per tile side [03 §2.1] C1
+	terrainTilePixels = 1024 // 32×32 [03 §2.2] C5
+)
+
+// floorDiv returns floor(a/b) with sign correction [INVARIANTS I3] [03 §2.1].
+func terrainFloorDiv(a, b int64) int64 {
+	q := a / b
+	if a%b != 0 && (a < 0) != (b < 0) {
+		q--
+	}
+	return q
+}
+
+// DrawTerrain draws terrain into the client's indexed framebuffer [03 §2.2] C1.
+//
+// It blits the world Terrain's TileIndices/TileSet through the camera pan,
+// clipping at map bounds and handling partial edge rectangles. The destination
+// is c.indexed at c.width×c.height. A nil terrain or camera clears the buffer
+// to 0 (void). The write is palette indices; conversion through palette.Tables
+// happens at present time in convertIndexedToRGBA (C7).
+//
+// Viewport origin for the shell window is 0,0 (full-window terrain). The
+// underlying projection still uses camera.WorldToScreen [03 §2.5] C1 with its
+// 128,32 beam offsets; the blitter subtracts those offsets to obtain the
+// shell origin so the scale/shear stay general and only the offset is
+// viewport-specific (PLAN_04A C1).
+func (c *Client) DrawTerrain(t *world.Terrain, cam *camera.Camera) {
+	if c == nil {
+		return
+	}
+	BlitTerrain(c.indexed, c.width, c.height, t, cam)
+}
+
+// BlitTerrain blits terrain into dst (row-major dstW×dstH indexed pixels) [03 §2.2].
+//
+// dst is filled with 0 (void) where no map tile covers the viewport. Visible
+// tiles are copied with source block plus intra-tile remainder: for each tile
+// intersecting the viewport the blitter computes its screen rectangle via
+// camera.WorldToScreen [03 §2.5], clips that rectangle at viewport and map
+// bounds, derives the intra-tile source offset (remainder), and copies the
+// partial edge rectangle row by row with nearest-neighbour sampling (the
+// texture upload already uses TextureFilterNearest).
+//
+// cam is in map pixels [camera.Camera]. A nil cam is treated as at 0,0.
+// t may be nil; the function then only clears dst.
+func BlitTerrain(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Camera) {
+	BlitTerrainOrigin(dst, dstW, dstH, t, cam, 0, 0)
+}
+
+// BlitTerrainOrigin is BlitTerrain with an explicit viewport origin. originX/Y
+// is the screen offset added after the camera subtraction — the viewport-
+// specific originX/Y of [03 §2.5] C1. The shell window uses 0,0; callers that
+// want the observed beam offsets can pass camera.OriginX/Y.
+//
+// The general projection per tile origin (tx*32, tz*32) at height Y=0 is:
+//
+//	screenX = (worldX>>16) - cam.X + originX
+//	screenY = (worldZ>>16) - ((worldY>>16)>>1) - cam.Z + originY
+//
+// where worldX = tileMapX*65536 etc [03 §2.5]. The blitter obtains that
+// position through cam.WorldToScreen and then re-bases from the 128,32 offsets
+// to the requested origin, so call sites do not hard-code literals (PLAN_04A C1).
+func BlitTerrainOrigin(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Camera, originX, originY int32) {
+	if dstW <= 0 || dstH <= 0 || len(dst) < dstW*dstH {
+		return
+	}
+	// Clear to void/background index 0. Out-of-map regions stay 0 (clipped at
+	// map bounds [03 §2.2]).
+	for i := range dst[:dstW*dstH] {
+		dst[i] = 0
+	}
+	if t == nil || t.TileIndices == nil || len(t.TileSet) == 0 {
+		return
+	}
+	if t.CellW <= 0 || t.CellH <= 0 {
+		return
+	}
+	// Map pixel dimensions: CellW*16 x CellH*16 [03 §2.1]. Tile map is
+	// CellW/2 × CellH/2 tiles of 32×32 [03 §2.2] C5 — both products agree.
+	tileMapW := int(t.CellW / 2)
+	tileMapH := int(t.CellH / 2)
+	if tileMapW <= 0 || tileMapH <= 0 {
+		return
+	}
+	if len(t.TileIndices) < tileMapW*tileMapH {
+		// Corrupt terrain; behave as empty.
+		return
+	}
+	var camX, camZ int32
+	if cam != nil {
+		camX = cam.X
+		camZ = cam.Z
+	}
+	// Visible map rectangle in map pixels for the viewport [originX/Y, originX+dstW).
+	// For the half-height shear, terrain is at Y=0 so the shear term is zero
+	// and the projection reduces to map-pixel translation; we keep the general
+	// WorldToScreen path per tile so the same helper governs all world→screen
+	// work [03 §2.5] C1.
+	// Compute inclusive tile range intersecting the viewport, including partial
+	// edge tiles. Using floor division handles negative camera correctly [I3][03 §2.1].
+	// mx0 = camX - originX is the map pixel at dst X=0.
+	mx0 := int64(camX - originX)
+	my0 := int64(camZ - originY)
+	mx1 := mx0 + int64(dstW) // exclusive
+	my1 := my0 + int64(dstH)
+	// Inclusive tile indices covering [mx0,mx1) etc.
+	startTX := terrainFloorDiv(mx0, terrainTileSize)
+	startTY := terrainFloorDiv(my0, terrainTileSize)
+	endTX := terrainFloorDiv(mx1-1, terrainTileSize)
+	endTY := terrainFloorDiv(my1-1, terrainTileSize)
+
+	// Stable iteration over intersecting tiles in row-major order (determinism
+	// per I1 is preserved — no map iteration).
+	for ty := startTY; ty <= endTY; ty++ {
+		for tx := startTX; tx <= endTX; tx++ {
+			// Clip at map bounds [03 §2.2]: tiles outside the TileIndices grid
+			// have no source block and leave the destination void.
+			if tx < 0 || ty < 0 || tx >= int64(tileMapW) || ty >= int64(tileMapH) {
+				continue
+			}
+			tileIndexPos := int(ty)*tileMapW + int(tx)
+			if tileIndexPos < 0 || tileIndexPos >= len(t.TileIndices) {
+				continue
+			}
+			tileID := t.TileIndices[tileIndexPos]
+			if int(tileID) < 0 || int(tileID) >= len(t.TileSet) {
+				continue
+			}
+			tile := &t.TileSet[tileID]
+			// Tile's map-pixel origin.
+			tileMapX := int(tx * terrainTileSize)
+			tileMapY := int(ty * terrainTileSize)
+			// Compute screen position via camera.WorldToScreen [03 §2.5] C1 to
+			// share the one orthographic integer projection with all render
+			// passes. World coords are map pixels *65536 (16.16 Fixed) [03 §2.1].
+			// Height Y=0 so half-height shear ((Y>>16)>>1) is zero; the call
+			// still proves the shear path.
+			var sx, sy int32
+			if cam != nil {
+				wx := numeric.Fixed(int64(tileMapX) << 16)
+				wz := numeric.Fixed(int64(tileMapY) << 16)
+				// WorldToScreen bakes OriginX/Y (128,32) for the beam path.
+				// Re-base to the requested viewport origin [PLAN_04A C1].
+				bsx, bsy := cam.WorldToScreen(wx, 0, wz)
+				sx = bsx - camera.OriginX + originX
+				sy = bsy - camera.OriginY + originY
+			} else {
+				// No camera: treat cam at 0,0.
+				sx = int32(tileMapX) + originX
+				sy = int32(tileMapY) + originY
+			}
+			// Destination rectangle for this tile, clipped at viewport bounds
+			// — partial edge rectangles [03 §2.2].
+			dstX0 := int(sx)
+			dstY0 := int(sy)
+			dstX1 := dstX0 + terrainTileSize
+			dstY1 := dstY0 + terrainTileSize
+			if dstX0 < 0 {
+				dstX0 = 0
+			}
+			if dstY0 < 0 {
+				dstY0 = 0
+			}
+			if dstX1 > dstW {
+				dstX1 = dstW
+			}
+			if dstY1 > dstH {
+				dstY1 = dstH
+			}
+			if dstX0 >= dstX1 || dstY0 >= dstY1 {
+				continue
+			}
+			// Source intra-tile remainder: how many pixels to skip inside the
+			// 32×32 block before the first visible column/row [03 §2.2].
+			// e.g. camera X=10 => first tile's visible slice starts at srcX=10.
+			srcX0 := dstX0 - int(sx)
+			srcY0 := dstY0 - int(sy)
+			w := dstX1 - dstX0
+			h := dstY1 - dstY0
+			// Defensive: source window must lie inside the 32×32 tile.
+			if srcX0 < 0 || srcY0 < 0 || srcX0+w > terrainTileSize || srcY0+h > terrainTileSize {
+				continue
+			}
+			// Copy the clipped source block row by row. Nearest-neighbour;
+			// bilinear would distort indexed art and is already disallowed
+			// by the TextureFilterNearest upload in client.go.
+			for row := 0; row < h; row++ {
+				srcRow := srcY0 + row
+				dstRow := dstY0 + row
+				srcOff := srcRow*terrainTileSize + srcX0
+				dstOff := dstRow*dstW + dstX0
+				if srcOff < 0 || srcOff+w > terrainTilePixels {
+					continue
+				}
+				if dstOff < 0 || dstOff+w > len(dst) {
+					continue
+				}
+				copy(dst[dstOff:dstOff+w], tile[srcOff:srcOff+w])
+			}
+		}
+	}
+}
