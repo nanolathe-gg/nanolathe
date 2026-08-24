@@ -1,0 +1,602 @@
+// Package content compiles retail's authored data into immutable definitions.
+// This file implements the two-stage catalog construction [02 §5] C1,
+// validation [SPEC_CONFLICTS SC2], cloning, and model sorting [03 §2.4] C13.
+package content
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/nanolathe/nanolathe/vfs"
+)
+
+// Catalog is the compiled, immutable content catalog [02 §5] [PLAN 02 Public API].
+// Maps are keyed by CanonicalKey (case-insensitive) [02 §5]; Sides is indexed
+// by SIDE ordinal [02 §6]; Maps holds headers only in this phase [02 "Map files"].
+// Definitions carry DefinitionHeader with canonical key/provenance/hash.
+// The catalog is read-only after Compile; sim packages take *Catalog and never mutate.
+type Catalog struct {
+	Units    map[string]*UnitDef       // key = CanonicalKey(unitname) [02 §5]
+	Weapons  map[string]*WeaponDef     // key = CanonicalKey(section name) [02 §5]
+	Features map[string]*FeatureDef    // key = CanonicalKey(feature name) [02 §5]
+	Movement map[string]*MovementClass // key = CanonicalKey(class Name) [02 "Movement class record"]
+	Sides    []*SideDef                // index = SIDE ordinal [02 §6] C8
+	Sounds   map[string]*SoundCategory // key = CanonicalKey(category name) [02 "Sound category record"]
+	Maps     map[string]*MapHeader     // key = CanonicalKey(basename) [02 "Map files"]
+
+	// AIProfiles holds ai/*.txt profiles (10 in retail, incl default.txt) [08 "Computer-controlled players"].
+	// Not in the minimal PLAN_02 Public API snippet but discovery is part of WU-02-6 and consumed by phase 11.
+	AIProfiles map[string]*AIProfile
+
+	Manifest string // vfs.ManifestHash() [PLAN 02]
+	Hash     string // sha256 over canonical definition bytes including defaults, stable across runs (I1) [02 §5] C12
+
+	// Model catalog for [03 §2.4] C13: distinct ObjectName values sorted case-insensitively
+	// before caching per-unit-type pointer. Load geometry in phase 6.
+	sortedModels []string       // distinct model names sorted case-insensitively [03 §2.4] C13
+	modelIndex   map[string]int // CanonicalKey(modelName) -> index in sortedModels [03 §2.4] C13
+}
+
+// Compile builds a Catalog from the VFS [02 §5] C1 two-stage discover → parse → link.
+//
+// Stage 1 discovers and parses every family into typed records so enumeration
+// order cannot leak into identity; Stage 2 links cross-references (weapon1..3 on
+// a unit resolve only after all weapons compile) [02 §5] C1. It uses the typed
+// accessor family only [02 §4] via the compile_* helpers, never a new conversion
+// path. Discovery walks logical paths through VFS per plan's table; filter by
+// extension, recursive for features [PLAN 02 Discovery].
+//
+// It also sorts the model catalog case-insensitively before caching per-unit-type
+// pointer [03 §2.4] C13 and computes Catalog.Hash over canonical bytes including
+// defaults, independent of map iteration, identical across two runs (I1) [02 §5] C12.
+func Compile(fs vfs.FSOps) (*Catalog, error) {
+	if fs == nil {
+		return nil, fmt.Errorf("content: nil VFS")
+	}
+
+	// Stage 1: discover and parse every family into typed records [02 §5] C1.
+	// Each compiler walks the VFS logical paths per PLAN_02 Discovery, filtering
+	// by extension already (units *.fbi, weapons *.tdf + gamedata/weapons.tdf,
+	// features recursive features/<group>/*.tdf, etc.).
+	weapons, err := CompileWeapons(fs)
+	if err != nil {
+		// Weapons are required for linking but not directly part of Validate's
+		// fatal trio; propagate error so whole-install compile is error-free.
+		return nil, err
+	}
+	units, err := CompileUnits(fs)
+	if err != nil {
+		return nil, err
+	}
+	features, err := CompileFeatures(fs)
+	if err != nil {
+		// Feature successor missing is fatal verbatim [GAP T14] C9.
+		return nil, err
+	}
+	movement, err := CompileMovement(fs)
+	if err != nil {
+		// MOVEINFO missing is fatal [02 §1] [SPEC_CONFLICTS SC2]; Validate also checks.
+		return nil, fmt.Errorf("content: catalog movement: %w", err)
+	}
+	sides, err := CompileSides(fs)
+	if err != nil {
+		// SIDEDATA missing is fatal [02 §6] C8; missing font fatal [GAP T14].
+		return nil, fmt.Errorf("content: catalog sides: %w", err)
+	}
+	soundData, err := CompileSounds(fs)
+	if err != nil {
+		// Sounds: gamedata/sound.tdf and gamedata/allsound.tdf [PLAN 02]; missing
+		// sound catalog is treated as error for whole-install; fixtures that lack
+		// it will see Compile error, but retail has it.
+		return nil, err
+	}
+	var sounds map[string]*SoundCategory
+	if soundData != nil {
+		sounds = soundData.Categories
+	}
+	if sounds == nil {
+		sounds = make(map[string]*SoundCategory)
+	}
+	maps, err := CompileMaps(fs)
+	if err != nil {
+		// Maps header discovery [02 "Map files"]; retail has 275 each; allow empty
+		// on a minimal fixture but whole-install expects them.
+		// Keep error for strict whole-install compile; fixtures use individual compilers.
+		return nil, err
+	}
+	aiProfiles, err := CompileAIProfiles(fs)
+	if err != nil {
+		// ai/*.txt 10 incl default.txt [PLAN 02]; missing default is fatal there.
+		return nil, err
+	}
+
+	// Stage 2: link cross-references so enumeration order cannot leak into identity [02 §5] C1.
+	// weapon1..3 on a unit resolve only after all weapons compile.
+	LinkUnitWeapons(units, weapons)
+	// Feature successors already linked inside CompileFeatures via LinkFeatureSuccessors [GAP T14] C9.
+	// Downloadable enforcement is intentionally not auto-invoked here: it requires
+	// build-menu button names [02 "Unit record"] C10 which are part of the
+	// SIDEDATA-derived GUI catalog not yet compiled in this phase. Callers that
+	// have build menus should invoke EnforceDownloadable explicitly.
+	// Model sorting C13: sort model catalog case-insensitively before caching per-unit-type pointer [03 §2.4].
+	sortedModels, modelIndex := buildModelCatalog(units)
+
+	// Manifest: vfs.ManifestHash() for identity [PLAN 02].
+	manifest, _ := manifestHashFor(fs)
+
+	c := &Catalog{
+		Units:        units,
+		Weapons:      weapons,
+		Features:     features,
+		Movement:     movement,
+		Sides:        sides,
+		Sounds:       sounds,
+		Maps:         maps,
+		AIProfiles:   aiProfiles,
+		Manifest:     manifest,
+		sortedModels: sortedModels,
+		modelIndex:   modelIndex,
+	}
+	// C12 Catalog.Hash computed over canonical bytes including defaults,
+	// independent of map iteration, identical across two runs (I1) [02 §5] C12.
+	c.Hash = catalogHash(c)
+	return c, nil
+}
+
+// buildModelCatalog collects distinct ObjectName values from units and sorts
+// them case-insensitively before caching a per-unit-type pointer [03 §2.4] C13.
+// The sort makes piece/type identity independent of provider order.
+func buildModelCatalog(units map[string]*UnitDef) ([]string, map[string]int) {
+	if len(units) == 0 {
+		return nil, nil
+	}
+	// Deduplicate by canonical key so "arm_3do" and "ARM_3DO" are one entry.
+	canonToOriginal := make(map[string]string)
+	for _, u := range units {
+		name := strings.TrimSpace(u.ObjectName)
+		if name == "" {
+			continue
+		}
+		ck := CanonicalKey(name)
+		if _, exists := canonToOriginal[ck]; !exists {
+			canonToOriginal[ck] = name
+		}
+	}
+	if len(canonToOriginal) == 0 {
+		return nil, nil
+	}
+	sorted := make([]string, 0, len(canonToOriginal))
+	for _, orig := range canonToOriginal {
+		sorted = append(sorted, orig)
+	}
+	// Sort case-insensitively [03 §2.4] — total order via lower + tie-breaker (I1).
+	sort.Slice(sorted, func(i, j int) bool {
+		li, lj := strings.ToLower(sorted[i]), strings.ToLower(sorted[j])
+		if li != lj {
+			return li < lj
+		}
+		return sorted[i] < sorted[j]
+	})
+	index := make(map[string]int, len(sorted))
+	for i, name := range sorted {
+		index[CanonicalKey(name)] = i
+	}
+	return sorted, index
+}
+
+// SortedModels returns the distinct model names sorted case-insensitively [03 §2.4] C13.
+// The slice is a copy; mutations do not affect the catalog.
+func (c *Catalog) SortedModels() []string {
+	if c == nil || len(c.sortedModels) == 0 {
+		return nil
+	}
+	out := make([]string, len(c.sortedModels))
+	copy(out, c.sortedModels)
+	return out
+}
+
+// ModelIndex returns the index of a model name in the sorted catalog [03 §2.4] C13
+// and whether it exists. Lookup is case-insensitive via CanonicalKey [02 §5].
+func (c *Catalog) ModelIndex(modelName string) (int, bool) {
+	if c == nil || c.modelIndex == nil {
+		return 0, false
+	}
+	idx, ok := c.modelIndex[CanonicalKey(modelName)]
+	return idx, ok
+}
+
+// ModelForUnit returns the model name for a unit and its index in the sorted
+// model catalog [03 §2.4] C13. The unit lookup is case-insensitive [02 §5].
+func (c *Catalog) ModelForUnit(unitKey string) (string, int, bool) {
+	if c == nil {
+		return "", 0, false
+	}
+	u, ok := c.Unit(unitKey)
+	if !ok {
+		return "", 0, false
+	}
+	name := strings.TrimSpace(u.ObjectName)
+	if name == "" {
+		return "", 0, false
+	}
+	idx, ok := c.ModelIndex(name)
+	if !ok {
+		return "", 0, false
+	}
+	return name, idx, true
+}
+
+// Validate treats a missing gamedata/ directory, MOVEINFO.TDF or SIDEDATA.TDF as fatal,
+// and translate.tdf as optional — NOT GAMEDATA.TDF which doesn't exist [SPEC_CONFLICTS SC2].
+//
+// It inspects the compiled catalog, not the filesystem, so it can be called
+// after Compile without retaining the FSOps. A missing gamedata/ directory
+// manifests as both movement and sides empty; we report it as gamedata/ fatal.
+// translate.tdf missing yields identity (byte-exact) and is not fatal [02 §3] C7.
+func (c *Catalog) Validate() error {
+	if c == nil {
+		return fmt.Errorf("content: nil catalog")
+	}
+	// Missing gamedata/ directory is fatal [SPEC_CONFLICTS SC2].
+	if len(c.Movement) == 0 && len(c.Sides) == 0 {
+		// Both hard requirements absent ⇒ likely missing gamedata/ entirely.
+		return fmt.Errorf("content: missing gamedata/ directory is fatal [02 §1] [SPEC_CONFLICTS SC2]")
+	}
+	// MOVEINFO.TDF missing is fatal [02 §1]; SIDEDATA.TDF missing is fatal [02 §6].
+	if len(c.Movement) == 0 {
+		return fmt.Errorf("content: missing gamedata/moveinfo.tdf is fatal [02 §1] [SPEC_CONFLICTS SC2]")
+	}
+	if len(c.Sides) == 0 {
+		return fmt.Errorf("content: missing gamedata/sidedata.tdf is fatal [02 §6] [SPEC_CONFLICTS SC2]")
+	}
+	// translate.tdf is optional — missing yields identity map, byte-exact [02 §3] C7 — so no check.
+	// GAMEDATA.TDF does not exist in a real install [SPEC_CONFLICTS SC2] — must not be required.
+	return nil
+}
+
+// Clone returns a deep copy for per-match isolation [PLAN 02].
+// Maps and slices are copied; per-definition maps are deep-copied; weapon
+// pointers and feature successor pointers are rewired to the cloned maps so
+// the clone never shares mutable state with the original. Hash and Manifest are
+// copied verbatim. Model catalog is copied.
+func (c *Catalog) Clone() *Catalog {
+	if c == nil {
+		return nil
+	}
+	out := &Catalog{
+		Manifest: c.Manifest,
+		Hash:     c.Hash,
+	}
+	// Weapons deep copy
+	if c.Weapons != nil {
+		out.Weapons = make(map[string]*WeaponDef, len(c.Weapons))
+		for k, v := range c.Weapons {
+			out.Weapons[k] = cloneWeapon(v)
+		}
+	}
+	// Units deep copy without weapon pointers (rewired after weapons cloned)
+	if c.Units != nil {
+		out.Units = make(map[string]*UnitDef, len(c.Units))
+		for k, v := range c.Units {
+			out.Units[k] = cloneUnit(v)
+		}
+		// Rewire weapon links deterministically (sorted keys I1) [02 §5] C1
+		keys := make([]string, 0, len(out.Units))
+		for k := range out.Units {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			u := out.Units[k]
+			if strings.TrimSpace(u.Weapon1) != "" {
+				if w, ok := out.Weapons[CanonicalKey(u.Weapon1)]; ok {
+					u.Weapon1Def = w
+				}
+			}
+			if strings.TrimSpace(u.Weapon2) != "" {
+				if w, ok := out.Weapons[CanonicalKey(u.Weapon2)]; ok {
+					u.Weapon2Def = w
+				}
+			}
+			if strings.TrimSpace(u.Weapon3) != "" {
+				if w, ok := out.Weapons[CanonicalKey(u.Weapon3)]; ok {
+					u.Weapon3Def = w
+				}
+			}
+			if strings.TrimSpace(u.ExplodeAs) != "" {
+				if w, ok := out.Weapons[CanonicalKey(u.ExplodeAs)]; ok {
+					u.ExplodeAsDef = w
+				}
+			}
+			if strings.TrimSpace(u.SelfDestructAs) != "" {
+				if w, ok := out.Weapons[CanonicalKey(u.SelfDestructAs)]; ok {
+					u.SelfDestructAsDef = w
+				}
+			}
+		}
+	}
+	// Features deep copy without successors then rewire
+	if c.Features != nil {
+		out.Features = make(map[string]*FeatureDef, len(c.Features))
+		for k, v := range c.Features {
+			out.Features[k] = cloneFeature(v)
+		}
+		// Rewire successors deterministically (sorted keys I1)
+		keys := make([]string, 0, len(out.Features))
+		for k := range out.Features {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			f := out.Features[k]
+			if strings.TrimSpace(f.FeatureDead) != "" {
+				if target, ok := out.Features[CanonicalKey(f.FeatureDead)]; ok {
+					f.FeatureDeadDef = target
+				}
+			}
+			if strings.TrimSpace(f.FeatureReclamate) != "" {
+				if target, ok := out.Features[CanonicalKey(f.FeatureReclamate)]; ok {
+					f.FeatureReclamateDef = target
+				}
+			}
+			if strings.TrimSpace(f.FeatureBurnt) != "" {
+				if target, ok := out.Features[CanonicalKey(f.FeatureBurnt)]; ok {
+					f.FeatureBurntDef = target
+				}
+			}
+		}
+	}
+	// Movement deep copy
+	if c.Movement != nil {
+		out.Movement = make(map[string]*MovementClass, len(c.Movement))
+		for k, v := range c.Movement {
+			out.Movement[k] = cloneMovement(v)
+		}
+	}
+	// Sides deep copy (slice ordered by ordinal [02 §6] C8)
+	if c.Sides != nil {
+		out.Sides = make([]*SideDef, len(c.Sides))
+		for i, s := range c.Sides {
+			out.Sides[i] = cloneSide(s)
+		}
+	}
+	// Sounds deep copy
+	if c.Sounds != nil {
+		out.Sounds = make(map[string]*SoundCategory, len(c.Sounds))
+		for k, v := range c.Sounds {
+			out.Sounds[k] = cloneSoundCategory(v)
+		}
+	}
+	// Maps deep copy
+	if c.Maps != nil {
+		out.Maps = make(map[string]*MapHeader, len(c.Maps))
+		for k, v := range c.Maps {
+			out.Maps[k] = cloneMapHeader(v)
+		}
+	}
+	// AIProfiles deep copy
+	if c.AIProfiles != nil {
+		out.AIProfiles = make(map[string]*AIProfile, len(c.AIProfiles))
+		for k, v := range c.AIProfiles {
+			out.AIProfiles[k] = cloneAIProfile(v)
+		}
+	}
+	// Model catalog copy
+	if c.sortedModels != nil {
+		out.sortedModels = append([]string(nil), c.sortedModels...)
+	}
+	if c.modelIndex != nil {
+		out.modelIndex = make(map[string]int, len(c.modelIndex))
+		for k, v := range c.modelIndex {
+			out.modelIndex[k] = v
+		}
+	}
+	return out
+}
+
+// Unit returns the unit definition for a key case-insensitively [02 §5].
+func (c *Catalog) Unit(key string) (*UnitDef, bool) {
+	if c == nil || c.Units == nil {
+		return nil, false
+	}
+	u, ok := c.Units[CanonicalKey(key)]
+	return u, ok
+}
+
+// Weapon returns the weapon definition for a key case-insensitively [02 §5].
+func (c *Catalog) Weapon(key string) (*WeaponDef, bool) {
+	if c == nil || c.Weapons == nil {
+		return nil, false
+	}
+	w, ok := c.Weapons[CanonicalKey(key)]
+	return w, ok
+}
+
+// WeaponByID selects the weapon with the given ID case-insensitively and
+// deterministically (I1) [02 "Weapon record"] C2. ID is read with default -1
+// first to select the record [02 "Weapon record"] C2. The scan is over sorted
+// canonical keys so duplicate IDs have a stable winner independent of map iteration.
+func (c *Catalog) WeaponByID(id int32) (*WeaponDef, bool) {
+	if c == nil || c.Weapons == nil {
+		return nil, false
+	}
+	keys := make([]string, 0, len(c.Weapons))
+	for k := range c.Weapons {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if c.Weapons[k].ID == id {
+			return c.Weapons[k], true
+		}
+	}
+	return nil, false
+}
+
+// cloneUnit deep copies a UnitDef without weapon link pointers (rewired in Clone).
+func cloneUnit(u *UnitDef) *UnitDef {
+	if u == nil {
+		return nil
+	}
+	out := *u
+	// DefinitionHeader is value copy (strings + Provenance struct)
+	if u.Unknown != nil {
+		out.Unknown = make(map[string]string, len(u.Unknown))
+		for k, v := range u.Unknown {
+			out.Unknown[k] = v
+		}
+	}
+	// Clear weapon resolved pointers — rewired to cloned weapons.
+	out.Weapon1Def = nil
+	out.Weapon2Def = nil
+	out.Weapon3Def = nil
+	out.ExplodeAsDef = nil
+	out.SelfDestructAsDef = nil
+	return &out
+}
+
+// cloneWeapon deep copies a WeaponDef.
+func cloneWeapon(w *WeaponDef) *WeaponDef {
+	if w == nil {
+		return nil
+	}
+	out := *w
+	if w.Damage != nil {
+		out.Damage = make(map[string]int32, len(w.Damage))
+		for k, v := range w.Damage {
+			out.Damage[k] = v
+		}
+	}
+	if w.Unknown != nil {
+		out.Unknown = make(map[string]string, len(w.Unknown))
+		for k, v := range w.Unknown {
+			out.Unknown[k] = v
+		}
+	}
+	return &out
+}
+
+// cloneFeature deep copies a FeatureDef without successor pointers (rewired in Clone).
+func cloneFeature(f *FeatureDef) *FeatureDef {
+	if f == nil {
+		return nil
+	}
+	out := *f
+	if f.Unknown != nil {
+		out.Unknown = make(map[string]string, len(f.Unknown))
+		for k, v := range f.Unknown {
+			out.Unknown[k] = v
+		}
+	}
+	out.FeatureDeadDef = nil
+	out.FeatureReclamateDef = nil
+	out.FeatureBurntDef = nil
+	return &out
+}
+
+// cloneMovement deep copies a MovementClass.
+func cloneMovement(m *MovementClass) *MovementClass {
+	if m == nil {
+		return nil
+	}
+	out := *m
+	return &out
+}
+
+// cloneSide deep copies a SideDef.
+func cloneSide(s *SideDef) *SideDef {
+	if s == nil {
+		return nil
+	}
+	out := *s
+	if s.Anchors != nil {
+		out.Anchors = make(map[string]Rect, len(s.Anchors))
+		for k, v := range s.Anchors {
+			out.Anchors[k] = v
+		}
+	}
+	return &out
+}
+
+// cloneSoundCategory deep copies a SoundCategory [02 "Sound category record"] [03 §8.3].
+func cloneSoundCategory(sc *SoundCategory) *SoundCategory {
+	if sc == nil {
+		return nil
+	}
+	out := *sc
+	for i := range out.Slots {
+		slot := &out.Slots[i]
+		orig := sc.Slots[i]
+		if orig.Variants != nil {
+			slot.Variants = append([]string(nil), orig.Variants...)
+		}
+		if orig.Captions != nil {
+			slot.Captions = append([]string(nil), orig.Captions...)
+		}
+	}
+	return &out
+}
+
+// cloneMapHeader deep copies a MapHeader headers-only [02 "Map files"].
+func cloneMapHeader(mh *MapHeader) *MapHeader {
+	if mh == nil {
+		return nil
+	}
+	out := *mh
+	if mh.Schemas != nil {
+		out.Schemas = append([]MapSchema(nil), mh.Schemas...)
+	}
+	// RawOTA is immutable after Compile [PLAN 02]; share pointer.
+	// Provenance and DefinitionHeader are value copies.
+	return &out
+}
+
+// cloneAIProfile deep copies an AIProfile [08 "Computer-controlled players"].
+func cloneAIProfile(p *AIProfile) *AIProfile {
+	if p == nil {
+		return nil
+	}
+	out := *p
+	if p.Plans != nil {
+		out.Plans = make(map[string]*AIPlan, len(p.Plans))
+		for k, v := range p.Plans {
+			if v == nil {
+				continue
+			}
+			cp := *v
+			if v.Weights != nil {
+				cp.Weights = make(map[string]int32, len(v.Weights))
+				for kk, vv := range v.Weights {
+					cp.Weights[kk] = vv
+				}
+			}
+			if v.Limits != nil {
+				cp.Limits = make(map[string]int32, len(v.Limits))
+				for kk, vv := range v.Limits {
+					cp.Limits[kk] = vv
+				}
+			}
+			out.Plans[k] = &cp
+		}
+	}
+	return &out
+}
+
+// manifestHashFor returns vfs.ManifestHash when available [vfs.ManifestHash].
+// Compile takes vfs.FSOps which does not include ManifestHash (only Open,
+// ReadFileLimit, ReadDir, Stat, CacheStamp), but the concrete *vfs.FS does.
+// Use a type assertion so Catalog.Manifest is populated when a real FS is used
+// while keeping the FSOps abstraction for tests.
+func manifestHashFor(fs vfs.FSOps) (string, error) {
+	if fs == nil {
+		return "", fmt.Errorf("content: nil VFS")
+	}
+	if f, ok := fs.(*vfs.FS); ok {
+		return f.ManifestHash()
+	}
+	if mh, ok := fs.(interface{ ManifestHash() (string, error) }); ok {
+		return mh.ManifestHash()
+	}
+	return "", nil
+}
