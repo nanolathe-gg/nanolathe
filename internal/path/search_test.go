@@ -601,3 +601,163 @@ func TestFiveEntryFanAfterFirst(t *testing.T) {
 		t.Fatalf("fan: expected path")
 	}
 }
+
+// TestResumableBudgetHonoring verifies [04 §7.3] C11 C12 budget-honoring search [04 §7.3] "Budget exhaustion leaves the heap and request active — it does not publish the best partial prefix".
+// A wide grid needs >100 pops; first call with budget 100 returns done=false with no publication,
+// second (resumed) completes with identical results to an unconstrained one-shot run [04 §7.3] C11 C12.
+func TestResumableBudgetHonoring(t *testing.T) {
+	bounds := Rect{Min: Cell{0, 0}, Max: Cell{200, 200}}
+	start := Cell{0, 0}
+	goalCell := Cell{150, 0}
+	goal := PointGoal(goalCell, 0)
+	cfg := SearchConfig{
+		Start:      start,
+		Goal:       goal,
+		IsPassable: func(c Cell) bool { return true },
+		Scale:      65536,
+		HasBounds:  true,
+		Bounds:     bounds,
+		Bias:       Point{0, 0},
+	}
+	oneShot := Search(cfg)
+	if oneShot.Popped <= 100 {
+		t.Fatalf("one-shot fixture requires >100 pops to test budget, got %d; widen grid or obstacle [04 §7.3] C11", oneShot.Popped)
+	}
+	if len(oneShot.Points) == 0 {
+		t.Fatalf("one-shot should succeed, got empty status %#x", oneShot.Status)
+	}
+	sess := NewSession(cfg)
+	points1, status1, done1 := sess.Resume(100) // [04 §7.3] C11 100 pops per request per call
+	if done1 {
+		t.Fatalf("first budget 100 should not be done, got done=true points %v status %#x [04 §7.3] C12", points1, status1)
+	}
+	if len(points1) != 0 {
+		t.Fatalf("budget exhaustion must not publish partial prefix, got %d points [04 §7.3] C12", len(points1))
+	}
+	if sess.Popped() != 100 {
+		t.Fatalf("first resume should stop after exactly 100 pops, got %d", sess.Popped())
+	}
+	if sess.IsDone() {
+		t.Fatalf("session should remain active after budget exhaustion [04 §7.3] C11")
+	}
+	// Determinism: same session must retain heap+request state; resume must complete identically to one-shot [04 §7.3] C11 C12.
+	points2, status2, done2 := sess.Resume(1 << 20)
+	if !done2 {
+		t.Fatalf("second resume should complete, got done=false")
+	}
+	if status2 != oneShot.Status {
+		t.Fatalf("resumed status want %#x got %#x", oneShot.Status, status2)
+	}
+	if len(points2) != len(oneShot.Points) {
+		t.Fatalf("resumed points len want %d got %d", len(oneShot.Points), len(points2))
+	}
+	for i := range points2 {
+		if points2[i] != oneShot.Points[i] {
+			t.Fatalf("resumed points[%d] want %v got %v", i, oneShot.Points[i], points2[i])
+		}
+	}
+	if sess.Popped() != oneShot.Popped {
+		t.Fatalf("total pops should equal one-shot %d vs resumed %d (determinism same seed + same request sequence ⇒ identical published routes whether budget interrupts occur or not) [04 §7.3] C11", oneShot.Popped, sess.Popped())
+	}
+	// Direct second one-shot vs resumed identical.
+	sess2 := NewSession(cfg)
+	var all []Point
+	var st Status
+	var done bool
+	all, st, done = sess2.Resume(50)
+	if done {
+		t.Fatalf("50 budget should not finish")
+	}
+	all, st, done = sess2.Resume(1 << 20)
+	if !done || st != oneShot.Status || len(all) != len(oneShot.Points) {
+		t.Fatalf("chunked 50+ rest should also equal one-shot")
+	}
+	for i := range all {
+		if all[i] != oneShot.Points[i] {
+			t.Fatalf("chunked 50 mismatch")
+		}
+	}
+	_ = status1
+	_ = status2
+}
+
+// TestResumableHeapExhaustion verifies heap exhaustion publishes empty deterministically [04 §7.3] C12.
+func TestResumableHeapExhaustion(t *testing.T) {
+	bounds := Rect{Min: Cell{0, 0}, Max: Cell{10, 10}}
+	goal := PointGoal(Cell{10, 0}, 0)
+	isPassable := func(c Cell) bool {
+		if c.X == 1 || c.X == 2 {
+			return false
+		}
+		return true
+	}
+	cfg := SearchConfig{
+		Start:      Cell{0, 0},
+		Goal:       goal,
+		IsPassable: isPassable,
+		Scale:      65536,
+		HasBounds:  true,
+		Bounds:     bounds,
+	}
+	oneShot := Search(cfg)
+	if oneShot.Status != StatusRejected || len(oneShot.Points) != 0 {
+		t.Fatalf("heap exhaustion one-shot should publish empty rejected")
+	}
+	sess := NewSession(cfg)
+	p, st, done := sess.Resume(100)
+	if !done || st != StatusRejected || len(p) != 0 {
+		t.Fatalf("heap exhaustion with budget: resumed should also publish empty rejected in one call, got done %v st %#x len %d", done, st, len(p))
+	}
+}
+
+// TestResumableWriteOnceSlots verifies write-once tolerance, node store h, and goal flags persist across resumes [04 §7.2] C7 C9.
+func TestResumableWriteOnceSlots(t *testing.T) {
+	bounds := Rect{Min: Cell{0, 0}, Max: Cell{200, 200}}
+	start := Cell{0, 0}
+	goal := PointGoal(Cell{150, 0}, 0)
+	cfg := SearchConfig{
+		Start:      start,
+		Goal:       goal,
+		IsPassable: func(c Cell) bool { return true },
+		Scale:      65536,
+		HasBounds:  true,
+		Bounds:     bounds,
+	}
+	sess := NewSession(cfg)
+	// Capture initial tolerance and first node h.
+	initialTol := sess.tolerance
+	hasTol := sess.hasTolerance
+	_ = initialTol
+	_ = hasTol
+	_, _, done1 := sess.Resume(50)
+	if done1 {
+		t.Skipf("grid too small to need >50 pops, skipping write-once check")
+	}
+	// Tolerance slot must be unchanged after partial resume [04 §7.2] C9 write-once never updated.
+	if sess.tolerance != initialTol || sess.hasTolerance != hasTol {
+		t.Fatalf("tolerance write-once violated after resume: before %d %v after %d %v [04 §7.2] C9", initialTol, hasTol, sess.tolerance, sess.hasTolerance)
+	}
+	// Node h write-once: pick a node, mutate goal, ensure h unchanged.
+	ns := sess.ns
+	if ns.Len() > 1 {
+		// Find a known cell, e.g., start neighbor (0,1) or (1,0)
+		if id, ok := ns.Find(Cell{1, 0}); ok {
+			hBefore := ns.Get(id).H
+			// mutate goal via wrapper that returns different h
+			mg := &mutableGoal{h: 9999}
+			// Ensure returns same node with same h [04 §7.2] C7
+			id2 := ns.Ensure(Cell{1, 0}, 0, invalidNodeID, DirNone, mg)
+			if id2 != id || ns.Get(id2).H != hBefore {
+				t.Fatalf("node h write-once violated after resume [04 §7.2] C7")
+			}
+		}
+	}
+	pts, _, done2 := sess.Resume(1 << 20)
+	if !done2 {
+		t.Fatalf("should finish")
+	}
+	oneShot := Search(cfg)
+	if len(pts) != len(oneShot.Points) {
+		t.Fatalf("write-once resume vs one-shot mismatch")
+	}
+}

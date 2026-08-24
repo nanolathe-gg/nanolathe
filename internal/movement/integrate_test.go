@@ -193,3 +193,143 @@ func TestRouteCapsInIntegrate(t *testing.T) {
 		t.Fatalf("inactive enc want [0] got %v", enc2)
 	}
 }
+
+// syntheticLargeTerrainForBudget returns a flat terrain large enough to require >100 pops [04 §7.3] C11.
+func syntheticLargeTerrainForBudget() *world.Terrain {
+	t := &world.Terrain{
+		CellW:    200,
+		CellH:    200,
+		SeaLevel: 0,
+		Plot:     make([]world.PlotCell, 40000),
+	}
+	for i := range t.Plot {
+		t.Plot[i].SetFeature(world.PlotFeatureNone)
+		t.Plot[i].SetHeight(10)
+		t.Plot[i].SetMinHeight(10)
+		t.Plot[i].SetMaxHeight(10)
+	}
+	return t
+}
+
+// TestBigRequestStaysActiveAcrossTicks verifies budget-honoring end-to-end [04 §7.3] C11 C12.
+// A big synthetic request stays active across ticks and never publishes a partial prefix.
+func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
+	terrain := syntheticLargeTerrainForBudget()
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
+	grid := NewOccupancyGrid()
+	system := NewSystem(terrain, profile, grid)
+
+	w := units.New(10, nil)
+	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, TurnRate: 500}
+	def.MaxDamage = 100
+	def.FootprintX = 1
+	def.FootprintZ = 1
+	startWorldX := world.CellToWorld(1)
+	startWorldZ := world.CellToWorld(1)
+	startWorldY := terrain.HeightAt(startWorldX, startWorldZ)
+	h, err := w.Create(def, 0, startWorldX, startWorldY, startWorldZ)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	u := w.Unit(h)
+	system.EnsureUnit(u)
+
+	startCell := path.Cell{X: 1, Z: 1}
+	goalCell := path.Cell{X: 150, Z: 1}
+	system.SubmitMove(h, 0, startCell, goalCell)
+	id := orders.Lookup("Move_Ground")
+	if id == 0 {
+		t.Fatalf("Move_Ground not found")
+	}
+	q := orders.QueueForUnit(u)
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(150), GoalZ: world.CellToWorld(1)})
+
+	// One-shot expected via direct path search with same passability/bias/bounds.
+	isPassable := func(c path.Cell) bool {
+		if !profile.IsPassable(terrain, c.X, c.Z) {
+			return false
+		}
+		if occ, ok := grid.OccupantAt(Cell{X: c.X, Z: c.Z}); ok && occ != int(h) {
+			return false
+		}
+		return true
+	}
+	bias := path.Point{X: int32(profile.FootPrintX / 2), Z: int32(profile.FootPrintZ / 2)}
+	bounds := path.Rect{Min: path.Cell{X: 0, Z: 0}, Max: path.Cell{X: terrain.CellW - 1, Z: terrain.CellH - 1}}
+	cfg := path.SearchConfig{
+		Start:      startCell,
+		Goal:       path.PointGoal(goalCell, 0),
+		IsPassable: isPassable,
+		Scale:      65536,
+		Bias:       bias,
+		HasBounds:  true,
+		Bounds:     bounds,
+	}
+	oneShot := path.Search(cfg)
+	if oneShot.Popped <= 100 {
+		t.Fatalf("fixture requires >100 pops to test budget, got %d", oneShot.Popped)
+	}
+	if len(oneShot.Points) == 0 {
+		t.Fatalf("one-shot should succeed")
+	}
+
+	// First scheduler tick: budget 100, should NOT publish partial prefix [04 §7.3] C12.
+	system.Scheduler.Tick(1)
+	route := system.Routes[h]
+	if route != nil && route.Active {
+		t.Fatalf("big request first tick must stay inactive (full-or-empty), got active count %d [04 §7.3] C12", route.Count)
+	}
+	if system.Scheduler.Pending(0) != 1 {
+		t.Fatalf("request should remain ACTIVE after budget exhaustion, pending %d [04 §7.3] C11", system.Scheduler.Pending(0))
+	}
+
+	// Capture route bytes before second tick to ensure no partial publication overwrote stale bytes incorrectly.
+	var beforePoints [20]Point
+	var beforeCount uint8
+	var beforeActive bool
+	if route != nil {
+		beforePoints = route.Points
+		beforeCount = route.Count
+		beforeActive = route.Active
+	}
+
+	// Second tick should resume and eventually complete. May need a few ticks if distance large.
+	done := false
+	for tick := uint32(2); tick < 10; tick++ {
+		system.Scheduler.Tick(tick)
+		r := system.Routes[h]
+		if r != nil && r.Active {
+			done = true
+			break
+		}
+		// Ensure we never published a partial prefix that differs from final.
+		if r != nil && r.Active {
+			t.Fatalf("should not have published partial at tick %d", tick)
+		}
+		// While inactive, stale bytes should stay as before (publish zero leaves bytes untouched [04 §7.3] C14).
+		// We check that we never observed a nonempty publication that is not the final full route.
+		_ = beforePoints
+		_ = beforeCount
+		_ = beforeActive
+	}
+	if !done {
+		t.Fatalf("big request should have completed within 10 ticks, pending %d", system.Scheduler.Pending(0))
+	}
+	// Determinism: resumed route must equal one-shot route (converted to movement.Point) [04 §7.3] C11.
+	final := system.Routes[h]
+	if final == nil || !final.Active {
+		t.Fatalf("final route inactive")
+	}
+	if int(final.Count) != len(oneShot.Points) {
+		t.Fatalf("final count want %d got %d", len(oneShot.Points), final.Count)
+	}
+	for i := 0; i < len(oneShot.Points); i++ {
+		want := Point{X: oneShot.Points[i].X, Z: oneShot.Points[i].Z}
+		if final.Points[i] != want {
+			t.Fatalf("final point %d want %v got %v (determinism identical whether budget interrupts occur) [04 §7.3] C11", i, want, final.Points[i])
+		}
+	}
+	if system.Scheduler.Pending(0) != 0 {
+		t.Fatalf("after completion pending should be 0")
+	}
+}

@@ -6,8 +6,8 @@ package path
 // cell coordinates plus the profile's half-footprint bias [04 §7.1] C1.
 // Neighbor visit order north, northwest, west, southwest, south, southeast,
 // east, northeast [04 §7.1] C2. First expansion attempts nine entries (all eight
-// plus one harmless duplicate) [04 §7.1] C2; later expansions use a directed
-// five-entry fan centered on parent travel direction [04 §7.1] C2.
+// plus one harmless duplicate); later expansions use a directed five-entry
+// fan centered on the parent travel direction [04 §7.1] C2.
 // Diagonal steps check ONLY the destination cell [04 §7.1] C3.
 // Costs: cardinal 16, diagonal 22 [04 §7.2] C4; turn penalties
 // 0,40,60,80,100,80,60,40 by directional difference [04 §7.2] C4; initial
@@ -341,21 +341,56 @@ type SearchResult struct {
 	Seeded   bool    // whether A* was seeded (false for early exits without seeding) [04 §7.2] C10
 }
 
-// Search runs weighted A* per [04 §7.1][04 §7.2][04 §7.3] C1-C4,C6,C7,C9,C10.
-// Passability comes in as injected func [04 §7.1]; OOB is impassable [04 §7.1] C10.
-// hScaled uses full signed 64-bit product + arithmetic shift, no float [04 §7.2] C6.
-// Early exits are checked IN ORDER [04 §7.2] C10.
-// Arrival tolerance threshold is write-once via rayWalk never updated [04 §7.2] C9.
-// Reconstruction uses 64-entry ring at index&63 each time direction changes [04 §7.3] C13.
-func Search(cfg SearchConfig) SearchResult {
+// Session is the resumable search continuation [04 §7.3] C11 C12.
+// It retains the heap, node store, write-once tolerance slot, and goal flags across calls
+// so a search can stop after exactly N pops with heap+request state retained and resume later
+// [04 §7.3] "Budget exhaustion leaves the heap and request active — it does not publish the best partial prefix".
+// The one-shot Search wrapper delegates to a Session with an effectively infinite budget so
+// existing callers and tests keep working with identical results.
+type Session struct {
+	cfg SearchConfig
+	// TODO(question): does retail re-weight hScaled with the refreshed 150-tick quantum on resumption, or keep the request's original scale? Keeping initial preserves determinism across budget interruptions. [04 §7.2]
+	scale        int32
+	goalSet      map[Cell]struct{}
+	tolerance    int32
+	hasTolerance bool
+	notified     Status
+	seeded       bool
+	done         bool
+	resultPoints []Point
+	resultStatus Status
+	popped       int
+	ns           *NodeStore
+	heap         Heap
+	goalFlag     map[NodeID]bool
+}
+
+// NewSession creates a resumable search session [04 §7.1][04 §7.2][04 §7.3] C11 C12.
+// Initialization runs the same early-exit and ray-walk logic as the one-shot Search,
+// including the write-once tolerance slot that is never updated [04 §7.2] C9.
+func NewSession(cfg SearchConfig) *Session {
+	s := &Session{cfg: cfg}
 	scale := cfg.Scale
 	if scale == 0 {
-		scale = 65536 // 1.0 [04 §7.2] C6 default
+		scale = 65536
 	}
+	s.scale = scale
+	s.cfg.Scale = scale
+	s.init()
+	return s
+}
+
+// init performs the pre-seed phases: enumeration, early exits, ray walk, and heap seeding [04 §7.2] C9 C10.
+func (s *Session) init() {
+	cfg := s.cfg
+	scale := s.scale
 	if cfg.Goal == nil {
-		return SearchResult{Status: StatusRejected, Notified: StatusRejected, Seeded: false}
+		s.done = true
+		s.resultStatus = StatusRejected
+		s.notified = StatusRejected
+		s.seeded = false
+		return
 	}
-	// Enumerate goals, bounds-check, track nearest for ray [04 §7.2] C9, [04 §7.4]
 	enumCells := cfg.Goal.Enumerate(nil)
 	filtered := make([]Cell, 0, len(enumCells))
 	var nearestGoal Cell
@@ -363,10 +398,9 @@ func Search(cfg SearchConfig) SearchResult {
 	var nearestDist int64
 	for _, c := range enumCells {
 		if cfg.HasBounds && !InBounds(c, cfg.Bounds) {
-			continue // bounds-checked [04 §7.2] C9
+			continue
 		}
 		filtered = append(filtered, c)
-		// track nearest by squared distance [04 §7.2] C9
 		dx := int64(c.X) - int64(cfg.Start.X)
 		dz := int64(c.Z) - int64(cfg.Start.Z)
 		dist := dx*dx + dz*dz
@@ -376,81 +410,109 @@ func Search(cfg SearchConfig) SearchResult {
 			hasNearest = true
 		}
 	}
-	// goalCells set for direct marking [04 §7.2] C9
 	goalSet := make(map[Cell]struct{}, len(filtered))
 	for _, c := range filtered {
 		goalSet[c] = struct{}{}
 	}
+	s.goalSet = goalSet
 
-	// C10 early exit 1: start satisfies goal nonzero -> publish empty 0x100 [04 §7.2] C10
 	if cfg.Goal.StartSatisfied(cfg.Start) {
-		return SearchResult{Points: nil, Status: StatusAlreadySatisfied, Notified: StatusAlreadySatisfied, Seeded: false, Popped: 0}
+		s.done = true
+		s.resultStatus = StatusAlreadySatisfied
+		s.notified = StatusAlreadySatisfied
+		s.seeded = false
+		s.resultPoints = nil
+		return
 	}
-	// C10 early exit 2: OOB start -> notify 0x200 publish empty [04 §7.2] C10
 	if cfg.HasBounds && !InBounds(cfg.Start, cfg.Bounds) {
-		return SearchResult{Points: nil, Status: StatusRejected, Notified: StatusRejected, Seeded: false}
+		s.done = true
+		s.resultStatus = StatusRejected
+		s.notified = StatusRejected
+		s.seeded = false
+		return
 	}
-	// If start passable check fails but not OOB, we don't early exit; search will exhaust.
-
-	// Compute ray walk for tolerance and early exits 3 & 4 [04 §7.2] C9, C10
 	var tolerance int32
 	hasTolerance := false
-	var rayConnects bool
 	var notified Status
-	// Only if we have a nearest goal to walk toward; otherwise no tolerance
 	if hasNearest {
 		best, connects, hasBest := rayWalk(cfg.Start, nearestGoal, cfg.IsPassable, cfg.HasBounds, cfg.Bounds, cfg.Goal, scale)
 		if hasBest {
 			tolerance = best
-			hasTolerance = true // write-once slot never updated [04 §7.2] C9
+			hasTolerance = true
 		}
-		rayConnects = connects
 		if connects {
-			// ray connects start to goal notifies 0x100 but seed and run anyway [04 §7.2] C10
 			notified = StatusAlreadySatisfied
 		}
-		// Early exit 4: ray best scaled h >= start cell's own scaled h -> notify 0x200 WITHOUT seeding [04 §7.2] C10
 		startH := cfg.Goal.H(cfg.Start)
-		startScaled := ScaledHeuristic(startH, scale) // [04 §7.2] C6
+		startScaled := ScaledHeuristic(startH, scale)
 		if hasBest && best >= startScaled {
-			return SearchResult{Points: nil, Status: StatusRejected, Notified: StatusRejected, Seeded: false, Popped: 0}
+			s.done = true
+			s.resultStatus = StatusRejected
+			s.notified = StatusRejected
+			s.seeded = false
+			return
 		}
-		// Note: if rayConnects we keep notified but still seed
+		s.tolerance = tolerance
+		s.hasTolerance = hasTolerance
+		s.notified = notified
 	}
-
-	// Seed heap and store
-	ns := NewNodeStore(scale) // [04 §7.2] C6 scale stored, C7 write-once h
+	ns := NewNodeStore(scale)
 	var heap Heap
 	goalFlag := make(map[NodeID]bool)
-
-	// Allocate start node [04 §7.2] C7
 	startID := ns.Ensure(cfg.Start, 0, invalidNodeID, DirNone, cfg.Goal)
 	ns.SetOpen(startID, true)
 	heap.Push(startID, ns.Get(startID).F)
+	s.ns = ns
+	s.heap = heap
+	s.goalFlag = goalFlag
+	s.seeded = true
+	s.done = false
+	s.popped = 0
+}
 
-	// If start cell enumerated as goal (should have been caught by StartSatisfied for point etc, but saved goals have null predicate)
-	// Check tolerance for start itself? Not needed per spec: tolerance applies to opened neighbors, not start.
+// Resume advances the search by up to budget heap pops [04 §7.3] C11 C12.
+// If budget exhaustion stops the search mid-way, it returns done=false with heap+request state retained
+// and no publication [04 §7.3] C12. When the search completes (goal reached + reconstructed or heap exhausted /
+// rejected) it returns done=true with either points (goal reached) or empty (heap exhausted) [04 §7.3] C12.
+// The write-once tolerance slot, node store, and goal flags persist across resumes [04 §7.2] C9 C7.
+func (s *Session) Resume(budget int) ([]Point, Status, bool) {
+	if s.done {
+		return s.resultPoints, s.resultStatus, true
+	}
+	if !s.seeded {
+		s.done = true
+		s.resultStatus = StatusRejected
+		s.resultPoints = nil
+		return s.resultPoints, s.resultStatus, true
+	}
+	if budget <= 0 {
+		return nil, 0, false
+	}
+	cfg := s.cfg
+	scale := s.scale
+	ns := s.ns
+	heap := &s.heap
+	goalSet := s.goalSet
+	goalFlag := s.goalFlag
+	tolerance := s.tolerance
+	hasTolerance := s.hasTolerance
+	notified := s.notified
 
-	popped := 0
-
-	// Helper to check if cell is goal via enumeration direct marking
 	isEnumeratedGoal := func(c Cell) bool {
 		_, ok := goalSet[c]
 		return ok
 	}
 
-	for heap.Len() > 0 {
+	startPopped := s.popped
+	for heap.Len() > 0 && s.popped-startPopped < budget {
 		id, f, ok := heap.Pop()
 		if !ok {
 			break
 		}
 		node := ns.Get(id)
-		// Stale check: heap entry f may not match current node F after relaxation via Fix? But Fix updates heap entry in place, so should match. For duplicate push strategy stale would be filtered.
-		// Also skip if already closed
 		if node.Closed {
 			continue
 		}
-		// Lazy staleness: if f != node.F, skip (duplicate entry)
 		if f != node.F {
 			continue
 		}
@@ -459,41 +521,34 @@ func Search(cfg SearchConfig) SearchResult {
 		}
 		ns.SetOpen(id, false)
 		ns.SetClosed(id, true)
-		popped++
+		s.popped++
 
-		// Goal termination: popping a node with open-plus-goal status terminates [04 §7.2] C9
 		if goalFlag[id] {
 			pts := reconstructRoute(cfg.Start, node.Cell, ns, cfg.Bias)
-			// Preserve notified from ray walk if any; status success is 0
-			return SearchResult{Points: pts, Status: 0, Notified: notified, Popped: popped, Seeded: true}
+			s.done = true
+			s.resultPoints = pts
+			s.resultStatus = 0
+			return s.resultPoints, s.resultStatus, true
 		}
-		// Also if node's cell is enumerated goal cell, terminate even without tolerance (additional marking) [04 §7.2] C9
 		if isEnumeratedGoal(node.Cell) {
 			pts := reconstructRoute(cfg.Start, node.Cell, ns, cfg.Bias)
-			return SearchResult{Points: pts, Status: 0, Notified: notified, Popped: popped, Seeded: true}
+			s.done = true
+			s.resultPoints = pts
+			s.resultStatus = 0
+			return s.resultPoints, s.resultStatus, true
 		}
 
-		// Expand neighbors
-		isFirst := popped == 1 // first expansion is start [04 §7.1] C2
-		var neighCells []Cell
-		var neighDirs []uint8
-		neighCells, neighDirs = NeighborsForDir(node.Cell, node.Dir, isFirst)
-
+		isFirst := s.popped == 1
+		neighCells, neighDirs := NeighborsForDir(node.Cell, node.Dir, isFirst)
 		for idx, nCell := range neighCells {
 			dir := neighDirs[idx]
-			// C3 diagonal checks ONLY destination [04 §7.1] C3
 			if !isPassableWithBounds(nCell, cfg.IsPassable, cfg.HasBounds, cfg.Bounds) {
 				continue
 			}
-
-			// Compute costs [04 §7.2] C4
-			step := StepCost(dir)              // [04 §7.2] 16/22
-			turn := TurnPenalty(node.Dir, dir) // [04 §7.2] table
+			step := StepCost(dir)
+			turn := TurnPenalty(node.Dir, dir)
 			initial := int32(0)
-			if heap.Len() <= 1 { // while heap holds at most one entry [04 §7.2] C4
-				// heap len is remaining open nodes after popping cur
-				// For first expansion heap is 0, so this triggers; later heap >1
-				// This matches "while heap holds at most one entry (the start expansion)"
+			if heap.Len() <= 1 {
 				initial = InitialPenalty
 			}
 			short := int32(0)
@@ -504,16 +559,12 @@ func Search(cfg SearchConfig) SearchResult {
 			}
 			gNew := node.G + step + turn + initial + short
 
-			// Check if neighbor already allocated
 			if nid, exists := ns.Find(nCell); exists {
-				// Try relax: only if newG strictly less [04 §7.2] C5
 				if gNew < ns.Get(nid).G {
 					if ns.TryRelax(nid, gNew, id, dir) {
-						// Adjust heap via Fix if open, else reopen
 						if ns.IsOpen(nid) {
 							heap.Fix(nid, ns.Get(nid).F)
 						} else if ns.IsClosed(nid) {
-							// Reopen closed node [04 §7.2] C5? Not explicit, but allow to re-open if better path found
 							ns.SetClosed(nid, false)
 							ns.SetOpen(nid, true)
 							heap.Push(nid, ns.Get(nid).F)
@@ -521,36 +572,76 @@ func Search(cfg SearchConfig) SearchResult {
 							heap.Push(nid, ns.Get(nid).F)
 							ns.SetOpen(nid, true)
 						}
-						// goal status may need re-evaluation? h unchanged, tolerance same
 					}
 				}
 				continue
 			}
-			// New node allocation with write-once h [04 §7.2] C7
 			newID := ns.Ensure(nCell, gNew, id, dir, cfg.Goal)
 			ns.SetOpen(newID, true)
 			heap.Push(newID, ns.Get(newID).F)
 
-			// Determine open-plus-goal status via tolerance [04 §7.2] C9
 			h := ns.Get(newID).H
-			hs := ScaledHeuristic(h, scale) // [04 §7.2] C6
+			hs := ScaledHeuristic(h, scale)
 			if hasTolerance && hs <= tolerance {
-				goalFlag[newID] = true // write-once per node? Never updated again per spec: slot never updated; per-node goal flag is also write-once
+				goalFlag[newID] = true
 			}
 			if isEnumeratedGoal(nCell) {
-				goalFlag[newID] = true // directly marked [04 §7.2] C9
+				goalFlag[newID] = true
 			}
-			_ = rayConnects
 		}
 	}
 
-	// Heap exhaustion publishes empty route [04 §7.3] C12
-	// If we reached here, no goal popped. Return empty with rejected status.
-	// Preserve notified from earlier ray if any.
-	if notified != 0 {
-		return SearchResult{Points: nil, Status: StatusRejected, Notified: notified, Popped: popped, Seeded: true}
+	if s.done {
+		return s.resultPoints, s.resultStatus, true
 	}
-	return SearchResult{Points: nil, Status: StatusRejected, Notified: 0, Popped: popped, Seeded: true}
+	if heap.Len() == 0 {
+		s.done = true
+		s.resultPoints = nil
+		s.resultStatus = StatusRejected
+		if notified != 0 {
+			return s.resultPoints, notified, true
+		}
+		return s.resultPoints, s.resultStatus, true
+	}
+	return nil, 0, false
+}
+
+// Config returns the search configuration (copy) for request-matching.
+func (s *Session) Config() SearchConfig { return s.cfg }
+
+// Start returns the session start cell.
+func (s *Session) Start() Cell { return s.cfg.Start }
+
+// Goal returns the session goal.
+func (s *Session) Goal() Goal { return s.cfg.Goal }
+
+// Popped returns total heap pops performed so far.
+func (s *Session) Popped() int { return s.popped }
+
+// Notified returns the early ray notification status if any.
+func (s *Session) Notified() Status { return s.notified }
+
+// Seeded reports whether the A* was seeded.
+func (s *Session) Seeded() bool { return s.seeded }
+
+// IsDone reports whether the session has completed.
+func (s *Session) IsDone() bool { return s.done }
+
+// Search runs weighted A* per [04 §7.1][04 §7.2][04 §7.3] C1-C4,C6,C7,C9,C10.
+// Passability comes in as injected func [04 §7.1]; OOB is impassable [04 §7.1] C10.
+// hScaled uses full signed 64-bit product + arithmetic shift, no float [04 §7.2] C6.
+// Early exits are checked IN ORDER [04 §7.2] C10.
+// Arrival tolerance threshold is write-once via rayWalk never updated [04 §7.2] C9.
+// Reconstruction uses 64-entry ring at index&63 each time direction changes [04 §7.3] C13.
+// This one-shot entry point is a wrapper over the resumable Session so all current
+// callers/tests keep working with identical results [04 §7.3] C11 C12.
+func Search(cfg SearchConfig) SearchResult {
+	sess := NewSession(cfg)
+	if sess.done {
+		return SearchResult{Points: sess.resultPoints, Status: sess.resultStatus, Notified: sess.notified, Popped: sess.popped, Seeded: sess.seeded}
+	}
+	points, status, _ := sess.Resume(1 << 30)
+	return SearchResult{Points: points, Status: status, Notified: sess.notified, Popped: sess.popped, Seeded: sess.seeded}
 }
 
 // reconstructRoute walks predecessor chain producing []Point per [04 §7.3] C13 ring semantics locally.

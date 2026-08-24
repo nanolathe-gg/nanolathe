@@ -44,6 +44,7 @@ type System struct {
 	Steers     map[pool.Handle]*SteerState
 	Collisions map[pool.Handle]*CollisionState
 	Flights    map[pool.Handle]*FlightState
+	sessions   []*path.Session // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
 }
 
 // NewSystem creates a System bound to terrain/profile/grid. It allocates the per-unit
@@ -206,48 +207,66 @@ func (s *System) SubmitMove(handle pool.Handle, player uint8, start, goal path.C
 }
 
 // searchFunc is the injected SearchFunc bound to path.Search with profile passability
-// over System.Terrain and occupancy. It ignores budget for the gate-2 demo (path
-// completes within 100 pops) but respects the signature [04 §7.3] C11.
+// over System.Terrain and occupancy. It honors the 100-pops-per-request-per-call
+// budget and full-or-empty publication [04 §7.3] C11 C12 via a resumable Session
+// per unit held in deterministic slice storage indexed by handle [I1].
 func (s *System) searchFunc(r path.Request, scale int32, budget int) ([]path.Point, path.Status, bool) {
 	if s == nil {
 		return nil, path.StatusRejected, true
 	}
-	isPassable := func(c path.Cell) bool {
-		// Terrain profile passability [04 §6.1]
-		if s.Terrain != nil {
-			if !s.Profile.IsPassable(s.Terrain, c.X, c.Z) {
-				return false
-			}
+	idx := int(r.Unit)
+	// Grow sessions slice to cover handle deterministically [I1].
+	if idx >= len(s.sessions) {
+		need := idx + 1
+		if cap(s.sessions) < need {
+			ns := make([]*path.Session, need)
+			copy(ns, s.sessions)
+			s.sessions = ns
+		} else {
+			s.sessions = s.sessions[:need]
 		}
-		// Occupancy
-		if s.Grid != nil {
-			mc := Cell{X: c.X, Z: c.Z}
-			if occ, ok := s.Grid.OccupantAt(mc); ok && occ != int(r.Unit) {
-				return false
+	}
+	sess := s.sessions[idx]
+	needsNew := sess == nil || sess.Start() != r.Start || sess.Goal() != r.Goal
+	if needsNew {
+		isPassable := func(c path.Cell) bool {
+			if s.Terrain != nil {
+				if !s.Profile.IsPassable(s.Terrain, c.X, c.Z) {
+					return false
+				}
 			}
+			if s.Grid != nil {
+				mc := Cell{X: c.X, Z: c.Z}
+				if occ, ok := s.Grid.OccupantAt(mc); ok && occ != int(r.Unit) {
+					return false
+				}
+			}
+			return true
 		}
-		return true
+		bias := path.Point{X: int32(s.Profile.FootPrintX / 2), Z: int32(s.Profile.FootPrintZ / 2)}
+		var hasBounds bool
+		var bounds path.Rect
+		if s.Terrain != nil && s.Terrain.CellW > 0 && s.Terrain.CellH > 0 {
+			hasBounds = true
+			bounds = path.Rect{Min: path.Cell{X: 0, Z: 0}, Max: path.Cell{X: s.Terrain.CellW - 1, Z: s.Terrain.CellH - 1}}
+		}
+		cfg := path.SearchConfig{
+			Start:      r.Start,
+			Goal:       r.Goal,
+			IsPassable: isPassable,
+			Scale:      scale,
+			Bias:       bias,
+			HasBounds:  hasBounds,
+			Bounds:     bounds,
+		}
+		sess = path.NewSession(cfg)
+		s.sessions[idx] = sess
 	}
-	bias := path.Point{X: int32(s.Profile.FootPrintX / 2), Z: int32(s.Profile.FootPrintZ / 2)}
-	// HasBounds true with terrain extent [04 §7.1] C10 OOB impassable
-	var hasBounds bool
-	var bounds path.Rect
-	if s.Terrain != nil && s.Terrain.CellW > 0 && s.Terrain.CellH > 0 {
-		hasBounds = true
-		bounds = path.Rect{Min: path.Cell{X: 0, Z: 0}, Max: path.Cell{X: s.Terrain.CellW - 1, Z: s.Terrain.CellH - 1}}
+	points, status, done := sess.Resume(budget) // [04 §7.3] C11 budget, C12 full-or-empty
+	if done {
+		s.sessions[idx] = nil
 	}
-	cfg := path.SearchConfig{
-		Start:      r.Start,
-		Goal:       r.Goal,
-		IsPassable: isPassable,
-		Scale:      scale,
-		Bias:       bias,
-		HasBounds:  hasBounds,
-		Bounds:     bounds,
-	}
-	res := path.Search(cfg)
-	_ = budget // gate-2 demo ignores budget; search completes within 100 pops for small map
-	return res.Points, res.Status, true
+	return points, status, done
 }
 
 // publishFunc stores the published points into the per-unit Route via Route.Publish
