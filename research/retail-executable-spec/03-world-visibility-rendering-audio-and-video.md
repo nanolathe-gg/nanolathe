@@ -261,6 +261,41 @@ the radius quantizes by signed division by 32 **without** the -5 offset and
 clamps into the parsed LOS.TDF table range. Both paths write the same word
 mask; bit 2 only changes which shape is ORed in.
 
+**The sight-shape table is an authored GAF resource.** The sprite-mask shapes
+are not synthesized: the engine holds a handle to a visibility-mask GAF and
+indexes it by the quantized value. The resource ships as `anims/vismask.gaf`
+and `anims/vismasks.gaf` — one entry named `vismask`, ten frames, sides 11, 13,
+15 … 29 with the anchor at the frame centre. A frame's opaque (non-transparent)
+pixels are the covered tiles; its width, height, anchor offsets and transparent
+palette index are the shape fields named above.
+
+**The -5 is an index bias, not a radius reduction.** Shape *k* has radius
+`k + 5` tiles, so the subtraction that selects the frame is undone by the frame
+geometry: a unit whose `sightdistance` quantizes to index *k* covers `k + 5`
+tiles, i.e. `floor(radius / 32)` tiles. Reading the index as the radius shrinks
+every unit's sight by five tiles. The clamp is into `0 .. ns-1` where `ns` is the
+shape count carried by the resource, and radii below the first shape clamp up to
+index 0 rather than publishing nothing.
+
+The terrain-ray group index is the unbiased `radius / 32` clamped into
+`0 .. ns-1` over the parsed LOS.TDF tables, and the spokes walked for that group
+are that table's authored line list — line counts grow with the table index
+(a radius-9 table carries fourteen lines, radius-10 sixteen). Neither raster
+uses a synthesized circle or a fixed spoke set.
+
+Residual: which of the two shipped GAFs the engine binds is not established.
+They have identical frame geometry and different opacity — `vismask.gaf`'s
+frames are circular (frame 0 has 89 of 121 pixels opaque), `vismasks.gaf`'s are
+solid squares (121 of 121). The handle name matches the plural spelling, which
+is suggestive and not conclusive. Reproduce whichever is chosen behind a single
+named constant so a probe can flip it.
+
+**The per-player byte grid's increment has no upper clamp.** It is a plain
+byte increment with no comparison against 255, so a cell covered by 256
+simultaneous observers wraps to zero and reads as fogged. The decrement is the
+matching plain decrement; the word mask is never decremented and is instead
+reset and rebuilt.
+
 Sprite-mask publication clips start-inclusive/end-exclusive: right/bottom
 ends clip to the half-resolution grid bounds, negative left/top origins skip
 to `max(0, -origin)`, every bounds compare is unsigned so signed underflow
@@ -318,15 +353,41 @@ not a raw pixel grid. Evaluation order:
    the unit’s 32-bit runtime status field carries the underwater-exemption bit
    (mask 0x200), a base height below sea level returns not-visible. Because
    the sensor phase’s friendly marking sets that same bit on owned and allied
-   units (section 3.4), those units are implicitly exempt.
+   units (section 3.4), those units are implicitly exempt. **Sea level here is
+   the map header byte scaled to world units — the same `byte × 65,536`
+   comparison as section 2.2, not a comparison against zero.**
 4. Each sample projects with the half-height shear (`v = (Z - (Y >> 1)) >> 5`,
    `u = X >> 5`, pixel components) and unsigned bounds against the queried
    record’s grid dimensions; the mode-selected source is that record’s
    current-coverage byte grid (any nonzero byte visible) or, otherwise, the
    word grid tested at the LOCAL player’s bit.
+
+   **"Pixel components" is load-bearing.** Each 16.16 world coordinate is
+   first narrowed to its signed 16-bit high word — the map-pixel component —
+   and the shift by five is applied to *that*. Shifting the 16.16 value
+   directly is wrong by a factor of 65,536, and the narrowing to a signed
+   16-bit quantity is itself part of the contract: coordinates beyond ±32,768
+   map pixels wrap rather than saturate.
 5. Hull diamond: center, then east (definition X extent added), then north
    (definition Z extent added, half-height subtracted from the height), then
    west (X extent subtracted again). Any admitted sample returns visible.
+
+   **The four samples accumulate; they are not independent offsets from the
+   center.** One coordinate triple is carried through all four tests and each
+   step mutates it, which is why step four subtracts the X extent "again":
+
+   | sample | X | Y | Z |
+   |---|---|---|---|
+   | 0 center | `X` | `Y` | `Z` |
+   | 1 east | `X + ex` | `Y` | `Z` |
+   | 2 north | `X + ex` | `Y - ey` | `Z + ez` |
+   | 3 west | `X` | `Y - ey` | `Z + ez` |
+
+   The height decrement `ey` is its own definition field, distinct from the Z
+   extent `ez`; the two are not the same value and neither is half of the
+   unit's height. The resulting quadrilateral is a rectangle in projected
+   space, not a diamond centered on the base point — the historical "hull
+   diamond" label describes the sampling order, not the figure.
 
 The remaining consumers apply equivalent tests rather than calling this gate:
 weapon placement/order validation inlines a word-grid-first reject plus the

@@ -1,0 +1,111 @@
+[GADGET0]
+{
+    [COMMON]
+    {
+        id=0; name=TestPanel; xpos=0; ypos=0; width=640; height=480; active=1;
+    }
+    totalgadgets=12;
+    panel=MyPanel;
+    crdefault=OK;
+    escdefault=CANCEL;
+    defaultfocus=MYBUTTON;
+    [VERSION]
+    {
+        major=1; minor=0; revision=0;
+    }
+}
+[GADGET1]
+{
+    [COMMON]
+    {
+        id=1; name=MYBUTTON; xpos=10; ypos=10; width=100; height=20; active=1; attribs=0;
+    }
+    status=0; text=On|Off|Auto; quickkey=83; grayedout=0; stages=3;
+}
+[GADGET2]
+{
+    [COMMON]
+    {
+        id=2; name=MYLIST; xpos=10; ypos=40; width=200; height=100; active=1; assoc=5;
+    }
+    itemheight=14; range=20; knobpos=0; knobsize=5;
+}
+[GADGET3]
+{
+    [COMMON]
+    {
+        id=3; name=MYTEXTINPUT_WITH_VERY_LONG_NAME_THAT_SHOULD_BE_TRUNCATED_AT_127_BYTES_BECAUSE_RETAIL_CAPS_IT_AND_WE_MUST_HONOR_THE_CAP_SO_THIS_STRING_IS_INTENTIONALLY_MADE_LONG_TO_EXCEED_127_BYTES_LIMIT_XYZ1234567890_EXTRA_PADDING_TO_EXCEED; xpos=10; ypos=150; width=180; height=20; active=1;
+    }
+    maxchars=200; text=hello;
+}
+[GADGET4]
+{
+    [COMMON]
+    {
+        id=4; name=MYSCROLL; xpos=210; ypos=40; width=16; height=100; active=1; assoc=5; attribs=2;
+    }
+    range=99; knobpos=5; knobsize=99; thick=8; text=scroll;
+}
+[GADGET5]
+{
+    [COMMON]
+    {
+        id=5; name=MYLABEL; xpos=10; ypos=180; width=120; height=16; active=1;
+    }
+    text=LabelText; link=MYBUTTON;
+}
+[GADGET6]
+{
+    [COMMON]
+    {
+        id=6; name=MYSURFACE; xpos=10; ypos=200; width=100; height=100; active=1;
+    }
+    hotornot=1;
+}
+[GADGET7]
+{
+    [COMMON]
+    {
+        id=7; name=MYFONT; xpos=0; ypos=0; width=0; height=0; active=1;
+    }
+    filename=SMLFONT;
+}
+[GADGET8]
+{
+    [COMMON]
+    {
+        id=8; name=MYSLIDER; xpos=-1; ypos=320; width=200; height=16; active=1; assoc=6;
+    }
+    range=10; knobpos=2; knobsize=4; thick=4;
+}
+[GADGET9]
+{
+    [COMMON]
+    {
+        id=9; name=MYTEXT; xpos=10; ypos=340; width=200; height=20; active=1;
+    }
+    text=Some text case;
+}
+[GADGET10]
+{
+    [COMMON]
+    {
+        id=10; name=ZEROING; xpos=10; ypos=360; width=50; height=10; active=1;
+    }
+    text=should be zeroed; link=MYBUTTON; filename=ignored;
+}
+[GADGET11]
+{
+    [COMMON]
+    {
+        id=11; name=EMBED1; xpos=10; ypos=380; width=60; height=20; active=1;
+    }
+    filename=embed1.dat; text=embed1;
+}
+[GADGET12]
+{
+    [COMMON]
+    {
+        id=12; name=MYPICTURE; xpos=-2; ypos=400; width=80; height=60; active=1;
+    }
+}

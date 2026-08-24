@@ -10,11 +10,15 @@ func TestTwoStageAdmissionIndependent(t *testing.T) {
 	var svc Service
 	svc.Players[0].Stock[Metal] = 10
 	svc.Players[0].Stock[Energy] = 100
+	// Capacity above the closing stock so the post-settlement clamp is a no-op
+	// and this fixture keeps asserting the ratios, not the clamp [C10].
+	svc.Players[0].Capacity[Metal] = 1000
+	svc.Players[0].Capacity[Energy] = 1000
 	svc.Players[0].Mirror[Metal].Carry = 20
 	svc.Players[0].Mirror[Energy].Carry = 20
 	svc.Players[0].Mirror[Metal].Accepted = 0
 	svc.Players[0].Mirror[Energy].Accepted = 0
-	svc.Settle(0, 0)
+	svc.Settle(0, 0, nil)
 	if svc.Players[0].Stock[Metal] != 0 {
 		t.Fatalf("independent Metal stock %v want 0 (pool 10 debt 20 ratio 0.5)", svc.Players[0].Stock[Metal])
 	}

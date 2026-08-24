@@ -148,6 +148,13 @@ A unit placement record can contain:
 - initial mission string.
 
 The executable parses these fields into fixed records before unit creation.
+A complete reader census over the runtime unit record closes the parsed-only
+list above: `MissionCriticalUnit`, `AiIgnore`, `AiPriorityTarget`,
+`InitialGroup`, `BuildPriority` and the delayed-creation countdown have no
+reader anywhere in the image. The immunity high bit *is* transferred to a
+runtime status bit on the created unit — and that bit likewise has no reader,
+so the single consumed flag is itself inert in this executable. Retain all of
+them verbatim for save fidelity and diagnostics; act on none of them.
 `UseOnlyUnits` is not inert: it is read at OTA load and routed through the
 resource resolver into the campaign `camps\useonly` area — path-building
 evidence that it feeds the campaign restricted-units mechanism.
@@ -499,15 +506,55 @@ Completion sets the trigger's completed flag and raises the localized
 "Victory Condition" notification (message/sound presentation; the exact
 medium is not decomposed).
 
-Record shapes, the eighteen-entry vtable map, and these evaluator bodies are
-established. Residual: the tick site that iterates the victory and defeat
-arrays calling each checker was never decompiled (the dispatch pattern is
-inferred from vtable layout), and the timer evaluators' comparison bodies
-beyond the seconds×30 conversion remain undecoded.
+**The tick site.** The victory and defeat queues are polled from the per-player
+phase, in the LOCAL player's slice only, on that slot's own once-per-30-tick
+cadence (the same next-due-plus-30 shape the economy settlement deadline uses),
+and only when the mission type is 1. Skirmish and multiplayer sessions do not
+poll these queues at all.
 
-Short-circuit rules, ordering when multiple conditions fire, team/alliance
-semantics, and the exact victory/defeat transition sequence are not yet
-completely closed.
+**Combination and precedence are fixed.** The victory queue is an **AND** across
+its members — every victory trigger must report complete. The defeat queue is an
+**OR** — any single defeat trigger ends the mission. **Victory is evaluated
+first**, so a tick on which both would fire resolves as a victory. Completion
+arms a shared end-of-mission countdown at four, which then decrements roughly
+once per second before the end-latch word is written; the latch distinguishes
+"ending", "won" and "lost" as separate bits, and the lose path clears the win
+bit it would otherwise share.
+
+**Owner gating differs per kind and is not an alliance test.** Each trigger
+carries an inner match object used by the poll-time scans (the ones that walk
+live units: build-type, boundary crossings, all-units-killed, move-to-radius).
+The owner byte compared is the unit's player index. Victory conditions gate on
+the enemy owner index; `CommanderKilled` gates on the local one;
+`UnitTypeKilled` and `AllUnitsKilledOfType` accept any owner. The commander
+identity used by `KillEnemyCommander` and `CommanderKilled` comes from the
+SIDEDATA commander-name table, not from a unit flag.
+
+**The `DestroyAllUnits` quirk is a contract.** Its body reads a counter whose
+only reference in the whole image is that read — nothing ever writes it, so it
+holds its initial zero and the condition is **satisfied from the first poll**.
+Shipped campaign missions rely on this: at least one uses `DestroyAllUnits` as
+an AND-term beside a real `BuildUnitType` condition, where a genuinely
+evaluated destroy-all would never let the mission complete. Reproduce the quirk;
+do not "fix" it into a live unit scan.
+
+**Timer storage.** Timer triggers store `seconds × 30` as an absolute tick
+deadline and compare the authoritative tick count against it.
+
+**Architecture.** Triggers are vtable objects, not type-byte structs. Each
+carries six slots: a poll, a unit-died notification, a capture/transfer
+notification, a created notification (present but unused by any shipped
+condition), and save/load. The poll is the only one the tick site calls; the
+notification slots are driven by the corresponding gameplay events. A poll must
+therefore not consume tick events as if they were kills — the countdown in
+`KillUnitType` advances from the unit-died notification, never from the passage
+of time.
+
+Record shapes, the eighteen-entry vtable map, these evaluator bodies, the tick
+site, and the combination rules are established. Residual: the timer evaluators'
+comparison bodies beyond the seconds×30 conversion remain undecoded, and the
+exact presentation sequence between latch write and session teardown is not
+decomposed.
 
 ## Skirmish configuration
 

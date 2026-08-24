@@ -219,6 +219,39 @@ executable evidence.
 
 ---
 
+## SC9 — `LOS.TDF` declares nine tables and supplies twelve
+
+**Spec** `[03 §3.2]` clamps the terrain-ray group index "into the parsed
+LOS.TDF table range" without saying which count defines that range.
+
+**Observed** in the reference install: `gamedata/los.tdf` has
+`[TABLEINFO] { numtables=9 }` and then `[TABLE1]` through `[TABLE12]` — three
+more sections than it declares. Reproduce with:
+
+```
+go test ./internal/content -run TestCompileLOSTables -v
+```
+
+which asserts both numbers against the install.
+
+**Decision:** the clamp uses the **declared** `numtables`, not the discovered
+section count. The declared value is what the engine's table object reports,
+and the three undeclared tables are unreachable authoring residue — the largest
+declared table already saturates every stock `sightdistance` (the biggest,
+450, quantizes to 14 and clamps to 8). `Catalog.LOS` keeps all twelve parsed
+sections so nothing is lost and a probe can change the decision in one line;
+`internal/visibility` reads `NumTables` for the clamp and never
+`len(Tables)`.
+
+**Falsifies:** nothing — the spec is silent, and this records which silence we
+resolved and how.
+
+**Note:** the sprite-mask path has its own count from a different source (the
+ten frames of the visibility-mask GAF, `[03 §3.2]`). The two counts are not
+required to agree and must not be shared.
+
+---
+
 ## How to add to this file
 
 One section per conflict: what the spec says, what was observed and how, the

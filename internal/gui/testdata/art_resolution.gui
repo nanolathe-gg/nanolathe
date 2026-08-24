@@ -1,0 +1,33 @@
+[GADGET0]
+{
+    [COMMON]
+    {
+        id=0; name=ArtPanel; xpos=0; ypos=0; width=640; height=480; active=1;
+    }
+    totalgadgets=3;
+    panel=MyHeaderPanel;
+}
+[GADGET1]
+{
+    [COMMON]
+    {
+        id=1; name=OwnArtButton; xpos=10; ypos=10; width=80; height=20; active=1;
+    }
+    text=OwnArt;
+}
+[GADGET2]
+{
+    [COMMON]
+    {
+        id=5; name=SideArtLabel; xpos=10; ypos=40; width=80; height=16; active=1;
+    }
+    text=NoOwnArt;
+}
+[GADGET3]
+{
+    [COMMON]
+    {
+        id=1; name=; xpos=10; ypos=70; width=80; height=20; active=1;
+    }
+    text=EmptyName;
+}

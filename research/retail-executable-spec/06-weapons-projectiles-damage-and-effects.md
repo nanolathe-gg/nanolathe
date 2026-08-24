@@ -287,6 +287,23 @@ and overflow outside ordinary state remain malformed-state unknowns.
 helpers. Random decay adds a second RNG-derived timing or velocity perturbation
 where configured. Burst allocation can fail when the pool is full.
 
+**Supported inference (spray sampling shape).** The draw bounds are the
+*authored* spray fields, not constants: the weapon record's spray-angle field
+and the wobble field adjacent to it. Each sample is re-centred by subtracting
+half its own bound, so a bound of *B* yields a symmetric offset in
+`[-B/2, B/2 - 1]`; the offsets are applied to the projectile's stored yaw and
+pitch accumulators, and the velocity components are then **recomputed** from
+those angles through the same fixed-point angle helpers the spawner used for
+the initial aim — not incremented in Cartesian space. Two gameplay draws are
+consumed per successful attempt when the spray term is nonzero.
+
+This is the sampling *shape*, at medium confidence; the exact field widths and
+the order of the two draws relative to each other are not closed. What is
+established and must not be softened is that the bounds are authored values and
+the draw count is two, because both are inputs to the shared simulation
+sequence: a wrong bound or a wrong count desynchronizes every later draw in the
+game, not merely the pellet.
+
 **Established fact:** A root whose remaining burst count is nonzero is a
 scheduler/template, not an ordinary moving projectile. It is a stationary
 anchor parked at the muzzle: while its count is nonzero it takes the burst

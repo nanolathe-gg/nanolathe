@@ -1,0 +1,27 @@
+[GADGET0]
+{
+    [COMMON]
+    {
+        id=0; name=DefaultsPanel; xpos=0; ypos=0; width=640; height=480; active=1;
+    }
+    totalgadgets=2;
+    panel=;
+    [VERSION]
+    {
+        major=0; minor=0; revision=0;
+    }
+}
+[GADGET1]
+{
+    [COMMON]
+    {
+        id=1; name=MINBUTTON; xpos=5; ypos=5; width=50; height=15; active=1;
+    }
+}
+[GADGET2]
+{
+    [COMMON]
+    {
+        id=5; name=MINLABEL; xpos=60; ypos=5; width=50; height=15; active=1;
+    }
+}

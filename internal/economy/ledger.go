@@ -72,6 +72,14 @@ type Service struct {
 	OnSettle         func(p int, tick uint32) // notification-only diagnostic seam fired at settlement entry (WU-08-2/08-3 merge); production wiring leaves it nil [05 "Authoritative settlement order"] C7
 	ReferencePlayer  int                      // reference/local player for ShareTick dispatcher [05 "Allied resource and sensor sharing"] C12
 	SensorShareCalls int                      // diagnostic: sensor sharing invocations at tick%450==0 [05]
+
+	// CloakCost reports a unit's per-pass cloak upkeep, or zero when the unit
+	// is not cloaked [05 "Cloak debit"] C13. It is a seam rather than a field
+	// read because the cloak state lives on the unit's runtime status and the
+	// authored cost on its definition, and economy owns neither. A nil hook
+	// skips the debit entirely, which is what a session with no cloaking units
+	// would observe anyway.
+	CloakCost func(*units.Unit) float32
 }
 
 // UnitEconomy holds per-unit live and archived buckets per [05 "Unit instance economy state"].
@@ -265,11 +273,28 @@ func (p *Player) CommitPostSettlement() {
 			p.Stock[r] = 0
 		}
 	}
-	// Archive and zero live buckets per C10.
+	// Archive and clear live bucket INPUTS per C10 and step 8 of
+	// [05 "Authoritative settlement order"].
 	p.ArchivedMirror = p.Mirror
 	for r := Metal; r <= Energy; r++ {
-		p.Mirror[r] = Bucket{}
+		clearPassInputs(&p.Mirror[r])
 	}
+}
+
+// clearPassInputs zeroes the three pass-local accumulators and preserves the
+// carry [05 "Authoritative settlement order"] steps 1, 6 and 8.
+//
+// Carry is not a pass input. Step 1 clears "pass-local production, request,
+// acceptance"; step 6 writes the remaining carry back to each unit and to the
+// player bucket; step 8 clears the "live bucket inputs". Zeroing the whole
+// four-value subrecord destroys the debt the next pass is supposed to service,
+// which makes oldCarry permanently zero and the first stage of the two-stage
+// algorithm dead [05 "Two-stage settlement algorithm"].
+func clearPassInputs(b *Bucket) {
+	b.Production = 0
+	b.Requested = 0
+	b.Accepted = 0
+	// b.Carry survives.
 }
 
 // CommitUnitBuckets archives and zeroes per-unit live buckets for player per C10.
@@ -285,7 +310,8 @@ func (s *Service) CommitUnitBuckets(w *units.World, player int) {
 		s.ensureUnitBuckets(h)
 		ue := &s.unitBuckets[h]
 		ue.Archived = ue.Buckets
-		ue.Buckets = [2]Bucket{}
+		clearPassInputs(&ue.Buckets[Metal])
+		clearPassInputs(&ue.Buckets[Energy])
 	})
 }
 
@@ -310,13 +336,15 @@ func InitPlayer(p *Player) {
 	p.GameEnded = false
 }
 
-// ClearMirrorPerPass zeroes the live mirror buckets for reuse per C11.
+// ClearMirrorPerPass clears the live mirror bucket's pass inputs for reuse per
+// C11 and step 1 of [05 "Authoritative settlement order"]. Carry survives — see
+// clearPassInputs.
 func ClearMirrorPerPass(p *Player) {
 	if p == nil {
 		return
 	}
 	for r := Metal; r <= Energy; r++ {
-		p.Mirror[r] = Bucket{}
+		clearPassInputs(&p.Mirror[r])
 	}
 }
 

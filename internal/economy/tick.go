@@ -143,8 +143,11 @@ func (s *Service) TickPlayer(player int, tick uint32, w *units.World, beforeDead
 		return
 	}
 
-	// C7 nine-step pass ordering delegated to admission via Settle.
-	s.Settle(player, tick)
+	// C7 pass ordering delegated to admission via Settle, WITH the world.
+	// Dropping w here is what made the per-unit half of the two-stage
+	// algorithm dead code: the sums degenerate to the player mirror, both
+	// ratios come out wrong, and C6's slot-order consumption never happens.
+	s.Settle(player, tick, w)
 }
 
 // PlayerSave persists the three absolute tick deadlines verbatim per [05 "Authoritative settlement order"] C5 and [05 "Saving economy, construction, and features"].

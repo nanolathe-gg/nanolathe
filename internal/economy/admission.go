@@ -51,12 +51,12 @@ func settlePure(opening, production, sumDebt, sumAccepted float32) (pool, debtRa
 	acceptRatio = AcceptRatio(remainingPool, sumAccepted)
 	fundedAccepted := sumAccepted * acceptRatio
 	closingStock = remainingPool - fundedAccepted
-	if closingStock < float32(0) {
-		closingStock = float32(0)
-	}
-	if remainingPool < float32(0) {
-		remainingPool = float32(0)
-	}
+	// No clamp. Both ratios are at most one, so funded work never exceeds the
+	// pool it was scaled against and neither result can go negative on its own.
+	// A defensive max(0, ...) here would be uncited code in the one function
+	// whose exact arithmetic is the contract [05 "Two-stage settlement
+	// algorithm"] C8 C9 — and it would mask a genuine sign error rather than
+	// report one.
 	return
 }
 
@@ -141,24 +141,59 @@ func (s *Service) settleOneResource(p int, res Res, w *units.World) {
 }
 
 // Settle settles player p for tick per [05 "Authoritative settlement order"] and [05 "Two-stage settlement algorithm"] C8 C9.
-// This is the plan API signature func (s *Service) Settle(p int, tick uint32) operating on the mirror bucket
-// when no world is available. When a world is available use SettleWithWorld for full per-unit settlement.
-// Both resources are settled independently in float32 with retail evaluation order.
-func (s *Service) Settle(p int, tick uint32) {
+// Settle runs one full settlement pass for player p per
+// [05 "Authoritative settlement order"] C7 and [05 "Stocks, counters, and
+// waste"] C10. It is called from inside TickPlayer's deadline block, after the
+// gate chain, and is the ONLY assembled entry point — there is no mirror-only
+// variant, because a settlement that skips the per-unit half computes the wrong
+// ratios rather than a reduced-fidelity version of the right ones.
+//
+// The pass, in order:
+//
+//  1. rebuild storage capacity from eligible completed units [05 "Storage capacity"];
+//  2. cloak upkeep, a direct sequential debit in unit slot order [05 "Cloak debit"] C13;
+//  3. settle each resource independently, metal then energy, summing per-unit
+//     debt and accepted work in stable slot order [05 "Two-stage settlement
+//     algorithm"] C6 C8 C9;
+//  4. commit per-pass counters and cumulative totals, clamp stock to the
+//     rebuilt capacity, accrue the overflow to waste with its fractional part,
+//     then archive and zero the live buckets [05 "Stocks, counters, and
+//     waste"] C10.
+//
+// w may be nil only in fixtures that exercise the mirror arithmetic alone; the
+// per-unit sums then degenerate to the mirror, which is what a player with no
+// units settles to anyway.
+func (s *Service) Settle(p int, tick uint32, w *units.World) {
+	if s == nil || p < 0 || p >= len(s.Players) {
+		return
+	}
 	if s.OnSettle != nil {
 		s.OnSettle(p, tick)
 	}
-	_ = tick
-	s.settleOneResource(p, Metal, nil)
-	s.settleOneResource(p, Energy, nil)
-}
-
-// SettleWithWorld settles player p with full per-unit state via world w per [05 "Authoritative settlement order"] C6 and C8 C9.
-// Units are visited in stable slot order per I1; each resource is settled independently; all arithmetic is float32.
-func (s *Service) SettleWithWorld(p int, tick uint32, w *units.World) {
-	_ = tick
-	s.settleOneResource(p, Metal, w)
+	// 1. Capacity is rebuilt from scratch each pass [05 "Storage capacity"] C14.
+	// It is a whole-world sweep because a player's capacity is the sum over its
+	// own completed units; running it per settled player is what retail's
+	// per-slot pass does.
+	RebuildCapacity(s, w)
+	// 2. Cloak upkeep debits live stock BEFORE the pool is formed, in unit slot
+	// order, so an earlier unit's debit can starve a later one [05 "Cloak
+	// debit"] C13.
+	if s.CloakCost != nil {
+		ApplyCloakDebits(s, w, p, s.CloakCost)
+	}
+	// 3. Energy and metal settle independently; there is no combined shortage
+	// ratio [05 "Two-stage settlement algorithm"] C8. Energy goes first because
+	// that is the documented aggregation order — the gather walks energy
+	// production, requested, accepted, carry and only then the metal four
+	// [05 "Authoritative settlement order"]. The two are independent, so the
+	// order is not observable today; it is written this way so it stays right
+	// when the metal-production gate on energy carry lands.
 	s.settleOneResource(p, Energy, w)
+	s.settleOneResource(p, Metal, w)
+	// 4. Counters and cumulative totals commit before the clamp, so they report
+	// the pass rather than available funds [05 "Stocks, counters, and waste"] C10.
+	s.Players[p].CommitPostSettlement()
+	s.CommitUnitBuckets(w, p)
 }
 
 // AdmissionPure is an exported pure helper for tests: it performs the two-stage settlement arithmetic

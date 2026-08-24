@@ -5,125 +5,160 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
+// underwaterExempt is the runtime status bit that exempts a unit from the
+// below-sea-level rejection [03 §3.2] C8 step 3. The sensor phase sets it on
+// owned and allied units [03 §3.4], which is why they never need the test.
+const underwaterExempt uint32 = 0x200
+
 // Target is the gameplay visibility query [03 §3.2] C8.
-// X,Z are world coordinates (16.16), Y is height in same units.
+//
+// X, Y and Z are authoritative 16.16 world coordinates. The extents are the
+// definition's hull deltas, also 16.16, and they are NOT the full footprint —
+// [03 §3.2] distinguishes the small LOS hull box from the placement footprint.
 type Target struct {
 	Owner   PlayerID
 	X, Y, Z numeric.Fixed
-	XExtent int32 // definition extents in world units (16.16) as per unit def [04 §2]
-	ZExtent int32
-	Hidden  bool   // cloaked instance bit [03 §3.2] C8 step 2
-	Status  uint32 // runtime status bits; 0x200 underwater exemption [03 §3.2] C8
+
+	// XExtent, YExtent and ZExtent are the three hull deltas of [03 §3.2]
+	// step 5. They are three separate definition fields: YExtent is the height
+	// decrement applied at the north sample and is neither ZExtent nor half of
+	// the unit's height.
+	XExtent numeric.Fixed
+	YExtent numeric.Fixed
+	ZExtent numeric.Fixed
+
+	Hidden bool   // cloaked instance bit [03 §3.2] C8 step 2
+	Status uint32 // runtime status bits; 0x200 underwater exemption [03 §3.2] C8
 }
 
-// Box is the feature extents query [03 §3.2] reduced extents form.
+// Box is the feature extents query [03 §3.2] — the two-corner form used by the
+// feature draw pass. Coordinates are 16.16 world units, like Target's.
 type Box struct {
-	MinX, MinZ int32 // world Fixed truncated to cell? caller passes world coords
-	MaxX, MaxZ int32
+	MinX, MinZ numeric.Fixed
+	MaxX, MaxZ numeric.Fixed
+	Y          numeric.Fixed
 	Owner      PlayerID
 }
 
+// pixel narrows a 16.16 world coordinate to its signed 16-bit map-pixel
+// component, which is what the projection shifts [03 §3.2] C8 step 4.
+//
+// The narrowing is part of the contract, not a convenience: retail takes the
+// high word of the 16.16 value as a signed 16-bit quantity, so a coordinate
+// beyond ±32,768 map pixels wraps rather than saturating. Shifting the 16.16
+// value directly is wrong by a factor of 65,536 and puts every unit outside
+// the grid bounds.
+func pixel(v numeric.Fixed) int32 {
+	return int32(int16(int64(v) >> 16))
+}
+
 // IsVisible is the single gameplay gate [03 §3.2] C8.
-// Evaluation order: 1 owner bypass, 2 hidden, 3 underwater, 4 sample projection with mode-selected source, 5 hull diamond.
+//
+// Evaluation order: 1 owner bypass, 2 hidden, 3 below sea level, 4 sample
+// projection against the mode-selected source, 5 the four accumulating hull
+// samples.
 func (s *Service) IsVisible(viewer PlayerID, t Target) bool {
 	if s == nil {
 		return false
 	}
-	// 1. owner identity bypass — queried record equals unit's owner ⇒ visible [C8.1]
+	// 1. owner identity bypass — queried record equals unit's owner ⇒ visible [C8.1].
+	// This precedes the cloak test, so a player always sees its own cloaked units.
 	if viewer == t.Owner {
 		return true
 	}
-	// 2. hidden/cloaked instance bit ⇒ not visible [C8.2]
+	// 2. hidden/cloaked instance bit ⇒ not visible [C8.2].
+	// Cloak is a predicate early-out, never a mask edit [C10]; the proximity
+	// breach exception clears the instance bit in the sensor phase [03 §3.4],
+	// so the predicate itself has nothing to reconsider here.
 	if t.Hidden {
-		// Cloak is predicate early-out, never mask edit [C10]; proximity breach exception is handled by sensor's 0x1000 flag
-		// but predicate does not check it — cloaked stays hidden unless uncloaked via sensor.
 		return false
 	}
-	// 3. base height below sea level ⇒ not visible unless runtime status 0x200 [C8.3]
-	// Ally sensor phase sets 0x200 on owned/allied, so they are implicitly exempt.
-	if t.Y < 0 && t.Status&0x200 == 0 {
+	// 3. base height below sea level ⇒ not visible unless status 0x200 [C8.3].
+	// Sea level is the map header byte scaled to world units [03 §2.2] C9 —
+	// not zero. Comparing against zero makes every unit between world Y 0 and
+	// sea level wrongly visible on any map with a nonzero sea-level byte.
+	if t.Status&underwaterExempt == 0 && t.Y < s.seaLevelWorld() {
 		return false
 	}
-	// 4-5. Sample projection and hull diamond [C8.4-5]
-	// Each sample projects v = (Z - (Y>>1))>>5 , u = X>>5, bounds checked unsigned against viewer's grid,
-	// tested against mode-selected source (byte nonzero or word at local bit). Hull order center→east→north→west.
 	if s.W == 0 || s.H == 0 {
 		return false
 	}
-	// Helper to test one world point.
-	testPoint := func(x, y, z numeric.Fixed) bool {
-		// projection with half-height shear [C8.4]
-		// y>>1 then subtract from Z, then >>5
-		yHalf := int64(y) >> 1
-		v := (int64(z) - yHalf) >> 5
-		u := int64(x) >> 5
-		// bounds-checked unsigned against viewer's grid dimensions
-		if uint32(u) >= uint32(s.W) || uint32(v) >= uint32(s.H) {
-			return false
-		}
-		idx := int(v*int64(s.W) + u)
-		// mode-selected source: byte grid nonzero, or word grid at local player's bit [C8.4]
-		// Plan says word grid is tested at LOCAL player's bit when byte path not selected; but byte path uses any nonzero.
-		// Mode bit 2 selects source; we follow ModeTerrainRay vs sprite as same selector.
-		// For simplicity, if current coverage enabled we use byte, else word.
-		// The spec says when mode enables per-owner current-coverage byte grids, the byte grid is used.
-		// Use ModeCurrentEnabled as proxy.
-		if s.mode&ModeCurrentEnabled != 0 {
-			if int(viewer) < len(s.byteGrids) && s.byteGrids[viewer] != nil {
-				if s.byteGrids[viewer][idx] != 0 {
-					return true
-				}
-				return false
-			}
-		}
-		// Word path: test local player's bit? But spec says query record's grid dimensions vs local player's bit.
-		// Retail tests the queried record's grid at the LOCAL player's bit [C8.4].
-		// For determinism we test the wordMask at viewer's bit after C9 ally not OR'd ensures correctness.
-		bit := cellBit(viewer)
-		if idx < len(s.wordMask) && s.wordMask[idx]&bit != 0 {
-			return true
-		}
-		return false
-	}
-	// Center
-	if testPoint(t.X, t.Y, t.Z) {
+	// 4-5. The four hull samples ACCUMULATE: one coordinate triple is carried
+	// through all four tests and each step mutates it [03 §3.2] C8 step 5.
+	// That is why the last step subtracts the X extent "again". The resulting
+	// figure is a rectangle in projected space, not a diamond about the base.
+	x, y, z := t.X, t.Y, t.Z
+	if s.sample(viewer, x, y, z) { // 0: centre
 		return true
 	}
-	// East (+X extent)
-	if testPoint(t.X+numeric.Fixed(int64(t.XExtent)), t.Y, t.Z) {
+	x += t.XExtent
+	if s.sample(viewer, x, y, z) { // 1: east
 		return true
 	}
-	// North (+Z extent, half height subtracted) [C8.5]
-	if testPoint(t.X, t.Y, t.Z+numeric.Fixed(int64(t.ZExtent))) {
-		// The north sample's height is adjusted: half height subtracted is already in projection formula's Y half.
-		// For north we could pass adjusted Y = Y - (something) but spec says north sample is +Z extent with half height subtracted.
-		// Our testPoint already does Y>>1, so calling with same Y already subtracts half.
+	y -= t.YExtent
+	z += t.ZExtent
+	if s.sample(viewer, x, y, z) { // 2: north, still carrying the east offset
 		return true
 	}
-	// West (-X extent)
-	if testPoint(t.X-numeric.Fixed(int64(t.XExtent)), t.Y, t.Z) {
-		return true
-	}
-	return false
+	x -= t.XExtent
+	return s.sample(viewer, x, y, z) // 3: west, still carrying the north offset
 }
 
-// VisiblePoint is the reduced projectile predicate [03 §3.2].
+// sample projects one world point and tests the mode-selected source
+// [03 §3.2] C8 step 4.
+func (s *Service) sample(viewer PlayerID, x, y, z numeric.Fixed) bool {
+	// Half-height shear on the pixel components [03 §3.2] C8 step 4.
+	u := int64(pixel(x) >> 5)
+	v := int64((pixel(z) - (pixel(y) >> 1)) >> 5)
+	// Unsigned bounds against the queried record's grid dimensions, so a
+	// negative projection wraps high and fails rather than indexing backwards.
+	if uint32(u) >= uint32(s.W) || uint32(v) >= uint32(s.H) {
+		return false
+	}
+	idx := int(v*int64(s.W) + u)
+	// Mode-selected source: the record's current-coverage byte grid when
+	// current coverage is enabled (any nonzero count is visible), otherwise
+	// the word grid at the local player's bit [03 §3.2] C8 step 4.
+	//
+	// Ally vision is never OR'd (C9): the writer sets only the source unit's
+	// own slot bit and this reader tests only one bit, so allied coverage
+	// cannot admit through either path.
+	if s.mode&ModeCurrentEnabled != 0 {
+		grid := s.byteGrids[viewer]
+		return grid != nil && grid[idx] != 0
+	}
+	return s.wordMask[idx]&cellBit(viewer) != 0
+}
+
+// seaLevelWorld returns the terrain's sea level in world units, or zero when
+// the service has no terrain (fixtures) [03 §2.2] C9.
+func (s *Service) seaLevelWorld() numeric.Fixed {
+	if s.terrain == nil {
+		return 0
+	}
+	return s.terrain.SeaLevelWorld()
+}
+
+// VisiblePoint is the reduced one-point predicate used by projectiles
+// [03 §3.2]. It has no owner, no hull and no cloak state — just the projection.
 func (s *Service) VisiblePoint(viewer PlayerID, x, y, z numeric.Fixed) bool {
-	return s.IsVisible(viewer, Target{Owner: 255, X: x, Y: y, Z: z})
-}
-
-// VisibleExtents is the feature footprint predicate [03 §3.2].
-func (s *Service) VisibleExtents(viewer PlayerID, b Box) bool {
-	if s == nil || s.W == 0 {
+	if s == nil || s.W == 0 || s.H == 0 {
 		return false
 	}
-	// Project both corners and test; any sampled corner visible ⇒ extents visible.
-	// Use non-center samples.
-	if s.IsVisible(viewer, Target{Owner: b.Owner, X: numeric.Fixed(int64(b.MinX)), Y: 0, Z: numeric.Fixed(int64(b.MinZ))}) {
+	return s.sample(viewer, x, y, z)
+}
+
+// VisibleExtents is the two-corner feature predicate [03 §3.2]. The feature
+// draw pass tests the footprint's opposite corners rather than a hull.
+func (s *Service) VisibleExtents(viewer PlayerID, b Box) bool {
+	if s == nil || s.W == 0 || s.H == 0 {
+		return false
+	}
+	if viewer == b.Owner {
 		return true
 	}
-	if s.IsVisible(viewer, Target{Owner: b.Owner, X: numeric.Fixed(int64(b.MaxX)), Y: 0, Z: numeric.Fixed(int64(b.MaxZ))}) {
+	if s.sample(viewer, b.MinX, b.Y, b.MinZ) {
 		return true
 	}
-	return false
+	return s.sample(viewer, b.MaxX, b.Y, b.MaxZ)
 }
