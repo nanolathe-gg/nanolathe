@@ -21,6 +21,8 @@ type Options struct {
 	Ticks    int    // headless tick budget; 0 = run until the session ends
 	Seed     int64  // simulation RNG seed; <0 = derive from the clock
 	Dump     string // headless diagnostic dump verb
+	Save     string // write a native save after a headless run [PLAN_14 C18]
+	Load     string // restore a native save before ticking [PLAN_14 C18]
 }
 
 // ErrHelp reports that usage was requested and printed.
@@ -49,6 +51,8 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.IntVar(&opts.Ticks, "ticks", 0, "headless tick budget; 0 runs until the session ends")
 	set.Int64Var(&opts.Seed, "seed", -1, "simulation RNG seed; negative derives one from the clock")
 	set.StringVar(&opts.Dump, "dump", "", "headless diagnostic dump (manifest, catalog, providers, route)")
+	set.StringVar(&opts.Save, "save", "", "write a native save here after the headless run")
+	set.StringVar(&opts.Load, "load", "", "restore a native save before ticking")
 	set.Usage = func() {
 		fmt.Fprintf(out, "nanolathe — a reimplementation of the Total Annihilation engine\n\n")
 		fmt.Fprintf(out, "usage: nanolathe [flags]\n\nflags:\n")
@@ -58,6 +62,8 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		fmt.Fprintf(out, "  -dump providers   the mounted provider list in precedence order\n")
 		fmt.Fprintf(out, "  -dump rng         headless tick loop; both stream states and draw counts\n")
 		fmt.Fprintf(out, "  -dump route       gate2 route diagnostic: points ≤20 and save form ≤13 bytes [PLAN_07]\n")
+		fmt.Fprintf(out, "  -save <path>      write a native StateV1 save after a headless run [PLAN_14 C18]\n")
+		fmt.Fprintf(out, "  -load <path>      restore a native StateV1 save, then tick [PLAN_14 C18]\n")
 	}
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

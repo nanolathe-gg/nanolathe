@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
@@ -230,6 +231,16 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 	// features → units → barrier → starting resources directly to live stock outside ledger.
 	if err := SkirmishBattleEntry(s, cfg, m, nil); err != nil {
 		return nil, err
+	}
+	// Gate-5 integration: ground steering/routes via movement.System [PLAN_14 C5 movement integration].
+	if s.World != nil && s.Movement == nil {
+		s.Movement = movement.NewSystem(s.World, movement.Profile{FootPrintX: 1, FootPrintZ: 1}, movement.NewOccupancyGrid())
+		if cat != nil {
+			s.Movement.SetClasses(cat.Movement)
+		}
+		for _, u := range s.Units.Iter() {
+			s.Movement.EnsureUnit(u)
+		}
 	}
 	// Centralize subsystem registration in kernel phase order per C5 [01 §4.4] I7.
 	s.RegisterAll()

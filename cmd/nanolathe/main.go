@@ -85,13 +85,21 @@ func run(opts Options, out *os.File) error {
 		return runGate2RouteDump(opts, content, out)
 	}
 
-	// Gate 2 walker slice: when --map is set and no dump, prefer the
-	// Gate-2 viewer/headless paths per PHASES Gate 2 (6 + 7-stub). Keep every
-	// existing flag/path intact: on failure fall through to Gate-1 / report.
-	if opts.Map != "" && opts.Dump == "" {
-		if opts.Headless && opts.Ticks > 0 {
-			return runGate2Headless(opts, content, out)
+	// Native save/load: headless continuation through internal/save's StateV1
+	// box [PLAN_14 C18]. --load wins over a fresh skirmish.
+	if opts.Headless && opts.Load != "" {
+		return runLoadAndContinue(opts, content, out)
+	}
+	// Headless --map runs the REAL integrated session per Gate 5 [PLAN_14]:
+	// session.NewSkirmish → Step loop → deterministic summary. (--save rides it.)
+	if opts.Headless && opts.Map != "" && opts.Dump == "" {
+		if err := runSessionHeadless(opts, content, out); err != nil {
+			return err
 		}
+		return nil
+	}
+	// Gate 2 walker slice remains for the windowed viewer path.
+	if opts.Map != "" && opts.Dump == "" {
 		if wantsViewer(opts) {
 			if err := runGate2Viewer(opts, content); err != nil {
 				fmt.Fprintf(os.Stderr, "nanolathe: gate2 viewer: %v (falling back to Gate1)\n", err)

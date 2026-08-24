@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -40,6 +41,7 @@ type Session struct {
 	Econ     *economy.Service
 	Build    *construction.Service
 	Features *features.Service
+	Movement *movement.System // Gate-5 integration: ground steering/routes [PLAN_14 C5 movement integration]
 	Combat   *combat.Service
 	AI       []*ai.Manager
 	Mission  *mission.Mission
@@ -148,6 +150,9 @@ func (s *Session) RegisterAll() {
 
 	// Phase 5d: movement integration / occupancy commit [04 §8.1][04 §8.2]
 	s.Kernel.Register(kernel.PhaseOrdersPathEconomy, "movement-integrate", func(tick uint32) {
+		if s.Movement != nil {
+			s.Movement.Tick(tick, s.Units)
+		}
 		// Movement integration is immediate MoveRate / setSFXoccupy [GAP T15] I7.
 		// The movement.System (PLAN_07) is the composition root that the kernel's
 		// movement window calls each tick. Session does not yet own a Movement
