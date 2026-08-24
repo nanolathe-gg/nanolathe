@@ -1,10 +1,22 @@
-// Package movement — collision and occupancy [04 §8.2] C18 C22–C25.
+// Package movement — collision and occupancy [04 §8.2] C18 C22–C25 [P0-12].
 //
 // CollisionState and OccupancyGrid are the explicit synchronous-commit surfaces
 // that retail scatters across the unit/mover/terrain records. The orchestrator
 // will unify these with units.Unit / world.Terrain once those types grow the
 // necessary fields. Retail offsets are noted where established so the unification
 // is mechanical (I13).
+//
+// P0-12 [ground collision, pushing, blocked arrival, repath — substantially closed]:
+//
+//	validator row-major Z outer X inner immediate return + aggregate, same-cell fast path,
+//	blocked MaxVelocity/2 cap + fixed trig (8192 table, (prod+4096)>>13) ±524287 clamp without restamp,
+//	success Clear+Stamp before next slot → vacated reusable same tick, head-on both block,
+//	pipeline one cell per tick.
+//	NEGATIVE-BOUNDED [P0-12]: no pushing/slide/yield/priority — absence is contract, do NOT implement.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//	write, no mass read, no blockedTicks counter, no repath call. Repath is via path scheduler elsewhere.
+//
+// TODO(question): yard bit semantic labels 0x20/0x40 etc and factory BMCode 0x22F mode gate name remain [P0-12].
 //
 // Mapping to retail [04 §8.2][04 §9.1][02 "Movement class record"][03 §2.1] (I13: offsets are identity, not layout):
 //

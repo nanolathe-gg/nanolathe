@@ -117,33 +117,38 @@ func TestFriendlyMarkingExemptsUnderwater(t *testing.T) {
 }
 
 // TestProximityDecloak locks C10/C12: a cloaked unit's proximity search writes
-// the deadline and the decloak bit into the units it strikes.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func TestProximityDecloak(t *testing.T) {
 	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
 	var cloakedStatus, nearStatus, farStatus uint32
-	var nearDeadline, farDeadline uint32
+	var cloakedDeadline uint32
 	px := func(p int64) numeric.Fixed { return numeric.Fixed(p * 65536) }
 
 	units := []SensorUnit{
 		{Owner: 1, Status: &cloakedStatus, Alive: true, Hidden: true,
-			X: px(100), Z: px(100), MinCloakDistance: 50},
-		{Owner: 0, Status: &nearStatus, Alive: true, X: px(120), Z: px(100),
-			DecloakDeadline: &nearDeadline},
-		{Owner: 0, Status: &farStatus, Alive: true, X: px(300), Z: px(100),
-			DecloakDeadline: &farDeadline},
+			X: px(100), Z: px(100), MinCloakDistance: 50, DecloakDeadline: &cloakedDeadline},
+		{Owner: 0, Status: &nearStatus, Alive: true, X: px(120), Z: px(100)},
+		{Owner: 0, Status: &farStatus, Alive: true, X: px(300), Z: px(100)},
 	}
 	s.SensorTick(1000, 2, nil, units)
 
-	if nearStatus&DecloakBit == 0 {
-		t.Fatal("a unit inside mincloakdistance was not marked")
+	if cloakedStatus&DecloakBit == 0 {
+		t.Fatal("a cloaked unit with enemy inside mincloakdistance was not marked [03 §3.4] P0-11")
 	}
-	if nearDeadline != 1000+DecloakDeadlineAdd {
-		t.Fatalf("decloak deadline %d, want %d", nearDeadline, 1000+DecloakDeadlineAdd)
+	if cloakedDeadline != 1000+DecloakDeadlineAdd {
+		t.Fatalf("decloak deadline %d, want %d [03 §3.4] P0-11", cloakedDeadline, 1000+DecloakDeadlineAdd)
+	}
+	if nearStatus&DecloakBit != 0 {
+		t.Fatal("an enemy unit outside cloaked search was incorrectly marked")
 	}
 	if farStatus&DecloakBit != 0 {
-		t.Fatal("a unit outside mincloakdistance was marked")
+		t.Fatal("a far unit outside mincloakdistance was marked")
 	}
-	if farDeadline != 0 {
-		t.Fatalf("far unit got deadline %d", farDeadline)
+	// Test timeout: move cloaked far away before deadline expires, then advance beyond deadline.
+	units[0].X = px(1000)
+	units[0].Z = px(1000)
+	s.SensorTick(1000+DecloakDeadlineAdd+1, 2, nil, units)
+	if cloakedStatus&DecloakBit != 0 {
+		t.Fatal("decloak bit should clear after GT>=deadline and no longer within range [03 §3.4] P0-11")
 	}
 }

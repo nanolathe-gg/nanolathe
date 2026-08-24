@@ -179,25 +179,31 @@ func decodeUnitSection(sec *formats.Section) UnitPlacement {
 	u.Z = z << 16
 	u.Y = y << 16
 
-	// Angle degrees conversion via magic-multiply: trunc(degrees*65536/360).
-	// ESTABLISHED: the decompile confirms the constant chain
-	// *0x10000 * 0xb60b60b7 >> 0x28 (= ⌊2⁴⁰/360⌋+1) ≡ trunc(×65536/360)
-	// (notes/campaign/00_missions.md §4.1); the earlier "magic-multiply"
-	// open question is closed in favour of exactly what is computed here.
+	// Angle degrees conversion via retail fixed-point magic multiply
+	// 0xB60B60B7>>40..., bitwise identical to trunc(deg*65536/360) for stock
+	// but differs for negative/>360. [P0-06 §4][P0-04 §4][08 "Mission placement record"]
 	if raw, ok := sec.FirstValue("Angle"); ok {
 		trimmed := strings.TrimSpace(raw)
 		if trimmed != "" {
 			if f, err := strconv.ParseFloat(trimmed, 64); err == nil {
-				// Truncate toward zero per __ftol [I3].
-				heading := f * 65536.0 / 360.0
-				// Clamp to uint16 range via wrapping as retail would with trunc.
-				u.Angle = uint16(int32(heading))
-				// Handle negative degrees: Go uint16 conversion wraps, but retail likely wraps as well.
-				// Preserve trunc toward zero then modulo 65536.
-				if heading < 0 {
-					// Convert via math.Trunc then mod.
+				// Try integer path for bitwise identical retail result.
+				if isIntegerString(trimmed) {
+					if deg, err2 := strconv.ParseInt(trimmed, 10, 32); err2 == nil {
+						u.Angle = HeadingFromDegrees(int32(deg))
+					} else {
+						// Fallback to float trunc for out-of-range integer strings.
+						heading := f * 65536.0 / 360.0
+						t := math.Trunc(heading)
+						v := int64(t) % 65536
+						if v < 0 {
+							v += 65536
+						}
+						u.Angle = uint16(v)
+					}
+				} else {
+					// Fractional degrees: float trunc toward zero per __ftol [I3].
+					heading := f * 65536.0 / 360.0
 					t := math.Trunc(heading)
-					// Wrap into 0..65535
 					v := int64(t) % 65536
 					if v < 0 {
 						v += 65536
@@ -350,7 +356,8 @@ func decodeFeatureSection(sec *formats.Section) FeaturePlacement {
 }
 
 // DegreesToHeading converts authored degrees to retail heading 0..65535 via
-// trunc(degrees*65536/360). TODO(question): exact magic-multiply chain [GAP T14] [fmt ota]
+// trunc(degrees*65536/360). Bitwise identical to retail magic for stock angles
+// but differs for negative/>360 via the magic path. [P0-06 §4][P0-04 §4]
 func DegreesToHeading(deg float64) uint16 {
 	h := deg * 65536.0 / 360.0
 	t := math.Trunc(h) // truncate toward zero [I3] __ftol
@@ -359,6 +366,51 @@ func DegreesToHeading(deg float64) uint16 {
 		v += 65536
 	}
 	return uint16(v)
+}
+
+// HeadingFromDegrees is the retail fixed-point magic multiply
+// 0xB60B60B7>>40..., bitwise identical to trunc(deg*65536/360) for stock
+// but differing for negative/>360 per [P0-06 §4][P0-04 §4].
+// Input is integer degrees as authored in TDF Angle key.
+func HeadingFromDegrees(deg int32) uint16 {
+	// Retail sequence [P0-04 §4][P0-06 §4]:
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// high = temp64 >> 0x28 (40)
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// result = (short)(high - corr)  then uint16
+	// 0x1680000 = 360*65536
+	tmp := int64(int32(int64(deg) * 0x10000))
+	magic := int64(0xB60B60B7)
+	hi := (tmp * magic) >> 40 // >>0x28 arithmetic
+	// correction with 32-bit IDIV trunc toward zero
+	div := int32(tmp) / 0x1680000
+	sign := int32(tmp) >> 31
+	sum := div + sign
+	charVal := int8(sum)
+	shortVal := int16(charVal)
+	corr := int64(shortVal >> 15) // >>0x0F arithmetic
+	res := int16(hi - corr)
+	return uint16(res)
+}
+
+func isIntegerString(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	if s[0] == '+' || s[0] == '-' {
+		s = s[1:]
+	}
+	if s == "" {
+		return false
+	}
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // FixedFromPixels converts authored pixel coordinates to 16.16 fixed by

@@ -198,12 +198,32 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 	// Ballistic weapons need a launch angle before allocation: a target with no
 	// solution is not admitted [06 §3.3] [06 §6.4].
 	var solvedPitch, solvedYaw numeric.Angle
+	var h pool.Handle
+	var ok bool
+	// Reserve before solve to reproduce #DE leak per P0-10 [06 §6.4]
+	ballisticReserved := false
 	if fam == CreationBallistic {
+		// Reserve before solve to reproduce #DE leak per P0-10 [06 §6.4]
+		h, ok = svc.Reserve()
+		if !ok {
+			// Pool-full retains trajectory validation without count leak [06 §4.4] C5
+			dx := target.X.Sub(muzzle.X)
+			dy := target.Y.Sub(muzzle.Y)
+			dz := target.Z.Sub(muzzle.Z)
+			_, _ = BallisticSolve(dx, dy, dz, numeric.Fixed(int64(w.WeaponVelocity)), ports.Gravity, 0)
+			return 0, false
+		}
+		ballisticReserved = true
+		if w.WeaponVelocity == 0 {
+			panic("combat: ballistic zero velocity divide fault after reserve [06 §6.4]")
+		}
 		dx := target.X.Sub(muzzle.X)
 		dy := target.Y.Sub(muzzle.Y)
 		dz := target.Z.Sub(muzzle.Z)
-		raw, ok := BallisticSolve(dx, dy, dz, numeric.Fixed(int64(w.WeaponVelocity)), ports.Gravity, 0)
-		if !ok {
+		raw, solverOk := BallisticSolve(dx, dy, dz, numeric.Fixed(int64(w.WeaponVelocity)), ports.Gravity, 0)
+		if !solverOk {
+			// No solution: admission gate prevents allocation [06 §3.3]; roll back early reserve for non-fault case
+			svc.CancelReserve(h)
 			return 0, false
 		}
 		solvedPitch = numeric.Angle(raw)
@@ -217,14 +237,16 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 	if fam == CreationVertical && ports.InterceptorRescan != nil {
 		ports.InterceptorRescan(slotIdx, slot)
 	}
-	h, ok := svc.Reserve()
-	if !ok {
-		// C4 fire callbacks not called when pool is full [06 §4.1].
-		// C5 retained work is already done: muzzle query, angle mutation and
-		// spread draws. Suppressed: the record, Fire/RockUnit, start smoke,
-		// the shot packet, the pending-slot clear, reload, ammunition, firing
-		// state and resource mutation [06 §4.4].
-		return 0, false
+	if !ballisticReserved {
+		h, ok = svc.Reserve()
+		if !ok {
+			// C4 fire callbacks not called when pool is full [06 §4.1].
+			// C5 retained work is already done: muzzle query, angle mutation and
+			// spread draws. Suppressed: the record, Fire/RockUnit, start smoke,
+			// the shot packet, the pending-slot clear, reload, ammunition, firing
+			// state and resource mutation [06 §4.4].
+			return 0, false
+		}
 	}
 	idx := int(h) - 1
 	p := &svc.Records[idx]

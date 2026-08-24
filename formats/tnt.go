@@ -39,8 +39,8 @@ func DefaultTNTLimits() TNTLimits {
 	}
 }
 
-// TNTAttribute is one 16x16 source cell. Feature is intentionally uint16:
-// 0xfffc, 0xfffe and 0xffff are distinct source sentinels.
+// TNTAttribute is one 16x16 source cell [P0-17] W*H*4 attribute records (height + u16 feature + unk0).
+// Feature is intentionally uint16: 0xfffc, 0xfffe and 0xffff are distinct source sentinels [P0-17][fmt tnt].
 type TNTAttribute struct {
 	Height  byte
 	Feature uint16

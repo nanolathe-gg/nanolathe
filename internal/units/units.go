@@ -54,6 +54,14 @@ type Unit struct {
 	Orders       any          // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
 	Script       any          // COB VM placeholder [04 §4.2]
 	GuardLatches GuardLatches // per-unit dedup array for guard assistance [04 §3.5]
+	// Placement linkage for P0-04/P0-06 sparse created[] semantics [P0-04][P0-06].
+	// Retail maintains created[placementIdx] sparse array and scans it in
+	// placement order 0..count-1 skipping NULL gaps for Ident→Unitname first-
+	// occurrence resolution (A27). Store provenance to reconstruct that scan
+	// without relying on dense w.Iter() prefix.
+	PlacementIdx      int // index in Mission.Units placement order, -1 if not scenario-spawned
+	PlacementIdent    string
+	PlacementUnitName string
 }
 
 // DeathHook is invoked exactly once per unit at the moment Destroy first
@@ -104,16 +112,17 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 		w.units = newUnits
 	}
 	u := &Unit{
-		Handle:    h,
-		Def:       def,
-		Owner:     owner,
-		X:         x,
-		Y:         y,
-		Z:         z,
-		Alive:     true,
-		Remaining: 0,                    // built units start with 0? For builders nanoframe 1→0 [PLAN_06 C3] but Create for live units sets 0.
-		MaxHealth: int32(def.MaxDamage), // TODO(question): MaxDamage field name; use MaxHealth alias
-		Health:    int32(def.MaxDamage),
+		Handle:       h,
+		Def:          def,
+		Owner:        owner,
+		X:            x,
+		Y:            y,
+		Z:            z,
+		Alive:        true,
+		Remaining:    0,                    // built units start with 0? For builders nanoframe 1→0 [PLAN_06 C3] but Create for live units sets 0.
+		MaxHealth:    int32(def.MaxDamage), // TODO(question): MaxDamage field name; use MaxHealth alias
+		Health:       int32(def.MaxDamage),
+		PlacementIdx: -1,
 	}
 	w.units[idx] = u
 	return h, nil

@@ -94,8 +94,11 @@ func TestBothGates(t *testing.T) {
 	if m2.EntryCount() != 1 {
 		t.Fatalf("controller 2 entryCount want 1 got %d", m2.EntryCount())
 	}
-	// All task kinds due at 30 should have been run
+	// All task kinds due at 30 should have been run except empty/nullsub
 	for k := TaskKind(0); k < TaskKindCount; k++ {
+		if k == TaskEmpty || k == TaskNullSub {
+			continue
+		}
 		if m2.TaskRuns(k) != 1 {
 			t.Fatalf("controller 2: task %d should have run when due, got %d", k, m2.TaskRuns(k))
 		}
@@ -113,9 +116,21 @@ func TestBothGates(t *testing.T) {
 	if got := m2.Deadlines[TaskActivity]; got != 30+30 {
 		t.Fatalf("TaskActivity deadline want %d got %d", 30+30, got)
 	}
+	if got := m2.Deadlines[TaskWaveA]; got != 30+300 {
+		t.Fatalf("TaskWaveA deadline want %d got %d [P0-02]", 30+300, got)
+	}
+	if got := m2.Deadlines[TaskWaveB]; got != 30+300 {
+		t.Fatalf("TaskWaveB deadline want %d got %d [P0-02]", 30+300, got)
+	}
+	if got := m2.Deadlines[TaskRegroupA]; got != 30+150 {
+		t.Fatalf("TaskRegroupA deadline want %d got %d [P0-02]", 30+150, got)
+	}
+	if got := m2.Deadlines[TaskRegroupB]; got != 30+150 {
+		t.Fatalf("TaskRegroupB deadline want %d got %d [P0-02]", 30+150, got)
+	}
 	// RNG tasks consume draws and produce correct ranges
 	afterDraws := rng.Global.Sim.Draws()
-	if afterDraws-beforeDraws != 2 { // 900 and 150 each one draw
+	if afterDraws-beforeDraws != 2 { // 900 and 150 each one draw (resource 5 not drawn without units)
 		t.Fatalf("RNG draws for task reschedule: want 2 for 900/150, got %d", afterDraws-beforeDraws)
 	}
 	// Deadline ranges for RNG tasks
@@ -337,7 +352,7 @@ func TestClassificationCadence(t *testing.T) {
 	}
 }
 
-// TestRNGBoundCensus verifies manager.go uses only 900/150 bounds [08][PLAN_11 C3][C9].
+// TestRNGBoundCensus verifies manager.go uses only 900/150/5 bounds [08][PLAN_11 C3][C9][P0-02].
 func TestRNGBoundCensus(t *testing.T) {
 	data, err := os.ReadFile("manager.go")
 	if err != nil {
@@ -349,10 +364,10 @@ func TestRNGBoundCensus(t *testing.T) {
 	for _, m := range matches {
 		seen[string(m[1])] = true
 	}
-	// Expect exactly 150 and 900, no other bound like 30,255,65536,5 etc in this file.
-	want := map[string]bool{"150": true, "900": true}
+	// Expect 150, 900 and 5 (eco toggle) per P0-02, no other bound like 30,255 etc in this file.
+	want := map[string]bool{"150": true, "900": true, "5": true}
 	if len(seen) != len(want) {
-		t.Fatalf("manager.go RNG bounds = %v want %v (only 150/900 in this file per C9) [08][PLAN_11 C9]", seen, want)
+		t.Fatalf("manager.go RNG bounds = %v want %v (150/900/5 per P0-02) [08][PLAN_11 C9]", seen, want)
 	}
 	for k := range want {
 		if !seen[k] {
@@ -361,20 +376,25 @@ func TestRNGBoundCensus(t *testing.T) {
 	}
 	for k := range seen {
 		if !want[k] {
-			t.Fatalf("manager.go unexpected bound %s (only 150/900 allowed in this file) [PLAN_11 C9]", k)
+			t.Fatalf("manager.go unexpected bound %s (only 150/900/5 allowed in this file) [PLAN_11 C9][P0-02]", k)
 		}
 	}
-	// Also verify via execution that only those draws are consumed
+	// Also verify via execution that draws are consumed for RNG tasks; resource may draw 5 when branch taken.
+	// For this test we use nil world so resource task has no units to scan, thus no 5 draw; only 900/150 should draw.
 	m := newManagerFor(1, 10)
 	for k := TaskKind(0); k < TaskKindCount; k++ {
 		m.Deadlines[k] = 10
 	}
+	// Make Empty and NullSub not due to avoid extra counts? They stay 0, but we set deadlines to 10, they will be due and count, but they don't draw.
+	// For determinism, set Empty/NullSub to far future so they don't run.
+	m.Deadlines[TaskEmpty] = 1000
+	m.Deadlines[TaskNullSub] = 1000
 	econ := makeEconWithControllers(map[int]uint8{1: 2})
 	rng.SeedGlobal(100, 0)
 	before := rng.Global.Sim.Draws()
 	m.Tick(10, nil, econ)
 	after := rng.Global.Sim.Draws()
-	// Construction/positioning/resource/activity should not draw; other two each one draw => 2 draws
+	// Construction/positioning/resource/activity should not draw; other two each one draw => 2 draws (resource 5 not drawn without units)
 	if after-before != 2 {
 		t.Fatalf("execution RNG draws want 2 (900/150) got %d", after-before)
 	}

@@ -6,10 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"kaijuengine.com/bootstrap"
-	"kaijuengine.com/engine"
-	"kaijuengine.com/platform/hid"
-
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
@@ -105,13 +101,8 @@ func runBattleView(opts Options, cs *contentSet) error {
 		cl.SetFNT(fnt)
 	}
 	cl.Overlay = func(c *client.Client) { b.drawOverlay(c, fnt) }
-	if _, err := cl.ContentDatabase(); err != nil {
-		return fmt.Errorf("nanolathe: battle view: content database %q: %w (run `make kaiju-content`)", "content", err)
-	}
 	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select right-click=order M=move B=build Esc=cancel")
-	var platformState interface{}
-	bootstrap.Main(cl, platformState)
-	return nil
+	return client.RunGame(cl)
 }
 
 // newBattleSession builds the integrated skirmish session for the window.
@@ -151,10 +142,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b == nil || cl == nil {
 		return
 	}
-	host := cl.Host()
-	if host != nil && host.Window != nil {
-		b.handleInput(host, cl)
-	}
+	b.handleInput(cl.Input(), cl)
 	// Authoritative budget lives in Session.Step [01 §4.2][01 §4.3]; the
 	// accumulator converts renderer seconds into scaled milliseconds.
 	b.msAccum += delta * 1000
@@ -164,28 +152,28 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	}
 	b.sess.Step(int32(scaled))
 	// Camera pan identical to Gate-1/Gate-2 caps [07 §10].
-	if host != nil && host.Window != nil && b.cam != nil {
-		kbd := &host.Window.Keyboard
-		mouse := &host.Window.Mouse
+	if b.cam != nil {
+		kbd := cl.Input().Kbd
+		mouse := cl.Input().Mouse
 		rawDelta := int32(delta * 1000)
 		if rawDelta <= 0 {
 			rawDelta = 16
 		}
 		const scrollSetting = 8
-		if kbd.KeyHeld(hid.KeyboardKeyW) || kbd.KeyHeld(hid.KeyboardKeyUp) {
+		if kbd.KeyHeld(input.KeyW) || kbd.KeyHeld(input.KeyUp) {
 			b.cam.Scroll(scrollSetting, rawDelta, camera.DirUp)
 		}
-		if kbd.KeyHeld(hid.KeyboardKeyS) || kbd.KeyHeld(hid.KeyboardKeyDown) {
+		if kbd.KeyHeld(input.KeyS) || kbd.KeyHeld(input.KeyDown) {
 			b.cam.Scroll(scrollSetting, rawDelta, camera.DirDown)
 		}
-		if kbd.KeyHeld(hid.KeyboardKeyA) || kbd.KeyHeld(hid.KeyboardKeyLeft) {
+		if kbd.KeyHeld(input.KeyA) || kbd.KeyHeld(input.KeyLeft) {
 			b.cam.Scroll(scrollSetting, rawDelta, camera.DirLeft)
 		}
-		if kbd.KeyHeld(hid.KeyboardKeyD) || kbd.KeyHeld(hid.KeyboardKeyRight) {
+		if kbd.KeyHeld(input.KeyD) || kbd.KeyHeld(input.KeyRight) {
 			b.cam.Scroll(scrollSetting, rawDelta, camera.DirRight)
 		}
 		const edge = 8
-		w, h := host.Window.Width(), host.Window.Height()
+		w, h := cl.Size()
 		if w > 0 && h > 0 {
 			if mouse.X < float32(edge) {
 				b.cam.Scroll(scrollSetting, rawDelta, camera.DirLeft)
@@ -202,24 +190,24 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 }
 
 // handleInput processes selection, orders, and build placement.
-func (b *battleSession) handleInput(host *engine.Host, cl *client.Client) {
-	kbd := &host.Window.Keyboard
-	mouse := &host.Window.Mouse
+func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
+	kbd := in.Kbd
+	mouse := in.Mouse
 	mx, my := int32(mouse.X), int32(mouse.Y)
 
-	if kbd.KeyDown(hid.KeyboardKeyM) {
+	if kbd.KeyDown(input.KeyM) {
 		b.latch = input.LatchMove
 	}
-	if kbd.KeyDown(hid.KeyboardKeyB) {
+	if kbd.KeyDown(input.KeyB) {
 		b.armBuildPanel()
 	}
-	if kbd.KeyDown(hid.KeyboardKeyEscape) {
+	if kbd.KeyDown(input.KeyEscape) {
 		b.latch = input.LatchNormal
 		b.buildDef = ""
 	}
 
 	// Armed panel captures clicks before selection/drag handling.
-	if len(b.panelButtons) > 0 && mouse.Pressed(hid.MouseButtonLeft) && !b.dragActive {
+	if len(b.panelButtons) > 0 && mouse.Pressed(input.MouseButtonLeft) && !b.dragActive {
 		if my := int32(mouse.Y); my >= 480-panelButtonH-12 {
 			if b.panelClick(mx, my) {
 				return
@@ -230,17 +218,17 @@ func (b *battleSession) handleInput(host *engine.Host, cl *client.Client) {
 	// Build placement mode captures clicks before selection handling.
 	if b.buildDef != "" {
 		b.updatePlacement(mx, my)
-		if mouse.Pressed(hid.MouseButtonLeft) && b.buildOK {
+		if mouse.Pressed(input.MouseButtonLeft) && b.buildOK {
 			b.commitBuild()
 			b.buildDef = ""
 		}
-		if mouse.Pressed(hid.MouseButtonRight) {
+		if mouse.Pressed(input.MouseButtonRight) {
 			b.buildDef = ""
 		}
 		return
 	}
 
-	leftHeld := mouse.Held(hid.MouseButtonLeft)
+	leftHeld := mouse.Held(input.MouseButtonLeft)
 	additive := kbd.HasShift()
 	if leftHeld && !b.dragActive {
 		b.dragActive = true
@@ -262,7 +250,7 @@ func (b *battleSession) handleInput(host *engine.Host, cl *client.Client) {
 			b.filterSelectionToPlayer(0)
 		}
 	}
-	if mouse.Pressed(hid.MouseButtonRight) && b.hasSelection() {
+	if mouse.Pressed(input.MouseButtonRight) && b.hasSelection() {
 		b.orderSelected(1, mx, my) // contextual [04 §3.4]
 		b.latch = input.LatchNormal
 	}

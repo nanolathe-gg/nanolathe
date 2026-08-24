@@ -343,8 +343,8 @@ func TestInitialMissionVerbs(t *testing.T) {
 		if queueLen(u) != 0 {
 			t.Fatalf("o should not queue order")
 		}
-		want := (uint32(1&3) << 17) | (uint32(2&3) << 19)
-		if u.Flags&((0x3<<17)|(0x3<<19)) != want {
+		want := (uint32(1&3) << 18) | (uint32(2&3) << 20)
+		if u.Flags&((0x3<<18)|(0x3<<20)) != want {
 			t.Fatalf("o flag bits wrong: got %b want %b", u.Flags, want)
 		}
 	}
@@ -808,8 +808,8 @@ func TestCoordinatesAndTimesVectors(t *testing.T) {
 		{
 			token: "o 2 1",
 			check: func(u *units.Unit) bool {
-				want := (uint32(2&3) << 17) | (uint32(1&3) << 19)
-				got := u.Flags & ((0x3 << 17) | (0x3 << 19))
+				want := (uint32(2&3) << 18) | (uint32(1&3) << 20)
+				got := u.Flags & ((0x3 << 18) | (0x3 << 20))
 				return got == want
 			},
 		},
@@ -861,15 +861,16 @@ func TestNonCampaignNoOp(t *testing.T) {
 }
 
 func TestMissionOFlagBits(t *testing.T) {
-	// o d1,d2 writes bits 17-18 and 19-20 [C10].
+	// o d1,d2 writes bits 18-19 and 20-21 [C10] per mask 0xffc3ffff [P0-06].
+	// TODO(question): o-verb bits 17-20 vs 18-21 conflict; using 18-21 per mask 0xffc3ffff
 	cases := []struct {
 		d1, d2 int
 		want   uint32
 	}{
 		{0, 0, 0},
-		{1, 2, (1 << 17) | (2 << 19)},
-		{3, 3, (3 << 17) | (3 << 19)},
-		{5, 9, (1 << 17) | (1 << 19)}, // &3 masks
+		{1, 2, (1 << 18) | (2 << 20)},
+		{3, 3, (3 << 18) | (3 << 20)},
+		{5, 9, (1 << 18) | (1 << 20)}, // &3 masks
 	}
 	for _, c := range cases {
 		w1 := units.New(5, nil)
@@ -878,7 +879,7 @@ func TestMissionOFlagBits(t *testing.T) {
 		u.Flags = 0
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "o " + strconv.Itoa(c.d1) + " " + strconv.Itoa(c.d2)}}}
 		RunInitialMissions(m1, w1)
-		got := u.Flags & ((0x3 << 17) | (0x3 << 19))
+		got := u.Flags & ((0x3 << 18) | (0x3 << 20))
 		if got != c.want {
 			t.Fatalf("o %d,%d: got %x want %x", c.d1, c.d2, got, c.want)
 		}

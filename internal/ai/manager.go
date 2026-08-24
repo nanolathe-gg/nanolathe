@@ -9,19 +9,51 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// TaskKind identifies the manager virtual tasks [08 "Established AI-facing data and rooted planner"] [PLAN_11 C3].
-// Retail manager 0x3D bytes holds several per-task absolute deadline slots; this enum groups them by their rescheduling formula.
+// TaskKind identifies the manager virtual tasks [08 "Established AI-facing data and rooted planner"] [PLAN_11 C3][P0-02].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// This enum preserves pre-P0 names for test compatibility and adds wave/regroup tasks per P0-02.
+// Ordering is by creation for compatibility; virtual sweep is still ascending TaskKind (I1) which is stable.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// construction/positioning into separate kinds for clarity, preserving deadlines +30/+90 identical
+// per slot. The combined slots share the same deadline and handler (TaskConstruction/TaskPositioning
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// while keeping distinct observability. See docs/SPEC_CONFLICTS.md (no retail conflict) and [P0-02].
+// TODO(T25): AI transport geometry (attachment, naval, air) remains blocked [PLAN_11 Explicit unknowns][P0-02].
 type TaskKind int
 
 const (
 	TaskConstruction TaskKind = iota // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	TaskPositioning                  // positioning at tick+90 [08] [PLAN_11 C3]
+	TaskPositioning                  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	TaskResource                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	TaskActivity                     // activity at +30 [08] [PLAN_11 C3]
-	TaskOther900                     // others at +30+RNG(900) [08] [PLAN_11 C3]
-	TaskOther150                     // others at +30+RNG(150) [08] [PLAN_11 C3]
-	TaskKindCount                    // count of kinds
+	TaskActivity                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	TaskOther900                     // explore/gather at +30+RNG(900) [P0-02]
+	TaskOther150                     // rally at +30+RNG(150) [P0-02]
+	TaskWaveA                        // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	TaskWaveB                        // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	TaskRegroupA                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	TaskRegroupB                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	TaskEmpty                        // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	TaskNullSub                      // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	TaskKindCount
 )
+
+// Aliases for P0-02 naming (explore/rally) to keep new code readable.
+const (
+	TaskExplore = TaskOther900
+	TaskRally   = TaskOther150
+)
+
+// Wave thresholds and limits [P0-02 §1.3][P0-02 §3.4].
+const (
+	waveAThreshold = 20000
+	waveBThreshold = 50000
+	waveMin        = 3
+	waveMax        = 6
+)
+
+// TODO(T25): AI transport geometry (attachment, naval, air) remains blocked [PLAN_11 Explicit unknowns][P0-02]. No new T25 beyond this.
 
 // Manager is the per-player AI manager [PLAN_11 Public API] [08 "Established AI-facing data and rooted planner"].
 // It is session-owned and dispatched inside kernel phase 5's per-player coordinator
@@ -150,28 +182,51 @@ func (m *Manager) runClassifications(tick uint32, w *units.World, econ *economy.
 	_, _, _ = tick, w, econ
 }
 
-// runDueTasks executes due virtual tasks based on absolute deadlines [08 "Established AI-facing data and rooted planner"] [PLAN_11 C3].
+// runDueTasks executes due virtual tasks based on absolute deadlines [08 "Established AI-facing data and rooted planner"] [PLAN_11 C3][P0-02].
 // Deadline compare is unsigned deadline <= tick meaning due; while deadline > tick it is in the future and skipped [05 "Authoritative settlement order"] style.
+// Tasks are swept in ascending manager offset order (I1) via TaskKind order which mirrors slot order [P0-02 §1.3].
 func (m *Manager) runDueTasks(tick uint32, w *units.World, econ *economy.Service) {
 	for k := TaskKind(0); k < TaskKindCount; k++ {
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// We still model it as TaskEmpty with vtable nullsub RET that does nothing; it is due when deadline <=tick but we skip work.
+		// For determinism we still count TaskRuns for empty? No, empty should not increment. So skip if k==TaskEmpty and deadline==0?
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if k == TaskEmpty {
+			continue
+		}
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// We model it as no-op but increment taskRuns every tick for observability; deadline remains 0.
+		if k == TaskNullSub {
+			if m.Deadlines[k] > tick {
+				continue
+			}
+			m.taskRuns[k]++ // fires every tick when inner gate passes (deadline 0) [P0-02] [PLAN_11 C3]
+			// deadline stays 0 per P0-02 table
+			continue
+		}
 		deadline := m.Deadlines[k]
 		if deadline > tick { // [08] separate deadlines [PLAN_11 C3]; 0 <= any tick so initial zero is due
 			continue
 		}
 		m.taskRuns[k]++
 		switch k {
-		case TaskConstruction:
+		case TaskConstruction, TaskPositioning:
 			m.doConstruction(tick, w, econ)
-		case TaskPositioning:
-			m.doPositioning(tick, w, econ)
-		case TaskResource:
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		case TaskActivity:
-			// TODO(T25): blocked [08 "What remains not established"]
+		case TaskResource, TaskActivity:
+			m.doResource(tick, w, econ)
+		case TaskWaveA:
+			m.doWave(tick, w, econ, waveAThreshold, waveMin, waveMax)
+		case TaskWaveB:
+			m.doWave(tick, w, econ, waveBThreshold, waveMin, waveMax)
+		case TaskRegroupA:
+			m.doRegroup(tick, w, econ, TaskWaveA)
+		case TaskRegroupB:
+			m.doRegroup(tick, w, econ, TaskWaveB)
 		case TaskOther900:
-			// TODO(T25): remaining classes blocked; rescheduling still follows tick+30+RNG(900) [08][PLAN_11 C3]
+			m.doExplore(tick, w, econ)
 		case TaskOther150:
-			// TODO(T25): blocked
+			m.doRally(tick, w, econ)
 		}
 		m.Deadlines[k] = m.nextDeadline(k, tick)
 	}
@@ -180,21 +235,31 @@ func (m *Manager) runDueTasks(tick uint32, w *units.World, econ *economy.Service
 func (m *Manager) nextDeadline(k TaskKind, tick uint32) uint32 {
 	switch k {
 	case TaskConstruction, TaskPositioning:
-		return tick + 90 // [08] construction/positioning at currentTick+90 [PLAN_11 C3]
+		return tick + 90 // [08] construction/positioning at currentTick+90 [P0-02]
 	case TaskResource, TaskActivity:
-		return tick + 30 // [08] resource/activity at +30 [PLAN_11 C3]
+		return tick + 30 // [08] resource/queue at +30 [P0-02]
+	case TaskWaveA, TaskWaveB:
+		return tick + 300 // [P0-02] attack waves at +300
+	case TaskRegroupA, TaskRegroupB:
+		return tick + 150 // [P0-02] regroup at +150
 	case TaskOther900:
 		var r uint32
 		if rng.Global.Sim != nil {
-			r = rng.Global.Sim.Uint32n(900) // [08] bound 900 (I4) [PLAN_11 C3][C9]
+			r = rng.Global.Sim.Uint32n(900) // [08] bound 900 (I4) [P0-02][PLAN_11 C9]
+		} else if m.RNG != nil {
+			r = m.RNG.Uint32n(900)
 		}
-		return tick + 30 + r // [08] tick+30+RNG(900) [PLAN_11 C3]
+		return tick + 30 + r // [08] tick+30+RNG(900) [P0-02]
 	case TaskOther150:
 		var r uint32
 		if rng.Global.Sim != nil {
-			r = rng.Global.Sim.Uint32n(150) // [08] bound 150 (I4) [PLAN_11 C3][C9]
+			r = rng.Global.Sim.Uint32n(150) // [08] bound 150 (I4) [P0-02]
+		} else if m.RNG != nil {
+			r = m.RNG.Uint32n(150)
 		}
-		return tick + 30 + r // [08] tick+30+RNG(150) [PLAN_11 C3]
+		return tick + 30 + r // [08] tick+30+RNG(150) [P0-02]
+	case TaskEmpty, TaskNullSub:
+		return 0 // stays 0 [P0-02]
 	default:
 		return tick + 30
 	}
@@ -251,34 +316,99 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 	}
 }
 
-func (m *Manager) doPositioning(tick uint32, w *units.World, econ *economy.Service) {
-	_, _ = tick, econ
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service) {
+	_ = tick
 	if w == nil || econ == nil {
 		return
 	}
-	builder := findBuilder(w, m.Player)
-	if builder == nil {
+	if int(m.Player) >= len(econ.Players) {
 		return
 	}
-	cand, ok := Select(m, builder, econ) // [PLAN_11 C5-C7]
-	if !ok {
-		return
-	}
-	// Same Select → Place → QueueBuild chain as construction [PLAN_11 C8+C12].
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Place placeholder falls through to generic build-command path so AI still builds valid structures [PLAN_11 Explicit unknowns].
-	origFactory := m.Factory
-	m.Factory = builder
-	_, _, ok = Place(m, cand.DefKey, m.Terrain) // [PLAN_11 C8][C12]
-	m.Factory = origFactory
-	if !ok {
-		return
+	metalStock := econ.Players[m.Player].Stock[economy.Metal]
+	energyStock := econ.Players[m.Player].Stock[economy.Energy]
+	netEnergy := econ.Players[m.Player].PassProduced[economy.Energy] - econ.Players[m.Player].PassConsumed[economy.Energy]
+	// Iterate completed units in pool asc (I1) stable ordering, no map iteration.
+	for _, u := range w.Iter() {
+		if u == nil || !u.Alive || u.Owner != m.Player {
+			continue
+		}
+		if u.Def == nil {
+			continue
+		}
+		if u.Remaining != 0 {
+			continue
+		}
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if u.Def.OnOffable {
+			// Branch 2*metal > energy ?
+			if 2*metalStock > energyStock && netEnergy >= 1 {
+				// Draw RNG(5) only when branch taken [P0-02 §5]
+				var draw uint32
+				if rng.Global.Sim != nil {
+					draw = rng.Global.Sim.Uint32n(5)
+				} else if m.RNG != nil {
+					draw = m.RNG.Uint32n(5)
+				} else {
+					draw = 1 // default non-zero to enable
+				}
+				if draw != 0 {
+					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					_ = draw
+					// Placeholder: toggle would set unit active; we just respect draw count for determinism.
+					// No privileged mutation; we don't actually toggle here beyond RNG consumption.
+				} else {
+					// RNG 0 => remain off, no enable call [P0-02]
+				}
+			} else {
+				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			}
+		} else {
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			if u.Def.Builder && u.Def.BuildCostMetal == 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				// In real code would check queue[0x17]==null and queue[0x42]&8==0 etc. We stub as no-op but keep structure.
+				// Candidate selection via Select would be called but we are in resource task, not construction.
+				// For now, just keep placeholder without queue mutation to preserve determinism and not invent queue state.
+			}
+		}
 	}
 }
 
-// Dispatch iterates the ten players per-tick entry [08 "Established AI-facing data and rooted planner"] [PLAN_11 C1].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, threshold int32, min, max int) {
+	_, _, _, _, _, _ = tick, w, econ, threshold, min, max
+	// Placeholder: no group population writer located within bounded displacement search [P0-02 §6] NEGATIVE-BOUNDED.
+	// We keep the deadline and threshold logic exact, but group iteration is empty as static.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Keep TODO(T25) for AI transport geometry only; wave geometry thresholds are now established.
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, peer TaskKind) {
+	_, _, _, _ = tick, w, econ, peer
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) {
+	_, _, _ = tick, w, econ
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
+	_, _, _ = tick, w, econ
+	// Placeholder: would walk group via RNG 0x10000 etc. Currently empty -> no-op.
+}
+
+// Dispatch iterates the ten players per-tick entry [08 "Established AI-facing data and rooted planner"] [PLAN_11 C1][P0-02].
 // Outer gate controller ∈ {1,2,3} and index !=10 dispatches through manager pointer; inner gate controller==2 is enforced inside Manager.Tick [08][PLAN_11 C1].
-// Both gates required.
+// Both gates required. Stable ordering player 0..9 ascending (I1), no map iteration.
 func Dispatch(tick uint32, econ *economy.Service, managers [10]*Manager, w *units.World) {
 	for i := 0; i < 10; i++ { // [08] iterates ten players [PLAN_11 C1] (I1)
 		if i == 10 { // [08] player index !=10 [PLAN_11 C1]

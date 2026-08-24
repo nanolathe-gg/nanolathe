@@ -1,37 +1,19 @@
-// Package client is the Kaiju window and frame loop.
+// Package client is the window and frame loop.
 //
 // Presentation is the one deliberate divergence from retail's draw path, which
 // samples committed state with no interpolation [03 §2.4]. The sim never reads
 // wall-clock time, input state, camera, or renderer state (I6). Client owns the
-// Kaiju update boundary but never advances a clock or mutates sim state itself;
-// the injected Step callback owns those effects (PLAN_03 C15/C16, PLAN_04A C9).
+// update boundary but never advances a clock or mutates sim state itself; the
+// injected Step callback owns those effects (PLAN_03 C15/C16, PLAN_04A C9).
 //
-// Exactly one Updater registration exists in this package (C12).
-// Kaiju's Updater is concurrent and unordered, so extra registrations would
-// reintroduce nondeterministic ordering and violate I1/I6.
-//
-// Headless mode skips window creation entirely and must remain fully functional
-// (C11). The Kaiju import is confined to this package; no sim package imports
-// this package (I6).
-// TODO(T23): window style bits and SystemParametersInfoA semantics untraced.
-// Kaiju creates the window via windowing.New; retail's exact style bits are
-// not reproduced, but the negotiated size concept survives.
+// The presentation backend is a pure-Go software framebuffer: composeIndexed
+// produces the indexed image, the palette expands it to RGBA once per frame,
+// and Ebitengine uploads and presents it. No sim package imports this package
+// (I6).
 package client
 
 import (
-	"fmt"
-	"log/slog"
-	"os"
-	"path/filepath"
-	"reflect"
-	"sync"
-
-	"kaijuengine.com/bootstrap"
-	"kaijuengine.com/engine"
-	"kaijuengine.com/engine/assets"
-	"kaijuengine.com/engine/ui"
-	"kaijuengine.com/platform/hid"
-	"kaijuengine.com/rendering"
+	"github.com/hajimehoshi/ebiten/v2"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
@@ -40,29 +22,8 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// EventKind classifies a drained input event for the session.
-type EventKind int
-
-const (
-	EventKey   EventKind = iota // keyboard token
-	EventMouse                  // mouse record
-	EventClose                  // window close
-)
-
-// Event is a translated input record. Translation happens at the boundary so
-// nothing downstream sees Kaiju types. The retail token vocabulary drives
-// this shape [07 §2]; later WUs extend it with the ring/latch semantics.
-type Event struct {
-	Kind             EventKind
-	Key              int
-	State            hid.KeyState
-	X, Y             float32 // mouse position
-	Button           int
-	ScrollX, ScrollY float32
-}
-
 // Options configures a Client. Step is the injected owner of clock, sub-ticks,
-// and snapshot publish; it is called first inside the sole Updater (C9). The
+// and snapshot publish; it is called first inside each update (C9). The
 // window, palette, camera, and snapshot dependencies are carried here.
 type Options struct {
 	Step func(delta float64) // injected owner of clock/sub-ticks/snapshot publish (C9)
@@ -71,22 +32,20 @@ type Options struct {
 	Buffer *snapshot.Buffer
 
 	// Negotiated window size: the HUD panel arithmetic in phase 12 depends on
-	// it, so it is not invented per frame. Zero means the Kaiju default.
+	// it, so it is not invented per frame. Zero means 640×480.
 	Width, Height int
 	Title         string
 
 	// Headless skips window creation entirely (C11). Nothing above becomes
-	// reachable from --headless; the binary still links Kaiju but does not
-	// create an engine.Host.
+	// reachable from --headless; RunGame returns immediately.
 	Headless bool
 }
 
-// Client is the Kaiju window, palette, camera, and snapshot reader. It keeps
-// retail's 8-bit indexed software renderer and hands Kaiju one texture per
+// Client is the software framebuffer, palette, camera, and snapshot reader. It
+// keeps retail's 8-bit indexed renderer and presents one RGBA upload per
 // frame. Rendering interpolates Previous→Current at render fraction (I6).
 type Client struct {
 	opts Options
-	host *engine.Host
 
 	// Overlay draws battle-view chrome (build panel, ghosts, menus) after
 	// world units and before the debug text. Presentation only [I6].
@@ -96,6 +55,12 @@ type Client struct {
 	width, height int
 	indexed       []uint8
 	rgba          []byte
+	img           *ebiten.Image // backend-presented frame; lazily sized
+
+	// Accumulated presented seconds drive the render interpolation fraction;
+	// wall-clock time never reaches the sim (I6) — only this presentation
+	// fraction derives from it.
+	runtime float64
 
 	// Palette fallback (WU-04A-2 replaces this with full tables). The conversion
 	// goes logical → physical through the 256-byte table at present time only
@@ -111,28 +76,19 @@ type Client struct {
 	cam     *camera.Camera
 	fnt     *formats.FNT
 
-	texture   *rendering.Texture
-	uiManager *ui.Manager
-	image     *ui.Image
-
-	mu     sync.Mutex
-	events []Event
+	in InputState
 }
 
 // New creates a client. It allocates the indexed framebuffer at the negotiated
-// logical size and prepares fallback palette tables. Window creation is deferred
-// to Launch via bootstrap.Main; in headless mode no window is ever created.
+// logical size and prepares fallback palette tables. Window creation happens
+// in RunGame; in headless mode no window is ever created.
 func New(opts Options) (*Client, error) {
 	w := opts.Width
 	h := opts.Height
 	if w <= 0 {
-		w = engine.DefaultWindowWidth
+		w = 640
 	}
 	if h <= 0 {
-		h = engine.DefaultWindowHeight
-	}
-	if w <= 0 || h <= 0 {
-		w = 640
 		h = 480
 	}
 	buf := opts.Buffer
@@ -146,8 +102,8 @@ func New(opts Options) (*Client, error) {
 		height:  h,
 		indexed: make([]uint8, w*h),
 		rgba:    make([]byte, w*h*4),
-		events:  make([]Event, 0, 32),
 	}
+	c.in = *newInputState()
 	// Fallback palette: grayscale base and identity logical table. This keeps
 	// the framebuffer path valid before WU-04A-2 loads PALETTE.PAL/ALP/LHT/SHD
 	// and the 256-byte logical→physical lookup [03 §4.3] (C7).
@@ -157,10 +113,6 @@ func New(opts Options) (*Client, error) {
 		c.base[i][2] = byte(i)
 		c.base[i][3] = 255
 		c.logical[i] = byte(i)
-	}
-	// Headless returns immediately with no window and no display (C11).
-	if opts.Headless {
-		return c, nil
 	}
 	return c, nil
 }
@@ -191,77 +143,17 @@ func (c *Client) SetSnapshot(b *snapshot.Buffer) {
 	}
 }
 
-// Host returns the underlying engine.Host after Launch, or nil if headless or
-// not yet launched.
-func (c *Client) Host() *engine.Host { return c.host }
+// Size returns the negotiated logical framebuffer size.
+func (c *Client) Size() (int, int) { return c.width, c.height }
 
-// Launch implements bootstrap.GameInterface. Kaiju calls it once after the
-// window and renderer are initialized; we build everything that needs a Host
-// here.
-//
-// Exactly one Updater registration exists in the whole program
-// (C12). The updater is concurrent and unordered, so a single registration
-// that drives clock→sub-ticks→snapshot publish→compose→upload→draw sequentially
-// is required to preserve determinism (I1/I6).
-func (c *Client) Launch(host *engine.Host) {
-	c.host = host
+// Input exposes the per-frame input snapshot for the windowed paths. Edge
+// flags are valid for exactly one Update; held state persists while down.
+func (c *Client) Input() *InputState { return &c.in }
 
-	// Ensure an orthographic UI camera covers the negotiated size. The host
-	// already creates one at the negotiated dimensions, but we keep the size
-	// in sync if the window was negotiated differently.
-	if c.host.Window != nil {
-		w := float32(c.host.Window.Width())
-		h := float32(c.host.Window.Height())
-		if w > 0 && h > 0 {
-			// Keep client's logical size in step with the actual window size
-			// (the negotiated size concept survives the single Kaiju path).
-			if int(w) != c.width || int(h) != c.height {
-				c.width = int(w)
-				c.height = int(h)
-				c.indexed = make([]uint8, c.width*c.height)
-				c.rgba = make([]byte, c.width*c.height*4)
-				c.texture = nil
-			}
-		}
-		if c.opts.Title != "" {
-			c.host.Window.SetTitle(c.opts.Title)
-		}
-	}
-
-	c.uiManager = &ui.Manager{}
-	c.uiManager.Init(host)
-
-	// Prepare the single framebuffer texture and image. Creation is done here
-	// rather than in Frame so the per-frame path only does compose→convert→
-	// upload. If creation fails the per-frame upload will recreate it.
-	c.ensureResources()
-
-	// The sole updater (C12). It owns the Kaiju update boundary but never
-	// mutates sim state itself; Step does (C9).
-	host.Updater.AddUpdate(func(delta float64) {
-		// C9: Step first, then snapshot read and presentation. Client never
-		// writes sim state, calls a sim mutator, or advances the clock.
-		if c.opts.Step != nil {
-			c.opts.Step(delta)
-		}
-		// Translate Kaiju hid types at the boundary into retail vocabulary
-		// (C5) so downstream code never sees Kaiju types.
-		c.pollInput()
-		alpha := c.computeAlpha()
-		c.Frame(alpha)
-	})
-}
-
-// computeAlpha derives the render interpolation fraction. In the full engine
-// it is clamp((nowNanos-tickStartNanos)/tickPeriodNanos,0,1) (PLAN_03 C16).
-// For the 60 fps / 30 Hz stub we derive it from host runtime so the ramp is
-// visibly correct: frac = fract(runtime*30).
+// computeAlpha derives the render interpolation fraction:
+// frac(runtime*30), clamped to [0,1] (PLAN_03 C16).
 func (c *Client) computeAlpha() float32 {
-	if c.host == nil {
-		return 1
-	}
-	rt := c.host.Runtime()
-	ticks := rt * 30.0
+	ticks := c.runtime * 30.0
 	frac := ticks - float64(int64(ticks))
 	if frac < 0 {
 		frac = 0
@@ -272,156 +164,4 @@ func (c *Client) computeAlpha() float32 {
 		return 0
 	}
 	return float32(frac)
-}
-
-// pollInput translates host.Window.Keyboard and host.Window.Mouse (platform/hid)
-// into the retail token vocabulary at the boundary.
-func (c *Client) pollInput() {
-	if c.host == nil || c.host.Window == nil {
-		return
-	}
-	kbd := &c.host.Window.Keyboard
-	mouse := &c.host.Window.Mouse
-
-	var evs []Event
-
-	// Keyboard: sample the 30-entry ring vocabulary (29 usable, refusal when
-	// full [07 §2]) at the boundary. Later WUs implement the exact ring; for
-	// 04A-1 we drain discrete down/held presses.
-	for k := 0; k < hid.KeyboardKeyMaximum; k++ {
-		if kbd.KeyDown(hid.KeyboardKey(k)) {
-			evs = append(evs, Event{Kind: EventKey, Key: k, State: hid.KeyStateDown})
-		} else if kbd.KeyHeld(hid.KeyboardKey(k)) {
-			// Held is also reported so edge scroll and camera remain responsive;
-			// the session deduplicates per its input phase.
-			evs = append(evs, Event{Kind: EventKey, Key: k, State: hid.KeyStateHeld})
-		}
-	}
-	if mouse.Moved() || mouse.ButtonChanged() || mouse.Scrolled() || mouse.Held(hid.MouseButtonLeft) || mouse.Held(hid.MouseButtonRight) {
-		evs = append(evs, Event{
-			Kind:    EventMouse,
-			X:       mouse.X,
-			Y:       mouse.Y,
-			Button:  mouse.ButtonState(hid.MouseButtonLeft),
-			ScrollX: mouse.ScrollX,
-			ScrollY: mouse.ScrollY,
-		})
-	}
-	if len(evs) == 0 {
-		return
-	}
-	c.mu.Lock()
-	c.events = append(c.events, evs...)
-	c.mu.Unlock()
-}
-
-// DrainInput returns input events for the session to apply. It drains the
-// internal queue so the same event is not applied twice.
-func (c *Client) DrainInput() []Event {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.events) == 0 {
-		return nil
-	}
-	out := make([]Event, len(c.events))
-	copy(out, c.events)
-	c.events = c.events[:0]
-	return out
-}
-
-// PluginRegistry implements bootstrap.GameInterface. No Lua types are exposed.
-func (c *Client) PluginRegistry() []reflect.Type { return nil }
-
-// ContentDatabase implements bootstrap.GameInterface. It returns Kaiju's stock
-// content database which is a hard prerequisite for
-// host.MaterialCache().Material(...) — failure is misleading without it. The
-// content directory is populated via `make kaiju-content` (cp -R
-// ../kaiju/src/editor/editor_embedded_content/editor_content ./content).
-func (c *Client) ContentDatabase() (assets.Database, error) {
-	// Try several locations for the Kaiju stock content. When run via
-	// `go run ./cmd/nanolathe` the working directory is the repo root,
-	// but the built binary may be executed from a temp directory.
-	candidates := []string{
-		"content",
-		"./content",
-		"../content",
-		"../../content",
-	}
-	// Also try relative to the executable.
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		candidates = append(candidates,
-			filepath.Join(dir, "content"),
-			filepath.Join(dir, "../content"),
-			filepath.Join(dir, "../../content"),
-		)
-		// Walk up from cwd as well.
-		if cwd, err := os.Getwd(); err == nil {
-			candidates = append(candidates,
-				filepath.Join(cwd, "content"),
-				filepath.Join(cwd, "../content"),
-			)
-		}
-		_ = dir
-	}
-	for _, cand := range candidates {
-		if st, err := os.Stat(cand); err == nil && st.IsDir() {
-			// Verify it looks like Kaiju content (has renderer/materials).
-			if _, err := os.Stat(filepath.Join(cand, "renderer")); err == nil {
-				return newKaijuContentDatabase(cand)
-			}
-		}
-	}
-	// Fallback to the original relative path so the error message from
-	// assets.NewFileDatabase is preserved, but include diagnostics.
-	return newKaijuContentDatabase("content")
-}
-
-// Run is a convenience helper that starts the Kaiju main loop with this client
-// as the GameInterface. It blocks until the window closes. In headless mode it
-// returns immediately. Most callers use bootstrap.Main directly:
-//
-//	client, _ := client.New(opts)
-//	bootstrap.Main(client, platformState)
-func (c *Client) Run(platformState any) {
-	if c.opts.Headless {
-		return
-	}
-	bootstrap.Main(c, platformState)
-}
-
-// ensureResources creates the framebuffer texture and persistent UI image
-// when not yet present and the host is ready. It is called once from Launch
-// and lazily from Frame if a resize discarded the texture.
-func (c *Client) ensureResources() {
-	if c.host == nil || c.host.Window == nil || c.uiManager == nil {
-		return
-	}
-	if c.texture == nil {
-		key := fmt.Sprintf("nanolathe.framebuffer.%dx%d", c.width, c.height)
-		tex, err := c.host.TextureCache().InsertRawTexture(key, c.rgba, c.width, c.height, rendering.TextureFilterNearest)
-		if err != nil {
-			slog.Error("create framebuffer texture", "error", err)
-			return
-		}
-		c.texture = tex
-		if c.image != nil {
-			c.image.SetTexture(tex)
-		}
-	}
-	if c.image == nil {
-		mat, err := c.host.MaterialCache().Material(assets.MaterialDefinitionUITransparent)
-		if err != nil {
-			slog.Error("load framebuffer UI material", "error", err)
-			return
-		}
-		c.image = c.uiManager.Add().ToImage()
-		c.image.Init(c.texture)
-		c.image.Base().ToPanel().SetMaterial(mat)
-		c.image.Base().Layout().SetPositioning(ui.PositioningFixed)
-		c.image.Base().Layout().SetZ(1)
-	}
-	layout := c.image.Base().Layout()
-	layout.Scale(float32(c.width), float32(c.height))
-	layout.SetOffset(0, 0)
 }

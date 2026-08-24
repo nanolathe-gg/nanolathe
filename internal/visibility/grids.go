@@ -7,15 +7,17 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// Mode is the mode-word bits [03 §3.1] [PLAN_05 C2].
-// Bit 2 selects sprite-mask (0) vs terrain-ray (1); other bits control history/current enable.
+// Mode is the mode-word bits [03 §3.1][P0-18] [PLAN_05 C2].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Word u16 OR idempotent vs u8 wrap inc/dec [P0-18].
 type Mode uint32
 
 const (
-	ModeHistoryEnabled Mode = 1 << 0 // when clear, word grid init fills all-bits-set [03 §3.2] C7
-	ModeCurrentEnabled Mode = 1 << 1 // when clear, byte grids fill with 1 [03 §3.2] C7
-	ModeTerrainRay     Mode = 1 << 2 // selects terrain-ray vs sprite-mask [03 §3.2] C2
-	ModeFogCacheValid  Mode = 1 << 8 // presentation dirty bit; Service owns waking composer [03 §3.3]
+	ModeHistoryEnabled Mode = 1 << 0 // 0x1 history — when clear, word grid init fills all-bits-set [03 §3.2] C7 [P0-18]
+	ModeCurrentEnabled Mode = 1 << 1 // 0x2 byte-vs-word — selects predicate source; when clear, byte grids fill with 1 [03 §3.2] C7 [P0-18]
+	ModeTerrainRay     Mode = 1 << 2 // 0x4 ray-vs-sprite — selects raster shape [03 §3.2] C2 [P0-18]
+	ModeLazyDirty      Mode = 1 << 3 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	ModeFogCacheValid  Mode = 1 << 8 // presentation dirty bit (alias of lazy dirty's high bit for fog); Service owns waking composer [03 §3.3]
 )
 
 // PlayerID is a player slot 0..9 [04 §2] [03 §3.1] ten usable bits.
@@ -177,7 +179,8 @@ func (s *Service) incByteGrid(idx int, owner PlayerID) bool {
 	return true
 }
 
-// decByteGrid decrements the owner's byte refcount at idx.
+// decByteGrid decrements the owner's byte refcount at idx P0-11.
+// Retail does plain DEC with u8 wrap 256 (0→255) [03 §3.1] P0-11.
 func (s *Service) decByteGrid(idx int, owner PlayerID) bool {
 	if int(owner) >= len(s.byteGrids) || s.byteGrids[owner] == nil {
 		return false
@@ -185,9 +188,7 @@ func (s *Service) decByteGrid(idx int, owner PlayerID) bool {
 	if idx < 0 || idx >= len(s.byteGrids[owner]) {
 		return false
 	}
-	if s.byteGrids[owner][idx] == 0 {
-		return false
-	}
+	// Plain u8 wrap, no saturation [03 §3.1] P0-11; DEC at 0 wraps to 255.
 	s.byteGrids[owner][idx]--
 	return true
 }

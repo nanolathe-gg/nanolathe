@@ -1,9 +1,6 @@
 package client
 
 import (
-	"kaijuengine.com/matrix"
-	"kaijuengine.com/rendering"
-
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
@@ -12,11 +9,10 @@ import (
 // 30 Hz and the renderer interpolates between ticks for smooth modern motion
 // (I6). No sim package's mutable state is imported or written here.
 //
-// Framebuffer path (verified against ../kaiju/src):
+// Framebuffer path:
 //  1. Compose into own []uint8 indexed framebuffer at logical size.
 //  2. Convert to RGBA through palette.Tables.Logical→Base at present time only (C7).
-//  3. Upload through a cached nearest-filtered texture on Kaiju's render
-//     boundary, then present it with one persistent fixed-position UI image.
+//  3. The backend (backend_ebiten.go) uploads the RGBA bytes and presents them.
 func (c *Client) Frame(alpha float32) {
 	// C9: alpha clamped [0,1]; never writes sim state, never calls sim
 	// mutator, never advances clock (I6, PLAN_03 C15/C16).
@@ -29,29 +25,12 @@ func (c *Client) Frame(alpha float32) {
 		alpha = 1
 	}
 
-	if c.host == nil || c.host.Window == nil {
-		// Headless or not yet launched: no window, no display (C11). Still
-		// read the snapshot to satisfy the "reads snapshot.Buffer.Read()"
-		// contract even when not drawing, but do not mutate it.
+	if c.opts.Headless {
+		// Headless: no window, no display (C11). Still read the snapshot to
+		// satisfy the "reads snapshot.Buffer.Read()" contract even when not
+		// drawing, but do not mutate it.
 		_, _, _ = c.buffer.Read()
 		return
-	}
-
-	// Handle negotiated size changes (the single Kaiju path preserves the
-	// concept). If the window was resized, reallocate buffers and discard the
-	// texture so it is recreated at the new size and rebound to the image.
-	w := c.host.Window.Width()
-	h := c.host.Window.Height()
-	if w <= 0 || h <= 0 {
-		w = c.width
-		h = c.height
-	}
-	if w != c.width || h != c.height {
-		c.width = w
-		c.height = h
-		c.indexed = make([]uint8, w*h)
-		c.rgba = make([]byte, w*h*4)
-		c.texture = nil
 	}
 
 	// C9: read snapshot. The call is presentation-only; the sim never reads
@@ -61,43 +40,12 @@ func (c *Client) Frame(alpha float32) {
 	// alpha saturates at 1.0 with no extrapolation.
 	prev, cur, ok := c.buffer.Read()
 
-	// Compose. For WU-04A-1 the terrain and unit buckets are not yet present,
-	// so we produce a visibly correct alpha ramp that proves the 60 fps loop
-	// is interpolating against the injected 30 Hz stub. The ramp moves a
-	// vertical bar smoothly with alpha and shows tick feedback when a buffer
-	// exists.
 	c.composeIndexed(alpha, prev, cur, ok)
 
 	// Convert to RGBA through logical→base at present time only (C7). This is
 	// the only point where indexed pixels become RGBA so palette animation
 	// stays possible in later phases.
 	c.convertIndexedToRGBA()
-
-	// Upload. Create once with NewTextureFromMemory at TextureFilterNearest;
-	// per frame TextureWritePixels with Region 0,0,w,h. Use nearest filtering
-	// — bilinear on indexed-derived pixels destroys the look.
-	c.ensureResources()
-	if c.texture == nil {
-		return
-	}
-	texture := c.texture
-	req := rendering.GPUImageWriteRequest{
-		Region: matrix.Vec4i{0, 0, int32(c.width), int32(c.height)},
-		Pixels: c.rgba,
-	}
-	// Kaiju's updater workers are concurrent. Queue Vulkan work for the
-	// locked render boundary after updates join, keeping it off a worker OS
-	// thread on macOS/MoltenVK.
-	c.host.RunBeforeRender(func() {
-		if texture == nil || !texture.RenderId.IsValid() || c.host.Window == nil ||
-			c.host.Window.GpuInstance == nil || !c.host.Window.GpuInstance.IsValid() {
-			return
-		}
-		device := c.host.Window.GpuInstance.PrimaryDevice()
-		if device != nil {
-			texture.WritePixels(device, []rendering.GPUImageWriteRequest{req})
-		}
-	})
 }
 
 // composeIndexed fills c.indexed at the logical size. It demonstrates a
@@ -247,6 +195,11 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 				c.indexed[y*w+x] = 255 // white interior
 			}
 		}
+	}
+	// Menu chrome (front-end panels) draws over the placeholder too, so the
+	// shell can present menus without a terrain bound [I6].
+	if c.Overlay != nil {
+		c.Overlay(c)
 	}
 	// If we have a real snapshot, encode the tick in the top rows so the
 	// viewer can verify that the stub is ticking at 30 Hz while the bar

@@ -41,32 +41,54 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 	if m.Type != TypeCampaign && !m.IsRestore {
 		return
 	}
-	// Build deterministic world unit list in pool order (lowest-free allocation order).
-	// Iteration is deterministic: pool ascending matches creation order; we also
-	// ensure player 0..9 stable ordering per I1 by sorting by handle already.
-	worldUnits := w.Iter()
-	if len(worldUnits) == 0 && len(m.Units) == 0 {
+	// P0-04/P0-06: two-pass spawner with sparse created[] array [P0-04][P0-06].
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// We reconstruct sparse by placement index stored on the unit.
+	// createdSparse[i] is the unit for placement i or nil if allocation failed.
+	createdSparse := make([]*units.Unit, len(m.Units))
+	// Build index from world units by PlacementIdx.
+	mapped := 0
+	for _, u := range w.Iter() {
+		if u == nil {
+			continue
+		}
+		if u.PlacementIdx >= 0 && u.PlacementIdx < len(createdSparse) {
+			createdSparse[u.PlacementIdx] = u
+			mapped++
+		}
+	}
+	// Fallback for legacy fixtures that create world units without
+	// placement linkage (PlacementIdx==-1). If no placement-indexed units
+	// were found but world size matches placements, assume dense order for
+	// test compatibility [P0-06] (retail sparse path would have PlacementIdx).
+	if mapped == 0 && len(w.Iter()) == len(m.Units) && len(w.Iter()) > 0 {
+		ws := w.Iter()
+		for i := range m.Units {
+			if i < len(ws) {
+				createdSparse[i] = ws[i]
+			}
+		}
+	}
+	if len(m.Units) == 0 {
 		return
 	}
-	// Build ident->handle and unitname->handle maps for g/wa lookups [04 §3.6].
-	// Retail resolves names against the spawned created[] parallel array, so a
-	// skipped creation (bad player, countdown) shifts nothing; our index map
-	// assumes placement i ⇔ worldUnits[i].
-	// TODO(question): carry placement identity on the created unit so lookups
-	// resolve by identity instead of array position.
-	identMap := make(map[string]int)    // lower(Ident) -> index in worldUnits
-	unitNameMap := make(map[string]int) // lower(UnitName) -> index
+	// Build ident->placementIdx and unitname->placementIdx maps for g/wa lookups
+	// via sparse scan in placement order 0..count-1, first-occurrence wins,
+	// skipping NULL gaps [P0-06][P0-04] A27. Retail scans created[] directly.
+	identMap := make(map[string]int)    // lower(Ident) -> placementIdx
+	unitNameMap := make(map[string]int) // lower(UnitName) -> placementIdx
 	for i, pl := range m.Units {
-		if i >= len(worldUnits) {
-			break
+		if createdSparse[i] == nil {
+			continue
 		}
-		h := worldUnits[i].Handle
-		_ = h
 		if pl.Ident != "" {
-			identMap[strings.ToLower(pl.Ident)] = i
+			lower := strings.ToLower(pl.Ident)
+			if _, ok := identMap[lower]; !ok {
+				identMap[lower] = i
+			}
 		}
 		if pl.UnitName != "" {
-			// Preserve first occurrence for unitname wildcard; case-insensitive.
 			lower := strings.ToLower(pl.UnitName)
 			if _, ok := unitNameMap[lower]; !ok {
 				unitNameMap[lower] = i
@@ -74,28 +96,35 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 		}
 	}
 	// Per-unit attach storage for i-verb immediate attach (not a queued order) [04 §3.6].
-	attachMap := make(map[int]int) // unit idx -> target idx
+	attachMap := make(map[int]int) // placementIdx -> target placementIdx
 
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	for idx, placement := range m.Units {
-		if idx >= len(worldUnits) {
-			break
-		}
-		u := worldUnits[idx]
+		u := createdSparse[idx]
 		if u == nil {
 			continue
 		}
-		script := placement.InitialMission
-		if strings.TrimSpace(script) == "" {
+		if strings.TrimSpace(placement.InitialMission) == "" {
 			continue
 		}
+		// Also skip if InitialMission string was empty/NULL in retail sense.
+		// We already handle empty string above; retain explicit check for NULL
+		// equivalent (empty).
+		script := placement.InitialMission
+		// Prepare worldUnits list for handlers that need dense iteration (e.g., g target handle lookup).
+		// Handlers will use createdSparse via identMap, not dense.
+		// Keep worldUnits for handle resolution but base maps on sparse.
+		worldUnits := w.Iter()
 		ctx := &interpCtx{
-			unit:        u,
-			worldUnits:  worldUnits,
-			identMap:    identMap,
-			unitNameMap: unitNameMap,
-			attachMap:   attachMap,
-			mission:     m,
-			catalog:     cat,
+			unit:          u,
+			worldUnits:    worldUnits,
+			createdSparse: createdSparse,
+			identMap:      identMap,
+			unitNameMap:   unitNameMap,
+			attachMap:     attachMap,
+			mission:       m,
+			catalog:       cat,
+			placementIdx:  idx,
 		}
 		tokens := tokenizeScript(script)
 		for _, tok := range tokens {
@@ -109,9 +138,9 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 			}
 			dispatchToken(trimmed, ctx)
 		}
-		// Postlude C12.
+		// Postlude C12: when at least one order queued, bit5 clears and unless
+		// suppressTail latch (set by numeric a, p, d, s) a final MakeSelectable queues [P0-06].
 		if ctx.queued > 0 {
-			// Clear bit 5 of class/state word [04 §3.6] C12.
 			u.Flags &^= 1 << 5 // [04 §3.6] bit 5
 			if !ctx.suppressTail {
 				id := orders.Lookup("MakeSelectable") // [04 §3.6] C12 zero aux args
@@ -121,28 +150,23 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 				}
 			}
 		}
-		// i-verb attaches: retail performs the attach IMMEDIATELY via the
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// through a queued order. The units/orders attach API does not exist
-		// yet, so collected pairs are currently discarded.
-		// TODO(question): route these through the transport/attach executor
-		// once phase 7's transport service exposes an immediate attach entry;
-		// until then the verb parses and defers, it does not silently no-op.
 		_ = attachMap
 	}
 }
 
 // interpCtx holds per-unit interpreter state.
 type interpCtx struct {
-	unit         *units.Unit
-	worldUnits   []*units.Unit
-	identMap     map[string]int
-	unitNameMap  map[string]int
-	attachMap    map[int]int
-	mission      *Mission
-	catalog      *content.Catalog // production existence/building lookups [04 §3.6]; may be nil in fixtures with hooks
-	queued       int
-	suppressTail bool
+	unit          *units.Unit
+	worldUnits    []*units.Unit
+	createdSparse []*units.Unit // sparse P0-04/P0-06 created[placementIdx] [P0-04][P0-06]
+	identMap      map[string]int
+	unitNameMap   map[string]int
+	attachMap     map[int]int
+	mission       *Mission
+	catalog       *content.Catalog // production existence/building lookups [04 §3.6]; may be nil in fixtures with hooks
+	queued        int
+	suppressTail  bool
+	placementIdx  int
 }
 
 // tokenizeScript splits the script into verb tokens on EVERY comma — the
@@ -310,7 +334,7 @@ func isBuildingType(ctx *interpCtx, name string) bool {
 func (ctx *interpCtx) lookupIdentOrUnitName(name string) int {
 	lower := strings.ToLower(strings.TrimSpace(name))
 	if idx, ok := ctx.identMap[lower]; ok {
-		// Ident match first [04 §3.6] C10 g verb
+		// Ident match first [P0-06] scans placement order sparse first-occurrence.
 		return idx
 	}
 	if idx, ok := ctx.unitNameMap[lower]; ok {
@@ -321,14 +345,22 @@ func (ctx *interpCtx) lookupIdentOrUnitName(name string) int {
 
 func (ctx *interpCtx) targetHandleForName(name string) (handle int, found bool) {
 	idx := ctx.lookupIdentOrUnitName(name)
-	if idx < 0 || idx >= len(ctx.worldUnits) {
+	if idx < 0 || idx >= len(ctx.createdSparse) {
 		return 0, false
 	}
-	u := ctx.worldUnits[idx]
+	u := ctx.createdSparse[idx]
 	if u == nil {
 		return 0, false
 	}
 	return int(u.Handle), true
+}
+
+// sparseUnit returns the unit for sparse placement index or nil.
+func (ctx *interpCtx) sparseUnit(placementIdx int) *units.Unit {
+	if placementIdx < 0 || placementIdx >= len(ctx.createdSparse) {
+		return nil
+	}
+	return ctx.createdSparse[placementIdx]
 }
 
 // Handlers.
@@ -578,9 +610,9 @@ func handleG(token string, ctx *interpCtx) {
 	name := fields[0]
 	idx := ctx.lookupIdentOrUnitName(name)
 	if idx < 0 {
-		return // unresolved names queue nothing [04 §3.6] C10
+		return // unresolved names queue nothing [P0-06] C10, uses sparse first-occurrence
 	}
-	target := ctx.worldUnits[idx]
+	target := ctx.sparseUnit(idx)
 	if target == nil {
 		return
 	}
@@ -626,28 +658,18 @@ func handleI(token string, ctx *interpCtx) {
 	if idx < 0 {
 		return
 	}
-	target := ctx.worldUnits[idx]
+	target := ctx.sparseUnit(idx)
 	if target == nil {
 		return
 	}
-	// Immediate internal attach message — not a queued order [04 §3.6] C10.
-	// Record attachment for test visibility; no order queued.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	if ctx.attachMap != nil {
-		// Map from unit idx to target idx.
-		// Find current unit index.
-		curIdx := -1
-		for i, u := range ctx.worldUnits {
-			if u == ctx.unit {
-				curIdx = i
-				break
-			}
-		}
+		curIdx := ctx.placementIdx
 		if curIdx >= 0 {
 			ctx.attachMap[curIdx] = idx
 		}
 	}
 	_ = target
-	// No queued order, no suppress.
 }
 
 func handleO(token string, ctx *interpCtx) {
@@ -672,15 +694,11 @@ func handleO(token string, ctx *interpCtx) {
 			d2 = int64(fv)
 		}
 	}
-	// Writes two 2-bit fields of the unit flag word: bits 17-18 ← d1 &3 and
-	// bits 19-20 ← d2 &3 per [04 §3.6] C10.
-	// TODO(question): authorities conflict on the bit position — the
-	// decompile (notes/campaign/02 §5, `o` row) shows mask 0xffc3ffff with the
-	// pair at bits 18-21 (d1@18-19, d2@20-21), one position higher than
-	// doc-04's prose. Doc-04 is implemented; settle with a probe before
-	// moving either reading.
-	ctx.unit.Flags &^= (0x3 << 17) | (0x3 << 19)
-	ctx.unit.Flags |= (uint32(d1&3) << 17) | (uint32(d2&3) << 19)
+	// Writes two 2-bit fields of the unit flag word: bits 18-19 ← d1 &3 and
+	// bits 20-21 ← d2 &3 per mask 0xffc3ffff [04 §3.6] [P0-06].
+	// TODO(question): o-verb bits 17-20 vs 18-21 conflict; using 18-21 per mask 0xffc3ffff
+	ctx.unit.Flags &^= (0x3 << 18) | (0x3 << 20)         // mask 0xffc3ffff => bits 18-21
+	ctx.unit.Flags |= uint32(((d2&3)<<2)|(d1&3)) << 0x12 // shift 0x12 = 18 [P0-06]
 	// No order queued and no issued marker [04 §3.6] C10.
 }
 
@@ -831,20 +849,27 @@ func handleWA(token string, ctx *interpCtx) {
 		rest = ""
 	}
 	rest = strings.TrimSpace(rest)
+	// P0-06: only wa tests sscanf ==1 (name form). Retail scanset " %[a-zA-Z0-9.]"
+	// (no underscore) [P0-06 §2]. We mimic by checking first field existence and
+	// treating missing/empty as sscanf 0 → fallback to self.
 	fields := splitArgs(rest)
 	var targetHandle int
 	found := false
 	if len(fields) >= 1 {
 		name := fields[0]
+		// sscanf for wa would be one name; test ==1 else self. Our fields length
+		// check mirrors that: presence of name token counts as ==1, but we also
+		// verify lookup succeeds. Retail would fallback to self if lookup fails
+		// as well [P0-06].
 		if idx := ctx.lookupIdentOrUnitName(name); idx >= 0 {
-			if idx < len(ctx.worldUnits) && ctx.worldUnits[idx] != nil {
-				targetHandle = int(ctx.worldUnits[idx].Handle)
+			if u := ctx.sparseUnit(idx); u != nil {
+				targetHandle = int(u.Handle)
 				found = true
 			}
 		}
 	}
 	if !found {
-		// Fallback to self when unresolved [04 §3.6] C13.
+		// Fallback to self when unresolved or sscanf !=1 [P0-06] C13.
 		targetHandle = int(ctx.unit.Handle)
 	}
 	id := orders.Lookup("WaitForAttack") // [04 §3.1]

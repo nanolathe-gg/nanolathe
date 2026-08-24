@@ -12,13 +12,11 @@ import (
 	"os"
 	"time"
 
-	"kaijuengine.com/bootstrap"
-	"kaijuengine.com/platform/hid"
-
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -121,27 +119,22 @@ func runViewer(opts Options, cs *contentSet) error {
 			}
 			// Scroll setting byte: 8 is a comfortable default (8*16=128 cap).
 			const scrollSetting = 8
-			// Poll host through the client if available. The client owns the host
-			// after Launch; before that, skip.
-			host := cl.Host()
-			if host == nil || host.Window == nil {
-				return
-			}
-			kbd := &host.Window.Keyboard
-			mouse := &host.Window.Mouse
+			in := cl.Input()
+			kbd := in.Kbd
+			mouse := in.Mouse
 
 			// WASD handling: each key moves one direction per frame, using Scroll
 			// which caps at 128 [07 §10] C2. Zero delta skips movement.
-			if kbd.KeyHeld(hid.KeyboardKeyW) || kbd.KeyHeld(hid.KeyboardKeyUp) {
+			if kbd.KeyHeld(input.KeyW) || kbd.KeyHeld(input.KeyUp) {
 				cam.Scroll(scrollSetting, rawDelta, camera.DirUp)
 			}
-			if kbd.KeyHeld(hid.KeyboardKeyS) || kbd.KeyHeld(hid.KeyboardKeyDown) {
+			if kbd.KeyHeld(input.KeyS) || kbd.KeyHeld(input.KeyDown) {
 				cam.Scroll(scrollSetting, rawDelta, camera.DirDown)
 			}
-			if kbd.KeyHeld(hid.KeyboardKeyA) || kbd.KeyHeld(hid.KeyboardKeyLeft) {
+			if kbd.KeyHeld(input.KeyA) || kbd.KeyHeld(input.KeyLeft) {
 				cam.Scroll(scrollSetting, rawDelta, camera.DirLeft)
 			}
-			if kbd.KeyHeld(hid.KeyboardKeyD) || kbd.KeyHeld(hid.KeyboardKeyRight) {
+			if kbd.KeyHeld(input.KeyD) || kbd.KeyHeld(input.KeyRight) {
 				cam.Scroll(scrollSetting, rawDelta, camera.DirRight)
 			}
 			// Edge pan: when mouse near viewport edge, pan similarly.
@@ -184,9 +177,6 @@ func runViewer(opts Options, cs *contentSet) error {
 	// to client2 after assignment). Since Go closures capture variables by reference,
 	// updating cl updates the closure's view. Good.
 
-	// Platform state: nil is fine for desktop; Kaiju will create the window.
-	var platformState any
-
 	// Diagnostics before blocking.
 	fmt.Fprintf(os.Stderr, "nanolathe: viewer: opening window %dx%d for map %q (%dx%d cells)\n", winW, winH, opts.Map, terrain.CellW, terrain.CellH)
 	if pal != nil {
@@ -198,27 +188,15 @@ func runViewer(opts Options, cs *contentSet) error {
 	// Verify content database is reachable before blocking — if it is not,
 	// bootstrap.Main will log via slog and return immediately with no window,
 	// which looks like "no window" with only seed printed.
-	if _, err := cl.ContentDatabase(); err != nil {
-		return fmt.Errorf("nanolathe: viewer: content database %q: %w (run `make kaiju-content`)", "content", err)
-	}
 	if _, err := os.Stat("content"); err != nil {
 		fmt.Fprintf(os.Stderr, "nanolathe: viewer: warning: content directory not found at ./content: %v (try `make kaiju-content`)\n", err)
 	}
 
-	// This blocks until the window closes. bootstrap.Main calls Launch which
-	// registers the single Updater (C12) and drives the loop.
-	// For headless testing we could use a timeout, but for Gate 1 we block.
-	// To avoid hanging in CI, detect if DISPLAY is missing? On macOS, Kaiju
-	// will create a window; in CI without display, this would fail. But Gate 1
-	// is a manual visual gate.
-	bootstrap.Main(cl, platformState)
-	fmt.Fprintf(os.Stderr, "nanolathe: viewer: window closed (host %v)\n", cl.Host())
-	if cl.Host() == nil {
-		return fmt.Errorf("nanolathe: viewer: window never opened (host is nil) — check MoltenVK at runtime (DYLD_LIBRARY_PATH) and that content/ exists")
-	}
-	return nil
+	err = client.RunGame(cl)
+	fmt.Fprintf(os.Stderr, "nanolathe: viewer: window closed\n")
+	return err
 }
 
 // Ensure imports are used.
 var _ = time.Now
-var _ = hid.KeyboardKeyA
+var _ = input.KeyA

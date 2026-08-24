@@ -1,4 +1,4 @@
-// Package visibility predicate implements C8, C9, C10 [PLAN_05 WU-05-3].
+// Package visibility predicate implements C8, C9, C10 [PLAN_05 WU-05-3] P0-11.
 package visibility
 
 import (
@@ -6,9 +6,12 @@ import (
 )
 
 // underwaterExempt is the runtime status bit that exempts a unit from the
-// below-sea-level rejection [03 §3.2] C8 step 3. The sensor phase sets it on
-// owned and allied units [03 §3.4], which is why they never need the test.
+// below-sea-level rejection [03 §3.2] C8 step 3 P0-11. The sensor phase sets it on
+// owned and allied units via FriendlyMask 0x300 alias [03 §3.4] P0-11, which is why they never need the test.
 const underwaterExempt uint32 = 0x200
+
+// decloakBit is the decloak runtime bit 0x1000 set by proximity GT+90 [03 §3.4] P0-11.
+const decloakBit uint32 = 0x1000
 
 // Target is the gameplay visibility query [03 §3.2] C8.
 //
@@ -52,26 +55,26 @@ func pixel(v numeric.Fixed) int32 {
 	return int32(int16(int64(v) >> 16))
 }
 
-// IsVisible is the single gameplay gate [03 §3.2] C8.
+// IsVisible is the single gameplay gate [03 §3.2] C8 P0-11.
 //
-// Evaluation order: 1 owner bypass, 2 hidden, 3 below sea level, 4 sample
-// projection against the mode-selected source, 5 the four accumulating hull
-// samples.
+// Evaluation order: 1 owner bypass, 2 hidden with decloak GT+90, 3 below sea level with 0x200 exempt, 4 sample
+// projection against the mode-selected source with 4-point hull [03 §3.2] P0-11.
 func (s *Service) IsVisible(viewer PlayerID, t Target) bool {
 	if s == nil {
 		return false
 	}
-	// 1. owner identity bypass — queried record equals unit's owner ⇒ visible [C8.1].
+	// 1. owner identity bypass — queried record equals unit's owner ⇒ visible [C8.1] P0-11.
 	// This precedes the cloak test, so a player always sees its own cloaked units.
 	if viewer == t.Owner {
 		return true
 	}
-	// 2. hidden/cloaked instance bit ⇒ not visible [C8.2].
-	// Cloak is a predicate early-out, never a mask edit [C10]; the proximity
-	// breach exception clears the instance bit in the sensor phase [03 §3.4],
-	// so the predicate itself has nothing to reconsider here.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Cloak is a predicate early-out, never a mask edit [C10] P0-11; no firing decloak (NEGATIVE-BOUNDED) P0-11.
 	if t.Hidden {
-		return false
+		if t.Status&decloakBit == 0 {
+			return false
+		}
+		// Decloaked within 90 ticks, fall through to height/sample test P0-11
 	}
 	// 3. base height below sea level ⇒ not visible unless status 0x200 [C8.3].
 	// Sea level is the map header byte scaled to world units [03 §2.2] C9 —

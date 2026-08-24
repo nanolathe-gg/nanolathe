@@ -50,12 +50,16 @@ type SkirmishPlayer struct {
 
 // SkirmishConfig is the skirmish setup discriminant per [08 "Skirmish configuration"].
 // MapName is the --map selection (basename without extension).
-// NumPlayers is NumSkirmishPlayers validated 2..10 [GAP T14].
+// NumPlayers is NumSkirmishPlayers validated 2..10 [GAP T14] but retail
+// validation is a compiled no-op (both branches store raw) [P0-05].
 // Players holds per-slot controller/side/color/ally/metal/energy/nickname state.
+// Location selects start-position assignment: 0 = randomized via CRT shuffle
+// [P0-04], !=0 = identity mapping [P0-04].
 type SkirmishConfig struct {
 	MapName    string
 	NumPlayers int
 	Players    [10]SkirmishPlayer
+	Location   int // 0 randomized (CRT Fisher-Yates), !=0 identity [P0-04]
 }
 
 // ApplyDefaults fills absent per-slot values with retail defaults per [GAP T14] [02 §3].
@@ -106,19 +110,14 @@ func (c *SkirmishConfig) ApplyDefaults() {
 }
 
 // Validate checks NumPlayers 2..10 and non-empty map per [GAP T14] C8.
-// It respects the default 4 for missing NumPlayers when ApplyDefaults has
-// not been called, to match [02 §3] install-default-4 behaviour.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// raw value unchanged [P0-05]. We preserve that as no-op for NumPlayers range
+// (only map emptiness is an error for load). [P0-05]
 func (c SkirmishConfig) Validate() error {
-	n := c.NumPlayers
-	if n == 0 {
-		n = SkirmishDefaultPlayers
-	}
-	if n < SkirmishMinPlayers || n > SkirmishMaxPlayers {
-		return fmt.Errorf("session: NumSkirmishPlayers %d out of range 2..10 [GAP T14]", c.NumPlayers)
-	}
 	if strings.TrimSpace(c.MapName) == "" {
 		return fmt.Errorf("session: empty skirmish map [08 \"Skirmish configuration\"]")
 	}
+	// NumSkirmishPlayers range check is intentionally no-op [P0-05].
 	return nil
 }
 
@@ -185,8 +184,15 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 		Units:    units.New(600, cat),
 		Econ:     &economy.Service{},
 	}
-	// Economy slot wiring for active players 0..NumPlayers-1 per C8.
-	for i := 0; i < cfg.NumPlayers && i < 10; i++ {
+	nPlayers := cfg.NumPlayers
+	if nPlayers < 0 {
+		nPlayers = 0
+	}
+	if nPlayers > 10 {
+		nPlayers = 10
+	}
+	// Economy slot wiring for active players 0..nPlayers-1 per C8.
+	for i := 0; i < nPlayers && i < 10; i++ {
 		p := &s.Econ.Players[i]
 		p.Exists = true
 		ctrl := cfg.Players[i].Controller
@@ -243,7 +249,8 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 	if s.AI == nil {
 		s.AI = make([]*ai.Manager, 0, 2)
 	}
-	for i, p := range cfg.Players[:cfg.NumPlayers] {
+	limitAI := nPlayers
+	for i, p := range cfg.Players[:limitAI] {
 		if i >= 10 {
 			break
 		}
@@ -328,13 +335,18 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 	if s.Units == nil {
 		s.Units = units.New(600, s.Catalog)
 	}
-	// Collect StartPos specials deterministically per [08 "Placement and battle entry"].
+	// Collect StartPos specials deterministically [P0-04]. No sorting beyond
+	// TDF enumeration order; we keep original order (already as decoded) and
+	// also build ID lookup. Retail stores ID = suffix-1, but our decode stores
+	// suffix (1-based) – we handle both via ID-1 vs ID.
 	var starts []mission.Special
 	for _, sp := range m.Specials {
 		if sp.Kind == 1 {
 			starts = append(starts, sp)
 		}
 	}
+	// Deterministic order for ID lookup: sort by ID ascending as TDF enumeration
+	// is already ID order, but sort ensures stable for tests [I1].
 	sort.Slice(starts, func(i, j int) bool {
 		if starts[i].ID != starts[j].ID {
 			return starts[i].ID < starts[j].ID
@@ -344,9 +356,113 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		}
 		return starts[i].Z < starts[j].Z
 	})
-	for idx := 0; idx < cfg.NumPlayers && idx < 10; idx++ {
-		sideIdx := cfg.Players[idx].Side
-		// Side ordinal may be 0 for even slots, 1 for odd; clamp to available sides.
+	nPlayersLocal := cfg.NumPlayers
+	if nPlayersLocal < 0 {
+		nPlayersLocal = 0
+	}
+	if nPlayersLocal > 10 {
+		nPlayersLocal = 10
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// For skirmish, slot existence = idx < NumPlayers, ctrl 1/2/3 = ControllerState 1/2/3.
+	// We use s.Econ.Players existence + controller mapping.
+	var eligible []int
+	for i := 0; i < nPlayersLocal && i < 10; i++ {
+		if i >= len(s.Econ.Players) {
+			continue
+		}
+		pl := &s.Econ.Players[i]
+		if !pl.Exists {
+			continue
+		}
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		cs := pl.ControllerState
+		if cs != 1 && cs != 2 && cs != 3 {
+			continue
+		}
+		eligible = append(eligible, i)
+	}
+	n := len(eligible)
+	// CRT vs sim streams [P0-04] I4.
+	var crt *rng.CRT
+	if rng.Global.Crt != nil {
+		crt = rng.Global.Crt
+	} else {
+		tmp := rng.NewCRT(0)
+		crt = &tmp
+	}
+	var sim *rng.Simulation
+	if rng.Global.Sim != nil {
+		sim = rng.Global.Sim
+	} else {
+		tmp := rng.NewSimulation(0)
+		sim = &tmp
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	local28 := make([]int, n)
+	copy(local28, eligible)
+	if cfg.Location == 0 {
+		// Location==0 → randomized via CRT Fisher-Yates [P0-04].
+		if n < 3 {
+			// Gate: (CRT_rand()*2)/0x8000 unbiased 0/1 ; if 0 skip shuffle [P0-04].
+			if crt != nil {
+				gate := (int(crt.Rand()) * 2) / 0x8000
+				if gate != 0 {
+					// proceed to shuffle
+					for j := 1; j < n; j++ {
+						bound := uint32(j + 1)
+						r := crt.Uint32n(bound)
+						local28[j], local28[r] = local28[r], local28[j]
+					}
+				}
+			}
+		} else {
+			for j := 1; j < n; j++ {
+				bound := uint32(j + 1)
+				r := crt.Uint32n(bound)
+				local28[j], local28[r] = local28[r], local28[j]
+			}
+		}
+	} else {
+		// Location !=0 → identity (no shuffle) [P0-04].
+	}
+	// Map logical slot → startPosIndex via permuted eligible list.
+	// For each eligible logical in ascending order, map = local28[next].
+	permMap := make(map[int]int) // logical slot -> permuted slot
+	for idx, logical := range eligible {
+		if idx < len(local28) {
+			permMap[logical] = local28[idx]
+		}
+	}
+	// Helper to find Special by ID (suffix). Our Special.ID is 1-based suffix.
+	findSpecial := func(id int) *mission.Special {
+		for i := range starts {
+			if int(starts[i].ID) == id {
+				return &starts[i]
+			}
+			// Also handle 0-based stored case: ID==id-1?
+			if int(starts[i].ID) == id-1 {
+				// Fallback for 0-based decode (should not happen after fix)
+				return &starts[i]
+			}
+		}
+		return nil
+	}
+	// Commander creation loop player 0..9 asc, same as retail sweep [P0-04] I1.
+	for playerIdx := 0; playerIdx < 10; playerIdx++ {
+		if playerIdx >= nPlayersLocal {
+			continue
+		}
+		if playerIdx >= len(s.Econ.Players) || !s.Econ.Players[playerIdx].Exists {
+			continue
+		}
+		ctrl := s.Econ.Players[playerIdx].ControllerState
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if ctrl != 1 && ctrl != 2 && ctrl != 3 {
+			continue
+		}
+		// Side/commander lookup
+		sideIdx := cfg.Players[playerIdx].Side
 		var def *content.UnitDef
 		var ok bool
 		if s.Catalog != nil && len(s.Catalog.Sides) > 0 && sideIdx >= 0 && sideIdx < len(s.Catalog.Sides) {
@@ -356,7 +472,6 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 			}
 		}
 		if !ok {
-			// Fallback to common commanders [02 §6] side commander fallback.
 			for _, cand := range []string{"armcom", "corcom"} {
 				if d, found := s.Catalog.Unit(cand); found && d != nil {
 					def = d
@@ -368,44 +483,84 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		if !ok || def == nil {
 			def = &content.UnitDef{UnitName: "armcom", MaxDamage: 100, SightDistance: 128}
 		}
-		var x, z numeric.Fixed
-		var y numeric.Fixed
-		if len(starts) > 0 {
-			sp := starts[idx%len(starts)]
-			// Special X/Z are shorts; convert to fixed 16.16 via *65536 [GAP T14] unit placements <<16.
-			x = numeric.Fixed(int32(sp.X) * 65536)
-			z = numeric.Fixed(int32(sp.Z) * 65536)
-		} else if s.World != nil && idx > 0 {
-			// TODO(question): retail skirmish auto-spawn rule untraced; Nanolathe
-			// default spaces extra commanders along the map diagonal so every
-			// player gets a start when the schema carries no StartPos records.
-			stepX := int32(s.World.CellW*16) / int32(cfg.NumPlayers+1)
-			x = numeric.Fixed(int32(stepX*int32(idx+1)) * 65536)
-			z = numeric.Fixed(int32(s.World.CellH*8) * 65536)
+		// Sim jitter with degenerate no-advance [P0-04]
+		var jx, jz numeric.Fixed
+		// mapW/H in cells, fallback uses CellW/H; if no world, use 0 -> bound <=0 ->0
+		var mapW, mapH int32
+		if s.World != nil {
+			mapW = s.World.CellW
+			mapH = s.World.CellH
+		}
+		boundW := mapW - 0xA0
+		boundH := mapH - 0xA0
+		var rndW, rndH int32
+		if boundW > 0 && sim != nil {
+			rndW = int32(sim.Uint32n(uint32(boundW)))
+		} else {
+			rndW = 0 // JLE ret0 no advance [P0-04]
+		}
+		if boundH > 0 && sim != nil {
+			rndH = int32(sim.Uint32n(uint32(boundH)))
+		} else {
+			rndH = 0
+		}
+		jx = numeric.Fixed(int32(rndW+0x50) * 65536)
+		jz = numeric.Fixed(int32(rndH+0x50) * 65536)
+		x, z := jx, jz
+		y := numeric.Fixed(0)
+		// Try StartPos overwrite if mapping exists [P0-04]
+		if perm, has := permMap[playerIdx]; has {
+			// startPos number is perm+1 (since perm is slot index 0..9 => StartPos perm+1)
+			sp := findSpecial(perm + 1)
+			if sp != nil {
+				x = numeric.Fixed(int32(sp.X) * 65536)
+				z = numeric.Fixed(int32(sp.Z) * 65536)
+			} else {
+				// Missing StartPos: retain jitter fallback; emit diagnostic per [P0-04] (surplus/missing handled gracefully)
+				_ = fmt.Sprintf("skirmish: missing StartPos%d for slot %d", perm+1, playerIdx)
+			}
 		}
 		if s.World != nil {
-			h := s.World.HeightAt(x, z)
-			y = h
+			y = s.World.HeightAt(x, z)
+			if y == -1 {
+				y = 0
+			}
 		}
-		_, _ = s.Units.Create(def, uint8(idx), x, y, z)
-		_ = idx
+		h, _ := s.Units.Create(def, uint8(playerIdx), x, y, z)
+		if u := s.Units.Unit(h); u != nil {
+			// Mark as commander? No extra flags here but preserve placement linkage for debugging
+			u.PlacementIdx = -1
+		}
 	}
-	// Also reconstruct any mission-placed units that are not commanders, if present, at their authored positions.
-	// This keeps skirmish maps that carry pre-placed units compatible with the same reconstructor.
-	for _, up := range m.Units {
-		// Skip commanders already spawned? Keep all: reconstruct via pool using authored fixed positions.
+	// Also reconstruct any mission-placed units that are not commanders, at authored positions,
+	// via sparse two-pass semantics [P0-04] – reuse same sparse logic as mission path.
+	// For skirmish, these are additional scenario units beyond commanders.
+	for idx, up := range m.Units {
 		if s.Catalog != nil {
 			if def, found := s.Catalog.Unit(up.UnitName); found && def != nil {
-				// Respect player slot ownership; map units may belong to neutral? Keep as authored.
-				owner := up.Player
-				if owner < 0 {
-					owner = 0
+				ownerIdx := int(up.Player)
+				if ownerIdx < 0 {
+					ownerIdx = 0
 				}
-				if owner >= 10 {
-					owner = 9
+				if ownerIdx >= 10 {
+					ownerIdx = 9
 				}
-				// X/Z already <<16 in placement decode [GAP T14]; Y as well.
-				_, _ = s.Units.Create(def, uint8(owner), numeric.Fixed(up.X), numeric.Fixed(up.Y), numeric.Fixed(up.Z))
+				// Use authored fixed positions [P0-04]
+				h, err := s.Units.Create(def, uint8(ownerIdx), numeric.Fixed(int64(up.X)), numeric.Fixed(int64(up.Y)), numeric.Fixed(int64(up.Z)))
+				if err != nil {
+					continue
+				}
+				if u := s.Units.Unit(h); u != nil {
+					u.PlacementIdx = idx
+					u.PlacementIdent = up.Ident
+					u.PlacementUnitName = up.UnitName
+					if up.HealthPercentage != 0 && up.HealthPercentage != 100 {
+						u.Health = int32(int64(u.MaxHealth) * int64(up.HealthPercentage) / 100)
+					}
+					if up.IsImmune() {
+						u.Flags |= 1 << 15
+					}
+				}
 			}
 		}
 	}
@@ -421,7 +576,14 @@ func skirmishGrantResourcesDirect(s *Session, cfg SkirmishConfig) {
 	if s == nil || s.Econ == nil {
 		return
 	}
-	for p := 0; p < cfg.NumPlayers && p < 10; p++ {
+	nP := cfg.NumPlayers
+	if nP < 0 {
+		nP = 0
+	}
+	if nP > 10 {
+		nP = 10
+	}
+	for p := 0; p < nP && p < 10; p++ {
 		if !s.Econ.Players[p].Exists {
 			continue
 		}

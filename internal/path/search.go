@@ -1,6 +1,6 @@
 package path
 
-// Search core for weighted A* on the TNT attribute-cell lattice [04 §7.1][04 §7.2].
+// Search core for weighted A* on the TNT attribute-cell lattice [04 §7.1][04 §7.2][P0-13].
 //
 // Lattice: one cell = 16 map pixels per cell [04 §7.1] C1. Waypoints come from
 // cell coordinates plus the profile's half-footprint bias [04 §7.1] C1.

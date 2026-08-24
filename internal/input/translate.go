@@ -5,10 +5,6 @@
 // (PLAN_04A C5).
 package input
 
-import (
-	"kaijuengine.com/platform/hid"
-)
-
 // Retail token codes for special keys [07 §2].
 const (
 	CodeSpace      byte = 0x20
@@ -60,42 +56,42 @@ const (
 // ch is the WM_CHAR character value when originating from WM_CHAR; 0 otherwise.
 // ctrl indicates whether Ctrl was held for composition (system-key mode where
 // A..Z without Ctrl produce lowercase a..z).
-func TranslateKey(key hid.KeyboardKey, ch byte, ctrl bool) Token {
+func TranslateKey(key Key, ch byte, ctrl bool) Token {
 	var code byte
 	switch key {
-	case hid.KeyboardKeyPause:
+	case KeyPause:
 		code = CodePause // VK_PAUSE → 0xF8 [07 §2]
-	case hid.KeyboardKeyPageUp:
+	case KeyPrior:
 		code = CodePrior // VK_PRIOR → 0xF2 [07 §2]
-	case hid.KeyboardKeyPageDown:
+	case KeyNext:
 		code = CodeNext // VK_NEXT → 0xF3 [07 §2]
-	case hid.KeyboardKeyEnd:
+	case KeyEnd:
 		code = CodeEnd // VK_END → 0xF1 [07 §2]
-	case hid.KeyboardKeyHome:
+	case KeyHome:
 		code = CodeHome // VK_HOME → 0xF0 [07 §2]
-	case hid.KeyboardKeyLeft:
+	case KeyLeft:
 		code = CodeLeft // VK_LEFT → 0xF4 [07 §2]
-	case hid.KeyboardKeyUp:
+	case KeyUp:
 		code = CodeUp // VK_UP → 0xF5 [07 §2]
-	case hid.KeyboardKeyRight:
+	case KeyRight:
 		code = CodeRight // VK_RIGHT → 0xF6 [07 §2]
-	case hid.KeyboardKeyDown:
+	case KeyDown:
 		code = CodeDown // VK_DOWN → 0xF7 [07 §2]
-	case hid.KeyboardKeyInsert:
+	case KeyInsert:
 		code = CodeInsert // VK_INSERT → 0xEE [07 §2]
-	case hid.KeyboardKeyDelete:
+	case KeyDelete:
 		code = CodeDelete // VK_DELETE → 0xEF [07 §2]
-	case hid.KeyboardKeySpace:
+	case KeySpace:
 		code = CodeSpace // 0x20 [07 §2] held-state query also uses 0x20
-	case hid.KeyboardKeyEscape:
+	case KeyEscape:
 		code = 0x1B
-	case hid.KeyboardKeyTab:
+	case KeyTab:
 		code = 0x09
-	case hid.KeyboardKeyBackspace:
+	case KeyBackspace:
 		code = 0x08
-	case hid.KeyboardKeyReturn, hid.KeyboardKeyEnter:
+	case KeyEnter:
 		code = 0x0D // Enter opens chat [07 §5]
-	case hid.KeyboardKeyA, hid.KeyboardKeyB, hid.KeyboardKeyC, hid.KeyboardKeyD, hid.KeyboardKeyE, hid.KeyboardKeyF, hid.KeyboardKeyG, hid.KeyboardKeyH, hid.KeyboardKeyI, hid.KeyboardKeyJ, hid.KeyboardKeyK, hid.KeyboardKeyL, hid.KeyboardKeyM, hid.KeyboardKeyN, hid.KeyboardKeyO, hid.KeyboardKeyP, hid.KeyboardKeyQ, hid.KeyboardKeyR, hid.KeyboardKeyS, hid.KeyboardKeyT, hid.KeyboardKeyU, hid.KeyboardKeyV, hid.KeyboardKeyW, hid.KeyboardKeyX, hid.KeyboardKeyY, hid.KeyboardKeyZ:
+	case KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO, KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ:
 		// Ordinary mode uses virtual-key translator; system-key mode without Ctrl
 		// produces lowercase a..z [07 §2]. We preserve the retail behavior by
 		// using Char when supplied, else uppercase Code. Ctrl composition is
@@ -103,21 +99,14 @@ func TranslateKey(key hid.KeyboardKey, ch byte, ctrl bool) Token {
 		if ch != 0 {
 			code = ch
 		} else {
-			code = byte('A' + (key - hid.KeyboardKeyA))
-			if !ctrl {
-				// Without Ctrl in system-key path retail lowercases A..Z;
-				// we keep uppercase as Code and let Char carry the case when
-				// WM_CHAR is available. Downstream can distinguish via Char.
-			}
+			code = byte('A' + (key - KeyA))
 		}
-	case hid.KeyboardKey0, hid.KeyboardKey1, hid.KeyboardKey2, hid.KeyboardKey3, hid.KeyboardKey4, hid.KeyboardKey5, hid.KeyboardKey6, hid.KeyboardKey7, hid.KeyboardKey8, hid.KeyboardKey9:
-		code = byte('0' + (key - hid.KeyboardKey0))
-	case hid.KeyboardNumKey0, hid.KeyboardNumKey1, hid.KeyboardNumKey2, hid.KeyboardNumKey3, hid.KeyboardNumKey4, hid.KeyboardNumKey5, hid.KeyboardNumKey6, hid.KeyboardNumKey7, hid.KeyboardNumKey8, hid.KeyboardNumKey9:
-		code = byte('0' + (key - hid.KeyboardNumKey0))
-	case hid.KeyboardKeyF1, hid.KeyboardKeyF2, hid.KeyboardKeyF3, hid.KeyboardKeyF4, hid.KeyboardKeyF5, hid.KeyboardKeyF6, hid.KeyboardKeyF7, hid.KeyboardKeyF8, hid.KeyboardKeyF9, hid.KeyboardKeyF10, hid.KeyboardKeyF11, hid.KeyboardKeyF12:
+	case Key0, Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8, Key9:
+		code = byte('0' + (key - Key0))
+	case KeyF1, KeyF2, KeyF3, KeyF4, KeyF5, KeyF6, KeyF7, KeyF8, KeyF9, KeyF10, KeyF11, KeyF12:
 		// F-keys are table-driven [07 §2]; map to VK_F1..VK_F12 range 0x70..0x7B
 		// so they remain distinct from the held-state tokens 0xF0..0xFB.
-		code = byte(0x70 + (key - hid.KeyboardKeyF1))
+		code = byte(0x70 + (key - KeyF1))
 	default:
 		// OEM ranges 0xBA..0xC0 and 0xDB..0xDE remain unknown table aliases
 		// [07 §2]; return 0 meaning no new input token.
@@ -147,14 +136,4 @@ func TranslateMouse(x, y int16, keyState, tick, msg uint32, double bool) MouseRe
 		Msg:      msg,
 		Double:   double,
 	}
-}
-
-// TranslateMouseFromHID is a convenience that reads a Kaiju Mouse and produces a
-// retail MouseRecord. It truncates float coordinates toward zero into int16 as
-// retail does for world coordinate narrowing (I3), and preserves the remaining
-// six-dword fields from the caller-supplied message metadata.
-func TranslateMouseFromHID(m hid.Mouse, keyState, tick, msg uint32, double bool) MouseRecord {
-	x := int16(m.X)
-	y := int16(m.Y)
-	return TranslateMouse(x, y, keyState, tick, msg, double)
 }

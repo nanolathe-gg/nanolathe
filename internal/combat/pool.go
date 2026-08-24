@@ -118,6 +118,24 @@ func (s *Service) Reserve() (pool.Handle, bool) {
 	return h, true
 }
 
+// CancelReserve rolls back an early ballistic reservation when the solver finds
+// no solution. Retail did not reserve for that admission failure [06 §3.3],
+// so the count must not leak. The vel0 #DE path keeps the leak per P0-10
+// [06 §6.4] I11 and never calls this.
+func (s *Service) CancelReserve(h pool.Handle) bool {
+	if s == nil {
+		return false
+	}
+	ok := s.Slots.CancelReserve(h)
+	if ok {
+		idx := int(h) - 1
+		if idx >= 0 && idx < len(s.Records) {
+			s.Records[idx] = Projectile{}
+		}
+	}
+	return ok
+}
+
 // MarkDead sets the dead flag for h without changing the active-span count
 // [06 §5.1]. The flag lives in Slots; the shadow copy in Records is updated
 // for convenience but is not authoritative.

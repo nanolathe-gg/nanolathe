@@ -4,15 +4,15 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 )
 
-// DefaultBase is the stock default heuristic base scale placeholder.
-// base = int(atof(setting) * 65536.0) taken once at settings-application time [04 §7.2].
-// TODO(question): stock default value of the settings string that seeds base is not established [04 §7.2]; placeholder uses 1.0 (65536).
-const DefaultBase int32 = 65536 // TODO(question): stock default setting value not established [04 §7.2]
+// DefaultBase is the stock default heuristic base scale placeholder [P0-13].
+// base = int(atof(setting) * 65536.0) taken once at settings-application time [04 §7.2][P0-13].
+// TODO(question): stock default value of the settings string that seeds base is not established [04 §7.2][P0-13]; placeholder uses 1.0 (65536).
+const DefaultBase int32 = 65536 // TODO(question): stock default setting value not established [04 §7.2][P0-13]
 
-// PressureDivisor converts pending per-player pressure to tier.
-// tier = pending per-player pressure divided by unit-cap divisor [04 §7.2].
-// TODO(question): unit-cap divisor and exact pressure counter definition not established [04 §7.2][04 §7.3]; placeholder value.
-const PressureDivisor int32 = 10 // TODO(question): unit-cap divisor not established [04 §7.2][04 §7.3]
+// PressureDivisor converts pending per-player pressure to tier [P0-13].
+// tier = pending per-player pressure divided by unit-cap divisor [04 §7.2][P0-13].
+// TODO(question): unit-cap divisor and exact pressure counter definition not established [04 §7.2][04 §7.3][P0-13]; placeholder value.
+const PressureDivisor int32 = 10 // TODO(question): unit-cap divisor not established [04 §7.2][04 §7.3][P0-13]
 
 const (
 	popsPerRequest    = 100 // [04 §7.3] C11 each active request limited to 100 heap pops per scheduler call

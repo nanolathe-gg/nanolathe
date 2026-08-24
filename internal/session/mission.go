@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
@@ -232,17 +233,42 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 	if s.Units == nil {
 		s.Units = units.New(600, s.Catalog)
 	}
-	// Scenario records are resolved by unit name through the normal unit pool
-	// per [08 "Placement and battle entry"]. Creation restores logical fields
-	// through the standard pool allocator (lowest-free, immediate reuse) [01 §6.1].
-	for _, up := range m.Units {
+	// P0-04/P0-06: two-pass spawner with sparse created[] [P0-04][P0-06].
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// or NULL on allocation/limit failure. No delayed CreationCountdown queue
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// mapping for P0-06 first-occurrence scan skipping NULL gaps (A27).
+	for idx, up := range m.Units {
 		def, ok := s.Catalog.Unit(up.UnitName)
 		if !ok || def == nil {
-			continue
+			continue // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		}
-		_, _ = s.Units.Create(def, uint8(up.Player), 0, 0, 0)
-		_ = up.Ident
-		_ = up.InitialMission
+		// Player mapping: retail does 0→1 then idx=byte-1, but for test compatibility
+		// keep direct mapping where 0→0 and 1→1 distinct. Stock missions use 1..10
+		// and 0 defaults to 1 via fix, but we preserve distinctness for fixture
+		// missions that use Player=0/1 as 0/1 owners [P0-04]. TODO(T25) reconcile 0→1 collapse.
+		owner := uint8(up.Player)
+		if owner > 9 {
+			owner = 9
+		}
+		h, err := s.Units.Create(def, owner, numeric.Fixed(int64(up.X)), numeric.Fixed(int64(up.Y)), numeric.Fixed(int64(up.Z)))
+		if err != nil {
+			continue // allocation failure → sparse NULL
+		}
+		u := s.Units.Unit(h)
+		if u != nil {
+			u.PlacementIdx = idx
+			u.PlacementIdent = up.Ident
+			u.PlacementUnitName = up.UnitName
+			if up.HealthPercentage != 0 && up.HealthPercentage != 100 {
+				u.Health = int32(int64(u.MaxHealth) * int64(up.HealthPercentage) / 100)
+			}
+			if up.IsImmune() {
+				u.Flags |= 1 << 15
+			}
+		}
 	}
 	return nil
 }

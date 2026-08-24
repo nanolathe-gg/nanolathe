@@ -35,6 +35,10 @@ type Terrain struct {
 	WindMax      int32         // [03 §2.2] C3/C4
 	Tidal        numeric.Fixed // [03 §2.2] C4
 
+	// Playable insets derived at void-fixup time [P0-17]: PlayRight = Wpix-32, PlayBottom = Hpix-128.
+	PlayRight  int32 // Wpix-32 in map pixels, Wpix=CellW*16 [P0-17]
+	PlayBottom int32 // Hpix-128, Hpix=CellH*16 [P0-17]
+
 	// FeatureNames is the map's own feature-record list, in record order, from
 	// the TNT feature table [fmt tnt]. A plot cell's feature field indexes THIS
 	// list, not the catalog.
@@ -499,17 +503,49 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 		FeatureDefs:  defs,
 	}
 	t.stampFeatureAnchors()
-
-	// TODO(question): PLAN_04's Divergences section commits to deriving void
-	// and lava edges after terrain materialization — "two eastmost reserve
-	// columns plus the lava flood" — carried over from a prior implementation.
-	// Research supports only that void cells exist and describes them as
-	// "lava-world fill and map-edge strips" [02 "Terrain file"]; neither the
-	// two-column width, the eastmost side, nor the flood rule appears in
-	// [03 §2.2] or anywhere else. Implementing it would be inventing three
-	// constants, so it is left undone and PLAN_04's Divergences entry is
-	// downgraded to this unknown. Map-authored void sentinels still load
-	// verbatim; only engine-derived edges are missing.
+	t.applyVoidFixup(mh)
 
 	return t, nil
+}
+
+// applyVoidFixup derives engine void edges after materialization [P0-17].
+//
+//   - Right columns W-2,W-1 are always void 0xFFFD (two eastmost reserve columns).
+//   - Playable insets PlayRight = Wpix-32 and PlayBottom = Hpix-128 are set at void-fixup time.
+//   - Lava-world bulk flood sets 0xFFFD when lavaworld is set and hmin ≤ SeaLevel for 0xFFFF/0xFFFE cells.
+//
+// Map-authored void sentinels still load verbatim; only engine-derived edges are added here.
+// North/south height-dependent void strips beyond the right two columns remain TODO(question) [P0-17].
+func (t *Terrain) applyVoidFixup(mh *content.MapHeader) {
+	if t == nil || t.Plot == nil || t.CellW <= 0 || t.CellH <= 0 {
+		return
+	}
+	// Playable insets [P0-17]: Wpix = CellW*16, Hpix = CellH*16.
+	t.PlayRight = t.CellW*16 - 32
+	t.PlayBottom = t.CellH*16 - 128
+	// Right two columns always void 0xFFFD [P0-17].
+	if t.CellW >= 2 {
+		for cz := int32(0); cz < t.CellH; cz++ {
+			for _, cx := range []int32{t.CellW - 2, t.CellW - 1} {
+				idx := int(cz*t.CellW + cx)
+				if idx >= 0 && idx < len(t.Plot) {
+					t.Plot[idx].SetFeature(PlotFeatureVoid)
+				}
+			}
+		}
+	}
+	// Lava-world bulk flood [P0-17]: when lavaworld !=0, any 0xFFFF/0xFFFE cell with hmin ≤ SeaLevel becomes void.
+	if mh != nil && mh.LavaWorld != 0 {
+		for i := range t.Plot {
+			f := t.Plot[i].Feature()
+			if f == PlotFeatureNone || f == PlotFeatureFringe {
+				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				if t.Plot[i].MinHeight() <= t.SeaLevel {
+					t.Plot[i].SetFeature(PlotFeatureVoid)
+				}
+			}
+		}
+	}
+	// TODO(question): north/south height-dependent void strips beyond right columns remain unknown [P0-17].
+	// Engine-derived void edges for those strips are not implemented — map-authored sentinels remain.
 }

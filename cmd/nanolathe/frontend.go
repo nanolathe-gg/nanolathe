@@ -5,18 +5,16 @@ import (
 	"os"
 	"sort"
 
-	"kaijuengine.com/bootstrap"
-	"kaijuengine.com/platform/hid"
-
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // Game modes for the single-window shell: the front-end menu morphs into the
-// battle view in-process (Kaiju hosts one bootstrap per process).
+// battle view in-process.
 type shellMode uint8
 
 const (
@@ -55,18 +53,23 @@ type gameShell struct {
 func runGameShell(opts Options, cs *contentSet) error {
 	shell := &gameShell{opts: opts, cs: cs}
 	if opts.Map != "" {
-		return shell.startBattle(opts.Map)
+		// startBattle only morphs an existing shell client; the --map path
+		// has no menu, so launch the battle view with its own client.
+		return runBattleView(opts, cs)
 	}
-	maps, err := listMaps(cs)
+	fmt.Fprintln(os.Stderr, "nanolathe: shell: compiling catalog")
+	cat, err := content.Compile(cs.fs)
 	if err != nil {
-		return err
+		return fmt.Errorf("nanolathe: catalog: %w", err)
 	}
+	maps := listMapNames(cat)
 	if len(maps) == 0 {
 		return fmt.Errorf("nanolathe: no maps found under the mounted install")
 	}
 	shell.maps = maps
 	shell.mode = modeMenuMain
 	shell.buildMenuItems()
+	fmt.Fprintf(os.Stderr, "nanolathe: shell: %d maps, opening window\n", len(maps))
 
 	const winW, winH = 640, 480
 	shell.cam = &camera.Camera{X: 0, Z: 0, ViewW: winW, ViewH: winH, MapW: winW, MapH: winH}
@@ -94,12 +97,7 @@ func runGameShell(opts Options, cs *contentSet) error {
 		shell.fnt = fnt
 	}
 	cl.Overlay = func(c *client.Client) { shell.draw(c) }
-	if _, cerr := cl.ContentDatabase(); cerr != nil {
-		return fmt.Errorf("nanolathe: shell: content database %q: %w (run `make kaiju-content`)", "content", cerr)
-	}
-	var platformState interface{}
-	bootstrap.Main(cl, platformState)
-	return nil
+	return client.RunGame(cl)
 }
 
 // step dispatches by mode; menus tick nothing, battle drives its session.
@@ -141,37 +139,33 @@ func (g *gameShell) startBattle(mapName string) error {
 	return nil
 }
 
-// listMaps returns the catalog's map names sorted deterministically [I1].
-func listMaps(cs *contentSet) ([]string, error) {
-	cat, err := content.Compile(cs.fs)
-	if err != nil {
-		return nil, fmt.Errorf("nanolathe: catalog: %w", err)
-	}
+// listMapNames extracts sorted map names from a compiled catalog [I1].
+func listMapNames(cat *content.Catalog) []string {
 	names := make([]string, 0, len(cat.Maps))
 	for name := range cat.Maps {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return names, nil
+	return names
 }
 
 // menuInput polls menu-mode input (click edge + arrows); no simulation ticks.
 func (g *gameShell) menuInput(cl *client.Client) {
-	host := cl.Host()
-	if host == nil || host.Window == nil {
+	in := cl.Input()
+	if in == nil {
 		return
 	}
-	mouse := &host.Window.Mouse
-	kbd := &host.Window.Keyboard
-	if mouse.Pressed(hid.MouseButtonLeft) {
+	mouse := in.Mouse
+	kbd := in.Kbd
+	if mouse.Pressed(input.MouseButtonLeft) {
 		g.clickX, g.clickY = int32(mouse.X), int32(mouse.Y)
 		g.clickEdge = true
 	}
 	if g.mode == modeMenuSkirmish && len(g.maps) > 0 {
-		if kbd.KeyDown(hid.KeyboardKeyUp) {
+		if kbd.KeyDown(input.KeyUp) {
 			g.mapIdx = (g.mapIdx - 1 + len(g.maps)) % len(g.maps)
 		}
-		if kbd.KeyDown(hid.KeyboardKeyDown) {
+		if kbd.KeyDown(input.KeyDown) {
 			g.mapIdx = (g.mapIdx + 1) % len(g.maps)
 		}
 	}

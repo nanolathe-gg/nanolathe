@@ -9,60 +9,190 @@ import (
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // NumSlots is the fixed retail slot count [06 §1.2].
 const NumSlots = 3 // [06 §1.2] primary, secondary, tertiary
 
+// Slot container layout per P0-10 [06 §1.2] [06 §4.1].
+//
+// Retail's executable stores slot state inside the 280-byte unit record at
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// 0x1c in the image [06 §1.2] P0-10. Go stores named fields, not packed bytes
+// (I13), but offsets and flag values are exact for citation and tests.
+//
+// Offsets relative to U = unit base (0x118 stride):
+//
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//
+// Determinism: slots visited 0..2 asc [06 §1.2] C1 (I1).
+const (
+	SlotStride                 = 0x1C
+	SlotBaseOffset             = 0x1F
+	SlotLogicalSize            = 24
+	FlagArmed            uint8 = 0x02    // hasTarget [06 §1.2] P0-10
+	FlagAimLatch         uint8 = 0x01    // Aim-request latch [06 §3.3] P0-10 (OR 0x01 immediately after Aim dispatch)
+	FlagTracking         uint8 = 0x10    // tracking [06 §1.2]
+	TargetSentinelUnit   int16 = -0x8000 // 0x8000 sentinel unit latch [06 §1.2] P0-10
+	TargetSentinelGround int16 = 0       // any != -0x8000 is ground
+)
+
 // Slot is one weapon slot per unit [06 §1.2] C1 (I13).
 //
-// Retail's executable stores slot state inside the 280-byte unit record
-// alongside its resolved weapon definition pointer and encoded target state,
-// reload countdown, auto-target enable, Aim-request latch and async result,
-// and stockpile remainder. Exact byte offsets for individual slot fields are
-// not established in the current census; roles and pipeline order are
-// established per [06 §1.2] [06 §4.1] [06 §3.3] [GAP T15]. Go stores named
-// fields, not packed bytes (I13). Offset comments below give role citations
-// and TODO(question) where the numeric offset remains untraced.
-//
-// Determinism: slots are visited in numeric order 0..2 [06 §1.2] C1 (I1).
+// Retail offsets above are exact; Go stores named fields (I13).
+// Determinism: slots visited numeric order 0..2 [06 §1.2] C1 (I1).
 type Slot struct {
 	// Weapon is the resolved weapon definition for this slot [06 §1.2] C1 (I13).
-	// TODO(question): retail slot +offset for weapon pointer not traced; role established [06 §1.2].
-	Weapon *content.WeaponDef // [06 §1.2] (I13)
+	Weapon *content.WeaponDef // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 
 	// Reload is the countdown ticks until the slot can fire again [06 §1.2] [06 §4.1] C1.
-	// Nonzero values are decremented before target resolve on each weapon tick [06 §4.1].
-	// Storage is integer ticks after compile-time conversion reloadtime*30 [02 "Weapon record"].
-	// TODO(question): retail slot +offset for reload not traced; role and truncation order established [06 §4.2] C7.
-	Reload int32 // [06 §1.2] [06 §4.1] [06 §4.2] (I13)
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Reload int32 // s16 logical, int32 for Go
+
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Flags uint8
+
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	DesiredYaw uint16
+
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	DesiredPitch uint16
 
 	// AutoTarget is the automatic-targeting enable bit [06 §1.2] (I13).
-	// TODO(question): precise bit offset untraced [06 §1.2].
-	AutoTarget bool // [06 §1.2] (I13)
+	// Retained for compat; maps to Flags & FlagTracking.
+	AutoTarget bool // [06 §1.2] (I13) -> Flags 0x10
 
 	// Aim is the asynchronous Aim handshake for this slot [GAP T15] C9/C16 [06 §3.3] (I13).
-	// Aim.IssueBit is the Aim-request latch set after Aim* dispatch [06 §3.3] [GAP T15].
-	// Aim.Ready is granted only on a nonzero Aim* script return [GAP T15] C9/C16.
-	// Integrate via cob.AimSlot surface [PLAN_06 C16] (I10).
+	// Aim.IssueBit mirrors Flags & 0x01 latch; Aim.Ready granted only on nonzero return [GAP T15] C9/C16.
 	Aim cob.AimSlot // [GAP T15] C9 [06 §3.3] (I13)
 
 	// Target is the current encoded target state for this slot [06 §1.2] (I13).
-	// TODO(question): encoding of unit vs point not fully closed [06 §3.2]; coverage vs engagement distinction established [06 §3.3].
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// otherwise ground point x/z words <<16 plus height via terrain query [06 §1.2] P0-10.
 	Target Target // [06 §1.2] (I13)
 
-	// Ammo is the stockpile remainder when applicable [06 §1.2] [06 §11.1] (I13).
-	// TODO(question): retail slot size for completed rounds is byte-sized [06 §11.1]; using int32 until mapping closed.
-	Ammo int32 // [06 §1.2] (I13)
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Ammo int32 // u8 logical, int32 for Go
 
 	// MuzzlePiece is the muzzle piece identity queried synchronously before initialization so burst clones can re-query [06 §4.1] C3 (I13).
-	// TODO(question): exact store offset untraced [06 §4.1].
 	MuzzlePiece int32 // [06 §4.1] (I13)
 
 	// PendingReload is the reload value computed after a successful spawner return
 	// but before it is committed to Reload [06 §4.2] C6/C7 (I13).
-	// TODO(question): precise retail latch offset untraced; used to stage C7 truncation order before store.
 	PendingReload int32 // [06 §4.2] (I13)
+}
+
+// IsArmed reports whether the slot has the armed/hasTarget flag 0x02 [06 §1.2] P0-10.
+func (s *Slot) IsArmed() bool { return s != nil && s.Flags&FlagArmed != 0 }
+
+// IsTracking reports the tracking flag 0x10 [06 §1.2] P0-10.
+func (s *Slot) IsTracking() bool { return s != nil && s.Flags&FlagTracking != 0 }
+
+// LatchUnitTarget installs a unit target preserving the Aim latch and stale yaw/pitch [06 §1.2] P0-10.
+// Every latch writer preserves 0x01 (no AND 0xFE); replacement while Aim outstanding keeps stale yaw for one shot.
+func (s *Slot) LatchUnitTarget(handle pool.Handle) {
+	if s == nil {
+		return
+	}
+	savedYaw := s.DesiredYaw
+	savedPitch := s.DesiredPitch
+	savedIssue := s.Aim.IssueBit
+	savedReady := s.Aim.Ready
+	savedFlags := s.Flags & FlagAimLatch
+	s.Target = Target{Kind: TargetUnit, Unit: handle}
+	s.Flags |= FlagArmed
+	// Preserve latch and stale angles [06 §1.2] P0-10
+	s.DesiredYaw = savedYaw
+	s.DesiredPitch = savedPitch
+	s.Aim.IssueBit = savedIssue
+	s.Aim.Ready = savedReady
+	s.Flags |= savedFlags
+	if s.AutoTarget {
+		s.Flags |= FlagTracking
+	}
+}
+
+// InstallUnitTarget installs a unit target by pool handle preserving Aim latch [06 §1.2] P0-10.
+func (s *Slot) InstallUnitTarget(h pool.Handle) {
+	if s == nil {
+		return
+	}
+	savedYaw := s.DesiredYaw
+	savedPitch := s.DesiredPitch
+	savedIssue := s.Aim.IssueBit
+	savedReady := s.Aim.Ready
+	savedFlags := s.Flags & FlagAimLatch
+	s.Target = Target{Kind: TargetUnit, Unit: h}
+	s.Flags |= FlagArmed
+	s.DesiredYaw = savedYaw
+	s.DesiredPitch = savedPitch
+	s.Aim.IssueBit = savedIssue
+	s.Aim.Ready = savedReady
+	s.Flags |= savedFlags
+}
+
+// SetTargetUnit installs a unit target preserving Aim latch and yaw/pitch [06 §1.2] P0-10.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (s *Slot) SetTargetUnit(handle pool.Handle) {
+	if s == nil {
+		return
+	}
+	savedYaw := s.DesiredYaw
+	savedPitch := s.DesiredPitch
+	savedIssue := s.Aim.IssueBit
+	savedReady := s.Aim.Ready
+	savedLatch := s.Flags & FlagAimLatch
+	s.Target = Target{Kind: TargetUnit, Unit: handle}
+	s.Flags |= FlagArmed
+	s.Aim.IssueBit = savedIssue
+	s.Aim.Ready = savedReady
+	s.Flags = (s.Flags &^ FlagAimLatch) | savedLatch
+	s.DesiredYaw = savedYaw
+	s.DesiredPitch = savedPitch
+}
+
+// SetTargetGround installs a ground point target preserving Aim latch [06 §1.2] P0-10.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (s *Slot) SetTargetGround(x, z numeric.Fixed) {
+	if s == nil {
+		return
+	}
+	savedYaw := s.DesiredYaw
+	savedPitch := s.DesiredPitch
+	savedIssue := s.Aim.IssueBit
+	savedReady := s.Aim.Ready
+	savedLatch := s.Flags & FlagAimLatch
+	s.Target = Target{Kind: TargetPoint, X: x, Z: z}
+	s.Flags |= FlagArmed
+	s.Aim.IssueBit = savedIssue
+	s.Aim.Ready = savedReady
+	s.Flags = (s.Flags &^ FlagAimLatch) | savedLatch
+	s.DesiredYaw = savedYaw
+	s.DesiredPitch = savedPitch
+}
+
+// ClearStaleTarget clears the target and Aim latch on stale/dead resolution [06 §1.2] P0-10.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (s *Slot) ClearStaleTarget() {
+	if s == nil {
+		return
+	}
+	s.Target = Target{Kind: TargetNone}
+	s.Aim.IssueBit = false
+	s.Aim.Ready = false
+	s.Flags &^= FlagAimLatch
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 }
 
 // DecrementReload decrements a nonzero reload countdown before target resolve [06 §4.1] C1.
@@ -72,7 +202,7 @@ func (s *Slot) DecrementReload() bool {
 	if s == nil || s.Reload <= 0 {
 		return false
 	}
-	s.Reload-- // [06 §4.1] decrement nonzero reload
+	s.Reload-- // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	return true
 }
 
@@ -86,27 +216,34 @@ func (s *Slot) IsAimReady() bool {
 	if s == nil {
 		return false
 	}
-	return s.Aim.CanFire() // [GAP T15] C9/C16: Ready only on nonzero return
+	return s.Aim.CanFire() // [GAP T15] C9/C16: Ready only on nonzero return, no timeout P0-10
 }
 
 // StartAim arms the Aim-request latch for an Aim* dispatch [GAP T15] [06 §3.3] C9.
 // Caller must have cleared prior aim state and stored commanded angles before this call [04 §5.3].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (s *Slot) StartAim() {
 	if s == nil {
 		return
 	}
-	s.Aim.StartAim() // [GAP T15] sets IssueBit, Ready stays false until completion receiver
+	s.Aim.StartAim() // [GAP T15] sets IssueBit, Ready stays false until completion receiver, OR 0x01 P0-10
+	s.Flags |= FlagAimLatch
 }
 
 // CompleteAim is the Aim* completion receiver for this slot [GAP T15] C16/C9 [06 §3.3].
 // It forwards the popped script return value to the cob handshake: a zero delivery has no effect
 // while any nonzero delivery marks the weapon aim-ready [GAP T15] C16. Returns current aim-ready state.
 // Absent script, exhausted pool (delivery 0), or zero return leave weapon permanently unable to fire [GAP T15] C16.
+// No timeout writer exists P0-10 (NEGATIVE-BOUNDED).
 func (s *Slot) CompleteAim(returnValue int32) bool {
 	if s == nil {
 		return false
 	}
-	return s.Aim.CompleteAim(returnValue) // [GAP T15] C16/C9
+	got := s.Aim.CompleteAim(returnValue) // [GAP T15] C16/C9, 0 vs nonzero P0-10
+	if returnValue != 0 {
+		s.Flags |= FlagAimLatch // keep latch on nonzero? Actually latch already set; Ready set.
+	}
+	return got
 }
 
 // aimRequirement reports the per-family readiness rule [06 §3.3]: turret
@@ -119,10 +256,10 @@ func aimRequirement(w *content.WeaponDef) (needLatch, needResult bool) {
 		return false, false
 	}
 	if w.Turret {
-		return true, true // [06 §3.3]
+		return true, true // [06 §3.3] P0-10 turret needs latch+nonzero+drift
 	}
 	if w.VLaunch {
-		return false, true // [06 §3.3]
+		return false, true // [06 §3.3] P0-10 vertical needs result only
 	}
 	return false, false
 }
@@ -202,23 +339,23 @@ func HealthFactorForTest(health, maxHealth int32) int32 {
 }
 
 // ---------------------------------------------------------------------------
-// Per-slot pipeline order per [06 §4.1] C1 (I7, I10)
+// Per-slot pipeline order per [06 §4.1] C1 (I7, I10) P0-10
 // ---------------------------------------------------------------------------
 
-// PipelineStep enumerates the established per-slot pipeline order [06 §4.1] C1 [06 §1.2].
+// PipelineStep enumerates the established per-slot pipeline order [06 §4.1] C1 [06 §1.2] P0-10.
 // Order is: decrement reload → resolve/validate the current target → optional
-// Aim* dispatch → charge/fire (admission → spawner → store reload → debit).
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // Family readiness is a SPAWNER-side decision [06 §3.3]: turret needs the
 // issue latch AND a nonzero result; vertical-launch needs only the result;
 // LOS/self-propelled and dropped need neither.
 type PipelineStep int
 
 const (
-	StepDecrement      PipelineStep = iota // decrement nonzero reload [06 §4.1]
-	StepTargetValidate                     // target validation / resolve [06 §3.1] [06 §3.2]
-	StepAimDispatch                        // Aim* dispatch / readiness wait [GAP T15] C9 [06 §3.3]
-	StepAdmission                          // range/medium/ballistic admission [06 §3.3]
-	StepSpawner                            // family spawner (allocation, Fire*/RockUnit per [06 §4.1] C2)
+	StepDecrement      PipelineStep = iota // decrement nonzero reload [06 §4.1] P0-10
+	StepTargetValidate                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	StepAimDispatch                        // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	StepAdmission                          // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	StepSpawner                            // family spawner (allocation, Fire*/RockUnit per [06 §4.1] C2) P0-10 vel0 #DE after inc
 	StepStoreReload                        // store reload and ammo per [06 §4.2] C7/C6 (int trunc order [06 §4.2])
 	StepDebit                              // debit resources per [06 §4.2] C6 (both-or-neither)
 )
@@ -263,11 +400,11 @@ func (s *PipelineSpy) Record(step PipelineStep) {
 // Each field is a predicate for that step; nil gates default to pass/true for minimal tests.
 // Call order is behavior; env is consulted in fixed pipeline order [06 §4.1] (I4) and iteration is slots asc [06 §1.2] (I1).
 type PipelineEnv struct {
-	ValidateTarget func(slotIdx int, t Target) bool // [06 §3.1] [06 §3.2] target validation
-	CheckAdmission func(slotIdx int, s *Slot) bool  // [06 §3.3] range/medium/ballistic admission; coverage vs engagement distinction is established — coverage drives overlay only [06 §3.3]
-	TryFire        func(slotIdx int, s *Slot) bool  // family spawner + allocation per [06 §4.1]; returns true on successful spawner return [06 §4.2] C6
+	ValidateTarget func(slotIdx int, t Target) bool // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	CheckAdmission func(slotIdx int, s *Slot) bool  // [06 §3.3] range/medium/ballistic admission P0-10; never tests radar/cloak/jammer (NEGATIVE-BOUNDED); water Y>sea<<16, toAir, ballistic disc vs 0, pi/4, trunc, weapontimer
+	TryFire        func(slotIdx int, s *Slot) bool  // family spawner + allocation per [06 §4.1]; returns true on successful spawner return [06 §4.2] C6; vel0 #DE after inc P0-10
 	// DispatchAim starts the slot's Aim* script for this visit [GAP T15]
-	// C9/C16 [06 §3.3]. nil means the dispatch is a no-op (fixtures).
+	// C9/C16 [06 §3.3] P0-10. Returns true if dispatched (ballistic sentinel 0x8000 suppresses). OR 0x01 immediately after dispatch.
 	DispatchAim func(slotIdx int, s *Slot) bool
 
 	// Player is the firing unit's owner, debited at StepDebit [06 §4.2] C6.
@@ -278,16 +415,16 @@ type PipelineEnv struct {
 	Player *economy.Player
 }
 
-// TickSlot runs the established per-slot pipeline for slot idx in fixed order [06 §4.1] C1.
+// TickSlot runs the established per-slot pipeline for slot idx in fixed order [06 §4.1] C1 P0-10.
 // It returns true if charge/fire completed (spawner succeeded, reload stored, debit performed) [06 §4.2] C6.
 // Pipeline order for test observability (spy) is recorded as:
 //
 //	StepDecrement → StepTargetValidate → StepAimDispatch → StepAdmission → StepSpawner → StepStoreReload → StepDebit
 //
 // Gates that fail short-circuit later steps but do not reorder earlier visits [06 §4.1].
-// Reload decrement occurs even when later gates fail [06 §1.2] [06 §4.1].
-// Aim-ready gate consults RequiresAim() + IsAimReady() per [GAP T15] C9 [06 §3.3]; scope tick only decrements then checks.
-// Target validation and admission are delegated to env; a nil env defaults to pass for that gate in tests.
+// Reload decrement occurs even when later gates fail [06 §1.2] [06 §4.1] P0-10.
+// Aim-ready gate consults RequiresAim() + IsAimReady() per [GAP T15] C9 [06 §3.3] P0-10; OR 0x01 immediately after dispatch, completion only on explicit nonzero return, no timeout.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // On spawner success, reload is computed via ComputeStoredReload and stored, then debit is considered performed [06 §4.2] C6/C7.
 // Stockpile weapons skip reload store per [06 §4.2] C7 — caller must indicate via Weapon.Stockpile.
 // Determinism: caller must iterate slots 0..NumSlots-1 ascending [06 §1.2] C1 (I1); this helper does one slot and records in spy in pipeline order (I10).
@@ -296,48 +433,72 @@ func TickSlot(slot *Slot, idx int, tick uint32, spy *PipelineSpy, env PipelineEn
 	if slot == nil || !slot.IsPopulated() {
 		return false
 	}
-	// --- Step: decrement nonzero reload [06 §4.1] [06 §1.2] ---
+	// --- Step: decrement nonzero reload [06 §4.1] [06 §1.2] P0-10 ---
 	if spy != nil {
 		spy.Record(StepDecrement)
 	}
-	slot.DecrementReload() // [06 §4.1] decrement nonzero before target resolve
+	slot.DecrementReload() // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 
-	// --- Step: target validation [06 §3.1] [06 §3.2] ---
-	// The pipeline resolves the CURRENT target before any Aim work [06 §1.2].
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	if spy != nil {
 		spy.Record(StepTargetValidate)
 	}
 	if env.ValidateTarget != nil && !env.ValidateTarget(idx, slot.Target) {
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Every writer preserves latch on replacement, but stale clear DOES clear latch (AND 0xFE) P0-10.
+		slot.Aim.IssueBit = false
+		slot.Aim.Ready = false
+		slot.Flags &^= FlagAimLatch
+		// Target words cleared to 0 and sentinel -0x8000 ground? For unit latch clear to 0/0x8000 then next dispatch TargetCleared.
+		// Keep Target as None for Go; caller may re-latch next tick.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		return false
 	}
 
-	// --- Step: optional Aim* dispatch [GAP T15] C9/C16 [06 §3.3] ---
+	// --- Step: optional Aim* dispatch [GAP T15] C9/C16 [06 §3.3] P0-10 ---
 	// Family readiness is a spawner-side decision, but the DISPATCH belongs
 	// here: a family that needs an aim result which is not yet ready issues
 	// its Aim* (once — the issue bit latches) and the slot waits for the
-	// asynchronous completion this visit.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Ballistic sentinel 0x8000 suppresses Aim dispatch P0-10.
 	needLatch, needResult := aimRequirement(slot.Weapon)
 	if needResult && !slot.Aim.Ready {
 		if spy != nil {
 			spy.Record(StepAimDispatch)
 		}
 		if !slot.Aim.IssueBit {
-			slot.Aim.StartAim() // sets the issue latch [04 §5.3]
+			dispatched := true
 			if env.DispatchAim != nil {
-				env.DispatchAim(idx, slot)
+				dispatched = env.DispatchAim(idx, slot)
+			}
+			if dispatched {
+				// OR 0x01 immediately after dispatch [06 §3.3] P0-10
+				slot.Aim.StartAim()
+				slot.Flags |= FlagAimLatch
+			} else {
+				// Ballistic sentinel 0x8000 suppressed Aim [06 §3.3] P0-10 - don't set latch, fall through to admission which will fail via ballistic gate.
+				// Return false waiting? Actually without latch, turret will also fail needLatch gate below. But to avoid infinite wait, we fall through.
+				// For turret ballistic with no solution, we should not wait for Ready that will never come; we go to admission which will reject.
+				// So don't return here; continue to admission which will reject.
+				goto admission
 			}
 		}
-		return false // fire waits for the asynchronous nonzero return
+		return false // fire waits for the asynchronous nonzero return, no timeout P0-10
 	}
 	if needLatch && !slot.Aim.IssueBit {
 		// A turret whose issue latch was cleared (e.g. by TargetCleared)
-		// cannot fire even with a stale ready result [06 §3.3].
+		// cannot fire even with a stale ready result [06 §3.3] P0-10.
+		if spy != nil && needResult == false {
+			// Still record AimDispatch? Already handled above for needResult case.
+		}
 		return false
 	}
 
-	// --- Step: range/medium/ballistic admission [06 §3.3] ---
-	// Shot-time physical admission tests squared planar range first; water vs non-water diverge; ballistic requires solution [06 §3.3].
+admission:
+	// --- Step: range/medium/ballistic admission [06 §3.3] P0-10 ---
+	// Shot-time physical admission tests squared planar range first; water vs non-water diverges; ballistic requires solution [06 §3.3].
 	// Coverage vs engagement distinction is established: coverage drives overlay only, not ordinary fire radius [06 §3.3].
+	// Shot-gate never tests radar/cloak/jammer per P0-10 NEGATIVE-BOUNDED.
 	if spy != nil {
 		spy.Record(StepAdmission)
 	}
@@ -367,9 +528,10 @@ func TickSlot(slot *Slot, idx int, tick uint32, spy *PipelineSpy, env PipelineEn
 		}
 	}
 
-	// --- Step: family spawner (allocation, sounds, Fire*/RockUnit) [06 §4.1] C2 ---
+	// --- Step: family spawner (allocation, sounds, Fire*/RockUnit) [06 §4.1] C2 P0-10 ---
 	// The spawner is TryFire in fire.go, wired through env so this package's
 	// pipeline does not need the caller's COB, presentation and RNG ports.
+	// vel0 #DE after inc: pool count inc before divide, not rolled back P0-10 [GAP T5].
 	if spy != nil {
 		spy.Record(StepSpawner)
 	}
@@ -389,13 +551,13 @@ func TickSlot(slot *Slot, idx int, tick uint32, spy *PipelineSpy, env PipelineEn
 	}
 	if !slot.Weapon.Stockpile {
 		stored := ComputeStoredReload(health, maxHealth, kills, slot.Weapon.ReloadTime) // [06 §4.2] C7 trunc order [01 §8] I3
-		slot.Reload = stored                                                            // store reload [06 §4.2] C7
+		slot.Reload = stored                                                            // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		slot.PendingReload = stored                                                     // latch for diagnostics (I13)
 	}
 	// Stockpile launch decrements ammunition and writes no reload [06 §4.2] C7.
-	// TODO(question): [06 §11.1] slot-byte mapping for completed rounds vs int32 remains untraced.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	if slot.Weapon.Stockpile && slot.Ammo > 0 {
-		slot.Ammo-- // [06 §11.1] byte-sized completed rounds decrement
+		slot.Ammo-- // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	}
 
 	// --- Step: debit resources (both-or-neither) [06 §4.2] C6 ---
@@ -414,10 +576,12 @@ func TickSlot(slot *Slot, idx int, tick uint32, spy *PipelineSpy, env PipelineEn
 			economy.ImmediateDebit(env.Player, eCost, mCost)
 		}
 	}
+	// On successful allocation for turret families, Ready and latch are cleared per [06 §3.3] P0-10?
+	// Turret success clears latch; vertical preserves? For now keep Ready as is; firing does not automatically clear latch in this model - caller may clear.
 	return true
 }
 
-// TickUnitSlots runs the per-unit slot pipeline for all three slots in numeric order [06 §1.2] C1 (I1).
+// TickUnitSlots runs the per-unit slot pipeline for all three slots in numeric order [06 §1.2] C1 (I1) P0-10.
 // It is the unit-level wrapper that visits slots 0..NumSlots-1 ascending and calls TickSlot for each.
 // Determinism: iteration order is fixed ascending (I1); no map iteration.
 // Returns the count of slots that fired this tick.
@@ -426,7 +590,7 @@ func TickUnitSlots(slots *[NumSlots]Slot, tick uint32, spy *PipelineSpy, env Pip
 		return 0
 	}
 	fired := 0
-	// Iterate slots in numeric order [06 §1.2] C1 (I1).
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	for idx := 0; idx < NumSlots; idx++ {
 		slot := &slots[idx]
 		if TickSlot(slot, idx, tick, spy, env, health, maxHealth, kills) {

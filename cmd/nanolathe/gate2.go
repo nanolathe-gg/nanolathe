@@ -18,9 +18,6 @@ import (
 	"fmt"
 	"os"
 
-	"kaijuengine.com/bootstrap"
-	"kaijuengine.com/platform/hid"
-
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
@@ -237,19 +234,18 @@ func (g *gate2Session) viewerStep(delta float64, cl *client.Client) {
 	if g == nil || cl == nil {
 		return
 	}
-	host := cl.Host()
-	if host != nil && host.Window != nil {
-		kbd := &host.Window.Keyboard
-		mouse := &host.Window.Mouse
-		if kbd.KeyDown(hid.KeyboardKeyM) {
+	if in := cl.Input(); in != nil {
+		kbd := in.Kbd
+		mouse := in.Mouse
+		if kbd.KeyDown(input.KeyM) {
 			g.latch = input.LatchMove
 		}
-		if kbd.KeyDown(hid.KeyboardKeyEscape) {
+		if kbd.KeyDown(input.KeyEscape) {
 			g.latch = input.LatchNormal
 		}
 		mx := int32(mouse.X)
 		my := int32(mouse.Y)
-		leftHeld := mouse.Held(hid.MouseButtonLeft)
+		leftHeld := mouse.Held(input.MouseButtonLeft)
 		additive := kbd.HasShift()
 		if leftHeld && !g.dragActive {
 			g.dragActive = true
@@ -270,21 +266,21 @@ func (g *gate2Session) viewerStep(delta float64, cl *client.Client) {
 					wx, wz := g.cam.ScreenToWorld(mx, my)
 					g.issueMoveTo(wx, wz)
 					g.latch = input.LatchNormal
-				} else if mouse.Held(hid.MouseButtonRight) {
+				} else if mouse.Held(input.MouseButtonRight) {
 				} else {
 				}
 			} else {
 				_, _ = client.ApplyDragSelectionWorld(g.world, g.cam, rect, additive)
 			}
 		}
-		if mouse.Pressed(hid.MouseButtonRight) {
+		if mouse.Pressed(input.MouseButtonRight) {
 			if g.latch == input.LatchMove || g.hasSelection() {
 				wx, wz := g.cam.ScreenToWorld(mx, my)
 				g.issueMoveTo(wx, wz)
 				g.latch = input.LatchNormal
 			}
 		}
-		if mouse.Pressed(hid.MouseButtonLeft) && g.latch == input.LatchMove && !g.dragActive {
+		if mouse.Pressed(input.MouseButtonLeft) && g.latch == input.LatchMove && !g.dragActive {
 			wx, wz := g.cam.ScreenToWorld(mx, my)
 			g.issueMoveTo(wx, wz)
 			g.latch = input.LatchNormal
@@ -298,9 +294,9 @@ func (g *gate2Session) viewerStep(delta float64, cl *client.Client) {
 	for i := 0; i < ticks; i++ {
 		g.kernel.SubTick(g.clock)
 	}
-	if host != nil && host.Window != nil && g.cam != nil {
-		kbd := &host.Window.Keyboard
-		mouse := &host.Window.Mouse
+	if g.cam != nil && cl.Input() != nil {
+		kbd := cl.Input().Kbd
+		mouse := cl.Input().Mouse
 		rawDelta := int32(delta * 1000)
 		if rawDelta < 0 {
 			rawDelta = 0
@@ -309,21 +305,20 @@ func (g *gate2Session) viewerStep(delta float64, cl *client.Client) {
 			rawDelta = 16
 		}
 		const scrollSetting = 8
-		if kbd.KeyHeld(hid.KeyboardKeyW) || kbd.KeyHeld(hid.KeyboardKeyUp) {
+		if kbd.KeyHeld(input.KeyW) || kbd.KeyHeld(input.KeyUp) {
 			g.cam.Scroll(scrollSetting, rawDelta, camera.DirUp)
 		}
-		if kbd.KeyHeld(hid.KeyboardKeyS) || kbd.KeyHeld(hid.KeyboardKeyDown) {
+		if kbd.KeyHeld(input.KeyS) || kbd.KeyHeld(input.KeyDown) {
 			g.cam.Scroll(scrollSetting, rawDelta, camera.DirDown)
 		}
-		if kbd.KeyHeld(hid.KeyboardKeyA) || kbd.KeyHeld(hid.KeyboardKeyLeft) {
+		if kbd.KeyHeld(input.KeyA) || kbd.KeyHeld(input.KeyLeft) {
 			g.cam.Scroll(scrollSetting, rawDelta, camera.DirLeft)
 		}
-		if kbd.KeyHeld(hid.KeyboardKeyD) || kbd.KeyHeld(hid.KeyboardKeyRight) {
+		if kbd.KeyHeld(input.KeyD) || kbd.KeyHeld(input.KeyRight) {
 			g.cam.Scroll(scrollSetting, rawDelta, camera.DirRight)
 		}
 		const edge = 8
-		w := host.Window.Width()
-		h := host.Window.Height()
+		w, h := cl.Size()
 		if w > 0 && h > 0 {
 			if mouse.X < edge {
 				g.cam.Scroll(scrollSetting, rawDelta, camera.DirLeft)
@@ -414,17 +409,11 @@ func runGate2Viewer(opts Options, cs *contentSet) error {
 	if fnt != nil {
 		cl.SetFNT(fnt)
 	}
-	if _, err := cl.ContentDatabase(); err != nil {
-		return fmt.Errorf("nanolathe: viewer: content database %q: %w (run `make kaiju-content`)", "content", err)
-	}
 	fmt.Fprintf(os.Stderr, "nanolathe: gate2 viewer: opening window %dx%d for map %q (%dx%d cells) armflea@%d,%d M=arm Move Shift=add drag=select right-click=move\n", winW, winH, opts.Map, terrain.CellW, terrain.CellH, cam.X, cam.Z)
-	var platformState interface{}
-	bootstrap.Main(cl, platformState)
-	fmt.Fprintf(os.Stderr, "nanolathe: gate2 viewer: window closed host %v final tick %d rng sim draws %d\n", cl.Host(), sess.clock.GlobalTick, rng.Global.Sim.Draws())
-	if cl.Host() == nil {
-		return fmt.Errorf("nanolathe: viewer: window never opened (host is nil) — check MoltenVK at runtime (DYLD_LIBRARY_PATH) and that content/ exists")
-	}
-	return nil
+	err = client.RunGame(cl)
+	finalTick := sess.clock.GlobalTick
+	fmt.Fprintf(os.Stderr, "nanolathe: gate2 viewer: window closed final tick %d rng sim draws %d\n", finalTick, rng.Global.Sim.Draws())
+	return err
 }
 
 func runGate2Headless(opts Options, cs *contentSet, out *os.File) error {

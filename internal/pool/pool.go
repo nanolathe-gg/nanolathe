@@ -208,6 +208,23 @@ func (p *Projectiles) Reserve() (Handle, bool) {
 	return h, true
 }
 
+// CancelReserve rolls back the most recent Reserve when the ballistic solver
+// finds no solution after an early reservation. Retail never reserved for that
+// case, so the count must not leak; the vel0 #DE path keeps the leak per
+// P0-10 [06 §6.4] I11 and does not call this.
+func (p *Projectiles) CancelReserve(h Handle) bool {
+	if p == nil || p.count == 0 {
+		return false
+	}
+	if int(h) != p.count {
+		return false
+	}
+	p.count--
+	p.dead[p.count] = false
+	p.payload[p.count] = 0
+	return true
+}
+
 // MarkDead sets the dead flag for h without changing the active-span count
 // [06 §5.1]. Out-of-range and null handles are ignored. Already-dead handles
 // are idempotent.
