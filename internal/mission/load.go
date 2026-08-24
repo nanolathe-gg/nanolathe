@@ -1,8 +1,8 @@
 package mission
 
 import (
-	"github.com/nanolathe/nanolathe/internal/triggers"
 	"fmt"
+	"github.com/nanolathe/nanolathe/internal/triggers"
 	"sort"
 	"strings"
 
@@ -29,13 +29,13 @@ const (
 type Mission struct {
 	Type        Type
 	OTA         *formats.OTA
-	TerrainKey  string             // base name without extension, for TNT pairing [fmt ota]
-	Schema      Schema             // selected schema [08 "Schema choice"] [C3][C4]
-	Units       []UnitPlacement    // 36-byte retail identity, named fields per I13 [C6]
-	Specials    []Special          // 12-byte retail identity [C6]
-	Features    []FeaturePlacement // 136-byte retail identity [C6]
-	WindBounds  WindBounds         // retained for PLAN_14 battle-entry initializer, no RNG [C5] [08 "Wind initialization"]
-	UseOnlyPath string             // routed into camps/useonly [C8] [08 "Mission placement record"]
+	TerrainKey  string              // base name without extension, for TNT pairing [fmt ota]
+	Schema      Schema              // selected schema [08 "Schema choice"] [C3][C4]
+	Units       []UnitPlacement     // 36-byte retail identity, named fields per I13 [C6]
+	Specials    []Special           // 12-byte retail identity [C6]
+	Features    []FeaturePlacement  // 136-byte retail identity [C6]
+	WindBounds  WindBounds          // retained for PLAN_14 battle-entry initializer, no RNG [C5] [08 "Wind initialization"]
+	UseOnlyPath string              // routed into camps/useonly [C8] [08 "Mission placement record"]
 	Victory     []*triggers.Trigger // victory conditions [PLAN_10 C14-C17]
 	Defeat      []*triggers.Trigger // defeat conditions [PLAN_10 C14-C17]
 	IsRestore   bool                // BetweenMissions restore: InitialMission also runs on restores [04 §3.6] C9
