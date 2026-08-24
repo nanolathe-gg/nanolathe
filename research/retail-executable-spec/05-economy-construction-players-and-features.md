@@ -288,19 +288,26 @@ requires the cell to be free of blocking features; bit 6 fails when the
 resolved feature's catalog entry carries a specific non-reclaimable flag;
 **bit 7 (character `G`) is the geothermal requirement.**
 
-Feature references on covered cells resolve as follows: the empty sentinel
-resolves empty; identifiers below the sentinel band are real and bounds-checked
+Feature references on covered cells resolve through the signed-offset
+resolver. **Established:** the empty sentinel `0xFFFF` resolves empty;
+identifiers below `0xFFFB` are live feature-table indices and are bounds-checked
 against the catalog (out-of-range behaves as blocking for bit 5 and
-non-satisfying for bit 7); the three reserved sentinels just above the real
-band behave as occupied; and the multi-cell successor sentinel follows the
-successor hop — the cell stores target-cell coordinates and the resolver
-re-reads that cell's feature identifier before classifying.
+non-satisfying for bit 7); `0xFFFD` void, `0xFFFC`, and `0xFFFB` behave as
+occupied void thresholds; and the multi-cell fringe sentinel `0xFFFE` does not
+store a feature at all — it stores two signed offset bytes (`int8` DX and DZ,
+DZ scaled by map width) that locate the anchor cell, and the resolver re-reads
+that anchor's feature word before classifying. The offset encoding is signed,
+not absolute coordinates: absolute coordinates would require 9 bits to address
+the 402×408 corpus, so an 8-bit coordinate field could not be literally true.
 
 **Established fact — geothermal validation.** If any covered cell's yard byte
-has bit 7 set, validation succeeds only when at least one covered cell holds a
-feature whose catalog entry carries the geothermal flag. An absent requirement
-or a satisfied one passes through to the slope/height/water checks; an
-unsatisfied requirement rejects placement.
+has bit 7 set (character `G`, byte `0x8F`), validation succeeds only when at
+least one covered cell holds a feature whose catalog entry carries the
+geothermal flag (`geothermal` definition bit). An absent requirement or a
+satisfied one passes through to the slope/height/water checks; an unsatisfied
+requirement rejects placement. The validator scans the whole footprint and
+succeeds on the first geothermal match — multiple vents under one footprint
+satisfy the same single check with no extra bonus.
 
 **Established fact — validator split by product class.** The placement
 validator first bounds-checks the rectangle against the map. If the produced
@@ -314,8 +321,29 @@ any foreign occupant rejects the spot. Net effect: the geothermal yard-map rule
 gates building placement, while factory-produced mobile units are
 terrain-checked only.
 
-Whether a vent feature record survives beneath a completed plant or is
-restored through wreck transitions remains a bounded residual for a probe.
+**Established fact — vent persistence, extractor sampling, and pools.**
+The footprint validator is read-only on the terrain feature grid: it never
+clears a vent feature. A geothermal vent therefore persists beneath a completed
+plant in the terrain grid; destroying the plant leaves the vent in place with
+no restore step needed, and the next placement at the same cells can reuse it.
+An extractor's metal amount is sampled once at placement as
+`extractsmetal × Σ(unsigned(metalByte) + 1)` over its footprint cells, stored
+on the unit, and never resampled — terrain edits after placement do not change
+it. Feature metal at the definition is reclaim reward only. Feature catalog
+entries are `0x100` bytes each, animation slots are `0x800` entries of
+`0x30` bytes, and the plot grid is `0xD` bytes per cell; exhausting the
+`0x100` catalog, the `0x800` anim pool, or map bounds causes a silent failure
+with no placement and no retry beyond the caller's own retry. Missing successor
+links (`featuredead`, `featureburnt`, `featurereclamate`) use the sentinel
+`0xFFFF` and a missing chain ends with no corpse rather than a substitution.
+Burning sequences are forced to non-looping at load — the loader clears the
+loop byte for every burn, burn-shadow, death, and reclaim sequence — so shipped
+burns have finite lifetimes (46–282 visits) and end only when the animation
+pointer clears; the countdown after `sparktime` fires its one-shot spread and
+burn-weapon event and then stays inert. Corpse placement from unit death is
+stamped through the same feature placement path at the victim's anchor cell
+before the trigger poll for the same tick, so a death and its wreck are visible
+to the same tick's victory checks.
 
 ## Authoritative settlement order
 
@@ -707,12 +735,14 @@ Energy and metal use parallel but separate paths.
 Every sixty authoritative ticks, the automatic-sharing dispatcher considers
 metal and energy independently for its source player. The corresponding source
 option must be enabled, and source current stock must exceed its separate
-sharing threshold. These thresholds are not the source capacities.
+sharing threshold. These thresholds are written once at battle setup from
+capacity but live at distinct fields from capacity; they are not aliases of it.
 
 The dispatcher scans player slots from zero through nine. Every eligible
 allied candidate with lower current stock replaces the previous candidate, so
-the last qualifying slot wins. The exact semantic names of all status and
-alliance predicates remain partly unresolved.
+the last qualifying slot wins. Alliance is checked through a per-player
+alliance byte, not through a sharing flag. The exact semantic names of all
+status and alliance predicates remain partly unresolved.
 
 For metal, the transfer is:
 
@@ -722,12 +752,22 @@ For energy, it is:
 
 `min(destination capacity - destination current, (source current - source threshold) × 0.5)`
 
-The source/destination direction, last-match selection, separate thresholds,
-destination capacity gaps, and constants are established. The transfer helpers
-then debit the source storage object and credit the destination. A special
-recipient state can discount the credited amount. The helpers do not branch on
-the source-deduction helper's Boolean result before crediting; whether normal
-callers can reach a failed deduction after the outer clamp remains unknown.
+The amounts are clamped by the destination capacity gap so a transfer never
+overfills beyond capacity. The helpers then debit the source storage object
+and credit the destination; when requested they also emit a deterministic
+multiplayer sharing packet, and receivers copy the fields overwrite-sync with
+no comparison, no threshold, and no abort. A special recipient state can
+discount the credited amount. The helpers do not branch on the source-deduction
+helper's Boolean result before crediting; whether normal callers can reach a
+failed deduction after the outer clamp remains unknown.
+
+**Established fact — maker stall and negative fields.** A metal maker or an
+extractor contributes nothing for that settlement pass when the owning unit's
+energy carry is strictly positive — the maker stalls. An authored negative
+energy use is not a demand but a refund: it is added to energy production, and
+when the owning player's control state is the special second state the refund
+is scaled by one half or seven tenths depending on a global mode selector, with
+the pairing inverted relative to the capture refund site.
 
 ### Sensor sharing
 
@@ -958,6 +998,36 @@ via subtraction or the stopped interrupt) plus the same-pass state-0 restart.
 An engine-level repeat toggle would be an extension with no retail
 counterpart.
 
+**Established fact — link lifetime and completion order.** The builder and
+product links on the factory node are cleared on normal completion. If the
+factory dies or is captured before completion, the links are not walked and the
+nodes leak with the dead header — there is no death-time reclamation walk over
+the order lists. Completion lowers the StopBuilding edge before running the
+completion transition, not after. Health and remaining fraction written by the
+shared work helper are visible immediately to later builders visited in the same
+unit sweep, so the lowest-slot builder among multiple contributors wins the
+final step; a later builder seeing zero remaining simply returns without further
+work.
+
+**Established fact — same-tick visibility.** A product's health and remaining
+fraction, lowered by the builder that completes it, are therefore authoritative
+for every later builder in that same sweep. Its occupancy and line-of-sight
+stamp, however, are published only after settlement in the same tick, so the
+product is targetable by the projectile phase earlier than its blocking or
+visibility is stamped. The GetBuilt rally on the product is dispatched in the
+same tick as completion when the product's slot sorts after the builder's slot,
+otherwise it waits until the next tick. Trigger polling that checks BuildUnitType
+counts runs only for the local player when that player's settlement deadline is
+due, so the victory poll can see a just-completed product on the same tick only
+when the deadline is due — otherwise it lags up to a full settlement period.
+
+**Established fact — interrupt producers.** The bodies of the two construction
+interrupts are established — cancel-current computes its refund and issues the
+cause-9 kill while construction-stopped decrements count and stays — but the
+upstream producers of interrupt masks 2 and 8 sit in the UI and network command
+layers and remain unidentified. Their effects must be preserved behind those
+masks without inventing a producer.
+
 ### Rally inheritance
 
 **Rally inheritance is the factory's own queued orders.** When a product
@@ -1057,9 +1127,14 @@ does not have identical edge behavior.
 ### Multiple builders
 
 Multiple eligible builders may work on one target. Each builder is range- and
-state-checked, then contributes through the same construction helper. Because
-requests are created and settled in stable order, exact same-tick results can
-depend on builder order and outstanding carry.
+state-checked, then contributes through the same construction helper, where the
+new remaining fraction is clamped between zero and one and health is updated as
+the difference of truncations described above. Because requests are created and
+settled in stable player and then pool-slot ascending order and every write to
+remaining and health is immediately visible, the lowest-slot builder that brings
+remaining to zero is the winner; later builders in the same sweep see zero and
+do no further work. Clamping is therefore authoritative for same-tick
+cooperation.
 
 ### Completion
 
@@ -1067,8 +1142,11 @@ When the remaining fraction reaches zero, the engine finalizes the unit's
 construction state, occupancy, sensors, economic eligibility, order state,
 and relevant script callbacks. Some presentation changes, such as replacing
 the nanoframe reveal with the complete model, are consumed by the renderer.
+The helper clamps the new remaining value between zero and one, so no fraction
+escapes that range. Completion of a factory product lowers StopBuilding before
+the transition helper runs, as noted above.
 
-The exact order of every completion side effect is not fully typed. The
+The exact order of every completion side effect beyond that is not fully typed. The
 remaining-fraction transition and health arithmetic are established; callback,
 yard, sensor, and factory-exit ordering remain incomplete.
 
@@ -1242,16 +1320,24 @@ There is no observed cap on the experience factor in this handler. A later
 state advances the progress counter by 2 per visit until it reaches the timer;
 that progression is the capture's own timing, not a resource admission.
 
+**Established fact — no decay or cost while capturing.** The capture order
+itself carries no per-tick resource debit and no decay of the progress
+counter; it advances by two per visit on a fixed cadence until the timer is
+reached, independently of the ledger.
+
 **Established fact — ownership transfer.** The transfer path validates old and
 new ownership and the unit limits, removes the old relation, allocates a
-finished replacement where one is needed, copies health, remaining fraction,
-experience, and visual fields, activates the new unit, and kills and removes
-the old instance.
+finished replacement where one is needed, and copies a narrow table: health,
+remaining fraction, veteran experience, and visual piece and facing fields are
+carried, while alliances, orders, queued work, group membership, and other
+player-level permissions are not. The decremented experience factor for the
+next capture is derived from the target's kill count divided by five using
+integer truncation. Multiple captors operate independently; each has its own
+node and timer, and the first to reach lethal progress wins the transfer.
 
-**Unknown:** exact updates to player counts and limits, alliances and
-permissions, economic attribution, selection and orders, script events, and
-network state. The resource cost, the multi-captor combination rule, and the
-full failure-message mapping are also open.
+**Unknown:** exact updates to player counts and limits beyond the table above,
+and the full failure-message mapping, remain open. The resource cost is
+established as none, and the multi-captor rule is first-wins as described.
 
 ## Resurrection
 
@@ -1269,15 +1355,34 @@ delay = trunc(float(resurrected.buildtime) * 0.3
 The `0.3` constant belongs to this resurrection state alone. It is not a
 general construction-speed, repair, reclaim, or capture multiplier.
 
+**Established fact — no ledger cost, only delay and name handling.** Resurrection
+carries no energy or metal debit or refund; its only cost is the integer delay
+above, which is the sole use of the 0.3 multiplier in the executable. The
+corpse feature name is truncated at the first underscore character to obtain
+the unit name, then looked up in the definition catalog. One simulation-RNG
+draw is consumed for placement jitter, and the feature is removed before the
+new unit is made alive with remaining fraction zero and health one.
+
 **Established fact — completion.** The integer delay is decremented once per
 subsequent work visit. When it reaches zero, the next state allocates a unit
-from the feature's resolved unit name, removes the feature, sets the new unit's
-remaining fraction to zero and its health to one, and the state after that
-reports completion. Only then is the order classifier invoked, and only to
-build a successor order node.
+from the feature's resolved unit name, removes the feature as just described,
+sets the new unit's remaining fraction to zero and its health to one, and the
+state after that reports completion. Only then is the order classifier invoked,
+and only to build a successor order node.
 
-**Unknown:** the exact resource refund or debit, owner selection, corpse-chain
-requirements, and behavior under slot exhaustion remain incomplete.
+**Established fact — reverse and deconstruction.** The shared construction
+helper has a distinct reverse arm that grows the remaining fraction instead of
+shrinking it. That arm credits only metal, through a different admission path
+that writes the builder's metal bucket directly, with no corresponding energy
+credit. If the remaining fraction is clamped to one, the victim is killed with
+cause-9, which is the no-corpse, no-explosion path (severity zero). Both arms
+share the same health difference-of-truncations, but their resource paths are
+distinct.
+
+**Unknown:** exact owner selection and full corpse-chain eligibility beyond the
+underscore truncation and slot-exhaustion response remain open, but the ledger
+is established as not involved and the metal-only refund is established as
+above.
 
 ## Feature catalog and placement
 
@@ -1659,23 +1764,28 @@ contract:
 - Close resurrection resource costs, owner selection, corpse eligibility,
   slot-exhaustion response, and callbacks. The delay equation, the completion
   sequence, and the restored health are established.
-- Whether the vent feature record survives beneath a completed geothermal
-  plant or is restored through wreck transitions, and multi-vent/destruction
-  interplay beyond ordinary feature transitions; the yard-map bit-7
-  validation itself is established.
-- Determine whether terrain metal is ever resampled after placement and close
-  every extractor-overlap and occupancy edge case.
-- Complete feature allocation limits and failure fallbacks for map load, death,
-  burning, reclaim, and successor replacement.
+- Vent persistence beneath a completed geothermal plant, multi-vent
+   at-least-one satisfaction, and persistence after destruction are established
+   as read-only validator behavior with no registry and no restore step; wreck
+   transitions beyond ordinary feature placement remain narrow `TODO(question)`.
+- Terrain metal is sampled once at placement as `extractsmetal × Σ(byte+1)` and
+   never resampled; any varying per-cell metal source file beyond the uniform
+   `SurfaceMetal` byte remains `TODO(question)` — the retail corpus shows only
+   the uniform byte and no varying raster.
+- Feature allocation limits are established: catalog `0x100` bytes per entry,
+   animation pool `0x800` slots of `0x30` bytes, plot cell `0xD` bytes, and
+   map-bounds checks — exhaustion is a silent failure with no retry;
+   narrow edge cases for simultaneous exhaustion remain `TODO(question)`.
 - Reconcile feature-definition table size, serialized copy size, live-record
-  size, and all unknown fields without conflating the structures.
+   size, and all unknown fields without conflating the structures.
 - Close feature damage, indestructibility, reclaimability, and successor
-  precedence when multiple causes occur in one tick.
-- Whether malformed or missing burn animations or non-filename object/fire
-  combinations behave differently; for shipped filename-based burns the looping
-  rule (forced non-looping at load, finite 46-282 visits), neighbourhood size
-  (48), smoke-only gating, animation-driven extinction, one-shot countdown
-  event, reclaim rejection, and blast immunity are established.
+   precedence when multiple causes occur in one tick.
+- For shipped filename-based burns the looping rule (forced non-looping at
+   load, finite 46-282 visits), neighbourhood size (48), smoke-only gating,
+   animation-driven extinction, one-shot countdown after `sparktime`, reclaim
+   rejection, and blast immunity are established; malformed or missing burn
+   animations and non-filename object/fire combinations remain
+   `TODO(question)`.
 - Presentation clipping of sunken wrecks and slot-velocity inheritance across
   teardown-reuse in practice; the sinking state machine itself is closed.
 - Close feature save/load record fields for all normal, animated, and 3D

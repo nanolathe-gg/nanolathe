@@ -5,7 +5,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/kernel"
@@ -232,6 +234,33 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 	if err := SkirmishBattleEntry(s, cfg, m, nil); err != nil {
 		return nil, err
 	}
+	// Construction service drives factory/mobile-build lifecycles [PLAN_08].
+	if s.Build == nil && s.World != nil {
+		s.Build = construction.NewService(s.World, s.Catalog, s.Units, s.Econ)
+	}
+	// Computer players get strategic AI managers dispatched by the coordinator
+	// [PLAN_11 C1/C11]; humans none.
+	if s.AI == nil {
+		s.AI = make([]*ai.Manager, 0, 2)
+	}
+	for i, p := range cfg.Players[:cfg.NumPlayers] {
+		if i >= 10 {
+			break
+		}
+		if p.Controller == 0 {
+			continue
+		}
+		prof, perr := ai.LoadProfile(fs, "default")
+		if perr != nil || prof == nil {
+			continue // no profile available; skip AI this player [PLAN_11 WU-11-1]
+		}
+		mgr := &ai.Manager{Player: uint8(i), Profile: prof}
+		mgr.Terrain = s.World
+		if s.Catalog != nil {
+			mgr.Catalog = s.Catalog
+		}
+		s.AI = append(s.AI, mgr)
+	}
 	// Gate-5 integration: ground steering/routes via movement.System [PLAN_14 C5 movement integration].
 	if s.World != nil && s.Movement == nil {
 		s.Movement = movement.NewSystem(s.World, movement.Profile{FootPrintX: 1, FootPrintZ: 1}, movement.NewOccupancyGrid())
@@ -346,13 +375,17 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 			// Special X/Z are shorts; convert to fixed 16.16 via *65536 [GAP T14] unit placements <<16.
 			x = numeric.Fixed(int32(sp.X) * 65536)
 			z = numeric.Fixed(int32(sp.Z) * 65536)
-			// Height from terrain if available, otherwise 0.
-			if s.World != nil {
-				h := s.World.HeightAt(x, z)
-				if h != -1 {
-					y = h
-				}
-			}
+		} else if s.World != nil && idx > 0 {
+			// TODO(question): retail skirmish auto-spawn rule untraced; Nanolathe
+			// default spaces extra commanders along the map diagonal so every
+			// player gets a start when the schema carries no StartPos records.
+			stepX := int32(s.World.CellW*16) / int32(cfg.NumPlayers+1)
+			x = numeric.Fixed(int32(stepX*int32(idx+1)) * 65536)
+			z = numeric.Fixed(int32(s.World.CellH*8) * 65536)
+		}
+		if s.World != nil {
+			h := s.World.HeightAt(x, z)
+			y = h
 		}
 		_, _ = s.Units.Create(def, uint8(idx), x, y, z)
 		_ = idx

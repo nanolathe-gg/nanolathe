@@ -108,10 +108,16 @@ CRT stream. Later wind strength and 16-bit heading use the simulation stream.
 allocation, immediate reuse, no generation tags. A stale damage packet
 addressing a reused slot is accepted — that is retail `[06 §5.1]`.
 
-Capacities: units per `[01 §6.1]`, 300 projectiles (107-byte retail identity),
-eight COB threads per unit (164-byte identity), order nodes (86-byte identity),
-300 fixed effects (0x54-byte identity), and effect strips evicting oldest-first
-above 400. Go records use named fields per I13.
+Capacities: units are the game value derived from setup times ten plus one
+with 280-byte records sliced per player in sorted order, stock roughly two
+thousand to five thousand rather than 500 folklore, per `[01 §6.1]`; 300
+projectiles (107-byte retail identity), eight COB threads per unit (164-byte
+identity), order nodes (86-byte identity), 300 fixed effects (0x54-byte
+identity), and effect strips evicting oldest-first above 400. Go records use
+named fields per I13. Allocation scans the owning slice for the lowest free
+flag, reuses immediately, and validates per-definition limits and forced slots;
+stale 16-bit packets that validate only slot nonzero and alive alias silently
+after reuse.
 
 `pool.Projectiles` is the sole allocation/dead/count authority. The projectile
 pool **appends at the tail** and never fills holes; dead records

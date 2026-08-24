@@ -137,11 +137,17 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 				y := snapshot.Lerp(pv.Y, cv.Y, alpha)
 				z := snapshot.Lerp(pv.Z, cv.Z, alpha)
 				sx, sy := c.cam.WorldToScreen(x, y, z) // [03 §2.5] C1
-				// Clip and draw 5×5 sprite for visibility at 640×480.
+				if cv.FootX > 0 && cv.FootZ > 0 {
+					// Footprint-correct oriented body [04 §6.2]; health bar,
+					// nanoframe dashes, selection brackets.
+					c.drawUnitOriented(cv, sx, sy)
+					continue
+				}
+				// Legacy fallback: 5×5 marker for footprint-less views.
 				selected := cv.Flags&SelectionFlag != 0
 				inner := byte(250)
 				if selected {
-					inner = 200 // distinct when selected [07 §9] 0x10
+					inner = 200
 				}
 				for dy := -2; dy <= 2; dy++ {
 					for dx := -2; dx <= 2; dx++ {
@@ -150,7 +156,6 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 						if px < 0 || px >= w || py < 0 || py >= h {
 							continue
 						}
-						// Black border, white/yellow interior.
 						if dx == -2 || dx == 2 || dy == -2 || dy == 2 {
 							c.indexed[py*w+px] = 0
 						} else {
@@ -159,6 +164,10 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					}
 				}
 			}
+		}
+		// Battle chrome (build panel, ghosts, menus) after units [I6].
+		if c.Overlay != nil {
+			c.Overlay(c)
 		}
 		// Overlay: debug info via FNT when available [03 §7.1] C8.
 		if c.fnt != nil {

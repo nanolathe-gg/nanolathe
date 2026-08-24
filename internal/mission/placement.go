@@ -179,8 +179,11 @@ func decodeUnitSection(sec *formats.Section) UnitPlacement {
 	u.Z = z << 16
 	u.Y = y << 16
 
-	// Angle degrees conversion via magic-multiply: trunc(degrees*65536/360)
-	// TODO(question): exact rounding chain is "magic-multiply" [GAP T14] [fmt ota]
+	// Angle degrees conversion via magic-multiply: trunc(degrees*65536/360).
+	// ESTABLISHED: the decompile confirms the constant chain
+	// *0x10000 * 0xb60b60b7 >> 0x28 (= ⌊2⁴⁰/360⌋+1) ≡ trunc(×65536/360)
+	// (notes/campaign/00_missions.md §4.1); the earlier "magic-multiply"
+	// open question is closed in favour of exactly what is computed here.
 	if raw, ok := sec.FirstValue("Angle"); ok {
 		trimmed := strings.TrimSpace(raw)
 		if trimmed != "" {
@@ -216,11 +219,13 @@ func decodeUnitSection(sec *formats.Section) UnitPlacement {
 	u.CreationCountdown = sec.IntValue("CreationCountdown", 0)
 	u.Kills = sec.IntValue("Kills", 0)
 
-	// Packed flag byte: bits as per [08 "Mission placement record"] [02 "Map files"] [C7]
-	// Retail packs four flags into one byte; only high bit consumed.
+	// Packed flag byte: bits per the decompile reader census
+	// (notes/campaign/00_missions.md §4.1, address-backed): bit0 = nonzero
+	// InitialGroup, bit4 = MissionCriticalUnit, bit5 = AiIgnore, bit6 =
+	// AiPriorityTarget, bit7 = Immunity. Only the high bit is consumed [C7].
 	var flags byte
 	if sec.IntValue("MissionCriticalUnit", 0) != 0 {
-		flags |= 1 << 0
+		flags |= 1 << 4 // bit4 [08 "Mission placement record"]
 		u.MissionCriticalUnit = true
 	}
 	if sec.IntValue("AiIgnore", 0) != 0 {
@@ -360,11 +365,17 @@ func DegreesToHeading(deg float64) uint16 {
 // shifting left 16. [GAP T14] [02 "Map files"]
 func FixedFromPixels(pixels int32) int32 { return pixels << 16 }
 
-// --- Binary 36/12/136 retail identity helpers for cross-file contract [I13] ---
+// --- Binary 36/12/136 identity helpers ---
+//
+// SYNTHETIC round-trip codecs, not retail wire formats: no retail file ever
+// stores these records, so the offsets below are this codec's own and are
+// deliberately NOT the executable's field identities (I13). The 36/12/136
+// byte sizes remain record identity for contract cross-references.
 
-// MarshalUnit encodes a UnitPlacement into the 36-byte retail identity plus
+// MarshalUnit encodes a UnitPlacement into a 36-byte record plus
 // a tail heap. Name pointers are offsets into the heap. X/Z/Y are fixed
 // dwords <<16, Angle is heading, flags packed. [GAP T14] [02 "Map files"] [C6]
+// Synthetic codec — see the block comment above; offsets are not retail's.
 func MarshalUnit(u UnitPlacement, heap *[]byte) [36]byte {
 	var rec [36]byte
 	heapBase := len(*heap)

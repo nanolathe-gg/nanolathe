@@ -115,12 +115,71 @@ The tile map is a row-major array of 16-bit tile indices with dimensions
 intra-tile pixel remainder, clips at map bounds, and handles partial edge
 rectangles. It does not use a depth buffer or a textured water mesh.
 
-The loader expands each raw attribute entry into a 13-byte plot cell. Established
-fields are: terrain height byte, derived local minimum/maximum heights, a
-feature-anchor/sentinel field, footprint anchor offsets, and an occupied flag.
-Feature sentinels distinguish empty, covered, and void cells. The exact meaning
-of the first two bytes and all flag bits is not complete, but the 13-byte stride,
-height, feature, and occupancy roles are high-confidence.
+The loader expands each canonical attribute entry (four bytes: height,
+feature `uint16` little-endian, and a zero unknown byte) into a 13-byte plot
+cell in row-major order. Document 02 carries the typed layout and sentinel
+table. In plain terms, each 13-byte cell holds:
+
+* occupancy words at the first four bytes (two `uint16` mobile planes, zeroed at
+  load then stamped per building occupancy);
+* height byte at offset 4;
+* derived minimum and maximum heights at offsets 5 and 6 (maximum at 5, minimum
+  at 6, recomputed over the 2×2 neighbourhood; average is the coarse floor
+  query);
+* metal byte at offset 7, seeded uniformly from the mission `SurfaceMetal`
+  scalar — every cell receives the same signed byte, no per-cell raster;
+* feature word at offset 8 with quaternary sentinels: `0xFFFF` empty, `0xFFFE`
+  fringe (follow signed offsets), `0xFFFD` void (engine map-edge strips and
+  lava-world fill), and `< 0xFFFB` live feature index; `0xFFFB`/`0xFFFC` behave
+  as void because consumers test `< 0xFFFB` before dereferencing;
+* signed anchor offsets at offsets 10 and 11: the Z delta is the width-scaled
+  byte and the X delta is the unscaled byte, both `int8` `-128..127` from fringe
+  toward anchor; out-of-range stays zero and leaves the fringe unresolved; at
+  the anchor the same two bytes hold the live instance slot index while attached
+  or the accumulated blast damage otherwise — never simultaneous;
+* flag byte at offset 12, stamped at load as `flags = (flags & 0xD7) | 0x50`
+  (preserve bits 0,1,2,7; clear bits 3 and 5; set bits 4 and 6), carrying bit 0
+  live instance present, bit 1 building occupied, bit 2 never-seen fog, bits
+  3–6 placer nibble (map load passes 10), and bit 7 preserved with no isolated
+  reader (`TODO(T23)`).
+
+Fringe-anchor offsets are signed, not absolute coordinates. The retail corpus
+contains maps up to 402×408 cells, which needs 9 bits to name an absolute
+coordinate, so an 8-bit absolute field could not address the board — only signed
+offsets fit. The Z byte is scaled by map width when forming the anchor address
+(the row stride multiplies it); the X byte is not. The resolver follows the
+signed offsets when the feature is `0xFFFE`, bounds-checks the anchor, and only
+returns the anchor's feature when that anchor word is `< 0xFFFB`; otherwise the
+fringe remains not-found (blocking for yard-occupancy bit 5, non-satisfying for
+geothermal bit 7). No hidden map sections or separate flood-fill geometry exists
+beyond this array — a bounded writer census found only the expansion zero and the
+derived stamp. Merged fringe blobs and about 5,283 orphaned fringe cells need a
+non-local partition rule; the row-major left/above later-wins heuristic that
+resolves 83.2% of the 71,916 fringe cells across 275 maps is retained as
+`TODO(question)` — full retail partition is not established. Declaration
+footprints alone resolve 65.1%.
+
+Void and edge generation runs after the full-map minimum/maximum recompute and
+after feature placement. Right columns `Width-2` and `Width-1` are set to
+`0xFFFD` for every row unconditionally. Playable insets `PlayRight = WidthPixels
+- 32` and `PlayBottom = HeightPixels - 128` are set at that time and gate the
+camera clamp. When the mission `lavaworld` flag is set, a bulk sweep sets
+`0xFFFD` for every cell where `hmin ≤ SeaLevel` and the feature word is
+`0xFFFF` or `0xFFFE`. North and south height-dependent void strips beyond the
+right two columns are observed but the exact predicate is `TODO(question)`.
+Outside the map rectangle, height returns sentinel `-1` with unsigned
+candidate bounds before any terrain read; movement is blocked for generic modes
+and allowed only for factory-exit search mode 2; the LOS writer stores an empty
+footprint and returns; projectiles do not collide with terrain; and the camera
+remains clamped to the playable insets.
+
+Per-cell metal is uniform: every cell's metal byte is seeded from the single
+mission `SurfaceMetal` value. The TNT unknown byte is zero corpus-wide and is not
+a metal source, and no `Width × Height` metal raster is allocated. An extractor
+at placement sums `unsigned(metalByte) + 1` over its footprint and multiplies by
+its `extractsmetal` scalar; the stored result is never resampled. Feature metal
+is reclaim reward only. North/south void edge height predicates and any varying
+per-cell metal file beyond the uniform byte remain `TODO(question)`.
 
 Sea level is copied from the map header as a byte and is compared in world
 units by multiplying by 65,536. Water/lava map state and minimum/maximum water
@@ -130,15 +189,25 @@ depth/slope thresholds are cached for placement and impact decisions.
 
 The world-owned height query samples four neighboring plot-cell heights and
 performs bilinear interpolation using the low four bits of each cell-space
-coordinate. Signed interpolation uses a right-shift bias so negative differences
-round consistently. A separate coarse average of derived minimum/maximum
-heights is used by some placement/airborne tests; it must not be substituted for
-the bilinear query everywhere.
+coordinate. Signed interpolation uses a right-shift bias (`(val>>31 & 0xF) >>4`)
+so negative differences round consistently, and the four corner reads are
+guarded by `cx+1 < Width` and `cz+1 < Height` checks that return the sentinel
+`-1` when out of range. A separate coarse average `(hmax + hmin) >> 1` over the
+two derived bytes is used by some placement/airborne tests; it must not be
+substituted for the bilinear query everywhere. Height at offset 4 is the raw
+corner sample; `hmax` at offset 5 and `hmin` at offset 6 are the derived 2×2
+neighbourhood maximum and minimum that feed the coarse query and the LOS
+aggregation.
 
 The LOS writer uses a different, coarser height representation. It quantizes
-to 32-pixel visibility tiles and reads aggregated terrain heights; it does not
-use the four-corner bilinear query. A tall feature does not raise the LOS ray
-height unless its terrain/plot data itself changes.
+to 32-pixel visibility tiles and reads a lazily rebuilt `uint16` word per
+visibility tile (see section 3.2), aggregated from the terrain heights — not the
+four-corner bilinear query. The aggregation is supported inference as
+low byte = minimum and high byte = maximum over the four attribute cells that
+make one visibility tile, because the low byte gates admission and the high byte
+gates horizon advance; the exact derivation formula is `TODO(question)` until the
+lazy rebuild is fully traced. A tall feature does not raise the LOS ray height
+unless its terrain/plot data itself changes.
 
 ### 2.4 3DO model hierarchy
 
@@ -242,13 +311,20 @@ memory, and radar:
    current-LOS store.
 4. Radar/sonar uses minimap surfaces and blip lists, not the gameplay LOS bitset.
 
-One mode bit selects the byte-grid predicate versus the word-mask predicate.
-The byte-grid path treats any nonzero count as visible; increment/decrement
-operations therefore preserve visibility while overlapping units remain. The
-word path tests the local player’s bit. The global word map is reset and rebuilt
-when the visibility mode/map state requires it. This establishes that the word
-grid gates a form of visibility or mapping without proving one universal
-semantic name. The byte grid is rebuilt by walking current sight sources.
+A mode word governs which raster and which predicate are active. Bit 0
+selects history versus always-visible mapping, bit 1 selects the byte-grid
+predicate versus the word-mask predicate, bit 2 selects sprite-mask versus
+terrain-ray raster, and bit 3 marks the terrain-word cache dirty. The
+byte-grid path treats any nonzero `uint8` count as visible; its increment is a
+plain wrapping `uint8` add with no clamp (256 overlapping observers wraps to
+zero and reads as fogged) and its decrement is the matching plain subtract. The
+word path stores one `uint16` per visibility tile with ten usable player bits;
+its update is an idempotent bit OR — a cell receives its owner's bit only when
+absent, never decremented, rebuilt by reset instead. The global word map is
+reset and rebuilt when the visibility mode or map state requires it. This
+establishes that the word grid gates a form of visibility or mapping without
+proving one universal semantic name. The byte grid is rebuilt by walking
+current sight sources.
 
 ### 3.2 Sight shape and terrain occlusion
 
@@ -262,12 +338,24 @@ clamps into the parsed LOS.TDF table range. Both paths write the same word
 mask; bit 2 only changes which shape is ORed in.
 
 **The sight-shape table is an authored GAF resource.** The sprite-mask shapes
-are not synthesized: the engine holds a handle to a visibility-mask GAF and
-indexes it by the quantized value. The resource ships as `anims/vismask.gaf`
-and `anims/vismasks.gaf` — one entry named `vismask`, ten frames, sides 11, 13,
-15 … 29 with the anchor at the frame centre. A frame's opaque (non-transparent)
-pixels are the covered tiles; its width, height, anchor offsets and transparent
-palette index are the shape fields named above.
+are not synthesized: the engine holds a handle to the visibility-mask GAF file
+`anims/vismasks.gaf` and indexes the entry named `vismask` by the quantized
+value. **Established:** that GAF entry carries ten frames with sides 11, 13,
+15, 17, 19, 21, 23, 25, 27, and 29, each anchored at the frame centre. A frame's
+opaque (non-transparent) pixels are the covered tiles; its width, height, anchor
+offsets and transparent palette index are the shape fields. This GAF binding is
+not a first-match search over multiple candidates — the ten-frame handle is the
+authoritative shape table. An older file `anims/vismask.gaf` exists in the
+archive but is a distinct cursor set and is not the table that the shape fetcher
+counts; its frame counts (22 entries, varying opacity) do not match the counted
+ten-frame table.
+
+**Quantization is common, then biased differently.** Both rasters start from
+the same floor `q = floor(sightdistance / 32)` computed with signed floor
+division. Sprite-mask mode then forms `idx = clamp(q - 5, 0, nsMask-1)` where
+`nsMask` is the ten-frame count; terrain-ray mode forms `g = clamp(q, 0,
+nsRay-1)` where `nsRay` is the declared LOS.TDF table count. The `-5` bias is
+therefore sprite-only.
 
 **The -5 is an index bias, not a radius reduction.** Shape *k* has radius
 `k + 5` tiles, so the subtraction that selects the frame is undone by the frame
@@ -277,18 +365,38 @@ every unit's sight by five tiles. The clamp is into `0 .. ns-1` where `ns` is th
 shape count carried by the resource, and radii below the first shape clamp up to
 index 0 rather than publishing nothing.
 
-The terrain-ray group index is the unbiased `radius / 32` clamped into
-`0 .. ns-1` over the parsed LOS.TDF tables, and the spokes walked for that group
-are that table's authored line list — line counts grow with the table index
-(a radius-9 table carries fourteen lines, radius-10 sixteen). Neither raster
-uses a synthesized circle or a fixed spoke set.
+The terrain-ray group index is the unbiased `q` clamped into `0 .. nsRay-1`
+over the parsed LOS.TDF tables, and the spokes walked for that group are that
+table's authored line list — line counts grow with the table index (a radius-9
+table carries fourteen lines, radius-10 sixteen). LOS.TDF declares
+`numtables = 9` but ships twelve table sections; the clamp uses the declared
+nine and the three excess tables are unreachable authoring residue.
+Neither raster uses a synthesized circle or a fixed spoke set.
 
-Residual: which of the two shipped GAFs the engine binds is not established.
-They have identical frame geometry and different opacity — `vismask.gaf`'s
-frames are circular (frame 0 has 89 of 121 pixels opaque), `vismasks.gaf`'s are
-solid squares (121 of 121). The handle name matches the plural spelling, which
-is suggestive and not conclusive. Reproduce whichever is chosen behind a single
-named constant so a probe can flip it.
+**Terrain height word for the ray.** The LOS reader does not use the per-cell
+`hmax`/`hmin` at per-step granularity; it reads a dense `uint16` word per
+visibility tile (`TileW × TileH` words, two bytes per tile) that was rebuilt
+lazily from the terrain heights. The low byte is tested for admission and the
+high byte is tested to advance the retained horizon — identical strict
+comparisons, but the low byte decides whether the cell is seen and the high byte
+decides whether the horizon rises. The aggregation that produces those two bytes
+is **supported inference** as low = minimum and high = maximum over the four
+attribute cells that form one visibility tile, because only a minimum can let
+sight through a partially blocked tile and only a maximum can occlude behind it;
+the exact builder formula is `TODO(question)` until the lazy rebuild is fully
+traced. The rebuild is triggered when the cache-valid mode bit is clear and
+fills the whole word array at once.
+
+**Spoke geometry.** Each LOS.TDF line is expanded into four mirrored quadrants
+by 90-degree rotation. Whether authored offsets are absolute from the observer
+or cumulative along the spoke is `TODO(question)` — pairs cohere as absolute
+offsets after rotation, but the retail stepper's stride interpretation remains
+open.
+
+**Jammer separation is closed.** The sensor phase's jammer circles are drawn onto
+separate radar-presentation surfaces that are wiped each tick and never affect
+the gameplay LOS word mask or the per-player byte grids. Radar, sonar, and
+jammer presentation never authors the LOS mask.
 
 **The per-player byte grid's increment has no upper clamp.** It is a plain
 byte increment with no comparison against 255, so a cell covered by 256
@@ -1143,18 +1251,38 @@ fullscreen transition, and movie/audio synchronization are not established.
 
 ### World and visibility
 
-- Meaning of the legacy attribute-byte encodings and all remaining flag bits in
-  the canonical four-byte attribute entry beyond the established header layout
-  and attribute stride; plot flag bit 7, whether any unexported code writes
-  placer-nibble values into it, and which feature-definition flag gates the
-  owner-memory accept. Plot-cell flag semantics are otherwise adjudicated and
-  tall features do not raise LOS ray height.
-- Bilinear height boundary behavior at map edges, sea/lava void fill, and
-  deformation update ordering.
+- Meaning of the legacy attribute-byte encodings beyond the canonical four-byte
+   attribute stride remains `TODO(question)`; the canonical attribute layout
+   (height, feature `uint16`, zero unknown) and the 13-byte plot-cell stride
+   are established. Fringe-anchor encoding is established as signed offsets
+   (`int8` DX and DZ, DZ scaled by width, threshold `0xFFFB`, width proof to
+   402×408 — SC6 resolved); merged-blobs and orphaned fringe partition beyond
+   the 83.2% row-major heuristic remains `TODO(question)`. Plot flag bit 7 and
+   whether any unexported code writes placer-nibble values into it, and which
+   feature-definition flag gates the owner-memory accept, remain
+   `TODO(question)`; flag bits 0,1,2 and 3–6 are adjudicated. Tall features do
+   not raise LOS ray height.
+- Bilinear height at map edges returns sentinel `-1` and the four-corner
+   read guards `cx+1 < Width` and `cz+1 < Height`; outside the rectangle,
+   movement is blocked for generic modes and allowed only for factory-exit
+   search mode 2, the LOS writer stores an empty footprint, projectiles do not
+   collide, and the camera clamps to `PlayRight`/`PlayBottom`. Void fill is
+   established for right columns `W-2,W-1` always and for lava-world bulk flood
+   when `lavaworld` is set and `hmin ≤ SeaLevel`; north/south height-dependent
+   strips beyond the right two columns remain `TODO(question)`. Deformation
+   update ordering (derived `hmax`/`hmin` recompute then occupancy notify) is
+   established; exact per-tick sequencing with movers remains narrow
+   `TODO(question)`.
 - The engine-side derivation of the aggregated two-byte terrain-word table
-  feeding sight shapes and of the two fog-cache channel values (what gradient
-  values 1..14 encode); the vismasks shape count versus LOS.TDF table count
-  mismatch.
+   feeding sight shapes is **supported inference** as low = minimum and high =
+   maximum over the four attribute cells that form one visibility tile — low
+   gates admission, high gates horizon advance; the exact builder formula is
+   `TODO(question)` until the lazy rebuild is traced. Fog-cache channel values
+   1..14 encoding remains `TODO(question)`. The vismasks shape count (10
+   frames in `anims/vismasks.gaf` entry `vismask`) versus LOS.TDF declared
+   table count (9) mismatch is closed: the sprite path clamps to the 10-frame
+   count and the ray path clamps to the declared 9, with three excess LOS.TDF
+   sections unreachable.
 - 3DO primitive color/texture precedence and selection-primitive rendering and
   picking behavior beyond the established load-time swap of the declared
   selection primitive with primitive zero and the subsequent bubble sort of
@@ -1164,12 +1292,14 @@ fullscreen transition, and movie/audio synchronization are not established.
   cluster — frames sample accumulators as committed — and whether any outside
   code smooths pieces remains open.
 - Cloak/stealth early-outs (including the minimum-cloak-distance proximity
-  breach) are established; still open are the full stealth/init-cloak spawn
-  state walk, gameplay radar-versus-sonar contact rules beyond the presentation
-  circles, backing-surface layout plus mark arbitration among the three
-  sensor/jammer callback tables, and whether any unresolved identity path shares
-  visibility grids across players — multiplayer LOS sharing is closed as
-  never-OR through the mask itself.
+   breach) are established; jammer circles are established as minimap-only
+   (three callback tables onto separate surfaces wiped each tick, never the LOS
+   word mask) — separation is closed. Still open are the full stealth/init-cloak
+   spawn state walk, gameplay radar-versus-sonar contact rules beyond the
+   presentation circles, backing-surface layout plus mark arbitration among the
+   three sensor/jammer callback tables, and whether any unresolved identity path
+   shares visibility grids across players — multiplayer LOS sharing is closed as
+   never-OR through the mask itself.
 - Exact edge behavior for unexplored in-map void cells, map border clipping,
   and persistent backbuffer pixels.
 

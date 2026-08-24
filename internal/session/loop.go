@@ -16,6 +16,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
+	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -47,6 +48,12 @@ type Session struct {
 	Mission  *mission.Mission
 	Snapshot *snapshot.Buffer
 
+	// VictoryDone / DefeatDone latch the mission end conditions [08
+	// "Evaluation"]. They are set by the trigger poll site below and are
+	// one-way: a completed condition stays completed.
+	VictoryDone bool
+	DefeatDone  bool
+
 	Wind *world.Wind
 
 	cadence uint32
@@ -66,6 +73,15 @@ func (s *Session) RegisterAll() {
 	}
 	if s.Clock == nil {
 		s.Clock = &clock.State{Requested: 10, Active: 10}
+	}
+	// Death notifications feed the mission trigger queues exactly once
+	// [08 "Evaluation"]: units.World fires the hook at the first Destroy
+	// latch, which is the single fire point.
+	if s.Units != nil && s.Units.OnDeath == nil && s.Mission != nil {
+		s.Units.OnDeath = func(h pool.Handle, cause units.DeathCause, u *units.Unit) {
+			ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: 0, EnemyOwner: 1}
+			triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitDied, u)
+		}
 	}
 
 	// Phase 1: network drain — single-player no-op [01 §4.4]
@@ -163,6 +179,21 @@ func (s *Session) RegisterAll() {
 	})
 
 	// Phase 6: feature lifecycle, reclaim/death [01 §4.4]
+	// Construction/factory work consumes the primary queue's build orders and
+	// advances the five-state lifecycle [05 "Factory production lifecycle"].
+	s.Kernel.Register(kernel.PhaseOrdersPathEconomy, "construction-pump", func(tick uint32) {
+		if s.Build == nil || s.Units == nil {
+			return
+		}
+		for _, u := range s.Units.Iter() {
+			if u == nil || !u.Alive {
+				continue
+			}
+			if q := orders.QueueForUnit(u); q != nil && q.LenPrimary() > 0 {
+				s.Build.Pump(u, tick)
+			}
+		}
+	})
 	s.Kernel.Register(kernel.PhaseFeatureLifecycle, "feature-lifecycle", func(tick uint32) {
 		// feature lifecycle, reclaim, death processing [05 "Removal and successor replacement"][06 §13.1]
 		// Currently driven in phase 4 Tick; keep no-op to preserve ordering for future split.
@@ -209,6 +240,28 @@ func (s *Session) RegisterAll() {
 		_ = tick
 	})
 
+	// Trigger evaluation site [08 "Evaluation"]: the LOCAL player's
+	// once-per-30-tick slice, mission type 1 only. Victory is an AND across
+	// its queue, defeat an OR, and victory evaluates first; unit-death
+	// notifications are fed exactly once via units.World.OnDeath.
+	// TODO(question): the exact retail kernel phase hosting this slice was
+	// never decompiled ([GAP T10] residual); it rides the barrier phase here.
+	s.Kernel.Register(kernel.PhaseBarrier, "trigger-poll", func(tick uint32) {
+		if s.Mission == nil || s.Mission.Type != mission.TypeCampaign {
+			return
+		}
+		if len(s.Mission.Victory) == 0 && len(s.Mission.Defeat) == 0 {
+			return
+		}
+		if tick%30 != 0 {
+			return // once-per-30-ticks slice [08 "Evaluation"]
+		}
+		ctx := triggers.PollContext{Tick: tick, World: s.Units, LocalOwner: 0, EnemyOwner: 1}
+		v, d := triggers.Evaluate(s.Mission.Victory, s.Mission.Defeat, ctx)
+		s.VictoryDone = s.VictoryDone || v
+		s.DefeatDone = s.DefeatDone || d
+	})
+
 	// Phase 12: every-eight-sub-tick cadence flip [01 §4.4]
 	s.Kernel.Register(kernel.PhaseCadenceFlip, "cadence-flip", func(tick uint32) {
 		s.cadence++
@@ -221,7 +274,7 @@ func (s *Session) RegisterAll() {
 					if u == nil || !u.Alive {
 						continue
 					}
-					views = append(views, snapshot.UnitView{
+					v := snapshot.UnitView{
 						Slot:           u.Handle,
 						Owner:          u.Owner,
 						X:              u.X,
@@ -231,7 +284,13 @@ func (s *Session) RegisterAll() {
 						MaxHealth:      u.MaxHealth,
 						BuildRemaining: u.Remaining,
 						Flags:          u.Flags,
-					})
+					}
+					if u.Def != nil {
+						v.Model = u.Def.ObjectName
+						v.FootX = int8(u.Def.FootprintX)
+						v.FootZ = int8(u.Def.FootprintZ)
+					}
+					views = append(views, v)
 				}
 				frame.Units = views
 			}

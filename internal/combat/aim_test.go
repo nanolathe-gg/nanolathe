@@ -80,6 +80,10 @@ func TestDiscriminantExactZero(t *testing.T) {
 	if p, ok := BallisticSolve(fixRaw(523288), fixRaw(0), fixRaw(0), fixRaw(65536), fixRaw(8192), minBarrel); !ok || p != 7869 {
 		t.Fatalf("inside range got pitch %d ok %v want 7869 true", p, ok)
 	}
+	// No epsilon band at exactly zero. The plan's literal ±1e-12 vectors are
+	// float64-domain values unreachable through integer Fixed arguments; the
+	// strictly-negative case above (beyond max range) locks the same contract:
+	// any negative discriminant rejects.
 }
 
 // TestDiscriminantNegativeRejected verifies negative discriminant is rejected.

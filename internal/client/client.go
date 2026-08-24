@@ -85,9 +85,13 @@ type Options struct {
 // retail's 8-bit indexed software renderer and hands Kaiju one texture per
 // frame. Rendering interpolates Previous→Current at render fraction (I6).
 type Client struct {
-	opts   Options
-	host   *engine.Host
-	buffer *snapshot.Buffer
+	opts Options
+	host *engine.Host
+
+	// Overlay draws battle-view chrome (build panel, ghosts, menus) after
+	// world units and before the debug text. Presentation only [I6].
+	Overlay func(c *Client)
+	buffer  *snapshot.Buffer
 
 	width, height int
 	indexed       []uint8
@@ -178,6 +182,14 @@ func (c *Client) SetPalette(p *palette.Tables) {
 
 // SetFNT sets the debug font [03 §7.1] C8.
 func (c *Client) SetFNT(fnt *formats.FNT) { c.fnt = fnt }
+
+// SetSnapshot repoints presentation at another published buffer — used when
+// the shell transitions from front-end menus into a live battle session [I6].
+func (c *Client) SetSnapshot(b *snapshot.Buffer) {
+	if b != nil {
+		c.buffer = b
+	}
+}
 
 // Host returns the underlying engine.Host after Launch, or nil if headless or
 // not yet launched.

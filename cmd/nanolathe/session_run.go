@@ -35,6 +35,16 @@ func newSessionFor(opts Options, cs *contentSet) (*session.Session, *content.Cat
 	if err != nil {
 		return nil, nil, fmt.Errorf("catalog: %w", err)
 	}
+	// --mission routes to the campaign/mission session; without it the
+	// command is a skirmish setup. An unrecognized mission reference fails
+	// the run explicitly rather than silently degrading to skirmish.
+	if opts.Mission != "" {
+		sess, err := session.NewMissionWithFS(cs.fs, cat, opts.Mission, 0)
+		if err != nil {
+			return nil, nil, fmt.Errorf("mission setup: %w", err)
+		}
+		return sess, cat, nil
+	}
 	sess, err := session.NewSkirmishWithFS(cs.fs, cat, skirmishConfigFor(opts))
 	if err != nil {
 		return nil, nil, fmt.Errorf("skirmish setup: %w", err)

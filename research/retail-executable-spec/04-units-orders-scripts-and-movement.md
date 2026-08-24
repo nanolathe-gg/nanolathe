@@ -16,21 +16,27 @@ The corrected notes and root-correction ledger take precedence over earlier note
 
 **Established fact:** The authoritative simulation advances at 30 logical ticks per second. The frame dispatcher converts wall-clock time to a bounded number of logical ticks, with fractional carry. A frame can run at most five simulation ticks. Pausing produces no logical ticks. On single-player resume the stalled wall-clock anchor can yield one capped burst of up to five ticks; the excess integer time is dropped. The multiplayer budget keeps sampling time while paused and does not have that resume burst.
 
-**Established fact:** The tick body is ordered. The portions relevant to this document are:
+**Established fact:** The tick body is ordered and increments the global tick
+before any phase runs [P0-09]. The twelve-phase tree (canonical order in
+document 01 section 4.4) is, in plain order: network dispatch, per-unit sweep,
+projectile, feature and fire, visibility, trigger poll, sharing, economy
+settlement, wind and meteor, ten-vtable barrier, and presentation, with
+wind and meteor and the per-player settlement coordinator (AI before deadline)
+grouped as separate phases in that tree. The exact presentation barriers are
+outside this document. The unit and projectile boundaries are authoritative
+because they determine same-tick visibility and callback order.
 
-1. network and order/event ingress;
-2. unit sweep, including weapon slots, script draining, health and construction state;
-3. projectile simulation;
-4. effects and resource-related work;
-5. order and path service;
-6. feature update;
-7. sequence/effect advancement;
-8. environment and wind work;
-9. cleanup and deferred deletion.
-
-The exact presentation barriers are outside this document. The unit and projectile boundaries are authoritative because they determine same-tick visibility and callback order.
-
-**Established fact:** The unit sweep is deterministic: player slots are visited in numeric order, and units are visited in pool order. Same-sweep visibility of a newly allocated unit depends on whether its player/slot lies before or after the current scan position: already-visited positions wait for the next sweep, while an unvisited position can still be reached. A unit killed during projectile processing retains enough state to be seen by later same-tick phases; final deletion is deferred to cleanup.
+**Established fact:** The unit sweep is deterministic: player slots are visited
+in numeric order 0 through 9, and units are visited in ascending pool order with
+no hidden map iteration and no generation-tagged handles [P0-09][P1-14].
+Same-sweep visibility of a newly allocated unit depends on whether its
+player and slot lie before or after the current scan position: already-visited
+positions wait for the next sweep, while an unvisited position can still be
+reached the same tick — create is visible to later same-tick readers via the
+sparse set plus occupancy restamp, and a freed slot is immediately reusable via
+lowest-free scan [P0-09]. A unit killed during projectile processing retains
+enough state to be seen by later same-tick phases; final deletion is deferred
+to cleanup through the central death handler [P0-09].
 
 **Established fact:** Within one unit visit the sweep executes, in order: the
 general unit update (which can queue deferred `SetDirection` and `SetSpeed`);
@@ -39,17 +45,21 @@ the weapon update for eligible players (which can queue deferred
 decisions reach the projectile creators that queue `FirePrimary/Secondary/
 Tertiary` followed by `RockUnit`); the normal script drain with tick delta 1,
 running all eight threads once and then one piece-interpolation pass; order
-and construction work; movement integration, whose medium classifier issues
-`StartMoving`, `StopMoving`, `MoveRateN`, and then `setSFXoccupy` as immediate
-wake-flag starts; and finally the slot-end death handling, which can run the
-synchronous local `Killed` query. Consequences: a deferred callback queued
-before the normal drain executes in that same visit; a deferred callback
-queued after it normally waits for the next visit, except that any later
-immediate-start callback on the same virtual machine performs an all-slot
-delta-0 drain that can execute it earlier. Damage callbacks queued by the
-post-unit projectile phase therefore normally land on the next visit, while
-damage packets processed during event ingress can queue theirs in time for
-that tick's normal pass.
+and construction work (primary pump head-blocking then secondary skip-not-due);
+movement integration, whose medium classifier issues `StartMoving`,
+`StopMoving`, `MoveRateN`, and then `setSFXoccupy` as immediate wake-flag
+starts; and finally the slot-end death handling, which can run the synchronous
+local `Killed` query. Consequences: a deferred callback queued before the
+normal drain executes in that same visit; a deferred callback queued after it
+normally waits for the next visit, except that any later immediate-start
+callback on the same virtual machine performs an all-slot delta-0 drain that
+can execute it earlier [P0-09]. Damage callbacks queued by the post-unit
+projectile phase therefore normally land on the next visit, while damage packets
+processed during event ingress can queue theirs in time for that tick's normal
+pass. Capture is synchronous before trigger polling, build-complete product
+publication (GetBuilt) occurs before trigger polling but victory needs the next
+30-tick poll, and kill notification goes through the central death handler
+[P0-09].
 
 **Established fact:** The projectile phase captures its active-span count at
 entry. A zero-burst weapon projectile spawned during the preceding unit sweep
@@ -57,7 +67,7 @@ is inside that captured span and is eligible to move and collide in the same
 logical tick, subject to its family-specific launch and expiry state. A record
 appended during projectile iteration, including a burst clone, lies outside the
 captured span and first moves in the following tick. Projectiles created by
-later phases likewise wait for the next projectile phase.
+later phases likewise wait for the next projectile phase [P0-09].
 
 ### 1.2 Determinism and random state
 
@@ -156,7 +166,9 @@ A descriptor is 25 bytes and carries:
 - an optional **presentation helper** run during goal resolution: none, goal
   resolve with acknowledgement text and rings, the same plus moving path
   markers, or a build-footprint marker;
-- a small **class parameter** whose consumer is not located;
+- a small **class parameter** — bounded census over 3901 function boundaries
+  found no reader, so store it opaque and do not branch on it
+  `TODO(question)` [P0-07];
 - an **acknowledgement group** index; two of the groups additionally draw the
   weapon area-of-effect, coverage radius, and attack-length rings when a global
   display option is set;
@@ -283,26 +295,39 @@ tick and, for each record:
 4. Otherwise the satisfied bits are consumed from both the unit's capability
    word and the record, the dynamic gate mask is cleared, and the handler runs.
 
-The handler's return code drives the queue:
+The handler's return code drives the queue [P0-07][P0-08]:
 
 | Code | Effect |
 |---:|---|
 | 0 | reset the phase to zero and continue walking |
 | 1 | advance the phase by one and continue walking |
 | 2, 4 | continue walking unchanged |
-| 3 | set the lowest gate bit, set the deadline to the current tick plus 30 plus a random value below 15, and continue |
+| 3 | set the lowest gate bit, set the deadline to the current tick plus 30 plus a random value below 15, and continue — range 30 to 44 [P0-08] |
 | 5, 8 | unlink, free, and continue |
-| 6 | move the record to the tail of its segment and continue |
-| 7 | free every record on both segments and return — this is cancel-all |
-| 9 | set a completion flag; if the record is last, reset its phase and set the same randomized deadline; otherwise unlink and free |
-| above 9 | delegate to the order expiry helper and return |
+| 6 | move the record to the tail of its segment and continue (primary); in the secondary pump remove the single record and return without tail yield |
+| 7 | free every record on both segments and return — this is cancel-all (primary); in the secondary pump remove the single record and return without cancel-all |
+| 9 | set a completion flag; if the record is last, reset its phase and set the same randomized deadline `tick + 30 + random below 15` (range 30 to 44, same bound as code 3, resolving the earlier conflict where one description used 30) [P0-08][SC8]; otherwise unlink and free |
+| above 9 | delegate to the order expiry helper and return — helper unlinks, cleans, and frees the single record with no random draw and no whole-queue cancel; whole-queue cancel is exclusively code 7 [P0-08] |
 
 Consequences a reimplementation must preserve: one pump call can cascade a
 record through several phases in the same tick until a waiting or blocked code
-appears; a handler that returns an out-of-range phase code cancels the unit's
-entire queue; waits are quantized to between 30 and 44 ticks; and goal writes
-and slot binds made by a handler are visible to later handlers in the same
-cascade, while freed records are invisible immediately.
+appears; a handler that returns an out-of-range phase code at or below 9
+follows that code's row, while above 9 it takes the single-node expiry helper;
+waits are quantized to between 30 and 44 ticks for both code 3 and code 9 last
+[P0-08][SC8]; and goal writes and slot binds made by a handler are visible to
+later handlers in the same cascade, while freed records are invisible
+immediately.
+
+**Supported inference and Unknown — queue waits and producer assignment
+[P0-07][P0-08]:** The bodies for interrupt wake bits 2 (cancel-current) and 8
+(Construction stopped) are known — refund arithmetic plus a kill packet for the
+first, decrement and free for the second — but bounded scan found no writer for
+those wake bits, so producers remain `TODO(T25)` and must not be invented. The
+bounded census for the small class parameter above (3901 boundaries) similarly
+found no reader. All producers — HUD, AI, InitialMission, COB, network, rally
+inheritance, and factory completion — enter through the common queue tail-append
+path that coalesces only at the tail or inserts immediately after the active
+marker; there is no separate producer-specific queue [P0-07].
 
 **Established fact:** Insertion is not a plain tail append. A new record whose
 descriptor selects the front segment is inserted **immediately after the
@@ -320,6 +345,15 @@ state byte holds one of the two computer-player states, and the definition
 names a default op; such a node is allocated in non-queued mode, constructed
 with the auto flag, and head-inserted into the list the op's descriptor
 selects (a secondary-class default op therefore lands in the rear segment).
+
+In queue-modifier terms [P0-08]: a non-queued issue is **Replace** (purge
+unprotected queued records, then insert the single record), a queued issue
+including Shift-held is **Append** (insert after the active marker without
+purging), Shift-queue (`QMove`/`QPatrol` family) is an alias with identical
+mechanics except for the descriptor's queued class, and the pump's own
+empty-list creation is **Internal-Auto** (head-insert with the auto flag
+inherited from the old head). The descriptor's rear-segment gate flag selects
+the list for every modifier.
 
 **Established fact:** Counted adds coalesce only at the tail. A counted
 insertion walks to the tail of the selected segment; when the tail matches
@@ -374,15 +408,19 @@ failed capability gate produces the reject identity.
 | 14 | mobile build | the unit's build list is non-empty | ground or air mobile build |
 
 Hostility comes from a per-side diplomacy byte on the acting unit's
-definition, indexed by the target's side.
+definition, indexed by the target's side. VTOL versus ground variants are
+chosen by the canfly flag on the acting unit's definition; construction work
+uses the standard builder gates and stockpile `BuildWeapon` is capped at its
+buildTime with cost deltas applied via the two-resource versus energy-only
+gates [P0-07].
 
 ### 3.5 Attack-chase states and guard assistance
 
-**Attack-chase state machine.** Before its phase switch, the chase-attack
-handler runs admission pre-checks in order: satisfied bits indicating
-abandonment, a missing target, or a disengage bit combination return the
-abandon code; and when a pursuit leash is authored, a horizontal distance from
-the order's guard/fight anchor at or beyond the leash also abandons — this
+**Attack-chase state machine [P0-07][P0-08].** Before its phase switch, the
+chase-attack handler runs admission pre-checks in order: satisfied bits
+indicating abandonment, a missing target, or a disengage bit combination return
+the abandon code; and when a pursuit leash is authored, a horizontal distance
+from the order's guard/fight anchor at or beyond the leash also abandons — this
 leash is what makes the *Fight* command return to its post. The phases are:
 admit (require ground unit, reset goal to own position, pick a weapon slot if
 none stored), engage setup (range-gate, bind fire slots, single tick),
@@ -391,23 +429,38 @@ slot, both waiting 30 ticks). The orbit cycle runs an eight-state substate
 machine 0 through 8: approach at standoff distance; strafing steps that halve
 the distance when vertical separation exceeds eight units; closer approaches at
 half and zero standoff; then two banded-goal states (inner/outer radii at
-standoff/half and double/half); then wrap to zero. A substate at or beyond nine,
-or any handler phase beyond three, cancels the unit's entire queue via the
-cancel-all return code.
+standoff/half and double/half); then wrap to zero. Goal arrival within those
+states uses strict thresholds: horizontal distance at or below two world units
+and boundary absolute difference below three counts as arrived; otherwise the
+handler re-issues a wait [P0-08]. A substate at or beyond nine, or any handler
+phase beyond three, cancels the unit's entire queue via the cancel-all return
+code.
 
-**Guard assistance triggers.** The follow/guard handler evaluates, top-down on
-every visit: (a) **build assist** — if the ward has an active construction op
-that is friendly per the diplomacy byte and not already latched in the
-guarding unit's dedup array, enqueue assistance toward that op; (b) **auto-fire
-while holding position** — for each weapon slot with auto-target enabled whose
-weapon is not command-fire-only, acquire a candidate and range-gate it, binding
-the slot on success, each candidate deduped by id latch; (c) **repair assist** —
-when the ward is damaged and the guard can repair, resolve and enqueue the
-correct repair order for the ward; (d) **join the ward's build** — when the
-ward's own front order is a nanolathe-class build elsewhere, enqueue help-build
-toward that order's target; and (e) otherwise **follow maintenance** — refresh a
-banded goal around the ward and wait 30 ticks. Each assist path retries on the
-30-tick cadence behind its dedup latch.
+**Guard assistance triggers [P0-08].** The follow/guard handler evaluates,
+top-down on every visit: (a) **build assist** — if the ward has an active
+construction op that is friendly per the diplomacy byte and not already latched
+in the guarding unit's dedup array, enqueue assistance toward that op;
+(b) **auto-fire while holding position** — for each weapon slot with auto-target
+enabled whose weapon is not command-fire-only, acquire a candidate and
+range-gate it, binding the slot on success, each candidate deduped by id latch;
+(c) **repair assist** — when the ward is damaged and the guard can repair,
+resolve and enqueue the correct repair order for the ward; (d) **join the ward's
+build** — when the ward's own front order is a nanolathe-class build elsewhere,
+enqueue help-build toward that order's target; and (e) otherwise **follow
+maintenance** — refresh a banded goal around the ward and wait 30 ticks. Each
+assist path retries on the 30-tick cadence behind its dedup latch. Per-order
+leash and orbit vtables share the same deadline and arrival contract above:
+dedup latches prevent immediate re-enqueue, and strict `dist <= 2` with
+`abs diff < 3` guards the banded-goal transition [P0-08].
+
+**Established fact — goal vtables and queue modifiers [P0-08]:** Leash and orbit
+behaviour is per-order via virtual tables with strict arrival `dist <= 2` and
+boundary `abs diff < 3`. Queue modifiers map as: Replace (non-queued) purges
+unprotected records before inserting after the active marker; Append and
+Shift-queue (including `QMove`/`QPatrol`) both insert after the active marker
+without purging, differing only in descriptor class; Internal-Auto is the pump's
+own empty-list head-insert that inherits the old head's auto flag. The rear flag
+selects the segment for every modifier.
 
 ### 3.5 Construction and economy interaction boundary
 
@@ -525,6 +578,77 @@ malformed numbers convert whatever the destination cells already held —
 deterministic per stack state, undefined per language spec. A comma-free run
 longer than 255 characters overflows the 256-byte tokenizer frame buffer;
 retail accepts the risk and a clean implementation should clamp.
+
+### 3.7 Selection, picking, command latches, and build-command UI semantics
+
+**Established fact — drag selection and overlap picking [P1-14]:** Drag
+endpoints are converted from world to presentation by subtracting the camera
+position and adding the fixed view-pane origin offsets, then sorted
+independently on each axis and tested inclusively as `min <= x <= max` on both
+axes. Eligible units are visited in ascending pool order; for overlap, the
+nearest unit in squared distance wins with strict `<` tie-break, so an equal
+distance retains the lower slot. The eligibility predicate requires the active
+flag, exact `1.0` health fraction, no disqualifying state reference, and either
+no parent or a parent carrying the cargo-parent flag. Fog uses a word bit for
+the local player and a byte per viewer; picking requires the local-player word
+to be set for the cell, otherwise the unit is treated as absent for selection.
+
+**Established fact — toggle and commit modifiers [P1-14]:** Drag toggle uses
+bit 2 of the drag parameter word, giving a commit versus toggle truth table:
+clear sets selected and clears outside via bulk pre-clear, set toggles selected
+only inside and preserves outside. World-click commit (queued versus replace)
+uses a held-key query in the style of `GetAsyncKeyState` for Shift, not the
+drag word, so the two Shift sources can diverge. The bulk pre-clear clears
+selected membership and the single-select identifier and sets the interface
+dirty bit.
+
+**Established fact — mixed selection and control groups [P1-14]:** Command
+palette enable is the AND across the selected set — a button is enabled only
+when every selected unit carries the capability bit, otherwise it is greyed.
+Control-group assignment scans the local player's inclusive unit range in
+ascending order; selected units receive the group value while unselected units
+already carrying that value are cleared. Group recall takes a preserve argument
+from the held Shift query; when clear it clears non-members, and a secondary
+branch keyed on a matching unit that also carries the `0x80000000` flag filters
+through the authored `CTRL_F` 256-bit type mask indexed by definition
+identifier. Digit routing between build-page selection and group recall uses the
+battle-mode flag and held Alt query, exactly as documented in the interface
+contract.
+
+**Established fact — command latches [P1-14]:** The armed-order latch holds
+the order-dispatcher switch key. The GUI button dispatcher arms it by parsing the
+button name in a fixed chain — STOP, then ATTACK, BLAST, DEFEND, REPAIR, PATROL,
+RECLAIM, CAPTURE, UNLOAD, LOAD or PICKUP alias, and default MOVE — writing the
+parsed value only when the button's gate is nonzero, otherwise writing idle.
+Each armed write clears the placement-pending flag and plays the immediate-order
+versus special-order cue. Two latch values are off-button producers via
+placement preview, not via the button chain: TELEPORT and MOBILEBUILD are armed
+by the mobile-build and teleport placement preview paths that test site validity
+and choose the find-site versus too-far cursor. Escape clears a different latch
+flag and returns the latch to idle.
+
+**Established fact — build cancellation and queue modifier mapping [P1-14]:**
+Build cancellation walks to the tail-most matching record for the operation and
+type; a request smaller than that record's remaining count subtracts, otherwise
+it consumes the remainder and frees the record, looping for the remainder.
+A freed non-head record is marked with the tombstone bit so cleanup skips the
+weapon-target-clear helper; because the tombstone test compares against the
+front anchor regardless of segment, BuildWeapon and SelfDestruct removals are
+effectively always tombstoned. In queue-modifier terms, a non-queued click is
+Replace (purge unprotected records, then insert after the active marker), a
+Shift-queued click is Append (insert after the active marker without purging),
+Shift-queue family is an alias with identical mechanics, and the pump's own
+empty-list creation is Internal-Auto head-insert inheriting the old head's auto
+flag; the rear flag selects the list for every modifier.
+
+**Established fact — attack ground versus unit target [P1-14]:** With the
+ATTACK latch, the world-click issuer first picks the nearest eligible visible
+unit; when a unit is hit and the acting unit's can-attack and hostility gates
+pass, the resolver issues a unit-target attack (chase family with cached target
+position). Otherwise the click becomes an attack-ground with a world ground
+position payload. The BLAST latch (attack-special) always issues a ground
+position regardless of any unit hit and draws the area-of-effect rings, while
+ATTACK on a unit hit issues the chase orbit.
 
 ## 4. COB loader, VM, threads, and script timing
 
@@ -1013,7 +1137,11 @@ occupied is established in section 4.3 and differs by starter.
 
 ### 6.1 Terrain classification
 
-**Established fact:** The map terrain grid uses fixed-size attribute cells. A movement profile classifies a footprint rectangle against map bounds, blocking features, terrain height span, sea level, slope, and water-depth thresholds.
+**Established fact:** Movement profiles are movement class records compiled from `CLASS` sections. Each class reads eight keys in parse order — `FootPrintX`, `FootPrintZ`, `MaxWaterDepth`, `MinWaterDepth`, `MaxSlope`, `BadSlope`, `MaxWaterSlope`, `BadWaterSlope` — where `FootPrintX/Z` default 0, depth and slope fields default to the class's prior value (preserved), and `BadSlope`/`BadWaterSlope` default to half (`>>1`) of the `MaxSlope`/`MaxWaterSlope` value just read. Three unsigned-byte clamps then run unconditionally on every class: MaxWaterSlope caps MaxSlope, the resulting MaxSlope caps BadSlope, and MaxWaterSlope caps BadWaterSlope. Stock ship data only authors `MaxWaterSlope = 255` for hover classes (`TANKHOVER3/4`); the other thirteen classes omit it yet remain land-passable, so the stock movement template must carry a large `MaxWaterSlope` (255) before parsing so an omitted key preserves 255 and the clamps are identity — `TODO(question)` for the template writer. Nanolathe currently gates the first and third clamps on whether `MaxWaterSlope` was authored; this is a deliberate, install-compatible divergence retained with `TODO(question)` until the template initialization is proven.
+
+**Established fact:** The map terrain grid uses fixed-size attribute cells. The plot expansion derives per-cell MinHeight and MaxHeight as the minimum and maximum of up to four height bytes (cell, east, south, southeast, with edge guards) — slope is computed from these derived values, not a single sample. Height queries use bilinear interpolation of the four corner heights with low-four-bit fractions and signed-bias correction.
+
+**Established fact:** A movement profile classifies a footprint rectangle against map bounds, blocking features, terrain height span, sea level, slope, and water-depth thresholds. The footprint validator aggregates `min of mins` and `max of maxes` across the rectangle, selects the water-vs-land slope branch by whether the footprint is entirely above water (sea level at or below the footprint minimum chooses movement class MaxSlope, otherwise MaxWaterSlope), and tests passability with strict `<` (`slope == limit` and depth == limit pass). `BadSlope` and `BadWaterSlope` do not block in the validator — they are soft cost tiers.
 
 The classifier yields three terrain states:
 
@@ -1041,9 +1169,9 @@ The path reader adds a fourth state for building occupancy. The steep and clear 
 with one cell covering 16 map pixels. Waypoints are generated from cell
 coordinates plus the movement profile's half-footprint bias.
 
-**Established fact:** The eight neighbor directions are visited in this order: north, northwest, west, southwest, south, southeast, east, northeast. The first expansion is deliberately wide: it attempts nine entries, which covers all eight directions plus one harmless duplicate. Subsequent expansions use a directed five-entry fan centered on the parent travel direction.
+**Established fact:** The eight neighbor directions are visited in this order: north, northwest, west, southwest, south, southeast, east, northeast. The first expansion is deliberately wide: it attempts nine entries, which covers all eight directions plus one harmless duplicate. Subsequent expansions use a directed five-entry fan centered on the parent travel direction. The exact duplicate-direction position (which direction is duplicated) and the start fan's centre direction provenance are `TODO(question)`.
 
-**Established fact:** Diagonal movement checks only the destination cell. It does not check both cardinal corner cells. A footprint is not swept during expansion because the profile stamp already marked cells that would intersect static blockers.
+**Established fact:** Diagonal movement is endpoint-only: only the destination cell's stamped terrain and building mask are tested, not both cardinal corner cells. A footprint is not swept during expansion because the profile stamp already marked cells that would intersect static blockers. Whether duplicate neighbours are suppressed before or after cost computation and the greedy ray's exact bidirectional meet rule remain `TODO(question)`; debt-array layout and the heuristic-scale settings string value are also `TODO(question)`.
 
 ### 7.2 A* state and costs
 
@@ -1200,9 +1328,13 @@ unit systems coexist in one family.
 
 **Established fact:** Mobile occupancy is committed synchronously in sweep order. A unit that claims a cell first can prevent a later unit from entering. A vacated cell can be reused earlier in the same sweep. Head-on swaps block; no special simultaneous swap resolution was found. The sweep finishes one unit's clear/commit/stamp sequence before advancing to the next slot, so a later unit immediately observes earlier same-tick occupancy mutations.
 
-**Established fact:** Each mover tick proposes a new X/Z by adding velocity to position and quantizes the proposed footprint anchor with signed arithmetic and the instance's packed half-cell bias. If the resulting cell pair and proposed mover mode equal the committed cached pair and mode, the engine takes a same-cell fast path: it commits the proposed transform and dirty state without calling the footprint validator or restamping occupancy. For a cross-cell or mode-changing proposal in an active local simulation the engine calls the footprint validator once and rewrites the mover blocked bit 2 with its result. A blocked result does not try X-only or Z-only movement and does not move another unit: it caps scalar speed at `MaxVelocity/2` if higher, recomputes horizontal velocity at that capped speed and current heading, clamps X and Z against the old footprint boundary using `0x7FFFF`, commits the clamped self position, and marks transform dirty without clearing or restamping occupancy. A successful result clears the old footprint, commits X/Y/Z, packed anchor, and low mode bits, stamps the new footprint, marks transform dirty, and calls the coverage wrapper that updates visibility for the local player. There is no second validator call for axis sliding and no collision-candidate list or candidate cap; the validator scans the proposed footprint in row-major order and returns immediately on a rejecting per-cell predicate, with aggregate height/depth/slope gates after the scan.
+**Established fact:** Each mover tick proposes a new X/Z by adding velocity to position and quantizes the proposed footprint anchor with signed arithmetic and the instance's packed half-cell bias. If the resulting cell pair and proposed mover mode equal the committed cached pair and mode, the engine takes a same-cell fast path: it commits the proposed transform and dirty state without calling the footprint validator or restamping occupancy. For a cross-cell or mode-changing proposal in an active local simulation the engine calls the footprint validator once and rewrites the mover blocked flag with its result.
 
-**Established fact:** No mass-weighted pushing, impulse-based movement resolver, axis-slide resolver, or automatic repath timeout was recovered. A movement blocked flag causes a temporary speed reduction, but the mover does not automatically synthesize a new route solely from that flag.
+**Established fact:** The footprint validator scans the proposed rectangle row-major — Z outer, X inner — and returns immediately on the first rejecting per-cell predicate; aggregate height, depth, and slope gates run after the scan. A blocked result does not try X-only or Z-only movement and does not move another unit: it caps scalar speed at movement definition MaxVelocity/2 if higher, recomputes horizontal velocity at that capped speed and current heading via the fixed sine/cosine table with rounding, clamps X and Z against the old footprint's centre within half-cell minus one (`±524287`, half-cell `524288` minus one) and commits the clamped self position, marking transform dirty without clearing or restamping occupancy.
+
+**Established fact:** A successful result clears the old footprint, commits X/Y/Z, packed anchor, and low mode bits, stamps the new footprint, marks transform dirty, and calls the coverage wrapper that updates visibility for the local player. The clear-then-stamp sequence finishes before the next unit slot is visited, so a vacated cell is reusable in the same tick — a pipeline of one cell per tick — and head-on swaps where each proposes the other's cell both block, with no reservation or simultaneous-swap resolution. There is no second validator call for axis sliding and no collision-candidate list or candidate cap.
+
+**Established fact (negative-bounded):** No mass-weighted pushing, impulse-based movement resolver, axis-slide resolver, automatic repath timeout, or yielding/wait-queue was recovered within the bounded mover call graph. Absence is contract: a blocked mover only receives the half-speed clamp and dirty clamp above; it does not push, slide, or wait.
 
 **Supported inference:** Mobile units are hard blockers at the movement commit stage even though they are not inserted into the static A* layer. Feature/building and owner-mask details remain separate predicates.
 
@@ -1218,11 +1350,7 @@ rejects candidates whose mode is `2`). Modes `0` and `3` are preserved through
 save and load but have no ordinary bounded gameplay producer and are used only
 as `0`-mappings in the classifier below.
 
-**Established fact:** `setSFXoccupy` is computed from the committed mover-mode
-mirror, signed integer height `wy` (the signed high word of 16.16 Y, same domain
-as the sea-level byte `wt`), authored waterline byte `wl`, signed model-bottom
-word `mb`, and the cached prior band. All comparisons are signed integers in
-height-byte units, not 16.16 world units:
+**Established fact:** `setSFXoccupy` is a five-value classifier with sequential overwrite and edge-triggered caching. It is computed from the committed mover-mode mirror, signed integer height `wy` (the signed high word of 16.16 Y, same domain as the sea-level byte `wt`), authored waterline byte `wl`, signed model-bottom word `mb`, and the cached prior band. All comparisons are signed integers in height-byte units, not 16.16 world units:
 
 ```
 if mode not in {1,2}: band = 0
@@ -1234,23 +1362,13 @@ else:
     if mb + wy < wt:  band = 3
 ```
 
-The three underwater tests are ordered overwrites, not exclusive branches; if
-none matches the cached band is retained. When `band != cachedBand` the engine
-starts one-argument asynchronous `setSFXoccupy` with `band` and updates the
-cache; otherwise no callback is emitted. The classifier runs once per mover
-tick after the occupancy commit and before the stopped-state Y correction.
+The three underwater tests are ordered overwrites `1→2→3` — `3` wins if both `2` and `3` hold — not exclusive branches; if none matches the cached band is retained. Band `4` is strictly above water; `1` is the shoreline skirt within five units above water; `2` is draft exactly at surface; `3` is model bottom below water. When `band != cachedBand` the engine starts one-argument asynchronous `setSFXoccupy` with `band` and updates the cache; otherwise no callback is emitted. The classifier runs once per mover tick after the occupancy commit and before the stopped-state Y correction.
 
-**Established fact:** Hover and floater units use the shared ground integrator and terrain validation rather than a separate full physics loop. Water depth, slope, and sea-level tests remain profile-driven.
+**Established fact:** Hover and floater units reuse the ground integrator and terrain validator — the same heading clamp, acceleration/brake choice, pitch-table cap, and footprint validator as ground — not a separate hover controller. Water depth, slope, and sea-level tests remain profile-driven via the movement class. Wake is not an engine GAF: the engine emits only the band change; shipped hover scripts gate wake effects on bands `2` or `3` and spawn them via `emit-sfx` types `2` through `5` from dedicated `wake` pieces (single-vertex pieces), with no engine wake renderer.
 
 ### 9.2 Flags and damage
 
-**Established fact:** `canfly`, `canhover`, `floater`, `upright`, and
-`hoverattack` participate in movement or medium behavior as described above
-and in section 8. The `amphibious` bit is parsed and stored by the definition
-loader but has no reader in the bounded recovered movement, medium, targeting,
-or transport code; amphibious-looking shipped behavior in that bounded set is
-driven by movement-class data and other independently read flags. This is a
-parser-only bounded-absence fact, not a whole-executable impossibility claim.
+**Established fact:** Definition bits and fields participate as: `canhover` is bit 12, `floater` is bit 19, `upright` is bit 20, `amphibious` is bit 21, `hoverattack` is bit 27. `canhover` excludes the unit from water-damage and participates in the stopped-state Y pre-gate; `floater` selects the ship surface clamp at `waterline + sea level`; `upright` keeps the model vertical and computes Y as `max(terrain, sea level minus waterline)`; `hoverattack` selects the gunship attack variant, not hover locomotion. The `amphibious` bit is parsed and stored but has no reader in the bounded recovered movement, medium, targeting, or transport code — parser-only in that bound (bounded absence, not whole-executable impossibility). Shipped amphibious-looking behavior compensates via movement class `TANKHOVER3` values (movement class MaxSlope 12, MaxWaterSlope 255, no depth limits) and the `canhover`/`upright`/`waterline`/`modelBottom`/`movementclass` fields, not via the amphibious bit. Other medium fields are `waterline` byte (draft for band `2`), `movementclass` name resolved to profile, and `modelBottom` signed word (threshold for band `3`).
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
@@ -1296,18 +1414,20 @@ the heading using the shared table of section 5.1. Implementations needing
 bit-exactness must keep this mixed fixed/float instruction order, not one
 algebraically rearranged float expression.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** Vertical control is a sentinel-gated clamp. The sentinel is the unit's sector-list head field (the head pointer of the unit's occupancy sector list) compared by full 32-bit pointer equality against a global sector sentinel. Writers are only on footprint stamp: going out of bounds writes the global sentinel, otherwise writes the computed sector address; the value therefore flips only on a successful stamp or an OOB transition and persists across ticks. Readers — the flight integrator, the occupancy clear, and the follow-altitude helper — all perform the same full-pointer compare; when the unit's sector head equals the global sentinel the vertical assignment is SKIPPED entirely and vertical velocity keeps its damped value, with no limit computed.
+
+**Established fact:** With `dy = unitY − targetY` (both 16.16) and current scalar speed: the per-tick vertical limit is `yLimit = 65536 (0x10000, one world unit) if (speed masked with ~3) < 262144 (0x40000, four units) else speed arithmetic-shifted right by two (speed/4)` and velocity is assigned directly:
 
 ```
-if   dy <= -limit: vy = +limit
-elif dy <  limit:  vy = -dy        // exact final snap onto the command altitude
-else:              vy = -limit
+if   dy <= -yLimit: vy = +yLimit
+elif dy <  yLimit:  vy = -dy        // exact final snap onto the command altitude (vy = -dy)
+else:               vy = -yLimit
 ```
 
 Takeoff, climb, and descend are therefore velocity-limited, never Y
 teleportation; the limit floor is one 16.16 world unit while the middle-branch
 snap can be sub-unit; rising and descending share one rule; none of the air
-service radii (`0x30`/`0x80`/`0x140`) participates here.
+service radii participates here.
 
 **Established fact:** Heading integration is independent of the vertical
 block: `err = (int16)(targetHeading − heading)`; a zero error zeroes the turn
@@ -1338,6 +1458,8 @@ commit drives the lean-decay / velocity-delta / gravity pipeline that writes
 bank from the bank-scale-scaled X residual and pitch from the
 pitch-scale-scaled Z residual into the two visual angle words.
 
+**Established fact:** Cruise altitude for point and follow commands is `targetY = (max(sea level, terrain height at target XZ) + signed offset) × 65536` capped at `0x1FF0000` (about 511 world units), where terrain height is the bilinear four-corner query and the offset is `cruisealt` (full altitude) or `cruisealt/2` for the initial climb, or the negated attach-piece world Y for a hanging cargo. Sea level is the terrain header byte; terrain height is sampled at the cursor or at the followed unit's piece world position; there is no lower clamp. Arrival radii are horizontal and strict: explicit air arrivals test `hypot(dx,dz) < radius` with radii 48, 128, or 320 world units depending on order (flagged via the arrival-radius field), while the default test is `dx*dx+dz*dz <= 0.25` (0.5 world units) and for explicit-altitude commands also `|dy| < 65537` (one world unit plus one subunit).
+
 **Supported inference:** Can-fly movers bypass some ordinary ground footprint checks during travel, but air order admission and landing-pad checks still use separate validators.
 
 ### 10.2 Air orders
@@ -1347,7 +1469,7 @@ pitch-scale-scaled Z residual into the two visual angle words.
 **Established fact:** Transport service lifecycle is exact for admission, carry,
 unload, pads, and death:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+*Admission.* `carrier, candidate` is admitted only if, in this order, none of these nine rejects fires: 1) candidate `cantbetransported` set; 2) carrier lacks `canload`; 3) carried-count (entries in the carrier cargo list whose parent equals the carrier) reaches carrier `transportcapacity` (count, not summed sizes; unauthored `0` therefore blocks loading); 4) carrier `transportsize` below candidate `FootPrintX` (signed compare, FootPrintX is the movement class footprint width); 5) candidate has no mover; 6) candidate committed mover mode is active locomotion (mode 2, moving) — moving cargo is rejected; 7) ground carrier (`canfly` clear) with candidate `MinWaterDepth >= 0`; 8) candidate `Y + modelTop` at or below `sea level × 65536` (submerged); 9) candidate landed-float field not exactly `0.0` (still under construction). Missing `transportcapacity` and `transportsize` default to `0`. The effective boarding range is the first enabled weapon slot's `range` (scanned via the weapon-slot enabled flag); shipped unarmed fallback is weapon record `0` (`NOWEAPON`, Range 16), so shipped unarmed pickup range is `16`. Ownership or alliance is not tested in this predicate; whether allied cross-owner commands are permitted is an upstream command-layer question left open (`TODO(question)`).
 
 *Load executor entry gates.* Independent of admission, every phase of the
 canonical load executor re-checks four gates in order before doing work: the
@@ -1413,7 +1535,7 @@ climb-away construction. Phase 3 emits event code 13 with no text payload and
 finishes. The placement validator therefore runs once before the final
 lowering command and again immediately before detach (double validation).
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+*Landing pads.* `QueryLandingPad` is a synchronous four-output query on the target script; candidates are tried strictly in order `0` through `3` and the first piece that is not carried and not already assigned to another unit (any unit whose attach-piece field equals the candidate) wins. With no pad the loiter/spiral heading step is used; no free pad among those tried keeps the order alive for a next-tick retry or the `30+rand(15)` delayed retry, while the established `Landing aborted - all pads are occupied` and `Landing failed` branches are distinct.
 
 *Carrier death.* A dying cargo first detaches from its carrier. If the dying
 unit is a carrier, for each cargo head it applies `30000` damage through the

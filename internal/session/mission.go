@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
@@ -87,6 +88,46 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 		crt = &tmp
 	}
 	s.InitWindForSession(crt, 0)
+
+	// Economy slots for the two campaign players (local 0, enemy 1) per
+	// [08 "Established AI-facing data"]; single-player missions use 0 and 1
+	// [triggers PollContext]. Deadlines seed at battle-entry tick 0 per
+	// [05 "Authoritative settlement order"] C5.
+	if s.Econ == nil {
+		s.Econ = &economy.Service{}
+	}
+	for i := 0; i < 2 && i < len(s.Econ.Players); i++ {
+		p := &s.Econ.Players[i]
+		p.Exists = true
+		p.ControllerState = 1 // human active settling
+		p.IsObserver = false
+		p.StatusHalfwordAt144 = 1
+		p.StatusWordAt140 = 0
+		p.GameEnded = false
+		p.EndGameCountdown = -1
+	}
+	s.Econ.SeedDeadlines(0)
+
+	// Battle entry order: features → units (InitialMission interprets here)
+	// → barrier → starting resources directly to live stock outside the
+	// ledger [08 "Placement and battle entry"] C9.
+	if err := BattleEntry(s, m, nil); err != nil {
+		return nil, err
+	}
+	// Movement parity with the skirmish route: ground steering/routes via
+	// movement.System [PLAN_14 C5 movement integration].
+	if s.World != nil && s.Movement == nil {
+		s.Movement = movement.NewSystem(s.World, movement.Profile{FootPrintX: 1, FootPrintZ: 1}, movement.NewOccupancyGrid())
+		if cat != nil {
+			s.Movement.SetClasses(cat.Movement)
+		}
+		for _, u := range s.Units.Iter() {
+			s.Movement.EnsureUnit(u)
+		}
+	}
+	// Kernel phase registration — without this a mission session has no
+	// ticking subsystems and cannot reach victory/defeat [08 "Evaluation"].
+	s.RegisterAll()
 	return s, nil
 }
 
@@ -154,6 +195,13 @@ func BattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
 	if err := reconstructUnits(s, m); err != nil {
 		return err
 	}
+	// InitialMission runs ONCE on the loading worker after ALL mission units
+	// exist [04 §3.6] C9 — here, between unit placement and the start barrier.
+	// It queues orders; from the next tick the ordinary pump consumes them.
+	// TODO(question): the dedicated kernel registration site for the trigger
+	// poll and this interpreter's exact position in the retail loading pass
+	// are inferred from vtable layout ([GAP T10] residual).
+	mission.RunInitialMissionsWithCatalog(m, s.Units, s.Catalog)
 	spy.record("barrier")
 	if err := crossBarrier(s); err != nil {
 		return err

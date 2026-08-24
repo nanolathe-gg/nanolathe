@@ -312,28 +312,66 @@ do not accumulate as elapsed gameplay time.
 
 ### 4.4 Tick phase order
 
-When the runnable count is nonzero, each sub-tick increments the global tick
-before any phase runs. The established phase order is:
+**Established fact:** When the runnable count is nonzero, each sub-tick
+increments the global tick before any phase runs [P0-09]. The established
+twelve-phase order is:
 
-1. multiplayer frame/network drain (multiplayer only);
-2. unit and script/COB updates;
-3. projectile integration and collision opportunities;
-4. general effects/features motion and compaction pre-pass;
-5. orders, path/economy, and occupancy work;
-6. feature lifecycle and reclaim/death processing;
-7. sequence/effect-strip advancement;
-8. wind jitter/randomized interval update;
-9. wind-field update;
-10. ledger/death cleanup;
-11. a ten-object vtable-backed barrier pass whose consumer is not identified;
+1. multiplayer frame and network drain (multiplayer only) — drains the
+   future-frame window and can apply resource-transfer packets before unit work;
+2. per-unit sweep over players in ascending order and units in ascending pool
+   order, with per-unit micro-order: general unit update, then weapon update
+   (reload, target acquisition, aim latch, spawn), then COB drain of eight
+   threads in ascending order plus one piece-interpolation pass, then primary
+   order-queue pump (head-blocking, restart-from-head), then secondary queue pump
+   (skip not-due, front-to-back), then movement integration (immediate wake-flag
+   starts for StartMoving, StopMoving, MoveRate and setSFXoccupy), then slot-end
+   death handling with synchronous Killed query and finalization [P0-09];
+3. projectile integration and collision — captures active count at entry; a
+   zero-burst root spawned in phase 2 is inside the span and can move and collide
+   the same tick, while burst clones appended during iteration are outside and
+   wait for the next tick [P0-09];
+4. general effects, feature motion, and compaction pre-pass;
+5. per-player orders, path, economy, and occupancy work — outer loop players
+   0 through 9 in ascending order; for each eligible player: per-tick helpers,
+   then the AI coordinator callback before the settlement deadline compare, then
+   deadline `tick + 30` single add (catch-up via consecutive ticks), then the
+   nine-step settlement pass when the gate chain passes [P0-09];
+6. feature lifecycle and reclaim or death processing (burn, wind probes,
+   successor hops; reclaim credits become visible at the next settlement);
+7. sequence and effect-strip advancement;
+8. wind jitter and randomized interval update (interval uses the CRT stream);
+9. wind-field update (vectors from direction and strength);
+10. ledger and death cleanup;
+11. a ten-object vtable-backed barrier pass whose consumer is not identified
+   — keep as `TODO(T23)` no-op registration point [P0-09];
 12. an every-eight-sub-tick cadence flip.
 
 After the sub-tick loop, multiplayer may share frames and perform a network
-barrier, then timer dispatch and deferred compaction/drain run. There are three
-null/barrier calls around this tail. The old interpretation of the sequence
-phase as a line-of-sight scan is explicitly superseded by the current notes;
-the LOS writer is a separate visibility path. The ten-object barrier is not
-proven to be a renderer barrier.
+barrier, then timer dispatch and deferred projectile compaction run. There are
+three null and barrier calls around this tail. The old interpretation of the
+sequence phase as a line-of-sight scan is explicitly superseded by the current
+notes; the LOS writer is a separate visibility path. The ten-object barrier is
+not proven to be a renderer barrier.
+
+**Established fact — event visibility across phases [P0-09]:**
+
+- A newly created unit is visible to later same-tick phases when its
+  player and slot lie ahead of the current scan position; a position already
+  visited waits for the next tick. Free slot reuse is immediate via the lowest
+  free scan with no generation counter, so later same-tick readers that test the
+  alive flag correctly skip a freed slot.
+- Ownership transfer is synchronous and is visible to later readers in the same
+  tick when the new owner's player block has not yet been visited in the
+  settlement loop.
+- Build-complete — `remaining` reaching zero — publishes the product's GetBuilt
+  order and builder links before the next trigger poll; victory checks are polled
+  locally every 30 ticks and need the next poll to observe the product.
+- Kill damage sets a dying latch but defers final pool clearing to slot-end
+  death handling or ledger cleanup; a victim remains observable through settlement
+  of the current tick and is removed before the next unit sweep.
+- Stable iteration is by ascending player and ascending slot; there is no hidden
+  map iteration and no generation-tagged handles for simulation identities
+  [P0-09][P1-14].
 
 ## 5. Threads, TLS, locks, and synchronization
 
@@ -389,7 +427,7 @@ are established:
 
 | Pool | Capacity/record contract | Allocation and retirement |
 | --- | --- | --- |
-| Unit instances | 280-byte records; maximum is a runtime map-state limit; slot search is lowest free first | Alive state marks a slot; creation takes the lowest usable free slot; death clears the alive state during post-tick cleanup; freed slots are immediately reusable. Identity zero is treated as null. |
+| Unit instances | 280-byte records; capacity is a game value derived from setup multiplied by ten plus one, yielding roughly two thousand to five thousand stock slots rather than the 500 folklore; the pool is sliced per player by sorted player order, each slice holding as many records as there are definition types, with slot zero reserved as null; allocation scans the owning player's slice for the lowest free flag and reuses it immediately, and an alive mask marks a live slot; per-definition limits are enforced by a flag and a value of minus one meaning unlimited, counted by scanning the slice; the canonical allocator is the sole allocation site for every creation path and the reconstructor validates a forced slot against slice bounds and occupancy, with every limit, slice-full, out-of-bounds, or occupied case returning a null handle and consuming no RNG; freeing clears alive masks, heaps, order queues, and attachments but retains the stored slot index; saving uses forced-slot reconstruction and a stale 16-bit packet that validates only slot nonzero and alive, so it aliases a reused occupant silently |
 | Projectiles | Exactly 300 records, 107 bytes each | Allocation appends at the active-span tail. Retirement sets a dead flag without changing the count. Stable compaction normally runs at projectile-phase tail, removes dead records, preserves survivor order, and repairs the affected projectile and follow-camera links. |
 | Feature definitions | Each type has a 128-byte copy; type table records use a 256-byte stride | Preallocated at map/catalog load; type IDs are stable for the loaded catalog. |
 | Live features | A 48-byte live record plus a 13-byte plot cell per map attribute cell | Plot cells point to feature anchors; removal returns the cell to the free sentinel and releases the live record. Map-row order is deterministic. |
@@ -397,10 +435,14 @@ are established:
 | Construction nodes | A 86-byte node; factories use separate tail/head links selected by a flag | Nodes append to a per-factory chain, coalesce matching build types where applicable, and are freed on cancellation/completion. |
 | Effect/sequence strips | Variable vectors of segment records, with a global cap of about 400 for the nanolathe/effect family | Append in event order; a compaction/drain pass moves/removes old entries. Exact ownership of every strip is not yet proven. |
 
-The unit maximum is read from the map/game state rather than being proven as a
-single universal constant. The 300-projectile capacity, packed record size,
-append allocation, deferred retirement, and compaction behavior are direct
-observations.
+The unit maximum is the game value described above, not a universal
+500 constant. The 300-projectile capacity, packed record size, append
+allocation, deferred retirement, and compaction behavior are direct
+observations. Freeing a unit clears its alive masks, heaps, queues, and
+attachments but leaves its stored slot index intact; the reconstructor and
+save path use that forced slot for stable identity, and stale references that
+hold only the 16-bit slot with a nonzero and alive check will silently alias a
+later occupant after reuse.
 
 ### 6.2 Established queues
 

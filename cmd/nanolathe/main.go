@@ -98,20 +98,10 @@ func run(opts Options, out *os.File) error {
 		}
 		return nil
 	}
-	// Gate 2 walker slice remains for the windowed viewer path.
-	if opts.Map != "" && opts.Dump == "" {
-		if wantsViewer(opts) {
-			if err := runGate2Viewer(opts, content); err != nil {
-				fmt.Fprintf(os.Stderr, "nanolathe: gate2 viewer: %v (falling back to Gate1)\n", err)
-				if err2 := runViewer(opts, content); err2 != nil {
-					fmt.Fprintf(os.Stderr, "nanolathe: viewer: %v (falling back to headless report)\n", err2)
-				} else {
-					return nil
-				}
-			} else {
-				return nil
-			}
-		}
+	// Windowed play goes through the game shell (menus → battle view);
+	// --map skips menus and enters the battle directly [PLAN_14].
+	if !opts.Headless && opts.Dump == "" {
+		return runGameShell(opts, content)
 	}
 	// Gate 1: windowed terrain viewer when --map is set, --headless is false,
 	// and no --dump is requested. This opens the Kaiju window and draws real

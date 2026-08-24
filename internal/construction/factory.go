@@ -355,8 +355,6 @@ func getVMProgram(vm *cob.VM) *cob.Program {
 	return getVMProgramReflect(vm)
 }
 
-//go:generate
-
 // ---------------------------------------------------------------------------
 // Helpers for footprint yard and validation [05 C17] [04 §6.2].
 // ---------------------------------------------------------------------------
@@ -513,7 +511,6 @@ func (s *Service) OnRefreshHook(u *units.Unit) {
 }
 
 // OnRefresh is the interface refresh callback, set by tests.
-var _ = fmt.Sprintf // keep import
 
 // ---------------------------------------------------------------------------
 // C19 Rally inheritance [05 "Rally inheritance"].

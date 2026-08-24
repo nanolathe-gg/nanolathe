@@ -34,6 +34,8 @@ type UnitView struct {
 	Health, MaxHealth    int32
 	BuildRemaining       float32 // I2 allowlist: resource/ledger carry
 	Flags                uint32  // selected, cloaked, underwater, nanoframe, etc.
+	Model                string  // authored 3DO model name for presentation [03 §2.4]
+	FootX, FootZ         int8    // packed footprint extents in cells [04 §6.2]
 }
 
 // ProjectileView is a placeholder for the projectile presentation view.

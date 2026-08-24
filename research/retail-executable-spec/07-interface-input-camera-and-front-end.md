@@ -757,13 +757,18 @@ orders, and multiplayer packets.
 
 ### Unknown
 
-Selection picking-overlap priority, repeated group-recall behavior (centering
-result and the user-facing meaning of selection flag `0x80000000`), build
-cancellation/refund, mixed-selection command merge, exact per-page slot
-counts, page rebuild timing, and command availability for mixed selections
-remain incomplete. The drag-rectangle toggle truth table, eligibility
-predicate, group assignment/recall gating, digit routing, pagination bit
-encoding, and latch/dispatcher/cursor tables are established above.
+Repeated group-recall centering behavior and the writer lifetime of selection
+flag `0x80000000`, hull geometry and jammer versus radar-contact picking,
+exact per-page slot counts, page rebuild timing versus factory completion,
+and the exact arming trigger for the two off-button latch values remain
+incomplete. The drag-rectangle toggle truth table, eligibility predicate,
+overlap pick order with strict `<` tie-break and inclusive `min <= x <= max`,
+fog word versus byte gate, toggle versus held-Shift styles,
+group assignment and recall gating, digit routing, pagination bit encoding,
+latch and dispatcher and cursor tables, mixed-selection AND gate, build
+cancellation with tombstone (always tombstoned for BuildWeapon and
+SelfDestruct), queue-modifier mapping, and attack-ground versus unit-target
+discrimination (BLAST always ground) are established above [P1-14].
 
 ## 10. Camera, scrolling, projection, and radar/minimap
 
@@ -1019,19 +1024,40 @@ minimum-ping write-back are established above.
 * Exact cursor hotspots, remaining command-specific validity rules, cursor
   handle slot 0 identity, and queued-line palette-entry colors (latch-value
   table, cursor index table, and build-site validity cursors are established).
-* Overlap priority for unit/feature/terrain picking and fog-edge behavior.
-* Selection picking-overlap priority, repeated group-recall centering and the
-  meaning of selection flag `0x80000000`, build cancellation/refund,
-  mixed-selection merge, and exact per-page slot counts (drag toggle truth
-  table, eligibility predicate, group assign/recall, digit gating, and
-  pagination bits are established).
-* Exact order-class semantics for every immediate/special/build command and
-  the writer sites arming TELEPORT (`0xB`) and MOBILEBUILD (`0xE`) latch
-  values (latch keys, dispatcher arm chain, latch-flag bits, and cursor
-  authorization split are established).
-* Build-page patching/rebuild timing, queue indicators, and builder
-  transition rules (page-number bit encoding and page-count guard are
-  established).
+* Picking hull geometry, feature versus unit priority in exact overlap, and
+  fog-edge versus jammer or radar-contact interaction beyond the local-player
+  word versus per-viewer byte gate.
+* Selection overlap pick order — drag endpoints sorted independently, inclusive
+  `min <= x <= max` tested per axis, stable pool sweep with strict `<` distance
+  tie-break favoring lower slot [P1-14] — and fog word bit versus byte
+  distinction, toggle versus commit modifier styles (`GetAsyncKeyState`-style held
+  query for world commit versus drag word bit 2), and mixed-selection gate as
+  AND across the selected set [P1-14] are established; what remains is repeated
+  group-recall centering behavior and the writer lifetime of selection flag
+  `0x80000000`, plus exact per-page slot counts.
+* Build cancellation and refund — tail-most matching walk with tombstone bit
+  that skips `TargetCleared`, with `BuildWeapon` and `SelfDestruct` always
+  tombstoned because the tombstone compares against the front anchor regardless
+  of segment [P1-14] — and queue-modifier mapping (Replace purges unprotected,
+  Append and Shift-queue both insert after the active marker without purging,
+  Internal-Auto is the pump's head-insert) plus attack-ground versus
+  unit-target discrimination (ATTACK picks unit when hit and hostile, otherwise
+  ground; BLAST always ground) [P1-14] are established; what remains is the
+  exact arming trigger for the two off-button latch values (TELEPORT and
+  MOBILEBUILD placement preview versus click) and the producers for interrupt
+  masks 2 and 8.
+* Order-class semantics for immediate and special commands are established via
+  the fixed dispatcher chain STOP into ATTACK, BLAST, DEFEND, REPAIR, PATROL,
+  RECLAIM, CAPTURE, UNLOAD, LOAD or PICKUP alias, and default MOVE with gate
+  check, and latch values for TELEPORT and MOBILEBUILD as off-button consumers
+  of the same 14-entry table [P1-14]; what remains is the exact writer site
+  that arms those two off-button values (placement preview region) and minor
+  OEM aliases.
+* Build-page patching and rebuild timing — page-number bit encoding
+  `(page & 7) << 23` cleared by mask `0xFC7FFFFF` with bit 22 paged indicator
+  cleared by `0xFFBFFFFF`, and page-count guard are established [P1-14]; what
+  remains is dirty-scope versus factory completion and indicator animation
+  details.
 * Alternate minimap drag/current-camera branch boundary vectors and mode-bit
   truth table, unusual-domain camera bounds, terrain-height projection, and
   all dirty-field semantics (core clamp, edge predicates, direct radar

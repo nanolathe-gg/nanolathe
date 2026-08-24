@@ -141,7 +141,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
-		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", Ident: "u0", InitialMission: "m 100,200"}}}
+		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", Ident: "u0", InitialMission: "m 100 200"}}}
 		RunInitialMissions(m1, w1)
 		if !hasOrder(u, "Move_Ground") {
 			t.Fatalf("m verb should queue Move_Ground, got %v", primaryNodes(u))
@@ -164,7 +164,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
-		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "a 300,400"}}}
+		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "a 300 400"}}}
 		RunInitialMissions(m1, w1)
 		// Should queue attack (numeric) and suppress tail
 		hasAttack := hasOrder(u, "Attack_Chase") || hasOrder(u, "AttackUType") || hasOrder(u, "Attack_NoMove")
@@ -210,7 +210,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
 		// building type ARMFAB triggers BuildingBuild per hook
-		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "b ARMFAB 2 500,600"}}}
+		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "b ARMFAB 2 500 600"}}}
 		RunInitialMissions(m1, w1)
 		if !hasOrder(u, "BuildingBuild") {
 			t.Fatalf("b ARMFAB should queue BuildingBuild, got %v", primaryNodes(u))
@@ -227,7 +227,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u2 := w2.Unit(h2)
 		u2.Flags |= 1 << 5
-		m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "b ARMCK 3 700,800"}}}
+		m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "b ARMCK 3 700 800"}}}
 		RunInitialMissions(m2, w2)
 		if !hasOrder(u2, "MobileBuild") {
 			t.Fatalf("b ARMCK should queue MobileBuild")
@@ -338,7 +338,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags = 0
-		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "o 1,2"}}}
+		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "o 1 2"}}}
 		RunInitialMissions(m1, w1)
 		if queueLen(u) != 0 {
 			t.Fatalf("o should not queue order")
@@ -354,7 +354,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
-		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "p 100,200,10"}}}
+		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "p 100 200 10"}}}
 		RunInitialMissions(m1, w1)
 		if !hasOrder(u, "Patrol") && !hasOrder(u, "VTOL_Patrol") {
 			t.Fatalf("p should queue patrol")
@@ -403,7 +403,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
-		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "u 300,400"}}}
+		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "u 300 400"}}}
 		RunInitialMissions(m1, w1)
 		if !hasOrder(u, "Ground_Unload") && !hasOrder(u, "VTOL_Unload") {
 			t.Fatalf("u should queue unload")
@@ -422,7 +422,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
-		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "w 5,7"}}}
+		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "w 5 7"}}}
 		RunInitialMissions(m1, w1)
 		if !hasOrder(u, "Wait") {
 			t.Fatalf("w should queue Wait")
@@ -547,7 +547,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
-		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "m 10,20"}}}
+		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "m 10 20"}}}
 		RunInitialMissions(m1, w1)
 		if !hasOrder(u, "MakeSelectable") {
 			t.Fatalf("m should have postlude MakeSelectable")
@@ -562,7 +562,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
-		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "a 10,20"}}}
+		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "a 10 20"}}}
 		RunInitialMissions(m1, w1)
 		if hasOrder(u, "MakeSelectable") {
 			t.Fatalf("numeric a should suppress MakeSelectable")
@@ -591,7 +591,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
-		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "p 10,20,5"}}}
+		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "p 10 20 5"}}}
 		RunInitialMissions(m1, w1)
 		if hasOrder(u, "MakeSelectable") {
 			t.Fatalf("p should suppress")
@@ -649,7 +649,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
-		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "m 1,1, d"}}}
+		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "m 1 1, d"}}}
 		RunInitialMissions(m1, w1)
 		if hasOrder(u, "MakeSelectable") {
 			// Should have 0 Tail MakeSelectable, but d suppresses. However m before d still? The postlude MakeSelectable would be suppressed because script contained d.
@@ -677,7 +677,7 @@ func TestSilentMalformed(t *testing.T) {
 	h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u := w1.Unit(h)
 	u.Flags |= 1 << 5
-	m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "?, 123, m 10,20, !, w 5"}}}
+	m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "?, 123, m 10 20, !, w 5"}}}
 	RunInitialMissions(m1, w1)
 	if !hasOrder(u, "Move_Ground") {
 		t.Fatalf("silent malformed: m should still queue")
@@ -769,7 +769,7 @@ func TestCoordinatesAndTimesVectors(t *testing.T) {
 		check func(*units.Unit) bool
 	}{
 		{
-			token: "m 1.5,2.5",
+			token: "m 1.5 2.5",
 			check: func(u *units.Unit) bool {
 				n := findNode(u, "Move_Ground")
 				if n == nil {
@@ -779,7 +779,7 @@ func TestCoordinatesAndTimesVectors(t *testing.T) {
 			},
 		},
 		{
-			token: "m -1.5,-2.5",
+			token: "m -1.5 -2.5",
 			check: func(u *units.Unit) bool {
 				n := findNode(u, "Move_Ground")
 				if n == nil {
@@ -789,14 +789,14 @@ func TestCoordinatesAndTimesVectors(t *testing.T) {
 			},
 		},
 		{
-			token: "w 2.5,3",
+			token: "w 2.5 3",
 			check: func(u *units.Unit) bool {
 				n := findNode(u, "Wait")
 				return n != nil && n.Param1 == uint32(int32(2.5*30)) && n.Param2 == 3
 			},
 		},
 		{
-			token: "p 10,20,1.5",
+			token: "p 10 20 1.5",
 			check: func(u *units.Unit) bool {
 				n := findNode(u, "Patrol")
 				if n == nil {
@@ -806,7 +806,7 @@ func TestCoordinatesAndTimesVectors(t *testing.T) {
 			},
 		},
 		{
-			token: "o 2,1",
+			token: "o 2 1",
 			check: func(u *units.Unit) bool {
 				want := (uint32(2&3) << 17) | (uint32(1&3) << 19)
 				got := u.Flags & ((0x3 << 17) | (0x3 << 19))
@@ -850,7 +850,7 @@ func TestNonCampaignNoOp(t *testing.T) {
 	h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u := w1.Unit(h)
 	u.Flags |= 1 << 5
-	m1 := &Mission{Type: TypeSkirmish, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "m 10,20"}}}
+	m1 := &Mission{Type: TypeSkirmish, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "m 10 20"}}}
 	RunInitialMissions(m1, w1)
 	if queueLen(u) != 0 {
 		t.Fatalf("TypeSkirmish should not run InitialMission, got %d", queueLen(u))
@@ -876,7 +876,7 @@ func TestMissionOFlagBits(t *testing.T) {
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags = 0
-		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "o " + strconv.Itoa(c.d1) + "," + strconv.Itoa(c.d2)}}}
+		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "o " + strconv.Itoa(c.d1) + " " + strconv.Itoa(c.d2)}}}
 		RunInitialMissions(m1, w1)
 		got := u.Flags & ((0x3 << 17) | (0x3 << 19))
 		if got != c.want {

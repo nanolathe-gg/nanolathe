@@ -304,8 +304,8 @@ func TestImmunityBitOnlyConsumption(t *testing.T) {
 	if !u3.IsImmune() || !u3.AiIgnore || !u3.AiPriorityTarget || !u3.MissionCriticalUnit {
 		t.Fatalf("all flags set: %+v", u3)
 	}
-	if u3.RawFlags != 0x80|0x20|0x40|0x01 {
-		t.Fatalf("RawFlags packed: got %02x", u3.RawFlags)
+	if u3.RawFlags != 0x80|0x20|0x40|0x10 {
+		t.Fatalf("RawFlags packed (bit4 MissionCriticalUnit): got %02x", u3.RawFlags)
 	}
 }
 

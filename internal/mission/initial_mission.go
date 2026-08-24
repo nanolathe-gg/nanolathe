@@ -27,12 +27,18 @@ var IsBuildingTypeHook func(name string) bool
 // It registers with no tick dispatcher; from the next tick the ordinary pump
 // consumes queued orders [04 §3.6] C9.
 func RunInitialMissions(m *Mission, w *units.World) {
+	RunInitialMissionsWithCatalog(m, w, nil)
+}
+
+// RunInitialMissionsWithCatalog is RunInitialMissions with the content
+// catalog backing type-existence and building-vs-mobile lookups [04 §3.6].
+func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Catalog) {
 	if m == nil || w == nil {
 		return
 	}
-	// C9: only type 1 (campaign) and BetweenMissions restores. The latter is the
-	// same code path with type 1; other types are no-ops.
-	if m.Type != TypeCampaign {
+	// C9: only type 1 (campaign) games and BetweenMissions restores run the
+	// interpreter [04 §3.6]. IsRestore is set by the save-restore load path.
+	if m.Type != TypeCampaign && !m.IsRestore {
 		return
 	}
 	// Build deterministic world unit list in pool order (lowest-free allocation order).
@@ -43,9 +49,11 @@ func RunInitialMissions(m *Mission, w *units.World) {
 		return
 	}
 	// Build ident->handle and unitname->handle maps for g/wa lookups [04 §3.6].
-	// Mapping is placement index -> world unit handle correspondence: placement i
-	// corresponds to worldUnits[i] when counts align. This is deterministic because
-	// creation allocates lowest-free slots sequentially.
+	// Retail resolves names against the spawned created[] parallel array, so a
+	// skipped creation (bad player, countdown) shifts nothing; our index map
+	// assumes placement i ⇔ worldUnits[i].
+	// TODO(question): carry placement identity on the created unit so lookups
+	// resolve by identity instead of array position.
 	identMap := make(map[string]int)    // lower(Ident) -> index in worldUnits
 	unitNameMap := make(map[string]int) // lower(UnitName) -> index
 	for i, pl := range m.Units {
@@ -87,6 +95,7 @@ func RunInitialMissions(m *Mission, w *units.World) {
 			unitNameMap: unitNameMap,
 			attachMap:   attachMap,
 			mission:     m,
+			catalog:     cat,
 		}
 		tokens := tokenizeScript(script)
 		for _, tok := range tokens {
@@ -112,7 +121,13 @@ func RunInitialMissions(m *Mission, w *units.World) {
 				}
 			}
 		}
-		// Persist attach map if needed for external inspection (tests may read via hook).
+		// i-verb attaches: retail performs the attach IMMEDIATELY via the
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// through a queued order. The units/orders attach API does not exist
+		// yet, so collected pairs are currently discarded.
+		// TODO(question): route these through the transport/attach executor
+		// once phase 7's transport service exposes an immediate attach entry;
+		// until then the verb parses and defers, it does not silently no-op.
 		_ = attachMap
 	}
 }
@@ -125,49 +140,26 @@ type interpCtx struct {
 	unitNameMap  map[string]int
 	attachMap    map[int]int
 	mission      *Mission
+	catalog      *content.Catalog // production existence/building lookups [04 §3.6]; may be nil in fixtures with hooks
 	queued       int
 	suppressTail bool
 }
 
-// tokenizeScript splits script into verb tokens using comma-delimiting where a
-// comma is a token delimiter only when followed by optional spaces and a letter.
-// This preserves internal argument commas (x,y) that are followed by digits.
-// Also handles semicolon/trailing.
-// [04 §3.6] comma-separated token list left to right.
+// tokenizeScript splits the script into verb tokens on EVERY comma — the
+// tokenizer delimiter is the single byte ',' (_strcspn(p,",")), and a token's
+// own arguments are SPACE-separated by the scan formats (" %f %f") [04 §3.6];
+// decompile notes/campaign/02 §4. A trailing coordinate after an argument
+// comma is therefore its own token whose digit lead is silently ignored,
+// exactly as retail drops it.
 func tokenizeScript(s string) []string {
 	// Global clamp for comma-free run >255 as spec-recommended divergence.
 	// If script contains no comma and exceeds 255, clamp to 255 [04 §3.6] C13.
 	if len(s) > 255 && !strings.Contains(s, ",") {
 		s = s[:255] // [04 §3.6] sanctioned bounds exception
 	}
-	var tokens []string
-	start := 0
-	n := len(s)
-	for i := 0; i < n; i++ {
-		if s[i] != ',' {
-			continue
-		}
-		// Look ahead to next non-space char.
-		j := i + 1
-		for j < n && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
-			j++
-		}
-		if j < n && isLetter(s[j]) {
-			// This comma separates verb tokens.
-			token := s[start:i]
-			tokens = append(tokens, token)
-			start = i + 1
-		} else {
-			// Argument comma, stay within same token.
-			// Do not split.
-		}
-	}
-	// Final token.
-	if start <= n {
-		token := s[start:]
-		tokens = append(tokens, token)
-	}
-	// Edge: if script ends with comma, last token may be empty; preserved for silent handling.
+	tokens := strings.Split(s, ",")
+	// strings.Split always returns at least one element; an empty final token
+	// after a trailing comma is preserved for silent handling.
 	return tokens
 }
 
@@ -267,6 +259,11 @@ func timeToTicks(secs float64) int32 {
 	return int32(secs * 30) // [04 §3.6] times scale by 30, trunc toward zero [I3]
 }
 
+// productID derives the order payload's product identity for `b`. Retail
+// stores a u16 catalog TYPE id resolved by binary search at the verb site
+// [04 §3.6]; the compiled catalog carries no numeric unit id yet.
+// TODO(question): plumb content's numeric unit identity and replace this
+// hash; until then it is a deterministic stand-in keyed on the canonical key.
 func productID(defKey string) uint32 {
 	ck := content.CanonicalKey(defKey)
 	h := fnv.New32a()
@@ -274,21 +271,38 @@ func productID(defKey string) uint32 {
 	return h.Sum32()
 }
 
-func typeExists(name string) bool {
+func typeExists(ctx *interpCtx, name string) bool {
 	if UnitTypeExistsHook != nil {
 		return UnitTypeExistsHook(name)
 	}
 	if strings.TrimSpace(name) == "" {
 		return false
 	}
-	// Default: treat known via content catalog if available? Without hook, assume exists for fixture.
-	// To satisfy unknown-type no-op tests, hook must be set; default true.
-	return true
+	// Production path: the type exists when the catalog holds it [04 §3.6]
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	if ctx != nil && ctx.catalog != nil {
+		_, ok := ctx.catalog.Unit(content.CanonicalKey(name))
+		return ok
+	}
+	// No catalog and no hook: unknown. Retail would consult its catalog, so
+	// defaulting to true queued bogus orders for unknown types.
+	return false
 }
 
-func isBuildingType(name string) bool {
+func isBuildingType(ctx *interpCtx, name string) bool {
 	if IsBuildingTypeHook != nil {
 		return IsBuildingTypeHook(name)
+	}
+	// `b` builds BuildingBuild when the found catalog entry's unit-name field
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): the phase-2 compiler falls back UnitName to the base
+	// name when the FBI omits `unitname`, which masks authored-empty entries;
+	// the fallback site needs a raw-presence flag for this to be exact.
+	if ctx != nil && ctx.catalog != nil {
+		if def, ok := ctx.catalog.Unit(content.CanonicalKey(name)); ok && def != nil {
+			return def.UnitName == ""
+		}
+		return false
 	}
 	return false
 }
@@ -411,7 +425,7 @@ func handleA(token string, ctx *interpCtx) {
 	}
 	// By-type form: a name attack-by-unit-type [04 §3.6] C10.
 	name := fields[0]
-	if !typeExists(name) {
+	if !typeExists(ctx, name) {
 		// Unknown types queue nothing [04 §3.6] C10.
 		return
 	}
@@ -447,7 +461,7 @@ func handleB(token string, ctx *interpCtx) {
 		return
 	}
 	name := fields[0]
-	if !typeExists(name) {
+	if !typeExists(ctx, name) {
 		return // unknown types queue nothing (silent) [04 §3.6] C13
 	}
 	var n int64 = 1
@@ -467,7 +481,7 @@ func handleB(token string, ctx *interpCtx) {
 	}
 	// Building build when catalog type has empty unit name, mobile build at x,y otherwise [04 §3.6] C10.
 	var id orders.ID
-	if isBuildingType(name) {
+	if isBuildingType(ctx, name) {
 		id = orders.Lookup("BuildingBuild")
 		if id == 0 {
 			id = orders.Lookup("MobileBuild")
@@ -658,7 +672,13 @@ func handleO(token string, ctx *interpCtx) {
 			d2 = int64(fv)
 		}
 	}
-	// Writes two 2-bit fields of unit flag word: bits 17-18 ← d1 &3, bits 19-20 ← d2 &3 [04 §3.6] C10.
+	// Writes two 2-bit fields of the unit flag word: bits 17-18 ← d1 &3 and
+	// bits 19-20 ← d2 &3 per [04 §3.6] C10.
+	// TODO(question): authorities conflict on the bit position — the
+	// decompile (notes/campaign/02 §5, `o` row) shows mask 0xffc3ffff with the
+	// pair at bits 18-21 (d1@18-19, d2@20-21), one position higher than
+	// doc-04's prose. Doc-04 is implemented; settle with a probe before
+	// moving either reading.
 	ctx.unit.Flags &^= (0x3 << 17) | (0x3 << 19)
 	ctx.unit.Flags |= (uint32(d1&3) << 17) | (uint32(d2&3) << 19)
 	// No order queued and no issued marker [04 §3.6] C10.

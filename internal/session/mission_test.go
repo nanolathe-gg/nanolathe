@@ -242,3 +242,79 @@ func TestNewMissionUsesWindBoundsWithoutDraws(t *testing.T) {
 		t.Fatalf("NewMission must route via Gametype 1 -> StateLocalPreload [08 \"Session states\"] C3 got %v", s.State)
 	}
 }
+
+// TestTriggerPollAndDeathNotificationEndMission locks the mission end-to-end:
+// an authored KillUnitType defeat completes through the exactly-once death
+// notification, and the once-per-30-ticks poll site latches DefeatDone
+// [08 "Evaluation"] [PLAN_10 C14-C17].
+func TestTriggerPollAndDeathNotificationEndMission(t *testing.T) {
+	otaText := "[GlobalHeader]\n{\nKillUnitType=armflea, 2;\n[Schema 0]\n{\nType=Easy;\n[units]\n{\n[unit0]\n{\nUnitname=armcom;\nXPos=0;\nZPos=0;\n}\n[unit1]\n{\nUnitname=armflea;\nXPos=5;\nZPos=5;\nPlayer=1;\n}\n}\n[specials]\n{\n}\n[features]\n{\n}\n}\n}\n"
+	fs := fsFromMap(t, map[string]string{
+		"maps/test.ota": otaText,
+	})
+	cat := &content.Catalog{
+		Maps: map[string]*content.MapHeader{
+			"test": {
+				LogicalTNT: "maps/test.tnt",
+				Schemas:    []content.MapSchema{{SurfaceMetal: 0}},
+			},
+		},
+		Units: map[string]*content.UnitDef{
+			"armcom":  {UnitName: "armcom", MaxDamage: 100, SightDistance: 128, CanMove: true},
+			"armflea": {UnitName: "armflea", MaxDamage: 20, SightDistance: 128},
+		},
+	}
+	s, err := NewMissionWithFS(fs, cat, "test.ota", 0)
+	if err != nil {
+		t.Fatalf("NewMissionWithFS: %v", err)
+	}
+	if len(s.Mission.Victory) != 1 || s.Mission.Victory[0].Completed {
+		t.Fatalf("authored victory condition not decoded: %+v", s.Mission.Victory)
+	}
+	if len(s.Mission.Defeat) != 1 {
+		t.Fatalf("default defeat condition not injected [PLAN_10 C16]: %+v", s.Mission.Defeat)
+	}
+	// Find the enemy flea.
+	var enemy *units.Unit
+	for _, u := range s.Units.Iter() {
+		if u.Owner == 1 {
+			enemy = u
+		}
+	}
+	if enemy == nil {
+		t.Fatal("enemy unit was not placed")
+	}
+	// Stepping 31 ticks crosses the first two poll slices without any death.
+	for i := 0; i <= 30; i++ {
+		s.Step(int32(i))
+	}
+	if s.VictoryDone || s.DefeatDone {
+		t.Fatalf("nothing may complete before the deaths: v=%v d=%v", s.VictoryDone, s.DefeatDone)
+	}
+	// First death: the victory countdown drops to 1 — not yet complete.
+	s.Units.Destroy(enemy.Handle, units.DeathKilled)
+	for i := 31; i <= 60; i++ {
+		s.Step(int32(i))
+	}
+	if s.VictoryDone {
+		t.Fatal("KillUnitType=2 must not complete on one death")
+	}
+	// The default defeat (all-units-killed over the LOCAL player) completes
+	// when the local side is gone, while the unmet victory stays open.
+	var local *units.Unit
+	for _, u := range s.Units.Iter() {
+		if u.Owner == 0 {
+			local = u
+		}
+	}
+	if local == nil {
+		t.Fatal("local unit was not placed")
+	}
+	s.Units.Destroy(local.Handle, units.DeathKilled)
+	for i := 61; i <= 90; i++ {
+		s.Step(int32(i))
+	}
+	if !s.DefeatDone {
+		t.Fatal("default all-units-killed defeat did not complete after the local player died")
+	}
+}

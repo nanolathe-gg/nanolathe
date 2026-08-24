@@ -56,12 +56,21 @@ type Unit struct {
 	GuardLatches GuardLatches // per-unit dedup array for guard assistance [04 §3.5]
 }
 
+// DeathHook is invoked exactly once per unit at the moment Destroy first
+// latches Dying [04 §2.4]. The session uses it to feed mission trigger death
+// notifications exactly once [08 "Evaluation"].
+type DeathHook func(h pool.Handle, cause DeathCause, u *Unit)
+
 // World is the unit world [PLAN_06 Public API].
 // Pool is slot-indexed parallel to world state; iteration is players 0..9 then slots ascending [01 §6.2] C2.
 type World struct {
 	units   []*Unit
 	pool    *pool.Units
 	catalog *content.Catalog
+
+	// OnDeath is the death-notification hook [08 "Evaluation"]; nil means no
+	// consumer. It fires exactly once per unit, at the first Destroy latch.
+	OnDeath DeathHook
 }
 
 // New creates a World with given capacity (number of usable slots).
@@ -126,6 +135,11 @@ func (w *World) Destroy(h pool.Handle, cause DeathCause) {
 	}
 	u.Dying = true
 	u.DeathCause = cause
+	// Exactly-once death notification [08 "Evaluation"]: the latch transition
+	// is the single fire point.
+	if w.OnDeath != nil {
+		w.OnDeath(h, cause, u)
+	}
 }
 
 // Cleanup frees death-marked slots now that tick is done, matching retail

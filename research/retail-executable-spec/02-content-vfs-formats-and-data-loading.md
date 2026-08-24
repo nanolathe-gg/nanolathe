@@ -792,12 +792,22 @@ Feature files are TDF; each top-level section is one feature type.
 
 A second pass resolves `featuredead`, `featurereclamate`, and `featureburnt`
 — all string, default empty — to catalog identities, creating a late record
-when a referenced definition can still be discovered. Missing links use an
-explicit no-successor sentinel. When a requested feature record name appears
-in no parsed feature node, the loader formats the exact diagnostic
+when a referenced definition can still be discovered. Missing links use the
+explicit no-successor sentinel `0xFFFF`; an unresolved chain ends with no
+feature rather than a substitution. When a requested feature record name
+appears in no parsed feature node, the loader formats the exact diagnostic
 `Record "%s" missing from feature files` and emits it through the fatal
 diagnostic path; recovery beyond that dialog is not modeled, so a
 reimplementation treats it as fatal.
+
+Catalog entries are `0x100` bytes each, live animation slots are `0x800`
+entries of `0x30` bytes each, and the terrain plot grid is `0xD` bytes per
+cell. Exhausting the catalog, the animation pool, or map bounds causes a silent
+failure with no placement. Burning sequences have their loop byte forced to
+non-looping at load, so every shipped burn animation has a finite lifetime
+between 46 and 282 visits and ends only when its animation pointer clears; the
+countdown derived from `sparktime` fires a one-shot spread and optional
+burn-weapon event and then stays inert.
 
 The fire/reclaim/regrowth keys are all consumed. Reproduction runs inside the
 feature tick pass, once per simulation tick, after the catalog animation
@@ -823,34 +833,40 @@ advance and before the instance-list walk:
   exactly like map-loaded features.
 
 Reproduction is stock-inert only because every shipped feature authors
-`reproduce=0` (`reproducearea=6` where present). The one remaining
-authored-data question for burning is whether shipped burn-animation
-sequences carry a looping flag byte (completion timing depends on it).
+`reproduce=0` (`reproducearea=6` where present). Shipped burn animations are
+finite — the loader forces every burn, burn-shadow, death, and reclaim sequence
+to non-looping, so completion is gated on the animation pointer clearing, not
+on a loop byte carried from the GAF.
 
 ### Movement class record
 
 Movement classes come from `CLASS` sections in the movement catalog. Each class
-reads eight keys, and **their defaults chain off values read earlier in the same
-record**, so read order is part of the contract:
+reads eight keys **in this parse order**, and defaults chain off values read
+earlier in the same record, so order is contract:
 
 1. `FootPrintX` — integer, default 0, stored as 16-bit.
 2. `FootPrintZ` — integer, default 0, stored as 16-bit.
-3. `maxwaterdepth` — integer, default: the profile's current value.
-4. `minwaterdepth` — integer, default: the profile's current value.
-5. `maxslope` — integer, default: the profile's current value, stored as a byte.
-6. `badslope` — integer, default: **half the `maxslope` value just read**.
-7. `maxwaterslope` — integer, default: the profile's current value, byte.
-8. `badwaterslope` — integer, default: **half the `maxwaterslope` value just read**.
+3. `MaxWaterDepth` — integer, default the class's prior value (preserved).
+4. `MinWaterDepth` — integer, default the class's prior value (preserved).
+5. `MaxSlope` — integer, default the class's prior value (preserved), stored as a byte.
+6. `BadSlope` — integer, default **half (`>>1`) of the `MaxSlope` value just read**.
+7. `MaxWaterSlope` — integer, default the class's prior value (preserved), byte.
+8. `BadWaterSlope` — integer, default **half (`>>1`) of the `MaxWaterSlope` value just read**.
 
-Three clamps then run, in order:
+Three clamps then run **unconditionally on every class**, in order:
 
-* if `maxwaterslope` is below `maxslope`, `maxslope` becomes `maxwaterslope`;
-* if the resulting `maxslope` is below `badslope`, `badslope` becomes `maxslope`;
-* if `maxwaterslope` is below `badwaterslope`, `badwaterslope` becomes
-  `maxwaterslope`.
+* if movement class MaxWaterSlope is below movement class MaxSlope, MaxSlope becomes MaxWaterSlope;
+* if the resulting MaxSlope is below BadSlope, BadSlope becomes MaxSlope;
+* if MaxWaterSlope is below BadWaterSlope, BadWaterSlope becomes MaxWaterSlope.
+
+**Established fact:** The comparisons are unsigned byte comparisons with no authored gate; the three checks execute for every class regardless of which keys were authored.
+
+**Supported inference / deliberate divergence:** Retail ship data has only two classes authoring `MaxWaterSlope = 255` (`TANKHOVER3/4`); the other thirteen omit it. If the class record started zero-filled, the unconditional first clamp would set `MaxSlope` to zero for all land classes, making land impassable, which contradicts stock play. The stock movement template therefore must carry a large `MaxWaterSlope` (255) before parsing so an omitted key preserves 255 and the clamps are identity — `TODO(question)` the template writer has not been located in the bounded scan. Nanolathe currently gates the first and third clamps on whether `MaxWaterSlope` was authored to reproduce stock slopes; this is a deliberate, install-compatible divergence retained with `TODO(question)` until the template initialization is proven.
 
 The executable contains no key evidence for pivot-turn, reverse, arc-turn,
 minimum turn radius, or minimum turn speed.
+
+**Supported inference:** Slope is derived from a 2×2 height neighbourhood. The plot expansion computes per-cell derived `MinHeight` and `MaxHeight` as the minimum and maximum of up to four height bytes (cell, east, south, southeast, with edge guards) — these derived values are the slope inputs, not a single height sample. Height queries use bilinear interpolation of the four corner heights with low-four-bit fractions and signed-bias correction. Validation aggregates `min of mins` and `max of maxes` across the footprint rectangle, selects land vs water slope by whether the footprint is above water (sea level at or below the footprint minimum chooses movement class MaxSlope, otherwise MaxWaterSlope), and tests passability with strict `<` (`slope == limit` passes) for both slope and water-depth gates. `BadSlope`/`BadWaterSlope` are not hard blocks in the validator; they are soft tiers retained for cost.
 
 ### Sound aliases
 
@@ -1166,13 +1182,77 @@ and tidal strength falls back to one half.
 
 Sea level is a byte in the terrain header. Tile-map dimensions are half the
 cell dimensions in each axis, with one 16-bit tile index per entry; each index
-selects a 1,024-byte 32-by-32 indexed block in the tile set. The runtime
-expands the attribute array into 13-byte plot cells whose layout is typed:
+selects a 1,024-byte 32-by-32 indexed block in the tile set.
+
+The canonical attribute array is `Width × Height × 4` bytes, one record per
+attribute cell: height byte at the first byte, feature reference as little-endian
+`uint16` at the next two bytes, and an unknown byte that is zero across the
+entire retail corpus (171 canonical maps) and is not carried into runtime state.
+The loader validates the `0x2000` version, allocates a tile map of
+`(Width/2 × Height/2)` `uint16` entries, allocates tile graphics, reads the
+feature name table (`TileAnims × 132` bytes: `uint32` index plus 128-byte name),
+and then expands the attribute array into a dense plot array of `Width × Height`
+13-byte cells in row-major order (west to east, north to south).
+
+The runtime plot cell is 13 bytes with a typed layout. All multi-byte fields
+are little-endian.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+Fringe-anchor reconstruction is a derived step, not a loaded field. The TNT
+attribute record carries no anchor data, and the declared feature-definition
+footprint (`FootPrintX/Z`) is demonstrably not the stamping rule — measured
+examples show a 1×2 definition stamping a 4×4 fringe region — so map-authored
+fringe regions are independent of the definition. The current reimplementation
+derives fringe offsets by a row-major propagation that inherits the nearest left
+or above anchor with a later-wins tie, which resolves 83.2% of the 71,916 fringe
+cells across 275 maps; declared footprints alone resolve 65.1%. Merged blobs
+(up to 10×9 bounding boxes containing 7 distinct real cells) and about 5,283
+orphaned fringe cells with no nearby real index remain unresolved and need a
+non-local partition rule — retained as `TODO(question)` heuristic. An unresolved
+fringe stays not-found per the resolver above.
+
+Void and edge generation runs after the derived minimum/maximum heights are
+recomputed for the full map and after feature placement. It performs:
+
+* **Right-edge void:** columns `Width-2` and `Width-1` are set to `0xFFFD` for
+  every row unconditionally — `2 × Height` cells. The playable inset is also
+  set to `PlayRight = WidthPixels - 0x20` (32 pixels, two cells) and
+  `PlayBottom = HeightPixels - 0x80` (128 pixels, eight cells), which the
+  camera clamp enforces.
+* **Lava-world flood:** when the mission `lavaworld` flag is set, a bulk sweep
+  sets `0xFFFD` for every cell where `hmin ≤ SeaLevel` and the feature word is
+  `0xFFFF` or `0xFFFE`, turning the entire low basin into void.
+* **Other edges:** north and south height-dependent void strips have been
+  observed but the exact height predicate beyond the right two columns is not
+  fully traced — retained as `TODO(question)`.
+
+Outside the map rectangle, height returns the sentinel `-1` with unsigned
+candidate bounds before any terrain read; the movement validator returns
+blocked for generic modes but returns pass for factory-exit search mode 2; the
+LOS writer stores an empty footprint and returns; projectiles report no terrain
+collision; and the camera is clamped to the `PlayRight`/`PlayBottom` insets
+above.
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 The exact byte layout of the legacy attribute record, beyond what feeds these
-runtime cells, is the only remaining terrain-format unknown.
+runtime cells, is the only remaining terrain-format unknown. North/south
+height-dependent void edge predicates beyond the right two columns, and any
+legacy metal-source file beyond the uniform `SurfaceMetal`, remain
+`TODO(question)`.
 
 ### Animation archive (GAF)
 
@@ -1466,7 +1546,13 @@ union-enumeration dedup; the WAV detector order, DIGI normalization, and
 three allocation modes plus the 255-entry alias cap; the PCX validation,
 run clamping, and marker-less palette read; the FNT descender/bias split;
 the skirmish per-slot defaults with the `NumSkirmishPlayers` no-op
-validation; and the TNT feature-reference sentinel refinement.
+validation; the TNT feature-reference sentinel refinement; the fringe-anchor
+signed-offset encoding (signed bytes, DZ scaled by width, threshold `0xFFFB`,
+width proof to 402×408 — SC6 resolved, A11 closed); the void-edge generation
+(right `W-2,W-1` always void, `PlayRight`/`PlayBottom` insets, lava-world bulk
+flood on `hmin≤SeaLevel` — A29 closed); and the per-cell metal uniform
+`SurfaceMetal` seeding with no raster and extractor `Σ(byte+1)` sampling (A28
+closed, varying file `TODO(question)`).
 
 Still open:
 
@@ -1490,10 +1576,12 @@ Still open:
 * Exact strategic-AI use of `ai_weight` and `ai_limit`, and the identity of
   the enclosing routine behind the `side`-filtering build picker (mechanics
   confirmed in §5; its classification as AI code is supported inference).
-* Whether shipped burn-animation sequences carry a looping flag byte
-  (completion timing depends on it); feature reclaim and reproduction timing
-  are specified above and in document 05, and no geothermal registry exists —
-  enforcement is the footprint validator's yardmap-bit-7 check.
+* Shipped burn animations are forced to non-looping at load (finite 46–282
+   visits, completion only when the animation pointer clears); malformed or
+   missing burn sequences for non-filename features remain `TODO(question)`.
+   Feature reclaim and reproduction timing are specified above and in
+   document 05, and no geothermal registry exists — enforcement is the
+   footprint validator's yardmap-bit-7 check.
 * Complete sound alias precedence, eviction, and DirectSound streaming rules.
 * The draw-time interpretation of model primitive colour, texture, and flag
   fields is narrowed in document 03 (flat colours bypass the shade table,
@@ -1512,9 +1600,16 @@ Still open:
 * Exact sequencing of the CD `TOTALA.ID`/`Contents` identity gate relative
   to the mount loop (gate behavior carried as supported inference in §2).
 * The legacy terrain attribute record's exact byte layout beyond what feeds
-  the runtime plot cells above.
+   the runtime plot cells above.
+* Fringe-anchor reconstruction for merged blobs and orphaned fringe cells —
+   row-major left/above later-wins resolves 83.2% of the corpus's fringe cells,
+   but the full retail partition rule for the residual is `TODO(question)`.
+* North/south height-dependent void strips beyond the right two columns
+   (`W-2,W-1`) and any varying per-cell metal source file beyond the uniform
+   `SurfaceMetal` byte are `TODO(question)` — the corpus shows only the right
+   two columns and the uniform byte.
 * Remaining code-page behavior for high bytes and localized font selection
-  beyond the installed-corpus census; and which runtime messages pass through
-  the translation lookup.
+   beyond the installed-corpus census; and which runtime messages pass through
+   the translation lookup.
 * Exact cache invalidation boundaries across map changes, saves, and lobby
-  sessions.
+   sessions.

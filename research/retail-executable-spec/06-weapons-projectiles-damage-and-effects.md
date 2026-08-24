@@ -33,23 +33,34 @@ later effect or meteor work wait for the next projectile phase.
 ### 1.2 Three weapon slots
 
 **Established fact:** Every ordinary unit has up to three weapon slots: primary,
-secondary, and tertiary. Each slot carries a resolved weapon definition,
-encoded unit/point target state, reload countdown, an automatic-targeting
-enable bit, an Aim-request latch, a separate asynchronous Aim-result/piece
-field, and a stockpile remainder when applicable. The slot selects a muzzle
-piece through a synchronous COB query.
+secondary, and tertiary, stored as three contiguous slot records of about
+24 bytes of logical state each (28-byte stride in the executable image).
+Each record contains a resolved weapon definition pointer, an armed/has-target
+flag, an Aim-request latch, a tracking flag, an encoded target (a unit slot
+index when the sentinel value -0x8000 is present, otherwise a ground point
+with world X and Z words that later resolve to height through the terrain
+query), desired yaw and pitch, a signed reload countdown in ticks, and a
+stockpile remainder byte where applicable, plus firing and out-of-range status
+bits. The slot selects a muzzle piece through a synchronous COB query.
 
 **Established fact:** The slot pipeline visits slots in numeric order. For a
 populated slot it decrements nonzero reload, resolves the current target,
-optionally dispatches Aim, and then falls through to shot-time range/medium/
-ballistic admission. If reload is zero and the physical gate passes, it
-prechecks normal resources or stockpile ammunition and calls the family
-spawner. On successful return it stores reload or decrements ammunition, sets
-the unit firing state, and finally debits normal-weapon resources. Projectile
-allocation and, for families that emit them, Fire/RockUnit callbacks occur
-inside the spawner before those success mutations.
+optionally dispatches Aim (choosing the direct line-of-sight solver or the
+ballistic solver), and then falls through to shot-time range/medium/ballistic
+admission. If reload is zero and the physical gate passes, it prechecks normal
+resources or stockpile ammunition and calls the family spawner. On successful
+return it stores reload or decrements ammunition, sets the unit firing state,
+and finally debits normal-weapon resources. Projectile allocation and, for
+families that emit them, Fire/RockUnit callbacks occur inside the spawner
+before those success mutations.
 
 **Established fact:** A failed projectile allocation does not call Fire or RockUnit, does not debit firing resources, and does not advance the ordinary reload state. A pool-full failure is therefore observable at the slot level.
+
+**Established fact:** Every latch writer that installs a new target preserves
+the previous Aim-request latch; replacement while an Aim is outstanding keeps
+the stale yaw and pitch for the next shot rather than clearing them. The next
+shot therefore uses the new target position with the old angles for one firing
+attempt before the latch is cleared or recomputed.
 
 ## 2. Weapon catalog and logical flags
 
@@ -180,14 +191,44 @@ projectile family's readiness gate. Forced/manual installation can therefore
 bypass autonomous visibility lists and bad-category preference, but it does
 not bypass every firing check.
 
-**Established fact:** Ordinary acquisition randomly samples and removes at most
-50 candidates from its input set. Within the preferred and fallback category
-buckets, each candidate receives a shared-RNG score bounded by the sum of the
-high 32-bit halves of its squared fixed-point X and Z deltas. A bound below two
-uses the RNG helper's zero/no-advance path. Strictly lower score wins, so an
-equal score preserves the first sampled candidate in that bucket. This is not
+**Established fact:** Ordinary acquisition builds a filtered candidate set in
+stable order: it iterates candidates in ascending player and then pool-slot
+order, requires hostility, applies a direct-visibility predicate (own-side
+units bypass the check, cloaked units are rejected, underwater units without
+the dedicated alias flag are rejected, otherwise a four-point hull sampling
+of the target bounds is tested against the player's visibility state), and
+then applies physical admission (height above sea level, to-air and
+ballistic feasibility, and planar range). Only candidates passing all three
+groups enter the filtered set, which retains that stable order.
+
+**Established fact:** The filtered set is then sampled to at most 50
+candidates. If its length is 50 or fewer, no simulation-RNG draw is consumed
+and the sampled order equals the filtered stable order. If it is larger, the
+engine performs a swap-remove random selection for 50 iterations, each drawing
+from the simulation stream with a bound equal to the remaining length. The
+resulting sampled order is RNG-driven. The candidates are then split into
+two buckets: preferred (category not intersecting the weapon's bad-target
+mask) and fallback (matching the mask). No winner in the preferred bucket is
+retried as a failure of the whole acquisition; fallback is only consulted
+when preferred yields nothing, and when both exist preferred always wins
+over fallback.
+
+**Established fact:** Within each bucket every sampled candidate receives one
+score. The bound for the draw is the sum of the high 32-bit halves of the
+squared fixed-point X and Z deltas from shooter to candidate; formally it is
+the high half of the 64-bit product of each delta with itself, shifted right
+by 32, summed across the two axes. If the bound is below two, the RNG helper
+returns zero without advancing the stream. Otherwise the engine draws from the
+simulation stream with that bound. Strictly lower score wins, so an equal
+score preserves the first sampled candidate in that bucket. This is not
 nearest-target selection; candidate-list order, sampling, and RNG draw order
 are authoritative.
+
+**Established fact:** Shot-time admission, which is checked immediately before
+the spawner, never tests category, alliance, radar, sonar, cloak, or jammer.
+Those gates belong only to candidate-list building, not to the final firing
+check, and this absence is established by a bounded search over the
+shot-time admission code.
 
 **Established fact:** The automatic retention scan rechecks hostility,
 bad-target-category rejection, and the paralyzer already-stunned exclusion.
@@ -207,9 +248,15 @@ Aim-request latch, so a replacement can skip a fresh Aim request.
 
 **Established fact:** The slot bit that suppresses repeated Aim dispatch is an
 Aim-request latch, not a universal “physically aimed” or fire-ready result. It
-is set immediately after the asynchronous Aim callback is dispatched. The
-slot pipeline does not test it at the common fire fallthrough. A skipped Aim or
-failed ballistic Aim calculation can therefore still reach physical admission.
+is set immediately after the asynchronous Aim callback is dispatched — the
+engine ORs the latch bit right after issuing the AimPrimary, AimSecondary,
+or AimTertiary call through the COB dispatcher. Completion depends only on an
+explicit script return: a zero return leaves the latch without permission and
+does not clear it, a nonzero return grants permission, and no timeout is
+present — the absence of a timeout writer is established by a bounded search
+over the weapon-slot code. The slot pipeline does not test the latch at the
+common fire fallthrough. A skipped Aim or failed ballistic Aim calculation can
+therefore still reach physical admission.
 
 **Established fact:** Family spawners impose distinct readiness rules:
 
@@ -225,7 +272,8 @@ failed ballistic Aim calculation can therefore still reach physical admission.
 Infeasible turret geometry or excessive drift clears the Aim-request latch.
 Turret and vertical-launch allocation failure preserve ready state, while
 successful allocation clears the result and latch. The angular-drift helper
-does not consume the parsed accuracy, tolerance, or pitch-tolerance fields.
+does not consume the parsed accuracy, tolerance, or pitch-tolerance fields. A
+ballistic no-solution sentinel suppresses Aim dispatch entirely.
 
 **Established fact:** Shot-time physical admission tests squared planar range
 first. A water weapon succeeds after that range test. A non-water weapon also
@@ -233,11 +281,71 @@ requires the shooter's top/reference height above sea level and, when
 ballistic, a valid ballistic solution. The direct yaw/pitch geometry and this
 gate do not perform terrain/hill or visibility/sensor tests.
 
+**Established fact:** Water and medium gating is asymmetric. For a non-water
+weapon, both shooter and candidate reference heights must be strictly above sea
+level, expressed as world Y greater than sea level scaled to fixed-point.
+Water weapons skip that height test and instead apply two candidate depth and
+type predicates. The to-air weapon flag, when requested by the acquisition
+context, requires the candidate to be an air target; non-water paths enforce
+it while water paths do not. The weapon-timer branch is taken when velocity
+is zero or when the no-auto-range flag is set, in which case the expiry uses
+the weapon timer rather than range divided by velocity, but the range gate is
+still applied as squared planar distance less than or equal to squared range
+with zero range only admitting the shooter's own cell.
+
+**Established fact:** The ballistic solver tests its discriminant against
+exactly zero with no positive epsilon guard; a negative discriminant returns the
+no-solution sentinel and no firing occurs, while exactly zero proceeds through
+the equal-root arithmetic subject to the ordinary angular gates. The upper
+acceptance gate is pi divided by four. An accepted angle is serialized as the
+truncation of angle multiplied by 32768 divided by pi into the 16-bit angle
+domain. When velocity is zero and the ballistic creator is reached, the pool
+reservation has already incremented the active count and is not rolled back
+when the subsequent divide raises an exception.
+
 **Established fact:** Parsed accuracy, tolerance, and pitch-tolerance values are
 stored but never read from the weapon definition by gameplay code in this
 retail build. This is a bounded whole-image result, including both direct
 field references and pointer-advance forms. They are dead catalog data here:
 direct-fire spread, aim readiness, and projectile motion must not consume them.
+
+**Established fact:** The simulation keeps three distinct visibility-like
+layers. The authoritative word mask is a 16-bit word per map tile quarter, each
+bit representing one player. The per-player byte grid is a wrapping refcount
+per tile quarter. Both are authored only by the line-of-sight publisher. The
+minimap radar surfaces (a final image and its temporary and mapped companions)
+are wiped every tick and receive radar, sonar, and jammer circles; they are
+presentation only. The publisher chooses between a GAF shape indexed by the
+floor of radius divided by 32 minus five and a ray shape indexed by radius
+divided by 32, selected by a global mode bit. Outer radius for normal circles
+is the maximum of radar distance and sonar distance as a single geometric
+circle. Jammer circles for radar-jam and sonar-jam distances use separate tables
+and are drawn onto the same final surface; overlap is last-writer-wins and
+never ORs into the word mask, so jamming has no authoritative effect beyond
+presentation.
+
+**Established fact:** The sensor bookkeeping phase runs only when more than one
+player is active. When it runs it performs four passes in order: it clears the
+decloak bit and sets friendly bits including the dedicated alias that doubles as
+the underwater visibility exemption, it publishes normal and jammer circles to
+the minimap surfaces only, it scans for cloaked candidates whose distance to any
+enemy is less than or equal to minimum cloak distance and on a hit writes a
+deadline of global tick plus 90 and sets the decloak runtime bit, and it sets
+the seen marker through a four-point line test. The four-point test projects
+world X and Z and a half-height adjusted Y into tile coordinates, checks unsigned
+bounds, and then tests either the byte grid or the word mask according to the
+global mode. Cloaked units are rejected by an early predicate unless the
+decloak bit is set, and no firing path clears cloak — the bounded search found
+no firing decloak. Allied vision is never ORed: the writer ORs only the source
+player's own bit and the reader tests only the local player's bit. Overflow
+projectiles from occupancy are capped as described under damage; the same
+overflow handling applies here.
+
+**Established fact:** The secondary radar-like list is consulted only when the
+primary filtered set is empty and a targeting-upgrade aggregate is present from
+an active allied or same-player unit. If primary candidates existed but all
+failed category or scoring, the secondary list is not retried, and its sensor
+flag name remains a supported inference rather than an established literal.
 
 ## 4. Firing callbacks, costs, reload, and bursts
 

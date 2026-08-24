@@ -257,8 +257,8 @@ func TestDiscoverUnnamedFallback(t *testing.T) {
 	if len(c.Missions) != 2 {
 		t.Fatalf("want 2 missions got %d", len(c.Missions))
 	}
-	if c.Missions[0].Name != "unnamed mission" {
-		t.Fatalf("fallback: want \"unnamed mission\" got %q", c.Missions[0].Name)
+	if c.Missions[0].Name != "Error -- Unnamed Mission" {
+		t.Fatalf("fallback: want \"Error -- Unnamed Mission\" got %q", c.Missions[0].Name)
 	}
 	if c.Missions[1].Name != "Has Name" {
 		t.Fatalf("second name: got %q", c.Missions[1].Name)
@@ -386,7 +386,7 @@ func TestDiscoverFromTestdata(t *testing.T) {
 		if len(c.Missions) != 2 {
 			t.Fatalf("missing-name.tdf: want 2 missions got %d", len(c.Missions))
 		}
-		if c.Missions[0].Name != "unnamed mission" {
+		if c.Missions[0].Name != "Error -- Unnamed Mission" {
 			t.Fatalf("missing-name fallback: got %q", c.Missions[0].Name)
 		}
 	} else {
