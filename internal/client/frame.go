@@ -1,7 +1,6 @@
 package client
 
 import (
-	"kaijuengine.com/engine/assets"
 	"kaijuengine.com/matrix"
 	"kaijuengine.com/rendering"
 
@@ -16,14 +15,8 @@ import (
 // Framebuffer path (verified against ../kaiju/src):
 //  1. Compose into own []uint8 indexed framebuffer at logical size.
 //  2. Convert to RGBA through palette.Tables.Logical→Base at present time only (C7).
-//  3. Upload: create once with rendering.NewTextureFromMemory(key, rgba, w, h,
-//     rendering.TextureFilterNearest); per frame call
-//     device.TextureWritePixels with GPUImageWriteRequest Region
-//     matrix.Vec4i{0,0,w,h}.
-//  4. Draw one fullscreen quad via host.MeshCache quad +
-//     host.MaterialCache().Material(assets.MaterialDefinitionUnlit) instanced
-//     with texture, added via host.Drawings.AddDrawing, under orthographic
-//     camera (host.UICamera), using nearest filtering.
+//  3. Upload through a cached nearest-filtered texture on Kaiju's render
+//     boundary, then present it with one persistent fixed-position UI image.
 func (c *Client) Frame(alpha float32) {
 	// C9: alpha clamped [0,1]; never writes sim state, never calls sim
 	// mutator, never advances clock (I6, PLAN_03 C15/C16).
@@ -46,7 +39,7 @@ func (c *Client) Frame(alpha float32) {
 
 	// Handle negotiated size changes (the single Kaiju path preserves the
 	// concept). If the window was resized, reallocate buffers and discard the
-	// texture/mesh so they are recreated at the new size.
+	// texture so it is recreated at the new size and rebound to the image.
 	w := c.host.Window.Width()
 	h := c.host.Window.Height()
 	if w <= 0 || h <= 0 {
@@ -59,8 +52,6 @@ func (c *Client) Frame(alpha float32) {
 		c.indexed = make([]uint8, w*h)
 		c.rgba = make([]byte, w*h*4)
 		c.texture = nil
-		c.mesh = nil
-		c.transform.SetScale(matrix.NewVec3(float32(w), float32(h), 1))
 	}
 
 	// C9: read snapshot. The call is presentation-only; the sim never reads
@@ -89,23 +80,24 @@ func (c *Client) Frame(alpha float32) {
 	if c.texture == nil {
 		return
 	}
-	device := c.host.Window.GpuInstance.PrimaryDevice()
-	if device == nil {
-		return
-	}
-	// Ensure the texture is realized on the GPU before the first write.
-	if !c.texture.RenderId.IsValid() {
-		c.texture.DelayedCreate(device)
-	}
+	texture := c.texture
 	req := rendering.GPUImageWriteRequest{
 		Region: matrix.Vec4i{0, 0, int32(c.width), int32(c.height)},
 		Pixels: c.rgba,
 	}
-	c.texture.WritePixels(device, []rendering.GPUImageWriteRequest{req})
-
-	// Draw one fullscreen quad. The host owns the Kaiju update boundary but
-	// never mutates sim state itself (I6).
-	c.drawQuad()
+	// Kaiju's updater workers are concurrent. Queue Vulkan work for the
+	// locked render boundary after updates join, keeping it off a worker OS
+	// thread on macOS/MoltenVK.
+	c.host.RunBeforeRender(func() {
+		if texture == nil || !texture.RenderId.IsValid() || c.host.Window == nil ||
+			c.host.Window.GpuInstance == nil || !c.host.Window.GpuInstance.IsValid() {
+			return
+		}
+		device := c.host.Window.GpuInstance.PrimaryDevice()
+		if device != nil {
+			texture.WritePixels(device, []rendering.GPUImageWriteRequest{req})
+		}
+	})
 }
 
 // composeIndexed fills c.indexed at the logical size. It demonstrates a
@@ -245,31 +237,4 @@ func (c *Client) convertIndexedToRGBA() {
 			c.rgba[i*4+3] = 255
 		}
 	}
-}
-
-// drawQuad adds one fullscreen quad to host.Drawings for this frame. The quad
-// uses the host's MeshCache, MaterialCache().Material(assets.MaterialDefinitionUnlit)
-// instanced with the framebuffer texture, under the orthographic UICamera,
-// with nearest filtering. The quad's transform scales to the negotiated size
-// so it exactly covers the viewport.
-func (c *Client) drawQuad() {
-	if c.host == nil || c.texture == nil || c.mesh == nil || c.shaderData == nil {
-		return
-	}
-	// This is a presentation-only framebuffer, so it must not use the lit
-	// material's shadow-map bindings. The unlit material has exactly the one
-	// sampler supplied here and otherwise uses the same standard shader data.
-	mat, err := c.host.MaterialCache().Material(assets.MaterialDefinitionUnlit)
-	if err != nil {
-		return
-	}
-	inst := mat.CreateInstance([]*rendering.Texture{c.texture})
-	drawing := rendering.Drawing{
-		Material:   inst,
-		Mesh:       c.mesh,
-		ShaderData: c.shaderData,
-		Transform:  &c.transform,
-		Layer:      rendering.RenderLayerUI,
-	}
-	c.host.Drawings.AddDrawing(drawing)
 }

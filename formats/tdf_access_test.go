@@ -113,5 +113,3 @@ func TestTDFIdenticalSpellingLastWins(t *testing.T) {
 		t.Fatalf("FirstValue(k) = %q, want 2 (last write wins)", v)
 	}
 }
-
-

@@ -100,18 +100,28 @@ func TestCRTBoundOneStillDraws(t *testing.T) {
 	}
 }
 
-// TestCRTWideBoundConcatenates locks the chunk-concatenation helper that DOES
-// belong to the CRT stream [01 §7.2]: 15 bits per draw, so a 16-bit bound
-// needs two draws.
+// TestCRTWideBoundConcatenates locks the chunk-concatenation helper of
+// [01 §7.2], followed literally: mask and result both start at 0x7FFF, so a
+// bound of 0x10000 consumes exactly ONE draw and the sample's top bits come
+// from that constant (see the TODO(question) on CRT.Uint32n for why this
+// reading was chosen over seeding result from a fresh draw).
 func TestCRTWideBoundConcatenates(t *testing.T) {
 	stream := NewCRT(1)
 	got := stream.Uint32n(0x10000)
-	if stream.Draws() != 2 {
-		t.Fatalf("Uint32n(0x10000) consumed %d draws, want 2", stream.Draws())
+	if stream.Draws() != 1 {
+		t.Fatalf("Uint32n(0x10000) consumed %d draws, want 1", stream.Draws())
 	}
-	// Reproduce by hand from the known vector: (41 << 15 | 18467) % 0x10000.
-	if want := uint32((41<<15 | 18467) % 0x10000); got != want {
+	// Seed 1: first draw is 41 [01 §7.2]. Literal loop:
+	// result = (0x7FFF << 15 | 41) % 0x10000.
+	const firstDraw = uint32(41)
+	if want := ((uint32(0x7FFF) << 15) | firstDraw) % 0x10000; got != want {
 		t.Fatalf("Uint32n(0x10000) = %d, want %d", got, want)
+	}
+	// A wider bound needs a second iteration and a second draw.
+	stream = NewCRT(1)
+	_ = stream.Uint32n(0x40000000)
+	if stream.Draws() != 2 {
+		t.Fatalf("Uint32n(0x40000000) consumed %d draws, want 2", stream.Draws())
 	}
 }
 

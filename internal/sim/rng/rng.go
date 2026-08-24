@@ -112,11 +112,20 @@ func (c *CRT) Rand() int32 {
 // its draw and returns zero. Skipping that draw shifts every later CRT
 // consumer by one.
 //
-// Bounds above 32,767 use the chunk-concatenation loop of [01 §7.2]: starting
-// with mask and result both holding a fresh 15-bit draw, while the mask is
-// below the needed bound, shift both left by 15 bits, OR the mask with 0x7FFF
-// again, and OR another fresh draw into the result; the final result modulo
-// the bound is the sample.
+// Bounds above 32,767 use the chunk-concatenation loop of [01 §7.2], followed
+// literally: mask and result both start at 0x7FFF; while the mask is below
+// the needed bound, shift both left by 15 bits, OR the mask with 0x7FFF again,
+// and OR another fresh draw into the result; the final result modulo the
+// bound is the sample. One draw is consumed per iteration.
+//
+// TODO(question): the merged pre-review code instead seeded result from a
+// fresh draw (one extra draw per call, different value). The research text's
+// "starting with mask and result both 0x7FFF" is explicit about result's
+// initialization, so this implementation follows the letter; if
+// disassembly evidence ever shows an initial draw, change exactly this loop
+// and its vectors. No stock content draws a CRT bound above 32767 today
+// (briefing wind span+1 tops out at 2000), so nothing observable hinges on
+// it until a consumer appears [06 §6.5].
 //
 // Divergence (I11): a bound of zero would fault on retail's modulo. We consume
 // the draw — retail evaluates rand() before the divide — and return zero
@@ -129,8 +138,8 @@ func (c *CRT) Uint32n(bound uint32) uint32 {
 		}
 		return v % bound
 	}
-	result := uint32(c.Rand())
-	var mask uint32 = 0x7FFF
+	result := uint32(0x7FFF)
+	mask := uint32(0x7FFF)
 	for mask < bound {
 		result = (result << 15) | uint32(c.Rand())
 		mask = (mask << 15) | 0x7FFF

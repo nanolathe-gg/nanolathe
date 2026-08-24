@@ -33,7 +33,7 @@ func TestFormatCoverage(t *testing.T) {
 	failures := map[string][]string{}
 	note := func(ext string, path string, err error) {
 		if err != nil {
-			if len(failures[ext]) < 5 {
+			if len(failures[ext]) < 10 {
 				failures[ext] = append(failures[ext], fmt.Sprintf("%s: %v", path, err))
 			}
 			return
@@ -52,7 +52,9 @@ func TestFormatCoverage(t *testing.T) {
 		}
 		ext := strings.ToLower(filepath.Ext(record.LogicalPath))
 		switch ext {
-		case ".tdf", ".fbi", ".ota", ".gui", ".pal", ".tnt", ".3do", ".gaf", ".pcx", ".fnt":
+		case ".tdf", ".fbi", ".ota", ".gui", ".pal", ".tnt", ".3do", ".gaf", ".pcx", ".fnt", ".wav":
+			// .cob joins this walk when formats gains a COB loader (phase 6
+			// owns it); there is nothing to exercise today.
 		default:
 			continue
 		}
@@ -78,6 +80,11 @@ func TestFormatCoverage(t *testing.T) {
 			_, err = formats.LoadPCX(data)
 		case ".fnt":
 			_, err = formats.LoadFNT(data)
+		case ".wav":
+			// [fmt wav]: two stock files are not RIFF — HONK.WAV is raw
+			// 8-bit mono PCM and SING.WAV uses the DIGI/HSHD/SDAT container.
+			// LoadAudio accepts all three containers as retail must.
+			_, err = formats.LoadAudio(data)
 		}
 		note(ext, record.LogicalPath, err)
 	}

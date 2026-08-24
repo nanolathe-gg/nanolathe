@@ -19,6 +19,8 @@
 package client
 
 import (
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -27,9 +29,8 @@ import (
 	"kaijuengine.com/bootstrap"
 	"kaijuengine.com/engine"
 	"kaijuengine.com/engine/assets"
-	"kaijuengine.com/matrix"
+	"kaijuengine.com/engine/ui"
 	"kaijuengine.com/platform/hid"
-	"kaijuengine.com/registry/shader_data_registry"
 	"kaijuengine.com/rendering"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -106,10 +107,9 @@ type Client struct {
 	cam     *camera.Camera
 	fnt     *formats.FNT
 
-	texture    *rendering.Texture
-	mesh       *rendering.Mesh
-	transform  matrix.Transform
-	shaderData rendering.DrawInstance
+	texture   *rendering.Texture
+	uiManager *ui.Manager
+	image     *ui.Image
 
 	mu     sync.Mutex
 	events []Event
@@ -154,10 +154,6 @@ func New(opts Options) (*Client, error) {
 		c.base[i][3] = 255
 		c.logical[i] = byte(i)
 	}
-	c.transform.SetupRawTransform()
-	c.transform.SetPosition(matrix.NewVec3(0, 0, 0))
-	c.transform.SetScale(matrix.NewVec3(float32(w), float32(h), 1))
-
 	// Headless returns immediately with no window and no display (C11).
 	if opts.Headless {
 		return c, nil
@@ -197,11 +193,6 @@ func (c *Client) Host() *engine.Host { return c.host }
 // is required to preserve determinism (I1/I6).
 func (c *Client) Launch(host *engine.Host) {
 	c.host = host
-	// Re-initialize transform with the host workgroup so dirty tracking uses
-	// the correct concurrent workgroup.
-	c.transform.Initialize(host.WorkGroup())
-	c.transform.SetPosition(matrix.NewVec3(0, 0, 0))
-	c.transform.SetScale(matrix.NewVec3(float32(c.width), float32(c.height), 1))
 
 	// Ensure an orthographic UI camera covers the negotiated size. The host
 	// already creates one at the negotiated dimensions, but we keep the size
@@ -218,8 +209,6 @@ func (c *Client) Launch(host *engine.Host) {
 				c.indexed = make([]uint8, c.width*c.height)
 				c.rgba = make([]byte, c.width*c.height*4)
 				c.texture = nil
-				c.mesh = nil
-				c.transform.SetScale(matrix.NewVec3(w, h, 1))
 			}
 		}
 		if c.opts.Title != "" {
@@ -227,9 +216,12 @@ func (c *Client) Launch(host *engine.Host) {
 		}
 	}
 
-	// Prepare the single framebuffer texture and quad. Creation is done here
+	c.uiManager = &ui.Manager{}
+	c.uiManager.Init(host)
+
+	// Prepare the single framebuffer texture and image. Creation is done here
 	// rather than in Frame so the per-frame path only does compose→convert→
-	// upload→draw. If creation fails the per-frame upload will recreate it.
+	// upload. If creation fails the per-frame upload will recreate it.
 	c.ensureResources()
 
 	// The sole updater (C12). It owns the Kaiju update boundary but never
@@ -386,33 +378,38 @@ func (c *Client) Run(platformState any) {
 	bootstrap.Main(c, platformState)
 }
 
-// ensureResources creates the framebuffer texture, quad mesh, and shader data
+// ensureResources creates the framebuffer texture and persistent UI image
 // when not yet present and the host is ready. It is called once from Launch
 // and lazily from Frame if a resize discarded the texture.
 func (c *Client) ensureResources() {
-	if c.host == nil || c.host.Window == nil {
-		return
-	}
-	device := c.host.Window.GpuInstance.PrimaryDevice()
-	if device == nil {
+	if c.host == nil || c.host.Window == nil || c.uiManager == nil {
 		return
 	}
 	if c.texture == nil {
-		tex, err := rendering.NewTextureFromMemory("framebuffer", c.rgba, c.width, c.height, rendering.TextureFilterNearest)
+		key := fmt.Sprintf("nanolathe.framebuffer.%dx%d", c.width, c.height)
+		tex, err := c.host.TextureCache().InsertRawTexture(key, c.rgba, c.width, c.height, rendering.TextureFilterNearest)
 		if err != nil {
+			slog.Error("create framebuffer texture", "error", err)
 			return
 		}
-		// Immediate upload of the initial clear; DelayedCreate moves pendingData to GPU.
-		tex.DelayedCreate(device)
 		c.texture = tex
-	}
-	if c.mesh == nil {
-		mc := c.host.MeshCache()
-		if mc != nil {
-			c.mesh = rendering.NewMeshQuad(mc)
+		if c.image != nil {
+			c.image.SetTexture(tex)
 		}
 	}
-	if c.shaderData == nil {
-		c.shaderData = shader_data_registry.Create("basic")
+	if c.image == nil {
+		mat, err := c.host.MaterialCache().Material(assets.MaterialDefinitionUITransparent)
+		if err != nil {
+			slog.Error("load framebuffer UI material", "error", err)
+			return
+		}
+		c.image = c.uiManager.Add().ToImage()
+		c.image.Init(c.texture)
+		c.image.Base().ToPanel().SetMaterial(mat)
+		c.image.Base().Layout().SetPositioning(ui.PositioningFixed)
+		c.image.Base().Layout().SetZ(1)
 	}
+	layout := c.image.Base().Layout()
+	layout.Scale(float32(c.width), float32(c.height))
+	layout.SetOffset(0, 0)
 }

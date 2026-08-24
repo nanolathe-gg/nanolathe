@@ -32,9 +32,15 @@ func Cos(a Angle) int32 {
 }
 
 // MulRound multiplies two scaled trig values and rounds to nearest before
-// truncation [04 §5.1]. The scale is 1<<13 (8192) so half is 1<<12 (4096).
-// Retail adds half then arithmetic-shifts [04 §5.1] — (a*b+4096)>>13 — which
-// is reproduced here. The int64 intermediate avoids overflow.
+// truncation [04 §5.1]. The scale is 1<<13 (8192), so rounding to nearest is
+// implemented here as add-half-then-arithmetic-shift: (a*b + 4096) >> 13,
+// with an int64 intermediate against overflow.
+//
+// TODO(question): [04 §5.1] states "products round to nearest before
+// truncation" without naming the machine sequence; the add-half form is the
+// standard fixed-point reading and is what ships here. When phase 6 wires the
+// first real consumers (RockUnit/HitByWeapon arguments, flight brake shaping),
+// confirm the negative-tie behavior matches before building on it.
 func MulRound(a, b int32) int32 {
 	return int32((int64(a)*int64(b) + 4096) >> 13)
 }
