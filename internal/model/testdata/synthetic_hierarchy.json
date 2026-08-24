@@ -1,0 +1,10 @@
+{
+  "description": "Synthetic hierarchy for TestComposeTranslationSumming [03 §2.4] C21",
+  "root": "base",
+  "pieces": [
+    {"name": "base", "parent": -1, "translate": [0, 0, 0]},
+    {"name": "turret", "parent": 0, "translate": [65536, 131072, 196608], "scriptTrans": [32768, -65536, 16384]}
+  ],
+  "expectedOrigin": [98304, 65536, 212992],
+  "notes": "Authored, not retail. Verifies per-node translation sum [03 §2.4] C21."
+}

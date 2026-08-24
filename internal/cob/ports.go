@@ -1,0 +1,835 @@
+// Package cob — engine ports and callbacks [04 §4.4] [04 §5] [GAP T15] [03 §2.4].
+//
+// Contracts C15–C19, C25, C26 live here. This file owns the verbatim port
+// table (1–20), the callback arithmetic that uses fixed-point trig (RockUnit /
+// HitByWeapon / Killed severity / SetMaxReloadTime / Query seeds), the
+// emit-sfx vocabulary and its presentation sink, the MoveRate tier classifier,
+// the aim-ready handshake, the same-tick window scaffolding, and the normal-
+// kind damage packet ordering of C26. Model draw trig remains floating point
+// per [03 §2.4] and is not used for callback arguments, which go through the
+// 512-entry table via numeric.Sin/Cos and rounded products [04 §5.1] C25 (I2).
+package cob
+
+import (
+	"math"
+
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+)
+
+// ---------------------------------------------------------------------------
+// C15 — engine ports 1–20 [04 §4.4]
+// ---------------------------------------------------------------------------
+
+// PortInfo is one entry of the verbatim port table [04 §4.4] C15.
+// The switch over 1–20 is the retail dispatch; an id outside 1..20 reads zero
+// [04 §4.4] and a write to an id with no write arm only sets the script-
+// touched marker. Every write arm sets that marker in addition to its effect
+// [04 §4.4].
+type PortInfo struct {
+	ID        Port
+	Name      string
+	ReadDesc  string
+	WriteDesc string
+}
+
+// PortTable is the verbatim table of 20 engine ports [04 §4.4] C15.
+// Names are the plan/report spellings; read/write columns mirror the spec
+// prose without paraphrase so reviewers can spot-check line-by-line (I10).
+var PortTable = []PortInfo{
+	{1, "activation", "the unit's activation bit", "drives the activation edge machine, which fires the Activate and Deactivate callbacks re-entrantly [04 §4.4]"},
+
+	{2, "standing move orders", "a two-bit field, values 0 to 3 [04 §4.4]", "ignored [04 §4.4]"},
+
+	{3, "standing fire orders", "a two-bit field, values 0 to 3 [04 §4.4]", "ignored [04 §4.4]"},
+
+	{4, "health", "current health times 100 divided by the definition's maximum damage, as an unsigned division, giving 0 to 100 [04 §4.4]", "ignored [04 §4.4]"},
+
+	{5, "in build stance", "a flag bit [04 §4.4]", "sets the bit from the low bit of the value [04 §4.4]"},
+
+	{6, "busy", "a flag bit [04 §4.4]", "sets the bit from the low bit of the value [04 §4.4]"},
+
+	{7, "piece position XZ", "the piece's world transform packed with Z in the high half and X in the low half [04 §4.4]", "— [04 §4.4]"},
+
+	{8, "piece position Y", "the piece's world transform Y [04 §4.4]", "— [04 §4.4]"},
+
+	{9, "unit position XZ", "another unit's packed X and Z, selected by identifier through the unit table, gated on that unit being alive; identifier zero or a dead unit reads zero [04 §4.4]", "— [04 §4.4]"},
+
+	{10, "unit position Y", "the same unit's Y, same gates [04 §4.4]", "— [04 §4.4]"},
+
+	{11, "unit height", "the own definition's height value; takes no unit argument [04 §4.4]", "— [04 §4.4]"},
+
+	{12, "relative bearing", "unpacks the argument into two signed 16.16 halves, takes the arc tangent, then subtracts the unit's own heading, truncated to 16 bits [04 §4.4]", "— [04 §4.4]"},
+
+	{13, "distance", "the hypotenuse of the unpacked halves, truncated [04 §4.4]", "— [04 §4.4]"},
+
+	{14, "arc tangent", "the arc tangent of the two arguments, low 16 bits [04 §4.4]", "— [04 §4.4]"},
+
+	{15, "hypotenuse", "the hypotenuse of the two arguments, truncated [04 §4.4]", "— [04 §4.4]"},
+
+	{16, "ground height", "the world height query at the packed coordinates, shifted into 16.16 [04 §4.4]", "— [04 §4.4]"},
+
+	{17, "build percent left", "from the remaining-build fraction f: zero when f is exactly zero, otherwise 1 - trunc(f * -99.0) [04 §4.4]", "ignored [04 §4.4]"},
+
+	{18, "yard open", "a flag bit [04 §4.4]", "runs the yard-occupancy update [04 §4.4]"},
+
+	{19, "bugger off", "a plain flag bit, not a queued request [04 §4.4]", "sets the bit from the low bit of the value [04 §4.4]"},
+
+	{20, "armored", "a flag bit [04 §4.4]", "drives the armor edge event [04 §4.4]"},
+} // [04 §4.4] C15 exactly 20
+
+// IsEnginePort reports whether id is a valid engine port 1..20 [04 §4.4] C15.
+// Outside that range reads zero and writes only set the touched marker.
+func IsEnginePort(id int32) bool { return id >= 1 && id <= 20 }
+
+// ---------------------------------------------------------------------------
+// C15/C25 — callback arithmetic helpers
+// ---------------------------------------------------------------------------
+
+// trigScalar multiplies a table-scaled trig value (8192 scale, from
+// numeric.Sin/Cos [04 §5.1]) by an unscaled integer scalar and rounds to
+// nearest before truncation. The scale is 1<<13, so rounding adds 4096 then
+// arithmetic shifts right 13 [04 §5.1] C25 (I2).
+//
+// TODO(question): retail's rounding for negative products is not closed; this
+// helper adds half unconditionally (matching numeric.MulRound) so negative
+// values bias by +0.5. The spec states "products round to nearest before
+// truncation" without naming the negative tie path; validate against the retail
+// -cos*800 and HitByWeapon 400 sequences before depending on negative angles.
+func trigScalar(tableVal, scalar int32) int32 {
+	return int32((int64(tableVal)*int64(scalar) + 4096) >> 13)
+}
+
+// RockUnitArgs computes the two arguments for the RockUnit callback [GAP T15]
+// [04 §5.3] C15/C25: (-cos(rel)*800, -sin(rel)*800) where
+// rel = (int16)(barrelDir - unitHeading) evaluated through the shared 512-
+// entry table with round-to-nearest products. Both signs are negative [04
+// §5.3] and there is no completion receiver [GAP T15]. Model draw trig is
+// separate float path [03 §2.4] and is not used here (C25).
+func RockUnitArgs(rel int16) (int32, int32) {
+	// rel as signed 16-bit circular angle, widened to uint16 for the 65536
+	// domain, then to Angle for numeric table lookup [04 §5.1] C25.
+	a := numeric.Angle(uint16(rel))
+	cosVal := numeric.Cos(a)
+	sinVal := numeric.Sin(a)
+	// Products round to nearest before truncation [04 §5.1] C25.
+	c := trigScalar(cosVal, 800)
+	s := trigScalar(sinVal, 800)
+	return -c, -s // [GAP T15] both negative
+}
+
+// HitByWeaponArgs computes the two arguments for HitByWeapon [04 §5.1]
+// [GAP T15] C15/C25: (cos(dir)*400, sin(dir)*400) where dir is the packet
+// direction byte shifted left 8 into the 65536 domain [04 §5.1] C26. Products
+// round to nearest before truncation [04 §5.1] C25.
+func HitByWeaponArgs(dirByte uint8) (int32, int32) {
+	angle := numeric.Angle(uint16(dirByte) << 8) // byte shifted left 8 [04 §5.1] C26
+	cosVal := numeric.Cos(angle)
+	sinVal := numeric.Sin(angle)
+	return trigScalar(cosVal, 400), trigScalar(sinVal, 400) // [04 §5.1] C25
+}
+
+// KilledSeverity computes the local Killed severity input for the synchronous
+// query [GAP T15] C15 [04 §5.1]:
+//
+//	severity = ((-health*100)/maxHealth + prior) / 2 // unsigned divide
+//	clamp(severity, 1, 100)
+//
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// 30-tick window (the tick samples clamp(health*100/maxHealth,0,100) into
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// unsigned; for the positive domain it coincides with signed trunc toward zero
+// [01 §8] I3. The caller must only invoke this when the query is actually taken
+// (cause overrides bypass it with forced 0) [04 §5.1].
+func KilledSeverity(health, maxHealth int32, priorSample uint8) int32 {
+	if maxHealth <= 0 {
+		return 1 // TODO(question): maxHealth zero guard is untraced; clamp to minimum rather than fault.
+	}
+	negHealth := -health // health <=0 on normal lethal path; -health >=0
+	if negHealth < 0 {
+		negHealth = 0 // positive health would give negative severity; caller should have bypassed, but clamp path keeps it.
+	}
+	tmp := (negHealth * 100) / maxHealth // unsigned divide for positive domain [04 §5.1]
+	tmp += int32(priorSample)            // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	tmp /= 2
+	if tmp < 1 {
+		tmp = 1
+	}
+	if tmp > 100 {
+		tmp = 100
+	}
+	return tmp // [GAP T15] C15
+}
+
+// HealthPercent is the port-4 and post-hit percentage read [04 §4.4] [04 §5.1]
+// C15/C26: current health*100 / maxHealth as an unsigned division giving
+// 0..100, clamped. It is the computation underlying port 4 (health) and the
+// TakeDamage argument after health subtraction [04 §5.1] C26.
+func HealthPercent(health, maxHealth int32) int32 {
+	if maxHealth <= 0 {
+		return 0 // TODO(question): zero max guard untraced.
+	}
+	// Unsigned division note [04 §4.4] port 4 and [04 §5.1] TakeDamage.
+	// For the positive health path this is signed trunc toward zero [01 §8] I3.
+	v := (int64(health) * 100) / int64(maxHealth)
+	if v < 0 {
+		v = 0
+	}
+	if v > 100 {
+		v = 100
+	}
+	return int32(v) // [04 §4.4] port 4, [04 §5.1] C26
+}
+
+// TakeDamagePercent is the same as HealthPercent but named for the C26 post-hit
+// call site [04 §5.1] C26: clamp(health*100/maxHealth, 0, 100) as unsigned
+// division after health was already subtracted.
+func TakeDamagePercent(health, maxHealth int32) int32 {
+	return HealthPercent(health, maxHealth) // [04 §5.1] C26
+}
+
+// MaxReloadMillis converts the compiled maxReload ticks to the milliseconds
+// reported to SetMaxReloadTime [GAP T15] C15: trunc(maxReload*1000/30) [01 §8] I3
+// with truncation toward zero. The scan is over all three weapon slots [04
+// §5.3] and is issued after Create so it lands outside Create's own immediate
+// drain [04 §5.3].
+func MaxReloadMillis(maxReloadTicks int32) int32 {
+	// trunc(maxReload * 1000 / 30) [GAP T15] C15 (I3 trunc toward zero).
+	return int32((int64(maxReloadTicks) * 1000) / 30)
+}
+
+// QueryTransportSeed is the synchronous four-output seed for QueryTransport
+// [04 §5.3] [GAP T15] C15: [-1, 0, 0, 0]. Remaining outputs default 0 and are
+// excluded from copy-back; a missing script leaves -1, the root-piece fallback
+// [04 §5.3].
+func QueryTransportSeed() [4]int32 { return [4]int32{-1, 0, 0, 0} } // [GAP T15] C15
+
+// QueryLandingPadSeed is the synchronous four-output seed for QueryLandingPad
+// [04 §5.3] [GAP T15] C15: all -1. Candidates tried in order 0..3, first free
+// wins. Some paths query carrier first then transported unit [04 §5.3].
+func QueryLandingPadSeed() [4]int32 { return [4]int32{-1, -1, -1, -1} } // [GAP T15] C15
+
+// ---------------------------------------------------------------------------
+// C16 — aim-ready handshake [GAP T15]
+// ---------------------------------------------------------------------------
+
+// AimSlot tracks the aim-ready handshake for one weapon slot [GAP T15] C16
+// [04 §5.3]. The producer clears the aim state to 0, stores commanded angles,
+// starts Aim* with the issue bit, and the completion receiver grants aim-ready
+// ONLY on a nonzero script return. Absent script, exhausted pool (delivery 0),
+// or zero return leave that weapon permanently unable to fire [GAP T15] C16.
+type AimSlot struct {
+	IssueBit bool // weapon-slot issue bit; start sets, TargetCleared or fail can clear [04 §5.3]
+	Ready    bool // granted only on nonzero Aim* return [GAP T15] C16
+}
+
+// StartAim arms the issue bit for an Aim* start. The caller cleared aim state
+// beforehand and stored heading/pitch [04 §5.3]. Both start forms precede the
+// network event {u16 unitID, u16 slot, u8 arity=2, heading, pitch} behind a
+// global option bit and set the issue bit [04 §5.3].
+func (s *AimSlot) StartAim() {
+	s.IssueBit = true
+	// Ready stays false until completion receiver runs [GAP T15] C16.
+}
+
+// CompleteAim is the Aim* completion receiver [04 §5.3] [GAP T15] C16.
+// It is invoked ONLY on an explicit script return, passing the popped return
+// value; signal termination and abnormal termination never invoke it [04 §5.3].
+// A zero delivery has no effect, while any NONZERO delivery marks the weapon
+// aim-ready [GAP T15] C16. Returns whether aim-ready is now true.
+func (s *AimSlot) CompleteAim(returnValue int32) bool {
+	if returnValue != 0 {
+		s.Ready = true
+	}
+	// else no effect [GAP T15] C16: absent/exhausted (delivery 0) or authored
+	// zero leave weapon permanently unable to fire.
+	return s.Ready
+}
+
+// CanFire reports whether this slot may fire. Issue alone authorizes nothing;
+// the fire path additionally consults a per-weapon permission function behind
+// the issue bit [04 §5.3] [GAP T15] C16. Here we model the aim-ready gate only;
+// the permission function is TODO(question) in the combat package.
+func (s *AimSlot) CanFire() bool { return s.Ready }
+
+// AimDeliveryZero is the delivery value used when the Aim* starter fails due
+// to absent name or thread-pool exhaustion: it delivers 0 [GAP T15] C16 [04 §4.3].
+// The caller must NOT mark aim-ready; the thread pool exhaust path retains
+// arguments and does NOT invoke the completion receiver.
+const AimDeliveryZero int32 = 0 // [GAP T15] C16
+
+// ---------------------------------------------------------------------------
+// C17 — same-tick windows scaffolding [GAP T15] (I7)
+// ---------------------------------------------------------------------------
+
+// WindowPhase enumerates the same-tick window order [GAP T15] C17 (I7):
+// unit update (queues SetDirection/SetSpeed) → weapon update (queues
+// TargetCleared, Aim*, Fire*, RockUnit) → normal COB drain (delta 1, eight
+// thread slots then one piece pass) → orders/build work → movement integration
+// (immediate MoveRate, setSFXoccupy) → slot-end death handling. Deferred
+// callbacks produced before the normal pass run in the same visit; those after
+// normally wait, except an immediate wake-flag start does an all-slot delta-0
+// drain that can execute them earlier [GAP T15] C17.
+type WindowPhase int
+
+const (
+	PhaseUnitUpdate     WindowPhase = 1 // queues SetDirection/SetSpeed [GAP T15] C17
+	PhaseWeaponUpdate   WindowPhase = 2 // queues TargetCleared/Aim*/Fire*/RockUnit [GAP T15] C17
+	PhaseNormalDrain    WindowPhase = 3 // normal COB drain delta 1, 8 slots then one piece pass [04 §4.6] C17
+	PhaseOrdersBuild    WindowPhase = 4 // orders and build work [GAP T15] C17
+	PhaseMovementIntegr WindowPhase = 5 // movement integration immediate MoveRate/setSFXoccupy [GAP T15] C17
+	PhaseSlotEndDeath   WindowPhase = 6 // slot-end death handling synchronous Killed query [GAP T15] C17
+)
+
+// TickWindowOrder returns the in-tick order as phase numbers [GAP T15] C17 (I7).
+// Deterministic iteration: caller walks the returned slice in order (I1).
+func TickWindowOrder() []WindowPhase {
+	return []WindowPhase{
+		PhaseUnitUpdate,
+		PhaseWeaponUpdate,
+		PhaseNormalDrain,
+		PhaseOrdersBuild,
+		PhaseMovementIntegr,
+		PhaseSlotEndDeath,
+	}
+}
+
+// CallbackKind identifies an engine→COB callback for window bookkeeping
+// [GAP T15] C17. Names mirror the script callbacks; the kind alone does not
+// authoritatively order draws — call order is behavior (I4).
+type CallbackKind int
+
+const (
+	CallbackSetDirection  CallbackKind = 1 // unit update queued [GAP T15] C17
+	CallbackSetSpeed      CallbackKind = 2 // unit update queued [GAP T15] C17
+	CallbackTargetCleared CallbackKind = 3 // weapon update queued [GAP T15] C17
+	CallbackAimPrimary    CallbackKind = 4 // weapon update queued [GAP T15] C17
+	CallbackAimSecondary  CallbackKind = 5
+	CallbackAimTertiary   CallbackKind = 6
+	CallbackFirePrimary   CallbackKind = 7 // weapon update queued [GAP T15] C17
+	CallbackFireSecondary CallbackKind = 8
+	CallbackFireTertiary  CallbackKind = 9
+	CallbackRockUnit      CallbackKind = 10 // weapon update queued [GAP T15] C17
+
+	CallbackStartMoving  CallbackKind = 11 // movement integration immediate wake-flag [GAP T15] C17
+	CallbackStopMoving   CallbackKind = 12
+	CallbackMoveRate1    CallbackKind = 13 // immediate wake-flag tiers [GAP T15] C18
+	CallbackMoveRate2    CallbackKind = 14
+	CallbackMoveRate3    CallbackKind = 15
+	CallbackSetSFXoccupy CallbackKind = 16 // movement integration immediate [GAP T15] C17
+
+	CallbackHitByWeapon CallbackKind = 17 // damage path async [04 §5.1] C26
+	CallbackTakeDamage  CallbackKind = 18
+	CallbackKilled      CallbackKind = 19 // slot-end sync [GAP T15] C17
+)
+
+// QueuedCallback is a deferred or immediate engine→COB callback pending drain.
+// Deferred callbacks produced before the normal pass run in the same visit;
+// those produced after normally wait for the next visit, except that any later
+// immediate-start callback on the same VM performs an all-slot delta-0 drain
+// that can execute it earlier [GAP T15] C17.
+type QueuedCallback struct {
+	Kind     CallbackKind
+	Script   string // script name (e.g., "RockUnit") for VM.Start lookup
+	Args     []int32
+	Deferred bool // true if enqueued before NormalDrain, runs same visit
+}
+
+// DeferredQueue holds callbacks between windows for one unit tick. It is the
+// minimal scaffolding this contract needs; the driving subsystems (weapons
+// phase 9, movement phase 7/9) call EnqueueDeferred/EnqueueImmediate with
+// explicit TODO markers where they arrive.
+type DeferredQueue struct {
+	Pending []QueuedCallback
+}
+
+// EnqueueDeferred queues a callback that will run during the next normal drain
+// if queued before that drain, else will wait until the following tick unless an
+// immediate drain barrier runs [GAP T15] C17.
+//
+// TODO(question): weapons package (phase 9) will call this for TargetCleared /
+// Aim* / Fire* / RockUnit during weapon update (PhaseWeaponUpdate) before the
+// normal drain so they run same visit. Movement callers must NOT use this.
+func (q *DeferredQueue) EnqueueDeferred(cb QueuedCallback) {
+	cb.Deferred = true
+	q.Pending = append(q.Pending, cb)
+}
+
+// EnqueueImmediate records an immediate wake-flag callback such as MoveRateN or
+// setSFXoccupy issued from movement integration [GAP T15] C17/C18. Such starts
+// use the immediate drain barrier (all eight slots at delta 0 plus one piece
+// pass) so the StartMoving drain forms a barrier between it and the MoveRateN
+// that follows [GAP T15] C18.
+//
+// TODO(question): movement package (phase 7/9) will call this for StartMoving
+// then MoveRateN and setSFXoccupy. The barrier is StartWithImmediateBarrier
+// below, which issues a delta-0 drain after the first start.
+func (q *DeferredQueue) EnqueueImmediate(cb QueuedCallback) {
+	cb.Deferred = false
+	q.Pending = append(q.Pending, cb)
+}
+
+// DrainNormal simulates the normal COB drain window [04 §4.6] [GAP T15] C17: it
+// drains all deferred callbacks that were queued before this call in their
+// enqueue order, then clears them, then runs the VM piece pass. In a real VM
+// this is vm.Drain(1) after enqueuing; this queue version models the ordering
+// guarantee without needing a live VM so tests stay asset-free.
+//
+// The VM-driving version is vm.Drain(1) which runs eight slots in fixed order
+// 0..7 then one piece interpolation pass [04 §4.2] [04 §4.6] C13. Deferred
+// callbacks produced before that drain run in that same visit [GAP T15] C17.
+func (q *DeferredQueue) DrainNormal(startVM func(cb QueuedCallback) bool) {
+	remaining := q.Pending[:0]
+	for _, cb := range q.Pending {
+		if !cb.Deferred {
+			remaining = append(remaining, cb)
+			continue
+		}
+		// Attempt to start; if VM pool exhausted, the starter can fail separately
+		// per [04 §4.3] C14 — deferred HitByWeapon/TakeDamage starters fail
+		// independently [04 §5.1] C26. We keep the VM result but do not requeue.
+		if startVM != nil {
+			startVM(cb)
+		}
+	}
+	q.Pending = remaining
+	// TODO(question): after the eight thread slots, one piece pass runs [04 §4.6]
+	// C13. The VM implements it; this queue stub does not interpolate pieces.
+}
+
+// StartWithImmediateBarrier starts a script on vm for an immediate wake-flag
+// callback and performs the all-slot delta-0 barrier drain that retail issues
+// between StartMoving and MoveRateN [GAP T15] C18. The barrier runs every slot
+// at delta 0 plus one piece pass, so a deferred callback queued earlier but not
+// yet drained can also be executed earlier than the normal pass [GAP T15] C17.
+// The caller typically does:
+//
+//	StartWithImmediateBarrier(vm, "StartMoving", nil)
+//	StartWithImmediateBarrier(vm, "MoveRate2", nil)
+//
+// Returns whether the start succeeded (pool free and script present) [04 §4.3]
+// C14. Either starter can fail separately [04 §5.1] C26.
+func StartWithImmediateBarrier(vm *VM, scriptName string, args []int32) bool {
+	if vm == nil || vm.prog == nil {
+		return false
+	}
+	pc, ok := vm.prog.Scripts[scriptName]
+	if !ok {
+		return false
+	}
+	if !vm.Start(pc, args) {
+		return false
+	}
+	// Immediate drain barrier [GAP T15] C18: all slots at delta 0 plus one piece pass.
+	vm.Drain(0) // [04 §4.2] [GAP T15] immediate wake-flag start
+	return true
+}
+
+// ---------------------------------------------------------------------------
+// C18 — MoveRate tiers [GAP T15] [04 §5.2]
+// ---------------------------------------------------------------------------
+
+// MoveRateCategory classifies the movement tier [GAP T15] C18 [04 §5.2].
+// Category 0 overrides when the inhibit bit is set, the unit is attached to a
+// carrier (carrier dword nonzero), or both magnitude words are zero. Otherwise
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// 32-bit [04 §5.2]. On change: into 0 from nonzero issues StopMoving; into
+// nonzero from 0 issues StartMoving FIRST then MoveRateN with an immediate-drain
+// barrier; other nonzero-to-nonzero issues only MoveRateN [GAP T15] C18.
+//
+// Def offsets are identity per I13: the two thresholds are the compiled unit
+// definition fields MoveRate1 and MoveRate2 (default twice maxVelocity) [02
+// "Unit record"] [04 §5.2]. The Go fields live on content.UnitDef (WU-02-3)
+// as MoveRate1/MoveRate2; this function takes them as rate1/rate2 so ports.go
+// does not import content and the units-owner notes the mapping in comments
+// per the plan's "name the fields on whatever surface you can see" directive.
+//
+// TODO(question): which single magnitude word is classified is not fully named
+// here; the tier is a signed inclusive threshold classification of one 32-bit
+// magnitude word [04 §5.2]. The both-zero gate uses BOTH magnitude words
+// [GAP T15] C18. Callers should pass the retail magnitude word in magWord and
+// the two words for the zero gate in magA/magB; this helper combines them.
+// If retail's magnitude is a different derived word (e.g., 3-D speed vs scalar),
+// change exactly this helper.
+func MoveRateCategory(inhibit, attached bool, magA, magZ int32, rate1, rate2 int32) int {
+	if inhibit || attached { // [GAP T15] C18 category 0 overrides
+		return 0 // [04 §5.2] inhibit bit or attached (carrier dword nonzero)
+	}
+	if magA == 0 && magZ == 0 { // [GAP T15] C18 both magnitudes zero
+		return 0
+	}
+	// The classified magnitude is one word; pick magA as the canonical one per
+	// TODO above. Signed comparisons [04 §5.2].
+	mag := magA
+	if mag <= rate1 { // inclusive [04 §5.2]
+		return 1
+	}
+	if mag <= rate2 {
+		return 2
+	}
+	return 3
+}
+
+// MoveRateTransition describes the callbacks emitted on a tier change
+// [GAP T15] C18 [04 §5.2]. The cache is two bits of the unit's class/state
+// word; an unchanged category emits nothing [04 §5.2].
+func MoveRateTransition(prev, next int) []CallbackKind {
+	if prev == next {
+		return nil // unchanged emits nothing [04 §5.2]
+	}
+	if next == 0 && prev != 0 {
+		return []CallbackKind{CallbackStopMoving} // into 0 from nonzero [GAP T15] C18
+	}
+	if prev == 0 && next != 0 {
+		// Into nonzero from 0 issues StartMoving FIRST then matching MoveRateN
+		// with an immediate-drain barrier between them [GAP T15] C18.
+		var mr CallbackKind
+		switch next {
+		case 1:
+			mr = CallbackMoveRate1
+		case 2:
+			mr = CallbackMoveRate2
+		case 3:
+			mr = CallbackMoveRate3
+		default:
+			mr = CallbackMoveRate1
+		}
+		return []CallbackKind{CallbackStartMoving, mr}
+	}
+	// Nonzero-to-nonzero change issues only MoveRateN [GAP T15] C18.
+	switch next {
+	case 1:
+		return []CallbackKind{CallbackMoveRate1}
+	case 2:
+		return []CallbackKind{CallbackMoveRate2}
+	case 3:
+		return []CallbackKind{CallbackMoveRate3}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// C19 — emit-sfx vocabulary [GAP T15] [04 §4.3] [03 §2.4]
+// ---------------------------------------------------------------------------
+
+// SFXKind classifies an emit-sfx type [GAP T15] C19 [04 §4.3].
+type SFXKind int
+
+const (
+	SFXIgnored    SFXKind = 0 // >=0x104, 0x100 itself, vector 6+ ignored [GAP T15] C19 [04 §4.4]
+	SFXVector     SFXKind = 1 // vector types 0–5 piece-direction effects [GAP T15] C19
+	SFXWhiteSmoke SFXKind = 2 // point 0x101 [GAP T15] C19
+	SFXBlackSmoke SFXKind = 3 // point 0x102 [GAP T15] C19
+	SFXSubBubbles SFXKind = 4 // point 0x103 water-line bubbles [GAP T15] C19
+)
+
+// ClassifySFX maps an emit-sfx type word to its vocabulary class [GAP T15] C19.
+// Vector types 0–5 are piece-direction; point types 0x101 white, 0x102 black,
+// 0x103 sub-bubbles with height forced to water-line; everything >=0x104,
+// vector 6+, and 0x100 itself is ignored [GAP T15] C19 [04 §4.3]. Presentation-
+// only, visibility-gated [GAP T15]: no simulation state is written.
+func ClassifySFX(t int32) SFXKind {
+	if t >= 0 && t <= 5 {
+		return SFXVector // [GAP T15] C19 vector 0–5
+	}
+	switch t {
+	case 0x101:
+		return SFXWhiteSmoke // [GAP T15] C19
+	case 0x102:
+		return SFXBlackSmoke
+	case 0x103:
+		return SFXSubBubbles
+	}
+	// 0x100 itself falls through, and >=0x104 ignored [GAP T15] C19.
+	return SFXIgnored // [GAP T15] C19 presents nothing
+}
+
+// SFXSink is the presentation-only sink for emit-sfx. The engine never writes
+// sim state from this path; it is gated on the local player being able to see
+// the unit [GAP T15] C19. Implementations render or record, never mutate sim.
+//
+// The VM consults this sink plus an optional visibility predicate before
+// dispatching; the stub does not require a renderer.
+type SFXSink interface {
+	EmitSFX(piece int, sfxType int32, kind SFXKind)
+}
+
+// NullSFXSink discards all effects. Useful for headless tests.
+type NullSFXSink struct{}
+
+func (NullSFXSink) EmitSFX(int, int32, SFXKind) {}
+
+// DispatchSFX classifies t and, if visible, calls sink. Returns true if an
+// effect was classified as visible (vector/point). Ignored vocabulary returns
+// false and touches no sink. Visibility is the caller's predicate; the VM's
+// piece-visibility gate belongs to the renderer, not sim [GAP T15] C19 (I6).
+func DispatchSFX(sink SFXSink, piece int, sfxType int32, visible bool) bool {
+	k := ClassifySFX(sfxType) // [GAP T15] C19
+	if k == SFXIgnored {
+		return false // [GAP T15] C19 >=0x104 ignored
+	}
+	if !visible {
+		return false // visibility-gated, presentation-only [GAP T15] C19
+	}
+	if sink != nil {
+		sink.EmitSFX(piece, sfxType, k)
+	}
+	return true
+}
+
+// ---------------------------------------------------------------------------
+// C26 — normal-kind damage packet ordering [04 §5.1]
+// ---------------------------------------------------------------------------
+
+// DamageKind enumerates the packet kind byte. Only Normal participates in the
+// HitByWeapon/TakeDamage pair; Heal and Paralyze skip it, and lethal against
+// movement-category-1/2 sets death latch with no callbacks [04 §5.1] C26.
+type DamageKind uint8
+
+const (
+	DamageKindNormal   DamageKind = 1  // ordinary damage, full callback pair path [04 §5.1] C26
+	DamageKindParalyze DamageKind = 2  // paralyzer: flash etc but no HitByWeapon/TakeDamage, instead stun task [04 §5.1] C26
+	DamageKindHeal     DamageKind = 10 // healing: early path adds unsigned amount clamped vs max, no callbacks [06 §9.1] [04 §5.1] C26
+	DamageKindOther    DamageKind = 11 // kind 11 subtracts health but skips reaction/callbacks [06 §9.1]
+)
+
+// VictimState is the minimal per-unit health/liveness surface needed for the
+// C26 damage funnel without importing internal/units (WU-06-7 may not add
+// fields to units.Unit; the orchestrator decides the final placement, so this
+// package defines its own test-only victim shape, and the units-owner mirrors
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+type VictimState struct {
+	Health      int32 // current health, signed
+	MaxHealth   int32 // definition maximum damage, >0
+	Active      bool  // alive bit [04 §5.1] C26
+	Dying       bool  // death latch already set (not yet final-cleaned) [04 §2.4]
+	MovementCat int   // movement category for lethal latch short-circuit; 1/2 are the mobile classes [04 §5.1] C26
+}
+
+// DamageResult captures the synchronous health mutation plus the computed
+// arguments for the two independent async starters [04 §5.1] C26. Either starter
+// can fail separately due to pool exhaustion [04 §4.3] C14.
+type DamageResult struct {
+	HealthAfter int32    // after subtraction (clamped zero for stationary non-mobile path) [06 §9.1]
+	HitArgs     [2]int32 // cos*400, sin*400 from dir byte shifted left 8 [04 §5.1] C26 C25
+	TakeArg     int32    // post-hit percentage clamp(health*100/maxHealth,0,100) [04 §5.1] C26
+	ShouldHit   bool     // whether HitByWeapon should be started (normal kind, active victim, not death-latch short-circuit)
+	ShouldTake  bool     // whether TakeDamage should be started (same gates)
+	DeathLatch  bool     // lethal against movement-cat 1/2 => latch set, no callbacks [04 §5.1] C26
+	Dead        bool     // health dropped to <=0 (before clamp) and latch case examined
+}
+
+// ComputeTakeDamagePercent is the TakeDamage starter's single argument after
+// health subtraction [04 §5.1] C26: clamp(health*100/maxHealth, 0, 100) via
+// unsigned division. See also HealthPercent [04 §4.4].
+func ComputeTakeDamagePercent(health, maxHealth int32) int32 {
+	return TakeDamagePercent(health, maxHealth) // [04 §5.1] C26
+}
+
+// ApplyNormalDamage implements the C26 ordering on a normal-kind packet against
+// an active, not-yet-dying victim [04 §5.1] C26: health is subtracted FIRST,
+// then HitByWeapon args are cos/sin*400 of dir byte shifted left 8, then
+// TakeDamage arg is the post-hit percentage. Either starter can fail separately.
+// Heal and paralyze kinds skip the pair entirely; lethal damage against a
+// movement-category-1/2 victim sets the death latch and returns with NO
+// callbacks. This helper performs the synchronous health mutation and computes
+// the would-be arguments; the caller does the two VM.Start calls independently
+// so each can fail [04 §4.3] C14.
+//
+// The 16-bit modular subtraction is modeled as plain int32 subtraction here;
+// the wrap is noted but does not affect the clamp to zero for the stationary
+// path in the bounded tests.
+//
+// Death latch: on a non-positive signed health result, the two mobile
+// controller classes (movement categories 1 and 2) set the latch, preserve the
+// modular health, and return immediately with no callbacks [06 §9.1] [04 §5.1]
+// C26. Stationary units clamp health to zero and continue to callbacks unless
+// also latched.
+func ApplyNormalDamage(v *VictimState, kind DamageKind, amount int32, dirByte uint8) DamageResult {
+	var res DamageResult
+	if v == nil || !v.Active || v.Dying {
+		return res // packet rejected: missing, non-live, or already death-marked [04 §5.1] C26
+	}
+	if kind == DamageKindHeal || kind == DamageKindParalyze {
+		return res // skip pair entirely [04 §5.1] C26; heal's add path vs paralyze stun task are outside this helper
+	}
+	if kind == DamageKindOther {
+		return res // kind 11 skips reaction and callbacks [06 §9.1]
+	}
+	// Only normal-kind reaches here in this helper; other normal-adjacent kinds
+	// that also mutate health would be routed via separate funcs.
+
+	// --- health subtracted FIRST [04 §5.1] C26 ---
+	prevHealth := v.Health
+	_ = prevHealth
+	// Exact 16-bit modular subtraction [06 §9.1] [04 §5.1] — low 16 bits wrap modulo 65536.
+	// Implemented as sign-extending 16-bit amount then subtract; we preserve the
+	// raw wrap for latch test then clamp.
+	lowAmount := int32(int16(amount))        // packet amount is signed 16-bit, wraps modulo [06 §9.1]
+	newHealthModular := v.Health - lowAmount // modular at 16-bit then sign-extended? Keep int32 for latch compare.
+	// Retail's stationary clamp after modular test: if non-positive and not
+	// mobile 1/2, clamp to zero instead of preserving negative modular value
+	// [06 §9.1]. We apply latch short-circuit first.
+
+	// Lethal test: non-positive signed result [06 §9.1] [04 §5.1] C26.
+	if newHealthModular <= 0 {
+		res.Dead = true
+		if v.MovementCat == 1 || v.MovementCat == 2 {
+			// Lethal against movement-category-1/2 victim sets death latch and
+			// returns with NO callbacks [04 §5.1] C26.
+			v.Dying = true
+			v.Health = newHealthModular // preserve modular health [06 §9.1]
+			res.HealthAfter = v.Health
+			res.DeathLatch = true
+			// No callbacks.
+			return res
+		}
+		// Stationary lethal would clamp health to zero and can continue to
+		// normal callbacks unless cause-specific latch existed; we continue past
+		// short-circuit to queue HitByWeapon/TakeDamage [06 §9.1] [04 §5.1] C26
+		// but still mark dead for caller awareness.
+		// For C26 test purposes, stationary lethal still emits callbacks.
+		v.Health = 0 // clamp to zero [06 §9.1]
+		res.HealthAfter = 0
+	} else {
+		v.Health = newHealthModular
+		res.HealthAfter = v.Health
+	}
+
+	// On a non-latched normal victim, queue HitByWeapon then TakeDamage
+	// independently with computed args [04 §5.1] C26. Either starter can fail
+	// separately [04 §4.3] C14 (caller checks vm.Start result per callback).
+	x, y := HitByWeaponArgs(dirByte) // [04 §5.1] C26 angle via 512-entry table [04 §5.1] C25
+	res.HitArgs = [2]int32{x, y}
+	res.TakeArg = ComputeTakeDamagePercent(v.Health, v.MaxHealth) // [04 §5.1] C26 unsigned clamp
+	res.ShouldHit = true
+	res.ShouldTake = true
+	return res
+}
+
+// ---------------------------------------------------------------------------
+// Engine-port read/write helpers (trunc/round notes)
+// ---------------------------------------------------------------------------
+
+// RelativeBearing computes the engine port 12 read [04 §4.4] C15: unpacks packed
+// XZ argument halves as signed 16.16 world deltas, takes arc tangent, subtracts
+// own heading, truncated to 16 bits. The atan scaling is the only rounding port
+// (round-to-nearest via 65536/2pi); all other ports truncate [04 §4.4].
+//
+// TODO(question): packing of halves into the int32 argument and the exact
+// Fixed→float promotion for atan are not fully closed; the helper below uses
+// float64 Atan2 and round-to-nearest, which matches the spec's "round rather
+// than truncates" wording. Confirm dx/dz extraction for negative halves against
+// retail before depending on packed bits.
+func RelativeBearing(packedXZ int32, heading uint16) uint16 {
+	// Unpack halves: low 16 = X, high 16 = Z as signed halves; each half is
+	// nominally the low 16 bits of a 16.16 fixed word (the integer world part)
+	// for this read path. TODO(question): whether the fractional bits are
+	// already discarded before atan is not closed; we treat halves as plain
+	// signed integers for the atan here.
+	dx := int32(int16(packedXZ & 0xFFFF))
+	dz := int32(int16((packedXZ >> 16) & 0xFFFF))
+	// Arc tangent, scaled to 65536 per circle, round-to-nearest [04 §4.4].
+	angle := math.Atan2(float64(dz), float64(dx)) * 65536.0 / (2 * math.Pi)
+	rounded := int32(math.Round(angle)) // round-to-nearest [04 §4.4]
+	rel := uint16(rounded) - heading    // subtract own heading, wrap via uint16 [04 §4.4]
+	return rel
+}
+
+// Distance computes engine port 13 read [04 §4.4] C15: hypotenuse of unpacked
+// halves, truncated toward zero [01 §8] I3.
+func Distance(packedXZ int32) int32 {
+	dx := int32(int16(packedXZ & 0xFFFF))
+	dz := int32(int16((packedXZ >> 16) & 0xFFFF))
+	h := math.Hypot(float64(dx), float64(dz))
+	return int32(h) // trunc toward zero [01 §8] I3 [04 §4.4]
+}
+
+// AtanPorts computes ports 14/15 ground helpers truncated [04 §4.4] C15.
+// Atan (port 14) returns low 16 bits of rounded angle; Hypot (port 15) is
+// truncated integer hypotenuse. These share the rounding note: only atan
+// rounds, hypot truncates [04 §4.4].
+func AtanPort(a, b int32) uint16 {
+	angle := math.Atan2(float64(b), float64(a)) * 65536.0 / (2 * math.Pi)
+	return uint16(int32(math.Round(angle))) // round [04 §4.4]
+}
+func HypotPort(a, b int32) int32 {
+	return int32(math.Hypot(float64(a), float64(b))) // trunc [01 §8] I3
+}
+
+// BuildPercentLeft computes port 17 read [04 §4.4] C15: from remaining-build
+// fraction f (1→0): zero when f exactly zero, otherwise 1 - trunc(f * -99.0).
+// I2 allowlist: construction remaining fraction is float32 [05 §...].
+func BuildPercentLeft(f float32) int32 {
+	if f == 0.0 {
+		return 0 // [04 §4.4] C15
+	}
+	// trunc toward zero is Go int32(f * -99.0) [01 §8] I3.
+	return 1 - int32(f*-99.0) // [04 §4.4] C15
+}
+
+// SetDirectionArg is the engine→COB SetDirection conversion [04 §5.3] [GAP T15]
+// C15: guarded on a positive definition float field and a nonzero global
+// mover-active word, the engine passes a zero-extended 16-bit direction word
+// [04 §5.3]. Truncation is toward zero (here a zero-extend).
+func SetDirectionArg(dir uint16) int32 { return int32(dir) } // [04 §5.3] zero-extended
+
+// SetSpeedGeneral is the general unit-update SetSpeed conversion [04 §5.3] C15:
+// guarded on ... passes a signed dword shifted left by 4 [04 §5.3].
+func SetSpeedGeneral(speed int32) int32 { return speed << 4 } // [04 §5.3] signed <<4
+
+// SetSpeedFootprint is the footprint-path SetSpeed conversion [04 §5.3] C15:
+// guarded on a different positive definition float, passes the 16-bit sum over
+// covered footprint cells of each occupying unit's size byte plus one [04 §5.3].
+// Semantic unit not established [04 §5.3].
+//
+// TODO(question): the sum's exact terrain query and the definition float gate
+// are not closed; this helper is a pure pass-through for the summed value so
+// tests can pin the truncation (low 16 bits) without implying the gait.
+func SetSpeedFootprint(sum int32) int32 { return int32(int16(sum)) } // [04 §5.3] 16-bit sum
+
+// PackXZ packs X low, Z high halves for ports 7/9 [04 §4.4] C15.
+// TODO(question): packing is defined as Z in high half and X in low half; the
+// width and fixed scaling (whether high 16 bits of 16.16 or truncated int16)
+// are not fully closed for retail packed reads. This helper packs the integer
+// parts of 16.16 Fixed values truncated toward zero, matching the simplest
+// retail reading. Validate with a real piece world transform before using for
+// precise targeting.
+func PackXZ(x, z numeric.Fixed) int32 {
+	xi := int32(x.Int()) // trunc toward zero [01 §8] I3
+	zi := int32(z.Int())
+	return (zi << 16) | (int32(uint16(xi)) & 0xFFFF)
+}
+
+// GroundHeight is the port 16 read stub [04 §4.4] C15: world height query at
+// packed coordinates, shifted into 16.16. The terrain height byte is queried
+// via injected height func; without one we return 0 per fallback.
+//
+// TODO(question): world height query is 16.16 via bilinear interpolation [03
+// §2.3] and uses the signed floor shift helper for cell math [03 §2.1] I3. The
+// pack interpretation also matters (see PackXZ). Until the movement world is
+// available in phase 7, this stub returns 0 when heightFn is nil.
+func GroundHeight(packedXZ int32, heightFn func(packedXZ int32) numeric.Fixed) numeric.Fixed {
+	if heightFn == nil {
+		return 0 // TODO(question): no world height source yet (phase 4 terrain not wired to cob)
+	}
+	// Height already in 16.16 from heightFn if it used world queries; shift
+	// is identity when the query returns Fixed. Spec says "shifted into
+	// 16.16" [04 §4.4] — if heightFn returns integer tile height, caller should
+	// shift; we preserve Fixed passthrough.
+	_ = packedXZ
+	return heightFn(packedXZ)
+}
+
+// ---------------------------------------------------------------------------
+// Unit definition thresholds identity (I13) — MoveRate mapping note for
+// WU-06-1 units-owner. The two retails offsets 0x1AE and 0x1B2 correspond to
+// content.UnitDef.MoveRate1 and MoveRate2 respectively (both default to twice
+// MaxVelocity) [02 "Unit record"] [04 §5.2]. They are compiled thresholds for
+// the inclusive tier classification described in MoveRateCategory above.
+// ---------------------------------------------------------------------------
+
+// Ensure numeric import is used and fixed-point vs float separation is explicit.
+// The model draw path uses float trig with round-to-nearest [03 §2.4] (I2) and
+// must not call numeric.Sin/Cos; this package's callback arguments use
+// numeric.Sin/Cos exclusively [04 §5.1] C25.
+var _ = math.Pi // force math citation anchor [04 §4.4] rounding

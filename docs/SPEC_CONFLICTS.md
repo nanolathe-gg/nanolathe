@@ -197,6 +197,28 @@ not "fix" the compiler back to the letter without re-reading the executable.
 
 ---
 
+## SC8 — The two documents disagree on the code-9 re-arm jitter
+
+**Spec A** `[04 §3.3]`, result-code 9: if the record is last, "reset its phase
+and set **the same randomized deadline**" — i.e. the code-3 formula, global
+tick + 30 + a random value below 15.
+
+**Spec B** `[05 "Queue pumping and result codes"]`, result-code 9: "restarts at
+state 0 with a randomized **30-plus-random-30** retry when no successor
+exists".
+
+Same field, different jitter bounds (rand < 15 vs rand < 30).
+
+**Decision:** implement Spec A (+30 + rand(15)) because document 04 is the
+dedicated orders/queue section and its row is internally consistent with its
+own code-3 entry; the pump site carries a `TODO(question)` naming both
+readings. Observable only as the re-arm cadence of a completed last order.
+
+**Falsifies:** neither document; it picks between them. Revisit only with
+executable evidence.
+
+---
+
 ## How to add to this file
 
 One section per conflict: what the spec says, what was observed and how, the

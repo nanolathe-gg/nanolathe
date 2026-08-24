@@ -1,18 +1,23 @@
 // Package orders implements the 68-order descriptor table [04 §3.1] [PLAN_06 WU-06-2].
 package orders
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/nanolathe/nanolathe/internal/units"
+)
 
 // ID is the index into the sorted descriptor table; 0 is the reject sentinel [04 §3.1] C4.
 type ID uint8
 
 // Descriptor is one order descriptor [04 §3.1] C4.
 type Descriptor struct {
-	Name       string // canonical, sort key, binary-search key [04 §3.1]
-	StateLabel string // state label the interface uses [04 §3.1]
-	Class      uint8  // small class parameter [04 §3.1] TODO(question): no located consumer
-	AckGroup   uint8  // acknowledgement group [04 §3.1]
-	StaticGate uint32 // 32-bit static gate mask [04 §3.1]
+	Name       string                                              // canonical, sort key, binary-search key [04 §3.1]
+	StateLabel string                                              // state label the interface uses [04 §3.1]
+	Class      uint8                                               // small class parameter [04 §3.1] TODO(question): no located consumer
+	AckGroup   uint8                                               // acknowledgement group [04 §3.1]
+	StaticGate uint32                                              // 32-bit static gate mask [04 §3.1]
+	Handler    func(u *units.Unit, n *Node, satisfied uint32) Code // [04 §3.1] handler, called with owning unit, order record, and satisfied bits
 }
 
 var table []Descriptor

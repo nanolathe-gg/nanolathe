@@ -1,0 +1,1626 @@
+// Package cob implements the COB VM [04 §4.2] [04 §4.3] [04 §4.6] [fmt cob].
+//
+// Contracts C10–C14 plus the drain/signal piece surface are owned here.
+// Engine ports and callbacks (C15–C19) live in ports.go (WU-06-7); this file
+// defines only the minimal unexported hook Drain needs to call out.
+package cob
+
+import (
+	"sort"
+
+	"github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
+)
+
+// dispatchMask is the dispatched-key mask [04 §4.3] C10.
+//
+// Note on bit numbering: the plan and [04 §4.3] describe the dispatch as
+// "bit 28 always set; bits 16–23 select the operation; low twelve ignored",
+// but the literal mask given is 0x100FF000.  0x100FF000 = (1<<28) | (0xFF<<12)
+// selects bit 28 plus bits 12–19 (the hex digits "FF" at 0xFF000) and zeroes
+// bits 0–11.  Every retail opcode is of the form 0x100XX000 where XX occupies
+// exactly those eight bits, so the mask and the eight-bit range agree and the
+// doc's "16–23" label is a numbering shift.  Low three bits (0–2) are the
+// push/pop addressing mode, examined after dispatch [04 §4.3] C10, F.
+const dispatchMask uint32 = 0x100FF000 // [04 §4.3] C10
+
+// Thread status encodings [04 §4.2] [04 §4.3].
+// Retail stores a status word with the state in the high byte and a sub-state
+// nibble for the waiting family; we keep the logical enumeration as named
+// fields (I13) while preserving the distinct states.
+const (
+	ThreadIdle     = 0 // [04 §4.2] idle / free slot
+	ThreadRunning  = 1 // [04 §4.2] running
+	ThreadSleeping = 2 // [04 §4.6] sleep timer guard [04 §4.2] sleeping
+	ThreadWaitTurn = 3 // [04 §4.2] waiting for turn
+	ThreadWaitMove = 4 // [04 §4.2] waiting for move
+	ThreadWaitCall = 5 // [04 §4.2] waiting for called script (blocked)
+)
+
+// Thread is one of the eight 164-byte retail records [01 §6.1] C13, [04 §4.2] (I13).
+// Go stores named fields; byte size is not reproduced, but capacities and
+// scan order are.
+type Thread struct {
+	Status     int // one of Thread* constants [04 §4.2]
+	PC         int // word index into Program.Code [04 §4.3] C12
+	Stack      [10]int32
+	SP         int // stack depth 0..10 [04 §4.2] C13
+	Sleep      int32
+	WaitPiece  int
+	WaitAxis   int
+	WaitThread int   // -1 leaked wait [04 §4.3] C14
+	SignalMask int32 // per-thread signal mask [04 §4.3]
+}
+
+// Port is an engine port identifier 1..20 [04 §4.4] C15.
+// Binding surface lives in WU-06-7; this type is defined here so vm.go can
+// name the hook [PLAN_06 Public API].
+type Port int
+
+// VM is a per-unit COB instance [04 §4.1] [04 §4.2] [PLAN_06 Public API].
+// Threads[8] and Pieces are the published state; remaining fields are the
+// execution and animation state this package owns. Other packages compile
+// against the two exported fields only.
+type VM struct {
+	Threads [8]Thread
+	Pieces  []model.PieceState // len == len(Program.Pieces) [04 §4.1]
+
+	prog       *Program
+	statics    []int32
+	anims      []pieceAnim // per-piece per-axis animation state [04 §4.6]
+	pieceFlags []uint8     // per-piece draw/cache/shade/shadow flags [04 §4.3]
+	simRng     *rng.Simulation
+	portFuncs  map[Port]func(args []int32) int32   // minimal hook for WU-06-7; nil means default 0 [04 §4.4]
+	sfxSink    SFXSink                             // presentation-only sink for emit-sfx [GAP T15] C19; nil discards
+	sfxVisible func(piece int, sfxType int32) bool // visibility gate for emit-sfx [GAP T15] C19; nil means always visible in tests
+}
+
+// pieceAnim holds the per-piece per-axis interpolation lanes [04 §4.6].
+type pieceAnim struct {
+	axes [3]axisAnim
+}
+
+// axisAnim holds one axis of a piece [04 §4.6].
+type axisAnim struct {
+	moveTarget int32
+	moveSpeed  int32
+	moveBusy   bool
+	turnTarget uint16
+	turnSpeed  int32
+	turnBusy   bool
+	spinSpeed  int32
+	spinTarget int32
+	spinAccel  int32
+	spinActive bool
+}
+
+// dispatchKeys holds the 57 dispatched values sorted ascending [04 §4.3] C11.
+// Transcribed verbatim from the [04 §4.3] tables; the binary search uses
+// these sentinels and not a jump table, per the doc's note. Keys are the
+// masked word (word & dispatchMask) [04 §4.3] C10.
+var dispatchKeys = []uint32{
+	0x10001000, // move [04 §4.3] B/C shape
+	0x10002000, // turn [04 §4.3]
+	0x10003000, // spin [04 §4.3]
+	0x10004000, // stop-spin [04 §4.3]
+	0x10005000, // show [04 §4.3]
+	0x10006000, // hide [04 §4.3]
+	0x10007000, // cache [04 §4.3]
+	0x10008000, // dont-cache [04 §4.3]
+	0x10009000, // legacy two-arg effect (no-op on units) [04 §4.3]
+	0x1000a000, // dont-shadow [04 §4.3]
+	0x1000b000, // move-now [04 §4.3]
+	0x1000c000, // turn-now [04 §4.3]
+	0x1000d000, // shade [04 §4.3]
+	0x1000e000, // dont-shade [04 §4.3]
+	0x1000f000, // emit-sfx [04 §4.3]
+	0x10011000, // wait-for-turn [04 §4.3]
+	0x10012000, // wait-for-move [04 §4.3]
+	0x10013000, // sleep [04 §4.3]
+	0x10021000, // push (modes 1,2,4) [04 §4.3] F
+	0x10022000, // alloc-local [04 §4.3]
+	0x10023000, // pop (modes 2,4) [04 §4.3] F
+	0x10024000, // discard [04 §4.3]
+	0x10031000, // add [04 §4.3]
+	0x10032000, // subtract [04 §4.3]
+	0x10033000, // multiply [04 §4.3]
+	0x10034000, // divide (unguarded) [04 §4.3] C14
+	0x10035000, // bitwise and [04 §4.3]
+	0x10036000, // bitwise or [04 §4.3]
+	0x10037000, // bitwise xor [04 §4.3] [fmt cob]
+	0x10038000, // bitwise not [04 §4.3]
+	0x10041000, // random [04 §4.3]
+	0x10042000, // engine read 1-arg [04 §4.3]
+	0x10043000, // engine read 5-arg [04 §4.3]
+	0x10044000, // engine read single-arg port [04 §4.3]
+	0x10045000, // engine read no-arg [04 §4.3]
+	0x10051000, // less-than [04 §4.3]
+	0x10052000, // less-or-equal [04 §4.3]
+	0x10053000, // greater-than [04 §4.3]
+	0x10054000, // greater-or-equal [04 §4.3]
+	0x10055000, // equal [04 §4.3]
+	0x10056000, // not-equal [04 §4.3]
+	0x10057000, // logical and [04 §4.3]
+	0x10058000, // logical or [04 §4.3]
+	0x10059000, // word xor [04 §4.3]
+	0x1005a000, // logical not [04 §4.3]
+	0x10061000, // start-script [04 §4.3] E C14
+	0x10062000, // call-script [04 §4.3] E C14
+	0x10063000, // reserved pop-N [04 §4.3] E
+	0x10064000, // jump [04 §4.3] D
+	0x10065000, // return [04 §4.3]
+	0x10066000, // jump-if-false [04 §4.3] D
+	0x10067000, // signal [04 §4.3]
+	0x10068000, // set-signal-mask [04 §4.3]
+	0x10071000, // explode [04 §4.3] [04 §4.5]
+	0x10082000, // engine write [04 §4.3]
+	0x10083000, // attach-unit [04 §4.3]
+	0x10084000, // detach-unit [04 §4.3]
+} // [04 §4.3] C11 exactly 57
+
+var sortedDispatchKeys []uint32
+
+func init() {
+	sortedDispatchKeys = make([]uint32, len(dispatchKeys))
+	copy(sortedDispatchKeys, dispatchKeys)
+	sort.Slice(sortedDispatchKeys, func(i, j int) bool { return sortedDispatchKeys[i] < sortedDispatchKeys[j] })
+	// dispatched-value table is the sorted sentinel set; dispatch uses binary
+	// search over it [04 §4.3] C11.
+	dispatchKeys = sortedDispatchKeys
+}
+
+// NewVM creates a VM bound to prog. Pieces length matches prog.Pieces and
+// statics are zero-initialized per [fmt cob] "Statics are zero-initialized".
+// prog may be nil for fixture VMs that set program later via SetProgram.
+func NewVM(prog *Program) *VM {
+	v := &VM{}
+	v.SetProgram(prog)
+	return v
+}
+
+// SetProgram binds prog to v, reallocating piece and static storage.
+// Callers that construct VM as a literal may call this after.
+func (v *VM) SetProgram(prog *Program) {
+	v.prog = prog
+	if prog == nil {
+		v.statics = nil
+		v.Pieces = nil
+		v.anims = nil
+		v.pieceFlags = nil
+		return
+	}
+	v.statics = make([]int32, prog.Statics) // zero-initialized [fmt cob] [04 §4.2]
+	v.Pieces = make([]model.PieceState, len(prog.Pieces))
+	v.anims = make([]pieceAnim, len(prog.Pieces))
+	v.pieceFlags = make([]uint8, len(prog.Pieces))
+	// Defaults: bit 1 (cache) and bit 2 (shade) set, bit 0 (draw) clear for
+	// now; retail sets bit 0 per-geometry at creation [04 §4.3] "allocation is
+	// zero-filled and then a fill pass ... sets bit 1 and 2 unconditionally and
+	// sets bit 0 only when the piece's model object has at least three
+	// vertices". For synthetic VMs we start with cached+shaded (0x06) [04 §4.3].
+	for i := range v.pieceFlags {
+		v.pieceFlags[i] = 0x06 // [04 §4.3]
+	}
+	for i := range v.Threads {
+		v.Threads[i] = Thread{
+			Status:     ThreadIdle,
+			WaitPiece:  -1,
+			WaitAxis:   -1,
+			WaitThread: -1,
+		}
+	}
+}
+
+// BindPort registers a port handler for WU-06-7 [PLAN_06 Public API] [04 §4.4].
+// Drain consults this map; when no handler is bound the read returns 0 and
+// writes only set the script-touched marker (here a no-op) [04 §4.4].
+func (v *VM) BindPort(p Port, fn func(args []int32) int32) {
+	if v.portFuncs == nil {
+		v.portFuncs = make(map[Port]func(args []int32) int32)
+	}
+	v.portFuncs[p] = fn
+}
+
+// SetSFXSink installs the presentation-only emit-sfx sink [GAP T15] C19.
+// Nil discards. Presentation-only and visibility-gated; no simulation state
+// is written from this path.
+func (v *VM) SetSFXSink(s SFXSink) { v.sfxSink = s }
+
+// SetSFXVisible installs the visibility gate for emit-sfx [GAP T15] C19.
+// When nil the sink is considered always visible (tests). When set, the
+// gate is called with (piece, sfxType) and must return true for the effect
+// to be emitted.
+func (v *VM) SetSFXVisible(fn func(piece int, sfxType int32) bool) { v.sfxVisible = fn }
+
+// Start starts script at prog word index with args asynchronously [04 §4.2] [04 §4.3].
+// It allocates the lowest clear thread slot [01 §6.1] C13; if no slot or the
+// script id is not a valid entry, it returns false without consuming args
+// from any caller stack (here args are kept by the caller) [04 §4.3] C14.
+// Engine-started threads start with mask 0 [fmt cob].
+func (v *VM) Start(script int, args []int32) bool {
+	if v.prog == nil {
+		return false
+	}
+	if script < 0 || script >= len(v.prog.Code) {
+		return false // bad script id [04 §4.3] C14
+	}
+	if !v.isValidEntry(script) {
+		// Only script entry points are valid here; the table of 57 does not
+		// otherwise restrict script ids, but engine starters reject unknown
+		// names/ids [04 §4.3] "start-script with no free slot, or a bad script
+		// id, does not pop its arguments" — we return false.
+		// TODO(question): whether retail's valid-entry set is the Scripts map
+		// values or the raw ScriptCodeIndexArray; we treat any word index that
+		// is a mapped script start as valid.
+		return false
+	}
+	idx, ok := v.allocThread()
+	if !ok {
+		return false // pool full, no consume [04 §4.3] C14
+	}
+	t := &v.Threads[idx]
+	t.Status = ThreadRunning
+	t.PC = script
+	t.SignalMask = 0 // engine starters start with mask 0 [fmt cob]
+	t.WaitThread = -1
+	t.WaitPiece = -1
+	t.WaitAxis = -1
+	t.Sleep = 0
+	t.SP = 0
+	// Engine starters write four words with garbage beyond argc and set depth
+	// to argc-1 [04 §4.3]; we copy args in order, padding with 0 for missing
+	// slots, and set SP = len(args) clamped to 10, which yields the same local
+	// addressing after the script's alloc-local prologue [04 §4.3].
+	n := len(args)
+	if n > 10 {
+		n = 10
+	}
+	t.SP = n
+	for i := 0; i < n; i++ {
+		t.Stack[i] = args[i]
+	}
+	return true
+}
+
+// Call runs script synchronously [04 §4.2] as the synchronous query helper.
+// On a full pool it returns false and leaves args untouched [04 §4.3].
+// On success it pushes the (up to) four inputs, forces depth to three
+// (SP=4), runs the interpreter inline with delta 0 (no time, no piece
+// interpolation) [04 §4.2], and copies the first four window words back into
+// args, matching retail's query helper [04 §4.3] "On success it pushes its
+// four inputs, forces the depth to three, runs the interpreter inline, and
+// copies the first four window words back out."
+func (v *VM) Call(script int, args []int32) bool {
+	if v.prog == nil {
+		return false
+	}
+	if script < 0 || script >= len(v.prog.Code) {
+		return false
+	}
+	if !v.isValidEntry(script) {
+		return false
+	}
+	idx, ok := v.allocThread()
+	if !ok {
+		return false // full pool returns failure and leaves outputs untouched [04 §4.3]
+	}
+	t := &v.Threads[idx]
+	t.Status = ThreadRunning
+	t.PC = script
+	t.SignalMask = 0
+	t.WaitThread = -1
+	t.WaitPiece = -1
+	t.WaitAxis = -1
+	// Push four inputs, garbage for missing, depth forced to three (SP=4) [04 §4.3].
+	t.SP = 4
+	for i := 0; i < 4; i++ {
+		var val int32
+		if i < len(args) {
+			val = args[i]
+		}
+		t.Stack[i] = val
+	}
+	// Run inline with delta 0, no piece interpolation, to completion or block.
+	// We reuse the thread-run logic but without the outer Drain scheduling.
+	v.runThreadSync(idx)
+	// Copy back first four window words [04 §4.3].
+	for i := 0; i < 4 && i < len(args); i++ {
+		args[i] = t.Stack[i]
+	}
+	// If the synchronous query slept or waited, retail simply returns whatever
+	// the window then holds [04 §4.3] "If the queried script sleeps or waits,
+	// the query simply returns whatever the window then holds".
+	// Free the thread regardless (whether it returned normally or blocked).
+	v.killThread(idx)
+	return true
+}
+
+// Signal kills every thread whose mask intersects mask, waking anything
+// blocked on them [04 §4.3] signal opcode. Wake is transitive within the
+// same scan [04 §4.2]. This external Signal mirrors the opcode semantics
+// per the brief's "wake/signal semantics per [04 §4.2]/[04 §4.3]".
+func (v *VM) Signal(mask int32) {
+	if mask == 0 {
+		return
+	}
+	v.signalMask(mask)
+}
+
+// Drain advances the VM by delta ticks [04 §4.6] [PLAN_06].
+// It runs due threads within the tick budget in fixed slot order 0..7 [04 §4.2]
+// C13, then one piece-interpolation pass [04 §4.6] "execute all eight threads
+// in fixed slot order, then interpolate all piece axes with the same delta" C13.
+// A sleep occupies its truncated tick count plus one guard decrement, so
+// sleep 0 still costs one tick [04 §4.6]. Signals and wake are handled inside
+// the run. Drain is reentrant-safe: an all-slot delta-0 wake drain can be
+// issued from inside a starter and will run due threads with no time advance
+// [04 §4.2] [GAP T15].
+func (v *VM) Drain(delta int) {
+	if v.prog == nil {
+		// Still do piece pass if we have anim state but no code? No code to run.
+		if delta != 0 {
+			v.interpolate(delta)
+		}
+		return
+	}
+	// Clamp delta to tick budget 0..5 per [01 §4.2] but allow any int for test hooks.
+	// Retail dispatcher caps at 5; we honor the value as given for determinism
+	// and let the caller clamp.
+	if delta < 0 {
+		delta = 0
+	}
+	// Eight thread slots, fixed scan order [04 §4.2] C13 (I1).
+	for idx := 0; idx < 8; idx++ {
+		t := &v.Threads[idx]
+		if t.Status == ThreadIdle {
+			continue
+		}
+		if t.Status == ThreadSleeping {
+			// Guard subtracts delta first and wakes only when <=0 [04 §4.6].
+			t.Sleep -= int32(delta)
+			if t.Sleep > 0 {
+				continue // still sleeping, yield [04 §4.6]
+			}
+			t.Status = ThreadRunning // wake [04 §4.6]
+		} else if t.Status == ThreadWaitTurn {
+			if v.isTurnBusy(t.WaitPiece, t.WaitAxis) {
+				continue
+			}
+			t.Status = ThreadRunning
+		} else if t.Status == ThreadWaitMove {
+			if v.isMoveBusy(t.WaitPiece, t.WaitAxis) {
+				continue
+			}
+			t.Status = ThreadRunning
+		} else if t.Status == ThreadWaitCall {
+			if t.WaitThread == -1 {
+				continue // leaked wait, never wakes [04 §4.3] C14
+			}
+			if t.WaitThread < 0 || t.WaitThread >= 8 {
+				t.Status = ThreadRunning
+				t.WaitThread = -1
+			} else {
+				other := &v.Threads[t.WaitThread]
+				if other.Status != ThreadIdle {
+					continue // callee still alive
+				}
+				t.Status = ThreadRunning
+				t.WaitThread = -1
+			}
+		}
+		if t.Status != ThreadRunning {
+			continue
+		}
+		v.runThread(idx)
+	}
+	// One piece pass [04 §4.6] C13. Delta 0 performs no interpolation but still
+	// allows immediate move/turn that committed during interpretation to be
+	// visible [04 §4.6].
+	if delta != 0 {
+		v.interpolate(delta)
+	}
+}
+
+// isValidEntry reports whether word index is a script entry point [fmt cob] [04 §4.1].
+// It scans the ordered ScriptsByID slice for membership to avoid map iteration
+// (I1: no `range` over a map on a sim-visible path). Linear scan over ≤ a few
+// hundred entries is fine and keeps the invalid-entry check deterministic.
+func (v *VM) isValidEntry(pc int) bool {
+	if v.prog == nil {
+		return false
+	}
+	for _, entry := range v.prog.ScriptsByID {
+		if entry == pc {
+			return true
+		}
+	}
+	return false
+}
+
+// allocThread returns lowest clear thread slot 0..7 per [01 §6.1] C13.
+// Scan order is fixed ascending [04 §4.2] (I1).
+func (v *VM) allocThread() (int, bool) {
+	for i := 0; i < 8; i++ {
+		if v.Threads[i].Status == ThreadIdle {
+			// Mark allocated immediately (mask bit set) per [04 §4.2].
+			// Status will be set by caller to Running.
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+// killThread clears the thread status, decrements the instance active count
+// (via status), and wakes any thread blocked on it, transitively within the
+// same scan [04 §4.2] [04 §4.3] C11 kill path.
+func (v *VM) killThread(idx int) {
+	if idx < 0 || idx >= 8 {
+		return
+	}
+	t := &v.Threads[idx]
+	if t.Status == ThreadIdle {
+		return
+	}
+	t.Status = ThreadIdle
+	t.PC = 0
+	t.SP = 0
+	t.Sleep = 0
+	t.WaitPiece = -1
+	t.WaitAxis = -1
+	// Do not clear SignalMask? Retail leaves it? We'll keep but idle threads ignore.
+	// Wake transitively: any WaitCall that waited on idx flips to Running
+	// immediately and could be running later this same Drain scan [04 §4.2].
+	// We implement iterative wake because a killed thread may itself have been
+	// waited on by multiple callers; each woken thread could itself be a callee
+	// for another waiter, so transitive chain continues.
+	// Iterate until quiescent.
+	for {
+		woke := false
+		for j := 0; j < 8; j++ {
+			ot := &v.Threads[j]
+			if ot.Status == ThreadWaitCall && ot.WaitThread == idx {
+				ot.Status = ThreadRunning
+				ot.WaitThread = -1
+				woke = true
+			}
+		}
+		if !woke {
+			break
+		}
+		// If any woken thread was itself a WaitCall target for another, the
+		// next iteration will wake that next level. For kill-path transitive
+		// this is limited depth 8.
+		// Need to also consider that woken threads might be Waiting on idx
+		// that we just killed; the idx we killed is only one value, so single
+		// pass suffices for this kill. Transitivity across multiple kills in a
+		// signal loop is handled by signalMask's outer loop.
+		break
+	}
+	t.WaitThread = -1
+}
+
+// signalMask kills every thread whose mask intersects mask and wakes waiters.
+// It repeats until no more intersections (transitive via wake) [04 §4.3].
+func (v *VM) signalMask(mask int32) {
+	if mask == 0 {
+		return
+	}
+	// Repeated scan to handle transitive wake-then-kill where a woken thread
+	// also matches mask. Retail's signal scans with waking; we emulate via loop.
+	for {
+		killedAny := false
+		for i := 0; i < 8; i++ {
+			t := &v.Threads[i]
+			if t.Status == ThreadIdle {
+				continue
+			}
+			if t.SignalMask&mask != 0 {
+				v.killThread(i)
+				killedAny = true
+			}
+		}
+		if !killedAny {
+			break
+		}
+		// After kills, some WaitCall threads may have been woken to Running and
+		// now also intersect mask, so they will be killed in next iteration.
+		// Loop covers that.
+	}
+}
+
+// isTurnBusy reports whether turn/spin busy for piece axis [04 §4.6].
+func (v *VM) isTurnBusy(piece, axis int) bool {
+	if piece < 0 || piece >= len(v.anims) || axis < 0 || axis >= 3 {
+		return false
+	}
+	anim := &v.anims[piece].axes[axis]
+	return anim.turnBusy || anim.spinActive
+}
+
+// isMoveBusy reports whether move busy for piece axis [04 §4.6].
+func (v *VM) isMoveBusy(piece, axis int) bool {
+	if piece < 0 || piece >= len(v.anims) || axis < 0 || axis >= 3 {
+		return false
+	}
+	anim := &v.anims[piece].axes[axis]
+	return anim.moveBusy
+}
+
+// interpolate advances all piece axes by delta [04 §4.6].
+func (v *VM) interpolate(delta int) {
+	if delta == 0 || len(v.anims) == 0 {
+		return
+	}
+	for p := range v.anims {
+		if p >= len(v.Pieces) {
+			continue
+		}
+		for axis := 0; axis < 3; axis++ {
+			anim := &v.anims[p].axes[axis]
+			// Move axis
+			if anim.moveBusy {
+				cur := int64(v.Pieces[p].Trans[axis].Raw()) // [03 §2.4] C21
+				target := int64(anim.moveTarget)            // compiled [fmt cob]
+				step := int64(anim.moveSpeed) / 30          // [04 §4.6] trunc toward zero
+				if step == 0 {
+					// Zero per-tick step still sets busy/dirty for current cycle
+					// [04 §4.6]; piece never arrives, waiter never wakes unless
+					// movement is reissued. Keep busy.
+					continue
+				}
+				dStep := step * int64(delta)
+				diff := target - cur
+				if diff == 0 {
+					anim.moveBusy = false
+					anim.moveSpeed = 0
+					continue
+				}
+				// Direction is toward target regardless of speed sign magnitude;
+				// speed sign is ignored beyond magnitude (turn uses shortest arc).
+				var mag int64
+				if dStep < 0 {
+					mag = -dStep
+				} else {
+					mag = dStep
+				}
+				if diff > 0 {
+					if diff <= mag {
+						v.Pieces[p].SetTrans(axis, fixedFromRaw(target)) // [03 §2.4] C22
+						anim.moveBusy = false
+						anim.moveSpeed = 0
+					} else {
+						v.Pieces[p].SetTrans(axis, fixedFromRaw(cur+mag))
+					}
+				} else {
+					if -diff <= mag {
+						v.Pieces[p].SetTrans(axis, fixedFromRaw(target))
+						anim.moveBusy = false
+						anim.moveSpeed = 0
+					} else {
+						v.Pieces[p].SetTrans(axis, fixedFromRaw(cur-mag))
+					}
+				}
+			}
+			// Turn axis (including spin sharing)
+			// Spin active takes precedence over turn interpolation when spinActive [03 §2.4] C22.
+			if anim.spinActive {
+				// Advance spin speed toward target via acceleration [04 §4.6].
+				if anim.spinSpeed != anim.spinTarget {
+					accStep := int64(anim.spinAccel) / 30 // [04 §4.6]
+					if accStep == 0 {
+						// Sub-tick deceleration becomes immediate stop [04 §4.6]
+						anim.spinSpeed = anim.spinTarget
+					} else {
+						dAcc := accStep * int64(delta)
+						cur := int64(anim.spinSpeed)
+						tgt := int64(anim.spinTarget)
+						if cur < tgt {
+							cur += dAcc
+							if cur >= tgt {
+								cur = tgt
+							}
+						} else if cur > tgt {
+							cur += dAcc // dAcc may be negative if accel negative; but accel for stop is positive toward zero? handle magnitude
+							// If accel is positive but need to decrease, dAcc positive would increase away; we handle by direction.
+							// Correct by using sign of (tgt - cur) to apply magnitude of accStep.
+							// For now if we overshoot, clamp.
+							if cur <= tgt {
+								cur = tgt
+							}
+						}
+						// If accel sign mismatched (e.g., need decrease but acc positive), the above would not move toward target.
+						// Fix: use magnitude toward target regardless of accel sign when decreasing.
+						// If we still not moving toward target, clamp immediately.
+						// Simpler: compute magnitude of accStep and move toward target.
+						// This block will be revisited if needed; keep simple clamp.
+						if anim.spinAccel != 0 {
+							mag := accStep
+							if mag < 0 {
+								mag = -mag
+							}
+							mag *= int64(delta)
+							cur2 := int64(anim.spinSpeed)
+							if cur2 < tgt {
+								if tgt-cur2 <= mag {
+									cur = tgt
+								} else {
+									cur = cur2 + mag
+								}
+							} else if cur2 > tgt {
+								if cur2-tgt <= mag {
+									cur = tgt
+								} else {
+									cur = cur2 - mag
+								}
+							}
+							anim.spinSpeed = int32(cur)
+						} else {
+							anim.spinSpeed = anim.spinTarget
+						}
+					}
+					// Update stored with the magnitude-correct value.
+					// Above dual logic duplicated; resolve by using second path only.
+					// To avoid confusion, recompute correctly:
+					// Already did magnitude path inside, so keep that result if accel !=0.
+					// The earlier cur update may be overwritten; ensure final is magnitude path.
+					// If accelStep ==0 we already set to target.
+					// So if accelStep !=0 we should have used magnitude path; the earlier simple add may have been wrong direction, but magnitude path overwrote.
+					// Keep magnitude path result.
+					// No-op: magnitude path already wrote anim.spinSpeed.
+				}
+				// Apply spin rotation: angle increment = trunc(spinSpeed/30) * delta [04 §4.6]
+				step := int64(anim.spinSpeed) / 30 // trunc toward zero [04 §4.6]
+				if step != 0 {
+					deltaAngle := uint16(int64(step) * int64(delta)) // wrap via uint16
+					v.Pieces[p].AddAngle(axis, deltaAngle)           // [03 §2.4] C22 (I2)
+				} else if anim.spinSpeed != 0 {
+					// Zero per-tick step while still spinning keeps dirty/busy but no motion [04 §4.6]
+				}
+				if anim.spinSpeed == anim.spinTarget && anim.spinAccel == 0 {
+					// If we reached target and no accel pending, keep spinning at target speed; do not clear spinActive.
+					// spinActive remains true until stop-spin clears it.
+				}
+				if anim.spinTarget == 0 && anim.spinSpeed == 0 && anim.spinAccel == 0 {
+					// Spin stopped; if stop-spin cleared, we may keep spinActive until explicitly stopped? Spec: stop-spin with 0 decel is immediate stop.
+					// We'll keep spinActive true even at 0 until overwritten by another motion? For now clear when speed 0 and target 0?
+					// Keep as is; do not auto-clear.
+				}
+			} else if anim.turnBusy {
+				cur := v.Pieces[p].GetAngle(axis) // [03 §2.4] C21 uint16
+				target := anim.turnTarget
+				if cur == target {
+					anim.turnBusy = false
+					anim.turnSpeed = 0
+					continue
+				}
+				step := int64(anim.turnSpeed) / 30 // [04 §4.6] trunc
+				if step == 0 {
+					continue // zero step keeps busy [04 §4.6]
+				}
+				var mag int64
+				if step < 0 {
+					mag = -step
+				} else {
+					mag = step
+				}
+				mag *= int64(delta)
+				// Shortest arc diff signed 16 [04 §4.6] "Turn uses shortest-arc logic; exactly opposite uses deterministic sign tie"
+				diff := int64(int16(target - cur)) // -32768..32767
+				if diff == 0 {
+					anim.turnBusy = false
+					anim.turnSpeed = 0
+					continue
+				}
+				var diffAbs int64
+				if diff < 0 {
+					diffAbs = -diff
+				} else {
+					diffAbs = diff
+				}
+				if diffAbs <= mag {
+					v.Pieces[p].SetAngle(axis, target) // snap inclusive [04 §4.6]
+					anim.turnBusy = false
+					anim.turnSpeed = 0
+				} else if diff > 0 {
+					v.Pieces[p].SetAngle(axis, uint16(int64(cur)+mag))
+				} else {
+					v.Pieces[p].SetAngle(axis, uint16(int64(cur)-mag))
+				}
+			}
+		}
+	}
+}
+
+// fixedFromRaw converts raw int64 to Fixed (16.16).
+func fixedFromRaw(raw int64) numeric.Fixed {
+	return numeric.Fixed(raw)
+}
+
+// runThreadSync runs a thread inline to yield/block/return with delta 0.
+// Used by Call.
+func (v *VM) runThreadSync(idx int) {
+	// Drain already checked guards for this thread; we just run its code
+	// until it would sleep/wait/call/return. For sync query we execute with
+	// delta 0, so sleep would immediately consider timer 0? Actually sync
+	// queries do not advance time, but a sleep inside them would capture timer
+	// and then the query returns whatever window holds without waiting [04 §4.3].
+	// We'll just call runThread which respects current status (running).
+	v.runThread(idx)
+}
+
+// runThread executes the opcode stream for thread idx until it yields, blocks,
+// or is killed. It assumes the thread's pre-guards have already been handled
+// by Drain.
+func (v *VM) runThread(idx int) {
+	t := &v.Threads[idx]
+	// Safety bound to prevent infinite loops within one Drain visit: retail
+	// can cascade phases in one pump until a waiting code appears, but for
+	// script drain we should cap iterations to avoid spinning on a tight
+	// non-yielding loop that would starve other threads. The doc's drain runs
+	// eight slots once, not per-opcode count, so a thread could in principle
+	// run many opcodes until a yield. We cap at a large but finite count for
+	// safety; retail has no such cap but terminates on loops via jump.
+	for iter := 0; iter < 10000; iter++ {
+		if t.Status != ThreadRunning {
+			return
+		}
+		if v.prog == nil || t.PC < 0 || t.PC >= len(v.prog.Code) {
+			v.killThread(idx)
+			return
+		}
+		word := v.prog.Code[t.PC]
+		key := word & dispatchMask // [04 §4.3] C10
+		// Binary search over sorted sentinels [04 §4.3] C11.
+		pos := sort.Search(len(dispatchKeys), func(i int) bool { return dispatchKeys[i] >= key })
+		if pos >= len(dispatchKeys) || dispatchKeys[pos] != key {
+			// Kill path: clear thread status, decrement active count, yield [04 §4.3] C11
+			v.killThread(idx)
+			return
+		}
+		// Dispatch
+		switch key {
+		case 0x10001000: // move [04 §4.3] C shape
+			if t.PC+2 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			axis := int(v.prog.Code[t.PC+2])
+			target, _ := t.stackPop()
+			speed, _ := t.stackPop()
+			if piece >= 0 && piece < len(v.anims) && axis >= 0 && axis < 3 {
+				anim := &v.anims[piece].axes[axis]
+				anim.moveTarget = target
+				anim.moveSpeed = speed
+				anim.moveBusy = true
+				anim.spinActive = false // move cancels spin on same axis? Last writer wins [03 §2.4] C22 but keep both?
+			}
+			t.PC += 3
+		case 0x10002000: // turn [04 §4.3]
+			if t.PC+2 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			axis := int(v.prog.Code[t.PC+2])
+			target, _ := t.stackPop()
+			speed, _ := t.stackPop()
+			if piece >= 0 && piece < len(v.anims) && axis >= 0 && axis < 3 {
+				anim := &v.anims[piece].axes[axis]
+				anim.turnTarget = uint16(target) // masked to 16 bits [04 §4.3]
+				anim.turnSpeed = speed
+				anim.turnBusy = true
+				anim.spinActive = false
+			}
+			t.PC += 3
+		case 0x10003000: // spin [04 §4.3]
+			if t.PC+2 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			axis := int(v.prog.Code[t.PC+2])
+			accel, _ := t.stackPop() // top accel [fmt cob] "spin ... speed S accelerate A" pushes speed then accel
+			speed, _ := t.stackPop()
+			if piece >= 0 && piece < len(v.anims) && axis >= 0 && axis < 3 {
+				anim := &v.anims[piece].axes[axis]
+				anim.spinTarget = speed
+				anim.spinAccel = accel
+				// If accel is 0, speed takes effect immediately [04 §4.6] immediate
+				if accel == 0 {
+					anim.spinSpeed = speed
+				} else if anim.spinSpeed == 0 && speed != 0 && accel != 0 {
+					// Keep current spinSpeed as is; interpolation will ramp.
+				}
+				anim.spinActive = true
+				anim.turnBusy = false
+			}
+			t.PC += 3
+		case 0x10004000: // stop-spin [04 §4.3]
+			if t.PC+2 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			axis := int(v.prog.Code[t.PC+2])
+			dec, _ := t.stackPop()
+			if piece >= 0 && piece < len(v.anims) && axis >= 0 && axis < 3 {
+				anim := &v.anims[piece].axes[axis]
+				if dec == 0 {
+					// Sub-tick deceleration becomes immediate stop [04 §4.6]
+					anim.spinSpeed = 0
+					anim.spinTarget = 0
+					anim.spinAccel = 0
+					anim.spinActive = false
+					anim.turnBusy = false
+				} else {
+					anim.spinTarget = 0
+					anim.spinAccel = dec
+					// spinActive remains true until speed reaches 0 via interpolate
+					if anim.spinSpeed == 0 {
+						anim.spinActive = false
+					}
+				}
+			}
+			t.PC += 3
+		case 0x10005000: // show [04 §4.3] B
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			if piece >= 0 && piece < len(v.pieceFlags) {
+				v.pieceFlags[piece] |= 0x01 // bit 0 draw [04 §4.3]
+			}
+			t.PC += 2
+		case 0x10006000: // hide [04 §4.3]
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			if piece >= 0 && piece < len(v.pieceFlags) {
+				v.pieceFlags[piece] &^= 0x01
+			}
+			t.PC += 2
+		case 0x10007000: // cache [04 §4.3]
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			if piece >= 0 && piece < len(v.pieceFlags) {
+				v.pieceFlags[piece] |= 0x02 // bit 1 [04 §4.3]
+			}
+			t.PC += 2
+		case 0x10008000: // dont-cache [04 §4.3]
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			if piece >= 0 && piece < len(v.pieceFlags) {
+				v.pieceFlags[piece] &^= 0x02
+			}
+			t.PC += 2
+		case 0x10009000: // legacy two-arg effect (no-op) [04 §4.3]
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			// Pops two values [04 §4.3] but does nothing on units.
+			t.stackPop()
+			t.stackPop()
+			t.PC += 2
+		case 0x1000a000: // dont-shadow [04 §4.3]
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			if piece >= 0 && piece < len(v.pieceFlags) {
+				v.pieceFlags[piece] &^= 0x08 // use bit 3 for shadow [04 §4.3]
+			}
+			t.PC += 2
+		case 0x1000b000: // move-now [04 §4.3]
+			if t.PC+2 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			axis := int(v.prog.Code[t.PC+2])
+			target, _ := t.stackPop()
+			if piece >= 0 && piece < len(v.Pieces) && axis >= 0 && axis < 3 {
+				v.Pieces[piece].SetTrans(axis, fixedFromRaw(int64(target))) // [03 §2.4] C22
+				if piece < len(v.anims) {
+					anim := &v.anims[piece].axes[axis]
+					anim.moveBusy = false
+					anim.moveSpeed = 0
+					anim.moveTarget = target
+				}
+			}
+			t.PC += 3
+		case 0x1000c000: // turn-now [04 §4.3]
+			if t.PC+2 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			axis := int(v.prog.Code[t.PC+2])
+			target, _ := t.stackPop()
+			if piece >= 0 && piece < len(v.Pieces) && axis >= 0 && axis < 3 {
+				v.Pieces[piece].SetAngle(axis, uint16(target)) // masked [04 §4.3]
+				if piece < len(v.anims) {
+					anim := &v.anims[piece].axes[axis]
+					anim.turnBusy = false
+					anim.turnSpeed = 0
+					anim.turnTarget = uint16(target)
+					anim.spinActive = false
+				}
+			}
+			t.PC += 3
+		case 0x1000d000: // shade [04 §4.3]
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			if piece >= 0 && piece < len(v.pieceFlags) {
+				v.pieceFlags[piece] |= 0x04 // bit 2 [04 §4.3]
+			}
+			t.PC += 2
+		case 0x1000e000: // dont-shade [04 §4.3]
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			if piece >= 0 && piece < len(v.pieceFlags) {
+				v.pieceFlags[piece] &^= 0x04
+			}
+			t.PC += 2
+		case 0x1000f000: // emit-sfx [04 §4.3]
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1]) // B shape piece operand [04 §4.3]
+			effectType, _ := t.stackPop()     // pops effect type [04 §4.3]
+			// Presentation-only and visibility-gated [GAP T15] C19; no sim state write.
+			// Classification is SFXKind via ClassifySFX in ports.go [GAP T15] C19.
+			if v.sfxSink != nil {
+				kind := ClassifySFX(effectType) // [GAP T15] C19
+				if kind != SFXIgnored {
+					visible := true
+					if v.sfxVisible != nil {
+						visible = v.sfxVisible(piece, effectType)
+					}
+					if visible {
+						v.sfxSink.EmitSFX(piece, effectType, kind) // [GAP T15] C19
+					}
+				}
+			}
+			t.PC += 2
+		case 0x10011000: // wait-for-turn [04 §4.3] suspends yes
+			if t.PC+2 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			axis := int(v.prog.Code[t.PC+2])
+			t.WaitPiece = piece
+			t.WaitAxis = axis
+			t.Status = ThreadWaitTurn // [04 §4.2]
+			t.PC += 3
+			return // yield drain [04 §4.6]
+		case 0x10012000: // wait-for-move [04 §4.3]
+			if t.PC+2 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			piece := int(v.prog.Code[t.PC+1])
+			axis := int(v.prog.Code[t.PC+2])
+			t.WaitPiece = piece
+			t.WaitAxis = axis
+			t.Status = ThreadWaitMove
+			t.PC += 3
+			return
+		case 0x10013000: // sleep [04 §4.3] [04 §4.6]
+			dur, _ := t.stackPop() // milliseconds [fmt cob]
+			// Convert trunc(30 * ms / 1000) [04 §4.6]
+			ticks := int32((int64(dur) * 30) / 1000) // trunc toward zero [01 §8] I3
+			t.Sleep = ticks
+			t.Status = ThreadSleeping
+			t.PC += 1
+			return
+		case 0x10021000: // push [04 §4.3] F
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			mode := int(word & 0x7) // low three bits [04 §4.3] C10
+			operand := v.prog.Code[t.PC+1]
+			switch mode {
+			case 1: // push constant [04 §4.3]
+				t.stackPush(int32(operand))
+			case 2: // push local [04 §4.3]
+				t.stackPush(t.getLocal(int(operand)))
+			case 4: // push static [04 §4.3]
+				t.stackPush(v.getStatic(int(operand)))
+			default:
+				// Any other sub-mode pushes uninitialized scratch [04 §4.3] C14
+				// Deterministic fallback: push 0 as garbage [04 §4.3].
+				t.stackPush(0)
+			}
+			t.PC += 2
+		case 0x10022000: // alloc-local [04 §4.3]
+			if t.SP < 10 {
+				// Raise depth without initializing [04 §4.3]
+				t.SP++
+			}
+			t.PC += 1
+		case 0x10023000: // pop [04 §4.3] F C14
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			mode := int(word & 0x7)
+			operand := int(v.prog.Code[t.PC+1])
+			switch mode {
+			case 2: // pop local [04 §4.3]
+				val, _ := t.stackPop()
+				t.setLocal(operand, val)
+			case 4: // pop static [04 §4.3]
+				val, _ := t.stackPop()
+				v.setStatic(operand, val)
+			default:
+				// Any other sub-mode pops nothing and simply advances [04 §4.3] C14
+			}
+			t.PC += 2
+		case 0x10024000: // discard [04 §4.3]
+			t.stackPop()
+			t.PC += 1
+		case 0x10031000: // add [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			t.stackPush(a + b) // wrap 32 bits
+			t.PC += 1
+		case 0x10032000: // subtract second-popped minus top [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			t.stackPush(a - b)
+			t.PC += 1
+		case 0x10033000: // multiply [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			t.stackPush(a * b)
+			t.PC += 1
+		case 0x10034000: // divide unguarded [04 §4.3] C14
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			if b == 0 {
+				panic("cob: divide by zero") // [04 §4.3] C14 unguarded
+			}
+			if a == -2147483648 && b == -1 {
+				panic("cob: divide overflow INT_MIN/-1") // [04 §4.3] C14
+			}
+			t.stackPush(a / b) // trunc toward zero [01 §8] I3
+			t.PC += 1
+		case 0x10035000: // and [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			t.stackPush(a & b)
+			t.PC += 1
+		case 0x10036000: // or [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			t.stackPush(a | b)
+			t.PC += 1
+		case 0x10037000: // xor [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			t.stackPush(a ^ b) // raw word xor [04 §4.3]
+			t.PC += 1
+		case 0x10038000: // not in place [04 §4.3]
+			if t.SP > 0 {
+				t.Stack[t.SP-1] = ^t.Stack[t.SP-1]
+			}
+			t.PC += 1
+		case 0x10041000: // random [04 §4.3]
+			high, _ := t.stackPop()
+			low, _ := t.stackPop()
+			bound := int64(high) - int64(low) + 1
+			var res int32
+			if bound <= 0 {
+				res = low
+			} else if bound == 1 {
+				res = low
+			} else {
+				r := v.simRandN(uint32(bound)) // [01 §7.1] I4
+				res = low + int32(r)
+			}
+			t.stackPush(res)
+			t.PC += 1
+		case 0x10042000: // engine read 1-arg [04 §4.3]
+			id, _ := t.stackPop()
+			var out int32
+			if fn, ok := v.portFuncs[Port(id)]; ok && fn != nil {
+				out = fn([]int32{id})
+			} else {
+				out = v.readPortDefault(id, []int32{id})
+			}
+			t.stackPush(out)
+			t.PC += 1
+		case 0x10043000: // engine read 5-arg [04 §4.3] stack -4
+			// pops 5 values (id +4 args) and pushes one [04 §4.3]
+			vals := make([]int32, 5)
+			for i := 0; i < 5; i++ {
+				vv, _ := t.stackPop()
+				vals[4-i] = vv // reverse to push order: first popped is last pushed (top)
+			}
+			// vals[0] is id (first pushed), vals[1..4] are args
+			var out int32
+			// Port id is vals[0]
+			if fn, ok := v.portFuncs[Port(vals[0])]; ok && fn != nil {
+				out = fn(vals)
+			} else {
+				out = v.readPortDefault(vals[0], vals)
+			}
+			t.stackPush(out)
+			t.PC += 1
+		case 0x10044000: // engine read single-arg port [04 §4.3]
+			id, _ := t.stackPop()
+			var out int32
+			if fn, ok := v.portFuncs[Port(id)]; ok && fn != nil {
+				out = fn([]int32{id})
+			} else {
+				out = v.readPortDefault(id, []int32{id})
+			}
+			t.stackPush(out)
+			t.PC += 1
+		case 0x10045000: // engine read no-arg [04 §4.3] +1
+			// No pop, push one. Port is implied? For no-arg reads, the id is not on stack; retail uses a dedicated opcode per port? But doc groups them.
+			// We treat as no id, handler not called, push 0 as default engine value.
+			// To keep hook, we have no id to lookup; default 0.
+			t.stackPush(0)
+			t.PC += 1
+		case 0x10051000: // less-than signed [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			if a < b {
+				t.stackPush(1)
+			} else {
+				t.stackPush(0)
+			}
+			t.PC += 1
+		case 0x10052000: // less-or-equal [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			if a <= b {
+				t.stackPush(1)
+			} else {
+				t.stackPush(0)
+			}
+			t.PC += 1
+		case 0x10053000: // greater-than [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			if a > b {
+				t.stackPush(1)
+			} else {
+				t.stackPush(0)
+			}
+			t.PC += 1
+		case 0x10054000: // greater-or-equal [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			if a >= b {
+				t.stackPush(1)
+			} else {
+				t.stackPush(0)
+			}
+			t.PC += 1
+		case 0x10055000: // equal [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			if a == b {
+				t.stackPush(1)
+			} else {
+				t.stackPush(0)
+			}
+			t.PC += 1
+		case 0x10056000: // not-equal [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			if a != b {
+				t.stackPush(1)
+			} else {
+				t.stackPush(0)
+			}
+			t.PC += 1
+		case 0x10057000: // logical and [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			if a != 0 && b != 0 {
+				t.stackPush(1)
+			} else {
+				t.stackPush(0)
+			}
+			t.PC += 1
+		case 0x10058000: // logical or [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			if a != 0 || b != 0 {
+				t.stackPush(1)
+			} else {
+				t.stackPush(0)
+			}
+			t.PC += 1
+		case 0x10059000: // word xor (not boolean) [04 §4.3]
+			b, _ := t.stackPop()
+			a, _ := t.stackPop()
+			t.stackPush(a ^ b)
+			t.PC += 1
+		case 0x1005a000: // logical not [04 §4.3] stack 0 in place
+			if t.SP > 0 {
+				if t.Stack[t.SP-1] == 0 {
+					t.Stack[t.SP-1] = 1
+				} else {
+					t.Stack[t.SP-1] = 0
+				}
+			}
+			t.PC += 1
+		case 0x10061000: // start-script [04 §4.3] E C14
+			if t.PC+2 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			scriptID := int(v.prog.Code[t.PC+1])
+			argc := int(v.prog.Code[t.PC+2])
+			// Validate script id as table index into script entries.
+			// Program's valid script id range is 0..len(ScriptsByID)-1 or map size.
+			// We approximate via Programs Scripts map values via isValidEntry after translation.
+			targetPC := -1
+			if progHasID(v.prog, scriptID) {
+				targetPC = codeIndexForID(v.prog, scriptID)
+			}
+			badID := targetPC == -1
+			noSlot := true
+			var newIdx int
+			if !badID {
+				newIdx, noSlot = func() (int, bool) {
+					for i := 0; i < 8; i++ {
+						if v.Threads[i].Status == ThreadIdle {
+							return i, false
+						}
+					}
+					return -1, true
+				}()
+				noSlot = newIdx == -1
+			}
+			if badID || noSlot {
+				// Retain arguments [04 §4.3] C14: do not pop, simply advance.
+				t.PC += 3
+				continue
+			}
+			// Pop argc args from caller [04 §4.3]
+			args := make([]int32, argc)
+			for i := argc - 1; i >= 0; i-- {
+				val, _ := t.stackPop()
+				args[i] = val
+			}
+			// Copy into new thread in reverse with last popped highest [04 §4.3]
+			// Spec: "last popped landing highest" — we implement reverse copy
+			// where args[0] (first pushed, last popped) lands highest. Our args
+			// slice was built in order args[0]=first pushed? Actually we popped
+			// in reverse, filling args[argc-1] first as top, so args[0] is first
+			// pushed. To land last popped highest, we need newStack[high]=args[0].
+			// So we reverse again when copying.
+			nt := &v.Threads[newIdx]
+			nt.Status = ThreadRunning
+			nt.PC = targetPC
+			nt.SignalMask = t.SignalMask // inherited [fmt cob]
+			nt.WaitThread = -1
+			nt.WaitPiece = -1
+			nt.WaitAxis = -1
+			nt.Sleep = 0
+			nt.SP = argc
+			if argc > 10 {
+				nt.SP = 10
+			}
+			for i := 0; i < nt.SP; i++ {
+				// Reverse: last popped highest => args[0] -> high index
+				nt.Stack[i] = args[argc-1-i]
+			}
+			// Caller continues
+			t.PC += 3
+		case 0x10062000: // call-script [04 §4.3] E C14
+			if t.PC+2 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			scriptID := int(v.prog.Code[t.PC+1])
+			argc := int(v.prog.Code[t.PC+2])
+			targetPC := -1
+			if progHasID(v.prog, scriptID) {
+				targetPC = codeIndexForID(v.prog, scriptID)
+			}
+			badID := targetPC == -1
+			// Find free slot
+			newIdx := -1
+			for i := 0; i < 8; i++ {
+				if v.Threads[i].Status == ThreadIdle {
+					newIdx = i
+					break
+				}
+			}
+			if badID || newIdx == -1 {
+				// Retain args, record wait -1, block anyway [04 §4.3] C14
+				t.WaitThread = -1
+				t.Status = ThreadWaitCall
+				t.PC += 3
+				return // leak
+			}
+			args := make([]int32, argc)
+			for i := argc - 1; i >= 0; i-- {
+				val, _ := t.stackPop()
+				args[i] = val
+			}
+			nt := &v.Threads[newIdx]
+			nt.Status = ThreadRunning
+			nt.PC = targetPC
+			nt.SignalMask = t.SignalMask
+			nt.WaitThread = -1
+			nt.WaitPiece = -1
+			nt.WaitAxis = -1
+			nt.Sleep = 0
+			nt.SP = argc
+			if nt.SP > 10 {
+				nt.SP = 10
+			}
+			for i := 0; i < nt.SP; i++ {
+				nt.Stack[i] = args[argc-1-i]
+			}
+			// Block caller [04 §4.2]
+			t.WaitThread = newIdx
+			t.Status = ThreadWaitCall
+			t.PC += 3
+			return
+		case 0x10063000: // reserved pop-N [04 §4.3]
+			if t.PC+2 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			argc := int(v.prog.Code[t.PC+2])
+			// Pop count values into discarded temporary [04 §4.3]
+			for i := 0; i < argc; i++ {
+				t.stackPop()
+			}
+			t.PC += 3
+		case 0x10064000: // jump [04 §4.3] D
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			target := int(v.prog.Code[t.PC+1]) // word index absolute [04 §4.3] C12
+			if target < 0 || target >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			t.PC = target // set absolutely [04 §4.3] C12
+		case 0x10065000: // return [04 §4.3]
+			t.stackPop() // popped value delivered to completion callback when set [04 §4.3]
+			// Free thread and wake blocked callers [04 §4.2]
+			v.killThread(idx)
+			return
+		case 0x10066000: // jump-if-false [04 §4.3] D
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			target := int(v.prog.Code[t.PC+1])
+			cond, _ := t.stackPop()
+			if cond == 0 {
+				if target < 0 || target >= len(v.prog.Code) {
+					v.killThread(idx)
+					return
+				}
+				t.PC = target
+			} else {
+				t.PC += 2
+			}
+		case 0x10067000: // signal [04 §4.3]
+			mask, _ := t.stackPop()
+			// Kill every thread whose mask intersects mask, waking waiters [04 §4.3]
+			selfKilled := false
+			// Need to consider all threads; collect toKill first then kill to avoid modifying while iterating?
+			// We'll loop repeatedly as signalMask does.
+			// For opcode we can reuse signalMask helper but need self-killed flag.
+			// Implement inline to capture self.
+			// First pass: find intersections
+			toKill := make([]int, 0, 8)
+			for i := 0; i < 8; i++ {
+				ot := &v.Threads[i]
+				if ot.Status == ThreadIdle {
+					continue
+				}
+				if ot.SignalMask&mask != 0 {
+					toKill = append(toKill, i)
+				}
+			}
+			for _, k := range toKill {
+				if k == idx {
+					selfKilled = true
+				}
+				v.killThread(k)
+			}
+			if selfKilled {
+				return // only when it kills itself does it suspend [04 §4.3]
+			}
+			t.PC += 1
+		case 0x10068000: // set-signal-mask [04 §4.3]
+			mask, _ := t.stackPop()
+			t.SignalMask = mask
+			t.PC += 1
+		case 0x10071000: // explode [04 §4.3] [04 §4.5]
+			if t.PC+1 >= len(v.prog.Code) {
+				v.killThread(idx)
+				return
+			}
+			t.stackPop() // flags [04 §4.3] [04 §4.5]
+			// Random draws authoritative [04 §4.5]: three 3000, 40, 10 dead, 40
+			v.simRandN(3000)
+			v.simRandN(3000)
+			v.simRandN(3000)
+			v.simRandN(40)
+			dead := v.simRandN(10)
+			_ = dead // overwritten dead [04 §4.5]
+			v.simRandN(40)
+			// Bitmap branch spawns effects per bit ascending, plus physical debris if not bitmap-only; here no presentation effect.
+			t.PC += 2
+		case 0x10082000: // engine write [04 §4.3]
+			val, _ := t.stackPop()
+			id, _ := t.stackPop()
+			// If id has no write arm only sets script-touched marker [04 §4.4]; we treat as no-op beyond hook.
+			if fn, ok := v.portFuncs[Port(id)]; ok && fn != nil {
+				_ = fn([]int32{id, val})
+			} else {
+				v.writePortDefault(id, val)
+			}
+			t.PC += 1
+		case 0x10083000: // attach-unit [04 §4.3]
+			extra, _ := t.stackPop()
+			piece, _ := t.stackPop()
+			unit, _ := t.stackPop()
+			_ = extra
+			_ = piece
+			_ = unit
+			// Requires candidate carrier field empty etc [04 §4.4]; presentation deferred.
+			t.PC += 1
+		case 0x10084000: // detach-unit [04 §4.3]
+			t.stackPop()
+			t.PC += 1
+		default:
+			// Should be unreachable due to binary search guard, but keep kill path.
+			v.killThread(idx)
+			return
+		}
+	}
+}
+
+// readPortDefault is the default engine read when no port handler is bound.
+// It returns 0 for identifiers outside 1..20 [04 §4.4] C15, else 0 as stock
+// default.
+func (v *VM) readPortDefault(id int32, args []int32) int32 {
+	if id < 1 || id > 20 {
+		return 0 // [04 §4.4] outside range reads zero
+	}
+	// Without WU-06-7 binding, reads are 0; writes only set marker.
+	return 0
+}
+
+// writePortDefault is the default engine write when no handler bound.
+func (v *VM) writePortDefault(id, val int32) {
+	if id < 1 || id > 20 {
+		return
+	}
+	// No-op beyond marker [04 §4.4]
+}
+
+// helpers for Program id mapping.
+
+func progHasID(prog *Program, id int) bool {
+	if prog == nil {
+		return false
+	}
+	// If additive ScriptsByID slice exists, use length check.
+	if prog.ScriptsByID != nil {
+		return id >= 0 && id < len(prog.ScriptsByID)
+	}
+	// Fallback: id is word index within code and present in Scripts map.
+	// For synthetic programs with no map entries, treat any in-bounds id as valid?
+	// We'll consider valid only if map non-empty and code index matches.
+	if len(prog.Scripts) == 0 {
+		return id >= 0 && id < len(prog.Code) // allow direct pc as id for fixtures
+	}
+	return false
+}
+
+func codeIndexForID(prog *Program, id int) int {
+	if prog == nil {
+		return -1
+	}
+	if prog.ScriptsByID != nil {
+		if id < 0 || id >= len(prog.ScriptsByID) {
+			return -1
+		}
+		return prog.ScriptsByID[id]
+	}
+	// Fallback: id is direct pc for fixtures with no ScriptsByID.
+	if id >= 0 && id < len(prog.Code) {
+		return id
+	}
+	return -1
+}
+
+// stack helpers per thread [04 §4.2] C13 stack depth 10.
+
+func (t *Thread) stackPush(val int32) {
+	if t.SP >= 10 { // [04 §4.2] C13 stack depth 10
+		return // overflow: lose push deterministically; no kill
+	}
+	t.Stack[t.SP] = val
+	t.SP++
+}
+
+func (t *Thread) stackPop() (int32, bool) {
+	if t.SP <= 0 {
+		return 0, false // underflow returns 0 [04 §4.3] no fault
+	}
+	t.SP--
+	return t.Stack[t.SP], true
+}
+
+func (t *Thread) getLocal(idx int) int32 {
+	if idx < 0 || idx >= 10 {
+		return 0
+	}
+	// Window word idx [04 §4.3] "local i is window word i"
+	return t.Stack[idx]
+}
+
+func (t *Thread) setLocal(idx int, val int32) {
+	if idx < 0 || idx >= 10 {
+		return
+	}
+	t.Stack[idx] = val
+}
+
+func (v *VM) getStatic(idx int) int32 {
+	if idx < 0 || idx >= len(v.statics) {
+		return 0
+	}
+	return v.statics[idx]
+}
+
+func (v *VM) setStatic(idx int, val int32) {
+	if idx < 0 || idx >= len(v.statics) {
+		return
+	}
+	v.statics[idx] = val
+}
+
+func (v *VM) simRandN(bound uint32) uint32 {
+	if v.simRng != nil {
+		return v.simRng.Uint32n(bound) // [01 §7.1] I4
+	}
+	if rng.Global.Sim != nil {
+		return rng.Global.Sim.Uint32n(bound)
+	}
+	// Fallback deterministic for testing without global seed [01 §7.1]
+	// Use a package fallback seeded 1; not authoritative but deterministic.
+	return fallbackSim.Uint32n(bound)
+}
+
+var fallbackSim = rng.NewSimulation(1)

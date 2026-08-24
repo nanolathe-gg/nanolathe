@@ -19,6 +19,18 @@ const (
 	DeathSelfDestruct
 )
 
+// TODO(question): [04 §3.5] establishes the per-unit dedup array but not its capacity.
+const GuardLatchSize = 8
+
+// GuardLatches holds the per-unit dedup arrays for guard assistance triggers [04 §3.5].
+// Four classes × fixed-size arrays of pool.Handle; auto-fire per weapon slot.
+type GuardLatches struct {
+	BuildAssist [GuardLatchSize]pool.Handle
+	AutoFire    [3][GuardLatchSize]pool.Handle
+	Repair      [GuardLatchSize]pool.Handle
+	HelpBuild   [GuardLatchSize]pool.Handle
+}
+
 // Unit is a live unit instance [04 §2.3] C1.
 // Retail unit records have 280-byte identity; Nanolathe uses named Go fields in a slot-indexed array [PLAN_06 C1] (I13).
 type Unit struct {
@@ -30,8 +42,12 @@ type Unit struct {
 	MaxHealth int32
 	Alive     bool // alive vs death mark separate [04 §2.4] C2
 	// Build progress remaining 1→0 [04 §2.3] C3
-	Remaining float32
-	Flags     uint32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Remaining    float32
+	Flags        uint32       // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Pending      uint32       // capability/pending word for gate intersection [04 §3.3] C6
+	Orders       any          // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
+	Script       any          // COB VM placeholder [04 §4.2]
+	GuardLatches GuardLatches // per-unit dedup array for guard assistance [04 §3.5]
 }
 
 // World is the unit world [PLAN_06 Public API].
