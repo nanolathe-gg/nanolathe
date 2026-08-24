@@ -53,8 +53,14 @@ type EffectView struct{}
 // Frame is one published presentation frame. Tick is the authoritative global
 // tick at publish time. Slices are owned by the Frame value; callers must not
 // retain and mutate the slices passed to Publish after the call.
+//
+// Single-writer rule per docs/ORCHESTRATION.md §4: one writer per Frame field
+// is serialized. Units is owned exclusively by phase-06/GATE2-SLICE (the Gate-2
+// walker slice, straight-line stub per PHASES Gate 2) until WU-07-7 replaces the
+// mover; no other dispatch may write Frame.Units concurrently.
 type Frame struct {
-	Tick        uint32
+	Tick uint32
+	// Units — single writer: phase-06/GATE2-SLICE Gate-2 walker slice until WU-07-7 [PHASES Gate 2].
 	Units       []UnitView
 	Projectiles []ProjectileView
 	Features    []FeatureView

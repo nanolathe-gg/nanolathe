@@ -1,4 +1,4 @@
-// Package client — drag-rectangle selection placeholder (WU-04A-6, Gate 1).
+// Package client — drag-rectangle selection (WU-04A-6, Gate 1 → wired in Gate 2).
 //
 // Retail contract [07 §9] C6:
 //
@@ -32,13 +32,16 @@
 // ascending index order, which maps to ascending slot order when the pool is
 // present.
 //
-// TODO: wire to phase-6 pool. When the unit pool lands, replace the
-// Selectable/Eligible placeholder with iteration over the owning player's
-// inclusive unit range at fixed 280-byte stride, compute eligibility from
-// authoritative fields, and apply the same NextSelected/ApplyDragSelection
-// logic. The bulk pre-clear path should use mask 0xFFFFFF2F across that range
-// before the set-inside pass [07 §9].
+// Gate 2 wires this table to live units via ApplyDragSelectionWorld below.
+// Eligibility for the Gate-2 walker slice is alive == eligible; the full
+// retail predicate (active 0x20, float 1.0, state ref, parent 0x40000000)
+// is TODO(question) until COB/state and parent fields are populated.
 package client
+
+import (
+	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/units"
+)
 
 // View-pane origin offsets for presentation conversion [07 §9][03 §2.5].
 // The observed beam path uses 128,32; the drag-rect conversion uses the same
@@ -354,4 +357,52 @@ func ApplyDragSelectionFlags(flags []uint32, xs, ys []int32, rect Rect, additive
 		}
 	}
 	return changed, selectedCount
+}
+
+// ApplyDragSelectionWorld wires the [07 §9] C6 truth table to live units
+// [PHASES Gate 2]. It projects each alive unit via camera.WorldToScreen
+// [03 §2.5] and tests against the inclusive rect. Eligibility is alive for
+// the Gate-2 slice (full retail predicate needs COB/state fields).
+// Iteration is stable ascending slot order (I1) via units.World.Iter.
+func ApplyDragSelectionWorld(w *units.World, cam *camera.Camera, rect Rect, additive bool) (changed bool, selectedCount int) { // [07 §9] C6
+	if w == nil || cam == nil {
+		return false, 0
+	}
+	alive := w.Iter()
+	for _, u := range alive {
+		if u == nil || !u.Alive {
+			continue
+		}
+		sx, sy := cam.WorldToScreen(u.X, u.Y, u.Z) // [03 §2.5] C1
+		inside := rect.Contains(sx, sy)            // [07 §9] inclusive
+		old := u.Flags&SelectionFlag != 0
+		next := NextSelected(old, inside, additive)
+		if next != old {
+			changed = true
+			if next {
+				u.Flags |= SelectionFlag
+			} else {
+				u.Flags &^= SelectionFlag
+			}
+		}
+		if u.Flags&SelectionFlag != 0 {
+			selectedCount++
+		}
+	}
+	return changed, selectedCount
+}
+
+// SelectedUnits returns handles of currently selected alive units in stable
+// ascending slot order (I1) [07 §9] for order issuance.
+func SelectedUnits(w *units.World) []int { // int slot for test convenience
+	if w == nil {
+		return nil
+	}
+	var out []int
+	for _, u := range w.Iter() {
+		if u != nil && u.Alive && u.Flags&SelectionFlag != 0 {
+			out = append(out, int(u.Handle))
+		}
+	}
+	return out
 }

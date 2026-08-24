@@ -77,6 +77,26 @@ func run(opts Options, out *os.File) error {
 	rng.SeedGlobal(simSeed, crtSeed)
 	fmt.Fprintf(out, "seed: sim=%d crt=%d\n", simSeed, crtSeed)
 
+	// Gate 2 walker slice: when --map is set and no dump, prefer the
+	// Gate-2 viewer/headless paths per PHASES Gate 2 (6 + 7-stub). Keep every
+	// existing flag/path intact: on failure fall through to Gate-1 / report.
+	if opts.Map != "" && opts.Dump == "" {
+		if opts.Headless && opts.Ticks > 0 {
+			return runGate2Headless(opts, content, out)
+		}
+		if wantsViewer(opts) {
+			if err := runGate2Viewer(opts, content); err != nil {
+				fmt.Fprintf(os.Stderr, "nanolathe: gate2 viewer: %v (falling back to Gate1)\n", err)
+				if err2 := runViewer(opts, content); err2 != nil {
+					fmt.Fprintf(os.Stderr, "nanolathe: viewer: %v (falling back to headless report)\n", err2)
+				} else {
+					return nil
+				}
+			} else {
+				return nil
+			}
+		}
+	}
 	// Gate 1: windowed terrain viewer when --map is set, --headless is false,
 	// and no --dump is requested. This opens the Kaiju window and draws real
 	// TNT terrain with camera pan and FNT overlay [PLAN_04A].

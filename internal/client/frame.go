@@ -114,6 +114,52 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 	// camera are present, blit the tile map instead of the placeholder gradient.
 	if c.terrain != nil && c.cam != nil {
 		BlitTerrain(c.indexed, w, h, c.terrain, c.cam)
+		// Gate 2: draw interpolated units Previous→Current at alpha [03 §2.4] I6.
+		// Publish happens after phase 12 each sub-tick; renderer interpolates
+		// with alpha clamped [0,1] (C15/C16). When paused ticksToRun==0 the same
+		// pair is returned and Lerp at any alpha yields the same position, so
+		// holding alpha at 1.0 shows no jitter. Draw BEFORE debug overlay so
+		// text remains on top.
+		if ok && prev != nil && cur != nil && len(cur.Units) > 0 {
+			// Build slot→prev index for stable matching when lengths differ.
+			prevBySlot := make(map[uint16]int, len(prev.Units))
+			for i, pv := range prev.Units {
+				prevBySlot[uint16(pv.Slot)] = i
+			}
+			for _, cv := range cur.Units {
+				var pv snapshot.UnitView
+				if idx, ok2 := prevBySlot[uint16(cv.Slot)]; ok2 {
+					pv = prev.Units[idx]
+				} else {
+					pv = cv
+				}
+				x := snapshot.Lerp(pv.X, cv.X, alpha)
+				y := snapshot.Lerp(pv.Y, cv.Y, alpha)
+				z := snapshot.Lerp(pv.Z, cv.Z, alpha)
+				sx, sy := c.cam.WorldToScreen(x, y, z) // [03 §2.5] C1
+				// Clip and draw 5×5 sprite for visibility at 640×480.
+				selected := cv.Flags&SelectionFlag != 0
+				inner := byte(250)
+				if selected {
+					inner = 200 // distinct when selected [07 §9] 0x10
+				}
+				for dy := -2; dy <= 2; dy++ {
+					for dx := -2; dx <= 2; dx++ {
+						px := int(sx) + dx
+						py := int(sy) + dy
+						if px < 0 || px >= w || py < 0 || py >= h {
+							continue
+						}
+						// Black border, white/yellow interior.
+						if dx == -2 || dx == 2 || dy == -2 || dy == 2 {
+							c.indexed[py*w+px] = 0
+						} else {
+							c.indexed[py*w+px] = inner
+						}
+					}
+				}
+			}
+		}
 		// Overlay: debug info via FNT when available [03 §7.1] C8.
 		if c.fnt != nil {
 			// Use snapshot tick if available, else 0.
