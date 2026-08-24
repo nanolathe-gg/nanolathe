@@ -2,7 +2,6 @@ package combat
 
 import (
 	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -27,174 +26,269 @@ func (s *FireSpy) Reset() {
 	s.Events = s.Events[:0]
 }
 
-// TryFire attempts to fire slot slotIdx at tgt.
+// FireScript is the COB port for the fire callbacks [06 §4.1] C2.
 //
-// Contract transcription per plan C2–C8 with citations:
+// The callbacks are real script entry points, not names in a log: FirePrimary
+// moves the model's barrel, RockUnit applies the recoil the renderer reads.
+// A nil port fires no script, which is what a unit with no COB has.
+type FireScript interface {
+	// FireWeapon runs FirePrimary, FireSecondary or FireTertiary for the slot
+	// [06 §4.1] C2.
+	FireWeapon(slotIdx int)
+	// RockUnit applies the firing recoil [06 §4.1] C2.
+	RockUnit(slotIdx int)
+}
+
+// FireEvents is the presentation port for the shot's start sound and start
+// puff [06 §4.1] [06 §13.2].
+type FireEvents interface {
+	StartSound(name string)
+	StartSmoke(h pool.Handle)
+}
+
+// FirePorts carries everything the spawner needs from outside this package.
+//
+// Slot reload, stockpile ammunition and resource payment are deliberately NOT
+// here. The per-slot pipeline owns those steps [06 §4.1] C1 — see TickSlot —
+// and the spawner only validates, allocates, initializes and notifies. Both
+// layers owning them is how a stockpile launch could consume two rounds.
+type FirePorts struct {
+	// ShooterSide is the firing unit's side, recorded on the projectile so
+	// damage credit and hostility resolve against a real owner [06 §6.1].
+	ShooterSide uint8
+
+	// Origin is the firing unit's world point. It is the muzzle the shot
+	// starts from when the COB query yields no piece, which is the normal
+	// muzzle path [06 §4.1] C3 — not a stand-in for an unknown position.
+	Origin Vec3
+
+	// MuzzlePiece is the synchronous COB query for the slot's muzzle piece,
+	// performed before initialization and retained on pool-full
+	// [06 §4.1] C3 [06 §4.4] C5. A nil port or a negative result takes the
+	// normal muzzle path.
+	MuzzlePiece func(slotIdx int) int32
+
+	// MuzzleWorld resolves a piece index to its world point. When it declines,
+	// the shot falls back to Origin.
+	MuzzleWorld func(piece int32) (Vec3, bool)
+
+	// TargetWorld resolves a live unit target's world point at creation time.
+	// The family initializers derive yaw and pitch from muzzle to target
+	// [06 §6.3], so a unit target has no trajectory without it.
+	TargetWorld func(h pool.Handle) (Vec3, bool)
+
+	// Gravity is the map's gravity, consumed by the ballistic solver
+	// [06 §3.3] [06 §6.4].
+	Gravity numeric.Fixed
+
+	// Script and Events are the COB and presentation ports. Nil ports are
+	// silent; the callback ORDER is the contract either way [06 §4.1] C2.
+	Script FireScript
+	Events FireEvents
+
+	// RNG is the single global simulation stream. The draw COUNT is behavior
+	// [01 §7.1] I4.
+	RNG *rng.Simulation
+
+	// Spy observes the callback order for tests. It is an observer only —
+	// nothing in the spawner branches on it.
+	Spy *FireSpy
+}
+
+// TryFire is the family spawner: it validates, allocates a projectile record,
+// initializes it through the creation family, and runs the fire callbacks.
+//
+// Contract transcription per plan C2–C5, C8 with citations:
 //
 // C2 fire callback order fixed: root allocation → weapon's start sound → matching FirePrimary/Secondary/Tertiary → RockUnit → start smoke [06 §4.1].
 // C3 muzzle piece queried synchronously before initialization [06 §4.1].
 // C4 fire callbacks not called when pool is full [06 §4.1] [06 §5.1].
 // C5 pool-full retains target+trajectory validation, muzzle query, slot-angle mutation, accuracy calc and up to two RNG draws when spread nonzero [06 §4.4] I4.
-// C6 debit only after successful spawner return; both costs via economy immediate-debit both-or-neither [06 §4.2].
-// C7 reload integer-truncated in documented order [06 §4.2].
 // C8 burst spawns N pellets plus one silent anchor [06 §4.3].
 //
-// Validation, muzzle query and spread draws are performed before allocation so they are retained on pool-full failure [06 §4.4].
-// Callbacks, reload store and debit are suppressed on pool-full [06 §4.1] C4.
-func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, health, maxHealth, kills int32, simRNG *rng.Simulation, muzzleQuery func(slotIdx int) int32, spy *FireSpy, player *economy.Player) (pool.Handle, bool) {
+// Validation, muzzle query and spread draws are performed before allocation so
+// they are retained on pool-full failure [06 §4.4]. Callbacks are suppressed on
+// pool-full [06 §4.1] C4.
+//
+// Reload (C7), stockpile ammunition and the resource debit (C6) are the
+// pipeline's, not the spawner's: TickSlot performs them after a successful
+// return, in the order its PipelineStep enumeration fixes.
+func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, ports FirePorts) (pool.Handle, bool) {
 	if svc == nil || slot == nil || slot.Weapon == nil {
 		return 0, false
 	}
 	w := slot.Weapon
+
 	// --- retained pre-allocation work [06 §4.4] C5 ---
-	// Target and trajectory validation is retained even on pool-full; for this
-	// package validation is assumed passed by caller or via tgt.Kind check.
-	// We keep a minimal gate: if tgt is TargetNone we fail early without RNG.
+
+	// Target and trajectory validation is retained even on pool-full.
 	if tgt.Kind == TargetNone {
 		return 0, false
 	}
+
 	// C3 muzzle piece queried synchronously before initialization [06 §4.1].
-	// Identity stored so burst clones can re-query muzzle world position [06 §4.1] C3.
-	// Missing or negative result falls back to normal muzzle path [06 §4.1] C3.
+	// Identity is stored on the slot and on the record so burst clones can
+	// re-query the live muzzle position [06 §4.3] C8.
 	var muzzPiece int32 = -1
-	if muzzleQuery != nil {
-		muzzPiece = muzzleQuery(slotIdx) // synchronous query [06 §4.1] C3
-		slot.MuzzlePiece = muzzPiece     // retained even on pool-full [06 §4.4]
-	}
-	_ = muzzPiece
-	// Slot-angle mutation retained on pool-full [06 §4.4]; model as no-op but
-	// counted via muzzle query side effect. If caller supplied angle mutation
-	// it would be invoked here.
-
-	// Spread / accuracy calculation retained, including up to two RNG draws when spread nonzero [06 §4.4] I4.
-	// The parsed weapon-definition accuracy/tolerance/pitchtolerance remain dead stores [06 §3.3]; retained accuracy is executor's internal spread mathematics.
-	if simRNG != nil && w.SprayAngle != 0 {
-		// Up to two simulation-RNG draws whenever spread term is nonzero [06 §4.4] C5 I4.
-		// Consume exactly two draws to lock deterministic count; bound <2 would return 0 without advancing [01 §7.1] I4 but spray nonzero implies bound >=2.
-		simRNG.Uint32n(1000)
-		simRNG.Uint32n(1000)
-	} else if simRNG != nil && w.RandomDecay != 0 && w.SprayAngle == 0 {
-		// Random decay alone can also cause a second perturbation; for zero spray we keep zero draws to distinguish.
-		// Keep zero draws for pure zero-spray case per test expectation.
+	if ports.MuzzlePiece != nil {
+		muzzPiece = ports.MuzzlePiece(slotIdx)
+		slot.MuzzlePiece = muzzPiece // retained even on pool-full [06 §4.4]
 	}
 
-	// Resource precheck before spawner [06 §4.2] C6: both costs prechecked, stockpile uses ammo.
-	if w.Stockpile {
-		if slot.Ammo <= 0 {
+	// Resolve the muzzle world point. A negative piece, or a port that
+	// declines, takes the normal muzzle path: the firing unit's own position.
+	muzzle := ports.Origin
+	if muzzPiece >= 0 && ports.MuzzleWorld != nil {
+		if pos, ok := ports.MuzzleWorld(muzzPiece); ok {
+			muzzle = pos
+		}
+	}
+
+	// Resolve the aim point. A unit target's position is needed at creation
+	// time because the family initializers derive yaw and pitch from it
+	// [06 §6.3]; a target that cannot be resolved fails validation.
+	var target Vec3
+	switch tgt.Kind {
+	case TargetPoint:
+		target = Vec3{X: tgt.X, Y: tgt.Y, Z: tgt.Z}
+	case TargetUnit:
+		if ports.TargetWorld == nil {
 			return 0, false
 		}
-	} else if player != nil {
-		eCost := float32(w.EnergyPerShot)
-		mCost := float32(w.MetalPerShot)
-		if eCost != 0 || mCost != 0 {
-			if player.Stock[economy.Energy] < eCost || player.Stock[economy.Metal] < mCost {
-				return 0, false
-			}
+		pos, ok := ports.TargetWorld(tgt.Unit)
+		if !ok {
+			return 0, false
 		}
+		target = pos
 	}
 
-	// C2 root allocation before callbacks [06 §4.1] [06 §5.1]; pool-full check before common initialization and before Fire/RockUnit [06 §5.1].
-	h, ok := svc.Reserve()
-	if !ok {
-		// C4 fire callbacks not called when pool is full [06 §4.1] C4.
-		// C5 retained work already done (muzzle query, angle mutation, spread draws) [06 §4.4].
-		// Suppress: record itself, Fire/RockUnit, start smoke, shot packet, pending-slot clear, reload, ammunition, firing state, resource mutation [06 §4.4].
+	// Spread. Up to two simulation-RNG draws whenever the spread term is
+	// nonzero, retained on pool-full [06 §4.4] C5 I4. The sampling shape is
+	// the one [06 §4.3] gives: each draw is bounded by the authored spray
+	// field and re-centred by half that bound. The offsets are computed here,
+	// before allocation, so the draw count survives a pool-full failure, and
+	// applied after initialization, where the angles exist.
+	//
+	// TODO(question): [06 §4.4] establishes the draw count and that an
+	// "accuracy calculation" precedes it, but the parsed accuracy, tolerance
+	// and pitchtolerance fields are dead stores [06 §3.3] — the retained
+	// spread is the executor's own. The bound used here is sprayangle, the
+	// same field the burst path samples; the second bound is the adjacent
+	// wobble field [06 §4.3], not yet identified in the compiled record.
+	var yawSpread, pitchSpread int32
+	if ports.RNG != nil && w.SprayAngle != 0 {
+		bound := uint32(w.SprayAngle)
+		yawSpread = recentred(ports.RNG.Uint32n(bound), w.SprayAngle)
+		pitchSpread = recentred(ports.RNG.Uint32n(bound), w.SprayAngle)
+	}
+
+	// The creation family decides whether a record is created at all: a weapon
+	// matching none of the six creation predicates makes no projectile
+	// [06 §6.2] C15. Deciding before reservation keeps the pool untouched.
+	fam := CreationFamilyForWeapon(w)
+	if fam == CreationNone {
 		return 0, false
 	}
-	// Successful allocation: common initialization [06 §5.1] [06 §6.1].
+
+	// Ballistic weapons need a launch angle before allocation: a target with no
+	// solution is not admitted [06 §3.3] [06 §6.4].
+	var solvedPitch, solvedYaw numeric.Angle
+	if fam == CreationBallistic {
+		dx := target.X.Sub(muzzle.X)
+		dy := target.Y.Sub(muzzle.Y)
+		dz := target.Z.Sub(muzzle.Z)
+		raw, ok := BallisticSolve(dx, dy, dz, numeric.Fixed(int64(w.WeaponVelocity)), ports.Gravity, 0)
+		if !ok {
+			return 0, false
+		}
+		solvedPitch = numeric.Angle(raw)
+		solvedYaw = YawFromDelta(dx, dz)
+	}
+
+	// C2 root allocation before callbacks [06 §4.1] [06 §5.1]; the pool-full
+	// check precedes common initialization and the Fire/RockUnit callbacks
+	// [06 §5.1].
+	h, ok := svc.Reserve()
+	if !ok {
+		// C4 fire callbacks not called when pool is full [06 §4.1].
+		// C5 retained work is already done: muzzle query, angle mutation and
+		// spread draws. Suppressed: the record, Fire/RockUnit, start smoke,
+		// the shot packet, the pending-slot clear, reload, ammunition, firing
+		// state and resource mutation [06 §4.4].
+		return 0, false
+	}
 	idx := int(h) - 1
 	p := &svc.Records[idx]
-	// Clear and seed fields per common initializer [06 §5.1] [06 §6.1].
-	// Reserve already zeroed the slot; set authoritative fields.
-	p.WeaponID = w.ID
-	p.CreationTick = tick
-	p.MuzzlePiece = int16(muzzPiece) // stored for burst re-query [06 §4.1] C3
-	// Positions: copy muzzle point into both current/head and second point [06 §6.1].
-	// For fire path we use zero Vec3 as placeholder; burst refresh will re-query via MuzzlePiece.
-	p.Pos = Vec3{}
-	p.StartPos = Vec3{}
-	// Target
-	if tgt.Kind == TargetPoint {
-		p.TargetPos = Vec3{X: tgt.X, Y: tgt.Y, Z: tgt.Z}
-	} else {
-		// unit target: store handle; position resolved later
-		p.TargetUnit = tgt.Unit
+
+	// Ownership and muzzle identity are read back by the family initializers
+	// through InitCommon, so they are set before dispatch [06 §6.1].
+	p.ShooterSide = ports.ShooterSide
+	p.MuzzlePiece = int16(muzzPiece)
+
+	// Family dispatch [06 §6.2] C15: this is what gives the record its
+	// position, yaw, pitch, scalar speed, velocity and family expiry.
+	InitProjectile(p, w, tick, muzzle, target, tgt.Unit, solvedYaw, solvedPitch, nil)
+
+	// Apply the retained spread to the aimed trajectory, recomputing the
+	// velocity components from the perturbed angles through the fixed-point
+	// helpers rather than nudging them in Cartesian space [06 §4.3].
+	if yawSpread != 0 || pitchSpread != 0 {
+		p.Yaw = numeric.Angle(uint16(int32(p.Yaw) + yawSpread))
+		p.Pitch = numeric.Angle(uint16(int32(p.Pitch) + pitchSpread))
+		p.Velocity = VelocityFromAngles(p.Yaw, p.Pitch, p.Speed)
 	}
-	p.ShooterSide = 0 // neutral fallback; caller may set via p.Shooter
-	// Burst state copied from weapon [06 §4.3] C8: burst count into root.
+
+	// Burst state copied from the weapon into the root [06 §4.3] C8.
 	p.BurstRemaining = w.Burst
 	if w.Burst > 0 {
 		p.BurstDeadline = tick + uint32(w.BurstRate) // interval added to next deadline [06 §4.3]
 	} else {
 		p.BurstDeadline = 0
 	}
-	// Expiry: use WeaponTimer if nonzero else range-derived; simplified to WeaponTimer [06 §6.3] [06 §6.4].
-	if w.WeaponTimer != 0 {
-		p.ExpiryTick = tick + uint32(w.WeaponTimer)
-	}
-	// Smoke deadline seed [06 §5.1]
-	if w.SmokeDelay != 0 {
-		p.SmokeDeadline = tick + uint32(w.SmokeDelay)
-	}
 
-	// C2 fixed callback order [06 §4.1]: root allocation → start sound → FirePrimary/Secondary/Tertiary → RockUnit → start smoke.
-	// Start sound emitted by common initializer so it precedes Fire [06 §4.1].
-	// Successful normal, ballistic and vertical-launch root spawners follow this order;
-	// dropped-family inline allocator emits neither Fire nor RockUnit;
-	// direct meteor path runs only common initializer; burst clones rerun none [06 §4.1] C2.
-	isDropped := w.Dropped
-	isMeteor := w.Meteor
-	// Record allocation as first observable event for spy [06 §4.1] C2
-	if spy != nil {
-		spy.Record("alloc")
+	// C2 fixed callback order [06 §4.1]: root allocation → start sound →
+	// FirePrimary/Secondary/Tertiary → RockUnit → start smoke.
+	// The start sound is emitted by the common initializer so it precedes Fire.
+	// Successful normal, ballistic and vertical-launch root spawners follow
+	// this order; the dropped-family inline allocator emits neither Fire nor
+	// RockUnit; the direct meteor path runs only the common initializer; burst
+	// clones rerun none [06 §4.1] C2.
+	if ports.Spy != nil {
+		ports.Spy.Record("alloc")
 	}
-	if spy != nil && w.SoundStart != "" {
-		spy.Record("startSound") // [06 §4.1] C2 start sound from common initializer
+	if w.SoundStart != "" {
+		if ports.Spy != nil {
+			ports.Spy.Record("startSound")
+		}
+		if ports.Events != nil {
+			ports.Events.StartSound(w.SoundStart)
+		}
 	}
-	if !isDropped && !isMeteor {
-		if spy != nil {
+	if fam != CreationDropped && fam != CreationMeteor {
+		if ports.Spy != nil {
 			switch slotIdx {
-			case 0:
-				spy.Record("FirePrimary") // [06 §4.1] C2
 			case 1:
-				spy.Record("FireSecondary")
+				ports.Spy.Record("FireSecondary")
 			case 2:
-				spy.Record("FireTertiary")
+				ports.Spy.Record("FireTertiary")
 			default:
-				spy.Record("FirePrimary")
+				ports.Spy.Record("FirePrimary")
 			}
-			spy.Record("RockUnit") // [06 §4.1] C2
+			ports.Spy.Record("RockUnit")
 		}
-		// Start puff only from three ordinary spawners after Fire then RockUnit [06 §13.2]; burst/dropped/meteor never emit it.
-		if w.StartSmoke && spy != nil {
-			spy.Record("startSmoke") // [06 §4.1] [06 §13.2]
+		if ports.Script != nil {
+			ports.Script.FireWeapon(slotIdx) // [06 §4.1] C2
+			ports.Script.RockUnit(slotIdx)   // [06 §4.1] C2
 		}
-	} else {
-		// Dropped: neither Fire nor RockUnit [06 §4.1] C2; start smoke suppressed [06 §13.2]
-		// Meteor: only common initializer [06 §4.1] C2
-	}
-
-	// C7 reload integer-truncated in documented order [06 §4.2] C7.
-	// Stockpile launch does not write reload [06 §4.2] C7.
-	if !w.Stockpile {
-		stored := ComputeStoredReload(health, maxHealth, kills, w.ReloadTime) // [06 §4.2] C7 [01 §8] I3
-		slot.Reload = stored
-		slot.PendingReload = stored
-	} else {
-		// Stockpile launch decrements ammunition and performs no per-launch debit [06 §4.2] C6 [06 §11.1].
-		if slot.Ammo > 0 {
-			slot.Ammo-- // [06 §11.1] byte-sized completed rounds; int32 placeholder
-		}
-	}
-
-	// C6 debit only after successful spawner return; both costs prechecked then post-spawn helper rechecks and debits both or neither [06 §4.2] C6.
-	// Stockpile performs no per-launch debit [06 §4.2] C6.
-	if !w.Stockpile && player != nil {
-		eCost := float32(w.EnergyPerShot)
-		mCost := float32(w.MetalPerShot)
-		if eCost != 0 || mCost != 0 {
-			// Both-or-neither via ImmediateDebit [05 "Direct two-resource payment"] C11 [06 §4.2] C6
-			_ = economy.ImmediateDebit(player, eCost, mCost)
+		// The start puff comes only from the three ordinary spawners, after
+		// Fire and RockUnit [06 §13.2]; burst, dropped and meteor never emit it.
+		if w.StartSmoke {
+			if ports.Spy != nil {
+				ports.Spy.Record("startSmoke")
+			}
+			if ports.Events != nil {
+				ports.Events.StartSmoke(h)
+			}
 		}
 	}
 

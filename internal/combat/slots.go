@@ -8,6 +8,7 @@ package combat
 import (
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 )
 
 // NumSlots is the fixed retail slot count [06 §1.2].
@@ -250,6 +251,13 @@ type PipelineEnv struct {
 	ValidateTarget func(slotIdx int, t Target) bool // [06 §3.1] [06 §3.2] target validation
 	CheckAdmission func(slotIdx int, s *Slot) bool  // [06 §3.3] range/medium/ballistic admission; coverage vs engagement distinction is established — coverage drives overlay only [06 §3.3]
 	TryFire        func(slotIdx int, s *Slot) bool  // family spawner + allocation per [06 §4.1]; returns true on successful spawner return [06 §4.2] C6
+
+	// Player is the firing unit's owner, debited at StepDebit [06 §4.2] C6.
+	// The pipeline is the sole owner of that payment: the spawner prechecks
+	// the two costs but mutates nothing, so a shot cannot be paid for twice.
+	// A nil player pays nothing, which is what a shot with no economy behind
+	// it (a fixture, a neutral feature) does.
+	Player *economy.Player
 }
 
 // TickSlot runs the established per-slot pipeline for slot idx in fixed order [06 §4.1] C1.
@@ -310,8 +318,27 @@ func TickSlot(slot *Slot, idx int, tick uint32, spy *PipelineSpy, env PipelineEn
 		return false
 	}
 
+	// Both costs are prechecked before the spawner, so a shot that cannot be
+	// paid for never reserves a projectile and never runs the callbacks
+	// [06 §4.2] C6. A stockpile launch is gated on a completed round instead
+	// [06 §11.1]. The precheck reads; only StepDebit writes.
+	if slot.Weapon.Stockpile {
+		if slot.Ammo <= 0 {
+			return false
+		}
+	} else if env.Player != nil {
+		eCost := float32(slot.Weapon.EnergyPerShot)
+		mCost := float32(slot.Weapon.MetalPerShot)
+		if eCost != 0 || mCost != 0 {
+			if env.Player.Stock[economy.Energy] < eCost || env.Player.Stock[economy.Metal] < mCost {
+				return false
+			}
+		}
+	}
+
 	// --- Step: family spawner (allocation, sounds, Fire*/RockUnit) [06 §4.1] C2 ---
-	// For WU-09-1 the spawner is stubbed via env.TryFire; real family dispatch lives in WU-09-3 fire.go.
+	// The spawner is TryFire in fire.go, wired through env so this package's
+	// pipeline does not need the caller's COB, presentation and RNG ports.
 	if spy != nil {
 		spy.Record(StepSpawner)
 	}
@@ -329,27 +356,32 @@ func TickSlot(slot *Slot, idx int, tick uint32, spy *PipelineSpy, env PipelineEn
 	if spy != nil {
 		spy.Record(StepStoreReload)
 	}
-	if slot.Weapon != nil && !slot.Weapon.Stockpile {
+	if !slot.Weapon.Stockpile {
 		stored := ComputeStoredReload(health, maxHealth, kills, slot.Weapon.ReloadTime) // [06 §4.2] C7 trunc order [01 §8] I3
 		slot.Reload = stored                                                            // store reload [06 §4.2] C7
 		slot.PendingReload = stored                                                     // latch for diagnostics (I13)
-	} else if slot.Weapon != nil && slot.Weapon.Stockpile {
-		// Stockpile launch decrements ammunition but performs no reload write per [06 §4.2] C7; handled below at debit/ammo step.
-		// TODO(question): [06 §11.1] slot-byte mapping for completed rounds vs int32 remains untraced.
+	}
+	// Stockpile launch decrements ammunition and writes no reload [06 §4.2] C7.
+	// TODO(question): [06 §11.1] slot-byte mapping for completed rounds vs int32 remains untraced.
+	if slot.Weapon.Stockpile && slot.Ammo > 0 {
+		slot.Ammo-- // [06 §11.1] byte-sized completed rounds decrement
 	}
 
 	// --- Step: debit resources (both-or-neither) [06 §4.2] C6 ---
 	if spy != nil {
 		spy.Record(StepDebit)
 	}
-	// Debit happens only after successful spawner return; both costs prechecked then post-spawn helper rechecks and debits both or neither [06 §4.2] C6.
-	// For stockpile, launch decrements ammunition and performs no per-launch debit [06 §4.2] C6 — modeled as Ammo-- if stockpile.
-	if slot.Weapon != nil && slot.Weapon.Stockpile {
-		if slot.Ammo > 0 {
-			slot.Ammo-- // [06 §11.1] byte-sized completed rounds decrement
+	// Debit happens only after a successful spawner return; both costs were
+	// prechecked by the spawner, and this recheck-and-debit pays both or
+	// neither [05 "Direct two-resource payment"] C11 [06 §4.2] C6.
+	// A stockpile launch performs no per-launch debit — its metal and energy
+	// were spent building the round [06 §4.2] C6.
+	if !slot.Weapon.Stockpile && env.Player != nil {
+		eCost := float32(slot.Weapon.EnergyPerShot)
+		mCost := float32(slot.Weapon.MetalPerShot)
+		if eCost != 0 || mCost != 0 {
+			economy.ImmediateDebit(env.Player, eCost, mCost)
 		}
-	} else {
-		// Non-stockpile debit would be performed by economy phase; we record the step.
 	}
 	return true
 }

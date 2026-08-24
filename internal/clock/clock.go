@@ -273,3 +273,45 @@ func (s *State) BeginSubTick() uint32 {
 func ScaledNow(tickCount uint32) int32 {
 	return int32((uint64(tickCount) * 30) / 1000)
 }
+
+// FrameClock converts a renderer's per-frame elapsed time into the integer
+// scaled timebase the budget anchors against [01 §4.2]:
+//
+//	scaledNow = floor(GetTickCountMilliseconds * 30 / 1000)
+//
+// Retail samples GetTickCount, an integer millisecond counter, directly. A
+// Kaiju frame hands us a float seconds delta instead, so the milliseconds are
+// accumulated here and only their integer scaled value is handed to the
+// budget. The fractional millisecond is retained rather than dropped, so a
+// 60 Hz frame (16.666 ms) does not lose two thirds of a millisecond per frame.
+//
+// This is NOT a second timebase. It replaces the OS millisecond counter, not
+// the budget: the runnable tick count, the fractional carry, pause, speed and
+// the zero-to-five clamp all still come from State.AdvanceSP/AdvanceMP, which
+// is the sole authority [01 §4.2] [01 §4.3].
+type FrameClock struct {
+	millis float64
+}
+
+// Scaled advances the frame clock by deltaSeconds and returns the scaledNow to
+// pass to AdvanceSP or AdvanceMP.
+//
+// A negative or NaN delta advances nothing; retail's own wrap handling lives
+// in the budget, which reads a negative delta and clamps the count to zero.
+func (f *FrameClock) Scaled(deltaSeconds float64) int32 {
+	if f == nil {
+		return 0
+	}
+	if deltaSeconds > 0 && !math.IsInf(deltaSeconds, 0) && !math.IsNaN(deltaSeconds) {
+		f.millis += deltaSeconds * 1000.0
+	}
+	return int32(math.Floor(f.millis * 30.0 / 1000.0))
+}
+
+// Millis reports the accumulated wall-clock milliseconds, for diagnostics.
+func (f *FrameClock) Millis() float64 {
+	if f == nil {
+		return 0
+	}
+	return f.millis
+}

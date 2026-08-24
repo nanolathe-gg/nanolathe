@@ -12,13 +12,18 @@ import (
 
 func weaponForFire(id int32, reload int32, spray int32, burst int32, burstRate int32, stockpile bool, dropped bool, meteor bool, startSmoke bool, soundStart string, energy float64, metal float64) *content.WeaponDef {
 	return &content.WeaponDef{
-		ID:            id,
-		ReloadTime:    reload,
-		SprayAngle:    spray,
-		Burst:         burst,
-		BurstRate:     burstRate,
-		Stockpile:     stockpile,
-		Dropped:       dropped,
+		ID:         id,
+		ReloadTime: reload,
+		SprayAngle: spray,
+		Burst:      burst,
+		BurstRate:  burstRate,
+		Stockpile:  stockpile,
+		Dropped:    dropped,
+		// A weapon matching none of the six creation predicates makes no
+		// projectile at all [06 §6.2] C15, so a fixture that sets no family
+		// flag is not an "ordinary" weapon — it is an inert one. Ordinary
+		// here means line-of-sight, unless the case declares another family.
+		LineOfSight:   !dropped && !meteor,
 		Meteor:        meteor,
 		StartSmoke:    startSmoke,
 		SoundStart:    soundStart,
@@ -36,7 +41,7 @@ func TestFireCallbackOrder(t *testing.T) {
 		spy := &FireSpy{}
 		muzzle := func(int) int32 { return 5 }
 		r := rng.NewSimulation(1)
-		h, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint, X: numeric.FixedFromInt(10), Z: numeric.FixedFromInt(10)}, 0, 100, 100, 0, &r, muzzle, spy, nil)
+		h, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint, X: numeric.FixedFromInt(10), Z: numeric.FixedFromInt(10)}, 0, FirePorts{RNG: &r, MuzzlePiece: muzzle, Spy: spy})
 		if !ok || h == 0 {
 			t.Fatalf("expected fire ok")
 		}
@@ -56,7 +61,7 @@ func TestFireCallbackOrder(t *testing.T) {
 		slot := &Slot{Weapon: w}
 		spy := &FireSpy{}
 		r := rng.NewSimulation(1)
-		_, ok := TryFire(&svc, slot, 1, Target{Kind: TargetPoint, X: numeric.FixedFromInt(1)}, 0, 100, 100, 0, &r, func(int) int32 { return 1 }, spy, nil)
+		_, ok := TryFire(&svc, slot, 1, Target{Kind: TargetPoint, X: numeric.FixedFromInt(1)}, 0, FirePorts{RNG: &r, MuzzlePiece: func(int) int32 { return 1 }, Spy: spy})
 		if !ok {
 			t.Fatalf("fire secondary failed")
 		}
@@ -74,7 +79,7 @@ func TestFireCallbackOrder(t *testing.T) {
 		slot := &Slot{Weapon: w}
 		spy := &FireSpy{}
 		r := rng.NewSimulation(1)
-		_, ok := TryFire(&svc, slot, 2, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r, nil, spy, nil)
+		_, ok := TryFire(&svc, slot, 2, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r, Spy: spy})
 		if !ok {
 			t.Fatalf("tertiary failed")
 		}
@@ -90,7 +95,7 @@ func TestFireCallbackOrder(t *testing.T) {
 		slot := &Slot{Weapon: w}
 		spy := &FireSpy{}
 		r := rng.NewSimulation(1)
-		_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r, nil, spy, nil)
+		_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r, Spy: spy})
 		if !ok {
 			t.Fatalf("dropped fire failed")
 		}
@@ -112,7 +117,7 @@ func TestFireCallbackOrder(t *testing.T) {
 		slot := &Slot{Weapon: w}
 		spy := &FireSpy{}
 		r := rng.NewSimulation(1)
-		_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r, nil, spy, nil)
+		_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r, Spy: spy})
 		if !ok {
 			t.Fatalf("meteor fire failed")
 		}
@@ -128,7 +133,7 @@ func TestFireCallbackOrder(t *testing.T) {
 		slot := &Slot{Weapon: w}
 		spy := &FireSpy{}
 		r := rng.NewSimulation(1)
-		_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r, nil, spy, nil)
+		_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r, Spy: spy})
 		if !ok {
 			t.Fatalf("burst root fire failed")
 		}
@@ -160,7 +165,7 @@ func TestFirePoolFullSuppressesCallbacksButRetainsDraws(t *testing.T) {
 	r := rng.NewSimulation(42)
 	before := r.Draws()
 	// Need to supply slot muzzle piece tracking; but we test retains.
-	h, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint, X: numeric.FixedFromInt(5)}, 0, 100, 100, 0, &r, muzzle, spy, nil)
+	h, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint, X: numeric.FixedFromInt(5)}, 0, FirePorts{RNG: &r, MuzzlePiece: muzzle, Spy: spy})
 	if ok || h != 0 {
 		t.Fatalf("pool-full fire should fail")
 	}
@@ -183,7 +188,7 @@ func TestFirePoolFullSuppressesCallbacksButRetainsDraws(t *testing.T) {
 	slot2 := &Slot{Weapon: w2}
 	r2 := rng.NewSimulation(99)
 	before2 := r2.Draws()
-	_, ok2 := TryFire(&svc2, slot2, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r2, nil, &FireSpy{}, nil)
+	_, ok2 := TryFire(&svc2, slot2, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r2, Spy: &FireSpy{}})
 	if ok2 {
 		t.Fatalf("should fail pool full zero spray")
 	}
@@ -205,7 +210,7 @@ func TestFireMuzzleQuerySynchronousBeforeInit(t *testing.T) {
 		return 7
 	}
 	r := rng.NewSimulation(1)
-	TryFire(&svc, slot, 1, Target{Kind: TargetPoint}, 5, 100, 100, 0, &r, muzzle, nil, nil)
+	TryFire(&svc, slot, 1, Target{Kind: TargetPoint}, 5, FirePorts{RNG: &r, MuzzlePiece: muzzle})
 	if !called || calledSlot != 1 {
 		t.Fatalf("muzzle query not called synchronously [06 §4.1] C3")
 	}
@@ -219,7 +224,7 @@ func TestFireMuzzleQuerySynchronousBeforeInit(t *testing.T) {
 	var svc2 Service
 	slot2 := &Slot{Weapon: w}
 	muzzleNeg := func(int) int32 { return -1 }
-	TryFire(&svc2, slot2, 0, Target{Kind: TargetPoint}, 5, 100, 100, 0, &r, muzzleNeg, nil, nil)
+	TryFire(&svc2, slot2, 0, Target{Kind: TargetPoint}, 5, FirePorts{RNG: &r, MuzzlePiece: muzzleNeg})
 	if slot2.MuzzlePiece != -1 {
 		t.Fatalf("negative muzzle should be stored as -1 fallback")
 	}
@@ -228,88 +233,102 @@ func TestFireMuzzleQuerySynchronousBeforeInit(t *testing.T) {
 	}
 }
 
-func TestFireDebitOnlyOnSuccess(t *testing.T) {
-	// C6 debit only after successful spawner return; both costs via immediate-debit both-or-neither [06 §4.2] C6.
+// The reload store, the stockpile decrement and the resource debit belong to
+// the per-slot pipeline, not to the spawner [06 §4.1] C1. These tests compose
+// the REAL TryFire under TickSlot rather than a stub, which is the only shape
+// that can catch the two layers both owning a mutation: when both did, a
+// stockpile launch consumed two rounds per shot.
+
+// firingEnv wires the real spawner into the pipeline for one unit.
+func firingEnv(svc *Service, player *economy.Player, ports FirePorts) PipelineEnv {
+	return PipelineEnv{
+		Player: player,
+		TryFire: func(idx int, s *Slot) bool {
+			_, ok := TryFire(svc, s, idx, s.Target, 0, ports)
+			return ok
+		},
+	}
+}
+
+func TestPipelineDebitOnlyOnSuccess(t *testing.T) {
+	pointTarget := Target{Kind: TargetPoint, X: numeric.FixedFromInt(10)}
+
 	t.Run("successDebits", func(t *testing.T) {
 		var svc Service
 		w := weaponForFire(20, 10, 0, 0, 0, false, false, false, false, "", 5, 7)
-		slot := &Slot{Weapon: w}
+		slot := &Slot{Weapon: w, Target: pointTarget}
 		player := &economy.Player{}
 		player.Stock[economy.Energy] = 100
 		player.Stock[economy.Metal] = 100
 		r := rng.NewSimulation(1)
-		_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r, nil, nil, player)
-		if !ok {
+		if !TickSlot(slot, 0, 0, nil, firingEnv(&svc, player, FirePorts{RNG: &r}), 100, 100, 0) {
 			t.Fatalf("fire should succeed")
 		}
 		if player.Stock[economy.Energy] != 95 || player.Stock[economy.Metal] != 93 {
-			t.Fatalf("debit both costs [06 §4.2] C6, energy %v metal %v", player.Stock[economy.Energy], player.Stock[economy.Metal])
+			t.Fatalf("debit both costs exactly once [06 §4.2] C6, energy %v metal %v",
+				player.Stock[economy.Energy], player.Stock[economy.Metal])
 		}
 		if slot.Reload == 0 {
 			t.Fatalf("reload should be stored on success [06 §4.2] C7")
 		}
 	})
+
 	t.Run("poolFullNoDebitNoReload", func(t *testing.T) {
 		var svc Service
 		for i := 0; i < ProjectileCapacity; i++ {
 			svc.Reserve()
 		}
 		w := weaponForFire(21, 30, 0, 0, 0, false, false, false, false, "", 5, 7)
-		slot := &Slot{Weapon: w, Reload: 0}
+		slot := &Slot{Weapon: w, Reload: 0, Target: pointTarget}
 		player := &economy.Player{}
 		player.Stock[economy.Energy] = 100
 		player.Stock[economy.Metal] = 100
 		r := rng.NewSimulation(1)
-		_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r, nil, nil, player)
-		if ok {
+		if TickSlot(slot, 0, 0, nil, firingEnv(&svc, player, FirePorts{RNG: &r}), 100, 100, 0) {
 			t.Fatalf("pool full should fail")
 		}
-		if player.Stock[economy.Energy] != 100 || player.Stock[economy.Metal] != 93-93 { // unchanged
-			// check unchanged
-		}
 		if player.Stock[economy.Energy] != 100 || player.Stock[economy.Metal] != 100 {
-			t.Fatalf("pool-full must not debit [06 §4.2] C6, got energy %v metal %v", player.Stock[economy.Energy], player.Stock[economy.Metal])
+			t.Fatalf("pool-full must not debit [06 §4.2] C6, got energy %v metal %v",
+				player.Stock[economy.Energy], player.Stock[economy.Metal])
 		}
 		if slot.Reload != 0 {
 			t.Fatalf("pool-full must not store reload [06 §4.2] C6, got %d", slot.Reload)
 		}
-		if slot.Ammo != 0 {
-			t.Fatalf("no ammo change")
-		}
 	})
+
 	t.Run("bothOrNeither", func(t *testing.T) {
 		var svc Service
 		w := weaponForFire(22, 10, 0, 0, 0, false, false, false, false, "", 10, 10)
-		slot := &Slot{Weapon: w}
+		slot := &Slot{Weapon: w, Target: pointTarget}
 		player := &economy.Player{}
 		player.Stock[economy.Energy] = 5 // insufficient energy
 		player.Stock[economy.Metal] = 100
 		r := rng.NewSimulation(1)
-		_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r, nil, nil, player)
-		if ok {
-			t.Fatalf("precheck should fail when energy insufficient")
+		if TickSlot(slot, 0, 0, nil, firingEnv(&svc, player, FirePorts{RNG: &r}), 100, 100, 0) {
+			t.Fatalf("precheck should fail when energy is insufficient")
 		}
 		if svc.Count() != 0 {
 			t.Fatalf("precheck fail should not allocate")
 		}
 		if player.Stock[economy.Metal] != 100 {
-			t.Fatalf("both-or-neither: metal should not be debited on precheck fail")
+			t.Fatalf("both-or-neither: metal must not be debited on precheck fail")
 		}
 	})
-	t.Run("stockpileNoDebitDecrementsAmmo", func(t *testing.T) {
+
+	t.Run("stockpileConsumesExactlyOneRound", func(t *testing.T) {
 		var svc Service
-		w := weaponForFire(23, 30, 0, 0, 0, true, false, false, false, "", 100, 100) // stockpile high costs but should not debit
-		slot := &Slot{Weapon: w, Ammo: 5}
+		w := weaponForFire(23, 30, 0, 0, 0, true, false, false, false, "", 100, 100)
+		slot := &Slot{Weapon: w, Ammo: 5, Target: pointTarget}
 		player := &economy.Player{}
 		player.Stock[economy.Energy] = 10
 		player.Stock[economy.Metal] = 10
 		r := rng.NewSimulation(1)
-		_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r, nil, nil, player)
-		if !ok {
+		if !TickSlot(slot, 0, 0, nil, firingEnv(&svc, player, FirePorts{RNG: &r}), 100, 100, 0) {
 			t.Fatalf("stockpile fire should succeed even with low stock")
 		}
+		// One launch, one round. Two layers owning the decrement took two.
 		if slot.Ammo != 4 {
-			t.Fatalf("stockpile should decrement ammo [06 §4.2] [06 §11.1], got %d", slot.Ammo)
+			t.Fatalf("stockpile launch should consume exactly one round [06 §11.1], got %d left of 5", slot.Ammo)
 		}
 		if player.Stock[economy.Energy] != 10 || player.Stock[economy.Metal] != 10 {
 			t.Fatalf("stockpile must perform no per-launch debit [06 §4.2] C6")
@@ -318,9 +337,22 @@ func TestFireDebitOnlyOnSuccess(t *testing.T) {
 			t.Fatalf("stockpile must not write reload [06 §4.2] C7, got %d", slot.Reload)
 		}
 	})
+
+	t.Run("stockpileWithNoRoundsDoesNotFire", func(t *testing.T) {
+		var svc Service
+		w := weaponForFire(24, 30, 0, 0, 0, true, false, false, false, "", 0, 0)
+		slot := &Slot{Weapon: w, Ammo: 0, Target: pointTarget}
+		r := rng.NewSimulation(1)
+		if TickSlot(slot, 0, 0, nil, firingEnv(&svc, nil, FirePorts{RNG: &r}), 100, 100, 0) {
+			t.Fatalf("stockpile with no completed round should not fire")
+		}
+		if svc.Count() != 0 {
+			t.Fatalf("no round should mean no allocation")
+		}
+	})
 }
 
-func TestFireReloadTruncationOrder(t *testing.T) {
+func TestPipelineReloadTruncationOrder(t *testing.T) {
 	// C7 reload integer-truncated in documented order [06 §4.2].
 	tests := []struct {
 		health, maxHealth int32
@@ -337,16 +369,15 @@ func TestFireReloadTruncationOrder(t *testing.T) {
 	for i, tc := range tests {
 		var svc Service
 		w := weaponForFire(30+int32(i), tc.authored, 0, 0, 0, false, false, false, false, "", 0, 0)
-		slot := &Slot{Weapon: w}
+		slot := &Slot{Weapon: w, Target: Target{Kind: TargetPoint, X: numeric.FixedFromInt(10)}}
 		r := rng.NewSimulation(1)
-		_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, tc.health, tc.maxHealth, tc.kills, &r, nil, nil, nil)
-		if !ok {
+		if !TickSlot(slot, 0, 0, nil, firingEnv(&svc, nil, FirePorts{RNG: &r}), tc.health, tc.maxHealth, tc.kills) {
 			t.Fatalf("case %d fire failed", i)
 		}
 		if slot.Reload != tc.want {
-			t.Fatalf("case %d reload %d want %d (health %d/%d kills %d authored %d) [06 §4.2] C7", i, slot.Reload, tc.want, tc.health, tc.maxHealth, tc.kills, tc.authored)
+			t.Fatalf("case %d reload %d want %d (health %d/%d kills %d authored %d) [06 §4.2] C7",
+				i, slot.Reload, tc.want, tc.health, tc.maxHealth, tc.kills, tc.authored)
 		}
-		// Also verify ComputeStoredReload matches
 		got2 := ComputeStoredReload(tc.health, tc.maxHealth, tc.kills, tc.authored)
 		if got2 != tc.want {
 			t.Fatalf("ComputeStoredReload case %d %d want %d", i, got2, tc.want)
@@ -362,7 +393,7 @@ func TestBurstAnchor(t *testing.T) {
 	slot := &Slot{Weapon: w}
 	r := rng.NewSimulation(1)
 	// Fire root anchor at tick 0.
-	h, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r, nil, nil, nil)
+	h, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r})
 	if !ok || h == 0 {
 		t.Fatalf("burst root fire failed")
 	}
@@ -433,7 +464,7 @@ func TestBurstPoolFullConsumesAttemptNoRNGNoClone(t *testing.T) {
 	weapons := map[int32]*content.WeaponDef{w.ID: w}
 	slot := &Slot{Weapon: w}
 	r := rng.NewSimulation(77)
-	h, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r, nil, nil, nil)
+	h, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r})
 	if !ok {
 		t.Fatalf("root fire failed")
 	}
@@ -468,7 +499,7 @@ func TestBurstMuzzleRequeryAndSprayOrder(t *testing.T) {
 	weapons := map[int32]*content.WeaponDef{w.ID: w}
 	slot := &Slot{Weapon: w}
 	r := rng.NewSimulation(123)
-	_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r, func(int) int32 { return 1 }, nil, nil)
+	_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r, MuzzlePiece: func(int) int32 { return 1 }})
 	if !ok {
 		t.Fatalf("fire")
 	}
@@ -520,7 +551,7 @@ func TestBurstMuzzleRequeryAndSprayOrder(t *testing.T) {
 	weapons2 := map[int32]*content.WeaponDef{w2.ID: w2}
 	slot2 := &Slot{Weapon: w2}
 	r2 := rng.NewSimulation(1)
-	TryFire(&svc2, slot2, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r2, nil, nil, nil)
+	TryFire(&svc2, slot2, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r2})
 	svc2.Records[0].Velocity = Vec3{X: numeric.FixedFromInt(5)}
 	muzzleCalls2 := 0
 	muzzlePos2 := func(int16) Vec3 { muzzleCalls2++; return Vec3{X: numeric.FixedFromInt(999)} }
@@ -543,7 +574,7 @@ func TestFireZeroBurstFollowsOrdinaryPath(t *testing.T) {
 	w := weaponForFire(70, 10, 0, 0, 0, false, false, false, false, "", 0, 0)
 	slot := &Slot{Weapon: w}
 	r := rng.NewSimulation(1)
-	h, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, &r, nil, nil, nil)
+	h, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r})
 	if !ok {
 		t.Fatalf("fire")
 	}
@@ -565,15 +596,15 @@ func TestFireZeroBurstFollowsOrdinaryPath(t *testing.T) {
 func TestProjectilePoolHandle(t *testing.T) {
 	// Quick sanity: pool handle 0 null.
 	var svc Service
-	if _, ok := TryFire(&svc, nil, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, nil, nil, nil, nil); ok {
+	if _, ok := TryFire(&svc, nil, 0, Target{Kind: TargetPoint}, 0, FirePorts{}); ok {
 		t.Fatalf("nil slot should not fire")
 	}
-	if _, ok := TryFire(&svc, &Slot{}, 0, Target{Kind: TargetPoint}, 0, 100, 100, 0, nil, nil, nil, nil); ok {
+	if _, ok := TryFire(&svc, &Slot{}, 0, Target{Kind: TargetPoint}, 0, FirePorts{}); ok {
 		t.Fatalf("nil weapon should not fire")
 	}
 	// TargetNone should not fire even with valid weapon
 	w := weaponForFire(71, 10, 0, 0, 0, false, false, false, false, "", 0, 0)
-	if _, ok := TryFire(&svc, &Slot{Weapon: w}, 0, Target{Kind: TargetNone}, 0, 100, 100, 0, nil, nil, nil, nil); ok {
+	if _, ok := TryFire(&svc, &Slot{Weapon: w}, 0, Target{Kind: TargetNone}, 0, FirePorts{}); ok {
 		t.Fatalf("TargetNone should not fire")
 	}
 	_ = pool.Handle(0)

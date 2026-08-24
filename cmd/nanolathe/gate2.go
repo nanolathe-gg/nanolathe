@@ -57,7 +57,10 @@ type gate2Session struct {
 	dragStartY int32
 	dragEndX   int32
 	dragEndY   int32
-	accum      float64
+	// frame converts the renderer's float seconds delta into the scaled
+	// milliseconds the authoritative clock budget anchors against. The tick
+	// COUNT still comes from clock.State [01 §4.2].
+	frame clock.FrameClock
 }
 
 // newGate2Session builds a fresh Gate-2 world, spawns one armflea near the
@@ -82,27 +85,18 @@ func newGate2Session(cat *content.Catalog, terrain *world.Terrain, buf *snapshot
 		return nil, fmt.Errorf("gate2: spawn armflea: %w", err)
 	}
 	u := w.Unit(h)
-	// Build profile for this unit's movement class [02 "Movement class record"][04 §6.1]
-	var profile movement.Profile
-	if def.MovementClass != "" {
-		if mc, ok := cat.Movement[content.CanonicalKey(def.MovementClass)]; ok && mc != nil {
-			profile = movement.NewProfile(mc)
-		}
-	}
-	// Fallback permissive ground profile so demo succeeds even if class absent
-	if profile.FootPrintX == 0 && profile.FootPrintZ == 0 {
-		profile = movement.Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
-	}
-	if profile.FootPrintX == 0 {
-		profile.FootPrintX = 1
-	}
-	if profile.FootPrintZ == 0 {
-		profile.FootPrintZ = 1
-	}
+	// Movement profiles are per unit, resolved from each definition's movement
+	// class [02 "Movement class record"] [04 §6.1]. The System owns that
+	// resolution; the fallback here covers only definitions naming no class at
+	// all, which is aircraft and buildings.
 	grid := movement.NewOccupancyGrid()
-	system := movement.NewSystem(terrain, profile, grid)
+	system := movement.NewSystem(terrain, movement.Profile{FootPrintX: 1, FootPrintZ: 1}, grid)
+	system.SetClasses(cat.Movement)
 	if u != nil {
 		system.EnsureUnit(u)
+	}
+	if len(system.Unresolved) > 0 {
+		fmt.Fprintf(os.Stderr, "nanolathe: gate2: unresolved movement classes %v\n", system.Unresolved)
 	}
 	k := &kernel.Kernel{}
 	clk := &clock.State{Requested: 10, Active: 10}
@@ -296,19 +290,13 @@ func (g *gate2Session) viewerStep(delta float64, cl *client.Client) {
 			g.latch = input.LatchNormal
 		}
 	}
-	g.accum += delta
-	ticks := int(g.accum * 30.0)
-	if ticks < 0 {
-		ticks = 0
-	}
-	if ticks > 5 {
-		ticks = 5
-	}
-	if ticks > 0 {
-		g.accum -= float64(ticks) / 30.0
-		for i := 0; i < ticks; i++ {
-			g.kernel.SubTick(g.clock)
-		}
+	// The authoritative clock owns the frame-to-tick budget: pause, requested
+	// versus active speed, speed hysteresis, the float32 carry and the
+	// zero-to-five clamp are all [01 §4.2] [01 §4.3] behavior, and a second
+	// accumulator here would diverge from every one of them.
+	ticks := g.clock.AdvanceSP(g.frame.Scaled(delta))
+	for i := 0; i < ticks; i++ {
+		g.kernel.SubTick(g.clock)
 	}
 	if host != nil && host.Window != nil && g.cam != nil {
 		kbd := &host.Window.Keyboard
@@ -396,19 +384,10 @@ func runGate2Viewer(opts Options, cs *contentSet) error {
 	var clPtr *client.Client
 	step := func(delta float64) {
 		if clPtr == nil {
-			sess.accum += delta
-			ticks := int(sess.accum * 30.0)
-			if ticks < 0 {
-				ticks = 0
-			}
-			if ticks > 5 {
-				ticks = 5
-			}
-			if ticks > 0 {
-				sess.accum -= float64(ticks) / 30.0
-				for i := 0; i < ticks; i++ {
-					sess.kernel.SubTick(sess.clock)
-				}
+			// Same budget, same authority — the client just is not up yet.
+			ticks := sess.clock.AdvanceSP(sess.frame.Scaled(delta))
+			for i := 0; i < ticks; i++ {
+				sess.kernel.SubTick(sess.clock)
 			}
 			return
 		}

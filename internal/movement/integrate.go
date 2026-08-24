@@ -22,6 +22,9 @@ package movement
 
 import (
 	"math"
+	"strings"
+
+	"github.com/nanolathe/nanolathe/internal/content"
 
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
@@ -36,36 +39,110 @@ import (
 // One System is created per gate2Session (or later per session) and is the sole writer
 // of per-unit movement state for that world.
 type System struct {
-	Terrain    *world.Terrain
-	Profile    Profile
+	Terrain *world.Terrain
+
+	// Fallback is the profile used by a unit whose definition names no
+	// movement class. Aircraft and buildings legitimately have none: they are
+	// not classified against the ground lattice at all. It is NOT a permissive
+	// stand-in for a class that failed to resolve — that is a load error, and
+	// EnsureUnit records it in Unresolved.
+	Fallback Profile
+
+	// Classes is the compiled movement-class table, keyed as
+	// content.CanonicalKey(name). Each unit resolves its own profile from it:
+	// passability, path bias, collision footprint and occupancy stamps are
+	// per-unit identity, not session-wide [04 §6.1] [04 §7.1].
+	Classes map[string]*content.MovementClass
+
+	// Unresolved names the movement classes a unit definition asked for and
+	// the table did not have, for load diagnostics. Order is first-seen.
+	Unresolved []string
+
 	Grid       *OccupancyGrid
 	Scheduler  *path.Scheduler
 	Routes     map[pool.Handle]*Route
 	Steers     map[pool.Handle]*SteerState
 	Collisions map[pool.Handle]*CollisionState
 	Flights    map[pool.Handle]*FlightState
-	sessions   []*path.Session // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
+	profiles   map[pool.Handle]Profile // per-unit resolved movement profile [04 §6.1]
+	sessions   []*path.Session         // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
 }
 
 // NewSystem creates a System bound to terrain/profile/grid. It allocates the per-unit
 // maps and a path.Scheduler whose SearchFunc is bound to path.Search with profile
 // passability over the supplied terrain, and whose PublishFunc stores into Routes via
 // Route.Publish [04 §7.3] C14.
-func NewSystem(terrain *world.Terrain, profile Profile, grid *OccupancyGrid) *System {
+func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *System {
 	s := &System{
 		Terrain:    terrain,
-		Profile:    profile,
+		Fallback:   fallback,
 		Grid:       grid,
 		Routes:     make(map[pool.Handle]*Route),
 		Steers:     make(map[pool.Handle]*SteerState),
 		Collisions: make(map[pool.Handle]*CollisionState),
 		Flights:    make(map[pool.Handle]*FlightState),
+		profiles:   make(map[pool.Handle]Profile),
 	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
 	// Use the global base (65536) unless overridden; gate2 uses default.
 	sched.SetBase(path.GetBase())
 	s.Scheduler = sched
 	return s
+}
+
+// SetClasses binds the compiled movement-class table. Call it before the first
+// EnsureUnit; units already initialized keep the profile they resolved.
+func (s *System) SetClasses(classes map[string]*content.MovementClass) {
+	if s == nil {
+		return
+	}
+	s.Classes = classes
+}
+
+// resolveProfile derives a unit's movement profile from its definition's
+// movement class [02 "Unit record"] [04 §6.1].
+//
+// A definition naming no class gets the fallback: aircraft and buildings are
+// not classified against the ground lattice. A definition naming a class the
+// table does not hold is a content error, recorded in Unresolved so a load can
+// report it rather than silently pathing a ship like a scout.
+func (s *System) resolveProfile(u *units.Unit) Profile {
+	if s == nil || u == nil || u.Def == nil {
+		return Profile{}
+	}
+	name := u.Def.MovementClass
+	if strings.TrimSpace(name) == "" {
+		return s.Fallback
+	}
+	mc := s.Classes[content.CanonicalKey(name)]
+	if mc == nil {
+		s.noteUnresolved(name)
+		return s.Fallback
+	}
+	return NewProfile(mc)
+}
+
+// noteUnresolved records a missing movement class once, in first-seen order.
+func (s *System) noteUnresolved(name string) {
+	for _, have := range s.Unresolved {
+		if have == name {
+			return
+		}
+	}
+	s.Unresolved = append(s.Unresolved, name)
+}
+
+// ProfileFor returns the profile resolved for a unit handle. A handle with no
+// initialized surfaces falls back, which is the correct answer for a path
+// request that outlived its unit.
+func (s *System) ProfileFor(h pool.Handle) Profile {
+	if s == nil {
+		return Profile{}
+	}
+	if p, ok := s.profiles[h]; ok {
+		return p
+	}
+	return s.Fallback
 }
 
 // EnsureUnit initializes per-unit surfaces for u if not already present. It stamps
@@ -79,6 +156,10 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		return
 	}
 	s.Routes[h] = &Route{}
+	// Resolve this unit's own movement profile once; every later passability,
+	// bias, footprint and occupancy decision for it reads this one [04 §6.1].
+	profile := s.resolveProfile(u)
+	s.profiles[h] = profile
 	// SteerState
 	steer := &SteerState{
 		X:              int32(u.X.Raw()),
@@ -108,8 +189,8 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	s.Steers[h] = steer
 
 	// CollisionState
-	footX := int16(s.Profile.FootPrintX)
-	footZ := int16(s.Profile.FootPrintZ)
+	footX := profile.FootPrintX
+	footZ := profile.FootPrintZ
 	if footX <= 0 {
 		footX = int16(u.Def.FootprintX)
 		if footX <= 0 {
@@ -175,15 +256,12 @@ func (s *System) EnsureUnit(u *units.Unit) {
 			VerticalHoldSentinel: false,
 			Dirty:                false,
 		}
-		if flight.MaxVelocity == 0 {
-			flight.MaxVelocity = 65536
-		}
-		if flight.Acceleration == 0 {
-			flight.Acceleration = 16384
-		}
-		if flight.BrakeRate == 0 {
-			flight.BrakeRate = 65536
-		}
+		// Authored zeros stay zero. The previous 65536/16384/65536 substitutes
+		// were invented constants on an authoritative path (I6): a unit whose
+		// FBI really does author zero acceleration would silently fly with an
+		// acceleration nobody wrote, and no retail source gives those values.
+		// A stationary aircraft is a visible content bug; a fabricated one is
+		// not.
 		s.Flights[h] = flight
 	}
 }
@@ -229,9 +307,13 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) ([]path.Poi
 	sess := s.sessions[idx]
 	needsNew := sess == nil || sess.Start() != r.Start || sess.Goal() != r.Goal
 	if needsNew {
+		// The REQUESTING unit's profile decides passability and bias. Sharing
+		// one profile across the world paths a ship, a hover and a Krogoth as
+		// the same 1x1 ground scout [04 §6.1] [04 §7.1].
+		profile := s.ProfileFor(r.Unit)
 		isPassable := func(c path.Cell) bool {
 			if s.Terrain != nil {
-				if !s.Profile.IsPassable(s.Terrain, c.X, c.Z) {
+				if !profile.IsPassable(s.Terrain, c.X, c.Z) {
 					return false
 				}
 			}
@@ -243,7 +325,7 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) ([]path.Poi
 			}
 			return true
 		}
-		bias := path.Point{X: int32(s.Profile.FootPrintX / 2), Z: int32(s.Profile.FootPrintZ / 2)}
+		bias := path.Point{X: int32(profile.FootPrintX / 2), Z: int32(profile.FootPrintZ / 2)}
 		var hasBounds bool
 		var bounds path.Rect
 		if s.Terrain != nil && s.Terrain.CellW > 0 && s.Terrain.CellH > 0 {
@@ -441,8 +523,11 @@ func (s *System) Tick(tick uint32, w *units.World) {
 		if u.Def != nil {
 			coll.MaxVelocity = int32(u.Def.MaxVelocity)
 		}
+		// Collision admission uses the MOVING unit's own profile, so it agrees
+		// with the passability the path was searched under [04 §6.1] [04 §8.2].
+		moverProfile := s.ProfileFor(u.Handle)
 		perCell := func(c Cell) bool {
-			if s.Terrain != nil && !s.Profile.IsPassable(s.Terrain, c.X, c.Z) {
+			if s.Terrain != nil && !moverProfile.IsPassable(s.Terrain, c.X, c.Z) {
 				return false
 			}
 			if s.Grid != nil {
