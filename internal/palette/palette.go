@@ -35,11 +35,12 @@ type Tables struct {
 // Load loads all palette tables from the VFS.
 //
 // Logical paths are the retail install layout under palettes/ [fmt pal]:
-//   palettes/palette.pal  (1024 B, 256×4) [03 §4.3]
-//   palettes/guipal.pal   (1024 B)
-//   palettes/palette.alp  (65536 B, 256×256) [fmt pal]
-//   palettes/palette.lht  (8192 B, 32×256) [fmt pal]
-//   palettes/palette.shd  (8192 B, 32×256) [03 §4.3]
+//
+//	palettes/palette.pal  (1024 B, 256×4) [03 §4.3]
+//	palettes/guipal.pal   (1024 B)
+//	palettes/palette.alp  (65536 B, 256×256) [fmt pal]
+//	palettes/palette.lht  (8192 B, 32×256) [fmt pal]
+//	palettes/palette.shd  (8192 B, 32×256) [03 §4.3]
 //
 // The 256-byte logical→physical lookup is not a file on disk; retail
 // maintains it as the LOGPALETTE mapping [03 §4.3]. It is initialized to

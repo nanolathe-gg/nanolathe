@@ -35,15 +35,15 @@ const (
 
 // Retail mouse message numbers [07 §2].
 const (
-	MsgMouseMove      uint32 = 0x200
-	MsgMouseLDown     uint32 = 0x201
-	MsgMouseLUp       uint32 = 0x202
-	MsgMouseLDouble   uint32 = 0x203
-	MsgMouseRDown     uint32 = 0x204
-	MsgMouseRUp       uint32 = 0x205
-	MsgMouseRDouble   uint32 = 0x206
-	MsgMouseMDown     uint32 = 0x207 // no dedicated case, falls to default [07 §2]
-	MsgMouseWheel     uint32 = 0x20A // no dedicated case [07 §2]
+	MsgMouseMove    uint32 = 0x200
+	MsgMouseLDown   uint32 = 0x201
+	MsgMouseLUp     uint32 = 0x202
+	MsgMouseLDouble uint32 = 0x203
+	MsgMouseRDown   uint32 = 0x204
+	MsgMouseRUp     uint32 = 0x205
+	MsgMouseRDouble uint32 = 0x206
+	MsgMouseMDown   uint32 = 0x207 // no dedicated case, falls to default [07 §2]
+	MsgMouseWheel   uint32 = 0x20A // no dedicated case [07 §2]
 )
 
 // TranslateKey converts a Kaiju KeyboardKey into a retail Token [07 §2].

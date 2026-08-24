@@ -19,6 +19,8 @@
 package client
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 
@@ -27,10 +29,14 @@ import (
 	"kaijuengine.com/engine/assets"
 	"kaijuengine.com/matrix"
 	"kaijuengine.com/platform/hid"
-	"kaijuengine.com/rendering"
 	"kaijuengine.com/registry/shader_data_registry"
+	"kaijuengine.com/rendering"
 
+	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // EventKind classifies a drained input event for the session.
@@ -38,19 +44,19 @@ type EventKind int
 
 const (
 	EventKey   EventKind = iota // keyboard token
-	EventMouse                   // mouse record
-	EventClose                   // window close
+	EventMouse                  // mouse record
+	EventClose                  // window close
 )
 
 // Event is a translated input record. Translation happens at the boundary so
 // nothing downstream sees Kaiju types. The retail token vocabulary drives
 // this shape [07 §2]; later WUs extend it with the ring/latch semantics.
 type Event struct {
-	Kind   EventKind
-	Key    int
-	State  hid.KeyState
-	X, Y   float32 // mouse position
-	Button int
+	Kind             EventKind
+	Key              int
+	State            hid.KeyState
+	X, Y             float32 // mouse position
+	Button           int
 	ScrollX, ScrollY float32
 }
 
@@ -92,10 +98,17 @@ type Client struct {
 	// alpha ramp remains visibly correct.
 	base    [256][4]byte
 	logical [256]byte
+	pal     *palette.Tables
 
-	texture   *rendering.Texture
-	mesh      *rendering.Mesh
-	transform matrix.Transform
+	// World / camera for Gate 1 terrain viewer [PLAN_04A]. When set, Frame
+	// draws real TNT terrain instead of the placeholder gradient.
+	terrain *world.Terrain
+	cam     *camera.Camera
+	fnt     *formats.FNT
+
+	texture    *rendering.Texture
+	mesh       *rendering.Mesh
+	transform  matrix.Transform
 	shaderData rendering.DrawInstance
 
 	mu     sync.Mutex
@@ -151,6 +164,24 @@ func New(opts Options) (*Client, error) {
 	}
 	return c, nil
 }
+
+// SetTerrain sets the world terrain for Gate 1 drawing [PLAN_04A C1].
+func (c *Client) SetTerrain(t *world.Terrain) { c.terrain = t }
+
+// SetCamera sets the camera for Gate 1 pan [07 §10].
+func (c *Client) SetCamera(cam *camera.Camera) { c.cam = cam }
+
+// SetPalette installs real palette tables [03 §4.3] C7.
+func (c *Client) SetPalette(p *palette.Tables) {
+	c.pal = p
+	if p != nil {
+		c.base = p.Base
+		c.logical = p.Logical
+	}
+}
+
+// SetFNT sets the debug font [03 §7.1] C8.
+func (c *Client) SetFNT(fnt *formats.FNT) { c.fnt = fnt }
 
 // Host returns the underlying engine.Host after Launch, or nil if headless or
 // not yet launched.
@@ -303,6 +334,44 @@ func (c *Client) PluginRegistry() []reflect.Type { return nil }
 // content directory is populated via `make kaiju-content` (cp -R
 // ../kaiju/src/editor/editor_embedded_content/editor_content ./content).
 func (c *Client) ContentDatabase() (assets.Database, error) {
+	// Try several locations for the Kaiju stock content. When run via
+	// `go run ./cmd/nanolathe` the working directory is the repo root,
+	// but the built binary may be executed from a temp directory.
+	candidates := []string{
+		"content",
+		"./content",
+		"../content",
+		"../../content",
+	}
+	// Also try relative to the executable.
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		candidates = append(candidates,
+			filepath.Join(dir, "content"),
+			filepath.Join(dir, "../content"),
+			filepath.Join(dir, "../../content"),
+		)
+		// Walk up from cwd as well.
+		if cwd, err := os.Getwd(); err == nil {
+			candidates = append(candidates,
+				filepath.Join(cwd, "content"),
+				filepath.Join(cwd, "../content"),
+			)
+		}
+		_ = dir
+	}
+	for _, cand := range candidates {
+		if st, err := os.Stat(cand); err == nil && st.IsDir() {
+			// Verify it looks like Kaiju content (has renderer/materials).
+			if _, err := os.Stat(filepath.Join(cand, "renderer")); err == nil {
+				return assets.NewFileDatabase(cand)
+			}
+			// Still try even if renderer not found — let assets report.
+			return assets.NewFileDatabase(cand)
+		}
+	}
+	// Fallback to the original relative path so the error message from
+	// assets.NewFileDatabase is preserved, but include diagnostics.
 	return assets.NewFileDatabase("content")
 }
 

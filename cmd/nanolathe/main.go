@@ -49,5 +49,18 @@ func run(opts Options, out *os.File) error {
 	seed := seedFor(opts)
 	fmt.Fprintf(out, "seed: %d\n", seed)
 
+	// Gate 1: windowed terrain viewer when --map is set, --headless is false,
+	// and no --dump is requested. This opens the Kaiju window and draws real
+	// TNT terrain with camera pan and FNT overlay [PLAN_04A].
+	if !opts.Headless && opts.Map != "" && opts.Dump == "" {
+		if err := runViewer(opts, content); err != nil {
+			// If viewer fails (e.g., no display), fall back to headless report
+			// so CI and headless environments still produce useful output.
+			fmt.Fprintf(os.Stderr, "nanolathe: viewer: %v (falling back to headless report)\n", err)
+		} else {
+			return nil
+		}
+	}
+
 	return report(opts, content, out)
 }

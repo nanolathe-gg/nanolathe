@@ -20,19 +20,19 @@ const (
 // ViewW,ViewH are the viewport size in the same units.
 // MapW,MapH are the map extents in map pixels.
 type Camera struct {
-	X, Z          int32
-	ViewW, ViewH  int32
-	MapW, MapH    int32
+	X, Z         int32
+	ViewW, ViewH int32
+	MapW, MapH   int32
 }
 
 // Direction is a scroll direction [07 §10].
 type Direction int
 
 const (
-	DirectionLeft Direction = iota // -X [07 §10]
-	DirectionRight                 // +X
-	DirectionUp                    // -Z
-	DirectionDown                  // +Z
+	DirectionLeft  Direction = iota // -X [07 §10]
+	DirectionRight                  // +X
+	DirectionUp                     // -Z
+	DirectionDown                   // +Z
 )
 
 // Aliases for robustness across callers that may use different naming
@@ -131,8 +131,8 @@ func (c *Camera) WorldToScreen(x, y, z numeric.Fixed) (sx, sy int32) { // [03 §
 // picking assumes Y=0 so the shear term is zero. This is the ground-plane
 // pick used by the minimap direct branch and cursor picking [07 §10].
 func (c *Camera) ScreenToWorld(sx, sy int32) (x, z numeric.Fixed) { // [03 §2.5]
-	wx := int64(sx - OriginX + c.X) << 16
-	wz := int64(sy - OriginY + c.Z) << 16
+	wx := int64(sx-OriginX+c.X) << 16
+	wz := int64(sy-OriginY+c.Z) << 16
 	return numeric.Fixed(wx), numeric.Fixed(wz)
 }
 

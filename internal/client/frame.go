@@ -110,11 +110,62 @@ func (c *Client) Frame(alpha float32) {
 
 // composeIndexed fills c.indexed at the logical size. It demonstrates a
 // visibly correct alpha ramp at 60 fps vs 30 Hz stub and, when a snapshot is
-// present, shows tick coupling without extrapolating.
+// present, shows tick coupling without extrapolating. When a real terrain
+// and camera are present (Gate 1), it draws the TNT terrain instead.
 func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok bool) {
 	w := c.width
 	h := c.height
 	if len(c.indexed) != w*h {
+		return
+	}
+	// Gate 1: real terrain from TNT + palette [PLAN_04A]. When terrain and
+	// camera are present, blit the tile map instead of the placeholder gradient.
+	if c.terrain != nil && c.cam != nil {
+		BlitTerrain(c.indexed, w, h, c.terrain, c.cam)
+		// Overlay: debug info via FNT when available [03 §7.1] C8.
+		if c.fnt != nil {
+			// Use snapshot tick if available, else 0.
+			var tick uint32
+			if ok && cur != nil {
+				tick = cur.Tick
+			}
+			info := DebugInfo{
+				Tick:  tick,
+				Alpha: alpha,
+				CamX:  c.cam.X,
+				CamZ:  c.cam.Z,
+			}
+			// Draw with shadow for visibility on any terrain palette.
+			DrawDebugOverlayWithShadow(c.indexed, w, h, c.fnt, info, 255, 0, true)
+		} else {
+			// Fallback: small alpha bar when font not loaded, to keep visibly correct ramp.
+			barX := int(alpha * float32(w-1))
+			for y := 0; y < 4 && y < h; y++ {
+				for dx := -1; dx <= 1; dx++ {
+					x := barX + dx
+					if x < 0 || x >= w {
+						continue
+					}
+					c.indexed[y*w+x] = 255
+				}
+			}
+		}
+		// Still encode tick bar when snapshot present for verification.
+		if ok && prev != nil && cur != nil {
+			_ = prev
+			tick := cur.Tick
+			for y := 0; y < 4 && y < h; y++ {
+				for x := 0; x < 16 && x < w; x++ {
+					bit := (tick >> uint(x)) & 1
+					val := byte(30)
+					if bit == 1 {
+						val = 200
+					}
+					// Only overwrite where we haven't drawn terrain? For debug, just overwrite top rows.
+					c.indexed[y*w+x] = val
+				}
+			}
+		}
 		return
 	}
 	// Base: horizontal gradient plus alpha nudge so the image visibly shifts

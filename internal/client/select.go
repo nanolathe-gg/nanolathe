@@ -7,8 +7,11 @@
 //     view-pane origin offsets (128 horizontally, 32 vertically); each axis is
 //     then sorted independently (if right < left swap, if bottom < top swap) and
 //     both boundaries are tested inclusively (min <= x <= max && min <= y <= max).
+//
 //   - Selection membership is bit 0x10 of unit runtime flags.
+//
 //   - Iteration over the owner's unit range is ascending and stable.
+//
 //   - Truth table for eligible units:
 //
 //     | Modifier | inside rect            | outside rect                                |
@@ -153,8 +156,8 @@ func ToggleSelected(flags uint32) uint32 { return flags ^ SelectionFlag }
 
 // NextSelected is the pure truth table for one eligible unit [07 §9] C6.
 //
-//   additive == false (modifier clear): selected = inside
-//   additive == true  (modifier set):   selected = inside ? !old : old
+//	additive == false (modifier clear): selected = inside
+//	additive == true  (modifier set):   selected = inside ? !old : old
 //
 // This is the complete C6 contract for a single unit. Bulk application must
 // iterate in ascending stable order (I1) and apply this per unit.
@@ -246,10 +249,10 @@ func ApplyDragSelection(units []Selectable, rect Rect, additive bool) (changed b
 // n is the number of units in the owner's inclusive range. Iteration is
 // 0..n-1 ascending (stable) [07 §9][I1]. Callbacks:
 //
-//   eligible(i) reports eligibility (active 0x20, float 1.0, etc.) [07 §9].
-//   inside(i) reports whether the unit's presentation position is inside rect.
-//   isSelected(i) reports current selection bit.
-//   set(i)/clear(i)/toggle(i) mutate the selection bit.
+//	eligible(i) reports eligibility (active 0x20, float 1.0, etc.) [07 §9].
+//	inside(i) reports whether the unit's presentation position is inside rect.
+//	isSelected(i) reports current selection bit.
+//	set(i)/clear(i)/toggle(i) mutate the selection bit.
 //
 // Ineligible units are not mutated. Returns changed and post-count of selected
 // units (including ineligible that were already selected, which are counted but

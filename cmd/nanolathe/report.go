@@ -4,8 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	contentpkg "github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -50,7 +54,13 @@ func report(opts Options, content *contentSet, out *os.File) error {
 				record.LogicalPath, filepath.Base(record.ProviderID), strings.Join(shadows, ","))
 		}
 	default:
-		return fmt.Errorf("nanolathe: unknown --dump verb %q (manifest, providers, shadowed)", opts.Dump)
+		if strings.HasPrefix(opts.Dump, "heightAt=") {
+			if err := dumpHeightAt(content, opts, out); err != nil {
+				return err
+			}
+		} else {
+			return fmt.Errorf("nanolathe: unknown --dump verb %q (manifest, providers, shadowed)", opts.Dump)
+		}
 	}
 
 	if opts.Map != "" {
@@ -86,5 +96,34 @@ func reportMap(content *contentSet, name string, out *os.File) error {
 		fmt.Fprintf(out, "map%s: %s (%d bytes, %s)\n",
 			suffix, info.Path, info.Size, filepath.Base(info.Source.SourcePath))
 	}
+	return nil
+}
+
+// dumpHeightAt handles --dump heightAt=x,z for Gate 1 headless verification [PLAN_04].
+func dumpHeightAt(cs *contentSet, opts Options, out *os.File) error {
+	if opts.Map == "" {
+		return fmt.Errorf("nanolathe: --dump heightAt requires --map")
+	}
+	coords := strings.TrimPrefix(opts.Dump, "heightAt=")
+	parts := strings.Split(coords, ",")
+	if len(parts) != 2 {
+		return fmt.Errorf("nanolathe: --dump heightAt expects x,z")
+	}
+	x, err1 := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+	z, err2 := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+	if err1 != nil || err2 != nil {
+		return fmt.Errorf("nanolathe: --dump heightAt expects integer x,z")
+	}
+	cat, err := contentpkg.Compile(cs.fs)
+	if err != nil {
+		return fmt.Errorf("nanolathe: catalog: %w", err)
+	}
+	terrain, err := world.Load(cs.fs, cat, opts.Map)
+	if err != nil {
+		return fmt.Errorf("nanolathe: terrain %q: %w", opts.Map, err)
+	}
+	h := terrain.HeightAt(numeric.Fixed(x), numeric.Fixed(z))
+	fmt.Fprintf(out, "heightAt %d,%d = %d (%.2f) sea %d\n", x, z, int64(h), float64(h)/65536, int64(terrain.SeaLevelWorld()))
+	fmt.Fprintf(out, "coarse %d,%d = %d\n", x>>20, z>>20, int64(terrain.CoarseHeightAt(world.WorldToCell(numeric.Fixed(x)), world.WorldToCell(numeric.Fixed(z)))))
 	return nil
 }
