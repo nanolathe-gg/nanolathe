@@ -1,0 +1,24 @@
+[HEADER]
+{
+	campaignside=ARM;
+}
+
+[MissionList]
+{
+	// Allocation tag only — not an authored wrapper. Discover must NOT require this.
+	// Some old specs incorrectly placed missions under this wrapper.
+	MissionCount=2;
+}
+
+// Missions are top-level contiguous MISSION0..N, not nested under MissionList. [08 "Campaign discovery"]
+[MISSION0]
+{
+	missionfile=BT01.ota;
+	missionname=1: Alpha;
+}
+
+[MISSION1]
+{
+	missionfile=BT02.ota;
+	missionname=2: Beta;
+}

@@ -1,0 +1,16 @@
+[HEADER]
+{
+	campaignside=ARM;
+}
+
+[MISSION0]
+{
+	missionfile=AC01.ota;
+	// missionname intentionally missing — must fallback to "unnamed mission" [08 "Campaign discovery"]
+}
+
+[MISSION1]
+{
+	missionfile=AC02.ota;
+	missionname=2: Has Name;
+}

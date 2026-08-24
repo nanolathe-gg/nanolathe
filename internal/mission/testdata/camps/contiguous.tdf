@@ -1,0 +1,22 @@
+[HEADER]
+{
+	campaignside=ARM;
+}
+
+[MISSION0]
+{
+	missionfile=AC01.ota;
+	missionname=1: First Contact;
+}
+
+[MISSION1]
+{
+	missionfile=AC02.ota;
+	missionname=2: Second Wave;
+}
+
+[MISSION2]
+{
+	missionfile=AC03.ota;
+	missionname=3: Final Stand;
+}

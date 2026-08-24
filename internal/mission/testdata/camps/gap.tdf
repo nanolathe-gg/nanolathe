@@ -1,0 +1,29 @@
+[HEADER]
+{
+	campaignside=CORE;
+}
+
+[MISSION0]
+{
+	missionfile=CC01.ota;
+	missionname=1: Opening;
+}
+
+[MISSION1]
+{
+	missionfile=CC02.ota;
+	missionname=2: Middle;
+}
+
+// MISSION2 is intentionally missing — discovery must stop at first gap.
+[MISSION3]
+{
+	missionfile=CC04.ota;
+	missionname=4: Should Be Ignored;
+}
+
+[MISSION4]
+{
+	missionfile=CC05.ota;
+	missionname=5: Also Ignored;
+}
