@@ -2,6 +2,7 @@ package formats
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -32,12 +33,27 @@ type Item struct {
 
 // Section is a lossless TDF section. The document root is an unnamed section;
 // ordinary sections retain their original spelling and source location.
+//
+// Key lookups do not scan Items directly: they binary-search a resolved view
+// built once per section [02 §4]. The resolution applies retail's duplicate
+// policy — an identical spelling replaces the value in place (last write
+// wins, one entry); a case-variant spelling coexists as a second distinct
+// entry ordered by (case-insensitive fold, original bytes) — and typed
+// lookups return the lower-bound entry, the first variant of the run
+// (MEDIUM confidence: the mechanism is directly visible; accessor return
+// among variants still needs black-box confirmation).
 type Section struct {
 	Name         string
 	OriginalName string
 	Line         int
 	Column       int
 	Items        []Item
+
+	// resolved is the sorted, duplicate-resolved assignment vector. It is
+	// built eagerly by the parser and lazily (single-threaded) for
+	// hand-constructed sections; Items never change after either point.
+	resolvedBuilt bool
+	resolved      []Item
 }
 
 // Document is the parsed TDF syntax tree.
@@ -82,7 +98,80 @@ func ParseTDFWithLimits(data []byte, limits TDFLimits) (*Document, error) {
 	if err := p.parseBlock(root, false); err != nil {
 		return nil, err
 	}
+	resolveDocument(root)
 	return &Document{Root: root}, nil
+}
+
+// resolveDocument builds the resolved key view for every section in the tree,
+// root first, then nested sections depth-first. Called once after a parse.
+func resolveDocument(s *Section) {
+	if s == nil {
+		return
+	}
+	s.ensureResolved()
+	for _, item := range s.Items {
+		if item.Kind == NestedSection {
+			resolveDocument(item.Section)
+		}
+	}
+}
+
+// ensureResolved builds the section's sorted assignment vector when it has
+// not been built yet. See the Section type comment for the policy.
+func (s *Section) ensureResolved() {
+	if s.resolvedBuilt {
+		return
+	}
+	type entry struct {
+		item Item
+		src  int // source position for last-wins among identical spellings
+	}
+	entries := make([]entry, 0, len(s.Items))
+	for i, item := range s.Items {
+		if item.Kind == Assignment {
+			entries = append(entries, entry{item: item, src: i})
+		}
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		fi, fj := foldName(entries[i].item.Key), foldName(entries[j].item.Key)
+		if fi != fj {
+			return fi < fj
+		}
+		oi, oj := entries[i].item.OriginalKey, entries[j].item.OriginalKey
+		if oi != oj {
+			return oi < oj
+		}
+		return entries[i].src < entries[j].src
+	})
+	// Collapse identical spellings to their last source occurrence; distinct
+	// case variants each survive as one sorted entry [02 §4].
+	s.resolved = s.resolved[:0]
+	for k := 0; k < len(entries); k++ {
+		last := k
+		for last+1 < len(entries) &&
+			foldName(entries[last+1].item.Key) == foldName(entries[k].item.Key) &&
+			entries[last+1].item.OriginalKey == entries[k].item.OriginalKey {
+			last++
+		}
+		s.resolved = append(s.resolved, entries[last].item)
+		k = last
+	}
+	s.resolvedBuilt = true
+}
+
+// lookupResolved binary-searches the resolved vector for the lower bound of
+// the fold run of key and returns that entry — the first variant in
+// case-insensitive sort order [02 §4].
+func (s *Section) lookupResolved(key string) (Item, bool) {
+	s.ensureResolved()
+	fold := foldName(key)
+	lo := sort.Search(len(s.resolved), func(i int) bool {
+		return foldName(s.resolved[i].Key) >= fold
+	})
+	if lo < len(s.resolved) && foldName(s.resolved[lo].Key) == fold {
+		return s.resolved[lo], true
+	}
+	return Item{}, false
 }
 
 func LoadTDF(fs vfs.FSOps, name string) (*Document, error) {
@@ -115,36 +204,52 @@ func (s *Section) Assignments() []Item {
 	return result
 }
 
+// Values returns the values of every distinct key spelling matching key, in
+// resolved order (case-insensitive fold, then original bytes). Identical
+// duplicate spellings collapsed to their last value per [02 §4].
 func (s *Section) Values(key string) []string {
+	s.ensureResolved()
 	key = foldName(key)
 	result := make([]string, 0)
-	for _, item := range s.Items {
-		if item.Kind == Assignment && foldName(item.Key) == key {
+	for _, item := range s.resolved {
+		if foldName(item.Key) == key {
 			result = append(result, item.Value)
 		}
 	}
 	return result
 }
 
+// FirstValue returns the lower-bound entry of key's fold run — the first
+// variant in case-insensitive sort order [02 §4]. Identical duplicate
+// spellings have already collapsed to their last value.
 func (s *Section) FirstValue(key string) (string, bool) {
-	key = foldName(key)
-	for _, item := range s.Items {
-		if item.Kind == Assignment && foldName(item.Key) == key {
-			return item.Value, true
-		}
+	item, ok := s.lookupResolved(key)
+	if !ok {
+		return "", false
 	}
-	return "", false
+	return item.Value, true
 }
 
+// LastValue returns the upper-bound entry of key's fold run — the last
+// variant in resolved order. For keys authored with a single spelling (the
+// entire stock corpus) this equals FirstValue.
 func (s *Section) LastValue(key string) (string, bool) {
-	key = foldName(key)
-	for i := len(s.Items) - 1; i >= 0; i-- {
-		item := s.Items[i]
-		if item.Kind == Assignment && foldName(item.Key) == key {
-			return item.Value, true
+	s.ensureResolved()
+	fold := foldName(key)
+	hi := -1
+	for i, item := range s.resolved {
+		if foldName(item.Key) == fold {
+			hi = i
+			continue
+		}
+		if hi >= 0 {
+			break
 		}
 	}
-	return "", false
+	if hi < 0 {
+		return "", false
+	}
+	return s.resolved[hi].Value, true
 }
 
 func (s *Section) Section(name string) *Section {
@@ -169,8 +274,11 @@ func (s *Section) SectionsNamed(name string) []*Section {
 	return result
 }
 
+// Int, Float and Bool share the typed family's key location: the resolved
+// lower-bound entry [02 §4]. They return (value, found, error) with the
+// conversion applied.
 func (s *Section) Int(key string) (int64, bool, error) {
-	value, ok := s.LastValue(key)
+	value, ok := s.FirstValue(key)
 	if !ok {
 		return 0, false, nil
 	}
@@ -178,7 +286,7 @@ func (s *Section) Int(key string) (int64, bool, error) {
 }
 
 func (s *Section) Float(key string) (float64, bool, error) {
-	value, ok := s.LastValue(key)
+	value, ok := s.FirstValue(key)
 	if !ok {
 		return 0, false, nil
 	}
@@ -190,7 +298,7 @@ func (s *Section) Float(key string) (float64, bool, error) {
 }
 
 func (s *Section) Bool(key string) (bool, bool, error) {
-	value, ok := s.LastValue(key)
+	value, ok := s.FirstValue(key)
 	if !ok {
 		return false, false, nil
 	}

@@ -153,18 +153,19 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 	nodrawundergray := section.BoolValue("nodrawundergray", false)
 
 	// Successor hops — string default empty [02 "Feature record"] [GAP T14].
+	//
+	// Retail reads only `featurereclamate`. The misspelling
+	// `featurereclamamate` (authored ten times in features/acid/acidplants.tdf,
+	// with zero correct spellings) therefore leaves those records without a
+	// reclaim successor in retail, and we reproduce that: the typo key is
+	// retained as an inert Unknown entry only. Accepting it as an alias would
+	// invent successors retail does not have (I11).
 	featuredead, _ := section.StringValue("featuredead", "")
-	featurereclamate, hasReclamate := section.StringValue("featurereclamate", "")
+	featurereclamate, _ := section.StringValue("featurereclamate", "")
 	featureburnt, _ := section.StringValue("featureburnt", "")
-	// Retail reads only featurereclamate; 10 records in features/acid/acidplants.tdf misspell it as featurereclamamate [fmt tdf].
-	// Accept the typo as a fallback so the reclaim chain is not silently lost while remaining fatal for truly missing links.
-	if !hasReclamate || strings.TrimSpace(featurereclamate) == "" {
-		if alt, ok := section.StringValue("featurereclamamate", ""); ok && strings.TrimSpace(alt) != "" {
-			featurereclamate = alt
-		}
-	}
 
-	// Unknown inert keys retained per C14 [02 §5].
+	// Unknown inert keys retained per C14 [02 §5]. This includes the
+	// `featurereclamamate` typo, which is data retail ignores.
 	unknown := make(map[string]string)
 	for _, item := range section.Items {
 		if item.Kind != formats.Assignment {
@@ -173,17 +174,6 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 		fold := strings.ToLower(item.Key)
 		if _, ok := knownFeatureKeys[fold]; ok {
 			continue
-		}
-		// Explicit alias already handled: treat featurereclamamate as known when it supplied the successor.
-		if fold == "featurereclamamate" {
-			// If we used the typo as alias, don't also store it as unknown; if not used, retain as unknown
-			// to preserve provenance. Consider it unknown when not aliased.
-			if strings.TrimSpace(featurereclamate) != "" {
-				// Check if the alias value equals the stored featurereclamate and the correct key was absent — then it's the alias path.
-				if !hasReclamate {
-					continue
-				}
-			}
 		}
 		unknown[item.OriginalKey] = item.Value
 	}

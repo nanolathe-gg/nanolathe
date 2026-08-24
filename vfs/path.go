@@ -8,9 +8,9 @@ import (
 // cleanPath returns the case-folded logical path used by the overlay.
 // Retail HPI lookup splits on backslash only, treats '/' as a literal name
 // character, has no special handling of '.' or '..', and scans entries
-// last-to-first (02:164). That contract is preserved inside Archive
-// indexing: entry names from the directory contain no separators, and
-// duplicate entries are resolved by last-wins (hpi.go:338). The overlay
+// last-to-first [02 §2]. That contract is preserved inside Archive indexing:
+// entry names from the directory contain no separators, and duplicate entries
+// are resolved by last-wins (vfs/hpi.go, Archive.indexDirectory). The overlay
 // intentionally accepts both slash styles and normalizes '.'/rejects '..'
 // for host-filesystem ergonomics; no shipped archive contains '/' or a
 // '.'/'..' entry, so the window is unexercised. Archive-internal

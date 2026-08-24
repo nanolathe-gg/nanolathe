@@ -67,3 +67,51 @@ func TestTDFAccessorsUseRetailDuplicateAndNumericSemantics(t *testing.T) {
 		t.Fatalf("missing integer = (present %t, %v), want absent", present, err)
 	}
 }
+
+// TestTDFDuplicateKeyPolicy locks [02 §4]'s duplicate policy: an identical
+// spelling replaces the value in place (last write wins); a case-variant
+// spelling coexists as a second sorted entry; typed lookups return the
+// lower-bound entry — the first variant in case-insensitive sort order
+// (MEDIUM confidence per C10).
+func TestTDFDuplicateKeyPolicy(t *testing.T) {
+	doc, err := ParseTDF([]byte("[A]\n{\nkey=1;\nkey=2;\nKEY=3;\n}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec := doc.Root.Sections()[0]
+	// Three authored records collapse to two distinct spellings.
+	values := sec.Values("key")
+	if len(values) != 2 || values[0] != "3" || values[1] != "2" {
+		t.Fatalf("Values(key) = %v, want [3 2]", values)
+	}
+	// Lower bound of the fold run: KEY sorts before key byte-wise ('K' 0x4B < 'k' 0x6B).
+	if v, _ := sec.FirstValue("key"); v != "3" {
+		t.Fatalf("typed lookup over variants: IntValue(key) = %q, want 3 (KEY variant)", v)
+	}
+	if v := sec.IntValue("key", -99); v != 3 {
+		t.Fatalf("IntValue(key) = %d, want 3", v)
+	}
+	// LastValue is the upper bound of the run.
+	if v, _ := sec.LastValue("key"); v != "2" {
+		t.Fatalf("LastValue(key) = %q, want 2", v)
+	}
+	// The legacy trio shares the typed family's location now.
+	if n, ok, err := sec.Int("key"); err != nil || !ok || n != 3 {
+		t.Fatalf("Section.Int = %d,%v,%v, want 3,true,nil", n, ok, err)
+	}
+}
+
+// TestTDFIdenticalSpellingLastWins locks replace-in-place for one spelling
+// across source positions [02 §4].
+func TestTDFIdenticalSpellingLastWins(t *testing.T) {
+	doc, err := ParseTDF([]byte("[C]\n{\nk=1;\nk=2;\nz=5;\n}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec := doc.Root.Sections()[0]
+	if v, _ := sec.FirstValue("k"); v != "2" {
+		t.Fatalf("FirstValue(k) = %q, want 2 (last write wins)", v)
+	}
+}
+
+

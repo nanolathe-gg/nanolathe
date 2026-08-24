@@ -421,9 +421,9 @@ func (a *Archive) readRecord(record hpiRecord) ([]byte, error) {
 			return nil, fmt.Errorf("%w: chunk %d marker", ErrMalformedArchive, chunk)
 		}
 		method := encoded[5]
-		if method != record.compression {
-			return nil, fmt.Errorf("%w: chunk %d compression mismatch", ErrMalformedArchive, chunk)
-		}
+		// [02 §2]: the chunk header selects the actual decoder and retail does
+		// not require the two method numbers to match, so no equality check
+		// against the record's compression byte — dispatch on the chunk alone.
 		payloadSize := uint64(binary.LittleEndian.Uint32(encoded[7:11]))
 		decompressedSize := uint64(binary.LittleEndian.Uint32(encoded[11:15]))
 		checksum := binary.LittleEndian.Uint32(encoded[15:19])

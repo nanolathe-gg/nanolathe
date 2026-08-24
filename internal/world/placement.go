@@ -7,6 +7,8 @@ package world
 import (
 	"fmt"
 	"strings"
+
+	"github.com/nanolathe/nanolathe/internal/content"
 )
 
 // YardCell is a yard-map control byte per [04 §6.2] C10 [GAP T15].
@@ -26,8 +28,12 @@ type YardCell uint8
 //
 //   - Whitespace (space, tab, \r, \n) is stripped; the remaining characters must
 //     be exactly footX*footZ drawn from the ten control characters above.
-//   - A single-character input is repeated to fill the footprint, matching the
-//     retail convenience for 1-cell shorthand (e.g. "o" with 2x2 → "oooo").
+//   - A single-character input is repeated to fill the footprint (e.g. "o" with
+//     a 2x2 footprint becomes "oooo"). TODO(question): research describes the
+//     mapping as one-to-one into a buffer sized by the packed footprint extents
+//     [05 "Geothermal requirement"] and does not mention a shorthand. This
+//     accepts authored data that retail might reject; it never rejects data
+//     retail accepts, so it is the safe direction (I11).
 //   - Unknown characters are rejected with a diagnostic.
 //
 // Non-building classes do not allocate a yard-map buffer; callers should not
@@ -85,111 +91,79 @@ func ParseYardMap(s string, footX, footZ int) ([]YardCell, error) {
 	return out, nil
 }
 
-// hasBlockingFeatureAt reports whether the plot cell at (cx,cz) is considered
-// blocking for yard bit5 (feature-free) [04 §6.2][05 "Geothermal requirement"].
-// It resolves the fringe sentinel (0xFFFE) via the successor hop [GAP T14] and
-// treats the three reserved sentinels 0xFFFB/0xFFFC/0xFFFD as blocking.
-// Empty (0xFFFF) is not blocking.
-func (t *Terrain) hasBlockingFeatureAt(cx, cz int32) bool {
-	if t == nil || t.Plot == nil {
-		return false
-	}
-	if cx < 0 || cz < 0 || cx >= t.CellW || cz >= t.CellH {
-		return false
-	}
-	idx := int(cz*t.CellW + cx)
-	if idx < 0 || idx >= len(t.Plot) {
-		return false
-	}
-	f := t.Plot[idx].Feature()
-	if f < plotFeatureRealLimit {
-		// Real feature index <0xFFFB — bounds-checked against catalog; out-of-range
-		// behaves as blocking for bit5 [05 "Geothermal requirement"].
-		return true
-	}
-	if f == PlotFeatureFringe {
-		dx := int(t.Plot[idx].AnchorDXSigned())
-		dz := int(t.Plot[idx].AnchorDZSigned())
-		ax := cx + int32(dx)
-		az := cz + int32(dz)
-		if ax < 0 || az < 0 || ax >= t.CellW || az >= t.CellH {
-			return false
-		}
-		aIdx := int(az*t.CellW + ax)
-		if aIdx < 0 || aIdx >= len(t.Plot) {
-			return false
-		}
-		af := t.Plot[aIdx].Feature()
-		if af < plotFeatureRealLimit {
-			return true
-		}
-		// Fringe whose anchor is not a real feature is not blocking.
-		return false
-	}
-	if f == PlotFeatureNone {
-		return false
-	}
-	// 0xFFFB, 0xFFFC, 0xFFFD — reserved/void sentinels behave as occupied [05].
-	if f == PlotFeatureVoid || f == 0xFFFC || f == 0xFFFB {
-		return true
-	}
-	return false
-}
+// featureClass is how the footprint validator sees one covered cell's feature
+// reference, after the fringe hop [04 §6.2].
+type featureClass uint8
 
-// hasGeothermalFeatureAt reports whether the plot cell at (cx,cz) resolves to
-// a feature that could satisfy the geothermal requirement [05 "Geothermal requirement"].
-// It follows the fringe successor hop (0xFFFE) and returns true only for a real
-// feature index <0xFFFB. Void/empty sentinels do not satisfy. The final
-// geothermal-flag check requires the catalog entry's geothermal bit [02 "Feature record"];
-// without a catalog this counts any real feature as candidate — callers with a
-// catalog should additionally verify FeatureDef.Geothermal.
-func (t *Terrain) hasGeothermalFeatureAt(cx, cz int32) bool {
-	if t == nil || t.Plot == nil {
-		return false
-	}
-	if cx < 0 || cz < 0 || cx >= t.CellW || cz >= t.CellH {
-		return false
-	}
-	idx := int(cz*t.CellW + cx)
-	if idx < 0 || idx >= len(t.Plot) {
-		return false
-	}
-	f := t.Plot[idx].Feature()
-	if f < plotFeatureRealLimit {
-		return true
-	}
-	if f == PlotFeatureFringe {
-		dx := int(t.Plot[idx].AnchorDXSigned())
-		dz := int(t.Plot[idx].AnchorDZSigned())
-		ax := cx + int32(dx)
-		az := cz + int32(dz)
-		if ax < 0 || az < 0 || ax >= t.CellW || az >= t.CellH {
-			return false
-		}
-		aIdx := int(az*t.CellW + ax)
-		if aIdx < 0 || aIdx >= len(t.Plot) {
-			return false
-		}
-		af := t.Plot[aIdx].Feature()
-		if af < plotFeatureRealLimit {
-			return true
-		}
-	}
-	return false
-}
+const (
+	// featureEmpty is the empty sentinel: nothing occupies the cell.
+	featureEmpty featureClass = iota
+	// featureReal is a bounds-checked index that binds to a catalog definition.
+	featureReal
+	// featureBlocked covers the three reserved sentinels just above the real
+	// band, which "behave as occupied", and any reference that cannot be
+	// resolved — an out-of-range index, an unbound name, or a fringe cell whose
+	// anchor hop leads nowhere. [04 §6.2] makes all of these blocking for bit 5
+	// and non-satisfying for bit 7, so they share a class.
+	featureBlocked
+)
 
-// ValidatePlacement checks a placement at cell (cx,cz) with the given yard
-// footprint against the terrain plot cells [04 §6.2] C10–C11 [GAP T15].
+// classifyCell resolves the feature reference covering (cx,cz) [04 §6.2]:
 //
-//   - Bounds-checks the rectangle against the map.
-//   - Validates yard length matches footX*footZ.
-//   - Per covered cell, applies yard control-byte bits: occupancy (bits1-2),
-//     feature-free (bit5), blocked-class (bit6, catalog-gated), and the
-//     geothermal requirement (bit7) resolved through the covered cell's feature
-//     and successor hop with no registry [05 "Geothermal requirement"].
-//   - Slope (bit3) and height (bit4) sampling and visibility (bit0) are
-//     TODO(question) — stored but not gating placement in this phase [PLAN_04].
-func (t *Terrain) ValidatePlacement(cx, cz int32, yard []YardCell, footX, footZ int) error {
+//	"the empty sentinel resolves empty; identifiers below the sentinel band are
+//	real and bounds-checked against the catalog (out-of-range behaves as
+//	blocking for bit 5 and non-satisfying for bit 7); the three reserved
+//	sentinels just above the real band behave as occupied; and the multi-cell
+//	successor sentinel follows the successor hop"
+//
+// This is the single resolver. Placement used to carry three more copies of the
+// hop with subtly different out-of-bounds behaviour.
+func (t *Terrain) classifyCell(cx, cz int32) (featureClass, *content.FeatureDef) {
+	if t == nil || t.Plot == nil {
+		return featureEmpty, nil
+	}
+	feature, ok := ResolveFeature(t.Plot, int(t.CellW), int(t.CellH), int(cx), int(cz))
+	if ok {
+		if def, bound := t.FeatureDefAt(feature); bound {
+			return featureReal, def
+		}
+		// A real index that does not bind is the out-of-range case.
+		return featureBlocked, nil
+	}
+	cell := t.PlotAt(cx, cz)
+	if cell == nil || cell.IsEmpty() {
+		return featureEmpty, nil
+	}
+	// Void sentinels, and fringe cells whose hop found no real anchor.
+	return featureBlocked, nil
+}
+
+// ValidatePlacement checks a building placement at cell (cx,cz) against the
+// terrain, using the unit's yard map and footprint rectangle [04 §6.2],
+// [05 "Geothermal requirement"].
+//
+// The validator bounds-checks the rectangle first, then applies the yard byte's
+// per-cell bits. Implemented here:
+//
+//	bit 1-2  reject any nonzero occupant other than the passed self identity
+//	bit 5    the cell must be free of blocking features
+//	bit 6    fail when the resolved feature is not reclaimable
+//	bit 7    the geothermal requirement (character G)
+//
+// Geothermal is the documented rule: "If any covered cell's yard byte has bit 7
+// set, validation succeeds only when at least one covered cell holds a feature
+// whose catalog entry carries the geothermal flag." An unresolvable reference
+// does not satisfy it [04 §6.2], [05 "Geothermal requirement"].
+//
+// Not implemented, each with its own TODO below: bit 0 (enemy-visibility
+// occupancy), bit 3 (slope sampling), bit 4 (height tracking), and the
+// slope/height/water checks a satisfied geothermal requirement passes through
+// to. Mobile products use a different, inline terrain loop entirely [04 §6.2];
+// that path belongs to movement, not here.
+//
+// self is the placing unit's identity, or 0 during construction, where any
+// occupant rejects.
+func (t *Terrain) ValidatePlacement(cx, cz int32, yard []YardCell, footX, footZ int, self uint16) error {
 	if t == nil {
 		return fmt.Errorf("world: nil terrain")
 	}
@@ -199,85 +173,95 @@ func (t *Terrain) ValidatePlacement(cx, cz int32, yard []YardCell, footX, footZ 
 	if len(yard) != footX*footZ {
 		return fmt.Errorf("world: yard length %d != footprint %dx%d=%d", len(yard), footX, footZ, footX*footZ)
 	}
+	// The validator bounds-checks the rectangle against the map first [04 §6.2].
 	if cx < 0 || cz < 0 || cx+int32(footX) > t.CellW || cz+int32(footZ) > t.CellH {
 		return fmt.Errorf("world: placement %d,%d %dx%d out of bounds %dx%d", cx, cz, footX, footZ, t.CellW, t.CellH)
 	}
 	if t.Plot == nil || len(t.Plot) < int(t.CellW*t.CellH) {
 		return fmt.Errorf("world: terrain plot not initialized")
 	}
-	// Determine whether any yard cell carries the geothermal requirement (bit7) [05].
+
 	geothermalNeeded := false
-	for _, y := range yard {
-		if y&0x80 != 0 { // bit7 [04 §6.2] G 0x8f
-			geothermalNeeded = true
-			break
-		}
-	}
-	// Scan footprint for per-cell occupancy / feature gates and for geothermal satisfaction.
-	hasGeothermal := false
+	geothermalFound := false
 	for dz := 0; dz < footZ; dz++ {
 		for dx := 0; dx < footX; dx++ {
-			idx := dz*footX + dx
-			y := yard[idx]
-			px := cx + int32(dx)
-			pz := cz + int32(dz)
-			pIdx := int(pz*t.CellW + px)
-			if pIdx < 0 || pIdx >= len(t.Plot) {
-				return fmt.Errorf("world: plot index %d out of range", pIdx)
+			y := yard[dz*footX+dx]
+			px, pz := cx+int32(dx), cz+int32(dz)
+			cell := t.PlotAt(px, pz)
+			if cell == nil {
+				return fmt.Errorf("world: plot cell %d,%d out of range", px, pz)
 			}
-			cell := t.Plot[pIdx]
+			class, def := t.classifyCell(px, pz)
 
-			// Bits1-2 reject any nonzero occupant other than self [05][04 §6.2].
-			// For construction self is nil, so any Occupied cell rejects.
-			if y&0x06 != 0 { // bits1-2
-				if cell.Occupied() {
+			// TODO(question): bit 0 gates an enemy-visibility occupancy test
+			// [04 §6.2]. It needs the placing player's visibility state, which
+			// phase 5 owns; this package has no player context.
+
+			// Bits 1-2: reject any nonzero occupant other than self [04 §6.2].
+			if y&0x06 != 0 && cell.Occupied() {
+				if self == 0 || cell.AnchorWord() != self {
 					return fmt.Errorf("world: cell %d,%d occupied [04 §6.2]", px, pz)
 				}
 			}
-			// Bit0 enemy-visibility occupancy test [04 §6.2] — TODO(question): requires player visibility state, not checked here.
 
-			// Bit5 requires cell to be free of blocking features [05].
-			if y&0x20 != 0 { // bit5
-				if t.hasBlockingFeatureAt(px, pz) {
-					return fmt.Errorf("world: cell %d,%d blocked by feature [04 §6.2]", px, pz)
+			// TODO(question): bit 3 enables slope sampling over the footprint
+			// and bit 4 enables height tracking [04 §6.2]. Research names both
+			// roles but not the thresholds they compare against, and the
+			// movement profile's slope limits live in a different record.
+
+			// Bit 5: the cell must be free of blocking features [04 §6.2].
+			if y&0x20 != 0 && class != featureEmpty {
+				return fmt.Errorf("world: cell %d,%d blocked by feature [04 §6.2]", px, pz)
+			}
+
+			// Bit 6: fail when the resolved feature carries the
+			// non-reclaimable flag [04 §6.2]. An unresolvable reference is the
+			// out-of-range case and blocks here too.
+			if y&0x40 != 0 {
+				switch class {
+				case featureReal:
+					if !def.Reclaimable {
+						return fmt.Errorf("world: cell %d,%d holds a non-reclaimable feature [04 §6.2]", px, pz)
+					}
+				case featureBlocked:
+					return fmt.Errorf("world: cell %d,%d holds an unresolvable feature reference [04 §6.2]", px, pz)
 				}
 			}
-			// Bit6 fails when resolved feature's catalog entry carries a specific non-reclaimable flag [05].
-			// TODO(T25): requires FeatureDef catalog lookup for the non-reclaimable flag. Without it we cannot
-			// enforce bit6 precisely; placeholder accepts the placement (do not falsely reject).
-			// If a future catalog is threaded through, enforce here.
 
-			// Bit3 slope and bit4 height sampling — TODO(question): slope/height sampling over footprint not yet gated [04 §6.2].
-			// Bit4 height tracking and bit3 slope enable are stored in the yard byte but have no terrain-height gate in this phase.
-
-			// Track geothermal satisfaction: at least one covered cell holds a feature whose catalog entry
-			// carries geothermal flag [05 "Geothermal requirement"]. The resolver follows the fringe hop.
-			// Without a catalog we treat any real feature as geothermal candidate; a catalog-aware caller
-			// can extend this with FeatureDef.Geothermal.
-			if t.hasGeothermalFeatureAt(px, pz) {
-				hasGeothermal = true
+			// Bit 7: the geothermal requirement [05 "Geothermal requirement"].
+			if y&0x80 != 0 {
+				geothermalNeeded = true
+			}
+			if class == featureReal && def.Geothermal {
+				geothermalFound = true
 			}
 		}
 	}
-	if geothermalNeeded && !hasGeothermal {
-		return fmt.Errorf("world: geothermal requirement not satisfied [05 \"Geothermal requirement\"]")
+	if geothermalNeeded && !geothermalFound {
+		return fmt.Errorf("world: geothermal requirement not satisfied [05 %q]", "Geothermal requirement")
 	}
 	return nil
 }
 
-// SampleMetal computes the metal content sampled at placement [05 "Terrain metal extraction"].
+// SampleMetal computes the metal a placed extractor samples from its footprint
+// [05 "Terrain metal extraction"]:
 //
-// For each cell in the footprint at (cx,cz) sized footX×footZ, it sums the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// extractsMetal multiplier:
+//	sampled metal = extracts-metal multiplier x sum(cell metal byte + 1)
 //
-//	sampled = extractsMetal × Σ(cellMetal + 1)
+// Every cell contributes at least one, so a zero-metal cell still adds one. The
+// result is stored on the unit instance at placement and never resampled: later
+// terrain or feature changes do not change an already stored amount.
 //
-// The intermediate sum uses integer arithmetic then converts to single-precision
-// (float32) [05]. The result is stored on the unit instance at placement and not
-// recomputed each economy pass [05]. Later terrain or feature changes do not
-// automatically change an already stored amount.
-func (t *Terrain) SampleMetal(cx, cz int32, footX, footZ int, extractsMetal float64) (float32, error) {
+// The metal field must have been seeded by ApplySchema first; sampling before
+// that is an error rather than a plausible wrong number.
+//
+// TODO(question): retail "performs the intermediate sum with fixed-point-shaped
+// integer arithmetic and then converts it to a single-precision value", and
+// notes that an exact compatibility mode must preserve that conversion and
+// rounding order [05 "Terrain metal extraction"]. The algebraic result is the
+// clean-room contract and is what this computes; the exact intermediate shape
+// is not recovered.
+func (t *Terrain) SampleMetal(cx, cz int32, footX, footZ int, extractsMetal float32) (float32, error) {
 	if t == nil {
 		return 0, fmt.Errorf("world: nil terrain")
 	}
@@ -290,141 +274,19 @@ func (t *Terrain) SampleMetal(cx, cz int32, footX, footZ int, extractsMetal floa
 	if t.Plot == nil || len(t.Plot) < int(t.CellW*t.CellH) {
 		return 0, fmt.Errorf("world: terrain plot not initialized")
 	}
-	sum := 0
+	if !t.metalSeeded {
+		// An unseeded metal field reads as zero everywhere, which is
+		// indistinguishable from a genuinely metal-free map and would silently
+		// scale every extractor's yield down to the bare footprint count.
+		// Battle setup must call ApplySchema first
+		// [05 "Terrain metal extraction"].
+		return 0, fmt.Errorf("world: surface metal not seeded; call Terrain.ApplySchema before sampling [05 %q]", "Terrain metal extraction")
+	}
+	sum := int64(0)
 	for dz := 0; dz < footZ; dz++ {
 		for dx := 0; dx < footX; dx++ {
-			px := cx + int32(dx)
-			pz := cz + int32(dz)
-			pIdx := int(pz*t.CellW + px)
-			if pIdx < 0 || pIdx >= len(t.Plot) {
-				return 0, fmt.Errorf("world: plot index %d out of range", pIdx)
-			}
-			metal := t.Plot[pIdx].Metal()
-			sum += int(metal) + 1 // [05 "Terrain metal extraction"] cellMetal+1
+			sum += int64(t.Plot[(cz+int32(dz))*t.CellW+cx+int32(dx)].Metal()) + 1
 		}
 	}
-	// Retail converts the integer sum to single-precision after multiplication [05].
-	result := float32(float64(sum) * extractsMetal)
-	return result, nil
-}
-
-// ExtractedMetal is an alias for SampleMetal for callers that prefer the
-// placement-verb naming. It satisfies C12.
-func (t *Terrain) ExtractedMetal(cx, cz int32, footX, footZ int, extractsMetal float64) (float32, error) {
-	return t.SampleMetal(cx, cz, footX, footZ, extractsMetal)
-}
-
-// ValidatePlacementWithFeatures is a catalog-aware geothermal validator that
-// checks the geothermal flag on the resolved feature definition [05 "Geothermal requirement"].
-// It otherwise delegates to ValidatePlacement for bounds/occupancy/feature-free gates.
-// Pass nil features to fall back to the plot-only heuristic (any real feature satisfies).
-func (t *Terrain) ValidatePlacementWithFeatures(cx, cz int32, yard []YardCell, footX, footZ int, geothermalFeatures map[uint16]bool) error {
-	// First run the base validator without the geothermal gate, then re-check geothermal with catalog.
-	// To avoid double geothermal error, run base with a copy that has bit7 cleared, then handle geothermal ourselves.
-	if len(yard) != footX*footZ {
-		return fmt.Errorf("world: yard length %d != footprint %dx%d", len(yard), footX, footZ)
-	}
-	hasBit7 := false
-	for _, y := range yard {
-		if y&0x80 != 0 {
-			hasBit7 = true
-			break
-		}
-	}
-	if !hasBit7 || geothermalFeatures == nil {
-		return t.ValidatePlacement(cx, cz, yard, footX, footZ)
-	}
-	// Validate non-geothermal gates via base validator with bit7 temporarily cleared.
-	cleared := make([]YardCell, len(yard))
-	for i, y := range yard {
-		cleared[i] = y &^ 0x80
-	}
-	if err := t.ValidatePlacement(cx, cz, cleared, footX, footZ); err != nil {
-		return err
-	}
-	// Now check geothermal flag via supplied map.
-	hasGeothermal := false
-	for dz := 0; dz < footZ; dz++ {
-		for dx := 0; dx < footX; dx++ {
-			px := cx + int32(dx)
-			pz := cz + int32(dz)
-			// Resolve through fringe hop.
-			if t == nil || t.Plot == nil {
-				continue
-			}
-			if px < 0 || pz < 0 || px >= t.CellW || pz >= t.CellH {
-				continue
-			}
-			pIdx := int(pz*t.CellW + px)
-			if pIdx < 0 || pIdx >= len(t.Plot) {
-				continue
-			}
-			f := t.Plot[pIdx].Feature()
-			var idx uint16
-			found := false
-			if f < plotFeatureRealLimit {
-				idx = f
-				found = true
-			} else if f == PlotFeatureFringe {
-				adx := int(t.Plot[pIdx].AnchorDXSigned())
-				adz := int(t.Plot[pIdx].AnchorDZSigned())
-				ax := px + int32(adx)
-				az := pz + int32(adz)
-				if ax >= 0 && az >= 0 && ax < t.CellW && az < t.CellH {
-					aIdx := int(az*t.CellW + ax)
-					if aIdx >= 0 && aIdx < len(t.Plot) {
-						af := t.Plot[aIdx].Feature()
-						if af < plotFeatureRealLimit {
-							idx = af
-							found = true
-						}
-					}
-				}
-			}
-			if found {
-				if geothermalFeatures[idx] {
-					hasGeothermal = true
-					break
-				}
-			}
-		}
-		if hasGeothermal {
-			break
-		}
-	}
-	if !hasGeothermal {
-		return fmt.Errorf("world: geothermal requirement not satisfied [05 \"Geothermal requirement\"]")
-	}
-	return nil
-}
-
-// ComputeMetal is a package-level helper for C12 that does not require a Terrain method receiver.
-// It is useful for tests that synthesize a plot slice directly.
-func ComputeMetal(plot []PlotCell, cellW int32, cx, cz int32, footX, footZ int, extractsMetal float64) (float32, error) {
-	if plot == nil {
-		return 0, fmt.Errorf("world: nil plot")
-	}
-	if footX <= 0 || footZ <= 0 {
-		return 0, fmt.Errorf("world: invalid footprint %dx%d", footX, footZ)
-	}
-	if cellW <= 0 {
-		return 0, fmt.Errorf("world: invalid cellW %d", cellW)
-	}
-	cellH := int32(len(plot)) / cellW
-	if cx < 0 || cz < 0 || cx+int32(footX) > cellW || cz+int32(footZ) > cellH {
-		return 0, fmt.Errorf("world: sample %d,%d %dx%d out of bounds %dx%d", cx, cz, footX, footZ, cellW, cellH)
-	}
-	sum := 0
-	for dz := 0; dz < footZ; dz++ {
-		for dx := 0; dx < footX; dx++ {
-			px := cx + int32(dx)
-			pz := cz + int32(dz)
-			pIdx := int(pz*cellW + px)
-			if pIdx < 0 || pIdx >= len(plot) {
-				return 0, fmt.Errorf("world: plot index %d out of range", pIdx)
-			}
-			sum += int(plot[pIdx].Metal()) + 1 // [05 "Terrain metal extraction"]
-		}
-	}
-	return float32(float64(sum) * extractsMetal), nil
+	return float32(sum) * extractsMetal, nil
 }

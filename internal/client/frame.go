@@ -21,7 +21,7 @@ import (
 //     device.TextureWritePixels with GPUImageWriteRequest Region
 //     matrix.Vec4i{0,0,w,h}.
 //  4. Draw one fullscreen quad via host.MeshCache quad +
-//     host.MaterialCache().Material(assets.MaterialDefinitionBasic) instanced
+//     host.MaterialCache().Material(assets.MaterialDefinitionUnlit) instanced
 //     with texture, added via host.Drawings.AddDrawing, under orthographic
 //     camera (host.UICamera), using nearest filtering.
 func (c *Client) Frame(alpha float32) {
@@ -248,7 +248,7 @@ func (c *Client) convertIndexedToRGBA() {
 }
 
 // drawQuad adds one fullscreen quad to host.Drawings for this frame. The quad
-// uses the host's MeshCache, MaterialCache().Material(assets.MaterialDefinitionBasic)
+// uses the host's MeshCache, MaterialCache().Material(assets.MaterialDefinitionUnlit)
 // instanced with the framebuffer texture, under the orthographic UICamera,
 // with nearest filtering. The quad's transform scales to the negotiated size
 // so it exactly covers the viewport.
@@ -256,7 +256,10 @@ func (c *Client) drawQuad() {
 	if c.host == nil || c.texture == nil || c.mesh == nil || c.shaderData == nil {
 		return
 	}
-	mat, err := c.host.MaterialCache().Material(assets.MaterialDefinitionBasic)
+	// This is a presentation-only framebuffer, so it must not use the lit
+	// material's shadow-map bindings. The unlit material has exactly the one
+	// sampler supplied here and otherwise uses the same standard shader data.
+	mat, err := c.host.MaterialCache().Material(assets.MaterialDefinitionUnlit)
 	if err != nil {
 		return
 	}

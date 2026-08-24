@@ -72,15 +72,27 @@ func compileMovementSection(section *formats.Section, className string, prov Pro
 	badWaterSlopeDefault := maxWaterSlope / 2
 	badWaterSlope := section.IntValue("badwaterslope", badWaterSlopeDefault)
 
-	// Presence check for maxwaterslope using the string accessor, which CAN
-	// distinguish an authored empty/missing key from an absent key [02 §4].
-	// Integer cannot distinguish an authored zero from a missing key, so the
-	// clamp's treatment of an explicitly authored 0 vs a missing key remains
-	// ambiguous; conditional on string presence preserves the 12 land classes
-	// that omit MaxWaterSlope in the retail install.
+	// TODO(question): what is a movement profile's initial maxwaterslope,
+	// before the CLASS section is read?
+	//
+	// [02 "Movement class record"] runs three clamps unconditionally, and keys
+	// 3, 4, 5 and 7 default to "the profile's current value" rather than to
+	// zero. We use zero, which makes clamp 1 collapse maxslope to zero for every
+	// class that omits maxwaterslope — 12 of the reference install's 15, taking
+	// kbotsf2, kbotss2, tankbh3, tankds2, tanksh2 and tanksh3 with it. No land
+	// unit could climb anything.
+	//
+	// The presence branch below is a stand-in for that unknown default, not a
+	// reading of the spec: it is a documented divergence, SPEC_CONFLICTS SC5.
+	// If the profile is pre-initialized with a large maxwaterslope, all three
+	// clamps run unconditionally and produce retail's behaviour with no branch
+	// at all — that is the shape to aim for once the initial value is known.
+	//
+	// The string accessor is what distinguishes an absent key from an authored
+	// zero; the integer accessor cannot [02 §4].
 	_, maxWaterSlopePresent := section.StringValue("maxwaterslope", "")
 
-	// Three clamps in order [02 "Movement class record"].
+	// Three clamps in order [02 "Movement class record"], gated per SC5.
 	if maxWaterSlopePresent && maxWaterSlope < maxSlope {
 		maxSlope = maxWaterSlope
 	}

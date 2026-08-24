@@ -16,6 +16,12 @@ const (
 	VersionCanonical Version = 0x2000 // [03 §2.2]
 )
 
+// featureSentinelBase is the exclusive upper bound for real feature-record
+// indices in an attribute cell. Consumers test below it before dereferencing,
+// so 0xFFFB..0xFFFF is a sentinel band rather than an index range
+// [02 "Terrain file"], [GAP T14].
+const featureSentinelBase uint16 = 0xFFFB
+
 // TNTLimits bounds allocations made while decoding untrusted map data. The
 // defaults are deliberately large enough for the retail corpus, but finite.
 type TNTLimits struct {
@@ -59,12 +65,31 @@ type TNT struct {
 	TileAnims uint32
 	SeaLevel  uint32
 
-	PtrMapData    uint32
-	PtrMapAttr    uint32
-	PtrTileGfx    uint32
-	PtrTileAnims  uint32
-	PtrMiniMap    uint32
-	UnknownHeader [5]uint32
+	PtrMapData   uint32
+	PtrMapAttr   uint32
+	PtrTileGfx   uint32
+	PtrTileAnims uint32
+
+	// Header slots 10..15 are version-dependent [03 §2.2], [02 "Terrain file"].
+	// Canonical (0x2000): slot 10 is the minimap offset and slot 11 bit 0 its
+	// present flag; wind and gravity are hard-coded, not stored.
+	// Legacy (0x1020): slots 10, 11 and 13 carry minimum wind, maximum wind and
+	// gravity; the minimap offset moves to slot 14 and its flag to slot 15 bit 0.
+	//
+	// Read these rather than indexing raw slots: reading slot 10 as an offset on
+	// a legacy file seeks to the minimum wind speed.
+	MiniMapOffset  uint32
+	MiniMapPresent bool
+
+	// Legacy-only. Zero on canonical files, where the engine hard-codes wind
+	// 100/2000 and gravity 0 instead [03 §2.2].
+	LegacyMinWind uint32
+	LegacyMaxWind uint32
+	LegacyGravity uint32
+
+	// Unknown1 is header slot 11 on canonical files — always 1 across the retail
+	// corpus, meaning unknown [fmt tnt].
+	Unknown1 uint32
 
 	TileMapWidth   uint32
 	TileMapHeight  uint32
@@ -107,11 +132,32 @@ func LoadTNTWithLimits(data []byte, limits TNTLimits) (*TNT, error) {
 		TileAnims:    u32(0x1c),
 		PtrTileAnims: u32(0x20),
 		SeaLevel:     u32(0x24),
-		PtrMiniMap:   u32(0x28),
 	}
-	result.UnknownHeader[0] = u32(0x2c)
-	for i := 1; i < len(result.UnknownHeader); i++ {
-		result.UnknownHeader[i] = u32(0x30 + (i-1)*4)
+	// Slots 10..15 are version-dependent [03 §2.2]. Resolve them before any
+	// section offset is used.
+	switch Version(result.Version) {
+	case VersionCanonical:
+		result.MiniMapOffset = u32(0x28) // slot 10
+		result.Unknown1 = u32(0x2c)      // slot 11, always 1 in the retail corpus
+		result.MiniMapPresent = u32(0x2c)&1 != 0
+	case VersionLegacy:
+		result.LegacyMinWind = u32(0x28) // slot 10
+		result.LegacyMaxWind = u32(0x2c) // slot 11
+		result.LegacyGravity = u32(0x34) // slot 13
+		result.MiniMapOffset = u32(0x38) // slot 14
+		result.MiniMapPresent = u32(0x3c)&1 != 0
+		// The narrower legacy attribute record is the one remaining
+		// terrain-format unknown [02 "Terrain file"]. Decoding it as the
+		// canonical four-byte record would silently mis-parse every cell, so
+		// reject rather than invent a stride (I9). Every map in the retail
+		// corpus is canonical [fmt tnt].
+		return nil, fmt.Errorf("tnt: legacy version 0x1020 is not supported: "+
+			"the width of its attribute record is unrecovered "+
+			"[02 \"Terrain file\"], [03 §2.2] (map is %dx%d)", result.Width, result.Height)
+	default:
+		// [03 §2.2]: the loader accepts exactly two versions and rejects any
+		// other version word with a diagnostic.
+		return nil, fmt.Errorf("tnt: unsupported version 0x%04x, want 0x1020 or 0x2000 [03 §2.2]", result.Version)
 	}
 	if result.Width == 0 || result.Height == 0 || result.Width > limits.MaxWidth || result.Height > limits.MaxHeight {
 		return nil, fmt.Errorf("tnt: dimensions %dx%d exceed limits", result.Width, result.Height)
@@ -165,8 +211,13 @@ func LoadTNTWithLimits(data []byte, limits TNTLimits) (*TNT, error) {
 	for i := range result.Attributes {
 		b := attrBytes[i*4:]
 		result.Attributes[i] = TNTAttribute{Height: b[0], Feature: binary.LittleEndian.Uint16(b[1:3]), Unknown: b[3]}
+		// Values at or above 0xFFFB are the sentinel band, not indices: 0xFFFF
+		// empty, 0xFFFE footprint fringe, 0xFFFD void hole, with 0xFFFB/0xFFFC
+		// acting as further void thresholds because consumers test below 0xFFFB
+		// before dereferencing [02 "Terrain file"], [GAP T14]. On disk the
+		// retail corpus uses 0xFFFC for void [fmt tnt]; accept the whole band.
 		feature := result.Attributes[i].Feature
-		if feature != 0xffff && feature != 0xfffe && feature != 0xfffc && uint32(feature) >= result.TileAnims {
+		if feature < featureSentinelBase && uint32(feature) >= result.TileAnims {
 			return nil, fmt.Errorf("tnt: feature index %d at cell %d exceeds feature record count %d", feature, i, result.TileAnims)
 		}
 	}
@@ -190,7 +241,7 @@ func LoadTNTWithLimits(data []byte, limits TNTLimits) (*TNT, error) {
 		}
 		result.FeatureTable[i] = TNTFeatureRecord{Index: index, Name: string(nameBytes[:end])}
 	}
-	minimapHeader, err := section("minimap header", result.PtrMiniMap, 1, 8)
+	minimapHeader, err := section("minimap header", result.MiniMapOffset, 1, 8)
 	if err != nil {
 		return nil, err
 	}
@@ -203,10 +254,10 @@ func LoadTNTWithLimits(data []byte, limits TNTLimits) (*TNT, error) {
 	if pixels > limits.MaxMinimapPixels {
 		return nil, fmt.Errorf("tnt: minimap exceeds limits")
 	}
-	if result.PtrMiniMap > ^uint32(0)-8 {
+	if result.MiniMapOffset > ^uint32(0)-8 {
 		return nil, fmt.Errorf("tnt: minimap offset overflows")
 	}
-	minimap, err := section("minimap pixels", result.PtrMiniMap+8, pixels, 1)
+	minimap, err := section("minimap pixels", result.MiniMapOffset+8, pixels, 1)
 	if err != nil {
 		return nil, err
 	}

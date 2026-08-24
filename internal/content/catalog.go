@@ -24,10 +24,29 @@ type Catalog struct {
 	Sides    []*SideDef                // index = SIDE ordinal [02 §6] C8
 	Sounds   map[string]*SoundCategory // key = CanonicalKey(category name) [02 "Sound category record"]
 	Maps     map[string]*MapHeader     // key = CanonicalKey(basename) [02 "Map files"]
+	LOS      *LOSTables                // compiled gamedata/los.tdf [02 §6] C15 [PLAN_02]
+	Meteor   *MeteorDefaults           // compiled gamedata/meteor.tdf [02 §6] C15 [PLAN_02]
 
 	// AIProfiles holds ai/*.txt profiles (10 in retail, incl default.txt) [08 "Computer-controlled players"].
 	// Not in the minimal PLAN_02 Public API snippet but discovery is part of WU-02-6 and consumed by phase 11.
 	AIProfiles map[string]*AIProfile
+
+	// BuildMenus holds the per-builder CANBUILD pages of sidedata.tdf
+	// [02 "Build-menu catalog keys"]. The downloadable enforcement walks
+	// their button names at Compile time [02 "Unit record"]; phase 8's
+	// construction UI consumes pages directly.
+	BuildMenus map[string]*BuildMenuPage
+
+	// Aliases holds the gamedata/allsound.tdf alias registrations (cap 255,
+	// 32-byte names) [02 "Sound aliases"]. Phase 13's audio path resolves
+	// sound names through them; they live here so no downstream package
+	// re-parses a TDF.
+	Aliases map[string]*SoundAlias
+
+	// Warnings collects non-fatal load diagnostics verbatim, e.g. the
+	// downloadable enforcement's "Hey! Somebody forgot to set
+	// downloadable=1 for %s" [02 "Unit record"]. The caller owns display.
+	Warnings []string
 
 	Manifest string // vfs.ManifestHash() [PLAN 02]
 	Hash     string // sha256 over canonical definition bytes including defaults, stable across runs (I1) [02 §5] C12
@@ -98,6 +117,10 @@ func Compile(fs vfs.FSOps) (*Catalog, error) {
 	if sounds == nil {
 		sounds = make(map[string]*SoundCategory)
 	}
+	var aliases map[string]*SoundAlias
+	if soundData != nil {
+		aliases = soundData.Aliases
+	}
 	maps, err := CompileMaps(fs)
 	if err != nil {
 		// Maps header discovery [02 "Map files"]; retail has 275 each; allow empty
@@ -110,15 +133,32 @@ func Compile(fs vfs.FSOps) (*Catalog, error) {
 		// ai/*.txt 10 incl default.txt [PLAN 02]; missing default is fatal there.
 		return nil, err
 	}
+	// Battle tables [02 §6] C15 [PLAN_02] WU-02-8: phases 5 and 9 only consume immutable values, never re-parse (I8).
+	losTables, err := CompileLOSTables(fs)
+	if err != nil {
+		return nil, err
+	}
+	meteorDefaults, err := CompileMeteor(fs)
+	if err != nil {
+		return nil, err
+	}
 
 	// Stage 2: link cross-references so enumeration order cannot leak into identity [02 §5] C1.
 	// weapon1..3 on a unit resolve only after all weapons compile.
 	LinkUnitWeapons(units, weapons)
 	// Feature successors already linked inside CompileFeatures via LinkFeatureSuccessors [GAP T14] C9.
-	// Downloadable enforcement is intentionally not auto-invoked here: it requires
-	// build-menu button names [02 "Unit record"] C10 which are part of the
-	// SIDEDATA-derived GUI catalog not yet compiled in this phase. Callers that
-	// have build menus should invoke EnforceDownloadable explicitly.
+	// Build menus [02 "Build-menu catalog keys"]: the pages live in
+	// gamedata/sidedata.tdf next to the sides. They must exist before the
+	// downloadable enforcement, which walks their button names after all unit
+	// definitions are compiled [02 "Unit record"].
+	buildMenus, err := CompileBuildMenus(fs)
+	if err != nil {
+		return nil, err
+	}
+	var warnings []string
+	if len(buildMenus) > 0 {
+		warnings = EnforceDownloadable(units, MenuButtonNames(buildMenus))
+	}
 	// Model sorting C13: sort model catalog case-insensitively before caching per-unit-type pointer [03 §2.4].
 	sortedModels, modelIndex := buildModelCatalog(units)
 
@@ -133,7 +173,12 @@ func Compile(fs vfs.FSOps) (*Catalog, error) {
 		Sides:        sides,
 		Sounds:       sounds,
 		Maps:         maps,
+		LOS:          losTables,
+		Meteor:       meteorDefaults,
 		AIProfiles:   aiProfiles,
+		Aliases:      aliases,
+		BuildMenus:   buildMenus,
+		Warnings:     warnings,
 		Manifest:     manifest,
 		sortedModels: sortedModels,
 		modelIndex:   modelIndex,
@@ -152,14 +197,23 @@ func buildModelCatalog(units map[string]*UnitDef) ([]string, map[string]int) {
 		return nil, nil
 	}
 	// Deduplicate by canonical key so "arm_3do" and "ARM_3DO" are one entry.
+	// The surviving spelling is chosen deterministically: iterate units by
+	// sorted canonical key and keep the lexicographically smallest original
+	// among fold-equal spellings, so provider order and Go map randomization
+	// cannot choose the representative (I1).
 	canonToOriginal := make(map[string]string)
-	for _, u := range units {
-		name := strings.TrimSpace(u.ObjectName)
+	unitKeys := make([]string, 0, len(units))
+	for k := range units {
+		unitKeys = append(unitKeys, k)
+	}
+	sort.Strings(unitKeys)
+	for _, k := range unitKeys {
+		name := strings.TrimSpace(units[k].ObjectName)
 		if name == "" {
 			continue
 		}
 		ck := CanonicalKey(name)
-		if _, exists := canonToOriginal[ck]; !exists {
+		if existing, exists := canonToOriginal[ck]; !exists || name < existing {
 			canonToOriginal[ck] = name
 		}
 	}
@@ -382,6 +436,42 @@ func (c *Catalog) Clone() *Catalog {
 			out.AIProfiles[k] = cloneAIProfile(v)
 		}
 	}
+	// Aliases deep copy [02 "Sound aliases"]
+	if c.Aliases != nil {
+		out.Aliases = make(map[string]*SoundAlias, len(c.Aliases))
+		for k, v := range c.Aliases {
+			if v == nil {
+				continue
+			}
+			cp := *v
+			out.Aliases[k] = &cp
+		}
+	}
+	// BuildMenus deep copy [02 "Build-menu catalog keys"]
+	if c.BuildMenus != nil {
+		out.BuildMenus = make(map[string]*BuildMenuPage, len(c.BuildMenus))
+		for k, v := range c.BuildMenus {
+			if v == nil {
+				continue
+			}
+			cp := *v
+			if v.Buttons != nil {
+				cp.Buttons = append([]string(nil), v.Buttons...)
+			}
+			out.BuildMenus[k] = &cp
+		}
+	}
+	// Warnings are immutable diagnostics; a slice copy suffices.
+	if c.Warnings != nil {
+		out.Warnings = append([]string(nil), c.Warnings...)
+	}
+	// Battle tables deep copy [02 §6] C15
+	if c.LOS != nil {
+		out.LOS = cloneLOSTables(c.LOS)
+	}
+	if c.Meteor != nil {
+		out.Meteor = cloneMeteor(c.Meteor)
+	}
 	// Model catalog copy
 	if c.sortedModels != nil {
 		out.sortedModels = append([]string(nil), c.sortedModels...)
@@ -580,6 +670,39 @@ func cloneAIProfile(p *AIProfile) *AIProfile {
 			out.Plans[k] = &cp
 		}
 	}
+	return &out
+}
+
+// cloneLOSTables deep copies LOSTables [02 §6] C15 [PLAN_02] WU-02-8.
+func cloneLOSTables(lt *LOSTables) *LOSTables {
+	if lt == nil {
+		return nil
+	}
+	out := *lt
+	if lt.Tables != nil {
+		out.Tables = make([]LOSTable, len(lt.Tables))
+		for i, t := range lt.Tables {
+			out.Tables[i].TableNum = t.TableNum
+			out.Tables[i].NumLines = t.NumLines
+			if t.Lines != nil {
+				out.Tables[i].Lines = make([][]int32, len(t.Lines))
+				for j, line := range t.Lines {
+					if line != nil {
+						out.Tables[i].Lines[j] = append([]int32(nil), line...)
+					}
+				}
+			}
+		}
+	}
+	return &out
+}
+
+// cloneMeteor deep copies MeteorDefaults [02 §6] C15 [PLAN_02] WU-02-8.
+func cloneMeteor(md *MeteorDefaults) *MeteorDefaults {
+	if md == nil {
+		return nil
+	}
+	out := *md
 	return &out
 }
 

@@ -6,35 +6,59 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/version"
 )
 
-func main() {
-	opts, err := parseFlags(os.Args[1:], os.Stdout)
+// mainOptions parses command-line options without exiting so the Darwin entry
+// point can decide whether it must hand the process main thread to AppKit.
+func mainOptions(args []string, out io.Writer) (Options, int, bool) {
+	opts, err := parseFlags(args, out)
 	if err != nil {
 		if errors.Is(err, ErrHelp) {
-			os.Exit(0)
+			return Options{}, 0, false
 		}
-		os.Exit(2)
+		return Options{}, 2, false
 	}
-	if err := run(opts, os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	return opts, 0, true
 }
 
-// seedFor resolves the simulation seed. Retail seeds at battle entry from a
-// high-resolution counter [01 §7.1]; --seed makes a run reproducible, which
-// matters because RNG state is not saved and is reseeded on load
-// [08 "Scheduler and random state in saves"].
-func seedFor(opts Options) uint32 {
-	if opts.Seed >= 0 {
-		return uint32(opts.Seed)
+// runOptions executes a parsed command line and returns the process exit code.
+func runOptions(opts Options, out, errOut *os.File) int {
+	if err := run(opts, out); err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
 	}
-	return uint32(time.Now().UnixNano())
+	return 0
+}
+
+// wantsViewer is shared by run and the Darwin entry point. On macOS the latter
+// must start CocoaRunApp on the process main thread before Kaiju creates a
+// window; headless and dump commands must not enter the AppKit run loop.
+func wantsViewer(opts Options) bool {
+	return !opts.Headless && opts.Map != "" && opts.Dump == ""
+}
+
+// seedsFor resolves the two stream seeds.
+//
+// Retail seeds them separately: the simulation stream at battle entry from
+// QueryPerformanceCounter, the CRT stream at process start from the time
+// source at effectively one-second resolution [01 §2.1], [01 §7.1], [01 §7.2].
+// We mirror that split so an unseeded run does not accidentally couple them.
+//
+// --seed fixes both, which is the only handle a reproducible run has: RNG state
+// is not saved and is reseeded on load [08 "Scheduler and random state in
+// saves"]. PLAN_00 C4, PLAN_03 C10.
+func seedsFor(opts Options) (sim, crt uint32) {
+	if opts.Seed >= 0 {
+		return uint32(opts.Seed), uint32(opts.Seed)
+	}
+	now := time.Now()
+	return uint32(now.UnixNano()), uint32(now.Unix())
 }
 
 func run(opts Options, out *os.File) error {
@@ -46,13 +70,17 @@ func run(opts Options, out *os.File) error {
 	}
 	defer content.Close()
 
-	seed := seedFor(opts)
-	fmt.Fprintf(out, "seed: %d\n", seed)
+	// Seed both streams before any subsystem can draw (PLAN_03 C10). rng.Global
+	// is nil until this runs, so a missed seeding is a crash, not a run that
+	// looks deterministic and reproduces nothing (I4).
+	simSeed, crtSeed := seedsFor(opts)
+	rng.SeedGlobal(simSeed, crtSeed)
+	fmt.Fprintf(out, "seed: sim=%d crt=%d\n", simSeed, crtSeed)
 
 	// Gate 1: windowed terrain viewer when --map is set, --headless is false,
 	// and no --dump is requested. This opens the Kaiju window and draws real
 	// TNT terrain with camera pan and FNT overlay [PLAN_04A].
-	if !opts.Headless && opts.Map != "" && opts.Dump == "" {
+	if wantsViewer(opts) {
 		if err := runViewer(opts, content); err != nil {
 			// If viewer fails (e.g., no display), fall back to headless report
 			// so CI and headless environments still produce useful output.

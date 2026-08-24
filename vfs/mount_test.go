@@ -1,6 +1,7 @@
 package vfs_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,15 @@ func TestMountRetailInstall(t *testing.T) {
 		if _, err := fileSystem.Stat(required); err != nil {
 			t.Errorf("%s: %v", required, err)
 		}
+	}
+	// Tier precedence smoke test from PLAN_01 WU-01-1: sidedata.tdf must
+	// resolve to the patch archive rev31.gp3, beating the base HPIs.
+	sources := fileSystem.Sources("gamedata/sidedata.tdf")
+	if len(sources) == 0 {
+		t.Fatal("gamedata/sidedata.tdf not found")
+	}
+	if got := sources[0].Source.ProviderID(); got != "rev31.gp3" {
+		t.Fatalf("sidedata.tdf provider = %q, want rev31.gp3", got)
 	}
 }
 
@@ -117,19 +127,121 @@ func TestManifestHashStable(t *testing.T) {
 }
 
 // TestDuplicateMountSuppressed covers the dedup rule: an equal full path
-// mounts once [02 §2].
+// mounts once [02 §2]. The second mount attempt must not change the mount
+// count or the manifest.
 func TestDuplicateMountSuppressed(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	fileSystem := vfs.New()
 	if err := fileSystem.MountDirectory(dir, 10); err != nil {
 		t.Fatal(err)
 	}
 	before := fileSystem.MountCount()
+	first, err := fileSystem.ManifestHash()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := fileSystem.MountGameDirectoryWithPlan(dir, vfs.DefaultRetailMountPlan()); err != nil {
 		t.Fatal(err)
 	}
-	_ = before
-	if notes := fileSystem.Notes(); len(notes) > 0 {
-		t.Logf("notes: %v", notes)
+	if after := fileSystem.MountCount(); after != before {
+		t.Fatalf("mount count %d -> %d; duplicate full path must be suppressed [02 §2]", before, after)
+	}
+	second, err := fileSystem.ManifestHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("manifest hash changed across a suppressed duplicate mount")
+	}
+}
+
+// TestManifestHashPortable locks PLAN_01 C13's cross-filesystem clause: the
+// same content at two different host roots must produce the same
+// ManifestHash, because ProviderID is archive base name or root-relative
+// path — never an absolute host path.
+func TestManifestHashPortable(t *testing.T) {
+	build := func(root string) {
+		files := map[string]string{
+			"gamedata/moveinfo.tdf": "[CLASS0]\n{\nName=box;\n}\n",
+			"units/armcom.fbi":      "[UNITINFO]\n{\nunitname=ARMCOM;\n}\n",
+		}
+		for rel, data := range files {
+			full := filepath.Join(root, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(full, []byte(data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	a := t.TempDir()
+	b := t.TempDir()
+	build(a)
+	build(filepath.Join(b, "deeper", "nested", "install"))
+	if err := os.MkdirAll(filepath.Join(b, "deeper", "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	fsA := vfs.New()
+	defer fsA.Close()
+	if err := fsA.MountDirectory(a, 10); err != nil {
+		t.Fatal(err)
+	}
+	fsB := vfs.New()
+	defer fsB.Close()
+	if err := fsB.MountDirectory(filepath.Join(b, "deeper", "nested", "install"), 10); err != nil {
+		t.Fatal(err)
+	}
+	hashA, err := fsA.ManifestHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashB, err := fsB.ManifestHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hashA != hashB {
+		t.Fatalf("manifest hash depends on host root: %s vs %s", hashA[:16], hashB[:16])
+	}
+	records, err := fsA.Manifest(vfs.ManifestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if strings.Contains(record.ProviderID, string(filepath.Separator)+string(filepath.Separator)) ||
+			filepath.IsAbs(record.ProviderID) {
+			t.Fatalf("ProviderID %q leaks a host path", record.ProviderID)
+		}
+	}
+}
+
+// TestTenHPIDiagnostic names the SC1 discrepancy when more than ten local
+// HPIs are present (PLAN_01 C2): every archive mounts, one diagnostic notes
+// the count.
+func TestTenHPIDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 11; i++ {
+		name := filepath.Join(dir, fmt.Sprintf("dummy%d.hpi", i))
+		if err := os.WriteFile(name, []byte("not really an archive"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fs := vfs.New()
+	defer fs.Close()
+	// The >10 note is emitted while planning, before any archive opens, so
+	// the garbage payloads' open errors do not hide the diagnostic.
+	_ = fs.MountGameDirectoryWithPlan(dir, vfs.DefaultRetailMountPlan())
+	notesSeen := false
+	for _, note := range fs.Notes() {
+		if strings.Contains(note, "local HPI") && strings.Contains(note, "SC1") {
+			notesSeen = true
+		}
+	}
+	if !notesSeen {
+		t.Fatalf("no >10-HPI diagnostic among notes: %v", fs.Notes())
 	}
 }

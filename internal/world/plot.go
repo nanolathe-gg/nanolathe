@@ -53,18 +53,49 @@ func (p PlotCell) Metal() uint8 { return p[7] }
 func (p PlotCell) Feature() uint16 { return uint16(p[8]) | uint16(p[9])<<8 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// At fringe members this is a signed offset to the anchor cell (supported
-// inference [02 "Terrain file"]); interpret as int8 when resolving.
+// cell is, and research does not agree on the first of them:
+//
+//   - At a FRINGE member, they locate the anchor cell. [02 "Terrain file"] reads
+//     them as "signed offsets locating their anchor cell", explicitly marked
+//     supported inference; [04 §6.2] instead says "the cell stores target-cell
+//     coordinates and the resolver re-reads that cell's feature identifier".
+//     Both readings are exposed below; the resolver uses the offset reading.
+//     TODO(question): which is it? An absolute-coordinate pair cannot fit two
+//     bytes on maps wider than 256 cells, which is most of the retail corpus,
+//     so the offset reading is the only one that can be literally true at this
+//     width — but that argument is ours, not research's.
+//   - At an ANCHOR with a live instance attached, they are the instance slot
+//     index.
+//   - At an ANCHOR with no instance, they accumulate blast damage against hit
+//     points. Attachment clears the accumulator role, so the two are never
+//     simultaneous [02 "Terrain file"].
+//
+// Phase 5 (feature lifecycle) and phase 8 (blast accumulation) own the anchor
+// roles; this package only writes the fringe role.
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (p PlotCell) AnchorDX() uint8 { return p[0xA] }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (p PlotCell) AnchorDZ() uint8 { return p[0xB] }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// members to reach the anchor cell [02 "Terrain file"].
 func (p PlotCell) AnchorDXSigned() int8 { return int8(p[0xA]) }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (p PlotCell) AnchorDZSigned() int8 { return int8(p[0xB]) }
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// cell's reading: the attached instance slot index, or the accumulated blast
+// damage when no instance is attached [02 "Terrain file"].
+func (p PlotCell) AnchorWord() uint16 { return uint16(p[0xA]) | uint16(p[0xB])<<8 }
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (p *PlotCell) SetAnchorWord(v uint16) {
+	p[0xA] = byte(v)
+	p[0xB] = byte(v >> 8)
+}
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // This is the adjudicated reading of the flag byte [03 §3.3]; see also
@@ -209,86 +240,81 @@ func ResolveFeature(plot []PlotCell, cellW, cellH int, cx, cz int) (uint16, bool
 	return 0, false
 }
 
-// ExpandPlotFromTNT builds a row-major []PlotCell of length cellW*cellH from
-// a TNT attribute slice. Each raw 4-byte TNT attribute (height + feature +
-// unknown) is expanded to its 13-byte plot cell with [GAP T14] offsets and
-// sentinel values [PLAN_04 C6][03 §2.2].
+// ExpandPlot builds the row-major plot grid from a TNT attribute slice
+// [03 §2.2], [02 "Terrain file"], [GAP T14].
+//
+// This is the ONLY expansion path. Terrain.Load calls it; nothing else may
+// hand-write plot bytes, because a second path is how the derived fields ended
+// up unpopulated in the first place.
 //
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// 0xFFFF/0xFFFE/0xFFFD round-trip), occupied flag cleared. Derived fields
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// unknown bytes) are zeroed/seeded deterministically and left for later
-// passes to refine (derived floor pair, lava/edge strips, feature stamps).
-// First two bytes and flag bits are kept raw and never gate gameplay [PLAN_04 C13].
-func ExpandPlotFromTNT(attrs []plotTNTAttr, cellW, cellH int) []PlotCell {
-	if cellW <= 0 || cellH <= 0 {
-		return nil
-	}
-	n := cellW * cellH
-	plot := make([]PlotCell, n)
-	limit := n
-	if len(attrs) < limit {
-		limit = len(attrs)
-	}
-	for i := 0; i < limit; i++ {
-		a := attrs[i]
-		plot[i][4] = a.Height
-		// Seed derived floor pair to the height; a later terrain pass may
-		// refine these from neighbor heights [02 "Terrain file"].
-		plot[i][5] = a.Height
-		plot[i][6] = a.Height
-		plot[i][7] = 0 // SurfaceMetal — filled from placement/metal pass when known
-		plot[i][8] = byte(a.Feature)
-		plot[i][9] = byte(a.Feature >> 8)
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		_ = a.Unknown // preserved only as source sentinel; not interpreted per [fmt tnt] and [GAP T14]
-	}
-	return plot
-}
-
-// ExpandPlot builds a row-major plot from formats.TNTAttribute slice,
-// preserving sentinels verbatim [GAP T14][PLAN_04 C6]. See ExpandPlotFromTNT
-// for seeding rules.
+//
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// later passes, which own the data this package does not have: the metal byte
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [05 "Terrain metal extraction"]) and the fringe anchor offsets at
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [02 "Terrain file"]; the flag byte's fog bit is presentation state owned by
+// phase 5 [03 §3.3] (PLAN_04 C13).
 func ExpandPlot(attrs []formats.TNTAttribute, cellW, cellH int) []PlotCell {
 	if cellW <= 0 || cellH <= 0 {
 		return nil
 	}
-	n := cellW * cellH
-	plot := make([]PlotCell, n)
-	limit := n
+	plot := make([]PlotCell, cellW*cellH)
+	limit := len(plot)
 	if len(attrs) < limit {
 		limit = len(attrs)
 	}
 	for i := 0; i < limit; i++ {
-		a := attrs[i]
-		plot[i][4] = a.Height
-		plot[i][5] = a.Height
-		plot[i][6] = a.Height
-		plot[i][7] = 0
-		plot[i][8] = byte(a.Feature)
-		plot[i][9] = byte(a.Feature >> 8)
-		_ = a.Unknown
+		plot[i][4] = attrs[i].Height
+		plot[i].SetFeature(attrs[i].Feature)
+		// attrs[i].Unknown is byte +3 of the source cell: zero in all cells of
+		// all retail maps, meaning unknown [fmt tnt]. Not carried across.
 	}
+	deriveFloorPair(plot, cellW, cellH)
 	return plot
 }
 
-// plotTNTAttr is the minimal TNT attribute view needed for expansion without
-// importing formats at the call site. Callers that have formats.TNT can
-// adapt via AdaptTNTAttrs or use ExpandPlot directly.
-type plotTNTAttr struct {
-	Height  uint8
-	Feature uint16
-	Unknown uint8
-}
-
-// AdaptTNTAttrs adapts a generic slice of TNT-like attributes using accessors,
-// avoiding a hard import of formats in tests that synthesize attributes.
-func AdaptTNTAttrs[T any](attrs []T, height func(T) uint8, feature func(T) uint16, unknown func(T) uint8) []plotTNTAttr {
-	out := make([]plotTNTAttr, len(attrs))
-	for i, a := range attrs {
-		out[i] = plotTNTAttr{Height: height(a), Feature: feature(a), Unknown: unknown(a)}
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// whose average is the sampled floor height [02 "Terrain file"], [03 §2.3].
+//
+// TODO(question): research establishes that the pair exists, that it is
+// derived at load, and that CoarseHeightAt averages it — but not the
+// derivation rule. The reading used here follows from the source format: a
+// TNT height byte is "the height *of the cell's corner*" [fmt tnt], so the
+// cell's floor spans its four corners, and its local minimum and maximum are
+// the min and max of those four samples. That makes the average track the
+// bilinear query of [03 §2.3], which is what "their average is the sampled
+// floor height" implies. Corners past the last row/column clamp inward.
+func deriveFloorPair(plot []PlotCell, cellW, cellH int) {
+	at := func(x, z int) uint8 {
+		if x >= cellW {
+			x = cellW - 1
+		}
+		if z >= cellH {
+			z = cellH - 1
+		}
+		return plot[z*cellW+x][4]
 	}
-	return out
+	for z := 0; z < cellH; z++ {
+		for x := 0; x < cellW; x++ {
+			lo := at(x, z)
+			hi := lo
+			for _, h := range [3]uint8{at(x+1, z), at(x, z+1), at(x+1, z+1)} {
+				if h < lo {
+					lo = h
+				}
+				if h > hi {
+					hi = h
+				}
+			}
+			cell := &plot[z*cellW+x]
+			cell[5] = lo
+			cell[6] = hi
+		}
+	}
 }

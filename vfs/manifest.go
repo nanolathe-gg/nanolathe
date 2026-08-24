@@ -89,9 +89,9 @@ func (f *FS) ManifestHash() (string, error) {
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
-func providerID(info EntryInfo) string {
-	if info.Source.SourcePath != "" {
-		return info.Source.SourcePath
-	}
-	return info.Source.ProviderType
-}
+// providerID returns the portable identity of an entry's winning provider.
+// Archives contribute their file name (extension visible, PLAN_01 C4); loose
+// files contribute their path relative to the mount root. Absolute host
+// paths never reach the manifest, so ManifestHash is stable across runs and
+// across filesystems given the same content [PLAN_01 C13].
+func providerID(info EntryInfo) string { return info.Source.ProviderID() }

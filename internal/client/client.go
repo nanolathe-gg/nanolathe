@@ -364,15 +364,13 @@ func (c *Client) ContentDatabase() (assets.Database, error) {
 		if st, err := os.Stat(cand); err == nil && st.IsDir() {
 			// Verify it looks like Kaiju content (has renderer/materials).
 			if _, err := os.Stat(filepath.Join(cand, "renderer")); err == nil {
-				return assets.NewFileDatabase(cand)
+				return newKaijuContentDatabase(cand)
 			}
-			// Still try even if renderer not found — let assets report.
-			return assets.NewFileDatabase(cand)
 		}
 	}
 	// Fallback to the original relative path so the error message from
 	// assets.NewFileDatabase is preserved, but include diagnostics.
-	return assets.NewFileDatabase("content")
+	return newKaijuContentDatabase("content")
 }
 
 // Run is a convenience helper that starts the Kaiju main loop with this client

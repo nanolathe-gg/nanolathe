@@ -63,6 +63,7 @@ type MapHeader struct {
 	// so the plain key is read; the typed accessor family is still used [02 §3] [02 §4].
 	MissionName        string // missionname language-prefixed string empty [02 "Map files"]
 	MissionDescription string // missiondescription string default "No description available" [02 "Map files"]
+	MissionFile        string // missionfile string empty [02 "Map files"] map-global key table; consumed by the phase 10 mission loader
 	Planet             string // planet string empty [02 "Map files"] — vocabulary listed in [fmt ota]
 	Memory             string // memory string empty [fmt ota]
 	NumPlayers         string // numplayers string empty [fmt ota]
@@ -140,6 +141,7 @@ func compileMapHeader(otaLogical, tntLogical string, otaProv, tntProv Provenance
 		// Language-prefixed keys try <language><key> then plain key [02 §3].
 		mh.MissionName, _ = global.LanguageString("", "missionname", "")
 		mh.MissionDescription, _ = global.StringValue("missiondescription", "No description available")
+		mh.MissionFile, _ = global.StringValue("missionfile", "") // [02 "Map files"] map-global key table
 		mh.Planet, _ = global.StringValue("planet", "")
 		mh.Memory, _ = global.StringValue("memory", "")
 		mh.NumPlayers, _ = global.StringValue("numplayers", "")
@@ -216,26 +218,18 @@ func compileMapHeader(otaLogical, tntLogical string, otaProv, tntProv Provenance
 		Provenance:   mh.OTAProvenance,
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|", mh.CanonicalKey, mh.Name, mh.MissionName, mh.Planet, mh.Size, mh.NumPlayers, mh.Memory)
-	fmt.Fprintf(&b, "%d|%d|%d|%.10f|%d|", mh.LineOfSight, mh.Mapping, mh.MinWindSpeed, mh.TidalStrength, mh.Gravity)
-	fmt.Fprintf(&b, "%d|%d|%d|%.10f|%.10f|%d|%s|", mh.MaxUnits, mh.LavaWorld, mh.MaxWindSpeed, mh.KillMul, mh.TimeMul, mh.SurfaceMetalPlaceholder(), mh.UseOnlyUnits)
-	// Note: placeholder for per-header SurfaceMetal if needed; keep deterministic.
+	// Every compiled scalar is hashed, including defaults [02 §5] C12.
+	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|%s|%s|", mh.CanonicalKey, mh.Name, mh.MissionName, mh.MissionFile, mh.MissionDescription, mh.Planet, mh.Size, mh.NumPlayers, mh.Memory)
+	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|", mh.Brief, mh.Narration, mh.MissionHint, mh.Glamour, mh.GlamourSound, mh.UseOnlyUnits)
+	fmt.Fprintf(&b, "%d|%d|%d|%d|%d|", mh.LineOfSight, mh.Mapping, mh.NoMovie, mh.SolarStrength, mh.LavaWorld)
+	fmt.Fprintf(&b, "%d|%d|%d|%.10f|%d|", mh.WaterDoesDamage, mh.WaterDamage, mh.MinWindSpeed, mh.TidalStrength, mh.Gravity)
+	fmt.Fprintf(&b, "%d|%d|%d|%.10f|%.10f|%s|", mh.MaxUnits, mh.MaxWindSpeed, mh.TNTVersion, mh.KillMul, mh.TimeMul, mh.UseOnlyUnits)
 	for i, s := range mh.Schemas {
 		fmt.Fprintf(&b, "schema%d:%s|%s|%d|%d|%d|%d|%d|%d|%s|%d|%.10f|%.10f|%.10f|%d|", i, s.Name, s.Type, s.SurfaceMetal, s.HumanMetal, s.HumanEnergy, s.ComputerMetal, s.ComputerEnergy, s.MohoMetal, s.MeteorWeapon, s.MeteorRadius, s.MeteorDensity, s.MeteorDuration, s.MeteorInterval, s.StartPosCount)
 	}
 	fmt.Fprintf(&b, "tnt:%d|%d|%d|%d|%d|%d|%d|%d|", mh.TNTWidth, mh.TNTHeight, mh.TNTSeaLevel, mh.TNTTiles, mh.TNTTileAnims, mh.MinimapWidth, mh.MinimapHeight, mh.UnknownHeader1)
 	mh.Hash = HashDefinition([]byte(b.String()))
 	return mh
-}
-
-// SurfaceMetalPlaceholder returns a global SurfaceMetal placeholder if any schema has it.
-// Guard for hash estabilidade: not used elsewhere; keeps hash shape stable when global
-// vs schema duplication is loose [fmt ota].
-func (m *MapHeader) SurfaceMetalPlaceholder() int32 {
-	if len(m.Schemas) > 0 {
-		return m.Schemas[0].SurfaceMetal
-	}
-	return 0
 }
 
 // tntHeaderLite is a lightweight TNT header preview [fmt tnt]. Headers only in this
@@ -273,13 +267,25 @@ func loadTNTHeaderLite(fs vfs.FSOps, logical string) (tntHeaderLite, error) {
 		TileAnims: u32(0x1c),
 		Unknown1:  u32(0x2c),
 	}
+	// The minimap offset is version-dependent: slot 10 on canonical files, slot
+	// 14 on legacy ones, where slot 10 is the minimum wind speed instead
+	// [03 §2.2], [02 "Terrain file"]. Reading slot 10 unconditionally seeks into
+	// the middle of a legacy file.
 	ptrMini := u32(0x28)
+	if h.Version == versionLegacyTNT {
+		ptrMini = u32(0x38)
+	}
 	if uint64(ptrMini)+8 <= uint64(len(data)) {
 		h.MinimapWidth = binary.LittleEndian.Uint32(data[ptrMini:])
 		h.MinimapHeight = binary.LittleEndian.Uint32(data[ptrMini+4:])
 	}
 	return h, nil
 }
+
+// versionLegacyTNT is the legacy TNT version word [03 §2.2]. The catalog still
+// lists a legacy map — only loading its terrain fails, in world.Load — so this
+// header reader must resolve its slots correctly rather than reject.
+const versionLegacyTNT = 0x1020
 
 func isSchemaName(name string) bool {
 	// Retail probes "Schema %i" case-insensitively via formatting [fmt ota] [02 "Map files"].

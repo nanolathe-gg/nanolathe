@@ -254,6 +254,19 @@ func (s *State) LoadBox(b [28]byte) {
 	s.Active = clampSpeed(s.Active)
 }
 
+// BeginSubTick increments the global simulation tick and returns its new
+// value. It is the single writer of GlobalTick.
+//
+// [01 §4.4]: "each sub-tick increments the global tick before any phase runs"
+// (C6). The kernel calls this once per sub-tick, before phase 1; nothing else
+// may advance the counter. Keeping it here rather than in the kernel means the
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [08 "Scheduler and random state in saves"] (C14).
+func (s *State) BeginSubTick() uint32 {
+	s.GlobalTick++
+	return s.GlobalTick
+}
+
 // ScaledNow converts a GetTickCount millisecond value to the engine's
 // scaled timebase floor(tickCount *30/1000) [01 §4.1]. Kept here so the
 // conversion stays in one place and no other package invents its own.

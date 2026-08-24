@@ -2,7 +2,6 @@
 package world
 
 import (
-	"encoding/binary"
 	"fmt"
 	"strings"
 
@@ -12,20 +11,15 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// Version is the TNT version discriminant [03 §2.2] C2.
-//
-//	VersionLegacy    = 0x1020
-//	VersionCanonical = 0x2000
-type Version uint8
+// Version is the TNT version word [03 §2.2] C2. Its value IS the header word,
+// so a Version can be compared against raw file bytes without a lookup table.
+// It deliberately mirrors formats.Version rather than re-numbering it: an enum
+// whose VersionLegacy was 0 sitting next to a comment saying 0x1020 is a trap.
+type Version = formats.Version
 
 const (
-	VersionLegacy    Version = iota // 0x1020 [03 §2.2] C3
-	VersionCanonical                // 0x2000 [03 §2.2] C3
-)
-
-const (
-	versionWordLegacy    uint32 = 0x1020 // [03 §2.2] C2
-	versionWordCanonical uint32 = 0x2000 // [03 §2.2] C2
+	VersionLegacy    = formats.VersionLegacy    // 0x1020 [03 §2.2] C3
+	VersionCanonical = formats.VersionCanonical // 0x2000 [03 §2.2] C3
 )
 
 // Terrain is authoritative world geometry [03 §2.2].
@@ -40,6 +34,159 @@ type Terrain struct {
 	WindMin      int32         // [03 §2.2] C3/C4
 	WindMax      int32         // [03 §2.2] C3/C4
 	Tidal        numeric.Fixed // [03 §2.2] C4
+
+	// FeatureNames is the map's own feature-record list, in record order, from
+	// the TNT feature table [fmt tnt]. A plot cell's feature field indexes THIS
+	// list, not the catalog.
+	FeatureNames []string
+
+	// FeatureDefs binds each record to its catalog definition, matched
+	// case-insensitively by name [fmt tnt]. A nil entry means the map names a
+	// feature the catalog does not have, which is the out-of-range case of
+	// [04 §6.2]: blocking for yard bit 5, non-satisfying for bit 7. It is not a
+	// load failure — retail maps outlive their feature sets.
+	FeatureDefs []*content.FeatureDef
+
+	// metalSeeded records whether ApplySchema has run. SampleMetal refuses to
+	// answer before it has: an unseeded metal field reads as zero everywhere,
+	// which is indistinguishable from a genuinely metal-free map and silently
+	// makes every extractor's yield wrong [05 "Terrain metal extraction"].
+	metalSeeded bool
+}
+
+// FeatureDefAt resolves a plot cell's feature field to a catalog definition.
+// It reports ok only for a real record index that binds to a definition; every
+// sentinel, out-of-range index and unbound name reports false [04 §6.2].
+func (t *Terrain) FeatureDefAt(feature uint16) (*content.FeatureDef, bool) {
+	if t == nil || feature >= plotFeatureRealLimit {
+		return nil, false
+	}
+	if int(feature) >= len(t.FeatureDefs) {
+		return nil, false
+	}
+	def := t.FeatureDefs[feature]
+	return def, def != nil
+}
+
+// ApplySchema seeds the per-cell metal byte from the mission's uniform surface
+// metal value [05 "Terrain metal extraction"]: "When the mission provides a
+// uniform surface-metal value, map loading initializes the cell metal field
+// from it; maps can also supply per-cell values."
+//
+// The value is per-schema in the OTA, and schema selection is a battle-setup
+// decision [08], so it cannot happen inside Load. Battle setup must call this
+// before any extractor is placed; SampleMetal fails until it does.
+//
+// TODO(question): "maps can also supply per-cell values" is established, but
+// where a per-cell metal map is stored is not. No retail map in the reference
+// install carries one that we can identify, so only the uniform path exists
+// here.
+func (t *Terrain) ApplySchema(mh *content.MapHeader, schemaIndex int) error {
+	if t == nil {
+		return fmt.Errorf("world: nil terrain")
+	}
+	value := int32(0)
+	if mh != nil && schemaIndex >= 0 && schemaIndex < len(mh.Schemas) {
+		value = mh.Schemas[schemaIndex].SurfaceMetal
+	} else if mh != nil && len(mh.Schemas) > 0 {
+		return fmt.Errorf("world: schema %d out of range (map has %d) [02 \"Map files\"]", schemaIndex, len(mh.Schemas))
+	}
+	if value < 0 {
+		value = 0
+	}
+	if value > 255 {
+		value = 255 // the cell field is one unsigned byte [02 "Terrain file"]
+	}
+	for i := range t.Plot {
+		t.Plot[i][7] = uint8(value)
+	}
+	t.metalSeeded = true
+	return nil
+}
+
+// stampFeatureAnchors writes each fringe cell's offset back to its anchor.
+//
+// A feature covering more than one cell stores its record index in the anchor
+// cell — the top-left corner of its footprint — and fills the rest with the
+// fringe sentinel [fmt tnt]. Fringe cells carry no index of their own, so every
+// consumer resolves them through the anchor [04 §6.2]. The TNT attribute record
+// has no anchor field (height, feature reference, one unknown byte [fmt tnt]),
+// so the engine must derive the offsets at load; without this pass they stay
+// zero and each fringe cell resolves to itself, i.e. to nothing.
+//
+// The derivation propagates in row-major order — the deterministic map order of
+// [01 §6.1]. A fringe cell inherits from its left and upper neighbours,
+// preferring whichever anchor comes later in that order, which is what keeps
+// two features packed against each other from bleeding into one another.
+//
+// TODO(question): research states the anchor relationship and the resolver's
+// behaviour [fmt tnt], [04 §6.2] but never says how the engine reconstructs the
+// offsets. Measured against the reference install (275 maps, 71,916 fringe
+// cells):
+//
+//   - Stamping from the declared FBI footprint resolves 65.1%. The footprint is
+//     not the rule: metaltower10 declares 1x2 while the TNT marks a 4x4 region
+//     as covered.
+//   - This propagation resolves 83.2%.
+//   - The residual is not recoverable locally. On dense maps (pincushion,
+//     cloaked in the spires — together 83% of it) adjacent features' fringe
+//     regions merge into one 4-connected blob: bounding boxes reach 10x9 with
+//     seven real cells inside, so no local rule can partition them. A further
+//     5,283 cells lie in blobs with no real cell anywhere near, i.e. orphaned
+//     source data.
+//
+// An unresolved fringe cell is a legitimate state, not a failure: [04 §6.2]
+// makes an unresolvable reference blocking for yard bit 5 and non-satisfying
+// for bit 7, which is what placement does. A probe against retail would be
+// needed to settle the real rule.
+func (t *Terrain) stampFeatureAnchors() {
+	if t.CellW <= 0 || t.CellH <= 0 || len(t.Plot) < int(t.CellW*t.CellH) {
+		return
+	}
+	// anchorOf[i] is the plot index of the anchor owning cell i, or -1.
+	anchorOf := make([]int32, len(t.Plot))
+	for i := range anchorOf {
+		anchorOf[i] = -1
+	}
+	for cz := int32(0); cz < t.CellH; cz++ {
+		for cx := int32(0); cx < t.CellW; cx++ {
+			i := cz*t.CellW + cx
+			f := t.Plot[i].Feature()
+			if f < plotFeatureRealLimit {
+				anchorOf[i] = i // a real index anchors itself
+				continue
+			}
+			if f != PlotFeatureFringe {
+				continue
+			}
+			owner := int32(-1)
+			if cx > 0 {
+				owner = anchorOf[i-1]
+			}
+			if cz > 0 {
+				if above := anchorOf[i-t.CellW]; above > owner {
+					// Later in row-major order wins. Two features packed
+					// against each other both reach this cell through a
+					// neighbour; the one whose anchor comes later is the one
+					// whose rectangle starts here, because the earlier
+					// rectangle would have had to run past the later anchor's
+					// own origin to claim it.
+					owner = above
+				}
+			}
+			if owner < 0 {
+				continue // orphaned sentinel; stays unresolved [04 §6.2]
+			}
+			anchorOf[i] = owner
+			dx := owner%t.CellW - cx
+			dz := owner/t.CellW - cz
+			if dx < -128 || dx > 127 || dz < -128 || dz > 127 {
+				// The offsets are one signed byte each [02 "Terrain file"].
+				continue
+			}
+			t.Plot[i].SetAnchorSigned(int8(dx), int8(dz))
+		}
+	}
 }
 
 // SeaLevelWorld returns sea level in world units as byte*65536 [03 §2.2] C9.
@@ -143,26 +290,42 @@ func (t *Terrain) CoarseHeightAt(cx, cz int32) numeric.Fixed {
 	return numeric.Fixed(int64(v) * 65536)
 }
 
-// LOSHeightAt returns the 32-pixel quantized height for visibility tile (vx,vz) [03 §2.3] C8.
-// The LOS writer quantizes to 32-pixel visibility tiles and reads aggregated
-// terrain heights; it does not use the four-corner bilinear query. Each
-// visibility tile covers 2×2 cells (32 map pixels) [03 §2.1]. This query samples
-// the cell at the tile origin (vx*2, vz*2) without interpolation and returns the
-// raw height byte. Out-of-bounds tiles return 0. It must not be substituted for HeightAt.
+// LOSHeightAt returns the 32-pixel quantized height for visibility tile (vx,vz)
+// [03 §2.3] C8.
+//
+// The LOS writer uses its own, coarser height representation: it "quantizes to
+// 32-pixel visibility tiles and reads aggregated terrain heights; it does not
+// use the four-corner bilinear query" [03 §2.3]. A visibility tile covers 2x2
+// attribute cells [03 §2.1]. It must not be substituted for HeightAt, and a
+// tall feature does not raise it — only terrain data does [03 §2.3].
+//
+// TODO(question): [03 §2.3] establishes that the value is aggregated over the
+// tile but does not name the aggregate. This returns the maximum of the four
+// covered cells, which is the only choice that behaves like terrain occlusion:
+// a ridge crossing one cell of a tile must block the ray, and averaging would
+// let sight pass through it. Not attested — phase 5 owns the decision and
+// PLAN_05 records it as an open input.
 func (t *Terrain) LOSHeightAt(vx, vz int32) uint8 {
 	if t == nil || t.Plot == nil || t.CellW <= 0 || t.CellH <= 0 {
 		return 0
 	}
-	cx := vx * 2
-	cz := vz * 2
+	cx, cz := vx*2, vz*2
 	if cx < 0 || cz < 0 || cx >= t.CellW || cz >= t.CellH {
 		return 0
 	}
-	idx := int(cz*t.CellW + cx)
-	if idx < 0 || idx >= len(t.Plot) {
-		return 0
+	high := uint8(0)
+	for dz := int32(0); dz < 2; dz++ {
+		for dx := int32(0); dx < 2; dx++ {
+			px, pz := cx+dx, cz+dz
+			if px >= t.CellW || pz >= t.CellH {
+				continue
+			}
+			if h := t.Plot[pz*t.CellW+px].Height(); h > high {
+				high = h
+			}
+		}
 	}
-	return t.Plot[idx].Height()
+	return high
 }
 
 // gravityFromAuthored converts an authored OTA/TNT gravity integer into
@@ -210,24 +373,14 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("world: %s: file is too small", logicalTNT)
 	}
-	versionWord := binary.LittleEndian.Uint32(data[0:4])
-	if versionWord != versionWordLegacy && versionWord != versionWordCanonical {
-		return nil, fmt.Errorf("tnt: unsupported version 0x%04x [03 §2.2]", versionWord)
-	}
+	// Version gating lives in formats.LoadTNT, which is the only place that
+	// knows which header slots each version uses [03 §2.2] C2/C3. Duplicating
+	// the check here is how the two drifted apart in the first place.
 	tnt, err := formats.LoadTNT(data)
 	if err != nil {
 		return nil, fmt.Errorf("world: %s: %w", logicalTNT, err)
 	}
-	var ver Version
-	switch tnt.Version {
-	case versionWordLegacy:
-		ver = VersionLegacy
-	case versionWordCanonical:
-		ver = VersionCanonical
-	default:
-		// [03 §2.2] C2: rejects any other version word with a diagnostic.
-		return nil, fmt.Errorf("tnt: unsupported version 0x%04x [03 §2.2]", tnt.Version)
-	}
+	ver := Version(tnt.Version)
 	cellW := int32(tnt.Width)         // [03 §2.2]
 	cellH := int32(tnt.Height)        // [03 §2.2]
 	tileW := int32(tnt.TileMapWidth)  // Width/2 [03 §2.2] C5
@@ -264,21 +417,13 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 	} else {
 		tidal = numeric.Fixed(32768) // fallback when no catalog/OTA [03 §2.2] C4
 	}
-	if ver == VersionLegacy {
-		// [03 §2.2] C3: legacy reads gravity/minWind/maxWind from header slots 13/10/11.
-		// Header slots as parsed by formats/tnt.go [fmt tnt]:
-		// slot10 (0x28) = PtrMiniMap field, slot11 (0x2C)=UnknownHeader[0],
-		// slot13 (0x34)=UnknownHeader[2], minimap offset slot14=UnknownHeader[3],
-		// flag slot15 bit0 =UnknownHeader[4].
-		windMin = int32(tnt.PtrMiniMap)
-		windMax = int32(tnt.UnknownHeader[0])
-		gravInt := int32(tnt.UnknownHeader[2])
-		gravity = gravityFromAuthored(gravInt)
-		// Legacy keeps header values even if OTA would override [03 §2.2] C4.
-		// No OTA wind/gravity override for legacy.
-		// No fallback replacement for legacy header gravity; keep even if 0.
-	} else {
-		// [03 §2.2] C3: canonical hard-codes gravity 0, wind 100/2000.
+	{
+		// [03 §2.2] C3: canonical hard-codes gravity 0, wind 100/2000, and an
+		// authored non-negative OTA wind/gravity overrides the terrain value —
+		// for canonical maps only. The legacy branch that read wind and gravity
+		// from header slots 10/11/13 is gone: formats.LoadTNT now rejects
+		// version 0x1020 outright because the width of its attribute record is
+		// unrecovered [02 "Terrain file"], so no legacy terrain reaches here.
 		windMin = 100
 		windMax = 2000
 		gravity = numeric.Fixed(0)
@@ -312,31 +457,49 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 			gravity = numeric.Fixed(0x1FDB)
 		}
 	}
-	// Build Plot array [03 §2.2] [GAP T14]. Minimal for WU-04-2; full expansion in WU-04-3.
-	plotCount := int(cellW) * int(cellH)
-	plot := make([]PlotCell, plotCount)
-	if len(tnt.Attributes) == plotCount {
-		for i, attr := range tnt.Attributes {
-			// Height at +4 [GAP T14].
-			plot[i][4] = attr.Height
-			// Feature at +8 little-endian [GAP T14].
-			plot[i][8] = byte(attr.Feature & 0xff)
-			plot[i][9] = byte(attr.Feature >> 8)
-			// Min/Max derived later; leave zero for now.
-			// Occupied flag +0xC bit 0 left zero.
+	// Plot expansion goes through the one path in plot.go [03 §2.2], [GAP T14].
+	plot := ExpandPlot(tnt.Attributes, int(cellW), int(cellH))
+
+	// Bind the map's feature records to catalog definitions. The names are
+	// matched case-insensitively against the feature TDF sections [fmt tnt].
+	names := make([]string, len(tnt.FeatureTable))
+	defs := make([]*content.FeatureDef, len(tnt.FeatureTable))
+	for i, rec := range tnt.FeatureTable {
+		names[i] = rec.Name
+		if cat != nil && cat.Features != nil {
+			if def, ok := cat.Features[content.CanonicalKey(rec.Name)]; ok {
+				defs[i] = def
+			}
 		}
 	}
-	return &Terrain{
-		CellW:       cellW,
-		CellH:       cellH,
-		Version:     ver,
-		TileIndices: indices,
-		TileSet:     tileSet,
-		Plot:        plot,
-		SeaLevel:    sea,
-		Gravity:     gravity,
-		WindMin:     windMin,
-		WindMax:     windMax,
-		Tidal:       tidal,
-	}, nil
+
+	t := &Terrain{
+		CellW:        cellW,
+		CellH:        cellH,
+		Version:      ver,
+		TileIndices:  indices,
+		TileSet:      tileSet,
+		Plot:         plot,
+		SeaLevel:     sea,
+		Gravity:      gravity,
+		WindMin:      windMin,
+		WindMax:      windMax,
+		Tidal:        tidal,
+		FeatureNames: names,
+		FeatureDefs:  defs,
+	}
+	t.stampFeatureAnchors()
+
+	// TODO(question): PLAN_04's Divergences section commits to deriving void
+	// and lava edges after terrain materialization — "two eastmost reserve
+	// columns plus the lava flood" — carried over from a prior implementation.
+	// Research supports only that void cells exist and describes them as
+	// "lava-world fill and map-edge strips" [02 "Terrain file"]; neither the
+	// two-column width, the eastmost side, nor the flood rule appears in
+	// [03 §2.2] or anywhere else. Implementing it would be inventing three
+	// constants, so it is left undone and PLAN_04's Divergences entry is
+	// downgraded to this unknown. Map-authored void sentinels still load
+	// verbatim; only engine-derived edges are missing.
+
+	return t, nil
 }

@@ -180,58 +180,6 @@ var knownUnitKeys = map[string]struct{}{
 	"selfdestructcountdown": {},
 }
 
-// loadTranslateTable loads gamedata/translate.tdf for the given language [02 §3].
-// If the file is missing, it returns a nil map that callers treat as identity (byte-exact).
-// Translation lookup is byte-exact on the source string; duplicate source sections keep the last translation
-// and insertion is case-sensitive on the source string [02 §3].
-func loadTranslateTable(fs vfs.FSOps, language string) map[string]string {
-	if fs == nil || language == "" {
-		// With empty/default language, the translation table would have no entries for that language key.
-		// Still attempt to load to keep identity fallback semantics, but empty language yields empty map.
-		// Missing file yields identity (nil map) per [02 §3].
-		if language == "" {
-			return nil
-		}
-	}
-	data, err := fs.ReadFileLimit("gamedata/translate.tdf", 1<<20)
-	if err != nil {
-		return nil
-	}
-	doc, err := formats.ParseTDF(data)
-	if err != nil {
-		return nil
-	}
-	m := make(map[string]string)
-	for _, section := range doc.Root.Sections() {
-		source := section.OriginalName
-		if source == "" {
-			source = section.Name
-		}
-		// Key named by language string — case-insensitive lookup via typed accessor family [02 §4].
-		// Use FirstValue semantics via StringValue with case-insensitive foldName.
-		translated, ok := section.StringValue(language, "")
-		if !ok || translated == "" {
-			continue
-		}
-		m[source] = translated
-	}
-	if len(m) == 0 {
-		return nil
-	}
-	return m
-}
-
-// translate returns the mapped translation or the source unchanged byte-exactly when no map or no entry [02 §3].
-func translate(m map[string]string, source string) string {
-	if m == nil {
-		return source
-	}
-	if v, ok := m[source]; ok {
-		return v
-	}
-	return source
-}
-
 // compileUnitSection compiles a single UNITINFO section into a UnitDef.
 // It uses typed accessors only from formats/tdf_typed.go [02 §4].
 // Language-prefixed name trial <Language>name then name is applied for name/description [02 §3] C7.
@@ -524,7 +472,15 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	}
 
 	// Hash over canonical bytes including defaults, independent of map iteration (I1) [02 §5] C12.
-	// Fixed order canonical representation — never range a map directly.
+	u.Hash = HashDefinition(writeUnitCanonical(u))
+	return u
+}
+
+// writeUnitCanonical renders a UnitDef's canonical byte form: fixed order,
+// never ranging a map directly (I1) [02 §5] C12. Both the compile-time hash
+// and the downloadable enforcement's re-hash use it so the two can never
+// drift.
+func writeUnitCanonical(u *UnitDef) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|%s|%s|", u.CanonicalKey, u.UnitName, u.Name, u.Description, u.Side, u.ObjectName, u.Category, u.SoundCategory, u.Corpse)
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|", u.MovementClass, u.Weapon1, u.Weapon2, u.Weapon3, u.ExplodeAs, u.SelfDestructAs, u.YardMap)
@@ -548,8 +504,7 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	for _, k := range u.UnknownKeysSorted() {
 		fmt.Fprintf(&b, "%s=%s|", k, u.Unknown[k])
 	}
-	u.Hash = HashDefinition([]byte(b.String()))
-	return u
+	return []byte(b.String())
 }
 
 // CompileUnits compiles units from the VFS. Discovery is units/*.fbi (278) — filter .fbi only
@@ -569,10 +524,12 @@ func CompileUnitsWithLanguage(fs vfs.FSOps, language string) (map[string]*UnitDe
 	if fs == nil {
 		return nil, fmt.Errorf("content: nil VFS")
 	}
-	// Load translate table to honor missing-file identity fallback [02 §3] C7.
-	// The table is not applied to unit names (those use LanguageString), but loading it validates the
-	// fallback behavior and keeps the warning path explicit. Keep the map for future consumers.
-	_ = loadTranslateTable(fs, language)
+	// Note: gamedata/translate.tdf is NOT loaded here. The unit name/
+	// description fallback (<Language>name then name) is handled by
+	// LanguageString [02 §3] C7; runtime-message translation belongs to
+	// whichever later phase owns the configured language (phase 7), which
+	// should load the table itself rather than re-parse or carry an unused
+	// map through the catalog.
 
 	entries, err := fs.ReadDir("units")
 	if err != nil {
@@ -691,12 +648,16 @@ func LinkUnitWeapons(units map[string]*UnitDef, weapons map[string]*WeaponDef) {
 // EnforceDownloadable walks every unit definition and compares its name case-insensitively
 // against every build-menu button name. A match whose downloadable bit is clear raises the
 // exact warning "Hey! Somebody forgot to set downloadable=1 for %s" once, silently forces
-// the bit on, and re-sorts and re-finalizes the catalog [02 "Unit record"] C10.
-// buildMenuNames are the canonical button names (case-insensitive comparison via CanonicalKey).
-// It returns the number of units that were fixed.
-func EnforceDownloadable(units map[string]*UnitDef, buildMenuNames []string) int {
+// the bit on, and re-finalizes the record [02 "Unit record"] C10.
+// buildMenuNames are canonical button names (case-insensitive comparison via CanonicalKey).
+//
+// The warnings are returned verbatim in unit-key order instead of printed:
+// Compile routes them onto Catalog.Warnings so the caller owns diagnostics.
+// Each fixed unit is re-hashed through writeUnitCanonical; the catalog-level
+// hash is recomputed by the caller afterwards.
+func EnforceDownloadable(units map[string]*UnitDef, buildMenuNames []string) []string {
 	if units == nil || len(buildMenuNames) == 0 {
-		return 0
+		return nil
 	}
 	// Canonicalize build menu names for case-insensitive comparison [02 "Unit record"].
 	menuSet := make(map[string]struct{}, len(buildMenuNames))
@@ -709,48 +670,21 @@ func EnforceDownloadable(units map[string]*UnitDef, buildMenuNames []string) int
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	fixed := 0
+	var warnings []string
 	for _, k := range keys {
 		u := units[k]
 		if u.Downloadable {
 			continue
 		}
-		// Compare unit name case-insensitively against every build-menu button name [02 "Unit record"].
-		// The spec says walk every unit definition and compare its name case-insensitively against every build-menu button name.
-		// "Name" here is the unit's canonical UnitName (unitname) per [02 "Unit record"] enforcement walk.
+		// Compare the unit's canonical UnitName against the menu buttons
+		// case-insensitively [02 "Unit record"] enforcement walk.
 		if _, ok := menuSet[CanonicalKey(u.UnitName)]; !ok {
 			continue
 		}
 		// Verbatim warning [02 "Unit record"] C10.
-		fmt.Printf("Hey! Somebody forgot to set downloadable=1 for %s\n", u.UnitName)
+		warnings = append(warnings, fmt.Sprintf("Hey! Somebody forgot to set downloadable=1 for %s", u.UnitName))
 		u.Downloadable = true
-		// Re-hash to reflect forced bit — hash includes Downloadable flag.
-		// Recompute hash deterministically without map iteration.
-		var b strings.Builder
-		fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|%s|%s|", u.CanonicalKey, u.UnitName, u.Name, u.Description, u.Side, u.ObjectName, u.Category, u.SoundCategory, u.Corpse)
-		fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|", u.MovementClass, u.Weapon1, u.Weapon2, u.Weapon3, u.ExplodeAs, u.SelfDestructAs, u.YardMap)
-		fmt.Fprintf(&b, "%s|%s|%s|%s|%s|", u.DefaultMissionType, u.BadTargetCategoryWPRI, u.BadTargetCategoryWSEC, u.BadTargetCategoryWSPE, u.NoChaseCategory)
-		fmt.Fprintf(&b, "%d|%d|%.10f|%.10f|%.10f|%.10f|", u.BuildCostEnergy, u.BuildCostMetal, u.EnergyMake, u.EnergyUse, u.MetalMake, u.ExtractsMetal)
-		fmt.Fprintf(&b, "%.10f|%.10f|%.10f|%.10f|%d|%d|%d|%d|%d|%d|", u.WindGenerator, u.TidalGenerator, u.EnergyStorage, u.MetalStorage, u.MakesMetal, u.BuildTime, u.WorkerTime, u.HealTime, u.CloakCost, u.CloakCostMoving)
-		fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|", u.MaxVelocity, u.BrakeRate, u.Acceleration, u.BankScale, u.PitchScale, u.DamageModifier, u.MoveRate1, u.MoveRate2, u.TurnRate, u.Waterline)
-		fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|", u.CruiseAlt, u.TransportSize, u.TransportCapacity, u.BuildAngle, u.BuildDistance, u.SortBias, u.ManeuverLeashLength, u.AttackRunLength, u.KamikazeDistance, u.FootprintX)
-		fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|%d|", u.FootprintZ, u.MaxDamage, u.SightDistance, u.RadarDistance, u.SonarDistance, u.RadarDistanceJam, u.SonarDistanceJam)
-		fmt.Fprintf(&b, "%d|%d|%d|", u.MinCloakDistance, u.StandingMoveOrder, u.StandingFireOrder)
-		flags := []bool{u.InitCloaked, u.Downloadable, u.Builder, u.Stealth, u.BMCode, u.ZBuffer, u.IsAirBase, u.IsTargetingUpgrade, u.Teleporter, u.HideDamage, u.ShootMe, u.ArmoredState, u.ActivateWhenBuilt, u.CanFly, u.CanHover, u.Upright, u.Floater, u.Amphibious, u.IsFeature, u.NoShadow, u.ImmuneToParalyzer, u.HoverAttack, u.AntiWeapons, u.Digger, u.OnOffable, u.MobileStandOrders, u.FireStandOrders, u.CanStop, u.CanAttack, u.CanGuard, u.CanPatrol, u.CanMove, u.CanLoad, u.CanReclamate, u.CanResurrect, u.CanCapture, u.CanDGun, u.Kamikaze, u.NoRestrict, u.ShowPlayerName, u.Commander, u.CantBeTransported, u.Wacky}
-		for _, f := range flags {
-			if f {
-				b.WriteString("1|")
-			} else {
-				b.WriteString("0|")
-			}
-		}
-		fmt.Fprintf(&b, "%s|%t|", u.SelfDestructCountdown, u.SelfDestructCountdownPresent)
-		b.WriteString("unknown|")
-		for _, kk := range u.UnknownKeysSorted() {
-			fmt.Fprintf(&b, "%s=%s|", kk, u.Unknown[kk])
-		}
-		u.Hash = HashDefinition([]byte(b.String()))
-		fixed++
+		u.Hash = HashDefinition(writeUnitCanonical(u))
 	}
-	return fixed
+	return warnings
 }

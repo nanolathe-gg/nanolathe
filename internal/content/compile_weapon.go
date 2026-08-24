@@ -190,8 +190,9 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 	shakeDuration := int32(section.FloatValue("shakeduration", 0) * 30.0)
 	// turnrate *1/30 truncated per tick
 	turnRate := int32(section.FloatValue("turnrate", 0) * (1.0 / 30.0))
-	// minbarrelangle *pi/180 radians default -11.25
-	minBarrelAngle := section.FloatValue("minbarrelangle", -11.25) * math.Pi / 180.0
+	// minbarrelangle *pi/180 radians default -11.25 — composed exactly as
+	// tabulated, value times the pi/180 constant [02 "Weapon record"] C3.
+	minBarrelAngle := section.FloatValue("minbarrelangle", -11.25) * (math.Pi / 180.0)
 
 	// Remaining scalars [02 "Weapon record"]
 	rng := section.IntValue("range", 32767)
@@ -418,13 +419,22 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 // CompileWeapons compiles weapons from the VFS. Discovery is weapons/*.tdf (77) AND gamedata/weapons.tdf
 // — one weapon per top-level section across all files [PLAN 02 Discovery]. It returns a map keyed by
 // CanonicalKey(section name) [02 §5]. The helper uses only typed accessors from formats/tdf_typed.go [02 §4].
+//
+// Record identity is by ID [02 "Weapon record"]: each section fills the record
+// selected by its authored ID, so two sections sharing an ID produce ONE
+// record whose catalog name is the later section's. Measured on the reference
+// install: ID 36 is shared by EARTHQUAKE (gamedata/weapons.tdf) and cormine2
+// (weapons/cormine2_weapon.tdf); every unit link references CORMINE2 and none
+// references EARTHQUAKE.
 func CompileWeapons(fs vfs.FSOps) (map[string]*WeaponDef, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("content: nil VFS")
 	}
 	result := make(map[string]*WeaponDef)
+	// byID holds the record selected per authored ID [02 "Weapon record"]. Only
+	// records selected this way collapse; see the ID-less branch below.
+	byID := make(map[int32]*WeaponDef)
 
-	// Helper to process a file's document into result map. Last write wins for duplicate section names (I1).
 	processFile := func(data []byte, prov Provenance) error {
 		doc, err := formats.ParseTDF(data)
 		if err != nil {
@@ -436,14 +446,37 @@ func CompileWeapons(fs vfs.FSOps) (map[string]*WeaponDef, error) {
 				continue
 			}
 			wd := compileWeaponSection(section, name, prov)
-			key := CanonicalKey(name)
-			result[key] = wd
+			if wd.ID >= 0 {
+				// The later section replaces the earlier same-ID record
+				// wholesale: typed reads store value-or-default per field, so
+				// keys the later section omits revert to their defaults, and
+				// the catalog name becomes the later section's [02 "Weapon
+				// record"]. Drop the loser's old catalog-name entry unless it
+				// is being overwritten by the same spelling.
+				if prev, ok := byID[wd.ID]; ok && prev.CanonicalKey != wd.CanonicalKey {
+					delete(result, prev.CanonicalKey)
+				}
+				byID[wd.ID] = wd
+			} else {
+				// TODO(question): [02 "Weapon record"] says "A weapon section
+				// without an authored ID therefore selects the slot before the
+				// table", which reads as if every ID-less section merged into
+				// one slot -1 record. All 231 stock sections carry IDs
+				// (measured), so the reading is untestable against retail
+				// data; merging them here would be destructive if wrong.
+				// Until resolved, ID-less sections stay distinct records.
+			}
+			result[wd.CanonicalKey] = wd
 		}
 		return nil
 	}
 
-	// gamedata/weapons.tdf first — weapons/ is authoritative and overwrites duplicates (openta-go fallback logic).
-	// Sorting: gamedata first, then weapons/*.tdf sorted lexically so last-wins equals weapons authoritative.
+	// File order: gamedata/weapons.tdf parses BEFORE weapons/*.tdf, so the
+	// weapons-directory spelling wins an ID collision. Supported inference
+	// from the reference data: for the ID 36 collision the surviving name must
+	// be CORMINE2 because units reference it and nothing references
+	// EARTHQUAKE. TODO(question): the true retail enumeration order of the two
+	// weapon sources is not established; revisit if research lands.
 	if data, err := fs.ReadFileLimit("gamedata/weapons.tdf", 1<<20); err == nil {
 		prov := Provenance{LogicalPath: "gamedata/weapons.tdf"}
 		if info, statErr := fs.Stat("gamedata/weapons.tdf"); statErr == nil {
@@ -498,11 +531,11 @@ func compileWeapons(fs vfs.FSOps) (map[string]*WeaponDef, error) {
 	return CompileWeapons(fs)
 }
 
-// WeaponByID selects the weapon with the given ID. It scans the weapons map in canonical-key order
-// for determinism (I1) and returns the first match. Retail selects the record by ID first with default -1
-// [02 "Weapon record"] C2; if duplicate IDs exist the deterministic scan provides a stable winner.
-// For full retail last-write-wins file-order semantics, build the ID map during CompileWeapons; this helper
-// provides a stable sorted fallback for catalog queries and tests.
+// WeaponByID selects the weapon with the given ID. After CompileWeapons there
+// is exactly one record per nonnegative ID (same-ID sections merge into one
+// record whose name is the later section's [02 "Weapon record"]), so the scan
+// is deterministic regardless of order; it iterates sorted canonical keys (I1)
+// and returns the first match.
 func WeaponByID(weapons map[string]*WeaponDef, id int32) (*WeaponDef, bool) {
 	if weapons == nil {
 		return nil, false

@@ -115,6 +115,41 @@ func catalogHash(c *Catalog) string {
 			fmt.Fprintf(h, "ai %s %s\n", k, ap.Hash)
 		}
 	}
+	// BuildMenus — sorted pages, buttons in canonical order [02 "Build-menu catalog keys"].
+	if len(c.BuildMenus) > 0 {
+		keys := make([]string, 0, len(c.BuildMenus))
+		for k := range c.BuildMenus {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			bm := c.BuildMenus[k]
+			fmt.Fprintf(h, "buildmenu %s %s\n", k, bm.Hash)
+		}
+	}
+	// Sound aliases — sorted [02 "Sound aliases"].
+	if len(c.Aliases) > 0 {
+		keys := make([]string, 0, len(c.Aliases))
+		for k := range c.Aliases {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(h, "alias %s %s\n", k, c.Aliases[k].Hash)
+		}
+	}
+	// Battle tables [02 §6] C15 [PLAN_02] WU-02-8: included via per-definition hashes; never map-iterated unsorted.
+	if c.LOS != nil && c.LOS.Hash != "" {
+		fmt.Fprintf(h, "los %s\n", c.LOS.Hash)
+	} else if c.LOS != nil {
+		// LOS present but empty (minimal fixture without gamedata/los.tdf) — still distinguishable.
+		fmt.Fprintf(h, "los empty\n")
+	}
+	if c.Meteor != nil && c.Meteor.Hash != "" {
+		fmt.Fprintf(h, "meteor %s\n", c.Meteor.Hash)
+	} else if c.Meteor != nil {
+		fmt.Fprintf(h, "meteor empty\n")
+	}
 	// Model catalog sorted case-insensitively [03 §2.4] C13 — already sorted in c.sortedModels.
 	if len(c.sortedModels) > 0 {
 		for i, name := range c.sortedModels {
@@ -133,11 +168,27 @@ func catalogHash(c *Catalog) string {
 	}
 
 	// Terminator: include counts so empty vs missing is distinct but stable.
-	fmt.Fprintf(h, "counts u=%d w=%d f=%d m=%d sides=%d s=%d maps=%d ai=%d models=%d\n",
-		len(c.Units), len(c.Weapons), len(c.Features), len(c.Movement), len(c.Sides), len(c.Sounds), len(c.Maps), len(c.AIProfiles), len(c.sortedModels))
+	fmt.Fprintf(h, "counts u=%d w=%d f=%d m=%d sides=%d s=%d maps=%d ai=%d aliases=%d menus=%d models=%d los=%d meteor=%d\n",
+		len(c.Units), len(c.Weapons), len(c.Features), len(c.Movement), len(c.Sides), len(c.Sounds), len(c.Maps), len(c.AIProfiles), len(c.Aliases), len(c.BuildMenus), len(c.sortedModels), lenTables(c.LOS), hasMeteor(c.Meteor))
 
 	sum := h.Sum(nil)
 	return hex.EncodeToString(sum)
+}
+
+func lenTables(lt *LOSTables) int {
+	if lt == nil {
+		return -1 // nil vs empty distinguishes missing field (old binary) vs fixture
+	}
+	return len(lt.Tables)
+}
+func hasMeteor(md *MeteorDefaults) int {
+	if md == nil {
+		return -1
+	}
+	if md.Hash == "" {
+		return 0
+	}
+	return 1
 }
 
 // HashDefinition is in source.go; catalogHash is the Catalog-level aggregation [02 §5] C12 (I1).

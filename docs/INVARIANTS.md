@@ -64,6 +64,25 @@ func floorDiv(a, b int64) int64 { q := a / b; if a%b != 0 && (a < 0) != (b < 0) 
 **Why.** `x / 65536` on `x = -1` yields 0, but the arithmetic shift yields -1.
 The two disagree exactly on the map's west and north edges.
 
+A **fixed-by-fixed multiply** is the third case, and it floors. The product is
+formed at full width and shifted down, which is an arithmetic shift, so
+`numeric.Fixed.Mul` uses `>> 16` and not `/ 65536`. Division is the exception
+within the exception: it is an `idiv`, not a shift, so `Fixed.Div` truncates
+toward zero. The asymmetry is the hardware's, not a choice.
+
+Research does not state the multiply's rounding directly — `[01 §8]` scopes
+truncation to the float-to-integer `__ftol` path and `[03 §2.1]` describes the
+coordinate hierarchy's "signed, floor-like shifts". The inference is recorded at
+`numeric.Fixed.Mul` as a `TODO(question)`; it is one line to change if a probe
+disproves it.
+
+| Operation | Rule | Helper |
+|---|---|---|
+| float → integer | truncate toward zero (`__ftol`) `[01 §8]` | `int32(f)`, `Fixed.Int` |
+| world → cell/tile | floor with sign correction `[03 §2.1]` | `world.WorldToCell` / `WorldToTile` |
+| fixed × fixed | floor (arithmetic shift) | `Fixed.Mul` |
+| fixed ÷ fixed | truncate toward zero (`idiv`) | `Fixed.Div` |
+
 ## I4 — Two RNG streams, call order is behavior
 
 **Rule.** One global Park-Miller simulation stream (`16807 / 127773 / 2836 /

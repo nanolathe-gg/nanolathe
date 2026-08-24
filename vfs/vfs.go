@@ -28,9 +28,27 @@ type Provenance struct {
 	OriginalPath string
 	ProviderType string
 	SourcePath   string
+	MountRoot    string // absolute loose-mount root; empty for archives
 	Priority     int
 	MountOrder   int
 	Compression  string
+}
+
+// ProviderID returns the portable identity of the winning provider: the
+// archive file name for archives, or the path relative to the loose mount
+// root. It never embeds absolute host paths, so manifests and manifest hashes
+// are stable across machines and filesystems [PLAN_01 C13].
+func (p Provenance) ProviderID() string {
+	if p.MountRoot != "" && p.SourcePath != "" {
+		if rel, err := filepath.Rel(p.MountRoot, p.SourcePath); err == nil &&
+			!strings.HasPrefix(rel, "..") {
+			return filepath.ToSlash(rel)
+		}
+	}
+	if p.SourcePath != "" {
+		return filepath.Base(p.SourcePath)
+	}
+	return p.ProviderType
 }
 
 // EntryInfo describes a logical file or directory without opening its data.
@@ -307,8 +325,12 @@ func New() *FS { return &FS{} }
 
 // MountDirectory indexes a loose directory's names and metadata. It does not
 // read file contents. The directory is resolved case-insensitively at mount
-// time, including on case-sensitive host filesystems.
+// time, including on case-sensitive host filesystems. An equal full path
+// already mounted is suppressed [02 §2].
 func (f *FS) MountDirectory(root string, priority int) error {
+	if f.alreadyMounted(root) {
+		return nil
+	}
 	p, err := newLooseProvider(root, priority, f.nextOrder)
 	if err != nil {
 		return err
@@ -319,8 +341,12 @@ func (f *FS) MountDirectory(root string, priority int) error {
 }
 
 // MountArchive opens and indexes an HPI-family archive. Only its header and
-// directory region are read here; compressed file payloads remain on disk.
+// directory region are read here; compressed file payloads remain on disk. An
+// equal full path already mounted is suppressed [02 §2].
 func (f *FS) MountArchive(filename string, priority int) (*Archive, error) {
+	if f.alreadyMounted(filename) {
+		return nil, nil
+	}
 	a, err := OpenArchive(filename, ArchiveOptions{})
 	if err != nil {
 		return nil, err
@@ -433,9 +459,6 @@ func (f *FS) MountGameDirectoryWithPlan(root string, plan MountPlan) error {
 			tier = plan.UFO
 		}
 		full := filepath.Join(root, entry.Name())
-		if f.alreadyMounted(full) {
-			continue
-		}
 		if _, err := f.MountArchive(full, int(tier)*10); err != nil {
 			return err
 		}
@@ -623,7 +646,7 @@ func newLooseProvider(root string, priority, order int) (*looseProvider, error) 
 		return nil, fmt.Errorf("vfs: %s is not a directory", root)
 	}
 	p := &looseProvider{root: absolute, entries: make(map[string]*providerEntry)}
-	rootInfo := EntryInfo{Path: "", Name: "", IsDir: true, OriginalPath: "", Source: Provenance{ProviderType: "directory", SourcePath: absolute, Priority: priority, MountOrder: order}}
+	rootInfo := EntryInfo{Path: "", Name: "", IsDir: true, OriginalPath: "", Source: Provenance{ProviderType: "directory", SourcePath: absolute, MountRoot: absolute, Priority: priority, MountOrder: order}}
 	p.entries[""] = &providerEntry{info: rootInfo}
 	if err := p.indexDir(absolute, "", priority, order); err != nil {
 		return nil, err
@@ -656,7 +679,7 @@ func (p *looseProvider) indexDir(dirname, parent string, priority, order int) er
 			}
 		}
 		info := EntryInfo{Path: logical, Name: item.Name(), OriginalPath: original, Size: size, IsDir: isDir,
-			Source: Provenance{LogicalPath: logical, OriginalPath: original, ProviderType: "directory", SourcePath: full, Priority: priority, MountOrder: order}}
+			Source: Provenance{LogicalPath: logical, OriginalPath: original, ProviderType: "directory", SourcePath: full, MountRoot: p.root, Priority: priority, MountOrder: order}}
 		entry := &providerEntry{info: info}
 		p.indexedEntries = append(p.indexedEntries, info)
 		if !isDir {

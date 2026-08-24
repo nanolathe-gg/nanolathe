@@ -65,86 +65,68 @@ type Frame struct {
 // tick end via Publish; the renderer reads Previous→Current with alpha via
 // Read. The sim never reads this package (I6). Zero value is ready to use.
 //
-// The two frames are immutable after Publish: Publish deep-copies the input
-// so the caller may reuse its slices, and Read returns deep copies so the
-// renderer may retain the pointers without racing the next Publish.
+// A published frame is immutable. Publish deep-copies its input once, so the
+// caller may reuse its slices, and then never touches the copy again — it only
+// swaps pointers. That is what lets Read hand out the stored pointers directly
+// instead of copying: the renderer's frames cannot change under it, because a
+// later Publish replaces the pointers rather than the frames.
 type Buffer struct {
-	mu      sync.RWMutex
-	prev    Frame
-	cur     Frame
-	hasData bool
+	mu   sync.RWMutex
+	prev *Frame
+	cur  *Frame
 }
 
 // Publish stores f as the Current frame and shifts the previous Current to
-// Previous. It deep-copies all slices so the caller may reuse f after return.
-// It is called once at the end of a full tick after phase 12 (C15). If f is
-// nil the call is a no-op.
+// Previous. It deep-copies f once so the caller may reuse it after return, and
+// is called after phase 12 of every sub-tick (C15). A nil frame is a no-op.
 //
-// On the first Publish both Previous and Current become f, so interpolation
-// from Previous→Current does not start from a zero frame. On a burst of N
-// ticks Publish is called N times but only the final pair survives; intermediate
-// ticks are not drawn (C15).
+// On the first Publish both slots become the same frame, so interpolation does
+// not start from a zero frame. On a burst of N sub-ticks Publish runs N times
+// but only the final pair survives; intermediate ticks are not drawn (C15).
 func (b *Buffer) Publish(f *Frame) {
 	if b == nil || f == nil {
 		return
 	}
-	nf := cloneFrame(f)
+	published := cloneFrame(f)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.hasData {
-		// First publish: both slots become nf but with independent slice storage
-		// so later mutation of returned copies cannot alias.
-		b.prev = cloneFrame(&nf)
-		b.cur = nf
-		b.hasData = true
+	if b.cur == nil {
+		b.prev = &published
+		b.cur = &published
 		return
 	}
 	b.prev = b.cur
-	b.cur = nf
+	b.cur = &published
 }
 
-// Read returns the Previous and Current frames for interpolation. The returned
-// pointers are deep copies owned by the caller; mutating them does not affect
-// the buffer. If no frame has been published ok is false and both pointers
-// are nil. When ticksToRun==0 the same pair is returned again and the caller
-// clamps alpha to 1.0 with no extrapolation (C15).
+// Read returns the Previous and Current frames for interpolation. The frames
+// are immutable and shared; the caller must not mutate them. If nothing has
+// been published ok is false. When a render frame runs zero sub-ticks the same
+// pair comes back and the caller clamps alpha to 1.0 — never extrapolate (C15).
 func (b *Buffer) Read() (prev, cur *Frame, ok bool) {
 	if b == nil {
 		return nil, nil, false
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	if !b.hasData {
+	if b.cur == nil {
 		return nil, nil, false
 	}
-	p := cloneFrame(&b.prev)
-	c := cloneFrame(&b.cur)
-	return &p, &c, true
+	return b.prev, b.cur, true
 }
 
-// Lerp interpolates between prev and cur at alpha. Alpha is expected to be
-// in [0,1] as computed by the client (C16) but is clamped defensively; values
+// Lerp interpolates between prev and cur at alpha. Alpha is expected to be in
+// [0,1] as computed by the client (C16) but is clamped defensively; values
 // outside the range snap to the endpoints so no extrapolation occurs (C15).
-// Truncation is toward zero, matching retail's __ftol (I3). This is
-// presentation-only; the sim never calls it (I6).
+// Presentation-only; the sim never calls it (I6).
 func Lerp(prev, cur numeric.Fixed, alpha float32) numeric.Fixed {
-	if alpha <= 0 || alpha != alpha { // alpha != alpha catches NaN
+	if alpha != alpha || alpha <= 0 { // alpha != alpha catches NaN
 		return prev
 	}
 	if alpha >= 1 {
 		return cur
 	}
-	// Clamp defensively for -0 or small out-of-range due to float error.
-	if alpha < 0 {
-		alpha = 0
-	} else if alpha > 1 {
-		alpha = 1
-	}
 	delta := int64(cur) - int64(prev)
-	// delta*alpha in float64 then trunc toward zero via int64 conversion (I3).
-	// Using float64 for the product preserves more integer precision than float32
-	// while still truncating; the cast through float64(alpha) matches the float32
-	// alpha contract without forcing 32-bit intermediate overflow.
 	return numeric.Fixed(int64(prev) + int64(float64(delta)*float64(alpha)))
 }
 

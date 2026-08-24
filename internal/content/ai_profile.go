@@ -154,8 +154,10 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			}
 			diff := strings.ToLower(strings.TrimSpace(parts[1]))
 			if _, ok := aiPlanNames[diff]; !ok {
-				// Unknown plan difficulty — ignore gate change; subsequent lines still ignored until a valid plan.
-				// Other difficulty values fail per [08 "Schema choice"] campaign difficulty mapping.
+				// Unknown plan difficulty — TODO(question): does the
+				// executable reset the current gate or retain the last valid
+				// one when `plan <unknown>` appears? Resetting is a guess;
+				// stock profiles only author any/easy/medium/hard.
 				currentPlan = ""
 				continue
 			}
@@ -175,8 +177,11 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			}
 			typeName := parts[1]
 			factorStr := parts[2]
-			// Parse factor as floating; retail uses CRT decimal floating conversion for authored values
-			// [02 "Weapon record"] style; for AI we accept decimal with optional sign.
+			// TODO(question): retail converts the weight factor through the
+			// CRT decimal floating conversion, which differs from
+			// strconv.ParseFloat on trailing junk and hex forms. Stock
+			// profiles author plain decimals so both agree today; revisit if
+			// a mod profile ever disagrees.
 			factor, err := strconv.ParseFloat(strings.TrimSpace(factorStr), 64)
 			if err != nil {
 				// Try retail's forgiving float parser for cases like ".1"

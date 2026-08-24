@@ -5,6 +5,10 @@ from static analysis of one executable and a few of its statements are
 contradicted by a real, working retail install. This file records those, with the
 evidence, so nobody "fixes" the code back toward the spec later.
 
+It also records the rarer case where two research documents contradict **each
+other** (SC6). Those are not install measurements, but this is where an
+implementer looks.
+
 Reference install: `~/TotalAnnihilation` — base + Core Contingency + Battle
 Tactics + patch 3.1. Probed through this repo's `vfs` package.
 
@@ -104,6 +108,94 @@ for _, e := range fs.Entries() {          // one record PER MOUNT, see SC4
 
 Keep such programs in a scratch directory, not in the repo — the reusable form
 is PLAN_01's `WU-01-5` coverage test.
+
+---
+
+## SC5 — The three movement clamps cannot run unconditionally
+
+**Spec** `[02 "Movement class record"]`: eight keys are read in order, then
+"Three clamps then run, in order: if `maxwaterslope` is below `maxslope`,
+`maxslope` becomes `maxwaterslope`; …". Keys 3, 4, 5 and 7 default to "the
+profile's current value".
+
+**Observed:** 12 of the install's 15 `CLASS` sections omit `maxwaterslope`
+entirely. Compiling them with a zero default and running clamp 1
+unconditionally sets `maxslope = 0` for `kbotsf2`, `kbotss2`, `tankbh3`,
+`tankds2`, `tanksh2` and `tanksh3` — every land movement class that authored a
+real slope limit. No land unit could climb anything.
+
+Measured with `content.CompileMovementSorted` against the reference install:
+
+```
+kbotss2   maxslope=32 badslope=16 maxwslope=0    <- would clamp to maxslope=0
+tankdh3   maxslope=15 badslope=7  maxwslope=30   <- authored, clamps correctly
+tankhover3 maxslope=12 badslope=12 maxwslope=255 <- authored
+```
+
+**Decision:** clamps 1 and 3 are gated on whether `maxwaterslope` was authored,
+using the string accessor to tell an absent key from an authored zero.
+
+This is a stand-in for a different unknown, not a reading of the spec. The
+defaults chain off "the profile's current value", and we initialize that value
+to zero. If a fresh profile actually carries a large `maxwaterslope`, all three
+clamps run unconditionally and reproduce retail with no branch — which is the
+shape to aim for. The open question is recorded as a `TODO(question)` at
+`internal/content/compile_movement.go`.
+
+**Falsifies:** nothing yet. It defers PLAN_02 C6's "then apply the three clamps
+in order" until the profile's initial value is known.
+
+---
+
+## SC6 — The two documents disagree on the fringe-anchor encoding
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Spec B** `[04 §6.2]`: "the multi-cell successor sentinel follows the successor
+hop — the cell stores **target-cell coordinates** and the resolver re-reads that
+cell's feature identifier before classifying."
+
+Signed offsets and absolute coordinates are different encodings of the same two
+bytes, and only one can be right.
+
+**Observed:** the field is two bytes. Absolute cell coordinates cannot address a
+map wider than 256 cells in one byte per axis, and the reference install's maps
+run to 402×408 (`pincushion`) and 384×480 (`Comet Catcher`). The offset reading
+is the only one that can be literally true at those widths.
+
+**Decision:** implement the signed-offset reading, which is also the one its own
+document hedges on. Both readings are exposed as named accessors on `PlotCell`
+with the conflict spelled out, and the resolver is the single `ResolveFeature`.
+
+Note this is our argument from map dimensions, not a measurement of retail. A
+probe could still show the resolver does something else — for instance storing
+coordinates relative to a tile origin rather than to the cell.
+
+**Falsifies:** neither document; it picks between them. PLAN_04's explicit
+unknowns already asked for both readings to be exposed.
+
+---
+
+## SC7 — Sound variants are gathered even when the bare event key is absent
+
+**Spec** `[02 "Sound category record"]`: "An event key that is absent for the
+bare form contributes no variants at all, because the bare read is what gates
+the numbered loop."
+
+**Observed:** stock `gamedata/sound.tdf` authors `select1` (120 occurrences),
+`ok1` (76), `cant1` (76) and `arrived1` (63) with **no bare form** anywhere.
+Following the spec letter would mute selection, move-fail and arrival voices
+for every unit on a working retail install — clearly not what the executable
+does.
+
+**Decision:** gather `K1, K2…` regardless of the bare key's presence. The
+compile site carries the `TODO(question)` on what the executable really gates;
+this entry records why the spec letter is not implementable as written.
+
+**Falsifies:** the bare-gate sentence of `[02 "Sound category record"]`. Do
+not "fix" the compiler back to the letter without re-reading the executable.
+
+---
 
 ## How to add to this file
 

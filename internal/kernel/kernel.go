@@ -7,6 +7,8 @@
 // registration site is internal/session (PLAN_14 WU-14-2) [GAP T15].
 package kernel
 
+import "github.com/nanolathe/nanolathe/internal/clock"
+
 // Phase identifies one of the twelve sub-tick phases [01 §4.4].
 type Phase int
 
@@ -61,13 +63,8 @@ type entry struct {
 // registration call order within each phase, which is part of deterministic
 // behavior [01 §4.4][GAP T15].
 type Kernel struct {
-	tick   uint32
 	phases [PhaseCount][]entry
 }
-
-// Tick returns the current global tick. It is incremented before phase 1
-// of each sub-tick [01 §4.4] (C6).
-func (k *Kernel) Tick() uint32 { return k.tick }
 
 // Register appends fn to phase p. Call order within p is preserved and is
 // part of behavior — registration happens in one place (internal/session),
@@ -85,24 +82,32 @@ func (k *Kernel) Register(p Phase, name string, fn func(tick uint32)) {
 	k.phases[p] = append(k.phases[p], entry{name: name, fn: fn})
 }
 
-// SubTick increments the global tick before phase 1 and then executes
-// phases 1..12 in numeric order; within each phase callbacks run in
-// registration order [01 §4.4] (C6, C7).
-func (k *Kernel) SubTick() {
+// SubTick advances the global tick and then executes phases 1..12 in numeric
+// order; within each phase callbacks run in registration order [01 §4.4]
+// (C6, C7).
+//
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [08 "Scheduler and random state in saves"]. The kernel deliberately does not
+// keep a second counter: two counters means the value phases observe and the
+// value a save restores can drift apart, and every globalTick-modulo contract
+// — sharing at multiples of 60 and 450 [05 "Authoritative settlement order"],
+// phase 12's every-eighth flip [01 §4.4], wind deadlines [01 §7.3] — reads the
+// wrong one.
+func (k *Kernel) SubTick(s *clock.State) {
 	// C6: global tick increments before phase 1 of each sub-tick [01 §4.4].
-	k.tick++
+	tick := s.BeginSubTick()
 	// C7: phase order is the twelve entries above, in that order, every sub-tick.
 	for p := PhaseNetwork; p < PhaseCount; p++ {
 		for _, e := range k.phases[p] {
-			e.fn(k.tick)
+			e.fn(tick)
 		}
 	}
 }
 
-// Run executes SubTick ticksToRun times. The clock budget already clamps
-// the count to 0..5 [01 §4.2] (C1); values outside that range are clamped
-// defensively and excess is dropped, not queued.
-func (k *Kernel) Run(ticksToRun int) {
+// Run executes SubTick ticksToRun times against s. The clock budget already
+// clamps the count to 0..5 [01 §4.2] (C1); values outside that range are
+// clamped defensively and excess is dropped, not queued.
+func (k *Kernel) Run(s *clock.State, ticksToRun int) {
 	if ticksToRun < 0 {
 		ticksToRun = 0
 	}
@@ -110,6 +115,6 @@ func (k *Kernel) Run(ticksToRun int) {
 		ticksToRun = 5
 	}
 	for i := 0; i < ticksToRun; i++ {
-		k.SubTick()
+		k.SubTick(s)
 	}
 }

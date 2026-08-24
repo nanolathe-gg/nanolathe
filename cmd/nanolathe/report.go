@@ -41,6 +41,10 @@ func report(opts Options, content *contentSet, out *os.File) error {
 		for _, record := range records {
 			fmt.Fprintf(out, "%s\t%s\t%d\n", record.LogicalPath, filepath.Base(record.ProviderID), record.Size)
 		}
+	case "rng":
+		if err := dumpRNG(opts, out); err != nil {
+			return err
+		}
 	case "shadowed":
 		for _, record := range records {
 			if len(record.Shadowed) == 0 {
@@ -59,7 +63,7 @@ func report(opts Options, content *contentSet, out *os.File) error {
 				return err
 			}
 		} else {
-			return fmt.Errorf("nanolathe: unknown --dump verb %q (manifest, providers, shadowed)", opts.Dump)
+			return fmt.Errorf("nanolathe: unknown --dump verb %q (manifest, providers, rng, shadowed, heightAt=x,z)", opts.Dump)
 		}
 	}
 

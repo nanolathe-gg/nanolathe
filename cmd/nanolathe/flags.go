@@ -56,6 +56,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		fmt.Fprintf(out, "\ndiagnostic dumps:\n")
 		fmt.Fprintf(out, "  -dump manifest    every logical path, its winning provider and hash\n")
 		fmt.Fprintf(out, "  -dump providers   the mounted provider list in precedence order\n")
+		fmt.Fprintf(out, "  -dump rng         headless tick loop; both stream states and draw counts\n")
 	}
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

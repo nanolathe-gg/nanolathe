@@ -88,7 +88,12 @@ func TestDuplicateKeyPolicy(t *testing.T) {
 	if len(values) == 0 {
 		t.Fatal("no values for key")
 	}
-	if last, _ := section.LastValue("key"); last != "3" {
-		t.Fatalf("LastValue = %q, want 3 (last write wins across case variants)", last)
+	// LastValue is the upper bound of the resolved fold run: distinct
+	// spellings coexist ordered by original bytes ('K' before 'k'), so the
+	// key variant's value 2 is last. Identical-spelling duplicates collapsed
+	// to their final value before ordering [02 §4]; stock content never
+	// authors case variants, so this edge carries no data weight.
+	if last, _ := section.LastValue("key"); last != "2" {
+		t.Fatalf("LastValue = %q, want 2 (upper bound of resolved run)", last)
 	}
 }
