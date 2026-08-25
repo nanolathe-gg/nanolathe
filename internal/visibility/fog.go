@@ -16,6 +16,27 @@ func (s *Service) Fog() *FogCache { return &s.fog }
 // IsValid reports whether the cache is valid.
 func (f *FogCache) IsValid() bool { return f != nil && f.valid }
 
+// Dimensions returns the fog grid dimensions [03 §3.1] C1.
+func (f *FogCache) Dimensions() (int32, int32) {
+	if f == nil {
+		return 0, 0
+	}
+	return f.w, f.h
+}
+
+// Channels returns copies of the two channel slices for snapshot presentation [03 §3.3] C13.
+// The slices are copies; mutation does not affect the cache (I6).
+func (f *FogCache) Channels() ([]uint8, []uint8) {
+	if f == nil || f.ch0 == nil {
+		return nil, nil
+	}
+	c0 := make([]uint8, len(f.ch0))
+	copy(c0, f.ch0)
+	c1 := make([]uint8, len(f.ch1))
+	copy(c1, f.ch1)
+	return c0, c1
+}
+
 // Invalidate clears the valid bit, waking composer [03 §3.3] C13.
 func (f *FogCache) Invalidate() {
 	if f != nil {

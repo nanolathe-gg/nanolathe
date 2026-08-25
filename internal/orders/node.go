@@ -1,0 +1,186 @@
+package orders
+
+import (
+	"sync"
+
+	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+)
+
+// NewNodeForOrder is the single canonical command payload constructor [04 §3.2][04 §3.4][P0-I03].
+// It writes target handle or point, GoalX/Y/Z in 16.16 world coords, queue modifier,
+// command-specific fields via Param*, creation tick and owner. Every producer
+// (HUD, AI, InitialMission, rally inheritance, tests) must route through it.
+//
+//   - id: canonical descriptor ID from Lookup (0 is reject)
+//   - target: smart-reference handle of unit/feature target, 0 for ground point
+//   - goalX/Y/Z: fixed-point world coords of the command's position payload
+//   - tick: creation tick snapshot (Clock.GlobalTick)
+//   - owner: owning unit handle
+//   - queued: queue modifier — true is Append/Shift-queue (insert after active without purge),
+//     false is Replace (purge unprotected + drop leading auto before insert) [04 §3.3][P0-08].
+//
+// The returned Node carries Flags=FlagPurgeSurvivor when queued so future Replace purges
+// correctly preserve it [04 §3.3]. StaticGate/DynamicGate/Deadline are filled later by newNode
+// from the descriptor; caller may set Param1..3 for command-specific fields before Push.
+func NewNodeForOrder(id ID, target pool.Handle, goalX, goalY, goalZ numeric.Fixed, tick uint32, owner pool.Handle, queued bool) Node {
+	n := Node{
+		ID:           id,
+		Target:       target,
+		GoalX:        goalX,
+		GoalY:        goalY,
+		GoalZ:        goalZ,
+		CreationTick: tick,
+		Owner:        owner,
+	}
+	if queued {
+		n.Flags |= FlagPurgeSurvivor // survive future Replace purge [04 §3.3]
+	}
+	return n
+}
+
+// NewNodeForPos builds a canonical node from a ResolvePos ground payload [04 §3.4].
+// When pos is nil the goal is zero; when target !=0 the goal may be overwritten by caller
+// to the target's current position (attack) or kept as the clicked ground (attack-ground) [P1-14].
+func NewNodeForPos(id ID, pos *ResolvePos, target pool.Handle, tick uint32, owner pool.Handle, queued bool) Node {
+	var gx, gy, gz numeric.Fixed
+	if pos != nil {
+		gx = pos.X
+		gy = pos.Y
+		gz = pos.Z
+	}
+	return NewNodeForOrder(id, target, gx, gy, gz, tick, owner, queued)
+}
+
+// NewMoveNode is a convenience for pure point moves (no target) [04 §3.4] code 2.
+func NewMoveNode(id ID, goalX, goalZ numeric.Fixed, tick uint32, owner pool.Handle, queued bool) Node {
+	return NewNodeForOrder(id, 0, goalX, 0, goalZ, tick, owner, queued)
+}
+
+// NewBuildNode constructs a factory/mobile-build node with product identity in Param1/2 [04 §3.2].
+// defIdx is the catalog definition index (stable, 1-based, 0 sentinel) and count is remaining builds.
+// Goal carries the site world coords for mobile builds; for factory products it is ignored but
+// carried for save determinism [P0-I05]. BuildDefKey is stored as canonical string for
+// save/load remapping [P0-I05].
+func NewBuildNode(id ID, defIdx uint32, count uint32, goalX, goalZ numeric.Fixed, tick uint32, owner pool.Handle, queued bool) Node {
+	n := NewNodeForOrder(id, 0, goalX, 0, goalZ, tick, owner, queued)
+	n.Param1 = defIdx
+	n.Param2 = count
+	return n
+}
+
+// NewFactoryBuildNode constructs a factory product node with catalog-index payload [05 "Factory production lifecycle"][P0-I05].
+// Factory product lives as typed payload on Node in PRIMARY segment: definition catalog index in Param1,
+// remaining count in Param2, factory state/progress in Phase, BuildDefKey for stable identity [05][P0-I05].
+// ID must be BuildingBuild (primary) [04 §3.1][GAP T3].
+func NewFactoryBuildNode(cat *content.Catalog, defKey string, count uint32, tick uint32, owner pool.Handle, queued bool) Node {
+	ck := content.CanonicalKey(defKey)
+	idx, _ := catalogIndex(cat, ck)
+	id := Lookup("BuildingBuild")
+	if id == 0 {
+		id = Lookup("MobileBuild")
+	}
+	n := NewNodeForOrder(id, 0, 0, 0, 0, tick, owner, queued)
+	n.BuildDefKey = ck
+	n.Param1 = idx
+	n.Param2 = count
+	return n
+}
+
+// NewMobileBuildNode constructs a mobile build node with site anchor payload [05 "Construction arithmetic"][P0-I05].
+// Mobile build payload: definition catalog index in Param1, site world anchor in GoalX/Z,
+// orientation in Param3, builder relation is Owner, count in Param2 [05][P0-I05].
+// ID is MobileBuild or VTOL_MobileBuild chosen by caller [04 §3.1].
+func NewMobileBuildNode(cat *content.Catalog, defKey string, siteX, siteZ numeric.Fixed, orientation uint16, count uint32, tick uint32, owner pool.Handle, queued bool) Node {
+	ck := content.CanonicalKey(defKey)
+	idx, _ := catalogIndex(cat, ck)
+	id := Lookup("MobileBuild")
+	// Caller may override ID for VTOL; keep MobileBuild default if not VTOL.
+	n := NewNodeForOrder(id, 0, siteX, 0, siteZ, tick, owner, queued)
+	n.BuildDefKey = ck
+	n.Param1 = idx
+	n.Param2 = count
+	n.Param3 = uint32(orientation)
+	return n
+}
+
+// NewMobileBuildNodeWithID constructs a mobile build node with explicit descriptor ID [P0-I05].
+func NewMobileBuildNodeWithID(id ID, cat *content.Catalog, defKey string, siteX, siteZ numeric.Fixed, orientation uint16, count uint32, tick uint32, owner pool.Handle, queued bool) Node {
+	ck := content.CanonicalKey(defKey)
+	idx, _ := catalogIndex(cat, ck)
+	n := NewNodeForOrder(id, 0, siteX, 0, siteZ, tick, owner, queued)
+	n.BuildDefKey = ck
+	n.Param1 = idx
+	n.Param2 = count
+	n.Param3 = uint32(orientation)
+	return n
+}
+
+// NewAssistNode constructs an assist/repair/reclaim/capture/resurrection node [05].
+// Target identity is stored in Target, operation-specific progress in Param2/3.
+// For assist, Param1 may hold catalog index of product being assisted (if any).
+func NewAssistNode(id ID, target pool.Handle, progress uint32, tick uint32, owner pool.Handle, queued bool) Node {
+	n := NewNodeForOrder(id, target, 0, 0, 0, tick, owner, queued)
+	n.Param2 = progress
+	return n
+}
+
+// catalogIndex maps a canonical key to a stable catalog index [P0-I05][02 §5].
+// If cat is nil or key not found, it falls back to a deterministic
+// intern table that is collision-free (sequential assignment) and not a hash.
+// The fallback is used only for headless tests without a catalog; production
+// always has a catalog and uses its sorted index (1-based, 0 sentinel).
+func catalogIndex(cat *content.Catalog, canonicalKey string) (uint32, bool) {
+	if canonicalKey == "" {
+		return 0, false
+	}
+	if cat != nil {
+		if idx, ok := cat.UnitDefIndex(canonicalKey); ok {
+			return idx, true
+		}
+	}
+	// Fallback intern: collision-free sequential, not FNV hash [P0-I05].
+	return fallbackIndex(canonicalKey)
+}
+
+// fallback intern state for nil-catalog tests [P0-I05]. Not authoritative in
+// production; production always has cat.
+var (
+	fallbackMu            = make(map[string]uint32)
+	fallbackNext   uint32 = 100000 // start high to avoid overlapping real catalog 1..N (~500)
+	fallbackMuLock sync.Mutex
+)
+
+func fallbackIndex(ck string) (uint32, bool) {
+	fallbackMuLock.Lock()
+	defer fallbackMuLock.Unlock()
+	if id, ok := fallbackMu[ck]; ok {
+		return id, true
+	}
+	id := fallbackNext
+	fallbackNext++
+	fallbackMu[ck] = id
+	return id, true
+}
+
+// RemapBuildIndices remaps a node's catalog index from its BuildDefKey via the current catalog [P0-I05].
+// At load, saved definition names are mapped to current indices via the established catalog table;
+// the string plus index are kept for save/load stability [P0-I05].
+func RemapBuildIndices(cat *content.Catalog, n *Node) {
+	if n == nil || n.BuildDefKey == "" || cat == nil {
+		return
+	}
+	if idx, ok := cat.UnitDefIndex(n.BuildDefKey); ok {
+		n.Param1 = idx
+	}
+}
+
+// IsFactoryBuild reports whether id is a factory product handler [P0-I05][04 §3.1].
+func IsFactoryBuild(id ID) bool { return DescriptorFor(id).Name == "BuildingBuild" }
+
+// IsMobileBuild reports whether id is a mobile build handler [P0-I05][04 §3.1].
+func IsMobileBuild(id ID) bool {
+	name := DescriptorFor(id).Name
+	return name == "MobileBuild" || name == "VTOL_MobileBuild"
+}

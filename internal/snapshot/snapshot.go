@@ -44,9 +44,21 @@ type UnitView struct {
 // ORCHESTRATION §4. Currently empty so the package compiles before phase 9.
 type ProjectileView struct{}
 
-// FeatureView is a placeholder for the feature presentation view.
-// Later phases (features/world) populate this type and write Frame.Features.
-type FeatureView struct{}
+// FeatureView is the presentation view of one live feature [05 "Feature instance and terrain cell"].
+// Published by the features phase and consumed by the renderer. Fields are a
+// stable snapshot of authoritative state; mutation after Publish does not affect the buffer.
+type FeatureView struct {
+	CX, CZ       int32 // anchor cell
+	X, Y, Z      numeric.Fixed
+	DefName      string // canonical key or name
+	Model        string // object model if any, else filename
+	Health       int32
+	MaxHealth    int32
+	IsBurning    bool
+	IsSinking    bool
+	BurnTicks    int32
+	FootX, FootZ int8
+}
 
 // EffectView is a placeholder for the effect presentation view.
 // Later phases (render) populate this type and write Frame.Effects.
@@ -67,6 +79,17 @@ type Frame struct {
 	Projectiles []ProjectileView
 	Features    []FeatureView
 	Effects     []EffectView
+	// Fog is the presentation fog cache snapshot [03 §3.3] C13.
+	// It is copied from visibility.Service.Fog() each tick after the
+	// visibility/sensor phase. Renderer reads it via render.BuildFogOps (I6).
+	Fog FogView
+}
+
+// FogView is the presentation copy of the two-channel fog cache [03 §3.3] C13.
+type FogView struct {
+	W, H     int32
+	Ch0, Ch1 []uint8
+	Valid    bool
 }
 
 // Buffer is the double-buffered presentation state. The sim writes Current at
@@ -159,6 +182,17 @@ func cloneFrame(f *Frame) Frame {
 	if len(f.Effects) > 0 {
 		nf.Effects = make([]EffectView, len(f.Effects))
 		copy(nf.Effects, f.Effects)
+	}
+	nf.Fog.W = f.Fog.W
+	nf.Fog.H = f.Fog.H
+	nf.Fog.Valid = f.Fog.Valid
+	if len(f.Fog.Ch0) > 0 {
+		nf.Fog.Ch0 = make([]uint8, len(f.Fog.Ch0))
+		copy(nf.Fog.Ch0, f.Fog.Ch0)
+	}
+	if len(f.Fog.Ch1) > 0 {
+		nf.Fog.Ch1 = make([]uint8, len(f.Fog.Ch1))
+		copy(nf.Fog.Ch1, f.Fog.Ch1)
 	}
 	return nf
 }

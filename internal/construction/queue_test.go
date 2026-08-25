@@ -68,19 +68,25 @@ func TestCoalesceTailOnly(t *testing.T) {
 	}
 	countFlash, countFlea := 0, 0
 	for _, n := range prim {
-		if n.Param1 == productID("armflash") {
+		if n.BuildDefKey == "armflash" {
 			countFlash++
-		} else if n.Param1 == productID("armflea") {
+		} else if n.BuildDefKey == "armflea" {
 			countFlea++
 		}
 	}
 	if countFlash != 2 || countFlea != 1 {
-		t.Fatalf("product counts flash %d flea %d want 2,1", countFlash, countFlea)
+		t.Fatalf("product counts flash %d flea %d want 2,1 (keys %v)", countFlash, countFlea, func() []string {
+			var ks []string
+			for _, n := range prim {
+				ks = append(ks, n.BuildDefKey)
+			}
+			return ks
+		}())
 	}
 	// Ensure the separated armflash entry has count 1
 	foundSeparated := false
 	for _, n := range prim[1:] {
-		if n.Param1 == productID("armflash") && n.Param2 == 1 {
+		if n.BuildDefKey == "armflash" && n.Param2 == 1 {
 			foundSeparated = true
 		}
 	}

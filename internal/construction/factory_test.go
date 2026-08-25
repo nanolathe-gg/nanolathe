@@ -13,6 +13,16 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
+func prodIdx(cat *content.Catalog, key string) uint32 {
+	if cat != nil {
+		if idx, ok := cat.UnitDefIndex(key); ok {
+			return idx
+		}
+	}
+	// fallback for nil cat or missing - use BuildDefKey directly; Param1 0 plus string handles identity
+	return 0
+}
+
 // helper to create a trivial model with n pieces for QueryBuildInfo.
 func trivialModel(pieceCount int, translations [][3]int64) *model.Model {
 	m := &model.Model{
@@ -115,7 +125,7 @@ func TestSnapHalfExtentBias(t *testing.T) {
 	if bid == 0 {
 		bid = orders.Lookup("MobileBuild")
 	}
-	q.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 1, Phase: uint8(State2)})
+	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State2)})
 	cell, ok := svc.QueryBuildInfo(factory, m)
 	if !ok {
 		t.Fatalf("QueryBuildInfo failed")
@@ -168,7 +178,7 @@ func TestSilentFifteen(t *testing.T) {
 	if bid == 0 {
 		bid = orders.Lookup("MobileBuild")
 	}
-	node := &orders.Node{Param1: factoryProductID("armflash"), Param2: 1, Phase: uint8(State2), Deadline: -1}
+	node := &orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State2), Deadline: -1}
 	q.Push(bid, *node)
 	// Retrieve actual node pointer
 	prim := q.Primary()
@@ -250,7 +260,7 @@ func TestNanoframeCreationValues(t *testing.T) {
 	if bid == 0 {
 		bid = orders.Lookup("MobileBuild")
 	}
-	q.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 1, Phase: uint8(State2)})
+	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State2)})
 	head := q.Primary()[0]
 	head.Phase = uint8(State2)
 	svc := NewService(nil, cat, w, &economy.Service{})
@@ -306,7 +316,7 @@ func TestNanoframeCreationValues(t *testing.T) {
 	factory2.Def = facDef
 	factory2.Flags = StandingMoveMask | StandingFireMask
 	q2 := orders.QueueForUnit(factory2)
-	q2.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 1, Phase: uint8(State2)})
+	q2.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State2)})
 	head2 := q2.Primary()[0]
 	head2.Phase = uint8(State2)
 	svc2 := NewService(nil, cat, w2, &economy.Service{})
@@ -329,7 +339,7 @@ func TestNanoframeCreationValues(t *testing.T) {
 	factory3 := w3.Unit(h3)
 	factory3.Def = facDef
 	q3 := orders.QueueForUnit(factory3)
-	q3.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 1, Phase: uint8(State2)})
+	q3.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State2)})
 	head3 := q3.Primary()[0]
 	head3.Phase = uint8(State2)
 	svc3 := NewService(nil, cat2, w3, &economy.Service{})
@@ -369,7 +379,7 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 		t.Skip("QMove/QPatrol not in table")
 	}
 	// head is building
-	q.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 1, Phase: uint8(State3)})
+	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State3)})
 	// Now add rally nodes after head (they will be after active marker)
 	q.Push(qMoveID, orders.Node{GoalX: world.CellToWorld(1), GoalZ: world.CellToWorld(1)})
 	q.Push(qPatrolID, orders.Node{GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(2)})
@@ -420,7 +430,7 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	factory2 := w2.Unit(h2)
 	factory2.Def = facDef
 	q2 := orders.QueueForUnit(factory2)
-	q2.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 1, Phase: uint8(State3)})
+	q2.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State3)})
 	hp2, _ := w2.Create(prodDef, 0, world.CellToWorld(10), 0, world.CellToWorld(10))
 	prod2 := w2.Unit(hp2)
 	svc.rallyInheritance(factory2, prod2)
@@ -474,7 +484,7 @@ func TestRefundArithmetic(t *testing.T) {
 		if bid == 0 {
 			bid = orders.Lookup("MobileBuild")
 		}
-		q.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 2, Phase: uint8(State3), Target: prod.Handle})
+		q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 2, Phase: uint8(State3), Target: prod.Handle})
 		head := q.Primary()[0]
 		head.Target = prod.Handle
 		head.Phase = uint8(State3)
@@ -534,7 +544,7 @@ func TestKind9Kill(t *testing.T) {
 	prod := w.Unit(hp)
 	prod.Def = prodDef
 	prod.Remaining = 0.5
-	q.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 2, Phase: uint8(State3), Target: prod.Handle})
+	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 2, Phase: uint8(State3), Target: prod.Handle})
 	head := q.Primary()[0]
 	head.Target = prod.Handle
 	svc := NewService(nil, cat, w, econ)
@@ -567,7 +577,7 @@ func TestKind9Kill(t *testing.T) {
 	factory2.Def = facDef
 	factory2.Flags = FlagDeactivate | FlagStartBuilding
 	q2 := orders.QueueForUnit(factory2)
-	q2.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 1, Phase: uint8(State2), Target: 0})
+	q2.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State2), Target: 0})
 	head2 := q2.Primary()[0]
 	head2.Target = 0
 	svc2 := NewService(nil, cat, w2, econ)
@@ -598,7 +608,7 @@ func TestStopInterrupt(t *testing.T) {
 	if bid == 0 {
 		bid = orders.Lookup("MobileBuild")
 	}
-	q.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 3, Phase: uint8(State3)})
+	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 3, Phase: uint8(State3)})
 	head := q.Primary()[0]
 	head.Param2 = 3
 	head.Phase = uint8(State3)
@@ -729,7 +739,7 @@ func TestStateGates(t *testing.T) {
 		bid = orders.Lookup("MobileBuild")
 	}
 	// State0 with positive count should raise activate and go to state1
-	q.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 1, Phase: uint8(State0)})
+	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State0)})
 	head := q.Primary()[0]
 	head.Phase = uint8(State0)
 	svc := NewService(nil, cat, w, &economy.Service{})
@@ -747,7 +757,7 @@ func TestStateGates(t *testing.T) {
 	factory2.Def = facDef
 	factory2.Flags = FlagActivated
 	q2 := orders.QueueForUnit(factory2)
-	q2.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 0, Phase: uint8(State0)})
+	q2.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 0, Phase: uint8(State0)})
 	head2 := q2.Primary()[0]
 	head2.Phase = uint8(State0)
 	head2.Param2 = 0
@@ -767,7 +777,7 @@ func TestStateGates(t *testing.T) {
 	factory3.Def = facDef
 	factory3.Flags &^= FlagInBuildStance
 	q3 := orders.QueueForUnit(factory3)
-	q3.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 1, Phase: uint8(State1)})
+	q3.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State1)})
 	head3 := q3.Primary()[0]
 	head3.Phase = uint8(State1)
 	svc3 := NewService(nil, cat, w3, &economy.Service{})

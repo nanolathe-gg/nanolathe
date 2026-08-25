@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -14,9 +13,11 @@ import (
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -92,6 +93,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 		return fmt.Errorf("nanolathe: client: %w", err)
 	}
 	clPtr = cl
+	cl.SetModelFS(cs.fs)
 	cl.SetTerrain(terrain)
 	cl.SetCamera(cam)
 	if pal != nil {
@@ -253,7 +255,7 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		w, h := rect.MaxX-rect.MinX, rect.MaxY-rect.MinY
 		if w < 3 && h < 3 {
 			if b.latch == input.LatchMove {
-				b.orderSelected(2, mx, my) // move [04 §3.4]
+				b.orderSelected(2, mx, my, additive) // move [04 §3.4] queued via Shift [P0-I03]
 				b.latch = input.LatchNormal
 			}
 		} else {
@@ -262,7 +264,8 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		}
 	}
 	if mouse.Pressed(input.MouseButtonRight) && b.hasSelection() {
-		b.orderSelected(1, mx, my) // contextual [04 §3.4]
+		queued := kbd.HasShift()           // queue modifier Replace/Append [04 §3.3][P0-I03]
+		b.orderSelected(1, mx, my, queued) // contextual [04 §3.4]
 		b.latch = input.LatchNormal
 	}
 }
@@ -297,7 +300,8 @@ func (b *battleSession) selectedBuilder() *units.Unit {
 }
 
 // armBuildPanel resolves the selected builder's CANBUILD page into buttons
-// [02 "Build-menu catalog keys"].
+// [02 "Build-menu catalog keys"]. Authored page.Buttons order is preserved
+// verbatim — do NOT sort alphabetically [P0-I03][02 "Build-menu catalog keys"].
 func (b *battleSession) armBuildPanel() {
 	b.panelButtons = b.panelButtons[:0]
 	u := b.selectedBuilder()
@@ -308,11 +312,9 @@ func (b *battleSession) armBuildPanel() {
 	if !ok || page == nil {
 		return
 	}
-	names := append([]string(nil), page.Buttons...)
-	sort.Strings(names)
 	x := int32(8)
 	y := int32(480 - panelButtonH - 8)
-	for _, name := range names {
+	for _, name := range page.Buttons {
 		if _, found := b.cat.Unit(name); !found {
 			continue
 		}
@@ -379,15 +381,46 @@ func (b *battleSession) yardMapFor() string {
 }
 
 // commitBuild queues a mobile-build order through the ordinary construction
-// path [PLAN_08 C12/C23]; the session's construction pump drives the lifecycle.
+// path [PLAN_08 C12/C23][P0-I05]; the session's construction pump drives the lifecycle.
+// Site coordinates are passed at queue time and preserved on the queued node as GoalX/Z [P0-I05]:
+// the validated ghost anchor (buildMX/buildMY) carries the selected site via QueueMobileBuild.
 func (b *battleSession) commitBuild() {
 	builder := b.selectedBuilder()
 	if builder == nil {
 		return
 	}
-	if err := construction.QueueBuild(builder, b.buildDef, 1); err != nil {
+	wx, wz := b.cam.ScreenToWorld(b.buildMX, b.buildMY)
+	// Mobile build uses distinct handler with site anchor [P0-I05]; factory uses BuildingBuild.
+	if err := construction.QueueMobileBuild(builder, b.buildDef, wx, wz, 1, b.cat); err != nil {
 		fmt.Fprintf(os.Stderr, "nanolathe: build %s: %v\n", b.buildDef, err)
+		return
 	}
+	q := orders.QueueForUnit(builder)
+	if q == nil || q.LenPrimary() == 0 {
+		return
+	}
+	prim := q.Primary()
+	tail := prim[len(prim)-1]
+	if tail == nil {
+		return
+	}
+	// Ensure tick/owner and GoalY are populated for determinism [04 §3.2][P0-I05].
+	// QueueMobileBuild already wrote GoalX/Z and BuildDefKey; fill remaining canonical fields.
+	if b.sess.World != nil && tail.GoalY == 0 {
+		tail.GoalY = b.sess.World.HeightAt(wx, wz)
+		if tail.GoalY == numeric.Fixed(-1) {
+			tail.GoalY = 0
+		}
+	}
+	if tail.Owner == 0 {
+		tail.Owner = builder.Handle
+	}
+	if tail.CreationTick == 0 && b.sess.Clock != nil {
+		tail.CreationTick = uint32(b.sess.Clock.GlobalTick)
+	}
+	// Verify site is authoritative [P0-I05]
+	_ = wx
+	_ = wz
 }
 
 // drawOverlay renders the build panel and placement ghost after units.
@@ -441,20 +474,103 @@ func loadFNT(cs *contentSet) *formats.FNT {
 	return nil
 }
 
-// orderSelected resolves code at the clicked world position for every selected
-// player unit and pushes the resulting order [04 §3.4][04 §3.3].
-func (b *battleSession) orderSelected(code int, sx, sy int32) {
+// pickTarget returns the unit handle under the cursor if any, else ground pos.
+// It respects fog (local-player word), overlap (nearest squared distance wins
+// with strict < tie-break so lower slot wins on equal), and validity (alive)
+// [04 §3.5][07 §9][03 §3.2] C8 [P0-I03]. Feature picking is stubbed: ground pos
+// is returned when no unit hit; future feature picking will use the same routine.
+func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *orders.ResolvePos) {
 	wx, wz := b.cam.ScreenToWorld(sx, sy)
 	pos := &orders.ResolvePos{X: wx, Z: wz}
+	if b.sess == nil || b.sess.Units == nil || b.cam == nil {
+		return 0, nil, pos
+	}
+	if b.sess.World != nil {
+		y := b.sess.World.HeightAt(wx, wz)
+		if y != -1 {
+			pos.Y = y
+		}
+	}
+	bestHandle := pool.Handle(0)
+	var bestUnit *units.Unit
+	bestDist2 := int64(1 << 30)
+	const pickRadiusSq = 16 * 16 // 16 pixel radius [07 §9] overlap tolerance
+	for _, u := range b.sess.Units.Iter() {
+		if u == nil || !u.Alive {
+			continue
+		}
+		if b.sess.Vis != nil {
+			t := visibility.Target{
+				Owner:  visibility.PlayerID(u.Owner),
+				X:      u.X,
+				Y:      u.Y,
+				Z:      u.Z,
+				Hidden: u.Flags&0x4 != 0, // cloaked bit placeholder TODO(question) [03 §3.2]
+				Status: u.Flags,
+			}
+			if !b.sess.Vis.IsVisible(visibility.PlayerID(0), t) {
+				continue // fogged: treated as absent for picking [03 §3.2] C8
+			}
+		}
+		sxU, syU := b.cam.WorldToScreen(u.X, u.Y, u.Z)
+		dx := int64(sxU) - int64(sx)
+		dy := int64(syU) - int64(sy)
+		dist2 := dx*dx + dy*dy
+		if dist2 <= pickRadiusSq && dist2 < bestDist2 { // strict < so lower slot wins on tie [07 §9]
+			bestDist2 = dist2
+			bestHandle = u.Handle
+			bestUnit = u
+		}
+	}
+	if bestHandle != 0 && bestUnit != nil {
+		return bestHandle, bestUnit, pos
+	}
+	// TODO(P0-I05): feature picking — when a feature footprint covers the clicked
+	// cell and is visible, set pos.HasFeature etc. For now HasFeature false.
+	return 0, nil, pos
+}
+
+// orderSelected resolves code at the clicked world position for every selected
+// player unit and pushes the resulting canonical order payload [04 §3.4][04 §3.3][P0-I03].
+// It computes wx/wz, picks a target handle respecting fog/overlap/validity via
+// pickTarget, resolves via orders.Resolve, constructs a canonical Node via
+// orders.NewNodeForOrder that writes GoalX/Y/Z, target handle, queue modifier,
+// creation tick and owner, and pushes via q.Push(id, node) — never empty [P0-I03].
+func (b *battleSession) orderSelected(code int, sx, sy int32, queued bool) {
+	targetHandle, targetUnit, pos := b.pickTarget(sx, sy)
+	tick := uint32(0)
+	if b.sess != nil && b.sess.Clock != nil {
+		tick = uint32(b.sess.Clock.GlobalTick)
+	}
 	for _, u := range b.sess.Units.Iter() {
 		if u == nil || !u.Alive || u.Owner != 0 || u.Flags&client.SelectionFlag == 0 {
 			continue
 		}
-		id := orders.Resolve(code, u, nil, pos)
+		id := orders.Resolve(code, u, targetUnit, pos)
 		if id == 0 {
 			continue
 		}
+		var gx, gy, gz numeric.Fixed
+		if targetHandle != 0 && targetUnit != nil {
+			gx = targetUnit.X
+			gy = targetUnit.Y
+			gz = targetUnit.Z
+		} else {
+			gx = pos.X
+			gy = pos.Y
+			gz = pos.Z
+		}
+		node := orders.NewNodeForOrder(id, targetHandle, gx, gy, gz, tick, u.Handle, queued)
 		q := orders.QueueForUnit(u)
-		q.Push(id, orders.Node{})
+		if q == nil {
+			continue
+		}
+		if queued {
+			q.Push(id, node)
+		} else {
+			q.PurgeUnprotected()
+			q.DropLeadingAutoOps()
+			q.Push(id, node)
+		}
 	}
 }

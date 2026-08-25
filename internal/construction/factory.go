@@ -4,7 +4,6 @@ package construction
 import (
 	"fmt"
 	"reflect"
-	"sort"
 	"unsafe"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
@@ -123,35 +122,29 @@ func NewService(terrain *world.Terrain, catalog *content.Catalog, w *units.World
 }
 
 // buildProductIndex materializes the product-id to catalog-key reverse map once
-// [05 C16]. It is built by walking the catalog's keys in sorted order so a hash
-// collision between two unit names resolves to the same key on every run — the
-// previous code ranged over the catalog map and broke on the first match, which
-// is a map-iteration order dependency on a simulation path (I1).
+// [05 C16][P0-I05]. Product IDs are stable catalog indices (1-based, 0 sentinel)
+// via Catalog.UnitDefIndex, never FNV-1a hash (N04). Sorting ensures determinism (I1).
 func (s *Service) buildProductIndex() {
 	s.productIndex = make(map[uint32]string)
 	if s.Catalog == nil || s.Catalog.Units == nil {
 		return
 	}
-	keys := make([]string, 0, len(s.Catalog.Units))
-	for k := range s.Catalog.Units {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		id := factoryProductID(k)
+	keys := s.Catalog.SortedUnitKeys()
+	for i, k := range keys {
+		id := uint32(i + 1) // 1-based index matches Catalog.UnitDefIndex [P0-I05][02 §5]
 		if _, seen := s.productIndex[id]; !seen {
-			s.productIndex[id] = k // lowest key wins, deterministically
+			s.productIndex[id] = k
 		}
 	}
 }
 
 // rememberProductID records a product id mapping for callers that construct
-// order payloads directly (tests and the queue builder) [05 C16].
+// order payloads directly (tests and the queue builder) [05 C16][P0-I05].
 func (s *Service) rememberProductID(defKey string, pid uint32) {
 	if s.productIndex == nil {
 		s.productIndex = make(map[uint32]string)
 	}
-	s.productIndex[pid] = defKey
+	s.productIndex[pid] = content.CanonicalKey(defKey)
 }
 
 // Messages returns the verbatim diagnostics emitted so far [05 C18][05 C21][05 C22].
@@ -319,20 +312,29 @@ func (s *Service) QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cel
 	worldZ := factory.Z.Add(pos[2])
 	// 3. Store position on order node is done by caller (Pump state2) — not here.
 
-	// 4. Load product definition and snap using packed footprint extents each biased by half extent [05 C16].
+	// 4. Load product definition and snap using packed footprint extents each biased by half extent [05 C16][P0-I05].
 	footX, footZ := 1, 1 // default 1x1 when the product is unknown
 	if q := orders.QueueForUnit(factory); q != nil && q.LenPrimary() > 0 {
 		head := q.Primary()[0]
-		if pid := head.Param1; pid != 0 {
-			if def := s.productDef(uint32(pid)); def != nil {
-				footX = int(def.FootprintX)
-				footZ = int(def.FootprintZ)
-				if footX <= 0 {
-					footX = 1
-				}
-				if footZ <= 0 {
-					footZ = 1
-				}
+		var def *content.UnitDef
+		if head.BuildDefKey != "" && s.Catalog != nil {
+			if d, ok := s.Catalog.Unit(head.BuildDefKey); ok {
+				def = d
+			}
+		}
+		if def == nil {
+			if pid := head.Param1; pid != 0 {
+				def = s.productDef(uint32(pid))
+			}
+		}
+		if def != nil {
+			footX = int(def.FootprintX)
+			footZ = int(def.FootprintZ)
+			if footX <= 0 {
+				footX = 1
+			}
+			if footZ <= 0 {
+				footZ = 1
 			}
 		}
 	}
@@ -341,23 +343,26 @@ func (s *Service) QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cel
 }
 
 // productDef resolves an order payload's product id to its definition through
-// the reverse index built at Service construction [05 C16].
-//
-// The previous implementation ranged over the catalog's unit map hashing each
-// key and broke on the first match. Two names hashing to one id would resolve
-// differently between runs, which is a map-iteration dependency on a
-// simulation path (I1) — the exit-spot footprint, and therefore where the
-// nanoframe lands, would not be reproducible.
+// the reverse index built at Service construction [05 C16][P0-I05].
+// IDs are stable catalog indices (1-based), never FNV hash [P0-I05].
 func (s *Service) productDef(pid uint32) *content.UnitDef {
-	if s == nil || s.Catalog == nil {
+	if s == nil || s.Catalog == nil || pid == 0 {
 		return nil
 	}
 	key, ok := s.productIndex[pid]
 	if !ok {
+		// Fallback: try direct catalog lookup via index [P0-I05]
+		if def, ok2 := s.Catalog.UnitDefByIndex(pid); ok2 {
+			return def
+		}
 		return nil
 	}
 	def, ok := s.Catalog.Unit(key)
 	if !ok {
+		// Fallback to index-based lookup if key missing (catalog changed)
+		if def2, ok2 := s.Catalog.UnitDefByIndex(pid); ok2 {
+			return def2
+		}
 		return nil
 	}
 	return def
@@ -379,34 +384,29 @@ func getVMProgram(vm *cob.VM) *cob.Program {
 // Helpers for footprint yard and validation [05 C17] [04 §6.2].
 // ---------------------------------------------------------------------------
 
-func factoryProductID(defKey string) uint32 {
-	// Duplicate of queue.go productID logic: FNV-1a over CanonicalKey [02 §5][04 §3.2]
+// catalogIndex returns the stable catalog index for defKey [P0-I05][02 §5].
+// Never uses FNV hash.
+func catalogIndexForService(cat *content.Catalog, defKey string) uint32 {
 	ck := content.CanonicalKey(defKey)
-	// Use hash/fnv
-	h := fnvHash(ck)
-	return h
-}
-
-func fnvHash(s string) uint32 {
-	const (
-		offset32 = 2166136261
-		prime32  = 16777619
-	)
-	hash := uint32(offset32)
-	for i := 0; i < len(s); i++ {
-		hash ^= uint32(s[i])
-		hash *= prime32
+	if cat != nil {
+		if idx, ok := cat.UnitDefIndex(ck); ok {
+			return idx
+		}
 	}
-	return hash
+	return 0
 }
 
-// getProductDefForNode resolves the product a build node names, through the
-// Service's deterministic reverse index [05 C16]. It ranged over the catalog
-// map and broke on the first match, which made the resolution depend on Go's
-// map iteration order whenever two unit names hash alike (I1).
+// getProductDefForNode resolves the product a build node names [05 C16][P0-I05].
+// It first uses the authoritative BuildDefKey string (stable across catalog
+// changes and save/load), then falls back to the catalog index in Param1.
 func (s *Service) getProductDefForNode(node *orders.Node) *content.UnitDef {
 	if node == nil {
 		return nil
+	}
+	if node.BuildDefKey != "" && s != nil && s.Catalog != nil {
+		if def, ok := s.Catalog.Unit(node.BuildDefKey); ok {
+			return def
+		}
 	}
 	return s.productDef(uint32(node.Param1))
 }
@@ -864,6 +864,14 @@ func (s *Service) handleStop(factory *units.Unit, node *orders.Node, tick uint32
 // ---------------------------------------------------------------------------
 
 func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint32) {
+	// Mobile builds skip presentation clear of Goal (site is authoritative) [P0-I05]
+	if isMobileBuild(node.ID) {
+		// Mobile builds go directly to state2 placement, bypassing activate/yard-door [P0-I05]
+		node.Phase = uint8(State2)
+		node.DynamicGate = 0
+		node.Deadline = -1
+		return
+	}
 	// State 0 clears presentation payload [05].
 	node.GoalX = 0
 	node.GoalY = 0
@@ -935,6 +943,13 @@ func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint
 
 // handleState1 advances only when script has set in-build-stance bit, otherwise waits with wake bit 2 [05].
 func (s *Service) handleState1(factory *units.Unit, node *orders.Node, tick uint32) {
+	if isMobileBuild(node.ID) {
+		// Mobile builds skip yard-door handshake [P0-I05]
+		node.Phase = uint8(State2)
+		node.DynamicGate = 0
+		node.Deadline = -1
+		return
+	}
 	if factory.Flags&FlagInBuildStance != 0 {
 		node.Phase = uint8(State2)
 		node.DynamicGate = 0
@@ -946,9 +961,22 @@ func (s *Service) handleState1(factory *units.Unit, node *orders.Node, tick uint
 	node.Deadline = int32(tick + 1)
 }
 
-// handleState2 implements C16-C18 [05].
+// isMobileBuild reports whether id is a mobile build descriptor [P0-I05][04 §3.1].
+func isMobileBuild(id orders.ID) bool {
+	name := orders.DescriptorFor(id).Name
+	return name == MobileBuildOrder || name == VTOLMobileBuildOrder
+}
+
+// handleState2 implements C16-C18 [05][P0-I05].
+// Factory products use exit-spot QueryBuildInfo [05 C16]; mobile products use
+// the authoritative site anchor stored in Node.GoalX/Z [P0-I05] via QueueMobileBuild.
 func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint32) {
-	// Exit-spot acquisition exact order [05 C16] is performed via QueryBuildInfo path.
+	// Mobile build branch: site is authoritative Goal from QueueMobileBuild [P0-I05].
+	if isMobileBuild(node.ID) {
+		s.handleMobileState2(factory, node, tick)
+		return
+	}
+	// Exit-spot acquisition exact order [05 C16] is performed via QueryBuildInfo path for factory.
 	// For handler we already have stored cell via QueryBuildInfo; but we need to compute again per tick?
 	// Use lastService for catalog lookup.
 
@@ -986,6 +1014,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		cell = SnapWorldToCell(factory.X, factory.Z, footX, footZ)
 	}
 	// Store position on order node [05 C16] — already done in success epilogue storage but also store now.
+	// For factory, Goal is overwritten with exit spot cell origin [05 C16].
 	node.GoalX = world.CellToWorld(cell.X)
 	node.GoalZ = world.CellToWorld(cell.Z)
 
@@ -1056,6 +1085,97 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	s.successEpilogue(factory, node, product, cell)
 	// Rally inheritance is part of GetBuilt product's queue? Actually rally is re-enqueued on product via product's GetBuilt nodes? The spec says when product completes, its GetBuilt order walks builder's queue. But our success epilogue already creates GetBuilt on product; rally will happen when that GetBuilt runs? However factory lifecycle says rally inheritance re-enqueues factory's own QMove/QPatrol nodes in queue-traversal order; none => parks. That's for product's initial orders. We can do it now as part of success epilogue to satisfy C19 for tests.
 	s.rallyInheritance(factory, product)
+}
+
+// handleMobileState2 implements mobile build placement at the authoritative site anchor [P0-I05][05 "Factory production lifecycle"].
+// Mobile payload carries site in Node.GoalX/Z (world coords) via QueueMobileBuild [P0-I05].
+// Validation uses the product's yard at the snapped site, not the factory exit spot.
+func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tick uint32) {
+	def := s.getProductDefForNode(node)
+	footX, footZ := 1, 1
+	if def != nil {
+		footX = int(def.FootprintX)
+		footZ = int(def.FootprintZ)
+		if footX <= 0 {
+			footX = 1
+		}
+		if footZ <= 0 {
+			footZ = 1
+		}
+	}
+	// Site anchor is authoritative Goal from QueueMobileBuild [P0-I05]. Snap with half-extent bias to get cell rectangle origin [05 C16].
+	cell := SnapWorldToCell(node.GoalX, node.GoalZ, footX, footZ)
+	// Do not overwrite Goal: keep original clicked site for determinism and tests that assert Goal equals clicked site [P0-I05].
+	// Validation at snapped cell [05 C17] with null self identity (mobile builders place at site).
+	if def == nil {
+		node.DynamicGate = WakeBit2
+		node.Deadline = int32(tick + 15)
+		return
+	}
+	var yard []world.YardCell
+	if def.YardMap != "" {
+		y, err := world.ParseYardMap(def.YardMap, footX, footZ)
+		if err == nil {
+			yard = y
+		}
+	} else {
+		yard = make([]world.YardCell, footX*footZ)
+		for i := range yard {
+			yard[i] = 0x06 // bits 1-2 reject any occupant [04 §6.2]
+		}
+	}
+	if err := validatePlacement(s, cell.X, cell.Z, footX, footZ, yard); err != nil {
+		node.DynamicGate = WakeBit1 | WakeBit2
+		node.Deadline = int32(tick + 15)
+		return
+	}
+	product, err := s.allocateNanoframe(builder, def, cell)
+	if err != nil {
+		s.logMessage(ErrLimitMessage)
+		node.DynamicGate = WakeBit2
+		node.Deadline = int32(tick + 300)
+		return
+	}
+	// For mobile, success epilogue reuses factory helper but with builder as factory and cell as site cell.
+	// It stores cell origin as Goal? We preserve original Goal for site authoritative test, so store snapshot separately?
+	// Keep Goal as site, but successEpilogue will overwrite Goal with cell origin. Preserve site in a separate snapshot?
+	// Instead call mobile-specific epilogue that keeps Goal as site and uses cell for product creation.
+	s.successEpilogueMobile(builder, node, product, cell)
+	s.rallyInheritance(builder, product)
+}
+
+// successEpilogueMobile is like successEpilogue but preserves the authoritative site Goal [P0-I05].
+func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, product *units.Unit, cell world.Cell) {
+	// Preserve original Goal site for test assertion that structure appears at clicked location [P0-I05].
+	// The product's world position is at cell origin, which corresponds to site snapped with half-extent.
+	// Node.Goal remains the clicked site; we do not overwrite it with cell origin.
+	productHandle := product.Handle
+	node.Target = productHandle
+	s.logMessage("Starting construction")
+	s.SetBuilderLink(productHandle, builder.Handle)
+	product.Flags &^= (StandingMoveMask | StandingFireMask)
+	product.Flags |= (builder.Flags & (StandingMoveMask | StandingFireMask))
+	getBuiltID := orders.Lookup("GetBuilt")
+	if getBuiltID != 0 {
+		pq := orders.QueueForUnit(product)
+		pq.Push(getBuiltID, orders.Node{Param2: 0})
+	}
+	builder.Flags |= FlagStartBuilding
+	if builder.Script != nil {
+		if vm, ok := builder.Script.(*cob.VM); ok && vm != nil {
+			if prog := getVMProgram(vm); prog != nil {
+				if pc, ok := prog.Scripts["StartBuilding"]; ok {
+					_ = vm.Start(pc, nil)
+				}
+			}
+		}
+	}
+	if s != nil && s.OnRefresh != nil {
+		s.OnRefresh(builder)
+	}
+	node.Phase = uint8(State3)
+	// Keep cell for product creation already done; no need to store again.
+	_ = cell
 }
 
 // handleState3 is the work loop [05].

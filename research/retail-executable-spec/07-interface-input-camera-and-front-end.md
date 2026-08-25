@@ -326,6 +326,81 @@ The main shell provides single player, multiplayer, intro/movie, credits, and
 exit actions. It loads the main menu GUI, applies the active font and palette,
 and runs the GUI event/presentation loop.
 
+**Main-menu background shimmer (SPARKS) is closed.** Presentation-only
+effect active only while `MAINMENU.GUI` is shown. The shell allocates a
+100-entry particle buffer tagged `SPARKS` (100 × 13 bytes) on entry, zeroed,
+and frees it on exit when the menu window closes. Two window callbacks are
+installed for this shell: a destroy handler that frees the buffer and a
+per-frontend-frame tick that drives the shimmer. The tick is invoked through
+the frontend window pump (the same pump that services input polling and
+`GUI` drawing) once per frontend frame with no internal wall-clock throttle;
+presentation is via the shared indexed offscreen and palette present path
+(see document 03 §1). All draws use the CRT `rand()` stream only, never the
+simulation RNG, and no authoritative state is touched.
+
+Each record is 13 bytes (stable iteration `0..99`, stride 13, no map
+iteration; record count and size are exact because `100 × 13` matches the
+allocation):
+
+| Off | Size | Field |
+|---|---|---|
+| `+0` | `int16` | x 0..639 |
+| `+2` | `int16` | y 0..479 |
+| `+4` | `uint8` | active 0/1 |
+| `+5` | `int8` | dx (-3, 0, 3) |
+| `+6` | `int8` | dy (ditto, exactly one of `dx/dy` zero at any time) |
+| `+7` | `uint8` | life countdown, decremented each active frame |
+| `+8` | `uint8` | twinkle/direction timer |
+| `+9` | `uint32` | linear framebuffer offset `y*640+x` |
+
+The framebuffer is the logical 640×480 indexed surface (pitch 640, `off =
+y*640+x`). Two surfaces are used each tick: a background backup (the static
+menu art as captured when the offscreen was selected) as source and the
+onscreen offscreen as dest. All draws are single indexed bytes to the dest;
+no `ALP`/`SHD` blend participates.
+
+Per record per frontend frame, in order `0..99`:
+
+1. If active, restore the previous pixel from the backup to the dest at the
+stored offset before any other test. This erases the prior frame's spark.
+
+2. If inactive, attempt to spawn: pick `x = rand() % 640` and
+`y = rand() % 220` (220, not 480 — spawn band is the upper portion of the
+menu), form `off = y*640+x`, and test the dest pixel's low nibble
+`pixel & 0xF`. If `<= 0xC` (≤12) remain inactive; only bright background
+(`>= 0xD`/13) may spawn — dark menu bar areas never sparkle. On success set
+`active=1`, `off`, `life = (rand() low byte)+1` wrapping (0 allowed, dies
+next frame with probability 1/256), `timer = (rand() & 0x1F)+1` (1..32), and
+an initial orthogonal direction `±3` chosen by parity of `life` and the
+spawn position (if `life` odd the choice branches on `y` parity, otherwise on
+`x` parity; exactly one axis is zero). No pixel is drawn in the spawn frame;
+the spark becomes visible on its next active pass.
+
+3. If active after erase: decrement `life` — if already zero deactivate
+(the particle lives for `life` additional frames after spawn); advance
+`x += dx, y += dy` with signed 8-bit steps; if `x<0 or >=640 or y<0 or
+>=480` deactivate; integrate `off += dx` and if `dy != 0` add `dy*640`; test
+the dest pixel at the new offset `& 0xF >= 0xD` else deactivate (sparks that
+wander onto dark art die); otherwise write palette index `0xAA` (170) at
+`off` as the sparkle.
+
+4. Twinkle timer: if `timer != 0` then `--timer` and go to the next record.
+If zero, pick a new orthogonal direction `±3` by parity of the current
+coordinate (`x & 1` when previously moving horizontally, `y & 1` when
+vertically; the other axis zeroed) and reset `timer = (rand() & 0xF)+1`
+(1..16). The just-drawn `0xAA` remains for this frame.
+
+After all 100 records the tick marks the menu window dirty so the next
+present copies the modified offscreen to the display.
+
+The shimmer is therefore presentation-only. A reimplementation must isolate
+it to a CRT-style `rand()` stream (do not consume the simulation RNG), use
+pitch 640, threshold low-nibble `>= 0xD` against the *background* (not the
+previously drawn spark), orthogonal steps `±3` with exactly one zero axis,
+life/timer ranges as above, and must restore the background byte before each
+move. Spawning over dark `MAINMENU` art (low nibble `<= 0xC`) must remain
+suppressed — retail never sparkles over the grey menu bar.
+
 #### Single-player and campaign
 
 The single-player family includes campaign selection, arbitrary mission

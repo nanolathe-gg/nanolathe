@@ -187,7 +187,13 @@ func TestGate6EndToEnd(t *testing.T) {
 		return construction.QueueBuild(f, defKey, count)
 	}
 
-	expectedPID := gateProductID("gatefavee")
+	// P0-I05: product identity is stable catalog index, not FNV hash [P0-I05].
+	expectedPID := func() uint32 {
+		if idx, ok := cat.UnitDefIndex(content.CanonicalKey("gatefavee")); ok {
+			return idx
+		}
+		return gateProductID("gatefavee")
+	}()
 
 	var successTick int = -1
 	var successX, successZ numeric.Fixed
@@ -200,7 +206,7 @@ func TestGate6EndToEnd(t *testing.T) {
 			svc.TickPlayer(int(player), uint32(tick), w, func() {
 				mgr.Tick(uint32(tick), w, &svc)
 			})
-			// After manager tick, inspect ordinary construction queue (via orders) for real second unit.
+			// After manager tick, inspect ordinary construction queue (via orders) for real second unit [P0-I05].
 			q := orders.QueueForUnit(builderUnit)
 			if q == nil {
 				continue
@@ -210,7 +216,7 @@ func TestGate6EndToEnd(t *testing.T) {
 				if n == nil {
 					continue
 				}
-				if n.Param1 == expectedPID {
+				if n.Param1 == expectedPID || n.BuildDefKey == content.CanonicalKey("gatefavee") {
 					found = true
 					break
 				}
@@ -321,7 +327,12 @@ func TestGate6EndToEnd(t *testing.T) {
 		placeSpyDef = defKey
 		return construction.QueueBuild(f, defKey, count)
 	}
-	expectedPID2 := gateProductID("gatefavee")
+	expectedPID2 := func() uint32 {
+		if idx, ok := cat2.UnitDefIndex(content.CanonicalKey("gatefavee")); ok {
+			return idx
+		}
+		return gateProductID("gatefavee")
+	}()
 	var tick2 = -1
 	var x2, z2 numeric.Fixed
 	for tick := 0; tick < 900; tick++ {
@@ -334,7 +345,7 @@ func TestGate6EndToEnd(t *testing.T) {
 		}
 		found := false
 		for _, n := range q.Primary() {
-			if n != nil && n.Param1 == expectedPID2 {
+			if n != nil && (n.Param1 == expectedPID2 || n.BuildDefKey == content.CanonicalKey("gatefavee")) {
 				found = true
 				break
 			}

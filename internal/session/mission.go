@@ -320,15 +320,45 @@ func placeFeatures(s *Session, m *mission.Mission) error {
 	// feature stamping service; deterministic load order matters [08 "Placement
 	// and battle entry"]. In fixtures s.World or s.Features may be nil; the
 	// ordering guarantee is what C9 locks, not the footprint derivation, so this
-	// is a no-op when no terrain is present.
+	// is a no-op when no terrain is present. No RNG draws occur here [I4].
 	if s.World == nil || s.Features == nil {
 		return nil
 	}
-	// Mission features are already decoded as FeaturePlacements per [GAP T14];
-	// stamping is owned by the features service, which already handles the
-	// footprint-index vs successor sentinel per [04 §6.2]. No RNG draws occur
-	// here.
-	_ = m.Features
+	if m == nil || len(m.Features) == 0 {
+		return nil
+	}
+	// Deterministic source order: terrain features already stamped via world.Load's
+	// ExpandPlot + stampFeatureAnchors into Plot; we now stamp mission-authored
+	// features in decode order (not map iteration) [08 "Placement and battle entry"] [I1][04 §6.2].
+	for _, fp := range m.Features {
+		if !fp.IsPlaced() {
+			continue
+		}
+		name := fp.Name
+		if name == "" {
+			continue
+		}
+		var def *content.FeatureDef
+		if s.Catalog != nil && s.Catalog.Features != nil {
+			def = s.Catalog.Features[content.CanonicalKey(name)]
+		}
+		if def == nil {
+			for _, d := range s.World.FeatureDefs {
+				if d != nil && d.CanonicalKey == content.CanonicalKey(name) {
+					def = d
+					break
+				}
+			}
+		}
+		if def == nil {
+			continue
+		}
+		cx, cz := int(fp.X), int(fp.Z)
+		if cx < 0 || cz < 0 || cx >= int(s.World.CellW) || cz >= int(s.World.CellH) {
+			continue
+		}
+		s.Features.PlaceAt(cx, cz, def)
+	}
 	return nil
 }
 
@@ -390,6 +420,11 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 				if v, err := s.World.SampleMetal(cx, cz, footX, footZ, float32(def.ExtractsMetal)); err == nil {
 					u.SpotMetal = v // once, never resampled [P1-10]
 				}
+			}
+			// Publish visibility synchronously before loader returns — no empty-coverage frame [03 §3.3] C10.
+			publishOne(s, u)
+			if s.Movement != nil && s.Movement.Routes != nil {
+				s.Movement.EnsureUnit(u)
 			}
 		}
 	}

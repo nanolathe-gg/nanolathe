@@ -142,6 +142,112 @@ func (s *Service) Tick(tick uint32) {
 	s.sinkTick()
 }
 
+// TickMotion advances only the prepass/reproduction walker which belongs in
+// phase 4 (effects/feature motion) [01 §4.4][06 §13.1]. Lifecycle (burning and
+// sinking) belongs in phase 6. Splitting keeps reproduction ordering before
+// burning/sinking and avoids double Tick when both phases call [P0-I06].
+func (s *Service) TickMotion(tick uint32) {
+	_ = tick
+	s.reproduceTick()
+}
+
+// TickLifecycle advances only the lifecycle part of the feature phase which
+// belongs in phase 6 (feature lifecycle) [01 §4.4][05 "Feature burning"][05 "Feature sinking and water interaction"].
+// It runs burning (including smoke via CRT, spread via sim, successor) and then sinking.
+func (s *Service) TickLifecycle(tick uint32) {
+	s.burnTick(tick)
+	s.sinkTick()
+}
+
+// PlaceAt stamps a feature at anchor cell (cx,cz) via the common placement
+// helper with no position/velocity override [06 §13.1][P1-10][P1-15]. It is the
+// public entry for mission and corpse placement; deterministic order is the
+// caller's responsibility [I1]. Returns the new instance or nil on silent pool
+// failure [P1-10].
+func (s *Service) PlaceAt(cx, cz int, def *content.FeatureDef) *Instance {
+	return s.spawnFeatureAt(cx, cz, def)
+}
+
+// PlaceAtWorld stamps a feature at world position (x,z) using floor-corrected
+// cell conversion [03 §2.1] I3 and then PlaceAt. Used for corpse placement from
+// unit world coordinates.
+func (s *Service) PlaceAtWorld(x, z numeric.Fixed, def *content.FeatureDef) *Instance {
+	if s.Terrain == nil || def == nil {
+		return nil
+	}
+	cx := int(world.WorldToCell(x))
+	cz := int(world.WorldToCell(z))
+	return s.PlaceAt(cx, cz, def)
+}
+
+// PlaceCorpse stamps a corpse feature for a dying unit at its world position
+// and initiates sinking when submerged [05 "Feature sinking and water interaction"].
+// fromIsFeature is the dying unit's IsFeature flag; isfeature corpses never
+// descend. Chain depth is already resolved by caller (low nibble) [06 §12.1] C23;
+// this helper just stamps the resolved def. Returns the corpse instance or nil.
+func (s *Service) PlaceCorpse(x, z numeric.Fixed, def *content.FeatureDef, fromIsFeature bool) *Instance {
+	if def == nil || s.Terrain == nil {
+		return nil
+	}
+	inst := s.PlaceAtWorld(x, z, def)
+	if inst == nil {
+		return nil
+	}
+	// Submerged start latches vy to -11468 when terrain at or below sea level
+	// and dying definition lacks isfeature flag [05 "Feature sinking and water interaction"].
+	s.StartSinking(inst, fromIsFeature)
+	return inst
+}
+
+// SetBurnAnimationTicks installs a GAF-backed duration hook so shipped burns
+// terminate at the GAF sequence length rather than infinite [05 "Feature burning"] [P0-I06].
+// A nil hook or zero result falls back to finite 46-282 visits [P1-10].
+func (s *Service) SetBurnAnimationTicks(fn func(*content.FeatureDef) int32) {
+	s.BurnAnimationTicks = fn
+}
+
+// CorpseDefFor resolves the corpse feature for depth low-nibble [06 §12.1] C23.
+// It mirrors combat.ResolveCorpse but lives in features so callers without
+// combat import can still resolve. Depth 0 => nil; depth 1 => authored Corpse;
+// larger depths follow featuredead chain depth-1 times.
+func CorpseDefFor(unitDef *content.UnitDef, features map[string]*content.FeatureDef, depth uint8) *content.FeatureDef {
+	depth &= 0x0F
+	if depth == 0 || unitDef == nil {
+		return nil
+	}
+	name := unitDef.Corpse
+	if name == "" {
+		return nil
+	}
+	ck := content.CanonicalKey(name)
+	cur := features[ck]
+	if cur == nil {
+		return nil
+	}
+	if depth == 1 {
+		return cur
+	}
+	for i := uint8(1); i < depth; i++ {
+		if cur == nil {
+			return nil
+		}
+		var nxt *content.FeatureDef
+		if cur.FeatureDeadDef != nil {
+			nxt = cur.FeatureDeadDef
+		} else if cur.FeatureDead != "" {
+			ck2 := content.CanonicalKey(cur.FeatureDead)
+			nxt = features[ck2]
+		} else {
+			return nil
+		}
+		if nxt == nil {
+			return nil
+		}
+		cur = nxt
+	}
+	return cur
+}
+
 // Reclaim performs feature reclaim. The payout is a one-time completion event
 // adding the full feature pools to the builder [05 "Feature reclaim"].
 // It verifies reclaimable and not indestructible, returns the metal/energy

@@ -189,6 +189,37 @@ func (s *Scheduler) Submit(r Request) {
 	s.insertSorted(int(r.Player), r)
 }
 
+// HasRequest reports whether a request for the unit is pending [P0-I03].
+func (s *Scheduler) HasRequest(unit pool.Handle) bool {
+	if s == nil {
+		return false
+	}
+	for p := 0; p < 10; p++ {
+		for _, q := range s.queues[p] {
+			if q.Unit == unit {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Cancel removes the pending request for the unit, if any [P0-I03].
+func (s *Scheduler) Cancel(unit pool.Handle) bool {
+	if s == nil {
+		return false
+	}
+	for p := 0; p < 10; p++ {
+		for i, q := range s.queues[p] {
+			if q.Unit == unit {
+				s.queues[p] = append(s.queues[p][:i], s.queues[p][i+1:]...)
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Tick performs budgeted scheduling for the given tick [04 §7.3] C11 C12.
 // The global counter replenishes every 150 ticks; per-player scales are recomputed then [04 §7.2][04 §7.3].
 // Each active request is limited to 100 heap pops per call, passed as budget to the injected search [04 §7.3] C11.

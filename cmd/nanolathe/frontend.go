@@ -115,6 +115,7 @@ func runGameShell(opts Options, cs *contentSet) error {
 		return fmt.Errorf("nanolathe: client: %w", err)
 	}
 	clPtr = cl // startBattle morphs THIS client when a skirmish starts
+	cl.SetModelFS(cs.fs)
 	cl.SetCamera(shell.cam)
 	if shell.assets != nil && shell.assets.pal != nil {
 		cl.SetPalette(shell.assets.pal)

@@ -289,6 +289,68 @@ func (c *Catalog) ModelForUnit(unitKey string) (string, int, bool) {
 	return name, idx, true
 }
 
+// UnitDefIndex returns the stable catalog index for a unit definition
+// keyed by CanonicalKey (case-insensitive) [02 §5][05 "Build request and factory queue behavior"].
+// Indices are 1-based (0 is null sentinel) and ordered by sorted canonical keys (I1),
+// so they are deterministic across runs and independent of map iteration.
+// This replaces the invented FNV-1a product hashing (N04) with a collision-free
+// stable index [P0-I05].
+func (c *Catalog) UnitDefIndex(key string) (uint32, bool) {
+	if c == nil || c.Units == nil {
+		return 0, false
+	}
+	ck := CanonicalKey(key)
+	if ck == "" {
+		return 0, false
+	}
+	keys := make([]string, 0, len(c.Units))
+	for k := range c.Units {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for i, k := range keys {
+		if k == ck {
+			return uint32(i + 1), true // 1-based, 0 sentinel
+		}
+	}
+	return 0, false
+}
+
+// UnitDefByIndex returns the unit definition for a catalog index [02 §5][05].
+// Index 0 is invalid (null sentinel).
+func (c *Catalog) UnitDefByIndex(idx uint32) (*UnitDef, bool) {
+	if c == nil || c.Units == nil || idx == 0 {
+		return nil, false
+	}
+	keys := make([]string, 0, len(c.Units))
+	for k := range c.Units {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if int(idx) > len(keys) {
+		return nil, false
+	}
+	k := keys[idx-1]
+	u, ok := c.Units[k]
+	return u, ok
+}
+
+// SortedUnitKeys returns the unit catalog keys sorted ascending (I1) [02 §5].
+// The slice is a copy; mutations do not affect the catalog.
+func (c *Catalog) SortedUnitKeys() []string {
+	if c == nil || c.Units == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(c.Units))
+	for k := range c.Units {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, len(keys))
+	copy(out, keys)
+	return out
+}
+
 // Validate treats a missing gamedata/ directory, MOVEINFO.TDF or SIDEDATA.TDF as fatal,
 // and translate.tdf as optional — NOT GAMEDATA.TDF which doesn't exist [SPEC_CONFLICTS SC2].
 //

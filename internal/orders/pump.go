@@ -23,6 +23,13 @@ const (
 	FlagStopBuildingPending // TODO(question) StopBuilding pending flag lands with WU-06-7 [05 "Queue subtraction"]
 )
 
+const (
+	MoveNone    uint8 = 0
+	MoveEnRoute uint8 = 1
+	MoveArrived uint8 = 2
+	MoveBlocked uint8 = 3
+)
+
 // Node is an 86-byte retail order record identity [04 §3.2] C5 (I13).
 type Node struct {
 	ID           ID            // descriptor identity [04 §3.2]
@@ -45,6 +52,20 @@ type Node struct {
 	CreationTick uint32 // creation-tick snapshot [04 §3.2]
 	Satisfied    uint32 // accumulated satisfied-gate bits [04 §3.2]
 	Flags        uint32 // flag bits [04 §3.3][05]
+	// Nanolathe path status extension [P0-I03][04 §7][04 §3.5]: published back from
+	// the movement scheduler/route lifecycle so the pump and HUD can observe
+	// en route / arrived / blocked without re-reading the movement grid.
+	MoveState  uint8  // 0 none, 1 en route, 2 arrived, 3 blocked [P0-I03]
+	PathStatus uint32 // copy of path.Status (0 success, 0x100 already, 0x200 rejected) [04 §7.2]
+	// P0-I05 authoritative construction payloads [05 "Factory production lifecycle"][05 "Construction arithmetic"].
+	// BuildDefKey is the canonical catalog key for factory/mobile products; it
+	// survives save/load and maps to a stable catalog index in Param1 via
+	// Catalog.UnitDefIndex. Using string+index avoids FNV-1a collisions (N04)
+	// and provides the established name→index table at load [P0-I05].
+	// Factory product: BuildDefKey+Param1(index)+Param2(count)+Phase progress [05].
+	// Mobile build: BuildDefKey+Param1(index)+GoalX/Z site + Param3 orientation [05].
+	// Assist/repair/reclaim/capture/resurrection: Target + operation-specific progress in Param2/3 [05].
+	BuildDefKey string // canonical unit key for build products [P0-I05][02 §5]
 }
 
 // Queue holds the two segments [04 §3.2] C5.
@@ -453,6 +474,18 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 		n.DynamicGate = 0
 		handler := DescriptorFor(n.ID).Handler
 		if handler == nil {
+			// [P0-I03] path-backed move orders have no dedicated handler yet; the
+			// movement scheduler owns the route lifecycle [04 §7]. Synthesize a
+			// wait so the pump does not spin and the handler is re-dispatched
+			// after 30+rand15 [04 §3.3] C3, while the loop's path-submit and
+			// movement-integrate drive the route [P0-I03].
+			name := DescriptorFor(n.ID).Name
+			if name == "Move_Ground" || name == "VTOL_Move" || name == "QMove" || name == "Patrol" || name == "QPatrol" || name == "VTOL_Patrol" || name == "RepairPatrol" || name == "VTOL_RepairPatrol" {
+				n.DynamicGate = 1
+				n.Deadline = int32(tick + 30 + randBelow15()) // [04 §3.3][I4]
+				n.MoveState = MoveEnRoute
+				return
+			}
 			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for %s", DescriptorFor(n.ID).Name)) // [docs/ORCHESTRATION.md §7] never spin
 			return
 		}
@@ -588,6 +621,27 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 			idx++
 		}
 	}
+}
+
+func (q *Queue) RemoveHead() *Node {
+	if q == nil || len(q.primary) == 0 {
+		return nil
+	}
+	n := q.primary[0]
+	cleanupNode(n)
+	q.primary = q.primary[1:]
+	q.ensureSingleActive()
+	if n != nil {
+		n.MoveState = MoveArrived
+	}
+	return n
+}
+
+func (q *Queue) Head() *Node {
+	if q == nil || len(q.primary) == 0 {
+		return nil
+	}
+	return q.primary[0]
 }
 
 func QueueForUnit(u *units.Unit) *Queue {

@@ -721,9 +721,15 @@ func TestDropLeadingAutoOps(t *testing.T) {
 func TestNilHandlerDiagnostic(t *testing.T) {
 	q := &Queue{}
 	u := newTestUnit()
-	moveID := Lookup("Move_Ground")
-	table[int(moveID)].Handler = nil
-	q.Push(moveID, Node{})
+	// Use a non-move order so the synthetic move wait [P0-I03] does not interfere.
+	nilID := Lookup("Stop")
+	if nilID == 0 {
+		nilID = Lookup("Activate")
+	}
+	orig := DescriptorFor(nilID).Handler
+	table[int(nilID)].Handler = nil
+	defer func() { table[int(nilID)].Handler = orig }()
+	q.Push(nilID, Node{})
 	clearGates(q)
 	q.Pump(u, 10)
 	if len(q.Diagnostics()) == 0 {

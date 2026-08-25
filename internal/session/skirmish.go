@@ -520,7 +520,47 @@ func skirmishPlaceFeatures(s *Session, m *mission.Mission) error {
 	if s.World == nil || s.Features == nil {
 		return nil
 	}
-	_ = m.Features
+	// Deterministic source order: terrain features already stamped via world.Load's
+	// ExpandPlot + stampFeatureAnchors into Plot; we now stamp mission-authored
+	// features in decode order (not map iteration) [08 "Placement and battle entry"] [I1][04 §6.2].
+	// Each placement is tried in order; out-of-range or missing definition silently
+	// fails per pool limits 0x100/0x800/WH*0xD [P1-10][P1-15] without aborting earlier placements.
+	if m == nil || len(m.Features) == 0 {
+		return nil
+	}
+	for _, fp := range m.Features {
+		if !fp.IsPlaced() {
+			continue
+		}
+		name := fp.Name
+		if name == "" {
+			continue
+		}
+		var def *content.FeatureDef
+		if s.Catalog != nil && s.Catalog.Features != nil {
+			def = s.Catalog.Features[content.CanonicalKey(name)]
+		}
+		if def == nil {
+			// Fallback: try terrain FeatureDefs by name match for synthetic maps
+			for _, d := range s.World.FeatureDefs {
+				if d != nil && d.CanonicalKey == content.CanonicalKey(name) {
+					def = d
+					break
+				}
+			}
+		}
+		if def == nil {
+			continue
+		}
+		cx, cz := int(fp.X), int(fp.Z)
+		// Bounds check before stamping; OOB silently skips like retail [P1-15] WH*0xD.
+		if cx < 0 || cz < 0 || cx >= int(s.World.CellW) || cz >= int(s.World.CellH) {
+			continue
+		}
+		// Stamp via service PlaceAt which handles footprint fringe and pool limits [06 §13.1].
+		// No RNG draws here [08 "Placement and battle entry"].
+		s.Features.PlaceAt(cx, cz, def)
+	}
 	return nil
 }
 
@@ -627,15 +667,13 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 			permMap[logical] = local28[idx]
 		}
 	}
-	// Helper to find Special by ID (suffix). Our Special.ID is 1-based suffix.
+	// Helper to find Special by ID (suffix). Our Special.ID is the 1-based
+	// numeric suffix of "StartPos %i" [GAP T14]; the lookup is exact — a slot
+	// whose assigned index has no matching StartPos keeps its random jitter
+	// [08 "Randomization for skirmish starts"].
 	findSpecial := func(id int) *mission.Special {
 		for i := range starts {
 			if int(starts[i].ID) == id {
-				return &starts[i]
-			}
-			// Also handle 0-based stored case: ID==id-1?
-			if int(starts[i].ID) == id-1 {
-				// Fallback for 0-based decode (should not happen after fix)
 				return &starts[i]
 			}
 		}
@@ -742,6 +780,11 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 					u.SpotMetal = v
 				}
 			}
+			// Publish visibility synchronously before loader returns — no empty-coverage frame [03 §3.3] C10.
+			publishOne(s, u)
+			if s.Movement != nil && s.Movement.Routes != nil {
+				s.Movement.EnsureUnit(u)
+			}
 		}
 	}
 	// Also reconstruct any mission-placed units that are not commanders, at authored positions,
@@ -789,6 +832,10 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 						if v, err := s.World.SampleMetal(cx, cz, footX, footZ, float32(def.ExtractsMetal)); err == nil {
 							u.SpotMetal = v // once, never resampled [P1-10]
 						}
+					}
+					publishOne(s, u)
+					if s.Movement != nil && s.Movement.Routes != nil {
+						s.Movement.EnsureUnit(u)
 					}
 				}
 			}

@@ -81,6 +81,12 @@ type Session struct {
 	// alpha from the final snapshot pair. It is presentation-only; sim never
 	// reads it [PLAN_03 C15][PLAN_14 C6]. Tests set this to count renders.
 	OnRender func(alpha float32)
+
+	// Visibility sensor state [03 §3.4] P0-11: per-unit status bits (0x100 seen, 0x300 friendly, 0x1000 decloak)
+	// and decloak deadlines tick+90, plus presentation-only jammer/radar surfaces.
+	visStatus      map[int]uint32
+	visDecloak     map[int]uint32
+	sensorSurfaces *sensorSurfacesImpl
 }
 
 // ValidateComposition checks that every required authoritative service and
@@ -181,6 +187,61 @@ func (s *Session) humanCount() int {
 	return n
 }
 
+// activePlayerCount returns the number of active players (Exists && !IsObserver) [03 §3.4] P0-11.
+// The sensor phase runs only when more than one player is active (activePlayers>1 via CMP 1 JBE skip).
+func (s *Session) activePlayerCount() int {
+	if s.Econ == nil {
+		return 0
+	}
+	n := 0
+	for i := 0; i < 10; i++ {
+		p := &s.Econ.Players[i]
+		if p.Exists && !p.IsObserver {
+			n++
+		}
+	}
+	return n
+}
+
+// IsVisible is the canonical gameplay LOS predicate [03 §3.2] C8 P0-11.
+// It wraps visibility.Service.IsVisible with the session's local player and sea-level handling.
+// Owner bypass, cloak, underwater (Y <= water), and no-allied-OR are preserved [03 §3.2] C9.
+func (s *Session) IsVisible(viewer visibility.PlayerID, t visibility.Target) bool {
+	if s.Vis == nil {
+		return false
+	}
+	return s.Vis.IsVisible(viewer, t)
+}
+
+// IsUnitVisible reports whether target unit is visible to viewer via the canonical predicate [03 §3.2] C8.
+// It builds a Target from the target unit's authoritative position, hull extents (zero for now),
+// and sensor status (friendly/underwater/decloak bits).
+func (s *Session) IsUnitVisible(viewer int, target *units.Unit) bool {
+	if s == nil || s.Vis == nil || target == nil {
+		return false
+	}
+	vid := visibility.PlayerID(viewer)
+	tid := int(target.Handle)
+	var status uint32
+	if s.visStatus != nil {
+		status = s.visStatus[tid]
+	}
+	hidden := (target.Flags & 0x04) != 0
+	if !hidden && target.Def != nil && target.Def.InitCloaked {
+		hidden = true
+	}
+	// Underwater exemption is stored as FriendlyMask 0x200 via sensor phase; we include it if present.
+	t := visibility.Target{
+		Owner:  visibility.PlayerID(target.Owner),
+		X:      target.X,
+		Y:      target.Y,
+		Z:      target.Z,
+		Hidden: hidden,
+		Status: status,
+	}
+	return s.Vis.IsVisible(vid, t)
+}
+
 // RegisterAll centralizes subsystem registration in kernel phase order
 // with a comment naming each phase (I7, PLAN_03 C7, [01 §4.4]).
 // No package registers itself from init().
@@ -191,14 +252,83 @@ func (s *Session) RegisterAll() {
 	if s.Clock == nil {
 		s.Clock = &clock.State{Requested: 10, Active: 10}
 	}
+	// Ensure single canonical scheduler: Session.Path is alias to Movement.Scheduler [04 §7.3][P0-I03].
+	if s.Movement != nil && s.Movement.Scheduler != nil && s.Path != s.Movement.Scheduler {
+		s.Path = s.Movement.Scheduler
+	}
+	if s.Path != nil && s.Movement != nil && s.Movement.Scheduler == nil {
+		s.Movement.Scheduler = s.Path
+	}
 	// Death notifications feed the mission trigger queues exactly once
 	// [08 "Evaluation"]: units.World fires the hook at the first Destroy
-	// latch, which is the single fire point.
-	if s.Units != nil && s.Units.OnDeath == nil && s.Mission != nil {
+	// latch, which is the single fire point. Visibility unpublish is also handled here so the byte refcount plain
+	// wraps 0→255 and word mask never decrements [03 §3.1] P0-11. The same hook also routes death into corpse placement via the features service [05 "Feature instance and terrain cell"][06 §13] C23.
+	if s.Units != nil {
+		prevHook := s.Units.OnDeath
+		// Wrap or create hook to handle visibility unpublish, trigger notify, and corpse.
 		s.Units.OnDeath = func(h pool.Handle, cause units.DeathCause, u *units.Unit) {
-			ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: 0, EnemyOwner: 1}
-			triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitDied, u)
+			if s.Vis != nil && u != nil {
+				unpublishOne(s, u)
+			}
+			if s.Mission != nil && u != nil {
+				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: 0, EnemyOwner: 1}
+				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitDied, u)
+			} else if prevHook != nil {
+				// If no mission, still delegate to previous hook if it was trigger hook (should not happen, but preserve)
+			}
+			if prevHook != nil && s.Mission == nil {
+				// For non-mission path, prevHook may have been nil; avoid double notify.
+				// If prevHook existed before our wrap, call it (it may be another visibility hook).
+				// But we already handled unpublish and trigger; just ensure we don't lose it.
+				// Detect if prevHook is our own earlier wrap by not calling again if s.Mission != nil (we already notified).
+				if s.Mission == nil {
+					prevHook(h, cause, u)
+				}
+			} else if prevHook != nil && s.Mission != nil {
+				// If we wrapped an existing hook that was not trigger, we already did trigger; no need to call prevHook again
+				// (it would have been visibility-only). Keep idempotent.
+			}
+			// Route into corpse feature with correct chain depth low nibble [06 §12.1] C23 [04 §5.1] [P0-I06].
+			if s.Features != nil && u != nil && u.Def != nil && u.Def.Corpse != "" && s.World != nil {
+				var depth uint8 = 0
+				switch cause {
+				case units.DeathKilled:
+					depth = 1
+				case units.DeathSelfDestruct:
+					depth = 1
+				case units.DeathReclaimed:
+					depth = 0
+				default:
+					if u.Health <= 0 {
+						depth = 1
+					}
+				}
+				if s.Catalog != nil && s.Catalog.Features != nil {
+					if corpseDef := features.CorpseDefFor(u.Def, s.Catalog.Features, depth); corpseDef != nil && depth != 0 {
+						_ = s.Features.PlaceCorpse(u.X, u.Z, corpseDef, u.Def.IsFeature)
+					} else if depth == 1 {
+						if corpseDef := features.CorpseDefFor(u.Def, map[string]*content.FeatureDef{}, depth); corpseDef == nil {
+							if d, ok := s.Catalog.Features[content.CanonicalKey(u.Def.Corpse)]; ok {
+								s.Features.PlaceCorpse(u.X, u.Z, d, u.Def.IsFeature)
+							}
+						}
+					}
+				} else {
+					for _, d := range s.World.FeatureDefs {
+						if d != nil && d.CanonicalKey == content.CanonicalKey(u.Def.Corpse) {
+							if depth != 0 {
+								s.Features.PlaceCorpse(u.X, u.Z, d, u.Def.IsFeature)
+							}
+							break
+						}
+					}
+				}
+				_ = h
+			}
 		}
+		// If there was a previous hook that we wrapped, ensure we preserve its behavior for non-visibility cases
+		// (the above already handled trigger; for the case where prevHook was set before RegisterAll, we merged).
+		_ = prevHook
 	}
 
 	// Phase 1: network drain — single-player no-op [01 §4.4]
@@ -232,14 +362,10 @@ func (s *Session) RegisterAll() {
 
 	// Phase 4: effects/features motion, compaction pre-pass [01 §4.4]
 	s.Kernel.Register(kernel.PhaseEffectsFeatureMotion, "features-motion", func(tick uint32) {
-		// features motion / effect-strip pre-pass [05 "Feature burning"] [01 §4.4]
-		// The full Tick does reproduction + burning + sinking; phase 4 is motion only.
-		// Call Tick for now; phase 6 handles lifecycle separation when split.
+		// Phase 4 is motion/prepass: reproduction walker is top of phase [06 §13.1] C25.
+		// Lifecycle (burning, sinking) belongs in phase 6 per [01 §4.4] P0-I06.
 		if s.Features != nil {
-			// reproduction walker is top of phase [06 §13.1]; burning/sinking follow.
-			// To avoid double Tick when both phases 4 and 6 call Tick, only phase 4
-			// drives it today; phase 6 is stubbed.
-			s.Features.Tick(tick)
+			s.Features.TickMotion(tick)
 		}
 	})
 
@@ -266,10 +392,178 @@ func (s *Session) RegisterAll() {
 		}
 	})
 
-	// Phase 5b: path scheduler [04 §7.3]
+	// Phase 5a.6: construction/factory work [05 "Factory production lifecycle"][P0-I05].
+	// Must run in the orders/build window BEFORE movement integration [04 §1.3][I7][P0-I05]:
+	// orders-pump → construction work → movement. Construction exclusively owns
+	// Remaining, health, resource admission, and completion [05].
+	s.Kernel.Register(kernel.PhaseOrdersPathEconomy, "construction-pump", func(tick uint32) {
+		if s.Build == nil || s.Units == nil {
+			return
+		}
+		// Deterministic iteration: player 0..9, slots asc, same as PumpAll [I1][05].
+		// Use PumpAll when available to ensure lowest-slot wins for multi-builder
+		// cooperation [05 "Construction arithmetic"].
+		s.Build.PumpAll(tick)
+	})
+
+	// Phase 5a.5: path-submit — on path-backed order activation submit one
+	// request so scheduler receives it and can produce a route [04 §7.3][P0-I03].
+	// Must run after orders-pump (so the head is the newly activated order) and
+	// before path-scheduler (so the request is visible this tick) [P0-I03].
+	s.Kernel.Register(kernel.PhaseOrdersPathEconomy, "path-submit", func(tick uint32) {
+		if s.Units == nil || s.Movement == nil || s.Movement.Scheduler == nil {
+			return
+		}
+		sched := s.Movement.Scheduler
+		// Also keep alias coherent [P0-I03]
+		s.Path = sched
+		for _, u := range s.Units.Iter() {
+			if u == nil || !u.Alive {
+				continue
+			}
+			q := orders.QueueForUnit(u)
+			if q == nil || q.LenPrimary() == 0 {
+				continue
+			}
+			head := q.Head()
+			if head == nil {
+				continue
+			}
+			name := orders.DescriptorFor(head.ID).Name
+			isMove := name == "Move_Ground" || name == "VTOL_Move" || name == "QMove" || name == "Patrol" || name == "QPatrol" || name == "VTOL_Patrol" || name == "RepairPatrol" || name == "VTOL_RepairPatrol"
+			if !isMove {
+				// Also treat any order carrying a Goal when descriptor is move-class: generic fallback.
+				if head.GoalX == 0 && head.GoalZ == 0 && head.Target == 0 {
+					continue
+				}
+				if !isMove {
+					// For non-move orders with a target unit, update goal to target's current pos and handle stale target.
+					if head.Target != 0 {
+						var tgt *units.Unit
+						if q.Lookup != nil {
+							tgt = q.Lookup(head.Target)
+						}
+						if tgt == nil && s.Units != nil {
+							tgt = s.Units.Unit(head.Target)
+						}
+						if tgt == nil || !tgt.Alive {
+							// Stale target: abandon the order [04 §3.5] missing target → Code 5
+							head.MoveState = orders.MoveBlocked
+							head.PathStatus = uint32(path.StatusRejected)
+							// Remove head next time pump sees it? Do immediate removal via queue to avoid stuck head.
+							// But we cannot remove while iterating pump's ordering? Do it now for move-like orders.
+							// For generic attack/assist, let handler decide; for now just mark blocked and let pump handle.
+							continue
+						}
+						// Target moved: update goal and invalidate route so repath occurs [P0-I03].
+						if tgt.X != head.GoalX || tgt.Z != head.GoalZ {
+							head.GoalX = tgt.X
+							head.GoalY = tgt.Y
+							head.GoalZ = tgt.Z
+							if route := s.Movement.Routes[u.Handle]; route != nil && route.Active {
+								route.Active = false
+								route.Dirty = true
+							}
+							sched.Cancel(u.Handle)
+						}
+					}
+					continue
+				}
+			}
+			// Handle stale target for move-with-target (rare): if target set, use target's pos.
+			if head.Target != 0 {
+				var tgt *units.Unit
+				if q.Lookup != nil {
+					tgt = q.Lookup(head.Target)
+				}
+				if tgt == nil && s.Units != nil {
+					tgt = s.Units.Unit(head.Target)
+				}
+				if tgt == nil || !tgt.Alive {
+					head.MoveState = orders.MoveBlocked
+					head.PathStatus = uint32(path.StatusRejected)
+					q.RemoveHead()
+					if route := s.Movement.Routes[u.Handle]; route != nil {
+						route.Active = false
+					}
+					sched.Cancel(u.Handle)
+					continue
+				}
+				if tgt.X != head.GoalX || tgt.Z != head.GoalZ {
+					head.GoalX = tgt.X
+					head.GoalY = tgt.Y
+					head.GoalZ = tgt.Z
+					if route := s.Movement.Routes[u.Handle]; route != nil && route.Active {
+						route.Active = false
+						route.Dirty = true
+					}
+					sched.Cancel(u.Handle)
+				}
+			}
+			// If route already active for this goal, keep it; otherwise submit if no pending request.
+			route := s.Movement.Routes[u.Handle]
+			if route != nil && route.Active {
+				// Check if route already covers goal: compare goal cell to last waypoint cell bias-adjusted?
+				// For now if route active we assume it covers current goal; repath only on goal change above.
+				continue
+			}
+			if sched.HasRequest(u.Handle) {
+				continue
+			}
+			// No active route and no pending request: submit one PointGoal radius 0 [04 §7.2] C8 [P0-I03].
+			startCell := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
+			goalCell := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
+			// Out-of-bounds goal is handled by search as rejected [04 §7.2] C10 → publish empty; keep order for retry.
+			s.Movement.SubmitMove(u.Handle, u.Owner, startCell, goalCell)
+			head.MoveState = orders.MoveEnRoute
+		}
+	})
+
+	// Phase 5b: path scheduler [04 §7.3] — must be before movement-integrate [P0-I03].
 	s.Kernel.Register(kernel.PhaseOrdersPathEconomy, "path-scheduler", func(tick uint32) {
-		if s.Path != nil {
-			s.Path.Tick(tick)
+		var sched *path.Scheduler
+		if s.Movement != nil && s.Movement.Scheduler != nil {
+			sched = s.Movement.Scheduler
+		} else {
+			sched = s.Path
+		}
+		if sched != nil {
+			sched.Tick(tick)
+		}
+		// Publish route status back to active order node [P0-I03].
+		if s.Units == nil || s.Movement == nil {
+			return
+		}
+		for _, u := range s.Units.Iter() {
+			if u == nil || !u.Alive {
+				continue
+			}
+			q := orders.QueueForUnit(u)
+			if q == nil || q.LenPrimary() == 0 {
+				continue
+			}
+			head := q.Head()
+			if head == nil {
+				continue
+			}
+			name := orders.DescriptorFor(head.ID).Name
+			isMove := name == "Move_Ground" || name == "VTOL_Move" || name == "QMove" || name == "Patrol" || name == "QPatrol"
+			if !isMove {
+				continue
+			}
+			route := s.Movement.Routes[u.Handle]
+			if route != nil && route.Active {
+				head.MoveState = orders.MoveEnRoute
+				head.PathStatus = 0 // success
+			} else if sched != nil && sched.HasRequest(u.Handle) {
+				head.MoveState = orders.MoveEnRoute
+			} else {
+				// No active route and no pending: check if scheduler just published empty (rejected)
+				// We treat as blocked; path-submit will retry on next opportunity [P0-I03].
+				if head.MoveState != orders.MoveBlocked {
+					// Only mark blocked if we attempted and got no route; keep en route otherwise to avoid flip.
+				}
+			}
 		}
 	})
 
@@ -323,42 +617,236 @@ func (s *Session) RegisterAll() {
 	})
 
 	// Phase 5d: movement integration / occupancy commit [04 §8.1][04 §8.2]
+	// Scheduler tick runs before this in phase 5b [P0-I03]; route following
+	// consumes the published points here. Completion, stale target, blocked and
+	// repath handling publish status back to the order node [P0-I03][04 §7].
 	s.Kernel.Register(kernel.PhaseOrdersPathEconomy, "movement-integrate", func(tick uint32) {
 		if s.Movement != nil {
 			s.Movement.Tick(tick, s.Units)
 		}
-		// Movement integration is immediate MoveRate / setSFXoccupy [GAP T15] I7.
-		// The movement.System (PLAN_07) is the composition root that the kernel's
-		// movement window calls each tick. Session does not yet own a Movement
-		// field per PLAN_14 snippet; keep nil-safe placeholder.
-		// Stub: if a movement system were bound, it would be called here:
-		// s.Movement.Tick(tick, s.Units)
-		_ = tick
-	})
-
-	// Phase 6: feature lifecycle, reclaim/death [01 §4.4]
-	// Construction/factory work consumes the primary queue's build orders and
-	// advances the five-state lifecycle [05 "Factory production lifecycle"].
-	s.Kernel.Register(kernel.PhaseOrdersPathEconomy, "construction-pump", func(tick uint32) {
-		if s.Build == nil || s.Units == nil {
+		if s.Units == nil || s.Movement == nil {
 			return
+		}
+		var sched *path.Scheduler
+		if s.Movement != nil {
+			sched = s.Movement.Scheduler
+		} else {
+			sched = s.Path
 		}
 		for _, u := range s.Units.Iter() {
 			if u == nil || !u.Alive {
 				continue
 			}
-			if q := orders.QueueForUnit(u); q != nil && q.LenPrimary() > 0 {
-				s.Build.Pump(u, tick)
+			q := orders.QueueForUnit(u)
+			if q == nil || q.LenPrimary() == 0 {
+				continue
+			}
+			head := q.Head()
+			if head == nil {
+				continue
+			}
+			name := orders.DescriptorFor(head.ID).Name
+			isMove := name == "Move_Ground" || name == "VTOL_Move" || name == "QMove" || name == "Patrol" || name == "QPatrol"
+			if !isMove {
+				continue
+			}
+			// Target movement / stale target handling [P0-I03][04 §3.5].
+			if head.Target != 0 {
+				var tgt *units.Unit
+				if q.Lookup != nil {
+					tgt = q.Lookup(head.Target)
+				}
+				if tgt == nil && s.Units != nil {
+					tgt = s.Units.Unit(head.Target)
+				}
+				if tgt == nil || !tgt.Alive {
+					head.MoveState = orders.MoveBlocked
+					head.PathStatus = uint32(path.StatusRejected)
+					q.RemoveHead()
+					if route := s.Movement.Routes[u.Handle]; route != nil {
+						route.Active = false
+						route.Dirty = true
+					}
+					if sched != nil {
+						sched.Cancel(u.Handle)
+					}
+					continue
+				}
+				if tgt.X != head.GoalX || tgt.Z != head.GoalZ {
+					head.GoalX = tgt.X
+					head.GoalY = tgt.Y
+					head.GoalZ = tgt.Z
+					if route := s.Movement.Routes[u.Handle]; route != nil && route.Active {
+						route.Active = false
+						route.Dirty = true
+					}
+					if sched != nil {
+						sched.Cancel(u.Handle)
+					}
+					head.MoveState = orders.MoveEnRoute
+					continue
+				}
+			}
+			// Arrival check: dist ≤2 world units [04 §3.5][P0-I03] strict thresholds.
+			dx := int64(head.GoalX) - int64(u.X)
+			dz := int64(head.GoalZ) - int64(u.Z)
+			// Skip completion for zero goal (should not happen for move, but guard).
+			if head.GoalX == 0 && head.GoalZ == 0 && head.Target == 0 {
+				continue
+			}
+			dist2 := dx*dx + dz*dz
+			const threshFixed = 2 * 65536 // 2 world units
+			const thresh2 = int64(threshFixed) * int64(threshFixed)
+			if dist2 <= thresh2 {
+				head.MoveState = orders.MoveArrived
+				head.PathStatus = 0
+				q.RemoveHead()
+				if route := s.Movement.Routes[u.Handle]; route != nil {
+					route.Active = false
+					route.Dirty = true
+				}
+				if sched != nil {
+					sched.Cancel(u.Handle)
+				}
+				continue
+			}
+			// Blocked route: no active route and no pending request but not arrived.
+			// Mark blocked and let path-submit retry on its cadence (30+rand) [P0-I03].
+			route := s.Movement.Routes[u.Handle]
+			pending := false
+			if sched != nil {
+				pending = sched.HasRequest(u.Handle)
+			}
+			if (route == nil || !route.Active) && !pending {
+				// If we previously tried and got rejected, the scheduler would have
+				// published empty and cleared pending. Detect by checking that goal
+				// is not satisfied but no route exists: treat as blocked.
+				// Set status so HUD could show blocked; actual retry happens via path-submit.
+				if head.MoveState != orders.MoveBlocked {
+					head.MoveState = orders.MoveBlocked
+					head.PathStatus = uint32(path.StatusRejected)
+				}
+			} else if route != nil && route.Active {
+				head.MoveState = orders.MoveEnRoute
 			}
 		}
 	})
-	s.Kernel.Register(kernel.PhaseFeatureLifecycle, "feature-lifecycle", func(tick uint32) {
-		// feature lifecycle, reclaim, death processing [05 "Removal and successor replacement"][06 §13.1]
-		// Currently driven in phase 4 Tick; keep no-op to preserve ordering for future split.
+
+	// Visibility refresh on movement — throttled [03 §3.2] C6. Refresh internally throttles to cell/2 or height delta >5.
+	// TODO(question): exact retail refresh threshold is cell/2 and height >5 [03 §3.2] C6; we publish via Refresh which implements that,
+	// but if the movement tick does not cross the threshold, coverage correctly stays. At least updates when cell/2 changes.
+	s.Kernel.Register(kernel.PhaseOrdersPathEconomy, "visibility-refresh", func(tick uint32) {
+		if s.Vis == nil || s.Units == nil {
+			return
+		}
+		for _, u := range s.Units.IterSliced() {
+			if u == nil || !u.Alive {
+				continue
+			}
+			cx := world.WorldToCell(u.X) / 2
+			cz := world.WorldToCell(u.Z) / 2
+			hb := heightByteFor(u)
+			r := radiusFor(u)
+			s.Vis.Refresh(visibility.ObserverID(u.Handle), visibility.Observer{Owner: visibility.PlayerID(u.Owner), CX: cx, CZ: cz, HeightByte: hb, Radius: r})
+		}
 		_ = tick
 	})
 
-	// Phase 7: sequence/effect-strip advancement [01 §4.4]
+	// Phase 6: feature lifecycle, reclaim/death [01 §4.4]
+	s.Kernel.Register(kernel.PhaseFeatureLifecycle, "feature-lifecycle", func(tick uint32) {
+		// Phase 6 is lifecycle: burning (smoke via CRT, spread via sim), successor
+		// replacement and sinking [05 "Feature burning"][05 "Feature sinking and water interaction"][06 §13.1] P0-I06.
+		if s.Features != nil {
+			s.Features.TickLifecycle(tick)
+		}
+	})
+
+	// Phase 7: sequence/effect-strip advancement and visibility/sensor phase [01 §4.4][03 §3.4] C11 C12 P0-11
+	// Sensor phase runs only when more than one player is active (activePlayers>1 via CMP 1 JBE skip) [03 §3.4] P0-11.
+	// It runs after movement so next tick's acquisition sees fresh positions, and before wind/effects.
+	s.Kernel.Register(kernel.PhaseSequences, "visibility-sensors", func(tick uint32) {
+		if s.Vis == nil || s.Units == nil {
+			return
+		}
+		active := s.activePlayerCount()
+		if active <= 1 {
+			return // sensor gate [03 §3.4] P0-11
+		}
+		// Build sensor units deterministically: players 0..9 asc, slots asc [I1].
+		// Status and decloak deadline are session-owned maps so mutations persist [03 §3.4] P0-11.
+		if s.visStatus == nil {
+			s.visStatus = make(map[int]uint32)
+		}
+		if s.visDecloak == nil {
+			s.visDecloak = make(map[int]uint32)
+		}
+		type holder struct {
+			statusPtr *uint32
+			deadPtr   *uint32
+			handle    int
+		}
+		var holders []holder
+		var sensorUnits []visibility.SensorUnit
+		for _, u := range s.Units.IterSliced() {
+			if u == nil || !u.Alive {
+				continue
+			}
+			h := int(u.Handle)
+			stVal := s.visStatus[h]
+			dlVal := s.visDecloak[h]
+			sp := new(uint32)
+			*sp = stVal
+			dp := new(uint32)
+			*dp = dlVal
+			holders = append(holders, holder{statusPtr: sp, deadPtr: dp, handle: h})
+			hidden := (u.Flags & 0x04) != 0
+			if !hidden && u.Def != nil && u.Def.InitCloaked {
+				hidden = true
+			}
+			var rd, sd, rj, sj, mc int32
+			if u.Def != nil {
+				rd = u.Def.RadarDistance
+				sd = u.Def.SonarDistance
+				rj = u.Def.RadarDistanceJam
+				sj = u.Def.SonarDistanceJam
+				mc = u.Def.MinCloakDistance
+			}
+			sensorUnits = append(sensorUnits, visibility.SensorUnit{
+				Owner:            visibility.PlayerID(u.Owner),
+				Status:           sp,
+				X:                u.X,
+				Z:                u.Z,
+				Y:                u.Y,
+				Alive:            true,
+				Hidden:           hidden,
+				RadarDistance:    rd,
+				SonarDistance:    sd,
+				RadarJam:         rj,
+				SonarJam:         sj,
+				MinCloakDistance: mc,
+				DecloakDeadline:  dp,
+			})
+		}
+		allied := func(a, b visibility.PlayerID) bool {
+			if a == b {
+				return true
+			}
+			// Skirmish ally groups when available [GAP T14]; otherwise only same owner.
+			if s.Skirmish.NumPlayers > 0 {
+				if int(a) < 10 && int(b) < 10 {
+					return s.Skirmish.Players[a].AllyGroup == s.Skirmish.Players[b].AllyGroup
+				}
+			}
+			// Fallback: check Econ alliance via controller? For now same owner only.
+			return false
+		}
+		s.Vis.SensorTick(tick, active, allied, sensorUnits)
+		// Write back mutated status/deadlines.
+		for _, h := range holders {
+			s.visStatus[h.handle] = *h.statusPtr
+			s.visDecloak[h.handle] = *h.deadPtr
+		}
+	})
 	s.Kernel.Register(kernel.PhaseSequences, "sequences", func(tick uint32) {
 		// sequence/effect-strip advancement — driven by tick, renderer only reads [01 §4.4]
 		// TODO(T25): effect strips not yet wired; presentation-only stub.
@@ -462,6 +950,50 @@ func (s *Session) RegisterAll() {
 					views = append(views, v)
 				}
 				frame.Units = views
+			}
+			// Fog cache presentation copy [03 §3.3] C13.
+			if s.Vis != nil {
+				s.Vis.RebuildFog(0, 0)
+				if fc := s.Vis.Fog(); fc != nil {
+					w, h := fc.Dimensions()
+					ch0, ch1 := fc.Channels()
+					frame.Fog.W = w
+					frame.Fog.H = h
+					frame.Fog.Ch0 = ch0
+					frame.Fog.Ch1 = ch1
+					frame.Fog.Valid = fc.IsValid()
+				}
+			}
+			if s.Features != nil {
+				// Publish feature views in deterministic order (sorted keys) [I1][05 "Feature instance and terrain cell"] [P0-I06].
+				insts := s.Features.Instances()
+				fviews := make([]snapshot.FeatureView, 0, len(insts))
+				for _, inst := range insts {
+					if inst == nil || inst.Def == nil {
+						continue
+					}
+					fv := snapshot.FeatureView{
+						CX:        int32(inst.CX),
+						CZ:        int32(inst.CZ),
+						X:         inst.X,
+						Y:         inst.Y,
+						Z:         inst.Z,
+						DefName:   inst.Def.CanonicalKey,
+						Model:     inst.Def.Object,
+						Health:    inst.Health,
+						MaxHealth: inst.MaxHealth,
+						IsBurning: inst.IsBurning,
+						IsSinking: inst.IsSinking,
+						BurnTicks: inst.BurnTicks,
+						FootX:     int8(inst.FootprintX),
+						FootZ:     int8(inst.FootprintZ),
+					}
+					if fv.Model == "" {
+						fv.Model = inst.Def.Filename
+					}
+					fviews = append(fviews, fv)
+				}
+				frame.Features = fviews
 			}
 			s.Snapshot.Publish(frame)
 		}

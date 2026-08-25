@@ -679,19 +679,24 @@ func TestManagerSelectPlaceQueueChain(t *testing.T) {
 				t.Fatalf("kind %v queue nil after chain", kind)
 			}
 			wantPID := func(defKey string) uint32 {
+				if cat != nil {
+					if idx, ok := cat.UnitDefIndex(content.CanonicalKey(defKey)); ok {
+						return idx
+					}
+				}
 				h := fnv.New32a()
 				_, _ = h.Write([]byte(content.CanonicalKey(defKey)))
 				return h.Sum32()
 			}("chainfavee")
 			found := false
 			for _, n := range q.Primary() {
-				if n != nil && n.Param1 == wantPID {
+				if n != nil && (n.Param1 == wantPID || n.BuildDefKey == content.CanonicalKey("chainfavee")) {
 					found = true
 					break
 				}
 			}
 			if !found {
-				t.Fatalf("kind %v queue missing product chainfavee pid %d, calls %v", kind, wantPID, calls)
+				t.Fatalf("kind %v queue missing product chainfavee pid %d (or BuildDefKey), calls %v", kind, wantPID, calls)
 			}
 			// Origin should have stepped toward center if radius was 0 it stays;
 			// with radius 0 origin stays, but if we test with radius later, ensure Place moved.

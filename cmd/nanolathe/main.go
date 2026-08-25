@@ -98,6 +98,10 @@ func run(opts Options, out *os.File) error {
 		}
 		return nil
 	}
+	// Programmatic screenshot: compose frames headless and write a PNG.
+	if opts.Shot != "" {
+		return runShot(opts, content, out)
+	}
 	// Windowed play goes through the game shell (menus → battle view);
 	// --map skips menus and enters the battle directly [PLAN_14].
 	if !opts.Headless && opts.Dump == "" {

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -182,15 +183,24 @@ func TestPerDefLimit_Sentinel(t *testing.T) {
 	}
 }
 
-// TestPrimaryOnlyQueue locks 68-desc census primary-only [P0-14].
+// TestPrimaryOnlyQueue locks 68-desc census primary-only [P0-14][P0-I05].
 func TestPrimaryOnlyQueue(t *testing.T) {
-	// Factory products must live on primary only; secondary is exclusively BuildWeapon/SelfDestruct per GAP T3.
-	// Our queue.go enforces primary via FactoryBuildOrder / fallback MobileBuild, both primary descriptors.
-	bid := productID("armck")
+	// Factory/mobile products must live on primary only; secondary is exclusively BuildWeapon/SelfDestruct per GAP T3 [P0-I05].
+	// Products now use stable catalog indices, not FNV hash [P0-I05].
+	bid := orders.Lookup("BuildingBuild")
 	if bid == 0 {
-		t.Fatalf("productID zero")
+		bid = orders.Lookup("MobileBuild")
 	}
-	// Ensure BuildWeapon has secondary bit 0x40000 while BuildingBuild does not — checked via orders descriptors, but we just verify primary path.
+	if bid == 0 {
+		t.Fatalf("BuildingBuild/MobileBuild lookup failed")
+	}
+	if orders.DescriptorFor(bid).StaticGate&0x40000 != 0 {
+		t.Fatalf("factory/mobile build should be primary, not secondary")
+	}
+	bid2 := orders.Lookup("BuildWeapon")
+	if bid2 != 0 && orders.DescriptorFor(bid2).StaticGate&0x40000 == 0 {
+		t.Fatalf("BuildWeapon should be secondary")
+	}
 }
 
 // TestWorkClampAndHealthDiff locks work clamp remaining + diff-of-trunc [P0-14].

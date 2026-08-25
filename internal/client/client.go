@@ -14,12 +14,14 @@ package client
 
 import (
 	"github.com/hajimehoshi/ebiten/v2"
+	"image"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // Options configures a Client. Step is the injected owner of clock, sub-ticks,
@@ -75,6 +77,10 @@ type Client struct {
 	terrain *world.Terrain
 	cam     *camera.Camera
 	fnt     *formats.FNT
+
+	modelFS  *vfs.FS
+	models   map[string]*unitModel
+	texIndex map[string]texRef
 
 	in InputState
 }
@@ -145,6 +151,31 @@ func (c *Client) SetSnapshot(b *snapshot.Buffer) {
 
 // Size returns the negotiated logical framebuffer size.
 func (c *Client) Size() (int, int) { return c.width, c.height }
+
+// Buffer exposes the presentation snapshot source (diagnostics publish into
+// it directly; the session path owns it in normal play).
+func (c *Client) Buffer() *snapshot.Buffer { return c.buffer }
+
+// SetModelFS installs the VFS for lazy 3DO/texture loads and builds the
+// texture-name index. Presentation state only.
+func (c *Client) SetModelFS(fs *vfs.FS) {
+	c.modelFS = fs
+	c.models = map[string]*unitModel{}
+	c.texIndex = map[string]texRef{}
+	c.buildTextureIndex()
+}
+
+// ComposeFrame reads the published buffer, composes one frame at alpha 1.0,
+// and returns it as an RGBA image. It works headless — presentation never
+// requires a window (I6) — and is the basis of the --shot diagnostic path.
+func (c *Client) ComposeFrame() *image.RGBA {
+	prev, cur, ok := c.buffer.Read()
+	c.composeIndexed(1.0, prev, cur, ok)
+	c.convertIndexedToRGBA()
+	img := image.NewRGBA(image.Rect(0, 0, c.width, c.height))
+	copy(img.Pix, c.rgba)
+	return img
+}
 
 // Input exposes the per-frame input snapshot for the windowed paths. Edge
 // flags are valid for exactly one Update; held state persists while down.

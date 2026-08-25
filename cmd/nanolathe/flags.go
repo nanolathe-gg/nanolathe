@@ -13,16 +13,19 @@ import (
 // not rename existing ones, because the gate commands in docs/PLAN_*.md are
 // written against these names.
 type Options struct {
-	Root     string // retail install root
-	Map      string // map name without extension, e.g. "ashap plateau"
-	Mission  string // campaign mission reference, e.g. "camps/arm campaign.tdf:MISSION0"
-	AI       string // AI profile name; empty disables the planner
-	Headless bool   // no window
-	Ticks    int    // headless tick budget; 0 = run until the session ends
-	Seed     int64  // simulation RNG seed; <0 = derive from the clock
-	Dump     string // headless diagnostic dump verb
-	Save     string // write a native save after a headless run [PLAN_14 C18]
-	Load     string // restore a native save before ticking [PLAN_14 C18]
+	Root      string // retail install root
+	Map       string // map name without extension, e.g. "ashap plateau"
+	Mission   string // campaign mission reference, e.g. "camps/arm campaign.tdf:MISSION0"
+	AI        string // AI profile name; empty disables the planner
+	Headless  bool   // no window
+	Ticks     int    // headless tick budget; 0 = run until the session ends
+	Seed      int64  // simulation RNG seed; <0 = derive from the clock
+	Dump      string // headless diagnostic dump verb
+	Save      string // write a native save after a headless run [PLAN_14 C18]
+	Load      string // restore a native save before ticking [PLAN_14 C18]
+	Shot      string // render --frames composed frames headless and write this PNG
+	Frames    int    // ticks to advance before --shot captures (default 30)
+	ShotModel string // with --shot: render this single 3DO model at screen center
 }
 
 // ErrHelp reports that usage was requested and printed.
@@ -49,6 +52,9 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.AI, "ai", "", "AI profile name; empty disables the planner")
 	set.BoolVar(&opts.Headless, "headless", false, "run without a window")
 	set.IntVar(&opts.Ticks, "ticks", 0, "headless tick budget; 0 runs until the session ends")
+	set.StringVar(&opts.Shot, "shot", "", "render headless and write the composed frame to this PNG path")
+	set.StringVar(&opts.ShotModel, "shot-model", "", "with --shot: render this single 3DO model at screen center")
+	set.IntVar(&opts.Frames, "frames", 30, "ticks to advance before --shot captures")
 	set.Int64Var(&opts.Seed, "seed", -1, "simulation RNG seed; negative derives one from the clock")
 	set.StringVar(&opts.Dump, "dump", "", "headless diagnostic dump (manifest, catalog, providers, route)")
 	set.StringVar(&opts.Save, "save", "", "write a native save here after the headless run")
