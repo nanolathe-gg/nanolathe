@@ -397,21 +397,40 @@ func TestSignalWake(t *testing.T) {
 }
 
 func TestDividePanics(t *testing.T) {
+	// [P2-03] fallback: retail divide with b==0 or INT_MIN/-1 raises #DE
+	// and kills the process [04 §4.3] C14 I11. Nanolathe keeps malformed as
+	// explicit fallback, not crash: the thread is killed, a diagnostic is
+	// recorded, and the process stays alive (I11 divergence noted in vm.go).
 	prog := synthProg([]uint32{
 		0x10021001, 10,
 		0x10021001, 0,
-		0x10034000, // divide 10/0 should panic [04 §4.3] C14
+		0x10034000, // divide 10/0 → thread kill fallback [P2-03][04 §4.3] C14
 		0x10065000,
 	}, []string{"base"}, 0, []int{0})
 	vm := NewVM(prog)
 	vm.Threads[0].Status = ThreadRunning
 	vm.Threads[0].PC = 0
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatalf("divide by zero should panic [04 §4.3] C14")
-		}
-	}()
 	vm.Drain(1)
+	if vm.Threads[0].Status != ThreadIdle {
+		t.Fatalf("divide by zero should kill thread [P2-03] got status %d want idle", vm.Threads[0].Status)
+	}
+	if len(vm.Diagnostics()) == 0 {
+		t.Fatalf("divide by zero should record diagnostic [P2-03]")
+	}
+	// INT_MIN / -1 same guard
+	prog2 := synthProg([]uint32{
+		0x10021001, 0x80000000,
+		0x10021001, 0xffffffff,
+		0x10034000,
+		0x10065000,
+	}, []string{"base"}, 0, []int{0})
+	vm2 := NewVM(prog2)
+	vm2.Threads[0].Status = ThreadRunning
+	vm2.Threads[0].PC = 0
+	vm2.Drain(1)
+	if vm2.Threads[0].Status != ThreadIdle {
+		t.Fatalf("INT_MIN/-1 should kill thread [P2-03] got %d", vm2.Threads[0].Status)
+	}
 }
 
 func TestPieceMoveInterpolate(t *testing.T) {

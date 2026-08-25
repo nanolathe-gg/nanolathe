@@ -56,9 +56,9 @@ func mkUnit(handle pool.Handle, owner uint8, side string, health, max int32, ali
 }
 
 func TestResolveFullTable(t *testing.T) {
-	origHost := hostilityOverride
-	defer func() { hostilityOverride = origHost }()
+	// P0-I16: per-queue hostility
 	SetHostilityFunc(nil)
+	defer SetHostilityFunc(nil)
 
 	actor := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 		d.CanMove = true

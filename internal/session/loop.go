@@ -1,6 +1,8 @@
 package session
 
 import (
+	"fmt"
+
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/combat"
@@ -48,6 +50,12 @@ type Session struct {
 	Mission  *mission.Mission
 	Snapshot *snapshot.Buffer
 
+	// Skirmish retains the lobby/setup values that selected this battle. The
+	// placement and spawn paths consume Location and per-slot resources now;
+	// the remaining round rules stay available to visibility/endgame wiring
+	// without being silently replaced by map-global defaults.
+	Skirmish SkirmishConfig
+
 	// VictoryDone / DefeatDone latch the mission end conditions [08
 	// "Evaluation"]. They are set by the trigger poll site below and are
 	// one-way: a completed condition stays completed.
@@ -73,6 +81,88 @@ type Session struct {
 	// alpha from the final snapshot pair. It is presentation-only; sim never
 	// reads it [PLAN_03 C15][PLAN_14 C6]. Tests set this to count renders.
 	OnRender func(alpha float32)
+}
+
+// ValidateComposition checks that every required authoritative service and
+// cross-service port is non-nil and bound. It returns the first missing
+// diagnostic and is the gate for P0-I01. [08 "Session states"] [01 §4.4]
+func (s *Session) ValidateComposition() error {
+	if s == nil {
+		return fmt.Errorf("session: nil session [08 \"Session states\"]")
+	}
+	if s.Clock == nil {
+		return fmt.Errorf("session: missing Clock [01 §4.4]")
+	}
+	if s.Kernel == nil {
+		return fmt.Errorf("session: missing Kernel [01 §4.4]")
+	}
+	if s.Catalog == nil {
+		return fmt.Errorf("session: missing Catalog [02 §5]")
+	}
+	if s.World == nil {
+		return fmt.Errorf("session: missing World [03 §2.2]")
+	}
+	if s.Units == nil {
+		return fmt.Errorf("session: missing Units [01 §6.1]")
+	}
+	if !s.Units.IsSliced() {
+		return fmt.Errorf("session: Units not sliced retail [P0-16] [01 §6.1]")
+	}
+	if s.Econ == nil {
+		return fmt.Errorf("session: missing Econ [05 \"Authoritative settlement order\"]")
+	}
+	if s.Features == nil {
+		return fmt.Errorf("session: missing Features [05 \"Feature instance and terrain cell\"]")
+	}
+	if s.Features.Terrain != s.World {
+		return fmt.Errorf("session: Features.Terrain mismatch [05]")
+	}
+	if s.Vis == nil {
+		return fmt.Errorf("session: missing Vis [03 §3.2]")
+	}
+	if w, h := s.Vis.GridDimensions(); w == 0 || h == 0 {
+		return fmt.Errorf("session: Vis zero dimensions [03 §3.1]")
+	}
+	if w, h := s.Vis.GridDimensions(); w != s.World.CellW/2 || h != s.World.CellH/2 {
+		return fmt.Errorf("session: Vis dimensions %dx%d != terrain %dx%d/2 [03 §3.1]", w, h, s.World.CellW, s.World.CellH)
+	}
+	if s.Movement == nil {
+		return fmt.Errorf("session: missing Movement [04 §8.1]")
+	}
+	if s.Movement.Terrain != s.World {
+		return fmt.Errorf("session: Movement.Terrain mismatch [04 §8.1]")
+	}
+	if s.Movement.Classes == nil {
+		return fmt.Errorf("session: Movement.Classes not bound [02 \"Movement class record\"]")
+	}
+	if s.Movement.Scheduler == nil {
+		return fmt.Errorf("session: Movement.Scheduler nil [04 §7.3]")
+	}
+	if s.Path == nil {
+		return fmt.Errorf("session: missing Path [04 §7.3]")
+	}
+	if s.Path != s.Movement.Scheduler {
+		return fmt.Errorf("session: Path != Movement.Scheduler [04 §7.3]")
+	}
+	if s.Build == nil {
+		return fmt.Errorf("session: missing Build [05 \"Factory production lifecycle\"]")
+	}
+	if s.Combat == nil {
+		return fmt.Errorf("session: missing Combat [06 §5.1]")
+	}
+	if s.Mission == nil {
+		return fmt.Errorf("session: missing Mission [08 \"Mission type dispatch\"]")
+	}
+	if s.Snapshot == nil {
+		return fmt.Errorf("session: missing Snapshot [03 §2.4]")
+	}
+	if s.Wind == nil {
+		return fmt.Errorf("session: missing Wind [01 §7.3]")
+	}
+	if s.AI == nil {
+		return fmt.Errorf("session: missing AI slice [08 \"Established AI-facing data\"]")
+	}
+	return nil
 }
 
 // humanCount returns the number of human players (ControllerState==1)

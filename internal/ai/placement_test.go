@@ -3,6 +3,8 @@ package ai
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/construction"
+
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -306,18 +308,16 @@ func TestQueueBuildIssuedViaOrdinaryPath(t *testing.T) {
 	}
 	called := false
 	var calledDef string
-	old := queueBuild
-	queueBuild = func(f *units.Unit, defKey string, count int) error {
-		called = true
-		calledDef = defKey
-		return old(f, defKey, count)
-	}
-	defer func() { queueBuild = old }()
-
 	m := &Manager{
 		Catalog: catalog,
 		Factory: factory,
+		QueueBuild: func(f *units.Unit, defKey string, count int) error {
+			called = true
+			calledDef = defKey
+			return construction.QueueBuild(f, defKey, count)
+		},
 	}
+	m.Strategic.Catalog = catalog
 	m.Strategic.CenterX = numeric.FixedFromInt(0)
 	m.OriginX = numeric.FixedFromInt(0)
 	m.Strategic.Radius = 0
@@ -331,11 +331,11 @@ func TestQueueBuildIssuedViaOrdinaryPath(t *testing.T) {
 	if calledDef != "armsolar" {
 		t.Fatalf("queueBuild called with %q want %q", calledDef, "armsolar")
 	}
-	queueBuild = old
 	w2 := units.New(10, nil)
 	h2, _ := w2.Create(factoryDef, 0, 0, 0, 0)
 	factory2 := w2.Unit(h2)
 	m2 := &Manager{Catalog: catalog, Factory: factory2}
+	m2.Strategic.Catalog = catalog
 	Place(m2, "armsolar", nil)
 	if factory2.Orders == nil {
 		t.Fatalf("factory2 orders queue not created via ordinary path")

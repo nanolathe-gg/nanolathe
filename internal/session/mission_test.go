@@ -216,7 +216,7 @@ func TestNewMissionUsesWindBoundsWithoutDraws(t *testing.T) {
 			"armcom": {MaxDamage: 100, SightDistance: 128},
 		},
 	}
-	s, err := NewMissionWithFS(fs, cat, "test.ota", 0)
+	s, err := NewMissionForTest(fs, cat, "test.ota", 0)
 	if err != nil {
 		t.Fatalf("NewMissionWithFS: %v", err)
 	}
@@ -264,9 +264,9 @@ func TestTriggerPollAndDeathNotificationEndMission(t *testing.T) {
 			"armflea": {UnitName: "armflea", MaxDamage: 20, SightDistance: 128},
 		},
 	}
-	s, err := NewMissionWithFS(fs, cat, "test.ota", 0)
+	s, err := NewMissionForTest(fs, cat, "test.ota", 0)
 	if err != nil {
-		t.Fatalf("NewMissionWithFS: %v", err)
+		t.Fatalf("NewMissionForTest: %v", err)
 	}
 	if len(s.Mission.Victory) != 1 || s.Mission.Victory[0].Completed {
 		t.Fatalf("authored victory condition not decoded: %+v", s.Mission.Victory)

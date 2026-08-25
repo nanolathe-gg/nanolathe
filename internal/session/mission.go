@@ -4,12 +4,16 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/internal/ai"
+	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -26,10 +30,9 @@ func NewMission(path string, difficulty int) (*Session, error) {
 	return NewMissionWithFS(nil, nil, path, difficulty)
 }
 
-// NewMissionWithFS is NewMission with explicit filesystem and catalog for tests.
-// When fs is nil a loose filesystem rooted at the current directory is used; when
-// cat is nil the mission is loaded without cross-linking. The gametype routing
-// rides the existing eight-state machine per [08 "Session states"] C3.
+// NewMissionWithFS is the strict production constructor. It never fabricates
+// nil terrain, empty catalog, or missing service. Fixtures must use
+// NewMissionForTest. [02 §5][03 §2.2][P0-16]
 func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int) (*Session, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -37,6 +40,124 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 	}
 	if fs == nil {
 		fs = vfs.New()
+	}
+	cat, err := strictCatalog(fs, cat)
+	if err != nil {
+		return nil, err
+	}
+	var m *mission.Mission
+	if strings.Contains(path, ":") {
+		parts := strings.SplitN(path, ":", 2)
+		campaignPath := strings.TrimSpace(parts[0])
+		missionPart := strings.TrimSpace(parts[1])
+		var idx int
+		if strings.HasPrefix(strings.ToLower(missionPart), "mission") {
+			num := strings.TrimSpace(missionPart[len("mission"):])
+			fmt.Sscanf(num, "%d", &idx)
+		} else {
+			fmt.Sscanf(missionPart, "%d", &idx)
+		}
+		m, err = mission.LoadCampaignWithSink(fs, campaignPath, idx, difficulty, 0, nil)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		m, err = mission.LoadWithType(fs, mission.TypeCampaign, path, difficulty, 0, nil)
+		if err != nil {
+			m2, err2 := mission.Load(fs, cat, path)
+			if err2 != nil {
+				return nil, err
+			}
+			m = m2
+		}
+	}
+	terrain, err := loadTerrainStrict(fs, cat, m)
+	if err != nil {
+		return nil, err
+	}
+	unitsWorld, err := newSlicedWorld(cat)
+	if err != nil {
+		return nil, err
+	}
+	s := &Session{
+		Catalog:  cat,
+		World:    terrain,
+		Mission:  m,
+		Clock:    &clock.State{Requested: 10, Active: 10},
+		Kernel:   &kernel.Kernel{},
+		Snapshot: &snapshot.Buffer{},
+		Units:    unitsWorld,
+		Econ:     &economy.Service{},
+		Latch:    NewEndLatch(),
+	}
+	// Correct controller states: human local 1, computer enemy 2 [08 "Established AI-facing data"]
+	for i := 0; i < 2 && i < 10; i++ {
+		p := &s.Econ.Players[i]
+		p.Exists = true
+		if i == 0 {
+			p.ControllerState = 1
+		} else {
+			p.ControllerState = 2
+		}
+		p.IsObserver = false
+		p.StatusHalfwordAt144 = 1
+		p.StatusWordAt140 = 0
+		p.GameEnded = false
+		p.EndGameCountdown = -1
+	}
+	s.Econ.SeedDeadlines(0)
+	var crt *rng.CRT
+	if rng.Global.Crt != nil {
+		crt = rng.Global.Crt
+	} else {
+		tmp := rng.NewCRT(0)
+		crt = &tmp
+	}
+	s.InitWindForSession(crt, 0)
+	if err := createAndBindServices(s); err != nil {
+		return nil, err
+	}
+	if err := BattleEntry(s, m, nil); err != nil {
+		return nil, err
+	}
+	ensureMovementForAll(s)
+	publishVisibilityForAll(s)
+	// AI managers for computer players
+	s.AI = make([]*ai.Manager, 0, 1)
+	for i := 0; i < 2; i++ {
+		if s.Econ.Players[i].ControllerState == 2 {
+			prof, perr := ai.LoadProfile(fs, "default")
+			if perr != nil || prof == nil {
+				continue
+			}
+			mgr := &ai.Manager{Player: uint8(i), Profile: prof, Terrain: s.World, Catalog: s.Catalog}
+			s.AI = append(s.AI, mgr)
+		}
+	}
+	s.RegisterAll()
+	if err := s.SelectForGametype(GametypeCampaign); err != nil {
+		return nil, err
+	}
+	if err := s.ValidateComposition(); err != nil {
+		return nil, fmt.Errorf("session: composition invalid: %w", err)
+	}
+	return s, nil
+}
+
+// NewMissionForTest is the fixture constructor retaining lenient fallback.
+func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int) (*Session, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, fmt.Errorf("session: empty mission path")
+	}
+	if fs == nil {
+		fs = vfs.New()
+	}
+	// Lenient catalog: if compile fails keep what we have
+	if cat == nil {
+		if compiled, err := content.Compile(fs); err == nil {
+			cat = compiled
+		}
 	}
 	var m *mission.Mission
 	var err error
@@ -55,8 +176,6 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 	} else {
 		m, err = mission.LoadWithType(fs, mission.TypeCampaign, path, difficulty, 0, nil)
 		if err != nil {
-			// Fallback to generic loader that handles fuzzy search for Types 2/3 paths
-			// but still respects the caller's difficulty when the first attempt fails.
 			m2, err2 := mission.Load(fs, cat, path)
 			if err2 != nil {
 				return nil, err
@@ -73,15 +192,9 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 		Mission: m,
 		Latch:   NewEndLatch(),
 	}
-	// Gametype routing per C3 [08 "Session states"]: campaign is Gametype 1
-	// which selects StateLocalPreload (4) before the same StateLoading (5) path.
 	if err := s.SelectForGametype(GametypeCampaign); err != nil {
 		return nil, err
 	}
-	// Wind bounds retained without RNG draws [08 "Wind initialization"] [C5]; the
-	// single battle-entry initializer runs now after retention [01 §7.3] C17 when a
-	// CRT stream is available. Use the global CRT when seeded, otherwise a
-	// deterministic zero-seeded CRT so the three draws still occur (I4).
 	var crt *rng.CRT
 	if rng.Global.Crt != nil {
 		crt = rng.Global.Crt
@@ -90,18 +203,13 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 		crt = &tmp
 	}
 	s.InitWindForSession(crt, 0)
-
-	// Economy slots for the two campaign players (local 0, enemy 1) per
-	// [08 "Established AI-facing data"]; single-player missions use 0 and 1
-	// [triggers PollContext]. Deadlines seed at battle-entry tick 0 per
-	// [05 "Authoritative settlement order"] C5.
 	if s.Econ == nil {
 		s.Econ = &economy.Service{}
 	}
 	for i := 0; i < 2 && i < len(s.Econ.Players); i++ {
 		p := &s.Econ.Players[i]
 		p.Exists = true
-		p.ControllerState = 1 // human active settling
+		p.ControllerState = 1
 		p.IsObserver = false
 		p.StatusHalfwordAt144 = 1
 		p.StatusWordAt140 = 0
@@ -109,17 +217,13 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 		p.EndGameCountdown = -1
 	}
 	s.Econ.SeedDeadlines(0)
-
-	// Battle entry order: features → units (InitialMission interprets here)
-	// → barrier → starting resources directly to live stock outside the
-	// ledger [08 "Placement and battle entry"] C9.
 	if err := BattleEntry(s, m, nil); err != nil {
 		return nil, err
 	}
-	// Movement parity with the skirmish route: ground steering/routes via
-	// movement.System [PLAN_14 C5 movement integration].
 	if s.World != nil && s.Movement == nil {
-		s.Movement = movement.NewSystem(s.World, movement.Profile{FootPrintX: 1, FootPrintZ: 1}, movement.NewOccupancyGrid())
+		grid := movement.NewOccupancyGrid()
+		fallback := movement.Profile{FootPrintX: 1, FootPrintZ: 1}
+		s.Movement = movement.NewSystem(s.World, fallback, grid)
 		if cat != nil {
 			s.Movement.SetClasses(cat.Movement)
 		}
@@ -127,8 +231,6 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 			s.Movement.EnsureUnit(u)
 		}
 	}
-	// Kernel phase registration — without this a mission session has no
-	// ticking subsystems and cannot reach victory/defeat [08 "Evaluation"].
 	s.RegisterAll()
 	return s, nil
 }

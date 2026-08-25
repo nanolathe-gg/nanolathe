@@ -84,6 +84,10 @@ type Service struct {
 	// the special second state [05 C21]. nil means no player is special.
 	IsSpecialSecondState func(owner uint8) bool
 
+	// LimitChecker is the per-def limit hook for allocation [P0-I16][05 C23].
+	// Was package var LimitChecker; now per-Service to avoid shared mutable.
+	LimitChecker func(factory *units.Unit, defKey string) bool
+
 	// Per-session state. None of this may live in a package-level var: it is
 	// authoritative (BuilderLinks is C18's "register the builder link on the
 	// product"), it has to survive save/load through one owner, and two worlds
@@ -99,6 +103,15 @@ type KillInfo struct {
 	Damage   int32
 	Severity int32
 	NoCorpse bool
+}
+
+// CheckLimit reports whether nanoframe allocation for defKey on factory is allowed
+// via Service.LimitChecker [C23][P0-I16]. Nil checker means allowed.
+func (s *Service) CheckLimit(factory *units.Unit, defKey string) bool {
+	if s == nil || s.LimitChecker == nil {
+		return true
+	}
+	return s.LimitChecker(factory, defKey)
 }
 
 // NewService creates a Service with given dependencies.
@@ -432,8 +445,8 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, c
 			return nil, fmt.Errorf(ErrLimitMessage)
 		}
 	}
-	if !CheckLimit(factory, def.UnitName) {
-		return nil, fmt.Errorf(ErrLimitMessage) // verbatim [05 C18] via hook [P0-14]
+	if !s.CheckLimit(factory, def.UnitName) {
+		return nil, fmt.Errorf(ErrLimitMessage) // verbatim [05 C18] via hook [P0-I16]
 	}
 	if s.Allocator != nil {
 		// Hook for tests: create at exit spot cell origin world coords.

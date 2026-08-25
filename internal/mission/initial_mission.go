@@ -12,15 +12,18 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// UnitTypeExistsHook overrides catalog existence check for tests.
-// When nil, every name is considered known. Tests set this to simulate
-// unknown types for `a name` and `b name` no-ops [04 §3.6] C13.
-var UnitTypeExistsHook func(name string) bool
+// P0-I16: Authoritative hooks moved onto service/session. The previous package
+// vars UnitTypeExistsHook and IsBuildingTypeHook are removed. Catalog lookup via
+// injected catalog is now the sole production path; tests should provide a catalog
+// with or without the queried type instead of setting a global hook. For legacy
+// compatibility a per-call Hooks struct can be supplied via RunInitialMissionsWithHooks.
 
-// IsBuildingTypeHook overrides building-vs-mobile classification for `b`.
-// When nil, mobile build is chosen when coordinates are present, otherwise building.
-// Tests may set to force either path [04 §3.6].
-var IsBuildingTypeHook func(name string) bool
+// Hooks carries per-session overrides for InitialMission interpretation [P0-I16].
+// When nil, catalog lookup is used. Tests may supply hooks to simulate unknown types.
+type Hooks struct {
+	UnitTypeExists func(name string) bool
+	IsBuildingType func(name string) bool
+}
 
 // RunInitialMissions interprets InitialMission strings once after all mission
 // units exist, for mission type 1 and BetweenMissions restores only.
@@ -34,9 +37,8 @@ func RunInitialMissions(m *Mission, w *units.World) {
 	RunInitialMissionsWithCatalog(m, w, nil)
 }
 
-// RunInitialMissionsWithCatalog is RunInitialMissions with the content
-// catalog backing type-existence and building-vs-mobile lookups [04 §3.6].
-func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Catalog) {
+// RunInitialMissionsWithHooks is RunInitialMissions with catalog and per-session hooks [P0-I16].
+func RunInitialMissionsWithHooks(m *Mission, w *units.World, cat *content.Catalog, hooks *Hooks) {
 	if m == nil || w == nil {
 		return
 	}
@@ -49,7 +51,6 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// We reconstruct sparse by placement index stored on the unit.
-	// createdSparse[i] is the unit for placement i or nil if allocation failed.
 	createdSparse := make([]*units.Unit, len(m.Units))
 	// Build index from world units by PlacementIdx.
 	mapped := 0
@@ -128,6 +129,7 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 			attachMap:     attachMap,
 			mission:       m,
 			catalog:       cat,
+			hooks:         hooks,
 			placementIdx:  idx,
 		}
 		tokens := tokenizeScript(script)
@@ -158,6 +160,12 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 	}
 }
 
+// RunInitialMissionsWithCatalog is RunInitialMissions with the content
+// catalog backing type-existence and building-vs-mobile lookups [04 §3.6].
+func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Catalog) {
+	RunInitialMissionsWithHooks(m, w, cat, nil)
+}
+
 // interpCtx holds per-unit interpreter state.
 type interpCtx struct {
 	unit          *units.Unit
@@ -168,6 +176,7 @@ type interpCtx struct {
 	attachMap     map[int]int
 	mission       *Mission
 	catalog       *content.Catalog // production existence/building lookups [04 §3.6]; may be nil in fixtures with hooks
+	hooks         *Hooks           // per-session overrides [P0-I16]
 	queued        int
 	suppressTail  bool
 	placementIdx  int
@@ -300,8 +309,8 @@ func productID(defKey string) uint32 {
 }
 
 func typeExists(ctx *interpCtx, name string) bool {
-	if UnitTypeExistsHook != nil {
-		return UnitTypeExistsHook(name)
+	if ctx != nil && ctx.hooks != nil && ctx.hooks.UnitTypeExists != nil {
+		return ctx.hooks.UnitTypeExists(name)
 	}
 	if strings.TrimSpace(name) == "" {
 		return false
@@ -318,8 +327,8 @@ func typeExists(ctx *interpCtx, name string) bool {
 }
 
 func isBuildingType(ctx *interpCtx, name string) bool {
-	if IsBuildingTypeHook != nil {
-		return IsBuildingTypeHook(name)
+	if ctx != nil && ctx.hooks != nil && ctx.hooks.IsBuildingType != nil {
+		return ctx.hooks.IsBuildingType(name)
 	}
 	// `b` builds BuildingBuild when the found catalog entry's unit-name field
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.

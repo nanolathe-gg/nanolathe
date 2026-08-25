@@ -170,12 +170,8 @@ func TestClassVectors_RetailVectors(t *testing.T) {
 			content.CanonicalKey("armcom"): {Buttons: []string{"armex", "armsolar"}},
 		},
 	}
-	orig := AICatalog
-	AICatalog = cat
-	defer func() { AICatalog = orig }()
-
 	types := []string{"armcom", "corcom", "armex", "armsolar", "armlab", "armvp"}
-	s := &Strategic{}
+	s := &Strategic{Catalog: cat}
 	s.Init(types)
 	// Check InitVectors: armlab/armvp/armcom have build list => 40+20=60, others 40
 	if v := s.InitVectors[content.CanonicalKey("armlab")]; v != 60 {
@@ -219,7 +215,7 @@ func TestClassVectors_RetailVectors(t *testing.T) {
 		UnitName:         "armhlt", BuildCostMetal: 100, BuildCostEnergy: 100, ExtractsMetal: 0, Builder: false, CanMove: false,
 		Weapon1Def: weap,
 	}
-	s2 := &Strategic{}
+	s2 := &Strategic{Catalog: cat}
 	s2.Init([]string{"armhlt"})
 	cvHlt := s2.ClassVectors[content.CanonicalKey("armhlt")]
 	if cvHlt.C0 < -100 || cvHlt.C0 > 100 {
@@ -236,7 +232,7 @@ func TestClassVectors_RetailVectors(t *testing.T) {
 	// Test extractor float zero exact vs denorm: 0.0 vs 1.4e-45 should give different vectors [P0-01 §7.1]
 	cat.Units[content.CanonicalKey("zeroex")] = &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("zeroex")}, UnitName: "zeroex", ExtractsMetal: 0, BuildCostMetal: 100, BuildCostEnergy: 100}
 	cat.Units[content.CanonicalKey("denormex")] = &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("denormex")}, UnitName: "denormex", ExtractsMetal: 1.4e-45, BuildCostMetal: 100, BuildCostEnergy: 100}
-	s3 := &Strategic{}
+	s3 := &Strategic{Catalog: cat}
 	s3.Init([]string{"zeroex", "denormex"})
 	cvZero := s3.ClassVectors[content.CanonicalKey("zeroex")]
 	cvDenorm := s3.ClassVectors[content.CanonicalKey("denormex")]
@@ -246,7 +242,7 @@ func TestClassVectors_RetailVectors(t *testing.T) {
 	// Verify zero RNG inside recompute: no draws consumed during Init recompute
 	r := rng.NewSimulation(1)
 	before := r.Draws()
-	s4 := &Strategic{}
+	s4 := &Strategic{Catalog: cat}
 	// Init should not draw from passed RNG (only MaybeRefresh does)
 	s4.Init([]string{"armcom"})
 	after := r.Draws()
@@ -254,7 +250,7 @@ func TestClassVectors_RetailVectors(t *testing.T) {
 		t.Fatalf("recompute should use zero RNG inside routine [P0-01 §5], draws %d->%d", before, after)
 	}
 	// Also check that recompute via MaybeRefresh with RNG0 draws exactly one per refresh
-	s5 := &Strategic{}
+	s5 := &Strategic{Catalog: cat}
 	s5.Init(types)
 	r5 := rng.NewSimulation(123)
 	// Force RNG to 0 by finding seed that yields 0? We can just loop until RNG0 occurs and ensure recompute happened.

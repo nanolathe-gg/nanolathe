@@ -75,6 +75,15 @@ type Manager struct {
 	Factory      *units.Unit      // builder receiving construction.QueueBuild [PLAN_11 C12]
 	Terrain      *world.Terrain   // placement validation terrain; nil skips yard validation, success resets radius [PLAN_11 C8]
 
+	// P0-I16: authoritative hooks moved from package globals onto the owning
+	// service. These affect future behavior and therefore are session-owned
+	// (serializable via service fields, not package var). Immutable tables remain
+	// package-level.
+	CandidateSource func(builder *units.Unit) []string                        // was package var CandidateSource [P0-I16]
+	MissionGateFlag int32                                                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GateCandidates  map[string]struct{}                                       // was package var Gate241Candidates [P0-I16]
+	QueueBuild      func(factory *units.Unit, defKey string, count int) error // was package var queueBuild [P0-I16]
+
 	entryCount         uint32 // eligible manager entries for classification cadence [08][PLAN_11 C3]
 	classificationRuns int
 	taskRuns           [TaskKindCount]int
@@ -102,6 +111,58 @@ func (m *Manager) GetStrategic() *Strategic {
 		return nil
 	}
 	return &m.Strategic
+}
+
+// GetCandidateSource satisfies the extended Selector for P0-I16 [P0-I16].
+func (m *Manager) GetCandidateSource() func(builder *units.Unit) []string {
+	if m == nil {
+		return nil
+	}
+	return m.CandidateSource
+}
+
+// GetCatalog satisfies the extended Selector for P0-I16.
+func (m *Manager) GetCatalog() *content.Catalog {
+	if m == nil {
+		return nil
+	}
+	return m.Catalog
+}
+
+// GetMissionGateFlag satisfies the extended Selector for P0-I16.
+func (m *Manager) GetMissionGateFlag() int32 {
+	if m == nil {
+		return 0
+	}
+	return m.MissionGateFlag
+}
+
+// GetGateCandidates satisfies the extended Selector for P0-I16.
+func (m *Manager) GetGateCandidates() map[string]struct{} {
+	if m == nil {
+		return nil
+	}
+	return m.GateCandidates
+}
+
+// GetQueueBuild returns the ordinary build path for P0-I16.
+func (m *Manager) GetQueueBuild() func(factory *units.Unit, defKey string, count int) error {
+	if m == nil {
+		return nil
+	}
+	if m.QueueBuild != nil {
+		return m.QueueBuild
+	}
+	return nil
+}
+
+// SetCatalog sets the catalog for both Manager and its Strategic state [P0-I16].
+func (m *Manager) SetCatalog(cat *content.Catalog) {
+	if m == nil {
+		return
+	}
+	m.Catalog = cat
+	m.Strategic.Catalog = cat
 }
 
 // EntryCount returns the number of eligible manager entries seen [08][PLAN_11 C3].
@@ -150,6 +211,12 @@ func isOuterEligible(player uint8, ctrl uint8, hasCtrl bool) bool {
 func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 	if m == nil {
 		return
+	}
+	// P0-I16: sync catalog between Manager and Strategic if one is set via direct field assignment
+	if m.Catalog != nil && m.Strategic.Catalog == nil {
+		m.Strategic.Catalog = m.Catalog
+	} else if m.Strategic.Catalog != nil && m.Catalog == nil {
+		m.Catalog = m.Strategic.Catalog
 	}
 	if m.Player == 10 { // [08] index !=10 [PLAN_11 C1]
 		return

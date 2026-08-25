@@ -1,3 +1,5 @@
+//go:build retail
+
 package formats_test
 
 import (
@@ -22,23 +24,11 @@ func TestFormatCoverage(t *testing.T) {
 	if err := fileSystem.MountGameDirectory(root); err != nil {
 		t.Fatalf("mount: %v", err)
 	}
-	defer fileSystem.Close()
+	t.Cleanup(func() { _ = fileSystem.Close() })
 
 	records, err := fileSystem.Manifest(vfs.ManifestOptions{})
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	parsed := map[string]int{}
-	failures := map[string][]string{}
-	note := func(ext string, path string, err error) {
-		if err != nil {
-			if len(failures[ext]) < 10 {
-				failures[ext] = append(failures[ext], fmt.Sprintf("%s: %v", path, err))
-			}
-			return
-		}
-		parsed[ext]++
 	}
 
 	// palettes/guipal.pcx is a 1024-byte raw palette carrying a .pcx extension:
@@ -46,6 +36,7 @@ func TestFormatCoverage(t *testing.T) {
 	// It is content, not a parser defect.
 	notPCX := map[string]bool{"palettes/guipal.pcx": true}
 
+	byExt := map[string][]vfs.ManifestRecord{}
 	for _, record := range records {
 		if notPCX[record.LogicalPath] {
 			continue
@@ -58,54 +49,60 @@ func TestFormatCoverage(t *testing.T) {
 		default:
 			continue
 		}
-		data, err := fileSystem.ReadFileLimit(record.LogicalPath, 64<<20)
-		if err != nil {
-			note(ext, record.LogicalPath, err)
-			continue
-		}
-		switch ext {
-		case ".tdf", ".fbi", ".ota":
-			_, err = formats.ParseTDF(data)
-		case ".gui":
-			_, err = formats.LoadGUI(data)
-		case ".pal":
-			_, err = formats.LoadPAL(data)
-		case ".tnt":
-			_, err = formats.LoadTNT(data)
-		case ".3do":
-			_, err = formats.LoadThreeDO(data)
-		case ".gaf":
-			_, err = formats.LoadGAF(data)
-		case ".pcx":
-			_, err = formats.LoadPCX(data)
-		case ".fnt":
-			_, err = formats.LoadFNT(data)
-		case ".wav":
-			// [fmt wav]: two stock files are not RIFF — HONK.WAV is raw
-			// 8-bit mono PCM and SING.WAV uses the DIGI/HSHD/SDAT container.
-			// LoadAudio accepts all three containers as retail must.
-			_, err = formats.LoadAudio(data)
-		}
-		note(ext, record.LogicalPath, err)
+		byExt[ext] = append(byExt[ext], record)
 	}
 
-	exts := make([]string, 0, len(parsed)+len(failures))
-	seen := map[string]bool{}
-	for ext := range parsed {
-		if !seen[ext] {
-			exts, seen[ext] = append(exts, ext), true
-		}
-	}
-	for ext := range failures {
-		if !seen[ext] {
-			exts, seen[ext] = append(exts, ext), true
-		}
+	exts := make([]string, 0, len(byExt))
+	for ext := range byExt {
+		exts = append(exts, ext)
 	}
 	sort.Strings(exts)
 	for _, ext := range exts {
-		t.Logf("%-6s parsed=%d failed=%d", ext, parsed[ext], len(failures[ext]))
-		for _, failure := range failures[ext] {
-			t.Errorf("%s %s", ext, failure)
-		}
+		ext := ext
+		records := byExt[ext]
+		t.Run(ext, func(t *testing.T) {
+			t.Parallel()
+			parsed := 0
+			failures := make([]string, 0, 10)
+			for _, record := range records {
+				data, err := fileSystem.ReadFileLimit(record.LogicalPath, 64<<20)
+				if err == nil {
+					switch ext {
+					case ".tdf", ".fbi", ".ota":
+						_, err = formats.ParseTDF(data)
+					case ".gui":
+						_, err = formats.LoadGUI(data)
+					case ".pal":
+						_, err = formats.LoadPAL(data)
+					case ".tnt":
+						_, err = formats.LoadTNT(data)
+					case ".3do":
+						_, err = formats.LoadThreeDO(data)
+					case ".gaf":
+						_, err = formats.LoadGAF(data)
+					case ".pcx":
+						_, err = formats.LoadPCX(data)
+					case ".fnt":
+						_, err = formats.LoadFNT(data)
+					case ".wav":
+						// [fmt wav]: two stock files are not RIFF — HONK.WAV is raw
+						// 8-bit mono PCM and SING.WAV uses the DIGI/HSHD/SDAT container.
+						// LoadAudio accepts all three containers as retail must.
+						_, err = formats.LoadAudio(data)
+					}
+				}
+				if err != nil {
+					if len(failures) < 10 {
+						failures = append(failures, fmt.Sprintf("%s: %v", record.LogicalPath, err))
+					}
+					continue
+				}
+				parsed++
+			}
+			t.Logf("%-6s parsed=%d failed=%d", ext, parsed, len(failures))
+			for _, failure := range failures {
+				t.Errorf("%s %s", ext, failure)
+			}
+		})
 	}
 }

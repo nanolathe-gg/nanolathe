@@ -205,8 +205,10 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 			// XOffset/YOffset are anchor distances: a frame's top-left corner
 			// sits that many pixels before its anchor point. A subframe shares
 			// the parent anchor, so its position inside the parent is the
-			// parent's offset minus its own.
-			dx := int(frame.XOffset) - int(subframe.XOffset)
+			// parent's offset minus its own [fmt gaf] [03 §4.4] A25 established.
+			// Subframes may extend slightly outside the parent canvas (clip) [fmt gaf];
+			// later subframes overwrite earlier where opaque [fmt gaf][03 §4.4] A25.
+			dx := int(frame.XOffset) - int(subframe.XOffset) // [fmt gaf] A25
 			dy := int(frame.YOffset) - int(subframe.YOffset)
 			for sy := 0; sy < int(subframe.Height); sy++ {
 				dyPos := dy + sy

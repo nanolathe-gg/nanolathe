@@ -51,6 +51,11 @@ const (
 // illegal opcode kill path. Bad piece index (<0 or >=pieceCount) also kills
 // [P1-11] §2.4. Save blob size validation is statics*4+pieces*76+threads*164
 // with fatal vs skip branch TODO(question) [P1-11] §2.4.
+// Corrupt COB/save: header offset bounds-checked vs retail no-check —
+// Nanolathe rejects with diagnostic and fallback empty VM (I11 divergence)
+// [P2-03]. Cycle detection via visited set, queue overflow via diagnostic drop
+// and iteration limit 200, divide-by-zero via thread kill (not process #DE)
+// [P2-03][04 §4.3] C14 I11.
 // TODO(question): exact save blob abort vs skip for piece vs thread count
 // mismatch remains open [P1-11]; TODO(question): Killed variant cell
 // unassigned and persistence [P1-11]; TODO(question): SetSpeed domain
@@ -80,14 +85,15 @@ type VM struct {
 	Threads [8]Thread
 	Pieces  []model.PieceState // len == len(Program.Pieces) [04 §4.1]
 
-	prog       *Program
-	statics    []int32
-	anims      []pieceAnim // per-piece per-axis animation state [04 §4.6]
-	pieceFlags []uint8     // per-piece draw/cache/shade/shadow flags [04 §4.3]
-	simRng     *rng.Simulation
-	portFuncs  map[Port]func(args []int32) int32   // minimal hook for WU-06-7; nil means default 0 [04 §4.4]
-	sfxSink    SFXSink                             // presentation-only sink for emit-sfx [GAP T15] C19; nil discards
-	sfxVisible func(piece int, sfxType int32) bool // visibility gate for emit-sfx [GAP T15] C19; nil means always visible in tests
+	prog        *Program
+	statics     []int32
+	anims       []pieceAnim // per-piece per-axis animation state [04 §4.6]
+	pieceFlags  []uint8     // per-piece draw/cache/shade/shadow flags [04 §4.3]
+	simRng      *rng.Simulation
+	portFuncs   map[Port]func(args []int32) int32   // minimal hook for WU-06-7; nil means default 0 [04 §4.4]
+	sfxSink     SFXSink                             // presentation-only sink for emit-sfx [GAP T15] C19; nil discards
+	sfxVisible  func(piece int, sfxType int32) bool // visibility gate for emit-sfx [GAP T15] C19; nil means always visible in tests
+	diagnostics []string                            // [P2-03] fallback diagnostics (divide, overflow, corrupt) not fatal
 }
 
 // pieceAnim holds the per-piece per-axis interpolation lanes [04 §4.6].
@@ -250,6 +256,22 @@ func (v *VM) SetSFXSink(s SFXSink) { v.sfxSink = s }
 // gate is called with (piece, sfxType) and must return true for the effect
 // to be emitted.
 func (v *VM) SetSFXVisible(fn func(piece int, sfxType int32) bool) { v.sfxVisible = fn }
+
+// Diagnostics returns fallback diagnostics collected for malformed COB paths
+// [P2-03] (divide, corrupt save, stack overflow guard). Not fatal.
+func (v *VM) Diagnostics() []string {
+	if v == nil {
+		return nil
+	}
+	return append([]string(nil), v.diagnostics...)
+}
+
+// ClearDiagnostics drops fallback diagnostics [P2-03].
+func (v *VM) ClearDiagnostics() {
+	if v != nil {
+		v.diagnostics = nil
+	}
+}
 
 // Start starts script at prog word index with args asynchronously [04 §4.2] [04 §4.3].
 // It allocates the lowest clear thread slot [01 §6.1] C13; if no slot or the
@@ -1130,11 +1152,16 @@ func (v *VM) runThread(idx int) {
 		case 0x10034000: // divide unguarded [04 §4.3] C14
 			b, _ := t.stackPop()
 			a, _ := t.stackPop()
-			if b == 0 {
-				panic("cob: divide by zero") // [04 §4.3] C14 unguarded
-			}
-			if a == -2147483648 && b == -1 {
-				panic("cob: divide overflow INT_MIN/-1") // [04 §4.3] C14
+			// [P2-03][04 §4.3] C14 I11: retail raises #DE (process death) for
+			// divisor 0 or INT_MIN/-1 with no guard. Nanolathe keeps malformed
+			// as explicit fallback, not crash: kill the thread and diagnostic,
+			// do not push — matches kill-path stack-leak semantics (no push).
+			// TODO(question): whether retail would have pushed indefinite
+			// 0x80000000 vs killed immediately remains open.
+			if b == 0 || (a == -2147483648 && b == -1) {
+				v.diagnostics = append(v.diagnostics, "cob: divide by zero or overflow") // [P2-03] fallback diagnostic
+				v.killThread(idx)
+				return
 			}
 			if t.SP >= 10 {
 				v.killThread(idx)

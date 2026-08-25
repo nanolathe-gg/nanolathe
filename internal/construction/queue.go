@@ -48,24 +48,10 @@ var (
 	ErrLimit        = errors.New(ErrLimitMessage) // pool/per-def limit [P0-15][P0-16] 300-tick retry
 )
 
-// LimitChecker is the hook for WU-08-5 nanoframe allocation per-def limit check [05 "Unit creation and limits"] C23.
-// It is called ONLY at allocation time (factory lifecycle state 2), not at queue time —
-// queued factory products hold no reservation: a full queue simply fails each allocation
-// attempt and retries [05 "Unit creation and limits"].
-// Return true if creation allowed, false if limit exhausted (or pool full).
-// When false, producer prints ErrLimitMessage and retries in 300 ticks [05].
-// Default nil means unlimited (allow all) — stock defaults sentinel -1 unlimited [05].
-// WU-08-5 sets this to enforce counts within owning player's slice only [C23].
-var LimitChecker func(factory *units.Unit, defKey string) bool
-
-// CheckLimit reports whether nanoframe allocation for defKey on factory is allowed
-// via LimitChecker [C23]. Nil checker means allowed.
-func CheckLimit(factory *units.Unit, defKey string) bool {
-	if LimitChecker == nil {
-		return true
-	}
-	return LimitChecker(factory, defKey)
-}
+// P0-I16: LimitChecker moved onto Service as authoritative session-owned hook.
+// The previous package var LimitChecker is removed; per-service Service.LimitChecker
+// is used at allocation time (factory state 2) with no queue reservation [C23].
+// See Service.LimitChecker and Service.CheckLimit.
 
 // ExhaustionError returns the verbatim limit exhaustion error [05 "Unit creation and limits"].
 func ExhaustionError() error { return errors.New(ErrLimitMessage) }

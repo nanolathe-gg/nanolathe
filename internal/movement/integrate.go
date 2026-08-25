@@ -83,8 +83,8 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 		profiles:   make(map[pool.Handle]Profile),
 	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
-	// Use the global base (65536) unless overridden; gate2 uses default.
-	sched.SetBase(path.GetBase())
+	// Use DefaultBase unless overridden [P0-I16]; no longer reads mutable global.
+	sched.SetBase(path.DefaultBase)
 	s.Scheduler = sched
 	return s
 }

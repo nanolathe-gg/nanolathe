@@ -45,32 +45,65 @@ type ScoreInputs struct {
 	ProdMetal  float32
 }
 
-// AICatalog is the content catalog used to enumerate candidate build options for a builder.
-// Set by session init (WU-14). When nil, Select falls back to CandidateSource or to an empty list.
-// TODO(question): wiring of catalog into AI is not closed in [08]; this indirection keeps selection pure for tests.
-var AICatalog *content.Catalog
+// P0-I16: Authoritative hooks moved onto Manager. Immutable tables remain package-level.
+// The previous package globals AICatalog, CandidateSource, MissionGateFlag, Gate241Candidates
+// are now fields on Manager (CandidateSource, Catalog, MissionGateFlag, GateCandidates).
+// hasGate241 now takes per-manager state [P0-I16].
 
-// CandidateSource overrides build-option enumeration for tests. When non-nil it is called instead of AICatalog.
-var CandidateSource func(builder *units.Unit) []string
+func getCandidateSource(m Selector) func(builder *units.Unit) []string {
+	if m == nil {
+		return nil
+	}
+	if cs, ok := m.(interface {
+		GetCandidateSource() func(*units.Unit) []string
+	}); ok {
+		return cs.GetCandidateSource()
+	}
+	return nil
+}
+
+func getCatalog(m Selector) *content.Catalog {
+	if m == nil {
+		return nil
+	}
+	if gc, ok := m.(interface{ GetCatalog() *content.Catalog }); ok {
+		return gc.GetCatalog()
+	}
+	return nil
+}
+
+func getGateFlag(m Selector) int32 {
+	if m == nil {
+		return 0
+	}
+	if gf, ok := m.(interface{ GetMissionGateFlag() int32 }); ok {
+		return gf.GetMissionGateFlag()
+	}
+	return 0
+}
+
+func getGateCandidates(m Selector) map[string]struct{} {
+	if m == nil {
+		return nil
+	}
+	if gc, ok := m.(interface{ GetGateCandidates() map[string]struct{} }); ok {
+		return gc.GetGateCandidates()
+	}
+	return nil
+}
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// 0 = inactive (retail non-mission), 1 = active. Used with Gate241Candidates below.
-var MissionGateFlag int32
-
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-var Gate241Candidates map[string]struct{}
-
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(T25): exact definition field identity and mission-mode interaction is blocked; placeholder logic: MissionGateFlag==1 && key in Gate241Candidates.
-func hasGate241(candidateKey string) bool {
-	if MissionGateFlag != 1 {
+// TODO(T25): exact definition field identity and mission-mode interaction is blocked; placeholder logic: flag==1 && key in candidates [P0-I16].
+func hasGate241(candidateKey string, m Selector) bool {
+	flag := getGateFlag(m)
+	if flag != 1 {
 		return false
 	}
-	if Gate241Candidates == nil {
+	cands := getGateCandidates(m)
+	if cands == nil {
 		return false
 	}
-	_, ok := Gate241Candidates[canonicalKey(candidateKey)]
+	_, ok := cands[canonicalKey(candidateKey)]
 	return ok
 }
 
@@ -203,25 +236,27 @@ func EnergyRaw(in ScoreInputs) int32 { return energyRaw(in) }
 // MetalRaw is an exported accessor for tests.
 func MetalRaw(in ScoreInputs) int32 { return metalRaw(in) }
 
-func buildOptionsForBuilder(builder *units.Unit) []string {
-	if CandidateSource != nil {
-		out := CandidateSource(builder)
+func buildOptionsForBuilder(m Selector, builder *units.Unit) []string {
+	cs := getCandidateSource(m)
+	if cs != nil {
+		out := cs(builder)
 		cp := make([]string, len(out))
 		copy(cp, out)
 		return cp
 	}
-	if AICatalog != nil && AICatalog.BuildMenus != nil && builder != nil && builder.Def != nil {
+	cat := getCatalog(m)
+	if cat != nil && cat.BuildMenus != nil && builder != nil && builder.Def != nil {
 		key := canonicalKey(builder.Def.UnitName)
 		if key == "" {
 			key = canonicalKey(builder.Def.CanonicalKey)
 		}
-		if page, ok := AICatalog.BuildMenus[key]; ok && page != nil {
+		if page, ok := cat.BuildMenus[key]; ok && page != nil {
 			out := make([]string, len(page.Buttons))
 			copy(out, page.Buttons)
 			return out
 		}
 		if builder.Def.CanonicalKey != "" {
-			if page, ok := AICatalog.BuildMenus[builder.Def.CanonicalKey]; ok && page != nil {
+			if page, ok := cat.BuildMenus[builder.Def.CanonicalKey]; ok && page != nil {
 				out := make([]string, len(page.Buttons))
 				copy(out, page.Buttons)
 				return out
@@ -288,7 +323,7 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 			continue
 		}
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		if hasGate241(ck) {
+		if hasGate241(ck, m) {
 			continue
 		}
 		// C5: profile limit (count < limit or -1) [08] [PLAN 11 C5]
@@ -356,9 +391,9 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 }
 
 // Select is the public entry point per [PLAN 11 Public API] enumerated via build-option IDs.
-// It resolves candidates via AICatalog/ CandidateSource and then delegates to SelectWithCandidates.
+// It resolves candidates via Manager.Catalog/ CandidateSource and then delegates to SelectWithCandidates [P0-I16].
 // The Selector interface decouples from the concrete Manager type while manager.go lands concurrently.
 func Select(m Selector, builder *units.Unit, econ *economy.Service) (Candidate, bool) {
-	cands := buildOptionsForBuilder(builder)
+	cands := buildOptionsForBuilder(m, builder)
 	return SelectWithCandidates(m, builder, econ, cands)
 }

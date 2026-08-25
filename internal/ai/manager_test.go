@@ -500,16 +500,12 @@ func TestC12OnlyOrdinaryPaths(t *testing.T) {
 		MaxDamage:        100,
 	}
 	_ = def2
-	// Need to bypass catalog BuildMenus; use CandidateSource hook from selection.go
-	origSource := CandidateSource
-	defer func() { CandidateSource = origSource }()
-	CandidateSource = func(b *units.Unit) []string { return []string{"armfav"} }
-	// Enrich profile to allow armfav
+	// Enrich profile to allow armfav [P0-I16: per-manager CandidateSource]
 	prof := &Profile{
 		Weight: map[string]int32{"armfav": 100},
 		Limit:  map[string]int32{},
 	}
-	m := &Manager{Player: 1, Profile: prof}
+	m := &Manager{Player: 1, Profile: prof, CandidateSource: func(b *units.Unit) []string { return []string{"armfav"} }}
 	m.Strategic.ClassVectors = map[string]ClassVector{"armfav": {C0: 40, C1: 30, C2: 30}}
 	m.Strategic.Counts = map[string]int32{}
 	// Create builder alive with Remaining 0 (built)
@@ -551,10 +547,10 @@ func TestC12OnlyOrdinaryPaths(t *testing.T) {
 	if !regexp.MustCompile(`Place\(m,`).Match(data) {
 		t.Fatalf("manager.go should route through Place before QueueBuild [PLAN_11 C8+C12]")
 	}
-	// Ordinary QueueBuild path is inside placement.go via queueBuild var [PLAN_11 C12]
+	// Ordinary QueueBuild path is inside placement.go via per-manager QueueBuild [P0-I16][PLAN_11 C12]
 	pdata, _ := os.ReadFile("placement.go")
-	if !regexp.MustCompile(`queueBuild`).Match(pdata) {
-		t.Fatalf("placement.go should issue queueBuild via ordinary path [PLAN_11 C12]")
+	if !regexp.MustCompile(`QueueBuild`).Match(pdata) {
+		t.Fatalf("placement.go should issue QueueBuild via ordinary path [P0-I16][PLAN_11 C12]")
 	}
 }
 
@@ -623,38 +619,22 @@ func TestManagerSelectPlaceQueueChain(t *testing.T) {
 			}
 			mgr.Deadlines[kind] = 0
 
-			origAICatalog := AICatalog
-			origSource := CandidateSource
-			origQueue := queueBuild
-			origGateFlag := MissionGateFlag
-			origGateCandidates := Gate241Candidates
-			defer func() {
-				AICatalog = origAICatalog
-				CandidateSource = origSource
-				queueBuild = origQueue
-				MissionGateFlag = origGateFlag
-				Gate241Candidates = origGateCandidates
-			}()
-			AICatalog = cat
-			CandidateSource = nil
-			MissionGateFlag = 0
-			Gate241Candidates = nil
+			// P0-I16: per-manager hooks
+			mgr.SetCatalog(cat)
+			mgr.CandidateSource = nil
+			mgr.MissionGateFlag = 0
+			mgr.GateCandidates = nil
+			// Save original QueueBuild for spy
+			origQueueBuild := mgr.QueueBuild
+			if origQueueBuild == nil {
+				origQueueBuild = mgr.getQueueBuild()
+			}
 
 			var calls []string
-			// Spy Select via CandidateSource not directly; but Select's candidate enumeration
-			// goes through AICatalog BuildMenus, which we already assert returns chainfavee.
-			// To observe Select invocation we wrap CandidateSource to record if used;
-			// since AICatalog is set, Select will use AICatalog path, not CandidateSource.
-			// Instead we record Select by setting CandidateSource to a wrapper that would
-			// be called only if AICatalog missing. For this test we instrument via
-			// queueBuild for Place and infer Select by checking that queue product matches
-			// the candidate Select would pick (chainfavee) and that origin moved.
-			// For explicit Select spy, we temporarily clear AICatalog and use CandidateSource.
 			useSourceSpy := false
 			if kind == TaskConstruction {
-				// Use source spy for construction to prove Select path.
-				AICatalog = nil
-				CandidateSource = func(b *units.Unit) []string {
+				mgr.SetCatalog(nil)
+				mgr.CandidateSource = func(b *units.Unit) []string {
 					calls = append(calls, "select")
 					return []string{"chainfavee"}
 				}
@@ -662,11 +642,15 @@ func TestManagerSelectPlaceQueueChain(t *testing.T) {
 			}
 			placeCalled := false
 			var placeDef string
-			queueBuild = func(f *units.Unit, defKey string, count int) error {
+			mgr.QueueBuild = func(f *units.Unit, defKey string, count int) error {
 				calls = append(calls, "place")
 				placeCalled = true
 				placeDef = defKey
-				return origQueue(f, defKey, count)
+				if origQueueBuild != nil {
+					return origQueueBuild(f, defKey, count)
+				}
+				// fallback to construction
+				return mgr.getQueueBuild()(f, defKey, count)
 			}
 			// If we used CandidateSource spy, Select will be observed as "select";
 			// Place will be observed as "place" via queueBuild var.
@@ -765,17 +749,16 @@ func TestManagerPlaceFailureRetry(t *testing.T) {
 		mgr.Deadlines[k] = 1000
 	}
 	mgr.Deadlines[TaskConstruction] = 0
-	origAICatalog := AICatalog
-	origQueue := queueBuild
-	defer func() {
-		AICatalog = origAICatalog
-		queueBuild = origQueue
-	}()
-	AICatalog = cat
+	// P0-I16 per-manager
+	mgr.SetCatalog(cat)
 	calls := 0
-	queueBuild = func(f *units.Unit, defKey string, count int) error {
+	origQueue2 := mgr.QueueBuild
+	mgr.QueueBuild = func(f *units.Unit, defKey string, count int) error {
 		calls++
-		return origQueue(f, defKey, count)
+		if origQueue2 != nil {
+			return origQueue2(f, defKey, count)
+		}
+		return mgr.getQueueBuild()(f, defKey, count)
 	}
 	rng.SeedGlobal(1, 0)
 	mgr.Tick(0, w, &econ)

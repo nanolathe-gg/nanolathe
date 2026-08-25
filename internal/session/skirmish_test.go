@@ -56,13 +56,13 @@ func TestSkirmishDefaults(t *testing.T) {
 	fs := fsFromMapSkirmish(t, map[string]string{"maps/dummy.ota": otaMinimal})
 	for _, bad := range []int{1, 11} {
 		cfg := SkirmishConfig{MapName: "dummy", NumPlayers: bad}
-		if _, err := NewSkirmishWithFS(fs, nil, cfg); err != nil {
+		if _, err := NewSkirmishForTest(fs, nil, cfg); err != nil {
 			t.Fatalf("NewSkirmish NumPlayers %d should not error after P0-05 no-op (got %v)", bad, err)
 		}
 	}
 	for _, good := range []int{2, 10} {
 		cfg := SkirmishConfig{MapName: "dummy", NumPlayers: good}
-		if _, err := NewSkirmishWithFS(fs, nil, cfg); err != nil {
+		if _, err := NewSkirmishForTest(fs, nil, cfg); err != nil {
 			t.Fatalf("NewSkirmish NumPlayers %d should not error: %v", good, err)
 		}
 	}
@@ -72,6 +72,26 @@ func TestSkirmishDefaults(t *testing.T) {
 	cfg.Players[0].Nickname = "12345678901234567890" // 20 chars -> truncate to 16 [02 §3] 17-byte buffer
 	cfg.Players[2].Nickname = "short"
 	cfg.ApplyDefaults()
+	if cfg.Difficulty != SkirmishDefaultDifficulty || cfg.Location != SkirmishDefaultLocation ||
+		cfg.CommanderDeath != SkirmishDefaultCommanderDeath || cfg.Mapping != SkirmishDefaultMapping ||
+		cfg.LineOfSight != SkirmishDefaultLineOfSight || cfg.LOSType != SkirmishDefaultLOSType {
+		t.Fatalf("skirmish scalar defaults want difficulty/location/death/mapping/los/lostype %d/%d/%d/%d/%d/%d got %d/%d/%d/%d/%d/%d",
+			SkirmishDefaultDifficulty, SkirmishDefaultLocation, SkirmishDefaultCommanderDeath,
+			SkirmishDefaultMapping, SkirmishDefaultLineOfSight, SkirmishDefaultLOSType,
+			cfg.Difficulty, cfg.Location, cfg.CommanderDeath, cfg.Mapping, cfg.LineOfSight, cfg.LOSType)
+	}
+	// Easy/randomized/off are valid menu choices and must survive the second
+	// ApplyDefaults performed by the session constructor.
+	cfg.Difficulty = 0
+	cfg.Location = 0
+	cfg.CommanderDeath = 0
+	cfg.Mapping = 0
+	cfg.LineOfSight = 0
+	cfg.LOSType = 0
+	cfg.ApplyDefaults()
+	if cfg.Difficulty != 0 || cfg.Location != 0 || cfg.CommanderDeath != 0 || cfg.Mapping != 0 || cfg.LineOfSight != 0 || cfg.LOSType != 0 {
+		t.Fatalf("explicit zero-valued skirmish rules were replaced by defaults: %+v", cfg)
+	}
 	for i := 0; i < 4; i++ {
 		p := cfg.Players[i]
 		if p.Metal != 1000 {
@@ -113,9 +133,9 @@ func TestSkirmishDefaults(t *testing.T) {
 	if cfg2.Players[1].Controller != 2 {
 		t.Fatalf("computer slot per config controller 2")
 	}
-	// Validate computer slots via session economy mapping
+	// Validate computer slots via session economy mapping (fixture)
 	fs2 := fsFromMapSkirmish(t, map[string]string{"maps/dummy.ota": otaMinimal})
-	s, err := NewSkirmishWithFS(fs2, &content.Catalog{Units: map[string]*content.UnitDef{"armcom": {UnitName: "armcom", MaxDamage: 100}}, Maps: map[string]*content.MapHeader{}, Sides: []*content.SideDef{{Name: "ARM", Commander: "armcom"}, {Name: "CORE", Commander: "corcom"}}}, cfg2)
+	s, err := NewSkirmishForTest(fs2, &content.Catalog{Units: map[string]*content.UnitDef{"armcom": {UnitName: "armcom", MaxDamage: 100}}, Maps: map[string]*content.MapHeader{}, Sides: []*content.SideDef{{Name: "ARM", Commander: "armcom"}, {Name: "CORE", Commander: "corcom"}}}, cfg2)
 	if err != nil {
 		t.Fatalf("NewSkirmish computer slots: %v", err)
 	}
@@ -124,6 +144,10 @@ func TestSkirmishDefaults(t *testing.T) {
 	}
 	if s.Econ.Players[1].ControllerState != 2 {
 		t.Fatalf("computer economy ControllerState 2 want 2 got %d", s.Econ.Players[1].ControllerState)
+	}
+	if s.Skirmish.MapName != cfg2.MapName || s.Skirmish.NumPlayers != cfg2.NumPlayers ||
+		s.Skirmish.Players[1].Controller != cfg2.Players[1].Controller {
+		t.Fatalf("session did not retain lobby config: %+v", s.Skirmish)
 	}
 }
 
@@ -210,12 +234,12 @@ func TestSkirmishWindSinglePath(t *testing.T) {
 		Units: map[string]*content.UnitDef{"armcom": {UnitName: "armcom", MaxDamage: 100}},
 	}
 	seed := uint32(0x1234)
-	// Mission path draws
+	// Mission path draws (fixture)
 	rng.SeedGlobal(99, seed)
 	before := rng.Global.Crt.Draws()
-	sM, err := NewMissionWithFS(fsMission, cat, "wind.ota", 0)
+	sM, err := NewMissionForTest(fsMission, cat, "wind.ota", 0)
 	if err != nil {
-		t.Fatalf("NewMissionWithFS: %v", err)
+		t.Fatalf("NewMissionForTest: %v", err)
 	}
 	afterMission := rng.Global.Crt.Draws()
 	missionDraws := afterMission - before
@@ -227,7 +251,7 @@ func TestSkirmishWindSinglePath(t *testing.T) {
 	before2 := rng.Global.Crt.Draws()
 	cfg := SkirmishConfig{MapName: "wind", NumPlayers: 2}
 	// Ensure skirmish map uses same OTA wind bounds 15/35
-	sS, err := NewSkirmishWithFS(fsSkirmish, cat, cfg)
+	sS, err := NewSkirmishForTest(fsSkirmish, cat, cfg)
 	if err != nil {
 		t.Fatalf("NewSkirmishWithFS: %v", err)
 	}
@@ -256,7 +280,7 @@ func TestSkirmishWindSinglePath(t *testing.T) {
 	_ = rng.NewCRT(456)
 	// Ensure no second draw path: calling NewSkirmish again with same seed gives same result (deterministic)
 	rng.SeedGlobal(99, seed)
-	sS2, err := NewSkirmishWithFS(fsFromMapSkirmish(t, map[string]string{"maps/wind.ota": otaText}), cat, cfg)
+	sS2, err := NewSkirmishForTest(fsFromMapSkirmish(t, map[string]string{"maps/wind.ota": otaText}), cat, cfg)
 	if err != nil {
 		t.Fatalf("second skirmish: %v", err)
 	}

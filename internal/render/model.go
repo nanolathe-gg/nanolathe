@@ -22,8 +22,9 @@ import (
 const ModelOrientationThreshold = 7 // [03 §5.2] C13
 
 // ModelShadeMidRow is the placeholder SHD row until the selection formula is traced [03 §4.3].
-// TODO(question): SHD row selection formula not traced [03 §4.3]; use identity mid row 16 [PLAN_13 Explicit unknowns].
-const ModelShadeMidRow = 16 // [03 §4.3]
+// TODO(question): SHD row selection formula not traced [03 §4.3]; use identity mid row 16 [PLAN_13 Explicit unknowns] (A23).
+// Canonical definition lives in shade.go SHDMidRow; this alias preserves API.
+const ModelShadeMidRow = SHDMidRow // [03 §4.3] A23 alias
 
 // halfCircle is the authored model-facing offset for projectile models [03 §5.2].
 // Projectile yaw in Y and pitch in X each carry -32768 (-32768 == +32768 mod 65536 = 0x8000) [03 §5.2].

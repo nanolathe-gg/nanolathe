@@ -25,6 +25,7 @@ type placementManager interface {
 	getSurfaceMetal() int32
 	isExtractor(defKey string) bool
 	getFactory() *units.Unit
+	getQueueBuild() func(factory *units.Unit, defKey string, count int) error
 }
 
 // Implement placementManager for *Manager.
@@ -77,10 +78,12 @@ func (m *Manager) getFactory() *units.Unit {
 	return m.Factory
 }
 
-// queueBuild is the ordinary construction path [PLAN_11 C12].
-// It is a variable so tests can spy on it without needing a full units.World
-// with an order queue. Default is construction.QueueBuild.
-var queueBuild = construction.QueueBuild
+func (m *Manager) getQueueBuild() func(factory *units.Unit, defKey string, count int) error {
+	if m != nil && m.QueueBuild != nil {
+		return m.QueueBuild
+	}
+	return construction.QueueBuild
+}
 
 // stepTowardCenter moves the search origin toward the strategic center using the
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -341,7 +344,7 @@ func Place(m *Manager, defKey string, w *world.Terrain) (numeric.Fixed, numeric.
 					s.Radius = 0
 				}
 				if fac := m.getFactory(); fac != nil {
-					_ = queueBuild(fac, defKey, 1)
+					_ = m.getQueueBuild()(fac, defKey, 1)
 				}
 				return newOriginX, newOriginZ, true
 			}
@@ -355,7 +358,7 @@ func Place(m *Manager, defKey string, w *world.Terrain) (numeric.Fixed, numeric.
 				s.Radius = 0
 			}
 			if fac := m.getFactory(); fac != nil {
-				_ = queueBuild(fac, defKey, 1)
+				_ = m.getQueueBuild()(fac, defKey, 1)
 			}
 			return newOriginX, newOriginZ, true
 		}
@@ -369,7 +372,7 @@ func Place(m *Manager, defKey string, w *world.Terrain) (numeric.Fixed, numeric.
 			s.Radius = 0
 		}
 		if fac := m.getFactory(); fac != nil {
-			_ = queueBuild(fac, defKey, 1)
+			_ = m.getQueueBuild()(fac, defKey, 1)
 		}
 		return newOriginX, newOriginZ, true
 	}

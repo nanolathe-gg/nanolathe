@@ -554,6 +554,23 @@ Skirmish preferences include:
 - mapping rule;
 - line-of-sight enable and type.
 
+The installed scalar lobby defaults are difficulty 1 (Medium), location 1
+(pre-determined commander positions), commander-death 1 (commander death ends
+the game), mapping 1 (terrain is blacked out until explored), line-of-sight 1,
+and line-of-sight type 1 (terrain elevations affect LOS). Difficulty, location,
+commander death, and mapping each toggle/cycle through their ordinary menu
+alternatives. The retail `LineOfSight` callback is a three-state control: it
+cycles from elevation-aware LOS (`LineOfSight=1`, `LineOfSightType=1`), to
+elevation-agnostic LOS (`1,0`), to all mapped terrain visible
+(`LineOfSight=0`, `LineOfSightType=1`), then back to the default. These defaults
+are separate from the per-slot defaults below.
+
+The retail Energy and Metal lobby buttons adjust the selected slot by 500.
+Decrementing floors at 200; incrementing caps at 10000, with the preserved
+callback quirk that an increment from 200 would produce 700 and is immediately
+rewritten to 500. These are setup-time values, before battle-entry resources
+are granted.
+
 The front end builds ten-slot player state from these values and validates it
 against the selected map/schema. Computer-controlled slots use distinct player
 state values that later tick code recognizes.

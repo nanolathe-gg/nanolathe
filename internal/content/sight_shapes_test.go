@@ -1,3 +1,5 @@
+//go:build retail
+
 package content
 
 import (

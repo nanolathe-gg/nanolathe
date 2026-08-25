@@ -332,11 +332,8 @@ func TestNanoframeCreationValues(t *testing.T) {
 	q3.Push(bid, orders.Node{Param1: factoryProductID("armflash"), Param2: 1, Phase: uint8(State2)})
 	head3 := q3.Primary()[0]
 	head3.Phase = uint8(State2)
-	// Set LimitChecker to refuse
-	orig := LimitChecker
-	LimitChecker = func(f *units.Unit, key string) bool { return false }
-	defer func() { LimitChecker = orig }()
 	svc3 := NewService(nil, cat2, w3, &economy.Service{})
+	svc3.LimitChecker = func(f *units.Unit, key string) bool { return false }
 	svc3.Pump(factory3, 300)
 	if len(svc3.Messages()) == 0 || svc3.Messages()[len(svc3.Messages())-1] != "Unable to create any more units" {
 		t.Fatalf("expected verbatim Unable to create any more units, got %v", svc3.Messages())

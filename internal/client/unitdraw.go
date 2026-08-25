@@ -334,3 +334,25 @@ func (c *Client) UIBlit(f *formats.GAFFrame, x, y int) {
 		}
 	}
 }
+
+// UIBlitPCX stamps a decoded PCX image into the indexed framebuffer at
+// (x, y), clipped. PCX pixels are opaque indices into the active palette
+// [fmt pcx]. Presentation only [I6].
+func (c *Client) UIBlitPCX(p *formats.PCX, x, y int) {
+	if p == nil {
+		return
+	}
+	for row := 0; row < int(p.Height); row++ {
+		py := y + row
+		if py < 0 || py >= c.height {
+			continue
+		}
+		for col := 0; col < int(p.Width); col++ {
+			px := x + col
+			if px < 0 || px >= c.width {
+				continue
+			}
+			c.indexed[py*c.width+px] = p.Pixels[row*int(p.Width)+col]
+		}
+	}
+}

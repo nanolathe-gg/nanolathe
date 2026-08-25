@@ -11,14 +11,22 @@ import (
 )
 
 type testSelector struct {
-	player    uint8
-	profile   *Profile
-	strategic *Strategic
+	player          uint8
+	profile         *Profile
+	strategic       *Strategic
+	catalog         *content.Catalog
+	candidateSource func(*units.Unit) []string
+	gateFlag        int32
+	gateCandidates  map[string]struct{}
 }
 
-func (s *testSelector) GetPlayer() uint8         { return s.player }
-func (s *testSelector) GetProfile() *Profile     { return s.profile }
-func (s *testSelector) GetStrategic() *Strategic { return s.strategic }
+func (s *testSelector) GetPlayer() uint8                               { return s.player }
+func (s *testSelector) GetProfile() *Profile                           { return s.profile }
+func (s *testSelector) GetStrategic() *Strategic                       { return s.strategic }
+func (s *testSelector) GetCandidateSource() func(*units.Unit) []string { return s.candidateSource }
+func (s *testSelector) GetCatalog() *content.Catalog                   { return s.catalog }
+func (s *testSelector) GetMissionGateFlag() int32                      { return s.gateFlag }
+func (s *testSelector) GetGateCandidates() map[string]struct{}         { return s.gateCandidates }
 
 func testBuilder(defKey string) *units.Unit {
 	def := &content.UnitDef{
@@ -257,23 +265,22 @@ func TestGates(t *testing.T) {
 		t.Fatalf("self gate: should reject own definition")
 	}
 
-	// Opaque 241 bit5 gate TODO(T25) [PLAN 11 C5]
-	// When MissionGateFlag==1 and candidate in Gate241Candidates, gated
-	MissionGateFlag = 1
-	Gate241Candidates = map[string]struct{}{"corfav": {}}
-	defer func() { MissionGateFlag = 0; Gate241Candidates = nil }()
+	// Opaque 241 bit5 gate TODO(T25) [PLAN 11 C5] [P0-I16: per-selector]
+	sel.gateFlag = 1
+	sel.gateCandidates = map[string]struct{}{"corfav": {}}
 	rng.SeedGlobal(1, 0)
 	if _, ok := SelectWithCandidates(sel, builder, econOK, []string{"corfav"}); ok {
-		t.Fatalf("241 gate: should reject when global flag 1 and bit set")
+		t.Fatalf("241 gate: should reject when flag 1 and bit set [P0-I16]")
 	}
 	// Flag 0 => passes
-	MissionGateFlag = 0
+	sel.gateFlag = 0
+	sel.gateCandidates = nil
 	rng.SeedGlobal(1, 0)
 	if _, ok := SelectWithCandidates(sel, builder, econOK, []string{"corfav"}); !ok {
-		t.Fatalf("241 gate: flag 0 should pass")
+		t.Fatalf("241 gate: flag 0 should pass [P0-I16]")
 	}
-	MissionGateFlag = 0
-	Gate241Candidates = nil
+	sel.gateFlag = 0
+	sel.gateCandidates = nil
 }
 
 // TestFloat32Narrowing locks that energyRaw/metalRaw are evaluated in float32 with truncation, not float64 narrowing [PLAN 11 C6] [INVARIANTS I2].

@@ -11,22 +11,23 @@ import (
 // TODO(question): per-side diplomacy byte on acting unit's definition indexed by target side [04 §3.4].
 // Retail stores a per-side diplomacy byte on the definition; content.UnitDef lacks such a field.
 // Modeling as an unexported resolver input preserves the call site without inventing catalog surface.
-var hostilityOverride func(actor *units.Unit, target *units.Unit) bool
+// P0-I16: hostility and target lookup moved onto Queue.Hostility/Lookup; package globals removed.
 
-// SetHostilityFunc overrides hostility testing for fixtures [04 §3.4] TODO(question).
-func SetHostilityFunc(fn func(*units.Unit, *units.Unit) bool) { hostilityOverride = fn }
-
-// targetLookup is the narrow injection point for ward/target resolution used by
-// both chase and guard handlers [04 §3.5]. Keep exactly two injection points:
-// SetHostilityFunc and BindTargetLookup.
-var targetLookup func(pool.Handle) *units.Unit
-
-// BindTargetLookup installs the target lookup used by chase and guard ward resolution [04 §3.5].
-func BindTargetLookup(fn func(pool.Handle) *units.Unit) { targetLookup = fn }
+func getHostility(actor *units.Unit) func(*units.Unit, *units.Unit) bool {
+	if actor != nil {
+		if q := QueueForUnit(actor); q != nil && q.Hostility != nil {
+			return q.Hostility
+		}
+	}
+	return nil
+}
 
 func isHostile(actor, target *units.Unit) bool {
-	if hostilityOverride != nil {
-		return hostilityOverride(actor, target)
+	if fn := getHostility(actor); fn != nil {
+		return fn(actor, target)
+	}
+	if legacyHostility != nil {
+		return legacyHostility(actor, target)
 	}
 	if actor == nil || target == nil {
 		return false
@@ -36,6 +37,21 @@ func isHostile(actor, target *units.Unit) bool {
 	}
 	return actor.Owner != target.Owner
 }
+
+// Legacy setters retained for test compatibility but now operate per-queue when possible [P0-I16].
+// Prefer setting QueueForUnit(actor).Hostility directly or via Service.
+// These legacy setters set a fallback on a hidden default queue used only when actor's queue has no Hostility.
+var legacyHostility func(*units.Unit, *units.Unit) bool
+var legacyLookup func(pool.Handle) *units.Unit
+
+// SetHostilityFunc overrides hostility testing for fixtures [04 §3.4] TODO(question) [P0-I16 legacy].
+func SetHostilityFunc(fn func(*units.Unit, *units.Unit) bool) { legacyHostility = fn }
+
+// BindTargetLookup installs the target lookup used by chase and guard ward resolution [04 §3.5] [P0-I16 legacy].
+func BindTargetLookup(fn func(pool.Handle) *units.Unit) { legacyLookup = fn }
+
+func getLegacyHostility() func(*units.Unit, *units.Unit) bool { return legacyHostility }
+func getLegacyLookup() func(pool.Handle) *units.Unit          { return legacyLookup }
 
 // Capability gates map to definition flags [04 §2.2]/[04 §2.4] with TODO(T25) opaque handling.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -550,8 +566,15 @@ func attackChaseHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 	case 2: // combat-maneuver orbit cycle [04 §3.5] eight-state substate 0..8
 		standoff := stubStandoffWorld
 		var tgt *units.Unit
-		if targetLookup != nil {
-			tgt = targetLookup(n.Target)
+		// P0-I16: per-queue lookup, not package global
+		if u != nil {
+			if q := QueueForUnit(u); q != nil && q.Lookup != nil {
+				tgt = q.Lookup(n.Target)
+			} else if fn := getLegacyLookup(); fn != nil {
+				tgt = fn(n.Target)
+			}
+		} else if fn := getLegacyLookup(); fn != nil {
+			tgt = fn(n.Target)
 		}
 		sub := n.Param2
 		switch sub {
@@ -611,12 +634,31 @@ func pushDedupArr(arr *[units.GuardLatchSize]pool.Handle, h pool.Handle) {
 	arr[units.GuardLatchSize-1] = h
 }
 
+func getLookupForWard(n *Node, u *units.Unit) *units.Unit {
+	if n == nil || n.Target == 0 {
+		return nil
+	}
+	if u != nil {
+		if q := QueueForUnit(u); q != nil && q.Lookup != nil {
+			if tgt := q.Lookup(n.Target); tgt != nil {
+				return tgt
+			}
+		}
+	}
+	// Fallback to ward's own queue if actor's queue not set? try target's queue not needed
+	if fn := getLegacyLookup(); fn != nil {
+		return fn(n.Target)
+	}
+	return nil
+}
+
 func guardWard(n *Node) *units.Unit {
 	if n.Target == 0 {
 		return nil
 	}
-	if targetLookup != nil {
-		return targetLookup(n.Target)
+	// Legacy path without unit context; try legacy lookup
+	if fn := getLegacyLookup(); fn != nil {
+		return fn(n.Target)
 	}
 	return nil
 }
@@ -653,9 +695,13 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 	if n.Target == 0 {
 		return Code(5) // no ward
 	}
-	ward := guardWard(n)
+	ward := getLookupForWard(n, u)
 	if ward == nil {
-		return Code(5)
+		// Fallback to legacy guardWard without unit
+		ward = guardWard(n)
+		if ward == nil {
+			return Code(5)
+		}
 	}
 	// slot 0 is null [01 §6.1] — live unit never has Handle 0; no assist paths fire, fall through to maintenance
 	if u.Handle == 0 {

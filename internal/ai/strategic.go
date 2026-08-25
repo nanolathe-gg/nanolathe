@@ -53,6 +53,9 @@ type Strategic struct {
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// Stores the first coefficient (weapon-budget + cost path) clamped to [-100,100].
 	SingleVectors map[string]int8 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+
+	// Catalog is the content catalog for def lookups [P0-I16]. Was package var AICatalog.
+	Catalog *content.Catalog // [P0-I16] per-session, not package global
 }
 
 // Init initializes per-type state once at battle setup [08 "Established AI-facing data and rooted planner"].
@@ -132,7 +135,7 @@ func (s *Strategic) InitClassVectors() {
 	}
 	sort.Strings(keys)
 	for _, ck := range keys {
-		def := lookupDef(ck)
+		def := s.lookupDef(ck)
 		c := int32(0)
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -144,7 +147,7 @@ func (s *Strategic) InitClassVectors() {
 			c += 40
 		}
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		hasBuild := hasBuildOptions(ck, def)
+		hasBuild := s.hasBuildOptions(ck, def)
 		if hasBuild {
 			c += 20
 		}
@@ -277,25 +280,31 @@ func (s *Strategic) refreshCountsAndCenter(player uint8, w *units.World) {
 	}
 }
 
-// lookupDef returns the UnitDef for canonical key ck via AICatalog if available.
+// lookupDef returns the UnitDef for canonical key ck via s.Catalog if available [P0-I16].
 // Returns nil if not found. Used by class-vector computation to read economy cost fields etc [P0-01].
-func lookupDef(ck string) *content.UnitDef {
+func (s *Strategic) lookupDef(ck string) *content.UnitDef {
 	if ck == "" {
 		return nil
 	}
-	if AICatalog != nil && AICatalog.Units != nil {
-		if def, ok := AICatalog.Units[ck]; ok {
+	if s != nil && s.Catalog != nil && s.Catalog.Units != nil {
+		if def, ok := s.Catalog.Units[ck]; ok {
 			return def
 		}
 	}
 	return nil
 }
 
+// lookupDefGlobal is a helper for contexts without a Strategic receiver; retained for compatibility
+// but prefers the Strategic catalog when available. Avoid package global AICatalog [P0-I16].
+func lookupDef(ck string) *content.UnitDef {
+	return (&Strategic{}).lookupDef(ck)
+}
+
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Checks AICatalog.BuildMenus for the builder, falling back to def.Builder flag.
-func hasBuildOptions(ck string, def *content.UnitDef) bool {
-	if AICatalog != nil && AICatalog.BuildMenus != nil {
-		if page, ok := AICatalog.BuildMenus[ck]; ok && page != nil && len(page.Buttons) > 0 {
+// Checks s.Catalog.BuildMenus for the builder, falling back to def.Builder flag [P0-I16].
+func (s *Strategic) hasBuildOptions(ck string, def *content.UnitDef) bool {
+	if s != nil && s.Catalog != nil && s.Catalog.BuildMenus != nil {
+		if page, ok := s.Catalog.BuildMenus[ck]; ok && page != nil && len(page.Buttons) > 0 {
 			return true
 		}
 	}
@@ -303,6 +312,10 @@ func hasBuildOptions(ck string, def *content.UnitDef) bool {
 		return true
 	}
 	return false
+}
+
+func hasBuildOptions(ck string, def *content.UnitDef) bool {
+	return (&Strategic{}).hasBuildOptions(ck, def)
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -372,7 +385,7 @@ func (s *Strategic) recomputeClassVectors() {
 	}
 	sort.Strings(keys) // determinism (I1) ascending type index
 	for _, ck := range keys {
-		def := lookupDef(ck)
+		def := s.lookupDef(ck)
 		// Ensure maps have entries
 		if _, ok := s.ClassVectors[ck]; !ok {
 			s.ClassVectors[ck] = ClassVector{}

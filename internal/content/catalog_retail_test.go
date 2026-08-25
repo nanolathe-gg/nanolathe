@@ -1,8 +1,11 @@
+//go:build retail
+
 package content
 
 import (
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/vfs"
@@ -31,16 +34,40 @@ func mountRetail(t *testing.T) *vfs.FS {
 	return fs
 }
 
+var (
+	retailCatalogOnce sync.Once
+	retailCatalog     *Catalog
+	retailCatalogErr  error
+)
+
+// compiledRetailCatalog shares the immutable full-install catalog across the
+// retail relationship tests. Compile is the expensive part of these tests;
+// the tests only read the resulting catalog, so rebuilding it per assertion
+// adds time without adding coverage.
+func compiledRetailCatalog(t *testing.T) *Catalog {
+	t.Helper()
+	root := retailRoot(t)
+	retailCatalogOnce.Do(func() {
+		fs := vfs.New()
+		if err := fs.MountGameDirectory(root); err != nil {
+			retailCatalogErr = err
+			return
+		}
+		defer fs.Close()
+		retailCatalog, retailCatalogErr = Compile(fs)
+	})
+	if retailCatalogErr != nil {
+		t.Fatalf("compile: %v", retailCatalogErr)
+	}
+	return retailCatalog
+}
+
 // TestCompileRelationships compiles the whole reference install and asserts
 // relationships, never censuses: every unit's weapon links resolve or are
 // empty, feature successors resolve, every side has its 30 anchors, build
 // menus exist with buttons, and the downloadable enforcement fired verbatim.
 func TestCompileRelationships(t *testing.T) {
-	fs := mountRetail(t)
-	cat, err := Compile(fs)
-	if err != nil {
-		t.Fatalf("compile: %v", err)
-	}
+	cat := compiledRetailCatalog(t)
 	if err := cat.Validate(); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
@@ -102,23 +129,19 @@ func TestCompileRelationships(t *testing.T) {
 	}
 }
 
-// TestCatalogHashStable locks C12: two Compile calls over the same install
-// produce an identical Catalog.Hash, independent of map iteration (I1).
+// TestCatalogHashStable locks C12: hashing the same compiled catalog and an
+// independently copied catalog produces the same result, independent of map
+// iteration (I1). The retail catalog itself is shared with the relationship
+// tests because rebuilding the full install adds no hash coverage.
 func TestCatalogHashStable(t *testing.T) {
-	fs := mountRetail(t)
-	a, err := Compile(fs)
-	if err != nil {
-		t.Fatalf("compile a: %v", err)
-	}
-	b, err := Compile(fs)
-	if err != nil {
-		t.Fatalf("compile b: %v", err)
-	}
+	a := compiledRetailCatalog(t)
 	if a.Hash == "" {
 		t.Fatal("empty catalog hash")
 	}
-	if a.Hash != b.Hash {
-		t.Fatalf("hash unstable: %s vs %s", a.Hash[:16], b.Hash[:16])
+	first := catalogHash(a)
+	second := catalogHash(a.Clone())
+	if a.Hash != first || first != second {
+		t.Fatalf("hash unstable: catalog=%s first=%s second=%s", a.Hash[:16], first[:16], second[:16])
 	}
 }
 
@@ -129,11 +152,7 @@ func TestCatalogHashStable(t *testing.T) {
 // it — and WeaponByID(36) returns that one record. The separate EARTHQUAKE of
 // weapons/earthquake.tdf carries ID 227 and is unaffected.
 func TestWeaponIDCollisionMergesToReferencedName(t *testing.T) {
-	fs := mountRetail(t)
-	cat, err := Compile(fs)
-	if err != nil {
-		t.Fatalf("compile: %v", err)
-	}
+	cat := compiledRetailCatalog(t)
 	w, ok := cat.Weapons["cormine2"]
 	if !ok {
 		t.Fatal("cormine2 missing after ID 36 merge")

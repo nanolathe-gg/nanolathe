@@ -1,7 +1,11 @@
+//go:build retail
+
 package world_test
 
 import (
+	"runtime"
 	"sort"
+	"sync"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -23,47 +27,106 @@ func TestEveryMapLoads(t *testing.T) {
 	}
 	defer fileSystem.Close()
 
-	catalog, err := content.Compile(fileSystem)
+	maps, err := content.CompileMaps(fileSystem)
 	if err != nil {
-		t.Fatalf("compile: %v", err)
+		t.Fatalf("compile maps: %v", err)
 	}
+	features, err := content.CompileFeatures(fileSystem)
+	if err != nil {
+		t.Fatalf("compile features: %v", err)
+	}
+	catalog := &content.Catalog{Maps: maps, Features: features}
 	keys := make([]string, 0, len(catalog.Maps))
 	for key := range catalog.Maps {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 
-	var loaded, flatFloor, unbound, fringe, resolved int
-	var failures []string
-	for _, key := range keys {
+	type mapResult struct {
+		key             string
+		err             error
+		flatFloor       bool
+		unbound, fringe int
+		resolved        int
+	}
+	inspect := func(key string) mapResult {
+		result := mapResult{key: key}
 		terrain, err := world.Load(fileSystem, catalog, key)
 		if err != nil {
-			if len(failures) < 5 {
-				failures = append(failures, key+": "+err.Error())
-			}
-			continue
+			result.err = err
+			return result
 		}
-		loaded++
 		distinct := map[uint8]bool{}
 		for i := range terrain.Plot {
 			cell := terrain.Plot[i]
 			distinct[cell.MinHeight()] = true
 			switch feature := cell.Feature(); {
 			case feature == world.PlotFeatureFringe:
-				fringe++
+				result.fringe++
 				cx := int32(i) % terrain.CellW
 				cz := int32(i) / terrain.CellW
 				if _, ok := world.ResolveFeature(terrain.Plot, int(terrain.CellW), int(terrain.CellH), int(cx), int(cz)); ok {
-					resolved++
+					result.resolved++
 				}
 			case feature < 0xFFFB:
 				if _, ok := terrain.FeatureDefAt(feature); !ok {
-					unbound++
+					result.unbound++
 				}
 			}
 		}
-		if len(distinct) <= 1 {
+		result.flatFloor = len(distinct) <= 1
+		return result
+	}
+
+	// Each map load is independent. A small worker pool keeps this corpus gate
+	// representative without making it wait on one map at a time.
+	workerCount := runtime.GOMAXPROCS(0)
+	if workerCount > 4 {
+		workerCount = 4
+	}
+	if workerCount > len(keys) {
+		workerCount = len(keys)
+	}
+	jobs := make(chan string)
+	results := make(chan mapResult, len(keys))
+	var workers sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for key := range jobs {
+				results <- inspect(key)
+			}
+		}()
+	}
+	go func() {
+		for _, key := range keys {
+			jobs <- key
+		}
+		close(jobs)
+		workers.Wait()
+		close(results)
+	}()
+
+	var loaded, flatFloor, unbound, fringe, resolved int
+	errorsByKey := make(map[string]error)
+	for result := range results {
+		if result.err != nil {
+			errorsByKey[result.key] = result.err
+			continue
+		}
+		loaded++
+		if result.flatFloor {
 			flatFloor++
+		}
+		unbound += result.unbound
+		fringe += result.fringe
+		resolved += result.resolved
+	}
+	var failures []string
+	for _, key := range keys {
+		if err, ok := errorsByKey[key]; ok && len(failures) < 5 {
+			failures = append(failures, key+": "+err.Error())
 		}
 	}
 

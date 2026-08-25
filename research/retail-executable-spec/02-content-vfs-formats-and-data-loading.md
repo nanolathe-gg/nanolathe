@@ -380,6 +380,17 @@ filled with the slot index. Absent per-slot values install these defaults:
 controller 0, ally group 5, metal and energy 1000, color the slot index
 itself, and side the slot index masked to parity (slot & 1).
 
+The scalar skirmish preferences are also defaulted by the same loader when
+absent: `SkirmishDifficulty=1` (Medium), `SkirmishLocation=1` (pre-determined
+start positions), `SkirmishCommanderDeath=1` (commander death ends the game),
+`SkirmishMapping=1` (terrain is blacked out until explored),
+`SkirmishLineOfSight=1` (LOS enabled), and `SkirmishLOSType=1` (terrain
+elevations affect LOS). These values are the installed lobby defaults. The
+retail LineOfSight control cycles the coupled state through elevation-aware
+LOS (`1,1`), elevation-agnostic LOS (`1,0`), and all mapped terrain visible
+(`0,1`); the other scalar controls expose their ordinary zero-valued
+alternatives.
+
 `NumSkirmishPlayers` deserves precision. A missing value installs the default
 4. The loader then compares the stored value against the documented 2..10
 window, but **both comparison branches store the raw value unchanged**: the

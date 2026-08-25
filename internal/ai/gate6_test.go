@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/orders"
@@ -122,21 +123,7 @@ func TestGate6EndToEnd(t *testing.T) {
 	cat, builderDef, faveeDef := makeGateCatalog()
 	terrain := makeGateTerrain()
 
-	// Save/restore global selection state.
-	origAICatalog := AICatalog
-	origCandidateSource := CandidateSource
-	origGateFlag := MissionGateFlag
-	origGateCandidates := Gate241Candidates
-	defer func() {
-		AICatalog = origAICatalog
-		CandidateSource = origCandidateSource
-		MissionGateFlag = origGateFlag
-		Gate241Candidates = origGateCandidates
-	}()
-	AICatalog = cat
-	CandidateSource = nil
-	MissionGateFlag = 0
-	Gate241Candidates = nil
+	// P0-I16: selection state now per-manager, not package global.
 
 	// Profile with weight for favee, no limit.
 	prof := &Profile{
@@ -183,20 +170,22 @@ func TestGate6EndToEnd(t *testing.T) {
 		Catalog:      cat,
 		Factory:      builderUnit,
 	}
+	mgr.Strategic.Catalog = cat
+	mgr.CandidateSource = nil
+	mgr.MissionGateFlag = 0
+	mgr.GateCandidates = nil
 	for k := TaskKind(0); k < TaskKindCount; k++ {
 		mgr.Deadlines[k] = 0
 	}
 
-	// Spy Place's ordinary path via queueBuild var to prove Place wiring.
-	origQueueBuild := queueBuild
+	// Spy Place's ordinary path via per-manager QueueBuild [P0-I16].
 	var placeSpyDef string
 	var placeSpyCalled bool
-	queueBuild = func(f *units.Unit, defKey string, count int) error {
+	mgr.QueueBuild = func(f *units.Unit, defKey string, count int) error {
 		placeSpyCalled = true
 		placeSpyDef = defKey
-		return origQueueBuild(f, defKey, count)
+		return construction.QueueBuild(f, defKey, count)
 	}
-	defer func() { queueBuild = origQueueBuild }()
 
 	expectedPID := gateProductID("gatefavee")
 
@@ -285,11 +274,10 @@ func TestGate6EndToEnd(t *testing.T) {
 	t.Logf("gate6: queued %q at tick %d placement %d,%d cell %d,%d valid", faveeDef.UnitName, successTick, successX, successZ, world.WorldToCell(successX), world.WorldToCell(successZ))
 
 	// Determinism: rerun with same seed and assert same tick and placement.
-	// Re-seed and rebuild minimal fresh state to avoid polluted queues.
+	// Re-seed and rebuild minimal fresh state to avoid polluted queues [P0-I16].
 	rng.SeedGlobal(seed, 0)
 	cat2, builderDef2, faveeDef2 := makeGateCatalog()
 	terrain2 := makeGateTerrain()
-	AICatalog = cat2
 	w2 := units.New(64, cat2)
 	bx2 := world.CellToWorld(5)
 	bz2 := world.CellToWorld(5)
@@ -318,17 +306,20 @@ func TestGate6EndToEnd(t *testing.T) {
 		Catalog:      cat2,
 		Factory:      builderUnit2,
 	}
+	mgr2.Strategic.Catalog = cat2
+	mgr2.CandidateSource = nil
+	mgr2.MissionGateFlag = 0
+	mgr2.GateCandidates = nil
 	for k := TaskKind(0); k < TaskKindCount; k++ {
 		mgr2.Deadlines[k] = 0
 	}
-	// Reset spy
+	// Reset spy [P0-I16].
 	placeSpyCalled = false
 	placeSpyDef = ""
-	// Ensure queueBuild still spied
-	queueBuild = func(f *units.Unit, defKey string, count int) error {
+	mgr2.QueueBuild = func(f *units.Unit, defKey string, count int) error {
 		placeSpyCalled = true
 		placeSpyDef = defKey
-		return origQueueBuild(f, defKey, count)
+		return construction.QueueBuild(f, defKey, count)
 	}
 	expectedPID2 := gateProductID("gatefavee")
 	var tick2 = -1

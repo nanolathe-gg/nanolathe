@@ -173,8 +173,6 @@ func TestSparseVsDenseDivergence(t *testing.T) {
 		t.Fatalf("beta should be unresolved (sparse NULL) but got mapping")
 	}
 	// Also test that RunInitialMissions queues guard correctly via sparse
-	UnitTypeExistsHook = func(name string) bool { return true }
-	defer func() { UnitTypeExistsHook = nil }()
 	RunInitialMissionsWithCatalog(m3, w3, cat)
 	// alpha should have guard order to gamma
 	var alpha *units.Unit

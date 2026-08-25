@@ -116,6 +116,17 @@ func newBattleSession(opts Options, cs *contentSet) (*session.Session, *content.
 	if cfg.NumPlayers > 1 {
 		cfg.Players[1].Controller = 1 // computer
 	}
+	return newBattleSessionWithConfig(opts, cs, cfg)
+}
+
+// newBattleSessionWithConfig is the windowed composition path used by the
+// skirmish lobby. The menu's per-slot and round settings must reach the same
+// session constructor as the headless path [08 "Skirmish configuration"].
+func newBattleSessionWithConfig(opts Options, cs *contentSet, cfg session.SkirmishConfig) (*session.Session, *content.Catalog, error) {
+	if cfg.MapName == "" {
+		cfg.MapName = opts.Map
+	}
+	cfg.ApplyDefaults()
 	sess, err := session.NewSkirmishWithFS(cs.fs, nil, cfg)
 	if err != nil {
 		return nil, nil, err

@@ -5,6 +5,11 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
+// NanolatheColor is the fixed segment color for build/reclaim beams [03 §5.5].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// variation is via footprint jitter, not color. So A24 adjacency closed, color is fixed.
+const NanolatheColor = 6 // [03 §5.5] constant 6 via 0xdcb
+
 // EffectAnimPlayer is one embedded animation player in a fixed effect record [03 §1] C5.
 // Its tick integrator single-steps both players and clears non-looping sequences'
 // pointers at termination [03 §1]. Go uses named fields per I13; retail 12-byte
@@ -21,10 +26,10 @@ type EffectAnimPlayer struct {
 // Countdown <2 advances to the next frame, wraps to 0 for looping sequences
 // or clears the entry pointer for non-looping sequences and loads the new
 // frame's duration [03 §4.4]. Retail durations are whole ticks [03 §4.4]; this
-// pool uses 1 tick per frame as the minimal established duration.
+// pool uses 1 tick per frame as the minimal established duration (A24).
 // TODO(question): authored per-frame durations for fixed effects are not
 // established in [03 §1]; this uses 1 tick per frame. If probes show a
-// different cadence, replace the constant.
+// different cadence, replace the constant (A24).
 func (a *EffectAnimPlayer) Step() {
 	if a == nil || !a.Active {
 		return

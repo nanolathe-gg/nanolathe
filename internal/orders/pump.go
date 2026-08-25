@@ -57,7 +57,24 @@ type Queue struct {
 	// interleave their logs and so a queue's diagnostics die with it
 	// [docs/ORCHESTRATION.md §7].
 	diagnostics []string
+
+	// P0-I16: authoritative hooks moved onto the owning queue/service.
+	// Hostility and Lookup were package globals; now per-queue to avoid shared mutable.
+	Hostility func(actor *units.Unit, target *units.Unit) bool `json:"-"` // per-queue hostility [P0-I16]
+	Lookup    func(pool.Handle) *units.Unit                    `json:"-"` // per-queue target lookup [P0-I16]
 }
+
+// [P2-03] Queue overflow defense: retail has no located cap (NEGATIVE-BOUNDED
+// 3901 boundaries). Nanolathe drops with diagnostic instead of crashing/OOM.
+// This is a deliberate I11 divergence: bounds check that rejects data retail
+// would have accepted only to avoid unbounded growth. Limits chosen for
+// testability, not as retail constants, and remain TODO(question) for the
+// value retail would have used if it had a cap.
+const (
+	MaxPrimaryQueue   = 64  // [P2-03] fallback cap for primary list
+	MaxSecondaryQueue = 32  // [P2-03] fallback cap for secondary (BuildWeapon/SelfDestruct only)
+	MaxPumpIterations = 200 // [P2-03] cycle defense: handler loops via 0/1/2 without blocking
+)
 
 func (q *Queue) LenPrimary() int {
 	if q == nil {
@@ -263,6 +280,12 @@ func (q *Queue) Push(id ID, n Node) {
 	if q == nil {
 		return
 	}
+	// [P2-03] overflow guard: retail has no cap (NEGATIVE-BOUNDED); fallback
+	// drops with diagnostic instead of OOM. I11 divergence noted above.
+	if len(q.primary) >= MaxPrimaryQueue {
+		q.recordDiagnostic(fmt.Sprintf("orders: primary queue full (%d), dropping %s", len(q.primary), DescriptorFor(id).Name))
+		return
+	}
 	node := newNode(id, n) // [04 §3.3][05 "Queue insertion"] C9
 	act := findActive(q)
 	if act >= 0 {
@@ -288,6 +311,10 @@ func (q *Queue) PushSecondary(id ID, n Node) {
 	if q == nil {
 		return
 	}
+	if len(q.secondary) >= MaxSecondaryQueue {
+		q.recordDiagnostic(fmt.Sprintf("orders: secondary queue full (%d), dropping %s", len(q.secondary), DescriptorFor(id).Name))
+		return
+	}
 	node := newNode(id, n)
 	if len(q.secondary) > 0 && q.secondary[0].Flags&FlagAutoOp != 0 {
 		node.Flags |= FlagAutoOp // [05 "Queue insertion"] inherit old head's auto flag
@@ -307,9 +334,14 @@ func (q *Queue) CoalesceTail(id ID, n Node) {
 				if add == 0 {
 					add = 1
 				}
+				// [P2-03] arithmetic overflow: tail Param2 wraps int32 low32 like retail add/sub.
 				tail.Param2 += add
 				return
 			}
+		}
+		if len(q.secondary) >= MaxSecondaryQueue {
+			q.recordDiagnostic(fmt.Sprintf("orders: secondary coalesce full (%d), dropping %s", len(q.secondary), DescriptorFor(id).Name))
+			return
 		}
 		q.PushSecondary(id, n)
 		return
@@ -326,6 +358,10 @@ func (q *Queue) CoalesceTail(id ID, n Node) {
 		}
 	}
 	// tail-only fallback append [04 §3.3][05 "Queue insertion"]
+	if len(q.primary) >= MaxPrimaryQueue {
+		q.recordDiagnostic(fmt.Sprintf("orders: primary coalesce full (%d), dropping %s", len(q.primary), DescriptorFor(id).Name))
+		return
+	}
 	node := newNode(id, n)
 	q.primary = append(q.primary, node)
 	if len(q.primary) == 1 {
@@ -392,8 +428,17 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 	if q == nil || u == nil {
 		return
 	}
+	// [P2-03] iteration guard: defend against malformed handler that loops
+	// forever via 0/1/2 without ever blocking. Retail has no located guard
+	// (NEGATIVE-BOUNDED). Fallback breaks after MaxPumpIterations with diagnostic.
+	iter := 0
 	// TODO(question) idle default-op creation when primary empty [05 "Queue pumping and result codes"] step 1: owner player-state settling byte, definition default-idle-op field
 	for len(q.primary) > 0 {
+		iter++
+		if iter > MaxPumpIterations {
+			q.recordDiagnostic("orders: primary pump iteration limit hit, breaking")
+			return
+		}
 		n := q.primary[0] // head-driven [05]
 		if n.Deadline != -1 && tick >= uint32(n.Deadline) {
 			n.Deadline = -1

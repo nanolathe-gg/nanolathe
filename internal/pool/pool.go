@@ -54,6 +54,10 @@ func UsableCapacityForDefs(maxDefs int) int {
 // When sliced, the pool is partitioned per-player as maxDefs slots each via
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // constrained to the owning player's slice [P0-16 §3.2].
+// [P2-03] Allocator failure: nil return, zero-fill new record, zero RNG draws.
+// Retail zero-fill byte count remains TODO(question) — Nanolathe zeroes logical
+// fields (alive/defID cleared, slotIndex retained) and treats the remainder as
+// zeroed to avoid stale leak; divergence noted at Alloc* sites.
 type Units struct {
 	alive     []bool   // index 0 is sentinel, never allocated; len = totalRecords
 	defID     []uint16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.

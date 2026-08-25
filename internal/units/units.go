@@ -50,12 +50,22 @@ type Unit struct {
 	DeathCause DeathCause
 	// Build progress remaining 1→0 [04 §2.3] C3. float32 per the I2 allowlist
 	// row "Construction remaining fraction" [05 "Construction target state"].
+	// Owned exclusively by construction.Service; Units.Tick never mutates it [05 "Construction arithmetic"].
 	Remaining    float32
 	Flags        uint32       // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	Pending      uint32       // capability/pending word for gate intersection [04 §3.3] C6
 	Orders       any          // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
-	Script       any          // COB VM placeholder [04 §4.2]
+	Script       any          // COB VM placeholder [04 §4.2] (kept for backward compat, prefer ScriptState)
 	GuardLatches GuardLatches // per-unit dedup array for guard assistance [04 §3.5]
+
+	// Typed per-unit state introduced for P0-I02 real pipeline [04 §1.3][04 §4][06][GAP T15].
+	// These fields own the authoritative per-unit data that the phase-2 sweep
+	// visits in players-asc then slots-asc order [01 §6.2] C2 [P0-16].
+	ScriptState   *ScriptState    // per-unit COB VM/thread/piece state [04 §4.1][04 §4.2][GAP T15]; nil if not yet wired
+	Slots         [NumSlots]Slot  // three weapon slots [06 §1.2] C1 P0-10; local Slot avoids units→combat→economy→units cycle
+	Move          MoveState       // movement status shared with movement.System [04 §8.1][04 §9.1] (movement imports units)
+	Attachment    AttachmentState // carrier/cargo linkage [04 §4.4] attach-unit
+	CallbackQueue CallbackQueue   // engine→COB callback queues/readiness [GAP T15]
 	// SpotMetal is the extractor yield sampled once at placement: Σ(cellMetal+1)*extractsMetal [05 "Terrain metal extraction"] C14 [P1-10][P1-15].
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	SpotMetal float32 // [P1-10] once Σ(byte+1)*extractsMetal, [P1-15] uniform char write
@@ -546,16 +556,20 @@ func (w *World) LiveCountForPlayer(player int) int {
 }
 
 // Tick sweeps players ascending then slots ascending [01 §6.2] C2.
-// Alive state and death mark separate; death clears alive during post-tick cleanup.
-// For Phase 6 we just iterate deterministically and advance Remaining stub.
+// Alive state and death mark separate; death clears alive during post-tick cleanup [04 §2.4] C2.
+// Construction Remaining is owned exclusively by construction.Service and is never
+// mutated here [05 "Construction target state"] [05 "Construction arithmetic"].
+// Per-unit pipeline per [04 §1.3][GAP T15] C17 (I7): pre-update → water damage →
+// weapon-slot update (Aim can block) → normal COB drain delta 1 → deferred
+// build/order → preserved movement → slot-end death handling. Tick never frees
+// slots; Cleanup handles that in phase 10 [04 §2.4] C2.
 func (w *World) Tick(tick uint32) {
 	if w == nil || w.units == nil {
 		return
 	}
-	_ = tick
 	// Players 0..9 ascending, slots ascending [01 §6.2] [PLAN_06 C2] [P0-16 §3.1]
 	// For sliced pools, per-player slices are scanned; for unsliced, global scan
-	// with player filter.
+	// with player filter. No map iteration; deterministic (I1).
 	if w.pool != nil && w.pool.IsSliced() {
 		for player := 0; player < 10; player++ {
 			start, end, ok := w.pool.SliceForPlayer(player)
@@ -570,13 +584,8 @@ func (w *World) Tick(tick uint32) {
 				if int(u.Owner) != player {
 					continue
 				}
-				// TODO: per-unit tick: orders pump, COB drain etc. Phase 6 stub just advances Remaining if building.
-				if u.Remaining > 0 {
-					u.Remaining -= 0.01
-					if u.Remaining < 0 {
-						u.Remaining = 0
-					}
-				}
+				// Real per-unit pipeline; does not mutate Remaining [05 "Construction target state"].
+				w.tickUnit(u, tick) // [04 §1.3][GAP T15] C17
 			}
 		}
 		return
@@ -590,12 +599,7 @@ func (w *World) Tick(tick uint32) {
 			if int(u.Owner) != player {
 				continue
 			}
-			if u.Remaining > 0 {
-				u.Remaining -= 0.01
-				if u.Remaining < 0 {
-					u.Remaining = 0
-				}
-			}
+			w.tickUnit(u, tick) // [04 §1.3][GAP T15] C17; no Remaining mutation
 		}
 	}
 }

@@ -7,9 +7,11 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
@@ -17,21 +19,28 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // C8 defaults per [02 §3], [GAP T14] and [08 "Skirmish configuration"].
 const (
-	SkirmishMinPlayers        = 2  // [GAP T14] validated 2..10
-	SkirmishMaxPlayers        = 10 // [GAP T14]
-	SkirmishDefaultPlayers    = 4  // [02 §3] missing NumSkirmishPlayers installs default 4
-	SkirmishDefaultMetal      = 1000
-	SkirmishDefaultEnergy     = 1000
-	SkirmishDefaultAllyGroup  = 5  // [GAP T14]
-	SkirmishDefaultController = 0  // [GAP T14] human
-	SkirmishNickCap           = 17 // [02 §3] 17-byte buffers
-	skirmishNickPayload       = 16 // usable chars (17 includes NUL) [02 §3]
+	SkirmishMinPlayers            = 2  // [GAP T14] validated 2..10
+	SkirmishMaxPlayers            = 10 // [GAP T14]
+	SkirmishDefaultPlayers        = 4  // [02 §3] missing NumSkirmishPlayers installs default 4
+	SkirmishDefaultMetal          = 1000
+	SkirmishDefaultEnergy         = 1000
+	SkirmishDefaultAllyGroup      = 5  // [GAP T14]
+	SkirmishDefaultController     = 0  // [GAP T14] human
+	SkirmishDefaultDifficulty     = 1  // Medium [02 §3] [08 "Skirmish configuration"]
+	SkirmishDefaultLocation       = 1  // pre-determined start positions [08 "Skirmish configuration"]
+	SkirmishDefaultCommanderDeath = 1  // commander death ends the game [08 "Skirmish configuration"]
+	SkirmishDefaultMapping        = 1  // terrain is blacked out until explored [08 "Skirmish configuration"]
+	SkirmishDefaultLineOfSight    = 1  // LOS enabled [08 "Skirmish configuration"]
+	SkirmishDefaultLOSType        = 1  // terrain elevations affect LOS [08 "Skirmish configuration"]
+	SkirmishNickCap               = 17 // [02 §3] 17-byte buffers
+	skirmishNickPayload           = 16 // usable chars (17 includes NUL) [02 §3]
 )
 
 // SkirmishPlayer is per-slot skirmish state per [GAP T14].
@@ -56,10 +65,20 @@ type SkirmishPlayer struct {
 // Location selects start-position assignment: 0 = randomized via CRT shuffle
 // [P0-04], !=0 = identity mapping [P0-04].
 type SkirmishConfig struct {
-	MapName    string
-	NumPlayers int
-	Players    [10]SkirmishPlayer
-	Location   int // 0 randomized (CRT Fisher-Yates), !=0 identity [P0-04]
+	MapName        string
+	NumPlayers     int
+	Players        [10]SkirmishPlayer
+	Difficulty     int // 0 easy, 1 medium, 2 hard [08 "Skirmish configuration"]
+	Location       int // 0 randomized (CRT Fisher-Yates), !=0 identity [P0-04]
+	CommanderDeath int // 0 continues after commander death, 1 ends [08 "Skirmish configuration"]
+	Mapping        int // 0 all terrain visible, 1 blacked out until explored [08 "Skirmish configuration"]
+	LineOfSight    int // 0 disables LOS, 1 enables it [08 "Skirmish configuration"]
+	LOSType        int // 0 elevations ignored, 1 elevations affect LOS [08 "Skirmish configuration"]
+
+	// rulesDefaultsApplied distinguishes a zero-value config (missing registry
+	// values) from an explicit Easy/randomized/off choice. It is deliberately
+	// private: callers use ApplyDefaults once, then may cycle the public values.
+	rulesDefaultsApplied bool
 }
 
 // ApplyDefaults fills absent per-slot values with retail defaults per [GAP T14] [02 §3].
@@ -68,6 +87,17 @@ type SkirmishConfig struct {
 func (c *SkirmishConfig) ApplyDefaults() {
 	if c.NumPlayers == 0 {
 		c.NumPlayers = SkirmishDefaultPlayers
+	}
+	if !c.rulesDefaultsApplied {
+		// The six scalar preferences are all allowed to be zero after the menu
+		// changes them, so apply the retail missing-value defaults only once.
+		c.Difficulty = SkirmishDefaultDifficulty
+		c.Location = SkirmishDefaultLocation
+		c.CommanderDeath = SkirmishDefaultCommanderDeath
+		c.Mapping = SkirmishDefaultMapping
+		c.LineOfSight = SkirmishDefaultLineOfSight
+		c.LOSType = SkirmishDefaultLOSType
+		c.rulesDefaultsApplied = true
 	}
 	c.MapName = strings.TrimSpace(c.MapName)
 	n := c.NumPlayers
@@ -127,13 +157,11 @@ func NewSkirmish(cfg SkirmishConfig) (*Session, error) {
 	return NewSkirmishWithFS(nil, nil, cfg)
 }
 
-// NewSkirmishWithFS is NewSkirmish with explicit filesystem and catalog for tests.
-// When fs is nil a loose overlay is used; when cat is nil it is compiled from fs.
-// It wires catalog from VFS, terrain from --map selection and spawns units at
-// start positions per [08 "Placement and battle entry"] C9, then runs the single
-// shared wind initializer after retaining bounds per C17 [01 §7.3].
+// NewSkirmishWithFS is the strict production constructor. It never fabricates
+// an empty catalog, nil terrain, or invented commander. Missing retail content
+// aborts with a diagnostic. Fixtures must use NewSkirmishForTest.
+// [02 §5][03 §2.2][P0-16]
 func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (*Session, error) {
-	// Apply defaults before validation so missing NumPlayers defaults to 4.
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -141,12 +169,155 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 	if fs == nil {
 		fs = vfs.New()
 	}
-	// Catalog from VFS [PLAN_02] if caller did not supply one.
+	// 1. mount/receive VFS and compile one immutable catalog [02 §5]
+	cat, err := strictCatalog(fs, cat)
+	if err != nil {
+		return nil, err
+	}
+	// 2. select mission/schema [08 "Mission type dispatch"]
+	m, err := mission.LoadWithType(fs, mission.TypeSkirmish, cfg.MapName, 0, cfg.NumPlayers, nil)
+	if err != nil {
+		return nil, fmt.Errorf("session: skirmish map %q: %w", cfg.MapName, err)
+	}
+	// 3. load terrain and apply selected schema including surface metal [03 §2.2][05]
+	terrain, err := loadTerrainStrict(fs, cat, m)
+	if err != nil {
+		return nil, err
+	}
+	// 4. create retail sliced unit pool [P0-16]
+	unitsWorld, err := newSlicedWorld(cat)
+	if err != nil {
+		return nil, err
+	}
+	// Strict: ensure side commanders exist; do not invent armcom [P0-I01]
+	nPlayersCheck := cfg.NumPlayers
+	if nPlayersCheck < 0 {
+		nPlayersCheck = 0
+	}
+	if nPlayersCheck > 10 {
+		nPlayersCheck = 10
+	}
+	for i := 0; i < nPlayersCheck; i++ {
+		sideIdx := cfg.Players[i].Side
+		if sideIdx < 0 || sideIdx >= len(cat.Sides) {
+			return nil, fmt.Errorf("session: side %d out of range for player %d [02 §6]", sideIdx, i)
+		}
+		sd := cat.Sides[sideIdx]
+		if sd == nil || sd.Commander == "" {
+			return nil, fmt.Errorf("session: side %d missing commander [02 §6]", sideIdx)
+		}
+		if _, ok := cat.Unit(sd.Commander); !ok {
+			return nil, fmt.Errorf("session: commander %q for side %d not found [02]", sd.Commander, sideIdx)
+		}
+	}
+	s := &Session{
+		Catalog:  cat,
+		World:    terrain,
+		Mission:  m,
+		Skirmish: cfg,
+		Clock:    &clock.State{Requested: 10, Active: 10},
+		Kernel:   &kernel.Kernel{},
+		Snapshot: &snapshot.Buffer{},
+		Units:    unitsWorld,
+		Econ:     &economy.Service{},
+		Latch:    NewEndLatch(),
+	}
+	nPlayers := cfg.NumPlayers
+	if nPlayers < 0 {
+		nPlayers = 0
+	}
+	if nPlayers > 10 {
+		nPlayers = 10
+	}
+	for i := 0; i < nPlayers && i < 10; i++ {
+		p := &s.Econ.Players[i]
+		p.Exists = true
+		ctrl := cfg.Players[i].Controller
+		var ctrlState uint8
+		switch ctrl {
+		case SkirmishDefaultController:
+			ctrlState = 1
+		default:
+			if ctrl == 1 || ctrl == 2 || ctrl == 3 {
+				ctrlState = uint8(ctrl)
+			} else {
+				ctrlState = 2
+			}
+		}
+		p.ControllerState = ctrlState
+		p.IsObserver = false
+		p.StatusHalfwordAt144 = 1
+		p.StatusWordAt140 = 0
+		p.GameEnded = false
+		p.EndGameCountdown = -1
+	}
+	s.Econ.SeedDeadlines(0)
+	// 10. wind via shared path [01 §7.3] C17 – single initializer after retaining bounds
+	var crt *rng.CRT
+	if rng.Global.Crt != nil {
+		crt = rng.Global.Crt
+	} else {
+		tmp := rng.NewCRT(0)
+		crt = &tmp
+	}
+	s.InitWindForSession(crt, 0)
+	// 5. create every required service non-nil and bind ports [08][04 §7.2]
+	if err := createAndBindServices(s); err != nil {
+		return nil, err
+	}
+	// 7-9. battle entry: place features → units → barrier → resources (InitialMission inside) [08 "Placement and battle entry"] C9
+	if err := SkirmishBattleEntry(s, cfg, m, nil); err != nil {
+		return nil, err
+	}
+	// 8. movement state and visibility state for new units
+	ensureMovementForAll(s)
+	publishVisibilityForAll(s)
+	// AI managers for computer players [08 "Established AI-facing data"]
+	s.AI = make([]*ai.Manager, 0, nPlayers)
+	for i, p := range cfg.Players[:nPlayers] {
+		if i >= 10 {
+			break
+		}
+		if p.Controller == 0 {
+			continue
+		}
+		prof, perr := ai.LoadProfile(fs, "default")
+		if perr != nil || prof == nil {
+			continue
+		}
+		mgr := &ai.Manager{Player: uint8(i), Profile: prof}
+		mgr.Terrain = s.World
+		mgr.Catalog = s.Catalog
+		s.AI = append(s.AI, mgr)
+	}
+	// 11. register every authoritative phase once [01 §4.4] I7
+	s.RegisterAll()
+	// 12. transition through state machine [08 "Session states"] C3
+	if err := s.SelectForGametype(GametypeMultiplayer); err != nil {
+		return nil, err
+	}
+	if err := s.ValidateComposition(); err != nil {
+		return nil, fmt.Errorf("session: composition invalid: %w", err)
+	}
+	return s, nil
+}
+
+// NewSkirmishForTest is the fixture constructor. It retains the previous
+// lenient fallback (empty catalog, missing TNT tolerated, invented commander)
+// so existing deterministic fixtures continue to run. Production must use
+// NewSkirmishWithFS.
+func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (*Session, error) {
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if fs == nil {
+		fs = vfs.New()
+	}
 	if cat == nil && fs != nil {
 		if compiled, err := content.Compile(fs); err == nil {
 			cat = compiled
 		} else {
-			// Fixture FS may lack full content (e.g., only maps/*.ota); keep empty catalog so map load still proceeds.
 			cat = &content.Catalog{
 				Units:    map[string]*content.UnitDef{},
 				Features: map[string]*content.FeatureDef{},
@@ -162,26 +333,40 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 			Maps:     map[string]*content.MapHeader{},
 		}
 	}
-	// Load map mission for placements and wind bounds via the same typed path
-	// the campaign loader uses, but with skirmish type discriminant.
-	// Types 2 and 3 join the raw OTA path directly against maps/ with fuzzy fallback [08 "Mission type dispatch"].
 	m, err := mission.LoadWithType(fs, mission.TypeSkirmish, cfg.MapName, 0, cfg.NumPlayers, nil)
 	if err != nil {
 		return nil, fmt.Errorf("session: skirmish map %q: %w", cfg.MapName, err)
 	}
-	// Terrain from --map selection [PLAN_04] [03 §2.2]; tolerate missing TNT for fixtures that supply only OTA.
 	var terrain *world.Terrain
 	if t, err := world.Load(fs, cat, cfg.MapName); err == nil {
 		terrain = t
+		// Best-effort ApplySchema for fixtures; ignore error when header missing
+		if cat.Maps != nil && len(cat.Maps) > 0 {
+			_ = applySchemaStrict(terrain, cat, m)
+		} else {
+			_ = terrain.ApplySchema(nil, 0)
+		}
+	}
+	// Fixture uses sliced when possible, otherwise fallback to unsliced 600 for tiny catalogs
+	var unitsWorld *units.World
+	if len(cat.Units) > 0 {
+		if w, err := newSlicedWorld(cat); err == nil {
+			unitsWorld = w
+		} else {
+			unitsWorld = units.New(600, cat)
+		}
+	} else {
+		unitsWorld = units.New(600, cat)
 	}
 	s := &Session{
 		Catalog:  cat,
 		World:    terrain,
 		Mission:  m,
+		Skirmish: cfg,
 		Clock:    &clock.State{Requested: 10, Active: 10},
 		Kernel:   &kernel.Kernel{},
 		Snapshot: &snapshot.Buffer{},
-		Units:    units.New(600, cat),
+		Units:    unitsWorld,
 		Econ:     &economy.Service{},
 		Latch:    NewEndLatch(),
 	}
@@ -192,7 +377,6 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 	if nPlayers > 10 {
 		nPlayers = 10
 	}
-	// Economy slot wiring for active players 0..nPlayers-1 per C8.
 	for i := 0; i < nPlayers && i < 10; i++ {
 		p := &s.Econ.Players[i]
 		p.Exists = true
@@ -200,9 +384,8 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 		var ctrlState uint8
 		switch ctrl {
 		case SkirmishDefaultController:
-			ctrlState = 1 // human active settling [05 "Authoritative settlement order"]
+			ctrlState = 1
 		default:
-			// Computer controller: map to 2 (computer-policy gate) [08 "Established AI-facing data"]
 			if ctrl == 1 || ctrl == 2 || ctrl == 3 {
 				ctrlState = uint8(ctrl)
 			} else {
@@ -215,18 +398,8 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 		p.StatusWordAt140 = 0
 		p.GameEnded = false
 		p.EndGameCountdown = -1
-		// Seed deadlines at battle entry tick per [05 "Authoritative settlement order"] C5; exact tick is 0 here.
-		// SeedDeadlines will overwrite UpdateTime/WinLoseTime/DisplayTimer to current tick for active slots.
-		// We call it after wind so the global tick is still 0.
-		_ = i // used below for ally mapping if needed
 	}
-	// AllyGroup and colour are lobby/display state; they live in SkirmishConfig for C8 fixture purposes.
-	// Economy does not store them directly, but we retain them in config for diagnostics.
-	// Seed deadlines after player existence is established.
 	s.Econ.SeedDeadlines(0)
-
-	// Single battle-entry wind initializer after retaining terrain bounds per C17 [01 §7.3].
-	// Use the same shared path mission.go uses: InitWindForSession → NewBattleWindFromBounds → InitBattleWind → SeedBriefing.
 	var crt *rng.CRT
 	if rng.Global.Crt != nil {
 		crt = rng.Global.Crt
@@ -235,18 +408,41 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 		crt = &tmp
 	}
 	s.InitWindForSession(crt, 0)
-
-	// Battle entry order via the SAME shared order mission.go uses per C9 [08 "Placement and battle entry"]:
-	// features → units → barrier → starting resources directly to live stock outside ledger.
+	// Create services best-effort for fixture: use strict helper but tolerate missing world
+	if s.World != nil {
+		_ = createAndBindServices(s)
+	} else {
+		// No terrain: still need at least combat etc for Validate? For fixture without world, we skip full binding
+		if s.Build == nil {
+			s.Build = &construction.Service{}
+		}
+		if s.Combat == nil {
+			s.Combat = &combat.Service{}
+		}
+		if s.Features == nil {
+			s.Features = &features.Service{}
+		}
+		if s.Vis == nil {
+			s.Vis = &visibility.Service{}
+		}
+		if s.Movement == nil {
+			s.Movement = &movement.System{}
+		}
+		if s.Path == nil && s.Movement != nil && s.Movement.Scheduler != nil {
+			s.Path = s.Movement.Scheduler
+		}
+	}
 	if err := SkirmishBattleEntry(s, cfg, m, nil); err != nil {
 		return nil, err
 	}
-	// Construction service drives factory/mobile-build lifecycles [PLAN_08].
-	if s.Build == nil && s.World != nil {
-		s.Build = construction.NewService(s.World, s.Catalog, s.Units, s.Econ)
+	if s.World != nil && s.Movement != nil {
+		for _, u := range s.Units.Iter() {
+			s.Movement.EnsureUnit(u)
+		}
 	}
-	// Computer players get strategic AI managers dispatched by the coordinator
-	// [PLAN_11 C1/C11]; humans none.
+	if s.Vis != nil && s.World != nil {
+		publishVisibilityForAll(s)
+	}
 	if s.AI == nil {
 		s.AI = make([]*ai.Manager, 0, 2)
 	}
@@ -260,7 +456,7 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 		}
 		prof, perr := ai.LoadProfile(fs, "default")
 		if perr != nil || prof == nil {
-			continue // no profile available; skip AI this player [PLAN_11 WU-11-1]
+			continue
 		}
 		mgr := &ai.Manager{Player: uint8(i), Profile: prof}
 		mgr.Terrain = s.World
@@ -269,7 +465,6 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 		}
 		s.AI = append(s.AI, mgr)
 	}
-	// Gate-5 integration: ground steering/routes via movement.System [PLAN_14 C5 movement integration].
 	if s.World != nil && s.Movement == nil {
 		s.Movement = movement.NewSystem(s.World, movement.Profile{FootPrintX: 1, FootPrintZ: 1}, movement.NewOccupancyGrid())
 		if cat != nil {
@@ -279,10 +474,7 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 			s.Movement.EnsureUnit(u)
 		}
 	}
-	// Centralize subsystem registration in kernel phase order per C5 [01 §4.4] I7.
 	s.RegisterAll()
-	// Route through state machine as a skirmish (Gametype 2) which selects StateLoading directly per C3 [08 "Session states"].
-	// NewMission does this via SelectForGametype; keep parity.
 	_ = s.SelectForGametype(GametypeMultiplayer)
 	return s, nil
 }

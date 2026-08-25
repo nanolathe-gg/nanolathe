@@ -58,17 +58,19 @@ func TestTickOrderPlayersThenSlots(t *testing.T) {
 	_ = hA
 	_ = hB
 	world.Tick(1)
-	// Remaining 1→0 test: create building nanoframe with Remaining 1 → should stay >0 after tick
+	// P0-I02: Remaining is owned exclusively by construction.Service and must
+	// never be mutated by Units.Tick [05 "Construction target state"]. The old
+	// 0.01 stub is deleted. Verify unfinished unit never progresses in Tick
+	// even across 100 ticks when no builder exists.
 	def2 := &content.UnitDef{}
 	def2.MaxDamage = 100
 	hC, _ := world.Create(def2, 0, 0, 0, 0)
-	world.units[int(hC)].Remaining = 1.0
-	world.Tick(2)
-	if world.units[int(hC)].Remaining != 0.99 {
-		// Allow small tolerance due to stub 0.01 decrement; just check decreased
-		if world.units[int(hC)].Remaining >= 1.0 {
-			t.Fatalf("Remaining should decrement 1→0")
-		}
+	world.units[int(hC)].Remaining = 1.0 // nanoframe state 1→0 [04 §2.3] C3
+	for i := 0; i < 100; i++ {
+		world.Tick(uint32(2 + i))
+	}
+	if world.units[int(hC)].Remaining != 1.0 {
+		t.Fatalf("P0-I02: Tick must never mutate Remaining; got %v want 1.0 [05 \"Construction target state\"]", world.units[int(hC)].Remaining)
 	}
 }
 
