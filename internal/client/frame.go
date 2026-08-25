@@ -138,7 +138,7 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					}
 				}
 			}
-			// Projectiles: presentation-only interpolated markers/beams [06 §5][03 §5.4] (I6).
+			// Projectiles: presentation-only interpolated models/beams/markers [06 §5][03 §5.4] (I6).
 			// Preserve deterministic iteration (prev→cur matching) and do not advance sim RNG (I4).
 			if len(cur.Projectiles) > 0 {
 				prevProj := make(map[uint16]int, len(prev.Projectiles))
@@ -155,9 +155,15 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					px := snapshot.Lerp(pvp.X, cvp.X, alpha)
 					py := snapshot.Lerp(pvp.Y, cvp.Y, alpha)
 					pz := snapshot.Lerp(pvp.Z, cvp.Z, alpha)
+					interp := snapshot.ProjectileView{Handle: cvp.Handle, X: px, Y: py, Z: pz, WeaponID: cvp.WeaponID, Model: cvp.Model, Yaw: cvp.Yaw, Pitch: cvp.Pitch}
+					// Try real 3DO projectile model first [fmt 3do][03 §5.4][03 §5.2] with yaw/pitch offsets.
+					if interp.Model != "" && c.drawProjectileModel(interp, alpha) {
+						continue
+					}
+					// Fallback: dispatch via render projectiles for beam/rendertype handling [03 §5.4].
+					// For beams, draw line; for others, draw marker.
 					sx, sy := c.cam.WorldToScreen(px, py, pz)
-					// Simple 3x3 projectile marker; real beams use render.DispatchRendertype [03 §5.4].
-					// Presentation uses palette index 210 for visibility on dark terrain; never touches sim state.
+					// Simple 3x3 projectile marker; presentation uses palette index 210 for visibility; never touches sim state.
 					for dy := -1; dy <= 1; dy++ {
 						for dx := -1; dx <= 1; dx++ {
 							xp := int(sx) + dx
@@ -174,10 +180,9 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					}
 				}
 			}
-			// Features: minimal presentation-only markers when no 3DO available [05 "Feature instance"].
+			// Features: 3DO feature models with fallback markers [05 "Feature instance"] [fmt 3do].
 			if len(cur.Features) > 0 {
 				prevFeat := make(map[int]int)
-				// Features are not keyed by handle; use index when lengths match; otherwise snap to cur.
 				if len(prev.Features) == len(cur.Features) {
 					for i := range prev.Features {
 						prevFeat[i] = i
@@ -193,29 +198,27 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					fx := snapshot.Lerp(pvf.X, cvf.X, alpha)
 					fy := snapshot.Lerp(pvf.Y, cvf.Y, alpha)
 					fz := snapshot.Lerp(pvf.Z, cvf.Z, alpha)
+					interp := cvf
+					interp.X, interp.Y, interp.Z = fx, fy, fz
+					if interp.Model != "" && c.drawFeatureModel(interp) {
+						continue
+					}
 					sx, sy := c.cam.WorldToScreen(fx, fy, fz)
-					// Small footprint marker; real models via 3DO when available [fmt 3do].
 					if cvf.FootX > 0 && cvf.FootZ > 0 {
 						const pxPerCell = 16
 						hw := int(cvf.FootX) * pxPerCell / 2
 						hh := int(cvf.FootZ) * pxPerCell / 2
-						if hw < 3 {
-							hw = 3
-						}
-						if hh < 3 {
-							hh = 3
-						}
+						if hw < 3 { hw = 3 }
+						if hh < 3 { hh = 3 }
 						for dy := -hh; dy <= hh; dy++ {
 							for dx := -hw; dx <= hw; dx++ {
 								xp := int(sx) + dx
 								yp := int(sy) + dy
-								if xp < 0 || xp >= w || yp < 0 || yp >= h {
-									continue
-								}
+								if xp < 0 || xp >= w || yp < 0 || yp >= h { continue }
 								if dx == -hw || dx == hw || dy == -hh || dy == hh {
-									c.indexed[yp*w+xp] = 40 // dark outline
+									c.indexed[yp*w+xp] = 40
 								} else if cvf.IsBurning {
-									c.indexed[yp*w+xp] = 200 // burning tint
+									c.indexed[yp*w+xp] = 200
 								} else {
 									c.indexed[yp*w+xp] = 96
 								}
@@ -226,9 +229,7 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 							for dx := -1; dx <= 1; dx++ {
 								xp := int(sx) + dx
 								yp := int(sy) + dy
-								if xp < 0 || xp >= w || yp < 0 || yp >= h {
-									continue
-								}
+								if xp < 0 || xp >= w || yp < 0 || yp >= h { continue }
 								c.indexed[yp*w+xp] = 96
 							}
 						}
@@ -238,19 +239,39 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 			}
 		}
 		// Fog presentation [03 §3.3] C13 — reads snapshot fog cache copied from visibility.Service.Fog() each tick (I6).
-		// The cache is presentation-only and never writes sim state.
-		if ok && cur != nil && cur.Fog.Valid {
-			// Build a temporary FogCache from snapshot channels for render.BuildFogOps [03 §3.3].
+		// The cache is presentation-only and never writes sim state. Fog uses hard 32-pixel tiles [03 §3.3].
+		if ok && cur != nil && cur.Fog.Valid && c.cam != nil {
 			fc := &visibility.FogCache{}
-			// Use exported Channels via helper: reconstruct cache via SetChannel loop.
-			// For determinism, we directly build ops via snapshot data without mutating cache.
-			// Minimal bridge: ensure snapshot fog is read; full fog compose uses render package.
-			_ = fc
-			// Verify fog is presentation-only: never mutates Service.
-			_ = render.FogDarkPaletteIndex
-			// Build fog ops for viewport culling, but blit is omitted in this minimal bridge;
-			// correctness of channel values is locked by snapshot copy from Service.
-			_ = cur.Fog
+			// Reconstruct cache from snapshot channels via SetChannel [03 §3.3] I6.
+			for gy := int32(0); gy < cur.Fog.H; gy++ {
+				for gx := int32(0); gx < cur.Fog.W; gx++ {
+					idx := int(gy*cur.Fog.W + gx)
+					if idx < 0 || idx >= len(cur.Fog.Ch0) || idx >= len(cur.Fog.Ch1) {
+						continue
+					}
+					fc.SetChannel(gx, gy, cur.Fog.Ch0[idx], cur.Fog.Ch1[idx])
+				}
+			}
+			fc.Validate()
+			ops := render.BuildFogOps(fc, c.cam, c.cam.ViewW, c.cam.ViewH, cur.Fog.W, cur.Fog.H, c.pal, false)
+			for _, op := range ops {
+				x0, y0, x1, y1 := op.ScreenX0, op.ScreenY0, op.ScreenX1, op.ScreenY1
+				if x0 < 0 { x0 = 0 }
+				if y0 < 0 { y0 = 0 }
+				if x1 > int32(w) { x1 = int32(w) }
+				if y1 > int32(h) { y1 = int32(h) }
+				if x0 >= x1 || y0 >= y1 { continue }
+				// TODO(question): GAF fog frames (1..14) currently fill solid dark; retail GAF blit not yet wired.
+				// Patterned fog uses checker.
+				for py := y0; py < y1; py++ {
+					for px := x0; px < x1; px++ {
+						if op.Kind == render.FogKindPatterned && (px+py)%2 == 0 {
+							continue
+						}
+						c.indexed[int(py)*w+int(px)] = render.FogDarkPaletteIndex
+					}
+				}
+			}
 		}
 		// Battle chrome (build panel, ghosts, menus) after units [I6].
 		if c.Overlay != nil {

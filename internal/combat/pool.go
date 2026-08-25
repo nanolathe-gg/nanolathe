@@ -98,6 +98,29 @@ type Projectile struct {
 	OldMarker int16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 }
 
+// TraceEvent is an ordered debug trace event ON-04 [06 §3.3].
+// Disabled by default (nil Trace), nil-safe, consumes no RNG and alters no state.
+type TraceEvent struct {
+	Tick        uint32
+	Unit        pool.Handle
+	Slot        int
+	WeaponID    int32
+	Event       string // e.g., "aim_dispatch", "aim_function_absent", "aim_no_script", "aim_pool_exhausted", "aim_return_zero", "aim_return_nonzero", "aim_sleeping", "fire"
+	ReturnValue *int32 // optional for return events
+}
+
+// pendingKey identifies a per-unit weapon slot pending Aim ON-04 [06 §3.3].
+type pendingKey struct {
+	Unit pool.Handle
+	Slot int
+}
+
+// pendingAim tracks a dispatched Aim thread awaiting explicit return ON-04 [06 §3.3].
+type pendingAim struct {
+	ThreadIdx      int
+	DispatchedTick uint32
+}
+
 // Service is the projectile pool owner. Slots (pool.Projectiles) is the sole
 // allocation/dead/count authority per I5: Reserve appends at the active-span
 // tail and never fills holes; MarkDead sets a flag without decrementing count;
@@ -108,6 +131,9 @@ type Projectile struct {
 type Service struct {
 	Slots   pool.Projectiles               // sole count/dead authority (I5) [06 §5.1]
 	Records [ProjectileCapacity]Projectile // named records parallel to Slots
+
+	Trace       func(TraceEvent)          // optional ordered debug-trace sink ON-04, nil-safe, no RNG/state
+	pendingAims map[pendingKey]pendingAim // Aim dispatch tracking ON-04 [06 §3.3]
 }
 
 // Reserve appends a projectile record at the active-span tail [06 §5.1], [01 §6.1].
@@ -124,7 +150,7 @@ func (s *Service) Reserve() (pool.Handle, bool) {
 	}
 	idx := int(h) - 1
 	if idx >= 0 && idx < len(s.Records) {
-		s.Records[idx] = Projectile{}
+		s.Records[idx] = Projectile{} // TODO(T23): exact allocator zero-fill byte count for 107-byte projectile record not traced [01 §6.1][GAP T13]; Go zero-initializes the struct
 	}
 	return h, true
 }

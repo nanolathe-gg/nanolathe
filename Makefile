@@ -1,9 +1,25 @@
-.PHONY: check build test test-retail test-desktop kaiju-content
+.PHONY: check check-all build test test-retail test-desktop kaiju-content
 
 GO_TEST_PACKAGES := $(shell go list ./... | grep -vE '/(cmd/nanolathe|internal/client)$$')
 
 check:
 	@./tools/check
+
+# check-all is the auditable gate: it verifies gofmt and runs build/vet/test
+# over the entire module INCLUDING desktop packages (cmd/nanolathe,
+# internal/client). Retail-asset-dependent tests remain opt-in via
+# $NANOLATHE_TA_ROOT (or $NANOLATHE_RETAIL_ASSETS) and skip with a clear
+# message when assets are absent; no retail assets are required.
+check-all:
+	@echo "==> gofmt"
+	@unformatted=$$(gofmt -l . | grep -v '^content/' || true); \
+	if [ -n "$$unformatted" ]; then echo "not gofmt-clean:"; echo "$$unformatted"; exit 1; fi
+	@echo "==> go build"
+	@go build ./...
+	@echo "==> go vet"
+	@go vet ./...
+	@echo "==> go test (all packages including desktop, no retail assets required)"
+	@go test ./...
 
 build:
 	@go build ./...

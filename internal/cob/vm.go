@@ -94,6 +94,10 @@ type VM struct {
 	sfxSink     SFXSink                             // presentation-only sink for emit-sfx [GAP T15] C19; nil discards
 	sfxVisible  func(piece int, sfxType int32) bool // visibility gate for emit-sfx [GAP T15] C19; nil means always visible in tests
 	diagnostics []string                            // [P2-03] fallback diagnostics (divide, overflow, corrupt) not fatal
+
+	lastStarted     int      // last thread allocated by Start/StartByName, -1 if none [06 §3.3] ON-04 Aim dispatch
+	lastReturnValue [8]int32 // last explicit return value per thread [04 §5.3] ON-04
+	lastReturnValid [8]bool  // true if lastReturnValue holds an explicit return not yet consumed ON-04
 }
 
 // pieceAnim holds the per-piece per-axis interpolation lanes [04 §4.6].
@@ -252,6 +256,20 @@ func (v *VM) SetProgram(prog *Program) {
 			WaitThread: -1,
 		}
 	}
+	v.lastStarted = -1
+	for i := range v.lastReturnValid {
+		v.lastReturnValid[i] = false
+		v.lastReturnValue[i] = 0
+	}
+}
+
+// Program returns the bound program, or nil if none [04 §4.1].
+// Exported accessor replaces reflect/unsafe inspection in construction [I13].
+func (v *VM) Program() *Program {
+	if v == nil {
+		return nil
+	}
+	return v.prog
 }
 
 // BindPort registers a port handler for WU-06-7 [PLAN_06 Public API] [04 §4.4].
@@ -310,6 +328,44 @@ func (v *VM) StartByName(name string, args []int32) bool {
 	return v.Start(pc, args)
 }
 
+// LastStartedThread returns the last thread index allocated by Start/StartByName ON-04, -1 if none.
+func (v *VM) LastStartedThread() int {
+	if v == nil {
+		return -1
+	}
+	return v.lastStarted
+}
+
+// ConsumeReturn retrieves and clears the explicit return value for thread idx ON-04 [04 §5.3].
+// It returns true only if the thread executed an explicit return opcode; signal/abnormal termination never sets it.
+func (v *VM) ConsumeReturn(threadIdx int) (int32, bool) {
+	if v == nil || threadIdx < 0 || threadIdx >= 8 {
+		return 0, false
+	}
+	if !v.lastReturnValid[threadIdx] {
+		return 0, false
+	}
+	val := v.lastReturnValue[threadIdx]
+	v.lastReturnValid[threadIdx] = false
+	return val, true
+}
+
+// HasReturn reports whether thread idx has an unconsumed explicit return ON-04.
+func (v *VM) HasReturn(threadIdx int) bool {
+	if v == nil || threadIdx < 0 || threadIdx >= 8 {
+		return false
+	}
+	return v.lastReturnValid[threadIdx]
+}
+
+// IsThreadAlive reports whether thread idx is not idle (running/sleeping/waiting) ON-04.
+func (v *VM) IsThreadAlive(threadIdx int) bool {
+	if v == nil || threadIdx < 0 || threadIdx >= 8 {
+		return false
+	}
+	return v.Threads[threadIdx].Status != ThreadIdle
+}
+
 // Start starts script at prog word index with args asynchronously [04 §4.2] [04 §4.3].
 // It allocates the lowest clear thread slot [01 §6.1] C13; if no slot or the
 // script id is not a valid entry, it returns false without consuming args
@@ -357,6 +413,9 @@ func (v *VM) Start(script int, args []int32) bool {
 	for i := 0; i < n; i++ {
 		t.Stack[i] = args[i]
 	}
+	v.lastStarted = idx            // ON-04 Aim dispatch records thread relationship [06 §3.3]
+	v.lastReturnValid[idx] = false // clear stale return for this slot ON-04
+	v.lastReturnValue[idx] = 0
 	return true
 }
 
@@ -1545,8 +1604,11 @@ func (v *VM) runThread(idx int) {
 				return
 			}
 			t.PC = target // set absolutely [04 §4.3] C12
-		case 0x10065000: // return [04 §4.3]
-			t.stackPop() // popped value delivered to completion callback when set [04 §4.3]
+		case 0x10065000: // return [04 §4.3] ON-04 Aim completion value
+			ret, _ := t.stackPop() // popped value delivered to completion callback when set [04 §4.3] [06 §3.3] ON-04
+			// ON-04: store explicit return value for Aim handshake; signal/abnormal termination never sets it [04 §5.3]
+			v.lastReturnValue[idx] = ret
+			v.lastReturnValid[idx] = true
 			// Free thread and wake blocked callers [04 §4.2]
 			v.killThread(idx)
 			return

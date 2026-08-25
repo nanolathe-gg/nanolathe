@@ -21,6 +21,7 @@
 package movement
 
 import (
+	"math"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -65,6 +66,43 @@ type System struct {
 	Flights    map[pool.Handle]*FlightState
 	profiles   map[pool.Handle]Profile // per-unit resolved movement profile [04 §6.1]
 	sessions   []*path.Session         // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
+
+	// world is the units world bound via BindWorld (or via Tick for legacy path).
+	// StepUnit needs it to fetch the *units.Unit for a handle without passing
+	// the world on every per-unit call, so the caller can invoke StepUnit
+	// inside its own slot visit [04 §1.3] sweep order.
+	world *units.World
+
+	// per-tick shared indexing built deterministically ONCE in BeginTick [04 §8.2] C22.
+	// StepUnit consumes it; EndTick clears it.
+	tickStarted bool
+	tick        uint32
+	tickCarried map[pool.Handle]struct{}
+}
+
+// arrivalToleranceWorld is the goal tolerance for movement arrival [04 §7.3] C15.
+// Route pruning uses dx²+dz² ≤25 (5-cell radius) [04 §7.3] C15; that radius is
+// the only established movement arrival radius. Session's generic move arrival
+// (dist ≤2 world units [04 §3.5]) is stricter and is handled at the order
+// layer, but for StepResult we use the looser pruning radius so that a unit
+// that has consumed its route is considered arrived without requiring sub-cell
+// precision.
+// TODO(question): exact retail waypoint arrival tolerance beyond pruning 25 is not established [04 §8.1].
+const arrivalToleranceWorld = numeric.Fixed(5 * 16 * 65536) // 5 cells ×16 pixels ×65536 [03 §2.1][04 §7.3] C15
+
+// StepResult is the per-unit movement result for the slot visit [04 §8.1][04 §8.2].
+// Arrived is true only when the unit was dispatched with an active route and is now
+// within goal tolerance (not merely "route became active") [task].
+// DistToGoal is the Euclidean world distance (Fixed 16.16) to the order goal
+// (or to the last waypoint when no order goal exists) after the step.
+type StepResult struct {
+	Handle     pool.Handle   // the stepped handle
+	Arrived    bool          // true when within arrivalToleranceWorld and had an active route at entry
+	DistToGoal numeric.Fixed // Euclidean distance after step; large sentinel (1<<30) when no goal
+	HasRoute   bool          // route.Active after step (pruning may have cleared it)
+	Moved      bool          // position changed this tick
+	Blocked    bool          // collision blocked this tick [04 §8.2] C24
+	EmptyRoute bool          // true when no active route at entry (empty/failed) [task]
 }
 
 // NewSystem creates a System bound to terrain/profile/grid. It allocates the per-unit
@@ -96,6 +134,77 @@ func (s *System) SetClasses(classes map[string]*content.MovementClass) {
 		return
 	}
 	s.Classes = classes
+}
+
+// BindWorld binds the units world for per-unit stepping [04 §1.3].
+// The world is needed to fetch the *units.Unit for a handle inside StepUnit
+// so the caller can drive movement from its own slot visit without passing the
+// world on every call. Tick also binds it for legacy callers.
+// This is the minimal additive interface for ON-03; it does not change
+// internal/path or internal/orders.
+func (s *System) BindWorld(w *units.World) {
+	if s == nil {
+		return
+	}
+	s.world = w
+}
+
+// World returns the bound units world, if any.
+func (s *System) World() *units.World {
+	if s == nil {
+		return nil
+	}
+	return s.world
+}
+
+// distToGoal computes the Euclidean world distance from u to its order goal
+// (or to the last route waypoint when no order goal exists) [04 §7.3][04 §8.1].
+// When no goal exists it returns a large sentinel (1<<30) so Arrived stays false.
+func (s *System) distToGoal(u *units.Unit) numeric.Fixed {
+	if u == nil {
+		return numeric.Fixed(1 << 30)
+	}
+	q := orders.QueueForUnit(u)
+	if q != nil && q.LenPrimary() > 0 {
+		head := q.Primary()[0]
+		if head != nil && (head.GoalX != 0 || head.GoalZ != 0 || head.GoalY != 0 || head.Target != 0) {
+			dx := int64(head.GoalX) - int64(u.X)
+			dz := int64(head.GoalZ) - int64(u.Z)
+			d := math.Hypot(float64(dx), float64(dz))
+			return numeric.Fixed(int64(d))
+		}
+		// Also consider Primary()[0] for compatibility with older queue shape
+		if head != nil && head.GoalX == 0 && head.GoalZ == 0 {
+			// no explicit goal, fall through to route
+		} else if head != nil {
+			dx := int64(head.GoalX) - int64(u.X)
+			dz := int64(head.GoalZ) - int64(u.Z)
+			d := math.Hypot(float64(dx), float64(dz))
+			return numeric.Fixed(int64(d))
+		}
+	}
+	route := s.Routes[u.Handle]
+	if route != nil && route.Active && route.Count > 0 {
+		last := route.Points[route.Count-1]
+		wpX := world.CellToWorld(last.X)
+		wpZ := world.CellToWorld(last.Z)
+		wpX = numeric.Fixed(int64(wpX) + 524288)
+		wpZ = numeric.Fixed(int64(wpZ) + 524288)
+		dx := int64(wpX) - int64(u.X)
+		dz := int64(wpZ) - int64(u.Z)
+		d := math.Hypot(float64(dx), float64(dz))
+		return numeric.Fixed(int64(d))
+	}
+	// Check alternate queue accessor for session-style orders (Head())
+	if q != nil {
+		if h := q.Head(); h != nil && (h.GoalX != 0 || h.GoalZ != 0) {
+			dx := int64(h.GoalX) - int64(u.X)
+			dz := int64(h.GoalZ) - int64(u.Z)
+			d := math.Hypot(float64(dx), float64(dz))
+			return numeric.Fixed(int64(d))
+		}
+	}
+	return numeric.Fixed(1 << 30)
 }
 
 // resolveProfile derives a unit's movement profile from its definition's
@@ -400,134 +509,220 @@ func headingFromDelta(dx, dz int64) uint16 {
 	return uint16(lo)
 }
 
-// Tick runs the per-unit integration glue for all alive units in w. It must be
-// called in the movement integration window after Scheduler.Tick [01 §4.4] I7.
-// For each unit with an active route and a Move_Ground-class order, it does:
-// Prune, UpdateHeading toward current waypoint, Integrate, then collision fast-path/blocked handling.
-// Carried cargo is slaved to carrier and skips integration [04 §10.2]. Tick iterates
-// player 0..9 asc then slot asc [I1].
-func (s *System) Tick(tick uint32, w *units.World) {
-	_ = tick
-	if s == nil || w == nil {
+// BeginTick builds per-tick shared indexing deterministically ONCE per tick [04 §8.2] C22.
+// The cargo set (units whose Attachment.Carrier != 0) is captured here so all
+// StepUnit calls in this tick observe the same cargo membership [04 §10.2].
+// The occupancy grid itself is synchronous; clear-then-stamp finishes before the
+// next slot [04 §8.2] C22, so later StepUnit calls immediately observe earlier
+// commits without needing a separate grid copy. BeginTick must be called once
+// before any StepUnit in the tick; the world must have been bound via BindWorld
+// (or via Tick's legacy path).
+func (s *System) BeginTick(tick uint32) {
+	if s == nil {
 		return
 	}
-	// Build set of carried handles to skip in main integration [04 §10.2].
-	carried := make(map[pool.Handle]struct{}, 8)
-	for _, u := range w.IterSliced() {
-		if u == nil || !u.Alive {
-			continue
-		}
-		if u.Attachment.Carrier != 0 {
-			carried[u.Handle] = struct{}{}
+	s.tick = tick
+	s.tickStarted = true
+	// Deterministic cargo indexing [I1][04 §10.2]: player 0..9 asc then slot asc
+	// via IterSliced yields that order [P0-16]. Build once; StepUnit consumes.
+	s.tickCarried = make(map[pool.Handle]struct{}, 8)
+	w := s.world
+	if w != nil {
+		for _, u := range w.IterSliced() {
+			if u == nil || !u.Alive {
+				continue
+			}
+			if u.Attachment.Carrier != 0 {
+				s.tickCarried[u.Handle] = struct{}{}
+			}
 		}
 	}
-	for _, u := range w.IterSliced() {
-		if u == nil || !u.Alive {
-			continue
-		}
-		if _, isCarried := carried[u.Handle]; isCarried {
-			continue // cargo branch slaved after carrier moves [04 §10.2]
-		}
-		// Keep orders queue as authority: only follow route if primary order is Move_Ground-class [task]
-		q := orders.QueueForUnit(u)
-		if q == nil || q.LenPrimary() == 0 {
-			continue
-		}
-		head := q.Primary()[0]
-		if head == nil {
-			continue
-		}
-		name := orders.DescriptorFor(head.ID).Name
-		if name != "Move_Ground" && name != "VTOL_Move" && name != "QMove" && name != "VTOL_MobileBuild" && name != "MobileBuild" && name != "VTOL_Patrol" && name != "Patrol" {
-			// Still allow generic move for demo
-			if head.GoalX == 0 && head.GoalZ == 0 && head.GoalY == 0 {
+}
+
+// EndTick clears per-tick shared indexing and performs post-sweep work that
+// must happen once after all carriers have moved: cargo slaving and air-pad
+// repair [04 §10.2]. It must be called after the per-unit StepUnit loop.
+func (s *System) EndTick(tick uint32) {
+	if s == nil {
+		return
+	}
+	_ = tick
+	w := s.world
+	if w != nil {
+		s.SyncCarriedMotion(w) // [04 §10.2] cargo slaved to carrier, no occupancy stamp
+		// Air repair on pads for landed VTOLs [04 §10.2] VTOL_GetRepaired
+		for _, u := range w.IterSliced() {
+			if u == nil || !u.Alive {
 				continue
 			}
+			if u.Def != nil && u.Def.CanFly && u.Move.Mode == 1 {
+				for _, pad := range w.IterSliced() {
+					if pad == nil || pad == u {
+						continue
+					}
+					if !IsLandingPad(pad) {
+						continue
+					}
+					dx := int64(u.X) - int64(pad.X)
+					dz := int64(u.Z) - int64(pad.Z)
+					if dx*dx+dz*dz <= int64(16*65536)*int64(16*65536) {
+						AirRepair(w, u.Handle, pad, 5)
+						break
+					}
+				}
+			}
 		}
-		route := s.Routes[u.Handle]
-		if route == nil || !route.Active {
-			continue
+	}
+	s.tickCarried = nil
+	s.tickStarted = false
+}
+
+// StepUnit advances ONLY the unit identified by handle through the same
+// integration path Tick uses today [04 §8.1][04 §8.2][04 §10.1]. The per-unit
+// body is extracted so Tick becomes BeginTick+loop(StepUnit)+EndTick wrapper,
+// kept for compatibility and documented non-authoritative so the future central
+// loop replaces it. Shared per-tick indexing from BeginTick is consumed;
+// published routes are consumed without duplicate submission; route/goal
+// completion uses goal tolerance (arrival) and is exposed via StepResult.
+// Ground, air, landing, transport states keep working [04 §9.1][04 §10.2].
+// No presentation/camera state enters movement [I6]. Deterministic.
+func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
+	if s == nil {
+		return StepResult{Handle: handle, EmptyRoute: true, DistToGoal: numeric.Fixed(1 << 30)}
+	}
+	w := s.world
+	if w == nil {
+		return StepResult{Handle: handle, EmptyRoute: true, DistToGoal: numeric.Fixed(1 << 30)}
+	}
+	u := w.Unit(handle)
+	if u == nil || !u.Alive {
+		return StepResult{Handle: handle, EmptyRoute: true, DistToGoal: numeric.Fixed(1 << 30)}
+	}
+	// Cargo check via per-tick indexing [04 §10.2]. If BeginTick was not called
+	// we fall back to direct carrier check for backward compat (still deterministic).
+	if s.tickCarried != nil {
+		if _, isCarried := s.tickCarried[handle]; isCarried {
+			d := s.distToGoal(u)
+			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 		}
-		// Prune(mover pos) [04 §7.3] C15. The stored points carry the
-		// half-footprint bias added at publication (SearchConfig.Bias), so
-		// the mover's position is compared in the same biased domain.
-		profile := s.resolveProfile(u)
-		moverPt := Point{
-			X: world.WorldToCell(u.X) + int32(profile.FootPrintX/2),
-			Z: world.WorldToCell(u.Z) + int32(profile.FootPrintZ/2),
+	} else if u.Attachment.Carrier != 0 {
+		d := s.distToGoal(u)
+		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
+	}
+	// Keep orders queue as authority: only follow route if primary order is Move_Ground-class [task]
+	q := orders.QueueForUnit(u)
+	if q == nil || q.LenPrimary() == 0 {
+		// Also try alternate accessor for session-bound queues
+		if q == nil || (q.LenPrimary() == 0 && q.Head() == nil) {
+			d := s.distToGoal(u)
+			// Stopped unit stays stopped [task]: no movement, no arrival
+			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 		}
-		route.Prune(moverPt)
-		if !route.Active || route.Count == 0 {
-			continue
+	}
+	var head *orders.Node
+	if q.LenPrimary() > 0 {
+		head = q.Primary()[0]
+	} else {
+		head = q.Head()
+	}
+	if head == nil {
+		d := s.distToGoal(u)
+		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
+	}
+	name := orders.DescriptorFor(head.ID).Name
+	if name != "Move_Ground" && name != "VTOL_Move" && name != "QMove" && name != "VTOL_MobileBuild" && name != "MobileBuild" && name != "VTOL_Patrol" && name != "Patrol" {
+		if head.GoalX == 0 && head.GoalZ == 0 && head.GoalY == 0 {
+			d := s.distToGoal(u)
+			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 		}
-		// Current waypoint: index 1 if available else 0 [task]
-		var wp Point
-		if route.Count > 1 {
-			wp = route.Points[1]
+	}
+	route := s.Routes[handle]
+	hadRoute := route != nil && route.Active && route.Count > 0
+	if !hadRoute {
+		d := s.distToGoal(u)
+		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
+	}
+	// Prune(mover pos) [04 §7.3] C15. The stored points carry the half-footprint bias,
+	// so the mover's position is compared in the same biased domain [04 §7.1] C1.
+	profile := s.resolveProfile(u)
+	moverPt := Point{
+		X: world.WorldToCell(u.X) + int32(profile.FootPrintX/2),
+		Z: world.WorldToCell(u.Z) + int32(profile.FootPrintZ/2),
+	}
+	route.Prune(moverPt)
+	if !route.Active || route.Count == 0 {
+		// No waypoint left this tick: report arrival based on goal tolerance, not merely active [task][04 §7.3] C15
+		d := s.distToGoal(u)
+		arrived := hadRoute && d <= arrivalToleranceWorld
+		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
+	}
+	// Current waypoint: index 1 if available else 0 [task]
+	var wp Point
+	if route.Count > 1 {
+		wp = route.Points[1]
+	} else {
+		wp = route.Points[0]
+	}
+	wpWorldX := world.CellToWorld(wp.X)
+	wpWorldZ := world.CellToWorld(wp.Z)
+	wpWorldX = numeric.Fixed(int64(wpWorldX) + 524288) // 0.5 cell = 524288 = 1<<19 [03 §2.1]
+	wpWorldZ = numeric.Fixed(int64(wpWorldZ) + 524288)
+	dx := int64(wpWorldX) - int64(u.X)
+	dz := int64(wpWorldZ) - int64(u.Z)
+	if dx == 0 && dz == 0 {
+		d := s.distToGoal(u)
+		arrived := hadRoute && d <= arrivalToleranceWorld
+		// HasRoute still true but no heading
+		return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: arrived}
+	}
+	desired := headingFromDelta(dx, dz)
+	oldXRaw := int64(u.X)
+	oldZRaw := int64(u.Z)
+	var moved bool
+	var blocked bool
+	// Ground vs air branch [04 §10.1] C26
+	if u.Def != nil && u.Def.CanFly {
+		flight := s.Flights[handle]
+		if flight == nil {
+			d := s.distToGoal(u)
+			return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: d <= arrivalToleranceWorld && hadRoute}
+		}
+		flight.X = int32(u.X.Raw())
+		flight.Y = int32(u.Y.Raw())
+		flight.Z = int32(u.Z.Raw())
+		flight.TargetX = int32(wpWorldX.Raw())
+		flight.TargetZ = int32(wpWorldZ.Raw())
+		flight.TargetHeading = desired
+		if s.Terrain != nil && u.Def != nil {
+			targetY := CruiseAltitudeForOffset(s.Terrain, wpWorldX, wpWorldZ, u.Def.CruiseAlt)
+			flight.TargetY = int32(targetY.Raw())
 		} else {
-			wp = route.Points[0]
+			flight.TargetY = int32(u.Y.Raw())
 		}
-		// Convert waypoint cell+bias to world Fixed for heading [03 §2.1]
-		wpWorldX := world.CellToWorld(wp.X)
-		wpWorldZ := world.CellToWorld(wp.Z)
-		// Aim at cell center [03 §2.1]
-		wpWorldX = numeric.Fixed(int64(wpWorldX) + 524288) // 0.5 cell = 524288 = 1<<19
-		wpWorldZ = numeric.Fixed(int64(wpWorldZ) + 524288)
-		dx := int64(wpWorldX) - int64(u.X)
-		dz := int64(wpWorldZ) - int64(u.Z)
-		if dx == 0 && dz == 0 {
-			continue
+		if flight.MaxVelocity == 0 && u.Def.MaxVelocity != 0 {
+			flight.MaxVelocity = int32(u.Def.MaxVelocity)
 		}
-		desired := headingFromDelta(dx, dz)
-
-		// Ground vs air branch [04 §10.1] C26: can-fly units use flight integrator
-		if u.Def != nil && u.Def.CanFly {
-			flight := s.Flights[u.Handle]
-			if flight == nil {
-				continue
-			}
-			// Sync flight state from unit
-			flight.X = int32(u.X.Raw())
-			flight.Y = int32(u.Y.Raw())
-			flight.Z = int32(u.Z.Raw())
-			flight.TargetX = int32(wpWorldX.Raw())
-			flight.TargetZ = int32(wpWorldZ.Raw())
-			flight.TargetHeading = desired
-			// Cruise altitude: targetY = max(sea level, terrain height at target XZ) + cruisealt [04 §10.1]
-			// For waypoint following, use full cruisealt at waypoint.
-			if s.Terrain != nil && u.Def != nil {
-				targetY := CruiseAltitudeForOffset(s.Terrain, wpWorldX, wpWorldZ, u.Def.CruiseAlt)
-				flight.TargetY = int32(targetY.Raw())
-			} else {
-				flight.TargetY = int32(u.Y.Raw())
-			}
-			// Keep MaxVelocity etc from def if zero
-			if flight.MaxVelocity == 0 && u.Def.MaxVelocity != 0 {
-				flight.MaxVelocity = int32(u.Def.MaxVelocity)
-			}
-			if flight.Acceleration == 0 && u.Def.Acceleration != 0 {
-				flight.Acceleration = int32(u.Def.Acceleration)
-			}
-			if flight.BrakeRate == 0 && u.Def.BrakeRate != 0 {
-				flight.BrakeRate = int32(u.Def.BrakeRate)
-			}
-			flight.TurnRate = int32(u.Def.TurnRate)
-			IntegrateFlight(flight)
-			u.X = numeric.Fixed(int64(flight.X))
-			u.Y = numeric.Fixed(int64(flight.Y))
-			u.Z = numeric.Fixed(int64(flight.Z))
-			// Sync move heading/pitch/bank for snapshot [03 §2.4] C21
-			u.Move.Heading = flight.Heading
-			// Wake SFX band for air not needed; hover wake handled below for ground hover? Keep but air no wake.
-			continue
+		if flight.Acceleration == 0 && u.Def.Acceleration != 0 {
+			flight.Acceleration = int32(u.Def.Acceleration)
 		}
-
-		steer := s.Steers[u.Handle]
-		coll := s.Collisions[u.Handle]
+		if flight.BrakeRate == 0 && u.Def.BrakeRate != 0 {
+			flight.BrakeRate = int32(u.Def.BrakeRate)
+		}
+		flight.TurnRate = int32(u.Def.TurnRate)
+		IntegrateFlight(flight) // [04 §10.1] C26–C30, arithmetic preserved
+		u.X = numeric.Fixed(int64(flight.X))
+		u.Y = numeric.Fixed(int64(flight.Y))
+		u.Z = numeric.Fixed(int64(flight.Z))
+		u.Move.Heading = flight.Heading
+		moved = int64(u.X) != oldXRaw || int64(u.Z) != oldZRaw
+		blocked = false
+	} else {
+		steer := s.Steers[handle]
+		coll := s.Collisions[handle]
 		if steer == nil || coll == nil {
-			continue
+			d := s.distToGoal(u)
+			return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: d <= arrivalToleranceWorld && hadRoute}
 		}
-		// Sync steer position and terrain state
 		steer.X = int32(u.X.Raw())
 		steer.Z = int32(u.Z.Raw())
 		steer.HeightWord = int16(u.Y.Raw() >> 16)
@@ -546,20 +741,18 @@ func (s *System) Tick(tick uint32, w *units.World) {
 			}
 			steer.DefFlags = f
 		}
-		// Update heading before integration [04 §8.1] C20
-		steer.UpdateHeading(desired)
-		// Pitch input: the signed height difference toward the waypoint cell.
-		// TODO(question): [04 §8.1] does not name the exact operands feeding
-		// the >>11 shift; the waypoint's coarse floor against the unit's Y is
-		// the working reading (a one-height-byte step saturates the table).
-		biasX := int32(profile.FootPrintX / 2) // strip the publication bias to get the waypoint's own cell [04 §7.1] C1
+		steer.UpdateHeading(desired) // [04 §8.1] C20
+		biasX := int32(profile.FootPrintX / 2)
 		biasZ := int32(profile.FootPrintZ / 2)
-		pitchDelta := int32(s.Terrain.CoarseHeightAt(wp.X-biasX, wp.Z-biasZ).Raw() - int64(u.Y.Raw()))
-		cap := steer.SpeedCap(pitchDelta)
-		steer.UpdateSpeed(cap, pitchDelta)
-		steer.Integrate()
-
-		// Collision handling [04 §8.2] C23 C24
+		var pitchDelta int32
+		if s.Terrain != nil {
+			pitchDelta = int32(s.Terrain.CoarseHeightAt(wp.X-biasX, wp.Z-biasZ).Raw() - int64(u.Y.Raw()))
+		} else {
+			pitchDelta = 0
+		}
+		cap := steer.SpeedCap(pitchDelta)  // [04 §8.1] C21
+		steer.UpdateSpeed(cap, pitchDelta) // [04 §8.1] C20 C21: no rewrite of accel/brake/reverse/slope
+		steer.Integrate()                  // [04 §8.1] C20: heading commit + fixed trig position step
 		oldX := int64(u.X)
 		oldZ := int64(u.Z)
 		newX := int64(steer.X)
@@ -574,9 +767,7 @@ func (s *System) Tick(tick uint32, w *units.World) {
 		if u.Def != nil {
 			coll.MaxVelocity = int32(u.Def.MaxVelocity)
 		}
-		// Collision admission uses the MOVING unit's own profile, so it agrees
-		// with the passability the path was searched under [04 §6.1] [04 §8.2].
-		moverProfile := s.ProfileFor(u.Handle)
+		moverProfile := s.ProfileFor(handle) // [04 §6.1][04 §8.2] per-unit profile
 		perCell := func(c Cell) bool {
 			if s.Terrain != nil && !moverProfile.IsPassable(s.Terrain, c.X, c.Z) {
 				return false
@@ -589,56 +780,61 @@ func (s *System) Tick(tick uint32, w *units.World) {
 			return true
 		}
 		aggregate := func() bool { return true }
-		// TryFastPath is inside CommitOne; we call CommitOne which internally
-		// does fast path then validator then blocked/success [04 §8.2] C23 C24.
-		coll.CommitOne(s.Grid, coll.Mode, perCell, aggregate)
+		_, isBlocked := coll.CommitOne(s.Grid, coll.Mode, perCell, aggregate) // [04 §8.2] C23 C24: sync clear-then-stamp before next slot
+		blocked = isBlocked
 		u.X = numeric.Fixed(int64(coll.X))
 		u.Z = numeric.Fixed(int64(coll.Z))
 		if s.Terrain != nil {
 			u.Y = s.Terrain.HeightAt(u.X, u.Z)
 			if u.Y == numeric.Fixed(-1) {
-				// OOB sentinel: keep previous Y
 				u.Y = numeric.Fixed(int64(coll.Y))
 			}
-			// Hover/floater Y adjustments per [04 §9.2] waterline/floater clamp already in profile? Keep HeightAt.
 		}
-		// Sync steer to committed position
 		steer.X = coll.X
 		steer.Z = coll.Z
 		steer.Heading = coll.Heading
 		steer.Speed = coll.Speed
-		// Sync move state for snapshot
 		u.Move.Heading = coll.Heading
 		u.Move.Speed = numeric.Fixed(coll.Speed)
-		// Wake SFX for hover: band 2 or 3 emits wake types 2..5 [04 §9.1]
-		// We record band in Move.Pitch/Bank? Not needed for physics, but keep for presentation via wake check.
-		_ = ShouldEmitWake(s.Terrain, u)
+		_ = ShouldEmitWake(s.Terrain, u) // [04 §9.1] band check, no camera state [I6]
+		moved = int64(u.X) != oldXRaw || int64(u.Z) != oldZRaw
 	}
-	// After all carriers moved, slave cargo [04 §10.2]
-	s.SyncCarriedMotion(w)
-	// Air repair on pads for landed VTOLs [04 §10.2] VTOL_GetRepaired
-	for _, u := range w.IterSliced() {
+	// Arrival via goal tolerance, not merely route active [task]
+	d2 := s.distToGoal(u)
+	arrived := hadRoute && d2 <= arrivalToleranceWorld
+	// Published routes consumed without duplicate submission: StepUnit does not
+	// call SubmitMove; the scheduler's HasRequest gate in session path-submit
+	// remains authority [04 §7.3] C11 C12.
+	hasRouteAfter := route != nil && route.Active
+	return StepResult{Handle: handle, DistToGoal: d2, HasRoute: hasRouteAfter, EmptyRoute: false, Moved: moved, Blocked: blocked, Arrived: arrived}
+}
+
+// Tick runs the per-unit integration glue for all alive units in w.
+// It is kept for compatibility and documented non-authoritative so the future
+// central loop (units.World sweep that calls BeginTick+loop(StepUnit)+EndTick)
+// replaces it. The implementation is BeginTick + deterministic slot-asc loop of
+// StepUnit + EndTick, preserving the same integration path Tick uses today [task].
+// Mobile occupancy is committed synchronously in sweep order; clear-then-stamp
+// finishes before next slot; vacated cell reusable same tick [04 §8.2] C22.
+func (s *System) Tick(tick uint32, w *units.World) {
+	if s == nil || w == nil {
+		return
+	}
+	// Bind world for per-unit calls.
+	s.world = w
+	s.BeginTick(tick) // shared per-tick indexing built once [task]
+	// Deterministic snapshot of handles: player 0..9 asc then slot asc [I1].
+	// Iterate over snapshot so vacancy reuse same tick is visible via Grid but
+	// iteration order is stable.
+	units := w.IterSliced()
+	for _, u := range units {
 		if u == nil || !u.Alive {
 			continue
 		}
-		if u.Def != nil && u.Def.CanFly && u.Move.Mode == 1 {
-			// Check if on any IsAirBase pad
-			for _, pad := range w.IterSliced() {
-				if pad == nil || pad == u {
-					continue
-				}
-				if !IsLandingPad(pad) {
-					continue
-				}
-				dx := int64(u.X) - int64(pad.X)
-				dz := int64(u.Z) - int64(pad.Z)
-				if dx*dx+dz*dz <= int64(16*65536)*int64(16*65536) {
-					AirRepair(w, u.Handle, pad, 5)
-					break
-				}
-			}
-		}
+		// StepUnit advances ONLY that unit through the same integration path [task]
+		_ = s.StepUnit(u.Handle, tick)
 	}
+	s.EndTick(tick) // cargo slaving + pad repair + clear per-tick state
 }
 
 // Integrate is the ground integrator wrapper required by PLAN_07 Public API.

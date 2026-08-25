@@ -8,20 +8,22 @@ import (
 )
 
 func TestQueueOverflowCap_Primary(t *testing.T) {
+	// [P1-I09] queue is now dynamic with OOM guard far outside stock (105 << 10000).
+	// The old 64 cap was inside stock and has been replaced; the guard is now OOMGuardQueue.
 	rng.SeedGlobal(1, 0)
 	q := &Queue{}
 	id := Lookup("Move_Ground")
 	if id == 0 {
 		t.Fatalf("lookup Move_Ground failed")
 	}
-	for i := 0; i < MaxPrimaryQueue+5; i++ {
+	for i := 0; i < OOMGuardQueue+5; i++ {
 		q.Push(id, Node{Param1: uint32(i)})
 	}
-	if len(q.primary) != MaxPrimaryQueue {
-		t.Fatalf("primary overflow cap = %d, want %d", len(q.primary), MaxPrimaryQueue)
+	if len(q.primary) != OOMGuardQueue {
+		t.Fatalf("primary OOM guard cap = %d, want %d", len(q.primary), OOMGuardQueue)
 	}
 	if len(q.Diagnostics()) == 0 {
-		t.Fatalf("expected diagnostic for overflow")
+		t.Fatalf("expected diagnostic for OOM guard overflow")
 	}
 	found := false
 	for _, d := range q.Diagnostics() {
@@ -31,24 +33,42 @@ func TestQueueOverflowCap_Primary(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("diagnostics missing overflow text: %v", q.Diagnostics())
+		t.Fatalf("diagnostics missing OOM guard text: %v", q.Diagnostics())
+	}
+	// Stock-reachable length 105 must not trigger guard
+	q2 := &Queue{}
+	for i := 0; i < 105; i++ {
+		q2.Push(id, Node{Param1: uint32(i)})
+	}
+	if len(q2.primary) != 105 {
+		t.Fatalf("stock queue 105 should not be capped, got %d", len(q2.primary))
+	}
+	if len(q2.Diagnostics()) != 0 {
+		t.Fatalf("stock queue should not diagnostic, got %v", q2.Diagnostics())
 	}
 }
 
 func TestQueueOverflowCap_Secondary(t *testing.T) {
+	// Secondary is also dynamic with OOM guard [P1-I09]; maxSecondary in corpus is 1 << 10000.
 	q := &Queue{}
 	id := Lookup("BuildWeapon")
 	if id == 0 {
 		t.Fatalf("lookup BuildWeapon failed")
 	}
-	for i := 0; i < MaxSecondaryQueue+3; i++ {
+	for i := 0; i < OOMGuardQueue+3; i++ {
 		q.PushSecondary(id, Node{Param1: uint32(i)})
 	}
-	if len(q.secondary) != MaxSecondaryQueue {
-		t.Fatalf("secondary overflow cap = %d, want %d", len(q.secondary), MaxSecondaryQueue)
+	if len(q.secondary) != OOMGuardQueue {
+		t.Fatalf("secondary OOM guard cap = %d, want %d", len(q.secondary), OOMGuardQueue)
 	}
 	if len(q.Diagnostics()) == 0 {
-		t.Fatalf("expected diagnostic for secondary overflow")
+		t.Fatalf("expected diagnostic for secondary OOM guard overflow")
+	}
+	// Stock secondary max 1 should not hit guard
+	q2 := &Queue{}
+	q2.PushSecondary(id, Node{Param1: 1})
+	if len(q2.secondary) != 1 || len(q2.Diagnostics()) != 0 {
+		t.Fatalf("stock secondary should not guard")
 	}
 }
 

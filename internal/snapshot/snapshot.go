@@ -32,6 +32,9 @@ type PieceView struct {
 	Name             string        // piece name for diagnostics/provenance
 	RotX, RotY, RotZ uint16        // Z then X then Y rotation accumulators [03 §2.4] C21
 	Tx, Ty, Tz       numeric.Fixed // script translation lanes [03 §2.4] C21; authored parent translation stays in Model
+	DontShade        bool          // dont-shade pin row 15 [03 §2.4.1] [04 §4.3] 0x1000e000
+	Hidden           bool          // hide/show [04 §4.3] bit 0
+	DontShadow       bool          // dont-shadow [04 §4.3] 0x1000a000
 }
 
 // UnitView is the presentation view of one live unit. It is published by the
@@ -57,6 +60,10 @@ type ProjectileView struct {
 	X, Y, Z  numeric.Fixed
 	WeaponID int32
 	Shooter  pool.Handle
+	Model    string      // weapon model for 3DO draw [02 "Weapon record"] model
+	Yaw      uint16      // orientation yaw [06 §5.1] I2
+	Pitch    uint16      // orientation pitch [06 §5.1]
+	Flags    uint32      // reserved
 }
 
 // FeatureView is the presentation view of one live feature [05 "Feature instance and terrain cell"].

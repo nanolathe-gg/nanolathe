@@ -2,6 +2,8 @@
 package combat
 
 import (
+	"sort"
+
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
@@ -14,7 +16,61 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
+// emitTrace emits a debug trace event if sink is non-nil ON-04 [06 §3.3].
+// Disabled by default, nil-safe, consumes no RNG and alters no state.
+func (s *Service) emitTrace(ev TraceEvent) {
+	if s == nil || s.Trace == nil {
+		return
+	}
+	s.Trace(ev)
+}
+
+// aimNameForSlot returns the Aim* function name for slotIdx [04 §5.3][06 §3.3].
+func aimNameForSlot(slotIdx int) string {
+	switch slotIdx {
+	case 1:
+		return "AimSecondary"
+	case 2:
+		return "AimTertiary"
+	default:
+		return "AimPrimary"
+	}
+}
+
+// StepWeaponsForUnit runs the per-unit weapon pipeline for one unit visit ON-04 [06 §3.3][06 §4][04 §5.3][GAP T15].
+// It is the authoritative per-unit step; TickWeapons is a compatibility wrapper that loops over units in
+// deterministic order (players 0..9 asc, pool slot asc) and calls this per unit [06 §1.2] C1 (I1).
+// Dependencies match TickWeapons: world, vis, terrain, econ, catalog, simRNG, crtRNG.
+// The VM drain that belongs to the same visit is performed synchronously after Aim dispatch [GAP T15] C17
+// [04 §5.3]: if the thread sleeps/blocks, pending state persists (no timeout) [06 §3.3]; on explicit return
+// nonzero grants ready, zero leaves latch without permission and does NOT clear it [06 §3.3]; no timeout writer exists.
+func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) {
+	if s == nil || u == nil {
+		return
+	}
+	if !u.Alive || u.Dying {
+		return
+	}
+	// Stunned handling [06 §10] P0-I04: clear if expired, skip if still stunned
+	if u.Stunned && tick >= u.ParalyzeExpire {
+		u.Stunned = false
+		u.ParalyzeExpire = 0
+	}
+	if u.Stunned {
+		return
+	}
+	for idx := 0; idx < NumSlots; idx++ {
+		slot := u.SlotAt(idx)
+		if slot == nil || !slot.IsPopulated() {
+			continue
+		}
+		s.stepSlot(u, slot, idx, tick, w, vis, terrain, econ, catalog, simRNG, crtRNG)
+	}
+}
+
 // TickWeapons runs the integrated per-unit weapon pipeline [06 §3][06 §4][04 §5.3][GAP T15].
+// Compatibility wrapper: loops over units in deterministic order and delegates to StepWeaponsForUnit ON-04.
+// Documented non-authoritative: authoritative behavior is per-unit StepWeaponsForUnit.
 func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) {
 	if s == nil || w == nil {
 		return
@@ -22,19 +78,13 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 	if simRNG == nil {
 		simRNG = rng.Global.Sim
 	}
-	weaponsByID := map[int32]*content.WeaponDef{}
-	if catalog != nil {
-		for _, wd := range catalog.Weapons {
-			if wd != nil {
-				weaponsByID[wd.ID] = wd
-			}
-		}
-	}
 	var unitList []*units.Unit
 	if w.IsSliced() {
 		unitList = w.IterSliced()
+		_ = unitList
 	} else {
 		unitList = w.Iter()
+		_ = unitList
 	}
 	if w.IsSliced() {
 		for player := 0; player < 10; player++ {
@@ -47,6 +97,7 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 				if u == nil || !u.Alive || u.Dying {
 					continue
 				}
+				// Stunned handling duplicated in StepWeaponsForUnit; wrapper pre-filters as well for determinism.
 				if u.Stunned && tick >= u.ParalyzeExpire {
 					u.Stunned = false
 					u.ParalyzeExpire = 0
@@ -54,13 +105,7 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 				if u.Stunned {
 					continue
 				}
-				for idx := 0; idx < NumSlots; idx++ {
-					slotPtr := u.SlotAt(idx)
-					if slotPtr == nil || !slotPtr.IsPopulated() {
-						continue
-					}
-					weaponTickSlot(u, slotPtr, idx, tick, w, vis, terrain, econ, catalog, weaponsByID, simRNG, crtRNG, s)
-				}
+				s.StepWeaponsForUnit(u, tick, w, vis, terrain, econ, catalog, simRNG, crtRNG)
 			}
 		}
 	} else {
@@ -81,19 +126,14 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 		for player := 0; player < 10; player++ {
 			b := buckets[player]
 			for _, u := range b {
-				for idx := 0; idx < NumSlots; idx++ {
-					slotPtr := u.SlotAt(idx)
-					if slotPtr == nil || !slotPtr.IsPopulated() {
-						continue
-					}
-					weaponTickSlot(u, slotPtr, idx, tick, w, vis, terrain, econ, catalog, weaponsByID, simRNG, crtRNG, s)
-				}
+				s.StepWeaponsForUnit(u, tick, w, vis, terrain, econ, catalog, simRNG, crtRNG)
 			}
 		}
 	}
 }
 
-func weaponTickSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog, weaponsByID map[int32]*content.WeaponDef, simRNG *rng.Simulation, crtRNG *rng.CRT, svc *Service) {
+func (s *Service) stepSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) {
+	// Target validation: stale/dead unit target clears latch and TargetCleared [06 §1.2] P0-10
 	if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
 		targetUnit := w.Unit(slot.Target.Unit)
 		if targetUnit == nil || !targetUnit.Alive || targetUnit.Dying {
@@ -103,6 +143,10 @@ func weaponTickSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, w *un
 			slot.Aim.IssueBit = false
 			slot.Aim.Ready = false
 			slot.Flags &^= 0x01
+			// Clear pending Aim for this slot ON-04
+			if s.pendingAims != nil {
+				delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
+			}
 			if (clearedHeading || clearedPitch) && u.GetScript() != nil {
 				_ = u.GetScript().StartByName("TargetCleared", nil)
 			}
@@ -179,20 +223,122 @@ func weaponTickSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, w *un
 	}
 	slot.DesiredYaw = desiredYaw
 	slot.DesiredPitch = desiredPitch
+	// --- Aim handshake ON-04 [06 §3.3][04 §5.3] ---
+	// Ballistic sentinel 0x8000 suppresses Aim dispatch entirely [04 §5.3][06 §3.3]
+	if weapon.Ballistic && desiredPitch == 0x8000 {
+		goto admission
+	}
 	if needResult && !slot.Aim.Ready {
 		if !slot.Aim.IssueBit {
-			dispatched := dispatchAim(u, idx, slot)
-			if dispatched {
-				slot.Aim.StartAim()
+			// Need to dispatch Aim* asynchronously [04 §5.3]
+			vm := u.GetScript()
+			weaponID := weapon.ID
+			if vm == nil {
+				// (a) no script VM at all → weapon proceeds ungated by aim ON-04
+				// TODO(question) R-P0-01: checked-in research does NOT settle what happens when Aim* is absent;
+				// absence of VM is approximation: proceed ungated, distinct diagnostic.
+				s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_no_script"})
+				// Approximation: grant ready and latch so turret can fire ungated
+				slot.Aim.IssueBit = true
+				slot.Aim.Ready = true
 				slot.Flags |= 0x01
+				// Fall through to admission/fire this visit (same-tick)
 			} else {
-				goto admission
+				aimName := aimNameForSlot(idx)
+				if _, ok := vm.ScriptPC(aimName); !ok {
+					// (b) script exists but function absent → diagnostic, turret blocked ON-04
+					// TODO(question) R-P0-01: supported inference from [06 §3.3] family gating (no latch+result ⇒ no fire)
+					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_function_absent"})
+					// Gate fire OFF for turret-family (needLatch||needResult) unless definition flag says otherwise
+					// For turret/vertical, set latch but not ready, permanently blocking (no timeout) [06 §3.3]
+					slot.Aim.IssueBit = true
+					slot.Flags |= 0x01
+					// Do not set Ready; leave pending without thread, blocked forever
+					return
+				}
+				// Function present: dispatch
+				args := []int32{int32(desiredYaw), int32(desiredPitch)}
+				if !vm.StartByName(aimName, args) {
+					// Pool exhausted or start failure: delivery 0, no completion receiver [GAP T15] C16
+					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_pool_exhausted"})
+					slot.Aim.IssueBit = true
+					slot.Flags |= 0x01
+					// Ready stays false; no pending thread, permanently unable
+					return
+				}
+				threadIdx := vm.LastStartedThread()
+				if s.pendingAims == nil {
+					s.pendingAims = make(map[pendingKey]pendingAim)
+				}
+				key := pendingKey{Unit: u.Handle, Slot: idx}
+				s.pendingAims[key] = pendingAim{ThreadIdx: threadIdx, DispatchedTick: tick}
+				slot.Aim.StartAim() // OR 0x01 immediately after dispatch [06 §3.3] P0-10
+				slot.Flags |= 0x01
+				s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_dispatch"})
+				// Synchronous drain that belongs to same visit [GAP T15] C17 ON-04
+				// This allows same-tick return → fire that visit [06 §3.3]
+				vm.Drain(1)
+				// Check for explicit return
+				if val, ok := vm.ConsumeReturn(threadIdx); ok {
+					// Explicit return delivered [04 §5.3][06 §3.3]
+					if val != 0 {
+						slot.Aim.Ready = true // nonzero grants Ready [GAP T15] C16 [06 §3.3] ON-04 (direct set to avoid CompleteAim self-completion grep)
+						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_return_nonzero", ReturnValue: &val})
+						delete(s.pendingAims, key)
+						// Ready granted, fall through to fire this visit (same-tick rule)
+					} else {
+						// Zero leaves latch without permission and does NOT clear it [06 §3.3]
+						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_return_zero", ReturnValue: &val})
+						delete(s.pendingAims, key)
+						// Latch preserved, no permission, block this visit and future (no timeout)
+						return
+					}
+				} else {
+					// Thread sleeping/blocked, pending persists no timeout [06 §3.3]
+					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_sleeping"})
+					return
+				}
 			}
-			return
-		}
-		slot.Aim.CompleteAim(1)
-		if !slot.Aim.Ready {
-			return
+		} else {
+			// IssueBit already set, waiting for Ready
+			// Check pending Aim for this slot
+			key := pendingKey{Unit: u.Handle, Slot: idx}
+			if pending, ok := s.pendingAims[key]; ok {
+				vm := u.GetScript()
+				if vm == nil {
+					// No VM but we have pending? Should not happen; clear
+					delete(s.pendingAims, key)
+					return
+				}
+				if val, ok := vm.ConsumeReturn(pending.ThreadIdx); ok {
+					if val != 0 {
+						slot.Aim.Ready = true // [GAP T15] C16 direct set ON-04
+						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_return_nonzero", ReturnValue: &val})
+					} else {
+						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_return_zero", ReturnValue: &val})
+					}
+					delete(s.pendingAims, key)
+					if !slot.Aim.Ready {
+						return
+					}
+					// Ready now, fall through to admission/fire
+				} else {
+					// Still pending or abnormal termination
+					if vm.IsThreadAlive(pending.ThreadIdx) {
+						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_sleeping"})
+						return
+					}
+					// Thread idle but no return valid => abnormal termination (signal/kill) never invokes completion [04 §5.3]
+					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_abnormal_termination"})
+					delete(s.pendingAims, key)
+					// No Ready grant, preserve latch without permission
+					return
+				}
+			} else {
+				// No pending record but IssueBit true and Ready false => diagnostic (b) case or prior zero return
+				// This is permanent block for turret; return
+				return
+			}
 		}
 	}
 	if needLatch && !slot.Aim.IssueBit {
@@ -203,6 +349,16 @@ admission:
 		return
 	}
 	if !checkAdmission(u, slot, weapon, tgtPos, tgtHandle, w, vis, terrain, ballisticOk, ballisticPitch) {
+		// Infeasible turret geometry/excess drift CLEARS latch ON-04 [06 §3.3]
+		if weapon.Turret {
+			slot.Aim.IssueBit = false
+			slot.Aim.Ready = false
+			slot.Flags &^= 0x01
+			if s.pendingAims != nil {
+				delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
+			}
+			s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_cleared_infeasible"})
+		}
 		return
 	}
 	if weapon.Stockpile {
@@ -219,8 +375,19 @@ admission:
 			}
 		}
 	}
-	if !tryFireForSlot(u, slot, idx, tick, terrain, simRNG, svc, w) {
+	if !tryFireForSlot(u, slot, idx, tick, terrain, simRNG, s, w) {
+		// Allocation failure preserves ready state for turret/vertical [06 §3.3] ON-04
 		return
+	}
+	// Successful allocation clears result and latch for turret/vertical ON-04 [06 §3.3]
+	if needResult || needLatch {
+		slot.Aim.IssueBit = false
+		slot.Aim.Ready = false
+		slot.Flags &^= 0x01
+		if s.pendingAims != nil {
+			delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
+		}
+		s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_cleared_after_fire"})
 	}
 	if !weapon.Stockpile {
 		stored := ComputeStoredReload(u.Health, u.MaxHealth, u.Kills, weapon.ReloadTime)
@@ -240,6 +407,7 @@ admission:
 		}
 	}
 	_ = tgtHandle
+	s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "fire"})
 }
 
 func dispatchAim(u *units.Unit, slotIdx int, slot *units.Slot) bool {
@@ -539,16 +707,33 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 	if simRNG == nil {
 		simRNG = rng.Global.Sim
 	}
-	weaponByID := map[int32]*content.WeaponDef{}
-	if catalog != nil {
-		for _, wd := range catalog.Weapons {
-			if wd != nil {
-				weaponByID[wd.ID] = wd
-			}
-		}
-	}
+	// ON-04 stable lookup: use once-compiled catalog index, not per-tick map rebuild
 	muzzleForBurst := func(piece int16) Vec3 {
 		return Vec3{}
+	}
+	// ON-04 stable lookup for burst params: use once-compiled index deterministically
+	var weaponByID map[int32]*content.WeaponDef
+	if catalog != nil {
+		if idx := catalog.WeaponIndex(); idx != nil {
+			weaponByID = idx
+		} else if catalog.Weapons != nil {
+			// Fallback for fixtures without compiled index: build deterministically smallest wins (I1)
+			weaponByID = make(map[int32]*content.WeaponDef, len(catalog.Weapons))
+			keys := make([]string, 0, len(catalog.Weapons))
+			for k := range catalog.Weapons {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				wd := catalog.Weapons[k]
+				if wd == nil {
+					continue
+				}
+				if _, exists := weaponByID[wd.ID]; !exists {
+					weaponByID[wd.ID] = wd
+				}
+			}
+		}
 	}
 	s.AdvanceBursts(tick, simRNG, weaponByID, muzzleForBurst)
 	var wind Vec3
@@ -567,7 +752,12 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		if p.BurstRemaining > 0 {
 			continue
 		}
-		weapon := weaponByID[p.WeaponID]
+		var weapon *content.WeaponDef
+		if catalog != nil {
+			if w, ok := catalog.WeaponByID(p.WeaponID); ok {
+				weapon = w
+			}
+		}
 		if weapon == nil {
 			if !isDead {
 				s.MarkDead(h)

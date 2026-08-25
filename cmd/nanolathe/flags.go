@@ -26,6 +26,7 @@ type Options struct {
 	Shot      string // render --frames composed frames headless and write this PNG
 	Frames    int    // ticks to advance before --shot captures (default 30)
 	ShotModel string // with --shot: render this single 3DO model at screen center
+	ShotMenu  string // with --shot: render this frontend panel instead of a battle
 }
 
 // ErrHelp reports that usage was requested and printed.
@@ -54,6 +55,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.IntVar(&opts.Ticks, "ticks", 0, "headless tick budget; 0 runs until the session ends")
 	set.StringVar(&opts.Shot, "shot", "", "render headless and write the composed frame to this PNG path")
 	set.StringVar(&opts.ShotModel, "shot-model", "", "with --shot: render this single 3DO model at screen center")
+	set.StringVar(&opts.ShotMenu, "shot-menu", "", "with --shot: render a frontend panel (main, single, mission, map, skirmish)")
 	set.IntVar(&opts.Frames, "frames", 30, "ticks to advance before --shot captures")
 	set.Int64Var(&opts.Seed, "seed", -1, "simulation RNG seed; negative derives one from the clock")
 	set.StringVar(&opts.Dump, "dump", "", "headless diagnostic dump (manifest, catalog, providers, route)")

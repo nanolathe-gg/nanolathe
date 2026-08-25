@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -31,6 +32,13 @@ const (
 	modeMenuMap
 	modeMenuSkirmish
 	modeBattle
+)
+
+// retailScreenW and retailScreenH are the frontend display the .GUI files are
+// authored against; every full-screen shell window is (0,0,640,480) [07 §4].
+const (
+	retailScreenW = 640
+	retailScreenH = 480
 )
 
 type retailPanelAssets struct {
@@ -97,6 +105,14 @@ type gameShell struct {
 	modalPressed bool
 
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// window in front of the one already open and keeps a SAVE UNDER surface
+	// for it, so a panel window with no background bitmap — SELMAP.GUI is the
+	// single-player case — is drawn over the screen beneath it rather than
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	under     *retailPanelState
+	underMode shellMode
+
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// left button is down on an associated list scrollbar.  It is presentation
 	// state only; the list's top item remains the model used by the authored
 	// MAPNAMES/Campaign/Missions controls.
@@ -108,17 +124,15 @@ type gameShell struct {
 	battle *battleSession
 }
 
-// runGameShell is the windowed entry: retail menus by default; straight into
-// the battle view when --map was supplied (the established development path).
-func runGameShell(opts Options, cs *contentSet) error {
-	if opts.Map != "" {
-		return runBattleView(opts, cs)
-	}
-
+// newGameShell builds the frontend state: the skirmish map list, the retail
+// resource set, and the opening panel. The windowed entry and the headless
+// menu screenshot path share it so a captured frame is the same composition
+// the window shows.
+func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	shell := &gameShell{opts: opts, cs: cs, mode: modeMenuMain}
 	maps, err := enumerateSkirmishMaps(cs.fs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	shell.maps = maps
 	shell.mapLabels = make([]string, len(maps))
@@ -136,6 +150,21 @@ func runGameShell(opts Options, cs *contentSet) error {
 		shell.font = shell.assets.font
 	}
 	shell.openMenu(modeMenuMain)
+	return shell, nil
+}
+
+// runGameShell is the windowed entry: retail menus by default; straight into
+// the battle view when --map was supplied (the established development path).
+func runGameShell(opts Options, cs *contentSet) error {
+	if opts.Map != "" {
+		return runBattleView(opts, cs)
+	}
+
+	shell, err := newGameShell(opts, cs)
+	if err != nil {
+		return err
+	}
+	maps := shell.maps
 
 	const winW, winH = 640, 480
 	shell.cam = &camera.Camera{X: 0, Z: 0, ViewW: winW, ViewH: winH, MapW: winW, MapH: winH}
@@ -205,7 +234,15 @@ func loadMenuAssets(cs *contentSet) *menuAssets {
 	a.panel[modeMenuMain] = loadRetailPanel(cs, "guis/mainmenu.gui", "bitmaps/frontendx.pcx", "anims/mainmenu.gaf")
 	a.panel[modeMenuSingle] = loadRetailPanel(cs, "guis/single.gui", "bitmaps/singlebg.pcx", "anims/single.gaf")
 	a.panel[modeMenuMission] = loadRetailPanel(cs, "guis/newgame.gui", "bitmaps/newcampaign4x.pcx", "anims/newgame.gaf")
-	a.panel[modeMenuMap] = loadRetailPanel(cs, "guis/selmap.gui", "bitmaps/selectgame2x.pcx", "")
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// The file is 640x480 but its panel art occupies only the top-left
+	// 494x420, matching the window's own 494x420 record at (84,12), so it is
+	// drawn at the window origin and clipped to the window [07 §4].
+	// bitmaps/selectgame2x.pcx belongs to the multiplayer SELGAME.GUI lobby
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	a.panel[modeMenuMap] = loadRetailPanel(cs, "guis/selmap.gui", "bitmaps/dselectmap2.pcx", "")
 	a.panel[modeMenuSkirmish] = loadRetailPanel(cs, "guis/skirmish.gui", "bitmaps/skirmsetup4x.pcx", "anims/skirmish.gaf")
 	a.message = loadRetailPanel(cs, "guis/msgbox.gui", "", "")
 	if p, err := formats.LoadPCXFile(cs.fs, "bitmaps/newcampaign4.pcx"); err == nil {
@@ -242,6 +279,10 @@ func loadRetailPanel(cs *contentSet, guiName, pcxName, gafName string) *retailPa
 }
 
 func (g *gameShell) openMenu(mode shellMode) {
+	g.under, g.underMode = nil, mode
+	if g.panel != nil && mode != g.mode && g.panelWindowNeedsUnder(mode) {
+		g.under, g.underMode = g.panel, g.mode
+	}
 	g.mode = mode
 	g.panel = nil
 	g.modal = nil
@@ -271,6 +312,27 @@ func (g *gameShell) openMenu(mode shellMode) {
 	}
 	g.refreshRetailPanel()
 	g.resolveRetailButtonGeometry()
+}
+
+// panelWindowNeedsUnder reports whether opening mode pushes a panel window
+// onto the chain rather than replacing the screen. The test is the retail one:
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// and height, positioned at the window origin, and copies the screen into it
+// before anything is painted. A window smaller than the display therefore
+// never erases what is under it, and retail keeps a SAVE UNDER copy so it can
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// is the single-player case; the four frontend screens are all authored at
+// (0,0,640,480) and cover everything [07 §4].
+func (g *gameShell) panelWindowNeedsUnder(mode shellMode) bool {
+	if g.assets == nil {
+		return false
+	}
+	p := g.assets.panel[mode]
+	if p == nil || p.window == nil {
+		return false
+	}
+	r := p.window.Rect
+	return r.X > 0 || r.Y > 0 || int(r.X+r.W) < retailScreenW || int(r.Y+r.H) < retailScreenH
 }
 
 func (g *gameShell) step(delta float64, cl *client.Client) {
@@ -399,9 +461,46 @@ func enumerateSkirmishMaps(fs *vfs.FS) ([]string, error) {
 			continue
 		}
 		seen[key] = true
-		names = append(names, key)
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// records, not a folded copy: the localized-string lookup is only
+		// consulted when it returns something different from the stem.
+		names = append(names, base)
 	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// comparison is _stricmp, so the authored MAPNAMES order is ascending and
+	// case-insensitive, not archive order [07 §4].
+	sort.SliceStable(names, func(i, j int) bool { return retailStricmp(names[i], names[j]) < 0 })
 	return names, nil
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// only the ASCII range A-Z and compares the folded bytes, so it is neither
+// locale-aware nor Unicode-aware; map names outside ASCII order by raw byte.
+func retailStricmp(a, b string) int {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		ca, cb := retailFold(a[i]), retailFold(b[i])
+		if ca != cb {
+			if ca < cb {
+				return -1
+			}
+			return 1
+		}
+	}
+	switch {
+	case len(a) < len(b):
+		return -1
+	case len(a) > len(b):
+		return 1
+	}
+	return 0
+}
+
+func retailFold(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c + 32
+	}
+	return c
 }
 
 func (g *gameShell) draw(c *client.Client) {

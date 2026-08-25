@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
@@ -171,7 +172,8 @@ func (c *Client) drawUnitOriented(v snapshot.UnitView, sx, sy int32) {
 			maxY = p.y
 		}
 	}
-	const W, HMax = 640, 480
+	W := c.width
+	HMax := c.height
 	clamp := func(v, lo, hi int) int {
 		if v < lo {
 			return lo
@@ -382,27 +384,111 @@ func (c *Client) UIBlitAnchor(f *formats.GAFFrame, x, y int) {
 	c.UIBlit(f, x+int(f.XOffset), y+int(f.YOffset))
 }
 
+// UIBlitFrameScaled stretches a decoded GAF frame across a destination
+// rectangle, honoring GAF transparency and clipping to the framebuffer.
+//
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// quad whose destination spans (x, y)..(x+w-1, y+h-1) and whose source spans
+// (0, 0)..(frameW-1, frameH-1), then hands both to the texture-mapped blitter,
+// so the frame is resampled onto the authored gadget rectangle rather than
+// stamped at its own size [07 §4]. Presentation only [I6].
+func (c *Client) UIBlitFrameScaled(f *formats.GAFFrame, x, y, w, h int) {
+	if f == nil || w <= 0 || h <= 0 || f.Width == 0 || f.Height == 0 {
+		return
+	}
+	// Inclusive corner spans: the last destination column samples the last
+	// source column, which is what the quad's corner pairs describe.
+	spanX, spanY := w-1, h-1
+	srcX, srcY := int(f.Width)-1, int(f.Height)-1
+	for dy := 0; dy < h; dy++ {
+		py := y + dy
+		if py < 0 || py >= c.height {
+			continue
+		}
+		sy := 0
+		if spanY > 0 {
+			sy = dy * srcY / spanY
+		}
+		for dx := 0; dx < w; dx++ {
+			px := x + dx
+			if px < 0 || px >= c.width {
+				continue
+			}
+			sx := 0
+			if spanX > 0 {
+				sx = dx * srcX / spanX
+			}
+			b, ok := f.At(sx, sy)
+			if !ok {
+				continue
+			}
+			c.indexed[py*c.width+px] = b
+		}
+	}
+}
+
 // UIBlitPCX stamps a decoded PCX image into the indexed framebuffer at
 // (x, y), clipped. Retail frontend backgrounds carry pixels already addressed
 // by the active PALETTE.PAL display table; their PCX trailer palette is not
 // installed as a second display palette [fmt pcx][07 "Retail palette
 // contract"]. Presentation only [I6].
 func (c *Client) UIBlitPCX(p *formats.PCX, x, y int) {
+	c.UIBlitPCXClipped(p, x, y, 0, 0, c.width, c.height)
+}
+
+// UIBlitPCXClipped draws an opaque indexed bitmap confined to a destination
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// its own WxH drawing surface positioned at the window origin and copies the
+// window's background bitmap into that surface at (0,0), so a bitmap larger
+// than the window shows only the part the window rectangle admits. The
+// full-screen frontend screens are authored at (0,0,640,480) and are
+// unaffected; SELMAP.GUI is the case that needs the clip, because
+// bitmaps/dselectmap2.pcx is a 640x480 file whose panel art occupies just the
+// top-left 494x420 [07 §4]. Presentation only [I6].
+func (c *Client) UIBlitPCXClipped(p *formats.PCX, x, y, clipX, clipY, clipW, clipH int) {
 	if p == nil {
 		return
 	}
+	minX, minY := max(clipX, 0), max(clipY, 0)
+	maxX, maxY := min(clipX+clipW, c.width), min(clipY+clipH, c.height)
 	for row := 0; row < int(p.Height); row++ {
 		py := y + row
-		if py < 0 || py >= c.height {
+		if py < minY || py >= maxY {
 			continue
 		}
 		for col := 0; col < int(p.Width); col++ {
 			px := x + col
-			if px < 0 || px >= c.width {
+			if px < minX || px >= maxX {
 				continue
 			}
 			index := py*c.width + px
 			c.indexed[index] = p.Pixels[row*int(p.Width)+col]
+		}
+	}
+}
+
+// UILightRect remaps every pixel in a rectangle through one row of the
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// non-negative level: the level selects an LHT row directly and the operator
+// rewrites the destination in place, so it lifts whatever is already there
+// instead of painting a color. The GUI uses it for the selected list row
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (c *Client) UILightRect(pal *palette.Tables, x, y, w, h, level int) {
+	if pal == nil || w <= 0 || h <= 0 {
+		return
+	}
+	for dy := 0; dy < h; dy++ {
+		py := y + dy
+		if py < 0 || py >= c.height {
+			continue
+		}
+		row := py * c.width
+		for dx := 0; dx < w; dx++ {
+			px := x + dx
+			if px < 0 || px >= c.width {
+				continue
+			}
+			c.indexed[row+px] = pal.LightLookup(level, c.indexed[row+px])
 		}
 	}
 }

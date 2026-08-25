@@ -346,6 +346,88 @@ implementable counterpart yet.
 
 ---
 
+## SC17 — Order queue caps 64/32 were inside stock-reachable behavior [P1-I09]
+
+**Spec** `[P2-03]` fallback caps `MaxPrimaryQueue=64` / `MaxSecondaryQueue=32`
+with diagnostic drop (I11 divergence) for queue overflow, plus pump
+iteration cap `200` for handler loops via 0/1/2 without blocking (NEGATIVE-BOUNDED
+no cap).
+
+**Observed:** corpus measurement over the reference install (278 units, 275
+maps, 175 campaign missions, 13 campaigns) via
+`internal/orders/corpus_caps_test.go` `TestCorpusQueueCaps_Retail` finds:
+
+* `Silent Slayers.ota` `ARMCARRY carry1` raw InitialMission tokens `105` and
+  `fighting under fire.ota` raw `138`, both >64. With the 64 cap the run
+  truncated to 64 in `TestCorpusQueueCaps_Retail`'s capped-era probe
+  (`meas_main.go` 2026-08-25: `maxPrimary=64` capped vs `138` raw). Uncapped,
+  that unit would require >64 primary nodes (plus `MakeSelectable` postlude).
+* Secondary max in corpus is `1` (`bw 2` in `exp1ac12.ota` `CORFMD`), well
+  below 32.
+* Pump iterations for those queues are `<138 <200`, so the 200 guard is
+  outside stock.
+
+Therefore the 64 cap was inside stock-reachable behavior and changed a
+retail mission. The 32 cap was outside stock but an arbitrary divergence
+with no retail capacity, and the pump 200 guard is outside stock.
+
+**Decision:** replace primary/secondary caps with dynamic slice growth
+matching retail's heap-linked list (no located cap). The only remaining
+I11 divergence is an OOM guard at `10000` (`OOMGuardQueue` in
+`internal/orders/pump.go`), which is `>>138` and `>>` any reasonable
+player shift-queue (hundreds) while still bounding hostile input. The
+previous constants `64`/`32` are retained as deprecated for test
+compatibility but no longer gate `Push`/`CoalesceTail`. The pump guard
+`200` is retained with corpus proof that it is outside stock.
+`internal/orders/corpus_caps_test.go` locks the measurement; if corpus
+grows beyond the guard the test fails and the guard must be revisited.
+`go test -tags retail -run Corpus ./internal/orders` reproduces.
+
+**Falsifies:** the `P2-03` fallback-cap values `64`/`32` as stock-safe;
+they are replaced by dynamic storage per `P1-I09`.
+
+---
+
+## SC18 — Allocator zero-fill byte count and COB malformed-save policy are narrow open items [P1-I09]
+
+**Spec** `[01 §6.1]`/`[GAP T13]` note the allocator's backing implementation,
+arena boundaries and zero-fill policy remain `TODO(T23)`; `[04 §4.1]`/`[GAP
+T15]` note COB loader allocation and the exact failure behavior of allocation
+or corrupted piece indexes remain unresolved — retail may abort through its
+allocator where a clean implementation should terminate the affected script
+deterministically. `[08 "Save-file organization"]` documents the
+non-transactional partial-load policy.
+
+**Observed:** `internal/orders/pump.go`, `internal/combat/pool.go`,
+`internal/units/units.go` and `internal/save/bulk.go` zero-initialize Go
+structs (Go zero value). Retail's exact `memset` byte count for the 86-byte
+order node, 300×107-byte projectile records, 280-byte unit records etc. is
+not traced, but observable effect is zeroed. For COB saves,
+`internal/save/boxes.go` `UnmarshalStateV1` returns an error on truncated
+COB blobs (fatal for that StateV1), while retail bulk COB boxes
+(`0x528`+`stack*4`+`pieces*0x6C`) would be handled by the bulk loader's
+partial-load skips per `[08]` (missing account created empty, each
+subsystem's defaults govern). The two policies are therefore different
+abstractions: Nanolathe StateV1 is versioned and fatal on truncation,
+retail bulk is partial-load skip.
+
+**Decision:** keep Go zero-initialization with `TODO(T23)` at the allocation
+site (`internal/orders/pump.go` newNode, `internal/combat/pool.go`
+Reserve, `internal/units/units.go` Create) citing the open byte count.
+For COB saves, keep StateV1 fatal-on-truncation with
+`TODO(question)` naming the fatal-versus-skip question, and keep bulk save
+partial-load skip with diagnostic as documented in `internal/save/bulk.go`.
+No stock corpus hits either guard: `formats/coverage_test.go`
+`TestFormatCoverage` parses all stock files without hitting TDF/Gaf/Pcx/Wav
+fault guards, and `TestCorpusQueueCaps_Retail` shows no queue guard hit
+after the fix. Revisit only with executable evidence that retail's exact
+memset length or COB abort path is observable.
+
+**Falsifies:** nothing; it records the two `P1-I09` narrow open items as
+explicit `TODO(T23)`/`TODO(question)` placeholders.
+
+---
+
 ## How to add to this file
 
 One section per conflict: what the spec says, what was observed and how, the

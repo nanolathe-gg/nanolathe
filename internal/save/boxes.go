@@ -1616,6 +1616,12 @@ func MarshalStateV1(s *StateV1) []byte {
 // UnmarshalStateV1 decodes a StateV1 payload, validates catalog/manifest hashes
 // against expected values (empty expected means no check), and checks version
 // [PLAN_14 C18][P0-I11]. It accepts both version 1 and 2 for backwards compatibility.
+// TODO(question): COB malformed-save fatal-versus-skip policy [P1-I09][GAP T13]
+// Retail may abort through its allocator where Nanolathe returns an error for a
+// truncated COB blob; the bulk retail loader's partial-load policy would skip
+// with diagnostic per [08]. For the versioned StateV1 (Nanolathe-native) we
+// currently treat a truncated COB as fatal (return error) with TODO(question)
+// to revisit if retail evidence shows skip is observable.
 func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash string) (*StateV1, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("save: StateV1 too short")

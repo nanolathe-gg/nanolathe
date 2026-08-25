@@ -1,0 +1,33 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l . | grep -v '^content/' || true)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go build (all packages)
+        run: go build ./...
+      - name: go vet (all packages)
+        run: go vet ./...
+      - name: go test (all packages including desktop, no retail assets required)
+        run: go test ./...
+        env:
+          # Retail-asset-dependent tests are opt-in via NANOLATHE_TA_ROOT or
+          # NANOLATHE_RETAIL_ASSETS and skip with a clear message when absent.
+          # CI must NOT require retail assets.
+          CI: "true"

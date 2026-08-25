@@ -19,6 +19,9 @@ func runShot(opts Options, cs *contentSet, out *os.File) error {
 	if opts.ShotModel != "" {
 		return runShotModel(opts, cs, out)
 	}
+	if opts.ShotMenu != "" {
+		return runShotMenu(opts, cs, out)
+	}
 	sess, cat, err := newBattleSession(opts, cs)
 	if err != nil {
 		return err

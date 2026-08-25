@@ -440,13 +440,13 @@ The implemented single-player path is bound to the retail resources and
 callbacks below. These are not replacement layouts or a map-first skirmish
 wizard:
 
-| State | Retail GUI | Retail background/art | Entry/callback behavior |
-|---|---|---|---|
-| Main | `mainmenu.gui` | `frontendx.pcx`, `mainmenu.gaf`, `commongui.gaf` | `SINGLE` opens `single.gui`; `EXIT` enters the frontend close state |
-| Single-player chooser | `single.gui` | `singlebg.pcx`, `single.gaf`, `commongui.gaf` | `NewCamp` opens `newgame.gui`; `Skirmish` opens `skirmish.gui` directly |
-| Campaign/mission | `newgame.gui` | `newcampaign4.pcx` or `newcampaign4x.pcx`, `newgame.gaf` | Campaign and mission list gadgets are populated from discovered `camps` data; `Side0/Side1`, `Difficulty`, `Start`, and `PrevMenu` retain their authored callbacks |
-| Map selection | `selmap.gui` | `selectgame2x.pcx`, TNT minimap surface | The authored window origin is `(84,12)`; `MAPNAMES`, `SLIDER`, `MAPPIC`, `DESCRIPTION`, `SIZE`, `LOAD`, and `PREVMENU` remain window-local records placed at that origin |
-| Skirmish setup | `skirmish.gui` | `skirmsetup4x.pcx`, `skirmish.gaf`, `commongui.gaf`, `textures/logos.gaf` | `Player%d`, `Side%d`, `Color%d`, `Allies%d`, `Metal%d`, and `Energy%d` are appended by the runtime builder; their row geometry is `step=200/n`, `y=(180-(n-1)*step)/2+79` |
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 The skirmish row controller values are numeric and distinct from the session
 API's compatibility mapping: `0` is `Open`, `1` is `Player`, and `2` is
@@ -461,6 +461,14 @@ executable. There is no authored opponent-count, round-settings, or map-first
 control in `skirmish.gui`; the row count comes from the `NumSkirmishPlayers`
 registry value and the remaining setup values are the authored staged gadgets.
 [08 "Skirmish configuration"]
+
+GAF rendering uses each selected frame's authored dimensions at the `.GUI`
+control origin; `XOffset/YOffset` remain animation-anchor metadata and are not
+added to ordinary frontend gadget placement. Retail's GUI initializer replaces
+button runtime width and height with the chosen stock/owned frame dimensions.
+The indexed output surface uses the shared `PALETTE.PAL` display table; GUI
+semantic color fields are translated into active indices before primitive/FNT
+writes, while GAF image and GAF-font bytes are copied directly.
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
@@ -481,27 +489,7 @@ material because the two retail files have different color ordering.
 
 The following rules are established for the frontend controls in this slice:
 
-* The panel background is drawn first. Controls are then visited in authored
-  order, with the panel record itself skipped. Hidden and grayed controls do
-  not receive focus or callbacks. A control's screen rectangle is its local
-  `.GUI` rectangle translated by the panel header origin; hit testing includes
-  every integer pixel from the origin through `origin + size - 1`.
-* An ordinary clickable control arms on a left-button press inside its
-  rectangle. Its pressed frame is shown only while the left button remains
-  held and the pointer remains inside. Releasing outside clears the armed
-  state without invoking the callback; releasing inside invokes the callback
-  once. Focus is assigned on the press edge, before a later keyboard
-  activation. Quick keys and the panel's default/escape controls enter the
-  same callback path without a mouse rectangle.
-* Button art is selected from the named panel GAF first and the common
-  `BUTTONS0` fallback otherwise. `BUTTONS0` is grouped as four frames per
-  stock size: normal, armed, disabled, and spare. For a staged entry the
-  current status selects the stage frame and a held press selects the
-  penultimate frame. Text is vertically centered in the gadget rectangle; a
-  held press adds one pixel to its Y position. The authored alignment bits
-  select a three-pixel left inset, a three-pixel right inset, or centered
-  text, in that priority order. Text is measured and clipped through the
-  selected FNT; it is never drawn with a platform font.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 The stock common frame dimensions used by these controls are stable in the
 retail resource set: `BUTTONS0` groups are `16×16`, `321×20`, `120×20`,
@@ -510,23 +498,7 @@ retail resource set: `BUTTONS0` groups are `16×16`, `321×20`, `120×20`,
 horizontal frames. The staged common entries used by this menu are
 `stagebuttn2` (five `120×20` frames) and `stagebuttn3` (six `120×20` frames).
 
-* List controls retain a selected item and a top visible item. A row hit is
-  resolved against the list's two-pixel inner origin and the runtime font
-  height. Associated scrollbars use the common `SLIDERS` entry: the vertical
-  family is frames `0..9` and the horizontal family is `10..19`; each family
-  has three track pieces, three thumb pieces, and two normal/armed arrow
-  pairs. An arrow changes the associated list by one row. A left press inside
-  the computed thumb captures the pointer and maps held pointer displacement
-  through the thumb travel/range, truncating integer division toward zero.
-  A click on the track beside the thumb does not invent a page step.
-* Frontend GAF frame offsets are animation-anchor metadata. The GUI blitter
-  places the frame's indexed pixels at the translated gadget origin without
-  adding `XOffset` or `YOffset`. The selected frame dimensions become the
-  runtime button dimensions used by both drawing and hit testing. GAF and FNT
-  output uses active `PALETTE.PAL` indices: GAF bytes are copied directly,
-  while FNT receives the active index produced by the GUI semantic color map
-  before rasterization. PCX backgrounds and TNT minimap pixels use their
-  active `PALETTE.PAL` indices directly.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 Campaign and map controls also retain data-driven display behavior. The
 campaign list is rebuilt from the discovered campaign documents and filters
@@ -535,12 +507,9 @@ New Campaign, when the installed campaign set has two or fewer entries, the
 campaign and mission list controls are hidden and the side-specific
 `Arm Campaign` or `Core Campaign` file is selected directly. Play Any uses the
 same `newgame.gui` but exposes the campaign and mission lists and applies the
-retail compressed list rectangles at runtime. Map list labels and descriptions
-come from the language-prefixed OTA accessors with plain-key fallback. The
-size line uses the retail two-space format `Players  <NumPlayers>: <Size>`;
-the map preview preserves the selected TNT radar image's aspect ratio inside
-the authored surface. If the map census is empty, the map-selection callback
-uses the stock message `There are no multiplayer maps to choose from`.
+retail compressed list rectangles at runtime.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 The main-menu `EXIT` callback is a direct close transition. The separate
 `YESORNO.GUI` text `Close Windows CD Player?` belongs to frontend

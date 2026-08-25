@@ -3,8 +3,6 @@ package construction
 
 import (
 	"fmt"
-	"reflect"
-	"unsafe"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -97,6 +95,42 @@ type Service struct {
 	lastKill     KillInfo                    // most recent kind-9 kill packet [05 C21]
 }
 
+// TickContext carries per-tick shared services for unit-local stepping (ON-02).
+// It contains the tick and the existing shared services, no presentation state:
+// world, economy, terrain, and catalog are the authoritative sim services.
+// Presentation hooks (OnRefresh) are intentionally absent; StepUnit never calls them.
+type TickContext struct {
+	Tick    uint32
+	World   *units.World
+	Economy *economy.Service
+	Terrain *world.Terrain
+	Catalog *content.Catalog
+}
+
+// WorkResult reports the outcome of a single-unit construction step (ON-02).
+// It carries the builder identity, product handle, definition key, and owner
+// for session hooks without presentation calls. Completion is exactly-once.
+type WorkResult struct {
+	Builder     pool.Handle // builder that was stepped
+	Product     pool.Handle // nanoframe/new unit handle, 0 if none
+	DefKey      string      // canonical def key for the product
+	Owner       uint8       // builder owner
+	Completed   bool        // true if a unit completed this tick (exactly once)
+	State       State       // phase after step
+	Err         error       // explicit error for descriptor mismatch or other failure
+	Diagnostics []string    // verbatim diagnostics (e.g., "Starting construction")
+}
+
+// isMobileBuilder reports whether the builder is a mobile builder [04 §3.1][P0-I05].
+// Mobile builders use MobileBuild/VTOL_MobileBuild descriptors; factories use BuildingBuild.
+// A mobile builder is any builder whose definition can move or fly.
+func isMobileBuilder(u *units.Unit) bool {
+	if u == nil || u.Def == nil {
+		return false
+	}
+	return u.Def.CanMove || u.Def.CanFly
+}
+
 // KillInfo is the most recent kind-9 termination packet [05 C21].
 type KillInfo struct {
 	Damage   int32
@@ -177,6 +211,19 @@ func (s *Service) ClearBuilderLink(product pool.Handle) {
 	if s.builderLinks != nil {
 		delete(s.builderLinks, product)
 	}
+}
+
+// BuilderLinks returns a copy of all builder/product links (ON-02).
+// Exported accessor replaces reflect/unsafe inspection; used to verify deterministic cleanup.
+func (s *Service) BuilderLinks() map[pool.Handle]pool.Handle {
+	if s == nil || s.builderLinks == nil {
+		return nil
+	}
+	out := make(map[pool.Handle]pool.Handle, len(s.builderLinks))
+	for k, v := range s.builderLinks {
+		out[k] = v
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -265,10 +312,7 @@ func (s *Service) QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cel
 			// For QueryBuildInfo, the retail query helper [04 §4.2] expects 4 outputs seeded as [-1,0,0,0] per ports.go QueryTransportSeed etc, but build-info uses same seeding.
 			// We attempt to locate script by name.
 			var prog *cob.Program
-			// vm.prog is unexported; we cannot access directly. Instead we try via type assertion to interface with Program accessor?
-			// Fallback: if vm has method to get program? Not exported. Use reflection to read unexported field "prog".
-			// Avoid reflection in production: we simply try to call if VM has any script; for tests with trivial model we may not have VM program.
-			// So we use helper that tries to extract prog via reflection only when needed.
+			// Access program via exported accessor VM.Program() [04 §4.1] (ON-02) — replaces former reflect/unsafe.
 			prog = getVMProgram(vm)
 			if prog != nil {
 				if pc, ok := prog.Scripts["QueryBuildInfo"]; ok {
@@ -368,16 +412,13 @@ func (s *Service) productDef(pid uint32) *content.UnitDef {
 	return def
 }
 
-// getVMProgram extracts *cob.Program from *cob.VM via reflection [04 §4.1] I13.
-// VM.prog is unexported, but QueryBuildInfo needs it per [05 C16]. This is the sole reflective seam.
+// getVMProgram extracts *cob.Program from *cob.VM via exported accessor [04 §4.1] I13 (ON-02).
+// Replaces the former reflect/unsafe seam with VM.Program().
 func getVMProgram(vm *cob.VM) *cob.Program {
 	if vm == nil {
 		return nil
 	}
-	// Use type assertion to interface that exposes Program via method if available; fallback to reflection.
-	// Try reflection for unexported field "prog".
-	// We avoid importing reflect unless needed to keep simple and deterministic; but we need it.
-	return getVMProgramReflect(vm)
+	return vm.Program()
 }
 
 // ---------------------------------------------------------------------------
@@ -721,6 +762,14 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 			s.World.Destroy(product.Handle, units.DeathKilled)
 			// Override corpse handling: mark that cause-9 has severity zero, no corpse.
 		}
+		// Deterministically clear builder/product link after nanoframe (ON-02):
+		// before nanoframe builderLinks not yet set, so no-op; after nanoframe it must be cleared
+		// even on cancel, not leaked as on normal death path [P0-14]. Ensures stop/cancel cleanup deterministic.
+		if s.builderLinks != nil {
+			delete(s.builderLinks, product.Handle)
+		}
+		// Also clear any reverse mapping? product -> builder only, so delete above suffices.
+		// Ensure product's own builder link cleared on cancel (before and after nanoframe unified) [05 C21].
 	}
 
 	// Lower deactivate and start-building callback bits in ONE edge call (firing both COB callbacks together) [05 C21].
@@ -787,48 +836,37 @@ func (s *Service) removeHead(factory *units.Unit, node *orders.Node) {
 		}
 		newPrim = append(newPrim, n)
 	}
-	// Need to replace q's private primary. Use BindQueue with new queue.
-	newQ := &orders.Queue{}
-	// Copy secondary unchanged.
-	sec := q.Secondary()
-	// Use reflection to set private fields via exported helpers? Instead reconstruct via Push/Coalesce? Simpler: use reflection via unsafe.
-	setQueuePrimary(newQ, newPrim)
-	setQueueSecondary(newQ, sec)
+	// Replace queue via exported accessors (ON-02) — no reflect/unsafe.
+	newQ := orders.NewQueueWith(newPrim, q.Secondary())
 	// Ensure active marker on new head if any.
 	if len(newPrim) > 0 {
 		newPrim[0].Flags |= orders.FlagActive
 		for i := 1; i < len(newPrim); i++ {
 			newPrim[i].Flags &^= orders.FlagActive
 		}
+		// Re-set after flag fixup.
+		newQ.SetPrimary(newPrim)
 	}
 	orders.BindQueue(factory, newQ)
 	// Also clear node's flags to avoid reuse?
 	node.Flags |= orders.FlagTombstone
 }
 
+// setQueuePrimary replaces primary segment via exported accessor (ON-02).
+// Kept for internal call compatibility; uses exported SetPrimary, no reflect/unsafe.
 func setQueuePrimary(q *orders.Queue, prim []*orders.Node) {
 	if q == nil {
 		return
 	}
-	v := reflect.ValueOf(q).Elem()
-	f := v.FieldByName("primary")
-	if !f.IsValid() {
-		return
-	}
-	ptr := unsafe.Pointer(f.UnsafeAddr())
-	reflect.NewAt(f.Type(), ptr).Elem().Set(reflect.ValueOf(prim))
+	q.SetPrimary(prim)
 }
+
+// setQueueSecondary replaces secondary segment via exported accessor (ON-02).
 func setQueueSecondary(q *orders.Queue, sec []*orders.Node) {
 	if q == nil {
 		return
 	}
-	v := reflect.ValueOf(q).Elem()
-	f := v.FieldByName("secondary")
-	if !f.IsValid() {
-		return
-	}
-	ptr := unsafe.Pointer(f.UnsafeAddr())
-	reflect.NewAt(f.Type(), ptr).Elem().Set(reflect.ValueOf(sec))
+	q.SetSecondary(sec)
 }
 
 // ---------------------------------------------------------------------------
@@ -1344,6 +1382,7 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 // Fix: iterate slots by handle asc without snapshot — product allocated mid-sweep at slot after
 // builder is visible same tick. Snapshot via World.Iter() at player-loop start breaks lowest-slot wins.
 // Iterate per-player slices directly when sliced, else per-player scan of handles [P0-16][P0-14].
+// Non-authoritative compatibility wrapper (ON-02): new code should use StepUnit per handle.
 func (s *Service) PumpAll(tick uint32) {
 	if s == nil || s.World == nil {
 		return
@@ -1390,6 +1429,7 @@ func (s *Service) PumpAll(tick uint32) {
 
 // Pump implements the factory production handler entry per [05] with interrupt priority [PLAN_08].
 // Primary-only factory queue (68-desc census) — bit 0x40000 only on BuildWeapon/SelfDestruct [P0-14].
+// Non-authoritative compatibility wrapper (ON-02): new code should use StepUnit per handle.
 func (s *Service) Pump(factory *units.Unit, tick uint32) {
 	if factory == nil {
 		return
@@ -1432,32 +1472,168 @@ func (s *Service) Pump(factory *units.Unit, tick uint32) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Reflection helper for VM program [04 §4.1].
-// ---------------------------------------------------------------------------
+// StepUnit advances only the named unit's construction work state [05 "Factory production lifecycle"][P0-I05] (ON-02).
+// It preserves the existing bucket/carry admission model exactly: zero current stock does NOT forbid
+// the first carry-admitted quantum; work pauses only when settlement denies carry (carry>0) [05 "Two-stage settlement algorithm"].
+// Site coordinates survive intact from order node GoalX/Z through nanoframe placement for mobile builds [P0-I05]:
+// QueueMobileBuild stores the world anchor in Node.GoalX/Z and handleMobileState2 snaps to the half-extent biased cell,
+// preserving the original Goal for determinism. Factory and mobile descriptors remain distinct: a mobile builder
+// receiving a factory-only descriptor (BuildingBuild) fails explicitly with an error diagnostic, never silently cleared [P0-I05].
+// Completion returns handle, def key, and owner for session hooks; no presentation calls are made (OnRefresh suppressed).
+// Stop/cancel cleans up worker/build links deterministically before and after nanoframe creation [05 C21][P0-14].
+func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
+	w := s.World
+	if ctx.World != nil {
+		w = ctx.World
+	}
+	econ := s.Economy
+	if ctx.Economy != nil {
+		econ = ctx.Economy
+	}
+	terrain := s.Terrain
+	if ctx.Terrain != nil {
+		terrain = ctx.Terrain
+	}
+	cat := s.Catalog
+	if ctx.Catalog != nil {
+		cat = ctx.Catalog
+	}
+	tick := ctx.Tick
+	if w == nil {
+		return WorkResult{Builder: handle, Err: fmt.Errorf("construction: nil world")}
+	}
+	builder := w.Unit(handle)
+	if builder == nil {
+		return WorkResult{Builder: handle, Err: fmt.Errorf("construction: builder %d not found or dead", handle)}
+	}
+	q := orders.QueueForUnit(builder)
+	if q == nil || q.LenPrimary() == 0 {
+		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0, Diagnostics: append([]string(nil), s.messages...)}
+	}
+	prim := q.Primary()
+	if len(prim) == 0 {
+		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0, Diagnostics: append([]string(nil), s.messages...)}
+	}
+	head := prim[0]
+	// Distinct descriptor check [P0-I05][04 §3.1]: factory BuildingBuild vs mobile MobileBuild/VTOL_MobileBuild.
+	factoryID := orders.Lookup(FactoryBuildOrder)
+	mobile := isMobileBuild(head.ID)
+	isMobBuilder := isMobileBuilder(builder)
+	var mismatch error
+	if head.ID == factoryID && isMobBuilder {
+		mismatch = fmt.Errorf("construction: factory descriptor %q not allowed on mobile builder %q (handle %d) — distinct types end-to-end", orders.DescriptorFor(head.ID).Name, builder.Def.UnitName, handle)
+	}
+	if mobile && !isMobBuilder {
+		mismatch = fmt.Errorf("construction: mobile descriptor %q not allowed on factory builder %q (handle %d) — distinct types end-to-end", orders.DescriptorFor(head.ID).Name, builder.Def.UnitName, handle)
+	}
+	if mismatch != nil {
+		// Explicit failure, never silently cleared [P0-I05][04 §3.1] (ON-02).
+		s.logMessage(mismatch.Error())
+		return WorkResult{Builder: handle, Product: head.Target, DefKey: head.BuildDefKey, Owner: builder.Owner, State: State(head.Phase), Err: mismatch, Diagnostics: append([]string(nil), s.messages...)}
+	}
+	// Capture before state for completion detection.
+	beforeTarget := head.Target
+	beforeKey := head.BuildDefKey
+	beforeOwner := builder.Owner
+	beforePhase := State(head.Phase)
+	var beforeRemaining float32
+	var beforeProduct *units.Unit
+	if beforeTarget != 0 {
+		if bp := w.Unit(beforeTarget); bp != nil {
+			beforeProduct = bp
+			beforeRemaining = bp.Remaining
+		}
+	}
+	// Suppress presentation during authoritative step (ON-02).
+	oldRefresh := s.OnRefresh
+	s.OnRefresh = nil
+	oldWorld, oldEcon, oldTerrain, oldCat := s.World, s.Economy, s.Terrain, s.Catalog
+	s.World, s.Economy, s.Terrain, s.Catalog = w, econ, terrain, cat
+	// Single-unit pump: only this builder advances.
+	s.Pump(builder, tick)
+	s.World, s.Economy, s.Terrain, s.Catalog = oldWorld, oldEcon, oldTerrain, oldCat
+	s.OnRefresh = oldRefresh
+	// After state.
+	newQ := orders.QueueForUnit(builder)
+	var afterTarget pool.Handle
+	var afterKey string
+	var afterState State
+	if newQ != nil && newQ.LenPrimary() > 0 {
+		afterHead := newQ.Primary()[0]
+		afterTarget = afterHead.Target
+		afterKey = afterHead.BuildDefKey
+		afterState = State(afterHead.Phase)
+		if afterKey == "" {
+			afterKey = beforeKey
+		}
+	} else {
+		// Queue empty: node removed (completion, cancel-all, or expiry). Keep prior product handle for reporting.
+		afterTarget = beforeTarget
+		afterKey = beforeKey
+		afterState = State0
+	}
+	if afterKey == "" {
+		afterKey = beforeKey
+	}
+	productHandle := afterTarget
+	if productHandle == 0 {
+		productHandle = beforeTarget
+	}
+	completed := false
+	defKey := afterKey
+	if defKey == "" {
+		defKey = beforeKey
+	}
+	if productHandle != 0 {
+		if prod := w.Unit(productHandle); prod != nil {
+			if prod.Remaining == 0 && beforeProduct != nil && beforeRemaining != 0 {
+				completed = true
+			} else if beforePhase == State4 && prod.Remaining == 0 {
+				completed = true
+			} else if beforePhase == State3 && prod.Remaining == 0 && beforeRemaining != 0 {
+				completed = true
+			}
+			if prod.Def != nil && defKey == "" {
+				defKey = prod.Def.UnitName
+			}
+			// Completion initializes unit exactly once: Remaining 0→0, health MaxHealth set in handleState4 [05 C18].
+			// Detect exactly-once via transition from non-zero to zero.
+		} else {
+			// Product destroyed (cancel after nanoframe): not completed, but handle retained for hook.
+			// Builder link already cleared deterministically in handleCancelCurrent (ON-02).
+		}
+	} else {
+		// Check if a new nanoframe was just created this tick (state2 → state3) and product handle newly set.
+		if newQ != nil && newQ.LenPrimary() > 0 {
+			ah := newQ.Primary()[0]
+			if ah.Target != 0 && beforeTarget == 0 {
+				productHandle = ah.Target
+				defKey = ah.BuildDefKey
+				// Not completed yet (nanoframe created with Remaining=1).
+				if defKey == "" && w != nil {
+					if p2 := w.Unit(productHandle); p2 != nil && p2.Def != nil {
+						defKey = p2.Def.UnitName
+					}
+				}
+			}
+		}
+	}
+	if defKey == "" {
+		defKey = beforeKey
+	}
+	return WorkResult{
+		Builder:     handle,
+		Product:     productHandle,
+		DefKey:      defKey,
+		Owner:       beforeOwner,
+		Completed:   completed,
+		State:       afterState,
+		Diagnostics: append([]string(nil), s.messages...),
+	}
+}
 
+// getVMProgramReflect remains as thin wrapper over exported accessor (ON-02).
+// Historical reflect/unsafe implementation removed; now delegates to VM.Program().
 func getVMProgramReflect(vm *cob.VM) *cob.Program {
-	if vm == nil {
-		return nil
-	}
-	type progGetter interface {
-		Program() *cob.Program
-	}
-	if pg, ok := interface{}(vm).(progGetter); ok {
-		return pg.Program()
-	}
-	v := reflect.ValueOf(vm).Elem()
-	field := v.FieldByName("prog")
-	if !field.IsValid() {
-		return nil
-	}
-	// Unexported field via unsafe.
-	field = reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem()
-	if field.IsNil() {
-		return nil
-	}
-	if prog, ok := field.Interface().(*cob.Program); ok {
-		return prog
-	}
-	return nil
+	return getVMProgram(vm)
 }

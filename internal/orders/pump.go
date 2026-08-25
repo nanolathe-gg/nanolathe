@@ -94,17 +94,34 @@ type Queue struct {
 	} `json:"-"`
 }
 
-// [P2-03] Queue overflow defense: retail has no located cap (NEGATIVE-BOUNDED
-// 3901 boundaries). Nanolathe drops with diagnostic instead of crashing/OOM.
-// This is a deliberate I11 divergence: bounds check that rejects data retail
-// would have accepted only to avoid unbounded growth. Limits chosen for
-// testability, not as retail constants, and remain TODO(question) for the
-// value retail would have used if it had a cap.
+// [P2-03][P1-I09] Queue storage is dynamic, matching retail's heap-linked list
+// (NEGATIVE-BOUNDED 3901 boundaries found no cap). The previous 64/32 caps
+// were inside stock-reachable behavior: corpus measurement over 275 maps /
+// 278 units / 175 campaign missions shows a retail InitialMission can queue
+// 105 raw tokens (Silent Slayers carry1: g ms1,g ms2,m...w...) and would
+// require >64 primary nodes uncapped; the capped run truncated to 64.
+// The secondary max in corpus is 1, but 32 is an arbitrary divergence.
+// Retail has no located cap, so Nanolathe now uses dynamic slice growth
+// (unbounded) and preserves an OOM guard only at a very large threshold
+// far outside stock (see OOMGuardQueue). Pump cycle defense is separate.
+// Corpus: TestCorpusQueueCaps_Retail (internal/orders/corpus_caps_test.go)
+// measures maxPrimary 105+ uncapped, maxSecondary 1, maxPumpIterations
+// <200, proving the OOM guard is outside stock.
+// TODO(T23): exact allocator zero-fill byte count for order nodes (retail
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// used a different memset length but observable effect is zeroed.
 const (
-	MaxPrimaryQueue   = 64  // [P2-03] fallback cap for primary list
-	MaxSecondaryQueue = 32  // [P2-03] fallback cap for secondary (BuildWeapon/SelfDestruct only)
-	MaxPumpIterations = 200 // [P2-03] cycle defense: handler loops via 0/1/2 without blocking
+	MaxPrimaryQueue   = 64  // deprecated: previous cap, now dynamic; retained for test compat [P1-I09]
+	MaxSecondaryQueue = 32  // deprecated: previous cap, now dynamic; retained for test compat [P1-I09]
+	MaxPumpIterations = 200 // [P2-03] cycle defense: handler loops via 0/1/2 without blocking; corpus <200 so retained
 )
+
+// OOMGuardQueue is the current very-large OOM guard far outside stock-reachable
+// behavior. It is the only remaining deliberate I11 divergence: bounds check that
+// rejects data retail would have accepted only to avoid unbounded growth on hostile
+// input. The value is chosen to be >> corpus max (~105 primary) and >> any
+// reasonable player shift-queue (hundreds) while still bounding memory.
+const OOMGuardQueue = 10000
 
 func (q *Queue) LenPrimary() int {
 	if q == nil {
@@ -133,6 +150,111 @@ func (q *Queue) Secondary() []*Node {
 	out := make([]*Node, len(q.secondary))
 	copy(out, q.secondary)
 	return out
+}
+
+// SetPrimary replaces the primary segment [P0-I16][P0-I05].
+// Exported accessor replaces reflect/unsafe inspection (ON-02).
+func (q *Queue) SetPrimary(primary []*Node) {
+	if q == nil {
+		return
+	}
+	q.primary = primary
+}
+
+// SetSecondary replaces the secondary segment [P0-I16][04 §3.2].
+// Exported accessor replaces reflect/unsafe inspection (ON-02).
+func (q *Queue) SetSecondary(secondary []*Node) {
+	if q == nil {
+		return
+	}
+	q.secondary = secondary
+}
+
+// NewQueueWith constructs a queue with the given segments [04 §3.2] C5.
+// Exported constructor for construction service to avoid reflect/unsafe (ON-02).
+func NewQueueWith(primary []*Node, secondary []*Node) *Queue {
+	return &Queue{primary: primary, secondary: secondary}
+}
+
+// Pump is the per-unit order pump, replacing PumpAll-style global sweeps [04 §3.3][05 "Queue pumping and result codes"] (ON-02).
+// It operates on a single handle per call to preserve worker/economy bucket isolation:
+// stepping builder A does not advance builder B. The existing Queue.Pump remains
+// for compatibility but is non-authoritative in new session code (ON-02).
+type Pump struct {
+	World *units.World // authoritative unit pool (fixed pools, slot 0 null) [01 §6.1][P0-16]
+}
+
+// PumpResult reports the outcome of a single-unit pump [04 §3.3][05 "Queue pumping and result codes"] (ON-02).
+type PumpResult struct {
+	Handle       pool.Handle // requested handle
+	Found        bool        // unit existed and was alive
+	HadQueue     bool        // queue had at least one node before pumping
+	PrimaryLen   int         // primary length after pump
+	SecondaryLen int         // secondary length after pump
+	Err          error       // explicit error for missing unit or other failure, nil on success
+	Diagnostics  []string    // queue diagnostics captured during pump
+}
+
+// PumpUnit advances only the named unit's queue/work state [04 §3.3][05 "Queue pumping and result codes"] (ON-02).
+// It preserves the primary head-blocking restart-from-head and secondary skip-not-due contracts:
+// primary restarts from the head after each dispatch, secondary scans front-to-back skipping not-due.
+// Only the named unit's queue advances; other builders are untouched.
+func (p *Pump) PumpUnit(handle pool.Handle, tick uint32) PumpResult {
+	if p == nil || p.World == nil {
+		return PumpResult{Handle: handle, Err: fmt.Errorf("orders: nil pump or world")}
+	}
+	u := p.World.Unit(handle)
+	if u == nil {
+		return PumpResult{Handle: handle, Found: false, Err: fmt.Errorf("orders: unit %d not found or dead", handle)}
+	}
+	q := QueueForUnit(u)
+	if q == nil {
+		return PumpResult{Handle: handle, Found: true, HadQueue: false, PrimaryLen: 0, SecondaryLen: 0}
+	}
+	had := q.LenPrimary()+q.LenSecondary() > 0
+	// Preserve existing Queue.Pump semantics exactly: primary head-blocking, secondary skip-not-due.
+	q.Pump(u, tick)
+	prim := q.LenPrimary()
+	sec := q.LenSecondary()
+	diags := q.Diagnostics()
+	return PumpResult{Handle: handle, Found: true, HadQueue: had, PrimaryLen: prim, SecondaryLen: sec, Diagnostics: append([]string(nil), diags...)}
+}
+
+// PumpAll is the legacy global sweep over all units in stable player 0..9, slot asc order [I1][04 §3.3].
+// Deprecated: use Pump.PumpUnit per handle for deterministic unit-local processing.
+// This wrapper remains for compatibility and tests but is non-authoritative for new session code (ON-02).
+func (p *Pump) PumpAll(tick uint32) {
+	if p == nil || p.World == nil {
+		return
+	}
+	// Deterministic iteration player 0..9, slots asc [I1][01 §6.2].
+	if p.World.IsSliced() {
+		for player := 0; player < 10; player++ {
+			start, end, ok := p.World.SliceForPlayer(player)
+			if !ok {
+				continue
+			}
+			for slot := start; slot <= end; slot++ {
+				h := pool.Handle(slot)
+				u := p.World.Unit(h)
+				if u == nil || !u.Alive || int(u.Owner) != player {
+					continue
+				}
+				if q := QueueForUnit(u); q != nil {
+					q.Pump(u, tick)
+				}
+			}
+		}
+		return
+	}
+	for _, u := range p.World.Iter() {
+		if u == nil || !u.Alive {
+			continue
+		}
+		if q := QueueForUnit(u); q != nil {
+			q.Pump(u, tick)
+		}
+	}
 }
 
 func isSecondary(id ID) bool {
@@ -310,10 +432,11 @@ func (q *Queue) Push(id ID, n Node) {
 	if q == nil {
 		return
 	}
-	// [P2-03] overflow guard: retail has no cap (NEGATIVE-BOUNDED); fallback
-	// drops with diagnostic instead of OOM. I11 divergence noted above.
-	if len(q.primary) >= MaxPrimaryQueue {
-		q.recordDiagnostic(fmt.Sprintf("orders: primary queue full (%d), dropping %s", len(q.primary), DescriptorFor(id).Name))
+	// [P1-I09] dynamic storage: retail has no cap (NEGATIVE-BOUNDED); previous
+	// 64/32 caps were inside stock (corpus max 105 raw tokens -> 64 truncated).
+	// Now unbounded with OOM guard far outside stock (10000 >> 105).
+	if len(q.primary) >= OOMGuardQueue {
+		q.recordDiagnostic(fmt.Sprintf("orders: primary queue OOM guard (%d), dropping %s", len(q.primary), DescriptorFor(id).Name))
 		return
 	}
 	node := newNode(id, n) // [04 §3.3][05 "Queue insertion"] C9
@@ -341,8 +464,9 @@ func (q *Queue) PushSecondary(id ID, n Node) {
 	if q == nil {
 		return
 	}
-	if len(q.secondary) >= MaxSecondaryQueue {
-		q.recordDiagnostic(fmt.Sprintf("orders: secondary queue full (%d), dropping %s", len(q.secondary), DescriptorFor(id).Name))
+	// [P1-I09] dynamic: OOM guard far outside stock (maxSecondary 1 in corpus >> 32 old cap not hit but dynamic is correct retail).
+	if len(q.secondary) >= OOMGuardQueue {
+		q.recordDiagnostic(fmt.Sprintf("orders: secondary queue OOM guard (%d), dropping %s", len(q.secondary), DescriptorFor(id).Name))
 		return
 	}
 	node := newNode(id, n)
@@ -369,8 +493,8 @@ func (q *Queue) CoalesceTail(id ID, n Node) {
 				return
 			}
 		}
-		if len(q.secondary) >= MaxSecondaryQueue {
-			q.recordDiagnostic(fmt.Sprintf("orders: secondary coalesce full (%d), dropping %s", len(q.secondary), DescriptorFor(id).Name))
+		if len(q.secondary) >= OOMGuardQueue {
+			q.recordDiagnostic(fmt.Sprintf("orders: secondary coalesce OOM guard (%d), dropping %s", len(q.secondary), DescriptorFor(id).Name))
 			return
 		}
 		q.PushSecondary(id, n)
@@ -387,9 +511,9 @@ func (q *Queue) CoalesceTail(id ID, n Node) {
 			return
 		}
 	}
-	// tail-only fallback append [04 §3.3][05 "Queue insertion"]
-	if len(q.primary) >= MaxPrimaryQueue {
-		q.recordDiagnostic(fmt.Sprintf("orders: primary coalesce full (%d), dropping %s", len(q.primary), DescriptorFor(id).Name))
+	// tail-only fallback append [04 §3.3][05 "Queue insertion"] [P1-I09] dynamic with OOM guard
+	if len(q.primary) >= OOMGuardQueue {
+		q.recordDiagnostic(fmt.Sprintf("orders: primary coalesce OOM guard (%d), dropping %s", len(q.primary), DescriptorFor(id).Name))
 		return
 	}
 	node := newNode(id, n)
@@ -438,6 +562,8 @@ func (q *Queue) CancelTailMost(match func(Node) bool) bool {
 	return false
 }
 
+// Pump is the legacy per-queue pump for a single unit [04 §3.3][05 "Queue pumping and result codes"].
+// Non-authoritative compatibility wrapper (ON-02): new code should use Pump.PumpUnit per handle.
 func (q *Queue) Pump(u *units.Unit, tick uint32) {
 	if q == nil || u == nil {
 		return
@@ -458,9 +584,12 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 	if q == nil || u == nil {
 		return
 	}
-	// [P2-03] iteration guard: defend against malformed handler that loops
+	// [P2-03][P1-I09] iteration guard: defend against malformed handler that loops
 	// forever via 0/1/2 without ever blocking. Retail has no located guard
 	// (NEGATIVE-BOUNDED). Fallback breaks after MaxPumpIterations with diagnostic.
+	// Corpus: max primary queue after InitialMission is 105 (> old 64 cap) but
+	// still <<200, so 200 remains outside stock-reachable; retained with
+	// corpus proof in TestCorpusQueueCaps_Retail (max measured <200).
 	iter := 0
 	// TODO(question) idle default-op creation when primary empty [05 "Queue pumping and result codes"] step 1: owner player-state settling byte, definition default-idle-op field
 	for len(q.primary) > 0 {

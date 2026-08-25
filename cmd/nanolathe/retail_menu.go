@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -48,6 +49,12 @@ type retailPanelState struct {
 	active map[string]bool
 	status map[string]int
 	lists  map[string]*retailListState
+	// owner records which gadget a name belongs to. Retail resolves a gadget
+	// by name with a forward scan that stops at the first match
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// SKIRMISH.GUI has five separate TEXT labels — every by-name set reaches
+	// only the first, and the rest keep the text in their own record.
+	owner map[string]string
 }
 
 func newRetailPanelState(window *gui.Window) *retailPanelState {
@@ -58,6 +65,7 @@ func newRetailPanelState(window *gui.Window) *retailPanelState {
 		active: make(map[string]bool),
 		status: make(map[string]int),
 		lists:  make(map[string]*retailListState),
+		owner:  make(map[string]string),
 	}
 	if window == nil {
 		return p
@@ -67,6 +75,10 @@ func newRetailPanelState(window *gui.Window) *retailPanelState {
 		if key == "" {
 			continue
 		}
+		if _, taken := p.owner[key]; taken {
+			continue
+		}
+		p.owner[key] = gad.SourceName
 		p.text[key] = gad.Text
 		p.help[key] = gad.Help
 		p.active[key] = gad.Active != 0
@@ -161,6 +173,19 @@ func (p *retailPanelState) setText(name, text string) {
 	if p != nil {
 		p.text[menuKey(name)] = text
 	}
+}
+
+// textFor is textOf for one specific gadget: a gadget that does not own its
+// name is never the target of a by-name set, so it draws its authored record.
+func (p *retailPanelState) textFor(gad gui.Gadget) string {
+	if p == nil {
+		return ""
+	}
+	key := menuKey(gad.Name)
+	if owner, ok := p.owner[key]; ok && owner != gad.SourceName {
+		return gad.Text
+	}
+	return p.text[key]
 }
 
 func (p *retailPanelState) textOf(name string) string {
@@ -454,12 +479,15 @@ func (g *gameShell) refreshMapPanel() {
 	if g.mapIdx >= len(g.maps) && len(g.maps) != 0 {
 		g.mapIdx = len(g.maps) - 1
 	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// must not touch mapDataFor per row.
 	items := make([]string, len(g.maps))
-	for i, name := range g.maps {
-		if d := g.mapDataFor(name); d != nil {
-			items[i] = d.label
-		} else {
-			items[i] = name
+	copy(items, g.mapLabels)
+	for i := range items {
+		if items[i] == "" {
+			items[i] = g.maps[i]
 		}
 	}
 	g.setListItems("MAPNAMES", items, g.mapIdx)
@@ -469,16 +497,18 @@ func (g *gameShell) refreshMapPanel() {
 		return
 	}
 	if d := g.mapDataFor(g.maps[g.mapIdx]); d != nil {
-		g.panel.setText("DESCRIPTION", d.description)
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// NumPlayers, and OTA Size through "%s  %s: %s" into the authored
-		// SIZE gadget. The two spaces are part of the retail format string.
-		size := d.size
+		// verbatim — the authored string already carries the "16 X 17 " size
+		// prefix — and formats OTA memory, the localized "Players" label, and
+		// OTA numplayers through "%s  %s: %s" into SIZE. Both pairs of spaces
+		// are part of the retail format string.
+		g.panel.setText("DESCRIPTION", d.description)
+		size := ""
 		if d.ota != nil {
+			memory := strings.TrimSpace(d.ota.Memory)
 			numPlayers := strings.TrimSpace(d.ota.NumPlayers)
-			mapSize := strings.TrimSpace(d.ota.Size)
-			if numPlayers != "" && mapSize != "" {
-				size = fmt.Sprintf("Players  %s: %s", numPlayers, mapSize)
+			if memory != "" || numPlayers != "" {
+				size = fmt.Sprintf("%s  %s: %s", memory, "Players", numPlayers)
 			}
 		}
 		g.panel.setText("SIZE", size)
@@ -491,11 +521,9 @@ func (g *gameShell) refreshSkirmishPanel() {
 		return
 	}
 	g.ensureRetailSkirmishControllers()
-	mapLabel := g.setup.MapName
-	if d := g.mapDataFor(g.setup.MapName); d != nil && d.label != "" {
-		mapLabel = d.label
-	}
-	p.setText("MapName", mapLabel)
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// into the MapName gadget. It does not reopen the map to read a title.
+	p.setText("MapName", g.setup.MapName)
 	if g.setup.Location == 0 {
 		p.setStatus("StartLocation", 1)
 		p.setHelp("StartLocation", "Commanders are randomly placed on the battle field.")
@@ -562,9 +590,7 @@ func (g *gameShell) refreshSkirmishPanel() {
 			// retains its ordinary/hover frame state.
 			p.setStatus("Player"+prefix, 0)
 			p.setStatus("Side"+prefix, player.Side)
-			// TEAMICONSx frame 10 is the stock allegiance-symbol surface;
-			// the selected alliance number is lobby data, not its frame.
-			p.setStatus("Allies"+prefix, 10)
+			p.setStatus("Allies"+prefix, g.retailAllyIconFrame(i))
 			p.setStatus("Color"+prefix, player.Color)
 		}
 	}
@@ -576,6 +602,37 @@ func (g *gameShell) refreshSkirmishPanel() {
 		p.setHelp("Allies"+prefix, "Click to select an allegiance symbol.")
 		p.setHelp("Metal"+prefix, "Left click to increase metal. Right click to decrease metal.")
 		p.setHelp("Energy"+prefix, "Left click to increase energy. Right click to decrease energy.")
+	}
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// and rewrites each Allies%d surface's frame index. For one row it counts the
+// configured rows — controller not Open — whose alliance number equals that
+// row's, then picks the TEAMICONSx frame: none gives 10, exactly one gives
+// group*2+1, and two or more give group*2. The entry's twelve frames are six
+// symbols in that order, the odd one split in half and the even one whole, so
+// a row alone in its alliance shows the broken symbol and a row sharing it
+// shows the joined one. Alliance 5 lands on frames 10 and 11, which are both
+// blank, which is what makes it read as "no allegiance" [07 §4].
+func (g *gameShell) retailAllyIconFrame(slot int) int {
+	const blankAllyFrame = 10
+	if g == nil || slot < 0 || slot >= session.SkirmishMaxPlayers {
+		return blankAllyFrame
+	}
+	group := g.setup.Players[slot].AllyGroup
+	shared := 0
+	for i := 0; i < g.setup.NumPlayers && i < session.SkirmishMaxPlayers; i++ {
+		if g.retailControllers[i] != 0 && g.setup.Players[i].AllyGroup == group {
+			shared++
+		}
+	}
+	switch shared {
+	case 0:
+		return blankAllyFrame
+	case 1:
+		return group*2 + 1
+	default:
+		return group * 2
 	}
 }
 
@@ -633,7 +690,11 @@ func (g *gameShell) installSkirmishDynamicGadgets() {
 			retailDynamicButton("Player"+suffix, 45, rowY, 112, 20, "skirmname", 0),
 			side,
 			retailDynamicSurface("Color"+suffix, 214, rowY, 20, 20, "32xlogos", player.Color),
-			retailDynamicSurface("Allies"+suffix, 241, rowY, 40, 20, "TEAMICONSx", player.AllyGroup),
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// row's computed symbol; the alliance number is never the
+			// frame index.
+			retailDynamicSurface("Allies"+suffix, 241, rowY, 40, 20, "TEAMICONSx", 10),
 			retailDynamicButton("Metal"+suffix, 286, rowY, 45, 20, "skirmmet", 0),
 			retailDynamicButton("Energy"+suffix, 337, rowY, 45, 20, "skirmmet", 0),
 		)
@@ -814,16 +875,42 @@ func (g *gameShell) drawRetailPanel(c *client.Client) {
 	if g.mode == modeMenuSkirmish {
 		g.updateHoverHelp(int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y))
 	}
-	if bg := g.panelBackground(); bg != nil {
-		c.UIBlitPCX(bg, 0, 0)
-	} else {
-		g.drawPanelTile(c, g.panel.window.Rect)
+	// Back to front along the window chain: the screen beneath first, then the
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	if g.under != nil && g.under.window != nil {
+		g.drawRetailWindow(c, g.underMode, g.under)
 	}
-	for i, gad := range g.panel.window.Gadgets {
-		if i == 0 || !g.panel.activeOf(gad.Name) {
+	g.drawRetailWindow(c, g.mode, g.panel)
+}
+
+// drawRetailWindow composes one window of the chain. mode selects the resource
+// set the gadget art is resolved against, so a window beneath the active one
+// still draws with its own GUI GAF.
+func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *retailPanelState) {
+	if p == nil || p.window == nil {
+		return
+	}
+	savedMode, savedPanel := g.mode, g.panel
+	g.mode, g.panel = mode, p
+	defer func() { g.mode, g.panel = savedMode, savedPanel }()
+
+	if bg := g.panelBackground(); bg != nil {
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// own surface at (0,0), and that surface is the window rectangle. The
+		// bitmap therefore lands at the window origin and anything past the
+		// rectangle is not part of the window [07 §4].
+		r := p.window.Rect
+		c.UIBlitPCXClipped(bg, int(r.X), int(r.Y), int(r.X), int(r.Y), int(r.W), int(r.H))
+	} else {
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// the window rectangle; the stock fallback entry is BackTile.
+		g.drawPanelTile(c, p.window.Rect)
+	}
+	for i, gad := range p.window.Gadgets {
+		if i == 0 || !p.activeOf(gad.Name) {
 			continue
 		}
-		r := g.panel.window.PlacedRect(i)
+		r := p.window.PlacedRect(i)
 		switch gad.Kind {
 		case gui.KindButton:
 			g.drawRetailButton(c, gad, r)
@@ -1134,7 +1221,7 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *retailPanelState, g
 	if p == nil {
 		return
 	}
-	text := p.textOf(gad.Name)
+	text := p.textFor(gad)
 	if len(gad.Labels) != 0 {
 		idx := clampMenuStage(p.statusOf(gad.Name), len(gad.Labels))
 		text = gad.Labels[idx]
@@ -1165,20 +1252,84 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *retailPanelState, g
 	if pressed {
 		x += boolInt(gad.Attribs&1 != 0 || gad.Attribs&2 != 0)
 	}
-	y := int(r.Y)
-	if r.H > 0 {
-		y += (int(r.H) - g.retailTextHeight()) / 2
-	}
-	if pressed {
-		y++
-	}
+	y := retailTextPenY(gad, r, g.retailTextHeight())
 	color := g.guiColor(byte(gad.ColorF & 0xff))
 	maxWidth := int(r.W)
 	if maxWidth <= 0 {
 		width, _ := c.Size()
 		maxWidth = width - x
 	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// before it picks a renderer: it compares the rectangle's inclusive height
+	// (y1-y0) with twice the capital-I frame height plus two, and sends the
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// the wrapped case and SIZE 235x18 for the single-line one [07 §4].
+	lineStep := g.retailTextHeight()
+	if int(r.H)-1 > 2*lineStep {
+		lines := retailWrapLines(text, g.retailTextWidth, maxWidth)
+		top := int(r.Y) + (int(r.H)-1-len(lines)*lineStep)/2
+		if top < int(r.Y) {
+			top = int(r.Y)
+		}
+		for i, line := range lines {
+			g.drawRetailString(c, line, x, top+i*lineStep, maxWidth, color)
+		}
+		return
+	}
 	g.drawRetailString(c, text, x, y, maxWidth, color)
+}
+
+// retailWrapLines breaks a label at spaces so it fits maxWidth, keeping each
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// re-joining words, so the double space the OTA missiondescription carries
+// after the map size survives into the drawn line.
+func retailWrapLines(text string, measure func(string) int, maxWidth int) []string {
+	if text == "" || measure == nil || maxWidth <= 0 {
+		return []string{text}
+	}
+	var lines []string
+	for text != "" {
+		if measure(text) <= maxWidth {
+			lines = append(lines, text)
+			break
+		}
+		cut := -1
+		for i := 0; i < len(text); i++ {
+			if text[i] != ' ' {
+				continue
+			}
+			if measure(text[:i]) > maxWidth {
+				break
+			}
+			cut = i
+		}
+		if cut <= 0 {
+			// A single run wider than the box: emit what fits and continue,
+			// which is what the renderer's per-glyph width test amounts to.
+			cut = len(text)
+			for cut > 1 && measure(text[:cut]) > maxWidth {
+				cut--
+			}
+			lines = append(lines, text[:cut])
+			text = text[cut:]
+			continue
+		}
+		lines = append(lines, text[:cut])
+		text = strings.TrimLeft(text[cut:], " ")
+	}
+	return lines
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// centering span H-1, and staged controls add one to the pen coordinate. The
+// pressed state changes the selected art frame but does not move the text pen.
+func retailTextPenY(gad gui.Gadget, r gui.Rect, textHeight int) int {
+	y := int(r.Y)
+	if r.H > 0 {
+		y += (int(r.H)-1-textHeight)/2 + boolInt(gad.Stages != 0)
+	}
+	return y
 }
 
 func retailButtonPressed(c *client.Client, r gui.Rect) bool {
@@ -1222,11 +1373,14 @@ func (g *gameShell) drawRetailList(c *client.Client, gad gui.Gadget, r gui.Rect)
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		// calculating rows. The same origin is used by its text renderer.
 		y := int(r.Y) + 2 + row*itemHeight
+		color := g.guiColor(byte(gad.ColorF & 0xff))
+		g.drawRetailString(c, l.items[idx], int(r.X)+4, y, int(r.W)-4, color)
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// operator remaps whatever is already in the rectangle, so the glyphs
+		// are lifted along with the listbox interior.
 		if idx == l.selected {
 			g.drawListSelection(c, r, y, itemHeight)
 		}
-		color := g.guiColor(byte(gad.ColorF & 0xff))
-		g.drawRetailString(c, l.items[idx], int(r.X)+4, y, int(r.W)-4, color)
 	}
 }
 
@@ -1289,21 +1443,22 @@ func (g *gameShell) drawListBox(c *client.Client, r gui.Rect) {
 	}
 }
 
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// +30, and a non-negative level there indexes the 32-row PALETTE.LHT
+// brightening table, so the row's own pixels are remapped one row at a time.
+// That is what makes the selected entry read as a lit bar over the listbox
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (g *gameShell) drawListSelection(c *client.Client, r gui.Rect, y, h int) {
-	if g.assets == nil || g.assets.common == nil {
+	if g == nil || g.assets == nil || g.assets.pal == nil {
 		return
 	}
-	e, ok := g.assets.common.Find("LISTBOX")
-	if !ok || len(e.Frames) <= 4 || e.Frames[4].Frame == nil {
-		return
-	}
-	f := e.Frames[4].Frame
-	for x := int(r.X); x < int(r.X+r.W); x += int(f.Width) {
-		for yy := y; yy < y+h; yy += int(f.Height) {
-			blitRetailFrame(c, f, x, yy)
-		}
-	}
+	c.UILightRect(g.assets.pal, int(r.X), y, int(r.W), h, retailListSelectionLevel)
 }
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// list row, focused or not.
+const retailListSelectionLevel = 30
 
 func (g *gameShell) drawRetailScrollbar(c *client.Client, gad gui.Gadget, r gui.Rect) {
 	if g.assets == nil || g.assets.common == nil {
@@ -1359,7 +1514,7 @@ func (g *gameShell) drawRetailScrollbar(c *client.Client, gad gui.Gadget, r gui.
 		trackX := left + (int(r.W)-trackW)/2
 		blitRetailFrame(c, arrow0, left+(int(r.W)-int(arrow0.Width))/2, top)
 		blitRetailFrame(c, arrow1, left+(int(r.W)-int(arrow1.Width))/2, bottom-int(arrow1.Height))
-		drawRetailScrollbarTrack(c, track0, track1, track2, trackX, trackTop, trackBottom, false)
+		drawRetailScrollbarTrack(c, track0, track1, track2, trackTop, trackX, trackBottom, false)
 
 		l := g.listForAssoc(gad.Assoc)
 		itemHeight := g.retailListAssocItemHeight(gad.Assoc)
@@ -1371,7 +1526,11 @@ func (g *gameShell) drawRetailScrollbar(c *client.Client, gad gui.Gadget, r gui.
 				maxTop = 0
 			}
 		}
-		thumbLen := int(thumb0.Height) + int(thumb1.Height) + int(thumb2.Height)
+		total := 0
+		if l != nil {
+			total = len(l.items)
+		}
+		thumbLen := retailScrollbarKnobSize(visible, total, int(r.H))
 		travel := trackBottom - trackTop - thumbLen
 		if travel < 0 {
 			travel = 0
@@ -1381,7 +1540,7 @@ func (g *gameShell) drawRetailScrollbar(c *client.Client, gad gui.Gadget, r gui.
 			pos = l.top * travel / maxTop
 		}
 		thumbX := trackX + (trackW-int(thumb0.Width))/2
-		drawRetailScrollbarThumb(c, thumb0, thumb1, thumb2, thumbX, trackTop+pos, false)
+		drawRetailScrollbarThumb(c, thumb0, thumb1, thumb2, thumbX, trackTop+pos, thumbLen, false)
 		return
 	}
 
@@ -1416,7 +1575,11 @@ func (g *gameShell) drawRetailScrollbar(c *client.Client, gad gui.Gadget, r gui.
 			maxTop = 0
 		}
 	}
-	thumbLen := int(thumb0.Width) + int(thumb1.Width) + int(thumb2.Width)
+	total := 0
+	if l != nil {
+		total = len(l.items)
+	}
+	thumbLen := retailScrollbarKnobSize(visible, total, int(r.W))
 	travel := trackRight - trackLeft - thumbLen
 	if travel < 0 {
 		travel = 0
@@ -1426,7 +1589,7 @@ func (g *gameShell) drawRetailScrollbar(c *client.Client, gad gui.Gadget, r gui.
 		pos = l.top * travel / maxTop
 	}
 	thumbY := trackY + (trackH-int(thumb0.Height))/2
-	drawRetailScrollbarThumb(c, thumb0, thumb1, thumb2, trackLeft+pos, thumbY, true)
+	drawRetailScrollbarThumb(c, thumb0, thumb1, thumb2, trackLeft+pos, thumbY, thumbLen, true)
 }
 
 func drawRetailScrollbarTrack(c *client.Client, first, middle, last *formats.GAFFrame, start, cross0, cross1 int, horizontal bool) {
@@ -1450,19 +1613,55 @@ func drawRetailScrollbarTrack(c *client.Client, first, middle, last *formats.GAF
 	blitRetailFrame(c, last, cross0, end)
 }
 
-func drawRetailScrollbarThumb(c *client.Client, first, middle, last *formats.GAFFrame, x, y int, horizontal bool) {
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// It divides the associated list's visible row count by its item count, scales
+// that by the scrollbar's own length less three pixels, rounds, and clamps the
+// result up to ten. SLIDERS carries the knob as a one-pixel cap, a repeatable
+// three-pixel middle and a one-pixel cap, so the length is a computed run and
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func retailScrollbarKnobSize(visible, total, barLength int) int {
+	const minimum = 10
+	if total <= 0 || visible <= 0 || barLength <= 3 {
+		return minimum
+	}
+	span := barLength - 3
+	size := int(math.Round(float64(visible) / float64(total) * float64(span)))
+	if size < minimum {
+		size = minimum
+	}
+	if size > span {
+		size = span
+	}
+	return size
+}
+
+func drawRetailScrollbarThumb(c *client.Client, first, middle, last *formats.GAFFrame, x, y, length int, horizontal bool) {
 	if first == nil || middle == nil || last == nil {
 		return
 	}
 	if horizontal {
+		capLen := int(first.Width) + int(last.Width)
+		if length < capLen {
+			length = capLen
+		}
 		blitRetailFrame(c, first, x, y)
-		blitRetailFrame(c, middle, x+int(first.Width), y)
-		blitRetailFrame(c, last, x+int(first.Width)+int(middle.Width), y)
+		end := x + length - int(last.Width)
+		for px := x + int(first.Width); px < end; px += int(middle.Width) {
+			blitRetailFrame(c, middle, px, y)
+		}
+		blitRetailFrame(c, last, end, y)
 		return
 	}
+	capLen := int(first.Height) + int(last.Height)
+	if length < capLen {
+		length = capLen
+	}
 	blitRetailFrame(c, first, x, y)
-	blitRetailFrame(c, middle, x, y+int(first.Height))
-	blitRetailFrame(c, last, x, y+int(first.Height)+int(middle.Height))
+	end := y + length - int(last.Height)
+	for py := y + int(first.Height); py < end; py += int(middle.Height) {
+		blitRetailFrame(c, middle, x, py)
+	}
+	blitRetailFrame(c, last, x, end)
 }
 
 func (g *gameShell) listForAssoc(assoc int32) *retailListState {
@@ -1609,7 +1808,19 @@ func (g *gameShell) drawRetailSurface(c *client.Client, gad gui.Gadget, r gui.Re
 		}
 		return
 	}
-	g.drawRetailArt(c, gad, r)
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// gadget-art blit. An RLE frame (Compressed != 0) is stamped at the gadget
+	// origin; a raw frame is texture-mapped across the whole gadget rectangle.
+	// SKIRMISH's Color%d surface is the visible case: textures/logos.gaf holds
+	// raw 32x32 frames that retail resamples into the authored 20x20 record,
+	// while anims/skirmish.gaf's RLE ally icons are stamped 1:1 [07 §4].
+	if f := g.gadgetArt(gad, g.panel.statusOf(gad.Name)); f != nil {
+		if f.Compressed == 0 {
+			c.UIBlitFrameScaled(f, int(r.X), int(r.Y), int(r.W), int(r.H))
+			return
+		}
+		blitRetailFrame(c, f, int(r.X), int(r.Y))
+	}
 }
 
 func pointInRect(x, y int32, r gui.Rect) bool {

@@ -54,6 +54,16 @@ func retailGAFTextHeight(font *formats.GAFEntry) int {
 	return 0
 }
 
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// normalized offset from the supplied pen Y [07 §4].
+func retailGAFBaselineHeight(font *formats.GAFEntry) int {
+	if frame := retailGAFGlyph(font, 'I'); frame != nil {
+		return int(frame.Height)
+	}
+	return 0
+}
+
 func (g *gameShell) retailTextWidth(text string) int {
 	if font := g.retailGAFTextFont(); font != nil {
 		return retailGAFTextWidth(font, text)
@@ -81,6 +91,7 @@ func drawRetailGAFText(c *client.Client, font *formats.GAFEntry, text string, x,
 	if c == nil || font == nil {
 		return
 	}
+	baselineHeight := retailGAFBaselineHeight(font)
 	remaining := maxWidth
 	for i := 0; i < len(text); i++ {
 		code := text[i]
@@ -96,7 +107,13 @@ func drawRetailGAFText(c *client.Client, font *formats.GAFEntry, text string, x,
 			return
 		}
 		if code != 0x20 {
-			c.UIBlit(frame, x, y)
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			c.UIBlit(frame,
+				x-int(frame.XOffset),
+				y-(int(frame.YOffset)-baselineHeight),
+			)
 		}
 		x += advance
 		if remaining >= 0 {

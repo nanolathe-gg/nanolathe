@@ -426,16 +426,28 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 // install: ID 36 is shared by EARTHQUAKE (gamedata/weapons.tdf) and cormine2
 // (weapons/cormine2_weapon.tdf); every unit link references CORMINE2 and none
 // references EARTHQUAKE.
+//
+// Determinism ON-04: winner for duplicate IDs is the smallest canonical key
+// (lexicographically, I1), not last-wins-by-canonical-order nor file order.
+// Duplicates are recorded for diagnostics via CompileWeaponsWithDuplicates.
+// TODO(question) R-P0-01 duplicate winner policy: smallest canonical key wins is a supported inference
+// from [02 §5] deterministic catalog requirement (I1); last-wins would be nondeterministic
+// under map iteration and is NOT acceptable per ON-04.
 func CompileWeapons(fs vfs.FSOps) (map[string]*WeaponDef, error) {
-	if fs == nil {
-		return nil, fmt.Errorf("content: nil VFS")
-	}
-	result := make(map[string]*WeaponDef)
-	// byID holds the record selected per authored ID [02 "Weapon record"]. Only
-	// records selected this way collapse; see the ID-less branch below.
-	byID := make(map[int32]*WeaponDef)
+	m, _, err := CompileWeaponsWithDuplicates(fs)
+	return m, err
+}
 
-	processFile := func(data []byte, prov Provenance) error {
+// CompileWeaponsWithDuplicates is the stable implementation that also returns duplicate diagnostics ON-04.
+// It collects all weapon sections first, then selects winners deterministically as smallest canonical key
+// per ID, recording all colliding keys for diagnostics.
+func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []WeaponDuplicate, error) {
+	if fs == nil {
+		return nil, nil, fmt.Errorf("content: nil VFS")
+	}
+	var allDefs []*WeaponDef
+
+	processFileCollect := func(data []byte, prov Provenance) error {
 		doc, err := formats.ParseTDF(data)
 		if err != nil {
 			return err
@@ -446,84 +458,99 @@ func CompileWeapons(fs vfs.FSOps) (map[string]*WeaponDef, error) {
 				continue
 			}
 			wd := compileWeaponSection(section, name, prov)
-			if wd.ID >= 0 {
-				// The later section replaces the earlier same-ID record
-				// wholesale: typed reads store value-or-default per field, so
-				// keys the later section omits revert to their defaults, and
-				// the catalog name becomes the later section's [02 "Weapon
-				// record"]. Drop the loser's old catalog-name entry unless it
-				// is being overwritten by the same spelling.
-				if prev, ok := byID[wd.ID]; ok && prev.CanonicalKey != wd.CanonicalKey {
-					delete(result, prev.CanonicalKey)
-				}
-				byID[wd.ID] = wd
-			} else {
-				// TODO(question): [02 "Weapon record"] says "A weapon section
-				// without an authored ID therefore selects the slot before the
-				// table", which reads as if every ID-less section merged into
-				// one slot -1 record. All 231 stock sections carry IDs
-				// (measured), so the reading is untestable against retail
-				// data; merging them here would be destructive if wrong.
-				// Until resolved, ID-less sections stay distinct records.
-			}
-			result[wd.CanonicalKey] = wd
+			allDefs = append(allDefs, wd)
 		}
 		return nil
 	}
 
-	// File order: gamedata/weapons.tdf parses BEFORE weapons/*.tdf, so the
-	// weapons-directory spelling wins an ID collision. Supported inference
-	// from the reference data: for the ID 36 collision the surviving name must
-	// be CORMINE2 because units reference it and nothing references
-	// EARTHQUAKE. TODO(question): the true retail enumeration order of the two
-	// weapon sources is not established; revisit if research lands.
 	if data, err := fs.ReadFileLimit("gamedata/weapons.tdf", 1<<20); err == nil {
 		prov := Provenance{LogicalPath: "gamedata/weapons.tdf"}
 		if info, statErr := fs.Stat("gamedata/weapons.tdf"); statErr == nil {
 			prov = ProvenanceFrom(info)
 		}
-		if err := processFile(data, prov); err != nil {
-			return nil, fmt.Errorf("content: gamedata/weapons.tdf: %w", err)
+		if err := processFileCollect(data, prov); err != nil {
+			return nil, nil, fmt.Errorf("content: gamedata/weapons.tdf: %w", err)
 		}
 	}
 
 	entries, err := fs.ReadDir("weapons")
 	if err != nil {
 		// If gamedata already contributed weapons, allow missing weapons dir as empty.
-		if len(result) == 0 {
-			return nil, fmt.Errorf("content: weapons: %w", err)
+		if len(allDefs) == 0 {
+			return nil, nil, fmt.Errorf("content: weapons: %w", err)
 		}
-		return result, nil
-	}
-	// ReadDir already sorts by Path [vfs.ReadDir], so iteration is stable (I1).
-	for _, e := range entries {
-		if e.IsDir {
-			continue
-		}
-		// Filter by extension — directory also holds .bat, .pl, .txt, .xls junk [PLAN Discovery]
-		if !strings.HasSuffix(strings.ToLower(e.Path), ".tdf") {
-			continue
-		}
-		data, err := fs.ReadFileLimit(e.Path, 1<<20)
-		if err != nil {
-			continue
-		}
-		prov := Provenance{
-			LogicalPath: e.Path,
-			ProviderID:  e.Source.SourcePath,
-			MountOrder:  e.Source.MountOrder,
-		}
-		// Fallback to Stat provenance if ReadDir entry lacks it (should not happen).
-		if prov.ProviderID == "" {
-			if info, serr := fs.Stat(e.Path); serr == nil {
-				prov = ProvenanceFrom(info)
+	} else {
+		// ReadDir already sorts by Path [vfs.ReadDir], so iteration is stable (I1).
+		for _, e := range entries {
+			if e.IsDir {
+				continue
+			}
+			// Filter by extension — directory also holds .bat, .pl, .txt, .xls junk [PLAN Discovery]
+			if !strings.HasSuffix(strings.ToLower(e.Path), ".tdf") {
+				continue
+			}
+			data, err := fs.ReadFileLimit(e.Path, 1<<20)
+			if err != nil {
+				continue
+			}
+			prov := Provenance{
+				LogicalPath: e.Path,
+				ProviderID:  e.Source.SourcePath,
+				MountOrder:  e.Source.MountOrder,
+			}
+			// Fallback to Stat provenance if ReadDir entry lacks it (should not happen).
+			if prov.ProviderID == "" {
+				if info, serr := fs.Stat(e.Path); serr == nil {
+					prov = ProvenanceFrom(info)
+				}
+			}
+			if err := processFileCollect(data, prov); err != nil {
+				return nil, nil, fmt.Errorf("content: %s: %w", e.Path, err)
 			}
 		}
-		if err := processFile(data, prov); err != nil {
-			return nil, fmt.Errorf("content: %s: %w", e.Path, err)
+	}
+	// Deterministic winner selection: smallest canonical key wins per ID ON-04.
+	// Group by ID, keep smallest key as winner, record all colliding keys for diagnostics.
+	// ID < 0 (no ID) stays distinct per TODO(question) in processFileCollect comment.
+	sort.SliceStable(allDefs, func(i, j int) bool { return allDefs[i].CanonicalKey < allDefs[j].CanonicalKey })
+	result := make(map[string]*WeaponDef, len(allDefs))
+	byID := make(map[int32]*WeaponDef)
+	// dupKeys tracks all keys per ID in sorted winner-first order for diagnostics
+	dupKeys := make(map[int32][]string)
+	for _, wd := range allDefs {
+		if wd.ID >= 0 {
+			if _, exists := byID[wd.ID]; !exists {
+				byID[wd.ID] = wd
+				result[wd.CanonicalKey] = wd
+			}
+			// Record key for duplicate diagnostics (always append in sorted order)
+			dupKeys[wd.ID] = append(dupKeys[wd.ID], wd.CanonicalKey)
+		} else {
+			// TODO(question): ID-less sections stay distinct records per earlier comment
+			if _, exists := result[wd.CanonicalKey]; !exists {
+				result[wd.CanonicalKey] = wd
+			} else {
+				// Same canonical key duplicate with ID <0: keep first winner, record duplicate key
+				// For ID -1 we don't group by ID, but we can still note duplicate canonical
+				dupKeys[wd.ID] = append(dupKeys[wd.ID], wd.CanonicalKey)
+			}
 		}
 	}
-	return result, nil
+	// Build WeaponDuplicate slice for IDs where len >1, sorted by ID for determinism
+	var duplicates []WeaponDuplicate
+	for id, keys := range dupKeys {
+		if len(keys) <= 1 {
+			continue
+		}
+		// keys already in sorted order because allDefs sorted and we appended in that order
+		// but ensure sorted ascending for diagnostics
+		sort.Strings(keys)
+		// Ensure winner (smallest) first; after sort it is
+		dup := WeaponDuplicate{ID: id, Keys: append([]string(nil), keys...), Winner: keys[0]}
+		duplicates = append(duplicates, dup)
+	}
+	sort.Slice(duplicates, func(i, j int) bool { return duplicates[i].ID < duplicates[j].ID })
+	return result, duplicates, nil
 }
 
 // compileWeapons is an unexported alias for Catalog integration [02 §5] C1 two-stage discover → parse → link.

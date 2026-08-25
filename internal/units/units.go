@@ -48,8 +48,9 @@ type Unit struct {
 	// Dying is the death mark, separate from Alive [04 §2.3] C2: Destroy sets
 	// it and the unit stays visible to the sweep and to Unit() until Cleanup
 	// frees the slot.
-	Dying      bool
-	DeathCause DeathCause
+	Dying          bool
+	DeathCause     DeathCause
+	deathHookFired bool // internal: ensures OnDeath fires exactly once via Destroy or FinalizeDeath [01 §4.4][04 "unit sweep"]
 	// Build progress remaining 1→0 [04 §2.3] C3. float32 per the I2 allowlist
 	// row "Construction remaining fraction" [05 "Construction target state"].
 	// Owned exclusively by construction.Service; Units.Tick never mutates it [05 "Construction arithmetic"].
@@ -605,6 +606,9 @@ func (w *World) NotifyCapture(h pool.Handle, oldOwner, newOwner uint8) {
 
 // Destroy marks death; the slot stays alive and visible until post-tick
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// It fires OnDeath exactly once via an internal fired flag that FinalizeDeath
+// also respects, so hook and free are deduplicated across the two paths
+// [01 §4.4][04 "unit sweep"].
 func (w *World) Destroy(h pool.Handle, cause DeathCause) {
 	if w == nil || w.pool == nil || !w.pool.Alive(h) {
 		return
@@ -620,9 +624,10 @@ func (w *World) Destroy(h pool.Handle, cause DeathCause) {
 	u.Dying = true
 	u.DeathCause = cause
 	// Exactly-once death notification [08 "Evaluation"]: the latch transition
-	// is the single fire point.
-	if w.OnDeath != nil {
+	// is the single fire point. Also deduped with FinalizeDeath.
+	if !u.deathHookFired && w.OnDeath != nil {
 		w.OnDeath(h, cause, u)
+		u.deathHookFired = true
 	}
 }
 
@@ -772,6 +777,12 @@ func (w *World) LiveCountForPlayer(player int) int {
 // weapon-slot update (Aim can block) → normal COB drain delta 1 → deferred
 // build/order → preserved movement → slot-end death handling. Tick never frees
 // slots; Cleanup handles that in phase 10 [04 §2.4] C2.
+//
+// Deprecated: Tick is a legacy package-wide sweep retained only for
+// compatibility. It is non-authoritative. New code should use the explicit
+// traversal API: VisitActiveSlots with StepPreUpdate at the front and
+// FinalizeDeath at slot-end, running weapon/COB/orders/movement between
+// those two boundaries [01 §4.4][04 "unit sweep"].
 func (w *World) Tick(tick uint32) {
 	if w == nil || w.units == nil {
 		return
