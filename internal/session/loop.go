@@ -492,7 +492,8 @@ func handleLocalPreload(s *Session) {
 			p.GameEnded = false
 			p.EndGameCountdown = -1
 		}
-		// Seed deadlines from current tick to keep WinLoseTime cadence correct [05].
+		// Seed deadlines from current tick to keep WinLoseTime cadence correct [05 "Authoritative settlement order"] C5 and [08 "Evaluation"] tick site.
+		// WinLoseTime is the trigger poll deadline (globalTick >= WinLoseTime then WinLoseTime+=30) [08 "Evaluation"] in LOCAL slice.
 		var tick uint32
 		if s.Clock != nil {
 			tick = s.Clock.GlobalTick
@@ -1053,30 +1054,45 @@ func (s *Session) authoritativeTick(tick uint32) {
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceVisibilityDeadline})
 	}
 
-	// 8 Trigger polling [08 "Evaluation"][P1-01 §3] — mission victory/defeat queues polled once per 30 ticks in LOCAL player's slice only for mission type 1
+	// 8 Trigger polling [08 "Evaluation"][P1-01 §3] — victory/defeat queues are polled
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// settlement) [08 "Evaluation"], and only when mission type is 1 (campaign)
+	// [08 "Evaluation"]. Skirmish/multiplayer types 2/3 never poll [08 "Evaluation"].
+	// Poll order is victory then defeat in builder order; victory AND, defeat OR,
+	// victory evaluated first so simultaneous resolves as victory [08 "Evaluation"].
+	// Completion arms shared countdown at 4 which decrements once per due poll
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// is written with ending 0x04, won 0x10|0x20, lost 0x40 clearing 0x10
+	// [08 "Evaluation"].
+	// TODO(question): exact presentation sequence between latch write and session
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	if s.Mission != nil && s.Mission.Type == mission.TypeCampaign && (len(s.Mission.Victory) > 0 || len(s.Mission.Defeat) > 0) {
-		// Delegate to existing triggerPoll helper to preserve per-player WinLoseTime deadline logic [05 "Authoritative settlement order"] C2
-		// Extracted from old loop's trigger-poll registration
+		// Once-per-30 cadence via LOCAL player's WinLoseTime deadline [08 "Evaluation"].
+		// Shape matches economy settlement UpdateTime deadline: unsigned
+		// globalTick >= WinLoseTime then WinLoseTime +=30 [05 "Authoritative settlement order"] C2.
 		isDue := false
 		if s.Econ != nil && int(s.LocalOwner) < 10 {
 			p := &s.Econ.Players[int(s.LocalOwner)]
-			if p.WinLoseTime <= tick {
+			if p.WinLoseTime <= tick { // unsigned due, single add not loop [08 "Evaluation"]
 				p.WinLoseTime += 30
 				isDue = true
 			}
 		} else {
+			// Fixture-only fallback when Econ is nil; retail always has Econ for campaign.
+			// Tick%30 shape preserves ~1/sec when no deadline storage exists.
 			if tick%30 == 0 {
 				isDue = true
 			}
 		}
-		if isDue && s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
+		if isDue {
 			ctx := triggers.PollContext{Tick: tick, World: s.Units, LocalOwner: s.LocalOwner, EnemyOwner: s.EnemyOwner}
-			v, d := triggers.Evaluate(s.Mission.Victory, s.Mission.Defeat, ctx)
+			v, d := triggers.Evaluate(s.Mission.Victory, s.Mission.Defeat, ctx) // AND/OR + victory-first [08 "Evaluation"]
 			s.VictoryDone = s.VictoryDone || v
 			s.DefeatDone = s.DefeatDone || d
 			var latched bool
 			if v {
-				latched = s.Latch.AdvanceWin(isDue)
+				latched = s.Latch.AdvanceWin(isDue) // 4→-1 ~150 ticks [08 "Evaluation"]
 			} else if d {
 				latched = s.Latch.AdvanceLose(isDue)
 			}
@@ -1089,15 +1105,16 @@ func (s *Session) authoritativeTick(tick uint32) {
 			if latched && s.Latch.IsEnding() && s.State == StateBattle {
 				win := s.Latch.IsWin()
 				s.Progress.ApplyCampaignResult(0, win)
-				_ = s.TransitionTo(StatePostBattle)
+				_ = s.TransitionTo(StatePostBattle) // TODO(question): presentation sequence unknown [08 "Evaluation"]
 			}
-			s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceTriggerPoll})
 			if v || d {
 				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceVictoryLatch})
 			}
 		}
+		// Deterministic trace every tick, even when not due [INVARIANTS I1].
+		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceTriggerPoll})
 	} else {
-		// Still emit TriggerPoll for determinism proof even when no campaign mission
+		// Still emit TriggerPoll for determinism when no campaign mission or no queues.
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceTriggerPoll})
 	}
 
@@ -1463,6 +1480,9 @@ func (s *Session) RegisterAll() {
 			if s.Vis != nil && u != nil {
 				unpublishOne(s, u)
 			}
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// Polled queues use LocalOwner/EnemyOwner gating, not alliance; type-gated countdown
+			// decrements only here, never from poll [08 "Evaluation"].
 			if s.Mission != nil && u != nil {
 				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitDied, u)
@@ -1509,6 +1529,7 @@ func (s *Session) RegisterAll() {
 			}
 		}
 		s.Units.OnCreate = func(h pool.Handle, u *units.Unit) {
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if s.Mission != nil && u != nil {
 				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitCreated, u)
@@ -1520,6 +1541,7 @@ func (s *Session) RegisterAll() {
 			}
 		}
 		s.Units.OnCapture = func(h pool.Handle, oldOwner, newOwner uint8, u *units.Unit) {
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if s.Mission != nil && u != nil {
 				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitCaptured, u)

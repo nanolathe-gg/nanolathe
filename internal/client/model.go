@@ -856,6 +856,7 @@ func (c *Client) collectUnitTris(v snapshot.UnitView, useShade bool) ([]screenTr
 		}
 	}
 	isNanoframe := v.BuildRemaining > 0
+	_ = isNanoframe
 	var tris []screenTri
 	for pi, piece := range m.pieces {
 		if states[pi].hidden {
@@ -1068,9 +1069,10 @@ func (c *Client) collectUnitTris(v snapshot.UnitView, useShade bool) ([]screenTr
 					st.depth += py
 				}
 				st.depth /= 3
-				if isNanoframe {
-					continue
-				}
+				// Nanoframe buildings should still render (stipple handled
+				// later); don't skip tris here. The original skip was for
+				// direct nanoframe wireframe path, but offscreen cache should
+				// show the building's geometry even while constructing.
 				tris = append(tris, st)
 			}
 		}
@@ -1111,12 +1113,10 @@ func (c *Client) drawBuildingModelOffscreen(v snapshot.UnitView) bool {
 	if bw <= 0 || bh <= 0 || bw > 600 || bh > 600 {
 		return false
 	}
-	// 2x supersampled temp
+	// 2x supersampled temp with mask
 	tw, th := bw*2, bh*2
 	temp := make([]byte, tw*th)
-	for i := range temp {
-		temp[i] = 255 // transparent sentinel
-	}
+	mask := make([]bool, tw*th)
 	// Render scaled tris into temp
 	for i := range tris {
 		t := tris[i]
@@ -1134,11 +1134,11 @@ func (c *Client) drawBuildingModelOffscreen(v snapshot.UnitView) bool {
 				}
 			}
 			if frame != nil {
-				blitTexturedTriToDest(temp, tw, th, &st, frame, c.pal)
+				blitTexturedTriToDest(temp, mask, tw, th, &st, frame, c.pal)
 				continue
 			}
 		}
-		fillTriToDest(temp, tw, th, &st, st.color)
+		fillTriToDest(temp, mask, tw, th, &st, st.color)
 	}
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	dstW, dstH := bw, bh
@@ -1157,35 +1157,25 @@ func (c *Client) drawBuildingModelOffscreen(v snapshot.UnitView) bool {
 			if dx < 0 || dx >= c.width {
 				continue
 			}
-			// Gather 2x2 block
-			a := temp[sy0*tw+sx0]
-			b := temp[sy0*tw+sx1]
-			cc := temp[sy1*tw+sx0]
-			d := temp[sy1*tw+sx1]
-			// Transparent handling: if all 255 skip
-			opaques := 0
-			var vals []byte
-			if a != 255 {
-				opaques++
-				vals = append(vals, a)
+			// Gather 2x2 block via mask
+			vals := make([]byte, 0, 4)
+			if mask[sy0*tw+sx0] {
+				vals = append(vals, temp[sy0*tw+sx0])
 			}
-			if b != 255 {
-				opaques++
-				vals = append(vals, b)
+			if mask[sy0*tw+sx1] {
+				vals = append(vals, temp[sy0*tw+sx1])
 			}
-			if cc != 255 {
-				opaques++
-				vals = append(vals, cc)
+			if mask[sy1*tw+sx0] {
+				vals = append(vals, temp[sy1*tw+sx0])
 			}
-			if d != 255 {
-				opaques++
-				vals = append(vals, d)
+			if mask[sy1*tw+sx1] {
+				vals = append(vals, temp[sy1*tw+sx1])
 			}
-			if opaques == 0 {
+			if len(vals) == 0 {
 				continue
 			}
 			var out byte
-			if opaques == 1 {
+			if len(vals) == 1 {
 				out = vals[0]
 			} else if c.pal != nil {
 				// Blend via ALP sequentially
@@ -1221,9 +1211,7 @@ func (c *Client) drawMobileModelOffscreen(v snapshot.UnitView) bool {
 		return false
 	}
 	temp := make([]byte, bw*bh)
-	for i := range temp {
-		temp[i] = 255
-	}
+	mask := make([]bool, bw*bh)
 	for i := range tris {
 		t := tris[i]
 		var st screenTri = t
@@ -1242,13 +1230,13 @@ func (c *Client) drawMobileModelOffscreen(v snapshot.UnitView) bool {
 				}
 			}
 			if frame != nil {
-				blitTexturedTriToDest(temp, bw, bh, &st, frame, c.pal)
+				blitTexturedTriToDest(temp, mask, bw, bh, &st, frame, c.pal)
 				continue
 			}
 		}
-		fillTriToDest(temp, bw, bh, &st, st.color)
+		fillTriToDest(temp, mask, bw, bh, &st, st.color)
 	}
-	// Blit 1:1 to main with transparency
+	// Blit 1:1 to main with transparency via mask
 	for y := 0; y < bh; y++ {
 		dy := int(minY) + y
 		if dy < 0 || dy >= c.height {
@@ -1259,11 +1247,10 @@ func (c *Client) drawMobileModelOffscreen(v snapshot.UnitView) bool {
 			if dx < 0 || dx >= c.width {
 				continue
 			}
-			pix := temp[y*bw+x]
-			if pix == 255 {
+			if !mask[y*bw+x] {
 				continue
 			}
-			c.indexed[dy*c.width+dx] = pix
+			c.indexed[dy*c.width+dx] = temp[y*bw+x]
 		}
 	}
 	return true
@@ -2037,7 +2024,7 @@ func (c *Client) drawProjectileModel(p snapshot.ProjectileView, alpha float32) b
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 
-func fillTriToDest(dest []byte, w, h int, t *screenTri, color uint8) {
+func fillTriToDest(dest []byte, mask []bool, w, h int, t *screenTri, color uint8) {
 	minX, minY, maxX, maxY := t.x[0], t.y[0], t.x[0], t.y[0]
 	for k := 1; k < 3; k++ {
 		if t.x[k] < minX {
@@ -2069,13 +2056,17 @@ func fillTriToDest(dest []byte, w, h int, t *screenTri, color uint8) {
 		row := py * int32(w)
 		for px := minX; px <= maxX; px++ {
 			if pointInTri(t, px, py) {
-				dest[row+px] = color
+				idx := row + px
+				dest[idx] = color
+				if mask != nil {
+					mask[idx] = true
+				}
 			}
 		}
 	}
 }
 
-func blitTexturedTriToDest(dest []byte, w, h int, t *screenTri, frame *formats.GAFFrame, pal *palette.Tables) {
+func blitTexturedTriToDest(dest []byte, mask []bool, w, h int, t *screenTri, frame *formats.GAFFrame, pal *palette.Tables) {
 	minX, minY, maxX, maxY := t.x[0], t.y[0], t.x[0], t.y[0]
 	for k := 1; k < 3; k++ {
 		if t.x[k] < minX {
@@ -2142,7 +2133,11 @@ func blitTexturedTriToDest(dest []byte, w, h int, t *screenTri, frame *formats.G
 			if pal != nil {
 				b = pal.Shade[ri][b]
 			}
-			dest[row+px] = b
+			idx := row + px
+			dest[idx] = b
+			if mask != nil {
+				mask[idx] = true
+			}
 		}
 	}
 }

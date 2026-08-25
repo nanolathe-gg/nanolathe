@@ -199,38 +199,61 @@ func TestCommanderConditionsGateOnOwner(t *testing.T) {
 	}
 }
 
-// TestBoundaryTolerance locks C17's ±2 window over the poll-time scan.
+// TestBoundaryTolerance locks C17's ±2 window over the poll-time scan
+// with the promoted retail contract: threshold stored after arithmetic >>4 and
+// poll compares (worldPixel>>4) vs threshold with abs <3 [08 "Evaluation"].
 func TestBoundaryTolerance(t *testing.T) {
+	// Threshold 100 is already authored>>4 (authored 1600). Positions are
+	// worldPixel values; 1600>>4=100, 1632>>4=102 etc. Tolerance is <3 on the
+	// shifted values, i.e. ±2 world units after >>4 (32 worldPixel).
 	cases := []struct {
-		pos      int32
-		thresh   int32
+		pos      int32 // worldPixel X
+		thresh   int32 // already shifted (authored>>4)
 		wantPass bool
 	}{
-		{100, 100, true},
-		{102, 100, true},
-		{98, 100, true},
-		{103, 100, false},
-		{97, 100, false},
+		{1600, 100, true},  // diff 0
+		{1632, 100, true},  // 1632>>4=102 diff 2
+		{1568, 100, true},  // 98 diff 2
+		{1648, 100, false}, // 103 diff 3
+		{1552, 100, false}, // 97 diff 3
 	}
 	for _, tc := range cases {
 		w := triggerWorld(t)
 		spawn(t, w, "ARMFAV", 0, tc.pos, 0)
 		tr := New(KindAnyUnitPassesX, "", tc.thresh)
 		if got := tr.Poll(pollCtx(w, 0)); got != tc.wantPass {
-			t.Fatalf("AnyUnitPassesX pos %d thresh %d: got %v want %v",
-				tc.pos, tc.thresh, got, tc.wantPass)
+			t.Fatalf("AnyUnitPassesX pos %d (>>4=%d) thresh %d: got %v want %v",
+				tc.pos, tc.pos>>4, tc.thresh, got, tc.wantPass)
+		}
+	}
+	// Also verify negative thresholds with arithmetic shift: -1600>>4 = -100.
+	{
+		w := triggerWorld(t)
+		spawn(t, w, "ARMFAV", 0, -1600, 0) // -100
+		tr := New(KindAnyUnitPassesX, "", -100)
+		if !tr.Poll(pollCtx(w, 0)) {
+			t.Fatal("negative boundary should pass at diff 0")
+		}
+	}
+	{
+		w := triggerWorld(t)
+		spawn(t, w, "ARMFAV", 0, -1552, 0) // -97 diff 3 should fail
+		tr2 := New(KindAnyUnitPassesX, "", -100)
+		if tr2.Poll(pollCtx(w, 0)) {
+			t.Fatal("negative boundary diff 3 should fail")
 		}
 	}
 	// The type-gated variant respects the authored type and ANYTYPE.
+	// WorldPixel 1000 -> 62 after >>4, so threshold 62 matches.
 	w := triggerWorld(t)
-	spawn(t, w, "ARMCOM", 0, 1000, 0)
-	if New(KindUnitTypePassesX, "CORCOM", 1000).Poll(pollCtx(w, 0)) {
+	spawn(t, w, "ARMCOM", 0, 1000, 0) // 62
+	if New(KindUnitTypePassesX, "CORCOM", 62).Poll(pollCtx(w, 0)) {
 		t.Fatal("type mismatch crossed the boundary")
 	}
-	if !New(KindUnitTypePassesX, "ARMCOM", 1000).Poll(pollCtx(w, 0)) {
+	if !New(KindUnitTypePassesX, "ARMCOM", 62).Poll(pollCtx(w, 0)) {
 		t.Fatal("matching type did not cross the boundary")
 	}
-	if !New(KindUnitTypePassesX, "ANYTYPE", 1000).Poll(pollCtx(w, 0)) {
+	if !New(KindUnitTypePassesX, "ANYTYPE", 62).Poll(pollCtx(w, 0)) {
 		t.Fatal("ANYTYPE did not cross the boundary")
 	}
 }
@@ -310,11 +333,12 @@ func TestEvaluateCombination(t *testing.T) {
 // TestPollMutatesOnlyCompleted locks C17's purity for the scanning kinds.
 func TestPollMutatesOnlyCompleted(t *testing.T) {
 	w := triggerWorld(t)
-	spawn(t, w, "ARMFAV", 0, 502, 0)
+	// 8032>>4=502, 8000>>4=500 diff 2 after >>4 — should cross.
+	spawn(t, w, "ARMFAV", 0, 8032, 0)
 	tr := New(KindAnyUnitPassesX, "", 500)
 	args, typ := tr.Args, tr.Type
 	if !tr.Poll(pollCtx(w, 0)) {
-		t.Fatal("should cross at a difference of two")
+		t.Fatal("should cross at a difference of two after >>4")
 	}
 	if tr.Args != args || tr.Type != typ {
 		t.Fatal("poll mutated fields other than Completed")

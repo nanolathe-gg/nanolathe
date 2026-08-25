@@ -185,20 +185,20 @@ func TestParseLine(t *testing.T) {
 	if err != nil || tr.Args[0] != 3600*30 {
 		t.Fatalf("timer %v %v", err, tr)
 	}
-	// Boundary single int
+	// Boundary single int — stored after arithmetic >>4 [08 "Evaluation"].
 	tr, err = ParseLine("AnyUnitPassesX=4500;")
-	if err != nil || tr.Kind != KindAnyUnitPassesX || tr.Args[0] != 4500 {
-		t.Fatalf("AnyUnitPassesX %v %v", err, tr)
+	if err != nil || tr.Kind != KindAnyUnitPassesX || tr.Args[0] != int32(4500)>>4 {
+		t.Fatalf("AnyUnitPassesX %v %v want %d", err, tr, int32(4500)>>4)
 	}
 	// Radius three ints
 	tr, err = ParseLine("MoveUnitToRadius=ARMCOM, 1942, 1519, 100")
 	if err != nil || tr.Kind != KindMoveUnitToRadius || tr.Type != "ARMCOM" || tr.Args[0] != 1942 || tr.Args[1] != 1519 || tr.Args[2] != 100 {
 		t.Fatalf("MoveUnitToRadius %v %v", err, tr)
 	}
-	// ANYTYPE in boundary
+	// ANYTYPE in boundary — stored after >>4.
 	tr, err = ParseLine("UnitTypePassesX=ANYTYPE, 6000")
-	if err != nil || !IsANYTYPE(tr.Type) || tr.Args[0] != 6000 {
-		t.Fatalf("ANYTYPE boundary %v %v", err, tr)
+	if err != nil || !IsANYTYPE(tr.Type) || tr.Args[0] != int32(6000)>>4 {
+		t.Fatalf("ANYTYPE boundary %v %v want %d", err, tr, int32(6000)>>4)
 	}
 	// AllUnitsKilledOfType type only
 	tr, err = ParseLine("AllUnitsKilledOfType=ARMGATE")

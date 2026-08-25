@@ -190,9 +190,11 @@ type Trigger struct {
 
 // SecondsToTicks converts authored seconds to authoritative ticks at 30 Hz
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// [P1-01 §2.1][P1-01 §4]. Comparison body is tick >= deadline (signed int
-// ticks, >= not >) [P1-01 §2.1] with seconds*30 stored as int ticks.
-func SecondsToTicks(seconds int32) int32 { return seconds * 30 }
+// [08 "Trigger object"] [08 "Evaluation"] [C17] [P1-01 §2.1][P1-01 §4].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// carry path) [08 "Evaluation"]. Wrap is preserved via int32 truncation of
+// the 64-bit product.
+func SecondsToTicks(seconds int32) int32 { return int32(int64(seconds) * 30) }
 
 // New constructs a trigger of the given kind with type and up to three args.
 // For timer kinds, pass seconds; the caller should convert via SecondsToTicks
@@ -345,13 +347,14 @@ func ParseLine(line string) (*Trigger, error) {
 		if rest == "" {
 			return nil, fmt.Errorf("triggers: %q requires boundary", key)
 		}
-		// Single int boundary [08 "Defeat trigger types"].
+		// Single int boundary [08 "Defeat trigger types"]. Builder stores
+		// threshold after arithmetic >>4 [08 "Evaluation"].
 		b, err := strconv.ParseInt(strings.TrimSpace(strings.TrimSuffix(rest, ";")), 10, 32)
 		if err != nil {
 			// Try as maybe with type? but Any* is boundary only.
 			return nil, fmt.Errorf("triggers: parse boundary %q: %w", rest, err)
 		}
-		t.Args[0] = int32(b)
+		t.Args[0] = int32(b) >> 4 // arithmetic >>4 [08 "Evaluation"]
 		return t, nil
 	case KindAllUnitsKilledOfType:
 		if rest == "" {
@@ -382,6 +385,10 @@ func ParseLine(line string) (*Trigger, error) {
 			t.Type = "ANYTYPE"
 		}
 		t.Args = args
+		// Boundary kinds store threshold after arithmetic >>4 [08 "Evaluation"].
+		if kind == KindUnitTypePassesX || kind == KindUnitTypePassesZ {
+			t.Args[0] = t.Args[0] >> 4 // arithmetic >>4
+		}
 		// Normalize timer-like count storage for MoveRadius: args are X,Z,Radius.
 		return t, nil
 	}

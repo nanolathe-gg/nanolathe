@@ -135,9 +135,12 @@ func (t *Trigger) Poll(c PollContext) bool {
 		// [08 "Evaluation"].
 		//
 		// TODO(question): retail resolves commander identity through the
-		// SIDEDATA commander-name table rather than the definition's commander
-		// flag [08 "Evaluation"]. The flag is the same set for stock content;
-		// swap the predicate when the side table is threaded through here.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// through the definition's Commander flag [08 "Evaluation"]. The two
+		// sources agree for stock content; the table is the authority and a
+		// synthetic side that renames the commander would diverge if the flag is
+		// used. Keep flag predicate for now (stock-correct) and thread side
+		// table through PollContext when available.
 		owner := c.EnemyOwner
 		if t.Kind == KindCommanderKilled {
 			owner = c.LocalOwner
@@ -194,12 +197,14 @@ func (t *Trigger) Poll(c PollContext) bool {
 
 	case KindUnitTypePassesX, KindUnitTypePassesZ, KindAnyUnitPassesX, KindAnyUnitPassesZ:
 		// Boundary conditions scan live units and compare the signed world
-		// coordinate against the stored threshold, satisfied when the absolute
-		// difference is below three world units — a ±2 tolerance
-		// [08 "Evaluation"] C17. The ANY variants take any type.
+		// coordinate after arithmetic >>4 against the stored threshold
+		// (authored>>4), satisfied when abs((coord>>4)-threshold) <3 — a ±2
+		// tolerance [08 "Evaluation"]. The ANY variants take any type. Builder
+		// stores threshold after arithmetic >>4 [08 "Evaluation"]; ParseLine and
+		// ParseCondition perform that shift (int32(b)>>4).
 		isX := t.Kind == KindUnitTypePassesX || t.Kind == KindAnyUnitPassesX
 		anyType := t.Kind == KindAnyUnitPassesX || t.Kind == KindAnyUnitPassesZ
-		threshold := t.Args[0]
+		threshold := t.Args[0] // already authored>>4 [08 "Evaluation"]
 		forEachLive(c.World, func(u *units.Unit) {
 			if t.Completed {
 				return
@@ -211,19 +216,29 @@ func (t *Trigger) Poll(c PollContext) bool {
 			if isX {
 				pos = worldPixel(u.X)
 			}
-			if withinBoundary(pos, threshold) {
+			posShifted := pos >> 4 // arithmetic >>4 on signed world coordinate [08 "Evaluation"]
+			if withinBoundary(posShifted, threshold) {
 				t.Completed = true
 			}
 		})
 		return t.Completed
 
 	case KindMoveUnitToRadius:
-		// Type-gated scan against the authored centre and radius.
-		//
-		// TODO(question): the axis pair and the distance metric are not decoded
-		// [08 "Evaluation"]. Implemented as a planar X/Z Euclidean test against
-		// the squared radius, which is the only reading consistent with the
-		// three authored integers being X, Z and radius.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// (16.16 fixed) [08 "Trigger object"] [08 "Evaluation"]. Retail optionally
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// terrain-height snap, writing X<<16/Z<<16 back) and scans partition via
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Distance is planar X/Z Euclidean squared (dx*dx+dz*dz <= r*r with
+		// 64-bit __allmul then >>32), Y ignored, ANYTYPE-aware type gating
+		// [08 "Evaluation"]. Headless iteration over all live units is equivalent
+		// to the partition scan for correctness; tile bounds and sentinel clamping
+		// are presentation/partition optimizations.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// headless; retain as bounded residual — no stock mission observed to rely
+		// on it, and planar X/Z vs 3-D is now closed as X/Z planar [08 "Evaluation"].
 		cx, cz, rad := t.Args[0], t.Args[1], t.Args[2]
 		forEachLive(c.World, func(u *units.Unit) {
 			if t.Completed || !t.matchesType(u) {
@@ -240,14 +255,14 @@ func (t *Trigger) Poll(c PollContext) bool {
 	// --- Timers --------------------------------------------------------------
 
 	case KindVictoryTimerRunsOut, KindDeathTimerRunsOut:
-		// Timers store seconds×30 as an absolute tick deadline via IMUL 30
+		// Timers store seconds×30 as an absolute tick deadline via IMUL 0x1E
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// "Evaluation"] C17 [P1-01 §2.1][P1-01 §4]. Comparison is >= (not >)
-		// and uses signed int32 tick vs stored int ticks; seconds*30 stored
-		// as int ticks and compared >= [P1-01].
-		// TODO(question): signedness of deadline compare and overflow clamp
-		// for large seconds remain TODO(question) [P1-01 §8].
-		if int32(c.Tick) >= t.Args[0] {
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// globalTick >= deadline (CMP/SBB carry path, not signed JL) [08
+		// "Evaluation"]. Comparison is >= (not >) and zero-second deadline is
+		// satisfied on first poll [08 "Evaluation"].
+		if uint32(c.Tick) >= uint32(t.Args[0]) {
 			t.Completed = true
 		}
 		return t.Completed
@@ -318,9 +333,11 @@ func worldPixel(v interface{ Int() int64 }) int32 {
 }
 
 // withinBoundary reports the ±2 tolerance of C17: satisfied when the absolute
-// difference is strictly below three [08 "Evaluation"].
-func withinBoundary(pos, threshold int32) bool {
-	d := pos - threshold
+// difference is strictly below three after the >>4 on both sides
+// [08 "Evaluation"]. Caller has already applied arithmetic >>4 to pos; threshold
+// is stored as authored>>4.
+func withinBoundary(posShifted, threshold int32) bool {
+	d := posShifted - threshold
 	if d < 0 {
 		d = -d
 	}

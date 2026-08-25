@@ -73,20 +73,23 @@ func ParseCondition(key, value string) (*Trigger, bool) {
 		// The authored `=1` is inert: presence of the key is the condition.
 
 	case shapeTimer:
-		// Timers store seconds×30 as an absolute tick deadline
-		// [08 "Trigger object"] C17.
+		// Timers store seconds×30 as an absolute tick deadline via IMUL 0x1E
+		// with no saturation (wrap preserved) [08 "Trigger object"] [08
+		// "Evaluation"]; poll is unsigned tick >= deadline [08 "Evaluation"].
 		t.Args[0] = SecondsToTicks(intAt(fields, 0))
 
 	case shapeBoundary:
-		t.Args[0] = intAt(fields, 0)
+		// Boundary thresholds stored after arithmetic >>4 [08 "Evaluation"].
+		t.Args[0] = intAt(fields, 0) >> 4
 
 	case shapeType:
 		t.Type = typeAt(fields, 0)
 		t.Args[0] = intAt(fields, 1)
 
 	case shapeTypeInt:
+		// Boundary threshold stored after arithmetic >>4 [08 "Evaluation"].
 		t.Type = typeAt(fields, 0)
-		t.Args[0] = intAt(fields, 1)
+		t.Args[0] = intAt(fields, 1) >> 4
 
 	case shapeTypeXZR:
 		t.Type = typeAt(fields, 0)

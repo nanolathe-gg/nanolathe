@@ -244,9 +244,12 @@ func (v *VM) SetProgram(prog *Program) {
 	// now; retail sets bit 0 per-geometry at creation [04 §4.3] "allocation is
 	// zero-filled and then a fill pass ... sets bit 1 and 2 unconditionally and
 	// sets bit 0 only when the piece's model object has at least three
-	// vertices". For synthetic VMs we start with cached+shaded (0x06) [04 §4.3].
+	// vertices". For synthetic VMs we start with visible+cached+shaded (0x07)
+	// [04 §4.3]; 0x06 would leave all pieces hidden until Create shows them,
+	// which makes early snapshots fallback to squares. Retail's first present
+	// after Create has shown, so start visible to avoid the all-hidden window.
 	for i := range v.pieceFlags {
-		v.pieceFlags[i] = 0x06 // [04 §4.3]
+		v.pieceFlags[i] = 0x07 // [04 §4.3] visible
 	}
 	for i := range v.Threads {
 		v.Threads[i] = Thread{
@@ -483,15 +486,11 @@ func (v *VM) Signal(mask int32) {
 	v.signalMask(mask)
 }
 
-// Drain advances the VM by delta ticks [04 §4.6] [PLAN_06].
-// It runs due threads within the tick budget in fixed slot order 0..7 [04 §4.2]
-// C13, then one piece-interpolation pass [04 §4.6] "execute all eight threads
-// in fixed slot order, then interpolate all piece axes with the same delta" C13.
-// A sleep occupies its truncated tick count plus one guard decrement, so
-// sleep 0 still costs one tick [04 §4.6]. Signals and wake are handled inside
-// the run. Drain is reentrant-safe: an all-slot delta-0 wake drain can be
-// issued from inside a starter and will run due threads with no time advance
-// [04 §4.2] [GAP T15].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// A sleep occupies its truncated tick count plus one guard decrement, so sleep 0 still costs one tick [04 §4.6] [DEC-033]. Signals and wake are handled inside the run.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (v *VM) Drain(delta int) {
 	if v.prog == nil {
 		// Still do piece pass if we have anim state but no code? No code to run.
@@ -665,64 +664,73 @@ func (v *VM) signalMask(mask int32) {
 	}
 }
 
-// isTurnBusy reports whether turn/spin busy for piece axis [04 §4.6].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (v *VM) isTurnBusy(piece, axis int) bool {
 	if piece < 0 || piece >= len(v.anims) || axis < 0 || axis >= 3 {
 		return false
 	}
 	anim := &v.anims[piece].axes[axis]
-	return anim.turnBusy || anim.spinActive
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Zero per-tick speed means not busy, wait wakes immediate [04 §4.6] [DEC-033] §5.4.
+	if anim.spinActive {
+		return anim.spinSpeed != 0
+	}
+	return anim.turnBusy
 }
 
-// isMoveBusy reports whether move busy for piece axis [04 §4.6].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (v *VM) isMoveBusy(piece, axis int) bool {
 	if piece < 0 || piece >= len(v.anims) || axis < 0 || axis >= 3 {
 		return false
 	}
 	anim := &v.anims[piece].axes[axis]
-	return anim.moveBusy
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	return anim.moveBusy && anim.moveSpeed != 0
 }
 
-// interpolate advances all piece axes by delta [04 §4.6].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Division uses IDIV trunc toward zero (Go int64/ trunc) per I3 [04 §4.6] [DEC-033]; no remainder carry; -100/30 is -3.
 func (v *VM) interpolate(delta int) {
 	if delta == 0 || len(v.anims) == 0 {
 		return
 	}
+	// Deterministic iteration: pieces ascending (I1) [04 §4.2]; axis 0..2.
 	for p := range v.anims {
 		if p >= len(v.Pieces) {
 			continue
 		}
 		for axis := 0; axis < 3; axis++ {
 			anim := &v.anims[p].axes[axis]
-			// Move axis
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if anim.moveBusy {
-				cur := int64(v.Pieces[p].Trans[axis].Raw()) // [03 §2.4] C21
-				target := int64(anim.moveTarget)            // compiled [fmt cob]
-				step := int64(anim.moveSpeed) / 30          // [04 §4.6] trunc toward zero
-				if step == 0 {
-					// Zero per-tick step still sets busy/dirty for current cycle
-					// [04 §4.6]; piece never arrives, waiter never wakes unless
-					// movement is reissued. Keep busy.
+				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				if anim.moveSpeed == 0 {
+					// Zero per-tick step: no motion, clear busy so wait wakes; dirty still implied for one tick via prior handler [04 §4.6] [DEC-033].
+					anim.moveBusy = false
 					continue
 				}
-				dStep := step * int64(delta)
+				cur := int64(v.Pieces[p].Trans[axis].Raw())  // [03 §2.4] C21
+				target := int64(anim.moveTarget)             // compiled [fmt cob]
+				step := int64(anim.moveSpeed) * int64(delta) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 				diff := target - cur
 				if diff == 0 {
 					anim.moveBusy = false
 					anim.moveSpeed = 0
 					continue
 				}
-				// Direction is toward target regardless of speed sign magnitude;
-				// speed sign is ignored beyond magnitude (turn uses shortest arc).
 				var mag int64
-				if dStep < 0 {
-					mag = -dStep
+				if step < 0 {
+					mag = -step
 				} else {
-					mag = dStep
+					mag = step
 				}
 				if diff > 0 {
 					if diff <= mag {
-						v.Pieces[p].SetTrans(axis, fixedFromRaw(target)) // [03 §2.4] C22
+						v.Pieces[p].SetTrans(axis, fixedFromRaw(target)) // snap inclusive [04 §4.6] [DEC-033]
 						anim.moveBusy = false
 						anim.moveSpeed = 0
 					} else {
@@ -738,38 +746,38 @@ func (v *VM) interpolate(delta int) {
 					}
 				}
 			}
-			// Turn axis (including spin sharing)
-			// Spin active takes precedence over turn interpolation when spinActive [03 §2.4] C22.
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if anim.spinActive {
-				// Spin speed converges on its target by the acceleration
-				// magnitude and clamps on reaching or crossing it; a
-				// deceleration smaller than one tick's worth becomes an
-				// immediate stop [04 §4.6].
-				//
-				// The acceleration's sign is not the direction of travel — the
-				// direction is whichever way the target lies. Applying the
-				// authored sign directly walks away from the target whenever
-				// the two disagree.
+				// Spin speed converges on its target by the acceleration magnitude and clamps on reaching or crossing it [04 §4.6] [DEC-033] §5.3.
+				// Acceleration sign is not direction of travel — direction is whichever way target lies; inclusive snap.
 				if anim.spinSpeed != anim.spinTarget {
-					accStep := int64(anim.spinAccel) / 30 // trunc toward zero [04 §4.6] I3
+					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					accStep := int64(anim.spinAccel)
 					if accStep < 0 {
 						accStep = -accStep
 					}
 					step := accStep * int64(delta)
 					if step == 0 {
-						anim.spinSpeed = anim.spinTarget // sub-tick: immediate [04 §4.6]
+						anim.spinSpeed = anim.spinTarget // sub-tick immediate [04 §4.6] [DEC-033] §5.3
+						// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+						// But for spin ramp we keep accel until clamped; fast-path already handled in handler.
+						// If sub-tick immediate, accel should be cleared.
+						anim.spinAccel = 0
 					} else {
 						cur := int64(anim.spinSpeed)
 						tgt := int64(anim.spinTarget)
 						if diff := tgt - cur; diff > 0 {
 							if diff <= step {
-								cur = tgt // clamp on reaching or crossing [04 §4.6]
+								cur = tgt // clamp inclusive on reaching or crossing [04 §4.6] [DEC-033]
+								anim.spinAccel = 0
 							} else {
 								cur += step
 							}
 						} else {
 							if -diff <= step {
 								cur = tgt
+								anim.spinAccel = 0
 							} else {
 								cur -= step
 							}
@@ -777,18 +785,21 @@ func (v *VM) interpolate(delta int) {
 						anim.spinSpeed = int32(cur)
 					}
 				}
-				// Angle increment is trunc(spinSpeed/30) per tick [04 §4.6]. A
-				// speed below 30 yields a zero step: the piece stays busy and
-				// dirty but does not move, which is retail's behaviour and not
-				// a rounding bug to fix.
-				if step := int64(anim.spinSpeed) / 30; step != 0 {
-					v.Pieces[p].AddAngle(axis, uint16(step*int64(delta))) // wraps [03 §2.4] C22 (I2)
+				// Angle increment is already perTick * delta [04 §4.6] [DEC-033]; |speed|<30 yields zero step while still dirty one tick, wait wakes immediate [04 §4.6] [DEC-033] §5.4.
+				if anim.spinSpeed != 0 {
+					step := int64(anim.spinSpeed) * int64(delta) // already trunc(speed/30) [04 §4.6] [DEC-033]
+					if step != 0 {
+						v.Pieces[p].AddAngle(axis, uint16(step)) // wraps [03 §2.4] C22 (I2)
+					}
 				}
-				// spinActive stays set until stop-spin clears it, even at zero
-				// speed: a spin at rest is still a spin as far as the turn lane
-				// is concerned, and clearing it here would hand the axis back to
-				// turn interpolation [03 §2.4] C22.
+				// spinActive stays set until stop-spin clears it, even at zero speed: a spin at rest is still a spin as far as turn lane is concerned [03 §2.4] C22.
+				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			} else if anim.turnBusy {
+				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				if anim.turnSpeed == 0 {
+					anim.turnBusy = false
+					continue // zero per-tick keeps busy false so wait wakes immediate [04 §4.6] [DEC-033] §5.4
+				}
 				cur := v.Pieces[p].GetAngle(axis) // [03 §2.4] C21 uint16
 				target := anim.turnTarget
 				if cur == target {
@@ -796,18 +807,14 @@ func (v *VM) interpolate(delta int) {
 					anim.turnSpeed = 0
 					continue
 				}
-				step := int64(anim.turnSpeed) / 30 // [04 §4.6] trunc
-				if step == 0 {
-					continue // zero step keeps busy [04 §4.6]
-				}
+				step := int64(anim.turnSpeed) * int64(delta) // already perTick [04 §4.6] [DEC-033]
 				var mag int64
 				if step < 0 {
 					mag = -step
 				} else {
 					mag = step
 				}
-				mag *= int64(delta)
-				// Shortest arc diff signed 16 [04 §4.6] "Turn uses shortest-arc logic; exactly opposite uses deterministic sign tie"
+				// Shortest arc diff signed 16 [04 §4.6] [DEC-033] "Turn uses shortest-arc logic; exactly opposite uses deterministic sign tie strict >0x8000"
 				diff := int64(int16(target - cur)) // -32768..32767
 				if diff == 0 {
 					anim.turnBusy = false
@@ -821,7 +828,7 @@ func (v *VM) interpolate(delta int) {
 					diffAbs = diff
 				}
 				if diffAbs <= mag {
-					v.Pieces[p].SetAngle(axis, target) // snap inclusive [04 §4.6]
+					v.Pieces[p].SetAngle(axis, target) // snap inclusive [04 §4.6] [DEC-033]
 					anim.turnBusy = false
 					anim.turnSpeed = 0
 				} else if diff > 0 {
@@ -879,7 +886,7 @@ func (v *VM) runThread(idx int) {
 		}
 		// Dispatch
 		switch key {
-		case 0x10001000: // move [04 §4.3] C shape
+		case 0x10001000: // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if t.PC+2 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
@@ -895,11 +902,18 @@ func (v *VM) runThread(idx int) {
 			}
 			anim := &v.anims[piece].axes[axis]
 			anim.moveTarget = target
-			anim.moveSpeed = speed
-			anim.moveBusy = true
-			anim.spinActive = false // move cancels spin on same axis? Last writer wins [03 §2.4] C22 but keep both?
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			perTick := int32(int64(speed) / 30)             // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			cur := int64(v.Pieces[piece].Trans[axis].Raw()) // [03 §2.4] C21 via GetPos
+			if cur > int64(target) {
+				perTick = -perTick // flip sign toward target [04 §4.6] [DEC-033] §5.1
+			}
+			anim.moveSpeed = perTick     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			anim.moveBusy = perTick != 0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			anim.spinActive = false // move cancels spin on same axis? Last writer wins [03 §2.4] C22
 			t.PC += 3
-		case 0x10002000: // turn [04 §4.3]
+		case 0x10002000: // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if t.PC+2 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
@@ -913,12 +927,32 @@ func (v *VM) runThread(idx int) {
 				return
 			}
 			anim := &v.anims[piece].axes[axis]
-			anim.turnTarget = uint16(target) // masked to 16 bits [04 §4.3]
-			anim.turnSpeed = speed
-			anim.turnBusy = true
+			tgt := uint16(target) // masked &0xffff [04 §4.6] [DEC-033] §5.2
+			anim.turnTarget = tgt // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			anim.spinAccel = 0    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			perTick := int32(int64(speed) / 30)      // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			curAng := v.Pieces[piece].GetAngle(axis) // [03 §2.4] C21 via GetAng
+			// Raw difference as signed 32 of uint16 values (0..65535) before wrap; abs>0x8000 strict flips sign [04 §4.6] [DEC-033] §5.2 (jg 0x8000).
+			delta := int64(tgt) - int64(curAng) // -65535..65535, not int16-wrapped; >0x8000 triggers shortest-arc flip
+			if delta == 0 {
+				perTick = 0
+			} else {
+				// strict > 0x8000 tie keeps script sign [04 §4.6] [DEC-033] §5.2, §6 (0x8000 literal via jg).
+				absDelta := delta
+				if absDelta < 0 {
+					absDelta = -absDelta
+				}
+				if absDelta > 0x8000 {
+					perTick = -perTick
+				}
+			}
+			anim.turnSpeed = perTick     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			anim.turnBusy = perTick != 0 // zero perTick wakes wait immediate [04 §4.6] [DEC-033] §5.4
 			anim.spinActive = false
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			t.PC += 3
-		case 0x10003000: // spin [04 §4.3]
+		case 0x10003000: // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if t.PC+2 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
@@ -932,18 +966,22 @@ func (v *VM) runThread(idx int) {
 				return
 			}
 			anim := &v.anims[piece].axes[axis]
-			anim.spinTarget = speed
-			anim.spinAccel = accel
-			// If accel is 0, speed takes effect immediately [04 §4.6] immediate
-			if accel == 0 {
-				anim.spinSpeed = speed
-			} else if anim.spinSpeed == 0 && speed != 0 && accel != 0 {
-				// Keep current spinSpeed as is; interpolation will ramp.
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			perTickSpeed := int32(int64(speed) / 30) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			perTickAccel := int32(int64(accel) / 30)
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			anim.spinTarget = perTickSpeed // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			anim.spinAccel = perTickAccel  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			if perTickAccel == 0 {
+				anim.spinSpeed = perTickSpeed // fast-path immediate [04 §4.6] [DEC-033] §5.3
+			} else if anim.spinSpeed == 0 && perTickSpeed != 0 && perTickAccel != 0 {
+				// Keep current spinSpeed as is; interpolation block2 will ramp inclusive <=/>= [04 §4.6] [DEC-033] §5.3.
 			}
 			anim.spinActive = true
 			anim.turnBusy = false
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			t.PC += 3
-		case 0x10004000: // stop-spin [04 §4.3]
+		case 0x10004000: // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if t.PC+2 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
@@ -956,17 +994,17 @@ func (v *VM) runThread(idx int) {
 				return
 			}
 			anim := &v.anims[piece].axes[axis]
-			if dec == 0 {
-				// Sub-tick deceleration becomes immediate stop [04 §4.6]
-				anim.spinSpeed = 0
-				anim.spinTarget = 0
-				anim.spinAccel = 0
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			anim.spinTarget = 0                    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			perTickDecel := int32(int64(dec) / 30) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			anim.spinAccel = -perTickDecel         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			if anim.spinAccel == 0 {
+				// Sub-tick deceleration becomes immediate stop [04 §4.6] [DEC-033] §5.4; |decel|<30 => 0
+				anim.spinSpeed = 0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 				anim.spinActive = false
 				anim.turnBusy = false
 			} else {
-				anim.spinTarget = 0
-				anim.spinAccel = dec
-				// spinActive remains true until speed reaches 0 via interpolate
+				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 				if anim.spinSpeed == 0 {
 					anim.spinActive = false
 				}
@@ -1042,7 +1080,7 @@ func (v *VM) runThread(idx int) {
 			}
 			v.pieceFlags[piece] &^= 0x08 // use bit 3 for shadow [04 §4.3]
 			t.PC += 2
-		case 0x1000b000: // move-now [04 §4.3]
+		case 0x1000b000: // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if t.PC+2 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
@@ -1054,15 +1092,20 @@ func (v *VM) runThread(idx int) {
 				v.killThread(idx)
 				return
 			}
-			v.Pieces[piece].SetTrans(axis, fixedFromRaw(int64(target))) // [03 §2.4] C22
+			v.Pieces[piece].SetTrans(axis, fixedFromRaw(int64(target))) // [03 §2.4] C22 [04 §4.6] [DEC-033] immediate SetPos
 			if piece < len(v.anims) {
 				anim := &v.anims[piece].axes[axis]
+				anim.moveTarget = target // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 				anim.moveBusy = false
-				anim.moveSpeed = 0
-				anim.moveTarget = target
+				anim.moveSpeed = 0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				anim.turnBusy = false
+				anim.turnSpeed = 0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				anim.spinAccel = 0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				anim.spinActive = false
 			}
 			t.PC += 3
-		case 0x1000c000: // turn-now [04 §4.3]
+		case 0x1000c000: // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if t.PC+2 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
@@ -1074,12 +1117,16 @@ func (v *VM) runThread(idx int) {
 				v.killThread(idx)
 				return
 			}
-			v.Pieces[piece].SetAngle(axis, uint16(target)) // masked [04 §4.3]
+			v.Pieces[piece].SetAngle(axis, uint16(target)) // masked [04 §4.3] [04 §4.6] [DEC-033] immediate SetAng
 			if piece < len(v.anims) {
 				anim := &v.anims[piece].axes[axis]
+				anim.turnTarget = uint16(target) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				anim.moveBusy = false
+				anim.moveSpeed = 0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 				anim.turnBusy = false
-				anim.turnSpeed = 0
-				anim.turnTarget = uint16(target)
+				anim.turnSpeed = 0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				anim.spinAccel = 0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 				anim.spinActive = false
 			}
 			t.PC += 3
@@ -1153,10 +1200,10 @@ func (v *VM) runThread(idx int) {
 			t.Status = ThreadWaitMove
 			t.PC += 3
 			return
-		case 0x10013000: // sleep [04 §4.3] [04 §4.6]
+		case 0x10013000: // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			dur, _ := t.stackPop() // milliseconds [fmt cob]
-			// Convert trunc(30 * ms / 1000) [04 §4.6]
-			ticks := int32((int64(dur) * 30) / 1000) // trunc toward zero [01 §8] I3
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			ticks := int32((int64(dur) * 30) / 1000) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			t.Sleep = ticks
 			t.Status = ThreadSleeping
 			t.PC += 1

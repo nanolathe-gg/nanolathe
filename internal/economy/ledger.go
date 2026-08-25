@@ -34,7 +34,7 @@ type Player struct {
 	Capacity       [2]float32
 	Mirror         [2]Bucket
 	UpdateTime     uint32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	WinLoseTime    uint32 // sibling deadline #1 [05 "Saving economy, construction, and features"] TODO(question): consumer beyond save key unknown
+	WinLoseTime    uint32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	DisplayTimer   uint32 // sibling deadline #2 [05 "Saving economy, construction, and features"] TODO(question): consumer beyond save key unknown
 	Waste          [2]float64
 	TotalProduced  [2]float64

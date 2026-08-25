@@ -136,8 +136,8 @@ func (l *EndLatch) AdvanceWin(isDeadlineDue bool) bool {
 }
 
 // AdvanceLose advances for defeat (only when victory not candidate).
-// Lose clears win bits via AND ~0x10 (actually ~0x30) and sets 0x40
-// [P1-01 §2.2]. Pending lose is armed at 4 and not written until crossing.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [P1-01 §2.2][08 "Evaluation"]. Pending lose is armed at 4 and not written until crossing.
 func (l *EndLatch) AdvanceLose(isDeadlineDue bool) bool {
 	if !isDeadlineDue {
 		return false
@@ -169,10 +169,11 @@ func (l *EndLatch) Win() {
 	l.Bits &^= LatchBitLose
 }
 
-// Lose sets lose bit 0x40 and clears win bits 0x10 and 0x20 [P0-05][P1-01].
+// Lose sets lose bit 0x40 and clears win bit 0x10 [P0-05][P1-01][08 "Evaluation"].
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// cleared on the lose path — it remains only where a prior Win set it.
 func (l *EndLatch) Lose() {
-	l.Bits &^= LatchBitWin1 | LatchBitWin2
+	l.Bits &^= LatchBitWin1 // [08 "Evaluation"] lose clears 0x10, not 0x20
 	l.Bits |= LatchBitLose
 }
 
