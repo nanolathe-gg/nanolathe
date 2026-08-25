@@ -226,7 +226,7 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 		resMid2 := s2.GetResult()
 		if resMid2.Ended {
 			t.Logf("G6 three_player distinct teams: unexpected early victory winner %d [TODO alliance-aware victory may need retriage]", resMid2.WinnerTeam)
-			t.Skipf("G6 three_player: killing one of two enemies should not end match, got winner %d [TODO fix alliance-aware victory] [G6]", resMid2.WinnerTeam)
+			t.Fatalf("G6 three_player: killing one of two enemies should not end match, got winner %d [G6]", resMid2.WinnerTeam)
 		}
 		t.Logf("G6 three_player distinct: after killing one enemy, still no victory (correct alliance-aware)")
 		// Now kill second hostile team's commander

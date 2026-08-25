@@ -771,13 +771,15 @@ func TestStateGates(t *testing.T) {
 	if factory2.Flags&FlagActivated != 0 {
 		t.Fatalf("should lower activate")
 	}
-	// State1 waits for in-build-stance — use a factory VM with Activate so synthetic auto-stance does not fire [ON-12][05]
+	// State1 waits for in-build-stance
 	w3 := newTestWorld(10)
 	h3, _ := w3.Create(facDef, 0, 0, 0, 0)
 	factory3 := w3.Unit(h3)
 	factory3.Def = facDef
-	prog := &cob.Program{Scripts: map[string]int{"Activate": 0}, Code: []uint32{0, 0}, ScriptsByID: []int{0}}
-	factory3.Script = cob.NewVM(prog)
+	// Scriptless factory approximation [05 C18][RX-05]: a factory with no COB
+	// (or no Activate script) cannot raise the script-owned yard-door stance,
+	// so the service sets it on its behalf. Real retail factories always carry
+	// scripts; synthetic fixtures do not.
 	factory3.Flags &^= FlagInBuildStance
 	q3 := orders.QueueForUnit(factory3)
 	q3.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State1)})
@@ -785,15 +787,36 @@ func TestStateGates(t *testing.T) {
 	head3.Phase = uint8(State1)
 	svc3 := NewService(nil, cat, w3, &economy.Service{})
 	svc3.Pump(factory3, 10)
-	if head3.Phase != uint8(State1) {
-		t.Fatalf("state1 without in-stance should stay")
+	if factory3.Flags&FlagInBuildStance == 0 {
+		t.Fatalf("scriptless factory should have stance self-set (documented approximation)")
 	}
-	if head3.DynamicGate != WakeBit2 {
+	if head3.Phase != uint8(State2) {
+		t.Fatalf("state1 scriptless should advance to state2, got %d", head3.Phase)
+	}
+
+	// Script-owned handshake [05 C18]: a factory whose COB exposes Activate
+	// must wait for the stance bit (wake bit 2) and advance only when set.
+	w4 := newTestWorld(10)
+	h4, _ := w4.Create(facDef, 0, 0, 0, 0)
+	factory4 := w4.Unit(h4)
+	factory4.Def = facDef
+	factory4.Flags &^= FlagInBuildStance
+	factory4.SetScript(cob.NewVM(&cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{"Activate": 0}, Pieces: []string{"base"}}))
+	q4 := orders.QueueForUnit(factory4)
+	q4.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State1)})
+	head4 := q4.Primary()[0]
+	head4.Phase = uint8(State1)
+	svc4 := NewService(nil, cat, w4, &economy.Service{})
+	svc4.Pump(factory4, 10)
+	if head4.Phase != uint8(State1) {
+		t.Fatalf("state1 with Activate script but no stance should stay")
+	}
+	if head4.DynamicGate != WakeBit2 {
 		t.Fatalf("state1 wait wake bit2")
 	}
-	factory3.Flags |= FlagInBuildStance
-	svc3.Pump(factory3, 11)
-	if head3.Phase != uint8(State2) {
+	factory4.Flags |= FlagInBuildStance
+	svc4.Pump(factory4, 11)
+	if head4.Phase != uint8(State2) {
 		t.Fatalf("state1 with in-stance should advance to state2")
 	}
 }

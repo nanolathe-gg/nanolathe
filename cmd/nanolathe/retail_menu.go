@@ -2301,7 +2301,10 @@ func (g *gameShell) activateGadget(name string) {
 		case "exit":
 			// Retail MAINMENU's EXIT callback enters frontend state 8 and
 			// closes the process; it does not open the unrelated YESORNO
-			// CD-player dialog used during frontend initialization.
+			// CD-player dialog used during frontend initialization. The
+			// preferences are flushed first, since this is the process's last
+			// chance to write them.
+			g.saveSettings()
 			os.Exit(0)
 		}
 	case modeMenuSingle:
@@ -2344,6 +2347,7 @@ func (g *gameShell) activateGadget(name string) {
 		case "load":
 			if len(g.maps) != 0 && g.mapIdx >= 0 && g.mapIdx < len(g.maps) {
 				g.setup.MapName = g.maps[g.mapIdx]
+				g.saveSettings()
 				g.openMenu(g.mapReturn)
 			}
 		}
@@ -2355,6 +2359,9 @@ func (g *gameShell) activateGadget(name string) {
 func (g *gameShell) activateSkirmishGadget(name string) {
 	key := menuKey(name)
 	if key == "prevmenu" {
+		// Backing out of SKIRMISH.GUI still commits the setup, so the next
+		// visit to the screen opens on the rows that were last configured.
+		g.saveSettings()
 		g.openMenu(modeMenuSingle)
 		return
 	}

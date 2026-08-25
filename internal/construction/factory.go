@@ -1121,6 +1121,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	product, err := s.allocateNanoframe(factory, def, cell)
 	if err != nil {
 		// Allocator refusal prints verbatim "Unable to create any more units", retries in exactly 300 ticks (not randomized), stays state2 [05 C18].
+		s.logMessage(fmt.Sprintf("construction: allocation refused (%v)", err))
 		s.logMessage(ErrLimitMessage)
 		node.DynamicGate = WakeBit2 // F6b: the allocator refusal wakes on bit 2 (notes/construction/05_promotion_factory_contract.md)
 		node.Deadline = int32(tick + 300)
@@ -1462,7 +1463,10 @@ func (s *Service) Pump(factory *units.Unit, tick uint32) {
 	if len(prim) == 0 {
 		return
 	}
-	head := prim[0]
+	head := firstWorkNode(prim)
+	if head == nil {
+		return
+	}
 	// Non-build orders (e.g., Move_Ground) are not construction work; ignore without mutating queue [05][P0-I05].
 	if !isBuildOrderID(head.ID) {
 		return
@@ -1504,6 +1508,68 @@ func (s *Service) Pump(factory *units.Unit, tick uint32) {
 // receiving a factory-only descriptor (BuildingBuild) fails explicitly with an error diagnostic, never silently cleared [P0-I05].
 // Completion returns handle, def key, and owner for session hooks; no presentation calls are made (OnRefresh suppressed).
 // Stop/cancel cleans up worker/build links deterministically before and after nanoframe creation [05 C21][P0-14].
+// isStandingOpID reports whether the order id is a standing/auto or rally
+// op that must never block construction work discovery [05 "Queue insertion"]
+// [05 "Rally inheritance"][RX-05]. A factory's own queued-move/queued-patrol
+// nodes are rally points for produced units, not movement orders for the
+// (immobile) factory itself.
+func isStandingOpID(id orders.ID) bool {
+	if gb := orders.Lookup("GetBuilt"); gb != 0 && id == gb {
+		return true
+	}
+	if pk := orders.Lookup("Park"); pk != 0 && id == pk {
+		return true
+	}
+	if qm := orders.Lookup("QMove"); qm != 0 && id == qm {
+		return true
+	}
+	if qp := orders.Lookup("QPatrol"); qp != 0 && id == qp {
+		return true
+	}
+	return false
+}
+
+// firstWorkNode returns the first primary node that is construction work,
+// skipping leading standing ops (GetBuilt pending resolution, Park) [RX-05].
+func firstWorkNode(prim []*orders.Node) *orders.Node {
+	for _, n := range prim {
+		if n == nil {
+			continue
+		}
+		if !isStandingOpID(n.ID) {
+			return n
+		}
+	}
+	return nil
+}
+
+// resolveGetBuilt enforces the get-built node's self-drop on a completed
+// product [05 C18][05 "Rally inheritance"]: rally inheritance itself runs at
+// allocation time in the success epilogue; while the product is still under
+// construction the node waits per the researched retry gates.
+func (s *Service) resolveGetBuilt(product *units.Unit, tick uint32) {
+	if s == nil || product == nil {
+		return
+	}
+	q := orders.QueueForUnit(product)
+	if q == nil || q.LenPrimary() == 0 {
+		return
+	}
+	gb := orders.Lookup("GetBuilt")
+	if gb == 0 {
+		return
+	}
+	head := q.Primary()[0]
+	if head.ID != gb {
+		return
+	}
+	// Under construction: wait (300 ticks at state 0, 30 at state 1, or wake at state 2) [05 "Rally inheritance"].
+	if product.Remaining > 0 {
+		return
+	}
+	q.RemoveHead() // the get-built node then drops itself [05 "Rally inheritance"]
+}
+
 func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 	w := s.World
 	if ctx.World != nil {
@@ -1538,6 +1604,19 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0, Diagnostics: append([]string(nil), s.messages...)}
 	}
 	head := prim[0]
+	// GetBuilt resolution [05 C18][05 "Rally inheritance"] — must not block
+	// factory production behind a stale get-built node (RX-05).
+	if gbID := orders.Lookup("GetBuilt"); gbID != 0 && head.ID == gbID {
+		if u := w.Unit(handle); u != nil {
+			s.resolveGetBuilt(u, tick)
+		}
+	}
+	// Work discovery skips standing ops (GetBuilt pending resolution, Park)
+	// so a completed factory keeps producing [RX-05][05 "Queue insertion"].
+	head = firstWorkNode(prim)
+	if head == nil {
+		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0, Diagnostics: append([]string(nil), s.messages...)}
+	}
 	// Non-build orders (e.g., Move_Ground) are not construction work; ignore without mutating queue [05][P0-I05].
 	if !isBuildOrderID(head.ID) {
 		return WorkResult{Builder: handle, Product: head.Target, DefKey: head.BuildDefKey, Owner: builder.Owner, State: State(head.Phase), Diagnostics: append([]string(nil), s.messages...)}

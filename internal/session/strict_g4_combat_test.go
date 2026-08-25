@@ -243,8 +243,7 @@ func TestStrictSkirmish_AimReturnControlsProjectile(t *testing.T) {
 		}
 		t.Logf("G4 FAILURE missing %v last %s: %s", missing, lastCompleted, FormatFailure(fr))
 		// For strict gate, we must not manually inject projectile etc. So if missing, we report as failure but skip to keep suite green?
-		// We use Skipf to indicate scaffold/blocked: combat may be blocked by missing Aim or visibility.
-		t.Skipf("G4 strict gate missing stages %v last %s [TODO fix combat/COB wiring] [G4 1..12]", missing, lastCompleted)
+		t.Fatalf("G4 strict gate missing stages %v last %s [TODO fix combat/COB wiring] [G4 1..12]", missing, lastCompleted)
 	}
 	ev := StrictGateEvidence{
 		Commit: strictCommit(), ContentManifest: strictCatalogHash(cat), Map: "test", Seed: simSeed, CrtSeed: crtSeed,

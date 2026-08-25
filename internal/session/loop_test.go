@@ -18,69 +18,22 @@ import (
 // TestRegistrationOrder verifies C5: subsystem registration is centralized here
 // and written in kernel phase order with a comment naming each phase
 // (I7, PLAN_03 C7, [01 §4.4]).
-func TestRegistrationOrder(t *testing.T) {
+// TestNoKernelPhaseRegistrations locks the RX-08 topology contract: loop.go is
+// the single authoritative tick ([01 §4.4][ON-09]) and must not register any
+// package-wide kernel phases. The old twelve-phase graph was retired; nothing
+// may resurrect a second production tick path.
+func TestNoKernelPhaseRegistrations(t *testing.T) {
 	data, err := os.ReadFile("loop.go")
 	if err != nil {
 		t.Fatalf("read loop.go: %v", err)
 	}
 	text := string(data)
-	// Ensure no init() registers.
 	if strings.Contains(text, "func init(") {
-		t.Fatalf("loop.go must not use init() for registration (C5)")
+		t.Fatalf("loop.go must not use init() (C5)")
 	}
-	// Extract kernel.Phase* constants in order of appearance.
-	re := regexp.MustCompile(`kernel\.Phase\w+`)
-	matches := re.FindAllString(text, -1)
-	if len(matches) == 0 {
-		t.Fatalf("no kernel phase registrations found")
-	}
-	// Expected phase order per [01 §4.4].
-	order := map[string]int{
-		"kernel.PhaseNetwork":              1,
-		"kernel.PhaseUnitsScripts":         2,
-		"kernel.PhaseProjectiles":          3,
-		"kernel.PhaseEffectsFeatureMotion": 4,
-		"kernel.PhaseOrdersPathEconomy":    5,
-		"kernel.PhaseFeatureLifecycle":     6,
-		"kernel.PhaseSequences":            7,
-		"kernel.PhaseWindJitter":           8,
-		"kernel.PhaseWindField":            9,
-		"kernel.PhaseLedgerCleanup":        10,
-		"kernel.PhaseBarrier":              11,
-		"kernel.PhaseCadenceFlip":          12,
-	}
-	prev := 0
-	found := make(map[string]bool)
-	for _, m := range matches {
-		rank, ok := order[m]
-		if !ok {
-			t.Fatalf("unknown phase constant %q", m)
-		}
-		if rank < prev {
-			t.Fatalf("registration order violation: %q appeared after phase %d (prev rank %d) — phases must be registered in numeric order [01 §4.4] I7", m, rank, prev)
-		}
-		prev = rank
-		found[m] = true
-		// Check that each registration line has a comment naming the phase
-		// (simple check: line contains "Phase")
-	}
-	// Must have at least one registration per phase 1..12 (phase 1 may be no-op but we register)
-	for phase, rank := range order {
-		if !found[phase] {
-			t.Fatalf("missing registration for %s (phase %d) — all twelve phases must be registered in order [01 §4.4] C5", phase, rank)
-		}
-	}
-	// Within phase 5, registrations must be in documented sub-order:
-	// orders-pump, path-scheduler, economy-ai-coordinator, movement-integrate
-	idxOrders := strings.Index(text, "\"orders-pump\"")
-	idxPath := strings.Index(text, "\"path-scheduler\"")
-	idxEcon := strings.Index(text, "\"economy-ai-coordinator\"")
-	idxMove := strings.Index(text, "\"movement-integrate\"")
-	if idxOrders == -1 || idxPath == -1 || idxEcon == -1 || idxMove == -1 {
-		t.Fatalf("phase 5 sub-order registrations missing")
-	}
-	if !(idxOrders < idxPath && idxPath < idxEcon && idxEcon < idxMove) {
-		t.Fatalf("phase 5 internal order must be orders-pump < path-scheduler < economy-ai-coordinator < movement-integrate, got %d %d %d %d", idxOrders, idxPath, idxEcon, idxMove)
+	re := regexp.MustCompile(`s\.Kernel\.Register\(`)
+	if matches := re.FindAllString(text, -1); len(matches) != 0 {
+		t.Fatalf("loop.go must not register kernel phases (%d found); authoritativeTick is the single production tick [RX-08]", len(matches))
 	}
 }
 

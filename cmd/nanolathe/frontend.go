@@ -97,6 +97,11 @@ type gameShell struct {
 	retailControllers    [session.SkirmishMaxPlayers]int
 	retailControllersSet bool
 
+	// settingsWritable is set by the windowed entry point once it has read the
+	// persisted preferences. Only that path writes them back, so the
+	// screenshot path and the tests never touch the user's settings file.
+	settingsWritable bool
+
 	campaigns              []mission.Campaign
 	campaignOptions        []mission.Campaign
 	campaignIdx            int
@@ -176,6 +181,10 @@ func runGameShell(opts Options, cs *contentSet) error {
 	if err != nil {
 		return err
 	}
+	// The persisted frontend preferences are read once here, before the first
+	// panel is drawn, the way retail reads its registry block during startup
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	shell.attachSettings()
 	maps := shell.maps
 
 	const winW, winH = 640, 480

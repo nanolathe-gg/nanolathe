@@ -3,78 +3,66 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/ai"
 )
 
-// TestStrictSkirmish_TwoRunsMatchTraceAndStateHash implements G7 [ON-10 §11 G7].
+// TestStrictSkirmish_TwoRunsMatchTraceAndStateHash implements G7 [ON-10 §11 G7]:
+// run the G5 commander→factory→combat-unit→attack scenario twice from fresh
+// sessions with identical seeds and compare content manifest, ordered event
+// trace, milestone ticks, and final authoritative state hash. No tolerance is
+// permitted for authoritative differences.
 func TestStrictSkirmish_TwoRunsMatchTraceAndStateHash(t *testing.T) {
-	const simSeed, crtSeed uint32 = 123, 456
-	run := func() (string, string, map[string]uint32, uint32, int, []string) {
-		rng.SeedGlobal(simSeed, crtSeed)
-		cat := strictMinimalCatalog()
-		terrain := strictMinimalTerrain()
-		m := strictSyntheticMission()
-		s := &Session{Catalog: cat, World: terrain, Mission: m, Skirmish: SkirmishConfig{NumPlayers: 2, CommanderDeath: 1}}
-		s.Skirmish.Players[0].AllyGroup = 1
-		s.Skirmish.Players[1].AllyGroup = 2
-		w, _ := newSlicedWorld(cat)
-		s.Units = w
-		s.Econ = strictEconomyForTest()
-		for i := 0; i < 2; i++ {
-			s.Econ.Players[i].Exists = true
-			s.Econ.Players[i].ControllerState = uint8(i + 1)
-			s.Econ.Players[i].StatusHalfwordAt144 = 1
-		}
-		s.Econ.SeedDeadlines(0)
-		var crt rng.CRT = rng.NewCRT(crtSeed)
-		s.InitWindForSession(&crt, 0)
-		_ = createAndBindServices(s)
-		s.RegisterAll()
-		s.State = StateBattle
-		// Add two units
-		def := cat.Units["armcom"]
-		def.Commander = true
-		for i := 0; i < 2; i++ {
-			h, _ := s.Units.Create(def, uint8(i), strictCellToWorld(int32(10+i*10)), 0, strictCellToWorld(10))
-			publishOne(s, s.Units.Unit(h))
-			s.Movement.EnsureUnit(s.Units.Unit(h))
-		}
+	const simSeed, crtSeed uint32 = 900, 1000 // same fixture seeds as the G5 gate
+	const maxTick = 1500                      // covers wave-A attack issue at ~601
+
+	run := func(label string) (traceHash, stateHash string, milestones map[string]uint32, finalTick uint32) {
+		s, mgr := buildStrictG5Session(t, simSeed, crtSeed)
 		s.SetTraceEnabled(true)
 		s.ClearTrace()
-		s.Clock.ScaledAnchor = 0
-		for tick := 1; tick <= 50; tick++ {
+		for tick := 1; tick <= maxTick; tick++ {
+			ensureG5UnitCOB(s)
 			s.Step(int32(tick))
+			if _, ok := mgr.Milestones()[ai.MilestoneAttackMoveIssued]; ok {
+				break // meaningful game reached; hash the trajectory up to here
+			}
 		}
-		traceHash := HashTrace(s.TraceEvents())
-		stateHash := HashState(s)
-		milestones := map[string]uint32{"final_tick": s.Clock.GlobalTick}
-		winner := s.GetResult().WinnerTeam
-		finalTick := s.Clock.GlobalTick
-		poolCounts := []string{stateHash}
-		return traceHash, stateHash, milestones, finalTick, winner, poolCounts
+		ms := mgr.Milestones()
+		if _, ok := ms[ai.MilestoneAttackMoveIssued]; !ok {
+			t.Fatalf("G7 %s: attack milestone not reached within %d ticks; determinism comparison would be vacuous", label, maxTick)
+		}
+		return HashTrace(s.TraceEvents()), HashState(s), ms, s.Clock.GlobalTick
 	}
-	trace1, state1, miles1, finalTick1, winner1, _ := run()
-	trace2, state2, miles2, finalTick2, winner2, _ := run()
+
+	trace1, state1, miles1, tick1 := run("run1")
+	trace2, state2, miles2, tick2 := run("run2")
+
 	if trace1 != trace2 {
-		t.Fatalf("G7 determinism: trace hash mismatch %s vs %s", trace1, trace2)
+		t.Fatalf("G7 determinism: ordered event trace hash mismatch %s vs %s", trace1, trace2)
 	}
 	if state1 != state2 {
-		t.Fatalf("G7 determinism: state hash mismatch %s vs %s", state1, state2)
+		t.Fatalf("G7 determinism: final state hash mismatch %s vs %s", state1, state2)
 	}
-	if finalTick1 != finalTick2 {
-		t.Fatalf("G7 determinism: final tick mismatch %d vs %d", finalTick1, finalTick2)
+	if tick1 != tick2 {
+		t.Fatalf("G7 determinism: final tick mismatch %d vs %d", tick1, tick2)
 	}
-	if winner1 != winner2 {
-		t.Fatalf("G7 determinism: winner mismatch %d vs %d", winner1, winner2)
+	for _, k := range g5Required {
+		a, okA := miles1[k]
+		b, okB := miles2[k]
+		if okA != okB || (okA && a != b) {
+			t.Fatalf("G7 determinism: milestone %q ticks diverge: %v vs %v", k, miles1[k], miles2[k])
+		}
 	}
-	if miles1["final_tick"] != miles2["final_tick"] {
-		t.Fatalf("G7 determinism: milestone tick mismatch")
+	if len(miles1) < 10 {
+		t.Fatalf("G7: expected all ten G5 milestones in hashed runs, got %d", len(miles1))
 	}
+
 	ev := StrictGateEvidence{
 		Commit: strictCommit(), ContentManifest: strictCatalogHash(strictMinimalCatalog()), Map: "test", Seed: simSeed, CrtSeed: crtSeed,
-		Players: []map[string]any{{"slot": 0, "control": "human"}, {"slot": 1, "control": "computer"}},
-		MaxTick: 50, Milestones: miles1, Winner: winner1, Reason: "G7 determinism",
-		FinalTick: finalTick1, FinalStateHash: state1, TraceHash: trace1,
+		Players:    []map[string]any{{"slot": 0, "control": "human"}, {"slot": 1, "control": "computer", "ai_profile": "default"}},
+		MaxTick:    maxTick,
+		Milestones: miles1,
+		Winner:     -1, Reason: "G7 seeded full-skirmish determinism (G5 scenario x2)",
+		FinalTick: tick1, FinalStateHash: state1, TraceHash: trace1,
 	}
 	t.Logf("G7 evidence: %s", FormatEvidence(ev))
 }

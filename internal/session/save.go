@@ -94,9 +94,51 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 				MoveMode:          u.Move.Mode,
 				MoveHeading:       u.Move.Heading,
 				MoveSpeed:         int32(u.Move.Speed.Raw()),
-				Carrier:           int32(u.Attachment.Carrier),
-				Cargo:             make([]int32, len(u.Attachment.Cargo)),
-				HasCOB:            u.GetScript() != nil && u.ScriptState != nil,
+				MovePendingHeading: func() uint16 {
+					if st, ok := s.Movement.Steers[u.Handle]; ok {
+						return st.PendingHeading
+					}
+					return 0
+				}(),
+				MoveDirty: func() bool {
+					if st, ok := s.Movement.Steers[u.Handle]; ok {
+						return st.Dirty
+					}
+					return false
+				}(),
+				MoveHeightWord: func() int16 {
+					if st, ok := s.Movement.Steers[u.Handle]; ok {
+						return st.HeightWord
+					}
+					return 0
+				}(),
+				MoveSeaLevel: func() uint8 {
+					if st, ok := s.Movement.Steers[u.Handle]; ok {
+						return st.SeaLevel
+					}
+					return 0
+				}(),
+				MoveDefFlags: func() uint32 {
+					if st, ok := s.Movement.Steers[u.Handle]; ok {
+						return st.DefFlags
+					}
+					return 0
+				}(),
+				MoveMaxVelocity: func() int32 {
+					if st, ok := s.Movement.Steers[u.Handle]; ok {
+						return st.MaxVelocity
+					}
+					return int32(u.Def.MaxVelocity)
+				}(),
+				MoveTurnRate: func() int32 {
+					if st, ok := s.Movement.Steers[u.Handle]; ok {
+						return st.TurnRate
+					}
+					return int32(u.Def.TurnRate)
+				}(),
+				Carrier: int32(u.Attachment.Carrier),
+				Cargo:   make([]int32, len(u.Attachment.Cargo)),
+				HasCOB:  u.GetScript() != nil && u.ScriptState != nil,
 			}
 			for i, h := range u.Attachment.Cargo {
 				rec.Cargo[i] = int32(h)
@@ -712,6 +754,26 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 				u.Move.Mode = rec.MoveMode
 				u.Move.Heading = rec.MoveHeading
 				u.Move.Speed = numeric.Fixed(int64(rec.MoveSpeed))
+				// Restore system-level steer state so the integrator resumes with
+				// identical heading/speed/pending [RX-07 G8][04 §8.1].
+				if s.Movement != nil {
+					if s.Movement.Steers == nil {
+						s.Movement.Steers = make(map[pool.Handle]*movement.SteerState)
+					}
+					s.Movement.Steers[h] = &movement.SteerState{
+						X:              int32(rec.X),
+						Z:              int32(rec.Z),
+						Heading:        rec.MoveHeading,
+						PendingHeading: rec.MovePendingHeading,
+						Dirty:          rec.MoveDirty,
+						Speed:          rec.MoveSpeed,
+						MaxVelocity:    rec.MoveMaxVelocity,
+						TurnRate:       rec.MoveTurnRate,
+						HeightWord:     rec.MoveHeightWord,
+						SeaLevel:       rec.MoveSeaLevel,
+						DefFlags:       rec.MoveDefFlags,
+					}
+				}
 				u.Attachment.Carrier = pool.Handle(rec.Carrier)
 				u.Attachment.Cargo = make([]pool.Handle, len(rec.Cargo))
 				for i, ch := range rec.Cargo {

@@ -768,11 +768,21 @@ type UnitRecord struct {
 	MoveMode          uint8  // [04 §8.1] 0 none,1 parked,2 active
 	MoveHeading       uint16 // 0..65535 [04 §5.1]
 	MoveSpeed         int32  // 16.16 fixed raw
-	Carrier           int32  // pool.Handle 0 null [04 §4.4]
-	Cargo             []int32
-	Slots             [3]SlotRecord // three weapon slots [06 §1.2]
-	HasCOB            bool
-	COB               COBRecord // per-unit COB VM [04 §4.2][GAP T15]
+	// System-level steer state [04 §8.1][RX-07 G8]: the movement integrator's
+	// per-unit scratch block; without it restored runs diverge on the first
+	// direct-goal or turn-in tick.
+	MovePendingHeading uint16
+	MoveDirty          bool
+	MoveHeightWord     int16
+	MoveSeaLevel       uint8
+	MoveDefFlags       uint32
+	MoveMaxVelocity    int32
+	MoveTurnRate       int32
+	Carrier            int32 // pool.Handle 0 null [04 §4.4]
+	Cargo              []int32
+	Slots              [3]SlotRecord // three weapon slots [06 §1.2]
+	HasCOB             bool
+	COB                COBRecord // per-unit COB VM [04 §4.2][GAP T15]
 }
 
 // SlotRecord is one weapon slot per unit [06 §1.2] C1 [P0-I11].
@@ -1253,6 +1263,13 @@ func MarshalStateV1(s *StateV1) []byte {
 			buf.WriteByte(u.MoveMode)
 			binaryWriteUint16(&buf, u.MoveHeading)
 			binaryWriteInt32(&buf, u.MoveSpeed)
+			binaryWriteUint16(&buf, u.MovePendingHeading)
+			buf.WriteByte(boolToByte(u.MoveDirty))
+			binaryWriteInt32(&buf, int32(u.MoveHeightWord))
+			buf.WriteByte(u.MoveSeaLevel)
+			binaryWriteUint32(&buf, u.MoveDefFlags)
+			binaryWriteInt32(&buf, u.MoveMaxVelocity)
+			binaryWriteInt32(&buf, u.MoveTurnRate)
 			binaryWriteInt32(&buf, u.Carrier)
 			binaryWriteUint32(&buf, uint32(len(u.Cargo)))
 			for _, h := range u.Cargo {
@@ -1823,6 +1840,34 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 			if err := binary.Read(r, binary.LittleEndian, &moveSpeed); err != nil {
 				return nil, err
 			}
+			movePendingHeading, err := binaryReadUint16(r)
+			if err != nil {
+				return nil, err
+			}
+			moveDirtyByte, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			moveHeightWord, err := binaryReadInt32(r)
+			if err != nil {
+				return nil, err
+			}
+			moveSeaLevel, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			moveDefFlags, err := binaryReadUint32(r)
+			if err != nil {
+				return nil, err
+			}
+			moveMaxVelocity, err := binaryReadInt32(r)
+			if err != nil {
+				return nil, err
+			}
+			moveTurnRate, err := binaryReadInt32(r)
+			if err != nil {
+				return nil, err
+			}
 			var carrier int32
 			if err := binary.Read(r, binary.LittleEndian, &carrier); err != nil {
 				return nil, err
@@ -2082,6 +2127,13 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 			rec.MoveMode = moveMode
 			rec.MoveHeading = moveHeading
 			rec.MoveSpeed = moveSpeed
+			rec.MovePendingHeading = movePendingHeading
+			rec.MoveDirty = byteToBool(moveDirtyByte)
+			rec.MoveHeightWord = int16(moveHeightWord)
+			rec.MoveSeaLevel = moveSeaLevel
+			rec.MoveDefFlags = moveDefFlags
+			rec.MoveMaxVelocity = moveMaxVelocity
+			rec.MoveTurnRate = moveTurnRate
 			rec.Carrier = carrier
 			rec.Cargo = cargo
 			rec.Slots = slots

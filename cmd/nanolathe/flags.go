@@ -73,7 +73,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		fmt.Fprintf(out, "  -dump manifest    every logical path, its winning provider and hash\n")
 		fmt.Fprintf(out, "  -dump providers   the mounted provider list in precedence order\n")
 		fmt.Fprintf(out, "  -dump rng         headless tick loop; both stream states and draw counts\n")
-		fmt.Fprintf(out, "  -dump route       gate2 route diagnostic: points ≤20 and save form ≤13 bytes [PLAN_07]\n")
+		fmt.Fprintf(out, "  -dump route       (legacy diagnostic) gate2 route dump — runs the retired kernel graph, not the authoritative loop [RX-08]\n")
 		fmt.Fprintf(out, "  -save <path>      write a native StateV1 save after a headless run [PLAN_14 C18]\n")
 		fmt.Fprintf(out, "  -load <path>      restore a native StateV1 save, then tick [PLAN_14 C18]\n")
 	}

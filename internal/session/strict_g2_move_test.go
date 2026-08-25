@@ -6,10 +6,8 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/orders"
-	pathpkg "github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // TestStrictSkirmish_MoveOrderReachesGoal implements G2 [ON-10 §11 G2].
@@ -83,28 +81,10 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 	distBefore := numeric.Fixed(1 << 30)
 	const arrivalThresh = int64(2 * 65536)
 	const arrivalThresh2 = arrivalThresh * arrivalThresh
-	var fallbackUsed bool
 	for tick := 1; tick <= maxTick; tick++ {
 		s.Step(int32(tick))
-		// Fallback for production defect: authoritativeTick lacks path-submit [ON-09 F-P0-001]
-		// If no path request within 10 ticks, submit manually via production Scheduler API to allow later stages to be tested,
-		// but record warning so gate still reports defect.
-		if tick == 10 {
-			if _, ok := stages["path_request_submitted"]; !ok {
-				if s.Movement != nil && s.Movement.Scheduler != nil {
-					start := pathpkg.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
-					goal := pathpkg.Cell{X: world.WorldToCell(goalX), Z: world.WorldToCell(goalZ)}
-					s.Movement.SubmitMove(h, u.Owner, start, goal)
-					fallbackUsed = true
-					// Mark stage as completed via manual injection, but record warning
-					stages["path_request_submitted"] = uint32(tick)
-					tmp := uint32(tick)
-					pathSubmittedTick = &tmp
-					lastCompleted = "path_request_submitted (manual fallback)"
-					t.Logf("G2 WARNING: path request not auto-submitted within 10 ticks, falling back to manual Scheduler.SubmitMove [TODO fix authoritativeTick path-submit]")
-				}
-			}
-		}
+		// No manual SubmitMove fallback [RX-06]: production must submit path
+		// requests itself or the gate fails at stage 2 with a failure record.
 		// Stage 2: path request submitted — infer from scheduler HasRequest OR route published
 		if _, ok := stages["path_request_submitted"]; !ok {
 			hasReq := s.Movement != nil && s.Movement.Scheduler != nil && s.Movement.Scheduler.HasRequest(h)
@@ -276,8 +256,7 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 				}
 			}
 			// For strict gate, missing movement stages indicate production defect in movement/authoritativeTick.
-			// Use Skipf to keep suite green while capturing failure record [ON-10].
-			t.Skipf("G2 move gate missing stage %q (last completed %q) maxTick %d curTick %d [TODO fix movement/authoritativeTick] [G2 1..7]", name, lastCompleted, maxTick, s.Clock.GlobalTick)
+			t.Fatalf("G2 move gate missing stage %q (last completed %q) maxTick %d curTick %d [G2 1..7]", name, lastCompleted, maxTick, s.Clock.GlobalTick)
 		}
 	}
 	var prevTick uint32
@@ -332,18 +311,6 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 	s2.ClearTrace()
 	for tick := 1; tick <= int(stages["order_complete"]); tick++ {
 		s2.Step(int32(tick))
-		if tick == 10 {
-			// Fallback for determinism parity with first run [TODO fix]
-			hasReq := s2.Movement != nil && s2.Movement.Scheduler != nil && s2.Movement.Scheduler.HasRequest(h2)
-			if route := s2.Movement.Routes[h2]; route != nil && route.Active {
-				hasReq = true
-			}
-			if !hasReq {
-				start := pathpkg.Cell{X: world.WorldToCell(u2.X), Z: world.WorldToCell(u2.Z)}
-				goal := pathpkg.Cell{X: world.WorldToCell(goalX), Z: world.WorldToCell(goalZ)}
-				s2.Movement.SubmitMove(h2, u2.Owner, start, goal)
-			}
-		}
 	}
 	traceHash2 := HashTrace(s2.TraceEvents())
 	stateHash2 := HashState(s2)
@@ -355,10 +322,6 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 	}
 	warnings := []string{}
 	fallbacks := []string{}
-	if fallbackUsed {
-		warnings = append(warnings, "path_request auto-submit missing, manual fallback used [TODO authoritativeTick path-submit]")
-		fallbacks = append(fallbacks, "manual Scheduler.SubmitMove at tick 10")
-	}
 	ev := StrictGateEvidence{
 		Commit: strictCommit(), ContentManifest: strictCatalogHash(cat), Map: "test", Seed: simSeed, CrtSeed: crtSeed,
 		Players: []map[string]any{{"slot": 0, "control": "human"}, {"slot": 1, "control": "computer"}},

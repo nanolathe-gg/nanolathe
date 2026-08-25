@@ -178,6 +178,9 @@ func (l *loadingState) report(family string, percent int) {
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // only adopted back on the render goroutine, in step.
 func (g *gameShell) startBattleLoad(mapName string) {
+	// Start is the commit point for the skirmish setup: the next run of the
+	// engine opens SKIRMISH.GUI on the rows this battle was started with.
+	g.saveSettings()
 	cfg := g.skirmishConfigForStart(mapName)
 	g.beginLoad(mapName, modeMenuSkirmish, func(state *loadingState) (*session.Session, error) {
 		return session.NewSkirmishWithProgress(g.cs.fs, nil, cfg, state.report)
@@ -198,6 +201,8 @@ func (g *gameShell) startMissionLoad() {
 	}
 	path := fmt.Sprintf("%s:MISSION%d", c.Path, c.Missions[g.missionIdx].Index)
 	difficulty := g.missionDifficulty()
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	g.saveSettings()
 	g.beginLoad("", modeMenuMission, func(state *loadingState) (*session.Session, error) {
 		return session.NewMissionWithProgress(g.cs.fs, nil, path, difficulty, state.report)
 	})

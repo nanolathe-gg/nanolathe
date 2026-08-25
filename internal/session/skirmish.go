@@ -376,16 +376,9 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	// are dead; when <=1 hostile team remains, latch result (draw on mutual
 	// destruction) [08 "Victory and defeat triggers"][08 "Skirmish configuration"]
 	// CommanderDeath==1. Countdown via EndLatch [P1-01 §2.2] before visible.
-	// Hooked after death finalization so future central loop can invoke
-	// EvaluateResult after phase 10 cleanup (I7). TODO(question): general alliance
-	// sweep not decomposed; CommanderDeath==0 annihilation mode deferred.
-	if s.Skirmish.CommanderDeath != 0 {
-		s.Kernel.Register(kernel.PhaseLedgerCleanup, "skirmish-result", func(tick uint32) {
-			s.EvaluateResult(tick)
-		})
-	} else {
-		// TODO(question): CommanderDeath==0 annihilation mode not researched; defer [08 "Skirmish configuration"].
-	}
+	// Victory evaluation runs inside authoritativeTick (loop.go) after ledger
+	// cleanup [RX-08][ON-09]; the old kernel-phase registration is retired.
+	// TODO(question): CommanderDeath==0 annihilation mode not researched; defer [08 "Skirmish configuration"].
 	// 12. transition through state machine [08 "Session states"] C3
 	if err := s.SelectForGametype(GametypeMultiplayer); err != nil {
 		return nil, err
@@ -619,11 +612,7 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		}
 	}
 	s.RegisterAll()
-	if s.Skirmish.CommanderDeath != 0 {
-		s.Kernel.Register(kernel.PhaseLedgerCleanup, "skirmish-result", func(tick uint32) {
-			s.EvaluateResult(tick)
-		})
-	}
+	// Victory evaluation runs inside authoritativeTick [RX-08]; no phase registration.
 	_ = s.SelectForGametype(GametypeMultiplayer)
 	return s, nil
 }
