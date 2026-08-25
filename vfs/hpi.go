@@ -19,7 +19,9 @@ const (
 	hpiEntrySize         = 9
 	hpiFileRecordSize    = 9
 	hpiChunkHeaderSize   = 19
-	hpiChunkSize         = 64 * 1024
+	// defaultMaxFileBytes is the ceiling for a single decoded file.
+	defaultMaxFileBytes = 512 << 20
+	hpiChunkSize        = 64 * 1024
 )
 
 var ErrMalformedArchive = errors.New("vfs: malformed HPI archive")
@@ -40,7 +42,7 @@ func (o ArchiveOptions) withDefaults() ArchiveOptions {
 		o.MaxDirectoryBytes = 128 << 20
 	}
 	if o.MaxFileBytes <= 0 {
-		o.MaxFileBytes = 512 << 20
+		o.MaxFileBytes = defaultMaxFileBytes
 	}
 	if !o.SkipChecksums {
 		o.VerifyChecksums = true
@@ -351,6 +353,9 @@ func (v hpiDirectoryView) walkDirectory(nodeOffset uint64, parent, originalParen
 			Source: Provenance{LogicalPath: logical, OriginalPath: original, ProviderType: "hpi", SourcePath: v.archive.name, Compression: compressionName(compression)}}
 		entry := &providerEntry{info: info}
 		entry.open = func() (File, error) { return v.archive.openRecord(record, info) }
+		entry.readRange = func(offset int64, length int) ([]byte, error) {
+			return v.archive.readRecordRange(record, offset, length)
+		}
 		// Retail data does not define duplicate-path behavior within one archive.
 		// Keep the last directory entry, matching the deterministic overlay rule.
 		v.archive.entries[logical] = entry
@@ -386,12 +391,33 @@ func (a *Archive) openRecord(record hpiRecord, info EntryInfo) (File, error) {
 }
 
 func (a *Archive) readRecord(record hpiRecord) ([]byte, error) {
+	return a.readRecordRange(record, 0, -1)
+}
+
+// readRecordRange decodes only the part of a record that the requested byte
+// range needs. length < 0 means "to the end".
+//
+// A compressed record is a table of chunk sizes followed by that many SQSH
+// chunks, and every chunk but the last decodes to exactly hpiChunkSize bytes
+// [02 §2]. The decompressed offset of a chunk is therefore its index times the
+// chunk size, and the table gives every chunk's stored size, so the chunks
+// before the range can be stepped over with arithmetic alone — no read and no
+// decode. That is what makes a header probe on a multi-megabyte record cost
+// one chunk instead of the whole file.
+func (a *Archive) readRecordRange(record hpiRecord, offset int64, length int) ([]byte, error) {
 	if record.size > uint64(a.options.MaxFileBytes) || record.size > uint64(math.MaxInt) {
 		return nil, fmt.Errorf("%w: file exceeds size limit", ErrMalformedArchive)
 	}
+	if offset < 0 || uint64(offset) > record.size {
+		return nil, fmt.Errorf("%w: range offset %d outside %d-byte file", ErrMalformedArchive, offset, record.size)
+	}
+	remaining := int64(record.size) - offset
+	if length < 0 || int64(length) > remaining {
+		length = int(remaining)
+	}
 	if record.compression == 0 {
-		data := make([]byte, int(record.size))
-		if err := a.readArchiveBytes(record.dataOffset, data); err != nil {
+		data := make([]byte, length)
+		if err := a.readArchiveBytes(record.dataOffset+uint64(offset), data); err != nil {
 			return nil, err
 		}
 		return data, nil
@@ -404,66 +430,97 @@ func (a *Archive) readRecord(record hpiRecord) ([]byte, error) {
 	if err := a.readArchiveBytes(record.dataOffset, table); err != nil {
 		return nil, err
 	}
-	result := make([]byte, int(record.size))
+	if length == 0 {
+		return []byte{}, nil
+	}
+	first := uint64(offset) / hpiChunkSize
+	last := (uint64(offset) + uint64(length) - 1) / hpiChunkSize
+	result := make([]byte, length)
 	position := record.dataOffset + uint64(len(table))
-	output := 0
-	for chunk := uint64(0); chunk < chunkCount; chunk++ {
+	for chunk := uint64(0); chunk < first; chunk++ {
 		storedSize := uint64(binary.LittleEndian.Uint32(table[chunk*4 : chunk*4+4]))
 		if storedSize < hpiChunkHeaderSize || storedSize > uint64(a.size)-position {
 			return nil, fmt.Errorf("%w: invalid chunk %d size", ErrMalformedArchive, chunk)
 		}
-		encoded := make([]byte, int(storedSize))
-		if err := a.readArchiveBytes(position, encoded); err != nil {
+		position += storedSize
+	}
+	produced := 0
+	for chunk := first; chunk <= last && chunk < chunkCount; chunk++ {
+		storedSize := uint64(binary.LittleEndian.Uint32(table[chunk*4 : chunk*4+4]))
+		if storedSize < hpiChunkHeaderSize || storedSize > uint64(a.size)-position {
+			return nil, fmt.Errorf("%w: invalid chunk %d size", ErrMalformedArchive, chunk)
+		}
+		chunkStart := chunk * hpiChunkSize
+		decoded, err := a.decodeChunk(chunk, position, storedSize, record.size-chunkStart)
+		if err != nil {
 			return nil, err
 		}
 		position += storedSize
-		if string(encoded[0:4]) != "SQSH" {
-			return nil, fmt.Errorf("%w: chunk %d marker", ErrMalformedArchive, chunk)
+		// Copy the part of this chunk that falls inside the requested range.
+		from := int64(0)
+		if int64(chunkStart) < offset {
+			from = offset - int64(chunkStart)
 		}
-		method := encoded[5]
-		// [02 §2]: the chunk header selects the actual decoder and retail does
-		// not require the two method numbers to match, so no equality check
-		// against the record's compression byte — dispatch on the chunk alone.
-		payloadSize := uint64(binary.LittleEndian.Uint32(encoded[7:11]))
-		decompressedSize := uint64(binary.LittleEndian.Uint32(encoded[11:15]))
-		checksum := binary.LittleEndian.Uint32(encoded[15:19])
-		if payloadSize+hpiChunkHeaderSize != storedSize || decompressedSize > record.size-uint64(output) {
-			return nil, fmt.Errorf("%w: chunk %d size fields", ErrMalformedArchive, chunk)
-		}
-		payload := encoded[hpiChunkHeaderSize:]
-		var sum uint32
-		for _, value := range payload {
-			sum += uint32(value)
-		}
-		if a.options.VerifyChecksums && sum != checksum {
-			return nil, fmt.Errorf("%w: chunk %d checksum", ErrMalformedArchive, chunk)
-		}
-		if encoded[6] != 0 {
-			for i := range payload {
-				payload[i] = byte(uint16(payload[i])-uint16(i)) ^ byte(i)
-			}
-		}
-		var decoded []byte
-		var err error
-		switch method {
-		case 1:
-			decoded, err = decodeLZ77(payload, decompressedSize)
-		case 2:
-			decoded, err = decodeZlib(payload, decompressedSize)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("%w: chunk %d: %v", ErrMalformedArchive, chunk, err)
-		}
-		if uint64(len(decoded)) != decompressedSize {
+		if from > int64(len(decoded)) {
 			return nil, fmt.Errorf("%w: chunk %d output size", ErrMalformedArchive, chunk)
 		}
-		copy(result[output:], decoded)
-		output += len(decoded)
+		produced += copy(result[produced:], decoded[from:])
 	}
-	if output != len(result) {
+	if produced != length {
 		return nil, fmt.Errorf("%w: decompressed size mismatch", ErrMalformedArchive)
 	}
 	return result, nil
+}
+
+// decodeChunk reads and decodes one SQSH chunk. maxOutput is the most the
+// chunk may decode to, which is what is left of the record from this chunk's
+// own decompressed offset.
+func (a *Archive) decodeChunk(index, position, storedSize, maxOutput uint64) ([]byte, error) {
+	encoded := make([]byte, int(storedSize))
+	if err := a.readArchiveBytes(position, encoded); err != nil {
+		return nil, err
+	}
+	if string(encoded[0:4]) != "SQSH" {
+		return nil, fmt.Errorf("%w: chunk %d marker", ErrMalformedArchive, index)
+	}
+	method := encoded[5]
+	// [02 §2]: the chunk header selects the actual decoder and retail does
+	// not require the two method numbers to match, so no equality check
+	// against the record's compression byte — dispatch on the chunk alone.
+	payloadSize := uint64(binary.LittleEndian.Uint32(encoded[7:11]))
+	decompressedSize := uint64(binary.LittleEndian.Uint32(encoded[11:15]))
+	checksum := binary.LittleEndian.Uint32(encoded[15:19])
+	if payloadSize+hpiChunkHeaderSize != storedSize || decompressedSize > maxOutput {
+		return nil, fmt.Errorf("%w: chunk %d size fields", ErrMalformedArchive, index)
+	}
+	payload := encoded[hpiChunkHeaderSize:]
+	var sum uint32
+	for _, value := range payload {
+		sum += uint32(value)
+	}
+	if a.options.VerifyChecksums && sum != checksum {
+		return nil, fmt.Errorf("%w: chunk %d checksum", ErrMalformedArchive, index)
+	}
+	if encoded[6] != 0 {
+		for i := range payload {
+			payload[i] = byte(uint16(payload[i])-uint16(i)) ^ byte(i)
+		}
+	}
+	var decoded []byte
+	var err error
+	switch method {
+	case 1:
+		decoded, err = decodeLZ77(payload, decompressedSize)
+	case 2:
+		decoded, err = decodeZlib(payload, decompressedSize)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: chunk %d: %v", ErrMalformedArchive, index, err)
+	}
+	if uint64(len(decoded)) != decompressedSize {
+		return nil, fmt.Errorf("%w: chunk %d output size", ErrMalformedArchive, index)
+	}
+	return decoded, nil
 }
 
 func (a *Archive) readArchiveBytes(offset uint64, data []byte) error {

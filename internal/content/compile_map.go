@@ -249,15 +249,41 @@ type tntHeaderLite struct {
 // loadTNTHeaderLite parses a TNT header without retaining tile graphics [fmt tnt].
 // It reads the raw file and extracts the header integers, including the minimap
 // dimensions at PtrMiniMap. This is the lightweight path requested in [PLAN 02].
+// loadTNTHeaderLite reads a map's TNT header and its minimap dimensions
+// without materializing the terrain.
+//
+// This matters at the scale of a whole install: a retail install's 275 TNT
+// files are 1.3 GB decompressed, and the minimap header sits between 76% and
+// 99.5% of the way through each one, so reading them whole to collect a few
+// kilobytes of headers is what a map census costs if it opens files instead of
+// ranges. Retail's own census opens only the OTA of each map and never its
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func loadTNTHeaderLite(fs vfs.FSOps, logical string) (tntHeaderLite, error) {
-	data, err := fs.ReadFileLimit(logical, 16<<20)
+	read := func(offset int64, length int) ([]byte, error) {
+		if ranged, ok := fs.(vfs.RangeReader); ok {
+			return ranged.ReadFileRange(logical, offset, length)
+		}
+		data, err := fs.ReadFileLimit(logical, 16<<20)
+		if err != nil {
+			return nil, err
+		}
+		if offset > int64(len(data)) {
+			return nil, nil
+		}
+		data = data[offset:]
+		if length >= 0 && length < len(data) {
+			data = data[:length]
+		}
+		return data, nil
+	}
+	head, err := read(0, 0x40)
 	if err != nil {
 		return tntHeaderLite{}, err
 	}
-	if len(data) < 0x40 {
+	if len(head) < 0x40 {
 		return tntHeaderLite{}, fmt.Errorf("tnt: %s: file is too small", logical)
 	}
-	u32 := func(off int) uint32 { return binary.LittleEndian.Uint32(data[off : off+4]) }
+	u32 := func(off int) uint32 { return binary.LittleEndian.Uint32(head[off : off+4]) }
 	h := tntHeaderLite{
 		Version:   u32(0x00),
 		Width:     u32(0x04),
@@ -275,9 +301,9 @@ func loadTNTHeaderLite(fs vfs.FSOps, logical string) (tntHeaderLite, error) {
 	if h.Version == versionLegacyTNT {
 		ptrMini = u32(0x38)
 	}
-	if uint64(ptrMini)+8 <= uint64(len(data)) {
-		h.MinimapWidth = binary.LittleEndian.Uint32(data[ptrMini:])
-		h.MinimapHeight = binary.LittleEndian.Uint32(data[ptrMini+4:])
+	if mini, err := read(int64(ptrMini), 8); err == nil && len(mini) == 8 {
+		h.MinimapWidth = binary.LittleEndian.Uint32(mini)
+		h.MinimapHeight = binary.LittleEndian.Uint32(mini[4:])
 	}
 	return h, nil
 }

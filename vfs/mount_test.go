@@ -245,3 +245,56 @@ func TestTenHPIDiagnostic(t *testing.T) {
 		t.Fatalf("no >10-HPI diagnostic among notes: %v", fs.Notes())
 	}
 }
+
+// TestReadFileRangeMatchesWholeFile locks the range reader against the whole
+// read it exists to avoid. A compressed HPI record is a table of chunk sizes
+// followed by SQSH chunks, so the arithmetic that steps over the chunks before
+// a range is the part that can silently drift.
+func TestReadFileRangeMatchesWholeFile(t *testing.T) {
+	root := testsupport.RetailRoot(t)
+	fileSystem := vfs.New()
+	if err := fileSystem.MountGameDirectory(root); err != nil {
+		t.Fatalf("mount: %v", err)
+	}
+	defer fileSystem.Close()
+
+	// One archived file per compression method plus a small one, so the test
+	// covers a record whose range spans more than one chunk.
+	for _, name := range []string{"maps/acid foursome.tnt", "gamedata/sidedata.tdf", "guis/selmap.gui"} {
+		whole, err := fileSystem.ReadFileLimit(name, 64<<20)
+		if err != nil {
+			t.Skipf("%s: %v", name, err)
+		}
+		if len(whole) < 0x100 {
+			t.Fatalf("%s is only %d bytes", name, len(whole))
+		}
+		cases := []struct{ offset, length int }{
+			{0, 0x40},
+			{0, len(whole)},
+			{1, 0x40},
+			{len(whole) / 2, 0x2000},
+			{len(whole) - 8, 8},
+			{len(whole), 0},
+		}
+		for _, c := range cases {
+			if c.offset+c.length > len(whole) {
+				// A length past the end is clamped to the end.
+				c.length = len(whole) - c.offset
+			}
+			got, err := fileSystem.ReadFileRange(name, int64(c.offset), c.length)
+			if err != nil {
+				t.Errorf("%s[%d:+%d]: %v", name, c.offset, c.length, err)
+				continue
+			}
+			want := whole[c.offset : c.offset+c.length]
+			if string(got) != string(want) {
+				t.Errorf("%s[%d:+%d] differs from the whole read", name, c.offset, c.length)
+			}
+		}
+		// A negative length reads to the end.
+		tail, err := fileSystem.ReadFileRange(name, int64(len(whole)-16), -1)
+		if err != nil || string(tail) != string(whole[len(whole)-16:]) {
+			t.Errorf("%s: read to end: %v", name, err)
+		}
+	}
+}

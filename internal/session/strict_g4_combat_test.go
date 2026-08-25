@@ -17,7 +17,7 @@ func TestStrictSkirmish_AimReturnControlsProjectile(t *testing.T) {
 	rng.SeedGlobal(simSeed, crtSeed)
 	cat := strictMinimalCatalog()
 	// Weapon with turret, range 5000, velocity
-	wdef := &content.WeaponDef{ID: 1, WeaponVelocity: 65536 * 5, Range: 5000 * 65536, ReloadTime: 2, Damage: map[string]int32{"default": 500}, EdgeEffectiveness: 0, AreaOfEffect: 0, Turret: true, ToAirWeapon: false, WaterWeapon: true}
+	wdef := &content.WeaponDef{ID: 1, WeaponVelocity: 65536 * 5, Range: 5000 * 65536, ReloadTime: 2, DamageDefault: 500, Damage: map[string]int32{"default": 500}, EdgeEffectiveness: 0, AreaOfEffect: 0, Turret: true, ToAirWeapon: false, WaterWeapon: true, LineOfSight: true}
 	wdef.CanonicalKey = content.CanonicalKey("testgun")
 	cat.Weapons = map[string]*content.WeaponDef{"testgun": wdef}
 	cat.RebuildWeaponIndex()

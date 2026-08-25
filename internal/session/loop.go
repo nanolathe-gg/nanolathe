@@ -162,6 +162,7 @@ const (
 	TraceFeatureLifecycle     = "FeatureLifecycle"
 	TraceVisibilityDeadline   = "VisibilityDeadline"
 	TraceTriggerPoll          = "TriggerPoll"
+	TraceAIAux                = "AIAux"
 	TraceVictoryLatch         = "VictoryLatch"
 	TraceSnapshotPublish      = "SnapshotPublish"
 	TraceTickEnd              = "TickEnd"
@@ -235,6 +236,13 @@ func (s *Session) CaptureTrace(fn func()) []SessionTraceEvent {
 func (s *Session) ValidateComposition() error {
 	if s == nil {
 		return fmt.Errorf("session: nil session [08 \"Session states\"]")
+	}
+	// Every AI manager must have the typed build queue bound [RX-01][F-P0-004].
+	// A computer slot without a binder is a passive "computer", never a real AI.
+	for _, mgr := range s.AI {
+		if mgr != nil && mgr.QueueBuildTyped == nil {
+			return fmt.Errorf("session: ai manager player %d has no QueueBuildTyped binding [RX-01][F-P0-004]", mgr.Player)
+		}
 	}
 	if s.Clock == nil {
 		return fmt.Errorf("session: missing Clock [01 §4.4]")
@@ -597,11 +605,9 @@ func (s *Session) authoritativeTick(tick uint32) {
 		}
 		// Capture economy helper/carry state before to emit EconomyRequest/Settle accurately without map iteration
 		beforeUpdateTime := s.Econ.Players[player].UpdateTime
-		var aidDeadlineDone bool
 		before := func() {
 			if mgr != nil {
 				mgr.Tick(tick, s.Units, s.Econ)
-				aidDeadlineDone = true
 				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIDeadline, Player: player})
 			}
 		}
@@ -618,9 +624,6 @@ func (s *Session) authoritativeTick(tick uint32) {
 				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomyRequest, Player: player})
 			}
 		}
-		if aidDeadlineDone {
-			// already emitted inside before
-		}
 	}
 
 	// Prepare movement shared indexing once per tick [04 §8.2][04 §10.2] before unit visits
@@ -629,6 +632,102 @@ func (s *Session) authoritativeTick(tick uint32) {
 			s.Movement.BindWorld(s.Units)
 		}
 		s.Movement.BeginTick(tick)
+	}
+	// Path-submit — on path-backed order activation submit one request so scheduler receives it and can produce a route [04 §7.3][P0-I03].
+	// Must run after orders-pump's head is established but before scheduler tick so request is visible this tick [P0-I03].
+	// In authoritativeTick the per-unit pump runs after scheduler in the current structure (one-tick delay), but we still submit for the
+	// existing heads deterministically before scheduler so the fallback path-submit defect [ON-10] is closed. Deterministic player 0..9 asc, slots asc, no map range [INVARIANTS I1].
+	// Duplicate of kernel's path-submit phase loop.go:1425 replicated here for the fast path [04 §7.3].
+	if s.Units != nil && s.Movement != nil && s.Movement.Scheduler != nil {
+		sched := s.Movement.Scheduler
+		s.Path = sched
+		for _, u := range s.Units.IterSliced() {
+			if u == nil || !u.Alive {
+				continue
+			}
+			q := orders.QueueForUnit(u)
+			if q == nil || q.LenPrimary() == 0 {
+				continue
+			}
+			head := q.Head()
+			if head == nil {
+				continue
+			}
+			name := orders.DescriptorFor(head.ID).Name
+			isMove := name == "Move_Ground" || name == "VTOL_Move" || name == "QMove" || name == "Patrol" || name == "QPatrol" || name == "VTOL_Patrol" || name == "RepairPatrol" || name == "VTOL_RepairPatrol"
+			if !isMove {
+				if head.GoalX == 0 && head.GoalZ == 0 && head.Target == 0 {
+					continue
+				}
+				if !isMove {
+					if head.Target != 0 {
+						var tgt *units.Unit
+						if q.Lookup != nil {
+							tgt = q.Lookup(head.Target)
+						}
+						if tgt == nil && s.Units != nil {
+							tgt = s.Units.Unit(head.Target)
+						}
+						if tgt == nil || !tgt.Alive {
+							head.MoveState = orders.MoveBlocked
+							head.PathStatus = uint32(path.StatusRejected)
+							continue
+						}
+						if tgt.X != head.GoalX || tgt.Z != head.GoalZ {
+							head.GoalX = tgt.X
+							head.GoalY = tgt.Y
+							head.GoalZ = tgt.Z
+							if route := s.Movement.Routes[u.Handle]; route != nil && route.Active {
+								route.Active = false
+								route.Dirty = true
+							}
+							sched.Cancel(u.Handle)
+						}
+					}
+					continue
+				}
+			}
+			if head.Target != 0 {
+				var tgt *units.Unit
+				if q.Lookup != nil {
+					tgt = q.Lookup(head.Target)
+				}
+				if tgt == nil && s.Units != nil {
+					tgt = s.Units.Unit(head.Target)
+				}
+				if tgt == nil || !tgt.Alive {
+					head.MoveState = orders.MoveBlocked
+					head.PathStatus = uint32(path.StatusRejected)
+					q.RemoveHead()
+					if route := s.Movement.Routes[u.Handle]; route != nil {
+						route.Active = false
+					}
+					sched.Cancel(u.Handle)
+					continue
+				}
+				if tgt.X != head.GoalX || tgt.Z != head.GoalZ {
+					head.GoalX = tgt.X
+					head.GoalY = tgt.Y
+					head.GoalZ = tgt.Z
+					if route := s.Movement.Routes[u.Handle]; route != nil && route.Active {
+						route.Active = false
+						route.Dirty = true
+					}
+					sched.Cancel(u.Handle)
+				}
+			}
+			route := s.Movement.Routes[u.Handle]
+			if route != nil && route.Active {
+				continue
+			}
+			if sched.HasRequest(u.Handle) {
+				continue
+			}
+			startCell := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
+			goalCell := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
+			s.Movement.SubmitMove(u.Handle, u.Owner, startCell, goalCell)
+			head.MoveState = orders.MoveEnRoute
+		}
 	}
 	// Path scheduler at researched boundary without per-unit accidental invocation [04 §7.3] C11 C12
 	// Called exactly once per tick, deterministic, before movement steps consume routes.
@@ -647,54 +746,45 @@ func (s *Session) authoritativeTick(tick uint32) {
 			h := v.Handle
 			u := v.Unit
 			s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceUnitBegin, Handle: h, Slot: int(v.Slot)})
+			if tick < 200 {
+				if qDbg := orders.QueueForUnit(u); qDbg != nil {
+					fmt.Printf("DEBUG Visit start tick %d handle %d queue len %d\n", tick, h, qDbg.LenPrimary())
+				}
+			}
 			// unit pre-update (StepPreUpdate) [04 "unit sweep"]
 			s.Units.StepPreUpdate(h, tick)
 			// weapon slot/service step per unit [06 §3][06 §4] — stable weapon index once-compiled [ON-04]
+			// Trace kinds are emitted from the service's per-visit summary, never inferred
+			// from projectile counts or slot population [ON-09 evidence contract].
 			if s.Combat != nil && s.Catalog != nil && u != nil && u.Alive && !u.Dying {
-				// Capture projectile count before fire to emit WeaponFire trace deterministically without extra RNG
 				beforeCount := s.Combat.Count()
-				s.Combat.StepWeaponsForUnit(u, tick, s.Units, s.Vis, s.World, s.Econ, s.Catalog, rng.Global.Sim, rng.Global.Crt)
-				afterCount := s.Combat.Count()
-				// Emit WeaponAimDispatch if Aim was dispatched (check pendingAims via trace inside combat)
-				// For session trace, emit per slot that had weapon
-				hasWeapon := false
-				for idx := 0; idx < units.NumSlots; idx++ {
-					if sl := u.SlotAt(idx); sl != nil && sl.IsPopulated() {
-						hasWeapon = true
-						break
+				wsum := s.Combat.StepWeaponsForUnit(u, tick, s.Units, s.Vis, s.World, s.Econ, s.Catalog, rng.Global.Sim, rng.Global.Crt)
+				// Authoritative order: AimDispatch → COBReturn → WeaponFire [06 §3.3][GAP T15 C17]
+				if wsum.Dispatched {
+					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWeaponAimDispatch, Handle: h, Slot: wsum.DispatchSlot, WeaponID: wsum.DispatchWeaponID})
+				}
+				if wsum.ReturnSeen {
+					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceCOBReturn, Handle: h, Value: wsum.ReturnValue})
+				}
+				if fired := s.Combat.Count() - beforeCount; fired > 0 {
+					for i := beforeCount; i < len(s.Combat.Records); i++ {
+						s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWeaponFire, Handle: h, WeaponID: s.Combat.Records[i].WeaponID})
 					}
 				}
-				if hasWeapon {
-					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWeaponAimDispatch, Handle: h})
-				}
-				// COB return trace: check if any Aim returned this visit — use pendingAims removal as proxy? For now emit COBReturn per weapon if Ready transition happened
-				// WeaponFire trace: did we create projectile(s)?
-				if afterCount > beforeCount {
-					for i := beforeCount; i < afterCount; i++ {
-						if i >= 0 && i < len(s.Combat.Records) {
-							rec := s.Combat.Records[i]
-							s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWeaponFire, Handle: h, WeaponID: rec.WeaponID})
-						}
+				// Exactly-one synchronous COB drain per unit visit [04 §4.2][04 §4.6][GAP T15 C17].
+				// Combat drains only inside the Aim handshake; when it did not, this visit owns
+				// the drain so pending threads progress even without weapons or on non-turret arms.
+				if !wsum.Drained {
+					if vm := u.GetScript(); vm != nil {
+						vm.Drain(1)
 					}
-					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceCOBReturn, Handle: h})
-				} else if hasWeapon {
-					// Still emit COBReturn for sleeping/blocked Aim to preserve order
-					// Only emit if weapon step resulted in sleep — we can't easily detect without exposing pendingAims; emit conservatively for hasWeapon
-					// To avoid spurious traces, emit COBReturn only when weapon step may have dispatched, but we emit it once per unit with weapon
-					// The trace order remains WeaponAimDispatch -> COBReturn -> WeaponFire when fire occurs
 				}
-			} else {
-				// No combat: still need COB synchronous drain for pending threads [04 §4.2]
+			} else if u != nil {
+				// No weapon service for this unit: the visit still owns the COB drain [04 §4.2]
 				if vm := u.GetScript(); vm != nil {
 					vm.Drain(1)
-					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceCOBReturn, Handle: h})
 				}
 			}
-			// COB synchronous drain and pending-thread progression per unit [04 §4.2][GAP T15]
-			// If combat already drained for Aim handshake, avoid double drain by only draining when combat did not drain.
-			// Combat's StepWeaponsForUnit drains internally for Aim (one Drain(1)). We treat that as the authoritative drain for units with weapons.
-			// For units without weapons, we drained above. For units with weapons, we skip second drain to keep delta 1 [04 §4.6].
-			// Emit COBReturn already handled above.
 
 			// order resolve/pump per unit (PumpUnit) [04 §3.3]
 			if ordersPump != nil {
@@ -703,8 +793,27 @@ func (s *Session) authoritativeTick(tick uint32) {
 			}
 			// construction/worker action per unit (StepUnit) [05 "Factory production lifecycle"]
 			if s.Build != nil {
+				if tick < 200 && (h == 5 || h == 6 || h == 7) {
+					if qDbg2 := orders.QueueForUnit(u); qDbg2 != nil && qDbg2.LenPrimary() > 0 {
+						if hd2 := qDbg2.Head(); hd2 != nil {
+							fmt.Printf("DEBUG queue before construction tick %d h %d head %s BuildDef %s\n", tick, h, orders.DescriptorFor(hd2.ID).Name, hd2.BuildDefKey)
+						}
+					} else {
+						fmt.Printf("DEBUG queue before construction tick %d h %d empty\n", tick, h)
+					}
+				}
 				ctx := construction.TickContext{Tick: tick, World: s.Units, Economy: s.Econ, Terrain: s.World, Catalog: s.Catalog}
 				wres := s.Build.StepUnit(ctx, h)
+				if tick < 200 && (h == 5 || h == 6 || h == 7) {
+					fmt.Printf("DEBUG construction tick %d h %d DefKey %s Product %d Completed %v Err %v State %d\n", tick, h, wres.DefKey, wres.Product, wres.Completed, wres.Err, wres.State)
+					if qDbg := orders.QueueForUnit(u); qDbg != nil && qDbg.LenPrimary() > 0 {
+						if hd := qDbg.Head(); hd != nil {
+							fmt.Printf("DEBUG queue after construction tick %d head %s BuildDef %s Goal %d %d\n", tick, orders.DescriptorFor(hd.ID).Name, hd.BuildDefKey, int64(hd.GoalX.Raw()), int64(hd.GoalZ.Raw()))
+						}
+					} else {
+						fmt.Printf("DEBUG queue after construction tick %d empty\n", tick)
+					}
+				}
 				// Work admission trace when request recorded
 				if wres.Product != 0 || wres.DefKey != "" {
 					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWorkAdmission, Handle: h})
@@ -721,6 +830,36 @@ func (s *Session) authoritativeTick(tick uint32) {
 				mres := s.Movement.StepUnit(h, tick)
 				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceMovementStep, Handle: h, X: mres.DistToGoal, Value: 0})
 				_ = mres
+				// Arrival check for move orders: dist ≤2 world units [04 §3.5][P0-I03] strict thresholds.
+				if qArr := orders.QueueForUnit(u); qArr != nil && qArr.LenPrimary() > 0 {
+					if headArr := qArr.Head(); headArr != nil {
+						nameArr := orders.DescriptorFor(headArr.ID).Name
+						isMoveArr := nameArr == "Move_Ground" || nameArr == "VTOL_Move" || nameArr == "QMove" || nameArr == "Patrol" || nameArr == "QPatrol" || nameArr == "VTOL_Patrol" || nameArr == "RepairPatrol" || nameArr == "VTOL_RepairPatrol"
+						if isMoveArr {
+							if !(headArr.GoalX == 0 && headArr.GoalZ == 0 && headArr.Target == 0) {
+								dxArr := int64(headArr.GoalX) - int64(u.X)
+								dzArr := int64(headArr.GoalZ) - int64(u.Z)
+								const threshFixedArr = 2 * 65536
+								const thresh2Arr = int64(threshFixedArr) * int64(threshFixedArr)
+								dist2Arr := dxArr*dxArr + dzArr*dzArr
+								if dist2Arr <= thresh2Arr {
+									headArr.MoveState = orders.MoveArrived
+									headArr.PathStatus = 0
+									qArr.RemoveHead()
+									if routeArr := s.Movement.Routes[h]; routeArr != nil {
+										routeArr.Active = false
+										routeArr.Dirty = true
+									}
+									if schedArr := s.Movement.Scheduler; schedArr != nil {
+										schedArr.Cancel(h)
+									} else if s.Path != nil {
+										s.Path.Cancel(h)
+									}
+								}
+							}
+						}
+					}
+				}
 			}
 			// slot-end death, cleanup, corpse, occupancy, target invalidation (FinalizeDeath + vis unpublish + Feature.PlaceCorpse) [01 §4.4][04 §2.4]
 			if s.Units.NeedsDeathFinalization(h) {
@@ -746,19 +885,96 @@ func (s *Session) authoritativeTick(tick uint32) {
 				}
 				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceDeathFinalize, Handle: h, Value: int32(res.Cause)})
 			}
+			if tick < 10 {
+				if qDbg := orders.QueueForUnit(u); qDbg != nil {
+					fmt.Printf("DEBUG Visit end tick %d handle %d queue len %d\n", tick, h, qDbg.LenPrimary())
+				}
+			}
 		})
+	}
+	if tick < 200 {
+		if uDbg := s.Units.Unit(5); uDbg != nil {
+			if qDbg := orders.QueueForUnit(uDbg); qDbg != nil {
+				fmt.Printf("DEBUG after Visit loop tick %d handle5 queue len %d\n", tick, qDbg.LenPrimary())
+				if qDbg.LenPrimary() > 0 {
+					if hd := qDbg.Head(); hd != nil {
+						fmt.Printf("DEBUG after Visit loop head %s BuildDef %s\n", orders.DescriptorFor(hd.ID).Name, hd.BuildDefKey)
+					}
+				}
+			}
+		}
 	}
 	if s.Movement != nil {
 		s.Movement.EndTick(tick)
+	}
+	if tick < 200 {
+		if uDbg := s.Units.Unit(5); uDbg != nil {
+			if qDbg := orders.QueueForUnit(uDbg); qDbg != nil {
+				fmt.Printf("DEBUG after EndTick tick %d handle5 queue len %d\n", tick, qDbg.LenPrimary())
+				if qDbg.LenPrimary() > 0 {
+					if hd := qDbg.Head(); hd != nil {
+						fmt.Printf("DEBUG after EndTick head %s BuildDef %s\n", orders.DescriptorFor(hd.ID).Name, hd.BuildDefKey)
+					}
+				}
+			} else {
+				fmt.Printf("DEBUG after EndTick tick %d handle5 queue nil\n", tick)
+			}
+		} else {
+			fmt.Printf("DEBUG after EndTick tick %d handle5 unit nil\n", tick)
+		}
 	}
 
 	// 5 Projectile pool update and impact (TickProjectiles + interceptor guidance/detonation) [06 §5][06 §11.2]
 	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceProjectileStep})
 	// Interceptor guidance pre-step before motion [06 §11.2]
 	s.interceptorGuidanceTick()
+	// Snapshot hostile health before impact for AI milestone [P0-07] HostileDamageObserved
+	var beforeHealth map[pool.Handle]int32
+	if s.Combat != nil && len(s.AI) > 0 && s.Units != nil {
+		beforeHealth = make(map[pool.Handle]int32, s.Units.Used())
+		for _, u := range s.Units.IterSliced() {
+			if u == nil {
+				continue
+			}
+			beforeHealth[u.Handle] = u.Health
+		}
+		// Also include dead-but-recently-damaged? Before we only have alive, but after damage a unit may die and be removed from IterSliced.
+		// To capture death, also snapshot via direct handle scan for any unit with health < MaxHealth
+		// Use Unit() for handles up to capacity via Iter()
+		for _, u := range s.Units.Iter() {
+			if u == nil {
+				continue
+			}
+			if _, ok := beforeHealth[u.Handle]; !ok {
+				beforeHealth[u.Handle] = u.Health
+			}
+		}
+	}
 	if s.Combat != nil {
 		s.Combat.TickProjectiles(tick, s.Units, s.World, s.Features, s.Vis, s.Econ, s.Catalog, rng.Global.Sim, rng.Global.Crt)
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceProjectileImpact})
+		// Notify AI of hostile damage via normal combat [P0-07] HostileDamageObserved
+		if beforeHealth != nil && len(s.AI) > 0 {
+			for h, before := range beforeHealth {
+				u := s.Units.Unit(h)
+				if u == nil {
+					continue
+				}
+				if u.Health >= before {
+					continue
+				}
+				// Health decreased: damage occurred
+				for _, mgr := range s.AI {
+					if mgr == nil {
+						continue
+					}
+					mgr.ObserveHostileDamage(tick, h, s.Units)
+				}
+			}
+			// Also check for newly dead units that were not in beforeHealth because they were alive but we captured, but after are dead and still have health < before
+			// The above loop covers them via beforeHealth entry, since we captured before health, and after health is -400 for dead, so it will be detected.
+			// Additionally, check for any unit that was not in beforeHealth but is now dead with health < MaxHealth (e.g., newly created nanoframe? not hostile)
+		}
 	}
 	s.interceptorDetonationTick()
 
@@ -917,8 +1133,8 @@ func (s *Session) authoritativeTick(tick uint32) {
 
 	// 10 AI auxiliary deadlines [08 "Established AI-facing data and rooted planner"] — managers already ticked via player traversal beforeDeadline;
 	// auxiliary tasks with later deadlines (+150/+300 etc.) are also handled inside same Tick via runDueTasks [P0-02].
-	// To preserve deterministic commit, emit one per tick
-	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceVictoryLatch}) // placeholder for AI auxiliary trace ordering
+	// Emit the stage marker for the trace contract; VictoryLatch is reserved for actual result latches.
+	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIAux})
 
 	// 11 deterministic commit/barrier [01 §4.4] PhaseBarrier + ledger cleanup
 	if s.Units != nil {
@@ -1068,6 +1284,17 @@ func (s *Session) publishSnapshot(tick uint32) {
 				BurnTicks: inst.BurnTicks,
 				FootX:     int8(inst.FootprintX),
 				FootZ:     int8(inst.FootprintZ),
+
+				Filename:    inst.Def.Filename,
+				SeqName:     inst.Def.SeqName,
+				SeqNameShad: inst.Def.SeqNameShad,
+				Animating:   inst.Def.Animating != 0,
+				AnimTrans:   inst.Def.AnimTrans != 0,
+				ShadTrans:   inst.Def.ShadTrans != 0,
+				Blocking:    inst.Def.Blocking,
+				Reclaimable: inst.Def.Reclaimable,
+				Height:      inst.Def.Height,
+				Geothermal:  inst.Def.Geothermal,
 			}
 			if fv.Model == "" {
 				fv.Model = inst.Def.Filename
@@ -2115,6 +2342,17 @@ func (s *Session) RegisterAll() {
 						BurnTicks: inst.BurnTicks,
 						FootX:     int8(inst.FootprintX),
 						FootZ:     int8(inst.FootprintZ),
+
+						Filename:    inst.Def.Filename,
+						SeqName:     inst.Def.SeqName,
+						SeqNameShad: inst.Def.SeqNameShad,
+						Animating:   inst.Def.Animating != 0,
+						AnimTrans:   inst.Def.AnimTrans != 0,
+						ShadTrans:   inst.Def.ShadTrans != 0,
+						Blocking:    inst.Def.Blocking,
+						Reclaimable: inst.Def.Reclaimable,
+						Height:      inst.Def.Height,
+						Geothermal:  inst.Def.Geothermal,
 					}
 					if fv.Model == "" {
 						fv.Model = inst.Def.Filename

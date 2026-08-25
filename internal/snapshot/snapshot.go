@@ -60,10 +60,10 @@ type ProjectileView struct {
 	X, Y, Z  numeric.Fixed
 	WeaponID int32
 	Shooter  pool.Handle
-	Model    string      // weapon model for 3DO draw [02 "Weapon record"] model
-	Yaw      uint16      // orientation yaw [06 §5.1] I2
-	Pitch    uint16      // orientation pitch [06 §5.1]
-	Flags    uint32      // reserved
+	Model    string // weapon model for 3DO draw [02 "Weapon record"] model
+	Yaw      uint16 // orientation yaw [06 §5.1] I2
+	Pitch    uint16 // orientation pitch [06 §5.1]
+	Flags    uint32 // reserved
 }
 
 // FeatureView is the presentation view of one live feature [05 "Feature instance and terrain cell"].
@@ -80,6 +80,20 @@ type FeatureView struct {
 	IsSinking    bool
 	BurnTicks    int32
 	FootX, FootZ int8
+
+	// Sprite/GAF asset wiring — clean-room for Great Divide coverage.
+	// Object present => 3DO path via Model; otherwise Filename + SeqName drive GAF.
+	// See research/features/feature_rendering.md §2.
+	Filename    string // GAF filename stem, e.g. "trees" -> anims/trees.gaf [02 "Feature record"]
+	SeqName     string // idle sequence name, e.g. "leaf1" [02 "Feature record"]
+	SeqNameShad string // shadow sequence [02 "Feature record"]
+	Animating   bool   // animating flag drives cursor stepping [05 "Feature catalog and placement"]
+	AnimTrans   bool   // translucent normal blit (0x0004) [05 "Feature catalog and placement"]
+	ShadTrans   bool   // translucent shadow blit (0x0008) [05 "Feature catalog and placement"]
+	Blocking    bool   // blocking=1 => impassable footprint [02 "Feature record"] [04 §6.2]
+	Reclaimable bool   // reclaimable gate [02 "Feature record"]
+	Height      int32  // feature height in pixels, gates fog/memory [03 §5.1] tall >=10 [05]
+	Geothermal  bool   // geothermal=1 => YardMap 'G' acceptance [05 "Geothermal requirement"]
 }
 
 // EffectView is the presentation view of one fixed effect / strip object [03 §1] C5.

@@ -180,17 +180,26 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					}
 				}
 			}
-			// Features: 3DO feature models with fallback markers [05 "Feature instance"] [fmt 3do].
+			// Features: 3DO feature models + GAF sprites with shadows, Y-sorted [05 "Feature instance"] [fmt 3do][03 §5.1][research/features/feature_rendering.md §3].
 			if len(cur.Features) > 0 {
-				prevFeat := make(map[int]int)
-				if len(prev.Features) == len(cur.Features) {
-					for i := range prev.Features {
-						prevFeat[i] = i
-					}
+				// Build interpolation map keyed by DefName+CX/CZ for stable matching when lengths differ.
+				type featKey struct {
+					name   string
+					cx, cz int32
 				}
-				for i, cvf := range cur.Features {
+				prevByKey := make(map[featKey]int, len(prev.Features))
+				for i, pv := range prev.Features {
+					prevByKey[featKey{pv.DefName, pv.CX, pv.CZ}] = i
+				}
+				// Collect drawable with interpolated positions and screen Y for painter order [03 §1] Y-bucket.
+				type drawable struct {
+					view   snapshot.FeatureView
+					sx, sy int32
+				}
+				drawList := make([]drawable, 0, len(cur.Features))
+				for _, cvf := range cur.Features {
 					var pvf snapshot.FeatureView
-					if idx, ok2 := prevFeat[i]; ok2 {
+					if idx, ok2 := prevByKey[featKey{cvf.DefName, cvf.CX, cvf.CZ}]; ok2 && idx < len(prev.Features) {
 						pvf = prev.Features[idx]
 					} else {
 						pvf = cvf
@@ -200,27 +209,99 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					fz := snapshot.Lerp(pvf.Z, cvf.Z, alpha)
 					interp := cvf
 					interp.X, interp.Y, interp.Z = fx, fy, fz
-					if interp.Model != "" && c.drawFeatureModel(interp) {
+					sx, sy := c.featureScreenPos(interp)
+					drawList = append(drawList, drawable{view: interp, sx: sx, sy: sy})
+				}
+				// Y-sort for deterministic painter order [03 §1] C3 per-row buckets.
+				// Stable sort by screen Y then DefName for tie.
+				for i := 0; i < len(drawList)-1; i++ {
+					for j := i + 1; j < len(drawList); j++ {
+						if drawList[j].sy < drawList[i].sy || (drawList[j].sy == drawList[i].sy && drawList[j].view.DefName < drawList[i].view.DefName) {
+							drawList[i], drawList[j] = drawList[j], drawList[i]
+						}
+					}
+				}
+				for _, d := range drawList {
+					cvf := d.view
+					// 3DO path for object features (corpses, walls) [fmt 3do][02 "Feature record"] — try first.
+					// Object present => Model is Object; filename case uses GAF path instead.
+					is3DO := cvf.Model != "" && cvf.Filename == "" || (cvf.Filename == "" && cvf.SeqName == "")
+					// Heuristic: if Filename empty and Model non-empty and SeqName empty => 3DO; otherwise sprite.
+					// For Great Divide, sprite features have Filename set and SeqName populated.
+					if is3DO && cvf.Model != "" {
+						if c.drawFeatureModel(cvf) {
+							continue
+						}
+					}
+					// Sprite GAF path [03 §5.1] [research/features/feature_rendering.md §2].
+					// Resolve normal and shadow frames; shadow draws first at same anchor [04 §6A610].
+					normalFrame := c.featureFrameFor(cvf, false)
+					shadowFrame := c.featureFrameFor(cvf, true)
+					// Geothermal 1x1 invisible marker (geotherm.gaf 1x1) skip drawing to avoid single-pixel noise
+					// unless its footprint suggests it should be visible as vent. Keep but skip if both frames 1x1.
+					if cvf.Geothermal && normalFrame != nil && normalFrame.Width == 1 && normalFrame.Height == 1 && (shadowFrame == nil || (shadowFrame.Width == 1 && shadowFrame.Height == 1)) {
+						// Draw as small metal-deposit tinted dot for visibility on Great Divide
+						// rather than invisible; use reclaimable fallback color encoding [02 "Feature record"].
+						sx, sy := d.sx, d.sy
+						xp := int(sx)
+						yp := int(sy)
+						if xp >= 0 && xp < w && yp >= 0 && yp < h {
+							// Vent marker: palette index for geothermal (yellow-ish)
+							c.indexed[yp*w+xp] = 48
+						}
 						continue
 					}
-					sx, sy := c.cam.WorldToScreen(fx, fy, fz)
+					drawn := false
+					if shadowFrame != nil {
+						// Shadow at same anchor, translucent via ShadTrans [05 "Feature catalog and placement"].
+						dstX := int(d.sx) - int(shadowFrame.XOffset)
+						dstY := int(d.sy) - int(shadowFrame.YOffset)
+						c.blitGAFFrame(shadowFrame, dstX, dstY, true, cvf.ShadTrans)
+						drawn = true
+					}
+					if normalFrame != nil {
+						dstX := int(d.sx) - int(normalFrame.XOffset)
+						dstY := int(d.sy) - int(normalFrame.YOffset)
+						c.blitGAFFrame(normalFrame, dstX, dstY, false, cvf.AnimTrans)
+						drawn = true
+					}
+					if drawn {
+						continue
+					}
+					// Fallback rectangle: footprint-correct tinted body when GAF missing [04 §6.2][05 "Feature catalog and placement"].
+					// Colors encode reclaimability/blocking for diagnostics on Great Divide.
+					sx, sy := d.sx, d.sy
+					paletteIdx := byte(96) // default tree green
+					if cvf.Geothermal {
+						paletteIdx = 48
+					} else if !cvf.Reclaimable && cvf.Blocking {
+						paletteIdx = 72 // blocking non-reclaimable (e.g. hurt rock)
+					} else if !cvf.Reclaimable && !cvf.Blocking {
+						paletteIdx = 40 // metal deposit non-blocking (traversable)
+					} else if cvf.IsBurning {
+						paletteIdx = 200 // burnt
+					}
 					if cvf.FootX > 0 && cvf.FootZ > 0 {
 						const pxPerCell = 16
 						hw := int(cvf.FootX) * pxPerCell / 2
 						hh := int(cvf.FootZ) * pxPerCell / 2
-						if hw < 3 { hw = 3 }
-						if hh < 3 { hh = 3 }
+						if hw < 3 {
+							hw = 3
+						}
+						if hh < 3 {
+							hh = 3
+						}
 						for dy := -hh; dy <= hh; dy++ {
 							for dx := -hw; dx <= hw; dx++ {
 								xp := int(sx) + dx
 								yp := int(sy) + dy
-								if xp < 0 || xp >= w || yp < 0 || yp >= h { continue }
+								if xp < 0 || xp >= w || yp < 0 || yp >= h {
+									continue
+								}
 								if dx == -hw || dx == hw || dy == -hh || dy == hh {
 									c.indexed[yp*w+xp] = 40
-								} else if cvf.IsBurning {
-									c.indexed[yp*w+xp] = 200
 								} else {
-									c.indexed[yp*w+xp] = 96
+									c.indexed[yp*w+xp] = paletteIdx
 								}
 							}
 						}
@@ -229,12 +310,13 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 							for dx := -1; dx <= 1; dx++ {
 								xp := int(sx) + dx
 								yp := int(sy) + dy
-								if xp < 0 || xp >= w || yp < 0 || yp >= h { continue }
-								c.indexed[yp*w+xp] = 96
+								if xp < 0 || xp >= w || yp < 0 || yp >= h {
+									continue
+								}
+								c.indexed[yp*w+xp] = paletteIdx
 							}
 						}
 					}
-					_ = pvf
 				}
 			}
 		}
@@ -256,11 +338,21 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 			ops := render.BuildFogOps(fc, c.cam, c.cam.ViewW, c.cam.ViewH, cur.Fog.W, cur.Fog.H, c.pal, false)
 			for _, op := range ops {
 				x0, y0, x1, y1 := op.ScreenX0, op.ScreenY0, op.ScreenX1, op.ScreenY1
-				if x0 < 0 { x0 = 0 }
-				if y0 < 0 { y0 = 0 }
-				if x1 > int32(w) { x1 = int32(w) }
-				if y1 > int32(h) { y1 = int32(h) }
-				if x0 >= x1 || y0 >= y1 { continue }
+				if x0 < 0 {
+					x0 = 0
+				}
+				if y0 < 0 {
+					y0 = 0
+				}
+				if x1 > int32(w) {
+					x1 = int32(w)
+				}
+				if y1 > int32(h) {
+					y1 = int32(h)
+				}
+				if x0 >= x1 || y0 >= y1 {
+					continue
+				}
 				// TODO(question): GAF fog frames (1..14) currently fill solid dark; retail GAF blit not yet wired.
 				// Patterned fog uses checker.
 				for py := y0; py < y1; py++ {

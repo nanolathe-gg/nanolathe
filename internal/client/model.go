@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"math"
 	"os"
-		"strings"
+	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
@@ -87,8 +87,8 @@ type pieceState struct {
 }
 
 type xformNode struct {
-	t           [3]numeric.Fixed
-	ax, ay, az  uint16
+	t          [3]numeric.Fixed
+	ax, ay, az uint16
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -438,7 +438,7 @@ func (c *Client) drawUnitModel(v snapshot.UnitView, sx, sy int32) bool {
 	_ = groundY // shadow ground height used for projection [03 §5.3]
 	if c.terrain != nil {
 		if h := c.terrain.HeightAt(v.X, v.Z); h != numeric.Fixed(-1) {
-			groundY = int32(h>>16)
+			groundY = int32(h >> 16)
 		}
 	}
 	owner := int(v.Owner) % 10
@@ -1119,249 +1119,431 @@ func pointInTri(t *screenTri, px, py int32) bool {
 
 // drawFeatureModel draws a 3D feature model at its world position [fmt 3do][03 §2.4].
 func (c *Client) drawFeatureModel(f snapshot.FeatureView) bool {
-    if f.Model == "" {
-        return false
-    }
-    m := c.unitModelFor(f.Model)
-    if m == nil || c.cam == nil {
-        return false
-    }
-    n := len(m.pieces)
-    states := make([]pieceState, n)
-    ux, uy, uz := int32(f.X>>16), int32(f.Y>>16), int32(f.Z>>16)
-    var tris []screenTri
-    for pi, piece := range m.pieces {
-        chain := c.buildPieceChain(m, pi, states)
-        worldVerts := make([][3]numeric.Fixed, len(piece.vertices))
-        modelVertsF := make([][3]float64, len(piece.vertices))
-        for vi, lv := range piece.vertices {
-            mp := c.applyChain(lv, chain)
-            worldVerts[vi] = [3]numeric.Fixed{mp[0].Add(numeric.Fixed(int64(ux) << 16)), mp[1].Add(numeric.Fixed(int64(uy) << 16)), mp[2].Add(numeric.Fixed(int64(uz) << 16))}
-            modelVertsF[vi] = [3]float64{float64(mp[0].Raw())/65536, float64(mp[1].Raw())/65536, float64(mp[2].Raw())/65536}
-        }
-        normAcc := make([][3]float64, len(piece.vertices))
-        normCnt := make([]int, len(piece.vertices))
-        for _, pr := range piece.prims {
-            if pr.isSelection { continue }
-            np := len(pr.indices)
-            if np < 3 { continue }
-            if !pr.hasTex && np != 4 { continue }
-            if np >= 3 && len(pr.indices) >= 3 {
-                aIdx := int(pr.indices[0]); bIdx := int(pr.indices[1]); cIdx := int(pr.indices[2])
-                if aIdx < len(modelVertsF) && bIdx < len(modelVertsF) && cIdx < len(modelVertsF) {
-                    av, bv, cv := modelVertsF[aIdx], modelVertsF[bIdx], modelVertsF[cIdx]
-                    ax, ay, az := bv[0]-av[0], bv[1]-av[1], bv[2]-av[2]
-                    bx, by, bz := bv[0]-cv[0], bv[1]-cv[1], bv[2]-cv[2]
-                    nx := ay*bz - az*by
-                    ny := az*bx - ax*bz
-                    nz := ax*by - ay*bx
-                    if l := math.Sqrt(nx*nx + ny*ny + nz*nz); l > 1e-9 { nx, ny, nz = nx/l, ny/l, nz/l } else { nx, ny, nz = 0, 1, 0 }
-                    for _, vi := range pr.indices { if int(vi) < len(normAcc) { normAcc[vi][0] += nx; normAcc[vi][1] += ny; normAcc[vi][2] += nz; normCnt[vi]++ } }
-                }
-            }
-        }
-        vertRows := make([]int, len(piece.vertices))
-        for vi := range piece.vertices {
-            cnt := normCnt[vi]
-            if cnt == 0 { vertRows[vi] = 15; continue }
-            nx := normAcc[vi][0]/float64(cnt); ny := normAcc[vi][1]/float64(cnt); nz := normAcc[vi][2]/float64(cnt)
-            if l := math.Sqrt(nx*nx+ny*ny+nz*nz); l > 1e-9 { nx, ny, nz = nx/l, ny/l, nz/l }
-            d := nx*lightDir[0]+ny*lightDir[1]+nz*lightDir[2]
-            vertRows[vi] = int(d*5.0) & 31
-        }
-        for _, pr := range piece.prims {
-            if pr.isSelection { continue }
-            np := len(pr.indices)
-            if np < 3 { continue }
-            if !pr.hasTex && np != 4 { continue }
-            var frame *formats.GAFFrame; var entry *formats.GAFEntry; isTeam := false
-            if pr.hasTex {
-                switch pr.ref.kind {
-                case texAnimated: frame = animatedFrame(pr.ref, c.animClock)
-                case texTeam: frame = pr.ref.frame; entry = pr.ref.entry; isTeam = true
-                default: frame = pr.ref.frame
-                }
-            }
-            uvs := [4][2]float64{{0,0},{1,0},{1,1},{0,1}}
-            ngonUV := np>4
-            ua, ub := 0,2; var aMin,aSpan,bMin,bSpan float64
-            if ngonUV {
-                var lo,hi [3]float64; first:=true
-                for _, vi := range pr.indices {
-                    if int(vi) >= len(modelVertsF) { continue }
-                    mv:=modelVertsF[vi]
-                    if first {lo,hi=mv,mv; first=false; continue}
-                    for a:=0;a<3;a++{ if mv[a]<lo[a]{lo[a]=mv[a]}; if mv[a]>hi[a]{hi[a]=mv[a]} }
-                }
-                var ext [3]float64; for a:=0;a<3;a++{ext[a]=hi[a]-lo[a]}
-                ua,ub=0,1; if ext[1]>=ext[0] && ext[1]>=ext[2]{ua,ub=1,2} else if ext[2]>=ext[0] && ext[2]>=ext[1]{ua,ub=0,2}
-                if ext[ua]>ext[ub]{ua,ub=ub,ua}
-                aMin,aSpan=lo[ua],ext[ua]; bMin,bSpan=lo[ub],ext[ub]
-                if aSpan==0{aSpan=1}; if bSpan==0{bSpan=1}
-            }
-            for k:=1;k+1<np;k++{
-                idx0:=int(pr.indices[0]); idx1:=int(pr.indices[k]); idx2:=int(pr.indices[k+1])
-                if idx0>=len(worldVerts)||idx1>=len(worldVerts)||idx2>=len(worldVerts){continue}
-                var st screenTri
-                st.color=pr.color; st.order=pr.order
-                st.row=[3]float64{float64(vertRows[idx0]),float64(vertRows[idx1]),float64(vertRows[idx2])}
-                if isTeam{st.entry=entry; st.team=true}
-                if pr.hasTex{
-                    st.frame=frame
-                    uvFor:=func(vi,cidx int)[2]float64{
-                        if ngonUV{mv:=modelVertsF[vi]; return [2]float64{(mv[ua]-aMin)/aSpan,(mv[ub]-bMin)/bSpan}}
-                        return uvs[cidx]
-                    }
-                    st.u[0],st.v[0]=uvFor(idx0,0)[0],uvFor(idx0,0)[1]
-                    st.u[1],st.v[1]=uvFor(idx1,k)[0],uvFor(idx1,k)[1]
-                    st.u[2],st.v[2]=uvFor(idx2,k+1)[0],uvFor(idx2,k+1)[1]
-                }
-                for i,vi:=range []int{idx0,idx1,idx2}{
-                    wv:=worldVerts[vi]
-                    wx:=int32(wv[0]>>16); wy:=int32(wv[1]>>16); wz:=int32(wv[2]>>16)
-                    px:=wx - c.cam.X + camera.OriginX
-                    py:=wz - (wy>>1) - c.cam.Z + camera.OriginY
-                    st.x[i],st.y[i]=px,py
-                    st.depth+=py
-                }
-                st.depth/=3
-                tris=append(tris,st)
-            }
-        }
-    }
-    for _, t := range tris {
-        if t.frame != nil {
-            frame:=t.frame
-            if frame != nil { c.blitTexturedTri(&t, frame); continue }
-        }
-        if f.IsSinking { c.fillTriNanoframe(&t, t.color); continue }
-        c.fillTri(&t, t.color)
-    }
-    return true
+	if f.Model == "" {
+		return false
+	}
+	m := c.unitModelFor(f.Model)
+	if m == nil || c.cam == nil {
+		return false
+	}
+	n := len(m.pieces)
+	states := make([]pieceState, n)
+	ux, uy, uz := int32(f.X>>16), int32(f.Y>>16), int32(f.Z>>16)
+	var tris []screenTri
+	for pi, piece := range m.pieces {
+		chain := c.buildPieceChain(m, pi, states)
+		worldVerts := make([][3]numeric.Fixed, len(piece.vertices))
+		modelVertsF := make([][3]float64, len(piece.vertices))
+		for vi, lv := range piece.vertices {
+			mp := c.applyChain(lv, chain)
+			worldVerts[vi] = [3]numeric.Fixed{mp[0].Add(numeric.Fixed(int64(ux) << 16)), mp[1].Add(numeric.Fixed(int64(uy) << 16)), mp[2].Add(numeric.Fixed(int64(uz) << 16))}
+			modelVertsF[vi] = [3]float64{float64(mp[0].Raw()) / 65536, float64(mp[1].Raw()) / 65536, float64(mp[2].Raw()) / 65536}
+		}
+		normAcc := make([][3]float64, len(piece.vertices))
+		normCnt := make([]int, len(piece.vertices))
+		for _, pr := range piece.prims {
+			if pr.isSelection {
+				continue
+			}
+			np := len(pr.indices)
+			if np < 3 {
+				continue
+			}
+			if !pr.hasTex && np != 4 {
+				continue
+			}
+			if np >= 3 && len(pr.indices) >= 3 {
+				aIdx := int(pr.indices[0])
+				bIdx := int(pr.indices[1])
+				cIdx := int(pr.indices[2])
+				if aIdx < len(modelVertsF) && bIdx < len(modelVertsF) && cIdx < len(modelVertsF) {
+					av, bv, cv := modelVertsF[aIdx], modelVertsF[bIdx], modelVertsF[cIdx]
+					ax, ay, az := bv[0]-av[0], bv[1]-av[1], bv[2]-av[2]
+					bx, by, bz := bv[0]-cv[0], bv[1]-cv[1], bv[2]-cv[2]
+					nx := ay*bz - az*by
+					ny := az*bx - ax*bz
+					nz := ax*by - ay*bx
+					if l := math.Sqrt(nx*nx + ny*ny + nz*nz); l > 1e-9 {
+						nx, ny, nz = nx/l, ny/l, nz/l
+					} else {
+						nx, ny, nz = 0, 1, 0
+					}
+					for _, vi := range pr.indices {
+						if int(vi) < len(normAcc) {
+							normAcc[vi][0] += nx
+							normAcc[vi][1] += ny
+							normAcc[vi][2] += nz
+							normCnt[vi]++
+						}
+					}
+				}
+			}
+		}
+		vertRows := make([]int, len(piece.vertices))
+		for vi := range piece.vertices {
+			cnt := normCnt[vi]
+			if cnt == 0 {
+				vertRows[vi] = 15
+				continue
+			}
+			nx := normAcc[vi][0] / float64(cnt)
+			ny := normAcc[vi][1] / float64(cnt)
+			nz := normAcc[vi][2] / float64(cnt)
+			if l := math.Sqrt(nx*nx + ny*ny + nz*nz); l > 1e-9 {
+				nx, ny, nz = nx/l, ny/l, nz/l
+			}
+			d := nx*lightDir[0] + ny*lightDir[1] + nz*lightDir[2]
+			vertRows[vi] = int(d*5.0) & 31
+		}
+		for _, pr := range piece.prims {
+			if pr.isSelection {
+				continue
+			}
+			np := len(pr.indices)
+			if np < 3 {
+				continue
+			}
+			if !pr.hasTex && np != 4 {
+				continue
+			}
+			var frame *formats.GAFFrame
+			var entry *formats.GAFEntry
+			isTeam := false
+			if pr.hasTex {
+				switch pr.ref.kind {
+				case texAnimated:
+					frame = animatedFrame(pr.ref, c.animClock)
+				case texTeam:
+					frame = pr.ref.frame
+					entry = pr.ref.entry
+					isTeam = true
+				default:
+					frame = pr.ref.frame
+				}
+			}
+			uvs := [4][2]float64{{0, 0}, {1, 0}, {1, 1}, {0, 1}}
+			ngonUV := np > 4
+			ua, ub := 0, 2
+			var aMin, aSpan, bMin, bSpan float64
+			if ngonUV {
+				var lo, hi [3]float64
+				first := true
+				for _, vi := range pr.indices {
+					if int(vi) >= len(modelVertsF) {
+						continue
+					}
+					mv := modelVertsF[vi]
+					if first {
+						lo, hi = mv, mv
+						first = false
+						continue
+					}
+					for a := 0; a < 3; a++ {
+						if mv[a] < lo[a] {
+							lo[a] = mv[a]
+						}
+						if mv[a] > hi[a] {
+							hi[a] = mv[a]
+						}
+					}
+				}
+				var ext [3]float64
+				for a := 0; a < 3; a++ {
+					ext[a] = hi[a] - lo[a]
+				}
+				ua, ub = 0, 1
+				if ext[1] >= ext[0] && ext[1] >= ext[2] {
+					ua, ub = 1, 2
+				} else if ext[2] >= ext[0] && ext[2] >= ext[1] {
+					ua, ub = 0, 2
+				}
+				if ext[ua] > ext[ub] {
+					ua, ub = ub, ua
+				}
+				aMin, aSpan = lo[ua], ext[ua]
+				bMin, bSpan = lo[ub], ext[ub]
+				if aSpan == 0 {
+					aSpan = 1
+				}
+				if bSpan == 0 {
+					bSpan = 1
+				}
+			}
+			for k := 1; k+1 < np; k++ {
+				idx0 := int(pr.indices[0])
+				idx1 := int(pr.indices[k])
+				idx2 := int(pr.indices[k+1])
+				if idx0 >= len(worldVerts) || idx1 >= len(worldVerts) || idx2 >= len(worldVerts) {
+					continue
+				}
+				var st screenTri
+				st.color = pr.color
+				st.order = pr.order
+				st.row = [3]float64{float64(vertRows[idx0]), float64(vertRows[idx1]), float64(vertRows[idx2])}
+				if isTeam {
+					st.entry = entry
+					st.team = true
+				}
+				if pr.hasTex {
+					st.frame = frame
+					uvFor := func(vi, cidx int) [2]float64 {
+						if ngonUV {
+							mv := modelVertsF[vi]
+							return [2]float64{(mv[ua] - aMin) / aSpan, (mv[ub] - bMin) / bSpan}
+						}
+						return uvs[cidx]
+					}
+					st.u[0], st.v[0] = uvFor(idx0, 0)[0], uvFor(idx0, 0)[1]
+					st.u[1], st.v[1] = uvFor(idx1, k)[0], uvFor(idx1, k)[1]
+					st.u[2], st.v[2] = uvFor(idx2, k+1)[0], uvFor(idx2, k+1)[1]
+				}
+				for i, vi := range []int{idx0, idx1, idx2} {
+					wv := worldVerts[vi]
+					wx := int32(wv[0] >> 16)
+					wy := int32(wv[1] >> 16)
+					wz := int32(wv[2] >> 16)
+					px := wx - c.cam.X + camera.OriginX
+					py := wz - (wy >> 1) - c.cam.Z + camera.OriginY
+					st.x[i], st.y[i] = px, py
+					st.depth += py
+				}
+				st.depth /= 3
+				tris = append(tris, st)
+			}
+		}
+	}
+	for _, t := range tris {
+		if t.frame != nil {
+			frame := t.frame
+			if frame != nil {
+				c.blitTexturedTri(&t, frame)
+				continue
+			}
+		}
+		if f.IsSinking {
+			c.fillTriNanoframe(&t, t.color)
+			continue
+		}
+		c.fillTri(&t, t.color)
+	}
+	return true
 }
-
-
 
 // drawProjectileModel draws a projectile's 3DO model with yaw/pitch offsets [03 §5.2].
 func (c *Client) drawProjectileModel(p snapshot.ProjectileView, alpha float32) bool {
-    if p.Model == "" {
-        return false
-    }
-    m := c.unitModelFor(p.Model)
-    if m == nil || c.cam == nil {
-        return false
-    }
-    n := len(m.pieces)
-    states := make([]pieceState, n)
-    root := -1
-    for i, pc := range m.pieces { if pc.parent == -1 { root = i; break } }
-    if root >= 0 {
-        states[root].rotY += p.Yaw + 0x8000
-        states[root].rotX += p.Pitch + 0x8000
-    }
-    x, y, z := int32(p.X>>16), int32(p.Y>>16), int32(p.Z>>16)
-    var tris []screenTri
-    for pi, piece := range m.pieces {
-        chain := c.buildPieceChain(m, pi, states)
-        worldVerts := make([][3]numeric.Fixed, len(piece.vertices))
-        modelVertsF := make([][3]float64, len(piece.vertices))
-        for vi, lv := range piece.vertices {
-            mp := c.applyChain(lv, chain)
-            worldVerts[vi] = [3]numeric.Fixed{mp[0].Add(numeric.Fixed(int64(x)<<16)), mp[1].Add(numeric.Fixed(int64(y)<<16)), mp[2].Add(numeric.Fixed(int64(z)<<16))}
-            modelVertsF[vi] = [3]float64{float64(mp[0].Raw())/65536, float64(mp[1].Raw())/65536, float64(mp[2].Raw())/65536}
-        }
-        normAcc := make([][3]float64, len(piece.vertices)); normCnt := make([]int, len(piece.vertices))
-        for _, pr := range piece.prims {
-            if pr.isSelection { continue }
-            np := len(pr.indices); if np<3 { continue }
-            if !pr.hasTex && np!=4 { continue }
-            if np>=3 {
-                aIdx:=int(pr.indices[0]); bIdx:=int(pr.indices[1]); cIdx:=int(pr.indices[2])
-                if aIdx < len(modelVertsF) && bIdx < len(modelVertsF) && cIdx < len(modelVertsF) {
-                    av,bv,cv := modelVertsF[aIdx], modelVertsF[bIdx], modelVertsF[cIdx]
-                    ax,ay,az := bv[0]-av[0], bv[1]-av[1], bv[2]-av[2]
-                    bx,by,bz := bv[0]-cv[0], bv[1]-cv[1], bv[2]-cv[2]
-                    nx:=ay*bz - az*by; ny:=az*bx - ax*bz; nz:=ax*by - ay*bx
-                    if l:=math.Sqrt(nx*nx+ny*ny+nz*nz); l>1e-9 { nx,ny,nz=nx/l,ny/l,nz/l } else { nx,ny,nz=0,1,0 }
-                    for _, vi := range pr.indices { if int(vi) < len(normAcc) { normAcc[vi][0]+=nx; normAcc[vi][1]+=ny; normAcc[vi][2]+=nz; normCnt[vi]++ } }
-                }
-            }
-        }
-        vertRows:=make([]int, len(piece.vertices))
-        for vi:=range piece.vertices{
-            cnt:=normCnt[vi]; if cnt==0{vertRows[vi]=15; continue}
-            nx:=normAcc[vi][0]/float64(cnt); ny:=normAcc[vi][1]/float64(cnt); nz:=normAcc[vi][2]/float64(cnt)
-            if l:=math.Sqrt(nx*nx+ny*ny+nz*nz); l>1e-9{nx,ny,nz=nx/l,ny/l,nz/l}
-            d:=nx*lightDir[0]+ny*lightDir[1]+nz*lightDir[2]
-            vertRows[vi]=int(d*5.0)&31
-        }
-        for _, pr := range piece.prims{
-            if pr.isSelection{continue}
-            np:=len(pr.indices); if np<3||(!pr.hasTex&&np!=4){continue}
-            var frame *formats.GAFFrame; var entry *formats.GAFEntry; isTeam:=false
-            if pr.hasTex{
-                switch pr.ref.kind{
-                case texAnimated: frame=animatedFrame(pr.ref,c.animClock)
-                case texTeam: frame=pr.ref.frame; entry=pr.ref.entry; isTeam=true
-                default: frame=pr.ref.frame
-                }
-            }
-            uvs:=[4][2]float64{{0,0},{1,0},{1,1},{0,1}}
-            ngonUV:=np>4; ua,ub:=0,2; var aMin,aSpan,bMin,bSpan float64
-            if ngonUV{
-                var lo,hi [3]float64; first:=true
-                for _,vi:=range pr.indices{
-                    if int(vi)>=len(modelVertsF){continue}
-                    mv:=modelVertsF[vi]
-                    if first{lo,hi=mv,mv; first=false; continue}
-                    for a:=0;a<3;a++{ if mv[a]<lo[a]{lo[a]=mv[a]}; if mv[a]>hi[a]{hi[a]=mv[a]} }
-                }
-                var ext [3]float64; for a:=0;a<3;a++{ext[a]=hi[a]-lo[a]}
-                ua,ub=0,1; if ext[1]>=ext[0]&&ext[1]>=ext[2]{ua,ub=1,2} else if ext[2]>=ext[0]&&ext[2]>=ext[1]{ua,ub=0,2}
-                if ext[ua]>ext[ub]{ua,ub=ub,ua}
-                aMin,aSpan=lo[ua],ext[ua]; bMin,bSpan=lo[ub],ext[ub]
-                if aSpan==0{aSpan=1}; if bSpan==0{bSpan=1}
-            }
-            for k:=1;k+1<np;k++{
-                idx0:=int(pr.indices[0]); idx1:=int(pr.indices[k]); idx2:=int(pr.indices[k+1])
-                if idx0>=len(worldVerts)||idx1>=len(worldVerts)||idx2>=len(worldVerts){continue}
-                var st screenTri
-                st.color=pr.color; st.order=pr.order
-                st.row=[3]float64{float64(vertRows[idx0]),float64(vertRows[idx1]),float64(vertRows[idx2])}
-                if isTeam{st.entry=entry; st.team=true}
-                if pr.hasTex{
-                    st.frame=frame
-                    uvFor:=func(vi,cidx int)[2]float64{
-                        if ngonUV{mv:=modelVertsF[vi]; return [2]float64{(mv[ua]-aMin)/aSpan,(mv[ub]-bMin)/bSpan}}
-                        return uvs[cidx]
-                    }
-                    st.u[0],st.v[0]=uvFor(idx0,0)[0],uvFor(idx0,0)[1]
-                    st.u[1],st.v[1]=uvFor(idx1,k)[0],uvFor(idx1,k)[1]
-                    st.u[2],st.v[2]=uvFor(idx2,k+1)[0],uvFor(idx2,k+1)[1]
-                }
-                for i,vi:=range []int{idx0,idx1,idx2}{
-                    wv:=worldVerts[vi]
-                    wx:=int32(wv[0]>>16); wy:=int32(wv[1]>>16); wz:=int32(wv[2]>>16)
-                    px:=wx - c.cam.X + camera.OriginX
-                    py:=wz - (wy>>1) - c.cam.Z + camera.OriginY
-                    st.x[i],st.y[i]=px,py
-                    st.depth+=py
-                }
-                st.depth/=3
-                tris=append(tris,st)
-            }
-        }
-    }
-    for _, t := range tris{
-        if t.frame!=nil{
-            frame:=t.frame
-            if frame!=nil{c.blitTexturedTri(&t, frame); continue}
-        }
-        c.fillTri(&t, t.color)
-    }
-    return true
+	if p.Model == "" {
+		return false
+	}
+	m := c.unitModelFor(p.Model)
+	if m == nil || c.cam == nil {
+		return false
+	}
+	n := len(m.pieces)
+	states := make([]pieceState, n)
+	root := -1
+	for i, pc := range m.pieces {
+		if pc.parent == -1 {
+			root = i
+			break
+		}
+	}
+	if root >= 0 {
+		states[root].rotY += p.Yaw + 0x8000
+		states[root].rotX += p.Pitch + 0x8000
+	}
+	x, y, z := int32(p.X>>16), int32(p.Y>>16), int32(p.Z>>16)
+	var tris []screenTri
+	for pi, piece := range m.pieces {
+		chain := c.buildPieceChain(m, pi, states)
+		worldVerts := make([][3]numeric.Fixed, len(piece.vertices))
+		modelVertsF := make([][3]float64, len(piece.vertices))
+		for vi, lv := range piece.vertices {
+			mp := c.applyChain(lv, chain)
+			worldVerts[vi] = [3]numeric.Fixed{mp[0].Add(numeric.Fixed(int64(x) << 16)), mp[1].Add(numeric.Fixed(int64(y) << 16)), mp[2].Add(numeric.Fixed(int64(z) << 16))}
+			modelVertsF[vi] = [3]float64{float64(mp[0].Raw()) / 65536, float64(mp[1].Raw()) / 65536, float64(mp[2].Raw()) / 65536}
+		}
+		normAcc := make([][3]float64, len(piece.vertices))
+		normCnt := make([]int, len(piece.vertices))
+		for _, pr := range piece.prims {
+			if pr.isSelection {
+				continue
+			}
+			np := len(pr.indices)
+			if np < 3 {
+				continue
+			}
+			if !pr.hasTex && np != 4 {
+				continue
+			}
+			if np >= 3 {
+				aIdx := int(pr.indices[0])
+				bIdx := int(pr.indices[1])
+				cIdx := int(pr.indices[2])
+				if aIdx < len(modelVertsF) && bIdx < len(modelVertsF) && cIdx < len(modelVertsF) {
+					av, bv, cv := modelVertsF[aIdx], modelVertsF[bIdx], modelVertsF[cIdx]
+					ax, ay, az := bv[0]-av[0], bv[1]-av[1], bv[2]-av[2]
+					bx, by, bz := bv[0]-cv[0], bv[1]-cv[1], bv[2]-cv[2]
+					nx := ay*bz - az*by
+					ny := az*bx - ax*bz
+					nz := ax*by - ay*bx
+					if l := math.Sqrt(nx*nx + ny*ny + nz*nz); l > 1e-9 {
+						nx, ny, nz = nx/l, ny/l, nz/l
+					} else {
+						nx, ny, nz = 0, 1, 0
+					}
+					for _, vi := range pr.indices {
+						if int(vi) < len(normAcc) {
+							normAcc[vi][0] += nx
+							normAcc[vi][1] += ny
+							normAcc[vi][2] += nz
+							normCnt[vi]++
+						}
+					}
+				}
+			}
+		}
+		vertRows := make([]int, len(piece.vertices))
+		for vi := range piece.vertices {
+			cnt := normCnt[vi]
+			if cnt == 0 {
+				vertRows[vi] = 15
+				continue
+			}
+			nx := normAcc[vi][0] / float64(cnt)
+			ny := normAcc[vi][1] / float64(cnt)
+			nz := normAcc[vi][2] / float64(cnt)
+			if l := math.Sqrt(nx*nx + ny*ny + nz*nz); l > 1e-9 {
+				nx, ny, nz = nx/l, ny/l, nz/l
+			}
+			d := nx*lightDir[0] + ny*lightDir[1] + nz*lightDir[2]
+			vertRows[vi] = int(d*5.0) & 31
+		}
+		for _, pr := range piece.prims {
+			if pr.isSelection {
+				continue
+			}
+			np := len(pr.indices)
+			if np < 3 || (!pr.hasTex && np != 4) {
+				continue
+			}
+			var frame *formats.GAFFrame
+			var entry *formats.GAFEntry
+			isTeam := false
+			if pr.hasTex {
+				switch pr.ref.kind {
+				case texAnimated:
+					frame = animatedFrame(pr.ref, c.animClock)
+				case texTeam:
+					frame = pr.ref.frame
+					entry = pr.ref.entry
+					isTeam = true
+				default:
+					frame = pr.ref.frame
+				}
+			}
+			uvs := [4][2]float64{{0, 0}, {1, 0}, {1, 1}, {0, 1}}
+			ngonUV := np > 4
+			ua, ub := 0, 2
+			var aMin, aSpan, bMin, bSpan float64
+			if ngonUV {
+				var lo, hi [3]float64
+				first := true
+				for _, vi := range pr.indices {
+					if int(vi) >= len(modelVertsF) {
+						continue
+					}
+					mv := modelVertsF[vi]
+					if first {
+						lo, hi = mv, mv
+						first = false
+						continue
+					}
+					for a := 0; a < 3; a++ {
+						if mv[a] < lo[a] {
+							lo[a] = mv[a]
+						}
+						if mv[a] > hi[a] {
+							hi[a] = mv[a]
+						}
+					}
+				}
+				var ext [3]float64
+				for a := 0; a < 3; a++ {
+					ext[a] = hi[a] - lo[a]
+				}
+				ua, ub = 0, 1
+				if ext[1] >= ext[0] && ext[1] >= ext[2] {
+					ua, ub = 1, 2
+				} else if ext[2] >= ext[0] && ext[2] >= ext[1] {
+					ua, ub = 0, 2
+				}
+				if ext[ua] > ext[ub] {
+					ua, ub = ub, ua
+				}
+				aMin, aSpan = lo[ua], ext[ua]
+				bMin, bSpan = lo[ub], ext[ub]
+				if aSpan == 0 {
+					aSpan = 1
+				}
+				if bSpan == 0 {
+					bSpan = 1
+				}
+			}
+			for k := 1; k+1 < np; k++ {
+				idx0 := int(pr.indices[0])
+				idx1 := int(pr.indices[k])
+				idx2 := int(pr.indices[k+1])
+				if idx0 >= len(worldVerts) || idx1 >= len(worldVerts) || idx2 >= len(worldVerts) {
+					continue
+				}
+				var st screenTri
+				st.color = pr.color
+				st.order = pr.order
+				st.row = [3]float64{float64(vertRows[idx0]), float64(vertRows[idx1]), float64(vertRows[idx2])}
+				if isTeam {
+					st.entry = entry
+					st.team = true
+				}
+				if pr.hasTex {
+					st.frame = frame
+					uvFor := func(vi, cidx int) [2]float64 {
+						if ngonUV {
+							mv := modelVertsF[vi]
+							return [2]float64{(mv[ua] - aMin) / aSpan, (mv[ub] - bMin) / bSpan}
+						}
+						return uvs[cidx]
+					}
+					st.u[0], st.v[0] = uvFor(idx0, 0)[0], uvFor(idx0, 0)[1]
+					st.u[1], st.v[1] = uvFor(idx1, k)[0], uvFor(idx1, k)[1]
+					st.u[2], st.v[2] = uvFor(idx2, k+1)[0], uvFor(idx2, k+1)[1]
+				}
+				for i, vi := range []int{idx0, idx1, idx2} {
+					wv := worldVerts[vi]
+					wx := int32(wv[0] >> 16)
+					wy := int32(wv[1] >> 16)
+					wz := int32(wv[2] >> 16)
+					px := wx - c.cam.X + camera.OriginX
+					py := wz - (wy >> 1) - c.cam.Z + camera.OriginY
+					st.x[i], st.y[i] = px, py
+					st.depth += py
+				}
+				st.depth /= 3
+				tris = append(tris, st)
+			}
+		}
+	}
+	for _, t := range tris {
+		if t.frame != nil {
+			frame := t.frame
+			if frame != nil {
+				c.blitTexturedTri(&t, frame)
+				continue
+			}
+		}
+		c.fillTri(&t, t.color)
+	}
+	return true
 }
-
 
 // drawUnitChrome overlays selection brackets and the health bar for a
 // model-drawn unit. Geometry follows the footprint box [04 §6.2]; the model

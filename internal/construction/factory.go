@@ -988,6 +988,14 @@ func (s *Service) handleState1(factory *units.Unit, node *orders.Node, tick uint
 		node.Deadline = -1
 		return
 	}
+	// Synthetic factories without COB or without Activate script: set stance directly [05]
+	if factory.Script == nil {
+		factory.Flags |= FlagInBuildStance
+	} else if prog := getVMProgram(factory.Script); prog == nil {
+		factory.Flags |= FlagInBuildStance
+	} else if _, ok := prog.Scripts["Activate"]; !ok {
+		factory.Flags |= FlagInBuildStance
+	}
 	if factory.Flags&FlagInBuildStance != 0 {
 		node.Phase = uint8(State2)
 		node.DynamicGate = 0
@@ -1430,6 +1438,17 @@ func (s *Service) PumpAll(tick uint32) {
 // Pump implements the factory production handler entry per [05] with interrupt priority [PLAN_08].
 // Primary-only factory queue (68-desc census) — bit 0x40000 only on BuildWeapon/SelfDestruct [P0-14].
 // Non-authoritative compatibility wrapper (ON-02): new code should use StepUnit per handle.
+func isBuildOrderID(id orders.ID) bool {
+	if id == orders.Lookup(FactoryBuildOrder) {
+		return true
+	}
+	if id == orders.Lookup(MobileBuildOrder) || id == orders.Lookup(VTOLMobileBuildOrder) {
+		return true
+	}
+	// Also treat generic build via BuildingBuild fallback (already FactoryBuildOrder) – no other IDs are construction builds.
+	return false
+}
+
 func (s *Service) Pump(factory *units.Unit, tick uint32) {
 	if factory == nil {
 		return
@@ -1444,6 +1463,10 @@ func (s *Service) Pump(factory *units.Unit, tick uint32) {
 		return
 	}
 	head := prim[0]
+	// Non-build orders (e.g., Move_Ground) are not construction work; ignore without mutating queue [05][P0-I05].
+	if !isBuildOrderID(head.ID) {
+		return
+	}
 	// Interrupt masks tested before state machine with cancel-current first [05].
 	if factory.Pending&InterruptCancel != 0 {
 		factory.Pending &^= InterruptCancel
@@ -1515,6 +1538,10 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0, Diagnostics: append([]string(nil), s.messages...)}
 	}
 	head := prim[0]
+	// Non-build orders (e.g., Move_Ground) are not construction work; ignore without mutating queue [05][P0-I05].
+	if !isBuildOrderID(head.ID) {
+		return WorkResult{Builder: handle, Product: head.Target, DefKey: head.BuildDefKey, Owner: builder.Owner, State: State(head.Phase), Diagnostics: append([]string(nil), s.messages...)}
+	}
 	// Distinct descriptor check [P0-I05][04 §3.1]: factory BuildingBuild vs mobile MobileBuild/VTOL_MobileBuild.
 	factoryID := orders.Lookup(FactoryBuildOrder)
 	mobile := isMobileBuild(head.ID)

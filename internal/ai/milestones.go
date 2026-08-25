@@ -63,6 +63,16 @@ func (m *Manager) recordMilestone(stage string, tick uint32) {
 	m.milestones[stage] = tick
 }
 
+// MissedQueueCallbacks reports typed build requests dropped because the
+// session never bound QueueBuildTyped [RX-01][F-P0-004]. Production sessions
+// bind at manager creation; nonzero means a fixture-built AI lacks the binder.
+func (m *Manager) MissedQueueCallbacks() uint32 {
+	if m == nil {
+		return 0
+	}
+	return m.missedQueueCallbacks
+}
+
 // Milestones returns a deterministic copy of stage→tick [P0-07] ON-06.
 // Iteration over the returned map is nondeterministic per Go, but the
 // caller can iterate milestoneOrder for stable order; the map itself is a copy.

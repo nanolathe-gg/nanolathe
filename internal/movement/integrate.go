@@ -638,37 +638,82 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	}
 	route := s.Routes[handle]
 	hadRoute := route != nil && route.Active && route.Count > 0
-	if !hadRoute {
-		d := s.distToGoal(u)
-		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
-	}
-	// Prune(mover pos) [04 §7.3] C15. The stored points carry the half-footprint bias,
-	// so the mover's position is compared in the same biased domain [04 §7.1] C1.
 	profile := s.resolveProfile(u)
-	moverPt := Point{
-		X: world.WorldToCell(u.X) + int32(profile.FootPrintX/2),
-		Z: world.WorldToCell(u.Z) + int32(profile.FootPrintZ/2),
-	}
-	route.Prune(moverPt)
-	if !route.Active || route.Count == 0 {
-		// No waypoint left this tick: report arrival based on goal tolerance, not merely active [task][04 §7.3] C15
+	var directGoal bool
+	var directX, directZ numeric.Fixed
+	if !hadRoute {
+		// No active route: try direct move to order goal if present, else remain stopped.
+		// This handles final approach after route prune (within 5 cells but still >2 world units) [04 §7.3] C15.
 		d := s.distToGoal(u)
-		arrived := hadRoute && d <= arrivalToleranceWorld
-		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
-	}
-	// Current waypoint: index 1 if available else 0 [task]
-	var wp Point
-	if route.Count > 1 {
-		wp = route.Points[1]
+		const strictThresh = 2 * 65536
+		if d.Raw() <= strictThresh {
+			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: true}
+		}
+		// Attempt direct goal movement if order carries a goal.
+		if head != nil && (head.GoalX != 0 || head.GoalZ != 0) {
+			directGoal = true
+			directX = head.GoalX
+			directZ = head.GoalZ
+		} else {
+			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
+		}
 	} else {
-		wp = route.Points[0]
+		// Prune(mover pos) [04 §7.3] C15. The stored points carry the half-footprint bias,
+		// so the mover's position is compared in the same biased domain [04 §7.1] C1.
+		profile := s.resolveProfile(u)
+		moverPt := Point{
+			X: world.WorldToCell(u.X) + int32(profile.FootPrintX/2),
+			Z: world.WorldToCell(u.Z) + int32(profile.FootPrintZ/2),
+		}
+		route.Prune(moverPt)
+		if !route.Active || route.Count == 0 {
+			// No waypoint left this tick: check strict arrival, else fall through to direct goal movement.
+			d := s.distToGoal(u)
+			const strictThresh = 2 * 65536
+			if d.Raw() <= strictThresh {
+				arrived := hadRoute && d <= arrivalToleranceWorld
+				// Also consider strict threshold for order; for route prune case, within 2 is arrived.
+				if d.Raw() <= strictThresh {
+					arrived = true
+				}
+				return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
+			}
+			// Still far: direct move to goal.
+			if head != nil && (head.GoalX != 0 || head.GoalZ != 0) {
+				directGoal = true
+				directX = head.GoalX
+				directZ = head.GoalZ
+			} else {
+				arrived := hadRoute && d <= arrivalToleranceWorld
+				return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
+			}
+		}
 	}
-	wpWorldX := world.CellToWorld(wp.X)
-	wpWorldZ := world.CellToWorld(wp.Z)
-	wpWorldX = numeric.Fixed(int64(wpWorldX) + 524288) // 0.5 cell = 524288 = 1<<19 [03 §2.1]
-	wpWorldZ = numeric.Fixed(int64(wpWorldZ) + 524288)
-	dx := int64(wpWorldX) - int64(u.X)
-	dz := int64(wpWorldZ) - int64(u.Z)
+	// Current waypoint or direct goal
+	var wp Point
+	var wpWorldX, wpWorldZ numeric.Fixed
+	var dx, dz int64
+	if directGoal {
+		wpWorldX = directX
+		wpWorldZ = directZ
+		dx = int64(wpWorldX) - int64(u.X)
+		dz = int64(wpWorldZ) - int64(u.Z)
+		// For direct goal, keep wp as goal cell for pitch delta fallback (use goal cell)
+		wp = Point{X: world.WorldToCell(directX), Z: world.WorldToCell(directZ)}
+	} else {
+		// Current waypoint: index 1 if available else 0 [task]
+		if route.Count > 1 {
+			wp = route.Points[1]
+		} else {
+			wp = route.Points[0]
+		}
+		wpWorldX = world.CellToWorld(wp.X)
+		wpWorldZ = world.CellToWorld(wp.Z)
+		wpWorldX = numeric.Fixed(int64(wpWorldX) + 524288) // 0.5 cell = 524288 = 1<<19 [03 §2.1]
+		wpWorldZ = numeric.Fixed(int64(wpWorldZ) + 524288)
+		dx = int64(wpWorldX) - int64(u.X)
+		dz = int64(wpWorldZ) - int64(u.Z)
+	}
 	if dx == 0 && dz == 0 {
 		d := s.distToGoal(u)
 		arrived := hadRoute && d <= arrivalToleranceWorld

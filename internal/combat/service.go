@@ -37,6 +37,19 @@ func aimNameForSlot(slotIdx int) string {
 	}
 }
 
+// UnitStepSummary reports what one StepWeaponsForUnit visit did [ON-09 trace contract].
+// Stable integer/fixed-point state only; it observes behavior, consumes no RNG,
+// and alters no simulation decisions.
+type UnitStepSummary struct {
+	Dispatched       bool  // any Aim* dispatched this visit [04 §5.3]
+	DispatchSlot     int   // weapon slot of the first dispatch (-1 if none)
+	DispatchWeaponID int32 // weapon ID of the first dispatch
+	ReturnSeen       bool  // an explicit COB return was consumed this visit [06 §3.3]
+	ReturnValue      int32 // value of the last consumed return (0 or nonzero)
+	Drained          bool  // combat performed the visit's synchronous vm.Drain(1) [04 §4.2][GAP T15 C17]
+	Fired            int   // projectiles created via TryFire this visit [06 §4]
+}
+
 // StepWeaponsForUnit runs the per-unit weapon pipeline for one unit visit ON-04 [06 §3.3][06 §4][04 §5.3][GAP T15].
 // It is the authoritative per-unit step; TickWeapons is a compatibility wrapper that loops over units in
 // deterministic order (players 0..9 asc, pool slot asc) and calls this per unit [06 §1.2] C1 (I1).
@@ -44,12 +57,16 @@ func aimNameForSlot(slotIdx int) string {
 // The VM drain that belongs to the same visit is performed synchronously after Aim dispatch [GAP T15] C17
 // [04 §5.3]: if the thread sleeps/blocks, pending state persists (no timeout) [06 §3.3]; on explicit return
 // nonzero grants ready, zero leaves latch without permission and does NOT clear it [06 §3.3]; no timeout writer exists.
-func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) {
+// The returned UnitStepSummary lets the central loop emit truthful trace events and own
+// the exactly-once per-visit COB drain when no Aim handshake drained [04 §4.2][04 §4.6].
+func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) UnitStepSummary {
+	var sum UnitStepSummary
+	sum.DispatchSlot = -1
 	if s == nil || u == nil {
-		return
+		return sum
 	}
 	if !u.Alive || u.Dying {
-		return
+		return sum
 	}
 	// Stunned handling [06 §10] P0-I04: clear if expired, skip if still stunned
 	if u.Stunned && tick >= u.ParalyzeExpire {
@@ -57,15 +74,16 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		u.ParalyzeExpire = 0
 	}
 	if u.Stunned {
-		return
+		return sum
 	}
 	for idx := 0; idx < NumSlots; idx++ {
 		slot := u.SlotAt(idx)
 		if slot == nil || !slot.IsPopulated() {
 			continue
 		}
-		s.stepSlot(u, slot, idx, tick, w, vis, terrain, econ, catalog, simRNG, crtRNG)
+		s.stepSlot(u, slot, idx, tick, w, vis, terrain, econ, catalog, simRNG, crtRNG, &sum)
 	}
+	return sum
 }
 
 // TickWeapons runs the integrated per-unit weapon pipeline [06 §3][06 §4][04 §5.3][GAP T15].
@@ -132,7 +150,7 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 	}
 }
 
-func (s *Service) stepSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) {
+func (s *Service) stepSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT, sum *UnitStepSummary) {
 	// Target validation: stale/dead unit target clears latch and TargetCleared [06 §1.2] P0-10
 	if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
 		targetUnit := w.Unit(slot.Target.Unit)
@@ -275,20 +293,30 @@ func (s *Service) stepSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32
 				slot.Aim.StartAim() // OR 0x01 immediately after dispatch [06 §3.3] P0-10
 				slot.Flags |= 0x01
 				s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_dispatch"})
+				sum.Dispatched = true
+				if sum.DispatchSlot < 0 {
+					sum.DispatchSlot = idx
+					sum.DispatchWeaponID = weaponID
+				}
 				// Synchronous drain that belongs to same visit [GAP T15] C17 ON-04
 				// This allows same-tick return → fire that visit [06 §3.3]
 				vm.Drain(1)
+				sum.Drained = true
 				// Check for explicit return
 				if val, ok := vm.ConsumeReturn(threadIdx); ok {
 					// Explicit return delivered [04 §5.3][06 §3.3]
 					if val != 0 {
 						slot.Aim.Ready = true // nonzero grants Ready [GAP T15] C16 [06 §3.3] ON-04 (direct set to avoid CompleteAim self-completion grep)
 						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_return_nonzero", ReturnValue: &val})
+						sum.ReturnSeen = true
+						sum.ReturnValue = val
 						delete(s.pendingAims, key)
 						// Ready granted, fall through to fire this visit (same-tick rule)
 					} else {
 						// Zero leaves latch without permission and does NOT clear it [06 §3.3]
 						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_return_zero", ReturnValue: &val})
+						sum.ReturnSeen = true
+						sum.ReturnValue = val
 						delete(s.pendingAims, key)
 						// Latch preserved, no permission, block this visit and future (no timeout)
 						return
@@ -317,6 +345,8 @@ func (s *Service) stepSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32
 					} else {
 						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_return_zero", ReturnValue: &val})
 					}
+					sum.ReturnSeen = true
+					sum.ReturnValue = val
 					delete(s.pendingAims, key)
 					if !slot.Aim.Ready {
 						return
@@ -407,6 +437,7 @@ admission:
 		}
 	}
 	_ = tgtHandle
+	sum.Fired++
 	s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "fire"})
 }
 

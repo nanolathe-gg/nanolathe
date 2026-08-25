@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -91,6 +92,13 @@ type Manager struct {
 	// P0-07: typed build request replacing lossy callback [P0-07] ON-06 F-P0-004.
 	// Session binds this to construction queue; default nil → error diagnostic.
 	QueueBuildTyped func(BuildRequest) error // typed mobile/factory build [P0-07]
+
+	// missedQueueCallbacks counts typed build requests dropped because the
+	// session never bound QueueBuildTyped [RX-01][F-P0-004]. Diagnostic only;
+	// read via MissedQueueCallbacks. Production sessions bind at manager
+	// creation and ValidateComposition rejects unbound managers, so nonzero
+	// here means a fixture constructed an AI without the production binder.
+	missedQueueCallbacks uint32
 
 	// P0-07: alliance awareness [P0-07] ON-06. Nil means same-owner-only (default) [08].
 	IsAlliance func(a, b uint8) bool // alliance test injected at construction; default same-owner-only [P0-07]
@@ -471,8 +479,14 @@ func (m *Manager) runDueTasks(tick uint32, w *units.World, econ *economy.Service
 			continue
 		}
 		deadline := m.Deadlines[k]
+		if tick < 100 && k == TaskConstruction {
+			fmt.Printf("DEBUG runDueTasks tick %d task %d deadline %d\n", tick, k, deadline)
+		}
 		if deadline > tick { // [08] separate deadlines [PLAN_11 C3]; 0 <= any tick so initial zero is due
 			continue
+		}
+		if tick < 100 {
+			fmt.Printf("DEBUG runDueTasks RUN tick %d task %d deadline %d\n", tick, k, deadline)
 		}
 		m.taskRuns[k]++
 		switch k {
@@ -552,12 +566,15 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 			continue
 		}
 		if !m.hasBuildOptionsForDef(u.Def) {
+			fmt.Printf("DEBUG G5 hasBuildOptions false for %s tick %d\n", u.Def.UnitName, tick)
 			continue
 		}
 		cand, ok := Select(m, u, econ)
 		if !ok {
+			fmt.Printf("DEBUG G5 Select failed for builder %s tick %d\n", u.Def.UnitName, tick)
 			continue
 		}
+		fmt.Printf("DEBUG G5 Select succeeded for builder %s tick %d candidate %s score %d\n", u.Def.UnitName, tick, cand.DefKey, cand.Score)
 		if !found || cand.Score > bestScore {
 			bestBuilder = u
 			bestCand = cand
@@ -579,6 +596,7 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 	}
 	builder := bestBuilder
 	cand := bestCand
+	fmt.Printf("DEBUG doConstruction tick %d bestBuilder %s candidate %s score %d\n", tick, builder.Def.UnitName, cand.DefKey, bestScore)
 	// P0-07: typed build path [P0-07] ON-06 F-P0-004.
 	// Mobile builders use Place with MobileSite site coordinates; factories use FactoryQueue without site.
 	// Factory vs mobile is determined by both builder immobility and target mobility: factories (immobile builders) producing mobile units use FactoryQueue [P0-07].
@@ -600,7 +618,8 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 		// Factory production: direct typed queue without placement [P0-07] FactoryQueue.
 		if m.QueueBuildTyped == nil {
 			// Diagnostic: session has not bound typed queue [P0-07] F-P0-004.
-			// Error diagnostic via no-op; milestone not recorded.
+			// Counted, not silent: observable via MissedQueueCallbacks.
+			m.missedQueueCallbacks++
 			return
 		}
 		req := BuildRequest{
@@ -609,9 +628,12 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 			Count:   1,
 			Kind:    BuildKindFactoryQueue,
 		}
+		fmt.Printf("DEBUG FactoryQueue attempt tick %d builder %s handle %d candidate %s\n", tick, builder.Def.UnitName, builder.Handle, cand.DefKey)
 		if err := m.QueueBuildTyped(req); err != nil {
+			fmt.Printf("DEBUG FactoryQueue failed tick %d err %v\n", tick, err)
 			return
 		}
+		fmt.Printf("DEBUG FactoryQueue succeeded tick %d builder %s handle %d candidate %s\n", tick, builder.Def.UnitName, builder.Handle, cand.DefKey)
 		m.recordMilestone(MilestoneBuildRequestAccepted, tick)
 		// Factory product queued will also be observed via world scan; also record now for testability.
 		m.recordMilestone(MilestoneFactoryProductQueued, tick)
@@ -623,8 +645,10 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 	x, z, ok := Place(m, cand.DefKey, m.Terrain) // [PLAN_11 C8][C12] [P0-07] preserves X/Z via typed request
 	m.Factory = origFactory
 	if !ok {
+		fmt.Printf("DEBUG Place failed for %s builder %s\n", cand.DefKey, builder.Def.UnitName)
 		return
 	}
+	fmt.Printf("DEBUG Place succeeded for %s at %d %d builder %s\n", cand.DefKey, int64(x.Raw()), int64(z.Raw()), builder.Def.UnitName)
 	// Place already issued typed MobileSite request and recorded PlacementSelected/BuildRequestAccepted internally.
 	// Ensure milestones are observed via world scan as well.
 	_ = x
@@ -759,6 +783,7 @@ func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, thr
 	if w == nil {
 		return
 	}
+	fmt.Printf("DEBUG doWave tick %d threshold %d min %d max %d\n", tick, threshold, min, max)
 	m.updateGroups(w)
 	var group []pool.Handle
 	if threshold == waveAThreshold {
@@ -773,6 +798,7 @@ func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, thr
 	} else {
 		m.GroupWaveB = group
 	}
+	fmt.Printf("DEBUG doWave tick %d threshold %d group len %d min %d\n", tick, threshold, len(group), min)
 	if len(group) < min {
 		return
 	}

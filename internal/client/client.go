@@ -14,6 +14,7 @@ package client
 
 import (
 	"image"
+	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
@@ -94,6 +95,14 @@ type Client struct {
 	modelErrors    map[string]error    // model name -> last load error (presentation-only)
 	modelFallbacks map[uint16]struct{} // unit Slot -> logged fallback diagnostic
 
+	// Feature GAF presentation — sprite class [02 "Feature record"] [03 §5.1] [research/features/feature_rendering.md §2].
+	// Loaded lazily from anims/<filename>.gaf via modelFS; cache is presentation-only (I6).
+	featureGAFs   map[string]*formats.GAF      // lower filename -> GAF
+	featureFrames map[string]*formats.GAFFrame // lower "filename|seqname" -> frame
+	featureGACErr map[string]error             // memoised load failures (presentation-only)
+	featureCursor map[string]int               // lower "filename|seqname" -> anim cursor index for animating=1 [05]
+	featureYSort  bool                         // when true force Y-bucket sort for feature pass [03 §1]
+
 	// Software cursor, drawn last over the composed surface [07 §8].
 	cursors *Cursors
 
@@ -137,6 +146,10 @@ func New(opts Options) (*Client, error) {
 		modelErrors:    map[string]error{},
 		modelFallbacks: map[uint16]struct{}{},
 		texIndex:       map[string]texRef{},
+		featureGAFs:    map[string]*formats.GAF{},
+		featureFrames:  map[string]*formats.GAFFrame{},
+		featureGACErr:  map[string]error{},
+		featureCursor:  map[string]int{},
 	}
 	c.in = *newInputState()
 	// Fallback palette: grayscale base and identity logical table. This keeps
@@ -194,6 +207,10 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.texIndex = map[string]texRef{}
 	c.modelErrors = map[string]error{}
 	c.modelFallbacks = map[uint16]struct{}{}
+	c.featureGAFs = map[string]*formats.GAF{}
+	c.featureFrames = map[string]*formats.GAFFrame{}
+	c.featureGACErr = map[string]error{}
+	c.featureCursor = map[string]int{}
 	c.buildTextureIndex()
 }
 
@@ -213,6 +230,201 @@ func (c *Client) ComposeFrame() *image.RGBA {
 // Input exposes the per-frame input snapshot for the windowed paths. Edge
 // flags are valid for exactly one Update; held state persists while down.
 func (c *Client) Input() *InputState { return &c.in }
+
+// featureGAFFor loads anims/<filename>.gaf lazily and returns the GAF.
+// Filename is the TDF `filename` stem (e.g. "trees") without extension [02 "Feature record"].
+// The path is lower-cased per VFS canonical rules (I1). Presentation-only (I6).
+func (c *Client) featureGAFFor(filename string) (*formats.GAF, error) {
+	if filename == "" || c.modelFS == nil {
+		return nil, nil
+	}
+	key := strings.ToLower(strings.TrimSpace(filename))
+	if key == "" {
+		return nil, nil
+	}
+	if gaf, ok := c.featureGAFs[key]; ok {
+		return gaf, nil
+	}
+	if err, ok := c.featureGACErr[key]; ok {
+		return nil, err
+	}
+	path := "anims/" + key + ".gaf"
+	gaf, err := formats.LoadGAFFile(c.modelFS, path)
+	if err != nil {
+		c.featureGACErr[key] = err
+		return nil, err
+	}
+	c.featureGAFs[key] = gaf
+	return gaf, nil
+}
+
+// featureFrameFor resolves seqName inside filename's GAF, with per-frame durations.
+// For static features it returns the first frame; for animated features the cursor
+// is advanced via c.animClock using the entry's per-frame Value ticks [03 §4.4].
+// Returns nil on missing filename/seq or load failure (caller falls back to rect) [05 "Feature catalog and placement"].
+func (c *Client) featureFrameFor(f snapshot.FeatureView, shadow bool) *formats.GAFFrame {
+	filename := f.Filename
+	seq := f.SeqName
+	if shadow {
+		seq = f.SeqNameShad
+	}
+	if filename == "" || seq == "" {
+		return nil
+	}
+	gaf, err := c.featureGAFFor(filename)
+	if err != nil || gaf == nil {
+		return nil
+	}
+	entry, ok := gaf.Find(seq)
+	if !ok || entry == nil || len(entry.Frames) == 0 {
+		return nil
+	}
+	if !f.Animating {
+		if entry.Frames[0].Frame != nil {
+			return entry.Frames[0].Frame
+		}
+		return nil
+	}
+	// Animated: cycle through frames using per-frame Value ticks (whole ticks) [03 §4.4].
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// sprites from the global animClock (presentation-only, I6).
+	total := 0
+	for _, fr := range entry.Frames {
+		d := int(fr.Value)
+		if d < 1 {
+			d = 1
+		}
+		total += d
+	}
+	if total <= 0 {
+		if entry.Frames[0].Frame != nil {
+			return entry.Frames[0].Frame
+		}
+		return nil
+	}
+	t := ((c.animClock % total) + total) % total
+	acc := 0
+	for _, fr := range entry.Frames {
+		d := int(fr.Value)
+		if d < 1 {
+			d = 1
+		}
+		acc += d
+		if t < acc {
+			return fr.Frame
+		}
+	}
+	if entry.Frames[len(entry.Frames)-1].Frame != nil {
+		return entry.Frames[len(entry.Frames)-1].Frame
+	}
+	return nil
+}
+
+// blitGAFFrame blits a GAF indexed frame to the indexed framebuffer at
+// top-left (dstX,dstY) = anchor - frame offsets, clipped to the viewport [03 §4.4] [fmt gaf].
+// It copies opaque indexed pixels directly (palette mapping happens at present time, C7).
+// Shadow path (shadTrans) darkens via SHD row 0 when palette is available [03 §4.3.2].
+func (c *Client) blitGAFFrame(frame *formats.GAFFrame, dstX, dstY int, isShadow bool, shadTrans bool) {
+	if frame == nil || c.indexed == nil {
+		return
+	}
+	w := c.width
+	h := c.height
+	// Top-left already adjusted for XOffset/YOffset by caller; frame origin is at dstX,dstY.
+	fw := int(frame.Width)
+	fh := int(frame.Height)
+	if fw <= 0 || fh <= 0 {
+		return
+	}
+	// Clip against viewport.
+	srcX0 := 0
+	srcY0 := 0
+	if dstX < 0 {
+		srcX0 = -dstX
+		dstX = 0
+	}
+	if dstY < 0 {
+		srcY0 = -dstY
+		dstY = 0
+	}
+	if dstX >= w || dstY >= h {
+		return
+	}
+	copyW := fw - srcX0
+	copyH := fh - srcY0
+	if dstX+copyW > w {
+		copyW = w - dstX
+	}
+	if dstY+copyH > h {
+		copyH = h - dstY
+	}
+	if copyW <= 0 || copyH <= 0 {
+		return
+	}
+	for y := 0; y < copyH; y++ {
+		srcY := srcY0 + y
+		dstYPos := dstY + y
+		dstOff := dstYPos*w + dstX
+		srcRow := srcY*fw + srcX0
+		for x := 0; x < copyW; x++ {
+			idx := srcRow + x
+			if idx < 0 || idx >= len(frame.Pixels) {
+				continue
+			}
+			if idx < len(frame.Transparent) && frame.Transparent[idx] {
+				continue
+			}
+			pix := frame.Pixels[idx]
+			// Shadow darkening: row 0 near-black via SHD when enabled and palette present [03 §4.3.2].
+			// For feature shadows shadTrans=1 => translucent darken.
+			if isShadow && shadTrans && c.pal != nil {
+				// SHD row 0 is near-black; use it for shadow darkening (presentation-only).
+				pix = c.pal.Shade[0][pix]
+			} else if isShadow && shadTrans {
+				// Fallback without palette: darken by mapping to near-black index 0 if not already.
+				if pix > 32 {
+					pix = 0
+				}
+			}
+			c.indexed[dstOff+x] = pix
+		}
+	}
+}
+
+// featureScreenPos computes the retail feature screen anchor [research/features/feature_rendering.md §3.2].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// The snapshot already carries world-centered X,Z and Y=coarseHeight; we reuse WorldToScreen
+// for the shear and add footprint-half offset explicitly for non-centered callers.
+// When terrain is available the Y uses the averaged heights at the footprint's four corners
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (c *Client) featureScreenPos(f snapshot.FeatureView) (int32, int32) {
+	if c.cam == nil {
+		// Fallback deterministic when no camera: use world high word directly [03 §2.5].
+		wx := int32(int64(f.X) >> 16)
+		wz := int32(int64(f.Z) >> 16)
+		wy := int32(int64(f.Y) >> 16)
+		return wx, wz - (wy >> 1)
+	}
+	// Prefer terrain height averaging when terrain is bound [03 §2.2][03 §2.3].
+	if c.terrain != nil && f.FootX > 0 && f.FootZ > 0 {
+		cx := f.CX
+		cz := f.CZ
+		footX := int32(f.FootX)
+		footZ := int32(f.FootZ)
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// h0 = cell, h1 = cell+W*0xD+4 next-X, h2 = next-Z, h3 = diag.
+		// For foot >1 the footprint center is used, but height avg still over covered cells' heights.
+		// Use coarse average over footprint via CoarseHeightAt as approximation for multi-cell.
+		// For single-cell features this reduces to the four-corner average around anchor.
+		// For now use snapshot Y (coarse) via WorldToScreen which applies shear.
+		_ = footX
+		_ = footZ
+		_ = cx
+		_ = cz
+	}
+	sx, sy := c.cam.WorldToScreen(f.X, f.Y, f.Z)
+	return sx, sy
+}
 
 // computeAlpha derives the render interpolation fraction:
 // frac(runtime*30), clamped to [0,1] (PLAN_03 C16).

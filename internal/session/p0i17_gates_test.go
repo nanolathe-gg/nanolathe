@@ -191,7 +191,12 @@ func TestP0I17_Gate2_Move(t *testing.T) {
 		t.Fatalf("scheduler did not produce active route for move gate [P0-I03]")
 	}
 	t.Logf("route points %v", route.Points[:route.Count])
-	for i := 30; i < 250; i++ {
+	// Budget: the fixture unit moves at MaxVelocity 65536 (1 world-unit/tick);
+	// the 15-cell diagonal is ~340 units, so arrival needs ~350+ ticks after
+	// turn-in. 250 was sized for the pre-e757a19 simplified integrator; 600
+	// gives margin without changing any production behavior (legacy regression
+	// coverage only — the strict G2 gate owns release evidence).
+	for i := 30; i < 600; i++ {
 		s.Step(int32(i + 1))
 		if i%50 == 0 || i == 30 {
 			if st := s.Movement.Steers[h]; st != nil {

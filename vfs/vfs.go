@@ -74,6 +74,10 @@ type File interface {
 type providerEntry struct {
 	info EntryInfo
 	open func() (File, error)
+	// readRange, when set, produces a byte range without materializing the
+	// whole file. A provider that cannot do better than a full read leaves it
+	// nil and FS.ReadFileRange falls back to Open.
+	readRange func(offset int64, length int) ([]byte, error)
 }
 
 type provider interface {
@@ -528,6 +532,53 @@ func (f *FS) ReadFileLimit(name string, max int64) ([]byte, error) {
 	return data, nil
 }
 
+// RangeReader is the optional capability FS provides for reading part of a
+// file. It exists because a header probe over a whole install must not
+// decompress every archived file to read its first sixty-four bytes: the map
+// census reads two short ranges out of each TNT and would otherwise decode
+// more than a gigabyte to collect a few kilobytes of headers.
+type RangeReader interface {
+	ReadFileRange(name string, offset int64, length int) ([]byte, error)
+}
+
+// ReadFileRange returns length bytes of name starting at offset. length < 0
+// means "to the end of the file", and a length that runs past the end is
+// clamped to it. A provider that can decode part of a file does so; otherwise
+// the file is read whole and sliced, which is what the caller would have had
+// to do anyway.
+func (f *FS) ReadFileRange(name string, offset int64, length int) ([]byte, error) {
+	if offset < 0 {
+		return nil, fmt.Errorf("%w: negative offset %d", ErrNotFound, offset)
+	}
+	logical, err := cleanPath(name)
+	if err != nil {
+		return nil, err
+	}
+	for _, mount := range f.orderedMounts() {
+		entry, ok := mount.provider.lookup(logical)
+		if !ok {
+			continue
+		}
+		if entry.readRange != nil {
+			return entry.readRange(offset, length)
+		}
+		break
+	}
+	// The fallback keeps the same ceiling the archive reader uses.
+	data, err := f.ReadFileLimit(name, defaultMaxFileBytes)
+	if err != nil {
+		return nil, err
+	}
+	if offset > int64(len(data)) {
+		return nil, fmt.Errorf("%w: range offset %d outside %d-byte file", ErrNotFound, offset, len(data))
+	}
+	data = data[offset:]
+	if length >= 0 && length < len(data) {
+		data = data[:length]
+	}
+	return data, nil
+}
+
 func (f *FS) Stat(name string) (EntryInfo, error) {
 	logical, err := cleanPath(name)
 	if err != nil {
@@ -724,12 +775,42 @@ func (p *looseProvider) indexDir(dirname, parent string, priority, order int) er
 		p.indexedEntries = append(p.indexedEntries, info)
 		if !isDir {
 			entry.open = func() (File, error) { return newOSFile(full, info) }
+			entry.readRange = func(offset int64, length int) ([]byte, error) {
+				return readFileRangeOS(full, offset, length)
+			}
 		} else if err := p.indexDir(full, logical, priority, order); err != nil {
 			return err
 		}
 		p.entries[logical] = entry
 	}
 	return nil
+}
+
+// readFileRangeOS reads a byte range from a loose file without reading the
+// rest of it. length < 0 means "to the end".
+func readFileRangeOS(path string, offset int64, length int) ([]byte, error) {
+	handle, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer handle.Close()
+	if length < 0 {
+		stat, statErr := handle.Stat()
+		if statErr != nil {
+			return nil, statErr
+		}
+		remaining := stat.Size() - offset
+		if remaining < 0 {
+			return nil, fmt.Errorf("%w: range offset %d outside %d-byte file", ErrNotFound, offset, stat.Size())
+		}
+		length = int(remaining)
+	}
+	data := make([]byte, length)
+	read, err := handle.ReadAt(data, offset)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return data[:read], nil
 }
 
 func (p *looseProvider) lookup(name string) (*providerEntry, bool) {

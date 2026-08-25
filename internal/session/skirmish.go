@@ -329,6 +329,7 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		mgr := &ai.Manager{Player: uint8(i), Profile: sharedProf}
 		mgr.Terrain = s.World
 		mgr.Catalog = s.Catalog
+		bindAIQueue(mgr, s)
 		s.AI = append(s.AI, mgr)
 	}
 	// P0-I12: initialize class maps from catalog for each manager, ensure vectors not zero [08][P0-01]
@@ -565,6 +566,7 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		if s.Catalog != nil {
 			mgr.Catalog = s.Catalog
 		}
+		bindAIQueue(mgr, s)
 		s.AI = append(s.AI, mgr)
 	}
 	// P0-I12: initialize AI class vectors for fixture managers as well, if catalog present
