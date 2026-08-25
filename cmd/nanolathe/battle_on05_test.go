@@ -204,11 +204,11 @@ func TestLegalPlacementQueuesMobileBuild(t *testing.T) {
 		t.Fatalf("not armed")
 	}
 	// Simulate placement at legal site: screen that maps inside map
-	// Choose screen center 320,240 -> world = (320-128)=192, (240-32)=208
-	// With foot 2x2, cell = 192/16=12, 208/16=13 minus half => 11,12 inside 20
-	b.buildMX = 320
-	b.buildMY = 240
-	b.updatePlacement(320, 240)
+	// Shell viewport: world = shell + cam. Choose shell 160,120 -> world 160,120
+	// With foot 2x2, cell = 10,7 minus half => 9,6 inside 20
+	b.buildMX = 160
+	b.buildMY = 120
+	b.updatePlacement(160, 120)
 	if !b.buildOK {
 		t.Fatalf("expected legal placement at center, got blocked")
 	}
@@ -222,7 +222,7 @@ func TestLegalPlacementQueuesMobileBuild(t *testing.T) {
 		return b.dispatchMobileBuildFallback(prod, wx, wz, queued)
 	}
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
-	in.Mouse.InjectMouseMove(320, 240)
+	in.Mouse.InjectMouseMove(160, 120)
 	in.Mouse.InjectMouseButton(input.MouseButtonLeft, true)
 	// Ensure buildDef still armed
 	if b.buildDef == "" {
@@ -238,7 +238,7 @@ func TestLegalPlacementQueuesMobileBuild(t *testing.T) {
 		// fallback may be empty if we used dispatch directly, but check tail
 	}
 	tail := q.Primary()[0]
-	expectedWX, expectedWZ := b.cam.ScreenToWorld(320, 240)
+	expectedWX, expectedWZ := b.cam.ScreenToWorld(160+camera.OriginX, 120+camera.OriginY)
 	if tail.GoalX != expectedWX || tail.GoalZ != expectedWZ {
 		t.Fatalf("queued coords mismatch: got %d,%d want %d,%d", tail.GoalX, tail.GoalZ, expectedWX, expectedWZ)
 	}
@@ -404,11 +404,11 @@ func TestReclaimClickResolvesFeature(t *testing.T) {
 	// Place cam at 0
 	b.cam.X = 0
 	b.cam.Z = 0
-	// Pick at screen that maps to feature world 5*16 = 80
-	sx := int32(5*16 + 128) // approx
-	sy := int32(5*16 + 32)
-	// Debug: check what pickTarget computes for cx,cz
-	wx, wz := b.cam.ScreenToWorld(sx, sy)
+	// Pick at screen that maps to feature world 5*16 = 80 (shell coords)
+	sx := int32(5 * 16) // shell
+	sy := int32(5 * 16)
+	// Debug: check what pickTarget computes for cx,cz (add Origin for beam)
+	wx, wz := b.cam.ScreenToWorld(sx+camera.OriginX, sy+camera.OriginY)
 	cx := world.WorldToCell(wx)
 	cz := world.WorldToCell(wz)
 	t.Logf("debug pick screen %d,%d -> world %d,%d -> cell %d,%d PlotFeature %d Resolve %v", sx, sy, wx, wz, cx, cz, b.sess.World.Plot[cz*int32(b.sess.World.CellW)+cx].Feature(), func() bool {

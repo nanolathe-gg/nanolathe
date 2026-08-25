@@ -422,7 +422,8 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 	if err != nil {
 		return err
 	}
-	g.battle = &battleSession{sess: sess, cat: cat, cam: g.cam, hud: battleHUD, latch: input.LatchNormal}
+	g.battle = &battleSession{sess: sess, cat: cat, cam: g.cam, hud: battleHUD, latch: input.LatchNormal, menuPressed: -1}
+	g.battle.returnToMenu = g.returnFromBattle
 	g.mode = modeBattle
 	if clPtr != nil {
 		clPtr.SetSnapshot(sess.Snapshot)
@@ -435,6 +436,35 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 		clPtr.Overlay = func(c *client.Client) { battleHUD.draw(c, g.battle) }
 	}
 	return nil
+}
+
+// returnFromBattle is the retail MAINMENU confirmation outcome: discard the
+// live battle presentation and restore the main frontend window in the same
+// client. The abandoned session has no background goroutine and becomes
+// unreachable after this hand-off.
+func (g *gameShell) returnFromBattle(cl *client.Client) {
+	if g == nil {
+		return
+	}
+	if g.battle != nil {
+		g.battle.closeBattleMenu()
+	}
+	g.battle = nil
+	g.cam = &camera.Camera{ViewW: retailScreenW, ViewH: retailScreenH, MapW: retailScreenW, MapH: retailScreenH}
+	g.openMenu(modeMenuMain)
+	if cl == nil {
+		return
+	}
+	cl.SetSnapshot(&snapshot.Buffer{})
+	cl.SetTerrain(nil)
+	cl.SetCamera(g.cam)
+	if g.assets != nil {
+		if g.assets.pal != nil {
+			cl.SetPalette(g.assets.pal)
+		}
+		cl.SetFNT(g.assets.font)
+	}
+	cl.Overlay = func(c *client.Client) { g.draw(c) }
 }
 
 // enumerateSkirmishMaps is the retail map census: only OTA files with a

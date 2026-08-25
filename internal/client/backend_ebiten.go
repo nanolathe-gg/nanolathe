@@ -21,6 +21,9 @@ func (a *ebitenApp) Update() error {
 	if a.c.opts.Step != nil {
 		a.c.opts.Step(dt)
 	}
+	if a.c.ExitRequested() {
+		return ebiten.Termination
+	}
 	return nil
 }
 

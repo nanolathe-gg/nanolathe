@@ -38,28 +38,7 @@ lowest-free scan [P0-09]. A unit killed during projectile processing retains
 enough state to be seen by later same-tick phases; final deletion is deferred
 to cleanup through the central death handler [P0-09].
 
-**Established fact:** Within one unit visit the sweep executes, in order: the
-general unit update (which can queue deferred `SetDirection` and `SetSpeed`);
-the weapon update for eligible players (which can queue deferred
-`TargetCleared` and the `AimPrimary/Secondary/Tertiary` family, and whose fire
-decisions reach the projectile creators that queue `FirePrimary/Secondary/
-Tertiary` followed by `RockUnit`); the normal script drain with tick delta 1,
-running all eight threads once and then one piece-interpolation pass; order
-and construction work (primary pump head-blocking then secondary skip-not-due);
-movement integration, whose medium classifier issues `StartMoving`,
-`StopMoving`, `MoveRateN`, and then `setSFXoccupy` as immediate wake-flag
-starts; and finally the slot-end death handling, which can run the synchronous
-local `Killed` query. Consequences: a deferred callback queued before the
-normal drain executes in that same visit; a deferred callback queued after it
-normally waits for the next visit, except that any later immediate-start
-callback on the same virtual machine performs an all-slot delta-0 drain that
-can execute it earlier [P0-09]. Damage callbacks queued by the post-unit
-projectile phase therefore normally land on the next visit, while damage packets
-processed during event ingress can queue theirs in time for that tick's normal
-pass. Capture is synchronous before trigger polling, build-complete product
-publication (GetBuilt) occurs before trigger polling but victory needs the next
-30-tick poll, and kill notification goes through the central death handler
-[P0-09].
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 **Established fact:** The projectile phase captures its active-span count at
 entry. A zero-burst weapon projectile spawned during the preceding unit sweep
@@ -666,7 +645,15 @@ ATTACK on a unit hit issues the chase orbit.
 
 **Established fact:** The unit phase drains each unit's eight script threads. The interpreter runs before per-piece interpolation in that unit's script drain. A move or turn issued by a script therefore affects the same tick's interpolation; a wait that becomes satisfied during interpolation is observed by the next drain.
 
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Historical executable-analysis detail omitted from this public edition.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
 **Established fact:** Thread states include idle, running, waiting for turn, waiting for move, sleeping, and waiting for a called script. Signal masks can terminate or suppress matching threads. Calls block the caller until the callee returns.
+
+**Established fact:** `SET_SIGNAL_MASK` (`0x10068000`) replaces the current thread's mask with the popped value. Engine-created root threads begin with mask `1`. `SIGNAL` (`0x10067000`) pops a mask and scans all eight slots; every active thread whose mask intersects it is released, including the signalling thread itself, each decrementing the active count and waking every thread waiting for that slot. Signal termination never invokes a completion receiver; if the signalling thread is among the victims its interpretation stops. An explicit script `return` (`0x10065000`) pops the top value, delivers it to the thread's completion receiver when one is set, releases the slot, and wakes threads waiting for that slot. An invalid-opcode kill clears status and decrements active count but does not invoke a receiver. <!-- source orchestration-research-cob-callbacks.md -->
 
 **Established fact:** Synchronous query helpers execute script logic without an ordinary tick delta and do not advance piece interpolation. Asynchronous callbacks allocate one of the eight thread slots and return if no slot is available. Section 4.3 gives the exact failure edge for every starter, including the two cases where arguments are left on the caller's stack.
 
@@ -953,23 +940,33 @@ severity.
 
 ### 4.6 Piece arithmetic and interpolation
 
-**Established fact:** Each piece has independent move, turn, spin, and acceleration state, plus busy markers and dirty flags. Valid angles cover a 16-bit circle. A special all-bits marker means continuous spin rather than a valid angle.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Established fact:** Piece speed is divided by the VM tick denominator of 30 using signed integer division that truncates toward zero. There is no fractional remainder carry. A positive or negative script speed smaller than 30 can produce a zero per-tick step while still setting the operation dirty/busy state for the current cycle.
+**Publication omission:** Historical executable-analysis detail omitted from this public edition.
 
-**Established fact:** Move and turn operations snap on inclusive arrival. Turn uses shortest-arc logic; exactly opposite angles use a deterministic sign tie. Spin acceleration clamps on reaching or crossing the target speed. Stop-spin with a sub-tick deceleration becomes an immediate stop.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Established fact:** Sleep converts the script duration as `trunc(30 * milliseconds / 1000)` and stores it as the thread's timer. On every later entry the guard subtracts the tick delta first and wakes the thread only when the result is at or below zero. **A sleep therefore occupies its truncated tick count plus exactly one guard decrement, so its minimum latency is one tick, not zero** — a sleep of 33 milliseconds truncates to zero ticks and wakes on the next drain's guard. A zero or negative duration behaves the same way.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-Engine wake passes run all eight slots with a tick delta of zero, so they never advance a timer, but they do wake any thread whose timer is already at or below zero.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Established fact:** Drain order is: execute all eight threads in fixed slot order, then interpolate all piece axes with the same delta. Immediate move and turn operations commit during interpretation and are visible to later script slots and later simulation phases.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-A wait therefore observes an arrival one guard after the interpolation that produced it. There is a **slot-order effect**: when the thread that issued the motion occupies a higher slot number than the waiting thread, the waiter has already been guarded that tick and sees the arrival one tick later still. The drain has no second scan, so this asymmetry is part of the contract.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Established fact:** A synchronous query nests a full interpreter run inside its caller. Re-entrancy is possible and retail places no guard against querying a unit that is mid-drain.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Supported inference:** Model-coordinate handedness and any one-time 3DO conversion belong to model loading, not per-tick COB arithmetic. The script axis mapping itself appears direct.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 ## 5. Engine-to-COB callbacks
 
@@ -990,6 +987,8 @@ Callbacks are issued at the state transition that caused them, not deferred to
 the renderer. Mobile/hover lethal, healing, and paralyzer paths do not all use
 the normal HitByWeapon/TakeDamage pair; document 06 owns those gates.
 
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
 **Established fact:** `TargetCleared` carries the zero-based weapon slot (0–2)
 and is emitted only when a stored target is actually cleared: the slot's
 commanded heading/pitch words must be non-default (`heading != 0` or
@@ -1004,16 +1003,7 @@ one 512-entry word sine table whose entry *i* is
 quarter turn ahead of the phase, and products round to nearest before
 truncation.
 
-**Established fact:** On a normal-kind damage packet applied to an active,
-not-yet-dying victim, health is subtracted FIRST, then `HitByWeapon` starts
-asynchronously with two arguments `(cos(dir)·400, sin(dir)·400)` where `dir`
-is the packet direction byte shifted left by eight into the 65536-domain, and
-`TakeDamage` starts independently immediately after with one argument, the
-post-hit health percentage `clamp(health·100/maxHealth, 0, 100)` computed as
-an unsigned division of the product. Either starter can fail separately.
-Heal and paralyze kinds skip this pair entirely (the paralyze kind builds a
-paralyze order instead); lethal damage against a movement-category-1/2 victim
-sets the death latch and returns without any callbacks.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 **Established fact:** Local authoritative death runs a synchronous four-cell
 `Killed` query with outputs severity and variant before the death packet is
@@ -1030,93 +1020,27 @@ severity = clamp(severity, 1, 100)
 
 **Established fact:** Edge-triggered callbacks include StartMoving, StopMoving, MoveRate1, MoveRate2, MoveRate3, and setSFXoccupy with a medium-band value. Start/stop callbacks are issued when movement transitions; rate callbacks are issued on movement-tier changes; occupancy callbacks are issued only when the computed band changes.
 
-**Established fact:** The movement tier is a signed, inclusive threshold
-classification of one 32-bit magnitude word against two definition
-thresholds: category 1 iff `magnitude <= A`; category 2 iff `A < magnitude <=
-B`; category 3 above `B` — all comparisons signed 32-bit. Category 0 overrides
-when the mover inhibit bit is set, the unit is attached to a carrier (carrier
-dword nonzero), or both magnitude words are zero. The category is cached in
-two bits of the unit's class/state word and an unchanged category emits
-nothing. On change: into category 0 from nonzero issues `StopMoving`; into a
-nonzero category from 0 issues `StartMoving` FIRST and then the matching
-`MoveRateN`; other nonzero-to-nonzero changes issue only `MoveRateN`. All are
-immediate wake-flag starts, so the `StartMoving` drain — all eight slots at
-delta 0 plus one piece pass — forms a barrier between it and the `MoveRateN`
-that follows; the cache update is the final write.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 **Supported inference:** Wake effects and medium bands are script-authored behavior. The engine does not need a separate hard-coded wake renderer to reproduce the callback contract.
 
 ### 5.3 Weapon and query callbacks
 
-**Established fact:** The engine invokes QueryPrimary, QuerySecondary,
-QueryTertiary, AimFrom*, SweetSpot, and QueryNanoPiece synchronously.
-AimPrimary, AimSecondary, and AimTertiary are asynchronous callbacks with
-heading/pitch arguments. Successful normal, ballistic, and vertical-launch
-weapon spawners invoke FirePrimary/Secondary/Tertiary and RockUnit; the
-dropped-family inline allocator does not. Burst clones do not rerun the root
-Fire/Rock callbacks.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Established fact:** `AimPrimary`/`AimSecondary`/`AimTertiary` carry unsigned
-16-bit heading then unsigned 16-bit pitch (arity 2). Two issue forms exist,
-both preceded by clearing the slot's aim-state word to 0 and both storing the
-commanded angles in the weapon-slot record. The ballistic default computes
-relative heading as bearing-to-target minus unit heading and pitch from the
-ballistic solver; **a solver returning the `-0x8000` pitch sentinel suppresses
-the Aim start entirely**, otherwise the start carries `heading & 0xffff` then
-`pitch & 0xffff`. The fixed-forward branch — a weapon-record flag bit set,
-the aim issue bit clear, and no live tracked target (target inactive or the
-slot's adjacent status word nonzero) — starts with `(0, 0)`, the fixed-forward
-heading. After either start the engine emits a network event packet
-`{u16 unitId, u16 slot, u8 arity=2, heading, pitch}` behind a global option
-bit and sets the weapon flags byte's issue bit.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Established fact:** `RockUnit` follows its matching `Fire*` start in the
-same producer with arity 2 and arguments `(-cos(rel)·800, -sin(rel)·800)`,
-where `rel = (int16)(commanded barrel direction − unit heading)` evaluated
-through the shared sine table of section 5.1 with round-to-nearest products;
-both signs are negative and there is no completion receiver.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Established fact:** `StartBuilding` has an argument-less edge form, issued
-on the cached building-bit rising edge, and a slot-form heading variant that
-resolves the name to a weapon slot and starts THAT slot directly with one
-argument `heading & 0xffff`, plus its network event; the slot form sets the
-production record's StopBuilding-pending flag consumed by cleanup (section
-3.3).
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Established fact:** Engine-issued value callbacks convert exactly:
-`SetDirection` (guarded on a positive definition float field and a nonzero
-global mover-active word) passes a zero-extended 16-bit direction word;
-`SetSpeed` from the general update passes a signed dword shifted left by 4;
-the second `SetSpeed`, from the footprint path (guarded on a different
-positive definition float), passes the 16-bit sum over covered footprint
-cells of each occupying unit's size byte plus one — semantic unit not
-established; and `SetMaxReloadTime`, issued after Create so it lands outside
-Create's own immediate drain, scans all three weapon slots for the maximum
-authored reload and reports `trunc(maxReload · 1000 / 30)` — reload ticks
-converted to milliseconds. None of these adapters deduplicates; suppression
-can only live in the producers.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Established fact:** Query seeds are exact: the synchronous four-output
-`QueryTransport` pre-seeds output cell 0 to `-1` (remaining outputs default 0
-and are excluded from copy-back), so a missing script leaves `-1`, the
-root-piece fallback, which is later consumed as the attachment piece index.
-Every air-transport selection site seeds all four `QueryLandingPad` outputs
-to `-1`, tests candidate pieces in cell order against validity/availability,
-accepts the first pass, and keeps `-1` otherwise; some paths query the
-carrier first, then the transported unit.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Established fact:** The aim-ready handshake: the producer clears the aim
-state AND sets the weapon-slot issue bit immediately after starting `Aim*`
-with the embedded completion receiver; the issue bit clears when target
-acquisition fails and gates re-issue (a new `Aim*` starts only while the bit
-is clear). The adapter invokes the completion receiver ONLY on an explicit
-script return, passing the popped return value; signal termination and
-abnormal termination never invoke it. A zero delivery has no effect while any
-NONZERO delivery marks the weapon aim-ready — so name absence, thread-pool
-exhaustion (both deliver zero), or an authored zero return each leave the
-weapon unable to fire. The fire path entered with the issue bit set
-additionally consults a per-weapon permission function before firing; the
-issue bit alone authorizes nothing.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 **Established fact:** The run-script network dispatch (incoming packet case
 `0xE`) resolves the `u16` unit identifier at packet offset +1 through the unit
@@ -1128,10 +1052,7 @@ values are always written to window words 0–3 but only the byte arity sets
 the logical top (`depth = arity − 1`). There is no fixed callback name for
 this path.
 
-**Unknown:** The closure object installed as the `Aim*` completion receiver
-and the exact write it performs remain unlocated; the zero/nonzero readiness
-grant itself is established above. Behavior when all eight script slots are
-occupied is established in section 4.3 and differs by starter.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 ## 6. Terrain and movement prerequisites
 

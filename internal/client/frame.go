@@ -95,6 +95,15 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 			for i, pv := range prev.Units {
 				prevBySlot[uint16(pv.Slot)] = i
 			}
+			// Collect interpolated views with shell coords for Y-bucket sort [03 §1][rr-10].
+			// Retail Y-bucket is ((zPix - camZ + bias)>>4)+16 with stable append;
+			// sorting by screen Y (sy) with stable slot tie preserves that order.
+			type drawEntry struct {
+				view   snapshot.UnitView
+				sx, sy int32
+				slot   uint16
+			}
+			entries := make([]drawEntry, 0, len(cur.Units))
 			for _, cv := range cur.Units {
 				var pv snapshot.UnitView
 				if idx, ok2 := prevBySlot[uint16(cv.Slot)]; ok2 {
@@ -102,25 +111,34 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 				} else {
 					pv = cv
 				}
-				// Interpolated view includes heading/pitch/bank and piece transforms [03 §2.4] C21–C24 (I6).
 				lerped := LerpUnitView(pv, cv, alpha)
-				sx0, sy0 := c.cam.WorldToScreen(lerped.X, lerped.Y, lerped.Z) // [03 §2.5] C1
-				// Rebase from beam origin (128,32) to shell viewport origin (0,0) used by BlitTerrain [PLAN_04A C1].
+				sx0, sy0 := c.cam.WorldToScreen(lerped.X, lerped.Y, lerped.Z) // [03 §2.5] C1 beam
 				sx := sx0 - 128
-				sy := sy0 - 32
-				// Real 3DO model first [fmt 3do][03 §2.5]; footprint body
-				// only when the model is unavailable. Uses lerped heading [04 §8.1] C20 and piece state if bound [03 §2.4] C21.
+				sy := sy0 - 32 // shell [PLAN_04A C1]
+				entries = append(entries, drawEntry{view: lerped, sx: sx, sy: sy, slot: uint16(lerped.Slot)})
+			}
+			// Y-bucket stable sort: sy ascending, slot ascending on tie [03 §1] I1.
+			for i := 0; i < len(entries)-1; i++ {
+				for j := i + 1; j < len(entries); j++ {
+					if entries[j].sy < entries[i].sy || (entries[j].sy == entries[i].sy && entries[j].slot < entries[i].slot) {
+						entries[i], entries[j] = entries[j], entries[i]
+					}
+				}
+			}
+			for _, e := range entries {
+				lerped := e.view
+				sx, sy := e.sx, e.sy
+				// Real 3DO model first [fmt 3do][03 §2.5]; offscreen cache then blit in Y order [rr-10].
+				// Buildings (IsBuilding) at 2x supersampled with per-piece DontShade shading [03 §2.4.1][04 §4.3];
+				// mobiles at 1x without shading.
 				if lerped.Model != "" && c.drawUnitModel(lerped, sx, sy) {
 					c.drawUnitChrome(lerped, sx, sy)
 					continue
 				}
 				if lerped.FootX > 0 && lerped.FootZ > 0 {
-					// Footprint-correct oriented body [04 §6.2]; health bar,
-					// nanoframe dashes, selection brackets. lerped Heading ensures smooth rotation.
 					c.drawUnitOriented(lerped, sx, sy)
 					continue
 				}
-				// Legacy fallback: 5×5 marker for footprint-less views.
 				selected := lerped.Flags&SelectionFlag != 0
 				inner := byte(250)
 				if selected {

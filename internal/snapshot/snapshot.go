@@ -53,6 +53,7 @@ type UnitView struct {
 	Model                string      // authored 3DO model name for presentation [03 §2.4]
 	FootX, FootZ         int8        // packed footprint extents in cells [04 §6.2]
 	Pieces               []PieceView // COB piece transforms if VM bound [03 §2.4] C21–C22 [04 §4.6]; nil when no script
+	IsBuilding           bool        // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 }
 
 // ProjectileView is the projectile presentation view [06 §5.1] P0-I04.

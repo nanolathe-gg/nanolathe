@@ -677,9 +677,11 @@ or reproduce both halves of this contract; applying only the call-site
 addition is not retail behavior. This is distinct from ordinary `.GUI` gadget
 art: a gadget frame is copied at the translated authored gadget rectangle and
 its GAF offsets are not added. The command-panel
-GUI window is the side-prefixed `guis/<prefix>main.gui` when no unit page is
-active, `guis/<prefix>gen.gui` for a non-builder selection, or the selected
-builder's authored `guis/<unit>1.gui` page. Named page art is resolved from
+GUI window `guis/<prefix>main.gui` is the underlying battle/root window, not
+the empty-selection command page. When the selected-unit count becomes zero,
+the command-window switch formats and opens `guis/<prefix>gen.gui`. A
+non-builder selection uses that same general page; a selected builder uses its
+authored `guis/<unit>1.gui` page. Named page art is resolved from
 that page's `<unit>1.gaf`, then the side/main support GAFs, then the common
 `BUTTONS0` stock-size groups. A left-button hold inside a gadget selects its
 armed frame; pointer hover alone does not tint or change an ordinary button.
@@ -1185,14 +1187,33 @@ In-battle options and message-box panels are modal. Load/save, restart, CD
 check, and exit flows all use dialog GUIs and share text, button, list, and
 scrollbar rendering.
 
+**Tab options menu and manual exit.** In a non-network battle, the Tab key
+opens the hard-coded `guis/armopt.gui` window with `anims/armopt.gaf`; this
+name is not side-prefixed. Opening it sets both the battle modal bit and the
+single-player pause bit, and pauses the runtime audio path. Closing the root
+window clears the modal and pause bits and resumes audio. A second Tab while
+the root options window is active therefore closes it and resumes the battle.
+The authored root controls are `LOADGAME`, `SAVEGAME`, `PREFS`, `MISSION`,
+`HELP`, `EXIT`, and `OK` (`Resume`). Network mode takes a separate path and
+does not set this local pause bit.
+
+Activating `EXIT` pushes `guis/exitmenu.gui` over the options window. Its
+authored controls are `MAINMENU` (`Exit to Menu`), `EXITGAME` (`Exit Game`),
+`RESTART`, and `CANCEL`. `MAINMENU` opens `guis/yesorno.gui` with the title
+`Surrender this battle and return to main menu?`; `EXITGAME` opens it with
+`Exit the Battle` in the ordinary local skirmish path. `CHOICE1` (`Yes`)
+commits the requested transition and `CHOICE2` (`No`) returns to the exit
+window. These windows are a SAVE UNDER modal chain: the options window remains
+beneath the exit window, which remains beneath the confirmation window.
+
 Pause is represented by a runtime state that suppresses simulation progress
 and causes an `igpaused` title overlay to be drawn. Victory/defeat overlays
 come from the `igtitles` GAF family — handles `igvictory`, `igdefeat`, and
 `igpaused` — gated by mode-word bits: victory on bit 5 of one mode word,
 defeat on bit 6 of it, pause on bit 0 of the pause-mode word. Victory/defeat
-states later transition to end-mission/endgame report screens. The exact
-keyboard mapping that reaches pause is not stated here because the token
-table remains incomplete.
+states later transition to end-mission/endgame report screens. Tab's local
+options-window pause path is established above; the separate Pause-key path
+remains outside this closure.
 
 Game-speed changes are clamped to the retail range and displayed as localized
 messages. In multiplayer, speed changes are represented as networked semantic

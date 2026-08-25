@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
@@ -372,7 +373,7 @@ type screenTri struct {
 // (primitive loop starts at 1) [03 §2.4.1], team LOGOS 10 frames per-owner
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // nanoframe presentation [03 §5.7][05 "Construction target state"].
-func (c *Client) drawUnitModel(v snapshot.UnitView, sx, sy int32) bool {
+func (c *Client) drawUnitModelDirect(v snapshot.UnitView, sx, sy int32) bool {
 	m := c.unitModelFor(v.Model)
 	if m == nil || c.cam == nil || len(m.pieces) == 0 {
 		// Model-load fallback diagnostic emitted once per unit slot (structured), not per frame spam [ON-08].
@@ -774,6 +775,496 @@ func (c *Client) drawUnitModel(v snapshot.UnitView, sx, sy int32) bool {
 			}
 		}
 		c.fillTri(t, t.color)
+	}
+	return true
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// fixed buildings (IsBuilding) take the 2x supersampled path with per-piece
+// dont-shade [03 §2.4.1][04 §4.3] 0x1000e000, mobile units take the 1x cached
+// path with no shading and then both blit in Y-bucket order [03 §1].
+// Offscreen caches are per-unit and then blitted, matching retail's
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (c *Client) drawUnitModel(v snapshot.UnitView, sx, sy int32) bool {
+	if v.IsBuilding {
+		return c.drawBuildingModelOffscreen(v)
+	}
+	return c.drawMobileModelOffscreen(v)
+}
+
+// collectUnitTris builds the triangle list for v at 1x shell coords.
+// useShade true respects per-piece DontShade (buildings); false forces row 15 (units) [03 §2.4.1].
+func (c *Client) collectUnitTris(v snapshot.UnitView, useShade bool) ([]screenTri, int32, int32, int32, int32) {
+	m := c.unitModelFor(v.Model)
+	if m == nil || len(m.pieces) == 0 {
+		if m == nil && c.cam != nil && v.Model != "" {
+			if c.modelFallbacks == nil {
+				c.modelFallbacks = map[uint16]struct{}{}
+			}
+			key := uint16(v.Slot)
+			if _, seen := c.modelFallbacks[key]; !seen {
+				err := c.modelErrors[v.Model]
+				if err == nil {
+					err = fmt.Errorf("model not available")
+				}
+				fmt.Fprintf(os.Stderr, "{\"level\":\"warn\",\"msg\":\"model fallback\",\"slot\":%d,\"model\":%q,\"owner\":%d,\"error\":%q}\n", v.Slot, v.Model, v.Owner, err.Error())
+				c.modelFallbacks[key] = struct{}{}
+			}
+		}
+		return nil, 0, 0, 0, 0
+	}
+	n := len(m.pieces)
+	states := make([]pieceState, n)
+	for _, pv := range v.Pieces {
+		idx := -1
+		if pv.Name != "" {
+			if pi, ok := m.pieceByName[strings.ToLower(pv.Name)]; ok {
+				idx = pi
+			}
+		} else if pv.Index >= 0 && pv.Index < n {
+			idx = pv.Index
+		}
+		if idx < 0 || idx >= n {
+			continue
+		}
+		states[idx].rotX = pv.RotX
+		states[idx].rotY = pv.RotY
+		states[idx].rotZ = pv.RotZ
+		states[idx].tx = pv.Tx
+		states[idx].ty = pv.Ty
+		states[idx].tz = pv.Tz
+		states[idx].dontShade = pv.DontShade
+		states[idx].hidden = pv.Hidden
+		states[idx].dontShadow = pv.DontShadow
+	}
+	root := -1
+	for i, p := range m.pieces {
+		if p.parent == -1 {
+			root = i
+			break
+		}
+	}
+	if root >= 0 {
+		states[root].rotZ += v.Bank
+		states[root].rotY += v.Heading
+		states[root].rotX += v.Pitch
+	}
+	ux, uy, uz := int32(v.X>>16), int32(v.Y>>16), int32(v.Z>>16)
+	if c.terrain != nil {
+		if h := c.terrain.HeightAt(v.X, v.Z); h != numeric.Fixed(-1) {
+			_ = h
+		}
+	}
+	isNanoframe := v.BuildRemaining > 0
+	var tris []screenTri
+	for pi, piece := range m.pieces {
+		if states[pi].hidden {
+			continue
+		}
+		hiddenAncestor := false
+		cur := piece.parent
+		seen := map[int]bool{}
+		for cur >= 0 && cur < len(m.pieces) {
+			if seen[cur] {
+				break
+			}
+			seen[cur] = true
+			if states[cur].hidden {
+				hiddenAncestor = true
+				break
+			}
+			cur = m.pieces[cur].parent
+		}
+		if hiddenAncestor {
+			continue
+		}
+		chain := c.buildPieceChain(m, pi, states)
+		if chain == nil && pi != root && len(piece.vertices) > 0 {
+			continue
+		}
+		worldVerts := make([][3]numeric.Fixed, len(piece.vertices))
+		modelVertsF := make([][3]float64, len(piece.vertices))
+		for vi, lv := range piece.vertices {
+			mp := c.applyChain(lv, chain)
+			worldVerts[vi] = [3]numeric.Fixed{mp[0].Add(numeric.Fixed(int64(ux) << 16)), mp[1].Add(numeric.Fixed(int64(uy) << 16)), mp[2].Add(numeric.Fixed(int64(uz) << 16))}
+			modelVertsF[vi] = [3]float64{float64(mp[0].Raw()) / 65536, float64(mp[1].Raw()) / 65536, float64(mp[2].Raw()) / 65536}
+		}
+		normAcc := make([][3]float64, len(piece.vertices))
+		normCnt := make([]int, len(piece.vertices))
+		for _, pr := range piece.prims {
+			if pr.isSelection {
+				continue
+			}
+			np := len(pr.indices)
+			if np < 3 {
+				continue
+			}
+			if !pr.hasTex && np != 4 {
+				continue
+			}
+			if np >= 3 {
+				aIdx := int(pr.indices[0])
+				bIdx := int(pr.indices[1])
+				cIdx := int(pr.indices[2])
+				if aIdx < len(modelVertsF) && bIdx < len(modelVertsF) && cIdx < len(modelVertsF) {
+					av, bv, cv := modelVertsF[aIdx], modelVertsF[bIdx], modelVertsF[cIdx]
+					ax, ay, az := bv[0]-av[0], bv[1]-av[1], bv[2]-av[2]
+					bx, by, bz := bv[0]-cv[0], bv[1]-cv[1], bv[2]-cv[2]
+					nx := ay*bz - az*by
+					ny := az*bx - ax*bz
+					nz := ax*by - ay*bx
+					if l := math.Sqrt(nx*nx + ny*ny + nz*nz); l > 1e-9 {
+						nx, ny, nz = nx/l, ny/l, nz/l
+					} else {
+						nx, ny, nz = 0, 1, 0
+					}
+					for _, vi := range pr.indices {
+						if int(vi) < len(normAcc) {
+							normAcc[vi][0] += nx
+							normAcc[vi][1] += ny
+							normAcc[vi][2] += nz
+							normCnt[vi]++
+						}
+					}
+				}
+			}
+		}
+		vertRows := make([]int, len(piece.vertices))
+		for vi := range piece.vertices {
+			if !useShade {
+				vertRows[vi] = 15
+				continue
+			}
+			if states[pi].dontShade {
+				vertRows[vi] = 15
+				continue
+			}
+			cnt := normCnt[vi]
+			if cnt == 0 {
+				vertRows[vi] = 15
+				continue
+			}
+			nx := normAcc[vi][0] / float64(cnt)
+			ny := normAcc[vi][1] / float64(cnt)
+			nz := normAcc[vi][2] / float64(cnt)
+			if l := math.Sqrt(nx*nx + ny*ny + nz*nz); l > 1e-9 {
+				nx, ny, nz = nx/l, ny/l, nz/l
+			} else {
+				nx, ny, nz = 0, 1, 0
+			}
+			d := nx*lightDir[0] + ny*lightDir[1] + nz*lightDir[2]
+			vertRows[vi] = int(d*5.0) & 31
+		}
+		for _, pr := range piece.prims {
+			if pr.isSelection {
+				continue
+			}
+			np := len(pr.indices)
+			if np < 3 {
+				continue
+			}
+			if !pr.hasTex && np != 4 {
+				continue
+			}
+			var frame *formats.GAFFrame
+			var entry *formats.GAFEntry
+			isTeam := false
+			if pr.hasTex {
+				switch pr.ref.kind {
+				case texAnimated:
+					frame = animatedFrame(pr.ref, c.animClock)
+				case texTeam:
+					frame = pr.ref.frame
+					entry = pr.ref.entry
+					isTeam = true
+				default:
+					frame = pr.ref.frame
+				}
+			}
+			uvs := [4][2]float64{{0, 0}, {1, 0}, {1, 1}, {0, 1}}
+			ngonUV := np > 4
+			ua, ub := 0, 2
+			var aMin, aSpan, bMin, bSpan float64
+			if ngonUV {
+				var lo, hi [3]float64
+				first := true
+				for _, vi := range pr.indices {
+					if int(vi) >= len(piece.vertices) {
+						continue
+					}
+					mv := modelVertsF[vi]
+					if first {
+						lo, hi = mv, mv
+						first = false
+						continue
+					}
+					for a := 0; a < 3; a++ {
+						if mv[a] < lo[a] {
+							lo[a] = mv[a]
+						}
+						if mv[a] > hi[a] {
+							hi[a] = mv[a]
+						}
+					}
+				}
+				var ext [3]float64
+				for a := 0; a < 3; a++ {
+					ext[a] = hi[a] - lo[a]
+				}
+				ua, ub = 0, 1
+				if ext[1] >= ext[0] && ext[1] >= ext[2] {
+					ua, ub = 1, 2
+				} else if ext[2] >= ext[0] && ext[2] >= ext[1] {
+					ua, ub = 0, 2
+				}
+				if ext[ua] > ext[ub] {
+					ua, ub = ub, ua
+				}
+				aMin, aSpan = lo[ua], ext[ua]
+				bMin, bSpan = lo[ub], ext[ub]
+				if aSpan == 0 {
+					aSpan = 1
+				}
+				if bSpan == 0 {
+					bSpan = 1
+				}
+			}
+			for k := 1; k+1 < np; k++ {
+				idx0 := int(pr.indices[0])
+				idx1 := int(pr.indices[k])
+				idx2 := int(pr.indices[k+1])
+				if idx0 >= len(worldVerts) || idx1 >= len(worldVerts) || idx2 >= len(worldVerts) {
+					continue
+				}
+				var st screenTri
+				st.color = pr.color
+				st.order = pr.order
+				st.row = [3]float64{float64(vertRows[idx0]), float64(vertRows[idx1]), float64(vertRows[idx2])}
+				if isTeam {
+					st.entry = entry
+					st.team = true
+				}
+				if pr.hasTex {
+					st.frame = frame
+					uvFor := func(vi, cidx int) [2]float64 {
+						if ngonUV {
+							mv := modelVertsF[vi]
+							return [2]float64{(mv[ua] - aMin) / aSpan, (mv[ub] - bMin) / bSpan}
+						}
+						return uvs[cidx]
+					}
+					st.u[0], st.v[0] = uvFor(idx0, 0)[0], uvFor(idx0, 0)[1]
+					st.u[1], st.v[1] = uvFor(idx1, k)[0], uvFor(idx1, k)[1]
+					st.u[2], st.v[2] = uvFor(idx2, k+1)[0], uvFor(idx2, k+1)[1]
+				}
+				for triCorner, vi := range []int{idx0, idx1, idx2} {
+					wv := worldVerts[vi]
+					wx := int32(wv[0] >> 16)
+					wy := int32(wv[1] >> 16)
+					wz := int32(wv[2] >> 16)
+					px := wx - c.cam.X
+					py := wz - (wy >> 1) - c.cam.Z
+					st.x[triCorner], st.y[triCorner] = px, py
+					st.depth += py
+				}
+				st.depth /= 3
+				if isNanoframe {
+					continue
+				}
+				tris = append(tris, st)
+			}
+		}
+	}
+	if len(tris) == 0 {
+		return nil, 0, 0, 0, 0
+	}
+	minX, minY, maxX, maxY := tris[0].x[0], tris[0].y[0], tris[0].x[0], tris[0].y[0]
+	for _, t := range tris {
+		for k := 0; k < 3; k++ {
+			if t.x[k] < minX {
+				minX = t.x[k]
+			}
+			if t.x[k] > maxX {
+				maxX = t.x[k]
+			}
+			if t.y[k] < minY {
+				minY = t.y[k]
+			}
+			if t.y[k] > maxY {
+				maxY = t.y[k]
+			}
+		}
+	}
+	return tris, minX, minY, maxX, maxY
+}
+
+// drawBuildingModelOffscreen renders a building at 2x supersampled into an
+// offscreen cache then downscales via ALP 2x2 blend and blits in Y-bucket order
+// [03 §2.5][rr-10]. Shading respects per-piece DontShade (row 15) [03 §2.4.1][04 §4.3].
+func (c *Client) drawBuildingModelOffscreen(v snapshot.UnitView) bool {
+	tris, minX, minY, maxX, maxY := c.collectUnitTris(v, true)
+	if len(tris) == 0 {
+		return false
+	}
+	bw := int(maxX - minX + 1)
+	bh := int(maxY - minY + 1)
+	if bw <= 0 || bh <= 0 || bw > 600 || bh > 600 {
+		return false
+	}
+	// 2x supersampled temp
+	tw, th := bw*2, bh*2
+	temp := make([]byte, tw*th)
+	for i := range temp {
+		temp[i] = 255 // transparent sentinel
+	}
+	// Render scaled tris into temp
+	for i := range tris {
+		t := tris[i]
+		var st screenTri = t
+		for k := 0; k < 3; k++ {
+			st.x[k] = (t.x[k] - minX) * 2
+			st.y[k] = (t.y[k] - minY) * 2
+		}
+		if st.frame != nil {
+			frame := st.frame
+			if st.team && st.entry != nil {
+				owner := int(v.Owner) % 10
+				if owner < len(st.entry.Frames) {
+					frame = st.entry.Frames[owner].Frame
+				}
+			}
+			if frame != nil {
+				blitTexturedTriToDest(temp, tw, th, &st, frame, c.pal)
+				continue
+			}
+		}
+		fillTriToDest(temp, tw, th, &st, st.color)
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	dstW, dstH := bw, bh
+	// Blit with clipping
+	for y := 0; y < dstH; y++ {
+		sy0 := y * 2
+		sy1 := sy0 + 1
+		dy := int(minY) + y
+		if dy < 0 || dy >= c.height {
+			continue
+		}
+		for x := 0; x < dstW; x++ {
+			sx0 := x * 2
+			sx1 := sx0 + 1
+			dx := int(minX) + x
+			if dx < 0 || dx >= c.width {
+				continue
+			}
+			// Gather 2x2 block
+			a := temp[sy0*tw+sx0]
+			b := temp[sy0*tw+sx1]
+			cc := temp[sy1*tw+sx0]
+			d := temp[sy1*tw+sx1]
+			// Transparent handling: if all 255 skip
+			opaques := 0
+			var vals []byte
+			if a != 255 {
+				opaques++
+				vals = append(vals, a)
+			}
+			if b != 255 {
+				opaques++
+				vals = append(vals, b)
+			}
+			if cc != 255 {
+				opaques++
+				vals = append(vals, cc)
+			}
+			if d != 255 {
+				opaques++
+				vals = append(vals, d)
+			}
+			if opaques == 0 {
+				continue
+			}
+			var out byte
+			if opaques == 1 {
+				out = vals[0]
+			} else if c.pal != nil {
+				// Blend via ALP sequentially
+				out = vals[0]
+				for i := 1; i < len(vals); i++ {
+					out = c.pal.Alpha[int(out)*256+int(vals[i])]
+				}
+			} else {
+				// Fallback average without palette
+				sum := 0
+				for _, v := range vals {
+					sum += int(v)
+				}
+				out = byte(sum / len(vals))
+			}
+			c.indexed[dy*c.width+dx] = out
+		}
+	}
+	return true
+}
+
+// drawMobileModelOffscreen renders a mobile unit at 1x without shading
+// (row 15) into an offscreen cache then blits in Y-bucket order.
+// No downscale, no SHD darkening — flat and team textures at identity [03 §4.3].
+func (c *Client) drawMobileModelOffscreen(v snapshot.UnitView) bool {
+	tris, minX, minY, maxX, maxY := c.collectUnitTris(v, false)
+	if len(tris) == 0 {
+		return false
+	}
+	bw := int(maxX - minX + 1)
+	bh := int(maxY - minY + 1)
+	if bw <= 0 || bh <= 0 || bw > 600 || bh > 600 {
+		return false
+	}
+	temp := make([]byte, bw*bh)
+	for i := range temp {
+		temp[i] = 255
+	}
+	for i := range tris {
+		t := tris[i]
+		var st screenTri = t
+		for k := 0; k < 3; k++ {
+			st.x[k] = t.x[k] - minX
+			st.y[k] = t.y[k] - minY
+		}
+		// Force no shade: rows already 15, but ensure
+		st.row = [3]float64{15, 15, 15}
+		if st.frame != nil {
+			frame := st.frame
+			if st.team && st.entry != nil {
+				owner := int(v.Owner) % 10
+				if owner < len(st.entry.Frames) {
+					frame = st.entry.Frames[owner].Frame
+				}
+			}
+			if frame != nil {
+				blitTexturedTriToDest(temp, bw, bh, &st, frame, c.pal)
+				continue
+			}
+		}
+		fillTriToDest(temp, bw, bh, &st, st.color)
+	}
+	// Blit 1:1 to main with transparency
+	for y := 0; y < bh; y++ {
+		dy := int(minY) + y
+		if dy < 0 || dy >= c.height {
+			continue
+		}
+		for x := 0; x < bw; x++ {
+			dx := int(minX) + x
+			if dx < 0 || dx >= c.width {
+				continue
+			}
+			pix := temp[y*bw+x]
+			if pix == 255 {
+				continue
+			}
+			c.indexed[dy*c.width+dx] = pix
+		}
 	}
 	return true
 }
@@ -1542,6 +2033,118 @@ func (c *Client) drawProjectileModel(p snapshot.ProjectileView, alpha float32) b
 		c.fillTri(&t, t.color)
 	}
 	return true
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+
+func fillTriToDest(dest []byte, w, h int, t *screenTri, color uint8) {
+	minX, minY, maxX, maxY := t.x[0], t.y[0], t.x[0], t.y[0]
+	for k := 1; k < 3; k++ {
+		if t.x[k] < minX {
+			minX = t.x[k]
+		}
+		if t.x[k] > maxX {
+			maxX = t.x[k]
+		}
+		if t.y[k] < minY {
+			minY = t.y[k]
+		}
+		if t.y[k] > maxY {
+			maxY = t.y[k]
+		}
+	}
+	if minX < 0 {
+		minX = 0
+	}
+	if minY < 0 {
+		minY = 0
+	}
+	if maxX >= int32(w) {
+		maxX = int32(w - 1)
+	}
+	if maxY >= int32(h) {
+		maxY = int32(h - 1)
+	}
+	for py := minY; py <= maxY; py++ {
+		row := py * int32(w)
+		for px := minX; px <= maxX; px++ {
+			if pointInTri(t, px, py) {
+				dest[row+px] = color
+			}
+		}
+	}
+}
+
+func blitTexturedTriToDest(dest []byte, w, h int, t *screenTri, frame *formats.GAFFrame, pal *palette.Tables) {
+	minX, minY, maxX, maxY := t.x[0], t.y[0], t.x[0], t.y[0]
+	for k := 1; k < 3; k++ {
+		if t.x[k] < minX {
+			minX = t.x[k]
+		}
+		if t.x[k] > maxX {
+			maxX = t.x[k]
+		}
+		if t.y[k] < minY {
+			minY = t.y[k]
+		}
+		if t.y[k] > maxY {
+			maxY = t.y[k]
+		}
+	}
+	if minX < 0 {
+		minX = 0
+	}
+	if minY < 0 {
+		minY = 0
+	}
+	if maxX >= int32(w) {
+		maxX = int32(w - 1)
+	}
+	if maxY >= int32(h) {
+		maxY = int32(h - 1)
+	}
+	d := baryDenom(t)
+	if d == 0 {
+		return
+	}
+	fw, fh := int(frame.Width), int(frame.Height)
+	for py := minY; py <= maxY; py++ {
+		row := py * int32(w)
+		for px := minX; px <= maxX; px++ {
+			l0, l1, l2 := bary(t, d, px, py)
+			if l0 < 0 || l1 < 0 || l2 < 0 {
+				continue
+			}
+			u := l0*t.u[0] + l1*t.u[1] + l2*t.u[2]
+			v := l0*t.v[0] + l1*t.v[1] + l2*t.v[2]
+			tx, ty := int(u*float64(fw)), int(v*float64(fh))
+			if tx < 0 {
+				tx = 0
+			} else if tx >= fw {
+				tx = fw - 1
+			}
+			if ty < 0 {
+				ty = 0
+			} else if ty >= fh {
+				ty = fh - 1
+			}
+			b, ok := frame.At(tx, ty)
+			if !ok {
+				continue
+			}
+			r := l0*t.row[0] + l1*t.row[1] + l2*t.row[2]
+			ri := int(r)
+			if ri < 0 {
+				ri = 0
+			} else if ri > 31 {
+				ri = 31
+			}
+			if pal != nil {
+				b = pal.Shade[ri][b]
+			}
+			dest[row+px] = b
+		}
+	}
 }
 
 // drawUnitChrome overlays selection brackets and the health bar for a

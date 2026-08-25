@@ -507,7 +507,8 @@ func TestSelectionPickingStable(t *testing.T) {
 		},
 	}
 	// Selection rect centered at unit's projected position should still select it, even though piece is far.
-	sx, sy := c.cam.WorldToScreen(view.X, view.Y, view.Z)
+	sx0, sy0 := c.cam.WorldToScreen(view.X, view.Y, view.Z)
+	sx, sy := sx0-camera.OriginX, sy0-camera.OriginY
 	rect := Rect{MinX: sx - 2, MaxX: sx + 2, MinY: sy - 2, MaxY: sy + 2}
 	if !rect.Contains(sx, sy) {
 		t.Fatalf("rect should contain unit center")

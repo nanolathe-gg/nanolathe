@@ -263,7 +263,7 @@ func (g *gate2Session) viewerStep(delta float64, cl *client.Client) {
 			h := rect.MaxY - rect.MinY
 			if w < 3 && h < 3 {
 				if g.latch == input.LatchMove {
-					wx, wz := g.cam.ScreenToWorld(mx, my)
+					wx, wz := g.cam.ScreenToWorld(mx+camera.OriginX, my+camera.OriginY)
 					g.issueMoveTo(wx, wz)
 					g.latch = input.LatchNormal
 				} else if mouse.Held(input.MouseButtonRight) {
@@ -275,13 +275,13 @@ func (g *gate2Session) viewerStep(delta float64, cl *client.Client) {
 		}
 		if mouse.Pressed(input.MouseButtonRight) {
 			if g.latch == input.LatchMove || g.hasSelection() {
-				wx, wz := g.cam.ScreenToWorld(mx, my)
+				wx, wz := g.cam.ScreenToWorld(mx+camera.OriginX, my+camera.OriginY)
 				g.issueMoveTo(wx, wz)
 				g.latch = input.LatchNormal
 			}
 		}
 		if mouse.Pressed(input.MouseButtonLeft) && g.latch == input.LatchMove && !g.dragActive {
-			wx, wz := g.cam.ScreenToWorld(mx, my)
+			wx, wz := g.cam.ScreenToWorld(mx+camera.OriginX, my+camera.OriginY)
 			g.issueMoveTo(wx, wz)
 			g.latch = input.LatchNormal
 		}

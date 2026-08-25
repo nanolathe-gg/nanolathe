@@ -23,9 +23,9 @@ func TestSelectionPickWorld(t *testing.T) {
 		h, _ := w.Create(def, 0, x, y, z)
 		_ = h
 	}
-	// Projected screen positions: 128+px, 32
-	// Rect covering first two (128,32) to (138,32) inclusive.
-	rect := NormalizeRect(128, 32, 138, 32)                        // [07 §9] inclusive
+	// Projected screen positions: shell px,0 (beam 128+px,32 rebased)
+	// Rect covering first two (0,0) to (10,0) inclusive shell.
+	rect := NormalizeRect(0, 0, 10, 0)                             // [07 §9] inclusive shell
 	changed, count := ApplyDragSelectionWorld(w, cam, rect, false) // additive clear
 	if !changed {
 		t.Fatal("expected changed on first select")
@@ -53,7 +53,7 @@ func TestSelectionPickWorld(t *testing.T) {
 		t.Fatal("toggle should have cleared first two")
 	}
 	// Rect covering only third with additive false should select only third and clear others (already cleared).
-	rect2 := NormalizeRect(148, 32, 148, 32)
+	rect2 := NormalizeRect(20, 0, 20, 0)
 	changed, count = ApplyDragSelectionWorld(w, cam, rect2, false)
 	if count != 1 {
 		t.Fatalf("rect2 count %d want 1", count)

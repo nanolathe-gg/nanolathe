@@ -18,6 +18,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -57,8 +58,13 @@ type battleSession struct {
 	buildMX    int32
 	buildMY    int32
 
-	msAccum    float64 // renderer delta → scaled-now for Session.Step
-	lastScaled int64   // previous scaled-now; delta = sim frames ran
+	msAccum float64 // renderer delta → scaled-now for Session.Step
+
+	menu             battleMenuState
+	menuPressed      int
+	menuPressedState battleMenuState
+	returnToMenu     func(*client.Client)
+	ended            bool
 
 	panelButtons []panelButton
 
@@ -203,9 +209,26 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		b.panel.SetTarget(spaceHeld, false)
 		b.panel.Step(uint32(time.Now().UnixMilli() & 0xffffffff))
 	}
-	b.handleInput(cl.Input(), cl)
+	in := cl.Input()
+	if in != nil && in.Kbd != nil && in.Kbd.KeyDown(input.KeyTab) {
+		switch b.menu {
+		case battleMenuClosed:
+			b.openBattleMenu()
+		case battleMenuOptions:
+			b.closeBattleMenu()
+		}
+	}
+	if b.menu != battleMenuClosed {
+		b.handleBattleMenuInput(in, cl)
+	} else {
+		b.handleInput(in, cl)
+	}
+	if b.ended {
+		return
+	}
 	// Authoritative budget lives in Session.Step [01 §4.2][01 §4.3]; the
 	// accumulator converts renderer seconds into scaled milliseconds.
+	beforeTick := b.sess.Clock.GlobalTick
 	b.msAccum += delta * 1000
 	scaled := int64(b.msAccum * 30 / 1000)
 	if scaled > 1<<30 {
@@ -214,15 +237,20 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	b.sess.Step(int32(scaled))
 	// Animated model textures tick with the simulation frame count
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	if ran := scaled - b.lastScaled; ran > 0 {
+	if ran := b.sess.Clock.GlobalTick - beforeTick; ran > 0 {
 		cl.TickTextureAnimators(int(ran))
 		cl.Cursors().Step(int(ran))
-		b.lastScaled = scaled
 	}
-	b.updateCursor(cl)
+	if b.menu != battleMenuClosed {
+		if cursors := cl.Cursors(); cursors != nil {
+			cursors.SetIndex(render.CursorNormal)
+		}
+	} else {
+		b.updateCursor(cl)
+	}
 	// Camera pan identical to Gate-1/Gate-2 caps [07 §10]; W/A/S/D remain
 	// unbound per ON-05 (do not pan) [F-P1-008].
-	if b.cam != nil {
+	if b.cam != nil && b.menu == battleMenuClosed {
 		kbd := cl.Input().Kbd
 		mouse := cl.Input().Mouse
 		rawDelta := int32(delta * 1000)
@@ -1086,7 +1114,7 @@ func (b *battleSession) stockpileSelected(queued bool) {
 // the world [04 §6.2][PLAN_08 C17].
 func (b *battleSession) updatePlacement(mx, my int32) {
 	b.buildMX, b.buildMY = mx, my
-	wx, wz := b.cam.ScreenToWorld(mx, my)
+	wx, wz := b.cam.ScreenToWorld(mx+camera.OriginX, my+camera.OriginY)
 	cx, cz := world.WorldToCell(wx), world.WorldToCell(wz)
 	halfX, halfZ := b.buildFootX/2, b.buildFootZ/2
 	cx -= halfX
@@ -1129,7 +1157,7 @@ func (b *battleSession) commitBuild(queued bool) {
 	if !b.buildOK {
 		return // illegal placement queues nothing [R-P0-03]
 	}
-	wx, wz := b.cam.ScreenToWorld(b.buildMX, b.buildMY)
+	wx, wz := b.cam.ScreenToWorld(b.buildMX+camera.OriginX, b.buildMY+camera.OriginY)
 	wy := numeric.Fixed(0)
 	if b.sess.World != nil {
 		wy = b.sess.World.HeightAt(wx, wz)
@@ -1223,8 +1251,9 @@ func (b *battleSession) drawOverlay(c *client.Client, fnt *formats.FNT) {
 		}
 	}
 	if b.buildDef != "" {
-		wx, wz := b.cam.ScreenToWorld(b.buildMX, b.buildMY)
-		sx, sy := c.WorldToScreenPx(wx, wz, numeric.Fixed(0))
+		wx, wz := b.cam.ScreenToWorld(b.buildMX+camera.OriginX, b.buildMY+camera.OriginY)
+		sx0, sy0 := c.WorldToScreenPx(wx, wz, numeric.Fixed(0))
+		sx, sy := sx0-camera.OriginX, sy0-camera.OriginY
 		wpx := int(b.buildFootX) * 16
 		hpx := int(b.buildFootZ) * 16
 		col := byte(200)
@@ -1416,7 +1445,7 @@ func loadFNT(cs *contentSet) *formats.FNT {
 // clicked cell and is visible; unit picking is tried first [07 §8][07 §9][P0-I14].
 // It delegates unit picking to client.PickUnit so there is one canonical routine [P0-I14].
 func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *orders.ResolvePos) {
-	wx, wz := b.cam.ScreenToWorld(sx, sy)
+	wx, wz := b.cam.ScreenToWorld(sx+camera.OriginX, sy+camera.OriginY)
 	pos := &orders.ResolvePos{X: wx, Z: wz}
 	if b.sess == nil || b.sess.Units == nil || b.cam == nil {
 		return 0, nil, pos
@@ -1631,7 +1660,7 @@ func (b *battleSession) hoverFeature(sx, sy int32) *content.FeatureDef {
 	if b.sess.Features == nil || b.cam == nil {
 		return nil
 	}
-	wx, wz := b.cam.ScreenToWorld(sx, sy)
+	wx, wz := b.cam.ScreenToWorld(sx+camera.OriginX, sy+camera.OriginY)
 	inst := b.sess.Features.InstanceAt(int(world.WorldToCell(wx)), int(world.WorldToCell(wz)))
 	if inst == nil {
 		return nil

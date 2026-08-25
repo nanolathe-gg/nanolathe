@@ -150,3 +150,94 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 		}
 	}
 }
+
+func TestRetailNoSelectionUsesSideGeneralWindow(t *testing.T) {
+	root := os.Getenv("NANOLATHE_TA_ROOT")
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skipf("retail assets unavailable: %v", err)
+		}
+		root = home + "/TotalAnnihilation"
+	}
+	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
+	cs, err := openContent(opts)
+	if err != nil {
+		t.Skipf("retail assets unavailable: %v", err)
+	}
+	defer cs.Close()
+	rng.SeedGlobal(1, 1)
+	sess, cat, err := newBattleSession(opts, cs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range sess.Units.Iter() {
+		if u != nil {
+			u.Flags &^= client.SelectionFlag
+		}
+	}
+	for step := int32(1); step <= 30; step++ {
+		sess.Step(step)
+		if _, cur, ok := sess.Snapshot.Read(); ok && cur != nil {
+			break
+		}
+	}
+
+	const winW, winH = 640, 480
+	cam := &camera.Camera{
+		ViewW: winW, ViewH: winH,
+		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
+	}
+	centerOnCommander(sess.Units, cam, winW, winH)
+	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal, menuPressed: -1}
+	pal := loadPalette(cs)
+	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cur, ok := sess.Snapshot.Read()
+	if !ok || cur == nil {
+		t.Fatal("no-selection snapshot not published")
+	}
+	window, _ := b.hud.windowFor(b, cur)
+	want := strings.ToLower(b.hud.side.NamePrefix) + "gen.gui"
+	if window == nil || !strings.HasSuffix(strings.ToLower(window.Name), want) {
+		if window == nil {
+			t.Fatalf("no-selection window is nil; want %s", want)
+		}
+		t.Fatalf("no-selection window = %q; want suffix %q", window.Name, want)
+	}
+
+	if shot := os.Getenv("NANOLATHE_HUD_MENU_SHOT"); shot != "" {
+		b.openBattleMenu()
+		switch os.Getenv("NANOLATHE_HUD_MENU_STATE") {
+		case "exit":
+			b.menu = battleMenuExit
+		case "confirm":
+			b.menu = battleMenuConfirmExit
+		case "confirm-main":
+			b.menu = battleMenuConfirmMain
+		}
+		cl, err := client.New(client.Options{Buffer: sess.Snapshot, Width: winW, Height: winH, Headless: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cl.SetTerrain(sess.World)
+		cl.SetCamera(cam)
+		cl.SetPalette(pal)
+		cl.SetFNT(b.hud.console)
+		cl.SetModelFS(cs.fs)
+		cl.Overlay = func(c *client.Client) { b.hud.draw(c, b) }
+		file, err := os.Create(shot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := png.Encode(file, cl.ComposeFrame()); err != nil {
+			file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

@@ -58,6 +58,10 @@ type Options struct {
 type Client struct {
 	opts Options
 
+	// exitRequested lets authored in-game GUI actions terminate the same
+	// Ebitengine loop as closing the window. It is presentation state only.
+	exitRequested bool
+
 	// Overlay draws battle-view chrome after world units. Presentation only
 	// [I6]. Debug text is separately opt-in through Options.DebugOverlay.
 	Overlay func(c *Client)
@@ -198,6 +202,13 @@ func (c *Client) Size() (int, int) { return c.width, c.height }
 // Buffer exposes the presentation snapshot source (diagnostics publish into
 // it directly; the session path owns it in normal play).
 func (c *Client) Buffer() *snapshot.Buffer { return c.buffer }
+
+// RequestExit asks the window backend to terminate after the current update.
+// Headless callers can inspect the request without creating a window.
+func (c *Client) RequestExit() { c.exitRequested = true }
+
+// ExitRequested reports whether RequestExit has been called.
+func (c *Client) ExitRequested() bool { return c.exitRequested }
 
 // SetModelFS installs the VFS for lazy 3DO/texture loads and builds the
 // texture-name index. Presentation state only.

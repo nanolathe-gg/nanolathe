@@ -41,7 +41,8 @@ func TestPickUnitFogAndOverlap(t *testing.T) {
 		t.Fatal("units not created")
 	}
 	// Ensure both alive and same position.
-	sx, sy := cam.WorldToScreen(u1.X, u1.Y, u1.Z)
+	sx0, sy0 := cam.WorldToScreen(u1.X, u1.Y, u1.Z)
+	sx, sy := sx0-camera.OriginX, sy0-camera.OriginY // shell
 
 	// Visibility service with no coverage: enemy units not visible to player 0 [03 §3.2] C8.
 	// Construct minimal service with grid dimensions matching terrain/2.
@@ -65,7 +66,8 @@ func TestPickUnitFogAndOverlap(t *testing.T) {
 	// Move second unit slightly closer to cursor than first, should win despite higher slot.
 	// Nudge u2 to be exactly at cursor, u1 slightly offset.
 	u2.X = x + numeric.Fixed(1*65536) // 1 world unit east ~ 1 pixel
-	sx2, sy2 := cam.WorldToScreen(u2.X, u2.Y, u2.Z)
+	sx20, sy20 := cam.WorldToScreen(u2.X, u2.Y, u2.Z)
+	sx2, sy2 := sx20-camera.OriginX, sy20-camera.OriginY
 	// Cursor at u2's screen pos should pick u2 now.
 	bh, bu = PickUnit(sx2, sy2, cam, w, nil, visibility.PlayerID(0))
 	if bh != h2 {
@@ -90,7 +92,8 @@ func TestPickUnitRespectsFogViaVisibility(t *testing.T) {
 	h, _ := w.Create(def, 1, x, 0, z)
 	u := w.Unit(h)
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: 32 * 16, MapH: 32 * 16}
-	sx, sy := cam.WorldToScreen(u.X, u.Y, u.Z)
+	sx0, sy0 := cam.WorldToScreen(u.X, u.Y, u.Z)
+	sx, sy := sx0-camera.OriginX, sy0-camera.OriginY
 
 	// With visibility that marks player 0's own units visible but enemy not, we can test own bypass.
 	// Create a service that would mark enemy invisible; using nil vis means no fog (all visible).
@@ -103,7 +106,8 @@ func TestPickUnitRespectsFogViaVisibility(t *testing.T) {
 	w2 := units.New(8, cat)
 	hOwn, _ := w2.Create(def, 0, x, 0, z) // owner 0 same as viewer
 	own := w2.Unit(hOwn)
-	sxOwn, syOwn := cam.WorldToScreen(own.X, own.Y, own.Z)
+	sxO0, syO0 := cam.WorldToScreen(own.X, own.Y, own.Z)
+	sxOwn, syOwn := sxO0-camera.OriginX, syO0-camera.OriginY
 	bh, bu := PickUnit(sxOwn, syOwn, cam, w2, visEmpty, visibility.PlayerID(0))
 	if bh != hOwn || bu != own {
 		t.Fatalf("owner bypass: want own unit %v got %v", hOwn, bh)

@@ -33,22 +33,24 @@ func UnitToScreen(cam *camera.Camera, u *units.Unit) (int32, int32) {
 }
 
 // IsUnitViewInRect reports whether the projected UnitView falls inside the
-// inclusive drag rectangle [07 §9] C6.
+// inclusive drag rectangle [07 §9] C6. Rect is shell (window) coords.
 func IsUnitViewInRect(cam *camera.Camera, v snapshot.UnitView, rect Rect) bool {
 	if cam == nil || rect.IsEmpty() {
 		return false
 	}
-	sx, sy := UnitViewToScreen(cam, v)
+	sx0, sy0 := UnitViewToScreen(cam, v)             // beam
+	sx, sy := sx0-camera.OriginX, sy0-camera.OriginY // shell [PLAN_04A C1]
 	return rect.Contains(sx, sy)
 }
 
 // IsUnitInRect reports whether the live Unit's projected position is inside
-// the inclusive drag rectangle [07 §9] C6.
+// the inclusive drag rectangle [07 §9] C6. Rect is shell.
 func IsUnitInRect(cam *camera.Camera, u *units.Unit, rect Rect) bool {
 	if cam == nil || u == nil || rect.IsEmpty() {
 		return false
 	}
-	sx, sy := UnitToScreen(cam, u)
+	sx0, sy0 := UnitToScreen(cam, u) // beam
+	sx, sy := sx0-camera.OriginX, sy0-camera.OriginY
 	return rect.Contains(sx, sy)
 }
 

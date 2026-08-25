@@ -366,6 +366,12 @@ func ApplyDragSelectionFlags(flags []uint32, xs, ys []int32, rect Rect, additive
 // [03 §2.5] and tests against the inclusive rect. Eligibility is alive for
 // the Gate-2 slice (full retail predicate needs COB/state fields).
 // Iteration is stable ascending slot order (I1) via units.World.Iter.
+//
+// Mouse/window coords are shell viewport (0,0 origin) as used by
+// BlitTerrain and unit rendering which rebase from the 128,32 beam origin
+// [PLAN_04A C1][03 §2.5]. WorldToScreen adds 128,32 for the beam path, so
+// we rebase the projected point to shell before inclusive test. The rect
+// itself is built from window coords and is already shell.
 func ApplyDragSelectionWorld(w *units.World, cam *camera.Camera, rect Rect, additive bool) (changed bool, selectedCount int) { // [07 §9] C6
 	if w == nil || cam == nil {
 		return false, 0
@@ -375,8 +381,9 @@ func ApplyDragSelectionWorld(w *units.World, cam *camera.Camera, rect Rect, addi
 		if u == nil || !u.Alive {
 			continue
 		}
-		sx, sy := cam.WorldToScreen(u.X, u.Y, u.Z) // [03 §2.5] C1
-		inside := rect.Contains(sx, sy)            // [07 §9] inclusive
+		sx0, sy0 := cam.WorldToScreen(u.X, u.Y, u.Z)     // [03 §2.5] C1 beam
+		sx, sy := sx0-camera.OriginX, sy0-camera.OriginY // shell [PLAN_04A C1]
+		inside := rect.Contains(sx, sy)                  // [07 §9] inclusive
 		old := u.Flags&SelectionFlag != 0
 		next := NextSelected(old, inside, additive)
 		if next != old {
@@ -448,7 +455,8 @@ func PickUnit(sx, sy int32, cam *camera.Camera, unitsWorld *units.World, vis *vi
 				continue // fogged: treated as absent for picking [03 §3.2] C8 [P0-I14]
 			}
 		}
-		sxU, syU := cam.WorldToScreen(u.X, u.Y, u.Z)
+		sxU0, syU0 := cam.WorldToScreen(u.X, u.Y, u.Z)       // beam [03 §2.5]
+		sxU, syU := sxU0-camera.OriginX, syU0-camera.OriginY // shell [PLAN_04A C1]
 		dx := int64(sxU) - int64(sx)
 		dy := int64(syU) - int64(sy)
 		dist2 := dx*dx + dy*dy

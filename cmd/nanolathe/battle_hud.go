@@ -40,6 +40,11 @@ type retailBattleHUD struct {
 	oldMain     *formats.GAF
 	share       *formats.GAF
 	logos       *formats.GAF
+	optionsGAF  *formats.GAF
+	optionsWin  *gui.Window
+	exitWin     *gui.Window
+	confirmWin  *gui.Window
+	pausedFrame *formats.GAFFrame
 
 	panel *hud.Panel
 	fs    *vfs.FS
@@ -116,10 +121,35 @@ func loadRetailBattleHUD(fs *vfs.FS, sess *session.Session, cat *content.Catalog
 	if err != nil {
 		return nil, fmt.Errorf("battle HUD: textures/logos.gaf: %w", err)
 	}
+	optionsWin, err := gui.Load(fs, "guis/armopt.gui")
+	if err != nil {
+		return nil, fmt.Errorf("battle HUD: armopt.gui: %w [07 \"Tab options menu and manual exit\"]", err)
+	}
+	optionsGAF, err := formats.LoadGAFFile(fs, "anims/armopt.gaf")
+	if err != nil {
+		return nil, fmt.Errorf("battle HUD: armopt.gaf: %w [07 \"Tab options menu and manual exit\"]", err)
+	}
+	exitWin, err := gui.Load(fs, "guis/exitmenu.gui")
+	if err != nil {
+		return nil, fmt.Errorf("battle HUD: exitmenu.gui: %w [07 \"Tab options menu and manual exit\"]", err)
+	}
+	confirmWin, err := gui.Load(fs, "guis/yesorno.gui")
+	if err != nil {
+		return nil, fmt.Errorf("battle HUD: yesorno.gui: %w [07 \"Tab options menu and manual exit\"]", err)
+	}
+	titles, err := formats.LoadGAFFile(fs, "anims/igtitles.gaf")
+	if err != nil {
+		return nil, fmt.Errorf("battle HUD: igtitles.gaf: %w [07 §11]", err)
+	}
+	pausedFrame, err := battleFrame(titles, "igpaused")
+	if err != nil {
+		return nil, err
+	}
 	return &retailBattleHUD{
 		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, pal: pal,
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
+		optionsGAF: optionsGAF, optionsWin: optionsWin, exitWin: exitWin, confirmWin: confirmWin, pausedFrame: pausedFrame,
 		panel: hud.NewPanel(0x04, 640, 480, nil), fs: fs,
 		pages:      make(map[string]*formats.GAF),
 		windows:    make(map[string]*gui.Window),
@@ -214,6 +244,126 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 	}
 	_ = prev
 	h.drawSidePage(c, b, offset, cur)
+	if b != nil && b.sess != nil && b.sess.Clock != nil && b.sess.Clock.Paused {
+		h.drawPausedTitle(c)
+	}
+	h.drawBattleMenu(c, b)
+}
+
+func (h *retailBattleHUD) drawPausedTitle(c *client.Client) {
+	if h == nil || c == nil || h.pausedFrame == nil {
+		return
+	}
+	w, height := c.Size()
+	x := (w - int(h.pausedFrame.Width)) / 2
+	y := (height - int(h.pausedFrame.Height)) / 2
+	c.UIBlit(h.pausedFrame, x, y)
+}
+
+func (h *retailBattleHUD) drawBattleMenu(c *client.Client, b *battleSession) {
+	if h == nil || c == nil || b == nil || b.menu == battleMenuClosed {
+		return
+	}
+	h.drawGUIWindow(c, h.optionsWin, h.optionsGAF, "")
+	if b.menu >= battleMenuExit {
+		h.drawGUIWindow(c, h.exitWin, nil, "")
+	}
+	if b.menu == battleMenuConfirmMain {
+		h.drawGUIWindow(c, h.confirmWin, nil, "Surrender this battle and return to main menu?")
+	} else if b.menu == battleMenuConfirmExit {
+		h.drawGUIWindow(c, h.confirmWin, nil, "Exit the Battle")
+	}
+}
+
+// drawGUIWindow composes an authored modal window at its .GUI coordinates.
+// The window background uses its declared panel art (BackTile in retail),
+// while controls retain their authored rectangles and GAF resolution order.
+func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, page *formats.GAF, title string) {
+	if window == nil {
+		return
+	}
+	h.drawWindowBackground(c, window, page)
+	for i, gad := range window.Gadgets {
+		if i == 0 || gad.Active == 0 || gad.Kind == gui.KindFont || gad.Kind == gui.KindPanel {
+			continue
+		}
+		r := window.PlacedRect(i)
+		pressed := false
+		if c.Input() != nil && c.Input().Mouse != nil && c.Input().Mouse.Held(input.MouseButtonLeft) {
+			pressed = guiRectContains(r, int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y))
+		}
+		frame := h.modalGadgetFrame(gad, page, pressed, gad.GrayedOut != 0)
+		if frame != nil {
+			if int(frame.Width) != int(r.W) || int(frame.Height) != int(r.H) {
+				c.UIBlitFrameScaled(frame, int(r.X), int(r.Y), int(r.W), int(r.H))
+			} else {
+				c.UIBlit(frame, int(r.X), int(r.Y))
+			}
+		}
+		text := gad.Text
+		if strings.EqualFold(gad.Name, "TITLE") && title != "" {
+			text = title
+		} else if gad.Kind == gui.KindButton && len(gad.Labels) != 0 {
+			text = gad.Labels[0]
+		}
+		if text != "" && (gad.Kind == gui.KindButton || gad.Kind == gui.KindLabel || gad.Kind == gui.KindText) {
+			c.UITextWidth(h.guiFont, text, int(r.X)+3, int(r.Y)+(int(r.H)-int(h.guiFont.Height))/2, int(r.W)-6, h.guiColor(byte(gad.ColorF)))
+		}
+	}
+}
+
+func (h *retailBattleHUD) drawWindowBackground(c *client.Client, window *gui.Window, page *formats.GAF) {
+	if window == nil || window.Rect.W <= 0 || window.Rect.H <= 0 {
+		return
+	}
+	name := window.Header.Panel
+	if name == "" {
+		name = "BackTile"
+	}
+	var frame *formats.GAFFrame
+	for _, gaf := range []*formats.GAF{page, h.intGAF, h.oldMain, h.common} {
+		if gaf == nil {
+			continue
+		}
+		if entry, ok := gaf.Find(name); ok && len(entry.Frames) != 0 {
+			frame = entry.Frames[0].Frame
+			if frame != nil {
+				break
+			}
+		}
+	}
+	if frame == nil || frame.Width == 0 || frame.Height == 0 {
+		return
+	}
+	for y := int(window.Rect.Y); y < int(window.Rect.Y+window.Rect.H); y += int(frame.Height) {
+		for x := int(window.Rect.X); x < int(window.Rect.X+window.Rect.W); x += int(frame.Width) {
+			c.UIBlit(frame, x, y)
+		}
+	}
+}
+
+// modalGadgetFrame keeps modal art within the window's own GAF and the common
+// GUI stock controls. Side-page GAFs contain unrelated entries with colliding
+// names (notably EXIT) and are not part of ARMOPT's retail binding.
+func (h *retailBattleHUD) modalGadgetFrame(gad gui.Gadget, page *formats.GAF, pressed, disabled bool) *formats.GAFFrame {
+	name := gad.Art
+	if name == "" {
+		name = gad.Name
+	}
+	for _, gaf := range []*formats.GAF{page, h.common} {
+		if gaf == nil {
+			continue
+		}
+		if entry, ok := gaf.Find(name); ok {
+			return selectGadgetFrame(entry, gad, pressed, disabled, false)
+		}
+	}
+	if gad.Kind == gui.KindButton && h.common != nil {
+		if entry, ok := h.common.Find("BUTTONS0"); ok {
+			return selectGadgetFrame(entry, gad, pressed, disabled, true)
+		}
+	}
+	return nil
 }
 
 func (h *retailBattleHUD) drawResources(c *client.Client, f *snapshot.Frame) {
@@ -712,9 +862,9 @@ func (h *retailBattleHUD) windowFor(b *battleSession, f *snapshot.Frame) (*gui.W
 	// Name selection is data-driven with paging: builder's page bits select guis/<unit><page>.gui [R-P0-03][07 §9] C10
 	name := ""
 	if h.side != nil {
-		name = strings.ToLower(h.side.NamePrefix) + "main"
+		name = strings.ToLower(h.side.NamePrefix) + "gen"
 	} else {
-		name = "main"
+		name = "gen"
 	}
 	var selected *snapshot.UnitView
 	if f != nil {
@@ -837,6 +987,10 @@ func (h *retailBattleHUD) gadgetFrame(gad gui.Gadget, page *formats.GAF, pressed
 		entry, _ = h.common.Find("BUTTONS0")
 		stockButtons = entry != nil
 	}
+	return selectGadgetFrame(entry, gad, pressed, disabled, stockButtons)
+}
+
+func selectGadgetFrame(entry *formats.GAFEntry, gad gui.Gadget, pressed, disabled, stockButtons bool) *formats.GAFFrame {
 	if entry == nil || len(entry.Frames) == 0 {
 		return nil
 	}

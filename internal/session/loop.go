@@ -1193,12 +1193,26 @@ func (s *Session) publishSnapshot(tick uint32) {
 				if id := s.Units.DefIDForHandle(u.Handle); id != 0 {
 					v.DefID = id
 				}
+				// Fixed vs mobile image-cache selector: retail uses runtime flag
+				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				// but definition-level MaxVelocity==0 reliably identifies buildings
+				// (all 21 factories and labs have 0, mobile have >0) and matches
+				// the 2x building supersample expectation without needing runtime flags.
+				if u.Def.MaxVelocity == 0 {
+					v.IsBuilding = true
+				}
 			}
 			if vm := u.GetScript(); vm != nil {
 				if vmPieces := vm.Pieces; len(vmPieces) > 0 {
+					flags := vm.SnapshotFlags()
+					prog := vm.Program()
+					var names []string
+					if prog != nil {
+						names = prog.Pieces
+					}
 					v.Pieces = make([]snapshot.PieceView, len(vmPieces))
 					for i, ps := range vmPieces {
-						v.Pieces[i] = snapshot.PieceView{
+						pv := snapshot.PieceView{
 							Index: i,
 							RotX:  ps.RotX,
 							RotY:  ps.RotY,
@@ -1207,6 +1221,17 @@ func (s *Session) publishSnapshot(tick uint32) {
 							Ty:    ps.Trans[1],
 							Tz:    ps.Trans[2],
 						}
+						if i < len(names) {
+							pv.Name = names[i]
+						}
+						if i < len(flags) {
+							f := flags[i]
+							pv.Hidden = (f & 0x01) == 0     // show bit [04 §4.3]
+							pv.DontShade = (f & 0x04) == 0  // shade bit [04 §4.3] 0x1000d/e000
+							pv.DontShadow = (f & 0x08) == 0 // dont-shadow [04 §4.3] 0x1000a000
+							// DontCache (0x02) not needed in snapshot; renderer decides via IsBuilding.
+						}
+						v.Pieces[i] = pv
 					}
 				}
 			}

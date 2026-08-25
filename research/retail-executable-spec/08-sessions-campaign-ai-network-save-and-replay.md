@@ -173,23 +173,14 @@ The complete verb grammar, argument formats, and malformed-input handling are sp
 
 ### Trigger object
 
-Mission victory and defeat conditions are allocated as polymorphic trigger
-records. A builder probes the eighteen condition keys in a straight chain and
-allocates a per-condition record on a hit. Record size varies with the
-condition: the smallest are flag-only twelve-byte records; boundary conditions
-carry a threshold; string-plus-count shapes and a canonicalizing string shape
-are larger; the radius condition is the largest, carrying X/Y/Z plus radius
-payload. Every record leads with a vtable pointer whose table covers all
-eighteen condition types — shared destructor and helper slots plus one
-condition-specific checker slot — with the trigger's completed flag adjacent.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 The mission object owns separate growable arrays for victory and defeat
 conditions, each count kept beside its array. An empty queue receives an
 injected default destroy-all-units-class victory or all-units-killed-class
 defeat trigger, guaranteeing one win and one lose condition.
 
-Timer triggers store time in authoritative ticks after multiplying authored
-seconds by thirty.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 ### Save tree
 
@@ -469,73 +460,43 @@ default all-units-killed condition.
 
 ### Evaluation
 
-Every evaluator is a pure poll taking the trigger and a context and mutating
-only its own completed flag. Decoded bodies:
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-- `KillUnitType` runs a countdown: while the subject unit's type matches the
-  authored type it decrements the authored count, completing and firing the
-  victory notification once the count reaches zero or below.
-- Type-gated annihilation/capture checks compare the trigger's type string
-  against the subject unit type together with death/capture event flags.
-- Boundary conditions (`…PassesX`/`…PassesZ`) compare the signed world
-  coordinate carried in the context against the stored threshold, satisfied
-  when the absolute difference is below three world units (a ±2 tolerance).
-- Timer triggers compare the authoritative tick count against the stored
-  seconds×30 deadline.
+**Established — poll-time scans (mutate only Completed; already-completed stays set).**
 
-Completion sets the trigger's completed flag and raises the localized
-"Victory Condition" notification (message/sound presentation; the exact
-medium is not decomposed).
+- `DestroyAllUnits` — **the quirk is the contract.** Its poll reads a `u16` counter whose only reference in the image is that read; nothing ever writes it, so it holds its initial zero and the condition is satisfied from the first poll [08 "Evaluation"]. Shipped missions rely on this: at least one campaign mission uses `DestroyAllUnits` as an AND-term beside a real `BuildUnitType` condition, where a live scan would never let the mission complete. The injected default victory inherits the same quirk and therefore resolves.
 
-**The tick site.** The victory and defeat queues are polled from the per-player
-phase, in the LOCAL player's slice only, on that slot's own once-per-30-tick
-cadence (the same next-due-plus-30 shape the economy settlement deadline uses),
-and only when the mission type is 1. Skirmish and multiplayer sessions do not
-poll these queues at all.
+- `KillAllMobileUnits` — succeeds when no live mobile unit (`CanMove`) belonging to the enemy owner remains [08 "Evaluation"].
 
-**Combination and precedence are fixed.** The victory queue is an **AND** across
-its members — every victory trigger must report complete. The defeat queue is an
-**OR** — any single defeat trigger ends the mission. **Victory is evaluated
-first**, so a tick on which both would fire resolves as a victory. Completion
-arms a shared end-of-mission countdown at four, which then decrements roughly
-once per second before the end-latch word is written; the latch distinguishes
-"ending", "won" and "lost" as separate bits, and the lose path clears the win
-bit it would otherwise share.
+- `BuildUnitType` — succeeds when the local player owns at least the authored count of **completed** units of the named type (`Remaining == 0`) [08 "Evaluation"]. A want below one is treated as one; the scan walks live units in pool order and counts only `Owner == LocalOwner` with matching type (`ANYTYPE` bypasses the name compare). Enemy-owned units of the same type do not count.
 
-**Owner gating differs per kind and is not an alliance test.** Each trigger
-carries an inner match object used by the poll-time scans (the ones that walk
-live units: build-type, boundary crossings, all-units-killed, move-to-radius).
-The owner byte compared is the unit's player index. Victory conditions gate on
-the enemy owner index; `CommanderKilled` gates on the local one;
-`UnitTypeKilled` and `AllUnitsKilledOfType` accept any owner. The commander
-identity used by `KillEnemyCommander` and `CommanderKilled` comes from the
-SIDEDATA commander-name table, not from a unit flag.
+- `KillAllOfType` vs `AllUnitsKilledOfType` vs `AllUnitsKilled` — annihilation checks. `KillAllOfType` is a victory term and gates on the enemy owner; `AllUnitsKilledOfType` is its defeat counterpart and accepts any owner; `AllUnitsKilled` is any type but gates on the local owner and succeeds when the local player has no live units left [08 "Evaluation"]. `ANYTYPE` bypasses the name compare where a type slot exists.
 
-**The `DestroyAllUnits` quirk is a contract.** Its body reads a counter whose
-only reference in the whole image is that read — nothing ever writes it, so it
-holds its initial zero and the condition is **satisfied from the first poll**.
-Shipped campaign missions rely on this: at least one uses `DestroyAllUnits` as
-an AND-term beside a real `BuildUnitType` condition, where a genuinely
-evaluated destroy-all would never let the mission complete. Reproduce the quirk;
-do not "fix" it into a live unit scan.
+- `KillEnemyCommander` / `CommanderKilled` — absence scans. Victory gates on the enemy owner, defeat on the local owner [08 "Evaluation"]. **Established:** retail resolves commander identity through the `SIDEDATA` commander-name table (stride `0x232` at `DAT+0x37F5F`), not through the definition's `Commander` flag [08 "Evaluation"]. The two sources agree for stock content; the table is the authority. An implementation that tests the flag is observably correct on stock data but diverges on synthetic sides that rename the commander.
 
-**Timer storage.** Timer triggers store `seconds × 30` as an absolute tick
-deadline and compare the authoritative tick count against it.
+- Boundary conditions (`UnitTypePassesX`/`Z` and `AnyUnitPassesX`/`Z`) — each carries a single integer threshold stored after an arithmetic `>>4` of the authored value [08 "Evaluation"]. The poll compares the signed world coordinate (unit `X` for `…PassesX`, `Z` for `…PassesZ`, after the same `>>4`) against the stored threshold and is satisfied when `abs(coord - threshold) < 3`, i.e. a ±2-world-unit tolerance [08 "Evaluation"]. The type-gated variants compare `UnitName` case-insensitively against the authored type and `ANYTYPE` (empty stored name) bypasses the compare.
 
-**Architecture.** Triggers are vtable objects, not type-byte structs. Each
-carries six slots: a poll, a unit-died notification, a capture/transfer
-notification, a created notification (present but unused by any shipped
-condition), and save/load. The poll is the only one the tick site calls; the
-notification slots are driven by the corresponding gameplay events. A poll must
-therefore not consume tick events as if they were kills — the countdown in
-`KillUnitType` advances from the unit-died notification, never from the passage
-of time.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-Record shapes, the eighteen-entry vtable map, these evaluator bodies, the tick
-site, and the combination rules are established. Residual: the timer evaluators'
-comparison bodies beyond the seconds×30 conversion remain undecoded, and the
-exact presentation sequence between latch write and session teardown is not
-decomposed.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Established — notification-driven countdowns (do nothing on poll).**
+
+- `KillUnitType` (victory) and `UnitTypeKilled` (defeat) share a countdown stored in `Args[0]`. Each qualifying **unit-died** notification whose subject type matches the authored type decrements the count and completes when `<=0` [08 "Evaluation"]. `KillUnitType` counts only enemy-owner losses; `UnitTypeKilled` accepts any owner [08 "Evaluation"]. Poll returns false until notified; polling never advances the count.
+
+- `CaptureUnitType` — same countdown but driven by the **capture/transfer** slot, type-gated, completing at `<=0` [08 "Evaluation"].
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Combination and precedence — Established.** Victory is an **AND** across its queue — every victory trigger must report `Completed`. Defeat is an **OR** — any single defeat trigger ends the mission. **Victory is evaluated first**, so a tick on which both would fire resolves as a victory [08 "Evaluation"]. Completion arms a shared end-of-mission countdown at **four**, which then decrements roughly once per second (once per local 30-tick due: `4 → -1` over five invocations, ~150 ticks) before the end-latch word at `DAT+0x3923B` is written; the latch distinguishes "ending" (bit 2 `0x04`), "won" (`0x10|0x20`) and "lost" (`0x40`, clearing `0x10`) and the lose path clears the win bit it would otherwise share [08 "Evaluation"]. The `~1/sec` rate is the poll cadence, not a separate timer.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 ## Skirmish configuration
 
