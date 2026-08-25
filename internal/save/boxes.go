@@ -734,10 +734,12 @@ var (
 // Increment when the codec changes; decoder rejects unknown versions.
 // Version 2 adds full continuation per P0-I11 [08 "Save"] [01 §6] [05][04].
 // Version 3 adds COB piece transforms, anims, and flags per P1-I01 [04 §4.2][04 §4.6][04 §4.3].
+// Version 4 adds ground steering state per [04 §8.1] C20 C21 [ON-12].
 
-const StateV1VersionConst uint32 = 3
+const StateV1VersionConst uint32 = 4
 const StateV1Version1 uint32 = 1
 const StateV1Version2 uint32 = 2
+const StateV1Version3 uint32 = 3
 
 // UnitRecord is one slot-indexed unit record, canonically ordered by slot
 // ascending for determinism (I1) [01 §6.1] [PLAN_14 C18]. Reconstruction uses
@@ -907,6 +909,21 @@ type SchedulerPendingRecord struct {
 	GoalKind   uint8 // 0 point,1 annulus,2 rect,3 saved (only 0 used for now) [04 §7.2]
 }
 
+// MovementSteerRecord captures per-unit ground steering state [04 §8.1] C20 C21 [ON-12].
+type MovementSteerRecord struct {
+	Handle         int32
+	X, Z           int32
+	Heading        uint16
+	PendingHeading uint16
+	Dirty          bool
+	Speed          int32
+	MaxVelocity    int32
+	TurnRate       int32
+	HeightWord     int16
+	SeaLevel       uint8
+	DefFlags       uint32
+}
+
 // EconomySnapshot captures per-player ledger plus unit buckets [05][P0-I11].
 type EconomySnapshot struct {
 	Players     [10]EconomyPlayerRecord
@@ -945,6 +962,9 @@ type EconomyPlayerRecord struct {
 	EndGameCountdown    int32
 	Helper1Deadline     uint32
 	Helper2Deadline     uint32
+	Helper1Calls        int32
+	Helper2Calls        int32
+	WeaponRefreshCalls  int32
 	ReferencePlayer     int32
 	SensorShareCalls    int32
 }
@@ -1146,6 +1166,7 @@ type StateV1 struct {
 	Orders           []OrderRecord            // complete order nodes both segments [04 §3.2][P0-I11][P0-I03]
 	MovementRoutes   []MovementRouteRecord    // active routes [04 §7.3][P0-I11]
 	SchedulerPending []SchedulerPendingRecord // pending path requests [04 §7.3][P0-I11]
+	MovementSteers   []MovementSteerRecord    // per-unit steering [04 §8.1] C20 C21 [ON-12]
 	Economy          EconomySnapshot          // buckets and deadlines [05][P0-I11]
 	Features         FeaturesSnapshot         // free lists, burning, sinking [05][P0-I11]
 	Projectiles      []ProjectileRecord       // projectile pool for native continuation [06 §5.1][P0-I11]
@@ -1185,6 +1206,8 @@ func MarshalStateV1(s *StateV1) []byte {
 	sort.Slice(routes, func(i, j int) bool { return routes[i].Unit < routes[j].Unit })
 	pending := append([]SchedulerPendingRecord(nil), s.SchedulerPending...)
 	sort.Slice(pending, func(i, j int) bool { return pending[i].Unit < pending[j].Unit })
+	steers := append([]MovementSteerRecord(nil), s.MovementSteers...)
+	sort.Slice(steers, func(i, j int) bool { return steers[i].Handle < steers[j].Handle })
 	proj := append([]ProjectileRecord(nil), s.Projectiles...)
 	sort.Slice(proj, func(i, j int) bool { return proj[i].Handle < proj[j].Handle })
 	ai := append([]AIManagerRecord(nil), s.AI...)
@@ -1370,6 +1393,24 @@ func MarshalStateV1(s *StateV1) []byte {
 			binaryWriteInt32(&buf, p.GoalRadius)
 			buf.WriteByte(p.GoalKind)
 		}
+		if ver >= 4 {
+			// MovementSteers [04 §8.1] C20 C21 [ON-12]
+			binaryWriteUint32(&buf, uint32(len(steers)))
+			for _, st := range steers {
+				binaryWriteInt32(&buf, st.Handle)
+				binaryWriteInt32(&buf, st.X)
+				binaryWriteInt32(&buf, st.Z)
+				binaryWriteUint16(&buf, st.Heading)
+				binaryWriteUint16(&buf, st.PendingHeading)
+				buf.WriteByte(boolToByte(st.Dirty))
+				binaryWriteInt32(&buf, st.Speed)
+				binaryWriteInt32(&buf, st.MaxVelocity)
+				binaryWriteInt32(&buf, st.TurnRate)
+				binaryWriteInt16(&buf, st.HeightWord)
+				buf.WriteByte(st.SeaLevel)
+				binaryWriteUint32(&buf, st.DefFlags)
+			}
+		}
 		// Economy
 		for i := 0; i < 10; i++ {
 			pl := s.Economy.Players[i]
@@ -1415,6 +1456,11 @@ func MarshalStateV1(s *StateV1) []byte {
 			binaryWriteInt32(&buf, pl.EndGameCountdown)
 			binaryWriteUint32(&buf, pl.Helper1Deadline)
 			binaryWriteUint32(&buf, pl.Helper2Deadline)
+			if ver >= 4 {
+				binaryWriteInt32(&buf, pl.Helper1Calls)
+				binaryWriteInt32(&buf, pl.Helper2Calls)
+				binaryWriteInt32(&buf, pl.WeaponRefreshCalls)
+			}
 			binaryWriteInt32(&buf, pl.ReferencePlayer)
 			binaryWriteInt32(&buf, pl.SensorShareCalls)
 		}
@@ -1631,7 +1677,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 	if err := binary.Read(r, binary.LittleEndian, &ver); err != nil {
 		return nil, err
 	}
-	if ver != StateV1VersionConst && ver != StateV1Version1 && ver != StateV1Version2 {
+	if ver != StateV1VersionConst && ver != StateV1Version1 && ver != StateV1Version2 && ver != StateV1Version3 {
 		return nil, ErrStateV1Version
 	}
 	catHash, err := readString(r)
@@ -2327,6 +2373,59 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		}
 		sort.Slice(pend, func(i, j int) bool { return pend[i].Unit < pend[j].Unit })
 		st.SchedulerPending = pend
+		if ver >= 4 {
+			var nSteer uint32
+			if err := binary.Read(r, binary.LittleEndian, &nSteer); err != nil {
+				return nil, err
+			}
+			steers := make([]MovementSteerRecord, 0, nSteer)
+			for i := uint32(0); i < nSteer; i++ {
+				var rec MovementSteerRecord
+				if err := binary.Read(r, binary.LittleEndian, &rec.Handle); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &rec.X); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &rec.Z); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &rec.Heading); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &rec.PendingHeading); err != nil {
+					return nil, err
+				}
+				dirtyB, err := r.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				rec.Dirty = byteToBool(dirtyB)
+				if err := binary.Read(r, binary.LittleEndian, &rec.Speed); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &rec.MaxVelocity); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &rec.TurnRate); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &rec.HeightWord); err != nil {
+					return nil, err
+				}
+				seaB, err := r.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				rec.SeaLevel = seaB
+				if err := binary.Read(r, binary.LittleEndian, &rec.DefFlags); err != nil {
+					return nil, err
+				}
+				steers = append(steers, rec)
+			}
+			sort.Slice(steers, func(i, j int) bool { return steers[i].Handle < steers[j].Handle })
+			st.MovementSteers = steers
+		}
 		// Economy
 		var econ EconomySnapshot
 		for i := 0; i < 10; i++ {
@@ -2471,6 +2570,18 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 			if err := binary.Read(r, binary.LittleEndian, &h2); err != nil {
 				return nil, err
 			}
+			var h1c, h2c, wrc int32
+			if ver >= 4 {
+				if err := binary.Read(r, binary.LittleEndian, &h1c); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &h2c); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &wrc); err != nil {
+					return nil, err
+				}
+			}
 			var rp, ssc int32
 			if err := binary.Read(r, binary.LittleEndian, &rp); err != nil {
 				return nil, err
@@ -2493,7 +2604,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 				ArchivedMetal:       BucketRecord{Production: math.Float32frombits(amProd), Requested: math.Float32frombits(amReq), Accepted: math.Float32frombits(amAcc), Carry: math.Float32frombits(amCarry)},
 				ArchivedEnergy:      BucketRecord{Production: math.Float32frombits(aeProd), Requested: math.Float32frombits(aeReq), Accepted: math.Float32frombits(aeAcc), Carry: math.Float32frombits(aeCarry)},
 				StatusHalfwordAt144: sh, StatusWordAt140: sw, GameEnded: byteToBool(geB), EndGameCountdown: egc,
-				Helper1Deadline: h1, Helper2Deadline: h2, ReferencePlayer: rp, SensorShareCalls: ssc,
+				Helper1Deadline: h1, Helper2Deadline: h2, Helper1Calls: h1c, Helper2Calls: h2c, WeaponRefreshCalls: wrc, ReferencePlayer: rp, SensorShareCalls: ssc,
 			}
 			econ.Players[i] = pl
 		}

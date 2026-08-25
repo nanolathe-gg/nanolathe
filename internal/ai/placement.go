@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"fmt"
 	"math"
 	"strings"
 
@@ -259,7 +258,6 @@ func extractorHelperB(m placementManager, defKey string, surfaceMetal int32) boo
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		if terrain != nil && yard != nil {
 			if err := terrain.ValidatePlacement(cx, cz, yard, footX, footZ, 0); err != nil {
-				fmt.Printf("DEBUG helperB ValidatePlacement fail at %d %d foot %d %d err %v yard[0]=%d\n", cx, cz, footX, footZ, err, yard[0])
 				continue
 			}
 			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -277,7 +275,6 @@ func extractorHelperB(m placementManager, defKey string, surfaceMetal int32) boo
 			return true
 		}
 	}
-	fmt.Printf("DEBUG helperB all 30 trials failed for %s foot %d %d yard %v\n", defKey, footX, footZ, yard)
 	return false
 }
 

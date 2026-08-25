@@ -44,6 +44,8 @@ type battleSession struct {
 	// Input-capture latch [F-P1-008][07 §3]: a press that begins on HUD chrome
 	// never starts/completes world drag selection even if released over world.
 	hudCaptured bool
+	hudPressX   int32
+	hudPressY   int32
 	prevMouseX  float32
 	prevMouseY  float32
 
@@ -60,11 +62,9 @@ type battleSession struct {
 
 	panelButtons []panelButton
 
-	// Retail HUD data-driven assets [02 §6][07 §6][P0-I14].
-	// Anchors are the 30 mandatory side anchors stored verbatim [02 §6] C8; panel
-	// is the sliding rail with 15 ms throttle [07 §6] C13. GUI window is the
-	// authored BATTLE.GUI panel when available [07 §4]. Remaining full GUI wiring
-	// (anchors-driven button placement, SHD lookup, fog composer) is TODO(P1).
+	// Legacy fixture-only fallback state. Production battles always install
+	// retailBattleHUD below; these fields remain for the small synthetic input
+	// fixtures which have no mounted retail asset set.
 	anchors   hud.Anchors
 	anchorsOK bool
 	panel     *hud.Panel
@@ -99,7 +99,6 @@ func runBattleView(opts Options, cs *contentSet) error {
 	}
 	terrain := sess.World
 	pal := loadPalette(cs)
-	fnt := loadFNT(cs)
 
 	const winW, winH = 640, 480
 	mapW := int32(terrain.CellW * 16)
@@ -109,39 +108,13 @@ func runBattleView(opts Options, cs *contentSet) error {
 	centerOnCommander(sess.Units, cam, winW, winH)
 
 	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal}
-	// Load retail HUD data-driven assets: side anchors [02 §6] C8, panel [07 §6] C13, and authored GUI [07 §4][P0-I14].
-	// TODO(P1): full GUI wiring uses gui.Window dispatch, side-anchored button placement, palette/SHD lookup,
-	// fog composer and ten-layer draw order [07 §6][GAP T22]. Minimal HUD below preserves authored BuildMenus
-	// order and pagination, uses anchors/bars/panel/minimap when available, and issues canonical commands.
-	if cat != nil && len(cat.Sides) > 0 {
-		// Use local player's side for anchors; fallback to first side [02 §6].
-		var side *content.SideDef
-		if sess.LocalOwner < uint8(len(cat.Sides)) && cat.Sides[sess.LocalOwner] != nil {
-			side = cat.Sides[sess.LocalOwner]
-		} else {
-			for _, s := range cat.Sides {
-				if s != nil {
-					side = s
-					break
-				}
-			}
-		}
-		if side != nil {
-			if a, err := hud.AnchorsFromSide(side); err == nil {
-				b.anchors = a
-				b.anchorsOK = true
-			}
-		}
-	}
-	// Panel starts visible when session mode has bit 0x04 [07 §6] C13. Use 0x04 for battle entry.
-	b.panel = hud.NewPanel(0x04, winW, winH, nil)
-	// Attempt to load authored battle GUI for data-driven proof [07 §4][P0-I14]. Not fatal if missing.
-	for _, name := range []string{"gui/BATTLE.GUI", "gui/battle.gui", "gui/BATTLE2.GUI"} {
-		if w, gerr := gui.Load(cs.fs, name); gerr == nil && w != nil {
-			b.guiWin = w
-			b.guiOK = true
-			break
-		}
+	// The battle HUD is mandatory retail content: side-selected PANELTOP,
+	// PANELSIDE, PANELBOT, the 30 SIDEDATA anchors, side fonts, and the authored
+	// <prefix>main/<prefix>gen/<unit>N GUI pages [07 §6][07 §9]. A production
+	// battle must never silently fall back to Nanolathe-owned rectangles.
+	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
+	if err != nil {
+		return err
 	}
 	cl, err := client.New(client.Options{
 		Buffer:   sess.Snapshot,
@@ -163,9 +136,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 	if pal != nil {
 		cl.SetPalette(pal)
 	}
-	if fnt != nil {
-		cl.SetFNT(fnt)
-	}
+	cl.SetFNT(b.hud.console)
 	// Software cursor [07 §8]. A missing cursor GAF is not fatal: the battle
 	// view falls back to the window system's own pointer.
 	if cursors, cerr := client.LoadCursors(cs.fs); cerr == nil {
@@ -173,7 +144,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 	} else {
 		fmt.Fprintf(os.Stderr, "nanolathe: %v\n", cerr)
 	}
-	cl.Overlay = func(c *client.Client) { b.drawOverlay(c, fnt) }
+	cl.Overlay = func(c *client.Client) { b.hud.draw(c, b) }
 	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select right-click=context M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9=buildpage Shift=queue")
 	return client.RunGame(cl)
 }
@@ -427,17 +398,21 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		}
 		if overHUD {
 			b.hudCaptured = true
+			b.hudPressX = mx
+			b.hudPressY = my
+			b.dragActive = false
 		}
 	}
 	if b.hudCaptured && mouse.Released(input.MouseButtonLeft) {
-		// Release that began on HUD never selects world [F-P0-003]
+		// Retail buttons arm while held and activate once on release-inside.
+		// Requiring the same authored gadget at both endpoints prevents a drag
+		// across the rail from activating a different control [07 §3][07 §4].
 		b.hudCaptured = false
 		b.dragActive = false
-		// Still consume HUD click if any.
-		if b.hud != nil && b.hud.consumeClick(b, mx, my) {
+		if b.hud != nil && b.hud.sameButton(b, b.hudPressX, b.hudPressY, mx, my) && b.hud.consumeClick(b, mx, my) {
 			return
 		}
-		if len(b.panelButtons) > 0 {
+		if len(b.panelButtons) > 0 && b.sameFallbackButton(b.hudPressX, b.hudPressY, mx, my) {
 			if b.panelClick(mx, my) {
 				return
 			}
@@ -445,45 +420,7 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		return
 	}
 	if b.hudCaptured {
-		// While captured, consume HUD clicks but do not start world drag.
-		if mouse.Pressed(input.MouseButtonLeft) {
-			if b.hud != nil && b.hud.consumeClick(b, mx, my) {
-				return
-			}
-			if len(b.panelButtons) > 0 && b.isOverPanel(mx, my) {
-				if b.panelClick(mx, my) {
-					return
-				}
-			}
-			// Still consumed even if no button hit to prevent leak.
-			return
-		}
-		// Suppress world handling while captured.
-		if mouse.Held(input.MouseButtonLeft) {
-			return
-		}
-	}
-
-	// Retail HUD: authored GUI gadgets capture clicks before world [07 §3][07 §4][R-P0-03].
-	// Cache is used inside windowFor; no reparsing per draw [ON-05 1].
-	if b.hud != nil && mouse.Pressed(input.MouseButtonLeft) {
-		if b.hud.consumeClick(b, mx, my) {
-			b.hudCaptured = true
-			return
-		}
-	}
-	// Armed build panel captures clicks before selection/drag handling.
-	// Build buttons are data-driven from SIDEDATA authored order via cat.BuildMenus [02 §6][R-P0-03].
-	if len(b.panelButtons) > 0 && mouse.Pressed(input.MouseButtonLeft) && !b.dragActive {
-		if b.isOverPanel(mx, my) {
-			if b.panelClick(mx, my) {
-				b.hudCaptured = true
-				return
-			}
-			// Click on panel background but not a button still consumes.
-			b.hudCaptured = true
-			return
-		}
+		return
 	}
 
 	// Build placement mode captures clicks before selection handling [R-P0-03].
@@ -612,6 +549,34 @@ func (b *battleSession) isOverPanel(mx, my int32) bool {
 	return true
 }
 
+func (b *battleSession) fallbackButtonAt(x, y int32) int {
+	for i, btn := range b.panelButtons {
+		if x >= btn.X && x < btn.X+panelButtonW && y >= btn.Y && y < btn.Y+panelButtonH {
+			return i
+		}
+	}
+	return -1
+}
+
+func (b *battleSession) sameFallbackButton(x0, y0, x1, y1 int32) bool {
+	pressed := b.fallbackButtonAt(x0, y0)
+	return pressed >= 0 && pressed == b.fallbackButtonAt(x1, y1)
+}
+
+// buildPageCount follows the retail DOWNLOADMENU mapping when mounted HUD
+// pages are available. Synthetic fixtures fall back to the six-product page
+// grouping documented by SIDEDATA's CANBUILD contract [fmt tdf] and confirmed
+// by the stock <unit>N.GUI pages [07 §9].
+func (b *battleSession) buildPageCount(u *units.Unit, page *content.BuildMenuPage) int {
+	if u == nil || u.Def == nil || page == nil {
+		return 0
+	}
+	if b.hud != nil {
+		return b.hud.buildPageCount(u.Def)
+	}
+	return hud.PageCountFromButtons(len(page.Buttons), hud.RetailBuildButtonsPerPage)
+}
+
 // switchBuildPage handles digit 1..9 build page switching [07 §9] C10.
 // Page number lives in flag bits 23-25 with bit 22 paged indicator [07 §9].
 func (b *battleSession) switchBuildPage(digit int) {
@@ -623,9 +588,7 @@ func (b *battleSession) switchBuildPage(digit int) {
 	if !ok || page == nil || len(page.Buttons) == 0 {
 		return
 	}
-	// Derive page count data-driven via hud helper [R-P0-03][07 §9] C10.
-	const buttonsPerPage = 8
-	count := hud.PageCountFromButtons(len(page.Buttons), buttonsPerPage)
+	count := b.buildPageCount(u, page)
 	if count <= 1 {
 		return
 	}
@@ -651,8 +614,7 @@ func (b *battleSession) nextBuildPage() {
 	if !ok || page == nil || len(page.Buttons) == 0 {
 		return
 	}
-	const bpp = 8
-	count := hud.PageCountFromButtons(len(page.Buttons), bpp)
+	count := b.buildPageCount(u, page)
 	if count <= 1 {
 		return
 	}
@@ -683,8 +645,7 @@ func (b *battleSession) prevBuildPage() {
 	if !ok || page == nil || len(page.Buttons) == 0 {
 		return
 	}
-	const bpp = 8
-	count := hud.PageCountFromButtons(len(page.Buttons), bpp)
+	count := b.buildPageCount(u, page)
 	if count <= 1 {
 		return
 	}
@@ -812,13 +773,19 @@ func (b *battleSession) armBuildPanel() {
 	if u == nil || b.cat == nil {
 		return
 	}
+	// Production uses the authored <unit>N.GUI buttons. The custom rectangle
+	// fallback exists only for asset-free fixtures and must never overlap or
+	// intercept a real retail rail.
+	if b.hud != nil {
+		return
+	}
 	page, ok := b.cat.BuildMenus[u.Def.CanonicalKey]
 	if !ok || page == nil {
 		return
 	}
 	// Preserve authored order [02 "Build-menu catalog keys"] — Buttons already authored.
 	// Pagination: split Buttons into pages via data-driven helper [R-P0-03][07 §9] C10.
-	const buttonsPerPage = 8
+	const buttonsPerPage = hud.RetailBuildButtonsPerPage
 	count := hud.PageCountFromButtons(len(page.Buttons), buttonsPerPage)
 	if count == 0 {
 		count = 1

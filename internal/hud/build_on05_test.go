@@ -5,23 +5,23 @@ import "testing"
 func TestBuildProductsDataDrivenPaging(t *testing.T) {
 	// Paging changes page data-driven [R-P0-03][07 §9] C10: no hardcoding, guard prevents overflow
 	all := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
-	perPage := 8
+	perPage := RetailBuildButtonsPerPage
 	cnt := PageCountFromButtons(len(all), perPage)
 	if cnt != 2 {
 		t.Fatalf("page count want 2 got %d", cnt)
 	}
 	// Page 0 slice
 	p0 := ProductsForPage(all, 0, perPage)
-	if len(p0) != 8 || p0[0] != "a" || p0[7] != "h" {
+	if len(p0) != 6 || p0[0] != "a" || p0[5] != "f" {
 		t.Fatalf("page 0 wrong %v", p0)
 	}
 	p1 := ProductsForPage(all, 1, perPage)
-	if len(p1) != 2 || p1[0] != "i" || p1[1] != "j" {
+	if len(p1) != 4 || p1[0] != "g" || p1[3] != "j" {
 		t.Fatalf("page1 wrong %v", p1)
 	}
 	// Guard: request beyond count clamps
 	pClamped := ProductsForPage(all, 5, perPage)
-	if len(pClamped) != 2 {
+	if len(pClamped) != 4 {
 		t.Fatalf("clamp beyond count should give last page, got %v", pClamped)
 	}
 	// Next/Prev with guard

@@ -4,6 +4,7 @@ package construction
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/model"
@@ -770,11 +771,13 @@ func TestStateGates(t *testing.T) {
 	if factory2.Flags&FlagActivated != 0 {
 		t.Fatalf("should lower activate")
 	}
-	// State1 waits for in-build-stance
+	// State1 waits for in-build-stance — use a factory VM with Activate so synthetic auto-stance does not fire [ON-12][05]
 	w3 := newTestWorld(10)
 	h3, _ := w3.Create(facDef, 0, 0, 0, 0)
 	factory3 := w3.Unit(h3)
 	factory3.Def = facDef
+	prog := &cob.Program{Scripts: map[string]int{"Activate": 0}, Code: []uint32{0, 0}, ScriptsByID: []int{0}}
+	factory3.Script = cob.NewVM(prog)
 	factory3.Flags &^= FlagInBuildStance
 	q3 := orders.QueueForUnit(factory3)
 	q3.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State1)})

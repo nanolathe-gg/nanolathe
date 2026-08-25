@@ -4,6 +4,12 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 )
 
+// RetailBuildButtonsPerPage is the stock builder-page product count. The
+// CANBUILD sequence assigns buttons 1..6 to page one, 7..12 to page two, and
+// so on; the executable's DOWNLOADMENU records carry the authored page and
+// gadget slot explicitly [fmt tdf][07 §9].
+const RetailBuildButtonsPerPage = 6
+
 // Build law [07 §9][02 "Build-menu catalog keys"][R-P0-03]:
 // Build pages driven by CANBUILD + per-builder GUI files; button name and unit
 // definition stay data-driven; GUI may not invent products absent from authored
@@ -86,14 +92,14 @@ func PrevPage(flags uint32, count int) uint32 {
 }
 
 // PageCountFromButtons computes page count from button count and perPage size
-// data-driven. perPage is the GUI's buttons-per-page (8 in minimal HUD) but
-// derived from layout, not hardcoded page number.
+// data-driven. perPage is the GUI's authored product count; callers without a
+// generated page mapping use RetailBuildButtonsPerPage.
 func PageCountFromButtons(n, perPage int) int {
 	if n <= 0 {
 		return 0
 	}
 	if perPage <= 0 {
-		perPage = 8
+		perPage = RetailBuildButtonsPerPage
 	}
 	return (n + perPage - 1) / perPage
 }
@@ -104,7 +110,7 @@ func ProductsForPage(all []string, page, perPage int) []string {
 		return nil
 	}
 	if perPage <= 0 {
-		perPage = 8
+		perPage = RetailBuildButtonsPerPage
 	}
 	cnt := PageCountFromButtons(len(all), perPage)
 	page = ClampPage(page, cnt)

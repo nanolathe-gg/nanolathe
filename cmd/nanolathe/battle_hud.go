@@ -35,6 +35,7 @@ type retailBattleHUD struct {
 	panelTop    *formats.GAFFrame
 	panelSide   *formats.GAFFrame
 	panelBottom *formats.GAFFrame
+	intGAF      *formats.GAF
 	common      *formats.GAF
 	oldMain     *formats.GAF
 	share       *formats.GAF
@@ -44,7 +45,14 @@ type retailBattleHUD struct {
 	fs    *vfs.FS
 	pages map[string]*formats.GAF
 	// Cache resolved GUI/model once instead of reparsing on draw/click [ON-05 1][R-P0-03]
-	windows map[string]*gui.Window
+	windows    map[string]*gui.Window
+	pageCounts map[string]int
+
+	// Retail refreshes the displayed production/consumption counters on a
+	// one-second (30 tick) cadence while the stock bars remain live [07 §6].
+	rateSampleTick uint32
+	rateSample     snapshot.ResourceView
+	rateSampleOK   bool
 }
 
 // loadRetailBattleHUD binds the same side-selected resources as the retail
@@ -111,10 +119,11 @@ func loadRetailBattleHUD(fs *vfs.FS, sess *session.Session, cat *content.Catalog
 	return &retailBattleHUD{
 		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, pal: pal,
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
-		common: common, oldMain: oldMain, share: share, logos: logos,
+		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
 		panel: hud.NewPanel(0x04, 640, 480, nil), fs: fs,
-		pages:   make(map[string]*formats.GAF),
-		windows: make(map[string]*gui.Window),
+		pages:      make(map[string]*formats.GAF),
+		windows:    make(map[string]*gui.Window),
+		pageCounts: make(map[string]int),
 	}, nil
 }
 
@@ -171,6 +180,16 @@ func battleSide(sess *session.Session, cat *content.Catalog) (*content.SideDef, 
 	return cat.Sides[idx], nil
 }
 
+// blitBattlePanel mirrors TotalA's battle-shell call sites: the desired final
+// pixel origin is converted to the raw GAF coordinate by adding the frame's
+// authored offset, which UIBlitAnchor then subtracts [07 §6].
+func blitBattlePanel(c *client.Client, f *formats.GAFFrame, x, y int) {
+	if c == nil || f == nil {
+		return
+	}
+	c.UIBlitAnchor(f, x+int(f.XOffset), y+int(f.YOffset))
+}
+
 func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 	if h == nil || c == nil {
 		return
@@ -178,19 +197,20 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. The two horizontal
 	// frames are static at the authored 129-pixel rail boundary; only the side
 	// strip and its GUI contents use the panel slide offset [07 §6].
-	c.UIBlitAnchor(h.panelTop, 129, 0)
-	c.UIBlitAnchor(h.panelBottom, 129, 480-32)
+	blitBattlePanel(c, h.panelTop, 129, 0)
+	blitBattlePanel(c, h.panelBottom, 129, 480-32)
 	offset := 0
 	if h.panel != nil {
 		h.panel.AdvanceNow(c.Input().Kbd.KeyHeld(input.KeySpace), false)
 		offset = int(h.panel.Offset)
 	}
-	c.UIBlitAnchor(h.panelSide, 0, offset)
+	blitBattlePanel(c, h.panelSide, 0, offset)
 
 	prev, cur, ok := c.Buffer().Read()
 	if ok && cur != nil {
 		h.drawResources(c, cur)
 		h.drawSelectedUnit(c, cur)
+		h.drawTopStatusValues(c, cur)
 	}
 	_ = prev
 	h.drawSidePage(c, b, offset, cur)
@@ -207,6 +227,12 @@ func (h *retailBattleHUD) drawResources(c *client.Client, f *snapshot.Frame) {
 	if res == nil {
 		return
 	}
+	if !h.rateSampleOK || f.Tick < h.rateSampleTick || f.Tick-h.rateSampleTick >= 30 {
+		h.rateSampleTick = f.Tick
+		h.rateSample = *res
+		h.rateSampleOK = true
+	}
+	rates := &h.rateSample
 	energy := h.side.EnergyColor
 	metal := h.side.MetalColor
 	if energy < 0 || energy > 255 {
@@ -221,8 +247,14 @@ func (h *retailBattleHUD) drawResources(c *client.Client, f *snapshot.Frame) {
 	h.drawResourceBar(c, metalBar, hud.ResourceFraction(res.Metal, res.MetalCapacity), byte(metal))
 	h.drawNumber(c, hud.AnchorEnergyNum, float32(res.Energy))
 	h.drawNumber(c, hud.AnchorMetalNum, float32(res.Metal))
-	h.drawNumberAt(c, hud.AnchorEnergyMax, res.EnergyCapacity)
-	h.drawNumberAt(c, hud.AnchorMetalMax, res.MetalCapacity)
+	h.drawNumberRight(c, hud.AnchorEnergyMax, res.EnergyCapacity)
+	h.drawNumberRight(c, hud.AnchorMetalMax, res.MetalCapacity)
+	h.drawTextAt(c, hud.AnchorEnergy0, "0", h.paletteIndex(15))
+	h.drawTextAt(c, hud.AnchorMetal0, "0", h.paletteIndex(15))
+	h.drawTextAt(c, hud.AnchorEnergyProduced, formatEnergyRate(rates.EnergyProduced), h.paletteIndex(10))
+	h.drawTextAt(c, hud.AnchorEnergyConsumed, formatEnergyRate(-rates.EnergyConsumed), h.paletteIndex(12))
+	h.drawTextAt(c, hud.AnchorMetalProduced, fmt.Sprintf("%.1f", rates.MetalProduced), h.paletteIndex(10))
+	h.drawTextAt(c, hud.AnchorMetalConsumed, fmt.Sprintf("%.1f", -rates.MetalConsumed), h.paletteIndex(12))
 }
 
 func (h *retailBattleHUD) drawResourceBar(c *client.Client, r hud.Rect, fraction float32, inner byte) {
@@ -245,18 +277,53 @@ func (h *retailBattleHUD) drawNumber(c *client.Client, index int, value float32)
 	h.drawNumberAtPoint(c, r.X1, r.Y1, value)
 }
 
-func (h *retailBattleHUD) drawNumberAt(c *client.Client, index int, value float32) {
+func (h *retailBattleHUD) drawNumberRight(c *client.Client, index int, value float32) {
 	r, ok := h.anchors.ByIndex(index)
 	if !ok {
 		return
 	}
-	h.drawNumberAtPoint(c, r.X1, r.Y1, value)
+	text := fmt.Sprintf("%d", int(value))
+	x := r.X1 - int32(client.MeasureText(h.console, text))
+	c.UIText(h.console, text, int(x), int(r.Y1), h.paletteIndex(15))
 }
 
 func (h *retailBattleHUD) drawNumberAtPoint(c *client.Client, x, y int32, value float32) {
 	// The retail resource display is an integer text field; the authoritative
 	// stock remains float32, and conversion here truncates toward zero [01 §8].
-	c.UIText(h.console, fmt.Sprintf("%d", int(value)), int(x), int(y), h.guiColor(15))
+	c.UIText(h.console, fmt.Sprintf("%d", int(value)), int(x), int(y), h.paletteIndex(15))
+}
+
+func (h *retailBattleHUD) drawTextAt(c *client.Client, index int, text string, color byte) {
+	r, ok := h.anchors.ByIndex(index)
+	if !ok || text == "" {
+		return
+	}
+	c.UIText(h.console, text, int(r.X1), int(r.Y1), color)
+}
+
+func formatEnergyRate(value float32) string {
+	if value > 99999 || value < -99999 {
+		return fmt.Sprintf("%dK", int(value/1000))
+	}
+	return fmt.Sprintf("%d", int(value))
+}
+
+func (h *retailBattleHUD) drawTopStatusValues(c *client.Client, f *snapshot.Frame) {
+	if f == nil {
+		return
+	}
+	localUnits := 0
+	for i := range f.Units {
+		if f.Units[i].Owner == h.owner {
+			localUnits++
+		}
+	}
+	if r, ok := h.anchors.ByIndex(hud.AnchorTotalUnits); ok {
+		c.UIText(h.console, fmt.Sprintf("%d", localUnits), int(r.X1), int(r.Y1), h.paletteIndex(15))
+	}
+	if r, ok := h.anchors.ByIndex(hud.AnchorTotalTime); ok {
+		c.UIText(h.console, hud.FormatGameTime(int(f.Tick)), int(r.X1), int(r.Y1), h.paletteIndex(15))
+	}
 }
 
 func (h *retailBattleHUD) drawSelectedUnit(c *client.Client, f *snapshot.Frame) {
@@ -304,6 +371,12 @@ func (h *retailBattleHUD) drawHealthBar(c *client.Client, r hud.Rect, health, ma
 		inner = h.paletteIndex(14)
 	}
 	c.UIFillRect(int(left), int(top), int(right-left), int(bottom-top), outer)
+	left++
+	top++
+	bottom--
+	if right <= left || bottom <= top {
+		return
+	}
 	width := int((int64(health) * int64(right-left)) / int64(max))
 	if width > 0 {
 		if width > int(right-left) {
@@ -316,6 +389,11 @@ func (h *retailBattleHUD) drawHealthBar(c *client.Client, r hud.Rect, health, ma
 func (h *retailBattleHUD) defFor(u *snapshot.UnitView) (*content.UnitDef, bool) {
 	if h == nil || h.cat == nil || u == nil {
 		return nil, false
+	}
+	if u.DefName != "" {
+		if def, ok := h.cat.Unit(u.DefName); ok {
+			return def, true
+		}
 	}
 	return h.cat.UnitDefByIndex(uint32(u.DefID))
 }
@@ -338,7 +416,7 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 		if c.Input() != nil && c.Input().Mouse != nil && c.Input().Mouse.Held(input.MouseButtonLeft) {
 			pressed = guiRectContains(r, int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y))
 		}
-		frame := h.gadgetFrame(gad, pageGAF, pressed)
+		frame := h.gadgetFrame(gad, pageGAF, pressed, gad.GrayedOut != 0)
 		if frame != nil {
 			// .GUI controls use the authored rectangle origin; unlike the PANEL
 			// shell, their GAF offsets are not applied [07 §4].
@@ -386,7 +464,7 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 		offset = int32(h.panel.Offset)
 	}
 	for i, gad := range window.Gadgets {
-		if i == 0 || gad.Active == 0 || gad.Kind != gui.KindButton {
+		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
 			continue
 		}
 		r := window.PlacedRect(i)
@@ -409,7 +487,7 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 			// Generic NEXT button fallback only when builder has paging
 			if sel := b.selectedBuilder(); sel != nil && b.cat != nil {
 				if pm, ok := b.cat.BuildMenus[sel.Def.CanonicalKey]; ok && pm != nil {
-					if hud.PageCountFromButtons(len(pm.Buttons), 8) > 1 {
+					if b.buildPageCount(sel, pm) > 1 {
 						b.nextBuildPage()
 						return true
 					}
@@ -419,7 +497,7 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 		if strings.Contains(upperName, "PREV") || strings.Contains(upperText, "PREV") {
 			if sel := b.selectedBuilder(); sel != nil && b.cat != nil {
 				if pm, ok := b.cat.BuildMenus[sel.Def.CanonicalKey]; ok && pm != nil {
-					if hud.PageCountFromButtons(len(pm.Buttons), 8) > 1 {
+					if b.buildPageCount(sel, pm) > 1 {
 						b.prevBuildPage()
 						return true
 					}
@@ -556,7 +634,7 @@ func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
 		offset = int32(h.panel.Offset)
 	}
 	for i, gad := range window.Gadgets {
-		if i == 0 || gad.Active == 0 || gad.Kind != gui.KindButton {
+		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
 			continue
 		}
 		r := window.PlacedRect(i)
@@ -566,6 +644,67 @@ func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
 		}
 	}
 	return false
+}
+
+func (h *retailBattleHUD) buttonAt(b *battleSession, x, y int32) int {
+	if h == nil || b == nil {
+		return -1
+	}
+	var f *snapshot.Frame
+	if b.sess != nil && b.sess.Snapshot != nil {
+		_, cur, ok := b.sess.Snapshot.Read()
+		if ok {
+			f = cur
+		}
+	}
+	window, _ := h.windowFor(b, f)
+	if window == nil {
+		return -1
+	}
+	offset := int32(0)
+	if h.panel != nil {
+		offset = int32(h.panel.Offset)
+	}
+	for i, gad := range window.Gadgets {
+		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
+			continue
+		}
+		r := window.PlacedRect(i)
+		r.Y += offset
+		if guiRectContains(r, x, y) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (h *retailBattleHUD) sameButton(b *battleSession, x0, y0, x1, y1 int32) bool {
+	pressed := h.buttonAt(b, x0, y0)
+	return pressed >= 0 && pressed == h.buttonAt(b, x1, y1)
+}
+
+// buildPageCount returns the number of authored <unit>N.GUI pages. Retail's
+// unit definition page-count byte is populated from the DOWNLOADMENU records;
+// the mounted generated pages are the clean data equivalent and keep modded
+// layouts data-driven [07 §9]. Page flag encoding itself has only three bits.
+func (h *retailBattleHUD) buildPageCount(def *content.UnitDef) int {
+	if h == nil || def == nil {
+		return 0
+	}
+	key := strings.ToLower(def.UnitName)
+	if count, ok := h.pageCounts[key]; ok {
+		return count
+	}
+	count := 0
+	for page := 1; page <= 8; page++ {
+		name := fmt.Sprintf("%s%d", key, page)
+		if window, _ := h.loadWindow(name); window == nil {
+			break
+		}
+		count++
+	}
+	h.pageCounts[key] = count
+	return count
 }
 
 func (h *retailBattleHUD) windowFor(b *battleSession, f *snapshot.Frame) (*gui.Window, *formats.GAF) {
@@ -606,11 +745,7 @@ func (h *retailBattleHUD) windowFor(b *battleSession, f *snapshot.Frame) (*gui.W
 		}
 	}
 	if selected != nil && b != nil && b.cat != nil {
-		var def *content.UnitDef
-		var ok bool
-		if selected.DefID != 0 {
-			def, ok = b.cat.UnitDefByIndex(uint32(selected.DefID))
-		}
+		def, ok := h.defFor(selected)
 		if !ok || def == nil {
 			// Fallback to live builder def
 			if ub := b.selectedBuilder(); ub != nil {
@@ -637,13 +772,10 @@ func (h *retailBattleHUD) windowFor(b *battleSession, f *snapshot.Frame) (*gui.W
 				if hud.IsPaged(flags) {
 					pageNum = hud.DecodePage(flags)
 				}
-				// Guard page count data-driven [R-P0-03]
-				if pm, ok2 := b.cat.BuildMenus[def.CanonicalKey]; ok2 && pm != nil {
-					cnt := hud.PageCountFromButtons(len(pm.Buttons), 8)
-					pageNum = hud.ClampPage(pageNum, cnt)
-				} else {
-					pageNum = hud.ClampPage(pageNum, 1)
-				}
+				// The executable guards against the definition's page-count byte;
+				// that byte comes from DOWNLOADMENU PAGE records, not a guessed
+				// CANBUILD slice size [07 §9].
+				pageNum = hud.ClampPage(pageNum, h.buildPageCount(def))
 				name = strings.ToLower(def.UnitName) + fmt.Sprintf("%d", pageNum+1)
 			} else {
 				if h.side != nil {
@@ -652,26 +784,26 @@ func (h *retailBattleHUD) windowFor(b *battleSession, f *snapshot.Frame) (*gui.W
 			}
 		}
 	}
-	// Check cache first [ON-05 1]
+	return h.loadWindow(name)
+}
+
+func (h *retailBattleHUD) loadWindow(name string) (*gui.Window, *formats.GAF) {
+	if h == nil || h.fs == nil || name == "" {
+		return nil, nil
+	}
 	if cached, ok := h.windows[name]; ok && cached != nil {
-		var gaf *formats.GAF
-		if name != strings.ToLower(h.side.NamePrefix)+"main" {
-			gaf = h.pages[name]
-		}
-		return cached, gaf
+		return cached, h.pages[name]
 	}
 	window, err := gui.Load(h.fs, "guis/"+name+".gui")
 	if err != nil {
-		// Try lower case variant already handled; no cache on miss
 		return nil, nil
 	}
-	// Cache on success
 	if h.windows == nil {
 		h.windows = make(map[string]*gui.Window)
 	}
 	h.windows[name] = window
 	var gaf *formats.GAF
-	if h.side != nil && name != strings.ToLower(h.side.NamePrefix)+"main" {
+	if h.side != nil && name != strings.ToLower(h.side.NamePrefix)+"main" && name != strings.ToLower(h.side.NamePrefix)+"gen" {
 		if cached, ok := h.pages[name]; ok {
 			gaf = cached
 		} else if loaded, loadErr := formats.LoadGAFFile(h.fs, "anims/"+name+".gaf"); loadErr == nil {
@@ -685,14 +817,14 @@ func (h *retailBattleHUD) windowFor(b *battleSession, f *snapshot.Frame) (*gui.W
 	return window, gaf
 }
 
-func (h *retailBattleHUD) gadgetFrame(gad gui.Gadget, page *formats.GAF, pressed bool) *formats.GAFFrame {
+func (h *retailBattleHUD) gadgetFrame(gad gui.Gadget, page *formats.GAF, pressed, disabled bool) *formats.GAFFrame {
 	name := gad.Art
 	if name == "" {
 		name = gad.Name
 	}
 	var entry *formats.GAFEntry
 	stockButtons := false
-	for _, g := range []*formats.GAF{page, h.oldMain, h.share, h.common} {
+	for _, g := range []*formats.GAF{page, h.intGAF, h.oldMain, h.share, h.common} {
 		if g == nil {
 			continue
 		}
@@ -727,9 +859,13 @@ func (h *retailBattleHUD) gadgetFrame(gad gui.Gadget, page *formats.GAF, pressed
 			return nil
 		}
 		idx = (best / 4) * 4
-		if pressed {
+		if disabled {
+			idx += 2
+		} else if pressed {
 			idx++
 		}
+	} else if disabled && len(entry.Frames) > 2 {
+		idx = 2
 	} else if pressed && len(entry.Frames) > 1 {
 		idx = 1
 	}
@@ -755,7 +891,7 @@ func (h *retailBattleHUD) paletteIndex(logical byte) byte {
 
 func guiRectContains(r gui.Rect, x, y int32) bool {
 	left, top, right, bottom := r.X, r.Y, r.X+r.W, r.Y+r.H
-	return x >= left && x < right && y >= top && y < bottom
+	return x >= left && x <= right && y >= top && y <= bottom
 }
 
 // overWorld reports whether a pointer position lies in the world viewport

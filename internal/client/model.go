@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
@@ -685,8 +684,8 @@ func (c *Client) drawUnitModel(v snapshot.UnitView, sx, sy int32) bool {
 					wx := int32(wv[0] >> 16)
 					wy := int32(wv[1] >> 16)
 					wz := int32(wv[2] >> 16)
-					px := wx - c.cam.X + camera.OriginX
-					py := wz - (wy >> 1) - c.cam.Z + camera.OriginY
+					px := wx - c.cam.X
+					py := wz - (wy >> 1) - c.cam.Z
 					st.x[triCorner], st.y[triCorner] = px, py
 					st.depth += py
 				}
@@ -709,8 +708,8 @@ func (c *Client) drawUnitModel(v snapshot.UnitView, sx, sy int32) bool {
 			t := &tris[i]
 			// Shadow is same triangle but projected onto ground: use groundY for wy
 			// We approximate by offsetting py by (uy - groundY)>>1 shear difference?
-			// Instead reproject shadow vertices: shadowY = groundY, so pyShadow = wz - (groundY>>1) - cam.Z + OriginY
-			// Our t already has py = wz - (wy>>1) - camZ + OriginY. So shadow py = py + ((wy - groundY)>>1)
+			// Instead reproject shadow vertices: shadowY = groundY, so pyShadow = wz - (groundY>>1) - cam.Z
+			// Our t already has py = wz - (wy>>1) - camZ. So shadow py = py + ((wy - groundY)>>1)
 			// For flat ground, shadow is slightly below model. Use dark palette index via Shade row 0 or palette 0.
 			shadow := *t
 			// Darken: use flat color 0 for shadow if textured, else keep? For textured we will fill with dark via palette.
@@ -1302,8 +1301,8 @@ func (c *Client) drawFeatureModel(f snapshot.FeatureView) bool {
 					wx := int32(wv[0] >> 16)
 					wy := int32(wv[1] >> 16)
 					wz := int32(wv[2] >> 16)
-					px := wx - c.cam.X + camera.OriginX
-					py := wz - (wy >> 1) - c.cam.Z + camera.OriginY
+					px := wx - c.cam.X
+					py := wz - (wy >> 1) - c.cam.Z
 					st.x[i], st.y[i] = px, py
 					st.depth += py
 				}
@@ -1522,8 +1521,8 @@ func (c *Client) drawProjectileModel(p snapshot.ProjectileView, alpha float32) b
 					wx := int32(wv[0] >> 16)
 					wy := int32(wv[1] >> 16)
 					wz := int32(wv[2] >> 16)
-					px := wx - c.cam.X + camera.OriginX
-					py := wz - (wy >> 1) - c.cam.Z + camera.OriginY
+					px := wx - c.cam.X
+					py := wz - (wy >> 1) - c.cam.Z
 					st.x[i], st.y[i] = px, py
 					st.depth += py
 				}

@@ -1,8 +1,6 @@
 package ai
 
 import (
-	"fmt"
-
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -295,17 +293,10 @@ func buildOptionsForBuilder(m Selector, builder *units.Unit) []string {
 // It implements C5 gates, C6 scoring, C7 reservoir (single RNG(cumulative) draw), C9 bound census [PLAN 11].
 func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service, candidates []string) (Candidate, bool) {
 	if m == nil || builder == nil || builder.Def == nil || econ == nil {
-		fmt.Printf("DEBUG Select nil check m %v builder %v econ %v\n", m == nil, builder == nil, econ == nil)
 		return Candidate{}, false
 	}
 	if len(candidates) == 0 {
-		fmt.Printf("DEBUG Select candidates empty for builder %s\n", builder.Def.UnitName)
 		return Candidate{}, false
-	}
-	if mgr, ok := m.(*Manager); ok {
-		fmt.Printf("DEBUG Select tick %d candidates %v for builder %s player %d\n", mgr.lastTick, candidates, builder.Def.UnitName, m.GetPlayer())
-	} else {
-		fmt.Printf("DEBUG Select candidates %v for builder %s player %d\n", candidates, builder.Def.UnitName, m.GetPlayer())
 	}
 	player := m.GetPlayer()
 	if int(player) >= len(econ.Players) {
@@ -388,21 +379,15 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 		}
 		score := ComputeScore(in, cv, weight)
 		if score <= 0 {
-			fmt.Printf("DEBUG candidate %s filtered score %d weight %d cv %+v\n", candKeyRaw, score, weight, cv)
 			continue
 		}
 		positives = append(positives, scored{key: candKeyRaw, score: score})
 		total += score
 	}
 
-	fmt.Printf("DEBUG Select positives %d total %d curEnergy %.1f curMetal %.1f in %+v\n", len(positives), total, curEnergy, curMetal, in)
-	for _, p := range positives {
-		fmt.Printf("DEBUG positive %s score %d\n", p.key, p.score)
-	}
 	// C9 bound census: cumulative total is the only variable bound in this file [PLAN 11 C9] [08].
 	// C7: cumulative weighted reservoir: ONE manager-local RNG draw of RNG(cumulative) yielding score/finalTotal; positive scores only [PLAN 11 C7] [08] [P0-07] ON-06.
 	if len(positives) == 0 || total <= 0 {
-		fmt.Printf("DEBUG Select no positives, returning false\n")
 		return Candidate{}, false
 	}
 	// Bounds below 2 do not advance the stream per [01 §7.1] [INVARIANTS I4]; RNG(cumulative) is 0 without draw.

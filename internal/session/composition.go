@@ -263,8 +263,12 @@ func createAndBindServices(s *Session) error {
 			crt = &tmp
 		}
 		s.Features = features.NewService(s.World, sim, crt, s.Wind)
+		s.Features.PopulateFromTerrain()
 	} else if s.Features.Terrain != s.World {
 		return fmt.Errorf("session: Features.Terrain mismatch")
+	} else {
+		// Existing service but world may have been swapped (e.g. load); ensure terrain features are present
+		s.Features.PopulateFromTerrain()
 	}
 	// Visibility [03 §3] dimensions from terrain, mode respects SkirmishConfig
 	// Mapping 0 → history disabled (word fills all bits), LineOfSight 0 → current disabled (byte grids fill 1), LOSType 0 → sprite-mask [08 "Skirmish configuration"][03 §3.1] C2.

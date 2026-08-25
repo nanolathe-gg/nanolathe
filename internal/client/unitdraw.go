@@ -372,11 +372,6 @@ func (c *Client) UIBlit(f *formats.GAFFrame, x, y int) {
 	}
 }
 
-// UIBlitAnchor stamps a GAF frame using the authored animation anchor. The
-// retail battle GAF path receives the requested anchor plus XOffset/YOffset;
-// its rasterizer subtracts those fields internally before writing pixels
-// [fmt gaf][07 §6]. Frontend .GUI controls deliberately use UIBlit instead:
-// their rectangles are the placement contract [07 §4].
 // UIBlitLit stamps a GAF frame with every opaque pixel remapped through one
 // row of the PALETTE.LHT brightening table. This is retail's shaded glyph
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -410,11 +405,17 @@ func (c *Client) UIBlitLit(f *formats.GAFFrame, x, y int, pal *palette.Tables, l
 	}
 }
 
+// UIBlitAnchor reproduces retail's raw GAF rasterizer: x and y are the raw
+// call-site coordinates and the frame's authored offsets are subtracted before
+// pixels are written. Battle-shell callers pass the desired pixel origin plus
+// XOffset/YOffset, so those two operations cancel [fmt gaf][07 §6]. Frontend
+// .GUI controls deliberately use UIBlit instead: their rectangles are the
+// placement contract [07 §4].
 func (c *Client) UIBlitAnchor(f *formats.GAFFrame, x, y int) {
 	if f == nil {
 		return
 	}
-	c.UIBlit(f, x+int(f.XOffset), y+int(f.YOffset))
+	c.UIBlit(f, x-int(f.XOffset), y-int(f.YOffset))
 }
 
 // UIBlitFrameScaled stretches a decoded GAF frame across a destination

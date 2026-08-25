@@ -104,7 +104,10 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 				}
 				// Interpolated view includes heading/pitch/bank and piece transforms [03 §2.4] C21–C24 (I6).
 				lerped := LerpUnitView(pv, cv, alpha)
-				sx, sy := c.cam.WorldToScreen(lerped.X, lerped.Y, lerped.Z) // [03 §2.5] C1
+				sx0, sy0 := c.cam.WorldToScreen(lerped.X, lerped.Y, lerped.Z) // [03 §2.5] C1
+				// Rebase from beam origin (128,32) to shell viewport origin (0,0) used by BlitTerrain [PLAN_04A C1].
+				sx := sx0 - 128
+				sy := sy0 - 32
 				// Real 3DO model first [fmt 3do][03 §2.5]; footprint body
 				// only when the model is unavailable. Uses lerped heading [04 §8.1] C20 and piece state if bound [03 §2.4] C21.
 				if lerped.Model != "" && c.drawUnitModel(lerped, sx, sy) {
@@ -162,7 +165,9 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					}
 					// Fallback: dispatch via render projectiles for beam/rendertype handling [03 §5.4].
 					// For beams, draw line; for others, draw marker.
-					sx, sy := c.cam.WorldToScreen(px, py, pz)
+					sx0, sy0 := c.cam.WorldToScreen(px, py, pz)
+					sx := sx0 - 128
+					sy := sy0 - 32
 					// Simple 3x3 projectile marker; presentation uses palette index 210 for visibility; never touches sim state.
 					for dy := -1; dy <= 1; dy++ {
 						for dx := -1; dx <= 1; dx++ {

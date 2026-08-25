@@ -547,6 +547,84 @@ func (s *Service) Instances() []*Instance {
 	return out
 }
 
+// PopulateFromTerrain scans the terrain plot and creates live instances for every
+// anchor cell that already holds a real feature index. It is the bridge between
+// world.Load's Plot expansion (which stamps 0xFFFF/0xFFFE/0xFFFD and fringe
+// anchors) and the Features Service's authoritative instance map. Without this
+// pass the map-authored forest on Great Divide would remain as plot sentinels
+// for placement blocking but never appear in snapshot Features, so the renderer
+// would draw an empty forest [05 "Feature instance and terrain cell"] [03 §5.1].
+// It is idempotent: anchors already present in the map are skipped, fringe
+// cells are never instanced, and void/empty sentinels are ignored. Presentation-only
+// after battle entry (I6) — it does not advance RNG or sim state.
+func (s *Service) PopulateFromTerrain() int {
+	if s == nil || s.Terrain == nil || s.Terrain.Plot == nil {
+		return 0
+	}
+	w := int(s.Terrain.CellW)
+	h := int(s.Terrain.CellH)
+	if w <= 0 || h <= 0 {
+		return 0
+	}
+	if len(s.Terrain.Plot) < w*h {
+		return 0
+	}
+	n := 0
+	for cz := 0; cz < h; cz++ {
+		for cx := 0; cx < w; cx++ {
+			idx := cz*w + cx
+			if idx < 0 || idx >= len(s.Terrain.Plot) {
+				continue
+			}
+			// Only anchors carry real indices; fringe (0xFFFE) and voids are skipped
+			// via IsEmpty/IsVoid checks, and ResolveFeature would follow fringe to
+			// its anchor which we already handle.
+			cell := s.Terrain.Plot[idx]
+			if cell.IsFringe() || cell.IsVoid() || cell.IsEmpty() {
+				continue
+			}
+			if !cell.IsRealFeature() {
+				continue
+			}
+			if _, ok := s.instances[idx]; ok {
+				continue // already instanced (e.g. mission feature placed earlier)
+			}
+			def, ok := s.Terrain.FeatureDefAt(cell.Feature())
+			if !ok || def == nil {
+				continue // unbound name or out-of-range index: blocking sentinel but no visual
+			}
+			footX := def.FootprintX
+			footZ := def.FootprintZ
+			if footX <= 0 {
+				footX = 1
+			}
+			if footZ <= 0 {
+				footZ = 1
+			}
+			// Respect pool caps silently [P1-10][P1-15]
+			if len(s.instances) >= FeatureAnimSlots {
+				return n
+			}
+			inst := &Instance{
+				Def:        def,
+				Terrain:    s.Terrain,
+				CX:         cx,
+				CZ:         cz,
+				MaxHealth:  def.Damage,
+				Health:     def.Damage,
+				FootprintX: footX,
+				FootprintZ: footZ,
+			}
+			inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
+			inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
+			inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
+			s.instances[idx] = inst
+			n++
+		}
+	}
+	return n
+}
+
 // Cursor returns the current global cursor value for tests [06 §13.1].
 func (s *Service) Cursor() int { return s.cursor }
 

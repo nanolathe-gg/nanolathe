@@ -161,8 +161,8 @@ func (m *Manager) observeMilestones(tick uint32, w *units.World) {
 		if u.Remaining != 0 {
 			hasNanoframe = true
 		}
-		// Factory completed: allied completed builder that is immobile factory (Builder && !CanMove)
-		if u.Remaining == 0 && u.Def != nil && u.Def.Builder && !u.Def.CanMove {
+		// Factory completed: allied completed builder that is immobile factory (Builder && footprint>=4 && MaxVelocity==0) — retail factories have CanMove true but MaxVelocity 0 [ON-11].
+		if u.Remaining == 0 && u.Def != nil && u.Def.Builder && u.Def.FootprintX >= 4 && u.Def.MaxVelocity == 0 {
 			// Consider it factory if it has build menu or footprint
 			hasFactoryCompleted = true
 		}
@@ -189,7 +189,7 @@ func (m *Manager) observeMilestones(tick uint32, w *units.World) {
 			if !m.isAllied(u.Owner) {
 				continue
 			}
-			if u.Def == nil || !u.Def.Builder || u.Def.CanMove {
+			if u.Def == nil || !u.Def.Builder || u.Def.FootprintX < 4 || u.Def.MaxVelocity != 0 {
 				continue
 			}
 			q := orders.QueueForUnit(u)

@@ -323,7 +323,12 @@ func (c *Client) featureFrameFor(f snapshot.FeatureView, shadow bool) *formats.G
 // blitGAFFrame blits a GAF indexed frame to the indexed framebuffer at
 // top-left (dstX,dstY) = anchor - frame offsets, clipped to the viewport [03 §4.4] [fmt gaf].
 // It copies opaque indexed pixels directly (palette mapping happens at present time, C7).
-// Shadow path (shadTrans) darkens via SHD row 0 when palette is available [03 §4.3.2].
+// Shadow path darkens the underlying terrain via PALETTE.SHD instead of copying
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// `SHD[row*256 + dstPix]` where row 0 is near-black (mean -97) and the mask is
+// the shadow GAF's opaque pixels; with dither the effect is translucent. For
+// feature shadows `shadTrans` selects the dithered translucent path (checker)
+// vs solid darken. Row 8 is a mid-dark row that is visible but not pure black.
 func (c *Client) blitGAFFrame(frame *formats.GAFFrame, dstX, dstY int, isShadow bool, shadTrans bool) {
 	if frame == nil || c.indexed == nil {
 		return
@@ -361,6 +366,14 @@ func (c *Client) blitGAFFrame(frame *formats.GAFFrame, dstX, dstY int, isShadow 
 	if copyW <= 0 || copyH <= 0 {
 		return
 	}
+	// Shadow stencil darkens the destination (ground) where the shadow GAF
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// where the mask is the shadow GAF's opaque pixels; the feature path at
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// but both are stencil darkens, not sprite copies. Row 0 is near-black,
+	// row 8 is mid-dark; retail's exact row for feature shadows is not fully
+	// established, but the effect is a solid darkening, not a checker dither.
+	// User checked retail and saw no dithering, so we use solid rows.
 	for y := 0; y < copyH; y++ {
 		srcY := srcY0 + y
 		dstYPos := dstY + y
@@ -374,18 +387,31 @@ func (c *Client) blitGAFFrame(frame *formats.GAFFrame, dstX, dstY int, isShadow 
 			if idx < len(frame.Transparent) && frame.Transparent[idx] {
 				continue
 			}
-			pix := frame.Pixels[idx]
-			// Shadow darkening: row 0 near-black via SHD when enabled and palette present [03 §4.3.2].
-			// For feature shadows shadTrans=1 => translucent darken.
-			if isShadow && shadTrans && c.pal != nil {
-				// SHD row 0 is near-black; use it for shadow darkening (presentation-only).
-				pix = c.pal.Shade[0][pix]
-			} else if isShadow && shadTrans {
-				// Fallback without palette: darken by mapping to near-black index 0 if not already.
-				if pix > 32 {
-					pix = 0
+			if isShadow {
+				// Use the shadow GAF as a mask: darken the underlying terrain pixel.
+				dstIdx := dstOff + x
+				if dstIdx < 0 || dstIdx >= len(c.indexed) {
+					continue
 				}
+				destPix := c.indexed[dstIdx]
+				var darkPix byte
+				if c.pal != nil {
+					// shadTrans selects translucent (lighter) vs opaque (darker) row.
+					// Row 16 is near-identity for brightening, rows 0-14 darken.
+					// Use row 8 for translucent, row 4 for opaque as a plausible
+					// retail split; both are solid, no checker.
+					row := 8
+					if !shadTrans {
+						row = 4
+					}
+					darkPix = c.pal.Shade[row][destPix]
+				} else {
+					darkPix = 0
+				}
+				c.indexed[dstIdx] = darkPix
+				continue
 			}
+			pix := frame.Pixels[idx]
 			c.indexed[dstOff+x] = pix
 		}
 	}
@@ -423,6 +449,11 @@ func (c *Client) featureScreenPos(f snapshot.FeatureView) (int32, int32) {
 		_ = cz
 	}
 	sx, sy := c.cam.WorldToScreen(f.X, f.Y, f.Z)
+	// Rebase from the observed beam origin (128,32) to the shell viewport origin
+	// (0,0) used by BlitTerrainOrigin for full-window draws [03 §2.5] C1 [PLAN_04A C1].
+	// Without this, features would be 128,32 southeast of their terrain tiles.
+	sx -= camera.OriginX
+	sy -= camera.OriginY
 	return sx, sy
 }
 

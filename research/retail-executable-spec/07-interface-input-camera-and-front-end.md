@@ -666,14 +666,17 @@ slides toward 0.
 
 **Panel asset binding and draw origins are closed.** The side loader opens the
 GAF named by the selected SIDE's `intgaf` field and caches the named entries
-`PANELTOP`, `PANELSIDE`, and `PANELBOT`. The battle shell invokes the raw GAF
-blitter with these authored-coordinate pairs: `PANELTOP` at `(129,0)`,
-`PANELSIDE` at `(0,0)`, and `PANELBOT` at `(129,H-32)` for the negotiated
-640×480 surface. The raw blitter applies a frame's animation anchor by
-subtracting its `XOffset/YOffset`; therefore a caller that exposes a raw
-blit API passes the requested origin plus those two offsets. This is distinct
-from ordinary `.GUI` gadget art: a gadget frame is copied at the translated
-authored gadget rectangle and its GAF offsets are not added. The command-panel
+`PANELTOP`, `PANELSIDE`, and `PANELBOT`. Their final framebuffer origins are
+`PANELTOP` at `(129,0)`, `PANELSIDE` at `(0,0)`, and `PANELBOT` at
+`(129,H-32)` for the negotiated 640×480 surface. At each battle-shell call
+site, TotalA passes that final origin plus the frame's `XOffset/YOffset`; the
+raw blitter then subtracts the same fields before writing pixels. The offsets
+therefore cancel and do not translate the decoded panel artwork. A renderer
+that directly stamps decoded pixels must either stamp them at the final origin
+or reproduce both halves of this contract; applying only the call-site
+addition is not retail behavior. This is distinct from ordinary `.GUI` gadget
+art: a gadget frame is copied at the translated authored gadget rectangle and
+its GAF offsets are not added. The command-panel
 GUI window is the side-prefixed `guis/<prefix>main.gui` when no unit page is
 active, `guis/<prefix>gen.gui` for a non-builder selection, or the selected
 builder's authored `guis/<unit>1.gui` page. Named page art is resolved from
@@ -691,6 +694,17 @@ color fields and FNT colors use the GUI-source-to-active lookup built from
 The resource primitive fills the authored `ENERGYBAR`/`METALBAR` rectangle to
 the current-over-capacity width with the side-authored active color; it does
 not synthesize a GUI-colored frame or a second palette layer.
+
+**Resource text formatting and cadence are closed.** Energy is the first
+resource display and metal is the second. Current and capacity values use
+integer text, and the authored `ENERGY0`/`METAL0` anchors receive a literal
+`0`. Energy production and consumption use integer text, switching to a
+truncated integer `K` suffix outside the inclusive `-99999..99999` range;
+metal production and consumption use one fractional digit. Consumption is
+shown with a negative sign. Normal text uses logical palette entry 15,
+production entry 10, and consumption entry 12. Production/consumption values
+are latched every 30 simulation ticks; the current-over-capacity bars remain a
+live presentation of committed stock.
 
 **Unit health color thresholds are closed.** The retail health primitive uses
 the active logical-to-physical table entries `dcb[10]`, `dcb[12]`, and
@@ -1021,6 +1035,18 @@ Generated side-specific build GUIs and selected-builder identifiers are
 asset/catalog driven, and aggregate command state has distinct
 enabled/disabled/mixed paths across the selected set.
 
+**Product-page assembly is closed.** The generated-menu input records carry
+both an explicit `PAGE` byte and an explicit `BUTTON` byte. Assembly first
+matches the builder definition and page, then patches the product into the
+named gadget slot selected by that authored button byte. The maximum authored
+page populates the builder definition's page-count byte used by the guard
+above. Stock Cavedog full builder pages expose six 64×64 product gadgets (the
+final page may be partial); the stock `CANBUILD` sequence consequently maps
+entries 1–6 to page one, 7–12 to page two, and so on. Generated
+`<unit>N.GUI` pages are authoritative for page existence and placement, so a
+replacement engine must not infer an eight-slot grid or synthesize missing
+pages.
+
 Queued build indicators use unit/build GAF artwork and numeric queue state.
 Selection changes can update the side panel, build page, command palette,
 health bars, unit name, and queued-order cursor indicators.
@@ -1036,7 +1062,7 @@ orders, and multiplayer packets.
 
 Repeated group-recall centering behavior and the writer lifetime of selection
 flag `0x80000000`, hull geometry and jammer versus radar-contact picking,
-exact per-page slot counts, page rebuild timing versus factory completion,
+page rebuild timing versus factory completion,
 and the exact arming trigger for the two off-button latch values remain
 incomplete. The drag-rectangle toggle truth table, eligibility predicate,
 overlap pick order with strict `<` tie-break and inclusive `min <= x <= max`,
@@ -1313,7 +1339,7 @@ minimum-ping write-back are established above.
   query for world commit versus drag word bit 2), and mixed-selection gate as
   AND across the selected set [P1-14] are established; what remains is repeated
   group-recall centering behavior and the writer lifetime of selection flag
-  `0x80000000`, plus exact per-page slot counts.
+  `0x80000000`.
 * Build cancellation and refund — tail-most matching walk with tombstone bit
   that skips `TargetCleared`, with `BuildWeapon` and `SelfDestruct` always
   tombstoned because the tombstone compares against the front anchor regardless

@@ -642,21 +642,12 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	var directGoal bool
 	var directX, directZ numeric.Fixed
 	if !hadRoute {
-		// No active route: try direct move to order goal if present, else remain stopped.
-		// This handles final approach after route prune (within 5 cells but still >2 world units) [04 §7.3] C15.
 		d := s.distToGoal(u)
 		const strictThresh = 2 * 65536
 		if d.Raw() <= strictThresh {
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: true}
 		}
-		// Attempt direct goal movement if order carries a goal.
-		if head != nil && (head.GoalX != 0 || head.GoalZ != 0) {
-			directGoal = true
-			directX = head.GoalX
-			directZ = head.GoalZ
-		} else {
-			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
-		}
+		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
 	} else {
 		// Prune(mover pos) [04 §7.3] C15. The stored points carry the half-footprint bias,
 		// so the mover's position is compared in the same biased domain [04 §7.1] C1.

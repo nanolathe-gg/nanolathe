@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"fmt"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -111,25 +110,18 @@ func (m *Manager) updateGroups(w *units.World) {
 		// Prefer wave groups up to waveMax, then explore, then rally.
 		if len(m.GroupWaveA) < waveMax {
 			m.GroupWaveA = append(m.GroupWaveA, h)
-			fmt.Printf("DEBUG updateGroups tick %d handle %d assigned to WaveA len %d\n", m.lastTick, h, len(m.GroupWaveA))
 		} else if len(m.GroupWaveB) < waveMax {
 			m.GroupWaveB = append(m.GroupWaveB, h)
-			fmt.Printf("DEBUG updateGroups tick %d handle %d assigned to WaveB len %d\n", m.lastTick, h, len(m.GroupWaveB))
 		} else if len(m.GroupExplore) < 10 {
 			m.GroupExplore = append(m.GroupExplore, h)
-			fmt.Printf("DEBUG updateGroups tick %d handle %d assigned to Explore len %d\n", m.lastTick, h, len(m.GroupExplore))
 		} else if len(m.GroupRally) < 10 {
 			m.GroupRally = append(m.GroupRally, h)
-			fmt.Printf("DEBUG updateGroups tick %d handle %d assigned to Rally len %d\n", m.lastTick, h, len(m.GroupRally))
 		} else if len(m.GroupRegroupA) < waveMax {
 			m.GroupRegroupA = append(m.GroupRegroupA, h)
-			fmt.Printf("DEBUG updateGroups tick %d handle %d assigned to RegroupA len %d\n", m.lastTick, h, len(m.GroupRegroupA))
 		} else if len(m.GroupRegroupB) < waveMax {
 			m.GroupRegroupB = append(m.GroupRegroupB, h)
-			fmt.Printf("DEBUG updateGroups tick %d handle %d assigned to RegroupB len %d\n", m.lastTick, h, len(m.GroupRegroupB))
 		}
 	}
-	fmt.Printf("DEBUG updateGroups end tick %d WaveA %d WaveB %d Explore %d Rally %d\n", m.lastTick, len(m.GroupWaveA), len(m.GroupWaveB), len(m.GroupExplore), len(m.GroupRally))
 }
 
 // isInAnyGroup reports whether h is in any AI group.

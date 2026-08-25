@@ -748,7 +748,6 @@ func (s *Session) authoritativeTick(tick uint32) {
 			s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceUnitBegin, Handle: h, Slot: int(v.Slot)})
 			if tick < 200 {
 				if qDbg := orders.QueueForUnit(u); qDbg != nil {
-					fmt.Printf("DEBUG Visit start tick %d handle %d queue len %d\n", tick, h, qDbg.LenPrimary())
 				}
 			}
 			// unit pre-update (StepPreUpdate) [04 "unit sweep"]
@@ -796,22 +795,17 @@ func (s *Session) authoritativeTick(tick uint32) {
 				if tick < 200 && (h == 5 || h == 6 || h == 7) {
 					if qDbg2 := orders.QueueForUnit(u); qDbg2 != nil && qDbg2.LenPrimary() > 0 {
 						if hd2 := qDbg2.Head(); hd2 != nil {
-							fmt.Printf("DEBUG queue before construction tick %d h %d head %s BuildDef %s\n", tick, h, orders.DescriptorFor(hd2.ID).Name, hd2.BuildDefKey)
 						}
 					} else {
-						fmt.Printf("DEBUG queue before construction tick %d h %d empty\n", tick, h)
 					}
 				}
 				ctx := construction.TickContext{Tick: tick, World: s.Units, Economy: s.Econ, Terrain: s.World, Catalog: s.Catalog}
 				wres := s.Build.StepUnit(ctx, h)
 				if tick < 200 && (h == 5 || h == 6 || h == 7) {
-					fmt.Printf("DEBUG construction tick %d h %d DefKey %s Product %d Completed %v Err %v State %d\n", tick, h, wres.DefKey, wres.Product, wres.Completed, wres.Err, wres.State)
 					if qDbg := orders.QueueForUnit(u); qDbg != nil && qDbg.LenPrimary() > 0 {
 						if hd := qDbg.Head(); hd != nil {
-							fmt.Printf("DEBUG queue after construction tick %d head %s BuildDef %s Goal %d %d\n", tick, orders.DescriptorFor(hd.ID).Name, hd.BuildDefKey, int64(hd.GoalX.Raw()), int64(hd.GoalZ.Raw()))
 						}
 					} else {
-						fmt.Printf("DEBUG queue after construction tick %d empty\n", tick)
 					}
 				}
 				// Work admission trace when request recorded
@@ -887,7 +881,6 @@ func (s *Session) authoritativeTick(tick uint32) {
 			}
 			if tick < 10 {
 				if qDbg := orders.QueueForUnit(u); qDbg != nil {
-					fmt.Printf("DEBUG Visit end tick %d handle %d queue len %d\n", tick, h, qDbg.LenPrimary())
 				}
 			}
 		})
@@ -895,10 +888,8 @@ func (s *Session) authoritativeTick(tick uint32) {
 	if tick < 200 {
 		if uDbg := s.Units.Unit(5); uDbg != nil {
 			if qDbg := orders.QueueForUnit(uDbg); qDbg != nil {
-				fmt.Printf("DEBUG after Visit loop tick %d handle5 queue len %d\n", tick, qDbg.LenPrimary())
 				if qDbg.LenPrimary() > 0 {
 					if hd := qDbg.Head(); hd != nil {
-						fmt.Printf("DEBUG after Visit loop head %s BuildDef %s\n", orders.DescriptorFor(hd.ID).Name, hd.BuildDefKey)
 					}
 				}
 			}
@@ -910,17 +901,13 @@ func (s *Session) authoritativeTick(tick uint32) {
 	if tick < 200 {
 		if uDbg := s.Units.Unit(5); uDbg != nil {
 			if qDbg := orders.QueueForUnit(uDbg); qDbg != nil {
-				fmt.Printf("DEBUG after EndTick tick %d handle5 queue len %d\n", tick, qDbg.LenPrimary())
 				if qDbg.LenPrimary() > 0 {
 					if hd := qDbg.Head(); hd != nil {
-						fmt.Printf("DEBUG after EndTick head %s BuildDef %s\n", orders.DescriptorFor(hd.ID).Name, hd.BuildDefKey)
 					}
 				}
 			} else {
-				fmt.Printf("DEBUG after EndTick tick %d handle5 queue nil\n", tick)
 			}
 		} else {
-			fmt.Printf("DEBUG after EndTick tick %d handle5 unit nil\n", tick)
 		}
 	}
 
@@ -1209,6 +1196,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				}
 			}
 			if u.Def != nil {
+				v.DefName = u.Def.CanonicalKey
 				v.Model = u.Def.ObjectName
 				v.FootX = int8(u.Def.FootprintX)
 				v.FootZ = int8(u.Def.FootprintZ)
@@ -1336,6 +1324,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 				Energy:         pl.Stock[economy.Energy],
 				MetalCapacity:  pl.Capacity[economy.Metal],
 				EnergyCapacity: pl.Capacity[economy.Energy],
+				MetalProduced:  pl.PassProduced[economy.Metal],
+				MetalConsumed:  pl.PassConsumed[economy.Metal],
+				EnergyProduced: pl.PassProduced[economy.Energy],
+				EnergyConsumed: pl.PassConsumed[economy.Energy],
 			})
 		}
 		frame.Resources = resViews
@@ -2258,6 +2250,7 @@ func (s *Session) RegisterAll() {
 						}
 					}
 					if u.Def != nil {
+						v.DefName = u.Def.CanonicalKey
 						v.Model = u.Def.ObjectName
 						v.FootX = int8(u.Def.FootprintX)
 						v.FootZ = int8(u.Def.FootprintZ)
@@ -2396,6 +2389,10 @@ func (s *Session) RegisterAll() {
 						Energy:         pl.Stock[economy.Energy],
 						MetalCapacity:  pl.Capacity[economy.Metal],
 						EnergyCapacity: pl.Capacity[economy.Energy],
+						MetalProduced:  pl.PassProduced[economy.Metal],
+						MetalConsumed:  pl.PassConsumed[economy.Metal],
+						EnergyProduced: pl.PassProduced[economy.Energy],
+						EnergyConsumed: pl.PassConsumed[economy.Energy],
 					})
 				}
 				frame.Resources = resViews

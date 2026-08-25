@@ -49,6 +49,7 @@ type UnitView struct {
 	Health, MaxHealth    int32
 	BuildRemaining       float32     // I2 allowlist: resource/ledger carry
 	Flags                uint32      // selected, cloaked, underwater, nanoframe, etc.
+	DefName              string      // canonical definition key; presentation identity independent of runtime defID
 	Model                string      // authored 3DO model name for presentation [03 §2.4]
 	FootX, FootZ         int8        // packed footprint extents in cells [04 §6.2]
 	Pieces               []PieceView // COB piece transforms if VM bound [03 §2.4] C21–C22 [04 §4.6]; nil when no script
@@ -127,6 +128,10 @@ type ResourceView struct {
 	Energy         float32 // Stock[Energy] [05]
 	MetalCapacity  float32 // Capacity[Metal] [05]
 	EnergyCapacity float32 // Capacity[Energy] [05]
+	MetalProduced  float32 // latched per-pass production counter [05]
+	MetalConsumed  float32 // latched per-pass requested/consumed counter [05]
+	EnergyProduced float32 // latched per-pass production counter [05]
+	EnergyConsumed float32 // latched per-pass requested/consumed counter [05]
 }
 
 // SoundEvent is one queued presentation sound cue [03 §8.3].

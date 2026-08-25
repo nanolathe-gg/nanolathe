@@ -333,6 +333,28 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 			}
 			sort.Slice(st.SchedulerPending, func(i, j int) bool { return st.SchedulerPending[i].Unit < st.SchedulerPending[j].Unit })
 		}
+		// Steering state [04 §8.1] C20 C21 [ON-12] — deterministic sorted
+		for h, stt := range s.Movement.Steers {
+			if stt == nil {
+				continue
+			}
+			rec := save.MovementSteerRecord{
+				Handle:         int32(h),
+				X:              stt.X,
+				Z:              stt.Z,
+				Heading:        stt.Heading,
+				PendingHeading: stt.PendingHeading,
+				Dirty:          stt.Dirty,
+				Speed:          stt.Speed,
+				MaxVelocity:    stt.MaxVelocity,
+				TurnRate:       stt.TurnRate,
+				HeightWord:     stt.HeightWord,
+				SeaLevel:       stt.SeaLevel,
+				DefFlags:       stt.DefFlags,
+			}
+			st.MovementSteers = append(st.MovementSteers, rec)
+		}
+		sort.Slice(st.MovementSteers, func(i, j int) bool { return st.MovementSteers[i].Handle < st.MovementSteers[j].Handle })
 	}
 	// Economy [05]
 	if s.Econ != nil {
@@ -369,6 +391,9 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 				EndGameCountdown:    p.EndGameCountdown,
 				Helper1Deadline:     p.Helper1Deadline,
 				Helper2Deadline:     p.Helper2Deadline,
+				Helper1Calls:        int32(p.Helper1Calls),
+				Helper2Calls:        int32(p.Helper2Calls),
+				WeaponRefreshCalls:  int32(p.WeaponRefreshCalls),
 				ReferencePlayer:     int32(s.Econ.ReferencePlayer),
 				SensorShareCalls:    int32(s.Econ.SensorShareCalls),
 			}
@@ -854,6 +879,60 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 				s.Movement.Scheduler.Submit(req)
 			}
 		}
+		// Steering state [04 §8.1] C20 C21 [ON-12] — restore deterministically sorted
+		for h := range s.Movement.Steers {
+			delete(s.Movement.Steers, h)
+		}
+		for _, rec := range st.MovementSteers {
+			s.Movement.Steers[pool.Handle(rec.Handle)] = &movement.SteerState{
+				X:              rec.X,
+				Z:              rec.Z,
+				Heading:        rec.Heading,
+				PendingHeading: rec.PendingHeading,
+				Dirty:          rec.Dirty,
+				Speed:          rec.Speed,
+				MaxVelocity:    rec.MaxVelocity,
+				TurnRate:       rec.TurnRate,
+				HeightWord:     rec.HeightWord,
+				SeaLevel:       rec.SeaLevel,
+				DefFlags:       rec.DefFlags,
+			}
+		}
+		// Rebuild occupancy grid from restored positions to keep collision determinism [ON-12]
+		if s.Movement.Grid != nil {
+			s.Movement.Grid = movement.NewOccupancyGrid()
+			for _, u := range s.Units.Iter() {
+				if u == nil || !u.Alive {
+					continue
+				}
+				prof := s.Movement.ProfileFor(u.Handle)
+				fx := prof.FootPrintX
+				fz := prof.FootPrintZ
+				if fx <= 0 {
+					fx = int16(u.Def.FootprintX)
+					if fx <= 0 {
+						fx = 1
+					}
+				}
+				if fz <= 0 {
+					fz = int16(u.Def.FootprintZ)
+					if fz <= 0 {
+						fz = 1
+					}
+				}
+				bx := int32(int64(fx) * 1048576 / 2)
+				bz := int32(int64(fz) * 1048576 / 2)
+				anchor := movement.QuantizedAnchor(int32(u.X.Raw()), int32(u.Z.Raw()), bx, bz)
+				s.Movement.Grid.Stamp(anchor, fx, fz, int(u.Handle))
+				if coll, ok := s.Movement.Collisions[u.Handle]; ok && coll != nil {
+					coll.X = int32(u.X.Raw())
+					coll.Z = int32(u.Z.Raw())
+					coll.Y = int32(u.Y.Raw())
+					coll.CachedAnchor = anchor
+					coll.OldAnchor = anchor
+				}
+			}
+		}
 	}
 	// Economy
 	if s.Econ != nil {
@@ -890,6 +969,9 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 			p.EndGameCountdown = rec.EndGameCountdown
 			p.Helper1Deadline = rec.Helper1Deadline
 			p.Helper2Deadline = rec.Helper2Deadline
+			p.Helper1Calls = int(rec.Helper1Calls)
+			p.Helper2Calls = int(rec.Helper2Calls)
+			p.WeaponRefreshCalls = int(rec.WeaponRefreshCalls)
 			// ReferencePlayer and SensorShareCalls are service-level but we stored per player rec; use first
 			if i == 0 {
 				s.Econ.ReferencePlayer = int(rec.ReferencePlayer)
