@@ -15,7 +15,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
-	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
@@ -163,6 +162,23 @@ func NewSkirmish(cfg SkirmishConfig) (*Session, error) {
 // aborts with a diagnostic. Fixtures must use NewSkirmishForTest.
 // [02 §5][03 §2.2][P0-16]
 func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (*Session, error) {
+	return NewSkirmishWithProgress(fs, cat, cfg, nil)
+}
+
+// The session's own load families, reported after the catalog's. They are what
+// battle entry does once the immutable catalog exists.
+const (
+	FamilyTerrain   = "terrain"
+	FamilyUnitWorld = "unitworld"
+	FamilyPlacement = "placement"
+	FamilyScripts   = "scripts"
+)
+
+// NewSkirmishWithProgress is NewSkirmishWithFS with a load observer. The
+// observer sees the catalog's families first and then this constructor's own,
+// so a caller painting the retail loading screen can drive it from one stream.
+// A nil observer makes this exactly NewSkirmishWithFS.
+func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig, report content.Progress) (*Session, error) {
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -171,7 +187,7 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 		fs = vfs.New()
 	}
 	// 1. mount/receive VFS and compile one immutable catalog [02 §5]
-	cat, err := strictCatalog(fs, cat)
+	cat, err := strictCatalogWithProgress(fs, cat, report)
 	if err != nil {
 		return nil, err
 	}
@@ -185,11 +201,13 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 	if err != nil {
 		return nil, err
 	}
+	report.Report(FamilyTerrain, 100)
 	// 4. create retail sliced unit pool [P0-16]
 	unitsWorld, err := newSlicedWorldWithCOB(cat, fs)
 	if err != nil {
 		return nil, err
 	}
+	report.Report(FamilyUnitWorld, 100)
 	// Strict: ensure side commanders exist; do not invent armcom [P0-I01]
 	nPlayersCheck := cfg.NumPlayers
 	if nPlayersCheck < 0 {
@@ -273,12 +291,33 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 	if err := SkirmishBattleEntry(s, cfg, m, nil); err != nil {
 		return nil, err
 	}
+	report.Report(FamilyPlacement, 100)
 	// Ensure COB VMs for all units (load via VFS, statics zero-init, piece count from program, Create run) [04 §4.1][P1-I01]
 	ensureCOBForAll(s, fs)
+	report.Report(FamilyScripts, 100)
 	// 8. movement state and visibility state for new units
 	ensureMovementForAll(s)
 	publishVisibilityForAll(s)
 	// AI managers for computer players [08 "Established AI-facing data"] [P0-I12]
+	// AI profile load failure is explicit startup error [08].
+	hasComputer := false
+	for i := 0; i < nPlayers && i < 10; i++ {
+		if cfg.Players[i].Controller != 0 {
+			hasComputer = true
+			break
+		}
+	}
+	var sharedProf *ai.Profile
+	if hasComputer {
+		prof, perr := ai.LoadProfile(fs, "default")
+		if perr != nil || prof == nil {
+			if perr == nil {
+				perr = fmt.Errorf("ai: nil profile")
+			}
+			return nil, fmt.Errorf("session: ai profile default: %w", perr)
+		}
+		sharedProf = prof
+	}
 	s.AI = make([]*ai.Manager, 0, nPlayers)
 	for i, p := range cfg.Players[:nPlayers] {
 		if i >= 10 {
@@ -287,11 +326,7 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 		if p.Controller == 0 {
 			continue
 		}
-		prof, perr := ai.LoadProfile(fs, "default")
-		if perr != nil || prof == nil {
-			continue
-		}
-		mgr := &ai.Manager{Player: uint8(i), Profile: prof}
+		mgr := &ai.Manager{Player: uint8(i), Profile: sharedProf}
 		mgr.Terrain = s.World
 		mgr.Catalog = s.Catalog
 		s.AI = append(s.AI, mgr)
@@ -336,66 +371,19 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 	}
 	// 11. register every authoritative phase once [01 §4.4] I7
 	s.RegisterAll()
-	// Skirmish end condition: commander death when CommanderDeath==1 [08 "Skirmish configuration"]
-	// Separate from campaign trigger polling [P0-I09]; uses death hook for immediate latch.
+	// Alliance-aware skirmish victory: team eliminated when all its commanders
+	// are dead; when <=1 hostile team remains, latch result (draw on mutual
+	// destruction) [08 "Victory and defeat triggers"][08 "Skirmish configuration"]
+	// CommanderDeath==1. Countdown via EndLatch [P1-01 §2.2] before visible.
+	// Hooked after death finalization so future central loop can invoke
+	// EvaluateResult after phase 10 cleanup (I7). TODO(question): general alliance
+	// sweep not decomposed; CommanderDeath==0 annihilation mode deferred.
 	if s.Skirmish.CommanderDeath != 0 {
-		origDeath := s.Units.OnDeath
-		s.Units.OnDeath = func(h pool.Handle, cause units.DeathCause, u *units.Unit) {
-			if origDeath != nil {
-				origDeath(h, cause, u)
-			}
-			if u == nil || u.Def == nil || !u.Def.Commander {
-				return
-			}
-			deadOwner := int(u.Owner)
-			remaining := 0
-			for _, cand := range s.Units.IterSliced() {
-				if cand == nil || !cand.Alive || cand.Dying {
-					continue
-				}
-				if int(cand.Owner) == deadOwner && cand.Def != nil && cand.Def.Commander {
-					remaining++
-				}
-			}
-			if remaining != 0 {
-				return
-			}
-			if deadOwner == int(s.LocalOwner) {
-				s.Latch.Bits |= LatchBitEnding
-				s.Latch.Lose()
-				for i := 0; i < 10; i++ {
-					s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
-					s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
-				}
-				if s.State == StateBattle {
-					_ = s.TransitionTo(StatePostBattle)
-				}
-			} else {
-				localRemaining := 0
-				for _, cand := range s.Units.IterSliced() {
-					if cand == nil || !cand.Alive || cand.Dying {
-						continue
-					}
-					if int(cand.Owner) == int(s.LocalOwner) && cand.Def != nil && cand.Def.Commander {
-						localRemaining++
-					}
-				}
-				if localRemaining > 0 {
-					s.Latch.Bits |= LatchBitEnding
-					s.Latch.Win()
-				} else {
-					s.Latch.Bits |= LatchBitEnding
-					s.Latch.Win()
-				}
-				for i := 0; i < 10; i++ {
-					s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
-					s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
-				}
-				if s.State == StateBattle {
-					_ = s.TransitionTo(StatePostBattle)
-				}
-			}
-		}
+		s.Kernel.Register(kernel.PhaseLedgerCleanup, "skirmish-result", func(tick uint32) {
+			s.EvaluateResult(tick)
+		})
+	} else {
+		// TODO(question): CommanderDeath==0 annihilation mode not researched; defer [08 "Skirmish configuration"].
 	}
 	// 12. transition through state machine [08 "Session states"] C3
 	if err := s.SelectForGametype(GametypeMultiplayer); err != nil {
@@ -629,6 +617,11 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		}
 	}
 	s.RegisterAll()
+	if s.Skirmish.CommanderDeath != 0 {
+		s.Kernel.Register(kernel.PhaseLedgerCleanup, "skirmish-result", func(tick uint32) {
+			s.EvaluateResult(tick)
+		})
+	}
 	_ = s.SelectForGametype(GametypeMultiplayer)
 	return s, nil
 }

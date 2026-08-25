@@ -147,6 +147,22 @@ type Frame struct {
 	// It is copied from visibility.Service.Fog() each tick after the
 	// visibility/sensor phase. Renderer reads it via render.BuildFogOps (I6).
 	Fog FogView
+	// Result is the immutable skirmish result view published from committed
+	// authoritative state after EndLatch Bits become visible [08][P1-01 §2.2].
+	Result ResultView
+}
+
+// ResultView is the immutable presentation copy of the authoritative skirmish
+// result latched from team commander state [08 "Skirmish configuration"]
+// [08 "Victory and defeat triggers"] and [P1-01 §2.2] EndLatch countdown.
+// It is published from committed authoritative state after the latch Bits
+// become visible; renderer reads it presentation-only (I6).
+type ResultView struct {
+	Ended      bool   // true when terminal result is visible (latch ending)
+	WinnerTeam int    // team identifier; -1 for draw
+	Reason     string // e.g., "commander_death"
+	Tick       uint32 // authoritative tick when result became visible
+	Draw       bool   // true on mutual destruction draw
 }
 
 // FogView is the presentation copy of the two-channel fog cache [03 §3.3] C13.
@@ -166,9 +182,52 @@ type FogView struct {
 // instead of copying: the renderer's frames cannot change under it, because a
 // later Publish replaces the pointers rather than the frames.
 type Buffer struct {
-	mu   sync.RWMutex
-	prev *Frame
-	cur  *Frame
+	mu     sync.RWMutex
+	prev   *Frame
+	cur    *Frame
+	result ResultView // committed result held for next Publish [08][P1-01]
+}
+
+// SetResultView stores the committed result that the next Publish will copy
+// into Frame.Result [08 "Victory and defeat triggers"][P1-01]. It is
+// presentation-only copy of authoritative state; sim never reads it (I6).
+func (b *Buffer) SetResultView(v ResultView) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.result = v
+	b.mu.Unlock()
+	// Also patch the current frame in place so a result that becomes visible
+	// mid-tick (after the publish of that tick) is still observable without
+	// waiting for the next tick's Publish.
+	b.mu.Lock()
+	if b.cur != nil {
+		// Copy-on-write patch: clone cur, mutate, swap.
+		patched := *b.cur
+		patched.Result = v
+		// Deep-copy slices already owned by cur are immutable, so sharing is safe
+		// for this patch; we only mutate Result.
+		b.cur = &patched
+		if b.prev != nil && b.prev != b.cur {
+			// prev stays as previous; do not mutate prev's Result retroactively.
+		}
+	}
+	b.mu.Unlock()
+}
+
+// GetResultView returns the committed result view currently held by the
+// buffer (presentation-only, I6). Zero value means no result yet.
+func (b *Buffer) GetResultView() ResultView {
+	if b == nil {
+		return ResultView{}
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.cur != nil {
+		return b.cur.Result
+	}
+	return b.result
 }
 
 // Publish stores f as the Current frame and shifts the previous Current to
@@ -182,6 +241,17 @@ func (b *Buffer) Publish(f *Frame) {
 	if b == nil || f == nil {
 		return
 	}
+	b.mu.RLock()
+	rv := b.result
+	b.mu.RUnlock()
+	// Ensure the published frame carries the committed result view [08][P1-01].
+	if f.Result.Ended == false && rv.Ended {
+		f.Result = rv
+	} else if rv.Ended && f.Result.Ended == false {
+		// Prefer buffer's committed result when frame hasn't yet been patched.
+		f.Result = rv
+	}
+	// If frame already has Result (e.g., test directly sets), keep it.
 	published := cloneFrame(f)
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -248,7 +318,7 @@ func cloneFrame(f *Frame) Frame {
 	if f == nil {
 		return Frame{}
 	}
-	nf := Frame{Tick: f.Tick}
+	nf := Frame{Tick: f.Tick, Result: f.Result}
 	if len(f.Units) > 0 {
 		nf.Units = make([]UnitView, len(f.Units))
 		copy(nf.Units, f.Units)

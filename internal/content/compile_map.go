@@ -310,6 +310,14 @@ func baseNameWithoutExt(logical string) string {
 // via a lightweight header reader inspired by formats/tnt.go [PLAN 02].
 // It returns a map keyed by CanonicalKey(basename) [02 §5].
 func CompileMaps(fs vfs.FSOps) (map[string]*MapHeader, error) {
+	return compileMapsWithProgress(fs, nil)
+}
+
+// compileMapsWithProgress is CompileMaps with a running percentage. The map
+// census reads one OTA and one TNT header per installed map, so on a full
+// retail install it dominates a whole-install compile; it is the only family
+// the loading screen can show advancing rather than completing.
+func compileMapsWithProgress(fs vfs.FSOps, report Progress) (map[string]*MapHeader, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("content: nil VFS")
 	}
@@ -344,7 +352,10 @@ func CompileMaps(fs vfs.FSOps) (map[string]*MapHeader, error) {
 	}
 	sort.Strings(bases)
 	result := make(map[string]*MapHeader, len(bases))
-	for _, base := range bases {
+	for i, base := range bases {
+		if len(bases) != 0 {
+			report.Report(FamilyMaps, i*100/len(bases))
+		}
 		otaEntry := otaByBase[base]
 		tntEntry := tntByBase[base]
 		otaLogical := otaEntry.Path

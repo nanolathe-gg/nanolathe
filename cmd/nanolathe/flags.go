@@ -13,20 +13,22 @@ import (
 // not rename existing ones, because the gate commands in docs/PLAN_*.md are
 // written against these names.
 type Options struct {
-	Root      string // retail install root
-	Map       string // map name without extension, e.g. "ashap plateau"
-	Mission   string // campaign mission reference, e.g. "camps/arm campaign.tdf:MISSION0"
-	AI        string // AI profile name; empty disables the planner
-	Headless  bool   // no window
-	Ticks     int    // headless tick budget; 0 = run until the session ends
-	Seed      int64  // simulation RNG seed; <0 = derive from the clock
-	Dump      string // headless diagnostic dump verb
-	Save      string // write a native save after a headless run [PLAN_14 C18]
-	Load      string // restore a native save before ticking [PLAN_14 C18]
-	Shot      string // render --frames composed frames headless and write this PNG
-	Frames    int    // ticks to advance before --shot captures (default 30)
-	ShotModel string // with --shot: render this single 3DO model at screen center
-	ShotMenu  string // with --shot: render this frontend panel instead of a battle
+	Root        string // retail install root
+	Map         string // map name without extension, e.g. "ashap plateau"
+	Mission     string // campaign mission reference, e.g. "camps/arm campaign.tdf:MISSION0"
+	AI          string // AI profile name; empty disables the planner
+	Headless    bool   // no window
+	Ticks       int    // headless tick budget; 0 = run until the session ends
+	Seed        int64  // simulation RNG seed; <0 = derive from the clock
+	Dump        string // headless diagnostic dump verb
+	Save        string // write a native save after a headless run [PLAN_14 C18]
+	Load        string // restore a native save before ticking [PLAN_14 C18]
+	Shot        string // render --frames composed frames headless and write this PNG
+	Frames      int    // ticks to advance before --shot captures (default 30)
+	ShotModel   string // with --shot: render this single 3DO model at screen center
+	ShotMenu    string // with --shot: render this frontend panel instead of a battle
+	UntilResult bool   // run until terminal result (victory/defeat/draw) [ON-07]
+	MaxTick     int    // guard: maximum ticks when using --until-result [ON-07]
 }
 
 // ErrHelp reports that usage was requested and printed.
@@ -61,6 +63,8 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.Dump, "dump", "", "headless diagnostic dump (manifest, catalog, providers, route)")
 	set.StringVar(&opts.Save, "save", "", "write a native save here after the headless run")
 	set.StringVar(&opts.Load, "load", "", "restore a native save before ticking")
+	set.BoolVar(&opts.UntilResult, "until-result", false, "run until terminal result (victory/defeat/draw) [ON-07]")
+	set.IntVar(&opts.MaxTick, "max-tick", 0, "guard: maximum ticks when using --until-result [ON-07]")
 	set.Usage = func() {
 		fmt.Fprintf(out, "nanolathe — a reimplementation of the Total Annihilation engine\n\n")
 		fmt.Fprintf(out, "usage: nanolathe [flags]\n\nflags:\n")

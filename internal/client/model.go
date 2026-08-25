@@ -199,11 +199,14 @@ func (c *Client) buildTextureIndex() {
 // unitModelFor expands and caches a model; nil when the 3DO is unavailable
 // (callers fall back to footprint bodies).
 func (c *Client) unitModelFor(name string) *unitModel {
-	if c.modelFS == nil || name == "" {
+	if name == "" {
 		return nil
 	}
 	if m, ok := c.models[name]; ok {
 		return m
+	}
+	if c.modelFS == nil {
+		return nil
 	}
 	m := c.expandModel(name)
 	c.models[name] = m // nil caches too: missing models stay fallback
@@ -373,6 +376,21 @@ type screenTri struct {
 func (c *Client) drawUnitModel(v snapshot.UnitView, sx, sy int32) bool {
 	m := c.unitModelFor(v.Model)
 	if m == nil || c.cam == nil || len(m.pieces) == 0 {
+		// Model-load fallback diagnostic emitted once per unit slot (structured), not per frame spam [ON-08].
+		if m == nil && c.cam != nil && v.Model != "" {
+			if c.modelFallbacks == nil {
+				c.modelFallbacks = map[uint16]struct{}{}
+			}
+			key := uint16(v.Slot)
+			if _, seen := c.modelFallbacks[key]; !seen {
+				err := c.modelErrors[v.Model]
+				if err == nil {
+					err = fmt.Errorf("model not available")
+				}
+				fmt.Fprintf(os.Stderr, "{\"level\":\"warn\",\"msg\":\"model fallback\",\"slot\":%d,\"model\":%q,\"owner\":%d,\"error\":%q}\n", v.Slot, v.Model, v.Owner, err.Error())
+				c.modelFallbacks[key] = struct{}{}
+			}
+		}
 		return false
 	}
 	// Build per-piece dynamic states from snapshot [03 §2.4] C21–C22.
@@ -431,6 +449,26 @@ func (c *Client) drawUnitModel(v snapshot.UnitView, sx, sy int32) bool {
 	for pi, piece := range m.pieces {
 		if states[pi].hidden {
 			continue
+		}
+		// Hidden parent hides child: walk parent chain [03 §2.4] C22.
+		{
+			hiddenAncestor := false
+			cur := piece.parent
+			seen := map[int]bool{}
+			for cur >= 0 && cur < len(m.pieces) {
+				if seen[cur] {
+					break
+				}
+				seen[cur] = true
+				if states[cur].hidden {
+					hiddenAncestor = true
+					break
+				}
+				cur = m.pieces[cur].parent
+			}
+			if hiddenAncestor {
+				continue
+			}
 		}
 		// Build leaf→root chain for this piece [03 §2.4] C21.
 		chain := c.buildPieceChain(m, pi, states)

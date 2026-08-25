@@ -2028,7 +2028,13 @@ noRetailArrowRepeat:
 					case gui.KindScrollBar:
 						g.releaseRetailScrollbar(gad, g.panel.window.PlacedRect(idx), x, y)
 					default:
+						// Retail's pump returns to the window loop as soon as
+						// a callback has run, and re-reads the panel on the
+						// next pass. A callback is free to close the window it
+						// was invoked from — Start leaves for the loading
+						// screen — so nothing after this may touch g.panel.
 						g.activateGadget(gad.Name)
+						return
 					}
 				}
 			}
@@ -2071,6 +2077,10 @@ noRetailArrowRepeat:
 				}
 			}
 		}
+	}
+	if g.panel == nil || g.panel.window == nil {
+		// A pointer callback above closed the panel.
+		return
 	}
 	if kbd.KeyDown(input.KeyEscape) {
 		g.activateEscape()
@@ -2310,9 +2320,9 @@ func (g *gameShell) activateGadget(name string) {
 		case "prevmenu":
 			g.openMenu(modeMenuSingle)
 		case "start":
-			if err := g.startMission(); err != nil {
-				g.showRetailMessage(err.Error())
-			}
+			// The campaign Start leaves for the same loading screen the
+			// skirmish Start does [07 §4].
+			g.startMissionLoad()
 		case "difficulty":
 			g.missionDifficultyValue = cycleInt(g.missionDifficultyValue, 0, 2, 1)
 			g.panel.setStatus("Difficulty", g.missionDifficultyValue)
@@ -2353,9 +2363,9 @@ func (g *gameShell) activateSkirmishGadget(name string) {
 			g.showRetailMessage(message)
 			return
 		}
-		if err := g.startBattle(g.setup.MapName); err != nil {
-			g.showRetailMessage(err.Error())
-		}
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// which is what actually builds the session [07 §4].
+		g.startBattleLoad(g.setup.MapName)
 		return
 	}
 	if key == "selectmap" {

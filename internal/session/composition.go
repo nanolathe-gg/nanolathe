@@ -31,6 +31,10 @@ var globalCobLoader = cob.NewCachedLoader()
 // fabricates an empty fallback. Fixture constructors must explicitly supply a
 // catalog or use the ForTest variant. [02 §5]
 func strictCatalog(fs vfs.FSOps, cat *content.Catalog) (*content.Catalog, error) {
+	return strictCatalogWithProgress(fs, cat, nil)
+}
+
+func strictCatalogWithProgress(fs vfs.FSOps, cat *content.Catalog, report content.Progress) (*content.Catalog, error) {
 	if cat != nil {
 		// Explicitly supplied catalog is taken as-is. For production it will
 		// have been compiled via strict path; for fixtures the caller owns the
@@ -44,7 +48,7 @@ func strictCatalog(fs vfs.FSOps, cat *content.Catalog) (*content.Catalog, error)
 	if fs == nil {
 		return nil, fmt.Errorf("session: nil filesystem and nil catalog [02 §5]")
 	}
-	compiled, err := content.Compile(fs)
+	compiled, err := content.CompileWithProgress(fs, report)
 	if err != nil {
 		return nil, fmt.Errorf("session: catalog compile: %w", err)
 	}

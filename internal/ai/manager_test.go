@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/orders"
@@ -89,6 +90,7 @@ func TestBothGates(t *testing.T) {
 	econ2 := makeEconWithControllers(map[int]uint8{2: 2})
 	// Use world nil so doConstruction early returns but deadline still rescheduled and taskRuns increments.
 	rng.SeedGlobal(99, 0)
+	m2.RNG = rng.Global.Sim // manager-local RNG [P0-07]
 	beforeDraws := rng.Global.Sim.Draws()
 	m2.Tick(30, nil, econ2)
 	if m2.EntryCount() != 1 {
@@ -220,6 +222,7 @@ func TestDeadlineVectors(t *testing.T) {
 	}
 	m.Deadlines[TaskOther900] = 300
 	rng.SeedGlobal(42, 0)
+	m.RNG = rng.Global.Sim // manager-local [P0-07]
 	before = rng.Global.Sim.Draws()
 	m.Tick(300, nil, econ)
 	after := rng.Global.Sim.Draws()
@@ -247,6 +250,7 @@ func TestDeadlineVectors(t *testing.T) {
 	}
 	m.Deadlines[TaskOther150] = 500
 	rng.SeedGlobal(99, 0)
+	m.RNG = rng.Global.Sim // manager-local [P0-07]
 	before = rng.Global.Sim.Draws()
 	m.Tick(500, nil, econ)
 	after = rng.Global.Sim.Draws()
@@ -391,6 +395,7 @@ func TestRNGBoundCensus(t *testing.T) {
 	m.Deadlines[TaskNullSub] = 1000
 	econ := makeEconWithControllers(map[int]uint8{1: 2})
 	rng.SeedGlobal(100, 0)
+	m.RNG = rng.Global.Sim // manager-local [P0-07]
 	before := rng.Global.Sim.Draws()
 	m.Tick(10, nil, econ)
 	after := rng.Global.Sim.Draws()
@@ -486,7 +491,7 @@ func TestWiringBeforeDeadline(t *testing.T) {
 
 // TestC12OnlyOrdinaryPaths verifies construction path uses ordinary queue [PLAN_11 C12].
 func TestC12OnlyOrdinaryPaths(t *testing.T) {
-	// Verify that doConstruction uses construction.QueueBuild only when a candidate is selected
+	// Verify that doConstruction uses typed queue only when a candidate is selected [P0-07]
 	// Setup world with a builder unit
 	w := units.New(10, nil)
 	def := &content.UnitDef{
@@ -539,18 +544,21 @@ func TestC12OnlyOrdinaryPaths(t *testing.T) {
 	if m.TaskRuns(TaskConstruction) == 0 {
 		t.Fatalf("construction task should have run")
 	}
-	// Verify that the construction path is routed Select → Place → QueueBuild [PLAN_11 C8+C12]
+	// Verify that the construction path is routed Select → Place → QueueBuildTyped [PLAN_11 C8+C12] [P0-07]
 	data, _ := os.ReadFile("manager.go")
 	if !regexp.MustCompile(`Select\(m,`).Match(data) {
 		t.Fatalf("manager.go should route TaskConstruction/Positioning through Select [PLAN_11 C8]")
 	}
 	if !regexp.MustCompile(`Place\(m,`).Match(data) {
-		t.Fatalf("manager.go should route through Place before QueueBuild [PLAN_11 C8+C12]")
+		t.Fatalf("manager.go should route through Place before QueueBuildTyped [PLAN_11 C8+C12] [P0-07]")
 	}
-	// Ordinary QueueBuild path is inside placement.go via per-manager QueueBuild [P0-I16][PLAN_11 C12]
+	// Typed QueueBuild path is inside placement.go via per-manager QueueBuildTyped [P0-07][P0-I16]
 	pdata, _ := os.ReadFile("placement.go")
-	if !regexp.MustCompile(`QueueBuild`).Match(pdata) {
-		t.Fatalf("placement.go should issue QueueBuild via ordinary path [P0-I16][PLAN_11 C12]")
+	if !regexp.MustCompile(`QueueBuildTyped`).Match(pdata) {
+		t.Fatalf("placement.go should issue QueueBuildTyped via typed path [P0-07] [P0-I16]")
+	}
+	if !regexp.MustCompile(`BuildRequest`).Match(pdata) {
+		t.Fatalf("placement.go should use BuildRequest with MobileSite [P0-07]")
 	}
 }
 
@@ -624,11 +632,8 @@ func TestManagerSelectPlaceQueueChain(t *testing.T) {
 			mgr.CandidateSource = nil
 			mgr.MissionGateFlag = 0
 			mgr.GateCandidates = nil
-			// Save original QueueBuild for spy
-			origQueueBuild := mgr.QueueBuild
-			if origQueueBuild == nil {
-				origQueueBuild = mgr.getQueueBuild()
-			}
+			// Save original QueueBuildTyped for spy [P0-07]
+			origTyped := mgr.QueueBuildTyped
 
 			var calls []string
 			useSourceSpy := false
@@ -642,16 +647,26 @@ func TestManagerSelectPlaceQueueChain(t *testing.T) {
 			}
 			placeCalled := false
 			var placeDef string
-			mgr.QueueBuild = func(f *units.Unit, defKey string, count int) error {
+			var capturedReq BuildRequest
+			mgr.QueueBuildTyped = func(req BuildRequest) error {
 				calls = append(calls, "place")
 				placeCalled = true
-				placeDef = defKey
-				if origQueueBuild != nil {
-					return origQueueBuild(f, defKey, count)
+				placeDef = req.UnitKey
+				capturedReq = req
+				if origTyped != nil {
+					return origTyped(req)
 				}
-				// fallback to construction
-				return mgr.getQueueBuild()(f, defKey, count)
+				// Enqueue via typed construction helpers for verification [P0-I05]
+				builderUnit := w.Unit(req.Builder)
+				if builderUnit == nil {
+					builderUnit = builder
+				}
+				if req.Kind == BuildKindMobileSite {
+					return construction.QueueMobileBuild(builderUnit, req.UnitKey, req.X, req.Z, req.Count, cat)
+				}
+				return construction.QueueFactoryBuild(builderUnit, req.UnitKey, req.Count, cat)
 			}
+			_ = capturedReq
 			// If we used CandidateSource spy, Select will be observed as "select";
 			// Place will be observed as "place" via queueBuild var.
 
@@ -754,16 +769,23 @@ func TestManagerPlaceFailureRetry(t *testing.T) {
 		mgr.Deadlines[k] = 1000
 	}
 	mgr.Deadlines[TaskConstruction] = 0
-	// P0-I16 per-manager
+	// P0-I16 per-manager [P0-07] typed
 	mgr.SetCatalog(cat)
 	calls := 0
-	origQueue2 := mgr.QueueBuild
-	mgr.QueueBuild = func(f *units.Unit, defKey string, count int) error {
+	origTyped2 := mgr.QueueBuildTyped
+	mgr.QueueBuildTyped = func(req BuildRequest) error {
 		calls++
-		if origQueue2 != nil {
-			return origQueue2(f, defKey, count)
+		if origTyped2 != nil {
+			return origTyped2(req)
 		}
-		return mgr.getQueueBuild()(f, defKey, count)
+		builderUnit := w.Unit(req.Builder)
+		if builderUnit == nil {
+			builderUnit = builder
+		}
+		if req.Kind == BuildKindMobileSite {
+			return construction.QueueMobileBuild(builderUnit, req.UnitKey, req.X, req.Z, req.Count, cat)
+		}
+		return construction.QueueFactoryBuild(builderUnit, req.UnitKey, req.Count, cat)
 	}
 	rng.SeedGlobal(1, 0)
 	mgr.Tick(0, w, &econ)

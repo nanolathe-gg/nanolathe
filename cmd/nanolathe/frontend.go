@@ -31,6 +31,10 @@ const (
 	modeMenuMission
 	modeMenuMap
 	modeMenuSkirmish
+	// modeLoading is the retail loading screen. It owns no .GUI file: retail
+	// closes the frontend window, forces 640x480, and paints the screen from
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	modeLoading
 	modeBattle
 )
 
@@ -58,6 +62,7 @@ type menuAssets struct {
 	pal             *palette.Tables
 	panel           map[shellMode]*retailPanelAssets
 	message         *retailPanelAssets
+	loading         *formats.PCX
 	missionCampaign *formats.PCX
 	missionSmall    *formats.PCX
 	missionAny      *formats.PCX
@@ -99,6 +104,13 @@ type gameShell struct {
 	missionAny             bool
 	missionSide            int
 	missionDifficultyValue int
+
+	// loading is live only while mode is modeLoading. The loader runs on its
+	// own goroutine, so the shell reads its progress and adopts its result
+	// from the render goroutine only.
+	loading *loadingState
+	// loadingReturn is the screen a failed load falls back to.
+	loadingReturn shellMode
 
 	panel        *retailPanelState
 	modal        *retailPanelState
@@ -181,7 +193,7 @@ func runGameShell(opts Options, cs *contentSet) error {
 	if err != nil {
 		return fmt.Errorf("nanolathe: client: %w", err)
 	}
-	clPtr = cl // startBattle morphs THIS client when a skirmish starts
+	clPtr = cl // entering a battle morphs THIS client
 	cl.SetModelFS(cs.fs)
 	cl.SetCamera(shell.cam)
 	if shell.assets != nil && shell.assets.pal != nil {
@@ -245,6 +257,12 @@ func loadMenuAssets(cs *contentSet) *menuAssets {
 	a.panel[modeMenuMap] = loadRetailPanel(cs, "guis/selmap.gui", "bitmaps/dselectmap2.pcx", "")
 	a.panel[modeMenuSkirmish] = loadRetailPanel(cs, "guis/skirmish.gui", "bitmaps/skirmsetup4x.pcx", "anims/skirmish.gaf")
 	a.message = loadRetailPanel(cs, "guis/msgbox.gui", "", "")
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// open, so it becomes the global background the loading screen repaints
+	// from [07 §4].
+	if p, err := formats.LoadPCXFile(cs.fs, "bitmaps/loadgame2bg.pcx"); err == nil {
+		a.loading = p
+	}
 	if p, err := formats.LoadPCXFile(cs.fs, "bitmaps/newcampaign4.pcx"); err == nil {
 		a.missionCampaign = p
 	}
@@ -341,6 +359,19 @@ func (g *gameShell) step(delta float64, cl *client.Client) {
 		if g.battle != nil {
 			g.battle.viewerStep(delta, cl)
 		}
+	case modeLoading:
+		// The transition that blocks on catalog and map loading installs the
+		// hourglass shape [07 §8]; the frontend's own idle shape returns with
+		// the next menu.
+		if cursors := cl.Cursors(); cursors != nil {
+			cursors.SetIndex(render.CursorHourglass)
+			g.cursorAccum += delta * 30
+			if n := int(g.cursorAccum); n > 0 {
+				cursors.Step(n)
+				g.cursorAccum -= float64(n)
+			}
+		}
+		g.stepLoading(delta)
 	default:
 		// The front end uses the idle shape throughout; the loading shape is
 		// installed by the transition that blocks on catalog and map loading
@@ -356,39 +387,6 @@ func (g *gameShell) step(delta float64, cl *client.Client) {
 		}
 		g.menuInput(cl)
 	}
-}
-
-// startBattle transitions the shell into the live skirmish view in-process.
-func (g *gameShell) startBattle(mapName string) error {
-	opts := g.opts
-	opts.Map = mapName
-	cfg := g.skirmishConfigForStart(mapName)
-	sess, cat, err := newBattleSessionWithConfig(opts, g.cs, cfg)
-	if err != nil {
-		return err
-	}
-	return g.enterBattle(sess, cat)
-}
-
-func (g *gameShell) startMission() error {
-	if g.campaignIdx < 0 || g.campaignIdx >= len(g.campaignOptions) {
-		return fmt.Errorf("no campaign selected")
-	}
-	c := g.campaignOptions[g.campaignIdx]
-	if g.missionIdx < 0 || g.missionIdx >= len(c.Missions) {
-		return fmt.Errorf("no mission selected")
-	}
-	cat, err := content.Compile(g.cs.fs)
-	if err != nil {
-		return fmt.Errorf("catalog: %w", err)
-	}
-	stub := c.Missions[g.missionIdx]
-	path := fmt.Sprintf("%s:MISSION%d", c.Path, stub.Index)
-	sess, err := session.NewMissionWithFS(g.cs.fs, cat, path, g.missionDifficulty())
-	if err != nil {
-		return err
-	}
-	return g.enterBattle(sess, cat)
 }
 
 func (g *gameShell) missionDifficulty() int {
@@ -504,6 +502,10 @@ func retailFold(c byte) byte {
 }
 
 func (g *gameShell) draw(c *client.Client) {
+	if g.mode == modeLoading {
+		g.drawLoadingScreen(c)
+		return
+	}
 	if g.mode == modeBattle {
 		if g.battle != nil && g.battle.hud != nil {
 			g.battle.hud.draw(c, g.battle)

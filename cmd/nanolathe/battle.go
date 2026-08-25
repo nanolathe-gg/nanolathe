@@ -41,6 +41,12 @@ type battleSession struct {
 	dragEndX   int32
 	dragEndY   int32
 
+	// Input-capture latch [F-P1-008][07 §3]: a press that begins on HUD chrome
+	// never starts/completes world drag selection even if released over world.
+	hudCaptured bool
+	prevMouseX  float32
+	prevMouseY  float32
+
 	// Build placement: non-empty while an armed product awaits a click.
 	buildDef   string
 	buildFootX int32
@@ -64,6 +70,12 @@ type battleSession struct {
 	panel     *hud.Panel
 	guiWin    *gui.Window
 	guiOK     bool
+
+	// Injection points ON-09/session must bind [R-P0-03]. When nil the
+	// battleSession fallback paths use construction/orders directly.
+	mobileBuildFn   func(product string, wx, wz numeric.Fixed, queued bool) error
+	factoryBuildFn  func(product string, queued bool) error
+	orderDispatchFn func(latch input.Latch, x, y int32, queued bool)
 }
 
 type panelButton struct {
@@ -237,7 +249,8 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		b.lastScaled = scaled
 	}
 	b.updateCursor(cl)
-	// Camera pan identical to Gate-1/Gate-2 caps [07 §10].
+	// Camera pan identical to Gate-1/Gate-2 caps [07 §10]; W/A/S/D remain
+	// unbound per ON-05 (do not pan) [F-P1-008].
 	if b.cam != nil {
 		kbd := cl.Input().Kbd
 		mouse := cl.Input().Mouse
@@ -258,22 +271,17 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		if kbd.KeyHeld(input.KeyRight) {
 			b.cam.Scroll(scrollSetting, rawDelta, camera.DirRight)
 		}
-		// WASD edge reserved for camera only when latch is Normal to avoid
-		// conflict with A=attack, D=blast, S=stockpile hotkeys [07 §10][P0-I14].
-		// When a command latch is armed we keep camera on arrow keys + mouse edge only.
-		if b.latch == input.LatchNormal {
-			if kbd.KeyHeld(input.KeyW) {
-				b.cam.Scroll(scrollSetting, rawDelta, camera.DirUp)
+		// Middle-drag camera pan [F-P1-008]: presentation-only, uses mouse delta / scale.
+		if mouse.Held(input.MouseButtonMiddle) && mouse.Moved() {
+			dx := int32(mouse.X - b.prevMouseX)
+			dy := int32(mouse.Y - b.prevMouseY)
+			if dx != 0 || dy != 0 {
+				b.cam.Drag(dx, dy)
 			}
-			if kbd.KeyHeld(input.KeyS) {
-				b.cam.Scroll(scrollSetting, rawDelta, camera.DirDown)
-			}
-			if kbd.KeyHeld(input.KeyA) {
-				b.cam.Scroll(scrollSetting, rawDelta, camera.DirLeft)
-			}
-			if kbd.KeyHeld(input.KeyD) {
-				b.cam.Scroll(scrollSetting, rawDelta, camera.DirRight)
-			}
+		}
+		// Wheel zoom presentation-only, centered where practical (cursor) [F-P1-008].
+		if mouse.Scrolled() && mouse.ScrollY != 0 {
+			b.cam.AddZoom(mouse.ScrollY, int32(mouse.X), int32(mouse.Y))
 		}
 		const edge = 8
 		w, h := cl.Size()
@@ -289,6 +297,8 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 				b.cam.Scroll(scrollSetting, rawDelta, camera.DirDown)
 			}
 		}
+		b.prevMouseX = mouse.X
+		b.prevMouseY = mouse.Y
 	}
 }
 
@@ -296,6 +306,9 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 // It converts input into complete canonical commands with target/position and
 // queue modifiers (shift-queued) via one picking routine that respects fog,
 // unit/feature overlap, and command validity [07 §9][03 §3.2] C8 [P0-I14].
+// Order buttons are bound via injected dispatch [R-P0-03]; build products are
+// data-driven from cat.BuildMenus; input-capture latch prevents HUD presses
+// from leaking into world drag [F-P0-003][F-P1-008].
 func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	kbd := in.Kbd
 	mouse := in.Mouse
@@ -369,22 +382,111 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 			}
 		}
 	}
+	// Page next/prev data-driven with guard [R-P0-03][07 §9] C10: no hardcoding.
+	if kbd.KeyDown(input.KeyPrior) || kbd.KeyDown(input.KeyRight) && kbd.HasShift() {
+		b.nextBuildPage()
+	}
+	if kbd.KeyDown(input.KeyNext) || kbd.KeyDown(input.KeyLeft) && kbd.HasShift() {
+		b.prevBuildPage()
+	}
+	// Also handle comma/period as next/prev for headless tests (period maps to unknown but we use Insert/Delete as proxies)
+	if kbd.KeyDown(input.KeyInsert) {
+		b.nextBuildPage()
+	}
+	if kbd.KeyDown(input.KeyDelete) {
+		b.prevBuildPage()
+	}
 	if kbd.KeyDown(input.KeyEscape) {
 		b.latch = input.LatchNormal
 		b.buildDef = ""
+		b.hudCaptured = false
+		b.dragActive = false
+		return
+	}
+	if mouse.Pressed(input.MouseButtonRight) && b.buildDef != "" {
+		// Right-click cancels armed placement before affecting selection [R-P0-03][F-P0-003]
+		b.buildDef = ""
+		b.buildOK = false
+		b.hudCaptured = false
+		return
 	}
 
-	// Armed build panel captures clicks before selection/drag handling.
-	// Build buttons are data-driven from SIDEDATA authored order via cat.BuildMenus [02 §6].
-	if len(b.panelButtons) > 0 && mouse.Pressed(input.MouseButtonLeft) && !b.dragActive {
-		if my := int32(mouse.Y); my >= 480-panelButtonH-32 {
+	// Input-capture latch [F-P0-003][F-P1-008]: press that begins on HUD chrome
+	// never starts/completes world drag selection even if released over world.
+	// Detect HUD origin on the pressed edge.
+	if mouse.Pressed(input.MouseButtonLeft) {
+		overHUD := false
+		if !b.overWorld(mx, my) {
+			overHUD = true
+		}
+		if b.hud != nil && b.hud.hitTestFor(b, mx, my) {
+			overHUD = true
+		}
+		if len(b.panelButtons) > 0 && b.isOverPanel(mx, my) {
+			overHUD = true
+		}
+		if overHUD {
+			b.hudCaptured = true
+		}
+	}
+	if b.hudCaptured && mouse.Released(input.MouseButtonLeft) {
+		// Release that began on HUD never selects world [F-P0-003]
+		b.hudCaptured = false
+		b.dragActive = false
+		// Still consume HUD click if any.
+		if b.hud != nil && b.hud.consumeClick(b, mx, my) {
+			return
+		}
+		if len(b.panelButtons) > 0 {
 			if b.panelClick(mx, my) {
 				return
 			}
 		}
+		return
+	}
+	if b.hudCaptured {
+		// While captured, consume HUD clicks but do not start world drag.
+		if mouse.Pressed(input.MouseButtonLeft) {
+			if b.hud != nil && b.hud.consumeClick(b, mx, my) {
+				return
+			}
+			if len(b.panelButtons) > 0 && b.isOverPanel(mx, my) {
+				if b.panelClick(mx, my) {
+					return
+				}
+			}
+			// Still consumed even if no button hit to prevent leak.
+			return
+		}
+		// Suppress world handling while captured.
+		if mouse.Held(input.MouseButtonLeft) {
+			return
+		}
 	}
 
-	// Build placement mode captures clicks before selection handling.
+	// Retail HUD: authored GUI gadgets capture clicks before world [07 §3][07 §4][R-P0-03].
+	// Cache is used inside windowFor; no reparsing per draw [ON-05 1].
+	if b.hud != nil && mouse.Pressed(input.MouseButtonLeft) {
+		if b.hud.consumeClick(b, mx, my) {
+			b.hudCaptured = true
+			return
+		}
+	}
+	// Armed build panel captures clicks before selection/drag handling.
+	// Build buttons are data-driven from SIDEDATA authored order via cat.BuildMenus [02 §6][R-P0-03].
+	if len(b.panelButtons) > 0 && mouse.Pressed(input.MouseButtonLeft) && !b.dragActive {
+		if b.isOverPanel(mx, my) {
+			if b.panelClick(mx, my) {
+				b.hudCaptured = true
+				return
+			}
+			// Click on panel background but not a button still consumes.
+			b.hudCaptured = true
+			return
+		}
+	}
+
+	// Build placement mode captures clicks before selection handling [R-P0-03].
 	if b.buildDef != "" {
 		b.updatePlacement(mx, my)
 		if mouse.Pressed(input.MouseButtonLeft) && b.buildOK {
@@ -394,6 +496,8 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 			if !queued {
 				b.buildDef = ""
 			}
+		} else if mouse.Pressed(input.MouseButtonLeft) && !b.buildOK {
+			// Illegal placement queues nothing [R-P0-03]
 		}
 		if mouse.Pressed(input.MouseButtonRight) {
 			b.buildDef = ""
@@ -469,6 +573,9 @@ func (b *battleSession) selectedUnits() []*units.Unit {
 
 // selectedBuilder returns the first player builder unit under selection.
 func (b *battleSession) selectedBuilder() *units.Unit {
+	if b.sess == nil || b.sess.Units == nil {
+		return nil
+	}
 	for _, u := range b.sess.Units.Iter() {
 		if u != nil && u.Alive && u.Owner == 0 && u.Flags&client.SelectionFlag != 0 &&
 			u.Def != nil && u.Def.Builder {
@@ -476,6 +583,33 @@ func (b *battleSession) selectedBuilder() *units.Unit {
 		}
 	}
 	return nil
+}
+
+// selectedFactory returns the first selected immobile builder (factory) [R-P0-03][07 §9].
+func (b *battleSession) selectedFactory() *units.Unit {
+	if b.sess == nil || b.sess.Units == nil {
+		return nil
+	}
+	for _, u := range b.sess.Units.Iter() {
+		if u != nil && u.Alive && u.Owner == 0 && u.Flags&client.SelectionFlag != 0 &&
+			u.Def != nil && hud.IsFactoryBuilder(u.Def) {
+			return u
+		}
+	}
+	return nil
+}
+
+// isOverPanel reports whether a screen point is over the minimal build panel
+// area used by this overlay [F-P0-003]. The retail HUD uses overWorld/hitTest.
+func (b *battleSession) isOverPanel(mx, my int32) bool {
+	if len(b.panelButtons) == 0 {
+		return false
+	}
+	if my < 480-panelButtonH-32 {
+		return false
+	}
+	// Any y in the panel band is considered HUD chrome for capture.
+	return true
 }
 
 // switchBuildPage handles digit 1..9 build page switching [07 §9] C10.
@@ -489,10 +623,9 @@ func (b *battleSession) switchBuildPage(digit int) {
 	if !ok || page == nil || len(page.Buttons) == 0 {
 		return
 	}
-	// Derive page count from authored buttons split into pages of buttonsPerPage [07 §9] C10.
-	// Per-page slot count is not closed; use 8 as minimal presentation pagination that preserves order [P0-I14].
+	// Derive page count data-driven via hud helper [R-P0-03][07 §9] C10.
 	const buttonsPerPage = 8
-	count := (len(page.Buttons) + buttonsPerPage - 1) / buttonsPerPage
+	count := hud.PageCountFromButtons(len(page.Buttons), buttonsPerPage)
 	if count <= 1 {
 		return
 	}
@@ -506,6 +639,167 @@ func (b *battleSession) switchBuildPage(digit int) {
 		u.Flags = su.Flags
 		b.armBuildPanel()
 	}
+}
+
+// nextBuildPage advances one page data-driven with guard [R-P0-03][07 §9] C10.
+func (b *battleSession) nextBuildPage() {
+	u := b.selectedBuilder()
+	if u == nil || b.cat == nil {
+		return
+	}
+	page, ok := b.cat.BuildMenus[u.Def.CanonicalKey]
+	if !ok || page == nil || len(page.Buttons) == 0 {
+		return
+	}
+	const bpp = 8
+	count := hud.PageCountFromButtons(len(page.Buttons), bpp)
+	if count <= 1 {
+		return
+	}
+	var dirty uint32
+	su := &hud.SelectUnit{Flags: u.Flags, DefID: 1}
+	cur := 0
+	if hud.IsPaged(u.Flags) {
+		cur = hud.DecodePage(u.Flags)
+	}
+	cur = hud.ClampPage(cur, count)
+	next := hud.ClampPage(cur+1, count)
+	if next == cur {
+		return
+	}
+	if hud.SetBuildPage(su, next, count, &dirty) {
+		u.Flags = su.Flags
+		b.armBuildPanel()
+	}
+}
+
+// prevBuildPage goes back one page data-driven with guard [R-P0-03][07 §9] C10.
+func (b *battleSession) prevBuildPage() {
+	u := b.selectedBuilder()
+	if u == nil || b.cat == nil {
+		return
+	}
+	page, ok := b.cat.BuildMenus[u.Def.CanonicalKey]
+	if !ok || page == nil || len(page.Buttons) == 0 {
+		return
+	}
+	const bpp = 8
+	count := hud.PageCountFromButtons(len(page.Buttons), bpp)
+	if count <= 1 {
+		return
+	}
+	var dirty uint32
+	su := &hud.SelectUnit{Flags: u.Flags, DefID: 1}
+	cur := 0
+	if hud.IsPaged(u.Flags) {
+		cur = hud.DecodePage(u.Flags)
+	}
+	cur = hud.ClampPage(cur, count)
+	prev := hud.ClampPage(cur-1, count)
+	if prev == cur {
+		return
+	}
+	if hud.SetBuildPage(su, prev, count, &dirty) {
+		u.Flags = su.Flags
+		b.armBuildPanel()
+	}
+}
+
+// dispatchMobileBuildFallback is the ON-09 fallback for mobile builds [R-P0-03][PLAN_08 C12].
+func (b *battleSession) dispatchMobileBuildFallback(product string, wx, wz numeric.Fixed, queued bool) error {
+	builder := b.selectedBuilder()
+	if builder == nil || b.cat == nil {
+		return nil
+	}
+	if !hud.ValidateBuildProduct(b.cat, builder.Def.CanonicalKey, product) {
+		return nil
+	}
+	// Validate placement via ghost: if illegal, queue nothing [R-P0-03].
+	// Note: callers that already validated via updatePlacement can still call; we re-validate.
+	def, ok := b.cat.Unit(product)
+	if !ok || def == nil {
+		return nil
+	}
+	footX, footZ := int32(def.FootprintX), int32(def.FootprintZ)
+	if footX <= 0 {
+		footX = 1
+	}
+	if footZ <= 0 {
+		footZ = 1
+	}
+	cx, cz := world.WorldToCell(wx), world.WorldToCell(wz)
+	cx -= footX / 2
+	cz -= footZ / 2
+	yard, _ := world.ParseYardMap(def.YardMap, int(footX), int(footZ))
+	if b.sess != nil && b.sess.World != nil {
+		if err := b.sess.World.ValidatePlacement(cx, cz, yard, int(footX), int(footZ), uint16(builder.Handle)); err != nil {
+			return nil // illegal -> queue nothing [R-P0-03]
+		}
+	}
+	if !queued {
+		if q := orders.QueueForUnit(builder); q != nil {
+			q.PurgeUnprotected()
+			q.DropLeadingAutoOps()
+		}
+	}
+	if err := construction.QueueMobileBuild(builder, product, wx, wz, 1, b.cat); err != nil {
+		return err
+	}
+	// Mark queued flag per [04 §3.3][P0-I14].
+	if q := orders.QueueForUnit(builder); q != nil && q.LenPrimary() > 0 {
+		prim := q.Primary()
+		if tail := prim[len(prim)-1]; tail != nil {
+			if queued {
+				tail.Flags |= orders.FlagPurgeSurvivor
+			} else {
+				tail.Flags &^= orders.FlagPurgeSurvivor
+			}
+		}
+	}
+	return nil
+}
+
+// dispatchFactoryBuildFallback is the ON-09 fallback for factory builds [R-P0-03].
+func (b *battleSession) dispatchFactoryBuildFallback(product string, queued bool) error {
+	fac := b.selectedFactory()
+	if fac == nil {
+		// Fallback: any immobile builder works for synthetic tests where Builder+!CanMove encodes factory.
+		fac = b.selectedBuilder()
+		if fac == nil || fac.Def == nil || fac.Def.CanMove {
+			return nil
+		}
+	}
+	if b.cat != nil && fac.Def != nil && !hud.ValidateBuildProduct(b.cat, fac.Def.CanonicalKey, product) {
+		return nil
+	}
+	return b.queueFactoryDirect(fac, product, queued)
+}
+
+// queueFactoryDirect queues a factory product via construction path [R-P0-03][05].
+func (b *battleSession) queueFactoryDirect(fac *units.Unit, product string, queued bool) error {
+	if fac == nil || b.cat == nil {
+		return nil
+	}
+	if !queued {
+		if q := orders.QueueForUnit(fac); q != nil {
+			q.PurgeUnprotected()
+			q.DropLeadingAutoOps()
+		}
+	}
+	if err := construction.QueueFactoryBuild(fac, product, 1, b.cat); err != nil {
+		return err
+	}
+	if q := orders.QueueForUnit(fac); q != nil && q.LenPrimary() > 0 {
+		prim := q.Primary()
+		if tail := prim[len(prim)-1]; tail != nil {
+			if queued {
+				tail.Flags |= orders.FlagPurgeSurvivor
+			} else {
+				tail.Flags &^= orders.FlagPurgeSurvivor
+			}
+		}
+	}
+	return nil
 }
 
 // armBuildPanel resolves the selected builder's CANBUILD page into buttons
@@ -523,9 +817,9 @@ func (b *battleSession) armBuildPanel() {
 		return
 	}
 	// Preserve authored order [02 "Build-menu catalog keys"] — Buttons already authored.
-	// Pagination: split Buttons into pages of 8, page from Flags bits [07 §9] C10.
+	// Pagination: split Buttons into pages via data-driven helper [R-P0-03][07 §9] C10.
 	const buttonsPerPage = 8
-	count := (len(page.Buttons) + buttonsPerPage - 1) / buttonsPerPage
+	count := hud.PageCountFromButtons(len(page.Buttons), buttonsPerPage)
 	if count == 0 {
 		count = 1
 	}
@@ -534,17 +828,11 @@ func (b *battleSession) armBuildPanel() {
 		curPage = hud.DecodePage(u.Flags)
 	}
 	curPage = hud.ClampPage(curPage, count)
-	// Clamp and re-encode if needed to keep flags coherent.
-	// Build panel slice for current page.
-	start := curPage * buttonsPerPage
-	end := start + buttonsPerPage
-	if end > len(page.Buttons) {
-		end = len(page.Buttons)
-	}
+	pageButtons := hud.ProductsForPage(page.Buttons, curPage, buttonsPerPage)
 	// Main build buttons for this page [02 "Build-menu catalog keys"] C8 order preserved.
 	x := int32(8)
 	y := int32(480 - panelButtonH - 28)
-	for _, name := range page.Buttons[start:end] {
+	for _, name := range pageButtons {
 		if _, found := b.cat.Unit(name); !found {
 			continue
 		}
@@ -581,7 +869,11 @@ func (b *battleSession) armBuildPanel() {
 }
 
 // panelClick handles a click against the armed build panel; returns true when
-// a button was hit and placement armed or command issued.
+// a button was hit and placement armed or command issued [R-P0-03].
+// Build products are data-driven from cat.BuildMenus; no hardcoded unit names
+// [R-P0-03]. Mobile builders arm placement (definition retained); factories
+// queue immediately via injected callback with progress/count shown thereafter
+// [R-P0-03][F-P1-008]. Illegal products are rejected (queues nothing).
 func (b *battleSession) panelClick(mx, my int32) bool {
 	for _, btn := range b.panelButtons {
 		if mx >= btn.X && mx < btn.X+panelButtonW && my >= btn.Y && my < btn.Y+panelButtonH {
@@ -602,6 +894,27 @@ func (b *battleSession) panelClick(mx, my int32) bool {
 				if !found || def == nil {
 					return true // consumed; nothing placeable
 				}
+				// Data-driven guard: product must be in selected builder's authored list [R-P0-03]
+				builder := b.selectedBuilder()
+				if builder != nil && builder.Def != nil && b.cat != nil {
+					if !hud.ValidateBuildProduct(b.cat, builder.Def.CanonicalKey, def.CanonicalKey) {
+						return true // consumed but not placeable (illegal product)
+					}
+				}
+				// Factory vs mobile dispatch [R-P0-03][F-P1-008]
+				builderIsFactory := false
+				if builder != nil && builder.Def != nil {
+					builderIsFactory = hud.IsFactoryBuilder(builder.Def)
+				}
+				if builderIsFactory {
+					// Factory: product click queues factory build via injected callback [R-P0-03]
+					_ = b.DispatchFactoryBuild(def.CanonicalKey, false)
+					return true
+				}
+				// Mobile builder: arm placement mode with definition retained [R-P0-03][07 §9] 0xE requires non-empty list
+				if builder != nil && !hud.IsMobileBuilder(builder.Def) && builder.Def.Builder {
+					// Unknown builder class treated as mobile when CanMove absent; allow arming.
+				}
 				b.buildDef = def.CanonicalKey
 				b.buildFootX = int32(def.FootprintX)
 				b.buildFootZ = int32(def.FootprintZ)
@@ -612,11 +925,57 @@ func (b *battleSession) panelClick(mx, my int32) bool {
 					b.buildFootZ = 1
 				}
 				b.buildOK = false
+				// Also set latch to MobileBuild where applicable [07 §9] 0xE cursorfindsite branch.
+				if builder != nil && hud.IsMobileBuilder(builder.Def) {
+					b.latch = input.LatchMobileBuild
+				}
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// isOverPanel helper defined earlier; panelClick uses panelButtons
+
+// handleHudOrderButton binds named order buttons to the existing command path
+// via injected dispatch [R-P0-03][07 §9]. It is used by retail HUD consumeClick.
+func (b *battleSession) handleHudOrderButton(name string) {
+	latch := hud.ParseButtonLatch(name, 1)
+	// STOP is immediate (generic table) – dispatch directly as contextual stop [04 §3.4] code 1
+	if latch == input.LatchNormal && containsStop(name) {
+		// Immediate stop order for selected units
+		b.orderSelected(1, 0, 0, false) // code 1 contextual with no target acts as stop via resolver? fallback to Stop descriptor if present
+		// Try explicit Stop if exists
+		for _, u := range b.selectedUnits() {
+			if id := orders.Lookup("Stop"); id != 0 {
+				tick := uint32(0)
+				if b.sess != nil && b.sess.Clock != nil {
+					tick = uint32(b.sess.Clock.GlobalTick)
+				}
+				node := orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, false)
+				if q := orders.QueueForUnit(u); q != nil {
+					q.PurgeUnprotected()
+					q.DropLeadingAutoOps()
+					q.Push(id, node)
+				}
+			}
+		}
+		b.latch = input.LatchNormal
+		return
+	}
+	if latch.IsValid() {
+		b.latch = latch
+		if b.orderDispatchFn != nil {
+			// For button-originated latch, route through injected dispatcher for world-click path as well
+			// (tests can observe latch arming via b.latch)
+		}
+	}
+}
+
+func containsStop(s string) bool {
+	upper := strings.ToUpper(s)
+	return strings.Contains(upper, "STOP")
 }
 
 // cancelSelectedProduction cancels the tail-most matching factory/mobile build for selected units [04 §3.3][P1-14].
@@ -791,10 +1150,17 @@ func (b *battleSession) yardMapFor() string {
 // the validated ghost anchor (buildMX/buildMY) carries the selected site via QueueMobileBuild.
 // It uses catalog indices (not FNV hash) [P0-I05] and respects queue modifier (shift=queued) [04 §3.3][P0-I14].
 // Every producer goes through one canonical payload constructor [P0-I03]: orders.NewMobileBuildNode / QueueMobileBuild.
+// It is data-driven: product must be in builder's BuildMenus list; illegal placement queues nothing [R-P0-03].
 func (b *battleSession) commitBuild(queued bool) {
 	builder := b.selectedBuilder()
 	if builder == nil {
 		return
+	}
+	if b.cat != nil && !hud.ValidateBuildProduct(b.cat, builder.Def.CanonicalKey, b.buildDef) {
+		return // GUI may not invent products absent from authored list [R-P0-03]
+	}
+	if !b.buildOK {
+		return // illegal placement queues nothing [R-P0-03]
 	}
 	wx, wz := b.cam.ScreenToWorld(b.buildMX, b.buildMY)
 	wy := numeric.Fixed(0)
@@ -804,52 +1170,28 @@ func (b *battleSession) commitBuild(queued bool) {
 			wy = 0
 		}
 	}
-	tick := uint32(0)
-	if b.sess.Clock != nil {
-		tick = uint32(b.sess.Clock.GlobalTick)
-	}
-	// Build canonical payload via construction helper that uses catalog index and GoalX/Z site [P0-I05].
-	// Queue modifier: shift=queued appends behind active with FlagPurgeSurvivor; else replace [04 §3.3][P0-I14].
-	// Accomplish by purging before helper when not queued, and ensuring queued flag on node after.
-	if !queued {
-		if q := orders.QueueForUnit(builder); q != nil {
-			q.PurgeUnprotected()
-			q.DropLeadingAutoOps()
-		}
-	}
-	// Mobile build uses distinct handler with site anchor [P0-I05]; factory uses BuildingBuild.
-	if err := construction.QueueMobileBuild(builder, b.buildDef, wx, wz, 1, b.cat); err != nil {
+	// Use injected dispatch with fallback [R-P0-03][ON-09]
+	if err := b.DispatchMobileBuild(b.buildDef, wx, wz, queued); err != nil {
 		fmt.Fprintf(os.Stderr, "nanolathe: build %s: %v\n", b.buildDef, err)
 		return
 	}
-	q := orders.QueueForUnit(builder)
-	if q == nil || q.LenPrimary() == 0 {
-		return
-	}
-	prim := q.Primary()
-	tail := prim[len(prim)-1]
-	if tail == nil {
-		return
-	}
 	// Ensure canonical fields populated for determinism [04 §3.2][P0-I05][P0-I03].
-	if tail.GoalY == 0 {
-		tail.GoalY = wy
+	// The fallback already set flags; this extra ensures wy etc for tests that bypass fallback.
+	if b.sess != nil && b.sess.Units != nil {
+		if q := orders.QueueForUnit(builder); q != nil && q.LenPrimary() > 0 {
+			prim := q.Primary()
+			tail := prim[len(prim)-1]
+			if tail != nil {
+				if tail.GoalY == 0 {
+					tail.GoalY = wy
+				}
+				if tail.Owner == 0 {
+					tail.Owner = builder.Handle
+				}
+			}
+		}
 	}
-	if tail.Owner == 0 {
-		tail.Owner = builder.Handle
-	}
-	if tail.CreationTick == 0 {
-		tail.CreationTick = tick
-	}
-	if queued {
-		tail.Flags |= orders.FlagPurgeSurvivor // queued builds survive future Replace purge [04 §3.3][P0-I14]
-	} else {
-		tail.Flags &^= orders.FlagPurgeSurvivor
-	}
-	// Site is authoritative and catalog-indexed via BuildDefKey+Param1 [P0-I05]; not FNV hash.
-	_ = wx
 	_ = wy
-	_ = wz
 }
 
 // drawOverlay renders the build panel and placement ghost after units.

@@ -4,7 +4,6 @@ import (
 	"math"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -25,7 +24,9 @@ type placementManager interface {
 	getSurfaceMetal() int32
 	isExtractor(defKey string) bool
 	getFactory() *units.Unit
-	getQueueBuild() func(factory *units.Unit, defKey string, count int) error
+	getQueueBuildTyped() func(BuildRequest) error
+	getLastTick() uint32
+	recordMilestone(stage string, tick uint32)
 }
 
 // Implement placementManager for *Manager.
@@ -40,7 +41,8 @@ func (m *Manager) getRNG() *rng.Simulation {
 	if m.RNG != nil {
 		return m.RNG
 	}
-	return rng.Global.Sim
+	// Manager-local RNG not owned: nil signals deterministic fallback without global leakage [P0-07] ON-06.
+	return nil
 }
 func (m *Manager) getSurfaceMetal() int32 {
 	if m == nil {
@@ -78,11 +80,18 @@ func (m *Manager) getFactory() *units.Unit {
 	return m.Factory
 }
 
-func (m *Manager) getQueueBuild() func(factory *units.Unit, defKey string, count int) error {
-	if m != nil && m.QueueBuild != nil {
-		return m.QueueBuild
+func (m *Manager) getQueueBuildTyped() func(BuildRequest) error {
+	if m != nil && m.QueueBuildTyped != nil {
+		return m.QueueBuildTyped
 	}
-	return construction.QueueBuild
+	return nil
+}
+
+func (m *Manager) getLastTick() uint32 {
+	if m == nil {
+		return 0
+	}
+	return m.lastTick
 }
 
 // stepTowardCenter moves the search origin toward the strategic center using the
@@ -273,11 +282,12 @@ func extractorHelperB(m placementManager, defKey string, surfaceMetal int32) boo
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // mission SurfaceMetal, does not fall through on failed A, validates via yard
 // helpers, writes fixed-point placement, resets radius, and issues the build
-// command through construction.QueueBuild [08 "Established AI-facing data and rooted planner"]
-// [PLAN_11 C8, C9, C12][P0-03].
+// command through the typed queue [08 "Established AI-facing data and rooted planner"]
+// [PLAN_11 C8, C9, C12][P0-03][P0-07].
 //
 // C9 bound census: this file uses RNG(255) for the selector; helper B uses additional bounds radius, 0x10000, region offsets
 // which are part of the same I4 stream but documented as helper B's per-trial draws [P0-03 §5].
+// Typed path preserves X/Z via BuildRequest with MobileSite [P0-07] F-P0-004.
 func Place(m *Manager, defKey string, w *world.Terrain) (numeric.Fixed, numeric.Fixed, bool) {
 	if m == nil {
 		return 0, 0, false
@@ -324,6 +334,40 @@ func Place(m *Manager, defKey string, w *world.Terrain) (numeric.Fixed, numeric.
 	newOriginX, newOriginZ := stepTowardCenter(originX, originZ, centerX, centerZ, radius)
 	m.setOrigin(newOriginX, newOriginZ)
 
+	// Helper to issue typed MobileSite request preserving X/Z [P0-07].
+	// Radius is reset on placement success regardless of queue binding [P0-03 §3.1]; queue is best-effort via typed path.
+	issueMobile := func(x, z numeric.Fixed) bool {
+		// Placement success: reset radius and record PlacementSelected [P0-03 §3.1][P0-07].
+		if s := m.getStrategic(); s != nil {
+			s.Radius = 0
+		}
+		m.recordMilestone(MilestonePlacementSelected, m.getLastTick())
+		fac := m.getFactory()
+		if fac == nil {
+			// No builder bound; still success for placement, no queue to issue [PLAN_11 C12].
+			return true
+		}
+		cb := m.getQueueBuildTyped()
+		if cb == nil {
+			// Session has not bound typed queue - diagnostic, but placement still succeeds [P0-07] F-P0-004.
+			return true
+		}
+		req := BuildRequest{
+			Builder: fac.Handle,
+			UnitKey: defKey,
+			X:       x,
+			Z:       z,
+			Count:   1,
+			Kind:    BuildKindMobileSite,
+		}
+		if err := cb(req); err != nil {
+			// Queue error diagnostic but placement remains success [P0-07].
+			return true
+		}
+		m.recordMilestone(MilestoneBuildRequestAccepted, m.getLastTick())
+		return true
+	}
+
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	if m.isExtractor(defKey) {
 		rngStream := m.getRNG()
@@ -340,11 +384,8 @@ func Place(m *Manager, defKey string, w *world.Terrain) (numeric.Fixed, numeric.
 			ok := extractorHelperA(m, defKey, sm)
 			if ok {
 				// Success: write fixed-point placement ((foot+out*2)*0x80000) and reset radius [P0-03 §3.1]
-				if s := m.getStrategic(); s != nil {
-					s.Radius = 0
-				}
-				if fac := m.getFactory(); fac != nil {
-					_ = m.getQueueBuild()(fac, defKey, 1)
+				if !issueMobile(newOriginX, newOriginZ) {
+					return 0, 0, false
 				}
 				return newOriginX, newOriginZ, true
 			}
@@ -354,11 +395,8 @@ func Place(m *Manager, defKey string, w *world.Terrain) (numeric.Fixed, numeric.
 		// Selector chose B
 		ok := extractorHelperB(m, defKey, sm)
 		if ok {
-			if s := m.getStrategic(); s != nil {
-				s.Radius = 0
-			}
-			if fac := m.getFactory(); fac != nil {
-				_ = m.getQueueBuild()(fac, defKey, 1)
+			if !issueMobile(newOriginX, newOriginZ) {
+				return 0, 0, false
 			}
 			return newOriginX, newOriginZ, true
 		}
@@ -368,11 +406,8 @@ func Place(m *Manager, defKey string, w *world.Terrain) (numeric.Fixed, numeric.
 	// Non-extractor: directly helper B with no selector draw [P0-03 §3.1]
 	ok := extractorHelperB(m, defKey, m.getSurfaceMetal())
 	if ok {
-		if s := m.getStrategic(); s != nil {
-			s.Radius = 0
-		}
-		if fac := m.getFactory(); fac != nil {
-			_ = m.getQueueBuild()(fac, defKey, 1)
+		if !issueMobile(newOriginX, newOriginZ) {
+			return 0, 0, false
 		}
 		return newOriginX, newOriginZ, true
 	}

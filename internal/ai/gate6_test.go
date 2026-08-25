@@ -39,6 +39,7 @@ func makeGateCatalog() (*content.Catalog, *content.UnitDef, *content.UnitDef) {
 		FootprintZ:       2,
 		YardMap:          "oooo",
 		Builder:          true,
+		CanMove:          true,
 		MaxDamage:        100,
 		EnergyStorage:    1000,
 		MetalStorage:     500,
@@ -178,14 +179,31 @@ func TestGate6EndToEnd(t *testing.T) {
 		mgr.Deadlines[k] = 0
 	}
 
-	// Spy Place's ordinary path via per-manager QueueBuild [P0-I16].
+	// Spy Place's typed path via per-manager QueueBuildTyped [P0-07] ON-06.
 	var placeSpyDef string
 	var placeSpyCalled bool
-	mgr.QueueBuild = func(f *units.Unit, defKey string, count int) error {
+	var placeSpyKind BuildKind
+	var placeSpyX, placeSpyZ numeric.Fixed
+	mgr.QueueBuildTyped = func(req BuildRequest) error {
 		placeSpyCalled = true
-		placeSpyDef = defKey
-		return construction.QueueBuild(f, defKey, count)
+		placeSpyDef = req.UnitKey
+		placeSpyKind = req.Kind
+		placeSpyX, placeSpyZ = req.X, req.Z
+		builderUnit := w.Unit(req.Builder)
+		if builderUnit == nil {
+			builderUnit = mgr.Factory
+		}
+		if builderUnit == nil {
+			return nil
+		}
+		if req.Kind == BuildKindMobileSite {
+			return construction.QueueMobileBuild(builderUnit, req.UnitKey, req.X, req.Z, req.Count, cat)
+		}
+		return construction.QueueFactoryBuild(builderUnit, req.UnitKey, req.Count, cat)
 	}
+	_ = placeSpyX
+	_ = placeSpyZ
+	_ = placeSpyKind
 
 	// P0-I05: product identity is stable catalog index, not FNV hash [P0-I05].
 	expectedPID := func() uint32 {
@@ -275,7 +293,7 @@ func TestGate6EndToEnd(t *testing.T) {
 
 	tick := runLoop()
 	if tick == -1 || !successValid {
-		t.Fatalf("no construction.QueueBuild for REAL second unit at VALID placement within 900 ticks (builder %q favee %q)", builderDef.UnitName, faveeDef.UnitName)
+		t.Fatalf("no QueueBuildTyped for REAL second unit at VALID placement within 900 ticks (builder %q favee %q)", builderDef.UnitName, faveeDef.UnitName)
 	}
 	t.Logf("gate6: queued %q at tick %d placement %d,%d cell %d,%d valid", faveeDef.UnitName, successTick, successX, successZ, world.WorldToCell(successX), world.WorldToCell(successZ))
 
@@ -319,13 +337,24 @@ func TestGate6EndToEnd(t *testing.T) {
 	for k := TaskKind(0); k < TaskKindCount; k++ {
 		mgr2.Deadlines[k] = 0
 	}
-	// Reset spy [P0-I16].
+	// Reset spy [P0-07].
 	placeSpyCalled = false
 	placeSpyDef = ""
-	mgr2.QueueBuild = func(f *units.Unit, defKey string, count int) error {
+	placeSpyKind = 0
+	placeSpyX, placeSpyZ = 0, 0
+	mgr2.QueueBuildTyped = func(req BuildRequest) error {
 		placeSpyCalled = true
-		placeSpyDef = defKey
-		return construction.QueueBuild(f, defKey, count)
+		placeSpyDef = req.UnitKey
+		placeSpyKind = req.Kind
+		placeSpyX, placeSpyZ = req.X, req.Z
+		builderUnit := w2.Unit(req.Builder)
+		if builderUnit == nil {
+			builderUnit = builderUnit2
+		}
+		if req.Kind == BuildKindMobileSite {
+			return construction.QueueMobileBuild(builderUnit, req.UnitKey, req.X, req.Z, req.Count, cat2)
+		}
+		return construction.QueueFactoryBuild(builderUnit, req.UnitKey, req.Count, cat2)
 	}
 	expectedPID2 := func() uint32 {
 		if idx, ok := cat2.UnitDefIndex(content.CanonicalKey("gatefavee")); ok {

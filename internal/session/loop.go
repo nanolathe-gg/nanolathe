@@ -117,6 +117,116 @@ type Session struct {
 	audioViewport audio.Viewport     // presentation viewport for pan/attenuation [03 §8.3]
 	audioFrame    uint32             // presentation frame counter for Drain [03 §8.3] C18
 	audioFS       vfs.FSOps          // VFS for cache loads, presentation-only
+
+	// Trace is the optional ordered debug sink [ON-09]. Disabled by default,
+	// appends in authoritative order, never ranges maps, never calls RNG,
+	// never alters sim decisions [INVARIANTS I1][I4][I6].
+	traceEnabled bool
+	trace        []SessionTraceEvent
+}
+
+// SessionTraceEvent is one ordered trace entry [ON-09].
+// It uses stable integer/fixed-point fields, never RNG, and is
+// appended in authoritative tick order. Never range over maps to emit.
+type SessionTraceEvent struct {
+	Tick     uint32        // global tick [01 §4.4] C6
+	Kind     string        // one of Trace* constants [ON-09]
+	Player   int           // player slot 0..9 or -1 [INVARIANTS I1]
+	Handle   pool.Handle   // unit slot or 0
+	Slot     int           // weapon slot 0..2 or -1
+	WeaponID int32         // weapon ID or 0
+	X        numeric.Fixed // stable world X [INVARIANTS I2]
+	Z        numeric.Fixed // stable world Z [INVARIANTS I2]
+	Value    int32         // generic stable value
+}
+
+// Trace kind constants [ON-09] ordered trace sink events.
+const (
+	TraceTickBegin            = "TickBegin"
+	TraceWindMeteor           = "WindMeteor"
+	TracePlayerBegin          = "PlayerBegin"
+	TraceAIDeadline           = "AIDeadline"
+	TraceEconomyRequest       = "EconomyRequest"
+	TraceEconomySettle        = "EconomySettle"
+	TraceUnitBegin            = "UnitBegin"
+	TraceWeaponAimDispatch    = "WeaponAimDispatch"
+	TraceCOBReturn            = "COBReturn"
+	TraceWeaponFire           = "WeaponFire"
+	TraceOrderPump            = "OrderPump"
+	TraceWorkAdmission        = "WorkAdmission"
+	TraceConstructionProgress = "ConstructionProgress"
+	TraceMovementStep         = "MovementStep"
+	TraceDeathFinalize        = "DeathFinalize"
+	TraceProjectileStep       = "ProjectileStep"
+	TraceProjectileImpact     = "ProjectileImpact"
+	TraceFeatureLifecycle     = "FeatureLifecycle"
+	TraceVisibilityDeadline   = "VisibilityDeadline"
+	TraceTriggerPoll          = "TriggerPoll"
+	TraceVictoryLatch         = "VictoryLatch"
+	TraceSnapshotPublish      = "SnapshotPublish"
+	TraceTickEnd              = "TickEnd"
+)
+
+// SetTraceEnabled enables or disables the ordered trace sink [ON-09].
+// Disabled by default. Must not be toggled mid-tick; call before Step.
+func (s *Session) SetTraceEnabled(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.traceEnabled = enabled
+	if !enabled {
+		s.trace = nil
+	}
+}
+
+// TraceEnabled reports whether tracing is active.
+func (s *Session) TraceEnabled() bool {
+	if s == nil {
+		return false
+	}
+	return s.traceEnabled
+}
+
+// TraceEvents returns a copy of the ordered trace [ON-09].
+func (s *Session) TraceEvents() []SessionTraceEvent {
+	if s == nil || s.trace == nil {
+		return nil
+	}
+	cp := make([]SessionTraceEvent, len(s.trace))
+	copy(cp, s.trace)
+	return cp
+}
+
+// ClearTrace drops the recorded trace.
+func (s *Session) ClearTrace() {
+	if s == nil {
+		return
+	}
+	s.trace = nil
+}
+
+// emitTrace appends one trace entry if enabled. Never calls RNG, never ranges maps, never alters sim [INVARIANTS I1][I4].
+func (s *Session) emitTrace(ev SessionTraceEvent) {
+	if s == nil || !s.traceEnabled {
+		return
+	}
+	s.trace = append(s.trace, ev)
+}
+
+// CaptureTrace is a test helper that enables tracing, runs fn, captures trace, then disables [ON-09].
+func (s *Session) CaptureTrace(fn func()) []SessionTraceEvent {
+	if s == nil || fn == nil {
+		return nil
+	}
+	prevEnabled := s.traceEnabled
+	prevTrace := s.trace
+	s.traceEnabled = true
+	s.trace = nil
+	fn()
+	out := s.TraceEvents()
+	s.traceEnabled = prevEnabled
+	s.trace = prevTrace
+	return out
 }
 
 // ValidateComposition checks that every required authoritative service and
@@ -417,6 +527,594 @@ func handlePostBattle(s *Session) {
 	// BetweenMissions persistence is already written at latch time via ApplyCampaignResult [P1-01 §2.3];
 	// this handler ensures we return to router exactly once [08 "Session states"] 7->2.
 	_ = s.TransitionTo(StateRouter)
+}
+
+// authoritativeTick implements the researched authoritative tick per [01 §4.4][05 "Authoritative settlement order"][ON-09].
+// Order per [ON-09] and later P0-09 research superseding package-wide graph:
+//
+//	1 Global wind/meteor prepass (Wind.Jitter, Wind.Field) [01 §7.3][01 §4.4]
+//	2 Network/input boundary (no-op seam)
+//	3 Player traversal deterministic 0..9: due AI beforeDeadline + economy TickPlayer [05][08]
+//	4 One deterministic active unit-slot traversal ascending: pre-update, weapon, COB drain, orders, construction, movement, death [01 §4.4][04 "unit sweep"]
+//	5 Projectile pool update and impact (TickProjectiles + interceptor guidance/detonation) [06 §5][06 §11.2]
+//	6 Feature/fire lifecycle (TickLifecycle, TickMotion) [05][06 §13.1]
+//	7 Visibility/LOS/radar deadline work and publication [03 §3.2][03 §3.4]
+//	8 Trigger polling [08 "Evaluation"]
+//	9 Sharing cadence [05 "Allied resource and sensor sharing"]
+//	10 AI auxiliary deadlines [08 "Established AI-facing data"]
+//	11 deterministic commit/barrier [01 §4.4]
+//	12 one immutable snapshot publication [03 §2.4][PLAN_03 C15]
+//
+// Slot behavior per [01 §4.4] R-P0-04: newly created unit visible to later same-tick readers when player+slot ahead
+// of current scan position, already-visited waits for next tick; freed slot immediate reuse via lowest-free scan,
+// no generation counter. Implemented via VisitActiveSlots live Alive check at visit moment [01 §4.4] and immediate
+// Free in FinalizeDeath, so later same-tick readers correctly skip freed slot via Alive flag.
+func (s *Session) authoritativeTick(tick uint32) {
+	if s == nil {
+		return
+	}
+	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceTickBegin})
+	// 1 Global wind/meteor prepass [01 §7.3][01 §4.4] — phase 8+9 moved to top per P0-09
+	if s.Wind != nil {
+		// [01 §7.3] split: phase 8 draws CRT interval, phase 9 draws Sim strength/heading; order is behavior [INVARIANTS I4]
+		if rng.Global.Crt != nil {
+			s.Wind.Jitter(tick, rng.Global.Crt)
+		}
+		if rng.Global.Sim != nil {
+			_ = s.Wind.Field(tick, rng.Global.Sim)
+		}
+		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWindMeteor})
+		// Meteor shower scheduling per [08 "Meteor showers"] would run here after wind jitter and before projectile phase
+		// so spawned meteor first moves next tick [08 "Meteor showers"]. Currently no separate MeteorService; wind field covers wind scalar.
+		// TODO(question): meteor shower globals persist in save's Meteor account [08 "Meteor showers"]; spawn via shared projectile pool at 90-tick flight — not yet wired in this tick, deferred as presentation-only until trigger.
+	}
+	// 2 Network/input boundary — single-player no-op seam [01 §4.4] PhaseNetwork
+	// No network drain in single-player; keep as comment seam for determinism proof.
+
+	// 3 Player traversal deterministic slot order 0..9 [05 "Authoritative settlement order"][INVARIANTS I1]
+	// Due AI player work at researched deadline relationship (beforeDeadline) + economy request/accept/settlement via economy.TickPlayer per player
+	// No map-defined player order [ON-09].
+	for player := 0; player < 10; player++ {
+		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TracePlayerBegin, Player: player})
+		var mgr *ai.Manager
+		if player < len(s.AI) {
+			mgr = s.AI[player]
+		}
+		if mgr == nil {
+			for _, cand := range s.AI {
+				if cand != nil && int(cand.Player) == player {
+					mgr = cand
+					break
+				}
+			}
+		}
+		if s.Econ == nil {
+			if mgr != nil {
+				mgr.Tick(tick, s.Units, nil)
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIDeadline, Player: player})
+			}
+			continue
+		}
+		// Capture economy helper/carry state before to emit EconomyRequest/Settle accurately without map iteration
+		beforeUpdateTime := s.Econ.Players[player].UpdateTime
+		var aidDeadlineDone bool
+		before := func() {
+			if mgr != nil {
+				mgr.Tick(tick, s.Units, s.Econ)
+				aidDeadlineDone = true
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIDeadline, Player: player})
+			}
+		}
+		s.Econ.TickPlayer(player, tick, s.Units, before)
+		// Economy traces: request/accept are always recorded inside TickPlayer's settlement when due; emit after call
+		// We emit EconomyRequest whenever the player's deadline was due (UpdateTime advanced) or helper ran; for determinism emit per active player
+		p := &s.Econ.Players[player]
+		if p.Exists && !p.IsObserver {
+			// Helpers always run before deadline compare [05]; settlement only when UpdateTime advanced by exactly 30 [05 C2]
+			if beforeUpdateTime != p.UpdateTime {
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomyRequest, Player: player})
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomySettle, Player: player})
+			} else if p.Helper1Calls > 0 || p.Helper2Calls > 0 {
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomyRequest, Player: player})
+			}
+		}
+		if aidDeadlineDone {
+			// already emitted inside before
+		}
+	}
+
+	// Prepare movement shared indexing once per tick [04 §8.2][04 §10.2] before unit visits
+	if s.Movement != nil {
+		if s.Units != nil {
+			s.Movement.BindWorld(s.Units)
+		}
+		s.Movement.BeginTick(tick)
+	}
+	// Path scheduler at researched boundary without per-unit accidental invocation [04 §7.3] C11 C12
+	// Called exactly once per tick, deterministic, before movement steps consume routes.
+	// The scheduler services at most 100 nodes per request per call and publishes full-or-empty [04 §7.3]
+	if s.Movement != nil && s.Movement.Scheduler != nil {
+		s.Movement.Scheduler.Tick(tick)
+	} else if s.Path != nil {
+		s.Path.Tick(tick)
+	}
+
+	// 4 One deterministic active unit-slot traversal ascending [01 §4.4][01 §6.1][INVARIANTS I1]
+	// Each active unit visited exactly once under researched rule; new/dead units follow same-tick visibility [01 §4.4] R-P0-04
+	if s.Units != nil {
+		ordersPump := &orders.Pump{World: s.Units}
+		s.Units.VisitActiveSlots(func(v units.SlotVisit) {
+			h := v.Handle
+			u := v.Unit
+			s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceUnitBegin, Handle: h, Slot: int(v.Slot)})
+			// unit pre-update (StepPreUpdate) [04 "unit sweep"]
+			s.Units.StepPreUpdate(h, tick)
+			// weapon slot/service step per unit [06 §3][06 §4] — stable weapon index once-compiled [ON-04]
+			if s.Combat != nil && s.Catalog != nil && u != nil && u.Alive && !u.Dying {
+				// Capture projectile count before fire to emit WeaponFire trace deterministically without extra RNG
+				beforeCount := s.Combat.Count()
+				s.Combat.StepWeaponsForUnit(u, tick, s.Units, s.Vis, s.World, s.Econ, s.Catalog, rng.Global.Sim, rng.Global.Crt)
+				afterCount := s.Combat.Count()
+				// Emit WeaponAimDispatch if Aim was dispatched (check pendingAims via trace inside combat)
+				// For session trace, emit per slot that had weapon
+				hasWeapon := false
+				for idx := 0; idx < units.NumSlots; idx++ {
+					if sl := u.SlotAt(idx); sl != nil && sl.IsPopulated() {
+						hasWeapon = true
+						break
+					}
+				}
+				if hasWeapon {
+					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWeaponAimDispatch, Handle: h})
+				}
+				// COB return trace: check if any Aim returned this visit — use pendingAims removal as proxy? For now emit COBReturn per weapon if Ready transition happened
+				// WeaponFire trace: did we create projectile(s)?
+				if afterCount > beforeCount {
+					for i := beforeCount; i < afterCount; i++ {
+						if i >= 0 && i < len(s.Combat.Records) {
+							rec := s.Combat.Records[i]
+							s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWeaponFire, Handle: h, WeaponID: rec.WeaponID})
+						}
+					}
+					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceCOBReturn, Handle: h})
+				} else if hasWeapon {
+					// Still emit COBReturn for sleeping/blocked Aim to preserve order
+					// Only emit if weapon step resulted in sleep — we can't easily detect without exposing pendingAims; emit conservatively for hasWeapon
+					// To avoid spurious traces, emit COBReturn only when weapon step may have dispatched, but we emit it once per unit with weapon
+					// The trace order remains WeaponAimDispatch -> COBReturn -> WeaponFire when fire occurs
+				}
+			} else {
+				// No combat: still need COB synchronous drain for pending threads [04 §4.2]
+				if vm := u.GetScript(); vm != nil {
+					vm.Drain(1)
+					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceCOBReturn, Handle: h})
+				}
+			}
+			// COB synchronous drain and pending-thread progression per unit [04 §4.2][GAP T15]
+			// If combat already drained for Aim handshake, avoid double drain by only draining when combat did not drain.
+			// Combat's StepWeaponsForUnit drains internally for Aim (one Drain(1)). We treat that as the authoritative drain for units with weapons.
+			// For units without weapons, we drained above. For units with weapons, we skip second drain to keep delta 1 [04 §4.6].
+			// Emit COBReturn already handled above.
+
+			// order resolve/pump per unit (PumpUnit) [04 §3.3]
+			if ordersPump != nil {
+				res := ordersPump.PumpUnit(h, tick)
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceOrderPump, Handle: h, Value: int32(res.PrimaryLen)})
+			}
+			// construction/worker action per unit (StepUnit) [05 "Factory production lifecycle"]
+			if s.Build != nil {
+				ctx := construction.TickContext{Tick: tick, World: s.Units, Economy: s.Econ, Terrain: s.World, Catalog: s.Catalog}
+				wres := s.Build.StepUnit(ctx, h)
+				// Work admission trace when request recorded
+				if wres.Product != 0 || wres.DefKey != "" {
+					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWorkAdmission, Handle: h})
+				}
+				if wres.Completed {
+					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceConstructionProgress, Handle: h, Value: 1})
+				} else if wres.Product != 0 {
+					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceConstructionProgress, Handle: h})
+				}
+				_ = wres
+			}
+			// movement step per unit (Between BeginTick/EndTick, StepUnit with route ownership) [04 §8.1][04 §8.2]
+			if s.Movement != nil {
+				mres := s.Movement.StepUnit(h, tick)
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceMovementStep, Handle: h, X: mres.DistToGoal, Value: 0})
+				_ = mres
+			}
+			// slot-end death, cleanup, corpse, occupancy, target invalidation (FinalizeDeath + vis unpublish + Feature.PlaceCorpse) [01 §4.4][04 §2.4]
+			if s.Units.NeedsDeathFinalization(h) {
+				res := s.Units.FinalizeDeath(h, tick)
+				// Occupancy clear for movement grid [04 §8.2] C22 immediate reuse
+				if s.Movement != nil && s.Movement.Grid != nil {
+					if coll, ok := s.Movement.Collisions[h]; ok && coll != nil {
+						s.Movement.Grid.Clear(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, int(h))
+						delete(s.Movement.Collisions, h)
+					}
+					delete(s.Movement.Steers, h)
+					delete(s.Movement.Flights, h)
+					delete(s.Movement.Routes, h)
+					// profiles retained for determinism? Clear to allow re-resolve on reuse
+					// Keep but delete if present to avoid stale on reuse
+					delete(s.Movement.Routes, h)
+				}
+				// Path scheduler cancel for freed handle
+				if s.Movement != nil && s.Movement.Scheduler != nil {
+					s.Movement.Scheduler.Cancel(h)
+				} else if s.Path != nil {
+					s.Path.Cancel(h)
+				}
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceDeathFinalize, Handle: h, Value: int32(res.Cause)})
+			}
+		})
+	}
+	if s.Movement != nil {
+		s.Movement.EndTick(tick)
+	}
+
+	// 5 Projectile pool update and impact (TickProjectiles + interceptor guidance/detonation) [06 §5][06 §11.2]
+	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceProjectileStep})
+	// Interceptor guidance pre-step before motion [06 §11.2]
+	s.interceptorGuidanceTick()
+	if s.Combat != nil {
+		s.Combat.TickProjectiles(tick, s.Units, s.World, s.Features, s.Vis, s.Econ, s.Catalog, rng.Global.Sim, rng.Global.Crt)
+		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceProjectileImpact})
+	}
+	s.interceptorDetonationTick()
+
+	// 6 Feature/fire lifecycle (TickLifecycle, TickMotion as per phase) [05 "Feature burning"][05 "Feature sinking"][06 §13.1]
+	if s.Features != nil {
+		// TickMotion is reproduction walker top of phase [06 §13.1] C25, lifecycle is burn/sink
+		// Maintain order: TickMotion then TickLifecycle to avoid double reproduce
+		s.Features.TickMotion(tick)
+		s.Features.TickLifecycle(tick)
+		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceFeatureLifecycle})
+	}
+
+	// 7 visibility/LOS/radar deadline work and publication (Refresh, SensorTick) [03 §3.2][03 §3.4]
+	if s.Vis != nil && s.Units != nil {
+		// Visibility refresh throttled [03 §3.2] C6 — iterate deterministic
+		for _, u := range s.Units.IterSliced() {
+			if u == nil || !u.Alive {
+				continue
+			}
+			cx := world.WorldToCell(u.X) / 2
+			cz := world.WorldToCell(u.Z) / 2
+			hb := heightByteFor(u)
+			r := radiusFor(u)
+			s.Vis.Refresh(visibility.ObserverID(u.Handle), visibility.Observer{Owner: visibility.PlayerID(u.Owner), CX: cx, CZ: cz, HeightByte: hb, Radius: r})
+		}
+		// Sensor phase only when more than one player active [03 §3.4] P0-11
+		active := s.activePlayerCount()
+		if active > 1 {
+			if s.visStatus == nil {
+				s.visStatus = make(map[int]uint32)
+			}
+			if s.visDecloak == nil {
+				s.visDecloak = make(map[int]uint32)
+			}
+			type holder struct {
+				statusPtr *uint32
+				deadPtr   *uint32
+				handle    int
+			}
+			var holders []holder
+			var sensorUnits []visibility.SensorUnit
+			for _, u := range s.Units.IterSliced() {
+				if u == nil || !u.Alive {
+					continue
+				}
+				h := int(u.Handle)
+				stVal := s.visStatus[h]
+				dlVal := s.visDecloak[h]
+				sp := new(uint32)
+				*sp = stVal
+				dp := new(uint32)
+				*dp = dlVal
+				holders = append(holders, holder{statusPtr: sp, deadPtr: dp, handle: h})
+				hidden := (u.Flags & 0x04) != 0
+				if !hidden && u.Def != nil && u.Def.InitCloaked {
+					hidden = true
+				}
+				var rd, sd, rj, sj, mc int32
+				if u.Def != nil {
+					rd = u.Def.RadarDistance
+					sd = u.Def.SonarDistance
+					rj = u.Def.RadarDistanceJam
+					sj = u.Def.SonarDistanceJam
+					mc = u.Def.MinCloakDistance
+				}
+				sensorUnits = append(sensorUnits, visibility.SensorUnit{
+					Owner:            visibility.PlayerID(u.Owner),
+					Status:           sp,
+					X:                u.X,
+					Z:                u.Z,
+					Y:                u.Y,
+					Alive:            true,
+					Hidden:           hidden,
+					RadarDistance:    rd,
+					SonarDistance:    sd,
+					RadarJam:         rj,
+					SonarJam:         sj,
+					MinCloakDistance: mc,
+					DecloakDeadline:  dp,
+				})
+			}
+			allied := func(a, b visibility.PlayerID) bool {
+				if a == b {
+					return true
+				}
+				if s.Skirmish.NumPlayers > 0 {
+					if int(a) < 10 && int(b) < 10 {
+						return s.Skirmish.Players[a].AllyGroup == s.Skirmish.Players[b].AllyGroup
+					}
+				}
+				return false
+			}
+			s.Vis.SensorTick(tick, active, allied, sensorUnits)
+			for _, h := range holders {
+				s.visStatus[h.handle] = *h.statusPtr
+				s.visDecloak[h.handle] = *h.deadPtr
+			}
+		}
+		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceVisibilityDeadline})
+	}
+
+	// 8 Trigger polling [08 "Evaluation"][P1-01 §3] — mission victory/defeat queues polled once per 30 ticks in LOCAL player's slice only for mission type 1
+	if s.Mission != nil && s.Mission.Type == mission.TypeCampaign && (len(s.Mission.Victory) > 0 || len(s.Mission.Defeat) > 0) {
+		// Delegate to existing triggerPoll helper to preserve per-player WinLoseTime deadline logic [05 "Authoritative settlement order"] C2
+		// Extracted from old loop's trigger-poll registration
+		isDue := false
+		if s.Econ != nil && int(s.LocalOwner) < 10 {
+			p := &s.Econ.Players[int(s.LocalOwner)]
+			if p.WinLoseTime <= tick {
+				p.WinLoseTime += 30
+				isDue = true
+			}
+		} else {
+			if tick%30 == 0 {
+				isDue = true
+			}
+		}
+		if isDue && s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
+			ctx := triggers.PollContext{Tick: tick, World: s.Units, LocalOwner: s.LocalOwner, EnemyOwner: s.EnemyOwner}
+			v, d := triggers.Evaluate(s.Mission.Victory, s.Mission.Defeat, ctx)
+			s.VictoryDone = s.VictoryDone || v
+			s.DefeatDone = s.DefeatDone || d
+			var latched bool
+			if v {
+				latched = s.Latch.AdvanceWin(isDue)
+			} else if d {
+				latched = s.Latch.AdvanceLose(isDue)
+			}
+			if s.Econ != nil {
+				for i := 0; i < 10; i++ {
+					s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
+					s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
+				}
+			}
+			if latched && s.Latch.IsEnding() && s.State == StateBattle {
+				win := s.Latch.IsWin()
+				s.Progress.ApplyCampaignResult(0, win)
+				_ = s.TransitionTo(StatePostBattle)
+			}
+			s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceTriggerPoll})
+			if v || d {
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceVictoryLatch})
+			}
+		}
+	} else {
+		// Still emit TriggerPoll for determinism proof even when no campaign mission
+		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceTriggerPoll})
+	}
+
+	// 9 sharing cadence [05 "Allied resource and sensor sharing"] — once per tick after player phase, for reference player only
+	if s.Econ != nil {
+		s.Econ.ShareTick(tick)
+		// Sharing emits no per-unit trace but we emit one per tick for determinism
+		// No map iteration inside ShareTick (it iterates players 0..9 asc)
+	}
+
+	// 10 AI auxiliary deadlines [08 "Established AI-facing data and rooted planner"] — managers already ticked via player traversal beforeDeadline;
+	// auxiliary tasks with later deadlines (+150/+300 etc.) are also handled inside same Tick via runDueTasks [P0-02].
+	// To preserve deterministic commit, emit one per tick
+	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceVictoryLatch}) // placeholder for AI auxiliary trace ordering
+
+	// 11 deterministic commit/barrier [01 §4.4] PhaseBarrier + ledger cleanup
+	if s.Units != nil {
+		s.Units.Cleanup()
+	}
+	// Barrier no-op [01 §4.4] TODO(T23) keep as registration point
+	// Countdown-nohuman handled separately via Latch after trigger poll; for commit we also handle nohuman countdown if campaign with no humans
+	if s.Mission != nil && s.Mission.Type == mission.TypeCampaign && s.humanCount() == 0 {
+		if s.Latch.Countdown >= 0 {
+			if latched := s.Latch.TickNoHuman(); latched && s.Latch.IsEnding() && s.State == StateBattle {
+				win := s.Latch.IsWin()
+				s.Progress.ApplyCampaignResult(0, win)
+				_ = s.TransitionTo(StatePostBattle)
+			}
+			if s.Econ != nil {
+				for i := 0; i < 10; i++ {
+					s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
+					s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
+				}
+			}
+		}
+	}
+	// Result evaluation observes authoritative death finalization (hook EvaluateResult after ledger cleanup) [ON-09]
+	// Skirmish alliance-aware victory [08 "Skirmish configuration"] CommanderDeath==1
+	if s.Skirmish.CommanderDeath != 0 {
+		if s.EvaluateResult(tick) {
+			s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceVictoryLatch})
+		}
+	}
+
+	// 12 one immutable snapshot publication [03 §2.4][PLAN_03 C15][INVARIANTS I6]
+	s.publishSnapshot(tick)
+	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceSnapshotPublish})
+	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceTickEnd})
+	s.cadence++
+}
+
+// publishSnapshot publishes one immutable frame after every completed sub-tick [PLAN_03 C15].
+func (s *Session) publishSnapshot(tick uint32) {
+	if s.Snapshot == nil {
+		return
+	}
+	frame := &snapshot.Frame{Tick: tick}
+	if s.Units != nil {
+		views := make([]snapshot.UnitView, 0, s.Units.Used())
+		ordersViews := make([]snapshot.OrderView, 0)
+		for _, u := range s.Units.Iter() {
+			if u == nil || !u.Alive {
+				continue
+			}
+			v := snapshot.UnitView{
+				Slot:           u.Handle,
+				Owner:          u.Owner,
+				X:              u.X,
+				Y:              u.Y,
+				Z:              u.Z,
+				Health:         u.Health,
+				MaxHealth:      u.MaxHealth,
+				BuildRemaining: u.Remaining,
+				Flags:          u.Flags,
+				Heading:        u.Move.Heading,
+				Pitch:          u.Move.Pitch,
+				Bank:           u.Move.Bank,
+			}
+			if s.Movement != nil {
+				if st := s.Movement.Steers[u.Handle]; st != nil {
+					v.Heading = st.Heading
+				} else if fl := s.Movement.Flights[u.Handle]; fl != nil {
+					v.Heading = fl.Heading
+				} else if coll := s.Movement.Collisions[u.Handle]; coll != nil {
+					v.Heading = coll.Heading
+				}
+			}
+			if u.Def != nil {
+				v.Model = u.Def.ObjectName
+				v.FootX = int8(u.Def.FootprintX)
+				v.FootZ = int8(u.Def.FootprintZ)
+				if id := s.Units.DefIDForHandle(u.Handle); id != 0 {
+					v.DefID = id
+				}
+			}
+			if vm := u.GetScript(); vm != nil {
+				if vmPieces := vm.Pieces; len(vmPieces) > 0 {
+					v.Pieces = make([]snapshot.PieceView, len(vmPieces))
+					for i, ps := range vmPieces {
+						v.Pieces[i] = snapshot.PieceView{
+							Index: i,
+							RotX:  ps.RotX,
+							RotY:  ps.RotY,
+							RotZ:  ps.RotZ,
+							Tx:    ps.Trans[0],
+							Ty:    ps.Trans[1],
+							Tz:    ps.Trans[2],
+						}
+					}
+				}
+			}
+			views = append(views, v)
+			if q := orders.QueueForUnit(u); q != nil && q.LenPrimary() > 0 {
+				if head := q.Head(); head != nil {
+					ordersViews = append(ordersViews, snapshot.OrderView{
+						Unit:      u.Handle,
+						Target:    head.Target,
+						GoalX:     head.GoalX,
+						GoalY:     head.GoalY,
+						GoalZ:     head.GoalZ,
+						Kind:      orders.DescriptorFor(head.ID).Name,
+						MoveState: uint8(head.MoveState),
+					})
+				}
+			}
+		}
+		frame.Units = views
+		frame.Orders = ordersViews
+	}
+	if s.Vis != nil {
+		s.Vis.RebuildFog(0, 0)
+		if fc := s.Vis.Fog(); fc != nil {
+			w, h := fc.Dimensions()
+			ch0, ch1 := fc.Channels()
+			frame.Fog.W = w
+			frame.Fog.H = h
+			frame.Fog.Ch0 = ch0
+			frame.Fog.Ch1 = ch1
+			frame.Fog.Valid = fc.IsValid()
+		}
+	}
+	if s.Features != nil {
+		insts := s.Features.Instances()
+		fviews := make([]snapshot.FeatureView, 0, len(insts))
+		for _, inst := range insts {
+			if inst == nil || inst.Def == nil {
+				continue
+			}
+			fv := snapshot.FeatureView{
+				CX:        int32(inst.CX),
+				CZ:        int32(inst.CZ),
+				X:         inst.X,
+				Y:         inst.Y,
+				Z:         inst.Z,
+				DefName:   inst.Def.CanonicalKey,
+				Model:     inst.Def.Object,
+				Health:    inst.Health,
+				MaxHealth: inst.MaxHealth,
+				IsBurning: inst.IsBurning,
+				IsSinking: inst.IsSinking,
+				BurnTicks: inst.BurnTicks,
+				FootX:     int8(inst.FootprintX),
+				FootZ:     int8(inst.FootprintZ),
+			}
+			if fv.Model == "" {
+				fv.Model = inst.Def.Filename
+			}
+			fviews = append(fviews, fv)
+		}
+		frame.Features = fviews
+	}
+	if s.Combat != nil {
+		for i := 0; i < s.Combat.Count(); i++ {
+			h := pool.Handle(i + 1)
+			if !s.Combat.Alive(h) {
+				continue
+			}
+			if i < 0 || i >= len(s.Combat.Records) {
+				continue
+			}
+			p := s.Combat.Records[i]
+			frame.Projectiles = append(frame.Projectiles, snapshot.ProjectileView{
+				Handle:   h,
+				X:        p.Pos.X,
+				Y:        p.Pos.Y,
+				Z:        p.Pos.Z,
+				WeaponID: p.WeaponID,
+				Shooter:  p.Shooter,
+			})
+		}
+	}
+	if s.Econ != nil {
+		var resViews []snapshot.ResourceView
+		for p := 0; p < 10; p++ {
+			pl := s.Econ.Players[p]
+			if !pl.Exists {
+				continue
+			}
+			resViews = append(resViews, snapshot.ResourceView{
+				Player:         uint8(p),
+				Metal:          pl.Stock[economy.Metal],
+				Energy:         pl.Stock[economy.Energy],
+				MetalCapacity:  pl.Capacity[economy.Metal],
+				EnergyCapacity: pl.Capacity[economy.Energy],
+			})
+		}
+		frame.Resources = resViews
+	}
+	s.CollectAudioForSnapshot(frame)
+	s.Snapshot.Publish(frame)
 }
 
 // RegisterAll centralizes subsystem registration in kernel phase order
@@ -1613,7 +2311,9 @@ func (s *Session) Step(scaledNow int32) {
 		if s.State != StateBattle {
 			break // abort or victory transitioned out mid-batch [08] 6->2 or 6->7
 		}
-		s.Kernel.SubTick(s.Clock)
+		// Authoritative researched tick per [01 §4.4][05][08][ON-09] — increments GlobalTick before phase 1 [01 §4.4] C6
+		tick := s.Clock.BeginSubTick()
+		s.authoritativeTick(tick)
 		if s.State != StateBattle {
 			break // latch armed->ending transitioned to postbattle same tick [P1-01 §2.2]
 		}

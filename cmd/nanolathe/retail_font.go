@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/palette"
 )
 
 // retailGAFTextFont returns the primary frontend GAF font installed by
@@ -88,6 +89,15 @@ func (g *gameShell) retailTextHeight() int {
 // No GUI semantic-color remap or FNT tint is applied. maxWidth < 0 means no
 // width limit; otherwise the next glyph must fit in the remaining width.
 func drawRetailGAFText(c *client.Client, font *formats.GAFEntry, text string, x, y, maxWidth int) {
+	drawRetailGAFTextLit(c, font, text, x, y, maxWidth, nil, 0)
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// shade level: zero routes each glyph to the ordinary frame blitter
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// the glyph through PALETTE.LHT. Only the loading screen's stage labels pass a
+// non-zero level [07 §4].
+func drawRetailGAFTextLit(c *client.Client, font *formats.GAFEntry, text string, x, y, maxWidth int, pal *palette.Tables, shade int) {
 	if c == nil || font == nil {
 		return
 	}
@@ -110,9 +120,10 @@ func drawRetailGAFText(c *client.Client, font *formats.GAFEntry, text string, x,
 			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			c.UIBlit(frame,
+			c.UIBlitLit(frame,
 				x-int(frame.XOffset),
 				y-(int(frame.YOffset)-baselineHeight),
+				pal, shade,
 			)
 		}
 		x += advance
@@ -126,8 +137,16 @@ func drawRetailGAFText(c *client.Client, font *formats.GAFEntry, text string, x,
 }
 
 func (g *gameShell) drawRetailString(c *client.Client, text string, x, y, maxWidth int, fntColor byte) {
+	g.drawRetailStringLit(c, text, x, y, maxWidth, fntColor, 0)
+}
+
+func (g *gameShell) drawRetailStringLit(c *client.Client, text string, x, y, maxWidth int, fntColor byte, shade int) {
 	if font := g.retailGAFTextFont(); font != nil {
-		drawRetailGAFText(c, font, text, x, y, maxWidth)
+		var pal *palette.Tables
+		if g.assets != nil {
+			pal = g.assets.pal
+		}
+		drawRetailGAFTextLit(c, font, text, x, y, maxWidth, pal, shade)
 		return
 	}
 	if g != nil && g.font != nil {

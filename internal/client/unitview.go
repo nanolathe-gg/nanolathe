@@ -95,6 +95,7 @@ func LerpUnitView(prev, cur snapshot.UnitView, alpha float32) snapshot.UnitView 
 	out.Pitch = snapshot.LerpAngle(prev.Pitch, cur.Pitch, alpha)
 	out.Bank = snapshot.LerpAngle(prev.Bank, cur.Bank, alpha)
 	// Pieces: lerp rotations via shortest wrap and translations via Fixed lerp (I6).
+	// Hidden is not interpolated: snap to cur (presentation-only, no blending) [04 §4.3] show/hide.
 	if len(prev.Pieces) == len(cur.Pieces) && len(cur.Pieces) > 0 {
 		out.Pieces = make([]snapshot.PieceView, len(cur.Pieces))
 		for i := range cur.Pieces {
@@ -106,11 +107,16 @@ func LerpUnitView(prev, cur snapshot.UnitView, alpha float32) snapshot.UnitView 
 			pv.Tx = snapshot.Lerp(pp.Tx, pv.Tx, alpha)
 			pv.Ty = snapshot.Lerp(pp.Ty, pv.Ty, alpha)
 			pv.Tz = snapshot.Lerp(pp.Tz, pv.Tz, alpha)
+			pv.Hidden = cur.Pieces[i].Hidden
+			// Preserve name/index from cur for diagnostics.
+			pv.Name = cur.Pieces[i].Name
+			pv.Index = cur.Pieces[i].Index
 			out.Pieces[i] = pv
 		}
 	} else if len(cur.Pieces) > 0 {
 		// Length mismatch: snap to cur.
-		out.Pieces = cur.Pieces
+		out.Pieces = make([]snapshot.PieceView, len(cur.Pieces))
+		copy(out.Pieces, cur.Pieces)
 	}
 	return out
 }

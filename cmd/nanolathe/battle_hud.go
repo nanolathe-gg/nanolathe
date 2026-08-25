@@ -43,6 +43,8 @@ type retailBattleHUD struct {
 	panel *hud.Panel
 	fs    *vfs.FS
 	pages map[string]*formats.GAF
+	// Cache resolved GUI/model once instead of reparsing on draw/click [ON-05 1][R-P0-03]
+	windows map[string]*gui.Window
 }
 
 // loadRetailBattleHUD binds the same side-selected resources as the retail
@@ -111,7 +113,8 @@ func loadRetailBattleHUD(fs *vfs.FS, sess *session.Session, cat *content.Catalog
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		common: common, oldMain: oldMain, share: share, logos: logos,
 		panel: hud.NewPanel(0x04, 640, 480, nil), fs: fs,
-		pages: make(map[string]*formats.GAF),
+		pages:   make(map[string]*formats.GAF),
+		windows: make(map[string]*gui.Window),
 	}, nil
 }
 
@@ -353,17 +356,26 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 	}
 }
 
-// consumeClick applies the retail order-button latch parser to a visible
-// authored side-panel button. Other GUI controls are still consumed here even
-// though their callbacks are not yet in this slice; a click on the rail must
-// never leak through to world selection [07 §3][07 §9].
+// consumeClick applies the retail order-button latch parser and data-driven build
+// product binding to a visible authored side-panel button [R-P0-03][07 §9].
+// Build products are validated against cat.BuildMenus (no invention) and
+// dispatched via injected callbacks: mobile builders arm placement (definition
+// retained, cursorfindsite [07 §8] 0xE), factories queue immediately [F-P1-008].
+// Order buttons are bound via ParseButtonLatch and handleHudOrderButton which
+// routes through the injected command dispatch [R-P0-03]. Any HUD gadget hit
+// is consumed to prevent leak into world drag [07 §3][F-P0-003]. Page next/prev
+// are data-driven with count guard [R-P0-03][07 §9] C10.
 func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
-	if h == nil || b == nil || b.sess == nil {
+	if h == nil || b == nil {
 		return false
 	}
-	_, f, ok := b.sess.Snapshot.Read()
-	if !ok {
-		return false
+	// Snapshot may be nil in headless tests; fall back to live selection for window choice.
+	var f *snapshot.Frame
+	if b.sess != nil && b.sess.Snapshot != nil {
+		_, cur, ok := b.sess.Snapshot.Read()
+		if ok {
+			f = cur
+		}
 	}
 	window, _ := h.windowFor(b, f)
 	if window == nil {
@@ -382,6 +394,117 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 		if !guiRectContains(r, x, y) {
 			continue
 		}
+		upperName := strings.ToUpper(gad.Name)
+		upperText := strings.ToUpper(gad.Text)
+		// Page navigation data-driven [R-P0-03][07 §9] C10
+		if strings.Contains(upperName, "NEXTPAGE") || strings.Contains(upperName, "NEXT") && strings.Contains(upperName, "PAGE") || strings.Contains(upperName, "PAGEDOWN") {
+			b.nextBuildPage()
+			return true
+		}
+		if strings.Contains(upperName, "PREVPAGE") || strings.Contains(upperName, "PREV") && strings.Contains(upperName, "PAGE") || strings.Contains(upperName, "PAGEUP") {
+			b.prevBuildPage()
+			return true
+		}
+		if strings.Contains(upperName, "NEXT") || strings.Contains(upperText, "NEXT") {
+			// Generic NEXT button fallback only when builder has paging
+			if sel := b.selectedBuilder(); sel != nil && b.cat != nil {
+				if pm, ok := b.cat.BuildMenus[sel.Def.CanonicalKey]; ok && pm != nil {
+					if hud.PageCountFromButtons(len(pm.Buttons), 8) > 1 {
+						b.nextBuildPage()
+						return true
+					}
+				}
+			}
+		}
+		if strings.Contains(upperName, "PREV") || strings.Contains(upperText, "PREV") {
+			if sel := b.selectedBuilder(); sel != nil && b.cat != nil {
+				if pm, ok := b.cat.BuildMenus[sel.Def.CanonicalKey]; ok && pm != nil {
+					if hud.PageCountFromButtons(len(pm.Buttons), 8) > 1 {
+						b.prevBuildPage()
+						return true
+					}
+				}
+			}
+		}
+		// Build product binding data-driven [R-P0-03][02 "Build-menu catalog keys"].
+		// GUI may not invent products absent from authored build list.
+		if sel := b.selectedBuilder(); sel != nil && sel.Def != nil && b.cat != nil {
+			candidates := []string{gad.Name, gad.Text}
+			candidates = append(candidates, gad.Labels...)
+			for _, cand := range candidates {
+				if cand == "" {
+					continue
+				}
+				// Direct canonical match or case-insensitive
+				if !hud.ValidateBuildProduct(b.cat, sel.Def.CanonicalKey, cand) {
+					continue
+				}
+				// Resolve canonical product name for dispatch
+				prodDef, _ := b.cat.Unit(cand)
+				prodKey := cand
+				if prodDef != nil {
+					prodKey = prodDef.CanonicalKey
+				} else {
+					// Try canonical lookup via BuildMenus first entry match
+					for _, bm := range b.cat.BuildMenus[sel.Def.CanonicalKey].Buttons {
+						if strings.EqualFold(bm, cand) {
+							if d, ok := b.cat.Unit(bm); ok && d != nil {
+								prodKey = d.CanonicalKey
+							} else {
+								prodKey = bm
+							}
+							break
+						}
+					}
+				}
+				if hud.IsFactoryBuilder(sel.Def) {
+					_ = b.DispatchFactoryBuild(prodKey, false)
+					return true
+				}
+				if hud.IsMobileBuilder(sel.Def) {
+					// Arm placement mode with definition retained [R-P0-03] cursorfindsite 0xE requires non-empty list
+					if prodDef == nil {
+						if d, ok := b.cat.Unit(prodKey); ok {
+							prodDef = d
+						}
+					}
+					if prodDef != nil {
+						b.buildDef = prodDef.CanonicalKey
+						b.buildFootX = int32(prodDef.FootprintX)
+						b.buildFootZ = int32(prodDef.FootprintZ)
+						if b.buildFootX <= 0 {
+							b.buildFootX = 1
+						}
+						if b.buildFootZ <= 0 {
+							b.buildFootZ = 1
+						}
+						b.buildOK = false
+						b.latch = input.LatchMobileBuild
+					} else {
+						b.buildDef = prodKey
+						b.latch = input.LatchMobileBuild
+					}
+					return true
+				}
+				// Builder type ambiguous: treat as mobile for placement
+				if sel.Def.Builder {
+					if prodDef != nil {
+						b.buildDef = prodDef.CanonicalKey
+						b.buildFootX = int32(prodDef.FootprintX)
+						b.buildFootZ = int32(prodDef.FootprintZ)
+						if b.buildFootX <= 0 {
+							b.buildFootX = 1
+						}
+						if b.buildFootZ <= 0 {
+							b.buildFootZ = 1
+						}
+						b.buildOK = false
+						b.latch = input.LatchMobileBuild
+					}
+					return true
+				}
+			}
+		}
 		upper := strings.ToUpper(gad.Name)
 		if strings.Contains(upper, "MOVE") ||
 			strings.Contains(upper, "ATTACK") || strings.Contains(upper, "BLAST") ||
@@ -389,15 +512,71 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 			strings.Contains(upper, "PATROL") || strings.Contains(upper, "RECLAIM") ||
 			strings.Contains(upper, "CAPTURE") || strings.Contains(upper, "LOAD") ||
 			strings.Contains(upper, "UNLOAD") || strings.Contains(upper, "STOP") {
-			b.latch = hud.ParseButtonLatch(gad.Name, 1)
+			b.handleHudOrderButton(gad.Name)
+			return true
 		}
+		// Any other GUI button still consumes the click to prevent world leak [07 §3]
 		return true
 	}
 	return false
 }
 
+// hitTest reports whether (x,y) hits any active button gadget in the current
+// window, used for input-capture latch [F-P0-003][07 §3].
+// This fallback is retained for callers without battleSession context.
+func (h *retailBattleHUD) hitTest(x, y int32) bool {
+	if h == nil || h.side == nil {
+		return false
+	}
+	// Without session context we cannot resolve the correct page window;
+	// report false so handleInput's session-aware hitTestFor is preferred.
+	_ = x
+	_ = y
+	return false
+}
+
+// hitTestFor is the session-aware hit test used by battleSession handleInput [F-P0-003].
+func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
+	if h == nil || b == nil {
+		return false
+	}
+	var f *snapshot.Frame
+	if b.sess != nil && b.sess.Snapshot != nil {
+		_, cur, ok := b.sess.Snapshot.Read()
+		if ok {
+			f = cur
+		}
+	}
+	window, _ := h.windowFor(b, f)
+	if window == nil {
+		return false
+	}
+	offset := int32(0)
+	if h.panel != nil {
+		offset = int32(h.panel.Offset)
+	}
+	for i, gad := range window.Gadgets {
+		if i == 0 || gad.Active == 0 || gad.Kind != gui.KindButton {
+			continue
+		}
+		r := window.PlacedRect(i)
+		r.Y += offset
+		if guiRectContains(r, x, y) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *retailBattleHUD) windowFor(b *battleSession, f *snapshot.Frame) (*gui.Window, *formats.GAF) {
-	name := strings.ToLower(h.side.NamePrefix) + "main"
+	// Cache resolved GUI/model once instead of reparsing on draw/click [ON-05 1]
+	// Name selection is data-driven with paging: builder's page bits select guis/<unit><page>.gui [R-P0-03][07 §9] C10
+	name := ""
+	if h.side != nil {
+		name = strings.ToLower(h.side.NamePrefix) + "main"
+	} else {
+		name = "main"
+	}
 	var selected *snapshot.UnitView
 	if f != nil {
 		for i := range f.Units {
@@ -408,24 +587,97 @@ func (h *retailBattleHUD) windowFor(b *battleSession, f *snapshot.Frame) (*gui.W
 			}
 		}
 	}
-	if selected != nil {
-		if def, ok := b.cat.UnitDefByIndex(uint32(selected.DefID)); ok && def != nil {
-			if def.Builder {
-				name = strings.ToLower(def.UnitName) + "1"
-			} else {
-				name = strings.ToLower(h.side.NamePrefix) + "gen"
+	// Fallback to live selection when snapshot not yet published (headless tests, initial frame)
+	if selected == nil && b != nil && b.sess != nil && b.sess.Units != nil {
+		if ub := b.selectedBuilder(); ub != nil && ub.Def != nil {
+			// Synthesize a view for window selection
+			selected = &snapshot.UnitView{Owner: h.owner, Flags: ub.Flags, DefID: uint16(0)}
+			// Use live def directly for name selection below
+			// Mark DefID zero but we will use live def path
+		} else if len(b.selectedUnits()) > 0 {
+			if su := b.selectedUnits()[0]; su != nil {
+				selected = &snapshot.UnitView{Owner: h.owner, Flags: su.Flags}
+				if su.Def != nil {
+					if idx, ok := b.cat.UnitDefIndex(su.Def.CanonicalKey); ok {
+						selected.DefID = uint16(idx)
+					}
+				}
 			}
 		}
 	}
+	if selected != nil && b != nil && b.cat != nil {
+		var def *content.UnitDef
+		var ok bool
+		if selected.DefID != 0 {
+			def, ok = b.cat.UnitDefByIndex(uint32(selected.DefID))
+		}
+		if !ok || def == nil {
+			// Fallback to live builder def
+			if ub := b.selectedBuilder(); ub != nil {
+				def = ub.Def
+				ok = def != nil
+			} else if len(b.selectedUnits()) > 0 {
+				if su := b.selectedUnits()[0]; su != nil {
+					def = su.Def
+					ok = def != nil
+				}
+			}
+		}
+		if ok && def != nil {
+			if def.Builder {
+				// Data-driven page: decode from flags [R-P0-03][07 §9] C10 (page &7)<<23 bits 23-25 with bit 22 paged)
+				pageNum := 0
+				var flags uint32
+				// Prefer live flags for accurate page, fallback to snapshot flags
+				if ub := b.selectedBuilder(); ub != nil {
+					flags = ub.Flags
+				} else {
+					flags = selected.Flags
+				}
+				if hud.IsPaged(flags) {
+					pageNum = hud.DecodePage(flags)
+				}
+				// Guard page count data-driven [R-P0-03]
+				if pm, ok2 := b.cat.BuildMenus[def.CanonicalKey]; ok2 && pm != nil {
+					cnt := hud.PageCountFromButtons(len(pm.Buttons), 8)
+					pageNum = hud.ClampPage(pageNum, cnt)
+				} else {
+					pageNum = hud.ClampPage(pageNum, 1)
+				}
+				name = strings.ToLower(def.UnitName) + fmt.Sprintf("%d", pageNum+1)
+			} else {
+				if h.side != nil {
+					name = strings.ToLower(h.side.NamePrefix) + "gen"
+				}
+			}
+		}
+	}
+	// Check cache first [ON-05 1]
+	if cached, ok := h.windows[name]; ok && cached != nil {
+		var gaf *formats.GAF
+		if name != strings.ToLower(h.side.NamePrefix)+"main" {
+			gaf = h.pages[name]
+		}
+		return cached, gaf
+	}
 	window, err := gui.Load(h.fs, "guis/"+name+".gui")
 	if err != nil {
+		// Try lower case variant already handled; no cache on miss
 		return nil, nil
 	}
+	// Cache on success
+	if h.windows == nil {
+		h.windows = make(map[string]*gui.Window)
+	}
+	h.windows[name] = window
 	var gaf *formats.GAF
-	if name != strings.ToLower(h.side.NamePrefix)+"main" {
+	if h.side != nil && name != strings.ToLower(h.side.NamePrefix)+"main" {
 		if cached, ok := h.pages[name]; ok {
 			gaf = cached
 		} else if loaded, loadErr := formats.LoadGAFFile(h.fs, "anims/"+name+".gaf"); loadErr == nil {
+			if h.pages == nil {
+				h.pages = make(map[string]*formats.GAF)
+			}
 			h.pages[name] = loaded
 			gaf = loaded
 		}

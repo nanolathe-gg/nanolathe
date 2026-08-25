@@ -515,6 +515,18 @@ The main-menu `EXIT` callback is a direct close transition. The separate
 `YESORNO.GUI` text `Close Windows CD Player?` belongs to frontend
 initialization cleanup, not to the main-menu quit button. [07 §5]
 
+#### The loading screen
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+The repainted composition, in the order it is drawn:
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
 #### Multiplayer
 
 The multiplayer family includes new-game setup, lounge/battleroom, second

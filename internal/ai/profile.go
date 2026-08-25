@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -379,4 +380,39 @@ func isNotFound(err error) bool {
 	// Use errors.Is via string fallback to avoid import cycle if not available,
 	// but we can check directly.
 	return strings.Contains(err.Error(), "file not found") || strings.Contains(err.Error(), "not found")
+}
+
+// NewManager constructs a per-player AI manager with explicit profile-load error handling [P0-07] ON-06 F-P0-007.
+// It loads ai/<profileName>.txt via LoadProfile (fallback ai/default.txt) and returns error if missing,
+// never silently producing a passive manager with nil Profile. The returned manager has ProfileLoaded milestone set at tick 0.
+// Caller must bind QueueBuildTyped before ticks; RNG ownership is via r param (nil allowed but disables manager-local draws with deterministic fallback).
+// isAlliance is the alliance test injected at construction; nil means same-owner-only [P0-07].
+func NewManager(player uint8, fs vfs.FSOps, profileName string, r *rng.Simulation, catalog *content.Catalog, surfaceMetal int32, isAlliance func(a, b uint8) bool) (*Manager, error) {
+	if fs == nil {
+		return nil, fmt.Errorf("ai: NewManager: nil VFS")
+	}
+	clean := strings.TrimSpace(profileName)
+	if clean == "" {
+		return nil, fmt.Errorf("ai: NewManager: empty profile name (missing selected profile) [P0-07]")
+	}
+	// Explicit profile-load with error surfacing [P0-07] F-P0-007.
+	prof, err := LoadProfile(fs, clean)
+	if err != nil {
+		return nil, fmt.Errorf("ai: NewManager: profile %q: %w [P0-07]", clean, err)
+	}
+	if prof == nil {
+		return nil, fmt.Errorf("ai: NewManager: profile %q: loaded nil profile [P0-07]", clean)
+	}
+	m := &Manager{
+		Player:       player,
+		Profile:      prof,
+		RNG:          r,
+		Catalog:      catalog,
+		SurfaceMetal: surfaceMetal,
+		IsAlliance:   isAlliance,
+	}
+	m.Strategic.Catalog = catalog
+	// Milestone ProfileLoaded observed at construction tick 0 [P0-07].
+	m.recordMilestone(MilestoneProfileLoaded, 0)
+	return m, nil
 }

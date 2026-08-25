@@ -36,6 +36,14 @@ func NewMission(path string, difficulty int) (*Session, error) {
 // nil terrain, empty catalog, or missing service. Fixtures must use
 // NewMissionForTest. [02 §5][03 §2.2][P0-16]
 func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int) (*Session, error) {
+	return NewMissionWithProgress(fs, cat, path, difficulty, nil)
+}
+
+// NewMissionWithProgress is NewMissionWithFS with a load observer, reporting
+// the same families the skirmish constructor does so one loading screen can be
+// driven from either entry point. A nil observer makes this exactly
+// NewMissionWithFS.
+func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int, report content.Progress) (*Session, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, fmt.Errorf("session: empty mission path")
@@ -43,7 +51,7 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 	if fs == nil {
 		fs = vfs.New()
 	}
-	cat, err := strictCatalog(fs, cat)
+	cat, err := strictCatalogWithProgress(fs, cat, report)
 	if err != nil {
 		return nil, err
 	}
@@ -77,10 +85,12 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 	if err != nil {
 		return nil, err
 	}
+	report.Report(FamilyTerrain, 100)
 	unitsWorld, err := newSlicedWorldWithCOB(cat, fs)
 	if err != nil {
 		return nil, err
 	}
+	report.Report(FamilyUnitWorld, 100)
 	s := &Session{
 		Catalog:  cat,
 		World:    terrain,
@@ -123,7 +133,9 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 	if err := BattleEntry(s, m, nil); err != nil {
 		return nil, err
 	}
+	report.Report(FamilyPlacement, 100)
 	ensureCOBForAll(s, fs)
+	report.Report(FamilyScripts, 100)
 	ensureMovementForAll(s)
 	publishVisibilityForAll(s)
 	// AI managers for computer players [P0-I12]

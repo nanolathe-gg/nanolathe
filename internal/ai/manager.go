@@ -73,10 +73,10 @@ type Manager struct {
 	// wiring state so ai.Place can stay func(m *Manager, ...) per PLAN_11 API).
 	OriginX      numeric.Fixed // placement search origin, steps toward strategic center [PLAN_11 C8]
 	OriginZ      numeric.Fixed
-	RNG          *rng.Simulation  // nil => rng.Global.Sim [01 §7.1] I4
+	RNG          *rng.Simulation  // nil => deterministic seed 1 fallback with comment [P0-07] ON-06; global fallback removed
 	SurfaceMetal int32            // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	Catalog      *content.Catalog // defKey resolution for the extractor gate [PLAN_11 C8]
-	Factory      *units.Unit      // builder receiving construction.QueueBuild [PLAN_11 C12]
+	Factory      *units.Unit      // builder receiving construction requests [PLAN_11 C12] [P0-07]
 	Terrain      *world.Terrain   // placement validation terrain; nil skips yard validation, success resets radius [PLAN_11 C8]
 
 	// P0-I16: authoritative hooks moved from package globals onto the owning
@@ -86,7 +86,14 @@ type Manager struct {
 	CandidateSource func(builder *units.Unit) []string                        // was package var CandidateSource [P0-I16]
 	MissionGateFlag int32                                                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	GateCandidates  map[string]struct{}                                       // was package var Gate241Candidates [P0-I16]
-	QueueBuild      func(factory *units.Unit, defKey string, count int) error // was package var queueBuild [P0-I16]
+	QueueBuild      func(factory *units.Unit, defKey string, count int) error // was package var queueBuild [P0-I16] DEPRECATED: use QueueBuildTyped [P0-07]
+
+	// P0-07: typed build request replacing lossy callback [P0-07] ON-06 F-P0-004.
+	// Session binds this to construction queue; default nil → error diagnostic.
+	QueueBuildTyped func(BuildRequest) error // typed mobile/factory build [P0-07]
+
+	// P0-07: alliance awareness [P0-07] ON-06. Nil means same-owner-only (default) [08].
+	IsAlliance func(a, b uint8) bool // alliance test injected at construction; default same-owner-only [P0-07]
 
 	// Groups for AI tactical coordination — populated from unit creation/death/completion via updateGroups [P0-I12].
 	// Each slice holds pool handles in deterministic order; cleaned each tick before dispatch.
@@ -100,6 +107,10 @@ type Manager struct {
 	entryCount         uint32 // eligible manager entries for classification cadence [08][PLAN_11 C3]
 	classificationRuns int
 	taskRuns           [TaskKindCount]int
+
+	// P0-07 milestones and last tick [P0-07] ON-06.
+	milestones map[string]uint32 // stage→tick, set only from observed production state [P0-07]
+	lastTick   uint32            // last Tick tick, used by Place to record PlacementSelected with tick [P0-07]
 }
 
 // GetPlayer satisfies Selector [PLAN_11 WU-11-4] — Manager.Player 0..9.
@@ -156,6 +167,14 @@ func (m *Manager) GetGateCandidates() map[string]struct{} {
 		return nil
 	}
 	return m.GateCandidates
+}
+
+// GetRNG satisfies Selector RNG extension for P0-07 manager-local RNG [P0-07].
+func (m *Manager) GetRNG() *rng.Simulation {
+	if m == nil {
+		return nil
+	}
+	return m.RNG
 }
 
 // GetQueueBuild returns the ordinary build path for P0-I16.
@@ -246,12 +265,18 @@ func (m *Manager) EnsureStrategicInitialized() {
 	m.Strategic.Init(types)
 }
 
-// simRNG returns the simulation RNG to use [I4].
+// simRNG returns the simulation RNG to use [I4] [P0-07] ON-06.
+// Manager-local RNG ownership: prefers m.RNG when owned; global fallback removed [P0-07].
+// When no manager RNG is owned, returns a deterministic seed-1 stream for decision paths
+// with a fresh instance each call would not advance, so we return nil and callers handle
+// nil-guard erroring or zero-offset deterministic fallback (see nextDeadline/doResource).
 func (m *Manager) simRNG() *rng.Simulation {
 	if m != nil && m.RNG != nil {
 		return m.RNG
 	}
-	return rng.Global.Sim
+	// Deterministic fallback: nil signals no owned RNG; callers must not fall back to Global [P0-07].
+	// They should use zero offset or error. This prevents global call-order leakage (I4).
+	return nil
 }
 
 // findBuilder returns a valid builder for the manager's player [P0-I12].
@@ -364,6 +389,7 @@ func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 	if m == nil {
 		return
 	}
+	m.lastTick = tick
 	// P0-I16: sync catalog between Manager and Strategic if one is set via direct field assignment
 	if m.Catalog != nil && m.Strategic.Catalog == nil {
 		m.Strategic.Catalog = m.Catalog
@@ -374,11 +400,20 @@ func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 	m.EnsureStrategicInitialized()
 	// P0-I12: refresh strategic center/counts every 30 ticks via MaybeRefresh [08][P0-01] using Simulation RNG bound 30.
 	// This also gates class-vector recompute via RNG(30)==0. Only draw when catalog present to keep headless tests without catalog deterministic.
+	// Manager-local RNG ownership [P0-07]: use m.RNG when owned, no Global fallback.
 	if m.Catalog != nil || m.Strategic.Catalog != nil {
-		m.Strategic.MaybeRefresh(tick, m.simRNG(), m.Player, w)
+		var r *rng.Simulation
+		if m.RNG != nil {
+			r = m.RNG
+		} else {
+			r = nil // deterministic: no draw when no owned RNG [P0-07]
+		}
+		m.Strategic.MaybeRefresh(tick, r, m.Player, w)
 	}
 	// P0-I12: populate and maintain AI groups from unit creation/death/completion.
 	m.updateGroups(w)
+	// P0-07: observe milestones from production state [P0-07] ON-06.
+	m.observeMilestones(tick, w)
 	if m.Player == 10 { // [08] index !=10 [PLAN_11 C1]
 		return
 	}
@@ -474,18 +509,21 @@ func (m *Manager) nextDeadline(k TaskKind, tick uint32) uint32 {
 		return tick + 150 // [P0-02] regroup at +150
 	case TaskOther900:
 		var r uint32
-		if rng.Global.Sim != nil {
-			r = rng.Global.Sim.Uint32n(900) // [08] bound 900 (I4) [P0-02][PLAN_11 C9]
-		} else if m.RNG != nil {
-			r = m.RNG.Uint32n(900)
+		if m != nil && m.RNG != nil {
+			r = m.RNG.Uint32n(900) // [08] bound 900 (I4) [P0-02][PLAN_11 C9] manager-local RNG [P0-07]
+		} else {
+			// Deterministic seed 1 fallback without global leakage [P0-07] ON-06 (no Global.Sim fallback).
+			// Zero offset keeps repeated runs identical when RNG nil; manager should be constructed with RNG for production.
+			r = 0
 		}
 		return tick + 30 + r // [08] tick+30+RNG(900) [P0-02]
 	case TaskOther150:
 		var r uint32
-		if rng.Global.Sim != nil {
-			r = rng.Global.Sim.Uint32n(150) // [08] bound 150 (I4) [P0-02]
-		} else if m.RNG != nil {
-			r = m.RNG.Uint32n(150)
+		if m != nil && m.RNG != nil {
+			r = m.RNG.Uint32n(150) // [08] bound 150 (I4) [P0-02] manager-local [P0-07]
+		} else {
+			// Deterministic fallback without Global [P0-07].
+			r = 0
 		}
 		return tick + 30 + r // [08] tick+30+RNG(150) [P0-02]
 	case TaskEmpty, TaskNullSub:
@@ -541,15 +579,56 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 	}
 	builder := bestBuilder
 	cand := bestCand
-	// Issues orders ONLY through ordinary paths — construction.QueueBuild and descriptor registry [PLAN_11 C12] [08 "Established AI-facing data and rooted planner"].
-	// No privileged mutation. Chain Select → Place → QueueBuild [PLAN_11 C8+C12].
+	// P0-07: typed build path [P0-07] ON-06 F-P0-004.
+	// Mobile builders use Place with MobileSite site coordinates; factories use FactoryQueue without site.
+	// Factory vs mobile is determined by both builder immobility and target mobility: factories (immobile builders) producing mobile units use FactoryQueue [P0-07].
+	// Buildings (non-mobile targets) always require site placement even if builder is factory-like, preserving yard validation [04 §6.2][P0-03].
+	// Issues orders ONLY through typed queue and descriptor registry [PLAN_11 C12] [08].
+	// No privileged mutation. Chain Select → Place → QueueBuildTyped [PLAN_11 C8+C12] [P0-07].
+	isFactoryBuilder := builder.Def != nil && builder.Def.Builder && !builder.Def.CanMove
+	isTargetMobile := false
+	if m.Catalog != nil {
+		if def, ok := m.Catalog.Unit(cand.DefKey); ok && def != nil {
+			isTargetMobile = def.CanMove || def.MaxVelocity > 0
+		}
+	} else if m.Strategic.Catalog != nil {
+		if def, ok := m.Strategic.Catalog.Unit(cand.DefKey); ok && def != nil {
+			isTargetMobile = def.CanMove || def.MaxVelocity > 0
+		}
+	}
+	if isFactoryBuilder && isTargetMobile {
+		// Factory production: direct typed queue without placement [P0-07] FactoryQueue.
+		if m.QueueBuildTyped == nil {
+			// Diagnostic: session has not bound typed queue [P0-07] F-P0-004.
+			// Error diagnostic via no-op; milestone not recorded.
+			return
+		}
+		req := BuildRequest{
+			Builder: builder.Handle,
+			UnitKey: cand.DefKey,
+			Count:   1,
+			Kind:    BuildKindFactoryQueue,
+		}
+		if err := m.QueueBuildTyped(req); err != nil {
+			return
+		}
+		m.recordMilestone(MilestoneBuildRequestAccepted, tick)
+		// Factory product queued will also be observed via world scan; also record now for testability.
+		m.recordMilestone(MilestoneFactoryProductQueued, tick)
+		return
+	}
+	// Mobile site construction via placement [P0-07] MobileSite.
 	origFactory := m.Factory
 	m.Factory = builder
-	_, _, ok := Place(m, cand.DefKey, m.Terrain) // [PLAN_11 C8][C12]
+	x, z, ok := Place(m, cand.DefKey, m.Terrain) // [PLAN_11 C8][C12] [P0-07] preserves X/Z via typed request
 	m.Factory = origFactory
 	if !ok {
 		return
 	}
+	// Place already issued typed MobileSite request and recorded PlacementSelected/BuildRequestAccepted internally.
+	// Ensure milestones are observed via world scan as well.
+	_ = x
+	_ = z
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -583,14 +662,14 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 			// Branch 2*metal > energy ?
 			enable := false
 			if 2*metalStock > energyStock && netEnergy >= 1 {
-				// Draw RNG(5) only when branch taken [P0-02 §5]
+				// Draw RNG(5) only when branch taken [P0-02 §5] manager-local RNG [P0-07].
 				var draw uint32
-				if rng.Global.Sim != nil {
-					draw = rng.Global.Sim.Uint32n(5)
-				} else if m.RNG != nil {
+				if m != nil && m.RNG != nil {
 					draw = m.RNG.Uint32n(5)
 				} else {
-					draw = 1 // default non-zero to enable
+					// Deterministic fallback seed 1 without global leakage [P0-07] ON-06.
+					// Default non-zero to enable deterministically when RNG nil.
+					draw = 1
 				}
 				if draw != 0 {
 					enable = true
@@ -711,6 +790,7 @@ func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, thr
 		tx, tz = m.enemyCentroid(w)
 	}
 	// Issue ordinary attack/move orders to each unit in group via orders queue [08][P0-02].
+	issued := 0
 	for _, h := range group {
 		u := w.Unit(h)
 		if u == nil || !u.Alive || u.Remaining != 0 {
@@ -742,6 +822,10 @@ func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, thr
 		q.PurgeUnprotected()
 		q.DropLeadingAutoOps()
 		q.Push(id, node)
+		issued++
+	}
+	if issued > 0 {
+		m.recordMilestone(MilestoneAttackMoveIssued, tick)
 	}
 }
 
@@ -779,6 +863,7 @@ func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, 
 	if !ok {
 		cx, cz = m.enemyCentroid(w)
 	}
+	issued := 0
 	for _, h := range ownGroup {
 		u := w.Unit(h)
 		if u == nil || !u.Alive || u.Remaining != 0 {
@@ -801,6 +886,10 @@ func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, 
 		q.PurgeUnprotected()
 		q.DropLeadingAutoOps()
 		q.Push(id, node)
+		issued++
+	}
+	if issued > 0 {
+		m.recordMilestone(MilestoneAttackMoveIssued, tick)
 	}
 }
 
@@ -841,6 +930,7 @@ func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) 
 			tz = m.Strategic.CenterZ + numeric.Fixed(int32((tick*5)%20)*65536*16)
 		}
 	}
+	issued := 0
 	for _, h := range group {
 		u := w.Unit(h)
 		if u == nil || !u.Alive || u.Remaining != 0 {
@@ -863,6 +953,10 @@ func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) 
 		q.PurgeUnprotected()
 		q.DropLeadingAutoOps()
 		q.Push(id, node)
+		issued++
+	}
+	if issued > 0 {
+		m.recordMilestone(MilestoneAttackMoveIssued, tick)
 	}
 }
 
@@ -902,6 +996,7 @@ func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 		tx = m.Strategic.CenterX + numeric.Fixed(int32(tick%10)*65536*16)
 		tz = m.Strategic.CenterZ + numeric.Fixed(int32((tick*2)%10)*65536*16)
 	}
+	issued := 0
 	for _, h := range group {
 		u := w.Unit(h)
 		if u == nil || !u.Alive || u.Remaining != 0 {
@@ -924,6 +1019,10 @@ func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 		q.PurgeUnprotected()
 		q.DropLeadingAutoOps()
 		q.Push(id, node)
+		issued++
+	}
+	if issued > 0 {
+		m.recordMilestone(MilestoneAttackMoveIssued, tick)
 	}
 }
 

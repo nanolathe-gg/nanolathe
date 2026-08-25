@@ -5,6 +5,7 @@ import (
 	"image/png"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
@@ -20,6 +21,7 @@ var menuShotModes = map[string]shellMode{
 	"mission":  modeMenuMission,
 	"map":      modeMenuMap,
 	"skirmish": modeMenuSkirmish,
+	"loading":  modeLoading,
 }
 
 // runShotMenu composes one frontend panel headless and writes it to a PNG.
@@ -63,7 +65,20 @@ func runShotMenu(opts Options, cs *contentSet, out *os.File) error {
 		shell.mapReturn = modeMenuSkirmish
 		shell.openMenu(modeMenuSkirmish)
 	}
-	shell.openMenu(mode)
+	if mode == modeLoading {
+		// Start the real load and sample the screen once a bar is partway, so
+		// the capture is the composition under load rather than an empty one.
+		shell.startBattleLoad(shell.setup.MapName)
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			if p := shell.loading; p == nil || partialLoadBar(p) {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	} else {
+		shell.openMenu(mode)
+	}
 	if cursors, cerr := client.LoadCursors(cs.fs); cerr == nil {
 		cl.SetCursors(cursors)
 		cursors.SetIndex(render.CursorNormal)
@@ -84,4 +99,15 @@ func runShotMenu(opts Options, cs *contentSet, out *os.File) error {
 	fmt.Fprintf(out, "nanolathe: shot-menu %s: %s %dx%d\n",
 		opts.Shot, opts.ShotMenu, img.Bounds().Dx(), img.Bounds().Dy())
 	return nil
+}
+
+// partialLoadBar reports whether any stage is under way but unfinished, which
+// is the interesting frame to capture.
+func partialLoadBar(l *loadingState) bool {
+	for i := range l.percent {
+		if p := l.percent[i].Load(); p > 0 && p < 100 {
+			return true
+		}
+	}
+	return false
 }

@@ -342,8 +342,9 @@ func CompileAIProfiles(fs vfs.FSOps) (map[string]*AIProfile, error) {
 		result[key] = prof
 	}
 	// Ensure default.txt exists — it is the fallback for mission aiprofile [08 "Computer-controlled players"].
+	// Explicit diagnostic for missing selected profile [P0-07] ON-06 F-P0-007: never silently produce passive manager.
 	if _, ok := result[CanonicalKey("default")]; !ok {
-		return nil, fmt.Errorf("content: ai/default.txt: not found")
+		return nil, fmt.Errorf("content: ai/default.txt: not found (missing selected AI profile fallback) [P0-07]")
 	}
 	return result, nil
 }

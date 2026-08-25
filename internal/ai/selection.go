@@ -92,6 +92,29 @@ func getGateCandidates(m Selector) map[string]struct{} {
 	return nil
 }
 
+func getSelectorRNG(m Selector) *rng.Simulation {
+	if m == nil {
+		return nil
+	}
+	// Prefer Manager concrete type with owned RNG [P0-07].
+	if mgr, ok := m.(*Manager); ok && mgr != nil && mgr.RNG != nil {
+		return mgr.RNG
+	}
+	// Also support Selector that exposes GetRNG (test fakes) [P0-07].
+	if gr, ok := m.(interface{ GetRNG() *rng.Simulation }); ok {
+		if r := gr.GetRNG(); r != nil {
+			return r
+		}
+	}
+	// Also support placementManager private getRNG (lowercase) via interface.
+	if gr, ok := m.(interface{ getRNG() *rng.Simulation }); ok {
+		if r := gr.getRNG(); r != nil {
+			return r
+		}
+	}
+	return nil
+}
+
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(T25): exact definition field identity and mission-mode interaction is blocked; placeholder logic: flag==1 && key in candidates [P0-I16].
 func hasGate241(candidateKey string, m Selector) bool {
@@ -363,7 +386,7 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 	}
 
 	// C9 bound census: cumulative total is the only variable bound in this file [PLAN 11 C9] [08].
-	// C7: cumulative weighted reservoir: ONE rng.Global.Sim draw of RNG(cumulative) yielding score/finalTotal; positive scores only [PLAN 11 C7] [08].
+	// C7: cumulative weighted reservoir: ONE manager-local RNG draw of RNG(cumulative) yielding score/finalTotal; positive scores only [PLAN 11 C7] [08] [P0-07] ON-06.
 	if len(positives) == 0 || total <= 0 {
 		return Candidate{}, false
 	}
@@ -371,12 +394,14 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 	if total < 2 {
 		return Candidate{DefKey: positives[0].key, Score: positives[0].score}, true
 	}
-	if rng.Global.Sim == nil {
-		// No global stream seeded; fall back to picking first positive (deterministic) to keep tests that do not seed from panicking.
+	rngStream := getSelectorRNG(m)
+	if rngStream == nil {
+		// Manager-local RNG not owned: deterministic seed 1 fallback without global leakage [P0-07] ON-06.
+		// Fall back to picking first positive deterministically to keep tests without RNG seeded from panicking.
 		return Candidate{DefKey: positives[0].key, Score: positives[0].score}, true
 	}
-	// Single draw [PLAN 11 C7]
-	draw := rng.Global.Sim.Uint32n(uint32(total)) // I4 call order is behavior [01 §7.1] [INVARIANTS I4]
+	// Single draw [PLAN 11 C7] manager-local [P0-07].
+	draw := rngStream.Uint32n(uint32(total)) // I4 call order is behavior [01 §7.1] [INVARIANTS I4]
 	// Walk cumulative intervals
 	var cum int32
 	for _, p := range positives {

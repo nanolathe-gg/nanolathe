@@ -97,16 +97,20 @@ func (in *InputState) pollEbiten() {
 	}
 	m.X = float32(cx)
 	m.Y = float32(cy)
-	for b, eb := range [4]ebiten.MouseButton{
-		ebiten.MouseButtonMiddle,
-		ebiten.MouseButtonLeft,
-		ebiten.MouseButtonMiddle,
-		ebiten.MouseButtonRight,
-	} {
-		if b == int(input.MouseButtonMiddle) {
-			continue
-		}
-		down := ebiten.IsMouseButtonPressed(eb)
+	// Fix middle-button polling [F-P0-003][F-P1-008]: previous table mapped
+	// MouseButtonNone to Middle and skipped Middle entirely. Correct mapping
+	// polls Left/Middle/Right via stable array indexed by MouseButton.
+	mappings := []struct {
+		btn input.MouseButton
+		eb  ebiten.MouseButton
+	}{
+		{input.MouseButtonLeft, ebiten.MouseButtonLeft},
+		{input.MouseButtonMiddle, ebiten.MouseButtonMiddle},
+		{input.MouseButtonRight, ebiten.MouseButtonRight},
+	}
+	for _, mp := range mappings {
+		b := int(mp.btn)
+		down := ebiten.IsMouseButtonPressed(mp.eb)
 		m.edges[b] = down && !m.buttons[b]
 		m.released[b] = !down && m.buttons[b]
 		m.buttons[b] = down
@@ -127,6 +131,70 @@ func (in *InputState) pollEbiten() {
 			k.held[key] = down
 		}
 	}
+}
+
+// --- Headless test injection helpers (presentation-only, never touch sim) ---
+
+// InjectMouseButton sets the held state for a button and synthesizes the
+// corresponding edge flags for the next handleInput tick. Used by headless
+// tests to simulate presses without an Ebitengine window [07 §8].
+func (m *MouseState) InjectMouseButton(btn input.MouseButton, down bool) {
+	if m == nil || btn >= input.MouseButton(4) {
+		return
+	}
+	b := int(btn)
+	prev := m.buttons[b]
+	m.edges[b] = down && !prev
+	m.released[b] = !down && prev
+	m.buttons[b] = down
+}
+
+// InjectMouseMove moves the cursor to x,y and marks moved [07 §8].
+func (m *MouseState) InjectMouseMove(x, y float32) {
+	if m == nil {
+		return
+	}
+	m.moved = m.X != x || m.Y != y
+	m.X, m.Y = x, y
+}
+
+// InjectWheel injects wheel deltas for the next tick (presentation-only zoom) [07 §10].
+func (m *MouseState) InjectWheel(dx, dy float32) {
+	if m == nil {
+		return
+	}
+	m.scrolled = dx != 0 || dy != 0
+	m.ScrollX = dx
+	m.ScrollY = dy
+}
+
+// InjectKey sets a key's held/edge state for the next tick.
+func (k *KeyboardState) InjectKey(key input.Key, down bool) {
+	if k == nil || key >= input.KeyCount {
+		return
+	}
+	prev := k.held[key]
+	k.edges[key] = down && !prev
+	k.held[key] = down
+}
+
+// ClearEdges resets per-frame edge flags without touching held state. Useful
+// between injected ticks in headless tests.
+func (m *MouseState) ClearEdges() {
+	if m == nil {
+		return
+	}
+	m.edges = [4]bool{}
+	m.released = [4]bool{}
+	m.scrolled = false
+	m.moved = false
+	m.ScrollX, m.ScrollY = 0, 0
+}
+func (k *KeyboardState) ClearEdges() {
+	if k == nil {
+		return
+	}
+	k.edges = [input.KeyCount]bool{}
 }
 
 // ebitenKey maps the platform-neutral vocabulary onto Ebitengine keys.

@@ -88,6 +88,14 @@ type Catalog struct {
 // pointer [03 §2.4] C13 and computes Catalog.Hash over canonical bytes including
 // defaults, independent of map iteration, identical across two runs (I1) [02 §5] C12.
 func Compile(fs vfs.FSOps) (*Catalog, error) {
+	return CompileWithProgress(fs, nil)
+}
+
+// CompileWithProgress is Compile with an observer. The observer is told when
+// each family finishes, and is told the running percentage inside the map
+// census, which is the one family whose cost is proportional to the install.
+// A nil observer makes this exactly Compile.
+func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("content: nil VFS")
 	}
@@ -102,25 +110,30 @@ func Compile(fs vfs.FSOps) (*Catalog, error) {
 		// fatal trio; propagate error so whole-install compile is error-free.
 		return nil, err
 	}
+	report.Report(FamilyWeapons, 100)
 	units, err := CompileUnits(fs)
 	if err != nil {
 		return nil, err
 	}
+	report.Report(FamilyUnits, 100)
 	features, err := CompileFeatures(fs)
 	if err != nil {
 		// Feature successor missing is fatal verbatim [GAP T14] C9.
 		return nil, err
 	}
+	report.Report(FamilyFeatures, 100)
 	movement, err := CompileMovement(fs)
 	if err != nil {
 		// MOVEINFO missing is fatal [02 §1] [SPEC_CONFLICTS SC2]; Validate also checks.
 		return nil, fmt.Errorf("content: catalog movement: %w", err)
 	}
+	report.Report(FamilyMovement, 100)
 	sides, err := CompileSides(fs)
 	if err != nil {
 		// SIDEDATA missing is fatal [02 §6] C8; missing font fatal [GAP T14].
 		return nil, fmt.Errorf("content: catalog sides: %w", err)
 	}
+	report.Report(FamilySides, 100)
 	soundData, err := CompileSounds(fs)
 	if err != nil {
 		// Sounds: gamedata/sound.tdf and gamedata/allsound.tdf [PLAN 02]; missing
@@ -139,13 +152,15 @@ func Compile(fs vfs.FSOps) (*Catalog, error) {
 	if soundData != nil {
 		aliases = soundData.Aliases
 	}
-	maps, err := CompileMaps(fs)
+	report.Report(FamilySounds, 100)
+	maps, err := compileMapsWithProgress(fs, report)
 	if err != nil {
 		// Maps header discovery [02 "Map files"]; retail has 275 each; allow empty
 		// on a minimal fixture but whole-install expects them.
 		// Keep error for strict whole-install compile; fixtures use individual compilers.
 		return nil, err
 	}
+	report.Report(FamilyMaps, 100)
 	aiProfiles, err := CompileAIProfiles(fs)
 	if err != nil {
 		// ai/*.txt 10 incl default.txt [PLAN 02]; missing default is fatal there.
@@ -166,6 +181,7 @@ func Compile(fs vfs.FSOps) (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
+	report.Report(FamilyAIProfiles, 100)
 
 	// Stage 2: link cross-references so enumeration order cannot leak into identity [02 §5] C1.
 	// weapon1..3 on a unit resolve only after all weapons compile.
@@ -175,6 +191,7 @@ func Compile(fs vfs.FSOps) (*Catalog, error) {
 	// gamedata/sidedata.tdf next to the sides. They must exist before the
 	// downloadable enforcement, which walks their button names after all unit
 	// definitions are compiled [02 "Unit record"].
+	report.Report(FamilyBattleTables, 100)
 	buildMenus, err := CompileBuildMenus(fs)
 	if err != nil {
 		return nil, err
@@ -184,7 +201,9 @@ func Compile(fs vfs.FSOps) (*Catalog, error) {
 		warnings = EnforceDownloadable(units, MenuButtonNames(buildMenus))
 	}
 	// Model sorting C13: sort model catalog case-insensitively before caching per-unit-type pointer [03 §2.4].
+	report.Report(FamilyBuildMenus, 100)
 	sortedModels, modelIndex := buildModelCatalog(units)
+	report.Report(FamilyModels, 100)
 
 	// Manifest: vfs.ManifestHash() for identity [PLAN 02].
 	manifest, _ := manifestHashFor(fs)

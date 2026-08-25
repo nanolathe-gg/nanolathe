@@ -134,8 +134,9 @@ func (m *Manager) isInAnyGroup(h pool.Handle) bool {
 
 // findEnemyTarget deterministically selects an enemy unit nearest strategic center.
 // If no enemy units, returns nil. Deterministic tie-break by handle ascending [I1].
+// Alliance-aware: skips allied owners via IsAlliance func [P0-07] ON-06.
 func (m *Manager) findEnemyTarget(w *units.World) *units.Unit {
-	if w == nil {
+	if w == nil || m == nil {
 		return nil
 	}
 	var best *units.Unit
@@ -144,7 +145,7 @@ func (m *Manager) findEnemyTarget(w *units.World) *units.Unit {
 		if u == nil || !u.Alive || u.Remaining != 0 {
 			continue
 		}
-		if int(u.Owner) == int(m.Player) {
+		if m.isAllied(u.Owner) {
 			continue
 		}
 		if u.Def == nil {

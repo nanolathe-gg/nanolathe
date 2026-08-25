@@ -90,6 +90,9 @@ type Client struct {
 	models    map[string]*unitModel
 	texIndex  map[string]texRef
 	animClock int // texture-animation clock in sim frames
+	// model diagnostics: structured fallback emitted once per unit, not per frame [ON-08].
+	modelErrors    map[string]error    // model name -> last load error (presentation-only)
+	modelFallbacks map[uint16]struct{} // unit Slot -> logged fallback diagnostic
 
 	// Software cursor, drawn last over the composed surface [07 §8].
 	cursors *Cursors
@@ -124,12 +127,16 @@ func New(opts Options) (*Client, error) {
 		buf = &snapshot.Buffer{}
 	}
 	c := &Client{
-		opts:    opts,
-		buffer:  buf,
-		width:   w,
-		height:  h,
-		indexed: make([]uint8, w*h),
-		rgba:    make([]byte, w*h*4),
+		opts:           opts,
+		buffer:         buf,
+		width:          w,
+		height:         h,
+		indexed:        make([]uint8, w*h),
+		rgba:           make([]byte, w*h*4),
+		models:         map[string]*unitModel{},
+		modelErrors:    map[string]error{},
+		modelFallbacks: map[uint16]struct{}{},
+		texIndex:       map[string]texRef{},
 	}
 	c.in = *newInputState()
 	// Fallback palette: grayscale base and identity logical table. This keeps
@@ -185,6 +192,8 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.modelFS = fs
 	c.models = map[string]*unitModel{}
 	c.texIndex = map[string]texRef{}
+	c.modelErrors = map[string]error{}
+	c.modelFallbacks = map[uint16]struct{}{}
 	c.buildTextureIndex()
 }
 

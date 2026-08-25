@@ -1,0 +1,521 @@
+package client
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"fmt"
+	"hash/crc32"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/snapshot"
+)
+
+type pieceInfo struct {
+	name      string
+	parent    int
+	translate [3]float64
+}
+
+type syntheticTri struct {
+	piece     int
+	pieceName string
+	color     uint8
+	order     int
+	c         [3]modelCorner
+	vkey      [3]int64
+}
+
+// helper to make a synthetic model with specified pieces and triangles.
+// pieces: slice of pieceInfo, tris: slice of syntheticTri already with local corners.
+func syntheticModel(pieces []pieceInfo, tris []syntheticTri, root int) *unitModel {
+	um := &unitModel{
+		pieces:      make([]pieceModel, len(pieces)),
+		pieceByName: map[string]int{},
+	}
+	for i, p := range pieces {
+		pm := &um.pieces[i]
+		pm.name = p.name
+		pm.parent = p.parent
+		pm.translate = [3]numeric.Fixed{numeric.Fixed(int64(p.translate[0] * 65536)), numeric.Fixed(int64(p.translate[1] * 65536)), numeric.Fixed(int64(p.translate[2] * 65536))}
+		if p.name != "" {
+			um.pieceByName[strings.ToLower(p.name)] = i
+		}
+	}
+	// Build children lists.
+	for i := range um.pieces {
+		um.pieces[i].children = nil
+	}
+	for i, p := range um.pieces {
+		if p.parent >= 0 && p.parent < len(um.pieces) {
+			um.pieces[p.parent].children = append(um.pieces[p.parent].children, i)
+		}
+	}
+	_ = root
+	// Convert modelTri list into per-piece vertices + prims.
+	// Each tri contributes 3 unique vertices to its piece.
+	for _, tri := range tris {
+		pi := tri.piece
+		if pi < 0 || pi >= len(um.pieces) {
+			continue
+		}
+		piece := &um.pieces[pi]
+		base := len(piece.vertices)
+		for k := 0; k < 3; k++ {
+			c := tri.c[k]
+			x := numeric.Fixed(int64(c.x * 65536))
+			y := numeric.Fixed(int64(c.y * 65536))
+			z := numeric.Fixed(int64(c.z * 65536))
+			piece.vertices = append(piece.vertices, [3]numeric.Fixed{x, y, z})
+		}
+		// Create a primitive with 3 indices forming one triangle (fan).
+		// For flat shading test we need hasTex=false; but flat only quads would be rejected if not tex.
+		// So mark hasTex=true with a dummy texture? Instead we ensure n==4 path not taken: test uses flat color 42 etc.
+		// The new draw rejects flat non-quads (n !=4). To allow single triangles for test, force hasTex=true with no actual texture but pass filter.
+		// Better: create quad by duplicating third vertex to make 4 indices where last duplicates first? No.
+		// Instead create a quad primitive from triangle: indices [base, base+1, base+2, base+2] (degenerate quad) or make hasTex=true with order.
+		// Simpler: create a prim with hasTex=false but patch draw to allow triangles for tests? Instead make prim with 4 indices forming quad covering triangle area twice.
+		// For test purposes, we create a 3-index prim and patch piece.prims handling to allow it via hasTex=true path where any n>=3 allowed.
+		// Use hasTex=false with 3 indices will be skipped (flat only quads). So we make hasTex true and rely on flat color fallback.
+		// But hasTex true without texIndex will fallback to gray (0xd1) not desired color.
+		// Instead we directly create a 4-vertex quad that approximates triangle: add a duplicate vertex near third.
+		// We'll store as 4 indices: 0,1,2,0 (last duplicate) to satisfy n==4 flat path.
+		// That will draw two triangles covering similar area, which is fine for pixel presence tests.
+		idx0 := uint16(base)
+		idx1 := uint16(base + 1)
+		idx2 := uint16(base + 2)
+		// duplicate idx0 as fourth to make quad fan (0,1,2) and (0,2,3) where 3==0 degenerate but second tri is line.
+		// Better duplicate idx2 as fourth: quad (0,1,2,2) gives one tri + degenerate.
+		piece.prims = append(piece.prims, primModel{
+			color:   tri.color,
+			indices: []uint16{idx0, idx1, idx2, idx2},
+			hasTex:  false,
+			order:   tri.order,
+		})
+	}
+	return um
+}
+
+// newTestClient creates a 640x480 headless client with camera at origin.
+func newTestClient(t *testing.T) *Client {
+	t.Helper()
+	c, err := New(Options{Width: 640, Height: 480, Headless: true})
+	if err != nil {
+		t.Fatalf("New client: %v", err)
+	}
+	c.cam = &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: 4096, MapH: 4096}
+	// Ensure palette shade not needed; use default.
+	c.indexed = make([]uint8, 640*480)
+	return c
+}
+
+// clearIndexed zeros the framebuffer.
+func clearIndexed(c *Client) {
+	for i := range c.indexed {
+		c.indexed[i] = 0
+	}
+}
+
+// hashIndexed returns crc32 of indexed buffer for comparison.
+func hashIndexed(c *Client) uint32 {
+	return crc32.ChecksumIEEE(c.indexed)
+}
+
+// makeTriangle creates a syntheticTri for piece with local corners and color.
+func makeTriangle(piece int, name string, corners [3][3]float64, color uint8, order int) syntheticTri {
+	var tri syntheticTri
+	tri.piece = piece
+	tri.pieceName = name
+	tri.color = color
+	tri.order = order
+	for k := 0; k < 3; k++ {
+		tri.c[k] = modelCorner{x: corners[k][0], y: corners[k][1], z: corners[k][2], u: 0, v: 0}
+		// Use non-zero vkey to avoid row sharing issues; row will be 0.
+		tri.vkey[k] = int64(piece)<<32 | int64(k)
+	}
+	// rows already zero (shade identity not needed for test).
+	return tri
+}
+
+// TestPieceParentChildComposition verifies that parent transform composes child [03 §2.4] C21.
+// Child authored translation (10,0,5) plus script lane (5,0,2) should place child's triangle at (15,0,7) world offset from unit origin.
+func TestPieceParentChildComposition(t *testing.T) {
+	c := newTestClient(t)
+	pieces := []pieceInfo{
+		{name: "base", parent: -1, translate: [3]float64{0, 0, 0}},
+		{name: "turret", parent: 0, translate: [3]float64{10, 0, 5}},
+	}
+	// Child triangle at local origin, base has no triangle (so we only see child).
+	triTurret := makeTriangle(1, "turret", [3][3]float64{{0, 0, 0}, {4, 0, 0}, {0, 0, 4}}, 42, 0)
+	um := syntheticModel(pieces, []syntheticTri{triTurret}, 0)
+	c.models["syn_parent"] = um
+	// Snapshot with script translation (5,0,2) on turret.
+	view := snapshot.UnitView{
+		Slot:  1,
+		Owner: 0,
+		X:     0,
+		Z:     0,
+		Y:     0,
+		Model: "syn_parent",
+		Pieces: []snapshot.PieceView{
+			{Index: 0, Name: "base"},
+			{Index: 1, Name: "turret", Tx: numeric.Fixed(5 * 65536), Tz: numeric.Fixed(2 * 65536)},
+		},
+	}
+	clearIndexed(c)
+	sx, sy := c.cam.WorldToScreen(view.X, view.Y, view.Z)
+	// drawUnitModel projects around unit position; we expect child's triangle to be drawn offset.
+	// Instead of trusting sx,sy, we call drawUnitModel with lerped view at 0,0.
+	// Unit at 0,0 => screen origin is camera.OriginX/Y.
+	if !c.drawUnitModel(view, sx, sy) {
+		t.Fatalf("drawUnitModel failed")
+	}
+	// Expected world position of child's local origin after composition: authored (10,0,5) + script (5,0,2) = (15,0,7).
+	// So triangle covering (15,0,7) - (19,0,7) - (15,0,11) should be visible.
+	// Screen of (15,0,7): px = 15 + 128 = 143, py = 7 - 0 +32 =39 (wy=0).
+	// Check that pixel at expected center has color 42.
+	// Find bounding box of tri to locate a pixel that must be inside.
+	// We sample a point inside triangle: average of vertices after transform: ( (15+19+15)/3≈16.3, (7+7+11)/3≈8.3) -> screen (144,40).
+	found := false
+	// Search framebuffer for color 42 to ensure something was drawn.
+	for _, b := range c.indexed {
+		if b == 42 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("parent-child composition: expected color 42 not found in framebuffer; composition may have failed")
+	}
+	// Now test that without script translation, the triangle is elsewhere.
+	clearIndexed(c)
+	view2 := snapshot.UnitView{
+		Slot: view.Slot, Owner: view.Owner, X: view.X, Y: view.Y, Z: view.Z, Model: view.Model,
+		Pieces: []snapshot.PieceView{
+			{Index: 0, Name: "base"},
+			{Index: 1, Name: "turret", Tx: 0, Tz: 0},
+		},
+	}
+	sx2, sy2 := c.cam.WorldToScreen(view2.X, view2.Y, view2.Z)
+	if !c.drawUnitModel(view2, sx2, sy2) {
+		t.Fatalf("drawUnitModel second failed")
+	}
+	h1 := hashIndexed(c) // after second draw with 0 script
+	// Need first hash again: redraw first.
+	clearIndexed(c)
+	c.drawUnitModel(view, sx, sy)
+	hScript := hashIndexed(c)
+	if hScript == h1 {
+		t.Fatalf("parent-child translation via script lane did not change framebuffer: hashes equal %d", hScript)
+	}
+	// Also verify authored translation alone is present: with zero script, triangle at (10,5) -> screen (138,37) should have color.
+	clearIndexed(c)
+	c.drawUnitModel(view2, sx2, sy2)
+	found2 := false
+	for _, b := range c.indexed {
+		if b == 42 {
+			found2 = true
+			break
+		}
+	}
+	if !found2 {
+		t.Fatalf("authored translation alone should still draw triangle")
+	}
+}
+
+// TestHiddenPieceAbsent verifies hidden pieces are not rasterized [04 §4.3][03 §2.4].
+func TestHiddenPieceAbsent(t *testing.T) {
+	c := newTestClient(t)
+	pieces := []pieceInfo{
+		{name: "base", parent: -1, translate: [3]float64{0, 0, 0}},
+		{name: "turret", parent: 0, translate: [3]float64{0, 0, 0}},
+	}
+	// Two distinct triangles at different screen locations (non-overlapping) with different colors.
+	triBase := makeTriangle(0, "base", [3][3]float64{{-10, 0, -10}, {-5, 0, -10}, {-10, 0, -5}}, 11, 0)
+	triTurret := makeTriangle(1, "turret", [3][3]float64{{10, 0, 10}, {15, 0, 10}, {10, 0, 15}}, 22, 1)
+	um := syntheticModel(pieces, []syntheticTri{triBase, triTurret}, 0)
+	c.models["syn_hidden"] = um
+	view := snapshot.UnitView{
+		Slot: 2, Owner: 0, X: 0, Y: 0, Z: 0, Model: "syn_hidden",
+		Pieces: []snapshot.PieceView{
+			{Index: 0, Name: "base", Hidden: false},
+			{Index: 1, Name: "turret", Hidden: true}, // hidden
+		},
+	}
+	clearIndexed(c)
+	sx, sy := c.cam.WorldToScreen(view.X, view.Y, view.Z)
+	c.drawUnitModel(view, sx, sy)
+	// Count colors.
+	count11, count22 := 0, 0
+	for _, b := range c.indexed {
+		if b == 11 {
+			count11++
+		}
+		if b == 22 {
+			count22++
+		}
+	}
+	if count11 == 0 {
+		t.Fatalf("base piece should be visible, color 11 not found")
+	}
+	if count22 != 0 {
+		t.Fatalf("hidden turret piece should not be rasterized, color 22 found %d pixels", count22)
+	}
+	// Also test child of hidden parent is hidden: make turret child of hidden base? Already turret parent base but base visible; hide base should hide turret too even if turret not hidden.
+	view2 := snapshot.UnitView{
+		Slot: view.Slot, Owner: view.Owner, X: view.X, Y: view.Y, Z: view.Z, Model: view.Model,
+		Pieces: []snapshot.PieceView{
+			{Index: 0, Name: "base", Hidden: true},
+			{Index: 1, Name: "turret", Hidden: false},
+		},
+	}
+	clearIndexed(c)
+	c.drawUnitModel(view2, sx, sy)
+	count11, count22 = 0, 0
+	for _, b := range c.indexed {
+		if b == 11 {
+			count11++
+		}
+		if b == 22 {
+			count22++
+		}
+	}
+	if count11 != 0 {
+		t.Fatalf("hidden parent base should hide its own tris, found %d", count11)
+	}
+	if count22 != 0 {
+		t.Fatalf("child of hidden parent should also be hidden, found turret %d", count22)
+	}
+}
+
+// TestFlareFlashPolicy verifies that flare/flash named pieces follow Hidden state, not silent drop [fmt 3do "Piece naming conventions"].
+func TestFlareFlashPolicy(t *testing.T) {
+	c := newTestClient(t)
+	pieces := []pieceInfo{
+		{name: "base", parent: -1, translate: [3]float64{0, 0, 0}},
+		{name: "flare", parent: 0, translate: [3]float64{5, 0, 0}},
+	}
+	triBase := makeTriangle(0, "base", [3][3]float64{{0, 0, 0}, {4, 0, 0}, {0, 0, 4}}, 33, 0)
+	triFlare := makeTriangle(1, "flare", [3][3]float64{{0, 0, 0}, {2, 0, 0}, {0, 0, 2}}, 44, 1)
+	um := syntheticModel(pieces, []syntheticTri{triBase, triFlare}, 0)
+	c.models["syn_flare"] = um
+	viewVisible := snapshot.UnitView{
+		Slot: 3, Owner: 0, X: 0, Y: 0, Z: 0, Model: "syn_flare",
+		Pieces: []snapshot.PieceView{
+			{Index: 0, Name: "base", Hidden: false},
+			{Index: 1, Name: "flare", Hidden: false},
+		},
+	}
+	clearIndexed(c)
+	sx, sy := c.cam.WorldToScreen(viewVisible.X, viewVisible.Y, viewVisible.Z)
+	c.drawUnitModel(viewVisible, sx, sy)
+	hasFlare := false
+	for _, b := range c.indexed {
+		if b == 44 {
+			hasFlare = true
+			break
+		}
+	}
+	if !hasFlare {
+		t.Fatalf("flare piece with Hidden=false should be rasterized; no flare color found (policy requires no silent drop)")
+	}
+	viewHidden := snapshot.UnitView{
+		Slot: viewVisible.Slot, Owner: viewVisible.Owner, X: viewVisible.X, Y: viewVisible.Y, Z: viewVisible.Z, Model: viewVisible.Model,
+		Pieces: []snapshot.PieceView{
+			{Index: 0, Name: "base", Hidden: false},
+			{Index: 1, Name: "flare", Hidden: true},
+		},
+	}
+	clearIndexed(c)
+	c.drawUnitModel(viewHidden, sx, sy)
+	hasFlare = false
+	for _, b := range c.indexed {
+		if b == 44 {
+			hasFlare = true
+			break
+		}
+	}
+	if hasFlare {
+		t.Fatalf("flare piece with Hidden=true should not be rasterized")
+	}
+}
+
+// TestTurretRotationChangesPixels verifies that turret rotation changes rendered pixels while unit frame unchanged [03 §2.4] C21.
+// Uses framebuffer hash compare.
+func TestTurretRotationChangesPixels(t *testing.T) {
+	c := newTestClient(t)
+	pieces := []pieceInfo{
+		{name: "base", parent: -1, translate: [3]float64{0, 0, 0}},
+		{name: "turret", parent: 0, translate: [3]float64{0, 0, 0}},
+	}
+	// Asymmetric triangle: points (0,0,0),(10,0,0),(0,0,2) – rotation 90deg about Y will swap X->Z.
+	tri := makeTriangle(1, "turret", [3][3]float64{{0, 0, 0}, {10, 0, 0}, {0, 0, 2}}, 55, 0)
+	// Also base triangle to ensure frame still considered but not moved.
+	triBase := makeTriangle(0, "base", [3][3]float64{{-5, 0, -5}, {-1, 0, -5}, {-5, 0, -1}}, 66, 1)
+	um := syntheticModel(pieces, []syntheticTri{tri, triBase}, 0)
+	c.models["syn_rot"] = um
+	view0 := snapshot.UnitView{
+		Slot: 4, Owner: 0, X: 0, Y: 0, Z: 0, Model: "syn_rot",
+		Pieces: []snapshot.PieceView{
+			{Index: 0, Name: "base"},
+			{Index: 1, Name: "turret", RotY: 0},
+		},
+	}
+	view90 := snapshot.UnitView{
+		Slot: 4, Owner: 0, X: 0, Y: 0, Z: 0, Model: "syn_rot",
+		Pieces: []snapshot.PieceView{
+			{Index: 0, Name: "base"},
+			{Index: 1, Name: "turret", RotY: 16384}, // 90 deg [03 §2.4] 65536 per circle
+		},
+	}
+	clearIndexed(c)
+	sx, sy := c.cam.WorldToScreen(view0.X, view0.Y, view0.Z)
+	c.drawUnitModel(view0, sx, sy)
+	hash0 := hashIndexed(c)
+	// also capture sha for debugging
+	sha0 := sha256.Sum256(c.indexed)
+	clearIndexed(c)
+	sx2, sy2 := c.cam.WorldToScreen(view90.X, view90.Y, view90.Z)
+	c.drawUnitModel(view90, sx2, sy2)
+	hash90 := hashIndexed(c)
+	sha90 := sha256.Sum256(c.indexed)
+	if hash0 == hash90 {
+		t.Fatalf("turret rotation should change framebuffer hash: both %d sha %x vs %x", hash0, sha0, sha90)
+	}
+	// Verify unit position unchanged: X/Z same, so frame (unit position) unchanged but pixels changed proves piece rotation works.
+	if view0.X != view90.X || view0.Z != view90.Z {
+		t.Fatalf("unit frame position should be unchanged between rotations")
+	}
+}
+
+// TestSameSnapshotIdenticalFramebuffer verifies deterministic rendering: same snapshot yields identical indexed framebuffer [I1].
+func TestSameSnapshotIdenticalFramebuffer(t *testing.T) {
+	c1 := newTestClient(t)
+	c2 := newTestClient(t)
+	pieces := []pieceInfo{
+		{name: "base", parent: -1, translate: [3]float64{0, 0, 0}},
+	}
+	tri := makeTriangle(0, "base", [3][3]float64{{0, 0, 0}, {6, 0, 0}, {0, 0, 6}}, 77, 0)
+	um := syntheticModel(pieces, []syntheticTri{tri}, 0)
+	c1.models["syn_ident"] = um
+	c2.models["syn_ident"] = um
+	view := snapshot.UnitView{
+		Slot: 5, Owner: 1, X: numeric.Fixed(100 * 65536), Y: 0, Z: numeric.Fixed(50 * 65536), Model: "syn_ident",
+		Pieces:  []snapshot.PieceView{{Index: 0, Name: "base", RotY: 12345, Tx: numeric.Fixed(2 * 65536)}},
+		Heading: 1000, Pitch: 2000, Bank: 3000,
+	}
+	// Draw with c1
+	clearIndexed(c1)
+	sx, sy := c1.cam.WorldToScreen(view.X, view.Y, view.Z)
+	c1.drawUnitModel(view, sx, sy)
+	hash1 := hashIndexed(c1)
+	// Draw with c2
+	clearIndexed(c2)
+	sx2, sy2 := c2.cam.WorldToScreen(view.X, view.Y, view.Z)
+	c2.drawUnitModel(view, sx2, sy2)
+	hash2 := hashIndexed(c2)
+	if hash1 != hash2 {
+		t.Fatalf("same snapshot should yield identical framebuffer: %d vs %d", hash1, hash2)
+	}
+	if !bytes.Equal(c1.indexed, c2.indexed) {
+		t.Fatalf("indexed buffers differ despite same snapshot")
+	}
+	// Also draw again on c1 after clear should be identical.
+	clearIndexed(c1)
+	c1.drawUnitModel(view, sx, sy)
+	hash1b := hashIndexed(c1)
+	if hash1 != hash1b {
+		t.Fatalf("second draw on same client should be identical: %d vs %d", hash1, hash1b)
+	}
+}
+
+// TestFallbackDiagnosticEmittedOnce verifies model-load fallback diagnostic emitted once per unit (structured), not per frame spam [ON-08].
+func TestFallbackDiagnosticEmittedOnce(t *testing.T) {
+	c := newTestClient(t)
+	// Do not set modelFS, use missing model name.
+	view := snapshot.UnitView{Slot: 99, Owner: 0, X: 0, Y: 0, Z: 0, Model: "missing_model_xyz"}
+	// Capture stderr.
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	// Ensure maps initialized.
+	if c.modelFallbacks == nil {
+		c.modelFallbacks = map[uint16]struct{}{}
+	}
+	if c.modelErrors == nil {
+		c.modelErrors = map[string]error{}
+	}
+	c.modelErrors["missing_model_xyz"] = fmt.Errorf("not found")
+	sx, sy := int32(0), int32(0)
+	// Call drawUnitModel twice for same slot.
+	c.drawUnitModel(view, sx, sy)
+	c.drawUnitModel(view, sx, sy)
+	// Different slot with same missing model should log again (once per unit).
+	view2 := view
+	view2.Slot = 100
+	c.drawUnitModel(view2, sx, sy)
+	c.drawUnitModel(view2, sx, sy)
+	w.Close()
+	os.Stderr = oldStderr
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	out := buf.String()
+	// Count occurrences of slot 99 and 100.
+	count99 := strings.Count(out, "\"slot\":99")
+	count100 := strings.Count(out, "\"slot\":100")
+	if count99 != 1 {
+		t.Fatalf("fallback diagnostic for slot 99 should be emitted once, got %d in %q", count99, out)
+	}
+	if count100 != 1 {
+		t.Fatalf("fallback diagnostic for slot 100 should be emitted once, got %d in %q", count100, out)
+	}
+	// Ensure structured JSON-like contains model field.
+	if !strings.Contains(out, "\"model\":\"missing_model_xyz\"") {
+		t.Fatalf("structured diagnostic should contain model field, got %q", out)
+	}
+	if !strings.Contains(out, "\"level\":\"warn\"") {
+		t.Fatalf("structured diagnostic should contain level warn, got %q", out)
+	}
+}
+
+// TestSelectionPickingStable ensures selection picking comment: picking uses footprint, not animated extents.
+// This is a light check that ApplyDragSelectionWorld still works with piece transforms present.
+// We verify that unit's screen position for selection is still via UnitView.X/Z, not piece offset.
+func TestSelectionPickingStable(t *testing.T) {
+	c := newTestClient(t)
+	pieces := []pieceInfo{
+		{name: "base", parent: -1, translate: [3]float64{0, 0, 0}},
+		{name: "turret", parent: 0, translate: [3]float64{100, 0, 0}}, // far offset would move visual but not selection center
+	}
+	tri := makeTriangle(1, "turret", [3][3]float64{{0, 0, 0}, {4, 0, 0}, {0, 0, 4}}, 88, 0)
+	um := syntheticModel(pieces, []syntheticTri{tri}, 0)
+	c.models["syn_pick"] = um
+	view := snapshot.UnitView{
+		Slot: 6, Owner: 0, X: numeric.Fixed(50 * 65536), Y: 0, Z: numeric.Fixed(50 * 65536), Model: "syn_pick", FootX: 2, FootZ: 2,
+		Pieces: []snapshot.PieceView{
+			{Index: 0, Name: "base"},
+			{Index: 1, Name: "turret", Tx: numeric.Fixed(100 * 65536)}, // visual far but selection should stay at unit center
+		},
+	}
+	// Selection rect centered at unit's projected position should still select it, even though piece is far.
+	sx, sy := c.cam.WorldToScreen(view.X, view.Y, view.Z)
+	rect := Rect{MinX: sx - 2, MaxX: sx + 2, MinY: sy - 2, MaxY: sy + 2}
+	if !rect.Contains(sx, sy) {
+		t.Fatalf("rect should contain unit center")
+	}
+	// Simulate picking logic: IsUnitViewInRect uses UnitViewToScreen which is based on X/Z only, not piece offset.
+	if !IsUnitViewInRect(c.cam, view, rect) {
+		t.Fatalf("picking should be stable on footprint/model bound, not animated piece extents; IsUnitViewInRect failed")
+	}
+	// Also verify that turret's offset does not change IsUnitViewInRect result (it still uses unit X/Z).
+	viewFar := view
+	viewFar.Pieces[1].Tx = numeric.Fixed(500 * 65536)
+	if !IsUnitViewInRect(c.cam, viewFar, rect) {
+		t.Fatalf("far turret offset should not affect picking rect containment")
+	}
+	_ = um
+	_ = view
+}

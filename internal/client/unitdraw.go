@@ -377,6 +377,39 @@ func (c *Client) UIBlit(f *formats.GAFFrame, x, y int) {
 // its rasterizer subtracts those fields internally before writing pixels
 // [fmt gaf][07 §6]. Frontend .GUI controls deliberately use UIBlit instead:
 // their rectangles are the placement contract [07 §4].
+// UIBlitLit stamps a GAF frame with every opaque pixel remapped through one
+// row of the PALETTE.LHT brightening table. This is retail's shaded glyph
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// for a non-negative level; the loading screen draws a stage's label through
+// it so the label flashes as the stage completes. Level 0 is UIBlit
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (c *Client) UIBlitLit(f *formats.GAFFrame, x, y int, pal *palette.Tables, level int) {
+	if f == nil {
+		return
+	}
+	if pal == nil || level <= 0 {
+		c.UIBlit(f, x, y)
+		return
+	}
+	for row := 0; row < int(f.Height); row++ {
+		py := y + row
+		if py < 0 || py >= c.height {
+			continue
+		}
+		for col := 0; col < int(f.Width); col++ {
+			px := x + col
+			if px < 0 || px >= c.width {
+				continue
+			}
+			b, ok := f.At(col, row)
+			if !ok {
+				continue
+			}
+			c.indexed[py*c.width+px] = pal.LightLookup(level, b)
+		}
+	}
+}
+
 func (c *Client) UIBlitAnchor(f *formats.GAFFrame, x, y int) {
 	if f == nil {
 		return

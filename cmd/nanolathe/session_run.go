@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -73,12 +74,27 @@ func printSessionSummary(sess *session.Session, out *os.File) {
 	}
 }
 
+// headlessJSON is the structured JSON result for --until-result [ON-07].
+type headlessJSON struct {
+	WinnerTeam *int              `json:"winner_team"`
+	Reason     string            `json:"reason"`
+	Tick       uint32            `json:"tick"`
+	Draw       bool              `json:"draw"`
+	ArmedTick  *uint32           `json:"armed_tick,omitempty"`
+	Milestones map[string]uint32 `json:"milestones,omitempty"`
+}
+
 // runSessionHeadless runs the real integrated session for --ticks sub-ticks,
-// prints the deterministic summary, and honors --save.
+// prints the deterministic summary, and honors --save. When --until-result is
+// set it runs until the terminal skirmish result becomes visible via EndLatch
+// [P1-01 §2.2] and emits structured JSON [ON-07].
 func runSessionHeadless(opts Options, cs *contentSet, out *os.File) error {
 	sess, _, err := newSessionFor(opts, cs)
 	if err != nil {
 		return err
+	}
+	if opts.UntilResult {
+		return runUntilResult(sess, opts, out)
 	}
 	stepTicks(sess, opts.Ticks)
 	printSessionSummary(sess, out)
@@ -88,6 +104,139 @@ func runSessionHeadless(opts Options, cs *contentSet, out *os.File) error {
 		}
 		fmt.Fprintf(out, "saved: %s\n", opts.Save)
 	}
+	return nil
+}
+
+// runUntilResult runs until the authoritative result is visible or MaxTick guard fires [ON-07].
+func runUntilResult(sess *session.Session, opts Options, out *os.File) error {
+	maxTick := opts.MaxTick
+	// When MaxTick is 0 and Ticks is set, use Ticks as guard for convenience.
+	if maxTick <= 0 && opts.Ticks > 0 {
+		maxTick = opts.Ticks
+	}
+	// Hard safety cap when no guard is set to avoid infinite loop in CI.
+	const hardCap = 100000
+	if maxTick <= 0 {
+		maxTick = hardCap
+	}
+	// Loop driving the SP clock. Step anchors on first call so scaledNow=i gives ~1 tick.
+	for iter := 0; iter < maxTick+5000; iter++ {
+		// Check guard before stepping: GlobalTick is authoritative [01 §4.4].
+		if sess.Clock != nil && int(sess.Clock.GlobalTick) >= maxTick {
+			res := sess.GetResult()
+			// Emit JSON timeout
+			j := headlessJSON{
+				Reason: "max_tick",
+				Tick:   sess.Clock.GlobalTick,
+				Draw:   false,
+			}
+			if res.Ended {
+				// If result already ended but we hit guard exactly, treat as success.
+				return emitResultJSON(res, out, sess)
+			}
+			b, _ := json.Marshal(j)
+			fmt.Fprintln(out, string(b))
+			return fmt.Errorf("headless: max-tick %d reached without result (tick %d)", maxTick, sess.Clock.GlobalTick)
+		}
+		sess.Step(int32(iter))
+		// Check for terminal result latched exactly once [08][P1-01].
+		res := sess.GetResult()
+		if res.Ended {
+			if err := emitResultJSON(res, out, sess); err != nil {
+				return err
+			}
+			printSessionSummary(sess, out)
+			if opts.Save != "" {
+				if err := saveSession(sess, opts.Save, opts.Map); err != nil {
+					return fmt.Errorf("save %s: %w", opts.Save, err)
+				}
+				fmt.Fprintf(out, "saved: %s\n", opts.Save)
+			}
+			return nil
+		}
+		// Fallback for campaign latch (no skirmish result) – still emit something.
+		if sess.Latch.IsEnding() {
+			// Derive winner from latch bits for non-skirmish sessions.
+			win := sess.Latch.IsWin()
+			draw := !win && !sess.Latch.IsLose()
+			var winner *int
+			if !draw {
+				w := 0
+				if !win {
+					w = 1
+				}
+				winner = &w
+			}
+			j := headlessJSON{
+				WinnerTeam: winner,
+				Reason:     "latch",
+				Tick:       sess.Clock.GlobalTick,
+				Draw:       draw,
+			}
+			if sess.Clock != nil {
+				armed := sess.GetResultArmedTick()
+				if armed != 0 {
+					j.ArmedTick = &armed
+					j.Milestones = map[string]uint32{"armed": armed, "visible": j.Tick}
+				}
+			}
+			b, _ := json.Marshal(j)
+			fmt.Fprintln(out, string(b))
+			printSessionSummary(sess, out)
+			if opts.Save != "" {
+				if err := saveSession(sess, opts.Save, opts.Map); err != nil {
+					return fmt.Errorf("save %s: %w", opts.Save, err)
+				}
+				fmt.Fprintf(out, "saved: %s\n", opts.Save)
+			}
+			return nil
+		}
+		// Safety: if iter exceeds hardCap+maxTick, bail.
+		if iter > maxTick+1000 && maxTick == hardCap {
+			j := headlessJSON{Reason: "no_result", Tick: sess.Clock.GlobalTick}
+			b, _ := json.Marshal(j)
+			fmt.Fprintln(out, string(b))
+			return fmt.Errorf("headless: no result after %d ticks", iter)
+		}
+	}
+	// If loop exhausted, timeout.
+	j := headlessJSON{Reason: "max_tick", Tick: sess.Clock.GlobalTick}
+	b, _ := json.Marshal(j)
+	fmt.Fprintln(out, string(b))
+	return fmt.Errorf("headless: max-tick %d reached without result", maxTick)
+}
+
+func emitResultJSON(res session.Result, out *os.File, sess *session.Session) error {
+	var winner *int
+	if !res.Draw {
+		w := res.WinnerTeam
+		winner = &w
+	}
+	j := headlessJSON{
+		WinnerTeam: winner,
+		Reason:     res.Reason,
+		Tick:       res.Tick,
+		Draw:       res.Draw,
+	}
+	if res.ArmedTick != 0 {
+		j.ArmedTick = &res.ArmedTick
+		j.Milestones = map[string]uint32{"armed": res.ArmedTick, "visible": res.Tick}
+	} else {
+		armed := sess.GetResultArmedTick()
+		if armed != 0 {
+			j.ArmedTick = &armed
+			if j.Milestones == nil {
+				j.Milestones = map[string]uint32{}
+			}
+			j.Milestones["armed"] = armed
+			j.Milestones["visible"] = j.Tick
+		}
+	}
+	b, err := json.Marshal(j)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(out, string(b))
 	return nil
 }
 

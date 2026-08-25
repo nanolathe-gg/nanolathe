@@ -297,7 +297,7 @@ func TestQueueBuildIssuedViaOrdinaryPath(t *testing.T) {
 		},
 	}
 	w := units.New(10, nil)
-	factoryDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armvp"}, UnitName: "armvp", FootprintX: 4, FootprintZ: 4}
+	factoryDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armvp"}, UnitName: "armvp", FootprintX: 4, FootprintZ: 4, Builder: true, CanMove: true}
 	h, err := w.Create(factoryDef, 0, numeric.FixedFromInt(0), 0, numeric.FixedFromInt(0))
 	if err != nil {
 		t.Fatalf("create factory: %v", err)
@@ -308,36 +308,64 @@ func TestQueueBuildIssuedViaOrdinaryPath(t *testing.T) {
 	}
 	called := false
 	var calledDef string
+	var captured BuildRequest
 	m := &Manager{
 		Catalog: catalog,
 		Factory: factory,
-		QueueBuild: func(f *units.Unit, defKey string, count int) error {
+		QueueBuildTyped: func(req BuildRequest) error {
 			called = true
-			calledDef = defKey
-			return construction.QueueBuild(f, defKey, count)
+			calledDef = req.UnitKey
+			captured = req
+			builderUnit := w.Unit(req.Builder)
+			if builderUnit == nil {
+				builderUnit = factory
+			}
+			if req.Kind == BuildKindMobileSite {
+				return construction.QueueMobileBuild(builderUnit, req.UnitKey, req.X, req.Z, req.Count, catalog)
+			}
+			return construction.QueueFactoryBuild(builderUnit, req.UnitKey, req.Count, catalog)
 		},
 	}
 	m.Strategic.Catalog = catalog
 	m.Strategic.CenterX = numeric.FixedFromInt(0)
 	m.OriginX = numeric.FixedFromInt(0)
 	m.Strategic.Radius = 0
-	_, _, ok := Place(m, "armsolar", nil)
+	x, z, ok := Place(m, "armsolar", nil)
 	if !ok {
 		t.Fatalf("Place should succeed for QueueBuild test")
 	}
 	if !called {
-		t.Fatalf("queueBuild spy not called: AI did not issue build through ordinary path")
+		t.Fatalf("queueBuild spy not called: AI did not issue build through typed path [P0-07]")
 	}
 	if calledDef != "armsolar" {
 		t.Fatalf("queueBuild called with %q want %q", calledDef, "armsolar")
 	}
+	if captured.Kind != BuildKindMobileSite {
+		t.Fatalf("queueBuild Kind want MobileSite got %d", captured.Kind)
+	}
+	if captured.X != x || captured.Z != z {
+		t.Fatalf("queueBuild coordinates %d,%d want %d,%d (must preserve exact site) [P0-07]", captured.X, captured.Z, x, z)
+	}
 	w2 := units.New(10, nil)
 	h2, _ := w2.Create(factoryDef, 0, 0, 0, 0)
 	factory2 := w2.Unit(h2)
-	m2 := &Manager{Catalog: catalog, Factory: factory2}
+	m2 := &Manager{
+		Catalog: catalog,
+		Factory: factory2,
+		QueueBuildTyped: func(req BuildRequest) error {
+			builderUnit := w2.Unit(req.Builder)
+			if builderUnit == nil {
+				builderUnit = factory2
+			}
+			if req.Kind == BuildKindMobileSite {
+				return construction.QueueMobileBuild(builderUnit, req.UnitKey, req.X, req.Z, req.Count, catalog)
+			}
+			return construction.QueueFactoryBuild(builderUnit, req.UnitKey, req.Count, catalog)
+		},
+	}
 	m2.Strategic.Catalog = catalog
 	Place(m2, "armsolar", nil)
 	if factory2.Orders == nil {
-		t.Fatalf("factory2 orders queue not created via ordinary path")
+		t.Fatalf("factory2 orders queue not created via typed path [P0-07]")
 	}
 }
