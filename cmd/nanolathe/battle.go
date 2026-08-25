@@ -111,7 +111,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 	mapH := int32(terrain.CellH * 16)
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: winW, ViewH: winH, MapW: mapW, MapH: mapH}
 	cam.Pan(0, 0)
-	centerOnCommander(sess.Units, cam, winW, winH)
+	centerOnCommanderForSession(sess, cam, winW, winH)
 
 	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal}
 	// The battle HUD is mandatory retail content: side-selected PANELTOP,
@@ -156,16 +156,9 @@ func runBattleView(opts Options, cs *contentSet) error {
 }
 
 // newBattleSession builds the integrated skirmish session for the window.
+// It uses the canonical DirectSkirmishConfig normalization [08 "Skirmish configuration"] [GAP T14].
 func newBattleSession(opts Options, cs *contentSet) (*session.Session, *content.Catalog, error) {
-	cfg := session.SkirmishConfig{MapName: opts.Map}
-	cfg.ApplyDefaults()
-	if cfg.NumPlayers < 2 {
-		cfg.NumPlayers = 2
-	}
-	cfg.Players[0].Controller = 0 // human
-	if cfg.NumPlayers > 1 {
-		cfg.Players[1].Controller = 1 // computer
-	}
+	cfg := session.DirectSkirmishConfig(opts.Map)
 	return newBattleSessionWithConfig(opts, cs, cfg)
 }
 
@@ -184,11 +177,29 @@ func newBattleSessionWithConfig(opts Options, cs *contentSet, cfg session.Skirmi
 	return sess, sess.Catalog, nil
 }
 
-// centerOnCommander pans the camera to player 0's commander if present. The
+// centerOnCommander pans the camera to LocalOwner's commander if present. The
 // SIDEDATA commander name ends in "com" ([02 §6] side anchors table).
+// Deprecated: use centerOnCommanderForSession with Session.LocalOwner [08 "Skirmish configuration"].
 func centerOnCommander(w *units.World, cam *camera.Camera, winW, winH int32) {
 	for _, u := range w.Iter() {
-		if u != nil && u.Alive && u.Owner == 0 && u.Def != nil &&
+		if u != nil && u.Alive && u.Def != nil &&
+			strings.HasSuffix(strings.ToLower(u.Def.UnitName), "com") {
+			cam.X = int32(u.X>>16) - winW/2
+			cam.Z = int32(u.Z>>16) - winH/2
+			cam.Pan(0, 0)
+			return
+		}
+	}
+}
+
+// centerOnCommanderForSession pans to the Session.LocalOwner commander [08 "Skirmish configuration"].
+func centerOnCommanderForSession(sess *session.Session, cam *camera.Camera, winW, winH int32) {
+	if sess == nil {
+		return
+	}
+	owner := sess.LocalOwner
+	for _, u := range sess.Units.Iter() {
+		if u != nil && u.Alive && u.Owner == owner && u.Def != nil &&
 			strings.HasSuffix(strings.ToLower(u.Def.UnitName), "com") {
 			cam.X = int32(u.X>>16) - winW/2
 			cam.Z = int32(u.Z>>16) - winH/2
@@ -239,7 +250,9 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	if ran := b.sess.Clock.GlobalTick - beforeTick; ran > 0 {
 		cl.TickTextureAnimators(int(ran))
-		cl.Cursors().Step(int(ran))
+		if cursors := cl.Cursors(); cursors != nil {
+			cursors.Step(int(ran))
+		}
 	}
 	if b.menu != battleMenuClosed {
 		if cursors := cl.Cursors(); cursors != nil {
@@ -483,8 +496,9 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		rect := client.NormalizeRect(b.dragStartX, b.dragStartY, b.dragEndX, b.dragEndY)
 		w, h := rect.MaxX-rect.MinX, rect.MaxY-rect.MinY
 		if w < 3 && h < 3 {
-			// Small click: dispatch via armed latch if any, else no order (selection handled via drag only).
-			// Use one picking routine that respects fog, unit/feature overlap, command validity [07 §9][03 §3.2][P0-I14].
+			// Small click precedence [07 §8][07 §9][RS-P0-003]: armed latch dispatches; normal latch selects.
+			// Uses ONE canonical picker client.PickUnit so fog, 16px radius, strict < tie (lower slot wins),
+			// unit>feature priority and viewer are identical for selection and targeting [07 §9][03 §3.2][P0-I14].
 			if b.latch != input.LatchNormal {
 				code := hud.LatchToCode(b.latch)
 				if code != 0 {
@@ -494,10 +508,48 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 				if !additive {
 					b.latch = input.LatchNormal
 				}
+			} else {
+				// Normal latch: single-click selection via canonical picker [07 §9][03 §3.2] C8 [RS-P0-003].
+				// Shift semantics mirror drag: clear→set inside/clear outside; set→toggle inside/preserve outside [07 §9] C6.
+				viewer := visibility.PlayerID(0)
+				if b.sess != nil {
+					viewer = visibility.PlayerID(b.sess.LocalOwner)
+				}
+				bh, bu := client.PickUnit(mx, my, b.cam, b.sess.Units, b.sess.Vis, viewer)
+				hitOwn := bh != 0 && bu != nil && b.sess != nil && bu.Owner == b.sess.LocalOwner
+				if hitOwn {
+					if additive {
+						// Shift additive: toggle [07 §9] C6.
+						if bu.Flags&client.SelectionFlag != 0 {
+							bu.Flags &^= client.SelectionFlag
+						} else {
+							bu.Flags |= client.SelectionFlag
+						}
+					} else {
+						// Replace: clear other LocalOwner selection then select hit [07 §9] C6.
+						for _, u := range b.sess.Units.Iter() {
+							if u != nil && u.Owner == b.sess.LocalOwner {
+								u.Flags &^= client.SelectionFlag
+							}
+						}
+						bu.Flags |= client.SelectionFlag
+					}
+				} else {
+					// Empty click (no own visible unit under cursor): clear if not additive, else preserve [07 §9] C6.
+					if !additive {
+						if b.sess != nil && b.sess.Units != nil {
+							for _, u := range b.sess.Units.Iter() {
+								if u != nil && u.Owner == b.sess.LocalOwner {
+									u.Flags &^= client.SelectionFlag
+								}
+							}
+						}
+					}
+				}
 			}
 		} else {
 			client.ApplyDragSelectionWorld(b.sess.Units, b.cam, rect, additive)
-			b.filterSelectionToPlayer(0)
+			b.filterSelectionToPlayer(b.sess.LocalOwner)
 		}
 	}
 	if mouse.Pressed(input.MouseButtonRight) && b.hasSelection() {
@@ -507,7 +559,7 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	}
 }
 
-// filterSelectionToPlayer clears selection on foreign units.
+// filterSelectionToPlayer clears selection on foreign units [08 "Skirmish configuration"].
 func (b *battleSession) filterSelectionToPlayer(owner uint8) {
 	for _, u := range b.sess.Units.Iter() {
 		if u != nil && u.Owner != owner {
@@ -517,19 +569,27 @@ func (b *battleSession) filterSelectionToPlayer(owner uint8) {
 }
 
 func (b *battleSession) hasSelection() bool {
+	if b.sess == nil || b.sess.Units == nil {
+		return false
+	}
+	owner := b.sess.LocalOwner
 	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Flags&client.SelectionFlag != 0 {
+		if u != nil && u.Alive && u.Owner == owner && u.Flags&client.SelectionFlag != 0 {
 			return true
 		}
 	}
 	return false
 }
 
-// selectedUnits returns all selected player 0 units in stable ascending order [I1][07 §9].
+// selectedUnits returns all selected LocalOwner units in stable ascending order [I1][07 §9].
 func (b *battleSession) selectedUnits() []*units.Unit {
+	owner := uint8(0)
+	if b.sess != nil {
+		owner = b.sess.LocalOwner
+	}
 	var out []*units.Unit
 	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == 0 && u.Flags&client.SelectionFlag != 0 {
+		if u != nil && u.Alive && u.Owner == owner && u.Flags&client.SelectionFlag != 0 {
 			out = append(out, u)
 		}
 	}
@@ -541,8 +601,9 @@ func (b *battleSession) selectedBuilder() *units.Unit {
 	if b.sess == nil || b.sess.Units == nil {
 		return nil
 	}
+	owner := b.sess.LocalOwner
 	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == 0 && u.Flags&client.SelectionFlag != 0 &&
+		if u != nil && u.Alive && u.Owner == owner && u.Flags&client.SelectionFlag != 0 &&
 			u.Def != nil && u.Def.Builder {
 			return u
 		}
@@ -555,8 +616,9 @@ func (b *battleSession) selectedFactory() *units.Unit {
 	if b.sess == nil || b.sess.Units == nil {
 		return nil
 	}
+	owner := b.sess.LocalOwner
 	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == 0 && u.Flags&client.SelectionFlag != 0 &&
+		if u != nil && u.Alive && u.Owner == owner && u.Flags&client.SelectionFlag != 0 &&
 			u.Def != nil && hud.IsFactoryBuilder(u.Def) {
 			return u
 		}
@@ -1271,7 +1333,7 @@ func (b *battleSession) drawOverlay(c *client.Client, fnt *formats.FNT) {
 	// TODO(P1): full HUD uses all 30 anchors with SHD lookup, fog composer and ten-layer draw [07 §6][GAP T22].
 	if b.anchorsOK && b.sess != nil && b.sess.Econ != nil {
 		// Local player stocks are float32 metal/energy [05 "Player slot"] I2 allowlist.
-		p := b.sess.Econ.Players[0]
+		p := b.sess.Econ.Players[b.sess.LocalOwner]
 		// Fractions against max storage; when storage zero show empty [02 §6].
 		maxMetal := p.Capacity[economy.Metal]
 		if maxMetal <= 0 {
@@ -1315,7 +1377,7 @@ func (b *battleSession) drawOverlay(c *client.Client, fnt *formats.FNT) {
 		}
 	} else if b.sess != nil && b.sess.Econ != nil {
 		// Fallback top bar when anchors not yet loaded [P0-I14].
-		p := b.sess.Econ.Players[0]
+		p := b.sess.Econ.Players[b.sess.LocalOwner]
 		c.UIText(fnt, fmt.Sprintf("M:%d E:%d", int(p.Stock[economy.Metal]), int(p.Stock[economy.Energy])), 4, 14, 250)
 	}
 	// Minimap contacts [07 §6][03 §3.2]: small overview with unit dots; presentation-only separate from LOS [I6][P0-I14].
@@ -1334,9 +1396,10 @@ func (b *battleSession) drawOverlay(c *client.Client, fnt *formats.FNT) {
 						continue
 					}
 					// Fog: only draw contacts visible to local player [03 §3.2] C8 [P0-I14].
+					viewer := visibility.PlayerID(b.sess.LocalOwner)
 					if b.sess.Vis != nil {
 						t := visibility.Target{Owner: visibility.PlayerID(u.Owner), X: u.X, Y: u.Y, Z: u.Z, Status: u.Flags}
-						if !b.sess.Vis.IsVisible(visibility.PlayerID(0), t) && u.Owner != 0 {
+						if !b.sess.Vis.IsVisible(viewer, t) && u.Owner != b.sess.LocalOwner {
 							continue
 						}
 					}
@@ -1345,9 +1408,9 @@ func (b *battleSession) drawOverlay(c *client.Client, fnt *formats.FNT) {
 					px := mmX + int(cx)*mmW/cw
 					py := mmY + int(cz)*mmH/ch
 					col := byte(100)
-					if u.Owner == 0 {
+					if u.Owner == b.sess.LocalOwner {
 						col = 250
-					} else if b.sess.Vis != nil && b.sess.Vis.IsVisible(visibility.PlayerID(0), visibility.Target{Owner: visibility.PlayerID(u.Owner), X: u.X, Y: u.Y, Z: u.Z}) {
+					} else if b.sess.Vis != nil && b.sess.Vis.IsVisible(viewer, visibility.Target{Owner: visibility.PlayerID(u.Owner), X: u.X, Y: u.Y, Z: u.Z}) {
 						col = 180
 					} else {
 						col = 80
@@ -1457,7 +1520,8 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 		}
 	}
 	// ONE picking routine via client.PickUnit [P0-I14][07 §9][03 §3.2] C8.
-	if bh, bu := client.PickUnit(sx, sy, b.cam, b.sess.Units, b.sess.Vis, visibility.PlayerID(0)); bh != 0 && bu != nil {
+	viewer := visibility.PlayerID(b.sess.LocalOwner)
+	if bh, bu := client.PickUnit(sx, sy, b.cam, b.sess.Units, b.sess.Vis, viewer); bh != 0 && bu != nil {
 		return bh, bu, pos
 	}
 	// Feature picking: when no unit hit, test feature footprint at clicked cell [07 §8][P0-I14].
@@ -1471,7 +1535,8 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 				if b.sess.Vis != nil {
 					// Use VisiblePoint for feature centre; feature visibility is terrain-independent [03 §3.2].
 					// When mode disables current, VisiblePoint reads wordMask at local bit; still gate as fog.
-					visible = b.sess.Vis.VisiblePoint(visibility.PlayerID(0), wx, pos.Y, wz)
+					viewer := visibility.PlayerID(b.sess.LocalOwner)
+					visible = b.sess.Vis.VisiblePoint(viewer, wx, pos.Y, wz)
 					// For footprint features, also test extents box [03 §3.2] VisibleExtents.
 					if !visible {
 						footX := def.FootprintX
@@ -1487,7 +1552,7 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 						maxX := wx + numeric.Fixed(int64(footX)*65536)
 						maxZ := wz + numeric.Fixed(int64(footZ)*65536)
 						bx := visibility.Box{MinX: minX, MinZ: minZ, MaxX: maxX, MaxZ: maxZ, Y: pos.Y}
-						visible = b.sess.Vis.VisibleExtents(visibility.PlayerID(0), bx)
+						visible = b.sess.Vis.VisibleExtents(viewer, bx)
 					}
 				}
 				if visible {
@@ -1507,7 +1572,8 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 			if inst := b.sess.Features.InstanceAt(int(cx), int(cz)); inst != nil && inst.Def != nil {
 				visible := true
 				if b.sess.Vis != nil {
-					visible = b.sess.Vis.VisiblePoint(visibility.PlayerID(0), wx, pos.Y, wz)
+					viewer := visibility.PlayerID(b.sess.LocalOwner)
+					visible = b.sess.Vis.VisiblePoint(viewer, wx, pos.Y, wz)
 				}
 				if visible {
 					pos.HasFeature = true
@@ -1534,8 +1600,12 @@ func (b *battleSession) orderSelected(code int, sx, sy int32, queued bool) {
 	if b.sess != nil && b.sess.Clock != nil {
 		tick = uint32(b.sess.Clock.GlobalTick)
 	}
+	owner := uint8(0)
+	if b.sess != nil {
+		owner = b.sess.LocalOwner
+	}
 	for _, u := range b.sess.Units.Iter() {
-		if u == nil || !u.Alive || u.Owner != 0 || u.Flags&client.SelectionFlag == 0 {
+		if u == nil || !u.Alive || u.Owner != owner || u.Flags&client.SelectionFlag == 0 {
 			continue
 		}
 		id := orders.Resolve(code, u, targetUnit, pos)
@@ -1623,15 +1693,16 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 		_, hover.Target, _ = b.pickTarget(mx, my)
 		hover.Feature = b.hoverFeature(mx, my)
 	}
-	sel := hud.CursorSelection{Viewer: 0, Hostile: b.hostile}
+	sel := hud.CursorSelection{Viewer: b.sess.LocalOwner, Hostile: b.hostile}
 	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == 0 && u.Flags&client.SelectionFlag != 0 {
+		if u != nil && u.Alive && u.Owner == b.sess.LocalOwner && u.Flags&client.SelectionFlag != 0 {
 			sel.Units = append(sel.Units, u)
 		}
 	}
 	if b.sess.Econ != nil {
-		sel.Metal = b.sess.Econ.Players[0].Stock[economy.Metal]
-		sel.Energy = b.sess.Econ.Players[0].Stock[economy.Energy]
+		local := b.sess.LocalOwner
+		sel.Metal = b.sess.Econ.Players[local].Stock[economy.Metal]
+		sel.Energy = b.sess.Econ.Players[local].Stock[economy.Energy]
 	}
 	cursors.SetIndex(hud.ChooseCursor(b.latch, sel, hover))
 }

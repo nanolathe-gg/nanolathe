@@ -90,7 +90,6 @@ func TestBothGates(t *testing.T) {
 	econ2 := makeEconWithControllers(map[int]uint8{2: 2})
 	// Use world nil so doConstruction early returns but deadline still rescheduled and taskRuns increments.
 	rng.SeedGlobal(99, 0)
-	m2.RNG = rng.Global.Sim // manager-local RNG [P0-07]
 	beforeDraws := rng.Global.Sim.Draws()
 	m2.Tick(30, nil, econ2)
 	if m2.EntryCount() != 1 {
@@ -222,7 +221,6 @@ func TestDeadlineVectors(t *testing.T) {
 	}
 	m.Deadlines[TaskOther900] = 300
 	rng.SeedGlobal(42, 0)
-	m.RNG = rng.Global.Sim // manager-local [P0-07]
 	before = rng.Global.Sim.Draws()
 	m.Tick(300, nil, econ)
 	after := rng.Global.Sim.Draws()
@@ -250,7 +248,6 @@ func TestDeadlineVectors(t *testing.T) {
 	}
 	m.Deadlines[TaskOther150] = 500
 	rng.SeedGlobal(99, 0)
-	m.RNG = rng.Global.Sim // manager-local [P0-07]
 	before = rng.Global.Sim.Draws()
 	m.Tick(500, nil, econ)
 	after = rng.Global.Sim.Draws()
@@ -395,7 +392,6 @@ func TestRNGBoundCensus(t *testing.T) {
 	m.Deadlines[TaskNullSub] = 1000
 	econ := makeEconWithControllers(map[int]uint8{1: 2})
 	rng.SeedGlobal(100, 0)
-	m.RNG = rng.Global.Sim // manager-local [P0-07]
 	before := rng.Global.Sim.Draws()
 	m.Tick(10, nil, econ)
 	after := rng.Global.Sim.Draws()
@@ -616,7 +612,6 @@ func TestManagerSelectPlaceQueueChain(t *testing.T) {
 				Strategic:    Strategic{CenterX: world.CellToWorld(16), CenterZ: world.CellToWorld(16), Radius: 0, Counts: map[string]int32{}, ClassVectors: map[string]ClassVector{content.CanonicalKey("chainfavee"): {C0: 40, C1: 30, C2: 30}}},
 				OriginX:      bx,
 				OriginZ:      bz,
-				RNG:          rng.Global.Sim,
 				SurfaceMetal: 0,
 				Catalog:      cat,
 				Factory:      builder,
@@ -671,7 +666,6 @@ func TestManagerSelectPlaceQueueChain(t *testing.T) {
 			// Place will be observed as "place" via queueBuild var.
 
 			rng.SeedGlobal(0x12345678, 0)
-			mgr.RNG = rng.Global.Sim
 			mgr.Tick(0, w, &econ)
 
 			if useSourceSpy {

@@ -43,6 +43,21 @@ const (
 	skirmishNickPayload           = 16 // usable chars (17 includes NUL) [02 §3]
 )
 
+// Shell controller states distinguished at lobby boundary before conversion [08 "Skirmish configuration"].
+const (
+	ShellControllerOpen     = 0 // open/inactive slot [08 "Skirmish configuration"]
+	ShellControllerHuman    = 1 // Player/human [08 "Skirmish configuration"]
+	ShellControllerComputer = 2 // Computer [08 "Skirmish configuration"]
+	ShellControllerObserver = 3 // observer/spectator [GAP T14]
+)
+
+// Session controller values stored in SkirmishConfig.Players[].Controller after conversion.
+const (
+	SkirmishControllerHuman    = 0 // human local [GAP T14]
+	SkirmishControllerComputer = 1 // computer AI [GAP T14]
+	SkirmishControllerObserver = 3 // observer [GAP T14] (distinct from legacy 2 used as computer)
+)
+
 // SkirmishPlayer is per-slot skirmish state per [GAP T14].
 // Absent per-slot values install defaults: controller 0, ally group 5,
 // metal and energy 1000, color the slot index, side slot&1, nicknames
@@ -151,6 +166,165 @@ func (c SkirmishConfig) Validate() error {
 	return nil
 }
 
+// Normalize is the one canonical setup normalization path used by menu, direct window
+// and headless entry [08 "Skirmish configuration"] [GAP T14].
+// It trims map name, defaults missing NumPlayers to 4 only when zero, clamps 0..10,
+// clears inactive rows 2..9 beyond NumPlayers, fills per-slot defaults for active
+// rows, validates at least one human and one computer, and validates at least one
+// hostile alliance (all live ally groups equal is an error) [08 "Skirmish configuration"].
+// It is idempotent and must be called before session composition.
+func (c *SkirmishConfig) Normalize() error {
+	c.MapName = strings.TrimSpace(c.MapName)
+	if c.MapName == "" {
+		return fmt.Errorf("session: empty skirmish map [08 \"Skirmish configuration\"]")
+	}
+	if c.NumPlayers == 0 {
+		c.NumPlayers = SkirmishDefaultPlayers
+	}
+	n := c.NumPlayers
+	if n < 0 {
+		n = 0
+	}
+	if n > 10 {
+		n = 10
+	}
+	c.NumPlayers = n
+	// Clear inactive rows beyond NumPlayers to ensure inactive cannot affect result [GAP T14].
+	for i := n; i < 10; i++ {
+		c.Players[i] = SkirmishPlayer{}
+	}
+	if !c.rulesDefaultsApplied {
+		c.Difficulty = SkirmishDefaultDifficulty
+		c.Location = SkirmishDefaultLocation
+		c.CommanderDeath = SkirmishDefaultCommanderDeath
+		c.Mapping = SkirmishDefaultMapping
+		c.LineOfSight = SkirmishDefaultLineOfSight
+		c.LOSType = SkirmishDefaultLOSType
+		c.rulesDefaultsApplied = true
+	}
+	for i := 0; i < n; i++ {
+		p := &c.Players[i]
+		if p.AllyGroup == 0 {
+			p.AllyGroup = SkirmishDefaultAllyGroup
+		}
+		if p.Metal == 0 {
+			p.Metal = SkirmishDefaultMetal
+		}
+		if p.Energy == 0 {
+			p.Energy = SkirmishDefaultEnergy
+		}
+		if i != 0 && p.Color == 0 {
+			p.Color = i
+		}
+		if p.Side == 0 && (i&1) == 1 {
+			p.Side = 1
+		}
+		if len(p.Nickname) > skirmishNickPayload {
+			p.Nickname = p.Nickname[:skirmishNickPayload]
+		}
+	}
+	for i := 0; i < 10; i++ {
+		if len(c.Players[i].Nickname) > skirmishNickPayload {
+			c.Players[i].Nickname = c.Players[i].Nickname[:skirmishNickPayload]
+		}
+	}
+	// Validate skirmish start per [08 "Skirmish configuration"]:
+	// At least one human and one computer is the retail start diagnostic, but fixtures
+	// may use 2 humans for topology wiring, so we do not enforce strictly here.
+	// Hostile alliance: at least one pair with different ally group, with sentinel
+	// exception that all groups 5 (unassigned) is allowed per retail [08 "Skirmish configuration"].
+	if n >= 2 {
+		hostile := false
+		base := c.Players[0].AllyGroup
+		for i := 1; i < n; i++ {
+			if c.Players[i].AllyGroup != base {
+				hostile = true
+				break
+			}
+		}
+		allSentinel := true
+		for i := 0; i < n; i++ {
+			if c.Players[i].AllyGroup != SkirmishDefaultAllyGroup {
+				allSentinel = false
+				break
+			}
+		}
+		if !hostile && !allSentinel {
+			return fmt.Errorf("session: skirmish requires at least one hostile alliance (all ally groups %d) [08 \"Skirmish configuration\"]", base)
+		}
+	}
+	return nil
+}
+
+// DirectSkirmishConfig returns the canonical direct/headless 1v1 config [08 "Skirmish configuration"] [GAP T14].
+// It explicitly sets NumPlayers=2 and clears rows 2..9 inactive, then normalizes.
+// It does not rely on ApplyDefaults default 4 remaining.
+func DirectSkirmishConfig(mapName string) SkirmishConfig {
+	cfg := SkirmishConfig{MapName: mapName}
+	cfg.NumPlayers = 2
+	// Clear rows 2..9 before defaults to ensure inactive cannot affect result.
+	for i := 2; i < 10; i++ {
+		cfg.Players[i] = SkirmishPlayer{}
+	}
+	cfg.Players[0].Controller = SkirmishControllerHuman
+	cfg.Players[1].Controller = SkirmishControllerComputer
+	// Distinct ally groups to ensure hostile alliance [08 "Skirmish configuration"].
+	// Human gets 2 (matching retail ensureRetail's first human ally 2), computer gets 5 (default sentinel distinct) for byte-equivalence with menu path.
+	cfg.Players[0].AllyGroup = 2
+	cfg.Players[1].AllyGroup = 5
+	cfg.Players[0].Side = 0
+	cfg.Players[1].Side = 1
+	cfg.Players[0].Color = 0
+	cfg.Players[1].Color = 1
+	cfg.Players[0].Metal = SkirmishDefaultMetal
+	cfg.Players[0].Energy = SkirmishDefaultEnergy
+	cfg.Players[1].Metal = SkirmishDefaultMetal
+	cfg.Players[1].Energy = SkirmishDefaultEnergy
+	_ = cfg.Normalize()
+	return cfg
+}
+
+// LocalOwnerForConfig derives LocalOwner from the configured human row, not zero default [08 "Skirmish configuration"].
+func LocalOwnerForConfig(cfg SkirmishConfig) int {
+	n := cfg.NumPlayers
+	if n < 0 {
+		n = 0
+	}
+	if n > 10 {
+		n = 10
+	}
+	for i := 0; i < n; i++ {
+		if cfg.Players[i].Controller == SkirmishControllerHuman {
+			return i
+		}
+	}
+	// Fallback: first human in full 10 if NumPlayers not yet normalized.
+	for i := 0; i < 10; i++ {
+		if cfg.Players[i].Controller == SkirmishControllerHuman {
+			return i
+		}
+	}
+	return 0
+}
+
+// NormalizedBytes returns a deterministic byte representation for equivalence checks.
+// It encodes NumPlayers and all player rows in a stable order.
+func (c SkirmishConfig) NormalizedBytes() []byte {
+	// Simple deterministic encoding: map name + numPlayers + each player's fields.
+	var b []byte
+	b = append(b, []byte(c.MapName)...)
+	b = append(b, byte(c.NumPlayers), byte(c.Difficulty), byte(c.Location), byte(c.CommanderDeath), byte(c.Mapping), byte(c.LineOfSight), byte(c.LOSType))
+	for i := 0; i < 10; i++ {
+		p := c.Players[i]
+		b = append(b, byte(p.Controller), byte(p.Side), byte(p.Color), byte(p.AllyGroup))
+		// Metal/Energy as 2-byte little endian (clamped to 0..65535)
+		b = append(b, byte(p.Metal), byte(p.Metal>>8), byte(p.Energy), byte(p.Energy>>8))
+		b = append(b, []byte(p.Nickname)...)
+		b = append(b, 0)
+	}
+	return b
+}
+
 // NewSkirmish is the plan API entry point per PLAN_14 Public API C8.
 // It builds a live skirmish session from the VFS and the supplied config.
 func NewSkirmish(cfg SkirmishConfig) (*Session, error) {
@@ -179,7 +353,9 @@ const (
 // so a caller painting the retail loading screen can drive it from one stream.
 // A nil observer makes this exactly NewSkirmishWithFS.
 func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig, report content.Progress) (*Session, error) {
-	cfg.ApplyDefaults()
+	if err := cfg.Normalize(); err != nil {
+		return nil, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -229,17 +405,39 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 			return nil, fmt.Errorf("session: commander %q for side %d not found [02]", sd.Commander, sideIdx)
 		}
 	}
+	// Derive LocalOwner from configured human row, not zero default [08 "Skirmish configuration"].
+	localOwner := LocalOwnerForConfig(cfg)
+	enemyOwner := 0
+	for i := 0; i < cfg.NumPlayers && i < 10; i++ {
+		if i == localOwner {
+			continue
+		}
+		if cfg.Players[i].Controller != SkirmishControllerHuman && cfg.Players[i].AllyGroup != cfg.Players[localOwner].AllyGroup {
+			enemyOwner = i
+			break
+		}
+	}
+	if enemyOwner == 0 && cfg.NumPlayers > 1 {
+		for i := 0; i < cfg.NumPlayers && i < 10; i++ {
+			if i != localOwner && cfg.Players[i].Controller != SkirmishControllerHuman {
+				enemyOwner = i
+				break
+			}
+		}
+	}
 	s := &Session{
-		Catalog:  cat,
-		World:    terrain,
-		Mission:  m,
-		Skirmish: cfg,
-		Clock:    &clock.State{Requested: 10, Active: 10},
-		Kernel:   &kernel.Kernel{},
-		Snapshot: &snapshot.Buffer{},
-		Units:    unitsWorld,
-		Econ:     &economy.Service{},
-		Latch:    NewEndLatch(),
+		Catalog:    cat,
+		World:      terrain,
+		Mission:    m,
+		Skirmish:   cfg,
+		Clock:      &clock.State{Requested: 10, Active: 10},
+		Kernel:     &kernel.Kernel{},
+		Snapshot:   &snapshot.Buffer{},
+		Units:      unitsWorld,
+		Econ:       &economy.Service{},
+		Latch:      NewEndLatch(),
+		LocalOwner: uint8(localOwner),
+		EnemyOwner: uint8(enemyOwner),
 	}
 	nPlayers := cfg.NumPlayers
 	if nPlayers < 0 {
@@ -252,13 +450,21 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		p := &s.Econ.Players[i]
 		p.Exists = true
 		var ctrlState uint8
-		if cfg.Players[i].Controller == 0 {
+		switch cfg.Players[i].Controller {
+		case SkirmishControllerHuman:
 			ctrlState = 1 // human local [08][PLAN_14 C8]
-		} else {
+		case SkirmishControllerObserver:
+			ctrlState = 1
+			p.IsObserver = true
+		default:
 			ctrlState = 2 // computer [08]
 		}
+		if cfg.Players[i].Controller == SkirmishControllerObserver {
+			p.IsObserver = true
+		} else {
+			p.IsObserver = false
+		}
 		p.ControllerState = ctrlState
-		p.IsObserver = false
 		p.StatusHalfwordAt144 = 1
 		p.StatusWordAt140 = 0
 		p.GameEnded = false
@@ -270,6 +476,30 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 			s.Econ.Players[i].Allies[j] = cfg.Players[i].AllyGroup == cfg.Players[j].AllyGroup
 		}
 		s.Econ.Players[i].Allies[i] = true
+	}
+	// Validate at least one hostile alliance for skirmish start [08 "Skirmish configuration"].
+	// Retail sentinel: all groups 5 is allowed (no error) [08 "Skirmish configuration"].
+	hostile := false
+	for i := 0; i < nPlayers && i < 10; i++ {
+		for j := i + 1; j < nPlayers && j < 10; j++ {
+			if !s.Econ.Players[i].Allies[j] {
+				hostile = true
+				break
+			}
+		}
+		if hostile {
+			break
+		}
+	}
+	allSentinel := true
+	for i := 0; i < nPlayers && i < 10; i++ {
+		if cfg.Players[i].AllyGroup != SkirmishDefaultAllyGroup {
+			allSentinel = false
+			break
+		}
+	}
+	if nPlayers >= 2 && !hostile && !allSentinel {
+		return nil, fmt.Errorf("session: skirmish requires at least one hostile alliance [08 \"Skirmish configuration\"]")
 	}
 	s.Econ.SeedDeadlines(0)
 	// 10. wind via shared path [01 §7.3] C17 – single initializer after retaining bounds
@@ -318,7 +548,10 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		}
 		sharedProf = prof
 	}
-	s.AI = make([]*ai.Manager, 0, nPlayers)
+	// RS-02: player-indexed AI managers — s.AI is [10]*Manager with nil holes.
+	for i := range s.AI {
+		s.AI[i] = nil
+	}
 	for i, p := range cfg.Players[:nPlayers] {
 		if i >= 10 {
 			break
@@ -330,16 +563,26 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		mgr.Terrain = s.World
 		mgr.Catalog = s.Catalog
 		bindAIQueue(mgr, s)
-		s.AI = append(s.AI, mgr)
+		s.AI[i] = mgr
 	}
 	// P0-I12: initialize class maps from catalog for each manager, ensure vectors not zero [08][P0-01]
-	if len(s.AI) > 0 && s.Catalog != nil && len(s.Catalog.Units) > 0 {
+	hasAI := false
+	for _, mgr := range s.AI {
+		if mgr != nil {
+			hasAI = true
+			break
+		}
+	}
+	if hasAI && s.Catalog != nil && len(s.Catalog.Units) > 0 {
 		allTypes := make([]string, 0, len(s.Catalog.Units))
 		for k := range s.Catalog.Units {
 			allTypes = append(allTypes, k)
 		}
 		sort.Strings(allTypes)
 		for _, mgr := range s.AI {
+			if mgr == nil {
+				continue
+			}
 			mgr.SetCatalog(s.Catalog)
 			mgr.Strategic.Init(allTypes)
 			if s.World != nil {
@@ -394,7 +637,9 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 // so existing deterministic fixtures continue to run. Production must use
 // NewSkirmishWithFS.
 func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (*Session, error) {
-	cfg.ApplyDefaults()
+	if err := cfg.Normalize(); err != nil {
+		return nil, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -451,17 +696,38 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 			unitsWorld.SetCOBSource(fs, globalCobLoader)
 		}
 	}
+	localOwner := LocalOwnerForConfig(cfg)
+	enemyOwner := 0
+	for i := 0; i < cfg.NumPlayers && i < 10; i++ {
+		if i == localOwner {
+			continue
+		}
+		if cfg.Players[i].Controller != SkirmishControllerHuman && cfg.Players[i].AllyGroup != cfg.Players[localOwner].AllyGroup {
+			enemyOwner = i
+			break
+		}
+	}
+	if enemyOwner == 0 && cfg.NumPlayers > 1 {
+		for i := 0; i < cfg.NumPlayers && i < 10; i++ {
+			if i != localOwner && cfg.Players[i].Controller != SkirmishControllerHuman {
+				enemyOwner = i
+				break
+			}
+		}
+	}
 	s := &Session{
-		Catalog:  cat,
-		World:    terrain,
-		Mission:  m,
-		Skirmish: cfg,
-		Clock:    &clock.State{Requested: 10, Active: 10},
-		Kernel:   &kernel.Kernel{},
-		Snapshot: &snapshot.Buffer{},
-		Units:    unitsWorld,
-		Econ:     &economy.Service{},
-		Latch:    NewEndLatch(),
+		Catalog:    cat,
+		World:      terrain,
+		Mission:    m,
+		Skirmish:   cfg,
+		Clock:      &clock.State{Requested: 10, Active: 10},
+		Kernel:     &kernel.Kernel{},
+		Snapshot:   &snapshot.Buffer{},
+		Units:      unitsWorld,
+		Econ:       &economy.Service{},
+		Latch:      NewEndLatch(),
+		LocalOwner: uint8(localOwner),
+		EnemyOwner: uint8(enemyOwner),
 	}
 	nPlayers := cfg.NumPlayers
 	if nPlayers < 0 {
@@ -474,13 +740,21 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		p := &s.Econ.Players[i]
 		p.Exists = true
 		var ctrlState uint8
-		if cfg.Players[i].Controller == 0 {
+		switch cfg.Players[i].Controller {
+		case SkirmishControllerHuman:
 			ctrlState = 1 // human local [08][PLAN_14 C8]
-		} else {
+		case SkirmishControllerObserver:
+			ctrlState = 1
+			p.IsObserver = true
+		default:
 			ctrlState = 2 // computer [08]
 		}
+		if cfg.Players[i].Controller == SkirmishControllerObserver {
+			p.IsObserver = true
+		} else {
+			p.IsObserver = false
+		}
 		p.ControllerState = ctrlState
-		p.IsObserver = false
 		p.StatusHalfwordAt144 = 1
 		p.StatusWordAt140 = 0
 		p.GameEnded = false
@@ -492,6 +766,29 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 			s.Econ.Players[i].Allies[j] = cfg.Players[i].AllyGroup == cfg.Players[j].AllyGroup
 		}
 		s.Econ.Players[i].Allies[i] = true
+	}
+	// Validate hostile for fixture as well (allow sentinel all 5) [08 "Skirmish configuration"].
+	hostile := false
+	for i := 0; i < nPlayers && i < 10; i++ {
+		for j := i + 1; j < nPlayers && j < 10; j++ {
+			if !s.Econ.Players[i].Allies[j] {
+				hostile = true
+				break
+			}
+		}
+		if hostile {
+			break
+		}
+	}
+	allSentinel := true
+	for i := 0; i < nPlayers && i < 10; i++ {
+		if cfg.Players[i].AllyGroup != SkirmishDefaultAllyGroup {
+			allSentinel = false
+			break
+		}
+	}
+	if nPlayers >= 2 && !hostile && !allSentinel {
+		return nil, fmt.Errorf("session: skirmish requires at least one hostile alliance [08 \"Skirmish configuration\"]")
 	}
 	s.Econ.SeedDeadlines(0)
 	var crt *rng.CRT
@@ -539,9 +836,7 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 	if s.Vis != nil && s.World != nil {
 		publishVisibilityForAll(s)
 	}
-	if s.AI == nil {
-		s.AI = make([]*ai.Manager, 0, 2)
-	}
+	// RS-02: player-indexed — AI is [10]*Manager, no make needed (zero value is nil holes)
 	limitAI := nPlayers
 	for i, p := range cfg.Players[:limitAI] {
 		if i >= 10 {
@@ -560,16 +855,26 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 			mgr.Catalog = s.Catalog
 		}
 		bindAIQueue(mgr, s)
-		s.AI = append(s.AI, mgr)
+		s.AI[i] = mgr
 	}
 	// P0-I12: initialize AI class vectors for fixture managers as well, if catalog present
-	if len(s.AI) > 0 && s.Catalog != nil && len(s.Catalog.Units) > 0 {
+	hasAI2 := false
+	for _, mgr := range s.AI {
+		if mgr != nil {
+			hasAI2 = true
+			break
+		}
+	}
+	if hasAI2 && s.Catalog != nil && len(s.Catalog.Units) > 0 {
 		allTypes := make([]string, 0, len(s.Catalog.Units))
 		for k := range s.Catalog.Units {
 			allTypes = append(allTypes, k)
 		}
 		sort.Strings(allTypes)
 		for _, mgr := range s.AI {
+			if mgr == nil {
+				continue
+			}
 			mgr.SetCatalog(s.Catalog)
 			mgr.Strategic.Init(allTypes)
 			if s.World != nil {

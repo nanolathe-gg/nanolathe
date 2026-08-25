@@ -105,10 +105,10 @@ func TestScoreFormula(t *testing.T) {
 }
 
 // TestReservoirSingleDraw asserts one RNG draw per selection regardless of candidate count [PLAN 11 C7] [INVARIANTS I4].
-// Manager-local RNG [P0-07] ON-06: uses sel.rng when owned, not Global.
+// RS-02: single global simulation stream [08][I4].
 func TestReservoirSingleDraw(t *testing.T) {
 	seed := uint32(12345)
-	rLocal := rng.NewSimulation(seed)
+	rng.SeedGlobal(seed, 0)
 	sel := &testSelector{
 		player: 1,
 		profile: &Profile{
@@ -119,7 +119,6 @@ func TestReservoirSingleDraw(t *testing.T) {
 			Counts:       map[string]int32{},
 			ClassVectors: map[string]ClassVector{"armfav": {C0: 40, C1: 30, C2: 30}, "corfav": {C0: 40, C1: 30, C2: 30}, "armship": {C0: 40, C1: 30, C2: 30}},
 		},
-		rng: &rLocal,
 	}
 	builder := testBuilder("armcom")
 	econ := testEcon(1, 800, 1000, 400, 500, 300, 10, 0, 0) // use prod 300 etc to get positive scores but will override inputs via PassProduced mapping
@@ -131,31 +130,29 @@ func TestReservoirSingleDraw(t *testing.T) {
 	// diff still large: 1000-50=950 =>118+20+100=238
 	econStarved := testEcon(1, 50, 1000, 25, 500, 0, 0, 0, 0)
 	// Need to set PassConsumed zero so net 0 -> +20 each
-	rLocal = rng.NewSimulation(seed)
-	sel.rng = &rLocal
-	before := rLocal.Draws()
+	rng.SeedGlobal(seed, 0)
+	before := rng.Global.Sim.Draws()
 	_, ok := SelectWithCandidates(sel, builder, econStarved, cands)
 	if !ok {
 		t.Fatalf("selection should succeed")
 	}
-	after := sel.rng.Draws()
+	after := rng.Global.Sim.Draws()
 	if after-before != 1 {
 		t.Fatalf("reservoir single draw: draws %d -> %d want +1 regardless of %d candidates", before, after, len(cands))
 	}
 	// Regardless of candidate count, still one draw
-	rLocal = rng.NewSimulation(seed)
-	sel.rng = &rLocal
+	rng.SeedGlobal(seed, 0)
 	cands2 := []string{"armfav", "corfav"}
-	before = rLocal.Draws()
+	before = rng.Global.Sim.Draws()
 	_, _ = SelectWithCandidates(sel, builder, econStarved, cands2)
-	after = sel.rng.Draws()
+	after = rng.Global.Sim.Draws()
 	if after-before != 1 {
 		t.Fatalf("single draw with 2 cands: draws %d want +1", after-before)
 	}
 	// Total <2 should consume no draw per [01 §7.1]
 	// Create a scenario where only one positive remains and total==1 => need special cands with weight to produce score 1
 	// For determinism use weight 1 and class that yields 1
-	rOne := rng.NewSimulation(seed)
+	rng.SeedGlobal(seed, 0)
 	selOne := &testSelector{
 		player:  1,
 		profile: &Profile{Weight: map[string]int32{"armfav": 1}, Limit: map[string]int32{}},
@@ -163,7 +160,6 @@ func TestReservoirSingleDraw(t *testing.T) {
 			Counts:       map[string]int32{},
 			ClassVectors: map[string]ClassVector{"armfav": {C0: 100, C1: 0, C2: 0}},
 		},
-		rng: &rOne,
 	}
 	// Need score 1: choose mix that yields total 100*? Let's craft inputs that give oMix 100, metal0 energy0 => total 100*100=10000 *1 /10000=1? Actually C0 100 * other 100 =10000 *1/10000=1
 	// inputs starved with 245 gave mix metal100 energy100 other0 -> total 0 => not.
@@ -182,18 +178,16 @@ func TestReservoirSingleDraw(t *testing.T) {
 	econOne.Players[1].PassConsumed[economy.Metal] = 0  // net 10
 
 	// But our ScoreInputsFromEconomy net = prod - cons =300,10 both >1 so no +20, raw 0. Good.
-	before = rOne.Draws()
+	before = rng.Global.Sim.Draws()
 	_, _ = SelectWithCandidates(selOne, builder, econOne, []string{"armfav"})
-	after = selOne.rng.Draws()
+	after = rng.Global.Sim.Draws()
 	if after-before != 0 {
 		t.Fatalf("total<2 should not advance RNG [01 §7.1], draws %d want 0", after-before)
 	}
 	// Determinism: same seed gives same choice
-	rA := rng.NewSimulation(seed)
-	sel.rng = &rA
+	rng.SeedGlobal(seed, 0)
 	c1, _ := SelectWithCandidates(sel, builder, econStarved, cands)
-	rB := rng.NewSimulation(seed)
-	sel.rng = &rB
+	rng.SeedGlobal(seed, 0)
 	c2, _ := SelectWithCandidates(sel, builder, econStarved, cands)
 	if c1.DefKey != c2.DefKey {
 		t.Fatalf("reservoir deterministic: %s vs %s", c1.DefKey, c2.DefKey)
@@ -331,11 +325,9 @@ func TestFloat32Narrowing(t *testing.T) {
 }
 
 // TestSelectDeterminism ensures two identical runs produce identical build orders [PLAN 11 Exit].
-// Manager-local RNG [P0-07] ON-06.
+// RS-02: single global stream [08][I4].
 func TestSelectDeterminism(t *testing.T) {
 	seed := uint32(42)
-	rA := rng.NewSimulation(seed)
-	rB := rng.NewSimulation(seed)
 	selA := &testSelector{
 		player:  1,
 		profile: &Profile{Weight: map[string]int32{"armfav": 100, "corfav": 50}, Limit: map[string]int32{}},
@@ -343,7 +335,6 @@ func TestSelectDeterminism(t *testing.T) {
 			Counts:       map[string]int32{},
 			ClassVectors: map[string]ClassVector{"armfav": {C0: 40, C1: 30, C2: 30}, "corfav": {C0: 40, C1: 30, C2: 30}},
 		},
-		rng: &rA,
 	}
 	selB := &testSelector{
 		player:  1,
@@ -352,12 +343,13 @@ func TestSelectDeterminism(t *testing.T) {
 			Counts:       map[string]int32{},
 			ClassVectors: map[string]ClassVector{"armfav": {C0: 40, C1: 30, C2: 30}, "corfav": {C0: 40, C1: 30, C2: 30}},
 		},
-		rng: &rB,
 	}
 	builder := testBuilder("armcom")
 	econ := testEcon(1, 50, 1000, 25, 500, 0, 0, 0, 0)
 	cands := []string{"armfav", "corfav"}
+	rng.SeedGlobal(seed, 0)
 	a, okA := SelectWithCandidates(selA, builder, econ, cands)
+	rng.SeedGlobal(seed, 0)
 	b, okB := SelectWithCandidates(selB, builder, econ, cands)
 	if okA != okB || a.DefKey != b.DefKey || a.Score != b.Score {
 		t.Fatalf("determinism failed: %v/%v vs %v/%v", a, okA, b, okB)

@@ -73,7 +73,6 @@ type Manager struct {
 	// wiring state so ai.Place can stay func(m *Manager, ...) per PLAN_11 API).
 	OriginX      numeric.Fixed // placement search origin, steps toward strategic center [PLAN_11 C8]
 	OriginZ      numeric.Fixed
-	RNG          *rng.Simulation  // nil => deterministic seed 1 fallback with comment [P0-07] ON-06; global fallback removed
 	SurfaceMetal int32            // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	Catalog      *content.Catalog // defKey resolution for the extractor gate [PLAN_11 C8]
 	Factory      *units.Unit      // builder receiving construction requests [PLAN_11 C12] [P0-07]
@@ -118,6 +117,9 @@ type Manager struct {
 	// P0-07 milestones and last tick [P0-07] ON-06.
 	milestones map[string]uint32 // stage→tick, set only from observed production state [P0-07]
 	lastTick   uint32            // last Tick tick, used by Place to record PlacementSelected with tick [P0-07]
+
+	// RS-02 test hook: if non-nil, called at Tick entry for order verification (not persisted).
+	TestHook func(tick uint32, player uint8)
 }
 
 // GetPlayer satisfies Selector [PLAN_11 WU-11-4] — Manager.Player 0..9.
@@ -176,12 +178,10 @@ func (m *Manager) GetGateCandidates() map[string]struct{} {
 	return m.GateCandidates
 }
 
-// GetRNG satisfies Selector RNG extension for P0-07 manager-local RNG [P0-07].
+// GetRNG satisfies Selector RNG extension — now alias to Global.Sim per RS-02 I4 [08] single stream.
+// Deprecated per-manager RNG removed; always returns the one global simulation stream.
 func (m *Manager) GetRNG() *rng.Simulation {
-	if m == nil {
-		return nil
-	}
-	return m.RNG
+	return rng.Global.Sim
 }
 
 // GetQueueBuild returns the ordinary build path for P0-I16.
@@ -272,18 +272,10 @@ func (m *Manager) EnsureStrategicInitialized() {
 	m.Strategic.Init(types)
 }
 
-// simRNG returns the simulation RNG to use [I4] [P0-07] ON-06.
-// Manager-local RNG ownership: prefers m.RNG when owned; global fallback removed [P0-07].
-// When no manager RNG is owned, returns a deterministic seed-1 stream for decision paths
-// with a fresh instance each call would not advance, so we return nil and callers handle
-// nil-guard erroring or zero-offset deterministic fallback (see nextDeadline/doResource).
+// simRNG returns the one global simulation RNG per I4 and RS-02 [08] single stream.
+// There is no per-manager RNG; all AI draws advance rng.Global.Sim.
 func (m *Manager) simRNG() *rng.Simulation {
-	if m != nil && m.RNG != nil {
-		return m.RNG
-	}
-	// Deterministic fallback: nil signals no owned RNG; callers must not fall back to Global [P0-07].
-	// They should use zero offset or error. This prevents global call-order leakage (I4).
-	return nil
+	return rng.Global.Sim
 }
 
 // findBuilder returns a valid builder for the manager's player [P0-I12].
@@ -396,6 +388,9 @@ func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 	if m == nil {
 		return
 	}
+	if m.TestHook != nil {
+		m.TestHook(tick, m.Player)
+	}
 	m.lastTick = tick
 	// P0-I16: sync catalog between Manager and Strategic if one is set via direct field assignment
 	if m.Catalog != nil && m.Strategic.Catalog == nil {
@@ -405,17 +400,10 @@ func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 	}
 	// P0-I12: lazily initialize class maps from catalog if not yet done, ensuring vectors not zero.
 	m.EnsureStrategicInitialized()
-	// P0-I12: refresh strategic center/counts every 30 ticks via MaybeRefresh [08][P0-01] using Simulation RNG bound 30.
-	// This also gates class-vector recompute via RNG(30)==0. Only draw when catalog present to keep headless tests without catalog deterministic.
-	// Manager-local RNG ownership [P0-07]: use m.RNG when owned, no Global fallback.
+	// P0-I12: refresh strategic center/counts every 30 ticks via MaybeRefresh [08][P0-01] using Simulation RNG bound 30 [I4].
+	// Single global stream per RS-02: all draws via rng.Global.Sim.
 	if m.Catalog != nil || m.Strategic.Catalog != nil {
-		var r *rng.Simulation
-		if m.RNG != nil {
-			r = m.RNG
-		} else {
-			r = nil // deterministic: no draw when no owned RNG [P0-07]
-		}
-		m.Strategic.MaybeRefresh(tick, r, m.Player, w)
+		m.Strategic.MaybeRefresh(tick, rng.Global.Sim, m.Player, w)
 	}
 	// P0-I12: populate and maintain AI groups from unit creation/death/completion.
 	m.updateGroups(w)
@@ -516,21 +504,14 @@ func (m *Manager) nextDeadline(k TaskKind, tick uint32) uint32 {
 		return tick + 150 // [P0-02] regroup at +150
 	case TaskOther900:
 		var r uint32
-		if m != nil && m.RNG != nil {
-			r = m.RNG.Uint32n(900) // [08] bound 900 (I4) [P0-02][PLAN_11 C9] manager-local RNG [P0-07]
-		} else {
-			// Deterministic seed 1 fallback without global leakage [P0-07] ON-06 (no Global.Sim fallback).
-			// Zero offset keeps repeated runs identical when RNG nil; manager should be constructed with RNG for production.
-			r = 0
+		if rng.Global.Sim != nil {
+			r = rng.Global.Sim.Uint32n(900) // [08] bound 900 (I4) [P0-02][PLAN_11 C9] single global stream RS-02
 		}
 		return tick + 30 + r // [08] tick+30+RNG(900) [P0-02]
 	case TaskOther150:
 		var r uint32
-		if m != nil && m.RNG != nil {
-			r = m.RNG.Uint32n(150) // [08] bound 150 (I4) [P0-02] manager-local [P0-07]
-		} else {
-			// Deterministic fallback without Global [P0-07].
-			r = 0
+		if rng.Global.Sim != nil {
+			r = rng.Global.Sim.Uint32n(150) // [08] bound 150 (I4) [P0-02] single global stream RS-02
 		}
 		return tick + 30 + r // [08] tick+30+RNG(150) [P0-02]
 	case TaskEmpty, TaskNullSub:
@@ -670,19 +651,16 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 			// Branch 2*metal > energy ?
 			enable := false
 			if 2*metalStock > energyStock && netEnergy >= 1 {
-				// Draw RNG(5) only when branch taken [P0-02 §5] manager-local RNG [P0-07].
+				// Draw RNG(5) only when branch taken [P0-02 §5] single global stream RS-02 [I4].
 				var draw uint32
-				if m != nil && m.RNG != nil {
-					draw = m.RNG.Uint32n(5)
-				} else {
-					// Deterministic fallback seed 1 without global leakage [P0-07] ON-06.
-					// Default non-zero to enable deterministically when RNG nil.
-					draw = 1
+				if rng.Global.Sim != nil {
+					draw = rng.Global.Sim.Uint32n(5)
 				}
 				if draw != 0 {
 					enable = true
 				} else {
-					enable = false
+					// When Global.Sim unavailable, default to non-zero (enable) to keep determinism; production always seeded.
+					enable = rng.Global.Sim == nil
 				}
 			} else {
 				enable = false

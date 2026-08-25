@@ -49,7 +49,7 @@ type Session struct {
 	Features *features.Service
 	Movement *movement.System // Gate-5 integration: ground steering/routes [PLAN_14 C5 movement integration]
 	Combat   *combat.Service
-	AI       []*ai.Manager
+	AI       [10]*ai.Manager // fixed player-indexed, nil holes per RS-02 [08] I4 single stream
 	Mission  *mission.Mission
 	Snapshot *snapshot.Buffer
 	Shutdown *Shutdown // ordered shutdown in reverse-init order [01 §2.1][01 §2.3] P0-I10
@@ -239,9 +239,15 @@ func (s *Session) ValidateComposition() error {
 	}
 	// Every AI manager must have the typed build queue bound [RX-01][F-P0-004].
 	// A computer slot without a binder is a passive "computer", never a real AI.
-	for _, mgr := range s.AI {
-		if mgr != nil && mgr.QueueBuildTyped == nil {
-			return fmt.Errorf("session: ai manager player %d has no QueueBuildTyped binding [RX-01][F-P0-004]", mgr.Player)
+	// RS-02: assert player-indexed ownership — mgr.Player must equal array index [08].
+	for i, mgr := range s.AI {
+		if mgr != nil {
+			if int(mgr.Player) != i {
+				return fmt.Errorf("session: ai manager player %d at index %d mismatch [RS-02][08]", mgr.Player, i)
+			}
+			if mgr.QueueBuildTyped == nil {
+				return fmt.Errorf("session: ai manager player %d has no QueueBuildTyped binding [RX-01][F-P0-004]", mgr.Player)
+			}
 		}
 	}
 	if s.Clock == nil {
@@ -313,9 +319,7 @@ func (s *Session) ValidateComposition() error {
 	if s.Wind == nil {
 		return fmt.Errorf("session: missing Wind [01 §7.3]")
 	}
-	if s.AI == nil {
-		return fmt.Errorf("session: missing AI slice [08 \"Established AI-facing data\"]")
-	}
+	// AI is fixed [10]*Manager per RS-02 — nil holes are valid (human players); no missing-array check.
 	return nil
 }
 
@@ -585,18 +589,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 	// No map-defined player order [ON-09].
 	for player := 0; player < 10; player++ {
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TracePlayerBegin, Player: player})
-		var mgr *ai.Manager
-		if player < len(s.AI) {
-			mgr = s.AI[player]
-		}
-		if mgr == nil {
-			for _, cand := range s.AI {
-				if cand != nil && int(cand.Player) == player {
-					mgr = cand
-					break
-				}
-			}
-		}
+		mgr := s.AI[player] // direct player-indexed access per RS-02 [08] I1
 		if s.Econ == nil {
 			if mgr != nil {
 				mgr.Tick(tick, s.Units, nil)
@@ -908,7 +901,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 	s.interceptorGuidanceTick()
 	// Snapshot hostile health before impact for AI milestone [P0-07] HostileDamageObserved
 	var beforeHealth map[pool.Handle]int32
-	if s.Combat != nil && len(s.AI) > 0 && s.Units != nil {
+	if s.Combat != nil && s.Units != nil {
 		beforeHealth = make(map[pool.Handle]int32, s.Units.Used())
 		for _, u := range s.Units.IterSliced() {
 			if u == nil {
@@ -932,7 +925,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 		s.Combat.TickProjectiles(tick, s.Units, s.World, s.Features, s.Vis, s.Econ, s.Catalog, rng.Global.Sim, rng.Global.Crt)
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceProjectileImpact})
 		// Notify AI of hostile damage via normal combat [P0-07] HostileDamageObserved
-		if beforeHealth != nil && len(s.AI) > 0 {
+		if beforeHealth != nil {
 			for h, before := range beforeHealth {
 				u := s.Units.Unit(h)
 				if u == nil {
@@ -1575,18 +1568,7 @@ func (s *Session) coordinatePlayers(tick uint32) {
 		// so headless tests that construct managers without economy still tick.
 		// This path is not the retail shape but keeps tests deterministic.
 		for i := 0; i < 10; i++ {
-			var m *ai.Manager
-			if i < len(s.AI) {
-				m = s.AI[i]
-			}
-			if m == nil {
-				for _, cand := range s.AI {
-					if cand != nil && int(cand.Player) == i {
-						m = cand
-						break
-					}
-				}
-			}
+			m := s.AI[i] // direct player-indexed per RS-02 [08] I1
 			if m != nil {
 				m.Tick(tick, s.Units, nil)
 			}
@@ -1595,18 +1577,7 @@ func (s *Session) coordinatePlayers(tick uint32) {
 	}
 	for player := 0; player < 10; player++ {
 		p := player
-		var mgr *ai.Manager
-		if p < len(s.AI) {
-			mgr = s.AI[p]
-		}
-		if mgr == nil {
-			for _, cand := range s.AI {
-				if cand != nil && int(cand.Player) == p {
-					mgr = cand
-					break
-				}
-			}
-		}
+		mgr := s.AI[p] // direct player-indexed per RS-02 [08] I1
 		before := func() {
 			if mgr != nil {
 				// supported inference: AI is the auxiliary player-level update [08][PLAN_11 C11]

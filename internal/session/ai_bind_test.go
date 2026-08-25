@@ -43,10 +43,16 @@ func TestRX01_ProductionSessionsBindAIQueue(t *testing.T) {
 		}
 		publishVisibilityForAll(s)
 	}
-	if len(s.AI) != 1 {
-		t.Fatalf("want exactly one AI manager for one computer slot, got %d", len(s.AI))
+	count := 0
+	for _, m := range s.AI {
+		if m != nil {
+			count++
+		}
 	}
-	mgr := s.AI[0]
+	if count != 1 {
+		t.Fatalf("want exactly one AI manager for one computer slot, got %d", count)
+	}
+	mgr := s.AI[1] // RS-02: player-indexed, player 1 at index 1
 	if mgr.QueueBuildTyped == nil {
 		t.Fatalf("production session left QueueBuildTyped unbound — AI could never build [F-P0-004]")
 	}
@@ -91,7 +97,7 @@ func TestRX01_BoundCallbackQueuesMobileBuildAtCoordinates(t *testing.T) {
 	if builder == nil {
 		t.Fatalf("computer commander missing")
 	}
-	bindAIQueue(s.AI[0], s)
+	bindAIQueue(s.AI[1], s)
 	wantX, wantZ := strictCellToWorld(30), strictCellToWorld(30)
 	req := ai.BuildRequest{
 		Builder: builder.Handle,
@@ -101,7 +107,7 @@ func TestRX01_BoundCallbackQueuesMobileBuildAtCoordinates(t *testing.T) {
 		Count:   1,
 		Kind:    ai.BuildKindMobileSite,
 	}
-	if err := s.AI[0].QueueBuildTyped(req); err != nil {
+	if err := s.AI[1].QueueBuildTyped(req); err != nil {
 		t.Fatalf("typed mobile request rejected: %v", err)
 	}
 	q := orders.QueueForUnit(builder)

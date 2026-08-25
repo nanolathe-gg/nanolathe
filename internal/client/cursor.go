@@ -14,6 +14,7 @@ package client
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/render"
@@ -41,12 +42,35 @@ type Cursors struct {
 	Hidden bool
 }
 
+// cursorProviders returns provider identities for diagnostics [ORCHESTRATION §7].
+func cursorProviders(fs vfs.FSOps) string {
+	if fs == nil {
+		return ""
+	}
+	if p, ok := fs.(interface{ Providers() []vfs.ProviderInfo }); ok {
+		infos := p.Providers()
+		ids := make([]string, 0, len(infos))
+		for _, info := range infos {
+			id := info.ID
+			if id == "" {
+				id = info.Type
+			}
+			ids = append(ids, id)
+		}
+		return strings.Join(ids, ", ")
+	}
+	return ""
+}
+
 // LoadCursors opens the cursor GAF root and resolves the handle array [07 §8].
+// A missing cursor GAF is degradable: the caller retains the OS cursor and
+// the frame loop nil-guards every cursor call [07 §8]. The error includes a
+// provider-aware diagnostic (logical path + providers searched) [ORCHESTRATION §7].
 // A missing entry leaves its slot nil; the caller falls back to cursornormal.
-func LoadCursors(fs *vfs.FS) (*Cursors, error) {
+func LoadCursors(fs vfs.FSOps) (*Cursors, error) {
 	gaf, err := formats.LoadGAFFile(fs, CursorGAFPath)
 	if err != nil {
-		return nil, fmt.Errorf("client: cursors: %w", err)
+		return nil, fmt.Errorf("client: cursors: logical path %s, providers searched [%s]: %w", CursorGAFPath, cursorProviders(fs), err)
 	}
 	cs := &Cursors{gaf: gaf}
 	for idx := 1; idx < render.CursorCount; idx++ {
@@ -131,7 +155,11 @@ func (c *Client) Cursors() *Cursors { return c.cursors }
 // The frame's authored x_offset/y_offset is the hotspot: that pixel lands on
 // the pointer, so the blit origin is the pointer minus the offset
 // [07 §8][fmt gaf "Placement offsets"].
+// When cursor assets are missing the OS cursor remains and this is a no-op [07 §8].
 func (c *Client) drawCursor() {
+	if c == nil || c.cursors == nil {
+		return
+	}
 	f := c.cursors.Frame()
 	if f == nil {
 		return

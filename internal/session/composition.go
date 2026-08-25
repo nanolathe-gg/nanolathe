@@ -347,7 +347,7 @@ func createAndBindServices(s *Session) error {
 			}
 		}
 	}
-	// Ensure Clock, Kernel, Snapshot, AI slice non-nil
+	// Ensure Clock, Kernel, Snapshot non-nil (AI is fixed [10] per RS-02, no make needed)
 	if s.Clock == nil {
 		s.Clock = &clock.State{Requested: 10, Active: 10}
 	}
@@ -356,9 +356,6 @@ func createAndBindServices(s *Session) error {
 	}
 	if s.Snapshot == nil {
 		s.Snapshot = &snapshot.Buffer{}
-	}
-	if s.AI == nil {
-		s.AI = make([]*ai.Manager, 0)
 	}
 	if s.Mission == nil {
 		return fmt.Errorf("session: missing Mission [08]")
@@ -396,21 +393,56 @@ func visibilityModeForSession(s *Session) visibility.Mode {
 }
 
 // localPlayerForSession returns the local player slot for fog/sensor predicate [03 §3.2] C15.
-// Single-player campaign/skirmish local is slot 0 (human). Multiplayer would select from lobby; this uses 0 for now.
+// It derives from Session.LocalOwner, not zero default, and falls back to first human.
 func localPlayerForSession(s *Session) int {
 	if s == nil {
 		return 0
 	}
-	// Prefer the first human player (ControllerState==1) if present.
+	if int(s.LocalOwner) < 10 && s.Econ != nil {
+		p := &s.Econ.Players[int(s.LocalOwner)]
+		if p.Exists && p.ControllerState == 1 && !p.IsObserver {
+			return int(s.LocalOwner)
+		}
+	}
+	// Fallback: first human player (ControllerState==1) [08 "Skirmish configuration"].
 	if s.Econ != nil {
 		for i := 0; i < 10; i++ {
 			p := &s.Econ.Players[i]
-			if p.Exists && p.ControllerState == 1 {
+			if p.Exists && p.ControllerState == 1 && !p.IsObserver {
 				return i
 			}
 		}
 	}
-	return 0
+	return int(s.LocalOwner)
+}
+
+// RecalcLocalOwner recomputes LocalOwner from SkirmishConfig after save restore [08 "Skirmish configuration"].
+func (s *Session) RecalcLocalOwner() {
+	if s == nil {
+		return
+	}
+	// Prefer economy human first, as after restore Skirmish may be stale 1v1 default
+	// while economy holds the true topology with slot3 human.
+	if s.Econ != nil {
+		for i := 0; i < 10; i++ {
+			p := &s.Econ.Players[i]
+			if p.Exists && p.ControllerState == 1 && !p.IsObserver {
+				s.LocalOwner = uint8(i)
+				// Also update EnemyOwner to first hostile if needed.
+				for j := 0; j < 10; j++ {
+					q := &s.Econ.Players[j]
+					if q.Exists && q.ControllerState == 2 && !s.Econ.Players[i].Allies[j] {
+						s.EnemyOwner = uint8(j)
+						break
+					}
+				}
+				return
+			}
+		}
+	}
+	if s.Skirmish.NumPlayers > 0 {
+		s.LocalOwner = uint8(LocalOwnerForConfig(s.Skirmish))
+	}
 }
 
 // heightByteFor returns the observer height byte clamped 0..255 [03 §3.2] C5.

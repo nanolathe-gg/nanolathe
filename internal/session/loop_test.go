@@ -215,7 +215,7 @@ func TestAICallbackInsideTickPlayer(t *testing.T) {
 		Kernel:   &kernel.Kernel{},
 		Econ:     econ,
 		Units:    units.New(10, nil),
-		AI:       []*ai.Manager{mgr},
+		AI:       [10]*ai.Manager{0: mgr},
 		Snapshot: &snapshot.Buffer{},
 	}
 	s.RegisterAll()
@@ -314,7 +314,7 @@ func TestAICallbackInsideTickPlayer(t *testing.T) {
 		Kernel: &kernel.Kernel{},
 		Econ:   econ2,
 		Units:  units.New(10, nil),
-		AI:     []*ai.Manager{nil, mgr2}, // index 1 is player 1
+		AI:     [10]*ai.Manager{1: mgr2}, // index 1 is player 1 per RS-02
 		World:  &world.Terrain{CellW: 10, CellH: 10},
 	}
 	s2.RegisterAll()
@@ -346,7 +346,7 @@ func TestCoordinatorIteratesPlayersAscending(t *testing.T) {
 		p.Helper2Deadline = 100
 	}
 	var order []int
-	managers := make([]*ai.Manager, 10)
+	var managers [10]*ai.Manager
 	for i := 0; i < 10; i++ {
 		ii := i
 		m := &ai.Manager{Player: uint8(ii)}

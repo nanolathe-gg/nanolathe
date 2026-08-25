@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"image/png"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -111,5 +114,198 @@ func TestMissingRootDiagnostic(t *testing.T) {
 		if !strings.Contains(message, want) {
 			t.Fatalf("diagnostic %q is missing %q", message, want)
 		}
+	}
+}
+
+// mainTestRetailRoot skips when retail install is absent [ORCHESTRATION.md §6].
+func mainTestRetailRoot(t *testing.T) string {
+	t.Helper()
+	root := os.Getenv("NANOLATHE_TA_ROOT")
+	if root == "" {
+		if home, herr := os.UserHomeDir(); herr == nil {
+			root = filepath.Join(home, "TotalAnnihilation")
+		} else {
+			t.Skip("no home directory")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "gamedata")); err != nil {
+		// Also accept loose HPI at root (real install has empty gamedata dir on disk
+		// but HPI at root). Check for a required archive as fallback.
+		if _, err2 := os.Stat(filepath.Join(root, "totala1.hpi")); err2 != nil {
+			t.Skip("retail assets not present")
+		}
+	}
+	return root
+}
+
+// TestDispatchOrdering_ShotPrecedesHeadlessMap locks P5: --headless --map
+// must not shadow --shot/--shot-menu [REVIEW_OX_ALPHA.md P5].
+func TestDispatchOrdering_ShotPrecedesHeadlessMap(t *testing.T) {
+	tests := []struct {
+		name string
+		opts Options
+		want string
+	}{
+		{
+			name: "headless map alone -> headless",
+			opts: Options{Headless: true, Map: "Ashap Plateau"},
+			want: "headless",
+		},
+		{
+			name: "headless map + shot -> shot",
+			opts: Options{Headless: true, Map: "Ashap Plateau", Shot: "/tmp/out.png"},
+			want: "shot",
+		},
+		{
+			name: "headless map + shot-menu -> shot",
+			opts: Options{Headless: true, Map: "Ashap Plateau", Shot: "/tmp/out.png", ShotMenu: "main"},
+			want: "shot",
+		},
+		{
+			name: "headless mission alone -> headless",
+			opts: Options{Headless: true, Mission: "camps/arm campaign.tdf:MISSION0"},
+			want: "headless",
+		},
+		{
+			name: "headless mission + shot -> shot",
+			opts: Options{Headless: true, Mission: "camps/arm campaign.tdf:MISSION0", Shot: "/tmp/out.png"},
+			want: "shot",
+		},
+		{
+			name: "headless map+mission + shot -> shot",
+			opts: Options{Headless: true, Map: "Ashap Plateau", Mission: "camps/arm campaign.tdf:MISSION0", Shot: "/tmp/out.png"},
+			want: "shot",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dispatchKind(tc.opts); got != tc.want {
+				t.Fatalf("dispatchKind(%+v) = %q, want %q", tc.opts, got, tc.want)
+			}
+		})
+	}
+	// Direct helper mirrors.
+	if !shouldRunShot(Options{Shot: "/tmp/a.png"}) {
+		t.Fatal("shouldRunShot false for Shot set")
+	}
+	if shouldRunHeadlessSession(Options{Headless: true, Map: "Ashap Plateau", Shot: "/tmp/a.png"}) {
+		t.Fatal("shouldRunHeadlessSession must be false when Shot set [P5]")
+	}
+}
+
+// TestDispatchOrdering_MissionHeadless locks P6: --headless --mission must
+// dispatch to session construction like --headless --map [REVIEW_OX_ALPHA.md P6].
+func TestDispatchOrdering_MissionHeadless(t *testing.T) {
+	if !shouldRunHeadlessSession(Options{Headless: true, Mission: "camps/arm campaign.tdf:MISSION0"}) {
+		t.Fatalf("shouldRunHeadlessSession false for --headless --mission, want true [P6]")
+	}
+	if shouldRunHeadlessSession(Options{Headless: true}) {
+		t.Fatalf("shouldRunHeadlessSession true for headless alone, want false (falls through to report)")
+	}
+	if shouldRunHeadlessSession(Options{Headless: true, Mission: "camps/arm campaign.tdf:MISSION0", Dump: "manifest"}) {
+		t.Fatalf("shouldRunHeadlessSession true when Dump set, want false")
+	}
+	if shouldRunHeadlessSession(Options{Headless: true, Mission: "camps/arm campaign.tdf:MISSION0", Load: "/tmp/sav"}) {
+		t.Fatalf("shouldRunHeadlessSession true when Load set, want false (load wins)")
+	}
+	if got := dispatchKind(Options{Headless: true, Mission: "camps/arm campaign.tdf:MISSION0"}); got != "headless" {
+		t.Fatalf("dispatchKind mission = %q, want headless", got)
+	}
+	if got := dispatchKind(Options{Headless: true, Map: "Ashap Plateau"}); got != "headless" {
+		t.Fatalf("dispatchKind map = %q, want headless", got)
+	}
+	if got := dispatchKind(Options{Headless: true}); got == "headless" {
+		t.Fatalf("dispatchKind headless alone = headless, want report")
+	}
+}
+
+// TestHeadlessMapShotWritesPNG is the P5 integration check: go run
+// --headless --map --shot writes a PNG (skip if no retail).
+func TestHeadlessMapShotWritesPNG(t *testing.T) {
+	root := mainTestRetailRoot(t)
+	tmp := filepath.Join(t.TempDir(), "p5.png")
+	out, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	opts := Options{
+		Root:     root,
+		Headless: true,
+		Map:      "Ashap Plateau",
+		Shot:     tmp,
+		Frames:   30,
+		Seed:     1,
+	}
+	if err := run(opts, out); err != nil {
+		t.Fatalf("run headless map+shot: %v", err)
+	}
+	info, err := os.Stat(tmp)
+	if err != nil {
+		t.Fatalf("shot PNG not written: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("shot PNG is empty")
+	}
+	f, err := os.Open(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatalf("shot PNG decode: %v", err)
+	}
+	if img.Bounds().Dx() == 0 || img.Bounds().Dy() == 0 {
+		t.Fatalf("shot PNG has zero bounds %v", img.Bounds())
+	}
+	data, err := os.ReadFile(out.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outStr := string(data)
+	if !strings.Contains(outStr, "seed:") {
+		t.Fatalf("shot run output missing seed header: %q", outStr)
+	}
+	if !strings.Contains(outStr, "shot") {
+		t.Fatalf("shot run output missing shot line: %q", outStr)
+	}
+}
+
+// TestHeadlessMissionRunsSession is the P6 integration check: --headless
+// --mission must construct a session and print summary, not just manifest.
+func TestHeadlessMissionRunsSession(t *testing.T) {
+	root := mainTestRetailRoot(t)
+	out, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	opts := Options{
+		Root:     root,
+		Headless: true,
+		Mission:  "camps/arm campaign.tdf:MISSION0",
+		Ticks:    300,
+		Seed:     1,
+	}
+	if err := run(opts, out); err != nil {
+		t.Fatalf("run headless mission: %v", err)
+	}
+	data, err := os.ReadFile(out.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "seed:") {
+		t.Fatalf("mission run missing seed header: %q", s)
+	}
+	// Must have run the session (units + rng), not just the manifest report.
+	if !strings.Contains(s, "rng sim:") && !strings.Contains(s, "skirmish unit") {
+		t.Fatalf("mission run did not produce session summary (expected rng/ unit lines), got: %q", s)
+	}
+	// Ensure it did NOT just fall through to report's provider list as the sole output.
+	// A real session run may still contain notes, but should not be *only* manifest.
+	if strings.Contains(s, "providers:") && !strings.Contains(s, "rng") {
+		t.Fatalf("mission run appears to be manifest-only, not session: %q", s)
 	}
 }

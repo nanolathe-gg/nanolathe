@@ -126,22 +126,20 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 	// Use SurfaceMetal 0 and RNG that draws >0 to force A, which will fail (no patchVec) and Place should return false with exactly 1 draw
 	// Find a seed that gives draw >0 for bound 255
 	var seedForA uint32 = 1
-	var rForA rng.Simulation
 	var drawA uint32
 	for s := uint32(0); s < 1000; s++ {
 		tmp := rng.NewSimulation(s)
 		d := tmp.Uint32n(255)
 		if d > 0 {
 			seedForA = s
-			rForA = rng.NewSimulation(s)
 			drawA = d
 			break
 		}
 	}
 	_ = drawA
+	rng.SeedGlobal(seedForA, 0)
 	mA := &Manager{
 		Catalog:      catalog,
-		RNG:          &rForA,
 		SurfaceMetal: 0, // 0 < draw => A (since draw >0)
 	}
 	mA.Strategic.CenterX = numeric.FixedFromInt(0)
@@ -151,9 +149,9 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 	mA.Strategic.Radius = 0
 	// Need terrain for helper A/B to be relevant; use nil terrain so helper B would succeed but A fails.
 	// With SurfaceMetal 0 < draw, it picks A, which fails and does NOT fall through, so Place should fail
-	before := rForA.Draws()
+	before := rng.Global.Sim.Draws()
 	_, _, ok := Place(mA, "armmex", nil)
-	after := rForA.Draws()
+	after := rng.Global.Sim.Draws()
 	if ok {
 		t.Fatalf("extractor picking A should fail (no patchVec) and not fall through, got success")
 	}
@@ -162,10 +160,9 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 	}
 	// Test extractor branch picks B when SurfaceMetal >= RNG and succeeds via B (nil terrain => success)
 	// Use SurfaceMetal 255 to ensure always picks B (since max draw 254 <255)
-	rB := rng.NewSimulation(12345)
+	rng.SeedGlobal(12345, 0)
 	mB := &Manager{
 		Catalog:      catalog,
-		RNG:          &rB,
 		SurfaceMetal: 255,
 	}
 	mB.Strategic.CenterX = numeric.FixedFromInt(0)
@@ -173,9 +170,9 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 	mB.OriginX = numeric.FixedFromInt(0)
 	mB.OriginZ = numeric.FixedFromInt(0)
 	mB.Strategic.Radius = 0
-	beforeB := rB.Draws()
+	beforeB := rng.Global.Sim.Draws()
 	x, z, ok := Place(mB, "armmex", nil)
-	afterB := rB.Draws()
+	afterB := rng.Global.Sim.Draws()
 	if !ok {
 		t.Fatalf("extractor picking B should succeed via helper B (nil terrain), got failure")
 	}
@@ -187,16 +184,15 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 		// So placement at origin (0,0) is expected
 	}
 	// Non-extractor should not draw 255, but helper B with nil terrain succeeds without extra draws
-	r2 := rng.NewSimulation(999)
+	rng.SeedGlobal(999, 0)
 	m2 := &Manager{
 		Catalog: catalog,
-		RNG:     &r2,
 	}
 	m2.Strategic.CenterX = 0
 	m2.OriginX = 0
-	before2 := r2.Draws()
+	before2 := rng.Global.Sim.Draws()
 	_, _, ok2 := Place(m2, "armsolar", nil)
-	after2 := r2.Draws()
+	after2 := rng.Global.Sim.Draws()
 	if !ok2 {
 		t.Fatalf("non-extractor Place should succeed")
 	}
@@ -204,11 +200,11 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 		t.Fatalf("non-extractor should not consume RNG(255) when terrain nil, got %d->%d", before2, after2)
 	}
 	// Also test unknown def (no catalog entry) -> not extractor, no draw
-	r3 := rng.NewSimulation(42)
-	m3 := &Manager{Catalog: catalog, RNG: &r3}
-	before3 := r3.Draws()
+	rng.SeedGlobal(42, 0)
+	m3 := &Manager{Catalog: catalog}
+	before3 := rng.Global.Sim.Draws()
 	Place(m3, "unknownunit", nil)
-	if r3.Draws() != before3 {
+	if rng.Global.Sim.Draws() != before3 {
 		t.Fatalf("unknown def should be treated as non-extractor, no draw")
 	}
 	// Test exact < boundary: SurfaceMetal = draw => should pick B (since < is strict)
@@ -224,8 +220,8 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 		}
 	}
 	if found {
-		rEq := rng.NewSimulation(seedForEq)
-		mEq := &Manager{Catalog: catalog, RNG: &rEq, SurfaceMetal: 50}
+		rng.SeedGlobal(seedForEq, 0)
+		mEq := &Manager{Catalog: catalog, SurfaceMetal: 50}
 		mEq.Strategic.CenterX = 0
 		mEq.OriginX = 0
 		mEq.Strategic.Radius = 0

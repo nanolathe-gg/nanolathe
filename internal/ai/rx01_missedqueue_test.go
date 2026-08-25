@@ -48,13 +48,13 @@ func TestRX01_MissedCallbacks_MobileSitePath(t *testing.T) {
 		},
 	}
 	prof := &Profile{Weight: map[string]int32{content.CanonicalKey("armsolar"): 100}, Limit: map[string]int32{}}
-	r := rng.NewSimulation(7)
+	rng.SeedGlobal(7, 0)
 	w := units.New(16, cat)
 	h, _ := w.Create(cat.Units[content.CanonicalKey("armcom")], 0, world.CellToWorld(2), 0, world.CellToWorld(2))
 	b := w.Unit(h)
 	b.Remaining = 0
 	mgr := &Manager{
-		Player: 0, Profile: prof, RNG: &r, Catalog: cat,
+		Player: 0, Profile: prof, Catalog: cat,
 		Strategic:    Strategic{CenterX: world.CellToWorld(8), CenterZ: world.CellToWorld(8), Counts: map[string]int32{}, ClassVectors: map[string]ClassVector{content.CanonicalKey("armsolar"): {C0: 40}}},
 		OriginX:      world.CellToWorld(2),
 		OriginZ:      world.CellToWorld(2),
@@ -86,13 +86,13 @@ func TestRX01_MissedCallbacks_FactoryQueuePath(t *testing.T) {
 		},
 	}
 	prof := &Profile{Weight: map[string]int32{content.CanonicalKey("armflea"): 100}, Limit: map[string]int32{}}
-	r := rng.NewSimulation(9)
+	rng.SeedGlobal(9, 0)
 	w := units.New(16, cat)
 	h, _ := w.Create(cat.Units[content.CanonicalKey("armfactory")], 0, world.CellToWorld(2), 0, world.CellToWorld(2))
 	f := w.Unit(h)
 	f.Remaining = 0
 	mgr := &Manager{
-		Player: 0, Profile: prof, RNG: &r, Catalog: cat,
+		Player: 0, Profile: prof, Catalog: cat,
 		Strategic:    Strategic{CenterX: world.CellToWorld(8), CenterZ: world.CellToWorld(8), Counts: map[string]int32{}, ClassVectors: map[string]ClassVector{}},
 		OriginX:      world.CellToWorld(2),
 		OriginZ:      world.CellToWorld(2),

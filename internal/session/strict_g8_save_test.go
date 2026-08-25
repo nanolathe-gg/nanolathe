@@ -128,7 +128,7 @@ func TestStrictSkirmish_NaturalSaveContinuation(t *testing.T) {
 		mgr := &ai.Manager{Player: 1, Profile: &ai.Profile{}}
 		mgr.Terrain = terrain
 		mgr.Catalog = cat
-		mgr.RNG = nil
+		// RNG removed per RS-02
 		mgr.SurfaceMetal = 255
 		mgr.Strategic.Init([]string{"armcom", "armlab", "armflea"})
 		mgr.Strategic.ClassVectors[content.CanonicalKey("armlab")] = ai.ClassVector{C0: 10, C1: 40, C2: 10}
@@ -136,7 +136,7 @@ func TestStrictSkirmish_NaturalSaveContinuation(t *testing.T) {
 		mgr.Strategic.ClassVectors[content.CanonicalKey("armcom")] = ai.ClassVector{C0: 40, C1: 30, C2: 30}
 		mgr.Strategic.LastRefreshTick = 100000
 		mgr.Strategic.LastClassRecomputeTick = 100000
-		s.AI = []*ai.Manager{mgr}
+		s.AI[1] = mgr // RS-02 player-indexed
 		s.RegisterAll()
 		s.State = StateBattle
 		s.Clock.ScaledAnchor = 0
@@ -183,6 +183,9 @@ func TestStrictSkirmish_NaturalSaveContinuation(t *testing.T) {
 		}
 		// Strategic center/origin
 		for _, mm := range s.AI {
+			if mm == nil {
+				continue
+			}
 			mm.Strategic.CenterX = strictCellToWorld(32)
 			mm.Strategic.CenterZ = strictCellToWorld(32)
 			if u := s.Units.Unit(hAI); u != nil {

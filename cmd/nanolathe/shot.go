@@ -74,7 +74,9 @@ func runShot(opts Options, cs *contentSet, out *os.File) error {
 	for i := 0; i < frames; i++ {
 		sess.Step(int32(i + 1)) // scaled-ms anchor: one 30 Hz tick per frame
 		cl.TickTextureAnimators(1)
-		cl.Cursors().Step(1)
+		if cursors := cl.Cursors(); cursors != nil {
+			cursors.Step(1)
+		}
 		b.updateCursor(cl)
 	}
 	for _, u := range sess.Units.Iter() {

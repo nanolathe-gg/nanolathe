@@ -21,8 +21,8 @@ func minimalCatalogForStrict() *content.Catalog {
 	mv["testmove"].CanonicalKey = content.CanonicalKey("testmove")
 	cat := &content.Catalog{
 		Units: map[string]*content.UnitDef{
-			"armcom": {UnitName: "armcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1},
-			"corcom": {UnitName: "corcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1},
+			"armcom": {UnitName: "armcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, Commander: true},
+			"corcom": {UnitName: "corcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, Commander: true},
 		},
 		Movement: mv,
 		Sides: []*content.SideDef{
@@ -175,7 +175,12 @@ func TestTopologySameForBothConstructors(t *testing.T) {
 	fs1 := fsWithMap(t, "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=10;\nZPos=10;\n}\n}\n}\n}\n")
 	ota2 := "[GlobalHeader]\n{\nminwindspeed=10;\nmaxwindspeed=20;\n[Schema 0]\n{\nType=Easy;\n[units]\n{\n[unit0]\n{\nUnitname=armcom;\nXPos=0;\nZPos=0;\n}\n}\n[specials]\n{\n}\n[features]\n{\n}\n}\n}\n"
 	fs2 := fsWithMap(t, ota2)
-	sSkirmish, err := NewSkirmishForTest(fs1, cat, SkirmishConfig{MapName: "test", NumPlayers: 2})
+	cfgSk := SkirmishConfig{MapName: "test", NumPlayers: 2}
+	cfgSk.Players[0].Controller = SkirmishControllerHuman
+	cfgSk.Players[1].Controller = SkirmishControllerComputer
+	cfgSk.Players[0].AllyGroup = 1
+	cfgSk.Players[1].AllyGroup = 2
+	sSkirmish, err := NewSkirmishForTest(fs1, cat, cfgSk)
 	if err != nil {
 		t.Fatalf("skirmish ForTest: %v", err)
 	}

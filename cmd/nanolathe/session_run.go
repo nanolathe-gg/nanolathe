@@ -11,20 +11,18 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
-// skirmishConfigFor maps CLI options to a SkirmishConfig
-// [08 "Skirmish configuration"]. One human slot 0 plus one computer slot 1 is
-// enough for a headless gate run; NumPlayers keeps its validated default when
-// unset.
+// skirmishConfigFor maps CLI options to a SkirmishConfig via the canonical
+// DirectSkirmishConfig normalization [08 "Skirmish configuration"] [GAP T14].
 func skirmishConfigFor(opts Options) session.SkirmishConfig {
-	cfg := session.SkirmishConfig{MapName: opts.Map}
-	cfg.ApplyDefaults()
-	if cfg.NumPlayers < 2 {
-		cfg.NumPlayers = 2
+	if opts.Map == "" {
+		cfg := session.SkirmishConfig{MapName: opts.Map}
+		_ = cfg.Normalize()
+		return cfg
 	}
-	cfg.Players[0].Controller = 0 // human
-	if cfg.NumPlayers > 1 {
-		cfg.Players[1].Controller = 1 // computer; economy maps to controller state 2 [PLAN_11 C1]
-	}
+	cfg := session.DirectSkirmishConfig(opts.Map)
+	// Ensure map name from opts overrides any normalized default.
+	cfg.MapName = opts.Map
+	_ = cfg.Normalize()
 	return cfg
 }
 
@@ -317,4 +315,5 @@ func restoreSessionState(sess *session.Session, cat *content.Catalog, st *save.S
 	// orders, movement routes, economy, features, projectiles, AI, visibility, latch, wind [P0-I11].
 	_ = cat
 	_ = sess.RestoreStateV1(st)
+	sess.RecalcLocalOwner()
 }

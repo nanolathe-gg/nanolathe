@@ -7,6 +7,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -48,7 +49,7 @@ type retailBattleHUD struct {
 	pausedFrame *formats.GAFFrame
 
 	panel *hud.Panel
-	fs    *vfs.FS
+	fs    vfs.FSOps
 	pages map[string]*formats.GAF
 	// Cache resolved GUI/model once instead of reparsing on draw/click [ON-05 1][R-P0-03]
 	windows    map[string]*gui.Window
@@ -61,10 +62,82 @@ type retailBattleHUD struct {
 	rateSampleOK   bool
 }
 
+// hudFS is the read surface we need for HUD loads plus provider listing for diagnostics.
+type hudFS interface {
+	vfs.FSOps
+	Providers() []vfs.ProviderInfo
+}
+
+// hudProviders returns the ordered provider identities for diagnostics [ORCHESTRATION §7].
+func hudProviders(fs vfs.FSOps) []string {
+	if fs == nil {
+		return nil
+	}
+	if p, ok := fs.(interface{ Providers() []vfs.ProviderInfo }); ok {
+		infos := p.Providers()
+		out := make([]string, 0, len(infos))
+		for _, info := range infos {
+			id := info.ID
+			if id == "" {
+				id = info.Type
+			}
+			out = append(out, id)
+		}
+		return out
+	}
+	return nil
+}
+
+func hudProviderList(fs vfs.FSOps) string {
+	return strings.Join(hudProviders(fs), ", ")
+}
+
+func hudAssetError(fs vfs.FSOps, logical, ctx string, err error) error {
+	return fmt.Errorf("nanolathe: battle HUD: %s: logical path %s, providers searched [%s]: %w", ctx, logical, hudProviderList(fs), err)
+}
+
+func hudAssetWarning(fs vfs.FSOps, logical, ctx string, err error) {
+	fmt.Fprintf(os.Stderr, "nanolathe: battle HUD: %s: logical path %s, providers searched [%s]: %v\n", ctx, logical, hudProviderList(fs), err)
+}
+
+func loadGAFOptional(fs vfs.FSOps, logical, ctx string) *formats.GAF {
+	gaf, err := formats.LoadGAFFile(fs, logical)
+	if err != nil {
+		hudAssetWarning(fs, logical, ctx, err)
+		return nil
+	}
+	return gaf
+}
+
+func loadGUIOptional(fs vfs.FSOps, logical, ctx string) *gui.Window {
+	w, err := gui.Load(fs, logical)
+	if err != nil {
+		hudAssetWarning(fs, logical, ctx, err)
+		return nil
+	}
+	return w
+}
+
+func battleFrameWithDiag(fs vfs.FSOps, g *formats.GAF, logical, name string) (*formats.GAFFrame, error) {
+	f, err := battleFrame(g, name)
+	if err != nil {
+		return nil, hudAssetError(fs, logical, fmt.Sprintf("interface GAF missing %s [02 §6]", name), err)
+	}
+	return f, nil
+}
+
 // loadRetailBattleHUD binds the same side-selected resources as the retail
-// battle entry path. Missing side fonts, anchors, interface GAF, or panel
-// frames are data errors; there is no fallback custom HUD.
-func loadRetailBattleHUD(fs *vfs.FS, sess *session.Session, cat *content.Catalog, pal *palette.Tables) (*retailBattleHUD, error) {
+// battle entry path. Mandatory assets are side, fonts, 30 anchors and core
+// panel frames [02 §6][07 §6]; their absence fails before client creation with
+// a provider-aware diagnostic (logical path + providers searched) [ORCHESTRATION §7].
+// Pause/options/exit/confirm/title resources are individually degradable when
+// retail permits [07 §8][07 "Tab options menu and manual exit"]; missing
+// cursor GAF is also degradable and retains the OS pointer [07 §8].
+// Option/menu assets are resolved by side where established (ARM vs CORE) —
+// CORE does not load ARM-specific options unconditionally [07 "Tab options menu and manual exit"].
+// GUI/GAF loads are cached at battle entry in the HUD maps (windows/pages) so
+// the frame loop does not re-read VFS [07 §4].
+func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catalog, pal *palette.Tables) (*retailBattleHUD, error) {
 	if fs == nil || sess == nil || cat == nil {
 		return nil, fmt.Errorf("battle HUD: missing VFS, session, or catalog")
 	}
@@ -77,93 +150,105 @@ func loadRetailBattleHUD(fs *vfs.FS, sess *session.Session, cat *content.Catalog
 	}
 	anchors, err := hud.AnchorsFromSide(side)
 	if err != nil {
-		return nil, err
+		logical := "gamedata/sidedata.tdf"
+		return nil, hudAssetError(fs, logical, fmt.Sprintf("side %s missing anchor %s", side.Name, err), err)
 	}
 	if strings.TrimSpace(side.Font) == "" || strings.TrimSpace(side.FontGUI) == "" {
-		return nil, fmt.Errorf("battle HUD: side %s has no console/gui font [02 §6]", side.Name)
+		logical := "gamedata/sidedata.tdf"
+		return nil, hudAssetError(fs, logical, fmt.Sprintf("side %s has no console/gui font [02 §6]", side.Name), fmt.Errorf("missing font"))
 	}
-	console, err := formats.LoadFNTFile(fs, "fonts/"+strings.ToLower(side.Font)+".fnt")
+	// Mandatory fonts [02 §6][GAP T14] — fail with provider diagnostic.
+	logicalConsole := "fonts/" + strings.ToLower(side.Font) + ".fnt"
+	console, err := formats.LoadFNTFile(fs, logicalConsole)
 	if err != nil {
-		return nil, fmt.Errorf("battle HUD: side %s font %q: %w [02 §6]", side.Name, side.Font, err)
+		return nil, hudAssetError(fs, logicalConsole, fmt.Sprintf("side %s font %q [02 §6]", side.Name, side.Font), err)
 	}
-	guiFont, err := formats.LoadFNTFile(fs, "fonts/"+strings.ToLower(side.FontGUI)+".fnt")
+	logicalGUI := "fonts/" + strings.ToLower(side.FontGUI) + ".fnt"
+	guiFont, err := formats.LoadFNTFile(fs, logicalGUI)
 	if err != nil {
-		return nil, fmt.Errorf("battle HUD: side %s GUI font %q: %w [02 §6]", side.Name, side.FontGUI, err)
+		return nil, hudAssetError(fs, logicalGUI, fmt.Sprintf("side %s GUI font %q [02 §6]", side.Name, side.FontGUI), err)
 	}
-	intGAF, err := formats.LoadGAFFile(fs, "anims/"+strings.ToLower(side.IntGAF)+".gaf")
+	// Mandatory side intgaf [02 §6][07 §6].
+	logicalIntGAF := "anims/" + strings.ToLower(side.IntGAF) + ".gaf"
+	intGAF, err := formats.LoadGAFFile(fs, logicalIntGAF)
 	if err != nil {
-		return nil, fmt.Errorf("battle HUD: side %s intgaf %q: %w [02 §6]", side.Name, side.IntGAF, err)
+		return nil, hudAssetError(fs, logicalIntGAF, fmt.Sprintf("side %s intgaf %q [02 §6]", side.Name, side.IntGAF), err)
 	}
-	panelTop, err := battleFrame(intGAF, "PANELTOP")
+	// Mandatory core panel frames [02 §6][07 §6].
+	panelTop, err := battleFrameWithDiag(fs, intGAF, logicalIntGAF, "PANELTOP")
 	if err != nil {
 		return nil, err
 	}
-	panelSide, err := battleFrame(intGAF, "PANELSIDE")
+	panelSide, err := battleFrameWithDiag(fs, intGAF, logicalIntGAF, "PANELSIDE")
 	if err != nil {
 		return nil, err
 	}
-	panelBottom, err := battleFrame(intGAF, "PANELBOT")
+	panelBottom, err := battleFrameWithDiag(fs, intGAF, logicalIntGAF, "PANELBOT")
 	if err != nil {
 		return nil, err
 	}
-	common, err := formats.LoadGAFFile(fs, "anims/commongui.gaf")
-	if err != nil {
-		return nil, fmt.Errorf("battle HUD: commongui.gaf: %w", err)
+	// Optional support GAFs — degradable individually [07 §4][07 "Tab options menu and manual exit"].
+	// Missing optional assets log a provider-aware warning and leave nil so battle still enters.
+	common := loadGAFOptional(fs, "anims/commongui.gaf", "commongui.gaf")
+	oldMain := loadGAFOptional(fs, "anims/oldmain.gaf", "oldmain.gaf")
+	share := loadGAFOptional(fs, "anims/share.gaf", "share.gaf")
+	logos := loadGAFOptional(fs, "textures/logos.gaf", "textures/logos.gaf")
+	// Options menu — side-aware, degradable [07 "Tab options menu and manual exit"].
+	// Retail hard-codes guis/armopt.gui for the Tab menu (not side-prefixed), but
+	// we resolve by side where established: ARM uses armopt, CORE uses coropt
+	// where present. CORE never loads ARM-specific options unconditionally.
+	var optionsWin *gui.Window
+	var optionsGAF *formats.GAF
+	if strings.EqualFold(side.NamePrefix, "COR") {
+		optionsWin = loadGUIOptional(fs, "guis/coropt.gui", "options window (CORE) [07 \"Tab options menu and manual exit\"]")
+		optionsGAF = loadGAFOptional(fs, "anims/coropt.gaf", "options GAF (CORE) [07 \"Tab options menu and manual exit\"]")
+		// Do not load ARM-specific options unconditionally for CORE.
+	} else {
+		optionsWin = loadGUIOptional(fs, "guis/armopt.gui", "options window [07 \"Tab options menu and manual exit\"]")
+		optionsGAF = loadGAFOptional(fs, "anims/armopt.gaf", "options GAF [07 \"Tab options menu and manual exit\"]")
 	}
-	oldMain, err := formats.LoadGAFFile(fs, "anims/oldmain.gaf")
-	if err != nil {
-		return nil, fmt.Errorf("battle HUD: oldmain.gaf: %w", err)
+	// Optional modal windows — degradable individually [07 "Tab options menu and manual exit"].
+	exitWin := loadGUIOptional(fs, "guis/exitmenu.gui", "exitmenu.gui [07 \"Tab options menu and manual exit\"]")
+	confirmWin := loadGUIOptional(fs, "guis/yesorno.gui", "yesorno.gui [07 \"Tab options menu and manual exit\"]")
+	// Optional modal font — degradable [07 §4].
+	var modalFont *formats.GAFEntry
+	hattPath := "anims/hattfont12.gaf"
+	if gaf, ferr := formats.LoadGAFFile(fs, hattPath); ferr == nil {
+		if len(gaf.Entries) == 0 || len(gaf.Entries[0].Frames) == 0 {
+			hudAssetWarning(fs, hattPath, "hattfont12.gaf has no glyph entry [07 §4]", fmt.Errorf("empty"))
+		} else {
+			modalFont = &gaf.Entries[0]
+		}
+	} else {
+		hudAssetWarning(fs, hattPath, "hattfont12.gaf [07 §4]", ferr)
 	}
-	share, err := formats.LoadGAFFile(fs, "anims/share.gaf")
-	if err != nil {
-		return nil, fmt.Errorf("battle HUD: share.gaf: %w", err)
-	}
-	logos, err := formats.LoadGAFFile(fs, "textures/logos.gaf")
-	if err != nil {
-		return nil, fmt.Errorf("battle HUD: textures/logos.gaf: %w", err)
-	}
-	optionsWin, err := gui.Load(fs, "guis/armopt.gui")
-	if err != nil {
-		return nil, fmt.Errorf("battle HUD: armopt.gui: %w [07 \"Tab options menu and manual exit\"]", err)
-	}
-	optionsGAF, err := formats.LoadGAFFile(fs, "anims/armopt.gaf")
-	if err != nil {
-		return nil, fmt.Errorf("battle HUD: armopt.gaf: %w [07 \"Tab options menu and manual exit\"]", err)
-	}
-	exitWin, err := gui.Load(fs, "guis/exitmenu.gui")
-	if err != nil {
-		return nil, fmt.Errorf("battle HUD: exitmenu.gui: %w [07 \"Tab options menu and manual exit\"]", err)
-	}
-	confirmWin, err := gui.Load(fs, "guis/yesorno.gui")
-	if err != nil {
-		return nil, fmt.Errorf("battle HUD: yesorno.gui: %w [07 \"Tab options menu and manual exit\"]", err)
-	}
-	modalFontGAF, err := formats.LoadGAFFile(fs, "anims/hattfont12.gaf")
-	if err != nil {
-		return nil, fmt.Errorf("battle HUD: hattfont12.gaf: %w [07 §4]", err)
-	}
-	if len(modalFontGAF.Entries) == 0 || len(modalFontGAF.Entries[0].Frames) == 0 {
-		return nil, fmt.Errorf("battle HUD: hattfont12.gaf has no glyph entry [07 §4]")
+	// Optional title art — degradable [07 §11].
+	var pausedFrame *formats.GAFFrame
+	titlesPath := "anims/igtitles.gaf"
+	if gaf, ferr := formats.LoadGAFFile(fs, titlesPath); ferr == nil {
+		if f, ferr2 := battleFrame(gaf, "igpaused"); ferr2 == nil {
+			pausedFrame = f
+		} else {
+			hudAssetWarning(fs, titlesPath, "igtitles.gaf missing igpaused [07 §11]", ferr2)
+		}
+	} else {
+		hudAssetWarning(fs, titlesPath, "igtitles.gaf [07 §11]", ferr)
 	}
 	// EXITMENU and YESORNO are opened with the executable's 0x1000 placement
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// then centers them in the 512-pixel playfield to the right of the rail.
-	placeBattleModal(exitWin, 640, 480)
-	placeBattleModal(confirmWin, 640, 480)
-	titles, err := formats.LoadGAFFile(fs, "anims/igtitles.gaf")
-	if err != nil {
-		return nil, fmt.Errorf("battle HUD: igtitles.gaf: %w [07 §11]", err)
+	if exitWin != nil {
+		placeBattleModal(exitWin, 640, 480)
 	}
-	pausedFrame, err := battleFrame(titles, "igpaused")
-	if err != nil {
-		return nil, err
+	if confirmWin != nil {
+		placeBattleModal(confirmWin, 640, 480)
 	}
 	return &retailBattleHUD{
 		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, pal: pal,
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
 		optionsGAF: optionsGAF, optionsWin: optionsWin, exitWin: exitWin, confirmWin: confirmWin,
-		modalFont: &modalFontGAF.Entries[0], pausedFrame: pausedFrame,
+		modalFont: modalFont, pausedFrame: pausedFrame,
 		panel: hud.NewPanel(0x04, 640, 480, nil), fs: fs,
 		pages:      make(map[string]*formats.GAF),
 		windows:    make(map[string]*gui.Window),
@@ -1040,11 +1125,19 @@ func (h *retailBattleHUD) loadWindow(name string) (*gui.Window, *formats.GAF) {
 	if h == nil || h.fs == nil || name == "" {
 		return nil, nil
 	}
-	if cached, ok := h.windows[name]; ok && cached != nil {
-		return cached, h.pages[name]
+	if cached, ok := h.windows[name]; ok {
+		if cached != nil {
+			return cached, h.pages[name]
+		}
+		return nil, nil // cached miss
 	}
 	window, err := gui.Load(h.fs, "guis/"+name+".gui")
 	if err != nil {
+		if h.windows == nil {
+			h.windows = make(map[string]*gui.Window)
+		}
+		h.windows[name] = nil // cache miss to avoid repeated VFS hits [07 §4]
+		hudAssetWarning(h.fs, "guis/"+name+".gui", "builder GUI "+name+" [07 §9]", err)
 		return nil, nil
 	}
 	if h.windows == nil {
@@ -1061,6 +1154,13 @@ func (h *retailBattleHUD) loadWindow(name string) (*gui.Window, *formats.GAF) {
 			}
 			h.pages[name] = loaded
 			gaf = loaded
+		} else {
+			// Missing builder GAF is degradable; cache miss and warn once [07 §9].
+			if h.pages == nil {
+				h.pages = make(map[string]*formats.GAF)
+			}
+			h.pages[name] = nil
+			hudAssetWarning(h.fs, "anims/"+name+".gaf", "builder GAF "+name+" [07 §9]", loadErr)
 		}
 	}
 	return window, gaf

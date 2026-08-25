@@ -39,14 +39,13 @@ func TestTypedBuildRequestPreservesCoordinates(t *testing.T) {
 	h, _ := w.Create(cat.Units[content.CanonicalKey("armcom")], 0, world.CellToWorld(2), 0, world.CellToWorld(2))
 	builder := w.Unit(h)
 	builder.Remaining = 0
-	r := rng.NewSimulation(123)
+	rng.SeedGlobal(123, 0)
 	mgr := &Manager{
 		Player:       0,
 		Catalog:      cat,
 		Strategic:    Strategic{CenterX: world.CellToWorld(8), CenterZ: world.CellToWorld(8), Radius: 0, Counts: map[string]int32{}, ClassVectors: map[string]ClassVector{content.CanonicalKey("armsolar"): {C0: 40}}},
 		OriginX:      world.CellToWorld(2),
 		OriginZ:      world.CellToWorld(2),
-		RNG:          &r,
 		SurfaceMetal: 0,
 		Factory:      builder,
 		Terrain:      terrain,
@@ -102,7 +101,6 @@ func TestTypedBuildRequestPreservesCoordinates(t *testing.T) {
 		Player:    0,
 		Catalog:   cat,
 		Strategic: Strategic{CenterX: world.CellToWorld(8), CenterZ: world.CellToWorld(8), Radius: 0, Counts: map[string]int32{}, ClassVectors: map[string]ClassVector{content.CanonicalKey("armflash"): {C0: 40}}},
-		RNG:       &r,
 		Factory:   facUnit,
 		Terrain:   terrain,
 	}
@@ -203,8 +201,8 @@ func TestMilestoneSequenceObservesProduction(t *testing.T) {
 	if err := fs.MountDirectory(tmpDir, 10); err != nil {
 		t.Fatalf("mount: %v", err)
 	}
-	r := rng.NewSimulation(42)
-	mgr, err := NewManager(0, fs, "default", &r, cat, 0, nil)
+	rng.SeedGlobal(42, 0)
+	mgr, err := NewManager(0, fs, "default", nil, cat, 0, nil)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -271,7 +269,7 @@ func TestMilestoneSequenceObservesProduction(t *testing.T) {
 		t.Fatalf("BuildRequestAccepted not set after QueueBuildTyped success")
 	}
 	// Ensure not setting due to table entry alone: reset manager without Tick, with same catalog but no queue, milestones should remain only ProfileLoaded.
-	mgr2 := &Manager{Player: 0, Profile: mgr.Profile, Catalog: cat, RNG: &r}
+	mgr2 := &Manager{Player: 0, Profile: mgr.Profile, Catalog: cat}
 	mgr2.Strategic.Catalog = cat
 	if len(mgr2.Milestones()) != 0 {
 		t.Fatalf("fresh manager without Tick should have no milestones, got %v", mgr2.Milestones())
@@ -362,7 +360,7 @@ func TestMilestoneSequenceObservesProduction(t *testing.T) {
 		}
 	}
 	// Ensure not all milestones set due to table entry alone: create a manager with catalog that has build menu but no world progress, no milestones beyond ProfileLoaded.
-	mgrEmpty := &Manager{Player: 0, Profile: mgr.Profile, Catalog: cat, RNG: &r, Terrain: terrain}
+	mgrEmpty := &Manager{Player: 0, Profile: mgr.Profile, Catalog: cat, Terrain: terrain}
 	mgrEmpty.Strategic.Catalog = cat
 	mgrEmpty.Tick(0, units.New(16, cat), &econ)
 	if len(mgrEmpty.Milestones()) > 1 { // only ProfileLoaded expected
@@ -380,7 +378,7 @@ func TestAllianceAwareSelection(t *testing.T) {
 			content.CanonicalKey("armflash"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflash")}, UnitName: "armflash", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", Builder: false, CanMove: true, CanAttack: true, MaxDamage: 100, Weapon1Def: &content.WeaponDef{}},
 		},
 	}
-	r := rng.NewSimulation(1)
+	rng.SeedGlobal(1, 0)
 	allyGroups := map[uint8]int{0: 0, 1: 0, 2: 1}
 	isAlliance := func(a, b uint8) bool {
 		ga, oka := allyGroups[a]
@@ -392,7 +390,6 @@ func TestAllianceAwareSelection(t *testing.T) {
 	}
 	mgr := &Manager{
 		Player:     0,
-		RNG:        &r,
 		Catalog:    cat,
 		IsAlliance: isAlliance,
 	}
@@ -427,7 +424,7 @@ func TestAllianceAwareSelection(t *testing.T) {
 		}
 		return ga == gb
 	}
-	mgr2 := &Manager{Player: 0, RNG: &r, IsAlliance: isAlliance2}
+	mgr2 := &Manager{Player: 0, IsAlliance: isAlliance2}
 	mgr2.Strategic.CenterX = 0
 	w2 := units.New(16, cat)
 	hA2, _ := w2.Create(cat.Units[content.CanonicalKey("armflash")], 1, numeric.FixedFromInt(10), 0, 0)
@@ -436,7 +433,7 @@ func TestAllianceAwareSelection(t *testing.T) {
 		t.Fatalf("all allied, expected nil target, got owner %d", t2.Owner)
 	}
 	// Default same-owner-only when IsAlliance nil
-	mgr3 := &Manager{Player: 0, RNG: &r, IsAlliance: nil}
+	mgr3 := &Manager{Player: 0, IsAlliance: nil}
 	mgr3.Strategic.CenterX = 0
 	w3 := units.New(16, cat)
 	hA3, _ := w3.Create(cat.Units[content.CanonicalKey("armflash")], 1, numeric.FixedFromInt(5), 0, 0)
@@ -479,7 +476,7 @@ func TestDeterministicSeededRuns(t *testing.T) {
 	plot := world.ExpandPlot(attrs, 16, 16)
 	terrain := &world.Terrain{CellW: 16, CellH: 16, Plot: plot, Version: world.VersionCanonical}
 	run := func(seed uint32) ([]BuildRequest, [TaskKindCount]uint32) {
-		r := rng.NewSimulation(seed)
+		rng.SeedGlobal(seed, 0)
 		w := units.New(16, cat)
 		h, _ := w.Create(cat.Units[content.CanonicalKey("armcom")], 0, world.CellToWorld(2), 0, world.CellToWorld(2))
 		b := w.Unit(h)
@@ -487,7 +484,6 @@ func TestDeterministicSeededRuns(t *testing.T) {
 		mgr := &Manager{
 			Player:       0,
 			Profile:      prof,
-			RNG:          &r,
 			Catalog:      cat,
 			Strategic:    Strategic{CenterX: world.CellToWorld(8), CenterZ: world.CellToWorld(8), Radius: 0, Counts: map[string]int32{}, ClassVectors: map[string]ClassVector{content.CanonicalKey("armsolar"): {C0: 40}}},
 			OriginX:      world.CellToWorld(2),
@@ -560,11 +556,11 @@ func TestMissingProfileErrors(t *testing.T) {
 		t.Fatalf("LoadProfile should error for missing profile with no fallback")
 	}
 	// NewManager should also error
-	r := rng.NewSimulation(1)
-	if _, err := NewManager(0, fsEmpty, "nonexistent", &r, nil, 0, nil); err == nil {
+	rng.SeedGlobal(1, 0)
+	if _, err := NewManager(0, fsEmpty, "nonexistent", nil, nil, 0, nil); err == nil {
 		t.Fatalf("NewManager should error for missing selected profile")
 	}
-	if _, err := NewManager(0, fsEmpty, "", &r, nil, 0, nil); err == nil {
+	if _, err := NewManager(0, fsEmpty, "", nil, nil, 0, nil); err == nil {
 		t.Fatalf("NewManager should error for empty profile name")
 	}
 	// With default present, LoadProfile should succeed via fallback
@@ -581,11 +577,11 @@ func TestMissingProfileErrors(t *testing.T) {
 	if _, err := LoadProfile(fsWithDefault, "missing_but_default_exists"); err != nil {
 		t.Fatalf("LoadProfile with fallback should succeed when default exists, got %v", err)
 	}
-	if _, err := NewManager(0, fsWithDefault, "missing_but_default_exists", &r, nil, 0, nil); err != nil {
+	if _, err := NewManager(0, fsWithDefault, "missing_but_default_exists", nil, nil, 0, nil); err != nil {
 		t.Fatalf("NewManager fallback should succeed, got %v", err)
 	}
 	// Explicit missing with no fallback should be loud, not passive manager.
-	if _, err := NewManager(0, fsEmpty, "default", &r, nil, 0, nil); err == nil {
+	if _, err := NewManager(0, fsEmpty, "default", nil, nil, 0, nil); err == nil {
 		t.Fatalf("NewManager should error when default itself missing")
 	}
 }

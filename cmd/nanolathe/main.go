@@ -43,6 +43,50 @@ func wantsViewer(opts Options) bool {
 	return !opts.Headless && opts.Map != "" && opts.Dump == ""
 }
 
+// shouldRunShot reports whether run() will dispatch to runShot [P5].
+func shouldRunShot(opts Options) bool {
+	return opts.Shot != ""
+}
+
+// shouldRunHeadlessSession reports whether run() will dispatch to
+// runSessionHeadless [P5][P6]. It mirrors the condition in run() after the
+// shot and load checks: shot takes precedence over headless, and Mission is
+// included alongside Map.
+func shouldRunHeadlessSession(opts Options) bool {
+	if opts.Shot != "" {
+		return false
+	}
+	if opts.Headless && opts.Load != "" {
+		return false
+	}
+	return opts.Headless && (opts.Map != "" || opts.Mission != "") && opts.Dump == ""
+}
+
+// dispatchKind is the testable form of run()'s branch ordering [P5][P6].
+// It returns the name of the branch run() would take for opts, without
+// performing I/O.
+func dispatchKind(opts Options) string {
+	if opts.Dump == "route" {
+		return "route"
+	}
+	if opts.Headless && opts.Load != "" {
+		return "load"
+	}
+	if opts.Shot != "" {
+		return "shot"
+	}
+	if opts.Headless && (opts.Map != "" || opts.Mission != "") && opts.Dump == "" {
+		return "headless"
+	}
+	if !opts.Headless && opts.Dump == "" {
+		return "shell"
+	}
+	if wantsViewer(opts) {
+		return "viewer"
+	}
+	return "report"
+}
+
 // seedsFor resolves the two stream seeds.
 //
 // Retail seeds them separately: the simulation stream at battle entry from
@@ -90,17 +134,20 @@ func run(opts Options, out *os.File) error {
 	if opts.Headless && opts.Load != "" {
 		return runLoadAndContinue(opts, content, out)
 	}
-	// Headless --map runs the REAL integrated session per Gate 5 [PLAN_14]:
-	// session.NewSkirmish → Step loop → deterministic summary. (--save rides it.)
-	if opts.Headless && opts.Map != "" && opts.Dump == "" {
+	// Programmatic screenshot: compose frames headless and write a PNG.
+	// Must precede headless-session branch: --headless --map shadows --shot
+	// was unreachable [P5]. Shot path handles map/session itself via runShot.
+	if opts.Shot != "" {
+		return runShot(opts, content, out)
+	}
+	// Headless --map/--mission runs the REAL integrated session per Gate 5 [PLAN_14]:
+	// session.NewSkirmish / NewMission → Step loop → deterministic summary. (--save rides it.)
+	// Include Mission in dispatch: --headless --mission was silently falling through to report [P6].
+	if opts.Headless && (opts.Map != "" || opts.Mission != "") && opts.Dump == "" {
 		if err := runSessionHeadless(opts, content, out); err != nil {
 			return err
 		}
 		return nil
-	}
-	// Programmatic screenshot: compose frames headless and write a PNG.
-	if opts.Shot != "" {
-		return runShot(opts, content, out)
 	}
 	// Windowed play goes through the game shell (menus → battle view);
 	// --map skips menus and enters the battle directly [PLAN_14].

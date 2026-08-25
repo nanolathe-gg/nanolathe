@@ -138,8 +138,10 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 	report.Report(FamilyScripts, 100)
 	ensureMovementForAll(s)
 	publishVisibilityForAll(s)
-	// AI managers for computer players [P0-I12]
-	s.AI = make([]*ai.Manager, 0, 1)
+	// AI managers for computer players [P0-I12] RS-02: player-indexed [10]*Manager
+	for i := range s.AI {
+		s.AI[i] = nil
+	}
 	mgAI := mission.DecodeMissionGlobals(m.OTA.Global)
 	aiProfileName := mgAI.AIProfile
 	if strings.TrimSpace(aiProfileName) == "" {
@@ -152,17 +154,28 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 				continue
 			}
 			mgr := &ai.Manager{Player: uint8(i), Profile: prof, Terrain: s.World, Catalog: s.Catalog}
-			s.AI = append(s.AI, mgr)
+			bindAIQueue(mgr, s)
+			s.AI[i] = mgr
 		}
 	}
 	// P0-I12: initialize class maps from catalog for each manager, ensure vectors not zero [08][P0-01]
-	if len(s.AI) > 0 && s.Catalog != nil && len(s.Catalog.Units) > 0 {
+	hasAI3 := false
+	for _, mgr := range s.AI {
+		if mgr != nil {
+			hasAI3 = true
+			break
+		}
+	}
+	if hasAI3 && s.Catalog != nil && len(s.Catalog.Units) > 0 {
 		allTypes := make([]string, 0, len(s.Catalog.Units))
 		for k := range s.Catalog.Units {
 			allTypes = append(allTypes, k)
 		}
 		sort.Strings(allTypes)
 		for _, mgr := range s.AI {
+			if mgr == nil {
+				continue
+			}
 			mgr.SetCatalog(s.Catalog)
 			mgr.Strategic.Init(allTypes)
 			if s.World != nil {

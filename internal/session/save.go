@@ -570,8 +570,15 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 		}
 		sort.Slice(st.Projectiles, func(i, j int) bool { return st.Projectiles[i].Handle < st.Projectiles[j].Handle })
 	}
-	// AI [08][PLAN_11]
-	if len(s.AI) > 0 {
+	// AI [08][PLAN_11] RS-02: player-indexed [10]*Manager, direct index, no packed scan
+	hasAIMgr := false
+	for _, m := range s.AI {
+		if m != nil {
+			hasAIMgr = true
+			break
+		}
+	}
+	if hasAIMgr {
 		for _, m := range s.AI {
 			if m == nil {
 				continue
@@ -1228,22 +1235,20 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 		}
 		*s.Combat = *newSvc
 	}
-	// AI
+	// AI RS-02: player-indexed [10]*Manager, direct access, assert index == Player
 	if len(st.AI) > 0 {
-		// Ensure s.AI has managers for those players; create if missing
-		mByPlayer := make(map[uint8]*ai.Manager, len(s.AI))
-		for _, m := range s.AI {
-			if m != nil {
-				mByPlayer[m.Player] = m
-			}
-		}
 		for _, rec := range st.AI {
-			m, ok := mByPlayer[rec.Player]
-			if !ok {
-				// create new manager
+			if int(rec.Player) < 0 || int(rec.Player) >= 10 {
+				continue
+			}
+			m := s.AI[rec.Player]
+			if m == nil {
 				m = &ai.Manager{Player: rec.Player}
-				s.AI = append(s.AI, m)
-				mByPlayer[rec.Player] = m
+				s.AI[rec.Player] = m
+			}
+			if int(m.Player) != int(rec.Player) {
+				// Enforce RS-02 invariant at restore
+				m.Player = rec.Player
 			}
 			m.Deadlines = rec.Deadlines
 			m.SurfaceMetal = rec.SurfaceMetal
@@ -1320,7 +1325,6 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 				m.GroupRegroupB[i] = pool.Handle(h)
 			}
 		}
-		sort.Slice(s.AI, func(i, j int) bool { return s.AI[i].Player < s.AI[j].Player })
 	}
 	// Visibility
 	if s.Vis != nil {

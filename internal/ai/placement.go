@@ -35,14 +35,8 @@ func (m *Manager) getStrategic() *Strategic                  { return &m.Strateg
 func (m *Manager) getOrigin() (numeric.Fixed, numeric.Fixed) { return m.OriginX, m.OriginZ }
 func (m *Manager) setOrigin(x, z numeric.Fixed)              { m.OriginX, m.OriginZ = x, z }
 func (m *Manager) getRNG() *rng.Simulation {
-	if m == nil {
-		return nil
-	}
-	if m.RNG != nil {
-		return m.RNG
-	}
-	// Manager-local RNG not owned: nil signals deterministic fallback without global leakage [P0-07] ON-06.
-	return nil
+	// Single global simulation stream per I4 RS-02 [08]; no per-manager RNG.
+	return rng.Global.Sim
 }
 func (m *Manager) getSurfaceMetal() int32 {
 	if m == nil {
@@ -208,8 +202,8 @@ func extractorHelperB(m placementManager, defKey string, surfaceMetal int32) boo
 	}
 	rngStream := m.getRNG()
 	if rngStream == nil {
-		tmp := rng.NewSimulation(1)
-		rngStream = &tmp
+		// Global not seeded — no draws; production always seeded per I4.
+		return true
 	}
 	// Determine region bounds for scatter; use terrain dimensions if available.
 	var regionW, regionH int32 = 32, 32
@@ -374,10 +368,10 @@ func Place(m *Manager, defKey string, w *world.Terrain) (numeric.Fixed, numeric.
 	if m.isExtractor(defKey) {
 		rngStream := m.getRNG()
 		if rngStream == nil {
-			tmp := rng.NewSimulation(1)
-			rngStream = &tmp
+			// Global not seeded — treat as draw 0 without advancing; production always seeded.
+			return 0, 0, false
 		}
-		// Exactly one RNG(255) draw for selector when extractor [P0-03 §5] (I4).
+		// Exactly one RNG(255) draw for selector when extractor [P0-03 §5] (I4) single global stream RS-02.
 		draw := rngStream.Uint32n(255) // bound 255 is the extractor branch census [PLAN_11 C9][P0-03]
 		sm := m.getSurfaceMetal()      // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		// Reverse branch sense: SurfaceMetal < RNG(255) strict < via CMP/JGE picks A else B [P0-03 §3.1] DIRECT.

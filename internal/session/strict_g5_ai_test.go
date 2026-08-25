@@ -98,7 +98,7 @@ func buildStrictG5Session(t *testing.T, simSeed, crtSeed uint32) (*Session, *ai.
 	mgr := &ai.Manager{Player: 1, Profile: &ai.Profile{}}
 	mgr.Terrain = terrain
 	mgr.Catalog = cat
-	mgr.RNG = nil // prevent gated recompute overwriting manual vectors [08]
+	// RNG removed per RS-02; Global.Sim used overwriting manual vectors [08]
 	mgr.SurfaceMetal = 255
 	mgr.Strategic.Init([]string{"armcom", "armlab", "armflea"})
 	// Ensure positive scores for factory and combat unit candidates [08][PLAN_11 C6]
@@ -109,7 +109,7 @@ func buildStrictG5Session(t *testing.T, simSeed, crtSeed uint32) (*Session, *ai.
 	// Prevent periodic refresh from overwriting vectors and changing center too early
 	mgr.Strategic.LastRefreshTick = 100000
 	mgr.Strategic.LastClassRecomputeTick = 100000
-	s.AI = []*ai.Manager{mgr}
+	s.AI[1] = mgr // RS-02 player-indexed
 	s.RegisterAll()
 	s.State = StateBattle
 	// Commanders are disarmed: this gate proves the AI's own build→attack chain,
@@ -137,6 +137,9 @@ func buildStrictG5Session(t *testing.T, simSeed, crtSeed uint32) (*Session, *ai.
 		s.Movement.EnsureUnit(uD)
 	}
 	for _, mm := range s.AI {
+		if mm == nil {
+			continue
+		}
 		mm.Strategic.CenterX = strictCellToWorld(32)
 		mm.Strategic.CenterZ = strictCellToWorld(32)
 		mm.OriginX = u1.X

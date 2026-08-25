@@ -93,26 +93,8 @@ func getGateCandidates(m Selector) map[string]struct{} {
 }
 
 func getSelectorRNG(m Selector) *rng.Simulation {
-	if m == nil {
-		return nil
-	}
-	// Prefer Manager concrete type with owned RNG [P0-07].
-	if mgr, ok := m.(*Manager); ok && mgr != nil && mgr.RNG != nil {
-		return mgr.RNG
-	}
-	// Also support Selector that exposes GetRNG (test fakes) [P0-07].
-	if gr, ok := m.(interface{ GetRNG() *rng.Simulation }); ok {
-		if r := gr.GetRNG(); r != nil {
-			return r
-		}
-	}
-	// Also support placementManager private getRNG (lowercase) via interface.
-	if gr, ok := m.(interface{ getRNG() *rng.Simulation }); ok {
-		if r := gr.getRNG(); r != nil {
-			return r
-		}
-	}
-	return nil
+	// Single global simulation stream per I4 and RS-02 [08] — no per-manager RNG.
+	return rng.Global.Sim
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -386,7 +368,7 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 	}
 
 	// C9 bound census: cumulative total is the only variable bound in this file [PLAN 11 C9] [08].
-	// C7: cumulative weighted reservoir: ONE manager-local RNG draw of RNG(cumulative) yielding score/finalTotal; positive scores only [PLAN 11 C7] [08] [P0-07] ON-06.
+	// C7: cumulative weighted reservoir: ONE global RNG draw of RNG(cumulative) yielding score/finalTotal; positive scores only [PLAN 11 C7] [08] [I4] RS-02.
 	if len(positives) == 0 || total <= 0 {
 		return Candidate{}, false
 	}
@@ -396,11 +378,10 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 	}
 	rngStream := getSelectorRNG(m)
 	if rngStream == nil {
-		// Manager-local RNG not owned: deterministic seed 1 fallback without global leakage [P0-07] ON-06.
-		// Fall back to picking first positive deterministically to keep tests without RNG seeded from panicking.
+		// Global simulation stream not seeded (should not happen in production); deterministic fallback without draw.
 		return Candidate{DefKey: positives[0].key, Score: positives[0].score}, true
 	}
-	// Single draw [PLAN 11 C7] manager-local [P0-07].
+	// Single draw [PLAN 11 C7] single global stream [I4][RS-02].
 	draw := rngStream.Uint32n(uint32(total)) // I4 call order is behavior [01 §7.1] [INVARIANTS I4]
 	// Walk cumulative intervals
 	var cum int32

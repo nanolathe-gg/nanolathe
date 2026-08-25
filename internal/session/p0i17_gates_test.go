@@ -850,7 +850,7 @@ func TestP0I17_Gate6_AI(t *testing.T) {
 	mgr.Catalog = cat
 	// Init strategic vectors
 	mgr.Strategic.Init([]string{"armcom", "armlab", "armflea"})
-	s.AI = []*ai.Manager{mgr}
+	s.AI[1] = mgr // RS-02 player-indexed
 	s.RegisterAll()
 	s.State = StateBattle
 	h0, _ := s.Units.Create(builderDef, 0, numeric.Fixed(10*16*65536), numeric.Fixed(0), numeric.Fixed(10*16*65536))
@@ -862,6 +862,9 @@ func TestP0I17_Gate6_AI(t *testing.T) {
 	s.Movement.EnsureUnit(u0)
 	s.Movement.EnsureUnit(u1)
 	for _, mm := range s.AI {
+		if mm == nil {
+			continue
+		}
 		mm.Strategic.CenterX = numeric.Fixed(32 * 16 * 65536)
 		mm.Strategic.CenterZ = numeric.Fixed(32 * 16 * 65536)
 		mm.OriginX = u1.X
@@ -894,6 +897,9 @@ func TestP0I17_Gate6_AI(t *testing.T) {
 	if !issued {
 		var totalEntries uint32
 		for _, mm := range s.AI {
+			if mm == nil {
+				continue
+			}
 			totalEntries += mm.EntryCount()
 		}
 		if totalEntries == 0 {
@@ -930,7 +936,7 @@ func TestP0I17_Gate6_AI(t *testing.T) {
 	mgr2.Terrain = terrain2
 	mgr2.Catalog = cat
 	mgr2.Strategic.Init([]string{"armcom", "armlab", "armflea"})
-	sB.AI = []*ai.Manager{mgr2}
+	sB.AI[1] = mgr2 // RS-02 player-indexed
 	sB.RegisterAll()
 	sB.State = StateBattle
 	h0b, _ := sB.Units.Create(builderDef, 0, numeric.Fixed(10*16*65536), numeric.Fixed(0), numeric.Fixed(10*16*65536))
@@ -940,6 +946,9 @@ func TestP0I17_Gate6_AI(t *testing.T) {
 	sB.Movement.EnsureUnit(sB.Units.Unit(h0b))
 	sB.Movement.EnsureUnit(sB.Units.Unit(h1b))
 	for _, mm := range sB.AI {
+		if mm == nil {
+			continue
+		}
 		mm.Strategic.CenterX = numeric.Fixed(32 * 16 * 65536)
 		mm.Strategic.CenterZ = numeric.Fixed(32 * 16 * 65536)
 		mm.OriginX = numeric.Fixed(50 * 16 * 65536)

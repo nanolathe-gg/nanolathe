@@ -769,8 +769,8 @@ func TestRetailSmoke(t *testing.T) {
 			factoryKey := sel.FactoryCORE
 			// Prefer AI Place helper which does 30 trials with yard validation
 			queued := false
-			if len(sess.AI) > 0 {
-				mgr := sess.AI[0]
+			if sess.AI[1] != nil {
+				mgr := sess.AI[1] // RS-02 player-indexed
 				if x, z, ok := ai.Place(mgr, factoryKey, sess.World); ok {
 					if err := construction.QueueMobileBuild(aiCmdUnit, factoryKey, x, z, 1, cat); err == nil {
 						t.Logf("manually queued factory %s for AI at %d %d via AI Place", factoryKey, int64(x.Raw()), int64(z.Raw()))
@@ -797,7 +797,14 @@ func TestRetailSmoke(t *testing.T) {
 			}
 		}
 		// Ensure AI profile loaded; if default missing, t.Skip
-		if len(sess.AI) == 0 {
+		hasAI := false
+		for _, m := range sess.AI {
+			if m != nil {
+				hasAI = true
+				break
+			}
+		}
+		if !hasAI {
 			t.Fatalf("no AI managers created [ON-11] expected computer player")
 		}
 		sess.SetTraceEnabled(true)
@@ -938,8 +945,8 @@ func TestRetailSmoke(t *testing.T) {
 				}
 			}
 			// check milestones for AI
-			if len(sess.AI) > 0 {
-				mgr := sess.AI[0]
+			if sess.AI[1] != nil {
+				mgr := sess.AI[1] // RS-02 player-indexed
 				ms := mgr.Milestones()
 				milestones = ms
 				if !seenNanoframe {
