@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -44,6 +45,8 @@ type menuAssets struct {
 	common          *formats.GAF
 	logos           *formats.GAF
 	font            *formats.FNT
+	gafFont         *formats.GAF
+	gafFontSmall    *formats.GAF
 	pal             *palette.Tables
 	panel           map[shellMode]*retailPanelAssets
 	message         *retailPanelAssets
@@ -62,6 +65,10 @@ type gameShell struct {
 	mode   shellMode
 	assets *menuAssets
 	font   *formats.FNT
+
+	// cursorAccum converts renderer seconds into whole cursor animation ticks
+	// for the menu screens, which have no simulation clock [03 §4.4].
+	cursorAccum float64
 
 	maps         []string
 	mapLabels    []string
@@ -157,6 +164,13 @@ func runGameShell(opts Options, cs *contentSet) error {
 	if shell.font != nil {
 		cl.SetFNT(shell.font)
 	}
+	// Software cursor [07 §8]. A missing cursor GAF is not fatal: the shell
+	// falls back to the window system's own pointer.
+	if cursors, cerr := client.LoadCursors(cs.fs); cerr == nil {
+		cl.SetCursors(cursors)
+	} else {
+		fmt.Fprintf(os.Stderr, "nanolathe: %v\n", cerr)
+	}
 	cl.Overlay = func(c *client.Client) { shell.draw(c) }
 	fmt.Fprintf(os.Stderr, "nanolathe: retail frontend: %d skirmish maps\n", len(maps))
 	return client.RunGame(cl)
@@ -175,6 +189,15 @@ func loadMenuAssets(cs *contentSet) *menuAssets {
 	}
 	if f, err := formats.LoadFNTFile(cs.fs, "fonts/comix.fnt"); err == nil {
 		a.font = f
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// hattfont11 as secondary slot 1. Generic frontend controls prefer the
+	// primary GAF font over the active COMIX FNT [07 §4].
+	if f, err := formats.LoadGAFFile(cs.fs, "anims/hattfont12.gaf"); err == nil {
+		a.gafFont = f
+	}
+	if f, err := formats.LoadGAFFile(cs.fs, "anims/hattfont11.gaf"); err == nil {
+		a.gafFontSmall = f
 	}
 	if p, err := palette.Load(cs.fs); err == nil {
 		a.pal = p
@@ -257,6 +280,18 @@ func (g *gameShell) step(delta float64, cl *client.Client) {
 			g.battle.viewerStep(delta, cl)
 		}
 	default:
+		// The front end uses the idle shape throughout; the loading shape is
+		// installed by the transition that blocks on catalog and map loading
+		// [07 §8]. Menu animation still advances at the renderer's cadence so a
+		// visible hourglass keeps turning.
+		if cursors := cl.Cursors(); cursors != nil {
+			cursors.SetIndex(render.CursorNormal)
+			g.cursorAccum += delta * 30
+			if n := int(g.cursorAccum); n > 0 {
+				cursors.Step(n)
+				g.cursorAccum -= float64(n)
+			}
+		}
 		g.menuInput(cl)
 	}
 }

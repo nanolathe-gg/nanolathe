@@ -34,7 +34,18 @@ func (c *Client) Frame(alpha float32) {
 		// satisfy the "reads snapshot.Buffer.Read()" contract even when not
 		// drawing, but do not mutate it.
 		_, _, _ = c.buffer.Read()
+		// Audio drain still runs headless? No, Headless skips window creation
+		// entirely [PLAN_04A C11]; but TickAudio is presentation-only and can be
+		// called manually by headless diagnostics. Do not auto-drain here to
+		// keep headless simulation hash stable [I4][I6].
 		return
+	}
+	// Audio: drain queue once per rendered frame outside simulation [03 §8.3] C18.
+	// Presentation-only; uses CRT stream [03 §8.3] C19 [I4]; never touches Sim RNG.
+	c.TickAudio()
+	// Keep audio viewport in sync with camera for positional pan/attenuation [03 §8.3].
+	if c.cam != nil {
+		c.UpdateAudioViewportFromCamera()
 	}
 
 	// C9: read snapshot. The call is presentation-only; the sim never reads
@@ -45,6 +56,9 @@ func (c *Client) Frame(alpha float32) {
 	prev, cur, ok := c.buffer.Read()
 
 	c.composeIndexed(alpha, prev, cur, ok)
+	// The software cursor is drawn after the offscreen battle/front-end surface
+	// is prepared, so it sits above world, HUD, and modal overlays [07 §8].
+	c.drawCursor()
 
 	// Convert to RGBA through logical→base at present time only (C7). This is
 	// the only point where indexed pixels become RGBA so palette animation

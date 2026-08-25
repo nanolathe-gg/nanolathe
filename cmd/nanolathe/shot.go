@@ -54,6 +54,15 @@ func runShot(opts Options, cs *contentSet, out *os.File) error {
 	cl.SetFNT(b.hud.console)
 	cl.Overlay = func(c *client.Client) { b.hud.draw(c, b) }
 	cl.SetModelFS(cs.fs)
+	// The composed frame includes the software cursor, as retail's does
+	// [07 §8]. Headless has no window system, so the pointer is placed at the
+	// centre of the world viewport.
+	if cursors, cerr := client.LoadCursors(cs.fs); cerr == nil {
+		cl.SetCursors(cursors)
+		cl.Input().Mouse.SetPosition(float32(winW/2), float32(winH/2))
+	} else {
+		fmt.Fprintf(out, "nanolathe: shot: %v\n", cerr)
+	}
 
 	frames := opts.Frames
 	if frames <= 0 {
@@ -62,6 +71,8 @@ func runShot(opts Options, cs *contentSet, out *os.File) error {
 	for i := 0; i < frames; i++ {
 		sess.Step(int32(i + 1)) // scaled-ms anchor: one 30 Hz tick per frame
 		cl.TickTextureAnimators(1)
+		cl.Cursors().Step(1)
+		b.updateCursor(cl)
 	}
 	for _, u := range sess.Units.Iter() {
 		if u == nil || !u.Alive {

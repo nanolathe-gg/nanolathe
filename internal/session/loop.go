@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/nanolathe/nanolathe/internal/ai"
+	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
@@ -16,12 +17,14 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // Session is the canonical full Session per PLAN_14 Public API [08 "Session states"].
@@ -100,6 +103,20 @@ type Session struct {
 	visStatus      map[int]uint32
 	visDecloak     map[int]uint32
 	sensorSurfaces *sensorSurfacesImpl
+
+	// Audio is presentation-only and never feeds back into simulation
+	// [03 §8.3] C19 [I4][I6]. Queue is 8-deep sorted with cooldowns and
+	// per-slot global nextAllowed; variants and aliases are consumed at
+	// Resolve via CRT draw [03 §8.3] C16 C17. Positional helper uses
+	// audience cell + mode &2 choosing explored vs LOS, viewport pan
+	// dx/dy with half-height shear and two-level attenuation [03 §8.3].
+	// Music/CD fallback is briefing/music/CD probing via Controller [03 §8.4].
+	AudioQueue    *audio.Queue       // eight-slot arbitration queue [03 §8.3] C16 C18
+	AudioCache    *audio.SampleCache // alias→sample cache capped 255 [03 §8.2] C20
+	AudioMusic    *audio.Controller  // CD/MCI controller with 5 modes [03 §8.4]
+	audioViewport audio.Viewport     // presentation viewport for pan/attenuation [03 §8.3]
+	audioFrame    uint32             // presentation frame counter for Drain [03 §8.3] C18
+	audioFS       vfs.FSOps          // VFS for cache loads, presentation-only
 }
 
 // ValidateComposition checks that every required authoritative service and
@@ -518,6 +535,9 @@ func (s *Session) RegisterAll() {
 				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitDied, u)
 			}
+			// Audio: death does not map to a queued voice directly, but an
+			// under-attack cue for nearby allies could be queued elsewhere.
+			// For now, no death voice; weapon hit already queues via impact sink.
 			// Route into corpse feature with correct chain depth low nibble [06 §12.1] C23 [04 §5.1] [P0-I06].
 			if s.Features != nil && u != nil && u.Def != nil && u.Def.Corpse != "" && s.World != nil {
 				var depth uint8 = 0
@@ -561,11 +581,20 @@ func (s *Session) RegisterAll() {
 				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitCreated, u)
 			}
+			// Audio: completed build emits unitcomplete [03 §8.3] slot 8.
+			if s.AudioQueue != nil && u != nil && s.Clock != nil && s.Clock.GlobalTick > 0 {
+				s.AudioQueue.SetNow(s.Clock.GlobalTick)
+				_ = s.AudioQueue.InsertAt(s.Clock.GlobalTick, audio.SlotUnitComplete, h, "")
+			}
 		}
 		s.Units.OnCapture = func(h pool.Handle, oldOwner, newOwner uint8, u *units.Unit) {
 			if s.Mission != nil && u != nil {
 				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitCaptured, u)
+			}
+			if s.AudioQueue != nil && u != nil && s.Clock != nil {
+				s.AudioQueue.SetNow(s.Clock.GlobalTick)
+				_ = s.AudioQueue.InsertAt(s.Clock.GlobalTick, audio.SlotCapture, h, "")
 			}
 		}
 	}
@@ -586,8 +615,45 @@ func (s *Session) RegisterAll() {
 	// so Aim dispatch remains before normal COB drain of the same tick [GAP T15] C17.
 	s.Kernel.Register(kernel.PhaseUnitsScripts, "weapons-fire", func(tick uint32) {
 		if s.Combat != nil && s.Units != nil {
+			// Capture projectile count before fire to emit start sounds for new allocations [06 §5.1][03 §8.3].
+			before := 0
+			if s.Combat != nil {
+				before = s.Combat.Count()
+			}
 			s.Combat.TickWeapons(tick, s.Units, s.Vis, s.World, s.Econ, s.Catalog, rng.Global.Sim, rng.Global.Crt)
+			// Weapon start sounds: for each newly appended projectile, emit its SoundStart alias with positional gating [03 §8.3].
+			// Presentation-only, uses CRT for variant via queue not Sim [I4]; audience gate via IsAudibleAt.
+			if s.AudioQueue != nil && s.Combat != nil && s.Catalog != nil {
+				after := s.Combat.Count()
+				for i := before; i < after; i++ {
+					if i < 0 || i >= len(s.Combat.Records) {
+						continue
+					}
+					rec := s.Combat.Records[i]
+					if wdef, ok := s.Catalog.WeaponByID(rec.WeaponID); ok && wdef != nil && wdef.SoundStart != "" {
+						pos := [3]numeric.Fixed{rec.Pos.X, rec.Pos.Y, rec.Pos.Z}
+						if s.IsAudibleAt(pos) {
+							_, _, _ = s.EmitPositional(wdef.SoundStart, pos)
+						}
+					}
+				}
+			}
 		}
+	})
+	// Interceptor automatic launches [06 §11.2] C29: stockpile anti-nuke scans
+	// the current projectile prefix for first unclaimed enemy targetable nuke
+	// within coverage square. Runs after ordinary weapon fire so
+	// launch-before-production ordering is preserved (stockpile build is in
+	// PhaseOrdersPathEconomy after this phase) [06 §11.1] C29. Deterministic
+	// player/slot asc, prefix asc (I1).
+	s.Kernel.Register(kernel.PhaseUnitsScripts, "interceptor-fire", func(tick uint32) {
+		s.interceptorFireTick(tick)
+	})
+	// Interceptor guidance pre-step: update linked projectile's stored target
+	// point to current position before motion per [06 §11.2] non-cruise guidance.
+	s.Kernel.Register(kernel.PhaseProjectiles, "interceptor-guidance", func(tick uint32) {
+		_ = tick
+		s.interceptorGuidanceTick()
 	})
 
 	// Phase 3: projectile integration and collision [01 §4.4]
@@ -599,6 +665,13 @@ func (s *Session) RegisterAll() {
 			// compaction reads the current count and is handled at phase tail [06 §5.2].
 			s.Combat.TickProjectiles(tick, s.Units, s.World, s.Features, s.Vis, s.Econ, s.Catalog, rng.Global.Sim, rng.Global.Crt)
 		}
+	})
+	// Interceptor detonation sweep after ordinary impact [06 §11.2][06 §9.3] C29:
+	// ordinary area enumeration first, then interceptor force-detonation of
+	// alive non-self projectiles within unhalved Area. Friendly can be removed.
+	s.Kernel.Register(kernel.PhaseProjectiles, "interceptor-detonation", func(tick uint32) {
+		_ = tick
+		s.interceptorDetonationTick()
 	})
 
 	// Phase 4: effects/features motion, compaction pre-pass [01 §4.4]
@@ -1394,6 +1467,8 @@ func (s *Session) RegisterAll() {
 			// Effects placeholder: no fixed pool in session yet; keep empty but
 			// valid for renderer to read without touching sim state (I6).
 			// Presentation RNG (CRT) is not advanced here; client/server streams remain distinct (I4).
+			// Audio queue is presentation-only but snapshot carries pending cues for HUD/speech display [03 §8.3] C18 I6.
+			s.CollectAudioForSnapshot(frame)
 			s.Snapshot.Publish(frame)
 		}
 	})

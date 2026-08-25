@@ -738,7 +738,7 @@ func (g *gameShell) ensureRetailListVisible(name string) {
 		if gad.Kind != gui.KindListBox || !strings.EqualFold(gad.Name, name) {
 			continue
 		}
-		visible := retailVisibleListRows(g.panel.window.PlacedRect(i), retailListItemHeight(gad, g.font))
+		visible := retailVisibleListRows(g.panel.window.PlacedRect(i), retailListItemHeight(gad, g.retailTextHeight()))
 		maxTop := len(l.items) - visible
 		if maxTop < 0 {
 			maxTop = 0
@@ -893,16 +893,13 @@ func (g *gameShell) showRetailMessage(message string) {
 	if len(message) > 255 {
 		message = message[:255]
 	}
-	lines := retailMessageLines(message, g.font, 480)
+	lines := retailMessageLines(message, g.retailTextWidth, 480)
 	if len(lines) == 0 {
 		return
 	}
 	width := 0
 	for _, line := range lines {
-		lineWidth := len(line) * 8
-		if g.font != nil {
-			lineWidth = client.MeasureText(g.font, line)
-		}
+		lineWidth := g.retailTextWidth(line)
 		if lineWidth > width {
 			width = lineWidth
 		}
@@ -942,7 +939,7 @@ func (g *gameShell) showRetailMessage(message string) {
 		w.Gadgets = append(w.Gadgets, gui.Gadget{
 			Kind:       gui.KindLabel,
 			Name:       fmt.Sprintf("TEXT%d", i),
-			Rect:       gui.Rect{X: 0, Y: int32(20 + i*(fontHeight(g.font)+5)), W: int32(boxW), H: int32(fontHeight(g.font))},
+			Rect:       gui.Rect{X: 0, Y: int32(20 + i*(g.retailTextHeight()+5)), W: int32(boxW), H: int32(g.retailTextHeight())},
 			Attribs:    2,
 			Active:     1,
 			Text:       line,
@@ -953,14 +950,7 @@ func (g *gameShell) showRetailMessage(message string) {
 	g.modalPressed = false
 }
 
-func fontHeight(f *formats.FNT) int {
-	if f == nil || f.Height == 0 {
-		return 11
-	}
-	return int(f.Height)
-}
-
-func retailMessageLines(message string, f *formats.FNT, maxWidth int) []string {
+func retailMessageLines(message string, measure func(string) int, maxWidth int) []string {
 	var lines []string
 	for _, paragraph := range strings.Split(message, "\n") {
 		words := strings.Fields(paragraph)
@@ -973,7 +963,7 @@ func retailMessageLines(message string, f *formats.FNT, maxWidth int) []string {
 			if line != "" {
 				candidate = line + " " + word
 			}
-			if maxWidth > 0 && f != nil && line != "" && client.MeasureText(f, candidate) > maxWidth {
+			if maxWidth > 0 && measure != nil && line != "" && measure(candidate) > maxWidth {
 				lines = append(lines, line)
 				line = word
 			} else {
@@ -1149,13 +1139,10 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *retailPanelState, g
 		idx := clampMenuStage(p.statusOf(gad.Name), len(gad.Labels))
 		text = gad.Labels[idx]
 	}
-	if text == "" || g.font == nil {
+	if text == "" || !g.hasRetailTextFont() {
 		return
 	}
-	if r.W > 0 {
-		text = client.TruncateToWidth(g.font, text, int(r.W))
-	}
-	width := client.MeasureText(g.font, text)
+	width := g.retailTextWidth(text)
 	pressed := retailButtonPressed(c, r)
 	x := int(r.X)
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -1180,7 +1167,7 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *retailPanelState, g
 	}
 	y := int(r.Y)
 	if r.H > 0 {
-		y += (int(r.H) - int(g.font.Height)) / 2
+		y += (int(r.H) - g.retailTextHeight()) / 2
 	}
 	if pressed {
 		y++
@@ -1191,7 +1178,7 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *retailPanelState, g
 		width, _ := c.Size()
 		maxWidth = width - x
 	}
-	c.UITextWidth(g.font, text, x, y, maxWidth, color)
+	g.drawRetailString(c, text, x, y, maxWidth, color)
 }
 
 func retailButtonPressed(c *client.Client, r gui.Rect) bool {
@@ -1212,10 +1199,10 @@ func boolInt(value bool) int {
 func (g *gameShell) drawRetailList(c *client.Client, gad gui.Gadget, r gui.Rect) {
 	g.drawListBox(c, r)
 	l := g.panel.lists[menuKey(gad.Name)]
-	if l == nil || len(l.items) == 0 || g.font == nil {
+	if l == nil || len(l.items) == 0 || !g.hasRetailTextFont() {
 		return
 	}
-	itemHeight := retailListItemHeight(gad, g.font)
+	itemHeight := retailListItemHeight(gad, g.retailTextHeight())
 	visible := retailVisibleListRows(r, itemHeight)
 	maxTop := len(l.items) - visible
 	if maxTop < 0 {
@@ -1239,7 +1226,7 @@ func (g *gameShell) drawRetailList(c *client.Client, gad gui.Gadget, r gui.Rect)
 			g.drawListSelection(c, r, y, itemHeight)
 		}
 		color := g.guiColor(byte(gad.ColorF & 0xff))
-		c.UITextWidth(g.font, l.items[idx], int(r.X)+4, y, int(r.W)-4, color)
+		g.drawRetailString(c, l.items[idx], int(r.X)+4, y, int(r.W)-4, color)
 	}
 }
 
@@ -1568,9 +1555,9 @@ func (g *gameShell) retailScrollbarGeometry(gad gui.Gadget, r gui.Rect) (retailS
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // beyond the active font height. This is the default used by the authored
 // campaign and map lists when itemheight is zero.
-func retailListItemHeight(gad gui.Gadget, f *formats.FNT) int {
+func retailListItemHeight(gad gui.Gadget, fontHeight int) int {
 	height := int(gad.ItemHeight)
-	minimum := fontHeight(f) + 1
+	minimum := fontHeight + 1
 	if height < minimum {
 		height = minimum
 	}
@@ -1579,14 +1566,14 @@ func retailListItemHeight(gad gui.Gadget, f *formats.FNT) int {
 
 func (g *gameShell) retailListAssocItemHeight(assoc int32) int {
 	if g == nil || g.panel == nil || g.panel.window == nil {
-		return fontHeight(g.font) + 1
+		return g.retailTextHeight() + 1
 	}
 	for _, gad := range g.panel.window.Gadgets {
 		if gad.Kind == gui.KindListBox && gad.Assoc == assoc {
-			return retailListItemHeight(gad, g.font)
+			return retailListItemHeight(gad, g.retailTextHeight())
 		}
 	}
-	return fontHeight(g.font) + 1
+	return g.retailTextHeight() + 1
 }
 
 func (g *gameShell) drawRetailSurface(c *client.Client, gad gui.Gadget, r gui.Rect) {
@@ -2002,7 +1989,7 @@ func (g *gameShell) scrollAt(x, y int32, amount float32) {
 		if l.top < 0 {
 			l.top = 0
 		}
-		itemHeight := retailListItemHeight(gad, g.font)
+		itemHeight := retailListItemHeight(gad, g.retailTextHeight())
 		visible := retailVisibleListRows(r, itemHeight)
 		maxTop := len(l.items) - visible
 		if maxTop < 0 {
@@ -2017,10 +2004,10 @@ func (g *gameShell) scrollAt(x, y int32, amount float32) {
 
 func (g *gameShell) clickList(gad gui.Gadget, r gui.Rect, x, y int32) {
 	l := g.panel.lists[menuKey(gad.Name)]
-	if l == nil || len(l.items) == 0 || g.font == nil {
+	if l == nil || len(l.items) == 0 || !g.hasRetailTextFont() {
 		return
 	}
-	h := retailListItemHeight(gad, g.font)
+	h := retailListItemHeight(gad, g.retailTextHeight())
 	visible := retailVisibleListRows(r, h)
 	localY := int(y-r.Y) - 2
 	if localY < 0 {

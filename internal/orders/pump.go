@@ -4,6 +4,7 @@ package orders
 import (
 	"fmt"
 
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -83,6 +84,14 @@ type Queue struct {
 	// Hostility and Lookup were package globals; now per-queue to avoid shared mutable.
 	Hostility func(actor *units.Unit, target *units.Unit) bool `json:"-"` // per-queue hostility [P0-I16]
 	Lookup    func(pool.Handle) *units.Unit                    `json:"-"` // per-queue target lookup [P0-I16]
+
+	// StockpileEconomy is the per-queue economy service for BuildWeapon admission
+	// [06 §11.1][P1-09] I16: per-queue to avoid shared mutable global. When nil,
+	// the handler falls back to the package global set by session composition
+	// (single-session fast path) or admits always (fixtures).
+	StockpileEconomy interface {
+		UnitBuckets(pool.Handle) *[2]economy.Bucket
+	} `json:"-"`
 }
 
 // [P2-03] Queue overflow defense: retail has no located cap (NEGATIVE-BOUNDED
@@ -554,6 +563,13 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 	}
 	for idx := 0; idx < len(q.secondary); {
 		n := q.secondary[idx]
+		// Fresh BuildWeapon nodes are created with DynamicGate = StaticGate
+		// (0xc0140) and Deadline -1 via newNode. For secondary, DynamicGate 0
+		// means ready [05] literal, so fresh nodes would never dispatch.
+		// Normalize fresh BuildWeapon nodes to ready on first tick [06 §11.1] C29.
+		if n.Deadline == -1 && n.DynamicGate != 0 && DescriptorFor(n.ID).Name == "BuildWeapon" {
+			n.DynamicGate = 0
+		}
 		deadlineArrived := n.Deadline != -1 && tick >= uint32(n.Deadline)
 		shouldDispatch := n.DynamicGate == 0 || deadlineArrived // [05] literal
 		if !shouldDispatch {
@@ -567,6 +583,9 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 		n.Satisfied &^= satisfied
 		u.Pending &^= satisfied
 		n.DynamicGate = 0
+		// Publish tick for BuildWeapon stockpile handler's retry deadlines
+		// [06 §11.1] C29 (5/10/300) without changing Handler signature.
+		setSecondaryTick(tick)
 		handler := DescriptorFor(n.ID).Handler
 		if handler == nil {
 			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for secondary %s", DescriptorFor(n.ID).Name))
@@ -652,6 +671,9 @@ func QueueForUnit(u *units.Unit) *Queue {
 		return q
 	}
 	q := &Queue{}
+	if stockpileEconomy != nil && q.StockpileEconomy == nil {
+		q.StockpileEconomy = stockpileEconomy
+	}
 	u.Orders = q
 	return q
 }
@@ -659,5 +681,8 @@ func QueueForUnit(u *units.Unit) *Queue {
 func BindQueue(u *units.Unit, q *Queue) {
 	if u != nil {
 		u.Orders = q
+		if q != nil && stockpileEconomy != nil && q.StockpileEconomy == nil {
+			q.StockpileEconomy = stockpileEconomy
+		}
 	}
 }

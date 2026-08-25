@@ -505,3 +505,31 @@ func guiRectContains(r gui.Rect, x, y int32) bool {
 	left, top, right, bottom := r.X, r.Y, r.X+r.W, r.Y+r.H
 	return x >= left && x < right && y >= top && y < bottom
 }
+
+// overWorld reports whether a pointer position lies in the world viewport
+// rather than on the HUD chrome [07 §8]. The rail boundary is the authored
+// 129-pixel column; the top and bottom strips are as tall as their frames.
+// A pointer on the chrome forces the idle cursor shape [07 §8].
+//
+// TODO(question): retail's region summary is viewport **or minimap**, and the
+// minimap sets the same bit so world shapes appear over it [07 §8]. The rail
+// rectangle that holds this HUD's minimap is not separated out yet, so a
+// pointer over the minimap reads as chrome here.
+func (h *retailBattleHUD) overWorld(x, y int32) bool {
+	if h == nil {
+		return true
+	}
+	const railX = 129 // authored rail boundary, matching the PANELSIDE blit
+	if x < railX {
+		return false
+	}
+	top := int32(0)
+	if h.panelTop != nil {
+		top = int32(h.panelTop.Height)
+	}
+	bottom := int32(480)
+	if h.panelBottom != nil {
+		bottom = 480 - int32(h.panelBottom.Height)
+	}
+	return y >= top && y < bottom
+}

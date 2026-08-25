@@ -7,36 +7,65 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 )
 
+// Cursor index constants name the handle-array slots [07 §8]. Slot 0 is
+// unused/gray overflow; 1..21 resolve named `cursors.gaf` entries at init.
+// Lower indices win when several selected units disagree, so the numbering is
+// also the shape priority order (see hud.ChooseCursor) [07 §8].
+const (
+	CursorAttack    = 1
+	CursorAirstrike = 2
+	CursorTooFar    = 3
+	CursorCapture   = 4
+	CursorDefend    = 5
+	CursorRepair    = 6
+	CursorPatrol    = 7
+	CursorPickup    = 8
+	CursorTeleport  = 9
+	CursorRevive    = 10
+	CursorReclamate = 11
+	CursorLoad      = 12
+	CursorUnload    = 13
+	CursorMove      = 14
+	CursorSelect    = 15
+	CursorFindSite  = 16
+	CursorRed       = 17
+	CursorGrn       = 18
+	CursorNormal    = 19
+	CursorHourglass = 20
+	CursorPathIcon  = 21
+)
+
 // cursorIndexToName is the hardware-style cursor index table [07 §8].
-// Slot 0 is unused/gray overflow; indices 1..20 map to named GAF entries [07 §8].
+// Slot 0 is unused/gray overflow; indices 1..21 map to named GAF entries [07 §8].
 // The index writer diffs and swaps shapes; the armed-order latch decides
 // authorization while the index decides shape [07 §8].
-var cursorIndexToName = [21]string{
-	0:  "", // unused/gray overflow [07 §8]
-	1:  "cursorattack",
-	2:  "cursorairstrike",
-	3:  "cursortoofar",
-	4:  "cursorcapture",
-	5:  "cursordefend",
-	6:  "cursorrepair",
-	7:  "cursorpatrol",
-	8:  "cursorpickup",
-	9:  "cursorteleport",
-	10: "cursorreclamate",
-	11: "cursorload",
-	12: "cursorunload",
-	13: "cursormove",
-	14: "cursorselect",
-	15: "cursorfindsite",
-	16: "cursorred",
-	17: "cursorgrn",
-	18: "cursornormal",
-	19: "cursorhourglass",
-	20: "pathicon",
+var cursorIndexToName = [CursorCount]string{
+	0:               "", // unused/gray overflow [07 §8]
+	CursorAttack:    "cursorattack",
+	CursorAirstrike: "cursorairstrike",
+	CursorTooFar:    "cursortoofar",
+	CursorCapture:   "cursorcapture",
+	CursorDefend:    "cursordefend",
+	CursorRepair:    "cursorrepair",
+	CursorPatrol:    "cursorpatrol",
+	CursorPickup:    "cursorpickup",
+	CursorTeleport:  "cursorteleport",
+	CursorRevive:    "cursorrevive",
+	CursorReclamate: "cursorreclamate",
+	CursorLoad:      "cursorload",
+	CursorUnload:    "cursorunload",
+	CursorMove:      "cursormove",
+	CursorSelect:    "cursorselect",
+	CursorFindSite:  "cursorfindsite",
+	CursorRed:       "cursorred",
+	CursorGrn:       "cursorgrn",
+	CursorNormal:    "cursornormal",
+	CursorHourglass: "cursorhourglass",
+	CursorPathIcon:  "pathicon",
 }
 
 // CursorCount is the size of the cursor index table including slot 0 [07 §8].
-const CursorCount = 21 // 0..20 inclusive [07 §8]
+const CursorCount = 22 // 0..21 inclusive [07 §8]
 
 // CursorName returns the GAF entry name for a cursor index [07 §8].
 // Slot 0 returns "" (unused) [07 §8]; out-of-range also returns "".
@@ -50,7 +79,7 @@ func CursorName(idx int) string {
 // IsValidCursorIndex reports whether idx is a usable cursor index [07 §8].
 // Slot 0 is unused and returns false [07 §8].
 func IsValidCursorIndex(idx int) bool {
-	return idx >= 1 && idx <= 20
+	return idx >= 1 && idx <= CursorCount-1
 }
 
 // CursorIndexFromName returns the cursor index for a GAF entry name [07 §8].
@@ -70,18 +99,18 @@ func CursorIndexFromName(name string) int {
 // Site validity picks cursorfindsite when placement is valid else cursortoofar [07 §8].
 func CursorForBuildSite(valid bool) int {
 	if valid {
-		return 15 // cursorfindsite [07 §8]
+		return CursorFindSite
 	}
-	return 3 // cursortoofar [07 §8]
+	return CursorTooFar
 }
 
 // CursorForGhost chooses the ghost preview cursor [07 §8].
 // The ghost preview uses cursorred/cursorgrn [07 §8].
 func CursorForGhost(valid bool) int {
 	if valid {
-		return 17 // cursorgrn [07 §8]
+		return CursorGrn
 	}
-	return 16 // cursorred [07 §8]
+	return CursorRed
 }
 
 // ResolveCursorEntry resolves a cursor index to its GAF entry through formats.GAF [fmt gaf][07 §8].
@@ -318,9 +347,16 @@ func (c *Cursor) CurrentFrame() (*formats.GAFFrame, bool) {
 	return ResolveCursorFrame(c)
 }
 
-// TODO(question): cursor hotspot coordinates are not established in [07 §8];
-// retail GetCursorPos and configured hotspots determine placement [07 §8] but
-// exact per-entry hotspot metadata is unknown.
+// CursorHotspot returns the blit origin for a cursor frame drawn with its
+// anchor at (x, y) [07 §8][fmt gaf]. The frame's authored x_offset/y_offset is
+// the hotspot: that pixel lands on the pointer, so the top-left corner is the
+// pointer position minus the offset [fmt gaf "Placement offsets"].
+func CursorHotspot(f *formats.GAFFrame, x, y int) (int, int) {
+	if f == nil {
+		return x, y
+	}
+	return x - int(f.XOffset), y - int(f.YOffset)
+}
 
 // TODO(question): cursor subframe lifetime and animation speed for families not
 // shown to use the authored countdown cursor remain unknown [03 §4.4].

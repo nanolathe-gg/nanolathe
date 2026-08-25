@@ -62,6 +62,14 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 					name = u.Def.UnitName
 				}
 			}
+			flags := u.Flags
+			// Persist economy activation/cloak in high bits of Flags for save/load continuity [P1-I04] without changing save box layout.
+			if u.Activated {
+				flags |= 1 << 16
+			}
+			if u.IsCloaked {
+				flags |= 1 << 17
+			}
 			rec := save.UnitRecord{
 				Slot:              int32(u.Handle),
 				DefName:           name,
@@ -71,7 +79,7 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 				Z:                 int32(u.Z.Raw()),
 				Health:            u.Health,
 				Remaining:         u.Remaining,
-				Flags:             u.Flags,
+				Flags:             flags,
 				MaxHealth:         u.MaxHealth,
 				Dying:             u.Dying,
 				DeathCause:        uint8(u.DeathCause),
@@ -655,7 +663,13 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 				u.Health = rec.Health
 				u.MaxHealth = rec.MaxHealth
 				u.Remaining = rec.Remaining
-				u.Flags = rec.Flags
+				u.Flags = rec.Flags &^ ((1 << 16) | (1 << 17))
+				u.Activated = rec.Flags&(1<<16) != 0
+				u.IsCloaked = rec.Flags&(1<<17) != 0
+				// Backward compat for saves before P1-I04: non-OnOffable complete units default to active.
+				if !u.Activated && u.Def != nil && !u.Def.OnOffable && u.Remaining == 0 {
+					u.Activated = true
+				}
 				if rec.Dying {
 					u.Dying = true
 				} else {
@@ -880,6 +894,25 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 			if i == 0 {
 				s.Econ.ReferencePlayer = int(rec.ReferencePlayer)
 				s.Econ.SensorShareCalls = int(rec.SensorShareCalls)
+			}
+		}
+		// Rebind Wind/Terrain and cloak hook after load [P1-I04] — the one ledger must stay bound to authoritative wind/terrain.
+		s.Econ.Wind = s.Wind
+		s.Econ.Terrain = s.World
+		s.Econ.CloakCost = func(u *units.Unit) float32 {
+			if u == nil {
+				return 0
+			}
+			return u.CloakCost()
+		}
+		// Thresholds are written once at battle setup from capacity [P1-06]. They are not in the persisted
+		// EconomyPlayerRecord (retail save omits them), so reconstruct from current capacity if zero
+		// to keep sharing (60/450) functional after load [P1-I04]. Retail would recompute similarly.
+		for i := 0; i < 10; i++ {
+			if s.Econ.Players[i].Exists && s.Econ.Players[i].MetalShareThreshold == 0 && s.Econ.Players[i].EnergyShareThreshold == 0 {
+				// Use current capacity as threshold — matches initial battle setup where thresholds = capacity.
+				s.Econ.Players[i].MetalShareThreshold = s.Econ.Players[i].Capacity[0]
+				s.Econ.Players[i].EnergyShareThreshold = s.Econ.Players[i].Capacity[1]
 			}
 		}
 		// Unit buckets

@@ -91,6 +91,12 @@ type Service struct {
 	// skips the debit entirely, which is what a session with no cloaking units
 	// would observe anyway.
 	CloakCost func(*units.Unit) float32
+
+	// Wind holds the authoritative wind holder for wind generation scalar [01 §7.3]
+	// [05 "Wind generation"] [P1-I04]. Scalar is float32 published per I2.
+	Wind *world.Wind
+	// Terrain provides the map tidal strength [03 §2.2] [05 "Tidal generation"] [P1-I04].
+	Terrain *world.Terrain
 }
 
 // UnitEconomy holds per-unit live and archived buckets per [05 "Unit instance economy state"].

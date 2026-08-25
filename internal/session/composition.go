@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
+	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -222,6 +223,17 @@ func createAndBindServices(s *Session) error {
 	if s.Econ == nil {
 		s.Econ = &economy.Service{}
 	}
+	// Bind authoritative wind and terrain to the one ledger per [05] [P1-I04].
+	// All other producers must go through bucket Production/Requested/Accepted;
+	// only CreditSpawn (spawn) may write directly to Stock outside the ledger.
+	s.Econ.Wind = s.Wind
+	s.Econ.Terrain = s.World
+	s.Econ.CloakCost = func(u *units.Unit) float32 {
+		if u == nil {
+			return 0
+		}
+		return u.CloakCost() // [05 "Cloak debit"] stationary vs moving [P1-I04]
+	}
 	// Wind must already be present via InitWindForSession; if missing, create zero-range fallback
 	if s.Wind == nil {
 		var crt *rng.CRT
@@ -232,6 +244,7 @@ func createAndBindServices(s *Session) error {
 			crt = &tmp
 		}
 		s.InitWindForSession(crt, 0)
+		s.Econ.Wind = s.Wind
 	}
 	// Features [05] with terrain, sim, crt, wind
 	if s.Features == nil {
@@ -311,6 +324,21 @@ func createAndBindServices(s *Session) error {
 	if s.Combat == nil {
 		s.Combat = &combat.Service{}
 	}
+	// Wire BuildWeapon stockpile admission to the authoritative economy
+	// service so per-visit truncated cumulative costs are admitted via
+	// economy.UnitBuckets and carry is retained across cancels [06 §11.1]
+	// [P1-09 §4][P1-09 §5] I16.
+	orders.SetStockpileEconomy(s.Econ)
+	if s.Units != nil && s.Econ != nil {
+		for _, u := range s.Units.Iter() {
+			if u == nil {
+				continue
+			}
+			if q := orders.QueueForUnit(u); q != nil {
+				q.StockpileEconomy = s.Econ
+			}
+		}
+	}
 	// Ensure Clock, Kernel, Snapshot, AI slice non-nil
 	if s.Clock == nil {
 		s.Clock = &clock.State{Requested: 10, Active: 10}
@@ -326,6 +354,11 @@ func createAndBindServices(s *Session) error {
 	}
 	if s.Mission == nil {
 		return fmt.Errorf("session: missing Mission [08]")
+	}
+	// Audio is presentation-only but owned by session so events can queue
+	// without client import cycle [03 §8.3][03 §8.4] I6. Init lazily if not yet.
+	if s.AudioQueue == nil || s.AudioCache == nil || s.AudioMusic == nil {
+		s.InitAudio(s.audioFS)
 	}
 	return nil
 }

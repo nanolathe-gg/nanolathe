@@ -116,6 +116,7 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 		crt = &tmp
 	}
 	s.InitWindForSession(crt, 0)
+	s.InitAudio(fs)
 	if err := createAndBindServices(s); err != nil {
 		return nil, err
 	}
@@ -239,6 +240,7 @@ func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficul
 		crt = &tmp
 	}
 	s.InitWindForSession(crt, 0)
+	s.InitAudio(fs)
 	if s.Econ == nil {
 		s.Econ = &economy.Service{}
 	}
@@ -356,6 +358,8 @@ func BattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
 	}
 	spy.record("resources")
 	grantResourcesDirect(s, m)
+	// Initialize sharing thresholds once from rebuilt capacity after units exist [P1-06] [P1-I04].
+	s.InitShareThresholds()
 	return nil
 }
 

@@ -367,9 +367,17 @@ func (s *Service) clearFootprint(cx, cz int, def *content.FeatureDef) {
 // spawnFeatureAt stamps a feature through the common placement helper with no
 // position/velocity override and neutral side [06 §13.1] [P1-10][P1-15].
 // Pools 0x100 catalog / 0x800 anim slots / WH*0xD grid silent fail, successors 0xFFFF [P1-10][P1-15].
+// Malformed/custom: zero/negative footprints are normalized to 1x1, nil canonical keys handled, and unknown successors are sentinel 0xFFFF [P1-I05][02 "Feature record"].
 func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance {
 	if s.Terrain == nil || def == nil {
 		return nil
+	}
+	// Normalize malformed for placement without mutating catalog [P1-I05]
+	if IsMalformed(def) {
+		def = NormalizeDef(def)
+		if def == nil {
+			return nil
+		}
 	}
 	// Pools 0x100/0x800 silent fail [P1-10][P1-15]: catalog 256, anim slots 2048.
 	if len(s.Terrain.FeatureDefs) >= FeatureCatalogLimit && s.featureIndexForDef(def) == world.PlotFeatureNone {

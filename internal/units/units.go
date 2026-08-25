@@ -75,7 +75,10 @@ type Unit struct {
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// but save-restore forced-slot and any other direct Create caller must also sample via the same hook
 	// or via Terrain.ApplySchema post-load; verify universal coverage.
-	Kills int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Economy state bound to the one ledger per [05] — activation/on-off, cloak, storage, extraction, wind/tidal, makers [P1-I04].
+	Activated bool  // operational/activated bit for on/offable units [05 "Unit instance economy state"] [P1-I04]; true when the unit is turned on; for non-OnOffable units always true when complete
+	IsCloaked bool  // whether cloak upkeep is due this pass [05 "Cloak debit"] [P1-I04]
+	Kills     int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// Paralyze state per [06 §10] paralyzer status effects [P0-I04].
 	ParalyzeExpire uint32 // absolute tick when stun ends; 0 means not paralyzed [06 §10]
 	Stunned        bool   // TODO(question): GAI slow vs binary stun remains open [06 §10]
@@ -88,6 +91,68 @@ type Unit struct {
 	PlacementIdx      int // index in Mission.Units placement order, -1 if not scenario-spawned
 	PlacementIdent    string
 	PlacementUnitName string
+}
+
+// EconomyActive reports whether the unit is eligible for passive economy
+// production and storage [05 "Completed-unit eligibility"] [P1-I04].
+// Requires Remaining==0 and alive; for OnOffable units also requires Activated.
+func (u *Unit) EconomyActive() bool {
+	if u == nil || !u.Alive || u.Dying || u.Remaining != 0 {
+		return false
+	}
+	if u.Def != nil && u.Def.OnOffable {
+		return u.Activated
+	}
+	return true
+}
+
+// EconomyOperational reports whether wind/tidal generators may run.
+// Per [05 "Resource contributions"] wind and tidal require the operational bit
+// and a secondary state bit; we model it as EconomyActive (complete and on).
+func (u *Unit) EconomyOperational() bool {
+	return u.EconomyActive()
+}
+
+// SetActivated toggles activation for OnOffable units [05] [P1-I04].
+func (u *Unit) SetActivated(on bool) {
+	if u == nil {
+		return
+	}
+	u.Activated = on
+}
+
+// SetCloaked sets cloak state for upkeep debit [05 "Cloak debit"] [P1-I04].
+func (u *Unit) SetCloaked(on bool) {
+	if u == nil {
+		return
+	}
+	u.IsCloaked = on
+}
+
+// CloakCost returns the per-pass cloak cost, choosing stationary vs moving
+// variant when the unit is cloaked [05 "Cloak debit"] [P1-I04].
+func (u *Unit) CloakCost() float32 {
+	if u == nil || u.Def == nil || !u.IsCloaked {
+		return 0
+	}
+	if u.Move.Speed != 0 {
+		return float32(u.Def.CloakCostMoving)
+	}
+	return float32(u.Def.CloakCost)
+}
+
+// InitEconomyState initializes Activated and IsCloaked from the definition
+// per [02 "Unit record"] ActivateWhenBuilt / OnOffable / InitCloaked [P1-I04].
+func (u *Unit) InitEconomyState() {
+	if u == nil || u.Def == nil {
+		return
+	}
+	if u.Def.OnOffable {
+		u.Activated = u.Def.ActivateWhenBuilt
+	} else {
+		u.Activated = true
+	}
+	u.IsCloaked = u.Def.InitCloaked
 }
 
 // DeathHook is invoked exactly once per unit at the moment Destroy first
@@ -344,6 +409,7 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 			PlacementIdx: -1,
 		}
 		installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions into Slots [P0-I04]
+		u.InitEconomyState()   // [P1-I04] on/off, cloak, activation from definition
 		w.units[idx] = u
 		w.attachCOB(u) // per-unit VM with statics/pieces, Create run [04 §4.1][P1-I01]
 		if player >= 0 && player < 10 {
@@ -398,6 +464,7 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 		PlacementIdx: -1,
 	}
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
+	u.InitEconomyState()   // [P1-I04]
 	w.units[idx] = u
 	w.attachCOB(u) // [P1-I01] VM per-unit
 	if w.OnCreate != nil {
@@ -475,6 +542,7 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 			PlacementIdx: -1,
 		}
 		installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
+		u.InitEconomyState()   // [P1-I04]
 		w.units[idx] = u
 		w.attachCOB(u) // [P1-I01] VM per-unit for forced slot
 		w.liveCounters[player]++
@@ -509,6 +577,7 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		PlacementIdx: -1,
 	}
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
+	u.InitEconomyState()   // [P1-I04]
 	w.units[idx] = u
 	w.attachCOB(u) // [P1-I01] VM per-unit for forced unsliced
 	if w.OnCreate != nil {

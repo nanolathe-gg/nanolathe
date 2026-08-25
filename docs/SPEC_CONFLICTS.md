@@ -276,6 +276,76 @@ required to agree and must not be shared.
 
 ---
 
+## SC15 — The cursor index table was off by one from slot 10
+
+**Spec** `[07 §8]` (before this entry): "The cursor index table is closed …
+index 1 `cursorattack` … 9 `cursorteleport`, 10 `cursorreclamate`,
+11 `cursorload`, 12 `cursorunload`, 13 `cursormove`, 14 `cursorselect`,
+15 `cursorfindsite`, 16 `cursorred`, 17 `cursorgrn`, 18 `cursornormal`,
+19 `cursorhourglass`, 20 `pathicon`."
+
+**Observed:** `anims/cursors.gaf` in the reference install holds **22** named
+entries, two more than that table's twenty. Reproduce with the asset-guarded
+`TestGafCursorAssetGuarded` in `internal/render`, or by listing the GAF's
+entries directly:
+
+```
+cursormove cursorgrn cursorselect cursorred cursorload cursorrevive
+cursordefend cursorpatrol cursorprotect cursorrepair cursorattack
+cursornormal cursorpickup cursorairstrike cursorteleport cursorreclamate
+cursorfindsite cursorcapture cursorunload cursorhourglass cursortoofar
+pathicon
+```
+
+`cursorrevive` is missing from the spec table entirely and `cursorprotect` is
+never referenced by the executable (its name does not appear in the binary's
+string data at all — it is unused art).
+
+The handle array has twenty-two slots and the init sequence fills slot 10 with
+`cursorrevive` **last**, after slot 21, breaking the otherwise ascending order.
+Transcribing the sequence rather than the slot offsets drops slot 10 and shifts
+`cursorreclamate` through `pathicon` down by one. Three independent readers
+confirm the corrected numbering: the idle default the pointer update falls back
+to is index 19, which must be `cursornormal` and is `cursorhourglass` under the
+old table; the front end installs index 20 across blocking transitions, which
+must be `cursorhourglass` and is `pathicon` under the old table; and the shape
+chooser returns 7 for PATROL, 6 for REPAIR, 5 for FOLLOW, 11 for RECLAIM, 14 for
+MOVE and 16 for MOBILEBUILD, every one of which names the right art only under
+the corrected table.
+
+**Decision:** the table is 0..21 with slot 10 `cursorrevive`; every index from
+`cursorreclamate` up shifts by one. `research/retail-executable-spec`
+`[07 §8]` and `internal/render/gaf_cursor.go` carry the corrected table, and
+`render.CursorAttack`…`render.CursorPathIcon` are the named constants.
+`cursorprotect` is deliberately absent from the table: retail never resolves it.
+
+**Falsifies:** the previous "closed" twenty-entry table, and the
+`cursorfindsite` = 15 / `cursorgrn` = 17 constants that PLAN_12 C12 quoted.
+
+---
+
+## SC16 — No runtime bit corresponds to `[07 §9]`'s active-state `0x20`
+
+**Spec** `[07 §9]`: the shared selection eligibility predicate, and the
+own-unit inspect predicate behind `cursorselect` in `[07 §8]`, test "the
+active-state bit `0x20` of unit runtime flags".
+
+**Observed:** in this repo bit `0x20` of `units.Unit.Flags` is already claimed
+by `construction.FlagInBuildStance` (`1 << 5`, COB port 5 `INBUILDSTANCE`,
+`[04 §4.4]`), and no code path sets an active-state bit. Gating on `0x20`
+would make the inspect predicate permanently false and would make the
+`cursorselect` shape unreachable.
+
+**Decision:** `hud.isInspectable` gates on ownership plus completed
+construction only, with a `TODO(question)` naming both missing gates. Do not
+"fix" it by testing `0x20` until the runtime flag word is reconciled with
+`[07 §9]` — `INBUILDSTANCE` and the active-state bit cannot both be `0x20`.
+
+**Falsifies:** nothing in the spec; it records that a `[07 §9]` gate has no
+implementable counterpart yet.
+
+---
+
 ## How to add to this file
 
 One section per conflict: what the spec says, what was observed and how, the

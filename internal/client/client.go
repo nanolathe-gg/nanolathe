@@ -13,10 +13,12 @@
 package client
 
 import (
-	"github.com/hajimehoshi/ebiten/v2"
 	"image"
 
+	"github.com/hajimehoshi/ebiten/v2"
+
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
@@ -89,7 +91,20 @@ type Client struct {
 	texIndex  map[string]texRef
 	animClock int // texture-animation clock in sim frames
 
+	// Software cursor, drawn last over the composed surface [07 §8].
+	cursors *Cursors
+
 	in InputState
+
+	// Audio is presentation-only and never feeds simulation [03 §8.3] C19 I6.
+	// Queue drain runs once per rendered frame outside simulation C18;
+	// variant selection uses CRT stream [03 §8.3] C17; positional helper uses
+	// audience gating (mode &2) and viewport pan/attenuation [03 §8.3].
+	audioQueue    *audio.Queue
+	audioCache    *audio.SampleCache
+	audioMusic    *audio.Controller
+	audioViewport audio.Viewport
+	audioFrame    uint32
 }
 
 // New creates a client. It allocates the indexed framebuffer at the negotiated
@@ -179,6 +194,7 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 func (c *Client) ComposeFrame() *image.RGBA {
 	prev, cur, ok := c.buffer.Read()
 	c.composeIndexed(1.0, prev, cur, ok)
+	c.drawCursor() // cursor last, over the composed surface [07 §8]
 	c.convertIndexedToRGBA()
 	img := image.NewRGBA(image.Rect(0, 0, c.width, c.height))
 	copy(img.Pix, c.rgba)

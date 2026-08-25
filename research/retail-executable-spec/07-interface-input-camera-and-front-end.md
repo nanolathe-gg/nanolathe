@@ -800,22 +800,83 @@ normal, red/green validity, attack, move, airstrike, too-far, hourglass,
 path, and revive-style indicators. Cursor frames use the shared palette/LUT.
 
 **The cursor index table is closed.** A hardware-style cursor index byte
-selects the active shape from a handle array resolved at init from named
-entries: index 1 `cursorattack`, 2 `cursorairstrike`, 3 `cursortoofar`,
-4 `cursorcapture`, 5 `cursordefend`, 6 `cursorrepair`, 7 `cursorpatrol`,
-8 `cursorpickup`, 9 `cursorteleport`, 10 `cursorreclamate`, 11 `cursorload`,
-12 `cursorunload`, 13 `cursormove`, 14 `cursorselect`, 15 `cursorfindsite`,
-16 `cursorred`, 17 `cursorgrn`, 18 `cursornormal`, 19 `cursorhourglass`,
-20 `pathicon`; slot 0 is unused/gray overflow. The index writer diffs and
-swaps shapes. The armed-order latch decides authorization while the index
-decides shape; they coincide numerically only by table offset and must not be
-conflated. During mobile-build placement, site validity picks
-`cursorfindsite` when placement is valid else `cursortoofar`; the ghost
-preview uses `cursorred`/`cursorgrn`.
+selects the active shape from a handle array of twenty-two slots resolved at
+init from named entries: index 1 `cursorattack`, 2 `cursorairstrike`,
+3 `cursortoofar`, 4 `cursorcapture`, 5 `cursordefend`, 6 `cursorrepair`,
+7 `cursorpatrol`, 8 `cursorpickup`, 9 `cursorteleport`, 10 `cursorrevive`,
+11 `cursorreclamate`, 12 `cursorload`, 13 `cursorunload`, 14 `cursormove`,
+15 `cursorselect`, 16 `cursorfindsite`, 17 `cursorred`, 18 `cursorgrn`,
+19 `cursornormal`, 20 `cursorhourglass`, 21 `pathicon`; slot 0 is unused/gray
+overflow. Slot 10 is filled last by the init sequence, out of the otherwise
+ascending order — a revision of this document that transcribed the sequence
+rather than the slot offsets dropped it and shifted every later index by one
+(see `docs/SPEC_CONFLICTS.md`). Index 19 is the idle default the pointer
+update falls back to, and 20 is the loading shape the front end installs
+around blocking transitions. The index writer diffs and swaps shapes, so
+re-selecting the shape already shown does not restart its animation. The
+armed-order latch decides authorization while the index decides shape; they
+coincide numerically only by table offset and must not be conflated. During
+mobile-build placement, site validity picks `cursorfindsite` when placement is
+valid else `cursortoofar`; the ghost preview uses `cursorred`/`cursorgrn`.
+
+**The shape chooser is closed.** One pointer update resolves the shape in four
+steps. First, two region bits record whether the pointer is over the world
+viewport or over the minimap; when neither is set the index is forced to
+`cursornormal` and nothing else is consulted. Second, the mobile-build latch
+with a live placement ghost takes the site-validity branch above. Third, the
+selected units of the local player — walked over the owner's inclusive range at
+the fixed 280-byte stride, admitted by the membership bit `0x10` — are each
+asked for a shape, and **the lowest index wins**, so the table's numbering is
+also its shape priority order. Fourth, when that candidate set is empty the
+idle latch over an own, active, finished, untasked unit gives `cursorselect`
+and everything else gives `cursornormal`.
+
+Per selected unit the shape is dispatched on the armed latch and gated on the
+same authored capability flags the order predicate reads, so the advertised
+action and the performed action cannot disagree:
+
+* Idle (latch 1) rewrites itself to ATTACK over a hostile target the unit can
+  attack, and to RECLAIM over a hostile target a `canreclamate` unit could
+  strip; otherwise it yields `cursorrepair` over a friendly target needing
+  assistance, `cursorselect` over an own finished unit, `cursorrevive` or
+  `cursorreclamate` over a reclaimable feature depending on `canresurrect`
+  versus `canreclamate`, `cursormove` for a `canmove` unit, and
+  `cursornormal` otherwise.
+* MOVE (latch 2) requires `canmove` and then yields, in order, `cursorrevive`
+  over a reclaimable feature for a `canresurrect` unit, `cursorcapture` over a
+  hostile target for a `cancapture` unit, `cursorreclamate` over a hostile
+  target for a `canreclamate` unit, `cursorrepair` over a friendly target
+  needing assistance, `cursorunload` when a flyer targets an `isairbase` unit,
+  the transport pair below over a carriable target, `cursordefend` over a
+  friendly target for a `canguard` unit, and `cursormove` otherwise.
+* ATTACK (latch 3) requires `canattack` and yields `cursorairstrike` when the
+  unit's primary weapon is authored `dropped`, `cursorattack` otherwise.
+* BLAST (latch 4) requires `candgun` and is gated on **affordability, not
+  range**: the command-fire weapon's `energypershot` and `metalpershot` are
+  compared against the owner's stocks, giving `cursorattack` when both are
+  covered and `cursortoofar` when they are not.
+* UNLOAD (latch 5) requires `canload` and gives `cursorunload`; PICKUP
+  (latch 6) requires a carriable target and gives `cursorpickup` for a `canfly`
+  transport, `cursorload` for a ground one.
+* FOLLOW (latch 7) requires `canguard` and a friendly target, and refuses when
+  a ground guard is pointed at an air target; otherwise `cursordefend`.
+* REPAIR (latch 8) requires a target the unit can assist and gives
+  `cursorrepair`; PATROL (latch 9) requires `canpatrol` and gives
+  `cursorpatrol`; TELEPORT (latch 0xB) gives `cursorteleport`.
+* RECLAIM (latch 0xC) requires `canreclamate` and a reclaimable feature or a
+  hostile target, and gives `cursorreclamate`; CAPTURE (latch 0xD) requires
+  `cancapture` and a target of another owner, and gives `cursorcapture`;
+  MOBILEBUILD (latch 0xE) requires a non-empty build list and gives
+  `cursorfindsite`.
+* Any gate that fails yields `cursornormal`, which is also the value the
+  reduction starts from.
 
 The cursor is rendered after the offscreen battle/front-end surface is
 prepared. Cursor position is read from the window system and translated into
-surface/logical coordinates before drawing.
+surface/logical coordinates before drawing. **The hotspot is the GAF frame's
+own authored `x_offset`/`y_offset`:** that pixel lands on the pointer, so the
+blit origin is the pointer position minus the offset, and no separate hotspot
+table exists.
 
 Picking distinguishes GUI/modal controls from world space. In world space,
 unit, feature, and terrain/radar tests use the camera transform and visibility
@@ -834,11 +895,23 @@ cell, minimap, or GUI control consumes the action.
 
 ### Unknown
 
-Exact geometric picking hulls, object priority in overlap cases, cursor-hotspot
-coordinates, fog-edge behavior, cursor handle slot 0 identity, queued-line
-palette-entry color values, and every command-specific validity rule are not
-completely recovered. The named-entry index table and the build-site
-validity/ghost cursor selection are established above.
+Exact geometric picking hulls, object priority in overlap cases, fog-edge
+behavior, cursor handle slot 0 identity, and queued-line palette-entry color
+values are not completely recovered. The named-entry index table, the hotspot
+convention, the four-step shape chooser with its lowest-index-wins reduction,
+the per-latch shape table, and the build-site validity/ghost cursor selection
+are established above.
+
+One branch of the idle latch remains unresolved. A global byte, distinct from
+the latch and from the region bits, diverts the idle path to a two-shape
+answer: `cursorred` over a hostile target and `cursorgrn` over a friendly one,
+after the same own-finished-unit test that otherwise gives `cursorselect`. The
+byte's writer has not been located, so the condition that arms this branch is
+unknown and it is not implemented.
+
+The runtime active-state bit `0x20` and the empty-current-task field that the
+own-unit inspect predicate also tests are established for retail but have no
+counterpart in the current runtime flag word (see `docs/SPEC_CONFLICTS.md`).
 
 ## 9. Selection, control groups, orders, and build pages
 

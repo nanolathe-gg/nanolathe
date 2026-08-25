@@ -35,6 +35,14 @@ func (m *MouseState) Scrolled() bool { return m.scrolled }
 // Moved reports cursor motion this update.
 func (m *MouseState) Moved() bool { return m.moved }
 
+// SetPosition places the pointer directly. The windowed path never calls this
+// — pollEbiten owns the position there — but headless composition (screenshots,
+// probes) has no window system to read the pointer from [07 §8].
+func (m *MouseState) SetPosition(x, y float32) {
+	m.moved = m.X != x || m.Y != y
+	m.X, m.Y = x, y
+}
+
 // ButtonState returns 1 while a button is down, 0 otherwise.
 func (m *MouseState) ButtonState(b input.MouseButton) int {
 	if m.buttons[b] {

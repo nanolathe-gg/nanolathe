@@ -43,6 +43,20 @@ func (a *ebitenApp) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return a.c.width, a.c.height
 }
 
+// applyCursorMode hides the window system's pointer whenever a software cursor
+// is installed, so the drawn cursor is the only one visible [07 §8]. Headless
+// runs never touch the window system.
+func (c *Client) applyCursorMode() {
+	if c.opts.Headless {
+		return
+	}
+	if c.cursors != nil {
+		ebiten.SetCursorMode(ebiten.CursorModeHidden)
+		return
+	}
+	ebiten.SetCursorMode(ebiten.CursorModeVisible)
+}
+
 // RunGame starts the windowed main loop and blocks until the window closes.
 // In headless mode it returns immediately without creating a window (C11).
 // It must be called from main after option parsing.
@@ -54,5 +68,6 @@ func RunGame(c *Client) error {
 	if c.opts.Title != "" {
 		ebiten.SetWindowTitle(c.opts.Title)
 	}
+	c.applyCursorMode()
 	return ebiten.RunGame(&ebitenApp{c: c})
 }

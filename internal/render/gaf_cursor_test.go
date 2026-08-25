@@ -28,8 +28,8 @@ func syntheticEntry(durations []int32) *formats.GAFEntry {
 // TestCursorIndexTable verifies the cursor index table [07 §8].
 // Slot 0 is unused/gray overflow; indices 1..20 map to named entries [07 §8].
 func TestCursorIndexTable(t *testing.T) {
-	if CursorCount != 21 {
-		t.Fatalf("CursorCount %d want 21 [07 §8]", CursorCount)
+	if CursorCount != 22 {
+		t.Fatalf("CursorCount %d want 22 [07 §8]", CursorCount)
 	}
 	// Slot 0 unused [07 §8]
 	if got := CursorName(0); got != "" {
@@ -52,19 +52,20 @@ func TestCursorIndexTable(t *testing.T) {
 		7:  "cursorpatrol",
 		8:  "cursorpickup",
 		9:  "cursorteleport",
-		10: "cursorreclamate",
-		11: "cursorload",
-		12: "cursorunload",
-		13: "cursormove",
-		14: "cursorselect",
-		15: "cursorfindsite",
-		16: "cursorred",
-		17: "cursorgrn",
-		18: "cursornormal",
-		19: "cursorhourglass",
-		20: "pathicon",
+		10: "cursorrevive",
+		11: "cursorreclamate",
+		12: "cursorload",
+		13: "cursorunload",
+		14: "cursormove",
+		15: "cursorselect",
+		16: "cursorfindsite",
+		17: "cursorred",
+		18: "cursorgrn",
+		19: "cursornormal",
+		20: "cursorhourglass",
+		21: "pathicon",
 	}
-	if len(want) != 20 {
+	if len(want) != 21 {
 		t.Fatalf("want map size wrong")
 	}
 	seen := make(map[string]int)
@@ -88,14 +89,14 @@ func TestCursorIndexTable(t *testing.T) {
 		seen[name] = idx
 	}
 	// Out of range indices
-	if got := CursorName(21); got != "" {
-		t.Fatalf("out of range 21 should return empty, got %q", got)
+	if got := CursorName(22); got != "" {
+		t.Fatalf("out of range 22 should return empty, got %q", got)
 	}
 	if got := CursorName(-1); got != "" {
 		t.Fatalf("negative index should return empty, got %q", got)
 	}
-	if IsValidCursorIndex(21) {
-		t.Fatalf("21 should be invalid")
+	if IsValidCursorIndex(22) {
+		t.Fatalf("22 should be invalid")
 	}
 	if IsValidCursorIndex(-1) {
 		t.Fatalf("-1 should be invalid")
@@ -125,8 +126,8 @@ func TestBuildSiteCursorChoice(t *testing.T) {
 		ghostWant int
 		ghostName string
 	}{
-		{true, 15, "cursorfindsite", 17, "cursorgrn"},
-		{false, 3, "cursortoofar", 16, "cursorred"},
+		{true, 16, "cursorfindsite", 18, "cursorgrn"},
+		{false, 3, "cursortoofar", 17, "cursorred"},
 	}
 	for _, tc := range tests {
 		if got := CursorForBuildSite(tc.valid); got != tc.want {
@@ -396,7 +397,7 @@ func TestGafCursorAssetGuarded(t *testing.T) {
 	}
 	// Check that index table entries resolve case-insensitively when present
 	missing := 0
-	for idx := 1; idx <= 20; idx++ {
+	for idx := 1; idx <= CursorCount-1; idx++ {
 		name := CursorName(idx)
 		if name == "" {
 			t.Fatalf("table hole at %d", idx)
@@ -435,7 +436,7 @@ func TestGafCursorAssetGuarded(t *testing.T) {
 	}
 	// If many missing, log but not fail — some GAF variants may differ
 	if missing > 10 {
-		t.Logf("many cursor entries missing (%d/20), install may be minimal", missing)
+		t.Logf("many cursor entries missing (%d/21), install may be minimal", missing)
 	}
 	// Spot check build-site cursors are present
 	for _, idx := range []int{CursorForBuildSite(true), CursorForBuildSite(false), CursorForGhost(true), CursorForGhost(false)} {

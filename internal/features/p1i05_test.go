@@ -1,0 +1,524 @@
+package features
+
+import (
+	"testing"
+
+	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/save"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/world"
+)
+
+func newTestTerrainP1(w, h int) *world.Terrain {
+	attrs := make([]formats.TNTAttribute, w*h)
+	for i := range attrs {
+		attrs[i] = formats.TNTAttribute{Height: 10, Feature: world.PlotFeatureNone}
+	}
+	plot := world.ExpandPlot(attrs, w, h)
+	return &world.Terrain{
+		CellW:       int32(w),
+		CellH:       int32(h),
+		Plot:        plot,
+		FeatureDefs: []*content.FeatureDef{},
+		SeaLevel:    10,
+		Gravity:     numeric.Fixed(0x1FDB),
+	}
+}
+
+func defP1(name string, footX, footZ int32, obj, filename string) *content.FeatureDef {
+	fd := &content.FeatureDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey(name)},
+		FootprintX:       footX,
+		FootprintZ:       footZ,
+		Damage:           10,
+		Metal:            5,
+		Energy:           3,
+	}
+	fd.Object = obj
+	fd.Filename = filename
+	fd.Reclaimable = true
+	return fd
+}
+
+// TestAllocationFailurePolicy locks 0x100 catalog, 0x800 anim slots, WH*0xD grid silent fail [P1-10][P1-15] [P1-I05]
+func TestAllocationFailurePolicy(t *testing.T) {
+	w, h := 4, 4
+	terrain := newTestTerrainP1(w, h)
+	sim := rng.SimulationFromState(1)
+	svc := NewService(terrain, &sim, nil, nil)
+
+	// Catalog pool 0x100 silent fail: fill FeatureDefs to 256
+	for i := 0; i < FeatureCatalogLimit; i++ {
+		fd := defP1("feat"+string(rune('a'+i%26)), 1, 1, "", "")
+		fd.CanonicalKey = content.CanonicalKey("catalog" + string(rune(i)))
+		terrain.FeatureDefs = append(terrain.FeatureDefs, fd)
+	}
+	if len(terrain.FeatureDefs) != FeatureCatalogLimit {
+		t.Fatalf("setup: catalog not filled")
+	}
+	extra := defP1("extra", 1, 1, "", "")
+	extra.CanonicalKey = content.CanonicalKey("extra")
+	// Should fail silent when def not in catalog and catalog full
+	if inst := svc.spawnFeatureAt(0, 0, extra); inst != nil {
+		t.Fatalf("catalog pool exhaustion should silent fail [P1-10][P1-15] 0x100")
+	}
+	// Clear catalog for anim test
+	terrain.FeatureDefs = []*content.FeatureDef{}
+	// Anim pool 0x800 silent fail: fill instances map to 2048
+	for i := 0; i < FeatureAnimSlots; i++ {
+		// Use non-conflicting positions by wrapping? But our map key is cz*W+cx, limited to 16 cells. To fill map we need to allow many instances even on same cell? Instead directly fill map with synthetic keys beyond grid to simulate pool exhaustion
+		// For test, we directly set map size to limit
+		svc.instances[i] = &Instance{CX: i % w, CZ: i % h, Def: defP1("a", 1, 1, "", "")}
+		if len(svc.instances) >= FeatureAnimSlots {
+			break
+		}
+	}
+	// Ensure we reached limit
+	if len(svc.instances) < FeatureAnimSlots {
+		// Force to limit via manual fill with unique keys beyond grid bounds trick: bypass grid limit by directly inserting
+		for len(svc.instances) < FeatureAnimSlots {
+			k := len(svc.instances) + 10000
+			svc.instances[k] = &Instance{CX: 0, CZ: 0, Def: defP1("x", 1, 1, "", "")}
+		}
+	}
+	fd2 := defP1("animTest", 1, 1, "", "")
+	fd2.CanonicalKey = content.CanonicalKey("animTest")
+	terrain.FeatureDefs = []*content.FeatureDef{fd2}
+	// Need to clear a cell to attempt spawn but pool still full
+	terrain.Plot[1].SetFeature(world.PlotFeatureNone)
+	terrain.Plot[1].SetFlagByte(0)
+	if inst := svc.spawnFeatureAt(1, 0, fd2); inst != nil {
+		t.Fatalf("anim pool 0x800 exhaustion should silent fail [P1-10][P1-15]")
+	}
+	// WH*0xD grid silent fail: out-of-bounds and occupied
+	// Reset map to empty for grid test
+	svc.instances = make(map[int]*Instance)
+	terrain.Plot[0].SetFeature(0) // occupies 0,0
+	terrain.FeatureDefs = []*content.FeatureDef{defP1("gridTest", 1, 1, "", "")}
+	terrain.FeatureDefs[0].CanonicalKey = content.CanonicalKey("gridTest")
+	if inst := svc.spawnFeatureAt(0, 0, terrain.FeatureDefs[0]); inst != nil {
+		t.Fatalf("occupied cell should silent fail, not overwrite")
+	}
+	if inst := svc.spawnFeatureAt(-1, 0, terrain.FeatureDefs[0]); inst != nil {
+		t.Fatalf("out-of-bounds should silent fail [P1-15] WH*0xD grid")
+	}
+	if inst := svc.spawnFeatureAt(w, h, terrain.FeatureDefs[0]); inst != nil {
+		t.Fatalf("out-of-bounds should silent fail")
+	}
+	// Missing successor sentinel 0xFFFF: ensure remove with no successor just frees
+	svc.instances = make(map[int]*Instance)
+	terrain.Plot[0].SetFeature(world.PlotFeatureNone)
+	terrain.Plot[0].SetFlagByte(0)
+	defNoSucc := defP1("nosucc", 1, 1, "", "")
+	defNoSucc.CanonicalKey = content.CanonicalKey("nosucc")
+	defNoSucc.FeatureDead = ""
+	defNoSucc.FeatureDeadDef = nil
+	terrain.FeatureDefs = []*content.FeatureDef{defNoSucc}
+	inst := svc.spawnFeatureAt(0, 0, defNoSucc)
+	if inst == nil {
+		t.Fatalf("spawn nosucc failed")
+	}
+	svc.RemoveFeatureAt(0, 0, CauseDead)
+	if !terrain.Plot[0].IsEmpty() {
+		t.Fatalf("missing successor should return to free sentinel 0xFFFF [P1-10][P1-15] 0xFFFF")
+	}
+}
+
+// TestSaveRoundTrip verifies all three save groups round-trip via bulk [P1-I05][P1-13 §2.7]
+func TestSaveRoundTrip(t *testing.T) {
+	w, h := 8, 8
+	terrain := newTestTerrainP1(w, h)
+	// Seed metal so extractor not needed
+	terrain.ApplySchema(nil, 0)
+	sim := rng.SimulationFromState(42)
+	svc := NewService(terrain, &sim, nil, nil)
+	// Create one of each kind
+	normalDef := defP1("rockNormal", 1, 1, "", "")
+	normalDef.CanonicalKey = content.CanonicalKey("rockNormal")
+	normalDef.Reclaimable = true
+	normalDef.Damage = 20
+
+	animDef := defP1("treeAnim", 1, 1, "", "tree.gaf")
+	animDef.CanonicalKey = content.CanonicalKey("treeAnim")
+	animDef.Flamable = true
+	animDef.SeqName = "animSeq"
+	animDef.SeqNameBurn = "burnSeq"
+	animDef.SparkTime = 90
+	animDef.BurnWeapon = "burn_weapon"
+	animDef.Damage = 15
+
+	threeDDef := defP1("wreck3D", 2, 2, "wreck.3do", "")
+	threeDDef.CanonicalKey = content.CanonicalKey("wreck3D")
+	threeDDef.Damage = 50
+	threeDDef.Metal = 100
+
+	terrain.FeatureDefs = []*content.FeatureDef{normalDef, animDef, threeDDef}
+	// Place instances
+	nInst := svc.PlaceAt(1, 1, normalDef)
+	if nInst == nil {
+		t.Fatalf("normal place failed")
+	}
+	nInst.Health = 12
+	aInst := svc.PlaceAt(3, 3, animDef)
+	if aInst == nil {
+		t.Fatalf("anim place failed")
+	}
+	aInst.IsBurning = true
+	aInst.BurnCountdown = 2
+	aInst.BurnTicks = 5
+	threeInst := svc.PlaceAt(5, 5, threeDDef)
+	if threeInst == nil {
+		t.Fatalf("3d place failed")
+	}
+	threeInst.IsSinking = true
+	threeInst.Y = numeric.Fixed(100 * 65536)
+	threeInst.Vy = -11468
+	threeInst.Status = 1
+
+	// Write bulk
+	b := save.NewBuilder("")
+	if err := svc.WriteBulk(b); err != nil {
+		t.Fatalf("WriteBulk: %v", err)
+	}
+	data := b.Bytes()
+	bank, err := save.OpenBytes(data, save.RetailTag)
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	// Validate sizes [P1-13 §2.7]
+	ac, _ := bank.Account(save.FeaturesAccount)
+	if ac == nil {
+		t.Fatalf("Features account missing")
+	}
+	if namesData, ok := ac.BoxData(save.FeatureTypeNamesBox, 0); ok {
+		if len(namesData)%save.FeatureTypeName != 0 {
+			t.Fatalf("Type Names size %d not %%128 [P1-13 §2.7]", len(namesData))
+		}
+	}
+	if normData, ok := ac.BoxData(save.FeatureNormalBox, 0); ok {
+		if len(normData)%NormalRecordSize != 0 {
+			t.Fatalf("Normal box size %d not %%8 [P1-13 §2.7]", len(normData))
+		}
+	}
+	if animData, ok := ac.BoxData(save.FeatureAnimatingBox, 0); ok {
+		if len(animData)%AnimatingRecordSize != 0 {
+			t.Fatalf("Animating box size %d not %%10 [P1-13 §2.7]", len(animData))
+		}
+	}
+	if threeData, ok := ac.BoxData(save.Feature3DBox, 0); ok {
+		if len(threeData)%ThreeDRecordSize != 0 {
+			t.Fatalf("3D box size %d not %%26 [P1-13 §2.7]", len(threeData))
+		}
+	}
+
+	// Read into new service
+	terrain2 := newTestTerrainP1(w, h)
+	terrain2.ApplySchema(nil, 0)
+	terrain2.FeatureDefs = []*content.FeatureDef{normalDef, animDef, threeDDef}
+	svc2 := NewService(terrain2, &sim, nil, nil)
+	if err := svc2.ReadBulk(bank); err != nil {
+		t.Fatalf("ReadBulk: %v", err)
+	}
+	// Verify counts: should have 3 instances
+	if len(svc2.Instances()) != 3 {
+		t.Fatalf("bulk round-trip instances %d want 3", len(svc2.Instances()))
+	}
+	// Verify that each kind survived
+	foundNormal, foundAnim, found3D := false, false, false
+	for _, inst := range svc2.Instances() {
+		switch Classify(inst.Def) {
+		case KindNormal:
+			foundNormal = true
+			if inst.Health != 12 {
+				t.Fatalf("normal health %d want 12", inst.Health)
+			}
+		case KindAnimating:
+			foundAnim = true
+			if !inst.IsBurning || inst.BurnCountdown != 2 {
+				t.Fatalf("anim burn state lost: burning %v cd %d", inst.IsBurning, inst.BurnCountdown)
+			}
+		case KindThreeD:
+			found3D = true
+			if !inst.IsSinking || inst.Y.Raw() != 100*65536 {
+				t.Fatalf("3d sinking state lost: sinking %v y %d", inst.IsSinking, inst.Y.Raw())
+			}
+		}
+	}
+	if !foundNormal || !foundAnim || !found3D {
+		t.Fatalf("missing kinds normal %v anim %v 3d %v", foundNormal, foundAnim, found3D)
+	}
+	// Also test malformed bulk: unknown type name index and short boxes handled gracefully
+	b2 := save.NewBuilder("")
+	// Manually craft malformed Features account with truncated boxes and unknown type idx
+	ac2 := b2.Add(save.FeaturesAccount)
+	// Type names: one entry "rockNormal"
+	typePayload := make([]byte, save.FeatureTypeName)
+	copy(typePayload, []byte("rockNormal"))
+	ac2.AppendBox(save.FeatureTypeNamesBox, 0, typePayload)
+	// Normal box with out-of-range type idx 99 (should clamp gracefully)
+	malPayload := make([]byte, NormalRecordSize)
+	malPayload[0] = 99 // low byte of idx 99, high 0
+	malPayload[1] = 0
+	// CX=2, CZ=2
+	malPayload[2] = 2
+	malPayload[3] = 0
+	malPayload[4] = 2
+	malPayload[5] = 0
+	malPayload[6] = 10
+	malPayload[7] = 0
+	ac2.AppendBox(save.FeatureNormalBox, 0, malPayload)
+	// Truncated animating box (5 bytes, not %10) should be truncated gracefully
+	ac2.AppendBox(save.FeatureAnimatingBox, 0, []byte{1, 2, 3, 4, 5})
+	data2 := b2.Bytes()
+	bank2, _ := save.OpenBytes(data2, save.RetailTag)
+	terrain3 := newTestTerrainP1(w, h)
+	terrain3.ApplySchema(nil, 0)
+	terrain3.FeatureDefs = []*content.FeatureDef{normalDef}
+	svc3 := NewService(terrain3, &sim, nil, nil)
+	if err := svc3.ReadBulk(bank2); err != nil {
+		t.Fatalf("ReadBulk malformed should not error: %v", err)
+	}
+	// Should have at least the clamped normal instance
+	if len(svc3.Instances()) != 1 {
+		t.Fatalf("malformed bulk should have 1 instance after clamp, got %d", len(svc3.Instances()))
+	}
+}
+
+// TestVentPersistence verifies geothermal vent persists under building and after removal [05 "Geothermal requirement"] [P1-10]
+func TestVentPersistence(t *testing.T) {
+	w, h := 8, 8
+	terrain := newTestTerrainP1(w, h)
+	terrain.ApplySchema(nil, 0)
+	// Create vent feature
+	ventDef := defP1("geovent", 1, 1, "", "")
+	ventDef.CanonicalKey = content.CanonicalKey("geovent")
+	ventDef.Geothermal = true
+	ventDef.Reclaimable = false
+	ventDef.Blocking = false
+	ventDef.Damage = 100
+	terrain.FeatureDefs = []*content.FeatureDef{ventDef}
+	sim := rng.SimulationFromState(1)
+	svc := NewService(terrain, &sim, nil, nil)
+	vent := svc.PlaceAt(4, 4, ventDef)
+	if vent == nil {
+		t.Fatalf("vent place failed")
+	}
+	// Simulate building placement that requires geothermal: yard with G (0x8f) at 0,0
+	yard, err := world.ParseYardMap("G", 1, 1)
+	if err != nil {
+		t.Fatalf("ParseYardMap: %v", err)
+	}
+	if err := terrain.ValidatePlacement(4, 4, yard, 1, 1, 0); err != nil {
+		t.Fatalf("geothermal placement should succeed when vent present: %v", err)
+	}
+	// Ensure vent still present after validation (read-only)
+	if !VentPersistsAfterBuildingRemoval(terrain, 4, 4, ventDef) {
+		t.Fatalf("vent should persist after placement validation [05 \"Geothermal requirement\"] [P1-10]")
+	}
+	// Simulate building removal (no op on feature grid) and verify vent still there
+	// No clearFootprint called for building; vent should remain
+	if inst := svc.InstanceAt(4, 4); inst == nil || inst.Def != ventDef {
+		t.Fatalf("vent instance should still be at 4,4 after building would be placed")
+	}
+	// Destroy vent's successor path: vent has no successor, removal should free but we test plant destruction does NOT clear vent
+	// Instead, test that removing a different feature at same location via successor replacement still respects vent? No, we just ensure vent not cleared by building logic
+	// Clear a non-vent feature nearby and ensure vent unaffected
+	otherDef := defP1("rock", 1, 1, "", "")
+	otherDef.CanonicalKey = content.CanonicalKey("rock")
+	terrain.FeatureDefs = append(terrain.FeatureDefs, otherDef)
+	other := svc.PlaceAt(2, 2, otherDef)
+	if other == nil {
+		t.Fatalf("other place failed")
+	}
+	svc.RemoveFeatureAt(2, 2, CauseDead)
+	if terrain.Plot[2+2*w].Feature() != world.PlotFeatureNone {
+		t.Fatalf("other feature removal should clear its cell")
+	}
+	if !VentPersistsAfterBuildingRemoval(terrain, 4, 4, ventDef) {
+		t.Fatalf("vent should still persist after other feature removal")
+	}
+	// Also test at-least-one multi-vent satisfaction: footprint 2x2 with one vent anywhere should satisfy
+	yard2, _ := world.ParseYardMap("GGGG", 2, 2) // G at all cells
+	// Place vent only at 4,4, footprint at 4,4 covering 4,4 and 5,5 etc, but vent at 4,4 only
+	if err := terrain.ValidatePlacement(4, 4, yard2, 2, 2, 0); err != nil {
+		t.Fatalf("multi-vent at-least-one should succeed when one vent present [05][P1-10], got %v", err)
+	}
+	// Empty location without vent should fail
+	if err := terrain.ValidatePlacement(6, 6, yard2, 2, 2, 0); err == nil {
+		t.Fatalf("geothermal placement without vent should fail [05][P1-10]")
+	}
+}
+
+// TestDestruction verifies feature transitions to successor or removed, with reclaim credit [05 "Removal and successor replacement"] [05 "Feature reclaim"]
+func TestDestruction(t *testing.T) {
+	w, h := 4, 4
+	terrain := newTestTerrainP1(w, h)
+	sim := rng.SimulationFromState(1)
+	svc := NewService(terrain, &sim, nil, nil)
+	// Create chain A->B->C
+	defA := defP1("A", 1, 1, "", "")
+	defA.CanonicalKey = content.CanonicalKey("A")
+	defA.Reclaimable = true
+	defA.Metal = 10
+	defA.Energy = 20
+	defA.Damage = 30
+	defB := defP1("B", 1, 1, "", "")
+	defB.CanonicalKey = content.CanonicalKey("B")
+	defB.Reclaimable = true
+	defB.Damage = 5
+	defC := defP1("C", 1, 1, "", "")
+	defC.CanonicalKey = content.CanonicalKey("C")
+	defC.Damage = 5
+	defA.FeatureDeadDef = defB
+	defA.FeatureDead = "B"
+	defA.FeatureReclamateDef = defC
+	defA.FeatureReclamate = "C"
+	defA.FeatureBurntDef = nil
+	terrain.FeatureDefs = []*content.FeatureDef{defA, defB, defC}
+	_ = svc.PlaceAt(1, 1, defA)
+	// CauseDead should hop to B
+	svc.RemoveFeatureAt(1, 1, CauseDead)
+	if inst := svc.InstanceAt(1, 1); inst == nil || inst.Def != defB {
+		t.Fatalf("dead hop should spawn B [05 \"Removal and successor replacement\"]")
+	}
+	// Reclaim from B (which has nil reclaim successor) should remove to free
+	// But B's reclaim successor is nil, so next reclaim should free
+	svc.RemoveFeatureAt(1, 1, CauseReclaim)
+	if !terrain.Plot[1+1*w].IsEmpty() {
+		t.Fatalf("reclaim with no successor should free to 0xFFFF [P1-10][P1-15]")
+	}
+	// Test reclaim credit via Reclaim helper
+	_ = svc.PlaceAt(1, 1, defA)
+	inst := svc.InstanceAt(1, 1)
+	metal, energy := svc.Reclaim(nil, inst, 0)
+	if metal != 10 || energy != 20 {
+		t.Fatalf("reclaim should return full pools metal 10 energy 20 [05 \"Feature reclaim\"], got %v %v", metal, energy)
+	}
+	if svc.InstanceAt(1, 1) == nil || svc.InstanceAt(1, 1).Def != defC {
+		t.Fatalf("reclaim should replace with reclaimed successor C [05 \"Removal and successor replacement\"]")
+	}
+	// Test sinking successor carries position: place wreck with sinking, then destroy it and check successor inherits? Not needed for destruction but for completeness
+}
+
+// TestExtractorOverlap verifies extractor cannot be placed overlapping another extractor's patch when occupancy blocks, but metal sampling allows overlap [05 "Terrain metal extraction"] [P1-10]
+func TestExtractorOverlap(t *testing.T) {
+	w, h := 8, 8
+	terrain := newTestTerrainP1(w, h)
+	// Seed metal
+	terrain.ApplySchema(nil, 0)
+	// Simulate first extractor placement at 2,2 footprint 2x2
+	footX, footZ := 2, 2
+	extractsMetal := float32(1.5)
+	res1, err := terrain.CheckExtractorOverlap(2, 2, footX, footZ, extractsMetal)
+	if err != nil {
+		t.Fatalf("CheckExtractorOverlap: %v", err)
+	}
+	if res1.OverlapsExisting {
+		t.Fatalf("empty terrain should not overlap")
+	}
+	// Stamp occupancy for first extractor at 2,2
+	for dz := 0; dz < footZ; dz++ {
+		for dx := 0; dx < footX; dx++ {
+			cell := terrain.PlotAt(2+int32(dx), 2+int32(dz))
+			if cell != nil {
+				cell.SetOccupantA(1) // mark occupied [04 §6.2] bits 1-2
+			}
+		}
+	}
+	// Second extractor overlapping at 3,3 (overlaps cell 3,3) should report overlap
+	res2, _ := terrain.CheckExtractorOverlap(3, 3, footX, footZ, extractsMetal)
+	if !res2.OverlapsExisting {
+		t.Fatalf("overlapping extractor should be detected via occupancy [04 §6.2][05 \"Terrain metal extraction\"]")
+	}
+	// Non-overlapping at 5,5 should not overlap
+	res3, _ := terrain.CheckExtractorOverlap(5, 5, footX, footZ, extractsMetal)
+	if res3.OverlapsExisting {
+		t.Fatalf("non-overlapping should not report overlap")
+	}
+	// Validate placement with occupancy bits should reject overlapping when yard requires empty
+	yard, _ := world.ParseYardMap("o", 1, 1) // 'o' includes bits 1-2? Check: 'o' 0x2f includes bits 0,1,2,3,5? Actually o is 0x2f includes bits. Use 'o' for occupancy check
+	// For extractor, use yard that checks occupancy: G maybe? But o includes bit1-2 per placement doc: bits1-2 reject occupant
+	// So overlapping placement should be blocked
+	if err := terrain.ValidatePlacement(3, 3, yard, 2, 2, 0); err == nil {
+		// If yard is o, it should reject due to occupant
+		// If not, try with explicit occupancy yard: use 'o' which has 0x2f = 00101111 includes bits 1-2 (0x06) yes
+		// So should reject
+		t.Fatalf("ValidatePlacement should reject overlapping extractor due to occupancy [04 §6.2]")
+	}
+}
+
+// TestMalformedCustom verifies malformed feature defs handled gracefully [P1-I05]
+func TestMalformedCustom(t *testing.T) {
+	w, h := 4, 4
+	terrain := newTestTerrainP1(w, h)
+	sim := rng.SimulationFromState(1)
+	svc := NewService(terrain, &sim, nil, nil)
+	// Zero footprint should be normalized to 1x1
+	malDef := defP1("mal", 0, 0, "", "")
+	malDef.CanonicalKey = content.CanonicalKey("mal")
+	malDef.Damage = 10
+	terrain.FeatureDefs = []*content.FeatureDef{malDef}
+	inst := svc.PlaceAt(1, 1, malDef)
+	if inst == nil {
+		t.Fatalf("zero footprint malformed should be normalized to 1x1 and place [P1-I05]")
+	}
+	if inst.FootprintX != 1 || inst.FootprintZ != 1 {
+		t.Fatalf("normalized footprint should be 1x1, got %d x %d", inst.FootprintX, inst.FootprintZ)
+	}
+	// Negative footprint
+	negDef := defP1("neg", -2, -1, "", "")
+	negDef.CanonicalKey = content.CanonicalKey("neg")
+	terrain.FeatureDefs = append(terrain.FeatureDefs, negDef)
+	inst2 := svc.PlaceAt(2, 2, negDef)
+	if inst2 == nil {
+		t.Fatalf("negative footprint should be clamped and place")
+	}
+	// Unknown successor name: should not panic, sentinel
+	unknownSuccDef := defP1("unknownSucc", 1, 1, "", "")
+	unknownSuccDef.CanonicalKey = content.CanonicalKey("unknownSucc")
+	unknownSuccDef.FeatureDead = "missing_custom_feature"
+	unknownSuccDef.FeatureDeadDef = nil // not resolved
+	terrain.FeatureDefs = append(terrain.FeatureDefs, unknownSuccDef)
+	_ = svc.PlaceAt(0, 0, unknownSuccDef)
+	svc.RemoveFeatureAt(0, 0, CauseDead)
+	// Should gracefully handle missing successor as nil -> free sentinel
+	if !terrain.Plot[0].IsEmpty() {
+		t.Fatalf("missing successor should gracefully free to 0xFFFF [P1-10][P1-15]")
+	}
+	// Custom unknown type name in bulk save should be handled via placeholder
+	b := save.NewBuilder("")
+	// Create instance with custom name not in FeatureDefs
+	customDef := &content.FeatureDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "custom_unknown_123"},
+		FootprintX:       1,
+		FootprintZ:       1,
+		Damage:           7,
+		Object:           "custom.3do",
+	}
+	// Bypass catalog limit by directly inserting instance without going through FeatureDefs table? Use spawn with custom def that will be appended to FeatureDefs dynamically
+	terrain.FeatureDefs = []*content.FeatureDef{normalDefForCustom()}
+	_ = svc.PlaceAt(3, 3, customDef)
+	if err := svc.WriteBulk(b); err != nil {
+		t.Fatalf("WriteBulk custom should not error: %v", err)
+	}
+	data := b.Bytes()
+	bank, _ := save.OpenBytes(data, save.RetailTag)
+	terrain2 := newTestTerrainP1(w, h)
+	terrain2.FeatureDefs = []*content.FeatureDef{normalDefForCustom()}
+	svc2 := NewService(terrain2, &sim, nil, nil)
+	if err := svc2.ReadBulk(bank); err != nil {
+		t.Fatalf("ReadBulk custom should not error: %v", err)
+	}
+	// Should have at least 2 instances (mal + custom) or filtered
+	if len(svc2.Instances()) == 0 {
+		t.Fatalf("custom bulk round-trip should preserve instances")
+	}
+}
+
+func normalDefForCustom() *content.FeatureDef {
+	fd := defP1("normalBase", 1, 1, "", "")
+	fd.CanonicalKey = content.CanonicalKey("normalBase")
+	return fd
+}

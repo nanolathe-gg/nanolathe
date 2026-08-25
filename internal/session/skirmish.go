@@ -263,6 +263,8 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 		crt = &tmp
 	}
 	s.InitWindForSession(crt, 0)
+	// Audio presentation queue/cache/music owned by session so unit/weapon/feature/UI events can queue without client import cycle [03 §8.3][03 §8.4] I6.
+	s.InitAudio(fs)
 	// 5. create every required service non-nil and bind ports [08][04 §7.2]
 	if err := createAndBindServices(s); err != nil {
 		return nil, err
@@ -518,6 +520,7 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		crt = &tmp
 	}
 	s.InitWindForSession(crt, 0)
+	s.InitAudio(fs)
 	// Create services best-effort for fixture: use strict helper but tolerate missing world
 	if s.World != nil {
 		_ = createAndBindServices(s)
@@ -662,6 +665,8 @@ func SkirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy
 	}
 	spyRecord(spy, "resources")
 	skirmishGrantResourcesDirect(s, cfg)
+	// Initialize sharing thresholds once from rebuilt capacity after units exist [P1-06] [P1-I04].
+	s.InitShareThresholds()
 	return nil
 }
 
