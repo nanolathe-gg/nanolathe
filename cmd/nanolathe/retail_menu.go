@@ -1129,6 +1129,17 @@ func (g *gameShell) drawRetailText(c *client.Client, gad gui.Gadget, r gui.Rect)
 	g.drawRetailTextState(c, g.panel, gad, r)
 }
 
+// guiColor resolves a GUI file's semantic color field through the retail
+// GUIPAL→PALETTE nearest-RGB table. This is a color-field operation, not an
+// image-pixel conversion: GAF/PCX/TNT bytes are copied directly to the
+// indexed surface and use PALETTE.PAL at presentation.
+func (g *gameShell) guiColor(source byte) byte {
+	if g != nil && g.assets != nil && g.assets.pal != nil {
+		return g.assets.pal.GUIColor(source)
+	}
+	return source
+}
+
 func (g *gameShell) drawRetailTextState(c *client.Client, p *retailPanelState, gad gui.Gadget, r gui.Rect) {
 	if p == nil {
 		return
@@ -1174,10 +1185,7 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *retailPanelState, g
 	if pressed {
 		y++
 	}
-	color := byte(gad.ColorF & 0xff)
-	if color == 0 {
-		color = 255
-	}
+	color := g.guiColor(byte(gad.ColorF & 0xff))
 	maxWidth := int(r.W)
 	if maxWidth <= 0 {
 		width, _ := c.Size()
@@ -1230,10 +1238,7 @@ func (g *gameShell) drawRetailList(c *client.Client, gad gui.Gadget, r gui.Rect)
 		if idx == l.selected {
 			g.drawListSelection(c, r, y, itemHeight)
 		}
-		color := byte(gad.ColorF & 0xff)
-		if color == 0 {
-			color = 255
-		}
+		color := g.guiColor(byte(gad.ColorF & 0xff))
 		c.UITextWidth(g.font, l.items[idx], int(r.X)+4, y, int(r.W)-4, color)
 	}
 }

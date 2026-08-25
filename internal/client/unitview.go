@@ -84,12 +84,34 @@ func ProjectedPositions(views []snapshot.UnitView, cam *camera.Camera) [][2]int3
 }
 
 // LerpUnitView interpolates between prev and cur at alpha via snapshot.Lerp
-// [03 §2.4] C15/C16 (I6). It is presentation-only.
+// [03 §2.4] C15/C16 (I6). It is presentation-only. Heading uses the shortest
+// wrap [04 §8.1] C20 [04 §5.1] (I2) via snapshot.LerpAngle.
 func LerpUnitView(prev, cur snapshot.UnitView, alpha float32) snapshot.UnitView {
 	out := cur
 	out.X = snapshot.Lerp(prev.X, cur.X, alpha)
 	out.Y = snapshot.Lerp(prev.Y, cur.Y, alpha)
 	out.Z = snapshot.Lerp(prev.Z, cur.Z, alpha)
+	out.Heading = snapshot.LerpAngle(prev.Heading, cur.Heading, alpha)
+	out.Pitch = snapshot.LerpAngle(prev.Pitch, cur.Pitch, alpha)
+	out.Bank = snapshot.LerpAngle(prev.Bank, cur.Bank, alpha)
+	// Pieces: lerp rotations via shortest wrap and translations via Fixed lerp (I6).
+	if len(prev.Pieces) == len(cur.Pieces) && len(cur.Pieces) > 0 {
+		out.Pieces = make([]snapshot.PieceView, len(cur.Pieces))
+		for i := range cur.Pieces {
+			pv := cur.Pieces[i]
+			pp := prev.Pieces[i]
+			pv.RotX = snapshot.LerpAngle(pp.RotX, cur.Pieces[i].RotX, alpha)
+			pv.RotY = snapshot.LerpAngle(pp.RotY, cur.Pieces[i].RotY, alpha)
+			pv.RotZ = snapshot.LerpAngle(pp.RotZ, cur.Pieces[i].RotZ, alpha)
+			pv.Tx = snapshot.Lerp(pp.Tx, pv.Tx, alpha)
+			pv.Ty = snapshot.Lerp(pp.Ty, pv.Ty, alpha)
+			pv.Tz = snapshot.Lerp(pp.Tz, pv.Tz, alpha)
+			out.Pieces[i] = pv
+		}
+	} else if len(cur.Pieces) > 0 {
+		// Length mismatch: snap to cur.
+		out.Pieces = cur.Pieces
+	}
 	return out
 }
 

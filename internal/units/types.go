@@ -127,10 +127,12 @@ const NumSlots = 3 // [06 §1.2] primary, secondary, tertiary
 // window; integration via movement.System.Tick runs in phase 5 [01 §4.4] [GAP T15].
 // Stored directly on Unit; movement imports units so it can read/write this.
 // TODO(question): exact layout of mover mode bits and velocity domain remains
-// open; kept minimal for P0-I02 wiring.
+// open; kept minimal for P0-I02/P0-I15 wiring.
 type MoveState struct {
 	Mode    uint8         // low two bits runtime mover mode: 0 none, 1 stopped/parked, 2 active locomotion [04 §9.1]
-	Heading uint16        // 0..65535 per circle [04 §5.1] C25 (I2)
+	Heading uint16        // 0..65535 per circle [04 §5.1] C25 (I2) [03 §2.4] C24 bank→Z heading→Y pitch→X
+	Pitch   uint16        // pitch per [03 §2.4] C24 [03 §5.2] (flight lean pitch)
+	Bank    uint16        // bank per [03 §2.4] C24 [03 §2.4] C21
 	Speed   numeric.Fixed // current scalar speed, 16.16 [04 §8.1]
 	// Pending callbacks for movement window [GAP T15] C18.
 	PendingHeading uint16 // desired heading queued before movement window

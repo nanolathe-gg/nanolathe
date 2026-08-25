@@ -270,6 +270,52 @@ vestigial per-piece rebuild-gate counter is never observed holding a nonzero
 value, so every dirty frame rebuilds each reachable piece from pristine
 coordinates through its full ancestor chain.
 
+### 2.4.1 Model rasterization — face dispatch and shading
+
+The per-unit rasterizer projects every piece vertex with the section 2.5
+projection, then walks pieces and primitives with these established rules:
+
+1. **Selection plate exclusion.** When a piece declares a selection
+   primitive (swapped to index 0 at load), the primitive loop starts at
+   index 1 — the plate is never drawn as a model face. Unit picking is a 2D
+   bounding-box test elsewhere and does not consult the mesh.
+2. **Flat-colored faces are quads only.** An untextured primitive renders
+   solely when its vertex count is exactly 4; untextured triangles and n-gons
+   draw nothing. The fill takes the resolved color byte with **no SHD
+   shading** — flat colors do not vary with face orientation (confirmed by a
+   two-normal 3DO probe). A flat quad carrying the team-color flag
+   combination fills through the unit's LOGOS frame with a per-player shade
+   byte from the player record instead.
+3. **Textured faces** render through the scanline mapper for any vertex
+   count, sampling the texture through `PALETTE.SHD` at a row derived from
+   geometry:
+
+```
+row = trunc( dot(N, L) * 5.0 ) mod 32
+L default = (-0.8, 1.0, 0.25)      (user-settable light direction)
+N = per-vertex smooth normal:
+    face normal = normalize(cross(v[b]-v[a], v[b]-v[c]))
+      over the polygon's first three vertex indexes (0-based a,b,c);
+    degenerate faces (any two equal indexes) use (0, 1, 0);
+    vertex normal = average of the normals of all faces touching the vertex
+```
+
+   The row interpolates across the face with the corners. Rows are palette
+   remaps, not brightness ramps (row 15 identity; row 0 near-black; row 31
+   saturated; intermediate rows shift hue per entry). COB `dont-shade` pins a
+   piece to row 15. The light direction is read from three settings as
+   integers scaled by 0.01 and written through a dedicated setter that then
+   rebuilds the shadow caches.
+
+4. **Texture resolution at load**: each primitive's texture name resolves
+   case-insensitively against the side's texture GAF set, then a fallback
+   set. A miss rewrites the primitive to flat color `0xd1` (a gray placeholder
+   quad, subject to the quads-only rule). One-frame entries are static;
+   multi-frame entries become animated textures driven by per-instance
+   players ticked once per simulation frame with per-frame delays from the
+   GAF table — except exactly-10-frame entries, which are the LOGOS team
+   textures: never animated, frame selected by owner player at draw time.
+
 ### 2.5 Orthographic screen projection
 
 The established beam/line projection is orthographic and integer based:
@@ -685,23 +731,90 @@ fallback in the retail renderer.
 ### 4.3 Palette tables and color indirection
 
 `PALETTE.PAL` is 1,024 bytes: 256 entries of four bytes (RGB plus zero
-reserved byte). `GUIPAL.PAL` supplies a UI palette. The auxiliary tables are:
+reserved byte) and is the shared active display palette for the indexed
+renderer, including GUI/HUD surfaces. `GUIPAL.PAL` is an authored frontend
+source palette used to build a GUI-to-display lookup; it is not installed as
+the physical UI palette. The auxiliary tables are:
 
 - `ALP`: 65,536 bytes, a 256-by-256 nearest-color blend table;
 - `LHT`: 8,192 bytes, 32 rows by 256 entries for brightening;
 - `SHD`: 8,192 bytes, 32 rows by 256 entries for shading/darkening.
 
+No table has a header; identification is by size alone. Each of `LHT` and
+`SHD` is loaded as a raw 8192-byte block and is retained for the life of the
+session. Only `PALETTE.PAL` participates in the `LOGPALETTE`/`CreatePalette`/
+`SetDIBColorTable` install; `ALP`/`LHT`/`SHD` never enter the OS palette and
+are consulted only by the indexed software renderer via a single byte lookup.
+
 The palette install helper copies RGB entries, creates a `LOGPALETTE` with
 version 0x300 and 256 entries, and installs either DirectDraw palette entries
 or the GDI palette/DIB color table. A 256-byte logical-to-physical lookup maps
-TDF/UI indices into the live palette. Lines, selection rectangles, and beam
-colors use this lookup.
+TDF/UI indices into the live `PALETTE.PAL` display palette. During GUI
+bootstrap, `GUIPAL.PAL` is copied into a separate window record and its RGB
+entries are compared with all 256 display entries using the sum of absolute
+channel differences; the first entry on a tie wins. That map resolves GUI
+semantic color fields before GUI primitives or FNT glyphs are written. It is
+not applied to image bytes: the retail GAF blitter copies opaque frame bytes
+directly, and PCX/TNT bytes are likewise already indexed for `PALETTE.PAL`.
+Every final indexed pixel is resolved to RGB only at present time through
+`PALETTE.PAL`.
 
-Indexed texture pixels may be passed through an SHD row for model face lighting;
-flat-colored 3DO primitives and laser lines bypass SHD. Team/logo textures
-select the player-specific frame before palette/shading lookup. The exact SHD
-row selection formula is not established, although the identity mid-row and
-the existence of 32 rows are direct.
+#### 4.3.1 LHT brightening
+
+**Layout and formula.** `LHT` is 32 rows × 256 columns, row stride 256:
+
+```
+result = LHT[level * 256 + index]      level 0 .. 31 clamped, index 0 .. 255
+```
+
+`index` is the source palette index after the logical-to-physical map;
+`result` is again a palette index. The engine evaluates a single byte load —
+no channel arithmetic and no interpolation between rows.
+
+**Table shape (established, measured against the retail tables).**
+
+* Row 0 is near-identity: 242 of 256 entries map to themselves; the 14
+  exceptions are isolated duplicates near palette gaps. Mean luminance delta
+  is effectively ±0.0 at row 0 and rises monotonically to +51.51 at row 31.
+  White (255) maps to white and black (0) maps to black at every level.
+* Brightening is monotonic and nearest-color: each row remaps every source
+  index to the palette entry whose RGB is nearest the brightened color, not
+  to `src + level*step`. The top rows therefore collapse many sources onto the
+  same bright band (row 31 maps sources 1–6 onto 249–254, the bright
+  orange/yellow band).
+
+**When it is used (established).** `LHT` drives exactly one presentation
+family — the lit-ground halo drawn around an explosion and around muzzle
+flashes. The engine precomputes a small square flash texture (`N×N` plus a
+24-byte header) whose bytes encode intensity — the inner core varies around
+index `0x6F` minus a jittered radial distance, a thin ring is exactly `0x6E`,
+and outside the disc the byte is `0xFF` transparent — then for each screen
+pixel where that texture is opaque the underlying indexed pixel `src` is
+replaced by `LHT[level * 256 + src]` at a level derived from the disc
+intensity. The halo is composited after the flat tile pass and before shadows,
+units, and fog; its whole-tick countdown cadence is shared with the explosion
+animation, and the disc itself is seeded from the CRT presentation random
+stream (`*214013+2531011`), not the simulation stream. The effect is
+presentation-only, not authoritative, not hashed, and not save/loaded.
+
+`LHT` never darkens; darkening is through `SHD` rows 0–14. The exact
+`discByte → level` mapping and any multi-tick fading envelope are not
+established and remain presentation tuning; the 32-row/256-column layout, the
+near-identity row 0, the +51.51 bright end, and the exclusive flash binding
+are direct. The two brightening ramps overlap: `LHT` row 3 and `SHD` row 16
+both lift mean luminance by +6.83, `LHT` row 5 and `SHD` row 17 both by +12.60,
+but the files are distinct and neither is synthesized from the other.
+
+#### 4.3.2 SHD shading
+
+Indexed texture pixels may be passed through an `SHD` row for model face
+lighting; flat-colored 3DO primitives and laser lines bypass `SHD`. Team/logo
+textures select the player-specific frame before palette/shading lookup. `SHD`
+rows 0–14 darken (row 0 near-black, only index 0 survives; mean −97.59),
+row 15 is near-identity (232 of 256 self, mean +0.17), and rows 16–31 brighten
+past identity to +53.53 at row 31 — a full signed ramp that `LHT` does not
+replicate. The exact `SHD` row selection formula is not established, although
+the identity mid-row and the existence of 32 rows are direct.
 
 ### 4.4 GAF sprites and animation
 
@@ -1283,14 +1396,15 @@ fullscreen transition, and movie/audio synchronization are not established.
    table count (9) mismatch is closed: the sprite path clamps to the 10-frame
    count and the ray path clamps to the declared 9, with three excess LOS.TDF
    sections unreachable.
-- 3DO primitive color/texture precedence and selection-primitive rendering and
-  picking behavior beyond the established load-time swap of the declared
-  selection primitive with primitive zero and the subsequent bubble sort of
-  remaining primitives by mean second-coordinate; the swap, rewrite, sort, and
-  hierarchy mirroring themselves are established (see section 2.4 and document
-  02). Render-side piece interpolation: none found in the bounded renderer
-  cluster — frames sample accumulators as committed — and whether any outside
-  code smooths pieces remains open.
+- 3DO primitive color/texture precedence and selection-primitive picking
+  behavior beyond the established load-time swap of the declared selection
+  primitive with primitive zero and the subsequent bubble sort of remaining
+  primitives by mean second-coordinate; the swap, rewrite, sort, and hierarchy
+  mirroring themselves are established (see sections 2.4 and 2.4.1 and
+  document 02), as is plate exclusion from the unit draw pass (the
+  rasterizer's primitive loop starts at index 1 for pieces declaring a
+  selection primitive) and the SHD row formula for textured faces. Still open:
+  whether any outside code smooths pieces remains open.
 - Cloak/stealth early-outs (including the minimum-cloak-distance proximity
    breach) are established; jammer circles are established as minimap-only
    (three callback tables onto separate surfaces wiped each tick, never the LOS

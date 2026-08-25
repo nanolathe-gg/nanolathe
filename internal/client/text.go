@@ -26,10 +26,10 @@
 //     across rows (not byte-aligned) [fmt fnt]. Set bits write the current text
 //     color; clear bits are transparent.
 //
-// This file writes directly into the indexed framebuffer (palette indices) that
-// client.Frame composes at logical size. Palette conversion through
-// palette.Tables.Logical→Base happens at present time in convertIndexedToRGBA
-// (C7), so this file never touches RGBA.
+// This file writes directly into the indexed framebuffer (active palette
+// indices) that client.Frame composes at logical size. Palette conversion
+// happens at present time in convertIndexedToRGBA (C7). GUI semantic color
+// fields are resolved by the GUI caller before invoking this rasterizer.
 //
 // No simulation state is read or written here (I6). RNG draw counts shown in
 // the overlay are passed in by the caller.
@@ -168,6 +168,13 @@ func TruncateToWidth(fnt *formats.FNT, text string, maxWidth int) string { // [0
 // No palette conversion is performed here (C7); that happens at present time in
 // convertIndexedToRGBA. No simulation state is touched (I6).
 func DrawText(frame []uint8, width, height int, fnt *formats.FNT, text string, x, y, maxWidth int, color byte) { // [02 §7][03 §7.1][07 §7]
+	drawText(frame, width, height, fnt, text, x, y, maxWidth, color, nil)
+}
+
+// drawText is the common FNT rasterizer. onWrite is retained for the generic
+// helper shape used by the text tests; retail GUI callers pass nil because
+// glyph colors are already active palette indices.
+func drawText(frame []uint8, width, height int, fnt *formats.FNT, text string, x, y, maxWidth int, color byte, onWrite func(int)) { // [02 §7][03 §7.1][07 §7]
 	if len(frame) < width*height || fnt == nil || width <= 0 || height <= 0 || len(text) == 0 {
 		return
 	}
@@ -205,7 +212,11 @@ func DrawText(frame []uint8, width, height int, fnt *formats.FNT, text string, x
 				if dx < 0 || dx >= width {
 					continue
 				}
-				frame[rowBase+dx] = color
+				index := rowBase + dx
+				frame[index] = color
+				if onWrite != nil {
+					onWrite(index)
+				}
 			}
 		}
 		curX += int(g.Width) // advance; space advances 7 via its glyph [03 §7.1]

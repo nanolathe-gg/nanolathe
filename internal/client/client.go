@@ -64,10 +64,10 @@ type Client struct {
 	// fraction derives from it.
 	runtime float64
 
-	// Palette fallback (WU-04A-2 replaces this with full tables). The conversion
-	// goes logical → physical through the 256-byte table at present time only
-	// (C7). Until real PALETTE.PAL is loaded we use a grayscale ramp so the
-	// alpha ramp remains visibly correct.
+	// Palette fallback (WU-04A-2 replaces this with full tables). Every indexed
+	// pixel goes logical → physical through the 256-byte table at present time
+	// only (C7). GUIPAL.PAL is retained by palette.Tables only for GUI semantic
+	// color fields; it is never an alternate pixel route.
 	base    [256][4]byte
 	logical [256]byte
 	pal     *palette.Tables
@@ -135,21 +135,6 @@ func (c *Client) SetPalette(p *palette.Tables) {
 	if p != nil {
 		c.base = p.Base
 		c.logical = p.Logical
-	}
-}
-
-// SetGUIPalette switches presentation to the retail front-end palette. The
-// frontend loader installs GUIPAL.PAL as the physical table while its authored
-// GAF/PCX pixels remain direct palette indices. Battle transitions call
-// SetPalette to restore the simulation PALETTE.PAL table.
-func (c *Client) SetGUIPalette(p *palette.Tables) {
-	c.pal = p
-	if p == nil {
-		return
-	}
-	c.base = p.GUI
-	for i := range c.logical {
-		c.logical[i] = byte(i)
 	}
 }
 

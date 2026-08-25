@@ -1004,7 +1004,7 @@ with default 0 unless noted.
 | `xpos`, `ypos` | integer | 0 | stored as 16-bit |
 | `width`, `height` | integer | 0 | stored as 16-bit |
 | `attribs` | integer | 0 | 32-bit attribute word |
-| `colorf`, `colorb` | integer | 0 | masked to 16 bits |
+| `colorf`, `colorb` | integer | 0 | masked to 16 bits; GUI semantic palette fields, resolved through the per-window GUIPAL→PALETTE map before primitive/FNT writes |
 | `texturenumber`, `fontnumber` | integer | 0 | stored as bytes |
 | `active` | integer | 0 | stored as a byte |
 | `commonattribs` | integer | 0 | stored as a byte |

@@ -155,6 +155,8 @@ bounded index; retail data only ever exercises the index path.) For `0`,
 OpenTA treats it as index 0 only when the first primitive actually looks
 like a plate (a flat 4-vertex quad on unique vertices).
 
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
 #### Retail unit-model census
 
 A direct cross-reference of every winning retail `units/*.fbi` against its
@@ -211,6 +213,53 @@ the face's `PALETTE.SHD` lookup, then resolve the shaded index through the
 shared palette. Do not approximate this by palette-remapping frame 0; the
 frames contain entry-specific pixel and sometimes dimension differences. See
 [gaf.md](gaf.md).
+
+### Runtime texture resolution and face dispatch (retail rasterizer)
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+- **Miss** → the primitive is rewritten to a flat color `0xd1` (209) and takes
+  the flat-quad path below — a gray placeholder, not an invisible face.
+- **1 frame** → static texture.
+- **2+ frames** → animated texture: a per-instance animation player is
+  created and ticked once per simulation frame; per-frame delays come from the
+  GAF frame table. Instances tick independently (two labs built at different
+  ticks drift).
+- **Exactly 10 frames** → team texture: excluded from animation; the frame is
+  selected by owner player at draw time. This is the definitive
+  team-texture discriminator.
+
+**Publication omission:** Historical executable-analysis detail omitted from this public edition.
+
+- **Textured primitives** (flag bit 0) render through the scanline texture
+  mapper for any vertex count.
+- **Untextured (flat-colored) primitives render only when they are quads**
+  (vertex count exactly 4); untextured triangles and n-gons draw nothing.
+  Flat quads fill with the resolved color and take **no SHD shading at all**.
+- A flat quad with the team-color flag combination fills through the LOGOS
+  frame with a per-player shade byte from the player record.
+
+### Face shading (SHD rows)
+
+Textured faces shade through `PALETTE.SHD` (32 rows × 256 entries) with the
+row selected per vertex:
+
+```
+row = trunc( dot(N, L) * 5.0 ) mod 32
+L default = (-0.8, 1.0, 0.25)   (user-settable light; shipped default)
+N = per-vertex smooth normal:
+    face normal = normalize(cross(v[b]-v[a], v[b]-v[c]))
+      over the polygon's first three vertex indexes;
+    degenerate faces (any two equal indexes) use (0, 1, 0);
+    vertex normal = average of the normals of all faces touching it
+```
+
+Rows are palette remaps, not brightness ramps: row 15 is identity, row 0 maps
+most entries toward black, row 31 saturates, and intermediate rows shift hue
+differently per entry — this is what gives TA units their per-face color
+variation. COB's `dont-shade` opcode pins a piece to row 15. Flat-colored
+quads never route through SHD (confirmed by a two-normal 3DO probe: flat
+colors do not vary with orientation).
 
 ### Piece naming conventions
 

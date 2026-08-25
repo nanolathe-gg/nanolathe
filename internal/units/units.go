@@ -693,6 +693,29 @@ func (w *World) Iter() []*Unit {
 	return out
 }
 
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Zero means free sentinel or not yet assigned. It looks up the per-definition ID via defMap.
+func (w *World) DefIDForHandle(h pool.Handle) uint16 {
+	if w == nil || h == 0 {
+		return 0
+	}
+	idx := int(h)
+	if idx < 0 || idx >= len(w.units) {
+		return 0
+	}
+	u := w.units[idx]
+	if u == nil || u.Def == nil {
+		return 0
+	}
+	if w.defMap == nil {
+		return 0
+	}
+	if id, ok := w.defMap[u.Def]; ok {
+		return id
+	}
+	return 0
+}
+
 // IterSliced returns units in sliced deterministic order: players 0..9 asc,
 // slots asc within each slice [P0-16 §3.1]. For unsliced pools it falls back
 // to Iter.

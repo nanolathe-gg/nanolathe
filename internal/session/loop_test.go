@@ -95,6 +95,7 @@ func TestPublishAfterEachSubTick(t *testing.T) {
 		Units:    units.New(10, nil),
 	}
 	s.RegisterAll()
+	s.State = StateBattle // P0-I10: Step ticks only in battle
 	// Ensure initial snapshot is empty; Step with scaledNow that yields 3 ticks.
 	// clock at nominal speed: delta 3 => 3 ticks.
 	s.Clock.ScaledAnchor = 0
@@ -123,6 +124,7 @@ func TestPublishAfterEachSubTick(t *testing.T) {
 		Snapshot: &snapshot.Buffer{},
 	}
 	s2.RegisterAll()
+	s2.State = StateBattle // P0-I10: Step ticks only in battle
 	// ScaledNow equals anchor => 0 ticks
 	s2.Step(10)
 	prev2, cur2, ok2 := s2.Snapshot.Read()
@@ -142,6 +144,7 @@ func TestPauseUnpauseBurstCap(t *testing.T) {
 		Snapshot: &snapshot.Buffer{},
 	}
 	s.RegisterAll()
+	s.State = StateBattle // P0-I10: Step ticks only in battle
 	// While paused, scaledNow advances but clock should not.
 	s.Step(3000)
 	if s.Clock.GlobalTick != 0 {
@@ -173,7 +176,8 @@ func TestPauseUnpauseBurstCap(t *testing.T) {
 		Snapshot: &snapshot.Buffer{},
 	}
 	s2.RegisterAll()
-	s2.Step(100000) // huge delta
+	s2.State = StateBattle // P0-I10
+	s2.Step(100000)        // huge delta
 	if s2.Clock.GlobalTick != 5 {
 		t.Fatalf("huge delta must clamp to 5, got %d [01 §4.2] C1", s2.Clock.GlobalTick)
 	}
@@ -194,7 +198,8 @@ func TestRenderOncePerBatch(t *testing.T) {
 		},
 	}
 	s.RegisterAll()
-	s.Step(5) // 5 ticks
+	s.State = StateBattle // P0-I10: Step ticks only in battle
+	s.Step(5)             // 5 ticks
 	if renderCalls != 1 {
 		t.Fatalf("render must run exactly once per Step batch [PLAN_03 C15], got %d", renderCalls)
 	}

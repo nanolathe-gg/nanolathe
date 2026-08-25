@@ -61,7 +61,7 @@ gadget is one element of it.
 | `xpos`, `ypos` | int | Position in pixels (640×480 space). The first gadget is clamped so the interface stays on-screen. |
 | `width`, `height` | int | Size in pixels. Ignored by types whose art dictates size (buttons, labels, picture boxes). Scrollbar orientation follows the long axis. |
 | `attribs` | int | Type-dependent. Confirmed: scrollbars need `1` = horizontal, `2` = vertical. Other observed values (2, 32, 52685…) have no confirmed meaning. |
-| `colorf`, `colorb` | int | No observed effect ("foreground/background color"?) |
+| `colorf`, `colorb` | int | GUI semantic foreground/background palette fields; retail resolves them through the GUIPAL→PALETTE nearest-RGB map before primitive/FNT writes |
 | `texturenumber` | int | No observed effect |
 | `fontnumber` | int | Partially understood: nonzero reverts labels to the default font when a custom font gadget is present |
 | `active` | int | `1` visible, `0` hidden |
@@ -180,8 +180,10 @@ dominate (4,421 of 5,840 gadgets).
 
 - The complete per-menu hard-coded event-name tables are engine-internal;
   the only way to enumerate them is inspection of the stock GUI files.
-- `crdefault`, `colorf`, `colorb`, `texturenumber`, `commonattribs`,
-  `thick`, `help` have no confirmed behavior.
+- `crdefault`, `texturenumber`, `commonattribs`, `thick`, `help` have no
+  confirmed behavior. `colorf`/`colorb` are confirmed semantic GUI palette
+  fields, but their per-gadget defaults and every primitive consumer remain
+  context-dependent.
 - Exact numeric semantics of `attribs` beyond the scrollbar values are
   unknown.
 - Listbox behavior beyond the assoc pairing is undocumented.

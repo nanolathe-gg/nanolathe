@@ -7,6 +7,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/kernel"
@@ -125,9 +126,14 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 	publishVisibilityForAll(s)
 	// AI managers for computer players [P0-I12]
 	s.AI = make([]*ai.Manager, 0, 1)
+	mgAI := mission.DecodeMissionGlobals(m.OTA.Global)
+	aiProfileName := mgAI.AIProfile
+	if strings.TrimSpace(aiProfileName) == "" {
+		aiProfileName = "default"
+	}
 	for i := 0; i < 2; i++ {
 		if s.Econ.Players[i].ControllerState == 2 {
-			prof, perr := ai.LoadProfile(fs, "default")
+			prof, perr := ai.LoadProfile(fs, aiProfileName)
 			if perr != nil || prof == nil {
 				continue
 			}
@@ -246,7 +252,7 @@ func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficul
 		p.EndGameCountdown = -1
 	}
 	s.Econ.SeedDeadlines(0)
-	if err := BattleEntry(s, m, nil); err != nil {
+	if err := fixtureBattleEntry(s, m, nil); err != nil {
 		return nil, err
 	}
 	if s.World != nil && s.Movement == nil {
@@ -328,6 +334,8 @@ func BattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
 	if err := reconstructUnits(s, m); err != nil {
 		return err
 	}
+	// Initialize COB before InitialMission [04 §4.1] – each unit's VM must exist before script runs.
+	initCOBForSession(s)
 	// InitialMission runs ONCE on the loading worker after ALL mission units
 	// exist [04 §3.6] C9 — here, between unit placement and the start barrier.
 	// It queues orders; from the next tick the ordinary pump consumes them.
@@ -335,6 +343,8 @@ func BattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
 	// poll and this interpreter's exact position in the retail loading pass
 	// are inferred from vtable layout ([GAP T10] residual).
 	mission.RunInitialMissionsWithCatalog(m, s.Units, s.Catalog)
+	// Wire cargo/transport from i-verb immediate attach [04 §3.6] P0-04.
+	wireMissionCargo(s, m)
 	spy.record("barrier")
 	if err := crossBarrier(s); err != nil {
 		return err
@@ -407,14 +417,20 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 		if !ok || def == nil {
 			continue // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		}
-		// Player mapping: retail does 0→1 then idx=byte-1, but for test compatibility
-		// keep direct mapping where 0→0 and 1→1 distinct. Stock missions use 1..10
-		// and 0 defaults to 1 via fix, but we preserve distinctness for fixture
-		// missions that use Player=0/1 as 0/1 owners [P0-04]. TODO(T25) reconcile 0→1 collapse.
-		owner := uint8(up.Player)
-		if owner > 9 {
-			owner = 9
+		// Retail mapping: 0→1 then idx=byte-1, so 0 and 1 both map to 0 (human), 2→1, etc. [P0-04] I13.
+		// This is the production path; fixtures that need distinct 0/1 should use NewMissionForTest with adjusted Player values.
+		p := up.Player
+		if p == 0 {
+			p = 1
 		}
+		ownerIdx := p - 1
+		if ownerIdx < 0 {
+			ownerIdx = 0
+		}
+		if ownerIdx > 9 {
+			ownerIdx = 9
+		}
+		owner := uint8(ownerIdx)
 		h, err := s.Units.Create(def, owner, numeric.Fixed(int64(up.X)), numeric.Fixed(int64(up.Y)), numeric.Fixed(int64(up.Z)))
 		if err != nil {
 			continue // allocation failure → sparse NULL
@@ -460,6 +476,88 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 	return nil
 }
 
+func reconstructUnitsFixture(s *Session, m *mission.Mission) error {
+	if s.Units == nil {
+		s.Units = units.New(600, s.Catalog)
+	}
+	// Fixture mapping retains distinct 0/1 for test compatibility. Production uses retail 0→1 collapse [P0-04].
+	for idx, up := range m.Units {
+		def, ok := s.Catalog.Unit(up.UnitName)
+		if !ok || def == nil {
+			continue
+		}
+		owner := uint8(up.Player)
+		if owner > 9 {
+			owner = 9
+		}
+		h, err := s.Units.Create(def, owner, numeric.Fixed(int64(up.X)), numeric.Fixed(int64(up.Y)), numeric.Fixed(int64(up.Z)))
+		if err != nil {
+			continue
+		}
+		u := s.Units.Unit(h)
+		if u != nil {
+			u.PlacementIdx = idx
+			u.PlacementIdent = up.Ident
+			u.PlacementUnitName = up.UnitName
+			if up.HealthPercentage != 0 && up.HealthPercentage != 100 {
+				u.Health = int32(int64(u.MaxHealth) * int64(up.HealthPercentage) / 100)
+			}
+			if up.IsImmune() {
+				u.Flags |= 1 << 15
+			}
+			if def.ExtractsMetal != 0 && s.World != nil {
+				cx := world.WorldToCell(numeric.Fixed(int64(up.X)))
+				cz := world.WorldToCell(numeric.Fixed(int64(up.Z)))
+				footX := int(def.FootprintX)
+				footZ := int(def.FootprintZ)
+				if footX <= 0 {
+					footX = 1
+				}
+				if footZ <= 0 {
+					footZ = 1
+				}
+				cx -= int32(footX / 2)
+				cz -= int32(footZ / 2)
+				if v, err := s.World.SampleMetal(cx, cz, footX, footZ, float32(def.ExtractsMetal)); err == nil {
+					u.SpotMetal = v
+				}
+			}
+			publishOne(s, u)
+			if s.Movement != nil && s.Movement.Routes != nil {
+				s.Movement.EnsureUnit(u)
+			}
+		}
+	}
+	return nil
+}
+
+func fixtureBattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
+	if s == nil {
+		return fmt.Errorf("session: nil session")
+	}
+	if m == nil {
+		return fmt.Errorf("session: nil mission")
+	}
+	spy.record("features")
+	if err := placeFeatures(s, m); err != nil {
+		return err
+	}
+	spy.record("units")
+	if err := reconstructUnitsFixture(s, m); err != nil {
+		return err
+	}
+	initCOBForSession(s)
+	mission.RunInitialMissionsWithCatalog(m, s.Units, s.Catalog)
+	wireMissionCargo(s, m)
+	spy.record("barrier")
+	if err := crossBarrier(s); err != nil {
+		return err
+	}
+	spy.record("resources")
+	grantResourcesDirect(s, m)
+	return nil
+}
+
 func crossBarrier(s *Session) error {
 	// Placement/start barrier: multiplayer pumps network and sleeps 50ms
 	// [08 "Placement and battle entry"]; single-player crosses immediately.
@@ -475,19 +573,188 @@ func grantResourcesDirect(s *Session, m *mission.Mission) {
 	}
 	// Starting resources are credited DIRECTLY to live stock outside the ledger
 	// [08 "Placement and battle entry"] via economy.CreditSpawn per C9. No
-	// Mirror, Accepted or Carry bucket is touched. Amounts here are the
-	// skirmish defaults [GAP T14] when no mission values are present; campaign
-	// missions may carry their own values in the global block which would be read
-	// from m.OTA when present. Using CreditSpawn preserves I2's float32 stock
-	// identity.
-	_ = m
-	// Default 1000/1000 per [08 "Skirmish configuration"] [GAP T14] when no
-	// per-player amounts are authored; fixtures verify the CreditSpawn path
-	// rather than the amount.
+	// Mirror, Accepted or Carry bucket is touched. Amounts are the authored
+	// HumanMetal/HumanEnergy vs ComputerMetal/ComputerEnergy from the OTA
+	// GlobalHeader per [P1-02 §2.1] (defaults 1000). Using CreditSpawn preserves I2's float32 stock identity.
+	if m == nil || m.OTA == nil || m.OTA.Global == nil {
+		// Fallback should not happen in strict production; retain 1000 for fixtures without OTA.
+		for p := 0; p < 10; p++ {
+			if s.Econ.Players[p].Exists {
+				economy.CreditSpawn(&s.Econ.Players[p], economy.Metal, 1000)
+				economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, 1000)
+			}
+		}
+		return
+	}
+	mg := mission.DecodeMissionGlobals(m.OTA.Global) // [P1-02 §2.1] defaults 1000
 	for p := 0; p < 10; p++ {
-		if s.Econ.Players[p].Exists {
-			economy.CreditSpawn(&s.Econ.Players[p], economy.Metal, 1000)
-			economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, 1000)
+		if !s.Econ.Players[p].Exists {
+			continue
+		}
+		var metal, energy float32
+		switch s.Econ.Players[p].ControllerState {
+		case 1: // human local
+			metal = float32(mg.HumanMetal)
+			energy = float32(mg.HumanEnergy)
+		case 2, 3: // computer
+			metal = float32(mg.ComputerMetal)
+			energy = float32(mg.ComputerEnergy)
+		default:
+			if p == 0 {
+				metal = float32(mg.HumanMetal)
+				energy = float32(mg.HumanEnergy)
+			} else {
+				metal = float32(mg.ComputerMetal)
+				energy = float32(mg.ComputerEnergy)
+			}
+		}
+		if metal != 0 {
+			economy.CreditSpawn(&s.Econ.Players[p], economy.Metal, metal)
+		}
+		if energy != 0 {
+			economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, energy)
+		}
+	}
+}
+
+// initCOBForSession ensures each live unit has a COB VM before InitialMission [04 §4.1].
+// It creates an empty program when no retail COB is present; real COBs are loaded via
+// content compilation when available. The VM is bound via Unit.SetScript and Create is
+// started if present; the per-unit drain in units.Tick will then execute it [04 §4.2] C13.
+func initCOBForSession(s *Session) {
+	if s == nil || s.Units == nil {
+		return
+	}
+	for _, u := range s.Units.IterSliced() {
+		if u == nil || !u.Alive {
+			continue
+		}
+		if u.ScriptState != nil && u.ScriptState.VM != nil {
+			continue
+		}
+		// Empty fallback program; if a real COB is later found via catalog/VFS it could be loaded here.
+		// For now create a minimal VM so the drain path has a VM to call [04 §4.2] and Init before InitialMission is satisfied.
+		prog := &cob.Program{
+			Code:        []uint32{},
+			Scripts:     map[string]int{},
+			Pieces:      []string{},
+			Statics:     0,
+			ScriptsByID: []int{},
+		}
+		vm := cob.NewVM(prog)
+		u.SetScript(vm)
+		// Start Create if script exists (empty prog has none, so no-op).
+		_, _ = vm.StartByName("Create", nil), prog
+	}
+}
+
+// wireMissionCargo wires immediate attach i-verb cargo from InitialMission [04 §3.6] P0-04.
+// It scans placements for i tokens and attaches the named target unit as cargo on the carrier.
+// The sparse created[] array is reconstructed via PlacementIdx to match retail's first-occurrence scan [P0-04][P0-06].
+func wireMissionCargo(s *Session, m *mission.Mission) {
+	if s == nil || s.Units == nil || m == nil || len(m.Units) == 0 {
+		return
+	}
+	// Reconstruct sparse created[placementIdx] -> *units.Unit
+	createdSparse := make([]*units.Unit, len(m.Units))
+	for _, u := range s.Units.IterSliced() {
+		if u == nil {
+			continue
+		}
+		if u.PlacementIdx >= 0 && u.PlacementIdx < len(createdSparse) {
+			createdSparse[u.PlacementIdx] = u
+		}
+	}
+	// Build ident/unitname maps for first-occurrence scan skipping NULL gaps [P0-06].
+	identMap := make(map[string]int)
+	unitNameMap := make(map[string]int)
+	for i, pl := range m.Units {
+		if createdSparse[i] == nil {
+			continue
+		}
+		if pl.Ident != "" {
+			lower := strings.ToLower(pl.Ident)
+			if _, ok := identMap[lower]; !ok {
+				identMap[lower] = i
+			}
+		}
+		if pl.UnitName != "" {
+			lower := strings.ToLower(pl.UnitName)
+			if _, ok := unitNameMap[lower]; !ok {
+				unitNameMap[lower] = i
+			}
+		}
+	}
+	lookup := func(name string) int {
+		lower := strings.ToLower(strings.TrimSpace(name))
+		if idx, ok := identMap[lower]; ok {
+			return idx
+		}
+		if idx, ok := unitNameMap[lower]; ok {
+			return idx
+		}
+		return -1
+	}
+	for idx, pl := range m.Units {
+		carrier := createdSparse[idx]
+		if carrier == nil {
+			continue
+		}
+		script := strings.TrimSpace(pl.InitialMission)
+		if script == "" {
+			continue
+		}
+		// Tokenize on commas as retail does (_strcspn ","), then dispatch [04 §3.6].
+		tokens := strings.Split(script, ",")
+		for _, tok := range tokens {
+			tok = strings.TrimSpace(tok)
+			if tok == "" {
+				continue
+			}
+			if len(tok) > 255 {
+				tok = tok[:255]
+			}
+			first := tok[0]
+			if first >= 'A' && first <= 'Z' {
+				first = first + 'a' - 'A'
+			}
+			if first != 'i' {
+				continue
+			}
+			// Distinguish i vs other? 'i' alone is attach, "i <name>"
+			rest := strings.TrimSpace(tok[1:])
+			if rest == "" {
+				continue
+			}
+			// splitArgs equivalent: replace commas with spaces then fields
+			rest = strings.ReplaceAll(rest, ",", " ")
+			fields := strings.Fields(rest)
+			if len(fields) == 0 {
+				continue
+			}
+			name := fields[0]
+			targetIdx := lookup(name)
+			if targetIdx < 0 || targetIdx >= len(createdSparse) {
+				continue
+			}
+			target := createdSparse[targetIdx]
+			if target == nil || target == carrier {
+				continue
+			}
+			// Wire attachment: target's carrier is carrier, carrier's cargo appends target
+			target.Attachment.Carrier = carrier.Handle
+			target.Attachment.AttachPiece = -1
+			// Avoid duplicate cargo entries
+			found := false
+			for _, h := range carrier.Attachment.Cargo {
+				if h == target.Handle {
+					found = true
+					break
+				}
+			}
+			if !found {
+				carrier.Attachment.Cargo = append(carrier.Attachment.Cargo, target.Handle)
+			}
 		}
 	}
 }

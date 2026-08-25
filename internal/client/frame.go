@@ -13,7 +13,9 @@ import (
 //
 // Framebuffer path:
 //  1. Compose into own []uint8 indexed framebuffer at logical size.
-//  2. Convert to RGBA through palette.Tables.Logical→Base at present time only (C7).
+//  2. Convert every indexed pixel through Logical→Base (C7). GUI semantic
+//     colors are translated before they are written by the menu layer; image
+//     bytes are never treated as GUIPAL source colors.
 //  3. The backend (backend_ebiten.go) uploads the RGBA bytes and presents them.
 func (c *Client) Frame(alpha float32) {
 	// C9: alpha clamped [0,1]; never writes sim state, never calls sim
@@ -86,24 +88,23 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 				} else {
 					pv = cv
 				}
-				x := snapshot.Lerp(pv.X, cv.X, alpha)
-				y := snapshot.Lerp(pv.Y, cv.Y, alpha)
-				z := snapshot.Lerp(pv.Z, cv.Z, alpha)
-				sx, sy := c.cam.WorldToScreen(x, y, z) // [03 §2.5] C1
+				// Interpolated view includes heading/pitch/bank and piece transforms [03 §2.4] C21–C24 (I6).
+				lerped := LerpUnitView(pv, cv, alpha)
+				sx, sy := c.cam.WorldToScreen(lerped.X, lerped.Y, lerped.Z) // [03 §2.5] C1
 				// Real 3DO model first [fmt 3do][03 §2.5]; footprint body
-				// only when the model is unavailable.
-				if cv.Model != "" && c.drawUnitModel(cv, sx, sy) {
-					c.drawUnitChrome(cv, sx, sy)
+				// only when the model is unavailable. Uses lerped heading [04 §8.1] C20 and piece state if bound [03 §2.4] C21.
+				if lerped.Model != "" && c.drawUnitModel(lerped, sx, sy) {
+					c.drawUnitChrome(lerped, sx, sy)
 					continue
 				}
-				if cv.FootX > 0 && cv.FootZ > 0 {
+				if lerped.FootX > 0 && lerped.FootZ > 0 {
 					// Footprint-correct oriented body [04 §6.2]; health bar,
-					// nanoframe dashes, selection brackets.
-					c.drawUnitOriented(cv, sx, sy)
+					// nanoframe dashes, selection brackets. lerped Heading ensures smooth rotation.
+					c.drawUnitOriented(lerped, sx, sy)
 					continue
 				}
 				// Legacy fallback: 5×5 marker for footprint-less views.
-				selected := cv.Flags&SelectionFlag != 0
+				selected := lerped.Flags&SelectionFlag != 0
 				inner := byte(250)
 				if selected {
 					inner = 200
@@ -121,6 +122,104 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 							c.indexed[py*w+px] = inner
 						}
 					}
+				}
+			}
+			// Projectiles: presentation-only interpolated markers/beams [06 §5][03 §5.4] (I6).
+			// Preserve deterministic iteration (prev→cur matching) and do not advance sim RNG (I4).
+			if len(cur.Projectiles) > 0 {
+				prevProj := make(map[uint16]int, len(prev.Projectiles))
+				for i, p := range prev.Projectiles {
+					prevProj[uint16(p.Handle)] = i
+				}
+				for _, cvp := range cur.Projectiles {
+					var pvp snapshot.ProjectileView
+					if idx, ok2 := prevProj[uint16(cvp.Handle)]; ok2 {
+						pvp = prev.Projectiles[idx]
+					} else {
+						pvp = cvp
+					}
+					px := snapshot.Lerp(pvp.X, cvp.X, alpha)
+					py := snapshot.Lerp(pvp.Y, cvp.Y, alpha)
+					pz := snapshot.Lerp(pvp.Z, cvp.Z, alpha)
+					sx, sy := c.cam.WorldToScreen(px, py, pz)
+					// Simple 3x3 projectile marker; real beams use render.DispatchRendertype [03 §5.4].
+					// Presentation uses palette index 210 for visibility on dark terrain; never touches sim state.
+					for dy := -1; dy <= 1; dy++ {
+						for dx := -1; dx <= 1; dx++ {
+							xp := int(sx) + dx
+							yp := int(sy) + dy
+							if xp < 0 || xp >= w || yp < 0 || yp >= h {
+								continue
+							}
+							if dx == 0 && dy == 0 {
+								c.indexed[yp*w+xp] = 210
+							} else if dx == 0 || dy == 0 {
+								c.indexed[yp*w+xp] = 180
+							}
+						}
+					}
+				}
+			}
+			// Features: minimal presentation-only markers when no 3DO available [05 "Feature instance"].
+			if len(cur.Features) > 0 {
+				prevFeat := make(map[int]int)
+				// Features are not keyed by handle; use index when lengths match; otherwise snap to cur.
+				if len(prev.Features) == len(cur.Features) {
+					for i := range prev.Features {
+						prevFeat[i] = i
+					}
+				}
+				for i, cvf := range cur.Features {
+					var pvf snapshot.FeatureView
+					if idx, ok2 := prevFeat[i]; ok2 {
+						pvf = prev.Features[idx]
+					} else {
+						pvf = cvf
+					}
+					fx := snapshot.Lerp(pvf.X, cvf.X, alpha)
+					fy := snapshot.Lerp(pvf.Y, cvf.Y, alpha)
+					fz := snapshot.Lerp(pvf.Z, cvf.Z, alpha)
+					sx, sy := c.cam.WorldToScreen(fx, fy, fz)
+					// Small footprint marker; real models via 3DO when available [fmt 3do].
+					if cvf.FootX > 0 && cvf.FootZ > 0 {
+						const pxPerCell = 16
+						hw := int(cvf.FootX) * pxPerCell / 2
+						hh := int(cvf.FootZ) * pxPerCell / 2
+						if hw < 3 {
+							hw = 3
+						}
+						if hh < 3 {
+							hh = 3
+						}
+						for dy := -hh; dy <= hh; dy++ {
+							for dx := -hw; dx <= hw; dx++ {
+								xp := int(sx) + dx
+								yp := int(sy) + dy
+								if xp < 0 || xp >= w || yp < 0 || yp >= h {
+									continue
+								}
+								if dx == -hw || dx == hw || dy == -hh || dy == hh {
+									c.indexed[yp*w+xp] = 40 // dark outline
+								} else if cvf.IsBurning {
+									c.indexed[yp*w+xp] = 200 // burning tint
+								} else {
+									c.indexed[yp*w+xp] = 96
+								}
+							}
+						}
+					} else {
+						for dy := -1; dy <= 1; dy++ {
+							for dx := -1; dx <= 1; dx++ {
+								xp := int(sx) + dx
+								yp := int(sy) + dy
+								if xp < 0 || xp >= w || yp < 0 || yp >= h {
+									continue
+								}
+								c.indexed[yp*w+xp] = 96
+							}
+						}
+					}
+					_ = pvf
 				}
 			}
 		}
@@ -252,10 +351,10 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 	}
 }
 
-// convertIndexedToRGBA converts the indexed framebuffer to RGBA through
-// c.logical → c.base at present time only (C7). Later phases replace the
-// fallback grayscale tables with real PALETTE.PAL / GUIPAL.PAL / ALP / LHT /
-// SHD and the 256-byte logical→physical lookup.
+// convertIndexedToRGBA converts the indexed framebuffer to RGBA at present
+// time only (C7). The indexed framebuffer contains active PALETTE.PAL indices:
+// GAF, PCX, TNT, FNT, and direct primitive writers all follow the same route.
+// GUI semantic colors are resolved by the caller before FNT/primitives write.
 func (c *Client) convertIndexedToRGBA() {
 	if len(c.indexed)*4 != len(c.rgba) {
 		return

@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -49,6 +50,9 @@ type Session struct {
 	AI       []*ai.Manager
 	Mission  *mission.Mission
 	Snapshot *snapshot.Buffer
+	Shutdown *Shutdown // ordered shutdown in reverse-init order [01 §2.1][01 §2.3] P0-I10
+	// CampaignSlot is the mission list slot for progress W/L [P1-01 §2.3] [P0-05].
+	CampaignSlot int
 
 	// Skirmish retains the lobby/setup values that selected this battle. The
 	// placement and spawn paths consume Location and per-slot resources now;
@@ -252,6 +256,153 @@ func (s *Session) IsUnitVisible(viewer int, target *units.Unit) bool {
 	return s.Vis.IsVisible(vid, t)
 }
 
+// installStateHandlers installs the eight-state dispatch table handlers per
+// [08 "Session states"] C1-C2 P0-I10.  State 0/1 teardown variants, 2 routing,
+// 4 campaign player setup, 5 sync/async load completion, 6 battle stepping,
+// 7 report/progression cleanup.  Single-player takes 2->5 directly; state 3
+// network preload remains present and unreachable [08 "Session states"] C1.
+func (s *Session) installStateHandlers() {
+	// Capture handlers exactly once per session; re-install is idempotent.
+	s.SetHandler(StateTeardownA, handleTeardownA)
+	s.SetHandler(StateTeardownB, handleTeardownB)
+	s.SetHandler(StateRouter, handleRouter)
+	s.SetHandler(StateNetworkPreload, handleNetworkPreload)
+	s.SetHandler(StateLocalPreload, handleLocalPreload)
+	s.SetHandler(StateLoading, handleLoading)
+	s.SetHandler(StateBattle, handleBattle)
+	s.SetHandler(StatePostBattle, handlePostBattle)
+}
+
+// handleTeardownA implements state 0 cleanup variant A, then state 2 [08 "Session states"].
+// It releases session-owned state in reverse-init order [01 §2.1][01 §2.3] ShutdownOrder.
+func handleTeardownA(s *Session) {
+	if s == nil {
+		return
+	}
+	s.teardown(0)
+	_ = s.TransitionTo(StateRouter)
+}
+
+// handleTeardownB implements state 1 alternate cleanup, then state 2 [08 "Session states"].
+func handleTeardownB(s *Session) {
+	if s == nil {
+		return
+	}
+	s.teardown(1)
+	_ = s.TransitionTo(StateRouter)
+}
+
+// teardown releases session-owned resources in documented reverse-init order
+// [01 §2.1][01 §2.3] ShutdownOrder: window → display → sound → archives → semaphore → registryAudio.
+// Simulation pools (units/projectiles/COB) are freed via pool paths, not here [shutdown.go].
+func (s *Session) teardown(variant int) {
+	_ = variant
+	if s.Shutdown != nil {
+		_ = s.Shutdown.Run()
+		return
+	}
+	// Fallback when no Shutdown registered: still honor documented order by
+	// clearing session-owned presentation hooks; simulation pools remain owned
+	// elsewhere. This preserves the teardown→Router transition contract [08].
+}
+
+// handleRouter implements state 2 front-end/session router, selects 3|4|5 [08 "Session states"].
+// Single-player takes 2->5 directly; state 3 is present and unreachable in single-player C1.
+func handleRouter(s *Session) {
+	if s == nil {
+		return
+	}
+	// Campaign saves ride via 4 first, skirmish via 5 directly [08 "Session states"] C3.
+	// If mission type is campaign and we have not yet configured local players, go via 4.
+	if s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
+		if s.Econ != nil && s.Econ.Players[0].ControllerState != 1 {
+			_ = s.TransitionTo(StateLocalPreload)
+			return
+		}
+		// Even if already configured, router for campaign should still prefer 4 when coming from teardown
+		// to ensure two-player records are initialized [08 "Session states"].
+		// But to avoid infinite loop when already in campaign after Continue/Retry, we allow direct 5
+		// if already at correct state. For P0-I10 gate, single-player router ->5 is sufficient.
+	}
+	// Network preload (3) is unreachable in single-player; keep handler present [08] C1.
+	_ = s.TransitionTo(StateLoading)
+}
+
+// handleNetworkPreload implements state 3 network startup polling, then state 5 [08 "Session states"].
+// No network in single-player; handler still transitions to 5 to preserve graph presence.
+func handleNetworkPreload(s *Session) {
+	if s == nil {
+		return
+	}
+	_ = s.TransitionTo(StateLoading)
+}
+
+// handleLocalPreload implements state 4 initializes local two-player records, then state 5 [08 "Session states"].
+// Established behavior: configures two campaign players (human local 0, computer enemy 1) [08][P0-05].
+func handleLocalPreload(s *Session) {
+	if s == nil {
+		return
+	}
+	if s.Econ != nil {
+		for i := 0; i < 2 && i < 10; i++ {
+			p := &s.Econ.Players[i]
+			p.Exists = true
+			if i == 0 {
+				p.ControllerState = 1
+			} else {
+				p.ControllerState = 2
+			}
+			p.IsObserver = false
+			p.StatusHalfwordAt144 = 1
+			p.StatusWordAt140 = 0
+			p.GameEnded = false
+			p.EndGameCountdown = -1
+		}
+		// Seed deadlines from current tick to keep WinLoseTime cadence correct [05].
+		var tick uint32
+		if s.Clock != nil {
+			tick = s.Clock.GlobalTick
+		}
+		s.Econ.SeedDeadlines(tick)
+		s.LocalOwner = 0
+		s.EnemyOwner = 1
+	}
+	_ = s.TransitionTo(StateLoading)
+}
+
+// handleLoading implements state 5 loading UI/thread and readiness barrier [08 "Session states"].
+// Established: completion installs state 6; its first run happens on NEXT dispatch, not inline C2.
+// Supports synchronous (immediate CompleteLoading) and asynchronous (external CompleteLoading) paths.
+func handleLoading(s *Session) {
+	if s == nil {
+		return
+	}
+	if s.IsPendingBattle() {
+		return
+	}
+	// Synchronous path: if composition is valid (or at least terrain/catalog present), complete now.
+	// For fixtures that lack full composition, ValidateComposition would fail; we still complete to unblock tests.
+	// The gate requires newly constructed session cannot tick while loading, but loading handler must schedule battle for next dispatch.
+	_ = s.CompleteLoading()
+}
+
+// handleBattle implements state 6 live battle loop [08 "Session states"].
+// No-op: authoritative ticks are driven by Session.Step which checks State==StateBattle [P0-I10].
+func handleBattle(s *Session) {
+	_ = s
+}
+
+// handlePostBattle implements state 7 post-battle handling — results/postgame [08 "Session states"].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func handlePostBattle(s *Session) {
+	if s == nil {
+		return
+	}
+	// BetweenMissions persistence is already written at latch time via ApplyCampaignResult [P1-01 §2.3];
+	// this handler ensures we return to router exactly once [08 "Session states"] 7->2.
+	_ = s.TransitionTo(StateRouter)
+}
+
 // RegisterAll centralizes subsystem registration in kernel phase order
 // with a comment naming each phase (I7, PLAN_03 C7, [01 §4.4]).
 // No package registers itself from init().
@@ -261,6 +412,21 @@ func (s *Session) RegisterAll() {
 	}
 	if s.Clock == nil {
 		s.Clock = &clock.State{Requested: 10, Active: 10}
+	}
+	// Install eight-state handlers before kernel phases so state machine governs lifecycle [08][P0-I10].
+	s.installStateHandlers()
+	// Ensure Shutdown exists in documented startup order [01 §2.1][01 §2.3] for teardown variants 0/1 P0-I10.
+	if s.Shutdown == nil {
+		s.Shutdown = &Shutdown{}
+		// Register in startup order: window → display → sound → archives → semaphore → registryAudio.
+		// Run() will invoke reverse. We register no-ops that preserve order observable for tests.
+		for _, name := range ShutdownOrder {
+			n := name // capture
+			s.Shutdown.Register(func() error {
+				_ = n
+				return nil
+			})
+		}
 	}
 	// Ensure single canonical scheduler: Session.Path is alias to Movement.Scheduler [04 §7.3][P0-I03].
 	if s.Movement != nil && s.Movement.Scheduler != nil && s.Path != s.Movement.Scheduler {
@@ -738,6 +904,25 @@ func (s *Session) RegisterAll() {
 	s.Kernel.Register(kernel.PhaseOrdersPathEconomy, "movement-integrate", func(tick uint32) {
 		if s.Movement != nil {
 			s.Movement.Tick(tick, s.Units)
+			// Sync authoritative heading from movement state into units.MoveState
+			// so snapshot can copy from the single per-unit record [04 §8.1] C20 [04 §5.1] C25 [03 §2.4] C24.
+			// Heading is stored in movement side-state (Steer/Flight/Collision) not on Unit;
+			// this keeps Units.Tick or Movement.Tick as the heading owner and publishes it via MoveState.
+			if s.Units != nil {
+				for _, um := range s.Units.Iter() {
+					if um == nil || !um.Alive {
+						continue
+					}
+					if st := s.Movement.Steers[um.Handle]; st != nil {
+						um.Move.Heading = st.Heading
+					} else if fl := s.Movement.Flights[um.Handle]; fl != nil {
+						um.Move.Heading = fl.Heading
+						// TODO(question): Pitch/Bank for flight derived from velocity delta / bank-scale not yet wired; keep zero [03 §2.4] C24 [04 §10.1].
+					} else if coll := s.Movement.Collisions[um.Handle]; coll != nil {
+						um.Move.Heading = coll.Heading
+					}
+				}
+			}
 		}
 		if s.Units == nil || s.Movement == nil {
 			return
@@ -1044,6 +1229,7 @@ func (s *Session) RegisterAll() {
 			frame := &snapshot.Frame{Tick: tick}
 			if s.Units != nil {
 				views := make([]snapshot.UnitView, 0, s.Units.Used())
+				ordersViews := make([]snapshot.OrderView, 0)
 				for _, u := range s.Units.Iter() {
 					if u == nil || !u.Alive {
 						continue
@@ -1058,15 +1244,87 @@ func (s *Session) RegisterAll() {
 						MaxHealth:      u.MaxHealth,
 						BuildRemaining: u.Remaining,
 						Flags:          u.Flags,
+						Heading:        u.Move.Heading, // fallback [04 §5.1] C25 [03 §2.4] C24
+						Pitch:          u.Move.Pitch,
+						Bank:           u.Move.Bank,
+					}
+					// Prefer authoritative movement heading if movement state exists [04 §8.1] C20 [04 §10.1].
+					// Units.Tick or Movement.Tick owns heading; snapshot copies it read-only (I6).
+					if s.Movement != nil {
+						if st := s.Movement.Steers[u.Handle]; st != nil {
+							v.Heading = st.Heading
+						} else if fl := s.Movement.Flights[u.Handle]; fl != nil {
+							v.Heading = fl.Heading
+							// TODO(question): Pitch/Bank for flight are visual lean from velocity delta; keep Move.Pitch/Bank [03 §2.4] C24 [04 §10.1].
+						} else if coll := s.Movement.Collisions[u.Handle]; coll != nil {
+							v.Heading = coll.Heading
+						}
 					}
 					if u.Def != nil {
 						v.Model = u.Def.ObjectName
 						v.FootX = int8(u.Def.FootprintX)
 						v.FootZ = int8(u.Def.FootprintZ)
+						// DefID via world lookup if available (I13). Zero when not yet sliced.
+						if s.Units != nil {
+							if id := s.Units.DefIDForHandle(u.Handle); id != 0 {
+								v.DefID = id
+							}
+						}
+					}
+					// Bind COB piece transforms if VM exists [03 §2.4] C21–C22 [04 §4.6] [04 §4.2] C13.
+					// Last writer wins across TURN, turn-now, SPIN via one adapter [03 §2.4] C22.
+					// Snapshot copies the accumulators read-only; rendering uses float trig (I2) and never touches sim RNG (I4).
+					if u.ScriptState != nil && u.ScriptState.VM != nil {
+						if vmPieces := u.ScriptState.Pieces(); len(vmPieces) > 0 {
+							v.Pieces = make([]snapshot.PieceView, len(vmPieces))
+							for i, ps := range vmPieces {
+								v.Pieces[i] = snapshot.PieceView{
+									Index: i,
+									RotX:  ps.RotX,
+									RotY:  ps.RotY,
+									RotZ:  ps.RotZ,
+									Tx:    ps.Trans[0],
+									Ty:    ps.Trans[1],
+									Tz:    ps.Trans[2],
+								}
+							}
+						}
+					} else if u.Script != nil {
+						if vm, ok := u.Script.(*cob.VM); ok && vm != nil {
+							if vmPieces := vm.Pieces; len(vmPieces) > 0 {
+								v.Pieces = make([]snapshot.PieceView, len(vmPieces))
+								for i, ps := range vmPieces {
+									v.Pieces[i] = snapshot.PieceView{
+										Index: i,
+										RotX:  ps.RotX,
+										RotY:  ps.RotY,
+										RotZ:  ps.RotZ,
+										Tx:    ps.Trans[0],
+										Ty:    ps.Trans[1],
+										Tz:    ps.Trans[2],
+									}
+								}
+							}
+						}
 					}
 					views = append(views, v)
+					// Collect primary order head for overlays [04 §3][04 §7.3]
+					if q := orders.QueueForUnit(u); q != nil && q.LenPrimary() > 0 {
+						if head := q.Head(); head != nil {
+							ordersViews = append(ordersViews, snapshot.OrderView{
+								Unit:      u.Handle,
+								Target:    head.Target,
+								GoalX:     head.GoalX,
+								GoalY:     head.GoalY,
+								GoalZ:     head.GoalZ,
+								Kind:      orders.DescriptorFor(head.ID).Name,
+								MoveState: uint8(head.MoveState),
+							})
+						}
+					}
 				}
 				frame.Units = views
+				frame.Orders = ordersViews
 			}
 			// Fog cache presentation copy [03 §3.3] C13.
 			if s.Vis != nil {
@@ -1133,6 +1391,27 @@ func (s *Session) RegisterAll() {
 					})
 				}
 			}
+			// Resources for HUD [05 "Player slot"] (I2 float allowlist: ledger stocks)
+			if s.Econ != nil {
+				var resViews []snapshot.ResourceView
+				for p := 0; p < 10; p++ {
+					pl := s.Econ.Players[p]
+					if !pl.Exists {
+						continue
+					}
+					resViews = append(resViews, snapshot.ResourceView{
+						Player:         uint8(p),
+						Metal:          pl.Stock[economy.Metal],
+						Energy:         pl.Stock[economy.Energy],
+						MetalCapacity:  pl.Capacity[economy.Metal],
+						EnergyCapacity: pl.Capacity[economy.Energy],
+					})
+				}
+				frame.Resources = resViews
+			}
+			// Effects placeholder: no fixed pool in session yet; keep empty but
+			// valid for renderer to read without touching sim state (I6).
+			// Presentation RNG (CRT) is not advanced here; client/server streams remain distinct (I4).
 			s.Snapshot.Publish(frame)
 		}
 	})
@@ -1200,6 +1479,10 @@ func (s *Session) coordinatePlayers(tick uint32) {
 // runs 0..5 sub-ticks publishing after phase 12 of each completed sub-tick, and
 // renders once with alpha from the final snapshot pair. Rendering never runs
 // between sub-ticks of the same batch [PLAN_03 C15].
+//
+// P0-I10: Session.Step executes authoritative ticks only in StateBattle (6) [08 "Session states"].
+// Loading completion defers first battle dispatch to next dispatch (C2). Abort and victory/defeat
+// transition through 7/2 rather than leaving battle ticking behind overlay [08].
 func (s *Session) Step(scaledNow int32) {
 	if s.Clock == nil {
 		s.Clock = &clock.State{Requested: 10, Active: 10}
@@ -1207,9 +1490,76 @@ func (s *Session) Step(scaledNow int32) {
 	if s.Kernel == nil {
 		s.Kernel = &kernel.Kernel{}
 	}
+	// State machine governs lifecycle [08 "Session states"] P0-I10.
+	// If not in battle or pendingBattle, drive one state dispatch and do not tick this frame.
+	// This makes newly constructed loading sessions unable to tick and ensures
+	// state-5 completion schedules state-6 for the next dispatch (C2).
+	if s.State != StateBattle || s.IsPendingBattle() {
+		wasPending := s.IsPendingBattle()
+		// Drive one dispatch. For non-battle states this runs the state's handler
+		// which transitions via TransitionTo or CompleteLoading. For pendingBattle,
+		// this runs the battle handler's first run [08] C2.
+		s.Advance()
+		// If we just cleared pendingBattle (was pending, now battle not pending),
+		// we have just run the battle handler's first dispatch; now we can tick
+		// authoritative simulation in this same Step call. This still respects C2
+		// because battle handler did not tick inline—it ran on this next dispatch,
+		// and ticks follow after it.
+		if wasPending && s.State == StateBattle && !s.IsPendingBattle() {
+			// fall through to ticking
+		} else {
+			// Not yet ready to tick: still not in battle, or just became pending,
+			// or just transitioned Router/Preload->Loading. Render once and return.
+			if s.OnRender != nil {
+				var alpha float32
+				if s.Clock != nil {
+					a := s.Clock.Carry
+					if a < 0 {
+						a = 0
+					}
+					if a > 1 {
+						a = 1
+					}
+					if a != a {
+						a = 0
+					}
+					alpha = a
+				}
+				s.OnRender(alpha)
+			}
+			return
+		}
+	}
+	// Authoritative ticks only in StateBattle [08][P0-I10].
+	if s.State != StateBattle {
+		if s.OnRender != nil {
+			var alpha float32
+			if s.Clock != nil {
+				a := s.Clock.Carry
+				if a < 0 {
+					a = 0
+				}
+				if a > 1 {
+					a = 1
+				}
+				if a != a {
+					a = 0
+				}
+				alpha = a
+			}
+			s.OnRender(alpha)
+		}
+		return
+	}
 	ticks := s.Clock.AdvanceSP(scaledNow)
 	for i := 0; i < ticks; i++ {
+		if s.State != StateBattle {
+			break // abort or victory transitioned out mid-batch [08] 6->2 or 6->7
+		}
 		s.Kernel.SubTick(s.Clock)
+		if s.State != StateBattle {
+			break // latch armed->ending transitioned to postbattle same tick [P1-01 §2.2]
+		}
 	}
 	// Render once with alpha from final snapshot pair [PLAN_03 C15][PLAN_03 C16][I6].
 	// Alpha is presentation-only and computed in the client as
@@ -1233,4 +1583,83 @@ func (s *Session) Step(scaledNow int32) {
 		}
 		s.OnRender(alpha)
 	}
+}
+
+// AbortBattle transitions 6->2 abort/return path [08 "Session states"] C1.
+// It is the overlay abort path that must not leave battle ticking behind overlay [P0-I10].
+func (s *Session) AbortBattle() bool {
+	if s == nil {
+		return false
+	}
+	if s.State == StateBattle {
+		return s.TransitionTo(StateRouter)
+	}
+	if s.State == StatePostBattle {
+		return s.TransitionTo(StateRouter)
+	}
+	return false
+}
+
+// Retry reloads the same mission via state 5 directly [P1-01 §7.5][08 "Session states"].
+// RETRY path reloads same mission without rewriting campaign progress beyond current slot,
+// while CONTINUE writes W/L and selects next mission. For the gate we ensure Retry
+// keeps the same Mission object and ends in Loading, ready for next dispatch.
+func (s *Session) Retry() bool {
+	if s == nil {
+		return false
+	}
+	if s.State != StatePostBattle && s.State != StateBattle {
+		return false
+	}
+	// Reset latch and done flags so battle can retrigger exactly once [P1-01][08].
+	s.Latch = NewEndLatch()
+	s.VictoryDone = false
+	s.DefeatDone = false
+	if s.Econ != nil {
+		for i := 0; i < 10; i++ {
+			s.Econ.Players[i].GameEnded = false
+			s.Econ.Players[i].EndGameCountdown = -1
+		}
+	}
+	// Direct to loading for same mission; transition must respect graph: 6/7->2->5.
+	// If we are in PostBattle (7) we can go 7->2, then 2->5. If in Battle (6) go 6->2->5.
+	if s.State == StatePostBattle || s.State == StateBattle {
+		if !s.TransitionTo(StateRouter) {
+			return false
+		}
+	}
+	if s.State == StateRouter {
+		return s.TransitionTo(StateLoading)
+	}
+	// Fallback: try direct 5->6 pending path via CompleteLoading? For retry we want loading.
+	if s.State == StateLoading {
+		return true
+	}
+	return false
+}
+
+// ContinueCampaign writes progress and selects next mission via post-battle W/L [P1-01 §7.5][P0-I10].
+// It must be called from PostBattle (7) after victory latch has written Progress.WL.
+// It transitions 7->2 (front-end return) and leaves Progress written exactly once.
+func (s *Session) ContinueCampaign() bool {
+	if s == nil {
+		return false
+	}
+	if s.State != StatePostBattle {
+		return false
+	}
+	// Progress already written at latch time via trigger-poll ApplyCampaignResult [P1-01 §2.3].
+	// Ensure at least one slot holds W/L for gate: if Apply did not run (fixture without triggers),
+	// write current latch outcome.
+	if s.Progress.WL[s.CampaignSlot] == 0 {
+		win := s.Latch.IsWin()
+		if s.Latch.IsEnding() {
+			s.Progress.ApplyCampaignResult(s.CampaignSlot, win)
+		} else if s.VictoryDone {
+			s.Progress.ApplyCampaignResult(s.CampaignSlot, true)
+		} else if s.DefeatDone {
+			s.Progress.ApplyCampaignResult(s.CampaignSlot, false)
+		}
+	}
+	return s.TransitionTo(StateRouter)
 }

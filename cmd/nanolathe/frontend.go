@@ -148,7 +148,10 @@ func runGameShell(opts Options, cs *contentSet) error {
 	cl.SetModelFS(cs.fs)
 	cl.SetCamera(shell.cam)
 	if shell.assets != nil && shell.assets.pal != nil {
-		cl.SetGUIPalette(shell.assets.pal)
+		// Retail keeps one indexed display palette for frontend and battle. GAF,
+		// PCX, and FNT raster bytes all address PALETTE.PAL directly; GUIPAL is
+		// consulted only when a GUI semantic color field is resolved.
+		cl.SetPalette(shell.assets.pal)
 	}
 	if shell.font != nil {
 		cl.SetFNT(shell.font)
@@ -169,7 +172,7 @@ func loadMenuAssets(cs *contentSet) *menuAssets {
 	if g, err := formats.LoadGAFFile(cs.fs, "textures/logos.gaf"); err == nil {
 		a.logos = g
 	}
-	if f, err := formats.LoadFNTFile(cs.fs, "fonts/smlfont.fnt"); err == nil {
+	if f, err := formats.LoadFNTFile(cs.fs, "fonts/comix.fnt"); err == nil {
 		a.font = f
 	}
 	if p, err := palette.Load(cs.fs); err == nil {

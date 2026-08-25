@@ -462,12 +462,20 @@ control in `skirmish.gui`; the row count comes from the `NumSkirmishPlayers`
 registry value and the remaining setup values are the authored staged gadgets.
 [08 "Skirmish configuration"]
 
-GAF rendering uses each selected frame's authored dimensions at the `.GUI`
-control origin; `XOffset/YOffset` remain animation-anchor metadata and are not
-added to frontend gadget placement. Retail's GUI initializer replaces button
-runtime width and height with the chosen stock/owned frame dimensions. PCX
-backgrounds and GUI art are indexed pixels under `GUIPAL.PAL`, and menu text
-uses the mounted FNT font rather than a renderer-generated label. [07 §4]
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+### Retail palette contract
+
+The retail renderer has one active 256-entry display palette for the indexed
+surface: `PALETTE.PAL`. Frontend backgrounds, GAF widgets, FNT glyphs, HUD
+art, terrain, minimap pixels, and direct indexed primitives are eventually
+presented through that table and the current 256-byte logical-to-physical
+lookup. `GUIPAL.PAL` is a frontend semantic color-field palette retained by
+the GUI bootstrap;
+it is not installed as a second physical display palette. This distinction is
+material because the two retail files have different color ordering.
+
+**Publication omission:** Historical executable-analysis detail omitted from this public edition.
 
 ### Retail frontend control activation and raster rules
 
@@ -514,8 +522,11 @@ horizontal frames. The staged common entries used by this menu are
 * Frontend GAF frame offsets are animation-anchor metadata. The GUI blitter
   places the frame's indexed pixels at the translated gadget origin without
   adding `XOffset` or `YOffset`. The selected frame dimensions become the
-  runtime button dimensions used by both drawing and hit testing. PCX,
-  GAF, and FNT pixels all use the frontend `GUIPAL.PAL` tables.
+  runtime button dimensions used by both drawing and hit testing. GAF and FNT
+  output uses active `PALETTE.PAL` indices: GAF bytes are copied directly,
+  while FNT receives the active index produced by the GUI semantic color map
+  before rasterization. PCX backgrounds and TNT minimap pixels use their
+  active `PALETTE.PAL` indices directly.
 
 Campaign and map controls also retain data-driven display behavior. The
 campaign list is rebuilt from the discovered campaign documents and filters

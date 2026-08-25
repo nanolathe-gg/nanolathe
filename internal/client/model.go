@@ -16,6 +16,7 @@ package client
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -24,6 +25,13 @@ import (
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// the shipped default].
+var lightDir = [3]float64{-0.8, 1.0, 0.25}
+
+func sqrt3(x float64) float64 { return math.Sqrt(x) }
 
 type modelCorner struct {
 	x, y, z float64 // model space in world units (3DO 16.16 >>16)
@@ -37,7 +45,9 @@ type modelTri struct {
 	frame *formats.GAFFrame // resolved non-team texture, nil = flat color
 	entry *formats.GAFEntry // team entries resolve per-player frames
 	team  bool              // 10-frame LOGOS entry: frame = owner [fmt 3do]
-	order int               // expansion order, stable painter tiebreak [I1]
+	row   [3]int            // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	vkey  [3]int64          // packed piece+vertex id, resolved to rows post-walk
+	order int               // expansion order; draw order is load-fixed [03 2.4]
 }
 
 type unitModel struct {
@@ -128,6 +138,16 @@ func (c *Client) expandModel(name string) *unitModel {
 	}
 	um := &unitModel{}
 	order := 0
+	// Per-vertex smooth normals: each face's normalized normal accumulates
+	// onto its vertices; the SHD row derives from the averaged normal
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// touch count]. Keyed by piece+vertex index.
+	type vkey struct {
+		piece int32
+		vi    int32
+	}
+	normAcc := map[vkey][3]float64{}
+	normCnt := map[vkey]int{}
 	var walk func(obj int32, tx, ty, tz int64)
 	walk = func(obj int32, tx, ty, tz int64) {
 		if obj < 0 || int(obj) >= len(m3.Objects) {
@@ -272,11 +292,42 @@ func (c *Client) expandModel(name string) *unitModel {
 				}
 				return modelCorner{x: wx + vx, y: wy + vy, z: wz + vz, u: uv[0], v: uv[1]}
 			}
+			// Face normal from the polygon's first three vertices; degenerate
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			nx, ny, nz := 0.0, 1.0, 0.0
+			if n >= 3 {
+				// Retail face normal: cross(v[b]-v[a], v[b]-v[c]) over the
+				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				v0 := corner(0)
+				v1 := corner(1)
+				v2 := corner(2)
+				ax, ay, az := v1.x-v0.x, v1.y-v0.y, v1.z-v0.z
+				bx, by, bz := v1.x-v2.x, v1.y-v2.y, v1.z-v2.z
+				nx = ay*bz - az*by
+				ny = az*bx - ax*bz
+				nz = ax*by - ay*bx
+				if l := sqrt3(nx*nx + ny*ny + nz*nz); l > 1e-9 {
+					nx, ny, nz = nx/l, ny/l, nz/l
+				} else {
+					nx, ny, nz = 0, 1, 0
+				}
+			}
+			for k := 0; k < n; k++ {
+				vi := int32(p.VertexIndices[k])
+				key := vkey{piece: obj, vi: vi}
+				acc := normAcc[key]
+				normAcc[key] = [3]float64{acc[0] + nx, acc[1] + ny, acc[2] + nz}
+				normCnt[key]++
+			}
 			c0 := corner(0)
 			for k := 1; k+1 < n; k++ {
 				tri.c[0] = c0
 				tri.c[1] = corner(k)
 				tri.c[2] = corner(k + 1)
+				tri.vkey[0] = int64(obj)<<32 | int64(p.VertexIndices[0])
+				tri.vkey[1] = int64(obj)<<32 | int64(p.VertexIndices[k])
+				tri.vkey[2] = int64(obj)<<32 | int64(p.VertexIndices[k+1])
 				um.tris = append(um.tris, tri)
 			}
 		}
@@ -288,6 +339,28 @@ func (c *Client) expandModel(name string) *unitModel {
 		}
 	}
 	walk(m3.Root, 0, 0, 0)
+	// Row resolution runs after the full walk: a vertex's normal is the
+	// average of every face touching it, so rows are order-independent
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	for ti := range um.tris {
+		for kk := 0; kk < 3; kk++ {
+			key := vkey{piece: int32(um.tris[ti].vkey[kk] >> 32), vi: int32(um.tris[ti].vkey[kk] & 0xffffffff)}
+			acc := normAcc[key]
+			cnt := normCnt[key]
+			if cnt == 0 {
+				cnt = 1
+			}
+			nx, ny, nz := acc[0]/float64(cnt), acc[1]/float64(cnt), acc[2]/float64(cnt)
+			if l := sqrt3(nx*nx + ny*ny + nz*nz); l > 1e-9 {
+				nx, ny, nz = nx/l, ny/l, nz/l
+			}
+			// row = ftol(dot(N, L) * 5) & 31 with the shipped default light
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// fmul 0x4fd4cc=5.0, __ftol, and 0x1f].
+			d := nx*lightDir[0] + ny*lightDir[1] + nz*lightDir[2]
+			um.tris[ti].row[kk] = int(d*5.0) & 31
+		}
+	}
 	if len(um.tris) == 0 {
 		return nil
 	}
@@ -312,6 +385,7 @@ func primMeanY(o *formats.ThreeDOObject, p *formats.ThreeDOPrimitive) int64 {
 type screenTri struct {
 	x, y  [3]int32
 	u, v  [3]float64
+	row   [3]float64 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	color uint8
 	frame *formats.GAFFrame
 	entry *formats.GAFEntry
@@ -338,6 +412,7 @@ func (c *Client) drawUnitModel(v snapshot.UnitView, sx, sy int32) bool {
 		st.entry = t.entry
 		st.team = t.team
 		st.order = t.order
+		st.row = [3]float64{float64(t.row[0]), float64(t.row[1]), float64(t.row[2])}
 		for k := 0; k < 3; k++ {
 			cn := &t.c[k]
 			// Heading rotates the model X/Z plane; Y stays up. Same
@@ -419,10 +494,11 @@ func (c *Client) fillTri(t *screenTri, color uint8) {
 	}
 }
 
-// blitTexturedTri affinely samples the texture frame across the triangle.
-// UVs come from the implied quad mapping; transparent texels skip. SHD row
-// selection is undocumented in retail (TODO(question)); pixels sample
-// unshaded, matching the flat-face rule of no brightness split.
+// blitTexturedTri affinely samples the texture frame across the triangle,
+// routing every sample through PALETTE.SHD at the barycentrically
+// interpolated per-vertex row: row = ftol(dot(N, L)*5) & 31 with the piece's
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// no SHD at all — decompile two-normal probe]. Transparent texels skip.
 func (c *Client) blitTexturedTri(t *screenTri, frame *formats.GAFFrame) {
 	minX, minY, maxX, maxY := t.x[0], t.y[0], t.x[0], t.y[0]
 	for k := 1; k < 3; k++ {
@@ -479,6 +555,16 @@ func (c *Client) blitTexturedTri(t *screenTri, frame *formats.GAFFrame) {
 			b, ok := frame.At(tx, ty)
 			if !ok {
 				continue
+			}
+			r := l0*t.row[0] + l1*t.row[1] + l2*t.row[2]
+			ri := int(r)
+			if ri < 0 {
+				ri = 0
+			} else if ri > 31 {
+				ri = 31
+			}
+			if c.pal != nil {
+				b = c.pal.Shade[ri][b]
 			}
 			c.indexed[row+px] = b
 		}

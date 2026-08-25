@@ -290,11 +290,17 @@ func sin(t float64) float64 {
 	return mathSin(t)
 }
 
-// UIFillRect fills a clipped rectangle in the indexed framebuffer.
-func (c *Client) UIFillRect(x, y, w, h int, idx uint8) { c.fillIndexedRect(x, y, w, h, idx) }
+// UIFillRect fills a clipped rectangle in the indexed framebuffer. idx is an
+// active PALETTE.PAL index, matching retail's indexed primitive writers.
+func (c *Client) UIFillRect(x, y, w, h int, idx uint8) {
+	c.fillIndexedRect(x, y, w, h, idx)
+}
 
-// UIFrameRect outlines a clipped rectangle in the indexed framebuffer.
-func (c *Client) UIFrameRect(x, y, w, h int, idx uint8) { c.frameIndexedRect(x, y, w, h, idx) }
+// UIFrameRect outlines a clipped rectangle in the indexed framebuffer. idx is
+// an active PALETTE.PAL index.
+func (c *Client) UIFrameRect(x, y, w, h int, idx uint8) {
+	c.frameIndexedRect(x, y, w, h, idx)
+}
 
 // UIText draws FNT text into the indexed framebuffer when a font is loaded.
 func (c *Client) UIText(fnt *formats.FNT, text string, x, y int, color byte) {
@@ -308,7 +314,7 @@ func (c *Client) UITextWidth(fnt *formats.FNT, text string, x, y, maxWidth int, 
 	if c.fnt == nil || fnt == nil {
 		return
 	}
-	DrawText(c.indexed, c.width, c.height, fnt, text, x, y, maxWidth, color)
+	drawText(c.indexed, c.width, c.height, fnt, text, x, y, maxWidth, color, nil)
 }
 
 // WorldToScreenPx exposes the camera projection for overlay geometry.
@@ -337,14 +343,17 @@ func (c *Client) UIBlit(f *formats.GAFFrame, x, y int) {
 			if !ok {
 				continue
 			}
-			c.indexed[py*c.width+px] = b
+			index := py*c.width + px
+			c.indexed[index] = b
 		}
 	}
 }
 
 // UIBlitPCX stamps a decoded PCX image into the indexed framebuffer at
-// (x, y), clipped. PCX pixels are opaque indices into the active palette
-// [fmt pcx]. Presentation only [I6].
+// (x, y), clipped. Retail frontend backgrounds carry pixels already addressed
+// by the active PALETTE.PAL display table; their PCX trailer palette is not
+// installed as a second display palette [fmt pcx][07 "Retail palette
+// contract"]. Presentation only [I6].
 func (c *Client) UIBlitPCX(p *formats.PCX, x, y int) {
 	if p == nil {
 		return
@@ -359,14 +368,16 @@ func (c *Client) UIBlitPCX(p *formats.PCX, x, y int) {
 			if px < 0 || px >= c.width {
 				continue
 			}
-			c.indexed[py*c.width+px] = p.Pixels[row*int(p.Width)+col]
+			index := py*c.width + px
+			c.indexed[index] = p.Pixels[row*int(p.Width)+col]
 		}
 	}
 }
 
 // UIBlitIndexed draws an opaque indexed image with nearest-neighbour scaling.
 // It is used by retail surface gadgets such as SELMAP's MAPPIC, whose pixels
-// are supplied by the selected TNT minimap rather than a GAF frame.
+// are supplied by the selected TNT minimap. The source bytes already address
+// PALETTE.PAL, like every other indexed image path.
 func (c *Client) UIBlitIndexed(src []byte, srcW, srcH, x, y, w, h int) {
 	if len(src) == 0 || srcW <= 0 || srcH <= 0 || w <= 0 || h <= 0 {
 		return
@@ -385,7 +396,8 @@ func (c *Client) UIBlitIndexed(src []byte, srcW, srcH, x, y, w, h int) {
 			sx := dx * srcW / w
 			idx := sy*srcW + sx
 			if idx >= 0 && idx < len(src) {
-				c.indexed[py*c.width+px] = src[idx]
+				index := py*c.width + px
+				c.indexed[index] = src[idx]
 			}
 		}
 	}

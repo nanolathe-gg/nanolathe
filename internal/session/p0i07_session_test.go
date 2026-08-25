@@ -194,6 +194,7 @@ func TestP0I07_FogSnapshot(t *testing.T) {
 		t.Fatalf("bind: %v", err)
 	}
 	s.RegisterAll()
+	s.State = StateBattle // P0-I10: ticks only in battle
 	// Initially fog valid after RebuildFog in create? It starts invalid then rebuilt lazily. After publish, invalid.
 	// Run one subtick via Step.
 	s.Clock.ScaledAnchor = 0

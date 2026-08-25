@@ -15,6 +15,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
@@ -232,17 +233,11 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 	for i := 0; i < nPlayers && i < 10; i++ {
 		p := &s.Econ.Players[i]
 		p.Exists = true
-		ctrl := cfg.Players[i].Controller
 		var ctrlState uint8
-		switch ctrl {
-		case SkirmishDefaultController:
-			ctrlState = 1
-		default:
-			if ctrl == 1 || ctrl == 2 || ctrl == 3 {
-				ctrlState = uint8(ctrl)
-			} else {
-				ctrlState = 2
-			}
+		if cfg.Players[i].Controller == 0 {
+			ctrlState = 1 // human local [08][PLAN_14 C8]
+		} else {
+			ctrlState = 2 // computer [08]
 		}
 		p.ControllerState = ctrlState
 		p.IsObserver = false
@@ -250,6 +245,13 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 		p.StatusWordAt140 = 0
 		p.GameEnded = false
 		p.EndGameCountdown = -1
+	}
+	// Apply alliances: AllyGroup equality => allied [GAP T14][08 "Skirmish configuration"]
+	for i := 0; i < nPlayers && i < 10; i++ {
+		for j := 0; j < nPlayers && j < 10; j++ {
+			s.Econ.Players[i].Allies[j] = cfg.Players[i].AllyGroup == cfg.Players[j].AllyGroup
+		}
+		s.Econ.Players[i].Allies[i] = true
 	}
 	s.Econ.SeedDeadlines(0)
 	// 10. wind via shared path [01 §7.3] C17 – single initializer after retaining bounds
@@ -330,6 +332,67 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 	}
 	// 11. register every authoritative phase once [01 §4.4] I7
 	s.RegisterAll()
+	// Skirmish end condition: commander death when CommanderDeath==1 [08 "Skirmish configuration"]
+	// Separate from campaign trigger polling [P0-I09]; uses death hook for immediate latch.
+	if s.Skirmish.CommanderDeath != 0 {
+		origDeath := s.Units.OnDeath
+		s.Units.OnDeath = func(h pool.Handle, cause units.DeathCause, u *units.Unit) {
+			if origDeath != nil {
+				origDeath(h, cause, u)
+			}
+			if u == nil || u.Def == nil || !u.Def.Commander {
+				return
+			}
+			deadOwner := int(u.Owner)
+			remaining := 0
+			for _, cand := range s.Units.IterSliced() {
+				if cand == nil || !cand.Alive || cand.Dying {
+					continue
+				}
+				if int(cand.Owner) == deadOwner && cand.Def != nil && cand.Def.Commander {
+					remaining++
+				}
+			}
+			if remaining != 0 {
+				return
+			}
+			if deadOwner == int(s.LocalOwner) {
+				s.Latch.Bits |= LatchBitEnding
+				s.Latch.Lose()
+				for i := 0; i < 10; i++ {
+					s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
+					s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
+				}
+				if s.State == StateBattle {
+					_ = s.TransitionTo(StatePostBattle)
+				}
+			} else {
+				localRemaining := 0
+				for _, cand := range s.Units.IterSliced() {
+					if cand == nil || !cand.Alive || cand.Dying {
+						continue
+					}
+					if int(cand.Owner) == int(s.LocalOwner) && cand.Def != nil && cand.Def.Commander {
+						localRemaining++
+					}
+				}
+				if localRemaining > 0 {
+					s.Latch.Bits |= LatchBitEnding
+					s.Latch.Win()
+				} else {
+					s.Latch.Bits |= LatchBitEnding
+					s.Latch.Win()
+				}
+				for i := 0; i < 10; i++ {
+					s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
+					s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
+				}
+				if s.State == StateBattle {
+					_ = s.TransitionTo(StatePostBattle)
+				}
+			}
+		}
+	}
 	// 12. transition through state machine [08 "Session states"] C3
 	if err := s.SelectForGametype(GametypeMultiplayer); err != nil {
 		return nil, err
@@ -418,17 +481,11 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 	for i := 0; i < nPlayers && i < 10; i++ {
 		p := &s.Econ.Players[i]
 		p.Exists = true
-		ctrl := cfg.Players[i].Controller
 		var ctrlState uint8
-		switch ctrl {
-		case SkirmishDefaultController:
-			ctrlState = 1
-		default:
-			if ctrl == 1 || ctrl == 2 || ctrl == 3 {
-				ctrlState = uint8(ctrl)
-			} else {
-				ctrlState = 2
-			}
+		if cfg.Players[i].Controller == 0 {
+			ctrlState = 1 // human local [08][PLAN_14 C8]
+		} else {
+			ctrlState = 2 // computer [08]
 		}
 		p.ControllerState = ctrlState
 		p.IsObserver = false
@@ -436,6 +493,13 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		p.StatusWordAt140 = 0
 		p.GameEnded = false
 		p.EndGameCountdown = -1
+	}
+	// Apply alliances: AllyGroup equality => allied [GAP T14][08 "Skirmish configuration"]
+	for i := 0; i < nPlayers && i < 10; i++ {
+		for j := 0; j < nPlayers && j < 10; j++ {
+			s.Econ.Players[i].Allies[j] = cfg.Players[i].AllyGroup == cfg.Players[j].AllyGroup
+		}
+		s.Econ.Players[i].Allies[i] = true
 	}
 	s.Econ.SeedDeadlines(0)
 	var crt *rng.CRT
@@ -579,6 +643,10 @@ func SkirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy
 	if err := skirmishReconstructUnits(s, cfg, m); err != nil {
 		return err
 	}
+	// Initialize COB before any scripted orders (mirrors mission path) [04 §4.1]
+	initCOBForSession(s)
+	// Wire cargo from i-verb if any scenario units carry attachments (reuses mission helper)
+	wireMissionCargo(s, m)
 	spyRecord(spy, "barrier")
 	if err := skirmishCrossBarrier(s); err != nil {
 		return err
