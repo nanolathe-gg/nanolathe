@@ -312,6 +312,8 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 	} else if len(gadgets) > 0 {
 		w.Rect = gadgets[0].Rect
 	}
+	w.OriginX = w.Rect.X
+	w.OriginY = w.Rect.Y
 
 	w.Gadgets = gadgets
 
@@ -347,13 +349,14 @@ func (w *Window) HitTest(x, y int32) int {
 		// Also attribs grayed bit? Retail tests grayed attribute bit before activation [07 §3].
 		// Our GrayedOut covers it; additional attribs bit check is TODO(question).
 		// Inclusive bounds: gx <= x <= gx+w-1 && gy <= y <= gy+h-1 [07 §3].
-		if g.Rect.W <= 0 || g.Rect.H <= 0 {
+		r := w.PlacedRect(i)
+		if r.W <= 0 || r.H <= 0 {
 			continue
 		}
-		if x < g.Rect.X || x > g.Rect.X+g.Rect.W-1 {
+		if x < r.X || x > r.X+r.W-1 {
 			continue
 		}
-		if y < g.Rect.Y || y > g.Rect.Y+g.Rect.H-1 {
+		if y < r.Y || y > r.Y+r.H-1 {
 			continue
 		}
 		return i

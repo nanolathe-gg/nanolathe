@@ -43,8 +43,8 @@ func LoadOTA(data []byte) (*OTA, error) {
 	result := &OTA{
 		Document:           document,
 		Global:             global,
-		MissionName:        otaValue(global, "missionname"),
-		MissionDescription: otaValue(global, "missiondescription"),
+		MissionName:        languageValue(global, "missionname"),
+		MissionDescription: languageValue(global, "missiondescription"),
 		Memory:             otaValue(global, "memory"),
 		NumPlayers:         otaValue(global, "numplayers"),
 		Size:               otaValue(global, "size"),
@@ -65,6 +65,14 @@ func LoadOTA(data []byte) (*OTA, error) {
 		})
 	}
 	return result, nil
+}
+
+func languageValue(section *Section, key string) string {
+	if section == nil {
+		return ""
+	}
+	value, _ := section.LanguageString("", key, "")
+	return strings.TrimSpace(value)
 }
 
 func LoadOTAFile(fs vfs.FSOps, name string) (*OTA, error) {

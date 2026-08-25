@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/ai"
@@ -122,7 +123,7 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 	}
 	ensureMovementForAll(s)
 	publishVisibilityForAll(s)
-	// AI managers for computer players
+	// AI managers for computer players [P0-I12]
 	s.AI = make([]*ai.Manager, 0, 1)
 	for i := 0; i < 2; i++ {
 		if s.Econ.Players[i].ControllerState == 2 {
@@ -132,6 +133,34 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 			}
 			mgr := &ai.Manager{Player: uint8(i), Profile: prof, Terrain: s.World, Catalog: s.Catalog}
 			s.AI = append(s.AI, mgr)
+		}
+	}
+	// P0-I12: initialize class maps from catalog for each manager, ensure vectors not zero [08][P0-01]
+	if len(s.AI) > 0 && s.Catalog != nil && len(s.Catalog.Units) > 0 {
+		allTypes := make([]string, 0, len(s.Catalog.Units))
+		for k := range s.Catalog.Units {
+			allTypes = append(allTypes, k)
+		}
+		sort.Strings(allTypes)
+		for _, mgr := range s.AI {
+			mgr.SetCatalog(s.Catalog)
+			mgr.Strategic.Init(allTypes)
+			if s.World != nil {
+				mgr.Strategic.CenterX = world.CellToWorld(s.World.CellW / 2)
+				mgr.Strategic.CenterZ = world.CellToWorld(s.World.CellH / 2)
+				mgr.Strategic.Radius = 0
+				mgr.OriginX = world.CellToWorld(s.World.CellW / 2)
+				mgr.OriginZ = world.CellToWorld(s.World.CellH / 2)
+				for _, u := range s.Units.IterSliced() {
+					if u != nil && u.Alive && int(u.Owner) == int(mgr.Player) && u.Def != nil && u.Def.Commander {
+						mgr.OriginX = u.X
+						mgr.OriginZ = u.Z
+						mgr.Strategic.CenterX = u.X
+						mgr.Strategic.CenterZ = u.Z
+						break
+					}
+				}
+			}
 		}
 	}
 	s.RegisterAll()

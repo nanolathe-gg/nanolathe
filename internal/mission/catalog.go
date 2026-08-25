@@ -40,13 +40,24 @@ type Stub struct {
 // file, walks contiguous MISSION0..N sections until the first missing index.
 // MissionList is only the allocation tag for the resulting array, not an
 // authored section, so its presence or absence does not affect discovery.
-// Enumeration is deterministic: VFS ReadDir is already sorted, campaigns are
-// additionally sorted by logical path, and missions are visited in index order.
+// The concrete retail VFS preserves provider/enumeration order for this scan;
+// synthetic FSOps retain the canonical sorted order used by library tests.
+// Missions are always visited in index order.
 func Discover(fs vfs.FSOps) ([]Campaign, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("mission: nil filesystem")
 	}
-	entries, err := fs.ReadDir("camps")
+	retailOrder := false
+	var entries []vfs.EntryInfo
+	var err error
+	if ordered, ok := fs.(interface {
+		RetailReadDir(string) ([]vfs.EntryInfo, error)
+	}); ok {
+		entries, err = ordered.RetailReadDir("camps")
+		retailOrder = true
+	} else {
+		entries, err = fs.ReadDir("camps")
+	}
 	if err != nil {
 		// No camps directory => no campaigns (not an error for fixture tests).
 		// vfs.ErrNotFound is the expected signal for a missing logical dir.
@@ -57,9 +68,9 @@ func Discover(fs vfs.FSOps) ([]Campaign, error) {
 		}
 		return nil, fmt.Errorf("mission: camps: %w", err)
 	}
-	// Filter to .tdf files only, non-directories. VFS already sorts by Path,
-	// but re-sort by logical Path for determinism against any future provider
-	// ordering nuances. [I1]
+	// Filter to .tdf files only, non-directories. Retail's concrete VFS uses
+	// provider/enumeration order; synthetic FSOps retain the canonical sorted
+	// behavior used by the library tests. [08 "Campaign discovery"]
 	var tdfEntries []vfs.EntryInfo
 	for _, e := range entries {
 		if e.IsDir {
@@ -72,12 +83,14 @@ func Discover(fs vfs.FSOps) ([]Campaign, error) {
 		}
 		tdfEntries = append(tdfEntries, e)
 	}
-	sort.Slice(tdfEntries, func(i, j int) bool {
-		if tdfEntries[i].Path != tdfEntries[j].Path {
-			return tdfEntries[i].Path < tdfEntries[j].Path
-		}
-		return tdfEntries[i].OriginalPath < tdfEntries[j].OriginalPath
-	})
+	if !retailOrder {
+		sort.Slice(tdfEntries, func(i, j int) bool {
+			if tdfEntries[i].Path != tdfEntries[j].Path {
+				return tdfEntries[i].Path < tdfEntries[j].Path
+			}
+			return tdfEntries[i].OriginalPath < tdfEntries[j].OriginalPath
+		})
+	}
 
 	var out []Campaign
 	limit := int64(formats.DefaultTDFLimits().MaxBytes)
@@ -101,8 +114,10 @@ func Discover(fs vfs.FSOps) ([]Campaign, error) {
 		}
 		out = append(out, c)
 	}
-	// Already sorted by Path, but ensure stable iteration order for callers.
-	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	if !retailOrder {
+		// Synthetic FSOps are sorted above; keep their returned order stable.
+		sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	}
 	return out, nil
 }
 

@@ -74,6 +74,10 @@ type Unit struct {
 	// but save-restore forced-slot and any other direct Create caller must also sample via the same hook
 	// or via Terrain.ApplySchema post-load; verify universal coverage.
 	Kills int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Paralyze state per [06 §10] paralyzer status effects [P0-I04].
+	ParalyzeExpire uint32 // absolute tick when stun ends; 0 means not paralyzed [06 §10]
+	Stunned        bool   // TODO(question): GAI slow vs binary stun remains open [06 §10]
+	PriorSample    uint8  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// Placement linkage for P0-04/P0-06 sparse created[] semantics [P0-04][P0-06].
 	// Retail maintains created[placementIdx] sparse array and scans it in
 	// placement order 0..count-1 skipping NULL gaps for Ident→Unitname first-
@@ -88,6 +92,18 @@ type Unit struct {
 // latches Dying [04 §2.4]. The session uses it to feed mission trigger death
 // notifications exactly once [08 "Evaluation"].
 type DeathHook func(h pool.Handle, cause DeathCause, u *Unit)
+
+// CreateHook is invoked exactly once per unit at creation, after the unit
+// is inserted into the world and before any visibility publish [08
+// "Evaluation"] slot 3 present but unused by shipped conditions; bind exactly
+// once so future conditions see it without extra polling.
+type CreateHook func(h pool.Handle, u *Unit)
+
+// CaptureHook is invoked exactly once per capture transfer, after ownership
+// has changed and visibility republished [08 "Evaluation"] slot 2
+// capture/transfer notification. Session.CaptureUnit and any construction
+// capture path feed it.
+type CaptureHook func(h pool.Handle, oldOwner, newOwner uint8, u *Unit)
 
 // World is the unit world [PLAN_06 Public API].
 // Pool is slot-indexed parallel to world state; iteration is players 0..9
@@ -106,6 +122,12 @@ type World struct {
 	// OnDeath is the death-notification hook [08 "Evaluation"]; nil means no
 	// consumer. It fires exactly once per unit, at the first Destroy latch.
 	OnDeath DeathHook
+	// OnCreate is the creation-notification hook [08 "Evaluation"] slot 3;
+	// nil means no consumer. It fires exactly once per unit after Create inserts.
+	OnCreate CreateHook
+	// OnCapture is the capture-transfer hook [08 "Evaluation"] slot 2; nil means
+	// no consumer. It fires exactly once per ownership transfer.
+	OnCapture CaptureHook
 
 	defMap    map[*content.UnitDef]uint16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	nextDefID uint16
@@ -260,9 +282,13 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 			Health:       int32(def.MaxDamage),
 			PlacementIdx: -1,
 		}
+		installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions into Slots [P0-I04]
 		w.units[idx] = u
 		if player >= 0 && player < 10 {
 			w.liveCounters[player]++
+		}
+		if w.OnCreate != nil {
+			w.OnCreate(h, u)
 		}
 		return h, nil
 	}
@@ -309,8 +335,32 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 		Health:       int32(def.MaxDamage),
 		PlacementIdx: -1,
 	}
+	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
 	w.units[idx] = u
+	if w.OnCreate != nil {
+		w.OnCreate(h, u)
+	}
 	return h, nil
+}
+
+// installWeapons copies Weapon1/2/3 definitions from UnitDef into Units.Slots [06 §1.2] C1 [P0-I04].
+// It is the sole wiring of weapon definitions to per-unit slots; no other site fabricates them.
+func installWeapons(u *Unit, def *content.UnitDef) {
+	if u == nil || def == nil {
+		return
+	}
+	if def.Weapon1Def != nil {
+		u.Slots[0].Weapon = def.Weapon1Def
+		u.Slots[0].Flags |= 0x02 // armed/hasTarget when populated [06 §1.2] P0-10
+	}
+	if def.Weapon2Def != nil {
+		u.Slots[1].Weapon = def.Weapon2Def
+		u.Slots[1].Flags |= 0x02
+	}
+	if def.Weapon3Def != nil {
+		u.Slots[2].Weapon = def.Weapon3Def
+		u.Slots[2].Flags |= 0x02
+	}
 }
 
 // CreateWithForcedSlot allocates a unit at the exact forcedSlot for save
@@ -361,8 +411,12 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 			Health:       int32(def.MaxDamage),
 			PlacementIdx: -1,
 		}
+		installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
 		w.units[idx] = u
 		w.liveCounters[player]++
+		if w.OnCreate != nil {
+			w.OnCreate(h, u)
+		}
 		return h, nil
 	}
 	// Unsliced forced path: verify slot free and not OOB via pool
@@ -390,8 +444,29 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		Health:       int32(def.MaxDamage),
 		PlacementIdx: -1,
 	}
+	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
 	w.units[idx] = u
+	if w.OnCreate != nil {
+		w.OnCreate(h, u)
+	}
 	return h, nil
+}
+
+// NotifyCapture fires the capture hook exactly once after ownership transfer
+// [08 "Evaluation"] slot 2. Caller must have already changed u.Owner and
+// republished visibility.
+func (w *World) NotifyCapture(h pool.Handle, oldOwner, newOwner uint8) {
+	if w == nil || w.OnCapture == nil {
+		return
+	}
+	if int(h) >= len(w.units) {
+		return
+	}
+	u := w.units[int(h)]
+	if u == nil || !u.Alive {
+		return
+	}
+	w.OnCapture(h, oldOwner, newOwner, u)
 }
 
 // Destroy marks death; the slot stays alive and visible until post-tick

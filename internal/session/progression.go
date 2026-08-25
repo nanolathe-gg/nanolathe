@@ -30,9 +30,15 @@ const (
 // EndLatch holds countdown and win/lose bits [P0-05][P1-01].
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Pending stores the outcome armed but not yet latched: 0 none, 1 win, 2 lose.
+// It is set at arm time and consumed when Countdown crosses below zero to
+// write the latch word. Bits win/lose are not written until that crossing
+// [08 "Evaluation"][P1-01 §2.2], while SettlementFrozen already holds via
+// Countdown>=0.
 type EndLatch struct {
 	Countdown int16
 	Bits      uint16
+	Pending   uint8 // 0 none, 1 win pending, 2 lose pending
 }
 
 // NewEndLatch returns a latch in the retail initial state: countdown -1
@@ -45,12 +51,14 @@ func (l *EndLatch) IsEnding() bool { return l.Bits&LatchBitEnding != 0 }
 // IsLatched is alias for IsEnding.
 func (l *EndLatch) IsLatched() bool { return l.IsEnding() }
 
-// Arm sets countdown to 4 and sets ending bit 0x04 [P0-05][P1-01 §2.2].
-// Retail writes 4 when countdown<0 inside local deadline block and at
-// post-loop site [P1-01 §3].
+// Arm sets countdown to 4 without yet setting the latch word bits
+// [08 "Evaluation"][P1-01 §2.2]. Retail arms to 4 when Countdown<0 inside
+// the local deadline block; Bits 0x04/0x10/0x20/0x40 are written only when the
+// countdown later crosses below zero to  -1. Settlement freeze already holds
+// via Countdown>=0 even before Bits are written [P1-01 §2.2].
 func (l *EndLatch) Arm() {
 	l.Countdown = LatchInitial
-	l.Bits |= LatchBitEnding // 0x04 only [P0-05][P1-01]
+	// Bits not set until latch transition [08 "Evaluation"][P1-01 §2.2]
 }
 
 // Tick decrements roughly once per second (~1/s) via the local deadline
@@ -73,18 +81,34 @@ func (l *EndLatch) Tick(tick uint32) bool {
 // TickNoHuman decrements the countdown every tick for the
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // [P1-01 §7.2]. On no-human saves the latch fires in 5 ticks, not 150.
+// When Countdown crosses below zero it writes the latch word with ending
+// plus pending win/lose bits [P1-01 §2.2][08 "Evaluation"].
 func (l *EndLatch) TickNoHuman() bool {
-	if l.Countdown <= 0 {
+	if l.Countdown < 0 {
 		return false
 	}
 	l.Countdown--
-	return l.Countdown == 0
+	if l.Countdown < 0 {
+		l.Bits |= LatchBitEnding
+		if l.Pending == 1 {
+			l.Win()
+		} else if l.Pending == 2 {
+			l.Lose()
+		} else {
+			// No pending set via Advance path guard; default win not used.
+		}
+		l.Pending = 0
+		return true
+	}
+	return false
 }
 
 // AdvanceWin advances the countdown for a victory predicate. If countdown
-// is negative (unarmed) it arms to 4; otherwise it decrements once per
-// eligible invocation. When the decrement crosses below zero it latches
-// ending+win bits [P1-01 §3].
+// is negative (unarmed) it arms to 4 with pending win; otherwise it
+// decrements once per eligible invocation. When the decrement crosses below
+// zero it latches ending plus pending win bits [P1-01 §3][08 "Evaluation"].
+// The win bits are not written until the crossing [P1-01 §2.2]; SettlementFrozen
+// already holds via Countdown>=0 even before Bits are written.
 // Returns true when the latch transition (ending) occurs on this call.
 func (l *EndLatch) AdvanceWin(isDeadlineDue bool) bool {
 	if !isDeadlineDue {
@@ -92,13 +116,20 @@ func (l *EndLatch) AdvanceWin(isDeadlineDue bool) bool {
 	}
 	if l.Countdown < 0 {
 		l.Arm()
-		l.Win()
+		l.Pending = 1
 		return false
 	}
 	l.Countdown--
 	if l.Countdown < 0 {
 		l.Bits |= LatchBitEnding
-		l.Win()
+		if l.Pending == 1 {
+			l.Win()
+		} else if l.Pending == 2 {
+			l.Lose()
+		} else {
+			l.Win()
+		}
+		l.Pending = 0
 		return true
 	}
 	return false
@@ -106,20 +137,27 @@ func (l *EndLatch) AdvanceWin(isDeadlineDue bool) bool {
 
 // AdvanceLose advances for defeat (only when victory not candidate).
 // Lose clears win bits via AND ~0x10 (actually ~0x30) and sets 0x40
-// [P1-01 §2.2].
+// [P1-01 §2.2]. Pending lose is armed at 4 and not written until crossing.
 func (l *EndLatch) AdvanceLose(isDeadlineDue bool) bool {
 	if !isDeadlineDue {
 		return false
 	}
 	if l.Countdown < 0 {
 		l.Arm()
-		l.Lose()
+		l.Pending = 2
 		return false
 	}
 	l.Countdown--
 	if l.Countdown < 0 {
 		l.Bits |= LatchBitEnding
-		l.Lose()
+		if l.Pending == 2 {
+			l.Lose()
+		} else if l.Pending == 1 {
+			l.Win()
+		} else {
+			l.Lose()
+		}
+		l.Pending = 0
 		return true
 	}
 	return false

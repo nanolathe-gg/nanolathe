@@ -138,6 +138,21 @@ func (c *Client) SetPalette(p *palette.Tables) {
 	}
 }
 
+// SetGUIPalette switches presentation to the retail front-end palette. The
+// frontend loader installs GUIPAL.PAL as the physical table while its authored
+// GAF/PCX pixels remain direct palette indices. Battle transitions call
+// SetPalette to restore the simulation PALETTE.PAL table.
+func (c *Client) SetGUIPalette(p *palette.Tables) {
+	c.pal = p
+	if p == nil {
+		return
+	}
+	c.base = p.GUI
+	for i := range c.logical {
+		c.logical[i] = byte(i)
+	}
+}
+
 // SetFNT sets the debug font [03 §7.1] C8.
 func (c *Client) SetFNT(fnt *formats.FNT) { c.fnt = fnt }
 

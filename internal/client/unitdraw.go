@@ -298,10 +298,17 @@ func (c *Client) UIFrameRect(x, y, w, h int, idx uint8) { c.frameIndexedRect(x, 
 
 // UIText draws FNT text into the indexed framebuffer when a font is loaded.
 func (c *Client) UIText(fnt *formats.FNT, text string, x, y int, color byte) {
+	c.UITextWidth(fnt, text, x, y, c.width-x, color)
+}
+
+// UITextWidth draws FNT text with an explicit retail control width. The
+// frontend uses this so authored labels truncate before clipping to their
+// gadget rectangle rather than running into neighboring controls.
+func (c *Client) UITextWidth(fnt *formats.FNT, text string, x, y, maxWidth int, color byte) {
 	if c.fnt == nil || fnt == nil {
 		return
 	}
-	DrawText(c.indexed, c.width, c.height, c.fnt, text, x, y, c.width-x, color)
+	DrawText(c.indexed, c.width, c.height, fnt, text, x, y, maxWidth, color)
 }
 
 // WorldToScreenPx exposes the camera projection for overlay geometry.
@@ -353,6 +360,33 @@ func (c *Client) UIBlitPCX(p *formats.PCX, x, y int) {
 				continue
 			}
 			c.indexed[py*c.width+px] = p.Pixels[row*int(p.Width)+col]
+		}
+	}
+}
+
+// UIBlitIndexed draws an opaque indexed image with nearest-neighbour scaling.
+// It is used by retail surface gadgets such as SELMAP's MAPPIC, whose pixels
+// are supplied by the selected TNT minimap rather than a GAF frame.
+func (c *Client) UIBlitIndexed(src []byte, srcW, srcH, x, y, w, h int) {
+	if len(src) == 0 || srcW <= 0 || srcH <= 0 || w <= 0 || h <= 0 {
+		return
+	}
+	for dy := 0; dy < h; dy++ {
+		py := y + dy
+		if py < 0 || py >= c.height {
+			continue
+		}
+		sy := dy * srcH / h
+		for dx := 0; dx < w; dx++ {
+			px := x + dx
+			if px < 0 || px >= c.width {
+				continue
+			}
+			sx := dx * srcW / w
+			idx := sy*srcW + sx
+			if idx >= 0 && idx < len(src) {
+				c.indexed[py*c.width+px] = src[idx]
+			}
 		}
 	}
 }

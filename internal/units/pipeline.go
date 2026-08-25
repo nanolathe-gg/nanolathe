@@ -198,6 +198,12 @@ func (w *World) slotEndDeathHandling(u *Unit, tick uint32) {
 	if u == nil || !u.Alive || u.Dying {
 		return
 	}
+	// Nanoframes have Remaining>0 and Health==0 initially [05 "Construction target state"].
+	// They are not dead; construction will raise health via HealthGain [05 "Construction arithmetic"].
+	// Exclude incomplete units from generic health-exhausted death.
+	if u.Remaining != 0 {
+		return
+	}
 	// Retail death latch: lethal damage against movement category 1/2 sets the
 	// latch immediately with no HitByWeapon/TakeDamage callbacks [04 §5.1] C26;
 	// that path already marked Dying via Destroy. Here we handle generic

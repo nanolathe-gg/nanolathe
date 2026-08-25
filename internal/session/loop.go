@@ -62,11 +62,21 @@ type Session struct {
 	VictoryDone bool
 	DefeatDone  bool
 
+	// LocalOwner and EnemyOwner are the player identities the trigger owner
+	// gates compare against [08 "Evaluation"]. Victory conditions gate on the
+	// enemy index, CommanderKilled on the local one; UnitTypeKilled and
+	// AllUnitsKilledOfType accept any owner. PollContext and all notification
+	// sites use these, not hard-coded 0/1 [P0-I13].
+	LocalOwner uint8
+	EnemyOwner uint8
+
 	// Latch is the global end-of-mission countdown and win/lose bits
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// bits 0x04 ending 0x10/0x20 win 0x40 lose (lose clears win) [P1-01].
 	// Latch never clears 0x04 once set [P1-01]. Settlement freeze gates
-	// countdown<0 && NOT latched [P1-01 §2.2].
+	// countdown<0 && NOT latched [P1-01 §2.2]. Countdown arms to 4 without
+	// yet setting Bits; Bits are written only when Countdown crosses below
+	// zero [P1-01 §2.2][08 "Evaluation"].
 	Latch EndLatch
 
 	// Progress holds campaign W/L and BetweenMissions persistence
@@ -259,34 +269,89 @@ func (s *Session) RegisterAll() {
 	if s.Path != nil && s.Movement != nil && s.Movement.Scheduler == nil {
 		s.Movement.Scheduler = s.Path
 	}
-	// Death notifications feed the mission trigger queues exactly once
-	// [08 "Evaluation"]: units.World fires the hook at the first Destroy
-	// latch, which is the single fire point. Visibility unpublish is also handled here so the byte refcount plain
-	// wraps 0→255 and word mask never decrements [03 §3.1] P0-11. The same hook also routes death into corpse placement via the features service [05 "Feature instance and terrain cell"][06 §13] C23.
+	// Trigger and visibility hooks [08 "Evaluation"] are bound exactly once via
+	// units.World hooks at the single fire points: Create (slot 3), Death
+	// (first Destroy latch, slot 1), and Capture transfer (slot 2). The hook
+	// identities are derived from the session's actual local/enemy owners, not
+	// hard-coded 0/1 [P0-I13][08 "Evaluation"]. Visibility unpublish/corpse
+	// remain here so the byte refcount plain wraps 0→255 and word mask never
+	// decrements [03 §3.1] P0-11; corpse uses correct chain depth [06 §12.1] C23.
 	if s.Units != nil {
-		prevHook := s.Units.OnDeath
-		// Wrap or create hook to handle visibility unpublish, trigger notify, and corpse.
+		// Derive actual local/enemy identities from session state if not yet set
+		// [P0-I13]. Skirmish stores them from SkirmishConfig, mission from
+		// economy player slots 0/1; fallback to 0/1 preserves fixture compatibility.
+		if s.LocalOwner == 0 && s.EnemyOwner == 0 {
+			// Try SkirmishConfig first
+			foundLocal := false
+			foundEnemy := false
+			var local, enemy uint8
+			if s.Skirmish.NumPlayers > 0 {
+				for i := 0; i < 10; i++ {
+					ctrl := s.Skirmish.Players[i].Controller
+					if !foundLocal && ctrl == 0 && i < s.Skirmish.NumPlayers {
+						local = uint8(i)
+						foundLocal = true
+					}
+					if !foundEnemy && ctrl != 0 && i < s.Skirmish.NumPlayers {
+						enemy = uint8(i)
+						foundEnemy = true
+					}
+				}
+				if foundLocal || foundEnemy {
+					s.LocalOwner = local
+					if foundEnemy {
+						s.EnemyOwner = enemy
+					} else {
+						// Single human skirmish fallback: enemy 1
+						s.EnemyOwner = 1
+					}
+				}
+			}
+			if s.LocalOwner == 0 && s.EnemyOwner == 0 && s.Econ != nil {
+				// Derive from economy controller states 1/2 [08 "Established AI-facing data"]
+				var l, e uint8
+				foundL, foundE := false, false
+				for i := 0; i < 10; i++ {
+					p := s.Econ.Players[i]
+					if !p.Exists {
+						continue
+					}
+					if !foundL && p.ControllerState == 1 {
+						l = uint8(i)
+						foundL = true
+					}
+					if !foundE && p.ControllerState == 2 {
+						e = uint8(i)
+						foundE = true
+					}
+				}
+				if foundL || foundE {
+					if foundL {
+						s.LocalOwner = l
+					}
+					if foundE {
+						s.EnemyOwner = e
+					} else if s.EnemyOwner == 0 {
+						s.EnemyOwner = 1
+					}
+				} else {
+					s.LocalOwner = 0
+					s.EnemyOwner = 1
+				}
+			} else if s.LocalOwner == 0 && s.EnemyOwner == 0 {
+				s.LocalOwner = 0
+				s.EnemyOwner = 1
+			}
+		}
+		localOwner := s.LocalOwner
+		enemyOwner := s.EnemyOwner
 		s.Units.OnDeath = func(h pool.Handle, cause units.DeathCause, u *units.Unit) {
 			if s.Vis != nil && u != nil {
 				unpublishOne(s, u)
 			}
 			if s.Mission != nil && u != nil {
-				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: 0, EnemyOwner: 1}
+				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitDied, u)
-			} else if prevHook != nil {
-				// If no mission, still delegate to previous hook if it was trigger hook (should not happen, but preserve)
-			}
-			if prevHook != nil && s.Mission == nil {
-				// For non-mission path, prevHook may have been nil; avoid double notify.
-				// If prevHook existed before our wrap, call it (it may be another visibility hook).
-				// But we already handled unpublish and trigger; just ensure we don't lose it.
-				// Detect if prevHook is our own earlier wrap by not calling again if s.Mission != nil (we already notified).
-				if s.Mission == nil {
-					prevHook(h, cause, u)
-				}
-			} else if prevHook != nil && s.Mission != nil {
-				// If we wrapped an existing hook that was not trigger, we already did trigger; no need to call prevHook again
-				// (it would have been visibility-only). Keep idempotent.
 			}
 			// Route into corpse feature with correct chain depth low nibble [06 §12.1] C23 [04 §5.1] [P0-I06].
 			if s.Features != nil && u != nil && u.Def != nil && u.Def.Corpse != "" && s.World != nil {
@@ -326,9 +391,18 @@ func (s *Session) RegisterAll() {
 				_ = h
 			}
 		}
-		// If there was a previous hook that we wrapped, ensure we preserve its behavior for non-visibility cases
-		// (the above already handled trigger; for the case where prevHook was set before RegisterAll, we merged).
-		_ = prevHook
+		s.Units.OnCreate = func(h pool.Handle, u *units.Unit) {
+			if s.Mission != nil && u != nil {
+				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
+				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitCreated, u)
+			}
+		}
+		s.Units.OnCapture = func(h pool.Handle, oldOwner, newOwner uint8, u *units.Unit) {
+			if s.Mission != nil && u != nil {
+				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
+				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitCaptured, u)
+			}
+		}
 	}
 
 	// Phase 1: network drain — single-player no-op [01 §4.4]
@@ -342,21 +416,23 @@ func (s *Session) RegisterAll() {
 			s.Units.Tick(tick)
 		}
 	})
+	// Phase 2b: weapon target acquisition, Aim, fire [06 §3][06 §4][GAP T15] P0-I04.
+	// Runs after units-tick's reload decrement but still in PhaseUnitsScripts
+	// so Aim dispatch remains before normal COB drain of the same tick [GAP T15] C17.
+	s.Kernel.Register(kernel.PhaseUnitsScripts, "weapons-fire", func(tick uint32) {
+		if s.Combat != nil && s.Units != nil {
+			s.Combat.TickWeapons(tick, s.Units, s.Vis, s.World, s.Econ, s.Catalog, rng.Global.Sim, rng.Global.Crt)
+		}
+	})
 
 	// Phase 3: projectile integration and collision [01 §4.4]
 	s.Kernel.Register(kernel.PhaseProjectiles, "projectiles", func(tick uint32) {
 		if s.Combat != nil {
-			// combat motion, collision, impact — delegate to combat service.
+			// combat motion, collision, impact — delegate to combat service [06 §5][06 §6][06 §8][06 §9] P0-I04.
 			// The service is the sole projectile allocation authority [06 §5.1][I5].
 			// Per [01 §6.2] the projectile phase captures the count at entry; tail
-			// compaction reads the current count and is handled at phase tail.
-			// Placeholder: no per-tick motion until WU-09-5; keep stub deterministic.
-			s.Combat.ForEachAliveInEntrySpan(func(h pool.Handle, p *combat.Projectile) {
-				// stub: projectile motion handled by combat/motion.go when wired
-				_ = h
-				_ = p
-				_ = tick
-			})
+			// compaction reads the current count and is handled at phase tail [06 §5.2].
+			s.Combat.TickProjectiles(tick, s.Units, s.World, s.Features, s.Vis, s.Econ, s.Catalog, rng.Global.Sim, rng.Global.Crt)
 		}
 	})
 
@@ -571,7 +647,10 @@ func (s *Session) RegisterAll() {
 	// Victory is an AND, defeat an OR, victory first; polled once per
 	// 30 ticks in LOCAL player's slice only for mission type 1 [08
 	// "Evaluation"][P1-01 §3]. This must run before settlement so the
-	// latch freeze gates settlement same tick [P1-01 §2.2].
+	// latch freeze gates settlement same tick [P1-01 §2.2]. Poll cadence uses
+	// the per-player persisted WinLoseTime deadline (sibling of UpdateTime)
+	// advanced by exactly 30 when due [05 "Authoritative settlement order"] C2,
+	// not global tick%30 [P0-I13].
 	s.Kernel.Register(kernel.PhaseOrdersPathEconomy, "trigger-poll", func(tick uint32) {
 		if s.Mission == nil || s.Mission.Type != mission.TypeCampaign {
 			return
@@ -579,24 +658,60 @@ func (s *Session) RegisterAll() {
 		if len(s.Mission.Victory) == 0 && len(s.Mission.Defeat) == 0 {
 			return
 		}
-		if tick%30 != 0 {
-			return
+		// Per-player deadline block [P0-I13][05 "Authoritative settlement order"] C2.
+		isDue := false
+		if s.Econ != nil && int(s.LocalOwner) < 10 {
+			p := &s.Econ.Players[int(s.LocalOwner)]
+			// Unsigned due check: deadline <= tick means due. Mirrors settlement.
+			if p.WinLoseTime > tick {
+				return
+			}
+			// When due, advance by exactly 30 before poll [05 C2]. Single add,
+			// not loop, so catch-up one per tick if behind.
+			p.WinLoseTime += 30
+			isDue = true
+		} else {
+			// Fallback when no economy or invalid local owner (fixture without
+			// persisted deadline): global tick%30 [P0-I13].
+			// TODO(question): persisted per-player WinLoseTime not available; using global fallback.
+			if tick%30 != 0 {
+				return
+			}
+			isDue = true
 		}
-		ctx := triggers.PollContext{Tick: tick, World: s.Units, LocalOwner: 0, EnemyOwner: 1}
+		ctx := triggers.PollContext{Tick: tick, World: s.Units, LocalOwner: s.LocalOwner, EnemyOwner: s.EnemyOwner}
 		v, d := triggers.Evaluate(s.Mission.Victory, s.Mission.Defeat, ctx)
 		s.VictoryDone = s.VictoryDone || v
 		s.DefeatDone = s.DefeatDone || d
-		isDue := tick%30 == 0
+		var latched bool
 		if v {
-			s.Latch.AdvanceWin(isDue)
+			latched = s.Latch.AdvanceWin(isDue)
 		} else if d {
-			s.Latch.AdvanceLose(isDue)
+			latched = s.Latch.AdvanceLose(isDue)
 		}
 		if s.Econ != nil {
 			for i := 0; i < 10; i++ {
 				s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
 				s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
 			}
+		}
+		// Transition to postbattle only when retail latch point reached:
+		// Countdown has crossed below zero and Bits has win/lose [P1-01 §2.2]
+		// [08 "Evaluation"]. This is the sole latch transition; Arm alone
+		// (Countdown 4, Bits not yet set) does not transition [P0-I13].
+		if latched && s.Latch.IsEnding() && s.State == StateBattle {
+			// Feed final statistics/progression after final authoritative tick
+			// [P1-01 §2.3][P1-01 §4]: kills from economy, ticks from clock.
+			// Determine win/lose from latch bits, not just VictoryDone, so
+			// pending outcome is authoritative.
+			win := s.Latch.IsWin()
+			// Apply campaign W/L for mission slot 0 (campaign missions use slot
+			// 0 for single-mission test fixtures; real campaign slot derived from
+			// mission index via mission list — use 0 for now).
+			// TODO(question): campaign slot index for multi-mission persistence not yet threaded; using 0.
+			s.Progress.ApplyCampaignResult(0, win)
+			// Transition to postbattle [08 "Session states"] 6->7.
+			_ = s.TransitionTo(StatePostBattle)
 		}
 	})
 
@@ -890,6 +1005,9 @@ func (s *Session) RegisterAll() {
 	// [P1-01 §7.2]: decrements every tick, not per 30, so latch in 5
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// humanCount==0 [P1-01 §7.2]. Settlement still gated by same latch.
+	// Countdown arms to 4 without yet setting Bits; Bits are written only
+	// when Countdown crosses below zero via TickNoHuman with pending outcome
+	// [P1-01 §2.2][08 "Evaluation"].
 	s.Kernel.Register(kernel.PhaseBarrier, "countdown-nohuman", func(tick uint32) {
 		if s.Mission == nil || s.Mission.Type != mission.TypeCampaign {
 			return
@@ -899,22 +1017,21 @@ func (s *Session) RegisterAll() {
 		}
 		if s.Latch.Countdown < 0 && !s.Latch.IsEnding() {
 			// Not armed and no victory/defeat predicate: no latch yet.
-			// Retail post-loop site still arms to 4 when <0 before decrement
-			// on next predicate? We only decrement if already armed or if
-			// predicate would have armed. Keep armed check here.
 			return
 		}
 		// If already armed (Countdown >=0) decrement every tick [P1-01 §7.2].
 		if s.Latch.Countdown >= 0 {
-			s.Latch.TickNoHuman()
-			if s.Latch.Countdown < 0 {
-				s.Latch.Bits |= LatchBitEnding
-			}
+			latched := s.Latch.TickNoHuman()
 			if s.Econ != nil {
 				for i := 0; i < 10; i++ {
 					s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
 					s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
 				}
+			}
+			if latched && s.Latch.IsEnding() && s.State == StateBattle {
+				win := s.Latch.IsWin()
+				s.Progress.ApplyCampaignResult(0, win)
+				_ = s.TransitionTo(StatePostBattle)
 			}
 		}
 	})
@@ -994,6 +1111,27 @@ func (s *Session) RegisterAll() {
 					fviews = append(fviews, fv)
 				}
 				frame.Features = fviews
+			}
+			if s.Combat != nil {
+				// Publish projectiles for presentation [06 §5.1] P0-I04.
+				for i := 0; i < s.Combat.Count(); i++ {
+					h := pool.Handle(i + 1)
+					if !s.Combat.Alive(h) {
+						continue
+					}
+					if i < 0 || i >= len(s.Combat.Records) {
+						continue
+					}
+					p := s.Combat.Records[i]
+					frame.Projectiles = append(frame.Projectiles, snapshot.ProjectileView{
+						Handle:   h,
+						X:        p.Pos.X,
+						Y:        p.Pos.Y,
+						Z:        p.Pos.Z,
+						WeaponID: p.WeaponID,
+						Shooter:  p.Shooter,
+					})
+				}
 			}
 			s.Snapshot.Publish(frame)
 		}

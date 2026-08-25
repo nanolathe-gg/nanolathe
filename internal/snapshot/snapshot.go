@@ -38,11 +38,13 @@ type UnitView struct {
 	FootX, FootZ         int8    // packed footprint extents in cells [04 §6.2]
 }
 
-// ProjectileView is a placeholder for the projectile presentation view.
-// Later phases (combat) populate this type and write Frame.Projectiles. One
-// writer per Frame field; dispatches that extend Frame are serialized per
-// ORCHESTRATION §4. Currently empty so the package compiles before phase 9.
-type ProjectileView struct{}
+// ProjectileView is the projectile presentation view [06 §5.1] P0-I04.
+type ProjectileView struct {
+	Handle   pool.Handle
+	X, Y, Z  numeric.Fixed
+	WeaponID int32
+	Shooter  pool.Handle
+}
 
 // FeatureView is the presentation view of one live feature [05 "Feature instance and terrain cell"].
 // Published by the features phase and consumed by the renderer. Fields are a

@@ -1,103 +1,133 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/gui"
-	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// Front-end shell. The main menu is the retail MAINMENU.GUI panel drawn with
-// its retail art: BackTile background and BUTTONS0 staged buttons from
-// commongui.gaf, Credits art from mainmenu.gaf [fmt gui]. Single-player and
-// skirmish setup are rendered in the same 640×480 logical space while their
-// retail .gui panels are brought across incrementally.
-
-// shellMode selects the front-end screen.
+// shellMode is the retail frontend state. The menu screens deliberately map
+// one-to-one to the retail GUI files; there is no Nanolathe-owned layout.
 type shellMode uint8
 
 const (
-	modeMenuMain     shellMode = iota // retail MAINMENU.GUI
-	modeMenuSingle                    // retail SINGLE-player mode chooser
-	modeMenuMap                       // retail skirmish map selection
-	modeMenuSkirmish                  // retail skirmish setup/lobby
-	modeBattle                        // live battle view (client morphs)
+	modeMenuMain shellMode = iota
+	modeMenuSingle
+	modeMenuMission
+	modeMenuMap
+	modeMenuSkirmish
+	modeBattle
 )
 
-// menuAssets holds the retail front-end art for the main menu.
-type menuAssets struct {
-	gui      *gui.Window
-	commong  *formats.GAF
-	mainmenu *formats.GAF
-	titlscrn *formats.PCX // retail main-menu background (logo + button plates)
-	fnt      *formats.FNT
-	pal      *palette.Tables
+type retailPanelAssets struct {
+	window     *gui.Window
+	background *formats.PCX
+	art        *formats.GAF
 }
 
-// gameShell owns the window, the front-end flow, and the battle hand-off.
+// menuAssets is the mounted retail frontend resource set. All menu pixels,
+// widgets and text font come from the same files TotalA.exe selects.
+type menuAssets struct {
+	common          *formats.GAF
+	logos           *formats.GAF
+	font            *formats.FNT
+	pal             *palette.Tables
+	panel           map[shellMode]*retailPanelAssets
+	message         *retailPanelAssets
+	missionCampaign *formats.PCX
+	missionSmall    *formats.PCX
+	missionAny      *formats.PCX
+}
+
+// gameShell owns only frontend state and the battle hand-off. Menu state is
+// kept in retailPanelState in retail_menu.go and is reset whenever retail
+// opens a new .GUI panel.
 type gameShell struct {
 	opts Options
 	cs   *contentSet
 
-	mode         shellMode
-	assets       *menuAssets
-	maps         []string // skirmish-capable map names (OTA with Network schema)
+	mode   shellMode
+	assets *menuAssets
+	font   *formats.FNT
+
+	maps         []string
+	mapLabels    []string
 	mapIdx       int
-	pressed      int // gadget index currently pressed, -1 none
+	mapReturn    shellMode
+	mapData      map[string]*retailMapData
 	setup        session.SkirmishConfig
 	selectedSlot int
-	setupFocus   int
-	menuMessage  string
+	// retailControllers preserves the numeric Controller field that TotalA.exe
+	// puts in each Player%d row: 0=open, 1=human, 2=computer. The session
+	// package has a separate compatibility representation, so the conversion
+	// happens only at battle entry.
+	retailControllers    [session.SkirmishMaxPlayers]int
+	retailControllersSet bool
+
+	campaigns              []mission.Campaign
+	campaignOptions        []mission.Campaign
+	campaignIdx            int
+	missionIdx             int
+	missionAny             bool
+	missionSide            int
+	missionDifficultyValue int
+
+	panel        *retailPanelState
+	modal        *retailPanelState
+	modalPressed bool
+
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// left button is down on an associated list scrollbar.  It is presentation
+	// state only; the list's top item remains the model used by the authored
+	// MAPNAMES/Campaign/Missions controls.
+	scrollDrag         retailScrollDrag
+	retailPressed      int
+	retailRightPressed int
 
 	cam    *camera.Camera
 	battle *battleSession
-	fnt    *formats.FNT
-
-	clickX, clickY int32
-	clickEdge      bool
-	pickerHot      int // picker row under cursor, -1 none
-	pickerPressed  int
 }
 
-// runGameShell is the windowed entry: menus by default; straight into the
-// battle view when --map was supplied (dev/testing path).
+// runGameShell is the windowed entry: retail menus by default; straight into
+// the battle view when --map was supplied (the established development path).
 func runGameShell(opts Options, cs *contentSet) error {
-	shell := &gameShell{opts: opts, cs: cs}
 	if opts.Map != "" {
-		// startBattle only morphs an existing shell client; the --map path
-		// has no menu, so launch the battle view with its own client.
 		return runBattleView(opts, cs)
 	}
-	fmt.Fprintln(os.Stderr, "nanolathe: shell: enumerating skirmish maps")
+
+	shell := &gameShell{opts: opts, cs: cs, mode: modeMenuMain}
 	maps, err := enumerateSkirmishMaps(cs.fs)
 	if err != nil {
 		return err
 	}
-	if len(maps) == 0 {
-		return fmt.Errorf("nanolathe: no skirmish-capable maps found under the mounted install")
-	}
 	shell.maps = maps
-	shell.mode = modeMenuMain
-	shell.setup = newSkirmishMenuConfig(maps[0])
-	shell.pressed = -1
-	shell.pickerHot = -1
-	shell.pickerPressed = -1
-	fmt.Fprintf(os.Stderr, "nanolathe: shell: %d skirmish maps, loading front-end art\n", len(maps))
-
-	shell.assets = loadMenuAssets(cs)
-	if shell.assets != nil && shell.assets.fnt != nil {
-		shell.fnt = shell.assets.fnt
+	shell.mapLabels = make([]string, len(maps))
+	for i, name := range maps {
+		shell.mapLabels[i] = name
 	}
+	mapName := ""
+	if len(maps) != 0 {
+		mapName = maps[0]
+	}
+	shell.setup = newSkirmishMenuConfig(mapName)
+	shell.missionDifficultyValue = session.SkirmishDefaultDifficulty
+	shell.assets = loadMenuAssets(cs)
+	if shell.assets != nil {
+		shell.font = shell.assets.font
+	}
+	shell.openMenu(modeMenuMain)
 
 	const winW, winH = 640, 480
 	shell.cam = &camera.Camera{X: 0, Z: 0, ViewW: winW, ViewH: winH, MapW: winW, MapH: winH}
@@ -118,40 +148,104 @@ func runGameShell(opts Options, cs *contentSet) error {
 	cl.SetModelFS(cs.fs)
 	cl.SetCamera(shell.cam)
 	if shell.assets != nil && shell.assets.pal != nil {
-		cl.SetPalette(shell.assets.pal)
+		cl.SetGUIPalette(shell.assets.pal)
 	}
-	if shell.fnt != nil {
-		cl.SetFNT(shell.fnt)
+	if shell.font != nil {
+		cl.SetFNT(shell.font)
 	}
 	cl.Overlay = func(c *client.Client) { shell.draw(c) }
-	fmt.Fprintln(os.Stderr, "nanolathe: shell: opening window")
+	fmt.Fprintf(os.Stderr, "nanolathe: retail frontend: %d skirmish maps\n", len(maps))
 	return client.RunGame(cl)
 }
 
-// loadMenuAssets loads the retail front-end art; any piece may fail nil and
-// the shell falls back to flat panels so the menu still works.
 func loadMenuAssets(cs *contentSet) *menuAssets {
-	a := &menuAssets{}
-	if w, err := gui.Load(cs.fs, "guis/mainmenu.gui"); err == nil {
-		a.gui = w
+	a := &menuAssets{panel: make(map[shellMode]*retailPanelAssets)}
+	if cs == nil || cs.fs == nil {
+		return a
 	}
 	if g, err := formats.LoadGAFFile(cs.fs, "anims/commongui.gaf"); err == nil {
-		a.commong = g
+		a.common = g
 	}
-	if g, err := formats.LoadGAFFile(cs.fs, "anims/mainmenu.gaf"); err == nil {
-		a.mainmenu = g
+	if g, err := formats.LoadGAFFile(cs.fs, "textures/logos.gaf"); err == nil {
+		a.logos = g
 	}
-	a.fnt = loadFNT(cs)
+	if f, err := formats.LoadFNTFile(cs.fs, "fonts/smlfont.fnt"); err == nil {
+		a.font = f
+	}
 	if p, err := palette.Load(cs.fs); err == nil {
-		a.pal = p // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		a.pal = p
 	}
-	if p, err := formats.LoadPCXFile(cs.fs, "bitmaps/titlscrn.pcx"); err == nil {
-		a.titlscrn = p
+	a.panel[modeMenuMain] = loadRetailPanel(cs, "guis/mainmenu.gui", "bitmaps/frontendx.pcx", "anims/mainmenu.gaf")
+	a.panel[modeMenuSingle] = loadRetailPanel(cs, "guis/single.gui", "bitmaps/singlebg.pcx", "anims/single.gaf")
+	a.panel[modeMenuMission] = loadRetailPanel(cs, "guis/newgame.gui", "bitmaps/newcampaign4x.pcx", "anims/newgame.gaf")
+	a.panel[modeMenuMap] = loadRetailPanel(cs, "guis/selmap.gui", "bitmaps/selectgame2x.pcx", "")
+	a.panel[modeMenuSkirmish] = loadRetailPanel(cs, "guis/skirmish.gui", "bitmaps/skirmsetup4x.pcx", "anims/skirmish.gaf")
+	a.message = loadRetailPanel(cs, "guis/msgbox.gui", "", "")
+	if p, err := formats.LoadPCXFile(cs.fs, "bitmaps/newcampaign4.pcx"); err == nil {
+		a.missionCampaign = p
+	}
+	if p, err := formats.LoadPCXFile(cs.fs, "bitmaps/newcampaign4x.pcx"); err == nil {
+		a.missionSmall = p
+	}
+	if p, err := formats.LoadPCXFile(cs.fs, "bitmaps/playanygame4.pcx"); err == nil {
+		a.missionAny = p
 	}
 	return a
 }
 
-// step dispatches by mode; menus tick nothing, battle drives its session.
+func loadRetailPanel(cs *contentSet, guiName, pcxName, gafName string) *retailPanelAssets {
+	if cs == nil || cs.fs == nil {
+		return nil
+	}
+	p := &retailPanelAssets{}
+	if w, err := gui.Load(cs.fs, guiName); err == nil {
+		p.window = w
+	}
+	if pcxName != "" {
+		if bg, err := formats.LoadPCXFile(cs.fs, pcxName); err == nil {
+			p.background = bg
+		}
+	}
+	if gafName != "" {
+		if g, err := formats.LoadGAFFile(cs.fs, gafName); err == nil {
+			p.art = g
+		}
+	}
+	return p
+}
+
+func (g *gameShell) openMenu(mode shellMode) {
+	g.mode = mode
+	g.panel = nil
+	g.modal = nil
+	g.modalPressed = false
+	g.scrollDrag = retailScrollDrag{}
+	g.retailPressed = -1
+	g.retailRightPressed = -1
+	if g.assets != nil {
+		if mode == modeMenuMission {
+			// NEWGAME.GUI is reused for both New Campaign and Play Any Game.
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// Any branch, so restore/apply that runtime mutation before the
+			// panel state takes its snapshot.
+			g.applyRetailMissionLayout()
+		}
+		if p := g.assets.panel[mode]; p != nil && p.window != nil {
+			g.panel = newRetailPanelState(p.window)
+		}
+	}
+	if mode == modeMenuSkirmish {
+		g.installSkirmishDynamicGadgets()
+		if g.assets != nil {
+			if p := g.assets.panel[mode]; p != nil && p.window != nil {
+				g.panel = newRetailPanelState(p.window)
+			}
+		}
+	}
+	g.refreshRetailPanel()
+	g.resolveRetailButtonGeometry()
+}
+
 func (g *gameShell) step(delta float64, cl *client.Client) {
 	switch g.mode {
 	case modeBattle:
@@ -163,24 +257,54 @@ func (g *gameShell) step(delta float64, cl *client.Client) {
 	}
 }
 
-// startBattle transitions the shell into the live battle view in-process.
+// startBattle transitions the shell into the live skirmish view in-process.
 func (g *gameShell) startBattle(mapName string) error {
 	opts := g.opts
 	opts.Map = mapName
-	cfg := g.setup
-	cfg.MapName = mapName
+	cfg := g.skirmishConfigForStart(mapName)
 	sess, cat, err := newBattleSessionWithConfig(opts, g.cs, cfg)
 	if err != nil {
 		return err
 	}
+	return g.enterBattle(sess, cat)
+}
+
+func (g *gameShell) startMission() error {
+	if g.campaignIdx < 0 || g.campaignIdx >= len(g.campaignOptions) {
+		return fmt.Errorf("no campaign selected")
+	}
+	c := g.campaignOptions[g.campaignIdx]
+	if g.missionIdx < 0 || g.missionIdx >= len(c.Missions) {
+		return fmt.Errorf("no mission selected")
+	}
+	cat, err := content.Compile(g.cs.fs)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	stub := c.Missions[g.missionIdx]
+	path := fmt.Sprintf("%s:MISSION%d", c.Path, stub.Index)
+	sess, err := session.NewMissionWithFS(g.cs.fs, cat, path, g.missionDifficulty())
+	if err != nil {
+		return err
+	}
+	return g.enterBattle(sess, cat)
+}
+
+func (g *gameShell) missionDifficulty() int {
+	return g.missionDifficultyValue
+}
+
+func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) error {
+	if sess == nil {
+		return fmt.Errorf("nil session")
+	}
 	terrain := sess.World
 	if terrain == nil {
-		return fmt.Errorf("selected map %q has no terrain data", mapName)
+		return fmt.Errorf("selected mission has no terrain data")
 	}
 	const winW, winH = 640, 480
 	g.cam = &camera.Camera{
-		X: 0, Z: 0,
-		ViewW: winW, ViewH: winH,
+		X: 0, Z: 0, ViewW: winW, ViewH: winH,
 		MapW: int32(terrain.CellW * 16), MapH: int32(terrain.CellH * 16),
 	}
 	g.cam.Pan(0, 0)
@@ -192,37 +316,38 @@ func (g *gameShell) startBattle(mapName string) error {
 		clPtr.SetTerrain(terrain)
 		clPtr.SetCamera(g.cam)
 		if pal := loadPalette(g.cs); pal != nil {
-			clPtr.SetPalette(pal) // battle draws through PALETTE.PAL [03 §4.3]
+			clPtr.SetPalette(pal)
 		}
 	}
 	return nil
 }
 
-// enumerateSkirmishMaps lists map names whose OTA carries a Network schema —
-// the only maps retail skirmish can select [08 "Schema choice"]. Names are the
-// lowercase OTA basenames, sorted [I1].
+// enumerateSkirmishMaps is the retail map census: only OTA files with a
+// Network schema are put into the SELMAP MAPNAMES list [08 "Schema choice"].
 func enumerateSkirmishMaps(fs *vfs.FS) ([]string, error) {
-	var paths []string
-	for _, e := range fs.Entries() {
-		p := strings.ToLower(e.Path)
-		if strings.HasPrefix(p, "maps/") && strings.HasSuffix(p, ".ota") {
-			paths = append(paths, e.Path)
-		}
+	if fs == nil {
+		return nil, fmt.Errorf("nil VFS")
 	}
-	sort.Strings(paths)
-	seen := make(map[string]bool, len(paths))
-	names := make([]string, 0, len(paths))
-	for _, p := range paths {
+	entries, err := fs.RetailReadDir("maps")
+	if err != nil {
+		if errors.Is(err, vfs.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	seen := make(map[string]bool, len(entries))
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir || !strings.HasSuffix(strings.ToLower(entry.Name), ".ota") {
+			continue
+		}
+		p := entry.Path
 		ota, err := formats.LoadOTAFile(fs, p)
 		if err != nil || !ota.HasNetworkSchema() {
-			continue // mission-only map: retail skirmish cannot select it
+			continue
 		}
-		base := p
-		if i := strings.LastIndexByte(base, '/'); i >= 0 {
-			base = base[i+1:]
-		}
-		base = strings.TrimSuffix(base, ".ota")
-		base = strings.TrimSuffix(base, ".OTA")
+		base := entry.Name
+		base = strings.TrimSuffix(strings.TrimSuffix(base, ".ota"), ".OTA")
 		key := strings.ToLower(base)
 		if seen[key] {
 			continue
@@ -230,306 +355,16 @@ func enumerateSkirmishMaps(fs *vfs.FS) ([]string, error) {
 		seen[key] = true
 		names = append(names, key)
 	}
-	sort.Strings(names)
 	return names, nil
 }
 
-// menuInput polls menu-mode input; no simulation ticks.
-func (g *gameShell) menuInput(cl *client.Client) {
-	in := cl.Input()
-	if in == nil {
-		return
-	}
-	mouse := in.Mouse
-	kbd := in.Kbd
-	if mouse.Pressed(input.MouseButtonLeft) {
-		g.clickX, g.clickY = int32(mouse.X), int32(mouse.Y)
-		g.clickEdge = true
-		if g.mode == modeMenuMain {
-			g.dispatchMenuClick()
-			g.clickEdge = false
-		}
-	}
-	if kbd.KeyDown(input.KeyEscape) {
-		switch g.mode {
-		case modeMenuSingle:
-			g.mode = modeMenuMain
-		case modeMenuMap:
-			g.mode = modeMenuSingle
-		case modeMenuSkirmish:
-			g.mode = modeMenuMap
-		}
-	}
-	if g.mode == modeMenuMap && len(g.maps) > 0 {
-		if kbd.KeyDown(input.KeyUp) {
-			g.mapIdx = (g.mapIdx - 1 + len(g.maps)) % len(g.maps)
-		}
-		if kbd.KeyDown(input.KeyDown) {
-			g.mapIdx = (g.mapIdx + 1) % len(g.maps)
-		}
-		if kbd.KeyDown(input.KeyEnter) || kbd.KeyDown(input.KeySpace) {
-			g.setup.MapName = g.maps[g.mapIdx]
-			g.mode = modeMenuSkirmish
-		}
-	}
-	if g.mode == modeMenuSingle && (kbd.KeyDown(input.KeyEnter) || kbd.KeyDown(input.KeySpace)) {
-		// The retail single-player chooser opens with Skirmish selected. Campaign
-		// remains a separate mission-list flow and is not silently mapped here.
-		g.mode = modeMenuMap
-	}
-	if g.mode == modeMenuSkirmish {
-		g.setupInput(kbd)
-	}
-}
-
-// fntTextWidth measures a string in the loaded font (0 when unavailable).
-func fntTextWidth(fnt *formats.FNT, s string) int {
-	if fnt == nil {
-		return 0
-	}
-	w := 0
-	for i := 0; i < len(s); i++ {
-		if gl := fnt.Glyphs[s[i]]; gl != nil {
-			w += int(gl.Width)
-		}
-	}
-	return w
-}
-
-// draw renders the active front-end screen.
 func (g *gameShell) draw(c *client.Client) {
 	if g.mode == modeBattle {
 		if g.battle != nil {
-			g.battle.drawOverlay(c, g.fnt)
+			g.battle.drawOverlay(c, g.font)
 		}
 		return
 	}
-	a := g.assets
-	switch g.mode {
-	case modeMenuMain:
-		g.drawRetailMenu(c, a)
-	case modeMenuSingle:
-		g.drawRetailBackground(c, a)
-		g.drawSingleMenu(c, a)
-	case modeMenuMap:
-		g.drawRetailBackground(c, a)
-		g.drawPicker(c, a)
-	case modeMenuSkirmish:
-		g.drawRetailBackground(c, a)
-		g.drawSkirmishSetup(c, a)
-	}
-	g.clickEdge = false
-}
-
-// drawRetailBackground renders the shared 640×480 retail title background.
-// Child panels use it without leaving the MAINMENU button gadgets underneath.
-func (g *gameShell) drawRetailBackground(c *client.Client, a *menuAssets) {
-	c.UIFillRect(0, 0, 640, 480, 0)
-	if a == nil {
-		return
-	}
-	// Background: retail title screen (logo, button plates, pipes); BackTile
-	// is the .gui panel fallback when the PCX is unavailable.
-	if a.titlscrn != nil {
-		c.UIBlitPCX(a.titlscrn, 0, 0)
-	}
-	if a.titlscrn == nil && a.commong != nil {
-		if e, ok := a.commong.Find("BackTile"); ok && len(e.Frames) > 0 && e.Frames[0].Frame != nil {
-			f := e.Frames[0].Frame
-			for y := 0; y < 480; y += int(f.Height) {
-				for x := 0; x < 640; x += int(f.Width) {
-					c.UIBlit(f, x, y)
-				}
-			}
-		}
-	}
-}
-
-// drawRetailMenu renders MAINMENU.GUI with retail art: BackTile background,
-// BUTTONS0 96×20 staged frames (12 rest, 13 pressed), Credits art [fmt gui].
-func (g *gameShell) drawRetailMenu(c *client.Client, a *menuAssets) {
-	g.drawRetailBackground(c, a)
-	if a == nil {
-		return
-	}
-	if a.gui == nil {
-		return
-	}
-	for i, gad := range a.gui.Gadgets {
-		if i == 0 || gad.Active == 0 {
-			continue
-		}
-		switch gad.Kind {
-		case gui.KindButton:
-			pressed := g.pressed == i
-			g.drawButton(c, a, gad, pressed)
-		case gui.KindLabel:
-			// "Debug Build" label ships inactive in retail data; skip active=0
-			// above, and draw any active label centered in its rect.
-			w := fntTextWidth(g.fnt, gad.Text)
-			x := int(gad.Rect.X) + int(gad.Rect.W)/2 - w/2
-			y := int(gad.Rect.Y)
-			c.UIText(g.fnt, gad.Text, x, y, 255)
-		}
-	}
-}
-
-// drawButton stamps the retail button frame and its centered label.
-func (g *gameShell) drawButton(c *client.Client, a *menuAssets, gad gui.Gadget, pressed bool) {
-	frame := -1
-	if a.commong != nil {
-		if e, ok := a.commong.Find("BUTTONS0"); ok {
-			// Size-matched family: frames come in groups of four
-			// (rest, pressed, disabled, spare) [fmt gui "Button"].
-			for base := 0; base+3 < len(e.Frames); base += 4 {
-				f0 := e.Frames[base].Frame
-				if f0 == nil {
-					continue
-				}
-				if int(f0.Width) == int(gad.Rect.W) && int(f0.Height) == int(gad.Rect.H) {
-					if pressed {
-						frame = base + 1
-					} else {
-						frame = base
-					}
-					break
-				}
-			}
-			if frame >= 0 {
-				c.UIBlit(e.Frames[frame].Frame, int(gad.Rect.X), int(gad.Rect.Y))
-			}
-		}
-	}
-	// Credits gadget uses its own art entry from mainmenu.gaf.
-	if gad.Name == "Credits" && a.mainmenu != nil {
-		if e, ok := a.mainmenu.Find("Credits"); ok && len(e.Frames) > 0 {
-			c.UIBlit(e.Frames[0].Frame, int(gad.Rect.X), int(gad.Rect.Y))
-		}
-	}
-	if gad.Text == "" || g.fnt == nil {
-		return
-	}
-	w := fntTextWidth(g.fnt, gad.Text)
-	x := int(gad.Rect.X) + int(gad.Rect.W)/2 - w/2
-	y := int(gad.Rect.Y) + int(gad.Rect.H)/2 - int(g.fnt.Height)/2
-	c.UIText(g.fnt, gad.Text, x, y, 255)
-}
-
-// pickerRows is how many map rows the stand-in picker shows at once.
-const pickerRows = 14
-
-// drawPicker renders the retail skirmish map selection stage. The selected map
-// is passed to the setup/lobby screen rather than starting a battle directly.
-func (g *gameShell) drawPicker(c *client.Client, a *menuAssets) {
-	c.UIFrameRect(96, 60, 448, 300, 250)
-	c.UIText(g.fnt, "SKIRMISH — choose map (up/down or click, then SELECT)", 104, 66, 250)
-	if len(g.maps) == 0 {
-		return
-	}
-	g.pickerHot = -1
-	start := g.mapIdx - pickerRows/2
-	if start < 0 {
-		start = 0
-	}
-	if end := start + pickerRows; end > len(g.maps) {
-		start = len(g.maps) - pickerRows
-		if start < 0 {
-			start = 0
-		}
-	}
-	for row := 0; row < pickerRows; row++ {
-		idx := start + row
-		if idx >= len(g.maps) {
-			break
-		}
-		y := int32(84 + row*14)
-		hot := g.clickEdge && g.clickY >= y && g.clickY < y+14 &&
-			g.clickX >= 104 && g.clickX < 536
-		if idx == g.mapIdx {
-			c.UIFillRect(100, int(y), 440, 13, 30)
-		} else if hot {
-			g.pickerHot = idx
-			c.UIFillRect(100, int(y), 440, 13, 12)
-		}
-		c.UIText(g.fnt, g.maps[idx], 104, int(y), 250)
-		if hot {
-			g.mapIdx = idx
-			g.clickEdge = false
-		}
-	}
-	// SELECT / BACK reuse the retail 96×20 button art.
-	startRect := gui.Rect{X: 148, Y: 380, W: 96, H: 20}
-	backRect := gui.Rect{X: 396, Y: 380, W: 96, H: 20}
-	g.drawPickerButton(c, a, "SELECT", startRect, g.clickEdge && inRect(g.clickX, g.clickY, startRect))
-	g.drawPickerButton(c, a, "BACK", backRect, g.clickEdge && inRect(g.clickX, g.clickY, backRect))
-	if g.clickEdge {
-		if inRect(g.clickX, g.clickY, startRect) {
-			g.clickEdge = false
-			g.setup.MapName = g.maps[g.mapIdx]
-			g.mode = modeMenuSkirmish
-			return
-		}
-		if inRect(g.clickX, g.clickY, backRect) {
-			g.clickEdge = false
-			g.mode = modeMenuSingle
-		}
-	}
-}
-
-func (g *gameShell) drawPickerButton(c *client.Client, a *menuAssets, label string, r gui.Rect, pressed bool) {
-	if a != nil && a.commong != nil {
-		if e, ok := a.commong.Find("BUTTONS0"); ok {
-			for base := 0; base+3 < len(e.Frames); base += 4 {
-				f0 := e.Frames[base].Frame
-				if f0 == nil {
-					continue
-				}
-				if int(f0.Width) == int(r.W) && int(f0.Height) == int(r.H) {
-					idx := base
-					if pressed {
-						idx = base + 1
-					}
-					c.UIBlit(e.Frames[idx].Frame, int(r.X), int(r.Y))
-					break
-				}
-			}
-		}
-	}
-	w := fntTextWidth(g.fnt, label)
-	fontHeight := 12
-	if g.fnt != nil {
-		fontHeight = int(g.fnt.Height)
-	}
-	c.UIText(g.fnt, label, int(r.X)+int(r.W)/2-w/2, int(r.Y)+int(r.H)/2-fontHeight/2, 255)
-}
-
-func inRect(x, y int32, r gui.Rect) bool {
-	return x >= r.X && x < r.X+r.W && y >= r.Y && y < r.Y+r.H
-}
-
-// dispatchMenuClick hit-tests the retail main menu gadgets and runs the
-// Nanolathe bindings (SINGLE → single-player chooser; EXIT → quit;
-// MULTI/INTRO/Credits are present but inert until their retail flows land).
-func (g *gameShell) dispatchMenuClick() {
-	if g.assets == nil || g.assets.gui == nil {
-		return
-	}
-	for i, gad := range g.assets.gui.Gadgets {
-		if i == 0 || gad.Kind != gui.KindButton || gad.Active == 0 {
-			continue
-		}
-		r := gad.Rect
-		if g.clickX >= int32(r.X) && g.clickX < int32(r.X)+int32(r.W) &&
-			g.clickY >= int32(r.Y) && g.clickY < int32(r.Y)+int32(r.H) {
-			switch gad.Name {
-			case "SINGLE":
-				g.mode = modeMenuSingle
-			case "EXIT":
-				os.Exit(0)
-			default:
-				fmt.Fprintf(os.Stderr, "nanolathe: menu %q not wired yet\n", gad.Name)
-			}
-			return
-		}
-	}
+	g.drawRetailPanel(c)
+	g.drawRetailModal(c)
 }

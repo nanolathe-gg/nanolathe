@@ -14,13 +14,17 @@ type MouseState struct {
 	ScrollX, ScrollY float32
 	scrolled         bool
 
-	edges   [4]bool // just-pressed this update, indexed by MouseButton
-	buttons [4]bool // currently down
-	moved   bool
+	edges    [4]bool // just-pressed this update, indexed by MouseButton
+	released [4]bool // just-released this update, indexed by MouseButton
+	buttons  [4]bool // currently down
+	moved    bool
 }
 
 // Pressed reports a button that went down this update.
 func (m *MouseState) Pressed(b input.MouseButton) bool { return m.edges[b] }
+
+// Released reports a button that went up this update.
+func (m *MouseState) Released(b input.MouseButton) bool { return m.released[b] }
 
 // Held reports a button currently down.
 func (m *MouseState) Held(b input.MouseButton) bool { return m.buttons[b] }
@@ -74,6 +78,7 @@ func (in *InputState) pollEbiten() {
 	m := in.Mouse
 	k := in.Kbd
 	m.edges = [4]bool{}
+	m.released = [4]bool{}
 	m.scrolled = false
 	m.moved = false
 	k.edges = [input.KeyCount]bool{}
@@ -95,6 +100,7 @@ func (in *InputState) pollEbiten() {
 		}
 		down := ebiten.IsMouseButtonPressed(eb)
 		m.edges[b] = down && !m.buttons[b]
+		m.released[b] = !down && m.buttons[b]
 		m.buttons[b] = down
 	}
 	wx, wy := ebiten.Wheel()

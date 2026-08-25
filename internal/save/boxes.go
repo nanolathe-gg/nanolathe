@@ -732,13 +732,15 @@ var (
 
 // StateV1Version is the version of the Nanolathe StateV1 box [PLAN_14 C18].
 // Increment when the codec changes; decoder rejects unknown versions.
+// Version 2 adds full continuation per P0-I11 [08 "Save"] [01 §6] [05][04].
 
-const StateV1VersionConst uint32 = 1
+const StateV1VersionConst uint32 = 2
+const StateV1Version1 uint32 = 1
 
 // UnitRecord is one slot-indexed unit record, canonically ordered by slot
 // ascending for determinism (I1) [01 §6.1] [PLAN_14 C18]. Reconstruction uses
-// only published package APIs (e.g., units.World.Create via catalog lookup) —
-// no direct memory image.
+// only published package APIs (e.g., units.World.CreateWithForcedSlot via catalog lookup) —
+// no direct memory image [P0-I11]. Slots are forced identity, not lowest-free [01 §6.1].
 type UnitRecord struct {
 	Slot      int32
 	DefName   string
@@ -747,11 +749,68 @@ type UnitRecord struct {
 	Health    int32
 	Remaining float32 // construction remaining 1→0 [05 "Construction target state"] [I2]
 	Flags     uint32
+	// Extended per-unit mutable state for full continuation [P0-I11][01 §6][04][05][06].
+	MaxHealth         int32  // [04 §2.3]
+	Dying             bool   // death mark before Cleanup [04 §2.4]
+	DeathCause        uint8  // [04 §2.4]
+	Pending           uint32 // capability word [04 §3.3]
+	Kills             int32  // +0xB8 [P0-15]
+	ParalyzeExpire    uint32 // [06 §10]
+	Stunned           bool   // [06 §10]
+	SpotMetal         float32
+	PlacementIdx      int32
+	PlacementIdent    string
+	PlacementUnitName string
+	MoveMode          uint8  // [04 §8.1] 0 none,1 parked,2 active
+	MoveHeading       uint16 // 0..65535 [04 §5.1]
+	MoveSpeed         int32  // 16.16 fixed raw
+	Carrier           int32  // pool.Handle 0 null [04 §4.4]
+	Cargo             []int32
+	Slots             [3]SlotRecord // three weapon slots [06 §1.2]
+	HasCOB            bool
+	COB               COBRecord // per-unit COB VM [04 §4.2][GAP T15]
+}
+
+// SlotRecord is one weapon slot per unit [06 §1.2] C1 [P0-I11].
+type SlotRecord struct {
+	WeaponName   string // canonical weapon key, empty if none
+	Reload       int32
+	Flags        uint8
+	DesiredYaw   uint16
+	DesiredPitch uint16
+	Ammo         int32
+	MuzzlePiece  int32
+	AimIssue     bool
+	AimReady     bool
+	TargetKind   uint8 // 0 none,1 unit,2 ground [06 §1.2]
+	TargetUnit   int32
+	TargetX      int32
+	TargetZ      int32
+}
+
+// COBRecord captures per-unit COB VM threads/stacks/statics [04 §4.2][GAP T15][P0-I11].
+type COBRecord struct {
+	Statics []int32
+	Threads [8]ThreadRecord
+}
+
+// ThreadRecord captures one COB thread [04 §4.2] 8*164 identity (I13) [P0-I11].
+type ThreadRecord struct {
+	Status     int32
+	PC         int32
+	SP         int32
+	Sleep      int32
+	WaitPiece  int32
+	WaitAxis   int32
+	WaitThread int32
+	SignalMask int32
+	Stack      []int32 // 0..10 depth [04 §4.2]
 }
 
 // QueueRecord is a per-unit queue payload stub; real engine would include the
 // full 86-byte order nodes [01 §6.1] [05 "Factory queue"]; this fixture captures
 // the canonical slot-indexed queue payload principle [PLAN_14 C18].
+// Retained for v1 compatibility; v2 uses Orders for full nodes [P0-I11].
 type QueueRecord struct {
 	UnitSlot int32
 	Kind     string // e.g., "Build", "Move"
@@ -759,11 +818,286 @@ type QueueRecord struct {
 	Payload  []byte // opaque queue bytes, slot-indexed
 }
 
+// OrderRecord is a full 86-byte order node identity [04 §3.2][P0-I11][P0-I03] plus
+// queue segment, canonically ordered for determinism (I1).
+type OrderRecord struct {
+	UnitSlot     int32
+	Segment      uint8  // 0 primary, 1 secondary [04 §3.2]
+	Index        int32  // position within segment
+	Descriptor   string // canonical descriptor name [04 §3.2]
+	Phase        uint8
+	DynamicGate  uint32
+	Deadline     int32
+	Owner        int32
+	Target       int32
+	GoalX        int32
+	GoalY        int32
+	GoalZ        int32
+	GuardX       int16
+	GuardY       int16
+	CachedX      int16
+	CachedY      int16
+	Param1       uint32
+	Param2       uint32
+	Param3       uint32
+	StaticGate   uint32
+	CreationTick uint32
+	Satisfied    uint32
+	Flags        uint32
+	MoveState    uint8
+	PathStatus   uint32
+	BuildDefKey  string
+}
+
+// MovementRouteRecord captures a published route per [04 §7.3] C14–C16 [P0-I11].
+type MovementRouteRecord struct {
+	Unit   int32
+	Count  uint8
+	Active bool
+	Dirty  bool
+	Points [20]PointRecord
+}
+
+// PointRecord holds route lattice point [04 §7.3].
+type PointRecord struct {
+	X int32
+	Z int32
+}
+
+// SchedulerPendingRecord captures a pending path request [04 §7.3] C11 C12 [P0-I11].
+type SchedulerPendingRecord struct {
+	Unit       int32
+	Player     uint8
+	StartX     int32
+	StartZ     int32
+	GoalX      int32
+	GoalZ      int32
+	GoalRadius int32 // for point goal; 0 for exact [04 §7.2]
+	GoalKind   uint8 // 0 point,1 annulus,2 rect,3 saved (only 0 used for now) [04 §7.2]
+}
+
+// EconomySnapshot captures per-player ledger plus unit buckets [05][P0-I11].
+type EconomySnapshot struct {
+	Players     [10]EconomyPlayerRecord
+	UnitBuckets []EconomyUnitBucketRecord // sparse, by handle
+}
+
+// EconomyPlayerRecord mirrors economy.Player fields that affect settlement [05][P0-I11].
+type EconomyPlayerRecord struct {
+	Exists              bool
+	ControllerState     uint8
+	IsObserver          bool
+	StockMetal          float32
+	StockEnergy         float32
+	CapacityMetal       float32
+	CapacityEnergy      float32
+	MirrorMetal         BucketRecord
+	MirrorEnergy        BucketRecord
+	UpdateTime          uint32
+	WinLoseTime         uint32
+	DisplayTimer        uint32
+	WasteMetal          float64
+	WasteEnergy         float64
+	TotalProducedMetal  float64
+	TotalProducedEnergy float64
+	TotalConsumedMetal  float64
+	TotalConsumedEnergy float64
+	PassProducedMetal   float32
+	PassProducedEnergy  float32
+	PassConsumedMetal   float32
+	PassConsumedEnergy  float32
+	ArchivedMetal       BucketRecord
+	ArchivedEnergy      BucketRecord
+	StatusHalfwordAt144 int16
+	StatusWordAt140     int32
+	GameEnded           bool
+	EndGameCountdown    int32
+	Helper1Deadline     uint32
+	Helper2Deadline     uint32
+	ReferencePlayer     int32
+	SensorShareCalls    int32
+}
+
+// BucketRecord mirrors economy.Bucket [05].
+type BucketRecord struct {
+	Production float32
+	Requested  float32
+	Accepted   float32
+	Carry      float32
+}
+
+// EconomyUnitBucketRecord mirrors per-unit economy buckets [05][P0-I11].
+type EconomyUnitBucketRecord struct {
+	Handle   int32
+	Buckets  [2]BucketRecord
+	Archived [2]BucketRecord
+}
+
+// FeaturesSnapshot captures feature pool [05][06 §13.1][P0-I11].
+type FeaturesSnapshot struct {
+	Cursor       int32
+	LastReproIdx int32
+	Instances    []FeatureInstanceRecord
+}
+
+// FeatureInstanceRecord mirrors features.Instance [05][P0-I11].
+type FeatureInstanceRecord struct {
+	DefName         string
+	CX              int32
+	CZ              int32
+	Health          int32
+	MaxHealth       int32
+	ReclaimProgress int32
+	IsBurning       bool
+	BurnCountdown   int32
+	BurnTicks       int32
+	BurnDuration    int32
+	IsSinking       bool
+	Y               int32
+	Vy              int32
+	Settled         bool
+	Status          uint8
+	X               int32
+	Z               int32
+	FootX           int32
+	FootZ           int32
+}
+
+// ProjectileRecord mirrors combat.Projectile [06 §5.1][P0-I11].
+type ProjectileRecord struct {
+	Handle                             int32
+	WeaponID                           int32
+	PosX, PosY, PosZ                   int32
+	StartPosX, StartPosY, StartPosZ    int32
+	TargetPosX, TargetPosY, TargetPosZ int32
+	TargetUnit                         int32
+	TargetProjectile                   int32
+	VelocityX, VelocityY, VelocityZ    int32
+	Speed                              int32
+	Yaw                                uint16
+	Pitch                              uint16
+	Shooter                            int32
+	ShooterSide                        uint8
+	MuzzlePiece                        int16
+	CreationTick                       uint32
+	BurstDeadline                      uint32
+	BurstRemaining                     int32
+	ExpiryTick                         uint32
+	SmokeDeadline                      uint32
+	BeamLatch                          bool
+	TwoPhase                           bool
+	Dead                               bool
+	PropellerYaw                       uint16
+	MeteorPitch                        uint16
+	CacheCellX                         int32
+	CacheCellZ                         int32
+	Scratch5E                          int16
+	State69                            uint8
+	OldMarker                          int16
+}
+
+// AIManagerRecord mirrors ai.Manager [08][P0-I11][PLAN_11].
+type AIManagerRecord struct {
+	Player       uint8
+	Deadlines    [12]uint32 // TaskKindCount is 12 [P0-02]
+	Strategic    StrategicSnapshot
+	Groups       AIGroupsSnapshot
+	SurfaceMetal int32
+	OriginX      int32
+	OriginZ      int32
+}
+
+// StrategicSnapshot mirrors ai.Strategic [08][P0-I11].
+type StrategicSnapshot struct {
+	CenterX                int32
+	CenterZ                int32
+	Radius                 int32
+	LastRefreshTick        uint32
+	LastClassRecomputeTick uint32
+	Counts                 []StrategicCountRecord
+	ClassVectors           []StrategicClassVectorRecord
+	InitVectors            []StrategicInitVectorRecord
+	SingleVectors          []StrategicSingleVectorRecord
+}
+
+type StrategicCountRecord struct {
+	Key   string
+	Value int32
+}
+type StrategicClassVectorRecord struct {
+	Key string
+	C0  int8
+	C1  int8
+	C2  int8
+}
+type StrategicInitVectorRecord struct {
+	Key   string
+	Value int8
+}
+type StrategicSingleVectorRecord struct {
+	Key   string
+	Value int8
+}
+
+// AIGroupsSnapshot mirrors Manager groups
+type AIGroupsSnapshot struct {
+	WaveA    []int32
+	WaveB    []int32
+	Explore  []int32
+	Rally    []int32
+	RegroupA []int32
+	RegroupB []int32
+}
+
+// VisibilitySnapshot mirrors visibility grids [03 §3][P0-I11].
+type VisibilitySnapshot struct {
+	W         int32
+	H         int32
+	WordMask  []uint16
+	ByteGrids [10][]uint8
+	Local     uint8
+	Mode      uint32
+	Status    []VisibilityStatusRecord // per-unit sensor status
+	Decloak   []VisibilityDecloakRecord
+}
+
+// VisibilityStatusRecord mirrors session visStatus map [03 §3.4][P0-I11].
+type VisibilityStatusRecord struct {
+	Handle int32
+	Status uint32
+}
+type VisibilityDecloakRecord struct {
+	Handle   int32
+	Deadline uint32
+}
+
+// LatchSnapshot mirrors session.EndLatch [P1-01][P0-I11].
+type LatchSnapshot struct {
+	Countdown int16
+	Bits      uint16
+	Pending   uint8
+}
+
+// WindSnapshot mirrors world.Wind [01 §7.3][P0-I11].
+type WindSnapshot struct {
+	Min        int32
+	Max        int32
+	Strength   int32
+	Heading    uint16
+	Scalar     float32
+	DirX       int32
+	DirZ       int32
+	NextChange uint32
+	LastChange uint32
+	Changed    bool
+	Pending    bool
+}
+
 // StateV1 is the versioned native continuation box that canonically encodes
-// every mutable authoritative service present in this fixture, slot-indexed,
-// plus both RNG states+draw counts and hash guards [PLAN_14 C18] [GAP T25].
+// every mutable authoritative service, slot-indexed, plus both RNG states+draw counts and hash guards [PLAN_14 C18] [GAP T25] [P0-I11].
+// Version 2 adds full continuation via forced slot identity and full per-system snapshots [P0-I11].
 type StateV1 struct {
-	Version      uint32 // must be 1 [PLAN_14 C18]
+	Version      uint32 // must be 2 [PLAN_14 C18][P0-I11]
 	CatalogHash  string // [02 §5] C12 catalog hash
 	ManifestHash string // vfs.ManifestHash
 
@@ -775,20 +1109,28 @@ type StateV1 struct {
 	Clock clock.State // 28-byte scheduler block [08 "Scheduler and random state in saves"] [01 §7.3]
 
 	Units  []UnitRecord  // sorted by Slot ascending (I1) [01 §6.1]
-	Queues []QueueRecord // sorted by UnitSlot ascending (I1)
+	Queues []QueueRecord // sorted by UnitSlot ascending (I1) — v1 compat retained [P0-I11]
 
-	// TODO(T25): add feature pool, projectile pool, path queues, AI manager,
-	// economy player buckets, construction nodes etc. Their bulk layouts beyond
-	// sampled maps are TODO(T25) [GAP T25]; this fixture proves the codec shape.
+	// P0-I11 full continuation fields (v2 only)
+	Orders           []OrderRecord            // complete order nodes both segments [04 §3.2][P0-I11][P0-I03]
+	MovementRoutes   []MovementRouteRecord    // active routes [04 §7.3][P0-I11]
+	SchedulerPending []SchedulerPendingRecord // pending path requests [04 §7.3][P0-I11]
+	Economy          EconomySnapshot          // buckets and deadlines [05][P0-I11]
+	Features         FeaturesSnapshot         // free lists, burning, sinking [05][P0-I11]
+	Projectiles      []ProjectileRecord       // projectile pool for native continuation [06 §5.1][P0-I11]
+	AI               []AIManagerRecord        // managers task deadlines strategic groups [08][P0-I11]
+	Visibility       VisibilitySnapshot       // mapping/sensor state [03 §3][P0-I11]
+	Latch            LatchSnapshot            // triggers/end latch/campaign progress [P1-01][P0-I11]
+	Wind             WindSnapshot             // wind/meteor state [01 §7.3][P0-I11]
 }
 
 // MarshalStateV1 encodes s into the canonical StateV1 byte layout (I13 exception:
-// bytes cross the save boundary, so layout is the contract) [PLAN_14 C18].
+// bytes cross the save boundary, so layout is the contract) [PLAN_14 C18][P0-I11].
 func MarshalStateV1(s *StateV1) []byte {
 	if s == nil {
 		return nil
 	}
-	// Ensure canonical ordering (I1) [01 §6.1] [PLAN_14 C18].
+	// Ensure canonical ordering (I1) [01 §6.1] [PLAN_14 C18][P0-I11].
 	units := append([]UnitRecord(nil), s.Units...)
 	sort.Slice(units, func(i, j int) bool { return units[i].Slot < units[j].Slot })
 	queues := append([]QueueRecord(nil), s.Queues...)
@@ -798,6 +1140,24 @@ func MarshalStateV1(s *StateV1) []byte {
 		}
 		return queues[i].Kind < queues[j].Kind
 	})
+	orders := append([]OrderRecord(nil), s.Orders...)
+	sort.Slice(orders, func(i, j int) bool {
+		if orders[i].UnitSlot != orders[j].UnitSlot {
+			return orders[i].UnitSlot < orders[j].UnitSlot
+		}
+		if orders[i].Segment != orders[j].Segment {
+			return orders[i].Segment < orders[j].Segment
+		}
+		return orders[i].Index < orders[j].Index
+	})
+	routes := append([]MovementRouteRecord(nil), s.MovementRoutes...)
+	sort.Slice(routes, func(i, j int) bool { return routes[i].Unit < routes[j].Unit })
+	pending := append([]SchedulerPendingRecord(nil), s.SchedulerPending...)
+	sort.Slice(pending, func(i, j int) bool { return pending[i].Unit < pending[j].Unit })
+	proj := append([]ProjectileRecord(nil), s.Projectiles...)
+	sort.Slice(proj, func(i, j int) bool { return proj[i].Handle < proj[j].Handle })
+	ai := append([]AIManagerRecord(nil), s.AI...)
+	sort.Slice(ai, func(i, j int) bool { return ai[i].Player < ai[j].Player })
 	var buf bytes.Buffer
 	ver := s.Version
 	if ver == 0 {
@@ -810,24 +1170,80 @@ func MarshalStateV1(s *StateV1) []byte {
 	binaryWriteUint64(&buf, s.SimDraws)
 	binaryWriteUint32(&buf, s.CrtState)
 	binaryWriteUint64(&buf, s.CrtDraws)
-	// Clock 28 bytes verbatim [08 "Scheduler and random state in saves"] [01 §7.3].
 	clockBox := s.Clock.SaveBox()
 	buf.Write(clockBox[:])
-	// Units [01 §6.1] slot-indexed.
+	// Units [01 §6.1] slot-indexed. v1: 6 fields, v2: extended [P0-I11].
 	binaryWriteUint32(&buf, uint32(len(units)))
 	for _, u := range units {
 		binaryWriteInt32(&buf, u.Slot)
 		writeString(&buf, u.DefName)
 		buf.WriteByte(u.Owner)
-		// pad to 4-byte align for deterministic decoding? No padding needed; consume via binary reads.
 		binaryWriteInt32(&buf, u.X)
 		binaryWriteInt32(&buf, u.Y)
 		binaryWriteInt32(&buf, u.Z)
 		binaryWriteInt32(&buf, u.Health)
 		binaryWriteUint32(&buf, math.Float32bits(u.Remaining))
 		binaryWriteUint32(&buf, u.Flags)
+		if ver >= 2 {
+			binaryWriteInt32(&buf, u.MaxHealth)
+			buf.WriteByte(boolToByte(u.Dying))
+			buf.WriteByte(u.DeathCause)
+			binaryWriteUint32(&buf, u.Pending)
+			binaryWriteInt32(&buf, u.Kills)
+			binaryWriteUint32(&buf, u.ParalyzeExpire)
+			buf.WriteByte(boolToByte(u.Stunned))
+			binaryWriteUint32(&buf, math.Float32bits(u.SpotMetal))
+			binaryWriteInt32(&buf, u.PlacementIdx)
+			writeString(&buf, u.PlacementIdent)
+			writeString(&buf, u.PlacementUnitName)
+			buf.WriteByte(u.MoveMode)
+			binaryWriteUint16(&buf, u.MoveHeading)
+			binaryWriteInt32(&buf, u.MoveSpeed)
+			binaryWriteInt32(&buf, u.Carrier)
+			binaryWriteUint32(&buf, uint32(len(u.Cargo)))
+			for _, h := range u.Cargo {
+				binaryWriteInt32(&buf, h)
+			}
+			for k := 0; k < 3; k++ {
+				sr := u.Slots[k]
+				writeString(&buf, sr.WeaponName)
+				binaryWriteInt32(&buf, sr.Reload)
+				buf.WriteByte(sr.Flags)
+				binaryWriteUint16(&buf, sr.DesiredYaw)
+				binaryWriteUint16(&buf, sr.DesiredPitch)
+				binaryWriteInt32(&buf, sr.Ammo)
+				binaryWriteInt32(&buf, sr.MuzzlePiece)
+				buf.WriteByte(boolToByte(sr.AimIssue))
+				buf.WriteByte(boolToByte(sr.AimReady))
+				buf.WriteByte(sr.TargetKind)
+				binaryWriteInt32(&buf, sr.TargetUnit)
+				binaryWriteInt32(&buf, sr.TargetX)
+				binaryWriteInt32(&buf, sr.TargetZ)
+			}
+			buf.WriteByte(boolToByte(u.HasCOB))
+			if u.HasCOB {
+				binaryWriteUint32(&buf, uint32(len(u.COB.Statics)))
+				for _, v := range u.COB.Statics {
+					binaryWriteInt32(&buf, v)
+				}
+				for t := 0; t < 8; t++ {
+					tr := u.COB.Threads[t]
+					binaryWriteInt32(&buf, tr.Status)
+					binaryWriteInt32(&buf, tr.PC)
+					binaryWriteInt32(&buf, tr.SP)
+					binaryWriteInt32(&buf, tr.Sleep)
+					binaryWriteInt32(&buf, tr.WaitPiece)
+					binaryWriteInt32(&buf, tr.WaitAxis)
+					binaryWriteInt32(&buf, tr.WaitThread)
+					binaryWriteInt32(&buf, tr.SignalMask)
+					binaryWriteUint32(&buf, uint32(len(tr.Stack)))
+					for _, v := range tr.Stack {
+						binaryWriteInt32(&buf, v)
+					}
+				}
+			}
+		}
 	}
-	// Queues
 	binaryWriteUint32(&buf, uint32(len(queues)))
 	for _, q := range queues {
 		binaryWriteInt32(&buf, q.UnitSlot)
@@ -836,13 +1252,307 @@ func MarshalStateV1(s *StateV1) []byte {
 		binaryWriteUint32(&buf, uint32(len(q.Payload)))
 		buf.Write(q.Payload)
 	}
+	if ver >= 2 {
+		// Orders
+		binaryWriteUint32(&buf, uint32(len(orders)))
+		for _, o := range orders {
+			binaryWriteInt32(&buf, o.UnitSlot)
+			buf.WriteByte(o.Segment)
+			binaryWriteInt32(&buf, o.Index)
+			writeString(&buf, o.Descriptor)
+			buf.WriteByte(o.Phase)
+			binaryWriteUint32(&buf, o.DynamicGate)
+			binaryWriteInt32(&buf, o.Deadline)
+			binaryWriteInt32(&buf, o.Owner)
+			binaryWriteInt32(&buf, o.Target)
+			binaryWriteInt32(&buf, o.GoalX)
+			binaryWriteInt32(&buf, o.GoalY)
+			binaryWriteInt32(&buf, o.GoalZ)
+			binaryWriteInt16(&buf, o.GuardX)
+			binaryWriteInt16(&buf, o.GuardY)
+			binaryWriteInt16(&buf, o.CachedX)
+			binaryWriteInt16(&buf, o.CachedY)
+			binaryWriteUint32(&buf, o.Param1)
+			binaryWriteUint32(&buf, o.Param2)
+			binaryWriteUint32(&buf, o.Param3)
+			binaryWriteUint32(&buf, o.StaticGate)
+			binaryWriteUint32(&buf, o.CreationTick)
+			binaryWriteUint32(&buf, o.Satisfied)
+			binaryWriteUint32(&buf, o.Flags)
+			buf.WriteByte(o.MoveState)
+			binaryWriteUint32(&buf, o.PathStatus)
+			writeString(&buf, o.BuildDefKey)
+		}
+		// MovementRoutes
+		binaryWriteUint32(&buf, uint32(len(routes)))
+		for _, r := range routes {
+			binaryWriteInt32(&buf, r.Unit)
+			buf.WriteByte(r.Count)
+			buf.WriteByte(boolToByte(r.Active))
+			buf.WriteByte(boolToByte(r.Dirty))
+			for i := 0; i < 20; i++ {
+				binaryWriteInt32(&buf, r.Points[i].X)
+				binaryWriteInt32(&buf, r.Points[i].Z)
+			}
+		}
+		// SchedulerPending
+		binaryWriteUint32(&buf, uint32(len(pending)))
+		for _, p := range pending {
+			binaryWriteInt32(&buf, p.Unit)
+			buf.WriteByte(p.Player)
+			binaryWriteInt32(&buf, p.StartX)
+			binaryWriteInt32(&buf, p.StartZ)
+			binaryWriteInt32(&buf, p.GoalX)
+			binaryWriteInt32(&buf, p.GoalZ)
+			binaryWriteInt32(&buf, p.GoalRadius)
+			buf.WriteByte(p.GoalKind)
+		}
+		// Economy
+		for i := 0; i < 10; i++ {
+			pl := s.Economy.Players[i]
+			buf.WriteByte(boolToByte(pl.Exists))
+			buf.WriteByte(pl.ControllerState)
+			buf.WriteByte(boolToByte(pl.IsObserver))
+			binaryWriteUint32(&buf, math.Float32bits(pl.StockMetal))
+			binaryWriteUint32(&buf, math.Float32bits(pl.StockEnergy))
+			binaryWriteUint32(&buf, math.Float32bits(pl.CapacityMetal))
+			binaryWriteUint32(&buf, math.Float32bits(pl.CapacityEnergy))
+			binaryWriteUint32(&buf, math.Float32bits(pl.MirrorMetal.Production))
+			binaryWriteUint32(&buf, math.Float32bits(pl.MirrorMetal.Requested))
+			binaryWriteUint32(&buf, math.Float32bits(pl.MirrorMetal.Accepted))
+			binaryWriteUint32(&buf, math.Float32bits(pl.MirrorMetal.Carry))
+			binaryWriteUint32(&buf, math.Float32bits(pl.MirrorEnergy.Production))
+			binaryWriteUint32(&buf, math.Float32bits(pl.MirrorEnergy.Requested))
+			binaryWriteUint32(&buf, math.Float32bits(pl.MirrorEnergy.Accepted))
+			binaryWriteUint32(&buf, math.Float32bits(pl.MirrorEnergy.Carry))
+			binaryWriteUint32(&buf, pl.UpdateTime)
+			binaryWriteUint32(&buf, pl.WinLoseTime)
+			binaryWriteUint32(&buf, pl.DisplayTimer)
+			binaryWriteUint64(&buf, math.Float64bits(pl.WasteMetal))
+			binaryWriteUint64(&buf, math.Float64bits(pl.WasteEnergy))
+			binaryWriteUint64(&buf, math.Float64bits(pl.TotalProducedMetal))
+			binaryWriteUint64(&buf, math.Float64bits(pl.TotalProducedEnergy))
+			binaryWriteUint64(&buf, math.Float64bits(pl.TotalConsumedMetal))
+			binaryWriteUint64(&buf, math.Float64bits(pl.TotalConsumedEnergy))
+			binaryWriteUint32(&buf, math.Float32bits(pl.PassProducedMetal))
+			binaryWriteUint32(&buf, math.Float32bits(pl.PassProducedEnergy))
+			binaryWriteUint32(&buf, math.Float32bits(pl.PassConsumedMetal))
+			binaryWriteUint32(&buf, math.Float32bits(pl.PassConsumedEnergy))
+			binaryWriteUint32(&buf, math.Float32bits(pl.ArchivedMetal.Production))
+			binaryWriteUint32(&buf, math.Float32bits(pl.ArchivedMetal.Requested))
+			binaryWriteUint32(&buf, math.Float32bits(pl.ArchivedMetal.Accepted))
+			binaryWriteUint32(&buf, math.Float32bits(pl.ArchivedMetal.Carry))
+			binaryWriteUint32(&buf, math.Float32bits(pl.ArchivedEnergy.Production))
+			binaryWriteUint32(&buf, math.Float32bits(pl.ArchivedEnergy.Requested))
+			binaryWriteUint32(&buf, math.Float32bits(pl.ArchivedEnergy.Accepted))
+			binaryWriteUint32(&buf, math.Float32bits(pl.ArchivedEnergy.Carry))
+			binaryWriteInt16(&buf, pl.StatusHalfwordAt144)
+			binaryWriteInt32(&buf, pl.StatusWordAt140)
+			buf.WriteByte(boolToByte(pl.GameEnded))
+			binaryWriteInt32(&buf, pl.EndGameCountdown)
+			binaryWriteUint32(&buf, pl.Helper1Deadline)
+			binaryWriteUint32(&buf, pl.Helper2Deadline)
+			binaryWriteInt32(&buf, pl.ReferencePlayer)
+			binaryWriteInt32(&buf, pl.SensorShareCalls)
+		}
+		binaryWriteUint32(&buf, uint32(len(s.Economy.UnitBuckets)))
+		for _, ub := range s.Economy.UnitBuckets {
+			binaryWriteInt32(&buf, ub.Handle)
+			binaryWriteUint32(&buf, math.Float32bits(ub.Buckets[0].Production))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Buckets[0].Requested))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Buckets[0].Accepted))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Buckets[0].Carry))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Buckets[1].Production))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Buckets[1].Requested))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Buckets[1].Accepted))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Buckets[1].Carry))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Archived[0].Production))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Archived[0].Requested))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Archived[0].Accepted))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Archived[0].Carry))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Archived[1].Production))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Archived[1].Requested))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Archived[1].Accepted))
+			binaryWriteUint32(&buf, math.Float32bits(ub.Archived[1].Carry))
+		}
+		// Features
+		binaryWriteInt32(&buf, s.Features.Cursor)
+		binaryWriteInt32(&buf, s.Features.LastReproIdx)
+		binaryWriteUint32(&buf, uint32(len(s.Features.Instances)))
+		for _, f := range s.Features.Instances {
+			writeString(&buf, f.DefName)
+			binaryWriteInt32(&buf, f.CX)
+			binaryWriteInt32(&buf, f.CZ)
+			binaryWriteInt32(&buf, f.Health)
+			binaryWriteInt32(&buf, f.MaxHealth)
+			binaryWriteInt32(&buf, f.ReclaimProgress)
+			buf.WriteByte(boolToByte(f.IsBurning))
+			binaryWriteInt32(&buf, f.BurnCountdown)
+			binaryWriteInt32(&buf, f.BurnTicks)
+			binaryWriteInt32(&buf, f.BurnDuration)
+			buf.WriteByte(boolToByte(f.IsSinking))
+			binaryWriteInt32(&buf, f.Y)
+			binaryWriteInt32(&buf, f.Vy)
+			buf.WriteByte(boolToByte(f.Settled))
+			buf.WriteByte(f.Status)
+			binaryWriteInt32(&buf, f.X)
+			binaryWriteInt32(&buf, f.Z)
+			binaryWriteInt32(&buf, f.FootX)
+			binaryWriteInt32(&buf, f.FootZ)
+		}
+		// Projectiles
+		binaryWriteUint32(&buf, uint32(len(proj)))
+		for _, p := range proj {
+			binaryWriteInt32(&buf, p.Handle)
+			binaryWriteInt32(&buf, p.WeaponID)
+			binaryWriteInt32(&buf, p.PosX)
+			binaryWriteInt32(&buf, p.PosY)
+			binaryWriteInt32(&buf, p.PosZ)
+			binaryWriteInt32(&buf, p.StartPosX)
+			binaryWriteInt32(&buf, p.StartPosY)
+			binaryWriteInt32(&buf, p.StartPosZ)
+			binaryWriteInt32(&buf, p.TargetPosX)
+			binaryWriteInt32(&buf, p.TargetPosY)
+			binaryWriteInt32(&buf, p.TargetPosZ)
+			binaryWriteInt32(&buf, p.TargetUnit)
+			binaryWriteInt32(&buf, p.TargetProjectile)
+			binaryWriteInt32(&buf, p.VelocityX)
+			binaryWriteInt32(&buf, p.VelocityY)
+			binaryWriteInt32(&buf, p.VelocityZ)
+			binaryWriteInt32(&buf, p.Speed)
+			binaryWriteUint16(&buf, p.Yaw)
+			binaryWriteUint16(&buf, p.Pitch)
+			binaryWriteInt32(&buf, p.Shooter)
+			buf.WriteByte(p.ShooterSide)
+			binaryWriteInt16(&buf, p.MuzzlePiece)
+			binaryWriteUint32(&buf, p.CreationTick)
+			binaryWriteUint32(&buf, p.BurstDeadline)
+			binaryWriteInt32(&buf, p.BurstRemaining)
+			binaryWriteUint32(&buf, p.ExpiryTick)
+			binaryWriteUint32(&buf, p.SmokeDeadline)
+			buf.WriteByte(boolToByte(p.BeamLatch))
+			buf.WriteByte(boolToByte(p.TwoPhase))
+			buf.WriteByte(boolToByte(p.Dead))
+			binaryWriteUint16(&buf, p.PropellerYaw)
+			binaryWriteUint16(&buf, p.MeteorPitch)
+			binaryWriteInt32(&buf, p.CacheCellX)
+			binaryWriteInt32(&buf, p.CacheCellZ)
+			binaryWriteInt16(&buf, p.Scratch5E)
+			buf.WriteByte(p.State69)
+			binaryWriteInt16(&buf, p.OldMarker)
+		}
+		// AI
+		binaryWriteUint32(&buf, uint32(len(ai)))
+		for _, m := range ai {
+			buf.WriteByte(m.Player)
+			for k := 0; k < 12; k++ {
+				var v uint32
+				if k < len(m.Deadlines) {
+					v = m.Deadlines[k]
+				}
+				binaryWriteUint32(&buf, v)
+			}
+			binaryWriteInt32(&buf, m.Strategic.CenterX)
+			binaryWriteInt32(&buf, m.Strategic.CenterZ)
+			binaryWriteInt32(&buf, m.Strategic.Radius)
+			binaryWriteUint32(&buf, m.Strategic.LastRefreshTick)
+			binaryWriteUint32(&buf, m.Strategic.LastClassRecomputeTick)
+			binaryWriteUint32(&buf, uint32(len(m.Strategic.Counts)))
+			for _, c := range m.Strategic.Counts {
+				writeString(&buf, c.Key)
+				binaryWriteInt32(&buf, c.Value)
+			}
+			binaryWriteUint32(&buf, uint32(len(m.Strategic.ClassVectors)))
+			for _, c := range m.Strategic.ClassVectors {
+				writeString(&buf, c.Key)
+				buf.WriteByte(byte(c.C0))
+				buf.WriteByte(byte(c.C1))
+				buf.WriteByte(byte(c.C2))
+			}
+			binaryWriteUint32(&buf, uint32(len(m.Strategic.InitVectors)))
+			for _, c := range m.Strategic.InitVectors {
+				writeString(&buf, c.Key)
+				buf.WriteByte(byte(c.Value))
+			}
+			binaryWriteUint32(&buf, uint32(len(m.Strategic.SingleVectors)))
+			for _, c := range m.Strategic.SingleVectors {
+				writeString(&buf, c.Key)
+				buf.WriteByte(byte(c.Value))
+			}
+			binaryWriteUint32(&buf, uint32(len(m.Groups.WaveA)))
+			for _, h := range m.Groups.WaveA {
+				binaryWriteInt32(&buf, h)
+			}
+			binaryWriteUint32(&buf, uint32(len(m.Groups.WaveB)))
+			for _, h := range m.Groups.WaveB {
+				binaryWriteInt32(&buf, h)
+			}
+			binaryWriteUint32(&buf, uint32(len(m.Groups.Explore)))
+			for _, h := range m.Groups.Explore {
+				binaryWriteInt32(&buf, h)
+			}
+			binaryWriteUint32(&buf, uint32(len(m.Groups.Rally)))
+			for _, h := range m.Groups.Rally {
+				binaryWriteInt32(&buf, h)
+			}
+			binaryWriteUint32(&buf, uint32(len(m.Groups.RegroupA)))
+			for _, h := range m.Groups.RegroupA {
+				binaryWriteInt32(&buf, h)
+			}
+			binaryWriteUint32(&buf, uint32(len(m.Groups.RegroupB)))
+			for _, h := range m.Groups.RegroupB {
+				binaryWriteInt32(&buf, h)
+			}
+			binaryWriteInt32(&buf, m.SurfaceMetal)
+			binaryWriteInt32(&buf, m.OriginX)
+			binaryWriteInt32(&buf, m.OriginZ)
+		}
+		// Visibility
+		binaryWriteInt32(&buf, s.Visibility.W)
+		binaryWriteInt32(&buf, s.Visibility.H)
+		binaryWriteUint32(&buf, uint32(len(s.Visibility.WordMask)))
+		for _, v := range s.Visibility.WordMask {
+			binaryWriteUint16(&buf, v)
+		}
+		for p := 0; p < 10; p++ {
+			binaryWriteUint32(&buf, uint32(len(s.Visibility.ByteGrids[p])))
+			buf.Write(s.Visibility.ByteGrids[p])
+		}
+		buf.WriteByte(s.Visibility.Local)
+		binaryWriteUint32(&buf, s.Visibility.Mode)
+		binaryWriteUint32(&buf, uint32(len(s.Visibility.Status)))
+		for _, vs := range s.Visibility.Status {
+			binaryWriteInt32(&buf, vs.Handle)
+			binaryWriteUint32(&buf, vs.Status)
+		}
+		binaryWriteUint32(&buf, uint32(len(s.Visibility.Decloak)))
+		for _, vd := range s.Visibility.Decloak {
+			binaryWriteInt32(&buf, vd.Handle)
+			binaryWriteUint32(&buf, vd.Deadline)
+		}
+		// Latch
+		binaryWriteInt16(&buf, s.Latch.Countdown)
+		binaryWriteUint16(&buf, s.Latch.Bits)
+		buf.WriteByte(s.Latch.Pending)
+		// Wind
+		binaryWriteInt32(&buf, s.Wind.Min)
+		binaryWriteInt32(&buf, s.Wind.Max)
+		binaryWriteInt32(&buf, s.Wind.Strength)
+		binaryWriteUint16(&buf, s.Wind.Heading)
+		binaryWriteUint32(&buf, math.Float32bits(s.Wind.Scalar))
+		binaryWriteInt32(&buf, s.Wind.DirX)
+		binaryWriteInt32(&buf, s.Wind.DirZ)
+		binaryWriteUint32(&buf, s.Wind.NextChange)
+		binaryWriteUint32(&buf, s.Wind.LastChange)
+		buf.WriteByte(boolToByte(s.Wind.Changed))
+		buf.WriteByte(boolToByte(s.Wind.Pending))
+	}
 	return buf.Bytes()
 }
 
 // UnmarshalStateV1 decodes a StateV1 payload, validates catalog/manifest hashes
 // against expected values (empty expected means no check), and checks version
-// [PLAN_14 C18]. It returns the decoded state or an error with explicit
-// diagnostics for wrong content.
+// [PLAN_14 C18][P0-I11]. It accepts both version 1 and 2 for backwards compatibility.
 func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash string) (*StateV1, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("save: StateV1 too short")
@@ -852,7 +1562,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 	if err := binary.Read(r, binary.LittleEndian, &ver); err != nil {
 		return nil, err
 	}
-	if ver != StateV1VersionConst {
+	if ver != StateV1VersionConst && ver != StateV1Version1 {
 		return nil, ErrStateV1Version
 	}
 	catHash, err := readString(r)
@@ -930,7 +1640,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		if err := binary.Read(r, binary.LittleEndian, &flags); err != nil {
 			return nil, err
 		}
-		units = append(units, UnitRecord{
+		rec := UnitRecord{
 			Slot:      slot,
 			DefName:   defName,
 			Owner:     ownerByte,
@@ -940,11 +1650,239 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 			Health:    health,
 			Remaining: math.Float32frombits(remBits),
 			Flags:     flags,
-		})
+		}
+		if ver >= 2 {
+			var maxHealth int32
+			if err := binary.Read(r, binary.LittleEndian, &maxHealth); err != nil {
+				return nil, err
+			}
+			dyingByte, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			deathCause, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var pending uint32
+			if err := binary.Read(r, binary.LittleEndian, &pending); err != nil {
+				return nil, err
+			}
+			var kills int32
+			if err := binary.Read(r, binary.LittleEndian, &kills); err != nil {
+				return nil, err
+			}
+			var paralyze uint32
+			if err := binary.Read(r, binary.LittleEndian, &paralyze); err != nil {
+				return nil, err
+			}
+			stunnedByte, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var spotBits uint32
+			if err := binary.Read(r, binary.LittleEndian, &spotBits); err != nil {
+				return nil, err
+			}
+			var placementIdx int32
+			if err := binary.Read(r, binary.LittleEndian, &placementIdx); err != nil {
+				return nil, err
+			}
+			placementIdent, err := readString(r)
+			if err != nil {
+				return nil, err
+			}
+			placementUnitName, err := readString(r)
+			if err != nil {
+				return nil, err
+			}
+			moveMode, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			moveHeading, err := binaryReadUint16(r)
+			if err != nil {
+				return nil, err
+			}
+			var moveSpeed int32
+			if err := binary.Read(r, binary.LittleEndian, &moveSpeed); err != nil {
+				return nil, err
+			}
+			var carrier int32
+			if err := binary.Read(r, binary.LittleEndian, &carrier); err != nil {
+				return nil, err
+			}
+			var cargoLen uint32
+			if err := binary.Read(r, binary.LittleEndian, &cargoLen); err != nil {
+				return nil, err
+			}
+			cargo := make([]int32, cargoLen)
+			for ci := uint32(0); ci < cargoLen; ci++ {
+				if err := binary.Read(r, binary.LittleEndian, &cargo[ci]); err != nil {
+					return nil, err
+				}
+			}
+			var slots [3]SlotRecord
+			for k := 0; k < 3; k++ {
+				wname, err := readString(r)
+				if err != nil {
+					return nil, err
+				}
+				var reload int32
+				if err := binary.Read(r, binary.LittleEndian, &reload); err != nil {
+					return nil, err
+				}
+				flagByte, err := r.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				dyaw, err := binaryReadUint16(r)
+				if err != nil {
+					return nil, err
+				}
+				dpitch, err := binaryReadUint16(r)
+				if err != nil {
+					return nil, err
+				}
+				var ammo int32
+				if err := binary.Read(r, binary.LittleEndian, &ammo); err != nil {
+					return nil, err
+				}
+				var muzzle int32
+				if err := binary.Read(r, binary.LittleEndian, &muzzle); err != nil {
+					return nil, err
+				}
+				aimIssueByte, err := r.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				aimReadyByte, err := r.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				tkind, err := r.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				var tunit int32
+				if err := binary.Read(r, binary.LittleEndian, &tunit); err != nil {
+					return nil, err
+				}
+				var tx int32
+				if err := binary.Read(r, binary.LittleEndian, &tx); err != nil {
+					return nil, err
+				}
+				var tz int32
+				if err := binary.Read(r, binary.LittleEndian, &tz); err != nil {
+					return nil, err
+				}
+				slots[k] = SlotRecord{
+					WeaponName:   wname,
+					Reload:       reload,
+					Flags:        flagByte,
+					DesiredYaw:   dyaw,
+					DesiredPitch: dpitch,
+					Ammo:         ammo,
+					MuzzlePiece:  muzzle,
+					AimIssue:     byteToBool(aimIssueByte),
+					AimReady:     byteToBool(aimReadyByte),
+					TargetKind:   tkind,
+					TargetUnit:   tunit,
+					TargetX:      tx,
+					TargetZ:      tz,
+				}
+			}
+			hasCOBByte, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			hasCOB := byteToBool(hasCOBByte)
+			var cobRec COBRecord
+			if hasCOB {
+				var nStatics uint32
+				if err := binary.Read(r, binary.LittleEndian, &nStatics); err != nil {
+					return nil, err
+				}
+				statics := make([]int32, nStatics)
+				for si := uint32(0); si < nStatics; si++ {
+					if err := binary.Read(r, binary.LittleEndian, &statics[si]); err != nil {
+						return nil, err
+					}
+				}
+				cobRec.Statics = statics
+				for t := 0; t < 8; t++ {
+					var st, pc, sp, slp, wpiece, waxis, wthread, smask int32
+					if err := binary.Read(r, binary.LittleEndian, &st); err != nil {
+						return nil, err
+					}
+					if err := binary.Read(r, binary.LittleEndian, &pc); err != nil {
+						return nil, err
+					}
+					if err := binary.Read(r, binary.LittleEndian, &sp); err != nil {
+						return nil, err
+					}
+					if err := binary.Read(r, binary.LittleEndian, &slp); err != nil {
+						return nil, err
+					}
+					if err := binary.Read(r, binary.LittleEndian, &wpiece); err != nil {
+						return nil, err
+					}
+					if err := binary.Read(r, binary.LittleEndian, &waxis); err != nil {
+						return nil, err
+					}
+					if err := binary.Read(r, binary.LittleEndian, &wthread); err != nil {
+						return nil, err
+					}
+					if err := binary.Read(r, binary.LittleEndian, &smask); err != nil {
+						return nil, err
+					}
+					var stackLen uint32
+					if err := binary.Read(r, binary.LittleEndian, &stackLen); err != nil {
+						return nil, err
+					}
+					stack := make([]int32, stackLen)
+					for si := uint32(0); si < stackLen; si++ {
+						if err := binary.Read(r, binary.LittleEndian, &stack[si]); err != nil {
+							return nil, err
+						}
+					}
+					cobRec.Threads[t] = ThreadRecord{
+						Status:     st,
+						PC:         pc,
+						SP:         sp,
+						Sleep:      slp,
+						WaitPiece:  wpiece,
+						WaitAxis:   waxis,
+						WaitThread: wthread,
+						SignalMask: smask,
+						Stack:      stack,
+					}
+				}
+			}
+			rec.MaxHealth = maxHealth
+			rec.Dying = byteToBool(dyingByte)
+			rec.DeathCause = deathCause
+			rec.Pending = pending
+			rec.Kills = kills
+			rec.ParalyzeExpire = paralyze
+			rec.Stunned = byteToBool(stunnedByte)
+			rec.SpotMetal = math.Float32frombits(spotBits)
+			rec.PlacementIdx = placementIdx
+			rec.PlacementIdent = placementIdent
+			rec.PlacementUnitName = placementUnitName
+			rec.MoveMode = moveMode
+			rec.MoveHeading = moveHeading
+			rec.MoveSpeed = moveSpeed
+			rec.Carrier = carrier
+			rec.Cargo = cargo
+			rec.Slots = slots
+			rec.HasCOB = hasCOB
+			rec.COB = cobRec
+		}
+		units = append(units, rec)
 	}
 	var numQueues uint32
 	if err := binary.Read(r, binary.LittleEndian, &numQueues); err != nil {
-		// If no queue count (old data), treat as zero and ignore trailing? But versioned, so must have it.
 		return nil, err
 	}
 	queues := make([]QueueRecord, 0, numQueues)
@@ -986,7 +1924,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		}
 		return queues[i].Kind < queues[j].Kind
 	})
-	return &StateV1{
+	st := &StateV1{
 		Version:      ver,
 		CatalogHash:  catHash,
 		ManifestHash: manHash,
@@ -997,7 +1935,1040 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		Clock:        clk,
 		Units:        units,
 		Queues:       queues,
-	}, nil
+	}
+	if ver >= 2 {
+		// Orders
+		var nOrders uint32
+		if err := binary.Read(r, binary.LittleEndian, &nOrders); err != nil {
+			return nil, err
+		}
+		orders := make([]OrderRecord, 0, nOrders)
+		for i := uint32(0); i < nOrders; i++ {
+			var rec OrderRecord
+			var unitSlot int32
+			if err := binary.Read(r, binary.LittleEndian, &unitSlot); err != nil {
+				return nil, err
+			}
+			seg, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var idx int32
+			if err := binary.Read(r, binary.LittleEndian, &idx); err != nil {
+				return nil, err
+			}
+			desc, err := readString(r)
+			if err != nil {
+				return nil, err
+			}
+			phase, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var dg uint32
+			if err := binary.Read(r, binary.LittleEndian, &dg); err != nil {
+				return nil, err
+			}
+			var dl int32
+			if err := binary.Read(r, binary.LittleEndian, &dl); err != nil {
+				return nil, err
+			}
+			var owner, target, gx, gy, gz int32
+			if err := binary.Read(r, binary.LittleEndian, &owner); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &target); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &gx); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &gy); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &gz); err != nil {
+				return nil, err
+			}
+			gx16, err := binaryReadInt16(r)
+			if err != nil {
+				return nil, err
+			}
+			gy16, err := binaryReadInt16(r)
+			if err != nil {
+				return nil, err
+			}
+			cx16, err := binaryReadInt16(r)
+			if err != nil {
+				return nil, err
+			}
+			cy16, err := binaryReadInt16(r)
+			if err != nil {
+				return nil, err
+			}
+			var p1, p2, p3, sg, ck, sat, fl uint32
+			if err := binary.Read(r, binary.LittleEndian, &p1); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &p2); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &p3); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &sg); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &ck); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &sat); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &fl); err != nil {
+				return nil, err
+			}
+			moveState, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var ps uint32
+			if err := binary.Read(r, binary.LittleEndian, &ps); err != nil {
+				return nil, err
+			}
+			bkey, err := readString(r)
+			if err != nil {
+				return nil, err
+			}
+			rec = OrderRecord{
+				UnitSlot:     unitSlot,
+				Segment:      seg,
+				Index:        idx,
+				Descriptor:   desc,
+				Phase:        phase,
+				DynamicGate:  dg,
+				Deadline:     dl,
+				Owner:        owner,
+				Target:       target,
+				GoalX:        gx,
+				GoalY:        gy,
+				GoalZ:        gz,
+				GuardX:       gx16,
+				GuardY:       gy16,
+				CachedX:      cx16,
+				CachedY:      cy16,
+				Param1:       p1,
+				Param2:       p2,
+				Param3:       p3,
+				StaticGate:   sg,
+				CreationTick: ck,
+				Satisfied:    sat,
+				Flags:        fl,
+				MoveState:    moveState,
+				PathStatus:   ps,
+				BuildDefKey:  bkey,
+			}
+			orders = append(orders, rec)
+		}
+		sort.Slice(orders, func(i, j int) bool {
+			if orders[i].UnitSlot != orders[j].UnitSlot {
+				return orders[i].UnitSlot < orders[j].UnitSlot
+			}
+			if orders[i].Segment != orders[j].Segment {
+				return orders[i].Segment < orders[j].Segment
+			}
+			return orders[i].Index < orders[j].Index
+		})
+		st.Orders = orders
+		// MovementRoutes
+		var nRoutes uint32
+		if err := binary.Read(r, binary.LittleEndian, &nRoutes); err != nil {
+			return nil, err
+		}
+		routes := make([]MovementRouteRecord, 0, nRoutes)
+		for i := uint32(0); i < nRoutes; i++ {
+			var unit int32
+			if err := binary.Read(r, binary.LittleEndian, &unit); err != nil {
+				return nil, err
+			}
+			cnt, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			activeB, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			dirtyB, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var pts [20]PointRecord
+			for p := 0; p < 20; p++ {
+				var x, z int32
+				if err := binary.Read(r, binary.LittleEndian, &x); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &z); err != nil {
+					return nil, err
+				}
+				pts[p] = PointRecord{X: x, Z: z}
+			}
+			routes = append(routes, MovementRouteRecord{
+				Unit:   unit,
+				Count:  cnt,
+				Active: byteToBool(activeB),
+				Dirty:  byteToBool(dirtyB),
+				Points: pts,
+			})
+		}
+		sort.Slice(routes, func(i, j int) bool { return routes[i].Unit < routes[j].Unit })
+		st.MovementRoutes = routes
+		// SchedulerPending
+		var nPend uint32
+		if err := binary.Read(r, binary.LittleEndian, &nPend); err != nil {
+			return nil, err
+		}
+		pend := make([]SchedulerPendingRecord, 0, nPend)
+		for i := uint32(0); i < nPend; i++ {
+			var unit int32
+			if err := binary.Read(r, binary.LittleEndian, &unit); err != nil {
+				return nil, err
+			}
+			player, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var sx, sz, gx, gz, rad int32
+			if err := binary.Read(r, binary.LittleEndian, &sx); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &sz); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &gx); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &gz); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rad); err != nil {
+				return nil, err
+			}
+			kind, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			pend = append(pend, SchedulerPendingRecord{
+				Unit: unit, Player: player, StartX: sx, StartZ: sz, GoalX: gx, GoalZ: gz, GoalRadius: rad, GoalKind: kind,
+			})
+		}
+		sort.Slice(pend, func(i, j int) bool { return pend[i].Unit < pend[j].Unit })
+		st.SchedulerPending = pend
+		// Economy
+		var econ EconomySnapshot
+		for i := 0; i < 10; i++ {
+			var pl EconomyPlayerRecord
+			existsB, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			ctrlB, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			obsB, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var sm, se, cm, ce uint32
+			if err := binary.Read(r, binary.LittleEndian, &sm); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &se); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &cm); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &ce); err != nil {
+				return nil, err
+			}
+			var mmProd, mmReq, mmAcc, mmCarry, meProd, meReq, meAcc, meCarry uint32
+			if err := binary.Read(r, binary.LittleEndian, &mmProd); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &mmReq); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &mmAcc); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &mmCarry); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &meProd); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &meReq); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &meAcc); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &meCarry); err != nil {
+				return nil, err
+			}
+			var ut, wlt, dt uint32
+			if err := binary.Read(r, binary.LittleEndian, &ut); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &wlt); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &dt); err != nil {
+				return nil, err
+			}
+			var wm, we, tpm, tpe, tcm, tce uint64
+			if err := binary.Read(r, binary.LittleEndian, &wm); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &we); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &tpm); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &tpe); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &tcm); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &tce); err != nil {
+				return nil, err
+			}
+			var ppm, ppe, pcm, pce uint32
+			if err := binary.Read(r, binary.LittleEndian, &ppm); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &ppe); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &pcm); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &pce); err != nil {
+				return nil, err
+			}
+			var amProd, amReq, amAcc, amCarry, aeProd, aeReq, aeAcc, aeCarry uint32
+			if err := binary.Read(r, binary.LittleEndian, &amProd); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &amReq); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &amAcc); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &amCarry); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &aeProd); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &aeReq); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &aeAcc); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &aeCarry); err != nil {
+				return nil, err
+			}
+			sh, err := binaryReadInt16(r)
+			if err != nil {
+				return nil, err
+			}
+			var sw int32
+			if err := binary.Read(r, binary.LittleEndian, &sw); err != nil {
+				return nil, err
+			}
+			geB, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var egc int32
+			if err := binary.Read(r, binary.LittleEndian, &egc); err != nil {
+				return nil, err
+			}
+			var h1, h2 uint32
+			if err := binary.Read(r, binary.LittleEndian, &h1); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &h2); err != nil {
+				return nil, err
+			}
+			var rp, ssc int32
+			if err := binary.Read(r, binary.LittleEndian, &rp); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &ssc); err != nil {
+				return nil, err
+			}
+			pl = EconomyPlayerRecord{
+				Exists: byteToBool(existsB), ControllerState: ctrlB, IsObserver: byteToBool(obsB),
+				StockMetal: math.Float32frombits(sm), StockEnergy: math.Float32frombits(se),
+				CapacityMetal: math.Float32frombits(cm), CapacityEnergy: math.Float32frombits(ce),
+				MirrorMetal:  BucketRecord{Production: math.Float32frombits(mmProd), Requested: math.Float32frombits(mmReq), Accepted: math.Float32frombits(mmAcc), Carry: math.Float32frombits(mmCarry)},
+				MirrorEnergy: BucketRecord{Production: math.Float32frombits(meProd), Requested: math.Float32frombits(meReq), Accepted: math.Float32frombits(meAcc), Carry: math.Float32frombits(meCarry)},
+				UpdateTime:   ut, WinLoseTime: wlt, DisplayTimer: dt,
+				WasteMetal: math.Float64frombits(wm), WasteEnergy: math.Float64frombits(we),
+				TotalProducedMetal: math.Float64frombits(tpm), TotalProducedEnergy: math.Float64frombits(tpe),
+				TotalConsumedMetal: math.Float64frombits(tcm), TotalConsumedEnergy: math.Float64frombits(tce),
+				PassProducedMetal: math.Float32frombits(ppm), PassProducedEnergy: math.Float32frombits(ppe),
+				PassConsumedMetal: math.Float32frombits(pcm), PassConsumedEnergy: math.Float32frombits(pce),
+				ArchivedMetal:       BucketRecord{Production: math.Float32frombits(amProd), Requested: math.Float32frombits(amReq), Accepted: math.Float32frombits(amAcc), Carry: math.Float32frombits(amCarry)},
+				ArchivedEnergy:      BucketRecord{Production: math.Float32frombits(aeProd), Requested: math.Float32frombits(aeReq), Accepted: math.Float32frombits(aeAcc), Carry: math.Float32frombits(aeCarry)},
+				StatusHalfwordAt144: sh, StatusWordAt140: sw, GameEnded: byteToBool(geB), EndGameCountdown: egc,
+				Helper1Deadline: h1, Helper2Deadline: h2, ReferencePlayer: rp, SensorShareCalls: ssc,
+			}
+			econ.Players[i] = pl
+		}
+		var nUB uint32
+		if err := binary.Read(r, binary.LittleEndian, &nUB); err != nil {
+			return nil, err
+		}
+		ubs := make([]EconomyUnitBucketRecord, 0, nUB)
+		for i := uint32(0); i < nUB; i++ {
+			var h int32
+			if err := binary.Read(r, binary.LittleEndian, &h); err != nil {
+				return nil, err
+			}
+			var b0Prod, b0Req, b0Acc, b0Carry, b1Prod, b1Req, b1Acc, b1Carry uint32
+			if err := binary.Read(r, binary.LittleEndian, &b0Prod); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &b0Req); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &b0Acc); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &b0Carry); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &b1Prod); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &b1Req); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &b1Acc); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &b1Carry); err != nil {
+				return nil, err
+			}
+			var a0Prod, a0Req, a0Acc, a0Carry, a1Prod, a1Req, a1Acc, a1Carry uint32
+			if err := binary.Read(r, binary.LittleEndian, &a0Prod); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &a0Req); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &a0Acc); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &a0Carry); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &a1Prod); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &a1Req); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &a1Acc); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &a1Carry); err != nil {
+				return nil, err
+			}
+			ubs = append(ubs, EconomyUnitBucketRecord{
+				Handle: h,
+				Buckets: [2]BucketRecord{
+					{Production: math.Float32frombits(b0Prod), Requested: math.Float32frombits(b0Req), Accepted: math.Float32frombits(b0Acc), Carry: math.Float32frombits(b0Carry)},
+					{Production: math.Float32frombits(b1Prod), Requested: math.Float32frombits(b1Req), Accepted: math.Float32frombits(b1Acc), Carry: math.Float32frombits(b1Carry)},
+				},
+				Archived: [2]BucketRecord{
+					{Production: math.Float32frombits(a0Prod), Requested: math.Float32frombits(a0Req), Accepted: math.Float32frombits(a0Acc), Carry: math.Float32frombits(a0Carry)},
+					{Production: math.Float32frombits(a1Prod), Requested: math.Float32frombits(a1Req), Accepted: math.Float32frombits(a1Acc), Carry: math.Float32frombits(a1Carry)},
+				},
+			})
+		}
+		econ.UnitBuckets = ubs
+		st.Economy = econ
+		// Features
+		var feat FeaturesSnapshot
+		var cur, lri int32
+		if err := binary.Read(r, binary.LittleEndian, &cur); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(r, binary.LittleEndian, &lri); err != nil {
+			return nil, err
+		}
+		var nInst uint32
+		if err := binary.Read(r, binary.LittleEndian, &nInst); err != nil {
+			return nil, err
+		}
+		insts := make([]FeatureInstanceRecord, 0, nInst)
+		for i := uint32(0); i < nInst; i++ {
+			defName, err := readString(r)
+			if err != nil {
+				return nil, err
+			}
+			var cx, cz, hl, mhl, rp int32
+			if err := binary.Read(r, binary.LittleEndian, &cx); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &cz); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &hl); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &mhl); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rp); err != nil {
+				return nil, err
+			}
+			isBurnB, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var bc, bt, bd int32
+			if err := binary.Read(r, binary.LittleEndian, &bc); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &bt); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &bd); err != nil {
+				return nil, err
+			}
+			isSinkB, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var y, vy int32
+			if err := binary.Read(r, binary.LittleEndian, &y); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &vy); err != nil {
+				return nil, err
+			}
+			settledB, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			status, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var fx, fz, footx, footz int32
+			if err := binary.Read(r, binary.LittleEndian, &fx); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &fz); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &footx); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &footz); err != nil {
+				return nil, err
+			}
+			insts = append(insts, FeatureInstanceRecord{
+				DefName: defName, CX: cx, CZ: cz, Health: hl, MaxHealth: mhl, ReclaimProgress: rp,
+				IsBurning: byteToBool(isBurnB), BurnCountdown: bc, BurnTicks: bt, BurnDuration: bd,
+				IsSinking: byteToBool(isSinkB), Y: y, Vy: vy, Settled: byteToBool(settledB), Status: status,
+				X: fx, Z: fz, FootX: footx, FootZ: footz,
+			})
+		}
+		feat.Cursor = cur
+		feat.LastReproIdx = lri
+		feat.Instances = insts
+		st.Features = feat
+		// Projectiles
+		var nProj uint32
+		if err := binary.Read(r, binary.LittleEndian, &nProj); err != nil {
+			return nil, err
+		}
+		projs := make([]ProjectileRecord, 0, nProj)
+		for i := uint32(0); i < nProj; i++ {
+			var rec ProjectileRecord
+			if err := binary.Read(r, binary.LittleEndian, &rec.Handle); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.WeaponID); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.PosX); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.PosY); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.PosZ); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.StartPosX); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.StartPosY); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.StartPosZ); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.TargetPosX); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.TargetPosY); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.TargetPosZ); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.TargetUnit); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.TargetProjectile); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.VelocityX); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.VelocityY); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.VelocityZ); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.Speed); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.Yaw); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.Pitch); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.Shooter); err != nil {
+				return nil, err
+			}
+			sb, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			rec.ShooterSide = sb
+			mp, err := binaryReadInt16(r)
+			if err != nil {
+				return nil, err
+			}
+			rec.MuzzlePiece = mp
+			if err := binary.Read(r, binary.LittleEndian, &rec.CreationTick); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.BurstDeadline); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.BurstRemaining); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.ExpiryTick); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.SmokeDeadline); err != nil {
+				return nil, err
+			}
+			bl, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			tp, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			dd, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			rec.BeamLatch = byteToBool(bl)
+			rec.TwoPhase = byteToBool(tp)
+			rec.Dead = byteToBool(dd)
+			if err := binary.Read(r, binary.LittleEndian, &rec.PropellerYaw); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.MeteorPitch); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.CacheCellX); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rec.CacheCellZ); err != nil {
+				return nil, err
+			}
+			scratch, err := binaryReadInt16(r)
+			if err != nil {
+				return nil, err
+			}
+			rec.Scratch5E = scratch
+			s69, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			rec.State69 = s69
+			om, err := binaryReadInt16(r)
+			if err != nil {
+				return nil, err
+			}
+			rec.OldMarker = om
+			projs = append(projs, rec)
+		}
+		sort.Slice(projs, func(i, j int) bool { return projs[i].Handle < projs[j].Handle })
+		st.Projectiles = projs
+		// AI
+		var nAI uint32
+		if err := binary.Read(r, binary.LittleEndian, &nAI); err != nil {
+			return nil, err
+		}
+		ais := make([]AIManagerRecord, 0, nAI)
+		for i := uint32(0); i < nAI; i++ {
+			var playerB byte
+			playerB, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var dl [12]uint32
+			for k := 0; k < 12; k++ {
+				if err := binary.Read(r, binary.LittleEndian, &dl[k]); err != nil {
+					return nil, err
+				}
+			}
+			var cx, cz, rad int32
+			if err := binary.Read(r, binary.LittleEndian, &cx); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &cz); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &rad); err != nil {
+				return nil, err
+			}
+			var lrt, lcrt uint32
+			if err := binary.Read(r, binary.LittleEndian, &lrt); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &lcrt); err != nil {
+				return nil, err
+			}
+			var nCounts uint32
+			if err := binary.Read(r, binary.LittleEndian, &nCounts); err != nil {
+				return nil, err
+			}
+			counts := make([]StrategicCountRecord, 0, nCounts)
+			for c := uint32(0); c < nCounts; c++ {
+				k, err := readString(r)
+				if err != nil {
+					return nil, err
+				}
+				var v int32
+				if err := binary.Read(r, binary.LittleEndian, &v); err != nil {
+					return nil, err
+				}
+				counts = append(counts, StrategicCountRecord{Key: k, Value: v})
+			}
+			var nCV uint32
+			if err := binary.Read(r, binary.LittleEndian, &nCV); err != nil {
+				return nil, err
+			}
+			cvs := make([]StrategicClassVectorRecord, 0, nCV)
+			for c := uint32(0); c < nCV; c++ {
+				k, err := readString(r)
+				if err != nil {
+					return nil, err
+				}
+				c0, err := r.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				c1, err := r.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				c2, err := r.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				cvs = append(cvs, StrategicClassVectorRecord{Key: k, C0: int8(c0), C1: int8(c1), C2: int8(c2)})
+			}
+			var nIV uint32
+			if err := binary.Read(r, binary.LittleEndian, &nIV); err != nil {
+				return nil, err
+			}
+			ivs := make([]StrategicInitVectorRecord, 0, nIV)
+			for c := uint32(0); c < nIV; c++ {
+				k, err := readString(r)
+				if err != nil {
+					return nil, err
+				}
+				vb, err := r.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				ivs = append(ivs, StrategicInitVectorRecord{Key: k, Value: int8(vb)})
+			}
+			var nSV uint32
+			if err := binary.Read(r, binary.LittleEndian, &nSV); err != nil {
+				return nil, err
+			}
+			svs := make([]StrategicSingleVectorRecord, 0, nSV)
+			for c := uint32(0); c < nSV; c++ {
+				k, err := readString(r)
+				if err != nil {
+					return nil, err
+				}
+				vb, err := r.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				svs = append(svs, StrategicSingleVectorRecord{Key: k, Value: int8(vb)})
+			}
+			var nWaveA uint32
+			if err := binary.Read(r, binary.LittleEndian, &nWaveA); err != nil {
+				return nil, err
+			}
+			waveA := make([]int32, nWaveA)
+			for idx := uint32(0); idx < nWaveA; idx++ {
+				if err := binary.Read(r, binary.LittleEndian, &waveA[idx]); err != nil {
+					return nil, err
+				}
+			}
+			var nWaveB uint32
+			if err := binary.Read(r, binary.LittleEndian, &nWaveB); err != nil {
+				return nil, err
+			}
+			waveB := make([]int32, nWaveB)
+			for idx := uint32(0); idx < nWaveB; idx++ {
+				if err := binary.Read(r, binary.LittleEndian, &waveB[idx]); err != nil {
+					return nil, err
+				}
+			}
+			var nExp uint32
+			if err := binary.Read(r, binary.LittleEndian, &nExp); err != nil {
+				return nil, err
+			}
+			exp := make([]int32, nExp)
+			for idx := uint32(0); idx < nExp; idx++ {
+				if err := binary.Read(r, binary.LittleEndian, &exp[idx]); err != nil {
+					return nil, err
+				}
+			}
+			var nRally uint32
+			if err := binary.Read(r, binary.LittleEndian, &nRally); err != nil {
+				return nil, err
+			}
+			rally := make([]int32, nRally)
+			for idx := uint32(0); idx < nRally; idx++ {
+				if err := binary.Read(r, binary.LittleEndian, &rally[idx]); err != nil {
+					return nil, err
+				}
+			}
+			var nRegA uint32
+			if err := binary.Read(r, binary.LittleEndian, &nRegA); err != nil {
+				return nil, err
+			}
+			regA := make([]int32, nRegA)
+			for idx := uint32(0); idx < nRegA; idx++ {
+				if err := binary.Read(r, binary.LittleEndian, &regA[idx]); err != nil {
+					return nil, err
+				}
+			}
+			var nRegB uint32
+			if err := binary.Read(r, binary.LittleEndian, &nRegB); err != nil {
+				return nil, err
+			}
+			regB := make([]int32, nRegB)
+			for idx := uint32(0); idx < nRegB; idx++ {
+				if err := binary.Read(r, binary.LittleEndian, &regB[idx]); err != nil {
+					return nil, err
+				}
+			}
+			var surf, ox, oz int32
+			if err := binary.Read(r, binary.LittleEndian, &surf); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &ox); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &oz); err != nil {
+				return nil, err
+			}
+			ais = append(ais, AIManagerRecord{
+				Player: playerB, Deadlines: dl,
+				Strategic:    StrategicSnapshot{CenterX: cx, CenterZ: cz, Radius: rad, LastRefreshTick: lrt, LastClassRecomputeTick: lcrt, Counts: counts, ClassVectors: cvs, InitVectors: ivs, SingleVectors: svs},
+				Groups:       AIGroupsSnapshot{WaveA: waveA, WaveB: waveB, Explore: exp, Rally: rally, RegroupA: regA, RegroupB: regB},
+				SurfaceMetal: surf, OriginX: ox, OriginZ: oz,
+			})
+		}
+		sort.Slice(ais, func(i, j int) bool { return ais[i].Player < ais[j].Player })
+		st.AI = ais
+		// Visibility
+		var vis VisibilitySnapshot
+		var wv, hv int32
+		if err := binary.Read(r, binary.LittleEndian, &wv); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(r, binary.LittleEndian, &hv); err != nil {
+			return nil, err
+		}
+		var nWord uint32
+		if err := binary.Read(r, binary.LittleEndian, &nWord); err != nil {
+			return nil, err
+		}
+		wordMask := make([]uint16, nWord)
+		for i := uint32(0); i < nWord; i++ {
+			if err := binary.Read(r, binary.LittleEndian, &wordMask[i]); err != nil {
+				return nil, err
+			}
+		}
+		var byteGrids [10][]uint8
+		for p := 0; p < 10; p++ {
+			var nByte uint32
+			if err := binary.Read(r, binary.LittleEndian, &nByte); err != nil {
+				return nil, err
+			}
+			b := make([]uint8, nByte)
+			if nByte > 0 {
+				if _, err := r.Read(b); err != nil {
+					return nil, err
+				}
+			}
+			byteGrids[p] = b
+		}
+		localB, err := r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		var mode uint32
+		if err := binary.Read(r, binary.LittleEndian, &mode); err != nil {
+			return nil, err
+		}
+		var nStatus uint32
+		if err := binary.Read(r, binary.LittleEndian, &nStatus); err != nil {
+			return nil, err
+		}
+		status := make([]VisibilityStatusRecord, 0, nStatus)
+		for i := uint32(0); i < nStatus; i++ {
+			var h int32
+			if err := binary.Read(r, binary.LittleEndian, &h); err != nil {
+				return nil, err
+			}
+			var s uint32
+			if err := binary.Read(r, binary.LittleEndian, &s); err != nil {
+				return nil, err
+			}
+			status = append(status, VisibilityStatusRecord{Handle: h, Status: s})
+		}
+		var nDecloak uint32
+		if err := binary.Read(r, binary.LittleEndian, &nDecloak); err != nil {
+			return nil, err
+		}
+		decloak := make([]VisibilityDecloakRecord, 0, nDecloak)
+		for i := uint32(0); i < nDecloak; i++ {
+			var h int32
+			if err := binary.Read(r, binary.LittleEndian, &h); err != nil {
+				return nil, err
+			}
+			var d uint32
+			if err := binary.Read(r, binary.LittleEndian, &d); err != nil {
+				return nil, err
+			}
+			decloak = append(decloak, VisibilityDecloakRecord{Handle: h, Deadline: d})
+		}
+		vis.W = wv
+		vis.H = hv
+		vis.WordMask = wordMask
+		vis.ByteGrids = byteGrids
+		vis.Local = localB
+		vis.Mode = mode
+		vis.Status = status
+		vis.Decloak = decloak
+		st.Visibility = vis
+		// Latch
+		var latch LatchSnapshot
+		cd, err := binaryReadInt16(r)
+		if err != nil {
+			return nil, err
+		}
+		bits, err := binaryReadUint16(r)
+		if err != nil {
+			return nil, err
+		}
+		pendB, err := r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		latch.Countdown = cd
+		latch.Bits = bits
+		latch.Pending = pendB
+		st.Latch = latch
+		// Wind
+		var wind WindSnapshot
+		if err := binary.Read(r, binary.LittleEndian, &wind.Min); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(r, binary.LittleEndian, &wind.Max); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(r, binary.LittleEndian, &wind.Strength); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(r, binary.LittleEndian, &wind.Heading); err != nil {
+			return nil, err
+		}
+		var scalarBits uint32
+		if err := binary.Read(r, binary.LittleEndian, &scalarBits); err != nil {
+			return nil, err
+		}
+		wind.Scalar = math.Float32frombits(scalarBits)
+		if err := binary.Read(r, binary.LittleEndian, &wind.DirX); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(r, binary.LittleEndian, &wind.DirZ); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(r, binary.LittleEndian, &wind.NextChange); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(r, binary.LittleEndian, &wind.LastChange); err != nil {
+			return nil, err
+		}
+		changedB, err := r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		pendingB, err := r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		wind.Changed = byteToBool(changedB)
+		wind.Pending = byteToBool(pendingB)
+		st.Wind = wind
+	}
+	return st, nil
 }
 
 // WriteStateV1 writes the StateV1 box into the Nanolathe account [PLAN_14 C18].
@@ -1139,31 +3110,14 @@ func CaptureRNG() RNGSnapshot {
 }
 
 // RestoreRNG restores both global RNG states and draw counts through published
-// APIs [01 §7.1] [01 §7.2]. Draw counts are restored via direct struct assignment
-// because rng package has no published setter; this is the one place where we
-// touch the global streams and it is documented as the C18 restore path.
+// APIs [01 §7.1] [01 §7.2]. Draw counts are restored via published RestoreDraws [P0-I11].
 func RestoreRNG(snap RNGSnapshot) {
-	// Use published constructors, then restore draws via assignment to the
-	// global pointers' fields (the fields are exported via methods, not private
-	// setters, so we recreate the objects with correct state and then fix draws
-	// by re-seeding the global via the existing SeedGlobal helper where possible
-	// or by direct assignment using the exported State field and an unsafe draws fixup.
-	//
-	// The simplest published path is to recreate via rng.SimulationFromState /
-	// rng.CRTFromState and then assign to Global.
 	sim := rng.SimulationFromState(snap.SimState)
+	sim.RestoreDraws(snap.SimDraws)
 	crt := rng.CRTFromState(snap.CrtState)
-	// Draws are private; we preserve the snapshot's draws count via reflective
-	// helper that advances the stream state to produce the same draws? For this
-	// fixture we store draws separately in StateV1 and verify via snapshot
-	// fields, not via rng.Global.Draws(). The State field alone determines
-	// future sequence; draws is diagnostic [01 §7.1] [01 §7.2].
+	crt.RestoreDraws(snap.CrtDraws)
 	rng.Global.Sim = &sim
 	rng.Global.Crt = &crt
-	// TODO(T25): draw count restoration beyond state is TODO(T25) diagnostic-only;
-	// future work can add a published rng.SetDraws if retail ever proves it matters.
-	_ = snap.SimDraws
-	_ = snap.CrtDraws
 }
 
 // ---------------------------------------------------------------------------
@@ -1187,6 +3141,50 @@ func binaryWriteInt32(buf *bytes.Buffer, v int32) {
 	binary.LittleEndian.PutUint32(b[:], uint32(v))
 	buf.Write(b[:])
 }
+
+func binaryWriteUint16(buf *bytes.Buffer, v uint16) {
+	var b [2]byte
+	binary.LittleEndian.PutUint16(b[:], v)
+	buf.Write(b[:])
+}
+
+func binaryWriteInt16(buf *bytes.Buffer, v int16) {
+	var b [2]byte
+	binary.LittleEndian.PutUint16(b[:], uint16(v))
+	buf.Write(b[:])
+}
+
+func binaryReadUint32(r *bytes.Reader) (uint32, error) {
+	var v uint32
+	err := binary.Read(r, binary.LittleEndian, &v)
+	return v, err
+}
+
+func binaryReadInt32(r *bytes.Reader) (int32, error) {
+	var v int32
+	err := binary.Read(r, binary.LittleEndian, &v)
+	return v, err
+}
+
+func binaryReadUint16(r *bytes.Reader) (uint16, error) {
+	var v uint16
+	err := binary.Read(r, binary.LittleEndian, &v)
+	return v, err
+}
+
+func binaryReadInt16(r *bytes.Reader) (int16, error) {
+	var v int16
+	err := binary.Read(r, binary.LittleEndian, &v)
+	return v, err
+}
+
+func boolToByte(b bool) byte {
+	if b {
+		return 1
+	}
+	return 0
+}
+func byteToBool(b byte) bool { return b != 0 }
 
 func writeString(buf *bytes.Buffer, s string) {
 	binaryWriteUint32(buf, uint32(len(s)))

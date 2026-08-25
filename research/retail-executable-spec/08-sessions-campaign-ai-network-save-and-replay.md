@@ -565,6 +565,12 @@ elevation-agnostic LOS (`1,0`), to all mapped terrain visible
 (`LineOfSight=0`, `LineOfSightType=1`), then back to the default. These defaults
 are separate from the per-slot defaults below.
 
+For a missing per-slot value, the retail lobby supplies controller `0`, ally
+group `5`, metal `1000`, energy `1000`, color equal to the slot index, and side
+equal to the slot index modulo two. The frontend row state then distinguishes
+`Open` (`0`), `Player` (`1`), and `Computer` (`2`) before converting those
+values into the session's player-controller representation at battle entry.
+
 The retail Energy and Metal lobby buttons adjust the selected slot by 500.
 Decrementing floors at 200; incrementing caps at 10000, with the preserved
 callback quirk that an increment from 200 would produce 700 and is immediately
@@ -574,6 +580,41 @@ are granted.
 The front end builds ten-slot player state from these values and validates it
 against the selected map/schema. Computer-controlled slots use distinct player
 state values that later tick code recognizes.
+
+The stock skirmish screen does not contain a custom opponent-count selector.
+The persisted `NumSkirmishPlayers` setting determines how many `Player%d`
+rows the runtime appends to `SKIRMISH.GUI`; the missing-value default is four
+players and the executable's registry validation stores an explicitly supplied
+value without clamping. Each visible row is laid out from the active row count,
+with a vertical step of `200 / count` and a first-row Y coordinate of
+`(180 - (count - 1) * step) / 2 + 79`. The authored screen supplies the
+round/setup controls (`StartLocation`, `CommanderDeath`, `Mapping`,
+`LineOfSight`, and staged `Difficulty`); the dynamic row builder supplies
+controller, side, color, alliance, metal, and energy controls.
+
+The setup callbacks use the following retail validation order. A selected map
+must resolve to both its OTA metadata and terrain; at least one visible row
+must be `Player` and at least one must be `Computer`; the number of players
+requested by the lobby must fit the selected map's network schema; and the
+live rows must not all share one non-sentinel alliance group. The alliance
+group value `5` is the unassigned sentinel: if every live row is `5`, the
+same-group error is not raised. Open rows are ignored after the first live
+non-`5` group is found. The retail diagnostic strings are, respectively,
+`The terrain for the selected map does not exist.`,
+`There must be at least one player and one computer opponent`,
+`There are too many players enabled for this map`, and
+`All players may not be in the same allied group.`
+
+The start callback's allied-group preflight is intentionally narrower than a
+simple "all live rows have the same value" test. It first finds the first live
+row whose ally group is not 5. If no such row exists (no live rows, or every
+live row is group 5), the check passes. Otherwise open rows are ignored and the
+check fails only when another live row has a different group. The color callback
+has a similarly observable quirk: it accepts the next logo when that candidate
+does not conflict with another live row, but after a conflict its fallback
+search scans every configured row, including open rows, from logo 0 upward and
+stores -1 when all ten stock logos are present. [07 "Retail closure for the
+single-player menu slice"]
 
 ## Lobby behavior
 

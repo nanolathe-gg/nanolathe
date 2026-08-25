@@ -273,6 +273,25 @@ func (v *VM) ClearDiagnostics() {
 	}
 }
 
+// ScriptPC returns the code index for a script name, if present [fmt cob][04 §4.1].
+func (v *VM) ScriptPC(name string) (int, bool) {
+	if v == nil || v.prog == nil {
+		return 0, false
+	}
+	pc, ok := v.prog.Scripts[name]
+	return pc, ok
+}
+
+// StartByName starts a script by name on the lowest free thread [04 §4.1][04 §4.2].
+// It is a convenience for engine→COB callbacks (Fire*, RockUnit, Aim*, TargetCleared) [GAP T15].
+func (v *VM) StartByName(name string, args []int32) bool {
+	pc, ok := v.ScriptPC(name)
+	if !ok {
+		return false
+	}
+	return v.Start(pc, args)
+}
+
 // Start starts script at prog word index with args asynchronously [04 §4.2] [04 §4.3].
 // It allocates the lowest clear thread slot [01 §6.1] C13; if no slot or the
 // script id is not a valid entry, it returns false without consuming args

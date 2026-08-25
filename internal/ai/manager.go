@@ -1,8 +1,12 @@
 package ai
 
 import (
+	"sort"
+
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -83,6 +87,15 @@ type Manager struct {
 	MissionGateFlag int32                                                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	GateCandidates  map[string]struct{}                                       // was package var Gate241Candidates [P0-I16]
 	QueueBuild      func(factory *units.Unit, defKey string, count int) error // was package var queueBuild [P0-I16]
+
+	// Groups for AI tactical coordination — populated from unit creation/death/completion via updateGroups [P0-I12].
+	// Each slice holds pool handles in deterministic order; cleaned each tick before dispatch.
+	GroupWaveA    []pool.Handle
+	GroupWaveB    []pool.Handle
+	GroupExplore  []pool.Handle
+	GroupRally    []pool.Handle
+	GroupRegroupA []pool.Handle
+	GroupRegroupB []pool.Handle
 
 	entryCount         uint32 // eligible manager entries for classification cadence [08][PLAN_11 C3]
 	classificationRuns int
@@ -189,6 +202,145 @@ func (m *Manager) TaskRuns(k TaskKind) int {
 	return m.taskRuns[k]
 }
 
+// EnsureStrategicInitialized lazily initializes class maps from catalog for each manager [P0-I12].
+// It calls Strategic.Init with all catalog types if vectors are still zero/empty, ensuring vectors not zero.
+func (m *Manager) EnsureStrategicInitialized() {
+	if m == nil {
+		return
+	}
+	if m.Catalog == nil && m.Strategic.Catalog == nil {
+		return
+	}
+	cat := m.Catalog
+	if cat == nil {
+		cat = m.Strategic.Catalog
+	}
+	if cat == nil || cat.Units == nil || len(cat.Units) == 0 {
+		return
+	}
+	// If already initialized with varied vectors, skip.
+	if len(m.Strategic.ClassVectors) > 0 {
+		// Check if any vector is non-zero; if all zero, reinit (fallback case)
+		hasVaried := false
+		for _, v := range m.Strategic.ClassVectors {
+			if v.C0 != 0 || v.C1 != 0 || v.C2 != 0 {
+				hasVaried = true
+				break
+			}
+		}
+		if hasVaried && len(m.Strategic.ClassVectors) == len(cat.Units) {
+			return
+		}
+		if hasVaried && len(m.Strategic.ClassVectors) >= len(cat.Units)/2 {
+			// Assume sufficiently initialized
+			return
+		}
+	}
+	types := make([]string, 0, len(cat.Units))
+	for k := range cat.Units {
+		types = append(types, k)
+	}
+	sort.Strings(types)
+	m.Strategic.Catalog = cat
+	m.Catalog = cat
+	m.Strategic.Init(types)
+}
+
+// simRNG returns the simulation RNG to use [I4].
+func (m *Manager) simRNG() *rng.Simulation {
+	if m != nil && m.RNG != nil {
+		return m.RNG
+	}
+	return rng.Global.Sim
+}
+
+// findBuilder returns a valid builder for the manager's player [P0-I12].
+// It scans in deterministic sliced order (player asc, slot asc) [I1] and returns the
+// first completed builder that has a non-empty build menu via the manager's catalog.
+// This replaces the previous first-owned-unit logic which could return a non-builder.
+func (m *Manager) findBuilder(w *units.World) *units.Unit {
+	if m == nil || w == nil {
+		return nil
+	}
+	for _, u := range w.IterSliced() {
+		if u == nil || !u.Alive {
+			continue
+		}
+		if u.Owner != m.Player {
+			continue
+		}
+		if u.Remaining != 0 {
+			continue
+		}
+		if u.Def == nil {
+			continue
+		}
+		if !u.Def.Builder {
+			continue
+		}
+		// Must have build options via catalog's BuildMenus or at least Builder flag with candidate source.
+		// Prefer check via manager's catalog; fallback to Builder true if no catalog.
+		if m.Catalog != nil && m.Catalog.BuildMenus != nil {
+			ck := canonicalKey(u.Def.UnitName)
+			if ck == "" {
+				ck = canonicalKey(u.Def.CanonicalKey)
+			}
+			if page, ok := m.Catalog.BuildMenus[ck]; ok && page != nil && len(page.Buttons) > 0 {
+				return u
+			}
+			if ck2 := canonicalKey(u.Def.CanonicalKey); ck2 != ck {
+				if page, ok := m.Catalog.BuildMenus[ck2]; ok && page != nil && len(page.Buttons) > 0 {
+					return u
+				}
+			}
+			// Also check candidate source if set
+			if m.CandidateSource != nil {
+				cands := m.CandidateSource(u)
+				if len(cands) > 0 {
+					return u
+				}
+			}
+			continue
+		}
+		if m.Strategic.Catalog != nil && m.Strategic.Catalog.BuildMenus != nil {
+			ck := canonicalKey(u.Def.UnitName)
+			if page, ok := m.Strategic.Catalog.BuildMenus[ck]; ok && page != nil && len(page.Buttons) > 0 {
+				return u
+			}
+			continue
+		}
+		// No catalog: any builder qualifies
+		return u
+	}
+	return nil
+}
+
+// hasBuildOptionsForDef reports whether def has build options via catalog.
+func (m *Manager) hasBuildOptionsForDef(def *content.UnitDef) bool {
+	if def == nil {
+		return false
+	}
+	cat := m.Catalog
+	if cat == nil {
+		cat = m.Strategic.Catalog
+	}
+	if cat != nil && cat.BuildMenus != nil {
+		ck := canonicalKey(def.UnitName)
+		if page, ok := cat.BuildMenus[ck]; ok && page != nil && len(page.Buttons) > 0 {
+			return true
+		}
+		if ck2 := canonicalKey(def.CanonicalKey); ck2 != ck {
+			if page, ok := cat.BuildMenus[ck2]; ok && page != nil && len(page.Buttons) > 0 {
+				return true
+			}
+		}
+	}
+	if m.CandidateSource != nil {
+		// We can't test without a unit instance; assume builder flag indicates options
+	}
+	return def.Builder
+}
+
 // isOuterEligible reports whether the outer per-tick gate passes [08 "Established AI-facing data and rooted planner"] [PLAN_11 C1].
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // The Player==10 check is literal retail guard [08]; it never fires for 0..9 but is kept for fidelity.
@@ -218,6 +370,15 @@ func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 	} else if m.Strategic.Catalog != nil && m.Catalog == nil {
 		m.Catalog = m.Strategic.Catalog
 	}
+	// P0-I12: lazily initialize class maps from catalog if not yet done, ensuring vectors not zero.
+	m.EnsureStrategicInitialized()
+	// P0-I12: refresh strategic center/counts every 30 ticks via MaybeRefresh [08][P0-01] using Simulation RNG bound 30.
+	// This also gates class-vector recompute via RNG(30)==0. Only draw when catalog present to keep headless tests without catalog deterministic.
+	if m.Catalog != nil || m.Strategic.Catalog != nil {
+		m.Strategic.MaybeRefresh(tick, m.simRNG(), m.Player, w)
+	}
+	// P0-I12: populate and maintain AI groups from unit creation/death/completion.
+	m.updateGroups(w)
 	if m.Player == 10 { // [08] index !=10 [PLAN_11 C1]
 		return
 	}
@@ -246,6 +407,8 @@ func (m *Manager) runClassifications(tick uint32, w *units.World, econ *economy.
 	m.classificationRuns++
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// Placeholder: no state change beyond counting; real work would read completed counts / profile.
+	// For P0-I12, we ensure strategic center is fresh (already via MaybeRefresh above) and that
+	// classifications produce varied scores via existing ClassVectors (established via Init).
 	_, _, _ = tick, w, econ
 }
 
@@ -332,51 +495,57 @@ func (m *Manager) nextDeadline(k TaskKind, tick uint32) uint32 {
 	}
 }
 
-func findBuilder(w *units.World, player uint8) *units.Unit {
-	if w == nil {
-		return nil
-	}
-	for _, u := range w.Iter() { // [I1] pool asc [05 "Authoritative settlement order"]
-		if u == nil || !u.Alive {
-			continue
-		}
-		if u.Owner != player {
-			continue
-		}
-		if u.Def == nil {
-			continue
-		}
-		return u
-	}
-	return nil
-}
-
 func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Service) {
 	_, _ = tick, econ
 	if w == nil || econ == nil {
 		return
 	}
-	builder := findBuilder(w, m.Player)
-	if builder == nil {
-		return
+	// Find best builder+candidate across all owned completed builders [P0-I12].
+	// Iterate builders in deterministic sliced order [I1] and pick highest scoring candidate.
+	var bestBuilder *units.Unit
+	var bestCand Candidate
+	var bestScore int32 = -1
+	found := false
+	for _, u := range w.IterSliced() {
+		if u == nil || !u.Alive || u.Owner != m.Player || u.Remaining != 0 {
+			continue
+		}
+		if u.Def == nil || !u.Def.Builder {
+			continue
+		}
+		if !m.hasBuildOptionsForDef(u.Def) {
+			continue
+		}
+		cand, ok := Select(m, u, econ)
+		if !ok {
+			continue
+		}
+		if !found || cand.Score > bestScore {
+			bestBuilder = u
+			bestCand = cand
+			bestScore = cand.Score
+			found = true
+		}
 	}
+	if !found || bestBuilder == nil {
+		// Fallback to old findBuilder for compatibility
+		bestBuilder = m.findBuilder(w)
+		if bestBuilder == nil {
+			return
+		}
+		cand, ok := Select(m, bestBuilder, econ)
+		if !ok {
+			return
+		}
+		bestCand = cand
+	}
+	builder := bestBuilder
+	cand := bestCand
 	// Issues orders ONLY through ordinary paths — construction.QueueBuild and descriptor registry [PLAN_11 C12] [08 "Established AI-facing data and rooted planner"].
 	// No privileged mutation. Chain Select → Place → QueueBuild [PLAN_11 C8+C12].
-	cand, ok := Select(m, builder, econ) // [PLAN_11 C5-C7]
-	if !ok {
-		return
-	}
-	// Route through Place before QueueBuild [PLAN_11 C8+C12]: Place moves search
-	// origin toward strategic center using stored radius, handles the extractor
-	// RNG(255) branch, validates against terrain yard map, resets radius on
-	// success, and issues the build command via the ordinary queueBuild path.
-	// Temporarily bind Factory to the builder that Select evaluated so the
-	// placement queues to the correct unit even if Manager.Factory was stale;
-	// restore afterwards. On Place failure the radius growth and origin step
-	// are already applied and the deadline reschedule in runDueTasks provides the retry.
 	origFactory := m.Factory
 	m.Factory = builder
-	_, _, ok = Place(m, cand.DefKey, m.Terrain) // [PLAN_11 C8][C12]
+	_, _, ok := Place(m, cand.DefKey, m.Terrain) // [PLAN_11 C8][C12]
 	m.Factory = origFactory
 	if !ok {
 		return
@@ -398,8 +567,8 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 	metalStock := econ.Players[m.Player].Stock[economy.Metal]
 	energyStock := econ.Players[m.Player].Stock[economy.Energy]
 	netEnergy := econ.Players[m.Player].PassProduced[economy.Energy] - econ.Players[m.Player].PassConsumed[economy.Energy]
-	// Iterate completed units in pool asc (I1) stable ordering, no map iteration.
-	for _, u := range w.Iter() {
+	// Iterate completed units in sliced order (I1) stable ordering, no map iteration.
+	for _, u := range w.IterSliced() {
 		if u == nil || !u.Alive || u.Owner != m.Player {
 			continue
 		}
@@ -412,6 +581,7 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		if u.Def.OnOffable {
 			// Branch 2*metal > energy ?
+			enable := false
 			if 2*metalStock > energyStock && netEnergy >= 1 {
 				// Draw RNG(5) only when branch taken [P0-02 §5]
 				var draw uint32
@@ -423,54 +593,338 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 					draw = 1 // default non-zero to enable
 				}
 				if draw != 0 {
-					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-					_ = draw
-					// Placeholder: toggle would set unit active; we just respect draw count for determinism.
-					// No privileged mutation; we don't actually toggle here beyond RNG consumption.
+					enable = true
 				} else {
-					// RNG 0 => remain off, no enable call [P0-02]
+					enable = false
 				}
 			} else {
-				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				enable = false
 			}
-		} else {
+			// Ordinary toggle via unit Flags bit for metal maker [P0-I12].
 			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			if u.Def.Builder && u.Def.BuildCostMetal == 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-				// In real code would check queue[0x17]==null and queue[0x42]&8==0 etc. We stub as no-op but keep structure.
-				// Candidate selection via Select would be called but we are in resource task, not construction.
-				// For now, just keep placeholder without queue mutation to preserve determinism and not invent queue state.
+			// We mutate Flags bit 12 as active marker; economy can observe via Flags if extended.
+			// This is ordinary mutation via unit instance, not privileged economy write.
+			const activeBit uint32 = 1 << 12 // INFERENCE for OnOffable active state
+			if enable {
+				u.Flags |= activeBit
+			} else {
+				u.Flags &^= activeBit
+			}
+			// Also try repair of damaged units via builder orders when resource allows.
+			// This provides stock-reachable reclaim/repair behavior via ordinary orders [P0-I12].
+			if enable {
+				m.tryRepair(tick, w)
 			}
 		}
 	}
+}
+
+// tryRepair issues a repair order from a builder to the most damaged owned unit.
+// Uses ordinary order emission via orders.QueueForUnit [P0-I12][08].
+func (m *Manager) tryRepair(tick uint32, w *units.World) {
+	if w == nil {
+		return
+	}
+	builder := m.findBuilder(w)
+	if builder == nil {
+		return
+	}
+	// Don't repair if builder already has queued work
+	qb := orders.QueueForUnit(builder)
+	if qb != nil && qb.LenPrimary() > 0 {
+		return
+	}
+	var damaged *units.Unit
+	for _, u := range w.IterSliced() {
+		if u == nil || !u.Alive || u.Owner != m.Player || u.Remaining != 0 {
+			continue
+		}
+		if u.Health >= u.MaxHealth {
+			continue
+		}
+		if u.Health <= 0 {
+			continue
+		}
+		if u.Def != nil && u.Def.Builder {
+			continue
+		}
+		if damaged == nil || u.Health < damaged.Health || (u.Health == damaged.Health && u.Handle < damaged.Handle) {
+			damaged = u
+		}
+	}
+	if damaged == nil {
+		return
+	}
+	id := orders.Lookup("RepairUnit")
+	if id == 0 {
+		id = orders.Lookup("RepairUnitNoMove")
+	}
+	if id == 0 {
+		return
+	}
+	node := orders.NewNodeForOrder(id, damaged.Handle, damaged.X, damaged.Y, damaged.Z, tick, builder.Handle, false)
+	q := orders.QueueForUnit(builder)
+	if q == nil {
+		return
+	}
+	q.PurgeUnprotected()
+	q.DropLeadingAutoOps()
+	q.Push(id, node)
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, threshold int32, min, max int) {
-	_, _, _, _, _, _ = tick, w, econ, threshold, min, max
-	// Placeholder: no group population writer located within bounded displacement search [P0-02 §6] NEGATIVE-BOUNDED.
-	// We keep the deadline and threshold logic exact, but group iteration is empty as static.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Keep TODO(T25) for AI transport geometry only; wave geometry thresholds are now established.
+	_, _ = econ, threshold
+	if w == nil {
+		return
+	}
+	m.updateGroups(w)
+	var group []pool.Handle
+	if threshold == waveAThreshold {
+		group = m.GroupWaveA
+	} else {
+		group = m.GroupWaveB
+	}
+	group = cleanGroup(group, w, m.Player)
+	// Update stored group after clean
+	if threshold == waveAThreshold {
+		m.GroupWaveA = group
+	} else {
+		m.GroupWaveB = group
+	}
+	if len(group) < min {
+		return
+	}
+	if len(group) > max {
+		group = group[:max]
+	}
+	// Find enemy target deterministically; if none, use map centroid.
+	target := m.findEnemyTarget(w)
+	var tx, tz numeric.Fixed
+	var tid pool.Handle
+	if target != nil {
+		tx, tz = target.X, target.Z
+		tid = target.Handle
+	} else {
+		tx, tz = m.enemyCentroid(w)
+	}
+	// Issue ordinary attack/move orders to each unit in group via orders queue [08][P0-02].
+	for _, h := range group {
+		u := w.Unit(h)
+		if u == nil || !u.Alive || u.Remaining != 0 {
+			continue
+		}
+		var id orders.ID
+		if tid != 0 {
+			id = orders.Lookup("Attack_Chase")
+			if id == 0 {
+				id = orders.Lookup("Attack_NoMove")
+			}
+		}
+		if id == 0 {
+			if u.Def != nil && u.Def.CanFly {
+				id = orders.Lookup("VTOL_Move")
+			} else {
+				id = orders.Lookup("Move_Ground")
+			}
+		}
+		if id == 0 {
+			continue
+		}
+		node := orders.NewNodeForOrder(id, tid, tx, 0, tz, tick, u.Handle, false)
+		q := orders.QueueForUnit(u)
+		if q == nil {
+			continue
+		}
+		// Ordinary path: purge unprotected and push (queued false) [04 §3.3][P0-I03]
+		q.PurgeUnprotected()
+		q.DropLeadingAutoOps()
+		q.Push(id, node)
+	}
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// It moves own group toward peer centroid via ordinary move orders [P0-02][P0-I12].
 func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, peer TaskKind) {
-	_, _, _, _ = tick, w, econ, peer
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	_, _, _ = tick, econ, peer
+	if w == nil {
+		return
+	}
+	m.updateGroups(w)
+	var ownGroup []pool.Handle
+	var peerGroup []pool.Handle
+	if peer == TaskWaveA {
+		ownGroup = m.GroupWaveA
+		peerGroup = m.GroupWaveB
+		// Alternative: use Regroup slices if they have members, else wave
+		if len(m.GroupRegroupA) > 0 {
+			ownGroup = m.GroupRegroupA
+		}
+	} else {
+		ownGroup = m.GroupWaveB
+		peerGroup = m.GroupWaveA
+		if len(m.GroupRegroupB) > 0 {
+			ownGroup = m.GroupRegroupB
+		}
+	}
+	ownGroup = cleanGroup(ownGroup, w, m.Player)
+	peerGroup = cleanGroup(peerGroup, w, m.Player)
+	if len(ownGroup) == 0 || len(peerGroup) == 0 {
+		return
+	}
+	// Peer centroid
+	cx, cz, ok := groupCentroid(peerGroup, w)
+	if !ok {
+		cx, cz = m.enemyCentroid(w)
+	}
+	for _, h := range ownGroup {
+		u := w.Unit(h)
+		if u == nil || !u.Alive || u.Remaining != 0 {
+			continue
+		}
+		var id orders.ID
+		if u.Def != nil && u.Def.CanFly {
+			id = orders.Lookup("VTOL_Move")
+		} else {
+			id = orders.Lookup("Move_Ground")
+		}
+		if id == 0 {
+			continue
+		}
+		node := orders.NewNodeForOrder(id, 0, cx, 0, cz, tick, u.Handle, false)
+		q := orders.QueueForUnit(u)
+		if q == nil {
+			continue
+		}
+		q.PurgeUnprotected()
+		q.DropLeadingAutoOps()
+		q.Push(id, node)
+	}
 }
 
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) {
 	_, _, _ = tick, w, econ
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	if w == nil {
+		return
+	}
+	m.updateGroups(w)
+	group := cleanGroup(m.GroupExplore, w, m.Player)
+	m.GroupExplore = group
+	if len(group) == 0 {
+		// If no explore group, use idle combat units not in wave as explore
+		return
+	}
+	var tx, tz numeric.Fixed
+	if len(group) < 5 {
+		tx, tz = m.enemyCentroid(w)
+	} else {
+		// Deterministic pseudo-random target based on tick and player, no RNG draws [I4] to keep census 900/150 only in deadline path
+		if m.Terrain != nil {
+			wc := m.Terrain.CellW
+			hc := m.Terrain.CellH
+			if wc < 2 {
+				wc = 2
+			}
+			if hc < 2 {
+				hc = 2
+			}
+			cx := int32(tick) % wc
+			cz := int32(tick*3+uint32(m.Player)*7) % hc
+			tx = world.CellToWorld(cx)
+			tz = world.CellToWorld(cz)
+		} else {
+			tx = m.Strategic.CenterX + numeric.Fixed(int32(tick%20)*65536*16)
+			tz = m.Strategic.CenterZ + numeric.Fixed(int32((tick*5)%20)*65536*16)
+		}
+	}
+	for _, h := range group {
+		u := w.Unit(h)
+		if u == nil || !u.Alive || u.Remaining != 0 {
+			continue
+		}
+		var id orders.ID
+		if u.Def != nil && u.Def.CanFly {
+			id = orders.Lookup("VTOL_Move")
+		} else {
+			id = orders.Lookup("Move_Ground")
+		}
+		if id == 0 {
+			continue
+		}
+		node := orders.NewNodeForOrder(id, 0, tx, 0, tz, tick, u.Handle, false)
+		q := orders.QueueForUnit(u)
+		if q == nil {
+			continue
+		}
+		q.PurgeUnprotected()
+		q.DropLeadingAutoOps()
+		q.Push(id, node)
+	}
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// It issues ordinary move orders via stock-reachable path [P0-I12][P0-02].
 func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 	_, _, _ = tick, w, econ
-	// Placeholder: would walk group via RNG 0x10000 etc. Currently empty -> no-op.
+	if w == nil {
+		return
+	}
+	m.updateGroups(w)
+	group := cleanGroup(m.GroupRally, w, m.Player)
+	m.GroupRally = group
+	if len(group) == 0 {
+		// Use explore as fallback if rally empty but explore has members
+		if len(m.GroupExplore) > 0 {
+			group = m.GroupExplore[:1]
+		} else {
+			return
+		}
+	}
+	// Deterministic walk offset based on tick, no extra RNG beyond deadline's 150 bound
+	var tx, tz numeric.Fixed
+	if m.Terrain != nil {
+		// Walk around strategic center with small orbit
+		radius := numeric.Fixed(10 * 65536)
+		angle := uint16(tick % 65536)
+		// Simple fixed-point trig via integer approx: use map center offset
+		// Deterministic without float: use tick-derived cell
+		cx := int32(tick*3) % m.Terrain.CellW
+		cz := int32(tick*7) % m.Terrain.CellH
+		tx = world.CellToWorld(cx)
+		tz = world.CellToWorld(cz)
+		_ = radius
+		_ = angle
+	} else {
+		tx = m.Strategic.CenterX + numeric.Fixed(int32(tick%10)*65536*16)
+		tz = m.Strategic.CenterZ + numeric.Fixed(int32((tick*2)%10)*65536*16)
+	}
+	for _, h := range group {
+		u := w.Unit(h)
+		if u == nil || !u.Alive || u.Remaining != 0 {
+			continue
+		}
+		var id orders.ID
+		if u.Def != nil && u.Def.CanFly {
+			id = orders.Lookup("VTOL_Move")
+		} else {
+			id = orders.Lookup("Move_Ground")
+		}
+		if id == 0 {
+			continue
+		}
+		node := orders.NewNodeForOrder(id, 0, tx, 0, tz, tick, u.Handle, false)
+		q := orders.QueueForUnit(u)
+		if q == nil {
+			continue
+		}
+		q.PurgeUnprotected()
+		q.DropLeadingAutoOps()
+		q.Push(id, node)
+	}
 }
 
 // Dispatch iterates the ten players per-tick entry [08 "Established AI-facing data and rooted planner"] [PLAN_11 C1][P0-02].

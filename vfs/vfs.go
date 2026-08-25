@@ -593,6 +593,46 @@ func (f *FS) ReadDir(name string) ([]EntryInfo, error) {
 	return result, nil
 }
 
+// RetailReadDir returns the winning direct children of a logical directory in
+// the provider/enumeration order exposed by the mounted providers. Retail's
+// front-end wildcard scans do not sort these results; ordinary ReadDir keeps
+// its canonical sorted contract for deterministic content consumers.
+func (f *FS) RetailReadDir(name string) ([]EntryInfo, error) {
+	logical, err := cleanPath(name)
+	if err != nil {
+		return nil, err
+	}
+	prefix := logical
+	if prefix != "" {
+		prefix += "/"
+	}
+	seen := make(map[string]bool)
+	var result []EntryInfo
+	for _, mount := range f.orderedMounts() {
+		for _, info := range mount.provider.auditEntries() {
+			if info.Path == "" || !strings.HasPrefix(info.Path, prefix) {
+				continue
+			}
+			rest := strings.TrimPrefix(info.Path, prefix)
+			if rest == "" || strings.Contains(rest, "/") {
+				continue
+			}
+			key := strings.ToLower(info.Path)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			result = append(result, info)
+		}
+	}
+	if len(result) == 0 && logical != "" {
+		if _, err := f.Stat(logical); err != nil {
+			return nil, fmt.Errorf("%w: %s", ErrNotFound, name)
+		}
+	}
+	return result, nil
+}
+
 // Close closes all mounted archive handles. Loose-directory mounts have no
 // resources to release.
 func (f *FS) Close() error {

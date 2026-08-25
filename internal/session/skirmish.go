@@ -272,7 +272,7 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 	// 8. movement state and visibility state for new units
 	ensureMovementForAll(s)
 	publishVisibilityForAll(s)
-	// AI managers for computer players [08 "Established AI-facing data"]
+	// AI managers for computer players [08 "Established AI-facing data"] [P0-I12]
 	s.AI = make([]*ai.Manager, 0, nPlayers)
 	for i, p := range cfg.Players[:nPlayers] {
 		if i >= 10 {
@@ -289,6 +289,44 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 		mgr.Terrain = s.World
 		mgr.Catalog = s.Catalog
 		s.AI = append(s.AI, mgr)
+	}
+	// P0-I12: initialize class maps from catalog for each manager, ensure vectors not zero [08][P0-01]
+	if len(s.AI) > 0 && s.Catalog != nil && len(s.Catalog.Units) > 0 {
+		allTypes := make([]string, 0, len(s.Catalog.Units))
+		for k := range s.Catalog.Units {
+			allTypes = append(allTypes, k)
+		}
+		sort.Strings(allTypes)
+		for _, mgr := range s.AI {
+			mgr.SetCatalog(s.Catalog)
+			mgr.Strategic.Init(allTypes)
+			if s.World != nil {
+				mgr.Strategic.CenterX = world.CellToWorld(s.World.CellW / 2)
+				mgr.Strategic.CenterZ = world.CellToWorld(s.World.CellH / 2)
+				mgr.Strategic.Radius = 0
+				mgr.OriginX = world.CellToWorld(s.World.CellW / 2)
+				mgr.OriginZ = world.CellToWorld(s.World.CellH / 2)
+				for _, u := range s.Units.IterSliced() {
+					if u != nil && u.Alive && int(u.Owner) == int(mgr.Player) && u.Def != nil && u.Def.Commander {
+						mgr.OriginX = u.X
+						mgr.OriginZ = u.Z
+						mgr.Strategic.CenterX = u.X
+						mgr.Strategic.CenterZ = u.Z
+						break
+					}
+				}
+				if mgr.OriginX == 0 && mgr.OriginZ == 0 {
+					for _, u := range s.Units.IterSliced() {
+						if u != nil && u.Alive && int(u.Owner) == int(mgr.Player) {
+							mgr.OriginX = u.X
+							mgr.OriginZ = u.Z
+							break
+						}
+					}
+				}
+				mgr.SurfaceMetal = 255 // bias extractor placement to scatter helper B which succeeds without patch vector [P0-03][P0-I12]
+			}
+		}
 	}
 	// 11. register every authoritative phase once [01 §4.4] I7
 	s.RegisterAll()
@@ -464,6 +502,46 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 			mgr.Catalog = s.Catalog
 		}
 		s.AI = append(s.AI, mgr)
+	}
+	// P0-I12: initialize AI class vectors for fixture managers as well, if catalog present
+	if len(s.AI) > 0 && s.Catalog != nil && len(s.Catalog.Units) > 0 {
+		allTypes := make([]string, 0, len(s.Catalog.Units))
+		for k := range s.Catalog.Units {
+			allTypes = append(allTypes, k)
+		}
+		sort.Strings(allTypes)
+		for _, mgr := range s.AI {
+			mgr.SetCatalog(s.Catalog)
+			mgr.Strategic.Init(allTypes)
+			if s.World != nil {
+				mgr.Strategic.CenterX = world.CellToWorld(s.World.CellW / 2)
+				mgr.Strategic.CenterZ = world.CellToWorld(s.World.CellH / 2)
+				mgr.Strategic.Radius = 0
+				mgr.OriginX = world.CellToWorld(s.World.CellW / 2)
+				mgr.OriginZ = world.CellToWorld(s.World.CellH / 2)
+				for _, u := range s.Units.IterSliced() {
+					if u != nil && u.Alive && int(u.Owner) == int(mgr.Player) && u.Def != nil && u.Def.Commander {
+						mgr.OriginX = u.X
+						mgr.OriginZ = u.Z
+						mgr.Strategic.CenterX = u.X
+						mgr.Strategic.CenterZ = u.Z
+						break
+					}
+				}
+				if mgr.OriginX == 0 && mgr.OriginZ == 0 {
+					for _, u := range s.Units.IterSliced() {
+						if u != nil && u.Alive && int(u.Owner) == int(mgr.Player) {
+							mgr.OriginX = u.X
+							mgr.OriginZ = u.Z
+							break
+						}
+					}
+				}
+				mgr.SurfaceMetal = 255
+			} else {
+				mgr.SurfaceMetal = 255
+			}
+		}
 	}
 	if s.World != nil && s.Movement == nil {
 		s.Movement = movement.NewSystem(s.World, movement.Profile{FootPrintX: 1, FootPrintZ: 1}, movement.NewOccupancyGrid())

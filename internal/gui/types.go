@@ -126,11 +126,31 @@ type Header struct {
 // Window is a compiled GUI panel. GADGET0 is the panel header; its rect is also Window.Rect [02 §6].
 // Gadgets includes the header as index 0 for provenance; consumers that want only controls can slice Gadgets[1:].
 type Window struct {
-	Name    string   // logical file path like guis/MAINMENU.GUI
-	Rect    Rect     // header rect after clamping to stay on-screen [02 §6]
+	Name string // logical file path like guis/MAINMENU.GUI
+	Rect Rect   // header rect after clamping to stay on-screen [02 §6]
+	// OriginX/OriginY are the header's authored placement. Retail stores
+	// controls in window-local coordinates; the renderer and hit tester add
+	// this origin when placing every non-header gadget [02 §6][07 §4].
+	OriginX int32
+	OriginY int32
 	Gadgets []Gadget // all gadgets in file order [07 §4] — header at 0
 	Focus   int      // index into Gadgets of default focus, -1 if none [02 §6]
 	Header  Header   // header fields
+}
+
+// PlacedRect returns a gadget's screen-space rectangle. Gadget.Rect remains
+// the authored/local rectangle so format and GUI tests can inspect it without
+// losing provenance. The header itself is already screen-space.
+func (w *Window) PlacedRect(index int) Rect {
+	if w == nil || index < 0 || index >= len(w.Gadgets) {
+		return Rect{}
+	}
+	r := w.Gadgets[index].Rect
+	if index != 0 {
+		r.X += w.OriginX
+		r.Y += w.OriginY
+	}
+	return r
 }
 
 // Event is a GUI input event for dispatch. WU-12-2 will expand runtime families 1,2,3,4,5,6,12,13 [07 §4].
