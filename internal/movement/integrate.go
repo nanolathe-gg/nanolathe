@@ -81,6 +81,8 @@ type System struct {
 	tickStarted bool
 	tick        uint32
 	tickCarried map[pool.Handle]struct{}
+
+	pathFailures map[pool.Handle]PathFailure // last non-success publish per handle [04 §7.3] C12 [P0-08][P0-12]
 }
 
 // arrivalToleranceWorld is the goal tolerance for movement arrival [04 §7.3] C15.
@@ -92,6 +94,16 @@ type System struct {
 // precision.
 // TODO(question): exact retail waypoint arrival tolerance beyond pruning 25 is not established [04 §8.1].
 const arrivalToleranceWorld = numeric.Fixed(5 * 16 * 65536) // 5 cells ×16 pixels ×65536 [03 §2.1][04 §7.3] C15
+
+const pathFailureRetryInterval = 30 // TODO(question): exact bound not established [04 §7.3][P0-08][P0-12], N>=30 placeholder
+const pathFailureMaxRetries = 1     // TODO(question): exact retry count not established [P0-08][P0-12]; bounded placeholder
+
+type PathFailure struct {
+	Status    path.Status
+	Tick      uint32
+	Retries   int
+	NextRetry uint32
+}
 
 // StepResult is the per-unit movement result for the slot visit [04 §8.1][04 §8.2].
 // Arrived is true only when the unit was dispatched with an active route and is now
@@ -124,6 +136,7 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 		profiles:     make(map[pool.Handle]Profile),
 		prevMoveTier: make(map[pool.Handle]int),
 		prevSFXBand:  make(map[pool.Handle]int),
+		pathFailures: make(map[pool.Handle]PathFailure),
 	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
 	// Use DefaultBase unless overridden [P0-I16]; no longer reads mutable global.
@@ -256,6 +269,102 @@ func (s *System) ProfileFor(h pool.Handle) Profile {
 		return p
 	}
 	return s.Fallback
+}
+
+func (s *System) recordPathFailure(h pool.Handle, status path.Status, tick uint32) {
+	if s == nil {
+		return
+	}
+	if s.pathFailures == nil {
+		s.pathFailures = make(map[pool.Handle]PathFailure)
+	}
+	if rec, ok := s.pathFailures[h]; ok {
+		rec.Status = status
+		rec.Tick = tick
+		rec.Retries++
+		rec.NextRetry = tick + pathFailureRetryInterval
+		s.pathFailures[h] = rec
+		return
+	}
+	s.pathFailures[h] = PathFailure{Status: status, Tick: tick, Retries: 0, NextRetry: tick + pathFailureRetryInterval}
+}
+
+func (s *System) HasPathFailure(h pool.Handle) bool {
+	if s == nil || s.pathFailures == nil {
+		return false
+	}
+	_, ok := s.pathFailures[h]
+	return ok
+}
+
+func (s *System) PathFailure(h pool.Handle) (path.Status, uint32, bool) {
+	if s == nil || s.pathFailures == nil {
+		return 0, 0, false
+	}
+	rec, ok := s.pathFailures[h]
+	if !ok {
+		return 0, 0, false
+	}
+	return rec.Status, rec.Tick, true
+}
+
+func (s *System) PathFailureRecord(h pool.Handle) (PathFailure, bool) {
+	if s == nil || s.pathFailures == nil {
+		return PathFailure{}, false
+	}
+	rec, ok := s.pathFailures[h]
+	return rec, ok
+}
+
+func (s *System) ClearPathFailure(h pool.Handle) {
+	if s == nil || s.pathFailures == nil {
+		return
+	}
+	delete(s.pathFailures, h)
+}
+
+func (s *System) NextRetryTick(h pool.Handle) uint32 {
+	if s == nil || s.pathFailures == nil {
+		return 0
+	}
+	if rec, ok := s.pathFailures[h]; ok {
+		return rec.NextRetry
+	}
+	return 0
+}
+
+func (s *System) RetryCount(h pool.Handle) int {
+	if s == nil || s.pathFailures == nil {
+		return 0
+	}
+	if rec, ok := s.pathFailures[h]; ok {
+		return rec.Retries
+	}
+	return 0
+}
+
+func (s *System) IncrementPathFailureRetry(h pool.Handle, nextTick uint32) {
+	if s == nil || s.pathFailures == nil {
+		return
+	}
+	rec, ok := s.pathFailures[h]
+	if !ok {
+		return
+	}
+	rec.Retries++
+	rec.NextRetry = nextTick
+	s.pathFailures[h] = rec
+}
+
+func (s *System) IsGoalCellPassable(h pool.Handle, cell path.Cell) bool {
+	if s == nil {
+		return true
+	}
+	if s.Terrain == nil {
+		return true
+	}
+	profile := s.ProfileFor(h)
+	return profile.IsPassable(s.Terrain, cell.X, cell.Z)
 }
 
 // EnsureUnit initializes per-unit surfaces for u if not already present. It stamps
@@ -468,6 +577,7 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) ([]path.Poi
 
 // publishFunc stores the published points into the per-unit Route via Route.Publish
 // [04 §7.3] C14 and leaves the order node as authority (caller keeps orders queue).
+// It surfaces non-success status via Route.Status and pathFailures for loop failure handling [04 §7.3] C12 [P0-08][P0-12].
 func (s *System) publishFunc(r path.Request, points []path.Point, status path.Status) {
 	if s == nil {
 		return
@@ -482,7 +592,12 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 		mPoints[i] = Point{X: p.X, Z: p.Z}
 	}
 	route.Publish(mPoints)
-	_ = status
+	route.Status = status
+	if status == path.StatusRejected {
+		s.recordPathFailure(r.Unit, status, s.tick)
+	} else {
+		s.ClearPathFailure(r.Unit)
+	}
 }
 
 // headingFromDelta computes a uint16 heading for a ground delta dx (east), dz (north)

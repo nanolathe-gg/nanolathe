@@ -3,6 +3,7 @@ package construction
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -224,6 +225,65 @@ func (s *Service) BuilderLinks() map[pool.Handle]pool.Handle {
 		out[k] = v
 	}
 	return out
+}
+
+// LinkRecord is one builder-product link, product handle owns builder handle [05 C18][RS-10].
+type LinkRecord struct {
+	Builder pool.Handle
+	Product pool.Handle
+}
+
+// SnapshotLinks returns a deterministic sorted copy of builder-product links [RS-10][I1].
+// Sorted by Product ascending, then Builder ascending, for canonical save ordering.
+func (s *Service) SnapshotLinks() []LinkRecord {
+	if s == nil || len(s.builderLinks) == 0 {
+		return nil
+	}
+	out := make([]LinkRecord, 0, len(s.builderLinks))
+	for prod, builder := range s.builderLinks {
+		out = append(out, LinkRecord{Builder: builder, Product: prod})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Product != out[j].Product {
+			return out[i].Product < out[j].Product
+		}
+		return out[i].Builder < out[j].Builder
+	})
+	return out
+}
+
+// RestoreLinks rebinds builder-product links without firing gameplay hooks [RS-10].
+// It replaces the entire map with the supplied links sorted deterministically.
+// No COB callbacks, no interface refresh, no economy mutation — pure state rebind.
+func (s *Service) RestoreLinks(links []LinkRecord) {
+	if s == nil {
+		return
+	}
+	if s.builderLinks == nil {
+		s.builderLinks = make(map[pool.Handle]pool.Handle)
+	} else {
+		// Clear existing.
+		for k := range s.builderLinks {
+			delete(s.builderLinks, k)
+		}
+	}
+	for _, l := range links {
+		if l.Product == 0 || l.Builder == 0 {
+			continue
+		}
+		s.builderLinks[l.Product] = l.Builder
+	}
+}
+
+// ClearAllBuilderLinks removes all builder-product links without firing hooks [RS-10].
+// Used during session restore before rebinding.
+func (s *Service) ClearAllBuilderLinks() {
+	if s == nil || s.builderLinks == nil {
+		return
+	}
+	for k := range s.builderLinks {
+		delete(s.builderLinks, k)
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -21,19 +21,23 @@ import (
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // battleSession is the composition root for the windowed battle view. It owns
 // the integrated session (all twelve kernel phases) and the interaction state:
 // selection, order latch, build panel and placement.
 type battleSession struct {
-	sess *session.Session
-	cat  *content.Catalog
-	cam  *camera.Camera
-	hud  *retailBattleHUD
+	sess  *session.Session
+	cat   *content.Catalog
+	cam   *camera.Camera
+	hud   *retailBattleHUD
+	fs    vfs.FSOps
+	shell *gameShell
 
 	latch      input.Latch
 	dragActive bool
@@ -64,9 +68,13 @@ type battleSession struct {
 	menuPressed      int
 	menuPressedState battleMenuState
 	returnToMenu     func(*client.Client)
+	returnToSkirmish func(*client.Client)
+	retryFunc        func(*client.Client)
+	continueFunc     func(*client.Client)
 	ended            bool
-
-	panelButtons []panelButton
+	resultDismissed  bool
+	resultButtons    []panelButton // buttons for result overlay [RS-05]
+	panelButtons     []panelButton
 
 	// Legacy fixture-only fallback state. Production battles always install
 	// retailBattleHUD below; these fields remain for the small synthetic input
@@ -113,7 +121,15 @@ func runBattleView(opts Options, cs *contentSet) error {
 	cam.Pan(0, 0)
 	centerOnCommanderForSession(sess, cam, winW, winH)
 
-	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal}
+	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs, latch: input.LatchNormal}
+	b.retryFunc = func(cl *client.Client) { b.doRetry(cl) }
+	b.returnToMenu = func(cl *client.Client) {
+		// Headless battle view has no shell; just mark ended
+		b.ended = true
+		if cl != nil {
+			cl.RequestExit()
+		}
+	}
 	// The battle HUD is mandatory retail content: side-selected PANELTOP,
 	// PANELSIDE, PANELBOT, the 30 SIDEDATA anchors, side fonts, and the authored
 	// <prefix>main/<prefix>gen/<unit>N GUI pages [07 §6][07 §9]. A production
@@ -151,7 +167,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 		fmt.Fprintf(os.Stderr, "nanolathe: %v\n", cerr)
 	}
 	cl.Overlay = func(c *client.Client) { b.hud.draw(c, b) }
-	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select right-click=context M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9=buildpage Shift=queue")
+	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select left-click=action right-click=deselect/cancel M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9=buildpage Shift=queue")
 	return client.RunGame(cl)
 }
 
@@ -221,6 +237,18 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		b.panel.Step(uint32(time.Now().UnixMilli() & 0xffffffff))
 	}
 	in := cl.Input()
+	// RS-05: result overlay takes precedence over menu and world input [08][P1-01] and
+	// must not leave hidden ticks running [RS-P0-012].
+	if b.isResultVisible() {
+		b.handleResultInput(in, cl)
+		// Do not advance simulation while result overlay is visible; Step would early-return
+		// due to StatePostBattle anyway, but we skip it entirely to keep the countdown frozen
+		// and to prevent the automatic 7→2 transition until the user chooses an action.
+		if cursors := cl.Cursors(); cursors != nil {
+			cursors.SetIndex(render.CursorNormal)
+		}
+		return
+	}
 	if in != nil && in.Kbd != nil && in.Kbd.KeyDown(input.KeyTab) {
 		switch b.menu {
 		case battleMenuClosed:
@@ -415,11 +443,34 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		b.dragActive = false
 		return
 	}
-	if mouse.Pressed(input.MouseButtonRight) && b.buildDef != "" {
-		// Right-click cancels armed placement before affecting selection [R-P0-03][F-P0-003]
-		b.buildDef = ""
-		b.buildOK = false
-		b.hudCaptured = false
+	// Right button is deselect/cancel only: every world order fires on left [07 §9][04 §3.4].
+	if mouse.Pressed(input.MouseButtonRight) {
+		if b.buildDef != "" {
+			// Cancel armed placement before affecting selection [R-P0-03][F-P0-003][07 §9].
+			b.buildDef = ""
+			b.buildOK = false
+			b.hudCaptured = false
+			if b.latch == input.LatchMobileBuild {
+				b.latch = input.LatchNormal
+			}
+			return
+		}
+		if b.latch != input.LatchNormal {
+			// Cancel armed order latch to idle [07 §9][07 §8][07 §9].
+			b.latch = input.LatchNormal
+			return
+		}
+		if b.hasSelection() {
+			// Deselect all local selection on right-click when idle [07 §9].
+			if b.sess != nil && b.sess.Units != nil {
+				for _, u := range b.sess.Units.Iter() {
+					if u != nil && u.Owner == b.sess.LocalOwner {
+						u.Flags &^= client.SelectionFlag
+					}
+				}
+			}
+			return
+		}
 		return
 	}
 
@@ -464,7 +515,9 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		return
 	}
 
-	// Build placement mode captures clicks before selection handling [R-P0-03].
+	// Build placement mode captures left-clicks before selection handling [R-P0-03].
+	// Right-click cancellation is handled at the top of handleInput with the
+	// latch/selection precedence of [07 §9].
 	if b.buildDef != "" {
 		b.updatePlacement(mx, my)
 		if mouse.Pressed(input.MouseButtonLeft) && b.buildOK {
@@ -476,9 +529,6 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 			}
 		} else if mouse.Pressed(input.MouseButtonLeft) && !b.buildOK {
 			// Illegal placement queues nothing [R-P0-03]
-		}
-		if mouse.Pressed(input.MouseButtonRight) {
-			b.buildDef = ""
 		}
 		return
 	}
@@ -496,7 +546,7 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		rect := client.NormalizeRect(b.dragStartX, b.dragStartY, b.dragEndX, b.dragEndY)
 		w, h := rect.MaxX-rect.MinX, rect.MaxY-rect.MinY
 		if w < 3 && h < 3 {
-			// Small click precedence [07 §8][07 §9][RS-P0-003]: armed latch dispatches; normal latch selects.
+			// Small click precedence [07 §8][07 §9][RS-P0-003]: armed latch dispatches on left-click; idle latch left-click selects or issues contextual order; right-click never issues an order [04 §3.4][07 §9].
 			// Uses ONE canonical picker client.PickUnit so fog, 16px radius, strict < tie (lower slot wins),
 			// unit>feature priority and viewer are identical for selection and targeting [07 §9][03 §3.2][P0-I14].
 			if b.latch != input.LatchNormal {
@@ -509,8 +559,8 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 					b.latch = input.LatchNormal
 				}
 			} else {
-				// Normal latch: single-click selection via canonical picker [07 §9][03 §3.2] C8 [RS-P0-003].
-				// Shift semantics mirror drag: clear→set inside/clear outside; set→toggle inside/preserve outside [07 §9] C6.
+				// Idle latch left-click: every world command is left-click; right-click is deselect/cancel only [07 §9][04 §3.4].
+				// When clicking an own visible unit we change selection; otherwise with a selection we issue the contextual order (code 1) which delegates to move/attack/repair/etc. based on the target [04 §3.4].
 				viewer := visibility.PlayerID(0)
 				if b.sess != nil {
 					viewer = visibility.PlayerID(b.sess.LocalOwner)
@@ -535,12 +585,17 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 						bu.Flags |= client.SelectionFlag
 					}
 				} else {
-					// Empty click (no own visible unit under cursor): clear if not additive, else preserve [07 §9] C6.
-					if !additive {
-						if b.sess != nil && b.sess.Units != nil {
-							for _, u := range b.sess.Units.Iter() {
-								if u != nil && u.Owner == b.sess.LocalOwner {
-									u.Flags &^= client.SelectionFlag
+					if b.hasSelection() {
+						// Left-click contextual order when a selection exists and the click is not on own unit [04 §3.4][07 §9].
+						b.orderSelected(1, mx, my, additive)
+					} else {
+						// No selection and click not on own unit: clear if not additive, else preserve [07 §9] C6.
+						if !additive {
+							if b.sess != nil && b.sess.Units != nil {
+								for _, u := range b.sess.Units.Iter() {
+									if u != nil && u.Owner == b.sess.LocalOwner {
+										u.Flags &^= client.SelectionFlag
+									}
 								}
 							}
 						}
@@ -552,11 +607,7 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 			b.filterSelectionToPlayer(b.sess.LocalOwner)
 		}
 	}
-	if mouse.Pressed(input.MouseButtonRight) && b.hasSelection() {
-		queued := kbd.HasShift()           // queue modifier Replace/Append [04 §3.3][P0-I03]
-		b.orderSelected(1, mx, my, queued) // contextual [04 §3.4]
-		b.latch = input.LatchNormal
-	}
+	// No right-button order path: right-click is deselect/cancel only, handled at the top [07 §9][04 §3.4].
 }
 
 // filterSelectionToPlayer clears selection on foreign units [08 "Skirmish configuration"].
@@ -1749,4 +1800,223 @@ func (b *battleSession) hostile(actor, target *units.Unit) bool {
 		return q.Hostility(actor, target)
 	}
 	return actor.Owner != target.Owner
+}
+
+// isResultVisible reports whether the authoritative result overlay should be shown [RS-05][08][P1-01].
+// It is presentation-only and reads the snapshot view plus the session's latch state (I6).
+// The overlay is visible when the terminal result is latched (Ended) and has not been dismissed.
+func (b *battleSession) isResultVisible() bool {
+	if b == nil || b.sess == nil || b.resultDismissed {
+		return false
+	}
+	if b.sess.GetResult().Ended {
+		return true
+	}
+	if b.sess.Snapshot != nil {
+		if view := b.sess.Snapshot.GetResultView(); view.Ended {
+			return true
+		}
+		if _, cur, ok := b.sess.Snapshot.Read(); ok && cur != nil && cur.Result.Ended {
+			return true
+		}
+	}
+	if b.sess.State == session.StatePostBattle {
+		return true
+	}
+	return false
+}
+
+// resultView returns the current authoritative result view for overlay [RS-05].
+func (b *battleSession) resultView() snapshot.ResultView {
+	if b == nil || b.sess == nil {
+		return snapshot.ResultView{}
+	}
+	if b.sess.Snapshot != nil {
+		if view := b.sess.Snapshot.GetResultView(); view.Ended {
+			return view
+		}
+		if _, cur, ok := b.sess.Snapshot.Read(); ok && cur != nil && cur.Result.Ended {
+			return cur.Result
+		}
+	}
+	r := b.sess.GetResult()
+	if r.Ended {
+		view := snapshot.ResultView{
+			Ended:      r.Ended,
+			Kind:       r.Kind,
+			WinnerTeam: r.WinnerTeam,
+			Reason:     r.Reason,
+			Tick:       r.Tick,
+			ArmedTick:  r.ArmedTick,
+			Countdown:  r.Countdown,
+			Draw:       r.Draw,
+		}
+		if len(r.Winners) > 0 {
+			view.Winners = append([]int(nil), r.Winners...)
+		}
+		if len(r.Losers) > 0 {
+			view.Losers = append([]int(nil), r.Losers...)
+		}
+		if len(r.Scores) > 0 {
+			view.Scores = append([]snapshot.ResultScore(nil), r.Scores...)
+		}
+		return view
+	}
+	return snapshot.ResultView{}
+}
+
+// ensureResultButtons builds the result overlay button set [RS-05][07 §8].
+func (b *battleSession) ensureResultButtons() {
+	if b == nil {
+		return
+	}
+	if len(b.resultButtons) != 0 {
+		return
+	}
+	// Determine campaign vs skirmish via Mission type
+	isCampaign := b.sess != nil && b.sess.Mission != nil && b.sess.Mission.Type == 1 // TypeCampaign
+	// Centered overlay: 640x480, box 400x200 at (120,140), buttons at y=300
+	y := int32(300)
+	if isCampaign {
+		b.resultButtons = []panelButton{
+			{Name: "Retry", X: 140, Y: y, Kind: "result_retry"},
+			{Name: "Continue", X: 270, Y: y, Kind: "result_continue"},
+			{Name: "Main Menu", X: 400, Y: y, Kind: "result_main"},
+		}
+	} else {
+		b.resultButtons = []panelButton{
+			{Name: "Retry", X: 140, Y: y, Kind: "result_retry"},
+			{Name: "Skirmish Setup", X: 270, Y: y, Kind: "result_skirmish"},
+			{Name: "Main Menu", X: 400, Y: y, Kind: "result_main"},
+		}
+	}
+}
+
+// handleResultInput owns all input while the result overlay is visible [RS-05][07 §3].
+// Buttons activate once on release-inside the same authored gadget.
+func (b *battleSession) handleResultInput(in *client.InputState, cl *client.Client) {
+	if b == nil || in == nil {
+		return
+	}
+	b.ensureResultButtons()
+	mx, my := int32(0), int32(0)
+	if in.Mouse != nil {
+		mx, my = int32(in.Mouse.X), int32(in.Mouse.Y)
+	}
+	// Keyboard shortcuts: R retry, S skirmish, M main, C continue, Esc main
+	if in.Kbd != nil {
+		if in.Kbd.KeyDown(input.KeyR) {
+			b.doResultAction("result_retry", cl)
+			return
+		}
+		if in.Kbd.KeyDown(input.KeyM) || in.Kbd.KeyDown(input.KeyEscape) {
+			b.doResultAction("result_main", cl)
+			return
+		}
+		if in.Kbd.KeyDown(input.KeyC) {
+			b.doResultAction("result_continue", cl)
+			return
+		}
+		// S for skirmish (not conflicting with other)
+		if in.Kbd.KeyDown(input.KeyS) {
+			b.doResultAction("result_skirmish", cl)
+			return
+		}
+	}
+	if in.Mouse != nil && in.Mouse.Released(input.MouseButtonLeft) {
+		for _, btn := range b.resultButtons {
+			if mx >= btn.X && mx < btn.X+panelButtonW && my >= btn.Y && my < btn.Y+panelButtonH {
+				b.doResultAction(btn.Kind, cl)
+				return
+			}
+		}
+	}
+}
+
+// doResultAction executes the result overlay button action through the state graph [RS-05][08 "Session states"].
+func (b *battleSession) doResultAction(kind string, cl *client.Client) {
+	if b == nil {
+		return
+	}
+	switch kind {
+	case "result_retry":
+		if b.retryFunc != nil {
+			b.retryFunc(cl)
+			b.resultDismissed = false
+			b.resultButtons = nil
+			return
+		}
+		// Fallback: direct session retry via clean recreation
+		b.doRetry(cl)
+	case "result_skirmish":
+		if b.returnToSkirmish != nil {
+			b.returnToSkirmish(cl)
+		} else if b.shell != nil {
+			b.shell.openMenu(modeMenuSkirmish)
+		} else if b.returnToMenu != nil {
+			b.returnToMenu(cl)
+		}
+		b.resultDismissed = true
+	case "result_main":
+		if b.returnToMenu != nil {
+			b.returnToMenu(cl)
+		} else if b.shell != nil {
+			b.shell.openMenu(modeMenuMain)
+		}
+		b.resultDismissed = true
+	case "result_continue":
+		if b.continueFunc != nil {
+			b.continueFunc(cl)
+		} else if b.shell != nil && b.sess != nil {
+			// Try campaign continue via session then shell
+			if b.sess.ContinueCampaign() {
+				// For now, treat as return to main; real next-mission load would be here
+				b.shell.openMenu(modeMenuMain)
+			} else {
+				b.shell.openMenu(modeMenuMain)
+			}
+		} else if b.returnToMenu != nil {
+			b.returnToMenu(cl)
+		}
+		b.resultDismissed = true
+	}
+}
+
+// doRetry recreates a clean session for retry without duplicate callbacks [RS-05] RS-P0-012.
+func (b *battleSession) doRetry(cl *client.Client) {
+	if b == nil || b.sess == nil || b.fs == nil {
+		// Fallback: reset result state in place
+		if b.sess != nil {
+			b.sess.ResetResultForRetry()
+			_ = b.sess.Retry()
+		}
+		b.resultDismissed = false
+		b.resultButtons = nil
+		return
+	}
+	cfg := b.sess.Skirmish
+	cat := b.cat
+	if cat == nil {
+		cat = b.sess.Catalog
+	}
+	newSess, err := session.NewSkirmishWithFS(b.fs, cat, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nanolathe: retry failed: %v\n", err)
+		return
+	}
+	// Preserve callback? The new session should have no callback yet; shell will reinstall if needed.
+	b.sess = newSess
+	b.cat = newSess.Catalog
+	b.resultDismissed = false
+	b.resultButtons = nil
+	centerOnCommanderForSession(newSess, b.cam, 640, 480)
+	if b.shell != nil {
+		b.shell.battle = b
+		if cl != nil {
+			cl.SetSnapshot(newSess.Snapshot)
+			cl.SetTerrain(newSess.World)
+		}
+	}
+	// Ensure battle state
+	newSess.State = session.StateBattle
 }

@@ -816,6 +816,8 @@ coincide numerically only by table offset and must not be conflated. During
 mobile-build placement, site validity picks `cursorfindsite` when placement is
 valid else `cursortoofar`; the ghost preview uses `cursorred`/`cursorgrn`.
 
+**Every world order fires on left-click; right-click never fires an order — it only returns the command latch to idle (`cursornormal`) and, when idle, clears selection.**
+
 **The shape chooser is closed.** One pointer update resolves the shape in four
 steps. First, two region bits record whether the pointer is over the world
 viewport or over the minimap; when neither is set the index is forced to
@@ -954,6 +956,8 @@ When the modifier is clear, the pre-clear also runs the single-select reset.
 After selection, one selected unit takes the single-unit presentation path
 and multiple units take the multiple-unit path; any change sets the dirty bit
 above and plays `SelectMultipleUnits` or the single select cue.
+
+**Mouse-button assignment is closed.** Every world action — single-unit picking, rectangle drag selection, building placement, and issuing every order including the contextual code 1 — is performed with the **left** mouse button. The **right** mouse button performs only deselection and cancellation: it cancels an armed order or build placement (returning the command latch to idle) or, when the latch is already idle, clears the current selection. The battle input pump routes left-button press and release through the single-click and drag-rectangle paths and the order dispatcher, while right-button press is routed exclusively to the cancellation path that returns the latch to idle and, when idle, clears selection; no right-button path queues an order. The cursor table shows the same polarity: every latch shape fires its order on left-click; the right-click column is empty or a transition back to the normal cursor [04 §3.4][07 §8].
 
 Control groups store one group value per unit rather than membership bits in
 several groups. Ctrl+digits (tokens `0xC5..0xCD`) assign groups with the

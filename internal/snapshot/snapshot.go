@@ -177,12 +177,28 @@ type Frame struct {
 // [08 "Victory and defeat triggers"] and [P1-01 §2.2] EndLatch countdown.
 // It is published from committed authoritative state after the latch Bits
 // become visible; renderer reads it presentation-only (I6).
+// [RS-05] adds kind, winners/losers, countdown, scores and statistics.
+type ResultScore struct {
+	Player int    // 0..9
+	Team   int    // team identifier
+	Kills  int    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Losses int    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Score  int    // Score(kills, killmul, ticks, timemul) [P1-01 §2.3]
+	Kind   string // "win"/"lose"/"draw" for this player
+}
+
 type ResultView struct {
-	Ended      bool   // true when terminal result is visible (latch ending)
-	WinnerTeam int    // team identifier; -1 for draw
-	Reason     string // e.g., "commander_death"
-	Tick       uint32 // authoritative tick when result became visible
-	Draw       bool   // true on mutual destruction draw
+	Ended      bool          // true when terminal result is visible (latch ending)
+	Kind       string        // "victory" | "defeat" | "draw" [08][RR-04]
+	WinnerTeam int           // team identifier; -1 for draw
+	Winners    []int         // winning team identifiers (sorted) [RS-05]
+	Losers     []int         // losing team identifiers (sorted) [RS-05]
+	Reason     string        // e.g., "commander_death"
+	Tick       uint32        // authoritative tick when result became visible
+	ArmedTick  uint32        // tick when countdown armed [08]
+	Countdown  int16         // current latch countdown (-1 armed idle, 4..-1) [P1-01 §2.2]
+	Draw       bool          // true on mutual destruction draw
+	Scores     []ResultScore // per-player score/statistics [P1-01 §2.3]
 }
 
 // FogView is the presentation copy of the two-channel fog cache [03 §3.3] C13.
@@ -338,7 +354,23 @@ func cloneFrame(f *Frame) Frame {
 	if f == nil {
 		return Frame{}
 	}
-	nf := Frame{Tick: f.Tick, Result: f.Result}
+	r := f.Result
+	if len(r.Winners) > 0 {
+		cp := make([]int, len(r.Winners))
+		copy(cp, r.Winners)
+		r.Winners = cp
+	}
+	if len(r.Losers) > 0 {
+		cp := make([]int, len(r.Losers))
+		copy(cp, r.Losers)
+		r.Losers = cp
+	}
+	if len(r.Scores) > 0 {
+		cp := make([]ResultScore, len(r.Scores))
+		copy(cp, r.Scores)
+		r.Scores = cp
+	}
+	nf := Frame{Tick: f.Tick, Result: r}
 	if len(f.Units) > 0 {
 		nf.Units = make([]UnitView, len(f.Units))
 		copy(nf.Units, f.Units)

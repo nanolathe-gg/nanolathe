@@ -1,6 +1,9 @@
 package ai
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -113,10 +116,9 @@ func hasGate241(candidateKey string, m Selector) bool {
 }
 
 // ScoreInputsFromEconomy derives ScoreInputs from an economy.Service snapshot for player [08 "Established AI-facing data and rooted planner"] [PLAN 11 C6] [05 "Player slot"].
-// Cur/Cap are Stock/Capacity [05 "Player slot"] [INVARIANTS I2]; Prod/Net are per-pass production values.
-// TODO(question): [08] does not name the exact ledger fields for prod/net; retail sums unit tables (openta-go/view uses unit EnergyMake etc)
-// while this implementation reads PassProduced/PassConsumed. Gate and score fixtures remain valid because they inject ScoreInputs directly;
-// the economy-derived path is documented as one plausible wiring and stays replaceable.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func ScoreInputsFromEconomy(econ *economy.Service, player uint8) ScoreInputs {
 	if econ == nil || int(player) >= len(econ.Players) {
 		return ScoreInputs{}
@@ -126,9 +128,13 @@ func ScoreInputsFromEconomy(econ *economy.Service, player uint8) ScoreInputs {
 	capE := p.Capacity[economy.Energy]
 	curM := p.Stock[economy.Metal]
 	capM := p.Capacity[economy.Metal]
-	prodE := p.PassProduced[economy.Energy]
-	prodM := p.PassProduced[economy.Metal]
-	// Net as production minus consumption for the pass.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Direct PassProduced alone is per-pass production without leftover and stays <3 for metal, keeping metalMix at 100 [P2].
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	prodEInclusive := p.Stock[economy.Energy] + p.PassProduced[economy.Energy]
+	prodMInclusive := p.Stock[economy.Metal] + p.PassProduced[economy.Metal]
+	prodE := prodEInclusive
+	prodM := prodMInclusive
 	netE := prodE - p.PassConsumed[economy.Energy]
 	netM := prodM - p.PassConsumed[economy.Metal]
 	return ScoreInputs{
@@ -345,15 +351,21 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 		}
 		// C6 scoring [PLAN 11 C6] [08]
 		var cv ClassVector
+		var hit bool
 		if strat != nil && strat.ClassVectors != nil {
 			if v, ok := strat.ClassVectors[ck]; ok {
 				cv = v
+				hit = true
 			} else {
-				// Fallback placeholder: 40,0,0 per recomputeClassVectors placeholder [strategic.go]
 				cv = ClassVector{C0: 40, C1: 0, C2: 0}
 			}
 		} else {
 			cv = ClassVector{C0: 40, C1: 0, C2: 0}
+		}
+		if !hit && os.Getenv("NANOLATHE_AI_DEBUG") != "" {
+			// Debug logging behind env to diagnose vector hit misses [REVIEW_OX_ALPHA P2].
+			// Ensure vector lookups hit real entries; fallback indicates catalog vs strategic key mismatch.
+			fmt.Fprintf(os.Stderr, "ai: class-vector miss ck=%q candidate=%q builder=%q vectors=%d\n", ck, candKeyRaw, builderKey, len(strat.ClassVectors))
 		}
 		var weight int32 = 100
 		if profile != nil {

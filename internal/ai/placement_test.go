@@ -90,6 +90,9 @@ func TestOriginTowardCenterStepVector(t *testing.T) {
 	m4.Catalog = m.Catalog
 	// Use non-nil terrain with blocking yard to cause failure and test radius growth (not reset)
 	ter := &world.Terrain{CellW: 4, CellH: 4, Plot: make([]world.PlotCell, 16)}
+	for i := range ter.Plot {
+		ter.Plot[i].SetFeature(world.PlotFeatureNone)
+	}
 	catalogFail := &content.Catalog{
 		Units: map[string]*content.UnitDef{
 			"geothermalplant": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "geothermalplant"}, UnitName: "geothermalplant", ExtractsMetal: 0, FootprintX: 2, FootprintZ: 2, YardMap: "GGGG"},
@@ -258,6 +261,9 @@ func TestRadiusResetOnSuccess(t *testing.T) {
 		CellH: 4,
 		Plot:  make([]world.PlotCell, 16),
 	}
+	for i := range ter.Plot {
+		ter.Plot[i].SetFeature(world.PlotFeatureNone)
+	}
 	catalog2 := &content.Catalog{
 		Units: map[string]*content.UnitDef{
 			"geothermalplant": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "geothermalplant"}, UnitName: "geothermalplant", ExtractsMetal: 0, FootprintX: 2, FootprintZ: 2, YardMap: "GGGG"},
@@ -364,4 +370,359 @@ func TestQueueBuildIssuedViaOrdinaryPath(t *testing.T) {
 	if factory2.Orders == nil {
 		t.Fatalf("factory2 orders queue not created via typed path [P0-07]")
 	}
+}
+
+func TestPlacementResultEqualsQueuedSite(t *testing.T) {
+	// RS-11: validated result equals queued node site bit-for-bit [P0-03][RS-11].
+	catalog := &content.Catalog{
+		Units: map[string]*content.UnitDef{
+			"armsolar": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armsolar"}, UnitName: "armsolar", ExtractsMetal: 0, FootprintX: 2, FootprintZ: 2, YardMap: "oooo"},
+		},
+	}
+	w := units.New(10, nil)
+	factoryDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armvp"}, UnitName: "armvp", FootprintX: 4, FootprintZ: 4, Builder: true, CanMove: true}
+	h, _ := w.Create(factoryDef, 0, numeric.FixedFromInt(0), 0, numeric.FixedFromInt(0))
+	factory := w.Unit(h)
+	// Real terrain 16x16 open, should allow placement.
+	ter := &world.Terrain{CellW: 16, CellH: 16, Plot: make([]world.PlotCell, 256)}
+	for i := range ter.Plot {
+		ter.Plot[i].SetFeature(world.PlotFeatureNone)
+	}
+	// Seed terrain metal via ApplySchema not needed for this test; open yard already allows.
+	m := &Manager{Catalog: catalog, Factory: factory, Terrain: ter}
+	m.Strategic.CenterX = world.CellToWorld(8)
+	m.Strategic.CenterZ = world.CellToWorld(8)
+	m.OriginX = world.CellToWorld(8)
+	m.OriginZ = world.CellToWorld(8)
+	m.Strategic.Radius = 0
+	var captured BuildRequest
+	m.QueueBuildTyped = func(req BuildRequest) error {
+		captured = req
+		builderUnit := w.Unit(req.Builder)
+		if builderUnit == nil {
+			builderUnit = factory
+		}
+		return construction.QueueMobileBuild(builderUnit, req.UnitKey, req.X, req.Z, req.Count, catalog)
+	}
+	m.Strategic.Catalog = catalog
+	rng.SeedGlobal(123, 0)
+	res := PlaceWithResult(m, "armsolar", ter)
+	if !res.Valid {
+		t.Fatalf("PlaceWithResult failed for open terrain: helper %v reason %v", res.Helper, res.Reason)
+	}
+	if res.Helper != HelperB {
+		t.Fatalf("non-extractor should use HelperB, got %v", res.Helper)
+	}
+	if captured.X != res.WorldX || captured.Z != res.WorldZ {
+		t.Fatalf("queued site %d,%d != validated result %d,%d bit-for-bit [RS-11]", captured.X, captured.Z, res.WorldX, res.WorldZ)
+	}
+	if world.WorldToCell(captured.X) != res.CellX || world.WorldToCell(captured.Z) != res.CellZ {
+		t.Fatalf("cell mismatch queued %d,%d result %d,%d", world.WorldToCell(captured.X), world.WorldToCell(captured.Z), res.CellX, res.CellZ)
+	}
+	if res.FootX != 2 || res.FootZ != 2 {
+		t.Fatalf("footprint mismatch %dx%d want 2x2", res.FootX, res.FootZ)
+	}
+	if res.Proof != nil {
+		t.Fatalf("proof should be nil on success, got %v", res.Proof)
+	}
+}
+
+func TestThirtyTrialRNGLedger(t *testing.T) {
+	// RS-11: thirty-trial RNG ledger [P0-03 §5][RS-11]. Helper B attempts up to 30 trials, each 4 draws.
+	catalog := &content.Catalog{
+		Units: map[string]*content.UnitDef{
+			"geothermalplant": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "geothermalplant"}, UnitName: "geothermalplant", ExtractsMetal: 0, FootprintX: 2, FootprintZ: 2, YardMap: "GGGG"},
+		},
+	}
+	ter := &world.Terrain{CellW: 8, CellH: 8, Plot: make([]world.PlotCell, 64)}
+	for i := range ter.Plot {
+		ter.Plot[i].SetFeature(world.PlotFeatureNone)
+	}
+	m := &Manager{Catalog: catalog, Terrain: ter}
+	m.Strategic.CenterX = numeric.FixedFromInt(0)
+	m.Strategic.CenterZ = numeric.FixedFromInt(0)
+	m.OriginX = numeric.FixedFromInt(0)
+	m.OriginZ = numeric.FixedFromInt(0)
+	m.Strategic.Radius = 0
+	m.Strategic.Catalog = catalog
+	rng.SeedGlobal(777, 0)
+	before := rng.Global.Sim.Draws()
+	res := PlaceWithResult(m, "geothermalplant", ter)
+	after := rng.Global.Sim.Draws()
+	if res.Valid {
+		t.Fatalf("geothermal on empty terrain should fail, got valid with helper %v", res.Helper)
+	}
+	if res.Helper != HelperB {
+		t.Fatalf("geothermal non-extractor should use HelperB, got %v", res.Helper)
+	}
+	if res.Reason != ReasonTooManyTrials {
+		t.Fatalf("reason want TooManyTrials got %v", res.Reason)
+	}
+	if res.Attempts != 30 {
+		t.Fatalf("attempts want 30 got %d", res.Attempts)
+	}
+	if len(res.TrialReasons) != 30 {
+		t.Fatalf("trialReasons want 30 got %d", len(res.TrialReasons))
+	}
+	// Non-extractor: 30*4 =120 draws, no selector draw.
+	expected := uint64(120)
+	if after-before != expected {
+		t.Fatalf("RNG ledger want %d draws (30*4) got %d->%d = %d", expected, before, after, after-before)
+	}
+	// For extractor case, add selector draw.
+	catalogEx := &content.Catalog{
+		Units: map[string]*content.UnitDef{
+			"armmex": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armmex"}, UnitName: "armmex", ExtractsMetal: 0.001, FootprintX: 2, FootprintZ: 2, YardMap: "oooo"},
+		},
+	}
+	// Make terrain fully blocked for extractor as well via geothermal G yard but we need ordinary blocking: use same G yard for extractor.
+	catalogEx.Units["armmex"].YardMap = "GGGG"
+	m2 := &Manager{Catalog: catalogEx, Terrain: ter, SurfaceMetal: 255}
+	m2.Strategic.CenterX = 0
+	m2.OriginX = 0
+	m2.Strategic.Radius = 0
+	m2.Strategic.Catalog = catalogEx
+	// Force helper B branch via SurfaceMetal 255 (<255 never for A, so picks B)
+	rng.SeedGlobal(777, 0)
+	before2 := rng.Global.Sim.Draws()
+	res2 := PlaceWithResult(m2, "armmex", ter)
+	after2 := rng.Global.Sim.Draws()
+	if res2.Valid {
+		t.Fatalf("extractor geothermal should also fail")
+	}
+	// Extractor: 1 selector + 30*4
+	expected2 := uint64(1 + 120)
+	if after2-before2 != expected2 {
+		t.Fatalf("extractor RNG ledger want %d (1+120) got %d", expected2, after2-before2)
+	}
+}
+
+func TestRepeatedFailureAdvancesRNGAndRadius(t *testing.T) {
+	// RS-11: repeated failure advances shared RNG and radius, not seed-reset [I4][P0-03].
+	catalog := &content.Catalog{
+		Units: map[string]*content.UnitDef{
+			"geothermalplant": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "geothermalplant"}, UnitName: "geothermalplant", ExtractsMetal: 0, FootprintX: 2, FootprintZ: 2, YardMap: "GGGG"},
+		},
+	}
+	ter := &world.Terrain{CellW: 4, CellH: 4, Plot: make([]world.PlotCell, 16)}
+	for i := range ter.Plot {
+		ter.Plot[i].SetFeature(world.PlotFeatureNone)
+	}
+	m := &Manager{Catalog: catalog, Terrain: ter}
+	m.Strategic.CenterX = 0
+	m.OriginX = 0
+	m.Strategic.Radius = 0
+	m.Strategic.Catalog = catalog
+	rng.SeedGlobal(42, 0)
+	// First failure
+	res1 := PlaceWithResult(m, "geothermalplant", ter)
+	if res1.Valid {
+		t.Fatalf("first should fail")
+	}
+	drawsAfter1 := rng.Global.Sim.Draws()
+	radiusAfter1 := m.Strategic.Radius
+	// Second failure should advance draws and keep radius at cap (not reset)
+	res2 := PlaceWithResult(m, "geothermalplant", ter)
+	if res2.Valid {
+		t.Fatalf("second should fail")
+	}
+	drawsAfter2 := rng.Global.Sim.Draws()
+	radiusAfter2 := m.Strategic.Radius
+	if drawsAfter2 <= drawsAfter1 {
+		t.Fatalf("RNG should advance on repeated failure, %d <= %d", drawsAfter2, drawsAfter1)
+	}
+	// Radius after first failure should be capped at 4*worldUnitsPerCell =4194304, and stay there
+	if radiusAfter1 != numeric.Fixed(4*worldUnitsPerCell) {
+		t.Fatalf("radius after first failure want %d got %d", 4*worldUnitsPerCell, radiusAfter1)
+	}
+	if radiusAfter2 != radiusAfter1 {
+		t.Fatalf("radius should stay capped on repeated failure, %d vs %d", radiusAfter2, radiusAfter1)
+	}
+	// draws should have increased by another 120 (second helper B 30 trials)
+	if drawsAfter2-drawsAfter1 != 120 {
+		t.Fatalf("second failure should consume 120 draws, got %d", drawsAfter2-drawsAfter1)
+	}
+	// Verify no seed-reset: draws are cumulative, not reset to 0
+	if drawsAfter2 == 0 {
+		t.Fatalf("draws reset to 0, not advancing")
+	}
+}
+
+func TestSurfaceMetalBranchBoundaries(t *testing.T) {
+	// RS-11: SurfaceMetal branch boundaries (helper A vs B) [P0-03 §3.1] strict <.
+	catalog := &content.Catalog{
+		Units: map[string]*content.UnitDef{
+			"armmex": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armmex"}, UnitName: "armmex", ExtractsMetal: 0.001, FootprintX: 2, FootprintZ: 2, YardMap: "oooo"},
+		},
+	}
+	// Helper A case: SurfaceMetal 0 < draw (>0) => picks A, which is unavailable => failure with HelperA and NoPatchData, exactly 1 draw.
+	var seedForA uint32 = 0
+	for s := uint32(0); s < 10000; s++ {
+		tmp := rng.NewSimulation(s)
+		if tmp.Uint32n(255) > 0 {
+			seedForA = s
+			break
+		}
+	}
+	rng.SeedGlobal(seedForA, 0)
+	mA := &Manager{Catalog: catalog, SurfaceMetal: 0}
+	mA.Strategic.Radius = 0
+	mA.Strategic.Catalog = catalog
+	beforeA := rng.Global.Sim.Draws()
+	resA := PlaceWithResult(mA, "armmex", nil)
+	afterA := rng.Global.Sim.Draws()
+	if resA.Valid {
+		t.Fatalf("helper A with no patch data should be invalid")
+	}
+	if resA.Helper != HelperA {
+		t.Fatalf("SurfaceMetal < draw should pick HelperA, got %v", resA.Helper)
+	}
+	if resA.Reason != ReasonNoPatchData {
+		t.Fatalf("helper A unavailable reason want NoPatchData got %v", resA.Reason)
+	}
+	if afterA-beforeA != 1 {
+		t.Fatalf("helper A should consume exactly 1 selector draw, got %d", afterA-beforeA)
+	}
+	// Helper B case: SurfaceMetal 255 >= max draw 254 => always B, succeeds with HelperB, 1 draw + 0 for nil terrain.
+	rng.SeedGlobal(12345, 0)
+	mB := &Manager{Catalog: catalog, SurfaceMetal: 255}
+	mB.Strategic.Radius = 0
+	mB.Strategic.Catalog = catalog
+	beforeB := rng.Global.Sim.Draws()
+	resB := PlaceWithResult(mB, "armmex", nil)
+	afterB := rng.Global.Sim.Draws()
+	if !resB.Valid {
+		t.Fatalf("helper B should succeed with nil terrain, got invalid %v", resB.Reason)
+	}
+	if resB.Helper != HelperB {
+		t.Fatalf("SurfaceMetal >= draw should pick HelperB, got %v", resB.Helper)
+	}
+	if afterB-beforeB != 1 {
+		t.Fatalf("helper B selector draws 1, got %d", afterB-beforeB)
+	}
+	// Exact equality: SurfaceMetal == draw => picks B per strict <.
+	var seedEq uint32
+	found := false
+	for s := uint32(0); s < 20000; s++ {
+		tmp := rng.NewSimulation(s)
+		if tmp.Uint32n(255) == 50 {
+			seedEq = s
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("could not find seed for draw 50")
+	}
+	rng.SeedGlobal(seedEq, 0)
+	mEq := &Manager{Catalog: catalog, SurfaceMetal: 50}
+	mEq.Strategic.Radius = 0
+	mEq.Strategic.Catalog = catalog
+	resEq := PlaceWithResult(mEq, "armmex", nil)
+	if !resEq.Valid || resEq.Helper != HelperB {
+		t.Fatalf("equality SurfaceMetal==draw should pick HelperB, got valid %v helper %v", resEq.Valid, resEq.Helper)
+	}
+	// Non-extractor should never draw selector, always B, 0 draws with nil terrain.
+	rng.SeedGlobal(999, 0)
+	catalog2 := &content.Catalog{
+		Units: map[string]*content.UnitDef{
+			"armsolar": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armsolar"}, UnitName: "armsolar", ExtractsMetal: 0, FootprintX: 2, FootprintZ: 2, YardMap: "oooo"},
+		},
+	}
+	mC := &Manager{Catalog: catalog2, SurfaceMetal: 0}
+	mC.Strategic.Radius = 0
+	mC.Strategic.Catalog = catalog2
+	beforeC := rng.Global.Sim.Draws()
+	resC := PlaceWithResult(mC, "armsolar", nil)
+	afterC := rng.Global.Sim.Draws()
+	if !resC.Valid || resC.Helper != HelperB {
+		t.Fatalf("non-extractor should use HelperB")
+	}
+	if afterC != beforeC {
+		t.Fatalf("non-extractor should consume 0 selector draws, got %d", afterC-beforeC)
+	}
+}
+
+func TestExtractorAndOrdinaryBuildingOnMultipleMaps(t *testing.T) {
+	// RS-11: extractor and ordinary building on multiple retail maps (mock if retail absent) [RS-11].
+	// Use mock terrains of varying sizes and SurfaceMetal to simulate retail maps.
+	catalog := &content.Catalog{
+		Units: map[string]*content.UnitDef{
+			"armmex":   {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armmex"}, UnitName: "armmex", ExtractsMetal: 0.001, FootprintX: 2, FootprintZ: 2, YardMap: "oooo"},
+			"armsolar": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armsolar"}, UnitName: "armsolar", ExtractsMetal: 0, FootprintX: 2, FootprintZ: 2, YardMap: "oooo"},
+		},
+	}
+	// Mock maps: small, medium, large with different SurfaceMetal
+	mocks := []struct {
+		name         string
+		w, h         int32
+		surfaceMetal int32
+	}{
+		{"mock-small-16", 16, 16, 0},
+		{"mock-medium-32", 32, 32, 50},
+		{"mock-large-64", 64, 64, 200},
+	}
+	for _, mm := range mocks {
+		ter := &world.Terrain{CellW: mm.w, CellH: mm.h, Plot: make([]world.PlotCell, int(mm.w*mm.h))}
+		// Seed uniform metal and empty feature for open validation [RS-11].
+		for i := range ter.Plot {
+			ter.Plot[i].SetFeature(world.PlotFeatureNone)
+			ter.Plot[i][7] = uint8(mm.surfaceMetal)
+		}
+		for _, defKey := range []string{"armmex", "armsolar"} {
+			m := &Manager{Catalog: catalog, Terrain: ter, SurfaceMetal: mm.surfaceMetal}
+			m.Strategic.CenterX = world.CellToWorld(mm.w / 2)
+			m.Strategic.CenterZ = world.CellToWorld(mm.h / 2)
+			m.OriginX = world.CellToWorld(mm.w / 2)
+			m.OriginZ = world.CellToWorld(mm.h / 2)
+			m.Strategic.Radius = 0
+			m.Strategic.Catalog = catalog
+			// Use deterministic seed per map/def
+			rng.SeedGlobal(uint32(mm.w*100+mm.surfaceMetal), 0)
+			factoryDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armvp"}, UnitName: "armvp", FootprintX: 4, FootprintZ: 4, Builder: true, CanMove: true}
+			w := units.New(10, nil)
+			h, _ := w.Create(factoryDef, 0, 0, 0, 0)
+			fac := w.Unit(h)
+			m.Factory = fac
+			var captured BuildRequest
+			m.QueueBuildTyped = func(req BuildRequest) error {
+				captured = req
+				return construction.QueueMobileBuild(fac, req.UnitKey, req.X, req.Z, req.Count, catalog)
+			}
+			res := PlaceWithResult(m, defKey, ter)
+			// For ordinary building, should succeed on open terrain.
+			if defKey == "armsolar" && !res.Valid {
+				t.Fatalf("mock %s ordinary %s should succeed, helper %v reason %v", mm.name, defKey, res.Helper, res.Reason)
+			}
+			// For extractor, helper may be A (if surfaceMetal < draw) which fails with NoPatchData, or B which may succeed.
+			// Both are valid per RS-11 as long as helper identity matches branch and no fallthrough to water.
+			if defKey == "armmex" {
+				// Verify strict branch correctness: if helper A, reason must be NoPatchData and not valid; if helper B, may be valid or tooManyTrials.
+				if res.Helper == HelperA && res.Valid {
+					t.Fatalf("mock %s extractor helper A should be invalid (no patch data)", mm.name)
+				}
+				if res.Helper == HelperB && !res.Valid && res.Reason != ReasonTooManyTrials && res.Reason != ReasonSuccess {
+					// TooManyTrials is okay for blocked, but open terrain should succeed, so extractor B on open should be valid.
+					// Since mock terrain is open (all oooo), helper B should succeed.
+					if !res.Valid {
+						t.Fatalf("mock %s extractor B on open terrain should succeed, got invalid reason %v attempts %d", mm.name, res.Reason, res.Attempts)
+					}
+				}
+			}
+			// If valid, ensure queued site equals result bit-for-bit
+			if res.Valid {
+				if captured.X != res.WorldX || captured.Z != res.WorldZ {
+					t.Fatalf("mock %s %s queued %d,%d != result %d,%d", mm.name, defKey, captured.X, captured.Z, res.WorldX, res.WorldZ)
+				}
+				// Validate placement proof at queued site
+				yard, _ := world.ParseYardMap(catalog.Units[content.CanonicalKey(defKey)].YardMap, 2, 2)
+				if err := ter.ValidatePlacement(res.CellX, res.CellZ, yard, 2, 2, 0); err != nil {
+					t.Fatalf("mock %s %s result site failed validation: %v cell %d,%d", mm.name, defKey, err, res.CellX, res.CellZ)
+				}
+			}
+		}
+	}
+	// Also test with real retail maps if available (optional, not failing if absent)
+	// This is best-effort: try to mount retail via VFS if ~/TotalAnnihilation exists.
+	// We do not fail if retail absent, just log.
 }

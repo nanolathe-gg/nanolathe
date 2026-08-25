@@ -73,17 +73,17 @@ func TestResult_TwoPlayerHostileCommanderDeath(t *testing.T) {
 	handles := commanderHandles(s)
 	h := handles[1][0]
 	s.Units.Destroy(poolHandle(h), units.DeathKilled)
-	// Evaluate until latched
+	// Evaluate until latched [RS-05][RR-04] 4→-1 over ~150 ticks (once per 30)
 	var latched bool
-	for tick := uint32(0); tick < 20; tick++ {
+	for tick := uint32(0); tick < 200; tick++ {
 		if s.EvaluateResult(tick) {
 			latched = true
 			break
 		}
 	}
 	if !latched {
-		// Try more ticks with Step path as fallback
-		for i := 0; i < 20; i++ {
+		// Try more ticks with Step path as fallback (needs ~150 ticks for latch)
+		for i := 0; i < 200; i++ {
 			s.Step(int32(i + 100))
 			if s.GetResult().Ended {
 				latched = true
@@ -155,7 +155,7 @@ func TestResult_ThreePlayerFFA(t *testing.T) {
 	}
 	// Kill one enemy (owner 1) – should NOT end
 	s.Units.Destroy(poolHandle(commanderHandles(s)[1][0]), units.DeathKilled)
-	for tick := uint32(0); tick < 20; tick++ {
+	for tick := uint32(0); tick < 200; tick++ {
 		s.EvaluateResult(tick)
 	}
 	if s.GetResult().Ended {
@@ -164,7 +164,7 @@ func TestResult_ThreePlayerFFA(t *testing.T) {
 	// Kill second enemy (owner 2) – now only owner 0 remains, should end with winner 0
 	s.Units.Destroy(poolHandle(commanderHandles(s)[2][0]), units.DeathKilled)
 	var latched bool
-	for tick := uint32(30); tick < 60; tick++ {
+	for tick := uint32(60); tick < 260; tick++ {
 		if s.EvaluateResult(tick) {
 			latched = true
 			break
@@ -203,7 +203,7 @@ func TestResult_AlliedPairVsEnemy(t *testing.T) {
 	// Kill enemy commander (owner 2)
 	s.Units.Destroy(poolHandle(commanderHandles(s)[2][0]), units.DeathKilled)
 	var latched bool
-	for tick := uint32(0); tick < 30; tick++ {
+	for tick := uint32(0); tick < 200; tick++ {
 		if s.EvaluateResult(tick) {
 			latched = true
 			break
@@ -243,7 +243,7 @@ func TestResult_LocalDefeat(t *testing.T) {
 	// Kill local commander
 	s.Units.Destroy(poolHandle(commanderHandles(s)[0][0]), units.DeathKilled)
 	var latched bool
-	for tick := uint32(0); tick < 30; tick++ {
+	for tick := uint32(0); tick < 200; tick++ {
 		if s.EvaluateResult(tick) {
 			latched = true
 			break
@@ -282,7 +282,7 @@ func TestResult_MutualDestructionDraw(t *testing.T) {
 	s.Units.Destroy(poolHandle(handles[0][0]), units.DeathKilled)
 	s.Units.Destroy(poolHandle(handles[1][0]), units.DeathKilled)
 	var latched bool
-	for tick := uint32(0); tick < 30; tick++ {
+	for tick := uint32(0); tick < 200; tick++ {
 		if s.EvaluateResult(tick) {
 			latched = true
 			break
@@ -319,14 +319,14 @@ func TestResult_CallbackFiresOnce(t *testing.T) {
 	s.SetResultCallback(func(r Result) { count++ })
 	// Kill enemy
 	s.Units.Destroy(poolHandle(commanderHandles(s)[1][0]), units.DeathKilled)
-	for tick := uint32(0); tick < 30; tick++ {
+	for tick := uint32(0); tick < 200; tick++ {
 		s.EvaluateResult(tick)
 	}
 	if count != 1 {
 		t.Fatalf("callback should fire once, got %d", count)
 	}
-	// Further evaluations should not fire again
-	for tick := uint32(100); tick < 110; tick++ {
+	// Further evaluations should not fire again (200..300 covers next due windows)
+	for tick := uint32(200); tick < 310; tick++ {
 		s.EvaluateResult(tick)
 	}
 	if count != 1 {
@@ -356,7 +356,7 @@ func TestResult_ResultViewExposesEnded(t *testing.T) {
 		}
 	}
 	s.Units.Destroy(poolHandle(commanderHandles(s)[1][0]), units.DeathKilled)
-	for tick := uint32(0); tick < 30; tick++ {
+	for tick := uint32(0); tick < 200; tick++ {
 		s.EvaluateResult(tick)
 	}
 	// After latch, snapshot view should be ended

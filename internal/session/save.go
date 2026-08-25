@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/combat"
+	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
@@ -37,13 +38,21 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 		st.CatalogHash = s.Catalog.Hash
 		st.ManifestHash = s.Catalog.Manifest
 	}
-	if rng.Global.Sim != nil {
-		st.SimState = rng.Global.Sim.State
-		st.SimDraws = rng.Global.Sim.Draws()
-	}
-	if rng.Global.Crt != nil {
-		st.CrtState = rng.Global.Crt.State
-		st.CrtDraws = rng.Global.Crt.Draws()
+	// Per-session RNG [RS-06][I4] isolated; was process-global before RS-06.
+	if s.rngInitialized {
+		st.SimState = s.rngSim.State
+		st.SimDraws = s.rngSim.Draws()
+		st.CrtState = s.rngCrt.State
+		st.CrtDraws = s.rngCrt.Draws()
+	} else {
+		if rng.Global.Sim != nil {
+			st.SimState = rng.Global.Sim.State
+			st.SimDraws = rng.Global.Sim.Draws()
+		}
+		if rng.Global.Crt != nil {
+			st.CrtState = rng.Global.Crt.State
+			st.CrtDraws = rng.Global.Crt.Draws()
+		}
 	}
 	if s.Clock != nil {
 		st.Clock = *s.Clock
@@ -585,7 +594,9 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 			}
 			var rec save.AIManagerRecord
 			rec.Player = m.Player
-			rec.Deadlines = m.Deadlines
+			for k := 0; k < len(m.Deadlines) && k < len(rec.Deadlines); k++ {
+				rec.Deadlines[k] = m.Deadlines[k]
+			}
 			rec.SurfaceMetal = m.SurfaceMetal
 			rec.OriginX = int32(m.OriginX.Raw())
 			rec.OriginZ = int32(m.OriginZ.Raw())
@@ -644,7 +655,7 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 		_, _, _, local, mode, _, _ := s.Vis.Snapshot()
 		st.Visibility.Local = uint8(local)
 		st.Visibility.Mode = uint32(mode)
-		// visStatus / visDecloak are session maps, not vis service
+		// visStatus / visDecloak are session maps, not vis service — sorted after collection to ensure deterministic save bytes despite map iteration [INVARIANTS I1][RS-06].
 		for h, v := range s.visStatus {
 			st.Visibility.Status = append(st.Visibility.Status, save.VisibilityStatusRecord{Handle: int32(h), Status: v})
 		}
@@ -673,6 +684,20 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 		st.Wind.Changed = changed
 		st.Wind.Pending = pending
 	}
+	// Construction builder-product links [05 C18][RS-10] — canonical sorted, no hooks
+	if s.Build != nil {
+		links := s.Build.SnapshotLinks()
+		st.Construction.BuilderLinks = make([]save.BuilderLinkRecord, 0, len(links))
+		for _, l := range links {
+			st.Construction.BuilderLinks = append(st.Construction.BuilderLinks, save.BuilderLinkRecord{Builder: int32(l.Builder), Product: int32(l.Product)})
+		}
+		sort.Slice(st.Construction.BuilderLinks, func(i, j int) bool {
+			if st.Construction.BuilderLinks[i].Product != st.Construction.BuilderLinks[j].Product {
+				return st.Construction.BuilderLinks[i].Product < st.Construction.BuilderLinks[j].Product
+			}
+			return st.Construction.BuilderLinks[i].Builder < st.Construction.BuilderLinks[j].Builder
+		})
+	}
 	return st
 }
 
@@ -682,14 +707,22 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 		return fmt.Errorf("session: nil restore")
 	}
 	// Hashes already validated by Unmarshal
-	// RNG
+	// RNG per-session isolated [RS-06][I4] — restore into session, sync global for backward compat.
+	s.rngSim = rng.SimulationFromState(st.SimState)
+	s.rngSim.RestoreDraws(st.SimDraws)
+	s.rngCrt = rng.CRTFromState(st.CrtState)
+	s.rngCrt.RestoreDraws(st.CrtDraws)
+	s.rngInitialized = true
 	if rng.Global.Sim != nil {
-		*rng.Global.Sim = rng.SimulationFromState(st.SimState)
-		rng.Global.Sim.RestoreDraws(st.SimDraws)
+		*rng.Global.Sim = s.rngSim
 	}
 	if rng.Global.Crt != nil {
-		*rng.Global.Crt = rng.CRTFromState(st.CrtState)
-		rng.Global.Crt.RestoreDraws(st.CrtDraws)
+		*rng.Global.Crt = s.rngCrt
+	}
+	for _, mgr := range s.AI {
+		if mgr != nil {
+			mgr.RNG = s.SimRNG()
+		}
 	}
 	// Clock
 	if s.Clock != nil {
@@ -1250,7 +1283,9 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 				// Enforce RS-02 invariant at restore
 				m.Player = rec.Player
 			}
-			m.Deadlines = rec.Deadlines
+			for k := 0; k < len(m.Deadlines) && k < len(rec.Deadlines); k++ {
+				m.Deadlines[k] = rec.Deadlines[k]
+			}
 			m.SurfaceMetal = rec.SurfaceMetal
 			m.OriginX = numeric.Fixed(int64(rec.OriginX))
 			m.OriginZ = numeric.Fixed(int64(rec.OriginZ))
@@ -1352,6 +1387,14 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 			s.visDecloak[int(rec.Handle)] = rec.Deadline
 		}
 		// Rebuild fog? Not needed
+	}
+	// Construction builder-product links [05 C18][RS-10] — rebind without firing hooks
+	if s.Build != nil {
+		links := make([]construction.LinkRecord, 0, len(st.Construction.BuilderLinks))
+		for _, r := range st.Construction.BuilderLinks {
+			links = append(links, construction.LinkRecord{Builder: pool.Handle(r.Builder), Product: pool.Handle(r.Product)})
+		}
+		s.Build.RestoreLinks(links)
 	}
 	return nil
 }

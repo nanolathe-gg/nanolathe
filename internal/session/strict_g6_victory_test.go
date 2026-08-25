@@ -54,10 +54,10 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 		s.Clock.ScaledAnchor = 0
 		// Stage 1: final hostile team eliminated — kill enemy commander via production Destroy (marks Dying, finalizes at slot visit)
 		s.Units.Destroy(h1, 1)
-		// Run ticks to allow death finalization and victory latch (needs 5-6 evaluations for countdown)
+		// Run ticks to allow death finalization and victory latch [RS-05][RR-04] 4→-1 ~150 ticks (30 per step)
 		var resultLatched bool
 		var winnerTeam int
-		for tick := 1; tick <= 30; tick++ {
+		for tick := 1; tick <= 200; tick++ {
 			s.Step(int32(tick))
 			res := s.GetResult()
 			if res.Ended {
@@ -83,8 +83,8 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 		if !res.Ended {
 			t.Fatalf("G6 two_player: result not ended")
 		}
-		// Try to trigger again, should not change
-		s.Step(int32(31))
+		// Try to trigger again, should not change [RS-05] latch once
+		s.Step(int32(201))
 		res2 := s.GetResult()
 		if res2.WinnerTeam != res.WinnerTeam || res2.Tick != res.Tick {
 			t.Fatalf("G6 two_player: result changed after latch [G6] latch once")
@@ -174,7 +174,7 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 		s.Clock.ScaledAnchor = 0
 		// Kill one enemy (player1 group2) — with groups 1,2,1, killing group2 leaves only group1 (players 0+2 allied), so hostile eliminated → should end [G6]
 		s.Units.Destroy(h1, 1)
-		for tick := 1; tick <= 30; tick++ {
+		for tick := 1; tick <= 200; tick++ {
 			s.Step(int32(tick))
 		}
 		resMid := s.GetResult()
@@ -220,7 +220,7 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 		s2.ClearTrace()
 		s2.Clock.ScaledAnchor = 0
 		s2.Units.Destroy(h1b, 1)
-		for tick := 1; tick <= 30; tick++ {
+		for tick := 1; tick <= 200; tick++ {
 			s2.Step(int32(tick))
 		}
 		resMid2 := s2.GetResult()
@@ -231,7 +231,7 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 		t.Logf("G6 three_player distinct: after killing one enemy, still no victory (correct alliance-aware)")
 		// Now kill second hostile team's commander
 		s2.Units.Destroy(h2b, 1)
-		for tick := 31; tick <= 60; tick++ {
+		for tick := 201; tick <= 400; tick++ {
 			s2.Step(int32(tick))
 		}
 		resFinal := s2.GetResult()
@@ -242,7 +242,7 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 		ev := StrictGateEvidence{
 			Commit: strictCommit(), ContentManifest: strictCatalogHash(cat), Map: "test", Seed: simSeed, CrtSeed: crtSeed,
 			Players: []map[string]any{{"slot": 0, "ally_group": 1}, {"slot": 1, "ally_group": 2}, {"slot": 2, "ally_group": 3}},
-			MaxTick: 60, Milestones: map[string]uint32{"three_player_alliance": resFinal.Tick}, Winner: resFinal.WinnerTeam, Reason: resFinal.Reason,
+			MaxTick: 400, Milestones: map[string]uint32{"three_player_alliance": resFinal.Tick}, Winner: resFinal.WinnerTeam, Reason: resFinal.Reason,
 			FinalTick: s2.Clock.GlobalTick, FinalStateHash: HashState(s2), TraceHash: HashTrace(s2.TraceEvents()),
 		}
 		t.Logf("G6 three_player evidence: %s", FormatEvidence(ev))

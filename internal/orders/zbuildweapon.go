@@ -24,21 +24,22 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// stockpileEconomy is the authoritative economy service for stockpile admission.
-// Set by session composition (P0-I01) via SetStockpileEconomy; nil means always
-// admit (test fixtures without economy) [05 "Two-resource admission"].
-var stockpileEconomy *economy.Service
+// SetStockpileEconomy is deprecated: per-queue StockpileEconomy is the authoritative bridge [RS-P0-018][INVARIANTS I1].
+// It is retained as a no-op for test compatibility. Session composition now sets StockpileEconomy on each Queue directly [RS-P0-018].
+func SetStockpileEconomy(s *economy.Service) { _ = s }
 
-// SetStockpileEconomy installs the economy service for BuildWeapon admission.
-// Called once during session composition; nil clears it (I16).
-func SetStockpileEconomy(s *economy.Service) { stockpileEconomy = s }
+// setSecondaryTick is deprecated: per-queue SecondaryTick is the authoritative tick [RS-P0-018].
+// It is retained as a no-op for test compatibility; pumpSecondary now sets Queue.SecondaryTick directly.
+func setSecondaryTick(t uint32) { _ = t }
 
-// currentSecondaryTick is set by pumpSecondary before dispatching a secondary
-// handler so the handler can compute retry deadlines (tick+5/10/300) per
-// [06 §11.1] without changing the Descriptor.Handler signature.
-var currentSecondaryTick uint32
-
-func setSecondaryTick(t uint32) { currentSecondaryTick = t }
+// secondaryTick returns the per-queue tick for the handler's unit [RS-P0-018].
+// It reads Queue.SecondaryTick when available, else 0 (fixtures without pump).
+func secondaryTick(u *units.Unit) uint32 {
+	if q := QueueForUnit(u); q != nil {
+		return q.SecondaryTick
+	}
+	return 0
+}
 
 // BuildWeaponHandler is the secondary-queue handler for BUILDWEAPON per [06 §11]
 // C29 and [04 §3.1] 0x40000. It advances the linked stockpile slot via
@@ -88,7 +89,7 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 		// removed by the stockpile handler. Real stray nodes will simply wait
 		// [05] and be cleaned via cancel.
 		n.DynamicGate = 1
-		n.Deadline = int32(currentSecondaryTick + 30)
+		n.Deadline = int32(secondaryTick(u) + 30)
 		return Code(2)
 	}
 	weapon := slot.Weapon
@@ -107,14 +108,11 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 	// Admit func: record via economy.UnitBuckets and return true if both
 	// carries non-positive (accepted), false if rejected, but always record
 	// requested amounts so the two-stage settlement retains fractional carry
-	// across cancels [05][06 §11.1][P1-09 §4]. Prefer per-queue economy (I16)
-	// to allow two sessions in one process without shared mutable state.
+	// across cancels [05][06 §11.1][P1-09 §4]. Per-queue economy only [RS-P0-018][INVARIANTS I1].
 	admit := func(e, m float32) bool {
 		var buckets *[2]economy.Bucket
 		if q := QueueForUnit(u); q != nil && q.StockpileEconomy != nil {
 			buckets = q.StockpileEconomy.UnitBuckets(u.Handle)
-		} else if stockpileEconomy != nil {
-			buckets = stockpileEconomy.UnitBuckets(u.Handle)
 		}
 		if buckets == nil {
 			return true
@@ -126,7 +124,7 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 		economy.AdmitTwoResource(buckets, e, m)
 		return wasAccepted
 	}
-	nextTick, _, completedRounds := combat.TickStockpile(ce, cs, currentSecondaryTick, admit)
+	nextTick, _, completedRounds := combat.TickStockpile(ce, cs, secondaryTick(u), admit)
 	// Copy back slot ammo (TickStockpile wraps 255->0) and node fields.
 	slot.Ammo = cs.Ammo
 	n.Param2 = uint32(ce.Count)
@@ -148,7 +146,7 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 	}
 	// No nextTick but count remains: keep node, schedule default 5-tick retry
 	// so the pump does not spin. Use 5 as accepted-incomplete boundary.
-	n.Deadline = int32(currentSecondaryTick + combat.StockpileRetryAccepted)
+	n.Deadline = int32(secondaryTick(u) + combat.StockpileRetryAccepted)
 	n.DynamicGate = 1
 	return Code(2)
 }

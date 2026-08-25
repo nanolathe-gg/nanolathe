@@ -49,6 +49,16 @@ func clickAt(b *battleSession, sx, sy int32, shift bool) {
 	b.handleInput(in, nil)
 }
 
+func rightClickAt(b *battleSession, sx, sy int32, shift bool) {
+	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
+	if shift {
+		in.Kbd.InjectKey(input.KeyShift, true)
+	}
+	in.Mouse.InjectMouseMove(float32(sx), float32(sy))
+	in.Mouse.InjectMouseButton(input.MouseButtonRight, true)
+	b.handleInput(in, nil)
+}
+
 func dragSelect(b *battleSession, sx0, sy0, sx1, sy1 int32, shift bool) {
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 	if shift {
@@ -146,19 +156,60 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 	if c.Flags&client.SelectionFlag == 0 {
 		t.Fatalf("C should remain selected after toggling A off")
 	}
-	// Empty click clears when not additive [07 §9] C6
-	clickAt(b, 5, 5, false) // 5,5 is HUD-ish but b.hud nil so considered world empty; pick no unit
-	// Ensure empty: choose far coords where no unit within 16px
-	clickAt(b, 600, 400, false)
-	if a.Flags&client.SelectionFlag != 0 || c.Flags&client.SelectionFlag != 0 {
-		t.Fatalf("empty click should clear all, A %v C %v", a.Flags&client.SelectionFlag != 0, c.Flags&client.SelectionFlag != 0)
+	// Left empty with selection issues a contextual move order and does NOT clear [07 §9][04 §3.4] — right-click is deselect/cancel only.
+	// Use the mobile builder A (armcons, CanMove) for move tests; C is a building (armsolar) that cannot move.
+	clickAt(b, sxA, syA, false) // select mobile A
+	if a.Flags&client.SelectionFlag == 0 {
+		t.Fatalf("A should be selected for move test")
 	}
-	// Shift+empty preserves [07 §9] C6
-	// Select C again
-	clickAt(b, sxC, syC, false)
-	clickAt(b, 600, 400, true) // shift empty
-	if c.Flags&client.SelectionFlag == 0 {
-		t.Fatalf("shift empty should preserve selection")
+	qBefore := 0
+	if q := orders.QueueForUnit(a); q != nil {
+		qBefore = q.LenPrimary()
+	}
+	// Use a far empty ground location that is not within 16px of any unit (units at 8,8 and 20,20 world → screen 8,8 and 20,20).
+	clickAt(b, 600, 400, false) // far empty ground
+	if a.Flags&client.SelectionFlag == 0 {
+		t.Fatalf("left empty with selection should preserve selection (issues move instead of clear)")
+	}
+	if c.Flags&client.SelectionFlag != 0 {
+		t.Fatalf("left empty should not affect C, got %v", c.Flags&client.SelectionFlag != 0)
+	}
+	if q := orders.QueueForUnit(a); q == nil || q.LenPrimary() != qBefore+1 {
+		t.Fatalf("left empty with selection should queue a contextual move, before %d after %d", qBefore, func() int {
+			if q := orders.QueueForUnit(a); q != nil {
+				return q.LenPrimary()
+			}
+			return 0
+		}())
+	} else {
+		// Clear the queued move for the next sub-test.
+		q.PurgeUnprotected()
+		q.DropLeadingAutoOps()
+		a.Flags |= client.SelectionFlag
+	}
+	// Right empty clears when not additive [07 §9] — deselect branch.
+	rightClickAt(b, 600, 400, false)
+	if a.Flags&client.SelectionFlag != 0 || c.Flags&client.SelectionFlag != 0 {
+		t.Fatalf("right empty should clear all, A %v C %v", a.Flags&client.SelectionFlag != 0, c.Flags&client.SelectionFlag != 0)
+	}
+	// Shift+right empty still clears in current retail path (right does not queue).
+	// Select A again and verify shift+left empty preserves via queued move.
+	clickAt(b, sxA, syA, false)
+	qBefore2 := 0
+	if q := orders.QueueForUnit(a); q != nil {
+		qBefore2 = q.LenPrimary()
+	}
+	clickAt(b, 600, 400, true) // shift left empty → queued move, preserves
+	if a.Flags&client.SelectionFlag == 0 {
+		t.Fatalf("shift left empty should preserve selection via queued move")
+	}
+	if q := orders.QueueForUnit(a); q == nil || q.LenPrimary() != qBefore2+1 {
+		t.Fatalf("shift left empty should queue a move, before %d after %d", qBefore2, func() int {
+			if q := orders.QueueForUnit(a); q != nil {
+				return q.LenPrimary()
+			}
+			return 0
+		}())
 	}
 	// Drag semantics also covered via ApplyDragSelectionWorld already, but verify drag replace/toggle still filtered to LocalOwner
 }
@@ -319,7 +370,7 @@ func TestLocalOwnerNonzeroReceivesCommands(t *testing.T) {
 	if localUnit.Flags&client.SelectionFlag == 0 {
 		t.Fatalf("local unit (owner 1) should be selectable when LocalOwner=1")
 	}
-	// Right-click move should dispatch only to local selection via same canonical producer [P0-I03].
+	// Left-click contextual move should dispatch only to local selection via same canonical producer [P0-I03].
 	// Acquire orders for local unit
 	// Use orderSelected direct: code 2 = MOVE
 	b.orderSelected(2, 300, 300, false) // ground point
@@ -384,7 +435,7 @@ func TestFeaturePickingOverlap(t *testing.T) {
 	_ = world.ResolveFeature
 }
 
-// Ensure orders use canonical payload builder: button, hotkey, right-click all via NewNodeForOrder.
+// Ensure orders use canonical payload builder: button, hotkey, left-click contextual all via NewNodeForOrder.
 func TestCanonicalPayloadIdentical(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
@@ -403,14 +454,14 @@ func TestCanonicalPayloadIdentical(t *testing.T) {
 	if first.GoalX == 0 && first.GoalZ == 0 {
 		t.Fatalf("payload missing Goal")
 	}
-	// Clear and test right-click contextual (code 1) also uses same builder
+	// Clear and test left-click contextual (code 1) also uses same builder
 	q.PurgeUnprotected()
 	q.DropLeadingAutoOps()
 	// Need selection still
 	u.Flags |= client.SelectionFlag
 	b.orderSelected(1, 210, 210, false)
 	if q.LenPrimary() != 1 {
-		t.Fatalf("right-click contextual should queue 1")
+		t.Fatalf("left-click contextual should queue 1")
 	}
 	second := q.Primary()[0]
 	if second.Target != 0 && second.Target != first.Target {

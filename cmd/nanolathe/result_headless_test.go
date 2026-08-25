@@ -143,8 +143,8 @@ func TestHeadlessNaturalResultExitsZero(t *testing.T) {
 		t.Fatalf("no enemy commander")
 	}
 	sess.Units.Destroy(enemyHandle, 1)
-	// Run until result with sufficient maxTick
-	maxTick := 100
+	// Run until result with sufficient maxTick [RS-05][RR-04] ~150 ticks
+	maxTick := 200
 	var result session.Result
 	for iter := 0; iter < maxTick; iter++ {
 		sess.Step(int32(iter))

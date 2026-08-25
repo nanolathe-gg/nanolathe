@@ -371,7 +371,7 @@ failed capability gate produces the reject identity.
 
 | Code | Meaning | Capability gate | Resolves to |
 |---:|---|---|---|
-| 1 | contextual, from a right-click | delegates to the codes below | hostile and able to attack becomes an attack order; a damaged or unfinished friendly becomes repair or build assistance; a transportable target becomes a pickup; a followable target becomes follow; a feature at the position becomes resurrect when eligible, otherwise reclaim; otherwise a move |
+| 1 | contextual, from a left-click with idle latch (the default left-button action when a selection exists) | delegates to the codes below | hostile and able to attack becomes an attack order; a damaged or unfinished friendly becomes repair or build assistance; a transportable target becomes a pickup; a followable target becomes follow; a feature at the position becomes resurrect when eligible, otherwise reclaim; otherwise a move |
 | 2 | move | can-move | a dead unit target becomes a queued move; a hostile target with the capture or reclaim capability becomes capture or unit-reclaim; a friendly build target becomes build assistance or repair; a landing pad becomes landing; a carriable target becomes pickup; a followable target becomes follow; otherwise ground or air move |
 | 3 | attack a unit | can-attack | suppression for the non-air special case; the four air-attack variants chosen by weapon and target class; the kamikaze variant for a unit flagged for it; the no-move variant for a structure; otherwise the chase attack |
 | 4 | special attack | special-attack capability | the special attack |
@@ -392,6 +392,8 @@ chosen by the canfly flag on the acting unit's definition; construction work
 uses the standard builder gates and stockpile `BuildWeapon` is capped at its
 buildTime with cost deltas applied via the two-resource versus energy-only
 gates [P0-07].
+
+**Mouse-button assignment is closed.** Every world command — selection, move, attack, and the contextual delegation above (code 1) — is issued with the **left** mouse button; the **right** button never issues an order. A right click cancels the armed command latch (returning it to idle) or, when the latch is already idle, clears the current selection. The battle input pump routes left-button press and release through the single-click and drag-rectangle selection paths and the order dispatcher, while right-button press is routed exclusively to the cancellation path that returns the latch to idle and, when idle, performs the deselection branch. The cursor contract shows the same polarity: every latched shape's advertised action fires on left-click; the right-click column is empty or a transition back to the normal cursor [07 §8][07 §9].
 
 ### 3.5 Attack-chase states and guard assistance
 

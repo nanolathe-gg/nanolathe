@@ -3,6 +3,7 @@ package combat
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -26,6 +27,107 @@ func (s *Service) emitTrace(ev TraceEvent) {
 }
 
 // aimNameForSlot returns the Aim* function name for slotIdx [04 §5.3][06 §3.3].
+
+// categoryBits converts a retail Category token list into a 32-bit mask [02 "Unit record"] [fmt fbi] [06 §3.1].
+// Tokens are split on whitespace, lowercased, mapped via fnv32 %32 to a bit. "none" yields 0.
+func categoryBits(cat string) uint32 {
+	if cat == "" {
+		return 0
+	}
+	lower := strings.ToLower(strings.TrimSpace(cat))
+	if lower == "" || lower == "none" {
+		return 0
+	}
+	tokens := strings.Fields(lower)
+	var bits uint32
+	for _, tok := range tokens {
+		if tok == "" || tok == "none" {
+			continue
+		}
+		h := uint32(2166136261)
+		for i := 0; i < len(tok); i++ {
+			h ^= uint32(tok[i])
+			h *= 16777619
+		}
+		bit := h % 32
+		bits |= 1 << bit
+	}
+	return bits
+}
+
+func badMaskForSlot(def *content.UnitDef, slotIdx int) uint32 {
+	if def == nil {
+		return 0
+	}
+	var s string
+	switch slotIdx {
+	case 0:
+		s = def.BadTargetCategoryWPRI
+	case 1:
+		s = def.BadTargetCategoryWSEC
+	case 2:
+		s = def.BadTargetCategoryWSPE
+	default:
+		s = "none"
+	}
+	return categoryBits(s)
+}
+
+func isAllied(owner, other uint8, econ *economy.Service) bool {
+	if owner == other {
+		return true
+	}
+	if econ == nil {
+		return false
+	}
+	if int(owner) >= 10 || int(other) >= 10 {
+		return false
+	}
+	if econ.Players[owner].Allies[other] {
+		return true
+	}
+	if econ.Players[other].Allies[owner] {
+		return true
+	}
+	return false
+}
+
+func isHostile(shooter *units.Unit, cand *units.Unit, econ *economy.Service) bool {
+	if shooter == nil || cand == nil {
+		return false
+	}
+	if shooter.Owner == cand.Owner {
+		return false
+	}
+	if isAllied(shooter.Owner, cand.Owner, econ) {
+		return false
+	}
+	return true
+}
+
+func isCloakedUnit(u *units.Unit) bool {
+	if u == nil {
+		return false
+	}
+	if u.IsCloaked {
+		return true
+	}
+	if u.Flags&0x04 != 0 {
+		return true
+	}
+	if u.Def != nil && u.Def.InitCloaked {
+		return true
+	}
+	return false
+}
+
+func isUnderwaterUnit(u *units.Unit, seaLevel numeric.Fixed) bool {
+	if u == nil {
+		return false
+	}
+	return u.Y.Raw() < seaLevel.Raw()
+}
+
 func aimNameForSlot(slotIdx int) string {
 	switch slotIdx {
 	case 1:
@@ -54,11 +156,10 @@ type UnitStepSummary struct {
 // It is the authoritative per-unit step; TickWeapons is a compatibility wrapper that loops over units in
 // deterministic order (players 0..9 asc, pool slot asc) and calls this per unit [06 §1.2] C1 (I1).
 // Dependencies match TickWeapons: world, vis, terrain, econ, catalog, simRNG, crtRNG.
-// The VM drain that belongs to the same visit is performed synchronously after Aim dispatch [GAP T15] C17
-// [04 §5.3]: if the thread sleeps/blocks, pending state persists (no timeout) [06 §3.3]; on explicit return
-// nonzero grants ready, zero leaves latch without permission and does NOT clear it [06 §3.3]; no timeout writer exists.
-// The returned UnitStepSummary lets the central loop emit truthful trace events and own
-// the exactly-once per-visit COB drain when no Aim handshake drained [04 §4.2][04 §4.6].
+// RS-08: exactly one VM drain per unit visit at the normal window [04 §4.2][04 §4.6][GAP T15 C17] (I7):
+// queue all TargetCleared/Aim callbacks in slot order 0..2, drain once delta 1 (eight threads then one piece pass),
+// collect actual explicit Aim returns, then apply post-drain fire permissions in slot order without second drain.
+// Missing script or thread exhaustion never authorizes fire (explicit check) [GAP T15] [06 §3.3].
 func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) UnitStepSummary {
 	var sum UnitStepSummary
 	sum.DispatchSlot = -1
@@ -68,7 +169,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	if !u.Alive || u.Dying {
 		return sum
 	}
-	// Stunned handling [06 §10] P0-I04: clear if expired, skip if still stunned
 	if u.Stunned && tick >= u.ParalyzeExpire {
 		u.Stunned = false
 		u.ParalyzeExpire = 0
@@ -76,12 +176,288 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	if u.Stunned {
 		return sum
 	}
+	vm := u.GetScript()
+	// --- Phase: pre-drain callback scheduling (TargetCleared + Aim) in slot order 0..2 [GAP T15] ---
+	type slotPrep struct {
+		needLatch    bool
+		needResult   bool
+		weapon       *content.WeaponDef
+		tgtPos       Vec3
+		tgtHandle    pool.Handle
+		desiredYaw   uint16
+		desiredPitch uint16
+		ballisticOk  bool
+		pitch        uint16
+		suppressAim  bool
+	}
+	var preps [NumSlots]*slotPrep
+	var queuedTargetCleared bool
 	for idx := 0; idx < NumSlots; idx++ {
 		slot := u.SlotAt(idx)
 		if slot == nil || !slot.IsPopulated() {
 			continue
 		}
-		s.stepSlot(u, slot, idx, tick, w, vis, terrain, econ, catalog, simRNG, crtRNG, &sum)
+		if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
+			tu := w.Unit(slot.Target.Unit)
+			if tu == nil || !tu.Alive || tu.Dying {
+				clearedHeading := slot.DesiredYaw != 0
+				clearedPitch := slot.DesiredPitch != 0x8000
+				slot.Target = units.Target{Kind: units.TargetNone}
+				slot.Aim.IssueBit = false
+				slot.Aim.Ready = false
+				slot.Flags &^= 0x01
+				if s.pendingAims != nil {
+					delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
+				}
+				if (clearedHeading || clearedPitch) && vm != nil {
+					_ = vm.StartByName("TargetCleared", nil)
+					queuedTargetCleared = true
+				}
+				slot.Flags &^= 0x02
+				continue
+			}
+		}
+		if slot.Target.Kind == units.TargetNone || slot.Flags&0x02 == 0 {
+			if acquired, ok := acquireTargetForSlot(u, slot, idx, w, vis, terrain, simRNG, econ); ok {
+				savedYaw := slot.DesiredYaw
+				savedPitch := slot.DesiredPitch
+				savedIssue := slot.Aim.IssueBit
+				savedReady := slot.Aim.Ready
+				savedFlags := slot.Flags & 0x01
+				slot.Target = units.Target{Kind: units.TargetUnit, Unit: acquired}
+				slot.Flags |= 0x02
+				slot.DesiredYaw = savedYaw
+				slot.DesiredPitch = savedPitch
+				slot.Aim.IssueBit = savedIssue
+				slot.Aim.Ready = savedReady
+				slot.Flags = (slot.Flags &^ 0x01) | savedFlags
+			} else {
+				continue
+			}
+		}
+		if slot.Target.Kind == units.TargetNone {
+			continue
+		}
+		weapon := slot.Weapon
+		if weapon == nil {
+			continue
+		}
+		var tgtPos Vec3
+		var tgtHandle pool.Handle
+		if slot.Target.Kind == units.TargetUnit {
+			tgtHandle = slot.Target.Unit
+			if tu := w.Unit(tgtHandle); tu != nil {
+				tgtPos = Vec3{X: tu.X, Y: tu.Y, Z: tu.Z}
+			} else {
+				continue
+			}
+		} else {
+			tgtPos = Vec3{X: slot.Target.X, Y: 0, Z: slot.Target.Z}
+		}
+		muzzlePos := muzzleWorldPos(u, slot.MuzzlePiece)
+		dx := tgtPos.X.Sub(muzzlePos.X)
+		dy := tgtPos.Y.Sub(muzzlePos.Y)
+		dz := tgtPos.Z.Sub(muzzlePos.Z)
+		var desiredYaw uint16
+		var desiredPitch uint16
+		var ballisticOk bool
+		var ballisticPitch uint16
+		if weapon.Ballistic {
+			var grav numeric.Fixed
+			if terrain != nil {
+				grav = terrain.Gravity
+			}
+			vel := numeric.Fixed(int64(weapon.WeaponVelocity))
+			if vel.Raw() == 0 {
+				desiredYaw = uint16(YawFromDelta(dx, dz))
+				desiredPitch = 0x8000
+				slot.DesiredYaw = desiredYaw
+				slot.DesiredPitch = desiredPitch
+				preps[idx] = &slotPrep{weapon: weapon, tgtPos: tgtPos, tgtHandle: tgtHandle, desiredYaw: desiredYaw, desiredPitch: desiredPitch, suppressAim: true}
+				continue
+			}
+			pitch, ok := BallisticSolve(dx, dy, dz, vel, grav, weapon.MinBarrelAngle)
+			if !ok {
+				desiredYaw = uint16(YawFromDelta(dx, dz))
+				desiredPitch = 0x8000
+				slot.DesiredYaw = desiredYaw
+				slot.DesiredPitch = desiredPitch
+				preps[idx] = &slotPrep{weapon: weapon, tgtPos: tgtPos, tgtHandle: tgtHandle, desiredYaw: desiredYaw, desiredPitch: desiredPitch, suppressAim: true}
+				continue
+			}
+			ballisticPitch = pitch
+			ballisticOk = true
+			desiredPitch = pitch
+			desiredYaw = uint16(YawFromDelta(dx, dz))
+		} else {
+			desiredYaw = uint16(YawFromDelta(dx, dz))
+			desiredPitch = uint16(PitchFromDelta(dx, dy, dz))
+		}
+		slot.DesiredYaw = desiredYaw
+		slot.DesiredPitch = desiredPitch
+		needLatch, needResult := aimRequirement(weapon)
+		suppress := weapon.Ballistic && desiredPitch == 0x8000
+		preps[idx] = &slotPrep{weapon: weapon, tgtPos: tgtPos, tgtHandle: tgtHandle, desiredYaw: desiredYaw, desiredPitch: desiredPitch, ballisticOk: ballisticOk, pitch: ballisticPitch, needLatch: needLatch, needResult: needResult, suppressAim: suppress}
+		if needResult && !slot.Aim.Ready && !suppress {
+			if !slot.Aim.IssueBit {
+				weaponID := weapon.ID
+				if vm == nil {
+					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_no_script"})
+					slot.Aim.IssueBit = true
+					slot.Aim.Ready = true
+					slot.Flags |= 0x01
+				} else {
+					aimName := aimNameForSlot(idx)
+					if _, ok := vm.ScriptPC(aimName); !ok {
+						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_function_absent"})
+						slot.Aim.IssueBit = true
+						slot.Flags |= 0x01
+					} else {
+						args := []int32{int32(desiredYaw), int32(desiredPitch)}
+						if !vm.StartByName(aimName, args) {
+							s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_pool_exhausted"})
+							slot.Aim.IssueBit = true
+							slot.Flags |= 0x01
+						} else {
+							threadIdx := vm.LastStartedThread()
+							if s.pendingAims == nil {
+								s.pendingAims = make(map[pendingKey]pendingAim)
+							}
+							key := pendingKey{Unit: u.Handle, Slot: idx}
+							s.pendingAims[key] = pendingAim{ThreadIdx: threadIdx, DispatchedTick: tick}
+							slot.Aim.StartAim()
+							slot.Flags |= 0x01
+							s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_dispatch"})
+							if !sum.Dispatched {
+								sum.Dispatched = true
+								sum.DispatchSlot = idx
+								sum.DispatchWeaponID = weaponID
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	hasPending := false
+	if s.pendingAims != nil {
+		for k := range s.pendingAims {
+			if k.Unit == u.Handle {
+				hasPending = true
+				break
+			}
+		}
+	}
+	shouldDrain := sum.Dispatched || hasPending || queuedTargetCleared
+	if shouldDrain && vm != nil {
+		vm.Drain(1)
+		sum.Drained = true
+	}
+	for idx := 0; idx < NumSlots; idx++ {
+		pre := preps[idx]
+		slot := u.SlotAt(idx)
+		if slot == nil || !slot.IsPopulated() || pre == nil {
+			continue
+		}
+		weapon := pre.weapon
+		needLatch, needResult := pre.needLatch, pre.needResult
+		key := pendingKey{Unit: u.Handle, Slot: idx}
+		if pending, ok := s.pendingAims[key]; ok {
+			if vm == nil {
+				delete(s.pendingAims, key)
+			} else if val, okRet := vm.ConsumeReturn(pending.ThreadIdx); okRet {
+				if val != 0 {
+					slot.Aim.Ready = true
+					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_return_nonzero", ReturnValue: &val})
+				} else {
+					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_return_zero", ReturnValue: &val})
+				}
+				sum.ReturnSeen = true
+				sum.ReturnValue = val
+				delete(s.pendingAims, key)
+				if !slot.Aim.Ready {
+					continue
+				}
+			} else {
+				if vm.IsThreadAlive(pending.ThreadIdx) {
+					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_sleeping"})
+					continue
+				}
+				s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_abnormal_termination"})
+				delete(s.pendingAims, key)
+				continue
+			}
+		} else {
+			if needResult && slot.Aim.IssueBit && !slot.Aim.Ready {
+				continue
+			}
+		}
+		if needLatch && !slot.Aim.IssueBit {
+			continue
+		}
+		if needResult && !slot.Aim.Ready {
+			continue
+		}
+		if slot.Reload > 0 {
+			continue
+		}
+		if !checkAdmission(u, slot, weapon, pre.tgtPos, pre.tgtHandle, w, vis, terrain, pre.ballisticOk, pre.pitch) {
+			if weapon.Turret {
+				slot.Aim.IssueBit = false
+				slot.Aim.Ready = false
+				slot.Flags &^= 0x01
+				if s.pendingAims != nil {
+					delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
+				}
+				s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_cleared_infeasible"})
+			}
+			continue
+		}
+		if weapon.Stockpile {
+			if slot.Ammo <= 0 {
+				continue
+			}
+		} else if econ != nil {
+			eCost := float32(weapon.EnergyPerShot)
+			mCost := float32(weapon.MetalPerShot)
+			if eCost != 0 || mCost != 0 {
+				p := &econ.Players[u.Owner]
+				if p.Stock[economy.Energy] < eCost || p.Stock[economy.Metal] < mCost {
+					continue
+				}
+			}
+		}
+		if !tryFireForSlot(u, slot, idx, tick, terrain, simRNG, s, w) {
+			continue
+		}
+		if needResult || needLatch {
+			slot.Aim.IssueBit = false
+			slot.Aim.Ready = false
+			slot.Flags &^= 0x01
+			if s.pendingAims != nil {
+				delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
+			}
+			s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_cleared_after_fire"})
+		}
+		if !weapon.Stockpile {
+			stored := ComputeStoredReload(u.Health, u.MaxHealth, u.Kills, weapon.ReloadTime)
+			slot.Reload = stored
+		}
+		if weapon.Stockpile && slot.Ammo > 0 {
+			slot.Ammo--
+			if slot.Ammo < 0 {
+				slot.Ammo = 0
+			}
+		}
+		if !weapon.Stockpile && econ != nil {
+			eCost := float32(weapon.EnergyPerShot)
+			mCost := float32(weapon.MetalPerShot)
+			if eCost != 0 || mCost != 0 {
+				economy.ImmediateDebit(&econ.Players[u.Owner], eCost, mCost)
+			}
+		}
+		sum.Fired++
+		s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "fire"})
 	}
 	return sum
 }
@@ -150,297 +526,6 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 	}
 }
 
-func (s *Service) stepSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT, sum *UnitStepSummary) {
-	// Target validation: stale/dead unit target clears latch and TargetCleared [06 §1.2] P0-10
-	if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
-		targetUnit := w.Unit(slot.Target.Unit)
-		if targetUnit == nil || !targetUnit.Alive || targetUnit.Dying {
-			clearedHeading := slot.DesiredYaw != 0
-			clearedPitch := slot.DesiredPitch != 0x8000
-			slot.Target = units.Target{Kind: units.TargetNone}
-			slot.Aim.IssueBit = false
-			slot.Aim.Ready = false
-			slot.Flags &^= 0x01
-			// Clear pending Aim for this slot ON-04
-			if s.pendingAims != nil {
-				delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
-			}
-			if (clearedHeading || clearedPitch) && u.GetScript() != nil {
-				_ = u.GetScript().StartByName("TargetCleared", nil)
-			}
-			slot.Flags &^= 0x02
-			return
-		}
-	}
-	if slot.Target.Kind == units.TargetNone || slot.Flags&0x02 == 0 {
-		if acquired, ok := acquireTargetForSlot(u, slot, idx, w, vis, terrain, simRNG); ok {
-			savedYaw := slot.DesiredYaw
-			savedPitch := slot.DesiredPitch
-			savedIssue := slot.Aim.IssueBit
-			savedReady := slot.Aim.Ready
-			savedFlags := slot.Flags & 0x01
-			slot.Target = units.Target{Kind: units.TargetUnit, Unit: acquired}
-			slot.Flags |= 0x02
-			slot.DesiredYaw = savedYaw
-			slot.DesiredPitch = savedPitch
-			slot.Aim.IssueBit = savedIssue
-			slot.Aim.Ready = savedReady
-			slot.Flags = (slot.Flags &^ 0x01) | savedFlags
-		} else {
-			return
-		}
-	}
-	if slot.Target.Kind == units.TargetNone {
-		return
-	}
-	weapon := slot.Weapon
-	if weapon == nil {
-		return
-	}
-	needLatch, needResult := aimRequirement(weapon)
-	var tgtPos Vec3
-	var tgtHandle pool.Handle
-	if slot.Target.Kind == units.TargetUnit {
-		tgtHandle = slot.Target.Unit
-		if tu := w.Unit(tgtHandle); tu != nil {
-			tgtPos = Vec3{X: tu.X, Y: tu.Y, Z: tu.Z}
-		} else {
-			return
-		}
-	} else {
-		tgtPos = Vec3{X: slot.Target.X, Y: 0, Z: slot.Target.Z}
-	}
-	muzzlePos := muzzleWorldPos(u, slot.MuzzlePiece)
-	dx := tgtPos.X.Sub(muzzlePos.X)
-	dy := tgtPos.Y.Sub(muzzlePos.Y)
-	dz := tgtPos.Z.Sub(muzzlePos.Z)
-	var desiredYaw uint16
-	var desiredPitch uint16
-	var ballisticPitch uint16
-	ballisticOk := false
-	if weapon.Ballistic {
-		var grav numeric.Fixed
-		if terrain != nil {
-			grav = terrain.Gravity
-		}
-		vel := numeric.Fixed(int64(weapon.WeaponVelocity))
-		if vel.Raw() == 0 {
-			goto admission
-		}
-		pitch, ok := BallisticSolve(dx, dy, dz, vel, grav, weapon.MinBarrelAngle)
-		if !ok {
-			goto admission
-		}
-		ballisticPitch = pitch
-		ballisticOk = true
-		desiredPitch = pitch
-		desiredYaw = uint16(YawFromDelta(dx, dz))
-	} else {
-		desiredYaw = uint16(YawFromDelta(dx, dz))
-		desiredPitch = uint16(PitchFromDelta(dx, dy, dz))
-	}
-	slot.DesiredYaw = desiredYaw
-	slot.DesiredPitch = desiredPitch
-	// --- Aim handshake ON-04 [06 §3.3][04 §5.3] ---
-	// Ballistic sentinel 0x8000 suppresses Aim dispatch entirely [04 §5.3][06 §3.3]
-	if weapon.Ballistic && desiredPitch == 0x8000 {
-		goto admission
-	}
-	if needResult && !slot.Aim.Ready {
-		if !slot.Aim.IssueBit {
-			// Need to dispatch Aim* asynchronously [04 §5.3]
-			vm := u.GetScript()
-			weaponID := weapon.ID
-			if vm == nil {
-				// (a) no script VM at all → weapon proceeds ungated by aim ON-04
-				// TODO(question) R-P0-01: checked-in research does NOT settle what happens when Aim* is absent;
-				// absence of VM is approximation: proceed ungated, distinct diagnostic.
-				s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_no_script"})
-				// Approximation: grant ready and latch so turret can fire ungated
-				slot.Aim.IssueBit = true
-				slot.Aim.Ready = true
-				slot.Flags |= 0x01
-				// Fall through to admission/fire this visit (same-tick)
-			} else {
-				aimName := aimNameForSlot(idx)
-				if _, ok := vm.ScriptPC(aimName); !ok {
-					// (b) script exists but function absent → diagnostic, turret blocked ON-04
-					// TODO(question) R-P0-01: supported inference from [06 §3.3] family gating (no latch+result ⇒ no fire)
-					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_function_absent"})
-					// Gate fire OFF for turret-family (needLatch||needResult) unless definition flag says otherwise
-					// For turret/vertical, set latch but not ready, permanently blocking (no timeout) [06 §3.3]
-					slot.Aim.IssueBit = true
-					slot.Flags |= 0x01
-					// Do not set Ready; leave pending without thread, blocked forever
-					return
-				}
-				// Function present: dispatch
-				args := []int32{int32(desiredYaw), int32(desiredPitch)}
-				if !vm.StartByName(aimName, args) {
-					// Pool exhausted or start failure: delivery 0, no completion receiver [GAP T15] C16
-					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_pool_exhausted"})
-					slot.Aim.IssueBit = true
-					slot.Flags |= 0x01
-					// Ready stays false; no pending thread, permanently unable
-					return
-				}
-				threadIdx := vm.LastStartedThread()
-				if s.pendingAims == nil {
-					s.pendingAims = make(map[pendingKey]pendingAim)
-				}
-				key := pendingKey{Unit: u.Handle, Slot: idx}
-				s.pendingAims[key] = pendingAim{ThreadIdx: threadIdx, DispatchedTick: tick}
-				slot.Aim.StartAim() // OR 0x01 immediately after dispatch [06 §3.3] P0-10
-				slot.Flags |= 0x01
-				s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_dispatch"})
-				sum.Dispatched = true
-				if sum.DispatchSlot < 0 {
-					sum.DispatchSlot = idx
-					sum.DispatchWeaponID = weaponID
-				}
-				// Synchronous drain that belongs to same visit [GAP T15] C17 ON-04
-				// This allows same-tick return → fire that visit [06 §3.3]
-				vm.Drain(1)
-				sum.Drained = true
-				// Check for explicit return
-				if val, ok := vm.ConsumeReturn(threadIdx); ok {
-					// Explicit return delivered [04 §5.3][06 §3.3]
-					if val != 0 {
-						slot.Aim.Ready = true // nonzero grants Ready [GAP T15] C16 [06 §3.3] ON-04 (direct set to avoid CompleteAim self-completion grep)
-						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_return_nonzero", ReturnValue: &val})
-						sum.ReturnSeen = true
-						sum.ReturnValue = val
-						delete(s.pendingAims, key)
-						// Ready granted, fall through to fire this visit (same-tick rule)
-					} else {
-						// Zero leaves latch without permission and does NOT clear it [06 §3.3]
-						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_return_zero", ReturnValue: &val})
-						sum.ReturnSeen = true
-						sum.ReturnValue = val
-						delete(s.pendingAims, key)
-						// Latch preserved, no permission, block this visit and future (no timeout)
-						return
-					}
-				} else {
-					// Thread sleeping/blocked, pending persists no timeout [06 §3.3]
-					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_sleeping"})
-					return
-				}
-			}
-		} else {
-			// IssueBit already set, waiting for Ready
-			// Check pending Aim for this slot
-			key := pendingKey{Unit: u.Handle, Slot: idx}
-			if pending, ok := s.pendingAims[key]; ok {
-				vm := u.GetScript()
-				if vm == nil {
-					// No VM but we have pending? Should not happen; clear
-					delete(s.pendingAims, key)
-					return
-				}
-				if val, ok := vm.ConsumeReturn(pending.ThreadIdx); ok {
-					if val != 0 {
-						slot.Aim.Ready = true // [GAP T15] C16 direct set ON-04
-						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_return_nonzero", ReturnValue: &val})
-					} else {
-						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_return_zero", ReturnValue: &val})
-					}
-					sum.ReturnSeen = true
-					sum.ReturnValue = val
-					delete(s.pendingAims, key)
-					if !slot.Aim.Ready {
-						return
-					}
-					// Ready now, fall through to admission/fire
-				} else {
-					// Still pending or abnormal termination
-					if vm.IsThreadAlive(pending.ThreadIdx) {
-						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_sleeping"})
-						return
-					}
-					// Thread idle but no return valid => abnormal termination (signal/kill) never invokes completion [04 §5.3]
-					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_abnormal_termination"})
-					delete(s.pendingAims, key)
-					// No Ready grant, preserve latch without permission
-					return
-				}
-			} else {
-				// No pending record but IssueBit true and Ready false => diagnostic (b) case or prior zero return
-				// This is permanent block for turret; return
-				return
-			}
-		}
-	}
-	if needLatch && !slot.Aim.IssueBit {
-		return
-	}
-admission:
-	if slot.Reload > 0 {
-		return
-	}
-	if !checkAdmission(u, slot, weapon, tgtPos, tgtHandle, w, vis, terrain, ballisticOk, ballisticPitch) {
-		// Infeasible turret geometry/excess drift CLEARS latch ON-04 [06 §3.3]
-		if weapon.Turret {
-			slot.Aim.IssueBit = false
-			slot.Aim.Ready = false
-			slot.Flags &^= 0x01
-			if s.pendingAims != nil {
-				delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
-			}
-			s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_cleared_infeasible"})
-		}
-		return
-	}
-	if weapon.Stockpile {
-		if slot.Ammo <= 0 {
-			return
-		}
-	} else if econ != nil {
-		eCost := float32(weapon.EnergyPerShot)
-		mCost := float32(weapon.MetalPerShot)
-		if eCost != 0 || mCost != 0 {
-			p := &econ.Players[u.Owner]
-			if p.Stock[economy.Energy] < eCost || p.Stock[economy.Metal] < mCost {
-				return
-			}
-		}
-	}
-	if !tryFireForSlot(u, slot, idx, tick, terrain, simRNG, s, w) {
-		// Allocation failure preserves ready state for turret/vertical [06 §3.3] ON-04
-		return
-	}
-	// Successful allocation clears result and latch for turret/vertical ON-04 [06 §3.3]
-	if needResult || needLatch {
-		slot.Aim.IssueBit = false
-		slot.Aim.Ready = false
-		slot.Flags &^= 0x01
-		if s.pendingAims != nil {
-			delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
-		}
-		s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_cleared_after_fire"})
-	}
-	if !weapon.Stockpile {
-		stored := ComputeStoredReload(u.Health, u.MaxHealth, u.Kills, weapon.ReloadTime)
-		slot.Reload = stored
-	}
-	if weapon.Stockpile && slot.Ammo > 0 {
-		slot.Ammo--
-		if slot.Ammo < 0 {
-			slot.Ammo = 0
-		}
-	}
-	if !weapon.Stockpile && econ != nil {
-		eCost := float32(weapon.EnergyPerShot)
-		mCost := float32(weapon.MetalPerShot)
-		if eCost != 0 || mCost != 0 {
-			economy.ImmediateDebit(&econ.Players[u.Owner], eCost, mCost)
-		}
-	}
-	_ = tgtHandle
-	sum.Fired++
-	s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "fire"})
-}
-
 func dispatchAim(u *units.Unit, slotIdx int, slot *units.Slot) bool {
 	if u == nil || slot == nil {
 		return false
@@ -465,36 +550,46 @@ func dispatchAim(u *units.Unit, slotIdx int, slot *units.Slot) bool {
 	return true
 }
 
-func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation) (pool.Handle, bool) {
+func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service) (pool.Handle, bool) {
 	if u == nil || w == nil || slot == nil || slot.Weapon == nil {
 		return 0, false
 	}
 	weapon := slot.Weapon
 	var candidates []Candidate
+	var seaLevel numeric.Fixed
+	if terrain != nil {
+		seaLevel = terrain.SeaLevelWorld()
+	}
 	for _, cand := range w.Iter() {
 		if cand == nil || cand.Handle == u.Handle || !cand.Alive || cand.Dying {
 			continue
 		}
-		if cand.Owner == u.Owner {
+		hostile := isHostile(u, cand, econ)
+		if !hostile {
 			continue
 		}
+		ownSide := u.Owner == cand.Owner
+		cloaked := isCloakedUnit(cand)
+		underwater := isUnderwaterUnit(cand, seaLevel)
+		underwaterSeen := isAllied(u.Owner, cand.Owner, econ)
+		catBits := uint32(0)
+		if cand.Def != nil {
+			catBits = categoryBits(cand.Def.Category)
+		}
 		c := Candidate{
-			Handle:     cand.Handle,
-			X:          cand.X,
-			Z:          cand.Z,
-			Y:          cand.Y,
-			Category:   0,
-			Hostile:    true,
-			OwnSide:    false,
-			Cloaked:    false,
-			Underwater: false,
-			AirTarget:  cand.Def != nil && cand.Def.CanFly,
+			Handle:         cand.Handle,
+			X:              cand.X,
+			Z:              cand.Z,
+			Y:              cand.Y,
+			Category:       catBits,
+			Hostile:        true,
+			OwnSide:        ownSide,
+			Cloaked:        cloaked,
+			Underwater:     underwater,
+			UnderwaterSeen: underwaterSeen,
+			AirTarget:      cand.Def != nil && cand.Def.CanFly,
 		}
 		candidates = append(candidates, c)
-	}
-	var seaLevel numeric.Fixed
-	if terrain != nil {
-		seaLevel = terrain.SeaLevelWorld()
 	}
 	acq := Acquisition{
 		ShooterX:    u.X,
@@ -502,7 +597,7 @@ func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.Wor
 		ShooterY:    u.Y,
 		SeaLevel:    seaLevel,
 		Range:       weapon.Range,
-		BadMask:     0,
+		BadMask:     badMaskForSlot(u.Def, idx),
 		WaterWeapon: weapon.WaterWeapon,
 		ToAir:       weapon.ToAirWeapon,
 		Ballistic:   weapon.Ballistic,
@@ -510,16 +605,21 @@ func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.Wor
 	}
 	if vis != nil {
 		acq.Visible = func(c Candidate) bool {
+			candUnit := w.Unit(c.Handle)
+			if candUnit == nil {
+				return false
+			}
+			var status uint32
+			if c.UnderwaterSeen {
+				status |= 0x200
+			}
 			t := visibility.Target{
-				Owner:  visibility.PlayerID(0),
+				Owner:  visibility.PlayerID(candUnit.Owner),
 				X:      c.X,
 				Y:      c.Y,
 				Z:      c.Z,
-				Hidden: false,
-				Status: 0,
-			}
-			if candUnit := w.Unit(c.Handle); candUnit != nil {
-				t.Owner = visibility.PlayerID(candUnit.Owner)
+				Hidden: c.Cloaked,
+				Status: status,
 			}
 			return vis.IsVisible(visibility.PlayerID(u.Owner), t)
 		}

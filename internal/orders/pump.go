@@ -86,12 +86,14 @@ type Queue struct {
 	Lookup    func(pool.Handle) *units.Unit                    `json:"-"` // per-queue target lookup [P0-I16]
 
 	// StockpileEconomy is the per-queue economy service for BuildWeapon admission
-	// [06 §11.1][P1-09] I16: per-queue to avoid shared mutable global. When nil,
-	// the handler falls back to the package global set by session composition
-	// (single-session fast path) or admits always (fixtures).
+	// [06 §11.1][P1-09] I16: per-queue to avoid shared mutable global [RS-P0-018][INVARIANTS I1].
 	StockpileEconomy interface {
 		UnitBuckets(pool.Handle) *[2]economy.Bucket
 	} `json:"-"`
+
+	// SecondaryTick is the per-queue tick for BuildWeapon handler deadlines [06 §11.1][RS-P0-018].
+	// Was package-global currentSecondaryTick; now per-queue for session isolation [INVARIANTS I1].
+	SecondaryTick uint32 `json:"-"`
 }
 
 // [P2-03][P1-I09] Queue storage is dynamic, matching retail's heap-linked list
@@ -713,7 +715,8 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 		u.Pending &^= satisfied
 		n.DynamicGate = 0
 		// Publish tick for BuildWeapon stockpile handler's retry deadlines
-		// [06 §11.1] C29 (5/10/300) without changing Handler signature.
+		// [06 §11.1] C29 (5/10/300) without changing Handler signature [RS-P0-018].
+		q.SecondaryTick = tick
 		setSecondaryTick(tick)
 		handler := DescriptorFor(n.ID).Handler
 		if handler == nil {
@@ -800,9 +803,6 @@ func QueueForUnit(u *units.Unit) *Queue {
 		return q
 	}
 	q := &Queue{}
-	if stockpileEconomy != nil && q.StockpileEconomy == nil {
-		q.StockpileEconomy = stockpileEconomy
-	}
 	u.Orders = q
 	return q
 }
@@ -810,8 +810,5 @@ func QueueForUnit(u *units.Unit) *Queue {
 func BindQueue(u *units.Unit, q *Queue) {
 	if u != nil {
 		u.Orders = q
-		if q != nil && stockpileEconomy != nil && q.StockpileEconomy == nil {
-			q.StockpileEconomy = stockpileEconomy
-		}
 	}
 }

@@ -3,6 +3,7 @@ package combat
 import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 )
 
 // ProjectileCapacity is the fixed retail capacity [01 §6.1], [06 §5.1]: exactly
@@ -134,6 +135,10 @@ type Service struct {
 
 	Trace       func(TraceEvent)          // optional ordered debug-trace sink ON-04, nil-safe, no RNG/state
 	pendingAims map[pendingKey]pendingAim // Aim dispatch tracking ON-04 [06 §3.3]
+
+	// Visibility is the per-session LOS predicate [03 §3.2] C8 [RS-P0-018].
+	// Moved from package-global combat.VisibilityHook to per-Service field for session isolation [INVARIANTS I1][I6][RS-P0-018].
+	Visibility func(viewer visibility.PlayerID, target visibility.Target) bool `json:"-"`
 }
 
 // Reserve appends a projectile record at the active-span tail [06 §5.1], [01 §6.1].

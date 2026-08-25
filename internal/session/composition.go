@@ -299,14 +299,14 @@ func createAndBindServices(s *Session) error {
 		s.visDecloak = make(map[int]uint32)
 	}
 	// Canonical visibility predicate for combat [03 §3.2] C8 P0-11 — single gameplay gate.
-	// Combat's AcquireTarget Visible closure should call s.Vis.IsVisible; this global hook is a minimal bridge
-	// for call sites that cannot yet thread the session. It is presentation-global and last-writer-wins;
-	// per-session closure is preferred (P0-I16 future).
-	combat.VisibilityHook = func(viewer visibility.PlayerID, target visibility.Target) bool {
-		if s.Vis == nil {
-			return false
+	// Per-session isolated: was package-global combat.VisibilityHook, now Service.Visibility [RS-P0-018][INVARIANTS I1][I6].
+	if s.Combat != nil {
+		s.Combat.Visibility = func(viewer visibility.PlayerID, target visibility.Target) bool {
+			if s.Vis == nil {
+				return false
+			}
+			return s.Vis.IsVisible(viewer, target)
 		}
-		return s.Vis.IsVisible(viewer, target)
 	}
 	// Movement [04 §8] with occupancy grid and compiled classes
 	if s.Movement == nil {

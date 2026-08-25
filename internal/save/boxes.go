@@ -736,12 +736,15 @@ var (
 // Version 3 adds COB piece transforms, anims, and flags per P1-I01 [04 §4.2][04 §4.6][04 §4.3].
 // Version 4 adds ground steering state per [04 §8.1] C20 C21 [ON-12].
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Version 6 adds construction builder-product links [05 "Factory production lifecycle"] C18 [RS-10].
 
-const StateV1VersionConst uint32 = 5
+const StateV1VersionConst uint32 = 6
 const StateV1Version1 uint32 = 1
 const StateV1Version2 uint32 = 2
 const StateV1Version3 uint32 = 3
 const StateV1Version4 uint32 = 4
+const StateV1Version5 uint32 = 5
+const StateV1Version6 uint32 = 6
 
 // UnitRecord is one slot-indexed unit record, canonically ordered by slot
 // ascending for determinism (I1) [01 §6.1] [PLAN_14 C18]. Reconstruction uses
@@ -1161,6 +1164,17 @@ type WindSnapshot struct {
 	Pending    bool
 }
 
+// ConstructionSnapshot mirrors construction.Service builder-product links [05 "Factory production lifecycle"] C18 [RS-10].
+type ConstructionSnapshot struct {
+	BuilderLinks []BuilderLinkRecord // product -> builder, sorted by Product ascending (I1) [RS-10]
+}
+
+// BuilderLinkRecord is one builder-product link, product handle owns builder handle [05 C18][RS-10].
+type BuilderLinkRecord struct {
+	Builder int32 // builder handle (pool.Handle)
+	Product int32 // product handle (pool.Handle)
+}
+
 // StateV1 is the versioned native continuation box that canonically encodes
 // every mutable authoritative service, slot-indexed, plus both RNG states+draw counts and hash guards [PLAN_14 C18] [GAP T25] [P0-I11].
 // Version 2 adds full continuation via forced slot identity and full per-system snapshots [P0-I11].
@@ -1191,6 +1205,7 @@ type StateV1 struct {
 	Visibility       VisibilitySnapshot       // mapping/sensor state [03 §3][P0-I11]
 	Latch            LatchSnapshot            // triggers/end latch/campaign progress [P1-01][P0-I11]
 	Wind             WindSnapshot             // wind/meteor state [01 §7.3][P0-I11]
+	Construction     ConstructionSnapshot     // builder-product links [05 C18][RS-10]
 }
 
 // MarshalStateV1 encodes s into the canonical StateV1 byte layout (I13 exception:
@@ -1229,6 +1244,13 @@ func MarshalStateV1(s *StateV1) []byte {
 	sort.Slice(proj, func(i, j int) bool { return proj[i].Handle < proj[j].Handle })
 	ai := append([]AIManagerRecord(nil), s.AI...)
 	sort.Slice(ai, func(i, j int) bool { return ai[i].Player < ai[j].Player })
+	links := append([]BuilderLinkRecord(nil), s.Construction.BuilderLinks...)
+	sort.Slice(links, func(i, j int) bool {
+		if links[i].Product != links[j].Product {
+			return links[i].Product < links[j].Product
+		}
+		return links[i].Builder < links[j].Builder
+	})
 	var buf bytes.Buffer
 	ver := s.Version
 	if ver == 0 {
@@ -1684,6 +1706,14 @@ func MarshalStateV1(s *StateV1) []byte {
 		binaryWriteUint32(&buf, s.Wind.LastChange)
 		buf.WriteByte(boolToByte(s.Wind.Changed))
 		buf.WriteByte(boolToByte(s.Wind.Pending))
+		if ver >= 6 {
+			// Construction builder-product links [05 C18][RS-10] — sorted by Product ascending (I1)
+			binaryWriteUint32(&buf, uint32(len(links)))
+			for _, l := range links {
+				binaryWriteInt32(&buf, l.Builder)
+				binaryWriteInt32(&buf, l.Product)
+			}
+		}
 	}
 	return buf.Bytes()
 }
@@ -1706,7 +1736,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 	if err := binary.Read(r, binary.LittleEndian, &ver); err != nil {
 		return nil, err
 	}
-	if ver != StateV1VersionConst && ver != StateV1Version1 && ver != StateV1Version2 && ver != StateV1Version3 {
+	if ver != StateV1VersionConst && ver != StateV1Version6 && ver != StateV1Version5 && ver != StateV1Version4 && ver != StateV1Version3 && ver != StateV1Version2 && ver != StateV1Version1 {
 		return nil, ErrStateV1Version
 	}
 	catHash, err := readString(r)
@@ -3321,6 +3351,30 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		wind.Changed = byteToBool(changedB)
 		wind.Pending = byteToBool(pendingB)
 		st.Wind = wind
+		if ver >= 6 {
+			var nLinks uint32
+			if err := binary.Read(r, binary.LittleEndian, &nLinks); err != nil {
+				return nil, err
+			}
+			links := make([]BuilderLinkRecord, 0, nLinks)
+			for i := uint32(0); i < nLinks; i++ {
+				var b, p int32
+				if err := binary.Read(r, binary.LittleEndian, &b); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &p); err != nil {
+					return nil, err
+				}
+				links = append(links, BuilderLinkRecord{Builder: b, Product: p})
+			}
+			sort.Slice(links, func(i, j int) bool {
+				if links[i].Product != links[j].Product {
+					return links[i].Product < links[j].Product
+				}
+				return links[i].Builder < links[j].Builder
+			})
+			st.Construction.BuilderLinks = links
+		}
 	}
 	return st, nil
 }

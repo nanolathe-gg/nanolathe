@@ -120,6 +120,12 @@ type Manager struct {
 
 	// RS-02 test hook: if non-nil, called at Tick entry for order verification (not persisted).
 	TestHook func(tick uint32, player uint8)
+
+	// RS-06: per-session isolated RNG [I4][RS-P0-018]. Nil => rng.Global.Sim (single global stream per I4, but per-session isolated when set).
+	RNG *rng.Simulation `json:"-"`
+
+	// RS-06: hook for ObserveHostileDamage order verification [RS-P0-014].
+	ObserveHook func(tick uint32, target pool.Handle) `json:"-"`
 }
 
 // GetPlayer satisfies Selector [PLAN_11 WU-11-4] — Manager.Player 0..9.
@@ -178,9 +184,11 @@ func (m *Manager) GetGateCandidates() map[string]struct{} {
 	return m.GateCandidates
 }
 
-// GetRNG satisfies Selector RNG extension — now alias to Global.Sim per RS-02 I4 [08] single stream.
-// Deprecated per-manager RNG removed; always returns the one global simulation stream.
+// GetRNG satisfies Selector RNG extension — returns per-manager RNG when set for session isolation [RS-06][I4], else Global.Sim per RS-02.
 func (m *Manager) GetRNG() *rng.Simulation {
+	if m != nil && m.RNG != nil {
+		return m.RNG
+	}
 	return rng.Global.Sim
 }
 
@@ -272,9 +280,11 @@ func (m *Manager) EnsureStrategicInitialized() {
 	m.Strategic.Init(types)
 }
 
-// simRNG returns the one global simulation RNG per I4 and RS-02 [08] single stream.
-// There is no per-manager RNG; all AI draws advance rng.Global.Sim.
+// simRNG returns the per-session isolated RNG when set [RS-06][I4], else the one global simulation RNG per RS-02.
 func (m *Manager) simRNG() *rng.Simulation {
+	if m != nil && m.RNG != nil {
+		return m.RNG
+	}
 	return rng.Global.Sim
 }
 
@@ -400,10 +410,9 @@ func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 	}
 	// P0-I12: lazily initialize class maps from catalog if not yet done, ensuring vectors not zero.
 	m.EnsureStrategicInitialized()
-	// P0-I12: refresh strategic center/counts every 30 ticks via MaybeRefresh [08][P0-01] using Simulation RNG bound 30 [I4].
-	// Single global stream per RS-02: all draws via rng.Global.Sim.
+	// P0-I12: refresh strategic center/counts every 30 ticks via MaybeRefresh [08][P0-01] using Simulation RNG bound 30 [I4][RS-06 per-session isolated].
 	if m.Catalog != nil || m.Strategic.Catalog != nil {
-		m.Strategic.MaybeRefresh(tick, rng.Global.Sim, m.Player, w)
+		m.Strategic.MaybeRefresh(tick, m.simRNG(), m.Player, w)
 	}
 	// P0-I12: populate and maintain AI groups from unit creation/death/completion.
 	m.updateGroups(w)
@@ -504,14 +513,14 @@ func (m *Manager) nextDeadline(k TaskKind, tick uint32) uint32 {
 		return tick + 150 // [P0-02] regroup at +150
 	case TaskOther900:
 		var r uint32
-		if rng.Global.Sim != nil {
-			r = rng.Global.Sim.Uint32n(900) // [08] bound 900 (I4) [P0-02][PLAN_11 C9] single global stream RS-02
+		if s := m.simRNG(); s != nil {
+			r = s.Uint32n(900) // [08] bound 900 (I4) [P0-02][PLAN_11 C9] per-session isolated [RS-06]
 		}
 		return tick + 30 + r // [08] tick+30+RNG(900) [P0-02]
 	case TaskOther150:
 		var r uint32
-		if rng.Global.Sim != nil {
-			r = rng.Global.Sim.Uint32n(150) // [08] bound 150 (I4) [P0-02] single global stream RS-02
+		if s := m.simRNG(); s != nil {
+			r = s.Uint32n(150) // [08] bound 150 (I4) [P0-02] per-session isolated [RS-06]
 		}
 		return tick + 30 + r // [08] tick+30+RNG(150) [P0-02]
 	case TaskEmpty, TaskNullSub:
@@ -651,16 +660,16 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 			// Branch 2*metal > energy ?
 			enable := false
 			if 2*metalStock > energyStock && netEnergy >= 1 {
-				// Draw RNG(5) only when branch taken [P0-02 §5] single global stream RS-02 [I4].
+				// Draw RNG(5) only when branch taken [P0-02 §5] per-session isolated [RS-06][I4].
 				var draw uint32
-				if rng.Global.Sim != nil {
-					draw = rng.Global.Sim.Uint32n(5)
+				if s := m.simRNG(); s != nil {
+					draw = s.Uint32n(5)
 				}
 				if draw != 0 {
 					enable = true
 				} else {
-					// When Global.Sim unavailable, default to non-zero (enable) to keep determinism; production always seeded.
-					enable = rng.Global.Sim == nil
+					// When RNG unavailable, default to non-zero (enable) to keep determinism; production always seeded.
+					enable = m.simRNG() == nil
 				}
 			} else {
 				enable = false
@@ -880,7 +889,7 @@ func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, 
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): population of manager task group vectors is bounded negative [P0-02]; this task is inert as static image until a runtime writer is found. It issues ordinary move orders only when the explore group is non-empty via proven producer; otherwise it returns without tick-derived coordinates or extra RNG.
 func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) {
 	_, _, _ = tick, w, econ
 	if w == nil {
@@ -890,32 +899,9 @@ func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) 
 	group := cleanGroup(m.GroupExplore, w, m.Player)
 	m.GroupExplore = group
 	if len(group) == 0 {
-		// If no explore group, use idle combat units not in wave as explore
 		return
 	}
-	var tx, tz numeric.Fixed
-	if len(group) < 5 {
-		tx, tz = m.enemyCentroid(w)
-	} else {
-		// Deterministic pseudo-random target based on tick and player, no RNG draws [I4] to keep census 900/150 only in deadline path
-		if m.Terrain != nil {
-			wc := m.Terrain.CellW
-			hc := m.Terrain.CellH
-			if wc < 2 {
-				wc = 2
-			}
-			if hc < 2 {
-				hc = 2
-			}
-			cx := int32(tick) % wc
-			cz := int32(tick*3+uint32(m.Player)*7) % hc
-			tx = world.CellToWorld(cx)
-			tz = world.CellToWorld(cz)
-		} else {
-			tx = m.Strategic.CenterX + numeric.Fixed(int32(tick%20)*65536*16)
-			tz = m.Strategic.CenterZ + numeric.Fixed(int32((tick*5)%20)*65536*16)
-		}
-	}
+	tx, tz := m.enemyCentroid(w)
 	issued := 0
 	for _, h := range group {
 		u := w.Unit(h)
@@ -947,7 +933,7 @@ func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) 
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// It issues ordinary move orders via stock-reachable path [P0-I12][P0-02].
+// TODO(question): see doExplore — inert until group population writer found; no tick-derived coordinates or extra RNG beyond deadline's 150 bound.
 func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 	_, _, _ = tick, w, econ
 	if w == nil {
@@ -957,31 +943,9 @@ func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 	group := cleanGroup(m.GroupRally, w, m.Player)
 	m.GroupRally = group
 	if len(group) == 0 {
-		// Use explore as fallback if rally empty but explore has members
-		if len(m.GroupExplore) > 0 {
-			group = m.GroupExplore[:1]
-		} else {
-			return
-		}
+		return
 	}
-	// Deterministic walk offset based on tick, no extra RNG beyond deadline's 150 bound
-	var tx, tz numeric.Fixed
-	if m.Terrain != nil {
-		// Walk around strategic center with small orbit
-		radius := numeric.Fixed(10 * 65536)
-		angle := uint16(tick % 65536)
-		// Simple fixed-point trig via integer approx: use map center offset
-		// Deterministic without float: use tick-derived cell
-		cx := int32(tick*3) % m.Terrain.CellW
-		cz := int32(tick*7) % m.Terrain.CellH
-		tx = world.CellToWorld(cx)
-		tz = world.CellToWorld(cz)
-		_ = radius
-		_ = angle
-	} else {
-		tx = m.Strategic.CenterX + numeric.Fixed(int32(tick%10)*65536*16)
-		tz = m.Strategic.CenterZ + numeric.Fixed(int32((tick*2)%10)*65536*16)
-	}
+	tx, tz := m.enemyCentroid(w)
 	issued := 0
 	for _, h := range group {
 		u := w.Unit(h)

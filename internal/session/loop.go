@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/audio"
@@ -89,7 +90,31 @@ type Session struct {
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	Progress BankProgress
 
+	// Result ownership [08][RS-05] moved from package global sync.Map into Session
+	// per RS-P0-012. One point where result becomes terminal is when latch
+	// becomes visible (EndLatch Bits 0x04 set) and Result.Ended set; one where
+	// simulation stops is State != Battle (Step early return, no authoritativeTick).
+	// All result mutation happens in authoritativeTick/EvaluateResult (single
+	// thread); reads from presentation (snapshot GetResult) hold resultMu.
+	resultMu            sync.Mutex
+	result              Result
+	resultPending       bool
+	resultPendingWinner int
+	resultPendingLosers []int
+	resultPendingReason string
+	resultPendingDraw   bool
+	resultArmedTick     uint32
+	resultNextDue       uint32
+	resultCallback      func(Result)
+	resultCallbackFired bool
+
 	Wind *world.Wind
+
+	// Per-session RNG state [I4][RS-06]: isolated per-session copies of the single global Park-Miller and CRT streams.
+	// Two interleaved sessions must not cross-contaminate draws; moved from process-global rng.Global [INVARIANTS I4][RS-P0-018].
+	rngSim         rng.Simulation
+	rngCrt         rng.CRT
+	rngInitialized bool
 
 	cadence uint32
 
@@ -166,6 +191,7 @@ const (
 	TraceVictoryLatch         = "VictoryLatch"
 	TraceSnapshotPublish      = "SnapshotPublish"
 	TraceTickEnd              = "TickEnd"
+	TracePathFailed           = "PathFailed"
 )
 
 // SetTraceEnabled enables or disables the ordered trace sink [ON-09].
@@ -228,6 +254,82 @@ func (s *Session) CaptureTrace(fn func()) []SessionTraceEvent {
 	s.traceEnabled = prevEnabled
 	s.trace = prevTrace
 	return out
+}
+
+// SimRNG returns the per-session simulation RNG [INVARIANTS I4][RS-P0-018].
+// It is isolated per Session so two interleaved sessions do not cross-contaminate draws [RS-06].
+func (s *Session) SimRNG() *rng.Simulation {
+	if s == nil {
+		return rng.Global.Sim
+	}
+	if !s.rngInitialized {
+		if rng.Global.Sim != nil {
+			s.rngSim = *rng.Global.Sim
+		} else {
+			s.rngSim = rng.NewSimulation(1)
+		}
+		if rng.Global.Crt != nil {
+			s.rngCrt = *rng.Global.Crt
+		} else {
+			s.rngCrt = rng.NewCRT(1)
+		}
+		s.rngInitialized = true
+	}
+	return &s.rngSim
+}
+
+// CrtRNG returns the per-session CRT RNG [INVARIANTS I4][RS-P0-018].
+func (s *Session) CrtRNG() *rng.CRT {
+	if s == nil {
+		return rng.Global.Crt
+	}
+	if !s.rngInitialized {
+		if rng.Global.Sim != nil {
+			s.rngSim = *rng.Global.Sim
+		} else {
+			s.rngSim = rng.NewSimulation(1)
+		}
+		if rng.Global.Crt != nil {
+			s.rngCrt = *rng.Global.Crt
+		} else {
+			s.rngCrt = rng.NewCRT(1)
+		}
+		s.rngInitialized = true
+	}
+	return &s.rngCrt
+}
+
+// SeedSessionRNG seeds the per-session RNGs from the given seeds [I4][RS-06].
+// It also seeds the process-global for backward compatibility with code that still reads rng.Global.
+func (s *Session) SeedSessionRNG(simSeed, crtSeed uint32) {
+	if s == nil {
+		return
+	}
+	rng.SeedGlobal(simSeed, crtSeed)
+	s.rngSim = rng.NewSimulation(simSeed)
+	s.rngCrt = rng.NewCRT(crtSeed)
+	// Preserve draw counters at zero for fresh session [01 §7.1][01 §7.2].
+	s.rngInitialized = true
+	// Bind AI managers to this session's RNG for isolation [RS-06][I4].
+	for _, mgr := range s.AI {
+		if mgr != nil {
+			mgr.RNG = s.SimRNG()
+		}
+	}
+}
+
+// SyncGlobalRNG syncs the process-global RNG to this session's state for code that still reads rng.Global [RS-06][I4].
+// Call before any legacy global draw to keep global in sync with session-local.
+func (s *Session) SyncGlobalRNG() {
+	if s == nil || !s.rngInitialized {
+		return
+	}
+	if rng.Global.Sim != nil {
+		*rng.Global.Sim = s.rngSim
+	}
+	if rng.Global.Crt != nil {
+		*rng.Global.Crt = s.rngCrt
+	}
 }
 
 // ValidateComposition checks that every required authoritative service and
@@ -567,15 +669,17 @@ func (s *Session) authoritativeTick(tick uint32) {
 		return
 	}
 	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceTickBegin})
+	// Sync per-session RNG to global for any remaining global draws, and ensure per-session initialized [RS-06][I4].
+	// Use pointer assignment so Global and per-session share same state during tick — any draw via either advances same state [I4][RS-06].
+	_ = s.SimRNG()
+	_ = s.CrtRNG()
+	rng.Global.Sim = s.SimRNG()
+	rng.Global.Crt = s.CrtRNG()
 	// 1 Global wind/meteor prepass [01 §7.3][01 §4.4] — phase 8+9 moved to top per P0-09
 	if s.Wind != nil {
-		// [01 §7.3] split: phase 8 draws CRT interval, phase 9 draws Sim strength/heading; order is behavior [INVARIANTS I4]
-		if rng.Global.Crt != nil {
-			s.Wind.Jitter(tick, rng.Global.Crt)
-		}
-		if rng.Global.Sim != nil {
-			_ = s.Wind.Field(tick, rng.Global.Sim)
-		}
+		// [01 §7.3] split: phase 8 draws CRT interval, phase 9 draws Sim strength/heading; order is behavior [INVARIANTS I4][RS-P0-018] per-session isolated
+		s.Wind.Jitter(tick, s.CrtRNG())
+		_ = s.Wind.Field(tick, s.SimRNG())
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWindMeteor})
 		// Meteor shower scheduling per [08 "Meteor showers"] would run here after wind jitter and before projectile phase
 		// so spawned meteor first moves next tick [08 "Meteor showers"]. Currently no separate MeteorService; wind field covers wind scalar.
@@ -590,6 +694,10 @@ func (s *Session) authoritativeTick(tick uint32) {
 	for player := 0; player < 10; player++ {
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TracePlayerBegin, Player: player})
 		mgr := s.AI[player] // direct player-indexed access per RS-02 [08] I1
+		// Bind per-session RNG for isolation [RS-06][I4] — ensure manager uses session's stream, not shared global.
+		if mgr != nil && mgr.RNG == nil {
+			mgr.RNG = s.SimRNG()
+		}
 		if s.Econ == nil {
 			if mgr != nil {
 				mgr.Tick(tick, s.Units, nil)
@@ -719,6 +827,29 @@ func (s *Session) authoritativeTick(tick uint32) {
 			}
 			startCell := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
 			goalCell := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
+			if s.Movement != nil && s.World != nil {
+				if !s.Movement.IsGoalCellPassable(u.Handle, goalCell) {
+					head.MoveState = orders.MoveBlocked
+					head.PathStatus = uint32(path.StatusRejected)
+					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TracePathFailed, Handle: u.Handle, Value: int32(path.StatusRejected)})
+					q.RemoveHead()
+					if route != nil {
+						route.Active = false
+						route.Dirty = true
+						route.Status = path.StatusRejected
+					}
+					s.Movement.ClearPathFailure(u.Handle)
+					sched.Cancel(u.Handle)
+					continue
+				}
+			}
+			if s.Movement != nil && s.Movement.HasPathFailure(u.Handle) {
+				if rec, ok := s.Movement.PathFailureRecord(u.Handle); ok {
+					if tick < rec.NextRetry {
+						continue
+					}
+				}
+			}
 			s.Movement.SubmitMove(u.Handle, u.Owner, startCell, goalCell)
 			head.MoveState = orders.MoveEnRoute
 		}
@@ -751,7 +882,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 			// from projectile counts or slot population [ON-09 evidence contract].
 			if s.Combat != nil && s.Catalog != nil && u != nil && u.Alive && !u.Dying {
 				beforeCount := s.Combat.Count()
-				wsum := s.Combat.StepWeaponsForUnit(u, tick, s.Units, s.Vis, s.World, s.Econ, s.Catalog, rng.Global.Sim, rng.Global.Crt)
+				wsum := s.Combat.StepWeaponsForUnit(u, tick, s.Units, s.Vis, s.World, s.Econ, s.Catalog, s.SimRNG(), s.CrtRNG())
 				// Authoritative order: AimDispatch → COBReturn → WeaponFire [06 §3.3][GAP T15 C17]
 				if wsum.Dispatched {
 					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWeaponAimDispatch, Handle: h, Slot: wsum.DispatchSlot, WeaponID: wsum.DispatchWeaponID})
@@ -838,6 +969,41 @@ func (s *Session) authoritativeTick(tick uint32) {
 						}
 					}
 				}
+				if s.Movement.HasPathFailure(h) {
+					if rec, ok := s.Movement.PathFailureRecord(h); ok {
+						if qFail := orders.QueueForUnit(u); qFail != nil && qFail.LenPrimary() > 0 {
+							headFail := qFail.Head()
+							if headFail != nil {
+								nameFail := orders.DescriptorFor(headFail.ID).Name
+								isMoveFail := nameFail == "Move_Ground" || nameFail == "VTOL_Move" || nameFail == "QMove" || nameFail == "Patrol" || nameFail == "QPatrol" || nameFail == "VTOL_Patrol" || nameFail == "RepairPatrol" || nameFail == "VTOL_RepairPatrol"
+								if isMoveFail {
+									if rec.Retries >= 1 {
+										headFail.MoveState = orders.MoveBlocked
+										headFail.PathStatus = uint32(rec.Status)
+										qFail.RemoveHead()
+										if routeFail := s.Movement.Routes[h]; routeFail != nil {
+											routeFail.Active = false
+											routeFail.Dirty = true
+										}
+										if schedFail := s.Movement.Scheduler; schedFail != nil {
+											schedFail.Cancel(h)
+										} else if s.Path != nil {
+											s.Path.Cancel(h)
+										}
+										s.Movement.ClearPathFailure(h)
+										s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TracePathFailed, Handle: h, Value: int32(rec.Status)})
+									}
+								} else {
+									s.Movement.ClearPathFailure(h)
+								}
+							} else {
+								s.Movement.ClearPathFailure(h)
+							}
+						} else {
+							s.Movement.ClearPathFailure(h)
+						}
+					}
+				}
 			}
 			// slot-end death, cleanup, corpse, occupancy, target invalidation (FinalizeDeath + vis unpublish + Feature.PlaceCorpse) [01 §4.4][04 §2.4]
 			if s.Units.NeedsDeathFinalization(h) {
@@ -854,6 +1020,9 @@ func (s *Session) authoritativeTick(tick uint32) {
 					// profiles retained for determinism? Clear to allow re-resolve on reuse
 					// Keep but delete if present to avoid stale on reuse
 					delete(s.Movement.Routes, h)
+				}
+				if s.Movement != nil {
+					s.Movement.ClearPathFailure(h)
 				}
 				// Path scheduler cancel for freed handle
 				if s.Movement != nil && s.Movement.Scheduler != nil {
@@ -900,33 +1069,36 @@ func (s *Session) authoritativeTick(tick uint32) {
 	// Interceptor guidance pre-step before motion [06 §11.2]
 	s.interceptorGuidanceTick()
 	// Snapshot hostile health before impact for AI milestone [P0-07] HostileDamageObserved
-	var beforeHealth map[pool.Handle]int32
+	// Deterministic slot-ordered snapshot [INVARIANTS I1][RS-P0-014]: use slice in slot-ascending order, not map[Handle]int32 with random range iteration.
+	var beforeHealth []struct {
+		Handle pool.Handle
+		Health int32
+	}
 	if s.Combat != nil && s.Units != nil {
-		beforeHealth = make(map[pool.Handle]int32, s.Units.Used())
+		beforeHealth = make([]struct {
+			Handle pool.Handle
+			Health int32
+		}, 0, s.Units.Used())
+		// Collect in deterministic slot-ascending order via IterSliced (player 0..9 then slot asc) [INVARIANTS I1][01 §6.1].
+		// This replaces the previous map[Handle]int32 which used random map iteration to notify AI [RS-P0-014].
 		for _, u := range s.Units.IterSliced() {
 			if u == nil {
 				continue
 			}
-			beforeHealth[u.Handle] = u.Health
-		}
-		// Also include dead-but-recently-damaged? Before we only have alive, but after damage a unit may die and be removed from IterSliced.
-		// To capture death, also snapshot via direct handle scan for any unit with health < MaxHealth
-		// Use Unit() for handles up to capacity via Iter()
-		for _, u := range s.Units.Iter() {
-			if u == nil {
-				continue
-			}
-			if _, ok := beforeHealth[u.Handle]; !ok {
-				beforeHealth[u.Handle] = u.Health
-			}
+			beforeHealth = append(beforeHealth, struct {
+				Handle pool.Handle
+				Health int32
+			}{Handle: u.Handle, Health: u.Health})
 		}
 	}
 	if s.Combat != nil {
-		s.Combat.TickProjectiles(tick, s.Units, s.World, s.Features, s.Vis, s.Econ, s.Catalog, rng.Global.Sim, rng.Global.Crt)
+		s.Combat.TickProjectiles(tick, s.Units, s.World, s.Features, s.Vis, s.Econ, s.Catalog, s.SimRNG(), s.CrtRNG())
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceProjectileImpact})
-		// Notify AI of hostile damage via normal combat [P0-07] HostileDamageObserved
-		if beforeHealth != nil {
-			for h, before := range beforeHealth {
+		// Notify AI of hostile damage via normal combat [P0-07] HostileDamageObserved in deterministic slot order [RS-P0-014][INVARIANTS I1].
+		if len(beforeHealth) > 0 {
+			for _, snap := range beforeHealth {
+				h := snap.Handle
+				before := snap.Health
 				u := s.Units.Unit(h)
 				if u == nil {
 					continue
@@ -942,9 +1114,6 @@ func (s *Session) authoritativeTick(tick uint32) {
 					mgr.ObserveHostileDamage(tick, h, s.Units)
 				}
 			}
-			// Also check for newly dead units that were not in beforeHealth because they were alive but we captured, but after are dead and still have health < before
-			// The above loop covers them via beforeHealth entry, since we captured before health, and after health is -400 for dead, so it will be detected.
-			// Additionally, check for any unit that was not in beforeHealth but is now dead with health < MaxHealth (e.g., newly created nanoframe? not hostile)
 		}
 	}
 	s.interceptorDetonationTick()
@@ -1098,7 +1267,55 @@ func (s *Session) authoritativeTick(tick uint32) {
 			if latched && s.Latch.IsEnding() && s.State == StateBattle {
 				win := s.Latch.IsWin()
 				s.Progress.ApplyCampaignResult(0, win)
-				_ = s.TransitionTo(StatePostBattle) // TODO(question): presentation sequence unknown [08 "Evaluation"]
+				// RS-05: campaign latch also becomes terminal result for snapshot and callback [08][P1-01]
+				shouldFire := false
+				s.resultMu.Lock()
+				if !s.result.Ended {
+					kind := "defeat"
+					if win {
+						kind = "victory"
+					}
+					var winners, losers []int
+					if win {
+						winners = []int{int(s.LocalOwner)}
+						losers = []int{int(s.EnemyOwner)}
+					} else {
+						winners = []int{int(s.EnemyOwner)}
+						losers = []int{int(s.LocalOwner)}
+					}
+					scores := s.collectScores(func() int {
+						if win {
+							return int(s.LocalOwner)
+						}
+						return int(s.EnemyOwner)
+					}(), false)
+					reason := "campaign"
+					if len(s.Mission.Victory) > 0 && win {
+						reason = "victory_trigger"
+					} else if len(s.Mission.Defeat) > 0 && !win {
+						reason = "defeat_trigger"
+					}
+					s.result = Result{
+						Ended:      true,
+						Draw:       false,
+						Kind:       kind,
+						WinnerTeam: winners[0],
+						Winners:    winners,
+						Losers:     losers,
+						Reason:     reason,
+						Tick:       tick,
+						ArmedTick:  tick,
+						Countdown:  s.Latch.Countdown,
+						Scores:     scores,
+					}
+					shouldFire = true
+				}
+				s.resultMu.Unlock()
+				if shouldFire {
+					s.publishResultView()
+					s.fireResultCallback()
+				}
+				_ = s.TransitionTo(StatePostBattle)
 			}
 			if v || d {
 				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceVictoryLatch})
@@ -1125,6 +1342,31 @@ func (s *Session) authoritativeTick(tick uint32) {
 
 	// 11 deterministic commit/barrier [01 §4.4] PhaseBarrier + ledger cleanup
 	if s.Units != nil {
+		// RS-08: projectile damage after slot visit marks Dying after that visit [01 §4.4][GAP T15];
+		// retain for feature/visibility/trigger same tick but clear movement occupancy before next tick and before snapshot.
+		if s.Movement != nil {
+			for _, u := range s.Units.IterSliced() {
+				if u == nil || !u.Dying {
+					continue
+				}
+				h := u.Handle
+				if coll, ok := s.Movement.Collisions[h]; ok && coll != nil {
+					if s.Movement.Grid != nil {
+						s.Movement.Grid.Clear(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, int(h))
+					}
+					delete(s.Movement.Collisions, h)
+				}
+				delete(s.Movement.Steers, h)
+				delete(s.Movement.Flights, h)
+				delete(s.Movement.Routes, h)
+				if s.Movement.Scheduler != nil {
+					s.Movement.Scheduler.Cancel(h)
+				} else if s.Path != nil {
+					s.Path.Cancel(h)
+				}
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceDeathFinalize, Handle: h, Value: int32(u.DeathCause)})
+			}
+		}
 		s.Units.Cleanup()
 	}
 	// Barrier no-op [01 §4.4] TODO(T23) keep as registration point
@@ -1152,6 +1394,13 @@ func (s *Session) authoritativeTick(tick uint32) {
 		}
 	}
 
+	// Sync global to per-session RNG for single-session determinism and test Global draw checks [RS-06][I4].
+	if rng.Global.Sim != nil {
+		*rng.Global.Sim = s.rngSim
+	}
+	if rng.Global.Crt != nil {
+		*rng.Global.Crt = s.rngCrt
+	}
 	// 12 one immutable snapshot publication [03 §2.4][PLAN_03 C15][INVARIANTS I6]
 	s.publishSnapshot(tick)
 	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceSnapshotPublish})
@@ -1356,6 +1605,53 @@ func (s *Session) publishSnapshot(tick uint32) {
 			})
 		}
 		frame.Resources = resViews
+	}
+	// RS-05: publish authoritative result (kind, tick, winners/losers, scores, countdown) [08][P1-01]
+	// Countdown is visible even before Ended (pending) via Latch.Countdown; winners/losers/scores
+	// become authoritative only when Ended. This is the sole snapshot writer for Result (I6).
+	{
+		s.resultMu.Lock()
+		r := s.result
+		s.resultMu.Unlock()
+		view := snapshot.ResultView{
+			Ended:      r.Ended,
+			Kind:       r.Kind,
+			WinnerTeam: r.WinnerTeam,
+			Reason:     r.Reason,
+			Tick:       r.Tick,
+			ArmedTick:  r.ArmedTick,
+			Countdown:  r.Countdown,
+			Draw:       r.Draw,
+		}
+		if len(r.Winners) > 0 {
+			view.Winners = append([]int(nil), r.Winners...)
+		}
+		if len(r.Losers) > 0 {
+			view.Losers = append([]int(nil), r.Losers...)
+		}
+		if len(r.Scores) > 0 {
+			view.Scores = append([]snapshot.ResultScore(nil), r.Scores...)
+		}
+		// Even when not Ended, publish Countdown from latch for HUD countdown display [P1-01][RR-04].
+		if !view.Ended {
+			view.Countdown = s.Latch.Countdown
+			// If pending, ensure Kind/ArmedTick etc reflect pending even though not Ended.
+			if s.resultPending {
+				s.resultMu.Lock()
+				view.Kind = s.result.Kind
+				view.ArmedTick = s.result.ArmedTick
+				view.Reason = s.result.Reason
+				view.Draw = s.result.Draw
+				if len(s.result.Winners) > 0 {
+					view.Winners = append([]int(nil), s.result.Winners...)
+				}
+				if len(s.result.Losers) > 0 {
+					view.Losers = append([]int(nil), s.result.Losers...)
+				}
+				s.resultMu.Unlock()
+			}
+		}
+		frame.Result = view
 	}
 	s.CollectAudioForSnapshot(frame)
 	s.Snapshot.Publish(frame)
@@ -1718,10 +2014,13 @@ func (s *Session) AbortBattle() bool {
 	return false
 }
 
-// Retry reloads the same mission via state 5 directly [P1-01 §7.5][08 "Session states"].
+// Retry reloads the same mission via state 5 directly [P1-01 §7.5][08 "Session states"] [RS-05].
 // RETRY path reloads same mission without rewriting campaign progress beyond current slot,
 // while CONTINUE writes W/L and selects next mission. For the gate we ensure Retry
 // keeps the same Mission object and ends in Loading, ready for next dispatch.
+// RS-05: retry must create/reload a clean session without duplicate callbacks [RS-P0-012].
+// We reset the Session-owned result state (including callbackFired) so the new match
+// can latch exactly once again, and clear the snapshot view.
 func (s *Session) Retry() bool {
 	if s == nil {
 		return false
@@ -1729,16 +2028,8 @@ func (s *Session) Retry() bool {
 	if s.State != StatePostBattle && s.State != StateBattle {
 		return false
 	}
-	// Reset latch and done flags so battle can retrigger exactly once [P1-01][08].
-	s.Latch = NewEndLatch()
-	s.VictoryDone = false
-	s.DefeatDone = false
-	if s.Econ != nil {
-		for i := 0; i < 10; i++ {
-			s.Econ.Players[i].GameEnded = false
-			s.Econ.Players[i].EndGameCountdown = -1
-		}
-	}
+	// Reset result and latch to clean state for new match [RS-05] RS-P0-012.
+	s.ResetResultForRetry()
 	// Direct to loading for same mission; transition must respect graph: 6/7->2->5.
 	// If we are in PostBattle (7) we can go 7->2, then 2->5. If in Battle (6) go 6->2->5.
 	if s.State == StatePostBattle || s.State == StateBattle {

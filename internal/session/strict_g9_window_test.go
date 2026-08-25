@@ -39,7 +39,7 @@ func TestStrictSkirmish_WindowedHumanUsability(t *testing.T) {
 	s.SetTraceEnabled(true)
 	s.ClearTrace()
 	s.Clock.ScaledAnchor = 0
-	// Simulate deterministic input replay: select commander, right-click move, etc.
+	// Simulate deterministic input replay: select commander, left-click contextual move, etc.
 	// For scaffold, we just verify that snapshot is readable and that HUD click does not leak into selection
 	// by checking that after a simulated HUD click (presentation-only), sim selection unchanged.
 	initialHash := HashState(s)

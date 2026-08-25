@@ -409,7 +409,7 @@ func runGate2Viewer(opts Options, cs *contentSet) error {
 	if fnt != nil {
 		cl.SetFNT(fnt)
 	}
-	fmt.Fprintf(os.Stderr, "nanolathe: gate2 viewer: opening window %dx%d for map %q (%dx%d cells) armflea@%d,%d M=arm Move Shift=add drag=select right-click=move\n", winW, winH, opts.Map, terrain.CellW, terrain.CellH, cam.X, cam.Z)
+	fmt.Fprintf(os.Stderr, "nanolathe: gate2 viewer: opening window %dx%d for map %q (%dx%d cells) armflea@%d,%d M=arm Move Shift=add drag=select left-click=action right-click=deselect/cancel\n", winW, winH, opts.Map, terrain.CellW, terrain.CellH, cam.X, cam.Z)
 	err = client.RunGame(cl)
 	finalTick := sess.clock.GlobalTick
 	fmt.Fprintf(os.Stderr, "nanolathe: gate2 viewer: window closed final tick %d rng sim draws %d\n", finalTick, rng.Global.Sim.Draws())

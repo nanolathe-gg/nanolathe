@@ -312,9 +312,18 @@ func TestMissingMandatoryFailsBeforeClientWithDiagnostic(t *testing.T) {
 	brokenCat.Sides = make([]*content.SideDef, len(sess.Catalog.Sides))
 	copy(brokenCat.Sides, sess.Catalog.Sides)
 	brokenCat.Sides[origSide.Index] = &brokenSide
-	sessBroken := *sess
-	sessBroken.Catalog = &brokenCat
-	_, err = loadRetailBattleHUD(cs.fs, &sessBroken, &brokenCat, pal)
+	// RS-05: Session now contains sync.Mutex; copying by value triggers vet.
+	// Construct a minimal Session that shares the same Skirmish/LocalOwner without copying the mutex.
+	sessBroken := &session.Session{
+		Skirmish:   sess.Skirmish,
+		Catalog:    &brokenCat,
+		LocalOwner: sess.LocalOwner,
+		EnemyOwner: sess.EnemyOwner,
+		Mission:    sess.Mission,
+		World:      sess.World,
+		Units:      sess.Units,
+	}
+	_, err = loadRetailBattleHUD(cs.fs, sessBroken, &brokenCat, pal)
 	if err == nil {
 		t.Fatal("expected anchor missing to fail")
 	}

@@ -223,4 +223,7 @@ func (m *Manager) ObserveHostileDamage(tick uint32, target pool.Handle, w *units
 		return
 	}
 	m.recordMilestone(MilestoneHostileDamageObserved, tick)
+	if m.ObserveHook != nil {
+		m.ObserveHook(tick, target)
+	}
 }

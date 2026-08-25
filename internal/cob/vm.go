@@ -98,6 +98,8 @@ type VM struct {
 	lastStarted     int      // last thread allocated by Start/StartByName, -1 if none [06 §3.3] ON-04 Aim dispatch
 	lastReturnValue [8]int32 // last explicit return value per thread [04 §5.3] ON-04
 	lastReturnValid [8]bool  // true if lastReturnValue holds an explicit return not yet consumed ON-04
+
+	DrainCalls int // count of Drain invocations for RS-08 one-drain invariant [04 §4.2][GAP T15]
 }
 
 // pieceAnim holds the per-piece per-axis interpolation lanes [04 §4.6].
@@ -492,6 +494,7 @@ func (v *VM) Signal(mask int32) {
 // A sleep occupies its truncated tick count plus one guard decrement, so sleep 0 still costs one tick [04 §4.6] [DEC-033]. Signals and wake are handled inside the run.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (v *VM) Drain(delta int) {
+	v.DrainCalls++ // RS-08 one-drain invariant [04 §4.2][GAP T15]
 	if v.prog == nil {
 		// Still do piece pass if we have anim state but no code? No code to run.
 		if delta != 0 {

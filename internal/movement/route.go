@@ -10,6 +10,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"github.com/nanolathe/nanolathe/internal/path"
 )
 
 // Point is a signed integer waypoint coordinate in the route lattice.
@@ -33,6 +35,7 @@ type Route struct {
 	Count  uint8
 	Active bool
 	Dirty  bool
+	Status path.Status // last publish status [04 §7.2] 0 success, 0x100 already, 0x200 rejected
 }
 
 // Publish publishes a waypoint list per [04 §7.3] C14.

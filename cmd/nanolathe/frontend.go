@@ -422,8 +422,80 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 	if err != nil {
 		return err
 	}
-	g.battle = &battleSession{sess: sess, cat: cat, cam: g.cam, hud: battleHUD, latch: input.LatchNormal, menuPressed: -1}
+	g.battle = &battleSession{sess: sess, cat: cat, cam: g.cam, hud: battleHUD, fs: g.cs.fs, shell: g, latch: input.LatchNormal, menuPressed: -1}
 	g.battle.returnToMenu = g.returnFromBattle
+	g.battle.returnToSkirmish = func(cl *client.Client) {
+		if g != nil {
+			g.battle = nil
+			g.openMenu(modeMenuSkirmish)
+			if cl != nil {
+				cl.SetSnapshot(&snapshot.Buffer{})
+				cl.SetTerrain(nil)
+				cl.SetCamera(g.cam)
+				if g.assets != nil && g.assets.pal != nil {
+					cl.SetPalette(g.assets.pal)
+				}
+				if g.assets != nil {
+					cl.SetFNT(g.assets.font)
+				}
+				cl.Overlay = func(c *client.Client) { g.draw(c) }
+			}
+		}
+	}
+	g.battle.retryFunc = func(cl *client.Client) {
+		if g == nil || g.battle == nil {
+			return
+		}
+		// RS-05 retry: recreate clean session from same SkirmishConfig via state graph 7→2→5 [08]
+		cfg := g.battle.sess.Skirmish
+		cat2 := g.battle.sess.Catalog
+		if cat2 == nil {
+			cat2 = cat
+		}
+		newSess, err := session.NewSkirmishWithFS(g.cs.fs, cat2, cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "nanolathe: retry failed: %v\n", err)
+			return
+		}
+		// Replace battle session with clean one [RS-05] no duplicate callbacks
+		g.battle.sess = newSess
+		g.battle.cat = newSess.Catalog
+		g.battle.resultDismissed = false
+		g.battle.resultButtons = nil
+		centerOnCommanderForSession(newSess, g.cam, winW, winH)
+		if cl != nil {
+			cl.SetSnapshot(newSess.Snapshot)
+			cl.SetTerrain(newSess.World)
+			cl.SetCamera(g.cam)
+		}
+		newSess.State = session.StateBattle
+		// Rebind HUD for new side
+		if pal2 := loadPalette(g.cs); pal2 != nil {
+			if hud2, err2 := loadRetailBattleHUD(g.cs.fs, newSess, newSess.Catalog, pal2); err2 == nil {
+				g.battle.hud = hud2
+				if cl != nil {
+					cl.SetFNT(hud2.console)
+					cl.Overlay = func(c *client.Client) { hud2.draw(c, g.battle) }
+				}
+			}
+		}
+	}
+	g.battle.continueFunc = func(cl *client.Client) {
+		if g == nil || g.battle == nil || g.battle.sess == nil {
+			return
+		}
+		s := g.battle.sess
+		if s.Mission != nil && s.Mission.Type == 1 {
+			if s.ContinueCampaign() {
+				// For now, return to main; real next-mission load would inspect Progress.WL and load MISSION slot+1
+				g.returnFromBattle(cl)
+			} else {
+				g.returnFromBattle(cl)
+			}
+		} else {
+			g.returnFromBattle(cl)
+		}
+	}
 	g.mode = modeBattle
 	if clPtr != nil {
 		clPtr.SetSnapshot(sess.Snapshot)

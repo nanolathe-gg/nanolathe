@@ -80,6 +80,7 @@ func cleanGroup(list []pool.Handle, w *units.World, player uint8) []pool.Handle 
 // updateGroups maintains AI groups from unit creation/death/completion.
 // It is called each tick before task dispatch to ensure groups reflect live state [P0-I12].
 // Groups are populated deterministically by scanning units.World in sliced order (player asc, slot asc) [I1].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (m *Manager) updateGroups(w *units.World) {
 	if m == nil || w == nil {
 		return

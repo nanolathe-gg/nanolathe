@@ -365,6 +365,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 		h.drawPausedTitle(c)
 	}
 	h.drawBattleMenu(c, b)
+	h.drawResultOverlay(c, b)
 }
 
 func (h *retailBattleHUD) drawPausedTitle(c *client.Client) {
@@ -389,6 +390,78 @@ func (h *retailBattleHUD) drawBattleMenu(c *client.Client, b *battleSession) {
 		h.drawGUIWindow(c, h.confirmWin, nil, "Surrender this battle and return to main menu?")
 	} else if b.menu == battleMenuConfirmExit {
 		h.drawGUIWindow(c, h.confirmWin, nil, "Exit the Battle")
+	}
+}
+
+// drawResultOverlay renders the retail victory/defeat overlay [RS-05][08][P1-01] using authored
+// palette and fonts [02 §6][03 §7.1]. It is presentation-only (I6) and reads the snapshot ResultView.
+func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession) {
+	if h == nil || c == nil || b == nil || !b.isResultVisible() {
+		return
+	}
+	view := b.resultView()
+	// Dim the scene: fill whole screen with palette 0 (black) at 50% by alternating? For now opaque dark grey 1
+	c.UIFillRect(0, 0, 640, 480, 1)
+	// Centered box 400x240 at (120,120) with border
+	bx, by, bw, bh := 120, 120, 400, 240
+	c.UIFillRect(bx, by, bw, bh, 8)
+	c.UIFillRect(bx, by, bw, 2, 15)
+	c.UIFillRect(bx, by+bh-2, bw, 2, 15)
+	c.UIFillRect(bx, by, 2, bh, 15)
+	c.UIFillRect(bx+bw-2, by, 2, bh, 15)
+	// Title: VICTORY / DEFEAT / DRAW [08][RR-04]
+	title := "VICTORY"
+	if view.Draw {
+		title = "DRAW"
+	} else if view.Kind == "defeat" {
+		title = "DEFEAT"
+	} else if view.Kind == "victory" {
+		title = "VICTORY"
+	} else if view.WinnerTeam != b.sess.TeamForOwner(int(b.sess.LocalOwner)) && view.WinnerTeam != -1 {
+		title = "DEFEAT"
+	}
+	// Use console font for title
+	if h.console != nil {
+		tx := bx + (bw-client.MeasureText(h.console, title))/2
+		c.UIText(h.console, title, tx, by+10, 15)
+		reason := view.Reason
+		if reason == "" {
+			reason = "commander_death"
+		}
+		c.UIText(h.console, reason, bx+10, by+30, 7)
+		c.UIText(h.console, fmt.Sprintf("Tick %d Armed %d Countdown %d", view.Tick, view.ArmedTick, view.Countdown), bx+10, by+45, 7)
+		// Winners/Losers
+		wStr := fmt.Sprintf("Winners: %v", view.Winners)
+		if view.Draw {
+			wStr = "Winners: none (draw)"
+		}
+		c.UIText(h.console, wStr, bx+10, by+60, 7)
+		c.UIText(h.console, fmt.Sprintf("Losers: %v", view.Losers), bx+10, by+75, 7)
+		// Scores
+		y := by + 90
+		for _, sc := range view.Scores {
+			if y > by+bh-40 {
+				break
+			}
+			line := fmt.Sprintf("P%d Team%d K%d L%d Score%d %s", sc.Player, sc.Team, sc.Kills, sc.Losses, sc.Score, sc.Kind)
+			c.UIText(h.console, line, bx+10, y, 7)
+			y += 12
+		}
+	}
+	// Buttons [RS-05] 6→7→2 graph: retry, skirmish, main, continue
+	b.ensureResultButtons()
+	for _, btn := range b.resultButtons {
+		// Button background
+		c.UIFillRect(int(btn.X), int(btn.Y), panelButtonW, panelButtonH, 4)
+		c.UIFillRect(int(btn.X), int(btn.Y), panelButtonW, 2, 15)
+		c.UIFillRect(int(btn.X), int(btn.Y+panelButtonH-2), panelButtonW, 2, 15)
+		c.UIFillRect(int(btn.X), int(btn.Y), 2, panelButtonH, 15)
+		c.UIFillRect(int(btn.X+panelButtonW-2), int(btn.Y), 2, panelButtonH, 15)
+		if h.console != nil {
+			tx := int(btn.X) + (panelButtonW-client.MeasureText(h.console, btn.Name))/2
+			ty := int(btn.Y) + 6
+			c.UIText(h.console, btn.Name, tx, ty, 15)
+		}
 	}
 }
 

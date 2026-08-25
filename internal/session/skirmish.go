@@ -609,7 +609,16 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 						}
 					}
 				}
-				mgr.SurfaceMetal = 255 // bias extractor placement to scatter helper B which succeeds without patch vector [P0-03][P0-I12]
+				// Bind actual schema SurfaceMetal from uniform terrain metal byte [05 "Terrain metal extraction"][P0-03][RS-11].
+				// No 255 forcing; helper A uses established patch data or explicit unavailable, helper B validates with real yard/occupancy.
+				if s.World != nil && len(s.World.Plot) > 0 {
+					mgr.SurfaceMetal = int32(s.World.Plot[0].Metal())
+				} else {
+					mgr.SurfaceMetal = 0
+				}
+			} else {
+				// No world: zero surface metal, no 255 bias [RS-11].
+				mgr.SurfaceMetal = 0
 			}
 		}
 	}
@@ -901,9 +910,14 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 						}
 					}
 				}
-				mgr.SurfaceMetal = 255
+				// Bind actual SurfaceMetal from uniform terrain metal byte [05][P0-03][RS-11]; no 255 forcing.
+				if s.World != nil && len(s.World.Plot) > 0 {
+					mgr.SurfaceMetal = int32(s.World.Plot[0].Metal())
+				} else {
+					mgr.SurfaceMetal = 0
+				}
 			} else {
-				mgr.SurfaceMetal = 255
+				mgr.SurfaceMetal = 0
 			}
 		}
 	}
