@@ -65,6 +65,10 @@ invocation. Producers append at the end; when the pre-insert count exceeds
 records per strip and same-strip order among survivors equals insertion
 order.
 
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
 **Fixed effect pool.** Effects are not strip objects: a separate fixed pool
 holds up to 300 fixed-size effect records, and appends at or above the cap
 allocate nothing. Rendering walks the whole pool once per embedded animation
@@ -223,16 +227,7 @@ piece/type identity independent of provider enumeration order. N-gon primitives
 are expanded into triangles by a fan-like operation. Leaf pieces with a vertex
 but no primitive are valid attachment/emit points.
 
-After relocation and before any draw, each object reorders its primitives at load
-time: if the object declares a selection primitive, that primitive record is
-swapped with primitive zero and the selection index is rewritten to zero; the
-remaining primitives from index one upward are then bubble-sorted into ascending
-order of the integer mean of their vertices' second coordinate. A separate
-recursive pass then negates the first and third vertex coordinates and the first
-and third parent translations of every object in the hierarchy, a half-turn about
-the vertical axis applied to the whole model. Draw order within a piece is
-therefore fixed at load time, not recomputed per frame, and a per-frame sort
-does not reproduce retail tie order.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 **Piece transform composition.** There is no matrix stack and no per-frame
 matrix build anywhere in the model path: the renderer applies ordered in-place
@@ -300,12 +295,7 @@ N = per-vertex smooth normal:
     vertex normal = average of the normals of all faces touching the vertex
 ```
 
-   The row interpolates across the face with the corners. Rows are palette
-   remaps, not brightness ramps (row 15 identity; row 0 near-black; row 31
-   saturated; intermediate rows shift hue per entry). COB `dont-shade` pins a
-   piece to row 15. The light direction is read from three settings as
-   integers scaled by 0.01 and written through a dedicated setter that then
-   rebuilds the shadow caches.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 4. **Texture resolution at load**: each primitive's texture name resolves
    case-insensitively against the side's texture GAF set, then a fallback
@@ -325,7 +315,7 @@ screenX = (worldX >> 16) - cameraX + 128
 screenY = (worldZ >> 16) - ((worldY >> 16) >> 1) - cameraZ + 32
 ```
 
-Equivalent paths use the same world-to-pixel scale and a half-height shear.
+Equivalent paths use the same world-to-pixel scale and a half-height shear. The `NEG` of `Z` before `hiword` extraction in bounds/raster helpers is the transient shear term above, not a persistent vertex store — bounded-negative census finds no second `NEG [mem]` outside the load-time half-turn (rr-06_addendum, direct-static).
 There is no perspective divide, depth buffer, or distance-based line width in
 the observed beam renderer. Camera scroll and edge scrolling are integer state;
 camera speed is separately configurable.
@@ -610,11 +600,7 @@ the camera in 32-pixel cells including signed residues. Per cell:
   via the plain blitter. Channel one therefore renders BEFORE channel zero.
 
 This overlay sits at the compositor position after all strips/effects and
-before selection/interface (section 1). Residual: the engine-side conversion
-that PRODUCES the cached channel values from history/current coverage —
-including what gradient values 1..14 encode and the aggregated terrain-word
-table feeding sight shapes — is unresolved; retail’s hard fog edge must not
-be softened to improve image metrics.
+before selection/interface (section 1). The cached channel derivation is now established (rr-16_addendum, direct-static): hi accumulates the per-player byte-grid (`cur==0`) only when mode bit 1 is set else zeroed, lo accumulates the word-grid history mask `1<<player` regardless; each holds a 4-bit nibble `0..15` via four bounded `OR 1,2,4,8` sites (`0` transparent, `15` solid dark, `1..14` index `value-1` into the Gray=hi=current and Black=lo=history four-way variant families with `variant=(col+row+camPhase)&3` deterministically from `floorMod(camera,32)` residues `0..31` via `offX/offZ=(res<16?-16:+16)-res` and `rect=[vpLeft+offX+col*32, vpTop+offZ+row*32, +31]` inclusive), edge rows/cols forced to `15` when the viewport extends beyond the map. Corner→bit `1=NW,2=NE,4=SW,8=SE` remains supported inference pending asymmetric fog.gaf probe; retail’s hard fog edge must not be softened to improve image metrics.
 
 **Unexplored-versus-fogged mechanism (adjudicated).** The plot flag byte’s
 0x04 bit marks a cell never-explored/fogged. The composer’s feature pass
@@ -715,6 +701,15 @@ For presentation, it obtains the window DC, calls `SelectPalette` and
 releases the DC. Palette installation creates a 256-entry Windows logical
 palette and calls `SetDIBColorTable`.
 
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+| Mode (W×H) | Viewport `left,top,right,bottom` incl | Viewport `W×H` | Pitch `(W+3)&~3` | Status |
+|---|---|---|---|---|
+| 640×480 | 128,32,639,447 | 512×416 (`W-128 × H-64`) | 640 | Established (direct-static) |
+| 800×600 | 128,32,799,567 | 672×536 | 800 | Established |
+| 1024×768 | 128,32,1023,735 | 896×704 | 1024 | Established |
+| any×any hidden | predicted 0,0,W-1,H-1 → W×H if hidden expanded, else 128,32,W-1,H-33 if retained | — | — | `TODO(T23)` (bounded-negative, no writer) |
+
 ### 4.2 DirectDraw fullscreen backend
 
 The fullscreen path calls `DirectDrawCreate`, sets cooperative level on the game
@@ -723,6 +718,8 @@ primary/backbuffer surface, attaches/installs a palette, composites into the
 surface, and presents with DirectDraw surface blit/flip calls. The observed
 surface descriptor is the legacy 108-byte form with primary/backbuffer flags;
 exact flag naming and all lost-surface recovery are medium-confidence.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 Both paths share the indexed software framebuffer and serialize present work
 through the renderer’s global MAIN lock. There is no observed 16/24/32-bit
@@ -797,24 +794,11 @@ animation, and the disc itself is seeded from the CRT presentation random
 stream (`*214013+2531011`), not the simulation stream. The effect is
 presentation-only, not authoritative, not hashed, and not save/loaded.
 
-`LHT` never darkens; darkening is through `SHD` rows 0–14. The exact
-`discByte → level` mapping and any multi-tick fading envelope are not
-established and remain presentation tuning; the 32-row/256-column layout, the
-near-identity row 0, the +51.51 bright end, and the exclusive flash binding
-are direct. The two brightening ramps overlap: `LHT` row 3 and `SHD` row 16
-both lift mean luminance by +6.83, `LHT` row 5 and `SHD` row 17 both by +12.60,
-but the files are distinct and neither is synthesized from the other.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 #### 4.3.2 SHD shading
 
-Indexed texture pixels may be passed through an `SHD` row for model face
-lighting; flat-colored 3DO primitives and laser lines bypass `SHD`. Team/logo
-textures select the player-specific frame before palette/shading lookup. `SHD`
-rows 0–14 darken (row 0 near-black, only index 0 survives; mean −97.59),
-row 15 is near-identity (232 of 256 self, mean +0.17), and rows 16–31 brighten
-past identity to +53.53 at row 31 — a full signed ramp that `LHT` does not
-replicate. The exact `SHD` row selection formula is not established, although
-the identity mid-row and the existence of 32 rows are direct.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 ### 4.4 GAF sprites and animation
 
@@ -886,6 +870,8 @@ Projectile models reuse the identical rotation helper — yaw feeds the Y slot,
 pitch the X slot, each with a constant negative half-circle (180-degree)
 authored model-facing offset — and a propeller-style variant feeds its spin
 angle through the same slot machinery.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 ### 5.3 Projected shadows and feature shadows
 
@@ -1391,7 +1377,7 @@ fullscreen transition, and movie/audio synchronization are not established.
    maximum over the four attribute cells that form one visibility tile — low
    gates admission, high gates horizon advance; the exact builder formula is
    `TODO(question)` until the lazy rebuild is traced. Fog-cache channel values
-   1..14 encoding remains `TODO(question)`. The vismasks shape count (10
+   `0/15` vs `1..14→value-1` are now **established** as `Gray=hi=current` (byte-grid gated `mode&2`) and `Black=lo=history` (word-grid `1<<player`), `variant=(col+row+camPhase)&3` via `offX/offZ` residues, edge `15` fixups (rr-16_addendum, direct-static for `value-1`/`&3`/hi/lo/bounds, supported inference for `1=NW` corner→bit). The vismasks shape count (10
    frames in `anims/vismasks.gaf` entry `vismask`) versus LOS.TDF declared
    table count (9) mismatch is closed: the sprite path clamps to the 10-frame
    count and the ray path clamps to the declared 9, with three excess LOS.TDF
@@ -1419,29 +1405,7 @@ fullscreen transition, and movie/audio synchronization are not established.
 
 ### Renderer
 
-- Full windowed/fullscreen mode transitions, DirectDraw surface flags, lost
-  surface recovery, palette-loss recovery, and exact blit/flip error policy.
-- Complete pass table is closed: ten fixed-order strips inside the single frame
-  composer with Y-bucket insertion and no depth test, exact numeric order,
-  render-mode gates, removal-before-update lifecycle, the 401 steady eviction
-  bound, and the 300-record effect pool (section 1). Still open: semantic strip
-  names, every effect-strip owner/flush point beyond the reviewed producer
-  family, and full producer coverage.
-- SHD/LHT/ALP row/index formula in every consumer and whether ALP is used by any
-  non-LOS UI/fade path.
-- Model lighting normals, texture coordinate policy, flat-color handling in all
-  primitive cases, and exact team/logo frame selection edge cases.
-- Shadow projection coefficients, feature/model stencil geometry, shadow
-  clipping, dither pattern, and shadow-vs-fog interaction at boundaries.
-- Water wake rectangle interpolation, underwater tint, splash timing, and proof
-  that no hidden animated-water surface writer exists.
-- Cursor hotspot metadata, subframe lifetime, animation speed for families not
-  shown to use the authored countdown cursor, sequence-flag naming, and complete
-  effect-strip owner registration, lifetime, and terminal-frame behavior.
-- FNT baseline, glyph advance/kerning, two-byte header fields, clipping edge,
-  and any shell path that uses GDI text directly.
-- Input repeat/focus/activation rules, key-token translation, cursor capture,
-  gadget hit-testing, and complete HUD/minimap palette composition.
+**Publication omission:** Historical executable-analysis detail omitted from this public edition.
 
 ### Projectiles and effects
 

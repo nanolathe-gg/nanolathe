@@ -191,4 +191,9 @@ func IntegrateFlight(s *FlightState) {
 
 	// Scalar speed recomputed as FULL 3-D magnitude trunc(sqrt(vx²+vy²+vz²)) [04 §10.1].
 	s.Speed = int32(math.Sqrt(float64(s.VX)*float64(s.VX) + float64(s.VY)*float64(s.VY) + float64(s.VZ)*float64(s.VZ)))
+
+	// Commit position via velocity [04 §10.1] shared mover position commit; flight branch shares final position commit with ground [04 §10.1].
+	s.X += s.VX
+	s.Y += s.VY
+	s.Z += s.VZ
 }

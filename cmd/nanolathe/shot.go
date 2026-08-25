@@ -7,6 +7,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
@@ -18,7 +19,7 @@ func runShot(opts Options, cs *contentSet, out *os.File) error {
 	if opts.ShotModel != "" {
 		return runShotModel(opts, cs, out)
 	}
-	sess, _, err := newBattleSession(opts, cs)
+	sess, cat, err := newBattleSession(opts, cs)
 	if err != nil {
 		return err
 	}
@@ -41,12 +42,17 @@ func runShot(opts Options, cs *contentSet, out *os.File) error {
 	}
 	cl.SetTerrain(sess.World)
 	cl.SetCamera(cam)
-	if pal := loadPalette(cs); pal != nil {
+	pal := loadPalette(cs)
+	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal}
+	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
+	if err != nil {
+		return err
+	}
+	if pal != nil {
 		cl.SetPalette(pal)
 	}
-	if fnt := loadFNT(cs); fnt != nil {
-		cl.SetFNT(fnt)
-	}
+	cl.SetFNT(b.hud.console)
+	cl.Overlay = func(c *client.Client) { b.hud.draw(c, b) }
 	cl.SetModelFS(cs.fs)
 
 	frames := opts.Frames
@@ -55,6 +61,7 @@ func runShot(opts Options, cs *contentSet, out *os.File) error {
 	}
 	for i := 0; i < frames; i++ {
 		sess.Step(int32(i + 1)) // scaled-ms anchor: one 30 Hz tick per frame
+		cl.TickTextureAnimators(1)
 	}
 	for _, u := range sess.Units.Iter() {
 		if u == nil || !u.Alive {
@@ -113,6 +120,11 @@ func runShotModel(opts Options, cs *contentSet, out *os.File) error {
 		Health: 100, MaxHealth: 100,
 	})
 	buf.Publish(frame)
+	frames := opts.Frames
+	if frames < 1 {
+		frames = 1
+	}
+	cl.TickTextureAnimators(frames)
 	img := cl.ComposeFrame()
 	f, err := os.Create(opts.Shot)
 	if err != nil {

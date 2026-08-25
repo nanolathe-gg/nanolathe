@@ -52,10 +52,34 @@ func (c *Client) ResolveUnitStyle() {
 	unitStyle.BodyDark = c.nearestIndex(48, 48, 56)
 	unitStyle.BodyMid = c.nearestIndex(96, 96, 108)
 	unitStyle.BodyLit = c.nearestIndex(168, 168, 184)
-	unitStyle.HealthGreen = c.nearestIndex(64, 220, 64)
-	unitStyle.HealthRed = c.nearestIndex(230, 48, 32)
+	unitStyle.HealthGreen = c.paletteIndex(10)
+	unitStyle.HealthRed = c.paletteIndex(12)
 	unitStyle.Outline = c.nearestIndex(0, 0, 0)
 	unitStyle.SelectWhite = c.nearestIndex(255, 255, 255)
+}
+
+// paletteIndex resolves a retail logical palette entry through the active
+// PALETTE.PAL mapping. HUD health colors are dcb[10]/[14]/[12], not guessed
+// RGB colors and not GUIPAL semantic fields [07 §6].
+func (c *Client) paletteIndex(logical byte) uint8 {
+	if c.pal == nil {
+		return logical
+	}
+	return c.pal.Logical[logical]
+}
+
+// retailHealthColor returns the exact three-tier health color selection used
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// positive-health fraction toward zero [07 §6].
+func (c *Client) retailHealthColor(health, max int32) uint8 {
+	third := max / 3
+	if health > third*2 {
+		return c.paletteIndex(10)
+	}
+	if health > third {
+		return c.paletteIndex(14)
+	}
+	return c.paletteIndex(12)
 }
 
 // fillIndexedRect fills an axis-aligned rectangle, clipped.
@@ -251,7 +275,7 @@ func (c *Client) drawUnitOriented(v snapshot.UnitView, sx, sy int32) {
 		}
 		bx := int(sx) - bw/2
 		by := maxY + 3
-		c.fillIndexedRect(bx-1, by-1, bw+2, 4, unitStyle.Outline)
+		c.fillIndexedRect(bx-1, by-1, bw+2, 4, c.paletteIndex(0))
 		frac := float64(v.Health) / float64(v.MaxHealth)
 		if frac < 0 {
 			frac = 0
@@ -259,10 +283,7 @@ func (c *Client) drawUnitOriented(v snapshot.UnitView, sx, sy int32) {
 		if frac > 1 {
 			frac = 1
 		}
-		fill := unitStyle.HealthGreen
-		if frac < 0.34 {
-			fill = unitStyle.HealthRed
-		}
+		fill := c.retailHealthColor(v.Health, v.MaxHealth)
 		c.fillIndexedRect(bx, by, int(float64(bw)*frac), 2, fill)
 	}
 }
@@ -347,6 +368,18 @@ func (c *Client) UIBlit(f *formats.GAFFrame, x, y int) {
 			c.indexed[index] = b
 		}
 	}
+}
+
+// UIBlitAnchor stamps a GAF frame using the authored animation anchor. The
+// retail battle GAF path receives the requested anchor plus XOffset/YOffset;
+// its rasterizer subtracts those fields internally before writing pixels
+// [fmt gaf][07 §6]. Frontend .GUI controls deliberately use UIBlit instead:
+// their rectangles are the placement contract [07 §4].
+func (c *Client) UIBlitAnchor(f *formats.GAFFrame, x, y int) {
+	if f == nil {
+		return
+	}
+	c.UIBlit(f, x+int(f.XOffset), y+int(f.YOffset))
 }
 
 // UIBlitPCX stamps a decoded PCX image into the indexed framebuffer at

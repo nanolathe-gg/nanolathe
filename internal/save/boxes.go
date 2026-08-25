@@ -733,9 +733,11 @@ var (
 // StateV1Version is the version of the Nanolathe StateV1 box [PLAN_14 C18].
 // Increment when the codec changes; decoder rejects unknown versions.
 // Version 2 adds full continuation per P0-I11 [08 "Save"] [01 §6] [05][04].
+// Version 3 adds COB piece transforms, anims, and flags per P1-I01 [04 §4.2][04 §4.6][04 §4.3].
 
-const StateV1VersionConst uint32 = 2
+const StateV1VersionConst uint32 = 3
 const StateV1Version1 uint32 = 1
+const StateV1Version2 uint32 = 2
 
 // UnitRecord is one slot-indexed unit record, canonically ordered by slot
 // ascending for determinism (I1) [01 §6.1] [PLAN_14 C18]. Reconstruction uses
@@ -788,10 +790,14 @@ type SlotRecord struct {
 	TargetZ      int32
 }
 
-// COBRecord captures per-unit COB VM threads/stacks/statics [04 §4.2][GAP T15][P0-I11].
+// COBRecord captures per-unit COB VM threads/stacks/statics [04 §4.2][GAP T15][P0-I11][P1-I01].
+// Version 3 adds piece transforms, anims, and flags [04 §4.6][04 §4.3] P1-I01.
 type COBRecord struct {
 	Statics []int32
 	Threads [8]ThreadRecord
+	Pieces  []PieceStateSave // per-piece transforms [03 §2.4] P1-I01
+	Flags   []uint8          // per-piece flags [04 §4.3] P1-I01
+	Anims   []PieceAnimSave  // per-piece anim lanes [04 §4.6] P1-I01
 }
 
 // ThreadRecord captures one COB thread [04 §4.2] 8*164 identity (I13) [P0-I11].
@@ -805,6 +811,31 @@ type ThreadRecord struct {
 	WaitThread int32
 	SignalMask int32
 	Stack      []int32 // 0..10 depth [04 §4.2]
+}
+
+// PieceStateSave captures one piece transform [03 §2.4] C21 P1-I01.
+type PieceStateSave struct {
+	RotX, RotY, RotZ       uint16
+	TransX, TransY, TransZ int32 // Fixed raw 16.16
+}
+
+// PieceAnimSave captures one piece's per-axis anim lanes [04 §4.6] P1-I01.
+type PieceAnimSave struct {
+	Axes [3]AxisAnimSave
+}
+
+// AxisAnimSave captures one axis lane [04 §4.6] P1-I01.
+type AxisAnimSave struct {
+	MoveTarget int32
+	MoveSpeed  int32
+	MoveBusy   bool
+	TurnTarget uint16
+	TurnSpeed  int32
+	TurnBusy   bool
+	SpinSpeed  int32
+	SpinTarget int32
+	SpinAccel  int32
+	SpinActive bool
 }
 
 // QueueRecord is a per-unit queue payload stub; real engine would include the
@@ -1241,6 +1272,38 @@ func MarshalStateV1(s *StateV1) []byte {
 						binaryWriteInt32(&buf, v)
 					}
 				}
+				if ver >= 3 {
+					// Pieces [03 §2.4] P1-I01
+					binaryWriteUint32(&buf, uint32(len(u.COB.Pieces)))
+					for _, p := range u.COB.Pieces {
+						binaryWriteUint16(&buf, p.RotX)
+						binaryWriteUint16(&buf, p.RotY)
+						binaryWriteUint16(&buf, p.RotZ)
+						binaryWriteInt32(&buf, p.TransX)
+						binaryWriteInt32(&buf, p.TransY)
+						binaryWriteInt32(&buf, p.TransZ)
+					}
+					binaryWriteUint32(&buf, uint32(len(u.COB.Flags)))
+					for _, f := range u.COB.Flags {
+						buf.WriteByte(f)
+					}
+					binaryWriteUint32(&buf, uint32(len(u.COB.Anims)))
+					for _, a := range u.COB.Anims {
+						for ax := 0; ax < 3; ax++ {
+							aa := a.Axes[ax]
+							binaryWriteInt32(&buf, aa.MoveTarget)
+							binaryWriteInt32(&buf, aa.MoveSpeed)
+							buf.WriteByte(boolToByte(aa.MoveBusy))
+							binaryWriteUint16(&buf, aa.TurnTarget)
+							binaryWriteInt32(&buf, aa.TurnSpeed)
+							buf.WriteByte(boolToByte(aa.TurnBusy))
+							binaryWriteInt32(&buf, aa.SpinSpeed)
+							binaryWriteInt32(&buf, aa.SpinTarget)
+							binaryWriteInt32(&buf, aa.SpinAccel)
+							buf.WriteByte(boolToByte(aa.SpinActive))
+						}
+					}
+				}
 			}
 		}
 	}
@@ -1562,7 +1625,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 	if err := binary.Read(r, binary.LittleEndian, &ver); err != nil {
 		return nil, err
 	}
-	if ver != StateV1VersionConst && ver != StateV1Version1 {
+	if ver != StateV1VersionConst && ver != StateV1Version1 && ver != StateV1Version2 {
 		return nil, ErrStateV1Version
 	}
 	catHash, err := readString(r)
@@ -1856,6 +1919,100 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 						WaitThread: wthread,
 						SignalMask: smask,
 						Stack:      stack,
+					}
+				}
+				if ver >= 3 {
+					var nPieces uint32
+					if err := binary.Read(r, binary.LittleEndian, &nPieces); err != nil {
+						return nil, err
+					}
+					if nPieces > 0 {
+						pieces := make([]PieceStateSave, nPieces)
+						for pi := uint32(0); pi < nPieces; pi++ {
+							var rx, ry, rz uint16
+							if err := binary.Read(r, binary.LittleEndian, &rx); err != nil {
+								return nil, err
+							}
+							if err := binary.Read(r, binary.LittleEndian, &ry); err != nil {
+								return nil, err
+							}
+							if err := binary.Read(r, binary.LittleEndian, &rz); err != nil {
+								return nil, err
+							}
+							var tx, ty, tz int32
+							if err := binary.Read(r, binary.LittleEndian, &tx); err != nil {
+								return nil, err
+							}
+							if err := binary.Read(r, binary.LittleEndian, &ty); err != nil {
+								return nil, err
+							}
+							if err := binary.Read(r, binary.LittleEndian, &tz); err != nil {
+								return nil, err
+							}
+							pieces[pi] = PieceStateSave{RotX: rx, RotY: ry, RotZ: rz, TransX: tx, TransY: ty, TransZ: tz}
+						}
+						cobRec.Pieces = pieces
+					}
+					var nFlags uint32
+					if err := binary.Read(r, binary.LittleEndian, &nFlags); err != nil {
+						return nil, err
+					}
+					if nFlags > 0 {
+						flags := make([]uint8, nFlags)
+						if _, err := r.Read(flags); err != nil {
+							return nil, err
+						}
+						cobRec.Flags = flags
+					}
+					var nAnims uint32
+					if err := binary.Read(r, binary.LittleEndian, &nAnims); err != nil {
+						return nil, err
+					}
+					if nAnims > 0 {
+						anims := make([]PieceAnimSave, nAnims)
+						for pi := uint32(0); pi < nAnims; pi++ {
+							for ax := 0; ax < 3; ax++ {
+								var mt, ms int32
+								if err := binary.Read(r, binary.LittleEndian, &mt); err != nil {
+									return nil, err
+								}
+								if err := binary.Read(r, binary.LittleEndian, &ms); err != nil {
+									return nil, err
+								}
+								mb, err := r.ReadByte()
+								if err != nil {
+									return nil, err
+								}
+								var tt uint16
+								if err := binary.Read(r, binary.LittleEndian, &tt); err != nil {
+									return nil, err
+								}
+								var ts int32
+								if err := binary.Read(r, binary.LittleEndian, &ts); err != nil {
+									return nil, err
+								}
+								tb, err := r.ReadByte()
+								if err != nil {
+									return nil, err
+								}
+								var ss, st, sa int32
+								if err := binary.Read(r, binary.LittleEndian, &ss); err != nil {
+									return nil, err
+								}
+								if err := binary.Read(r, binary.LittleEndian, &st); err != nil {
+									return nil, err
+								}
+								if err := binary.Read(r, binary.LittleEndian, &sa); err != nil {
+									return nil, err
+								}
+								sab, err := r.ReadByte()
+								if err != nil {
+									return nil, err
+								}
+								anims[pi].Axes[ax] = AxisAnimSave{MoveTarget: mt, MoveSpeed: ms, MoveBusy: byteToBool(mb), TurnTarget: tt, TurnSpeed: ts, TurnBusy: byteToBool(tb), SpinSpeed: ss, SpinTarget: st, SpinAccel: sa, SpinActive: byteToBool(sab)}
+							}
+						}
+						cobRec.Anims = anims
 					}
 				}
 			}

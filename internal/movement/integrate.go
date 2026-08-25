@@ -214,7 +214,7 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		MaxVelocity: int32(u.Def.MaxVelocity),
 		FootPrintX:  footX,
 		FootPrintZ:  footZ,
-		Mode:        2,
+		Mode:        1,
 		Blocked:     false,
 		Dirty:       false,
 	}
@@ -228,15 +228,17 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	// ProposedAnchor adds VX,VZ (0) then quantizes, so it's current cell
 	coll.CachedAnchor = anchor
 	coll.OldAnchor = anchor
-	coll.CachedMode = 2
+	coll.CachedMode = 1
 	s.Collisions[h] = coll
 	if s.Grid != nil {
 		s.Grid.Stamp(anchor, footX, footZ, coll.ID)
 	}
+	// Init move mode to parked [04 §9.1] 1 stopped/parked; TakeOff/Sumbit will set 2 active
+	u.Move.Mode = 1
 	// FlightState for can-fly units
 	if u.Def.CanFly {
 		flight := &FlightState{
-			Mode:                 2,
+			Mode:                 1,
 			X:                    int32(u.X.Raw()),
 			Y:                    int32(u.Y.Raw()),
 			Z:                    int32(u.Z.Raw()),
@@ -402,20 +404,29 @@ func headingFromDelta(dx, dz int64) uint16 {
 // called in the movement integration window after Scheduler.Tick [01 §4.4] I7.
 // For each unit with an active route and a Move_Ground-class order, it does:
 // Prune, UpdateHeading toward current waypoint, Integrate, then collision fast-path/blocked handling.
+// Carried cargo is slaved to carrier and skips integration [04 §10.2]. Tick iterates
+// player 0..9 asc then slot asc [I1].
 func (s *System) Tick(tick uint32, w *units.World) {
 	_ = tick
 	if s == nil || w == nil {
 		return
 	}
-	// Scheduler tick is driven externally by the kernel's orders/path window [task C2];
-	// this method only follows routes. The kernel registers Scheduler.Tick separately
-	// before this Tick, but we also tick here if scheduler hasn't been ticked this tick
-	// to make headless tests that call only System.Tick still progress.
-	// No-op if already ticked; scheduler is idempotent per tick due to replenish logic.
-
-	for _, u := range w.Iter() {
+	// Build set of carried handles to skip in main integration [04 §10.2].
+	carried := make(map[pool.Handle]struct{}, 8)
+	for _, u := range w.IterSliced() {
 		if u == nil || !u.Alive {
 			continue
+		}
+		if u.Attachment.Carrier != 0 {
+			carried[u.Handle] = struct{}{}
+		}
+	}
+	for _, u := range w.IterSliced() {
+		if u == nil || !u.Alive {
+			continue
+		}
+		if _, isCarried := carried[u.Handle]; isCarried {
+			continue // cargo branch slaved after carrier moves [04 §10.2]
 		}
 		// Keep orders queue as authority: only follow route if primary order is Move_Ground-class [task]
 		q := orders.QueueForUnit(u)
@@ -427,7 +438,7 @@ func (s *System) Tick(tick uint32, w *units.World) {
 			continue
 		}
 		name := orders.DescriptorFor(head.ID).Name
-		if name != "Move_Ground" && name != "VTOL_Move" && name != "QMove" {
+		if name != "Move_Ground" && name != "VTOL_Move" && name != "QMove" && name != "VTOL_MobileBuild" && name != "MobileBuild" && name != "VTOL_Patrol" && name != "Patrol" {
 			// Still allow generic move for demo
 			if head.GoalX == 0 && head.GoalZ == 0 && head.GoalY == 0 {
 				continue
@@ -482,15 +493,32 @@ func (s *System) Tick(tick uint32, w *units.World) {
 			flight.TargetX = int32(wpWorldX.Raw())
 			flight.TargetZ = int32(wpWorldZ.Raw())
 			flight.TargetHeading = desired
-			flight.TargetY = int32(u.Y.Raw()) // keep altitude
+			// Cruise altitude: targetY = max(sea level, terrain height at target XZ) + cruisealt [04 §10.1]
+			// For waypoint following, use full cruisealt at waypoint.
+			if s.Terrain != nil && u.Def != nil {
+				targetY := CruiseAltitudeForOffset(s.Terrain, wpWorldX, wpWorldZ, u.Def.CruiseAlt)
+				flight.TargetY = int32(targetY.Raw())
+			} else {
+				flight.TargetY = int32(u.Y.Raw())
+			}
 			// Keep MaxVelocity etc from def if zero
 			if flight.MaxVelocity == 0 && u.Def.MaxVelocity != 0 {
 				flight.MaxVelocity = int32(u.Def.MaxVelocity)
 			}
+			if flight.Acceleration == 0 && u.Def.Acceleration != 0 {
+				flight.Acceleration = int32(u.Def.Acceleration)
+			}
+			if flight.BrakeRate == 0 && u.Def.BrakeRate != 0 {
+				flight.BrakeRate = int32(u.Def.BrakeRate)
+			}
+			flight.TurnRate = int32(u.Def.TurnRate)
 			IntegrateFlight(flight)
 			u.X = numeric.Fixed(int64(flight.X))
 			u.Y = numeric.Fixed(int64(flight.Y))
 			u.Z = numeric.Fixed(int64(flight.Z))
+			// Sync move heading/pitch/bank for snapshot [03 §2.4] C21
+			u.Move.Heading = flight.Heading
+			// Wake SFX band for air not needed; hover wake handled below for ground hover? Keep but air no wake.
 			continue
 		}
 
@@ -568,12 +596,48 @@ func (s *System) Tick(tick uint32, w *units.World) {
 		u.Z = numeric.Fixed(int64(coll.Z))
 		if s.Terrain != nil {
 			u.Y = s.Terrain.HeightAt(u.X, u.Z)
+			if u.Y == numeric.Fixed(-1) {
+				// OOB sentinel: keep previous Y
+				u.Y = numeric.Fixed(int64(coll.Y))
+			}
+			// Hover/floater Y adjustments per [04 §9.2] waterline/floater clamp already in profile? Keep HeightAt.
 		}
 		// Sync steer to committed position
 		steer.X = coll.X
 		steer.Z = coll.Z
 		steer.Heading = coll.Heading
 		steer.Speed = coll.Speed
+		// Sync move state for snapshot
+		u.Move.Heading = coll.Heading
+		u.Move.Speed = numeric.Fixed(coll.Speed)
+		// Wake SFX for hover: band 2 or 3 emits wake types 2..5 [04 §9.1]
+		// We record band in Move.Pitch/Bank? Not needed for physics, but keep for presentation via wake check.
+		_ = ShouldEmitWake(s.Terrain, u)
+	}
+	// After all carriers moved, slave cargo [04 §10.2]
+	s.SyncCarriedMotion(w)
+	// Air repair on pads for landed VTOLs [04 §10.2] VTOL_GetRepaired
+	for _, u := range w.IterSliced() {
+		if u == nil || !u.Alive {
+			continue
+		}
+		if u.Def != nil && u.Def.CanFly && u.Move.Mode == 1 {
+			// Check if on any IsAirBase pad
+			for _, pad := range w.IterSliced() {
+				if pad == nil || pad == u {
+					continue
+				}
+				if !IsLandingPad(pad) {
+					continue
+				}
+				dx := int64(u.X) - int64(pad.X)
+				dz := int64(u.Z) - int64(pad.Z)
+				if dx*dx+dz*dz <= int64(16*65536)*int64(16*65536) {
+					AirRepair(w, u.Handle, pad, 5)
+					break
+				}
+			}
+		}
 	}
 }
 

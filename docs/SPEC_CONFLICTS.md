@@ -252,6 +252,30 @@ required to agree and must not be shared.
 
 ---
 
+## SC10 — Trailing -Z is Z-Y/2 shear, not a second model-space NEG (H_A vs H_C)
+
+**Spec** `[03 §2.4/2.5]` prior to 2026-08-25: load-time half-turn `-X,-Z` was established, but whether screen helpers' `-Z` was a second conversion (`H_C` net `-X`) vs shear (`H_A` net `-X,-Z`) was an open question or supported inference.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Decision:** implement `H_A` sole load-time conversion; reject `H_C` (rr-06_addendum, direct-static). Flare/muzzle world at `(2,1,-30)` is `(-2,1,+30)` plus unit origin.
+
+**Falsifies:** `H_C` reading; no prior SC.
+
+---
+
+## SC14 — Flare/muzzle per-vertex reuse vs second NEG
+
+**Spec** `[03 §2.4]` / `research/formats/3do.md` "Model facing is −Z": piece translations converted at load, but muzzle query path could have re-applied `NEG`.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Decision:** muzzle query reuses pristine post-load vectors; no second sign fixup (rr-06_addendum, direct-static). Same evidence as SC10; separated because SC10 is about projection shear vs conversion and SC14 is about per-vertex flare reuse.
+
+**Falsifies:** second-NEG-at-query reading.
+
+---
+
 ## How to add to this file
 
 One section per conflict: what the spec says, what was observed and how, the

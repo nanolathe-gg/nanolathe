@@ -16,7 +16,6 @@
 package units
 
 import (
-	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/pool"
 )
 
@@ -64,7 +63,7 @@ func (w *World) tickUnit(u *Unit, tick uint32) {
 	// [04 §4.2][04 §4.6][GAP T15] C17: delta 1, eight thread slots then one piece pass.
 	// Deferred callbacks queued before this drain run same visit [GAP T15] C17.
 	// If the unit has no VM (fixture, pre-COB attach, or not yet wired session),
-	// keep the placeholder Script any dormant and do not synthesize completion.
+	// keep the placeholder Script dormant and do not synthesize completion [P1-I01].
 	// The VM's own Drain handles the zero-piece case and the eight-slot fixed
 	// scan order [04 §4.2] C13 (I1).
 	w.cobDrain(u, tick)
@@ -158,18 +157,10 @@ func (w *World) cobDrain(u *Unit, tick uint32) {
 	if u == nil {
 		return
 	}
-	// Prefer typed ScriptState; fall back to Script any if it holds a *cob.VM.
-	var vm *cob.VM
-	if u.ScriptState != nil && u.ScriptState.VM != nil {
-		vm = u.ScriptState.VM
-	} else if u.Script != nil {
-		if v, ok := u.Script.(*cob.VM); ok {
-			vm = v
-		}
-	}
+	vm := u.GetScript()
 	if vm == nil {
 		// No VM bound yet (session not yet wired, fixture, or placeholder) —
-		// keep placeholder dormant and do not synthesize completion ticks [04 §4.1].
+		// keep dormant and do not synthesize completion ticks [04 §4.1][P1-I01].
 		return
 	}
 	// Normal drain delta 1 [04 §4.6][GAP T15] C17. The VM runs all eight threads

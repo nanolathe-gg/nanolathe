@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/session"
@@ -312,15 +313,22 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 	}
 	g.cam.Pan(0, 0)
 	centerOnCommander(sess.Units, g.cam, winW, winH)
-	g.battle = &battleSession{sess: sess, cat: cat, cam: g.cam}
+	pal := loadPalette(g.cs)
+	battleHUD, err := loadRetailBattleHUD(g.cs.fs, sess, cat, pal)
+	if err != nil {
+		return err
+	}
+	g.battle = &battleSession{sess: sess, cat: cat, cam: g.cam, hud: battleHUD, latch: input.LatchNormal}
 	g.mode = modeBattle
 	if clPtr != nil {
 		clPtr.SetSnapshot(sess.Snapshot)
 		clPtr.SetTerrain(terrain)
 		clPtr.SetCamera(g.cam)
-		if pal := loadPalette(g.cs); pal != nil {
+		if pal != nil {
 			clPtr.SetPalette(pal)
 		}
+		clPtr.SetFNT(battleHUD.console)
+		clPtr.Overlay = func(c *client.Client) { battleHUD.draw(c, g.battle) }
 	}
 	return nil
 }
@@ -363,8 +371,8 @@ func enumerateSkirmishMaps(fs *vfs.FS) ([]string, error) {
 
 func (g *gameShell) draw(c *client.Client) {
 	if g.mode == modeBattle {
-		if g.battle != nil {
-			g.battle.drawOverlay(c, g.font)
+		if g.battle != nil && g.battle.hud != nil {
+			g.battle.hud.draw(c, g.battle)
 		}
 		return
 	}

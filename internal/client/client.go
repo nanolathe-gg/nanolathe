@@ -38,6 +38,12 @@ type Options struct {
 	Width, Height int
 	Title         string
 
+	// DebugOverlay is an explicit developer diagnostic switch. Retail battle
+	// frames do not contain the Nanolathe tick/camera text or verification bar;
+	// keep those diagnostics opt-in so attaching a font never changes the
+	// retail surface [03 §7.1] C8.
+	DebugOverlay bool
+
 	// Headless skips window creation entirely (C11). Nothing above becomes
 	// reachable from --headless; RunGame returns immediately.
 	Headless bool
@@ -49,8 +55,8 @@ type Options struct {
 type Client struct {
 	opts Options
 
-	// Overlay draws battle-view chrome (build panel, ghosts, menus) after
-	// world units and before the debug text. Presentation only [I6].
+	// Overlay draws battle-view chrome after world units. Presentation only
+	// [I6]. Debug text is separately opt-in through Options.DebugOverlay.
 	Overlay func(c *Client)
 	buffer  *snapshot.Buffer
 
@@ -78,9 +84,10 @@ type Client struct {
 	cam     *camera.Camera
 	fnt     *formats.FNT
 
-	modelFS  *vfs.FS
-	models   map[string]*unitModel
-	texIndex map[string]texRef
+	modelFS   *vfs.FS
+	models    map[string]*unitModel
+	texIndex  map[string]texRef
+	animClock int // texture-animation clock in sim frames
 
 	in InputState
 }
@@ -135,6 +142,7 @@ func (c *Client) SetPalette(p *palette.Tables) {
 	if p != nil {
 		c.base = p.Base
 		c.logical = p.Logical
+		c.ResolveUnitStyle()
 	}
 }
 

@@ -39,27 +39,74 @@ type modelCorner struct {
 }
 
 type modelTri struct {
-	c     [3]modelCorner
-	piece string // source piece name, for diagnostics/provenance
-	color uint8
-	frame *formats.GAFFrame // resolved non-team texture, nil = flat color
-	entry *formats.GAFEntry // team entries resolve per-player frames
-	team  bool              // 10-frame LOGOS entry: frame = owner [fmt 3do]
-	row   [3]int            // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	vkey  [3]int64          // packed piece+vertex id, resolved to rows post-walk
-	order int               // expansion order; draw order is load-fixed [03 2.4]
+	c      [3]modelCorner
+	piece  string // source piece name, for diagnostics/provenance
+	color  uint8
+	hasTex bool     // resolved to a texture (static, team, or animated)
+	ref    texRef   // texture resolution; animated frames pick at draw time
+	row    [3]int   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	vkey   [3]int64 // packed piece+vertex id, resolved to rows post-walk
+	order  int      // expansion order; draw order is load-fixed [03 2.4]
 }
 
 type unitModel struct {
 	tris []modelTri
 }
 
-// texRef is one texture-name resolution. Team textures are the 10-frame
-// entries (LOGOS.GAF): frame n is player n's colored copy [fmt 3do].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// one frame is static, exactly ten is a LOGOS team texture (frame = owner,
+// never animated), anything else is an animated sequence ticked by the
+// simulation frame with per-frame delays from the GAF table.
+type texKind uint8
+
+const (
+	texStatic texKind = iota
+	texTeam
+	texAnimated
+)
+
+// texRef is one texture-name resolution.
 type texRef struct {
-	frame *formats.GAFFrame
-	entry *formats.GAFEntry // team entries resolve per-player frames
-	team  bool
+	kind  texKind
+	frame *formats.GAFFrame // static frame (kind static)
+	entry *formats.GAFEntry // team/animated: full frame list
+	cum   []int             // animated: cumulative delay ticks per frame
+	total int               // animated: full-cycle length in ticks
+}
+
+func (k texKind) String() string {
+	switch k {
+	case texTeam:
+		return "team"
+	case texAnimated:
+		return "animated"
+	}
+	return "static"
+}
+
+// TickTextureAnimators advances the texture-animation clock by n simulation
+// frames. Presentation-only state (I6): animated model textures tick with the
+// simulation frame rate, driven here from the session owner. Divergence
+// (documented): retail runs one player per 3DO instance so instances drift
+// apart; Nanolathe phases all instances from one clock until snapshots carry
+// spawn ticks.
+func (c *Client) TickTextureAnimators(n int) {
+	c.animClock += n
+}
+
+// animatedFrame picks the current frame of an animated entry from the clock,
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func animatedFrame(ref texRef, clock int) *formats.GAFFrame {
+	if ref.total <= 0 || len(ref.cum) == 0 {
+		return ref.frame
+	}
+	t := ((clock % ref.total) + ref.total) % ref.total
+	for i, c := range ref.cum {
+		if t < c {
+			return ref.entry.Frames[i].Frame
+		}
+	}
+	return ref.entry.Frames[len(ref.entry.Frames)-1].Frame
 }
 
 // buildTextureIndex enumerates textures/*.gaf and indexes entries by name.
@@ -90,8 +137,21 @@ func (c *Client) buildTextureIndex() {
 				continue
 			}
 			ref := texRef{frame: entry.Frames[0].Frame, entry: entry}
-			if len(entry.Frames) == 10 {
-				ref.team = true // frame n = player n [fmt 3do "Texturing"]
+			switch {
+			case len(entry.Frames) == 10:
+				ref.kind = texTeam // frame n = player n, never animated
+			case len(entry.Frames) > 1:
+				ref.kind = texAnimated
+				total := 0
+				for _, fr := range entry.Frames {
+					d := int(fr.Value)
+					if d < 1 {
+						d = 1 // zero delay would flicker every tick
+					}
+					total += d
+					ref.cum = append(ref.cum, total)
+				}
+				ref.total = total
 			}
 			c.texIndex[strings.ToLower(entry.Name)] = ref
 		}
@@ -207,12 +267,28 @@ func (c *Client) expandModel(name string) *unitModel {
 			tri.color = uint8(p.ColorIndex)
 			tri.order = order
 			order++
+			// Retail resolves the texture at load; a miss REWRITES the
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// subject to the quads-only rule), not a skipped face.
+			textured := false
 			if p.TextureName != "" {
-				if ref, ok := c.texIndex[strings.ToLower(p.TextureName)]; ok {
-					tri.frame = ref.frame
-					tri.entry = ref.entry
-					tri.team = ref.team
+				ref, ok := c.texIndex[strings.ToLower(p.TextureName)]
+				if !ok {
+					tri.color = 0xd1
+				} else {
+					tri.hasTex = true
+					tri.ref = ref
+					textured = true
 				}
+			}
+			// Flat-colored (untextured) faces draw ONLY as quads — the
+			// retail rasterizer rejects non-quad untextured primitives
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// The textured test runs after resolution: a texture miss
+			// rewrote the primitive to flat color 0xd1 above.
+			if !textured && n != 4 {
+				continue
 			}
 			// Quad corners map in index order to (0,0),(1,0),(1,1),(0,1)
 			// [fmt 3do "Texturing"]. The retail rule for larger n-gons is
@@ -408,11 +484,20 @@ func (c *Client) drawUnitModel(v snapshot.UnitView, sx, sy int32) bool {
 		t := &m.tris[i]
 		var st screenTri
 		st.color = t.color
-		st.frame = t.frame
-		st.entry = t.entry
-		st.team = t.team
 		st.order = t.order
 		st.row = [3]float64{float64(t.row[0]), float64(t.row[1]), float64(t.row[2])}
+		if t.hasTex {
+			switch t.ref.kind {
+			case texAnimated:
+				st.frame = animatedFrame(t.ref, c.animClock)
+			case texTeam:
+				st.frame = t.ref.frame
+				st.entry = t.ref.entry
+				st.team = true
+			default:
+				st.frame = t.ref.frame
+			}
+		}
 		for k := 0; k < 3; k++ {
 			cn := &t.c[k]
 			// Heading rotates the model X/Z plane; Y stays up. Same
@@ -654,14 +739,16 @@ func (c *Client) drawUnitChrome(v snapshot.UnitView, sx, sy int32) {
 			frac = 1
 		}
 		by := sy + halfH + 2
+		background := c.paletteIndex(0)
+		fill := c.retailHealthColor(v.Health, v.MaxHealth)
 		for i := int32(0); i < bw; i++ {
 			px := sx - bw/2 + i
 			if px < 0 || px >= int32(c.width) || by < 0 || by >= int32(c.height) {
 				continue
 			}
-			idx := unitStyle.HealthRed
+			idx := background
 			if float64(i) < frac*float64(bw) {
-				idx = unitStyle.HealthGreen
+				idx = fill
 			}
 			c.indexed[by*int32(c.width)+px] = idx
 		}

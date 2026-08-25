@@ -196,16 +196,7 @@ terrain alignment.
 
 ### Texturing
 
-Texture names refer to entries in the GAF files under `textures/`
-([gaf.md](gaf.md)). There are no UV coordinates: a quad maps the texture by
-vertex order — the first index is one corner of the texture and subsequent
-indexes proceed around it. Which corner is "top-left" was established by
-authoring tools per-face by rotating the index order; renderers replicating
-classic visuals map quad corners in index order to
-(0,0), (1,0), (1,1), (0,1) and fan-triangulate larger polygons.
-Faces are single-sided; the retail winding convention is counter-clockwise
-when viewed from outside — measured, see "Unknowns and caveats" (inverted
-faces were a common authoring bug, fixed in tools by "Invert Face").
+**Publication omission:** Historical executable-analysis detail omitted from this public edition.
 
 Team color comes from complete player-specific frames in `LOGOS.GAF`: frame
 *n* is the source texture for player *n*. Select that frame before applying
@@ -323,7 +314,7 @@ no untextured primitive does.
   commander comparison shows that this leaves source X visibly mirrored. The
   reflection reverses polygon winding, so submission must swap the final two
   triangle indices. Apply the same source-Z conversion to piece translations
-  and simulation query/muzzle points.
+  and simulation query/muzzle points. Trailing `-Z` in screen helpers is the `Z - Y/2` shear (`NEG; SAR 0x10; SAR 1; SUB` transient) not a second conversion; load-time `−X,−Z` remains sole persistent sign fixup (`H_A` established, `H_C` rejected per rr-06_addendum, direct-static via register-vs-store and `SUB` vs `ADD`).
 - Canonical `IsColored == 1` plus `ColorIndex < 256` takes precedence over a
   resolved texture name. The controlled asymmetric Oracle carries both fields
   and retail draws its synthetic index-56 box face instead of `colorsmd`.

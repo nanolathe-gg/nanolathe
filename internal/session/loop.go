@@ -5,7 +5,6 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
-	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -1274,8 +1273,8 @@ func (s *Session) RegisterAll() {
 					// Bind COB piece transforms if VM exists [03 §2.4] C21–C22 [04 §4.6] [04 §4.2] C13.
 					// Last writer wins across TURN, turn-now, SPIN via one adapter [03 §2.4] C22.
 					// Snapshot copies the accumulators read-only; rendering uses float trig (I2) and never touches sim RNG (I4).
-					if u.ScriptState != nil && u.ScriptState.VM != nil {
-						if vmPieces := u.ScriptState.Pieces(); len(vmPieces) > 0 {
+					if vm := u.GetScript(); vm != nil {
+						if vmPieces := vm.Pieces; len(vmPieces) > 0 {
 							v.Pieces = make([]snapshot.PieceView, len(vmPieces))
 							for i, ps := range vmPieces {
 								v.Pieces[i] = snapshot.PieceView{
@@ -1286,23 +1285,6 @@ func (s *Session) RegisterAll() {
 									Tx:    ps.Trans[0],
 									Ty:    ps.Trans[1],
 									Tz:    ps.Trans[2],
-								}
-							}
-						}
-					} else if u.Script != nil {
-						if vm, ok := u.Script.(*cob.VM); ok && vm != nil {
-							if vmPieces := vm.Pieces; len(vmPieces) > 0 {
-								v.Pieces = make([]snapshot.PieceView, len(vmPieces))
-								for i, ps := range vmPieces {
-									v.Pieces[i] = snapshot.PieceView{
-										Index: i,
-										RotX:  ps.RotX,
-										RotY:  ps.RotY,
-										RotZ:  ps.RotZ,
-										Tx:    ps.Trans[0],
-										Ty:    ps.Trans[1],
-										Tz:    ps.Trans[2],
-									}
 								}
 							}
 						}

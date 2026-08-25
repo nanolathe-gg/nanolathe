@@ -683,6 +683,42 @@ typed gadget whose authored record type equals `3` (the text-editor family)
 holds focus, in which case it slides toward 0; with Space released it always
 slides toward 0.
 
+**Panel asset binding and draw origins are closed.** The side loader opens the
+GAF named by the selected SIDE's `intgaf` field and caches the named entries
+`PANELTOP`, `PANELSIDE`, and `PANELBOT`. The battle shell invokes the raw GAF
+blitter with these authored-coordinate pairs: `PANELTOP` at `(129,0)`,
+`PANELSIDE` at `(0,0)`, and `PANELBOT` at `(129,H-32)` for the negotiated
+640×480 surface. The raw blitter applies a frame's animation anchor by
+subtracting its `XOffset/YOffset`; therefore a caller that exposes a raw
+blit API passes the requested origin plus those two offsets. This is distinct
+from ordinary `.GUI` gadget art: a gadget frame is copied at the translated
+authored gadget rectangle and its GAF offsets are not added. The command-panel
+GUI window is the side-prefixed `guis/<prefix>main.gui` when no unit page is
+active, `guis/<prefix>gen.gui` for a non-builder selection, or the selected
+builder's authored `guis/<unit>1.gui` page. Named page art is resolved from
+that page's `<unit>1.gaf`, then the side/main support GAFs, then the common
+`BUTTONS0` stock-size groups. A left-button hold inside a gadget selects its
+armed frame; pointer hover alone does not tint or change an ordinary button.
+
+The stock battle resource set binds `fonts/<font>.fnt` as the side console
+font and `fonts/<fontgui>.fnt` as the side GUI/button font. The frontend
+`COMIX.FNT` selection is not a battle-HUD fallback. `energycolor` and
+`metalcolor` are active `PALETTE.PAL` indices for their inner resource bars;
+raw GAF/PCX/TNT bytes are copied as active indexed pixels. Only semantic GUI
+color fields and FNT colors use the GUI-source-to-active lookup built from
+`GUIPAL.PAL`; `GUIPAL.PAL` is never installed as the physical display palette.
+The resource primitive fills the authored `ENERGYBAR`/`METALBAR` rectangle to
+the current-over-capacity width with the side-authored active color; it does
+not synthesize a GUI-colored frame or a second palette layer.
+
+**Unit health color thresholds are closed.** The retail health primitive uses
+the active logical-to-physical table entries `dcb[10]`, `dcb[12]`, and
+`dcb[14]`: above two-thirds health selects entry 10, above one-third selects
+entry 14, and the remaining positive-health range selects entry 12. The
+outer health rectangle uses entry `dcb[0]`; the inner fill is inset before
+the current/max fraction is truncated toward zero. This is separate from
+the side `DAMAGEBAR` anchor, whose placement remains data-authored.
+
 Whenever the offset is nonzero, the moving strip is blitted at y+offset and
 three translated strings are drawn onto it: `Game Time:` as `hh:mm:ss`,
 `Total Units: %d (Max %d)`, and `Game Speed: %s%s` with a `(+/-n)` suffix
@@ -1203,7 +1239,9 @@ minimum-ping write-back are established above.
 * Complete HUD side-anchor to draw/hit-test consumer mapping, provider/
   palette/font/art failure policy, and slide/modal combinations (anchor list,
   tuple order, slide animation, and frame-composition passes are established).
-* Exact battle HUD coordinates and per-side optional-asset fallback behavior.
+* Exact battle HUD optional-asset fallback behavior beyond the closed
+  `intgaf` panel entries, side fonts, authored GUI page, page GAF, support GAF,
+  and common-button resolution above.
 * Full FNT text wrapping, drop-color defaults, code-page behavior, font
   fallback order, and translation-table missing-key rules (truncate-before-
   clip and the presentation-context drop-shadow switch are established).

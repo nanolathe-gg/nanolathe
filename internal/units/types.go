@@ -28,6 +28,8 @@ import (
 // Stored as *ScriptState on Unit; nil means no script bound (e.g., fixture or
 // not yet wired in session composition) [04 §4.1]. Tick drains with delta 1 via
 // VM.Drain(1) [04 §4.6][GAP T15] and never synthesizes completion.
+// Typed Script field on Unit is *cob.VM (not any) per P1-I01 acceptance; ScriptState
+// remains as typed wrapper for snapshot convenience.
 type ScriptState struct {
 	VM *cob.VM
 }
@@ -154,7 +156,8 @@ type CallbackQueue struct {
 	Deferred cob.DeferredQueue
 }
 
-// SetScript binds a COB VM to the unit's script state [04 §4.1].
+// SetScript binds a COB VM to the unit's script state [04 §4.1][P1-I01].
+// Script is typed *cob.VM (not any) per P1-I01 acceptance; ScriptState wrapper is retained for snapshot convenience.
 func (u *Unit) SetScript(vm *cob.VM) {
 	if u == nil {
 		return
@@ -165,16 +168,18 @@ func (u *Unit) SetScript(vm *cob.VM) {
 		return
 	}
 	u.ScriptState = &ScriptState{VM: vm}
-	// Keep Script any for backward compatibility with callers that used opaque any [04 §4.2].
-	u.Script = vm
+	u.Script = vm // typed field [P1-I01]
 }
 
-// GetScript returns the unit's VM or nil.
+// GetScript returns the unit's VM or nil. It prefers ScriptState then falls back to typed Script field.
 func (u *Unit) GetScript() *cob.VM {
-	if u == nil || u.ScriptState == nil {
+	if u == nil {
 		return nil
 	}
-	return u.ScriptState.VM
+	if u.ScriptState != nil && u.ScriptState.VM != nil {
+		return u.ScriptState.VM
+	}
+	return u.Script
 }
 
 // SlotAt returns the slot or nil if out of range.

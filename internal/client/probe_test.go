@@ -37,7 +37,7 @@ func TestProbeArmcomTriangles(t *testing.T) {
 	}
 	textured, flat := 0, 0
 	for i := range m.tris {
-		if m.tris[i].frame != nil {
+		if m.tris[i].hasTex {
 			textured++
 		} else {
 			flat++
@@ -93,9 +93,9 @@ func TestProbeArmcomTriangles(t *testing.T) {
 		// Faces covering the artifact region (right of the body).
 		if minX <= 458 && maxX >= 452 && minY <= 152 && maxY >= 146 {
 			t.Logf("HIT piece=%q tex=%v color=%d screen (%d,%d)..(%d,%d) nverts-model(%.1f,%.1f,%.1f)",
-				tr.piece, tr.frame != nil, tr.color, minX, minY, maxX, maxY, tr.c[0].x, tr.c[0].y, tr.c[0].z)
+				tr.piece, tr.hasTex, tr.color, minX, minY, maxX, maxY, tr.c[0].x, tr.c[0].y, tr.c[0].z)
 		}
-		if tr.frame != nil {
+		if tr.hasTex {
 			b := pieceBounds[tr.piece]
 			if b[2] == 0 && b[3] == 0 {
 				pieceBounds[tr.piece] = [4]int32{minX, minY, maxX, maxY}
@@ -105,7 +105,7 @@ func TestProbeArmcomTriangles(t *testing.T) {
 		}
 		if w > 25 || h > 25 {
 			t.Logf("BIG piece=%q tex=%v color=%d screen (%d,%d)..(%d,%d) %dx%d",
-				tr.piece, tr.frame != nil, tr.color, minX, minY, maxX, maxY, w, h)
+				tr.piece, tr.hasTex, tr.color, minX, minY, maxX, maxY, w, h)
 			for k := 0; k < 3; k++ {
 				t.Logf("   v%d model(%.2f,%.2f,%.2f) screen(%d,%d)", k, tr.c[k].x, tr.c[k].y, tr.c[k].z, xs[k], ys[k])
 			}

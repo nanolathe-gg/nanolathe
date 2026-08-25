@@ -259,7 +259,7 @@ func (s *Service) QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cel
 	// 1. query the factory script's build-info piece with argument pre-initialized to -1 [05 C16].
 	pieceIdx := int32(-1)
 	if factory.Script != nil {
-		if vm, ok := factory.Script.(*cob.VM); ok && vm != nil {
+		if vm := factory.Script; vm != nil {
 			// Try to find QueryBuildInfo script entry; vm prog may be nil in tests.
 			// Use generic Call mechanism: pieceIdx is args[0] after synchronous query [04 §4.2] Call pushes 4 inputs, forces SP 4, runs inline [04 §4.3].
 			// For QueryBuildInfo, the retail query helper [04 §4.2] expects 4 outputs seeded as [-1,0,0,0] per ports.go QueryTransportSeed etc, but build-info uses same seeding.
@@ -299,7 +299,7 @@ func (s *Service) QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cel
 	// 2. resolve piece transform plus factory origin to world position [05 C16].
 	var states []model.PieceState
 	if factory.Script != nil {
-		if vm, ok := factory.Script.(*cob.VM); ok && vm != nil && len(vm.Pieces) == len(m.Pieces) {
+		if vm := factory.Script; vm != nil && len(vm.Pieces) == len(m.Pieces) {
 			states = vm.Pieces
 		}
 	}
@@ -533,7 +533,7 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	// TODO(question): exact COB callback name and bit not located beyond "start-building edge"; we set flag.
 	factory.Flags |= FlagStartBuilding
 	if factory.Script != nil {
-		if vm, ok := factory.Script.(*cob.VM); ok && vm != nil {
+		if vm := factory.Script; vm != nil {
 			// Try to start StartBuilding script if exists.
 			if prog := getVMProgram(vm); prog != nil {
 				if pc, ok := prog.Scripts["StartBuilding"]; ok {
@@ -727,7 +727,7 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 	// TODO(question): exact bits not located; we clear both in one op to preserve edge coalescence.
 	factory.Flags &^= (FlagDeactivate | FlagStartBuilding)
 	if factory.Script != nil {
-		if vm, ok := factory.Script.(*cob.VM); ok && vm != nil {
+		if vm := factory.Script; vm != nil {
 			if prog := getVMProgram(vm); prog != nil {
 				// Fire both callbacks together via single edge call simulation: start Deactivate and StopBuilding together.
 				// For test, just record that both were lowered.
@@ -894,7 +894,7 @@ func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint
 			if factory.Flags&FlagActivated == 0 {
 				factory.Flags |= FlagActivated
 				if factory.Script != nil {
-					if vm, ok := factory.Script.(*cob.VM); ok && vm != nil {
+					if vm := factory.Script; vm != nil {
 						if prog := getVMProgram(vm); prog != nil {
 							if pc, ok := prog.Scripts["Activate"]; ok {
 								_ = vm.Start(pc, nil)
@@ -918,7 +918,7 @@ func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint
 		if factory.Flags&FlagActivated != 0 {
 			factory.Flags &^= FlagActivated
 			if factory.Script != nil {
-				if vm, ok := factory.Script.(*cob.VM); ok && vm != nil {
+				if vm := factory.Script; vm != nil {
 					if prog := getVMProgram(vm); prog != nil {
 						if pc, ok := prog.Scripts["Deactivate"]; ok {
 							_ = vm.Start(pc, nil)
@@ -1162,7 +1162,7 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 	}
 	builder.Flags |= FlagStartBuilding
 	if builder.Script != nil {
-		if vm, ok := builder.Script.(*cob.VM); ok && vm != nil {
+		if vm := builder.Script; vm != nil {
 			if prog := getVMProgram(vm); prog != nil {
 				if pc, ok := prog.Scripts["StartBuilding"]; ok {
 					_ = vm.Start(pc, nil)
@@ -1287,7 +1287,7 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	// Engine prints no text, lowers start-building edge, runs completion transition [05].
 	factory.Flags &^= FlagStartBuilding
 	if factory.Script != nil {
-		if vm, ok := factory.Script.(*cob.VM); ok && vm != nil {
+		if vm := factory.Script; vm != nil {
 			if prog := getVMProgram(vm); prog != nil {
 				if pc, ok := prog.Scripts["StopBuilding"]; ok {
 					_ = vm.Start(pc, nil)

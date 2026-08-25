@@ -4,9 +4,11 @@ package units
 import (
 	"fmt"
 
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // DeathCause names how a unit died [04 §2.4].
@@ -55,7 +57,7 @@ type Unit struct {
 	Flags        uint32       // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	Pending      uint32       // capability/pending word for gate intersection [04 §3.3] C6
 	Orders       any          // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
-	Script       any          // COB VM placeholder [04 §4.2] (kept for backward compat, prefer ScriptState)
+	Script       *cob.VM      // typed COB VM per-unit [04 §4.2][P1-I01] — not any, typed per acceptance
 	GuardLatches GuardLatches // per-unit dedup array for guard assistance [04 §3.5]
 
 	// Typed per-unit state introduced for P0-I02 real pipeline [04 §1.3][04 §4][06][GAP T15].
@@ -133,6 +135,10 @@ type World struct {
 	nextDefID uint16
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	liveCounters [10]int
+
+	// COB loader for per-unit VM creation [04 §4.1][P1-I01].
+	cobFS     vfs.FSOps
+	cobLoader *cob.CachedLoader
 }
 
 // New creates a World with given usable capacity (number of usable slots).
@@ -168,6 +174,61 @@ func NewSliced(maxDefs int, cat *content.Catalog) *World {
 		nextDefID: 1,
 	}
 	return w
+}
+
+// SetCOBSource installs the VFS-backed COB loader for per-unit VM creation [04 §4.1][P1-I01].
+// When set, every successful Create/CreateWithForcedSlot will load the unit's Program via cob.Load
+// (or cached lookup) and create a VM with statics zero-init, piece count from program, 8 threads [04 §4.2] C13,
+// and immediately start the Create script if present (hide muzzle etc.) [04 §4.1][GAP T15].
+// The loader is used for all future units, including those created by construction.
+func (w *World) SetCOBSource(fs vfs.FSOps, loader *cob.CachedLoader) {
+	if w == nil {
+		return
+	}
+	w.cobFS = fs
+	w.cobLoader = loader
+}
+
+// attachCOB loads the unit's Program and binds a VM with Create started [04 §4.1][P1-I01].
+func (w *World) attachCOB(u *Unit) {
+	if w == nil || u == nil || u.Def == nil {
+		return
+	}
+	if u.GetScript() != nil {
+		return // already has VM [P1-I01]
+	}
+	var prog *cob.Program
+	var found bool
+	if w.cobLoader != nil && w.cobFS != nil {
+		// Try via loader (cached, case-insensitive) [04 §4.1]
+		if p, ok, _ := w.cobLoader.Load(w.cobFS, u.Def.UnitName); ok && p != nil {
+			prog = p
+			found = true
+		} else if p, ok, _ := w.cobLoader.Load(w.cobFS, u.Def.CanonicalKey); ok && p != nil {
+			prog = p
+			found = true
+		}
+	}
+	if !found {
+		// Empty fallback program: zero statics, zero pieces, no scripts [04 §4.2][P1-I01].
+		// Keep drain path consistent; Create is no-op.
+		prog = &cob.Program{
+			Code:        []uint32{},
+			Scripts:     map[string]int{},
+			Pieces:      []string{},
+			Statics:     0,
+			ScriptsByID: []int{},
+		}
+	}
+	vm := cob.NewVM(prog)
+	u.SetScript(vm)
+	// Run Create immediately with wake flag (delta 0 barrier) so hide/show etc. are visible before first snapshot [04 §4.1][GAP T15].
+	if prog != nil {
+		if _, ok := prog.Scripts["Create"]; ok {
+			_ = vm.StartByName("Create", nil)
+			vm.Drain(0) // immediate wake-flag drain [GAP T15] C17
+		}
+	}
 }
 
 // IsSliced reports whether the world uses per-player slicing [P0-16 §3.1].
@@ -284,6 +345,7 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 		}
 		installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions into Slots [P0-I04]
 		w.units[idx] = u
+		w.attachCOB(u) // per-unit VM with statics/pieces, Create run [04 §4.1][P1-I01]
 		if player >= 0 && player < 10 {
 			w.liveCounters[player]++
 		}
@@ -337,6 +399,7 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 	}
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
 	w.units[idx] = u
+	w.attachCOB(u) // [P1-I01] VM per-unit
 	if w.OnCreate != nil {
 		w.OnCreate(h, u)
 	}
@@ -413,6 +476,7 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		}
 		installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
 		w.units[idx] = u
+		w.attachCOB(u) // [P1-I01] VM per-unit for forced slot
 		w.liveCounters[player]++
 		if w.OnCreate != nil {
 			w.OnCreate(h, u)
@@ -446,6 +510,7 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 	}
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
 	w.units[idx] = u
+	w.attachCOB(u) // [P1-I01] VM per-unit for forced unsliced
 	if w.OnCreate != nil {
 		w.OnCreate(h, u)
 	}

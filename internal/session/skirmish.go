@@ -186,7 +186,7 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 		return nil, err
 	}
 	// 4. create retail sliced unit pool [P0-16]
-	unitsWorld, err := newSlicedWorld(cat)
+	unitsWorld, err := newSlicedWorldWithCOB(cat, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -271,6 +271,8 @@ func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (
 	if err := SkirmishBattleEntry(s, cfg, m, nil); err != nil {
 		return nil, err
 	}
+	// Ensure COB VMs for all units (load via VFS, statics zero-init, piece count from program, Create run) [04 §4.1][P1-I01]
+	ensureCOBForAll(s, fs)
 	// 8. movement state and visibility state for new units
 	ensureMovementForAll(s)
 	publishVisibilityForAll(s)
@@ -451,13 +453,19 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 	// Fixture uses sliced when possible, otherwise fallback to unsliced 600 for tiny catalogs
 	var unitsWorld *units.World
 	if len(cat.Units) > 0 {
-		if w, err := newSlicedWorld(cat); err == nil {
+		if w, err := newSlicedWorldWithCOB(cat, fs); err == nil {
 			unitsWorld = w
 		} else {
 			unitsWorld = units.New(600, cat)
+			if fs != nil {
+				unitsWorld.SetCOBSource(fs, globalCobLoader)
+			}
 		}
 	} else {
 		unitsWorld = units.New(600, cat)
+		if fs != nil {
+			unitsWorld.SetCOBSource(fs, globalCobLoader)
+		}
 	}
 	s := &Session{
 		Catalog:  cat,
@@ -537,6 +545,7 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 	if err := SkirmishBattleEntry(s, cfg, m, nil); err != nil {
 		return nil, err
 	}
+	ensureCOBForAll(s, fs)
 	if s.World != nil && s.Movement != nil {
 		for _, u := range s.Units.Iter() {
 			s.Movement.EnsureUnit(u)

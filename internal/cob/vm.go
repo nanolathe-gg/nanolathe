@@ -115,6 +115,24 @@ type axisAnim struct {
 	spinActive bool
 }
 
+// Exported anim save types for session/save persistence [04 §4.6][04 §4.2] P1-I01.
+// These mirror axisAnim/pieceAnim but are exported for codec.
+type AxisAnimSave struct {
+	MoveTarget int32
+	MoveSpeed  int32
+	MoveBusy   bool
+	TurnTarget uint16
+	TurnSpeed  int32
+	TurnBusy   bool
+	SpinSpeed  int32
+	SpinTarget int32
+	SpinAccel  int32
+	SpinActive bool
+}
+type PieceAnimSave struct {
+	Axes [3]AxisAnimSave
+}
+
 // dispatchKeys holds the 57 dispatched values sorted ascending [04 §4.3] C11.
 // Transcribed verbatim from the [04 §4.3] tables; the binary search uses
 // these sentinels and not a jump table, per the doc's note. Keys are the

@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
+	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
@@ -152,6 +153,26 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 					// Trim to SP
 					if int(th.SP) < len(cobRec.Threads[t].Stack) {
 						cobRec.Threads[t].Stack = cobRec.Threads[t].Stack[:th.SP]
+					}
+				}
+				// Pieces, flags, anims [03 §2.4][04 §4.6][04 §4.3] P1-I01
+				pieces := vm.SnapshotPieces()
+				if len(pieces) > 0 {
+					cobRec.Pieces = make([]save.PieceStateSave, len(pieces))
+					for i, p := range pieces {
+						cobRec.Pieces[i] = save.PieceStateSave{RotX: p.RotX, RotY: p.RotY, RotZ: p.RotZ, TransX: int32(p.Trans[0].Raw()), TransY: int32(p.Trans[1].Raw()), TransZ: int32(p.Trans[2].Raw())}
+					}
+				}
+				if flags := vm.SnapshotFlags(); len(flags) > 0 {
+					cobRec.Flags = append([]uint8(nil), flags...)
+				}
+				if anims := vm.SnapshotAnims(); len(anims) > 0 {
+					cobRec.Anims = make([]save.PieceAnimSave, len(anims))
+					for i, a := range anims {
+						for ax := 0; ax < 3; ax++ {
+							src := a.Axes[ax]
+							cobRec.Anims[i].Axes[ax] = save.AxisAnimSave{MoveTarget: src.MoveTarget, MoveSpeed: src.MoveSpeed, MoveBusy: src.MoveBusy, TurnTarget: src.TurnTarget, TurnSpeed: src.TurnSpeed, TurnBusy: src.TurnBusy, SpinSpeed: src.SpinSpeed, SpinTarget: src.SpinTarget, SpinAccel: src.SpinAccel, SpinActive: src.SpinActive}
+						}
 					}
 				}
 				rec.COB = cobRec
@@ -1169,6 +1190,32 @@ func restoreCOBThreads(vm *cob.VM, rec save.COBRecord) {
 		}
 	}
 	vm.RestoreSnapshot(rec.Statics, threads)
+	// Pieces, flags, anims [03 §2.4][04 §4.6] P1-I01
+	if len(rec.Pieces) > 0 {
+		pieces := make([]model.PieceState, len(rec.Pieces))
+		for i, p := range rec.Pieces {
+			pieces[i].RotX = p.RotX
+			pieces[i].RotY = p.RotY
+			pieces[i].RotZ = p.RotZ
+			pieces[i].Trans[0] = numeric.Fixed(int64(p.TransX))
+			pieces[i].Trans[1] = numeric.Fixed(int64(p.TransY))
+			pieces[i].Trans[2] = numeric.Fixed(int64(p.TransZ))
+		}
+		vm.RestorePieces(pieces)
+	}
+	if len(rec.Flags) > 0 {
+		vm.RestoreFlags(append([]uint8(nil), rec.Flags...))
+	}
+	if len(rec.Anims) > 0 {
+		anims := make([]cob.PieceAnimSave, len(rec.Anims))
+		for i, a := range rec.Anims {
+			for ax := 0; ax < 3; ax++ {
+				src := a.Axes[ax]
+				anims[i].Axes[ax] = cob.AxisAnimSave{MoveTarget: src.MoveTarget, MoveSpeed: src.MoveSpeed, MoveBusy: src.MoveBusy, TurnTarget: src.TurnTarget, TurnSpeed: src.TurnSpeed, TurnBusy: src.TurnBusy, SpinSpeed: src.SpinSpeed, SpinTarget: src.SpinTarget, SpinAccel: src.SpinAccel, SpinActive: src.SpinActive}
+			}
+		}
+		vm.RestoreAnims(anims)
+	}
 }
 
 func createVMForRestore(statics []int32) *cob.VM {

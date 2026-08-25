@@ -77,7 +77,7 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 	if err != nil {
 		return nil, err
 	}
-	unitsWorld, err := newSlicedWorld(cat)
+	unitsWorld, err := newSlicedWorldWithCOB(cat, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -122,6 +122,7 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 	if err := BattleEntry(s, m, nil); err != nil {
 		return nil, err
 	}
+	ensureCOBForAll(s, fs)
 	ensureMovementForAll(s)
 	publishVisibilityForAll(s)
 	// AI managers for computer players [P0-I12]
@@ -254,6 +255,10 @@ func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficul
 	s.Econ.SeedDeadlines(0)
 	if err := fixtureBattleEntry(s, m, nil); err != nil {
 		return nil, err
+	}
+	if s.Units != nil && fs != nil {
+		s.Units.SetCOBSource(fs, globalCobLoader)
+		ensureCOBForAll(s, fs)
 	}
 	if s.World != nil && s.Movement == nil {
 		grid := movement.NewOccupancyGrid()

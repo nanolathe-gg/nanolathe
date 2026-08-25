@@ -9,6 +9,9 @@ package cob
 import (
 	"encoding/binary"
 	"fmt"
+	"strings"
+
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // Program is an immutable compiled script definition [PLAN_06 cob] [fmt cob].
@@ -229,4 +232,70 @@ func Load(data []byte) (*Program, error) {
 		Statics:     int(numStatics),
 		ScriptsByID: byID,
 	}, nil
+}
+
+// LoadFromFS loads a compiled script for unitName via VFS [fmt cob] [04 §4.1].
+// It tries logical paths scripts/<unitName>.cob case-insensitively (VFS cleanPath is case-folded).
+// Returns (nil, false, nil) when no COB exists for the unit, so callers can create an empty fallback VM without error.
+// An existing file that fails to parse returns (nil, true, error).
+func LoadFromFS(fs vfs.FSOps, unitName string) (*Program, bool, error) {
+	if fs == nil || strings.TrimSpace(unitName) == "" {
+		return nil, false, nil
+	}
+	// VFS is case-insensitive via cleanPath lowercasing; use lowercased logical path [vfs/path.go].
+	name := strings.TrimSpace(unitName)
+	// Try canonical lower form; VFS will fold again, but keep deterministic.
+	candidates := []string{
+		"scripts/" + strings.ToLower(name) + ".cob",
+		"scripts/" + name + ".cob",
+		"scripts/" + strings.ToUpper(name) + ".cob",
+	}
+	for _, p := range candidates {
+		data, err := fs.ReadFileLimit(p, 4<<20) // 4 MiB limit [fmt cob] COB size bounded
+		if err != nil {
+			continue
+		}
+		prog, err := Load(data)
+		if err != nil {
+			return nil, true, fmt.Errorf("cob: %s: %w", p, err)
+		}
+		return prog, true, nil
+	}
+	return nil, false, nil
+}
+
+// CachedLoader memoizes per-unit Programs to avoid repeated VFS reads and reparse [PLAN_06].
+type CachedLoader struct {
+	cache map[string]*Program
+}
+
+func NewCachedLoader() *CachedLoader { return &CachedLoader{cache: make(map[string]*Program)} }
+
+func (c *CachedLoader) Load(fs vfs.FSOps, unitName string) (*Program, bool, error) {
+	if c == nil {
+		return LoadFromFS(fs, unitName)
+	}
+	ck := strings.ToLower(strings.TrimSpace(unitName))
+	if prog, ok := c.cache[ck]; ok {
+		if prog == nil {
+			return nil, false, nil
+		}
+		return prog, true, nil
+	}
+	prog, found, err := LoadFromFS(fs, unitName)
+	if err != nil {
+		return nil, true, err
+	}
+	if found && prog != nil {
+		if c.cache == nil {
+			c.cache = make(map[string]*Program)
+		}
+		c.cache[ck] = prog
+		return prog, true, nil
+	}
+	if c.cache == nil {
+		c.cache = make(map[string]*Program)
+	}
+	c.cache[ck] = nil // negative cache for missing script
+	return nil, false, nil
 }

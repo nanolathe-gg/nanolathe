@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -20,6 +21,10 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
+
+// cobLoader is the per-process cache for COB programs [04 §4.1][P1-I01].
+// It is shared across sessions but never mutated during a tick (I1).
+var globalCobLoader = cob.NewCachedLoader()
 
 // strictCatalog compiles a single immutable catalog from the VFS. It never
 // fabricates an empty fallback. Fixture constructors must explicitly supply a
@@ -133,6 +138,69 @@ func newSlicedWorld(cat *content.Catalog) (*units.World, error) {
 		return nil, fmt.Errorf("session: pool not sliced [P0-16]")
 	}
 	return w, nil
+}
+
+// newSlicedWorldWithCOB creates the sliced pool and installs the COB loader [04 §4.1][P1-I01].
+func newSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps) (*units.World, error) {
+	w, err := newSlicedWorld(cat)
+	if err != nil {
+		return nil, err
+	}
+	if fs != nil {
+		w.SetCOBSource(fs, globalCobLoader)
+	} else {
+		w.SetCOBSource(nil, globalCobLoader)
+	}
+	return w, nil
+}
+
+// ensureCOBForAll ensures every live unit has a VM, loading via VFS when possible [04 §4.1][P1-I01].
+// It is idempotent; units already with a VM are skipped. For missing COB files it creates an empty fallback VM.
+func ensureCOBForAll(s *Session, fs vfs.FSOps) {
+	if s == nil || s.Units == nil {
+		return
+	}
+	if fs != nil && s.Units != nil {
+		// Ensure world has loader for future units
+		s.Units.SetCOBSource(fs, globalCobLoader)
+	}
+	for _, u := range s.Units.IterSliced() {
+		if u == nil || !u.Alive {
+			continue
+		}
+		if u.GetScript() != nil {
+			continue
+		}
+		// Try to load via FS; fallback to empty program is handled by attachCOB via loader
+		// If loader not set, create empty VM directly
+		if fs == nil {
+			prog := &cob.Program{Code: []uint32{}, Scripts: map[string]int{}, Pieces: []string{}, Statics: 0, ScriptsByID: []int{}}
+			vm := cob.NewVM(prog)
+			u.SetScript(vm)
+			continue
+		}
+		// Use world's attachCOB path which already handles loading; but since unit already exists,
+		// we call attachCOB directly
+		s.Units.SetCOBSource(fs, globalCobLoader)
+		// Force attach via private helper: create VM via world's loader
+		// We call attachCOB by temporarily using the world's method via direct call
+		// Since attachCOB is private, we replicate logic here
+		var prog *cob.Program
+		if p, found, _ := globalCobLoader.Load(fs, u.Def.UnitName); found && p != nil {
+			prog = p
+		} else if p, found, _ := globalCobLoader.Load(fs, u.Def.CanonicalKey); found && p != nil {
+			prog = p
+		}
+		if prog == nil {
+			prog = &cob.Program{Code: []uint32{}, Scripts: map[string]int{}, Pieces: []string{}, Statics: 0, ScriptsByID: []int{}}
+		}
+		vm := cob.NewVM(prog)
+		u.SetScript(vm)
+		if _, ok := prog.Scripts["Create"]; ok {
+			_ = vm.StartByName("Create", nil)
+			vm.Drain(0)
+		}
+	}
 }
 
 // createAndBindServices creates every required authoritative service and binds
