@@ -44,6 +44,7 @@ type retailBattleHUD struct {
 	optionsWin  *gui.Window
 	exitWin     *gui.Window
 	confirmWin  *gui.Window
+	modalFont   *formats.GAFEntry
 	pausedFrame *formats.GAFFrame
 
 	panel *hud.Panel
@@ -137,6 +138,18 @@ func loadRetailBattleHUD(fs *vfs.FS, sess *session.Session, cat *content.Catalog
 	if err != nil {
 		return nil, fmt.Errorf("battle HUD: yesorno.gui: %w [07 \"Tab options menu and manual exit\"]", err)
 	}
+	modalFontGAF, err := formats.LoadGAFFile(fs, "anims/hattfont12.gaf")
+	if err != nil {
+		return nil, fmt.Errorf("battle HUD: hattfont12.gaf: %w [07 §4]", err)
+	}
+	if len(modalFontGAF.Entries) == 0 || len(modalFontGAF.Entries[0].Frames) == 0 {
+		return nil, fmt.Errorf("battle HUD: hattfont12.gaf has no glyph entry [07 §4]")
+	}
+	// EXITMENU and YESORNO are opened with the executable's 0x1000 placement
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// then centers them in the 512-pixel playfield to the right of the rail.
+	placeBattleModal(exitWin, 640, 480)
+	placeBattleModal(confirmWin, 640, 480)
 	titles, err := formats.LoadGAFFile(fs, "anims/igtitles.gaf")
 	if err != nil {
 		return nil, fmt.Errorf("battle HUD: igtitles.gaf: %w [07 §11]", err)
@@ -149,12 +162,31 @@ func loadRetailBattleHUD(fs *vfs.FS, sess *session.Session, cat *content.Catalog
 		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, pal: pal,
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
-		optionsGAF: optionsGAF, optionsWin: optionsWin, exitWin: exitWin, confirmWin: confirmWin, pausedFrame: pausedFrame,
+		optionsGAF: optionsGAF, optionsWin: optionsWin, exitWin: exitWin, confirmWin: confirmWin,
+		modalFont: &modalFontGAF.Entries[0], pausedFrame: pausedFrame,
 		panel: hud.NewPanel(0x04, 640, 480, nil), fs: fs,
 		pages:      make(map[string]*formats.GAF),
 		windows:    make(map[string]*gui.Window),
 		pageCounts: make(map[string]int),
 	}, nil
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// negotiated logical display size. The battle rail occupies x=0..127; modal
+// centering therefore uses the remaining width and adds 128 [07 "Tab options
+// menu and manual exit"].
+func placeBattleModal(window *gui.Window, screenW, screenH int) {
+	if window == nil {
+		return
+	}
+	x := (screenW-128-int(window.Rect.W))/2 + 128
+	y := (screenH - int(window.Rect.H)) / 2
+	window.Rect.X, window.Rect.Y = int32(x), int32(y)
+	window.OriginX, window.OriginY = int32(x), int32(y)
+	if len(window.Gadgets) != 0 {
+		window.Gadgets[0].Rect.X = int32(x)
+		window.Gadgets[0].Rect.Y = int32(y)
+	}
 }
 
 func battleFrame(g *formats.GAF, name string) (*formats.GAFFrame, error) {
@@ -275,29 +307,30 @@ func (h *retailBattleHUD) drawBattleMenu(c *client.Client, b *battleSession) {
 	}
 }
 
-// drawGUIWindow composes an authored modal window at its .GUI coordinates.
-// The window background uses its declared panel art (BackTile in retail),
-// while controls retain their authored rectangles and GAF resolution order.
+// drawGUIWindow composes an authored modal into its retail private surface.
+// Every write is clipped to the window rectangle before that surface is
+// presented, and buttons take the runtime dimensions of their selected art.
 func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, page *formats.GAF, title string) {
 	if window == nil {
 		return
 	}
+	clip := window.Rect
 	h.drawWindowBackground(c, window, page)
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.Kind == gui.KindFont || gad.Kind == gui.KindPanel {
 			continue
 		}
-		r := window.PlacedRect(i)
+		r := h.modalGadgetRect(window, i, page)
 		pressed := false
 		if c.Input() != nil && c.Input().Mouse != nil && c.Input().Mouse.Held(input.MouseButtonLeft) {
 			pressed = guiRectContains(r, int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y))
 		}
 		frame := h.modalGadgetFrame(gad, page, pressed, gad.GrayedOut != 0)
 		if frame != nil {
-			if int(frame.Width) != int(r.W) || int(frame.Height) != int(r.H) {
-				c.UIBlitFrameScaled(frame, int(r.X), int(r.Y), int(r.W), int(r.H))
+			if gad.Kind != gui.KindButton && (int(frame.Width) != int(r.W) || int(frame.Height) != int(r.H)) {
+				c.UIBlitFrameScaledClipped(frame, int(r.X), int(r.Y), int(r.W), int(r.H), int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
 			} else {
-				c.UIBlit(frame, int(r.X), int(r.Y))
+				c.UIBlitClipped(frame, int(r.X), int(r.Y), int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
 			}
 		}
 		text := gad.Text
@@ -306,8 +339,27 @@ func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, pa
 		} else if gad.Kind == gui.KindButton && len(gad.Labels) != 0 {
 			text = gad.Labels[0]
 		}
-		if text != "" && (gad.Kind == gui.KindButton || gad.Kind == gui.KindLabel || gad.Kind == gui.KindText) {
-			c.UITextWidth(h.guiFont, text, int(r.X)+3, int(r.Y)+(int(r.H)-int(h.guiFont.Height))/2, int(r.W)-6, h.guiColor(byte(gad.ColorF)))
+		if text != "" && h.modalFont != nil && (gad.Kind == gui.KindButton || gad.Kind == gui.KindLabel || gad.Kind == gui.KindText) {
+			textWidth := retailGAFTextWidth(h.modalFont, text)
+			x := int(r.X)
+			switch {
+			case gad.Attribs&1 != 0:
+				x += 3
+			case gad.Attribs&4 != 0:
+				x = int(r.X+r.W) - textWidth - 3
+				if x < int(r.X) {
+					x = int(r.X)
+				}
+			case gad.Attribs&2 != 0:
+				x += (int(r.W)-1-textWidth)/2 + 1
+			default:
+				x += 3
+			}
+			if pressed {
+				x += boolInt(gad.Attribs&1 != 0 || gad.Attribs&2 != 0)
+			}
+			y := retailTextPenY(gad, r, retailGAFTextHeight(h.modalFont))
+			drawRetailGAFTextClipped(c, h.modalFont, text, x, y, int(r.W), int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
 		}
 	}
 }
@@ -316,30 +368,77 @@ func (h *retailBattleHUD) drawWindowBackground(c *client.Client, window *gui.Win
 	if window == nil || window.Rect.W <= 0 || window.Rect.H <= 0 {
 		return
 	}
-	name := window.Header.Panel
-	if name == "" {
-		name = "BackTile"
-	}
-	var frame *formats.GAFFrame
-	for _, gaf := range []*formats.GAF{page, h.intGAF, h.oldMain, h.common} {
-		if gaf == nil {
-			continue
-		}
-		if entry, ok := gaf.Find(name); ok && len(entry.Frames) != 0 {
-			frame = entry.Frames[0].Frame
-			if frame != nil {
-				break
-			}
-		}
+	frame := h.modalArtFrame(window.Header.Panel, page)
+	if frame == nil {
+		// YESORNO.GUI has no usable PANEL value. Retail does not treat that as
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// lookup after the file-specific and GUI-context searches.
+		frame = h.modalArtFrame("BackTile", page)
 	}
 	if frame == nil || frame.Width == 0 || frame.Height == 0 {
 		return
 	}
 	for y := int(window.Rect.Y); y < int(window.Rect.Y+window.Rect.H); y += int(frame.Height) {
 		for x := int(window.Rect.X); x < int(window.Rect.X+window.Rect.W); x += int(frame.Width) {
-			c.UIBlit(frame, x, y)
+			c.UIBlitClipped(frame, x, y, int(window.Rect.X), int(window.Rect.Y), int(window.Rect.W), int(window.Rect.H))
 		}
 	}
+}
+
+func (h *retailBattleHUD) modalArtFrame(name string, page *formats.GAF) *formats.GAFFrame {
+	if name == "" {
+		return nil
+	}
+	for _, gaf := range []*formats.GAF{page, h.intGAF, h.oldMain, h.common} {
+		if gaf == nil {
+			continue
+		}
+		if entry, ok := gaf.Find(name); ok && len(entry.Frames) != 0 && entry.Frames[0].Frame != nil {
+			return entry.Frames[0].Frame
+		}
+	}
+	return nil
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Stock button selection replaces the authored width/height with the chosen
+// frame dimensions (YESORNO's 95x20 choices therefore become 96x20).
+func (h *retailBattleHUD) modalGadgetRect(window *gui.Window, index int, page *formats.GAF) gui.Rect {
+	if window == nil || index < 0 || index >= len(window.Gadgets) {
+		return gui.Rect{}
+	}
+	r := window.PlacedRect(index)
+	gad := window.Gadgets[index]
+	if gad.Kind == gui.KindButton {
+		if frame := h.modalGadgetFrame(gad, page, false, gad.GrayedOut != 0); frame != nil {
+			r.W = int32(frame.Width)
+			r.H = int32(frame.Height)
+		}
+	}
+	return r
+}
+
+func (h *retailBattleHUD) modalPage(window *gui.Window) *formats.GAF {
+	if h != nil && window == h.optionsWin {
+		return h.optionsGAF
+	}
+	return nil
+}
+
+func (h *retailBattleHUD) modalButtonAt(window *gui.Window, x, y int32) int {
+	if h == nil || window == nil {
+		return -1
+	}
+	page := h.modalPage(window)
+	for i, gad := range window.Gadgets {
+		if i == 0 || gad.Kind != gui.KindButton || gad.Active == 0 || gad.GrayedOut != 0 {
+			continue
+		}
+		if guiRectContains(h.modalGadgetRect(window, i, page), x, y) {
+			return i
+		}
+	}
+	return -1
 }
 
 // modalGadgetFrame keeps modal art within the window's own GAF and the common

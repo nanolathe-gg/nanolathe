@@ -140,8 +140,11 @@ func FoldRootAngles(st []PieceState, root int, heading, pitch, bank uint16) {
 	if root < 0 || root >= len(st) {
 		return
 	}
-	st[root].RotZ += bank    // Z = bank [03 §2.4] C24
-	st[root].RotY += heading // Y = heading [03 §2.4] C24
+	st[root].RotZ += bank // Z = bank [03 §2.4] C24
+	// Heading increases toward +X (east) from north (+Z) per [03 §2.4] and [fmt 3do] "Model facing is −Z" note:
+	// Y rotation positive is CCW (east→north) per applyChain, but engine heading increases clockwise (north→east) [03 §2.4] C21.
+	// Fold as -heading (65536-heading) so heading 90 east (+X) rotates north (+Z) → east (+X) clockwise.
+	st[root].RotY -= heading // Y = -heading [03 §2.4] C24 (retail clockwise)
 	st[root].RotX += pitch   // X = pitch [03 §2.4] C24
 }
 

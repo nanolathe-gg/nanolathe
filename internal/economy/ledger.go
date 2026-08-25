@@ -72,6 +72,13 @@ type Player struct {
 	Helper1Calls         int // diagnostic: helper1 invocations, never touches stock [05]
 	Helper2Calls         int // diagnostic: helper2 invocations, never touches stock [05]
 	WeaponRefreshCalls   int // diagnostic: weapon/position refresh sweep, never touches stock [05]
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// int semantics truncated toward zero per I3 (FILD exact for 200..tens of thousands) [I3].
+	StorageBonusEnabled bool       // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	StorageBonus        [2]float32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 }
 
 // Service is the economy service skeleton per plan public API.
@@ -172,6 +179,26 @@ func AddRequested(b *Bucket, amount float32) {
 	b.Requested += amount
 }
 
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// In Go the bonus is kept as float32 with int value; FILD is exact for 200..tens of thousands.
+func (p *Player) InstallStorageBonus(startMetal, startEnergy int) {
+	if p == nil {
+		return
+	}
+	p.StorageBonusEnabled = true // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	if startMetal < 200 {
+		startMetal = 200 // max(value,0xC8) at 0x496E98/0x496EA8 [02_ledger_exact.md §4.1]
+	}
+	if startEnergy < 200 {
+		startEnergy = 200
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	p.StorageBonus[Metal] = float32(int32(startMetal))
+	p.StorageBonus[Energy] = float32(int32(startEnergy))
+}
+
 // RebuildCapacity rebuilds player storage capacities from scratch each pass
 // by summing eligible completed units' authored storage per [05 "Storage capacity"] C14.
 // Eligible means alive and remaining construction fraction zero per [05 "Completed-unit eligibility"].
@@ -199,7 +226,16 @@ func RebuildCapacity(s *Service, w *units.World) {
 		s.Players[owner].Capacity[Energy] += float32(u.Def.EnergyStorage)
 		s.Players[owner].Capacity[Metal] += float32(u.Def.MetalStorage)
 	}
-	// TODO(question): mission-provided storage bonuses per [05 "Storage capacity"] when enable flag is set.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// In Go we add float bonus with int semantics via truncation per I3.
+	for i := range s.Players {
+		if s.Players[i].StorageBonusEnabled {
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			s.Players[i].Capacity[Metal] += s.Players[i].StorageBonus[Metal]
+			s.Players[i].Capacity[Energy] += s.Players[i].StorageBonus[Energy]
+		}
+	}
 }
 
 // SampleExtractorYield wraps world.Terrain.SampleMetal for placement-time metal extraction

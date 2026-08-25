@@ -23,17 +23,18 @@ func TestUnitOrientationFoldOrder(t *testing.T) {
 	}
 	m.Pieces[0].Children = []int{1}
 
-	// Heading Y 90deg (16384) should rotate child (1,0,0) about Y to (0,0,1) [03 §2.4] C21 Ry: x'=c*x - s*z ; z'=s*x + c*z
-	states := BuildUnitPieceStates(m, nil, 16384, 0, 0) // heading 16384→Y, pitch 0→X, bank 0→Z [03 §2.4] C24
-	if states[0].RotY != 16384 || states[0].RotX != 0 || states[0].RotZ != 0 {
-		t.Fatalf("fold heading→Y got Y=%d X=%d Z=%d", states[0].RotY, states[0].RotX, states[0].RotZ)
+	// Heading Y 90deg (16384) clockwise north→east per [03 §2.4] C24: heading increases toward +X, Y rotation is CCW, so fold as -heading.
+	// child (1,0,0) east with heading 90 east should go to (0,0,-1) south (clockwise) not north. The Y rotation formula is CCW, heading is clockwise, so RotY = -16384 = 49152.
+	states := BuildUnitPieceStates(m, nil, 16384, 0, 0) // heading 16384→Y (as -16384), pitch 0→X, bank 0→Z [03 §2.4] C24
+	if states[0].RotY != 49152 || states[0].RotX != 0 || states[0].RotZ != 0 {
+		t.Fatalf("fold heading→Y got Y=%d X=%d Z=%d want 49152", states[0].RotY, states[0].RotX, states[0].RotZ)
 	}
 	tr := model.Compose(m, states, 1)
-	// child world origin before world pos = root chain: child translate rotated by root Y 90
-	// Expected: (1,0,0) Ry90 -> (0,0,1) = (0,0,65536)
+	// child world origin before world pos = root chain: child translate rotated by root Y -90 (49152)
+	// Expected: (1,0,0) Ry270 -> (0,0,-1) = (0,0,-65536) clockwise east→south
 	expX := numeric.Fixed(0)
 	expY := numeric.Fixed(0)
-	expZ := numeric.Fixed(65536)
+	expZ := numeric.Fixed(-65536)
 	if tr.Origin[0] != expX || tr.Origin[1] != expY || tr.Origin[2] != expZ {
 		t.Fatalf("heading Y 90 fold: got %v want [%d %d %d]", tr.Origin, expX, expY, expZ)
 	}
@@ -102,8 +103,8 @@ func TestUnitOrientationFoldOrder(t *testing.T) {
 		t.Fatalf("lerp pos half: got %d want 32768", draw.LerpPos[0])
 	}
 	// States should reflect cur heading/pitch not interpolated
-	if draw.PieceStates[m.Root].RotY != 16384 || draw.PieceStates[m.Root].RotX != 16384 {
-		t.Fatalf("angles interpolated: got Y=%d X=%d want 16384 each", draw.PieceStates[m.Root].RotY, draw.PieceStates[m.Root].RotX)
+	if draw.PieceStates[m.Root].RotY != 49152 || draw.PieceStates[m.Root].RotX != 16384 {
+		t.Fatalf("angles interpolated: got Y=%d X=%d want 49152/16384", draw.PieceStates[m.Root].RotY, draw.PieceStates[m.Root].RotX)
 	}
 	// Also verify manual expected for combined Y+X: (1,0,0) with Y90+X90? Compute manually via Compose vs hand
 	// Use handCompose logic: our model.Compose already implements Z→X→Y with round-to-nearest NOT fixed tables [03 §2.4] C21

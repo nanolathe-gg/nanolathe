@@ -429,7 +429,7 @@ func (c *Client) drawUnitModelDirect(v snapshot.UnitView, sx, sy int32) bool {
 	}
 	if root >= 0 {
 		states[root].rotZ += v.Bank
-		states[root].rotY += v.Heading
+		states[root].rotY -= v.Heading // heading clockwise vs Y CCW [03 §2.4] C21
 		states[root].rotX += v.Pitch
 	}
 	ux, uy, uz := int32(v.X>>16), int32(v.Y>>16), int32(v.Z>>16)
@@ -846,7 +846,7 @@ func (c *Client) collectUnitTris(v snapshot.UnitView, useShade bool) ([]screenTr
 	}
 	if root >= 0 {
 		states[root].rotZ += v.Bank
-		states[root].rotY += v.Heading
+		states[root].rotY -= v.Heading // heading clockwise vs Y CCW [03 §2.4] C21
 		states[root].rotX += v.Pitch
 	}
 	ux, uy, uz := int32(v.X>>16), int32(v.Y>>16), int32(v.Z>>16)

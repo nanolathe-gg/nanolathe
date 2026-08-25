@@ -93,6 +93,42 @@ func drawRetailGAFText(c *client.Client, font *formats.GAFEntry, text string, x,
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// draws the same opaque glyphs into the window's private surface, which clips
+// glyph bearings and text that extends beyond the authored window [07 §4].
+func drawRetailGAFTextClipped(c *client.Client, font *formats.GAFEntry, text string, x, y, maxWidth, clipX, clipY, clipW, clipH int) {
+	if c == nil || font == nil {
+		return
+	}
+	baselineHeight := retailGAFBaselineHeight(font)
+	remaining := maxWidth
+	for i := 0; i < len(text); i++ {
+		code := text[i]
+		if code == 0 {
+			return
+		}
+		frame := retailGAFGlyph(font, code)
+		if frame == nil {
+			continue
+		}
+		advance := int(frame.Width)
+		if remaining >= 0 && remaining < advance {
+			return
+		}
+		if code != 0x20 {
+			c.UIBlitClipped(frame,
+				x-int(frame.XOffset),
+				y-(int(frame.YOffset)-baselineHeight),
+				clipX, clipY, clipW, clipH,
+			)
+		}
+		x += advance
+		if remaining >= 0 {
+			remaining -= advance
+		}
+	}
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // shade level: zero routes each glyph to the ordinary frame blitter
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // the glyph through PALETTE.LHT. Only the loading screen's stage labels pass a

@@ -5,8 +5,36 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/session"
 )
+
+func TestPlaceBattleModalCentersOverRetailPlayfield(t *testing.T) {
+	tests := []struct {
+		name       string
+		w, h, x, y int32
+	}{
+		{name: "exit menu", w: 150, h: 155, x: 309, y: 162},
+		{name: "yes or no", w: 400, h: 100, x: 184, y: 190},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			window := &gui.Window{
+				Rect:    gui.Rect{X: 7, Y: 9, W: test.w, H: test.h, RawX: 7, RawY: 9},
+				OriginX: 7,
+				OriginY: 9,
+				Gadgets: []gui.Gadget{{Rect: gui.Rect{X: 7, Y: 9, W: test.w, H: test.h}}},
+			}
+			placeBattleModal(window, 640, 480)
+			if window.Rect.X != test.x || window.Rect.Y != test.y {
+				t.Fatalf("origin = (%d,%d), want (%d,%d)", window.Rect.X, window.Rect.Y, test.x, test.y)
+			}
+			if window.Rect.RawX != 7 || window.Rect.RawY != 9 {
+				t.Fatalf("authored origin was discarded: raw=(%d,%d)", window.Rect.RawX, window.Rect.RawY)
+			}
+		})
+	}
+}
 
 func TestBattleMenuPauseAndResume(t *testing.T) {
 	b := &battleSession{sess: &session.Session{Clock: &clock.State{}}, menuPressed: -1}

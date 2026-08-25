@@ -735,11 +735,13 @@ var (
 // Version 2 adds full continuation per P0-I11 [08 "Save"] [01 §6] [05][04].
 // Version 3 adds COB piece transforms, anims, and flags per P1-I01 [04 §4.2][04 §4.6][04 §4.3].
 // Version 4 adds ground steering state per [04 §8.1] C20 C21 [ON-12].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 
-const StateV1VersionConst uint32 = 4
+const StateV1VersionConst uint32 = 5
 const StateV1Version1 uint32 = 1
 const StateV1Version2 uint32 = 2
 const StateV1Version3 uint32 = 3
+const StateV1Version4 uint32 = 4
 
 // UnitRecord is one slot-indexed unit record, canonically ordered by slot
 // ascending for determinism (I1) [01 §6.1] [PLAN_14 C18]. Reconstruction uses
@@ -977,6 +979,11 @@ type EconomyPlayerRecord struct {
 	WeaponRefreshCalls  int32
 	ReferencePlayer     int32
 	SensorShareCalls    int32
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Retail identity +0x149 bit0 enable, +0x37/+0x38 ints max(value,200) via FILD/FSTP at +0xDC/+0xE0.
+	StorageBonusEnabled bool    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	StorageBonusMetal   float32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	StorageBonusEnergy  float32 // +0x37/+0xDC max(startEnergy,200)
 }
 
 // BucketRecord mirrors economy.Bucket [05].
@@ -1480,6 +1487,11 @@ func MarshalStateV1(s *StateV1) []byte {
 			}
 			binaryWriteInt32(&buf, pl.ReferencePlayer)
 			binaryWriteInt32(&buf, pl.SensorShareCalls)
+			if ver >= 5 {
+				buf.WriteByte(boolToByte(pl.StorageBonusEnabled))
+				binaryWriteUint32(&buf, math.Float32bits(pl.StorageBonusMetal))
+				binaryWriteUint32(&buf, math.Float32bits(pl.StorageBonusEnergy))
+			}
 		}
 		binaryWriteUint32(&buf, uint32(len(s.Economy.UnitBuckets)))
 		for _, ub := range s.Economy.UnitBuckets {
@@ -2641,6 +2653,21 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 			if err := binary.Read(r, binary.LittleEndian, &ssc); err != nil {
 				return nil, err
 			}
+			var sbe bool
+			var sbm, sbe32 uint32
+			if ver >= 5 {
+				b, err := r.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				sbe = byteToBool(b)
+				if err := binary.Read(r, binary.LittleEndian, &sbm); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &sbe32); err != nil {
+					return nil, err
+				}
+			}
 			pl = EconomyPlayerRecord{
 				Exists: byteToBool(existsB), ControllerState: ctrlB, IsObserver: byteToBool(obsB),
 				StockMetal: math.Float32frombits(sm), StockEnergy: math.Float32frombits(se),
@@ -2657,6 +2684,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 				ArchivedEnergy:      BucketRecord{Production: math.Float32frombits(aeProd), Requested: math.Float32frombits(aeReq), Accepted: math.Float32frombits(aeAcc), Carry: math.Float32frombits(aeCarry)},
 				StatusHalfwordAt144: sh, StatusWordAt140: sw, GameEnded: byteToBool(geB), EndGameCountdown: egc,
 				Helper1Deadline: h1, Helper2Deadline: h2, Helper1Calls: h1c, Helper2Calls: h2c, WeaponRefreshCalls: wrc, ReferencePlayer: rp, SensorShareCalls: ssc,
+				StorageBonusEnabled: sbe, StorageBonusMetal: math.Float32frombits(sbm), StorageBonusEnergy: math.Float32frombits(sbe32),
 			}
 			econ.Players[i] = pl
 		}

@@ -142,12 +142,15 @@ func (c *Client) drawUnitOriented(v snapshot.UnitView, sx, sy int32) {
 	if halfH < 4 {
 		halfH = 4
 	}
-	cos, sin := headingCosSin(v.Heading)
-	// Corners of the unrotated rect relative to center; long axis = Z (down).
+	// Heading is clockwise north→east per [03 §2.4] and movement.TestHeadingUsesTAWorldConvention, but screen Y down makes north down (+Y).
+	// Unrotated rect must have north (+Z world) at +Y screen (down) and east (+X) at +X screen (right) per camera.WorldToScreen [03 §2.5].
+	// Apply -heading so positive heading (north→east clockwise) rotates north (+Y) → east (+X) via Y-down screen.
+	cos, sin := headingCosSin(uint16(0 - v.Heading))
+	// Corners of the unrotated rect relative to center; long axis = Z (down) with north at +Y [03 §2.5].
 	type pt struct{ x, y int }
 	pts := [4]pt{}
 	corners := [4][2]int{
-		{-halfW, -halfH}, {halfW, -halfH}, {halfW, halfH}, {-halfW, halfH},
+		{-halfW, halfH}, {halfW, halfH}, {halfW, -halfH}, {-halfW, -halfH},
 	}
 	for i, cnr := range corners {
 		rx, ry := float64(cnr[0]), float64(cnr[1])
@@ -349,17 +352,28 @@ func (c *Client) WorldToScreenPx(x, y, z numeric.Fixed) (int32, int32) {
 // honoring GAF transparency and clipping to the framebuffer [fmt gaf].
 // Presentation only [I6].
 func (c *Client) UIBlit(f *formats.GAFFrame, x, y int) {
+	c.UIBlitClipped(f, x, y, 0, 0, c.width, c.height)
+}
+
+// UIBlitClipped stamps a decoded GAF frame while confining every write to a
+// destination rectangle. Retail GUI windows draw into a private WxH surface
+// before that surface is copied to the framebuffer, so tiled backgrounds,
+// oversized picture gadgets, and glyph overhang cannot escape the window
+// rectangle [07 §4]. Presentation only [I6].
+func (c *Client) UIBlitClipped(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int) {
 	if f == nil {
 		return
 	}
+	minX, minY := max(clipX, 0), max(clipY, 0)
+	maxX, maxY := min(clipX+clipW, c.width), min(clipY+clipH, c.height)
 	for row := 0; row < int(f.Height); row++ {
 		py := y + row
-		if py < 0 || py >= c.height {
+		if py < minY || py >= maxY {
 			continue
 		}
 		for col := 0; col < int(f.Width); col++ {
 			px := x + col
-			if px < 0 || px >= c.width {
+			if px < minX || px >= maxX {
 				continue
 			}
 			b, ok := f.At(col, row)
@@ -427,16 +441,25 @@ func (c *Client) UIBlitAnchor(f *formats.GAFFrame, x, y int) {
 // so the frame is resampled onto the authored gadget rectangle rather than
 // stamped at its own size [07 §4]. Presentation only [I6].
 func (c *Client) UIBlitFrameScaled(f *formats.GAFFrame, x, y, w, h int) {
+	c.UIBlitFrameScaledClipped(f, x, y, w, h, 0, 0, c.width, c.height)
+}
+
+// UIBlitFrameScaledClipped is the private-window-surface form of
+// UIBlitFrameScaled. Sampling still spans the complete destination rectangle;
+// the clip only rejects writes outside the owning GUI surface [07 §4].
+func (c *Client) UIBlitFrameScaledClipped(f *formats.GAFFrame, x, y, w, h, clipX, clipY, clipW, clipH int) {
 	if f == nil || w <= 0 || h <= 0 || f.Width == 0 || f.Height == 0 {
 		return
 	}
+	minX, minY := max(clipX, 0), max(clipY, 0)
+	maxX, maxY := min(clipX+clipW, c.width), min(clipY+clipH, c.height)
 	// Inclusive corner spans: the last destination column samples the last
 	// source column, which is what the quad's corner pairs describe.
 	spanX, spanY := w-1, h-1
 	srcX, srcY := int(f.Width)-1, int(f.Height)-1
 	for dy := 0; dy < h; dy++ {
 		py := y + dy
-		if py < 0 || py >= c.height {
+		if py < minY || py >= maxY {
 			continue
 		}
 		sy := 0
@@ -445,7 +468,7 @@ func (c *Client) UIBlitFrameScaled(f *formats.GAFFrame, x, y, w, h int) {
 		}
 		for dx := 0; dx < w; dx++ {
 			px := x + dx
-			if px < 0 || px >= c.width {
+			if px < minX || px >= maxX {
 				continue
 			}
 			sx := 0

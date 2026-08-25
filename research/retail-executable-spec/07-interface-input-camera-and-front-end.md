@@ -1206,6 +1206,20 @@ commits the requested transition and `CHOICE2` (`No`) returns to the exit
 window. These windows are a SAVE UNDER modal chain: the options window remains
 beneath the exit window, which remains beneath the confirmation window.
 
+The modal layout and raster contract is also established. `ARMOPT.GUI` is
+created with flags `0x800` and retains its authored `(0,128,128,352)` root.
+`EXITMENU.GUI` is created with `0x1800`, and `YESORNO.GUI` with `0x1000`; bit
+`0x1000` makes the GUI initializer replace the authored root origin with its
+modal sentinels and center the window in the playfield to the right of the
+128-pixel rail:
+
+```
+x = (screenWidth - 128 - windowWidth) / 2 + 128
+y = (screenHeight - windowHeight) / 2
+```
+
+**Publication omission:** Historical executable-analysis detail omitted from this public edition.
+
 Pause is represented by a runtime state that suppresses simulation progress
 and causes an `igpaused` title overlay to be drawn. Victory/defeat overlays
 come from the `igtitles` GAF family — handles `igvictory`, `igdefeat`, and

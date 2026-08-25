@@ -60,21 +60,6 @@ func (b *battleSession) menuWindow() *gui.Window {
 	}
 }
 
-func buttonAtWindow(window *gui.Window, x, y int32) int {
-	if window == nil {
-		return -1
-	}
-	for i, gad := range window.Gadgets {
-		if i == 0 || gad.Kind != gui.KindButton || gad.Active == 0 || gad.GrayedOut != 0 {
-			continue
-		}
-		if guiRectContains(window.PlacedRect(i), x, y) {
-			return i
-		}
-	}
-	return -1
-}
-
 // handleBattleMenuInput owns all input while a retail modal is open. Buttons
 // activate once on release-inside the same authored gadget [07 §3].
 func (b *battleSession) handleBattleMenuInput(in *client.InputState, cl *client.Client) {
@@ -96,14 +81,14 @@ func (b *battleSession) handleBattleMenuInput(in *client.InputState, cl *client.
 
 	mx, my := int32(in.Mouse.X), int32(in.Mouse.Y)
 	if in.Mouse.Pressed(input.MouseButtonLeft) {
-		b.menuPressed = buttonAtWindow(b.menuWindow(), mx, my)
+		b.menuPressed = b.hud.modalButtonAt(b.menuWindow(), mx, my)
 		b.menuPressedState = b.menu
 	}
 	if !in.Mouse.Released(input.MouseButtonLeft) {
 		return
 	}
 	window := b.menuWindow()
-	released := buttonAtWindow(window, mx, my)
+	released := b.hud.modalButtonAt(window, mx, my)
 	pressed := b.menuPressed
 	pressedState := b.menuPressedState
 	b.menuPressed = -1

@@ -574,13 +574,9 @@ This produces several important consequences:
 
 ### Storage capacity
 
-At each settlement pass, the engine rebuilds player capacity from scratch by
-summing the energy- and metal-storage contributions of eligible completed
-units. Optional mission/player bonuses are added when their enable flag is set.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-Capacity is single-precision state. It is not an integer total. Destroyed,
-unfinished, or ineligible storage units cease contributing when the next
-player pass recomputes capacity.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 ### Cloak debit
 

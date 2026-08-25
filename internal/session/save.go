@@ -438,6 +438,9 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 				WeaponRefreshCalls:  int32(p.WeaponRefreshCalls),
 				ReferencePlayer:     int32(s.Econ.ReferencePlayer),
 				SensorShareCalls:    int32(s.Econ.SensorShareCalls),
+				StorageBonusEnabled: p.StorageBonusEnabled,
+				StorageBonusMetal:   p.StorageBonus[0],
+				StorageBonusEnergy:  p.StorageBonus[1],
 			}
 			st.Economy.Players[i] = rec
 		}
@@ -1034,6 +1037,9 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 			p.Helper1Calls = int(rec.Helper1Calls)
 			p.Helper2Calls = int(rec.Helper2Calls)
 			p.WeaponRefreshCalls = int(rec.WeaponRefreshCalls)
+			p.StorageBonusEnabled = rec.StorageBonusEnabled
+			p.StorageBonus[0] = rec.StorageBonusMetal
+			p.StorageBonus[1] = rec.StorageBonusEnergy
 			// ReferencePlayer and SensorShareCalls are service-level but we stored per player rec; use first
 			if i == 0 {
 				s.Econ.ReferencePlayer = int(rec.ReferencePlayer)

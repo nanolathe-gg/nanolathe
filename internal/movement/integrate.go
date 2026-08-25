@@ -24,6 +24,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 
 	"github.com/nanolathe/nanolathe/internal/orders"
@@ -58,14 +59,16 @@ type System struct {
 	// the table did not have, for load diagnostics. Order is first-seen.
 	Unresolved []string
 
-	Grid       *OccupancyGrid
-	Scheduler  *path.Scheduler
-	Routes     map[pool.Handle]*Route
-	Steers     map[pool.Handle]*SteerState
-	Collisions map[pool.Handle]*CollisionState
-	Flights    map[pool.Handle]*FlightState
-	profiles   map[pool.Handle]Profile // per-unit resolved movement profile [04 §6.1]
-	sessions   []*path.Session         // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
+	Grid         *OccupancyGrid
+	Scheduler    *path.Scheduler
+	Routes       map[pool.Handle]*Route
+	Steers       map[pool.Handle]*SteerState
+	Collisions   map[pool.Handle]*CollisionState
+	Flights      map[pool.Handle]*FlightState
+	profiles     map[pool.Handle]Profile // per-unit resolved movement profile [04 §6.1]
+	sessions     []*path.Session         // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
+	prevMoveTier map[pool.Handle]int     // cached mover tier per unit for MoveRate edge emission [04 §5.2][GAP T15] C18
+	prevSFXBand  map[pool.Handle]int     // cached setSFXoccupy band per unit for edge emission [04 §5.2][GAP T15] C17 C18
 
 	// world is the units world bound via BindWorld (or via Tick for legacy path).
 	// StepUnit needs it to fetch the *units.Unit for a handle without passing
@@ -111,14 +114,16 @@ type StepResult struct {
 // Route.Publish [04 §7.3] C14.
 func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *System {
 	s := &System{
-		Terrain:    terrain,
-		Fallback:   fallback,
-		Grid:       grid,
-		Routes:     make(map[pool.Handle]*Route),
-		Steers:     make(map[pool.Handle]*SteerState),
-		Collisions: make(map[pool.Handle]*CollisionState),
-		Flights:    make(map[pool.Handle]*FlightState),
-		profiles:   make(map[pool.Handle]Profile),
+		Terrain:      terrain,
+		Fallback:     fallback,
+		Grid:         grid,
+		Routes:       make(map[pool.Handle]*Route),
+		Steers:       make(map[pool.Handle]*SteerState),
+		Collisions:   make(map[pool.Handle]*CollisionState),
+		Flights:      make(map[pool.Handle]*FlightState),
+		profiles:     make(map[pool.Handle]Profile),
+		prevMoveTier: make(map[pool.Handle]int),
+		prevSFXBand:  make(map[pool.Handle]int),
 	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
 	// Use DefaultBase unless overridden [P0-I16]; no longer reads mutable global.
@@ -509,6 +514,80 @@ func headingFromDelta(dx, dz int64) uint16 {
 	return uint16(lo)
 }
 
+// emitMovementCallbacks emits StartMoving/StopMoving/MoveRateN and setSFXoccupy per [04 §5.2][GAP T15] C17 C18.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Must be called after steering/flight integration but before the next slot's clear/commit so the VM sees the walk loops [04 §1.3][01 §4.4].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// We map def MoveRate1/2 via content.UnitDef.MoveRate1/2 (defaults twice MaxVelocity) [02 "Unit record"] [04 §5.2].
+func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
+	if s == nil || u == nil {
+		return
+	}
+	vm := u.GetScript()
+	if vm == nil {
+		return
+	}
+	if s.prevMoveTier == nil {
+		s.prevMoveTier = make(map[pool.Handle]int)
+	}
+	if s.prevSFXBand == nil {
+		s.prevSFXBand = make(map[pool.Handle]int)
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	inhibit := false
+	attached := u.Attachment.Carrier != 0
+	// Magnitude is speed scalar (ground) or 3-D flight speed; ground uses scalar Speed [04 §5.2] C18.
+	// We pass speed for magA and 0 for magZ so both-zero gate is Speed==0 [04 §5.2][GAP T15] C18.
+	magA := speed
+	magZ := int32(0)
+	rate1 := int32(0)
+	rate2 := int32(0)
+	if u.Def != nil {
+		rate1 = u.Def.MoveRate1
+		rate2 = u.Def.MoveRate2
+		// Defaults: twice MaxVelocity when not authored [02 "Unit record"] [04 §5.2].
+		if rate1 == 0 && rate2 == 0 && u.Def.MaxVelocity != 0 {
+			rate1 = u.Def.MaxVelocity * 2
+			rate2 = u.Def.MaxVelocity * 2
+		} else if rate1 == 0 {
+			rate1 = rate2
+		} else if rate2 == 0 {
+			rate2 = rate1
+		}
+	}
+	cat := cob.MoveRateCategory(inhibit, attached, magA, magZ, rate1, rate2) // [04 §5.2][GAP T15] C18
+	prev := s.prevMoveTier[u.Handle]
+	if prev != cat {
+		kinds := cob.MoveRateTransition(prev, cat) // [GAP T15] C18
+		for _, k := range kinds {
+			var name string
+			switch k {
+			case cob.CallbackStartMoving:
+				name = "StartMoving"
+			case cob.CallbackStopMoving:
+				name = "StopMoving"
+			case cob.CallbackMoveRate1:
+				name = "MoveRate1"
+			case cob.CallbackMoveRate2:
+				name = "MoveRate2"
+			case cob.CallbackMoveRate3:
+				name = "MoveRate3"
+			default:
+				continue
+			}
+			cob.StartWithImmediateBarrier(vm, name, nil) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		}
+		s.prevMoveTier[u.Handle] = cat
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	band := MediumBand(s.Terrain, u) // simplified mapping [04 §9.1]; exact overwrite 1→2→3 via wy/wt/wl/mb is TODO(question) for hover
+	prevBand := s.prevSFXBand[u.Handle]
+	if band != prevBand {
+		cob.StartWithImmediateBarrier(vm, "setSFXoccupy", []int32{int32(band)}) // I [GAP T15] C17 exact spelling lower-case s
+		s.prevSFXBand[u.Handle] = band
+	}
+}
+
 // BeginTick builds per-tick shared indexing deterministically ONCE per tick [04 §8.2] C22.
 // The cargo set (units whose Attachment.Carrier != 0) is captured here so all
 // StepUnit calls in this tick observe the same cargo membership [04 §10.2].
@@ -603,10 +682,12 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	if s.tickCarried != nil {
 		if _, isCarried := s.tickCarried[handle]; isCarried {
 			d := s.distToGoal(u)
+			s.emitMovementCallbacks(u, 0) // carried cargo does not drive own mover [04 §10.2]
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 		}
 	} else if u.Attachment.Carrier != 0 {
 		d := s.distToGoal(u)
+		s.emitMovementCallbacks(u, 0)
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 	}
 	// Keep orders queue as authority: only follow route if primary order is Move_Ground-class [task]
@@ -615,7 +696,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		// Also try alternate accessor for session-bound queues
 		if q == nil || (q.LenPrimary() == 0 && q.Head() == nil) {
 			d := s.distToGoal(u)
-			// Stopped unit stays stopped [task]: no movement, no arrival
+			s.emitMovementCallbacks(u, 0) // no order => tier 0 [04 §5.2][GAP T15] C18 ensure StopMoving if was moving
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 		}
 	}
@@ -627,12 +708,14 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	}
 	if head == nil {
 		d := s.distToGoal(u)
+		s.emitMovementCallbacks(u, 0)
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 	}
 	name := orders.DescriptorFor(head.ID).Name
 	if name != "Move_Ground" && name != "VTOL_Move" && name != "QMove" && name != "VTOL_MobileBuild" && name != "MobileBuild" && name != "VTOL_Patrol" && name != "Patrol" {
 		if head.GoalX == 0 && head.GoalZ == 0 && head.GoalY == 0 {
 			d := s.distToGoal(u)
+			s.emitMovementCallbacks(u, 0)
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 		}
 	}
@@ -645,8 +728,10 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		d := s.distToGoal(u)
 		const strictThresh = 2 * 65536
 		if d.Raw() <= strictThresh {
+			s.emitMovementCallbacks(u, 0)
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: true}
 		}
+		s.emitMovementCallbacks(u, 0)
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
 	} else {
 		// Prune(mover pos) [04 §7.3] C15. The stored points carry the half-footprint bias,
@@ -667,6 +752,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 				if d.Raw() <= strictThresh {
 					arrived = true
 				}
+				s.emitMovementCallbacks(u, 0) // arrived => tier 0 [04 §5.2][GAP T15] C18 ensure StopMoving
 				return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
 			}
 			// Still far: direct move to goal.
@@ -676,6 +762,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 				directZ = head.GoalZ
 			} else {
 				arrived := hadRoute && d <= arrivalToleranceWorld
+				s.emitMovementCallbacks(u, 0)
 				return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
 			}
 		}
@@ -708,7 +795,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	if dx == 0 && dz == 0 {
 		d := s.distToGoal(u)
 		arrived := hadRoute && d <= arrivalToleranceWorld
-		// HasRoute still true but no heading
+		s.emitMovementCallbacks(u, 0) // no delta => tier 0 [04 §5.2][GAP T15] C18
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: arrived}
 	}
 	desired := headingFromDelta(dx, dz)
@@ -721,6 +808,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		flight := s.Flights[handle]
 		if flight == nil {
 			d := s.distToGoal(u)
+			s.emitMovementCallbacks(u, 0)
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: d <= arrivalToleranceWorld && hadRoute}
 		}
 		flight.X = int32(u.X.Raw())
@@ -750,6 +838,8 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		u.Y = numeric.Fixed(int64(flight.Y))
 		u.Z = numeric.Fixed(int64(flight.Z))
 		u.Move.Heading = flight.Heading
+		u.Move.Speed = numeric.Fixed(int64(flight.Speed))
+		s.emitMovementCallbacks(u, flight.Speed) // [04 §5.2][GAP T15] C18 flight path also uses MoveRate tiers with same thresholds
 		moved = int64(u.X) != oldXRaw || int64(u.Z) != oldZRaw
 		blocked = false
 	} else {
@@ -757,6 +847,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		coll := s.Collisions[handle]
 		if steer == nil || coll == nil {
 			d := s.distToGoal(u)
+			s.emitMovementCallbacks(u, 0)
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: d <= arrivalToleranceWorld && hadRoute}
 		}
 		steer.X = int32(u.X.Raw())
@@ -832,7 +923,9 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		steer.Speed = coll.Speed
 		u.Move.Heading = coll.Heading
 		u.Move.Speed = numeric.Fixed(coll.Speed)
-		_ = ShouldEmitWake(s.Terrain, u) // [04 §9.1] band check, no camera state [I6]
+		// Emit StartMoving/StopMoving/MoveRateN and setSFXoccupy per [04 §5.2][GAP T15] C17 C18 via immediate barrier [GAP T15] C18.
+		// Must run after speed commit so tier reflects current capped speed [04 §5.2][GAP T15] C18.
+		s.emitMovementCallbacks(u, coll.Speed)
 		moved = int64(u.X) != oldXRaw || int64(u.Z) != oldZRaw
 	}
 	// Arrival via goal tolerance, not merely route active [task]

@@ -76,6 +76,25 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got := b.hud.exitWin.Rect; got.X != 309 || got.Y != 162 || got.W != 150 || got.H != 155 {
+		t.Fatalf("retail EXITMENU runtime rect = %+v, want (309,162,150,155)", got)
+	}
+	if got := b.hud.confirmWin.Rect; got.X != 184 || got.Y != 190 || got.W != 400 || got.H != 100 {
+		t.Fatalf("retail YESORNO runtime rect = %+v, want (184,190,400,100)", got)
+	}
+	choice1 := -1
+	for i, gad := range b.hud.confirmWin.Gadgets {
+		if strings.EqualFold(gad.Name, "CHOICE1") {
+			choice1 = i
+			break
+		}
+	}
+	if choice1 < 0 {
+		t.Fatal("YESORNO has no CHOICE1 gadget")
+	}
+	if got := b.hud.modalGadgetRect(b.hud.confirmWin, choice1, nil); got.W != 96 || got.H != 20 {
+		t.Fatalf("YESORNO CHOICE1 runtime size = %dx%d, want stock frame 96x20", got.W, got.H)
+	}
 	_, cur, ok := sess.Snapshot.Read()
 	if !ok || cur == nil {
 		t.Fatal("selected commander snapshot disappeared")

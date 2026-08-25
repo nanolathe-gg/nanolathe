@@ -650,6 +650,10 @@ func SkirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy
 	spyRecord(spy, "resources")
 	skirmishGrantResourcesDirect(s, cfg)
 	// Initialize sharing thresholds once from rebuilt capacity after units exist [P1-06] [P1-I04].
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Retail order is setup pass (0x497C10) before spawn credits/bonus (0x465E30→0x496E90), so
+	// thresholds from capacity BEFORE bonus would be stale (0). We keep bonus-inclusive and emit
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	s.InitShareThresholds()
 	return nil
 }
@@ -1008,6 +1012,19 @@ func skirmishGrantResourcesDirect(s *Session, cfg SkirmishConfig) {
 		if !s.Econ.Players[p].Exists {
 			continue
 		}
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Bonus must be installed BEFORE spawn credits and before first settlement's RebuildCapacity
+		// so that CommitPostSettlement's bonus-inclusive capacity clamp preserves opening 1000/1000
+		// past tick 30/60 [OX P1]. ARM and CORE both get correct values derived from their own startMetal/Energy.
+		s.Econ.Players[p].InstallStorageBonus(cfg.Players[p].Metal, cfg.Players[p].Energy)
+		// Ensure bonus is visible to capacity before first settlement. RebuildCapacity will include it
+		// on next Settle; we also rebuild now so InitShareThresholds after this sees bonus-inclusive capacity.
+		// Threshold ordering remains TODO(question): retail setup pass (0x497C10) precedes spawn credits (0x465E30),
+		// so thresholds written from capacity BEFORE bonus would be stale (0). We choose bonus-inclusive
+		// thresholds (capacity with bonus) and leave TODO if retail writes before bonus [02_ledger_exact.md §4.1].
 		metal := float32(cfg.Players[p].Metal)
 		energy := float32(cfg.Players[p].Energy)
 		if metal != 0 {
@@ -1016,6 +1033,13 @@ func skirmishGrantResourcesDirect(s *Session, cfg SkirmishConfig) {
 		if energy != 0 {
 			economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, energy)
 		}
+	}
+	// After all bonuses installed, rebuild capacity once so that InitShareThresholds that follows
+	// sees bonus-inclusive capacity without waiting for the first 30-tick settlement.
+	// This also ensures that a strict probe that steps 60 ticks without waiting for settlement
+	// still has correct capacity for CommitPostSettlement clamp.
+	if s.Units != nil {
+		economy.RebuildCapacity(s.Econ, s.Units)
 	}
 }
 
