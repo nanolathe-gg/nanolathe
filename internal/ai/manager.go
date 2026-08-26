@@ -228,6 +228,20 @@ func (m *Manager) EntryCount() uint32 {
 	return m.entryCount
 }
 
+// SetEntryCountForRestore restores the cumulative eligible-entry counter from
+// a native StateV1 continuation. It is intentionally narrow: cadence state is
+// not a general gameplay control and callers should only use it while applying
+// a validated save [08 "Strategy manager and its task graph"] [PLAN_11 C3].
+func (m *Manager) SetEntryCountForRestore(n uint32) {
+	if m == nil {
+		return
+	}
+	m.entryCount = n
+	// classificationRuns is diagnostic and derived from the same cadence;
+	// restore it consistently without persisting a redundant field.
+	m.classificationRuns = int(n / 30)
+}
+
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (m *Manager) ClassificationRuns() int {
 	if m == nil {

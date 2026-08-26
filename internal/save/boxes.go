@@ -744,10 +744,13 @@ var (
 // Version 9 adds all nine manager tactical vectors in recovered retail slot
 // order [R-P0-04]. Older v8 states decode the legacy six vectors and default
 // the three newly recovered vectors to empty.
-// The next version adds script-owned INBUILDSTANCE and any continuation
-// fields whose prior version has already been allocated.
+// Version 10 adds the script-owned INBUILDSTANCE byte and the manager's
+// eligible-entry cadence counter. Older saves decode both as clear/zero,
+// preserving the v9 group-vector layout while allowing current saves to
+// resume the next classifier tick exactly [08 "Strategy manager and its task
+// graph"] [R-P0-04].
 
-const StateV1VersionConst uint32 = 9
+const StateV1VersionConst uint32 = 10
 const StateV1Version1 uint32 = 1
 const StateV1Version2 uint32 = 2
 const StateV1Version3 uint32 = 3
@@ -757,6 +760,7 @@ const StateV1Version6 uint32 = 6
 const StateV1Version7 uint32 = 7
 const StateV1Version8 uint32 = 8
 const StateV1Version9 uint32 = 9
+const StateV1Version10 uint32 = 10
 
 // UnitRecord is one slot-indexed unit record, canonically ordered by slot
 // ascending for determinism (I1) [01 §6.1] [PLAN_14 C18]. Reconstruction uses
@@ -1093,6 +1097,7 @@ type ProjectileRecord struct {
 type AIManagerRecord struct {
 	Player       uint8
 	Deadlines    [12]uint32 // TaskKindCount is 12 [P0-02]
+	EntryCount   uint32     // eligible manager entries for 30-entry classification cadence [08][PLAN_11 C3]
 	Strategic    StrategicSnapshot
 	Groups       AIGroupsSnapshot
 	SurfaceMetal int32
@@ -1206,7 +1211,7 @@ type BuilderLinkRecord struct {
 // every mutable authoritative service, slot-indexed, plus both RNG states+draw counts and hash guards [PLAN_14 C18] [GAP T25] [P0-I11].
 // Version 2 adds full continuation via forced slot identity and full per-system snapshots [P0-I11].
 type StateV1 struct {
-	Version      uint32 // supported versions 1..9; current writer emits 9 [PLAN_14 C18][P0-I11]
+	Version      uint32 // supported versions 1..10; current writer emits 10 [PLAN_14 C18][P0-I11]
 	CatalogHash  string // [02 §5] C12 catalog hash
 	ManifestHash string // vfs.ManifestHash
 
@@ -1307,7 +1312,7 @@ func MarshalStateV1(s *StateV1) []byte {
 		if ver >= 7 {
 			buf.WriteByte(u.Group)
 		}
-		if ver >= 9 {
+		if ver >= StateV1Version10 {
 			buf.WriteByte(boolToByte(u.InBuildStance))
 		}
 		if ver >= 2 {
@@ -1706,6 +1711,12 @@ func MarshalStateV1(s *StateV1) []byte {
 				writeGroupVector(m.Groups.RegroupA)
 				writeGroupVector(m.Groups.RegroupB)
 			}
+			if ver >= StateV1Version10 {
+				// The cadence is a cumulative count of eligible manager entries;
+				// it is not a task deadline and must survive save/load unchanged
+				// [08 "Strategy manager and its task graph"] [PLAN_11 C3].
+				binaryWriteUint32(&buf, m.EntryCount)
+			}
 			binaryWriteInt32(&buf, m.SurfaceMetal)
 			binaryWriteInt32(&buf, m.OriginX)
 			binaryWriteInt32(&buf, m.OriginZ)
@@ -1779,7 +1790,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 	if err := binary.Read(r, binary.LittleEndian, &ver); err != nil {
 		return nil, err
 	}
-	if ver != StateV1VersionConst && ver != StateV1Version8 && ver != StateV1Version7 && ver != StateV1Version6 && ver != StateV1Version5 && ver != StateV1Version4 && ver != StateV1Version3 && ver != StateV1Version2 && ver != StateV1Version1 {
+	if ver != StateV1VersionConst && ver != StateV1Version9 && ver != StateV1Version8 && ver != StateV1Version7 && ver != StateV1Version6 && ver != StateV1Version5 && ver != StateV1Version4 && ver != StateV1Version3 && ver != StateV1Version2 && ver != StateV1Version1 {
 		return nil, ErrStateV1Version
 	}
 	catHash, err := readString(r)
@@ -1865,7 +1876,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 			}
 		}
 		var inBuildStance bool
-		if ver >= 9 {
+		if ver >= StateV1Version10 {
 			stance, readErr := r.ReadByte()
 			if readErr != nil {
 				return nil, readErr
@@ -3270,6 +3281,12 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 					return nil, err
 				}
 			}
+			var entryCount uint32
+			if ver >= StateV1Version10 {
+				if err := binary.Read(r, binary.LittleEndian, &entryCount); err != nil {
+					return nil, err
+				}
+			}
 			var surf, ox, oz int32
 			if err := binary.Read(r, binary.LittleEndian, &surf); err != nil {
 				return nil, err
@@ -3281,7 +3298,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 				return nil, err
 			}
 			ais = append(ais, AIManagerRecord{
-				Player: playerB, Deadlines: dl,
+				Player: playerB, Deadlines: dl, EntryCount: entryCount,
 				Strategic:    StrategicSnapshot{CenterX: cx, CenterZ: cz, Radius: rad, LastRefreshTick: lrt, LastClassRecomputeTick: lcrt, Counts: counts, ClassVectors: cvs, InitVectors: ivs, SingleVectors: svs},
 				Groups:       AIGroupsSnapshot{Resource: resource, WaveA: waveA, RegroupA: regA, Construction: construction, Null: nullGroup, WaveB: waveB, RegroupB: regB, Explore: exp, Rally: rally},
 				SurfaceMetal: surf, OriginX: ox, OriginZ: oz,

@@ -600,6 +600,7 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 			}
 			var rec save.AIManagerRecord
 			rec.Player = m.Player
+			rec.EntryCount = m.EntryCount()
 			for k := 0; k < len(m.Deadlines) && k < len(rec.Deadlines); k++ {
 				rec.Deadlines[k] = m.Deadlines[k]
 			}
@@ -1294,6 +1295,14 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 			if int(m.Player) != int(rec.Player) {
 				// Enforce RS-02 invariant at restore
 				m.Player = rec.Player
+			}
+			// v10 persists the cumulative eligible-entry count so the next
+			// 30-entry classifier boundary is unchanged after restore. Legacy
+			// v1-v9 records decode EntryCount as zero [08 C3].
+			if st.Version >= save.StateV1Version10 {
+				m.SetEntryCountForRestore(rec.EntryCount)
+			} else {
+				m.SetEntryCountForRestore(0)
 			}
 			for k := 0; k < len(m.Deadlines) && k < len(rec.Deadlines); k++ {
 				m.Deadlines[k] = rec.Deadlines[k]

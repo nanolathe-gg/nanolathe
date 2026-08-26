@@ -33,8 +33,8 @@ func TestAIGroupVectorsCaptureRestoreAndHashCoherence(t *testing.T) {
 
 	beforeHash := HashState(s)
 	st := s.CaptureStateV1()
-	if st == nil || st.Version != 9 {
-		t.Fatalf("CaptureStateV1 version=%v want 9", st)
+	if st == nil || st.Version != save.StateV1VersionConst {
+		t.Fatalf("CaptureStateV1 version=%v want %d", st, save.StateV1VersionConst)
 	}
 	decoded, err := saveStateRoundTrip(st)
 	if err != nil {
@@ -66,6 +66,19 @@ func TestAIGroupVectorsCaptureRestoreAndHashCoherence(t *testing.T) {
 	ungrouped.Group = 9
 	if got := HashState(s2); got == hashBeforeGroup {
 		t.Fatal("unit group change did not affect authoritative hash")
+	}
+}
+
+func TestHashStateIncludesInBuildStance(t *testing.T) {
+	s := strictNewSessionWithUnits(18, 901, 1001)
+	u := s.Units.Unit(3)
+	if u == nil {
+		t.Fatal("strict fixture missing unit")
+	}
+	base := HashState(s)
+	u.InBuildStance = true
+	if got := HashState(s); got == base {
+		t.Fatal("INBUILDSTANCE change did not affect authoritative hash")
 	}
 }
 

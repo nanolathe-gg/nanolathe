@@ -891,6 +891,9 @@ func TestStateGates(t *testing.T) {
 	h4, _ := w4.Create(facDef, 0, 0, 0, 0)
 	factory4 := w4.Unit(h4)
 	factory4.Def = facDef
+	// Keep the legacy flag clear so the classifier eligibility bit installed by
+	// the allocator cannot satisfy the compatibility fallback.
+	factory4.Flags &^= FlagInBuildStance
 	factory4.InBuildStance = false
 	factory4.SetScript(cob.NewVM(&cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{"Activate": 0}, Pieces: []string{"base"}}))
 	q4 := orders.QueueForUnit(factory4)

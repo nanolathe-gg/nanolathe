@@ -95,7 +95,7 @@ func HashState(s *Session) string {
 			// Group is authoritative manager/control-group state. It is hashed
 			// separately from the tactical vectors below so an unlisted unit's
 			// group transition cannot alias an otherwise identical state.
-			fmt.Fprintf(h, "U%d:%d:%d:%d:%.2f:%d:%d|", u.Handle, int64(u.X.Raw()), int64(u.Z.Raw()), u.Health, u.Remaining, u.Flags, u.Group)
+			fmt.Fprintf(h, "U%d:%d:%d:%d:%.2f:%d:%d:%t|", u.Handle, int64(u.X.Raw()), int64(u.Z.Raw()), u.Health, u.Remaining, u.Flags, u.Group, u.InBuildStance)
 		}
 	}
 	if s.Combat != nil {
@@ -141,7 +141,10 @@ func HashState(s *Session) string {
 		if m == nil {
 			continue
 		}
-		fmt.Fprintf(h, "G%d:", player)
+		// The cumulative eligible-entry count selects the next classifier
+		// boundary; cover it independently from tactical membership vectors so
+		// identical groups with different future cadence cannot alias [08 C3].
+		fmt.Fprintf(h, "C%d:%d|G%d:", player, m.EntryCount(), player)
 		groups := [][]pool.Handle{
 			m.GroupResource, m.GroupWaveA, m.GroupRegroupA,
 			m.GroupConstruction, m.GroupNull, m.GroupWaveB,

@@ -20,6 +20,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/presentation"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -516,6 +517,18 @@ func createAndBindServices(s *Session) error {
 			s.Presentation.EmitShake(pe)
 		case combat.EventHitSound, combat.EventWaterSound:
 			s.Presentation.EmitSound(pe)
+		case combat.EventStartSound:
+			// Start sound is emitted by the common initializer before Fire/RockUnit;
+			// admit it once and route the authored alias through session-owned audio.
+			s.Presentation.EmitSound(pe)
+			if ev.Sound != "" {
+				_, _, _ = s.EmitWeaponStart(ev.Sound, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z})
+			}
+		case combat.EventStartSmoke:
+			// Target carries the projectile handle solely as presentation identity;
+			// no authoritative state is read or mutated at this boundary.
+			pe.EffectID = uint32(ev.Target)
+			s.Presentation.EmitSmokeStart(pe)
 		case combat.EventEndSmoke:
 			s.Presentation.EmitSmokeEnd(pe)
 		case combat.EventExplosion:
