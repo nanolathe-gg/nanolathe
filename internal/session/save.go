@@ -89,6 +89,7 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 				Health:            u.Health,
 				Remaining:         u.Remaining,
 				Flags:             flags,
+				Group:             u.Group,
 				MaxHealth:         u.MaxHealth,
 				Dying:             u.Dying,
 				DeathCause:        uint8(u.DeathCause),
@@ -772,8 +773,9 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 			if u := s.Units.Unit(h); u != nil {
 				u.Health = rec.Health
 				u.MaxHealth = rec.MaxHealth
-				u.Remaining = rec.Remaining
+					u.Remaining = rec.Remaining
 				u.Flags = rec.Flags &^ ((1 << 16) | (1 << 17))
+				u.Group = rec.Group
 				u.Activated = rec.Flags&(1<<16) != 0
 				u.IsCloaked = rec.Flags&(1<<17) != 0
 				// Backward compat for saves before P1-I04: non-OnOffable complete units default to active.

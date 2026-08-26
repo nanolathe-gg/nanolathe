@@ -283,21 +283,25 @@ func BuildFogOps(cache *visibility.FogCache, cam *camera.Camera, viewW, viewH in
 	// Window of fog cells whose 32x32 rects intersect the viewport, plus a
 	// one-cell border ring replicating the retail viewport+border cache
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// (FogScreenRect: map pixel gx*32+16), cell g intersects screen [0,viewW)
-	// iff 32g+48 > C and 32g+16 < C+viewW where C = camX-OriginX, giving the
-	// exact range below; the ring extension is clipped by the composer and
-	// engages the border fixups like the retail cache border [rr-16 §6.1].
-	// Range is NOT clamped to the grid: cells beyond the map are part of the
-	// retail cache and receive the border fixups (§ below).
+	// coordinates (including OriginX/Y) which the composer rebases to the
+	// shell framebuffer by subtracting OriginX/Y, so a cell's framebuffer
+	// extent is map pixel [gx*32+16, gx*32+48) − camX. Cell g therefore
+	// intersects framebuffer [0,viewW) iff its map extent intersects
+	// [camX, camX+viewW): 32g+48 > camX and 32g+16 < camX+viewW — the exact
+	// range below. The math must use the raw camera position: deriving it
+	// from camX−OriginX shifts the whole window one OriginX west and leaves
+	// the last OriginX-wide framebuffer columns/rows unfogged. The ring
+	// extension is clipped by the composer and engages the border fixups like
+	// the retail cache border [rr-16 §6.1]. Range is NOT clamped to the grid:
+	// cells beyond the map are part of the retail cache and receive the
+	// border fixups (§ below).
 	var startX, endX, startY, endY int32
 	useViewport := cam != nil && viewW > 0 && viewH > 0
 	if useViewport {
-		c := cam.X - camera.OriginX
-		r := cam.Z - camera.OriginY
-		startX = floorDiv(c-FogTilePixels/2, FogTilePixels) - 1
-		endX = floorDiv(c+viewW-FogTilePixels/2+FogTilePixels-1, FogTilePixels) + 1
-		startY = floorDiv(r-FogTilePixels/2, FogTilePixels) - 1
-		endY = floorDiv(r+viewH-FogTilePixels/2+FogTilePixels-1, FogTilePixels) + 1
+		startX = floorDiv(cam.X-FogTilePixels/2, FogTilePixels) - 1
+		endX = floorDiv(cam.X+viewW-FogTilePixels/2+FogTilePixels-1, FogTilePixels) + 1
+		startY = floorDiv(cam.Z-FogTilePixels/2, FogTilePixels) - 1
+		endY = floorDiv(cam.Z+viewH-FogTilePixels/2+FogTilePixels-1, FogTilePixels) + 1
 	} else {
 		// No camera: enumerate the whole map plus its void ring (test path).
 		startX, endX = int32(-1), gridW+1

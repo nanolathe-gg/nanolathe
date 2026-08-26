@@ -33,6 +33,14 @@ func runShot(opts Options, cs *contentSet, out *os.File) error {
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: winW, ViewH: winH, MapW: mapW, MapH: mapH}
 	cam.Pan(0, 0)
 	centerOnCommander(sess.Units, cam, winW, winH)
+	// NANOLATHE_SHOT_PAN=dx,dz offsets the shot camera after centering — a
+	// diagnostic for map-edge rendering (fog border, terrain void).
+	if pan := os.Getenv("NANOLATHE_SHOT_PAN"); pan != "" {
+		var dx, dz int64
+		fmt.Sscanf(pan, "%d,%d", &dx, &dz)
+		cam.X += int32(dx)
+		cam.Z += int32(dz)
+	}
 
 	cl, err := client.New(client.Options{
 		Buffer:   sess.Snapshot,

@@ -156,6 +156,7 @@ type Session struct {
 	// pendingHuman is the session-owned immutable input queue. Presentation
 	// enqueues value commands; authoritativeTick drains it at the network/input
 	// boundary before any order/build work [01 §4.4][I6].
+	humanMu      sync.Mutex
 	pendingHuman []HumanCommand
 }
 
@@ -175,6 +176,8 @@ const (
 	HumanCancelProduction
 	HumanStockpile
 	HumanBuildPage
+	HumanGroupAssign
+	HumanGroupRecall
 )
 
 type HumanSelectionCommand struct{ Handles []pool.Handle }
@@ -217,6 +220,17 @@ type HumanBuildPageCommand struct {
 	Page    int
 }
 
+// HumanGroupCommand carries the established Ctrl+digit assignment or digit
+// recall operation. Preserve is the Shift-held toggle/preserve argument on
+// recall [07 §9]. Mask is the authored CTRL_F filter when that state is
+// available; an all-zero value means that the presentation boundary has not
+// published a CTRL_F mask yet (the no-filter path).
+type HumanGroupCommand struct {
+	Group    int
+	Preserve bool
+	Mask     [32]byte
+}
+
 // HumanCommand is an immutable-at-boundary command value. EnqueueHumanCommand
 // copies handle slices and strings so callers may reuse their input buffers.
 type HumanCommand struct {
@@ -230,6 +244,7 @@ type HumanCommand struct {
 	CancelProduction HumanCancelProductionCommand
 	Stockpile        HumanStockpileCommand
 	BuildPage        HumanBuildPageCommand
+	Group            HumanGroupCommand
 }
 
 func cloneHumanHandles(in []pool.Handle) []pool.Handle {
@@ -254,6 +269,8 @@ func (s *Session) EnqueueHumanCommand(c HumanCommand) error {
 	if s == nil {
 		return fmt.Errorf("session: nil human-command owner")
 	}
+	s.humanMu.Lock()
+	defer s.humanMu.Unlock()
 	s.pendingHuman = append(s.pendingHuman, cloneHumanCommand(c))
 	return nil
 }
@@ -263,6 +280,8 @@ func (s *Session) PendingHumanCommands() []HumanCommand {
 	if s == nil {
 		return nil
 	}
+	s.humanMu.Lock()
+	defer s.humanMu.Unlock()
 	out := make([]HumanCommand, len(s.pendingHuman))
 	for i := range s.pendingHuman {
 		out[i] = cloneHumanCommand(s.pendingHuman[i])
@@ -1566,11 +1585,17 @@ func (s *Session) authoritativeTick(tick uint32) {
 // are applied in enqueue order, with canonical orders/construction APIs doing
 // all descriptor and lifecycle decisions.
 func (s *Session) applyHumanCommands(tick uint32) {
-	if s == nil || len(s.pendingHuman) == 0 {
+	if s == nil {
+		return
+	}
+	s.humanMu.Lock()
+	if len(s.pendingHuman) == 0 {
+		s.humanMu.Unlock()
 		return
 	}
 	cmds := s.pendingHuman
 	s.pendingHuman = nil
+	s.humanMu.Unlock()
 	for _, c := range cmds {
 		s.applyHumanCommand(c, tick)
 	}
@@ -1642,6 +1667,43 @@ func (s *Session) applyHumanBuildPage(c HumanBuildPageCommand) {
 	// to the authored page byte. It mutates only at the input boundary [07 §9].
 	hud.SetBuildPage(&view, c.Page, pageCount, nil)
 	u.Flags = view.Flags
+}
+
+func (s *Session) applyHumanGroup(c HumanGroupCommand, assign bool) {
+	if s == nil || s.Units == nil || s.Catalog == nil || c.Group < 1 || c.Group > 9 {
+		return
+	}
+	views := make([]*hud.SelectUnit, 0)
+	unitsByView := make([]*units.Unit, 0)
+	for _, u := range s.Units.Iter() {
+		if u == nil || !u.Alive || u.Owner != s.LocalOwner || u.Def == nil {
+			continue
+		}
+		defID, ok := s.Catalog.UnitDefIndex(u.Def.CanonicalKey)
+		if !ok || defID == 0 || defID > 0xffff {
+			continue
+		}
+		views = append(views, &hud.SelectUnit{Flags: u.Flags, Group: u.Group, DefID: uint16(defID)})
+		unitsByView = append(unitsByView, u)
+	}
+	if assign {
+		hud.AssignGroup(views, c.Group, nil)
+	} else {
+		mask := c.Mask
+		if mask == [32]byte{} {
+			// No CTRL_F mask producer is part of the current immutable frame.
+			// Treat absent filter state as no filter; the authored mask producer
+			// remains an explicit TODO rather than a guessed category mask [07 §9].
+			for i := range mask {
+				mask[i] = 0xff
+			}
+		}
+		hud.RecallGroup(views, c.Group, c.Preserve, mask, nil)
+	}
+	for i, view := range views {
+		unitsByView[i].Flags = view.Flags
+		unitsByView[i].Group = view.Group
+	}
 }
 
 func (s *Session) normalizeSelectedBuilderPages() {
@@ -1841,6 +1903,10 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		}
 	case HumanBuildPage:
 		s.applyHumanBuildPage(c.BuildPage)
+	case HumanGroupAssign:
+		s.applyHumanGroup(c.Group, true)
+	case HumanGroupRecall:
+		s.applyHumanGroup(c.Group, false)
 	case HumanOrder:
 		var target *units.Unit
 		if c.Order.Target != 0 {

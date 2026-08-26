@@ -44,6 +44,8 @@ const (
 	battleCommandCancelProduction
 	battleCommandStockpile
 	battleCommandBuildPage
+	battleCommandGroupAssign
+	battleCommandGroupRecall
 )
 
 // battleCommand is the narrow, typed input-to-session payload. Exactly one
@@ -58,6 +60,7 @@ type battleCommand struct {
 	CancelProduction battleCancelProductionCommand
 	Stockpile        battleStockpileCommand
 	BuildPage        battleBuildPageCommand
+	Group            battleGroupCommand
 	Selection        battleSelectionCommand
 }
 
@@ -102,6 +105,12 @@ type battleBuildPageCommand struct {
 	Page    int
 }
 
+type battleGroupCommand struct {
+	Group    int
+	Preserve bool
+	Mask     [32]byte
+}
+
 // battleDispatch is the narrow injection surface the HUD and battle input
 // controller use to issue authoritative commands without importing session
 // internals directly [R-P0-03][07 §9]. Cycle ON-09/session must bind these to
@@ -135,6 +144,8 @@ type battleDispatch interface {
 	DispatchActivation(cmd battleActivationCommand) error
 	DispatchCancelProduction(unit pool.Handle) error
 	DispatchStockpile(unit pool.Handle, queued bool) error
+	DispatchGroupAssign(group int) error
+	DispatchGroupRecall(group int, preserve bool) error
 }
 
 var _ battleDispatch = (*battleSession)(nil)
@@ -253,6 +264,20 @@ func (b *battleSession) DispatchBuildPage(page int) error {
 	return b.submitBattleCommand(battleCommand{Kind: battleCommandBuildPage, BuildPage: battleBuildPageCommand{Builder: builder, Page: page}})
 }
 
+func (b *battleSession) DispatchGroupAssign(group int) error {
+	if group < 1 || group > 9 {
+		return fmt.Errorf("battle: invalid control group %d", group)
+	}
+	return b.submitBattleCommand(battleCommand{Kind: battleCommandGroupAssign, Group: battleGroupCommand{Group: group}})
+}
+
+func (b *battleSession) DispatchGroupRecall(group int, preserve bool) error {
+	if group < 1 || group > 9 {
+		return fmt.Errorf("battle: invalid control group %d", group)
+	}
+	return b.submitBattleCommand(battleCommand{Kind: battleCommandGroupRecall, Group: battleGroupCommand{Group: group, Preserve: preserve}})
+}
+
 func (b *battleSession) submitBattleCommand(cmd battleCommand) error {
 	if b == nil {
 		return nil
@@ -303,6 +328,18 @@ func (b *battleSession) submitBattleCommand(cmd battleCommand) error {
 			}
 		}
 		return nil
+	case battleCommandGroupAssign:
+		if b.requireCommandDispatch {
+			return fmt.Errorf("battle: production group assignment requires session dispatch")
+		}
+		b.dispatchGroupFallback(cmd.Group, true)
+		return nil
+	case battleCommandGroupRecall:
+		if b.requireCommandDispatch {
+			return fmt.Errorf("battle: production group recall requires session dispatch")
+		}
+		b.dispatchGroupFallback(cmd.Group, false)
+		return nil
 	default:
 		return nil
 	}
@@ -342,6 +379,10 @@ func (b *battleSession) sessionHumanCommand(c battleCommand) (session.HumanComma
 		return session.HumanCommand{Kind: session.HumanStockpile, Stockpile: session.HumanStockpileCommand{Unit: c.Stockpile.Unit, Queued: c.Stockpile.Queued}}, true
 	case battleCommandBuildPage:
 		return session.HumanCommand{Kind: session.HumanBuildPage, BuildPage: session.HumanBuildPageCommand{Builder: c.BuildPage.Builder, Page: c.BuildPage.Page}}, true
+	case battleCommandGroupAssign:
+		return session.HumanCommand{Kind: session.HumanGroupAssign, Group: session.HumanGroupCommand{Group: c.Group.Group, Preserve: c.Group.Preserve, Mask: c.Group.Mask}}, true
+	case battleCommandGroupRecall:
+		return session.HumanCommand{Kind: session.HumanGroupRecall, Group: session.HumanGroupCommand{Group: c.Group.Group, Preserve: c.Group.Preserve, Mask: c.Group.Mask}}, true
 	}
 	return session.HumanCommand{}, false
 }
@@ -424,6 +465,40 @@ func (b *battleSession) dispatchStockpileFallback(cmd battleStockpileCommand) {
 	node.Param3 = 0
 	if q := orders.QueueForUnit(u); q != nil {
 		q.CoalesceTail(buildWeaponID, node)
+	}
+}
+
+func (b *battleSession) dispatchGroupFallback(cmd battleGroupCommand, assign bool) {
+	if b == nil || b.sess == nil || b.sess.Units == nil || b.cat == nil {
+		return
+	}
+	views := make([]*hud.SelectUnit, 0)
+	unitsByView := make([]*units.Unit, 0)
+	for _, u := range b.sess.Units.Iter() {
+		if u == nil || !u.Alive || u.Owner != b.sess.LocalOwner || u.Def == nil {
+			continue
+		}
+		id, ok := b.cat.UnitDefIndex(u.Def.CanonicalKey)
+		if !ok || id == 0 || id > 0xffff {
+			continue
+		}
+		views = append(views, &hud.SelectUnit{Flags: u.Flags, Group: u.Group, DefID: uint16(id)})
+		unitsByView = append(unitsByView, u)
+	}
+	if assign {
+		hud.AssignGroup(views, cmd.Group, nil)
+	} else {
+		mask := cmd.Mask
+		if mask == [32]byte{} {
+			for i := range mask {
+				mask[i] = 0xff
+			}
+		}
+		hud.RecallGroup(views, cmd.Group, cmd.Preserve, mask, nil)
+	}
+	for i, view := range views {
+		unitsByView[i].Flags = view.Flags
+		unitsByView[i].Group = view.Group
 	}
 }
 

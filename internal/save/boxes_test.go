@@ -383,8 +383,8 @@ func TestStateV1RoundTrip(t *testing.T) {
 		CrtDraws:     snap.CrtDraws,
 		Clock:        *clk,
 		Units: []UnitRecord{
-			{Slot: 3, DefName: "armcom", Owner: 0, X: 100, Y: 0, Z: 200, Health: 1000, Remaining: 0, Flags: 0x1},
-			{Slot: 1, DefName: "armlab", Owner: 1, X: 300, Y: 0, Z: 400, Health: 500, Remaining: 0.5, Flags: 0x2},
+			{Slot: 3, DefName: "armcom", Owner: 0, X: 100, Y: 0, Z: 200, Health: 1000, Remaining: 0, Flags: 0x1, Group: 3},
+			{Slot: 1, DefName: "armlab", Owner: 1, X: 300, Y: 0, Z: 400, Health: 500, Remaining: 0.5, Flags: 0x2, Group: 9},
 			// Intentionally out of order to test canonical sorting (I1).
 		},
 		Queues: []QueueRecord{
@@ -422,6 +422,9 @@ func TestStateV1RoundTrip(t *testing.T) {
 	}
 	if decoded.Units[0].DefName != "armlab" || decoded.Units[1].DefName != "armcom" {
 		t.Fatalf("unit def names mismatch %+v", decoded.Units)
+	}
+	if decoded.Units[0].Group != 9 || decoded.Units[1].Group != 3 {
+		t.Fatalf("unit groups mismatch %+v", decoded.Units)
 	}
 	if len(decoded.Queues) != 2 || decoded.Queues[0].UnitSlot != 1 {
 		t.Fatalf("queues mismatch %+v", decoded.Queues)

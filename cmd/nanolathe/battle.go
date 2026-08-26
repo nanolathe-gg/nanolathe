@@ -110,6 +110,11 @@ type battleSession struct {
 	// composition does not currently bind this callback to a separate session
 	// command queue, so the direct application fallback remains authoritative.
 	commandDispatchFn func(battleCommand) error
+	// battleMode is the established runtime mode flag consumed by the digit
+	// gate [07 §9]. The production composition currently has no separate
+	// publisher for this byte, so the composition value remains zero until
+	// that producer is wired (TODO(question): identify the mode-byte writer).
+	battleMode byte
 	// requireCommandDispatch is true only for the real production composition;
 	// fixture sessions may explicitly exercise legacy fallbacks.
 	requireCommandDispatch bool
@@ -414,8 +419,9 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	if kbd.KeyDown(input.KeyN) {
 		b.stockpileSelected(kbd.HasShift())
 	}
-	// Build page switching via digits 1..9 — routes to build page when builder selected [07 §9] C10.
-	// Use hud.RoutesToPage gate approximation: when builder selected we treat digits as pages.
+	// Digit routing uses the established battle-mode/Alt gate. Ctrl+digit is
+	// assignment; the non-page branch is group recall with Shift as preserve /
+	// toggle [07 §9] C9-C10.
 	for d := 1; d <= 9; d++ {
 		var key input.Key
 		switch d {
@@ -439,7 +445,11 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 			key = input.Key9
 		}
 		if kbd.KeyDown(key) {
-			b.switchBuildPage(d)
+			if kbd.KeyHeld(input.KeyCtrl) {
+				_ = b.DispatchGroupAssign(d)
+			} else {
+				b.routeDigit(d, kbd.KeyHeld(input.KeyAlt), kbd.HasShift())
+			}
 		}
 	}
 	// Page next/prev data-driven with guard [R-P0-03][07 §9] C10: no hardcoding.
@@ -643,6 +653,14 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		}
 	}
 	// No right-button order path: right-click is deselect/cancel only, handled at the top [07 §9][04 §3.4].
+}
+
+func (b *battleSession) routeDigit(digit int, altHeld, shiftHeld bool) {
+	if hud.RoutesToPage(b.battleMode, altHeld) {
+		b.switchBuildPage(digit)
+		return
+	}
+	_ = b.DispatchGroupRecall(digit, shiftHeld)
 }
 
 // filterSelectionToPlayer clears selection on foreign units [08 "Skirmish configuration"].
@@ -1012,6 +1030,34 @@ func (b *battleSession) queueFactoryDirect(fac *units.Unit, product string, queu
 // Pagination is applied via flag bits 23-25 with bit 22 paged [07 §9] C10.
 func (b *battleSession) armBuildPanel() {
 	b.panelButtons = b.panelButtons[:0]
+	// The production fallback rail is presentation state. Its builder, page,
+	// and product slice must come from the immutable frame published by the
+	// authoritative input phase; reading selectedBuilder here would cross the
+	// presentation boundary and can observe a stale/mutated live flag [I6].
+	if b.requireCommandDispatch {
+		if b.hud != nil {
+			// The mounted retail HUD owns the authored GUI rail. There is no
+			// fallback geometry to refresh in this path.
+			return
+		}
+		frame, ok := b.currentSnapshot()
+		if !ok || b.cat == nil || frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount == 0 {
+			return
+		}
+		builderView, found := snapshotUnitByHandle(frame, frame.CommandPage.Builder)
+		if !found || b.sess == nil || builderView.Owner != b.sess.LocalOwner || !b.snapshotBuilder(builderView) {
+			return
+		}
+		if int(frame.CommandPage.Page) >= int(frame.CommandPage.PageCount) {
+			return
+		}
+		builderDef, found := b.cat.Unit(builderView.DefName)
+		if !found || builderDef == nil {
+			return
+		}
+		b.appendFallbackBuildPanel(frame.CommandPage.ProductKeys)
+		return
+	}
 	u := b.selectedBuilder()
 	if u == nil || b.cat == nil {
 		return
@@ -1039,10 +1085,22 @@ func (b *battleSession) armBuildPanel() {
 	}
 	curPage = hud.ClampPage(curPage, count)
 	pageButtons := hud.ProductsForPage(page.Buttons, curPage, buttonsPerPage)
+	b.appendFallbackBuildPanel(pageButtons)
+}
+
+// appendFallbackBuildPanel lays out the small synthetic/headless rail from an
+// already-resolved product slice. Production callers pass CommandPage keys;
+// fixture callers pass the authored catalog page. The slice is never sorted or
+// rewritten, preserving the producer's authored order [02 "Build-menu catalog
+// keys"] and making page refreshes deterministic [I1][I6].
+func (b *battleSession) appendFallbackBuildPanel(productKeys []string) {
+	if b == nil || b.cat == nil {
+		return
+	}
 	// Main build buttons for this page [02 "Build-menu catalog keys"] C8 order preserved.
 	x := int32(8)
 	y := int32(480 - panelButtonH - 28)
-	for _, name := range pageButtons {
+	for _, name := range productKeys {
 		if _, found := b.cat.Unit(name); !found {
 			continue
 		}
@@ -1085,6 +1143,9 @@ func (b *battleSession) armBuildPanel() {
 // queue immediately via injected callback with progress/count shown thereafter
 // [R-P0-03][F-P1-008]. Illegal products are rejected (queues nothing).
 func (b *battleSession) panelClick(mx, my int32) bool {
+	if b == nil {
+		return false
+	}
 	for _, btn := range b.panelButtons {
 		if mx >= btn.X && mx < btn.X+panelButtonW && my >= btn.Y && my < btn.Y+panelButtonH {
 			switch btn.Kind {
@@ -1100,13 +1161,44 @@ func (b *battleSession) panelClick(mx, my int32) bool {
 			case "build":
 				fallthrough
 			default:
+				if b.cat == nil {
+					return true // consume an authored button while the catalog is unavailable
+				}
 				def, found := b.cat.Unit(btn.Name)
 				if !found || def == nil {
 					return true // consumed; nothing placeable
 				}
-				// Data-driven guard: product must be in selected builder's authored list [R-P0-03]
-				builder := b.selectedBuilder()
-				if builder != nil && builder.Def != nil && b.cat != nil {
+				// Data-driven guard: product must be in the selected builder's
+				// authored list [R-P0-03]. Production uses the immutable command
+				// page and unit view; fixture-only sessions retain the live lookup.
+				if b.requireCommandDispatch {
+					frame, ok := b.currentSnapshot()
+					if !ok || b.cat == nil || frame.CommandPage.Builder == 0 {
+						return true
+					}
+					builderView, found := snapshotUnitByHandle(frame, frame.CommandPage.Builder)
+					if !found || b.sess == nil || builderView.Owner != b.sess.LocalOwner {
+						return true
+					}
+					builderDef, found := b.cat.Unit(builderView.DefName)
+					if !found || builderDef == nil || !hud.ValidateBuildProduct(b.cat, builderDef.CanonicalKey, def.CanonicalKey) {
+						return true // consumed but not placeable (illegal product)
+					}
+					// The visible button may have been armed from an older frame.
+					// Require the clicked product to remain in the current immutable
+					// page before dispatching it; the catalog menu alone is not a
+					// sufficient page identity [07 §9][I6].
+					pageProduct := false
+					for _, key := range frame.CommandPage.ProductKeys {
+						if content.CanonicalKey(key) == content.CanonicalKey(def.CanonicalKey) {
+							pageProduct = true
+							break
+						}
+					}
+					if !pageProduct {
+						return true
+					}
+				} else if builder := b.selectedBuilder(); builder != nil && builder.Def != nil && b.cat != nil {
 					if !hud.ValidateBuildProduct(b.cat, builder.Def.CanonicalKey, def.CanonicalKey) {
 						return true // consumed but not placeable (illegal product)
 					}
@@ -1522,9 +1614,15 @@ func (b *battleSession) drawOverlay(c *client.Client, fnt *formats.FNT) {
 		// Latch indicator and page hint [07 §9][P0-I14].
 		latchText := "Latch: " + b.latch.String()
 		c.UIText(fnt, latchText, 500, baseY+4, 250)
-		if u := b.selectedBuilder(); u != nil && b.cat != nil {
+		if b.requireCommandDispatch {
+			if frame, ok := b.currentSnapshot(); ok && frame.CommandPage.Builder != 0 && frame.CommandPage.PageCount > 1 {
+				cur := hud.ClampPage(int(frame.CommandPage.Page), int(frame.CommandPage.PageCount))
+				pg := fmt.Sprintf("Page %d/%d (1..9)", cur+1, frame.CommandPage.PageCount)
+				c.UIText(fnt, pg, 500, baseY+20, 250)
+			}
+		} else if u := b.selectedBuilder(); u != nil && b.cat != nil {
 			if page, ok := b.cat.BuildMenus[u.Def.CanonicalKey]; ok && page != nil {
-				const bpp = 8
+				const bpp = hud.RetailBuildButtonsPerPage
 				cnt := (len(page.Buttons) + bpp - 1) / bpp
 				if cnt > 1 {
 					cur := 0

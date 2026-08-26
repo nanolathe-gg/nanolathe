@@ -57,6 +57,7 @@ type Unit struct {
 	// Owned exclusively by construction.Service; Units.Tick never mutates it [05 "Construction arithmetic"].
 	Remaining    float32
 	Flags        uint32       // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Group        uint8        // one stored control-group value 0..9 [07 §9]
 	Pending      uint32       // capability/pending word for gate intersection [04 §3.3] C6
 	Orders       any          // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
 	Script       *cob.VM      // typed COB VM per-unit [04 §4.2][P1-I01] — not any, typed per acceptance

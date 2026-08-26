@@ -737,14 +737,16 @@ var (
 // Version 4 adds ground steering state per [04 §8.1] C20 C21 [ON-12].
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // Version 6 adds construction builder-product links [05 "Factory production lifecycle"] C18 [RS-10].
+// Version 7 adds the per-unit control-group value [07 §9].
 
-const StateV1VersionConst uint32 = 6
+const StateV1VersionConst uint32 = 7
 const StateV1Version1 uint32 = 1
 const StateV1Version2 uint32 = 2
 const StateV1Version3 uint32 = 3
 const StateV1Version4 uint32 = 4
 const StateV1Version5 uint32 = 5
 const StateV1Version6 uint32 = 6
+const StateV1Version7 uint32 = 7
 
 // UnitRecord is one slot-indexed unit record, canonically ordered by slot
 // ascending for determinism (I1) [01 §6.1] [PLAN_14 C18]. Reconstruction uses
@@ -758,6 +760,7 @@ type UnitRecord struct {
 	Health    int32
 	Remaining float32 // construction remaining 1→0 [05 "Construction target state"] [I2]
 	Flags     uint32
+	Group     uint8 // one stored control-group value 0..9 [07 §9]
 	// Extended per-unit mutable state for full continuation [P0-I11][01 §6][04][05][06].
 	MaxHealth         int32  // [04 §2.3]
 	Dying             bool   // death mark before Cleanup [04 §2.4]
@@ -1277,6 +1280,9 @@ func MarshalStateV1(s *StateV1) []byte {
 		binaryWriteInt32(&buf, u.Health)
 		binaryWriteUint32(&buf, math.Float32bits(u.Remaining))
 		binaryWriteUint32(&buf, u.Flags)
+		if ver >= 7 {
+			buf.WriteByte(u.Group)
+		}
 		if ver >= 2 {
 			binaryWriteInt32(&buf, u.MaxHealth)
 			buf.WriteByte(boolToByte(u.Dying))
@@ -1814,6 +1820,13 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		if err := binary.Read(r, binary.LittleEndian, &flags); err != nil {
 			return nil, err
 		}
+		var group byte
+		if ver >= 7 {
+			group, err = r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+		}
 		rec := UnitRecord{
 			Slot:      slot,
 			DefName:   defName,
@@ -1824,6 +1837,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 			Health:    health,
 			Remaining: math.Float32frombits(remBits),
 			Flags:     flags,
+			Group:     group,
 		}
 		if ver >= 2 {
 			var maxHealth int32

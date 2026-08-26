@@ -882,7 +882,7 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 	var selectedDef *content.UnitDef
 	var snapshotProducts []string
 	if b.requireCommandDispatch {
-		if f == nil || f.CommandPage.Builder == 0 {
+		if f == nil || b.sess == nil || b.cat == nil || f.CommandPage.Builder == 0 {
 			return true
 		}
 		builderView, found := snapshotUnitByHandle(f, f.CommandPage.Builder)
@@ -955,26 +955,31 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 					continue
 				}
 				// Direct canonical match or case-insensitive
+				var pageProductKey string
 				if b.requireCommandDispatch {
-					matched := false
 					for _, key := range snapshotProducts {
 						if strings.EqualFold(content.CanonicalKey(key), content.CanonicalKey(cand)) {
-							matched = true
+							pageProductKey = key
 							break
 						}
 					}
-					if !matched {
+					if pageProductKey == "" {
 						continue
 					}
 				} else if !hud.ValidateBuildProduct(b.cat, selectedDef.CanonicalKey, cand) {
 					continue
 				}
 				// Resolve canonical product name for dispatch
-				prodDef, _ := b.cat.Unit(cand)
 				prodKey := cand
+				if pageProductKey != "" {
+					// Production uses the immutable page key as identity; do not
+					// recover an alias by consulting the live catalog menu.
+					prodKey = pageProductKey
+				}
+				prodDef, _ := b.cat.Unit(prodKey)
 				if prodDef != nil {
 					prodKey = prodDef.CanonicalKey
-				} else {
+				} else if !b.requireCommandDispatch {
 					// Try canonical lookup via BuildMenus first entry match
 					for _, bm := range b.cat.BuildMenus[selectedDef.CanonicalKey].Buttons {
 						if strings.EqualFold(bm, cand) {
@@ -1185,7 +1190,17 @@ func (h *retailBattleHUD) windowFor(b *battleSession, f *snapshot.Frame) (*gui.W
 		name = "gen"
 	}
 	var selected *snapshot.UnitView
-	if f != nil {
+	if b != nil && b.requireCommandDispatch {
+		// Production window selection follows the authoritative command page,
+		// not live selection flags. A mixed selection can contain non-builders,
+		// while CommandPage.Builder is the executable's resolved producer [I6].
+		if f != nil && f.CommandPage.Builder != 0 {
+			if view, found := snapshotUnitByHandle(f, f.CommandPage.Builder); found && view.Owner == h.owner && b.snapshotBuilder(view) {
+				selectedView := view
+				selected = &selectedView
+			}
+		}
+	} else if f != nil {
 		for i := range f.Units {
 			u := &f.Units[i]
 			if u.Owner == h.owner && u.Flags&client.SelectionFlag != 0 {
@@ -1194,8 +1209,9 @@ func (h *retailBattleHUD) windowFor(b *battleSession, f *snapshot.Frame) (*gui.W
 			}
 		}
 	}
-	// Fallback to live selection when snapshot not yet published (headless tests, initial frame)
-	if selected == nil && b != nil && b.sess != nil && b.sess.Units != nil {
+	// Fallback to live selection only for asset-free fixture sessions. Production
+	// never crosses back into the mutable unit pool when a frame is unavailable.
+	if selected == nil && b != nil && !b.requireCommandDispatch && b.sess != nil && b.sess.Units != nil {
 		if ub := b.selectedBuilder(); ub != nil && ub.Def != nil {
 			// Synthesize a view for window selection
 			selected = &snapshot.UnitView{Owner: h.owner, Flags: ub.Flags, DefID: uint16(0)}
@@ -1215,35 +1231,36 @@ func (h *retailBattleHUD) windowFor(b *battleSession, f *snapshot.Frame) (*gui.W
 	if selected != nil && b != nil && b.cat != nil {
 		def, ok := h.defFor(selected)
 		if !ok || def == nil {
-			// Fallback to live builder def
-			if ub := b.selectedBuilder(); ub != nil {
-				def = ub.Def
-				ok = def != nil
-			} else if len(b.selectedUnits()) > 0 {
-				if su := b.selectedUnits()[0]; su != nil {
-					def = su.Def
+			// Fallback to a live definition only for fixture sessions.
+			if !b.requireCommandDispatch {
+				if ub := b.selectedBuilder(); ub != nil {
+					def = ub.Def
 					ok = def != nil
+				} else if len(b.selectedUnits()) > 0 {
+					if su := b.selectedUnits()[0]; su != nil {
+						def = su.Def
+						ok = def != nil
+					}
 				}
 			}
 		}
 		if ok && def != nil {
 			if def.Builder {
-				// Data-driven page: decode from flags [R-P0-03][07 §9] C10 (page &7)<<23 bits 23-25 with bit 22 paged)
 				pageNum := 0
-				var flags uint32
-				// Prefer live flags for accurate page, fallback to snapshot flags
-				if ub := b.selectedBuilder(); ub != nil {
-					flags = ub.Flags
+				if b.requireCommandDispatch {
+					// CommandPage.Page is the authoritative page after the typed
+					// navigation command publishes. Do not decode mutable flags.
+					if f == nil || f.CommandPage.PageCount == 0 {
+						return h.loadWindow(name)
+					}
+					pageNum = hud.ClampPage(int(f.CommandPage.Page), int(f.CommandPage.PageCount))
 				} else {
-					flags = selected.Flags
+					// Fixture path retains the flag encoding used by the live unit.
+					if hud.IsPaged(selected.Flags) {
+						pageNum = hud.DecodePage(selected.Flags)
+					}
+					pageNum = hud.ClampPage(pageNum, h.buildPageCount(def))
 				}
-				if hud.IsPaged(flags) {
-					pageNum = hud.DecodePage(flags)
-				}
-				// The executable guards against the definition's page-count byte;
-				// that byte comes from DOWNLOADMENU PAGE records, not a guessed
-				// CANBUILD slice size [07 §9].
-				pageNum = hud.ClampPage(pageNum, h.buildPageCount(def))
 				name = strings.ToLower(def.UnitName) + fmt.Sprintf("%d", pageNum+1)
 			} else {
 				if h.side != nil {

@@ -212,15 +212,28 @@ func TestFogScreenRectViewportClipping(t *testing.T) {
 	// Corner-straddle culling: with C=0 the cell gx=-1 rect [-16,16) shows a
 	// 16px strip; the window must include it (regression for the half-tile
 	// culling offset) [rr-16 §7].
-	hasWestStrip := false
+	// Full framebuffer coverage: the composer rebases op rects by −OriginX/Y,
+	// so the op set must span post-rebase [0,viewW)×[0,viewH) — a window
+	// derived from camX−OriginX instead of camX leaves the last OriginX-wide
+	// columns unfogged (regression).
+	loX, hiX, loY, hiY := int32(1<<30), int32(-1<<30), int32(1<<30), int32(-1<<30)
 	for _, op := range ops {
-		if op.GridX == -1 && op.GridY >= -1 && op.ScreenX1 > 0 {
-			hasWestStrip = true
-			break
+		if op.ScreenX0-camera.OriginX < loX {
+			loX = op.ScreenX0 - camera.OriginX
+		}
+		if op.ScreenX1-camera.OriginX > hiX {
+			hiX = op.ScreenX1 - camera.OriginX
+		}
+		if op.ScreenY0-camera.OriginY < loY {
+			loY = op.ScreenY0 - camera.OriginY
+		}
+		if op.ScreenY1-camera.OriginY > hiY {
+			hiY = op.ScreenY1 - camera.OriginY
 		}
 	}
-	if !hasWestStrip {
-		t.Fatalf("viewport culling dropped the west half-tile strip (gx=-1) [rr-16 §7]")
+	if loX > 0 || hiX < cam.ViewW || loY > 0 || hiY < cam.ViewH {
+		t.Fatalf("fog ops do not cover the framebuffer: x=[%d,%d) y=[%d,%d) want x<=[0,%d) y<=[0,%d)",
+			loX, hiX, loY, hiY, cam.ViewW, cam.ViewH)
 	}
 	// ops should be clipped: with view 64x64 centered at cam 128,32, visible tiles are roughly 2x2
 	// Validate every op's rect is 32 and within viewport+32 tolerance and row-major order

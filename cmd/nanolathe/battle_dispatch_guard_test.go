@@ -40,3 +40,193 @@ func TestProductionBuildUsesSnapshotCommandPageBuilder(t *testing.T) {
 		t.Fatalf("builder handle=%d, want command-page builder 2", got)
 	}
 }
+
+func TestProductionBuildPanelUsesImmutableCommandPage(t *testing.T) {
+	builder := &content.UnitDef{UnitName: "lab", Builder: true}
+	builder.CanonicalKey = "lab"
+	first := &content.UnitDef{UnitName: "prod-b"}
+	first.CanonicalKey = "prod-b"
+	second := &content.UnitDef{UnitName: "prod-a"}
+	second.CanonicalKey = "prod-a"
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{
+		builder.CanonicalKey: builder,
+		first.CanonicalKey:   first,
+		second.CanonicalKey:  second,
+	}}
+	s := &session.Session{LocalOwner: 0, Snapshot: &snapshot.Buffer{}}
+	s.Snapshot.Publish(&snapshot.Frame{
+		Units: []snapshot.UnitView{{Slot: 7, Owner: 0, DefName: "lab"}},
+		CommandPage: snapshot.CommandPageView{
+			Builder:     7,
+			Page:        1,
+			PageCount:   2,
+			ProductKeys: []string{"prod-b", "prod-a"},
+		},
+	})
+	// No live unit pool is installed. A production armBuildPanel must still
+	// resolve the immutable builder/page and publish the authored key order.
+	b := &battleSession{sess: s, cat: cat, requireCommandDispatch: true}
+	b.armBuildPanel()
+	if len(b.panelButtons) < 2 || b.panelButtons[0].Name != "prod-b" || b.panelButtons[1].Name != "prod-a" {
+		t.Fatalf("production panel=%#v, want immutable product order", b.panelButtons)
+	}
+	if b.panelButtons[0].Kind != "build" || b.panelButtons[1].Kind != "build" {
+		t.Fatalf("production panel product kinds=%q,%q", b.panelButtons[0].Kind, b.panelButtons[1].Kind)
+	}
+
+	// A later published page replaces the geometry from the frame only; no live
+	// selection flags or catalog menu ordering participate in the refresh.
+	s.Snapshot.Publish(&snapshot.Frame{
+		Units: []snapshot.UnitView{{Slot: 7, Owner: 0, DefName: "lab"}},
+		CommandPage: snapshot.CommandPageView{
+			Builder:     7,
+			Page:        0,
+			PageCount:   2,
+			ProductKeys: []string{"prod-a"},
+		},
+	})
+	b.armBuildPanel()
+	if len(b.panelButtons) < 1 || b.panelButtons[0].Name != "prod-a" {
+		t.Fatalf("refreshed production panel=%#v, want page-0 immutable key", b.panelButtons)
+	}
+}
+
+func TestProductionBuildPanelRejectsStaleProductAfterPagePublication(t *testing.T) {
+	builder := &content.UnitDef{UnitName: "lab", Builder: true}
+	builder.CanonicalKey = "lab"
+	product := &content.UnitDef{UnitName: "armllt", BMCode: true}
+	product.CanonicalKey = "armllt"
+	cat := &content.Catalog{
+		Units: map[string]*content.UnitDef{"lab": builder, "armllt": product},
+		BuildMenus: map[string]*content.BuildMenuPage{
+			"lab": {Buttons: []string{"armllt"}},
+		},
+	}
+	s := &session.Session{LocalOwner: 0, Snapshot: &snapshot.Buffer{}}
+	s.Snapshot.Publish(&snapshot.Frame{
+		Units:       []snapshot.UnitView{{Slot: 7, Owner: 0, DefName: "lab"}},
+		CommandPage: snapshot.CommandPageView{Builder: 7, PageCount: 1, ProductKeys: []string{"other"}},
+	})
+	b := &battleSession{sess: s, cat: cat, requireCommandDispatch: true,
+		panelButtons: []panelButton{{Name: "armllt", X: 8, Y: 432, Kind: "build"}}}
+	dispatched := false
+	b.commandDispatchFn = func(battleCommand) error {
+		dispatched = true
+		return nil
+	}
+	if !b.panelClick(9, 433) {
+		t.Fatal("stale production panel button was not consumed")
+	}
+	if dispatched {
+		t.Fatal("stale production panel button dispatched after immutable page changed")
+	}
+
+	// Once the newly published page names the product, the same authored
+	// button becomes dispatchable through the typed command boundary.
+	s.Snapshot.Publish(&snapshot.Frame{
+		Units:       []snapshot.UnitView{{Slot: 7, Owner: 0, DefName: "lab"}},
+		CommandPage: snapshot.CommandPageView{Builder: 7, PageCount: 1, ProductKeys: []string{"armllt"}},
+	})
+	if !b.panelClick(9, 433) || !dispatched {
+		t.Fatal("current immutable production page did not dispatch authored product")
+	}
+}
+
+func TestProductionBuildPanelNilCatalogIsSafe(t *testing.T) {
+	b := &battleSession{requireCommandDispatch: true}
+	b.armBuildPanel()
+	if len(b.panelButtons) != 0 {
+		t.Fatalf("nil production catalog produced panel buttons: %#v", b.panelButtons)
+	}
+}
+
+func TestProductionDigitRoutingUsesBattleModeAltGate(t *testing.T) {
+	bdef := &content.UnitDef{UnitName: "lab", Builder: true}
+	bdef.CanonicalKey = "lab"
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"lab": bdef}}
+	s := &session.Session{LocalOwner: 0, Snapshot: &snapshot.Buffer{}}
+	s.Snapshot.Publish(&snapshot.Frame{
+		Units:       []snapshot.UnitView{{Slot: 2, Owner: 0, DefName: "lab"}},
+		Selection:   snapshot.SelectionView{Handles: []pool.Handle{2}, Primary: 2, Count: 1},
+		CommandPage: snapshot.CommandPageView{Builder: 2, PageCount: 3},
+	})
+
+	tests := []struct {
+		name       string
+		mode       byte
+		alt        bool
+		shift      bool
+		wantKind   battleCommandKind
+		wantPage   int
+		wantGroup  int
+		wantQueued bool
+	}{
+		{name: "normal page", mode: 0, alt: false, wantKind: battleCommandBuildPage, wantPage: 1},
+		{name: "normal alt group", mode: 0, alt: true, shift: true, wantKind: battleCommandGroupRecall, wantGroup: 2, wantQueued: true},
+		{name: "battle group", mode: 1, alt: false, wantKind: battleCommandGroupRecall, wantGroup: 2},
+		{name: "battle alt page", mode: 1, alt: true, wantKind: battleCommandBuildPage, wantPage: 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &battleSession{sess: s, cat: cat, requireCommandDispatch: true, battleMode: tc.mode}
+			var got battleCommand
+			b.commandDispatchFn = func(c battleCommand) error {
+				got = c
+				return nil
+			}
+			b.routeDigit(2, tc.alt, tc.shift)
+			if got.Kind != tc.wantKind {
+				t.Fatalf("command kind=%d, want %d (%+v)", got.Kind, tc.wantKind, got)
+			}
+			if got.Kind == battleCommandBuildPage {
+				if got.BuildPage.Page != tc.wantPage || got.BuildPage.Builder != 2 {
+					t.Fatalf("page command=%+v, want builder=2 page=%d", got.BuildPage, tc.wantPage)
+				}
+				return
+			}
+			if got.Group.Group != tc.wantGroup || got.Group.Preserve != tc.wantQueued {
+				t.Fatalf("group command=%+v, want group=%d preserve=%v", got.Group, tc.wantGroup, tc.wantQueued)
+			}
+		})
+	}
+}
+
+func TestProductionDigitGroupPathDoesNotEmitPageForNonBuilder(t *testing.T) {
+	nonBuilder := &content.UnitDef{UnitName: "scout"}
+	nonBuilder.CanonicalKey = "scout"
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"scout": nonBuilder}}
+	s := &session.Session{LocalOwner: 0, Snapshot: &snapshot.Buffer{}}
+	s.Snapshot.Publish(&snapshot.Frame{
+		Units:       []snapshot.UnitView{{Slot: 1, Owner: 0, DefName: "scout"}},
+		Selection:   snapshot.SelectionView{Handles: []pool.Handle{1}, Primary: 1, Count: 1},
+		CommandPage: snapshot.CommandPageView{},
+	})
+	b := &battleSession{sess: s, cat: cat, requireCommandDispatch: true, battleMode: 1}
+	var got battleCommand
+	b.commandDispatchFn = func(c battleCommand) error {
+		got = c
+		return nil
+	}
+	b.routeDigit(3, false, false)
+	if got.Kind != battleCommandGroupRecall || got.Group.Group != 3 {
+		t.Fatalf("non-builder digit command=%+v, want group recall 3", got)
+	}
+	if got.Kind == battleCommandBuildPage {
+		t.Fatal("non-builder/group route emitted build-page command")
+	}
+}
+
+func TestProductionCtrlDigitAssignsGroupWithoutPageCommand(t *testing.T) {
+	b := &battleSession{requireCommandDispatch: true}
+	var got battleCommand
+	b.commandDispatchFn = func(c battleCommand) error {
+		got = c
+		return nil
+	}
+	if err := b.DispatchGroupAssign(4); err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != battleCommandGroupAssign || got.Group.Group != 4 {
+		t.Fatalf("ctrl-digit assignment command=%+v, want group assignment 4", got)
+	}
+}
