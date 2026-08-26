@@ -105,6 +105,7 @@ type battleSession struct {
 	mobileBuildFn   func(product string, wx, wz numeric.Fixed, queued bool) error
 	factoryBuildFn  func(product string, queued bool) error
 	orderDispatchFn func(latch input.Latch, x, y int32, queued bool)
+	controller      *BattleController
 }
 
 type panelButton struct {
@@ -275,27 +276,13 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b.menu != battleMenuClosed {
 		b.handleBattleMenuInput(in, cl)
 	} else {
-		b.handleInput(in, cl)
+		if b.controller == nil {
+			b.controller = NewBattleController(b)
+		}
+		b.controller.Step(BattleInputFrameFromClient(in, delta), cl)
 	}
 	if b.ended {
 		return
-	}
-	// Authoritative budget lives in Session.Step [01 §4.2][01 §4.3]; the
-	// accumulator converts renderer seconds into scaled milliseconds.
-	beforeTick := b.sess.Clock.GlobalTick
-	b.msAccum += delta * 1000
-	scaled := int64(b.msAccum * 30 / 1000)
-	if scaled > 1<<30 {
-		scaled = 1 << 30
-	}
-	b.sess.Step(int32(scaled))
-	// Animated model textures tick with the simulation frame count
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	if ran := b.sess.Clock.GlobalTick - beforeTick; ran > 0 {
-		cl.TickTextureAnimators(int(ran))
-		if cursors := cl.Cursors(); cursors != nil {
-			cursors.Step(int(ran))
-		}
 	}
 	if b.menu != battleMenuClosed {
 		if cursors := cl.Cursors(); cursors != nil {

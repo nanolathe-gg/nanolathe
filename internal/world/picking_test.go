@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // pickFixture builds a flat terrain of the given height, 16x16 cells.
@@ -64,5 +65,26 @@ func TestCursorToWorldFloorsAtSeaLevel(t *testing.T) {
 	}
 	if row := int32(z>>16) - 30; row != 100 {
 		t.Fatalf("picked z=%d projects to row %d, want 100", z>>16, row)
+	}
+}
+
+// TestCursorToWorldRetainsNorthCandidatePastFarBracket crafts the int16
+// projection wrap that reaches the second retail guard. [07 §8] narrows both
+// candidate rows to int16 before comparing them; at map row 32816, the north
+// candidate projects as -32720 while its unrefined south bracket is -32704.
+// The clicked row (32700) is therefore south of that far bracket, so the
+// unrefined north candidate must be retained rather than interpolated.
+func TestCursorToWorldRetainsNorthCandidatePastFarBracket(t *testing.T) {
+	const cellW, cellH = 4, 4096
+	attrs := make([]formats.TNTAttribute, cellW*cellH)
+	for i := range attrs {
+		attrs[i] = formats.TNTAttribute{Feature: PlotFeatureNone}
+	}
+	ter := &Terrain{CellW: cellW, CellH: cellH, Plot: ExpandPlot(attrs, cellW, cellH), SeaLevel: 0}
+	const clickedX, clickedRow = 16, 32700
+	x, y, z := ter.CursorToWorld(clickedX, clickedRow)
+	const expectedNorth = 32816 // (32700 &^ 15) + 128: initial probe, before walk north
+	if x != numeric.Fixed(clickedX<<16) || y != 0 || z != numeric.Fixed(expectedNorth<<16) {
+		t.Fatalf("far-bracket guard result=(%d,%d,%d), want (%d,0,%d)", x>>16, y>>16, z>>16, clickedX, expectedNorth)
 	}
 }

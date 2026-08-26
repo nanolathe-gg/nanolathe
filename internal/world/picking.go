@@ -83,7 +83,7 @@ func (t *Terrain) CursorToWorld(px, pz int32) (x, y, z numeric.Fixed) {
 
 	// Retail's two guards: a non-increasing pair, or a click south of the far
 	// bracket, both keep the unrefined candidate.
-	if (projNorth >= projSouth || pz < projNorth) && pz > projSouth {
+	if projNorth >= projSouth || pz > projSouth {
 		return xf, hf, zf
 	}
 	span := projSouth - projNorth
@@ -93,6 +93,14 @@ func (t *Terrain) CursorToWorld(px, pz int32) (x, y, z numeric.Fixed) {
 	zi := zf + numeric.Fixed(int64(pz-projNorth)*worldUnitsPerCell/int64(span))
 	hi := t.groundLevel(xf, zi, sea)
 	return xf, numeric.Fixed(int64(hi) * worldUnitsPerPixel), zi
+}
+
+// CursorToWorldMapPixels is the named map-pixel entry point for the terrain
+// inverse. CursorToWorld is retained for existing callers; both names route
+// through the same retail search so an order target cannot accidentally use a
+// height-zero algebraic inverse [07 §8].
+func (t *Terrain) CursorToWorldMapPixels(px, pz int32) (x, y, z numeric.Fixed) {
+	return t.CursorToWorld(px, pz)
 }
 
 // groundLevel is the height query the cursor search uses: the bilinear terrain
