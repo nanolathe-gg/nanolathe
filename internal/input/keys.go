@@ -77,6 +77,10 @@ const (
 	KeyShift
 	KeyCtrl
 	KeyAlt
+	KeyMinus // '-' / '_'  [07 §2] game-speed decrease retail equivalent
+	KeyEqual // '=' / '+'  [07 §2] game-speed increase retail equivalent
+	KeyNumpadAdd
+	KeyNumpadSubtract
 	KeyCount
 )
 

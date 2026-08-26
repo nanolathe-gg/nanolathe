@@ -1138,8 +1138,10 @@ func (s *Session) authoritativeTick(tick uint32) {
 				mres := s.Movement.StepUnit(h, tick)
 				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceMovementStep, Handle: h, X: mres.DistToGoal, Value: 0})
 				_ = mres
-				// Final Move_Ground order completion remains unresolved [R-P0-01].
-				// Route pruning/local settling are intentionally not promoted here.
+				// [R-P0-01] Move_Ground-family completion arrives through the orders pump
+				// result path only (satisfied 0x20 → code 5); invented ≤2wu distance
+				// completion deleted. Route pruning (≤25 whole units) and
+				// localSteeringThreshold remain separate and never complete the order.
 				if s.Movement.HasPathFailure(h) {
 					if rec, ok := s.Movement.PathFailureRecord(h); ok {
 						if qFail := orders.QueueForUnit(u); qFail != nil && qFail.LenPrimary() > 0 {
@@ -2324,6 +2326,19 @@ func (s *Session) publishSnapshot(tick uint32) {
 			frame.EventsTruncated = true
 		}
 		frame.EventAdmissionsDropped = batch.Dropped
+		// Effects are the visual subset of the same ordered event window, one
+		// EffectView per admitted visual event with presentation-only payload.
+		// Authored GAF/art identity comes from weapon-compiled explosion fields
+		// where established; empty stays empty and never invents artwork [03 §1] C5 [I9].
+		// Nano selector is 6, source piece via QueryNanoPiece, target footprint
+		// bounds, reclaim reversed, shared strip evicts oldest beyond 400 [R-P0-06].
+		// Admission budgets are already enforced by the collector [F-P0-034].
+		frame.Effects = effectsFromEvents(batch.Events)
+		if len(frame.Effects) > snapshot.MaxSnapshotEffects {
+			// Preserve newest, evict oldest beyond fixed pool [03 §1] C5 and strip beyond 400 [R-P0-06].
+			frame.Effects = frame.Effects[len(frame.Effects)-snapshot.MaxSnapshotEffects:]
+			frame.EffectsTruncated = true
+		}
 		// Buffer.Publish deep-copies the frame. Reset only after that successful
 		// hand-off, so events survive exactly once and remain queued on a nil
 		// buffer path [I6][F-P0-031].
@@ -2331,7 +2346,59 @@ func (s *Session) publishSnapshot(tick uint32) {
 		s.Presentation.Reset()
 		return
 	}
+	// Headless or no presentation collector: no effects to publish.
 	s.Snapshot.Publish(frame)
+}
+
+// effectsFromEvents maps the ordered, already-admitted visual events to the
+// immutable EffectView hand-off, one per event. It is presentation-only and
+// never invents artwork; empty Graphic stays empty [03 §1] C5 [I9]. Shake and
+// sound kinds are not effects and are omitted here; they are consumed via
+// Frame.Events by the audio/shake sinks [03 §5.6][03 §8.3].
+func effectsFromEvents(events []snapshot.EventView) []snapshot.EffectView {
+	if len(events) == 0 {
+		return nil
+	}
+	out := make([]snapshot.EffectView, 0, len(events))
+	for _, e := range events {
+		switch e.Kind {
+		case snapshot.EventKindShake, snapshot.EventKindSound:
+			continue // not a visual effect; handled via Events [03 §5.6][03 §8.3]
+		}
+		view := snapshot.EffectView{
+			ID:         e.ID,
+			EventSeq:   e.Sequence,
+			Source:     e.Source,
+			Target:     e.Target,
+			EffectID:   e.EffectID,
+			Piece:      e.Piece,
+			SFXType:    e.SFXType,
+			SFXClass:   e.SFXClass,
+			Mode:       e.Mode,
+			StartTick:  e.Tick,
+			ExpiryTick: e.ExpiryTick,
+			Lifetime:   e.Lifetime,
+			X:          e.X,
+			Y:          e.Y,
+			Z:          e.Z,
+			TargetX:    e.TargetX,
+			TargetY:    e.TargetY,
+			TargetZ:    e.TargetZ,
+			Kind:       e.Kind.String(),
+			Graphic:    e.Graphic,
+			PaletteRow: e.PaletteRow,
+			Light:      e.Kind == snapshot.EventKindLHTFlash,
+			Shake:      e.Magnitude,
+		}
+		if view.ExpiryTick == 0 && view.Lifetime > 0 {
+			view.ExpiryTick = view.StartTick + uint32(view.Lifetime)
+		}
+		out = append(out, view)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // publishVisibilityView copies the local player's visibility masks into the
@@ -2481,41 +2548,102 @@ func (s *Session) RegisterAll() {
 			// Audio: death does not map to a queued voice directly, but an
 			// under-attack cue for nearby allies could be queued elsewhere.
 			// For now, no death voice; weapon hit already queues via impact sink.
-			// Route into corpse feature with correct chain depth low nibble [06 §12.1] C23 [04 §5.1] [P0-I06].
-			if s.Features != nil && u != nil && u.Def != nil && u.Def.Corpse != "" && s.World != nil {
-				var depth uint8 = 0
+			// Local authoritative death runs the synchronous 4-cell Killed query
+			// BEFORE the death packet is emitted [04 §5.1]; severity clamp → corpse
+			// chain depth + death-explosion weapon trigger (DoExplosion) per
+			// [06 §12.1] C22–C25. Deterministic, no wall-clock, no map iteration (I1, I4, I6).
+			if s.Features != nil && u != nil && u.Def != nil && s.World != nil {
+				// Map units death cause to combat cause [06 §12.1] for the shared path.
+				var c combat.Cause
 				switch cause {
 				case units.DeathKilled:
-					depth = 1
+					c = combat.CauseOrdinary // 1 [06 §12.1]
 				case units.DeathSelfDestruct:
-					depth = 1
+					c = combat.CauseSelfDestruct // 3 [06 §12.1]
 				case units.DeathReclaimed:
-					depth = 0
+					c = combat.CauseReclaim // 5 [06 §12.1] C24 bypass
 				default:
 					if u.Health <= 0 {
-						depth = 1
+						c = combat.CauseOrdinary
+					} else {
+						c = combat.CauseReclaim
 					}
 				}
-				if s.Catalog != nil && s.Catalog.Features != nil {
-					if corpseDef := features.CorpseDefFor(u.Def, s.Catalog.Features, depth); corpseDef != nil && depth != 0 {
+				// IsFeature direct conversion cause 7 handling: when def isfeature,
+				// retail writes cause 7 DIRECT store not via packet builder [06 §12.1].
+				// We treat isfeature kills as FeatureConversion when cause is killed and isfeature true and corpse exists?
+				// Keep ordinary for now; TODO(question) on isfeature cause-7 producer gating [06 §12.1].
+				ctx := combat.DeathContext{
+					Health:            u.Health,
+					MaxHealth:         u.MaxHealth,
+					PriorSample:       u.PriorSample, // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					Cause:             c,
+					RemainingFraction: u.Remaining, // [06 §12.1] 0.0 when normal/grounded
+					UnitDef:           u.Def,
+				}
+				var featMap map[string]*content.FeatureDef
+				if s.Catalog != nil {
+					featMap = s.Catalog.Features
+				}
+				// Synchronous 4-cell Killed query drains script threads inline [04 §5.1] C25 (I1, I4)
+				syncKilled := func(sev int32) (int32, bool) {
+					if vm := u.GetScript(); vm != nil {
+						v, ok := combat.KilledVariantFromVM(vm, sev) // [04 §5.1][06 §12.1] C23 C25
+						return v, ok
+					}
+					return 0, false
+				}
+				res := combat.ResolveDeath(ctx, featMap, syncKilled) // [04 §5.1][06 §12.1] C22-C25
+				// Corpse depth comes from the Killed-variant low nibble [04 §5.1][06 §12.1] C23, replacing the constant switch.
+				if res.DoCorpse && u.Def.Corpse != "" {
+					depth := res.Variant & 0x0F // low nibble [06 §12.1] C23
+					var corpseDef *content.FeatureDef
+					if s.Catalog != nil && s.Catalog.Features != nil {
+						corpseDef = features.CorpseDefFor(u.Def, s.Catalog.Features, depth) // [06 §12.1] C23 low nibble
+						if corpseDef == nil && depth != 0 {
+							// Fallback to direct catalog lookup for depth1 when chain helper misses
+							if d, ok := s.Catalog.Features[content.CanonicalKey(u.Def.Corpse)]; ok && depth == 1 {
+								corpseDef = d
+							}
+						}
+					} else {
+						for _, d := range s.World.FeatureDefs {
+							if d != nil && d.CanonicalKey == content.CanonicalKey(u.Def.Corpse) {
+								if depth != 0 {
+									corpseDef = features.CorpseDefFor(u.Def, map[string]*content.FeatureDef{content.CanonicalKey(u.Def.Corpse): d}, depth)
+									if corpseDef == nil && depth == 1 {
+										corpseDef = d
+									}
+								}
+								break
+							}
+						}
+					}
+					if corpseDef != nil {
 						_ = s.Features.PlaceCorpse(u.X, u.Z, corpseDef, u.Def.IsFeature)
-					} else if depth == 1 {
-						if corpseDef := features.CorpseDefFor(u.Def, map[string]*content.FeatureDef{}, depth); corpseDef == nil {
-							if d, ok := s.Catalog.Features[content.CanonicalKey(u.Def.Corpse)]; ok {
-								s.Features.PlaceCorpse(u.X, u.Z, d, u.Def.IsFeature)
-							}
-						}
 					}
-				} else {
-					for _, d := range s.World.FeatureDefs {
-						if d != nil && d.CanonicalKey == content.CanonicalKey(u.Def.Corpse) {
-							if depth != 0 {
-								s.Features.PlaceCorpse(u.X, u.Z, d, u.Def.IsFeature)
+				}
+				// Death-explosion weapon trigger (DoExplosion) [06 §12.1] C22-C25
+				// Shared with projectile splash via ExplodeWeaponAt [06 §9.3] (I1, I2)
+				if res.DoExplosion {
+					weapon := combat.SelectDeathExplosionWeapon(u.Def, c) // [06 §12.1][02 "Unit record"]
+					if weapon != nil && s.Combat != nil {
+						impact := combat.Vec3{X: u.X, Y: u.Y, Z: u.Z}
+						tick := uint32(0)
+						if s.Clock != nil {
+							tick = s.Clock.GlobalTick
+						}
+						s.Combat.ExplodeWeaponAt(s.Units, s.World, weapon, impact, h, tick) // [06 §9.3][06 §12.1] shared splash
+						if s.Presentation != nil {
+							pe := presentation.Event{Tick: tick, Source: h, X: u.X, Y: u.Y, Z: u.Z, Graphic: weapon.ExplosionGaf, Alias: weapon.SoundHit}
+							if weapon.ExplosionGaf != "" || weapon.ExplosionArt != "" {
+								s.Presentation.EmitExplosion(pe) // [06 §13.2] C27
 							}
-							break
 						}
 					}
 				}
+			} else if u != nil && u.Def != nil && u.Def.Corpse != "" && s.World != nil {
+				// Fallback when no authoritative resolution (nil def etc) — keep deterministic no-op; TODO(question) on missing def path
 				_ = h
 			}
 		}

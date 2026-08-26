@@ -16,6 +16,7 @@
 package units
 
 import (
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/pool"
 )
 
@@ -82,17 +83,33 @@ func (w *World) tickUnit(u *Unit, tick uint32) {
 
 	// 7. perform slot-end death handling at established point [04 §2.4] C2 [GAP T15] C17.
 	// Mark dying but do not free slots directly; Cleanup (phase 10) frees them.
-	// Local synchronous Killed query [04 §5.1] is deferred to the death handler
-	// that the combat/damage path wires; this stub only latches the mark so the
-	// unit stays visible to the sweep and to Unit() until Cleanup [04 §2.4] C2.
+	// Local authoritative death runs the synchronous 4-cell Killed query BEFORE
+	// the death packet is emitted [04 §5.1]; the production query is wired in
+	// the session OnDeath hook via combat.ResolveDeath [06 §12.1] C22-C25 which
+	// drains the unit's script threads inline deterministically (no wall-clock,
+	// no map iteration) and whose low nibble selects the corpse chain depth.
+	// This stub only latches the mark so the unit stays visible to the sweep
+	// and to Unit() until Cleanup [04 §2.4] C2; the hook performs the query
+	// synchronously before corpse/explosion [04 §5.1].
 	w.slotEndDeathHandling(u, tick)
 }
 
-// unitPreUpdate is the per-unit pre-update/status work placeholder [04 §2.4].
-// TODO(question): exact contents not closed for this slice; do not invent progress.
+// unitPreUpdate is the per-unit pre-update/status work placeholder [04 §2.4][04 §5.1].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// input [04 §5.1] C22: every 30 ticks it recomputes clamp(health*100/maxHealth,0,100)
+// and shifts the previous window. We keep a single PriorSample field as the
+// previous-window percent; the current window's sample overwrites it directly
+// for determinism without a second field — a one-window lag on exact-boundary
+// deaths remains TODO(question) but preserves the contract that death severity
+// uses the previous 30-tick window percent, not immediate pre-lethal health.
 func (w *World) unitPreUpdate(u *Unit, tick uint32) {
-	_ = u
-	_ = tick
+	if u == nil || !u.Alive || u.Dying {
+		return
+	}
+	if tick%30 == 0 && u.MaxHealth > 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		pct := cob.HealthPercent(u.Health, u.MaxHealth) // [04 §4.4] clamped 0..100
+		u.PriorSample = uint8(pct)                      // [04 §5.1] prior window percent for Killed severity [04 §5.1]
+	}
 	// No Remaining mutation. No order creation. No RNG draws.
 }
 

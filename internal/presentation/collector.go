@@ -28,6 +28,7 @@ const (
 	KindLHTFlash        = snapshot.EventKindLHTFlash
 	KindShake           = snapshot.EventKindShake
 	KindSound           = snapshot.EventKindSound
+	KindCorpse          = snapshot.EventKindCorpse
 )
 
 // SFXClass is the typed COB SFX classification carried by an event. Numeric
@@ -262,7 +263,7 @@ func (c *Collector) countEffects() int {
 	return len(c.events) - c.countSounds()
 }
 
-func validKind(k Kind) bool { return k >= KindCOBSFX && k <= KindSound }
+func validKind(k Kind) bool { return k >= KindCOBSFX && k <= KindCorpse }
 
 func (c *Collector) emit(kind Kind, e Event) bool {
 	e.Kind = kind
@@ -283,3 +284,4 @@ func (c *Collector) EmitExplosion(e Event) bool       { return c.emit(KindExplos
 func (c *Collector) EmitLHTFlash(e Event) bool        { return c.emit(KindLHTFlash, e) }
 func (c *Collector) EmitShake(e Event) bool           { return c.emit(KindShake, e) }
 func (c *Collector) EmitSound(e Event) bool           { return c.emit(KindSound, e) }
+func (c *Collector) EmitCorpse(e Event) bool          { return c.emit(KindCorpse, e) }

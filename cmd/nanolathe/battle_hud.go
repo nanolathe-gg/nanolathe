@@ -33,20 +33,22 @@ type retailBattleHUD struct {
 	guiFont *formats.FNT
 	pal     *palette.Tables
 
-	panelTop    *formats.GAFFrame
-	panelSide   *formats.GAFFrame
-	panelBottom *formats.GAFFrame
-	intGAF      *formats.GAF
-	common      *formats.GAF
-	oldMain     *formats.GAF
-	share       *formats.GAF
-	logos       *formats.GAF
-	optionsGAF  *formats.GAF
-	optionsWin  *gui.Window
-	exitWin     *gui.Window
-	confirmWin  *gui.Window
-	modalFont   *formats.GAFEntry
-	pausedFrame *formats.GAFFrame
+	panelTop     *formats.GAFFrame
+	panelSide    *formats.GAFFrame
+	panelBottom  *formats.GAFFrame
+	intGAF       *formats.GAF
+	common       *formats.GAF
+	oldMain      *formats.GAF
+	share        *formats.GAF
+	logos        *formats.GAF
+	optionsGAF   *formats.GAF
+	optionsWin   *gui.Window
+	exitWin      *gui.Window
+	confirmWin   *gui.Window
+	modalFont    *formats.GAFEntry
+	pausedFrame  *formats.GAFFrame
+	victoryFrame *formats.GAFFrame // [07 §11] igvictory from anims/igtitles.gaf via intgaf/gui machinery
+	defeatFrame  *formats.GAFFrame // [07 §11] igdefeat from anims/igtitles.gaf
 
 	panel *hud.Panel
 	fs    vfs.FSOps
@@ -222,14 +224,24 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	} else {
 		hudAssetWarning(fs, hattPath, "hattfont12.gaf [07 §4]", ferr)
 	}
-	// Optional title art — degradable [07 §11].
-	var pausedFrame *formats.GAFFrame
+	// Optional title art — degradable [07 §11]. Load via same intgaf/gui machinery as HUD panels [07 §6][07 §11].
+	var pausedFrame, victoryFrame, defeatFrame *formats.GAFFrame
 	titlesPath := "anims/igtitles.gaf"
 	if gaf, ferr := formats.LoadGAFFile(fs, titlesPath); ferr == nil {
 		if f, ferr2 := battleFrame(gaf, "igpaused"); ferr2 == nil {
 			pausedFrame = f
 		} else {
 			hudAssetWarning(fs, titlesPath, "igtitles.gaf missing igpaused [07 §11]", ferr2)
+		}
+		if f, ferr2 := battleFrame(gaf, "igvictory"); ferr2 == nil {
+			victoryFrame = f
+		} else {
+			hudAssetWarning(fs, titlesPath, "igtitles.gaf missing igvictory [07 §11]", ferr2)
+		}
+		if f, ferr2 := battleFrame(gaf, "igdefeat"); ferr2 == nil {
+			defeatFrame = f
+		} else {
+			hudAssetWarning(fs, titlesPath, "igtitles.gaf missing igdefeat [07 §11]", ferr2)
 		}
 	} else {
 		hudAssetWarning(fs, titlesPath, "igtitles.gaf [07 §11]", ferr)
@@ -248,7 +260,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
 		optionsGAF: optionsGAF, optionsWin: optionsWin, exitWin: exitWin, confirmWin: confirmWin,
-		modalFont: modalFont, pausedFrame: pausedFrame,
+		modalFont: modalFont, pausedFrame: pausedFrame, victoryFrame: victoryFrame, defeatFrame: defeatFrame,
 		panel: hud.NewPanel(0x04, 640, 480, nil), fs: fs,
 		pages:      make(map[string]*formats.GAF),
 		windows:    make(map[string]*gui.Window),
@@ -375,6 +387,9 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 		h.drawPausedTitle(c)
 	}
 	h.drawBattleMenu(c, b)
+	if b != nil {
+		b.drawStatusMessage(c)
+	}
 	h.drawResultOverlay(c, b)
 }
 
@@ -400,78 +415,6 @@ func (h *retailBattleHUD) drawBattleMenu(c *client.Client, b *battleSession) {
 		h.drawGUIWindow(c, h.confirmWin, nil, "Surrender this battle and return to main menu?")
 	} else if b.menu == battleMenuConfirmExit {
 		h.drawGUIWindow(c, h.confirmWin, nil, "Exit the Battle")
-	}
-}
-
-// drawResultOverlay renders the retail victory/defeat overlay [RS-05][08][P1-01] using authored
-// palette and fonts [02 §6][03 §7.1]. It is presentation-only (I6) and reads the snapshot ResultView.
-func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession) {
-	if h == nil || c == nil || b == nil || !b.isResultVisible() {
-		return
-	}
-	view := b.resultView()
-	// Dim the scene: fill whole screen with palette 0 (black) at 50% by alternating? For now opaque dark grey 1
-	c.UIFillRect(0, 0, 640, 480, 1)
-	// Centered box 400x240 at (120,120) with border
-	bx, by, bw, bh := 120, 120, 400, 240
-	c.UIFillRect(bx, by, bw, bh, 8)
-	c.UIFillRect(bx, by, bw, 2, 15)
-	c.UIFillRect(bx, by+bh-2, bw, 2, 15)
-	c.UIFillRect(bx, by, 2, bh, 15)
-	c.UIFillRect(bx+bw-2, by, 2, bh, 15)
-	// Title: VICTORY / DEFEAT / DRAW [08][RR-04]
-	title := "VICTORY"
-	if view.Draw {
-		title = "DRAW"
-	} else if view.Kind == "defeat" {
-		title = "DEFEAT"
-	} else if view.Kind == "victory" {
-		title = "VICTORY"
-	} else if view.WinnerTeam != b.sess.TeamForOwner(int(b.sess.LocalOwner)) && view.WinnerTeam != -1 {
-		title = "DEFEAT"
-	}
-	// Use console font for title
-	if h.console != nil {
-		tx := bx + (bw-client.MeasureText(h.console, title))/2
-		c.UIText(h.console, title, tx, by+10, 15)
-		reason := view.Reason
-		if reason == "" {
-			reason = "commander_death"
-		}
-		c.UIText(h.console, reason, bx+10, by+30, 7)
-		c.UIText(h.console, fmt.Sprintf("Tick %d Armed %d Countdown %d", view.Tick, view.ArmedTick, view.Countdown), bx+10, by+45, 7)
-		// Winners/Losers
-		wStr := fmt.Sprintf("Winners: %v", view.Winners)
-		if view.Draw {
-			wStr = "Winners: none (draw)"
-		}
-		c.UIText(h.console, wStr, bx+10, by+60, 7)
-		c.UIText(h.console, fmt.Sprintf("Losers: %v", view.Losers), bx+10, by+75, 7)
-		// Scores
-		y := by + 90
-		for _, sc := range view.Scores {
-			if y > by+bh-40 {
-				break
-			}
-			line := fmt.Sprintf("P%d Team%d K%d L%d Score%d %s", sc.Player, sc.Team, sc.Kills, sc.Losses, sc.Score, sc.Kind)
-			c.UIText(h.console, line, bx+10, y, 7)
-			y += 12
-		}
-	}
-	// Buttons [RS-05] 6→7→2 graph: retry, skirmish, main, continue
-	b.ensureResultButtons()
-	for _, btn := range b.resultButtons {
-		// Button background
-		c.UIFillRect(int(btn.X), int(btn.Y), panelButtonW, panelButtonH, 4)
-		c.UIFillRect(int(btn.X), int(btn.Y), panelButtonW, 2, 15)
-		c.UIFillRect(int(btn.X), int(btn.Y+panelButtonH-2), panelButtonW, 2, 15)
-		c.UIFillRect(int(btn.X), int(btn.Y), 2, panelButtonH, 15)
-		c.UIFillRect(int(btn.X+panelButtonW-2), int(btn.Y), 2, panelButtonH, 15)
-		if h.console != nil {
-			tx := int(btn.X) + (panelButtonW-client.MeasureText(h.console, btn.Name))/2
-			ty := int(btn.Y) + 6
-			c.UIText(h.console, btn.Name, tx, ty, 15)
-		}
 	}
 }
 

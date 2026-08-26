@@ -231,6 +231,9 @@ func TestLegalPlacementQueuesMobileBuild(t *testing.T) {
 	if b.buildDef == "" {
 		t.Fatalf("buildDef cleared prematurely")
 	}
+	// Capture placement before handleInput disarms it [07 §9]
+	expCellX, expCellZ := b.buildCellX, b.buildCellZ
+	expFootX, expFootZ := b.buildFootX, b.buildFootZ
 	b.handleInput(in, nil)
 	// Check that one mobile build was queued
 	q := orders.QueueForUnit(builder)
@@ -243,12 +246,12 @@ func TestLegalPlacementQueuesMobileBuild(t *testing.T) {
 	// The order carries the footprint's center, not the cursor point [07 §9]:
 	// retail snaps the site to whole cells and stores ((foot + 2*cell) << 19).
 	tail := q.Primary()[0]
-	expectedWX, expectedWZ := world.PlacementCenter(b.buildCellX, b.buildCellZ, b.buildFootX, b.buildFootZ)
+	expectedWX, expectedWZ := world.PlacementCenter(expCellX, expCellZ, expFootX, expFootZ)
 	if tail.GoalX != expectedWX || tail.GoalZ != expectedWZ {
 		t.Fatalf("queued coords mismatch: got %d,%d want %d,%d", tail.GoalX, tail.GoalZ, expectedWX, expectedWZ)
 	}
-	if tail.GoalX != numeric.Fixed(int64(b.buildCellX*16+b.buildFootX*8)<<16) {
-		t.Fatalf("site center %d is not the footprint midpoint of cell %d", tail.GoalX, b.buildCellX)
+	if tail.GoalX != numeric.Fixed(int64(expCellX*16+expFootX*8)<<16) {
+		t.Fatalf("site center %d is not the footprint midpoint of cell %d", tail.GoalX, expCellX)
 	}
 	_ = qx
 	_ = qz

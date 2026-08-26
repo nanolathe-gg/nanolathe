@@ -94,6 +94,7 @@ type System struct {
 	// movement package fixtures.
 	activeOrders   map[pool.Handle]*activeMove
 	nextActivation uint64
+	arrivalHandles map[pool.Handle]*arrivalHandle // per-unit Move_Ground arrival handle [R-P0-01]
 }
 
 type activeMove struct {
@@ -101,10 +102,23 @@ type activeMove struct {
 	token uint64
 }
 
+type arrivalHandle struct {
+	order    *orders.Node
+	goalX    int32 // goal cells (bias-corrected) [R-P0-01]
+	goalZ    int32
+	threshSq int32 // floor((SightDistance+4)/16)² inclusive [R-P0-01]
+}
+
 // localSteeringThresholdSquared is only the near-waypoint brake/steering
-// threshold. It is not final Move_Ground completion; that tolerance remains an
-// explicit R-P0-01 question. [04 §3.5]
+// threshold. It is not final Move_Ground completion; that tolerance is recovered
+// in R-P0-01 and lives in the arrival handle (threshold²) below. [04 §3.5][R-P0-01]
 const localSteeringThresholdSquared uint64 = uint64(2*65536) * uint64(2*65536)
+
+// [R-P0-01] Move_Ground arrival handshake constants.
+const (
+	arrivalSatisfiedBit uint32 = 0x20 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	arrivalGateMask     uint32 = 0xE0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+)
 
 // These are explicit Nanolathe land-skirmish retry policy values. Retail's
 // dynamic-blocker retry cadence/count remain unresolved [R-P1-10]; they are not
@@ -119,6 +133,50 @@ type PathFailure struct {
 	Tick      uint32
 	Retries   int
 	NextRetry uint32
+}
+
+// thresholdSqFromSight computes threshold² = floor((SightDistance+4)/16)² [R-P0-01].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func thresholdSqFromSight(sight int32) int32 {
+	rp := int64(sight) + 4 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	if rp < 0 {
+		rp = 0
+	}
+	t := rp / 16 // floor for non-negative; sight non-negative in practice
+	// cdq/and 0xf/sar 4/imul in decompile is arithmetic floor division by 16
+	return int32(t * t)
+}
+
+// goalCellForWorld computes goal cells (goal − bias·0x80000 + 0x80000) >>20 [R-P0-01].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// the offset shifts by foot*halfCell. Using foot*halfCell offset makes tile and goal domains
+// consistent and inclusive compare planar in cell domain [R-P0-01].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// gives identical domains for tile and goal for 1×1 and preserves inclusive distance semantics.
+func goalCellForWorld(goal numeric.Fixed, foot int32) int32 {
+	if foot <= 0 {
+		foot = 1
+	}
+	half := int64(0x80000) // 1<<19 half cell [R-P0-01][03 §2.1]
+	cell := int64(1 << 20) // 0x100000 one cell [03 §2.1]
+	v := int64(goal) + int64(foot)*half
+	return int32(floorDiv(v, cell))
+}
+
+// ThresholdSqFromSight is exported helper for tests [R-P0-01].
+func ThresholdSqFromSight(sight int32) int32 { return thresholdSqFromSight(sight) }
+
+// ArrivalHandleFor returns the cached arrival handle for a unit, if any [R-P0-01].
+func (s *System) ArrivalHandleFor(h pool.Handle) (goalX, goalZ int32, threshSq int32, ok bool) {
+	if s == nil || s.arrivalHandles == nil {
+		return 0, 0, 0, false
+	}
+	ah, ok := s.arrivalHandles[h]
+	if !ok || ah == nil {
+		return 0, 0, 0, false
+	}
+	return ah.goalX, ah.goalZ, ah.threshSq, true
 }
 
 // StepResult is the per-unit movement result for the slot visit [04 §8.1][04 §8.2].
@@ -142,19 +200,20 @@ type StepResult struct {
 // Route.Publish [04 §7.3] C14.
 func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *System {
 	s := &System{
-		Terrain:      terrain,
-		Fallback:     fallback,
-		Grid:         grid,
-		Routes:       make(map[pool.Handle]*Route),
-		Steers:       make(map[pool.Handle]*SteerState),
-		Collisions:   make(map[pool.Handle]*CollisionState),
-		Flights:      make(map[pool.Handle]*FlightState),
-		profiles:     make(map[pool.Handle]Profile),
-		prevMoveTier: make(map[pool.Handle]int),
-		prevSFXBand:  make(map[pool.Handle]int),
-		avoidNext:    make(map[pool.Handle]uint32),
-		pathFailures: make(map[pool.Handle]PathFailure),
-		activeOrders: make(map[pool.Handle]*activeMove),
+		Terrain:        terrain,
+		Fallback:       fallback,
+		Grid:           grid,
+		Routes:         make(map[pool.Handle]*Route),
+		Steers:         make(map[pool.Handle]*SteerState),
+		Collisions:     make(map[pool.Handle]*CollisionState),
+		Flights:        make(map[pool.Handle]*FlightState),
+		profiles:       make(map[pool.Handle]Profile),
+		prevMoveTier:   make(map[pool.Handle]int),
+		prevSFXBand:    make(map[pool.Handle]int),
+		avoidNext:      make(map[pool.Handle]uint32),
+		pathFailures:   make(map[pool.Handle]PathFailure),
+		activeOrders:   make(map[pool.Handle]*activeMove),
+		arrivalHandles: make(map[pool.Handle]*arrivalHandle),
 	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
 	// Use DefaultBase unless overridden [P0-I16]; no longer reads mutable global.
@@ -298,19 +357,63 @@ func (s *System) distToGoal(u *units.Unit) numeric.Fixed {
 	return numeric.Fixed(int64(isqrt(d2)))
 }
 
-// finalGoalReached deliberately does not turn route pruning into order
-// completion. R-P0-01 did not establish the final Move_Ground tolerance or
-// comparison domain; retaining the order active is the safe deterministic
-// behavior until that question is answered.
+// finalGoalReached implements the recovered Move_Ground arrival predicate [R-P0-01].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// cell in the cell domain, planar only, inclusive: dx*dx+dz*dz <= threshold².
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// speed or blocked term participates. Route pruning (<=25 whole units) is separate [R-P0-01].
 func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
-	if !hadRoute || u == nil {
+	if u == nil {
 		return false
 	}
-	// TODO(question): exact final Move_Ground completion tolerance, units, and
-	// inclusive comparison remain unresolved by R-P0-01. Do not fabricate a
-	// five-cell or two-world-unit threshold here.
+	// Arrival is defined only for an order that has an arrival handle bound [R-P0-01].
+	// hadRoute gates the diagnostic Arrived flag but the satisfied bit is still
+	// set via the handle when within threshold even if route already pruned [R-P0-01].
+	ah, ok := s.arrivalHandles[u.Handle]
+	if !ok || ah == nil || ah.order == nil {
+		return false
+	}
+	// Verify handle still belongs to the active head; stale handles after a head
+	// replacement must not signal [R-P0-01][04 §7.3].
+	if q := orders.QueueForUnit(u); q == nil || q.Head() != ah.order {
+		return false
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	var tileX, tileZ int32
+	if coll, ok := s.Collisions[u.Handle]; ok && coll != nil {
+		tileX = coll.CachedAnchor.X
+		tileZ = coll.CachedAnchor.Z
+	} else {
+		// Fallback before first stamp: use world-to-cell floor with same bias domain
+		// for determinism. For 1x1 this is WorldToCell; for larger footprints the
+		// bias offset is the same foot*half used for goal cells.
+		tileX = world.WorldToCell(u.X)
+		tileZ = world.WorldToCell(u.Z)
+	}
+	dx := int64(tileX) - int64(ah.goalX)
+	dz := int64(tileZ) - int64(ah.goalZ)
+	// Signed 32-bit squares, pure planar inclusive compare [R-P0-01] setle.
+	if dx*dx+dz*dz <= int64(ah.threshSq) {
+		ah.order.Satisfied |= arrivalSatisfiedBit // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Also reflect hadRoute gating for diagnostic Arrived flag: only report
+		// Arrived when we had a route at entry, preserving prior contract that
+		// EmptyRoute paths do not count as arrived [R-P0-01][task].
+		if hadRoute {
+			return true
+		}
+		// Still signal the bit even when hadRoute false so pump can complete
+		// a direct-walk goal without a published route [R-P0-01] TODO(question):
+		// whether direct arrival without a route should complete is Unknown for
+		// compact controller class; keep bit set but diagnostic false.
+		return false
+	}
 	return false
 }
+
+// TODO(question): How does the compact ground controller class (0x1c alloc, vt 0x4fd488,
+// selected for owner type byte 3) signal ground-order arrival, given its vt+8 hook is a
+// plain ret? And what advances the VTOL_MOVE handler phase 1→2? Both remain
+// unrecovered; do not guess them. [R-P0-01]
 
 // resolveProfile derives a unit's movement profile from its definition's
 // movement class [02 "Unit record"] [04 §6.1].
@@ -646,6 +749,7 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	start := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
 	goal := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
 	s.submitMove(u.Handle, u.Owner, start, goal, token)
+	s.bindArrivalHandle(u, head)
 	return true
 }
 
@@ -673,6 +777,7 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	start := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
 	goal := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
 	s.submitMove(u.Handle, u.Owner, start, goal, token)
+	s.bindArrivalHandle(u, head)
 	return true
 }
 
@@ -692,6 +797,58 @@ func (s *System) DeactivateMove(handle pool.Handle) {
 	if route := s.Routes[handle]; route != nil && route.Active {
 		route.Active = false
 		route.Dirty = true
+	}
+	if s.arrivalHandles != nil {
+		delete(s.arrivalHandles, handle)
+	}
+}
+
+func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
+	if s == nil || u == nil || head == nil {
+		return
+	}
+	if s.arrivalHandles == nil {
+		s.arrivalHandles = make(map[pool.Handle]*arrivalHandle)
+	}
+	// Only bind for Move_Ground-family orders [R-P0-01]; other orders not arrival-tracked.
+	name := orders.DescriptorFor(head.ID).Name
+	switch name {
+	case "Move_Ground", "VTOL_Move", "QMove", "Patrol", "QPatrol", "VTOL_Patrol", "RepairPatrol", "VTOL_RepairPatrol":
+	default:
+		// Not a ground-move family order: ensure no stale handle remains.
+		delete(s.arrivalHandles, u.Handle)
+		return
+	}
+	profile := s.ProfileFor(u.Handle)
+	footX := profile.FootPrintX
+	footZ := profile.FootPrintZ
+	if footX <= 0 {
+		if u.Def != nil && u.Def.FootprintX > 0 {
+			footX = int16(u.Def.FootprintX)
+		} else {
+			footX = 1
+		}
+	}
+	if footZ <= 0 {
+		if u.Def != nil && u.Def.FootprintZ > 0 {
+			footZ = int16(u.Def.FootprintZ)
+		} else {
+			footZ = 1
+		}
+	}
+	goalX := goalCellForWorld(head.GoalX, int32(footX))
+	goalZ := goalCellForWorld(head.GoalZ, int32(footZ))
+	sight := int32(0)
+	if u.Def != nil {
+		sight = u.Def.SightDistance
+	}
+	threshSq := thresholdSqFromSight(sight) // [R-P0-01] floor((SightDistance+4)/16)²
+	s.arrivalHandles[u.Handle] = &arrivalHandle{order: head, goalX: goalX, goalZ: goalZ, threshSq: threshSq}
+	// [R-P0-01] initial gate must be 0 so phase 0 handler can arm 0xE0; otherwise static 0x402 would block.
+	if head.Phase == 0 && head.DynamicGate != 0 {
+		// Only clear initial static gate; preserve armed 0xE0 for re-binds after a replan where Phase already 1
+		head.DynamicGate = 0
+		head.Deadline = -1
 	}
 }
 
@@ -1103,12 +1260,16 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	var directGoal bool
 	var directX, directZ numeric.Fixed
 	if !hadRoute {
+		// [R-P0-01] still test arrival even without an active route: handle is
+		// bound at order activation, and the inclusive cell-domain predicate may
+		// already be satisfied before a route publishes (e.g., start within threshold).
+		_ = s.finalGoalReached(u, hadRoute)
 		d := s.distToGoal(u)
 		d2, hasGoal := s.distSqToGoal(u)
 		if hasGoal && d2 <= localSteeringThresholdSquared {
 			s.emitMovementCallbacks(u, 0)
-			// Route absence is not proof of final order completion; the
-			// order-layer tolerance remains unresolved [R-P0-01].
+			// Route absence is not proof of final order completion via local
+			// threshold; completion is via the arrival handle above [R-P0-01].
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
 		}
 		s.emitMovementCallbacks(u, 0)

@@ -13,6 +13,7 @@ func (c *Client) SetAudioQueue(q *audio.Queue) {
 		return
 	}
 	c.audioQueue = q
+	c.ensureAudioBackend()
 }
 
 // SetAudioCache attaches the sample cache [03 §8.2] C20. Load resolves aliases
@@ -22,6 +23,7 @@ func (c *Client) SetAudioCache(cache *audio.SampleCache) {
 		return
 	}
 	c.audioCache = cache
+	c.ensureAudioBackend()
 }
 
 // SetMusicController attaches the CD/MCI controller [03 §8.4]. Tick is
@@ -31,6 +33,37 @@ func (c *Client) SetMusicController(m *audio.Controller) {
 		return
 	}
 	c.audioMusic = m
+}
+
+// SetAudioBackend installs the PCM backend directly [03 §8.3] [I6]. Headless
+// never installs a device; windowed callers pass a non-headless backend.
+func (c *Client) SetAudioBackend(b *audio.Backend) {
+	if c == nil {
+		return
+	}
+	if b != nil && !b.IsHeadless() && c.opts.Headless {
+		// Headless client must never hold a windowed backend [I5][I6].
+		return
+	}
+	audio.SetGlobalBackend(b)
+}
+
+// AudioBackend returns the installed PCM backend (presentation-only) [I6].
+func (c *Client) AudioBackend() *audio.Backend {
+	return audio.GlobalBackend()
+}
+
+func (c *Client) ensureAudioBackend() {
+	if c == nil || c.opts.Headless {
+		return
+	}
+	if audio.GlobalBackend() != nil {
+		return
+	}
+	// Guard ALL device construction behind windowed backend detection [I5][I6].
+	// Headless never constructs an audio context; hashes stay byte-identical.
+	b := audio.NewBackend(false)
+	audio.SetGlobalBackend(b)
 }
 
 // SetAudioViewport sets the presentation viewport for positional pan and
@@ -81,10 +114,14 @@ func (c *Client) AudioMusic() *audio.Controller {
 // resolves within the window still print speech but play no sound; full-queue
 // eviction resolves the last entry silently before inserting [03 §8.3] C16.
 // It also ticks the music controller via the MCI poll [03 §8.4].
+// When a windowed backend is present the queue's OnPlay variant draw [03 §8.3]
+// C17 is played via PCM with volume/pan from the positional math [03 §8.3]
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (c *Client) TickAudio() {
 	if c == nil {
 		return
 	}
+	c.ensureAudioBackend()
 	c.audioFrame++
 	if c.audioQueue != nil {
 		c.audioQueue.Drain(c.audioFrame)
@@ -130,6 +167,9 @@ func (c *Client) UpdateAudioViewportFromCamera() {
 // audience cell via the supplied IsAudible func (which should wrap
 // audio.IsAudible with the session's vis grids and mode &2), computes pan or
 // attenuation, and loads via cache. Missing alias degrades silently.
+// When a windowed backend is present the alias is also played via PCM with
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// constructs a device [I5][I6].
 func (c *Client) PlayPositional(alias string, pos [3]numeric.Fixed, isAudible func([3]numeric.Fixed) bool) (audio.Pan, int32, bool) {
 	if c == nil || alias == "" {
 		return audio.Pan{}, 0, false
@@ -149,6 +189,11 @@ func (c *Client) PlayPositional(alias string, pos [3]numeric.Fixed, isAudible fu
 	if c.audioCache != nil {
 		_, _ = c.audioCache.Load(alias)
 	}
+	if be := audio.GlobalBackend(); be != nil {
+		volF := audio.VolumeFromAttenuation(vol)
+		panF := audio.PanFloat(pan, c.audioViewport)
+		_ = be.PlayAlias(alias, c.audioCache, volF, panF)
+	}
 	return pan, vol, true
 }
 
@@ -158,10 +203,18 @@ func (c *Client) PlayPositional(alias string, pos [3]numeric.Fixed, isAudible fu
 // volume with no pan, because they have no world position to attenuate or
 // place. A missing alias degrades silently, the same way the positional path
 // treats one.
+// When a backend is present the cue is also played via PCM at unity
+// volume [03 §8.3] [I6]; headless backends record without constructing a
+// device [I5].
 func (c *Client) PlayUICue(alias string) bool {
 	if c == nil || alias == "" || c.audioCache == nil {
 		return false
 	}
 	_, err := c.audioCache.Load(alias)
+	if err == nil {
+		if be := audio.GlobalBackend(); be != nil {
+			_ = be.PlayAlias(alias, c.audioCache, 1.0, 0)
+		}
+	}
 	return err == nil
 }

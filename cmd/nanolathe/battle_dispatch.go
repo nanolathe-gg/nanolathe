@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
@@ -339,6 +340,38 @@ func (b *battleSession) submitBattleCommand(cmd battleCommand) error {
 			return fmt.Errorf("battle: production group recall requires session dispatch")
 		}
 		b.dispatchGroupFallback(cmd.Group, false)
+		return nil
+	case battleCommandSelectionReplace:
+		if b.sess != nil && b.sess.Units != nil {
+			for _, u := range b.sess.Units.Iter() {
+				if u != nil && u.Owner == b.sess.LocalOwner {
+					u.Flags &^= client.SelectionFlag
+				}
+			}
+			for _, h := range cmd.Selection.Handles {
+				if u := b.sess.Units.Unit(h); u != nil && u.Owner == b.sess.LocalOwner {
+					u.Flags |= client.SelectionFlag
+				}
+			}
+		}
+		return nil
+	case battleCommandSelectionToggle:
+		if b.sess != nil && b.sess.Units != nil {
+			for _, h := range cmd.Selection.Handles {
+				if u := b.sess.Units.Unit(h); u != nil && u.Owner == b.sess.LocalOwner {
+					u.Flags ^= client.SelectionFlag
+				}
+			}
+		}
+		return nil
+	case battleCommandSelectionClear:
+		if b.sess != nil && b.sess.Units != nil {
+			for _, u := range b.sess.Units.Iter() {
+				if u != nil && u.Owner == b.sess.LocalOwner {
+					u.Flags &^= client.SelectionFlag
+				}
+			}
+		}
 		return nil
 	default:
 		return nil

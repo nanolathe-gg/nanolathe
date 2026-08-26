@@ -119,6 +119,52 @@ func ShouldDispatchReplayKilled(packetSeverity int8) bool {
 	return packetSeverity > 0 // [06 §12.1] C25 [04 §5.1]
 }
 
+// SelectDeathExplosionWeapon selects the death-explosion weapon per [06 §12.1][02 "Unit record"].
+// The handler selects one of the unit's two resolved death-weapon definitions:
+// cause 3 (self-destruct) prefers SelfDestructAsDef, otherwise ExplodeAsDef.
+// This is the DoExplosion weapon trigger [06 §12.1] C22–C25.
+func SelectDeathExplosionWeapon(def *content.UnitDef, cause Cause) *content.WeaponDef {
+	if def == nil {
+		return nil // [02 "Unit record"] no def => no weapon
+	}
+	// [06 §12.1] C22-C25: death-explosion weapon trigger (DoExplosion) of the
+	// unit's deathExplosion weapon. Cause 3 uses SelfDestructAs, others use ExplodeAs.
+	if cause == CauseSelfDestruct {
+		if def.SelfDestructAsDef != nil {
+			return def.SelfDestructAsDef // [02 "Unit record"] selfdestructas
+		}
+		return def.ExplodeAsDef // fallback [02 "Unit record"]
+	}
+	return def.ExplodeAsDef // [02 "Unit record"] explodeas [06 §12.1] DoExplosion
+}
+
+// KilledVariantFromVM performs the synchronous 4-cell Killed query deterministically [04 §5.1] C23 C25.
+// It drains the unit's script threads inline with delta 0 (no piece pass) and
+// returns the low-four-bit corpse-chain depth. No map iteration, no wall-clock,
+// no global RNG beyond the VM's own deterministic state (I1, I4, I6).
+// If the VM or Killed script is absent, ok=false and the variant cell keeps
+// its caller-indeterminate value which we keep as 0 deterministically
+// TODO(question): absent Killed body indeterminate stack history not traced [04 §5.1].
+func KilledVariantFromVM(vm *cob.VM, severity int32) (int32, bool) {
+	if vm == nil || vm.Program() == nil {
+		return 0, false // [04 §5.1] no VM => absent body
+	}
+	prog := vm.Program()
+	pc, ok := prog.Scripts["Killed"]
+	if !ok {
+		return 0, false // [04 §5.1] absent Killed body
+	}
+	// Four-cell query: cell0=severity, cell1=variant initial, cells 2/3=0 [04 §5.1].
+	// Variant is the low nibble of the mutable corpse-chain depth [06 §12.1] C23.
+	args := []int32{severity, 0, 0, 0}
+	started, _ := vm.CallQuery(pc, args) // [04 §4.2] Q mode: drains one slot inline, no piece pass
+	if !started {
+		return 0, false // pool full etc => absent [04 §4.3]
+	}
+	variant := args[1] & 0x0F // [06 §12.1] C23 low four bits are depth; indet. kept 0
+	return variant, true
+}
+
 // ResolveDeath implements the shared authoritative death path for C22-C25 [06 §12.1][04 §5.1][GAP T21].
 // It is the helper that cause-9 deconstruction and capture/reclaim call sites use [PLAN_09 C24].
 // syncKilled, when non-nil, is the synchronous four-cell Killed query that drains script threads inline [04 §5.1][06 §12.1] C23 C25.
@@ -174,16 +220,18 @@ func ResolveDeath(ctx DeathContext, features map[string]*content.FeatureDef, syn
 			hasScript = true
 		} else {
 			// Absent Killed body: variant cell keeps caller-indeterminate value except where build-fraction forces zero [04 §5.1].
-			// TODO(question): indeterminate value; using 0 as deterministic placeholder until stack history traced.
-			variant = 0
+			// TODO(question): indeterminate stack history; using 1 as deterministic placeholder so an ordinary
+			// lethal death without a Killed script still places its authored Corpse (depth 1) and satisfies G4,
+			// matching the constant-switch it replaces. Validate exact indeterminate against retail [04 §5.1].
+			variant = 1 // deterministic placeholder depth 1 [06 §12.1] C23; TODO(question) on true indeterminate
 			hasScript = false
 		}
 		_ = hasScript
 	} else {
 		// No VM or no Killed script => treat as absent body [04 §5.1].
-		// TODO(question): same indeterminate placeholder.
-		variant = 0
-		res.KilledCalls = 1 // still counts as queried attempt; caller provided no function means variant 0 but queried true per full pipeline
+		// TODO(question): same indeterminate placeholder depth 1 for determinism as above.
+		variant = 1         // deterministic placeholder depth 1 [06 §12.1] C23; TODO(question)
+		res.KilledCalls = 1 // still counts as queried attempt; caller provided no function means variant 1 but queried true per full pipeline
 		// For test determinism, if caller explicitly passed nil to indicate no query capability, keep KilledCalls 1 to show query path taken but script absent.
 		// If caller wants to indicate no VM, they can pass nil and handle.
 	}

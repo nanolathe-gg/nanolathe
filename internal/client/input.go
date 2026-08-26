@@ -328,6 +328,14 @@ func ebitenKey(k input.Key) (ebiten.Key, bool) {
 		return ebiten.KeyEscape, true
 	case input.KeyPause:
 		return ebiten.KeyPause, true
+	case input.KeyMinus:
+		return ebiten.KeyMinus, true
+	case input.KeyEqual:
+		return ebiten.KeyEqual, true
+	case input.KeyNumpadAdd:
+		return ebiten.KeyNumpadAdd, true
+	case input.KeyNumpadSubtract:
+		return ebiten.KeyNumpadSubtract, true
 	case input.KeyShift:
 		return ebiten.KeyShiftLeft, true
 	case input.KeyCtrl:

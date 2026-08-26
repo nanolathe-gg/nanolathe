@@ -1,11 +1,161 @@
 package client
 
 import (
+	"sort"
+
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/visibility"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
+
+// frameShake holds presentation-only screen shake per client. It is keyed by
+// Client pointer so a shared package-level map avoids mutating the Client
+// struct owned by another lane [I6][03 §5.6]. Two CRT draws per active tick
+// are preserved via the companion CRT map [I4].
+var (
+	frameShakeMap    = make(map[*Client]*render.Shake)
+	frameShakeCRTMap = make(map[*Client]*rng.CRT)
+)
+
+func getFrameShake(c *Client) *render.Shake {
+	if c == nil {
+		return nil
+	}
+	if s, ok := frameShakeMap[c]; ok {
+		return s
+	}
+	s := &render.Shake{}
+	frameShakeMap[c] = s
+	return s
+}
+
+func getFrameShakeCRT(c *Client) *rng.CRT {
+	if c == nil {
+		return nil
+	}
+	if crt, ok := frameShakeCRTMap[c]; ok {
+		return crt
+	}
+	crt := &rng.CRT{}
+	*crt = rng.NewCRT(1)
+	frameShakeCRTMap[c] = crt
+	return crt
+}
+
+// projectileVisible is the one-point projectile gate from the immutable
+// local-player coverage grid [03 §3.2][03 §5.4]. An invalid/missing grid is
+// treated as visible so fixtures without a visibility service still draw
+// projectiles [03 §5.4][I9].
+func projectileVisible(v snapshot.VisibilityView) func(snapshot.ProjectileView) bool {
+	return func(p snapshot.ProjectileView) bool {
+		if !v.Valid || v.W <= 0 || v.H <= 0 || len(v.Visible) != int(v.W*v.H) {
+			return true
+		}
+		px := int32(int16(int64(p.X) >> 16))
+		py := int32(int16(int64(p.Y) >> 16))
+		pz := int32(int16(int64(p.Z) >> 16))
+		u := px >> 5
+		row := (pz - (py >> 1)) >> 5
+		if u < 0 || row < 0 || u >= v.W || row >= v.H {
+			return false
+		}
+		return v.Visible[int(row*v.W+u)] != 0
+	}
+}
+
+// fogUnexploredUnit reports whether a unit's anchor visibility tile is never-explored [03 §3.3][rr-16].
+// It checks Fog Ch0 ==15 (solid dark, all four neighbours fogged) via the immutable FogView, which is the presentation equivalent of the plot flag 0x04 [03 §3.3]. Invalid or missing fog is treated as explored so fixtures remain visible [I9].
+func fogUnexploredUnit(fog snapshot.FogView, u snapshot.UnitView) bool {
+	if !fog.Valid || fog.W <= 0 || fog.H <= 0 || len(fog.Ch0) != int(fog.W*fog.H) {
+		return false
+	}
+	tx := world.WorldToTile(u.X)
+	tz := world.WorldToTile(u.Z)
+	if tx < 0 || tz < 0 || tx >= fog.W || tz >= fog.H {
+		return false
+	}
+	idx := int(tz*fog.W + tx)
+	return fog.Ch0[idx] == 15
+}
+
+// fogUnexploredFeature reports whether a feature's anchor cell maps to an unexplored fog tile [03 §3.3][rr-16].
+// Feature CX/CZ are cell coordinates; fog is per visibility tile (2x2 cells) so tile = cell>>1 [03 §2.1][03 §3.1]. Invalid fog is treated as explored [I9].
+func fogUnexploredFeature(fog snapshot.FogView, f snapshot.FeatureView) bool {
+	if !fog.Valid || fog.W <= 0 || fog.H <= 0 || len(fog.Ch0) != int(fog.W*fog.H) {
+		return false
+	}
+	tx := f.CX >> 1
+	tz := f.CZ >> 1
+	if tx < 0 || tz < 0 || tx >= fog.W || tz >= fog.H {
+		return false
+	}
+	idx := int(tz*fog.W + tx)
+	return fog.Ch0[idx] == 15
+}
+
+// unitVisibleForFrame is the enemy-visibility predicate for the painter [03 §3.2] C8.
+// Own units always pass (owner bypass) [03 §3.2] step1; invalid visibility is treated as visible for fixtures [I9]; otherwise it delegates to SnapshotVisible which checks cloaked flag and the current-coverage byte grid.
+func unitVisibleForFrame(frame *snapshot.Frame, u snapshot.UnitView, viewer uint8) bool {
+	if frame == nil {
+		return false
+	}
+	if u.Owner == viewer {
+		return true
+	}
+	if !frame.Visibility.Valid || frame.Visibility.W <= 0 || frame.Visibility.H <= 0 || len(frame.Visibility.Visible) != int(frame.Visibility.W*frame.Visibility.H) {
+		return true
+	}
+	return SnapshotVisible(frame, u, viewer)
+}
+
+// projectileDispatchOptions supplies only metadata established by the
+// immutable snapshot. Unresolved families stay suppressed rather than
+// synthesizing artwork [I9].
+func projectileDispatchOptions() render.ProjectileDispatchOptions {
+	return render.ProjectileDispatchOptions{
+		FrameCount: func(v snapshot.ProjectileView) (int, bool) { return 0, false },
+		Color: func(v snapshot.ProjectileView) (int32, int32, bool) {
+			if v.PaletteRow != 0 {
+				return int32(v.PaletteRow), 0, true
+			}
+			return 210, 0, true
+		},
+		ResolveGAF: func(req render.ProjectileGAFRequest) (*formats.GAFFrame, bool) {
+			if req.Base {
+				// Minimal 1×1 opaque placeholder for model families that require
+				// a base sprite. It preserves the researched model draw path
+				// without inventing an authored GAF entry [I9].
+				return &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{210}, Transparent: []bool{false}}, true
+			}
+			return nil, false
+		},
+		SegmentPoints: func(v snapshot.ProjectileView) ([]render.ProjectilePoint, []render.ProjectilePoint, bool) {
+			return nil, nil, false
+		},
+	}
+}
+
+// effectDrawOptions keeps LHT admission terrain-bounded [03 §4.3.1]. Authored
+// LHT row/radius and effect GAF sequences remain unresolved until the
+// producer publishes them, so DrawEffectViews emits no fabricated effect [I9].
+func effectDrawOptions(c *Client) EffectDrawOptions {
+	return EffectDrawOptions{
+		ResolveFrame: func(ev snapshot.EffectView, _ int32) (*formats.GAFFrame, bool) { return nil, false },
+		LHTGeometry:  func(ev snapshot.EffectView) (int, int, bool) { return 0, 0, false },
+		TerrainCoverage: func(x, y int) bool {
+			if c == nil || c.terrain == nil || c.cam == nil || c.terrain.CellW <= 0 || c.terrain.CellH <= 0 {
+				return false
+			}
+			mapX := int64(x) + int64(c.cam.X)
+			mapZ := int64(y) + int64(c.cam.Z)
+			return mapX >= 0 && mapZ >= 0 && mapX < int64(c.terrain.CellW*16) && mapZ < int64(c.terrain.CellH*16)
+		},
+	}
+}
 
 // Frame draws one frame; never mutates sim. It reads snapshot.Buffer.Read()
 // and interpolates with alpha clamped [0,1] (C9). The sim is authoritative at
@@ -81,6 +231,26 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 	// a camera is bound (menu mode binds one without terrain); terrain blits
 	// only when a world is attached.
 	if c.cam != nil {
+		// Shake: consume ordered shake events presentation-only [03 §5.6][I4][I6].
+		// Request accumulates magnitude/duration, Tick applies two CRT draws
+		// per active tick with permanent walk clamped to map [03 §5.6].
+		if ok && cur != nil {
+			for _, ev := range cur.Events {
+				if ev.Kind == snapshot.EventKindShake {
+					dur := ev.Lifetime
+					if dur == 0 {
+						dur = ev.Magnitude
+					}
+					if dur == 0 {
+						dur = 10
+					}
+					getFrameShake(c).Request(ev.Magnitude, dur)
+				}
+			}
+			// ShakeHook is the composer seam; for the software framebuffer we
+			// tick directly once per frame after world strips [03 §1][03 §5.6].
+			getFrameShake(c).Tick(c.cam, getFrameShakeCRT(c))
+		}
 		if c.terrain != nil {
 			BlitTerrain(c.indexed, w, h, c.terrain, c.cam)
 		}
@@ -90,21 +260,41 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 		// pair is returned and Lerp at any alpha yields the same position, so
 		// holding alpha at 1.0 shows no jitter. Draw BEFORE debug overlay so
 		// text remains on top.
-		if ok && prev != nil && cur != nil && len(cur.Units) > 0 {
-			// Build slot→prev index for stable matching when lengths differ.
+		if ok && prev != nil && cur != nil && (len(cur.Units) > 0 || len(cur.Features) > 0) {
+			// Single painter pass: merge units+features Y-sorted [03 §1] fixing trees-over-tanks.
+			// Retail Y-bucket is ((zPix - camZ + bias)>>4)+16 with stable append [rr-10];
+			// we sort by screen-Y then stable handle tie [03 §1][I1] via sort.SliceStable (presentation-only).
+			// Visibility admission: binary hard edge skip anchor-cell-unexplored via Fog Ch0==15 [03 §3.3][rr-16],
+			// enemies in partial fog suppressed via SnapshotVisible predicate [03 §3.2]; own units always drawn [03 §3.2] C8 step1.
+			// MarkUnexplored/ClearUnexplored helpers in visibility/fog.go own the 0x04 flag [03 §3.3] — presentation uses Ch0 equivalence, destroyed features absent from snapshot stop painting once Ch0 flips.
 			prevBySlot := make(map[uint16]int, len(prev.Units))
 			for i, pv := range prev.Units {
 				prevBySlot[uint16(pv.Slot)] = i
 			}
-			// Collect interpolated views with shell coords for Y-bucket sort [03 §1][rr-10].
-			// Retail Y-bucket is ((zPix - camZ + bias)>>4)+16 with stable append;
-			// sorting by screen Y (sy) with stable slot tie preserves that order.
-			type drawEntry struct {
-				view   snapshot.UnitView
-				sx, sy int32
-				slot   uint16
+			type featKey struct {
+				name   string
+				cx, cz int32
 			}
-			entries := make([]drawEntry, 0, len(cur.Units))
+			prevByKey := make(map[featKey]int, len(prev.Features))
+			for i, pv := range prev.Features {
+				prevByKey[featKey{pv.DefName, pv.CX, pv.CZ}] = i
+			}
+			viewer := cur.Selection.LocalPlayer // 0..9, invalid falls through to fog-only gating [07 §9]
+			isUnexploredUnit := func(u snapshot.UnitView) bool { return fogUnexploredUnit(cur.Fog, u) }
+			isUnexploredFeat := func(f snapshot.FeatureView) bool { return fogUnexploredFeature(cur.Fog, f) }
+			isEnemyVisible := func(u snapshot.UnitView) bool { return unitVisibleForFrame(cur, u, viewer) }
+			type drawable struct {
+				sy       int32
+				tie      int64
+				isUnit   bool
+				unit     snapshot.UnitView
+				usx, usy int32
+				feat     snapshot.FeatureView
+				fsx, fsy int32
+				featName string
+			}
+			var drawables []drawable
+			// Collect units with admission.
 			for _, cv := range cur.Units {
 				var pv snapshot.UnitView
 				if idx, ok2 := prevBySlot[uint16(cv.Slot)]; ok2 {
@@ -113,188 +303,124 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					pv = cv
 				}
 				lerped := LerpUnitView(pv, cv, alpha)
+				if lerped.Owner != viewer {
+					if isUnexploredUnit(lerped) {
+						continue
+					}
+					if !isEnemyVisible(lerped) {
+						continue
+					}
+				}
 				sx0, sy0 := c.cam.WorldToScreen(lerped.X, lerped.Y, lerped.Z) // [03 §2.5] C1 beam
 				sx := sx0 - 128
 				sy := sy0 - 32 // shell [PLAN_04A C1]
-				entries = append(entries, drawEntry{view: lerped, sx: sx, sy: sy, slot: uint16(lerped.Slot)})
+				drawables = append(drawables, drawable{sy: sy, tie: int64(lerped.Slot), isUnit: true, unit: lerped, usx: sx, usy: sy})
 			}
-			// Y-bucket stable sort: sy ascending, slot ascending on tie [03 §1] I1.
-			for i := 0; i < len(entries)-1; i++ {
-				for j := i + 1; j < len(entries); j++ {
-					if entries[j].sy < entries[i].sy || (entries[j].sy == entries[i].sy && entries[j].slot < entries[i].slot) {
-						entries[i], entries[j] = entries[j], entries[i]
-					}
-				}
-			}
-			for _, e := range entries {
-				lerped := e.view
-				sx, sy := e.sx, e.sy
-				// Real 3DO model first [fmt 3do][03 §2.5]; offscreen cache then blit in Y order [rr-10].
-				// Buildings (IsBuilding) at 2x supersampled with per-piece DontShade shading [03 §2.4.1][04 §4.3];
-				// mobiles at 1x without shading.
-				if lerped.Model != "" && c.drawUnitModel(lerped, sx, sy) {
-					c.drawUnitChrome(lerped, sx, sy)
+			// Collect features with fog admission [03 §3.3] feature pass owns unexplored marker.
+			for _, cvf := range cur.Features {
+				if isUnexploredFeat(cvf) {
 					continue
 				}
-				if lerped.FootX > 0 && lerped.FootZ > 0 {
-					c.drawUnitOriented(lerped, sx, sy)
-					continue
+				var pvf snapshot.FeatureView
+				if idx, ok2 := prevByKey[featKey{cvf.DefName, cvf.CX, cvf.CZ}]; ok2 && idx < len(prev.Features) {
+					pvf = prev.Features[idx]
+				} else {
+					pvf = cvf
 				}
-				selected := lerped.Flags&SelectionFlag != 0
-				inner := byte(250)
-				if selected {
-					inner = 200
-				}
-				for dy := -2; dy <= 2; dy++ {
-					for dx := -2; dx <= 2; dx++ {
-						px := int(sx) + dx
-						py := int(sy) + dy
-						if px < 0 || px >= w || py < 0 || py >= h {
-							continue
-						}
-						if dx == -2 || dx == 2 || dy == -2 || dy == 2 {
-							c.indexed[py*w+px] = 0
-						} else {
-							c.indexed[py*w+px] = inner
-						}
-					}
-				}
+				fx := snapshot.Lerp(pvf.X, cvf.X, alpha)
+				fy := snapshot.Lerp(pvf.Y, cvf.Y, alpha)
+				fz := snapshot.Lerp(pvf.Z, cvf.Z, alpha)
+				interp := cvf
+				interp.X, interp.Y, interp.Z = fx, fy, fz
+				sx, sy := c.featureScreenPos(interp)
+				tie := int64(cvf.CX)<<32 | int64(uint32(cvf.CZ))
+				drawables = append(drawables, drawable{sy: sy, tie: tie, isUnit: false, feat: interp, fsx: sx, fsy: sy, featName: cvf.DefName})
 			}
-			// Projectiles: presentation-only interpolated models/beams/markers [06 §5][03 §5.4] (I6).
-			// Preserve deterministic iteration (prev→cur matching) and do not advance sim RNG (I4).
-			if len(cur.Projectiles) > 0 {
-				prevProj := make(map[uint16]int, len(prev.Projectiles))
-				for i, p := range prev.Projectiles {
-					prevProj[uint16(p.Handle)] = i
+			// Y-sorted painter order [03 §1] stable by handle/featName.
+			sort.SliceStable(drawables, func(i, j int) bool {
+				if drawables[i].sy != drawables[j].sy {
+					return drawables[i].sy < drawables[j].sy
 				}
-				for _, cvp := range cur.Projectiles {
-					var pvp snapshot.ProjectileView
-					if idx, ok2 := prevProj[uint16(cvp.Handle)]; ok2 {
-						pvp = prev.Projectiles[idx]
-					} else {
-						pvp = cvp
-					}
-					px := snapshot.Lerp(pvp.X, cvp.X, alpha)
-					py := snapshot.Lerp(pvp.Y, cvp.Y, alpha)
-					pz := snapshot.Lerp(pvp.Z, cvp.Z, alpha)
-					interp := snapshot.ProjectileView{Handle: cvp.Handle, X: px, Y: py, Z: pz, WeaponID: cvp.WeaponID, Model: cvp.Model, Yaw: cvp.Yaw, Pitch: cvp.Pitch}
-					// Try real 3DO projectile model first [fmt 3do][03 §5.4][03 §5.2] with yaw/pitch offsets.
-					if interp.Model != "" && c.drawProjectileModel(interp, alpha) {
+				if drawables[i].tie != drawables[j].tie {
+					return drawables[i].tie < drawables[j].tie
+				}
+				if !drawables[i].isUnit && !drawables[j].isUnit {
+					return drawables[i].featName < drawables[j].featName
+				}
+				return drawables[i].isUnit && !drawables[j].isUnit
+			})
+			for _, d := range drawables {
+				if d.isUnit {
+					lerped := d.unit
+					sx, sy := d.usx, d.usy
+					// Real 3DO model first [fmt 3do][03 §2.5]; offscreen cache then blit in Y order [rr-10].
+					// Buildings (IsBuilding) at 2x supersampled with per-piece DontShade shading [03 §2.4.1][04 §4.3];
+					// mobiles at 1x without shading.
+					if lerped.Model != "" && c.drawUnitModel(lerped, sx, sy) {
+						c.drawUnitChrome(lerped, sx, sy)
 						continue
 					}
-					// Fallback: dispatch via render projectiles for beam/rendertype handling [03 §5.4].
-					// For beams, draw line; for others, draw marker.
-					sx0, sy0 := c.cam.WorldToScreen(px, py, pz)
-					sx := sx0 - 128
-					sy := sy0 - 32
-					// Simple 3x3 projectile marker; presentation uses palette index 210 for visibility; never touches sim state.
-					for dy := -1; dy <= 1; dy++ {
-						for dx := -1; dx <= 1; dx++ {
-							xp := int(sx) + dx
-							yp := int(sy) + dy
-							if xp < 0 || xp >= w || yp < 0 || yp >= h {
+					if lerped.FootX > 0 && lerped.FootZ > 0 {
+						c.drawUnitOriented(lerped, sx, sy)
+						continue
+					}
+					selected := lerped.Flags&SelectionFlag != 0
+					inner := byte(250)
+					if selected {
+						inner = 200
+					}
+					for dy := -2; dy <= 2; dy++ {
+						for dx := -2; dx <= 2; dx++ {
+							px := int(sx) + dx
+							py := int(sy) + dy
+							if px < 0 || px >= w || py < 0 || py >= h {
 								continue
 							}
-							if dx == 0 && dy == 0 {
-								c.indexed[yp*w+xp] = 210
-							} else if dx == 0 || dy == 0 {
-								c.indexed[yp*w+xp] = 180
+							if dx == -2 || dx == 2 || dy == -2 || dy == 2 {
+								c.indexed[py*w+px] = 0
+							} else {
+								c.indexed[py*w+px] = inner
 							}
 						}
 					}
-				}
-			}
-			// Features: 3DO feature models + GAF sprites with shadows, Y-sorted [05 "Feature instance"] [fmt 3do][03 §5.1][research/features/feature_rendering.md §3].
-			if len(cur.Features) > 0 {
-				// Build interpolation map keyed by DefName+CX/CZ for stable matching when lengths differ.
-				type featKey struct {
-					name   string
-					cx, cz int32
-				}
-				prevByKey := make(map[featKey]int, len(prev.Features))
-				for i, pv := range prev.Features {
-					prevByKey[featKey{pv.DefName, pv.CX, pv.CZ}] = i
-				}
-				// Collect drawable with interpolated positions and screen Y for painter order [03 §1] Y-bucket.
-				type drawable struct {
-					view   snapshot.FeatureView
-					sx, sy int32
-				}
-				drawList := make([]drawable, 0, len(cur.Features))
-				for _, cvf := range cur.Features {
-					var pvf snapshot.FeatureView
-					if idx, ok2 := prevByKey[featKey{cvf.DefName, cvf.CX, cvf.CZ}]; ok2 && idx < len(prev.Features) {
-						pvf = prev.Features[idx]
-					} else {
-						pvf = cvf
-					}
-					fx := snapshot.Lerp(pvf.X, cvf.X, alpha)
-					fy := snapshot.Lerp(pvf.Y, cvf.Y, alpha)
-					fz := snapshot.Lerp(pvf.Z, cvf.Z, alpha)
-					interp := cvf
-					interp.X, interp.Y, interp.Z = fx, fy, fz
-					sx, sy := c.featureScreenPos(interp)
-					drawList = append(drawList, drawable{view: interp, sx: sx, sy: sy})
-				}
-				// Y-sort for deterministic painter order [03 §1] C3 per-row buckets.
-				// Stable sort by screen Y then DefName for tie.
-				for i := 0; i < len(drawList)-1; i++ {
-					for j := i + 1; j < len(drawList); j++ {
-						if drawList[j].sy < drawList[i].sy || (drawList[j].sy == drawList[i].sy && drawList[j].view.DefName < drawList[i].view.DefName) {
-							drawList[i], drawList[j] = drawList[j], drawList[i]
-						}
-					}
-				}
-				for _, d := range drawList {
-					cvf := d.view
+				} else {
+					cvf := d.feat
+					sx, sy := d.fsx, d.fsy
 					// 3DO path for object features (corpses, walls) [fmt 3do][02 "Feature record"] — try first.
-					// Object present => Model is Object; filename case uses GAF path instead.
 					is3DO := cvf.Model != "" && cvf.Filename == "" || (cvf.Filename == "" && cvf.SeqName == "")
-					// Heuristic: if Filename empty and Model non-empty and SeqName empty => 3DO; otherwise sprite.
-					// For Great Divide, sprite features have Filename set and SeqName populated.
 					if is3DO && cvf.Model != "" {
 						if c.drawFeatureModel(cvf) {
 							continue
 						}
 					}
 					// Sprite GAF path [03 §5.1] [research/features/feature_rendering.md §2].
-					// Resolve normal and shadow frames; shadow draws first at same anchor [04 §6A610].
 					normalFrame := c.featureFrameFor(cvf, false)
 					shadowFrame := c.featureFrameFor(cvf, true)
-					// Geothermal 1x1 invisible marker (geotherm.gaf 1x1) skip drawing to avoid single-pixel noise
-					// unless its footprint suggests it should be visible as vent. Keep but skip if both frames 1x1.
 					if cvf.Geothermal && normalFrame != nil && normalFrame.Width == 1 && normalFrame.Height == 1 && (shadowFrame == nil || (shadowFrame.Width == 1 && shadowFrame.Height == 1)) {
-						// Draw as small metal-deposit tinted dot for visibility on Great Divide
-						// rather than invisible; use reclaimable fallback color encoding [02 "Feature record"].
-						sx, sy := d.sx, d.sy
 						xp := int(sx)
 						yp := int(sy)
 						if xp >= 0 && xp < w && yp >= 0 && yp < h {
-							// Vent marker: palette index for geothermal (yellow-ish)
 							c.indexed[yp*w+xp] = 48
 						}
 						continue
 					}
 					drawn := false
 					if shadowFrame != nil {
-						// Shadow at same anchor, translucent via ShadTrans [05 "Feature catalog and placement"].
-						dstX := int(d.sx) - int(shadowFrame.XOffset)
-						dstY := int(d.sy) - int(shadowFrame.YOffset)
+						dstX := int(sx) - int(shadowFrame.XOffset)
+						dstY := int(sy) - int(shadowFrame.YOffset)
 						c.blitGAFFrame(shadowFrame, dstX, dstY, true, cvf.ShadTrans)
 						drawn = true
 					}
 					if normalFrame != nil {
-						dstX := int(d.sx) - int(normalFrame.XOffset)
-						dstY := int(d.sy) - int(normalFrame.YOffset)
+						dstX := int(sx) - int(normalFrame.XOffset)
+						dstY := int(sy) - int(normalFrame.YOffset)
 						c.blitGAFFrame(normalFrame, dstX, dstY, false, cvf.AnimTrans)
 						drawn = true
 					}
 					if drawn {
 						continue
 					}
-					// Fallback rectangle: footprint-correct tinted body when GAF missing [04 §6.2][05 "Feature catalog and placement"].
-					// Colors encode reclaimability/blocking for diagnostics on Great Divide.
-					sx, sy := d.sx, d.sy
+					sx2, sy2 := sx, sy
 					paletteIdx := byte(96) // default tree green
 					if cvf.Geothermal {
 						paletteIdx = 48
@@ -317,8 +443,8 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 						}
 						for dy := -hh; dy <= hh; dy++ {
 							for dx := -hw; dx <= hw; dx++ {
-								xp := int(sx) + dx
-								yp := int(sy) + dy
+								xp := int(sx2) + dx
+								yp := int(sy2) + dy
 								if xp < 0 || xp >= w || yp < 0 || yp >= h {
 									continue
 								}
@@ -332,8 +458,8 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					} else {
 						for dy := -1; dy <= 1; dy++ {
 							for dx := -1; dx <= 1; dx++ {
-								xp := int(sx) + dx
-								yp := int(sy) + dy
+								xp := int(sx2) + dx
+								yp := int(sy2) + dy
 								if xp < 0 || xp >= w || yp < 0 || yp >= h {
 									continue
 								}
@@ -342,6 +468,19 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 						}
 					}
 				}
+			}
+		}
+		// Projectiles and effects occupy		// Projectiles and effects occupy the researched strip-6/7 window:
+		// after unit/feature traversals and before fog/interface [03 §1][03 §5.4].
+		// They are deliberately outside the unit-length guard so a frame with
+		// only projectiles or effects still draws [I6]. Both adapters consume
+		// immutable snapshots and never inspect live pools.
+		if ok && prev != nil && cur != nil {
+			if len(cur.Projectiles) > 0 {
+				c.DrawProjectileViews(prev.Projectiles, cur.Projectiles, alpha, cur.Tick, projectileVisible(cur.Visibility), func(snapshot.ProjectileView) bool { return false }, projectileDispatchOptions())
+			}
+			if len(cur.Effects) > 0 {
+				c.DrawEffectViews(cur.Effects, effectDrawOptions(c))
 			}
 		}
 		// Fog presentation [03 §3.3] C13 — reads snapshot fog cache copied from visibility.Service.Fog() each tick (I6).

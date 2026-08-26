@@ -134,16 +134,23 @@ type FeatureView struct {
 // EffectView is the presentation view of one fixed effect / strip object [03 §1] C5.
 // Published from the fixed effect pool or strip objects and consumed by the renderer.
 // Fields are a stable snapshot of authoritative state; mutation after Publish does not affect the buffer.
-// TODO(T25): fixed effect pool not yet owned by Session; snapshot currently empty and publisher leaves it empty.
 type EffectView struct {
 	ID         uint32 // stable presentation identity within a frame
 	EventSeq   uint64 // producer sequence that admitted this effect
 	Source     pool.Handle
 	Target     pool.Handle
+	EffectID   uint32 // authored selector/semantic ID when established [R-P0-06]
+	Piece      int32  // authored COB piece when the producer supplies one [R-P0-06]
+	SFXType    int32
+	SFXClass   SFXClass
+	Mode       uint8 // build/assist/reclaim mode [R-P0-06]
 	StartTick  uint32
 	ExpiryTick uint32        // explicit lifetime deadline; zero means unknown
 	Lifetime   int32         // authored lifetime when known; no guessed duration
 	X, Y, Z    numeric.Fixed // position [03 §1]
+	TargetX    numeric.Fixed // endpoint supplied by an admitted producer [R-P0-06]
+	TargetY    numeric.Fixed
+	TargetZ    numeric.Fixed
 	VX, VY, VZ numeric.Fixed // velocity if any
 	Kind       string        // palette/effect discriminator if known
 	HasModel   bool
@@ -275,10 +282,11 @@ const (
 	EventKindLHTFlash
 	EventKindShake
 	EventKindSound
+	EventKindCorpse
 )
 
 func (k EventKind) String() string {
-	names := [...]string{"invalid", "cob_sfx", "nanolathe", "muzzle_flash", "smoke_start", "smoke_end", "projectile_trail", "impact", "water_impact", "explosion", "lht_flash", "shake", "sound"}
+	names := [...]string{"invalid", "cob_sfx", "nanolathe", "muzzle_flash", "smoke_start", "smoke_end", "projectile_trail", "impact", "water_impact", "explosion", "lht_flash", "shake", "sound", "corpse"}
 	if int(k) >= len(names) {
 		return names[0]
 	}

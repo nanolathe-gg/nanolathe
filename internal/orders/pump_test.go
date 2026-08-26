@@ -303,8 +303,8 @@ func TestPumpResultCodes(t *testing.T) {
 		if n.Phase != 0 {
 			t.Fatalf("code9 last phase %d want 0", n.Phase)
 		}
-		if n.Deadline == -1 || n.Deadline < int32(80) || n.Deadline > int32(94) {
-			t.Fatalf("code9 last deadline %d want 80..94", n.Deadline)
+		if n.Deadline == -1 || n.Deadline < int32(80) || n.Deadline > int32(109) {
+			t.Fatalf("code9 last deadline %d want 80..109 [R-P0-01] 30+RNG30", n.Deadline)
 		}
 	})
 	t.Run("code9 not last", func(t *testing.T) {
@@ -740,7 +740,7 @@ func TestNilHandlerDiagnostic(t *testing.T) {
 	}
 }
 
-// SC8: code 3 and code 9-last share tick+30+RNG15 (30..44) not RNG30 [P0-08].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func TestSC8_RNG15_30_44(t *testing.T) {
 	moveID := Lookup("Move_Ground")
 	rng.SeedGlobal(1, 0)
@@ -758,7 +758,7 @@ func TestSC8_RNG15_30_44(t *testing.T) {
 	if dl < 130 || dl > 144 {
 		t.Fatalf("SC8 code3 deadline %d want 130..144 (tick+30+RNG15)", dl)
 	}
-	// code 9 last re-arms with same RNG15 bound
+	// code 9 last re-arms with RNG30 bound [R-P0-01] PUSH 0x1E
 	rng.SeedGlobal(99, 0)
 	q2 := &Queue{}
 	u2 := newTestUnit()
@@ -771,11 +771,73 @@ func TestSC8_RNG15_30_44(t *testing.T) {
 		t.Fatalf("code9 last should rearm phase 0")
 	}
 	dl2 := q2.primary[0].Deadline
-	if dl2 < 80 || dl2 > 94 {
-		t.Fatalf("SC8 code9 last deadline %d want 80..94 (tick+30+RNG15)", dl2)
+	if dl2 < 80 || dl2 > 109 {
+		t.Fatalf("SC8 code9 last deadline %d want 80..109 (tick+30+RNG30) [R-P0-01]", dl2)
 	}
 	if q2.primary[0].DynamicGate != 1 {
 		t.Fatalf("code9 last gate 1")
+	}
+}
+
+// TestMoveGroundArrivalPumpTransition verifies satisfied 0x20 → handler return 5 unlink/free [R-P0-01].
+func TestMoveGroundArrivalPumpTransition(t *testing.T) {
+	moveID := Lookup("Move_Ground")
+	if moveID == 0 {
+		t.Fatalf("Move_Ground not found")
+	}
+	q := &Queue{}
+	u := newTestUnit()
+	// Push a Move_Ground node and let handler arm gate
+	q.Push(moveID, Node{})
+	if len(q.primary) != 1 {
+		t.Fatalf("push")
+	}
+	n := q.primary[0]
+	// First pump: phase 0 -> arms 0xE0 and returns 1 (phase becomes 1) [R-P0-01]
+	clearGates(q)
+	// Ensure gate allows handler entry: clearGate sets gate 0, handler will set 0xE0
+	// Our pump's phase-0 bypass allows Move_Ground phase 0 to run even with initial 0x402
+	q.Pump(u, 10)
+	if n.DynamicGate != 0xE0 || n.Phase != 1 {
+		t.Fatalf("phase0 should arm 0xE0 and phase 1, got gate %x phase %d", n.DynamicGate, n.Phase)
+	}
+	if len(q.primary) != 1 {
+		t.Fatalf("phase0 should not free, len %d", len(q.primary))
+	}
+	// Simulate movement arrival ORing 0x20 [R-P0-01]
+	n.Satisfied |= 0x20
+	// Pump again: handler phase1 sees satisfied&0x20 -> return 5 unlink
+	q.Pump(u, 11)
+	if len(q.primary) != 0 {
+		t.Fatalf("phase1 with 0x20 should return 5 and unlink, len %d", len(q.primary))
+	}
+	// Gate test: (satisfied|pending)&gate halts while 0 [R-P0-01] at pump ~607
+	q2 := &Queue{}
+	q2.Push(moveID, Node{Phase: 1, DynamicGate: 0xE0, Satisfied: 0})
+	u.Pending = 0
+	// Pump should halt (not call handler) while combined==0
+	called := false
+	orig := DescriptorFor(moveID).Handler
+	table[int(moveID)].Handler = func(u *units.Unit, n *Node, s uint32) Code { called = true; return 9 }
+	defer func() { table[int(moveID)].Handler = orig }()
+	q2.Pump(u, 20)
+	if called {
+		t.Fatalf("gate halt should prevent handler when combined==0 [R-P0-01]")
+	}
+	if len(q2.primary) != 1 {
+		t.Fatalf("halted head should remain")
+	}
+	// Now set bit and ensure handler called and returns 5
+	q2.primary[0].Satisfied |= 0x20
+	table[int(moveID)].Handler = func(u *units.Unit, n *Node, s uint32) Code {
+		if s&0x20 == 0 {
+			t.Fatalf("combined should contain 0x20")
+		}
+		return 5
+	}
+	q2.Pump(u, 21)
+	if len(q2.primary) != 0 {
+		t.Fatalf("with 0x20 handler should return 5 and free")
 	}
 }
 

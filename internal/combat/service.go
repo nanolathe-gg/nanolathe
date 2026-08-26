@@ -1135,64 +1135,106 @@ func applyProjectileDamage(service *Service, p *Projectile, weapon *content.Weap
 		}
 		return
 	}
+	// Shared area splash: EnumerateArea→DistanceToBox→Falloff→ApplyDamage [06 §9.3]
+	// Extracted to ExplodeWeaponAt for death DoExplosion reuse [06 §12.1] C22–C25 (I1, I2)
+	service.ExplodeWeaponAt(w, terrain, weapon, p.Pos, p.Shooter, tick)
+	_ = featSvc
+	_ = econ
+	_ = catalog
+	_ = simRNG
+	_ = isWaterTerrain
+	_ = handle
+	return
+}
+
+// ExplodeWeaponAt is the shared authoritative area-damage entry point for
+// projectile splash and death explosions [06 §9.3][06 §12.1] C22–C25.
+// It performs EnumerateArea → DistanceToBox (fixed-point box, Y+16) → Falloff (float32) →
+// SelectBaseDamage → ComputeScaledAmount → ApplyDamage→Destroy exactly as TickProjectiles
+// does, deterministically (pool asc via Iter, I1) and without new float64 sites
+// (I2 allowlist: Falloff float32 only). Collect-then-apply avoids double-processing
+// victims when nested deaths chain-explode [01 §4.4].
+func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon *content.WeaponDef, impact Vec3, shooter pool.Handle, tick uint32) {
+	if w == nil || weapon == nil {
+		return
+	}
+	radius := BlastRadius(weapon.AreaOfEffect) // [06 §9.3] unsigned area>>1
+	if radius <= 0 {
+		return
+	}
 	var mapW, mapH int32
 	if terrain != nil {
 		mapW = terrain.CellW
 		mapH = terrain.CellH
 	}
-	impact := p.Pos
+	type victim struct {
+		h       pool.Handle
+		u       *units.Unit
+		dist    int32
+		falloff float32
+	}
+	var victims []victim
 	EnumerateArea(impact, radius, mapW, mapH, func(cx, cz int32) {
-		if w != nil {
-			for _, u := range w.Iter() {
-				if u == nil || !u.Alive || u.Dying {
-					continue
-				}
-				ucx := world.WorldToCell(u.X)
-				ucz := world.WorldToCell(u.Z)
-				if ucx != cx || ucz != cz {
-					continue
-				}
-				footX := int32(1)
-				footZ := int32(1)
-				if u.Def != nil {
-					if u.Def.FootprintX > 0 {
-						footX = u.Def.FootprintX
-					}
-					if u.Def.FootprintZ > 0 {
-						footZ = u.Def.FootprintZ
-					}
-				}
-				halfX := numeric.Fixed(int64(footX) * 1048576 / 2)
-				halfZ := numeric.Fixed(int64(footZ) * 1048576 / 2)
-				min := Vec3{X: u.X.Sub(halfX), Y: u.Y, Z: u.Z.Sub(halfZ)}
-				max := Vec3{X: u.X.Add(halfX), Y: u.Y.Add(numeric.Fixed(int64(16) * 65536)), Z: u.Z.Add(halfZ)}
-				uv := UnitForArea{Handle: u.Handle, Pos: Vec3{X: u.X, Y: u.Y, Z: u.Z}, Min: min, Max: max}
-				dist := DistanceToBox(impact, uv)
-				if dist >= radius {
-					continue
-				}
-				var falloff float32 = 1
-				if dist != 0 {
-					falloff = Falloff(float32(dist), float32(radius), float32(weapon.EdgeEffectiveness))
-				}
-				applyDamageToUnit(service, u, p, weapon, falloff, dist, w, tick)
-			}
-		}
-		_ = featSvc
-	})
-	if terrain == nil || mapW == 0 {
-		for _, u := range w.Iter() {
+		for _, u := range w.Iter() { // deterministic pool asc (I1)
 			if u == nil || !u.Alive || u.Dying {
 				continue
 			}
-			dx := impact.X.Int() - u.X.Int()
-			dz := impact.Z.Int() - u.Z.Int()
-			dist2 := int64(dx)*int64(dx) + int64(dz)*int64(dz)
-			if dist2 >= int64(radius)*int64(radius) {
+			ucx := world.WorldToCell(u.X)
+			ucz := world.WorldToCell(u.Z)
+			if ucx != cx || ucz != cz {
 				continue
 			}
-			applyDamageToUnit(service, u, p, weapon, 1.0, 0, w, tick)
+			footX := int32(1)
+			footZ := int32(1)
+			if u.Def != nil {
+				if u.Def.FootprintX > 0 {
+					footX = u.Def.FootprintX
+				}
+				if u.Def.FootprintZ > 0 {
+					footZ = u.Def.FootprintZ
+				}
+			}
+			halfX := numeric.Fixed(int64(footX) * 1048576 / 2)
+			halfZ := numeric.Fixed(int64(footZ) * 1048576 / 2)
+			min := Vec3{X: u.X.Sub(halfX), Y: u.Y, Z: u.Z.Sub(halfZ)}
+			max := Vec3{X: u.X.Add(halfX), Y: u.Y.Add(numeric.Fixed(int64(16) * 65536)), Z: u.Z.Add(halfZ)}
+			uv := UnitForArea{Handle: u.Handle, Pos: Vec3{X: u.X, Y: u.Y, Z: u.Z}, Min: min, Max: max}
+			dist := DistanceToBox(impact, uv) // integer [06 §9.3]
+			if dist >= radius {
+				continue // strict < radius [06 §9.3]
+			}
+			falloff := float32(1)
+			if dist != 0 {
+				falloff = Falloff(float32(dist), float32(radius), float32(weapon.EdgeEffectiveness)) // [06 §9.3] float32
+			}
+			victims = append(victims, victim{h: u.Handle, u: u, dist: dist, falloff: falloff})
 		}
+	})
+	if terrain == nil || mapW == 0 {
+		// Fallback when no terrain map (mirrors TickProjectiles fallback) — planar dist2 check, no float64
+		if len(victims) == 0 {
+			for _, u := range w.Iter() { // deterministic (I1)
+				if u == nil || !u.Alive || u.Dying {
+					continue
+				}
+				dx := impact.X.Int() - u.X.Int()
+				dz := impact.Z.Int() - u.Z.Int()
+				dist2 := int64(dx)*int64(dx) + int64(dz)*int64(dz)
+				if dist2 >= int64(radius)*int64(radius) {
+					continue
+				}
+				victims = append(victims, victim{h: u.Handle, u: u, dist: 0, falloff: 1})
+			}
+		}
+	}
+	// Apply deterministically in collected order (EnumerateArea rows Z asc, cols X asc, Iter pool asc) [I1]
+	for _, vi := range victims {
+		cand := vi.u
+		if cand == nil || !cand.Alive || cand.Dying {
+			continue
+		}
+		p := &Projectile{Pos: impact, Shooter: shooter} // synthetic projectile for damage pipeline [06 §9.1]
+		applyDamageToUnit(s, cand, p, weapon, vi.falloff, vi.dist, w, tick)
 	}
 }
 

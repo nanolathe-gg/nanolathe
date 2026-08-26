@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/audio"
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -44,9 +45,17 @@ func (s *Session) InitAudio(fs vfs.FSOps) {
 	// Resolver maps unit handle to its sound category via catalog [02 "Sound category record"] [03 §8.3] C17.
 	s.AudioQueue.SetResolver(s.audioResolver)
 	// Playback sink loads the sample via cache; missing alias degrades silently [03 §8.2] C20.
+	// When a backend is present it also plays via PCM [03 §8.3] [I6]; headless
+	// backends record the alias without constructing a device [I5].
 	s.AudioQueue.OnPlay(func(alias string, slot audio.Slot, unit pool.Handle) {
 		if s.AudioCache != nil && alias != "" {
 			_, _ = s.AudioCache.Load(alias)
+		}
+		if alias != "" {
+			if be := audio.GlobalBackend(); be != nil {
+				// UI/category cues are non-positional at full volume [03 §8.3].
+				_ = be.PlayAlias(alias, s.AudioCache, 1.0, 0)
+			}
 		}
 	})
 	// Speech sink is presentation only; keep no-op for now but preserve call order [03 §8.3] C17.
@@ -205,6 +214,8 @@ func (s *Session) PositionalAttenuation(pos [3]numeric.Fixed) int32 {
 // plus audible flag. Presentation-only, uses CRT for any variant draw inside
 // the cache path only if the alias is a category variant; direct alias load
 // does not draw [I4].
+// When a windowed backend is installed the alias is also played via PCM with
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (s *Session) EmitPositional(alias string, pos [3]numeric.Fixed) (audio.Pan, int32, bool) {
 	alias = strings.TrimSpace(alias)
 	if alias == "" || s == nil {
@@ -224,6 +235,11 @@ func (s *Session) EmitPositional(alias string, pos [3]numeric.Fixed) (audio.Pan,
 	}
 	if s.AudioCache != nil {
 		_, _ = s.AudioCache.Load(alias) // degrade silently if missing [P1-02 §2.2]
+	}
+	if be := audio.GlobalBackend(); be != nil {
+		volF := audio.VolumeFromAttenuation(vol)
+		panF := audio.PanFloat(pan, s.audioViewport)
+		_ = be.PlayAlias(alias, s.AudioCache, volF, panF)
 	}
 	return pan, vol, true
 }
@@ -344,6 +360,52 @@ func (s *Session) preloadBriefing() error {
 		return err
 	}
 	return nil
+}
+
+// InstallAudioBridge wires combat events to audio queue/positional playback
+// [03 §8.3] [06 §13.2] [GAP T21] presentation-only [I6]. It wraps the existing
+// combat event sink installed at composition.go:496 and additionally maps hit
+// and water sounds via EmitWeaponHit and start sounds via EmitWeaponStart.
+// Unit-complete etc. remain via the construction hooks. The orchestrator calls
+// this from composition.go after the combat service is bound; do NOT edit
+// composition.go directly. Headless never constructs a device [I5].
+func (s *Session) InstallAudioBridge() {
+	if s == nil || s.Combat == nil {
+		return
+	}
+	prev := s.Combat.Events
+	s.Combat.Events = func(ev combat.Event) {
+		if prev != nil {
+			prev(ev)
+		}
+		switch ev.Kind {
+		case combat.EventHitSound:
+			if ev.Sound != "" {
+				pos := [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}
+				_, _, _ = s.EmitWeaponHit(ev.Sound, pos, false)
+			}
+		case combat.EventWaterSound:
+			if ev.Sound != "" {
+				pos := [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}
+				_, _, _ = s.EmitWeaponHit(ev.Sound, pos, true)
+			}
+		case combat.EventShake, combat.EventEndSmoke, combat.EventExplosion, combat.EventWaterExplosion, combat.EventProjectileImpact, combat.EventUnitKilled, combat.EventCorpse:
+			// No audio mapping; shake is presentation but not audio [03 §5.6]
+		default:
+			if ev.Sound != "" {
+				pos := [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}
+				_, _, _ = s.EmitWeaponStart(ev.Sound, pos)
+			}
+		}
+	}
+}
+
+// InstallAudioBridge is the package-level form for the orchestrator's call
+// from composition.go [03 §8.3] [I6]. It forwards to the session method.
+func InstallAudioBridge(s *Session) {
+	if s != nil {
+		s.InstallAudioBridge()
+	}
 }
 
 // PlayBriefing plays the mission briefing sound if present; otherwise it

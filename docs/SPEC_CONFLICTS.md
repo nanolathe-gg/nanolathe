@@ -197,7 +197,7 @@ not "fix" the compiler back to the letter without re-reading the executable.
 
 ---
 
-## SC8 — The two documents disagree on the code-9 re-arm jitter
+## SC8 — The two documents disagree on the code-9 re-arm jitter — resolved to distinct arms
 
 **Spec A** `[04 §3.3]`, result-code 9: if the record is last, "reset its phase
 and set **the same randomized deadline**" — i.e. the code-3 formula, global
@@ -209,13 +209,12 @@ exists".
 
 Same field, different jitter bounds (rand < 15 vs rand < 30).
 
-**Decision:** implement Spec A (+30 + rand(15)) because document 04 is the
-dedicated orders/queue section and its row is internally consistent with its
-own code-3 entry; the pump site carries a `TODO(question)` naming both
-readings. Observable only as the re-arm cadence of a completed last order.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Falsifies:** neither document; it picks between them. Revisit only with
-executable evidence.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Falsifies:** the earlier SC8 reading that both arms shared `RNG(15)`; [04 §3.3]
+row is correct for code 3 and [05] is correct for code 9 last.
 
 ---
 

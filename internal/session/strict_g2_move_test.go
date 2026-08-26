@@ -79,8 +79,10 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 	initialX, initialZ := u.X, u.Z
 	routeCountBefore := -1
 	distBefore := numeric.Fixed(1 << 30)
-	const arrivalThresh = int64(2 * 65536)
-	const arrivalThresh2 = arrivalThresh * arrivalThresh
+	// [R-P0-01] arrival threshold floor((SightDistance+4)/16) cells inclusive.
+	const sightForG2 = int32(200)
+	thresholdCells := (sightForG2 + 4) / 16 // 12
+	thresholdSq := int64(thresholdCells) * int64(thresholdCells)
 	for tick := 1; tick <= maxTick; tick++ {
 		s.Step(int32(tick))
 		// No manual SubmitMove fallback [RX-06]: production must submit path
@@ -179,17 +181,27 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 				}
 			}
 		}
-		// Stage 6: goal tolerance (strict 2 world units, not 5 cells)
+		// Stage 6: goal tolerance [R-P0-01] cell-domain inclusive vs SightDistance
 		if _, ok := stages["goal_tolerance"]; !ok {
-			dx := int64(goalX) - int64(u.X)
-			dz := int64(goalZ) - int64(u.Z)
-			dist2 := dx*dx + dz*dz
-			if dist2 <= arrivalThresh2 {
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			var tileX, tileZ int64
+			if coll, ok := s.Movement.Collisions[h]; ok && coll != nil {
+				tileX = int64(coll.CachedAnchor.X)
+				tileZ = int64(coll.CachedAnchor.Z)
+			} else {
+				tileX = (int64(u.X) + 0x80000) >> 20
+				tileZ = (int64(u.Z) + 0x80000) >> 20
+			}
+			goalCellX := (int64(goalX) + 0x80000) >> 20
+			goalCellZ := (int64(goalZ) + 0x80000) >> 20
+			dx := tileX - goalCellX
+			dz := tileZ - goalCellZ
+			if dx*dx+dz*dz <= thresholdSq {
 				stages["goal_tolerance"] = uint32(tick)
 				tmp := uint32(tick)
 				goalToleranceTick = &tmp
 				lastCompleted = "goal_tolerance"
-				t.Logf("G2 stage6 goal tolerance at tick %d pos %d %d dist2 %d", tick, u.X.Raw(), u.Z.Raw(), dist2)
+				t.Logf("G2 stage6 goal tolerance at tick %d tile %d,%d goal %d,%d dist2 %d thresh %d", tick, tileX, tileZ, goalCellX, goalCellZ, dx*dx+dz*dz, thresholdSq)
 			}
 		}
 		// Stage 7: order completes

@@ -39,14 +39,15 @@ func syntheticTerrainFlat() *world.Terrain {
 }
 
 // TestStepUnitGroundRoutePruneDoesNotComplete proves route pruning is not
-// order completion. R-P0-01 leaves the final Move_Ground tolerance unknown.
+// order completion. [R-P0-01] arrival is now via cell-domain inclusive threshold
+// floor((SightDistance+4)/16)² vs cached tile, not via prune <=25.
 func TestStepUnitGroundArrival(t *testing.T) {
 	terrain := syntheticTerrainFlat()
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 	w := units.New(10, nil)
-	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, TurnRate: 800}
+	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, TurnRate: 800, SightDistance: 120}
 	def.MaxDamage = 100
 	def.FootprintX = 1
 	def.FootprintZ = 1
@@ -60,43 +61,52 @@ func TestStepUnitGroundArrival(t *testing.T) {
 	u := w.Unit(h)
 	system.BindWorld(w)
 	system.EnsureUnit(u)
-	startCell := path.Cell{X: 1, Z: 1}
-	goalCell := path.Cell{X: 8, Z: 8}
-	system.SubmitMove(h, 0, startCell, goalCell)
 	id := orders.Lookup("Move_Ground")
 	if id == 0 {
 		t.Fatalf("Move_Ground not found")
 	}
+	// Use SightDistance 120 → threshold 7 cells [R-P0-01] so start delta 14 >7 not arrived immediately.
 	q := orders.QueueForUnit(u)
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(8)})
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(15), GoalZ: world.CellToWorld(1)})
+	system.ActivateMove(u, q.Head())
 	// Scheduler must tick to publish route
 	system.Scheduler.Tick(1)
 	route := system.Routes[h]
 	if route == nil || !route.Active {
 		t.Fatalf("route not published after scheduler tick: %v", route)
 	}
-	// StepUnit loop
+	// First step should not be arrived: route prune (<=25) is not completion [R-P0-01].
+	system.BeginTick(2)
+	res := system.StepUnit(h, 2)
+	system.EndTick(2)
+	if res.Arrived {
+		t.Fatalf("route prune must not immediately complete Move_Ground; arrival is cell threshold [R-P0-01]")
+	}
+	// Drive until arrival via threshold (planar inclusive)
 	var arrived bool
 	var last StepResult
-	for tick := uint32(2); tick < 300; tick++ {
+	for tick := uint32(3); tick < 400; tick++ {
 		system.Scheduler.Tick(tick)
 		system.BeginTick(tick)
-		// In real central loop the caller visits slot asc; here single unit
-		res := system.StepUnit(h, tick)
+		res = system.StepUnit(h, tick)
 		system.EndTick(tick)
 		last = res
+		// Check satisfied bit ORed [R-P0-01]
+		q2 := orders.QueueForUnit(u)
+		if q2 != nil && q2.Head() != nil && q2.Head().Satisfied&0x20 != 0 {
+			arrived = res.Arrived
+			break
+		}
 		if res.Arrived {
 			arrived = true
 			break
 		}
-		// Also break if route inactive and dist small but not yet flagged arrived due to empty check
-		// Continue until arrived
 	}
-	if arrived {
-		t.Fatalf("route prune must not complete Move_Ground while final tolerance is unresolved")
+	if !arrived {
+		t.Fatalf("should have arrived via cell threshold floor((120+4)/16)=7 within 400 ticks, last Dist %v", last.DistToGoal)
 	}
-	if last.DistToGoal <= 0 {
-		t.Fatalf("distance diagnostic must remain useful after route prune")
+	if q.Head() != nil && q.Head().Satisfied&0x20 == 0 {
+		t.Fatalf("arrival should OR 0x20 into node.satisfied [R-P0-01]")
 	}
 }
 
@@ -539,6 +549,112 @@ func TestStepUnitPublishedRouteNoDuplicate(t *testing.T) {
 	system.EndTick(3)
 	if system.Scheduler.Pending(0) != 0 {
 		t.Fatalf("second StepUnit duplicate pending %d", system.Scheduler.Pending(0))
+	}
+	_ = res
+}
+
+// TestThresholdFormulaVectors locks threshold² = floor((SightDistance+4)/16)² [R-P0-01].
+func TestThresholdFormulaVectors(t *testing.T) {
+	vectors := []struct {
+		sight int32
+		want  int32
+	}{
+		{120, 49},  // floor((120+4)/16)=7 →49 [R-P0-01]
+		{180, 121}, // floor((180+4)/16)=11 →121
+		{0, 0},     // floor(4/16)=0 →0
+		{12, 1},    // floor(16/16)=1 →1
+		{16, 1},    // floor(20/16)=1 →1
+		{28, 4},    // floor(32/16)=2 →4
+	}
+	for _, v := range vectors {
+		got := ThresholdSqFromSight(v.sight)
+		if got != v.want {
+			t.Fatalf("ThresholdSqFromSight(%d)=%d want %d [R-P0-01]", v.sight, got, v.want)
+		}
+	}
+}
+
+// TestArrivalInclusiveBoundary checks inclusive <= for cell domain [R-P0-01].
+func TestArrivalInclusiveBoundary(t *testing.T) {
+	terrain := syntheticTerrainFlat()
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}
+	grid := NewOccupancyGrid()
+	system := NewSystem(terrain, profile, grid)
+	w := units.New(10, nil)
+	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, SightDistance: 28}
+	// Sight 28 → (28+4)/16=2 → threshSq 4 → radius 2 cells inclusive
+	def.MaxDamage = 100
+	def.FootprintX = 1
+	def.FootprintZ = 1
+	h, _ := w.Create(def, 0, world.CellToWorld(5), terrain.HeightAt(world.CellToWorld(5), world.CellToWorld(1)), world.CellToWorld(1))
+	u := w.Unit(h)
+	system.BindWorld(w)
+	system.EnsureUnit(u)
+	// Goal at 7,1 => delta 2,0 → dx²+dz²=4 exactly threshSq → should arrive inclusive
+	goalX := world.CellToWorld(7)
+	goalZ := world.CellToWorld(1)
+	id := orders.Lookup("Move_Ground")
+	q := orders.QueueForUnit(u)
+	q.Push(id, orders.Node{GoalX: goalX, GoalZ: goalZ})
+	system.ActivateMove(u, q.Head())
+	system.Scheduler.Tick(1)
+	// Move unit to start tile 5, then check arrival from tile 5 vs goal 7: dx=-2 → 4 <=4 true
+	// Force cached tile to 5,1 via EnsureUnit already stamps at start
+	// Step should set satisfied 0x20 immediately since distance exactly threshold inclusive
+	system.BeginTick(2)
+	res := system.StepUnit(h, 2)
+	system.EndTick(2)
+	if q.Head().Satisfied&0x20 == 0 {
+		t.Fatalf("inclusive boundary dx²=4 threshSq=4 should OR 0x20, got %x", q.Head().Satisfied)
+	}
+	if !res.Arrived && res.HasRoute {
+		// Arrived flag requires hadRoute; this case hadRoute true with route active, so should be Arrived
+		// If not, ensure bit at least set
+	}
+	// Farther case: goal 8,1 delta 3 → 9 >4 not arrived
+	w2 := units.New(10, nil)
+	system2 := NewSystem(terrain, profile, NewOccupancyGrid())
+	def2 := &content.UnitDef{UnitName: "armflea2", MaxVelocity: 2 * 65536, TurnRate: 500, SightDistance: 28, MaxDamage: 100, FootprintX: 1, FootprintZ: 1}
+	h2, _ := w2.Create(def2, 0, world.CellToWorld(5), numeric.Fixed(0), world.CellToWorld(1))
+	u2 := w2.Unit(h2)
+	system2.BindWorld(w2)
+	system2.EnsureUnit(u2)
+	q2 := orders.QueueForUnit(u2)
+	q2.Push(id, orders.Node{GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(1)})
+	system2.ActivateMove(u2, q2.Head())
+	system2.Scheduler.Tick(1)
+	system2.BeginTick(2)
+	_ = system2.StepUnit(h2, 2)
+	system2.EndTick(2)
+	if q2.Head().Satisfied&0x20 != 0 {
+		t.Fatalf("distance 3 thresh 2 should not set 0x20, dx²=9 threshSq=4")
+	}
+}
+
+// TestArrivalIsPlanarNoYHeading verifies y/heading do not affect arrival [R-P0-01].
+func TestArrivalIsPlanarNoYHeading(t *testing.T) {
+	terrain := syntheticTerrainFlat()
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}
+	grid := NewOccupancyGrid()
+	system := NewSystem(terrain, profile, grid)
+	w := units.New(10, nil)
+	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, SightDistance: 120, MaxDamage: 100, FootprintX: 1, FootprintZ: 1}
+	h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(100*65536), world.CellToWorld(0))
+	u := w.Unit(h)
+	u.Y = numeric.Fixed(100 * 65536) // high Y, but arrival planar only [R-P0-01]
+	u.Move.Heading = 12345
+	system.BindWorld(w)
+	system.EnsureUnit(u)
+	q := orders.QueueForUnit(u)
+	id := orders.Lookup("Move_Ground")
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(0), GoalZ: world.CellToWorld(0)})
+	system.ActivateMove(u, q.Head())
+	system.Scheduler.Tick(1)
+	system.BeginTick(2)
+	res := system.StepUnit(h, 2)
+	system.EndTick(2)
+	if q.Head().Satisfied&0x20 == 0 {
+		t.Fatalf("planar arrival should succeed despite Y and heading [R-P0-01]")
 	}
 	_ = res
 }

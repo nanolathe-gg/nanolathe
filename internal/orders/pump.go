@@ -270,6 +270,45 @@ func randBelow15() uint32 {
 	return rng.Global.Sim.Uint32n(15) // gameplay jitter uses simulation stream [I4][04 §3.3]
 }
 
+func randBelow30() uint32 {
+	if rng.Global.Sim == nil {
+		panic("orders: rng.Global.Sim not seeded")
+	}
+	return rng.Global.Sim.Uint32n(30) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Phase 0 arms gate 0xE0 and returns 1; phase 1 tests satisfied&0x20 -> 5 else 9.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32) Code {
+	if u != nil && u.Attachment.Carrier != 0 {
+		return 7 // reject while attached [R-P0-01]
+	}
+	if n.Phase == 0 {
+		n.DynamicGate = 0xE0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		return 1
+	}
+	if satisfied&0x20 != 0 { // [R-P0-01] combined&0x20 -> ack + return 5
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		return 5
+	}
+	return 9 // [R-P0-01] drop when further records else 30+RNG30 wait
+}
+
+func ensureMoveHandlers() {
+	for _, name := range []string{"Move_Ground", "VTOL_Move", "QMove", "Patrol", "QPatrol", "VTOL_Patrol", "RepairPatrol", "VTOL_RepairPatrol"} {
+		id := Lookup(name)
+		if id != 0 && int(id) < len(table) && table[int(id)].Handler == nil {
+			table[int(id)].Handler = moveGroundHandler
+		}
+	}
+}
+
+func init() {
+	// Attempt early install; if table not yet built (init order) the lazy ensure will retry on first pump.
+	ensureMoveHandlers()
+}
+
 func findActive(q *Queue) int {
 	if q == nil {
 		return -1
@@ -612,6 +651,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 		n.Satisfied &^= satisfied
 		u.Pending &^= satisfied
 		n.DynamicGate = 0
+		ensureMoveHandlers()
 		handler := DescriptorFor(n.ID).Handler
 		if handler == nil {
 			// [P0-I03] path-backed move orders have no dedicated handler yet; the
@@ -663,7 +703,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			if len(q.primary) == 1 {
 				n.Phase = 0
 				n.DynamicGate = 1
-				n.Deadline = int32(tick + 30 + randBelow15()) // [04 §3.3] same as code 3
+				n.Deadline = int32(tick + 30 + randBelow30()) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 				return
 			}
 			cleanupNode(n)
@@ -753,7 +793,7 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 			if idx == len(q.secondary)-1 {
 				n.Phase = 0
 				n.DynamicGate = 1
-				n.Deadline = int32(tick + 30 + randBelow15())
+				n.Deadline = int32(tick + 30 + randBelow30()) // [R-P0-01] secondary mirrors primary 30+RNG(30)
 				idx++
 			} else {
 				n.Flags |= FlagTombstone

@@ -79,6 +79,10 @@ type battleSession struct {
 
 	msAccum float64 // renderer delta → scaled-now for Session.Step
 
+	// Status message for game-speed and pause feedback [07 §11][07 §2]; presentation-only transient overlay (I6).
+	statusMessage string
+	statusUntil   uint32 // GlobalTick expiry
+
 	menu             battleMenuState
 	menuPressed      int
 	menuPressedState battleMenuState
@@ -296,6 +300,17 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			b.closeBattleMenu()
 		}
 	}
+	// ESC-menu token path [07 §2]: ESC reuses Tab menu machinery; also disarms latch as today [07 §9].
+	if in != nil && in.Kbd != nil && in.Kbd.KeyDown(input.KeyEscape) && b.menu == battleMenuClosed {
+		if b.latch == input.LatchNormal && b.buildDef == "" {
+			b.openBattleMenu()
+		} else {
+			b.disarmPlacement()
+			b.latch = input.LatchNormal
+			b.hudCaptured = false
+			b.dragActive = false
+		}
+	}
 	if b.menu != battleMenuClosed {
 		b.handleBattleMenuInput(in, cl)
 	} else {
@@ -418,6 +433,16 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	}
 	if kbd.KeyDown(input.KeyN) {
 		b.stockpileSelected(kbd.HasShift())
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	if kbd.KeyDown(input.KeyPause) {
+		b.togglePause()
+	}
+	if kbd.KeyDown(input.KeyEqual) || kbd.KeyDown(input.KeyNumpadAdd) {
+		b.adjustGameSpeed(1)
+	}
+	if kbd.KeyDown(input.KeyMinus) || kbd.KeyDown(input.KeyNumpadSubtract) {
+		b.adjustGameSpeed(-1)
 	}
 	// Digit routing uses the established battle-mode/Alt gate. Ctrl+digit is
 	// assignment; the non-page branch is group recall with Shift as preserve /
@@ -1785,6 +1810,12 @@ func (b *battleSession) drawOverlay(c *client.Client, fnt *formats.FNT) {
 			c.UIText(fnt, "GUI: BATTLE.GUI loaded ✓", 4, 60, 200)
 		}
 	}
+	// Transient game-speed and pause messages [07 §11][07 §2] presentation-only (I6)
+	if b.statusVisible() && fnt != nil {
+		w := client.MeasureText(fnt, b.statusMessage)
+		x := (640 - w) / 2
+		c.UIText(fnt, b.statusMessage, x, 30, 15)
+	}
 	// TODO(P1): messages queue, chat, cloak/jammer indicators, SHD fog strip, ten-layer composer, audio cues [07 §6][GAP T22][03 §3.3].
 }
 
@@ -2250,4 +2281,68 @@ func (b *battleSession) doRetry(cl *client.Client) {
 	}
 	// Ensure battle state
 	newSess.State = session.StateBattle
+}
+
+// setStatusMessage stores a transient on-screen message [07 §11][07 §2] presentation-only (I6).
+func (b *battleSession) setStatusMessage(msg string) {
+	if b == nil || b.sess == nil || b.sess.Clock == nil {
+		return
+	}
+	b.statusMessage = msg
+	// Display for 90 ticks (~3 seconds at 30 Hz) [07 §11] animation cadence; TODO(question): exact duration not established
+	b.statusUntil = b.sess.Clock.GlobalTick + 90
+}
+
+// statusVisible reports whether the transient message should be drawn [07 §11].
+func (b *battleSession) statusVisible() bool {
+	if b == nil || b.sess == nil || b.sess.Clock == nil || b.statusMessage == "" {
+		return false
+	}
+	// Show until expiry; if clock hasn't ticked yet, still show
+	return b.sess.Clock.GlobalTick <= b.statusUntil
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (b *battleSession) adjustGameSpeed(delta int) {
+	if b == nil || b.sess == nil || b.sess.Clock == nil {
+		return
+	}
+	old := b.sess.Clock.Requested
+	newReq := old + int32(delta)
+	if newReq < 1 {
+		newReq = 1
+	}
+	if newReq > 20 {
+		newReq = 20
+	}
+	if newReq == old {
+		return
+	}
+	b.sess.Clock.Requested = newReq
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	b.sess.Clock.Active = newReq
+	var msg string
+	if newReq == 10 {
+		msg = "Game Speed Normal" // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	} else {
+		d := int(newReq - 10)
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		msg = fmt.Sprintf("Game Speed  %+d", d)
+	}
+	b.setStatusMessage(msg)
+}
+
+// togglePause flips the pause bit and emits retail message [07 §11] igpaused overlay is the established indicator; TODO(question): exact on-screen pause string not recovered, using "Game Paused"/"Game Resumed" as placeholder behind TODO.
+func (b *battleSession) togglePause() {
+	if b == nil || b.sess == nil || b.sess.Clock == nil {
+		return
+	}
+	b.sess.Clock.Paused = !b.sess.Clock.Paused
+	var msg string
+	if b.sess.Clock.Paused {
+		msg = "Game Paused" // TODO(question): retail pause localized message not established beyond igpaused GAF [07 §11]; verify with decompile
+	} else {
+		msg = "Game Resumed"
+	}
+	b.setStatusMessage(msg)
 }

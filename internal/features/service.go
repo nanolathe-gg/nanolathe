@@ -183,7 +183,8 @@ func (s *Service) PlaceAtWorld(x, z numeric.Fixed, def *content.FeatureDef) *Ins
 // PlaceCorpse stamps a corpse feature for a dying unit at its world position
 // and initiates sinking when submerged [05 "Feature sinking and water interaction"].
 // fromIsFeature is the dying unit's IsFeature flag; isfeature corpses never
-// descend. Chain depth is already resolved by caller (low nibble) [06 §12.1] C23;
+// descend. Chain depth is already resolved by caller from the Killed-variant
+// low nibble [04 §5.1][06 §12.1] C23, replacing the constant-switch placeholder;
 // this helper just stamps the resolved def. Returns the corpse instance or nil.
 func (s *Service) PlaceCorpse(x, z numeric.Fixed, def *content.FeatureDef, fromIsFeature bool) *Instance {
 	if def == nil || s.Terrain == nil {
@@ -206,12 +207,14 @@ func (s *Service) SetBurnAnimationTicks(fn func(*content.FeatureDef) int32) {
 	s.BurnAnimationTicks = fn
 }
 
-// CorpseDefFor resolves the corpse feature for depth low-nibble [06 §12.1] C23.
+// CorpseDefFor resolves the corpse feature for depth low-nibble [06 §12.1] C23 [04 §5.1].
 // It mirrors combat.ResolveCorpse but lives in features so callers without
-// combat import can still resolve. Depth 0 => nil; depth 1 => authored Corpse;
-// larger depths follow featuredead chain depth-1 times.
+// combat import can still resolve. Depth is the Killed-variant low nibble
+// [04 §5.1][06 §12.1] C23, not a constant: Depth 0 => nil; depth 1 => authored Corpse;
+// larger depths follow featuredead chain depth-1 times. This is the sole
+// corpse-depth source, replacing the constant switch in the corpse stamper.
 func CorpseDefFor(unitDef *content.UnitDef, features map[string]*content.FeatureDef, depth uint8) *content.FeatureDef {
-	depth &= 0x0F
+	depth &= 0x0F // [06 §12.1] C23 low four bits from Killed variant
 	if depth == 0 || unitDef == nil {
 		return nil
 	}

@@ -773,7 +773,7 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 			if u := s.Units.Unit(h); u != nil {
 				u.Health = rec.Health
 				u.MaxHealth = rec.MaxHealth
-					u.Remaining = rec.Remaining
+				u.Remaining = rec.Remaining
 				u.Flags = rec.Flags &^ ((1 << 16) | (1 << 17))
 				u.Group = rec.Group
 				u.Activated = rec.Flags&(1<<16) != 0
