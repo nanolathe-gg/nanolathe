@@ -2,6 +2,8 @@ package session
 
 import (
 	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
@@ -13,8 +15,10 @@ import (
 	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
@@ -27,6 +31,146 @@ import (
 // cobLoader is the per-process cache for COB programs [04 §4.1][P1-I01].
 // It is shared across sessions but never mutated during a tick (I1).
 var globalCobLoader = cob.NewCachedLoader()
+
+// parsedModelEntry retains one immutable model and the winning VFS
+// provenance for an authored ObjectName/provider identity. Models are safe to
+// share between sessions; VM piece state remains per-unit in cob.Binding.
+type parsedModelEntry struct {
+	model *model.Model
+	prov  vfs.Provenance
+}
+
+type authoredModelKey struct {
+	Identity     string
+	LogicalPath  string
+	OriginalPath string
+	ProviderType string
+	SourcePath   string
+	MountRoot    string
+	Priority     int
+	MountOrder   int
+}
+
+var parsedModels = struct {
+	sync.Mutex
+	byProvider map[authoredModelKey]parsedModelEntry
+}{byProvider: make(map[authoredModelKey]parsedModelEntry)}
+
+func loadAuthoredModel(fs vfs.FSOps, objectName string) (*model.Model, vfs.Provenance, error) {
+	identity := content.CanonicalKey(strings.TrimSpace(objectName))
+	if identity == "" {
+		return nil, vfs.Provenance{}, fmt.Errorf("session: unit has empty ObjectName")
+	}
+	path := "objects3d/" + identity + ".3do"
+	info, err := fs.Stat(path)
+	if err != nil {
+		return nil, vfs.Provenance{}, fmt.Errorf("session: model %q unavailable: %w", path, err)
+	}
+	if info.IsDir {
+		return nil, info.Source, fmt.Errorf("session: model %q is a directory (provider %s)", path, info.Source.ProviderID())
+	}
+	key := authoredModelKey{
+		Identity: identity, LogicalPath: info.Source.LogicalPath,
+		OriginalPath: info.Source.OriginalPath, ProviderType: info.Source.ProviderType,
+		SourcePath: info.Source.SourcePath, MountRoot: info.Source.MountRoot,
+		Priority: info.Source.Priority, MountOrder: info.Source.MountOrder,
+	}
+	parsedModels.Lock()
+	if entry, ok := parsedModels.byProvider[key]; ok {
+		parsedModels.Unlock()
+		return entry.model, entry.prov, nil
+	}
+	parsedModels.Unlock()
+	loaded, err := model.Load(fs, path)
+	if err != nil {
+		return nil, info.Source, fmt.Errorf("session: model %q from %s: %w", path, info.Source.ProviderID(), err)
+	}
+	if loaded == nil {
+		return nil, info.Source, fmt.Errorf("session: model %q from %s is nil", path, info.Source.ProviderID())
+	}
+	parsedModels.Lock()
+	if entry, ok := parsedModels.byProvider[key]; ok {
+		parsedModels.Unlock()
+		return entry.model, entry.prov, nil
+	}
+	parsedModels.byProvider[key] = parsedModelEntry{model: loaded, prov: info.Source}
+	entry := parsedModels.byProvider[key]
+	parsedModels.Unlock()
+	return entry.model, entry.prov, nil
+}
+
+// cobPresentationSink admits only already-resolved COB events. It supplies
+// the originating unit identity while the collector assigns sequence/order.
+type cobPresentationSink struct {
+	session  *Session
+	source   pool.Handle
+	pieceMap []int
+}
+
+// SetCOBPieceMap is called by strict binding before mode-I Create. The map is
+// immutable after that point and translates VM/COB indices to authored model
+// indices at the presentation boundary.
+func (s *cobPresentationSink) SetCOBPieceMap(pieceMap []int) {
+	if s == nil {
+		return
+	}
+	s.pieceMap = append(s.pieceMap[:0], pieceMap...)
+}
+
+func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
+	if s.session == nil || s.session.Presentation == nil {
+		return
+	}
+	if ev.Piece < 0 || int(ev.Piece) >= len(s.pieceMap) || s.pieceMap[ev.Piece] < 0 {
+		// Strict binding diagnostics already reject unresolved pieces. This is a
+		// defensive presentation drop for a malformed producer event; never
+		// invent a root/model index [I6].
+		return
+	}
+	tick := uint32(0)
+	if s.session.Clock != nil {
+		tick = s.session.Clock.GlobalTick
+	}
+	e := presentation.Event{Tick: tick, Source: s.source, Piece: int32(s.pieceMap[ev.Piece]), SFXType: ev.SFXType, SFXClass: presentation.SFXClass(ev.SFXClass), X: ev.Source[0], Y: ev.Source[1], Z: ev.Source[2], TargetX: ev.Target[0], TargetY: ev.Target[1], TargetZ: ev.Target[2]}
+	switch ev.Kind {
+	case cob.PresentationSFX:
+		s.session.Presentation.EmitCOBSFX(e)
+	case cob.PresentationNano:
+		s.session.Presentation.EmitNanolathe(e)
+	case cob.PresentationMuzzle:
+		s.session.Presentation.EmitMuzzleFlash(e)
+	case cob.PresentationSmoke:
+		s.session.Presentation.EmitSmokeStart(e)
+	case cob.PresentationTrail:
+		s.session.Presentation.EmitProjectileTrail(e)
+	case cob.PresentationImpact:
+		s.session.Presentation.EmitImpact(e)
+	}
+}
+
+func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
+	if s == nil || u == nil || u.Def == nil {
+		return fmt.Errorf("session: cannot bind nil unit")
+	}
+	mdl, prov, err := loadAuthoredModel(fs, u.Def.ObjectName)
+	if err != nil {
+		return fmt.Errorf("unit %q model %s: %w", u.Def.UnitName, prov.ProviderID(), err)
+	}
+	sink := &cobPresentationSink{session: s, source: u.Handle}
+	visible := func(_ int, _ int32) bool {
+		// This is the established unit-level gameplay visibility gate used by
+		// combat acquisition; it never mutates authoritative state [03 §3.2].
+		return s.IsUnitVisible(localPlayerForSession(s), u)
+	}
+	binding, err := units.BindCOBWithPortsAndVisibility(fs, u.Def, mdl, s.SimRNG(), sink, visible)
+	if err != nil {
+		return fmt.Errorf("unit %q model %q script binding: %w", u.Def.UnitName, mdl.Name, err)
+	}
+	if err := u.AttachCOBBinding(binding); err != nil {
+		return fmt.Errorf("unit %q attach strict COB: %w", u.Def.UnitName, err)
+	}
+	return nil
+}
 
 // strictCatalog compiles a single immutable catalog from the VFS. It never
 // fabricates an empty fallback. Fixture constructors must explicitly supply a
@@ -160,53 +304,28 @@ func newSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps) (*units.World, er
 	return w, nil
 }
 
-// ensureCOBForAll ensures every live unit has a VM, loading via VFS when possible [04 §4.1][P1-I01].
-// It is idempotent; units already with a VM are skipped. For missing COB files it creates an empty fallback VM.
-func ensureCOBForAll(s *Session, fs vfs.FSOps) {
+// ensureCOBForAll verifies that every production unit has the strict binding
+// installed by createAndBindServices. It never repairs a missing binding with
+// an empty VM; synthetic empty VMs remain explicit fixture-only state.
+func ensureCOBForAll(s *Session, fs vfs.FSOps) error {
 	if s == nil || s.Units == nil {
-		return
+		return nil
 	}
-	if fs != nil && s.Units != nil {
-		// Ensure world has loader for future units
-		s.Units.SetCOBSource(fs, globalCobLoader)
+	if fs == nil {
+		return nil // explicit fixture path
+	}
+	if !s.Units.HasCOBBinder() {
+		return nil // legacy campaign fixture path has not entered composition
 	}
 	for _, u := range s.Units.IterSliced() {
 		if u == nil || !u.Alive {
 			continue
 		}
-		if u.GetScript() != nil {
-			continue
-		}
-		// Try to load via FS; fallback to empty program is handled by attachCOB via loader
-		// If loader not set, create empty VM directly
-		if fs == nil {
-			prog := &cob.Program{Code: []uint32{}, Scripts: map[string]int{}, Pieces: []string{}, Statics: 0, ScriptsByID: []int{}}
-			vm := cob.NewVM(prog)
-			u.SetScript(vm)
-			continue
-		}
-		// Use world's attachCOB path which already handles loading; but since unit already exists,
-		// we call attachCOB directly
-		s.Units.SetCOBSource(fs, globalCobLoader)
-		// Force attach via private helper: create VM via world's loader
-		// We call attachCOB by temporarily using the world's method via direct call
-		// Since attachCOB is private, we replicate logic here
-		var prog *cob.Program
-		if p, found, _ := globalCobLoader.Load(fs, u.Def.UnitName); found && p != nil {
-			prog = p
-		} else if p, found, _ := globalCobLoader.Load(fs, u.Def.CanonicalKey); found && p != nil {
-			prog = p
-		}
-		if prog == nil {
-			prog = &cob.Program{Code: []uint32{}, Scripts: map[string]int{}, Pieces: []string{}, Statics: 0, ScriptsByID: []int{}}
-		}
-		vm := cob.NewVM(prog)
-		u.SetScript(vm)
-		if _, ok := prog.Scripts["Create"]; ok {
-			_ = vm.StartByName("Create", nil)
-			vm.Drain(0)
+		if u.COBBinding() == nil {
+			return fmt.Errorf("session: unit %d has no strict COB binding after battle entry", u.Handle)
 		}
 	}
+	return nil
 }
 
 // createAndBindServices creates every required authoritative service and binds
@@ -224,6 +343,16 @@ func createAndBindServices(s *Session) error {
 	}
 	if s.Units == nil {
 		return fmt.Errorf("session: missing Units for service wiring [01 §6.1]")
+	}
+	if s.Presentation == nil {
+		s.Presentation = presentation.NewCollector(presentation.Limits{})
+	}
+	// Production worlds carry a VFS source. Install one strict binder before
+	// battle entry so scenario, construction, and forced-slot creation all
+	// resolve the same authored model/script path. Fixture worlds leave the
+	// source nil and may attach SyntheticCOBForTests explicitly.
+	if fs, _ := s.Units.COBSource(); fs != nil {
+		s.Units.SetCOBBinder(func(u *units.Unit) error { return s.bindUnitCOB(fs, u) })
 	}
 	if s.Econ == nil {
 		s.Econ = &economy.Service{}
@@ -329,9 +458,62 @@ func createAndBindServices(s *Session) error {
 	if s.Build == nil {
 		s.Build = construction.NewService(s.World, s.Catalog, s.Units, s.Econ)
 	}
+	// Construction queries the immutable model retained by each strict COB
+	// binding. This keeps factory exit placement and mobile QueryNanoPiece on
+	// the authored model identity, including future products.
+	s.Build.ModelForFactory = func(u *units.Unit) *model.Model {
+		if u == nil || u.COBBinding() == nil {
+			return nil
+		}
+		return u.COBBinding().Model
+	}
+	s.Build.ModelForUnit = func(u *units.Unit) *model.Model {
+		if u == nil || u.COBBinding() == nil {
+			return nil
+		}
+		return u.COBBinding().Model
+	}
+	s.Build.Presentation = s.Presentation
+	// Placement release is an independent lifecycle observer. The primary
+	// OnDeath hook remains owned by the session loop for triggers/corpse/Killed;
+	// this observer only releases unfinished construction occupancy once.
+	s.Units.OnDeathExtra = func(h pool.Handle, _ units.DeathCause, _ *units.Unit) {
+		if s.Build != nil {
+			s.Build.ReleasePlacement(h)
+		}
+	}
 	// Combat [06] sole projectile authority
 	if s.Combat == nil {
 		s.Combat = &combat.Service{}
+	}
+	// Combat emits immutable authoritative events in impact order. The
+	// collector is presentation-only; EventUnitKilled remains a death/corpse
+	// notification in Units.OnDeath and is not duplicated here.
+	s.Combat.Events = func(ev combat.Event) {
+		if s.Presentation == nil {
+			return
+		}
+		pe := presentation.Event{
+			Tick: ev.Tick, Source: ev.Source, Target: ev.Target,
+			X: ev.Position.X, Y: ev.Position.Y, Z: ev.Position.Z,
+			Graphic: ev.Graphic, Alias: ev.Sound, Magnitude: ev.Magnitude,
+		}
+		switch ev.Kind {
+		case combat.EventShake:
+			s.Presentation.EmitShake(pe)
+		case combat.EventHitSound, combat.EventWaterSound:
+			s.Presentation.EmitSound(pe)
+		case combat.EventEndSmoke:
+			s.Presentation.EmitSmokeEnd(pe)
+		case combat.EventExplosion:
+			s.Presentation.EmitExplosion(pe)
+		case combat.EventWaterExplosion:
+			s.Presentation.EmitWaterImpact(pe)
+		case combat.EventProjectileImpact:
+			s.Presentation.EmitImpact(pe)
+		case combat.EventUnitKilled, combat.EventCorpse:
+			// Death/corpse lifecycle is owned by Units.OnDeath exactly once.
+		}
 	}
 	// Wire BuildWeapon stockpile admission to the authoritative economy
 	// service so per-visit truncated cumulative costs are admitted via
@@ -357,9 +539,6 @@ func createAndBindServices(s *Session) error {
 	}
 	if s.Snapshot == nil {
 		s.Snapshot = &snapshot.Buffer{}
-	}
-	if s.Presentation == nil {
-		s.Presentation = presentation.NewCollector(presentation.Limits{})
 	}
 	if s.Mission == nil {
 		return fmt.Errorf("session: missing Mission [08]")

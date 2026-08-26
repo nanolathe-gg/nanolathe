@@ -10,6 +10,7 @@ package combat
 import (
 	"sort"
 
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -103,7 +104,13 @@ type Candidate struct {
 	X, Z     numeric.Fixed // current world X/Z [06 §3.2] P0-10
 	Y        numeric.Fixed // reference/top height, compared against sea level via Y>sea<<16 [06 §3.1] P0-10 (I13)
 	Category uint32        // decoded category bitset for this candidate [06 §3.1] P0-10
-	Hostile  bool          // hostility for primary list [06 §3.1] P0-10
+	// CategoryMask is the compiled unit-ID membership mask. It is authoritative
+	// whenever CategoryMaskResolved is true; Category is retained only for old
+	// fixture callers and is never populated from authored text at runtime
+	// [R-P0-03].
+	CategoryMask         content.CategoryMask
+	CategoryMaskResolved bool
+	Hostile              bool // hostility for primary list [06 §3.1] P0-10
 
 	// OwnSide marks a candidate belonging to the viewing player. The
 	// direct-visibility predicate accepts own-side units outright, without
@@ -124,6 +131,13 @@ type Candidate struct {
 // entering the preferred bucket [06 §3.1] P0-10. A matching candidate (category & badMask !=0) enters the fallback bucket [06 §3.1] P0-10.
 // Any preferred result wins over fallback [06 §3.1] P0-10.
 func IsPreferredCategory(cat, badMask uint32) bool { return cat&badMask == 0 } // [06 §3.1] P0-10
+
+// IsPreferredCategoryMask tests compiled unit-definition membership masks.
+// Category tokens are registry keys whose values are unit-ID sets; no runtime
+// token hashing participates [R-P0-03][06 §3.1].
+func IsPreferredCategoryMask(cat, badMask content.CategoryMask) bool {
+	return !cat.Intersects(badMask)
+}
 
 // rngBoundForCandidate computes the shared-RNG bound for a candidate as the sum of the high 32-bit halves
 // of its squared fixed-point X and Z deltas [06 §3.2] P0-10. Bound = (dxRaw²>>32)+(dzRaw²>>32) via __allmul.
@@ -186,8 +200,10 @@ type Acquisition struct {
 	// Range is the weapon's ordinary fire range. Coverage is a SEPARATE scalar
 	// for projectile-target/interceptor behavior and is not this radius
 	// [06 §3.3] [06 §2.1] P0-10.
-	Range   int32
-	BadMask uint32
+	Range         int32
+	BadMask       uint32
+	BadTargetMask content.CategoryMask
+	MaskResolved  bool
 
 	// WaterWeapon takes the water branch: the depth/type predicates and planar
 	// range, with no sea-level height requirement [06 §3.1] P0-10.
@@ -356,7 +372,11 @@ func AcquireTarget(candidates []Candidate, a Acquisition) (pool.Handle, bool) {
 	// Step 3: partition into preferred vs fallback [06 §3.1] P0-10.
 	var preferred, fallback []Candidate
 	for _, c := range sampled {
-		if IsPreferredCategory(c.Category, a.BadMask) {
+		isPreferred := IsPreferredCategory(c.Category, a.BadMask)
+		if a.MaskResolved && c.CategoryMaskResolved {
+			isPreferred = IsPreferredCategoryMask(c.CategoryMask, a.BadTargetMask)
+		}
+		if isPreferred {
 			preferred = append(preferred, c)
 		} else {
 			fallback = append(fallback, c)
@@ -397,6 +417,14 @@ func ShouldRetain(current Candidate, hostile bool, badMask uint32, stunned bool)
 		return false // [06 §3.2] P0-10 paralyzer already-stunned exclusion
 	}
 	return true // retain without re-running physical/sensor gates [06 §3.2] P0-10
+}
+
+// ShouldRetainMask is the compiled-mask retention path [R-P0-03][06 §3.2].
+func ShouldRetainMask(current Candidate, hostile bool, badMask content.CategoryMask, stunned bool) bool {
+	if current.Handle == 0 || !hostile || stunned {
+		return false
+	}
+	return IsPreferredCategoryMask(current.CategoryMask, badMask)
 }
 
 // IsValidAcquisitionCandidate reports whether a candidate passes the primary

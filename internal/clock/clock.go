@@ -280,7 +280,7 @@ func ScaledNow(tickCount uint32) int32 {
 //	scaledNow = floor(GetTickCountMilliseconds * 30 / 1000)
 //
 // Retail samples GetTickCount, an integer millisecond counter, directly. A
-// Kaiju frame hands us a float seconds delta instead, so the milliseconds are
+// Ebitengine hands us a float seconds delta instead, so the milliseconds are
 // accumulated here and only their integer scaled value is handed to the
 // budget. The fractional millisecond is retained rather than dropped, so a
 // 60 Hz frame (16.666 ms) does not lose two thirds of a millisecond per frame.

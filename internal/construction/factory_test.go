@@ -120,6 +120,7 @@ func TestSnapHalfExtentBias(t *testing.T) {
 	cat.Units[content.CanonicalKey("armflash")] = prodDef
 	// Also need factory queue with product so footprint resolved
 	svc := NewService(nil, cat, nil, nil)
+	svc.AllowSyntheticPlacement = true
 	q := orders.QueueForUnit(factory)
 	// Push a building build node for armflash
 	bid := orders.Lookup("BuildingBuild")
@@ -138,6 +139,92 @@ func TestSnapHalfExtentBias(t *testing.T) {
 	// Verify half-extent bias explicitly
 	if bx, _ := snapBias(2, 2); bx != 1 {
 		t.Fatalf("bias 2=>1")
+	}
+	position, ok := svc.QueryBuildWorldPosition(factory, m)
+	if !ok || position.X() != factory.X || position.Y() != factory.Y || position.Z() != factory.Z {
+		t.Fatalf("QueryBuildWorldPosition = (%d,%d,%d), want factory transform (%d,%d,%d)", position.X().Raw(), position.Y().Raw(), position.Z().Raw(), factory.X.Raw(), factory.Y.Raw(), factory.Z.Raw())
+	}
+}
+
+func TestFactoryAllocationPreservesAuthoredExitTransform(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	facDef := newFactoryDef("armfac", 4, 4, 300)
+	prodDef := newProductDef("armflash", 2, 2, 100, 100)
+	cat.Units[content.CanonicalKey("armfac")] = facDef
+	cat.Units[content.CanonicalKey("armflash")] = prodDef
+	w := newTestWorld(8)
+	h, _ := w.Create(facDef, 0, world.CellToWorld(5), world.CellToWorld(2), world.CellToWorld(5))
+	factory := w.Unit(h)
+	factory.Script = nil // explicit synthetic fixture: QueryBuildInfo root fallback
+	q := orders.QueueForUnit(factory)
+	buildID := orders.Lookup("BuildingBuild")
+	if buildID == 0 {
+		buildID = orders.Lookup("MobileBuild")
+	}
+	q.Push(buildID, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(cat, "armflash"), Param2: 1, Phase: uint8(State2), Deadline: -1})
+	q.Primary()[0].BuildDefKey = "armflash"
+	q.Primary()[0].Phase = uint8(State2)
+	// The root QueryBuildInfo transform is deliberately offset from the
+	// geometric center. Allocation must retain all three authored coordinates;
+	// validation uses the independently snapped 2x2 rectangle.
+	exitX, exitY, exitZ := int64(12345), int64(54321), int64(-23456)
+	svc := NewService(nil, cat, w, &economy.Service{})
+	svc.AllowSyntheticPlacement = true
+	svc.ModelForFactory = func(*units.Unit) *model.Model {
+		return trivialModel(1, [][3]int64{{exitX, exitY, exitZ}})
+	}
+	if _, ok := svc.QueryBuildWorldPosition(factory, svc.ModelForFactory(factory)); !ok {
+		t.Fatal("query world position failed before pump")
+	}
+	svc.Pump(factory, 0)
+	node := q.Primary()[0]
+	prod := w.Unit(node.Target)
+	if prod == nil {
+		t.Fatalf("factory did not allocate product: node id=%d phase=%d target=%d deadline=%d gate=%d messages=%v", node.ID, node.Phase, node.Target, node.Deadline, node.DynamicGate, svc.Messages())
+	}
+	wantX := factory.X + numeric.Fixed(exitX)
+	wantY := factory.Y + numeric.Fixed(exitY)
+	wantZ := factory.Z + numeric.Fixed(exitZ)
+	if prod.X != wantX || prod.Y != wantY || prod.Z != wantZ {
+		t.Fatalf("product transform=(%d,%d,%d), want authored=(%d,%d,%d)", prod.X.Raw(), prod.Y.Raw(), prod.Z.Raw(), wantX.Raw(), wantY.Raw(), wantZ.Raw())
+	}
+	extent, _ := world.NewFootprintExtent(2, 2)
+	anchor, _ := world.SnapFootprintAnchor(wantX, wantZ, extent)
+	if node.GoalX != world.CellToWorld(anchor.CellX()) || node.GoalZ != world.CellToWorld(anchor.CellZ()) {
+		t.Fatalf("validation anchor=(%d,%d) not retained separately in node goal", anchor.CellX(), anchor.CellZ())
+	}
+	record, ok := svc.PlacementForProduct(prod.Handle)
+	if !ok || record.Anchor() != anchor {
+		t.Fatalf("placement record=%#v ok=%v, want anchor %#v", record, ok, anchor)
+	}
+}
+
+func TestPlacementDispatchUsesProducedDefinitionClass(t *testing.T) {
+	terrain := &world.Terrain{CellW: 2, CellH: 1, Plot: make([]world.PlotCell, 2)}
+	for i := range terrain.Plot {
+		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
+	}
+	terrain.Plot[0].SetOccupantA(9)
+	cat := &content.Catalog{
+		Units: map[string]*content.UnitDef{},
+		Movement: map[string]*content.MovementClass{
+			"test": {MaxSlope: 255, MaxWaterSlope: 255, MaxWaterDepth: 255, MinWaterDepth: 0},
+		},
+	}
+	prod := newProductDef("dispatch", 1, 1, 1, 1)
+	prod.MovementClass = "test"
+	prod.BMCode = true // factory-produced mobile product
+	cat.Units[prod.CanonicalKey] = prod
+	svc := NewService(terrain, cat, nil, nil)
+	extent, _ := world.NewFootprintExtent(1, 1)
+	rect, _ := world.NewFootprintRect(world.NewFootprintAnchor(0, 0), extent)
+	if _, err := validatePlacement(svc, rect, prod, []world.YardCell{0}); err == nil {
+		t.Fatal("factory mobile product used building yard path and ignored occupancy")
+	}
+
+	prod.BMCode = false // mobile-builder path placing a building product
+	if _, err := validatePlacement(svc, rect, prod, []world.YardCell{0}); err != nil {
+		t.Fatalf("building product did not use yard path: %v", err)
 	}
 }
 
@@ -190,6 +277,7 @@ func TestSilentFifteen(t *testing.T) {
 	head.Phase = uint8(State2)
 
 	svc := NewService(terrain, cat, w, &economy.Service{})
+	svc.AllowSyntheticPlacement = true
 	// Pump at tick 10: should detect blocked and set retry 15
 	tick := uint32(10)
 	svc.Pump(factory, tick)
@@ -265,7 +353,8 @@ func TestNanoframeCreationValues(t *testing.T) {
 	head := q.Primary()[0]
 	head.Phase = uint8(State2)
 	svc := NewService(nil, cat, w, &economy.Service{})
-	// Ensure terrain is nil => passes validation
+	svc.AllowSyntheticPlacement = true
+	// Explicit synthetic seam: no terrain is available in this fixture.
 	svc.Pump(factory, 100)
 	if head.Target == 0 {
 		t.Fatalf("allocation failed")
@@ -321,6 +410,7 @@ func TestNanoframeCreationValues(t *testing.T) {
 	head2 := q2.Primary()[0]
 	head2.Phase = uint8(State2)
 	svc2 := NewService(nil, cat, w2, &economy.Service{})
+	svc2.AllowSyntheticPlacement = true
 	svc2.Pump(factory2, 200)
 	prod2 := w2.Unit(head2.Target)
 	if prod2.Flags&(StandingMoveMask|StandingFireMask) != (StandingMoveMask | StandingFireMask) {
@@ -344,6 +434,7 @@ func TestNanoframeCreationValues(t *testing.T) {
 	head3 := q3.Primary()[0]
 	head3.Phase = uint8(State2)
 	svc3 := NewService(nil, cat2, w3, &economy.Service{})
+	svc3.AllowSyntheticPlacement = true
 	svc3.LimitChecker = func(f *units.Unit, key string) bool { return false }
 	svc3.Pump(factory3, 300)
 	if len(svc3.Messages()) == 0 || svc3.Messages()[len(svc3.Messages())-1] != "Unable to create any more units" {

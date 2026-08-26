@@ -59,7 +59,7 @@ formats    — lossless parsers (TDF blanking comment offsets, GAF/TNT/3DO reloc
 content    — compiled catalogs (units/weapons/features/movement/side/sound/maps) with defaults+conversions
 clock, rng, pool, kernel — 30 Hz tick, budget clamp 0..5, phase graph, fixed pools (slot 0=null)
 world (terrain, features, occupancy) → visibility → units+orders+cob → movement → economy → combat → ai → snapshot
-client     — Kaiju renderer interpolates Previous→Current at render fraction, palette/SHD lookup, fog presentation separate from LOS mask
+client     — Ebitengine window loop presents a software framebuffer, interpolates Previous→Current at render fraction, palette/SHD lookup, fog presentation separate from LOS mask
 ```
 
 ## Workflow

@@ -333,3 +333,52 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 		t.Fatalf("after completion pending should be 0")
 	}
 }
+
+func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
+	terrain := syntheticTerrainForIntegrate()
+	system := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}, NewOccupancyGrid())
+	w := units.New(10, nil)
+	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, MaxDamage: 100}
+	h, _ := w.Create(def, 0, world.CellToWorld(0), 0, world.CellToWorld(0))
+	u := w.Unit(h)
+	system.BindWorld(w)
+	system.EnsureUnit(u)
+	id := orders.Lookup("Move_Ground")
+	q := orders.QueueForUnit(u)
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(3)})
+	first := q.Head()
+	if first == nil || !system.ActivateMove(u, first) {
+		t.Fatal("first active order was not submitted")
+	}
+	if system.Scheduler.Pending(0) != 1 {
+		t.Fatalf("first activation pending=%d, want 1", system.Scheduler.Pending(0))
+	}
+	if system.ActivateMove(u, first) {
+		t.Fatal("same active order submitted twice")
+	}
+	if system.Scheduler.Pending(0) != 1 {
+		t.Fatalf("duplicate activation changed pending=%d", system.Scheduler.Pending(0))
+	}
+	firstRequest := path.Request{Unit: h, Activation: system.activeOrders[h].token}
+
+	q.RemoveHead()
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(6), GoalZ: world.CellToWorld(6)})
+	second := q.Head()
+	if second == nil || !system.ActivateMove(u, second) {
+		t.Fatal("replacement active order was not submitted")
+	}
+	if system.Scheduler.Pending(0) != 1 {
+		t.Fatalf("replacement pending=%d, want 1", system.Scheduler.Pending(0))
+	}
+	// Simulate a late callback for the canceled first request.  It must not
+	// overwrite the route belonging to the current head.
+	system.publishFunc(firstRequest, []path.Point{{X: 99, Z: 99}}, 0)
+	if route := system.Routes[h]; route != nil && route.Active {
+		t.Fatalf("stale publication became active: %+v", route.Points[:route.Count])
+	}
+	currentRequest := path.Request{Unit: h, Activation: system.activeOrders[h].token}
+	system.publishFunc(currentRequest, []path.Point{{X: 6, Z: 6}}, 0)
+	if route := system.Routes[h]; route == nil || !route.Active || route.Points[0] != (Point{X: 6, Z: 6}) {
+		t.Fatalf("current publication was not attached to active head: %+v", route)
+	}
+}

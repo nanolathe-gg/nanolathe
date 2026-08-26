@@ -2,7 +2,7 @@
 //
 // This is the minimal vertical slice that makes the engine visible.
 // It loads real TNT terrain and palette data, creates a camera and a
-// Kaiju window, and drives the frame loop with correct alpha handling.
+// Ebitengine window, and drives the frame loop with correct alpha handling.
 // It is intentionally small: no units, no fog, no sim subsystems beyond
 // a stub tick for the overlay.
 package main
@@ -185,13 +185,6 @@ func runViewer(opts Options, cs *contentSet) error {
 	if fnt != nil {
 		fmt.Fprintf(os.Stderr, "nanolathe: viewer: font loaded height %d\n", fnt.Height)
 	}
-	// Verify content database is reachable before blocking — if it is not,
-	// bootstrap.Main will log via slog and return immediately with no window,
-	// which looks like "no window" with only seed printed.
-	if _, err := os.Stat("content"); err != nil {
-		fmt.Fprintf(os.Stderr, "nanolathe: viewer: warning: content directory not found at ./content: %v (try `make kaiju-content`)\n", err)
-	}
-
 	err = client.RunGame(cl)
 	fmt.Fprintf(os.Stderr, "nanolathe: viewer: window closed\n")
 	return err

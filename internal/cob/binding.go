@@ -5,6 +5,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -15,9 +18,14 @@ import (
 type BindingRequest struct {
 	UnitName             string
 	ScriptPath           string
+	Model                *model.Model
 	ModelPieces          []string
 	RequiredScripts      []string
 	RequiredScriptGroups [][]string
+	SimulationRNG        *rng.Simulation
+	SFXSink              SFXSink
+	SFXVisible           func(piece int, sfxType int32) bool
+	PresentationSink     PresentationSink
 }
 
 // BindingDiagnosticCode identifies one strict binding failure. Codes are
@@ -93,12 +101,18 @@ func (e *BindingError) Has(code BindingDiagnosticCode) bool {
 // only after the one immediate (mode I) Create start and delta-zero VM-wide
 // barrier completed [04 §4.2].
 type Binding struct {
-	Program       *Program
-	VM            *VM
-	ScriptPath    string
-	Provider      vfs.Provenance
-	PieceMap      []int
-	CreateInvoked bool
+	Program          *Program
+	VM               *VM
+	Model            *model.Model
+	ScriptPath       string
+	Provider         vfs.Provenance
+	PieceMap         []int
+	CreateInvoked    bool
+	Callbacks        *CallbackBridge
+	SimulationRNG    *rng.Simulation
+	SFXSink          SFXSink
+	SFXVisible       func(piece int, sfxType int32) bool
+	PresentationSink PresentationSink
 }
 
 // BindStrict resolves, parses, links, and initializes one production COB
@@ -146,24 +160,102 @@ func BindStrict(fs vfs.FSOps, req BindingRequest) (*Binding, error) {
 	}
 
 	vm := NewVM(program)
+	bridge := NewCallbackBridge(vm)
+	bridge.SetSimulationRNG(req.SimulationRNG)
+	bridge.SetSFXSink(req.SFXSink, req.SFXVisible)
+	if req.PresentationSink != nil {
+		bridge.SetPresentationSink(req.PresentationSink)
+	}
+	pieceMap := make([]int, len(program.Pieces))
+	for i := range pieceMap {
+		pieceMap[i] = modelPieceIndex(req.ModelPieces, program.Pieces[i])
+	}
+	// A presentation sink may need the strict COB→model identity before the
+	// mode-I Create callback emits its first event. This optional adapter is
+	// presentation-only and cannot affect binding or VM state.
+	if sink, ok := req.PresentationSink.(interface{ SetCOBPieceMap([]int) }); ok {
+		sink.SetCOBPieceMap(pieceMap)
+	}
 	// Create is an immediate mode-I lifecycle callback: start it once, then
 	// drain all eight slots with delta 0 and one piece pass [04 §4.2][04 §5.1].
-	if !StartModeI(vm, "Create", nil) {
+	create := bridge.Create()
+	if !create.Started {
 		return nil, &BindingError{Diagnostics: []BindingDiagnostic{{
 			Code: BindingCreateStart, Logical: logical, Provider: providersFor(fs, logical, info), Expected: "Create entry point runnable in mode I", Detail: fmt.Sprintf("unit %q could not allocate its Create thread", unitName),
 		}}}
 	}
 
-	pieceMap := make([]int, len(program.Pieces))
-	for i := range pieceMap {
-		pieceMap[i] = modelPieceIndex(req.ModelPieces, program.Pieces[i])
+	return &Binding{Program: program, VM: vm, Model: req.Model, ScriptPath: logical, Provider: info.Source, PieceMap: pieceMap, CreateInvoked: bridge.CreateInvoked(), Callbacks: bridge, SimulationRNG: req.SimulationRNG, SFXSink: req.SFXSink, SFXVisible: req.SFXVisible, PresentationSink: req.PresentationSink}, nil
+}
+
+// ComposePiece returns the current world-local origin for one COB piece. COB
+// piece indices are not model indices: PieceMap is the link produced by the
+// strict binder. The VM's current piece states are remapped into the immutable
+// model before hierarchy composition [03 §2.4] C21 [04 §4.1].
+func (b *Binding) ComposePiece(cobPiece int, heading, pitch, bank uint16) ([3]numeric.Fixed, bool) {
+	if b == nil || b.Model == nil || b.VM == nil || cobPiece < 0 || cobPiece >= len(b.PieceMap) {
+		return [3]numeric.Fixed{}, false
 	}
-	return &Binding{Program: program, VM: vm, ScriptPath: logical, Provider: info.Source, PieceMap: pieceMap, CreateInvoked: true}, nil
+	modelPiece := b.PieceMap[cobPiece]
+	if modelPiece < 0 || modelPiece >= len(b.Model.Pieces) {
+		return [3]numeric.Fixed{}, false
+	}
+	states := make([]model.PieceState, len(b.Model.Pieces))
+	for cobIndex, modelIndex := range b.PieceMap {
+		if cobIndex < len(b.VM.Pieces) && modelIndex >= 0 && modelIndex < len(states) {
+			states[modelIndex] = b.VM.Pieces[cobIndex]
+		}
+	}
+	model.FoldRootAngles(states, b.Model.Root, heading, pitch, bank)
+	return model.Compose(b.Model, states, modelPiece).Origin, true
 }
 
 // Bind is an alias for BindStrict for production callers that prefer a short
 // package operation name.
 func Bind(fs vfs.FSOps, req BindingRequest) (*Binding, error) { return BindStrict(fs, req) }
+
+// SetSimulationRNG binds a session-owned stream to the production VM and all
+// COB random opcodes. It does not mutate any global RNG [01 §7.1] I4.
+func (b *Binding) SetSimulationRNG(sim *rng.Simulation) {
+	if b == nil {
+		return
+	}
+	b.SimulationRNG = sim
+	if b.VM != nil {
+		b.VM.SetSimulationRNG(sim)
+	}
+}
+
+// SetSFXSink binds a presentation-only sink and visibility predicate to the
+// production VM. The sink is also retained on the binding for composition
+// diagnostics; it never mutates authoritative state [GAP T15] C19.
+func (b *Binding) SetSFXSink(sink SFXSink, visible func(piece int, sfxType int32) bool) {
+	if b == nil {
+		return
+	}
+	b.SFXSink, b.SFXVisible = sink, visible
+	if b.VM != nil {
+		b.VM.SetSFXSink(sink)
+		b.VM.SetSFXVisible(visible)
+	}
+}
+
+// SetPresentationSink adapts a typed session event sink to the VM's SFX
+// callback without inventing lifetimes or effect records.
+func (b *Binding) SetPresentationSink(sink PresentationSink) {
+	if b == nil {
+		return
+	}
+	b.PresentationSink = sink
+	if b.VM == nil {
+		return
+	}
+	if sink == nil {
+		b.VM.SetSFXSink(nil)
+		return
+	}
+	b.VM.SetSFXSink(PresentationSinkAdapter{Sink: sink})
+}
 
 func bindingPath(req BindingRequest) (logical, unitName string, err error) {
 	unitName = strings.TrimSpace(req.UnitName)

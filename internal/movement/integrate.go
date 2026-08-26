@@ -84,6 +84,21 @@ type System struct {
 	tickCarried map[pool.Handle]struct{}
 
 	pathFailures map[pool.Handle]PathFailure // last non-success publish per handle [04 §7.3] C12 [P0-08][P0-12]
+
+	// activeOrders is the single path activation boundary.  A route belongs to
+	// the order node that was active when its request was submitted, not merely
+	// to a unit handle.  Queue heads are stable pointers for their lifetime;
+	// keeping that identity here lets publication reject a result for a stale
+	// head after a replace/purge in the same tick.  Direct movement callers do
+	// not bind an order and retain the legacy SubmitMove surface used by the
+	// movement package fixtures.
+	activeOrders   map[pool.Handle]*activeMove
+	nextActivation uint64
+}
+
+type activeMove struct {
+	order *orders.Node
+	token uint64
 }
 
 // localSteeringThresholdSquared is only the near-waypoint brake/steering
@@ -139,6 +154,7 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 		prevSFXBand:  make(map[pool.Handle]int),
 		avoidNext:    make(map[pool.Handle]uint32),
 		pathFailures: make(map[pool.Handle]PathFailure),
+		activeOrders: make(map[pool.Handle]*activeMove),
 	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
 	// Use DefaultBase unless overridden [P0-I16]; no longer reads mutable global.
@@ -579,14 +595,104 @@ func (s *System) SubmitMove(handle pool.Handle, player uint8, start, goal path.C
 	if s == nil || s.Scheduler == nil {
 		return
 	}
+	s.submitMove(handle, player, start, goal, 0)
+}
+
+func (s *System) submitMove(handle pool.Handle, player uint8, start, goal path.Cell, activation uint64) {
 	goalObj := path.PointGoal(goal, 0) // radius 0 [task]
 	req := path.Request{
-		Unit:   handle,
-		Player: player,
-		Start:  start,
-		Goal:   goalObj,
+		Unit:       handle,
+		Player:     player,
+		Start:      start,
+		Goal:       goalObj,
+		Activation: activation,
 	}
 	s.Scheduler.Submit(req)
+}
+
+// ActivateMove binds one path request to the current primary order head and
+// submits it exactly once.  The queue head is the authority: a repeated call
+// for the same node is a no-op, while a new node cancels the old request and
+// invalidates its route before submitting the replacement.  This closes the
+// activation/submission boundary used by session's authoritative loop [04
+// §3.3][04 §7.3].
+//
+// The caller must have resolved a target's current position into head.GoalX/Z
+// before calling this method.  Target tracking is deliberately kept at the
+// order boundary; a path request never captures a mutable *units.Unit.
+func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
+	if s == nil || u == nil || head == nil || s.Scheduler == nil {
+		return false
+	}
+	if s.activeOrders == nil {
+		s.activeOrders = make(map[pool.Handle]*activeMove)
+	}
+	if old, ok := s.activeOrders[u.Handle]; ok && old.order == head {
+		return false // exactly one submission per active order
+	}
+	if _, wasBound := s.activeOrders[u.Handle]; wasBound {
+		s.Scheduler.Cancel(u.Handle)
+		if route := s.Routes[u.Handle]; route != nil {
+			route.Active = false
+			route.Dirty = true
+		}
+	}
+	s.nextActivation++
+	if s.nextActivation == 0 { // reserve zero for unbound/direct requests
+		s.nextActivation++
+	}
+	token := s.nextActivation
+	s.activeOrders[u.Handle] = &activeMove{order: head, token: token}
+	start := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
+	goal := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
+	s.submitMove(u.Handle, u.Owner, start, goal, token)
+	return true
+}
+
+// ReplanMove replaces the pending path for the currently active order after a
+// dynamic blocker.  It retains the order identity, so the resulting
+// publication is still attached only to that head.
+func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
+	if s == nil || u == nil || head == nil || s.Scheduler == nil {
+		return false
+	}
+	if s.activeOrders == nil || s.activeOrders[u.Handle] == nil || s.activeOrders[u.Handle].order != head {
+		return s.ActivateMove(u, head)
+	}
+	s.Scheduler.Cancel(u.Handle)
+	if route := s.Routes[u.Handle]; route != nil {
+		route.Active = false
+		route.Dirty = true
+	}
+	s.nextActivation++
+	if s.nextActivation == 0 {
+		s.nextActivation++
+	}
+	token := s.nextActivation
+	s.activeOrders[u.Handle].token = token
+	start := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
+	goal := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
+	s.submitMove(u.Handle, u.Owner, start, goal, token)
+	return true
+}
+
+// DeactivateMove drops the path binding for a unit whose active order is no
+// longer path-backed.  It is intentionally idempotent so every queue/head
+// transition can pass through the same boundary.
+func (s *System) DeactivateMove(handle pool.Handle) {
+	if s == nil {
+		return
+	}
+	if s.Scheduler != nil {
+		s.Scheduler.Cancel(handle)
+	}
+	if s.activeOrders != nil {
+		delete(s.activeOrders, handle)
+	}
+	if route := s.Routes[handle]; route != nil && route.Active {
+		route.Active = false
+		route.Dirty = true
+	}
 }
 
 // replanDynamicBlock applies the explicit land-skirmish avoidance policy from
@@ -613,9 +719,10 @@ func (s *System) replanDynamicBlock(u *units.Unit, tick uint32, blockerID int) {
 	if head == nil || (head.GoalX == 0 && head.GoalZ == 0) {
 		return
 	}
-	start := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
-	goal := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
-	s.SubmitMove(u.Handle, u.Owner, start, goal)
+	// Preserve the active order identity across a dynamic replan.  Calling the
+	// raw SubmitMove surface here would let a stale publication attach after a
+	// head replacement [04 §7.3].
+	s.ReplanMove(u, head)
 }
 
 // searchFunc is the injected SearchFunc bound to path.Search with profile passability
@@ -691,6 +798,23 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) ([]path.Poi
 func (s *System) publishFunc(r path.Request, points []path.Point, status path.Status) {
 	if s == nil {
 		return
+	}
+	// A scheduler callback can finish after the queue head has changed (for
+	// example, a replace/purge in the order pump).  Publication belongs only to
+	// the node that activated this request.  Leave the current route untouched
+	// when identity no longer matches; the next active head will submit through
+	// ActivateMove.
+	if binding, bound := s.activeOrders[r.Unit]; bound {
+		if binding == nil || binding.token != r.Activation {
+			return
+		}
+		if s.world != nil {
+			u := s.world.Unit(r.Unit)
+			q := orders.QueueForUnit(u)
+			if u == nil || q == nil || q.Head() != binding.order {
+				return
+			}
+		}
 	}
 	route := s.Routes[r.Unit]
 	if route == nil {

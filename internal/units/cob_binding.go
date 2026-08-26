@@ -6,6 +6,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -39,6 +40,20 @@ func appendUniqueEntry(entries []string, names ...string) []string {
 // start before this function returns [04 §4.1][04 §5.1]. A nil model or any
 // missing/malformed asset is an error; use SyntheticCOBForTests for fixtures.
 func BindCOB(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model) (*cob.Binding, error) {
+	return BindCOBWithPorts(fs, def, mdl, nil, nil)
+}
+
+// BindCOBWithPorts is the composition seam for a production VM that must see
+// the session-owned simulation stream and presentation sink during its one
+// mode-I Create callback. It retains the same strict model/piece checks as
+// BindCOB; the extra ports are supplied before Create starts.
+func BindCOBWithPorts(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink) (*cob.Binding, error) {
+	return BindCOBWithPortsAndVisibility(fs, def, mdl, sim, sink, nil)
+}
+
+// BindCOBWithPortsAndVisibility is the full production seam. The visibility
+// predicate is installed before Create so emit-sfx cannot bypass gameplay LOS.
+func BindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink, visible func(piece int, sfxType int32) bool) (*cob.Binding, error) {
 	if def == nil {
 		return nil, fmt.Errorf("nanolathe: COB binding: nil unit definition")
 	}
@@ -52,10 +67,14 @@ func BindCOB(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model) (*cob.Binding
 		modelPieces[i] = mdl.Pieces[i].Name
 	}
 	return cob.BindStrict(fs, cob.BindingRequest{
-		UnitName:        def.UnitName,
-		ScriptPath:      "scripts/" + def.UnitName + ".cob",
-		ModelPieces:     modelPieces,
-		RequiredScripts: RequiredCOBEntryPoints(def),
+		UnitName:         def.UnitName,
+		ScriptPath:       "scripts/" + def.UnitName + ".cob",
+		Model:            mdl,
+		ModelPieces:      modelPieces,
+		RequiredScripts:  RequiredCOBEntryPoints(def),
+		SimulationRNG:    sim,
+		SFXVisible:       visible,
+		PresentationSink: sink,
 	})
 }
 
@@ -81,7 +100,38 @@ func BindCOBWithRequirements(fs vfs.FSOps, unitName string, mdl *model.Model, en
 		modelPieces[i] = mdl.Pieces[i].Name
 	}
 	entries = appendUniqueEntry(append([]string(nil), entries...), "Create")
-	return cob.BindStrict(fs, cob.BindingRequest{UnitName: unitName, ModelPieces: modelPieces, RequiredScripts: entries, RequiredScriptGroups: alternatives})
+	return cob.BindStrict(fs, cob.BindingRequest{UnitName: unitName, Model: mdl, ModelPieces: modelPieces, RequiredScripts: entries, RequiredScriptGroups: alternatives})
+}
+
+// AttachCOBBinding attaches only a fully initialized strict production
+// binding. Create must already have run exactly once in mode I before the unit
+// receives a playable script [04 §4.1][04 §5.1]. Synthetic fixtures should use
+// SetScript or SyntheticCOBForTests explicitly.
+func (u *Unit) AttachCOBBinding(binding *cob.Binding) error {
+	if u == nil {
+		return fmt.Errorf("nanolathe: COB attachment: nil unit")
+	}
+	if binding == nil || binding.VM == nil {
+		return fmt.Errorf("nanolathe: COB attachment: missing strict binding")
+	}
+	if !binding.CreateInvoked || binding.Callbacks == nil || !binding.Callbacks.CreateInvoked() {
+		return fmt.Errorf("nanolathe: COB attachment: Create was not invoked exactly once")
+	}
+	if u.GetScript() != nil {
+		return fmt.Errorf("nanolathe: COB attachment: unit already has a script")
+	}
+	u.ScriptState = &ScriptState{VM: binding.VM, Binding: binding}
+	u.Script = binding.VM
+	return nil
+}
+
+// COBBinding returns the strict production binding attached to the unit, or
+// nil for synthetic/legacy script state.
+func (u *Unit) COBBinding() *cob.Binding {
+	if u == nil || u.ScriptState == nil {
+		return nil
+	}
+	return u.ScriptState.Binding
 }
 
 // SyntheticCOBForTests is an explicit empty-script constructor for fixtures

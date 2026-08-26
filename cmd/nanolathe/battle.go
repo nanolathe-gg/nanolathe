@@ -105,7 +105,12 @@ type battleSession struct {
 	mobileBuildFn   func(product string, wx, wz numeric.Fixed, queued bool) error
 	factoryBuildFn  func(product string, queued bool) error
 	orderDispatchFn func(latch input.Latch, x, y int32, queued bool)
-	controller      *BattleController
+	// commandDispatchFn is the typed battle/application boundary. All
+	// world-mutating input is represented as a battleCommand before application;
+	// composition does not currently bind this callback to a separate session
+	// command queue, so the direct application fallback remains authoritative.
+	commandDispatchFn func(battleCommand) error
+	controller        *BattleController
 }
 
 type panelButton struct {
@@ -441,8 +446,8 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		b.prevBuildPage()
 	}
 	if kbd.KeyDown(input.KeyEscape) {
+		b.disarmPlacement()
 		b.latch = input.LatchNormal
-		b.buildDef = ""
 		b.hudCaptured = false
 		b.dragActive = false
 		return
@@ -451,12 +456,8 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	if mouse.Pressed(input.MouseButtonRight) {
 		if b.buildDef != "" {
 			// Cancel armed placement before affecting selection [R-P0-03][F-P0-003][07 §9].
-			b.buildDef = ""
-			b.buildOK = false
+			b.disarmPlacement()
 			b.hudCaptured = false
-			if b.latch == input.LatchMobileBuild {
-				b.latch = input.LatchNormal
-			}
 			return
 		}
 		if b.latch != input.LatchNormal {
@@ -541,7 +542,12 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 				return
 			}
 			queued := kbd.HasShift()
-			b.commitBuild(queued)
+			if !b.commitBuild(queued) {
+				// A command rejection is a failed commit, not an armed
+				// placement state. All cancellation exits share disarmPlacement.
+				b.disarmPlacement()
+				return
+			}
 			b.playUICue(cl, "oktobuild")
 			if queued {
 				b.buildSticky = true
@@ -681,6 +687,20 @@ func (b *battleSession) selectedBuilder() *units.Unit {
 	return nil
 }
 
+// catalogDefID returns the stable compiled catalog identity used by the HUD
+// page guard. It is deliberately not a literal placeholder and does not use
+// the allocation order of the live unit pool [02 §5][07 §9] C10.
+func (b *battleSession) catalogDefID(u *units.Unit) uint16 {
+	if b == nil || b.cat == nil || u == nil || u.Def == nil {
+		return 0
+	}
+	id, ok := b.cat.UnitDefIndex(u.Def.CanonicalKey)
+	if !ok || id == 0 || id > 0xffff {
+		return 0
+	}
+	return uint16(id)
+}
+
 // selectedFactory returns the first selected immobile builder (factory) [R-P0-03][07 §9].
 func (b *battleSession) selectedFactory() *units.Unit {
 	if b.sess == nil || b.sess.Units == nil {
@@ -757,7 +777,7 @@ func (b *battleSession) switchBuildPage(digit int) {
 	target = hud.ClampPage(target, count)
 	var dirty uint32
 	// BuildPage switching validates builder identity and page count [07 §9] C10.
-	su := &hud.SelectUnit{Flags: u.Flags, DefID: 1} // DefID nonzero validates [07 §9] C10 placeholder
+	su := &hud.SelectUnit{Flags: u.Flags, DefID: b.catalogDefID(u)}
 	if hud.SetBuildPage(su, target, count, &dirty) {
 		u.Flags = su.Flags
 		b.armBuildPanel()
@@ -779,7 +799,7 @@ func (b *battleSession) nextBuildPage() {
 		return
 	}
 	var dirty uint32
-	su := &hud.SelectUnit{Flags: u.Flags, DefID: 1}
+	su := &hud.SelectUnit{Flags: u.Flags, DefID: b.catalogDefID(u)}
 	cur := 0
 	if hud.IsPaged(u.Flags) {
 		cur = hud.DecodePage(u.Flags)
@@ -810,7 +830,7 @@ func (b *battleSession) prevBuildPage() {
 		return
 	}
 	var dirty uint32
-	su := &hud.SelectUnit{Flags: u.Flags, DefID: 1}
+	su := &hud.SelectUnit{Flags: u.Flags, DefID: b.catalogDefID(u)}
 	cur := 0
 	if hud.IsPaged(u.Flags) {
 		cur = hud.DecodePage(u.Flags)
@@ -1049,25 +1069,10 @@ func (b *battleSession) panelClick(mx, my int32) bool {
 // via injected dispatch [R-P0-03][07 §9]. It is used by retail HUD consumeClick.
 func (b *battleSession) handleHudOrderButton(name string) {
 	latch := hud.ParseButtonLatch(name, 1)
-	// STOP is immediate (generic table) – dispatch directly as contextual stop [04 §3.4] code 1
+	// STOP is a distinct immediate command. It must never dispatch contextual
+	// code 1 at the map origin before the Stop descriptor [04 §3.4][07 §9].
 	if latch == input.LatchNormal && containsStop(name) {
-		// Immediate stop order for selected units
-		b.orderSelected(1, 0, 0, false) // code 1 contextual with no target acts as stop via resolver? fallback to Stop descriptor if present
-		// Try explicit Stop if exists
-		for _, u := range b.selectedUnits() {
-			if id := orders.Lookup("Stop"); id != 0 {
-				tick := uint32(0)
-				if b.sess != nil && b.sess.Clock != nil {
-					tick = uint32(b.sess.Clock.GlobalTick)
-				}
-				node := orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, false)
-				if q := orders.QueueForUnit(u); q != nil {
-					q.PurgeUnprotected()
-					q.DropLeadingAutoOps()
-					q.Push(id, node)
-				}
-			}
-		}
+		_ = b.dispatchStopCommand()
 		b.latch = input.LatchNormal
 		return
 	}
@@ -1090,33 +1095,8 @@ func containsStop(s string) bool {
 // construction.CancelTailMost / CancelMobileTailMost. Tombstone bit ensures weapon-target-clear skip [04 §3.3].
 func (b *battleSession) cancelSelectedProduction() {
 	for _, u := range b.selectedUnits() {
-		if u == nil || u.Def == nil {
-			continue
-		}
-		q := orders.QueueForUnit(u)
-		if q == nil || q.LenPrimary() == 0 {
-			continue
-		}
-		prim := q.Primary()
-		if len(prim) == 0 {
-			continue
-		}
-		tail := prim[len(prim)-1]
-		if tail == nil || tail.BuildDefKey == "" {
-			// No build product at tail — try generic tail cancel for any build-like tail
-			// Use string match on BuildDefKey; for queue without BuildDefKey but with MobileBuild/BuildingBuild id, use def from Param1?
-			continue
-		}
-		// Prefer mobile cancel when descriptor is MobileBuild, else factory.
-		if orders.IsMobileBuild(tail.ID) {
-			_ = construction.CancelMobileTailMost(u, tail.BuildDefKey, tail.GoalX, tail.GoalZ)
-		} else if orders.IsFactoryBuild(tail.ID) {
-			_ = construction.CancelTailMost(u, tail.BuildDefKey)
-		} else {
-			// Generic fallback: try factory path
-			if err := construction.CancelTailMost(u, tail.BuildDefKey); err != nil {
-				_ = construction.CancelMobileTailMost(u, tail.BuildDefKey, tail.GoalX, tail.GoalZ)
-			}
+		if u != nil {
+			_ = b.DispatchCancelProduction(u.Handle)
 		}
 	}
 }
@@ -1124,101 +1104,26 @@ func (b *battleSession) cancelSelectedProduction() {
 // toggleOnOffSelected issues Activate/Deactivate for OnOffable units [02 "Unit record"].
 // OnOffable is data-driven; the command is Activate/Deactivate via orders.NewNodeForOrder [P0-I14].
 func (b *battleSession) toggleOnOffSelected(queued bool) {
-	tick := uint32(0)
-	if b.sess != nil && b.sess.Clock != nil {
-		tick = uint32(b.sess.Clock.GlobalTick)
-	}
 	for _, u := range b.selectedUnits() {
 		if u == nil || u.Def == nil || !u.Def.OnOffable {
 			continue
 		}
-		// Simple toggle: check LSB of Flags as active proxy [TODO(question)].
-		// Retail's exact activation bit is not fully placed, but Activate/Deactivate are symmetric.
-		// Use queued modifier as Append/Shift-queue [04 §3.3].
-		var id orders.ID
-		if u.Flags&0x1000 != 0 {
-			id = orders.Lookup("Deactivate")
-		} else {
-			id = orders.Lookup("Activate")
-		}
-		if id == 0 {
-			continue
-		}
-		node := orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, queued)
-		q := orders.QueueForUnit(u)
-		if q == nil {
-			continue
-		}
-		if queued {
-			q.Push(id, node)
-		} else {
-			q.PurgeUnprotected()
-			q.DropLeadingAutoOps()
-			q.Push(id, node)
-		}
-		// Flip proxy bit for next toggle visualization.
-		u.Flags ^= 0x1000
+		// Activation state is typed unit state, not the unrelated order flag
+		// word. The queued command is consumed by the ordinary order/COB edge
+		// machinery [05 "Unit instance economy state"].
+		_ = b.DispatchActivation(battleActivationCommand{
+			Unit: u.Handle, Activate: !u.Activated, Queued: queued,
+		})
 	}
 }
 
 // stockpileSelected queues one BuildWeapon round for stockpile weapons [06 §11.1].
 // Stockpile launch requires BuildWeapon descriptor (rear segment 0x40000) with count.
 func (b *battleSession) stockpileSelected(queued bool) {
-	tick := uint32(0)
-	if b.sess != nil && b.sess.Clock != nil {
-		tick = uint32(b.sess.Clock.GlobalTick)
-	}
-	buildWeaponID := orders.Lookup("BuildWeapon")
-	if buildWeaponID == 0 {
-		return
-	}
 	for _, u := range b.selectedUnits() {
-		if u == nil || u.Def == nil {
-			continue
+		if u != nil {
+			_ = b.DispatchStockpile(u.Handle, queued)
 		}
-		hasStockpile := false
-		if u.Def.Weapon1Def != nil && u.Def.Weapon1Def.Stockpile {
-			hasStockpile = true
-		}
-		if u.Def.Weapon2Def != nil && u.Def.Weapon2Def.Stockpile {
-			hasStockpile = true
-		}
-		if u.Def.Weapon3Def != nil && u.Def.Weapon3Def.Stockpile {
-			hasStockpile = true
-		}
-		// Fallback via slot state: if any populated slot has stockpile weapon.
-		for i := 0; i < units.NumSlots; i++ {
-			if s := u.SlotAt(i); s != nil && s.Weapon != nil && s.Weapon.Stockpile {
-				hasStockpile = true
-				break
-			}
-		}
-		if !hasStockpile {
-			continue
-		}
-		// BuildWeapon is secondary [04 §3.1] 0x40000 — use PushSecondary via queue coalesce.
-		// Use queued flag as purge survivor? For secondary, queued semantics differ: head insert but flag preserved [04 §3.3].
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		slotIdx := -1
-		for sIdx := 0; sIdx < units.NumSlots; sIdx++ {
-			if s := u.SlotAt(sIdx); s != nil && s.Weapon != nil && s.Weapon.Stockpile {
-				slotIdx = sIdx
-				break
-			}
-		}
-		if slotIdx < 0 {
-			continue
-		}
-		node := orders.NewNodeForOrder(buildWeaponID, 0, 0, 0, 0, tick, u.Handle, queued)
-		node.Param1 = uint32(slotIdx) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		node.Param2 = 1               // count 1 [06 §11.1]
-		node.Param3 = 0               // progress 0 start [06 §11.1]
-		q := orders.QueueForUnit(u)
-		if q == nil {
-			continue
-		}
-		// Tail-only coalesce for counted BuildWeapon [04 §3.3]; mirror construction path.
-		q.CoalesceTail(buildWeaponID, node)
 	}
 }
 
@@ -1257,8 +1162,15 @@ func (b *battleSession) armPlacement(def *content.UnitDef) {
 // disarmPlacement returns the battle screen to the idle latch after a placement
 // ends, whether it ended in a click, a cancel, or shift being released [07 §9].
 func (b *battleSession) disarmPlacement() {
+	if b == nil {
+		return
+	}
 	b.buildDef = ""
+	b.buildFootX, b.buildFootZ = 0, 0
 	b.buildOK = false
+	b.buildMX, b.buildMY = 0, 0
+	b.buildCellX, b.buildCellZ = 0, 0
+	b.buildSiteH = 0
 	b.buildSticky = false
 	if b.latch == input.LatchMobileBuild {
 		b.latch = input.LatchNormal
@@ -1341,16 +1253,16 @@ func (b *battleSession) yardMapFor() string {
 // It uses catalog indices (not FNV hash) [P0-I05] and respects queue modifier (shift=queued) [04 §3.3][P0-I14].
 // Every producer goes through one canonical payload constructor [P0-I03]: orders.NewMobileBuildNode / QueueMobileBuild.
 // It is data-driven: product must be in builder's BuildMenus list; illegal placement queues nothing [R-P0-03].
-func (b *battleSession) commitBuild(queued bool) {
+func (b *battleSession) commitBuild(queued bool) bool {
 	builder := b.selectedBuilder()
 	if builder == nil {
-		return
+		return false
 	}
 	if b.cat != nil && !hud.ValidateBuildProduct(b.cat, builder.Def.CanonicalKey, b.buildDef) {
-		return // GUI may not invent products absent from authored list [R-P0-03]
+		return false // GUI may not invent products absent from authored list [R-P0-03]
 	}
 	if !b.buildOK {
-		return // illegal placement queues nothing [R-P0-03]
+		return false // illegal placement queues nothing [R-P0-03]
 	}
 	// The order carries the footprint's center and the site height, not the raw
 	// cursor point: retail recomputes the same cell-aligned anchor the ghost was
@@ -1362,7 +1274,7 @@ func (b *battleSession) commitBuild(queued bool) {
 	// Use injected dispatch with fallback [R-P0-03][ON-09]
 	if err := b.DispatchMobileBuild(b.buildDef, wx, wz, queued); err != nil {
 		fmt.Fprintf(os.Stderr, "nanolathe: build %s: %v\n", b.buildDef, err)
-		return
+		return false
 	}
 	// Ensure canonical fields populated for determinism [04 §3.2][P0-I05][P0-I03].
 	// The queue helper builds its node from the site alone, so the height, the
@@ -1392,6 +1304,7 @@ func (b *battleSession) commitBuild(queued bool) {
 			}
 		}
 	}
+	return true
 }
 
 // drawBuildGhost draws the armed build site the way retail does [07 §9].
@@ -1764,14 +1677,11 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 				}
 				if visible {
 					pos.HasFeature = true
-					// Reclaimable check is data-driven; wreck test via reclaimable + non-empty successor or naming heuristic.
-					// For P0-I14 minimal HUD we mark IsWreck when reclaimable (many wrecks are reclaimable) [05 "Feature reclaim"].
-					// Resurrectable when wreck and definition is resurrectable and actor can resurrect; gate handled in orders.Resolve.
-					pos.IsWreck = def.Reclaimable // TODO(question) exact wreck vs debris discrimination not closed; reclaimable is close proxy [05]
-					// Approximate resurrectable when reclaimable and has featuredead (corpse chain) [06 §12.1].
-					pos.FeatureResurrectable = pos.IsWreck && def.Reclaimable && (def.FeatureDead != "" || def.FeatureDeadDef != nil)
-					// Also consider metal/energy reclaimable; indestructible not reclaimable but still has feature.
-					// For minimal HUD, HasFeature true suffices; order resolver will gate via canReclaim/canResurrect.
+					// Reclaimable is not a corpse identity: trees, rocks and deposits
+					// may all be reclaimable. Resolve the feature's compiled identity
+					// against authored unit Corpse links [05 "Feature reclaim"].
+					pos.IsWreck = b.isCorpseFeature(def)
+					pos.FeatureResurrectable = pos.IsWreck && def.Reclaimable
 				}
 			}
 		} else if b.sess.Features != nil {
@@ -1784,7 +1694,7 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 				}
 				if visible {
 					pos.HasFeature = true
-					pos.IsWreck = inst.Def.Reclaimable
+					pos.IsWreck = b.isCorpseFeature(inst.Def)
 					pos.FeatureResurrectable = pos.IsWreck && inst.Def.Reclaimable
 				}
 			}
@@ -1793,91 +1703,73 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 	return 0, nil, pos
 }
 
-// orderSelected resolves code at the clicked world position for every selected
-// player unit and pushes the resulting canonical order payload [04 §3.4][04 §3.3][P0-I03][P0-I14].
-// It uses the ONE picking routine pickTarget that respects fog, overlap, feature priority,
-// and command validity [07 §9][03 §3.2] C8. It constructs a canonical Node via
-// orders.NewNodeForOrder that writes GoalX/Y/Z, target handle, queue modifier,
-// creation tick and owner, and pushes via q.Push(id, node) — never empty [P0-I03][P0-I14].
-// Attack ground where permitted is handled: when latch Attack with no unit hit but ground pos,
-// it falls back to a ground attack descriptor (Attack_Chase/NoMove or AttackSpecial) [P1-14][04 §3.4].
+// isCorpseFeature applies the recovered resurrection identity rule: truncate
+// the feature name at its first underscore, then resolve that unit key in the
+// compiled catalog. Reclaimable alone is not a wreck identity [05 "Resurrection"].
+func (b *battleSession) isCorpseFeature(def *content.FeatureDef) bool {
+	if b == nil || b.cat == nil || def == nil {
+		return false
+	}
+	key := content.CanonicalKey(def.CanonicalKey)
+	if i := strings.IndexByte(key, '_'); i >= 0 {
+		key = key[:i]
+	}
+	if key == "" {
+		return false
+	}
+	_, ok := b.cat.Unit(key)
+	return ok
+}
+
+// orderSelected resolves code at the clicked world position and submits one
+// typed order command. Descriptor selection remains solely in orders.Resolve;
+// this integration layer does not guess an attack descriptor for ground clicks
+// [04 §3.4][07 §9].
 func (b *battleSession) orderSelected(code int, sx, sy int32, queued bool) {
-	targetHandle, targetUnit, pos := b.pickTarget(sx, sy)
-	tick := uint32(0)
-	if b.sess != nil && b.sess.Clock != nil {
-		tick = uint32(b.sess.Clock.GlobalTick)
+	targetHandle, _, pos := b.pickTarget(sx, sy)
+	if pos == nil {
+		return
 	}
-	owner := uint8(0)
-	if b.sess != nil {
-		owner = b.sess.LocalOwner
+	latch, ok := latchForOrderCode(code)
+	if !ok {
+		return
 	}
-	for _, u := range b.sess.Units.Iter() {
-		if u == nil || !u.Alive || u.Owner != owner || u.Flags&client.SelectionFlag == 0 {
-			continue
-		}
-		id := orders.Resolve(code, u, targetUnit, pos)
-		// Attack ground fallback: code 3 (ATTACK) with no unit but ground pos should still produce a ground attack
-		// where permitted (BLAST always ground, ATTACK unit-or-ground) [P1-14][04 §3.4].
-		// Resolve currently requires target !=nil for code 3, so fallback to a ground descriptor when canAttack.
-		if id == 0 && code == 3 && targetHandle == 0 && pos != nil && u.Def != nil && u.Def.CanAttack {
-			// Prefer AttackSpecial if unit canDGun (special attack ground), else Attack_Chase/NoMove ground.
-			// Use AttackSpecial as blast-equivalent ground attack where permitted.
-			if u.Def.CanDGun {
-				if alt := orders.Lookup("AttackSpecial"); alt != 0 {
-					id = alt
-				}
-			}
-			if id == 0 {
-				if alt := orders.Lookup("Attack_Chase"); alt != 0 {
-					id = alt
-				} else if alt2 := orders.Lookup("Attack_NoMove"); alt2 != 0 {
-					id = alt2
-				} else if alt3 := orders.Lookup("Suppress"); alt3 != 0 {
-					id = alt3
-				}
-			}
-			// Ensure pos is used as ground payload for fallback.
-			if id != 0 {
-				targetHandle = 0
-				targetUnit = nil
-			}
-		}
-		// Patrol ground fallback: code 9 with no target should still produce QPatrol/Patrol ground [04 §3.4].
-		// Resolve already handles it (returns QPatrol), but ensure fallback if nil.
-		if id == 0 && code == 9 && pos != nil && u.Def != nil && u.Def.CanPatrol {
-			if alt := orders.Lookup("QPatrol"); alt != 0 {
-				id = alt
-			} else if alt2 := orders.Lookup("Patrol"); alt2 != 0 {
-				id = alt2
-			}
-			targetHandle = 0
-			targetUnit = nil
-		}
-		if id == 0 {
-			continue
-		}
-		var gx, gy, gz numeric.Fixed
-		if targetHandle != 0 && targetUnit != nil {
-			gx = targetUnit.X
-			gy = targetUnit.Y
-			gz = targetUnit.Z
-		} else {
-			gx = pos.X
-			gy = pos.Y
-			gz = pos.Z
-		}
-		node := orders.NewNodeForOrder(id, targetHandle, gx, gy, gz, tick, u.Handle, queued)
-		q := orders.QueueForUnit(u)
-		if q == nil {
-			continue
-		}
-		if queued {
-			q.Push(id, node)
-		} else {
-			q.PurgeUnprotected()
-			q.DropLeadingAutoOps()
-			q.Push(id, node)
-		}
+	_ = b.DispatchOrderCommand(battleOrderCommand{
+		Latch: latch, Target: targetHandle,
+		Position: *pos, Queued: queued,
+	})
+}
+
+func latchForOrderCode(code int) (input.Latch, bool) {
+	switch code {
+	case 1:
+		return input.LatchNormal, true
+	case 2:
+		return input.LatchMove, true
+	case 3:
+		return input.LatchAttack, true
+	case 4:
+		return input.LatchBlast, true
+	case 5:
+		return input.LatchUnload, true
+	case 6:
+		return input.LatchPickup, true
+	case 7:
+		return input.LatchFollow, true
+	case 8:
+		return input.LatchRepair, true
+	case 9:
+		return input.LatchPatrol, true
+	case 11:
+		return input.LatchTeleport, true
+	case 12:
+		return input.LatchReclaim, true
+	case 13:
+		return input.LatchCapture, true
+	case 14:
+		return input.LatchMobileBuild, true
+	default:
+		return input.LatchNormal, false
 	}
 }
 

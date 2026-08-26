@@ -48,9 +48,10 @@ type Unit struct {
 	// Dying is the death mark, separate from Alive [04 §2.3] C2: Destroy sets
 	// it and the unit stays visible to the sweep and to Unit() until Cleanup
 	// frees the slot.
-	Dying          bool
-	DeathCause     DeathCause
-	deathHookFired bool // internal: ensures OnDeath fires exactly once via Destroy or FinalizeDeath [01 §4.4][04 "unit sweep"]
+	Dying               bool
+	DeathCause          DeathCause
+	deathHookFired      bool // internal: ensures OnDeath fires exactly once via Destroy or FinalizeDeath [01 §4.4][04 "unit sweep"]
+	deathExtraHookFired bool // internal composition observer deduplication
 	// Build progress remaining 1→0 [04 §2.3] C3. float32 per the I2 allowlist
 	// row "Construction remaining fraction" [05 "Construction target state"].
 	// Owned exclusively by construction.Service; Units.Tick never mutates it [05 "Construction arithmetic"].
@@ -173,6 +174,13 @@ type CreateHook func(h pool.Handle, u *Unit)
 // capture path feed it.
 type CaptureHook func(h pool.Handle, oldOwner, newOwner uint8, u *Unit)
 
+// COBBinder is the composition-owned production attachment seam. It runs
+// before a newly allocated unit becomes observable through OnCreate. A
+// strict session binder resolves the authored model/script, invokes Create
+// exactly once, and returns a fatal error for missing or malformed assets.
+// Synthetic fixtures continue to use SetScript directly.
+type COBBinder func(*Unit) error
+
 // World is the unit world [PLAN_06 Public API].
 // Pool is slot-indexed parallel to world state; iteration is players 0..9
 // then slots ascending [01 §6.2] C2 [P0-16]. Allocation is per-player sliced
@@ -190,6 +198,10 @@ type World struct {
 	// OnDeath is the death-notification hook [08 "Evaluation"]; nil means no
 	// consumer. It fires exactly once per unit, at the first Destroy latch.
 	OnDeath DeathHook
+	// OnDeathExtra is a narrow composition observer that survives replacement
+	// of the primary session hook. It fires at the same latch, independently
+	// deduplicated, and must not emit duplicate Killed/corpse notifications.
+	OnDeathExtra DeathHook
 	// OnCreate is the creation-notification hook [08 "Evaluation"] slot 3;
 	// nil means no consumer. It fires exactly once per unit after Create inserts.
 	OnCreate CreateHook
@@ -205,6 +217,10 @@ type World struct {
 	// COB loader for per-unit VM creation [04 §4.1][P1-I01].
 	cobFS     vfs.FSOps
 	cobLoader *cob.CachedLoader
+	// cobBinder supersedes the legacy empty fallback when installed by session
+	// composition. It is also used for units created by construction and save
+	// reconstruction, so every production unit follows one path.
+	cobBinder COBBinder
 }
 
 // New creates a World with given usable capacity (number of usable slots).
@@ -255,13 +271,38 @@ func (w *World) SetCOBSource(fs vfs.FSOps, loader *cob.CachedLoader) {
 	w.cobLoader = loader
 }
 
-// attachCOB loads the unit's Program and binds a VM with Create started [04 §4.1][P1-I01].
-func (w *World) attachCOB(u *Unit) {
-	if w == nil || u == nil || u.Def == nil {
+// COBSource returns the VFS and loader configured for production attachment.
+// It is intentionally read-only so session composition can install one strict
+// binder without reaching into pool state.
+func (w *World) COBSource() (vfs.FSOps, *cob.CachedLoader) {
+	if w == nil {
+		return nil, nil
+	}
+	return w.cobFS, w.cobLoader
+}
+
+// SetCOBBinder installs a strict composition-owned binder for future unit
+// allocations. A nil binder restores the legacy fixture/source path.
+func (w *World) SetCOBBinder(binder COBBinder) {
+	if w == nil {
 		return
 	}
+	w.cobBinder = binder
+}
+
+// HasCOBBinder reports whether strict composition owns future allocations.
+func (w *World) HasCOBBinder() bool { return w != nil && w.cobBinder != nil }
+
+// attachCOB loads the unit's Program and binds a VM with Create started [04 §4.1][P1-I01].
+func (w *World) attachCOB(u *Unit) error {
+	if w == nil || u == nil || u.Def == nil {
+		return nil
+	}
 	if u.GetScript() != nil {
-		return // already has VM [P1-I01]
+		return nil // already has VM [P1-I01]
+	}
+	if w.cobBinder != nil {
+		return w.cobBinder(u)
 	}
 	var prog *cob.Program
 	var found bool
@@ -295,6 +336,7 @@ func (w *World) attachCOB(u *Unit) {
 			vm.Drain(0) // immediate wake-flag drain [GAP T15] C17
 		}
 	}
+	return nil
 }
 
 // IsSliced reports whether the world uses per-player slicing [P0-16 §3.1].
@@ -412,7 +454,11 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 		installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions into Slots [P0-I04]
 		u.InitEconomyState()   // [P1-I04] on/off, cloak, activation from definition
 		w.units[idx] = u
-		w.attachCOB(u) // per-unit VM with statics/pieces, Create run [04 §4.1][P1-I01]
+		if err := w.attachCOB(u); err != nil {
+			w.units[idx] = nil
+			w.pool.Free(h)
+			return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
+		} // per-unit VM with statics/pieces, Create run [04 §4.1][P1-I01]
 		if player >= 0 && player < 10 {
 			w.liveCounters[player]++
 		}
@@ -467,7 +513,11 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
 	u.InitEconomyState()   // [P1-I04]
 	w.units[idx] = u
-	w.attachCOB(u) // [P1-I01] VM per-unit
+	if err := w.attachCOB(u); err != nil {
+		w.units[idx] = nil
+		w.pool.Free(h)
+		return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
+	} // [P1-I01] VM per-unit
 	if w.OnCreate != nil {
 		w.OnCreate(h, u)
 	}
@@ -545,7 +595,11 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
 		u.InitEconomyState()   // [P1-I04]
 		w.units[idx] = u
-		w.attachCOB(u) // [P1-I01] VM per-unit for forced slot
+		if err := w.attachCOB(u); err != nil {
+			w.units[idx] = nil
+			w.pool.Free(h)
+			return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
+		} // [P1-I01] VM per-unit for forced slot
 		w.liveCounters[player]++
 		if w.OnCreate != nil {
 			w.OnCreate(h, u)
@@ -580,7 +634,11 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
 	u.InitEconomyState()   // [P1-I04]
 	w.units[idx] = u
-	w.attachCOB(u) // [P1-I01] VM per-unit for forced unsliced
+	if err := w.attachCOB(u); err != nil {
+		w.units[idx] = nil
+		w.pool.Free(h)
+		return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
+	} // [P1-I01] VM per-unit for forced unsliced
 	if w.OnCreate != nil {
 		w.OnCreate(h, u)
 	}
@@ -628,6 +686,10 @@ func (w *World) Destroy(h pool.Handle, cause DeathCause) {
 	if !u.deathHookFired && w.OnDeath != nil {
 		w.OnDeath(h, cause, u)
 		u.deathHookFired = true
+	}
+	if !u.deathExtraHookFired && w.OnDeathExtra != nil {
+		w.OnDeathExtra(h, cause, u)
+		u.deathExtraHookFired = true
 	}
 }
 

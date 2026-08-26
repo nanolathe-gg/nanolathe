@@ -1,8 +1,10 @@
 package combat
 
 import (
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 )
 
@@ -110,6 +112,39 @@ type TraceEvent struct {
 	ReturnValue *int32 // optional for return events
 }
 
+// EventKind identifies authoritative combat-to-presentation/death records.
+// Values are intentionally local to combat; the session adapter translates
+// them to snapshot.EventKind without allowing the renderer into simulation
+// [I6][06 §13.2].
+type EventKind uint8
+
+const (
+	EventShake EventKind = iota + 1
+	EventHitSound
+	EventWaterSound
+	EventEndSmoke
+	EventExplosion
+	EventWaterExplosion
+	EventProjectileImpact
+	EventUnitKilled
+	EventCorpse
+)
+
+// Event is an immutable combat event emitted in simulation order. Graphic and
+// Sound are authored identities; empty values remain empty rather than being
+// replaced with guessed assets [06 §13.2].
+type Event struct {
+	Kind      EventKind
+	Tick      uint32
+	Source    pool.Handle
+	Target    pool.Handle
+	Position  Vec3
+	Sound     string
+	Graphic   string
+	Magnitude int32
+	Duration  int32
+}
+
 // pendingKey identifies a per-unit weapon slot pending Aim ON-04 [06 §3.3].
 type pendingKey struct {
 	Unit pool.Handle
@@ -134,7 +169,13 @@ type Service struct {
 	Records [ProjectileCapacity]Projectile // named records parallel to Slots
 
 	Trace       func(TraceEvent)          // optional ordered debug-trace sink ON-04, nil-safe, no RNG/state
+	Events      func(Event)               // optional ordered combat event sink; nil-safe
 	pendingAims map[pendingKey]pendingAim // Aim dispatch tracking ON-04 [06 §3.3]
+	// bridges retains one typed callback bridge per unit so deferred Aim/Fire/
+	// RockUnit callbacks share the unit VM and the single normal drain window
+	// [04 §4.2][04 §5.3]. It is session-local state, never a package global.
+	bridges       map[pool.Handle]*cob.CallbackBridge
+	deathNotified map[pool.Handle]*units.Unit
 
 	// Visibility is the per-session LOS predicate [03 §3.2] C8 [RS-P0-018].
 	// Moved from package-global combat.VisibilityHook to per-Service field for session isolation [INVARIANTS I1][I6][RS-P0-018].

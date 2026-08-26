@@ -31,7 +31,8 @@ import (
 // Typed Script field on Unit is *cob.VM (not any) per P1-I01 acceptance; ScriptState
 // remains as typed wrapper for snapshot convenience.
 type ScriptState struct {
-	VM *cob.VM
+	VM      *cob.VM
+	Binding *cob.Binding // strict production binding; nil for synthetic fixtures [04 §4.1]
 }
 
 // Pieces returns the current piece transforms for snapshot or nil [03 §2.4] C21.

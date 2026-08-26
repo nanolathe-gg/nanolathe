@@ -529,7 +529,9 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	}
 	report.Report(FamilyPlacement, 100)
 	// Ensure COB VMs for all units (load via VFS, statics zero-init, piece count from program, Create run) [04 §4.1][P1-I01]
-	ensureCOBForAll(s, fs)
+	if err := ensureCOBForAll(s, fs); err != nil {
+		return nil, err
+	}
 	report.Report(FamilyScripts, 100)
 	// 8. movement state and visibility state for new units
 	ensureMovementForAll(s)
@@ -842,7 +844,9 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 	if err := SkirmishBattleEntry(s, cfg, m, nil); err != nil {
 		return nil, err
 	}
-	ensureCOBForAll(s, fs)
+	if err := ensureCOBForAll(s, fs); err != nil {
+		return nil, err
+	}
 	if s.World != nil && s.Movement != nil {
 		for _, u := range s.Units.Iter() {
 			s.Movement.EnsureUnit(u)

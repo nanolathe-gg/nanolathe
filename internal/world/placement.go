@@ -44,6 +44,17 @@ func NewFootprintExtent(width, depth int32) (FootprintExtent, error) {
 	return FootprintExtent{width: width, depth: depth}, nil
 }
 
+func checkedPlacementArea(width, depth int32) (int, error) {
+	if width <= 0 || depth <= 0 {
+		return 0, fmt.Errorf("%w: %dx%d", ErrInvalidFootprint, width, depth)
+	}
+	area := int64(width) * int64(depth)
+	if area > int64(int(^uint(0)>>1)) {
+		return 0, ErrPlacementOverflow
+	}
+	return int(area), nil
+}
+
 func (e FootprintExtent) Width() int32 { return e.width }
 func (e FootprintExtent) Depth() int32 { return e.depth }
 
@@ -375,6 +386,174 @@ const (
 	featureVoid
 )
 
+// PlacementRules carries authored terrain limits for one placement query.
+// ProfileResolved is the explicit provenance bit: production must reject an
+// unresolved profile rather than inventing a threshold [04 §6.1][02
+// "Movement class record"].
+type PlacementRules struct {
+	MaxSlope      int32
+	MaxWaterSlope int32
+	MaxWaterDepth int32
+	MinWaterDepth int32
+	Waterline     int32
+	Terrain       bool // legacy provenance marker; production sets ProfileResolved
+	// ProfileResolved means every aggregate terrain limit came from the
+	// produced definition's compiled movement/fallback profile. Canonical
+	// production placement must set this; legacy adapters leave it false.
+	ProfileResolved bool
+}
+
+// PlacementQuery is the immutable input to the canonical placement legality
+// predicate. A non-nil Yard describes a building yard map. Mobile products set
+// Mobile and leave Yard nil; their footprint terrain and occupancy checks apply
+// to every covered cell [04 §6.1][07 §9].
+type PlacementQuery struct {
+	Rect   FootprintRect
+	Yard   []YardCell
+	Rules  PlacementRules
+	Self   uint16
+	Mobile bool
+}
+
+// PlacementResult contains the only derived value placement consumers need
+// after legality succeeds. SiteHeight is the aggregate height published to a
+// build order/ghost [07 §9][05 "Geothermal requirement"].
+type PlacementResult struct {
+	Rect       FootprintRect
+	SiteHeight int32
+}
+
+// CheckPlacement is the one canonical, read-only placement legality function
+// for preview, commit, AI, and factory exits. It checks the typed half-open
+// rectangle before walking cells in row-major order, then applies class-
+// specific feature/occupancy/yard and aggregate terrain gates [R-P0-08].
+func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
+	if t == nil {
+		return PlacementResult{}, fmt.Errorf("world: nil terrain")
+	}
+	if q.Rect.Width() <= 0 || q.Rect.Depth() <= 0 {
+		return PlacementResult{}, fmt.Errorf("%w: rectangle dimensions %dx%d", ErrInvalidFootprint, q.Rect.Width(), q.Rect.Depth())
+	}
+	if q.Rect.MinX() < 0 || q.Rect.MinZ() < 0 || q.Rect.MaxX() > t.CellW || q.Rect.MaxZ() > t.CellH {
+		return PlacementResult{}, fmt.Errorf("world: placement rectangle [%d,%d)x[%d,%d) out of bounds %dx%d", q.Rect.MinX(), q.Rect.MaxX(), q.Rect.MinZ(), q.Rect.MaxZ(), t.CellW, t.CellH)
+	}
+	plotArea, err := checkedPlacementArea(t.CellW, t.CellH)
+	if err != nil {
+		return PlacementResult{}, fmt.Errorf("world: invalid terrain dimensions: %w", err)
+	}
+	if t.Plot == nil || len(t.Plot) < plotArea {
+		return PlacementResult{}, fmt.Errorf("world: terrain plot not initialized")
+	}
+	area, err := checkedPlacementArea(q.Rect.Width(), q.Rect.Depth())
+	if err != nil {
+		return PlacementResult{}, err
+	}
+	if !q.Mobile && len(q.Yard) != area {
+		return PlacementResult{}, fmt.Errorf("world: yard length %d != rectangle %dx%d=%d", len(q.Yard), q.Rect.Width(), q.Rect.Depth(), area)
+	}
+
+	minLow, maxHigh, bit4Max := int32(255), int32(0), int32(0)
+	geothermalNeeded, geothermalFound := false, false
+	for dz := int32(0); dz < q.Rect.Depth(); dz++ {
+		for dx := int32(0); dx < q.Rect.Width(); dx++ {
+			idx := int(dz*q.Rect.Width() + dx)
+			yard := YardCell(0)
+			if q.Mobile {
+				// Mobile placement checks occupancy/features and samples the
+				// complete footprint, not an authored yard map [04 §6.1].
+				yard = 0x2e // occupancy + blocking feature + slope + height
+			} else {
+				yard = q.Yard[idx]
+			}
+			cx, cz := q.Rect.MinX()+dx, q.Rect.MinZ()+dz
+			cell := t.PlotAt(cx, cz)
+			if cell == nil {
+				return PlacementResult{}, fmt.Errorf("world: plot cell %d,%d out of range", cx, cz)
+			}
+			class, def := t.classifyCell(cx, cz)
+
+			// TODO(question): yard bit 0's exact player/visibility alias and
+			// mode matrix remain unresolved [R-P0-08][03 §3.2]. Keep the
+			// authoritative visibility gate named but do not guess a player.
+			if yard&0x06 != 0 {
+				for _, occ := range [2]int16{cell.OccupantA(), cell.OccupantB()} {
+					if occ != 0 && uint16(occ) != q.Self {
+						return PlacementResult{}, fmt.Errorf("world: cell %d,%d occupied [04 §6.2]", cx, cz)
+					}
+				}
+			}
+			if yard&0x20 != 0 {
+				switch class {
+				case featureReal:
+					if def.Blocking {
+						return PlacementResult{}, fmt.Errorf("world: cell %d,%d blocked by feature %s [04 §6.2]", cx, cz, def.CanonicalKey)
+					}
+				case featureVoid:
+					return PlacementResult{}, fmt.Errorf("world: cell %d,%d holds an occupied feature sentinel [04 §6.2]", cx, cz)
+				}
+			}
+			if yard&0x40 != 0 && class == featureReal && def.Indestructible {
+				return PlacementResult{}, fmt.Errorf("world: cell %d,%d holds an indestructible feature %s [04 §6.2]", cx, cz, def.CanonicalKey)
+			}
+			if yard&0x80 != 0 {
+				geothermalNeeded = true
+				if class == featureReal && def.Geothermal {
+					geothermalFound = true
+				}
+			}
+
+			// Building yards select the aggregate samples with bits 3/4;
+			// mobile products sample every covered cell [R-P0-08].
+			if q.Mobile || yard&0x08 != 0 {
+				if h := int32(cell.MinHeight()); h < minLow {
+					minLow = h
+				}
+				if h := int32(cell.MaxHeight()); h > maxHigh {
+					maxHigh = h
+				}
+			}
+			if q.Mobile || yard&0x10 != 0 {
+				if h := int32(cell.MaxHeight()); h > bit4Max {
+					bit4Max = h
+				}
+			}
+		}
+	}
+	if geothermalNeeded && !geothermalFound {
+		return PlacementResult{}, fmt.Errorf("world: geothermal requirement not satisfied [05 %q]", "Geothermal requirement")
+	}
+
+	sea := int32(t.SeaLevel)
+	siteHeight := sea - q.Rules.Waterline
+	if maxHigh >= minLow {
+		siteHeight = minLow
+		water := sea > minLow
+		limit := q.Rules.MaxSlope
+		// Building yards use MaxSlope. Only the inline mobile path selects
+		// MaxWaterSlope from the complete footprint's water state [04 §6.1].
+		if q.Mobile && water {
+			limit = q.Rules.MaxWaterSlope
+		}
+		if q.Rules.ProfileResolved && maxHigh-minLow > limit {
+			return PlacementResult{}, fmt.Errorf("world: placement slope %d exceeds limit %d [04 §6.1]", maxHigh-minLow, limit)
+		}
+	}
+	if q.Rules.ProfileResolved && bit4Max > siteHeight {
+		return PlacementResult{}, fmt.Errorf("world: placement height peak %d exceeds site height %d [05 %q]", bit4Max, siteHeight, "Geothermal requirement")
+	}
+	if q.Rules.ProfileResolved && minLow < sea-q.Rules.MaxWaterDepth {
+		return PlacementResult{}, fmt.Errorf("world: placement water depth exceeds %d [05 %q]", q.Rules.MaxWaterDepth, "Geothermal requirement")
+	}
+	maxSample := maxHigh
+	if bit4Max > maxSample {
+		maxSample = bit4Max
+	}
+	if q.Rules.ProfileResolved && maxSample > sea-q.Rules.MinWaterDepth {
+		return PlacementResult{}, fmt.Errorf("world: placement is deeper than minimum water depth %d [05 %q]", q.Rules.MinWaterDepth, "Geothermal requirement")
+	}
+	return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight}, nil
+}
+
 // classifyCell resolves the feature reference covering (cx,cz) [04 §6.2]:
 //
 //	"the empty sentinel resolves empty; identifiers below the sentinel band are
@@ -405,35 +584,9 @@ func (t *Terrain) classifyCell(cx, cz int32) (featureClass, *content.FeatureDef)
 	return featureVoid, nil
 }
 
-// ValidatePlacement checks a building placement at cell (cx,cz) against the
-// terrain, using the unit's yard map and footprint rectangle [04 §6.2],
-// [05 "Geothermal requirement"] [P1-10][P1-15].
-//
-// The validator bounds-checks the rectangle first, then applies the yard byte's
-// per-cell bits. Implemented here:
-//
-//	bit 1-2  reject any nonzero occupant other than the passed self identity
-//	bit 5    the cell must be free of blocking features
-//	bit 6    fail when the resolved feature is not reclaimable
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-//
-// Geothermal is the documented rule: "If any covered cell's yard byte has bit 7
-// set, validation succeeds only when at least one covered cell holds a feature
-// whose catalog entry carries the geothermal flag." An unresolvable reference
-// does not satisfy it [04 §6.2], [05 "Geothermal requirement"] [P1-10 at-least-one].
-// Persistence is read-only: vent remains in grid under plant and leaves grid on destruction with no restore [P1-10].
-//
-// Outside map rectangle: generic placement blocked (return error), mode 2 factory pad search passes [P1-15].
-// Use ValidatePlacementWithMode for mode-discriminated call.
-//
-// Not implemented, each with its own TODO below: bit 0 (enemy-visibility
-// occupancy), bit 3 (slope sampling), bit 4 (height tracking), and the
-// slope/height/water checks a satisfied geothermal requirement passes through
-// to. Mobile products use a different, inline terrain loop entirely [04 §6.2];
-// that path belongs to movement, not here.
-//
-// self is the placing unit's identity, or 0 during construction, where any
-// occupant rejects.
+// ValidatePlacement is the legacy cell/yard adapter to CheckPlacement. New
+// preview, commit, AI, and factory code should construct a typed
+// PlacementQuery directly; this adapter retains the established call shape.
 func (t *Terrain) ValidatePlacement(cx, cz int32, yard []YardCell, footX, footZ int, self uint16) error {
 	return t.ValidatePlacementWithMode(cx, cz, yard, footX, footZ, self, 0)
 }
@@ -445,113 +598,19 @@ func (t *Terrain) ValidatePlacementWithMode(cx, cz int32, yard []YardCell, footX
 	if t == nil {
 		return fmt.Errorf("world: nil terrain")
 	}
-	if footX <= 0 || footZ <= 0 {
-		return fmt.Errorf("world: invalid footprint %dx%d", footX, footZ)
+	extent, err := NewFootprintExtent(int32(footX), int32(footZ))
+	if err != nil {
+		return err
 	}
-	if len(yard) != footX*footZ {
-		return fmt.Errorf("world: yard length %d != footprint %dx%d=%d", len(yard), footX, footZ, footX*footZ)
+	rect, err := NewFootprintRect(NewFootprintAnchor(cx, cz), extent)
+	if err != nil {
+		return err
 	}
-	// The validator bounds-checks the rectangle against the map first [04 §6.2][P1-15].
-	if cx < 0 || cz < 0 || cx+int32(footX) > t.CellW || cz+int32(footZ) > t.CellH {
-		if mode == 2 {
-			return nil // mode 2 factory pass allows OOB as fallback [P1-15]
-		}
-		return fmt.Errorf("world: placement %d,%d %dx%d out of bounds %dx%d", cx, cz, footX, footZ, t.CellW, t.CellH)
+	if mode == 2 && (cx < 0 || cz < 0 || rect.MaxX() > t.CellW || rect.MaxZ() > t.CellH) {
+		return nil // established factory fallback compatibility [P1-15]
 	}
-	if t.Plot == nil || len(t.Plot) < int(t.CellW*t.CellH) {
-		return fmt.Errorf("world: terrain plot not initialized")
-	}
-
-	geothermalNeeded := false
-	geothermalFound := false
-	for dz := 0; dz < footZ; dz++ {
-		for dx := 0; dx < footX; dx++ {
-			y := yard[dz*footX+dx]
-			px, pz := cx+int32(dx), cz+int32(dz)
-			cell := t.PlotAt(px, pz)
-			if cell == nil {
-				return fmt.Errorf("world: plot cell %d,%d out of range", px, pz)
-			}
-			class, def := t.classifyCell(px, pz)
-
-			// TODO(question): bit 0 gates an enemy-visibility occupancy test
-			// [04 §6.2]. It needs the placing player's visibility state, which
-			// phase 5 owns; this package has no player context.
-
-			// Bits 1-2: reject any nonzero mobile occupant other than the
-			// requester [04 §6.2]. The occupants live in the layer-A/B
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// stomp/unstomp (notes/terrain/01_attribute_cells.md §3.2 rows
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// TODO(question): which of bit 1 / bit 2 maps to layer A vs B is
-			// not established; both layers reject until it is.
-			if y&0x06 != 0 {
-				for _, occ := range [2]int16{cell.OccupantA(), cell.OccupantB()} {
-					if occ != 0 && uint16(occ) != self {
-						return fmt.Errorf("world: cell %d,%d occupied [04 §6.2]", px, pz)
-					}
-				}
-			}
-
-			// Bits 3 and 4 accumulate the height aggregates that feed the
-			// slope/height/water gate [05 "Geothermal requirement"]. The
-			// aggregation is in SiteHeight, which is what the ghost and the
-			// order need; the gate itself is not run here.
-			//
-			// TODO(question): the gate compares against the *movement
-			// profile's* MaxSlope, MaxWaterDepth and MinWaterDepth, copied into
-			// the definition at compile time from the named movementclass or,
-			// for a class-less building, from a profile built out of the
-			// definition's own authored keys. The unit catalog does not carry
-			// that fallback profile yet, so the limits are unavailable for the
-			// building classes this validator serves. A gate fed with zeroes
-			// would reject sites retail accepts, which is strictly worse than
-			// not running it: omitting it can only ever be more permissive.
-
-			// Bit 5: the cell must be free of blocking features [04 §6.2].
-			// "Blocking" is the feature definition's own authored flag, not the
-			// mere presence of a feature: the validator resolves the reference
-			// to a definition and reads its blocking bit. Trees and wreckage
-			// carry it; metal patches, which are 3x3 features sitting exactly
-			// where an extractor wants to go, do not — and a mex whose yard map
-			// is all `o` is unplaceable on its own deposit if presence alone
-			// blocks. A reference that occupies without resolving keeps the
-			// blocking answer.
-			if y&0x20 != 0 {
-				switch class {
-				case featureReal:
-					if def.Blocking {
-						return fmt.Errorf("world: cell %d,%d blocked by feature %s [04 §6.2]", px, pz, def.CanonicalKey)
-					}
-				case featureVoid:
-					return fmt.Errorf("world: cell %d,%d holds an occupied feature sentinel [04 §6.2]", px, pz)
-				}
-			}
-
-			// Bit 6: fail when the resolved feature is indestructible
-			// [04 §6.2]. The validator reads the high byte of the definition's
-			// flag word and tests its bit 1, which is the word's bit 9 —
-			// `indestructible`, not `reclaimable`. A reference that resolves to
-			// no definition reaches no flag and so does not fail here.
-			if y&0x40 != 0 && class == featureReal && def.Indestructible {
-				return fmt.Errorf("world: cell %d,%d holds an indestructible feature %s [04 §6.2]", px, pz, def.CanonicalKey)
-			}
-
-			// Bit 7: the geothermal requirement [05 "Geothermal requirement"].
-			// Retail resolves the feature only inside this branch, so a vent
-			// under a cell whose yard byte is not `G` satisfies nothing.
-			if y&0x80 != 0 {
-				geothermalNeeded = true
-				if class == featureReal && def.Geothermal {
-					geothermalFound = true
-				}
-			}
-		}
-	}
-	if geothermalNeeded && !geothermalFound {
-		return fmt.Errorf("world: geothermal requirement not satisfied [05 %q]", "Geothermal requirement")
-	}
-	return nil
+	_, err = t.CheckPlacement(PlacementQuery{Rect: rect, Yard: yard, Self: self})
+	return err
 }
 
 // SiteHeight returns the ground height retail draws a build site at and stores
@@ -565,17 +624,16 @@ func (t *Terrain) ValidatePlacementWithMode(cx, cz int32, yard []YardCell, footX
 // initial 255 and 0, the maximum compares below the minimum, and retail falls
 // back to `SeaLevel - waterline` instead.
 //
-// The same two aggregates also feed the slope and water gates that can reject a
-// site outright [05 "Geothermal requirement"]. Those gates are not implemented;
-// see the bit 3/4 note in ValidatePlacementWithMode for why. Height derivation
-// is independent of them and is what the ghost and the order need, so it is
-// separated out here.
+// The same two aggregates also feed the slope and water gates in
+// CheckPlacement. This legacy helper only returns the derived height; callers
+// that need legality must use the canonical typed query.
 func (t *Terrain) SiteHeight(cx, cz int32, yard []YardCell, footX, footZ int, waterline int32) int32 {
 	if t == nil {
 		return 0
 	}
 	sea := int32(t.SeaLevel)
-	if footX <= 0 || footZ <= 0 || len(yard) != footX*footZ {
+	area, err := checkedPlacementArea(int32(footX), int32(footZ))
+	if err != nil || len(yard) != area {
 		return sea
 	}
 	minLow, maxHigh := int32(255), int32(0)

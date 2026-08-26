@@ -1,4 +1,4 @@
-.PHONY: check check-all build test test-retail test-desktop kaiju-content
+.PHONY: check check-all build test test-retail test-desktop
 
 GO_TEST_PACKAGES := $(shell go list ./... | grep -vE '/(cmd/nanolathe|internal/client)$$')
 
@@ -12,7 +12,7 @@ check:
 # message when assets are absent; no retail assets are required.
 check-all:
 	@echo "==> gofmt"
-	@unformatted=$$(gofmt -l . | grep -v '^content/' || true); \
+	@unformatted=$$(gofmt -l . || true); \
 	if [ -n "$$unformatted" ]; then echo "not gofmt-clean:"; echo "$$unformatted"; exit 1; fi
 	@echo "==> go build"
 	@go build ./...
@@ -36,9 +36,3 @@ test-retail:
 # desktop-only packages explicit so the default loop stays usable headlessly.
 test-desktop:
 	@go test ./internal/client ./cmd/nanolathe
-
-# Kaiju needs its stock shaders/materials present as a content database.
-# See docs/PLAN_00_BOOTSTRAP.md WU-00-1.
-kaiju-content:
-	@test -d content || cp -R ../kaiju/src/editor/editor_embedded_content/editor_content content
-	@echo "content/ ready"

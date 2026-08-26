@@ -1,9 +1,9 @@
 // Package input holds the retail input rings and command latch [07 §2][GAP T22].
 //
 // Rings are the fixed-capacity circular queues that the window procedure
-// writes and the battle dispatcher drains. Translation from Kaiju
-// platform/hid types to the retail token vocabulary happens at the boundary so
-// nothing downstream sees Kaiju types (PLAN_04A C5).
+// writes and the battle dispatcher drains. Translation from Ebitengine input
+// state to the retail token vocabulary happens at the boundary so nothing
+// downstream sees backend-specific types (PLAN_04A C5).
 //
 // Keyboard ring holds 30 entries with 29 usable; mouse ring holds 24 six-dword
 // entries with the same refusal rule [07 §2] (C5). A push when full is

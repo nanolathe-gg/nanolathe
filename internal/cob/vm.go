@@ -96,6 +96,7 @@ type VM struct {
 	diagnostics []string                            // [P2-03] fallback diagnostics (divide, overflow, corrupt) not fatal
 
 	lastStarted     int      // last thread allocated by Start/StartByName, -1 if none [06 §3.3] ON-04 Aim dispatch
+	lastQueryThread int      // last thread allocated by CallQuery, -1 if none [04 §4.2]
 	lastReturnValue [8]int32 // last explicit return value per thread [04 §5.3] ON-04
 	lastReturnValid [8]bool  // true if lastReturnValue holds an explicit return not yet consumed ON-04
 
@@ -262,6 +263,7 @@ func (v *VM) SetProgram(prog *Program) {
 		}
 	}
 	v.lastStarted = -1
+	v.lastQueryThread = -1
 	for i := range v.lastReturnValid {
 		v.lastReturnValid[i] = false
 		v.lastReturnValue[i] = 0
@@ -297,6 +299,23 @@ func (v *VM) SetSFXSink(s SFXSink) { v.sfxSink = s }
 // gate is called with (piece, sfxType) and must return true for the effect
 // to be emitted.
 func (v *VM) SetSFXVisible(fn func(piece int, sfxType int32) bool) { v.sfxVisible = fn }
+
+// SetSimulationRNG binds the session-owned simulation stream to this VM. COB
+// random opcodes then consume this stream instead of the process-global
+// fallback [01 §7.1] I4. A nil value preserves the legacy fixture fallback.
+func (v *VM) SetSimulationRNG(sim *rng.Simulation) {
+	if v != nil {
+		v.simRng = sim
+	}
+}
+
+// SimulationRNG returns the session-owned stream bound to this VM, if any.
+func (v *VM) SimulationRNG() *rng.Simulation {
+	if v == nil {
+		return nil
+	}
+	return v.simRng
+}
 
 // Diagnostics returns fallback diagnostics collected for malformed COB paths
 // [P2-03] (divide, corrupt save, stack overflow guard). Not fatal.
@@ -433,21 +452,49 @@ func (v *VM) Start(script int, args []int32) bool {
 // four inputs, forces the depth to three, runs the interpreter inline, and
 // copies the first four window words back out."
 func (v *VM) Call(script int, args []int32) bool {
+	started, _ := v.CallQuery(script, args)
+	if started {
+		// Call historically consumes a blocked query thread. Keep that
+		// compatibility behavior; CallbackBridge uses CallQuery directly so
+		// mode-Q partial results preserve the blocked thread [04 §4.2].
+		if v.lastQueryThread >= 0 && v.lastQueryThread < len(v.Threads) && v.Threads[v.lastQueryThread].Status != ThreadIdle {
+			v.killThread(v.lastQueryThread)
+		}
+	}
+	return started
+}
+
+// CallQuery executes one synchronous mode-Q callback and leaves a sleeping or
+// waiting thread active after copying its current four cells. It returns
+// started and returned separately: a missing entry/full pool/invalid identity
+// reports started=false and leaves args untouched; a blocked callback reports
+// started=true, returned=false, and preserves the partial output/thread for a
+// later VM-wide drain [04 §4.2][04 §4.4]. No piece interpolation occurs.
+func (v *VM) CallQuery(script int, args []int32) (started, returned bool) {
+	if v == nil {
+		return false, false
+	}
+	v.lastQueryThread = -1
 	if v.prog == nil {
-		return false
+		return false, false
 	}
 	if script < 0 || script >= len(v.prog.Code) {
-		return false
+		return false, false
 	}
 	if !v.isValidEntry(script) {
-		return false
+		return false, false
 	}
 	idx, ok := v.allocThread()
 	if !ok {
-		return false // full pool returns failure and leaves outputs untouched [04 §4.3]
+		return false, false // full pool returns failure and leaves outputs untouched [04 §4.3]
 	}
+	v.lastQueryThread = idx
 	t := &v.Threads[idx]
 	t.Status = ThreadRunning
+	// Clear a stale explicit-return marker if this slot was reused after a
+	// prior callback. The current Q result must only observe this invocation.
+	v.lastReturnValid[idx] = false
+	v.lastReturnValue[idx] = 0
 	t.PC = script
 	t.SignalMask = 0
 	t.WaitThread = -1
@@ -469,12 +516,15 @@ func (v *VM) Call(script int, args []int32) bool {
 	for i := 0; i < 4 && i < len(args); i++ {
 		args[i] = t.Stack[i]
 	}
-	// If the synchronous query slept or waited, retail simply returns whatever
-	// the window then holds [04 §4.3] "If the queried script sleeps or waits,
-	// the query simply returns whatever the window then holds".
-	// Free the thread regardless (whether it returned normally or blocked).
-	v.killThread(idx)
-	return true
+	returned = v.lastReturnValid[idx]
+	if returned {
+		// Explicit return already released the thread. Keep the return marker
+		// available to the caller's query result until it is consumed.
+		return true, true
+	}
+	// A sleep/wait leaves the query thread active by retail contract. It will
+	// resume during a later normal drain and does not revise this host result.
+	return true, false
 }
 
 // Signal kills every thread whose mask intersects mask, waking anything

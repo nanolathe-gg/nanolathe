@@ -133,6 +133,7 @@ func TestStepUnit_MobileSiteSurvives(t *testing.T) {
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 	}
 	svc := NewService(terrain, cat, w, &economy.Service{})
+	svc.AllowSyntheticPlacement = true
 	// Force state2
 	node.Phase = uint8(State2)
 	ctx := TickContext{Tick: 0, World: w, Economy: svc.Economy, Terrain: terrain, Catalog: cat}
@@ -148,8 +149,9 @@ func TestStepUnit_MobileSiteSurvives(t *testing.T) {
 		t.Fatalf("product nil")
 	}
 	expectedCell := SnapWorldToCell(siteX, siteZ, int(prodDef.FootprintX), int(prodDef.FootprintZ))
-	if world.WorldToCell(prod.X) != expectedCell.X || world.WorldToCell(prod.Z) != expectedCell.Z {
-		t.Fatalf("product at %d,%d want snapped site %d,%d", world.WorldToCell(prod.X), world.WorldToCell(prod.Z), expectedCell.X, expectedCell.Z)
+	wantX, wantZ := world.PlacementCenter(expectedCell.X, expectedCell.Z, prodDef.FootprintX, prodDef.FootprintZ)
+	if prod.X != wantX || prod.Z != wantZ {
+		t.Fatalf("product at (%d,%d) want model center (%d,%d), anchor (%d,%d)", prod.X.Raw(), prod.Z.Raw(), wantX.Raw(), wantZ.Raw(), expectedCell.X, expectedCell.Z)
 	}
 	// GoalX/Z must still equal original site (not overwritten to cell origin) per P0-I05 mobile site authoritative.
 	if node.GoalX != siteX || node.GoalZ != siteZ {
@@ -172,6 +174,7 @@ func TestStepUnit_MobileSiteSurvives(t *testing.T) {
 	nf := qf.Primary()[0]
 	nf.Phase = uint8(State2)
 	svc2 := NewService(terrain, cat2, w2, &economy.Service{})
+	svc2.AllowSyntheticPlacement = true
 	res2 := svc2.StepUnit(TickContext{Tick: 0, World: w2, Economy: svc2.Economy, Terrain: terrain, Catalog: cat2}, hf)
 	if res2.Err != nil {
 		t.Fatalf("factory StepUnit err %v", res2.Err)
@@ -231,6 +234,7 @@ func TestStepUnit_DistinctDescriptors(t *testing.T) {
 	q2 := orders.QueueForUnit(factory)
 	q2.Push(mobileID, orders.Node{BuildDefKey: "armllt", Param1: 1, Param2: 1, Phase: uint8(State0), GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(5)})
 	svc2 := NewService(nil, cat, w2, &economy.Service{})
+	svc2.AllowSyntheticPlacement = true
 	res2 := svc2.StepUnit(TickContext{Tick: 0, World: w2, Economy: svc2.Economy, Catalog: cat}, hf)
 	if res2.Err == nil {
 		t.Fatalf("factory + mobile descriptor should error")
@@ -388,6 +392,7 @@ func TestStepUnit_CancelBeforeAndAfterNanoframe(t *testing.T) {
 	factory2 := w2.Unit(hf2)
 	factory2.Def = facDef
 	svc2 := NewService(nil, cat, w2, &economy.Service{})
+	svc2.AllowSyntheticPlacement = true
 	q2 := orders.QueueForUnit(factory2)
 	q2.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State2)})
 	head2 := q2.Primary()[0]

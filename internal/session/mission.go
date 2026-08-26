@@ -134,7 +134,9 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 		return nil, err
 	}
 	report.Report(FamilyPlacement, 100)
-	ensureCOBForAll(s, fs)
+	if err := ensureCOBForAll(s, fs); err != nil {
+		return nil, err
+	}
 	report.Report(FamilyScripts, 100)
 	ensureMovementForAll(s)
 	publishVisibilityForAll(s)
@@ -285,7 +287,9 @@ func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficul
 	}
 	if s.Units != nil && fs != nil {
 		s.Units.SetCOBSource(fs, globalCobLoader)
-		ensureCOBForAll(s, fs)
+		if err := ensureCOBForAll(s, fs); err != nil {
+			return nil, err
+		}
 	}
 	if s.World != nil && s.Movement == nil {
 		grid := movement.NewOccupancyGrid()

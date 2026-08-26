@@ -82,6 +82,7 @@ type UnitDef struct {
 	Waterline           int32 // waterline integer default 0 [02 "Unit record"]
 	MinWaterDepth       int32 // minwaterdepth integer default 0 — per-unit placement depth floor; classless buildings author it directly (coruwmex.fbi=10) [02 "Unit record"][P0-03]
 	MaxWaterDepth       int32 // maxwaterdepth integer default 0 — per-unit placement depth cap [02 "Unit record"][P0-03]
+	MaxSlope            int32 // maxslope integer default 0 — class-less building placement profile [fmt fbi]
 	CruiseAlt           int32 // cruisealt integer default 0 [02 "Unit record"]
 	TransportSize       int32 // transportsize integer default 0 [02 "Unit record"]
 	TransportCapacity   int32 // transportcapacity integer default 0 [02 "Unit record"]
@@ -207,7 +208,7 @@ func (u *UnitDef) UnknownKeysSorted() []string {
 var knownUnitKeys = map[string]struct{}{
 	"unitname": {}, "name": {}, "description": {}, "side": {}, "objectname": {}, "category": {}, "soundcategory": {}, "corpse": {}, "movementclass": {}, "weapon1": {}, "weapon2": {}, "weapon3": {}, "explodeas": {}, "selfdestructas": {}, "yardmap": {}, "defaultmissiontype": {}, "wpri_badtargetcategory": {}, "wsec_badtargetcategory": {}, "wspe_badtargetcategory": {}, "nochasecategory": {},
 	"buildcostenergy": {}, "buildcostmetal": {}, "energymake": {}, "energyuse": {}, "metalmake": {}, "extractsmetal": {}, "windgenerator": {}, "tidalgenerator": {}, "energystorage": {}, "metalstorage": {}, "makesmetal": {}, "buildtime": {}, "workertime": {}, "healtime": {}, "cloakcost": {}, "cloakcostmoving": {}, "unitlimit": {}, "maxthisunit": {}, "limit": {},
-	"maxvelocity": {}, "brakerate": {}, "acceleration": {}, "bankscale": {}, "pitchscale": {}, "damagemodifier": {}, "moverate1": {}, "moverate2": {}, "turnrate": {}, "waterline": {}, "cruisealt": {}, "transportsize": {}, "transportcapacity": {}, "buildangle": {}, "builddistance": {}, "sortbias": {}, "maneuverleashlength": {}, "attackrunlength": {}, "kamikazedistance": {}, "footprintx": {}, "footprintz": {},
+	"maxvelocity": {}, "brakerate": {}, "acceleration": {}, "bankscale": {}, "pitchscale": {}, "damagemodifier": {}, "moverate1": {}, "moverate2": {}, "turnrate": {}, "waterline": {}, "minwaterdepth": {}, "maxwaterdepth": {}, "maxslope": {}, "cruisealt": {}, "transportsize": {}, "transportcapacity": {}, "buildangle": {}, "builddistance": {}, "sortbias": {}, "maneuverleashlength": {}, "attackrunlength": {}, "kamikazedistance": {}, "footprintx": {}, "footprintz": {},
 	"maxdamage": {}, "sightdistance": {}, "radardistance": {}, "sonardistance": {}, "radardistancejam": {}, "sonardistancejam": {}, "mincloakdistance": {},
 	"standingmoveorder": {}, "standingfireorder": {}, "init_cloaked": {}, "downloadable": {}, "builder": {}, "stealth": {}, "bmcode": {}, "zbuffer": {}, "isairbase": {}, "istargetingupgrade": {}, "teleporter": {}, "hidedamage": {}, "shootme": {}, "armoredstate": {}, "activatewhenbuilt": {}, "canfly": {}, "canhover": {}, "upright": {}, "floater": {}, "amphibious": {}, "isfeature": {}, "noshadow": {}, "immunetoparalyzer": {}, "hoverattack": {}, "antiweapons": {}, "digger": {}, "onoffable": {}, "mobilestandorders": {}, "firestandorders": {}, "canstop": {}, "canattack": {}, "canguard": {}, "canpatrol": {}, "canmove": {}, "canload": {}, "canreclamate": {}, "canresurrect": {}, "cancapture": {}, "candgun": {}, "kamikaze": {}, "norestrict": {}, "showplayername": {}, "commander": {}, "cantbetransported": {}, "wacky": {},
 	"selfdestructcountdown": {},
@@ -283,6 +284,7 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	waterline := section.IntValue("waterline", 0)
 	minWaterDepth := section.IntValue("minwaterdepth", 0)
 	maxWaterDepth := section.IntValue("maxwaterdepth", 0)
+	maxSlope := section.IntValue("maxslope", 0)
 	cruiseAlt := section.IntValue("cruisealt", 0)
 	transportSize := section.IntValue("transportsize", 0)
 	transportCapacity := section.IntValue("transportcapacity", 0)
@@ -466,6 +468,7 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 		Waterline:                    waterline,
 		MinWaterDepth:                minWaterDepth,
 		MaxWaterDepth:                maxWaterDepth,
+		MaxSlope:                     maxSlope,
 		CruiseAlt:                    cruiseAlt,
 		TransportSize:                transportSize,
 		TransportCapacity:            transportCapacity,
@@ -551,7 +554,7 @@ func writeUnitCanonical(u *UnitDef) []byte {
 	fmt.Fprintf(&b, "%s|%d|%s|%s|%s|%s|%s|%s|%s|", u.CanonicalKey, u.UnitDefID, u.UnitName, u.Name, u.Description, u.Side, u.ObjectName, u.Category, u.SoundCategory)
 	fmt.Fprintf(&b, "%s|", u.Corpse)
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|", u.MovementClass, u.Weapon1, u.Weapon2, u.Weapon3, u.ExplodeAs, u.SelfDestructAs, u.YardMap)
-	fmt.Fprintf(&b, "%d|%d|", u.MinWaterDepth, u.MaxWaterDepth)
+	fmt.Fprintf(&b, "%d|%d|%d|", u.MinWaterDepth, u.MaxWaterDepth, u.MaxSlope)
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|", u.DefaultMissionType, u.BadTargetCategoryWPRI, u.BadTargetCategoryWSEC, u.BadTargetCategoryWSPE, u.NoChaseCategory)
 	fmt.Fprintf(&b, "%d|%d|%.10f|%.10f|%.10f|%.10f|", u.BuildCostEnergy, u.BuildCostMetal, u.EnergyMake, u.EnergyUse, u.MetalMake, u.ExtractsMetal)
 	fmt.Fprintf(&b, "%.10f|%.10f|%.10f|%.10f|%d|%d|%d|%d|%d|%d|", u.WindGenerator, u.TidalGenerator, u.EnergyStorage, u.MetalStorage, u.MakesMetal, u.BuildTime, u.WorkerTime, u.HealTime, u.CloakCost, u.CloakCostMoving)

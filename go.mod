@@ -2,8 +2,6 @@ module github.com/nanolathe/nanolathe
 
 go 1.25.0
 
-replace kaijuengine.com => ../kaiju/src
-
 require github.com/hajimehoshi/ebiten/v2 v2.9.10
 
 require (

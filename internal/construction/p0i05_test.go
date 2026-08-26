@@ -73,6 +73,7 @@ func TestP0I05_SiteAuthoritative(t *testing.T) {
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 	}
 	svc := NewService(terrain, cat, w, &economy.Service{})
+	svc.AllowSyntheticPlacement = true
 	// Directly pump mobile builder state2 -> allocation at site
 	// Ensure builder's queue head is mobile build at state2
 	node.Phase = uint8(State2)
@@ -84,10 +85,11 @@ func TestP0I05_SiteAuthoritative(t *testing.T) {
 	if prod == nil {
 		t.Fatalf("product nil")
 	}
-	// Product position should be at snapped site cell (10,10) with half-extent bias 1 => 9,9 ? Wait site 10,10 with foot 2 => snap 9,9
+	// Occupancy uses the snapped anchor, while the model uses the footprint center.
 	expectedCell := SnapWorldToCell(siteX, siteZ, int(prodDef.FootprintX), int(prodDef.FootprintZ))
-	if world.WorldToCell(prod.X) != expectedCell.X || world.WorldToCell(prod.Z) != expectedCell.Z {
-		t.Fatalf("product at %d,%d want snapped site %d,%d (site world %d,%d)", world.WorldToCell(prod.X), world.WorldToCell(prod.Z), expectedCell.X, expectedCell.Z, siteX.Raw(), siteZ.Raw())
+	wantX, wantZ := world.PlacementCenter(expectedCell.X, expectedCell.Z, prodDef.FootprintX, prodDef.FootprintZ)
+	if prod.X != wantX || prod.Z != wantZ {
+		t.Fatalf("product at (%d,%d) want model center (%d,%d), anchor (%d,%d)", prod.X.Raw(), prod.Z.Raw(), wantX.Raw(), wantZ.Raw(), expectedCell.X, expectedCell.Z)
 	}
 	if world.WorldToCell(prod.X) == 0 && world.WorldToCell(prod.Z) == 0 {
 		t.Fatalf("product at origin, not site")

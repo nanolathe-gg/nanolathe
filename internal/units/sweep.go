@@ -221,6 +221,11 @@ func (w *World) FinalizeDeath(handle pool.Handle, tick uint32) DeathResult {
 		// However the slot will be freed now, so later calls are no-ops anyway.
 		// To preserve exactly-once semantics when hook later appears, do not set flag.
 	}
+	if !u.deathExtraHookFired && w.OnDeathExtra != nil {
+		w.OnDeathExtra(handle, cause, u)
+		u.deathExtraHookFired = true
+		hookFired = true
+	}
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	player := int(u.Owner)
 	u.Alive = false

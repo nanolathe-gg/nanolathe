@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -45,10 +46,12 @@ const (
 
 // Flags on units.Unit.Flags for COB edges [04 §4.4] [05].
 const (
-	FlagInBuildStance uint32 = 1 << 5 // port 5 INBUILDSTANCE [04 §4.4]
-	FlagActivated     uint32 = 1 << 0 // activate edge placeholder [05 "Factory production lifecycle"] TODO(question): exact bit not located
-	FlagStartBuilding uint32 = 1 << 2 // start-building edge [05]
-	FlagDeactivate    uint32 = 1 << 1 // deactivate edge [05 C21]
+	FlagInBuildStance uint32 = 1 << 5     // port 5 INBUILDSTANCE [04 §4.4]
+	FlagActivated     uint32 = 1 << 0     // activate edge placeholder [05 "Factory production lifecycle"] TODO(question): exact bit not located
+	FlagCompleted     uint32 = 0x00002000 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	FlagInitCloak     uint32 = 0x00004000 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	FlagStartBuilding uint32 = 1 << 2     // start-building edge [05]
+	FlagDeactivate    uint32 = 1 << 1     // deactivate edge [05 C21]
 )
 
 // Damage constants [05 "Cancel-current and stop interrupts"] C21.
@@ -72,6 +75,13 @@ type Service struct {
 	ModelForFactory func(factory *units.Unit) *model.Model
 	// OnRefresh is the interface refresh hook [05 C18][05 C21][05 C22].
 	OnRefresh func(*units.Unit)
+	// Presentation receives already-admitted construction cues. It is optional
+	// for headless simulation and never feeds back into authoritative state
+	// [R-P0-06][EVENT-01].
+	Presentation interface{ EmitNanolathe(presentation.Event) bool }
+	// ModelForUnit resolves the current model used by QueryNanoPiece. The
+	// factory hook remains the compatibility name for factory/model fixtures.
+	ModelForUnit func(unit *units.Unit) *model.Model
 
 	// ModeSelector selects the special-player refund scaling [05 C21]:
 	// 0 => subtract 7/10, 1 => subtract 1/2, other => add fallback. This
@@ -85,15 +95,21 @@ type Service struct {
 	// LimitChecker is the per-def limit hook for allocation [P0-I16][05 C23].
 	// Was package var LimitChecker; now per-Service to avoid shared mutable.
 	LimitChecker func(factory *units.Unit, defKey string) bool
+	// AllowSyntheticPlacement is an explicit test seam for services that have
+	// no terrain world. Production placement must leave it false so a missing
+	// terrain dependency is an error rather than a permissive success.
+	AllowSyntheticPlacement bool
 
 	// Per-session state. None of this may live in a package-level var: it is
 	// authoritative (BuilderLinks is C18's "register the builder link on the
 	// product"), it has to survive save/load through one owner, and two worlds
 	// in one process must not share it.
-	builderLinks map[pool.Handle]pool.Handle // product -> builder [05 C18]
-	productIndex map[uint32]string           // product id -> catalog key, built once
-	messages     []string                    // verbatim diagnostics [05 C18][05 C21][05 C22]
-	lastKill     KillInfo                    // most recent kind-9 kill packet [05 C21]
+	builderLinks  map[pool.Handle]pool.Handle         // product -> builder [05 C18]
+	placements    map[pool.Handle]world.FootprintRect // product -> occupancy footprint; save persistence TODO(question)
+	productIndex  map[uint32]string                   // product id -> catalog key, built once
+	getBuiltLinks map[pool.Handle]pool.Handle         // product -> builder until GetBuilt consumes it [R-P0-09]
+	messages      []string                            // verbatim diagnostics [05 C18][05 C21][05 C22]
+	lastKill      KillInfo                            // most recent kind-9 kill packet [05 C21]
 }
 
 // TickContext carries per-tick shared services for unit-local stepping (ON-02).
@@ -152,6 +168,8 @@ func (s *Service) CheckLimit(factory *units.Unit, defKey string) bool {
 func NewService(terrain *world.Terrain, catalog *content.Catalog, w *units.World, econ *economy.Service) *Service {
 	s := &Service{Terrain: terrain, Catalog: catalog, World: w, Economy: econ}
 	s.builderLinks = make(map[pool.Handle]pool.Handle)
+	s.placements = make(map[pool.Handle]world.FootprintRect)
+	s.getBuiltLinks = make(map[pool.Handle]pool.Handle)
 	s.buildProductIndex()
 	return s
 }
@@ -212,6 +230,98 @@ func (s *Service) ClearBuilderLink(product pool.Handle) {
 	if s.builderLinks != nil {
 		delete(s.builderLinks, product)
 	}
+}
+
+// PlacementForProduct returns the typed occupancy rectangle retained when a
+// nanoframe was allocated. It is session state, not a reinterpretation of
+// persisted unit/save fields; save persistence remains TODO(question).
+func (s *Service) PlacementForProduct(product pool.Handle) (world.FootprintRect, bool) {
+	if s == nil || s.placements == nil {
+		return world.FootprintRect{}, false
+	}
+	r, ok := s.placements[product]
+	return r, ok
+}
+
+func (s *Service) recordPlacement(product pool.Handle, rect world.FootprintRect) {
+	if s.placements == nil {
+		s.placements = make(map[pool.Handle]world.FootprintRect)
+	}
+	s.placements[product] = rect
+}
+
+// reservePlacement commits the product's footprint after a complete
+// validation pass. Construction uses the established layer-A occupancy
+// accessors because the placement validator compares both occupancy layers;
+// the exact structure-vs-mobile layer alias remains TODO(question) [04 §6.2].
+// The full rectangle is prechecked before any cell is stamped, so a failed
+// reservation cannot leave a partial occupancy footprint.
+func (s *Service) reservePlacement(product pool.Handle, rect world.FootprintRect) error {
+	if s == nil || s.Terrain == nil {
+		if s != nil && s.AllowSyntheticPlacement {
+			return nil
+		}
+		return fmt.Errorf("construction: placement terrain unavailable")
+	}
+	if product == 0 || uint64(product) > uint64(^uint16(0)>>1) {
+		return fmt.Errorf("construction: placement identity %d exceeds occupancy identity range", product)
+	}
+	id := int16(product)
+	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
+		for x := rect.MinX(); x < rect.MaxX(); x++ {
+			cell := s.Terrain.PlotAt(x, z)
+			if cell == nil {
+				return fmt.Errorf("construction: placement cell %d,%d unavailable", x, z)
+			}
+			if (cell.OccupantA() != 0 && cell.OccupantA() != id) ||
+				(cell.OccupantB() != 0 && cell.OccupantB() != id) {
+				return fmt.Errorf("construction: placement cell %d,%d occupied", x, z)
+			}
+		}
+	}
+	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
+		for x := rect.MinX(); x < rect.MaxX(); x++ {
+			cell := s.Terrain.PlotAt(x, z)
+			cell.SetOccupantA(id)
+			cell.SetOccupied(true)
+		}
+	}
+	return nil
+}
+
+// ReleasePlacement removes an unfinished/dead product's reserved footprint.
+// Completed live products retain occupancy; callers handling a death/removal
+// invoke this before the unit leaves the pool [R-P0-09].
+func (s *Service) ReleasePlacement(product pool.Handle) bool {
+	if s == nil || s.placements == nil {
+		return false
+	}
+	if s.World != nil {
+		if u := s.World.Unit(product); u != nil && u.Alive && !u.Dying && u.Remaining == 0 {
+			return false
+		}
+	}
+	rect, ok := s.placements[product]
+	if !ok {
+		return false
+	}
+	if s.Terrain != nil && uint64(product) <= uint64(^uint16(0)>>1) {
+		id := int16(product)
+		for z := rect.MinZ(); z < rect.MaxZ(); z++ {
+			for x := rect.MinX(); x < rect.MaxX(); x++ {
+				cell := s.Terrain.PlotAt(x, z)
+				if cell == nil || cell.OccupantA() != id {
+					continue
+				}
+				cell.SetOccupantA(0)
+				if cell.OccupantB() == 0 {
+					cell.SetOccupied(false)
+				}
+			}
+		}
+	}
+	delete(s.placements, product)
+	return true
 }
 
 // BuilderLinks returns a copy of all builder/product links (ON-02).
@@ -353,68 +463,65 @@ func SnapWorldToCell(wx, wz numeric.Fixed, footX, footZ int) world.Cell {
 // snapBias is the half-extent bias vector for tests: returns (footX/2, footZ/2) integer.
 func snapBias(footX, footZ int) (int32, int32) { return int32(footX / 2), int32(footZ / 2) }
 
-// QueryBuildInfo implements the exit-spot query per [05 "Factory production lifecycle"] C16.
+// QueryBuildWorldPosition resolves the authored exit transform in full world
+// X/Y/Z per [05 "Factory production lifecycle"] C16.
 // Exact order: query factory script's build-info piece with query argument PRE-INITIALIZED to -1;
 // resolve piece transform + factory origin to world position; store position on order node is done by caller;
 // load product definition and snap to map cells using packed footprint extents each biased by half extent.
-// Signature per PLAN_08: QueryBuildInfo(factory *units.Unit, m *model.Model) (cell world.Cell, ok bool)
-// If a needed seam is missing (model+piece transform via cob/model), it is implemented here per plan.
-func (s *Service) QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cell, bool) {
+func (s *Service) QueryBuildWorldPosition(factory *units.Unit, m *model.Model) (world.ModelWorldPosition, bool) {
 	if factory == nil || m == nil {
-		return world.Cell{}, false
+		return world.ModelWorldPosition{}, false
 	}
-	// 1. query the factory script's build-info piece with argument pre-initialized to -1 [05 C16].
+	// QueryBuildInfo is a synchronous mode-Q callback. Production must use the
+	// strict binding bridge; root-piece fallback is available only through the
+	// explicit synthetic fixture seam [R-P0-09][04 §5.3].
 	pieceIdx := int32(-1)
-	if factory.Script != nil {
-		if vm := factory.Script; vm != nil {
-			// Try to find QueryBuildInfo script entry; vm prog may be nil in tests.
-			// Use generic Call mechanism: pieceIdx is args[0] after synchronous query [04 §4.2] Call pushes 4 inputs, forces SP 4, runs inline [04 §4.3].
-			// For QueryBuildInfo, the retail query helper [04 §4.2] expects 4 outputs seeded as [-1,0,0,0] per ports.go QueryTransportSeed etc, but build-info uses same seeding.
-			// We attempt to locate script by name.
-			var prog *cob.Program
-			// Access program via exported accessor VM.Program() [04 §4.1] (ON-02) — replaces former reflect/unsafe.
-			prog = getVMProgram(vm)
-			if prog != nil {
-				if pc, ok := prog.Scripts["QueryBuildInfo"]; ok {
-					args := [4]int32{-1, 0, 0, 0} // pre-initialized to -1 [05 C16]
-					slice := args[:]
-					if vm.Call(pc, slice) {
-						pieceIdx = slice[0]
-					}
-				}
-			}
-		}
+	if binding := factory.COBBinding(); binding != nil && binding.Callbacks != nil {
+		pieceIdx = binding.Callbacks.QueryBuildInfo().QueryValue()
+	} else if s != nil && s.AllowSyntheticPlacement && syntheticUnitVM(factory) {
+		pieceIdx = 0 // explicit synthetic fixture only; retail fallback is unknown
+	} else {
+		return world.ModelWorldPosition{}, false
 	}
-	// If pieceIdx remains -1, fallback to 0 for deterministic behavior where script absent? But spec says query argument pre-initialized to -1, so if no script, piece remains -1 and snap should fail.
-	// For headless tests without COB, we treat -1 as piece 0 fallback to allow snap tests without requiring COB program.
-	// Distinguish: if we had a VM but script missing, we keep -1 and return not ok? However task says silent blocked revalidation etc need piece transform even without script, so fallback to root is reasonable.
-	// We will fallback to piece 0 only when factory.Script is nil (no VM), so tests can proceed.
-	if pieceIdx == -1 {
-		if factory.Script == nil {
-			pieceIdx = 0 // fallback for tests without VM [05 C16] TODO(question): retail fallback not located
-		} else {
-			// VM present but query returned -1 => invalid piece, fail.
-			return world.Cell{}, false
-		}
+	if pieceIdx < 0 {
+		return world.ModelWorldPosition{}, false
 	}
-	if pieceIdx < 0 || int(pieceIdx) >= len(m.Pieces) {
+	modelPiece := pieceIdx
+	if binding := factory.COBBinding(); binding != nil && int(pieceIdx) < len(binding.PieceMap) {
+		modelPiece = int32(binding.PieceMap[pieceIdx])
+	}
+	if modelPiece < 0 || int(modelPiece) >= len(m.Pieces) {
+		return world.ModelWorldPosition{}, false
+	}
+	// 2. resolve piece transform plus factory origin to world position. Strict
+	// bindings own PieceMap, hierarchy state, and unit orientation; construction
+	// must not duplicate that composition [04 §4.1][03 §2.4].
+	var pos [3]numeric.Fixed
+	if binding := factory.COBBinding(); binding != nil {
+		var composed bool
+		pos, composed = binding.ComposePiece(int(pieceIdx), factory.Move.Heading, factory.Move.Pitch, factory.Move.Bank)
+		if !composed {
+			return world.ModelWorldPosition{}, false
+		}
+	} else {
+		// Explicit synthetic fixture path only.
+		states := make([]model.PieceState, len(m.Pieces))
+		pos = model.Compose(m, states, int(modelPiece)).Position()
+	}
+	worldX := factory.X.Add(pos[0])
+	worldY := factory.Y.Add(pos[1])
+	worldZ := factory.Z.Add(pos[2])
+	return world.NewModelWorldPosition(worldX, worldY, worldZ), true
+}
+
+// QueryBuildInfo preserves the established cell-returning API. Its cell is
+// the independently snapped validation anchor; callers allocating a product
+// must retain QueryBuildWorldPosition separately [R-P0-02].
+func (s *Service) QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cell, bool) {
+	position, ok := s.QueryBuildWorldPosition(factory, m)
+	if !ok {
 		return world.Cell{}, false
 	}
-	// 2. resolve piece transform plus factory origin to world position [05 C16].
-	var states []model.PieceState
-	if factory.Script != nil {
-		if vm := factory.Script; vm != nil && len(vm.Pieces) == len(m.Pieces) {
-			states = vm.Pieces
-		}
-	}
-	if states == nil {
-		states = make([]model.PieceState, len(m.Pieces))
-	}
-	tf := model.Compose(m, states, int(pieceIdx))
-	pos := tf.Position() // piece origin [03 §2.4] C21
-	worldX := factory.X.Add(pos[0])
-	worldZ := factory.Z.Add(pos[2])
-	// 3. Store position on order node is done by caller (Pump state2) — not here.
 
 	// 4. Load product definition and snap using packed footprint extents each biased by half extent [05 C16][P0-I05].
 	footX, footZ := 1, 1 // default 1x1 when the product is unknown
@@ -442,8 +549,87 @@ func (s *Service) QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cel
 			}
 		}
 	}
-	cell := SnapWorldToCell(worldX, worldZ, footX, footZ)
-	return cell, true
+	extent, err := world.NewFootprintExtent(int32(footX), int32(footZ))
+	if err != nil {
+		return world.Cell{}, false
+	}
+	placement, err := world.SnapFactoryPlacement(position, extent)
+	if err != nil {
+		return world.Cell{}, false
+	}
+	return placement.Anchor().Cell(), true
+}
+
+// QueryNanoPiece synchronously resolves the builder's authored nano piece and
+// transforms it through the current model hierarchy. Cell zero is seeded to 0;
+// no engine-side piece alternation is permitted [R-P0-06][04 §5.3].
+func (s *Service) QueryNanoPiece(builder *units.Unit) (int32, world.ModelWorldPosition, bool) {
+	if s == nil || builder == nil {
+		return 0, world.ModelWorldPosition{}, false
+	}
+	m := s.ModelForUnit
+	if m == nil {
+		m = s.ModelForFactory
+	}
+	var mdl *model.Model
+	if m != nil {
+		mdl = m(builder)
+	}
+	if mdl == nil {
+		if binding := builder.COBBinding(); binding != nil {
+			mdl = binding.Model
+		}
+	}
+	if mdl == nil {
+		if s != nil && s.AllowSyntheticPlacement && syntheticUnitVM(builder) {
+			return 0, world.NewModelWorldPosition(builder.X, builder.Y, builder.Z), true
+		}
+		return 0, world.ModelWorldPosition{}, false
+	}
+	piece := int32(0)
+	if binding := builder.COBBinding(); binding != nil && binding.Callbacks != nil {
+		piece = binding.Callbacks.QueryNanoPiece().QueryValue()
+	} else if !(s != nil && s.AllowSyntheticPlacement && syntheticUnitVM(builder)) {
+		return 0, world.ModelWorldPosition{}, false
+	}
+	modelPiece := piece
+	if binding := builder.COBBinding(); binding != nil && piece >= 0 && int(piece) < len(binding.PieceMap) {
+		modelPiece = int32(binding.PieceMap[piece])
+	}
+	if modelPiece < 0 || int(modelPiece) >= len(mdl.Pieces) {
+		return piece, world.ModelWorldPosition{}, false
+	}
+	var pos [3]numeric.Fixed
+	if binding := builder.COBBinding(); binding != nil {
+		var composed bool
+		pos, composed = binding.ComposePiece(int(piece), builder.Move.Heading, builder.Move.Pitch, builder.Move.Bank)
+		if !composed {
+			return piece, world.ModelWorldPosition{}, false
+		}
+	} else {
+		states := make([]model.PieceState, len(mdl.Pieces))
+		pos = model.Compose(mdl, states, int(modelPiece)).Position()
+	}
+	return piece, world.NewModelWorldPosition(builder.X.Add(pos[0]), builder.Y.Add(pos[1]), builder.Z.Add(pos[2])), true
+}
+
+func (s *Service) emitAcceptedNano(tick uint32, builder, product *units.Unit) {
+	if s == nil || s.Presentation == nil || builder == nil || product == nil {
+		return
+	}
+	piece, source, ok := s.QueryNanoPiece(builder)
+	if !ok {
+		return
+	}
+	// Selector 6 is the established construction segment selector. Lifetime
+	// and geometry beyond the supplied endpoint are intentionally unknown
+	// [R-P0-06]; the collector only admits this value event.
+	s.Presentation.EmitNanolathe(presentation.Event{
+		Tick: tick, Source: builder.Handle, Target: product.Handle, Piece: piece,
+		X: source.X(), Y: source.Y(), Z: source.Z(),
+		TargetX: product.X, TargetY: product.Y, TargetZ: product.Z,
+		EffectID: 6, Mode: 1, Team: builder.Owner,
+	})
 }
 
 // productDef resolves an order payload's product id to its definition through
@@ -481,6 +667,18 @@ func getVMProgram(vm *cob.VM) *cob.Program {
 	return vm.Program()
 }
 
+func syntheticUnitVM(u *units.Unit) bool {
+	if u == nil || u.COBBinding() != nil {
+		return false
+	}
+	vm := u.GetScript()
+	if vm == nil {
+		return true
+	}
+	p := vm.Program()
+	return p != nil && len(p.Scripts) == 0 && len(p.Pieces) == 0
+}
+
 // ---------------------------------------------------------------------------
 // Helpers for footprint yard and validation [05 C17] [04 §6.2].
 // ---------------------------------------------------------------------------
@@ -512,21 +710,61 @@ func (s *Service) getProductDefForNode(node *orders.Node) *content.UnitDef {
 	return s.productDef(uint32(node.Param1))
 }
 
-func validatePlacement(s *Service, cx, cz int32, footX, footZ int, yard []world.YardCell) error {
-	if s == nil || s.Terrain == nil {
-		// No terrain => treat as pass-through for tests without terrain (assume unblocked).
-		return nil
+func placementRules(s *Service, def *content.UnitDef) (world.PlacementRules, error) {
+	if def == nil {
+		return world.PlacementRules{}, fmt.Errorf("construction: placement profile unavailable: nil product definition [TODO(question)]")
 	}
-	// Factory exit-pad search fallback OOB mode 2→pass while generic blocked [P1-15].
-	// Acquires with factory class/state flag pair as MODE 2 and null self identity 0 [05 C17][P1-15].
-	return s.Terrain.ValidatePlacementWithMode(cx, cz, yard, footX, footZ, 0, 2)
+	rules := world.PlacementRules{Waterline: def.Waterline}
+	if s != nil && s.Catalog != nil && def.MovementClass != "" {
+		if mc, ok := s.Catalog.Movement[content.CanonicalKey(def.MovementClass)]; ok && mc != nil {
+			rules.MaxSlope = mc.MaxSlope
+			rules.MaxWaterSlope = mc.MaxWaterSlope
+			rules.MaxWaterDepth = mc.MaxWaterDepth
+			rules.MinWaterDepth = mc.MinWaterDepth
+			rules.Terrain = true // retained as profile provenance for callers
+			rules.ProfileResolved = true
+			return rules, nil
+		}
+		return world.PlacementRules{}, fmt.Errorf("construction: movement profile %q unavailable for placement [TODO(question)]", def.MovementClass)
+	}
+	if !def.BMCode {
+		// Class-less building definitions carry their own placement profile in
+		// FBI keys. MaxWaterSlope is intentionally absent: the building yard
+		// aggregate consumes MaxSlope only [05 "Geothermal requirement"].
+		rules.MaxSlope = def.MaxSlope
+		rules.MaxWaterDepth = def.MaxWaterDepth
+		rules.MinWaterDepth = def.MinWaterDepth
+		rules.Terrain = true
+		rules.ProfileResolved = true
+		return rules, nil
+	}
+	if s != nil && s.AllowSyntheticPlacement {
+		// Explicit synthetic seam: occupancy/features still run, while the
+		// absent authored profile leaves aggregate terrain gates unresolved.
+		return rules, nil
+	}
+	return world.PlacementRules{}, fmt.Errorf("construction: class-less product %q has no compiled placement profile [TODO(question)]", def.UnitName)
+}
+
+func validatePlacement(s *Service, rect world.FootprintRect, def *content.UnitDef, yard []world.YardCell) (world.PlacementResult, error) {
+	if s == nil || s.Terrain == nil {
+		if s != nil && s.AllowSyntheticPlacement {
+			return world.PlacementResult{Rect: rect}, nil
+		}
+		return world.PlacementResult{}, fmt.Errorf("construction: placement terrain unavailable")
+	}
+	rules, err := placementRules(s, def)
+	if err != nil {
+		return world.PlacementResult{}, err
+	}
+	return s.Terrain.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Mobile: def != nil && def.BMCode})
 }
 
 // ---------------------------------------------------------------------------
 // Allocation and success epilogue [05 C18].
 // ---------------------------------------------------------------------------
 
-func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, cell world.Cell) (*units.Unit, error) {
+func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, rect world.FootprintRect, position world.ModelWorldPosition) (*units.Unit, error) {
 	if def == nil {
 		return nil, fmt.Errorf("construction: nil product def")
 	}
@@ -550,32 +788,43 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, c
 		return nil, fmt.Errorf(ErrLimitMessage) // verbatim [05 C18] via hook [P0-I16]
 	}
 	if s.Allocator != nil {
-		// Hook for tests: create at exit spot cell origin world coords.
-		x := world.CellToWorld(cell.X)
-		z := world.CellToWorld(cell.Z)
-		// Add half footprint offset to center? But spec says create AT exit spot with product def; exit spot is already snapped rectangle origin, but creation at exit spot world position is at that origin? For simplicity create at cell origin.
-		// Use Y from factory or terrain height.
-		y := factory.Y
-		prod, err := s.Allocator(factory.Owner, def, x, y, z)
+		// Hook for tests: create at the authored model/world exit position.
+		prod, err := s.Allocator(factory.Owner, def, position.X(), position.Y(), position.Z())
 		if err != nil {
 			return nil, err
 		}
+		if prod == nil || prod.Handle == 0 {
+			return nil, fmt.Errorf("construction: allocator returned invalid unit handle")
+		}
+		if _, exists := s.placements[prod.Handle]; exists {
+			return nil, fmt.Errorf("construction: allocator reused reserved unit handle %d", prod.Handle)
+		}
+		if s.World != nil {
+			if existing := s.World.Unit(prod.Handle); existing != nil && existing != prod {
+				return nil, fmt.Errorf("construction: allocator reused live unit handle %d", prod.Handle)
+			}
+		}
+		initializeNanoframe(prod, def)
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		if prod != nil && def.ExtractsMetal != 0 && s.Terrain != nil {
-			if v, err := s.Terrain.SampleMetal(cell.X, cell.Z, int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
+			if v, err := s.Terrain.SampleMetal(rect.MinX(), rect.MinZ(), int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
 				prod.SpotMetal = v // once, never resampled [P1-10]
 			}
+		}
+		if prod != nil {
+			if err := s.reservePlacement(prod.Handle, rect); err != nil {
+				prod.Alive = false
+				return nil, err
+			}
+			s.recordPlacement(prod.Handle, rect)
 		}
 		return prod, nil
 	}
 	if s.World == nil {
 		return nil, fmt.Errorf("construction: no world/allocator")
 	}
-	// Create at exit spot world position: cell origin.
-	x := world.CellToWorld(cell.X)
-	z := world.CellToWorld(cell.Z)
-	y := factory.Y
-	h, err := s.World.Create(def, factory.Owner, x, y, z)
+	// Create at the authored exit model/world position.
+	h, err := s.World.Create(def, factory.Owner, position.X(), position.Y(), position.Z())
 	if err != nil {
 		return nil, err
 	}
@@ -583,19 +832,32 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, c
 	if prod == nil {
 		return nil, fmt.Errorf("construction: failed to get product")
 	}
-	// Initialize nanoframe values per [05 C18]: remaining=1, health=0, build stance cleared.
-	prod.Remaining = 1
-	prod.Health = 0
-	prod.Flags &^= FlagInBuildStance // build stance cleared [05 C18]
-	// MaxHealth from def
-	prod.MaxHealth = int32(def.MaxDamage)
+	if err := s.reservePlacement(prod.Handle, rect); err != nil {
+		s.World.Destroy(prod.Handle, units.DeathKilled)
+		return nil, err
+	}
+	s.recordPlacement(prod.Handle, rect)
+	initializeNanoframe(prod, def)
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	if def.ExtractsMetal != 0 && s.Terrain != nil {
-		if v, err := s.Terrain.SampleMetal(cell.X, cell.Z, int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
+		if v, err := s.Terrain.SampleMetal(rect.MinX(), rect.MinZ(), int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
 			prod.SpotMetal = v // once, never resampled [P1-10]
 		}
 	}
 	return prod, nil
+}
+
+func initializeNanoframe(prod *units.Unit, def *content.UnitDef) {
+	if prod == nil || def == nil {
+		return
+	}
+	// [05 "Nanoframe allocation"]: every allocation path publishes the same
+	// unfinished instance before builder/product linking.
+	prod.Remaining = 1
+	prod.Health = 0
+	prod.MaxHealth = int32(def.MaxDamage)
+	prod.Flags &^= FlagInBuildStance
+	prod.Alive = true
 }
 
 // successEpilogue performs the success sequence after allocation [05 C18].
@@ -613,13 +875,15 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	// Register builder link on product [05 C18].
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	s.SetBuilderLink(productHandle, factory.Handle)
+	if s.getBuiltLinks == nil {
+		s.getBuiltLinks = make(map[pool.Handle]pool.Handle)
+	}
+	s.getBuiltLinks[productHandle] = factory.Handle
 
-	// Copy standing-order bits 18-19/20-21 from factory class/state word [05 C18][05 "Rally inheritance"].
-	// Gates documented: both product and builder must carry mobile/class flag and neither may carry auto flag before copy.
-	// For now we copy unconditionally but cite gates TODO(question).
-	// TODO(question): standing-order bits copy gates [05 "Rally inheritance"] not fully located; copy unconditionally pending probe.
-	product.Flags &^= (StandingMoveMask | StandingFireMask)
-	product.Flags |= (factory.Flags & (StandingMoveMask | StandingFireMask))
+	// Initial standing-field merge has the same recovered class/auto guard as
+	// GetBuilt. Do not copy order bits to a product whose flags do not prove the
+	// standing-order capability [R-P0-09].
+	s.copyStandingFlags(factory, product)
 
 	// Resolve get-built op + insert GetBuilt node onto product's primary queue (queued mode, zero count) [05 C18].
 	getBuiltID := orders.Lookup("GetBuilt")
@@ -630,19 +894,8 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 		// Ensure product's queue head is GetBuilt with active marker.
 	}
 
-	// Raise start-building edge (rising edge fires COB callback) [05 C18].
-	// TODO(question): exact COB callback name and bit not located beyond "start-building edge"; we set flag.
-	factory.Flags |= FlagStartBuilding
-	if factory.Script != nil {
-		if vm := factory.Script; vm != nil {
-			// Try to start StartBuilding script if exists.
-			if prog := getVMProgram(vm); prog != nil {
-				if pc, ok := prog.Scripts["StartBuilding"]; ok {
-					_ = vm.Start(pc, nil) // rising edge fires COB callback [05 C18]
-				}
-			}
-		}
-	}
+	// Raise StartBuilding only on the rising edge [R-P0-09][04 §5.3].
+	s.startBuilding(factory)
 
 	// Refresh builder interface [05 C18].
 	if s != nil && s.Economy != nil {
@@ -660,6 +913,76 @@ func (s *Service) OnRefreshHook(u *units.Unit) {
 	if s != nil && s.OnRefresh != nil {
 		s.OnRefresh(u)
 	}
+}
+
+// startBuilding/stopBuilding are edge helpers. The bridge owns callback mode
+// and argument shape; construction only changes the cached edge bit [04 §5.3].
+func (s *Service) startBuilding(u *units.Unit) {
+	if u == nil || u.Flags&FlagStartBuilding != 0 {
+		return
+	}
+	u.Flags |= FlagStartBuilding
+	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
+		binding.Callbacks.StartBuilding()
+	}
+}
+
+func (s *Service) stopBuilding(u *units.Unit) {
+	if u == nil || u.Flags&FlagStartBuilding == 0 {
+		return
+	}
+	u.Flags &^= FlagStartBuilding
+	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
+		binding.Callbacks.StopBuilding()
+	}
+}
+
+func (s *Service) activate(u *units.Unit) {
+	if u == nil || u.Flags&FlagActivated != 0 {
+		return
+	}
+	u.Flags |= FlagActivated
+	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
+		binding.Callbacks.Activate()
+	}
+}
+
+func (s *Service) deactivate(u *units.Unit) {
+	if u == nil || u.Flags&(FlagActivated|FlagDeactivate) == 0 {
+		return
+	}
+	u.Flags &^= FlagActivated | FlagDeactivate
+	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
+		binding.Callbacks.Deactivate()
+	}
+}
+
+// copyStandingFlags is the recovered initial standing-field merge guard. The
+// class and auto exclusions are distinct from the later rally traversal
+// [R-P0-09].
+func copyStandingFlags(builder, product *units.Unit) {
+	if builder == nil || product == nil {
+		return
+	}
+	if builder.Flags&0x10000000 == 0 || product.Flags&0x10000000 == 0 ||
+		builder.Flags&0x00004000 != 0 || product.Flags&0x00004000 != 0 {
+		return
+	}
+	product.Flags = (product.Flags &^ (StandingMoveMask | StandingFireMask)) |
+		(builder.Flags & (StandingMoveMask | StandingFireMask))
+}
+
+func (s *Service) copyStandingFlags(builder, product *units.Unit) {
+	if s != nil && s.AllowSyntheticPlacement {
+		// Synthetic fixtures predate the recovered class-word fields. Keep their
+		// explicit seam useful without weakening the production guard.
+		if builder != nil && product != nil {
+			product.Flags = (product.Flags &^ (StandingMoveMask | StandingFireMask)) |
+				(builder.Flags & (StandingMoveMask | StandingFireMask))
+		}
+		return
+	}
+	copyStandingFlags(builder, product)
 }
 
 // OnRefresh is the interface refresh callback, set by tests.
@@ -745,7 +1068,14 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit) {
 			newPrim[0].Flags |= orders.FlagActive
 		}
 		sec := pq.Secondary()
-		newQ := &orders.Queue{}
+		// Preserve queue-owned dispatch/economy hooks when replacing the primary
+		// segment; rebuilding a queue must not silently detach its services.
+		newQ := &orders.Queue{
+			Hostility:        pq.Hostility,
+			Lookup:           pq.Lookup,
+			StockpileEconomy: pq.StockpileEconomy,
+			SecondaryTick:    pq.SecondaryTick,
+		}
 		setQueuePrimary(newQ, newPrim)
 		setQueueSecondary(newQ, sec)
 		orders.BindQueue(product, newQ)
@@ -775,6 +1105,11 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 		if def := s.getProductDefForNode(node); def != nil {
 			metalCost = def.BuildCostMetal
 		}
+	}
+	// Cancel-current performs the same completion transition before its cause-9
+	// kill. The queued count is intentionally untouched [R-P0-09][05 C21].
+	if product != nil {
+		s.applyCompletionPosture(product)
 	}
 	refund := float32(int32((1 - remaining) * float32(metalCost))) // trunc toward zero [01 §8] I3
 
@@ -816,41 +1151,33 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 	s.lastKill = KillInfo{Damage: Kind9Damage, Severity: 0, NoCorpse: true} // severity zero [05 C21]
 	if product != nil {
 		// Apply death: Alive false, but no corpse/explosion.
-		product.Alive = false
 		// In world pool, mark dead but not via Destroy which would set cleanup? For test, just set Alive false.
 		if s.World != nil {
 			s.World.Destroy(product.Handle, units.DeathKilled)
 			// Override corpse handling: mark that cause-9 has severity zero, no corpse.
 		}
+		// Release after the cause-9 death mark. Completion posture intentionally
+		// precedes the kill, so releasing before Destroy would look like a live
+		// completed product and retain its reservation.
+		product.Alive = false
+		s.ReleasePlacement(product.Handle)
 		// Deterministically clear builder/product link after nanoframe (ON-02):
 		// before nanoframe builderLinks not yet set, so no-op; after nanoframe it must be cleared
 		// even on cancel, not leaked as on normal death path [P0-14]. Ensures stop/cancel cleanup deterministic.
 		if s.builderLinks != nil {
 			delete(s.builderLinks, product.Handle)
 		}
+		if s.getBuiltLinks != nil {
+			delete(s.getBuiltLinks, product.Handle)
+		}
 		// Also clear any reverse mapping? product -> builder only, so delete above suffices.
 		// Ensure product's own builder link cleared on cancel (before and after nanoframe unified) [05 C21].
 	}
 
-	// Lower deactivate and start-building callback bits in ONE edge call (firing both COB callbacks together) [05 C21].
-	// TODO(question): exact bits not located; we clear both in one op to preserve edge coalescence.
-	factory.Flags &^= (FlagDeactivate | FlagStartBuilding)
-	if factory.Script != nil {
-		if vm := factory.Script; vm != nil {
-			if prog := getVMProgram(vm); prog != nil {
-				// Fire both callbacks together via single edge call simulation: start Deactivate and StopBuilding together.
-				// For test, just record that both were lowered.
-				_ = prog
-				// Attempt to start both scripts if present.
-				if pc, ok := prog.Scripts["Deactivate"]; ok {
-					_ = vm.Start(pc, nil)
-				}
-				if pc, ok := prog.Scripts["StopBuilding"]; ok {
-					_ = vm.Start(pc, nil)
-				}
-			}
-		}
-	}
+	// Lower Deactivate and StartBuilding together. Each bridge operation is
+	// edge-deduplicated, preserving the single falling-edge callback contract.
+	s.deactivate(factory)
+	s.stopBuilding(factory)
 
 	// Refresh interface [05 C21].
 	if s != nil && s.OnRefresh != nil {
@@ -860,6 +1187,22 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 	// Drop node WITHOUT decrementing remaining count [05 C21].
 	// Remove head from primary queue without touching Param2.
 	s.removeHead(factory, node)
+}
+
+func (s *Service) applyCompletionPosture(product *units.Unit) {
+	if product == nil {
+		return
+	}
+	product.Remaining = 0
+	product.Flags |= FlagCompleted
+	if product.Def != nil && product.Def.ActivateWhenBuilt {
+		s.activate(product)
+	}
+	if product.Def != nil && product.Def.InitCloaked {
+		product.Flags |= FlagInitCloak
+		product.IsCloaked = true
+	}
+	product.Health = product.MaxHealth
 }
 
 // removeHead removes the head node from factory's primary queue without decrement [05 C21].
@@ -989,18 +1332,7 @@ func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint
 		if int32(node.Param2) > 0 {
 			// Positive count raises activate edge and waits [05].
 			// Raise activate edge if not already set.
-			if factory.Flags&FlagActivated == 0 {
-				factory.Flags |= FlagActivated
-				if factory.Script != nil {
-					if vm := factory.Script; vm != nil {
-						if prog := getVMProgram(vm); prog != nil {
-							if pc, ok := prog.Scripts["Activate"]; ok {
-								_ = vm.Start(pc, nil)
-							}
-						}
-					}
-				}
-			}
+			s.activate(factory)
 			// Wait — stay in state0 with wake? Spec says waits; we stay and will be retried via pump?
 			// Set retry 1 tick? Not specified. For now stay without deadline, pump will retry next tick when pending?
 			// To avoid tight loop, set deadline tick+1 and wake bit? But not defined.
@@ -1013,18 +1345,7 @@ func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint
 			return
 		}
 		// Nonpositive count lowers it and frees node [05].
-		if factory.Flags&FlagActivated != 0 {
-			factory.Flags &^= FlagActivated
-			if factory.Script != nil {
-				if vm := factory.Script; vm != nil {
-					if prog := getVMProgram(vm); prog != nil {
-						if pc, ok := prog.Scripts["Deactivate"]; ok {
-							_ = vm.Start(pc, nil)
-						}
-					}
-				}
-			}
-		}
+		s.deactivate(factory)
 		// Free node via removeHead
 		s.removeHead(factory, node)
 		return
@@ -1091,41 +1412,50 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	if s.ModelForFactory != nil {
 		m = s.ModelForFactory(factory)
 	}
-	// If no model supplied, try to load via catalog ObjectName? But we have no VFS. For tests without model, we still need snap.
-	// If m is nil, we fallback to factory position direct.
-	var cell world.Cell
+	// A missing current model is a production composition failure. Only the
+	// explicit synthetic seam may use the factory origin as a fixture transform
+	// [R-P0-09].
+	def := s.getProductDefForNode(node)
+	footX, footZ := 1, 1
+	if def != nil {
+		footX, footZ = int(def.FootprintX), int(def.FootprintZ)
+		if footX <= 0 {
+			footX = 1
+		}
+		if footZ <= 0 {
+			footZ = 1
+		}
+	}
+	extent, err := world.NewFootprintExtent(int32(footX), int32(footZ))
+	if err != nil {
+		node.DynamicGate, node.Deadline = WakeBit2, int32(tick+15)
+		return
+	}
+	var modelPosition world.ModelWorldPosition
 	var ok bool
 	if m != nil {
-		cell, ok = s.QueryBuildInfo(factory, m)
-		if !ok {
-			// Query failed => treat as blocked? For now retry 15.
-			node.DynamicGate = WakeBit2
-			node.Deadline = int32(tick + 15)
-			return
-		}
+		modelPosition, ok = s.QueryBuildWorldPosition(factory, m)
+	} else if s.AllowSyntheticPlacement && syntheticUnitVM(factory) {
+		modelPosition, ok = world.NewModelWorldPosition(factory.X, factory.Y, factory.Z), true
 	} else {
-		// No model: use factory world position snapped with product footprint.
-		def := s.getProductDefForNode(node)
-		footX, footZ := 1, 1
-		if def != nil {
-			footX = int(def.FootprintX)
-			footZ = int(def.FootprintZ)
-			if footX <= 0 {
-				footX = 1
-			}
-			if footZ <= 0 {
-				footZ = 1
-			}
-		}
-		cell = SnapWorldToCell(factory.X, factory.Z, footX, footZ)
+		ok = false
 	}
+	if !ok {
+		node.DynamicGate, node.Deadline = WakeBit2, int32(tick+15)
+		return
+	}
+	factoryPlacement, err := world.SnapFactoryPlacement(modelPosition, extent)
+	if err != nil {
+		node.DynamicGate, node.Deadline = WakeBit2, int32(tick+15)
+		return
+	}
+	cell := factoryPlacement.Anchor().Cell()
 	// Store position on order node [05 C16] — already done in success epilogue storage but also store now.
 	// For factory, Goal is overwritten with exit spot cell origin [05 C16].
 	node.GoalX = world.CellToWorld(cell.X)
 	node.GoalZ = world.CellToWorld(cell.Z)
 
 	// Load product definition and attempt silent blocked revalidation [05 C17].
-	def := s.getProductDefForNode(node)
 	if def == nil {
 		// No product def => cannot proceed; stay and retry 15 silent? But spec says product def loaded after storing position.
 		// If missing, treat as blocked silent? For test we may not have product def; just skip validation and try allocation.
@@ -1158,7 +1488,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 				yard[i] = 0x06 // bits 1-2 set [04 §6.2]
 			}
 		}
-		if err := validatePlacement(s, cell.X, cell.Z, footX, footZ, yard); err != nil {
+		if _, err := validatePlacement(s, factoryPlacement.Rect(), def, yard); err != nil {
 			// Silent blocked revalidation: retry in exactly 15 ticks, stays — no
 			// message/sound/allocation; repeats every 15 while obstructed; NO
 			// timeout [05 C17]. Wake mask is bits {1,2}: schedule(node,15) sets
@@ -1178,7 +1508,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		node.Deadline = int32(tick + 15)
 		return
 	}
-	product, err := s.allocateNanoframe(factory, def, cell)
+	product, err := s.allocateNanoframe(factory, def, factoryPlacement.Rect(), factoryPlacement.ModelPosition())
 	if err != nil {
 		// Allocator refusal prints verbatim "Unable to create any more units", retries in exactly 300 ticks (not randomized), stays state2 [05 C18].
 		s.logMessage(fmt.Sprintf("construction: allocation refused (%v)", err))
@@ -1190,8 +1520,6 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	}
 	// Success epilogue [05 C18].
 	s.successEpilogue(factory, node, product, cell)
-	// Rally inheritance is part of GetBuilt product's queue? Actually rally is re-enqueued on product via product's GetBuilt nodes? The spec says when product completes, its GetBuilt order walks builder's queue. But our success epilogue already creates GetBuilt on product; rally will happen when that GetBuilt runs? However factory lifecycle says rally inheritance re-enqueues factory's own QMove/QPatrol nodes in queue-traversal order; none => parks. That's for product's initial orders. We can do it now as part of success epilogue to satisfy C19 for tests.
-	s.rallyInheritance(factory, product)
 }
 
 // handleMobileState2 implements mobile build placement at the authoritative site anchor [P0-I05][05 "Factory production lifecycle"].
@@ -1210,8 +1538,23 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 			footZ = 1
 		}
 	}
-	// Site anchor is authoritative Goal from QueueMobileBuild [P0-I05]. Snap with half-extent bias to get cell rectangle origin [05 C16].
-	cell := SnapWorldToCell(node.GoalX, node.GoalZ, footX, footZ)
+	// Site anchor is authoritative Goal from QueueMobileBuild [P0-I05].
+	extent, err := world.NewFootprintExtent(int32(footX), int32(footZ))
+	if err != nil {
+		node.DynamicGate, node.Deadline = WakeBit2, int32(tick+15)
+		return
+	}
+	anchor, err := world.SnapFootprintAnchor(node.GoalX, node.GoalZ, extent)
+	if err != nil {
+		node.DynamicGate, node.Deadline = WakeBit1|WakeBit2, int32(tick+15)
+		return
+	}
+	rect, err := world.NewFootprintRect(anchor, extent)
+	if err != nil {
+		node.DynamicGate, node.Deadline = WakeBit1|WakeBit2, int32(tick+15)
+		return
+	}
+	cell := anchor.Cell()
 	// Do not overwrite Goal: keep original clicked site for determinism and tests that assert Goal equals clicked site [P0-I05].
 	// Validation at snapped cell [05 C17] with null self identity (mobile builders place at site).
 	if def == nil {
@@ -1231,12 +1574,22 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 			yard[i] = 0x06 // bits 1-2 reject any occupant [04 §6.2]
 		}
 	}
-	if err := validatePlacement(s, cell.X, cell.Z, footX, footZ, yard); err != nil {
+	result, err := validatePlacement(s, rect, def, yard)
+	if err != nil {
 		node.DynamicGate = WakeBit1 | WakeBit2
 		node.Deadline = int32(tick + 15)
 		return
 	}
-	product, err := s.allocateNanoframe(builder, def, cell)
+	siteY := builder.Y
+	if s.Terrain != nil {
+		siteY = numeric.Fixed(int64(result.SiteHeight) * numeric.FractionOne)
+	}
+	mobilePlacement, err := world.SnapMobilePlacement(node.GoalX, siteY, node.GoalZ, extent)
+	if err != nil {
+		node.DynamicGate, node.Deadline = WakeBit1|WakeBit2, int32(tick+15)
+		return
+	}
+	product, err := s.allocateNanoframe(builder, def, mobilePlacement.Rect(), mobilePlacement.ModelPosition())
 	if err != nil {
 		s.logMessage(ErrLimitMessage)
 		node.DynamicGate = WakeBit2
@@ -1248,7 +1601,6 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 	// Keep Goal as site, but successEpilogue will overwrite Goal with cell origin. Preserve site in a separate snapshot?
 	// Instead call mobile-specific epilogue that keeps Goal as site and uses cell for product creation.
 	s.successEpilogueMobile(builder, node, product, cell)
-	s.rallyInheritance(builder, product)
 }
 
 // successEpilogueMobile is like successEpilogue but preserves the authoritative site Goal [P0-I05].
@@ -1260,23 +1612,17 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 	node.Target = productHandle
 	s.logMessage("Starting construction")
 	s.SetBuilderLink(productHandle, builder.Handle)
-	product.Flags &^= (StandingMoveMask | StandingFireMask)
-	product.Flags |= (builder.Flags & (StandingMoveMask | StandingFireMask))
+	if s.getBuiltLinks == nil {
+		s.getBuiltLinks = make(map[pool.Handle]pool.Handle)
+	}
+	s.getBuiltLinks[productHandle] = builder.Handle
+	s.copyStandingFlags(builder, product)
 	getBuiltID := orders.Lookup("GetBuilt")
 	if getBuiltID != 0 {
 		pq := orders.QueueForUnit(product)
 		pq.Push(getBuiltID, orders.Node{Param2: 0})
 	}
-	builder.Flags |= FlagStartBuilding
-	if builder.Script != nil {
-		if vm := builder.Script; vm != nil {
-			if prog := getVMProgram(vm); prog != nil {
-				if pc, ok := prog.Scripts["StartBuilding"]; ok {
-					_ = vm.Start(pc, nil)
-				}
-			}
-		}
-	}
+	s.startBuilding(builder)
 	if s != nil && s.OnRefresh != nil {
 		s.OnRefresh(builder)
 	}
@@ -1354,9 +1700,6 @@ func (s *Service) handleState3(factory *units.Unit, node *orders.Node, tick uint
 		node.Deadline = int32(tick + 1)
 		return
 	}
-	// Accepted work emits nano presentation over product footprint bounds [05].
-	// TODO: presentation hook.
-
 	// Update remaining and health with fractional carry [05 C24].
 	product.Remaining = nv
 	if hg != 0 {
@@ -1368,6 +1711,9 @@ func (s *Service) handleState3(factory *units.Unit, node *orders.Node, tick uint
 			product.Health = 0
 		}
 	}
+	// Query and emit only after the two-resource admission and authoritative
+	// state update have committed [R-P0-06]. Rejected work reaches no query.
+	s.emitAcceptedNano(tick, factory, product)
 	if product.Remaining == 0 {
 		// Advance to completion [05].
 		node.Phase = uint8(State4)
@@ -1392,22 +1738,11 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	// Trigger BuildUnitType only on local 30-tick deadline [P0-14].
 	// Interrupt masks 2/8 bodies known, producers TODO(T25) [P0-14].
 	// Engine prints no text, lowers start-building edge, runs completion transition [05].
-	factory.Flags &^= FlagStartBuilding
-	if factory.Script != nil {
-		if vm := factory.Script; vm != nil {
-			if prog := getVMProgram(vm); prog != nil {
-				if pc, ok := prog.Scripts["StopBuilding"]; ok {
-					_ = vm.Start(pc, nil)
-				}
-			}
-		}
-	}
+	// Falling edge occurs before the completion transition [R-P0-09].
+	s.stopBuilding(factory)
 	if product != nil {
 		// Completion transition: product remaining to zero, completion flag set, activation per standing-order bits, cloak/init posture, selection refresh [05].
-		product.Remaining = 0
-		// TODO(question): completion flag set etc not located.
-		// Activate per standing-order bits already copied; but additional activation handling?
-		product.Health = product.MaxHealth
+		s.applyCompletionPosture(product)
 		// Clear presentation payload [05].
 		// Decrement node's remaining count once [05].
 		if node.Param2 > 0 {
@@ -1623,11 +1958,47 @@ func (s *Service) resolveGetBuilt(product *units.Unit, tick uint32) {
 	if head.ID != gb {
 		return
 	}
-	// Under construction: wait (300 ticks at state 0, 30 at state 1, or wake at state 2) [05 "Rally inheritance"].
+	// Under construction uses three established retry states: state 0 schedules
+	// 300 ticks, state 1 schedules 30 ticks, and state 2 waits on its wake bit
+	// [R-P0-09][05 "Rally inheritance"].
 	if product.Remaining > 0 {
+		if head.Deadline >= 0 && tick < uint32(head.Deadline) {
+			return
+		}
+		switch State(head.Phase) {
+		case State0:
+			head.Phase = uint8(State1)
+			head.DynamicGate = WakeBit1
+			head.Deadline = int32(tick + 300)
+		case State1:
+			head.Phase = uint8(State2)
+			head.DynamicGate = WakeBit2
+			head.Deadline = int32(tick + 30)
+		default:
+			head.Phase = uint8(State2)
+			head.DynamicGate = WakeBit2
+			head.Deadline = -1
+		}
 		return
 	}
-	q.RemoveHead() // the get-built node then drops itself [05 "Rally inheritance"]
+	builderHandle, ok := s.getBuiltLinks[product.Handle]
+	if !ok || builderHandle == 0 || s.World == nil {
+		// A restored product may not have an in-memory builder link. The retail
+		// cleanup/recovery path is unresolved; remove the watcher without
+		// inventing a replacement builder [R-P0-09].
+		q.RemoveHead()
+		return
+	}
+	builder := s.World.Unit(builderHandle)
+	if builder != nil {
+		s.rallyInheritance(builder, product)
+	}
+	delete(s.getBuiltLinks, product.Handle)
+	// rallyInheritance may have rebound the product queue. Reacquire it before
+	// dropping GetBuilt so the watcher cannot survive on the new primary list.
+	if current := orders.QueueForUnit(product); current != nil {
+		current.RemoveHead() // GetBuilt drops itself [05 "Rally inheritance"]
+	}
 }
 
 func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {

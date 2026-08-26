@@ -37,7 +37,7 @@ func runOptions(opts Options, out, errOut *os.File) int {
 }
 
 // wantsViewer is shared by run and the Darwin entry point. On macOS the latter
-// must start CocoaRunApp on the process main thread before Kaiju creates a
+// must start CocoaRunApp on the process main thread before Ebitengine creates a
 // window; headless and dump commands must not enter the AppKit run loop.
 func wantsViewer(opts Options) bool {
 	return !opts.Headless && opts.Map != "" && opts.Dump == ""
@@ -155,7 +155,7 @@ func run(opts Options, out *os.File) error {
 		return runGameShell(opts, content)
 	}
 	// Gate 1: windowed terrain viewer when --map is set, --headless is false,
-	// and no --dump is requested. This opens the Kaiju window and draws real
+	// and no --dump is requested. This opens the Ebitengine window and draws real
 	// TNT terrain with camera pan and FNT overlay [PLAN_04A].
 	if wantsViewer(opts) {
 		if err := runViewer(opts, content); err != nil {

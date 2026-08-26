@@ -1,8 +1,8 @@
-// Translation at the Kaiju boundary into the retail token vocabulary [07 §2].
+// Translation at the Ebitengine boundary into the retail token vocabulary [07 §2].
 //
-// Nothing downstream sees Kaiju types; the input package owns the translation
-// so the session and client see only Token/MouseRecord in retail semantics
-// (PLAN_04A C5).
+// Nothing downstream sees backend-specific types; the input package owns the
+// translation so the session and client see only Token/MouseRecord in retail
+// semantics (PLAN_04A C5).
 package input
 
 // Retail token codes for special keys [07 §2].
@@ -42,10 +42,11 @@ const (
 	MsgMouseWheel   uint32 = 0x20A // no dedicated case [07 §2]
 )
 
-// TranslateKey converts a Kaiju KeyboardKey into a retail Token [07 §2].
+// TranslateKey converts the platform-neutral key vocabulary used by the
+// Ebitengine client into a retail Token [07 §2].
 //
 // Translation happens at the boundary so downstream code sees the retail token
-// vocabulary, not Kaiju types (PLAN_04A C5). The virtual-key translator cases
+// vocabulary, not backend-specific types (PLAN_04A C5). The virtual-key translator cases
 // are exact per [07 §2]: VK_PAUSE→0xF8, VK_PRIOR→0xF2, VK_NEXT→0xF3,
 // VK_END→0xF1, VK_HOME→0xF0, VK_LEFT→0xF4, VK_UP→0xF5, VK_RIGHT→0xF6,
 // VK_DOWN→0xF7, VK_INSERT→0xEE, VK_DELETE→0xEF. F-keys and Ctrl composition
@@ -119,7 +120,7 @@ func TranslateKey(key Key, ch byte, ctrl bool) Token {
 	return Token{Code: code, Char: ch, Ctrl: ctrl}
 }
 
-// TranslateMouse builds a retail MouseRecord from Kaiju mouse state [07 §2].
+// TranslateMouse builds a retail MouseRecord from Ebitengine mouse state [07 §2].
 //
 // x, y are window positions; they are truncated toward zero into int16 fields
 // matching the low/high words of the retail message position. keyState is the

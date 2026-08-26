@@ -2,7 +2,7 @@
 # Pre-dispatch and pre-merge gate. See docs/ORCHESTRATION.md §5.
 set -e
 echo "==> gofmt"
-unformatted=$(gofmt -l . | grep -v '^content/' || true)
+unformatted=$(gofmt -l . || true)
 if [ -n "$unformatted" ]; then
 	echo "not gofmt-clean:"
 	echo "$unformatted"

@@ -234,7 +234,7 @@ func TestON04_SameTickReturn_FiresSameVisit(t *testing.T) {
 	}
 }
 
-func TestON04_NoScript_ProceedsUngated(t *testing.T) {
+func TestON04_NoScript_CannotAuthorizeAim(t *testing.T) {
 	w, terrain, shooter, target := newTestWorldAndUnits(t)
 	// No VM bound (nil)
 	// Ensure shooter has no script
@@ -250,8 +250,8 @@ func TestON04_NoScript_ProceedsUngated(t *testing.T) {
 	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w1": weapon}}
 	cat.RebuildWeaponIndex()
 	svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
-	if svc.Count() != 1 {
-		t.Fatalf("no-script turret should fire (approximation TODO question) count %d traces %v", svc.Count(), traces)
+	if svc.Count() != 0 {
+		t.Fatalf("no-script turret must not authorize fire [04 §5.3], count %d traces %v", svc.Count(), traces)
 	}
 	found := false
 	for _, ev := range traces {

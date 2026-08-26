@@ -752,15 +752,21 @@ func (s *Session) authoritativeTick(tick uint32) {
 			}
 			q := orders.QueueForUnit(u)
 			if q == nil || q.LenPrimary() == 0 {
+				s.Movement.DeactivateMove(u.Handle)
 				continue
 			}
 			head := q.Head()
 			if head == nil {
+				s.Movement.DeactivateMove(u.Handle)
 				continue
 			}
 			name := orders.DescriptorFor(head.ID).Name
 			isMove := name == "Move_Ground" || name == "VTOL_Move" || name == "QMove" || name == "Patrol" || name == "QPatrol" || name == "VTOL_Patrol" || name == "RepairPatrol" || name == "VTOL_RepairPatrol"
 			if !isMove {
+				// The primary order head is authoritative.  Drop any path binding
+				// as soon as a non-move head becomes active so a late publication
+				// cannot attach to the replacement [04 §3.3][04 §7.3].
+				s.Movement.DeactivateMove(u.Handle)
 				if head.GoalX == 0 && head.GoalZ == 0 && head.Target == 0 {
 					continue
 				}
@@ -792,6 +798,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 					continue
 				}
 			}
+			targetMoved := false
 			if head.Target != 0 {
 				var tgt *units.Unit
 				if q.Lookup != nil {
@@ -801,50 +808,52 @@ func (s *Session) authoritativeTick(tick uint32) {
 					tgt = s.Units.Unit(head.Target)
 				}
 				if tgt == nil || !tgt.Alive {
-					head.MoveState = orders.MoveBlocked
-					head.PathStatus = uint32(path.StatusRejected)
-					q.RemoveHead()
-					if route := s.Movement.Routes[u.Handle]; route != nil {
-						route.Active = false
+					rejected := q.RemoveHead()
+					if rejected != nil {
+						rejected.MoveState = orders.MoveBlocked
+						rejected.PathStatus = uint32(path.StatusRejected)
 					}
-					sched.Cancel(u.Handle)
+					s.Movement.DeactivateMove(u.Handle)
 					continue
 				}
 				if tgt.X != head.GoalX || tgt.Z != head.GoalZ {
 					head.GoalX = tgt.X
 					head.GoalY = tgt.Y
 					head.GoalZ = tgt.Z
-					if route := s.Movement.Routes[u.Handle]; route != nil && route.Active {
-						route.Active = false
-						route.Dirty = true
-					}
-					sched.Cancel(u.Handle)
+					targetMoved = true
 				}
 			}
+			// Reject an impossible destination after resolving a target's current
+			// position, but before activation submits anything. A target may have
+			// moved since the node was created; the resolved position is the only
+			// goal eligible for this preflight [04 §7.3].
+			goalCell := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
+			if s.Movement != nil && s.World != nil && !s.Movement.IsGoalCellPassable(u.Handle, goalCell) {
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TracePathFailed, Handle: u.Handle, Value: int32(path.StatusRejected)})
+				rejected := q.RemoveHead()
+				if rejected != nil {
+					rejected.MoveState = orders.MoveBlocked
+					rejected.PathStatus = uint32(path.StatusRejected)
+				}
+				s.Movement.ClearPathFailure(u.Handle)
+				s.Movement.DeactivateMove(u.Handle)
+				continue
+			}
+			// Bind and submit at one boundary.  Repeated visits for the same
+			// active node do not submit again; a changed target is an explicit
+			// replan for that same node [04 §7.3].
+			if targetMoved {
+				s.Movement.ReplanMove(u, head)
+			} else {
+				s.Movement.ActivateMove(u, head)
+			}
+			head.MoveState = orders.MoveEnRoute
 			route := s.Movement.Routes[u.Handle]
 			if route != nil && route.Active {
 				continue
 			}
 			if sched.HasRequest(u.Handle) {
 				continue
-			}
-			startCell := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
-			goalCell := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
-			if s.Movement != nil && s.World != nil {
-				if !s.Movement.IsGoalCellPassable(u.Handle, goalCell) {
-					head.MoveState = orders.MoveBlocked
-					head.PathStatus = uint32(path.StatusRejected)
-					s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TracePathFailed, Handle: u.Handle, Value: int32(path.StatusRejected)})
-					q.RemoveHead()
-					if route != nil {
-						route.Active = false
-						route.Dirty = true
-						route.Status = path.StatusRejected
-					}
-					s.Movement.ClearPathFailure(u.Handle)
-					sched.Cancel(u.Handle)
-					continue
-				}
 			}
 			if s.Movement != nil && s.Movement.HasPathFailure(u.Handle) {
 				if rec, ok := s.Movement.PathFailureRecord(u.Handle); ok {
@@ -853,8 +862,6 @@ func (s *Session) authoritativeTick(tick uint32) {
 					}
 				}
 			}
-			s.Movement.SubmitMove(u.Handle, u.Owner, startCell, goalCell)
-			head.MoveState = orders.MoveEnRoute
 		}
 	}
 	// Path scheduler at researched boundary without per-unit accidental invocation [04 §7.3] C11 C12
@@ -917,6 +924,58 @@ func (s *Session) authoritativeTick(tick uint32) {
 			if ordersPump != nil {
 				res := ordersPump.PumpUnit(h, tick)
 				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceOrderPump, Handle: h, Value: int32(res.PrimaryLen)})
+			}
+			// Pumping can advance the primary head in this same visit.  Reconcile
+			// the activation boundary immediately so a stale request/route cannot
+			// be consumed by movement for the successor order.  The scheduler has
+			// already run for this tick; the replacement is therefore serviced on
+			// its next normal scheduler turn, without a second scheduler call.
+			if s.Movement != nil {
+				qActive := orders.QueueForUnit(u)
+				active := qActive.Head()
+				if active != nil {
+					activeName := orders.DescriptorFor(active.ID).Name
+					activeMove := activeName == "Move_Ground" || activeName == "VTOL_Move" || activeName == "QMove" || activeName == "Patrol" || activeName == "QPatrol" || activeName == "VTOL_Patrol" || activeName == "RepairPatrol" || activeName == "VTOL_RepairPatrol"
+					if activeMove {
+						if active.Target != 0 {
+							var target *units.Unit
+							if qActive.Lookup != nil {
+								target = qActive.Lookup(active.Target)
+							}
+							if target == nil && s.Units != nil {
+								target = s.Units.Unit(active.Target)
+							}
+							if target == nil || !target.Alive {
+								rejected := qActive.RemoveHead()
+								if rejected != nil {
+									rejected.MoveState = orders.MoveBlocked
+									rejected.PathStatus = uint32(path.StatusRejected)
+								}
+								s.Movement.DeactivateMove(h)
+							} else {
+								active.GoalX, active.GoalY, active.GoalZ = target.X, target.Y, target.Z
+							}
+						}
+						if qActive.Head() == active && s.World != nil {
+							goalCell := path.Cell{X: world.WorldToCell(active.GoalX), Z: world.WorldToCell(active.GoalZ)}
+							if !s.Movement.IsGoalCellPassable(h, goalCell) {
+								rejected := qActive.RemoveHead()
+								if rejected != nil {
+									rejected.MoveState = orders.MoveBlocked
+									rejected.PathStatus = uint32(path.StatusRejected)
+								}
+								s.Movement.DeactivateMove(h)
+							} else {
+								s.Movement.ActivateMove(u, active)
+								active.MoveState = orders.MoveEnRoute
+							}
+						}
+					} else {
+						s.Movement.DeactivateMove(h)
+					}
+				} else {
+					s.Movement.DeactivateMove(h)
+				}
 			}
 			// construction/worker action per unit (StepUnit) [05 "Factory production lifecycle"]
 			if s.Build != nil {
@@ -1026,6 +1085,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 				}
 				if s.Movement != nil {
 					s.Movement.ClearPathFailure(h)
+					s.Movement.DeactivateMove(h)
 				}
 				// Path scheduler cancel for freed handle
 				if s.Movement != nil && s.Movement.Scheduler != nil {
@@ -1362,6 +1422,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 				delete(s.Movement.Steers, h)
 				delete(s.Movement.Flights, h)
 				delete(s.Movement.Routes, h)
+				s.Movement.DeactivateMove(h)
 				if s.Movement.Scheduler != nil {
 					s.Movement.Scheduler.Cancel(h)
 				} else if s.Path != nil {

@@ -52,6 +52,7 @@ func TestRS10_MobileBuildLegalSite(t *testing.T) {
 	// Advance to nanoframe allocation: state2 with exact site
 	node.Phase = uint8(State2)
 	svc := NewService(terrain, cat, w, &economy.Service{})
+	svc.AllowSyntheticPlacement = true
 	svc.Pump(builder, 0)
 	if node.Target == 0 {
 		t.Fatalf("legal site allocation failed")
@@ -61,8 +62,9 @@ func TestRS10_MobileBuildLegalSite(t *testing.T) {
 		t.Fatalf("product nil")
 	}
 	expectedCell := SnapWorldToCell(siteX, siteZ, int(prodDef.FootprintX), int(prodDef.FootprintZ))
-	if world.WorldToCell(prod.X) != expectedCell.X || world.WorldToCell(prod.Z) != expectedCell.Z {
-		t.Fatalf("product at %d,%d want snapped validated site %d,%d", world.WorldToCell(prod.X), world.WorldToCell(prod.Z), expectedCell.X, expectedCell.Z)
+	wantX, wantZ := world.PlacementCenter(expectedCell.X, expectedCell.Z, prodDef.FootprintX, prodDef.FootprintZ)
+	if prod.X != wantX || prod.Z != wantZ {
+		t.Fatalf("product at (%d,%d) want model center (%d,%d), anchor (%d,%d)", prod.X.Raw(), prod.Z.Raw(), wantX.Raw(), wantZ.Raw(), expectedCell.X, expectedCell.Z)
 	}
 	// Builder link [05 C18]
 	if b, ok := svc.BuilderLink(prod.Handle); !ok || b != builder.Handle {
@@ -115,6 +117,7 @@ func TestRS10_MobileBuildIllegalSite(t *testing.T) {
 	node := q.Primary()[0]
 	node.Phase = uint8(State2)
 	svc := NewService(terrain, cat, w, &economy.Service{})
+	svc.AllowSyntheticPlacement = true
 	tick := uint32(100)
 	svc.Pump(builder, tick)
 	if node.Target != 0 {
@@ -265,6 +268,7 @@ func TestRS10_FactoryBlockedRetryAndLimit(t *testing.T) {
 	head := q.Primary()[0]
 	head.Phase = uint8(State2)
 	svc := NewService(terrain, cat, w, &economy.Service{})
+	svc.AllowSyntheticPlacement = true
 	svc.Pump(factory, 10)
 	if head.Deadline != int32(25) {
 		t.Fatalf("blocked retry deadline want 25 got %d", head.Deadline)
@@ -454,6 +458,7 @@ func TestRS10_SaveMidConstruction(t *testing.T) {
 	node := q.Primary()[0]
 	node.Phase = uint8(State2)
 	svc := NewService(terrain, cat, w, econ)
+	svc.AllowSyntheticPlacement = true
 	svc.Pump(builder, 10)
 	if node.Target == 0 {
 		t.Fatalf("mobile allocation failed")
@@ -574,6 +579,7 @@ func TestRS10_SaveMidConstruction(t *testing.T) {
 	headF := qf.Primary()[0]
 	headF.Phase = uint8(State2)
 	svcF := NewService(terrain2, cat, w2, &economy.Service{})
+	svcF.AllowSyntheticPlacement = true
 	svcF.Pump(factory, 100)
 	if headF.Deadline != int32(115) {
 		t.Fatalf("factory blocked deadline want 115 got %d", headF.Deadline)

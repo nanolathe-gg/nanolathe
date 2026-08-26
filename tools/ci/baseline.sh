@@ -45,7 +45,7 @@ TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date)"
 # --- run checks (capture, never abort early) ---
 set +e
 
-GOFMT_OUT="$(gofmt -l . 2>&1 | grep -v '^content/' || true)"
+GOFMT_OUT="$(gofmt -l . 2>&1 || true)"
 if [ -n "$GOFMT_OUT" ]; then
 	GOFMT_OK="false"
 	GOFMT_EXIT=1

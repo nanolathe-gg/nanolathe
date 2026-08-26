@@ -10,7 +10,7 @@ package hud
 // function that walks a slice.
 //
 // The drag truth table is duplicated locally to avoid importing the heavy
-// client package (which pulls Kaiju linkage) into hud tests [07 §9] C9.
+// client package (which pulls the Ebitengine window backend) into hud tests [07 §9] C9.
 
 const (
 	SelectionFlag     uint32 = 0x10       // [07 §9] membership bit

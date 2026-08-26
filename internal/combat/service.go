@@ -3,7 +3,6 @@ package combat
 
 import (
 	"sort"
-	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -26,51 +25,28 @@ func (s *Service) emitTrace(ev TraceEvent) {
 	s.Trace(ev)
 }
 
-// aimNameForSlot returns the Aim* function name for slotIdx [04 §5.3][06 §3.3].
-
-// categoryBits converts a retail Category token list into a 32-bit mask [02 "Unit record"] [fmt fbi] [06 §3.1].
-// Tokens are split on whitespace, lowercased, mapped via fnv32 %32 to a bit. "none" yields 0.
-func categoryBits(cat string) uint32 {
-	if cat == "" {
-		return 0
+func (s *Service) emitEvent(ev Event) {
+	if s != nil && s.Events != nil {
+		s.Events(ev)
 	}
-	lower := strings.ToLower(strings.TrimSpace(cat))
-	if lower == "" || lower == "none" {
-		return 0
-	}
-	tokens := strings.Fields(lower)
-	var bits uint32
-	for _, tok := range tokens {
-		if tok == "" || tok == "none" {
-			continue
-		}
-		h := uint32(2166136261)
-		for i := 0; i < len(tok); i++ {
-			h ^= uint32(tok[i])
-			h *= 16777619
-		}
-		bit := h % 32
-		bits |= 1 << bit
-	}
-	return bits
 }
 
-func badMaskForSlot(def *content.UnitDef, slotIdx int) uint32 {
+// aimNameForSlot returns the Aim* function name for slotIdx [04 §5.3][06 §3.3].
+
+func badMaskForSlot(def *content.UnitDef, slotIdx int) content.CategoryMask {
 	if def == nil {
-		return 0
+		return content.CategoryMask{}
 	}
-	var s string
 	switch slotIdx {
 	case 0:
-		s = def.BadTargetCategoryWPRI
+		return def.BadTargetCategoryWPRIMask
 	case 1:
-		s = def.BadTargetCategoryWSEC
+		return def.BadTargetCategoryWSECMask
 	case 2:
-		s = def.BadTargetCategoryWSPE
+		return def.BadTargetCategoryWSPEMask
 	default:
-		s = "none"
+		return content.CategoryMask{}
 	}
-	return categoryBits(s)
 }
 
 func isAllied(owner, other uint8, econ *economy.Service) bool {
@@ -139,6 +115,31 @@ func aimNameForSlot(slotIdx int) string {
 	}
 }
 
+// callbackBridgeForUnit returns the unit's strict production bridge, or a
+// session-local bridge for an explicitly synthetic test VM. Production never
+// calls raw VM.Start for researched weapon callbacks [04 §4.2][04 §5.3].
+func (s *Service) callbackBridgeForUnit(u *units.Unit) *cob.CallbackBridge {
+	if s == nil || u == nil {
+		return nil
+	}
+	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
+		return binding.Callbacks
+	}
+	vm := u.GetScript()
+	if vm == nil {
+		return nil
+	}
+	if s.bridges == nil {
+		s.bridges = make(map[pool.Handle]*cob.CallbackBridge)
+	}
+	if bridge := s.bridges[u.Handle]; bridge != nil && bridge.VM == vm {
+		return bridge
+	}
+	bridge := cob.NewCallbackBridge(vm)
+	s.bridges[u.Handle] = bridge
+	return bridge
+}
+
 // UnitStepSummary reports what one StepWeaponsForUnit visit did [ON-09 trace contract].
 // Stable integer/fixed-point state only; it observes behavior, consumes no RNG,
 // and alters no simulation decisions.
@@ -176,7 +177,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	if u.Stunned {
 		return sum
 	}
-	vm := u.GetScript()
+	bridge := s.callbackBridgeForUnit(u)
 	// --- Phase: pre-drain callback scheduling (TargetCleared + Aim) in slot order 0..2 [GAP T15] ---
 	type slotPrep struct {
 		needLatch    bool
@@ -209,8 +210,8 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 				if s.pendingAims != nil {
 					delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
 				}
-				if (clearedHeading || clearedPitch) && vm != nil {
-					_ = vm.StartByName("TargetCleared", nil)
+				if (clearedHeading || clearedPitch) && bridge != nil {
+					bridge.TargetCleared(int32(idx))
 					queuedTargetCleared = true
 				}
 				slot.Flags &^= 0x02
@@ -218,7 +219,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			}
 		}
 		if slot.Target.Kind == units.TargetNone || slot.Flags&0x02 == 0 {
-			if acquired, ok := acquireTargetForSlot(u, slot, idx, w, vis, terrain, simRNG, econ); ok {
+			if acquired, ok := acquireTargetForSlot(u, slot, idx, w, vis, terrain, simRNG, econ, catalog); ok {
 				savedYaw := slot.DesiredYaw
 				savedPitch := slot.DesiredPitch
 				savedIssue := slot.Aim.IssueBit
@@ -254,7 +255,22 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		} else {
 			tgtPos = Vec3{X: slot.Target.X, Y: 0, Z: slot.Target.Z}
 		}
-		muzzlePos := muzzleWorldPos(u, slot.MuzzlePiece)
+		// Weapon piece selection is a synchronous Q path. AimFrom* uses -1 and
+		// falls back to Query* with seed 0; SweetSpot is a separate Q query and
+		// must not be conflated with the muzzle result [R-P0-07][04 §5.3].
+		if bridge != nil {
+			piece := bridge.AimPiece(cob.WeaponSlot(idx))
+			if piece.Started && piece.QueryValue() >= 0 {
+				slot.MuzzlePiece = piece.QueryValue()
+			}
+			_ = bridge.SweetSpot()
+		}
+		muzzlePos, muzzleOK := muzzleWorldPosResolved(u, slot.MuzzlePiece)
+		if !muzzleOK {
+			// A strict production binding must resolve the queried COB piece
+			// through its model map; only synthetic/legacy seams use root fallback.
+			continue
+		}
 		dx := tgtPos.X.Sub(muzzlePos.X)
 		dy := tgtPos.Y.Sub(muzzlePos.Y)
 		dz := tgtPos.Z.Sub(muzzlePos.Z)
@@ -301,56 +317,59 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if needResult && !slot.Aim.Ready && !suppress {
 			if !slot.Aim.IssueBit {
 				weaponID := weapon.ID
-				if vm == nil {
+				if bridge == nil {
 					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_no_script"})
 					slot.Aim.IssueBit = true
-					slot.Aim.Ready = true
-					slot.Flags |= 0x01
 				} else {
-					aimName := aimNameForSlot(idx)
-					if _, ok := vm.ScriptPC(aimName); !ok {
+					key := pendingKey{Unit: u.Handle, Slot: idx}
+					if _, present := bridge.VM.ScriptPC(aimNameForSlot(idx)); !present {
 						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_function_absent"})
-						slot.Aim.IssueBit = true
-						slot.Flags |= 0x01
-					} else {
-						args := []int32{int32(desiredYaw), int32(desiredPitch)}
-						if !vm.StartByName(aimName, args) {
-							s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_pool_exhausted"})
-							slot.Aim.IssueBit = true
-							slot.Flags |= 0x01
-						} else {
-							threadIdx := vm.LastStartedThread()
-							if s.pendingAims == nil {
-								s.pendingAims = make(map[pendingKey]pendingAim)
-							}
-							key := pendingKey{Unit: u.Handle, Slot: idx}
-							s.pendingAims[key] = pendingAim{ThreadIdx: threadIdx, DispatchedTick: tick}
-							slot.Aim.StartAim()
-							slot.Flags |= 0x01
-							s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_dispatch"})
-							if !sum.Dispatched {
-								sum.Dispatched = true
-								sum.DispatchSlot = idx
-								sum.DispatchWeaponID = weaponID
-							}
+					}
+					result := bridge.Aim(cob.WeaponSlot(idx), desiredYaw, desiredPitch, func(ret cob.CallbackReturn) {
+						if s.pendingAims != nil {
+							delete(s.pendingAims, key)
 						}
+						sum.ReturnSeen = true
+						sum.ReturnValue = ret.Value
+						if ret.Explicit && ret.Value != 0 {
+							slot.Aim.Ready = true
+							s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_return_nonzero", ReturnValue: &ret.Value})
+						} else {
+							s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_return_zero", ReturnValue: &ret.Value})
+						}
+					})
+					slot.Aim.IssueBit = true
+					slot.Flags |= 0x01
+					if result.Started {
+						if s.pendingAims == nil {
+							s.pendingAims = make(map[pendingKey]pendingAim)
+						}
+						s.pendingAims[key] = pendingAim{ThreadIdx: result.Thread, DispatchedTick: tick}
+						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_dispatch"})
+						if !sum.Dispatched {
+							sum.Dispatched = true
+							sum.DispatchSlot = idx
+							sum.DispatchWeaponID = weaponID
+						}
+					} else {
+						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_pool_exhausted"})
 					}
 				}
 			}
 		}
 	}
 	hasPending := false
-	if s.pendingAims != nil {
-		for k := range s.pendingAims {
-			if k.Unit == u.Handle {
+	for idx := 0; idx < NumSlots; idx++ {
+		if s.pendingAims != nil {
+			if _, ok := s.pendingAims[pendingKey{Unit: u.Handle, Slot: idx}]; ok {
 				hasPending = true
 				break
 			}
 		}
 	}
 	shouldDrain := sum.Dispatched || hasPending || queuedTargetCleared
-	if shouldDrain && vm != nil {
-		vm.Drain(1)
+	if shouldDrain && bridge != nil {
+		bridge.Drain(1)
 		sum.Drained = true
 	}
 	for idx := 0; idx < NumSlots; idx++ {
@@ -362,31 +381,9 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		weapon := pre.weapon
 		needLatch, needResult := pre.needLatch, pre.needResult
 		key := pendingKey{Unit: u.Handle, Slot: idx}
-		if pending, ok := s.pendingAims[key]; ok {
-			if vm == nil {
-				delete(s.pendingAims, key)
-			} else if val, okRet := vm.ConsumeReturn(pending.ThreadIdx); okRet {
-				if val != 0 {
-					slot.Aim.Ready = true
-					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_return_nonzero", ReturnValue: &val})
-				} else {
-					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_return_zero", ReturnValue: &val})
-				}
-				sum.ReturnSeen = true
-				sum.ReturnValue = val
-				delete(s.pendingAims, key)
-				if !slot.Aim.Ready {
-					continue
-				}
-			} else {
-				if vm.IsThreadAlive(pending.ThreadIdx) {
-					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_sleeping"})
-					continue
-				}
-				s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_abnormal_termination"})
-				delete(s.pendingAims, key)
-				continue
-			}
+		if _, ok := s.pendingAims[key]; ok {
+			s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_sleeping"})
+			continue
 		} else {
 			if needResult && slot.Aim.IssueBit && !slot.Aim.Ready {
 				continue
@@ -534,25 +531,21 @@ func dispatchAim(u *units.Unit, slotIdx int, slot *units.Slot) bool {
 	if vm == nil {
 		return true
 	}
-	var name string
-	switch slotIdx {
-	case 1:
-		name = "AimSecondary"
-	case 2:
-		name = "AimTertiary"
-	default:
-		name = "AimPrimary"
-	}
-	args := []int32{int32(slot.DesiredYaw), int32(slot.DesiredPitch)}
-	if vm.StartByName(name, args) {
-		return true
-	}
-	return true
+	// Legacy helper retained for the slot-level fixture API; even this path
+	// uses the typed bridge rather than raw VM.Start [04 §5.3]. The owning
+	// Service path retains the bridge so completion receivers survive the tick.
+	bridge := cob.NewCallbackBridge(vm)
+	result := bridge.Aim(cob.WeaponSlot(slotIdx), slot.DesiredYaw, slot.DesiredPitch, nil)
+	return result.Started
 }
 
-func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service) (pool.Handle, bool) {
+func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service, catalogs ...*content.Catalog) (pool.Handle, bool) {
 	if u == nil || w == nil || slot == nil || slot.Weapon == nil {
 		return 0, false
+	}
+	var catalog *content.Catalog
+	if len(catalogs) != 0 {
+		catalog = catalogs[0]
 	}
 	weapon := slot.Weapon
 	var candidates []Candidate
@@ -572,36 +565,39 @@ func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.Wor
 		cloaked := isCloakedUnit(cand)
 		underwater := isUnderwaterUnit(cand, seaLevel)
 		underwaterSeen := isAllied(u.Owner, cand.Owner, econ)
-		catBits := uint32(0)
+		var catMask content.CategoryMask
+		maskResolved := catalog != nil && cand.Def != nil
 		if cand.Def != nil {
-			catBits = categoryBits(cand.Def.Category)
+			catMask = cand.Def.DefinitionMask()
 		}
 		c := Candidate{
-			Handle:         cand.Handle,
-			X:              cand.X,
-			Z:              cand.Z,
-			Y:              cand.Y,
-			Category:       catBits,
-			Hostile:        true,
-			OwnSide:        ownSide,
-			Cloaked:        cloaked,
-			Underwater:     underwater,
-			UnderwaterSeen: underwaterSeen,
-			AirTarget:      cand.Def != nil && cand.Def.CanFly,
+			Handle:               cand.Handle,
+			X:                    cand.X,
+			Z:                    cand.Z,
+			Y:                    cand.Y,
+			CategoryMask:         catMask,
+			CategoryMaskResolved: maskResolved,
+			Hostile:              true,
+			OwnSide:              ownSide,
+			Cloaked:              cloaked,
+			Underwater:           underwater,
+			UnderwaterSeen:       underwaterSeen,
+			AirTarget:            cand.Def != nil && cand.Def.CanFly,
 		}
 		candidates = append(candidates, c)
 	}
 	acq := Acquisition{
-		ShooterX:    u.X,
-		ShooterZ:    u.Z,
-		ShooterY:    u.Y,
-		SeaLevel:    seaLevel,
-		Range:       weapon.Range,
-		BadMask:     badMaskForSlot(u.Def, idx),
-		WaterWeapon: weapon.WaterWeapon,
-		ToAir:       weapon.ToAirWeapon,
-		Ballistic:   weapon.Ballistic,
-		RNG:         simRNG,
+		ShooterX:      u.X,
+		ShooterZ:      u.Z,
+		ShooterY:      u.Y,
+		SeaLevel:      seaLevel,
+		Range:         weapon.Range,
+		BadTargetMask: badMaskForSlot(u.Def, idx),
+		MaskResolved:  catalog != nil && u.Def != nil,
+		WaterWeapon:   weapon.WaterWeapon,
+		ToAir:         weapon.ToAirWeapon,
+		Ballistic:     weapon.Ballistic,
+		RNG:           simRNG,
 	}
 	if vis != nil {
 		acq.Visible = func(c Candidate) bool {
@@ -626,7 +622,10 @@ func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.Wor
 	}
 	if weapon.Ballistic {
 		acq.BallisticFeasible = func(c Candidate) bool {
-			muzzle := muzzleWorldPos(u, slot.MuzzlePiece)
+			muzzle, muzzleOK := muzzleWorldPosResolved(u, slot.MuzzlePiece)
+			if !muzzleOK {
+				return false
+			}
 			var tgt Vec3
 			if tu := w.Unit(c.Handle); tu != nil {
 				tgt = Vec3{X: tu.X, Y: tu.Y, Z: tu.Z}
@@ -698,16 +697,31 @@ func checkAdmission(u *units.Unit, slot *units.Slot, weapon *content.WeaponDef, 
 	return true
 }
 
-func muzzleWorldPos(u *units.Unit, piece int32) Vec3 {
+func muzzleWorldPosResolved(u *units.Unit, piece int32) (Vec3, bool) {
 	if u == nil {
-		return Vec3{}
+		return Vec3{}, false
+	}
+	if binding := u.COBBinding(); binding != nil {
+		origin, ok := binding.ComposePiece(int(piece), u.Move.Heading, u.Move.Pitch, u.Move.Bank)
+		if !ok {
+			return Vec3{}, false
+		}
+		return Vec3{X: u.X.Add(origin[0]), Y: u.Y.Add(origin[1]), Z: u.Z.Add(origin[2])}, true
 	}
 	vm := u.GetScript()
 	if vm != nil && piece >= 0 && int(piece) < len(vm.Pieces) {
 		tr := vm.Pieces[piece].Trans
-		return Vec3{X: u.X.Add(tr[0]), Y: u.Y.Add(tr[1]), Z: u.Z.Add(tr[2])}
+		return Vec3{X: u.X.Add(tr[0]), Y: u.Y.Add(tr[1]), Z: u.Z.Add(tr[2])}, true
 	}
-	return Vec3{X: u.X, Y: u.Y, Z: u.Z}
+	return Vec3{X: u.X, Y: u.Y, Z: u.Z}, true
+}
+
+// muzzleWorldPos preserves the root fallback used by synthetic fixtures while
+// production callers use muzzleWorldPosResolved to reject an invalid strict
+// binding rather than authorizing a shot from an invented origin.
+func muzzleWorldPos(u *units.Unit, piece int32) Vec3 {
+	pos, _ := muzzleWorldPosResolved(u, piece)
+	return pos
 }
 
 func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terrain *world.Terrain, simRNG *rng.Simulation, svc *Service, w *units.World) bool {
@@ -728,7 +742,10 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 	if terrain != nil {
 		gravity = terrain.Gravity
 	}
-	origin := muzzleWorldPos(u, slot.MuzzlePiece)
+	origin, ok := muzzleWorldPosResolved(u, slot.MuzzlePiece)
+	if !ok {
+		return false
+	}
 	targetWorld := func(h pool.Handle) (Vec3, bool) {
 		if tu := w.Unit(h); tu != nil {
 			return Vec3{X: tu.X, Y: tu.Y, Z: tu.Z}, true
@@ -736,8 +753,7 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		return Vec3{}, false
 	}
 	muzzleWorld := func(piece int32) (Vec3, bool) {
-		pos := muzzleWorldPos(u, piece)
-		return pos, true
+		return muzzleWorldPosResolved(u, piece)
 	}
 	muzzlePieceFn := func(slotIdx int) int32 {
 		if slot.MuzzlePiece >= 0 {
@@ -745,7 +761,7 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		}
 		return -1
 	}
-	scriptAdapter := &fireScriptAdapter{unit: u, slotIdx: idx}
+	scriptAdapter := &fireScriptAdapter{bridge: svc.callbackBridgeForUnit(u), unit: u}
 	ports := FirePorts{
 		ShooterSide: uint8(u.Owner),
 		Origin:      origin,
@@ -789,36 +805,25 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 }
 
 type fireScriptAdapter struct {
-	unit    *units.Unit
-	slotIdx int
+	bridge *cob.CallbackBridge
+	unit   *units.Unit
 }
 
 func (a *fireScriptAdapter) FireWeapon(slotIdx int) {
 	if a == nil || a.unit == nil {
 		return
 	}
-	vm := a.unit.GetScript()
-	if vm == nil {
+	if a.bridge == nil {
 		return
 	}
-	var name string
-	switch slotIdx {
-	case 1:
-		name = "FireSecondary"
-	case 2:
-		name = "FireTertiary"
-	default:
-		name = "FirePrimary"
-	}
-	_ = vm.StartByName(name, nil)
+	a.bridge.Fire(cob.WeaponSlot(slotIdx))
 }
 
 func (a *fireScriptAdapter) RockUnit(slotIdx int) {
 	if a == nil || a.unit == nil {
 		return
 	}
-	vm := a.unit.GetScript()
-	if vm == nil {
+	if a.bridge == nil {
 		return
 	}
 	u := a.unit
@@ -827,8 +832,7 @@ func (a *fireScriptAdapter) RockUnit(slotIdx int) {
 		return
 	}
 	rel := int16(slot.DesiredYaw - u.Move.Heading)
-	x, y := cob.RockUnitArgs(rel)
-	_ = vm.StartByName("RockUnit", []int32{x, y})
+	a.bridge.RockUnit(rel)
 }
 
 func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Terrain, featSvc *features.Service, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) {
@@ -975,7 +979,10 @@ func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, te
 			isOffMap = true
 			return
 		}
-		if FeatureCacheSuppressed((*[2]int32)(&[2]int32{p.CacheCellX, p.CacheCellZ}), int32(cx), int32(cz)) {
+		cache := [2]int32{p.CacheCellX, p.CacheCellZ}
+		suppressed := FeatureCacheSuppressed(&cache, int32(cx), int32(cz))
+		p.CacheCellX, p.CacheCellZ = cache[0], cache[1]
+		if suppressed {
 		} else {
 			if featSvc != nil {
 				if inst := featSvc.InstanceAt(int(cx), int(cz)); inst != nil && inst.Def != nil {
@@ -1052,28 +1059,67 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 		return
 	}
 	hasDirectTarget := p.TargetUnit != 0
-	var sink *noopSink
+	sink := &combatPresentationSink{service: s, tick: tick, source: p.Shooter, position: p.Pos}
 	DispatchPresentation(weapon, hasDirectTarget, isWaterTerrain, p.Pos, sink)
-	applyProjectileDamage(p, weapon, w, terrain, featSvc, econ, catalog, tick, simRNG, hasDirectTarget, isWaterTerrain, h)
+	s.emitEvent(Event{Kind: EventProjectileImpact, Tick: tick, Source: p.Shooter, Target: p.TargetUnit, Position: p.Pos})
+	applyProjectileDamage(s, p, weapon, w, terrain, featSvc, econ, catalog, tick, simRNG, hasDirectTarget, isWaterTerrain, h)
 	_ = wind
 }
 
-type noopSink struct{}
+type combatPresentationSink struct {
+	service  *Service
+	tick     uint32
+	source   pool.Handle
+	position Vec3
+}
 
-func (n *noopSink) Shake(magnitude, duration int32)             {}
-func (n *noopSink) PlayHitSound(sound string)                   {}
-func (n *noopSink) PlayWaterSound(sound string)                 {}
-func (n *noopSink) EmitEndSmoke(pos Vec3)                       {}
-func (n *noopSink) EmitExplosion(gaf, art string, isWater bool) {}
+func (n *combatPresentationSink) Shake(magnitude, duration int32) {
+	if n == nil {
+		return
+	}
+	n.service.emitEvent(Event{Kind: EventShake, Tick: n.tick, Source: n.source, Position: n.position, Magnitude: magnitude, Duration: duration})
+}
+func (n *combatPresentationSink) PlayHitSound(sound string) {
+	if n == nil {
+		return
+	}
+	n.service.emitEvent(Event{Kind: EventHitSound, Tick: n.tick, Source: n.source, Position: n.position, Sound: sound})
+}
+func (n *combatPresentationSink) PlayWaterSound(sound string) {
+	if n == nil {
+		return
+	}
+	n.service.emitEvent(Event{Kind: EventWaterSound, Tick: n.tick, Source: n.source, Position: n.position, Sound: sound})
+}
+func (n *combatPresentationSink) EmitEndSmoke(pos Vec3) {
+	if n == nil {
+		return
+	}
+	n.service.emitEvent(Event{Kind: EventEndSmoke, Tick: n.tick, Source: n.source, Position: pos})
+}
+func (n *combatPresentationSink) EmitExplosion(gaf, art string, isWater bool) {
+	if n == nil {
+		return
+	}
+	graphic := gaf
+	if graphic == "" {
+		graphic = art
+	}
+	kind := EventExplosion
+	if isWater {
+		kind = EventWaterExplosion
+	}
+	n.service.emitEvent(Event{Kind: kind, Tick: n.tick, Source: n.source, Position: n.position, Graphic: graphic})
+}
 
-func applyProjectileDamage(p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, econ *economy.Service, catalog *content.Catalog, tick uint32, simRNG *rng.Simulation, hasDirectTarget bool, isWaterTerrain bool, handle pool.Handle) {
+func applyProjectileDamage(service *Service, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, econ *economy.Service, catalog *content.Catalog, tick uint32, simRNG *rng.Simulation, hasDirectTarget bool, isWaterTerrain bool, handle pool.Handle) {
 	if w == nil || weapon == nil {
 		return
 	}
 	if hasDirectTarget && weapon.AreaOfEffect <= 16 && p.TargetUnit != 0 {
 		victim := w.Unit(p.TargetUnit)
 		if victim != nil {
-			applyDamageToUnit(victim, p, weapon, 1.0, 0, w, tick)
+			applyDamageToUnit(service, victim, p, weapon, 1.0, 0, w, tick)
 		}
 		if p.Shooter == 0 {
 			return
@@ -1084,7 +1130,7 @@ func applyProjectileDamage(p *Projectile, weapon *content.WeaponDef, w *units.Wo
 	if radius <= 0 {
 		if hasDirectTarget && p.TargetUnit != 0 {
 			if victim := w.Unit(p.TargetUnit); victim != nil {
-				applyDamageToUnit(victim, p, weapon, 1.0, 0, w, tick)
+				applyDamageToUnit(service, victim, p, weapon, 1.0, 0, w, tick)
 			}
 		}
 		return
@@ -1129,7 +1175,7 @@ func applyProjectileDamage(p *Projectile, weapon *content.WeaponDef, w *units.Wo
 				if dist != 0 {
 					falloff = Falloff(float32(dist), float32(radius), float32(weapon.EdgeEffectiveness))
 				}
-				applyDamageToUnit(u, p, weapon, falloff, dist, w, tick)
+				applyDamageToUnit(service, u, p, weapon, falloff, dist, w, tick)
 			}
 		}
 		_ = featSvc
@@ -1145,12 +1191,12 @@ func applyProjectileDamage(p *Projectile, weapon *content.WeaponDef, w *units.Wo
 			if dist2 >= int64(radius)*int64(radius) {
 				continue
 			}
-			applyDamageToUnit(u, p, weapon, 1.0, 0, w, tick)
+			applyDamageToUnit(service, u, p, weapon, 1.0, 0, w, tick)
 		}
 	}
 }
 
-func applyDamageToUnit(victim *units.Unit, p *Projectile, weapon *content.WeaponDef, falloff float32, distance int32, w *units.World, tick uint32) {
+func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weapon *content.WeaponDef, falloff float32, distance int32, w *units.World, tick uint32) {
 	if victim == nil || weapon == nil || w == nil {
 		return
 	}
@@ -1190,13 +1236,24 @@ func applyDamageToUnit(victim *units.Unit, p *Projectile, weapon *content.Weapon
 	victim.Health = newHealth
 	if newHealth <= 0 {
 		w.Destroy(victim.Handle, units.DeathKilled)
+		if service != nil {
+			if service.deathNotified == nil {
+				service.deathNotified = make(map[pool.Handle]*units.Unit)
+			}
+			if service.deathNotified[victim.Handle] != victim {
+				service.deathNotified[victim.Handle] = victim
+				service.emitEvent(Event{Kind: EventUnitKilled, Tick: tick, Source: p.Shooter, Target: victim.Handle, Position: Vec3{X: victim.X, Y: victim.Y, Z: victim.Z}})
+			}
+		}
 	} else {
 		dir := uint8(p.Yaw.Raw() >> 8)
-		hitX, hitY := HitByWeaponArgs(dir)
 		takeArg := cob.HealthPercent(victim.Health, victim.MaxHealth)
-		if vm := victim.GetScript(); vm != nil {
-			_ = vm.StartByName("HitByWeapon", []int32{hitX, hitY})
-			_ = vm.StartByName("TakeDamage", []int32{takeArg})
+		if bridge := service.callbackBridgeForUnit(victim); bridge != nil {
+			// The two damage callbacks are independent deferred starts and retain
+			// their exact order after the HitByWeapon direction conversion
+			// [04 §5.1]. The normal VM drain belongs to the session window.
+			bridge.HitByWeapon(dir)
+			bridge.TakeDamage(takeArg)
 		}
 	}
 	_ = distance

@@ -191,8 +191,9 @@ must be noted in the plan's Divergences.
 ## I12 — Standard library first
 
 Use `sort`, `slices`, `io/fs`, `errors` shapes rather than bespoke utilities. No
-new module dependencies without orchestrator sign-off; `go.mod` today is Kaiju
-plus `golang.org/x/image`.
+new module dependencies without orchestrator sign-off; the active window
+backend is Ebitengine and all other dependencies must be justified in the
+module diff.
 
 ## I13 — Research byte offsets are identity, not layout
 

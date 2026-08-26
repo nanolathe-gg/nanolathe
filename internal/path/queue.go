@@ -43,6 +43,11 @@ type Request struct {
 	Player uint8
 	Start  Cell
 	Goal   Goal
+	// Activation identifies the order/path boundary that created this
+	// request. Zero is reserved for direct callers that do not bind an order;
+	// session movement uses a monotonically increasing token so a late result
+	// from a canceled/replanned request cannot publish onto a new head.
+	Activation uint64
 }
 
 // SearchFunc is the injected path search function.
@@ -181,6 +186,7 @@ func (s *Scheduler) Submit(r Request) {
 				} else {
 					s.queues[p][i].Goal = r.Goal
 					s.queues[p][i].Start = r.Start
+					s.queues[p][i].Activation = r.Activation
 				}
 				return
 			}

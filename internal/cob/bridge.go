@@ -1,0 +1,432 @@
+package cob
+
+import (
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
+)
+
+// SetSimulationRNG binds the session-owned simulation stream to the bridged
+// VM. No global stream is modified [01 §7.1] I4.
+func (b *CallbackBridge) SetSimulationRNG(sim *rng.Simulation) {
+	if b != nil && b.VM != nil {
+		b.VM.SetSimulationRNG(sim)
+	}
+}
+
+// SetSFXSink binds the VM's presentation-only emit-sfx sink and visibility
+// predicate [GAP T15] C19.
+func (b *CallbackBridge) SetSFXSink(sink SFXSink, visible func(piece int, sfxType int32) bool) {
+	if b == nil || b.VM == nil {
+		return
+	}
+	b.VM.SetSFXSink(sink)
+	b.VM.SetSFXVisible(visible)
+}
+
+// SetPresentationSink adapts a typed session event sink to emit-sfx.
+func (b *CallbackBridge) SetPresentationSink(sink PresentationSink) {
+	if b == nil || b.VM == nil {
+		return
+	}
+	if sink == nil {
+		b.VM.SetSFXSink(nil)
+		return
+	}
+	b.VM.SetSFXSink(PresentationSinkAdapter{Sink: sink})
+}
+
+// CallbackMode is the three engine-to-COB adapter modes [04 §4.2].
+type CallbackMode uint8
+
+const (
+	ModeDeferred  CallbackMode = iota + 1 // D: allocate and return; normal drain later
+	ModeImmediate                         // I: allocate, all-slot delta-0 barrier
+	ModeQuery                             // Q: one-slot synchronous call, no piece pass
+)
+
+// CallbackReturn is delivered to a deferred callback receiver only when the
+// script explicitly returns. Failed receiver-bearing starts deliver Value=0
+// with Explicit=false; signal and abnormal termination deliver nothing [04
+// §4.2][04 §4.3][04 §5.3].
+type CallbackReturn struct {
+	Name     string
+	Mode     CallbackMode
+	Thread   int
+	Value    int32
+	Explicit bool
+}
+
+// CallbackReceiver is the standardized completion receiver for D/I bridge
+// operations. Receivers are called synchronously by Bridge.Drain after the VM
+// has observed an explicit return, in ascending thread-slot order [04 §4.2].
+type CallbackReceiver func(CallbackReturn)
+
+// CallbackResult describes a callback start and, for Q/I calls, its immediate
+// result. Values are the four physical callback cells; only the cells
+// requested by the named operation are semantically copied back [04 §4.2].
+type CallbackResult struct {
+	Name      string
+	Mode      CallbackMode
+	Started   bool
+	Completed bool
+	Thread    int
+	Values    [4]int32
+}
+
+// QueryValue returns cell zero from a callback result.
+func (r CallbackResult) QueryValue() int32 { return r.Values[0] }
+
+// WeaponSlot selects the authored primary/secondary/tertiary callback names.
+type WeaponSlot uint8
+
+const (
+	WeaponPrimary WeaponSlot = iota
+	WeaponSecondary
+	WeaponTertiary
+)
+
+// CallbackBridge is the only typed production surface for engine-to-COB
+// callbacks. It owns mode dispatch and receiver polling; downstream systems
+// should not call VM.Start for researched callbacks [04 §4.2][04 §5.1].
+type CallbackBridge struct {
+	VM *VM
+
+	createInvoked bool
+	pending       [8]pendingCallback
+}
+
+type pendingCallback struct {
+	active   bool
+	name     string
+	mode     CallbackMode
+	receiver CallbackReceiver
+}
+
+// NewCallbackBridge returns a bridge for vm. A nil VM is retained as an
+// explicit failed production binding; operations report Started=false.
+func NewCallbackBridge(vm *VM) *CallbackBridge { return &CallbackBridge{VM: vm} }
+
+// Create invokes Create exactly once in mode I. A second call is rejected and
+// does not schedule another callback [04 §5.1].
+func (b *CallbackBridge) Create() CallbackResult {
+	if b == nil || b.VM == nil || b.createInvoked {
+		return CallbackResult{Name: "Create", Mode: ModeImmediate, Thread: -1}
+	}
+	b.createInvoked = true
+	ok := StartModeI(b.VM, "Create", nil)
+	b.collectReturns()
+	thread := b.VM.LastStartedThread()
+	completed := ok && (thread < 0 || !b.VM.IsThreadAlive(thread))
+	return CallbackResult{Name: "Create", Mode: ModeImmediate, Started: ok, Completed: completed, Thread: thread}
+}
+
+// CreateInvoked reports whether this bridge has consumed its one Create slot.
+func (b *CallbackBridge) CreateInvoked() bool { return b != nil && b.createInvoked }
+
+// Drain executes the normal VM drain and delivers explicit deferred returns.
+// The VM itself remains authoritative for thread and piece state [04 §4.2].
+func (b *CallbackBridge) Drain(delta int) {
+	if b == nil || b.VM == nil {
+		return
+	}
+	b.VM.Drain(delta)
+	b.collectReturns()
+}
+
+// Deferred starts one receiver-bearing D callback. Missing name, invalid
+// identity, and thread exhaustion deliver zero to receiver immediately; no
+// receiver is called for an omitted receiver [04 §4.2][04 §4.3].
+func (b *CallbackBridge) Deferred(name string, args []int32, receiver CallbackReceiver) CallbackResult {
+	result := CallbackResult{Name: name, Mode: ModeDeferred, Thread: -1}
+	if b == nil || b.VM == nil {
+		if receiver != nil {
+			receiver(CallbackReturn{Name: name, Mode: ModeDeferred, Thread: -1, Value: 0})
+		}
+		return result
+	}
+	if !b.VM.StartByName(name, args) {
+		if receiver != nil {
+			receiver(CallbackReturn{Name: name, Mode: ModeDeferred, Thread: -1, Value: 0})
+		}
+		return result
+	}
+	thread := b.VM.LastStartedThread()
+	result.Started, result.Thread = true, thread
+	if receiver != nil && thread >= 0 && thread < len(b.pending) {
+		b.pending[thread] = pendingCallback{active: true, name: name, mode: ModeDeferred, receiver: receiver}
+	}
+	return result
+}
+
+// Immediate starts one I callback and performs the all-slot delta-zero
+// barrier. It is used by Activate/Deactivate and movement/lifecycle edges
+// whose research marks mode I [04 §4.2][04 §5.1].
+func (b *CallbackBridge) Immediate(name string, args []int32, receiver CallbackReceiver) CallbackResult {
+	result := CallbackResult{Name: name, Mode: ModeImmediate, Thread: -1}
+	if b == nil || b.VM == nil {
+		if receiver != nil {
+			receiver(CallbackReturn{Name: name, Mode: ModeImmediate, Thread: -1, Value: 0})
+		}
+		return result
+	}
+	// Start first so the receiver can be associated with the allocated slot
+	// before the mode-I barrier drains it.
+	if !b.VM.StartByName(name, args) {
+		if receiver != nil {
+			receiver(CallbackReturn{Name: name, Mode: ModeImmediate, Thread: -1, Value: 0})
+		}
+		return result
+	}
+	thread := b.VM.LastStartedThread()
+	result.Started, result.Thread = true, thread
+	if receiver != nil && thread >= 0 && thread < len(b.pending) {
+		b.pending[thread] = pendingCallback{active: true, name: name, mode: ModeImmediate, receiver: receiver}
+	}
+	b.VM.Drain(0)
+	b.collectReturns()
+	result.Completed = !b.VM.IsThreadAlive(thread)
+	return result
+}
+
+// Query runs a synchronous Q callback with the exact supplied four-cell
+// seeds. Missing entries/full pools leave values untouched. A sleeping/waiting
+// callback returns partial values and remains active, while an explicit return
+// reports Completed=true; no interpolation or receiver is involved [04 §4.2].
+func (b *CallbackBridge) Query(name string, seeds [4]int32) CallbackResult {
+	result := CallbackResult{Name: name, Mode: ModeQuery, Thread: -1, Values: seeds}
+	if b == nil || b.VM == nil {
+		return result
+	}
+	pc, ok := b.VM.ScriptPC(name)
+	if !ok {
+		return result
+	}
+	values := seeds
+	started, completed := b.VM.CallQuery(pc, values[:])
+	result.Started, result.Completed = started, completed
+	result.Values = values
+	return result
+}
+
+// QueryPiece is a Q callback with one semantically copied cell and zeroed
+// unused cells. It preserves the exact seed and partial-result behavior.
+func (b *CallbackBridge) QueryPiece(name string, seed int32) CallbackResult {
+	var seeds [4]int32
+	seeds[0] = seed
+	return b.Query(name, seeds)
+}
+
+// QueryBuildInfo performs the placement Q query with cell zero seeded -1 and
+// cells 1..3 seeded zero [04 §5.1][04 §5.3].
+func (b *CallbackBridge) QueryBuildInfo() CallbackResult { return b.QueryPiece("QueryBuildInfo", -1) }
+
+// QueryNanoPiece performs the construction Q query with cell zero seeded 0
+// [R-P0-06][04 §5.3].
+func (b *CallbackBridge) QueryNanoPiece() CallbackResult { return b.QueryPiece("QueryNanoPiece", 0) }
+
+// QueryWeapon performs QueryPrimary/Secondary/Tertiary with seed 0.
+func (b *CallbackBridge) QueryWeapon(slot WeaponSlot) CallbackResult {
+	name, ok := weaponCallbackName(slot, "Query")
+	if !ok {
+		return CallbackResult{Name: "", Mode: ModeQuery, Thread: -1}
+	}
+	return b.QueryPiece(name, 0)
+}
+
+// AimFromWeapon performs AimFrom* with sentinel seed -1. A missing entry
+// leaves -1; callers must then invoke QueryWeapon, exactly as retail does
+// [R-P0-07][04 §5.3].
+func (b *CallbackBridge) AimFromWeapon(slot WeaponSlot) CallbackResult {
+	name, ok := weaponCallbackName(slot, "AimFrom")
+	if !ok {
+		return CallbackResult{Name: "", Mode: ModeQuery, Thread: -1, Values: [4]int32{-1, 0, 0, 0}}
+	}
+	return b.QueryPiece(name, -1)
+}
+
+// AimPiece performs the established AimFrom→Query fallback and returns the
+// selected piece in cell zero. Invalid/negative authored values remain the
+// caller's normal root-piece fallback; no aim authorization is granted.
+func (b *CallbackBridge) AimPiece(slot WeaponSlot) CallbackResult {
+	result := b.AimFromWeapon(slot)
+	if result.QueryValue() == -1 {
+		result = b.QueryWeapon(slot)
+	}
+	return result
+}
+
+// SweetSpot performs the separate target-piece Q query with seed 0.
+func (b *CallbackBridge) SweetSpot() CallbackResult { return b.QueryPiece("SweetSpot", 0) }
+
+// Aim starts AimPrimary/Secondary/Tertiary deferred with unsigned heading and
+// pitch values. A receiver is required by turret/vertical families to grant
+// readiness only on an explicit nonzero return [R-P0-07].
+func (b *CallbackBridge) Aim(slot WeaponSlot, heading, pitch uint16, receiver CallbackReceiver) CallbackResult {
+	name, ok := weaponCallbackName(slot, "Aim")
+	if !ok {
+		return CallbackResult{Name: "", Mode: ModeDeferred, Thread: -1}
+	}
+	return b.Deferred(name, []int32{int32(heading), int32(pitch)}, receiver)
+}
+
+// Fire starts the matching Fire* callback deferred with zero arguments.
+func (b *CallbackBridge) Fire(slot WeaponSlot) CallbackResult {
+	name, ok := weaponCallbackName(slot, "Fire")
+	if !ok {
+		return CallbackResult{Name: "", Mode: ModeDeferred, Thread: -1}
+	}
+	return b.Deferred(name, nil, nil)
+}
+
+// RockUnit starts RockUnit deferred with the researched recoil arguments.
+func (b *CallbackBridge) RockUnit(rel int16) CallbackResult {
+	x, z := RockUnitArgs(rel)
+	return b.Deferred("RockUnit", []int32{x, z}, nil)
+}
+
+// FireThenRock starts root Fire first and RockUnit second; burst clones must
+// call neither operation [R-P0-07][04 §5.3]. Both callback attempts are
+// independent, as the retail producers invoke each adapter separately.
+func (b *CallbackBridge) FireThenRock(slot WeaponSlot, rel int16) (CallbackResult, CallbackResult) {
+	fire := b.Fire(slot)
+	rock := b.RockUnit(rel)
+	return fire, rock
+}
+
+// Lifecycle callbacks are named wrappers retaining their researched modes.
+func (b *CallbackBridge) Activate() CallbackResult      { return b.Deferred("Activate", nil, nil) }
+func (b *CallbackBridge) Deactivate() CallbackResult    { return b.Deferred("Deactivate", nil, nil) }
+func (b *CallbackBridge) StartBuilding() CallbackResult { return b.Deferred("StartBuilding", nil, nil) }
+
+// StartBuildingHeading is the slot-form StartBuilding callback carrying the
+// producer heading as one unsigned 16-bit argument [04 §5.3].
+func (b *CallbackBridge) StartBuildingHeading(heading uint16) CallbackResult {
+	return b.Deferred("StartBuilding", []int32{int32(heading)}, nil)
+}
+func (b *CallbackBridge) StopBuilding() CallbackResult { return b.Deferred("StopBuilding", nil, nil) }
+func (b *CallbackBridge) StartMoving() CallbackResult  { return b.Immediate("StartMoving", nil, nil) }
+func (b *CallbackBridge) StopMoving() CallbackResult   { return b.Immediate("StopMoving", nil, nil) }
+func (b *CallbackBridge) MoveRate1() CallbackResult    { return b.Immediate("MoveRate1", nil, nil) }
+func (b *CallbackBridge) MoveRate2() CallbackResult    { return b.Immediate("MoveRate2", nil, nil) }
+func (b *CallbackBridge) MoveRate3() CallbackResult    { return b.Immediate("MoveRate3", nil, nil) }
+func (b *CallbackBridge) SetSFXoccupy(v int32) CallbackResult {
+	return b.Immediate("setSFXoccupy", []int32{v}, nil)
+}
+func (b *CallbackBridge) TargetCleared(slot int32) CallbackResult {
+	return b.Deferred("TargetCleared", []int32{slot}, nil)
+}
+func (b *CallbackBridge) HitByWeapon(dir uint8) CallbackResult {
+	x, z := HitByWeaponArgs(dir)
+	return b.Deferred("HitByWeapon", []int32{x, z}, nil)
+}
+func (b *CallbackBridge) TakeDamage(percent int32) CallbackResult {
+	return b.Deferred("TakeDamage", []int32{percent}, nil)
+}
+func (b *CallbackBridge) Killed(severity int32) CallbackResult {
+	return b.Deferred("Killed", []int32{severity}, nil)
+}
+
+func weaponCallbackName(slot WeaponSlot, prefix string) (string, bool) {
+	if slot > WeaponTertiary {
+		return "", false
+	}
+	names := [...]string{"Primary", "Secondary", "Tertiary"}
+	return prefix + names[slot], true
+}
+
+func (b *CallbackBridge) collectReturns() {
+	if b == nil || b.VM == nil {
+		return
+	}
+	for i := 0; i < len(b.pending); i++ {
+		p := &b.pending[i]
+		if !p.active {
+			continue
+		}
+		if b.VM.HasReturn(i) {
+			value, _ := b.VM.ConsumeReturn(i)
+			if p.receiver != nil {
+				p.receiver(CallbackReturn{Name: p.name, Mode: p.mode, Thread: i, Value: value, Explicit: true})
+			}
+			*p = pendingCallback{}
+			continue
+		}
+		if !b.VM.IsThreadAlive(i) {
+			// Signal/abnormal termination has no receiver callback [04 §5.3].
+			*p = pendingCallback{}
+		}
+	}
+}
+
+// PresentationKind identifies only event families whose callback bridge can
+// carry an already-resolved event. This adapter stores no lifetime, performs
+// no allocation, and never fabricates nano/muzzle/smoke/trail/impact events.
+type PresentationKind uint8
+
+const (
+	PresentationSFX PresentationKind = iota + 1
+	PresentationNano
+	PresentationMuzzle
+	PresentationSmoke
+	PresentationTrail
+	PresentationImpact
+)
+
+// PresentationEvent is an exact, presentation-only payload supplied by an
+// authoritative producer. Source/Target are fixed-point world positions; zero
+// fields are meaningful only when the producer leaves them unspecified.
+type PresentationEvent struct {
+	Kind     PresentationKind
+	Piece    int
+	SFXType  int32
+	SFXClass SFXKind
+	Selector int32
+	Source   [3]numeric.Fixed
+	Target   [3]numeric.Fixed
+}
+
+// PresentationSink receives already-admitted COB-owned presentation events.
+// The collector owns identity, ordering, visibility, and lifetime policy.
+type PresentationSink interface{ EmitCOBEvent(PresentationEvent) }
+
+// PresentationSinkAdapter adapts the existing emit-sfx VM sink to the typed
+// session event sink. Other event methods forward only supplied event data;
+// they do not create geometry or lifetimes [R-P0-06][GAP T15] C19.
+type PresentationSinkAdapter struct{ Sink PresentationSink }
+
+func (a PresentationSinkAdapter) EmitSFX(piece int, sfxType int32, kind SFXKind) {
+	if a.Sink != nil {
+		a.Sink.EmitCOBEvent(PresentationEvent{Kind: PresentationSFX, Piece: piece, SFXType: sfxType, SFXClass: kind})
+	}
+}
+func (a PresentationSinkAdapter) Emit(event PresentationEvent) {
+	if a.Sink != nil {
+		a.Sink.EmitCOBEvent(event)
+	}
+}
+
+// The typed helpers forward only an event already admitted by an authoritative
+// producer. They assign the category named by the helper and do not invent
+// positions, selectors, or lifetimes [R-P0-06][GAP T15] C19.
+func (a PresentationSinkAdapter) EmitNano(event PresentationEvent) {
+	event.Kind = PresentationNano
+	a.Emit(event)
+}
+func (a PresentationSinkAdapter) EmitMuzzle(event PresentationEvent) {
+	event.Kind = PresentationMuzzle
+	a.Emit(event)
+}
+func (a PresentationSinkAdapter) EmitSmoke(event PresentationEvent) {
+	event.Kind = PresentationSmoke
+	a.Emit(event)
+}
+func (a PresentationSinkAdapter) EmitTrail(event PresentationEvent) {
+	event.Kind = PresentationTrail
+	a.Emit(event)
+}
+func (a PresentationSinkAdapter) EmitImpact(event PresentationEvent) {
+	event.Kind = PresentationImpact
+	a.Emit(event)
+}
+
+var _ SFXSink = PresentationSinkAdapter{}
