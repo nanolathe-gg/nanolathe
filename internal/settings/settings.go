@@ -51,6 +51,7 @@ const (
 	DefaultAllyGroup      = 5    // Player%dAllyGroup
 	DefaultMetal          = 1000 // Player%dMetal
 	DefaultEnergy         = 1000 // Player%dEnergy
+	DefaultScrollSpeed    = 32   // scrollspeed [02 "Settings"] default 32 [07 §10]
 )
 
 // Player is one skirmish slot, holding the six Player%d* registry values.
@@ -85,8 +86,9 @@ type Settings struct {
 	// Difficulty is retail's top-level "Difficulty" value, the campaign and
 	// mission setting. It is separate from Skirmish.Difficulty, which retail
 	// keeps as its own "SkirmishDifficulty" value.
-	Difficulty int      `json:"difficulty"`
-	Skirmish   Skirmish `json:"skirmish"`
+	Difficulty  int      `json:"difficulty"`
+	ScrollSpeed int      `json:"scrollSpeed"` // scrollspeed [02 "Settings"] [07 §10] C2
+	Skirmish    Skirmish `json:"skirmish"`
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -96,7 +98,7 @@ type Settings struct {
 // start positions, commander death continues, all terrain visible, LOS off,
 // elevation ignored — so a loader may not treat a zero as an absent value.
 func Defaults() Settings {
-	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty}
+	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty, ScrollSpeed: DefaultScrollSpeed}
 	s.Skirmish = Skirmish{
 		NumPlayers:     DefaultNumPlayers,
 		Difficulty:     DefaultDifficulty,
@@ -163,6 +165,12 @@ func (s *Settings) Normalize() {
 	}
 	if s.Difficulty < 0 || s.Difficulty > 2 {
 		s.Difficulty = DefaultDifficulty
+	}
+	if s.ScrollSpeed < 0 || s.ScrollSpeed > 255 {
+		s.ScrollSpeed = DefaultScrollSpeed
+	}
+	if s.ScrollSpeed == 0 {
+		s.ScrollSpeed = DefaultScrollSpeed
 	}
 	s.Skirmish.Normalize()
 }

@@ -1018,10 +1018,6 @@ func (s *Session) authoritativeTick(tick uint32) {
 			h := v.Handle
 			u := v.Unit
 			s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceUnitBegin, Handle: h, Slot: int(v.Slot)})
-			if tick < 200 {
-				if qDbg := orders.QueueForUnit(u); qDbg != nil {
-				}
-			}
 			// unit pre-update (StepPreUpdate) [04 "unit sweep"]
 			s.Units.StepPreUpdate(h, tick)
 			// weapon slot/service step per unit [06 §3][06 §4] — stable weapon index once-compiled [ON-04]
@@ -1206,36 +1202,10 @@ func (s *Session) authoritativeTick(tick uint32) {
 				}
 				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceDeathFinalize, Handle: h, Value: int32(res.Cause)})
 			}
-			if tick < 10 {
-				if qDbg := orders.QueueForUnit(u); qDbg != nil {
-				}
-			}
 		})
-	}
-	if tick < 200 {
-		if uDbg := s.Units.Unit(5); uDbg != nil {
-			if qDbg := orders.QueueForUnit(uDbg); qDbg != nil {
-				if qDbg.LenPrimary() > 0 {
-					if hd := qDbg.Head(); hd != nil {
-					}
-				}
-			}
-		}
 	}
 	if s.Movement != nil {
 		s.Movement.EndTick(tick)
-	}
-	if tick < 200 {
-		if uDbg := s.Units.Unit(5); uDbg != nil {
-			if qDbg := orders.QueueForUnit(uDbg); qDbg != nil {
-				if qDbg.LenPrimary() > 0 {
-					if hd := qDbg.Head(); hd != nil {
-					}
-				}
-			} else {
-			}
-		} else {
-		}
 	}
 
 	// 5 Projectile pool update and impact (TickProjectiles + interceptor guidance/detonation) [06 §5][06 §11.2]
@@ -1266,7 +1236,8 @@ func (s *Session) authoritativeTick(tick uint32) {
 		}
 	}
 	if s.Combat != nil {
-		s.Combat.TickProjectiles(tick, s.Units, s.World, s.Features, s.Vis, s.Econ, s.Catalog, s.SimRNG(), s.CrtRNG())
+		// [06 §6.4] plumb world wind vectors into ballistic/dropped drift
+		s.Combat.TickProjectiles(tick, s.Units, s.World, s.Wind, s.Features, s.Vis, s.Econ, s.Catalog, s.SimRNG(), s.CrtRNG())
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceProjectileImpact})
 		// Notify AI of hostile damage via normal combat [P0-07] HostileDamageObserved in deterministic slot order [RS-P0-014][INVARIANTS I1].
 		if len(beforeHealth) > 0 {

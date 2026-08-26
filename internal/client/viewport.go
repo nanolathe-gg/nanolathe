@@ -79,12 +79,17 @@ func NewViewportTransform(cam *camera.Camera, terrain *world.Terrain, width, hei
 	if cam != nil {
 		c = *cam
 	}
-	// The beam clip is [128,32]..[W-1,H-33]. The active shell rebases this
-	// rectangle to [0,0]..[W-129,H-65], while input remains logical 0..W-1,
-	// 0..H-1 [03 §4.3][07 §8].
-	left, top := int32(0), int32(0)
-	right := width - camera.OriginX - 1
-	bottom := height - 2*camera.OriginY - 1
+	// The battle viewport is the drawn-chrome region [07 §6][07 §8] step1:
+	// left panel 129px (OriginX+1) plus top/bottom strips OriginY (32). Retail's
+	// beam clip is [128,32]..[W-1,H-33] but the chrome's interactive region
+	// starts one pixel in at 129, and the shell previously rebased this to
+	// [0,0]..[W-129,H-65] which paired a rebased rect with unrebased pointers
+	// [C-3]. Fix: keep logical coordinates [129,32]..[W-1,H-33] so the pointer
+	// region and the drawn overWorld rect agree [07 §8][07 §10][C-3].
+	left := camera.OriginX + 1 // 129 [07 §6] drawn panel edge
+	top := camera.OriginY      // 32 [07 §6][03 §2.5]
+	right := width - 1
+	bottom := height - camera.OriginY - 1 // 447 for 480
 	if right < left {
 		right = left - 1
 	}

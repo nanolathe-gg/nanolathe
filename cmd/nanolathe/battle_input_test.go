@@ -14,10 +14,13 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// screenPos computes shell coords for a world unit [07 §9][03 §2.5].
+// screenPos computes viewport coords for a world unit [07 §9][03 §2.5][C-3].
+// It uses the drawn-chrome viewport (129,32) so clicks map through the same
+// OrderTargetFromViewport path as production [07 §8].
 func screenPos(cam *camera.Camera, u *units.Unit) (int32, int32) {
-	sx0, sy0 := cam.WorldToScreen(u.X, u.Y, u.Z)
-	return sx0 - camera.OriginX, sy0 - camera.OriginY
+	vt := client.NewViewportTransform(cam, nil, 640, 480)
+	p := vt.WorldToViewport(u.X, u.Y, u.Z)
+	return p.X, p.Y
 }
 
 func clickAt(b *battleSession, sx, sy int32, shift bool) {
@@ -167,7 +170,8 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 		qBefore = q.LenPrimary()
 	}
 	// Use a far empty ground location that is not within 16px of any unit (units at 8,8 and 20,20 world → screen 8,8 and 20,20).
-	clickAt(b, 600, 400, false) // far empty ground
+	// Use point outside minimap (540,360 90x90) so it is not intercepted as minimap jump [C-6][07 §10].
+	clickAt(b, 300, 200, false) // far empty ground
 	if a.Flags&client.SelectionFlag == 0 {
 		t.Fatalf("left empty with selection should preserve selection (issues move instead of clear)")
 	}
@@ -188,7 +192,8 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 		a.Flags |= client.SelectionFlag
 	}
 	// Right empty clears when not additive [07 §9] — deselect branch.
-	rightClickAt(b, 600, 400, false)
+	// Right click must be outside minimap as well.
+	rightClickAt(b, 300, 200, false)
 	if a.Flags&client.SelectionFlag != 0 || c.Flags&client.SelectionFlag != 0 {
 		t.Fatalf("right empty should clear all, A %v C %v", a.Flags&client.SelectionFlag != 0, c.Flags&client.SelectionFlag != 0)
 	}
@@ -199,7 +204,7 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 	if q := orders.QueueForUnit(a); q != nil {
 		qBefore2 = q.LenPrimary()
 	}
-	clickAt(b, 600, 400, true) // shift left empty → queued move, preserves
+	clickAt(b, 300, 200, true) // shift left empty → queued move, preserves
 	if a.Flags&client.SelectionFlag == 0 {
 		t.Fatalf("shift left empty should preserve selection via queued move")
 	}
@@ -317,13 +322,16 @@ func TestEqualOverlapTieLowerSlotWins(t *testing.T) {
 		}
 	}
 	sx, sy := screenPos(b.cam, u1) // same as u2
-	// First via direct picker
+	// First via direct picker (expects shell coords) [C-3][03 §2.5]
+	vtPick := client.NewViewportTransform(b.cam, nil, 640, 480)
+	shellX := sx - vtPick.Viewport.Left
+	shellY := sy - vtPick.Viewport.Top
 	viewer := visibility.PlayerID(b.sess.LocalOwner)
-	bh, bu := client.PickUnit(sx, sy, b.cam, b.sess.Units, nil, viewer)
+	bh, bu := client.PickUnit(shellX, shellY, b.cam, b.sess.Units, nil, viewer)
 	if bh != h1 || bu != u1 {
 		t.Fatalf("overlap tie: want lower slot %v got %v", h1, bh)
 	}
-	// Via click selection
+	// Via click selection (expects viewport logical, handled via battle's conversion)
 	clickAt(b, sx, sy, false)
 	if u1.Flags&client.SelectionFlag == 0 {
 		t.Fatalf("lower slot should be selected on exact overlap click")
@@ -334,7 +342,9 @@ func TestEqualOverlapTieLowerSlotWins(t *testing.T) {
 	// Nudge u2 to be 1px closer – should win despite higher slot (nearest wins)
 	u2.X = x + numeric.Fixed(1*65536)
 	sx2, sy2 := screenPos(b.cam, u2)
-	bh2, _ := client.PickUnit(sx2, sy2, b.cam, b.sess.Units, nil, viewer)
+	shellX2 := sx2 - vtPick.Viewport.Left
+	shellY2 := sy2 - vtPick.Viewport.Top
+	bh2, _ := client.PickUnit(shellX2, shellY2, b.cam, b.sess.Units, nil, viewer)
 	if bh2 != h2 {
 		t.Fatalf("nearest should win despite higher slot, want %v got %v", h2, bh2)
 	}
@@ -411,8 +421,9 @@ func TestFeaturePickingOverlap(t *testing.T) {
 	b.cam.Z = 0
 	// Place unit at same cell as feature to test unit>feature priority
 	u := placeUnit(b, "armsolar", numeric.Fixed(int64(5*16)<<16), numeric.Fixed(int64(5*16)<<16))
-	sx := int32(5 * 16)
-	sy := int32(5 * 16)
+	vt := client.NewViewportTransform(b.cam, b.sess.World, 640, 480)
+	p := vt.WorldToViewport(numeric.Fixed(int64(5*16)<<16), 0, numeric.Fixed(int64(5*16)<<16))
+	sx, sy := p.X, p.Y
 	// Pick at feature cell – unit should win
 	h, _, pos := b.pickTarget(sx, sy)
 	if h == 0 {

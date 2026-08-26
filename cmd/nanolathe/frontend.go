@@ -17,6 +17,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/settings"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -101,6 +102,7 @@ type gameShell struct {
 	// persisted preferences. Only that path writes them back, so the
 	// screenshot path and the tests never touch the user's settings file.
 	settingsWritable bool
+	scrollSpeed      int // persisted scrollspeed [02 "Settings"] [07 §10] C2 presentation-only
 
 	campaigns              []mission.Campaign
 	campaignOptions        []mission.Campaign
@@ -162,6 +164,7 @@ func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	}
 	shell.setup = newSkirmishMenuConfig(mapName)
 	shell.missionDifficultyValue = session.SkirmishDefaultDifficulty
+	shell.scrollSpeed = settings.DefaultScrollSpeed // [02 "Settings"] [07 §10]
 	shell.assets = loadMenuAssets(cs)
 	if shell.assets != nil {
 		shell.font = shell.assets.font

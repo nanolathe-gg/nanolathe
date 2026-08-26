@@ -89,6 +89,12 @@ func (c *Camera) scale() float32 {
 	return c.Scale
 }
 
+// EffectiveScale returns the clamped presentation scale [F-P1-008].
+// Presentation-only; sim never reads it [I6].
+func (c *Camera) EffectiveScale() float32 { // [F-P1-008]
+	return c.scale()
+}
+
 // EffectiveView returns the view size in world pixels after zoom. When zoomed
 // in, less world is visible; when zoomed out, more. Clamp uses this.
 func (c *Camera) EffectiveView() (int32, int32) {

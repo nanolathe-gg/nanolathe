@@ -379,9 +379,16 @@ func (q *Queue) ClearDiagnostics() {
 }
 
 func (q *Queue) recordDiagnostic(msg string) {
-	if q != nil {
-		q.diagnostics = append(q.diagnostics, msg)
+	if q == nil {
+		return
 	}
+	// [REVIEW_OX_ALPHA E-7] bound diagnostics to 256 entries to prevent per-tick unbounded growth when descriptors have nil handlers by design.
+	const maxDiagnostics = 256
+	if len(q.diagnostics) >= maxDiagnostics {
+		copy(q.diagnostics, q.diagnostics[1:])
+		q.diagnostics = q.diagnostics[:maxDiagnostics-1]
+	}
+	q.diagnostics = append(q.diagnostics, msg)
 }
 
 // cancelAll frees every record on both segments [04 §3.3] result code 7 and

@@ -76,6 +76,10 @@ type Client struct {
 	// wall-clock time never reaches the sim (I6) — only this presentation
 	// fraction derives from it.
 	runtime float64
+	// [PLAN_03 C16][REVIEW_OX_ALPHA S-2] tick-anchored alpha: runtime at last publish.
+	tickBaseRuntime float64
+	lastPublishTick uint32
+	hasPublish      bool
 
 	// Palette fallback (WU-04A-2 replaces this with full tables). Every indexed
 	// pixel goes logical → physical through the 256-byte table at present time
@@ -201,11 +205,17 @@ func (c *Client) SetFNT(fnt *formats.FNT) { c.fnt = fnt }
 func (c *Client) SetSnapshot(b *snapshot.Buffer) {
 	if b != nil {
 		c.buffer = b
+		// Reset publish anchor so alpha re-anchors to the new session [PLAN_03 C16][REVIEW_OX_ALPHA S-2].
+		c.hasPublish = false
+		c.lastPublishTick = 0
 	}
 }
 
 // Size returns the negotiated logical framebuffer size.
 func (c *Client) Size() (int, int) { return c.width, c.height }
+
+// IsHeadless reports whether the client was created headless [PLAN_04A] C11.
+func (c *Client) IsHeadless() bool { return c != nil && c.opts.Headless }
 
 // Buffer exposes the presentation snapshot source (diagnostics publish into
 // it directly; the session path owns it in normal play).
@@ -647,18 +657,47 @@ func (c *Client) featureScreenPos(f snapshot.FeatureView) (int32, int32) {
 	return sx, sy
 }
 
-// computeAlpha derives the render interpolation fraction:
-// frac(runtime*30), clamped to [0,1] (PLAN_03 C16).
+// computeAlpha derives the render interpolation fraction anchored to publish cadence [PLAN_03 C16][REVIEW_OX_ALPHA S-2].
+// Previous free-run frac(runtime*30) could beat the 30 Hz publish cadence under burst; now anchored to last publish tick.
 func (c *Client) computeAlpha() float32 {
-	ticks := c.runtime * 30.0
-	frac := ticks - float64(int64(ticks))
-	if frac < 0 {
-		frac = 0
-	} else if frac > 1 {
-		frac = 1
+	if !c.hasPublish {
+		ticks := c.runtime * 30.0
+		frac := ticks - float64(int64(ticks))
+		if frac < 0 {
+			frac = 0
+		} else if frac > 1 {
+			frac = 1
+		}
+		if frac != frac { // NaN
+			return 0
+		}
+		return float32(frac)
 	}
-	if frac != frac { // NaN
+	elapsed := c.runtime - c.tickBaseRuntime
+	alpha := elapsed * 30.0
+	if alpha < 0 {
+		alpha = 0
+	} else if alpha > 1 {
+		alpha = 1
+	}
+	if alpha != alpha { // NaN
 		return 0
 	}
-	return float32(frac)
+	return float32(alpha)
+}
+
+// updatePublishAnchor records the runtime at the last published tick [PLAN_03 C15][PLAN_03 C16].
+func (c *Client) updatePublishAnchor() {
+	if c == nil || c.buffer == nil {
+		return
+	}
+	_, cur, ok := c.buffer.Read()
+	if !ok || cur == nil {
+		return
+	}
+	if !c.hasPublish || cur.Tick != c.lastPublishTick {
+		c.lastPublishTick = cur.Tick
+		c.tickBaseRuntime = c.runtime
+		c.hasPublish = true
+	}
 }

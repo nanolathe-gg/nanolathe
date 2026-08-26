@@ -8,11 +8,9 @@ package client
 // trig is on the I2 float allowlist), projects through the orthographic
 // half-shear [03 §2.5], and rasterizes with painter's order.
 //
-// Face shading follows retail exactly on the two points the decompile pins:
-// flat-colored primitives keep their resolved palette color across
-// orientations (no SHD), and only texture pixels would route through SHD —
-// the SHD row-selection math is undocumented (TODO(question)), so textured
-// faces currently sample unshaded.
+// Face shading follows retail: flat-colored primitives keep palette color without SHD,
+// textured primitives shade via SHD row = __ftol(dot*5)&31 (trunc*5 mod 32) with dont-shade pin 15
+// [03 §4.3][03 §2.4.1][rr-09 addendum] via per-vertex averaged normals; implemented below.
 
 import (
 	"fmt"

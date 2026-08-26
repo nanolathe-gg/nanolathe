@@ -125,6 +125,13 @@ func (in *InputState) pollEbiten() {
 		m.ScrollY = 0
 	}
 	for key := input.Key(1); key < input.KeyCount; key++ {
+		if key == input.KeyShift {
+			// Retail VK_SHIFT covers both left and right shift [07 §2][C-5].
+			down := ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
+			k.edges[key] = down && !k.held[key]
+			k.held[key] = down
+			continue
+		}
 		if ek, ok := ebitenKey(key); ok {
 			down := ebiten.IsKeyPressed(ek)
 			k.edges[key] = down && !k.held[key]

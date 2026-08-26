@@ -21,6 +21,8 @@ func (a *ebitenApp) Update() error {
 	if a.c.opts.Step != nil {
 		a.c.opts.Step(dt)
 	}
+	// [PLAN_03 C16][REVIEW_OX_ALPHA S-2] anchor alpha to last publish.
+	a.c.updatePublishAnchor()
 	if a.c.ExitRequested() {
 		return ebiten.Termination
 	}

@@ -34,6 +34,11 @@ func (g *gameShell) attachSettings() {
 func (g *gameShell) applySettings(s settings.Settings) {
 	s.Normalize()
 	g.missionDifficultyValue = s.Difficulty
+	// Scroll speed is the persisted scrollspeed byte [02 "Settings"] [07 §10] C2.
+	// It is presentation-only and never touches sim [I6].
+	if s.ScrollSpeed != 0 {
+		g.scrollSpeed = s.ScrollSpeed
+	}
 
 	sk := s.Skirmish
 	// ApplyDefaults has already run in newGameShell, so the six scalars below
@@ -112,7 +117,10 @@ func (g *gameShell) syncMapIndex() {
 // captureSettings reads the shell's live frontend state back into the
 // persisted block.
 func (g *gameShell) captureSettings() settings.Settings {
-	s := settings.Settings{Version: settings.FileVersion, Difficulty: g.missionDifficultyValue}
+	s := settings.Settings{Version: settings.FileVersion, Difficulty: g.missionDifficultyValue, ScrollSpeed: g.scrollSpeed}
+	if s.ScrollSpeed == 0 {
+		s.ScrollSpeed = settings.DefaultScrollSpeed
+	}
 	s.Skirmish = settings.Skirmish{
 		Map:            g.setup.MapName,
 		NumPlayers:     g.setup.NumPlayers,

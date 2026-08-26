@@ -58,7 +58,10 @@ func TestViewportTransformRoundTripFlat(t *testing.T) {
 func TestViewportTransformZoomProjectionRoundTrip(t *testing.T) {
 	ter := viewportTerrain(func(int, int) uint8 { return 40 }, 0)
 	cam := &camera.Camera{X: 128, Z: 96, ViewW: 512, ViewH: 416, MapW: 1024, MapH: 1024}
-	point := struct{ x, y, z numeric.Fixed }{numeric.Fixed(300 << 16), numeric.Fixed(40 << 16), numeric.Fixed(300 << 16)}
+	// Point chosen to stay inside the drawn-chrome viewport (129,32..639,447) at all
+	// zoom levels: distance from cam (128,96) is 72 world pixels, so at scale 4
+	// the screen offset is 288, well inside the 511-wide viewport [C-1][F-P1-008].
+	point := struct{ x, y, z numeric.Fixed }{numeric.Fixed(200 << 16), numeric.Fixed(40 << 16), numeric.Fixed(200 << 16)}
 	for _, scale := range []float32{0.25, 0.5, 1, 2, 4} {
 		cam.Scale = scale // presentation-only zoom [F-P1-008]
 		tr := NewViewportTransform(cam, ter, 640, 480)
@@ -117,20 +120,22 @@ func TestViewportLogicalCursorCoordinates(t *testing.T) {
 	if tr.LogicalWidth != 640 || tr.LogicalHeight != 480 {
 		t.Fatalf("defaults=(%d,%d), want (640,480)", tr.LogicalWidth, tr.LogicalHeight)
 	}
-	if tr.Viewport != (ViewportRect{Left: 0, Top: 0, Right: 511, Bottom: 415}) {
-		t.Fatalf("battle viewport=%+v, want shell-rebased 512x416 rectangle", tr.Viewport)
+	// Battle viewport is the drawn-chrome region [129,32]..[639,447] [07 §6][07 §8] C-3.
+	if tr.Viewport != (ViewportRect{Left: 129, Top: 32, Right: 639, Bottom: 447}) {
+		t.Fatalf("battle viewport=%+v, want drawn-chrome 511x416 rectangle at 129,32", tr.Viewport)
 	}
-	if tr.ViewportToHUDRegion(Point{X: 511, Y: 415}) != RegionWorld {
+	if tr.ViewportToHUDRegion(Point{X: 639, Y: 447}) != RegionWorld {
 		t.Fatal("last battle pixel was classified as HUD")
 	}
-	if tr.ViewportToHUDRegion(Point{X: 512, Y: 415}) != RegionHUD || tr.ViewportToHUDRegion(Point{X: 1, Y: 416}) != RegionHUD {
+	if tr.ViewportToHUDRegion(Point{X: 640, Y: 447}) != RegionHUD || tr.ViewportToHUDRegion(Point{X: 129, Y: 448}) != RegionHUD {
 		t.Fatal("HUD boundary reached the world region")
 	}
 }
 
 func TestHUDClicksNeverReachWorld(t *testing.T) {
 	tr := NewViewportTransform(nil, viewportTerrain(func(int, int) uint8 { return 10 }, 0), 640, 480)
-	for _, p := range []Point{{X: 512, Y: 100}, {X: 10, Y: 416}, {X: 639, Y: 479}, {X: -1, Y: 10}} {
+	// Viewport is 129,32..639,447; points outside that are HUD [C-3][07 §8].
+	for _, p := range []Point{{X: 128, Y: 100}, {X: 10, Y: 31}, {X: 640, Y: 100}, {X: 639, Y: 448}, {X: -1, Y: 10}} {
 		if _, _, _, ok := tr.OrderTargetFromViewport(p); ok {
 			t.Fatalf("HUD point %+v produced an order target", p)
 		}
@@ -139,15 +144,19 @@ func TestHUDClicksNeverReachWorld(t *testing.T) {
 
 func TestViewportRectToWorldSortsEndpoints(t *testing.T) {
 	tr := NewViewportTransform(&camera.Camera{}, nil, 640, 480)
-	minX, minZ, maxX, maxZ, ok := tr.ViewportRectToWorld(ViewportRect{Left: 200, Top: 300, Right: 20, Bottom: 40})
+	// Use a rect fully inside the drawn-chrome viewport 129,32..639,447 [C-3].
+	// World = viewport - (129,32) + cam (cam 0) [03 §2.5][07 §8].
+	rect := ViewportRect{Left: 329, Top: 332, Right: 149, Bottom: 132}
+	minX, minZ, maxX, maxZ, ok := tr.ViewportRectToWorld(rect)
 	if !ok {
 		t.Fatal("in-viewport selection was rejected")
 	}
 	if minX > maxX || minZ > maxZ {
 		t.Fatalf("selection was not sorted: (%d,%d)..(%d,%d)", minX, minZ, maxX, maxZ)
 	}
-	if minX != numeric.Fixed(20<<16) || minZ != numeric.Fixed(40<<16) || maxX != numeric.Fixed(200<<16) || maxZ != numeric.Fixed(300<<16) {
-		t.Fatalf("selection world bounds=(%d,%d)..(%d,%d)", minX, minZ, maxX, maxZ)
+	// 149,132 => world 20,100 ; 329,332 => world 200,300 after subtracting chrome origin 129,32.
+	if minX != numeric.Fixed(20<<16) || minZ != numeric.Fixed(100<<16) || maxX != numeric.Fixed(200<<16) || maxZ != numeric.Fixed(300<<16) {
+		t.Fatalf("selection world bounds=(%d,%d)..(%d,%d) want 20,100..200,300", minX, minZ, maxX, maxZ)
 	}
 }
 
@@ -157,7 +166,8 @@ func TestViewportNegativeProjectionUsesArithmeticShift(t *testing.T) {
 	if beam != (Point{X: 127, Y: 31}) {
 		t.Fatalf("negative beam point=%+v, want (127,31)", beam)
 	}
-	if got := tr.BeamToViewport(beam); got != (Point{X: -1, Y: -1}) {
-		t.Fatalf("negative viewport point=%+v, want (-1,-1)", got)
+	// With drawn-chrome viewport at 129,32, beam 127 maps to 128 (=127-128+129) [C-3].
+	if got := tr.BeamToViewport(beam); got != (Point{X: 128, Y: 31}) {
+		t.Fatalf("negative viewport point=%+v, want (128,31)", got)
 	}
 }

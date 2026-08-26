@@ -418,14 +418,15 @@ func TestReclaimClickResolvesFeature(t *testing.T) {
 	// Place cam at 0
 	b.cam.X = 0
 	b.cam.Z = 0
-	// Pick at screen that maps to feature world 5*16 = 80 (shell coords)
-	sx := int32(5 * 16) // shell
-	sy := int32(5 * 16)
-	// Debug: check what pickTarget computes for cx,cz (add Origin for beam)
-	wx, wz := b.cam.ScreenToWorld(sx+camera.OriginX, sy+camera.OriginY)
-	cx := world.WorldToCell(wx)
-	cz := world.WorldToCell(wz)
-	t.Logf("debug pick screen %d,%d -> world %d,%d -> cell %d,%d PlotFeature %d Resolve %v", sx, sy, wx, wz, cx, cz, b.sess.World.Plot[cz*int32(b.sess.World.CellW)+cx].Feature(), func() bool {
+	// Pick at viewport that maps to feature world 5*16 = 80 [C-3][07 §8] drawn-chrome.
+	vt := client.NewViewportTransform(b.cam, b.sess.World, 640, 480)
+	p := vt.WorldToViewport(numeric.Fixed(int64(5*16)<<16), 0, numeric.Fixed(int64(5*16)<<16))
+	sx, sy := p.X, p.Y
+	// Debug: check what pickTarget computes for cx,cz
+	wxDbg, _, wzDbg := b.cursorWorld(sx, sy)
+	cx := world.WorldToCell(wxDbg)
+	cz := world.WorldToCell(wzDbg)
+	t.Logf("debug pick screen %d,%d -> world %d,%d -> cell %d,%d PlotFeature %d Resolve %v", sx, sy, wxDbg, wzDbg, cx, cz, b.sess.World.Plot[cz*int32(b.sess.World.CellW)+cx].Feature(), func() bool {
 		_, ok := world.ResolveFeature(b.sess.World.Plot, int(b.sess.World.CellW), int(b.sess.World.CellH), int(cx), int(cz))
 		return ok
 	}())
@@ -531,7 +532,7 @@ func TestWASDUnbound(t *testing.T) {
 	// Edge scroll still works: place mouse near edge
 	cl3, _ := client.New(client.Options{Buffer: buf, Width: 640, Height: 480, Headless: true, Step: func(delta float64) {}})
 	cl3.SetCamera(b.cam)
-	cl3.Input().Mouse.InjectMouseMove(1, 240) // left edge
+	cl3.Input().Mouse.InjectMouseMove(0, 240) // left edge exact [07 §10] x==0
 	b.viewerStep(0.016, cl3)
 	if b.cam.X == 500 {
 		t.Fatalf("edge scroll should move left")

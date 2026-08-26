@@ -15,6 +15,8 @@
 package client
 
 import (
+	"math"
+
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -110,27 +112,33 @@ func BlitTerrainOrigin(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camer
 		return
 	}
 	var camX, camZ int32
+	var scale float64 = 1
 	if cam != nil {
 		camX = cam.X
 		camZ = cam.Z
+		scale = float64(cam.EffectiveScale())
+		if scale == 0 {
+			scale = 1
+		}
 	}
 	// Visible map rectangle in map pixels for the viewport [originX/Y, originX+dstW).
 	// For the half-height shear, terrain is at Y=0 so the shear term is zero
 	// and the projection reduces to map-pixel translation; we keep the general
 	// WorldToScreen path per tile so the same helper governs all world→screen
 	// work [03 §2.5] C1.
-	// Compute inclusive tile range intersecting the viewport, including partial
-	// edge tiles. Using floor division handles negative camera correctly [I3][03 §2.1].
-	// mx0 = camX - originX is the map pixel at dst X=0.
-	mx0 := int64(camX - originX)
-	my0 := int64(camZ - originY)
-	mx1 := mx0 + int64(dstW) // exclusive
-	my1 := my0 + int64(dstH)
+	// Derive visible range from Camera.Scale so rendered tiles and picked pixels
+	// agree at any zoom [C-1][03 §2.5][F-P1-008]: screenX = (worldX - camX)*scale + originX
+	// => worldX = camX + (screenX - originX)/scale . At scale !=1 the tile range is
+	// dstW/scale world pixels. Use floor division for negative correctly [I3][03 §2.1].
+	mx0 := float64(camX) - float64(originX)/scale
+	my0 := float64(camZ) - float64(originY)/scale
+	mx1 := mx0 + float64(dstW)/scale // exclusive
+	my1 := my0 + float64(dstH)/scale
 	// Inclusive tile indices covering [mx0,mx1) etc.
-	startTX := terrainFloorDiv(mx0, terrainTileSize)
-	startTY := terrainFloorDiv(my0, terrainTileSize)
-	endTX := terrainFloorDiv(mx1-1, terrainTileSize)
-	endTY := terrainFloorDiv(my1-1, terrainTileSize)
+	startTX := terrainFloorDiv(int64(math.Floor(mx0)), terrainTileSize)
+	startTY := terrainFloorDiv(int64(math.Floor(my0)), terrainTileSize)
+	endTX := terrainFloorDiv(int64(math.Floor(mx1-1e-9)), terrainTileSize)
+	endTY := terrainFloorDiv(int64(math.Floor(my1-1e-9)), terrainTileSize)
 
 	// Stable iteration over intersecting tiles in row-major order (determinism
 	// per I1 is preserved — no map iteration).
@@ -173,11 +181,40 @@ func BlitTerrainOrigin(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camer
 				sy = int32(tileMapY) + originY
 			}
 			// Destination rectangle for this tile, clipped at viewport bounds
-			// — partial edge rectangles [03 §2.2].
+			// — partial edge rectangles [03 §2.2]. At scale 1 the rect is 32×32.
+			// At other scales the screen size is 32*scale [F-P1-008] so picking
+			// via ScreenToWorld and rendered tiles agree [C-1].
+			var tileScreenW, tileScreenH int
+			if cam != nil && scale != 1 {
+				// Compute opposite corner via projection to get exact scaled size
+				// with same truncation as WorldToScreen [03 §2.5].
+				wx1 := numeric.Fixed(int64(tileMapX+terrainTileSize) << 16)
+				wz1 := numeric.Fixed(int64(tileMapY+terrainTileSize) << 16)
+				bsx1, bsy1 := cam.WorldToScreen(wx1, 0, wz1)
+				sx1 := bsx1 - camera.OriginX + originX
+				sy1 := bsy1 - camera.OriginY + originY
+				tileScreenW = int(sx1 - sx)
+				tileScreenH = int(sy1 - sy)
+				if tileScreenW <= 0 {
+					tileScreenW = int(float64(terrainTileSize) * scale)
+					if tileScreenW <= 0 {
+						tileScreenW = 1
+					}
+				}
+				if tileScreenH <= 0 {
+					tileScreenH = int(float64(terrainTileSize) * scale)
+					if tileScreenH <= 0 {
+						tileScreenH = 1
+					}
+				}
+			} else {
+				tileScreenW = terrainTileSize
+				tileScreenH = terrainTileSize
+			}
 			dstX0 := int(sx)
 			dstY0 := int(sy)
-			dstX1 := dstX0 + terrainTileSize
-			dstY1 := dstY0 + terrainTileSize
+			dstX1 := dstX0 + tileScreenW
+			dstY1 := dstY0 + tileScreenH
 			if dstX0 < 0 {
 				dstX0 = 0
 			}
@@ -193,32 +230,58 @@ func BlitTerrainOrigin(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camer
 			if dstX0 >= dstX1 || dstY0 >= dstY1 {
 				continue
 			}
-			// Source intra-tile remainder: how many pixels to skip inside the
-			// 32×32 block before the first visible column/row [03 §2.2].
-			// e.g. camera X=10 => first tile's visible slice starts at srcX=10.
-			srcX0 := dstX0 - int(sx)
-			srcY0 := dstY0 - int(sy)
-			w := dstX1 - dstX0
-			h := dstY1 - dstY0
-			// Defensive: source window must lie inside the 32×32 tile.
-			if srcX0 < 0 || srcY0 < 0 || srcX0+w > terrainTileSize || srcY0+h > terrainTileSize {
-				continue
-			}
-			// Copy the clipped source block row by row. Nearest-neighbour;
-			// bilinear would distort indexed art and is already disallowed
-			// by the TextureFilterNearest upload in client.go.
-			for row := 0; row < h; row++ {
-				srcRow := srcY0 + row
-				dstRow := dstY0 + row
-				srcOff := srcRow*terrainTileSize + srcX0
-				dstOff := dstRow*dstW + dstX0
-				if srcOff < 0 || srcOff+w > terrainTilePixels {
+			if scale == 1 {
+				// Fast 1:1 path: source intra-tile remainder [03 §2.2].
+				srcX0 := dstX0 - int(sx)
+				srcY0 := dstY0 - int(sy)
+				w := dstX1 - dstX0
+				h := dstY1 - dstY0
+				if srcX0 < 0 || srcY0 < 0 || srcX0+w > terrainTileSize || srcY0+h > terrainTileSize {
 					continue
 				}
-				if dstOff < 0 || dstOff+w > len(dst) {
-					continue
+				for row := 0; row < h; row++ {
+					srcRow := srcY0 + row
+					dstRow := dstY0 + row
+					srcOff := srcRow*terrainTileSize + srcX0
+					dstOff := dstRow*dstW + dstX0
+					if srcOff < 0 || srcOff+w > terrainTilePixels {
+						continue
+					}
+					if dstOff < 0 || dstOff+w > len(dst) {
+						continue
+					}
+					copy(dst[dstOff:dstOff+w], tile[srcOff:srcOff+w])
 				}
-				copy(dst[dstOff:dstOff+w], tile[srcOff:srcOff+w])
+			} else {
+				// Scaled nearest-neighbour: map each dest pixel to nearest source
+				// via (dest - sx)/scale [F-P1-008] presentation-only.
+				for dy := dstY0; dy < dstY1; dy++ {
+					srcY := int(float32(dy-int(sy)) / float32(scale))
+					if srcY < 0 {
+						srcY = 0
+					} else if srcY >= terrainTileSize {
+						srcY = terrainTileSize - 1
+					}
+					dstOff := dy*dstW + dstX0
+					srcRow := srcY * terrainTileSize
+					for dx := dstX0; dx < dstX1; dx++ {
+						srcX := int(float32(dx-int(sx)) / float32(scale))
+						if srcX < 0 {
+							srcX = 0
+						} else if srcX >= terrainTileSize {
+							srcX = terrainTileSize - 1
+						}
+						srcIdx := srcRow + srcX
+						if srcIdx < 0 || srcIdx >= terrainTilePixels {
+							continue
+						}
+						dstIdx := dstOff + (dx - dstX0)
+						if dstIdx < 0 || dstIdx >= len(dst) {
+							continue
+						}
+						dst[dstIdx] = tile[srcIdx]
+					}
+				}
 			}
 		}
 	}

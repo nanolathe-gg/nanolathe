@@ -531,6 +531,12 @@ func installWeapons(u *Unit, def *content.UnitDef) {
 	if u == nil || def == nil {
 		return
 	}
+	// [04 §5.3] muzzle piece identity queried synchronously via AimFrom→Query fallback;
+	// a missing COB query leaves -1 so muzzleWorldPosResolved falls back to root
+	// rather than piece 0. Seed default before wiring weapons [06 §4.1] C3.
+	for i := 0; i < NumSlots; i++ {
+		u.Slots[i].MuzzlePiece = -1 // [04 §5.3] [06 §4.1] C3
+	}
 	if def.Weapon1Def != nil {
 		u.Slots[0].Weapon = def.Weapon1Def
 		u.Slots[0].Flags |= 0x02 // armed/hasTarget when populated [06 §1.2] P0-10

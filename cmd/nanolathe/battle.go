@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hajimehoshi/ebiten/v2"
+
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
@@ -20,6 +22,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/settings"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -329,8 +332,15 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	} else {
 		b.updateCursor(cl)
 	}
-	// Camera pan identical to Gate-1/Gate-2 caps [07 §10]; W/A/S/D remain
-	// unbound per ON-05 (do not pan) [F-P1-008].
+	// Camera pan: exact predicates per [07 §10] C2/C3; presentation-only [I6].
+	// - delta = scrollSettingByte * rawTimeDelta capped at 128 [07 §10] (C2)
+	// - direction predicates: exact-edge bands plus less-than-100px beyond-edge forced strip with focus [07 §10]
+	// - held-arrow gated on TALK.GUI suppression, edge never suppressed by TALK [07 §10]
+	// - minimap interaction region suppresses edge [07 §10]
+	// - modal GUI suppresses edge [07 §10]
+	// - focus gating before edge [07 §10]
+	// - scroll setting from persisted settings byte [02 "Settings"] default 32 [C-5]
+	// W/A/S/D remain unbound per ON-05 (do not pan) [F-P1-008].
 	if b.cam != nil && b.menu == battleMenuClosed {
 		kbd := cl.Input().Kbd
 		mouse := cl.Input().Mouse
@@ -338,18 +348,48 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		if rawDelta <= 0 {
 			rawDelta = 16
 		}
-		const scrollSetting = 8
-		if kbd.KeyHeld(input.KeyUp) {
-			b.cam.Scroll(scrollSetting, rawDelta, camera.DirUp)
+		scrollSetting := b.scrollSetting()
+		focused := ebiten.IsFocused() || (cl != nil && cl.IsHeadless())
+		w, h := cl.Size()
+		wi, hi := int32(w), int32(h)
+		mx, my := int32(mouse.X), int32(mouse.Y)
+		// Beyond-edge forced strip: pointer outside right/bottom <100px beyond with focus is forced to edge [07 §10].
+		effX, effY := mx, my
+		if focused {
+			if mx >= wi && mx < wi+100 {
+				effX = wi - 1
+			}
+			if my >= hi && my < hi+100 {
+				effY = hi - 1
+			}
 		}
-		if kbd.KeyHeld(input.KeyDown) {
-			b.cam.Scroll(scrollSetting, rawDelta, camera.DirDown)
-		}
-		if kbd.KeyHeld(input.KeyLeft) {
+		talkActive := b.isTalkGUIActive()
+		overMinimap := b.isOverMinimap(effX, effY)
+		modalActive := b.menu != battleMenuClosed
+		// Held-arrow branches gated on TALK absence [07 §10]; edge branches gated on focus, modal, and minimap.
+		// Left: (Left held && !talk) OR (x==0 && y<H) [07 §10]
+		if kbd.KeyHeld(input.KeyLeft) && !talkActive {
+			b.cam.Scroll(scrollSetting, rawDelta, camera.DirLeft)
+		} else if focused && !modalActive && !overMinimap && effX == 0 && effY < hi {
 			b.cam.Scroll(scrollSetting, rawDelta, camera.DirLeft)
 		}
-		if kbd.KeyHeld(input.KeyRight) {
+		// Right: (Right held && !talk) OR x==W-1 [07 §10]
+		if kbd.KeyHeld(input.KeyRight) && !talkActive {
 			b.cam.Scroll(scrollSetting, rawDelta, camera.DirRight)
+		} else if focused && !modalActive && !overMinimap && effX == wi-1 {
+			b.cam.Scroll(scrollSetting, rawDelta, camera.DirRight)
+		}
+		// Up: (Up held && !talk) OR (y==0 && x<W) [07 §10]
+		if kbd.KeyHeld(input.KeyUp) && !talkActive {
+			b.cam.Scroll(scrollSetting, rawDelta, camera.DirUp)
+		} else if focused && !modalActive && !overMinimap && effY == 0 && effX < wi {
+			b.cam.Scroll(scrollSetting, rawDelta, camera.DirUp)
+		}
+		// Down: (Down held && !talk) OR y==H-1 [07 §10]
+		if kbd.KeyHeld(input.KeyDown) && !talkActive {
+			b.cam.Scroll(scrollSetting, rawDelta, camera.DirDown)
+		} else if focused && !modalActive && !overMinimap && effY == hi-1 {
+			b.cam.Scroll(scrollSetting, rawDelta, camera.DirDown)
 		}
 		// Middle-drag camera pan [F-P1-008]: presentation-only, uses mouse delta / scale.
 		if mouse.Held(input.MouseButtonMiddle) && mouse.Moved() {
@@ -362,20 +402,6 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// Wheel zoom presentation-only, centered where practical (cursor) [F-P1-008].
 		if mouse.Scrolled() && mouse.ScrollY != 0 {
 			b.cam.AddZoom(mouse.ScrollY, int32(mouse.X), int32(mouse.Y))
-		}
-		const edge = 8
-		w, h := cl.Size()
-		if w > 0 && h > 0 {
-			if mouse.X < float32(edge) {
-				b.cam.Scroll(scrollSetting, rawDelta, camera.DirLeft)
-			} else if mouse.X > float32(w-edge) {
-				b.cam.Scroll(scrollSetting, rawDelta, camera.DirRight)
-			}
-			if mouse.Y < float32(edge) {
-				b.cam.Scroll(scrollSetting, rawDelta, camera.DirUp)
-			} else if mouse.Y > float32(h-edge) {
-				b.cam.Scroll(scrollSetting, rawDelta, camera.DirDown)
-			}
 		}
 		b.prevMouseX = mouse.X
 		b.prevMouseY = mouse.Y
@@ -395,6 +421,56 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	mx, my := int32(mouse.X), int32(mouse.Y)
 	b.shiftHeld = kbd.HasShift()
 	b.pointerX, b.pointerY = mx, my
+
+	// Minimap click-to-jump [C-6][07 §10] using camera.Minimap math (ToCamera/ToWorld).
+	// This is presentation-only and never writes sim [I6].
+	if b.isOverMinimap(mx, my) {
+		if mouse.Pressed(input.MouseButtonLeft) && b.cam != nil && b.sess != nil && b.sess.World != nil {
+			playW := b.sess.World.PlayRight
+			playH := b.sess.World.PlayBottom
+			if playW <= 0 || playH <= 0 {
+				playW = b.sess.World.CellW*16 - 32
+				playH = b.sess.World.CellH*16 - 128
+				if playW <= 0 {
+					playW = b.sess.World.CellW * 16
+				}
+				if playH <= 0 {
+					playH = b.sess.World.CellH * 16
+				}
+			}
+			m := camera.LayoutMinimap(playW, playH) // [07 §10]
+			const mmX, mmY, mmW, mmH = 540, 360, 90, 90
+			// Scale HUD 90x90 to 126 canvas for letterbox math [07 §10][minimap §4].
+			canvasX := (mx - mmX) * 126 / mmW
+			canvasY := (my - mmY) * 126 / mmH
+			if canvasX < 0 {
+				canvasX = 0
+			} else if canvasX >= 126 {
+				canvasX = 125
+			}
+			if canvasY < 0 {
+				canvasY = 0
+			} else if canvasY >= 126 {
+				canvasY = 125
+			}
+			eW, eH := b.cam.EffectiveView()
+			if eW <= 0 {
+				eW = b.cam.ViewW
+			}
+			if eH <= 0 {
+				eH = b.cam.ViewH
+			}
+			cx, cz := m.ToCamera(canvasX, canvasY, playW, playH, eW, eH) // [07 §10] C4
+			b.cam.X = cx
+			b.cam.Z = cz
+			b.cam.Pan(0, 0)
+			return
+		}
+		// While over minimap, suppress world drag/selection [07 §10] minimap interaction region.
+		if mouse.Pressed(input.MouseButtonLeft) || mouse.Held(input.MouseButtonLeft) {
+			return
+		}
+	}
 
 	// Latch arming via hotkeys — retail latch byte IS dispatcher switch key [GAP T22][07 §9] C11.
 	// Preserve authored button order and pagination for build menu [02 "Build-menu catalog keys"].
@@ -633,10 +709,15 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 				var bh pool.Handle
 				var bu snapshot.UnitView
 				var hit bool
+				// PickUnit/Snapshot pick expects shell viewport coords (0..511) [03 §2.5][C-3];
+				// convert logical mouse (129..639) to shell by subtracting viewport origin.
+				vtShell := client.NewViewportTransform(b.cam, nil, 640, 480)
+				shellX := mx - vtShell.Viewport.Left
+				shellY := my - vtShell.Viewport.Top
 				if frame, ok := b.currentSnapshot(); ok {
-					bh, bu, hit = client.PickSnapshotUnit(frame, mx, my, b.cam, uint8(viewer))
+					bh, bu, hit = client.PickSnapshotUnit(frame, shellX, shellY, b.cam, uint8(viewer))
 				} else if !b.requireCommandDispatch {
-					lh, lu := client.PickUnit(mx, my, b.cam, b.sess.Units, b.sess.Vis, viewer)
+					lh, lu := client.PickUnit(shellX, shellY, b.cam, b.sess.Units, b.sess.Vis, viewer)
 					bh = lh
 					if lu != nil {
 						bu = snapshot.UnitView{Slot: lu.Handle, Owner: lu.Owner, Flags: lu.Flags}
@@ -663,8 +744,16 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 				}
 			}
 		} else {
+			// Drag rect is logical (129..639); convert to shell (0..511) for pick [C-3][03 §2.5].
+			vtDrag := client.NewViewportTransform(b.cam, nil, 640, 480)
+			shellRect := client.Rect{
+				MinX: rect.MinX - vtDrag.Viewport.Left,
+				MinY: rect.MinY - vtDrag.Viewport.Top,
+				MaxX: rect.MaxX - vtDrag.Viewport.Left,
+				MaxY: rect.MaxY - vtDrag.Viewport.Top,
+			}
 			if frame, ok := b.currentSnapshot(); ok {
-				handles := client.SnapshotUnitHandlesInRect(frame, b.cam, rect, b.sess.LocalOwner)
+				handles := client.SnapshotUnitHandlesInRect(frame, b.cam, shellRect, b.sess.LocalOwner)
 				kind := battleCommandSelectionReplace
 				if additive {
 					kind = battleCommandSelectionToggle
@@ -672,7 +761,7 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 				_ = b.submitBattleCommand(battleCommand{Kind: kind, Selection: battleSelectionCommand{Handles: handles}})
 			} else if !b.requireCommandDispatch {
 				// Explicit synthetic fixture fallback only.
-				client.ApplyDragSelectionWorld(b.sess.Units, b.cam, rect, additive)
+				client.ApplyDragSelectionWorld(b.sess.Units, b.cam, shellRect, additive)
 				b.filterSelectionToPlayer(b.sess.LocalOwner)
 			}
 		}
@@ -1307,6 +1396,219 @@ func (b *battleSession) stockpileSelected(queued bool) {
 	}
 }
 
+// scrollSetting returns the persisted scroll speed byte [02 "Settings"] [07 §10] C2.
+// It is presentation-only and never touches sim [I6].
+func (b *battleSession) scrollSetting() byte { // [07 §10] [02 "Settings"]
+	s, _ := settings.Load()
+	ss := s.ScrollSpeed
+	if ss <= 0 || ss > 255 {
+		ss = settings.DefaultScrollSpeed
+	}
+	return byte(ss)
+}
+
+// isTalkGUIActive reports whether TALK.GUI suppresses held-arrow movement [07 §10].
+// Retail suppresses only held-arrow, not edge. In Nanolathe chat is not yet fully
+// wired, so we treat any active modal that would correspond to chat as active.
+// For now, no dedicated TALK.GUI state exists, so held-arrow is never suppressed
+// except when a modal menu is active which already suppresses edge separately.
+// This preserves retail's distinction: TALK suppresses arrow but not edge.
+func (b *battleSession) isTalkGUIActive() bool { // [07 §10]
+	// TODO(question): wire real TALK.GUI detection when chat is implemented; for now return false
+	return false
+}
+
+// isOverMinimap reports whether a screen point is over the minimap HUD interaction region [07 §10].
+func (b *battleSession) isOverMinimap(x, y int32) bool { // [07 §10]
+	const mmX, mmY, mmW, mmH = 540, 360, 90, 90 // HUD minimap stub region [C-6] drawn in drawOverlay
+	return x >= mmX && x < mmX+mmW && y >= mmY && y < mmY+mmH
+}
+
+// drawMinimap renders terrain-minimap + fog + contacts using camera.Minimap math [07 §10] C4 [C-6].
+// It uses LayoutMinimap/ToCamera/ToWorld via camera.Minimap [C-6] and is presentation-only [I6].
+func (b *battleSession) drawMinimap(c *client.Client, fnt *formats.FNT) { // [07 §10][C-6]
+	const mmX, mmY, mmW, mmH = 540, 360, 90, 90
+	c.UIFillRect(mmX, mmY, mmW, mmH, 0)
+	c.UIFrameRect(mmX, mmY, mmW, mmH, 250)
+	c.UIText(fnt, "MINIMAP", mmX+2, mmY-8, 250)
+	if b.sess == nil || b.sess.World == nil {
+		return
+	}
+	playW := b.sess.World.PlayRight
+	playH := b.sess.World.PlayBottom
+	if playW <= 0 || playH <= 0 {
+		playW = b.sess.World.CellW*16 - 32
+		playH = b.sess.World.CellH*16 - 128
+		if playW <= 0 {
+			playW = b.sess.World.CellW * 16
+		}
+		if playH <= 0 {
+			playH = b.sess.World.CellH * 16
+		}
+	}
+	m := camera.LayoutMinimap(playW, playH) // [07 §10] 126 letterbox
+	// Build radar picture from terrain tiles [minimap §3.2] 2x supersampled; baked minimap not yet wired, generate.
+	var pal *palette.Tables
+	// c.Palette is not directly exposed; pal stays nil fallback to nearest without ALP [minimap §3.2].
+	picture := render.BuildRadarPicture(b.sess.World, playW, playH, m, nil, 0, 0, pal)
+	if picture == nil || picture.Bits == nil || picture.W <= 0 || picture.H <= 0 {
+		// Fallback to dots only
+	} else {
+		// Fog: apply snapshot FogView Ch0==15 as black for unexplored [03 §3.3][rr-16][C-6].
+		mapped := picture
+		if b.sess.Snapshot != nil {
+			if _, cur, ok := b.sess.Snapshot.Read(); ok && cur != nil && cur.Fog.Valid && cur.Fog.W > 0 && cur.Fog.H > 0 && len(cur.Fog.Ch0) == int(cur.Fog.W*cur.Fog.H) {
+				w, h := picture.W, picture.H
+				bits := make([]byte, w*h)
+				copy(bits, picture.Bits)
+				fw, fh := int(cur.Fog.W), int(cur.Fog.H)
+				for y := 0; y < h; y++ {
+					vy := y * fh / h
+					if vy < 0 {
+						vy = 0
+					} else if vy >= fh {
+						vy = fh - 1
+					}
+					for x := 0; x < w; x++ {
+						vx := x * fw / w
+						if vx < 0 {
+							vx = 0
+						} else if vx >= fw {
+							vx = fw - 1
+						}
+						idxFog := vy*fw + vx
+						if idxFog >= 0 && idxFog < len(cur.Fog.Ch0) && cur.Fog.Ch0[idxFog] == 15 {
+							bits[y*w+x] = 0
+						}
+					}
+				}
+				mapped = &render.RadarSurface{W: w, H: h, Pitch: (w + 3) &^ 3, Bits: bits}
+			}
+		}
+		// Draw mapped picture scaled to HUD rect via nearest [minimap §3.2][C-6].
+		for y := 0; y < mmH; y++ {
+			srcY := y * mapped.H / mmH
+			if srcY < 0 {
+				srcY = 0
+			} else if srcY >= mapped.H {
+				srcY = mapped.H - 1
+			}
+			for x := 0; x < mmW; x++ {
+				srcX := x * mapped.W / mmW
+				if srcX < 0 {
+					srcX = 0
+				} else if srcX >= mapped.W {
+					srcX = mapped.W - 1
+				}
+				idx := srcY*mapped.W + srcX
+				if idx < 0 || idx >= len(mapped.Bits) {
+					continue
+				}
+				pix := mapped.Bits[idx]
+				c.UIFillRect(int(mmX+x), int(mmY+y), 1, 1, pix)
+			}
+		}
+		// Viewport rect lens 1-pixel [07 §10][minimap §7] clipped to HUD.
+		if b.cam != nil {
+			eW, eH := b.cam.EffectiveView()
+			if eW <= 0 {
+				eW = b.cam.ViewW
+			}
+			if eH <= 0 {
+				eH = b.cam.ViewH
+			}
+			if eW < 1 {
+				eW = 1
+			}
+			if eH < 1 {
+				eH = 1
+			}
+			rx0, ry0 := m.WorldToRadar(b.cam.X, b.cam.Z, playW, playH)
+			rx1, ry1 := m.WorldToRadar(b.cam.X+eW-1, b.cam.Z+eH-1, playW, playH)
+			if rx0 > rx1 {
+				rx0, rx1 = rx1, rx0
+			}
+			if ry0 > ry1 {
+				ry0, ry1 = ry1, ry0
+			}
+			if rx0 < 0 {
+				rx0 = 0
+			}
+			if ry0 < 0 {
+				ry0 = 0
+			}
+			if rx1 >= int32(m.W) {
+				rx1 = int32(m.W - 1)
+			}
+			if ry1 >= int32(m.H) {
+				ry1 = int32(m.H - 1)
+			}
+			hx0 := mmX + int(rx0)*mmW/int(m.W)
+			hy0 := mmY + int(ry0)*mmH/int(m.H)
+			hx1 := mmX + int(rx1)*mmW/int(m.W)
+			hy1 := mmY + int(ry1)*mmH/int(m.H)
+			if hx0 < mmX {
+				hx0 = mmX
+			}
+			if hy0 < mmY {
+				hy0 = mmY
+			}
+			if hx1 >= mmX+mmW {
+				hx1 = mmX + mmW - 1
+			}
+			if hy1 >= mmY+mmH {
+				hy1 = mmY + mmH - 1
+			}
+			col := byte(250)
+			for x := hx0; x <= hx1; x++ {
+				c.UIFillRect(x, hy0, 1, 1, col)
+				c.UIFillRect(x, hy1, 1, 1, col)
+			}
+			for y := hy0; y <= hy1; y++ {
+				c.UIFillRect(hx0, y, 1, 1, col)
+				c.UIFillRect(hx1, y, 1, 1, col)
+			}
+		}
+	}
+	// Contacts via RadarProjection [minimap §7][07 §10] using same minimap math [C-6].
+	if b.sess.Units != nil && playW > 0 && playH > 0 {
+		m2 := camera.LayoutMinimap(playW, playH)
+		for _, u := range b.sess.Units.Iter() {
+			if u == nil || !u.Alive {
+				continue
+			}
+			viewer := visibility.PlayerID(b.sess.LocalOwner)
+			if b.sess.Vis != nil {
+				t := visibility.Target{Owner: visibility.PlayerID(u.Owner), X: u.X, Y: u.Y, Z: u.Z, Status: u.Flags}
+				if !b.sess.Vis.IsVisible(viewer, t) && u.Owner != b.sess.LocalOwner {
+					continue
+				}
+			}
+			wx := int32(u.X >> 16)
+			wz := int32(u.Z >> 16)
+			wy := int32(u.Y >> 16)
+			rx, ry := m2.WorldToRadarWithY(wx, wy, wz, playW, playH)
+			px := mmX + int(rx)*mmW/int(m2.W)
+			py := mmY + int(ry)*mmH/int(m2.H)
+			if px < mmX || px >= mmX+mmW || py < mmY || py >= mmY+mmH {
+				continue
+			}
+			col := byte(100)
+			if u.Owner == b.sess.LocalOwner {
+				col = 250
+			} else if b.sess.Vis != nil && b.sess.Vis.IsVisible(viewer, visibility.Target{Owner: visibility.PlayerID(u.Owner), X: u.X, Y: u.Y, Z: u.Z}) {
+				col = 180
+			} else {
+				col = 80
+			}
+			if u.Flags&client.SelectionFlag != 0 {
+				col = 255
+			}
+			c.UIFillRect(px, py, 2, 2, col)
+		}
+	}
+}
+
 // cursorWorld is the one cursor-to-ground conversion the battle screen uses
 // [07 §8]. The camera's inverse alone assumes height zero, but every world
 // object is drawn with the half-height shear, so on raised ground that inverse
@@ -1314,11 +1616,37 @@ func (b *battleSession) stockpileSelected(queued bool) {
 // hill puts the unit partway up it. Terrain.CursorToWorld runs retail's search
 // along Z to find the ground whose sheared projection is the clicked row, and
 // returns the height there as Y.
+// It clamps the pointer into the battle viewport before ground resolution per
+// [07 §8] step 1 and wires OrderTargetFromViewport as the single source of
+// truth [C-2][C-3]. Chose to wire OrderTargetFromViewport (not delete trap).
 func (b *battleSession) cursorWorld(sx, sy int32) (wx, wy, wz numeric.Fixed) {
 	if b.cam == nil {
 		return 0, 0, 0
 	}
-	fx, fz := b.cam.ScreenToWorld(sx+camera.OriginX, sy+camera.OriginY)
+	// Single source of truth: ViewportTransform's OrderTargetFromViewport [C-3][07 §8].
+	vt := client.NewViewportTransform(b.cam, nil, 640, 480)
+	if b.sess != nil {
+		vt.Terrain = b.sess.World
+	}
+	// Clamp pointer into the battle viewport before ground resolution [07 §8] step 1 [C-2].
+	clampedX := sx
+	clampedY := sy
+	if clampedX < vt.Viewport.Left {
+		clampedX = vt.Viewport.Left
+	} else if clampedX > vt.Viewport.Right {
+		clampedX = vt.Viewport.Right
+	}
+	if clampedY < vt.Viewport.Top {
+		clampedY = vt.Viewport.Top
+	} else if clampedY > vt.Viewport.Bottom {
+		clampedY = vt.Viewport.Bottom
+	}
+	p := client.Point{X: clampedX, Y: clampedY}
+	if x, y, z, ok := vt.OrderTargetFromViewport(p); ok {
+		return x, y, z
+	}
+	// Fallback: direct ground-plane inverse when transform rejects (should not happen after clamp).
+	fx, fz := b.cam.ScreenToWorld(clampedX+camera.OriginX, clampedY+camera.OriginY)
 	if b.sess == nil || b.sess.World == nil {
 		return fx, 0, fz
 	}
@@ -1714,49 +2042,9 @@ func (b *battleSession) drawOverlay(c *client.Client, fnt *formats.FNT) {
 		p := b.sess.Econ.Players[b.sess.LocalOwner]
 		c.UIText(fnt, fmt.Sprintf("M:%d E:%d", int(p.Stock[economy.Metal]), int(p.Stock[economy.Energy])), 4, 14, 250)
 	}
-	// Minimap contacts [07 §6][03 §3.2]: small overview with unit dots; presentation-only separate from LOS [I6][P0-I14].
-	// TODO(P1): full minimap uses fog cache, radar contacts via visibility.Service sensor surfaces and panel anchors.
-	{
-		const mmX, mmY, mmW, mmH = 540, 360, 90, 90
-		c.UIFillRect(mmX, mmY, mmW, mmH, 0)
-		c.UIFrameRect(mmX, mmY, mmW, mmH, 250)
-		c.UIText(fnt, "MINIMAP", mmX+2, mmY-8, 250)
-		if b.sess != nil && b.sess.World != nil && b.sess.Units != nil {
-			cw := int(b.sess.World.CellW)
-			ch := int(b.sess.World.CellH)
-			if cw > 0 && ch > 0 {
-				for _, u := range b.sess.Units.Iter() {
-					if u == nil || !u.Alive {
-						continue
-					}
-					// Fog: only draw contacts visible to local player [03 §3.2] C8 [P0-I14].
-					viewer := visibility.PlayerID(b.sess.LocalOwner)
-					if b.sess.Vis != nil {
-						t := visibility.Target{Owner: visibility.PlayerID(u.Owner), X: u.X, Y: u.Y, Z: u.Z, Status: u.Flags}
-						if !b.sess.Vis.IsVisible(viewer, t) && u.Owner != b.sess.LocalOwner {
-							continue
-						}
-					}
-					cx := world.WorldToCell(u.X)
-					cz := world.WorldToCell(u.Z)
-					px := mmX + int(cx)*mmW/cw
-					py := mmY + int(cz)*mmH/ch
-					col := byte(100)
-					if u.Owner == b.sess.LocalOwner {
-						col = 250
-					} else if b.sess.Vis != nil && b.sess.Vis.IsVisible(viewer, visibility.Target{Owner: visibility.PlayerID(u.Owner), X: u.X, Y: u.Y, Z: u.Z}) {
-						col = 180
-					} else {
-						col = 80
-					}
-					if u.Flags&client.SelectionFlag != 0 {
-						col = 255
-					}
-					c.UIFillRect(px, py, 2, 2, col)
-				}
-			}
-		}
-	}
+	// Minimap: terrain-minimap + fog + contacts using camera.Minimap math [07 §10] C4 [C-6]; click-to-jump wired in handleInput [C-6].
+	// TODO(P1): panel anchors for minimap HUD rect; this uses a fixed 90x90 stub region [C-6] with 126 letterbox scaling [07 §10].
+	b.drawMinimap(c, fnt)
 	// Queue counts for selected factory/builder [04 §3.2][P0-I14].
 	if sel := b.selectedUnits(); len(sel) > 0 {
 		for i, u := range sel {
@@ -1854,8 +2142,13 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 		return 0, nil, pos
 	}
 	// ONE picking routine via client.PickUnit [P0-I14][07 §9][03 §3.2] C8.
+	// PickUnit expects shell viewport coordinates (0..511,0..415) [03 §2.5][C-3];
+	// convert logical mouse (129,32..639,447) to shell by subtracting viewport origin.
+	vtPick := client.NewViewportTransform(b.cam, nil, 640, 480)
+	shellX := sx - vtPick.Viewport.Left
+	shellY := sy - vtPick.Viewport.Top
 	viewer := visibility.PlayerID(b.sess.LocalOwner)
-	if bh, bu := client.PickUnit(sx, sy, b.cam, b.sess.Units, b.sess.Vis, viewer); bh != 0 && bu != nil {
+	if bh, bu := client.PickUnit(shellX, shellY, b.cam, b.sess.Units, b.sess.Vis, viewer); bh != 0 && bu != nil {
 		return bh, bu, pos
 	}
 	// Feature picking: when no unit hit, test feature footprint at clicked cell [07 §8][P0-I14].
@@ -2023,11 +2316,7 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 // overWorld reports whether a pointer position lies in the world viewport
 // rather than on the HUD chrome; chrome forces the idle cursor shape [07 §8].
 // It uses the same band the click path treats as panel, so the shape and the
-// click destination cannot disagree.
-//
-// TODO(question): retail's region summary is viewport **or minimap**, and the
-// minimap sets the same bit so world shapes appear over it [07 §8]. This
-// overlay's minimap does not consume clicks either, so it reads as world here.
+// click destination cannot disagree. Unified on drawn-chrome layout [C-3][07 §6][07 §8].
 func (b *battleSession) overWorld(x, y int32) bool {
 	if b.hud != nil {
 		return b.hud.overWorld(x, y)
@@ -2035,7 +2324,9 @@ func (b *battleSession) overWorld(x, y int32) bool {
 	if len(b.panelButtons) > 0 && y >= 480-panelButtonH-32 {
 		return false
 	}
-	return true
+	// Fallback uses drawn-chrome viewport [C-3][07 §8] via ViewportTransform's viewport rect.
+	vt := client.NewViewportTransform(b.cam, nil, 640, 480)
+	return vt.Viewport.Contains(x, y)
 }
 
 // hoverFeature returns the definition of the feature occupying the cell under

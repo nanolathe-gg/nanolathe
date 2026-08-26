@@ -208,7 +208,6 @@ type SelectionView struct {
 	Handles     []pool.Handle
 	Primary     pool.Handle
 	Count       uint16
-	ShiftHeld   bool
 	CommandMask uint32
 }
 

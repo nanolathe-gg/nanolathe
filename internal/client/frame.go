@@ -169,6 +169,9 @@ func effectDrawOptions(c *Client) EffectDrawOptions {
 //     bytes are never treated as GUIPAL source colors.
 //  3. The backend (backend_ebiten.go) uploads the RGBA bytes and presents them.
 func (c *Client) Frame(alpha float32) {
+	if c == nil {
+		return
+	}
 	// C9: alpha clamped [0,1]; never writes sim state, never calls sim
 	// mutator, never advances clock (I6, PLAN_03 C15/C16).
 	if alpha != alpha { // NaN
@@ -184,7 +187,9 @@ func (c *Client) Frame(alpha float32) {
 		// Headless: no window, no display (C11). Still read the snapshot to
 		// satisfy the "reads snapshot.Buffer.Read()" contract even when not
 		// drawing, but do not mutate it.
-		_, _, _ = c.buffer.Read()
+		if c.buffer != nil {
+			_, _, _ = c.buffer.Read()
+		}
 		// Audio drain still runs headless? No, Headless skips window creation
 		// entirely [PLAN_04A C11]; but TickAudio is presentation-only and can be
 		// called manually by headless diagnostics. Do not auto-drain here to

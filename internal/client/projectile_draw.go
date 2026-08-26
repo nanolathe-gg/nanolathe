@@ -35,8 +35,15 @@ func (c *Client) DrawProjectileViews(prev, current []snapshot.ProjectileView, al
 		return stats
 	}
 	draws, aborted := render.BuildProjectileDraws(current, now, visible, admitGlobalGAF, options)
-	stats.Dispatched = len(draws)
 	stats.Aborted = aborted
+	// Rendertype 2 admission failure aborts the entire projectile renderer, not
+	// merely the failing record. BuildProjectileDraws retains earlier
+	// instructions for diagnostics, but those instructions must not reach the
+	// framebuffer after an abort [03 §5.4].
+	if aborted {
+		return stats
+	}
+	stats.Dispatched = len(draws)
 	for _, d := range draws {
 		view := projectileViewByHandle(current, d.Handle)
 		if view.Handle == 0 {

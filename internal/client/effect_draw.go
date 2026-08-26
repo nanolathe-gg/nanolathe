@@ -49,7 +49,10 @@ func (c *Client) DrawEffectViews(effects []snapshot.EffectView, options EffectDr
 				continue
 			}
 			radius, level, ok := options.LHTGeometry(view)
-			if !ok || radius <= 0 || level <= 0 || options.TerrainCoverage == nil {
+			// LHT row 0 is authored and near-identity; only negative rows are
+			// invalid. A resolver returning ok=true, level=0 must still admit the
+			// halo [03 §4.3.1].
+			if !ok || radius <= 0 || level < 0 || options.TerrainCoverage == nil {
 				stats.Skipped++
 				continue
 			}

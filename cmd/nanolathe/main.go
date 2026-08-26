@@ -154,18 +154,6 @@ func run(opts Options, out *os.File) error {
 	if !opts.Headless && opts.Dump == "" {
 		return runGameShell(opts, content)
 	}
-	// Gate 1: windowed terrain viewer when --map is set, --headless is false,
-	// and no --dump is requested. This opens the Ebitengine window and draws real
-	// TNT terrain with camera pan and FNT overlay [PLAN_04A].
-	if wantsViewer(opts) {
-		if err := runViewer(opts, content); err != nil {
-			// If viewer fails (e.g., no display), fall back to headless report
-			// so CI and headless environments still produce useful output.
-			fmt.Fprintf(os.Stderr, "nanolathe: viewer: %v (falling back to headless report)\n", err)
-		} else {
-			return nil
-		}
-	}
 
 	return report(opts, content, out)
 }

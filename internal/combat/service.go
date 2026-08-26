@@ -762,6 +762,8 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		return -1
 	}
 	scriptAdapter := &fireScriptAdapter{bridge: svc.callbackBridgeForUnit(u), unit: u}
+	// [06 §13.2] wire weapon-start events to same service sink installed at composition [06 §4.1] C2
+	fireEvents := &combatFireEvents{svc: svc, tick: tick, shooter: u.Handle, pos: origin}
 	ports := FirePorts{
 		ShooterSide: uint8(u.Owner),
 		Origin:      origin,
@@ -770,7 +772,7 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		TargetWorld: targetWorld,
 		Gravity:     gravity,
 		Script:      scriptAdapter,
-		Events:      nil,
+		Events:      fireEvents,
 		RNG:         simRNG,
 		Spy:         nil,
 	}
@@ -835,7 +837,39 @@ func (a *fireScriptAdapter) RockUnit(slotIdx int) {
 	a.bridge.RockUnit(rel)
 }
 
-func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Terrain, featSvc *features.Service, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) {
+// combatFireEvents forwards weapon start sound/smoke to the service event sink
+// [06 §4.1] C2 [06 §13.2] ordering: start sound before Fire/Rock, start smoke after.
+type combatFireEvents struct {
+	svc     *Service
+	tick    uint32
+	shooter pool.Handle
+	pos     Vec3
+}
+
+func (c *combatFireEvents) StartSound(name string) {
+	if c == nil || c.svc == nil || name == "" {
+		return
+	}
+	c.svc.emitEvent(Event{Kind: EventStartSound, Tick: c.tick, Source: c.shooter, Position: c.pos, Sound: name})
+}
+
+func (c *combatFireEvents) StartSmoke(h pool.Handle) {
+	if c == nil || c.svc == nil {
+		return
+	}
+	c.svc.emitEvent(Event{Kind: EventStartSmoke, Tick: c.tick, Source: c.shooter, Target: h, Position: c.pos})
+}
+
+// EventStartSound and EventStartSmoke are weapon-start presentation events emitted
+// before/after Fire callbacks [06 §4.1] C2 [06 §13.2]. Defined here to keep the
+// service file as the sole owner of the start-event wiring; pool.go owns the
+// impact ordering sink [06 §13.2] C27.
+const (
+	EventStartSound EventKind = 10 // [06 §4.1] C2 [06 §13.2]
+	EventStartSmoke EventKind = 11 // [06 §4.1] C2 [06 §13.2]
+)
+
+func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Terrain, windState *world.Wind, featSvc *features.Service, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) {
 	if s == nil {
 		return
 	}
@@ -871,13 +905,23 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		}
 	}
 	s.AdvanceBursts(tick, simRNG, weaponByID, muzzleForBurst)
-	var wind Vec3
+	// [06 §6.4] ballistic/dropped drift: adds all three global wind values directly to position
+	var windVec Vec3
 	var gravity numeric.Fixed
 	var seaLevel numeric.Fixed
 	if terrain != nil {
 		gravity = terrain.Gravity
 		seaLevel = terrain.SeaLevelWorld()
-		wind = Vec3{}
+	}
+	if windState != nil {
+		// [06 §6.4] wind vectors recomputed via MulRound; scalar capped at 1.0 [01 §7.3]
+		// TODO(question): DirX/DirZ scaling as Fixed raw vs world units unresolved; treat Dir as Fixed raw
+		windVec = Vec3{
+			X: numeric.Fixed(int64(windState.DirX)),
+			Y: numeric.Fixed(0),
+			Z: numeric.Fixed(int64(windState.DirZ)),
+		}
+		_ = windState.Scalar // scalar published to wind generators [01 §7.3] I2 allowlist
 	}
 	entry := s.Count()
 	for i := 0; i < entry; i++ {
@@ -907,9 +951,9 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		case MotionDirect:
 			res = AdvanceDirect(p, weapon, tick)
 		case MotionBallistic:
-			res = AdvanceBallistic(p, weapon, tick, wind, gravity)
+			res = AdvanceBallistic(p, weapon, tick, windVec, gravity)
 		case MotionDropped:
-			res = AdvanceDropped(p, weapon, tick, wind, gravity)
+			res = AdvanceDropped(p, weapon, tick, windVec, gravity)
 		case MotionMeteor:
 			res = AdvanceMeteor(p, weapon, tick)
 		case MotionSelfProp:
@@ -922,7 +966,7 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 			continue
 		}
 		if res == AdvanceImpact {
-			handleProjectileImpact(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, wind, simRNG, false)
+			handleProjectileImpact(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, false)
 			s.MarkDead(h)
 			continue
 		}
@@ -960,7 +1004,7 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		}
 		if needImpact {
 			isWater := isWaterTerrain && directTarget == 0
-			handleProjectileImpact(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, wind, simRNG, isWater)
+			handleProjectileImpact(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, isWater)
 			if NoExplodeRetirement(weapon.NoExplode, true, isOffMap, false) {
 				s.MarkDead(h)
 			}
@@ -1021,6 +1065,7 @@ func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, te
 		}
 	}
 	if w != nil {
+		// [06 §8.1] faithful two-slot Y-gate via CollisionSlotYGate [06 §8.1] C? ; planar r=24 retained for XY until grid slots wired
 		bestDist2 := int64(1 << 62)
 		var best pool.Handle
 		for _, u := range w.Iter() {
@@ -1030,17 +1075,17 @@ func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, te
 			if u.Handle == p.Shooter {
 				continue
 			}
-			lower := u.Y.Raw() - 16*65536
-			upper := u.Y.Raw() + 16*65536
-			py := p.Pos.Y.Raw()
-			if py >= upper {
+			lower := int32(u.Y.Raw() - 16*65536)
+			upper := int32(u.Y.Raw() + 16*65536)
+			py := int32(p.Pos.Y.Raw())
+			// [06 §8.1] slot0: Y<upper (no lower), slot1: lower<=Y<=upper; either slot may authorize
+			if !CollisionSlotYGate(py, lower, upper, 0) && !CollisionSlotYGate(py, lower, upper, 1) {
 				continue
 			}
-			_ = lower
 			dx := p.Pos.X.Int() - u.X.Int()
 			dz := p.Pos.Z.Int() - u.Z.Int()
 			dist2 := int64(dx)*int64(dx) + int64(dz)*int64(dz)
-			const hitRadius = 24
+			const hitRadius = 24 // TODO(question): planar radius approximation retained; grid-slot XY gate unresolved [06 §8.1]
 			if dist2 <= hitRadius*hitRadius && dist2 < bestDist2 {
 				bestDist2 = dist2
 				best = u.Handle

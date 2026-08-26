@@ -363,7 +363,7 @@ func TestRS08_NaturalFireImpactDeath(t *testing.T) {
 	// Advance projectile to impact: target at (20,20), shooter at (10,10) distance ~14, velocity high => arrive in 1 tick
 	// Run TickProjectiles for a few ticks
 	for i := 0; i < 5; i++ {
-		svc.TickProjectiles(uint32(10+i), w, terrain, nil, nil, nil, cat, &rSim, nil)
+		svc.TickProjectiles(uint32(10+i), w, terrain, nil, nil, nil, nil, cat, &rSim, nil)
 		if w.Unit(targetH) == nil || w.Unit(targetH).Dying || w.Unit(targetH).Health <= 0 {
 			break
 		}
