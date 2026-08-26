@@ -57,7 +57,8 @@ type Session struct {
 	Snapshot *snapshot.Buffer
 	Shutdown *Shutdown // ordered shutdown in reverse-init order [01 §2.1][01 §2.3] P0-I10
 
-	Presentation *presentation.Collector // typed presentation event admission [EVENT-01]
+	Presentation *presentation.Collector     // typed presentation event admission [EVENT-01]
+	Effects      *presentation.EffectService // bounded immutable effect publication [F-P0-034]
 	// CampaignSlot is the mission list slot for progress W/L [P1-01 §2.3] [P0-05].
 	CampaignSlot int
 
@@ -1932,9 +1933,25 @@ func (s *Session) publishSnapshot(tick uint32) {
 		return
 	}
 	frame := &snapshot.Frame{Tick: tick}
+	var presentationEvents []presentation.Event
+	if s.Presentation != nil {
+		presentationEvents = s.Presentation.Events()
+	}
+	if s.Effects == nil {
+		s.Effects = presentation.NewEffectService(presentation.EffectCapacity)
+	}
+	// Effects consume the same ordered value events that are published below.
+	// They are advanced even when the current event window is empty so explicit
+	// deadlines and authored frame timing expire independently of rendering [I6].
+	s.Effects.Advance(tick, presentationEvents)
+	frame.Effects = s.Effects.Snapshot()
+	if len(frame.Effects) > snapshot.MaxSnapshotEffects || s.Effects.Dropped() != 0 {
+		frame.EffectsTruncated = true
+	}
 	if s.Units != nil {
 		views := make([]snapshot.UnitView, 0, s.Units.Used())
 		ordersViews := make([]snapshot.OrderView, 0)
+		orderQueues := make([]snapshot.OrderQueueView, 0)
 		for _, u := range s.Units.Iter() {
 			if u == nil || !u.Alive {
 				continue
@@ -2013,22 +2030,36 @@ func (s *Session) publishSnapshot(tick uint32) {
 				}
 			}
 			views = append(views, v)
-			if q := orders.QueueForUnit(u); q != nil && q.LenPrimary() > 0 {
-				if head := q.Head(); head != nil {
-					ordersViews = append(ordersViews, snapshot.OrderView{
-						Unit:      u.Handle,
-						Target:    head.Target,
-						GoalX:     head.GoalX,
-						GoalY:     head.GoalY,
-						GoalZ:     head.GoalZ,
-						Kind:      orders.DescriptorFor(head.ID).Name,
-						MoveState: uint8(head.MoveState),
-					})
+			if q := orders.QueueForUnit(u); q != nil && (q.LenPrimary() > 0 || q.LenSecondary() > 0) {
+				activeHead := q.Head()
+				queue := orders.SnapshotQueueOf(q, u.Handle, func(n *orders.Node) []orders.SnapshotRoutePoint {
+					// A route is authoritative only for the node that activated it;
+					// movement.Route is keyed by unit for that active binding. Do not
+					// attach a stale route to a queued node [04 §7.3].
+					if n == nil || n != activeHead || s.Movement == nil {
+						return nil
+					}
+					r := s.Movement.Routes[u.Handle]
+					if r == nil || !r.Active || r.Count == 0 {
+						return nil
+					}
+					points := make([]orders.SnapshotRoutePoint, int(r.Count))
+					for i := range points {
+						p := r.Points[i]
+						points[i] = orders.SnapshotRoutePoint{X: world.CellToWorld(p.X), Z: world.CellToWorld(p.Z)}
+					}
+					return points
+				})
+				ov := snapshotOrderQueueView(queue, s.Catalog)
+				orderQueues = append(orderQueues, ov)
+				if len(ov.Primary) > 0 {
+					ordersViews = append(ordersViews, ov.Primary[0])
 				}
 			}
 		}
 		frame.Units = views
 		frame.Orders = ordersViews
+		frame.OrderQueues = orderQueues
 		// Selection is authoritative unit state (bit 0x10), not a renderer-side
 		// cache [07 §9]. Preserve pool order so a frame is deterministic [I1].
 		for _, u := range views {
@@ -2375,6 +2406,51 @@ func effectsFromEvents(events []snapshot.EventView) []snapshot.EffectView {
 // publishVisibilityView copies the local player's visibility masks into the
 // immutable presentation frame. Radar has no authoritative mask source in the
 // visibility service.
+func snapshotOrderQueueView(src orders.SnapshotQueue, cat *content.Catalog) snapshot.OrderQueueView {
+	return snapshot.OrderQueueView{
+		Unit:               src.Unit,
+		Primary:            snapshotOrderViews(src.Primary, cat),
+		Secondary:          snapshotOrderViews(src.Secondary, cat),
+		PrimaryTruncated:   src.PrimaryTruncated,
+		SecondaryTruncated: src.SecondaryTruncated,
+	}
+}
+
+func snapshotOrderViews(src []orders.SnapshotNode, cat *content.Catalog) []snapshot.OrderView {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]snapshot.OrderView, len(src))
+	for i, n := range src {
+		var footX, footZ int8
+		if cat != nil && n.BuildProduct != "" {
+			if def, ok := cat.Unit(n.BuildProduct); ok && def != nil {
+				footX, footZ = int8(def.FootprintX), int8(def.FootprintZ)
+			}
+		}
+		dst[i] = snapshot.OrderView{
+			Unit: n.Owner, Target: n.Target,
+			GoalX: n.GoalX, GoalY: n.GoalY, GoalZ: n.GoalZ,
+			Kind: n.Kind, StateLabel: n.State, MoveState: n.MoveState,
+			List: n.List, Index: n.Index, DescriptorID: n.DescriptorID,
+			Phase: n.Phase, CreationTick: n.CreationTick, Flags: n.Flags,
+			DynamicGate: n.DynamicGate, Deadline: n.Deadline,
+			Satisfied: n.Satisfied, PathStatus: n.PathStatus,
+			Param1: n.Param1, Param2: n.Param2, Param3: n.Param3,
+			BuildProduct: n.BuildProduct, BuildCount: n.BuildCount,
+			FootX: footX, FootZ: footZ,
+			RouteTruncated: n.RouteTruncated,
+		}
+		if len(n.Route) > 0 {
+			dst[i].Route = make([]snapshot.RoutePoint, len(n.Route))
+			for j, p := range n.Route {
+				dst[i].Route[j] = snapshot.RoutePoint{X: p.X, Y: p.Y, Z: p.Z, Flags: p.Flags}
+			}
+		}
+	}
+	return dst
+}
+
 func publishVisibilityView(vis *visibility.Service, local uint8, out *snapshot.VisibilityView) {
 	if vis == nil || out == nil || local >= 10 {
 		return

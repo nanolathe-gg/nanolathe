@@ -353,14 +353,28 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 	if h == nil || c == nil {
 		return
 	}
+	// Read the immutable presentation pair before composing world overlays. The
+	// queue walker is deliberately fed only published state; Shift is the live
+	// presentation gate and releasing it returns without constructing or
+	// mutating any authoritative data [I6][07 §9][R-P0-11 §4].
+	var cur *snapshot.Frame
+	frameOK := false
+	if buf := c.Buffer(); buf != nil {
+		_, cur, frameOK = buf.Read()
+	}
 	// World-space overlays come first, while the composed world is still the
-	// whole surface: retail draws the build ghost and the order-queue markers
+	// whole surface: retail draws the build ghost and the order-queue overlay
 	// into the battle view and only then blits the GUI frames over them, so a
 	// marker near the map edge is covered by the chrome instead of drawing on
 	// top of it [07 §9].
 	if b != nil {
 		b.drawBuildGhost(c)
-		b.drawQueuedBuildMarkers(c)
+		if frameOK && cur != nil {
+			// Selection.Primary is the authoritative focus handle published with
+			// the frame. A separate hover field is not yet established at this
+			// seam, so do not consult the live unit pool or pointer picker.
+			drawQueueOverlay(c, cur, cur.Tick, b.shiftHeld, cur.Selection.LocalPlayer, cur.Selection.Primary)
+		}
 	}
 
 	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. The two horizontal
@@ -375,7 +389,11 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 	}
 	blitBattlePanel(c, h.panelSide, 0, offset)
 
-	prev, cur, ok := c.Buffer().Read()
+	var prev *snapshot.Frame
+	ok := false
+	if buf := c.Buffer(); buf != nil {
+		prev, cur, ok = buf.Read()
+	}
 	if ok && cur != nil {
 		h.drawResources(c, cur)
 		h.drawSelectedUnit(c, cur)

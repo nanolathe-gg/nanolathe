@@ -132,6 +132,12 @@ func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
 		tick = s.session.Clock.GlobalTick
 	}
 	e := presentation.Event{Tick: tick, Source: s.source, Piece: int32(s.pieceMap[ev.Piece]), SFXType: ev.SFXType, SFXClass: presentation.SFXClass(ev.SFXClass), X: ev.Source[0], Y: ev.Source[1], Z: ev.Source[2], TargetX: ev.Target[0], TargetY: ev.Target[1], TargetZ: ev.Target[2]}
+	// Selector is an authored effect discriminator when the producer supplied
+	// one. Negative/absent selectors remain unknown; EffectID is unsigned at
+	// the snapshot boundary, so never convert the unresolved sentinel [I9].
+	if ev.Selector >= 0 {
+		e.EffectID = uint32(ev.Selector)
+	}
 	switch ev.Kind {
 	case cob.PresentationSFX:
 		s.session.Presentation.EmitCOBSFX(e)
@@ -347,6 +353,9 @@ func createAndBindServices(s *Session) error {
 	if s.Presentation == nil {
 		s.Presentation = presentation.NewCollector(presentation.Limits{})
 	}
+	if s.Effects == nil {
+		s.Effects = presentation.NewEffectService(presentation.EffectCapacity)
+	}
 	// Production worlds carry a VFS source. Install one strict binder before
 	// battle entry so scenario, construction, and forced-slot creation all
 	// resolve the same authored model/script path. Fixture worlds leave the
@@ -516,7 +525,11 @@ func createAndBindServices(s *Session) error {
 		case combat.EventProjectileImpact:
 			s.Presentation.EmitImpact(pe)
 		case combat.EventUnitKilled, combat.EventCorpse:
-			// Death/corpse lifecycle is owned by Units.OnDeath exactly once.
+			// Death/corpse lifecycle is owned by Units.OnDeath exactly once;
+			// a separate authored corpse event, when emitted, is presentation-only.
+			if ev.Kind == combat.EventCorpse {
+				s.Presentation.EmitCorpse(pe)
+			}
 		}
 	}
 	// Wire BuildWeapon stockpile admission to the authoritative economy

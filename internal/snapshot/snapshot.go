@@ -165,21 +165,29 @@ type EffectView struct {
 // OrderView is the presentation view of one unit order head [04 §3][04 §7.3].
 // It is published for selection/order overlays (waypoint lines) and is read-only for the HUD.
 type OrderView struct {
-	Unit                pool.Handle
-	Target              pool.Handle
-	GoalX, GoalY, GoalZ numeric.Fixed
-	Kind                string       // descriptor Name e.g. "Move_Ground" [04 §3]
-	MoveState           uint8        // orders.MoveState if applicable
-	List                uint8        // 0 primary, 1 secondary [04 §3]
-	Index               uint16       // stable position within that list
-	DescriptorID        int32        // immutable descriptor identity when available
-	CreationTick        uint32       // order creation tick [04 §3]
-	Flags               uint32       // queue/descriptor gates needed by presentation
-	State               uint8        // descriptor state label
-	BuildProduct        string       // canonical product key for build nodes
-	FootX, FootZ        int8         // authored build footprint when known
-	Route               []RoutePoint // immutable route points in publication order
-	RouteTruncated      bool         // true when the presentation bound dropped points
+	Unit                   pool.Handle
+	Target                 pool.Handle
+	GoalX, GoalY, GoalZ    numeric.Fixed
+	Kind                   string       // descriptor Name e.g. "Move_Ground" [04 §3]
+	State                  uint8        // retained state byte when authored [04 §3.2]
+	StateLabel             string       // descriptor state label [04 §3.1]
+	MoveState              uint8        // orders.MoveState if applicable
+	List                   uint8        // 0 primary, 1 secondary [04 §3]
+	Index                  uint16       // stable position within that list
+	DescriptorID           int32        // immutable descriptor identity when available
+	Phase                  uint8        // handler-private phase byte [04 §3.2]
+	CreationTick           uint32       // order creation tick [04 §3]
+	Flags                  uint32       // queue/descriptor gates needed by presentation
+	DynamicGate            uint32       // runtime gate mask [04 §3.2]
+	Deadline               int32        // deadline tick, -1 when none [04 §3.2]
+	Satisfied              uint32       // accumulated satisfied gates [04 §3.2]
+	PathStatus             uint32       // movement scheduler status [04 §7.2]
+	Param1, Param2, Param3 uint32       // command-specific payload, retained verbatim
+	BuildProduct           string       // canonical product key for build nodes
+	BuildCount             uint32       // authored/coalesced count (Param2) [R-P0-11]
+	FootX, FootZ           int8         // authored build footprint when known
+	Route                  []RoutePoint // immutable route points in publication order
+	RouteTruncated         bool         // true when the presentation bound dropped points
 }
 
 // RoutePoint is a fixed-point path point copied into the presentation frame.

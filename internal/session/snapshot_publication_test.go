@@ -6,7 +6,10 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/presentation"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -88,6 +91,33 @@ func TestSnapshotPublishesEventsInAdmissionOrderExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestSnapshotPublishesActiveEffectsFromOrderedEvents(t *testing.T) {
+	c := presentation.NewCollector(presentation.Limits{})
+	if !c.EmitNanolathe(presentation.Event{
+		Tick: 4, Source: 2, Target: 3, Piece: 6, EffectID: 6,
+		X: 11, Y: 12, Z: 13, TargetX: 21, TargetY: 22, TargetZ: 23,
+	}) {
+		t.Fatal("admit nanolathe event")
+	}
+	s := &Session{Snapshot: &snapshot.Buffer{}, Presentation: c}
+	s.publishSnapshot(4)
+	_, frame, ok := s.Snapshot.Read()
+	if !ok || len(frame.Effects) != 1 {
+		t.Fatalf("effects = %#v, ok=%v", frame.Effects, ok)
+	}
+	got := frame.Effects[0]
+	if got.ID != frame.Events[0].ID || got.EventSeq != frame.Events[0].Sequence || got.EffectID != 6 || got.Piece != 6 || got.X != 11 || got.TargetZ != 23 {
+		t.Fatalf("effect publication = %+v events=%+v", got, frame.Events)
+	}
+	// The event window is one-shot, while an unknown-duration effect remains
+	// explicitly active rather than being silently reduced to one tick.
+	s.publishSnapshot(5)
+	_, next, ok := s.Snapshot.Read()
+	if !ok || len(next.Events) != 0 || len(next.Effects) != 1 || next.Effects[0].Lifetime != 0 || next.Effects[0].ExpiryTick != 0 {
+		t.Fatalf("effect/event lifecycle = %+v", next)
+	}
+}
+
 func TestSnapshotPublishesConstructionLink(t *testing.T) {
 	builderDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "builder"}, UnitName: "builder", Builder: true, MaxDamage: 100, FootprintX: 2, FootprintZ: 2}
 	productDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "product"}, UnitName: "product", MaxDamage: 200, FootprintX: 1, FootprintZ: 1}
@@ -115,5 +145,30 @@ func TestSnapshotPublishesConstructionLink(t *testing.T) {
 	got := frame.Builds[0]
 	if got.Builder != builder || got.Product != product || got.ProductKey != productDef.CanonicalKey || got.Remaining != productUnit.Remaining || got.Health != productUnit.Health || got.FootX != 1 || got.FootZ != 1 {
 		t.Fatalf("build publication = %+v", got)
+	}
+}
+
+func TestSnapshotQueuePublishesBuildFootprint(t *testing.T) {
+	product := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testproduct"},
+		FootprintX:       3,
+		FootprintZ:       2,
+	}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{product.CanonicalKey: product}}
+	owner := pool.Handle(4)
+	queue := orders.NewQueueWith([]*orders.Node{{
+		ID:          orders.Lookup("MobileBuild"),
+		Owner:       owner,
+		GoalX:       numeric.Fixed(16 << 16),
+		GoalZ:       numeric.Fixed(24 << 16),
+		BuildDefKey: product.CanonicalKey,
+	}}, nil)
+	view := snapshotOrderQueueView(orders.SnapshotQueueOf(queue, owner, nil), cat)
+	if len(view.Primary) != 1 {
+		t.Fatalf("published queue length = %d, want 1", len(view.Primary))
+	}
+	got := view.Primary[0]
+	if got.BuildProduct != product.CanonicalKey || got.FootX != 3 || got.FootZ != 2 {
+		t.Fatalf("published build geometry = %+v, want product footprint 3x2", got)
 	}
 }

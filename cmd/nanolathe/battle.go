@@ -1864,51 +1864,6 @@ func (b *battleSession) drawBuildGhost(c *client.Client) {
 	c.UIFrameRect(int(l)+1, int(t)+1, int(r-l)-2, int(btm-t)-2, col)
 }
 
-// drawQueuedBuildMarkers draws the animated site marker on every queued build
-// order of the local player's units [07 §9].
-//
-// Retail gates the whole order-queue overlay — connecting lines, range rings and
-// these markers — on Shift being held, so a player reviews a queue by holding
-// the same modifier that appends to it. The marker itself is eight lines whose
-// four positions sweep across the footprint over ten ticks from the order's
-// creation; see hud.BuildMarkerSegments.
-func (b *battleSession) drawQueuedBuildMarkers(c *client.Client) {
-	if b.sess == nil || b.sess.Units == nil || b.cam == nil {
-		return
-	}
-	if !b.shiftHeld || b.sess.Clock == nil {
-		return
-	}
-	tick := b.sess.Clock.GlobalTick
-	for _, u := range b.sess.Units.Iter() {
-		if u == nil || !u.Alive || u.Owner != b.sess.LocalOwner {
-			continue
-		}
-		q := orders.QueueForUnit(u)
-		if q == nil {
-			continue
-		}
-		selected := u.Flags&client.SelectionFlag != 0
-		for _, node := range q.Primary() {
-			if node == nil || node.BuildDefKey == "" {
-				continue
-			}
-			def, found := b.cat.Unit(node.BuildDefKey)
-			if !found || def == nil {
-				continue
-			}
-			footX, footZ := footprintCells(def)
-			cellX, cellZ := world.PlacementAnchor(node.GoalX, node.GoalZ, footX, footZ)
-			h := int32(node.GoalY >> 16)
-			l, t, r, btm := b.siteRectToScreen(cellX*16, cellZ*16, (cellX+footX)*16, (cellZ+footZ)*16, h)
-			age := int(tick - node.CreationTick)
-			for _, seg := range hud.BuildMarkerSegments(l, t, r, btm, age, selected) {
-				c.UIFillRect(int(seg.X0), int(seg.Y0), int(seg.X1-seg.X0)+1, int(seg.Y1-seg.Y0)+1, c.GUIColor(seg.Color))
-			}
-		}
-	}
-}
-
 // footprintCells returns a definition's footprint, clamped to at least one cell
 // on each axis so a definition that authors neither still occupies a square.
 func footprintCells(def *content.UnitDef) (footX, footZ int32) {
@@ -1990,7 +1945,6 @@ func (b *battleSession) drawOverlay(c *client.Client, fnt *formats.FNT) {
 		}
 	}
 	b.drawBuildGhost(c)
-	b.drawQueuedBuildMarkers(c)
 	// Resource bars via anchors [02 §6][07 §6][P0-I14]: ENERGYBAR/METALBAR filled left-to-right [01 §8].
 	// TODO(P1): full HUD uses all 30 anchors with SHD lookup, fog composer and ten-layer draw [07 §6][GAP T22].
 	if b.anchorsOK && b.sess != nil && b.sess.Econ != nil {
