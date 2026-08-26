@@ -61,6 +61,21 @@ type battleSession struct {
 	buildOK    bool
 	buildMX    int32
 	buildMY    int32
+	// Site resolved by the last updatePlacement: the north-west footprint cell
+	// and the ground height retail draws the ghost and stores the order at
+	// [07 §9]. buildSticky is retail's placement-valid-pending bit, set by a
+	// shift-click so the mode survives until shift is released.
+	buildCellX  int32
+	buildCellZ  int32
+	buildSiteH  int32
+	buildSticky bool
+	// shiftHeld mirrors the last polled Shift state so the overlay can gate the
+	// order-queue markers on it the way retail's battle draw does [07 §9].
+	// pointerX/Y mirror the last polled pointer so the overlay can gate on the
+	// live region rather than on the site the ghost was last moved to.
+	shiftHeld bool
+	pointerX  int32
+	pointerY  int32
 
 	msAccum float64 // renderer delta → scaled-now for Session.Step
 
@@ -353,6 +368,8 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	kbd := in.Kbd
 	mouse := in.Mouse
 	mx, my := int32(mouse.X), int32(mouse.Y)
+	b.shiftHeld = kbd.HasShift()
+	b.pointerX, b.pointerY = mx, my
 
 	// Latch arming via hotkeys — retail latch byte IS dispatcher switch key [GAP T22][07 §9] C11.
 	// Preserve authored button order and pagination for build menu [02 "Build-menu catalog keys"].
@@ -518,17 +535,32 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	// Build placement mode captures left-clicks before selection handling [R-P0-03].
 	// Right-click cancellation is handled at the top of handleInput with the
 	// latch/selection precedence of [07 §9].
+	//
+	// A shift-click leaves the mode armed so the next click places another copy;
+	// retail records that on a placement-valid-pending bit and drops back to the
+	// idle latch as soon as shift is released, whether or not another click
+	// arrives. Arming from a build button does not set the bit, so a first
+	// placement without shift still gets its click.
+	if b.buildSticky && !kbd.HasShift() {
+		b.disarmPlacement()
+	}
 	if b.buildDef != "" {
 		b.updatePlacement(mx, my)
-		if mouse.Pressed(input.MouseButtonLeft) && b.buildOK {
+		if mouse.Pressed(input.MouseButtonLeft) {
+			if !b.buildOK {
+				// An illegal site queues nothing and stays armed; the player
+				// hears the refusal and can move the ghost [07 §9].
+				b.playUICue(cl, "notoktobuild")
+				return
+			}
 			queued := kbd.HasShift()
 			b.commitBuild(queued)
-			// Keep latch for queued multi-build via shift: if shift held keep buildDef for next placement [P0-I14].
-			if !queued {
-				b.buildDef = ""
+			b.playUICue(cl, "oktobuild")
+			if queued {
+				b.buildSticky = true
+			} else {
+				b.disarmPlacement()
 			}
-		} else if mouse.Pressed(input.MouseButtonLeft) && !b.buildOK {
-			// Illegal placement queues nothing [R-P0-03]
 		}
 		return
 	}
@@ -1009,34 +1041,14 @@ func (b *battleSession) panelClick(mx, my int32) bool {
 						return true // consumed but not placeable (illegal product)
 					}
 				}
-				// Factory vs mobile dispatch [R-P0-03][F-P1-008]
-				builderIsFactory := false
-				if builder != nil && builder.Def != nil {
-					builderIsFactory = hud.IsFactoryBuilder(builder.Def)
-				}
-				if builderIsFactory {
-					// Factory: product click queues factory build via injected callback [R-P0-03]
+				// Retail branches on the product's authored BMcode, not on the
+				// builder's mobility [07 §9]: a building arms placement, and
+				// anything else queues immediately.
+				if !hud.ProductArmsPlacement(def) {
 					_ = b.DispatchFactoryBuild(def.CanonicalKey, false)
 					return true
 				}
-				// Mobile builder: arm placement mode with definition retained [R-P0-03][07 §9] 0xE requires non-empty list
-				if builder != nil && !hud.IsMobileBuilder(builder.Def) && builder.Def.Builder {
-					// Unknown builder class treated as mobile when CanMove absent; allow arming.
-				}
-				b.buildDef = def.CanonicalKey
-				b.buildFootX = int32(def.FootprintX)
-				b.buildFootZ = int32(def.FootprintZ)
-				if b.buildFootX <= 0 {
-					b.buildFootX = 1
-				}
-				if b.buildFootZ <= 0 {
-					b.buildFootZ = 1
-				}
-				b.buildOK = false
-				// Also set latch to MobileBuild where applicable [07 §9] 0xE cursorfindsite branch.
-				if builder != nil && hud.IsMobileBuilder(builder.Def) {
-					b.latch = input.LatchMobileBuild
-				}
+				b.armPlacement(def)
 				return true
 			}
 		}
@@ -1223,15 +1235,66 @@ func (b *battleSession) stockpileSelected(queued bool) {
 	}
 }
 
+// cursorWorld is the one cursor-to-ground conversion the battle screen uses
+// [07 §8]. The camera's inverse alone assumes height zero, but every world
+// object is drawn with the half-height shear, so on raised ground that inverse
+// lands north of the pixel the player clicked — an order given at the foot of a
+// hill puts the unit partway up it. Terrain.CursorToWorld runs retail's search
+// along Z to find the ground whose sheared projection is the clicked row, and
+// returns the height there as Y.
+func (b *battleSession) cursorWorld(sx, sy int32) (wx, wy, wz numeric.Fixed) {
+	if b.cam == nil {
+		return 0, 0, 0
+	}
+	fx, fz := b.cam.ScreenToWorld(sx+camera.OriginX, sy+camera.OriginY)
+	if b.sess == nil || b.sess.World == nil {
+		return fx, 0, fz
+	}
+	return b.sess.World.CursorToWorld(int32(fx>>16), int32(fz>>16))
+}
+
+// armPlacement enters build-placement mode for a product [07 §9]. Retail arms
+// the MOBILEBUILD latch, stores the product's definition id in a pending-build
+// word and plays the `addbuild` cue; nothing is queued until the world click.
+func (b *battleSession) armPlacement(def *content.UnitDef) {
+	if def == nil {
+		return
+	}
+	b.buildDef = def.CanonicalKey
+	b.buildFootX, b.buildFootZ = footprintCells(def)
+	b.buildOK = false
+	b.buildSticky = false
+	b.latch = input.LatchMobileBuild
+}
+
+// disarmPlacement returns the battle screen to the idle latch after a placement
+// ends, whether it ended in a click, a cancel, or shift being released [07 §9].
+func (b *battleSession) disarmPlacement() {
+	b.buildDef = ""
+	b.buildOK = false
+	b.buildSticky = false
+	if b.latch == input.LatchMobileBuild {
+		b.latch = input.LatchNormal
+	}
+}
+
+// playUICue plays a non-positional interface sound by its authored alias
+// [07 §9][03 §8.3]. Retail's placement path plays `oktobuild` on a placed site
+// and `notoktobuild` on a refused one; both are ordinary sound aliases, not a
+// separate UI audio path.
+func (b *battleSession) playUICue(cl *client.Client, alias string) {
+	if cl == nil {
+		return
+	}
+	cl.PlayUICue(alias)
+}
+
 // updatePlacement tracks the ghost under the cursor and validates it against
 // the world [04 §6.2][PLAN_08 C17].
 func (b *battleSession) updatePlacement(mx, my int32) {
 	b.buildMX, b.buildMY = mx, my
-	wx, wz := b.cam.ScreenToWorld(mx+camera.OriginX, my+camera.OriginY)
-	cx, cz := world.WorldToCell(wx), world.WorldToCell(wz)
-	halfX, halfZ := b.buildFootX/2, b.buildFootZ/2
-	cx -= halfX
-	cz -= halfZ
+	wx, _, wz := b.cursorWorld(mx, my)
+	b.buildCellX, b.buildCellZ = world.PlacementAnchor(wx, wz, b.buildFootX, b.buildFootZ)
 	self := uint16(0)
 	if u := b.selectedBuilder(); u != nil {
 		self = uint16(u.Handle)
@@ -1240,7 +1303,39 @@ func (b *battleSession) updatePlacement(mx, my int32) {
 	if yerr != nil {
 		yard = nil
 	}
-	b.buildOK = b.sess.World.ValidatePlacement(cx, cz, yard, int(b.buildFootX), int(b.buildFootZ), self) == nil
+	footX, footZ := int(b.buildFootX), int(b.buildFootZ)
+	b.buildOK = b.sess.World.ValidatePlacement(b.buildCellX, b.buildCellZ, yard, footX, footZ, self) == nil
+	waterline := int32(0)
+	if def, found := b.cat.Unit(b.buildDef); found && def != nil {
+		waterline = def.Waterline
+	}
+	b.buildSiteH = b.sess.World.SiteHeight(b.buildCellX, b.buildCellZ, yard, footX, footZ, waterline)
+}
+
+// placementRect returns the armed site's footprint as a screen rectangle
+// [07 §9]. Retail projects the two cell-aligned corners with the ordinary
+// half-height shear, using the site height for both, so the ghost lies flat on
+// the ground the building will stand on rather than following the cursor.
+func (b *battleSession) placementRect() (left, top, right, bottom int32) {
+	l := b.buildCellX * 16
+	t := b.buildCellZ * 16
+	r := l + b.buildFootX*16
+	btm := t + b.buildFootZ*16
+	return b.siteRectToScreen(l, t, r, btm, b.buildSiteH)
+}
+
+// siteRectToScreen projects a map-pixel footprint rectangle standing at height
+// h (in map-pixel height units) into viewport-relative screen pixels [03 §2.5].
+// Both corners take the same height, which is what flattens the marker onto the
+// ground plane instead of tilting it.
+func (b *battleSession) siteRectToScreen(l, t, r, btm, h int32) (left, top, right, bottom int32) {
+	if b.cam == nil {
+		return l, t, r, btm
+	}
+	px := func(v int32) numeric.Fixed { return numeric.Fixed(int64(v) << 16) }
+	x0, y0 := b.cam.WorldToScreen(px(l), px(h), px(t))
+	x1, y1 := b.cam.WorldToScreen(px(r), px(h), px(btm))
+	return x0 - camera.OriginX, y0 - camera.OriginY, x1 - camera.OriginX, y1 - camera.OriginY
 }
 
 // yardMapFor returns the placed definition's yard text when known.
@@ -1270,36 +1365,131 @@ func (b *battleSession) commitBuild(queued bool) {
 	if !b.buildOK {
 		return // illegal placement queues nothing [R-P0-03]
 	}
-	wx, wz := b.cam.ScreenToWorld(b.buildMX+camera.OriginX, b.buildMY+camera.OriginY)
-	wy := numeric.Fixed(0)
-	if b.sess.World != nil {
-		wy = b.sess.World.HeightAt(wx, wz)
-		if wy == numeric.Fixed(-1) {
-			wy = 0
-		}
-	}
+	// The order carries the footprint's center and the site height, not the raw
+	// cursor point: retail recomputes the same cell-aligned anchor the ghost was
+	// drawn on and stores `((foot + 2*cell) << 19)` per axis with the validator's
+	// site height as Y [07 §9]. Sending the cursor point instead would put the
+	// building half a footprint off the box the player aimed with.
+	wx, wz := world.PlacementCenter(b.buildCellX, b.buildCellZ, b.buildFootX, b.buildFootZ)
+	wy := numeric.Fixed(int64(b.buildSiteH) << 16)
 	// Use injected dispatch with fallback [R-P0-03][ON-09]
 	if err := b.DispatchMobileBuild(b.buildDef, wx, wz, queued); err != nil {
 		fmt.Fprintf(os.Stderr, "nanolathe: build %s: %v\n", b.buildDef, err)
 		return
 	}
 	// Ensure canonical fields populated for determinism [04 §3.2][P0-I05][P0-I03].
-	// The fallback already set flags; this extra ensures wy etc for tests that bypass fallback.
+	// The queue helper builds its node from the site alone, so the height, the
+	// owning builder and the creation tick are stamped here — for every builder
+	// the click ordered, not just the first. The creation tick is what the site
+	// marker measures its sweep from [07 §9]; an unstamped order simply renders
+	// at rest.
 	if b.sess != nil && b.sess.Units != nil {
-		if q := orders.QueueForUnit(builder); q != nil && q.LenPrimary() > 0 {
+		for _, u := range b.selectedUnits() {
+			q := orders.QueueForUnit(u)
+			if q == nil || q.LenPrimary() == 0 {
+				continue
+			}
 			prim := q.Primary()
 			tail := prim[len(prim)-1]
-			if tail != nil {
-				if tail.GoalY == 0 {
-					tail.GoalY = wy
-				}
-				if tail.Owner == 0 {
-					tail.Owner = builder.Handle
-				}
+			if tail == nil || tail.BuildDefKey != content.CanonicalKey(b.buildDef) {
+				continue
+			}
+			if tail.GoalY == 0 {
+				tail.GoalY = wy
+			}
+			if tail.Owner == 0 {
+				tail.Owner = u.Handle
+			}
+			if tail.CreationTick == 0 && b.sess.Clock != nil {
+				tail.CreationTick = b.sess.Clock.GlobalTick
 			}
 		}
 	}
-	_ = wy
+}
+
+// drawBuildGhost draws the armed build site the way retail does [07 §9].
+//
+// The ghost is two nested one-pixel outlines on the footprint's own cell-aligned
+// rectangle — not a box centered on the cursor — and both are drawn in a single
+// color chosen by site validity: logical palette entry 10 when the site is legal
+// and 4 when it is not. Retail draws no text next to it; the product name and
+// its cost live on the build button, and the cursor (`cursorfindsite` versus
+// `cursortoofar`) carries the validity as well.
+//
+// Retail suppresses the ghost whenever the pointer leaves the world viewport,
+// so it never appears over the side panel or the minimap.
+func (b *battleSession) drawBuildGhost(c *client.Client) {
+	if b.buildDef == "" || b.cam == nil {
+		return
+	}
+	if !b.overWorld(b.pointerX, b.pointerY) {
+		return
+	}
+	l, t, r, btm := b.placementRect()
+	col := c.GUIColor(hud.GhostColorIllegal)
+	if b.buildOK {
+		col = c.GUIColor(hud.GhostColorLegal)
+	}
+	c.UIFrameRect(int(l), int(t), int(r-l), int(btm-t), col)
+	c.UIFrameRect(int(l)+1, int(t)+1, int(r-l)-2, int(btm-t)-2, col)
+}
+
+// drawQueuedBuildMarkers draws the animated site marker on every queued build
+// order of the local player's units [07 §9].
+//
+// Retail gates the whole order-queue overlay — connecting lines, range rings and
+// these markers — on Shift being held, so a player reviews a queue by holding
+// the same modifier that appends to it. The marker itself is eight lines whose
+// four positions sweep across the footprint over ten ticks from the order's
+// creation; see hud.BuildMarkerSegments.
+func (b *battleSession) drawQueuedBuildMarkers(c *client.Client) {
+	if b.sess == nil || b.sess.Units == nil || b.cam == nil {
+		return
+	}
+	if !b.shiftHeld || b.sess.Clock == nil {
+		return
+	}
+	tick := b.sess.Clock.GlobalTick
+	for _, u := range b.sess.Units.Iter() {
+		if u == nil || !u.Alive || u.Owner != b.sess.LocalOwner {
+			continue
+		}
+		q := orders.QueueForUnit(u)
+		if q == nil {
+			continue
+		}
+		selected := u.Flags&client.SelectionFlag != 0
+		for _, node := range q.Primary() {
+			if node == nil || node.BuildDefKey == "" {
+				continue
+			}
+			def, found := b.cat.Unit(node.BuildDefKey)
+			if !found || def == nil {
+				continue
+			}
+			footX, footZ := footprintCells(def)
+			cellX, cellZ := world.PlacementAnchor(node.GoalX, node.GoalZ, footX, footZ)
+			h := int32(node.GoalY >> 16)
+			l, t, r, btm := b.siteRectToScreen(cellX*16, cellZ*16, (cellX+footX)*16, (cellZ+footZ)*16, h)
+			age := int(tick - node.CreationTick)
+			for _, seg := range hud.BuildMarkerSegments(l, t, r, btm, age, selected) {
+				c.UIFillRect(int(seg.X0), int(seg.Y0), int(seg.X1-seg.X0)+1, int(seg.Y1-seg.Y0)+1, c.GUIColor(seg.Color))
+			}
+		}
+	}
+}
+
+// footprintCells returns a definition's footprint, clamped to at least one cell
+// on each axis so a definition that authors neither still occupies a square.
+func footprintCells(def *content.UnitDef) (footX, footZ int32) {
+	footX, footZ = def.FootprintX, def.FootprintZ
+	if footX <= 0 {
+		footX = 1
+	}
+	if footZ <= 0 {
+		footZ = 1
+	}
+	return footX, footZ
 }
 
 // drawOverlay renders the build panel and placement ghost after units.
@@ -1363,23 +1553,8 @@ func (b *battleSession) drawOverlay(c *client.Client, fnt *formats.FNT) {
 			}
 		}
 	}
-	if b.buildDef != "" {
-		wx, wz := b.cam.ScreenToWorld(b.buildMX+camera.OriginX, b.buildMY+camera.OriginY)
-		sx0, sy0 := c.WorldToScreenPx(wx, wz, numeric.Fixed(0))
-		sx, sy := sx0-camera.OriginX, sy0-camera.OriginY
-		wpx := int(b.buildFootX) * 16
-		hpx := int(b.buildFootZ) * 16
-		col := byte(200)
-		if b.buildOK {
-			col = 250
-		}
-		c.UIFrameRect(int(sx)-wpx/2, int(sy)-hpx/2, wpx, hpx, col)
-		label := b.buildDef + " — BLOCKED"
-		if b.buildOK {
-			label = b.buildDef + " — click to place"
-		}
-		c.UIText(fnt, label, int(sx)-wpx/2, int(sy)+hpx/2+2, col)
-	}
+	b.drawBuildGhost(c)
+	b.drawQueuedBuildMarkers(c)
 	// Resource bars via anchors [02 §6][07 §6][P0-I14]: ENERGYBAR/METALBAR filled left-to-right [01 §8].
 	// TODO(P1): full HUD uses all 30 anchors with SHD lookup, fog composer and ten-layer draw [07 §6][GAP T22].
 	if b.anchorsOK && b.sess != nil && b.sess.Econ != nil {
@@ -1559,16 +1734,10 @@ func loadFNT(cs *contentSet) *formats.FNT {
 // clicked cell and is visible; unit picking is tried first [07 §8][07 §9][P0-I14].
 // It delegates unit picking to client.PickUnit so there is one canonical routine [P0-I14].
 func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *orders.ResolvePos) {
-	wx, wz := b.cam.ScreenToWorld(sx+camera.OriginX, sy+camera.OriginY)
-	pos := &orders.ResolvePos{X: wx, Z: wz}
+	wx, wy, wz := b.cursorWorld(sx, sy)
+	pos := &orders.ResolvePos{X: wx, Y: wy, Z: wz}
 	if b.sess == nil || b.sess.Units == nil || b.cam == nil {
 		return 0, nil, pos
-	}
-	if b.sess.World != nil {
-		y := b.sess.World.HeightAt(wx, wz)
-		if y != -1 {
-			pos.Y = y
-		}
 	}
 	// ONE picking routine via client.PickUnit [P0-I14][07 §9][03 §3.2] C8.
 	viewer := visibility.PlayerID(b.sess.LocalOwner)
@@ -1782,7 +1951,7 @@ func (b *battleSession) hoverFeature(sx, sy int32) *content.FeatureDef {
 	if b.sess.Features == nil || b.cam == nil {
 		return nil
 	}
-	wx, wz := b.cam.ScreenToWorld(sx+camera.OriginX, sy+camera.OriginY)
+	wx, _, wz := b.cursorWorld(sx, sy)
 	inst := b.sess.Features.InstanceAt(int(world.WorldToCell(wx)), int(world.WorldToCell(wz)))
 	if inst == nil {
 		return nil

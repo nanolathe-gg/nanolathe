@@ -168,7 +168,7 @@ use a single character (`YardMap=o;`).
 | Key | Meaning |
 | --- | --- |
 | `Builder` | Can construct (`1` for factories, construction units, commander) |
-| `BMcode` | `0` for stationary factories ("build-machine"), `1` for everything else — distinguishes pad factories from mobile builders |
+| `BMcode` | `0` for structures, `1` for mobile units. Perfectly correlated with `YardMap` across the stock corpus: all 126 definitions with a yard map author `0`, all 152 without author `1` (see `docs/SPEC_CONFLICTS.md` SC21). It is not a factory marker — stock factories author `1` for `CanMove` |
 | `WorkerTime` | Nanolathe rate (build effort contributed per unit time) |
 | `Builddistance` | Build/repair reach in pixels (mobile builders) |
 | `MetalMake` | Metal produced while active (also used by builders) |

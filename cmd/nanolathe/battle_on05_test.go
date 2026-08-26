@@ -25,7 +25,10 @@ func testCatalogON05() *content.Catalog {
 	p1 := &content.UnitDef{UnitName: "armsolar", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100}
 	p1.CanonicalKey = content.CanonicalKey(p1.UnitName)
 	p1.DefinitionHeader.CanonicalKey = p1.CanonicalKey
-	p2 := &content.UnitDef{UnitName: "armfav", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100}
+	// armfav is a vehicle: authored BMcode 1 and no yard map, like every stock
+	// mobile unit. That is what makes it a factory product rather than a
+	// placement one [07 §9].
+	p2 := &content.UnitDef{UnitName: "armfav", BMCode: true, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
 	p2.CanonicalKey = content.CanonicalKey(p2.UnitName)
 	p2.DefinitionHeader.CanonicalKey = p2.CanonicalKey
 	fac := &content.UnitDef{UnitName: "armfac", Builder: true, CanMove: false, FootprintX: 3, FootprintZ: 3, YardMap: "ooooooooo", MaxDamage: 500}
@@ -237,10 +240,15 @@ func TestLegalPlacementQueuesMobileBuild(t *testing.T) {
 	if queuedProduct != b.buildDef && queuedProduct != "armsolar" {
 		// fallback may be empty if we used dispatch directly, but check tail
 	}
+	// The order carries the footprint's center, not the cursor point [07 §9]:
+	// retail snaps the site to whole cells and stores ((foot + 2*cell) << 19).
 	tail := q.Primary()[0]
-	expectedWX, expectedWZ := b.cam.ScreenToWorld(160+camera.OriginX, 120+camera.OriginY)
+	expectedWX, expectedWZ := world.PlacementCenter(b.buildCellX, b.buildCellZ, b.buildFootX, b.buildFootZ)
 	if tail.GoalX != expectedWX || tail.GoalZ != expectedWZ {
 		t.Fatalf("queued coords mismatch: got %d,%d want %d,%d", tail.GoalX, tail.GoalZ, expectedWX, expectedWZ)
+	}
+	if tail.GoalX != numeric.Fixed(int64(b.buildCellX*16+b.buildFootX*8)<<16) {
+		t.Fatalf("site center %d is not the footprint midpoint of cell %d", tail.GoalX, b.buildCellX)
 	}
 	_ = qx
 	_ = qz
@@ -256,15 +264,18 @@ func TestIllegalPlacementQueuesNothing(t *testing.T) {
 	b.armBuildPanel()
 	btn := b.panelButtons[0]
 	b.panelClick(btn.X+1, btn.Y+1)
-	// Choose illegal OOB screen far outside map: 800,600 -> world OOB
-	b.buildMX = 800
-	b.buildMY = 600
-	b.updatePlacement(800, 600)
+	// A pointer outside the map no longer reaches an out-of-bounds cell: the
+	// cursor-to-ground conversion clamps into the map rectangle first, as
+	// retail does [07 §8]. The illegal site is the corner instead, where the
+	// 2x2 footprint's half-extent bias pushes its origin off the map.
+	b.buildMX = 0
+	b.buildMY = 0
+	b.updatePlacement(0, 0)
 	if b.buildOK {
-		t.Fatalf("OOB placement should be illegal")
+		t.Fatalf("corner placement should be illegal")
 	}
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
-	in.Mouse.InjectMouseMove(800, 600)
+	in.Mouse.InjectMouseMove(0, 0)
 	in.Mouse.InjectMouseButton(input.MouseButtonLeft, true)
 	b.handleInput(in, nil)
 	q := orders.QueueForUnit(builder)
@@ -642,10 +653,11 @@ func TestFootprintPreviewLegalIllegal(t *testing.T) {
 	if !b.buildOK {
 		t.Fatalf("center should be legal")
 	}
-	b.updatePlacement(800, 600) // with cam 0, 800,600 -> world 672,568 -> cell 42,35 inside 100, but not OOB for large map, so choose far OOB via large screen beyond map
-	// Use far outside: with large map 1600, still inside. Use 2000,2000 to exceed
-	b.updatePlacement(2000, 2000)
+	// Off-map pointers clamp into the map rectangle before anything else
+	// [07 §8], so the illegal site is the corner: the 2x2 footprint's
+	// half-extent bias puts its origin at cell -1.
+	b.updatePlacement(0, 0)
 	if b.buildOK {
-		t.Fatalf("far OOB should be illegal")
+		t.Fatalf("corner placement should be illegal")
 	}
 }

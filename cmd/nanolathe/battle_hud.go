@@ -341,6 +341,16 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 	if h == nil || c == nil {
 		return
 	}
+	// World-space overlays come first, while the composed world is still the
+	// whole surface: retail draws the build ghost and the order-queue markers
+	// into the battle view and only then blits the GUI frames over them, so a
+	// marker near the map edge is covered by the chrome instead of drawing on
+	// top of it [07 §9].
+	if b != nil {
+		b.drawBuildGhost(c)
+		b.drawQueuedBuildMarkers(c)
+	}
+
 	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. The two horizontal
 	// frames are static at the authored 129-pixel rail boundary; only the side
 	// strip and its GUI contents use the panel slide offset [07 §6].
@@ -941,6 +951,22 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 							break
 						}
 					}
+				}
+				if prodDef == nil {
+					if d, ok := b.cat.Unit(prodKey); ok {
+						prodDef = d
+					}
+				}
+				// Retail branches on the product's BMcode, not on the builder
+				// [07 §9]. A resolvable product decides; only an unresolvable
+				// one falls back to classifying the builder.
+				if prodDef != nil {
+					if !hud.ProductArmsPlacement(prodDef) {
+						_ = b.DispatchFactoryBuild(prodKey, false)
+						return true
+					}
+					b.armPlacement(prodDef)
+					return true
 				}
 				if hud.IsFactoryBuilder(sel.Def) {
 					_ = b.DispatchFactoryBuild(prodKey, false)

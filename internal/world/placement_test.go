@@ -30,11 +30,68 @@ func TestYardMapControlBytes(t *testing.T) {
 			t.Fatalf("%q has bit 7 = %v", ch, b&0x80 != 0)
 		}
 	}
-	if _, err := ParseYardMap("Z", 1, 1); err == nil {
-		t.Fatal("unknown yardmap character was accepted")
+	// Retail skips characters outside the table rather than rejecting the
+	// definition, so a typo consumes the character and the next usable one
+	// fills the cell [04 §6.2].
+	got, err := ParseYardMap("Zo", 1, 1)
+	if err != nil {
+		t.Fatalf("unknown yardmap character rejected the map: %v", err)
 	}
-	if _, err := ParseYardMap("oo", 2, 2); err == nil {
-		t.Fatal("wrong-length yardmap was accepted")
+	if got[0] != 0x2f {
+		t.Fatalf("skipped character left %#x, want the following o", got[0])
+	}
+}
+
+// TestYardMapLengthMismatch locks retail's two padding rules [04 §6.2]: a
+// string shorter than the footprint repeats its last character, and one longer
+// than the footprint is read only as far as the last cell. Forty-six of the 126
+// stock yard maps disagree with their own footprint — ARMESTOR authors one
+// character for 4x4, ARMSOLAR authors 27 for 5x5 — so rejecting a mismatch
+// makes those buildings unplaceable.
+func TestYardMapLengthMismatch(t *testing.T) {
+	short, err := ParseYardMap("o", 2, 2)
+	if err != nil {
+		t.Fatalf("single-character yard map rejected: %v", err)
+	}
+	for i, b := range short {
+		if b != 0x2f {
+			t.Fatalf("cell %d = %#x, want the repeated o", i, b)
+		}
+	}
+
+	// Nine characters over a 5x5 footprint: the ninth repeats for the rest.
+	partial, err := ParseYardMap("ooooooooC", 5, 5)
+	if err != nil {
+		t.Fatalf("short yard map rejected: %v", err)
+	}
+	for i, b := range partial {
+		want := YardCell(0x2f)
+		if i >= 8 {
+			want = 0x35
+		}
+		if b != want {
+			t.Fatalf("cell %d = %#x, want %#x", i, b, want)
+		}
+	}
+
+	// Whitespace between rows is skipped, not counted.
+	rows, err := ParseYardMap("oo cc", 2, 2)
+	if err != nil {
+		t.Fatalf("spaced yard map rejected: %v", err)
+	}
+	if rows[0] != 0x2f || rows[1] != 0x2f || rows[2] != 0x2d || rows[3] != 0x2d {
+		t.Fatalf("spaced yard map parsed as %#x", rows)
+	}
+
+	// Trailing characters past the last cell are never read.
+	long, err := ParseYardMap("ooooC", 2, 2)
+	if err != nil {
+		t.Fatalf("long yard map rejected: %v", err)
+	}
+	for i, b := range long {
+		if b != 0x2f {
+			t.Fatalf("cell %d = %#x, want o — the trailing C must be ignored", i, b)
+		}
 	}
 }
 
@@ -88,9 +145,40 @@ func TestGeothermalRequiresTheFlag(t *testing.T) {
 	}
 }
 
+// TestBitFiveNeedsTheBlockingFlag locks bit 5 [04 §6.2]: the validator resolves
+// the covered cell's feature to a definition and reads its authored blocking
+// flag. Presence alone is not enough — metal patches are 3x3 non-blocking
+// features, and an extractor whose yard map is all `o` has to be placeable on
+// its own deposit.
+func TestBitFiveNeedsTheBlockingFlag(t *testing.T) {
+	yard, err := ParseYardMap("oooo", 2, 2) // o = 0x2f: bit 5 set, bit 6 clear
+	if err != nil {
+		t.Fatal(err)
+	}
+	if yard[0]&0x20 == 0 || yard[0]&0x40 != 0 {
+		t.Fatalf("o must carry bit 5 and not bit 6, got %#x", yard[0])
+	}
+
+	patch := &content.FeatureDef{Metal: 200, Indestructible: true}
+	ter := placementFixture(t, patch)
+	ter.Plot[1*6+1].SetFeature(0)
+	if err := ter.ValidatePlacement(1, 1, yard, 2, 2, 0); err != nil {
+		t.Fatalf("a non-blocking metal patch blocked placement: %v", err)
+	}
+
+	tree := &content.FeatureDef{Blocking: true, Reclaimable: true}
+	ter = placementFixture(t, tree)
+	ter.Plot[1*6+1].SetFeature(0)
+	if err := ter.ValidatePlacement(1, 1, yard, 2, 2, 0); err == nil {
+		t.Fatal("a blocking feature did not fail bit 5")
+	}
+}
+
 // TestUnresolvableReferenceBlocks locks the out-of-range rule of [04 §6.2]: an
-// index that does not bind, a void sentinel, and a fringe cell whose anchor hop
-// leads nowhere all behave as blocking for bit 5 and non-satisfying for bit 7.
+// index that does not bind and a void sentinel occupy without resolving, so bit
+// 5 blocks. A fringe cell whose anchor hop leads nowhere does not: retail's hop
+// reads the anchor and falls out with a zero, the same answer an empty cell
+// gives.
 func TestUnresolvableReferenceBlocks(t *testing.T) {
 	free, err := ParseYardMap("ffff", 2, 2) // f = 0x6f, bit 5 set
 	if err != nil {
@@ -102,15 +190,20 @@ func TestUnresolvableReferenceBlocks(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		feature uint16
+		blocks  bool
 	}{
-		{"unbound index", 0},
-		{"void sentinel", PlotFeatureVoid},
-		{"orphan fringe", PlotFeatureFringe},
+		{"unbound index", 0, true},
+		{"void sentinel", PlotFeatureVoid, true},
+		{"orphan fringe", PlotFeatureFringe, false},
 	} {
 		ter := placementFixture(t, nil) // record 0 binds to nothing
 		ter.Plot[1*6+1].SetFeature(tc.feature)
-		if err := ter.ValidatePlacement(1, 1, free, 2, 2, 0); err == nil {
+		err := ter.ValidatePlacement(1, 1, free, 2, 2, 0)
+		if tc.blocks && err == nil {
 			t.Fatalf("%s did not block bit 5", tc.name)
+		}
+		if !tc.blocks && err != nil {
+			t.Fatalf("%s blocked bit 5: %v", tc.name, err)
 		}
 	}
 	// Empty ground passes.
@@ -120,10 +213,11 @@ func TestUnresolvableReferenceBlocks(t *testing.T) {
 	}
 }
 
-// TestNonReclaimableBlocksBitSix locks bit 6 [04 §6.2]. It used to be tagged
-// TODO(T25) even though content.FeatureDef already carries the flag and T25's
-// accepted-blocked list does not include it.
-func TestNonReclaimableBlocksBitSix(t *testing.T) {
+// TestIndestructibleBlocksBitSix locks bit 6 [04 §6.2]. The validator reads the
+// high byte of the feature definition's flag word and tests its bit 1, which is
+// the word's bit 9: `indestructible`. It is not the reclaimable flag, which
+// sits at bit 7 of the same word and is never read here.
+func TestIndestructibleBlocksBitSix(t *testing.T) {
 	yard, err := ParseYardMap("ffff", 2, 2) // f = 0x6f: bits 5 and 6 both set
 	if err != nil {
 		t.Fatal(err)
@@ -134,18 +228,20 @@ func TestNonReclaimableBlocksBitSix(t *testing.T) {
 	// Use a yard byte with bit 6 but not bit 5 so the two gates are separable.
 	bitSixOnly := []YardCell{0x40, 0x40, 0x40, 0x40}
 
-	rock := &content.FeatureDef{Reclaimable: false}
+	rock := &content.FeatureDef{Indestructible: true}
 	ter := placementFixture(t, rock)
 	ter.Plot[1*6+1].SetFeature(0)
 	if err := ter.ValidatePlacement(1, 1, bitSixOnly, 2, 2, 0); err == nil {
-		t.Fatal("a non-reclaimable feature did not fail bit 6")
+		t.Fatal("an indestructible feature did not fail bit 6")
 	}
 
-	scrap := &content.FeatureDef{Reclaimable: true}
-	ter = placementFixture(t, scrap)
-	ter.Plot[1*6+1].SetFeature(0)
-	if err := ter.ValidatePlacement(1, 1, bitSixOnly, 2, 2, 0); err != nil {
-		t.Fatalf("a reclaimable feature failed bit 6: %v", err)
+	// Destructible features pass, reclaimable or not.
+	for _, scrap := range []*content.FeatureDef{{Reclaimable: true}, {Reclaimable: false}} {
+		ter = placementFixture(t, scrap)
+		ter.Plot[1*6+1].SetFeature(0)
+		if err := ter.ValidatePlacement(1, 1, bitSixOnly, 2, 2, 0); err != nil {
+			t.Fatalf("a destructible feature failed bit 6: %v", err)
+		}
 	}
 }
 

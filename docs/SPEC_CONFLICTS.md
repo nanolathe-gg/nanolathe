@@ -428,6 +428,130 @@ explicit `TODO(T23)`/`TODO(question)` placeholders.
 
 ---
 
+## SC19 — Yard-map parsing is not one-to-one, and bits 5/6 read the wrong flags
+
+**Spec said:** `[05 "Geothermal requirement"]` described yard-map characters as
+mapping "one-to-one into a row-major buffer sized by the packed footprint
+extents", and named bit 6 a test for "a specific non-reclaimable flag". Bit 5
+was described only as "free of blocking features", which `internal/world`
+implemented as any feature at all.
+
+**Observed:** three separate disagreements with the shipped data and with the
+definition compiler's character loop.
+
+1. **Length.** Forty-six of the 126 stock yard-mapped definitions disagree with
+   their own footprint. `ARMSOLAR` authors 27 characters for a 5×5 footprint,
+   `ARMESTOR` authors one for 4×4, `ARMSILO` nine for 5×5, `CORSOLAR` sixteen for
+   5×5. Reproduce with a catalog compiled from `~/TotalAnnihilation`, comparing
+   `len(strings.Fields-stripped YardMap)` against `FootprintX*FootprintZ` over
+   `Catalog.SortedUnitKeys()`. Rejecting the mismatch — which `ParseYardMap` did
+   — left every one of those buildings permanently unplaceable; the reported
+   symptom was "I cannot build a solar collector at all". The compiler instead
+   skips table-absent characters without consuming a cell, parks on the final
+   character so it repeats for unfilled cells, and never reads past the last
+   cell.
+2. **Bit 5.** Metal patches are 3×3 features authored `blocking=0`,
+   `reclaimable=0`, `indestructible=1` (`archmetal*`, `drymetal*`, `moonmetal*`,
+   `marsmetal*`, `*aquaore*` — 3-tier sets in every world's feature TDF).
+   `ARMMEX` authors an all-`o` yard map and `o` carries bit 5, so blocking on
+   presence rather than on the definition's authored `blocking` flag makes the
+   metal extractor unplaceable on its own deposit — the reported symptom. Trees
+   and rock clutter do carry `blocking=1` and still block.
+3. **Bit 6.** The validator reads bit 1 of the flag word's **high** byte, which
+   is word bit 9 — `indestructible` (mask 0x0200). `reclaimable` is word bit 7 of
+   the same byte-pair and is never read by the validator.
+
+**Decision:** `ParseYardMap` fills the footprint by retail's rules and no longer
+returns a length or unknown-character error; `ValidatePlacement` reads
+`FeatureDef.Blocking` for bit 5 and `FeatureDef.Indestructible` for bit 6, and
+counts a geothermal match only on cells whose own yard byte carries bit 7. A
+fringe cell whose anchor hop finds nothing is not blocking. `[05 "Geothermal
+requirement"]` is updated to match.
+
+**Falsifies:** the one-to-one parse contract and the bit-6 flag identity in
+`[05 "Geothermal requirement"]`. It does not change the control-byte table, the
+bit roles, or the geothermal rule itself.
+
+---
+
+## SC20 — Cursor-to-ground is a search along Z, not an inverse projection
+
+**Spec said:** `[07 §8]` said only that "world space, unit, feature, and
+terrain/radar tests use the camera transform", which `internal/camera`
+implemented as the algebraic inverse of `WorldToScreen` at height zero.
+
+**Observed:** that inverse is wrong wherever the ground is above zero, and
+visibly so. Terrain tiles are presented flat while world objects carry the
+half-height shear `screenRow = Z − (height >> 1)` `[03 §2.5]`, so an order given
+at a pixel put the unit half the terrain height north of it — the reported
+symptom was a commander moving to a space above the click. Retail resolves the
+pointer with a bounded search instead: clamp into the map rectangle, start eight
+cells south of the clicked row, walk north up to nine cells comparing each
+candidate's `max(height, seaLevel)` projection against the clicked row, then
+bracket and interpolate. Reproduce by sweeping every map pixel of a stock map
+through `Terrain.CursorToWorld` and projecting the result back: exact on flat
+ground, within a few pixels on steep slopes (retail's own linear-interpolation
+residue), against an error of half the terrain height for the algebraic inverse.
+
+**Decision:** `Terrain.CursorToWorld` implements the search and is the single
+cursor-to-ground conversion the battle screen uses, through
+`battleSession.cursorWorld`. `Camera.ScreenToWorld` keeps its pixel-level
+meaning and is no longer used directly for ground orders. `[07 §8]` is updated
+with the full resolver.
+
+**Falsifies:** nothing written down; it closes a gap `[07 §8]` had left
+unstated. The map-rectangle clamp is a behavioral consequence worth noting: a
+pointer past the map edge resolves to the edge, so an off-map build ghost is
+legal rather than out of bounds.
+
+## SC21 — `BMcode` marks structures, not factories, and `CanMove` does not separate factories from mobile builders
+
+**Spec said:** `research/formats/fbi.md` gave `BMcode` as "`0` for stationary
+factories ('build-machine'), `1` for everything else — distinguishes pad
+factories from mobile builders". That reading is a community guess, and the
+document flagged it as one.
+
+**Observed:** a census of the compiled catalog over `~/TotalAnnihilation`
+partitions the 278 unit definitions into exactly five buckets:
+
+```
+BMcode=0 yard=yes canmove=no  builder=no   103
+BMcode=0 yard=yes canmove=no  builder=yes    2
+BMcode=0 yard=yes canmove=yes builder=yes   21
+BMcode=1 yard=no  canmove=yes builder=no   122
+BMcode=1 yard=no  canmove=yes builder=yes   30
+```
+
+`BMcode == 0` and "has a yard map" are the same set, with no exception. That is
+the structure class, and it is what `[04 §6.2]` already meant when it said the
+yard map is parsed only when BMcode is zero. `ARMSOLAR` and `ARMMEX` author `0`;
+`ARMFAV`, `ARMCOM` and `ARMCK` author `1`.
+
+The census also disproves a second assumption this repo held independently of
+any document: **stock factories author `CanMove=1`**. `ARMVP`, `ARMLAB` and
+`ARMHP` are all `BMcode=0, CanMove=1, Builder=1`. Only two definitions in the
+whole corpus are `Builder=1, CanMove=0`.
+
+**Consequence in code:** `hud.IsFactoryBuilder` was `Builder && !CanMove`, so
+every stock factory failed it and passed `IsMobileBuilder` instead. Clicking a
+vehicle in a factory's build menu armed a placement ghost rather than queueing
+the vehicle.
+
+**Decision:** the factory-versus-placement branch keys on the **product's**
+`BMcode`, via `hud.ProductArmsPlacement`, which is what retail's build-button
+handler tests — it arms the MOBILEBUILD latch and stores the product id only
+when the product's BMcode byte is zero, and otherwise falls through to the
+immediate queue path `[07 §9]`. `IsFactoryBuilder`/`IsMobileBuilder` survive only
+as the fallback for a product the catalog cannot resolve.
+
+**Falsifies:** the `BMcode` row of `research/formats/fbi.md`, now corrected.
+`[07 §9]` gains the product-BMcode branch. Nothing in `[04 §6.2]` changes; its
+BMcode-zero gate was right all along.
+
+---
+
+---
+
 ## How to add to this file
 
 One section per conflict: what the spec says, what was observed and how, the

@@ -578,3 +578,22 @@ func (c *Client) UIBlitIndexed(src []byte, srcW, srcH, x, y, w, h int) {
 		}
 	}
 }
+
+// GUIColor resolves a GUI semantic color index to an active PALETTE.PAL index
+// [03 §4.3][07 "Retail palette contract"].
+//
+// Retail's world overlays — the drag-selection box, the build ghost, the queued
+// build markers, the nanolathe beam — do not name palette entries directly.
+// They index a 256-byte map built at GUI bootstrap by matching every GUIPAL.PAL
+// entry against the display palette, and GUIPAL's first sixteen entries are the
+// familiar sixteen-color set. That is why those overlays are pure primaries:
+// entry 10 is bright green, 4 is dark red, 15 is white, 0 is black.
+//
+// Use this for primitives the engine colors semantically. Never apply it to
+// GAF/PCX/TNT pixels, which are already active palette indices.
+func (c *Client) GUIColor(index uint8) uint8 {
+	if c == nil || c.pal == nil {
+		return index
+	}
+	return c.pal.GUIColor(index)
+}

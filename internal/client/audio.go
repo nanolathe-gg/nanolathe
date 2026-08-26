@@ -151,3 +151,17 @@ func (c *Client) PlayPositional(alias string, pos [3]numeric.Fixed, isAudible fu
 	}
 	return pan, vol, true
 }
+
+// PlayUICue plays a non-positional interface sound by its authored alias
+// [03 §8.3]. Interface cues — the build-placement confirmations, the order
+// acknowledgements, the menu clicks — are ordinary sound aliases played at full
+// volume with no pan, because they have no world position to attenuate or
+// place. A missing alias degrades silently, the same way the positional path
+// treats one.
+func (c *Client) PlayUICue(alias string) bool {
+	if c == nil || alias == "" || c.audioCache == nil {
+		return false
+	}
+	_, err := c.audioCache.Load(alias)
+	return err == nil
+}

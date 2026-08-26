@@ -353,6 +353,12 @@ const (
 // so a caller painting the retail loading screen can drive it from one stream.
 // A nil observer makes this exactly NewSkirmishWithFS.
 func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig, report content.Progress) (*Session, error) {
+	// Battle-entry RNG seeding per [01 §7]: retail derives (QPC ^ 0x66e29572)|1 at
+	// battle entry; embedders that did not seed get the deterministic default 1 so
+	// library construction never runs with nil streams (the AI placement selector
+	// hard-fails on a nil stream). TODO(T23): QPC-derived seeding is platform
+	// residual parity, deferred with the other platform hooks.
+	rng.SeedGlobalIfUnset(1, 1)
 	if err := cfg.Normalize(); err != nil {
 		return nil, err
 	}

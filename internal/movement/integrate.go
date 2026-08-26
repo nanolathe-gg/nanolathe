@@ -382,7 +382,7 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	// bias, footprint and occupancy decision for it reads this one [04 §6.1].
 	profile := s.resolveProfile(u)
 	s.profiles[h] = profile
-	// SteerState
+	// SteerState [M2][M3] with pitch accumulator and accel/brake plumbing
 	steer := &SteerState{
 		X:              int32(u.X.Raw()),
 		Z:              int32(u.Z.Raw()),
@@ -395,6 +395,15 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		HeightWord:     int16(u.Y.Raw() >> 16),
 		SeaLevel:       0,
 		DefFlags:       0,
+		Pitch:          0,
+		Bank:           0,
+		PitchScale:     int32(u.Def.PitchScale),
+		BankScale:      int32(u.Def.BankScale),
+		Acceleration:   int32(u.Def.Acceleration),
+		BrakeRate:      int32(u.Def.BrakeRate),
+		ResidualX:      0,
+		ResidualY:      0,
+		ResidualZ:      0,
 	}
 	if s.Terrain != nil {
 		steer.SeaLevel = s.Terrain.SeaLevel
@@ -836,7 +845,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	}
 	route := s.Routes[handle]
 	hadRoute := route != nil && route.Active && route.Count > 0
-	profile := s.resolveProfile(u)
+	_ = s.resolveProfile(u) // retained for profile revision side-effects if any; outer profile not needed for pitch path [M2]
 	var directGoal bool
 	var directX, directZ numeric.Fixed
 	if !hadRoute {
@@ -982,19 +991,22 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 				f |= 0x80000
 			}
 			steer.DefFlags = f
+			steer.PitchScale = int32(u.Def.PitchScale)
+			steer.BankScale = int32(u.Def.BankScale)
+			steer.Acceleration = int32(u.Def.Acceleration)
+			steer.BrakeRate = int32(u.Def.BrakeRate)
 		}
 		steer.UpdateHeading(desired) // [04 §8.1] C20
-		biasX := int32(profile.FootPrintX / 2)
-		biasZ := int32(profile.FootPrintZ / 2)
-		var pitchDelta int32
-		if s.Terrain != nil {
-			pitchDelta = int32(s.Terrain.CoarseHeightAt(wp.X-biasX, wp.Z-biasZ).Raw() - int64(u.Y.Raw()))
-		} else {
-			pitchDelta = 0
-		}
-		cap := steer.SpeedCap(pitchDelta)  // [04 §8.1] C21
-		steer.UpdateSpeed(cap, pitchDelta) // [04 §8.1] C20 C21: no rewrite of accel/brake/reverse/slope
-		steer.Integrate()                  // [04 §8.1] C20: heading commit + fixed trig position step
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		steer.UpdatePitch(steer.PendingHeading) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		cap := steer.SpeedCapFromPitch() // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		hasWaypoint := true // hadRoute true implies waypoint (directGoal fallback also true) [04 §7.3] C14
+		blockedPrev := coll != nil && coll.Blocked
+		distRaw := int32(s.distToGoal(u).Raw())                              // 16.16 trunc toward zero [I3][01 §8]
+		steer.UpdateSpeedWithBraking(cap, hasWaypoint, distRaw, blockedPrev) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		steer.Integrate()                                                    // [04 §8.1] C20: heading commit + fixed trig position step
 		oldX := int64(u.X)
 		oldZ := int64(u.Z)
 		newX := int64(steer.X)
@@ -1110,13 +1122,17 @@ func Integrate(u *units.Unit, w *world.Terrain, tick uint32) {
 	}
 	desired := headingFromDelta(dx, dz)
 	steer := &SteerState{
-		X:           int32(u.X.Raw()),
-		Z:           int32(u.Z.Raw()),
-		Heading:     0,
-		MaxVelocity: int32(u.Def.MaxVelocity),
-		TurnRate:    int32(u.Def.TurnRate),
-		HeightWord:  int16(u.Y.Raw() >> 16),
-		SeaLevel:    w.SeaLevel,
+		X:            int32(u.X.Raw()),
+		Z:            int32(u.Z.Raw()),
+		Heading:      0,
+		MaxVelocity:  int32(u.Def.MaxVelocity),
+		TurnRate:     int32(u.Def.TurnRate),
+		HeightWord:   int16(u.Y.Raw() >> 16),
+		SeaLevel:     w.SeaLevel,
+		PitchScale:   int32(u.Def.PitchScale),
+		BankScale:    int32(u.Def.BankScale),
+		Acceleration: int32(u.Def.Acceleration),
+		BrakeRate:    int32(u.Def.BrakeRate),
 	}
 	var f uint32
 	if u.Def.CanHover {
@@ -1127,9 +1143,10 @@ func Integrate(u *units.Unit, w *world.Terrain, tick uint32) {
 	}
 	steer.DefFlags = f
 	steer.UpdateHeading(desired)
-	pitchDelta := int32(0)
-	cap := steer.SpeedCap(pitchDelta)
-	steer.UpdateSpeed(cap, pitchDelta)
+	steer.UpdatePitch(steer.PendingHeading) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	cap := steer.SpeedCapFromPitch()        // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Transient wrapper: no history, treat as hasWaypoint true with large dist for accel [M3]
+	steer.UpdateSpeedWithBraking(cap, true, 1<<30, false) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	steer.Integrate()
 	u.X = numeric.Fixed(int64(steer.X))
 	u.Z = numeric.Fixed(int64(steer.Z))

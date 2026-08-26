@@ -67,6 +67,8 @@ type UnitDef struct {
 	MoveRate2           int32 // moverate2 fixed default twice maxvelocity just read [02 "Unit record"]
 	TurnRate            int32 // turnrate integer default 0 [02 "Unit record"]
 	Waterline           int32 // waterline integer default 0 [02 "Unit record"]
+	MinWaterDepth       int32 // minwaterdepth integer default 0 — per-unit placement depth floor; classless buildings author it directly (coruwmex.fbi=10) [02 "Unit record"][P0-03]
+	MaxWaterDepth       int32 // maxwaterdepth integer default 0 — per-unit placement depth cap [02 "Unit record"][P0-03]
 	CruiseAlt           int32 // cruisealt integer default 0 [02 "Unit record"]
 	TransportSize       int32 // transportsize integer default 0 [02 "Unit record"]
 	TransportCapacity   int32 // transportcapacity integer default 0 [02 "Unit record"]
@@ -256,6 +258,8 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	moveRate2 := section.FixedValue("moverate2", maxVelocity*2)   // [02 "Unit record"]
 	turnRate := section.IntValue("turnrate", 0)
 	waterline := section.IntValue("waterline", 0)
+	minWaterDepth := section.IntValue("minwaterdepth", 0)
+	maxWaterDepth := section.IntValue("maxwaterdepth", 0)
 	cruiseAlt := section.IntValue("cruisealt", 0)
 	transportSize := section.IntValue("transportsize", 0)
 	transportCapacity := section.IntValue("transportcapacity", 0)
@@ -437,6 +441,8 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 		MoveRate2:                    moveRate2,
 		TurnRate:                     turnRate,
 		Waterline:                    waterline,
+		MinWaterDepth:                minWaterDepth,
+		MaxWaterDepth:                maxWaterDepth,
 		CruiseAlt:                    cruiseAlt,
 		TransportSize:                transportSize,
 		TransportCapacity:            transportCapacity,
@@ -521,6 +527,7 @@ func writeUnitCanonical(u *UnitDef) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|%s|%s|", u.CanonicalKey, u.UnitName, u.Name, u.Description, u.Side, u.ObjectName, u.Category, u.SoundCategory, u.Corpse)
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|", u.MovementClass, u.Weapon1, u.Weapon2, u.Weapon3, u.ExplodeAs, u.SelfDestructAs, u.YardMap)
+	fmt.Fprintf(&b, "%d|%d|", u.MinWaterDepth, u.MaxWaterDepth)
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|", u.DefaultMissionType, u.BadTargetCategoryWPRI, u.BadTargetCategoryWSEC, u.BadTargetCategoryWSPE, u.NoChaseCategory)
 	fmt.Fprintf(&b, "%d|%d|%.10f|%.10f|%.10f|%.10f|", u.BuildCostEnergy, u.BuildCostMetal, u.EnergyMake, u.EnergyUse, u.MetalMake, u.ExtractsMetal)
 	fmt.Fprintf(&b, "%.10f|%.10f|%.10f|%.10f|%d|%d|%d|%d|%d|%d|", u.WindGenerator, u.TidalGenerator, u.EnergyStorage, u.MetalStorage, u.MakesMetal, u.BuildTime, u.WorkerTime, u.HealTime, u.CloakCost, u.CloakCostMoving)

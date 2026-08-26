@@ -50,3 +50,36 @@ func CellToWorld(c int32) numeric.Fixed {
 func TileToWorld(t int32) numeric.Fixed {
 	return numeric.Fixed(int64(t) * worldUnitsPerTile)
 }
+
+// PlacementAnchor returns the north-west footprint cell retail snaps a build
+// site to, given the ground point under the cursor [07 §9].
+//
+// Retail's ghost updater and its order issuer compute the same pair, with the
+// footprint's half-extent subtracted in world units before the shift:
+//
+//	cell = (picked - (foot << 19) + (1 << 19)) >> 20
+//
+// The `+ (1 << 19)` is a round-to-nearest-cell, not a floor: an even footprint
+// straddles a cell boundary, and the site follows whichever cell the cursor is
+// nearer to rather than always taking the lower one. Odd footprints are
+// centered on a cell and the rounding term is absorbed by the half-extent, so
+// they behave like a plain floor.
+func PlacementAnchor(px, pz numeric.Fixed, footX, footZ int32) (cellX, cellZ int32) {
+	half := func(p numeric.Fixed, foot int32) int32 {
+		v := int64(p) - int64(foot)*(worldUnitsPerCell/2) + worldUnitsPerCell/2
+		return int32(floorDiv(v, worldUnitsPerCell))
+	}
+	return half(px, footX), half(pz, footZ)
+}
+
+// PlacementCenter returns the world point at the center of a footprint anchored
+// at (cellX, cellZ). This is the position retail stores on the MOBILEBUILD
+// order, not the raw cursor point [07 §9]:
+//
+//	center = ((foot + 2*cell) << 19)
+func PlacementCenter(cellX, cellZ, footX, footZ int32) (x, z numeric.Fixed) {
+	c := func(cell, foot int32) numeric.Fixed {
+		return numeric.Fixed(int64(foot+2*cell) * (worldUnitsPerCell / 2))
+	}
+	return c(cellX, footX), c(cellZ, footZ)
+}

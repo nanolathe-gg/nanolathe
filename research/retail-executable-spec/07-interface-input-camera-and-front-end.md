@@ -882,6 +882,50 @@ unit, feature, and terrain/radar tests use the camera transform and visibility
 state. Hover/status selection gives priority to visible eligible objects and
 does not expose hidden/fogged objects through the UI.
 
+**The cursor-to-ground conversion is closed, and it is a search, not an
+inverse.** One routine per pointer update turns the pointer into a world point.
+It first picks a branch: over the minimap the pointer scales through the radar
+rectangle (§10), otherwise the pointer is clamped into the battle viewport
+rectangle and rebased to map pixels as `camera + clamp(pointer, vpLeft, vpRight)
+− vpLeft` on X and the same on Y against `vpTop`/`vpBottom`. Two bits of the
+placement flag byte record which branch ran and whether the pointer was inside
+the viewport at all.
+
+The map-pixel pair then goes through the ground resolver, which returns a 16.16
+world triple `(X, Y, Z)`. That resolver exists because the two halves of the
+presentation disagree: terrain tiles are blitted flat — the tile blitter never
+reads a height — while every world object standing on the ground is drawn with
+the half-height shear `screenRow = Z − (height >> 1)` [03 §2.5]. Inverting the
+projection at height zero would land an order north of the pixel the player
+clicked, by half the terrain height there. The resolver instead searches:
+
+1. Clamp both axes into the map rectangle, `0 .. Width·16 − 1` and
+   `0 .. Height·16 − 1`. A pointer beyond the map edge therefore resolves to the
+   edge, and the build ghost stays live there rather than going out of bounds.
+2. Round the clicked row down to a whole cell and start **eight cells south** of
+   it, with a budget of 128 that steps down by 16.
+3. Probe at most nine candidate rows, walking north one cell (16 map pixels) at a
+   time. Each probe takes `h = max(terrainHeight, seaLevel)` — so the water
+   surface picks like ground — and computes that candidate's projected screen row
+   `Z − (h >> 1)`, both terms narrowed to `int16`. The search stops at the first
+   candidate projecting at or above the clicked row. Exhausting the budget
+   returns the ninth candidate unrefined.
+4. Probe once more one cell further south to bracket the answer, then interpolate
+   `Z += ((clickedRow − projNorth) << 20) / (projSouth − projNorth)` and sample
+   the height at the interpolated row for the returned `Y`. Two guards keep the
+   unrefined candidate instead: a non-increasing projection pair, and a clicked
+   row south of the far bracket.
+
+The division is unguarded in retail, so a degenerate bracket faults; nothing in
+the stock corpus reaches it. The interpolation is linear in the projected rows,
+not in the terrain, so on steep ground the returned point can still project a
+few pixels off the clicked row — that residue is retail's own approximation, not
+an error to correct.
+
+The triple is stored for the frame, and its cell index (`>> 20` per axis) is what
+the order dispatcher, the build-site validator, and the hover/status readout all
+consume.
+
 Queued orders and path previews use separate cursor/indicator artwork. The
 cursor validity state is therefore a presentation of command legality, not
 just a pointer shape.
@@ -895,11 +939,13 @@ cell, minimap, or GUI control consumes the action.
 ### Unknown
 
 Exact geometric picking hulls, object priority in overlap cases, fog-edge
-behavior, cursor handle slot 0 identity, and queued-line palette-entry color
-values are not completely recovered. The named-entry index table, the hotspot
-convention, the four-step shape chooser with its lowest-index-wins reduction,
-the per-latch shape table, and the build-site validity/ghost cursor selection
-are established above.
+behavior, and cursor handle slot 0 identity are not completely recovered. The
+named-entry index table, the hotspot convention, the four-step shape chooser
+with its lowest-index-wins reduction, the per-latch shape table, the
+cursor-to-ground resolver, and the build-site validity/ghost cursor selection
+are established above. The world overlays' palette entries are no longer open:
+they are GUI semantic indices resolved through the GUIPAL-to-display map
+[03 §4.3], and §9 lists the ones each overlay uses.
 
 One branch of the idle latch remains unresolved. A global byte, distinct from
 the latch and from the region bits, diverts the idle path to a two-shape
@@ -1053,6 +1099,122 @@ entries 1–6 to page one, 7–12 to page two, and so on. Generated
 replacement engine must not infer an eight-slot grid or synthesize missing
 pages.
 
+**Build placement is closed, and the branch into it is on the product.** The GUI
+build-button handler resolves the gadget to a definition id and, when that id is
+nonzero **and the product's authored `BMcode` byte is zero**, arms the
+MOBILEBUILD latch (`0xE`), stores the id in a pending-build word and plays the
+`addbuild` cue. Nothing is queued; the click that follows on the world is what
+issues the order. A product whose BMcode is nonzero never reaches that branch and
+falls through to the immediate queue path instead.
+
+BMcode zero is the structure class — the same test that decides whether a
+definition carries a yard map at all [04 §6.2] — so the discriminator is "is this
+product a building", not "is this builder a factory". The two agree across the
+stock corpus only by coincidence of the data, and the builder's mobility is not a
+usable substitute: stock factories author `CanMove=1`
+(see `docs/SPEC_CONFLICTS.md` SC21).
+
+Three things then run once per pointer update, all of them gated on the pointer
+being inside the battle viewport — over the side rail or the minimap the ghost is
+not updated and not drawn.
+
+*The site.* The ground point under the pointer (§8) is snapped to whole cells
+with the footprint's half-extent removed first and a round-to-nearest term
+added:
+
+```
+cellX = (pickedX - (footprintX << 19) + (1 << 19)) >> 20
+cellZ = (pickedZ - (footprintZ << 19) + (1 << 19)) >> 20
+```
+
+The footprint here is the movement profile's, copied into the definition at
+compile time from the named `movementclass` or, for a class-less building, from
+the definition's own authored footprint. The `+ (1 << 19)` is a rounding term,
+not a floor: an even footprint straddles a cell boundary and follows whichever
+cell the pointer is nearer to, while an odd one is centered on a cell and
+behaves like a plain floor.
+
+*The height.* The footprint validator writes the site's ground height to a
+global on its way out, and the ghost reads it. That height is the minimum of the
+per-cell low heights over exactly those footprint cells whose yard byte carries
+bit 3; when no cell carried the bit — the aggregate minimum is still 255 and the
+maximum still 0, so the maximum compares below the minimum — the height is
+`SeaLevel - waterline` instead. The same two aggregates feed the gates that can
+reject the site: `maxHigh - minLow` against the profile's MaxSlope, the bit-4
+maximum against the site height, and the pair against `SeaLevel - MaxWaterDepth`
+and `SeaLevel - MinWaterDepth`. A rejected site leaves the global at whatever a
+separate scan of the same two height fields produced, so the ghost still has a
+height to draw at.
+
+*The drawing.* The two cell-aligned corners are projected with the ordinary
+half-height shear [03 §2.5], **both with the site height**, so the ghost lies
+flat on the ground the building will stand on rather than tilting with the
+terrain under the cursor:
+
+```
+left   = cellX*16 - cameraX + 128        top    = cellZ*16          - (h >> 1) - cameraZ + 32
+right  = (cellX + footX)*16 - cameraX + 128
+bottom = (cellZ + footZ)*16 - (h >> 1) - cameraZ + 32
+```
+
+Two one-pixel outlines are drawn, the second inset by one pixel on all four
+sides, **both in the same color**: validity is a color change, not a shape
+change. The color is a GUI semantic index — 10 when the site is legal, 4 when it
+is not — resolved through the GUIPAL-to-display map [03 §4.3]. GUIPAL's first
+sixteen entries are the familiar sixteen-color set, so those are bright green
+and dark red. The drag-selection rectangle shares this drawing path and takes
+15 (white) outer and 0 (black) inner. No text is drawn beside the ghost. The
+pointer shape carries the same validity independently: `cursorfindsite` when
+legal, `cursortoofar` when not (§8).
+
+*The click.* A left-click on a legal site walks the local player's unit range in
+pool order and issues an order to every selected unit whose definition is
+authored `builder` (capability bit 6) — MOBILEBUILD, or VTOL_MOBILEBUILD when
+the unit is authored `canfly` (bit 11). One click therefore tasks a whole pack
+of construction units onto one structure. The order's stored position is the
+**footprint's center**, `((foot + 2*cell) << 19)` per axis, with the site height
+as Y — not the raw cursor point. The `oktobuild` cue plays. If Shift was held
+the placement-valid-pending bit is set and the mode stays armed for another
+placement; that bit is cleared, and the latch returned to idle, as soon as Shift
+is released, whether or not another click arrived. A left-click on an illegal
+site plays `notoktobuild`, queues nothing, and leaves the mode armed. Escape and
+right-click both return the latch to idle (§9, mouse-button assignment).
+
+The builder then paths to the site: build-site generation enumerates perimeter
+candidates around the footprint, filters by build distance and placement
+validation, and hands a selected point goal to path search [04 §7.4].
+
+**The order-queue overlay is closed, and it is gated on Shift.** Once per battle
+draw, after the effect strips and before the GUI frames, the engine tests whether
+Shift is held; only then does it walk the local player's units and draw their
+order queues. Each order's descriptor carries a four-bit draw mask that selects
+which helpers run for it: a build-site marker, a connecting line with travelling
+dashes, a plain connecting line, and a per-unit pass that draws range rings once.
+The hovered/selected unit is drawn with the full mask and other selected units
+with the line-only subset. Stock masks give MOBILEBUILD marker+dashes+rings,
+VTOL_MOBILEBUILD marker+dashes, MOVE and PATROL dashes+rings, QMOVE dashes, and
+the attack family a plain line; no stock order sets the circle helper's bit.
+
+**The build-site marker is eight lines with a ten-tick sweep.** For an order
+carrying a nonzero build definition id, the footprint rectangle is projected
+exactly as the ghost is — the definition's own corner offsets added to the order
+position, then the half-height shear. The order's age in simulation ticks is
+clamped into `0 .. 10` and drives two offsets:
+
+```
+dx = (right - left) * age / 10        dy = (bottom - top) * age / 10
+```
+
+Four lines are drawn at `left + dx`, `right - dx`, `top + dy` and `bottom - dy`,
+each twice: once one pixel outside the rectangle on the perpendicular axis and
+one pixel back along its own in the outer color, once flush with the rectangle in
+the inner color. At age 0 the four lie on the footprint's own edges; over the
+sweep the two verticals cross each other and land on the opposite sides, as do
+the two horizontals, so the marker closes inward and comes to rest as the same
+rectangle it started from — a third of a second at 30 Hz. The color pair is
+chosen by whether the owning unit is currently selected: GUI indices 3 and 10
+when it is, 1 and 9 when it is not.
+
 Queued build indicators use unit/build GAF artwork and numeric queue state.
 Selection changes can update the side panel, build page, command palette,
 health bars, unit name, and queued-order cursor indicators.
@@ -1070,7 +1232,11 @@ Repeated group-recall centering behavior and the writer lifetime of selection
 flag `0x80000000`, hull geometry and jammer versus radar-contact picking,
 page rebuild timing versus factory completion,
 and the exact arming trigger for the two off-button latch values remain
-incomplete. The drag-rectangle toggle truth table, eligibility predicate,
+incomplete. MOBILEBUILD's arming trigger is no longer among them: a build gadget
+whose product authors BMcode zero arms it, as the build-placement contract above
+records. The dash cadence
+and travelling-dash artwork of the queue's connecting lines, and the radii the
+per-unit ring pass draws, are recovered only in outline. The drag-rectangle toggle truth table, eligibility predicate,
 overlap pick order with strict `<` tie-break and inclusive `min <= x <= max`,
 fog word versus byte gate, toggle versus held-Shift styles,
 group assignment and recall gating, digit routing, pagination bit encoding,
@@ -1112,7 +1278,8 @@ The camera transform is consumed by:
 * Terrain tile projection.
 * Feature and unit world rendering.
 * Selection rectangle conversion.
-* Cursor-to-world picking.
+* Cursor-to-world picking (see the ground resolver in §8: clamp, nine-probe
+  search along Z, then a linear bracket interpolation).
 * Minimap interaction and camera state.
 * Fog/visibility presentation.
 

@@ -267,8 +267,8 @@ question is an effect emitter feeding the capped segment ring, not vent
 bookkeeping. The geothermal requirement is enforced entirely by the building
 footprint validator at placement time, through the yard-map control bytes.
 
-**Established fact — yard-map control bytes.** Yard-map characters map
-one-to-one into a row-major buffer sized by the packed footprint extents:
+**Established fact — yard-map control bytes.** Yard-map characters map into a
+row-major buffer sized by the packed footprint extents:
 
 | character | byte | character | byte |
 |---|---|---|---|
@@ -278,25 +278,117 @@ one-to-one into a row-major buffer sized by the packed footprint extents:
 | `O` | 0x2b | `w` | 0x37 |
 | `Y` | 0x31 | `y` | 0x29 |
 
-Non-building classes do not allocate a yard-map buffer.
+Non-building classes do not allocate a yard-map buffer: the definition compiler
+parses `YardMap` only when the definition's `BMcode` byte is zero, and stores a
+null buffer pointer otherwise. Stock data has `BMcode=0` on buildings and
+`BMcode=1` on mobiles.
+
+**Established fact — the parse is not one-to-one.** The compiler walks the
+footprint cell by cell and the authored string character by character, and the
+two walks are free to fall out of step. A revision of this document that
+described the mapping as one-to-one implied a length contract the parser does
+not have; forty-six of the 126 stock yard maps disagree with their own
+footprint, so that reading makes those buildings unplaceable (see
+`docs/SPEC_CONFLICTS.md`). Three rules, all direct from the character loop:
+
+- A character outside the ten-entry table advances the string **without**
+  consuming a cell. That is how the spaces stock authors use to lay a yard map
+  out in rows disappear (`ARMLAB` writes `yoccoy ooccoo …`), and it also
+  silently drops typos rather than rejecting the definition.
+- The string pointer advances only when the character **after** the current one
+  is not the terminator. Once the string runs out the pointer parks on its final
+  character, which therefore repeats for every cell still unfilled. `ARMESTOR`
+  authors `YardMap=o` for a 4×4 footprint and gets sixteen `o` cells; `ARMSILO`
+  authors nine characters for 5×5 and gets its ninth repeated sixteen times.
+- Characters past the last cell are never read. `ARMSOLAR` authors twenty-seven
+  characters for a 5×5 footprint; the trailing two are ignored.
+
+The buffer is allocated, not zeroed, so a yard map that is empty or wholly
+unusable leaves the compiler reading past the string. No stock definition
+reaches that state.
 
 **Established fact — control-byte bit roles in the footprint validator.** Per
 covered terrain cell: bit 0 gates an enemy-visibility occupancy test; bits 1-2
 reject any nonzero occupant other than the passed self identity; bit 3 enables
 slope sampling over the footprint; bit 4 enables height tracking; bit 5
 requires the cell to be free of blocking features; bit 6 fails when the
-resolved feature's catalog entry carries a specific non-reclaimable flag;
+resolved feature's catalog entry is flagged indestructible;
 **bit 7 (character `G`) is the geothermal requirement.**
+
+**Established fact — bits 5, 6 and 7 all read authored feature flags.** None of
+the three tests is satisfied by the mere presence of a feature. Each resolves
+the covered cell's reference to a feature definition and reads one bit of that
+definition's flag word:
+
+- **Bit 5** passes unless the definition carries `blocking` (flag-word bit 6,
+  mask 0x0040). This distinction decides whether an extractor can be placed on
+  its own deposit: metal patches are 3×3 features authored `blocking=0`
+  (`indestructible=1`, `reclaimable=0`), while trees and rock clutter are
+  authored `blocking=1`. Treating presence alone as blocking makes every metal
+  extractor unplaceable, since `ARMMEX`/`CORMEX` author an all-`o` yard map and
+  `o` carries bit 5.
+- **Bit 6** fails when the definition carries `indestructible` (flag-word bit 9,
+  mask 0x0200 — the validator tests bit 1 of the flag word's high byte). It is
+  not the `reclaimable` flag, which lives at bit 7 of the same word and is never
+  read here. A revision of this document that named bit 6 a "non-reclaimable"
+  test had the flag wrong (see `docs/SPEC_CONFLICTS.md`).
+- **Bit 7** resolves the feature inside its own branch, so a vent under a cell
+  whose yard byte is not `G` satisfies nothing.
+
+Bits 6 and 7 reach a flag only through a definition, so a reference that
+occupies without resolving to one passes both. Bit 5 is the exception: it
+answers "blocking" for an unresolvable reference without consulting any flag.
+
+**Established fact — what bits 3 and 4 sample, and the gate that consumes it.**
+The two bits are not per-cell rejections. They accumulate three aggregates over
+the footprint, which a single gate then evaluates after the cell walk finishes:
+
+- On a cell whose byte carries **bit 3**, the running minimum of that cell's low
+  height (attribute cell `+6`) and the running maximum of its high height
+  (`+5`). The minimum starts at 255 and the maximum at 0.
+- On a cell whose byte carries **bit 4**, a separate running maximum of the same
+  high height, starting at 0.
+
+The gate is:
+
+```
+if geothermalRequired and not geothermalFound:      reject
+if maxHigh < minLow:                                 // no cell carried bit 3
+    siteHeight = SeaLevel - waterline
+else:
+    if maxHigh - minLow > MaxSlope:                  reject
+    siteHeight = minLow
+if bit4Max > siteHeight:                             reject
+if minLow  < SeaLevel - MaxWaterDepth:               reject
+if max(maxHigh, bit4Max) > SeaLevel - MinWaterDepth: reject
+publish siteHeight; accept
+```
+
+`MaxSlope`, `MaxWaterDepth` and `MinWaterDepth` are the **movement profile's**,
+copied into the definition when it compiled from its named `movementclass` or,
+for a class-less building, from a profile built out of the definition's own
+authored keys — the same copy that supplies the footprint the placement anchor
+uses. `waterline` is the definition's own.
+
+The published `siteHeight` is a global the build ghost and the MOBILEBUILD order
+both read [07 §9]; it is what makes the placement rectangle sit flat on the
+ground the structure will stand on. The `maxHigh < minLow` branch is reachable:
+a yard map made only of characters without bit 3 leaves both aggregates at their
+initial values, and the site is then referred to the water surface instead of to
+the terrain.
 
 Feature references on covered cells resolve through the signed-offset
 resolver. **Established:** the empty sentinel `0xFFFF` resolves empty;
 identifiers below `0xFFFB` are live feature-table indices and are bounds-checked
 against the catalog (out-of-range behaves as blocking for bit 5 and
-non-satisfying for bit 7); `0xFFFD` void, `0xFFFC`, and `0xFFFB` behave as
+non-satisfying for bits 6 and 7); `0xFFFD` void, `0xFFFC`, and `0xFFFB` behave as
 occupied void thresholds; and the multi-cell fringe sentinel `0xFFFE` does not
 store a feature at all — it stores two signed offset bytes (`int8` DX and DZ,
 DZ scaled by map width) that locate the anchor cell, and the resolver re-reads
-that anchor's feature word before classifying. The offset encoding is signed,
+that anchor's feature word before classifying. **A fringe cell whose anchor hop
+finds no live feature is not blocking**: the hop yields the same zero an empty
+cell yields, and all three feature branches fall out of it — the dead hop is the
+one unresolvable case bit 5 lets through. The offset encoding is signed,
 not absolute coordinates: absolute coordinates would require 9 bits to address
 the 402×408 corpus, so an 8-bit coordinate field could not be literally true.
 

@@ -10,6 +10,10 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
+// aiDebug reports whether AI decision diagnostics are enabled [OX P2].
+// Presentation-only stderr logging; never touches sim state [I6].
+func aiDebug() bool { return os.Getenv("NANOLATHE_AI_DEBUG") == "1" }
+
 // TODO(question): AI resource-score expressions (energyRaw/metalRaw) are float32 temporaries per I2
 // with exact x87 spill retention unknown; this file evaluates the named energyRaw and metalRaw
 // expressions in float32 and narrows at the shown truncations per [08 "Established AI-facing data and rooted planner"] [PLAN 11 C6] [INVARIANTS I2].
@@ -98,6 +102,48 @@ func getGateCandidates(m Selector) map[string]struct{} {
 func getSelectorRNG(m Selector) *rng.Simulation {
 	// Single global simulation stream per I4 and RS-02 [08] — no per-manager RNG.
 	return rng.Global.Sim
+}
+
+// isWaterOnlyExtractor reports whether def extracts metal and authors a water
+// depth floor, i.e. it can only ever be placed in water (coruwmex.fbi
+// minwaterdepth=10 vs cormex.fbi none) [02 "Unit record"][P0-03].
+func isWaterOnlyExtractor(def *content.UnitDef) bool {
+	return def != nil && def.ExtractsMetal != 0 && def.MinWaterDepth > 0
+}
+
+// filterWaterExtractors demotes water-only extractor candidates while any land
+// extractor remains, so the planner expands on land first and does not pin the
+// only builder on a slow shore site [OX P3][P0-03]. TODO(question): the exact
+// retail mechanism that deprioritizes water extractors early is not located in
+// p0-03; this encodes the observed land-first behavior with authored FBI data.
+func filterWaterExtractors(m Selector, candidates []string) []string {
+	cat := getCatalog(m)
+	if cat == nil || len(candidates) == 0 {
+		return candidates
+	}
+	hasLand := false
+	for _, key := range candidates {
+		def, ok := cat.Unit(key)
+		if !ok || def == nil {
+			continue
+		}
+		if def.ExtractsMetal != 0 && !isWaterOnlyExtractor(def) {
+			hasLand = true
+			break
+		}
+	}
+	if !hasLand {
+		return candidates
+	}
+	out := make([]string, 0, len(candidates))
+	for _, key := range candidates {
+		def, ok := cat.Unit(key)
+		if ok && def != nil && isWaterOnlyExtractor(def) {
+			continue
+		}
+		out = append(out, key)
+	}
+	return out
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -296,7 +342,7 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 	// Deterministic iteration: authored BuildMenu order (canbuild1..N ascending) is already stable via Catalog enumeration (I1 via sorted ReadDir [content]).
 	// Preserve provided order for retail fidelity [08 "Established AI-facing data and rooted planner"]; no sorting here.
 	// Caller must provide deterministically ordered slice; BuildMenus already does. This avoids map randomization.
-	cands := candidates
+	cands := filterWaterExtractors(m, candidates)
 
 	curEnergy := econ.Players[player].Stock[economy.Energy]
 	curMetal := econ.Players[player].Stock[economy.Metal]
@@ -372,6 +418,10 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 			weight = profile.WeightFor(ck)
 		}
 		score := ComputeScore(in, cv, weight)
+		if aiDebug() {
+			fmt.Printf("ai-debug: player=%d builder=%s cand=%s cv=%+v weight=%d score=%d in=%+v\n",
+				player, builderKey, ck, cv, weight, score, in)
+		}
 		if score <= 0 {
 			continue
 		}

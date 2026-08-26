@@ -16,6 +16,21 @@ const RetailBuildButtonsPerPage = 6
 // build list; page encoding (page&7)<<23 bits 23-25 with bit 22 paged indicator;
 // MOBILEBUILD (0xE) requires non-empty build list.
 
+// ProductArmsPlacement reports whether clicking this product's build gadget arms
+// the placement latch rather than queueing the product immediately [07 §9].
+//
+// Retail tests the **product**, not the builder: the build-button handler arms
+// MOBILEBUILD and stores the product's definition id only when the product's
+// authored `BMcode` is zero, and otherwise falls through to the immediate queue
+// path. BMcode zero is the building class — the same test that decides whether a
+// definition carries a yard map at all [04 §6.2]. Keying on the builder's
+// mobility instead happens to agree across the stock corpus, where factories
+// build mobile units and mobile builders build structures, but it is not the
+// contract.
+func ProductArmsPlacement(def *content.UnitDef) bool {
+	return def != nil && !def.BMCode
+}
+
 // IsMobileBuilder reports a mobile builder that should arm placement [07 §9][04 §3.4] 0xE.
 func IsMobileBuilder(def *content.UnitDef) bool {
 	if def == nil {
