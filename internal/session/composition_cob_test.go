@@ -45,7 +45,7 @@ func TestCompositionRetailCOBBindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retail preflight: %v", err)
 	}
-	names := []string{manifest.Commander, "armpeewee", manifest.Solar, manifest.Mex, manifest.KbotLab}
+	names := []string{manifest.Commander, manifest.LabProduct, manifest.Solar, manifest.Mex, manifest.KbotLab}
 	for _, name := range names {
 		def, ok := cat.Unit(name)
 		if !ok || def == nil {

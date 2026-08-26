@@ -151,6 +151,110 @@ type Session struct {
 	// never alters sim decisions [INVARIANTS I1][I4][I6].
 	traceEnabled bool
 	trace        []SessionTraceEvent
+
+	// pendingHuman is the session-owned immutable input queue. Presentation
+	// enqueues value commands; authoritativeTick drains it at the network/input
+	// boundary before any order/build work [01 §4.4][I6].
+	pendingHuman []HumanCommand
+}
+
+// HumanCommandKind identifies a typed local-player command. Payloads contain
+// handles and values only; they never retain pointers into simulation pools.
+type HumanCommandKind uint8
+
+const (
+	HumanSelectionReplace HumanCommandKind = iota + 1
+	HumanSelectionToggle
+	HumanSelectionClear
+	HumanOrder
+	HumanStop
+	HumanActivation
+	HumanMobileBuild
+	HumanFactoryBuild
+	HumanCancelProduction
+	HumanStockpile
+)
+
+type HumanSelectionCommand struct{ Handles []pool.Handle }
+type HumanOrderCommand struct {
+	Handles  []pool.Handle
+	Code     int
+	Target   pool.Handle
+	Position orders.ResolvePos
+	Queued   bool
+}
+type HumanStopCommand struct{ Handles []pool.Handle }
+type HumanActivationCommand struct {
+	Unit             pool.Handle
+	Activate, Queued bool
+}
+type HumanMobileBuildCommand struct {
+	Builder    pool.Handle
+	Product    string
+	WX, WY, WZ numeric.Fixed
+	Queued     bool
+}
+type HumanFactoryBuildCommand struct {
+	Builder pool.Handle
+	Product string
+	Queued  bool
+}
+type HumanCancelProductionCommand struct{ Unit pool.Handle }
+type HumanStockpileCommand struct {
+	Unit   pool.Handle
+	Queued bool
+}
+
+// HumanCommand is an immutable-at-boundary command value. EnqueueHumanCommand
+// copies handle slices and strings so callers may reuse their input buffers.
+type HumanCommand struct {
+	Kind             HumanCommandKind
+	Selection        HumanSelectionCommand
+	Order            HumanOrderCommand
+	Stop             HumanStopCommand
+	Activation       HumanActivationCommand
+	MobileBuild      HumanMobileBuildCommand
+	FactoryBuild     HumanFactoryBuildCommand
+	CancelProduction HumanCancelProductionCommand
+	Stockpile        HumanStockpileCommand
+}
+
+func cloneHumanHandles(in []pool.Handle) []pool.Handle {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]pool.Handle, len(in))
+	copy(out, in)
+	return out
+}
+
+func cloneHumanCommand(c HumanCommand) HumanCommand {
+	c.Selection.Handles = cloneHumanHandles(c.Selection.Handles)
+	c.Order.Handles = cloneHumanHandles(c.Order.Handles)
+	c.Stop.Handles = cloneHumanHandles(c.Stop.Handles)
+	return c
+}
+
+// EnqueueHumanCommand appends one command for the next authoritative input
+// phase. It performs no simulation mutation.
+func (s *Session) EnqueueHumanCommand(c HumanCommand) error {
+	if s == nil {
+		return fmt.Errorf("session: nil human-command owner")
+	}
+	s.pendingHuman = append(s.pendingHuman, cloneHumanCommand(c))
+	return nil
+}
+
+// PendingHumanCommands returns immutable command copies for diagnostics/tests.
+func (s *Session) PendingHumanCommands() []HumanCommand {
+	if s == nil {
+		return nil
+	}
+	out := make([]HumanCommand, len(s.pendingHuman))
+	for i := range s.pendingHuman {
+		out[i] = cloneHumanCommand(s.pendingHuman[i])
+	}
+	return out
 }
 
 // SessionTraceEvent is one ordered trace entry [ON-09].
@@ -688,8 +792,9 @@ func (s *Session) authoritativeTick(tick uint32) {
 		// so spawned meteor first moves next tick [08 "Meteor showers"]. Currently no separate MeteorService; wind field covers wind scalar.
 		// TODO(question): meteor shower globals persist in save's Meteor account [08 "Meteor showers"]; spawn via shared projectile pool at 90-tick flight — not yet wired in this tick, deferred as presentation-only until trigger.
 	}
-	// 2 Network/input boundary — single-player no-op seam [01 §4.4] PhaseNetwork
-	// No network drain in single-player; keep as comment seam for determinism proof.
+	// 2 Network/input boundary — drain local typed commands before orders/build
+	// [01 §4.4] PhaseNetwork. The queue is presentation-owned until this point.
+	s.applyHumanCommands(tick)
 
 	// 3 Player traversal deterministic slot order 0..9 [05 "Authoritative settlement order"][INVARIANTS I1]
 	// Due AI player work at researched deadline relationship (beforeDeadline) + economy request/accept/settlement via economy.TickPlayer per player
@@ -1001,36 +1106,8 @@ func (s *Session) authoritativeTick(tick uint32) {
 				mres := s.Movement.StepUnit(h, tick)
 				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceMovementStep, Handle: h, X: mres.DistToGoal, Value: 0})
 				_ = mres
-				// Arrival check for move orders: dist ≤2 world units [04 §3.5][P0-I03] strict thresholds.
-				if qArr := orders.QueueForUnit(u); qArr != nil && qArr.LenPrimary() > 0 {
-					if headArr := qArr.Head(); headArr != nil {
-						nameArr := orders.DescriptorFor(headArr.ID).Name
-						isMoveArr := nameArr == "Move_Ground" || nameArr == "VTOL_Move" || nameArr == "QMove" || nameArr == "Patrol" || nameArr == "QPatrol" || nameArr == "VTOL_Patrol" || nameArr == "RepairPatrol" || nameArr == "VTOL_RepairPatrol"
-						if isMoveArr {
-							if !(headArr.GoalX == 0 && headArr.GoalZ == 0 && headArr.Target == 0) {
-								dxArr := int64(headArr.GoalX) - int64(u.X)
-								dzArr := int64(headArr.GoalZ) - int64(u.Z)
-								const threshFixedArr = 2 * 65536
-								const thresh2Arr = int64(threshFixedArr) * int64(threshFixedArr)
-								dist2Arr := dxArr*dxArr + dzArr*dzArr
-								if dist2Arr <= thresh2Arr {
-									headArr.MoveState = orders.MoveArrived
-									headArr.PathStatus = 0
-									qArr.RemoveHead()
-									if routeArr := s.Movement.Routes[h]; routeArr != nil {
-										routeArr.Active = false
-										routeArr.Dirty = true
-									}
-									if schedArr := s.Movement.Scheduler; schedArr != nil {
-										schedArr.Cancel(h)
-									} else if s.Path != nil {
-										s.Path.Cancel(h)
-									}
-								}
-							}
-						}
-					}
-				}
+				// Final Move_Ground order completion remains unresolved [R-P0-01].
+				// Route pruning/local settling are intentionally not promoted here.
 				if s.Movement.HasPathFailure(h) {
 					if rec, ok := s.Movement.PathFailureRecord(h); ok {
 						if qFail := orders.QueueForUnit(u); qFail != nil && qFail.LenPrimary() > 0 {
@@ -1472,6 +1549,249 @@ func (s *Session) authoritativeTick(tick uint32) {
 	s.cadence++
 }
 
+// applyHumanCommands is the sole production consumer of local input. Commands
+// are applied in enqueue order, with canonical orders/construction APIs doing
+// all descriptor and lifecycle decisions.
+func (s *Session) applyHumanCommands(tick uint32) {
+	if s == nil || len(s.pendingHuman) == 0 {
+		return
+	}
+	cmds := s.pendingHuman
+	s.pendingHuman = nil
+	for _, c := range cmds {
+		s.applyHumanCommand(c, tick)
+	}
+}
+
+func (s *Session) humanUnit(h pool.Handle) *units.Unit {
+	if s == nil || s.Units == nil || h == 0 {
+		return nil
+	}
+	u := s.Units.Unit(h)
+	if u == nil || !u.Alive || u.Owner != s.LocalOwner {
+		return nil
+	}
+	return u
+}
+
+func (s *Session) selectedHumanHandles() []pool.Handle {
+	if s == nil || s.Units == nil {
+		return nil
+	}
+	out := make([]pool.Handle, 0)
+	for _, u := range s.Units.Iter() {
+		if u != nil && u.Alive && u.Owner == s.LocalOwner && u.Flags&0x10 != 0 {
+			out = append(out, u.Handle)
+		}
+	}
+	return out
+}
+
+func stampHumanBuild(u *units.Unit, product string, tick uint32, queued bool) {
+	if u == nil {
+		return
+	}
+	q := orders.QueueForUnit(u)
+	if q == nil || q.LenPrimary() == 0 {
+		return
+	}
+	prim := q.Primary()
+	tail := prim[len(prim)-1]
+	if tail == nil || tail.BuildDefKey != content.CanonicalKey(product) {
+		return
+	}
+	tail.Owner = u.Handle
+	tail.CreationTick = tick
+	if queued {
+		tail.Flags |= orders.FlagPurgeSurvivor
+	} else {
+		tail.Flags &^= orders.FlagPurgeSurvivor
+	}
+}
+
+func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
+	if s == nil || s.Units == nil {
+		return
+	}
+	switch c.Kind {
+	case HumanSelectionReplace:
+		for _, u := range s.Units.Iter() {
+			if u != nil && u.Alive && u.Owner == s.LocalOwner {
+				u.Flags &^= 0x10
+			}
+		}
+		for _, h := range c.Selection.Handles {
+			if u := s.humanUnit(h); u != nil {
+				u.Flags |= 0x10
+			}
+		}
+	case HumanSelectionToggle:
+		for _, h := range c.Selection.Handles {
+			if u := s.humanUnit(h); u != nil {
+				u.Flags ^= 0x10
+			}
+		}
+	case HumanSelectionClear:
+		for _, u := range s.Units.Iter() {
+			if u != nil && u.Alive && u.Owner == s.LocalOwner {
+				u.Flags &^= 0x10
+			}
+		}
+	case HumanStop:
+		id := orders.Lookup("Stop")
+		if id == 0 {
+			return
+		}
+		handles := c.Stop.Handles
+		if len(handles) == 0 {
+			handles = s.selectedHumanHandles()
+		}
+		for _, h := range handles {
+			if u := s.humanUnit(h); u != nil {
+				if q := orders.QueueForUnit(u); q != nil {
+					q.PurgeUnprotected()
+					q.DropLeadingAutoOps()
+					q.Push(id, orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, false))
+				}
+			}
+		}
+	case HumanActivation:
+		u := s.humanUnit(c.Activation.Unit)
+		if u == nil || u.Def == nil || !u.Def.OnOffable {
+			return
+		}
+		name := "Deactivate"
+		if c.Activation.Activate {
+			name = "Activate"
+		}
+		id := orders.Lookup(name)
+		if id == 0 {
+			return
+		}
+		if q := orders.QueueForUnit(u); q != nil {
+			if !c.Activation.Queued {
+				q.PurgeUnprotected()
+				q.DropLeadingAutoOps()
+			}
+			q.Push(id, orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, c.Activation.Queued))
+		}
+	case HumanMobileBuild:
+		u := s.humanUnit(c.MobileBuild.Builder)
+		if u == nil || s.Catalog == nil {
+			return
+		}
+		if !c.MobileBuild.Queued {
+			if q := orders.QueueForUnit(u); q != nil {
+				q.PurgeUnprotected()
+				q.DropLeadingAutoOps()
+			}
+		}
+		if err := construction.QueueMobileBuild(u, c.MobileBuild.Product, c.MobileBuild.WX, c.MobileBuild.WZ, 1, s.Catalog); err == nil {
+			stampHumanBuild(u, c.MobileBuild.Product, tick, c.MobileBuild.Queued)
+		}
+	case HumanFactoryBuild:
+		u := s.humanUnit(c.FactoryBuild.Builder)
+		if u == nil || s.Catalog == nil {
+			return
+		}
+		if !c.FactoryBuild.Queued {
+			if q := orders.QueueForUnit(u); q != nil {
+				q.PurgeUnprotected()
+				q.DropLeadingAutoOps()
+			}
+		}
+		if err := construction.QueueFactoryBuild(u, c.FactoryBuild.Product, 1, s.Catalog); err == nil {
+			stampHumanBuild(u, c.FactoryBuild.Product, tick, c.FactoryBuild.Queued)
+		}
+	case HumanCancelProduction:
+		u := s.humanUnit(c.CancelProduction.Unit)
+		if u == nil {
+			return
+		}
+		q := orders.QueueForUnit(u)
+		if q == nil || q.LenPrimary() == 0 {
+			return
+		}
+		prim := q.Primary()
+		tail := prim[len(prim)-1]
+		if tail == nil || tail.BuildDefKey == "" {
+			return
+		}
+		if orders.IsMobileBuild(tail.ID) {
+			_ = construction.CancelMobileTailMost(u, tail.BuildDefKey, tail.GoalX, tail.GoalZ)
+		} else {
+			_ = construction.CancelTailMost(u, tail.BuildDefKey)
+		}
+	case HumanStockpile:
+		u := s.humanUnit(c.Stockpile.Unit)
+		if u == nil {
+			return
+		}
+		id := orders.Lookup("BuildWeapon")
+		if id == 0 {
+			return
+		}
+		slot := -1
+		for i := 0; i < units.NumSlots; i++ {
+			if sl := u.SlotAt(i); sl != nil && sl.Weapon != nil && sl.Weapon.Stockpile {
+				slot = i
+				break
+			}
+		}
+		if slot < 0 {
+			return
+		}
+		n := orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, c.Stockpile.Queued)
+		n.Param1, n.Param2 = uint32(slot), 1
+		if q := orders.QueueForUnit(u); q != nil {
+			q.CoalesceTail(id, n)
+		}
+	case HumanOrder:
+		var target *units.Unit
+		if c.Order.Target != 0 {
+			target = s.humanTarget(c.Order.Target)
+		}
+		handles := c.Order.Handles
+		if len(handles) == 0 {
+			handles = s.selectedHumanHandles()
+		}
+		for _, h := range handles {
+			u := s.humanUnit(h)
+			if u == nil {
+				continue
+			}
+			id := orders.Resolve(c.Order.Code, u, target, &c.Order.Position)
+			if id == 0 {
+				continue
+			}
+			gx, gy, gz := c.Order.Position.X, c.Order.Position.Y, c.Order.Position.Z
+			if target != nil {
+				gx, gy, gz = target.X, target.Y, target.Z
+			}
+			q := orders.QueueForUnit(u)
+			if q == nil {
+				continue
+			}
+			if !c.Order.Queued {
+				q.PurgeUnprotected()
+				q.DropLeadingAutoOps()
+			}
+			q.Push(id, orders.NewNodeForOrder(id, c.Order.Target, gx, gy, gz, tick, u.Handle, c.Order.Queued))
+		}
+	}
+}
+
+func (s *Session) humanTarget(h pool.Handle) *units.Unit {
+	if s == nil || s.Units == nil || h == 0 {
+		return nil
+	}
+	u := s.Units.Unit(h)
+	if u == nil || !u.Alive {
+		return nil
+	}
+	return u
+}
+
 // publishSnapshot publishes one immutable frame after every completed sub-tick [PLAN_03 C15].
 func (s *Session) publishSnapshot(tick uint32) {
 	if s.Snapshot == nil {
@@ -1575,8 +1895,54 @@ func (s *Session) publishSnapshot(tick uint32) {
 		}
 		frame.Units = views
 		frame.Orders = ordersViews
+		// Selection is authoritative unit state (bit 0x10), not a renderer-side
+		// cache [07 §9]. Preserve pool order so a frame is deterministic [I1].
+		for _, u := range views {
+			if u.Owner != s.LocalOwner || u.Flags&0x10 == 0 {
+				continue
+			}
+			frame.Selection.Handles = append(frame.Selection.Handles, u.Slot)
+			if frame.Selection.Primary == 0 {
+				frame.Selection.Primary = u.Slot
+			}
+		}
+		frame.Selection.LocalPlayer = s.LocalOwner
+		frame.Selection.Count = uint16(len(frame.Selection.Handles))
+		// Command-page state is authored by the selected builder's CANBUILD
+		// page. Shift/input latches are presentation-owned and therefore remain
+		// at their zero value until a typed input state is introduced [07 §9].
+		if frame.Selection.Primary != 0 && s.Catalog != nil {
+			// Only a selected builder owns a command page; mixed selection must
+			// not promote an ordinary unit to the page owner [07 §9].
+			for _, u := range s.Units.Iter() {
+				if u == nil || u.Owner != s.LocalOwner || u.Def == nil || u.Flags&0x10 == 0 || !u.Def.Builder {
+					continue
+				}
+				if page := s.Catalog.BuildMenus[content.CanonicalKey(u.Def.CanonicalKey)]; page != nil {
+					frame.CommandPage.Builder = u.Handle
+					const buttonsPerPage = 6 // authored build rail page [07 §9]
+					frame.CommandPage.PageCount = uint16((len(page.Buttons) + buttonsPerPage - 1) / buttonsPerPage)
+					if frame.CommandPage.PageCount == 0 {
+						frame.CommandPage.PageCount = 1
+					}
+					end := buttonsPerPage
+					if end > len(page.Buttons) {
+						end = len(page.Buttons)
+					}
+					frame.CommandPage.ProductKeys = append([]string(nil), page.Buttons[:end]...)
+				}
+				break
+			}
+		}
 	}
+	// Visibility masks are copied for the validated local player; their
+	// mode-dependent/raw representation remains owned by visibility [03 §3.1–§3.2].
+	// Radar is a separate presentation surface, not a mask
+	// published by visibility.Service [03 §3.4], so it remains unset. The
+	// service currently has no generation counter; Version consequently stays
+	// zero rather than inventing one [I9].
 	if s.Vis != nil {
+		publishVisibilityView(s.Vis, s.LocalOwner, &frame.Visibility)
 		s.Vis.RebuildFog(0, 0)
 		if fc := s.Vis.Fog(); fc != nil {
 			w, h := fc.Dimensions()
@@ -1639,14 +2005,79 @@ func (s *Session) publishSnapshot(tick uint32) {
 				continue
 			}
 			p := s.Combat.Records[i]
-			frame.Projectiles = append(frame.Projectiles, snapshot.ProjectileView{
-				Handle:   h,
-				X:        p.Pos.X,
-				Y:        p.Pos.Y,
-				Z:        p.Pos.Z,
-				WeaponID: p.WeaponID,
-				Shooter:  p.Shooter,
-			})
+			pv := snapshot.ProjectileView{
+				Handle:         h,
+				X:              p.Pos.X,
+				Y:              p.Pos.Y,
+				Z:              p.Pos.Z,
+				WeaponID:       p.WeaponID,
+				Shooter:        p.Shooter,
+				Yaw:            uint16(p.Yaw),
+				Pitch:          uint16(p.Pitch),
+				StartX:         p.StartPos.X,
+				StartY:         p.StartPos.Y,
+				StartZ:         p.StartPos.Z,
+				TailX:          p.StartPos.X,
+				TailY:          p.StartPos.Y,
+				TailZ:          p.StartPos.Z,
+				VX:             p.Velocity.X,
+				VY:             p.Velocity.Y,
+				VZ:             p.Velocity.Z,
+				CreationTick:   p.CreationTick,
+				ExpiryTick:     p.ExpiryTick,
+				BurstRemaining: p.BurstRemaining,
+				MuzzlePiece:    int32(p.MuzzlePiece),
+				Target:         p.TargetUnit,
+				TargetX:        p.TargetPos.X,
+				TargetY:        p.TargetPos.Y,
+				TargetZ:        p.TargetPos.Z,
+				TrailFrame:     0, // no authored/runtime trail-frame field is established [I9]
+				// Selector stays zero: rendertype-4 suppression input is unknown [03 §5.4][I9].
+			}
+			if s.Catalog != nil {
+				if w, ok := s.Catalog.WeaponByID(p.WeaponID); ok && w != nil {
+					pv.Model = w.Model
+					pv.Graphic = w.Model
+					pv.RenderType = w.RenderType
+					// Creation-family presentation mapping is unresolved; do not infer
+					// it from weapon authored data [03 §5.4][I9].
+					pv.SmokeTrail = w.SmokeTrail
+					// [03 §5.4] leaves the lifetime-scaled GAF input as a caller
+					// parameter (commonly WeaponTimer or Duration); no projectile
+					// record field identifies which authored value is selected. Keep
+					// Lifetime explicitly unknown rather than guessing [I9].
+				}
+			}
+			frame.Projectiles = append(frame.Projectiles, pv)
+		}
+	}
+	if s.Build != nil && s.Units != nil {
+		// BuilderLinks is the construction service's authoritative product→builder
+		// relation [05 C18]. SnapshotLinks provides deterministic product order;
+		// queue index, accepted work, and stall state have no published source yet.
+		for _, link := range s.Build.SnapshotLinks() {
+			builder := s.Units.Unit(link.Builder)
+			product := s.Units.Unit(link.Product)
+			if builder == nil || product == nil || !builder.Alive || !product.Alive {
+				continue
+			}
+			b := snapshot.BuildProgressView{
+				Builder:    link.Builder,
+				Product:    link.Product,
+				Remaining:  product.Remaining,
+				Health:     product.Health,
+				MaxHealth:  product.MaxHealth,
+				QueueIndex: -1, // queue position is O5 and is not exposed here
+			}
+			if product.Def != nil {
+				b.ProductKey = product.Def.CanonicalKey
+				b.FootX = int8(product.Def.FootprintX)
+				b.FootZ = int8(product.Def.FootprintZ)
+			}
+			if builder.Def != nil {
+				b.Factory = !builder.Def.CanMove && !builder.Def.CanFly
+			}
+			frame.Builds = append(frame.Builds, b)
 		}
 	}
 	if s.Econ != nil {
@@ -1718,7 +2149,47 @@ func (s *Session) publishSnapshot(tick uint32) {
 		frame.Result = view
 	}
 	s.CollectAudioForSnapshot(frame)
+	if s.Presentation != nil {
+		batch := s.Presentation.Snapshot()
+		frame.Events = batch.Events
+		if len(frame.Events) > snapshot.MaxSnapshotEvents {
+			frame.Events = frame.Events[:snapshot.MaxSnapshotEvents]
+			frame.EventsTruncated = true
+		}
+		frame.EventAdmissionsDropped = batch.Dropped
+		// Buffer.Publish deep-copies the frame. Reset only after that successful
+		// hand-off, so events survive exactly once and remain queued on a nil
+		// buffer path [I6][F-P0-031].
+		s.Snapshot.Publish(frame)
+		s.Presentation.Reset()
+		return
+	}
 	s.Snapshot.Publish(frame)
+}
+
+// publishVisibilityView copies the local player's visibility masks into the
+// immutable presentation frame. Radar has no authoritative mask source in the
+// visibility service.
+func publishVisibilityView(vis *visibility.Service, local uint8, out *snapshot.VisibilityView) {
+	if vis == nil || out == nil || local >= 10 {
+		return
+	}
+	w, h := vis.GridDimensions()
+	word := vis.WordMask()
+	current := vis.ByteGrid(visibility.PlayerID(local))
+	if w <= 0 || h <= 0 || len(word) != int(w*h) || len(current) != int(w*h) {
+		return
+	}
+	explored := make([]uint8, len(word))
+	bit := uint16(1) << (local % 10)
+	for i, cell := range word {
+		if cell&bit != 0 {
+			explored[i] = 1
+		}
+	}
+	visible := make([]uint8, len(current))
+	copy(visible, current)
+	*out = snapshot.VisibilityView{W: w, H: h, Explored: explored, Visible: visible, Valid: true}
 }
 
 // RegisterAll centralizes subsystem registration in kernel phase order

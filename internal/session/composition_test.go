@@ -9,7 +9,9 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -114,6 +116,41 @@ func TestValidateCompositionSuccess(t *testing.T) {
 	}
 	if err := s.ValidateComposition(); err != nil {
 		t.Fatalf("ValidateComposition should pass: %v", err)
+	}
+}
+
+func TestCreateAndBindServicesChainsDeathObserver(t *testing.T) {
+	cat := minimalCatalogForStrict()
+	terrain := minimalTerrain()
+	s := &Session{Catalog: cat, World: terrain, Mission: syntheticMission()}
+	w, err := newSlicedWorld(cat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Units = w
+	s.Econ = economyForTest()
+	s.Econ.Players[0].Exists = true
+	s.Econ.Players[0].ControllerState = 1
+	s.Econ.SeedDeadlines(0)
+	var crt rng.CRT = rng.NewCRT(0)
+	s.InitWindForSession(&crt, 0)
+	var primary, priorExtra int
+	w.OnDeath = func(pool.Handle, units.DeathCause, *units.Unit) { primary++ }
+	w.OnDeathExtra = func(pool.Handle, units.DeathCause, *units.Unit) { priorExtra++ }
+	if err := createAndBindServices(s); err != nil {
+		t.Fatal(err)
+	}
+	def := cat.Units["armcom"]
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Destroy(h, units.DeathKilled)
+	if got := w.FinalizeDeath(h, 1); !got.Freed {
+		t.Fatalf("FinalizeDeath = %#v", got)
+	}
+	if primary != 1 || priorExtra != 1 {
+		t.Fatalf("composition clobbered/duplicated hooks: primary=%d priorExtra=%d", primary, priorExtra)
 	}
 }
 

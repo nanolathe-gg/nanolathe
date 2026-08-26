@@ -268,3 +268,25 @@ func TestP016_ZeroRNGAllocation(t *testing.T) {
 		t.Fatalf("allocation drew RNG %d -> %d", before, after)
 	}
 }
+
+func TestOnDeathExtraFiresExactlyOnceAlongsidePrimary(t *testing.T) {
+	world := New(2, nil)
+	def := &content.UnitDef{UnitName: "death-extra", MaxDamage: 100, Limit: -1}
+	h, err := world.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var primary, extra int
+	world.OnDeath = func(pool.Handle, DeathCause, *Unit) { primary++ }
+	world.OnDeathExtra = func(pool.Handle, DeathCause, *Unit) { extra++ }
+	world.Destroy(h, DeathKilled)
+	if got := world.FinalizeDeath(h, 1); !got.Freed {
+		t.Fatalf("FinalizeDeath = %#v, want freed", got)
+	}
+	if primary != 1 || extra != 1 {
+		t.Fatalf("death hooks primary=%d extra=%d, want exactly one each", primary, extra)
+	}
+	if got := world.FinalizeDeath(h, 2); got.Freed || primary != 1 || extra != 1 {
+		t.Fatalf("second FinalizeDeath = %#v hooks=%d/%d, duplicated or freed", got, primary, extra)
+	}
+}

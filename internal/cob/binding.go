@@ -303,7 +303,7 @@ func linkDiagnostics(program *Program, modelPieces, required []string, groups []
 	diagnostics := make([]BindingDiagnostic, 0)
 	if modelPieces == nil {
 		diagnostics = append(diagnostics, BindingDiagnostic{Code: BindingMissingModel, Logical: logical, Provider: providers, Expected: "loaded 3DO piece hierarchy", Detail: "model piece list is nil"})
-	} else if len(modelPieces) != len(program.Pieces) {
+	} else if len(program.Pieces) > len(modelPieces) {
 		diagnostics = append(diagnostics, BindingDiagnostic{Code: BindingPieceCount, Logical: logical, Provider: providers, Expected: fmt.Sprintf("%d model pieces", len(modelPieces)), Detail: fmt.Sprintf("COB declares %d pieces", len(program.Pieces))})
 	}
 

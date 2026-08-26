@@ -477,7 +477,11 @@ func createAndBindServices(s *Session) error {
 	// Placement release is an independent lifecycle observer. The primary
 	// OnDeath hook remains owned by the session loop for triggers/corpse/Killed;
 	// this observer only releases unfinished construction occupancy once.
-	s.Units.OnDeathExtra = func(h pool.Handle, _ units.DeathCause, _ *units.Unit) {
+	priorDeathExtra := s.Units.OnDeathExtra
+	s.Units.OnDeathExtra = func(h pool.Handle, cause units.DeathCause, u *units.Unit) {
+		if priorDeathExtra != nil {
+			priorDeathExtra(h, cause, u)
+		}
 		if s.Build != nil {
 			s.Build.ReleasePlacement(h)
 		}

@@ -1,13 +1,28 @@
 package main
 
 import (
+	"fmt"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
+
+func snapshotUnitByHandle(f *snapshot.Frame, h pool.Handle) (snapshot.UnitView, bool) {
+	if f == nil {
+		return snapshot.UnitView{}, false
+	}
+	for i := range f.Units {
+		if f.Units[i].Slot == h {
+			return f.Units[i], true
+		}
+	}
+	return snapshot.UnitView{}, false
+}
 
 // battleCommandKind identifies the authoritative mutation requested by one
 // production input event. Keeping the command typed prevents screen-space
@@ -16,7 +31,10 @@ import (
 type battleCommandKind uint8
 
 const (
-	battleCommandOrder battleCommandKind = iota + 1
+	battleCommandSelectionReplace battleCommandKind = iota + 1
+	battleCommandSelectionToggle
+	battleCommandSelectionClear
+	battleCommandOrder
 	battleCommandStop
 	battleCommandActivation
 	battleCommandMobileBuild
@@ -36,10 +54,14 @@ type battleCommand struct {
 	FactoryBuild     battleFactoryBuildCommand
 	CancelProduction battleCancelProductionCommand
 	Stockpile        battleStockpileCommand
+	Selection        battleSelectionCommand
 }
+
+type battleSelectionCommand struct{ Handles []pool.Handle }
 
 type battleOrderCommand struct {
 	Latch    input.Latch
+	Handles  []pool.Handle
 	Target   pool.Handle
 	Position orders.ResolvePos
 	Queued   bool
@@ -52,12 +74,14 @@ type battleActivationCommand struct {
 }
 
 type battleMobileBuildCommand struct {
-	Product string
-	WX, WZ  numeric.Fixed
-	Queued  bool
+	Builder    pool.Handle
+	Product    string
+	WX, WY, WZ numeric.Fixed
+	Queued     bool
 }
 
 type battleFactoryBuildCommand struct {
+	Builder pool.Handle
 	Product string
 	Queued  bool
 }
@@ -109,14 +133,52 @@ var _ battleDispatch = (*battleSession)(nil)
 // These stubs are overridden in battle.go with real logic; they exist here
 // only to document the injected contract for ON-09.
 func (b *battleSession) DispatchMobileBuild(product string, wx, wz numeric.Fixed, queued bool) error {
+	var builder pool.Handle
+	if f, ok := b.currentSnapshot(); ok {
+		builder = f.CommandPage.Builder
+		if v, found := snapshotUnitByHandle(f, builder); !found || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
+			builder = 0
+		}
+	}
+	if b.requireCommandDispatch && builder == 0 {
+		return fmt.Errorf("battle: production build has no snapshot builder")
+	}
+	if builder == 0 && !b.requireCommandDispatch {
+		if u := b.selectedBuilder(); u != nil {
+			builder = u.Handle
+		}
+	}
 	return b.submitBattleCommand(battleCommand{Kind: battleCommandMobileBuild, MobileBuild: battleMobileBuildCommand{
-		Product: product, WX: wx, WZ: wz, Queued: queued,
+		Builder: builder, Product: product, WX: wx, WZ: wz, Queued: queued,
 	}})
 }
 func (b *battleSession) DispatchFactoryBuild(product string, queued bool) error {
+	var builder pool.Handle
+	if f, ok := b.currentSnapshot(); ok {
+		builder = f.CommandPage.Builder
+		if v, found := snapshotUnitByHandle(f, builder); !found || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
+			builder = 0
+		}
+	}
+	if b.requireCommandDispatch && builder == 0 {
+		return fmt.Errorf("battle: production factory has no snapshot builder")
+	}
+	if builder == 0 && !b.requireCommandDispatch {
+		if u := b.selectedFactory(); u != nil {
+			builder = u.Handle
+		}
+	}
 	return b.submitBattleCommand(battleCommand{Kind: battleCommandFactoryBuild, FactoryBuild: battleFactoryBuildCommand{
-		Product: product, Queued: queued,
+		Builder: builder, Product: product, Queued: queued,
 	}})
+}
+
+func (b *battleSession) snapshotBuilder(v snapshot.UnitView) bool {
+	if b == nil || b.cat == nil {
+		return false
+	}
+	def, ok := b.cat.Unit(v.DefName)
+	return ok && def != nil && def.Builder
 }
 func (b *battleSession) DispatchOrderLatch(latch input.Latch, x, y int32, queued bool) {
 	// This compatibility entry point is retained for HUD integrations that
@@ -131,6 +193,17 @@ func (b *battleSession) DispatchOrderLatch(latch input.Latch, x, y int32, queued
 // contains no screen-space origin, so an order cannot be preceded by an
 // accidental contextual action at (0,0) [04 §3.4][07 §9].
 func (b *battleSession) DispatchOrderCommand(cmd battleOrderCommand) error {
+	if b.requireCommandDispatch {
+		if _, ok := b.currentSnapshot(); !ok {
+			return fmt.Errorf("battle: production order has no current snapshot")
+		}
+		// Empty handles mean resolve the authoritative selection at the input
+		// boundary, after any earlier queued selection command.
+		cmd.Handles = nil
+	}
+	if len(cmd.Handles) == 0 && !b.requireCommandDispatch {
+		cmd.Handles = b.selectedHandles()
+	}
 	return b.submitBattleCommand(battleCommand{Kind: battleCommandOrder, Order: cmd})
 }
 
@@ -156,6 +229,9 @@ func (b *battleSession) submitBattleCommand(cmd battleCommand) error {
 	}
 	if b.commandDispatchFn != nil {
 		return b.commandDispatchFn(cmd)
+	}
+	if b.requireCommandDispatch {
+		return fmt.Errorf("battle: production command dispatch is unbound")
 	}
 	switch cmd.Kind {
 	case battleCommandOrder:
@@ -186,6 +262,42 @@ func (b *battleSession) submitBattleCommand(cmd battleCommand) error {
 	default:
 		return nil
 	}
+}
+
+// sessionHumanCommand converts the UI value into the session-owned command
+// value. Slices are copied by Session.EnqueueHumanCommand; no live pointers
+// cross the presentation boundary.
+func (b *battleSession) sessionHumanCommand(c battleCommand) (session.HumanCommand, bool) {
+	if b == nil {
+		return session.HumanCommand{}, false
+	}
+	switch c.Kind {
+	case battleCommandSelectionReplace:
+		return session.HumanCommand{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: c.Selection.Handles}}, true
+	case battleCommandSelectionToggle:
+		return session.HumanCommand{Kind: session.HumanSelectionToggle, Selection: session.HumanSelectionCommand{Handles: c.Selection.Handles}}, true
+	case battleCommandSelectionClear:
+		return session.HumanCommand{Kind: session.HumanSelectionClear}, true
+	case battleCommandOrder:
+		return session.HumanCommand{Kind: session.HumanOrder, Order: session.HumanOrderCommand{Handles: c.Order.Handles, Code: latchCode(c.Order.Latch), Target: c.Order.Target, Position: c.Order.Position, Queued: c.Order.Queued}}, true
+	case battleCommandStop:
+		var handles []pool.Handle
+		if !b.requireCommandDispatch {
+			handles = b.selectedHandles()
+		}
+		return session.HumanCommand{Kind: session.HumanStop, Stop: session.HumanStopCommand{Handles: handles}}, true
+	case battleCommandActivation:
+		return session.HumanCommand{Kind: session.HumanActivation, Activation: session.HumanActivationCommand{Unit: c.Activation.Unit, Activate: c.Activation.Activate, Queued: c.Activation.Queued}}, true
+	case battleCommandMobileBuild:
+		return session.HumanCommand{Kind: session.HumanMobileBuild, MobileBuild: session.HumanMobileBuildCommand{Builder: c.MobileBuild.Builder, Product: c.MobileBuild.Product, WX: c.MobileBuild.WX, WY: c.MobileBuild.WY, WZ: c.MobileBuild.WZ, Queued: c.MobileBuild.Queued}}, true
+	case battleCommandFactoryBuild:
+		return session.HumanCommand{Kind: session.HumanFactoryBuild, FactoryBuild: session.HumanFactoryBuildCommand{Builder: c.FactoryBuild.Builder, Product: c.FactoryBuild.Product, Queued: c.FactoryBuild.Queued}}, true
+	case battleCommandCancelProduction:
+		return session.HumanCommand{Kind: session.HumanCancelProduction, CancelProduction: session.HumanCancelProductionCommand{Unit: c.CancelProduction.Unit}}, true
+	case battleCommandStockpile:
+		return session.HumanCommand{Kind: session.HumanStockpile, Stockpile: session.HumanStockpileCommand{Unit: c.Stockpile.Unit, Queued: c.Stockpile.Queued}}, true
+	}
+	return session.HumanCommand{}, false
 }
 
 func (b *battleSession) dispatchCancelProductionFallback(handle pool.Handle) {

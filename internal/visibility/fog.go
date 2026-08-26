@@ -51,6 +51,33 @@ func (f *FogCache) Validate() {
 	}
 }
 
+// NewFogCacheFromChannels creates a presentation FogCache from snapshot channels [03 §3.3] (I6).
+// It allocates w*h entries and copies ch0/ch1 (each 0..15) then marks valid.
+func NewFogCacheFromChannels(w, h int32, ch0, ch1 []uint8) *FogCache {
+	if w <= 0 || h <= 0 {
+		return &FogCache{w: w, h: h, valid: true}
+	}
+	n := int(w * h)
+	fc := &FogCache{w: w, h: h, ch0: make([]uint8, n), ch1: make([]uint8, n), valid: true}
+	if len(ch0) >= n {
+		copy(fc.ch0, ch0[:n])
+	} else if len(ch0) > 0 {
+		copy(fc.ch0, ch0)
+	}
+	if len(ch1) >= n {
+		copy(fc.ch1, ch1[:n])
+	} else if len(ch1) > 0 {
+		copy(fc.ch1, ch1)
+	}
+	for i := range fc.ch0 {
+		fc.ch0[i] &= 0x0F
+	}
+	for i := range fc.ch1 {
+		fc.ch1[i] &= 0x0F
+	}
+	return fc
+}
+
 // Channel returns the two channel values for cell (x,y) for tests.
 func (f *FogCache) Channel(x, y int32) (uint8, uint8) {
 	if f == nil || f.ch0 == nil {

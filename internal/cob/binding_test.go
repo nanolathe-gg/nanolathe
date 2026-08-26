@@ -71,10 +71,14 @@ func TestBindStrictReportsMissingAndMalformedCOB(t *testing.T) {
 }
 
 func TestBindStrictReportsPieceAndEntryFailures(t *testing.T) {
-	fs := bindingFS(t, makeCOB([]uint32{0x10065000}, []string{"Create"}, []uint32{0}, []string{"barrel"}))
+	// COB declares more pieces than model provides — the strict count check is
+	// that COB pieces must be a subset of model pieces, not strict equality;
+	// model having extra unused pieces (e.g., ARMCOM 15 vs COB 14) is allowed
+	// [d69ed97].
+	fs := bindingFS(t, makeCOB([]uint32{0x10065000}, []string{"Create"}, []uint32{0, 0}, []string{"barrel", "extra"}))
 	_, err := BindStrict(fs, BindingRequest{
 		UnitName:        "TestUnit",
-		ModelPieces:     []string{"base", "other"},
+		ModelPieces:     []string{"base"},
 		RequiredScripts: []string{"Create", "FirePrimary"},
 	})
 	bindingErr, ok := err.(*BindingError)

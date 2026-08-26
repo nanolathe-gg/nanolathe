@@ -110,7 +110,10 @@ type battleSession struct {
 	// composition does not currently bind this callback to a separate session
 	// command queue, so the direct application fallback remains authoritative.
 	commandDispatchFn func(battleCommand) error
-	controller        *BattleController
+	// requireCommandDispatch is true only for the real production composition;
+	// fixture sessions may explicitly exercise legacy fallbacks.
+	requireCommandDispatch bool
+	controller             *BattleController
 }
 
 type panelButton struct {
@@ -143,6 +146,16 @@ func runBattleView(opts Options, cs *contentSet) error {
 	centerOnCommanderForSession(sess, cam, winW, winH)
 
 	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs, latch: input.LatchNormal}
+	b.requireCommandDispatch = true
+	// Production composition owns the typed command queue. Synthetic fixtures
+	// intentionally leave this nil and use their explicit fallback helpers.
+	b.commandDispatchFn = func(cmd battleCommand) error {
+		hc, ok := b.sessionHumanCommand(cmd)
+		if !ok {
+			return fmt.Errorf("battle: unsupported command kind %d", cmd.Kind)
+		}
+		return sess.EnqueueHumanCommand(hc)
+	}
 	b.retryFunc = func(cl *client.Client) { b.doRetry(cl) }
 	b.returnToMenu = func(cl *client.Client) {
 		// Headless battle view has no shell; just mark ended
@@ -466,14 +479,8 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 			return
 		}
 		if b.hasSelection() {
-			// Deselect all local selection on right-click when idle [07 §9].
-			if b.sess != nil && b.sess.Units != nil {
-				for _, u := range b.sess.Units.Iter() {
-					if u != nil && u.Owner == b.sess.LocalOwner {
-						u.Flags &^= client.SelectionFlag
-					}
-				}
-			}
+			// Deselect is a typed command; UI never mutates live flags [I6].
+			_ = b.submitBattleCommand(battleCommand{Kind: battleCommandSelectionClear})
 			return
 		}
 		return
@@ -590,24 +597,25 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 				if b.sess != nil {
 					viewer = visibility.PlayerID(b.sess.LocalOwner)
 				}
-				bh, bu := client.PickUnit(mx, my, b.cam, b.sess.Units, b.sess.Vis, viewer)
-				hitOwn := bh != 0 && bu != nil && b.sess != nil && bu.Owner == b.sess.LocalOwner
+				var bh pool.Handle
+				var bu snapshot.UnitView
+				var hit bool
+				if frame, ok := b.currentSnapshot(); ok {
+					bh, bu, hit = client.PickSnapshotUnit(frame, mx, my, b.cam, uint8(viewer))
+				} else if !b.requireCommandDispatch {
+					lh, lu := client.PickUnit(mx, my, b.cam, b.sess.Units, b.sess.Vis, viewer)
+					bh = lh
+					if lu != nil {
+						bu = snapshot.UnitView{Slot: lu.Handle, Owner: lu.Owner, Flags: lu.Flags}
+						hit = true
+					}
+				}
+				hitOwn := hit && bh != 0 && bu.Owner == b.sess.LocalOwner
 				if hitOwn {
 					if additive {
-						// Shift additive: toggle [07 §9] C6.
-						if bu.Flags&client.SelectionFlag != 0 {
-							bu.Flags &^= client.SelectionFlag
-						} else {
-							bu.Flags |= client.SelectionFlag
-						}
+						_ = b.submitBattleCommand(battleCommand{Kind: battleCommandSelectionToggle, Selection: battleSelectionCommand{Handles: []pool.Handle{bh}}})
 					} else {
-						// Replace: clear other LocalOwner selection then select hit [07 §9] C6.
-						for _, u := range b.sess.Units.Iter() {
-							if u != nil && u.Owner == b.sess.LocalOwner {
-								u.Flags &^= client.SelectionFlag
-							}
-						}
-						bu.Flags |= client.SelectionFlag
+						_ = b.submitBattleCommand(battleCommand{Kind: battleCommandSelectionReplace, Selection: battleSelectionCommand{Handles: []pool.Handle{bh}}})
 					}
 				} else {
 					if b.hasSelection() {
@@ -616,20 +624,24 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 					} else {
 						// No selection and click not on own unit: clear if not additive, else preserve [07 §9] C6.
 						if !additive {
-							if b.sess != nil && b.sess.Units != nil {
-								for _, u := range b.sess.Units.Iter() {
-									if u != nil && u.Owner == b.sess.LocalOwner {
-										u.Flags &^= client.SelectionFlag
-									}
-								}
-							}
+							_ = b.submitBattleCommand(battleCommand{Kind: battleCommandSelectionClear})
 						}
 					}
 				}
 			}
 		} else {
-			client.ApplyDragSelectionWorld(b.sess.Units, b.cam, rect, additive)
-			b.filterSelectionToPlayer(b.sess.LocalOwner)
+			if frame, ok := b.currentSnapshot(); ok {
+				handles := client.SnapshotUnitHandlesInRect(frame, b.cam, rect, b.sess.LocalOwner)
+				kind := battleCommandSelectionReplace
+				if additive {
+					kind = battleCommandSelectionToggle
+				}
+				_ = b.submitBattleCommand(battleCommand{Kind: kind, Selection: battleSelectionCommand{Handles: handles}})
+			} else if !b.requireCommandDispatch {
+				// Explicit synthetic fixture fallback only.
+				client.ApplyDragSelectionWorld(b.sess.Units, b.cam, rect, additive)
+				b.filterSelectionToPlayer(b.sess.LocalOwner)
+			}
 		}
 	}
 	// No right-button order path: right-click is deselect/cancel only, handled at the top [07 §9][04 §3.4].
@@ -644,7 +656,36 @@ func (b *battleSession) filterSelectionToPlayer(owner uint8) {
 	}
 }
 
+func (b *battleSession) currentSnapshot() (*snapshot.Frame, bool) {
+	if b == nil || b.sess == nil || b.sess.Snapshot == nil {
+		return nil, false
+	}
+	_, cur, ok := b.sess.Snapshot.Read()
+	return cur, ok && cur != nil
+}
+
+// selectedHandles reads only the immutable current frame in production. The
+// live-pool fallback is retained for asset-free synthetic fixtures.
+func (b *battleSession) selectedHandles() []pool.Handle {
+	if f, ok := b.currentSnapshot(); ok {
+		return append([]pool.Handle(nil), f.Selection.Handles...)
+	}
+	if b == nil || b.requireCommandDispatch || b.sess == nil || b.sess.Units == nil {
+		return nil
+	}
+	out := make([]pool.Handle, 0)
+	for _, u := range b.sess.Units.Iter() {
+		if u != nil && u.Alive && u.Owner == b.sess.LocalOwner && u.Flags&client.SelectionFlag != 0 {
+			out = append(out, u.Handle)
+		}
+	}
+	return out
+}
+
 func (b *battleSession) hasSelection() bool {
+	if f, ok := b.currentSnapshot(); ok {
+		return len(f.Selection.Handles) != 0
+	}
 	if b.sess == nil || b.sess.Units == nil {
 		return false
 	}
@@ -760,6 +801,11 @@ func (b *battleSession) buildPageCount(u *units.Unit, page *content.BuildMenuPag
 // switchBuildPage handles digit 1..9 build page switching [07 §9] C10.
 // Page number lives in flag bits 23-25 with bit 22 paged indicator [07 §9].
 func (b *battleSession) switchBuildPage(digit int) {
+	if _, productionFrame := b.currentSnapshot(); productionFrame {
+		// Authored page state is not yet represented as a typed command; retain
+		// the immutable frame page until that presentation state is added.
+		return
+	}
 	u := b.selectedBuilder()
 	if u == nil || b.cat == nil {
 		return
@@ -786,6 +832,9 @@ func (b *battleSession) switchBuildPage(digit int) {
 
 // nextBuildPage advances one page data-driven with guard [R-P0-03][07 §9] C10.
 func (b *battleSession) nextBuildPage() {
+	if _, productionFrame := b.currentSnapshot(); productionFrame {
+		return
+	}
 	u := b.selectedBuilder()
 	if u == nil || b.cat == nil {
 		return
@@ -817,6 +866,9 @@ func (b *battleSession) nextBuildPage() {
 
 // prevBuildPage goes back one page data-driven with guard [R-P0-03][07 §9] C10.
 func (b *battleSession) prevBuildPage() {
+	if _, productionFrame := b.currentSnapshot(); productionFrame {
+		return
+	}
 	u := b.selectedBuilder()
 	if u == nil || b.cat == nil {
 		return
@@ -1195,7 +1247,11 @@ func (b *battleSession) updatePlacement(mx, my int32) {
 	wx, _, wz := b.cursorWorld(mx, my)
 	b.buildCellX, b.buildCellZ = world.PlacementAnchor(wx, wz, b.buildFootX, b.buildFootZ)
 	self := uint16(0)
-	if u := b.selectedBuilder(); u != nil {
+	if b.requireCommandDispatch {
+		if frame, ok := b.currentSnapshot(); ok {
+			self = uint16(frame.CommandPage.Builder)
+		}
+	} else if u := b.selectedBuilder(); u != nil {
 		self = uint16(u.Handle)
 	}
 	yard, yerr := world.ParseYardMap(b.yardMapFor(), int(b.buildFootX), int(b.buildFootZ))
@@ -1254,11 +1310,26 @@ func (b *battleSession) yardMapFor() string {
 // Every producer goes through one canonical payload constructor [P0-I03]: orders.NewMobileBuildNode / QueueMobileBuild.
 // It is data-driven: product must be in builder's BuildMenus list; illegal placement queues nothing [R-P0-03].
 func (b *battleSession) commitBuild(queued bool) bool {
-	builder := b.selectedBuilder()
-	if builder == nil {
-		return false
+	var builder *units.Unit
+	builderKey := ""
+	if b.requireCommandDispatch {
+		frame, ok := b.currentSnapshot()
+		if !ok || frame.CommandPage.Builder == 0 {
+			return false
+		}
+		v, found := snapshotUnitByHandle(frame, frame.CommandPage.Builder)
+		if !found || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
+			return false
+		}
+		builderKey = v.DefName
+	} else {
+		builder = b.selectedBuilder()
+		if builder == nil {
+			return false
+		}
+		builderKey = builder.Def.CanonicalKey
 	}
-	if b.cat != nil && !hud.ValidateBuildProduct(b.cat, builder.Def.CanonicalKey, b.buildDef) {
+	if b.cat != nil && !hud.ValidateBuildProduct(b.cat, builderKey, b.buildDef) {
 		return false // GUI may not invent products absent from authored list [R-P0-03]
 	}
 	if !b.buildOK {
@@ -1282,7 +1353,10 @@ func (b *battleSession) commitBuild(queued bool) bool {
 	// the click ordered, not just the first. The creation tick is what the site
 	// marker measures its sweep from [07 §9]; an unstamped order simply renders
 	// at rest.
-	if b.sess != nil && b.sess.Units != nil {
+	// Synthetic fixtures may stamp their live queue for legacy assertions. The
+	// production frame path must leave queue mutation to the authoritative input
+	// phase [I6].
+	if _, productionFrame := b.currentSnapshot(); !productionFrame && b.sess != nil && b.sess.Units != nil {
 		for _, u := range b.selectedUnits() {
 			q := orders.QueueForUnit(u)
 			if q == nil || q.LenPrimary() == 0 {
