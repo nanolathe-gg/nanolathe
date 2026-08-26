@@ -439,9 +439,7 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 			key = input.Key9
 		}
 		if kbd.KeyDown(key) {
-			if b.selectedBuilder() != nil {
-				b.switchBuildPage(d)
-			}
+			b.switchBuildPage(d)
 		}
 	}
 	// Page next/prev data-driven with guard [R-P0-03][07 §9] C10: no hardcoding.
@@ -801,9 +799,12 @@ func (b *battleSession) buildPageCount(u *units.Unit, page *content.BuildMenuPag
 // switchBuildPage handles digit 1..9 build page switching [07 §9] C10.
 // Page number lives in flag bits 23-25 with bit 22 paged indicator [07 §9].
 func (b *battleSession) switchBuildPage(digit int) {
-	if _, productionFrame := b.currentSnapshot(); productionFrame {
-		// Authored page state is not yet represented as a typed command; retain
-		// the immutable frame page until that presentation state is added.
+	if frame, productionFrame := b.currentSnapshot(); productionFrame {
+		if frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount == 0 || digit < 1 || digit > 9 {
+			return
+		}
+		target := hud.ClampPage(hud.DigitToPage(digit), int(frame.CommandPage.PageCount))
+		_ = b.DispatchBuildPage(target)
 		return
 	}
 	u := b.selectedBuilder()
@@ -832,7 +833,12 @@ func (b *battleSession) switchBuildPage(digit int) {
 
 // nextBuildPage advances one page data-driven with guard [R-P0-03][07 §9] C10.
 func (b *battleSession) nextBuildPage() {
-	if _, productionFrame := b.currentSnapshot(); productionFrame {
+	if frame, productionFrame := b.currentSnapshot(); productionFrame {
+		if frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount <= 1 {
+			return
+		}
+		target := hud.ClampPage(int(frame.CommandPage.Page)+1, int(frame.CommandPage.PageCount))
+		_ = b.DispatchBuildPage(target)
 		return
 	}
 	u := b.selectedBuilder()
@@ -866,7 +872,12 @@ func (b *battleSession) nextBuildPage() {
 
 // prevBuildPage goes back one page data-driven with guard [R-P0-03][07 §9] C10.
 func (b *battleSession) prevBuildPage() {
-	if _, productionFrame := b.currentSnapshot(); productionFrame {
+	if frame, productionFrame := b.currentSnapshot(); productionFrame {
+		if frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount <= 1 {
+			return
+		}
+		target := hud.ClampPage(int(frame.CommandPage.Page)-1, int(frame.CommandPage.PageCount))
+		_ = b.DispatchBuildPage(target)
 		return
 	}
 	u := b.selectedBuilder()

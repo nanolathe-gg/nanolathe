@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
+	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
@@ -173,6 +174,7 @@ const (
 	HumanFactoryBuild
 	HumanCancelProduction
 	HumanStockpile
+	HumanBuildPage
 )
 
 type HumanSelectionCommand struct{ Handles []pool.Handle }
@@ -205,6 +207,16 @@ type HumanStockpileCommand struct {
 	Queued bool
 }
 
+// HumanBuildPageCommand selects one authored build page for a selected builder.
+// Page is an absolute zero-based page; presentation resolves digit/next/prev
+// into this value from the immutable frame, while the authoritative boundary
+// validates the builder and clamps against the compiled CANBUILD page count
+// [07 §9].
+type HumanBuildPageCommand struct {
+	Builder pool.Handle
+	Page    int
+}
+
 // HumanCommand is an immutable-at-boundary command value. EnqueueHumanCommand
 // copies handle slices and strings so callers may reuse their input buffers.
 type HumanCommand struct {
@@ -217,6 +229,7 @@ type HumanCommand struct {
 	FactoryBuild     HumanFactoryBuildCommand
 	CancelProduction HumanCancelProductionCommand
 	Stockpile        HumanStockpileCommand
+	BuildPage        HumanBuildPageCommand
 }
 
 func cloneHumanHandles(in []pool.Handle) []pool.Handle {
@@ -1587,6 +1600,84 @@ func (s *Session) selectedHumanHandles() []pool.Handle {
 	return out
 }
 
+func (s *Session) selectedHumanBuilder(h pool.Handle) *units.Unit {
+	if s == nil || s.Units == nil || h == 0 {
+		return nil
+	}
+	var selected *units.Unit
+	for _, u := range s.Units.Iter() {
+		if u == nil || !u.Alive || u.Owner != s.LocalOwner || u.Flags&0x10 == 0 {
+			continue
+		}
+		// The retail page state is keyed by the single selected-builder
+		// identity. A builder mixed with another selected unit has aggregate
+		// command state, not a builder page [07 §9].
+		if selected != nil {
+			return nil
+		}
+		selected = u
+	}
+	if selected == nil || selected.Handle != h || selected.Def == nil || !selected.Def.Builder {
+		return nil
+	}
+	return selected
+}
+
+func (s *Session) applyHumanBuildPage(c HumanBuildPageCommand) {
+	u := s.selectedHumanBuilder(c.Builder)
+	if u == nil || s.Catalog == nil {
+		return
+	}
+	menu := s.Catalog.BuildMenus[content.CanonicalKey(u.Def.CanonicalKey)]
+	if menu == nil || len(menu.Buttons) == 0 {
+		return
+	}
+	pageCount := hud.PageCountFromButtons(len(menu.Buttons), hud.RetailBuildButtonsPerPage)
+	defID, ok := s.Catalog.UnitDefIndex(u.Def.CanonicalKey)
+	if !ok || defID == 0 || defID > 0xffff {
+		return
+	}
+	view := hud.SelectUnit{Flags: u.Flags, DefID: uint16(defID)}
+	// SetBuildPage performs the retail identity/page-count guard and clamps
+	// to the authored page byte. It mutates only at the input boundary [07 §9].
+	hud.SetBuildPage(&view, c.Page, pageCount, nil)
+	u.Flags = view.Flags
+}
+
+func (s *Session) normalizeSelectedBuilderPages() {
+	if s == nil || s.Units == nil || s.Catalog == nil {
+		return
+	}
+	var u *units.Unit
+	for _, candidate := range s.Units.Iter() {
+		if candidate == nil || !candidate.Alive || candidate.Owner != s.LocalOwner || candidate.Flags&0x10 == 0 {
+			continue
+		}
+		if u != nil {
+			return // mixed/multiple selection has no single page owner [07 §9]
+		}
+		u = candidate
+	}
+	if u == nil || u.Def == nil || !u.Def.Builder {
+		return
+	}
+	menu := s.Catalog.BuildMenus[content.CanonicalKey(u.Def.CanonicalKey)]
+	if menu == nil || len(menu.Buttons) == 0 {
+		return
+	}
+	defID, ok := s.Catalog.UnitDefIndex(u.Def.CanonicalKey)
+	if !ok || defID == 0 || defID > 0xffff {
+		return
+	}
+	view := hud.SelectUnit{Flags: u.Flags, DefID: uint16(defID)}
+	page := 0
+	if hud.IsPaged(view.Flags) {
+		page = hud.DecodePage(view.Flags)
+	}
+	hud.SetBuildPage(&view, page, hud.PageCountFromButtons(len(menu.Buttons), hud.RetailBuildButtonsPerPage), nil)
+	u.Flags = view.Flags
+}
+
 func stampHumanBuild(u *units.Unit, product string, tick uint32, queued bool) {
 	if u == nil {
 		return
@@ -1625,12 +1716,14 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 				u.Flags |= 0x10
 			}
 		}
+		s.normalizeSelectedBuilderPages()
 	case HumanSelectionToggle:
 		for _, h := range c.Selection.Handles {
 			if u := s.humanUnit(h); u != nil {
 				u.Flags ^= 0x10
 			}
 		}
+		s.normalizeSelectedBuilderPages()
 	case HumanSelectionClear:
 		for _, u := range s.Units.Iter() {
 			if u != nil && u.Alive && u.Owner == s.LocalOwner {
@@ -1746,6 +1839,8 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if q := orders.QueueForUnit(u); q != nil {
 			q.CoalesceTail(id, n)
 		}
+	case HumanBuildPage:
+		s.applyHumanBuildPage(c.BuildPage)
 	case HumanOrder:
 		var target *units.Unit
 		if c.Order.Target != 0 {
@@ -1911,13 +2006,11 @@ func (s *Session) publishSnapshot(tick uint32) {
 		// Command-page state is authored by the selected builder's CANBUILD
 		// page. Shift/input latches are presentation-owned and therefore remain
 		// at their zero value until a typed input state is introduced [07 §9].
-		if frame.Selection.Primary != 0 && s.Catalog != nil {
-			// Only a selected builder owns a command page; mixed selection must
-			// not promote an ordinary unit to the page owner [07 §9].
-			for _, u := range s.Units.Iter() {
-				if u == nil || u.Owner != s.LocalOwner || u.Def == nil || u.Flags&0x10 == 0 || !u.Def.Builder {
-					continue
-				}
+		if frame.Selection.Count == 1 && frame.Selection.Primary != 0 && s.Catalog != nil {
+			// A command page is a single-selected-builder surface. Do not
+			// promote one builder from a mixed or multi-builder selection to
+			// the page owner; aggregate command state is distinct [07 §9].
+			if u := s.Units.Unit(frame.Selection.Primary); u != nil && u.Alive && u.Owner == s.LocalOwner && u.Flags&0x10 != 0 && u.Def != nil && u.Def.Builder {
 				if page := s.Catalog.BuildMenus[content.CanonicalKey(u.Def.CanonicalKey)]; page != nil {
 					frame.CommandPage.Builder = u.Handle
 					const buttonsPerPage = 6 // authored build rail page [07 §9]
@@ -1925,13 +2018,21 @@ func (s *Session) publishSnapshot(tick uint32) {
 					if frame.CommandPage.PageCount == 0 {
 						frame.CommandPage.PageCount = 1
 					}
-					end := buttonsPerPage
-					if end > len(page.Buttons) {
-						end = len(page.Buttons)
+					pageNumber := 0
+					if hud.IsPaged(u.Flags) {
+						pageNumber = hud.DecodePage(u.Flags)
 					}
-					frame.CommandPage.ProductKeys = append([]string(nil), page.Buttons[:end]...)
+					pageNumber = hud.ClampPage(pageNumber, int(frame.CommandPage.PageCount))
+					frame.CommandPage.Page = uint16(pageNumber)
+					start := pageNumber * buttonsPerPage
+					end := start + buttonsPerPage
+					if start < len(page.Buttons) {
+						if end > len(page.Buttons) {
+							end = len(page.Buttons)
+						}
+						frame.CommandPage.ProductKeys = append([]string(nil), page.Buttons[start:end]...)
+					}
 				}
-				break
 			}
 		}
 	}

@@ -209,6 +209,19 @@ func TestFogScreenRectViewportClipping(t *testing.T) {
 	if len(ops) == 0 {
 		t.Fatalf("expected fog ops for viewport covering grid")
 	}
+	// Corner-straddle culling: with C=0 the cell gx=-1 rect [-16,16) shows a
+	// 16px strip; the window must include it (regression for the half-tile
+	// culling offset) [rr-16 §7].
+	hasWestStrip := false
+	for _, op := range ops {
+		if op.GridX == -1 && op.GridY >= -1 && op.ScreenX1 > 0 {
+			hasWestStrip = true
+			break
+		}
+	}
+	if !hasWestStrip {
+		t.Fatalf("viewport culling dropped the west half-tile strip (gx=-1) [rr-16 §7]")
+	}
 	// ops should be clipped: with view 64x64 centered at cam 128,32, visible tiles are roughly 2x2
 	// Validate every op's rect is 32 and within viewport+32 tolerance and row-major order
 	for i, op := range ops {
@@ -243,26 +256,63 @@ func TestFogScreenRectViewportClipping(t *testing.T) {
 
 // TestFogChannelSemantics verifies per-cell channel rules [03 §3.3].
 func TestFogChannelSemantics(t *testing.T) {
-	// Single cell grid for isolated semantics
-	cache := testFogCache(t, 1, 1)
-	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: 32, MapH: 32}
+	// 3x3 grid; the semantics under test target centre cell (1,1), which has
+	// all four neighbours in-map so its nibble can reach any value 0..15.
+	// Cache values are set producer-style: bit1 of each channel marks the
+	// tile fogged/unexplored and BuildFogOps reconstructs the nibble by the
+	// retail OR pattern (1 self, 2 west tile, 4 north tile, 8 NW tile).
+	cache := testFogCache(t, 3, 3)
+	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: 96, MapH: 96}
 	tables := &palette.Tables{}
 	for i := 0; i < 256; i++ {
 		tables.Logical[i] = byte(i)
 	}
 	tables.Base[0] = [4]byte{99, 42, 7, 0}
 	tables.Logical[0] = 0
-
-	// Visible: 0,0 => no ops [03 §3.3]
-	cache.SetChannel(0, 0, 0, 0)
-	ops := BuildFogOps(cache, cam, 0, 0, 1, 1, tables, false)
-	if len(ops) != 0 {
-		t.Fatalf("visible 0,0 should produce no ops, got %d", len(ops))
+	// setTiles configures the four tiles around cell (1,1): [y][x] booleans
+	// are the per-channel bit1 flags for tiles (1,1),(2,1),(1,2),(2,2).
+	setTiles := func(c0 [2][2]bool, c1 [2][2]bool) {
+		coords := [4][2]int32{{1, 1}, {2, 1}, {1, 2}, {2, 2}}
+		for y := int32(0); y < 3; y++ {
+			for x := int32(0); x < 3; x++ {
+				cache.SetChannel(x, y, 0, 0)
+			}
+		}
+		for i, p := range coords {
+			var b0, b1 uint8
+			if c0[i/2][i%2] {
+				b0 = 1
+			}
+			if c1[i/2][i%2] {
+				b1 = 1
+			}
+			cache.SetChannel(p[0], p[1], b0, b1)
+		}
+	}
+	all := [2][2]bool{{true, true}, {true, true}}
+	none := [2][2]bool{}
+	// The enumerated window includes the void ring around the grid; the
+	// semantics under test are per-cell, so select cell (1,1)'s ops.
+	cell11 := func(ops []FogOp) []FogOp {
+		var out []FogOp
+		for _, op := range ops {
+			if op.GridX == 1 && op.GridY == 1 {
+				out = append(out, op)
+			}
+		}
+		return out
 	}
 
-	// ch0==15 short-circuit: only one SolidDark, no GAF even if ch1==14 [03 §3.3]
-	cache.SetChannel(0, 0, 15, 14)
-	ops = BuildFogOps(cache, cam, 0, 0, 1, 1, tables, false)
+	// Visible: no ops [03 §3.3]
+	setTiles(none, none)
+	ops := cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, false))
+	if len(ops) != 0 {
+		t.Fatalf("visible 1,1 should produce no ops, got %d", len(ops))
+	}
+
+	// ch0==15 short-circuit: only one SolidDark, no GAF even if ch1 fogged [03 §3.3]
+	setTiles(all, all)
+	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, false))
 	if len(ops) != 1 || ops[0].Kind != FogKindSolidDark {
 		t.Fatalf("ch0==15 short-circuit want 1 SolidDark got %+v", ops)
 	}
@@ -274,8 +324,8 @@ func TestFogChannelSemantics(t *testing.T) {
 	}
 
 	// ch1==15 gray remap, ch0=0 => one GrayRemap [rr-16 §8]
-	cache.SetChannel(0, 0, 0, 15)
-	ops = BuildFogOps(cache, cam, 0, 0, 1, 1, tables, false)
+	setTiles(none, all)
+	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, false))
 	if len(ops) != 1 || ops[0].Kind != FogKindGrayRemap {
 		t.Fatalf("ch1==15 want GrayRemap got %+v", ops)
 	}
@@ -285,10 +335,10 @@ func TestFogChannelSemantics(t *testing.T) {
 
 	// DitheredFog option bit (not camera parity) selects the black checker
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	cache.SetChannel(0, 0, 0, 15)
+	setTiles(none, all)
 	cam.X = 0
 	cam.Z = 0 // parity 0, dither on => Patterned
-	ops = BuildFogOps(cache, cam, 0, 0, 1, 1, tables, true)
+	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, true))
 	if len(ops) != 1 || ops[0].Kind != FogKindPatterned {
 		t.Fatalf("dither on: want Patterned got %+v", ops[0])
 	}
@@ -296,7 +346,7 @@ func TestFogChannelSemantics(t *testing.T) {
 		t.Fatalf("dither on should be patterned")
 	}
 	cam.X = 1 // parity 1, dither on => still Patterned (parity is phase only)
-	ops = BuildFogOps(cache, cam, 0, 0, 1, 1, tables, true)
+	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, true))
 	if len(ops) != 1 || ops[0].Kind != FogKindPatterned {
 		t.Fatalf("dither on parity 1 want Patterned got %+v", ops[0])
 	}
@@ -304,8 +354,9 @@ func TestFogChannelSemantics(t *testing.T) {
 	cam.Z = 0
 
 	// ch1 1..14 GAF then ch0 1..14 GAF: channel one BEFORE channel zero [03 §3.3]
-	cache.SetChannel(0, 0, 7, 5) // c0=7 => frame6, c1=5=>frame4
-	ops = BuildFogOps(cache, cam, 0, 0, 1, 1, tables, false)
+	// c0=7 (tiles S? no: self+east+north), c1=5 (self+north).
+	setTiles([2][2]bool{{true, true}, {true, false}}, [2][2]bool{{true, false}, {true, false}})
+	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, false))
 	if len(ops) != 2 {
 		t.Fatalf("both channels GAF want 2 ops got %d %+v", len(ops), ops)
 	}
@@ -320,13 +371,13 @@ func TestFogChannelSemantics(t *testing.T) {
 	}
 	// Variant is (gx+gy+2)&3: retail col+row+camPhase with cache-relative col
 	// reduces to gx+gy+2 for map-global cells (camera phase cancels) [rr-16 §6.2].
-	if ops[0].Variant != 2 || ops[1].Variant != 2 {
-		t.Fatalf("variant for gx0 gy0 should be 2, got %d %d", ops[0].Variant, ops[1].Variant)
+	if ops[0].Variant != 0 || ops[1].Variant != 0 {
+		t.Fatalf("variant for gx1 gy1 should be 0, got %d %d", ops[0].Variant, ops[1].Variant)
 	}
 
-	// ch1==0 c0==7 => single GAF ch0
-	cache.SetChannel(0, 0, 3, 0)
-	ops = BuildFogOps(cache, cam, 0, 0, 1, 1, tables, false)
+	// ch1==0 c0==3 => single GAF ch0 (self+east tiles unexplored)
+	setTiles([2][2]bool{{true, true}, {false, false}}, none)
+	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, false))
 	if len(ops) != 1 || ops[0].Kind != FogKindGAFCh0 {
 		t.Fatalf("single ch0 GAF want 1 GAFCh0 got %+v", ops)
 	}
@@ -334,19 +385,28 @@ func TestFogChannelSemantics(t *testing.T) {
 		t.Fatalf("frame 3-1=2 got %d", ops[0].Frame)
 	}
 
-	// ch1==7 c0==0 => single GAF ch1
-	cache.SetChannel(0, 0, 0, 9)
-	ops = BuildFogOps(cache, cam, 0, 0, 1, 1, tables, false)
+	// ch1==9 c0==0 => single GAF ch1 (self+NW tiles fogged)
+	setTiles(none, [2][2]bool{{true, false}, {false, true}})
+	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, false))
 	if len(ops) != 1 || ops[0].Kind != FogKindGAFCh1 {
 		t.Fatalf("single ch1 GAF want 1 GAFCh1 got %+v", ops)
+	}
+	if ops[0].Frame != 8 {
+		t.Fatalf("frame 9-1=8 got %d", ops[0].Frame)
 	}
 }
 
 // TestFogPaletteDarkening verifies palette/SHD darkening uses logical→physical at present time [03 §4.3] C7.
 func TestFogPaletteDarkening(t *testing.T) {
-	cache := testFogCache(t, 1, 1)
-	cache.SetChannel(0, 0, 15, 0) // dark solid
-	cam := &camera.Camera{X: 0, Z: 0, MapW: 32, MapH: 32}
+	// 2x2 grid with every tile unexplored: the OR pattern reconstructs
+	// ch0==15 at cell (0,0) (short-circuit SolidDark carries the dark color).
+	cache := testFogCache(t, 2, 2)
+	for y := int32(0); y < 2; y++ {
+		for x := int32(0); x < 2; x++ {
+			cache.SetChannel(x, y, 1, 0)
+		}
+	}
+	cam := &camera.Camera{X: 0, Z: 0, MapW: 64, MapH: 64}
 
 	// Craft palette where dark index maps through logical to different physical
 	tables := &palette.Tables{}
@@ -359,9 +419,14 @@ func TestFogPaletteDarkening(t *testing.T) {
 	tables.Base[42] = [4]byte{11, 22, 33, 0}
 	tables.Base[0] = [4]byte{99, 99, 99, 0} // should not be used when logical remapped
 
-	ops := BuildFogOps(cache, cam, 0, 0, 1, 1, tables, false)
+	var ops []FogOp
+	for _, op := range BuildFogOps(cache, cam, 0, 0, 1, 1, tables, false) {
+		if op.GridX == 0 && op.GridY == 0 {
+			ops = append(ops, op)
+		}
+	}
 	if len(ops) != 1 {
-		t.Fatalf("want 1 op")
+		t.Fatalf("want 1 op for cell 0,0")
 	}
 	r, g, b, a := FogDarkRGBA(tables)
 	if r != 11 || g != 22 || b != 33 || a != 255 {
@@ -381,8 +446,113 @@ func TestFogPaletteDarkening(t *testing.T) {
 		t.Fatalf("nil tables dark want 0,0,0,255 got %d,%d,%d,%d", rn, gn, bn, an)
 	}
 	opsNil := BuildFogOps(cache, cam, 0, 0, 1, 1, nil, false)
-	if opsNil[0].R != 0 || opsNil[0].G != 0 || opsNil[0].B != 0 {
-		t.Fatalf("nil tables op should be 0,0,0")
+	for _, op := range opsNil {
+		if op.GridX == 0 && op.GridY == 0 && (op.R != 0 || op.G != 0 || op.B != 0) {
+			t.Fatalf("nil tables op should be 0,0,0")
+		}
+	}
+}
+
+// TestFogBorderFixups locks the retail producer border behavior for cells
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// right; rr-16 §6.1]: fogged/unexplored map-edge tiles leak their bit into
+// the void row/column adjacent to the north/west edges (drawn as partial
+// clouds over void), the last in-map row/column is thickened toward the
+// south/east edge, south/east void cells stay untouched, and the NW void
+// corner combines both passes into the short-circuit value.
+func TestFogBorderFixups(t *testing.T) {
+	build := func(ops []FogOp) map[[2]int32]FogOp {
+		m := make(map[[2]int32]FogOp)
+		for _, op := range ops {
+			if op.Channel0 == 0 {
+				continue
+			}
+			m[[2]int32{op.GridX, op.GridY}] = op
+		}
+		return m
+	}
+
+	// Single unexplored tile (1,0) in the top row; everything else visible.
+	// Nil camera enumerates the full grid plus the one-cell void ring.
+	cache := testFogCache(t, 4, 4)
+	cache.SetChannel(1, 0, 1, 0)
+	byCell := build(BuildFogOps(cache, nil, 0, 0, 4, 4, nil, false))
+	// Void cell west of the tile: seed bit8 (tile (1,0) is its SE source),
+	// top fixup adds bit2 => 10.
+	op, ok := byCell[[2]int32{0, -1}]
+	if !ok || op.Channel0 != 10 || op.Kind != FogKindGAFCh0 || op.Frame != 9 {
+		t.Fatalf("north void cell (0,-1) want ch0=10 GAFCh0 frame9, got %+v (ok=%v)", op, ok)
+	}
+	// Void cell above the tile: seed bit4, top fixup adds bit1 => 5.
+	op, ok = byCell[[2]int32{1, -1}]
+	if !ok || op.Channel0 != 5 || op.Kind != FogKindGAFCh0 || op.Frame != 4 {
+		t.Fatalf("north void cell (1,-1) want ch0=5 GAFCh0 frame4, got %+v (ok=%v)", op, ok)
+	}
+	// No void op beyond the tile's leak radius.
+	if op, ok := byCell[[2]int32{2, -1}]; ok {
+		t.Fatalf("north void cell (2,-1) want none, got %+v", op)
+	}
+	// In-map tile cell carries only its own bit1.
+	if got := byCell[[2]int32{1, 0}].Channel0; got != 1 {
+		t.Fatalf("in-map (1,0) want ch0=1 got %d", got)
+	}
+	// Whole top row unexplored: void cells collect bit4+bit8 seeds and the
+	// top fixup adds bit1+bit2 => 15 short-circuit (solid black over void);
+	// the NW void corner also collects the left fixup (still 15).
+	cache = testFogCache(t, 4, 4)
+	for x := int32(0); x < 4; x++ {
+		cache.SetChannel(x, 0, 1, 0)
+	}
+	byCell = build(BuildFogOps(cache, nil, 0, 0, 4, 4, nil, false))
+	for x := int32(0); x < 4; x++ {
+		op, ok := byCell[[2]int32{x, -1}]
+		if !ok || op.Channel0 != 15 || op.Kind != FogKindSolidDark {
+			t.Fatalf("north void cell (%d,-1) want ch0=15 SolidDark, got %+v (ok=%v)", x, op, ok)
+		}
+	}
+	if op, ok = byCell[[2]int32{-1, -1}]; !ok || op.Channel0 != 15 || op.Kind != FogKindSolidDark {
+		t.Fatalf("NW void corner want ch0=15 SolidDark, got %+v (ok=%v)", op, ok)
+	}
+	// West void column at row 0: seed bit2 from tile (0,0), left fixup adds bit1 => 3.
+	op, ok = byCell[[2]int32{-1, 0}]
+	if !ok || op.Channel0 != 3 {
+		t.Fatalf("west void cell (-1,0) want ch0=3, got %+v (ok=%v)", op, ok)
+	}
+	// In-map top row cells: own bit1 plus bit2 from the east neighbour tile;
+	// the last column gets bit2 from the right-edge fixup instead (its own
+	// tile is fogged and the fixup marks the void tile east of it) — all 3.
+	for x := int32(0); x < 4; x++ {
+		if got := byCell[[2]int32{x, 0}].Channel0; got != 3 {
+			t.Fatalf("in-map (%d,0) want ch0=3 got %d", x, got)
+		}
+	}
+	// South/east void stays untouched; no ops anywhere with GridY>=4/GridX>=4.
+	for cell := range byCell {
+		if cell[0] >= 4 || cell[1] >= 4 {
+			t.Fatalf("unexpected south/east void op at %v", cell)
+		}
+	}
+
+	// Bottom row unexplored: bottom fixup (row endY-2 == 3) thickens toward
+	// the map edge: cell (0,3) = 1|2 then +4|8 => 15; cell (3,3) = 1 then +4,
+	// right fixup adds bit2 => 7.
+	cache = testFogCache(t, 4, 4)
+	for x := int32(0); x < 4; x++ {
+		cache.SetChannel(x, 3, 1, 0)
+	}
+	byCell = build(BuildFogOps(cache, nil, 0, 0, 4, 4, nil, false))
+	op, ok = byCell[[2]int32{0, 3}]
+	if !ok || op.Channel0 != 15 || op.Kind != FogKindSolidDark {
+		t.Fatalf("bottom edge cell (0,3) want ch0=15 SolidDark, got %+v (ok=%v)", op, ok)
+	}
+	// Corner cell compounds both fixups in retail order (bottom: bit1→bit4;
+	// right: bit4→bit8 and bit1→bit2) => 15.
+	op, ok = byCell[[2]int32{3, 3}]
+	if !ok || op.Channel0 != 15 || op.Kind != FogKindSolidDark {
+		t.Fatalf("bottom-right cell (3,3) want ch0=15 SolidDark, got %+v (ok=%v)", op, ok)
+	}
+	if _, ok := byCell[[2]int32{0, 4}]; ok {
+		t.Fatalf("south void cell (0,4) must have no ch0 op")
 	}
 }
 

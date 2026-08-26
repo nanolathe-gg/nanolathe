@@ -4,8 +4,10 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -128,5 +130,141 @@ func TestHumanBuildMetadataIsStampedAtInputBoundary(t *testing.T) {
 		if n.Owner != h || n.CreationTick != 42 || n.Flags&orders.FlagPurgeSurvivor == 0 {
 			t.Fatalf("build metadata for %d: owner=%d tick=%d flags=%x", h, n.Owner, n.CreationTick, n.Flags)
 		}
+	}
+}
+
+func TestHumanBuildPageUsesAuthoritativeBuilderAndAuthoredPageGuard(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, BuildMenus: map[string]*content.BuildMenuPage{}}
+	bdef := &content.UnitDef{UnitName: "armcom", Builder: true, MaxDamage: 100}
+	bdef.CanonicalKey = "armcom"
+	other := &content.UnitDef{UnitName: "other", Builder: true, MaxDamage: 100}
+	other.CanonicalKey = "other"
+	cat.Units[bdef.CanonicalKey], cat.Units[other.CanonicalKey] = bdef, other
+	buttons := []string{"armsolar", "armmex", "armlab", "armllt", "armstump", "armham", "armflash"}
+	cat.BuildMenus[bdef.CanonicalKey] = &content.BuildMenuPage{Buttons: buttons}
+	w := units.New(8, cat)
+	h, _ := w.Create(bdef, 0, 0, 0, 0)
+	ho, _ := w.Create(other, 0, 0, 0, 0)
+	w.Unit(h).Flags |= 0x10
+	s := &Session{Units: w, Catalog: cat, LocalOwner: 0}
+	// Seven authored products make two six-button pages; page 1 is valid.
+	if err := s.EnqueueHumanCommand(HumanCommand{Kind: HumanBuildPage, BuildPage: HumanBuildPageCommand{Builder: h, Page: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	s.applyHumanCommands(1)
+	if got := hud.DecodePage(w.Unit(h).Flags); got != 1 {
+		t.Fatalf("valid page command got page %d, want 1", got)
+	}
+	// An invalid builder identity is rejected at the authoritative boundary.
+	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanBuildPage, BuildPage: HumanBuildPageCommand{Builder: ho, Page: 1}})
+	s.applyHumanCommands(2)
+	if got := hud.DecodePage(w.Unit(h).Flags); got != 1 {
+		t.Fatalf("invalid page command changed page to %d", got)
+	}
+	// A valid builder with an out-of-range request follows the established
+	// page-count clamp before encoding, rather than writing an invalid page.
+	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanBuildPage, BuildPage: HumanBuildPageCommand{Builder: h, Page: 0}})
+	s.applyHumanCommands(3)
+	if got := hud.DecodePage(w.Unit(h).Flags); got != 0 {
+		t.Fatalf("page reset got %d, want 0", got)
+	}
+	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanBuildPage, BuildPage: HumanBuildPageCommand{Builder: h, Page: 9}})
+	s.applyHumanCommands(4)
+	if got := hud.DecodePage(w.Unit(h).Flags); got != 1 {
+		t.Fatalf("page-count clamp got %d, want 1", got)
+	}
+}
+
+func TestHumanBuildPageSelectionThenPageSameBoundary(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, BuildMenus: map[string]*content.BuildMenuPage{}}
+	bdef := &content.UnitDef{UnitName: "builder", Builder: true, MaxDamage: 100}
+	bdef.CanonicalKey = "builder"
+	cat.Units[bdef.CanonicalKey] = bdef
+	cat.BuildMenus[bdef.CanonicalKey] = &content.BuildMenuPage{Buttons: []string{"a", "b", "c", "d", "e", "f", "g"}}
+	w := units.New(8, cat)
+	h, _ := w.Create(bdef, 0, 0, 0, 0)
+	s := &Session{Units: w, Catalog: cat, LocalOwner: 0}
+	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanSelectionReplace, Selection: HumanSelectionCommand{Handles: []pool.Handle{h}}})
+	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanBuildPage, BuildPage: HumanBuildPageCommand{Builder: h, Page: 1}})
+	s.applyHumanCommands(3)
+	if w.Unit(h).Flags&0x10 == 0 || hud.DecodePage(w.Unit(h).Flags) != 1 {
+		t.Fatalf("selection then page did not apply in one input boundary: flags=%08x", w.Unit(h).Flags)
+	}
+}
+
+func TestCommandPagePublicationIsImmutableAndUsesSelectedPage(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, BuildMenus: map[string]*content.BuildMenuPage{}}
+	bdef := &content.UnitDef{UnitName: "builder", Builder: true, MaxDamage: 100}
+	bdef.CanonicalKey = "builder"
+	cat.Units[bdef.CanonicalKey] = bdef
+	menu := &content.BuildMenuPage{Buttons: []string{"a", "b", "c", "d", "e", "f", "g"}}
+	cat.BuildMenus[bdef.CanonicalKey] = menu
+	w := units.New(8, cat)
+	h, _ := w.Create(bdef, 0, 0, 0, 0)
+	w.Unit(h).Flags = 0x10 | hud.EncodePageBits(0, 1)
+	s := &Session{Units: w, Catalog: cat, LocalOwner: 0, Snapshot: &snapshot.Buffer{}}
+	s.publishSnapshot(4)
+	_, frame, ok := s.Snapshot.Read()
+	if !ok || frame.CommandPage.Page != 1 || len(frame.CommandPage.ProductKeys) != 1 || frame.CommandPage.ProductKeys[0] != "g" {
+		t.Fatalf("published page=%d products=%v", frame.CommandPage.Page, frame.CommandPage.ProductKeys)
+	}
+	menu.Buttons[6] = "mutated-after-publish"
+	if frame.CommandPage.ProductKeys[0] != "g" {
+		t.Fatalf("published product keys alias mutable catalog: %v", frame.CommandPage.ProductKeys)
+	}
+}
+
+func TestHumanBuildPageRejectsMixedAndMultiBuilderSelection(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, BuildMenus: map[string]*content.BuildMenuPage{}}
+	bdef := &content.UnitDef{UnitName: "builder", Builder: true, MaxDamage: 100}
+	bdef.CanonicalKey = "builder"
+	workerDef := &content.UnitDef{UnitName: "worker", MaxDamage: 100}
+	workerDef.CanonicalKey = "worker"
+	otherBuilder := &content.UnitDef{UnitName: "otherbuilder", Builder: true, MaxDamage: 100}
+	otherBuilder.CanonicalKey = "otherbuilder"
+	cat.Units[bdef.CanonicalKey] = bdef
+	cat.Units[workerDef.CanonicalKey] = workerDef
+	cat.Units[otherBuilder.CanonicalKey] = otherBuilder
+	cat.BuildMenus[bdef.CanonicalKey] = &content.BuildMenuPage{Buttons: []string{"a", "b", "c", "d", "e", "f", "g"}}
+	cat.BuildMenus[otherBuilder.CanonicalKey] = &content.BuildMenuPage{Buttons: []string{"a", "b", "c", "d", "e", "f", "g"}}
+	w := units.New(8, cat)
+	h, _ := w.Create(bdef, 0, 0, 0, 0)
+	n, _ := w.Create(workerDef, 0, 0, 0, 0)
+	o, _ := w.Create(otherBuilder, 0, 0, 0, 0)
+	s := &Session{Units: w, Catalog: cat, LocalOwner: 0, Snapshot: &snapshot.Buffer{}}
+
+	// A builder mixed with an ordinary unit has aggregate command state and
+	// cannot mutate a single-builder page [07 §9].
+	if err := s.EnqueueHumanCommand(HumanCommand{Kind: HumanSelectionReplace, Selection: HumanSelectionCommand{Handles: []pool.Handle{h, n}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnqueueHumanCommand(HumanCommand{Kind: HumanBuildPage, BuildPage: HumanBuildPageCommand{Builder: h, Page: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	s.applyHumanCommands(1)
+	if got := hud.DecodePage(w.Unit(h).Flags); got != 0 {
+		t.Fatalf("mixed builder/non-builder selection changed page to %d", got)
+	}
+	s.publishSnapshot(1)
+	_, frame, ok := s.Snapshot.Read()
+	if !ok || frame.CommandPage.Builder != 0 {
+		t.Fatalf("mixed selection published builder page: %+v", frame.CommandPage)
+	}
+
+	// Two selected builders are likewise not a single page identity.
+	if err := s.EnqueueHumanCommand(HumanCommand{Kind: HumanSelectionReplace, Selection: HumanSelectionCommand{Handles: []pool.Handle{h, o}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnqueueHumanCommand(HumanCommand{Kind: HumanBuildPage, BuildPage: HumanBuildPageCommand{Builder: h, Page: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	s.applyHumanCommands(2)
+	if got := hud.DecodePage(w.Unit(h).Flags); got != 0 {
+		t.Fatalf("multi-builder selection changed page to %d", got)
+	}
+	s.publishSnapshot(2)
+	_, frame, ok = s.Snapshot.Read()
+	if !ok || frame.CommandPage.Builder != 0 {
+		t.Fatalf("multi-builder selection published builder page: %+v", frame.CommandPage)
 	}
 }

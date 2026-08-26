@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+
 	"github.com/nanolathe/nanolathe/internal/construction"
+	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -41,6 +43,7 @@ const (
 	battleCommandFactoryBuild
 	battleCommandCancelProduction
 	battleCommandStockpile
+	battleCommandBuildPage
 )
 
 // battleCommand is the narrow, typed input-to-session payload. Exactly one
@@ -54,6 +57,7 @@ type battleCommand struct {
 	FactoryBuild     battleFactoryBuildCommand
 	CancelProduction battleCancelProductionCommand
 	Stockpile        battleStockpileCommand
+	BuildPage        battleBuildPageCommand
 	Selection        battleSelectionCommand
 }
 
@@ -91,6 +95,11 @@ type battleCancelProductionCommand struct{ Unit pool.Handle }
 type battleStockpileCommand struct {
 	Unit   pool.Handle
 	Queued bool
+}
+
+type battleBuildPageCommand struct {
+	Builder pool.Handle
+	Page    int
 }
 
 // battleDispatch is the narrow injection surface the HUD and battle input
@@ -223,6 +232,27 @@ func (b *battleSession) DispatchStockpile(unit pool.Handle, queued bool) error {
 	return b.submitBattleCommand(battleCommand{Kind: battleCommandStockpile, Stockpile: battleStockpileCommand{Unit: unit, Queued: queued}})
 }
 
+// DispatchBuildPage submits an absolute authored page selected by the
+// presentation controls. Production resolves the builder from the immutable
+// CommandPage and the session validates it again at the input boundary [07 §9].
+func (b *battleSession) DispatchBuildPage(page int) error {
+	var builder pool.Handle
+	if f, ok := b.currentSnapshot(); ok {
+		builder = f.CommandPage.Builder
+		if builder == 0 || page < 0 || page >= int(f.CommandPage.PageCount) {
+			return fmt.Errorf("battle: invalid build page %d", page)
+		}
+	} else if !b.requireCommandDispatch {
+		if u := b.selectedBuilder(); u != nil {
+			builder = u.Handle
+		}
+	}
+	if b.requireCommandDispatch && builder == 0 {
+		return fmt.Errorf("battle: build page has no snapshot builder")
+	}
+	return b.submitBattleCommand(battleCommand{Kind: battleCommandBuildPage, BuildPage: battleBuildPageCommand{Builder: builder, Page: page}})
+}
+
 func (b *battleSession) submitBattleCommand(cmd battleCommand) error {
 	if b == nil {
 		return nil
@@ -258,6 +288,20 @@ func (b *battleSession) submitBattleCommand(cmd battleCommand) error {
 		return nil
 	case battleCommandStockpile:
 		b.dispatchStockpileFallback(cmd.Stockpile)
+		return nil
+	case battleCommandBuildPage:
+		if !b.requireCommandDispatch {
+			// Fixture fallback still mutates only through the same unit flag
+			// encoding; production always takes the session queue branch.
+			if u := b.selectedBuilder(); u != nil && b.cat != nil {
+				if pm := b.cat.BuildMenus[u.Def.CanonicalKey]; pm != nil {
+					count := hud.PageCountFromButtons(len(pm.Buttons), hud.RetailBuildButtonsPerPage)
+					view := hud.SelectUnit{Flags: u.Flags, DefID: b.catalogDefID(u)}
+					hud.SetBuildPage(&view, cmd.BuildPage.Page, count, nil)
+					u.Flags = view.Flags
+				}
+			}
+		}
 		return nil
 	default:
 		return nil
@@ -296,6 +340,8 @@ func (b *battleSession) sessionHumanCommand(c battleCommand) (session.HumanComma
 		return session.HumanCommand{Kind: session.HumanCancelProduction, CancelProduction: session.HumanCancelProductionCommand{Unit: c.CancelProduction.Unit}}, true
 	case battleCommandStockpile:
 		return session.HumanCommand{Kind: session.HumanStockpile, Stockpile: session.HumanStockpileCommand{Unit: c.Stockpile.Unit, Queued: c.Stockpile.Queued}}, true
+	case battleCommandBuildPage:
+		return session.HumanCommand{Kind: session.HumanBuildPage, BuildPage: session.HumanBuildPageCommand{Builder: c.BuildPage.Builder, Page: c.BuildPage.Page}}, true
 	}
 	return session.HumanCommand{}, false
 }

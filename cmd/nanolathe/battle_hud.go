@@ -876,6 +876,24 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 	if window == nil {
 		return false
 	}
+	// Production HUD dispatch is snapshot-driven: the builder identity and
+	// visible product slice come from the immutable CommandPage. Live unit
+	// selection remains available only to asset-free fixture sessions [I6].
+	var selectedDef *content.UnitDef
+	var snapshotProducts []string
+	if b.requireCommandDispatch {
+		if f == nil || f.CommandPage.Builder == 0 {
+			return true
+		}
+		builderView, found := snapshotUnitByHandle(f, f.CommandPage.Builder)
+		if !found || builderView.Owner != b.sess.LocalOwner || b.cat == nil {
+			return true
+		}
+		selectedDef, _ = b.cat.Unit(builderView.DefName)
+		snapshotProducts = f.CommandPage.ProductKeys
+	} else if live := b.selectedBuilder(); live != nil {
+		selectedDef = live.Def
+	}
 	offset := int32(0)
 	if h.panel != nil {
 		offset = int32(h.panel.Offset)
@@ -902,28 +920,34 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 		}
 		if strings.Contains(upperName, "NEXT") || strings.Contains(upperText, "NEXT") {
 			// Generic NEXT button fallback only when builder has paging
-			if sel := b.selectedBuilder(); sel != nil && b.cat != nil {
-				if pm, ok := b.cat.BuildMenus[sel.Def.CanonicalKey]; ok && pm != nil {
-					if b.buildPageCount(sel, pm) > 1 {
-						b.nextBuildPage()
-						return true
-					}
+			if b.requireCommandDispatch {
+				if f != nil && f.CommandPage.PageCount > 1 {
+					b.nextBuildPage()
+					return true
+				}
+			} else if sel := b.selectedBuilder(); sel != nil && b.cat != nil {
+				if pm, ok := b.cat.BuildMenus[sel.Def.CanonicalKey]; ok && pm != nil && b.buildPageCount(sel, pm) > 1 {
+					b.nextBuildPage()
+					return true
 				}
 			}
 		}
 		if strings.Contains(upperName, "PREV") || strings.Contains(upperText, "PREV") {
-			if sel := b.selectedBuilder(); sel != nil && b.cat != nil {
-				if pm, ok := b.cat.BuildMenus[sel.Def.CanonicalKey]; ok && pm != nil {
-					if b.buildPageCount(sel, pm) > 1 {
-						b.prevBuildPage()
-						return true
-					}
+			if b.requireCommandDispatch {
+				if f != nil && f.CommandPage.PageCount > 1 {
+					b.prevBuildPage()
+					return true
+				}
+			} else if sel := b.selectedBuilder(); sel != nil && b.cat != nil {
+				if pm, ok := b.cat.BuildMenus[sel.Def.CanonicalKey]; ok && pm != nil && b.buildPageCount(sel, pm) > 1 {
+					b.prevBuildPage()
+					return true
 				}
 			}
 		}
 		// Build product binding data-driven [R-P0-03][02 "Build-menu catalog keys"].
 		// GUI may not invent products absent from authored build list.
-		if sel := b.selectedBuilder(); sel != nil && sel.Def != nil && b.cat != nil {
+		if selectedDef != nil && b.cat != nil {
 			candidates := []string{gad.Name, gad.Text}
 			candidates = append(candidates, gad.Labels...)
 			for _, cand := range candidates {
@@ -931,7 +955,18 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 					continue
 				}
 				// Direct canonical match or case-insensitive
-				if !hud.ValidateBuildProduct(b.cat, sel.Def.CanonicalKey, cand) {
+				if b.requireCommandDispatch {
+					matched := false
+					for _, key := range snapshotProducts {
+						if strings.EqualFold(content.CanonicalKey(key), content.CanonicalKey(cand)) {
+							matched = true
+							break
+						}
+					}
+					if !matched {
+						continue
+					}
+				} else if !hud.ValidateBuildProduct(b.cat, selectedDef.CanonicalKey, cand) {
 					continue
 				}
 				// Resolve canonical product name for dispatch
@@ -941,7 +976,7 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 					prodKey = prodDef.CanonicalKey
 				} else {
 					// Try canonical lookup via BuildMenus first entry match
-					for _, bm := range b.cat.BuildMenus[sel.Def.CanonicalKey].Buttons {
+					for _, bm := range b.cat.BuildMenus[selectedDef.CanonicalKey].Buttons {
 						if strings.EqualFold(bm, cand) {
 							if d, ok := b.cat.Unit(bm); ok && d != nil {
 								prodKey = d.CanonicalKey
@@ -968,11 +1003,11 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 					b.armPlacement(prodDef)
 					return true
 				}
-				if hud.IsFactoryBuilder(sel.Def) {
+				if hud.IsFactoryBuilder(selectedDef) {
 					_ = b.DispatchFactoryBuild(prodKey, false)
 					return true
 				}
-				if hud.IsMobileBuilder(sel.Def) {
+				if hud.IsMobileBuilder(selectedDef) {
 					// Arm placement mode with definition retained [R-P0-03] cursorfindsite 0xE requires non-empty list
 					if prodDef == nil {
 						if d, ok := b.cat.Unit(prodKey); ok {
@@ -998,7 +1033,7 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 					return true
 				}
 				// Builder type ambiguous: treat as mobile for placement
-				if sel.Def.Builder {
+				if selectedDef.Builder {
 					if prodDef != nil {
 						b.buildDef = prodDef.CanonicalKey
 						b.buildFootX = int32(prodDef.FootprintX)

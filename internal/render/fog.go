@@ -239,8 +239,21 @@ func cellOps(gx, gy int32, c0, c1 uint8, cam *camera.Camera, tables *palette.Tab
 //
 // gridW, gridH are the visibility grid dimensions (W = CellW/2, H = CellH/2
 // [03 §3.1]); when zero they are derived from cam.MapW/MapH when available.
-// When cam is nil the full grid is enumerated row-major without viewport culling.
-// dither selects the options-storage dither bit for patterned fills [03 §3.3].
+// When cam is nil the full grid plus its one-cell void ring is enumerated
+// row-major without viewport culling. dither selects the options-storage
+// dither bit for patterned fills [03 §3.3].
+//
+// The enumerated window extends one cell past the viewport intersection on
+// every side (the retail cache border [rr-16 §4.1]) and is NOT clamped to the
+// map: cells beyond the map are part of the retail cache. Their values are
+// recomputed in a presentation-only working buffer exactly as the retail
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// tiles OR 1,2,4,8 into the cell and its NW neighbours (void cells receive the
+// bits that cross the map boundary), then the four border fixups run in
+// retail order — top/left propagate fog into the void row/column adjacent to
+// the map, bottom/right thicken the last in-map row/column toward the edge
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// (retail draws nothing there); the terrain blit leaves out-of-map black.
 func BuildFogOps(cache *visibility.FogCache, cam *camera.Camera, viewW, viewH int32, gridW, gridH int32, tables *palette.Tables, dither bool) []FogOp {
 	if cache == nil {
 		return nil
@@ -267,50 +280,143 @@ func BuildFogOps(cache *visibility.FogCache, cam *camera.Camera, viewW, viewH in
 		viewH = cam.ViewH
 	}
 
+	// Window of fog cells whose 32x32 rects intersect the viewport, plus a
+	// one-cell border ring replicating the retail viewport+border cache
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// (FogScreenRect: map pixel gx*32+16), cell g intersects screen [0,viewW)
+	// iff 32g+48 > C and 32g+16 < C+viewW where C = camX-OriginX, giving the
+	// exact range below; the ring extension is clipped by the composer and
+	// engages the border fixups like the retail cache border [rr-16 §6.1].
+	// Range is NOT clamped to the grid: cells beyond the map are part of the
+	// retail cache and receive the border fixups (§ below).
 	var startX, endX, startY, endY int32
 	useViewport := cam != nil && viewW > 0 && viewH > 0
 	if useViewport {
-		// Align to camera in 32-pixel cells including signed residues [03 §3.3].
-		// screenX0 = gx*32 - camX + OriginX ; visible when intersects [0,viewW)
-		// => gx*32 ∈ [camX-OriginX -31, camX-OriginX+viewW)
-		// Compute conservative range via floorDiv then clip to grid [I3].
-		startX = floorDiv(cam.X-camera.OriginX, FogTilePixels)
-		endX = floorDiv(cam.X-camera.OriginX+viewW+FogTilePixels-1, FogTilePixels) // ceil
-		startY = floorDiv(cam.Z-camera.OriginY, FogTilePixels)
-		endY = floorDiv(cam.Z-camera.OriginY+viewH+FogTilePixels-1, FogTilePixels)
-		if startX < 0 {
-			startX = 0
-		}
-		if startY < 0 {
-			startY = 0
-		}
-		if endX > gridW {
-			endX = gridW
-		}
-		if endY > gridH {
-			endY = gridH
-		}
-		if startX > endX {
-			startX = endX
-		}
-		if startY > endY {
-			startY = endY
-		}
+		c := cam.X - camera.OriginX
+		r := cam.Z - camera.OriginY
+		startX = floorDiv(c-FogTilePixels/2, FogTilePixels) - 1
+		endX = floorDiv(c+viewW-FogTilePixels/2+FogTilePixels-1, FogTilePixels) + 1
+		startY = floorDiv(r-FogTilePixels/2, FogTilePixels) - 1
+		endY = floorDiv(r+viewH-FogTilePixels/2+FogTilePixels-1, FogTilePixels) + 1
 	} else {
-		startX = 0
-		endX = gridW
-		startY = 0
-		endY = gridH
+		// No camera: enumerate the whole map plus its void ring (test path).
+		startX, endX = int32(-1), gridW+1
+		startY, endY = int32(-1), gridH+1
+	}
+	winW := endX - startX
+	winH := endY - startY
+	if winW <= 0 || winH <= 0 {
+		return nil
+	}
+
+	// Rebuild the retail producer's window content in a presentation-only
+	// working buffer (I6: the published cache is never mutated):
+	//
+	//  1. seed: every in-map visibility tile with cache bit1 set (hi: current
+	//     fogged — mode-gated at production so a disabled mode leaves hi zero;
+	//     lo: unexplored) ORs 1,2,4,8 into the cell and its NW neighbours
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	//     leak across the map boundary exactly as the retail cache does.
+	//  2. border fixups in retail order top, bottom, left, right
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	//     (right)]: top/left propagate fog INTO the void row/column adjacent
+	//     to the map (bit4→1, bit8→2 / bit8→4, bit2→1); bottom/right thicken
+	//     the last in-map row/column toward the map edge (bit1→4, bit2→8 /
+	//     bit4→8, bit1→2) on the row/col two from the window end (h-2),
+	//     which is a no-op on void rows since their bits 1/2 are always zero.
+	win0 := make([]uint8, winW*winH)
+	win1 := make([]uint8, winW*winH)
+	winIdx := func(gx, gy int32) int {
+		return int((gy-startY)*winW + (gx - startX))
+	}
+	inWin := func(gx, gy int32) bool {
+		return gx >= startX && gx < endX && gy >= startY && gy < endY
+	}
+	orSeed := func(win []uint8, tx, ty int32) {
+		if inWin(tx, ty) {
+			win[winIdx(tx, ty)] |= 1
+		}
+		if inWin(tx-1, ty) {
+			win[winIdx(tx-1, ty)] |= 2
+		}
+		if inWin(tx, ty-1) {
+			win[winIdx(tx, ty-1)] |= 4
+		}
+		if inWin(tx-1, ty-1) {
+			win[winIdx(tx-1, ty-1)] |= 8
+		}
+	}
+	for ty := startY; ty <= endY; ty++ {
+		if ty < 0 || ty >= gridH {
+			continue
+		}
+		for tx := startX; tx <= endX; tx++ {
+			if tx < 0 || tx >= gridW {
+				continue
+			}
+			c0, c1 := cache.Channel(tx, ty) // read-only [I6]
+			if c1&1 != 0 {
+				orSeed(win1, tx, ty)
+			}
+			if c0&1 != 0 {
+				orSeed(win0, tx, ty)
+			}
+		}
+	}
+	// Border fixup helper: applies two (mask → set-bit) rules to one cell.
+	applyFixup := func(win []uint8, gx, gy int32, mA, vA, mB, vB uint8) {
+		if !inWin(gx, gy) {
+			return
+		}
+		i := winIdx(gx, gy)
+		if win[i]&mA != 0 {
+			win[i] |= vA
+		}
+		if win[i]&mB != 0 {
+			win[i] |= vB
+		}
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	if startY <= -1 {
+		for gx := startX; gx < endX; gx++ {
+			applyFixup(win1, gx, -1, 0x04, 0x01, 0x08, 0x02)
+			applyFixup(win0, gx, -1, 0x04, 0x01, 0x08, 0x02)
+		}
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// no-op on void rows (their bits 1/2 are always zero there).
+	if endY > gridH {
+		row := endY - 2
+		for gx := startX; gx < endX; gx++ {
+			applyFixup(win1, gx, row, 0x01, 0x04, 0x02, 0x08)
+			applyFixup(win0, gx, row, 0x01, 0x04, 0x02, 0x08)
+		}
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	if startX <= -1 {
+		for gy := startY; gy < endY; gy++ {
+			applyFixup(win1, -1, gy, 0x08, 0x04, 0x02, 0x01)
+			applyFixup(win0, -1, gy, 0x08, 0x04, 0x02, 0x01)
+		}
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// no-op on void columns.
+	if endX > gridW {
+		col := endX - 2
+		for gy := startY; gy < endY; gy++ {
+			applyFixup(win1, col, gy, 0x04, 0x08, 0x01, 0x02)
+			applyFixup(win0, col, gy, 0x04, 0x08, 0x01, 0x02)
+		}
 	}
 
 	var out []FogOp
 	// Deterministic row-major iteration [I1]: y outer, x inner.
 	for gy := startY; gy < endY; gy++ {
 		for gx := startX; gx < endX; gx++ {
-			c0, c1 := cache.Channel(gx, gy) // read-only [I6]; out of bounds returns 0,0
-			// Channel is presentation-only 0..15 [03 §3.3] C13.
+			i := winIdx(gx, gy)
+			c0, c1 := win0[i], win1[i]
 			if c0 == 0 && c1 == 0 {
-				continue // visible, no fog draw [03 §3.3]
+				continue // visible or untouched void: no fog draw [03 §3.3]
 			}
 			ops := cellOps(gx, gy, c0, c1, cam, tables, dither)
 			if len(ops) > 0 {

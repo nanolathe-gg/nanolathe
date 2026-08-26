@@ -2048,6 +2048,13 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 	if head == nil {
 		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0, Diagnostics: append([]string(nil), s.messages...)}
 	}
+	// Unit reclaim is an order-driven worker state distinct from factory/mobile
+	// construction. It must run through the same per-unit construction window,
+	// while remaining outside the build descriptor state machine [04 §3.5][05
+	// "Unit reclaim"].
+	if isReclaimUnitNode(head) {
+		return s.stepUnitReclaim(builder, head, tick)
+	}
 	// Non-build orders (e.g., Move_Ground) are not construction work; ignore without mutating queue [05][P0-I05].
 	if !isBuildOrderID(head.ID) {
 		return WorkResult{Builder: handle, Product: head.Target, DefKey: head.BuildDefKey, Owner: builder.Owner, State: State(head.Phase), Diagnostics: append([]string(nil), s.messages...)}
