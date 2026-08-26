@@ -40,6 +40,15 @@ type Tables struct {
 	Light   [8192]byte    // PALETTE.LHT 32×256 brightening [03 §4.3.1] [fmt pal]
 	Shade   [32][256]byte // PALETTE.SHD 32×256 shading/darkening [03 §4.3.2] [fmt pal]
 	Logical [256]byte     // logical → physical 256-byte lookup [03 §4.3] (C7)
+	// Gray is the retail "GRAY TABLE": a 256→256 palette LUT mapping each
+	// palette index to the palette entry nearest its grayscale average. Retail
+	// builds it at palette install into a named shared block and applies it to
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// It holds physical (Base) indices on both sides; apply after the
+	// logical→physical lookup when the Logical map is animated.
+	Gray [256]byte
 }
 
 // Load loads all palette tables from the VFS.
@@ -81,7 +90,66 @@ func Load(fs vfs.FSOps) (*Tables, error) {
 	for row := 0; row < 32; row++ {
 		copy(t.Shade[row][:], shd[row*256:(row+1)*256])
 	}
+	buildGrayTable(t)
 	return t, nil
+}
+
+// buildGrayTable constructs the "GRAY TABLE" LUT exactly as the retail
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//
+//	for each palette index i with Base RGB (r,g,b):
+//	  avg = (r+g+b)/3            (floor divide via 0xAAAAAAAB magic)
+//	  target = (avg, avg, avg), targetSum = 3*avg
+//	  scan candidate indices 0..255 in order, restricted to entries whose
+//	  RGB sum lies in [targetSum-40, targetSum+40] (below: skip, above: stop);
+//	  keep the strictly-smaller squared RGB distance, so ties keep the lowest
+//	  index; if no candidate fell in the window, retail keeps the index where
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//
+// The scan runs over the physical (Base) palette; the result is a physical
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func buildGrayTable(t *Tables) {
+	sums := make([]int, 256)
+	for i := 0; i < 256; i++ {
+		e := t.Base[i]
+		sums[i] = int(e[0]) + int(e[1]) + int(e[2])
+	}
+	for i := 0; i < 256; i++ {
+		e := t.Base[i]
+		avg := (int(e[0]) + int(e[1]) + int(e[2])) / 3
+		targetSum := 3 * avg
+		minSum := targetSum - 40
+		bestDist := 1_000_000_000
+		result := 0
+		found := false
+		stop := 0
+		for c := 0; c < 256; c++ {
+			s := sums[c]
+			if s < minSum {
+				continue // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			}
+			if s > targetSum+40 {
+				stop = c // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				break
+			}
+			p := t.Base[c]
+			dr := int(p[0]) - avg
+			dg := int(p[1]) - avg
+			db := int(p[2]) - avg
+			dist := dr*dr + dg*dg + db*db
+			if dist < bestDist { // strict: ties keep lowest index
+				bestDist = dist
+				result = c
+				found = true
+			}
+		}
+		if !found {
+			// No candidate in the window: retail keeps the loop counter at exit
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			result = stop
+		}
+		t.Gray[i] = byte(result)
+	}
 }
 
 // RGBA resolves an indexed pixel to RGBA at present time (C7).

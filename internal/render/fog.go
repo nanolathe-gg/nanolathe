@@ -25,11 +25,14 @@ const FogTilePixels = 32
 // One pixel is 65536 wu [03 §2.1], so 32 pixels is 2097152 wu.
 const FogTileWorld = FogTilePixels * 65536 // 32*65536 [03 §2.1][03 §3.3]
 
-// FogDarkPaletteIndex is the palette index for the default dark fog fill
-// [03 §3.3] "default dark palette entry". The exact index is not named in
-// the research; 0 is black and serves as the placeholder.
-// TODO(question): exact dark palette index not established [03 §3.3]; verify
-// against retail palette animation.
+// FogDarkPaletteIndex is the palette index for the unexplored solid fill
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// mapping of logical index 0 — black in stock PALETTE.PAL [rr-16 §8]
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// The fogged-but-explored fill (hi==15) is NOT a solid color: retail remaps the
+// existing screen pixels through the 256-byte "GRAY TABLE" LUT via
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 const FogDarkPaletteIndex byte = 0
 
 // FogKind describes the draw kind for one fog cell operation [03 §3.3].
@@ -37,11 +40,11 @@ type FogKind uint8
 
 const (
 	FogKindNone      FogKind = iota // visible, no fog draw
-	FogKindSolidDark                // channel zero ==15 short-circuit [03 §3.3]
-	FogKindDark                     // channel one ==15 solid [03 §3.3]
-	FogKindPatterned                // channel one ==15 dithered checker [03 §3.3]
-	FogKindGAFCh1                   // channel one 1..14 GAF family [03 §3.3]
-	FogKindGAFCh0                   // channel zero 1..14 GAF family [03 §3.3]
+	FogKindSolidDark                // lo==15 short-circuit solid black [rr-16 §8]
+	FogKindGrayRemap                // hi==15: remap existing pixels through GRAY TABLE [rr-16 §8]
+	FogKindPatterned                // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	FogKindGAFCh1                   // hi 1..14 Gray family GAF [rr-16 §8]
+	FogKindGAFCh0                   // lo 1..14 Black family GAF [rr-16 §8]
 )
 
 // FogOp is one deterministic fog draw operation for a cell [03 §3.3] (I6).
@@ -89,31 +92,44 @@ func FogTileForWorld(world numeric.Fixed) int32 {
 // (gx,gy) at camera cam [03 §3.3][03 §2.5]. The rectangle is camera-aligned
 // including signed residues [03 §3.3] and has hard 32-pixel edges with no blend.
 // Screen origin uses the orthographic beam projection offsets [03 §2.5].
+//
+// Fog cells straddle visibility-tile corners: retail draws cell gx at
+// sx = vpLeft + offX + (gx-startX)*32 with startX=floorDiv(camX-16,32) and
+// offX=(res<16?-16:+16)-res, which algebraically reduces to map pixel
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// cell is therefore centred on the corner where tiles (gx,gy), (gx-1,gy),
+// (gx,gy-1), (gx-1,gy-1) meet — exactly the four tiles the 4-bit nibble
+// accumulates [rr-16 §6.1].
 func FogScreenRect(cam *camera.Camera, gx, gy int32) (x0, y0, x1, y1 int32) {
 	var camX, camZ int32
 	if cam != nil {
 		camX = cam.X
 		camZ = cam.Z
 	}
-	x0 = gx*FogTilePixels - camX + camera.OriginX // [03 §2.5][03 §3.3]
-	y0 = gy*FogTilePixels - camZ + camera.OriginY
+	x0 = gx*FogTilePixels + FogTilePixels/2 - camX + camera.OriginX // [03 §2.5][03 §3.3][rr-16 §7]
+	y0 = gy*FogTilePixels + FogTilePixels/2 - camZ + camera.OriginY
 	x1 = x0 + FogTilePixels // hard 32 [03 §3.3]
 	y1 = y0 + FogTilePixels
 	return x0, y0, x1, y1
 }
 
-// FogVariant returns the four-way variant selector for a cell [03 §3.3] [rr-16 §6.2].
+// FogVariant returns the four-way variant selector for a cell [rr-16 §6.2].
+//
+// Retail computes variant = (col + row + camPhase) & 3 over cache-relative
+// col/row with camPhase = floorDiv(camX+16,32)+floorDiv(camZ+16,32)
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// For map-sized cache col=gx, row=gy; for viewport-sized col=gx-startX likewise. Using global gx+camPhase yields
-// same rotation as retail's col+row+camPhase when start is accounted, since col = gx-start and start's contribution is absorbed into camPhase.
-// Implements floorDiv with signed correction for negative camera [I3][03 §2.1].
+// startX = floorDiv(camX-16,32) [rr-16 §6.1], and the two floorDiv arguments
+// differ by exactly 32, so floorDiv(camX+16,32) − floorDiv(camX−16,32) = 1 for
+// every camera position. Substituting col = gx − startX:
+//
+//	variant = (gx + gy + 2) & 3   (map-global coordinates, camera-independent)
+//
+// Nanolathe's cache is map-sized (col = gx), so the camera phase cancels
+// exactly; the four-way cloud tiling is anchored to the world grid and must
+// NOT rotate as the camera pans.
 func FogVariant(gx, gy int32, cam *camera.Camera) int {
-	if cam == nil {
-		return int((gx + gy) & 3)
-	}
-	// camPhase = floorDiv(camX+16,32) + floorDiv(camZ+16,32) [rr-16 §6.2].
-	camPhase := floorDiv(cam.X+16, FogTilePixels) + floorDiv(cam.Z+16, FogTilePixels)
-	return int((gx + gy + camPhase) & 3)
+	_ = cam // camera phase cancels for map-global cells; see doc comment
+	return int((gx + gy + 2) & 3)
 }
 
 // FogDarkRGBA returns the RGBA for the default dark fog fill via the palette
@@ -160,23 +176,11 @@ func cellOps(gx, gy int32, c0, c1 uint8, cam *camera.Camera, tables *palette.Tab
 	var ops []FogOp
 	// Channel one handling before channel zero [03 §3.3].
 	if c1 == 15 {
-		patterned := false
-		if dither {
-			// Patterned checker seeded with camera parity ((cameraX+cameraY)&1) [03 §3.3].
-			var camX, camZ int32
-			if cam != nil {
-				camX = cam.X
-				camZ = cam.Z
-			}
-			parity := (camX + camZ) & 1
-			patterned = parity != 0
-			// Per-cell checker could also be (gx+gy+parity)&1 but global parity
-			// is the established seed [03 §3.3]; keep global parity as the
-			// deterministic base until per-cell phase is traced.
-			_ = gx
-			_ = gy
-		}
-		kind := FogKindDark
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		kind := FogKindGrayRemap
+		patterned := dither
 		if patterned {
 			kind = FogKindPatterned
 		}
@@ -189,21 +193,12 @@ func cellOps(gx, gy int32, c0, c1 uint8, cam *camera.Camera, tables *palette.Tab
 			R:         dr, G: dg, B: db, A: da,
 		})
 	} else if c1 >= 1 && c1 <= 14 {
-		// GAF frame value-1 from four-way variant family selected by (col+row+camPhase)&3 [03 §3.3][rr-16 §6.2].
+		// GAF frame value-1 from four-way variant family selected by (col+row+camPhase)&3 [rr-16 §6.2].
 		variant := FogVariant(gx, gy, cam)
 		frame := int(c1) - 1
-		patterned := false
-		if dither {
-			// Blitted plain or parity-seeded patterned per same option bit [03 §3.3][rr-16 §8].
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			var camX, camZ int32
-			if cam != nil {
-				camX = cam.X
-				camZ = cam.Z
-			}
-			parity := (camX + camZ) & 1
-			patterned = parity != 0
-		}
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		patterned := dither
 		ops = append(ops, FogOp{
 			GridX: gx, GridY: gy,
 			ScreenX0: x0, ScreenY0: y0, ScreenX1: x1, ScreenY1: y1,

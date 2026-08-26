@@ -175,17 +175,17 @@ func TestFogHardEdges32(t *testing.T) {
 		_ = y1
 	}
 
-	// Signed residue shift: moving camera by 1 moves rect by -1 [03 §3.3] including residues
-	x0a, _, _, _ := FogScreenRect(&camera.Camera{X: 0, Z: 0}, 0, 0) // cam 0 => 0*32-0+128=128
-	x0b, _, _, _ := FogScreenRect(&camera.Camera{X: 1, Z: 0}, 0, 0) // cam 1 => -1+128=127
+	// Signed residue shift: moving camera by 1 moves rect by -1 [03 §3.3] including residues.
+	// Cells straddle tile corners: x0 = gx*32+16 - camX + 128 [rr-16 §7].
+	x0a, _, _, _ := FogScreenRect(&camera.Camera{X: 0, Z: 0}, 0, 0) // cam 0 => 0*32+16-0+128=144
+	x0b, _, _, _ := FogScreenRect(&camera.Camera{X: 1, Z: 0}, 0, 0) // cam 1 => 16-1+128=143
 	if x0b != x0a-1 {
 		t.Fatalf("camera residue shift: cam0 x0=%d cam1 x0=%d want -1 delta [03 §3.3]", x0a, x0b)
 	}
 	// Negative camera floor handling
-	x0c, _, _, _ := FogScreenRect(&camera.Camera{X: -1, Z: 0}, 0, 0) // 0 - (-1)+128=129?
-	// gx0 with cam -1 => 0 - (-1)+128=129
-	if x0c != 129 {
-		t.Fatalf("negative camera residue: got %d want 129", x0c)
+	x0c, _, _, _ := FogScreenRect(&camera.Camera{X: -1, Z: 0}, 0, 0) // 16 - (-1)+128=145
+	if x0c != 145 {
+		t.Fatalf("negative camera residue: got %d want 145", x0c)
 	}
 	// Verify floorDiv-based viewport range includes signed residues correctly via BuildFogOps
 	// Use a cache 8x8 and cam at -1 with dither off, ensure ops are deterministic inclusive
@@ -273,34 +273,32 @@ func TestFogChannelSemantics(t *testing.T) {
 		t.Fatalf("solid dark should have no variant/frame")
 	}
 
-	// ch1==15 solid dark, ch0=0 => one Dark [03 §3.3]
+	// ch1==15 gray remap, ch0=0 => one GrayRemap [rr-16 §8]
 	cache.SetChannel(0, 0, 0, 15)
 	ops = BuildFogOps(cache, cam, 0, 0, 1, 1, tables, false)
-	if len(ops) != 1 || ops[0].Kind != FogKindDark {
-		t.Fatalf("ch1==15 want Dark got %+v", ops)
+	if len(ops) != 1 || ops[0].Kind != FogKindGrayRemap {
+		t.Fatalf("ch1==15 want GrayRemap got %+v", ops)
 	}
 	if ops[0].Patterned {
 		t.Fatalf("non-dither should not be patterned")
 	}
 
-	// ch1==15 with dither: Patterned depends on camera parity ((camX+camZ)&1) [03 §3.3]
+	// DitheredFog option bit (not camera parity) selects the black checker
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	cache.SetChannel(0, 0, 0, 15)
 	cam.X = 0
-	cam.Z = 0 // parity 0 => not patterned
-	ops = BuildFogOps(cache, cam, 0, 0, 1, 1, tables, true)
-	if len(ops) != 1 || ops[0].Kind != FogKindDark {
-		t.Fatalf("dither parity 0: still Dark kind but Patterned false, got %+v", ops[0])
-	}
-	if ops[0].Patterned {
-		t.Fatalf("parity 0 should not be patterned")
-	}
-	cam.X = 1 // parity 1 => patterned
+	cam.Z = 0 // parity 0, dither on => Patterned
 	ops = BuildFogOps(cache, cam, 0, 0, 1, 1, tables, true)
 	if len(ops) != 1 || ops[0].Kind != FogKindPatterned {
-		t.Fatalf("dither parity 1 want Patterned got %+v", ops[0])
+		t.Fatalf("dither on: want Patterned got %+v", ops[0])
 	}
 	if !ops[0].Patterned {
-		t.Fatalf("expected patterned")
+		t.Fatalf("dither on should be patterned")
+	}
+	cam.X = 1 // parity 1, dither on => still Patterned (parity is phase only)
+	ops = BuildFogOps(cache, cam, 0, 0, 1, 1, tables, true)
+	if len(ops) != 1 || ops[0].Kind != FogKindPatterned {
+		t.Fatalf("dither on parity 1 want Patterned got %+v", ops[0])
 	}
 	cam.X = 0
 	cam.Z = 0
@@ -320,9 +318,10 @@ func TestFogChannelSemantics(t *testing.T) {
 	if ops[0].Variant < 0 || ops[0].Variant > 3 || ops[1].Variant < 0 || ops[1].Variant > 3 {
 		t.Fatalf("variant out of range 0..3")
 	}
-	// Variant is (gx+gy)&3 currently [03 §3.3] TODO
-	if ops[0].Variant != 0 || ops[1].Variant != 0 {
-		t.Fatalf("variant for gx0 gy0 should be 0, got %d %d", ops[0].Variant, ops[1].Variant)
+	// Variant is (gx+gy+2)&3: retail col+row+camPhase with cache-relative col
+	// reduces to gx+gy+2 for map-global cells (camera phase cancels) [rr-16 §6.2].
+	if ops[0].Variant != 2 || ops[1].Variant != 2 {
+		t.Fatalf("variant for gx0 gy0 should be 2, got %d %d", ops[0].Variant, ops[1].Variant)
 	}
 
 	// ch1==0 c0==7 => single GAF ch0
@@ -476,18 +475,26 @@ func TestFogNeverMutatesVisibility(t *testing.T) {
 	}
 }
 
-// TestFogVariantSelection checks four-way variant deterministic.
+// TestFogVariantSelection checks four-way variant deterministic and
+// camera-independent: (gx+gy+2)&3 for map-global cells [rr-16 §6.2].
 func TestFogVariantSelection(t *testing.T) {
-	cam := &camera.Camera{X: 0, Z: 0}
-	for gy := int32(0); gy < 4; gy++ {
-		for gx := int32(0); gx < 4; gx++ {
-			v := FogVariant(gx, gy, cam)
-			want := int((gx + gy) & 3)
-			if v != want {
-				t.Fatalf("variant gx=%d gy=%d got %d want %d", gx, gy, v, want)
-			}
-			if v < 0 || v > 3 {
-				t.Fatalf("variant out of range")
+	cams := []*camera.Camera{
+		nil,
+		{X: 0, Z: 0},
+		{X: 33, Z: -47},
+		{X: 1024, Z: 512},
+	}
+	for _, cam := range cams {
+		for gy := int32(0); gy < 4; gy++ {
+			for gx := int32(0); gx < 4; gx++ {
+				v := FogVariant(gx, gy, cam)
+				want := int((gx + gy + 2) & 3)
+				if v != want {
+					t.Fatalf("variant gx=%d gy=%d got %d want %d", gx, gy, v, want)
+				}
+				if v < 0 || v > 3 {
+					t.Fatalf("variant out of range")
+				}
 			}
 		}
 	}

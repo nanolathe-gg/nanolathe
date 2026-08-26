@@ -384,17 +384,27 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 							c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
 						}
 					}
-				case render.FogKindDark:
+				case render.FogKindGrayRemap:
+					// hi==15 fogged-but-explored: remap existing pixels through the
 					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-					for py := y0; py < y1; py++ {
-						base := int(py)*w + int(x0)
-						for px := x0; px < x1; px++ {
-							c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
+					// — terrain texture is preserved and desaturated [rr-16 §8;
+					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					// screen indices; c.indexed holds logical indices and Logical is
+					// identity until animated, so the direct application matches.
+					if c.pal != nil {
+						for py := y0; py < y1; py++ {
+							base := int(py)*w + int(x0)
+							for px := x0; px < x1; px++ {
+								i := base + int(px-x0)
+								c.indexed[i] = c.pal.Gray[c.indexed[i]]
+							}
 						}
 					}
 				case render.FogKindPatterned:
 					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-					// Checker skips every other pixel in 2×2 block seeded by parity.
+					// Retail writes literal palette index 0 (black) at checker
+					// positions (x+y+parity)&1==1 and leaves the rest untouched
+					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 					parity := int32(0)
 					if c.cam != nil {
 						parity = (c.cam.X + c.cam.Z) & 1
@@ -402,9 +412,7 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					for py := y0; py < y1; py++ {
 						base := int(py)*w + int(x0)
 						for px := x0; px < x1; px++ {
-							// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-							// Approximate as checker where (px+py+parity)&1==0 is skipped (transparent, shows terrain).
-							if (px+py+parity)&1 == 0 {
+							if (px+py+parity)&1 != 1 {
 								continue
 							}
 							c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
@@ -424,16 +432,9 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 							continue
 						}
 					}
-					// Fallback solid dark when GAF missing (missing entry returns 0 → skip blit [rr-16 §9.3]).
-					for py := y0; py < y1; py++ {
-						base := int(py)*w + int(x0)
-						for px := x0; px < x1; px++ {
-							if op.Patterned && (px+py)&1 == 0 {
-								continue
-							}
-							c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
-						}
-					}
+					// Missing GAF entry/frame: retail skips the blit and the cell
+					// keeps the underlying tile [rr-16 §9.3 SUPPORTED-INFERENCE].
+					continue
 				case render.FogKindGAFCh0:
 					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 					if c.fogGAF != nil && op.Variant >= 0 && op.Variant < 4 && op.Frame >= 0 {
@@ -444,21 +445,11 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 							continue
 						}
 					}
-					// Fallback solid dark.
-					for py := y0; py < y1; py++ {
-						base := int(py)*w + int(x0)
-						for px := x0; px < x1; px++ {
-							c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
-						}
-					}
+					// Missing GAF: skip, cell keeps underlying tile [rr-16 §9.3].
+					continue
 				default:
-					// visible shouldn't produce ops, but fallback.
-					for py := y0; py < y1; py++ {
-						base := int(py)*w + int(x0)
-						for px := x0; px < x1; px++ {
-							c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
-						}
-					}
+					// Visible cells produce no ops; nothing to draw.
+					continue
 				}
 			}
 		}

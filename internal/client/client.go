@@ -478,13 +478,20 @@ func (c *Client) blitGAFFrame(frame *formats.GAFFrame, dstX, dstY int, isShadow 
 	}
 }
 
-// blitFogGAF blits a fog GAF frame at (dstX,dstY) which is the cell's screen rect origin [rr-16 §6.2].
-// It copies opaque indexed pixels directly (palette mapping at present time C7), clipped to viewport.
+// blitFogGAF blits a fog GAF frame for the cell whose screen rect origin is
+// (dstX,dstY) [rr-16 §6.2]. Retail subtracts the frame's signed 16-bit
+// XOffset/YOffset anchor fields from the destination before clipping
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// the quadrant geometry of the 14 fog frames lives entirely in those offsets.
+// It copies opaque indexed pixels directly (palette mapping at present time
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// no checker.
 func (c *Client) blitFogGAF(frame *formats.GAFFrame, dstX, dstY int) {
 	if frame == nil || c.indexed == nil {
 		return
 	}
+	dstX -= int(frame.XOffset) // retail anchor: dest = cell origin − frame offset
+	dstY -= int(frame.YOffset)
 	w := c.width
 	h := c.height
 	fw := int(frame.Width)
@@ -535,11 +542,14 @@ func (c *Client) blitFogGAF(frame *formats.GAFFrame, dstX, dstY int) {
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// It skips every other pixel in a 2×2 checker seeded by camera parity (camX+camZ)&1 [rr-16 §6.2].
+// Same frame-offset anchoring as blitFogGAF; it skips every other pixel in a
+// 2×2 checker seeded by camera parity (camX+camZ)&1 [rr-16 §6.2].
 func (c *Client) blitFogGAFPatterned(frame *formats.GAFFrame, dstX, dstY int) {
 	if frame == nil || c.indexed == nil {
 		return
 	}
+	dstX -= int(frame.XOffset) // retail anchor: dest = cell origin − frame offset
+	dstY -= int(frame.YOffset)
 	w := c.width
 	h := c.height
 	fw := int(frame.Width)
