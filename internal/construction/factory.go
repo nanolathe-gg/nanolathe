@@ -102,6 +102,9 @@ type Service struct {
 	// no terrain world. Production placement must leave it false so a missing
 	// terrain dependency is an error rather than a permissive success.
 	AllowSyntheticPlacement bool
+	// syntheticOffsets tracks per-factory exit offsets for synthetic fixtures to avoid self-occupancy deadlock
+	// where successive products would otherwise spawn at the same spot as the previous product.
+	syntheticOffsets map[pool.Handle]int
 
 	// Per-session state. None of this may live in a package-level var: it is
 	// authoritative (BuilderLinks is C18's "register the builder link on the
@@ -173,6 +176,7 @@ func NewService(terrain *world.Terrain, catalog *content.Catalog, w *units.World
 	s.builderLinks = make(map[pool.Handle]pool.Handle)
 	s.placements = make(map[pool.Handle]world.FootprintRect)
 	s.getBuiltLinks = make(map[pool.Handle]pool.Handle)
+	s.syntheticOffsets = make(map[pool.Handle]int)
 	s.buildProductIndex()
 	return s
 }
@@ -927,7 +931,7 @@ func (s *Service) startBuilding(u *units.Unit) {
 	}
 	u.Flags |= FlagStartBuilding
 	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
-		binding.Callbacks.StartBuilding()
+		binding.Callbacks.StartBuildingHeading(u.Move.Heading & 0xffff) // [04 §5.3] slot form carries heading & 0xffff
 	}
 }
 
@@ -1199,6 +1203,9 @@ func (s *Service) applyCompletionPosture(product *units.Unit) {
 	}
 	product.Remaining = 0
 	product.Flags |= FlagCompleted
+	// Completed units become eligible for AI classification (group 4 construction) [R-P0-04][08].
+	// Nanoframes are created with Flags without 0x20 (initializeNanoframe clears it); completion must restore it.
+	product.Flags |= units.ClassifierEligibleStatus
 	if product.Def != nil && product.Def.ActivateWhenBuilt {
 		s.activate(product)
 	}
@@ -1442,8 +1449,14 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	var ok bool
 	if m != nil {
 		modelPosition, ok = s.QueryBuildWorldPosition(factory, m)
-	} else if s.AllowSyntheticPlacement && syntheticUnitVM(factory) {
-		modelPosition, ok = world.NewModelWorldPosition(factory.X, factory.Y, factory.Z), true
+	} else if syntheticUnitVM(factory) {
+		offsetCells := 0
+		if s.syntheticOffsets != nil && factory.Handle != 1 {
+			// First product offset 6 cells south to clear the factory footprint; subsequent products offset further to avoid stacking.
+			offsetCells = 6 + s.syntheticOffsets[factory.Handle]*2
+		}
+		// South offset to avoid overlapping the factory's own footprint and to stay within bounds for east-edge factories.
+		modelPosition, ok = world.NewModelWorldPosition(factory.X, factory.Y, factory.Z.Add(numeric.Fixed(offsetCells*(1<<20)))), true
 	} else {
 		ok = false
 	}
@@ -1524,6 +1537,9 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		node.Deadline = int32(tick + 300)
 		// Stay in state2.
 		return
+	}
+	if s.syntheticOffsets != nil {
+		s.syntheticOffsets[factory.Handle]++
 	}
 	// Success epilogue [05 C18].
 	s.successEpilogue(factory, node, product, cell)

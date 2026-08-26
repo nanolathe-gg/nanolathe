@@ -43,6 +43,15 @@ func TestPublishCopiesInput(t *testing.T) {
 	}
 }
 
+func TestPublishPreservesPausedClockState(t *testing.T) {
+	var b Buffer
+	b.Publish(&Frame{Tick: 1, Paused: true})
+	_, got, ok := b.Read()
+	if !ok || !got.Paused {
+		t.Fatalf("paused state = %#v, want true", got)
+	}
+}
+
 func TestPublishCopiesExtendedFrameAndAppliesPresentationBounds(t *testing.T) {
 	projectiles := make([]ProjectileView, MaxSnapshotProjectiles+1)
 	projectiles[0].WeaponID = 7

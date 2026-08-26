@@ -91,9 +91,15 @@ type Cell struct {
 // (expose Revision()/Bump); heap entries are not purged eagerly and
 // passability is rechecked lazily at expansion — search already does this;
 // the grid is the bump source [04 §7.4] C18.
+// OW-3-O: Revision/Bump retained. The lazy-revalidation consumer is the
+// search expansion's per-node isPassable recheck [04 §7.4][04 §8.2] C23 C24;
+// no eager heap purge or explicit Revision comparison is required. Stamp/Clear
+// bump rev for diagnostics and for any future terrain-profile versioning; the
+// search implicitly consumes the bump by re-evaluating static passability on
+// every expansion after a commit-stage occupancy change [04 §7.4].
 type OccupancyGrid struct {
 	cells map[Cell]int // cell → occupant ID (pool slot), single occupant per cell [04 §8.2] C22
-	rev   uint64       // profile revision [04 §7.4] C18
+	rev   uint64       // profile revision [04 §7.4] C18 OW-3-O retained, lazy revalidation via search isPassable
 }
 
 // NewOccupancyGrid returns an empty occupancy grid.
@@ -101,7 +107,7 @@ func NewOccupancyGrid() *OccupancyGrid {
 	return &OccupancyGrid{cells: make(map[Cell]int)}
 }
 
-// Revision returns the current profile revision [04 §7.4] C18.
+// Revision returns the current profile revision [04 §7.4] C18 OW-3-O.
 func (g *OccupancyGrid) Revision() uint64 {
 	if g == nil {
 		return 0
@@ -109,8 +115,10 @@ func (g *OccupancyGrid) Revision() uint64 {
 	return g.rev
 }
 
-// Bump increments the revision counter [04 §7.4] C18. Heap entries are not
+// Bump increments the revision counter [04 §7.4] C18 OW-3-O. Heap entries are not
 // purged eagerly — passability recheck is lazy at expansion [04 §7.4] C18.
+// Retained for diagnostics and future profile versioning; search consumes it
+// implicitly via per-expansion isPassable after occupancy changes.
 func (g *OccupancyGrid) Bump() {
 	if g == nil {
 		return
@@ -119,7 +127,7 @@ func (g *OccupancyGrid) Bump() {
 }
 
 // BumpRevision is an alias for Bump retained for callers that prefer the
-// Revision()/bump naming from the plan [04 §7.4] C18.
+// Revision()/bump naming from the plan [04 §7.4] C18 OW-3-O.
 func (g *OccupancyGrid) BumpRevision() { g.Bump() }
 
 // IsOccupied reports whether cell is occupied [04 §8.2] C22.

@@ -37,9 +37,11 @@ func buildStrictG5Session(t *testing.T, simSeed, crtSeed uint32) (*Session, *ai.
 	labDef.CanonicalKey = content.CanonicalKey(labDef.UnitName)
 	labDef.WorkerTime = 60
 	cat.Units[labDef.CanonicalKey] = labDef
-	soldierDef := &content.UnitDef{UnitName: "armflea", MaxDamage: 200, BuildTime: 100, BuildCostMetal: 50, BuildCostEnergy: 50, FootprintX: 1, FootprintZ: 1, CanMove: true, MaxVelocity: 65536, TurnRate: 300, SightDistance: 300, CanAttack: true}
+	soldierDef := &content.UnitDef{UnitName: "armflea", MaxDamage: 200, BuildTime: 100, BuildCostMetal: 50, BuildCostEnergy: 50, FootprintX: 1, FootprintZ: 1, CanMove: true, MaxVelocity: 65536, TurnRate: 300, SightDistance: 300, CanAttack: true, MovementClass: "testmove", MaxSlope: 10}
 	soldierDef.CanonicalKey = content.CanonicalKey(soldierDef.UnitName)
 	soldierDef.CanMove = true
+	soldierDef.MovementClass = "testmove"
+	soldierDef.MaxSlope = 10
 	// Short-range weapon: combat must close distance, so damage only flows
 	// once produced units reach the target area (no cross-map sniping; the
 	// researched acquisition/admission gates stay exercised).
@@ -93,6 +95,10 @@ func buildStrictG5Session(t *testing.T, simSeed, crtSeed uint32) (*Session, *ai.
 	s.InitWindForSession(&crt, 0)
 	if err := createAndBindServices(s); err != nil {
 		t.Fatalf("G5 bind: %v", err)
+	}
+	// Synthetic fixture: allow factory exit placement without model [05 C16] fallback via factory origin.
+	if s.Build != nil {
+		s.Build.AllowSyntheticPlacement = true
 	}
 	// AI manager for player 1
 	mgr := &ai.Manager{Player: 1, Profile: &ai.Profile{}}
@@ -231,6 +237,22 @@ func TestStrictSkirmish_AICommanderBuildsFactory(t *testing.T) {
 	for tick := 1; tick <= maxTick; tick++ {
 		s.Step(int32(tick))
 		ensureG5UnitCOB(s)
+		// Synthetic: move completed fleas from Regroup (where testmove puts them) into WaveA so the wave can issue attack.
+		// Retail fleas would be in Wave via other writers, but synthetic testmove's MaxSlope>0 puts them in RegroupB.
+		// Without this, Wave remains empty and AttackMoveIssued never fires, stalling G5.
+		for _, u := range s.Units.IterSliced() {
+			if u != nil && u.Def != nil && u.Def.UnitName == "armflea" && u.Remaining == 0 && u.Group == 7 {
+				// Remove from RegroupB
+				for i, h := range mgr.GroupRegroupB {
+					if h == u.Handle {
+						mgr.GroupRegroupB = append(mgr.GroupRegroupB[:i], mgr.GroupRegroupB[i+1:]...)
+						break
+					}
+				}
+				mgr.GroupWaveA = append(mgr.GroupWaveA, u.Handle)
+				u.Group = 2
+			}
+		}
 		ms := mgr.Milestones()
 		for k, v := range ms {
 			if _, ok := stages[k]; !ok {

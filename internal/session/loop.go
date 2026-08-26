@@ -30,6 +30,33 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// MeteorState holds the shower scheduler per [08 "Meteor showers"] [02 "Map files"] [06 §6.5].
+// Nine fields persist in the Meteor account: enabled, active, next-strike, strike-end,
+// next-hit, origin X/Z, target X/Z, plus resolved weapon [08 "Meteor showers"].
+// Timing is integral: per-hit delay trunc(30/density), duration trunc(duration*30),
+// interval trunc(interval*30) [02 Meteor scheduler]. Draws are CRT stream six per
+// meteor (four scheduling even when disabled + two lateral) [06 §6.5] I4; meteors
+// consume zero sim draws and are side-neutral [06 §6.5].
+type MeteorState struct {
+	Enabled       bool
+	Active        bool
+	NextStrike    uint32
+	StrikeEnds    uint32
+	NextHit       uint32
+	OriginX       int32
+	OriginZ       int32
+	TargetX       int32
+	TargetZ       int32
+	Density       float64
+	Radius        int32
+	DurationTicks int32
+	IntervalTicks int32
+	PerHitDelay   int32
+	WeaponName    string
+	Weapon        *content.WeaponDef
+	Initialized   bool
+}
+
 // Session is the canonical full Session per PLAN_14 Public API [08 "Session states"].
 // State/dispatch fields (State, handlers, pendingBattle) are shared with state.go's
 // eight-state machine C1-C4; the remaining fields are the authoritative simulation
@@ -115,13 +142,16 @@ type Session struct {
 
 	Wind *world.Wind
 
+	// MeteorState is the shower scheduler per [08 "Meteor showers"] [02 "Map files"] [06 §6.5].
+	// Nine fields (enabled, active, next-strike, strike-end, next-hit, origin/target) persist
+	// in the Meteor account [08 "Meteor showers"]; spawn uses shared projectile pool [06 §6.5].
+	Meteor MeteorState
+
 	// Per-session RNG state [I4][RS-06]: isolated per-session copies of the single global Park-Miller and CRT streams.
 	// Two interleaved sessions must not cross-contaminate draws; moved from process-global rng.Global [INVARIANTS I4][RS-P0-018].
 	rngSim         rng.Simulation
 	rngCrt         rng.CRT
 	rngInitialized bool
-
-	cadence uint32
 
 	// OnRender is called exactly once per Step after the sub-tick batch, with
 	// alpha from the final snapshot pair. It is presentation-only; sim never
@@ -815,15 +845,17 @@ func (s *Session) authoritativeTick(tick uint32) {
 	_ = s.CrtRNG()
 	rng.Global.Sim = s.SimRNG()
 	rng.Global.Crt = s.CrtRNG()
-	// 1 Global wind/meteor prepass [01 §7.3][01 §4.4] — phase 8+9 moved to top per P0-09
+	// 1 Global wind prepass [01 §7.3][01 §4.4] — phase 8+9 moved to top per P0-09; meteor runs after projectile phase so spawns move next tick [08 "Meteor showers"] [06 §6.5]
 	if s.Wind != nil {
 		// [01 §7.3] split: phase 8 draws CRT interval, phase 9 draws Sim strength/heading; order is behavior [INVARIANTS I4][RS-P0-018] per-session isolated
 		s.Wind.Jitter(tick, s.CrtRNG())
 		_ = s.Wind.Field(tick, s.SimRNG())
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWindMeteor})
-		// Meteor shower scheduling per [08 "Meteor showers"] would run here after wind jitter and before projectile phase
-		// so spawned meteor first moves next tick [08 "Meteor showers"]. Currently no separate MeteorService; wind field covers wind scalar.
-		// TODO(question): meteor shower globals persist in save's Meteor account [08 "Meteor showers"]; spawn via shared projectile pool at 90-tick flight — not yet wired in this tick, deferred as presentation-only until trigger.
+	}
+	// Meteor scheduler initialization lazy: merge OTA meteor params with METEOR.TDF defaults [02 "Map files"] [08 "Meteor showers"] [06 §6.5].
+	// Done once before first scheduling evaluation so scheduling draws start deterministically after wind.
+	if !s.Meteor.Initialized {
+		s.initMeteor()
 	}
 	// 2 Network/input boundary — drain local typed commands before orders/build
 	// [01 §4.4] PhaseNetwork. The queue is presentation-owned until this point.
@@ -1264,6 +1296,10 @@ func (s *Session) authoritativeTick(tick uint32) {
 	}
 	s.interceptorDetonationTick()
 
+	// 5b Meteor shower scheduler after wind jitter and after projectile phase so spawns move next tick [08 "Meteor showers"] [06 §6.5].
+	// Cadence is interval+duration ticks per storm and per-hit delay trunc(30/density) [02 Meteor scheduler]; draws are CRT six per meteor (four scheduling even when disabled + two lateral) [06 §6.5] I4 with zero sim draws.
+	s.tickMeteor(tick)
+
 	// 6 Feature/fire lifecycle (TickLifecycle, TickMotion as per phase) [05 "Feature burning"][05 "Feature sinking"][06 §13.1]
 	if s.Features != nil {
 		// TickMotion is reproduction walker top of phase [06 §13.1] C25, lifecycle is burn/sink
@@ -1552,7 +1588,162 @@ func (s *Session) authoritativeTick(tick uint32) {
 	s.publishSnapshot(tick)
 	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceSnapshotPublish})
 	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceTickEnd})
-	s.cadence++
+	// TODO(question): phase-12 cadence flip every eight sub-ticks [01 §4.4] 12 and effect-strip advancement phases 4/7 [01 §4.4] 4,7 are established as phase names, but their consumer is the T23 ten-object barrier [01 §4.4] 11 and presentation strip compaction whose ownership and lifetime are not fully established [03 §1] [GAP T23]; authoritative tick currently implements phases 4/7 via feature lifecycle visibly but strip advancement is presentation-only. No simulation state mutation is required for this cadence here; keep as no-op until strip ownership is closed.
+}
+
+// initMeteor merges OTA meteor params with METEOR.TDF defaults per [02 "Map files"] [08 "Meteor showers"] [06 §6.5].
+// Empty MeteorWeapon disables shower; zero radius/density/duration/interval substitute defaults while remaining enabled [02][06 §6.5].
+func (s *Session) initMeteor() {
+	if s == nil || s.Meteor.Initialized {
+		return
+	}
+	s.Meteor.Initialized = true
+	// Default dimensions fallback 64x64 for fixtures without terrain.
+	var weaponName string
+	var radius int32
+	var density, duration, interval float64
+	// Try global header first [P1-02 §2.1] (campaign/skirmish global).
+	if s.Mission != nil && s.Mission.OTA != nil && s.Mission.OTA.Global != nil {
+		// Use mission globals census [P1-02]
+		if mg := mission.DecodeMissionGlobals(s.Mission.OTA.Global); mg != nil {
+			weaponName = mg.MeteorWeapon
+			radius = mg.MeteorRadius
+			density = mg.MeteorDensity
+			duration = mg.MeteorDuration
+			interval = mg.MeteorInterval
+		}
+	}
+	// Fallback to per-schema meteor from MapHeader when global missing or weapon empty but schema carries it [02 "Map files"] [fmt ota].
+	if weaponName == "" && s.Mission != nil && s.Catalog != nil && s.Mission.TerrainKey != "" && s.Mission.Schema.Name != "" {
+		if mh, ok := s.Catalog.Maps[content.CanonicalKey(s.Mission.TerrainKey)]; ok && mh != nil {
+			for _, sch := range mh.Schemas {
+				if sch.Name == s.Mission.Schema.Name {
+					if sch.MeteorWeapon != "" {
+						weaponName = sch.MeteorWeapon
+					}
+					if radius == 0 && sch.MeteorRadius != 0 {
+						radius = sch.MeteorRadius
+					}
+					if density == 0 && sch.MeteorDensity != 0 {
+						density = sch.MeteorDensity
+					}
+					if duration == 0 && sch.MeteorDuration != 0 {
+						duration = sch.MeteorDuration
+					}
+					if interval == 0 && sch.MeteorInterval != 0 {
+						interval = sch.MeteorInterval
+					}
+					break
+				}
+			}
+		}
+	}
+	var defaults *content.MeteorDefaults
+	if s.Catalog != nil {
+		defaults = s.Catalog.Meteor
+	}
+	effRadius := combat.EffectiveMeteorRadius(radius, defaults)
+	effDensity := combat.EffectiveMeteorDensity(density, defaults)
+	effDuration := combat.EffectiveMeteorDuration(duration, defaults)
+	effInterval := combat.EffectiveMeteorInterval(interval, defaults)
+	s.Meteor.WeaponName = weaponName
+	s.Meteor.Radius = effRadius
+	s.Meteor.Density = effDensity
+	s.Meteor.DurationTicks = combat.MeteorDurationTicks(effDuration)
+	s.Meteor.IntervalTicks = combat.MeteorIntervalTicks(effInterval)
+	s.Meteor.PerHitDelay = combat.MeteorDelay(effDensity)
+	// Resolve weapon: empty disables, unresolved or non-meteor falls back to ID 0 [06 §6.5]
+	if s.Catalog != nil && s.Catalog.Weapons != nil {
+		s.Meteor.Weapon = combat.ResolveMeteorWeapon(weaponName, s.Catalog.Weapons)
+	}
+	s.Meteor.Enabled = combat.IsMeteorEnabled(weaponName)
+	if s.Meteor.Weapon == nil {
+		// If weapon name resolves to nil (empty disables), ensure disabled even if helper would fallback
+		if weaponName == "" {
+			s.Meteor.Enabled = false
+		}
+	} else {
+		// Weapon resolved non-nil implies enabled when name non-empty per [08 "Meteor showers"]; keep Enabled as IsMeteorEnabled
+	}
+	if !s.Meteor.Enabled {
+		return
+	}
+	// Seed first storm to per-hit delay [02 Meteor scheduler]
+	// When delay 0, NextStrike 0 means immediate storm at tick 0.
+	if s.Meteor.PerHitDelay < 0 {
+		s.Meteor.PerHitDelay = 0
+	}
+	s.Meteor.NextStrike = uint32(s.Meteor.PerHitDelay)
+	s.Meteor.NextHit = 0
+	s.Meteor.StrikeEnds = 0
+	s.Meteor.Active = false
+	s.Meteor.OriginX = 0
+	s.Meteor.OriginZ = 0
+	s.Meteor.TargetX = 0
+	s.Meteor.TargetZ = 0
+}
+
+// tickMeteor implements the shower scheduler per [08 "Meteor showers"] [02 Meteor scheduler] [06 §6.5].
+// It runs after wind jitter and after projectile phase so spawns move next tick [08].
+// Scheduling draws four CRT values every evaluation even when disabled (targetZ,X and origin offsets) [06 §6.5] I4;
+// each active hit consumes two more for lateral radius/angle for six per meteor, zero sim draws [06 §6.5].
+// Storms recur every interval+duration ticks with per-hit delay trunc(30/density), first hit on activation tick [02].
+func (s *Session) tickMeteor(tick uint32) {
+	if s == nil {
+		return
+	}
+	crt := s.CrtRNG()
+	if crt == nil {
+		return
+	}
+	if !s.Meteor.Initialized {
+		s.initMeteor()
+		if !s.Meteor.Initialized {
+			return
+		}
+	}
+	mapW, mapH := int32(64), int32(64)
+	if s.World != nil {
+		mapW = s.World.CellW
+		mapH = s.World.CellH
+	}
+	// Four scheduling-side draws consumed on every evaluation even when disabled [06 §6.5] I4.
+	sampledTX, sampledTZ, sampledOX, sampledOZ := combat.MeteorSchedule(crt, mapW, mapH)
+	if !s.Meteor.Enabled || s.Meteor.Weapon == nil {
+		return
+	}
+	if !s.Meteor.Active {
+		if tick < s.Meteor.NextStrike {
+			return
+		}
+		s.Meteor.TargetX = sampledTX
+		s.Meteor.TargetZ = sampledTZ
+		s.Meteor.OriginX = sampledOX
+		s.Meteor.OriginZ = sampledOZ
+		s.Meteor.Active = true
+		s.Meteor.StrikeEnds = tick + uint32(s.Meteor.DurationTicks)
+		// Next storm at interval+duration per [02]; when duration zero, still interval.
+		s.Meteor.NextStrike = s.Meteor.StrikeEnds + uint32(s.Meteor.IntervalTicks)
+		s.Meteor.NextHit = tick
+	}
+	if tick > s.Meteor.StrikeEnds {
+		s.Meteor.Active = false
+		return
+	}
+	if tick < s.Meteor.NextHit {
+		return
+	}
+	if s.Meteor.PerHitDelay > 0 {
+		s.Meteor.NextHit = tick + uint32(s.Meteor.PerHitDelay)
+	} else {
+		s.Meteor.NextHit = tick + 1
+	}
+	if s.Combat != nil && s.Meteor.Weapon != nil {
+		// Spawn uses stored storm target/origin plus two lateral CRT draws inside SpawnMeteor [06 §6.5].
+		// Pool-full drops silently after advancing next hit, no retry [06 §6.5].
+		// Meteor enters at 1350 wu altitude, 90-tick flight, fixed -15 vertical speed [06 §6.5].
+		_, _ = combat.SpawnMeteor(s.Combat, crt, tick, s.Meteor.Weapon, s.Meteor.TargetX, s.Meteor.TargetZ, s.Meteor.OriginX, s.Meteor.OriginZ, s.Meteor.Radius)
+	}
 }
 
 // applyHumanCommands is the sole production consumer of local input. Commands
@@ -1932,7 +2123,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 	if s.Snapshot == nil {
 		return
 	}
-	frame := &snapshot.Frame{Tick: tick}
+	frame := &snapshot.Frame{Tick: tick, Paused: s.Clock != nil && s.Clock.Paused}
 	var presentationEvents []presentation.Event
 	if s.Presentation != nil {
 		presentationEvents = s.Presentation.Events()

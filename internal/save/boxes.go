@@ -749,8 +749,9 @@ var (
 // preserving the v9 group-vector layout while allowing current saves to
 // resume the next classifier tick exactly [08 "Strategy manager and its task
 // graph"] [R-P0-04].
+// Version 11 adds meteor shower scheduler state per [08 "Meteor showers"] [06 §6.5] (OW-3-Q).
 
-const StateV1VersionConst uint32 = 10
+const StateV1VersionConst uint32 = 11
 const StateV1Version1 uint32 = 1
 const StateV1Version2 uint32 = 2
 const StateV1Version3 uint32 = 3
@@ -761,6 +762,7 @@ const StateV1Version7 uint32 = 7
 const StateV1Version8 uint32 = 8
 const StateV1Version9 uint32 = 9
 const StateV1Version10 uint32 = 10
+const StateV1Version11 uint32 = 11
 
 // UnitRecord is one slot-indexed unit record, canonically ordered by slot
 // ascending for determinism (I1) [01 §6.1] [PLAN_14 C18]. Reconstruction uses
@@ -1196,6 +1198,28 @@ type WindSnapshot struct {
 	Pending    bool
 }
 
+// MeteorSnapshot mirrors session.MeteorState per [08 "Meteor showers"] [06 §6.5] (OW-3-Q).
+// Nine fields persist in the Meteor account [08 "Meteor showers"]; this snapshot adds effective
+// density/radius/tick counters for deterministic restore without re-deriving from mission.
+type MeteorSnapshot struct {
+	Enabled       bool
+	Active        bool
+	NextStrike    uint32
+	StrikeEnds    uint32
+	NextHit       uint32
+	OriginX       int32
+	OriginZ       int32
+	TargetX       int32
+	TargetZ       int32
+	WeaponName    string
+	Density       float64
+	Radius        int32
+	DurationTicks int32
+	IntervalTicks int32
+	PerHitDelay   int32
+	Initialized   bool
+}
+
 // ConstructionSnapshot mirrors construction.Service builder-product links [05 "Factory production lifecycle"] C18 [RS-10].
 type ConstructionSnapshot struct {
 	BuilderLinks []BuilderLinkRecord // product -> builder, sorted by Product ascending (I1) [RS-10]
@@ -1236,7 +1260,8 @@ type StateV1 struct {
 	AI               []AIManagerRecord        // managers task deadlines strategic groups [08][P0-I11]
 	Visibility       VisibilitySnapshot       // mapping/sensor state [03 §3][P0-I11]
 	Latch            LatchSnapshot            // triggers/end latch/campaign progress [P1-01][P0-I11]
-	Wind             WindSnapshot             // wind/meteor state [01 §7.3][P0-I11]
+	Wind             WindSnapshot             // wind state [01 §7.3][P0-I11]
+	Meteor           MeteorSnapshot           // shower scheduler [08 "Meteor showers"] [06 §6.5] (OW-3-Q)
 	Construction     ConstructionSnapshot     // builder-product links [05 C18][RS-10]
 }
 
@@ -1760,6 +1785,25 @@ func MarshalStateV1(s *StateV1) []byte {
 		binaryWriteUint32(&buf, s.Wind.LastChange)
 		buf.WriteByte(boolToByte(s.Wind.Changed))
 		buf.WriteByte(boolToByte(s.Wind.Pending))
+		if ver >= StateV1Version11 {
+			// Meteor shower scheduler [08 "Meteor showers"] [06 §6.5] (OW-3-Q)
+			buf.WriteByte(boolToByte(s.Meteor.Enabled))
+			buf.WriteByte(boolToByte(s.Meteor.Active))
+			binaryWriteUint32(&buf, s.Meteor.NextStrike)
+			binaryWriteUint32(&buf, s.Meteor.StrikeEnds)
+			binaryWriteUint32(&buf, s.Meteor.NextHit)
+			binaryWriteInt32(&buf, s.Meteor.OriginX)
+			binaryWriteInt32(&buf, s.Meteor.OriginZ)
+			binaryWriteInt32(&buf, s.Meteor.TargetX)
+			binaryWriteInt32(&buf, s.Meteor.TargetZ)
+			writeString(&buf, s.Meteor.WeaponName)
+			binaryWriteUint64(&buf, math.Float64bits(s.Meteor.Density))
+			binaryWriteInt32(&buf, s.Meteor.Radius)
+			binaryWriteInt32(&buf, s.Meteor.DurationTicks)
+			binaryWriteInt32(&buf, s.Meteor.IntervalTicks)
+			binaryWriteInt32(&buf, s.Meteor.PerHitDelay)
+			buf.WriteByte(boolToByte(s.Meteor.Initialized))
+		}
 		if ver >= 6 {
 			// Construction builder-product links [05 C18][RS-10] — sorted by Product ascending (I1)
 			binaryWriteUint32(&buf, uint32(len(links)))
@@ -1790,7 +1834,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 	if err := binary.Read(r, binary.LittleEndian, &ver); err != nil {
 		return nil, err
 	}
-	if ver != StateV1VersionConst && ver != StateV1Version9 && ver != StateV1Version8 && ver != StateV1Version7 && ver != StateV1Version6 && ver != StateV1Version5 && ver != StateV1Version4 && ver != StateV1Version3 && ver != StateV1Version2 && ver != StateV1Version1 {
+	if ver != StateV1VersionConst && ver != StateV1Version10 && ver != StateV1Version9 && ver != StateV1Version8 && ver != StateV1Version7 && ver != StateV1Version6 && ver != StateV1Version5 && ver != StateV1Version4 && ver != StateV1Version3 && ver != StateV1Version2 && ver != StateV1Version1 {
 		return nil, ErrStateV1Version
 	}
 	catHash, err := readString(r)
@@ -3451,6 +3495,85 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		wind.Changed = byteToBool(changedB)
 		wind.Pending = byteToBool(pendingB)
 		st.Wind = wind
+		if ver >= StateV1Version11 {
+			// Meteor [08 "Meteor showers"] OW-3-Q
+			var met MeteorSnapshot
+			enB, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			acB, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			var ns, se, nh uint32
+			if err := binary.Read(r, binary.LittleEndian, &ns); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &se); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &nh); err != nil {
+				return nil, err
+			}
+			var ox, oz, tx, tz int32
+			if err := binary.Read(r, binary.LittleEndian, &ox); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &oz); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &tx); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &tz); err != nil {
+				return nil, err
+			}
+			wn, err := readString(r)
+			if err != nil {
+				return nil, err
+			}
+			var dens float64
+			if err := binary.Read(r, binary.LittleEndian, &dens); err != nil {
+				return nil, err
+			}
+			var rad, dur, itv, phd int32
+			if err := binary.Read(r, binary.LittleEndian, &rad); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &dur); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &itv); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(r, binary.LittleEndian, &phd); err != nil {
+				return nil, err
+			}
+			inB, err := r.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			met = MeteorSnapshot{
+				Enabled:       byteToBool(enB),
+				Active:        byteToBool(acB),
+				NextStrike:    ns,
+				StrikeEnds:    se,
+				NextHit:       nh,
+				OriginX:       ox,
+				OriginZ:       oz,
+				TargetX:       tx,
+				TargetZ:       tz,
+				WeaponName:    wn,
+				Density:       dens,
+				Radius:        rad,
+				DurationTicks: dur,
+				IntervalTicks: itv,
+				PerHitDelay:   phd,
+				Initialized:   byteToBool(inB),
+			}
+			st.Meteor = met
+		}
 		if ver >= 6 {
 			nLinks, err := readStateCount(r, "construction links", 8)
 			if err != nil {

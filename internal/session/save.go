@@ -688,6 +688,23 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 		st.Wind.Changed = changed
 		st.Wind.Pending = pending
 	}
+	// Meteor [08 "Meteor showers"] [06 §6.5] OW-3-Q
+	st.Meteor.Enabled = s.Meteor.Enabled
+	st.Meteor.Active = s.Meteor.Active
+	st.Meteor.NextStrike = s.Meteor.NextStrike
+	st.Meteor.StrikeEnds = s.Meteor.StrikeEnds
+	st.Meteor.NextHit = s.Meteor.NextHit
+	st.Meteor.OriginX = s.Meteor.OriginX
+	st.Meteor.OriginZ = s.Meteor.OriginZ
+	st.Meteor.TargetX = s.Meteor.TargetX
+	st.Meteor.TargetZ = s.Meteor.TargetZ
+	st.Meteor.WeaponName = s.Meteor.WeaponName
+	st.Meteor.Density = s.Meteor.Density
+	st.Meteor.Radius = s.Meteor.Radius
+	st.Meteor.DurationTicks = s.Meteor.DurationTicks
+	st.Meteor.IntervalTicks = s.Meteor.IntervalTicks
+	st.Meteor.PerHitDelay = s.Meteor.PerHitDelay
+	st.Meteor.Initialized = s.Meteor.Initialized
 	// Construction builder-product links [05 C18][RS-10] — canonical sorted, no hooks
 	if s.Build != nil {
 		links := s.Build.SnapshotLinks()
@@ -738,6 +755,32 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 	// Wind
 	if s.Wind != nil {
 		s.Wind.RestoreSnapshot(st.Wind.Min, st.Wind.Max, st.Wind.Strength, st.Wind.Heading, st.Wind.Scalar, st.Wind.DirX, st.Wind.DirZ, st.Wind.NextChange, st.Wind.LastChange, st.Wind.Changed, st.Wind.Pending)
+	}
+	// Meteor [08 "Meteor showers"] [06 §6.5] OW-3-Q
+	s.Meteor.Enabled = st.Meteor.Enabled
+	s.Meteor.Active = st.Meteor.Active
+	s.Meteor.NextStrike = st.Meteor.NextStrike
+	s.Meteor.StrikeEnds = st.Meteor.StrikeEnds
+	s.Meteor.NextHit = st.Meteor.NextHit
+	s.Meteor.OriginX = st.Meteor.OriginX
+	s.Meteor.OriginZ = st.Meteor.OriginZ
+	s.Meteor.TargetX = st.Meteor.TargetX
+	s.Meteor.TargetZ = st.Meteor.TargetZ
+	s.Meteor.WeaponName = st.Meteor.WeaponName
+	s.Meteor.Density = st.Meteor.Density
+	s.Meteor.Radius = st.Meteor.Radius
+	s.Meteor.DurationTicks = st.Meteor.DurationTicks
+	s.Meteor.IntervalTicks = st.Meteor.IntervalTicks
+	s.Meteor.PerHitDelay = st.Meteor.PerHitDelay
+	s.Meteor.Initialized = st.Meteor.Initialized
+	if s.Meteor.WeaponName != "" && s.Catalog != nil && s.Catalog.Weapons != nil {
+		s.Meteor.Weapon = combat.ResolveMeteorWeapon(s.Meteor.WeaponName, s.Catalog.Weapons)
+		if s.Meteor.Weapon == nil {
+			// Fallback keep disabled if weapon not found but name persisted; treat as disabled until catalog provides it.
+			// Preserve Enabled as persisted; weapon nil will prevent spawns deterministically even if Enabled true.
+		}
+	} else {
+		s.Meteor.Weapon = nil
 	}
 	// Latch
 	s.Latch.Countdown = st.Latch.Countdown

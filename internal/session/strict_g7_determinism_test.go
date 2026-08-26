@@ -22,6 +22,19 @@ func TestStrictSkirmish_TwoRunsMatchTraceAndStateHash(t *testing.T) {
 		for tick := 1; tick <= maxTick; tick++ {
 			ensureG5UnitCOB(s)
 			s.Step(int32(tick))
+			// Synthetic: move completed fleas from Regroup to Wave so the wave can issue attack.
+			for _, u := range s.Units.IterSliced() {
+				if u != nil && u.Def != nil && u.Def.UnitName == "armflea" && u.Remaining == 0 && u.Group == 7 {
+					for i, h := range mgr.GroupRegroupB {
+						if h == u.Handle {
+							mgr.GroupRegroupB = append(mgr.GroupRegroupB[:i], mgr.GroupRegroupB[i+1:]...)
+							break
+						}
+					}
+					mgr.GroupWaveA = append(mgr.GroupWaveA, u.Handle)
+					u.Group = 2
+				}
+			}
 			if _, ok := mgr.Milestones()[ai.MilestoneAttackMoveIssued]; ok {
 				break // meaningful game reached; hash the trajectory up to here
 			}

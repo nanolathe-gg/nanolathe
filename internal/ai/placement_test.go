@@ -416,8 +416,11 @@ func TestPlacementResultEqualsQueuedSite(t *testing.T) {
 	if captured.X != res.WorldX || captured.Z != res.WorldZ {
 		t.Fatalf("queued site %d,%d != validated result %d,%d bit-for-bit [RS-11]", captured.X, captured.Z, res.WorldX, res.WorldZ)
 	}
-	if world.WorldToCell(captured.X) != res.CellX || world.WorldToCell(captured.Z) != res.CellZ {
-		t.Fatalf("cell mismatch queued %d,%d result %d,%d", world.WorldToCell(captured.X), world.WorldToCell(captured.Z), res.CellX, res.CellZ)
+	// The queued site's world coords, when snapped, must equal the validated anchor cell [RS-11][07 §9].
+	extentCheck, _ := world.NewFootprintExtent(int32(res.FootX), int32(res.FootZ))
+	anchorCheck, _ := world.SnapFootprintAnchor(captured.X, captured.Z, extentCheck)
+	if anchorCheck.CellX() != res.CellX || anchorCheck.CellZ() != res.CellZ {
+		t.Fatalf("cell mismatch queued snapped %d,%d result %d,%d", anchorCheck.CellX(), anchorCheck.CellZ(), res.CellX, res.CellZ)
 	}
 	if res.FootX != 2 || res.FootZ != 2 {
 		t.Fatalf("footprint mismatch %dx%d want 2x2", res.FootX, res.FootZ)

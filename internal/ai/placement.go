@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -371,74 +372,104 @@ func extractorHelperB(m placementManager, defKey string, surfaceMetal int32, ter
 			trialReasons = append(trialReasons, ReasonOutOfBounds)
 			continue
 		}
-		worldX := world.CellToWorld(cx)
-		worldZ := world.CellToWorld(cz)
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// Record reason codes for each failed trial without changing RNG draws [RS-11][I4].
-		if yard != nil {
-			if err := ter.ValidatePlacement(cx, cz, yard, footX, footZ, 0); err != nil {
-				trialReasons = append(trialReasons, ReasonBlocked)
-				continue
+		worldXRaw := world.CellToWorld(cx)
+		worldZRaw := world.CellToWorld(cz)
+		worldX := worldXRaw
+		worldZ := worldZRaw
+		// Validate via canonical placement legality CheckPlacement with proper profile [R-P0-08][07 §9].
+		// AI preview must use the same rules as construction's placementRules so a preview-legal site is not
+		// silently refused in-sim (C-8). Use the compiled movement/FBI profile and the snapped rectangle
+		// so the validated anchor matches what construction's SnapFootprintAnchor will derive from the same Goal.
+		// Compute placement rules for this def (mirrors construction.placementRules) [04 §6.1][02 "Movement class record"].
+		var rules world.PlacementRules
+		var isMobile bool
+		var defForRules *content.UnitDef
+		if mgrReal, ok := m.(*Manager); ok && mgrReal != nil && mgrReal.Catalog != nil {
+			if d, ok2 := mgrReal.Catalog.Unit(canonicalKey(defKey)); ok2 && d != nil {
+				defForRules = d
 			}
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// If limit is small and yard is permissive, we still succeed for test purposes.
-			_ = limit
-			// Success: return exact validated candidate site [RS-11]
-			return PlacementResult{
-				Valid:        true,
-				Helper:       HelperB,
-				Reason:       ReasonSuccess,
-				WorldX:       worldX,
-				WorldZ:       worldZ,
-				CellX:        cx,
-				CellZ:        cz,
-				FootX:        footX,
-				FootZ:        footZ,
-				Score:        0,
-				Limit:        limit,
-				Attempts:     attempt + 1,
-				TrialReasons: append([]ReasonCode(nil), trialReasons...),
-				Proof:        nil,
+		}
+		if defForRules != nil {
+			rules.Waterline = defForRules.Waterline
+			if defForRules.MovementClass != "" {
+				if mc, ok := m.(*Manager).Catalog.Movement[content.CanonicalKey(defForRules.MovementClass)]; ok && mc != nil {
+					rules.MaxSlope = mc.MaxSlope
+					rules.MaxWaterSlope = mc.MaxWaterSlope
+					rules.MaxWaterDepth = mc.MaxWaterDepth
+					rules.MinWaterDepth = mc.MinWaterDepth
+					rules.ProfileResolved = true
+				}
+			} else if !defForRules.BMCode {
+				rules.MaxSlope = defForRules.MaxSlope
+				rules.MaxWaterDepth = defForRules.MaxWaterDepth
+				rules.MinWaterDepth = defForRules.MinWaterDepth
+				rules.ProfileResolved = true
 			}
-		} else if ter != nil && yard == nil {
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// No yard to validate but footprint valid: treat as success at computed cell (permissive fallback for empty yard).
-			return PlacementResult{
-				Valid:        true,
-				Helper:       HelperB,
-				Reason:       ReasonSuccess,
-				WorldX:       worldX,
-				WorldZ:       worldZ,
-				CellX:        cx,
-				CellZ:        cz,
-				FootX:        footX,
-				FootZ:        footZ,
-				Score:        0,
-				Limit:        limit,
-				Attempts:     attempt + 1,
-				TrialReasons: append([]ReasonCode(nil), trialReasons...),
-				Proof:        nil,
+			// Determine mobile vs building for CheckPlacement: building has yard, mobile is yard-empty and move-capable.
+			if yard != nil {
+				isMobile = false
+			} else {
+				// Yard empty (or parse failed) => mobile inline footprint if move-capable, else treat as building without yard (should not happen for retail buildings).
+				if defForRules.BMCode || defForRules.CanMove || defForRules.MaxVelocity > 0 {
+					isMobile = true
+					// For mobile, re-derive MaxSlope/MaxWaterSlope from MC if available for slope selection [04 §6.1].
+					if defForRules.MovementClass != "" {
+						if mc, ok := m.(*Manager).Catalog.Movement[content.CanonicalKey(defForRules.MovementClass)]; ok && mc != nil {
+							rules.MaxSlope = mc.MaxSlope
+							rules.MaxWaterSlope = mc.MaxWaterSlope
+							rules.MaxWaterDepth = mc.MaxWaterDepth
+							rules.MinWaterDepth = mc.MinWaterDepth
+							rules.ProfileResolved = true
+						}
+					}
+				} else {
+					isMobile = false
+				}
 			}
 		} else {
-			// No terrain: succeed at computed site
-			return PlacementResult{
-				Valid:        true,
-				Helper:       HelperB,
-				Reason:       ReasonSuccess,
-				WorldX:       worldX,
-				WorldZ:       worldZ,
-				CellX:        cx,
-				CellZ:        cz,
-				FootX:        footX,
-				FootZ:        footZ,
-				Score:        0,
-				Limit:        limit,
-				Attempts:     attempt + 1,
-				TrialReasons: append([]ReasonCode(nil), trialReasons...),
-				Proof:        nil,
-			}
+			// No def: treat as building without profile (permissive fallback for synthetic tests without catalog) [RS-11].
+			rules.ProfileResolved = false
+			isMobile = yard == nil
+		}
+		// Snap the Goal to the footprint anchor exactly as construction's handleMobileState2 does [07 §9].
+		// This ensures the validated rectangle is the same one construction will check from the same Goal.
+		extentSnap, errExt := world.NewFootprintExtent(int32(footX), int32(footZ))
+		if errExt != nil {
+			trialReasons = append(trialReasons, ReasonInvalidFootprint)
+			continue
+		}
+		anchorSnap, errSnap := world.SnapFootprintAnchor(worldX, worldZ, extentSnap)
+		if errSnap != nil {
+			trialReasons = append(trialReasons, ReasonOutOfBounds)
+			continue
+		}
+		rectSnap, errRect := world.NewFootprintRect(anchorSnap, extentSnap)
+		if errRect != nil {
+			trialReasons = append(trialReasons, ReasonOutOfBounds)
+			continue
+		}
+		_, errCheck := ter.CheckPlacement(world.PlacementQuery{Rect: rectSnap, Yard: yard, Rules: rules, Mobile: isMobile})
+		if errCheck != nil {
+			trialReasons = append(trialReasons, ReasonBlocked)
+			continue
+		}
+		_ = limit
+		// Success: return the original Goal world coords; construction's handleMobileState2 will snap the same Goal to the same anchor.
+		return PlacementResult{
+			Valid:        true,
+			Helper:       HelperB,
+			Reason:       ReasonSuccess,
+			WorldX:       worldX,
+			WorldZ:       worldZ,
+			CellX:        anchorSnap.CellX(),
+			CellZ:        anchorSnap.CellZ(),
+			FootX:        footX,
+			FootZ:        footZ,
+			Score:        0,
+			Limit:        limit,
+			Attempts:     attempt + 1,
+			TrialReasons: append([]ReasonCode(nil), trialReasons...),
+			Proof:        nil,
 		}
 	}
 	// Exhausted 30 trials [P0-03 §3.3]

@@ -2,6 +2,7 @@ package ai
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
@@ -592,25 +593,46 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 		}
 	}
 	if !found || bestBuilder == nil {
+		// Debug: log why no builder found (for TestDebugG5LabQueue)
+		// fmt.Printf("doConstruction tick %d found %v bestBuilder %v GroupConstruction %v\n", tick, found, bestBuilder, m.GroupConstruction)
 		return
 	}
 	builder := bestBuilder
 	cand := bestCand
+	// Debug log for G5
+	// fmt.Printf("doConstruction tick %d builder %d cand %s score %d isFactory %v isTargetMobile %v\n", tick, builder.Handle, cand.DefKey, cand.Score, isFactoryBuilder, isTargetMobile)
 	// P0-07: typed build path [P0-07] ON-06 F-P0-004.
 	// Mobile builders use Place with MobileSite site coordinates; factories use FactoryQueue without site.
 	// Factory vs mobile is determined by both builder immobility and target mobility: factories (immobile builders) producing mobile units use FactoryQueue [P0-07].
 	// Buildings (non-mobile targets) always require site placement even if builder is factory-like, preserving yard validation [04 §6.2][P0-03].
 	// Issues orders ONLY through typed queue and descriptor registry [PLAN_11 C12] [08].
 	// No privileged mutation. Chain Select → Place → QueueBuildTyped [PLAN_11 C8+C12] [P0-07].
-	isFactoryBuilder := builder.Def != nil && builder.Def.Builder && !builder.Def.CanMove
+	// Factory vs mobile determined by building-class (yard-bearing) vs mobile [R-P0-08][07 §9][SC21].
+	// Retail BMCode 0 (structure with yard) vs 1 (mobile) correlates with yard presence; yard is the
+	// direct placement discriminator (building needs site, mobile does not). Use yard as primary,
+	// falling back to CanMove/MaxVelocity for synthetic fixtures that omit yard but are mobile.
+	isFactoryBuilder := builder.Def != nil && builder.Def.Builder && (strings.TrimSpace(builder.Def.YardMap) != "" || !builder.Def.CanMove)
 	isTargetMobile := false
 	if m.Catalog != nil {
 		if def, ok := m.Catalog.Unit(cand.DefKey); ok && def != nil {
-			isTargetMobile = def.CanMove || def.MaxVelocity > 0
+			// Target is mobile if it is not a builder and can move; builders with yard are factories/buildings even if CanMove true (retail labs have CanMove true).
+			if !def.Builder && (def.BMCode || def.CanMove || def.MaxVelocity > 0) {
+				isTargetMobile = true
+			} else if strings.TrimSpace(def.YardMap) == "" && (def.BMCode || def.CanMove || def.MaxVelocity > 0) {
+				isTargetMobile = true
+			} else {
+				isTargetMobile = false
+			}
 		}
 	} else if m.Strategic.Catalog != nil {
 		if def, ok := m.Strategic.Catalog.Unit(cand.DefKey); ok && def != nil {
-			isTargetMobile = def.CanMove || def.MaxVelocity > 0
+			if !def.Builder && (def.BMCode || def.CanMove || def.MaxVelocity > 0) {
+				isTargetMobile = true
+			} else if strings.TrimSpace(def.YardMap) == "" && (def.BMCode || def.CanMove || def.MaxVelocity > 0) {
+				isTargetMobile = true
+			} else {
+				isTargetMobile = false
+			}
 		}
 	}
 	if isFactoryBuilder && isTargetMobile {

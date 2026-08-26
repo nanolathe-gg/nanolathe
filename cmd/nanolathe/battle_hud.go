@@ -401,7 +401,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 	}
 	_ = prev
 	h.drawSidePage(c, b, offset, cur)
-	if b != nil && b.sess != nil && b.sess.Clock != nil && b.sess.Clock.Paused {
+	if ok && cur != nil && cur.Paused {
 		h.drawPausedTitle(c)
 	}
 	h.drawBattleMenu(c, b)

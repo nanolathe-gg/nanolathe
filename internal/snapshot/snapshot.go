@@ -375,6 +375,10 @@ type SoundEvent struct {
 // mover; no other dispatch may write Frame.Units concurrently.
 type Frame struct {
 	Tick uint32
+	// Paused is the committed clock state for this frame. Presentation must
+	// read it from the immutable snapshot rather than consulting the live
+	// simulation clock [I6].
+	Paused bool
 	// Units — single writer: phase-06/GATE2-SLICE Gate-2 walker slice until WU-07-7 [PHASES Gate 2].
 	Units                       []UnitView
 	Projectiles                 []ProjectileView
@@ -608,6 +612,7 @@ func cloneFrame(f *Frame) Frame {
 	}
 	nf := Frame{
 		Tick:        f.Tick,
+		Paused:      f.Paused,
 		Result:      r,
 		Selection:   f.Selection,
 		CommandPage: f.CommandPage,

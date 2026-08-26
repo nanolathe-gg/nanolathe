@@ -909,15 +909,10 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) ([]path.Poi
 		// one profile across the world paths a ship, a hover and a Krogoth as
 		// the same 1x1 ground scout [04 §6.1] [04 §7.1].
 		profile := s.ProfileFor(r.Unit)
+		// [04 §8.2] mobile units are NOT A* walls; pathing runs on the static layer (terrain + static features + yard/building occupancy) with arbitration at commit (MaxVelocity/2 cap + clamped nudge) [04 §8.2] C23 C24. Mobile occupancy is therefore not a search wall; mover-vs-mover contention is resolved at commit time via the OccupancyGrid validator and replanDynamicBlock policy (see SC22).
 		isPassable := func(c path.Cell) bool {
 			if s.Terrain != nil {
 				if !profile.IsPassableFootprint(s.Terrain, c.X, c.Z) {
-					return false
-				}
-			}
-			if s.Grid != nil {
-				mc := Cell{X: c.X, Z: c.Z}
-				if occ, ok := s.Grid.OccupantAt(mc); ok && occ != int(r.Unit) {
 					return false
 				}
 			}

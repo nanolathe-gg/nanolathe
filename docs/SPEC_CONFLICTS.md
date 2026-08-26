@@ -551,6 +551,26 @@ BMcode-zero gate was right all along.
 
 ---
 
+## SC22 — Static-layer path search and Nanolathe dynamic-block / retry policy [OW-3-O]
+
+**Spec** `[04 §8.2]` (static and mobile collision): mobile units are **not** A* walls; path search runs on the static layer (terrain + static features + yard/building occupancy) and arbitrates at commit `[04 §8.2]`; supported inference adds "mobile units are hard blockers at the movement commit stage even though they are not inserted into the static A* layer." `[04 §7.4]` dynamic blockers bump a profile revision, heap entries are not purged eagerly, passability is rechecked lazily at expansion (a previously open node can become blocked without rebuilding the heap).
+
+**Observed:** `internal/movement/integrate.go:searchFunc` previously checked `OccupancyGrid.OccupantAt` for every neighbor and rejected occupied cells, turning transient traffic into static obstacles and feeding an invented retry/removal policy (needless rejected routes around movers, then path-failure retry count). `OccupancyGrid.Revision/Bump` (`internal/movement/collision.go:Revision/Bump/BumpRevision`) had no explicit consumer beyond diagnostics; search already rechecks `isPassable` lazily at expansion, so an explicit revision guard is unnecessary, but `Stamp`/`Clear` correctly bumped `rev` per `[04 §7.4]` C18 and tests locked the bump. `landPathFailureRetryInterval = 30` and `landPathFailureMaxRetries = 1` (`integrate.go:127-128`) and the `rec.Retries >= 1` hard-coded check in `internal/session/loop.go:1149` are Nanolathe retry policy where retail's dynamic-blocker retry cadence/count remain unresolved `[R-P1-10]`.
+
+**Decision:** Align search with the static layer: `searchFunc.isPassable` now checks only `Profile.IsPassableFootprint` (terrain + feature/slope/water per `[04 §6.1]`) and **no longer** checks `OccupancyGrid` occupancy — mobile occupancy is ignored at search time `[04 §8.2]`. Mover-vs-mover contention is resolved only at commit via the footprint validator row-major scan `[04 §8.2]` C25, the `MaxVelocity/2` cap + fixed-trig recompute + `±0x7FFFF` clamp without restamp `[04 §8.2]` C24 (existing `ApplyBlocked` stays), and the synchronous clear/commit/stamp pipeline `[04 §8.2]` C22. Building/yard occupancy remains via terrain profile and construction terrain stamps (static); transient mobile occupancy is ignored at search time. `OccupancyGrid.Revision/Bump` is **retained**; its lazy-revalidation consumer is the search expansion's per-node `isPassable` recheck `[04 §7.4]` (no eager purge, no explicit revision comparison needed). `Stamp`/`Clear`/`Block`/`Unblock` continue to bump `rev` for diagnostics and future profile versioning.
+
+Deliberate Nanolathe policy divergences retained with `I9`/`I11` hygiene (one-behavior, unknowns stay unknown):
+
+* `replanDynamicBlock` (`integrate.go:replanDynamicBlock` — deterministic 1-tick cadence `avoidNext = tick+1`, lower pool slot wins, higher slot replans from current anchor to the order goal via `ReplanMove` preserving active-order identity) — explicit Nanolathe avoidance because retail has no recovered automatic repath/priority/wait-queue in the bounded mover graph `[04 §8.2]` negative-bounded. No pushing/slide/yield.
+
+* `landPathFailureRetryInterval = 30`, `landPathFailureMaxRetries = 1` (`integrate.go`) plus `internal/session/loop.go:1149` `if rec.Retries >= 1` — explicit Nanolathe failed-path recovery where retail's retry cadence/count remain unresolved `[R-P1-10]`. The hard-coded `>=1` in `loop.go` is session-owned, so per `OW-3-O` ownership it is **not** changed here; it mirrors the movement-owned constant and is documented as policy, not spec. If the hunk were movement-owned it would reference `landPathFailureMaxRetries`; as session-owned it is reported and left intact.
+
+This is an `I9`/`I11` divergence: bounded retry and priority replans that reject or reroute where retail would have accepted only to keep determinism and avoid unbounded growth; no retail constant is invented.
+
+**Falsifies:** the previous mobile-as-wall search behavior; the previous assumption that `Revision` had no consumer (its consumer is lazy recheck).
+
+---
+
 ## How to add to this file
 
 One section per conflict: what the spec says, what was observed and how, the
