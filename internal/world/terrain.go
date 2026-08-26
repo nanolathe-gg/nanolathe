@@ -26,14 +26,18 @@ const (
 type Terrain struct {
 	CellW, CellH int32
 	Version      Version
-	TileIndices  []uint16      // (CellW/2) x (CellH/2) row-major [03 §2.2] C5
-	TileSet      [][1024]byte  // Tiles x 1024 bytes [03 §2.2] C5
-	Plot         []PlotCell    // CellW x CellH row-major [03 §2.2] C6
-	SeaLevel     uint8         // header byte [03 §2.2] C9
-	Gravity      numeric.Fixed // per-tick gravity [03 §2.2] C4
-	WindMin      int32         // [03 §2.2] C3/C4
-	WindMax      int32         // [03 §2.2] C3/C4
-	Tidal        numeric.Fixed // [03 §2.2] C4
+	TileIndices  []uint16     // (CellW/2) x (CellH/2) row-major [03 §2.2] C5
+	TileSet      [][1024]byte // Tiles x 1024 bytes [03 §2.2] C5
+	Plot         []PlotCell   // CellW x CellH row-major [03 §2.2] C6
+	SeaLevel     uint8        // header byte [03 §2.2] C9
+
+	// losWords is the lazily built per-visibility-tile height table the
+	// terrain-ray LOS raster reads [03 §3.2]; see buildLOSHeightWords.
+	losWords []uint16
+	Gravity  numeric.Fixed // per-tick gravity [03 §2.2] C4
+	WindMin  int32         // [03 §2.2] C3/C4
+	WindMax  int32         // [03 §2.2] C3/C4
+	Tidal    numeric.Fixed // [03 §2.2] C4
 
 	// Playable insets derived at void-fixup time [P0-17]: PlayRight = Wpix-32, PlayBottom = Hpix-128.
 	PlayRight  int32 // Wpix-32 in map pixels, Wpix=CellW*16 [P0-17]
@@ -305,43 +309,159 @@ func (t *Terrain) CoarseHeightAt(cx, cz int32) numeric.Fixed {
 // byte is tested with the identical comparison afterwards to decide whether the
 // retained horizon advances.
 //
-// TODO(question): [03 §3.2/§2.3] establish that each byte is aggregated over
-// the tile but neither names the aggregates. This returns (minimum, maximum)
-// over the tile's four cells — minimum is the only choice that lets sight pass
-// over a tile's low point for admission, and maximum is the only choice that
-// makes the horizon occlude like terrain (a ridge crossing one cell of a tile
-// must block the ray; an average would let sight through it). Neither is
-// attested; PLAN_05 records the aggregate as an open input.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// the LOW byte is a MAXIMUM and the HIGH byte a MINIMUM, seeded 0x00 / 0xFF and
+// finished with a 1/3-2/3 blend floored at sea level. Reading them the other
+// way round — the intuitive (min, max) — is the maximally occlusive choice and
+// litters flat ground with false shadows.
 func (t *Terrain) LOSHeightWord(vx, vz int32) (low, high uint8) {
 	if t == nil || t.Plot == nil || t.CellW <= 0 || t.CellH <= 0 {
 		return 0, 0
 	}
-	cx, cz := vx*2, vz*2
-	if cx < 0 || cz < 0 || cx >= t.CellW || cz >= t.CellH {
+	w, h := t.CellW/2, t.CellH/2
+	if w <= 0 || h <= 0 || vx < 0 || vz < 0 || vx >= w || vz >= h {
 		return 0, 0
 	}
-	low, high = 255, 0
-	seen := false
-	for dz := int32(0); dz < 2; dz++ {
-		for dx := int32(0); dx < 2; dx++ {
-			px, pz := cx+dx, cz+dz
-			if px >= t.CellW || pz >= t.CellH {
-				continue
+	if len(t.losWords) != int(w*h) {
+		t.buildLOSHeightWords()
+	}
+	word := t.losWords[vz*w+vx]
+	return uint8(word), uint8(word >> 8)
+}
+
+// SetLOSHeightWord installs one visibility tile's LOS height word directly,
+// building the table first when it is not yet resident.
+//
+// It exists so fixtures and probes can drive the terrain-ray horizon rule from
+// exact byte pairs instead of reverse-engineering authored heights through the
+// scatter in buildLOSHeightWords. The simulation never calls it.
+func (t *Terrain) SetLOSHeightWord(vx, vz int32, low, high uint8) {
+	if t == nil || t.CellW <= 0 || t.CellH <= 0 {
+		return
+	}
+	w, h := t.CellW/2, t.CellH/2
+	if w <= 0 || h <= 0 || vx < 0 || vz < 0 || vx >= w || vz >= h {
+		return
+	}
+	if len(t.losWords) != int(w*h) {
+		t.buildLOSHeightWords()
+	}
+	if len(t.losWords) != int(w*h) {
+		return
+	}
+	t.losWords[vz*w+vx] = uint16(low) | uint16(high)<<8
+}
+
+// InvalidateLOSHeightWords drops the cached LOS height table so the next query
+// rebuilds it. Retail rebuilds lazily behind a mode bit [03 §3.2]; terrain
+// deformation is the event that clears it.
+func (t *Terrain) InvalidateLOSHeightWords() {
+	if t != nil {
+		t.losWords = nil
+	}
+}
+
+// buildLOSHeightWords fills the per-visibility-tile height table exactly as
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//
+// The table is TileW x TileH u16 words seeded low=0x00, high=0xFF, so the low
+// byte accumulates a MAXIMUM and the high byte a MINIMUM. Cells are SCATTERED
+// into it rather than gathered: iterating columns then rows, each attribute
+// cell at (x, z) with height cellH projects to
+//
+//	zs    = z*16 - cellH/2          (the beam shear, as the observer's own
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//
+// and contributes to tile columns (x-1)>>1 and x>>1 at that row, plus the two
+// tiles the PREVIOUS row's cell in this column resolved to — the carry is what
+// keeps tiles from being skipped where the shear jumps a row. Cells whose
+// tileZ is negative contribute to the carried tiles only.
+//
+// Two values are scattered per cell: first the perspective-scaled
+//
+//	value = ((tileZ*32 + 31) * cellH) / (zs + 31)
+//
+// then the raw cellH. Since value <= cellH, the net effect is low = max of raw
+// heights and high = min of scaled values over the neighbourhood.
+//
+// A final pass blends and floors each word:
+//
+//	low  = max(SeaLevel, (high + 2*low) / 3)
+//	high = max(SeaLevel, (low  + 2*high) / 3)
+//
+// with truncating division, the low result feeding the high computation from
+// the ORIGINAL bytes (retail computes both from the pre-blend pair).
+func (t *Terrain) buildLOSHeightWords() {
+	w, h := t.CellW/2, t.CellH/2
+	if w <= 0 || h <= 0 {
+		t.losWords = nil
+		return
+	}
+	words := make([]uint16, int(w)*int(h))
+	for i := range words {
+		words[i] = 0xFF00 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	}
+	// scatter applies the low-maximum / high-minimum update to one tile.
+	scatter := func(index int, v int32) {
+		if index < 0 {
+			return
+		}
+		word := words[index]
+		lo, hi := int32(uint8(word)), int32(uint8(word>>8))
+		if v > lo { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			lo = v
+		}
+		if v < hi { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			hi = v
+		}
+		words[index] = uint16(lo) | uint16(hi)<<8
+	}
+	tileAt := func(col, row int32) int {
+		if col < 0 || row < 0 || col >= w || row >= h {
+			return -1
+		}
+		return int(row*w + col)
+	}
+	for x := int32(0); x < t.CellW; x++ {
+		colA, colB := (x-1)>>1, x>>1
+		carryA, carryB := -1, -1
+		zPix := int32(0)
+		for z := int32(0); z < t.CellH; z++ {
+			cellH := int32(t.Plot[z*t.CellW+x].Height())
+			zs := zPix - cellH>>1 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			tileZ := zs >> 5
+			if tileZ > -1 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				value := ((tileZ*32 + 31) * cellH) / (zs + 31)
+				scatter(carryA, value)
+				scatter(carryB, value)
+				carryA = tileAt(colA, tileZ)
+				scatter(carryA, value)
+				carryB = -1
+				if colA != colB {
+					carryB = tileAt(colB, tileZ)
+					scatter(carryB, value)
+				}
 			}
-			h := t.Plot[pz*t.CellW+px].Height()
-			if h < low {
-				low = h
-			}
-			if h > high {
-				high = h
-			}
-			seen = true
+			// The raw height reaches the same two tiles on both paths.
+			scatter(carryA, cellH)
+			scatter(carryB, cellH)
+			zPix += 16
 		}
 	}
-	if !seen {
-		return 0, 0
+	sea := int32(t.SeaLevel)
+	for i, word := range words {
+		lo, hi := int32(uint8(word)), int32(uint8(word>>8))
+		newLo := (hi + 2*lo) / 3 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		newHi := (lo + 2*hi) / 3
+		if newLo <= sea {
+			newLo = sea
+		}
+		if newHi <= sea {
+			newHi = sea
+		}
+		words[i] = uint16(newLo) | uint16(newHi)<<8
 	}
-	return low, high
+	t.losWords = words
 }
 
 // gravityFromAuthored converts an authored OTA/TNT gravity integer into

@@ -137,25 +137,47 @@ func TestSurfaceMetalSeeding(t *testing.T) {
 	}
 }
 
-// TestLOSHeightAggregates locks R8: the LOS query aggregates over the 2x2 cells
-// a 32-pixel visibility tile covers rather than sampling the tile origin
-// [03 §2.3], [03 §2.1]. The high byte (horizon) is the tile maximum; the low
-// byte (admission) is the tile minimum.
+// TestLOSHeightAggregates locks the polarity of the LOS height word, which the
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// high=0xFF and updated with `low = max`, `high = min`, so the LOW byte
+// (admission) is the neighbourhood MAXIMUM and the HIGH byte (horizon advance)
+// its MINIMUM.
+//
+// Reading them the other way round — the intuitive (min, max) — is the
+// maximally occlusive pairing: admission gets the lowest candidate and the
+// horizon the highest retained slope, which scatters false shadows across
+// ground retail leaves fully visible.
 func TestLOSHeightAggregates(t *testing.T) {
-	attrs := flat(4, 4, 10)
-	attrs[1*4+1].Height = 90 // a ridge inside tile (0,0), not at its origin
-	ter := synth(t, 4, 4, attrs, nil)
+	attrs := flat(8, 8, 10)
+	attrs[3*8+3].Height = 90 // a ridge away from any tile origin
+	ter := synth(t, 8, 8, attrs, nil)
 
-	lo, hi := ter.LOSHeightWord(0, 0)
-	if hi != 90 {
-		t.Fatalf("LOSHeightWord(0,0) high = %d, want 90 (a ridge off the tile origin must still occlude)", hi)
+	// Flat ground away from the ridge: the two bytes converge. They land a
+	// little under the authored height because the scattered value is scaled by
+	// (tileZ*32+31)/(zs+31) <= 1 and the tail blends the pair by thirds.
+	lo, hi := ter.LOSHeightWord(3, 3)
+	if lo != hi || lo < 9 || lo > 10 {
+		t.Fatalf("flat tile word = (%d,%d), want a converged pair near 10", lo, hi)
 	}
-	if lo != 10 {
-		t.Fatalf("LOSHeightWord(0,0) low = %d, want 10", lo)
+
+	// Somewhere the ridge reaches, the maximum lands in LOW and the minimum in
+	// HIGH — never the reverse.
+	ridged := false
+	for vz := int32(0); vz < 4; vz++ {
+		for vx := int32(0); vx < 4; vx++ {
+			lo, hi := ter.LOSHeightWord(vx, vz)
+			if hi > lo {
+				t.Fatalf("tile (%d,%d) word = (%d,%d): high must never exceed low", vx, vz, lo, hi)
+			}
+			if lo > 10 {
+				ridged = true
+			}
+		}
 	}
-	if _, hi = ter.LOSHeightWord(1, 1); hi != 10 {
-		t.Fatalf("LOSHeightWord(1,1) high = %d, want 10", hi)
+	if !ridged {
+		t.Fatal("the ridge must raise the low byte of some tile")
 	}
+
 	// It is a separate query from the bilinear one and must not be substituted.
 	if numeric := ter.HeightAt(0, 0); numeric == 90*65536 {
 		t.Fatal("HeightAt and LOSHeightWord must not agree on a ridge corner")

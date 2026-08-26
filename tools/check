@@ -1,5 +1,5 @@
 #!/bin/sh
-# Pre-dispatch and pre-merge gate. See docs/ORCHESTRATION.md §5.
+# Pre-dispatch and pre-merge gate. See AGENTS.md §"Dispatching and reviewing sub-agents".
 set -e
 echo "==> gofmt"
 unformatted=$(gofmt -l . || true)

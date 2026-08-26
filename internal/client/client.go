@@ -76,7 +76,7 @@ type Client struct {
 	// wall-clock time never reaches the sim (I6) — only this presentation
 	// fraction derives from it.
 	runtime float64
-	// [PLAN_03 C16][REVIEW_OX_ALPHA S-2] tick-anchored alpha: runtime at last publish.
+	// [PLAN_03 C16] tick-anchored alpha: runtime at last publish.
 	tickBaseRuntime float64
 	lastPublishTick uint32
 	hasPublish      bool
@@ -103,7 +103,7 @@ type Client struct {
 	modelErrors    map[string]error    // model name -> last load error (presentation-only)
 	modelFallbacks map[uint16]struct{} // unit Slot -> logged fallback diagnostic
 
-	// Feature GAF presentation — sprite class [02 "Feature record"] [03 §5.1] [research/features/feature_rendering.md §2].
+	// Feature GAF presentation — sprite class [02 "Feature record"] [03 §5.1.1].
 	// Loaded lazily from anims/<filename>.gaf via modelFS; cache is presentation-only (I6).
 	featureGAFs   map[string]*formats.GAF      // lower filename -> GAF
 	featureFrames map[string]*formats.GAFFrame // lower "filename|seqname" -> frame
@@ -111,13 +111,13 @@ type Client struct {
 	featureCursor map[string]int               // lower "filename|seqname" -> anim cursor index for animating=1 [05]
 	featureYSort  bool                         // when true force Y-bucket sort for feature pass [03 §1]
 
-	// Fog overlay — anims/fog.gaf handles, presentation-only [03 §3.3] [rr-16 §9.1].
-	fogGAF      *formats.GAF         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	fogGray     [4]*formats.GAFEntry // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	fogBlack    [4]*formats.GAFEntry // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Fog overlay — anims/fog.gaf handles, presentation-only [03 §3.3].
+	fogGAF      *formats.GAF
+	fogGray     [4]*formats.GAFEntry // Gray1-4 variant family [03 §3.3]
+	fogBlack    [4]*formats.GAFEntry // Black1-4 variant family [03 §3.3]
 	fogLoaded   bool
 	fogLoadErr  error
-	ditheredFog bool // options byte bit6 0x40 DitheredFog [rr-16 §8]
+	ditheredFog bool // options byte bit6 0x40 DitheredFog [03 §3.3]
 
 	// Software cursor, drawn last over the composed surface [07 §8].
 	cursors *Cursors
@@ -205,7 +205,7 @@ func (c *Client) SetFNT(fnt *formats.FNT) { c.fnt = fnt }
 func (c *Client) SetSnapshot(b *snapshot.Buffer) {
 	if b != nil {
 		c.buffer = b
-		// Reset publish anchor so alpha re-anchors to the new session [PLAN_03 C16][REVIEW_OX_ALPHA S-2].
+		// Reset publish anchor so alpha re-anchors to the new session [PLAN_03 C16].
 		c.hasPublish = false
 		c.lastPublishTick = 0
 	}
@@ -250,15 +250,15 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.buildTextureIndex()
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// SetDitheredFog selects patterned current-fog rendering [03 §3.3]. When set,
+// hi==15 draws a checker and hi 1..14 uses patterned Gray GAF drawing; when
+// clear, both use their plain forms. The lo/Black family is always plain.
 func (c *Client) SetDitheredFog(v bool) { c.ditheredFog = v }
 
 // DitheredFog returns the current DitheredFog bit.
 func (c *Client) DitheredFog() bool { return c.ditheredFog }
 
-// ensureFogGAF loads anims/fog.gaf lazily and binds Gray1-4/Black1-4 [rr-16 §9.1].
+// ensureFogGAF loads anims/fog.gaf lazily and binds Gray1-4/Black1-4 [03 §3.3].
 // It is presentation-only and never touches sim state (I6).
 func (c *Client) ensureFogGAF() {
 	if c.fogLoaded || c.modelFS == nil {
@@ -488,77 +488,39 @@ func (c *Client) blitGAFFrame(frame *formats.GAFFrame, dstX, dstY int, isShadow 
 	}
 }
 
-// blitFogGAF blits a fog GAF frame for the cell whose screen rect origin is
-// (dstX,dstY) [rr-16 §6.2]. Retail subtracts the frame's signed 16-bit
-// XOffset/YOffset anchor fields from the destination before clipping
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// the quadrant geometry of the 14 fog frames lives entirely in those offsets.
-// It copies opaque indexed pixels directly (palette mapping at present time
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// no checker.
-func (c *Client) blitFogGAF(frame *formats.GAFFrame, dstX, dstY int) {
-	if frame == nil || c.indexed == nil {
-		return
-	}
-	dstX -= int(frame.XOffset) // retail anchor: dest = cell origin − frame offset
-	dstY -= int(frame.YOffset)
-	w := c.width
-	h := c.height
-	fw := int(frame.Width)
-	fh := int(frame.Height)
-	if fw <= 0 || fh <= 0 {
-		return
-	}
-	srcX0, srcY0 := 0, 0
-	if dstX < 0 {
-		srcX0 = -dstX
-		dstX = 0
-	}
-	if dstY < 0 {
-		srcY0 = -dstY
-		dstY = 0
-	}
-	if dstX >= w || dstY >= h {
-		return
-	}
-	copyW := fw - srcX0
-	copyH := fh - srcY0
-	if dstX+copyW > w {
-		copyW = w - dstX
-	}
-	if dstY+copyH > h {
-		copyH = h - dstY
-	}
-	if copyW <= 0 || copyH <= 0 {
-		return
-	}
-	for y := 0; y < copyH; y++ {
-		srcY := srcY0 + y
-		dstYPos := dstY + y
-		dstOff := dstYPos*w + dstX
-		srcRow := srcY*fw + srcX0
-		for x := 0; x < copyW; x++ {
-			idx := srcRow + x
-			if idx < 0 || idx >= len(frame.Pixels) {
-				continue
-			}
-			if idx < len(frame.Transparent) && frame.Transparent[idx] {
-				continue
-			}
-			pix := frame.Pixels[idx]
-			c.indexed[dstOff+x] = pix
-		}
-	}
-}
+// fogBlitMode selects what a fog GAF frame does to the pixels its non-key
+// mask covers. The mask itself is identical in all three: retail compares each
+// source pixel against the frame's ColorKey and skips the matches
+// [fmt gaf][R-RR16-A §3].
+type fogBlitMode uint8
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Same frame-offset anchoring as blitFogGAF; it skips every other pixel in a
-// 2×2 checker seeded by camera parity (camX+camZ)&1 [rr-16 §6.2].
-func (c *Client) blitFogGAFPatterned(frame *formats.GAFFrame, dstX, dstY int) {
+const (
+	// fogBlitBlack copies the source pixel — the Black family via
+	// its keyed raw blitter, whose art is palette index 0 [03 §3.3].
+	fogBlitBlack fogBlitMode = iota
+	// fogBlitGray remaps the destination through the GRAY TABLE and never
+	// writes the source pixel [03 §3.3][R-RR16-A §1].
+	fogBlitGray
+	// fogBlitPatterned writes literal index 0 on a 2-pixel checker — the
+	// dithered Gray variant, which steps x by two [03 §3.3].
+	fogBlitPatterned
+)
+
+// blitFogGAF blits a fog GAF frame for the cell whose screen rect origin is
+// (dstX,dstY) [03 §3.3]. Retail subtracts the frame's signed 16-bit
+// XOffset/YOffset anchor fields from the destination before clipping —
+// the quadrant geometry of the 14 fog frames lives entirely in those offsets.
+// The fog art is a mask: every frame is built from the color key (index 9) and
+// index 0, so what reaches the screen is decided by mode, not by the source
+// palette indices [R-RR16-A §3].
+func (c *Client) blitFogGAF(frame *formats.GAFFrame, dstX, dstY int, mode fogBlitMode) {
 	if frame == nil || c.indexed == nil {
 		return
 	}
-	dstX -= int(frame.XOffset) // retail anchor: dest = cell origin − frame offset
+	if mode == fogBlitGray && c.pal == nil {
+		return
+	}
+	dstX -= int(frame.XOffset) // retail anchor: dest = cell origin - frame offset
 	dstY -= int(frame.YOffset)
 	w := c.width
 	h := c.height
@@ -567,6 +529,7 @@ func (c *Client) blitFogGAFPatterned(frame *formats.GAFFrame, dstX, dstY int) {
 	if fw <= 0 || fh <= 0 {
 		return
 	}
+	// Checker phase seeded by camera parity (camX+camZ)&1 [03 §3.3].
 	parity := int32(0)
 	if c.cam != nil {
 		parity = (c.cam.X + c.cam.Z) & 1
@@ -600,29 +563,36 @@ func (c *Client) blitFogGAFPatterned(frame *formats.GAFFrame, dstX, dstY int) {
 		dstOff := dstYPos*w + dstX
 		srcRow := srcY*fw + srcX0
 		for x := 0; x < copyW; x++ {
-			// Checker: skip where (screenX+screenY+parity)&1==0 approximates retail's 2×2 block via AND 1 / ADD 2.
-			if ((int32(dstX+x) + int32(dstYPos) + parity) & 1) == 0 {
+			if mode == fogBlitPatterned && ((int32(dstX+x)+int32(dstYPos)+parity)&1) == 0 {
 				continue
 			}
 			idx := srcRow + x
 			if idx < 0 || idx >= len(frame.Pixels) {
 				continue
 			}
+			// Key pixels leave the destination alone; the decoder records the
+			// key match in Transparent [fmt gaf].
 			if idx < len(frame.Transparent) && frame.Transparent[idx] {
 				continue
 			}
-			pix := frame.Pixels[idx]
-			c.indexed[dstOff+x] = pix
+			switch mode {
+			case fogBlitGray:
+				c.indexed[dstOff+x] = c.pal.Gray[c.indexed[dstOff+x]]
+			case fogBlitPatterned:
+				c.indexed[dstOff+x] = 0
+			default:
+				c.indexed[dstOff+x] = frame.Pixels[idx]
+			}
 		}
 	}
 }
 
-// featureScreenPos computes the retail feature screen anchor [research/features/feature_rendering.md §3.2].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// featureScreenPos computes the retail feature screen anchor [03 §5.1.4].
+// It applies footprint centering and four-corner terrain-height averaging.
 // The snapshot already carries world-centered X,Z and Y=coarseHeight; we reuse WorldToScreen
 // for the shear and add footprint-half offset explicitly for non-centered callers.
 // When terrain is available the Y uses the averaged heights at the footprint's four corners
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// matching the four-corner averaging contract. Presentation-only (I6).
 func (c *Client) featureScreenPos(f snapshot.FeatureView) (int32, int32) {
 	if c.cam == nil {
 		// Fallback deterministic when no camera: use world high word directly [03 §2.5].
@@ -657,7 +627,7 @@ func (c *Client) featureScreenPos(f snapshot.FeatureView) (int32, int32) {
 	return sx, sy
 }
 
-// computeAlpha derives the render interpolation fraction anchored to publish cadence [PLAN_03 C16][REVIEW_OX_ALPHA S-2].
+// computeAlpha derives the render interpolation fraction anchored to publish cadence [PLAN_03 C16].
 // Previous free-run frac(runtime*30) could beat the 30 Hz publish cadence under burst; now anchored to last publish tick.
 func (c *Client) computeAlpha() float32 {
 	if !c.hasPublish {

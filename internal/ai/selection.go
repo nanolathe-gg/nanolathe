@@ -410,7 +410,7 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 			cv = ClassVector{C0: 40, C1: 0, C2: 0}
 		}
 		if !hit && os.Getenv("NANOLATHE_AI_DEBUG") != "" {
-			// Debug logging behind env to diagnose vector hit misses [REVIEW_OX_ALPHA P2].
+			// Debug logging behind env to diagnose vector hit misses .
 			// Ensure vector lookups hit real entries; fallback indicates catalog vs strategic key mismatch.
 			fmt.Fprintf(os.Stderr, "ai: class-vector miss ck=%q candidate=%q builder=%q vectors=%d\n", ck, candKeyRaw, builderKey, len(strat.ClassVectors))
 		}

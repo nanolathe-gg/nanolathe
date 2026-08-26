@@ -103,7 +103,7 @@ func TestDumpRNGIsReproducible(t *testing.T) {
 }
 
 // TestMissingRootDiagnostic locks the standard diagnostic shape from
-// docs/ORCHESTRATION.md §7.
+// AGENTS.md §Diagnostics.
 func TestMissingRootDiagnostic(t *testing.T) {
 	_, err := openContent(Options{Root: "/definitely/not/an/install"})
 	if err == nil {
@@ -117,7 +117,7 @@ func TestMissingRootDiagnostic(t *testing.T) {
 	}
 }
 
-// mainTestRetailRoot skips when retail install is absent [ORCHESTRATION.md §6].
+// mainTestRetailRoot skips when retail install is absent [AGENTS.md §Test policy].
 func mainTestRetailRoot(t *testing.T) string {
 	t.Helper()
 	root := os.Getenv("NANOLATHE_TA_ROOT")
@@ -139,7 +139,7 @@ func mainTestRetailRoot(t *testing.T) string {
 }
 
 // TestDispatchOrdering_ShotPrecedesHeadlessMap locks P5: --headless --map
-// must not shadow --shot/--shot-menu [REVIEW_OX_ALPHA.md P5].
+// must not shadow --shot/--shot-menu .
 func TestDispatchOrdering_ShotPrecedesHeadlessMap(t *testing.T) {
 	tests := []struct {
 		name string
@@ -194,7 +194,7 @@ func TestDispatchOrdering_ShotPrecedesHeadlessMap(t *testing.T) {
 }
 
 // TestDispatchOrdering_MissionHeadless locks P6: --headless --mission must
-// dispatch to session construction like --headless --map [REVIEW_OX_ALPHA.md P6].
+// dispatch to session construction like --headless --map .
 func TestDispatchOrdering_MissionHeadless(t *testing.T) {
 	if !shouldRunHeadlessSession(Options{Headless: true, Mission: "camps/arm campaign.tdf:MISSION0"}) {
 		t.Fatalf("shouldRunHeadlessSession false for --headless --mission, want true [P6]")

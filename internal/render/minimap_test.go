@@ -29,12 +29,12 @@ func TestMinimapRadarSurfaceAtSet(t *testing.T) {
 
 func TestMinimapLetterboxFill(t *testing.T) {
 	if got := LetterboxFill(); got != 0 {
-		t.Fatalf("LetterboxFill want 0 got %d [minimap §4] TODO(question)", got)
+		t.Fatalf("LetterboxFill want 0 got %d [03 §3.6] TODO(question)", got)
 	}
 }
 
 func TestMinimapLayoutLetterboxWideTallSquare(t *testing.T) {
-	// Square: mapW==mapH -> RadarW=126, RadarH=126, Origin 0,0 [07 §10][minimap §4]
+	// Square: mapW==mapH -> RadarW=126, RadarH=126, Origin 0,0 [07 §10][03 §3.6]
 	m := camera.LayoutMinimap(100, 100)
 	if m.W != 126 || m.H != 126 || m.PadX != 0 || m.PadY != 0 {
 		t.Fatalf("square got %+v want W=126 H=126 pad 0,0", m)
@@ -73,7 +73,7 @@ func TestMinimapLayoutLetterboxWideTallSquare(t *testing.T) {
 }
 
 func TestMinimapRadarProjectionHalfShear(t *testing.T) {
-	// rx=worldX*RadarW/PlayRight, ry=(worldZ - (worldY>>1))*RadarH/PlayBottom SAR 1 [minimap §7]
+	// rx=worldX*RadarW/PlayRight, ry=(worldZ - (worldY>>1))*RadarH/PlayBottom SAR 1 [03 §3.9]
 	m := camera.Minimap{W: 126, H: 63, PadX: 0, PadY: 31} // arbitrary
 	playW := int32(1000)
 	playH := int32(1000)
@@ -100,7 +100,7 @@ func TestMinimapRadarProjectionHalfShear(t *testing.T) {
 }
 
 func TestMinimapRadarRadius(t *testing.T) {
-	// Radar*dist/Play trunc [minimap §6][07 §10]
+	// Radar*dist/Play trunc [03 §3.10][07 §10]
 	if got := RadarRadius(100, 126, 1000); got != 12 {
 		t.Fatalf("radius 100*126/1000 want 12 got %d", got)
 	}
@@ -164,7 +164,7 @@ func TestMinimapBuildRadarPictureLetterboxAndGuard(t *testing.T) {
 	// Due to supersampling with tile0 fallback, first pixel should be 0x11 (guard case)
 	// worldX for tx=0, ty=0 is 0, tileIdx at (0,0) is 5 -> guard to 0 -> pix 0x11, blended nearest without ALP gives 0x11.
 	if pic.Bits[0] != 0x11 {
-		t.Fatalf("guard idx>=TileCount→0 failed, got %02x want 0x11 [minimap §3.2] [analysis omitted]:3C", pic.Bits[0])
+		t.Fatalf("guard idx>=TileCount→0 failed, got %02x want 0x11 [03 §3.7] [analysis omitted]:3C", pic.Bits[0])
 	}
 	// Test baked path still produces w*h
 	baked := make([]byte, 4*4)
@@ -244,7 +244,7 @@ func TestMinimapBuildMappedVisIdxAndGateOrder(t *testing.T) {
 	if mapped == nil {
 		t.Fatalf("mapped nil")
 	}
-	// visIdx = (y*mapH/h)*mapW + (x*mapW/w) TRUNC [minimap §5]
+	// visIdx = (y*mapH/h)*mapW + (x*mapW/w) TRUNC [03 §3.8]
 	// y=0 x=0 -> visIdx (0*2/2)*2 +0*2/2=0 -> word bit1 true, byte1 -> raw 10
 	if got := mapped.Bits[0]; got != 10 {
 		t.Fatalf("visIdx 0,0 want raw 10 got %d", got)
@@ -295,7 +295,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 	}
 	playW := int32(100)
 	playH := int32(100)
-	// Two contacts at same radar pixel, later should overwrite earlier (pool order ascending slice order is caller-stable) [minimap §7]
+	// Two contacts at same radar pixel, later should overwrite earlier (pool order ascending slice order is caller-stable) [03 §3.9]
 	contacts := []MinimapContact{
 		{WorldX: 50, WorldZ: 50, WorldY: 0, Owner: 0, Palette: 10, IsCommander: false},
 		{WorldX: 50, WorldZ: 50, WorldY: 0, Owner: 0, Palette: 20, IsCommander: false},
@@ -311,7 +311,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 		t.Fatalf("rx,ry OOB %d,%d", rx, ry)
 	}
 	if got := final.Bits[idx]; got != 20 {
-		t.Fatalf("layer order later overwrites earlier: got %d want 20 [minimap §7]", got)
+		t.Fatalf("layer order later overwrites earlier: got %d want 20 [03 §3.9]", got)
 	}
 	// Commander draws on top of blip at same location plus second pixel
 	contacts2 := []MinimapContact{
@@ -341,11 +341,11 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 	cx := int(rx3) + int(r)
 	cy := int(ry3)
 	if v, _ := final3.At(cx, cy); v != 0xA0 {
-		t.Fatalf("circle should overwrite, at %d,%d got %d want 0xA0 [minimap §7] radius %d", cx, cy, v, r)
+		t.Fatalf("circle should overwrite, at %d,%d got %d want 0xA0 [03 §3.9] radius %d", cx, cy, v, r)
 	}
 	// Ensure wipe: mapped bits 1 should be present where no blip/circle
 	if v, _ := final3.At(0, 0); v != 1 {
-		t.Fatalf("wipe from MAPPED via copy [minimap §7] [analysis omitted]: at 0,0 got %d want 1", v)
+		t.Fatalf("wipe from MAPPED via copy [03 §3.9] [analysis omitted]: at 0,0 got %d want 1", v)
 	}
 }
 
@@ -360,14 +360,14 @@ func TestMinimapBlinkGate(t *testing.T) {
 	finalOff := RebuildFinal(mapped, m, 100, 100, contacts, blinkOff, nil)
 	rx, ry := RadarProjection(10, 10, 0, 100, 100, m)
 	if v, _ := finalOff.At(int(rx), int(ry)); v != 5 {
-		t.Fatalf("stealth hidden when blink==0, got %d want mapped 5 [minimap §7]", v)
+		t.Fatalf("stealth hidden when blink==0, got %d want mapped 5 [03 §3.9]", v)
 	}
 	blinkOn := BlinkState{Countdown: 7, Phase: 1}
 	finalOn := RebuildFinal(mapped, m, 100, 100, contacts, blinkOn, nil)
 	if v, _ := finalOn.At(int(rx), int(ry)); v != 9 {
 		t.Fatalf("stealth visible when blink==1, got %d want 9", v)
 	}
-	// Tick: every 8 frames ^=1 [minimap §10]
+	// Tick: every 8 frames ^=1 [03 §3.6]
 	b := BlinkState{Countdown: 7, Phase: 0}
 	for i := 0; i < 7; i++ {
 		b.Tick()

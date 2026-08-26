@@ -7,20 +7,21 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Helper for client-side minimap HUD presentation [minimap §4].
+// PlaySizeForMinimap returns PlayRight = Wpix-32, PlayBottom = Hpix-128 [03 §3.4].
+// Helper for client-side minimap HUD presentation [03 §3.6].
 func PlaySizeForMinimap(t *world.Terrain) (playW, playH int32) {
 	return hud.PlaySizeForMinimap(t)
 }
 
 // DrawMinimap draws a RadarSurface's Bits onto the indexed framebuffer at HUD rect (scaled if HUD zoom !=1.0).
-// It copies indexed pixels (no GUIPAL remap) via nearest, letterbox bars already 0, and then draws viewport rect
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// It copies indexed pixels (no GUIPAL remap) via nearest, leaves the letterbox
+// bars at zero, and draws the one-pixel viewport marker in the caller-supplied
+// palette index when enabled [03 §3.9][03 §3.12][07 §10].
 // Presentation-only, I6 [docs/INVARIANTS.md].
 //
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(T23): start markers drawn between MAPPED and contacts per research/minimap/gaps/02-contacts-viewport.md §5 — not drawn here.
+// hudRect and viewportRect are inclusive [03 §3.6][03 §3.12].
+// TODO(question): exact viewport-marker palette mapping remains unknown.
+// TODO(T23): the start-marker blit site remains untraced [03 §3.9].
 func (c *Client) DrawMinimap(surf *render.RadarSurface, hudRect hud.Rect, viewportRect hud.Rect, paletteViewport byte) {
 	if c == nil || surf == nil || surf.Bits == nil || surf.W <= 0 || surf.H <= 0 {
 		return
@@ -67,7 +68,7 @@ func (c *Client) DrawMinimap(surf *render.RadarSurface, hudRect hud.Rect, viewpo
 	// Use generic centered nearest scaling that preserves letterbox bars as 0 outside dst radar area.
 	// Compute scale based on HUD rect vs MinimapLongSide 126? But surf may be smaller than 126, so scale should be hudW/126.
 	// For now compute dstRadarW/H as surf.W/H scaled by hudW/126 if hudW !=126.
-	const longSide = 126 // [07 §10][minimap §4] MinimapLongSide
+	const longSide = 126 // [07 §10][03 §3.6] MinimapLongSide
 	_ = longSide
 	// If hudRect is radar rect itself (not full square), then longSide assumption fails. Fall back to direct scale.
 
@@ -89,7 +90,7 @@ func (c *Client) DrawMinimap(surf *render.RadarSurface, hudRect hud.Rect, viewpo
 		dstRadarY1 = ht
 	} else {
 		// Check aspect ratio to decide scaling vs letterbox centering.
-		// If hud and surf share aspect ratio (within tolerance), scale surf to fill hudRect via nearest [minimap §3.2] via HUD zoom.
+		// If hud and surf share aspect ratio (within tolerance), scale surf to fill hudRect via nearest [03 §3.7] via HUD zoom.
 		// Otherwise letterbox aspect mismatch -> center surf inside square hudRect, preserving bars at 0.
 		hudRatio := float64(hudW) / float64(hudH)
 		surfRatio := float64(surf.W) / float64(surf.H)
@@ -99,13 +100,13 @@ func (c *Client) DrawMinimap(surf *render.RadarSurface, hudRect hud.Rect, viewpo
 		}
 		const eps = 1e-9
 		if diff < eps || (hudRatio > 0.99 && hudRatio < 1.01 && surfRatio > 0.99 && surfRatio < 1.01) {
-			// Aspect matches (both square or both same) -> scale to fill hudRect entirely [minimap §3.2] nearest
+			// Aspect matches (both square or both same) -> scale to fill hudRect entirely [03 §3.7] nearest
 			dstRadarW = hudW
 			dstRadarH = hudH
 			dstRadarX1 = hl
 			dstRadarY1 = ht
 		} else if hudW == longSide || hudW == longSide+1 {
-			// HUD is full square 126 (or 127 inclusive), surf is radar letterboxed -> center without scaling [minimap §4]
+			// HUD is full square 126 (or 127 inclusive), surf is radar letterboxed -> center without scaling [03 §3.6]
 			dstRadarW = int32(surf.W)
 			dstRadarH = int32(surf.H)
 			dstRadarX1 = hl + (hudW-dstRadarW)/2
@@ -279,7 +280,7 @@ func HandleMinimapInput(cam *camera.Camera, m camera.Minimap, hudRect hud.Rect, 
 			*dragActive = true
 		}
 	}
-	// Clamp per [07 §10] C3 clampAxis order via playW/H as mapSize [minimap §4].
+	// Clamp per [07 §10] C3 clampAxis order via playW/H as mapSize [03 §3.6].
 	eW, eH := cam.ViewW, cam.ViewH
 	if cam.Scale != 0 {
 		eW, eH = cam.EffectiveView()

@@ -164,7 +164,8 @@ func (a *Archive) index() error {
 		return fmt.Errorf("%w: unsupported version 0x%08x", ErrMalformedArchive, version)
 	}
 	// Footer: retail seeks to end and requires trailing "Copyright ... Cavedog Entertainment".
-	// Real archives use 1997/1998 but GAP-ANALYSIS normalizes to 0000. Validate suffix/prefix tolerant to year.
+	// Retail normalizes the footer's four edition bytes before comparing the
+	// surrounding copyright text [02 §2].
 	if version == 0x00010000 {
 		const footerSuffix = "Cavedog Entertainment"
 		const footerPrefix = "Copyright"

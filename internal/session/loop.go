@@ -934,7 +934,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 			}
 			name := orders.DescriptorFor(head.ID).Name
 			isMove := name == "Move_Ground" || name == "VTOL_Move" || name == "QMove" || name == "Patrol" || name == "QPatrol" || name == "VTOL_Patrol" || name == "RepairPatrol" || name == "VTOL_RepairPatrol"
-			// Walk-to-site for mobile builders [REVIEW_OX_ALPHA E-8][04 §3.4][05][R-P0-06].
+			// Walk-to-site for mobile builders [04 §3.4][05][R-P0-06].
 			// A MOBILE builder with a MobileBuild order out of nano range walks
 			// via normal Move_Ground machinery before state 2. This pre-pass
 			// submission ensures the scheduler sees the request before its Tick,
@@ -1339,9 +1339,8 @@ func (s *Session) authoritativeTick(tick uint32) {
 			if u == nil || !u.Alive {
 				continue
 			}
-			cx := world.WorldToCell(u.X) / 2
-			cz := world.WorldToCell(u.Z) / 2
-			hb := heightByteFor(u)
+			hb := heightByteAt(u, seaLevelFor(s))
+			cx, cz := observerTile(u, hb)
 			r := radiusFor(u)
 			s.Vis.Refresh(visibility.ObserverID(u.Handle), visibility.Observer{Owner: visibility.PlayerID(u.Owner), CX: cx, CZ: cz, HeightByte: hb, Radius: r})
 		}
@@ -2474,6 +2473,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 	}
 	if s.Econ != nil {
 		var resViews []snapshot.ResourceView
+		var econViews []snapshot.EconomyView
 		for p := 0; p < 10; p++ {
 			pl := s.Econ.Players[p]
 			if !pl.Exists {
@@ -2490,8 +2490,21 @@ func (s *Session) publishSnapshot(tick uint32) {
 				EnergyProduced: pl.PassProduced[economy.Energy],
 				EnergyConsumed: pl.PassConsumed[economy.Energy],
 			})
+			econViews = append(econViews, snapshot.EconomyView{
+				Player:         uint8(p),
+				Metal:          pl.Stock[economy.Metal],
+				Energy:         pl.Stock[economy.Energy],
+				MetalCapacity:  pl.Capacity[economy.Metal],
+				EnergyCapacity: pl.Capacity[economy.Energy],
+				MetalProduced:  pl.PassProduced[economy.Metal],
+				MetalConsumed:  pl.PassConsumed[economy.Metal],
+				EnergyProduced: pl.PassProduced[economy.Energy],
+				EnergyConsumed: pl.PassConsumed[economy.Energy],
+				Active:         pl.Exists && !pl.IsObserver,
+			})
 		}
 		frame.Resources = resViews
+		frame.Economy = econViews
 	}
 	// RS-05: publish authoritative result (kind, tick, winners/losers, scores, countdown) [08][P1-01]
 	// Countdown is visible even before Ended (pending) via Latch.Countdown; winners/losers/scores

@@ -103,16 +103,16 @@ func (f *FogCache) SetChannel(x, y int32, c0, c1 uint8) {
 	f.ch1[idx] = c1 & 0x0F
 }
 
-// RebuildFog lazily rebuilds the two-channel cache [03 §3.3] C13 [rr-16].
+// RebuildFog lazily rebuilds the two-channel cache [03 §3.3] C13 [03 §3.3].
 // The cache never writes word mask; values 15 are solid dark (channel0 Black/history) or patterned fill (channel1 Gray/current).
 // Values 1..14 select GAF frame value-1 from variant families keyed by cell parity plus camera phase.
-// Channel one (hi/Gray/current) renders first, then channel zero (lo/Black/history) [03 §3.3] [rr-16 §6.1/6.2].
+// Channel one (hi/Gray/current) renders first, then channel zero (lo/Black/history) [03 §3.3] [03 §3.3].
 //
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// lo accumulates word-grid history mask 1<<player regardless [rr-16 §6.1]; each holds a 4-bit nibble 0..15 via four bounded
+// Established: hi accumulates per-player byte-grid (cur==0) only when mode bit 1 is set else zeroed [03 §3.3],
+// lo accumulates word-grid history mask 1<<player regardless [03 §3.3]; each holds a 4-bit nibble 0..15 via four bounded
 // OR 1,2,4,8 sites (0 transparent, 15 solid dark, 1..14 index value-1 into Gray=hi/current and Black=lo/history four-way variant families
-// with variant=(col+row+camPhase)&3 deterministically from floorMod(camera,32) residues [rr-16 §6.1/6.2]), edge rows/cols forced to 15
-// when viewport extends beyond map [rr-16 §6.1]. Corner→bit 1=NW,2=NE,4=SW,8=SE remains supported inference pending asymmetric probe [rr-16 §6.1].
+// with variant=(col+row+camPhase)&3 deterministically from floorMod(camera,32) residues [03 §3.3]), edge rows/cols forced to 15
+// when viewport extends beyond map [03 §3.3]. Corner→bit 1=NW,2=NE,4=SW,8=SE remains supported inference pending asymmetric probe [03 §3.3].
 // Camera residues/offX are used for viewport-sized cache alignment; for Nanolathe's map-sized cache we generate for the whole map and
 // let BuildFogOps handle viewport clipping via hard 32 edges [03 §3.3] C13 — viewport edge forcing is therefore a render-time concern
 // and the cache remains map-aligned for simplicity (divergence documented as TODO(question) for exact viewport-sized residue alignment).
@@ -123,21 +123,24 @@ func (s *Service) RebuildFog(cameraX, cameraY int32) {
 	if s.fog.valid {
 		return
 	}
-	// Clear entire cache (rep stos) [rr-16 §6.1].
+	// Clear the entire cache before rebuilding it [03 §3.3].
 	for i := range s.fog.ch0 {
 		s.fog.ch0[i] = 0
 		s.fog.ch1[i] = 0
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// is sufficient for correctness of nibble values since each visibility tile's fog contribution is local to its 4 neighbours).
+	// Dimensions: fog cache is W×H. Nanolathe keeps a map-sized cache while
+	// retail's cache follows the viewport [03 §3.3]; the map-sized form
+	// preserves nibble values because each tile contributes only to its four
+	// neighboring cells.
 	w := int(s.fog.w)
 	h := int(s.fog.h)
 	if w <= 0 || h <= 0 {
 		s.fog.valid = true
 		return
 	}
-	// Hi channel (ch1) — current visibility, only when mode bit 1 (ModeCurrentEnabled, 0x2) is set [rr-16 §6.1: TEST 2].
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Hi channel (ch1) — current visibility, only when mode bit 1 (ModeCurrentEnabled, 0x2) is set [03 §3.3].
+	// A fogged visibility tile ORs corner bits 1, 2, 4, and 8 into its four
+	// neighboring cache cells [03 §3.3].
 	if s.mode&ModeCurrentEnabled != 0 {
 		localGrid := s.byteGrids[s.local]
 		if localGrid != nil {
@@ -170,8 +173,9 @@ func (s *Service) RebuildFog(cameraX, cameraY int32) {
 			}
 		}
 	}
-	// Lo channel (ch0) — history/unexplored, always from word grid [rr-16 §6.1: after hi loop, lo loop unconditional].
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Lo channel (ch0) — history/unexplored, always from word grid [03 §3.3].
+	// An unexplored visibility tile uses the same four corner-bit writes
+	// [03 §3.3].
 	bit := cellBit(s.local)
 	if len(s.wordMask) > 0 {
 		visW := int(s.W)
@@ -200,7 +204,7 @@ func (s *Service) RebuildFog(cameraX, cameraY int32) {
 			}
 		}
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Edge fixup for viewport beyond map [03 §3.3].
 	// For Nanolathe's map-sized cache, the viewport-sized equivalent is that cells beyond the map are considered
 	// fogged (out-of-bounds visibility considered unexplored). Retail forces those border cache rows/cols to 15
 	// when camera tile start <0 or end > map. We approximate by treating virtual out-of-bounds tiles as fogged for
@@ -208,7 +212,7 @@ func (s *Service) RebuildFog(cameraX, cameraY int32) {
 	// missing neighbours would have contributed bits 2/4/8 at the edge but were skipped. To ensure map outer edge
 	// appears solid when the edge is fogged, we optionally force outer ring partially-fogged cells to 15.
 	// This is a supported inference for map-sized cache; full viewport-sized residue handling remains TODO(question)
-	// for exact offX/offZ alignment [rr-16 §7/10].
+	// for exact offX/offZ alignment [03 §3.3].
 	// No additional forcing here preserves partial transition at map edge, which matches the hard 32 edge without extra fill.
 	// Callers that need beyond-map solid can rely on BuildFogOps viewport culling leaving out-of-bounds as no-cache (treated as visible
 	// in current BuildFogOps, but terrain void beyond map is already black via BlitTerrain clipping).

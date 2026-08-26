@@ -62,18 +62,22 @@ prove that an unrecovered function cannot contain the reader.
 The engine is divided into eight categories. This is intentionally near the
 upper end of the requested range: fewer documents would combine unrelated
 subsystems into unreviewable files, while more would fragment prerequisites
-and state transitions across too many boundaries.
+and state transitions across too many boundaries. Each document is the
+exhaustive, self-contained home for its feature area: corrections and closures
+that were once tracked as separate addenda files (`R-*.md`) and gap-analysis
+files have been folded inline, under headings that keep the old `R-<id>`
+anchors so existing citations still resolve.
 
 | Document | Category | Main ownership |
 |---|---|---|
 | [01-core-runtime-platform-and-determinism.md](01-core-runtime-platform-and-determinism.md) | Core runtime, platform, and determinism | PE/Win32 lifecycle, window/message pump, scheduler, authoritative phase order, threads, locks, allocators, pools, queues, RNG, x87, diagnostics, runtime failures |
-| [02-content-vfs-formats-and-data-loading.md](02-content-vfs-formats-and-data-loading.md) | Content, VFS, formats, and loading | Current directory, mount tiers, loose/archive resolution, HPI family, TDF grammar, configuration/localization, catalogs, file decoders, linking, caching and load failures |
-| [03-world-visibility-rendering-audio-and-video.md](03-world-visibility-rendering-audio-and-video.md) | World and presentation | Coordinates, terrain, height/water, visibility/radar/fog, software rasterizer, GDI/DirectDraw, palettes, 3DO/GAF presentation, effects, shadows, audio, CD music, Smacker and capture |
-| [04-units-orders-scripts-and-movement.md](04-units-orders-scripts-and-movement.md) | Units, orders, scripts, and movement | Unit identity/lifetime, order state, COB VM and pieces, A*, path scheduling, steering, collision/occupancy, hover, VTOL, transport and air work positioning |
-| [05-economy-construction-players-and-features.md](05-economy-construction-players-and-features.md) | Economy, construction, players, and features | Resource buckets/settlement, storage, extraction, sharing, nanoframes, factory queues, build/repair/reclaim/capture/resurrection, limits, feature placement/successors/fire/sinking |
-| [06-weapons-projectiles-damage-and-effects.md](06-weapons-projectiles-damage-and-effects.md) | Weapons and combat | Weapon definitions/slots/targets, costs and cadence, projectiles/trajectories/guidance/beams, collision, armor, AOE, status, veterancy, stockpile/interception, death and combat events |
-| [07-interface-input-camera-and-front-end.md](07-interface-input-camera-and-front-end.md) | Interface, input, camera, and frontend | Win32 input, software cursor, picking/selection/groups, command UI, build pages, queue overlays, camera control, minimap interaction, GUI widgets/screens, HUD, chat and text |
-| [08-sessions-campaign-ai-network-save-and-replay.md](08-sessions-campaign-ai-network-save-and-replay.md) | Sessions, campaign, AI, networking, save, and replay | Game modes, campaigns/missions/triggers, skirmish/lobby, known AI inputs, DirectPlay packet/lockstep state, checksums, disconnects, save/load and bounded replay absence |
+| [02-content-vfs-formats-and-data-loading.md](02-content-vfs-formats-and-data-loading.md) | Content, VFS, formats, and loading | Current directory, mount tiers, loose/archive resolution, HPI family, TDF grammar, configuration/localization, catalogs, file decoders, linking, caching and load failures (incl. R-P0-03 category registry) |
+| [03-world-visibility-rendering-audio-and-video.md](03-world-visibility-rendering-audio-and-video.md) | World and presentation | Coordinates, terrain, height/water, visibility/radar/fog, software rasterizer, GDI/DirectDraw, palettes, 3DO/GAF presentation, minimap, features rendering, effects, shadows, audio, CD music, Smacker and capture (incl. R-P0-18-A/B LOS height, R-RR16-A fog) |
+| [04-units-orders-scripts-and-movement.md](04-units-orders-scripts-and-movement.md) | Units, orders, scripts, and movement | Unit identity/lifetime, order state, COB VM and pieces, A*, path scheduling, steering, collision/occupancy, hover, VTOL, transport and air work positioning (incl. R-P0-01/02/08/09/10) |
+| [05-economy-construction-players-and-features.md](05-economy-construction-players-and-features.md) | Economy, construction, players, and features | Resource buckets/settlement, storage, extraction, sharing, nanoframes, factory queues, build/repair/reclaim/capture/resurrection, limits, feature placement/successors/fire/sinking (incl. R-P0-06 nano cadence) |
+| [06-weapons-projectiles-damage-and-effects.md](06-weapons-projectiles-damage-and-effects.md) | Weapons and combat | Weapon definitions/slots/targets, costs and cadence, projectiles/trajectories/guidance/beams, collision, armor, AOE, status, veterancy, stockpile/interception, death and combat events (incl. R-P0-07 weapon query path) |
+| [07-interface-input-camera-and-front-end.md](07-interface-input-camera-and-front-end.md) | Interface, input, camera, and frontend | Win32 input, software cursor, picking/selection/groups, command UI, build pages, queue overlays, camera control, minimap interaction, GUI widgets/screens, HUD, chat and text (incl. R-P0-11 UI order producers) |
+| [08-sessions-campaign-ai-network-save-and-replay.md](08-sessions-campaign-ai-network-save-and-replay.md) | Sessions, campaign, AI, networking, save, and replay | Game modes, campaigns/missions/triggers, skirmish/lobby, known AI inputs, DirectPlay packet/lockstep state, checksums, disconnects, save/load and bounded replay absence (incl. R-P0-04/05 AI group vectors and score fields) |
 
 ## Reading order
 
@@ -228,14 +232,87 @@ Further corrections folded during the 2026-08-22 reconciliation pass:
 - the LOS mask carries per-source-player-slot bits and is never OR'd across
   allied players.
 
-## Gap register
+## Legacy packet citation routing
 
-[GAP-ANALYSIS.md](GAP-ANALYSIS.md) records the audit of this specification
-against the underlying executable analysis: what the specification stated only
-as prose while a concrete contract was available, what it declared unknown
-that was in fact established, what a bounded re-derivation closed, and what
-remains genuinely blocked. It is a working document and is expected to shrink
-as its entries are folded into the category documents.
+Early implementation comments cite research packets that were later folded
+into the category documents. The packet files and orchestration plan are not
+part of the curated reference; this table preserves their searchable IDs and
+routes readers to the current authoritative home. A packet-local `§` suffix in
+an old citation describes the retired packet outline, not a section number in
+the destination document.
+
+| Legacy ID | Current authoritative home |
+|---|---|
+| `[P0-01]`, `[P0-02]`, `[P0-03]` | doc 08 §"Established AI-facing data and rooted planner" |
+| `[P0-04]` | doc 08 mission/skirmish placement and initialization |
+| `[P0-05]` | doc 08 campaign progression and session end |
+| `[P0-06]` | docs 04 §3.6 and 08 mission loading |
+| `[P0-07]`, `[P0-08]`, `[P0-09]` | doc 04 §3 orders, queue pumping, and same-tick dispatch |
+| `[P0-10]` | doc 06 §§3–4 targeting, Aim, and firing |
+| `[P0-11]` | docs 03 §3.2 and 06 §3 sensors and target admission |
+| `[P0-12]` | doc 04 §8 ground collision and occupancy |
+| `[P0-13]` | doc 04 §7 path search, goals, and scheduling |
+| `[P0-14]` | docs 04 §3.8 and 05 construction completion |
+| `[P0-15]` | doc 05 unit reclaim, capture, resurrection, and reverse construction |
+| `[P0-16]` | docs 04 §2 and 05 §"Unit creation and limits" |
+| `[P0-17]` | doc 03 terrain plus `[fmt tnt]` plot-cell encoding |
+| `[P0-18]` | doc 03 §3.2 visibility-mask and LOS raster behavior |
+| `[P1-01]` | doc 08 §"Session end and reporting" |
+| `[P1-02]` | docs 02 mission data and 08 mission loading/media behavior |
+| `[P1-03]` | docs 02 movement-class data and 04 §6/§9 terrain-medium behavior |
+| `[P1-04]` | doc 04 §§9–10 hover, amphibious, and flight behavior |
+| `[P1-05]` | doc 04 transport and attachment behavior |
+| `[P1-06]` | doc 05 settlement, admission, and sharing |
+| `[P1-07]` | docs 04 §8 and 06 §§8–9 collision and damage |
+| `[P1-08]` | doc 06 §§5–10 projectile families and edge states |
+| `[P1-09]` | doc 06 §11 stockpile and interceptor behavior |
+| `[P1-10]` | doc 05 feature placement, extraction, lifecycle, and fire |
+| `[P1-11]` | doc 04 §§4–5 COB VM, ports, callbacks, and persistence |
+| `[P1-12]` | doc 02 content resolution, overrides, sounds, and error policy |
+| `[P1-13]` | doc 08 save organization, contents, and load process |
+| `[P1-14]` | docs 04 §3.7 and 07 picking, selection, latches, and build UI |
+| `[P1-15]` | docs 03 terrain and 05 terrain-metal extraction |
+
+## Gap disposition
+
+The gap-analysis files (`GAP-ANALYSIS.md`, `GAP_ANALYSIS.md`) were removed on
+2026-08-26: they were a working audit that had gone stale, and open questions
+should be ephemeral — tracked as `TODO(T23)` / `TODO(T25)` / `TODO(question)`
+markers at the exact site in code and as **Unknown** items in each category
+doc's "Missing and unknown" list. Their closed tasks were promoted into the
+category documents before removal; the mapping recorded in the last revision:
+
+| Task | Promoted to |
+|---|---|
+| T1 economy ledger cadence | doc 05 settlement |
+| T2 flight integrator arithmetic | doc 04 §10 |
+| T3 factory production lifecycle | docs 04 §3.5 / 05 |
+| T4 death-cause producer table | doc 06 §12.1 |
+| T5 ballistic malformed/overflow table | doc 06 |
+| T6 pool-full fire retains draws | doc 06 |
+| T7 visibility predicate + sight shapes | doc 03 §3.2 |
+| T8 InitialMission mini-language | docs 02 / 08 |
+| T9 session states, lockstep pacing, save | doc 08 |
+| T10 trigger objects and mission mechanics | doc 08 |
+| T11 peer hash overwrite-sync | docs 01 / 08 |
+| T12 SP vs MP pause/carry | doc 01 §4.3 |
+| T13 wind draw arithmetic | doc 01 §7.3 |
+| T14 content-layer promotions | doc 02 |
+| T15 COB callback catalog + same-tick windows | doc 04 §5.4 |
+| T16 route publication + water damage | doc 04 §7.3/§9.2/§10.2 |
+| T17 sensor phase + fog + compositor | doc 03 |
+| T18 script rotation order | docs 03 / 04 |
+| T19 path heuristic family | doc 04 §7.2 |
+| T20 economy/feature residuals | doc 05 |
+| T21 combat residuals | doc 06 |
+| T22 interface promotions | doc 07 |
+| T23 platform residuals | `TODO(T23)` markers in code — none gate gameplay |
+| T24 network internals | out of scope (no multiplayer) |
+| T25 accepted blocked items | `TODO(T25)` markers in code (extractor placement helpers, resource-activity ledger arguments, definition flag semantics, save bulk-box byte layouts) |
+
+A `[GAP Txx]` citation in code means the task's content now lives at the
+promoted location above. The compressed GAF decoder is **not** a gap: it is
+fully specified in `[fmt gaf]` and implemented in `formats/gaf.go`.
 
 ## How to use the specifications
 
@@ -254,7 +331,11 @@ For implementation work:
 6. Keep presentation events separate from authoritative outcomes even when the
    same retail function initiates both.
 7. Update the relevant document's final unknown list when new static evidence
-   closes or contradicts a behavior.
+   closes or contradicts a behavior. New findings are edited into the owning
+   category doc in place — a closure of a tracked unknown or a long finding is
+   written inline under a heading carrying an `R-<id>` anchor (the old addenda
+   files no longer exist); a correction must state what the previous text said
+   and why it was wrong.
 
 ## Global missing and unknown
 

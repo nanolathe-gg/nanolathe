@@ -190,13 +190,42 @@ Flash tank's corpse from `features/corpses/arm_corpses.tdf`, referenced by
 
 Field reference (all optional unless the feature type needs them):
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+| Key | Meaning |
+| --- | --- |
+| `world` | World types the feature suits (editor filter, e.g. `All Worlds`). Authored on all 1,645 retail feature records and **inert** — the executable has no string for it. |
+| `description` | Hover text (`Wreckage`) |
+| `category` | Grouping (`arm_corpses`, `heaps`, `rocks`, `steamvents`, …) |
+| `object` | 3DO model name for 3D features (corpses, rocks) |
+| `filename` + `seqname` | For 2D (sprite) features: GAF file and entry name |
+| `animating` / `animtrans` / `shadtrans` | Animation / transparency flags for sprite features |
+| `seqnameshad` | Shadow sprite entry. The engine also reads `seqnamedieshad` and `seqnamereclamateshad`, the shadow companions of `seqnamedie` and `seqnamereclamate`. |
+| `footprintx`, `footprintz` | Size in 16-pixel grid cells |
+| `height` | Height for shot-over tests |
+| `blocking` | `1` = blocks unit movement |
+| `hitdensity` | Community-understood as hit-probability weighting. Authored on all 1,645 retail records and **inert** — no string for it exists in the executable. |
+| `damage` | HP before turning into `featuredead` (or vanishing) |
+| `featuredead` | Feature this becomes when destroyed |
+| `metal`, `energy` | Reclaim yield; for metal deposits `metal` is the extraction concentration (~0–255) |
+| `reclaimable`, `autoreclaimable` | Can be reclaimed / auto-reclaimed on patrol |
+| `featurereclamate`, `seqnamereclamate` | Leftover feature and animation when reclaimed |
+| `flamable`, `sparktime`, `spreadchance`, `burnweapon`, `featureburnt`, `seqnameburn`, `seqnameburnshad` | Fire behavior for burnable features. These are the keys the engine reads. |
+| `burnmin`, `burnmax` | Authored on 9 files (115 records) and **inert** — no string for either exists in the executable, so burn duration is not authored this way. |
+| `geothermal` | `1` = geothermal plants can build here |
+| `indestructible`, `permanent`, `nodisplayinfo` | Misc flags |
+| `seqnamedie` | Animation/feature left when destroyed |
+| `reproduce`, `reproducearea` | Growth mechanic, authored on 19 files (310 records). Both keys are read by the engine, so it is not unused. |
 
 TNT maps reference features **by name** (see [tnt.md](tnt.md)); the engine
 searches all loaded feature TDFs for the section, and reports a missing one
 with `Record "%s" missing from feature files`.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+A whole-string census of the retail executable finds one bounded feature-key
+table. Alongside the keys it carries the literals `REUSE`,
+`treeburn`, `Normal Features`, `Fortification`, `Fortification_Core`,
+`DragonsTeeth` and `DragonsTeeth_Core`, which are feature names and category
+labels the engine knows by name rather than by authored data. One shipped file
+misspells the reclaim successor as `featurereclamamate`; the read spelling is
+`featurereclamate`.
 
 ### `weapons/` — weapon definitions
 
@@ -259,7 +288,9 @@ comment): ballistic (`ballistic=1`, arcing under gravity), line-of-sight
 
 #### Which weapon keys the engine reads
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+A whole-string census of the retail executable finds one contiguous weapon-key
+table alongside the `DAMAGE` subsection name and `default`. Every key in the
+table below appears in that census except three:
 
 | Key | Authored in | Status |
 | --- | ---: | --- |
@@ -271,7 +302,9 @@ comment): ballistic (`ballistic=1`, arcing under gravity), line-of-sight
 `movingaccuracy` or `noselfdamage`, both of which circulate in third-party
 documentation.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+Two keys are read but never authored by retail weapons: `shellweapon`, the flag
+between `ballistic` and `beamweapon` in the same bitfield, and the
+`metal`/`energy` short spellings of the per-shot costs.
 
 The projectile behavior flags all live in one bitfield, and the executable's
 own string addresses fix the bit assignment:
@@ -290,7 +323,11 @@ own string addresses fix the bit assignment:
 | 9 | `startsmoke` | 20 | `selfprop` | | |
 | 10 | `endsmoke` | | | | |
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+Bit 27 is `noautorange`. Its key string sits apart from the main table,
+but bit 27 is the only unassigned bit, `noautorange` the only unassigned key,
+and bit 27 is tested at both projectile spawn sites — where it makes the
+projectile take its `weapontimer` lifetime instead of one derived from range
+and velocity.
 
 | Key | Meaning |
 | --- | --- |
@@ -408,7 +445,31 @@ Units not listed are grayed out in build menus during that mission.
 
 ## Unknowns and caveats
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+- No formal grammar exists; the rules above are inferred from the retail
+  corpus. Retail files may terminate a nested section as `};`; readers should
+  treat that semicolon as part of the section terminator. Unobserved edge
+  cases (duplicate keys, `;` in values, comments opened inside values) have no
+  defined behavior.
+- Several weapon/feature fields have community-guessed semantics
+  (`randomdecay` direction, `thick`); guesses are marked in the tables. Note
+  that `gamedata/WEAPONS.TDF`'s own commentary settles several keys the
+  community only guessed at — check there before treating a weapon key as
+  undocumented, and note that being documented there does not make a key live:
+  `aimrate` is documented in that header and has no string in the executable.
+  `hitdensity` is a settled case in the other direction: it is inert.
+- `MOVEINFO.TDF`'s `BadSlope`/`BadWaterSlope` pair is authored only by the
+  two hover classes and has no documented meaning, but both keys are read by
+  the engine along with `MaxWaterSlope`.
+  The third-party controller keys `pivotturn`, `reverse`, `arcturn`,
+  `minturnradius` and `minturnspeed` have no strings in the executable.
+- Retail authors `featurereclamamate` (a typo for `featurereclamate`) ten
+  times in `features/acid/acidplants.tdf`. OpenTA accepts both spellings; the
+  original engine reads only `featurereclamate`, so those ten records lose
+  their reclaim successor.
+- `[CANBUILD]`'s exact relationship to the download-menu system (which one
+  the engine consults when both exist) is not fully established.
+- `LOS.TDF` table values are only partially understood; the file declares
+  `numtables=9` while containing 12 tables.
 
 - The "which keys the engine reads" tables in this document are a whole-string
   census of `TotalA.exe` (GOG build, MD5 `8e74a1dffa1f5988624c52048f5b20cd`).

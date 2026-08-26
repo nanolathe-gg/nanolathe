@@ -34,13 +34,13 @@ func TestMinimapHUDHitTestInclusive(t *testing.T) { // TODO(question): Historica
 }
 
 func TestMinimapHUDNewFallback(t *testing.T) {
-	// Zero anchors → fallback [07 §10][minimap §4]
+	// Zero anchors → fallback [07 §10][03 §3.6]
 	h := NewMinimapHUD(Anchors{}, Rect{X1: 0, Y1: 0, X2: 126, Y2: 126})
 	if h.Rect != (Rect{X1: 0, Y1: 0, X2: 126, Y2: 126}) {
 		t.Fatalf("NewMinimapHUD zero anchors fallback want 0,0,126,126 got %+v", h.Rect)
 	}
 	if h.BlinkCountdown != 7 {
-		t.Fatalf("BlinkCountdown want 7 got %d [minimap §10]", h.BlinkCountdown)
+		t.Fatalf("BlinkCountdown want 7 got %d [03 §3.6]", h.BlinkCountdown)
 	}
 	// Non-zero anchors with fallback zero → fallback default
 	var a Anchors
@@ -102,7 +102,7 @@ func TestMinimapHUDWorldToMinimapRoundTrip(t *testing.T) { // TODO(question): Hi
 	}
 }
 
-func TestMinimapHUDViewportRect(t *testing.T) { // inclusive and clipped to HUD rect, 1-pixel not filled, hiColor DDA placeholder [07 §10][minimap §7]
+func TestMinimapHUDViewportRect(t *testing.T) { // inclusive and clipped to HUD rect, 1-pixel not filled, hiColor DDA placeholder [07 §10][03 §3.9]
 	h := NewMinimapHUD(Anchors{}, Rect{X1: 0, Y1: 0, X2: 126, Y2: 126})
 	playW, playH := int32(608), int32(352) // 640,480 raw -> play [03 §3.4]
 	m := camera.LayoutMinimap(640, 480)    // wide: W126 H94 PadY 16
@@ -135,7 +135,7 @@ func TestMinimapHUDViewportRect(t *testing.T) { // inclusive and clipped to HUD 
 
 func TestMinimapHUDDirtyBlink(t *testing.T) {
 	h := NewMinimapHUD(Anchors{}, Rect{X1: 0, Y1: 0, X2: 10, Y2: 10})
-	// DirtyBlink bits: bit0 blink, bit1 FINAL dirty, bit2 MAPPED dirty [minimap §10]
+	// DirtyBlink bits: bit0 blink, bit1 FINAL dirty, bit2 MAPPED dirty [03 §3.6]
 	h.DirtyBlink = 0x0004 // MAPPED dirty
 	if h.DirtyBlink&0x0004 == 0 {
 		t.Fatalf("MAPPED dirty bit not set")

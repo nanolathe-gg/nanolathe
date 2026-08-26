@@ -6,7 +6,7 @@ package camera
 const MinimapLongSide = 126 // [07 §10] long side
 
 // minimapLetterboxFill is the palette index used to fill letterbox bars beyond RadarW×RadarH.
-// TODO(question): bars beyond RadarW×RadarH retain heap bytes — inference 0 black pending capture. Assume 0 [minimap §4].
+// TODO(question): bars beyond RadarW×RadarH retain heap bytes — inference 0 black pending capture. Assume 0 [03 §3.6].
 const minimapLetterboxFill = 0 // TODO(question) assume 0 black
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -51,7 +51,7 @@ func (m Minimap) HitTest(x, y int32) bool { // TODO(question): Historical analys
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 //
 // worldX/worldZ are map pixels in [0,PlayRight/Bottom). OriginX/Y are
-// Minimap.PadX/PadY inside the 126×126 canvas [minimap §4]. PlayW/PlayH
+// Minimap.PadX/PadY inside the 126×126 canvas [03 §3.6]. PlayW/PlayH
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // This variant assumes worldY == 0 (ground). Use WorldToRadarWithY for height-aware.
 func (m Minimap) WorldToRadar(worldX, worldZ int32, playW, playH int32) (rx, ry int32) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.

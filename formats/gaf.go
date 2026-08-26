@@ -33,18 +33,26 @@ type GAFFrameRef struct {
 
 // GAFFrame contains decoded indexed pixels. Transparent is parallel to
 // Pixels; a false value means the indexed pixel is opaque, even when Pixels is
-// palette index zero.
+// palette index zero. Pixels always keeps the raw decoded bytes — the
+// color-key match is recorded in Transparent, never overwritten in Pixels.
 type GAFFrame struct {
 	Width, Height    uint16
 	XOffset, YOffset int16
-	Unknown1         uint8
-	Compressed       uint8
-	Unknown2         uint32
-	DataOffset       uint32
-	Unknown3         uint32
-	Pixels           []byte
-	Transparent      []bool
-	Subframes        []*GAFFrame
+	// ColorKey is frame header byte +8. On the raw path (Compressed==0)
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// (`mov ah,[ebp+0x18]; mov al,[esi]; cmp al,ah; je skip`), the byte
+	// being passed straight from the frame header by the generic frame draw
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// transparent color of raw frames; the RLE path carries its own skip
+	// runs and ignores the key.
+	ColorKey    uint8
+	Compressed  uint8
+	Unknown2    uint32
+	DataOffset  uint32
+	Unknown3    uint32
+	Pixels      []byte
+	Transparent []bool
+	Subframes   []*GAFFrame
 }
 
 const maxGAFFramePixels = 16 << 20
@@ -167,14 +175,14 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 		Width: width, Height: height,
 		XOffset:  int16(binary.LittleEndian.Uint16(header[4:6])),
 		YOffset:  int16(binary.LittleEndian.Uint16(header[6:8])),
-		Unknown1: header[8], Compressed: header[9],
+		ColorKey: header[8], Compressed: header[9],
 		Unknown2:   binary.LittleEndian.Uint32(header[12:16]),
 		DataOffset: binary.LittleEndian.Uint32(header[16:20]),
 		Unknown3:   binary.LittleEndian.Uint32(header[20:24]),
 	}
 	frame.Pixels = make([]byte, int(pixelCount))
 	frame.Transparent = make([]bool, int(pixelCount))
-	// Retail frames have Unknown1==9 for all 48519 frames; synthetic
+	// Retail frames have ColorKey==9 for all 48519 frames; synthetic
 	// mod/test frames may use 0 and should remain loadable.
 	if frame.Compressed != 0 && frame.Compressed != 1 {
 		return nil, fmt.Errorf("frame 0x%x has compression %d", offset, frame.Compressed)
@@ -240,6 +248,18 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 			return nil, fmt.Errorf("frame 0x%x raw pixels are truncated", offset)
 		}
 		copy(frame.Pixels, data[dataStart:dataStart+pixelCount])
+		// Raw frames carry no skip runs: their only transparency is the
+		// frame's own color key, which retail compares per pixel in
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// anims/fogtiles.gaf and anims/vismasks.gaf are built entirely from
+		// key pixels and index 0, so without this the fog clouds blit as
+		// solid palette 9 (84,84,252) instead of black, and every sight
+		// shape fills to its bounding box [R-RR16-A §3].
+		for i, pixel := range frame.Pixels {
+			if pixel == frame.ColorKey {
+				frame.Transparent[i] = true
+			}
+		}
 		cache[offset] = frame
 		return frame, nil
 	}

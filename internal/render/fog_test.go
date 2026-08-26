@@ -176,7 +176,7 @@ func TestFogHardEdges32(t *testing.T) {
 	}
 
 	// Signed residue shift: moving camera by 1 moves rect by -1 [03 §3.3] including residues.
-	// Cells straddle tile corners: x0 = gx*32+16 - camX + 128 [rr-16 §7].
+	// Cells straddle tile corners: x0 = gx*32+16 - camX + 128 [03 §3.3].
 	x0a, _, _, _ := FogScreenRect(&camera.Camera{X: 0, Z: 0}, 0, 0) // cam 0 => 0*32+16-0+128=144
 	x0b, _, _, _ := FogScreenRect(&camera.Camera{X: 1, Z: 0}, 0, 0) // cam 1 => 16-1+128=143
 	if x0b != x0a-1 {
@@ -211,7 +211,7 @@ func TestFogScreenRectViewportClipping(t *testing.T) {
 	}
 	// Corner-straddle culling: with C=0 the cell gx=-1 rect [-16,16) shows a
 	// 16px strip; the window must include it (regression for the half-tile
-	// culling offset) [rr-16 §7].
+	// culling offset) [03 §3.3].
 	// Full framebuffer coverage: the composer rebases op rects by −OriginX/Y,
 	// so the op set must span post-rebase [0,viewW)×[0,viewH) — a window
 	// derived from camX−OriginX instead of camX leaves the last OriginX-wide
@@ -336,7 +336,7 @@ func TestFogChannelSemantics(t *testing.T) {
 		t.Fatalf("solid dark should have no variant/frame")
 	}
 
-	// ch1==15 gray remap, ch0=0 => one GrayRemap [rr-16 §8]
+	// ch1==15 gray remap, ch0=0 => one GrayRemap [03 §3.3]
 	setTiles(none, all)
 	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, false))
 	if len(ops) != 1 || ops[0].Kind != FogKindGrayRemap {
@@ -347,7 +347,7 @@ func TestFogChannelSemantics(t *testing.T) {
 	}
 
 	// DitheredFog option bit (not camera parity) selects the black checker
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// [03 §3.3].
 	setTiles(none, all)
 	cam.X = 0
 	cam.Z = 0 // parity 0, dither on => Patterned
@@ -383,7 +383,7 @@ func TestFogChannelSemantics(t *testing.T) {
 		t.Fatalf("variant out of range 0..3")
 	}
 	// Variant is (gx+gy+2)&3: retail col+row+camPhase with cache-relative col
-	// reduces to gx+gy+2 for map-global cells (camera phase cancels) [rr-16 §6.2].
+	// reduces to gx+gy+2 for map-global cells (camera phase cancels) [03 §3.3].
 	if ops[0].Variant != 0 || ops[1].Variant != 0 {
 		t.Fatalf("variant for gx1 gy1 should be 0, got %d %d", ops[0].Variant, ops[1].Variant)
 	}
@@ -467,8 +467,7 @@ func TestFogPaletteDarkening(t *testing.T) {
 }
 
 // TestFogBorderFixups locks the retail producer border behavior for cells
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// right; rr-16 §6.1]: fogged/unexplored map-edge tiles leak their bit into
+// beyond the map [03 §3.3]: fogged/unexplored map-edge tiles leak their bit into
 // the void row/column adjacent to the north/west edges (drawn as partial
 // clouds over void), the last in-map row/column is thickened toward the
 // south/east edge, south/east void cells stay untouched, and the NW void
@@ -659,7 +658,7 @@ func TestFogNeverMutatesVisibility(t *testing.T) {
 }
 
 // TestFogVariantSelection checks four-way variant deterministic and
-// camera-independent: (gx+gy+2)&3 for map-global cells [rr-16 §6.2].
+// camera-independent: (gx+gy+2)&3 for map-global cells [03 §3.3].
 func TestFogVariantSelection(t *testing.T) {
 	cams := []*camera.Camera{
 		nil,

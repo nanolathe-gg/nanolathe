@@ -493,7 +493,7 @@ func retailRoot(t *testing.T) string {
 	if root == "" {
 		root = filepath.Join(os.Getenv("HOME"), "TotalAnnihilation")
 	}
-	// Check for gamedata directory as marker per ORCHESTRATION.md
+	// Check for gamedata directory as marker per AGENTS.md
 	if _, err := os.Stat(filepath.Join(root, "gamedata")); err != nil {
 		// Also check for at least one HPI to be more lenient
 		if _, err2 := os.Stat(filepath.Join(root, "totala1.hpi")); err2 != nil {

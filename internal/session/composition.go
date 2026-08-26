@@ -484,7 +484,7 @@ func createAndBindServices(s *Session) error {
 		return u.COBBinding().Model
 	}
 	s.Build.Presentation = s.Presentation
-	// Walk-to-site uses normal Move_Ground machinery [REVIEW_OX_ALPHA E-8][04 §3.4][R-P0-06].
+	// Walk-to-site uses normal Move_Ground machinery [04 §3.4][R-P0-06].
 	// Bind the movement system so mobile builders walk into nano range before state 2.
 	s.Build.Movement = s.Movement
 	// Placement release is an independent lifecycle observer. The primary
@@ -663,11 +663,38 @@ func (s *Session) RecalcLocalOwner() {
 
 // heightByteFor returns the observer height byte clamped 0..255 [03 §3.2] C5.
 // It is the world Y high word (map pixel height) truncated to byte; negative clamps to 0.
+// heightByteFor forms the LOS observer's emitter height byte [03 §3.2].
+//
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// where worldY has already been clamped to `(SeaLevel+1)<<16` by the caller at
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//
+// The addend is what makes the terrain-ray raster work at all: the horizon test
+// admits a step only when its slope STRICTLY exceeds the retained horizon, so
+// an observer whose height equals the ground under it retains a zero slope
+// after its first step and every later step ties and is rejected. Sighting from
+// the model's top gives the ray a negative slope to spend, which is also why a
+// laser tower outranges a peewee at equal sightdistance.
 func heightByteFor(u *units.Unit) uint8 {
+	return heightByteAt(u, 0)
+}
+
+// heightByteAt is heightByteFor with the map's sea level, which retail clamps
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func heightByteAt(u *units.Unit, seaLevel uint8) uint8 {
 	if u == nil {
 		return 0
 	}
-	h := int32(int64(u.Y) >> 16)
+	y := u.Y
+	if floor := numeric.Fixed(int64(seaLevel)+1) << 16; y < floor {
+		y = floor // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	}
+	h := int32(int64(y) >> 16)
+	if u.Def != nil {
+		h += u.Def.ModelTop // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	}
 	if h < 0 {
 		h = 0
 	}
@@ -675,6 +702,23 @@ func heightByteFor(u *units.Unit) uint8 {
 		h = 255
 	}
 	return uint8(h)
+}
+
+// observerTile returns the LOS coverage tile for a unit [03 §3.2].
+//
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// `tileX = worldX >> 5` and `tileZ = (worldZ - emitter/2) >> 5`, both
+// arithmetic shifts. The Z term subtracts half the emitter height because the
+// world is drawn along the same beam the camera projects: a tall observer's
+// footprint sits north of its ground position by half its height.
+func observerTile(u *units.Unit, emitter uint8) (cx, cz int32) {
+	if u == nil {
+		return 0, 0
+	}
+	px := int32(int64(u.X) >> 16)
+	pz := int32(int64(u.Z) >> 16)
+	pz -= int32(emitter) / 2 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	return px >> 5, pz >> 5  // arithmetic shift: floor, not truncation
 }
 
 func radiusFor(u *units.Unit) int32 {
@@ -690,9 +734,8 @@ func publishOne(s *Session, u *units.Unit) {
 	if s == nil || s.Vis == nil || u == nil || !u.Alive {
 		return
 	}
-	cx := world.WorldToCell(u.X) / 2
-	cz := world.WorldToCell(u.Z) / 2
-	hb := heightByteFor(u)
+	hb := heightByteAt(u, seaLevelFor(s))
+	cx, cz := observerTile(u, hb)
 	r := radiusFor(u)
 	s.Vis.Refresh(visibility.ObserverID(u.Handle), visibility.Observer{
 		Owner:      visibility.PlayerID(u.Owner),
@@ -784,3 +827,12 @@ var (
 	_ = world.NewWind
 	_ = ai.Manager{}
 )
+
+// seaLevelFor is the map's sea-level byte, which the LOS writer clamps the
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func seaLevelFor(s *Session) uint8 {
+	if s == nil || s.World == nil {
+		return 0
+	}
+	return s.World.SeaLevel
+}

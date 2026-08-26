@@ -57,11 +57,14 @@ func (s *SightShapes) Shape(i int) *SightShape {
 // sightShapeCandidates are the shipped visibility-mask resources, in the order
 // they are tried [03 §3.2].
 //
-// TODO(question): the reference install ships both, with identical frame
-// geometry and different opacity — vismasks.gaf's frames are solid squares and
-// vismask.gaf's are circular. Which one retail binds is recorded as an open
-// residual in [03 §3.2]; the plural spelling matches the handle name, so it is
-// tried first. This slice is the one place to flip that decision.
+// The reference install ships both and they decode identically — ten circular
+// frames, 11x11 through 29x29, with matching opaque-pixel counts; vismasks.gaf
+// stores them raw and vismask.gaf RLE-compressed. The old note here (that
+// vismasks.gaf held solid squares) was an artifact of decoding raw frames
+// without their color key [fmt gaf, frame header +8]: index 9 is the
+// transparent background, so ignoring it filled every shape to its bounding
+// box and gave every unit a square sight footprint. Retail binds `0x1485B`,
+// whose handle name is the plural spelling, so that stays first.
 var sightShapeCandidates = []string{
 	"anims/vismasks.gaf",
 	"anims/vismask.gaf",

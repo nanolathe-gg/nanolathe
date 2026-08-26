@@ -24,7 +24,7 @@ func replayBattleFrame(c *BattleController, cl *client.Client, f BattleInputFram
 func TestStrictSkirmish_ProductionInputReplayG10A(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
 	b.latch = input.LatchNormal
-	commander := placeUnit(b, "armcons", numeric.Fixed(10*65536), numeric.Fixed(10*65536))
+	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
 	for _, u := range b.sess.Units.Iter() {
 		if u != nil {
 			u.Flags &^= client.SelectionFlag

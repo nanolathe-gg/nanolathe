@@ -77,7 +77,7 @@ type Queue struct {
 	// diagnostics records dispatch failures for this unit's queue. It is per
 	// queue rather than package-global so two worlds in one process cannot
 	// interleave their logs and so a queue's diagnostics die with it
-	// [docs/ORCHESTRATION.md §7].
+	// [AGENTS.md §Diagnostics].
 	diagnostics []string
 
 	// P0-I16: authoritative hooks moved onto the owning queue/service.
@@ -382,7 +382,7 @@ func (q *Queue) recordDiagnostic(msg string) {
 	if q == nil {
 		return
 	}
-	// [REVIEW_OX_ALPHA E-7] bound diagnostics to 256 entries to prevent per-tick unbounded growth when descriptors have nil handlers by design.
+	//  bound diagnostics to 256 entries to prevent per-tick unbounded growth when descriptors have nil handlers by design.
 	const maxDiagnostics = 256
 	if len(q.diagnostics) >= maxDiagnostics {
 		copy(q.diagnostics, q.diagnostics[1:])
@@ -651,6 +651,21 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			n.Deadline = -1
 			n.Satisfied |= 1 // [04 §3.3]
 		}
+		ensureMoveHandlers()
+		ensureTransportHandlers()
+		// For transport and other wired handlers, the initial static gate (0x200/0x400 etc) is satisfied by construction (target/goal present) [04 §3.1] TODO(question) exact gate semantics.
+		// Clear it for phase 0 so the first dispatch is not blocked, mirroring the move arrival handle's clearing [R-P0-01].
+		// BeCarried is intentionally left blocked (gate 0x24) to keep cargo stalled while carried without RNG [04 §3.1] TODO(question).
+		if n.Phase == 0 && n.DynamicGate != 0 {
+			if h := DescriptorFor(n.ID).Handler; h != nil {
+				name := DescriptorFor(n.ID).Name
+				if name != "BeCarried" && n.DynamicGate == DescriptorFor(n.ID).StaticGate {
+					n.DynamicGate = 0
+					n.Satisfied = 0
+					n.Deadline = -1
+				}
+			}
+		}
 		satisfied := (n.Satisfied | u.Pending) & n.DynamicGate // [04 §3.3] C6
 		if n.DynamicGate != 0 && satisfied == 0 {
 			return // blocked head stalls [04 §3.3] C6
@@ -658,7 +673,6 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 		n.Satisfied &^= satisfied
 		u.Pending &^= satisfied
 		n.DynamicGate = 0
-		ensureMoveHandlers()
 		handler := DescriptorFor(n.ID).Handler
 		if handler == nil {
 			// [P0-I03] path-backed move orders have no dedicated handler yet; the
@@ -673,7 +687,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 				n.MoveState = MoveEnRoute
 				return
 			}
-			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for %s", DescriptorFor(n.ID).Name)) // [docs/ORCHESTRATION.md §7] never spin
+			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for %s", DescriptorFor(n.ID).Name)) // [AGENTS.md §Diagnostics] never spin
 			return
 		}
 		code := handler(u, n, satisfied)
@@ -858,4 +872,55 @@ func BindQueue(u *units.Unit, q *Queue) {
 	if u != nil {
 		u.Orders = q
 	}
+}
+
+// RemovePrimaryNode removes one primary node in place, preserving queue
+// identity and every queue-owned service binding (Hostility, Lookup,
+// StockpileEconomy, SecondaryTick, diagnostics). Callers that rebuilt the
+// segment into a fresh Queue silently dropped those hooks, so successor
+// orders lost target lookup and stockpile admission after a construction
+// removal.
+//
+// Removal follows the established subtraction order [04 §3.3][05 "Queue
+// subtraction"]: the node is marked per tombstone rules, cleanup runs exactly
+// once, the segment is spliced, and the active marker is handed to the
+// successor.
+//
+// tombstone selects the marker applied before cleanup. Retail exempts the
+// primary head from the tombstone [04 §3.3]; callers that must preserve an
+// older unconditional marking pass true explicitly.
+//
+// The node is matched by pointer identity; when that fails the head is
+// accepted if it carries the same order ID and first parameter. Returns the
+// removed node, or nil when nothing matched.
+func (q *Queue) RemovePrimaryNode(node *Node, tombstone bool) *Node {
+	if q == nil || len(q.primary) == 0 {
+		return nil
+	}
+	idx := -1
+	for i, n := range q.primary {
+		if n == node {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		head := q.primary[0]
+		if node != nil && head != nil && head.ID == node.ID && head.Param1 == node.Param1 {
+			idx = 0
+		} else {
+			return nil
+		}
+	}
+	removed := q.primary[idx]
+	if removed != nil {
+		if tombstone || idx != 0 {
+			removed.Flags |= FlagTombstone
+		}
+		removed.Flags &^= FlagActive
+		cleanupNode(removed)
+	}
+	q.primary = append(q.primary[:idx], q.primary[idx+1:]...)
+	q.ensureSingleActive()
+	return removed
 }

@@ -209,9 +209,16 @@ exists".
 
 Same field, different jitter bounds (rand < 15 vs rand < 30).
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Observed:** the two retail arms use distinct random bounds while adding the
+same 30-tick base delay. Result code 3 draws below 15; result code 9 on the last
+record draws below 30 [R-P0-01]. The earlier analysis missed the latter arm
+because it reaches the shared deadline calculation through an indirect branch.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Decision:** implement distinct arms: code 3 → `tick+30+RNG(15)` and code 9
+last → `tick+30+RNG(30)` per [R-P0-01].
+`internal/orders/pump.go` has `randBelow15` for code 3 and `randBelow30` for
+code 9 last; both primary and secondary pumps use the same split. Observable
+only as the re-arm cadence of a completed last order.
 
 **Falsifies:** the earlier SC8 reading that both arms shared `RNG(15)`; [04 §3.3]
 row is correct for code 3 and [05] is correct for code 9 last.
@@ -255,7 +262,11 @@ required to agree and must not be shared.
 
 **Spec** `[03 §2.4/2.5]` prior to 2026-08-25: load-time half-turn `-X,-Z` was established, but whether screen helpers' `-Z` was a second conversion (`H_C` net `-X`) vs shear (`H_A` net `-X,-Z`) was an open question or supported inference.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Observed:** the screen helpers negate only the transient projected Z value,
+then compute the established `Z - Y/2` shear. They do not store that negation
+back into model data. The muzzle query likewise consumes the vectors produced
+by the one load-time half-turn without applying a second sign change. Therefore
+the trailing `-Z` belongs to projection, not source conversion.
 
 **Decision:** implement `H_A` sole load-time conversion; reject `H_C` (rr-06_addendum, direct-static). Flare/muzzle world at `(2,1,-30)` is `(-2,1,+30)` plus unit origin.
 
@@ -267,7 +278,9 @@ required to agree and must not be shared.
 
 **Spec** `[03 §2.4]` / `research/formats/3do.md` "Model facing is −Z": piece translations converted at load, but muzzle query path could have re-applied `NEG`.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Observed:** the piece transform rotates and translates the already-converted
+piece and center vectors. `COB.QueryPrimary` uses the same vectors without an
+extra sign change.
 
 **Decision:** muzzle query reuses pristine post-load vectors; no second sign fixup (rr-06_addendum, direct-static). Same evidence as SC10; separated because SC10 is about projection shear vs conversion and SC14 is about per-vertex flare reuse.
 

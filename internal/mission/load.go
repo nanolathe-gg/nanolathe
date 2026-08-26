@@ -62,7 +62,7 @@ func (m *Mission) Order() []string {
 	return out
 }
 
-// Sink is the diagnostic sink per ORCHESTRATION §7. Diagnostics are returned
+// Sink is the diagnostic sink per AGENTS.md §Diagnostics. Diagnostics are returned
 // as errors and also collected on the sink; never logged inside sim.
 type Sink interface {
 	Report(string)

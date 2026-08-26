@@ -71,7 +71,7 @@ type hudFS interface {
 	Providers() []vfs.ProviderInfo
 }
 
-// hudProviders returns the ordered provider identities for diagnostics [ORCHESTRATION §7].
+// hudProviders returns the ordered provider identities for diagnostics [AGENTS.md §Diagnostics].
 func hudProviders(fs vfs.FSOps) []string {
 	if fs == nil {
 		return nil
@@ -132,7 +132,7 @@ func battleFrameWithDiag(fs vfs.FSOps, g *formats.GAF, logical, name string) (*f
 // loadRetailBattleHUD binds the same side-selected resources as the retail
 // battle entry path. Mandatory assets are side, fonts, 30 anchors and core
 // panel frames [02 §6][07 §6]; their absence fails before client creation with
-// a provider-aware diagnostic (logical path + providers searched) [ORCHESTRATION §7].
+// a provider-aware diagnostic (logical path + providers searched) [AGENTS.md §Diagnostics].
 // Pause/options/exit/confirm/title resources are individually degradable when
 // retail permits [07 §8][07 "Tab options menu and manual exit"]; missing
 // cursor GAF is also degradable and retains the OS pointer [07 §8].
@@ -628,12 +628,12 @@ func (h *retailBattleHUD) drawResources(c *client.Client, f *snapshot.Frame) {
 	h.drawNumber(c, hud.AnchorMetalNum, float32(res.Metal))
 	h.drawNumberRight(c, hud.AnchorEnergyMax, res.EnergyCapacity)
 	h.drawNumberRight(c, hud.AnchorMetalMax, res.MetalCapacity)
-	h.drawTextAt(c, hud.AnchorEnergy0, "0", h.paletteIndex(15))
-	h.drawTextAt(c, hud.AnchorMetal0, "0", h.paletteIndex(15))
-	h.drawTextAt(c, hud.AnchorEnergyProduced, formatEnergyRate(rates.EnergyProduced), h.paletteIndex(10))
-	h.drawTextAt(c, hud.AnchorEnergyConsumed, formatEnergyRate(-rates.EnergyConsumed), h.paletteIndex(12))
-	h.drawTextAt(c, hud.AnchorMetalProduced, fmt.Sprintf("%.1f", rates.MetalProduced), h.paletteIndex(10))
-	h.drawTextAt(c, hud.AnchorMetalConsumed, fmt.Sprintf("%.1f", -rates.MetalConsumed), h.paletteIndex(12))
+	h.drawTextAt(c, hud.AnchorEnergy0, "0", h.guiColor(15))
+	h.drawTextAt(c, hud.AnchorMetal0, "0", h.guiColor(15))
+	h.drawTextAt(c, hud.AnchorEnergyProduced, formatEnergyRate(rates.EnergyProduced), h.guiColor(10))
+	h.drawTextAt(c, hud.AnchorEnergyConsumed, formatEnergyRate(-rates.EnergyConsumed), h.guiColor(12))
+	h.drawTextAt(c, hud.AnchorMetalProduced, fmt.Sprintf("%.1f", rates.MetalProduced), h.guiColor(10))
+	h.drawTextAt(c, hud.AnchorMetalConsumed, fmt.Sprintf("%.1f", -rates.MetalConsumed), h.guiColor(12))
 }
 
 func (h *retailBattleHUD) drawResourceBar(c *client.Client, r hud.Rect, fraction float32, inner byte) {
@@ -663,13 +663,13 @@ func (h *retailBattleHUD) drawNumberRight(c *client.Client, index int, value flo
 	}
 	text := fmt.Sprintf("%d", int(value))
 	x := r.X1 - int32(client.MeasureText(h.console, text))
-	c.UIText(h.console, text, int(x), int(r.Y1), h.paletteIndex(15))
+	c.UIText(h.console, text, int(x), int(r.Y1), h.guiColor(15))
 }
 
 func (h *retailBattleHUD) drawNumberAtPoint(c *client.Client, x, y int32, value float32) {
 	// The retail resource display is an integer text field; the authoritative
 	// stock remains float32, and conversion here truncates toward zero [01 §8].
-	c.UIText(h.console, fmt.Sprintf("%d", int(value)), int(x), int(y), h.paletteIndex(15))
+	c.UIText(h.console, fmt.Sprintf("%d", int(value)), int(x), int(y), h.guiColor(15))
 }
 
 func (h *retailBattleHUD) drawTextAt(c *client.Client, index int, text string, color byte) {
@@ -698,10 +698,10 @@ func (h *retailBattleHUD) drawTopStatusValues(c *client.Client, f *snapshot.Fram
 		}
 	}
 	if r, ok := h.anchors.ByIndex(hud.AnchorTotalUnits); ok {
-		c.UIText(h.console, fmt.Sprintf("%d", localUnits), int(r.X1), int(r.Y1), h.paletteIndex(15))
+		c.UIText(h.console, fmt.Sprintf("%d", localUnits), int(r.X1), int(r.Y1), h.guiColor(15))
 	}
 	if r, ok := h.anchors.ByIndex(hud.AnchorTotalTime); ok {
-		c.UIText(h.console, hud.FormatGameTime(int(f.Tick)), int(r.X1), int(r.Y1), h.paletteIndex(15))
+		c.UIText(h.console, hud.FormatGameTime(int(f.Tick)), int(r.X1), int(r.Y1), h.guiColor(15))
 	}
 }
 
@@ -741,13 +741,13 @@ func (h *retailBattleHUD) drawHealthBar(c *client.Client, r hud.Rect, health, ma
 	if right <= left || bottom <= top || max <= 0 {
 		return
 	}
-	outer := h.paletteIndex(0)
-	inner := h.paletteIndex(12)
+	outer := h.guiColor(0)
+	inner := h.guiColor(12)
 	third := max / 3
 	if health > third*2 {
-		inner = h.paletteIndex(10)
+		inner = h.guiColor(10)
 	} else if health > third {
-		inner = h.paletteIndex(14)
+		inner = h.guiColor(14)
 	}
 	c.UIFillRect(int(left), int(top), int(right-left), int(bottom-top), outer)
 	left++

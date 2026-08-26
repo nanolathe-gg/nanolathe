@@ -279,3 +279,45 @@ func LoadThreeDOFile(fs vfs.FSOps, name string) (*ThreeDO, error) {
 }
 
 func Load3DOFile(fs vfs.FSOps, name string) (*ThreeDO, error) { return LoadThreeDOFile(fs, name) }
+
+// ModelTop returns the model's top extent in 16.16 world units, matching the
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//
+// Retail walks the piece and its siblings, taking the maximum of
+// `vertex.Y + piece.Translation.Y` over every vertex, and for each child
+// subtree the recursive result plus this piece's own Y translation. The
+// accumulator starts at zero and only ever grows, so the value is floored at
+// zero and a model entirely below its origin reports 0.
+//
+// The LOS writer reads only the HIGH word of that dword — `def+0x170`, the top
+// in whole world units — as the observer's height addend, which is why the eye
+// sits at the model's top rather than on the ground [03 §3.2].
+func (t *ThreeDO) ModelTop() int32 {
+	if t == nil || len(t.Objects) == 0 {
+		return 0
+	}
+	return t.modelTopFrom(0)
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// following sibling, each contributing its own vertices and its child subtree.
+func (t *ThreeDO) modelTopFrom(index int32) int32 {
+	var top int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	for index >= 0 && int(index) < len(t.Objects) {
+		obj := &t.Objects[index]
+		ty := obj.Translation[1]
+		for _, v := range obj.Vertices {
+			if y := v.Y + ty; y > top {
+				top = y
+			}
+		}
+		if obj.FirstChild >= 0 {
+			if y := t.modelTopFrom(obj.FirstChild) + ty; y > top {
+				top = y
+			}
+		}
+		index = obj.NextSibling
+	}
+	return top
+}

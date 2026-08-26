@@ -333,6 +333,11 @@ func (p *Player) CommitPostSettlement() {
 	}
 	prepared := p.aiAggregatesPrepared
 	// Per-pass counters and cumulative totals committed before stock fold per C10.
+	// They report activity for the pass, including every live unit bucket plus
+	// the player mirror, not mirror alone [05 "Authoritative settlement order"]
+	// [05 "Stocks, counters, and waste"] C10. AIProduction/Consumption already
+	// hold that total when settleOneResource prepared them [R-P0-05]; fall back
+	// to mirror for direct unit-less fixtures.
 	for r := Metal; r <= Energy; r++ {
 		// Strategic AI observes the settled player record on the next manager
 		// dispatch. A composed Settle call has already populated these fields
@@ -342,10 +347,10 @@ func (p *Player) CommitPostSettlement() {
 			p.AIProduction[r] = p.Mirror[r].Production
 			p.AIConsumption[r] = p.Mirror[r].Requested
 		}
-		p.PassProduced[r] = p.Mirror[r].Production
-		p.PassConsumed[r] = p.Mirror[r].Requested
-		p.TotalProduced[r] += float64(p.Mirror[r].Production)
-		p.TotalConsumed[r] += float64(p.Mirror[r].Requested)
+		p.PassProduced[r] = p.AIProduction[r]
+		p.PassConsumed[r] = p.AIConsumption[r]
+		p.TotalProduced[r] += float64(p.PassProduced[r])
+		p.TotalConsumed[r] += float64(p.PassConsumed[r])
 	}
 	// Clamp stock to rebuilt capacity; overflow to waste with fractional preserved per C10.
 	// Waste is float64 per I2; stock stays float32 per [05 "Player slot"].

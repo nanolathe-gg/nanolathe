@@ -580,7 +580,9 @@ Retail content loading is two-stage:
 
 This avoids directory enumeration order deciding whether a reference can be
 resolved. Known links include unit weapons, corpses, movement classes,
-feature successors, 3DO objects, GAF animation sequences, and sound aliases.
+feature successors, 3DO objects, GAF animation sequences, sound aliases, and
+category tokens (the category token registry is specified under R-P0-03
+below).
 
 Catalog construction must be case-insensitive for names. Unknown keys should
 remain in the source tree even when the runtime catalog ignores them.
@@ -601,7 +603,7 @@ and the stated default is already in 16.16 units.
 | `description` | language-prefixed string, 64 bytes | empty | |
 | `side` | string, 30 bytes | empty | faction tag; consumed by the build-pick filter below |
 | `objectname` | string, 32 bytes | empty | 3DO model name |
-| `category` | string, 100 bytes | empty | category token list |
+| `category` | string, 100 bytes | empty | category token list (see R-P0-03) |
 | `soundcategory` | string, 100 bytes | empty | resolves to a sound-category index |
 | `corpse` | string, 100 bytes | empty | resolves to a feature identity |
 | `movementclass` | string, 100 bytes | empty | resolves to a movement class |
@@ -609,7 +611,7 @@ and the stated default is already in 16.16 units.
 | `explodeas`, `selfdestructas` | string, 128 bytes each | empty | resolve to weapon identities |
 | `YardMap` | string, 1,024 bytes | empty | occupancy map text |
 | `defaultmissiontype` | string, 100 bytes | empty | |
-| `wpri_badTargetCategory`, `wsec_badTargetCategory`, `wspe_badTargetCategory`, `noChaseCategory` | string, 100 bytes each | `none` | per-slot exclusion categories |
+| `wpri_badTargetCategory`, `wsec_badTargetCategory`, `wspe_badTargetCategory`, `noChaseCategory` | string, 100 bytes each | `none` | per-slot exclusion categories (see R-P0-03) |
 
 `side` is read by the catalog loader, not the per-unit compiler. Its one
 located consumer is a weighted build-choice roulette over an acting unit's
@@ -937,7 +939,157 @@ companion key `<that key>text` (empty when absent). A category's event
 therefore holds an ordered list of variants and their captions, plus the count.
 
 An event key that is absent for the bare form contributes no variants at all,
-because the bare read is what gates the numbered loop.
+because the bare read is what gates the numbered loop. **Correction (SC7):**
+this gating is wrong — the numbered loop runs regardless of whether the bare
+key is present. The stock corpus ships no bare forms at all for the core cues
+(120 `select1`, 76 `ok1`, 76 `cant1`, 63 `arrived1`), and retail still counts
+one variant for each via the numbered path; a strict bare-gate would mute them.
+See `[03 §8.3]` for the full sound-category contract and
+`docs/SPEC_CONFLICTS.md` SC7.
+
+### R-P0-03 — Category token registry and membership-bitset compilation
+
+Addendum R-P0-03 is folded into this subsection; the consumption of these
+bitsets by weapon and order masks is owned by document 06 §3.1.
+
+#### §1 — Result
+
+**Established.** Retail does **not** assign one bit per category token by
+hashing the token. A category token is a case-insensitive registry key whose
+value is a bitset of unit definition IDs. Compiling a unit's `category` string
+sets that unit's ID bit in the bitset for every token named by the string.
+Weapon and order masks then refer to those token bitsets and test candidate
+unit IDs.
+
+An earlier reading — one bit per token derived by hashing the token name
+(`FNV(token) % 32`) — is the wrong contract: it would make category bits token
+ordinals or hash buckets, while retail makes them membership sets indexed by
+unit ID. The hash reading was tried and is rejected by the recovered static
+path; this paragraph records the reversal so it stays auditable.
+
+#### §2 — Registry construction
+
+The category registry is a sorted vector of entries, each holding a name
+pointer and a bitset pointer. Lookup uses a case-insensitive comparison. If a
+name is already present, lookup returns the existing bitset; otherwise it
+allocates a zeroed bitset of 16 32-bit words (512 unit-ID positions), stores
+the normalized name/entry, and inserts it into the case-insensitively sorted
+vector.
+
+There is no evidence of an ordinal assigned to a category token and no evidence
+that token insertion order controls unit membership bits. The stable unit
+catalog is built in a separate stage, with unit IDs assigned after the
+catalog's case-insensitive record ordering (§5 above).
+
+The registry's bitset layout:
+
+```text
+word = unitID >> 5
+mask = 1 << (unitID & 31)
+```
+
+The compiler sets `registry[token][word] |= mask`. The same unit ID can be set
+in many token bitsets. Downstream, a bad-target/no-chase mask for token T is
+effectively tested as `T.bitset[unitID >> 5] & (1 << (unitID & 31))` [06 §3.1].
+
+#### §3 — Category-string compilation
+
+The `category` value is scanned as a whitespace-separated sequence (a `%s`-style
+token scan that also reports the consumed-character count). Each token is
+looked up or created in the registry, then the current unit ID bit is ORed into
+that token's bitset. Empty or repeated whitespace has no semantic effect.
+
+After the token loop, the compiler also looks up the registry's
+empty/sentinel entry and sets the current unit ID bit in that bitset.
+Sentinel membership is mandatory; the sentinel is recovered as an internal
+empty-name entry rather than an authored field name, so its exact
+user-visible spelling or semantic label is not established — implementations
+must preserve the mandatory sentinel membership without inventing a display
+token.
+
+Unit category fields and weapon masks use the same registry. The bad-target
+fields (`wpri_badTargetCategory`, `wsec_badTargetCategory`, and
+`wspe_badTargetCategory`) and `noChaseCategory` default to the authored token
+`none` when absent. `none` is not a reserved compiler keyword: it is looked up
+like any other token, so its mask is empty unless an authored unit is actually
+compiled into that token [06 §3.1].
+
+#### §4 — Unknown and duplicate handling
+
+| Input case | Retail behavior | Confidence |
+| --- | --- | --- |
+| Unknown token | Create a zeroed registry bitset; do not reject the unit or emit a required diagnostic. It remains empty until another unit contributes the same case-insensitive token. | Established |
+| Duplicate token in one `category` string | OR the same unit bit again; no duplicate membership and no second registry entry. | Established |
+| Same token with different case | Case-insensitive lookup returns the same registry entry/bitset. | Established |
+| Duplicate category names across units | One registry entry; each unit ID is ORed into that entry's bitset. | Established |
+| Empty/missing category value | Token loop contributes none, but the mandatory empty/sentinel registry membership is still set. | Supported inference — direct static path; sentinel label unknown |
+| `none` default mask | Ordinary registry lookup; zero unless a unit is a member of `none`. | Established, with authored-data caveat |
+
+Unknown category text is thus tolerated data, not a hash collision and not an
+error path. A later definition can populate an already-created empty bitset,
+which is why registry construction must not discard unknown names during the
+first pass.
+
+#### §5 — Related mask lookup
+
+The mask helper first resolves a name against the unit-name index. If the name
+is a unit name, it sets that one unit ID bit; otherwise it ORs the whole
+category bitset into the output mask. This preserves the distinction between a
+direct unit target and a category target and further rules out a
+token-to-single-bit model [06 §3.1].
+
+#### §6 — Algorithm and ordering contract
+
+```text
+build unit catalog
+  case-insensitively order unit records
+  assign stable unit IDs
+
+for each unit in stable ID order
+  for token in whitespace_tokens(unit.category)
+    set category_registry[casefold(token)][unit.id] = 1
+  set category_registry[empty_sentinel][unit.id] = 1
+
+compile authored bad-target/no-chase category names
+  resolve one case-insensitive registry entry per name
+  retain its unit-ID bitset pointer/value
+```
+
+The category vector is sorted for lookup; token order within one string does
+not affect the resulting bitsets. Unit ID ordering is the determinism boundary:
+the same case-insensitive catalog order must be used before setting bits.
+Registry allocation and membership are integer operations; no FNV, modulo, or
+floating-point step participates.
+
+#### §7 — Evidence and confidence
+
+- Unit category fields, defaults, two-stage catalog loading, and retained
+  unknown keys: §5 above.
+- Category masks as unit-target membership sets: [06 §3.1].
+- Exact registry shape, case-insensitive sorted insertion, zeroed 16-word
+  allocation, whitespace tokenization, unit-ID word/mask calculation, and
+  sentinel membership: static-analysis notes kept outside the repository.
+
+Confidence is high for registry identity, bitset layout, unknown/duplicate
+behavior, and unit-ID indexing. Confidence is medium for the sentinel's
+user-visible name and semantics, because the recovered pointer is an internal
+empty-name/sentinel entry rather than an authored field name.
+
+#### §8 — Implementation guidance and unresolved question
+
+Compile a registry entry to a mutable/immutable 512-bit unit-membership mask,
+not to a token ordinal. Casefold names using the retail-compatible
+case-insensitive comparison, sort registry entries for deterministic lookup,
+retain unknown names with zero masks, and OR duplicate memberships. Assign unit
+IDs only after the stable case-insensitive unit catalog ordering. Keep `none`
+as a normal token default unless content analysis proves an authored special
+case.
+
+```text
+TODO(question): What exact internal string (if any) is attached to the
+empty/sentinel category registry entry, and which retail systems consume that
+sentinel membership beyond the recovered category compiler?
+```
 
 
 ## 6. Interface, side, map, animation, model, and script files
@@ -1559,11 +1711,16 @@ run clamping, and marker-less palette read; the FNT descender/bias split;
 the skirmish per-slot defaults with the `NumSkirmishPlayers` no-op
 validation; the TNT feature-reference sentinel refinement; the fringe-anchor
 signed-offset encoding (signed bytes, DZ scaled by width, threshold `0xFFFB`,
-width proof to 402×408 — SC6 resolved, A11 closed); the void-edge generation
+width proof to 402×408 — content specified above; SC6 resolved, A11 closed); the void-edge generation
 (right `W-2,W-1` always void, `PlayRight`/`PlayBottom` insets, lava-world bulk
-flood on `hmin≤SeaLevel` — A29 closed); and the per-cell metal uniform
-`SurfaceMetal` seeding with no raster and extractor `Σ(byte+1)` sampling (A28
-closed, varying file `TODO(question)`).
+flood on `hmin≤SeaLevel` — content specified above; A29 closed); and the per-cell metal uniform
+`SurfaceMetal` seeding with no raster and extractor `Σ(byte+1)` sampling
+(content specified above; A28 closed, varying file `TODO(question)`); and the
+category token registry — case-insensitive sorted entries, 16-word 512-bit
+unit-membership bitsets (`word = unitID >> 5`, `mask = 1 << (unitID & 31)`),
+whitespace tokenization of `category`, mandatory empty/sentinel membership,
+`none` as an ordinary token, and the unit-name-first mask helper (R-P0-03
+folded into §5).
 
 Still open:
 
@@ -1624,3 +1781,6 @@ Still open:
    the translation lookup.
 * Exact cache invalidation boundaries across map changes, saves, and lobby
    sessions.
+* The empty/sentinel category registry entry's exact internal string, and
+   which retail systems consume that sentinel membership beyond the category
+   compiler — `TODO(question)` under R-P0-03 in §5.

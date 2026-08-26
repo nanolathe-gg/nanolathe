@@ -6,7 +6,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// OW-3-P goal-families wiring [04 §7.2][04 §7.4][04 §3.5][REVIEW_OX_ALPHA M-4].
+// OW-3-P goal-families wiring [04 §7.2][04 §7.4][04 §3.5].
 //
 // Four families share the path.Goal interface [04 §7.2] C8:
 //   PointGoal, AnnulusGoal (stand-off), RectPerimeterGoal, SavedGoal.

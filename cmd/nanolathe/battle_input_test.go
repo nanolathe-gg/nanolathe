@@ -9,18 +9,17 @@ import (
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// screenPos computes viewport coords for a world unit [07 §9][03 §2.5][C-3].
-// It uses the drawn-chrome viewport (129,32) so clicks map through the same
-// OrderTargetFromViewport path as production [07 §8].
+// screenPos computes the framebuffer position where the world renderer draws a
+// unit [07 §9][03 §2.5].
 func screenPos(cam *camera.Camera, u *units.Unit) (int32, int32) {
-	vt := client.NewViewportTransform(cam, nil, 640, 480)
-	p := vt.WorldToViewport(u.X, u.Y, u.Z)
-	return p.X, p.Y
+	sx, sy := cam.WorldToScreen(u.X, u.Y, u.Z)
+	return sx - camera.OriginX, sy - camera.OriginY
 }
 
 func clickAt(b *battleSession, sx, sy int32, shift bool) {
@@ -95,8 +94,10 @@ func TestClickCommanderSelectsExactlyOne(t *testing.T) {
 	b := newTestBattle(cat, terrain)
 	b.sess.LocalOwner = 0
 	cam := b.cam
-	// Place commander at (10,10) map pixels
-	cmdr := placeUnit(b, "armcons", numeric.Fixed(10*65536), numeric.Fixed(10*65536))
+	// Place commander inside the visible battle surface. The renderer's world
+	// pass uses framebuffer coordinates, so points under the side rail are not
+	// valid click fixtures.
+	cmdr := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
 	// Ensure no prior selection
 	for _, u := range b.sess.Units.Iter() {
 		if u != nil {
@@ -122,14 +123,62 @@ func TestClickCommanderSelectsExactlyOne(t *testing.T) {
 	}
 }
 
+// TestClickAtRenderedCommanderPosition selects at the framebuffer position
+// where the battle renderer draws the unit. The input path must not subtract
+// the HUD viewport origin a second time [03 §2.5][07 §8].
+func TestClickAtRenderedCommanderPosition(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
+	b.sess.LocalOwner = 0
+	b.latch = input.LatchNormal
+	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
+	commander.Flags &^= client.SelectionFlag
+
+	beamX, beamY := b.cam.WorldToScreen(commander.X, commander.Y, commander.Z)
+	sx, sy := beamX-camera.OriginX, beamY-camera.OriginY
+	clickAt(b, sx, sy, false)
+
+	if commander.Flags&client.SelectionFlag == 0 {
+		t.Fatalf("rendered commander at (%d,%d) was not selected", sx, sy)
+	}
+}
+
+// TestClickAtRenderedCommanderPositionUsesSnapshotPicker covers the normal
+// loaded-battle path, where input picks from the immutable frame already being
+// rendered rather than the live-pool fallback [03 §2.5][07 §9].
+func TestClickAtRenderedCommanderPositionUsesSnapshotPicker(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
+	b.sess.LocalOwner = 0
+	b.latch = input.LatchNormal
+	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
+	commander.Flags &^= client.SelectionFlag
+	b.sess.Snapshot.Publish(&snapshot.Frame{
+		Units: []snapshot.UnitView{{
+			Slot:  commander.Handle,
+			Owner: b.sess.LocalOwner,
+			X:     commander.X,
+			Y:     commander.Y,
+			Z:     commander.Z,
+		}},
+		Selection: snapshot.SelectionView{LocalPlayer: b.sess.LocalOwner},
+	})
+
+	beamX, beamY := b.cam.WorldToScreen(commander.X, commander.Y, commander.Z)
+	sx, sy := beamX-camera.OriginX, beamY-camera.OriginY
+	clickAt(b, sx, sy, false)
+
+	if commander.Flags&client.SelectionFlag == 0 {
+		t.Fatalf("snapshot-rendered commander at (%d,%d) was not selected", sx, sy)
+	}
+}
+
 // TestEmptyClickClearsShiftToggles [07 §9] C6 empty clears, shift toggles/adds.
 func TestEmptyClickClearsShiftToggles(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(30, 30)
 	b := newTestBattle(cat, terrain)
 	b.sess.LocalOwner = 0
-	a := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
-	c := placeUnit(b, "armsolar", numeric.Fixed(20*65536), numeric.Fixed(20*65536))
+	a := placeUnit(b, "armcons", numeric.Fixed(180*65536), numeric.Fixed(100*65536))
+	c := placeUnit(b, "armsolar", numeric.Fixed(320*65536), numeric.Fixed(220*65536))
 	b.latch = input.LatchNormal
 	// Click A selects A
 	sxA, syA := screenPos(b.cam, a)
@@ -169,9 +218,9 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 	if q := orders.QueueForUnit(a); q != nil {
 		qBefore = q.LenPrimary()
 	}
-	// Use a far empty ground location that is not within 16px of any unit (units at 8,8 and 20,20 world → screen 8,8 and 20,20).
+	// Use a far empty ground location that is not within 16px of any unit.
 	// Use point outside minimap (540,360 90x90) so it is not intercepted as minimap jump [C-6][07 §10].
-	clickAt(b, 300, 200, false) // far empty ground
+	clickAt(b, 500, 300, false) // far empty ground
 	if a.Flags&client.SelectionFlag == 0 {
 		t.Fatalf("left empty with selection should preserve selection (issues move instead of clear)")
 	}
@@ -193,7 +242,7 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 	}
 	// Right empty clears when not additive [07 §9] — deselect branch.
 	// Right click must be outside minimap as well.
-	rightClickAt(b, 300, 200, false)
+	rightClickAt(b, 500, 300, false)
 	if a.Flags&client.SelectionFlag != 0 || c.Flags&client.SelectionFlag != 0 {
 		t.Fatalf("right empty should clear all, A %v C %v", a.Flags&client.SelectionFlag != 0, c.Flags&client.SelectionFlag != 0)
 	}
@@ -204,7 +253,7 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 	if q := orders.QueueForUnit(a); q != nil {
 		qBefore2 = q.LenPrimary()
 	}
-	clickAt(b, 300, 200, true) // shift left empty → queued move, preserves
+	clickAt(b, 500, 300, true) // shift left empty → queued move, preserves
 	if a.Flags&client.SelectionFlag == 0 {
 		t.Fatalf("shift left empty should preserve selection via queued move")
 	}
@@ -265,7 +314,7 @@ func TestFoggedEnemyCannotBeSelectedOrTargeted(t *testing.T) {
 	b.sess.LocalOwner = 0
 	// Ensure visibility service is empty (W==0 => enemy invisible) [03 §3.2] C8
 	b.sess.Vis = &visibility.Service{} // empty
-	enemy := placeUnit(b, "armsolar", numeric.Fixed(10*65536), numeric.Fixed(10*65536))
+	enemy := placeUnit(b, "armsolar", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
 	enemy.Owner = 1
 	enemy.Flags &^= client.SelectionFlag
 	b.latch = input.LatchNormal
@@ -290,7 +339,7 @@ func TestFoggedEnemyCannotBeSelectedOrTargeted(t *testing.T) {
 	}
 	// Now make visible via nil vis (no fog) – should be selectable if owned? But enemy owned so not selectable as own.
 	// Instead place own unit fogged? Own bypass [03 §3.2] C8 step1 so own always visible even with empty vis.
-	own := placeUnit(b, "armsolar", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
+	own := placeUnit(b, "armsolar", numeric.Fixed(300*65536), numeric.Fixed(200*65536))
 	own.Owner = 0
 	sxOwn, syOwn := screenPos(b.cam, own)
 	b.latch = input.LatchNormal
@@ -306,8 +355,8 @@ func TestEqualOverlapTieLowerSlotWins(t *testing.T) {
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
 	b.sess.LocalOwner = 0
-	x := numeric.Fixed(10 * 65536)
-	z := numeric.Fixed(10 * 65536)
+	x := numeric.Fixed(200 * 65536)
+	z := numeric.Fixed(120 * 65536)
 	h1, _ := b.sess.Units.Create(cat.Units[content.CanonicalKey("armcons")], 0, x, 0, z)
 	h2, _ := b.sess.Units.Create(cat.Units[content.CanonicalKey("armsolar")], 0, x, 0, z)
 	u1 := b.sess.Units.Unit(h1)
@@ -322,10 +371,9 @@ func TestEqualOverlapTieLowerSlotWins(t *testing.T) {
 		}
 	}
 	sx, sy := screenPos(b.cam, u1) // same as u2
-	// First via direct picker (expects shell coords) [C-3][03 §2.5]
-	vtPick := client.NewViewportTransform(b.cam, nil, 640, 480)
-	shellX := sx - vtPick.Viewport.Left
-	shellY := sy - vtPick.Viewport.Top
+	// First via direct picker at the rendered framebuffer position [03 §2.5]
+	shellX := sx
+	shellY := sy
 	viewer := visibility.PlayerID(b.sess.LocalOwner)
 	bh, bu := client.PickUnit(shellX, shellY, b.cam, b.sess.Units, nil, viewer)
 	if bh != h1 || bu != u1 {
@@ -342,8 +390,8 @@ func TestEqualOverlapTieLowerSlotWins(t *testing.T) {
 	// Nudge u2 to be 1px closer – should win despite higher slot (nearest wins)
 	u2.X = x + numeric.Fixed(1*65536)
 	sx2, sy2 := screenPos(b.cam, u2)
-	shellX2 := sx2 - vtPick.Viewport.Left
-	shellY2 := sy2 - vtPick.Viewport.Top
+	shellX2 := sx2
+	shellY2 := sy2
 	bh2, _ := client.PickUnit(shellX2, shellY2, b.cam, b.sess.Units, nil, viewer)
 	if bh2 != h2 {
 		t.Fatalf("nearest should win despite higher slot, want %v got %v", h2, bh2)
@@ -359,10 +407,10 @@ func TestLocalOwnerNonzeroReceivesCommands(t *testing.T) {
 	b := newTestBattle(cat, terrain)
 	b.sess.LocalOwner = 1 // human is player 1, not 0 [RS-P0-004]
 	// Place two units, one owned by 1 (local), one owned by 0
-	localUnit := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
+	localUnit := placeUnit(b, "armcons", numeric.Fixed(180*65536), numeric.Fixed(100*65536))
 	localUnit.Owner = 1
 	localUnit.Flags &^= client.SelectionFlag
-	otherUnit := placeUnit(b, "armcons", numeric.Fixed(10*65536), numeric.Fixed(10*65536))
+	otherUnit := placeUnit(b, "armcons", numeric.Fixed(240*65536), numeric.Fixed(160*65536))
 	otherUnit.Owner = 0
 	otherUnit.Flags &^= client.SelectionFlag
 	// Try to select otherUnit via click – should not select because filter to LocalOwner [07 §9]
@@ -412,7 +460,7 @@ func TestFeaturePickingOverlap(t *testing.T) {
 	featDef := cat.Features[content.CanonicalKey("armrock")]
 	terrain.FeatureNames = []string{"armrock"}
 	terrain.FeatureDefs = []*content.FeatureDef{featDef}
-	idx := 5*int(terrain.CellW) + 5
+	idx := 5*int(terrain.CellW) + 9
 	terrain.Plot[idx][8] = 0
 	terrain.Plot[idx][9] = 0
 	b := newTestBattle(cat, terrain)
@@ -420,10 +468,9 @@ func TestFeaturePickingOverlap(t *testing.T) {
 	b.cam.X = 0
 	b.cam.Z = 0
 	// Place unit at same cell as feature to test unit>feature priority
-	u := placeUnit(b, "armsolar", numeric.Fixed(int64(5*16)<<16), numeric.Fixed(int64(5*16)<<16))
-	vt := client.NewViewportTransform(b.cam, b.sess.World, 640, 480)
-	p := vt.WorldToViewport(numeric.Fixed(int64(5*16)<<16), 0, numeric.Fixed(int64(5*16)<<16))
-	sx, sy := p.X, p.Y
+	u := placeUnit(b, "armsolar", numeric.Fixed(int64(9*16)<<16), numeric.Fixed(int64(5*16)<<16))
+	beamX, beamY := b.cam.WorldToScreen(numeric.Fixed(int64(9*16)<<16), 0, numeric.Fixed(int64(5*16)<<16))
+	sx, sy := beamX-camera.OriginX, beamY-camera.OriginY
 	// Pick at feature cell – unit should win
 	h, _, pos := b.pickTarget(sx, sy)
 	if h == 0 {
@@ -436,7 +483,7 @@ func TestFeaturePickingOverlap(t *testing.T) {
 	if !pos2.HasFeature {
 		t.Fatalf("feature picking after unit moved: HasFeature false")
 	}
-	// Feature picking should respect fog: with empty vis, feature at 5,5 invisible?
+	// Feature picking should respect fog: with empty vis, the feature is invisible.
 	b.sess.Vis = &visibility.Service{}
 	_, _, pos3 := b.pickTarget(sx, sy)
 	// With empty vis and feature, our code checks VisiblePoint – empty returns false, so not visible.

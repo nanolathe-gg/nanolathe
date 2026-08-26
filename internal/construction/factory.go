@@ -116,7 +116,7 @@ type Service struct {
 	// Movement is the optional walk driver for mobile builders. When set, a
 	// MOBILE builder ordered to build at a site out of nano range first walks
 	// toward the site until within nanolathe range via the normal
-	// Move_Ground machinery, then enters state 2 [04 §3.4][05][REVIEW_OX_ALPHA E-8][R-P0-06].
+	// Move_Ground machinery, then enters state 2 [04 §3.4][05][R-P0-06].
 	// Factory-class builders (CanMove==false && CanFly==false) are their own
 	// yard and are unaffected. The field is nil in synthetic unit-tests so
 	// they retain the legacy immediate-placement behavior.
@@ -180,7 +180,7 @@ func nanoReach(builder *units.Unit) numeric.Fixed {
 }
 
 // isWithinNanoRange reports whether the builder's nano piece (or its base
-// position as fallback) is within nanolathe range of the site [04 §3.4][05][REVIEW_OX_ALPHA E-8][R-P0-06][fmt fbi].
+// position as fallback) is within nanolathe range of the site [04 §3.4][05][R-P0-06][fmt fbi].
 // The reach is nanoReach above; distance is planar X/Z only, as the reclaim
 // range check is planar [05 "Unit reclaim"]. The site is the order's GoalX/Z
 // world anchor; whether retail measures to the footprint center, edge, or
@@ -190,7 +190,7 @@ func (s *Service) isWithinNanoRange(builder *units.Unit, siteX, siteZ numeric.Fi
 		return true
 	}
 	if builder.Def.BuildDistance == 0 {
-		return true // synthetic or unlimited; preserve fixture behavior [REVIEW_OX_ALPHA E-8]
+		return true // synthetic or unlimited; preserve fixture behavior
 	}
 	if s == nil || s.Movement == nil {
 		return true // no walk driver bound in this context; skip range gate for unit tests
@@ -215,7 +215,7 @@ func (s *Service) isWithinNanoRange(builder *units.Unit, siteX, siteZ numeric.Fi
 }
 
 // ensureWalk submits a walk request toward the site via the normal
-// Move_Ground machinery, without adding new path code [REVIEW_OX_ALPHA E-8][04 §7.3].
+// Move_Ground machinery, without adding new path code [04 §7.3].
 // It is idempotent: repeated calls while a request or active route already
 // exists do not resubmit, preserving determinism I1 and RNG call order I4.
 func (s *Service) ensureWalk(builder *units.Unit, node *orders.Node) {
@@ -244,7 +244,7 @@ func (s *Service) clearWalk(builder *units.Unit) {
 }
 
 // NeedsWalk reports whether a mobile builder needs to walk toward the site
-// before construction can begin [REVIEW_OX_ALPHA E-8][04 §3.4][05][R-P0-06].
+// before construction can begin [04 §3.4][05][R-P0-06].
 // Factory-class builders never need walk.
 func (s *Service) NeedsWalk(builder *units.Unit, node *orders.Node) bool {
 	if builder == nil || node == nil || !isMobileBuilder(builder) || builder.Def == nil || builder.Def.BuildDistance == 0 || s == nil || s.Movement == nil {
@@ -253,7 +253,7 @@ func (s *Service) NeedsWalk(builder *units.Unit, node *orders.Node) bool {
 	return !s.isWithinNanoRange(builder, node.GoalX, node.GoalZ)
 }
 
-// EnsureWalkPublic is the exported walk submission for session integration [REVIEW_OX_ALPHA E-8][04 §7.3].
+// EnsureWalkPublic is the exported walk submission for session integration [04 §7.3].
 func (s *Service) EnsureWalkPublic(builder *units.Unit, node *orders.Node) {
 	s.ensureWalk(builder, node)
 }
@@ -1305,54 +1305,25 @@ func (s *Service) applyCompletionPosture(product *units.Unit) {
 	product.Health = product.MaxHealth
 }
 
-// removeHead removes the head node from factory's primary queue without decrement [05 C21].
+// removeHead removes the head node from factory's primary queue without
+// decrement [05 C21]. Removal happens in place through the queue's own
+// subtraction path so queue identity and every queue-owned service binding
+// (Hostility, Lookup, StockpileEconomy, SecondaryTick, diagnostics) survive.
+// The previous implementation rebuilt the segment into a fresh orders.Queue
+// and rebound it, which dropped those hooks: after the first factory product
+// completed, successor target orders lost target lookup and hostility, and
+// secondary stockpile admission no longer saw the economy buckets.
+//
+// TODO(question): the tombstone marker is applied unconditionally here, while
+// [04 §3.3] exempts the primary head from it. The observable difference is
+// currently nil because the tombstone-gated cleanup step is a stub, so the
+// pre-existing marking is preserved rather than changed on inference.
 func (s *Service) removeHead(factory *units.Unit, node *orders.Node) {
 	q := orders.QueueForUnit(factory)
 	if q == nil {
 		return
 	}
-	prim := q.Primary()
-	if len(prim) == 0 {
-		return
-	}
-	// Find index of node pointer equality.
-	idx := -1
-	for i, n := range prim {
-		if n == node {
-			idx = i
-			break
-		}
-	}
-	if idx == -1 {
-		// Not found: try via handle equality head is prim[0] if sizes match? fallback to 0.
-		if prim[0] == node || (node != nil && prim[0].ID == node.ID && prim[0].Param1 == node.Param1) {
-			idx = 0
-		} else {
-			return
-		}
-	}
-	// Rebuild queue without idx.
-	newPrim := make([]*orders.Node, 0, len(prim)-1)
-	for i, n := range prim {
-		if i == idx {
-			continue
-		}
-		newPrim = append(newPrim, n)
-	}
-	// Replace queue via exported accessors (ON-02) — no reflect/unsafe.
-	newQ := orders.NewQueueWith(newPrim, q.Secondary())
-	// Ensure active marker on new head if any.
-	if len(newPrim) > 0 {
-		newPrim[0].Flags |= orders.FlagActive
-		for i := 1; i < len(newPrim); i++ {
-			newPrim[i].Flags &^= orders.FlagActive
-		}
-		// Re-set after flag fixup.
-		newQ.SetPrimary(newPrim)
-	}
-	orders.BindQueue(factory, newQ)
-	// Also clear node's flags to avoid reuse?
-	node.Flags |= orders.FlagTombstone
+	q.RemovePrimaryNode(node, true)
 }
 
 // setQueuePrimary replaces primary segment via exported accessor (ON-02).
@@ -1639,7 +1610,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 // Mobile payload carries site in Node.GoalX/Z (world coords) via QueueMobileBuild [P0-I05].
 // Validation uses the product's yard at the snapped site, not the factory exit spot.
 func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tick uint32) {
-	// Walk-to-site for mobile builders [REVIEW_OX_ALPHA E-8][04 §3.4][05][R-P0-06].
+	// Walk-to-site for mobile builders [04 §3.4][05][R-P0-06].
 	// A MOBILE builder ordered to build at a site out of nano range first walks
 	// toward the site until within nanolathe range, then enters state 2.
 	// Range is builder BuildDistance pixels [fmt fbi] via nanoReach; distance is

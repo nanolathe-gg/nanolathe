@@ -91,9 +91,9 @@ streams, no `math/rand`, no `crypto/rand`.
 
 Consumers must draw the documented number of times **even when the result is
 discarded**: a pool-full fire attempt still draws up to two spread values
-`[06 §4.4]`; feature reproduction draws once per eligible visit even at
-`reproduce=0` `[05 "Feature reproduction"]`; `bound < 2` returns 0 without
-advancing `[01 §7.1]`.
+`[06 §4.4]`; feature reproduction draws once per visited cell even at
+`reproduce=0` `[03 §5.1.2]`; `bound < 2` returns 0 without advancing
+`[01 §7.1]`.
 
 Which stream: gameplay normally uses the simulation stream; meteor geometry
 `[06 §6.5]`, screen shake `[03 §5.6]`, audio variant selection `[03 §8.3]`, and
@@ -143,7 +143,7 @@ modern motion; the sim is unaffected because it never observes `alpha`.
 the global tick before phase 1 of each sub-tick. Subsystems register into a
 named phase; nothing runs outside one.
 
-Within a tick, the same-tick callback windows of `[GAP T15]` hold: unit update
+Within a tick, the same-tick callback windows of `[04 §5.4]` hold: unit update
 (queues `SetDirection`/`SetSpeed`) → weapon update (queues `TargetCleared`,
 `Aim*`, `Fire*`, `RockUnit`) → normal COB drain (delta 1, eight thread slots
 then one piece pass) → orders/build work → movement integration (immediate
@@ -161,10 +161,17 @@ rate in the ledger. Weapon fields *are* converted at catalog compile time
 
 **Rule.** Three forms only:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+```go
+// TODO(T25): the extractor placement helpers' geometry is untraced.
+// Placeholder: fall through to the generic build command path.
+```
 
-
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+`TODO(T23)` platform residual, `TODO(T25)` accepted blocked item, or
+`TODO(question)` for a local gap with the question written out. Never a bare
+constant with no citation, and never a plausible-sounding name for something
+the research explicitly leaves unnamed. Use a neutral logical name and cite the
+owning clean-room contract; executable offsets stay outside the repository per
+`AGENTS.md` rule 3.
 
 ## I10 — Citations in code
 
@@ -195,13 +202,24 @@ new module dependencies without orchestrator sign-off; the active window
 backend is Ebitengine and all other dependencies must be justified in the
 module diff.
 
-## I13 — Research byte offsets are identity, not layout
+## I13 — Retail record identity is not Go layout
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Rule.** Retail's in-memory record sizes and field positions describe how the
+executable represented state, not how Nanolathe must lay out Go memory. Go
+structs use named fields and whatever layout the compiler picks. Do **not**
+build byte arrays with hand-packed accessors merely to imitate an executable
+record.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+When two clean-room contracts name the same logical field, they resolve to the
+same Go field. Preserve that identity through the logical name and citations,
+not through executable offsets:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+```go
+type Unit struct {
+    // ...
+    StateFlags uint16 // armored and hidden/cloaked state [06 §9.2], [03 §3.2]
+}
+```
 
 The exceptions — where byte layout *is* the contract, because bytes cross a
 boundary — are: file formats in `formats/`, the 13-byte plot cell (`[03 §2.2]`),

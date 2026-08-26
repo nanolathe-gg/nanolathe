@@ -61,7 +61,7 @@ func (s *Service) reproduceTick() {
 	if sim == nil {
 		return
 	}
-	// simRNG(100) consumed EVEN WHEN reproduce==0 (I4 draw-count rule) [05 "Feature reproduction"] [06 §13.1].
+	// simRNG(100) consumed EVEN WHEN reproduce==0 (I4 draw-count rule) [03 §5.1.2] [06 §13.1].
 	roll := sim.Uint32n(100)
 
 	def, ok := s.Terrain.FeatureDefAt(cell.Feature())

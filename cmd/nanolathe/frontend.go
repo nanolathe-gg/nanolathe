@@ -419,7 +419,7 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 		MapW: int32(terrain.CellW * 16), MapH: int32(terrain.CellH * 16),
 	}
 	g.cam.Pan(0, 0)
-	centerOnCommander(sess.Units, g.cam, winW, winH)
+	centerOnCommanderForSession(sess, g.cam, winW, winH)
 	pal := loadPalette(g.cs)
 	battleHUD, err := loadRetailBattleHUD(g.cs.fs, sess, cat, pal)
 	if err != nil {

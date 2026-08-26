@@ -123,21 +123,18 @@ func TestRayUsesAuthoredSpokes(t *testing.T) {
 
 // TestRayStrictTieNeverAdmits locks C5: admission is strictly greater, so an
 // exact tie fails. A ridge of equal height beyond the first step must occlude.
+//
+// The words are installed directly rather than authored as heights: the LOS
+// height table is built by a height-dependent scatter [R-P0-18-B], and this
+// test is about the horizon comparison, not that builder.
 func TestRayStrictTieNeverAdmits(t *testing.T) {
 	// A 3-step spoke due north over terrain that rises to a plateau: the first
 	// step establishes a horizon that the equal-height steps behind it tie
 	// with, and a tie never admits.
 	terrain := flatTerrain(64, 0)
-	set := func(cx, cz int32, h uint8) {
-		for dz := int32(0); dz < 2; dz++ {
-			for dx := int32(0); dx < 2; dx++ {
-				terrain.Plot[(cz*2+dz)*terrain.CellW+(cx*2+dx)].SetHeight(h)
-			}
-		}
-	}
-	set(10, 11, 20) // first step: a wall
-	set(10, 12, 20) // second step: exactly as tall — ties, so it is hidden
-	set(10, 13, 20)
+	terrain.SetLOSHeightWord(10, 11, 20, 20) // first step: a wall
+	terrain.SetLOSHeightWord(10, 12, 20, 20) // exactly as tall — ties, hidden
+	terrain.SetLOSHeightWord(10, 13, 20, 20)
 
 	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
 	s.SetRayTables(&content.LOSTables{
@@ -168,16 +165,9 @@ func TestRayStrictTieNeverAdmits(t *testing.T) {
 // sides are exactly 40 — and a step beyond it (difference 41) admits.
 func TestRayExactEqualityTie(t *testing.T) {
 	terrain := flatTerrain(64, 0)
-	set := func(cx, cz int32, h uint8) {
-		for dz := int32(0); dz < 2; dz++ {
-			for dx := int32(0); dx < 2; dx++ {
-				terrain.Plot[(cz*2+dz)*terrain.CellW+(cx*2+dx)].SetHeight(h)
-			}
-		}
-	}
-	set(10, 11, 20) // first step: horizon (20 @ distance 1)
-	set(10, 12, 40) // 20*2 == 40*1 — exact equality, never admits
-	set(10, 13, 61) // 20*3 < 61*1 — strictly greater, admits
+	terrain.SetLOSHeightWord(10, 11, 20, 20) // horizon (20 @ distance 1)
+	terrain.SetLOSHeightWord(10, 12, 40, 40) // 20*2 == 40*1 — exact equality
+	terrain.SetLOSHeightWord(10, 13, 61, 61) // 20*3 < 61*1 — strictly greater
 	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
 	s.SetRayTables(&content.LOSTables{
 		NumTables: 1,
@@ -206,13 +196,13 @@ func TestRayExactEqualityTie(t *testing.T) {
 // single-byte terrain word that test is algebraically dead.
 func TestRayHighByteGatesHorizonUpdate(t *testing.T) {
 	terrain := flatTerrain(64, 0)
-	// A tile whose four cells disagree: low 0, high 40. The low byte lets sight
-	// through; the high byte raises the horizon behind it.
-	terrain.Plot[(11*2)*terrain.CellW+(10*2)].SetHeight(40)
+	// A tile whose two bytes disagree: low 0 lets sight through, high 40 raises
+	// the horizon behind it.
+	terrain.SetLOSHeightWord(10, 11, 0, 40)
 
 	lo, hi := terrain.LOSHeightWord(10, 11)
 	if lo != 0 || hi != 40 {
-		t.Fatalf("aggregated word = (%d,%d), want (0,40)", lo, hi)
+		t.Fatalf("installed word = (%d,%d), want (0,40)", lo, hi)
 	}
 
 	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)

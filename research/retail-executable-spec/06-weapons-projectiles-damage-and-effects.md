@@ -41,7 +41,9 @@ index when the sentinel value -0x8000 is present, otherwise a ground point
 with world X and Z words that later resolve to height through the terrain
 query), desired yaw and pitch, a signed reload countdown in ticks, and a
 stockpile remainder byte where applicable, plus firing and out-of-range status
-bits. The slot selects a muzzle piece through a synchronous COB query.
+bits. The slot selects a muzzle piece through a synchronous COB query; the
+query path itself — the AimFrom/Query fallback, the deferred Aim command, and
+the SweetSpot target query — is specified in §3.4 [R-P0-07].
 
 **Established fact:** The slot pipeline visits slots in numeric order. For a
 populated slot it decrements nonzero reload, resolves the current target,
@@ -250,11 +252,19 @@ Aim-request latch, so a replacement can skip a fresh Aim request.
 Aim-request latch, not a universal “physically aimed” or fire-ready result. It
 is set immediately after the asynchronous Aim callback is dispatched — the
 engine ORs the latch bit right after issuing the AimPrimary, AimSecondary,
-or AimTertiary call through the COB dispatcher. Completion depends only on an
-explicit script return: a zero return leaves the latch without permission and
-does not clear it, a nonzero return grants permission, and no timeout is
-present — the absence of a timeout writer is established by a bounded search
-over the weapon-slot code. The slot pipeline does not test the latch at the
+or AimTertiary call through the COB dispatcher. Completion arrives through the
+receiver embedded on that deferred callback: an explicit script return
+delivers its value, and the dispatcher delivers zero when the script name is
+absent, the script identity is invalid, or all eight COB thread slots are
+occupied; signal termination and abnormal termination do not call the
+receiver. A zero delivery — explicit return or dispatcher — leaves the latch
+without permission and does not clear it; a nonzero delivery grants
+permission; and no timeout is present, the absence of a timeout writer being
+established by a bounded search over the weapon-slot code. A nil VM or missing
+script must therefore not set an Aim-ready state for a family that requires a
+result. (Supersedes the earlier reading that completion depends only on an
+explicit script return: a missing or blocked Aim script delivers zero through
+the same receiver.) The slot pipeline does not test the latch at the
 common fire fallthrough. A skipped Aim or failed ballistic Aim calculation can
 therefore still reach physical admission.
 
@@ -272,8 +282,13 @@ therefore still reach physical admission.
 Infeasible turret geometry or excessive drift clears the Aim-request latch.
 Turret and vertical-launch allocation failure preserve ready state, while
 successful allocation clears the result and latch. The angular-drift helper
-does not consume the parsed accuracy, tolerance, or pitch-tolerance fields. A
-ballistic no-solution sentinel suppresses Aim dispatch entirely.
+does not consume the parsed accuracy, tolerance, or pitch-tolerance fields. The
+ballistic no-solution sentinel (the angle-domain value 0x8000) suppresses Aim
+dispatch entirely. A missing Aim script, a zero completion delivery, or an
+exhausted projectile pool therefore means the turret and vertical-launch
+families cannot fire; the line-of-sight/self-propelled family's query fallback
+may still supply a muzzle piece, but no Aim result is invented on its behalf
+[R-P0-07].
 
 **Established fact:** Shot-time physical admission tests squared planar range
 first. A water weapon succeeds after that range test. A non-water weapon also
@@ -347,6 +362,120 @@ an active allied or same-player unit. If primary candidates existed but all
 failed category or scoring, the secondary list is not retried, and its sensor
 flag name remains a supported inference rather than an established literal.
 
+### 3.4 The weapon-query path [R-P0-07]
+
+**Established fact:** The slot selects its pieces through four query jobs that
+must not be collapsed into a single "muzzle piece" lookup:
+
+1. QueryPrimary, QuerySecondary, or QueryTertiary supplies a fallback muzzle
+   piece and is synchronous.
+2. AimFromPrimary, AimFromSecondary, or AimFromTertiary supplies the piece from
+   which the weapon aims and is synchronous. Its sentinel is −1; only that
+   sentinel invokes the matching Query fallback.
+3. SweetSpot supplies the selected target-piece offset and is synchronous where
+   the target path requests it.
+4. AimPrimary, AimSecondary, or AimTertiary is a deferred command carrying the
+   computed heading and pitch; its return value is delivered through an
+   embedded receiver and controls readiness for the weapon families that
+   require an Aim result.
+
+The query callbacks are engine-to-COB mode-Q calls. Their output is consumed
+immediately by the engine; they are not a presentation event and do not grant
+fire permission merely by returning a piece. [04 §5.3]
+
+#### Query callbacks, seeds, and fallback — Established [R-P0-07]
+
+**Established fact:** The callback names are selected by slot index (0, 1, or
+2) and are not hardcoded to the primary weapon. The recovered algorithm is:
+
+```text
+AimPiece(k):
+    piece = -1
+    AimFrom[k](piece)             // mode Q, cell 0 seeded -1
+    if piece == -1:
+        piece = 0
+        Query[k](piece)           // mode Q, cell 0 seeded 0
+    return piece
+```
+
+**Established fact:** The mode-Q dispatcher runs the script synchronously and
+copies back only cell 0; cells 1 through 3 are seeded zero by the dispatcher
+but are not copied to the caller. A script that sleeps or waits leaves the
+partial cell-0 value in the host while the Q thread remains live; the engine
+does not invent a second piece or retry the query within that call. [04 §4.4]
+
+**Established fact:** The seed distinction is load-bearing. Query starts from
+piece 0 while AimFrom starts from −1, so a missing AimFrom entry falls through
+to Query, whereas a missing Query entry leaves the already-seeded root piece 0.
+A negative or invalid result from either query is handled by the normal
+root-muzzle fallback and is never a reason to authorize a shot.
+
+**Established fact:** SweetSpot is a separate synchronous query. Its cell 0
+starts at 0 and the selected piece is transformed into a target world offset
+before target-point geometry is solved. The target path must not substitute the
+shooter's muzzle piece for this query. (§3.3 owns the target-point geometry.)
+
+#### Per-attempt ordering and piece transform — Established [R-P0-07]
+
+**Established fact:** The recovered weapon path runs the following stages in
+order:
+
+```text
+resolve/retain target
+  -> compute target point (SweetSpot where required)
+  -> compute AimFrom[k], then Query[k] only when AimFrom returned -1
+  -> transform the selected piece through current COB state and the model hierarchy
+  -> solve heading/pitch and physical range/medium admission
+  -> start Aim[k] when the weapon family requires it
+  -> reserve the root projectile
+  -> start sound
+  -> start Fire[k]
+  -> start RockUnit
+  -> start smoke/trail presentation
+```
+
+The muzzle query is synchronous before root projectile initialization, and the
+selected piece identity is stored on the root projectile so a later burst
+attempt can refresh its world position from the live piece. Allocation failure
+does not retroactively call Fire or RockUnit. The physical admission stage is
+the squared-planar-range and medium gate of §3.3; it is not a visibility or
+terrain-hill test.
+
+**Established fact:** The piece transform uses the current COB piece state and
+the loaded model hierarchy, then adds the unit world position. The loaded 3DO
+translation conversion is used as-is; the muzzle query does not apply a second
+sign negation, and the screen projection's trailing Z − Y/2 shear is not a
+second model-space conversion. The stored muzzle piece is not a substitute for
+the synchronous query, and burst clones do not re-query unconditionally.
+[03 §2.4]
+
+#### Aim dispatch mechanics — Established [R-P0-07]
+
+**Established fact:** The Aim callback is deferred (mode D) with arity two:
+unsigned 16-bit heading followed by unsigned 16-bit pitch. The producer clears
+the slot's Aim state, stores the commanded angles, starts the callback with the
+receiver embedded at the slot record, sets the issue bit, and emits the type
+0x10 aim event when that event channel is enabled. Readiness delivery from the
+receiver is specified in §3.3. [04 §5.3]
+
+**Established fact:** Two Aim forms exist. The ordinary/ballistic form computes
+relative heading as target bearing minus unit heading and stores the ballistic
+pitch; the ballistic no-solution sentinel 0x8000 suppresses the Aim start
+entirely. The fixed-forward form starts with (0, 0) when the weapon's
+fixed-forward flag is set, the issue bit is clear, and there is no live tracked
+target (or the adjacent slot status selects the fixed branch).
+
+**TODO(question):** Locate the Aim-completion closure writer/consumer at the
+weapon-slot receiver. The zero/nonzero delivery and no-timeout contract is
+established, but the exact closure object installed in the slot record and the
+instruction that consumes its nonzero value were not located in the bounded
+census; the stored-result mutation should remain named as a receiver operation
+until that writer is recovered.
+
+Regression fixtures: the query path is locked by the [R-P0-07]-citing tests
+around the weapon-slot query/fallback in `internal/combat/service.go` and the
+mode-Q/mode-D dispatcher in `internal/cob/bridge.go`.
+
 ## 4. Firing callbacks, costs, reload, and bursts
 
 ### 4.1 Fire callback order
@@ -361,7 +490,9 @@ allocator emits neither Fire nor RockUnit in its recovered path, and the direct
 meteor path runs only the common initializer and copies its packet velocity.
 Burst clones rerun none of it.
 
-**Established fact:** A muzzle piece is queried synchronously before initialization. The root projectile records the muzzle piece identity so a later burst clone can re-query the muzzle world position. A missing or negative query result falls back through the normal muzzle-position path.
+**Established fact:** A muzzle piece is queried synchronously before initialization through the §3.4 AimFrom/Query fallback: the AimFrom sentinel −1 selects the matching Query fallback, and a negative or invalid result from either query resolves through the normal muzzle-position path — it is never a reason to authorize a shot. The root projectile records the muzzle piece identity so a later burst clone can re-query the muzzle world position [R-P0-07].
+
+**Established fact:** FirePrimary, FireSecondary, or FireTertiary is a deferred zero-cell callback and RockUnit is a deferred two-cell callback. RockUnit's recoil arguments are `(-cos(rel)*800, -sin(rel)*800)`, where `rel` is the stored commanded barrel direction minus the unit heading, evaluated through the shared 512-entry integer sine/cosine table with round-to-nearest products [R-P0-07].
 
 **Established fact:** Fire callbacks are not called when the projectile pool is full. Start and trail smoke are separate engine events controlled by weapon flags and delays.
 
@@ -419,7 +550,8 @@ branch **instead of** all motion, collision, expiry, and trail smoke. On each
 due attempt the engine refreshes its position from the live muzzle **when the
 authored burst interval is greater than four or the remaining count is odd**,
 decrements the remaining count, advances the burst deadline, and tries to
-append a clone. A successful
+append a clone. This refresh is a burst-anchor policy, not an engine-side
+alternation between the Query and AimFrom callbacks [R-P0-07]. A successful
 clone receives a full copy of the parent, then has its creation/expiry state
 updated and its own remaining burst count cleared. It is therefore an ordinary
 moving projectile on the next projectile phase.
@@ -1456,8 +1588,15 @@ ledger and close its former contradiction.
 - Semantic names of the water-weapon candidate masks, all acquisition bypasses,
   and category behavior for non-unit target types.
 - Exact range behavior for no-auto-range and zero-velocity weapons.
-- Callback completion timing, target replacement during an outstanding Aim,
-  and malformed-state interactions around the closed family readiness gates.
+- The exact Aim-completion closure writer/consumer in the weapon-slot record is
+  open (see §3.4 [R-P0-07]): the zero/nonzero delivery and no-timeout contract
+  is established, but the stored-result mutation is not named. Target
+  replacement during an outstanding Aim and malformed-state interactions around
+  the closed family readiness gates remain open.
+- The exact boundary between the general muzzle query and the per-family
+  dropped/meteor muzzle paths, and the full side effects of the shared muzzle
+  fallback on malformed piece indices, remain at medium confidence (see §3.4
+  [R-P0-07]).
 - Candidate-list order before random sampling and RNG behavior for zero or
   overflowed squared-distance bounds.
 

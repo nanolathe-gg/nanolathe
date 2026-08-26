@@ -1,11 +1,11 @@
-// Package units — per-unit pipeline helpers [04 §1.3][04 §5][06][GAP T15][01 §4.4].
+// Package units — per-unit pipeline helpers [04 §1.1][04 §5][06][GAP T15][01 §4.4].
 //
 // This file implements the established per-unit sequence visited by the phase-2
 // sweep in deterministic order players 0..9 then slots ascending [01 §6.2][P0-16].
 // Construction Remaining is owned exclusively by construction.Service; this file
 // never reads or writes Remaining [05 "Construction target state"] [05 "Construction arithmetic"].
 //
-// Order inside one unit visit per [04 §1.3][GAP T15] C17 (I7):
+// Order inside one unit visit per [04 §1.1][GAP T15] C17 (I7):
 //  1. per-unit pre-update/status work (deferred via placeholder if no spec yet; no invented progress)
 //  2. water damage and timed work (deferred unless spec says)
 //  3. weapon-slot update and target/Aim scheduling (delegates to Slot; Aim can block)
@@ -21,7 +21,7 @@ import (
 )
 
 // tickUnit executes the established per-unit pipeline for one unit visit
-// in phase 2 [04 §1.3][GAP T15] C17 (I7). It is called from World.Tick in
+// in phase 2 [04 §1.1][GAP T15] C17 (I7). It is called from World.Tick in
 // players-asc then slots-asc order [01 §6.2] C2 [P0-16]. No map iteration;
 // no float64 outside allowlist; deterministic (I1, I2).
 //

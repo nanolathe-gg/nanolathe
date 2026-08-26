@@ -12,7 +12,7 @@ import (
 )
 
 // retailRoot returns the reference install root, or skips the test [PLAN_02
-// Tests; docs/ORCHESTRATION.md §6].
+// Tests; AGENTS.md §Test policy].
 func retailRoot(t *testing.T) string {
 	t.Helper()
 	root := os.Getenv("TOTALA_ROOT")

@@ -260,22 +260,20 @@ func TestLegalPlacementQueuesMobileBuild(t *testing.T) {
 // Test 4: illegal placement queues nothing [R-P0-03]
 func TestIllegalPlacementQueuesNothing(t *testing.T) {
 	cat := testCatalogON05()
-	terrain := testWorldON05(10, 10) // small
+	terrain := testWorldON05(1, 1) // compact map has no visible 2x2 placement site
 	b := newTestBattle(cat, terrain)
 	builder := placeUnit(b, "armcons", numeric.Fixed(0), numeric.Fixed(0))
 	builder.Flags |= client.SelectionFlag
 	b.armBuildPanel()
 	btn := b.panelButtons[0]
 	b.panelClick(btn.X+1, btn.Y+1)
-	// A pointer outside the map no longer reaches an out-of-bounds cell: the
-	// cursor-to-ground conversion clamps into the map rectangle first, as
-	// retail does [07 §8]. The illegal site is the corner instead, where the
-	// 2x2 footprint's half-extent bias pushes its origin off the map.
-	b.buildMX = 0
-	b.buildMY = 0
-	b.updatePlacement(0, 0)
+	// Use the visible battle-surface edge. The cursor-to-ground conversion
+	// resolves it in the compact map's out-of-bounds region [07 §8].
+	b.buildMX = 639
+	b.buildMY = 447
+	b.updatePlacement(639, 447)
 	if b.buildOK {
-		t.Fatalf("corner placement should be illegal")
+		t.Fatalf("off-map placement should be illegal")
 	}
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 	in.Mouse.InjectMouseMove(0, 0)
@@ -386,12 +384,13 @@ func TestPagingChangesPageDataDriven(t *testing.T) {
 func TestReclaimClickResolvesFeature(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(10, 10)
-	// Place feature at cell 5,5
+	// Place feature at cell 9,5 so it lies inside the visible framebuffer
+	// surface rather than under the side rail.
 	featDef, _ := cat.Features[content.CanonicalKey("armrock")]
 	terrain.FeatureNames = []string{"armrock"}
 	terrain.FeatureDefs = []*content.FeatureDef{featDef}
-	// Plot cell anchor at 5,5
-	idx := 5*int(terrain.CellW) + 5
+	// Plot cell anchor at 9,5
+	idx := 5*int(terrain.CellW) + 9
 	terrain.Plot[idx][8] = 0
 	terrain.Plot[idx][9] = 0 // index 0
 	// Debug check
@@ -399,37 +398,31 @@ func TestReclaimClickResolvesFeature(t *testing.T) {
 		t.Fatalf("plot feature not set, got %d", f)
 	}
 	if ok := func() bool {
-		_, ok := world.ResolveFeature(terrain.Plot, int(terrain.CellW), int(terrain.CellH), 5, 5)
+		_, ok := world.ResolveFeature(terrain.Plot, int(terrain.CellW), int(terrain.CellH), 9, 5)
 		return ok
 	}(); !ok {
-		t.Fatalf("ResolveFeature direct failed at 5,5")
+		t.Fatalf("ResolveFeature direct failed at 9,5")
 	}
 	// Ensure anchor not fringe
 	b := newTestBattle(cat, terrain)
 	if ok := func() bool {
-		_, ok := world.ResolveFeature(b.sess.World.Plot, int(b.sess.World.CellW), int(b.sess.World.CellH), 5, 5)
+		_, ok := world.ResolveFeature(b.sess.World.Plot, int(b.sess.World.CellW), int(b.sess.World.CellH), 9, 5)
 		return ok
 	}(); !ok {
 		t.Fatalf("b.sess.World ResolveFeature failed after b creation")
 	}
-	// Place reclaim unit elsewhere (2,2) so feature at 5,5 is not masked by unit [07 §8] unit>feature priority
+	// Place reclaim unit elsewhere (2,2) so feature at 9,5 is not masked by unit [07 §8] unit>feature priority
 	recl := placeUnit(b, "armrecl", numeric.Fixed(int64(2*16)<<16), numeric.Fixed(int64(2*16)<<16))
 	recl.Flags |= client.SelectionFlag
 	// Place cam at 0
 	b.cam.X = 0
 	b.cam.Z = 0
-	// Pick at viewport that maps to feature world 5*16 = 80 [C-3][07 §8] drawn-chrome.
-	vt := client.NewViewportTransform(b.cam, b.sess.World, 640, 480)
-	p := vt.WorldToViewport(numeric.Fixed(int64(5*16)<<16), 0, numeric.Fixed(int64(5*16)<<16))
-	sx, sy := p.X, p.Y
-	// Debug: check what pickTarget computes for cx,cz
+	// Pick at the framebuffer position that maps to feature world 9*16 = 144.
+	beamX, beamY := b.cam.WorldToScreen(numeric.Fixed(int64(9*16)<<16), 0, numeric.Fixed(int64(5*16)<<16))
+	sx, sy := beamX-camera.OriginX, beamY-camera.OriginY
 	wxDbg, _, wzDbg := b.cursorWorld(sx, sy)
 	cx := world.WorldToCell(wxDbg)
 	cz := world.WorldToCell(wzDbg)
-	t.Logf("debug pick screen %d,%d -> world %d,%d -> cell %d,%d PlotFeature %d Resolve %v", sx, sy, wxDbg, wzDbg, cx, cz, b.sess.World.Plot[cz*int32(b.sess.World.CellW)+cx].Feature(), func() bool {
-		_, ok := world.ResolveFeature(b.sess.World.Plot, int(b.sess.World.CellW), int(b.sess.World.CellH), int(cx), int(cz))
-		return ok
-	}())
 	_, _, pos := b.pickTarget(sx, sy)
 	if !pos.HasFeature {
 		t.Fatalf("reclaim pick should resolve feature, got HasFeature false at %d,%d world %v cell %d,%d", sx, sy, pos, cx, cz)
@@ -645,7 +638,7 @@ func TestEscapeCancelsPlacement(t *testing.T) {
 // Footprint preview drawn legal/illegal already verified via buildOK in updatePlacement
 func TestFootprintPreviewLegalIllegal(t *testing.T) {
 	cat := testCatalogON05()
-	terrain := testWorldON05(100, 100)
+	terrain := testWorldON05(39, 39)
 	b := newTestBattle(cat, terrain)
 	b.cam.X = 0
 	b.cam.Z = 0
@@ -657,11 +650,10 @@ func TestFootprintPreviewLegalIllegal(t *testing.T) {
 	if !b.buildOK {
 		t.Fatalf("center should be legal")
 	}
-	// Off-map pointers clamp into the map rectangle before anything else
-	// [07 §8], so the illegal site is the corner: the 2x2 footprint's
-	// half-extent bias puts its origin at cell -1.
-	b.updatePlacement(0, 0)
+	// The far visible edge resolves beyond this map's right boundary, making
+	// the 2x2 footprint illegal [07 §8].
+	b.updatePlacement(639, 447)
 	if b.buildOK {
-		t.Fatalf("corner placement should be illegal")
+		t.Fatalf("off-map placement should be illegal")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -213,6 +214,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	// Model sorting C13: sort model catalog case-insensitively before caching per-unit-type pointer [03 §2.4].
 	report.Report(FamilyBuildMenus, 100)
 	sortedModels, modelIndex := buildModelCatalog(units)
+	fillModelTops(fs, units)
 	report.Report(FamilyModels, 100)
 
 	// Manifest: vfs.ManifestHash() for identity [PLAN 02].
@@ -993,4 +995,36 @@ func manifestHashFor(fs vfs.FSOps) (string, error) {
 		return mh.ManifestHash()
 	}
 	return "", nil
+}
+
+// fillModelTops resolves each unit's ModelTop from its 3DO, reading every
+// distinct objects3d/<ObjectName>.3do once [03 §3.2].
+//
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// missing or unparsable model leaves ModelTop zero — the observer then sits on
+// the ground, which is what an absent model means, not an invented height.
+func fillModelTops(fs vfs.FSOps, units map[string]*UnitDef) {
+	if fs == nil || len(units) == 0 {
+		return
+	}
+	tops := make(map[string]int32)
+	for _, u := range units {
+		name := strings.ToLower(strings.TrimSpace(u.ObjectName))
+		if name == "" {
+			continue
+		}
+		top, done := tops[name]
+		if !done {
+			if data, err := fs.ReadFileLimit("objects3d/"+name+".3do", 1<<22); err == nil {
+				if model, perr := formats.LoadThreeDO(data); perr == nil {
+					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					top = (model.ModelTop() >> 16) & 0xFF
+				}
+			}
+			tops[name] = top
+		}
+		u.ModelTop = top
+	}
 }

@@ -106,7 +106,7 @@ but readers must not assume pixel extents are uniquely owned.
 | +2 | 2 | u16 | height | pixels, > 0 |
 | +4 | 2 | i16 | x_offset | signed placement offset (see below) |
 | +6 | 2 | i16 | y_offset | |
-| +8 | 1 | u8 | unknown1 | `9` in **all 48,519 retail frames** — a constant, historically mislabelled "palette index"; meaning unknown. |
+| +8 | 1 | u8 | color_key | `9` in **all 48,519 retail frames**. On the raw path it is the transparent palette index: the frame draw passes this byte to the blitter, which skips every matching source pixel. The RLE path carries transparency in skip runs and does not consume this key. Historically mislabelled "palette index" and long listed as unknown. |
 | +9 | 1 | u8 | compressed | `0` = raw pixels, `1` = per-row RLE (only these two values occur in retail data) |
 | +10 | 2 | u16 | subframe_count | if nonzero, this frame is composed of subframes (see below). Composition is common: roughly half of retail frames are composed. |
 | +12 | 4 | u32 | unknown2 | `0` in all retail frames |
@@ -134,8 +134,9 @@ may extend slightly outside the parent canvas (clip when compositing).
 ### Raw pixels (`compressed = 0`)
 
 `data_offset` points at `width × height` bytes, row-major, one palette
-index per pixel. Every pixel is opaque — raw frames have no transparency
-encoding.
+index per pixel. Raw frames carry no skip runs: their only transparency is the
+frame's own `color_key` (header byte +8), which the blitter compares per
+pixel.
 
 ### RLE pixels (`compressed = 1`)
 
@@ -182,9 +183,19 @@ pixels never covered by an opaque subframe pixel are transparent.
 
 ## Unknowns and caveats
 
-- Frame header byte +8 (constant 9) and the trailing u32 (garbage) have no
-  confirmed semantics. The frame-reference u32 is very likely per-frame
-  duration but unconfirmed. Preserve all three, interpret cautiously.
+- Frame header byte +8 is the raw path's color key (see the frame-header
+  table); the trailing u32 (garbage) has no confirmed semantics. The
+  frame-reference u32 is very likely per-frame duration but unconfirmed.
+  Preserve all three, interpret cautiously.
+- Because the key is constant `9`, index 9 is effectively transparent in every
+  raw retail frame. Across the 958 GAFs in the reference install only 274 of
+  6,068 raw frames contain it at all, and three of them account for 99.9% of
+  those pixels: `anims/fog.gaf` (30%), `anims/fogtiles.gaf` (40%) and
+  `anims/vismasks.gaf` (23%). Those three are mask families drawn entirely
+  from key pixels and index 0 — decoding them without the key inverts them
+  into solid rectangles of palette 9 (bright blue, `84,84,252`) and fills every
+  sight shape to its bounding box. The handful of stray key pixels elsewhere
+  (4-8 per file in a few unit textures) is noise.
 - Controlled retail model probes establish that a 10-frame `LOGOS.GAF`
   entry stores ten complete player-specific indexed textures: select frame
   *n* for player *n*, sample that frame's indexes, then apply the model's

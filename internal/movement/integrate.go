@@ -74,7 +74,7 @@ type System struct {
 	// world is the units world bound via BindWorld (or via Tick for legacy path).
 	// StepUnit needs it to fetch the *units.Unit for a handle without passing
 	// the world on every per-unit call, so the caller can invoke StepUnit
-	// inside its own slot visit [04 §1.3] sweep order.
+	// inside its own slot visit [04 §1.1] sweep order.
 	world *units.World
 
 	// per-tick shared indexing built deterministically ONCE in BeginTick [04 §8.2] C22.
@@ -231,7 +231,7 @@ func (s *System) SetClasses(classes map[string]*content.MovementClass) {
 	s.Classes = classes
 }
 
-// BindWorld binds the units world for per-unit stepping [04 §1.3].
+// BindWorld binds the units world for per-unit stepping [04 §1.1].
 // The world is needed to fetch the *units.Unit for a handle inside StepUnit
 // so the caller can drive movement from its own slot visit without passing the
 // world on every call. Tick also binds it for legacy callers.
@@ -1060,7 +1060,7 @@ func headingFromDelta(dx, dz int64) uint16 {
 
 // emitMovementCallbacks emits StartMoving/StopMoving/MoveRateN and setSFXoccupy per [04 §5.2][GAP T15] C17 C18.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Must be called after steering/flight integration but before the next slot's clear/commit so the VM sees the walk loops [04 §1.3][01 §4.4].
+// Must be called after steering/flight integration but before the next slot's clear/commit so the VM sees the walk loops [04 §1.1][01 §4.4].
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // We map def MoveRate1/2 via content.UnitDef.MoveRate1/2 (defaults twice MaxVelocity) [02 "Unit record"] [04 §5.2].
 func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {

@@ -37,7 +37,7 @@ func TestMinimapLetterbox(t *testing.T) { // TODO(question): Historical analysis
 	if m.W != 126 || m.H != 126 || m.PadX != 0 || m.PadY != 0 {
 		t.Fatalf("square want 126x126 0,0 got %dx%d %d,%d", m.W, m.H, m.PadX, m.PadY)
 	}
-	// letterbox bars are fill inference 0 black [minimap §4] TODO(question)
+	// letterbox bars are fill inference 0 black [03 §3.6] TODO(question)
 	if minimapLetterboxFill != 0 {
 		t.Fatalf("letterbox fill inference want 0 black got %d", minimapLetterboxFill)
 	}
@@ -209,7 +209,7 @@ func TestPlayHelpers(t *testing.T) { // TODO(question): Historical analysis omit
 	}
 }
 
-func TestMinimapLetterboxFillTODO(t *testing.T) { // TODO(question) 0 black [minimap §4]
+func TestMinimapLetterboxFillTODO(t *testing.T) { // TODO(question) 0 black [03 §3.6]
 	// Letterbox bars beyond RadarW×RadarH retain heap bytes — inference 0 black pending capture.
 	// This test locks the current inference so review knows it is deliberate.
 	if MinimapLongSide != 126 {

@@ -155,7 +155,11 @@ bounded index; retail data only ever exercises the index path.) For `0`,
 OpenTA treats it as index 0 only when the first primitive actually looks
 like a plate (a flat 4-vertex quad on unique vertices).
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+At draw time the selection primitive is **not rendered as a model face**: the
+retail unit rasterizer starts its primitive loop at index 1 for any piece
+declaring a selection primitive (after the load-time swap places the plate at
+index 0), and unit picking is a 2D bounding-box test, not a mesh raycast. The
+plate's remaining live use is identification bookkeeping.
 
 #### Retail unit-model census
 
@@ -196,7 +200,20 @@ terrain alignment.
 
 ### Texturing
 
-**Publication omission:** Historical executable-analysis detail omitted from this public edition.
+Texture names refer to entries in the GAF files under `textures/`
+([gaf.md](gaf.md)). There are no UV coordinates or stored `u/v` fields. A
+quad maps by corner-index affine 16.16: index order `0→(0,0)`, `1→(1,0)`,
+`2→(1,1)`, `3→(0,1)`, with fixed-point interpolation along edges and then
+across each scanline. Flat-color drawing accepts only quads; textured polygons
+with 5–16 vertices remain affine n-edge polygons rather than pre-triangulated
+fans. Bounding extents control clipping and scanline iteration, not texture
+coordinates. Sampling is nearest-neighbor, clamped to the last texel, with no
+perspective divide; transparent texels also skip shade lookup. Which corner is
+"top-left" was established by authoring tools per face by rotating the index
+order; renderers replicating classic visuals map as above.
+Faces are single-sided; the retail winding convention is counter-clockwise
+when viewed from outside — measured, see "Unknowns and caveats" (inverted
+faces were a common authoring bug, fixed in tools by "Invert Face").
 
 Team color comes from complete player-specific frames in `LOGOS.GAF`: frame
 *n* is the source texture for player *n*. Select that frame before applying
@@ -207,7 +224,9 @@ frames contain entry-specific pixel and sometimes dimension differences. See
 
 ### Runtime texture resolution and face dispatch (retail rasterizer)
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+At load the engine resolves every primitive's texture name against the side's
+texture GAF set (`armbldg`/`armcamo`/`armvehic`/`armships` for Arm, `cor*` for
+Core), then a fallback set, case-insensitively:
 
 - **Miss** → the primitive is rewritten to a flat color `0xd1` (209) and takes
   the flat-quad path below — a gray placeholder, not an invisible face.
@@ -220,7 +239,7 @@ frames contain entry-specific pixel and sometimes dimension differences. See
   selected by owner player at draw time. This is the definitive
   team-texture discriminator.
 
-**Publication omission:** Historical executable-analysis detail omitted from this public edition.
+At draw time the rasterizer dispatches per primitive on its flag bits:
 
 - **Textured primitives** (flag bit 0) render through the scanline texture
   mapper for any vertex count.

@@ -666,9 +666,25 @@ This produces several important consequences:
 
 ### Storage capacity
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+At each settlement pass, the engine rebuilds player capacity from scratch by
+summing the energy- and metal-storage contributions of eligible completed
+units. Optional mission/player bonuses are added when their enable flag is set.
+Retail implements this with a capacity helper that applies the storage bonus
+and the per-resource floor: when the bonus enable bit is set, each resource's
+capacity is floored at 200, and the bonus values are converted to
+single-precision and added to the player's live energy and metal capacity
+fields after the unit sum (the economy ledger analysis notes pin the add
+order, §4.1 and §5).
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+Capacity is single-precision state. It is not an integer total. Destroyed,
+unfinished, or ineligible storage units cease contributing when the next
+player pass recomputes capacity. Bonus addition converts the stored integer
+bonus to single precision — exact over the 200 floor range — and any
+float-to-integer conversion at the capacity add truncates toward zero
+(INVARIANTS I3). The battle-init capacity writer runs the capacity helper per
+active player before the spawn-credit grant to preserve the opening 1000/1000
+stocks past the 30-tick settlement clamp; without the bonus the clamp to zero
+would zero both players at the first settlement [OX P1].
 
 ### Cloak debit
 
@@ -1277,6 +1293,173 @@ combination, byte wrap for malformed preexisting values above 200,
 cancellation interaction with admitted carry, repeat requeue, and presentation
 behavior beyond the refresh call.
 
+## Construction nano cadence and admission [R-P0-06]
+
+This section closes the construction nano-cadence contract: retail has **no
+independent "nano every N ticks" presentation timer**. Nano output is admitted
+by the construction/reclaim work paths, so the visual pulse follows accepted
+work, not a free-running clock.
+
+### R-P0-06 §1 — Work-admission gating and emission producers
+
+The emission producers, their admission gates, and their cadences:
+
+| Path | Work/admission condition | Query timing | Segment count | Next work timing |
+| --- | --- | --- | --- | --- |
+| Mobile construction | shared construction work helper accepts the builder's worker quantum | once after accepted work in state 3 | one | unfinished target retries after one tick |
+| Factory product construction | same two-resource work helper accepts the factory worker quantum | once after accepted work in state 3 | one | unfinished product retries after one tick |
+| Build assist | assist state/counter admits the visit; the direct counter gate keeps the counter above 15 | once for the visit | two | assist state continues under its own counter/deadline |
+| Reclaim/capture | target is valid and in range, and the operation is admitted | once per emitted segment | one | operation schedules the next visit two ticks later |
+| Repair | repair work helper admits the visit | once after accepted work | one | unfinished repair retries after one tick |
+
+An unfinished target retries its work state one tick later, so ordinary
+construction cadence follows accepted work visits rather than a visual clock.
+**No query and no segment is emitted when the two-resource construction
+admission rejects the work step.** The presentation contract is therefore:
+publish a nano event only for an accepted work transition, carrying the
+builder/source, the target/site, the mode, and the resolved source piece.
+
+### R-P0-06 §2 — Synchronous QueryNanoPiece contract
+
+`QueryNanoPiece` is a mode-Q, zero-argument COB callback [04 §4.4; fmt cob
+"QueryNanoPiece"]. The engine seeds its cell-0 output to piece index `0`,
+passes no cells 1-3 for copy-back, and waits for the synchronous script call
+to finish. The returned piece index is then transformed through the unit's
+piece hierarchy and added to the unit's world position to produce the nano
+origin. A script that does not overwrite cell 0 therefore leaves the seeded
+piece 0; stock builders can select or alternate their spray pieces through
+script output, not through an engine-side alternation counter.
+
+The recovered helper is conceptually:
+
+```text
+piece = 0
+piece = QueryNanoPiece(piece)     // synchronous Q, cell 0
+offset = worldPieceTransform(unit, piece)
+nanoWorld = unitWorldPosition + offset
+```
+
+The query is presentation-side data acquisition. It does not itself modify
+construction fraction, health, resources, occupancy, or order state [04 §4.4].
+
+### R-P0-06 §3 — Worker quantum, visit schedule, and counter gates
+
+The mobile and factory state-3 paths call the shared construction work helper
+with the floor of worker time divided by 30 — the worker quantum of [05
+"Construction arithmetic"]. On nonzero admission they query the builder's or
+factory's nano piece and submit one segment; if the remaining fraction is not
+zero they reschedule one tick later. The factory path uses the same contract
+for the product's build work [05 "Factory production lifecycle"].
+
+The direct static emission census recovers the remaining cadence boundaries:
+
+- the build-assist path makes two segment calls when its remaining work
+  counter sits above the recovered `15` gate;
+- reclaim's nano counter advances by two per visit and the operation schedules
+  the next visit on a two-tick cadence; and
+- capture follows the same one-segment-per-visit pattern, also at two ticks
+  per visit.
+
+These are operation-specific paths, not a universal construction timer [03
+§5.5; 05 "Repair"; 05 "Unit reclaim"; 05 "Capture"].
+
+### R-P0-06 §4 — Segment geometry and selector
+
+Every recovered nano-segment producer passes the selector value `6` to the
+segment helper. This is an effect/visual selector, not a weapon `sprayangle`
+field and not a simulation RNG bound.
+
+The line endpoints are built from:
+
+1. the world position returned by `QueryNanoPiece`; and
+2. the target/product position plus the definition's resolved footprint/model
+   extents (the paired X/Y/Z offsets around the target).
+
+Construction therefore draws from the builder/factory nano piece toward the
+target footprint bounds. Reclaim reverses the direction so the segment travels
+from the target toward the builder. The exact presentation projection is the
+ordinary world-to-screen line path; the target bounds, not an invented target
+center, are the source data [03 §5.7; 05 "Factory production lifecycle"].
+
+The event-facing payload justified by this contract is:
+
+```text
+tick, stable event identity
+builder/source handle
+target or construction-site handle
+QueryNanoPiece piece index
+source nano world position
+target footprint-bound endpoints
+build, assist, repair, reclaim, or capture mode
+team/palette identity where the presentation layer already owns it
+selector = 6
+```
+
+An event is emitted once per admitted segment call. A two-segment assist visit
+emits two ordered events. A rejected work step emits none and must not call
+`QueryNanoPiece` merely to draw a speculative spray.
+
+### R-P0-06 §5 — Shared effect admission and lifetime boundary
+
+Nano segments append to the shared variable-length effect/sequence strip
+family. Producers append in event order. The effect allocator is guarded by
+the recovered presentation allocation gate; an allocation failure admits no
+segment record. The strip update pass removes an object before updating it,
+then stably compacts survivors. The oldest record is evicted when the
+pre-insert count exceeds `400`, giving the documented steady bound of at most
+`401` records for a strip [01 §6.1; 03 §1 "Strip storage and lifecycle"; 03
+§5.5].
+
+The renderer later consumes the staged strips in its fixed compositor order.
+Nano construction work is presentation-only after the authoritative work step:
+rendering can be disabled without changing remaining fraction, health, stock,
+occupancy, or RNG state [03 §5.5; 03 §5.7].
+
+The direct census identifies a shared segment allocator and the fixed selector
+value, but does not close every effect-family ownership detail. In particular,
+the packet does not assign a strip number to nano segments solely from an
+adjacent producer, and it does not assume that all segment families share the
+same fade.
+
+### R-P0-06 §6 — Strict admission and ordering
+
+The authoritative ordering is:
+
+```text
+check operation/target/range/state
+  -> admit two-resource construction or operation work
+  -> update authoritative construction/economy state
+  -> synchronously QueryNanoPiece
+  -> transform piece to source world position
+  -> append selector-6 segment if effect allocation admits it
+  -> schedule the operation's next state visit
+```
+
+For construction work, resource admission is all-or-nothing for energy and
+metal [05 "Two-resource admission"]. Rejected work leaves remaining fraction
+and health unchanged and does not emit a nano segment. Accepted work updates
+the remaining fraction and health in the established difference-of-truncations
+order [05 "Health gain and fractional carry"] before the presentation segment
+is requested.
+
+The query/segment path must not be moved before admission, and an
+effect-pool failure must not roll back already committed work. The visual
+event is a consumer of an accepted authoritative transition, not its gate.
+
+**Confidence.** Query mode/seed, accepted-work gating, ordinary construction
+cadence, selector value 6, endpoint ownership, and cap/order behavior are
+established. The allocator gate's complete failure side effects and the
+assignment of nano records to one particular strip among the shared effect
+families are of medium confidence and remain open.
+
+```text
+TODO(question): Recover the complete nano-segment record constructor and
+allocator epilogue: exact strip ownership, allocation-failure side effects,
+logical-to-palette color mapping, random presentation draws, and per-segment
+fade/lifetime remain open. Do not invent these fields from the selector value
+6 alone.
+```
+
 ## Repair
 
 **Established fact — repair helper terms.** The helper forms two truncated
@@ -1300,6 +1483,11 @@ That helper always adds the amount to energy requested and adds it to energy
 accepted only when energy carry is non-positive; it does not touch the metal
 subrecord. Only after admission succeeds does the helper emit the separately
 computed heal term as kind-10 healing through the ordinary damage path.
+
+**Established fact — repair nano cadence.** Repair emits one nano segment per
+accepted repair visit, and an unfinished repair target retries the work state
+one tick later, so the presentation follows accepted repair work rather than a
+free-running timer [R-P0-06 §3].
 
 A variant reverses the context and target arguments; its user-interface
 identity and the behavior for zero or negative authored values remain open.
@@ -1334,6 +1522,11 @@ cadence counter, not a resource fraction. Each successful work visit adds 2;
 when it exceeds 14 the pulse is emitted and the counter resets to zero. A
 reclaim therefore delivers one integer damage pulse every eight qualifying
 work visits.
+
+**Established fact — nano cadence.** Reclaim emits one nano segment per
+qualifying work visit, and the operation schedules each next visit two ticks
+later — a one-segment/two-tick presentation cadence, distinct from the
+damage-pulse gate above [R-P0-06 §3].
 
 **Established fact — application.** The pulse is applied through the ordinary
 damage packet path, so the target's death, its corpse, and any resulting
@@ -1412,6 +1605,10 @@ that progression is the capture's own timing, not a resource admission.
 itself carries no per-tick resource debit and no decay of the progress
 counter; it advances by two per visit on a fixed cadence until the timer is
 reached, independently of the ledger.
+
+**Established fact — capture visit cadence and nano.** Each qualifying visit
+emits one nano segment, and the operation schedules the next visit two ticks
+later — the same one-segment/two-tick pattern as reclaim [R-P0-06 §3].
 
 **Established fact — ownership transfer.** The transfer path validates old and
 new ownership and the unit limits, removes the old relation, allocates a
@@ -1517,6 +1714,58 @@ The successor used depends on cause:
 
 Cause-specific priority when multiple transitions occur during the same tick is
 not fully closed.
+
+### Definition flags, teardown, and the Great Divide partition
+
+**Established — flag defaults.** A feature's economy yield is independent from
+its extraction role. Orthogonal booleans govern reclaim (see "Feature
+reclaim"):
+
+| Flag | TDF default | Retail meaning |
+|---|---|---|
+| `reclaimable` | `0` | command-gated; only when `1` can a builder enter the reclaim state |
+| `autoreclaimable` | `1` | reuse-suppression; protects the cell from being implicitly cleared by a colliding stamp unless honored explicitly |
+| `indestructible` | `0` | weapon-damage and teardown guard; when `1` damage is ignored and teardown returns without clearing |
+| `blocking` | `0` | pathway/yard map predicate; when `1` the footprint is treated as blocked for generic placement |
+| `geothermal` | `0` | footprint-class flag; a `YardMap 'G'` requirement is satisfied only by a covered cell holding this flag (yard-map bit 7, `[04 §6.4]`) |
+
+**Established — teardown frees the footprint.** Teardown clears the anchor to
+`0xFFFF` and each fringe to `0xFFFF` with the signed offset bytes poisoned,
+then notifies derived occupancy — the cleared cells become free. If a
+successor was stamped (typically a `1×1` smudge for trees/shrubs) the newly
+stamped residue may itself be non-blocking and non-reclaimable, so a reclaimed
+tree line opens a corridor. The same transition applies when a wreck sinks or
+burns to completion.
+
+**Established — the Great Divide partition** (derived from the catalog, not
+from the TNT table alone):
+
+- **Reclaimable energy (blocking, flamable, damagable):** `Tree1..Tree6` (250
+  energy), `Shrub1..3` (20 energy), `Rock1a` (metal 100). Footprint blocks
+  pathing and building. Reclaim completion pays the full `metal` + `energy`
+  pools as a one-time credit and atomically swaps to the `featurereclamate`
+  successor (smudges) or clears. While burning they reject reclaim.
+- **Reclaimable rock chain with successors:** `Rock1a → Rock1b → rockgone`
+  (successive `featuredead` links) and generic rock variants. Damage
+  accumulation against `damage` thresholds traverses the same chain as
+  reclaim.
+- **Non-reclaimable, non-blocking metal deposits:** `RockMetal*` variants,
+  `3×3`, metal 86–223 but `reclaimable=0`, `indestructible=1`, `height=4`.
+  They cannot be reclaimed or destroyed and never change. They are the source
+  of **extractor economy** ("Terrain metal extraction") rather than reclaim
+  economy.
+- **Geothermal vents:** `Geothermal`, `1×1`, `animating=1`, `geothermal=1`,
+  `indestructible=1`. Not reclaimable. Their only interaction is footprint
+  validation for buildings that carry `YardMap 'G'`.
+- **Non-reclaimable remnants:** generated smudges (`Smudge01..Smudge04`),
+  `Tree1Dead`/`Tree2Dead`, and the indestructible rock debris all carry
+  `reclaimable=0` and serve as inert residues.
+
+Geothermal validation is read-only: placing a building that covers a vent does
+not clear the vent feature, so destroying the building leaves the stamp intact
+and another plant can reuse the same cell without a restore step. Feature
+metal at the definition is reclaim reward only and does not drive extraction
+("Terrain metal extraction").
 
 ## Wreckage and corpse production
 
@@ -1764,6 +2013,11 @@ preserve these invariants:
 - Repair admission is energy-only: the energy resource term is always added to
   energy requested and is added to energy accepted only when energy carry is
   non-positive, with no metal ledger effect.
+- Nano presentation has no free-running timer: build and repair emit one
+  segment per accepted work visit and retry one tick later, build assist emits
+  two segments per visit while its counter sits above the 15 gate, and
+  reclaim/capture emit one segment per visit on a two-tick cadence; rejected
+  work emits no query and no segment [R-P0-06].
 - Unit reclaim's fatal payment is metal-only: `(1 - remaining fraction) ×
   metal build cost` credited to the killer's metal production bucket at death
   finalization, with no per-pulse payment and no energy credit.
@@ -1790,7 +2044,8 @@ contract:
   reclaim, feature reclaim, capture, and resurrection.
 - Establish the precise same-tick order between each work handler, economy
   admission, settlement, operational callback, occupancy change, and
-  presentation event.
+  presentation event; the nano-event admission/ordering contract is closed in
+  [R-P0-06 §6].
 - Confirm the semantic names of the game-ended flag bits and of the two
   mission-end predicates behind the confirmation delay. The gate's effect on
   settlement — a freeze at end of game, not a cadence — is established.
@@ -1881,3 +2136,9 @@ contract:
   failures.
 - Identify every statistic/UI field derived from the economy and distinguish
   authoritative totals from presentation-only cached values.
+- Close the nano-segment record constructor and allocator epilogue — exact
+  effect-strip ownership, allocation-failure side effects,
+  logical-to-palette color mapping, random presentation draws, and
+  per-segment fade/lifetime — `TODO(question)` in [R-P0-06 §5]. Emission
+  cadences, accepted-work gating, selector 6, endpoint ownership, and strip
+  cap/order are established.

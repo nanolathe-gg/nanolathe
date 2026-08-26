@@ -43,9 +43,8 @@ type Tables struct {
 	// Gray is the retail "GRAY TABLE": a 256→256 palette LUT mapping each
 	// palette index to the palette entry nearest its grayscale average. Retail
 	// builds it at palette install into a named shared block and applies it to
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// the screen for fogged-but-explored tiles, desaturating terrain while
+	// preserving texture [03 §3.3].
 	// It holds physical (Base) indices on both sides; apply after the
 	// logical→physical lookup when the Logical map is animated.
 	Gray [256]byte
@@ -94,62 +93,85 @@ func Load(fs vfs.FSOps) (*Tables, error) {
 	return t, nil
 }
 
-// buildGrayTable constructs the "GRAY TABLE" LUT exactly as the retail
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// buildGrayTable constructs the retail gray-table LUT [03 §4.3.3]. It prepares
+// one sum-sorted view of the palette, then for each index computes the floored
+// average of R, G, and B and finds the nearest palette entry to that gray.
 //
-//	for each palette index i with Base RGB (r,g,b):
-//	  avg = (r+g+b)/3            (floor divide via 0xAAAAAAAB magic)
-//	  target = (avg, avg, avg), targetSum = 3*avg
-//	  scan candidate indices 0..255 in order, restricted to entries whose
-//	  RGB sum lies in [targetSum-40, targetSum+40] (below: skip, above: stop);
-//	  keep the strictly-smaller squared RGB distance, so ties keep the lowest
-//	  index; if no candidate fell in the window, retail keeps the index where
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-//
-// The scan runs over the physical (Base) palette; the result is a physical
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// The sorted view is what makes the search's early-out legal: it walks sort
+// positions, skipping while the sum is below targetSum-40 and
+// BREAKING at the first sum above targetSum+40. Walking raw palette order
+// instead terminates the scan almost immediately on TA's unsorted PALETTE.PAL
+// and leaves the fogged fringe remapped to arbitrary hues — red and yellow
+// where retail shows grey.
 func buildGrayTable(t *Tables) {
-	sums := make([]int, 256)
-	for i := 0; i < 256; i++ {
-		e := t.Base[i]
-		sums[i] = int(e[0]) + int(e[1]) + int(e[2])
-	}
+	sums, perm := sortPaletteBySum(t)
 	for i := 0; i < 256; i++ {
 		e := t.Base[i]
 		avg := (int(e[0]) + int(e[1]) + int(e[2])) / 3
-		targetSum := 3 * avg
-		minSum := targetSum - 40
-		bestDist := 1_000_000_000
-		result := 0
-		found := false
-		stop := 0
-		for c := 0; c < 256; c++ {
-			s := sums[c]
-			if s < minSum {
-				continue // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			}
-			if s > targetSum+40 {
-				stop = c // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-				break
-			}
-			p := t.Base[c]
-			dr := int(p[0]) - avg
-			dg := int(p[1]) - avg
-			db := int(p[2]) - avg
-			dist := dr*dr + dg*dg + db*db
-			if dist < bestDist { // strict: ties keep lowest index
-				bestDist = dist
-				result = c
-				found = true
-			}
-		}
-		if !found {
-			// No candidate in the window: retail keeps the loop counter at exit
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			result = stop
-		}
-		t.Gray[i] = byte(result)
+		t.Gray[i] = nearestBySum(t, sums, perm, avg, avg, avg)
 	}
+}
+
+// sortPaletteBySum seeds sums[i] = r+g+b and
+// perm[i] = i, then run retail's exchange sort — for every i, compare against
+// every later j and swap both arrays when sums[i] > sums[j]. The swap is on a
+// strict greater-than, and the sort is reproduced loop-for-loop rather than
+// delegated to sort.Slice so the resulting permutation matches retail's for
+// equal sums.
+func sortPaletteBySum(t *Tables) (sums [256]int32, perm [256]uint8) {
+	for i := 0; i < 256; i++ {
+		e := t.Base[i]
+		sums[i] = int32(e[0]) + int32(e[1]) + int32(e[2])
+		perm[i] = uint8(i)
+	}
+	for i := 0; i < 256; i++ {
+		for j := i + 1; j < 256; j++ {
+			if sums[i] > sums[j] {
+				sums[i], sums[j] = sums[j], sums[i]
+				perm[i], perm[j] = perm[j], perm[i]
+			}
+		}
+	}
+	return sums, perm
+}
+
+// nearestBySum scans sort positions in ascending sum
+// order, skip below targetSum-40, stop above targetSum+40, and keep the
+// strictly smaller squared RGB distance so ties keep the earliest position.
+// When no candidate fell inside the window retail keeps the loop counter at
+// exit — the position that broke the scan, or 256 masked to 0 when the scan
+// ran to completion [03 §4.3.3].
+// The returned value is perm[best]: a physical palette index, not a position.
+func nearestBySum(t *Tables, sums [256]int32, perm [256]uint8, r, g, b int) uint8 {
+	targetSum := int32(r + g + b)
+	const window = 40
+	best := 0
+	bestDist := int32(0x3b9aca00) // retail's established sentinel [03 §4.3.3]
+	found := false
+	position := 256
+	for k := 0; k < 256; k++ {
+		s := sums[k]
+		if s < targetSum-window {
+			continue // below the bounded sum window [03 §4.3.3]
+		}
+		if s > targetSum+window {
+			position = k // stop above the bounded sum window [03 §4.3.3]
+			break
+		}
+		e := t.Base[perm[k]]
+		dr := int32(e[0]) - int32(r)
+		dg := int32(e[1]) - int32(g)
+		db := int32(e[2]) - int32(b)
+		if dist := dr*dr + dg*dg + db*db; dist < bestDist { // strict improvement [03 §4.3.3]
+			bestDist = dist
+			best = k
+			found = true
+		}
+	}
+	if !found {
+		best = position & 0xFF
+	}
+	return perm[best]
 }
 
 // RGBA resolves an indexed pixel to RGBA at present time (C7).

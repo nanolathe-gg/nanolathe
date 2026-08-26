@@ -384,7 +384,7 @@ func TestLoadTruncatedTable(t *testing.T) {
 }
 
 // Asset-guarded test: loads every COB via VFS and asserts structural
-// relationships. Skips when retail assets absent per ORCHESTRATION §6 pattern
+// relationships. Skips when retail assets absent per AGENTS.md §Test policy pattern
 // os.Stat $HOME/TotalAnnihilation/gamedata, but uses testsupport.RetailRoot
 // so the suite passes on machines with no game installed.
 func TestLoadRetailCOBs(t *testing.T) {

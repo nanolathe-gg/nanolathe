@@ -80,7 +80,7 @@ type Unit struct {
 	Script        *cob.VM      // typed COB VM per-unit [04 §4.2][P1-I01] — not any, typed per acceptance
 	GuardLatches  GuardLatches // per-unit dedup array for guard assistance [04 §3.5]
 
-	// Typed per-unit state introduced for P0-I02 real pipeline [04 §1.3][04 §4][06][GAP T15].
+	// Typed per-unit state introduced for P0-I02 real pipeline [04 §1.1][04 §4][06][GAP T15].
 	// These fields own the authoritative per-unit data that the phase-2 sweep
 	// visits in players-asc then slots-asc order [01 §6.2] C2 [P0-16].
 	ScriptState   *ScriptState    // per-unit COB VM/thread/piece state [04 §4.1][04 §4.2][GAP T15]; nil if not yet wired
@@ -884,7 +884,7 @@ func (w *World) LiveCountForPlayer(player int) int {
 // Alive state and death mark separate; death clears alive during post-tick cleanup [04 §2.4] C2.
 // Construction Remaining is owned exclusively by construction.Service and is never
 // mutated here [05 "Construction target state"] [05 "Construction arithmetic"].
-// Per-unit pipeline per [04 §1.3][GAP T15] C17 (I7): pre-update → water damage →
+// Per-unit pipeline per [04 §1.1][GAP T15] C17 (I7): pre-update → water damage →
 // weapon-slot update (Aim can block) → normal COB drain delta 1 → deferred
 // build/order → preserved movement → slot-end death handling. Tick never frees
 // slots; Cleanup handles that in phase 10 [04 §2.4] C2.
@@ -916,7 +916,7 @@ func (w *World) Tick(tick uint32) {
 					continue
 				}
 				// Real per-unit pipeline; does not mutate Remaining [05 "Construction target state"].
-				w.tickUnit(u, tick) // [04 §1.3][GAP T15] C17
+				w.tickUnit(u, tick) // [04 §1.1][GAP T15] C17
 			}
 		}
 		return
@@ -930,7 +930,7 @@ func (w *World) Tick(tick uint32) {
 			if int(u.Owner) != player {
 				continue
 			}
-			w.tickUnit(u, tick) // [04 §1.3][GAP T15] C17; no Remaining mutation
+			w.tickUnit(u, tick) // [04 §1.1][GAP T15] C17; no Remaining mutation
 		}
 	}
 }

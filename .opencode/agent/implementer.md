@@ -17,8 +17,8 @@ Before writing code:
    contracts, unknowns.
 2. Read every research citation the plan gives you
    (`research/retail-executable-spec/*.md` for behavior,
-   `research/formats/*.md` for byte layout) plus `docs/INVARIANTS.md`,
-   `docs/SPEC_CONFLICTS.md`, and `docs/ORCHESTRATION.md`. Do not invent data
+   `research/formats/*.md` for byte layout) plus `docs/INVARIANTS.md` and
+   `docs/SPEC_CONFLICTS.md`. Do not invent data
    or behavior the specs or retail assets define; an unresolved question
    becomes `TODO(T23)`, `TODO(T25)`, or `TODO(question)` in code plus a line
    in your report, never a guess.
@@ -41,7 +41,7 @@ go build ./... && go vet ./... && gofmt -l . && go test ./...
 
 plus any gate command your plan names. All must pass.
 
-Do NOT commit. Leave the working tree with your changes and report back:
+Commit the verified work on the assigned branch; do not merge it. Report back:
 
 - worktree path and branch name
 - files created/modified with one-line purpose each

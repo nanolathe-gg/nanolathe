@@ -65,7 +65,9 @@ whole-string search of `TotalA.exe` settles, without any disassembly, which FBI
 keys can possibly do anything. Match whole strings — `hover` is not read merely
 because `canhover` exists.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+The executable's FBI key strings form one bounded table, with footprint and
+slope keys shared with movement-class loading. Every key in the tables below
+that is not listed here as inert appears in that census.
 
 ### Authored by retail units, but not readable by the engine
 
@@ -95,11 +97,16 @@ them and no string for them exists in the executable either.
 
 ### Readable by the engine, but never authored by retail units
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+| Key | Notes |
+| --- | --- |
+| `armoredstate` | An authored starting value for the armored flag that `DamageModifier` scales. No shipped unit sets it, so on retail content that flag is script-driven only. Its existence is independent support for reading `DamageModifier` as the armored-state damage scale. |
+| `wacky` | Read with the restriction and weapon-slot fields. Purpose unresolved. |
 
 ### Exactly three weapon slots
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+`weapon1`, `weapon2`, and `weapon3` occur in the bounded key census. There is
+no `weapon4` string anywhere in the executable, so three is the hard slot
+count, not a convention.
 
 ## Field reference
 
@@ -235,7 +242,24 @@ mobile incorrectly replaces that gradient with mobile flat-face shading.
 
 ### Combat
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+| Key | Meaning |
+| --- | --- |
+| `canattack` | Can be given attack orders |
+| `Weapon1`, `Weapon2`, `Weapon3` | Weapon names ([tdf.md](tdf.md) weapons); map to the script's Primary/Secondary/Tertiary callbacks. Three is the hard limit: the executable contains `weapon1`, `weapon2` and `weapon3` and no `weapon4`. A 1998–2001 community unit-manager tool defensively parses `Weapon4`/`Weapon5`; those keys cannot reach the engine. |
+| `NoAutoFire` | Documented as `1` = never auto-engages, and authored on 272 retail units, but the executable has no string for it. Standing fire orders carry that behavior instead. |
+| `StandingFireOrder` | Initial fire order: 0 hold, 1 return, 2 fire at will |
+| `StandingMoveOrder` | Initial move order: 0 hold position, 1 move, 2 roam |
+| `firestandorders`, `mobilestandorders` | Whether those order toggles exist for the unit |
+| `wpri_badTargetCategory`, `wsec_badTargetCategory`, `wspe_badTargetCategory` | Per-slot bad-target categories. All three spellings exist in the executable; retail content authors the first two (107 and 22 units). |
+| `NoChaseCategory` | Never-chase categories, read unprefixed. |
+| `BadTargetCategory` (unprefixed) | Authored on 99 retail units and **inert** — the executable has only the three prefixed spellings. |
+| `antiweapons` | Shoots at projectiles (anti-nuke) |
+| `CanDgun` | Has a D-gun |
+| `kamikaze`, `kamikazedistance` | Self-destruct attack |
+| `SelfDestructAs`, `ExplodeAs` | Weapon names for self-destruct and death explosions |
+| `selfdestructcountdown` | Countdown seconds |
+| `ShootMe` | `1` = broadcasts as a target (dragon's teeth use 0) |
+| `ImmuneToParalyzer` | EMP immunity |
 
 ### Sensors and stealth
 
@@ -252,11 +276,51 @@ mobile incorrectly replaces that gradient with mobile flat-face shading.
 
 ### Miscellaneous
 
-**Publication omission:** Historical executable-analysis detail omitted from this public edition.
+| Key | Meaning |
+| --- | --- |
+| `Commander` | Is a commander |
+| `IsFeature` | Becomes its `Corpse` feature immediately when finished (dragon's teeth) |
+| `digger` | Has underground pieces (pop-up guns) — affects rendering below ground level |
+| `NoShadow` | No cast shadow (ships) |
+| `ZBuffer` | Always `1`; read by the engine. |
+| `ThreeD` | Always `1`; the engine has no string for it. |
+| `SoundCategory` | Category in `gamedata/SOUND.TDF` |
+| `Corpse` | Feature left on death ([tdf.md](tdf.md)); chained via the feature's `featuredead` |
+| `ai_limit`, `ai_weight` | Complete AI profile directives, merged beneath map-profile global and difficulty sections (`ai_limit=limit CORVOYR 2;`) |
+| `Ovradjust` | Authored as `1` on 173 retail units. Its name makes legacy 3D overlap adjustment a candidate meaning, but it cannot select a uniform parent/child bias: both `ARMSOLAR` and `ARMAP` set it while their shallow piece intersections resolve differently. Exact semantics remain unconfirmed. |
+| `sortbias` | Read by the engine; effect unconfirmed. |
+| `armoredstate` | Read by the engine and authored by no shipped unit: the starting value of the armored flag that `DamageModifier` scales. |
+| `wacky` | Read by the engine and authored by no shipped unit. Purpose unresolved. |
 
 ## Unknowns and caveats
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+- Default values when a key is absent are engine-internal and undocumented;
+  do not assume 0 for everything (e.g. `ShootMe` behaves as 1 by default).
+- Units/scales for `MaxVelocity`, `Acceleration`, `BuildTime`,
+  `WorkerTime` are relative engine ticks; exact per-tick math is still
+  being established by observation.
+- Several flags above carry community-guessed semantics (`BMcode`,
+  `MoveRate1`, `PitchScale`, `sortbias`, `Ovradjust`). `BuildAngle`
+  is confirmed to affect built-unit heading, but its exact random distribution
+  is still provisional. `Scale` and `Ovradjust` are now known to be inert:
+  the engine has no string for either.
+- `DamageModifier`'s armored-state reading gained independent support: the
+  executable reads an `armoredstate` FBI key that no shipped unit
+  authors, which is what a script-toggled armored flag with an authored initial
+  value looks like.
+- `DamageModifier` was previously recorded here as a self-heal rate factor.
+  That reading does not survive the data: all 16 retail units that author it
+  are structures with a script-toggled armored state (both solar collectors
+  at `0.33333`, Annihilator and Doomsday at `0.5`, both targeting facilities
+  at `0.7`, Viper at `0.125`), self-heal is already expressed by `HealTime`,
+  and the clean-room specification separately calls for a script-controlled
+  armored damage modifier with no authored source. OpenTA therefore applies
+  it as the armored-state damage scale, falling back to the historic half for
+  content that omits it. This is the best available reading, not a primary
+  source: no shipped file documents the key.
+- The `Copyright` requirement is community lore; not re-verified.
+- No key names the COB script — the `UnitName` → `scripts/<name>.cob`
+  convention is engine behavior.
 
 ## Sources
 

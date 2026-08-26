@@ -462,7 +462,7 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 			}
 			m := camera.LayoutMinimap(playW, playH) // [07 §10]
 			const mmX, mmY, mmW, mmH = 540, 360, 90, 90
-			// Scale HUD 90x90 to 126 canvas for letterbox math [07 §10][minimap §4].
+			// Scale HUD 90x90 to 126 canvas for letterbox math [07 §10][03 §3.6].
 			canvasX := (mx - mmX) * 126 / mmW
 			canvasY := (my - mmY) * 126 / mmH
 			if canvasX < 0 {
@@ -744,14 +744,17 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 				var bh pool.Handle
 				var bu snapshot.UnitView
 				var hit bool
-				// PickUnit/Snapshot pick expects shell viewport coords (0..511) [03 §2.5][C-3];
-				// convert logical mouse (129..639) to shell by subtracting viewport origin.
-				vtShell := client.NewViewportTransform(b.cam, nil, 640, 480)
-				shellX := mx - vtShell.Viewport.Left
-				shellY := my - vtShell.Viewport.Top
+				// The framebuffer composer already rebases the projected world point
+				// from the beam origin before drawing it. Mouse coordinates are in that
+				// same logical framebuffer, so do not subtract the HUD viewport origin
+				// a second time [03 §2.5][07 §8].
+				shellX, shellY := mx, my
 				if frame, ok := b.currentSnapshot(); ok {
 					bh, bu, hit = client.PickSnapshotUnit(frame, shellX, shellY, b.cam, uint8(viewer))
-				} else if !b.requireCommandDispatch {
+				} else {
+					// Snapshot not yet available (e.g., initial loading frames). Fall back to live picker
+					// so a click is not silently dropped. For production this still routes through the
+					// typed human-command queue; for fixtures it would have taken this path anyway.
 					lh, lu := client.PickUnit(shellX, shellY, b.cam, b.sess.Units, b.sess.Vis, viewer)
 					bh = lh
 					if lu != nil {
@@ -779,14 +782,9 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 				}
 			}
 		} else {
-			// Drag rect is logical (129..639); convert to shell (0..511) for pick [C-3][03 §2.5].
-			vtDrag := client.NewViewportTransform(b.cam, nil, 640, 480)
-			shellRect := client.Rect{
-				MinX: rect.MinX - vtDrag.Viewport.Left,
-				MinY: rect.MinY - vtDrag.Viewport.Top,
-				MaxX: rect.MaxX - vtDrag.Viewport.Left,
-				MaxY: rect.MaxY - vtDrag.Viewport.Top,
-			}
+			// The drag rectangle is already in the framebuffer coordinate space
+			// used by the rendered world [03 §2.5][07 §8].
+			shellRect := rect
 			if frame, ok := b.currentSnapshot(); ok {
 				handles := client.SnapshotUnitHandlesInRect(frame, b.cam, shellRect, b.sess.LocalOwner)
 				kind := battleCommandSelectionReplace
@@ -794,10 +792,41 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 					kind = battleCommandSelectionToggle
 				}
 				_ = b.submitBattleCommand(battleCommand{Kind: kind, Selection: battleSelectionCommand{Handles: handles}})
-			} else if !b.requireCommandDispatch {
-				// Explicit synthetic fixture fallback only.
-				client.ApplyDragSelectionWorld(b.sess.Units, b.cam, shellRect, additive)
-				b.filterSelectionToPlayer(b.sess.LocalOwner)
+			} else {
+				// Snapshot not yet available – use live world rect as fallback. For fixtures this
+				// is the established path; for production we collect handles and still dispatch
+				// through the typed queue so the input boundary remains consistent.
+				if b.requireCommandDispatch {
+					// Collect visible handles in live world using the same shell rect and visibility.
+					var liveHandles []pool.Handle
+					if b.sess != nil && b.sess.Units != nil && b.cam != nil {
+						for _, u := range b.sess.Units.Iter() {
+							if u == nil || !u.Alive {
+								continue
+							}
+							// Visibility check via live service (owner bypass, fog, etc.)
+							if b.sess.Vis != nil {
+								t := visibility.Target{Owner: visibility.PlayerID(u.Owner), X: u.X, Y: u.Y, Z: u.Z, Hidden: u.Flags&0x4 != 0, Status: u.Flags}
+								if !b.sess.Vis.IsVisible(visibility.PlayerID(b.sess.LocalOwner), t) {
+									continue
+								}
+							}
+							sx0, sy0 := b.cam.WorldToScreen(u.X, u.Y, u.Z)
+							sx, sy := sx0-camera.OriginX, sy0-camera.OriginY
+							if shellRect.Contains(sx, sy) && u.Owner == b.sess.LocalOwner {
+								liveHandles = append(liveHandles, u.Handle)
+							}
+						}
+					}
+					kind := battleCommandSelectionReplace
+					if additive {
+						kind = battleCommandSelectionToggle
+					}
+					_ = b.submitBattleCommand(battleCommand{Kind: kind, Selection: battleSelectionCommand{Handles: liveHandles}})
+				} else {
+					client.ApplyDragSelectionWorld(b.sess.Units, b.cam, shellRect, additive)
+					b.filterSelectionToPlayer(b.sess.LocalOwner)
+				}
 			}
 		}
 	}
@@ -1491,14 +1520,14 @@ func (b *battleSession) drawMinimap(c *client.Client, fnt *formats.FNT) { // [07
 		}
 	}
 	m := camera.LayoutMinimap(playW, playH) // [07 §10] 126 letterbox
-	// Build radar picture from terrain tiles [minimap §3.2] 2x supersampled; baked minimap not yet wired, generate.
+	// Build radar picture from terrain tiles [03 §3.7] 2x supersampled; baked minimap not yet wired, generate.
 	var pal *palette.Tables
-	// c.Palette is not directly exposed; pal stays nil fallback to nearest without ALP [minimap §3.2].
+	// c.Palette is not directly exposed; pal stays nil fallback to nearest without ALP [03 §3.7].
 	picture := render.BuildRadarPicture(b.sess.World, playW, playH, m, nil, 0, 0, pal)
 	if picture == nil || picture.Bits == nil || picture.W <= 0 || picture.H <= 0 {
 		// Fallback to dots only
 	} else {
-		// Fog: apply snapshot FogView Ch0==15 as black for unexplored [03 §3.3][rr-16][C-6].
+		// Fog: apply snapshot FogView Ch0==15 as black for unexplored [03 §3.3][03 §3.3][C-6].
 		mapped := picture
 		if b.sess.Snapshot != nil {
 			if _, cur, ok := b.sess.Snapshot.Read(); ok && cur != nil && cur.Fog.Valid && cur.Fog.W > 0 && cur.Fog.H > 0 && len(cur.Fog.Ch0) == int(cur.Fog.W*cur.Fog.H) {
@@ -1529,7 +1558,7 @@ func (b *battleSession) drawMinimap(c *client.Client, fnt *formats.FNT) { // [07
 				mapped = &render.RadarSurface{W: w, H: h, Pitch: (w + 3) &^ 3, Bits: bits}
 			}
 		}
-		// Draw mapped picture scaled to HUD rect via nearest [minimap §3.2][C-6].
+		// Draw mapped picture scaled to HUD rect via nearest [03 §3.7][C-6].
 		for y := 0; y < mmH; y++ {
 			srcY := y * mapped.H / mmH
 			if srcY < 0 {
@@ -1552,7 +1581,7 @@ func (b *battleSession) drawMinimap(c *client.Client, fnt *formats.FNT) { // [07
 				c.UIFillRect(int(mmX+x), int(mmY+y), 1, 1, pix)
 			}
 		}
-		// Viewport rect lens 1-pixel [07 §10][minimap §7] clipped to HUD.
+		// Viewport rect lens 1-pixel [07 §10][03 §3.9] clipped to HUD.
 		if b.cam != nil {
 			eW, eH := b.cam.EffectiveView()
 			if eW <= 0 {
@@ -1614,7 +1643,7 @@ func (b *battleSession) drawMinimap(c *client.Client, fnt *formats.FNT) { // [07
 			}
 		}
 	}
-	// Contacts via RadarProjection [minimap §7][07 §10] using same minimap math [C-6].
+	// Contacts via RadarProjection [03 §3.9][07 §10] using same minimap math [C-6].
 	if b.sess.Units != nil && playW > 0 && playH > 0 {
 		m2 := camera.LayoutMinimap(playW, playH)
 		for _, u := range b.sess.Units.Iter() {
@@ -1661,35 +1690,27 @@ func (b *battleSession) drawMinimap(c *client.Client, fnt *formats.FNT) { // [07
 // along Z to find the ground whose sheared projection is the clicked row, and
 // returns the height there as Y.
 // It clamps the pointer into the battle viewport before ground resolution per
-// [07 §8] step 1 and wires OrderTargetFromViewport as the single source of
-// truth [C-2][C-3]. Chose to wire OrderTargetFromViewport (not delete trap).
+// [07 §8] step 1. The framebuffer world pass is rebased from the beam origin,
+// so the inverse adds that origin back before resolving terrain [03 §2.5].
 func (b *battleSession) cursorWorld(sx, sy int32) (wx, wy, wz numeric.Fixed) {
 	if b.cam == nil {
 		return 0, 0, 0
 	}
-	// Single source of truth: ViewportTransform's OrderTargetFromViewport [C-3][07 §8].
-	vt := client.NewViewportTransform(b.cam, nil, 640, 480)
-	if b.sess != nil {
-		vt.Terrain = b.sess.World
-	}
 	// Clamp pointer into the battle viewport before ground resolution [07 §8] step 1 [C-2].
 	clampedX := sx
 	clampedY := sy
-	if clampedX < vt.Viewport.Left {
-		clampedX = vt.Viewport.Left
-	} else if clampedX > vt.Viewport.Right {
-		clampedX = vt.Viewport.Right
+	if clampedX < camera.OriginX+1 {
+		clampedX = camera.OriginX + 1
+	} else if clampedX > 639 {
+		clampedX = 639
 	}
-	if clampedY < vt.Viewport.Top {
-		clampedY = vt.Viewport.Top
-	} else if clampedY > vt.Viewport.Bottom {
-		clampedY = vt.Viewport.Bottom
+	if clampedY < camera.OriginY {
+		clampedY = camera.OriginY
+	} else if clampedY > 447 {
+		clampedY = 447
 	}
-	p := client.Point{X: clampedX, Y: clampedY}
-	if x, y, z, ok := vt.OrderTargetFromViewport(p); ok {
-		return x, y, z
-	}
-	// Fallback: direct ground-plane inverse when transform rejects (should not happen after clamp).
+	// The renderer stores world points at beam position minus OriginX/Y. Restore
+	// those fixed offsets for the camera inverse [03 §2.5].
 	fx, fz := b.cam.ScreenToWorld(clampedX+camera.OriginX, clampedY+camera.OriginY)
 	if b.sess == nil || b.sess.World == nil {
 		return fx, 0, fz
@@ -2194,11 +2215,9 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 		return 0, nil, pos
 	}
 	// ONE picking routine via client.PickUnit [P0-I14][07 §9][03 §3.2] C8.
-	// PickUnit expects shell viewport coordinates (0..511,0..415) [03 §2.5][C-3];
-	// convert logical mouse (129,32..639,447) to shell by subtracting viewport origin.
-	vtPick := client.NewViewportTransform(b.cam, nil, 640, 480)
-	shellX := sx - vtPick.Viewport.Left
-	shellY := sy - vtPick.Viewport.Top
+	// PickUnit uses the framebuffer coordinates produced by the world renderer.
+	// The battle input pointer already uses that coordinate space [03 §2.5].
+	shellX, shellY := sx, sy
 	viewer := visibility.PlayerID(b.sess.LocalOwner)
 	if bh, bu := client.PickUnit(shellX, shellY, b.cam, b.sess.Units, b.sess.Vis, viewer); bh != 0 && bu != nil {
 		return bh, bu, pos

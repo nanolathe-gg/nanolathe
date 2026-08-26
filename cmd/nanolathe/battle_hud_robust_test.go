@@ -241,7 +241,7 @@ func TestMissingOptionalStillEntersBattle(t *testing.T) {
 
 // TestMissingMandatoryFailsBeforeClientWithDiagnostic checks that a missing
 // mandatory side font/anchor fails before client creation with exact
-// path/provider diagnostic [02 §6][ORCHESTRATION §7].
+// path/provider diagnostic [02 §6][AGENTS.md §Diagnostics].
 func TestMissingMandatoryFailsBeforeClientWithDiagnostic(t *testing.T) {
 	root := retailRootForRobust(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}

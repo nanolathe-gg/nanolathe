@@ -104,6 +104,20 @@ type UnitDef struct {
 	SonarDistanceJam int32 // sonardistancejam integer default 0 [02 "Unit record"]
 	MinCloakDistance int32 // mincloakdistance integer default 0 [02 "Unit record"]
 
+	// ModelTop is the model's top extent in whole world units, derived from
+	// objects3d/<ObjectName>.3do rather than the FBI: retail computes it at
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// top, which is what lets a ray clear flat ground at all. Zero when the
+	// model is missing or entirely below its origin.
+	//
+	// It is deliberately absent from the canonical string below: that string
+	// is the FBI record's identity, and this value comes from a different
+	// asset with its own provenance.
+	ModelTop int32
+
 	// Flags and postures — integer accessor default 0 booleans except standing orders default 2 [02 "Unit record"].
 	StandingMoveOrder  int32 // standingmoveorder default 2 [02 "Unit record"]
 	StandingFireOrder  int32 // standingfireorder default 2 [02 "Unit record"]

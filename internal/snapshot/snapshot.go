@@ -118,7 +118,7 @@ type FeatureView struct {
 
 	// Sprite/GAF asset wiring — clean-room for Great Divide coverage.
 	// Object present => 3DO path via Model; otherwise Filename + SeqName drive GAF.
-	// See research/features/feature_rendering.md §2.
+	// See [03 §5.1].
 	Filename    string // GAF filename stem, e.g. "trees" -> anims/trees.gaf [02 "Feature record"]
 	SeqName     string // idle sequence name, e.g. "leaf1" [02 "Feature record"]
 	SeqNameShad string // shadow sequence [02 "Feature record"]
@@ -369,8 +369,8 @@ type SoundEvent struct {
 // tick at publish time. Slices are owned by the Frame value; callers must not
 // retain and mutate the slices passed to Publish after the call.
 //
-// Single-writer rule per docs/ORCHESTRATION.md §4: one writer per Frame field
-// is serialized. Units is owned exclusively by phase-06/GATE2-SLICE (the Gate-2
+// Single-writer rule per docs/WORK_UNITS.md §"Parallel dispatch groups": one
+// writer per Frame field is serialized. Units is owned exclusively by phase-06/GATE2-SLICE (the Gate-2
 // walker slice, straight-line stub per PHASES Gate 2) until WU-07-7 replaces the
 // mover; no other dispatch may write Frame.Units concurrently.
 type Frame struct {

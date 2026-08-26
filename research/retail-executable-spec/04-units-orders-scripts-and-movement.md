@@ -8,7 +8,7 @@ Evidence labels:
 - **Supported inference** means the behavior follows from several direct observations, but one semantic link or caller remains unresolved.
 - **Unknown** means that the available retail evidence does not close the behavior. An implementation must keep the gap explicit rather than inventing a rule.
 
-The corrected notes and root-correction ledger take precedence over earlier notes. In particular, the 30 Hz tick, the current path-search reconstruction, the current COB drain root, and the current visibility/effect phase identities are used here. Earlier notes marked superseded or quarantined are not evidence.
+The corrected notes and root-correction ledger take precedence over earlier notes. In particular, the 30 Hz tick, the current path-search reconstruction, the current COB drain root, and the current visibility/effect phase identities are used here. Earlier notes marked superseded or quarantined are not evidence. In-place corrections below carry audit notes naming the superseded reading: the code-9 last-record wait in section 3.3 [R-P0-01] and the UNIT_HEIGHT port in section 4.4 [R-P0-10].
 
 ## 1. Simulation prerequisites and phase contract
 
@@ -38,7 +38,28 @@ lowest-free scan [P0-09]. A unit killed during projectile processing retains
 enough state to be seen by later same-tick phases; final deletion is deferred
 to cleanup through the central death handler [P0-09].
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** Within one unit visit the sweep executes, in order: the
+general unit update (which can queue deferred `SetDirection` and `SetSpeed`);
+the weapon update for eligible players (which can queue deferred
+`TargetCleared` and the `AimPrimary/Secondary/Tertiary` family, and whose fire
+decisions reach the projectile creators that queue `FirePrimary/Secondary/
+Tertiary` followed by `RockUnit`); the normal script drain with tick delta 1,
+running all eight threads once and then one piece-interpolation pass; order
+and construction work (primary pump head-blocking then secondary skip-not-due);
+movement integration, whose medium classifier issues `StartMoving`,
+`StopMoving`, `MoveRateN`, and then `setSFXoccupy` as immediate wake-flag
+starts; and finally the slot-end death handling, which can run the synchronous
+local `Killed` query (Q). Consequences: a deferred (D) callback queued before the
+normal drain executes in that same visit (step 3 drains every active slot); a deferred callback queued after it
+normally waits for the next visit, except that any later immediate-start
+(I) callback on the same virtual machine performs an all-slot delta-0 drain that
+can execute it earlier [P0-09]. Damage callbacks queued by the post-unit
+projectile phase therefore normally land on the next visit, while damage packets
+processed during event ingress (before the unit phase) can queue theirs in time for that tick's normal
+pass. The four direct piece-pass call sites are the immediate branches of the zero-argument name-form adapter, the slot-based zero-argument helper, and the argument-carrying slot-form adapter (section 4.2), plus the ordinary per-tick drain; there is no direct piece-pass call from the general unit update (negative-bounded). Capture is synchronous before trigger polling, build-complete product
+publication (GetBuilt) occurs before trigger polling but victory needs the next
+30-tick poll, and kill notification goes through the central death handler
+[P0-09]. <!-- source orchestration-research-cob-callbacks.md -->
 
 **Established fact:** The projectile phase captures its active-span count at
 entry. A zero-burst weapon projectile spawned during the preceding unit sweep
@@ -285,24 +306,38 @@ The handler's return code drives the queue [P0-07][P0-08]:
 | 5, 8 | unlink, free, and continue |
 | 6 | move the record to the tail of its segment and continue (primary); in the secondary pump remove the single record and return without tail yield |
 | 7 | free every record on both segments and return — this is cancel-all (primary); in the secondary pump remove the single record and return without cancel-all |
-| 9 | set a completion flag; if the record is last, reset its phase and set the same randomized deadline `tick + 30 + random below 15` (range 30 to 44, same bound as code 3, resolving the earlier conflict where one description used 30) [P0-08][SC8]; otherwise unlink and free |
+| 9 | set a completion flag; if the record is last, reset its phase and set the randomized deadline `tick + 30 + random below 30` (range 30 to 59) [R-P0-01]; otherwise unlink and free |
 | above 9 | delegate to the order expiry helper and return — helper unlinks, cleans, and frees the single record with no random draw and no whole-queue cancel; whole-queue cancel is exclusively code 7 [P0-08] |
+
+**Audit note — the code-9 last-record wait [R-P0-01]:** the earlier reading
+[P0-08]/[SC8] and document 05's "Queue pumping and result codes" stated that
+the code-9 last-record wait drew a random value below 15 like code 3 (range
+30 to 44). The direct recovery in R-P0-01 (section 8.3) shows the code-9
+last-record arm draws a random value below 30 — range 30 to 59 — and that only
+the code-3 arm draws below 15. The 30-to-59 range is the contract; document
+05's table is superseded by section 8.3.
 
 Consequences a reimplementation must preserve: one pump call can cascade a
 record through several phases in the same tick until a waiting or blocked code
 appears; a handler that returns an out-of-range phase code at or below 9
 follows that code's row, while above 9 it takes the single-node expiry helper;
-waits are quantized to between 30 and 44 ticks for both code 3 and code 9 last
-[P0-08][SC8]; and goal writes and slot binds made by a handler are visible to
-later handlers in the same cascade, while freed records are invisible
-immediately.
+waits are quantized to 30 to 44 ticks for code 3 and 30 to 59 ticks for the
+code-9 last-record wait [R-P0-01]; and goal writes and slot binds made by a
+handler are visible to later handlers in the same cascade, while freed records
+are invisible immediately. The movement and path services fill satisfied bits
+between pump visits — a blocked record's gate can be satisfied from outside
+the pump — and an arrival bit set during a unit's movement integration is
+observed by that unit's NEXT pump visit, not the current one (one-tick
+latency; sections 1.1, 8.3).
 
 **Supported inference and Unknown — queue waits and producer assignment
 [P0-07][P0-08]:** The bodies for interrupt wake bits 2 (cancel-current) and 8
-(Construction stopped) are known — refund arithmetic plus a kill packet for the
-first, decrement and free for the second — but bounded scan found no writer for
-those wake bits, so producers remain `TODO(T25)` and must not be invented. The
-bounded census for the small class parameter above (3901 boundaries) similarly
+(Construction stopped) are known — for the first, a metal refund of
+trunc((1 − remaining)·cost) plus a cause-9 kill; for the second, a single
+count decrement after which the restart path frees the node when the count is
+exhausted — but bounded scan found no writer for those wake bits, so producers
+remain `TODO(T25)` and must not be invented [R-P0-09][R-P0-10] (full semantics
+in section 3.8). The bounded census for the small class parameter above (3901 boundaries) similarly
 found no reader. All producers — HUD, AI, InitialMission, COB, network, rally
 inheritance, and factory completion — enter through the common queue tail-append
 path that coalesces only at the tail or inserts immediately after the active
@@ -489,11 +524,16 @@ queued move or patrol record onto the product, copying the position payload
 and preserving traversal order — patrol rallies reproduce as patrols, multiple
 waypoints are inherited in queue order, and the factory itself never moves. If
 nothing was inherited the product receives a queued `Park` order instead.
-Standing-move and standing-fire bits copy from builder to product only when
-both units carry the building-class state word bit and NEITHER carries the
-auto flag; the experience word copies only for computer-player-owned builders.
+Standing-move bits (18–19) and standing-fire bits (20–21) copy from builder
+to product only when both units carry the building-class/alive state bit
+(bit 28) and NEITHER carries bit 14 (the auto flag, which also marks the
+cloak/initial-posture posture the completion transition applies); the
+experience word copies only for computer-player-owned builders (owner player
+state byte value 1) [R-P0-09].
 The full production lifecycle, refund arithmetic, and completion transition
-belong to document 05.
+belong to document 05. The complete GetBuilt state gates, retry timing,
+completion-transition order, and same-tick publication windows are in section
+3.8 [R-P0-09].
 
 **Supported inference:** The construction operation table is data-driven and
 maps an operation byte to handlers. The precise meaning of every operation byte
@@ -631,6 +671,117 @@ position payload. The BLAST latch (attack-special) always issues a ground
 position regardless of any unit hit and draws the area-of-effect rings, while
 ATTACK on a unit hit issues the chase orbit.
 
+### 3.8 Factory completion, activation, and rally inheritance [R-P0-09]
+
+**Established fact — product publication [R-P0-09]:** The factory's state-2
+success path is ordered: synchronous QueryBuildInfo (output cell 0 seeded −1)
+resolves the exit piece transform to a world position; the position is
+converted to a product footprint anchor (section 6.3) and validated (section
+6.4); the product is allocated at the resolved exit transform — not at the
+derived anchor, section 6.3 — as a nanoframe with remaining fraction 1.0,
+health 0, and build stance clear; the builder/product link is registered; the
+factory's standing-order fields are copied into the product's state fields; a
+GetBuilt record is enqueued on the product's PRIMARY queue; the factory's
+StartBuilding edge is raised; the builder interface is refreshed; and the
+factory node advances to its work state. The GetBuilt insertion precedes the
+StartBuilding edge. StartBuilding is an edge callback — the argument-less
+deferred form fires only when the cached building bit rises — and is distinct
+from the slot-form StartBuilding used by construction-command dispatch, which
+carries the producer heading as one unsigned 16-bit argument (section 5.3)
+[R-P0-09][R-P0-10].
+
+Allocation refusal (per-definition limit or pool exhaustion) occurs before the
+product exists: it prints the established "Unable to create any more units"
+message and retries in exactly 300 ticks. A blocked exit validation is a
+different pre-allocation path — silent, retrying in exactly 15 ticks. Neither
+retry changes the anchor/center ownership of section 6.3.
+
+**Established fact — work-to-completion transition [R-P0-09]:** Accepted
+construction work updates the remaining fraction and health through the shared
+helper, which admits both resource demands together and stores
+`newRemaining = clamp(oldRemaining − workerQuantum/buildTime, 0, 1)` with
+`healthGain = trunc(maxHealth·oldRemaining) − trunc(maxHealth·newRemaining)`.
+If resource admission rejects either demand, neither value changes and no
+completion callback is emitted. If the accepted step reaches 0.0 the factory
+state machine re-enters its completion state in the same primary-pump pass.
+
+The completion state has a strict callback/mutation order: the StopBuilding
+falling edge FIRST, then the completion transition, then clearing the
+presentation payload, decrementing the queued product count once, refreshing
+the builder interface, and restarting the factory node at state 0 — or freeing
+it when the count is exhausted. The edge helper fires StopBuilding only on the
+falling edge; unchanged state does not re-fire.
+
+The completion transition, gated on the recovered class preconditions
+(building-class builder with a build list; building-class product), stores
+remaining fraction 0.0, sets the product's completion flag (bit 13 of the
+state word), clears the product's build/weapon auxiliary field, raises the
+product's Activate edge when the product definition's capability word requests
+activation (capability bit 18), and applies the cloak/initial-posture handling
+when capability bit 24 requests it (writes the cloak/init byte value and sets
+bit 14 of the state word). The normal completion transition is not the
+cancel-current interrupt: cancel-current invokes the same transition before a
+cause-9 kill and lowers the Activate AND StartBuilding edges together without
+decrementing the queued count; construction-stopped (wake mask 8) instead
+prints its message, decrements the count once, and leaves the node to restart
+(the wake-bit bodies are in section 3.3) [R-P0-09][R-P0-10].
+
+**Established fact — GetBuilt retry and rally inheritance [R-P0-09]:** The
+product-side GetBuilt order is a real primary-queue node with three retry
+states: while the product remains unfinished it re-arms itself — state 0
+retries after 300 ticks, state 1 after 30 ticks, and state 2 blocks waiting on
+its wake bit. Once the product's remaining fraction is 0.0 it walks the
+builder's primary queue from front to back and, for every record whose
+resolved operation is QMove or QPatrol, enqueues the corresponding operation
+on the product with the record's saved position triple. Traversal order is
+preserved — multiple rally points become multiple product orders in
+factory-queue order, patrol remains patrol, and the factory itself never
+moves. If no such record exists it enqueues a Park order instead; it then
+returns result 5 and its own node is removed, so it is not left as a perpetual
+completion watcher.
+
+Standing-order inheritance is separately gated (summary in section 3.5): the
+copy is allowed only when BOTH the product and the builder carry the
+building-class/alive state bit (bit 28) and NEITHER carries bit 14 (the auto
+flag, which also marks the cloak/initial-posture posture). When the guard
+passes, standing-move bits 18–19 and standing-fire bits 20–21 copy from the
+builder's state word to the product's; for a computer-owned builder (owner
+player state byte value 1) the builder's experience word also copies. The
+state-2 epilogue's own standing-field merge is the initial product-state copy;
+the guarded GetBuilt block is the post-build gate — keep both stages distinct
+rather than treating the product's initial flags as proof that GetBuilt has
+already run.
+
+**Established fact — same-tick product publication windows [R-P0-09]:** A
+product allocated during the unit sweep exists before the projectile phase and
+can be selected as a projectile target in that phase, even while its remaining
+fraction is still 1.0. A product completed during the sweep has its completion
+flag and remaining fraction visible immediately to later builders in the same
+sweep. Occupancy and LOS publication happen after settlement in the same tick
+and do not retroactively alter the earlier projectile phase. GetBuilt runs in
+the same sweep when the product's slot sorts after the producing factory's
+slot; a product that reuses an already-visited slot waits for the next tick.
+The local player's victory/trigger poll rides that player's settlement
+deadline: a due 30-tick poll can see the just-completed product in the same
+tick, otherwise the trigger lags until the next due settlement.
+
+**Established fact — repetition and queue cleanup [R-P0-09]:** Retail has no
+repeat flag in the order-node descriptor or runtime flag word. Back-to-back
+production comes from the counted node: tail-only coalescing adds to the
+record's remaining count; each completion decrements it once; result 0
+restarts state 0 in the same primary-pump pass; and the final state-0 count at
+or below zero returns 5 and frees the node. There is no gap and no randomized
+delay between successful products of a coalesced count. A factory death or
+capture does not transfer queued nodes to the replacement in the bounded
+census — the old list stays on the dead factory's order anchors — and the
+exact allocator/slot-reuse cleanup when a dead factory slot is reused remains
+TODO(question); do not invent reclamation or inheritance.
+
+`TODO(T25)`: the upstream producers of production-node wake masks 2
+(cancel-current) and 8 (Construction stopped) remain unlocated — their handler
+semantics are closed in section 3.3 and above, but no UI or network producer
+was found in the bounded corpus, and none must be invented.
+
 ## 4. COB loader, VM, threads, and script timing
 
 ### 4.1 Loading and binding
@@ -647,11 +798,11 @@ ATTACK on a unit hit issues the chase orbit.
 
 **Established fact:** The unit phase drains each unit's eight script threads. The interpreter runs before per-piece interpolation in that unit's script drain. A move or turn issued by a script therefore affects the same tick's interpolation; a wait that becomes satisfied during interpolation is observed by the next drain.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** The engine reaches scripts through four adapter roots: the zero-argument name-form start, the argument-carrying name-form start, the argument-carrying slot-form start, and the name-form synchronous four-cell query (direct-static: the name-form roots resolve through the shared name-lookup helper and the slot-form roots through the shared slot-lookup helper). The zero-argument name-form start is a name-based zero-argument start (15 direct call sites); the argument-carrying name-form start is name-based, taking up to four arguments, resolving the name, then forwarding to the argument-carrying slot-form start (21 direct call sites); the argument-carrying slot-form start is slot-based, writing four physical cells then setting the logical top to `arity−1` (5 direct call sites: four producers outside the adapter roots plus the argument-carrying name-form forwarding); and the name-form synchronous query forwards to the query interpreter (14 direct call sites). A bounded call census over the code sections counts 55 direct calls to those four roots; one is the internal argument-carrying name-form→slot-form forwarding, so 54 are producer call sites outside the four roots. The adjacent slot-based zero-argument helper has no direct caller in the bounded census (negative-bounded). The fixed-name producer census yields 40 distinct case-sensitive callback names; the packet path `0x0E` (section 5.3) can additionally start an authored slot by index and is not limited to those 40 names. <!-- source orchestration-research-cob-callbacks.md -->
 
-**Publication omission:** Historical executable-analysis detail omitted from this public edition.
+**Established fact:** Each VM has eight thread slots of `0xA4` bytes. Allocation takes the first inactive slot in ascending order. A new root thread begins runnable at the selected function entry with logical stack top `−1`, no completion receiver, and signal mask `1`; child script starts inherit their parent's current mask. There is no name-level or producer-level duplicate suppression in the adapters — repeated successful starts occupy independent slots, and any repeat suppression lives in the producers' own state caches. Invalid identity (name lookup `−1` or slot out of range) and a full eight-slot pool are the same allocation failure to the adapters: the zero-argument name-form start and the slot-based zero-argument helper return false without notifying a supplied receiver, while the argument-carrying slot-form start and the argument-carrying name-form start return false and, if a receiver is supplied, invoke it with `0`. `HitByWeapon` and `TakeDamage` are independent argument-carrying name-form starts and can fail separately; `Aim*` failures also deliver `0` via that path and therefore leave aim-ready clear (section 5.3). <!-- source orchestration-research-cob-callbacks.md -->
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** Entry modes are D, I, and Q. D (deferred) allocates and initializes a thread then returns without interpreting it. I (immediate) after allocation interprets all eight slots once with delta `0` in slot order, then runs one piece pass with delta `0` — a VM-wide drain, not a drain of only the new callback. Q (synchronous query) interprets only the newly allocated slot with delta `0`, snapshots up to four cells, and returns; it does not scan the other seven slots and does not run a piece pass. The zero-argument name-form start takes zero logical arguments; the argument-carrying slot-form start always writes four physical values to cells `0..3` then sets logical top to `arity−1`; the synchronous query roots treat null cell pointers as seeded zero and excluded from copy-back, while non-null cells are logically exposed. A Q callback is not guaranteed to have returned when the host snapshots it: if it sleeps, waits for move/turn, or waits for another script, the one-slot interpretation stops and the host copies the current four cells immediately; the blocked thread remains active and may resume in a later VM-wide or normal drain, but it has no completion receiver that can revise the already returned host values, so callers must pre-initialize outputs and handle partial results. <!-- source orchestration-research-cob-callbacks.md -->
 
 **Established fact:** Thread states include idle, running, waiting for turn, waiting for move, sleeping, and waiting for a called script. Signal masks can terminate or suppress matching threads. Calls block the caller until the callee returns.
 
@@ -689,8 +840,7 @@ word index. Six operand shapes exist:
 | F | opcode with a mode in its low three bits, operand word | +2 | push constant, local, or static; pop local or static |
 
 The piece index comes from the first operand word and the axis from the second.
-A piece-state entry is addressed as `axis + piece * 19` inside a 76-byte-stride
-array.
+A piece-state entry is addressed as `axis + piece * 19` words.
 
 The stack effect, program-counter advance, engine port, and suspension
 behavior below are established from the interpreter. Where a *name* rests on
@@ -882,7 +1032,7 @@ transport queries and are not part of this table.
 | 8 | piece position Y | the piece's world transform Y | — |
 | 9 | unit position XZ | another unit's packed X and Z, selected by identifier through the unit table, gated on that unit being alive; identifier zero or a dead unit reads zero | — |
 | 10 | unit position Y | the same unit's Y, same gates | — |
-| 11 | unit height | the **own** definition's height value; takes no unit argument | — |
+| 11 | unit height | the definition height of the unit selected by the identifier, via the same unit-table lookup and alive gate as ports 9 and 10; identifier zero — including the zero-filled argument slot of a bare `get` — reads zero. **Audit note:** this corrects the earlier "own definition's height value" wording [R-P0-10] | — |
 | 12 | relative bearing | unpacks the argument into two signed 16.16 halves, takes the arc tangent, then **subtracts the unit's own heading**, truncated to 16 bits | — |
 | 13 | distance | the hypotenuse of the unpacked halves, truncated | — |
 | 14 | arc tangent | the arc tangent of the two arguments, low 16 bits | — |
@@ -942,33 +1092,140 @@ severity.
 
 ### 4.6 Piece arithmetic and interpolation
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact — angle domain and spin marker:** Each piece has independent per-axis move, turn, spin and acceleration state addressed as `axis + piece*19` words (see §4.3), plus per-piece busy and global dirty flags. Valid angles are 16-bit, `0x10000` per circle (`0x8000` is 180°); every angular store masks `&0xffff` and every lerp commit masks and wraps `&0xffff` with `+0x10000` wrap. The value `0xffffffff` is an out-of-band sentinel meaning continuous spin, never a valid angle, written only by `spin` (`0x10003000`) and tested by the interpolator's rotation block.
 
-**Publication omission:** Historical executable-analysis detail omitted from this public edition.
+**Established fact — tick denominator:** The VM tick denominator is the constant 30, read at VM zero-init from the engine's tick-rate global and written once at process startup from the fixed 30-tick configuration. It is copied to the VM's own tick-denominator field and immutable after. It is not derived per-tick from the wall-clock or game-speed budget. A bounded scan finds no zero guard before the four divide sites (move, turn, spin, stop-spin); a synthetic zero denominator would raise the processor divide fault. Sleep uses multiply `denom*ms` not divide and is not affected.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact — division and remainder:** Every `speed/denom`, `accel/denom` and `decel/denom` uses signed division truncating toward zero (positive denominator); remainder is discarded with no carry between ticks. Thus `−100/30` is `−3`, not `−4`. Sleep timer is `(denom * ms)/1000` trunc toward zero, denominator positive, also discarding remainder.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact — move and turn arrival:** Move and positional turn snap on inclusive arrival: if `cur+step` equals or overshoots `target` the interpolator snaps to `target` and clears the axis busy word, otherwise it steps and keeps the piece dirty. Turn chooses direction by shortest-arc: `delta = tgt − cur` (wrapped and sign-extended), `perTick = trunc(speedRaw/30)`; if `delta==0` perTick is 0, otherwise if `abs(delta) > 0x8000` the sign is flipped. The `> 0x8000` test is strict; a tie at exactly `0x8000` (opposite angles) does not flip and retains the script's sign — deterministic for both directions.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact — spin accel and stop-spin:** Spin (`0x10003000`) writes the spin target speed as `trunc(speed/30)` and the spin acceleration as `trunc(accel/30)`, and marks the turn-target/marker word with the `0xffffffff` sentinel; if `accel/30 == 0` the spin current speed is set to the target immediately (fast path). Otherwise the interpolator's acceleration-ramp block adds the spin acceleration to the spin current speed each tick and clamps inclusively: when `accel<0` and `curSpd <= tgtSpd`, or `accel>0` and `curSpd >= tgtSpd`, it snaps to `tgtSpd` and clears the spin acceleration (overshoot or exact hit both clamp). Stop-spin (`0x10004000`) writes the spin target speed to 0 and the spin acceleration to `−trunc(decel/30)`; if that is 0 it clears the spin current speed immediately (stop-now). Spin never completes on its own; it is terminated only by stop-spin. Stop-spin does not set the per-piece busy flag or the global dirty flag — it relies on the prior spin's dirty to ensure the next interpolator pass processes the negative ramp.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact — zero-speed and zero-decel:** If `|speedRaw| < 30` then `perTick == 0` (`|decel|<30` likewise 0). The interpreter still writes the per-piece busy flag and the global dirty flag for move/turn/spin, but the interpolator's busy-word guards (`move-speed word != 0`, `turn-speed word != 0`) are false so no motion occurs; the per-piece reduction clears dirty on the next tick. A `wait-for-move` polling the move-speed word or `wait-for-turn` polling the turn-speed word therefore wakes immediately (does not block) when the issued speed truncated to zero. Spin with zero speed and zero accel still dirties for one tick via the fast path then clears; a stopped spin (spin current speed 0, marker `0xffffffff`, spin acceleration 0) has no motion and is cleared as idle.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact — dirty lifecycle:** The piece interpolator clears the global dirty flag at entry, then per piece clears the per-piece busy flag at the start of the piece scan and re-sets it to 1 if any axis remains busy after processing the move block, the acceleration-ramp block and the rotation block. The epilogue OR-reduces: if any piece's busy flag is 1, the global dirty flag is set to 1. The interpreter's `move`, `turn`, and `spin` set both the per-piece busy flag and the global dirty flag; `move-now`, `turn-now`, and `stop-spin` do not set dirty and instead zero the busy words (the move-speed word, the turn-speed word, the spin-acceleration word) and commit immediately via the model adapter's set-position/set-angle. A retarget while active overwrites the target and recomputes sign/delta from the physical get-position/get-angle at issuance.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact — sleep:** Sleep converts the script duration as `trunc(denom * milliseconds / 1000)` with `denom==30` and stores it as the thread's timer. On every later entry the guard subtracts the tick delta first and wakes only when the result is at or below zero. **A sleep therefore occupies its truncated tick count plus exactly one guard decrement, so its minimum latency is one tick, not zero** — a sleep of 33 ms truncates to 0 and wakes on the next drain's guard; 34 ms truncates to 1. A zero or negative duration behaves the same. Engine wake passes run all eight slots with delta 0, so they never advance a timer, but they do wake any thread whose timer is already at or below zero.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact — drain and lerp order:** Per-unit tick entry drains `for slot 0..7: interpreter(this,slot,delta)` then `interpolator(this,delta)` with the same `delta` (retail passes 1; synchronous helpers pass 0 so lerp is skipped). The interpolator is a no-op when `delta==0` or `global dirty==0` or pieceCount==0. Thus a `move` issued in the drain moves the piece by `step = perTick*delta` in the **same** tick's trailing lerp; a `wait` that snaps during that lerp wakes only at the **next** tick's early guard (one-tick latency). A synchronous query nests a full interpreter run inside the caller at delta 0; re-entrancy is possible and retail places no guard against querying a unit mid-drain.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact — immediate commit and slot-order wake:** `move-now` (`0x1000b000`) and `turn-now` (`0x1000c000`) zero the move-speed/turn-speed/spin-acceleration busy words, write the target, and commit immediately via the model adapter's set-position/set-angle inside the drain — visible to later script slots and later simulation phases the same tick. A `wait-for-move`/`wait-for-turn` wakes when its polled busy word reads zero. For immediate ops the wake is slot-ordered: if issuer slot `i` < waiter slot `j`, the waiter's early guard has not yet run and sees zero same tick; if `i > j` the waiter already yielded and wakes next tick. A different piece/axis has no effect. The drain has no second scan after the lerp, so this asymmetry is contract.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact — save and load:** The COB/piece save writer emits `0x528` bytes for the thread pool (eight `0xA4`-byte thread slots plus eight pool bytes) plus `numStatics*4` plus `pieceCount*0x6c` bytes for pieces, each piece `0x6c` = 27 dwords covering per-axis move target, move speed, turn target/marker, turn speed, spin target, spin acceleration, plus the current position via the model adapter's get-position and the current angle via get-angle and a 24-byte pad of three anonymous snapshot slots. The loader gates exact size `0x528 + numStatics*4 + pieceCount*0x6c` (else fail 0), checks the VM's cache/signature value mismatch (fail 0), and on success forces the global dirty flag and the per-piece busy flags so the next interpolator pass resumes in-flight animation after one tick. Fractional deltas are not saved; the scheduler carry is saved separately. A failed piece allocation is skipped; TDF dispatch is quiescent during the save.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Supported inference (medium confidence) — axis mapping and retarget:** Model-coordinate handedness and any one-time 3DO conversion belong to model loading, not per-tick COB arithmetic. The script axis mapping `axis + piece*19` is passed directly to the model adapter's get-position/get-angle/set-position/set-angle with no sign inversion or axis remap at those call sites — adapter identity per-tick.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Unknown — bounded-negative (TODO(question)):** The three anonymous snapshot dwords per piece at per-piece wire offsets `0x54..0x60` (written from the adapter's three snapshot slots) have no located consumer; their meaning remains `TODO(question)`. Invalid piece index fault behaviour is bounded-negative (no bounds check found in the bounded export census; corpus guarantees validity) — `TODO(question)`. Allocation-failure deterministic fault policy where retail would abort through its allocator's abort path remains `TODO(question)`. Zero-denominator defence is likewise bounded-negative and must be a guarded thread-kill, not a trap.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+### 4.7 Engine port write semantics, the factory stance handshake, and thread-start masks [R-P0-10]
+
+**Established fact — write dispatch [R-P0-10]:** The engine-write opcode binds
+exactly six write arms — ports 1, 5, 6, 18, 19, 20. There is no STANDGROUND,
+no WEAPON1/2/3, and no CLOAKED write port; an identifier without a write arm
+only sets the unit's script-touched marker, and every write arm sets that
+marker in addition to its own effect (section 4.4). The compiled form writes
+the value first and the identifier last. A census of shipped scripts exercises
+all six arms and reads only ports 4, 17, and 18.
+
+Per-port write effects:
+
+- port 1 (activation): routes into the shared activation edge machine with
+  mask 1;
+- port 5 (in-build-stance): writes bit 0 of the stance byte from the low bit
+  of the value;
+- port 6 (busy): writes bit 1 of the same byte from the low bit;
+- port 18 (yard open): a gated admission — on pass it commits bit 2 of the
+  same byte from the low bit, sets the occupancy-dirty bit (bit 27 of the
+  state word), recomputes occupancy, and refreshes the footprint words;
+- port 19 (bugger off): writes bit 3 of the same byte from the low bit;
+- port 20 (armored): routes into the shared edge machine with mask 2, flipping
+  the armored bit; the damage paths consult the bit directly and there is no
+  callback.
+
+The unit keeps two port-relevant state bytes: one holds bits 0 = activated,
+1 = armored, 2 = engine-driven (cloak family; its rising edge releases cargo
+and notifies presentation codes 0xe/0xf), and 3 = building; the other holds
+bits 0..3 = in-build-stance, busy, yard-open, bugger-off.
+
+**Established fact — activation edge machine and engine drivers [R-P0-10]:**
+The shared edge machine computes the old and new state, writes back, and on a
+change fires: Activate plus the code-3 notification on bit-0 rising;
+Deactivate plus code 4 on falling; StartBuilding/StopBuilding on the
+building-bit edges; cargo release plus presentation codes 0xe/0xf around the
+bit-2 edges; always the interface refresh, and — when the owner player state
+byte is 1 or 2 — a network event carrying the state byte and the unit
+identifier. Callbacks run re-entrantly, but the diff is computed before they
+fire, so a callback that writes port 1 terminates immediately: its own edge is
+now a no-op. The engine itself raises and lowers activation — scripts are not
+the only writers: a non-empty production queue raises it and an empty one
+lowers it and drops the node; accepting an attack or build order on an
+on/offable definition (capability bit 11) raises it; the post-completion
+transition raises it when capability bit 18 is set; the low-power manager
+lowers it on a failing resource test and re-raises it on recovery behind one
+inclusive random draw below 5 from the simulation stream; the cancel-current
+interrupt clears the activation and building bits together; and the COB write
+port is the same machine, re-entrant.
+
+**Established fact — factory stance handshake [R-P0-10]:** The production node
+state machine is: state 0 — building-class gate on the factory's own state
+word; a pending count above zero raises activation and advances, otherwise
+activation lowers and the node is dropped. State 1 — a pure level test of the
+in-build-stance bit: while the bit is clear the node is marked waiting and
+stays, re-polled on every pump visit with no deadline set — the wait lasts
+until a script sets the bit or the order is cancelled or interrupted, and an
+unbound write port therefore deadlocks the factory exactly as observed; when
+set, it advances. State 2 — synchronous QueryBuildInfo (cell 0 seeded −1),
+exit-piece world position, footprint snap, placement validation: a blocked
+exit retries in exactly 15 ticks with no product, sound, or placement event;
+success allocates the nanoframe at the resolved exit transform (section 6.3),
+copies the factory's standing-order bits into the product state word, inserts
+GetBuilt, and fires the StartBuilding edge; allocator failure prints "Unable
+to create any more units" and retries in exactly 300 ticks. State 3 — work
+ticks through the shared construction helper (document 05). State 4 —
+completion: StopBuilding edge, completion transition (section 3.8), count
+decrement, restart at state 0 in the same pass. Cancel masks: the kill-frame
+path refunds metal by trunc((1 − remaining)·cost), kills the frame with
+kind-9 damage 30000, and clears the activation and building bits together; the
+Construction-stopped path decrements once and keeps the node [R-P0-09].
+
+**Established fact — read-port confirmations [R-P0-10]:** Reads route through
+a five-slot form; the one-argument form pops the identifier off the script
+stack and zero-fills the four argument slots, the five-argument form pops the
+identifier plus four arguments. The reads confirm section 4.4's table: health
+is the signed 16-bit health times 100, unsigned-divided by the definition's
+maximum damage (0..100 domain); build-percent-left tests the float remaining
+fraction against 0.0 and −99.0 with the section 4.4 formula; the piece-position
+query packs one component from the high half of one piece-position word and
+the other from the low half of a second word — the packing formula names raw
+record words, not axes (open question below); the arc-tangent port is the only
+rounding port. The port-11 correction is recorded in the section 4.4 table.
+
+**Established fact — thread-start signal mask [R-P0-10]:** The slot allocator
+seeds mask 1 on every successful allocation; the name- and id-form starters
+never touch the mask afterward. Inside the interpreter, both script-starting
+opcodes overwrite the allocated child's mask with the parent's current mask
+after copying arguments; the signal opcode scans masks; set-signal-mask
+replaces the issuing thread's. Hence every engine-started root — Create,
+Killed, Activate, the Aim family, the Fire family, and the movement callbacks
+— runs with mask 1 until the script changes it. This confirms section 4.2 and
+refutes the "mask zero" report in the COB format document, which already
+flagged itself as an unprobed community report.
+
+**Open questions [R-P0-10]:** `TODO(question)` — the consumer of the
+script-touched marker is unlocated: every write arm sets it and no reviewed
+reader consumes it. `TODO(question)` — the semantic name of the busy bit
+beyond the transport scripts that write it, and whether transport load
+admission checks it. `TODO(question)` — the name of the engine-driven
+cloak-family bit (bit 2 of the first state byte) and its writers outside the
+edge machine. `TODO(question)` — the axis naming of the packed position
+halves: whether the word section 4.4 calls Z is Z (as asserted there) or X (as
+an external host convention states) needs one controlled probe. `TODO(question)`
+— the exact yard-character class matrix inside the yard-open admission gate
+defers to the TNT yard-map format document rather than re-deriving byte masks.
+`TODO(question)` — whether mission or third-party content depends on a bare
+`get UNIT_HEIGHT` returning nonzero (retail returns 0 with a zero-filled
+argument slot).
 
 ## 5. Engine-to-COB callbacks
 
@@ -989,7 +1246,7 @@ Callbacks are issued at the state transition that caused them, not deferred to
 the renderer. Mobile/hover lethal, healing, and paralyzer paths do not all use
 the normal HitByWeapon/TakeDamage pair; document 06 owns those gates.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** Lifecycle modes are fixed: `Create` (only when the definition has compiled COB, and VM/script/piece state is attached first) is I (immediate: all eight slots delta 0 plus one piece pass, one start per unit init); `Activate`/`Deactivate`/`StartBuilding` (the building-bit edge helper)/`StopBuilding` are D (deferred) gated on cached-bit rising/falling edges with producer-side suppression of unchanged state; `QueryBuildInfo` (the placement-time call) is Q (one-slot snapshot, no piece pass) with cell 0 starting at `−1` (cells 1..3 at `0`) consumed as piece index transformed to a world build position and network-emitted; the slot-form `StartBuilding` variant is D via direct slot start (see 5.3). <!-- source orchestration-research-cob-callbacks.md -->
 
 **Established fact:** `TargetCleared` carries the zero-based weapon slot (0–2)
 and is emitted only when a stored target is actually cleared: the slot's
@@ -1005,7 +1262,13 @@ one 512-entry word sine table whose entry *i* is
 quarter turn ahead of the phase, and products round to nearest before
 truncation.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** On a normal-kind damage packet (kind `1`) applied to an active,
+not-yet-dying victim, health (the signed 16-bit health field) is subtracted FIRST (`-= dmg`), then `HitByWeapon` starts
+deferred (mode D, arity 2, receiver null) with two arguments `(cos(dir)·400, sin(dir)·400)` where `dir`
+is the packet direction byte shifted left by eight into the 65536-domain (`dir = byte << 8`), resolved through the shared 512-entry sine table with round-to-nearest (same helpers as `RockUnit` but positive signs, radius 400), and
+`TakeDamage` starts independently immediately after (mode D, arity 1, receiver null) with one argument, the
+post-hit health percentage `clamp(health·100/maxHealth, 0, 100)` (health signed 16-bit, maxHealth the definition's maximum-damage field, an unsigned division of the product with explicit `<0→0`, `>100→100` clamps) computed as
+an unsigned division of the product. Either starter can fail separately (invalid name or full pool). Heal (`0`) and paralyze (`2`) and non-normal kinds skip this pair entirely (the paralyze kind builds a paralyze order instead); lethal damage against a movement-category-1/2 victim sets the death latch (OR `0x4000` into the unit's death-latch word) and returns without any callbacks. <!-- source orchestration-research-cob-callbacks.md -->
 
 **Established fact:** Local authoritative death runs a synchronous four-cell
 `Killed` query with outputs severity and variant before the death packet is
@@ -1016,33 +1279,91 @@ severity = ((−health · 100) / maxHealth + priorSample) / 2   // unsigned divi
 severity = clamp(severity, 1, 100)
 ```
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+where `priorSample` is the unit's prior-severity-sample byte. Cause overrides, in evaluation
+order: cause byte `7` yields severity 0 with variant 1 and no query; cause
+`4`, `5`, or `9` — or a still-positive health value — yields severity 0 with
+variant 0 and no query; otherwise the query runs and the variant cell is NOT
+pre-initialized (a script that assigns it has that value copied back; an
+absent assignment serializes runtime stack history). After any query, a
+nonzero remaining-work fraction forces the variant to 0. The death packet
+packs the severity byte plus `(cause << 4) | (variant & 0xf)`.
+Received-network death replay instead starts the asynchronous one-argument
+`Killed` with the signed packet severity byte, only when that byte is
+positive. The severity input byte is maintained by the unit tick: every 30
+ticks it recomputes `clamp(health·100/maxHealth, 0, 100)`, stores it as the
+current severity-sample byte, and shifts the previous sample into the prior-sample byte — the severity input is
+therefore the PREVIOUS 30-tick-window health percentage.
 
 ### 5.2 Movement and medium callbacks
 
 **Established fact:** Edge-triggered callbacks include StartMoving, StopMoving, MoveRate1, MoveRate2, MoveRate3, and setSFXoccupy with a medium-band value. Start/stop callbacks are issued when movement transitions; rate callbacks are issued on movement-tier changes; occupancy callbacks are issued only when the computed band changes.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** The movement tier is a signed, inclusive threshold
+classification of one 32-bit magnitude word against two definition
+thresholds (the tier classifier runs inside the movement integration): category 1 iff `magnitude <= thresholdLower`; category 2 iff `thresholdLower < magnitude <=
+thresholdUpper`; category 3 above `thresholdUpper` — all comparisons signed 32-bit, with the
+category-1 bound inclusive and the category-2 upper bound inclusive. Category 0 overrides
+when the mover inhibit bit (bit 2 of the mover's state byte) is set, the unit is attached to a carrier (the carrier field is nonzero), or both magnitude words (the 32-bit magnitude word and its adjacent word) are zero. The category is cached in
+two bits (bits 2–3 of the movement-mode word) and an unchanged category emits
+nothing. On change: into category 0 from nonzero issues `StopMoving` (I); into a
+nonzero category from 0 issues `StartMoving` FIRST (I) and then the matching
+`MoveRateN` (I); other nonzero-to-nonzero changes issue only `MoveRateN` (I). All are
+immediate wake-flag starts via the zero-argument name-form adapter (wake 1), so the `StartMoving` drain — all eight slots at
+delta 0 plus one piece pass — forms a barrier between it and the `MoveRateN`
+that follows; the cache update (the two-bit category shifted left by two into its field) is the final write. <!-- source orchestration-research-cob-callbacks.md -->
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** `setSFXoccupy` is a five-value classifier (run after the rate classifier inside the movement integration, mode I, arity 1, spelling exact with lower-case `s`). Occupancy is `0` when the current movement mode (the low two bits of the movement-mode word) is not `1` or `2`. In those modes the classifier compares signed Y (the signed high word of the unit's 16.16 Y), the map water level (`wt`), the definition's waterline byte (`wl`) and the definition's model-bottom signed word (`mb`), yielding `4` if `wy > wt`; otherwise starting from the cached band it can yield `1` when `wy - wt > -5`, `2` when `wl + wy == wt`, and `3` when `mb + wy < wt`, with later tests overriding earlier ones (`1→2→3`). The value is cached and emitted via the argument-carrying name-form adapter only on change (cell 0 = band `0..4`). <!-- source orchestration-research-cob-callbacks.md -->
 
 **Supported inference:** Wake effects and medium bands are script-authored behavior. The engine does not need a separate hard-coded wake renderer to reproduce the callback contract.
 
 ### 5.3 Weapon and query callbacks
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** The engine invokes `QueryPrimary`/`QuerySecondary`/`QueryTertiary` (Q, cell 0 = `0`), `AimFromPrimary`/`AimFromSecondary`/`AimFromTertiary` (Q, cell 0 = `−1`; if still `−1` the engine falls back to the matching `Query*` with default `0`), `SweetSpot` (Q, cell 0 = `0` transformed through the selected piece), and `QueryNanoPiece` (Q, cell 0 = `0` → world nano origin) synchronously (mode Q, cells 1..3 null → seeded 0 and excluded from copy-back). `AimPrimary`/`AimSecondary`/`AimTertiary` are asynchronous (D) with heading/pitch arguments. Successful normal, ballistic, and vertical-launch weapon spawners invoke `FirePrimary/Secondary/Tertiary` (D, 0 cells via the zero-argument name-form adapter) and `RockUnit` (D, 2 cells via the argument-carrying name-form adapter); the dropped-family inline allocator does not. Burst clones do not rerun the root Fire/Rock callbacks. A Q script that sleeps/waits leaves the host holding the partial cell-0 value (section 4.2) — the blocked thread lingers with no receiver that can revise it. <!-- source orchestration-research-cob-callbacks.md -->
+
+**Established fact:** `AimPrimary`/`AimSecondary`/`AimTertiary` carry unsigned
+16-bit heading then unsigned 16-bit pitch (arity 2, issued by the weapon update). Two issue forms exist,
+both preceded by clearing the slot's aim-state word to `0` and both storing the
+commanded angles in the weapon-slot record's commanded heading and commanded pitch words, where the three weapon-slot records are addressed at a fixed stride from the unit record for slot `k=0..2`. The ballistic default computes
+relative heading as bearing-to-target minus unit heading and pitch from the
+ballistic solver; **a solver returning the `-0x8000` pitch sentinel suppresses
+the Aim start entirely**, otherwise the start carries `heading & 0xffff` then
+`pitch & 0xffff` via the argument-carrying name-form adapter forwarding to the argument-carrying slot-form adapter (mode D, receiver the slot's completion-receiver word). The fixed-forward branch — the weapon-slot record's flag byte bit 4 set,
+the aim issue bit clear, and no live tracked target (target inactive or the
+slot's adjacent status word nonzero) — starts with `(0, 0)`, the fixed-forward
+heading. After either start the engine emits a network event packet type `0x10`
+`{u16 unitId, u16 slot, u8 arity=2, heading, pitch}` behind the aim event's global option bit (mask `1`)
+and sets the weapon flags byte bit 0 (the issue bit). <!-- source orchestration-research-cob-callbacks.md -->
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** `StartBuilding` has an argument-less edge form, issued
+on the cached building-bit rising edge (mode D, 0 cells), and a slot-form heading variant that
+resolves the name to a weapon slot through the shared name-lookup helper and starts THAT slot directly via the argument-carrying slot-form adapter (mode D, receiver null) with one
+argument `heading & 0xffff` (the low 16 bits of the producer heading), plus its network event and setting the
+production record's StopBuilding-pending flag `0x400000` consumed by cleanup (section
+3.3). Four weapon-target routines call the `StartBuilding` name lookup while clearing targets but discard the result and are not producers. <!-- source orchestration-research-cob-callbacks.md -->
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** Engine-issued value callbacks convert exactly:
+`SetDirection` (issued by the general unit update, guarded on a definition float `>0.0` and a nonzero
+global mover-active flag) passes a zero-extended 16-bit direction word from the global direction word;
+`SetSpeed` from the general unit update (immediately after) passes the signed global speed word shifted left by four (arithmetic, ×16);
+the second `SetSpeed`, from the footprint path (guarded on a different definition float `>0.0`), passes the unsigned 16-bit sum over covered footprint
+cells of each occupying unit's size byte plus one — semantic unit not
+established; and `SetMaxReloadTime` (issued after `Create` so it lands outside
+Create's own immediate drain), scans all three weapon slots for the maximum
+authored reload field and reports `trunc(maxReload · 1000 / 30)` (multiply, then signed divide by 30 truncating toward zero) — reload ticks
+converted to milliseconds. None of these adapters deduplicates; suppression
+can only live in the producers. <!-- source orchestration-research-cob-callbacks.md -->
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** Query seeds are exact: the synchronous four-output
+`QueryTransport` (mode Q) pre-seeds output cell 0 to `-1` (remaining outputs passed null, seeded 0 by the query interpreter and excluded from copy-back), so a missing script leaves `-1`, the
+root-piece fallback, which is later consumed as the attachment piece index.
+Every air-transport selection site seeds all four `QueryLandingPad` outputs
+to `-1`, tests candidate pieces in cell order `0..3` against validity/availability,
+accepts the first pass, and keeps `-1` otherwise; some paths query the
+carrier first, then the transported unit. <!-- source orchestration-research-cob-callbacks.md -->
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** The aim-ready handshake: the producer clears the slot's aim-state word to `0`, stores heading/pitch in the slot's commanded heading and commanded pitch words, and starts `Aim*` deferred (mode D) with the embedded completion receiver (the slot's completion-receiver word); immediately after it sets the weapon flags byte bit 0 (the issue bit) and emits the type `0x10` network packet (see above). The issue bit clears when target acquisition fails (an AND-clearing of the flags byte bit 0) and gates re-issue (a new `Aim*` starts only while bit 0 is clear). The argument-carrying slot-form adapter stores the receiver in the thread's receiver slot; on pool exhaustion or invalid identity it invokes the non-null receiver's closure with value `0`, while an explicit script `return` (`0x10065000`) pops the top value and invokes the receiver's closure with that value — the receiver object is re-read at return time. Signal termination (`0x10067000`) and abnormal termination (invalid opcode kill) never invoke a receiver. A zero delivery has no effect while any NONZERO delivery marks the weapon aim-ready — so name absence, thread-pool exhaustion (both deliver `0` via the argument-carrying slot-form adapter), or an authored zero return each leave the weapon unable to fire. The fire path entered with the issue bit set additionally consults a per-weapon permission function referenced by the weapon-slot record before firing; the issue bit alone authorizes nothing. <!-- source orchestration-research-cob-callbacks.md -->
 
 **Established fact:** The run-script network dispatch (incoming packet case
 `0xE`) resolves the `u16` unit identifier at packet offset +1 through the unit
@@ -1054,7 +1375,37 @@ values are always written to window words 0–3 but only the byte arity sets
 the logical top (`depth = arity − 1`). There is no fixed callback name for
 this path.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Unknown:** The closure object installed as the `Aim*` completion receiver and the exact write it performs remain unlocated (`TODO(question)` R-1); the zero/nonzero readiness grant itself is established above via the adapter receiver delivery and the carried non-zero-sets-ready semantics. Behavior when all eight script slots are occupied is established in section 4.3 and differs by starter (deferred `Aim*`/`HitByWeapon`/`TakeDamage` deliver `0` through the receiver path; `Create` via the zero-argument name-form adapter has no receiver). <!-- source orchestration-research-cob-callbacks.md -->
+
+### 5.4 Same-tick callback windows [GAP T15]
+
+**Established fact [GAP T15]:** Within one unit visit the sweep executes, in
+order: the general unit update, which can queue deferred `SetDirection` and
+`SetSpeed`; the weapon update for eligible players, which can queue deferred
+`TargetCleared` and the `AimPrimary/Secondary/Tertiary` family, and whose fire
+decisions reach the projectile creators that queue
+`FirePrimary/Secondary/Tertiary` followed by `RockUnit`; the normal script
+drain with tick delta 1, running all eight threads once and then one
+piece-interpolation pass; order and construction work (primary pump
+head-blocking then secondary skip-not-due); movement integration, whose medium
+classifier issues `StartMoving`, `StopMoving`, `MoveRateN`, and then
+`setSFXoccupy` as immediate wake-flag starts; and finally the slot-end death
+handling, which can run the synchronous local `Killed` query. The authoritative
+sweep order lives in section 1.1; this section records the callback-window
+consequences that other documents cite as [GAP T15].
+
+A deferred callback queued before the normal drain executes in that same
+visit; one queued after it normally waits for the next visit, except that any
+later immediate-start callback on the same virtual machine performs an
+all-slot delta-0 drain that can execute it earlier. Damage callbacks queued by
+the post-unit projectile phase normally land on the next visit, while damage
+packets processed during event ingress before the unit phase can queue theirs
+in time for that tick's normal pass. A same-tick window also separates the
+pump from the movement service: an arrival or movement-callback bit set during
+movement integration is observed by the next pump visit, not the current one
+(section 8.3); and a product published during the sweep is visible to the
+projectile phase and to later same-sweep builders, while occupancy and LOS
+publication happen after settlement (section 3.8).
 
 ## 6. Terrain and movement prerequisites
 
@@ -1083,6 +1434,191 @@ The path reader adds a fourth state for building occupancy. The steep and clear 
 **Established fact:** Footprint dimensions are baked into profile terrain stamps. The path search validates the unit's center cell; it does not sweep a footprint at each path edge. Placement validation separately uses the unit yard map and footprint rectangle.
 
 **Supported inference:** This explains why a path can be geometrically valid while a later placement validator rejects the exact build position. The two checks must remain separate.
+
+### 6.3 Build footprint anchor and model center [R-P0-02]
+
+**Established fact [R-P0-02]:** Retail keeps a building's footprint anchor —
+the snapped rectangle origin in map-cell coordinates — its footprint rectangle
+— the authored width/depth rectangle beginning at that origin — and its
+center/model position as distinct values. World cell size is `1 << 20`
+fixed-point units (16 map pixels) and half a cell is `1 << 19`.
+
+For a picked world coordinate `p` and footprint extent `f` (width or depth),
+the snapped anchor cell is:
+
+```text
+anchorCell = (p - (f << 19) + (1 << 19)) >> 20
+```
+
+with a signed arithmetic shift; the half-cell term implements round-to-nearest
+at the footprint's half extent. The footprint rectangle is
+`[anchorCell, anchorCell + f)` in each axis, and placement and occupancy
+validation use this rectangle, not the visual model center. The mobile
+build-order path then writes the order's world position as:
+
+```text
+modelWorld = (f + 2*anchorCell) * (1 << 19)
+```
+
+which is exactly `anchorWorld + f*cellSize/2`: the unfinished mobile-built
+unit is centered on the footprint while its occupancy rectangle remains
+anchored at the snapped origin. The same formula applies to every extent —
+there is no separate odd/even compatibility branch. The half-extent term
+produces the visible bias: extent 1 centers at anchor + 0.5 cells, extent 2 at
+anchor + 1.0, extent 3 at anchor + 1.5, extent 4 at anchor + 2.0. For odd
+extents the picked coordinate behaves like the ordinary cell choice after the
+half-cell terms cancel; for even extents the footprint straddles a cell
+boundary and the nearest valid rectangle can move when the pick crosses the
+corresponding half-cell boundary. This is a property of the formula, not a
+post-placement visual adjustment. The ghost rectangle is generated from the
+anchor and extent — left/top edges at `anchor * 16`, right/bottom at
+`(anchor + extent) * 16`, with the camera and viewport offsets applied — so it
+must never be reconstructed from a model sprite's apparent center.
+
+**Established fact — factory product placement [R-P0-02]:** The factory
+production path has two coordinate products: QueryBuildInfo resolves a piece
+transform plus the factory origin and stores that world position on the
+production order; the validator separately derives an anchor with the same
+half-extent formula and validates the footprint rectangle at that anchor. On
+successful validation the allocator creates the product at the original stored
+QueryBuildInfo position, NOT at the derived snapped anchor: the factory
+product's model/unit center is the resolved exit transform, while the
+occupancy/legal-placement rectangle is the separately computed snapped
+rectangle. An implementation must preserve both values — it must not
+substitute the rectangle origin, nor assume every authored exit transform is
+exactly the geometric center. The blocked-exit retry (exactly 15 ticks,
+silent) and allocator-failure retry (exactly 300 ticks) do not change this
+ownership (sections 3.8, 4.7).
+
+`TODO(question)`: whether each stock factory's authored QueryBuildInfo exit
+transform equals the geometric center implied by its footprint, or carries
+intentional center offsets — the allocator preserves the transform either way;
+only data/COB analysis can settle it.
+
+### 6.4 Placement footprint legality [R-P0-08]
+
+**Established fact — class split [R-P0-08]:** Placement is not one universal
+"is this cell clear?" predicate. The shared entry first checks that the packed
+footprint rectangle is within the map, then dispatches by the produced
+definition's class: a building-class definition uses its compiled yard-map
+bytes plus the aggregate slope/height/water/geothermal validator; a mobile
+definition uses the inline footprint terrain loop, testing feature blocking,
+unit occupancy, and water/depth/height/slope only when the caller's
+terrain-check mode requests them (recovered mode value 1; other modes add no
+second terrain-legality rule after the bounds check). The class branch belongs
+to the product being placed, not to whether the builder is a factory — stock
+factories can have CanMove set.
+
+The factory exit path is: QueryBuildInfo (seed cell −1, synchronous) → resolve
+the exit piece transform to a world position → convert to a packed footprint
+anchor with the half-extent bias of section 6.3 → map-bounds check →
+class-specific footprint validation → allocate the product only on success. A
+blocked factory exit schedules an exact 15-tick retry before allocation,
+emitting no product, sound, or placement event.
+
+**Established fact — yard control bytes [R-P0-08]:** The compiled yard-map
+characters are:
+
+| Character | Byte | Character | Byte |
+|---|---|---:|---|---:|
+| `.` | 0x00 | `c` | 0x2d |
+| `C` | 0x35 | `f` | 0x6f |
+| `G` | 0x8f | `o` | 0x2f |
+| `O` | 0x2b | `w` | 0x37 |
+| `Y` | 0x31 | `y` | 0x29 |
+
+The parser is not a one-character-to-one-cell contract: characters outside the
+table advance the source string without consuming a footprint cell (spaces in
+stock maps therefore disappear); when the source reaches its final character
+the pointer parks there and that character repeats for remaining cells;
+characters beyond the final footprint cell are ignored. An implementation must
+preserve these rules rather than reject a yard map whose authored length
+differs from the packed extents.
+
+Each covered cell's yard byte gates independent tests:
+
+| Yard bit | Gate | Meaning |
+|---:|---|---|
+| 0 | enemy-visibility/occupancy branch | tests the authoritative visibility/occupancy predicate only when the mode and bit branch request it; the exact owner/visibility alias and full mode matrix remain open |
+| 1–2 | unit occupancy | a nonzero occupant other than the passed self identity rejects |
+| 3 | slope aggregate participation | contributes the cell's low and high terrain heights to the footprint aggregate |
+| 4 | height aggregate participation | contributes the high terrain height to the separate height maximum |
+| 5 | blocking-feature-free | rejects a resolved feature only when its authored blocking flag is set |
+| 6 | indestructible-feature test | rejects a resolved feature carrying the authored indestructible flag |
+| 7 | geothermal requirement | requires at least one qualifying geothermal feature somewhere in the footprint |
+
+Bit 5 is not "any feature is blocking": metal deposits are authored with
+blocking clear and are legal beneath an extractor's `o` cells, while trees and
+rocks with blocking set remain blockers. Bit 6 reads the feature definition's
+indestructible flag (catalog flag-word mask 0x0200), not its reclaimable flag.
+These flags are resolved through the feature cell's live identity, including
+the signed fringe-anchor hop: a fringe cell whose hop finds no live feature is
+not blocking; an out-of-range feature identity blocks for bit 5 and satisfies
+neither bit 6 nor bit 7. The bit-0 branch is an authoritative
+visibility/occupancy check, not a minimap or fog-presentation lookup — the
+placement predicate reuses the gameplay predicate family selected by its mode,
+and `TODO(question)` the exact player alias and all mode combinations for this
+branch remain open; do not equate it with the presentation fog surface.
+
+**Established fact — footprint aggregates and strict comparisons [R-P0-08]:**
+For yard bytes that request terrain sampling the validator maintains
+`minLow = 255`, `maxHigh = 0`, `bit4Max = 0`. Bit 3 updates minLow from the
+cell's low terrain height and maxHigh from its high terrain height; bit 4
+updates bit4Max from the high height. The aggregate is consumed once, after
+the full footprint walk:
+
+```text
+if geothermalRequired && !geothermalFound:      reject
+if maxHigh < minLow:                            // no bit-3 sample
+    siteHeight = SeaLevel - waterline
+else:
+    if maxHigh - minLow > MaxSlope:             reject
+    siteHeight = minLow
+if bit4Max > siteHeight:                        reject
+if minLow < SeaLevel - MaxWaterDepth:           reject
+if max(maxHigh, bit4Max) > SeaLevel - MinWaterDepth: reject
+publish siteHeight; accept
+```
+
+All rejections are strict: a slope exactly equal to MaxSlope, a low height
+exactly equal to `SeaLevel - MaxWaterDepth`, or a high height exactly equal to
+`SeaLevel - MinWaterDepth` passes. The no-bit-3 branch uses the definition's
+waterline against sea level rather than inventing a terrain sample. The
+published site height is consumed by the build ghost and the resulting order —
+it is not a renderer-only value.
+
+The geothermal condition is an existence test, not a count or registry: any
+covered yard byte with bit 7 requires any covered resolved feature whose
+catalog geothermal flag is set; the first qualifying feature satisfies it. The
+effect helper associated with geothermal visuals is not a registry and must
+not be used as a placement side channel.
+
+**Established fact — mobile terrain validator [R-P0-08]:** Mobile products do
+not use a building yard map. After the bounds and mode gates, the inline
+footprint loop checks the covered cells for feature blocking and unit
+occupancy, then aggregates the movement-profile terrain values; the profile
+derives the footprint minimum and maximum from the plot cell's four-corner
+heights, not one arbitrary corner (section 6.1). Water/slope selection is
+based on the entire footprint: if `SeaLevel <= footprintMin` the slope limit
+is MaxSlope (entirely above water), otherwise MaxWaterSlope. Rejection is a
+strict greater-than test (acceptance is at-or-below): slope equal to the limit
+and depth equal to the limit are legal, consistent with section 6.1's equality
+boundary. BadSlope and BadWaterSlope are soft cost tiers and never reject
+placement. The inline mobile path is active only for terrain-check mode 1;
+factory production supplies its state/mode pair and a null self identity, so a
+foreign occupant cannot be excused by self-identity. The exact
+out-of-map/mode behavior outside the production path remains `TODO(question)`.
+
+**Established fact — order and side effects [R-P0-08]:** The behaviorally
+important order is: compute the packed footprint anchor → reject a rectangle
+outside the map → walk the cells in stable row-major order (occupancy/
+visibility bits; feature resolution and yard bits 5/6/7; bit-3/bit-4 aggregate
+updates) → geothermal existence gate → slope/height/water aggregate gates →
+publish siteHeight and accept. The validator reads terrain, feature, and
+occupancy state; it does not clear a vent, reserve a unit slot, alter metal,
+consume RNG, or publish a nanolathe event. Factory allocation and construction
+work occur only after success; there is no pathfinding and no random
+relocation fallback inside the validator.
 
 ## 7. Ground path search
 
@@ -1167,7 +1703,9 @@ notifies status `0x200` and publishes empty; a ray that CONNECTS start to a
 goal notifies `0x100` but the search is still seeded and runs; and when the
 ray's best scaled h is at or above the start cell's own scaled h, the engine
 notifies `0x200` and publishes empty WITHOUT seeding — the A\* starts only
-when the ray proved a strictly closer frontier exists.
+when the ray proved a strictly closer frontier exists. These statuses are
+path-request results reported to the requester — they are never interpreted as
+queue-order completion [R-P0-01] (section 8.3).
 
 ### 7.3 Scheduler budget, publication, and route storage
 
@@ -1199,7 +1737,14 @@ an implementation may invalidate without eagerly zeroing.
 the mover compares its signed integer position against stored point index 1;
 if `dx² + dz² <= 25` the later points shift down one slot, the count
 decrements, the active bit clears when fewer than two points remain, and the
-dirty bit sets.
+dirty bit sets. The comparison runs in the whole-world-unit domain: the
+mover's signed integer position (the high words of its 16.16 position)
+against the signed 16-bit stored route points. The threshold is therefore 25
+square world units — a radius of 5 whole units, i.e. 5/16 of a map cell — not
+five cells and not fixed-point pixels; do not convert it to `5*16*65536`
+without separate evidence. Pruning is a route-consumption operation: it
+decides when the next waypoint can be discarded, never when the owning order
+completes [R-P0-01] (section 8.3).
 
 **Established fact:** Save representation: an inactive route serializes a
 2-bit count of zero; an active route serializes `min(count, 3)` in two bits
@@ -1241,7 +1786,17 @@ unit systems coexist in one family.
 
 **Established fact:** Acceleration versus braking is selected from the angle-to-waypoint and current speed. Speed is clamped to the definition's maximum. There is no normal reverse-speed branch.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** Ground speed is capped by an exact pitch table and by a
+below-water half-speed branch before integration. The signed pitch is
+arithmetic-shifted right by 11 and clamped to `[-5,+5]`; that index selects a
+signed byte from the table `25, 55, 70, 85, 100, 100, 75, 50, 25, 20, 15` in index
+order `-5` through `+5`. The pitch cap is `table[index] * MaxVelocity / 100`
+with signed truncation toward zero, so level pitch permits 100 percent and the
+two sides are asymmetric. If the unit's signed integer height (`(Y>>16)` as a
+signed 16-bit value, i.e. the signed high word of its 16.16 Y) is below the
+sea-level byte and `def.flags & 0x81000 == 0` — neither `canhover` (`0x1000`)
+nor `floater` (`0x80000`) is set — the cap is halved. The final integrator then
+applies terrain height, gravity and lean, and the fixed-point position commit.
 
 **Established fact:** Waypoint lookahead, vertical tolerance, and arrival tolerance are fixed-point thresholds. A blocked mover reduces its next-step cap. Waypoint consumption and path publication are synchronous with the mover tick.
 
@@ -1260,6 +1815,102 @@ unit systems coexist in one family.
 **Established fact (negative-bounded):** No mass-weighted pushing, impulse-based movement resolver, axis-slide resolver, automatic repath timeout, or yielding/wait-queue was recovered within the bounded mover call graph. Absence is contract: a blocked mover only receives the half-speed clamp and dirty clamp above; it does not push, slide, or wait.
 
 **Supported inference:** Mobile units are hard blockers at the movement commit stage even though they are not inserted into the static A* layer. Feature/building and owner-mask details remain separate predicates.
+
+### 8.3 Final-order arrival and the satisfied-bit handshake [R-P0-01]
+
+**Established fact [R-P0-01]:** Retail keeps three notions that must not be
+collapsed into one distance test: path-search termination and publication
+(section 7); consumption of an already published route (section 7.3); and
+completion of the order that owns the route. Route pruning and the arrival
+predicate below are both computed in the same mover visit, but pruning never
+writes the order's satisfied word: consuming the whole route does NOT complete
+the order — only the tile-versus-goal-cell test does — and conversely the
+order completes while route points remain if the mover's committed tile lands
+within threshold of the goal cell.
+
+**Established fact — the arrival predicate:** The ground mover's arrival test
+is a planar cell-domain comparison between the unit's committed tile (the
+cached cell written by every occupancy commit) and the goal cell packed in the
+movement-goal handle:
+
+```text
+dx = tileX - goalCellX
+dz = tileZ - goalCellZ
+arrived  <=>  dx*dx + dz*dz <= thresholdSquared
+```
+
+with signed 32-bit squares and an inclusive comparison. There is no Y term, no
+heading term, no speed or settling term, and a blocked mover is not exempt.
+The goal cell is derived from the order's world goal with the same
+half-footprint-bias conversion the occupancy commit uses for its cached tile:
+
+```text
+cell = (goalWorld - bias*0x80000 + 0x80000) >> 20
+```
+
+an arithmetic shift, with bias the footprint half-extent pair. The threshold
+is `floor(radiusParam/16)` squared; for HUD/AI-issued ground moves radiusParam
+is the definition's SightDistance plus 4, so the predicate reads
+`dist² <= floor((SightDistance + 4)/16)²`. The radius parameter's provenance
+for QMove/Patrol issuance is TODO(question).
+
+**Established fact — satisfied-bit notification:** On arrival the movement
+layer ORs bit 0x20 into the order record's accumulated satisfied word. The
+same word carries: 0x100/0x200 for path request done / no-path (written by the
+path service); 0x40 for route released before arrival; and 0x80 for
+goal-handle detach or rebind. The ground-move handler tests only 0x20; 0x40 or
+0x80 reaching its completion phase fall into the drop/wait return path, and
+their retry interplay with the re-armed gate is TODO(question).
+
+**Established fact — pump gate halt:** The primary pump combines the record's
+satisfied word with the unit's capability word, masked by the record's dynamic
+gate; when the gate is nonzero and the combination is zero it halts
+head-blocking for that unit (section 3.3). The movement and path services
+therefore fill satisfied bits between pump visits, and the pump itself never
+runs movement. An arrival bit set during a unit's movement integration is
+observed by that unit's NEXT pump visit — one-tick latency, part of the sweep
+contract (sections 1.1, 5.4).
+
+**Established fact — Move_Ground completion:** The handler is a two-phase
+state machine. Phase 0 rejects with the cancel-all return code while the unit
+is attached to a carrier; otherwise it binds a movement-goal handle for the
+order's goal position (a 20-byte pool allocation holding the goal cell as
+signed 16-bit X/Z, the radius parameter, and the squared threshold), arms the
+record's dynamic gate mask 0xE0 (bits 0x20, 0x40, 0x80 — arrival, route
+released, handle teardown), and advances. Phase 1, on the next pump visit with
+a nonzero combination: if bit 0x20 is set it issues the move-complete
+acknowledgement notification and returns result 5 — the pump unlinks and frees
+the record, ORDER COMPLETE; otherwise it returns 9 — dropped while further
+records follow, else the record resets its phase and waits `30 + RNG(30)`
+ticks (range 30 to 59). The VTOL_MOVE handler shares the mechanism: the same
+0xE0 gate, a goal snapped to a half-cell grid with a radius parameter of half
+an authored definition field (exact field identity not established here), and
+a terminal phase returning 5 with the acknowledgement only when it is the last
+record; hover controllers notify bit 0x20 from their own per-tick visit.
+TODO(question): the trigger that advances the VTOL handler from its phase-1
+wait to the terminal phase.
+
+**Audit note — completion-wait ranges [R-P0-01]:** the code-9 last-record
+wait is `30 + RNG(30)` (range 30 to 59), NOT `30 + RNG(15)`: only the code-3
+arm draws below 15. The code-9 row of the section 3.3 table is corrected in
+place, superseding the earlier [P0-08]/[SC8] reading and document 05's "Queue
+pumping and result codes" table.
+
+**Established fact — local settling family (steering only):** The ground
+mover has a speed-derived settling threshold for steering and braking:
+threshold 65536 (one 16.16 world unit) when `(speed & ~3) < 262144` (below
+four units), otherwise `speed >> 2` with signed truncation; the vertical
+comparison is strict (`-threshold < dy < threshold`). This family belongs to
+waypoint/steering logic only — it never appears in the order-completion chain
+— and blocked movement halves speed and clamps the resulting displacement
+without a replan, yield, or queue transition (section 8.2's blocked-mover
+contract).
+
+**Unknown [R-P0-01]:** The compact ground controller class — selected when
+the owning player record's state byte holds value 3 — wires its per-tick hook
+to a plain return, so the arrival notification is not wired there; how that
+population's ground orders complete is TODO(question). The VTOL phase trigger
+above is likewise unrecovered; both must not be guessed.
 
 ## 9. Hover, floaters, and amphibious behavior
 
@@ -1293,7 +1944,25 @@ The three underwater tests are ordered overwrites `1→2→3` — `3` wins if bo
 
 **Established fact:** Definition bits and fields participate as: `canhover` is bit 12, `floater` is bit 19, `upright` is bit 20, `amphibious` is bit 21, `hoverattack` is bit 27. `canhover` excludes the unit from water-damage and participates in the stopped-state Y pre-gate; `floater` selects the ship surface clamp at `waterline + sea level`; `upright` keeps the model vertical and computes Y as `max(terrain, sea level minus waterline)`; `hoverattack` selects the gunship attack variant, not hover locomotion. The `amphibious` bit is parsed and stored but has no reader in the bounded recovered movement, medium, targeting, or transport code — parser-only in that bound (bounded absence, not whole-executable impossibility). Shipped amphibious-looking behavior compensates via movement class `TANKHOVER3` values (movement class MaxSlope 12, MaxWaterSlope 255, no depth limits) and the `canhover`/`upright`/`waterline`/`modelBottom`/`movementclass` fields, not via the amphibious bit. Other medium fields are `waterline` byte (draft for band `2`), `movementclass` name resolved to profile, and `modelBottom` signed word (threshold for band `3`).
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** Water damage is evaluated per unit before movement, once
+per tick when `globalTick % 30 == 0`, only when the owning player's class is `1`
+or `2` and both mission fields `waterdoesdamage` and `waterdamage` are nonzero,
+and only when the unit's signed integer height is at or below the sea-level
+byte and `canhover` is clear. `floater` and `amphibious` are not additional
+immunity tests at this call site. Qualifying units receive `amount =
+mission.waterdamage` as damage type `0xB` with a null attacker through the
+standard damage funnel; blast falloff applies with the stored blast distance
+(zero outside AOE, so multiplier 1.0 for non-AOE water damage), but type `0xB`
+emits neither `HitByWeapon` nor `TakeDamage` COB callbacks and never enters the
+feature-class effect block. Lethal `0xB` sets the normal death-pending state.
+The shared funnel arithmetic inside that packet is owned by document 06 and
+applies to water damage like any other non-heal packet: definition-scaled
+armor reduction gated on bit 1 of the victim's instance armor byte
+(mask `0x02`) with the strictly-below-`30000` amount guard, then the
+veterancy tier factor `((25 − tier) · amount · 4) / 100` with
+`tier = min(kills / 5, 5)` read from the victim's credited-kill counter — so
+a veteran victim takes REDUCED water damage — and each credited kill
+increments the killer's credited-kill counter.
 
 **Supported inference:** The engine does not need a separate hard-coded wake
 renderer to reproduce the callback contract; wake effects and medium bands in
@@ -1517,7 +2186,10 @@ Function identities that a later re-derivation corrected — in particular the m
 - Complete lockstep packet ordering, replay state, state-hash contents, and resynchronization behavior.
 - Exact unit pool capacity and all slot-limit failure paths.
 - Complete serialization of transient order queues, script callbacks, pending path requests, and medium state.
-- Exact same-tick visibility for every possible unit creation caller, especially slot-relative reuse and order-created units.
+- Exact same-tick visibility for every possible unit creation caller
+  (factory-product publication windows are established in section 3.8
+  [R-P0-09]); slot-relative reuse and order-created units beyond the factory
+  path remain open.
 - Complete player category, side, ally, autonomy, and strategic-AI semantics.
 
 ### Orders and queues
@@ -1527,14 +2199,18 @@ Function identities that a later re-derivation corrected — in particular the m
   bits.
 - Where the interface and network layers replace or cancel the front order,
   which the queue pump itself never does.
-- Exact attack, reclaim, guard, patrol, and factory-exit goal predicates.
+- Exact attack, reclaim, guard, and patrol goal predicates (the ground-move
+  and VTOL final-order arrival predicate is established in section 8.3
+  [R-P0-01], and the factory exit path in sections 3.8 and 6.4).
 - Order behavior when a path is empty, stale, blocked, or budget-delayed.
 - The label of the one internal command code whose resolved name is not
   established.
 - Consumer-side meaning of the `Wait` trailing integer and of the `bw`/`b`
   stockpile count passed by InitialMission tokens (section 3.6); both live in
   their handlers.
-- Exact construction/economy carry, worktime-under-one-tick behavior, completion ordering, and callbacks.
+- Exact construction/economy carry and worktime-under-one-tick behavior
+  (document 05); completion ordering and the completion/activation/rally
+  callbacks are established in section 3.8 [R-P0-09].
 
 ### COB
 
@@ -1546,6 +2222,13 @@ Function identities that a later re-derivation corrected — in particular the m
   zero/nonzero readiness grant and the full callback argument catalog are
   established in section 5. Thread-slot exhaustion behavior is established in
   section 4.3.
+- Compact ground-controller order completion (owner player state byte value 3)
+  and the VTOL_MOVE phase-1-to-terminal trigger — TODO(question) in section
+  8.3 [R-P0-01].
+- The script-touched marker consumer, the busy-bit semantic, the
+  engine-driven cloak-family bit name, the packed position-half axis naming,
+  the yard-open admission class matrix, and bare-`get UNIT_HEIGHT` dependency
+  — TODO(question) in section 4.7 [R-P0-10].
 - Semantic unit of the footprint-path `SetSpeed` argument, and serialization
   of the unassigned `Killed` variant cell when the script neither assigns it
   nor the work-fraction gate forces zero.
@@ -1573,8 +2256,10 @@ Function identities that a later re-derivation corrected — in particular the m
 
 ### Ground movement
 
-- Braking, blocked-state, and waypoint arrival behavior at zero speed or a
-  moving target and its interaction with the exact pitch and below-water caps.
+- Braking and blocked-state behavior at zero speed or a moving target and its
+  interaction with the exact pitch and below-water caps (the final-order
+  arrival predicate itself is established in section 8.3 [R-P0-01], and the
+  speed-derived settling family is steering-only there).
 - Collision behavior for simultaneous multi-unit contacts beyond the established
   sequential sweep commit and row-major footprint scan, including interactions
   with features, buildings, and map boundaries; the per-unit validator and the
@@ -1584,4 +2269,31 @@ Function identities that a later re-derivation corrected — in particular the m
 
 ### Hover and VTOL
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+- Semantic names and ordinary gameplay producers of mover modes `0` and `3`
+  (save and load preserve them but no ordinary bounded producer was found);
+  the mover's signed integer height provenance is established as the signed
+  high word of its 16.16 Y.
+- Semantic name and domain of the global sentinel compared against the unit's
+  sector-list head field, which bypasses the flight vertical assignment
+  entirely (bypass behavior itself is established in section 10.1).
+- Sea-floor behavior, wake rectangle interpolation, and detailed wake and
+  SFX-piece mapping beyond the exact `setSFXoccupy` five-band classifier; the
+  band thresholds, their height-byte domain, overwrite order, mode dependency,
+  and edge-triggered delivery are established.
+- `amphibious` runtime role beyond the parser-only bounded absence, and any
+  unrecovered per-tick consumer of that bit outside the bounded movement/medium/
+  targeting/transport census.
+- Can-fly terrain bypass conditions for every order beyond the established
+  flight selection in the mover fan-in.
+- Cruise-altitude reference details beyond the established order-goal `Y`
+  authority (upper cap `0x1FF0000`, sources `cruisealt`, `cruisealt/2`,
+  `modelBottom`, and negated attach-piece Y), landing and descent arrival radii
+  (`0x30`, `0x80`, `0x140` are horizontal arrival radii, not descent rates),
+  pad reservation beyond the four-candidate `QueryLandingPad` selection and the
+  `0`/`30+rand(15)` retry protocol, and carrier collision beyond the ordinary
+  shared-mover commit rules; the load/unload executor entry gates, six-phase
+  tables, statuses, and event codes 12/13 are established in section 10.2.
+- Air patrol orbit admission beyond the established `150`-tick recurrence at
+  `builddistance << 16` with offset `0xDB6E` and build power `work/30` per tick;
+  exact travel time between generated construction waypoints and construction
+  target-eligibility gates.

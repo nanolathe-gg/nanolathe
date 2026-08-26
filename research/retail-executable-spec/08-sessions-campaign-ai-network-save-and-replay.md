@@ -173,14 +173,19 @@ The complete verb grammar, argument formats, and malformed-input handling are sp
 
 ### Trigger object
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+Mission victory and defeat conditions are allocated as polymorphic trigger
+records. A builder routine probes the eighteen condition keys in a straight chain and
+allocates a per-condition record on a hit. Record size varies with the
+condition and is one of seven established buckets — `0x0C` flag-only (12 bytes), `0x10` timer (16), `0x14` boundary (20), `0x30` string+count variant A (48), `0x32` string+count variant B (50), `0x36` canonicalizing string shape (54), and `0x40` radius (64) carrying X/Z plus radius payload [08 "Trigger object"] [GAP T10]. Every record leads with a vtable pointer whose table covers all
+eighteen condition types — eight slots per entry (shared destructor/helper slots plus the six named behavioural slots described under Evaluation: poll, unit-died notification, capture/transfer notification, created notification, and save/load) — with the trigger's completed flag adjacent [08 "Trigger object"].
 
 The mission object owns separate growable arrays for victory and defeat
 conditions, each count kept beside its array. An empty queue receives an
 injected default destroy-all-units-class victory or all-units-killed-class
 defeat trigger, guaranteeing one win and one lose condition.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+Timer triggers store time in authoritative ticks after multiplying authored
+seconds by thirty [08 "Trigger object"].
 
 ### Save tree
 
@@ -209,9 +214,19 @@ start synchronization barrier is required.
 
 ### Session states
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+A single session callback table drives the game-mode state machine across
+eight states:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+| State | Callback | Behavior | Label |
+|---:|---|---|---|
+| 0 | teardown A | cleanup variant A, then state 2 | Supported inference |
+| 1 | teardown B | alternate cleanup, then state 2 | Supported inference |
+| 2 | front-end/session router | selects state 3, 4, or 5 | Supported inference |
+| 3 | network pre-load | network startup polling, then state 5 | Supported inference |
+| 4 | local pre-load | initializes local two-player records, then state 5 | Supported inference |
+| 5 | battle loading/setup | loading UI/thread and readiness barrier | Established |
+| 6 | battle | live battle loop | Established |
+| 7 | results/postgame | post-battle handling | Established |
 
 Transitions and side effects are established; the semantic names for states
 0–4 are supported inference.
@@ -460,7 +475,7 @@ default all-units-killed condition.
 
 ### Evaluation
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Architecture — poll versus notification — Established.** Triggers are vtable objects, not type-byte structs [08 "Trigger object"]. Each of the eighteen conditions carries an eight-slot table — shared destructor/helper slots plus six named behavioural slots: a tick poll, a unit-died notification, a capture/transfer notification, a created notification (present but unused by any shipped condition), and save/load [08 "Evaluation"]. The tick site calls only the poll slot; the notification slots are driven by the corresponding gameplay events. A poll therefore never consumes a kill or capture — the countdown in `KillUnitType` advances only from the unit-died slot [08 "Evaluation"].
 
 **Established — poll-time scans (mutate only Completed; already-completed stays set).**
 
@@ -472,15 +487,15 @@ default all-units-killed condition.
 
 - `KillAllOfType` vs `AllUnitsKilledOfType` vs `AllUnitsKilled` — annihilation checks. `KillAllOfType` is a victory term and gates on the enemy owner; `AllUnitsKilledOfType` is its defeat counterpart and accepts any owner; `AllUnitsKilled` is any type but gates on the local owner and succeeds when the local player has no live units left [08 "Evaluation"]. `ANYTYPE` bypasses the name compare where a type slot exists.
 
-- `KillEnemyCommander` / `CommanderKilled` — absence scans. Victory gates on the enemy owner, defeat on the local owner [08 "Evaluation"]. **Established:** retail resolves commander identity through the `SIDEDATA` commander-name table (stride `0x232` at `DAT+0x37F5F`), not through the definition's `Commander` flag [08 "Evaluation"]. The two sources agree for stock content; the table is the authority. An implementation that tests the flag is observably correct on stock data but diverges on synthetic sides that rename the commander.
+- `KillEnemyCommander` / `CommanderKilled` — absence scans. Victory gates on the enemy owner, defeat on the local owner [08 "Evaluation"]. **Established:** retail resolves commander identity through the `SIDEDATA` commander-name table, not through the definition's `Commander` flag [08 "Evaluation"]. The two sources agree for stock content; the table is the authority. An implementation that tests the flag is observably correct on stock data but diverges on synthetic sides that rename the commander.
 
 - Boundary conditions (`UnitTypePassesX`/`Z` and `AnyUnitPassesX`/`Z`) — each carries a single integer threshold stored after an arithmetic `>>4` of the authored value [08 "Evaluation"]. The poll compares the signed world coordinate (unit `X` for `…PassesX`, `Z` for `…PassesZ`, after the same `>>4`) against the stored threshold and is satisfied when `abs(coord - threshold) < 3`, i.e. a ±2-world-unit tolerance [08 "Evaluation"]. The type-gated variants compare `UnitName` case-insensitively against the authored type and `ANYTYPE` (empty stored name) bypasses the compare.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+- `MoveUnitToRadius` — the largest record (64 bytes) carries the authored X, a sentinel value `0x12345678`, the authored Z, and radius as `authored <<16` (16.16 fixed) [08 "Trigger object"] [08 "Evaluation"]. Its poll optionally clamps the authored centre when the sentinel is present (map-edge and terrain-height snap, writing `X<<16` / `Z<<16` back), then scans the world partition [08 "Evaluation"]. Distance is planar **X/Z Euclidean squared** (`dx*dx + dz*dz <= r*r` with the 64-bit product reduced to its high 32 bits), Y is ignored, tile bounds are `(centre ± r) >>17` clamped to map tile counts, and iteration follows the world partition's unit-list links. Type gating is `ANYTYPE`-aware as above. **Supported inference made Established:** earlier speculation about an axis-swapped or 3-D metric is closed — subtraction uses the unit's world X and world Z fields [08 "Evaluation"].
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+- Timer triggers (`VictoryTimerRunsOut` / `DeathTimerRunsOut`) — the builder stores `seconds × 30` ticks with no saturation (wrap preserved) [08 "Trigger object"] [08 "Evaluation"]. The poll compares the authoritative global tick against the stored deadline as **unsigned** `globalTick >= deadline` (a carry-based unsigned comparison, not a signed one) [08 "Evaluation"]. Comparison is `>=`, not `>`, and a zero-second deadline is therefore satisfied on the first poll. The `>=` and unsigned shape are Established; the wrap without clamp is Established.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+Completion sets the trigger's `Completed` flag and, if `Celebrated` is still clear, raises the localized "Victory Condition" notification and sets `Celebrated`; the exact presentation channel (message/sound) is not decomposed beyond that invocation [08 "Evaluation"].
 
 **Established — notification-driven countdowns (do nothing on poll).**
 
@@ -488,15 +503,15 @@ default all-units-killed condition.
 
 - `CaptureUnitType` — same countdown but driven by the **capture/transfer** slot, type-gated, completing at `<=0` [08 "Evaluation"].
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+The created notification slot is present in every vtable but unused by any shipped condition [08 "Evaluation"].
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**The tick site — Established.** The victory and defeat queues are polled from the per-player tick phase, **in the LOCAL player's slice only**, on that slot's own **once-per-30-tick cadence** (`globalTick >= dueTick` then `dueTick += 30` — the same next-due-plus-30 shape the economy settlement deadline uses) [08 "Evaluation"], and **only when the mission type is 1** (campaign) [08 "Evaluation"]. Skirmish and multiplayer sessions (types 2/3) never poll these queues. Poll order is the victory array then the defeat array, in builder order.
 
-**Combination and precedence — Established.** Victory is an **AND** across its queue — every victory trigger must report `Completed`. Defeat is an **OR** — any single defeat trigger ends the mission. **Victory is evaluated first**, so a tick on which both would fire resolves as a victory [08 "Evaluation"]. Completion arms a shared end-of-mission countdown at **four**, which then decrements roughly once per second (once per local 30-tick due: `4 → -1` over five invocations, ~150 ticks) before the end-latch word at `DAT+0x3923B` is written; the latch distinguishes "ending" (bit 2 `0x04`), "won" (`0x10|0x20`) and "lost" (`0x40`, clearing `0x10`) and the lose path clears the win bit it would otherwise share [08 "Evaluation"]. The `~1/sec` rate is the poll cadence, not a separate timer.
+**Combination and precedence — Established.** Victory is an **AND** across its queue — every victory trigger must report `Completed`. Defeat is an **OR** — any single defeat trigger ends the mission. **Victory is evaluated first**, so a tick on which both would fire resolves as a victory [08 "Evaluation"]. Completion arms a shared end-of-mission countdown at **four**, which then decrements roughly once per second (once per local 30-tick due: `4 → -1` over five invocations, ~150 ticks) before the end-latch word is written; the latch distinguishes "ending" (bit 2, value `0x04`), "won" (`0x10` or `0x20`) and "lost" (`0x40`, clearing `0x10`) and the lose path clears the win bit it would otherwise share [08 "Evaluation"]. The `~1/sec` rate is the poll cadence, not a separate timer.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Owner gating is a player-index compare, not an alliance test — Established.** Each poll-time scan that walks live units compares the unit's player index against `LocalOwner` or `EnemyOwner` as above; no ally-group merge is performed [08 "Evaluation"]. `UnitTypeKilled` and `AllUnitsKilledOfType` explicitly accept any owner [08 "Evaluation"].
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Record shapes, the eighteen-entry vtable map, these evaluator bodies, the tick site, and the combination rules are established.** Remaining explicit unknowns: the exact presentation sequence between latch write and session teardown (the battle-to-postgame transition beyond the bit writes), and whether any non-stock `SIDEDATA` divergence would expose the commander-flag vs table distinction (stock content agrees, but a synthetic side definition could diverge — retained as bounded residual, not a poll-vs-notification gap). The timer comparison beyond `>=` unsigned and the `MoveUnitToRadius` axis pair beyond X/Z planar are now closed; do not retain them as Unknown.
 
 ## Skirmish configuration
 
@@ -628,7 +643,7 @@ Per-definition inputs consumed in plain terms are:
 - per-definition economy cost fields for metal and energy;
 - the extracts-metal flag as a floating-point zero versus non-zero test;
 - category and movement-class flag bits that contribute fixed integer addends and select weapon-budget bases;
-- footprint and yard-related size flags that add small constants and gate multipliers;
+- footprint and yard-related size flags that contribute small constants and gate multipliers;
 - a slope-related field that triples one accumulator when non-negative;
 - a weapon-related floating field that can zero one accumulator when combined with a global half-compare;
 - the weapon table entries themselves, where active weapons contribute damage divided by 40 plus reload divided by 100 plus small constants;
@@ -640,7 +655,7 @@ All weapon-slot contributions are bounded by clamps before they are summed with 
 
 #### Arithmetic and clamping — Established [P0-01]
 
-The routine performs its floating work with the retail x87 pattern: integer addends are loaded, economy costs are multiplied by constants, differences are taken in floating point, and each result is narrowed to 32-bit float at call boundaries before the next operation. The constants that appear are zero, minus one hundredth, minus two thousandths, thirty, minus two and a half thousandths, five, one hundred, minus two hundredths, and small integer addends such as one, ten, eleven, twenty, twenty-one, twenty-five, thirty, forty, fifty and one hundred. Every floating-to-integer conversion truncates toward zero, matching the retail helper's behavior, and the final per-type results are clamped to minus one hundred to plus one hundred before they are stored as signed bytes. No 80-bit retention crosses a helper call; the store to float32 is the truncation boundary. [P0-01]
+The routine performs its floating work with the retail x87 pattern: integer addends are loaded, economy costs are multiplied by constants, differences are taken in floating point, and each result is narrowed to 32-bit float at invocation boundaries before the next operation. The constants that appear are zero, minus one hundredth, minus two thousandths, thirty, minus two and a half thousandths, five, one hundred, minus two hundredths, and small integer addends such as one, ten, eleven, twenty, twenty-one, twenty-five, thirty, forty, fifty and one hundred. Every floating-to-integer conversion truncates toward zero, matching the retail helper's behavior, and the final per-type results are clamped to minus one hundred to plus one hundred before they are stored as signed bytes. No 80-bit retention crosses a helper invocation; the store to float32 is the truncation boundary. [P0-01]
 
 #### Random gate — Established [P0-01]
 
@@ -654,7 +669,7 @@ The nine active tasks are:
 
 - eco and queue management that handles activatable building toggles and builder queue insertion — rescheduled at current tick plus 30;
 - construction and positioning that selects a build candidate, finds placement, issues a build order, and then repositions builders when at least five builders are present — rescheduled at current tick plus 90;
-- two attack-wave tasks that share the same code but hold distinct distance thresholds and count bounds — each rescheduled at current tick plus 300; the underlying merge moves members between wave groups when distance squared exceeds threshold times count, with thresholds twenty thousand and fifty thousand, minimum three members and maximum six per wave;
+- two attack-wave tasks that share the same code but hold distinct distance thresholds and count bounds — each rescheduled at current tick plus 300; the underlying wave merge is two-phase and strict: the task's own group sheds its farthest member to the peer wave while distance squared is at least threshold times the task's group count, then the peer's members within distance squared strictly below threshold times the task's count are collected and transferred into the own group — thresholds twenty thousand and fifty thousand, minimum three members and maximum six per wave; the full merge order is under R-P0-04 §5 below. Audit: the earlier phrasing described the merge loosely as moving members between wave groups when distance squared exceeds threshold times count; the caller census established the two-phase order with an inclusive first comparison and a strict second, which is now the contract;
 - two regroup tasks paired with the waves — each rescheduled at current tick plus 150 and moving the task's group toward the peer wave's centroid;
 - an explore and gather task — rescheduled at current tick plus 30 plus a random value below 900;
 - a random-walk rally task that integrates a drifting target and validates exploration — rescheduled at current tick plus 30 plus a random value below 150.
@@ -671,13 +686,123 @@ All order submission from manager tasks uses the ordinary order service. Build o
 
 #### Eco toggle and group-vector population — Established with direct writer census [P0-02] [R-P0-04]
 
-The eco task scans its own group vector and examines only completed units. For activatable buildings it compares twice the stored metal income against current energy: when metal is at most half of energy it disables; otherwise when net energy is at or below zero it leaves the unit as is; otherwise it draws once with bound five and enables the unit only on a non-zero result. The two argument forms disable and enable correspond to those two call sites; the semantic name metal-maker on/off is supported inference, but the argument values, the eighty percent gate, and the metal-energy compare are established.
+The eco task scans its own group vector and examines only completed units. For activatable buildings it compares twice the stored metal income against current energy: when metal is at most half of energy it disables; otherwise when net energy is at or below zero it leaves the unit as is; otherwise it draws once with bound five and enables the unit only on a non-zero result. The two argument forms disable and enable correspond to those two invocation sites; the semantic name metal-maker on/off is supported inference, but the argument values, the eighty percent gate, and the metal-energy compare are established.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+The nine manager task group vectors are initialized empty, but the extended
+whole-image static census now locates the specialized direct
+manager-group writer. The manager's classifier invokes it every 30-countdown
+pass for ungrouped units that carry runtime bit `0x20`, assigning categories 1
+(resource), 3 (regroup A), 4 (construction), 5 (null), 7 (regroup B), or 8
+(explore) in ascending unit-pool order. It does not assign wave A/B or rally
+(categories 2, 6, and 9). The same writer is also called by wave merge, unit
+load, control-group assignment, unit initialization, and death removal; it
+appends to the destination vector, removes from the source by replacement with
+the last element, and has no gameplay member cap. See R-P0-04 §3 and §4 below for the complete
+writer and direct-store census. Transport, naval, air, or special scouting
+tasks with distinct tables are not found among the six unique virtual tables
+that cover the nine slots. The empty slot's null task is intentionally inert.
+[P0-02] [R-P0-04]
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+The earlier helper-only callback census (`6a3f9c5`) remains valid for its
+scope: it found no additional lifecycle admission callback that seeds these
+vectors through the generic insertion helper or the previously searched
+callback routes. It did not enumerate direct xrefs to the specialized
+direct manager-group writer. The new positive-static result therefore supersedes only
+the old conclusion about the direct manager writer; it does not invent a
+creation/completion/capture callback beyond the separately located init,
+load, control-group, wave-transfer, and death invocation sites.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+The classifier admission bit is the `uint32` runtime status word on the
+unit's runtime record, not an authored UnitDef field. The common
+allocator initializer sets bit `0x20`; the save-load path can restore
+it from the packed saved status word; and the death path clears it with the
+low-byte `0xcf` mask. InitialMission clears it after queuing at least one
+order. The exact `MakeSelectable` handler clears `0x8000`, sets
+`0x20`, stores the status word, and returns code 5; InitialMission's `s` verb
+and postlude queue this order. The separate `Selectable` option callback
+scans active units and ORs the same bit. Selection bulk-clear paths
+also mask it. No direct capture, activation, or
+factory-completion writer was found; completion sets the distinct status bit
+`0x2000`. These transitions are positive-static, while the absence of an
+additional authored/capture/completion writer is bounded-negative. [R-P0-04
+"Runtime eligibility bit lifecycle"]
+
+#### R-P0-04 §1 — Result: no per-tick group producer; two vector families — Established [R-P0-04]
+
+The retail AI has two distinct group-vector families, and neither is produced by a per-tick combat-capability scan:
+
+1. **Strategic state vectors** — produced during the 30-tick strategic refresh;
+2. **Manager task vectors** — the inputs consumed by the construction, eco/queue, wave, regroup, explore, and rally tasks.
+
+The manager's nine task vectors are allocated empty, but that is only their initial state: the extended static census locates the direct group-record writer and the manager's classifier, which together give the task vectors reachable producers. A production-time scan that assigns every apparently combat-capable unit to wave, explore, rally, and regroup slices is not a retail producer and must not be retained as authoritative AI behavior (see R-P0-04 §5).
+
+#### R-P0-04 §2 — Manager task slots and group-record identity — Established [R-P0-04]
+
+The manager allocates nine task objects in ten fixed slots; the tenth slot is an intentional null task that never runs. The slot order is load-bearing: resource/activity and builder queue, attack wave A, regroup A, construction/positioning, null, attack wave B, regroup B, explore/gather, random-walk rally. Each task points at its own player group record — a begin/end/capacity vector of unit pointers — and the dispatcher runs the task slots in ascending slot order when the computer-controller gate is active and the task's deadline is at or before the global tick. Deadline execution does not imply the task's vector is non-empty. Group record zero is the ungrouped sentinel and is not one of the nine task records. Task deadlines are listed under Strategy manager and its task graph above. [08 "Strategy manager and its task graph"; 08 "Dispatch gates and order sinks"]
+
+#### R-P0-04 §3 — Located producers and transfer order — Established [R-P0-04]
+
+The producers below are the reachable set; their order of application matters for save and simulation determinism.
+
+##### Strategic refresh vectors
+
+The strategic state owns three separate vectors, each rebuilt on the 30-tick refresh by clearing it and scanning the live unit pool in ascending pool order. The eligibility predicates differ per vector; they are not tactical-group population. Creation, completion, death, and capture affect these vectors only through the next refresh's live-pool scan — no creation hook inserts directly. [08 "Strategic state construction and refresh"]
+
+##### Wave merge
+
+The attack-wave task calls the wave merge helper before target selection; the merge operates only on the two wave groups passed by the task instance and is not a general manager-group initializer. The recovered order:
+
+1. compute the current group's centroid;
+2. repeatedly find its farthest member and, while `distanceSquared >= threshold * groupCount`, transfer that member to the peer group through the ordinary group-transfer helper;
+3. update the centroid and count state after each transfer;
+4. scan the peer group and collect members satisfying `distanceSquared < threshold * ownGroupCount` into a temporary vector; and
+5. transfer the collected members into the own group through the same transfer path.
+
+The first comparison is inclusive (`>=`); the peer-collection comparison is strict (`<`). Wave A uses threshold 20,000 and wave B uses 50,000. No random draw is taken by the merge. The merge is a transfer path only — it never discovers units from the world and can operate only after a wave vector has members. [08 "Strategy manager and its task graph"]
+
+##### The direct manager-group writer
+
+The direct group-record writer is a mutation of a unit's group membership, not a generic strategic-vector helper. It reads the unit's stored group record, removes the unit pointer from that record (replace-with-last and decrement the end), and — when the new group differs from the remove sentinel — appends the unit pointer to the new group's record and stores the new group number on the unit. The append path reserves and reallocates the four-byte pointer vector when capacity is exhausted; no gameplay member cap is tested. The remove sentinel removes without appending; group record zero is the ungrouped sentinel and is not one of the nine task records.
+
+The whole-image caller census finds exactly six caller classes: the wave merge (peer and current task records, transferring existing members); the manager's classifier (six fixed destinations); unit allocation and initialization (places a newly initialized unit in the ungrouped record); death teardown (remove sentinel, so a dying unit leaves its record); scenario and save unit load (restores the saved or mission group in load order); and the control-group assignment sweep (inserts selected units and clears matching old members). No capture-specific caller exists in the set; a captured unit may keep its stored group until one of the established writers or cleanup paths acts.
+
+##### Classifier eligibility, destinations, and order
+
+The classifier runs on the manager's 30-countdown cadence and scans the current player's unit slice in ascending pool order. For each unit it first requires the allocator-initialized runtime status bit (see the Eco toggle and group-vector population section above) and the ungrouped record, then emits at most one assignment per unit on that pass through the direct writer, in this exact branch order:
+
+| Predicate, in order | Destination task |
+|---|---|
+| first high status bit set, second high status bit clear | resource/activity |
+| first high status bit set, second high status bit set | null task |
+| otherwise, definition builder flag set | construction |
+| otherwise, definition can-fly flag set | explore/gather |
+| otherwise, definition max-slope field signed greater than zero | regroup B |
+| otherwise, second high status bit set | regroup A |
+| otherwise | stays ungrouped |
+
+The classifier never assigns wave A, wave B, or rally; it draws no random numbers; its insertion order is the ascending unit-pool traversal, and the ungrouped gate prevents duplicate append on later passes. The two high status bits' semantic names remain opaque; their tests and destinations are fixed. [08 "Eco toggle and group-vector population"]
+
+##### Runtime eligibility bit lifecycle
+
+The classifier's eligibility bit is a runtime instance-status bit, not an authored definition flag. Its lifecycle — allocator initialization, InitialMission clear, save restore, death and selection clear, MakeSelectable and Selectable writes, and the bounded absence of capture, activation, and factory-completion writers — is fully specified in the Eco toggle and group-vector population section above; that text is the home for this finding. No authored UnitDef field should be added to represent the bit, and it must not be aliased with the script-owned in-build-stance byte.
+
+#### R-P0-04 §4 — Bounded writer census — Established [R-P0-04]
+
+The generic vector insertion helper has exactly two caller classes: the strategic refresh (its three lists, inserting eligible live units in pool order) and the wave merge (temporary peer collection and transfer). The earlier helper-only census was incomplete because the direct group writer is a specialized writer rather than a path through the generic insertion helper. The constructor and the record allocator still initialize all task vectors empty, but the caller set above proves reachable population and removal after initialization. No other direct store, copy, or assignment path with a manager record alias was found in the whole-image search around the manager root, the ten task slots, the task vector fields, the record allocator and free pair, and the generic and direct writer references. The census is therefore positive-static for the direct writer and the classifier's six destinations, and bounded-negative for any additional distinct writer; the two high status bits' semantic names are the only opaque fields of this census. [08 "Eco toggle and group-vector population"]
+
+#### R-P0-04 §5 — Current heuristic versus retail contract — Established [R-P0-04]
+
+The production-time group scan performs actions that are not established retail behavior: it scans the whole world each tick, classifies units through movement, weapon, and economy proxies, filters owner, completion, and death within the scan, assigns ungrouped units to wave A, wave B, explore, rally, regroup A, then regroup B in a fixed fallback order, and imposes local caps of six or ten while doing so. The retail evidence establishes instead: the 30-entry manager cadence, the status-bit plus ungrouped gate, the branch order above, and the six classifier destinations. The heuristic's combat-capability predicates, per-tick timing, fallback order, and local caps are unsupported and must not be retained. The narrow producer runs only on the established cadence, appends in unit-pool order, and leaves wave A, wave B, and rally untouched unless a separate load, control-group, or wave-transfer path supplies them.
+
+#### R-P0-04 §6 — Implementation guidance — Established [R-P0-04]
+
+Keep the task-vector records and the task dispatch machinery, since their identity and deadlines are established; initialize the vectors empty, then run the narrow classifier on the manager's 30-entry cadence. Retain the wave merge only as a transfer operation on already populated wave vectors, with the recovered comparison strictness and thresholds. Keep the direct writer's swap-delete source removal and append destination order for lifecycle and control-group integration. Do not use the strategic refresh vectors as substitutes for tactical groups: they have different records, consumers, and eligibility predicates.
+
+Locked by the group-vector fixtures in internal/ai (groups_test.go, strategic_test.go) and the manager-record-order fixtures in internal/session and internal/save.
+
+```text
+TODO(question): Does a distinct writer, separate from the recovered direct-writer caller set, mutate manager task vectors through an indirect alias? The direct writer and the classifier are established; no additional writer is claimed without new static or dynamic evidence.
+```
 
 #### Placement root and search helpers — Established [P0-03]
 
@@ -691,11 +816,170 @@ Failed exhaustive helper does not fall through to the scatter helper; it returns
 
 RNG sites for AI planning are the outer 30 gate, the cumulative weighted reservoir, the extractor selector with bound 255, the positioning scatter with bounds up to the current radius and 65536, and the two periodic tasks with bounds five, one hundred fifty, and nine hundred. Any other bound in this package is a bug. [P0-01] [P0-02] [P0-03]
 
+#### R-P0-05 §1 — Score inputs and update order — Established [R-P0-05]
+
+The AI candidate score must consume the retail player economy aggregates and the strategic class vectors, not a proxy of current stock plus per-pass produced values. The runtime production and net-production accessors read player-record aggregates that are populated from the ledger's per-unit production and request buckets plus leftover stock; current stock and capacity are separate fields on the same record. The exact bucket arithmetic and settlement order are the economy contract. [05 "Player slot"; 05 "Settlement cadence"]
+
+The score has two layers: dynamic economy pressure read from the player record at candidate-selection time, and per-definition class coefficients stored in the strategic state and recomputed only on the established cadence. Update order matters: in the per-player tick loop the manager task dispatch runs before the strategic refresh, and the economy ledger runs later in that loop. A manager selection therefore observes the previous settled economy values and the previous class vectors for that tick; refresh and ledger writes become inputs to later ticks (see R-P0-05 §6).
+
+#### R-P0-05 §2 — Player economy record and strategic score fields — Established [R-P0-05]
+
+The player economy fields consumed by the score are: current energy stock, current metal stock, energy capacity, metal capacity, and four aggregates — energy production, energy usage, metal production, and metal usage. The production accessors are not per-pass produced values; the ledger folds per-unit production and request buckets and leftover stock into the aggregates.
+
+The strategic state contributes, per definition type: a three-byte class triple holding signed coefficients for the other, metal, and energy mixes; a completed-owner count; a single-byte coefficient used by the class path and the conditional half-addition; and an initialization-only single-byte vector written once at construction and never recomputed. The state also holds the last 30-tick refresh tick and the placement search radius. The three-byte class vector and the single-byte vectors are distinct arrays; the initialization-only vector is not an alias of the refresh-written families. [08 "Strategic state construction and refresh"]
+
+#### R-P0-05 §3 — Hard gates and economy pressure — Established [R-P0-05]
+
+For each candidate the hard gates run first:
+
+- reject when current energy is strictly below `50.0`;
+- reject when current metal is strictly below `25.0`;
+- reject when the special mission mode equals `1` and the candidate's definition carries a particular established status bit (the bit's authored semantic name is not closed);
+- reject when the candidate's completed count reaches its profile limit — `count < limit` is required, and `-1` means unlimited.
+
+The pressure values then use the player fields:
+
+```text
+energyRaw = trunc(max(0, (min(energyCapacity, 1000) - currentEnergy) * 0.125))
+metalRaw  = trunc(max(0, (min(metalCapacity,  500) - currentMetal)  * 0.25))
+```
+
+Adjustments are applied in this order:
+
+```text
+if netEnergy < 1.0: energyRaw += 20
+if netMetal  < 1.0: metalRaw  += 20
+
+if energyProduction < 50.0: energyRaw += 100
+else if energyProduction < 200.0: energyRaw += 10
+
+if metalProduction < 3.0: metalRaw += 100
+else if metalProduction < 5.0: metalRaw += 20
+```
+
+All integer conversions truncate toward zero.
+
+#### R-P0-05 §4 — Candidate score and cumulative weighted selection — Established [R-P0-05]
+
+The three-way mix is:
+
+```text
+metalMix  = clamp(metalRaw, 0, 100)
+energyMix = clamp(energyRaw - metalMix, 0, 100)
+otherMix  = max(0, 100 - metalMix - energyMix)
+```
+
+For the class triple `(other, metal, energy)` and profile weight `weight`:
+
+```text
+score = trunc((other * otherMix
+             + metal * metalMix
+             + energy * energyMix) * weight / 10000)
+```
+
+Scores at or below zero are excluded. The remaining positive scores are selected in authored build-option order by cumulative weighted reservoir selection using one simulation-random draw bounded by the running positive total. The builder's own definition name is rejected as a candidate. [08 "Placement root and search helpers"]
+
+#### R-P0-05 §5 — Class-vector compilation and refresh — Established [R-P0-05]
+
+The class routine walks definition IDs in strict ascending type order, skips the zero sentinel, and draws no random numbers itself. All float-to-integer conversions truncate toward zero; float32 narrowing occurs at the recovered helper boundaries. Final signed-byte coefficients clamp to `[-100, 100]`.
+
+The initialization-only single-byte vector is written once at construction — zero, plus 40 when the definition's category flag is clear, plus 20 when the build-option list is non-empty — and is never rewritten by the refresh routine. The category flag's authored semantic name is not closed and must not be replaced with a guessed meaning. [08 "Strategic state construction and refresh"]
+
+The single coefficient (first pass):
+
+```text
+acc = 1
+if ExtractsMetal != 0.0: acc = 11
+if MakesMetal != 0:      acc += 10
+if Classify(def) < 0:    acc += 10
+
+t0 = trunc(float32(acc) - BuildCostMetal  * 0.01)
+t1 = trunc(float32(t0) - BuildCostEnergy * 0.002)
+
+weaponBase = 11 if CanAttack else 1
+weaponSum = weaponBase
+for each of the three weapon slots:
+    if weapon.active != 0:
+        weaponSum += weapon.damage / 40 + 5 + weapon.reload / 100
+weaponSum = clamp(weaponSum, -100, 100)
+coefficient = clamp(weaponSum + t1, -100, 100)
+```
+
+The damage and reload field widths and divisions are established; the exact TDF key identity for the two weapon fields remains an explicit residual (see R-P0-05 §8).
+
+The triple class coefficients — the other-mix accumulator starts at zero and receives these addends:
+
+```text
+if CanAttack:                 acc = 21
+if Builder && count < 3:     acc += 30
+if Classify(def) < 0:         acc += 50
+if ExtractsMetal != 0.0:     acc += 50
+if MakesMetal != 0:          acc += 25
+if CanFly:                    acc += 40
+if SonarDistance != 0:        acc += 15
+if RadarDistance != 0:       acc += 5
+```
+
+Then `count == 0` multiplies the accumulator by four, `count == 1` by two, and `MaxSlope >= 0` by three. A global half-capacity comparison may contribute half of the single coefficient; its strategic-state writer is not located and stock state leaves that branch false. The coefficient is then zeroed when `CanLoad` is set, when `IsFeature` is set, or when the wind-generator/global-wind comparison is true, and is clamped to the signed-byte range.
+
+The energy coefficient: `clamp(trunc(BuildCostEnergy * -0.0025 - Classify(def) * 5.0), -100, 100)`.
+
+The metal coefficient:
+
+```text
+metalBase = 100 if ExtractsMetal != 0.0 else 0
+metal = clamp(trunc(metalBase
+                    - BuildCostMetal * 0.02
+                    - (25 if MakesMetal != 0 else 0)), -100, 100)
+```
+
+The definition inputs consumed by the routine — extracts-metal, makes-metal, metal and energy build costs, can-attack, builder, can-fly, can-load, is-feature, max-slope, radar and sonar distance, and wind-generator — are recovered runtime field mappings, not guesses based on similarly named proxies. Confidence is high for the comparisons, constants, cadence, and field mappings; medium for the classification helper's semantic name and the two weapon-field key identities.
+
+#### R-P0-05 §6 — Cadence and same-tick ordering — Established [R-P0-05]
+
+The established per-player sequence is:
+
+1. the player slot dispatches the manager, including any due candidate-selection task, before the strategic refresh;
+2. the 30-tick refresh runs when due: it clears and rebuilds the completed counts and the weighted center, stores the refresh tick, draws a single random value with bound 30, and recomputes the class vectors only when that draw is zero;
+3. the rest of the per-player unit and session work runs; and
+4. when its ledger gate is due, the economy ledger updates production, consumption, stock, and capacities from the unit buckets.
+
+A class refresh therefore sees the live-unit pool and the previous strategic counts, then writes vectors for subsequent selections. A manager task in the same iteration ran before that refresh, and a resource ledger write later in the iteration is not an input to that same manager invocation; the next tick's manager uses those newly settled aggregates. The class routine consumes zero random numbers; exactly one bound-30 draw occurs per due refresh, and the initial class computation at strategic-state creation draws none. The candidate selection's cumulative draw and the extractor placement draw are separate later consumers of the simulation stream. [08 "Strategic state construction and refresh"; 05 "Settlement cadence"]
+
+#### R-P0-05 §7 — Extractor, profile, and request gates — Established [R-P0-05]
+
+Extractor candidates take a separate placement branch: the root draws once with bound 255 and compares the draw with the mission's uniform surface-metal value; the strict `surfaceMetal < draw` result selects one placement helper, while non-extractors go directly to the other. The exact geometry of those helpers and any additional water legality are not established here; a water-only extractor filter is a heuristic, not a retail score gate. [08 "Placement root and search helpers"]
+
+Profile loading resolves the mission `aiprofile` through the resource system and falls back to `ai\default.txt`. `plan` enables subsequent directives only for `any` or the current difficulty (`0=easy`, `1=medium`, `2=hard`); `weight` multiplies and clamps the per-type profile weight (default 100); `limit` updates the per-type limit (default -1). The unit-definition `ai_limit` text is parsed but has no bounded runtime reader and must not replace the profile `limit`. [08 "Established AI-facing data and rooted planner"]
+
+Candidate request identity is determined by the ordinary service path: the construction task selects from the assigned builder's build list, resolves placement, and submits a build command with type identity and queue modifier one through the ordinary order service; the resource/queue task selects a build option for an idle builder and queues it through the same service. Neither path writes a unit or economy record directly. [08 "Dispatch gates and order sinks"]
+
+#### R-P0-05 §8 — Implementation guidance and blockers — Established [R-P0-05]
+
+Replace the economy adapter's stock-plus-produced proxy with the player runtime aggregate mapping. Preserve the strict gate comparisons, the pressure mix, the profile weight and limit state, the authored candidate order, the cumulative random draw, and the manager-before-refresh-before-ledger ordering. Replace strategic field proxies with the recovered definition fields, and leave unresolved semantic fields behind explicit TODOs.
+
+Locked by the score fixtures in internal/ai (o6_score_test.go, strategic_test.go) and the economy aggregate fixtures in internal/economy.
+
+```text
+TODO(question): What exact TDF keys populate the weapon damage and reload fields read by the class routine, and what is the exact runtime meaning and writer of the strategic half-capacity state field?
+
+TODO(question): What are the exact geometry and water-legality contracts of the two placement helpers beyond the established extractor selector draw?
+```
+
 ### What remains not established — Supported inference and unknown [P0-01] [P0-02] [P0-03]
 
-Semantic names for the per-definition flag bits that gate addends and the return meaning of the classification helper remain supported inference; the bit positions and the zero versus non-zero tests that drive them are established, but the design names such as hover, air, or builder are not closed. Weapon table field identities beyond damage divided by 40 and reload divided by 100 remain inference. The exact metric returned by the metal and blocking score helpers beyond a placeable versus blocked predicate and a product limit is inference.
+The class routine's per-definition inputs now have recovered field identities — extracts-metal, makes-metal, can-attack, builder, can-fly, can-load, is-feature, max-slope, radar and sonar distance, and wind-generator — as runtime field mappings (R-P0-05 §5). Audit: this doc previously claimed the addend-gating flag names were not closed; the field-level census recovered those identities, so the residual narrows to the semantic name of the classification helper, the TDF identities of the two weapon fields, and the strategic half-capacity state writer. The classifier's two high runtime status bits retain opaque semantic names while their tests and destinations are fixed (R-P0-04 §3). Weapon table field identities beyond damage divided by 40 and reload divided by 100 remain inference. The exact metric returned by the metal and blocking score helpers beyond a placeable versus blocked predicate and a product limit is inference.
 
-**Publication omission:** Historical executable-analysis detail omitted from this public edition.
+The population of the nine manager task group vectors is now positive-static
+for the direct writer and the six classifier destinations; no additional
+distinct writer is located in the whole-image direct-store/xref census. The
+classifier's two high runtime bits retain opaque semantic names, and no
+capture-specific caller of the direct manager-group writer was found. AI transport geometry and any
+distinct naval or air expansion policy beyond the generic move orders are not
+in this lane and remain unknown. The x87 control-word edge beyond the
+established narrowing to float32 at every helper invocation boundary remains an
+unknown of platform residual class; the default rounding mode is assumed.
+[P0-02] [P0-03] [R-P0-04]
 
 The four inert mission placement fields and the definition `ai_limit` field remain closed as bounded negative and must not be treated as strategic inputs. Earlier weighted-random loader claims are retracted.
 
@@ -752,7 +1036,7 @@ pre-battle barrier completion. The flag applies to both direct and custom sends.
 
 ### Loopback/diagnostic path
 
-A diagnostic mode bypasses the DirectPlay call and routes the same packet bytes
+A diagnostic mode bypasses the DirectPlay invocation and routes the same packet bytes
 through internal loopback helpers. This does not define a second gameplay
 protocol; it is a transport/debug alternative.
 
@@ -760,8 +1044,8 @@ protocol; it is a transport/debug alternative.
 
 ### Framing
 
-**The first byte of a packet is its type.** Dispatch is a direct indexed call
-through a handler table using that byte.
+**The first byte of a packet is its type.** Dispatch is a direct indexed
+invocation through a handler table using that byte.
 
 Three parallel tables are indexed by the type byte. Their capacity is 46, so
 valid types run from `0x00` through `0x2D`:
@@ -831,7 +1115,7 @@ slack and no padding, which independently validates the length table.
 | `0x25` | 5 | 1 | **No case in the in-game switch.** Its mask admits it only outside the battle-loading/live-battle states, so it is handled by the lobby receiver instead. |
 | `0x26` | 41 | 7 | Forwarded whole; roster semantics observed on the receive side: an empty roster decodes to zero participants and a special class value expands to all slots. |
 | `0x27` | 17 | 7 | **Integrity breach.** `+1` i32 peer identity; formats the translated "has modified his executable" text into the chat region. The twelve trailing bytes are opaque; their producer algorithm is unresolved. |
-| `0x28` | 58 | 7 | **Participant state push** (economy/player record). `+1` u8 flag, `+2` i32 sign-extended i16, `+6` i32 sign-extended i16, `+10` i32 sign-extended i16, `+14` i32 sign-extended i16, `+18` u32, `+22` u32, `+26` u32, `+30` u32, `+34` f32, `+38` f32, `+42` f32, `+46` f32, `+50` f32, `+54` f32. Consumer widens floats to doubles and copies every field into participant state unconditionally — no comparison, threshold, or abort; it can answer with a three-byte control plus optional re-push on nonzero flag. |
+| `0x28` | 58 | 7 | **Participant state message** (economy/player record). `+1` u8 flag, `+2` i32 sign-extended i16, `+6` i32 sign-extended i16, `+10` i32 sign-extended i16, `+14` i32 sign-extended i16, `+18` u32, `+22` u32, `+26` u32, `+30` u32, `+34` f32, `+38` f32, `+42` f32, `+46` f32, `+50` f32, `+54` f32. Consumer widens floats to doubles and copies every field into participant state unconditionally — no comparison, threshold, or abort; it can answer with a three-byte control plus optional re-send on nonzero flag. |
 | `0x29` | 3 | 7 | `+1` u8, `+2` u8. |
 | `0x2a` | 2 | 7 | `+1` u8 stored into a per-peer field. The local producer emits it as the mean of six per-peer bytes (loading progress). |
 | `0x2c` | 3 | 4 | **Build completion**; routes into the unit-creation path. |
@@ -887,7 +1171,11 @@ above.
 
 ## Receive buffering
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+The receiver drains DirectPlay, validates/decodes the custom envelope, orders
+by the descending transport sequence (suppressing duplicates, retaining one
+pending frame; the receive-window maintenance helper is a no-op in this binary), scans the whole payload
+for complete records (abort on incomplete), and places entries into a per-peer
+ring (512 entries, `0x180C`-byte record ring, grown to requested+`0x100`).
 
 Directly observed custom state includes:
 
@@ -924,7 +1212,11 @@ fully typed.
 
 ### Established model
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+At a scheduled step the local tick counter is incremented, the
+central network dispatcher runs, eligible packets mutate state,
+then unit, projectile, script, feature, economy, and other simulation
+subsystems run in fixed order; custom send queues are serviced after
+simulation for that step.
 
 The recovered synchronization state requires peer agreement on:
 
@@ -992,7 +1284,15 @@ commands are not fully closed.
 
 ### Map/resource identity
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+The executable computes checksums over map data, including the terrain header,
+plot/tile data, and raw feature records (the map-checksum builder applies the
+four-accumulator primitive to the 64-byte header, raw plot, and raw
+feature records, XORs components, and XORs one further map descriptor field;
+the result is stored in participant metadata and carried on wire inside packet
+`0x20`'s 185-byte metadata block, shown to lobby as map-content compatibility
+with a version-gated compare). Resource/economy integrity values are also
+observed in participant state but no single on-wire hash covering the whole
+world is established.
 
 The checksum primitive itself is established. It runs four independent 8-bit
 accumulators over a buffer of length *n*; for each index *i* with byte *b*, an
@@ -1012,13 +1312,13 @@ closed.
 
 No packet family establishes a fixed resource/economy hash comparison. The
 earlier assignment of that role to `0x28` is retracted. Packet `0x28` is a
-58-byte participant state push produced by a dedicated scanner thread polling
+58-byte participant state message produced by a dedicated scanner thread polling
 every 250 ms across locally-owned × remote participant pairs, plus an
 immediate echo path that re-emits the packet toward its originator when the
 inbound echo flag is set. It is not per-tick and is tied to no tick modulo.
 The receiver copies every field into local participant state (shorts and ints
 sign-extended back, floats widened back to doubles) with **no comparison, no
-threshold, and no abort** — push-and-overwrite, not compare-and-react. The
+threshold, and no abort** — overwrite, not compare-and-react. The
 sole gate is an anti-spam check that skips the copy while an echo-flood marker
 is set.
 
@@ -1048,7 +1348,7 @@ cadence, and mismatch path is closed.
 No direct evidence establishes a comprehensive per-tick hash of every world
 object. Existing hashes cover the envelope XOR-sum (weak corruption check,
 ignores last three bytes), the executable-integrity `0x27` notification
-(algorithm unresolved), and the `0x28` participant push (overwrite, not compare).
+(algorithm unresolved), and the `0x28` participant message (overwrite, not compare).
 A clean-room implementation must not describe them as a complete world-state
 hash until all payload inputs are traced.
 
@@ -1375,15 +1675,27 @@ empty and each subsystem's own defaults govern the result.
 ## Scheduler and random state in saves
 
 The `Players` `GameTime` binary box is exactly the first 28 bytes of the
-scheduler timing block at global offset `+0x38A37`. The writer copies those 28
+scheduler timing block. The writer copies those 28
 bytes verbatim; the loader requires at least 28 bytes and continues only if that
 amount is available (larger boxes have trailing bytes ignored).
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+The battle-loading state initializes the timing block before the worker starts, but
+the battle-setup initializer overwrites all 28 bytes. No direct code between the read and the
+later scheduler reset modifies the block, so a stale saved clock anchor is
+effective on the first budget pass and can produce a capped five-tick catch-up,
+zero for a negative delta, or zero when pause bit 0 was saved set. The top-level
+summary also writes `globalTick` as integer `Game Time` presentation metadata.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+Bounded census of the complete random-state writer graph and every bank
+account/item/box API invocation site shows no serialization of the Park-Miller
+simulation RNG or the per-thread CRT RNG. The load path reseeds both families (the
+simulation seed from `QueryPerformanceCounter` halves and the CRT seed from
+`time(NULL)`) before any bank
+restoration, so no bit-identical RNG continuation exists even in the same
+process. Consequently, loading a save resumes logical world state and the 28-byte
+timing block, but not bit-identical future random consumption.
 
 ## Multiplayer saves
 
@@ -1457,7 +1769,7 @@ properties:
   second.
 - Missing victory and defeat lists receive executable-defined defaults.
 - Scenario unit reconstruction is a load path, not the strategic AI.
-- Computer-player strategic construction selection, profile `plan`/`weight`/`limit` handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation with outer gate bound 30 and x87 truncation, full manager deadline graph and dispatch gates, direct manager-group writer/classifier for six destinations, eco toggle with eighty percent gate, and placement origin step, radius, selector, and two helper contracts are established; any additional distinct group writer, transport geometry, and exact score metric beyond placeable versus blocked remain bounded negative or inference. [P0-01] [P0-02] [P0-03] [R-P0-04]
+- Computer-player strategic construction selection, profile `plan`/`weight`/`limit` handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation with outer gate bound 30 and x87 truncation, full manager deadline graph and dispatch gates, direct manager-group writer/classifier for six destinations, eco toggle with eighty percent gate, and placement origin step, radius, selector, and two helper contracts are established; the AI score inputs (player economy aggregates and strategic class vectors), hard gates, pressure arithmetic, three-way mix, cumulative weighted reservoir selection, profile plan/weight/limit defaults, and manager-before-refresh-before-ledger update order are established (R-P0-05); the manager task-vector slot order, direct group-writer semantics, classifier branch order, and wave merge strictness are established (R-P0-04); any additional distinct group writer, transport geometry, and exact metal-score metric beyond placeable versus blocked remain bounded negative or inference. [P0-01] [P0-02] [P0-03] [R-P0-04] [R-P0-05]
 - Multiplayer transport is DirectPlay in the retail process.
 - Packet dispatch starts with a one-byte type and uses a fixed handler table.
 - Network input is consumed before the rest of an authoritative tick.
@@ -1509,7 +1821,7 @@ The following work remains before this category is a complete retail design:
   campaign useonly area, `Immunity` is consumed at unit creation, and
   mission-critical/AI-ignore/AI-priority-target/build-priority/initial-group
   are parsed but unread (bounded negative).
-- Computer-player strategic construction selection, profile plan/weight/limit handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation (single-byte init 40 plus 20 versus three-byte triple, outer gate bound 30, x87 constants and truncation), full manager deadline graph (construction plus 90, eco plus 30, waves plus 300 and plus 150, explore plus 30 plus 900, rally plus 30 plus 150, one empty slot), direct manager-group writer/classifier for six destinations, eco toggle with eighty percent gate, and placement radius and helper selection (fixed-point 16.16 origin step, radius plus 160 capped, strict less-than selector opposite inferred, exhaustive patch sorted versus scatter 30 trials with four draws per trial, product limit, no fall-through, yard validator required) are established [P0-01] [P0-02] [P0-03] [R-P0-04]; any additional distinct group writer, transport geometry, and exact metal-score metric beyond placeable versus blocked remain bounded negative or supported inference, and inert mission fields plus definition `ai_limit` remain closed as bounded negative.
+- Computer-player strategic construction selection, profile plan/weight/limit handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation (single-byte init 40 plus 20 versus three-byte triple, outer gate bound 30, x87 constants and truncation), full manager deadline graph (construction plus 90, eco plus 30, waves plus 300 and plus 150, explore plus 30 plus 900, rally plus 30 plus 150, one empty slot), direct manager-group writer/classifier for six destinations, eco toggle with eighty percent gate, and placement radius and helper selection (fixed-point 16.16 origin step, radius plus 160 capped, strict less-than selector opposite inferred, exhaustive patch sorted versus scatter 30 trials with four draws per trial, product limit, no fall-through, yard validator required) are established [P0-01] [P0-02] [P0-03] [R-P0-04]; AI score fields and update order — player economy aggregates, hard gates, pressure and mix arithmetic, cumulative weighted reservoir selection, class-vector compilation, manager-before-refresh-before-ledger ordering, and profile gates — are established [R-P0-05], with the weapon-field TDF identities and the strategic half-capacity state writer as explicit residuals (R-P0-05 §8); the manager task-vector slot order, direct group-writer semantics, classifier branch order, and wave merge strictness are established [R-P0-04]; any additional distinct group writer, transport geometry, and exact metal-score metric beyond placeable versus blocked remain bounded negative or supported inference, and inert mission fields plus definition `ai_limit` remain closed as bounded negative.
 - Specify remaining computer-player expansion, scouting, attack, targeting, retreat, repair, reclaim, transport, naval, and air policies beyond the rooted construction/selection path.
 - Reconcile every lobby slot-state value, host privilege, ready flag, blocked
   state, edit permission, and start condition.
@@ -1538,7 +1850,7 @@ The following work remains before this category is a complete retail design:
 - Complete map, resource, economy, and other hash contents, cadence, payloads,
   and mismatch handling; trace the zrb orchestrator, recover packet `0x27`'s
   trailing-integrity-data producer algorithm, and recover the exact
-  throttle-acknowledgement format in the participant-push receiver.
+  throttle-acknowledgement format in the participant-state receiver.
 - Establish initial simulation-random seed agreement between peers.
 - Recover reconnect, late join, spectator join, and temporary transport-loss
   behavior, or establish their bounded absence. Host-authority migration is

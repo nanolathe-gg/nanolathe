@@ -24,7 +24,7 @@ func (c *contentSet) Close() error {
 }
 
 // missingProductError is the standard diagnostic shape from
-// docs/ORCHESTRATION.md §7: what failed, the logical path, the providers
+// AGENTS.md §Diagnostics: what failed, the logical path, the providers
 // searched, and what was expected.
 type missingProductError struct {
 	what      string

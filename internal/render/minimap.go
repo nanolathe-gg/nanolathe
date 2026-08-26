@@ -1,4 +1,4 @@
-// Package render implements minimap/radar surfaces [03 §3.4][07 §10][minimap §2-§7, §10-§12].
+// Package render implements minimap/radar surfaces [03 §3.4][07 §10][03 §3.6–§3.12].
 package render
 
 import (
@@ -8,7 +8,7 @@ import (
 )
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// W,H are RadarW/H 1..126 [07 §10][03 §3.4]. Pitch is (W+3)&~3 DWORD-aligned [minimap §2][03 §4.1]. Bits are w*h indexed pixels (PALETTE.PAL indices).
+// W,H are RadarW/H 1..126 [07 §10][03 §3.4]. Pitch is (W+3)&~3 DWORD-aligned [03 §3.6][03 §4.1]. Bits are w*h indexed pixels (PALETTE.PAL indices).
 type RadarSurface struct {
 	W, H  int
 	Pitch int    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -16,7 +16,7 @@ type RadarSurface struct {
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 }
 
-// At returns pixel at (x,y) with bounds check [minimap §2].
+// At returns pixel at (x,y) with bounds check [03 §3.6].
 func (r *RadarSurface) At(x, y int) (byte, bool) {
 	if r == nil || r.Bits == nil {
 		return 0, false
@@ -31,7 +31,7 @@ func (r *RadarSurface) At(x, y int) (byte, bool) {
 	return r.Bits[idx], true
 }
 
-// Set writes pixel at (x,y) with bounds check [minimap §2].
+// Set writes pixel at (x,y) with bounds check [03 §3.6].
 func (r *RadarSurface) Set(x, y int, v byte) bool {
 	if r == nil || r.Bits == nil {
 		return false
@@ -47,9 +47,9 @@ func (r *RadarSurface) Set(x, y int, v byte) bool {
 	return true
 }
 
-// LetterboxFill returns minimapLetterboxFill = 0 TODO(question) [minimap §4] letterbox bars inference 0 black pending capture.
+// LetterboxFill returns minimapLetterboxFill = 0 TODO(question) [03 §3.6] letterbox bars inference 0 black pending capture.
 func LetterboxFill() byte {
-	// TODO(question): bars beyond RadarW×RadarH retain heap bytes — inference 0 black pending capture [minimap §4][07 §10].
+	// TODO(question): bars beyond RadarW×RadarH retain heap bytes — inference 0 black pending capture [03 §3.6][07 §10].
 	return 0
 }
 
@@ -62,12 +62,12 @@ func minimapFloorDiv(a, b int64) int64 {
 	return q
 }
 
-// BuildRadarPicture builds PICTURE from terrain or baked bytes [minimap §3.2][03 §3.4][07 §10].
+// BuildRadarPicture builds PICTURE from terrain or baked bytes [03 §3.7][03 §3.4][07 §10].
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Letterbox bars fill 0 black pending capture TODO(question) [minimap §4].
+// Letterbox bars fill 0 black pending capture TODO(question) [03 §3.6].
 // Tables may be nil in tests — fallback to nearest without ALP, still indices.
 func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, baked []byte, bakedW, bakedH int, tables *palette.Tables) *RadarSurface {
 	if m.W <= 0 || m.H <= 0 {
@@ -79,12 +79,12 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 		if h < 0 {
 			h = 0
 		}
-		pitch := (w + 3) &^ 3 // [minimap §2] DWORD-aligned
+		pitch := (w + 3) &^ 3 // [03 §3.6] DWORD-aligned
 		return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: make([]byte, w*h)}
 	}
 	w := int(m.W)
 	h := int(m.H)
-	pitch := (w + 3) &^ 3 // [minimap §2][03 §4.1] pitch (w+3)&~3
+	pitch := (w + 3) &^ 3 // [03 §3.6][03 §4.1] pitch (w+3)&~3
 	bits := make([]byte, w*h)
 	fill := LetterboxFill()
 	for i := range bits {
@@ -93,7 +93,7 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	if baked != nil && len(baked) > 0 && bakedW > 0 && bakedH > 0 {
-		// Exact 2× supersampled baked → ALP blend when tables present [minimap §3.2].
+		// Exact 2× supersampled baked → ALP blend when tables present [03 §3.7].
 		if bakedW == 2*w && bakedH == 2*h && tables != nil {
 			for y := 0; y < h; y++ {
 				for x := 0; x < w; x++ {
@@ -111,7 +111,7 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 		} else {
 			// Generic TRUNC rescale [07 §10] playW/playH analog; use trunc division.
 			for y := 0; y < h; y++ {
-				srcY := y * bakedH / h // TRUNC [minimap §3.2][07 §10]
+				srcY := y * bakedH / h // TRUNC [03 §3.7][07 §10]
 				if srcY < 0 {
 					srcY = 0
 				}
@@ -144,7 +144,7 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 	th := 2 * h
 	temp := make([]byte, tw*th)
 
-	tileW := int(t.CellW / 2) // [03 §2.2] TileW=Wcells/2 [minimap §3.2]
+	tileW := int(t.CellW / 2) // [03 §2.2] TileW=Wcells/2 [03 §3.7]
 	tileH := int(t.CellH / 2)
 	if tileW <= 0 || tileH <= 0 {
 		return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
@@ -154,9 +154,9 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	for ty := 0; ty < th; ty++ {
 		for tx := 0; tx < tw; tx++ {
-			// worldX = PlayRight * x / (2*RadarW)    // trunc IDIV [minimap §3.2]
+			// worldX = PlayRight * x / (2*RadarW)    // trunc IDIV [03 §3.7]
 			// worldZ = PlayBottom * y / (2*RadarH)
-			worldX := int32(int64(playW) * int64(tx) / int64(tw)) // TRUNC IDIV [minimap §3.2]
+			worldX := int32(int64(playW) * int64(tx) / int64(tw)) // TRUNC IDIV [03 §3.7]
 			worldZ := int32(int64(playH) * int64(ty) / int64(th))
 
 			// tileX = floorDiv(worldX,32) etc sign-corrected SAR 5 [03 §2.1]
@@ -165,7 +165,7 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 
 			var pix byte
 			if tileX < 0 || tileX >= int64(tileW) || tileZ < 0 || tileZ >= int64(tileH) {
-				pix = LetterboxFill() // TODO(question) OOB retains heap/inference 0 [minimap §4]
+				pix = LetterboxFill() // TODO(question) OOB retains heap/inference 0 [03 §3.6]
 			} else {
 				idx := int(tileZ)*tileW + int(tileX)
 				if idx < 0 || idx >= len(t.TileIndices) {
@@ -176,7 +176,7 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 					if int(tileIdx) >= tileCount {
 						tileIdx = 0
 					}
-					// intra-tile offset (world &31) with sign-correct floor [minimap §3.2]
+					// intra-tile offset (world &31) with sign-correct floor [03 §3.7]
 					ox := int(int64(worldX) - tileX*32) // 0..31
 					oz := int(int64(worldZ) - tileZ*32)
 					if ox < 0 {
@@ -193,7 +193,7 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 					}
 					// Tile 32×32 indexed pixels row-major [fmt tnt]
 					tile := t.TileSet[tileIdx]
-					pix = tile[oz*32+ox] // [minimap §3.2] pix = *(u8*)(tileBase + (worldZ&31)*32 + (worldX&31))
+					pix = tile[oz*32+ox] // [03 §3.7] pix = *(u8*)(tileBase + (worldZ&31)*32 + (worldX&31))
 				}
 			}
 			temp[ty*tw+tx] = pix // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -216,7 +216,7 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 			}
 		}
 	} else {
-		// Tables may be nil in tests — fallback to nearest without ALP, still indices [minimap §3.2].
+		// Tables may be nil in tests — fallback to nearest without ALP, still indices [03 §3.7].
 		for y := 0; y < h; y++ {
 			for x := 0; x < w; x++ {
 				bits[y*w+x] = temp[(y*2)*tw+(x*2)]
@@ -227,7 +227,7 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 	return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
 }
 
-// BuildRadarPictureFromWorld is a helper that derives playW/H from terrain [minimap §4][03 §2.2].
+// BuildRadarPictureFromWorld is a helper that derives playW/H from terrain [03 §3.6][03 §2.2].
 func BuildRadarPictureFromWorld(t *world.Terrain, m camera.Minimap, baked []byte, bakedW, bakedH int, tables *palette.Tables) *RadarSurface {
 	if t == nil {
 		return BuildRadarPicture(nil, 0, 0, m, baked, bakedW, bakedH, tables)
@@ -244,13 +244,13 @@ func BuildMapped(picture *RadarSurface, wordMask []uint16, byteGrid []uint8, map
 	}
 	w := picture.W
 	h := picture.H
-	pitch := (w + 3) &^ 3 // [minimap §2]
+	pitch := (w + 3) &^ 3 // [03 §3.6]
 	bits := make([]byte, w*h)
-	mask := uint16(1 << (localSlot & 0x1F)) // [minimap §5] bit 1<<(player&0x1F)
+	mask := uint16(1 << (localSlot & 0x1F)) // [03 §3.8] bit 1<<(player&0x1F)
 	for y := 0; y < h; y++ {
 		visY := 0
 		if mapH > 0 && h > 0 {
-			visY = y * mapH / h // TRUNC integer scaled [minimap §5]
+			visY = y * mapH / h // TRUNC integer scaled [03 §3.8]
 		}
 		if visY < 0 {
 			visY = 0
@@ -261,7 +261,7 @@ func BuildMapped(picture *RadarSurface, wordMask []uint16, byteGrid []uint8, map
 		for x := 0; x < w; x++ {
 			visX := 0
 			if mapW > 0 && w > 0 {
-				visX = x * mapW / w // TRUNC [minimap §5]
+				visX = x * mapW / w // TRUNC [03 §3.8]
 			}
 			if visX < 0 {
 				visX = 0
@@ -287,7 +287,7 @@ func BuildMapped(picture *RadarSurface, wordMask []uint16, byteGrid []uint8, map
 				if guiRemap != nil && len(guiRemap) == 256 {
 					out = guiRemap[src] // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 				} else {
-					out = src // no remap when nil [minimap §5]
+					out = src // no remap when nil [03 §3.8]
 				}
 			} else {
 				out = src
@@ -298,18 +298,18 @@ func BuildMapped(picture *RadarSurface, wordMask []uint16, byteGrid []uint8, map
 	return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
 }
 
-// MinimapContact carries world coords already in map pixels (short world>>16) plus owner, flags, def distances [minimap §7].
+// MinimapContact carries world coords already in map pixels (short world>>16) plus owner, flags, def distances [03 §3.9].
 type MinimapContact struct {
-	WorldX, WorldZ, WorldY int32 // map pixels (short narrow already), WorldY high word for shear [minimap §7]
+	WorldX, WorldZ, WorldY int32 // map pixels (short narrow already), WorldY high word for shear [03 §3.9]
 	Owner                  uint8
 	Palette                byte // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	IsCommander            bool // when true draws commander GAF after blip [minimap §7]
-	Stealth                bool // when true gate on blink [minimap §7]
-	NoRadar                bool // TODO(question) alias 0x245&4 [minimap §13]
+	IsCommander            bool // when true draws commander GAF after blip [03 §3.9]
+	Stealth                bool // when true gate on blink [03 §3.9]
+	NoRadar                bool // TODO(question) alias 0x245&4 [03 §3.9]
 	RawDistRadar           int32
 	RawDistSonar           int32
 	RawDistJamR            int32
-	RawDistJamS            int32 // radar distances, 0 means absent [minimap §6][07 §10]
+	RawDistJamS            int32 // radar distances, 0 means absent [03 §3.10][07 §10]
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -328,38 +328,38 @@ func (b *BlinkState) Tick() {
 		return
 	}
 	b.Countdown = 7
-	b.Phase ^= 1 // every 8 frames when countdown wraps [minimap §10]
+	b.Phase ^= 1 // every 8 frames when countdown wraps [03 §3.6]
 }
 
-// IsBlinkOn reports whether stealth contacts should be visible [minimap §7].
+// IsBlinkOn reports whether stealth contacts should be visible [03 §3.9].
 func (b BlinkState) IsBlinkOn() bool {
 	return b.Phase&1 != 0
 }
 
-// RadarProjection projects world coords to radar pixels [minimap §7][07 §10].
+// RadarProjection projects world coords to radar pixels [03 §3.9][07 §10].
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func RadarProjection(worldX, worldZ, worldY int32, playW, playH int32, m camera.Minimap) (rx, ry int32) {
 	if playW == 0 || playH == 0 || m.W == 0 || m.H == 0 {
 		return 0, 0
 	}
-	// TRUNC via IDIV [minimap §7][07 §10]; use int64 intermediate.
+	// TRUNC via IDIV [03 §3.9][07 §10]; use int64 intermediate.
 	rx = int32(int64(worldX) * int64(m.W) / int64(playW))
-	// ry = ((short)(worldZ) - ((short)(worldY)>>1)) * RadarH / PlayBottom // SAR 1 half shear [minimap §7]
+	// ry = ((short)(worldZ) - ((short)(worldY)>>1)) * RadarH / PlayBottom // SAR 1 half shear [03 §3.9]
 	ry = int32((int64(worldZ-(worldY>>1)) * int64(m.H)) / int64(playH))
 	return rx, ry
 }
 
-// RadarRadius computes truncated radar radius rRadar=RadarW*dist/PlayRight etc [minimap §6][07 §10].
+// RadarRadius computes truncated radar radius rRadar=RadarW*dist/PlayRight etc [03 §3.10][07 §10].
 func RadarRadius(dist int32, radarSize int32, playSize int32) int32 {
 	if playSize == 0 || radarSize == 0 || dist == 0 {
 		return 0
 	}
-	return int32(int64(radarSize) * int64(dist) / int64(playSize)) // TRUNC [minimap §6]
+	return int32(int64(radarSize) * int64(dist) / int64(playSize)) // TRUNC [03 §3.10]
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// then circles DD5/DD7/DDA via Bresenham placeholder, then returns FINAL. Keeps layer order painter: later overwrites earlier [minimap §7].
+// then circles DD5/DD7/DDA via Bresenham placeholder, then returns FINAL. Keeps layer order painter: later overwrites earlier [03 §3.9].
 func RebuildFinal(mapped *RadarSurface, m camera.Minimap, playW, playH int32, contacts []MinimapContact, blink BlinkState, _ *palette.Tables) *RadarSurface {
 	if mapped == nil || mapped.Bits == nil || mapped.W <= 0 || mapped.H <= 0 {
 		return nil
@@ -371,11 +371,11 @@ func RebuildFinal(mapped *RadarSurface, m camera.Minimap, playW, playH int32, co
 	copy(final.Bits, mapped.Bits) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 
 	for _, c := range contacts {
-		// NoRadar alias TODO(question) 0x245&4 bounded-negative keep 0x245&4 [minimap §13]
+		// NoRadar alias TODO(question) 0x245&4 bounded-negative keep 0x245&4 [03 §3.9]
 		if c.NoRadar {
 			continue
 		}
-		// Blink gate for stealthed contacts [minimap §7]: only when blink==1.
+		// Blink gate for stealthed contacts [03 §3.9]: only when blink==1.
 		if c.Stealth && !blink.IsBlinkOn() {
 			continue
 		}
@@ -392,13 +392,13 @@ func RebuildFinal(mapped *RadarSurface, m camera.Minimap, playW, playH int32, co
 
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		if c.IsCommander {
-			// painter: later overwrites earlier [minimap §7]; ensure commander visibly on top by second pixel offset and overwrite.
+			// painter: later overwrites earlier [03 §3.9]; ensure commander visibly on top by second pixel offset and overwrite.
 			final.Set(int(rx), int(ry), pal)
 			final.Set(int(rx+1), int(ry), pal)
 		}
 
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// Use truncated radii rRadar=RadarW*dist/PlayRight etc [minimap §6].
+		// Use truncated radii rRadar=RadarW*dist/PlayRight etc [03 §3.10].
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		if c.RawDistRadar != 0 || c.RawDistSonar != 0 {
 			outer := c.RawDistRadar
@@ -407,7 +407,7 @@ func RebuildFinal(mapped *RadarSurface, m camera.Minimap, playW, playH int32, co
 			}
 			r := RadarRadius(outer, m.W, playW)
 			if r > 0 {
-				// DD5 radar outer max(radar,sonar) [minimap §6]
+				// DD5 radar outer max(radar,sonar) [03 §3.10]
 				drawCircle(final, int(rx), int(ry), int(r), 0xA0) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			}
 		}
@@ -429,7 +429,7 @@ func RebuildFinal(mapped *RadarSurface, m camera.Minimap, playW, playH int32, co
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Uses trunc radii and overwrites later (painter order) [minimap §7]; DDA dash TODO(T23).
+// Uses trunc radii and overwrites later (painter order) [03 §3.9]; DDA dash TODO(T23).
 func drawCircle(s *RadarSurface, cx, cy, r int, color byte) {
 	if s == nil || s.Bits == nil || r <= 0 {
 		return

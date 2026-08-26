@@ -70,7 +70,30 @@ index array @ 0x2C0 = `[0, 83, 86]`, script names @ 0x2CC =
 
 ## The virtual machine
 
-**Publication omission:** Historical executable-analysis detail omitted from this public edition.
+- **Stack machine.** Instructions push/pop signed 32-bit values on a
+  per-thread value stack.
+- **Locals.** `alloc-local` (0x10022000) grows the current frame by one
+  slot. Function parameters are locals 0..k-1, allocated in call order
+  before declared `var` locals.
+- **Statics.** Per-unit-instance variables, indexed 0..NumberOfStatics-1,
+  shared across all threads/scripts of that unit, zero at unit creation.
+- **Threads.** `start-script` spawns a new thread at a script entry;
+  `call-script` is a synchronous call on the current thread whose return
+  value is discarded. A thread ends when its outermost function returns.
+- **Signals.** Each thread has a signal mask (`set-signal-mask`). `signal N`
+  kills every thread of the unit whose `mask AND N != 0`, including the
+  signalling thread when its mask matches. `start-script` children inherit
+  their parent's current mask; engine-initiated callback threads start with
+  mask zero. This P6-05 behavior is a community-report hypothesis pending a
+  controlled retail probe. Stock scripts use power-of-two masks so aim/wake
+  loops can be restarted cleanly.
+- **Blocking.** `sleep` (milliseconds) suspends for
+  `trunc(30*milliseconds/1000)` ticks. `wait-for-turn` and `wait-for-move`
+  suspend until the corresponding piece axis is no longer busy. Piece motion
+  started by `move`, `turn`, or `spin` advances over ticks after the thread
+  drain; `move-now` and `turn-now` commit immediately and can wake a later-slot
+  waiter in the same tick. An earlier-slot waiter wakes on the next tick
+  `[04 §4.6]`.
 
 ### Value scaling conventions
 
@@ -116,7 +139,15 @@ the right.
 | `0x1000F000` | emit-sfx | piece | `( sfxtype -- )` | Emit effect (smoke, wake, flame...) from piece; see SFX types below |
 | `0x10071000` | explode | piece | `( flags -- )` | Blow the piece off using explosion flags below |
 
-**Publication omission:** Historical executable-analysis detail omitted from this public edition.
+VM arithmetic for the above `[04 §4.6]`: `move`, `turn`, and `spin` speeds,
+spin acceleration, and stop-spin deceleration are divided by the constant tick
+denominator 30 using signed truncation toward zero with no remainder carry;
+`−100/30` is `−3`. Angles use `0x10000` per circle and are masked to 16 bits.
+Spin uses an out-of-band marker and ramps with an inclusive clamp. An exact
+half-turn tie keeps the script-provided sign. An absolute speed below 30 yields
+a zero per-tick step while remaining dirty for one tick; a wait on that axis
+wakes immediately. `move-now` and `turn-now` clear the busy state and commit
+their value immediately.
 
 ### Flow control, threads, signals
 
@@ -415,7 +446,53 @@ A full decode of every COB in the retail archives (835 scripts across
 
 ## Unknowns and caveats
 
-**Publication omission:** Historical executable-analysis detail omitted from this public edition.
+- **Historical opcode disagreements — now resolved against Cavedog's own
+  tools.** The 1998 command note assigns `call-script` to `0x10063000`; that
+  value is actually `CMD_FAKE_JUMP`, a decompiler-internal marker, never a
+  real bytecode opcode (see "Reserved / unassigned slots" above). Real
+  `call-script` is `0x10062000` (`0x10061000` = start-script), confirmed by
+  both retail bytecode and Scriptor's own `Defs.h`. The note also labels
+  `0x1005A000` "bitwise NOT"; Scriptor's compiler config confirms it is the
+  *logical* NOT (`!`/`NOT`, unary prefix, highest priority) — stock control
+  flow (busy-wait on `!ready`) only works under that reading. `0x10038000`
+  has no confirmed role at all (see below).
+- **Modulo vs. bitwise AND at `0x10035000`:** no longer purely a community
+  guess. Scriptor's own operator table places it, unnamed except for a bare
+  `"?"` placeholder, at the same priority tier as bitwise OR — grouping that
+  favors a bitwise-family op (AND, matching a common cross-engine
+  convention) over modulo, though Cavedog never wired a real keyword to it
+  either way.
+- **`0x10037000`, `0x10038000`, `0x10059000`:** unlike the slots above,
+  these have *zero* footprint in Cavedog's own Scriptor source — no opcode
+  name, no operator-table entry, nothing. Retail data never exercises them
+  either. Their conventional "XOR" / "bitwise NOT" / "logical XOR" labels
+  (this doc included, historically) are unverified conventions borrowed from
+  other engines' opcode tables, not attested by any Cavedog source seen so
+  far.
+- **`attach-unit` / `drop-unit` stack shapes** are now established from
+  retail bytecode (see the instruction table): all 48 retail call sites
+  are uniform, including the `piece = -1` idiom. What the engine does with
+  the third (always-0) value is unknown — nothing in retail data varies it.
+- **Sleep/tick rounding and wait wake — established `[04 §4.6]`:** the sleep
+  timer is `trunc(30*milliseconds/1000)`; 33 ms becomes zero ticks and 34 ms
+  becomes one. A next-tick guard wakes a thread after its timer reaches zero or
+  below; a zero-delta pass does not advance the timer but may wake one already
+  at zero. Move/turn waits normally wake in that same early guard after the
+  busy state clears. Immediate motion can instead wake a later-slot waiter in
+  the same tick. Threads drain in ascending slot order before piece motion is
+  advanced with the same delta; zero delta or no dirty motion skips that
+  advance. Thread scheduling and signal timing otherwise follow `[04 §4.2]`.
+- The header word at 0x28 (first-script-name pointer) has no known runtime
+  purpose.
+- **Embedded comments (community `Cobbler` compiler only).** Scriptor's
+  decompiler special-cases a code word `0x6C697542` ("cobbler crap" in its
+  own source, `#define COBBLER_CRAP`) as a marker for 45 inline words of
+  ASCII text — the community *Cobbler* compiler apparently embedded original
+  BOS comments in the bytecode stream itself so round-tripping through
+  decompile/recompile could restore them. Not a real instruction; any
+  disassembler that walks retail bytecode won't hit it (Cavedog's own
+  Scriptor never emits it), but a from-scratch COB reader could trip over it
+  if ever fed a `Cobbler`-compiled community `.cob`.
 
 ## Sources
 

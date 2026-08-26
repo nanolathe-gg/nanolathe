@@ -26,13 +26,11 @@ const FogTilePixels = 32
 const FogTileWorld = FogTilePixels * 65536 // 32*65536 [03 §2.1][03 §3.3]
 
 // FogDarkPaletteIndex is the palette index for the unexplored solid fill
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// mapping of logical index 0 — black in stock PALETTE.PAL [rr-16 §8]
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// (lo==15): retail uses the logical-to-physical mapping of logical index 0,
+// which is black in stock PALETTE.PAL [03 §3.3].
 // The fogged-but-explored fill (hi==15) is NOT a solid color: retail remaps the
-// existing screen pixels through the 256-byte "GRAY TABLE" LUT via
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// existing screen pixels through the 256-byte gray table, preserving terrain
+// texture [03 §3.3]. See palette.Tables.Gray.
 const FogDarkPaletteIndex byte = 0
 
 // FogKind describes the draw kind for one fog cell operation [03 §3.3].
@@ -40,11 +38,11 @@ type FogKind uint8
 
 const (
 	FogKindNone      FogKind = iota // visible, no fog draw
-	FogKindSolidDark                // lo==15 short-circuit solid black [rr-16 §8]
-	FogKindGrayRemap                // hi==15: remap existing pixels through GRAY TABLE [rr-16 §8]
-	FogKindPatterned                // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	FogKindGAFCh1                   // hi 1..14 Gray family GAF [rr-16 §8]
-	FogKindGAFCh0                   // lo 1..14 Black family GAF [rr-16 §8]
+	FogKindSolidDark                // lo==15 short-circuit solid black [03 §3.3]
+	FogKindGrayRemap                // hi==15: remap existing pixels through GRAY TABLE [03 §3.3]
+	FogKindPatterned                // hi==15 dithered: black checker dots [03 §3.3]
+	FogKindGAFCh1                   // hi 1..14 Gray family GAF [03 §3.3]
+	FogKindGAFCh0                   // lo 1..14 Black family GAF [03 §3.3]
 )
 
 // FogOp is one deterministic fog draw operation for a cell [03 §3.3] (I6).
@@ -96,29 +94,29 @@ func FogTileForWorld(world numeric.Fixed) int32 {
 // Fog cells straddle visibility-tile corners: retail draws cell gx at
 // sx = vpLeft + offX + (gx-startX)*32 with startX=floorDiv(camX-16,32) and
 // offX=(res<16?-16:+16)-res, which algebraically reduces to map pixel
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// gx*32+16 for every camera residue [03 §3.3]. Each
 // cell is therefore centred on the corner where tiles (gx,gy), (gx-1,gy),
 // (gx,gy-1), (gx-1,gy-1) meet — exactly the four tiles the 4-bit nibble
-// accumulates [rr-16 §6.1].
+// accumulates [03 §3.3].
 func FogScreenRect(cam *camera.Camera, gx, gy int32) (x0, y0, x1, y1 int32) {
 	var camX, camZ int32
 	if cam != nil {
 		camX = cam.X
 		camZ = cam.Z
 	}
-	x0 = gx*FogTilePixels + FogTilePixels/2 - camX + camera.OriginX // [03 §2.5][03 §3.3][rr-16 §7]
+	x0 = gx*FogTilePixels + FogTilePixels/2 - camX + camera.OriginX // [03 §2.5][03 §3.3][03 §3.3]
 	y0 = gy*FogTilePixels + FogTilePixels/2 - camZ + camera.OriginY
 	x1 = x0 + FogTilePixels // hard 32 [03 §3.3]
 	y1 = y0 + FogTilePixels
 	return x0, y0, x1, y1
 }
 
-// FogVariant returns the four-way variant selector for a cell [rr-16 §6.2].
+// FogVariant returns the four-way variant selector for a cell [03 §3.3].
 //
 // Retail computes variant = (col + row + camPhase) & 3 over cache-relative
 // col/row with camPhase = floorDiv(camX+16,32)+floorDiv(camZ+16,32)
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// startX = floorDiv(camX-16,32) [rr-16 §6.1], and the two floorDiv arguments
+// [03 §3.3]. The producer's cache origin is `floorDiv(camX-16,32)`, and the two
+// floorDiv arguments
 // differ by exactly 32, so floorDiv(camX+16,32) − floorDiv(camX−16,32) = 1 for
 // every camera position. Substituting col = gx − startX:
 //
@@ -176,9 +174,9 @@ func cellOps(gx, gy int32, c0, c1 uint8, cam *camera.Camera, tables *palette.Tab
 	var ops []FogOp
 	// Channel one handling before channel zero [03 §3.3].
 	if c1 == 15 {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// The DitheredFog option selects black checker pixels instead of a gray
+		// table remap; camera parity is
+		// only the checker phase, never the selector [03 §3.3].
 		kind := FogKindGrayRemap
 		patterned := dither
 		if patterned {
@@ -193,11 +191,11 @@ func cellOps(gx, gy int32, c0, c1 uint8, cam *camera.Camera, tables *palette.Tab
 			R:         dr, G: dg, B: db, A: da,
 		})
 	} else if c1 >= 1 && c1 <= 14 {
-		// GAF frame value-1 from four-way variant family selected by (col+row+camPhase)&3 [rr-16 §6.2].
+		// GAF frame value-1 from four-way variant family selected by (col+row+camPhase)&3 [03 §3.3].
 		variant := FogVariant(gx, gy, cam)
 		frame := int(c1) - 1
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// The same option selects checker-masked rather than plain GAF drawing;
+		// parity is the checker phase [03 §3.3].
 		patterned := dither
 		ops = append(ops, FogOp{
 			GridX: gx, GridY: gy,
@@ -244,15 +242,15 @@ func cellOps(gx, gy int32, c0, c1 uint8, cam *camera.Camera, tables *palette.Tab
 // dither bit for patterned fills [03 §3.3].
 //
 // The enumerated window extends one cell past the viewport intersection on
-// every side (the retail cache border [rr-16 §4.1]) and is NOT clamped to the
+// every side (the retail cache border [03 §3.3]) and is NOT clamped to the
 // map: cells beyond the map are part of the retail cache. Their values are
 // recomputed in a presentation-only working buffer exactly as the retail
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// producer builds its window [03 §3.3]: in-map fogged/unexplored
 // tiles OR 1,2,4,8 into the cell and its NW neighbours (void cells receive the
 // bits that cross the map boundary), then the four border fixups run in
 // retail order — top/left propagate fog into the void row/column adjacent to
 // the map, bottom/right thicken the last in-map row/column toward the edge
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [03 §3.3]. South/east void cells stay zero
 // (retail draws nothing there); the terrain blit leaves out-of-map black.
 func BuildFogOps(cache *visibility.FogCache, cam *camera.Camera, viewW, viewH int32, gridW, gridH int32, tables *palette.Tables, dither bool) []FogOp {
 	if cache == nil {
@@ -282,7 +280,7 @@ func BuildFogOps(cache *visibility.FogCache, cam *camera.Camera, viewW, viewH in
 
 	// Window of fog cells whose 32x32 rects intersect the viewport, plus a
 	// one-cell border ring replicating the retail viewport+border cache
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// [03 §3.3]. FogScreenRect returns retail viewport
 	// coordinates (including OriginX/Y) which the composer rebases to the
 	// shell framebuffer by subtracting OriginX/Y, so a cell's framebuffer
 	// extent is map pixel [gx*32+16, gx*32+48) − camX. Cell g therefore
@@ -292,7 +290,7 @@ func BuildFogOps(cache *visibility.FogCache, cam *camera.Camera, viewW, viewH in
 	// from camX−OriginX shifts the whole window one OriginX west and leaves
 	// the last OriginX-wide framebuffer columns/rows unfogged. The ring
 	// extension is clipped by the composer and engages the border fixups like
-	// the retail cache border [rr-16 §6.1]. Range is NOT clamped to the grid:
+	// the retail cache border [03 §3.3]. Range is NOT clamped to the grid:
 	// cells beyond the map are part of the retail cache and receive the
 	// border fixups (§ below).
 	var startX, endX, startY, endY int32
@@ -319,11 +317,10 @@ func BuildFogOps(cache *visibility.FogCache, cam *camera.Camera, viewW, viewH in
 	//  1. seed: every in-map visibility tile with cache bit1 set (hi: current
 	//     fogged — mode-gated at production so a disabled mode leaves hi zero;
 	//     lo: unexplored) ORs 1,2,4,8 into the cell and its NW neighbours
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	//     [03 §3.3]. Void cells receive the bits that
 	//     leak across the map boundary exactly as the retail cache does.
-	//  2. border fixups in retail order top, bottom, left, right
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	//     (right)]: top/left propagate fog INTO the void row/column adjacent
+	//  2. border fixups in retail order top, bottom, left, right: top and left
+	//     propagate fog into the void row/column adjacent
 	//     to the map (bit4→1, bit8→2 / bit8→4, bit2→1); bottom/right thicken
 	//     the last in-map row/column toward the map edge (bit1→4, bit2→8 /
 	//     bit4→8, bit1→2) on the row/col two from the window end (h-2),
@@ -380,14 +377,14 @@ func BuildFogOps(cache *visibility.FogCache, cam *camera.Camera, viewW, viewH in
 			win[i] |= vB
 		}
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Top edge: void row -1 when the window crosses north of the map.
 	if startY <= -1 {
 		for gx := startX; gx < endX; gx++ {
 			applyFixup(win1, gx, -1, 0x04, 0x01, 0x08, 0x02)
 			applyFixup(win0, gx, -1, 0x04, 0x01, 0x08, 0x02)
 		}
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Bottom edge: row endY-2 when the window crosses south of the map;
 	// no-op on void rows (their bits 1/2 are always zero there).
 	if endY > gridH {
 		row := endY - 2
@@ -396,14 +393,14 @@ func BuildFogOps(cache *visibility.FogCache, cam *camera.Camera, viewW, viewH in
 			applyFixup(win0, gx, row, 0x01, 0x04, 0x02, 0x08)
 		}
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Left edge: void column -1 when the window crosses west of the map.
 	if startX <= -1 {
 		for gy := startY; gy < endY; gy++ {
 			applyFixup(win1, -1, gy, 0x08, 0x04, 0x02, 0x01)
 			applyFixup(win0, -1, gy, 0x08, 0x04, 0x02, 0x01)
 		}
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Right edge: column endX-2 when the window crosses east of the map;
 	// no-op on void columns.
 	if endX > gridW {
 		col := endX - 2

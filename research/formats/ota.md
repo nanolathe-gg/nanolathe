@@ -131,7 +131,15 @@ terrain, so readers can ignore it.
 
 ### Schema keys (`[Schema N]`)
 
-**Publication omission:** Historical executable-analysis detail omitted from this public edition.
+| Key | Meaning |
+| --- | --- |
+| `Type` | `Network 1` … `Network 4` for multiplayer variants; `Easy` / `Medium` / `Hard` for mission difficulty variants |
+| `aiprofile` | AI profile TXT basename in `ai/` |
+| `SurfaceMetal` | Metal extraction concentration on ordinary ground |
+| `MohoMetal` | Nominally the extraction concentration for moho mines. Authored by all 275 retail maps and **inert**: only `SurfaceMetal` scales extraction, and a moho mine's advantage is its own larger `ExtractsMetal`. |
+| `HumanMetal`, `HumanEnergy` | Player starting resources |
+| `ComputerMetal`, `ComputerEnergy` | AI starting resources |
+| `MeteorWeapon`, `MeteorRadius`, `MeteorDensity`, `MeteorDuration`, `MeteorInterval` | Meteor storms (weapon name from [tdf.md](tdf.md); defaults in `gamedata/METEOR.TDF`). Meteors are disabled when `MeteorWeapon` is empty, or when the radius, density, duration, or interval is zero. |
 
 ### Mission end conditions
 
@@ -278,9 +286,20 @@ Example (retail ARM mission): a unit waits 900 seconds, then patrols:
 
 ## Which keys the engine reads
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+A whole-string census of the retail executable finds every key in the tables
+above except
+`SolarStrength`, `MohoMetal`, `SCHEMACOUNT` and `OffMapUnit`, which have no
+string in the image and therefore cannot be read.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+Schema sections are found by formatting `Schema %i` and probing upward. The
+difficulty and network vocabulary is the literal set `Easy`,
+`Medium`, `Hard`, `Network 1`, `Network 2`, `Network 3`, `Network 4`; the
+placement blocks are labelled `MISSIONUNIT DATA`, `MISSIONFEATURE DATA` and
+`MISSIONRULE DATA`, and the raw map payload sections `Raw Plot Data` and
+`Raw Feature Data`. The loader's own diagnostics name its failure modes:
+`No GlobalHeader block in mission file!`, `No suitable schema type in mission
+file!`, `Old TED format no longer supported!`, and `Hey, joker!  Mission file
+%s is corrupt (no header found).`
 
 ## Unknowns and caveats
 

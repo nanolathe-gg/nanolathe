@@ -37,7 +37,7 @@ type FeatureDef struct {
 	Metal  int32 // metal integer default 0 [02 "Feature record"]
 	Energy int32 // energy integer default 0 [02 "Feature record"]
 	Damage int32 // damage integer default 0 [02 "Feature record"]
-	// Fire / regrowth [02 "Feature record"] [05 "Feature reproduction"].
+	// Fire / regrowth [02 "Feature record"] [03 §5.1.2].
 	SpreadChance    int32  // spreadchance integer default 0 [02 "Feature record"]
 	Reproduce       int32  // reproduce integer default 0 [02 "Feature record"] [GAP T14]
 	ReproduceArea   int32  // reproducearea integer default 0 [02 "Feature record"] [GAP T14]

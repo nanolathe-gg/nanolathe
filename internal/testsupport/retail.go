@@ -9,7 +9,7 @@ import (
 
 // RetailRoot returns the retail install root, skipping the test when the
 // assets are absent. Every asset-dependent test guards itself this way so the
-// suite passes on a machine with no game installed (docs/ORCHESTRATION.md §6).
+// suite passes on a machine with no game installed (AGENTS.md §Test policy).
 // Retail assets are opt-in via $NANOLATHE_RETAIL_ASSETS or the legacy
 // $NANOLATHE_TA_ROOT (either may be set, the former takes precedence).
 func RetailRoot(t *testing.T) string {

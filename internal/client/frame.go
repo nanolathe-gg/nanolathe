@@ -67,7 +67,7 @@ func projectileVisible(v snapshot.VisibilityView) func(snapshot.ProjectileView) 
 	}
 }
 
-// fogUnexploredUnit reports whether a unit's anchor visibility tile is never-explored [03 §3.3][rr-16].
+// fogUnexploredUnit reports whether a unit's anchor visibility tile is never-explored [03 §3.3][03 §3.3].
 // It checks Fog Ch0 ==15 (solid dark, all four neighbours fogged) via the immutable FogView, which is the presentation equivalent of the plot flag 0x04 [03 §3.3]. Invalid or missing fog is treated as explored so fixtures remain visible [I9].
 func fogUnexploredUnit(fog snapshot.FogView, u snapshot.UnitView) bool {
 	if !fog.Valid || fog.W <= 0 || fog.H <= 0 || len(fog.Ch0) != int(fog.W*fog.H) {
@@ -82,7 +82,7 @@ func fogUnexploredUnit(fog snapshot.FogView, u snapshot.UnitView) bool {
 	return fog.Ch0[idx] == 15
 }
 
-// fogUnexploredFeature reports whether a feature's anchor cell maps to an unexplored fog tile [03 §3.3][rr-16].
+// fogUnexploredFeature reports whether a feature's anchor cell maps to an unexplored fog tile [03 §3.3][03 §3.3].
 // Feature CX/CZ are cell coordinates; fog is per visibility tile (2x2 cells) so tile = cell>>1 [03 §2.1][03 §3.1]. Invalid fog is treated as explored [I9].
 func fogUnexploredFeature(fog snapshot.FogView, f snapshot.FeatureView) bool {
 	if !fog.Valid || fog.W <= 0 || fog.H <= 0 || len(fog.Ch0) != int(fog.W*fog.H) {
@@ -269,7 +269,7 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 			// Single painter pass: merge units+features Y-sorted [03 §1] fixing trees-over-tanks.
 			// Retail Y-bucket is ((zPix - camZ + bias)>>4)+16 with stable append [rr-10];
 			// we sort by screen-Y then stable handle tie [03 §1][I1] via sort.SliceStable (presentation-only).
-			// Visibility admission: binary hard edge skip anchor-cell-unexplored via Fog Ch0==15 [03 §3.3][rr-16],
+			// Visibility admission: binary hard edge skip anchor-cell-unexplored via Fog Ch0==15 [03 §3.3][03 §3.3],
 			// enemies in partial fog suppressed via SnapshotVisible predicate [03 §3.2]; own units always drawn [03 §3.2] C8 step1.
 			// MarkUnexplored/ClearUnexplored helpers in visibility/fog.go own the 0x04 flag [03 §3.3] — presentation uses Ch0 equivalence, destroyed features absent from snapshot stop painting once Ch0 flips.
 			prevBySlot := make(map[uint16]int, len(prev.Units))
@@ -398,7 +398,7 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 							continue
 						}
 					}
-					// Sprite GAF path [03 §5.1] [research/features/feature_rendering.md §2].
+					// Sprite GAF path [03 §5.1.1].
 					normalFrame := c.featureFrameFor(cvf, false)
 					shadowFrame := c.featureFrameFor(cvf, true)
 					if cvf.Geothermal && normalFrame != nil && normalFrame.Width == 1 && normalFrame.Height == 1 && (shadowFrame == nil || (shadowFrame.Width == 1 && shadowFrame.Height == 1)) {
@@ -489,7 +489,7 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 			}
 		}
 		// Fog presentation [03 §3.3] C13 — reads snapshot fog cache copied from visibility.Service.Fog() each tick (I6).
-		// The cache is presentation-only and never writes sim state. Fog uses hard 32-pixel tiles [03 §3.3][rr-16].
+		// The cache is presentation-only and never writes sim state. Fog uses hard 32-pixel tiles [03 §3.3][03 §3.3].
 		if ok && cur != nil && cur.Fog.Valid && c.cam != nil {
 			fc := visibility.NewFogCacheFromChannels(cur.Fog.W, cur.Fog.H, cur.Fog.Ch0, cur.Fog.Ch1)
 			c.ensureFogGAF()
@@ -521,7 +521,7 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 				}
 				switch op.Kind {
 				case render.FogKindSolidDark:
-					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					// lo==15 short-circuit: fill the clipped cell with black [03 §3.3].
 					for py := y0; py < y1; py++ {
 						base := int(py)*w + int(x0)
 						for px := x0; px < x1; px++ {
@@ -530,9 +530,8 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					}
 				case render.FogKindGrayRemap:
 					// hi==15 fogged-but-explored: remap existing pixels through the
-					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-					// — terrain texture is preserved and desaturated [rr-16 §8;
-					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					// gray-table LUT; terrain texture is preserved and desaturated
+					// [03 §3.3][03 §4.3.3]. Retail applies the LUT to physical
 					// screen indices; c.indexed holds logical indices and Logical is
 					// identity until animated, so the direct application matches.
 					if c.pal != nil {
@@ -545,10 +544,10 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 						}
 					}
 				case render.FogKindPatterned:
-					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					// hi==15 dithered checker uses parity (camX+camZ)&1 [03 §3.3].
 					// Retail writes literal palette index 0 (black) at checker
 					// positions (x+y+parity)&1==1 and leaves the rest untouched
-					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					// [R-RR16-A §2].
 					parity := int32(0)
 					if c.cam != nil {
 						parity = (c.cam.X + c.cam.Z) & 1
@@ -563,33 +562,35 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 						}
 					}
 				case render.FogKindGAFCh1:
-					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					// hi 1..14: Gray family GAF, plain or patterned [03 §3.3].
 					if c.fogGAF != nil && op.Variant >= 0 && op.Variant < 4 && op.Frame >= 0 {
 						entry := c.fogGray[op.Variant]
 						if entry != nil && op.Frame < len(entry.Frames) && entry.Frames[op.Frame].Frame != nil {
 							frame := entry.Frames[op.Frame].Frame
 							if op.Patterned {
-								c.blitFogGAFPatterned(frame, int(x0), int(y0))
+								c.blitFogGAF(frame, int(x0), int(y0), fogBlitPatterned)
 							} else {
-								c.blitFogGAF(frame, int(x0), int(y0))
+								// Plain Gray family is a masked GRAY TABLE remap of the
+								// destination, not a copy of the source art [R-RR16-A §1].
+								c.blitFogGAF(frame, int(x0), int(y0), fogBlitGray)
 							}
 							continue
 						}
 					}
 					// Missing GAF entry/frame: retail skips the blit and the cell
-					// keeps the underlying tile [rr-16 §9.3 SUPPORTED-INFERENCE].
+					// keeps the underlying tile [03 §3.3].
 					continue
 				case render.FogKindGAFCh0:
-					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					// lo 1..14: Black family is always plain [03 §3.3].
 					if c.fogGAF != nil && op.Variant >= 0 && op.Variant < 4 && op.Frame >= 0 {
 						entry := c.fogBlack[op.Variant]
 						if entry != nil && op.Frame < len(entry.Frames) && entry.Frames[op.Frame].Frame != nil {
 							frame := entry.Frames[op.Frame].Frame
-							c.blitFogGAF(frame, int(x0), int(y0))
+							c.blitFogGAF(frame, int(x0), int(y0), fogBlitBlack)
 							continue
 						}
 					}
-					// Missing GAF: skip, cell keeps underlying tile [rr-16 §9.3].
+					// Missing GAF: skip, cell keeps underlying tile [03 §3.3].
 					continue
 				default:
 					// Visible cells produce no ops; nothing to draw.

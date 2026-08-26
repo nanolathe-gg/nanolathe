@@ -859,8 +859,11 @@ func PublishAllUnits(s *Session, spy *VisibilityLoadSpy) {
 		var radius int32 = 32
 		var height uint8
 		if s.World != nil {
-			cx = world.WorldToCell(u.X) / 2
-			cz = world.WorldToCell(u.Z) / 2
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// loaded session publishes the footprints it would have published
+			// while running.
+			height = heightByteAt(u, seaLevelFor(s))
+			cx, cz = observerTile(u, height)
 		}
 		if u.Def != nil && u.Def.SightDistance > 0 {
 			radius = int32(u.Def.SightDistance)

@@ -42,7 +42,7 @@ type Cursors struct {
 	Hidden bool
 }
 
-// cursorProviders returns provider identities for diagnostics [ORCHESTRATION §7].
+// cursorProviders returns provider identities for diagnostics [AGENTS.md §Diagnostics].
 func cursorProviders(fs vfs.FSOps) string {
 	if fs == nil {
 		return ""
@@ -65,7 +65,7 @@ func cursorProviders(fs vfs.FSOps) string {
 // LoadCursors opens the cursor GAF root and resolves the handle array [07 §8].
 // A missing cursor GAF is degradable: the caller retains the OS cursor and
 // the frame loop nil-guards every cursor call [07 §8]. The error includes a
-// provider-aware diagnostic (logical path + providers searched) [ORCHESTRATION §7].
+// provider-aware diagnostic (logical path + providers searched) [AGENTS.md §Diagnostics].
 // A missing entry leaves its slot nil; the caller falls back to cursornormal.
 func LoadCursors(fs vfs.FSOps) (*Cursors, error) {
 	gaf, err := formats.LoadGAFFile(fs, CursorGAFPath)
