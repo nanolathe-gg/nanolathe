@@ -344,7 +344,10 @@ type CollisionState struct {
 	OldAnchor Cell // old footprint anchor for clamp reference [04 §8.2] C24 centre±0x7FFFF
 
 	Blocked bool // mover blocked bit 2 at mover+? [04 §8.2] C23 C24 — rewritten by validator result
-	Dirty   bool // transform dirty [04 §8.2] C23 C24 — marks transform/visibility dirty
+	// BlockerID is the dynamic occupant that rejected the last proposal, or -1
+	// for static/terrain rejection. It never causes pushing or displacement.
+	BlockerID int
+	Dirty     bool // transform dirty [04 §8.2] C23 C24 — marks transform/visibility dirty
 
 	// halfBiasX/Z are the packed half-cell biases for anchor quantize [04 §8.2] C23.
 	// If zero, HalfBias() derives from footprint as FootPrint*cell/2.

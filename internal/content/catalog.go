@@ -29,16 +29,19 @@ type WeaponDuplicate struct {
 // Definitions carry DefinitionHeader with canonical key/provenance/hash.
 // The catalog is read-only after Compile; sim packages take *Catalog and never mutate.
 type Catalog struct {
-	Units    map[string]*UnitDef       // key = CanonicalKey(unitname) [02 §5]
-	Weapons  map[string]*WeaponDef     // key = CanonicalKey(section name) [02 §5]
-	Features map[string]*FeatureDef    // key = CanonicalKey(feature name) [02 §5]
-	Movement map[string]*MovementClass // key = CanonicalKey(class Name) [02 "Movement class record"]
-	Sides    []*SideDef                // index = SIDE ordinal [02 §6] C8
-	Sounds   map[string]*SoundCategory // key = CanonicalKey(category name) [02 "Sound category record"]
-	Maps     map[string]*MapHeader     // key = CanonicalKey(basename) [02 "Map files"]
-	LOS      *LOSTables                // compiled gamedata/los.tdf [02 §6] C15 [PLAN_02]
-	Sight    *SightShapes              // compiled anims/vismask*.gaf sight shapes [03 §3.2]
-	Meteor   *MeteorDefaults           // compiled gamedata/meteor.tdf [02 §6] C15 [PLAN_02]
+	Units map[string]*UnitDef // key = CanonicalKey(unitname) [02 §5]
+	// Categories is the sorted case-insensitive unit-membership registry
+	// compiled from all UnitDef category and target fields [R-P0-03].
+	Categories *CategoryRegistry
+	Weapons    map[string]*WeaponDef     // key = CanonicalKey(section name) [02 §5]
+	Features   map[string]*FeatureDef    // key = CanonicalKey(feature name) [02 §5]
+	Movement   map[string]*MovementClass // key = CanonicalKey(class Name) [02 "Movement class record"]
+	Sides      []*SideDef                // index = SIDE ordinal [02 §6] C8
+	Sounds     map[string]*SoundCategory // key = CanonicalKey(category name) [02 "Sound category record"]
+	Maps       map[string]*MapHeader     // key = CanonicalKey(basename) [02 "Map files"]
+	LOS        *LOSTables                // compiled gamedata/los.tdf [02 §6] C15 [PLAN_02]
+	Sight      *SightShapes              // compiled anims/vismask*.gaf sight shapes [03 §3.2]
+	Meteor     *MeteorDefaults           // compiled gamedata/meteor.tdf [02 §6] C15 [PLAN_02]
 
 	// AIProfiles holds ai/*.txt profiles (10 in retail, incl default.txt) [08 "Computer-controlled players"].
 	// Not in the minimal PLAN_02 Public API snippet but discovery is part of WU-02-6 and consumed by phase 11.
@@ -116,6 +119,10 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 		return nil, err
 	}
 	report.Report(FamilyUnits, 100)
+	categories, err := CompileCategories(units)
+	if err != nil {
+		return nil, err
+	}
 	features, err := CompileFeatures(fs)
 	if err != nil {
 		// Feature successor missing is fatal verbatim [GAP T14] C9.
@@ -210,6 +217,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 
 	c := &Catalog{
 		Units:        units,
+		Categories:   categories,
 		Weapons:      weapons,
 		Features:     features,
 		Movement:     movement,
@@ -422,6 +430,29 @@ func (c *Catalog) UnitDefByIndex(idx uint32) (*UnitDef, bool) {
 	return u, ok
 }
 
+// Category returns a value copy of a named registry membership set.
+func (c *Catalog) Category(name string) (CategoryMask, bool) {
+	if c == nil || c.Categories == nil {
+		return CategoryMask{}, false
+	}
+	return c.Categories.Lookup(name)
+}
+
+// ResolveCategoryMask distinguishes direct unit-name targets from category
+// tokens. A direct unit name wins and produces one ID bit; otherwise the whole
+// category membership set is returned [06 §3.1] [R-P0-03].
+func (c *Catalog) ResolveCategoryMask(name string) (CategoryMask, bool) {
+	if c == nil {
+		return CategoryMask{}, false
+	}
+	if u, ok := c.Unit(name); ok && u != nil {
+		var m CategoryMask
+		_ = m.set(u.UnitDefID)
+		return m, true
+	}
+	return c.Category(name)
+}
+
 // SortedUnitKeys returns the unit catalog keys sorted ascending (I1) [02 §5].
 // The slice is a copy; mutations do not affect the catalog.
 func (c *Catalog) SortedUnitKeys() []string {
@@ -478,6 +509,9 @@ func (c *Catalog) Clone() *Catalog {
 	out := &Catalog{
 		Manifest: c.Manifest,
 		Hash:     c.Hash,
+	}
+	if c.Categories != nil {
+		out.Categories = cloneCategoryRegistry(c.Categories)
 	}
 	// Weapons deep copy
 	if c.Weapons != nil {
@@ -762,6 +796,22 @@ func cloneUnit(u *UnitDef) *UnitDef {
 	out.ExplodeAsDef = nil
 	out.SelfDestructAsDef = nil
 	return &out
+}
+
+func cloneCategoryRegistry(r *CategoryRegistry) *CategoryRegistry {
+	if r == nil {
+		return nil
+	}
+	out := &CategoryRegistry{
+		entries:  make([]CategoryEntry, len(r.entries)),
+		byName:   make(map[string]int, len(r.byName)),
+		sentinel: r.sentinel,
+	}
+	copy(out.entries, r.entries)
+	for k, v := range r.byName {
+		out.byName[k] = v
+	}
+	return out
 }
 
 // cloneWeapon deep copies a WeaponDef.

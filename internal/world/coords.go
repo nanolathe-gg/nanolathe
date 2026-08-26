@@ -65,6 +65,21 @@ func TileToWorld(t int32) numeric.Fixed {
 // centered on a cell and the rounding term is absorbed by the half-extent, so
 // they behave like a plain floor.
 func PlacementAnchor(px, pz numeric.Fixed, footX, footZ int32) (cellX, cellZ int32) {
+	extent, err := NewFootprintExtent(footX, footZ)
+	if err != nil {
+		return legacyPlacementAnchor(px, pz, footX, footZ)
+	}
+	anchor, err := SnapFootprintAnchor(px, pz, extent)
+	if err != nil {
+		return legacyPlacementAnchor(px, pz, footX, footZ)
+	}
+	return anchor.cellX, anchor.cellZ
+}
+
+// legacyPlacementAnchor preserves the original no-error helper's behavior for
+// callers that have not migrated to checked typed placement APIs. New code
+// should use SnapFootprintAnchor and handle its explicit errors.
+func legacyPlacementAnchor(px, pz numeric.Fixed, footX, footZ int32) (cellX, cellZ int32) {
 	half := func(p numeric.Fixed, foot int32) int32 {
 		v := int64(p) - int64(foot)*(worldUnitsPerCell/2) + worldUnitsPerCell/2
 		return int32(floorDiv(v, worldUnitsPerCell))
@@ -78,6 +93,20 @@ func PlacementAnchor(px, pz numeric.Fixed, footX, footZ int32) (cellX, cellZ int
 //
 //	center = ((foot + 2*cell) << 19)
 func PlacementCenter(cellX, cellZ, footX, footZ int32) (x, z numeric.Fixed) {
+	extent, err := NewFootprintExtent(footX, footZ)
+	if err != nil {
+		return legacyPlacementCenter(cellX, cellZ, footX, footZ)
+	}
+	center, err := CenterForFootprint(NewFootprintAnchor(cellX, cellZ), extent)
+	if err != nil {
+		return legacyPlacementCenter(cellX, cellZ, footX, footZ)
+	}
+	return center.x, center.z
+}
+
+// legacyPlacementCenter preserves the original no-error helper's behavior;
+// checked callers should use CenterForFootprint.
+func legacyPlacementCenter(cellX, cellZ, footX, footZ int32) (x, z numeric.Fixed) {
 	c := func(cell, foot int32) numeric.Fixed {
 		return numeric.Fixed(int64(foot+2*cell) * (worldUnitsPerCell / 2))
 	}

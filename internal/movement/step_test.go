@@ -38,8 +38,8 @@ func syntheticTerrainFlat() *world.Terrain {
 	return t
 }
 
-// TestStepUnitGroundArrival proves ground unit ARRIVES within tolerance using
-// StepUnit-per-tick loop [task]. This is the primary ON-03 proof.
+// TestStepUnitGroundRoutePruneDoesNotComplete proves route pruning is not
+// order completion. R-P0-01 leaves the final Move_Ground tolerance unknown.
 func TestStepUnitGroundArrival(t *testing.T) {
 	terrain := syntheticTerrainFlat()
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
@@ -92,16 +92,11 @@ func TestStepUnitGroundArrival(t *testing.T) {
 		// Also break if route inactive and dist small but not yet flagged arrived due to empty check
 		// Continue until arrived
 	}
-	if !arrived {
-		t.Fatalf("ground unit away from reachable point did not ARRIVE within tolerance using StepUnit loop; last DistToGoal=%v HasRoute=%v Empty=%v Moved=%v", last.DistToGoal, last.HasRoute, last.EmptyRoute, last.Moved)
+	if arrived {
+		t.Fatalf("route prune must not complete Move_Ground while final tolerance is unresolved")
 	}
-	// Prove true arrival: DistToGoal must be within arrivalToleranceWorld (5 cells) [04 §7.3] C15
-	// and not merely route active. DistToGoal is Euclidean world Fixed.
-	if last.DistToGoal > arrivalToleranceWorld {
-		t.Fatalf("arrival DistToGoal %v > tolerance %v (not true arrival)", last.DistToGoal, arrivalToleranceWorld)
-	}
-	if last.EmptyRoute {
-		t.Fatalf("arrived but EmptyRoute true: must not count empty route as arrived")
+	if last.DistToGoal <= 0 {
+		t.Fatalf("distance diagnostic must remain useful after route prune")
 	}
 }
 

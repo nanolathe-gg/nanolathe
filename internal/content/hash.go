@@ -36,6 +36,22 @@ func catalogHash(c *Catalog) string {
 			fmt.Fprintf(h, "unit %s %s\n", k, u.Hash)
 		}
 	}
+	// Categories — sorted registry names and fixed-width membership values
+	// [R-P0-03]. The private sentinel is included without inventing a label.
+	if c.Categories != nil {
+		for _, e := range c.Categories.entries {
+			fmt.Fprintf(h, "category %s", e.Name)
+			for _, word := range e.Membership.Words {
+				fmt.Fprintf(h, " %08x", word)
+			}
+			fmt.Fprintln(h)
+		}
+		fmt.Fprint(h, "category-sentinel")
+		for _, word := range c.Categories.sentinel.Words {
+			fmt.Fprintf(h, " %08x", word)
+		}
+		fmt.Fprintln(h)
+	}
 	// Weapons — sorted [02 §5] C12. Weapon ID selects record [02 "Weapon record"] C2 but catalog key is section name.
 	if len(c.Weapons) > 0 {
 		keys := make([]string, 0, len(c.Weapons))
@@ -168,8 +184,12 @@ func catalogHash(c *Catalog) string {
 	}
 
 	// Terminator: include counts so empty vs missing is distinct but stable.
-	fmt.Fprintf(h, "counts u=%d w=%d f=%d m=%d sides=%d s=%d maps=%d ai=%d aliases=%d menus=%d models=%d los=%d meteor=%d\n",
-		len(c.Units), len(c.Weapons), len(c.Features), len(c.Movement), len(c.Sides), len(c.Sounds), len(c.Maps), len(c.AIProfiles), len(c.Aliases), len(c.BuildMenus), len(c.sortedModels), lenTables(c.LOS), hasMeteor(c.Meteor))
+	categoryCount := 0
+	if c.Categories != nil {
+		categoryCount = len(c.Categories.entries)
+	}
+	fmt.Fprintf(h, "counts u=%d w=%d f=%d m=%d sides=%d s=%d maps=%d ai=%d aliases=%d menus=%d models=%d categories=%d los=%d meteor=%d\n",
+		len(c.Units), len(c.Weapons), len(c.Features), len(c.Movement), len(c.Sides), len(c.Sounds), len(c.Maps), len(c.AIProfiles), len(c.Aliases), len(c.BuildMenus), len(c.sortedModels), categoryCount, lenTables(c.LOS), hasMeteor(c.Meteor))
 
 	sum := h.Sum(nil)
 	return hex.EncodeToString(sum)

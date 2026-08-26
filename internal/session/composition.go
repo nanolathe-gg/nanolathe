@@ -15,6 +15,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -356,6 +357,9 @@ func createAndBindServices(s *Session) error {
 	}
 	if s.Snapshot == nil {
 		s.Snapshot = &snapshot.Buffer{}
+	}
+	if s.Presentation == nil {
+		s.Presentation = presentation.NewCollector(presentation.Limits{})
 	}
 	if s.Mission == nil {
 		return fmt.Errorf("session: missing Mission [08]")

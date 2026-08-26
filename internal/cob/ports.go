@@ -429,6 +429,14 @@ func StartWithImmediateBarrier(vm *VM, scriptName string, args []int32) bool {
 	return true
 }
 
+// StartModeI starts one lifecycle callback in immediate mode I. The callback
+// is allocated once, then the VM-wide delta-zero drain visits all eight thread
+// slots and performs one piece pass [04 §4.2][04 §5.1]. This is the binding
+// surface used for Create; deferred engine callbacks use StartByName instead.
+func StartModeI(vm *VM, scriptName string, args []int32) bool {
+	return StartWithImmediateBarrier(vm, scriptName, args)
+}
+
 // ---------------------------------------------------------------------------
 // C18 — MoveRate tiers [GAP T15] [04 §5.2]
 // ---------------------------------------------------------------------------

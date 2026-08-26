@@ -36,6 +36,33 @@ func setHeight(t *world.Terrain, cx, cz int32, h uint8) {
 	c.SetHeight(h)
 	c.SetMinHeight(h)
 	c.SetMaxHeight(h)
+	// Rebuild the derived 2x2 floor ranges consumed by the footprint
+	// classifier. Synthetic tests model each height byte as a corner sample.
+	for z := int32(0); z < t.CellH; z++ {
+		for x := int32(0); x < t.CellW; x++ {
+			cell := t.PlotAt(x, z)
+			if cell == nil {
+				continue
+			}
+			lo, hi := uint8(255), uint8(0)
+			for dz := int32(0); dz <= 1; dz++ {
+				for dx := int32(0); dx <= 1; dx++ {
+					corner := t.PlotAt(x+dx, z+dz)
+					if corner == nil {
+						continue
+					}
+					if corner.Height() < lo {
+						lo = corner.Height()
+					}
+					if corner.Height() > hi {
+						hi = corner.Height()
+					}
+				}
+			}
+			cell.SetMinHeight(lo)
+			cell.SetMaxHeight(hi)
+		}
+	}
 }
 
 func TestProfileFromMovementClass(t *testing.T) {
@@ -139,6 +166,7 @@ func TestShipBandAcceptance(t *testing.T) {
 	}
 	// Deep again pass via CanTraverse
 	setHeight(ter, 1, 1, 10)
+	setHeight(ter, 2, 2, 10) // restore the adjacent derived corner range
 	if !ship.CanTraverse(ter, 1, 1, MediumShip) {
 		t.Fatalf("deep water CanTraverse ship should be true")
 	}

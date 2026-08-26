@@ -5,10 +5,255 @@
 package world
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
+
+const (
+	placementHalfCell = int64(worldUnitsPerCell / 2)
+	placementMinInt32 = -1 << 31
+	placementMaxInt32 = 1<<31 - 1
+)
+
+// ErrInvalidFootprint reports a zero or negative footprint extent. A footprint
+// is an authored count of covered cells, so there is no meaningful rectangle
+// for a non-positive extent.
+var ErrInvalidFootprint = errors.New("world: footprint extents must be positive")
+
+// ErrPlacementOverflow reports an input which cannot be represented by the
+// cell or world-coordinate types without wrapping.
+var ErrPlacementOverflow = errors.New("world: placement arithmetic overflow")
+
+// FootprintExtent is an immutable width/depth pair in map cells. Keeping the
+// pair typed prevents a width/depth rectangle from being confused with a
+// world-space point. Construct it with NewFootprintExtent so all public
+// placement conversions reject invalid dimensions explicitly.
+type FootprintExtent struct {
+	width int32
+	depth int32
+}
+
+// NewFootprintExtent validates and constructs an authored footprint extent.
+func NewFootprintExtent(width, depth int32) (FootprintExtent, error) {
+	if width <= 0 || depth <= 0 {
+		return FootprintExtent{}, fmt.Errorf("%w: %dx%d", ErrInvalidFootprint, width, depth)
+	}
+	return FootprintExtent{width: width, depth: depth}, nil
+}
+
+func (e FootprintExtent) Width() int32 { return e.width }
+func (e FootprintExtent) Depth() int32 { return e.depth }
+
+// FootprintAnchor is the snapped north-west origin of a footprint rectangle,
+// expressed in map-cell coordinates. It is deliberately distinct from a
+// ModelWorldPosition: retail validates occupancy at this origin but positions
+// a mobile model at the footprint midpoint (and a factory product at its
+// authored exit transform).
+type FootprintAnchor struct {
+	cellX int32
+	cellZ int32
+}
+
+// NewFootprintAnchor constructs an anchor from cell coordinates.
+func NewFootprintAnchor(cellX, cellZ int32) FootprintAnchor {
+	return FootprintAnchor{cellX: cellX, cellZ: cellZ}
+}
+
+func (a FootprintAnchor) CellX() int32 { return a.cellX }
+func (a FootprintAnchor) CellZ() int32 { return a.cellZ }
+func (a FootprintAnchor) Cell() Cell   { return Cell{X: a.cellX, Z: a.cellZ} }
+
+// FootprintRect is a validated half-open rectangle [MinX,MaxX) ×
+// [MinZ,MaxZ) in map cells. The endpoint check prevents anchor+extent from
+// silently wrapping at int32 boundaries.
+type FootprintRect struct {
+	anchor FootprintAnchor
+	extent FootprintExtent
+	maxX   int32
+	maxZ   int32
+}
+
+// NewFootprintRect constructs the half-open validation rectangle for anchor
+// and extent.
+func NewFootprintRect(anchor FootprintAnchor, extent FootprintExtent) (FootprintRect, error) {
+	if extent.width <= 0 || extent.depth <= 0 {
+		return FootprintRect{}, fmt.Errorf("%w: %dx%d", ErrInvalidFootprint, extent.width, extent.depth)
+	}
+	maxX := int64(anchor.cellX) + int64(extent.width)
+	maxZ := int64(anchor.cellZ) + int64(extent.depth)
+	if maxX < placementMinInt32 || maxX > placementMaxInt32 || maxZ < placementMinInt32 || maxZ > placementMaxInt32 {
+		return FootprintRect{}, fmt.Errorf("%w: rectangle origin (%d,%d), extent (%d,%d)", ErrPlacementOverflow, anchor.cellX, anchor.cellZ, extent.width, extent.depth)
+	}
+	return FootprintRect{anchor: anchor, extent: extent, maxX: int32(maxX), maxZ: int32(maxZ)}, nil
+}
+
+func (r FootprintRect) Anchor() FootprintAnchor { return r.anchor }
+func (r FootprintRect) Extent() FootprintExtent { return r.extent }
+func (r FootprintRect) MinX() int32             { return r.anchor.cellX }
+func (r FootprintRect) MinZ() int32             { return r.anchor.cellZ }
+func (r FootprintRect) MaxX() int32             { return r.maxX }
+func (r FootprintRect) MaxZ() int32             { return r.maxZ }
+func (r FootprintRect) Width() int32            { return r.extent.width }
+func (r FootprintRect) Depth() int32            { return r.extent.depth }
+
+// Contains reports whether a cell lies in this rectangle's half-open bounds.
+func (r FootprintRect) Contains(cellX, cellZ int32) bool {
+	return cellX >= r.MinX() && cellX < r.MaxX() && cellZ >= r.MinZ() && cellZ < r.MaxZ()
+}
+
+// ModelWorldPosition is a model/unit position in authoritative world fixed
+// units. It is separate from FootprintAnchor and FootprintRect because a
+// factory's QueryBuildInfo transform is retained verbatim even when the
+// independently snapped validation rectangle has another geometric center.
+// Y is retained even though placement anchor snapping uses only X/Z.
+type ModelWorldPosition struct {
+	x numeric.Fixed
+	y numeric.Fixed
+	z numeric.Fixed
+}
+
+// NewModelWorldPosition constructs an authored or derived model/world
+// position.
+func NewModelWorldPosition(x, y, z numeric.Fixed) ModelWorldPosition {
+	return ModelWorldPosition{x: x, y: y, z: z}
+}
+
+func (p ModelWorldPosition) X() numeric.Fixed { return p.x }
+func (p ModelWorldPosition) Y() numeric.Fixed { return p.y }
+func (p ModelWorldPosition) Z() numeric.Fixed { return p.z }
+
+// MobilePlacement carries all coordinate products of a mobile picked point:
+// the snapped anchor, its validation rectangle, and the derived footprint
+// midpoint used as the model/unit position.
+type MobilePlacement struct {
+	anchor FootprintAnchor
+	rect   FootprintRect
+	model  ModelWorldPosition
+}
+
+func (p MobilePlacement) Anchor() FootprintAnchor           { return p.anchor }
+func (p MobilePlacement) Rect() FootprintRect               { return p.rect }
+func (p MobilePlacement) ModelPosition() ModelWorldPosition { return p.model }
+
+// FactoryPlacement carries the two intentionally independent factory
+// products: the QueryBuildInfo model/world transform and the snapped
+// footprint rectangle used for validation.
+type FactoryPlacement struct {
+	anchor FootprintAnchor
+	rect   FootprintRect
+	model  ModelWorldPosition
+}
+
+func (p FactoryPlacement) Anchor() FootprintAnchor           { return p.anchor }
+func (p FactoryPlacement) Rect() FootprintRect               { return p.rect }
+func (p FactoryPlacement) ModelPosition() ModelWorldPosition { return p.model }
+
+// snapPlacementCell implements retail's signed arithmetic-shift formula:
+// (picked - (extent << 19) + (1 << 19)) >> 20 [07 §9].
+func snapPlacementCell(p numeric.Fixed, extent int32) (int32, error) {
+	if extent <= 0 {
+		return 0, fmt.Errorf("%w: %d", ErrInvalidFootprint, extent)
+	}
+	halfExtent := int64(extent) * placementHalfCell
+	value := int64(p)
+	if value < -1<<63+halfExtent {
+		return 0, ErrPlacementOverflow
+	}
+	value -= halfExtent
+	if value > 1<<63-1-placementHalfCell {
+		return 0, ErrPlacementOverflow
+	}
+	value += placementHalfCell
+	cell := value >> 20 // signed arithmetic shift: floor for negative values
+	if cell < placementMinInt32 || cell > placementMaxInt32 {
+		return 0, fmt.Errorf("%w: snapped cell %d", ErrPlacementOverflow, cell)
+	}
+	return int32(cell), nil
+}
+
+// SnapFootprintAnchor derives a checked typed anchor from a picked world
+// point and extent. It performs no validation side effects.
+func SnapFootprintAnchor(px, pz numeric.Fixed, extent FootprintExtent) (FootprintAnchor, error) {
+	if extent.width <= 0 || extent.depth <= 0 {
+		return FootprintAnchor{}, fmt.Errorf("%w: %dx%d", ErrInvalidFootprint, extent.width, extent.depth)
+	}
+	x, err := snapPlacementCell(px, extent.width)
+	if err != nil {
+		return FootprintAnchor{}, fmt.Errorf("x: %w", err)
+	}
+	z, err := snapPlacementCell(pz, extent.depth)
+	if err != nil {
+		return FootprintAnchor{}, fmt.Errorf("z: %w", err)
+	}
+	return NewFootprintAnchor(x, z), nil
+}
+
+// CenterForFootprint derives the mobile model/world midpoint from an anchor:
+// (extent + 2*anchor) << 19 [07 §9].
+func CenterForFootprint(anchor FootprintAnchor, extent FootprintExtent) (ModelWorldPosition, error) {
+	if extent.width <= 0 || extent.depth <= 0 {
+		return ModelWorldPosition{}, fmt.Errorf("%w: %dx%d", ErrInvalidFootprint, extent.width, extent.depth)
+	}
+	center := func(cell, foot int32) numeric.Fixed {
+		return numeric.Fixed((int64(foot) + 2*int64(cell)) * placementHalfCell)
+	}
+	return NewModelWorldPosition(center(anchor.cellX, extent.width), 0, center(anchor.cellZ, extent.depth)), nil
+}
+
+// snapMobilePlacementHorizontal derives the anchor and half-open rectangle
+// for a mobile build picked at (px,pz). The caller must supply the separately
+// resolved site Y before exposing a model/world position.
+func snapMobilePlacementHorizontal(px, pz numeric.Fixed, extent FootprintExtent) (MobilePlacement, error) {
+	anchor, err := SnapFootprintAnchor(px, pz, extent)
+	if err != nil {
+		return MobilePlacement{}, err
+	}
+	rect, err := NewFootprintRect(anchor, extent)
+	if err != nil {
+		return MobilePlacement{}, err
+	}
+	model, err := CenterForFootprint(anchor, extent)
+	if err != nil {
+		return MobilePlacement{}, err
+	}
+	return MobilePlacement{anchor: anchor, rect: rect, model: model}, nil
+}
+
+// SnapMobilePlacement derives the anchor, half-open rectangle, and model/world
+// position for a mobile build picked at (px,pz). Horizontal anchor snapping
+// uses only X/Z; the separately resolved site Y is carried verbatim.
+func SnapMobilePlacement(px, siteY, pz numeric.Fixed, extent FootprintExtent) (MobilePlacement, error) {
+	placement, err := snapMobilePlacementHorizontal(px, pz, extent)
+	if err != nil {
+		return MobilePlacement{}, err
+	}
+	placement.model.y = siteY
+	return placement, nil
+}
+
+// SnapFactoryPlacement derives the validation anchor/rectangle from the
+// original QueryBuildInfo model/world position while retaining that position
+// exactly as the product's model/unit center [05 "Factory production lifecycle"].
+func SnapFactoryPlacement(queryBuildInfo ModelWorldPosition, extent FootprintExtent) (FactoryPlacement, error) {
+	anchor, err := SnapFootprintAnchor(queryBuildInfo.x, queryBuildInfo.z, extent)
+	if err != nil {
+		return FactoryPlacement{}, err
+	}
+	rect, err := NewFootprintRect(anchor, extent)
+	if err != nil {
+		return FactoryPlacement{}, err
+	}
+	return FactoryPlacement{anchor: anchor, rect: rect, model: queryBuildInfo}, nil
+}
+
+// FactoryPlacementFromQueryBuildInfo constructs a factory placement from all
+// three authored QueryBuildInfo world coordinates.
+func FactoryPlacementFromQueryBuildInfo(x, y, z numeric.Fixed, extent FootprintExtent) (FactoryPlacement, error) {
+	return SnapFactoryPlacement(NewModelWorldPosition(x, y, z), extent)
+}
 
 // YardCell is a yard-map control byte per [04 §6.2] C10 [GAP T15].
 //

@@ -354,12 +354,10 @@ func (s *System) ValidateUnloadSite(w *units.World, cargoHandle pool.Handle, dro
 	cellZ := world.WorldToCell(dropZ)
 	ax := cellX - fx/2
 	az := cellZ - fz/2
+	anchor := Cell{X: ax, Z: az}
 	// Clamp? ValidateFootprint will reject OOB.
 	// Use profile.CanOccupy for terrain passability [04 §6.1][04 §8.2] and grid for overlap.
 	perCell := func(c Cell) bool {
-		if terrain != nil && !prof.IsPassable(terrain, c.X, c.Z) {
-			return false
-		}
 		if s.Grid != nil {
 			if occ, ok := s.Grid.OccupantAt(c); ok && occ != int(cargoHandle) {
 				return false
@@ -367,8 +365,7 @@ func (s *System) ValidateUnloadSite(w *units.World, cargoHandle pool.Handle, dro
 		}
 		return true
 	}
-	aggregate := func() bool { return true } // TODO(question): aggregate height/depth/slope gates [04 §8.2] C25
-	anchor := Cell{X: ax, Z: az}
+	aggregate := func() bool { return prof.IsPassableFootprint(terrain, anchor.X, anchor.Z) }
 	if !ValidateFootprint(anchor, int16(fx), int16(fz), perCell, aggregate) {
 		return false
 	}

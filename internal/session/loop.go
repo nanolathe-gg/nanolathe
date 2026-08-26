@@ -18,6 +18,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
@@ -54,6 +55,8 @@ type Session struct {
 	Mission  *mission.Mission
 	Snapshot *snapshot.Buffer
 	Shutdown *Shutdown // ordered shutdown in reverse-init order [01 §2.1][01 §2.3] P0-I10
+
+	Presentation *presentation.Collector // typed presentation event admission [EVENT-01]
 	// CampaignSlot is the mission list slot for progress W/L [P1-01 §2.3] [P0-05].
 	CampaignSlot int
 

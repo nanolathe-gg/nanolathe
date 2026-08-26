@@ -292,61 +292,7 @@ func (p Profile) slopeAt(t *world.Terrain, cx, cz int32) uint8 {
 // search expansion [04 §6.1]; BadSlope tier is HOT cost not blocker
 // TODO(question) [P1-03]. Only Blocked rejects.
 func (p Profile) Classify(t *world.Terrain, cx, cz int32) CellClass {
-	if t == nil || t.Plot == nil {
-		return ClassBlocked
-	}
-	if cx < 0 || cz < 0 || cx >= t.CellW || cz >= t.CellH {
-		return ClassBlocked // out of bounds => blocked [04 §6.1]
-	}
-	if isFeatureBlocked(t, cx, cz) {
-		return ClassBlocked
-	}
-	depth := p.depthAt(t, cx, cz)
-	// Water legality folded into depth thresholds [04 §6.1].
-	// Zero threshold means no limit (openta-go: >0 check) [02 "Movement class record"].
-	if p.MinWaterDepth > 0 && depth < p.MinWaterDepth {
-		return ClassBlocked // too shallow for ship band [02 "Movement class record"] MinWaterDepth
-	}
-	if p.MaxWaterDepth > 0 && depth > p.MaxWaterDepth {
-		return ClassBlocked // too deep for ground band [02 "Movement class record"] MaxWaterDepth
-	}
-	// Slope gate [02 "Movement class record"] 5-8, water vs land selection.
-	isWater := depth > 0 // [fmt tnt] water where height < sea
-	slope := p.slopeAt(t, cx, cz)
-	var maxSlope, badSlope uint8
-	if isWater {
-		// MaxWaterSlope applies separately over water [research/formats/tdf.md] MaxWaterSlope.
-		// When no water slope was authored (0), fall back to land thresholds; the
-		// alternative (0 = impassable) would make every ship and ground wading
-		// cell blocked, contradicting retail footprints (3/15 classes author
-		// maxwaterslope). The fallback is the minimal non-inventing choice and
-		// is marked as an open question.
-		if p.MaxWaterSlope != 0 || p.BadWaterSlope != 0 {
-			maxSlope = p.MaxWaterSlope
-			badSlope = p.BadWaterSlope
-		} else {
-			// TODO(question): what slope limit applies over water when
-			// maxwaterslope was not authored (12 of 15 retail classes)? The spec
-			// says water slope "applies over water, separately from MaxSlope"
-			// [research/formats/tdf.md] but no default is named. Using land
-			// thresholds is the only choice that keeps those classes traversable
-			// over water where depth allows; the alternative (max 0 = block)
-			// would forbid all water entry for KBOTs.
-			maxSlope = p.MaxSlope
-			badSlope = p.BadSlope
-		}
-	} else {
-		maxSlope = p.MaxSlope
-		badSlope = p.BadSlope
-	}
-	// Max == 0 means no slope limit authored => unlimited (openta-go: <=0 check) [02 "Movement class record"].
-	if maxSlope != 0 && slope > maxSlope {
-		return ClassBlocked // exceeds hard slope [02 "Movement class record"]
-	}
-	if badSlope != 0 && slope > badSlope {
-		return ClassSteep // steep but passable [04 §6.1]
-	}
-	return ClassClear
+	return p.ClassifyFootprint(t, cx, cz)
 }
 
 // IsPassable reports whether the profile can occupy cell (cx,cz) [04 §6.1].
@@ -412,30 +358,5 @@ func (p Profile) CanTraverse(t *world.Terrain, cx, cz int32, m Medium) bool {
 // Footprint dimensions of zero are treated as 1×1 so a default-constructed
 // Profile still answers.
 func (p Profile) CanOccupy(t *world.Terrain, ax, az int32) bool {
-	if t == nil {
-		return false
-	}
-	fx, fz := int32(p.FootPrintX), int32(p.FootPrintZ)
-	if fx <= 0 {
-		fx = 1
-	}
-	if fz <= 0 {
-		fz = 1
-	}
-	if ax < 0 || az < 0 || ax+fx > t.CellW || az+fz > t.CellH {
-		return false
-	}
-	for dz := int32(0); dz < fz; dz++ {
-		for dx := int32(0); dx < fx; dx++ {
-			if !p.IsPassable(t, ax+dx, az+dz) {
-				return false
-			}
-		}
-	}
-	// TODO(question): aggregate footprint slope/depth gates after the scan
-	// [04 §8.2] C25 (height span, sea-level span). Per-cell depth/slope
-	// already enforces the same thresholds for flat terrain; the exact
-	// aggregate form (DerivedFootprintRange min HMin vs max HMax) is not
-	// established for this profile predicate.
-	return true
+	return p.ClassifyFootprint(t, ax, az) != ClassBlocked
 }

@@ -22,6 +22,22 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
+// Presentation bounds protect the immutable hand-off from malformed or
+// hostile producers. They never constrain authoritative simulation state.
+// Projectile/effect limits are the established fixed pools [03 §1] C5 [I5].
+// Queue capacity remains a presentation-only safety bound: retail primary
+// queues are dynamically grown and exceed the old 64-node fallback [SC17].
+const (
+	MaxSnapshotProjectiles         = 300
+	MaxSnapshotEffects             = 300
+	MaxSnapshotOrderQueueUnits     = 4096    // presentation-only safety bound [SC17]
+	MaxSnapshotOrdersPerList       = 4096    // presentation-only safety bound [SC17]
+	MaxSnapshotRoutePoints         = 4096    // presentation-only safety bound
+	MaxSnapshotSounds              = 1024    // presentation-only safety bound [03 §8.3]
+	MaxSnapshotEvents              = 4096    // presentation-only safety bound
+	MaxSnapshotVisibilityMaskBytes = 1 << 20 // presentation-only safety bound
+)
+
 // PieceView is the presentation copy of one COB piece transform [03 §2.4] C21–C22.
 // It carries the three uint16 rotation accumulators and script translation lanes
 // [03 §2.4] C21. Rotation is 65,536 per circle and applied Z then X then Y via
@@ -58,14 +74,31 @@ type UnitView struct {
 
 // ProjectileView is the projectile presentation view [06 §5.1] P0-I04.
 type ProjectileView struct {
-	Handle   pool.Handle
-	X, Y, Z  numeric.Fixed
-	WeaponID int32
-	Shooter  pool.Handle
-	Model    string // weapon model for 3DO draw [02 "Weapon record"] model
-	Yaw      uint16 // orientation yaw [06 §5.1] I2
-	Pitch    uint16 // orientation pitch [06 §5.1]
-	Flags    uint32 // reserved
+	Handle                    pool.Handle
+	X, Y, Z                   numeric.Fixed
+	WeaponID                  int32
+	Shooter                   pool.Handle
+	Model                     string        // weapon model for 3DO draw [02 "Weapon record"] model
+	Yaw                       uint16        // orientation yaw [06 §5.1] I2
+	Pitch                     uint16        // orientation pitch [06 §5.1]
+	Flags                     uint32        // reserved
+	Family                    int32         // authored projectile family selector [03 §5.4] C6
+	RenderType                int32         // 0..7 rendertype [03 §5.4]
+	Selector                  int32         // selector/lifetime frame input; -1 suppresses selector GAF [03 §5.4]
+	StartX, StartY, StartZ    numeric.Fixed // immutable launch/tail point [06 §6.10]
+	TailX, TailY, TailZ       numeric.Fixed // current beam tail [06 §6.10]
+	VX, VY, VZ                numeric.Fixed // velocity copy [06 §5.1]
+	CreationTick              uint32        // spawn tick [06 §5.1]
+	ExpiryTick                uint32        // runtime expiry deadline [06 §5.1]
+	Lifetime                  int32         // authored lifetime when known; no guessed duration
+	BurstRemaining            int32         // burst state [06 §4.3]
+	MuzzlePiece               int32         // synchronous Query* result, -1 when unavailable [06 §4.1]
+	Target                    pool.Handle   // target identity when present [06 §6.1]
+	TargetX, TargetY, TargetZ numeric.Fixed // target point captured at launch [06 §6.3]
+	Graphic                   string        // authored GAF/3DO key
+	SmokeTrail                bool          // authored smoke-trail flag [06 §13.2]
+	TrailFrame                int32         // immutable trail frame/selector state
+	PaletteRow                int16         // authored palette/light row, unresolved values remain zero
 }
 
 // FeatureView is the presentation view of one live feature [05 "Feature instance and terrain cell"].
@@ -103,12 +136,23 @@ type FeatureView struct {
 // Fields are a stable snapshot of authoritative state; mutation after Publish does not affect the buffer.
 // TODO(T25): fixed effect pool not yet owned by Session; snapshot currently empty and publisher leaves it empty.
 type EffectView struct {
+	ID         uint32 // stable presentation identity within a frame
+	EventSeq   uint64 // producer sequence that admitted this effect
+	Source     pool.Handle
+	Target     pool.Handle
+	StartTick  uint32
+	ExpiryTick uint32        // explicit lifetime deadline; zero means unknown
+	Lifetime   int32         // authored lifetime when known; no guessed duration
 	X, Y, Z    numeric.Fixed // position [03 §1]
 	VX, VY, VZ numeric.Fixed // velocity if any
 	Kind       string        // palette/effect discriminator if known
 	HasModel   bool
-	SeqA       int32 // current frame index for anim A if active
-	SeqB       int32 // current frame index for anim B if active
+	SeqA       int32  // current frame index for anim A if active
+	SeqB       int32  // current frame index for anim B if active
+	Graphic    string // authored GAF/model key when known
+	PaletteRow int16  // LHT/SHD/palette selector when established
+	Light      bool   // apply established LHT presentation transform
+	Shake      int32  // authored shake magnitude; zero when not supplied
 }
 
 // OrderView is the presentation view of one unit order head [04 §3][04 §7.3].
@@ -117,8 +161,165 @@ type OrderView struct {
 	Unit                pool.Handle
 	Target              pool.Handle
 	GoalX, GoalY, GoalZ numeric.Fixed
-	Kind                string // descriptor Name e.g. "Move_Ground" [04 §3]
-	MoveState           uint8  // orders.MoveState if applicable
+	Kind                string       // descriptor Name e.g. "Move_Ground" [04 §3]
+	MoveState           uint8        // orders.MoveState if applicable
+	List                uint8        // 0 primary, 1 secondary [04 §3]
+	Index               uint16       // stable position within that list
+	DescriptorID        int32        // immutable descriptor identity when available
+	CreationTick        uint32       // order creation tick [04 §3]
+	Flags               uint32       // queue/descriptor gates needed by presentation
+	State               uint8        // descriptor state label
+	BuildProduct        string       // canonical product key for build nodes
+	FootX, FootZ        int8         // authored build footprint when known
+	Route               []RoutePoint // immutable route points in publication order
+	RouteTruncated      bool         // true when the presentation bound dropped points
+}
+
+// RoutePoint is a fixed-point path point copied into the presentation frame.
+// It has no pointer back to a path session, so a renderer may consume a frame
+// after the authoritative route has been replaced [I6].
+type RoutePoint struct {
+	X, Y, Z numeric.Fixed
+	Flags   uint8
+}
+
+// OrderQueueView carries complete primary and secondary lists for one unit.
+// Traversal order is the producer's established queue order; no map sorting is
+// performed [I1][04 §3].
+type OrderQueueView struct {
+	Unit               pool.Handle
+	Primary            []OrderView
+	Secondary          []OrderView
+	PrimaryTruncated   bool
+	SecondaryTruncated bool
+}
+
+// SelectionView is the immutable local-selection/command-page state consumed
+// by HUD presentation. The snapshot layer preserves producer pool order [07 §9].
+type SelectionView struct {
+	LocalPlayer uint8
+	Handles     []pool.Handle
+	Primary     pool.Handle
+	Count       uint16
+	ShiftHeld   bool
+	CommandMask uint32
+}
+
+// CommandPageView describes the selected builder's authored page without
+// retaining catalog or unit pointers [07 §9].
+type CommandPageView struct {
+	Builder     pool.Handle
+	Page        uint16
+	PageCount   uint16
+	ProductKeys []string
+}
+
+// BuildProgressView carries construction/factory progress as a presentation
+// copy. Remaining/work fractions retain their authored float32 domain [05 "Construction target state"].
+type BuildProgressView struct {
+	Builder      pool.Handle
+	Product      pool.Handle
+	ProductKey   string
+	Remaining    float32
+	AcceptedWork float32
+	Health       int32
+	MaxHealth    int32
+	QueueIndex   int32
+	Factory      bool
+	Stalled      bool
+	FootX, FootZ int8
+}
+
+// EconomyView is the HUD-facing stock/ledger copy. It contains no economy
+// pointers and keeps stock/carry values in the allowed float32 domain [05 "Player slot"] [I2].
+type EconomyView struct {
+	Player         uint8
+	Metal          float32
+	Energy         float32
+	MetalCapacity  float32
+	EnergyCapacity float32
+	MetalProduced  float32
+	MetalConsumed  float32
+	EnergyProduced float32
+	EnergyConsumed float32
+	Active         bool
+}
+
+// VisibilityView is the versioned presentation copy of explored/visible/radar
+// masks. Mask bytes are opaque to snapshot and never interpreted by simulation [03 §3.3] C13.
+type VisibilityView struct {
+	Version  uint32
+	W, H     int32
+	Explored []uint8
+	Visible  []uint8
+	Radar    []uint8
+	Valid    bool
+}
+
+// EventKind is the typed presentation-event discriminator shared by the
+// admission collector and immutable frame. Its numeric values are an API
+// contract; admission order, not this value, determines playback order.
+type EventKind uint8
+
+const (
+	EventKindInvalid EventKind = iota
+	EventKindCOBSFX
+	EventKindNanolathe
+	EventKindMuzzleFlash
+	EventKindSmokeStart
+	EventKindSmokeEnd
+	EventKindProjectileTrail
+	EventKindImpact
+	EventKindWaterImpact
+	EventKindExplosion
+	EventKindLHTFlash
+	EventKindShake
+	EventKindSound
+)
+
+func (k EventKind) String() string {
+	names := [...]string{"invalid", "cob_sfx", "nanolathe", "muzzle_flash", "smoke_start", "smoke_end", "projectile_trail", "impact", "water_impact", "explosion", "lht_flash", "shake", "sound"}
+	if int(k) >= len(names) {
+		return names[0]
+	}
+	return names[k]
+}
+
+// SFXClass is the typed COB SFX classification carried by an event.
+type SFXClass uint8
+
+const (
+	SFXVector SFXClass = iota + 1
+	SFXWhiteSmoke
+	SFXBlackSmoke
+	SFXSubBubbles
+)
+
+// EventView is an ordered reference to a presentation event admitted during a
+// tick. Sequence remains observable even when an active effect is also copied
+// into Frame.Effects [F-P0-031].
+type EventView struct {
+	ID                        uint32
+	Sequence                  uint64
+	Tick                      uint32
+	Kind                      EventKind
+	Source                    pool.Handle
+	Target                    pool.Handle
+	EffectID                  uint32
+	SoundID                   int32
+	Piece                     int32
+	SFXType                   int32
+	SFXClass                  SFXClass
+	Graphic                   string
+	Alias                     string
+	X, Y, Z                   numeric.Fixed
+	TargetX, TargetY, TargetZ numeric.Fixed
+	Lifetime                  int32 // authored duration when known; zero remains explicitly unknown
+	ExpiryTick                uint32
+	Mode                      uint8
+	Team                      uint8
+	PaletteRow                int16
+	Magnitude                 int32
 }
 
 // ResourceView is the presentation copy of per-player economy stocks [05 "Player slot"] (I2 allowlist).
@@ -139,10 +340,14 @@ type ResourceView struct {
 // Published from the audio queue for the client's audio sink (I6). Presentation-only.
 // TODO(T25): Session does not yet own an audio.Queue; snapshot Sounds stays empty until wired.
 type SoundEvent struct {
-	Alias string      // resolved variant alias if known
-	Slot  uint8       // slot id 1..23 [03 §8.3]
-	Unit  pool.Handle // source unit if any
-	Frame uint32      // tick when queued
+	Alias    string        // resolved variant alias if known
+	Slot     uint8         // slot id 1..23 [03 §8.3]
+	Unit     pool.Handle   // source unit if any
+	Frame    uint32        // tick when queued
+	Sequence uint64        // stable producer sequence [03 §8.3]
+	Source   pool.Handle   // source identity for non-unit producers
+	X, Y, Z  numeric.Fixed // positional source when established
+	Kind     string        // typed sound family; Alias remains authored lookup key
 }
 
 // Frame is one published presentation frame. Tick is the authoritative global
@@ -156,13 +361,29 @@ type SoundEvent struct {
 type Frame struct {
 	Tick uint32
 	// Units — single writer: phase-06/GATE2-SLICE Gate-2 walker slice until WU-07-7 [PHASES Gate 2].
-	Units       []UnitView
-	Projectiles []ProjectileView
-	Features    []FeatureView
-	Effects     []EffectView
-	Orders      []OrderView    // selection/order overlays (primary queue heads) [04 §3]
-	Resources   []ResourceView // per-player stocks for HUD [05]
-	Sounds      []SoundEvent   // queued presentation sound cues [03 §8.3] (I6)
+	Units                       []UnitView
+	Projectiles                 []ProjectileView
+	Features                    []FeatureView
+	Effects                     []EffectView
+	Orders                      []OrderView      // selection/order overlays (primary queue heads) [04 §3]
+	OrderQueues                 []OrderQueueView // complete primary/secondary queues [04 §3]
+	Resources                   []ResourceView   // per-player stocks for HUD [05]
+	Economy                     []EconomyView    // enriched HUD stock/ledger values [05]
+	Sounds                      []SoundEvent     // queued presentation sound cues [03 §8.3] (I6)
+	Selection                   SelectionView
+	CommandPage                 CommandPageView
+	Builds                      []BuildProgressView
+	Visibility                  VisibilityView
+	Events                      []EventView // stable ordered event sequence [F-P0-031]
+	EventAdmissionsDropped      uint64      // current-window collector drops preserved for HUD/diagnostics
+	ProjectilesTruncated        bool
+	EffectsTruncated            bool
+	OrderQueuesTruncated        bool
+	SoundsTruncated             bool
+	EventsTruncated             bool
+	VisibilityExploredTruncated bool
+	VisibilityVisibleTruncated  bool
+	VisibilityRadarTruncated    bool
 	// Fog is the presentation fog cache snapshot [03 §3.3] C13.
 	// It is copied from visibility.Service.Fog() each tick after the
 	// visibility/sensor phase. Renderer reads it via render.BuildFogOps (I6).
@@ -370,42 +591,49 @@ func cloneFrame(f *Frame) Frame {
 		copy(cp, r.Scores)
 		r.Scores = cp
 	}
-	nf := Frame{Tick: f.Tick, Result: r}
+	nf := Frame{
+		Tick:        f.Tick,
+		Result:      r,
+		Selection:   f.Selection,
+		CommandPage: f.CommandPage,
+		Visibility: VisibilityView{
+			Version: f.Visibility.Version,
+			W:       f.Visibility.W,
+			H:       f.Visibility.H,
+			Valid:   f.Visibility.Valid,
+		},
+	}
 	if len(f.Units) > 0 {
-		nf.Units = make([]UnitView, len(f.Units))
-		copy(nf.Units, f.Units)
+		nf.Units = cloneBounded(f.Units, 0)
 		// Deep-copy per-unit piece slices so caller's reuse does not alias published frame.
 		for i := range nf.Units {
-			if len(f.Units[i].Pieces) > 0 {
-				nf.Units[i].Pieces = make([]PieceView, len(f.Units[i].Pieces))
-				copy(nf.Units[i].Pieces, f.Units[i].Pieces)
-			}
+			nf.Units[i].Pieces = cloneBounded(f.Units[i].Pieces, 0)
 		}
 	}
-	if len(f.Projectiles) > 0 {
-		nf.Projectiles = make([]ProjectileView, len(f.Projectiles))
-		copy(nf.Projectiles, f.Projectiles)
-	}
-	if len(f.Features) > 0 {
-		nf.Features = make([]FeatureView, len(f.Features))
-		copy(nf.Features, f.Features)
-	}
-	if len(f.Effects) > 0 {
-		nf.Effects = make([]EffectView, len(f.Effects))
-		copy(nf.Effects, f.Effects)
-	}
-	if len(f.Orders) > 0 {
-		nf.Orders = make([]OrderView, len(f.Orders))
-		copy(nf.Orders, f.Orders)
-	}
-	if len(f.Resources) > 0 {
-		nf.Resources = make([]ResourceView, len(f.Resources))
-		copy(nf.Resources, f.Resources)
-	}
-	if len(f.Sounds) > 0 {
-		nf.Sounds = make([]SoundEvent, len(f.Sounds))
-		copy(nf.Sounds, f.Sounds)
-	}
+	nf.Projectiles = cloneBounded(f.Projectiles, MaxSnapshotProjectiles)
+	nf.ProjectilesTruncated = f.ProjectilesTruncated || len(f.Projectiles) > MaxSnapshotProjectiles
+	nf.Features = cloneBounded(f.Features, 0)
+	nf.Effects = cloneBounded(f.Effects, MaxSnapshotEffects)
+	nf.EffectsTruncated = f.EffectsTruncated || len(f.Effects) > MaxSnapshotEffects
+	nf.Orders = cloneOrders(f.Orders, 0)
+	nf.OrderQueues = cloneOrderQueues(f.OrderQueues, MaxSnapshotOrderQueueUnits)
+	nf.OrderQueuesTruncated = f.OrderQueuesTruncated || len(f.OrderQueues) > MaxSnapshotOrderQueueUnits
+	nf.Resources = cloneBounded(f.Resources, 0)
+	nf.Economy = cloneBounded(f.Economy, 0)
+	nf.Sounds = cloneBounded(f.Sounds, MaxSnapshotSounds)
+	nf.SoundsTruncated = f.SoundsTruncated || len(f.Sounds) > MaxSnapshotSounds
+	nf.Builds = cloneBounded(f.Builds, 0)
+	nf.Events = cloneBounded(f.Events, MaxSnapshotEvents)
+	nf.EventsTruncated = f.EventsTruncated || len(f.Events) > MaxSnapshotEvents
+	nf.Selection.Handles = cloneBounded(f.Selection.Handles, 0)
+	nf.CommandPage.ProductKeys = cloneBounded(f.CommandPage.ProductKeys, 0)
+	nf.Visibility.Explored = cloneBytes(f.Visibility.Explored, MaxSnapshotVisibilityMaskBytes)
+	nf.Visibility.Visible = cloneBytes(f.Visibility.Visible, MaxSnapshotVisibilityMaskBytes)
+	nf.Visibility.Radar = cloneBytes(f.Visibility.Radar, MaxSnapshotVisibilityMaskBytes)
+	nf.VisibilityExploredTruncated = f.VisibilityExploredTruncated || len(f.Visibility.Explored) > MaxSnapshotVisibilityMaskBytes
+	nf.VisibilityVisibleTruncated = f.VisibilityVisibleTruncated || len(f.Visibility.Visible) > MaxSnapshotVisibilityMaskBytes
+	nf.VisibilityRadarTruncated = f.VisibilityRadarTruncated || len(f.Visibility.Radar) > MaxSnapshotVisibilityMaskBytes
+	nf.EventAdmissionsDropped = f.EventAdmissionsDropped
 	nf.Fog.W = f.Fog.W
 	nf.Fog.H = f.Fog.H
 	nf.Fog.Valid = f.Fog.Valid
@@ -418,4 +646,44 @@ func cloneFrame(f *Frame) Frame {
 		copy(nf.Fog.Ch1, f.Fog.Ch1)
 	}
 	return nf
+}
+
+// cloneBounded copies a value slice in producer order and truncates only at a
+// presentation boundary. Values are deliberately copied rather than retained
+// through pointers so a published frame remains immutable (I6).
+func cloneBounded[T any](src []T, max int) []T {
+	if len(src) == 0 {
+		return nil
+	}
+	n := len(src)
+	if max > 0 && n > max {
+		n = max
+	}
+	dst := make([]T, n)
+	copy(dst, src[:n])
+	return dst
+}
+
+func cloneBytes(src []uint8, max int) []uint8 {
+	return cloneBounded(src, max)
+}
+
+func cloneOrders(src []OrderView, max int) []OrderView {
+	dst := cloneBounded(src, max)
+	for i := range dst {
+		dst[i].Route = cloneBounded(src[i].Route, MaxSnapshotRoutePoints)
+		dst[i].RouteTruncated = src[i].RouteTruncated || len(src[i].Route) > MaxSnapshotRoutePoints
+	}
+	return dst
+}
+
+func cloneOrderQueues(src []OrderQueueView, max int) []OrderQueueView {
+	dst := cloneBounded(src, max)
+	for i := range dst {
+		dst[i].Primary = cloneOrders(src[i].Primary, MaxSnapshotOrdersPerList)
+		dst[i].Secondary = cloneOrders(src[i].Secondary, MaxSnapshotOrdersPerList)
+		dst[i].PrimaryTruncated = src[i].PrimaryTruncated || len(src[i].Primary) > MaxSnapshotOrdersPerList
+		dst[i].SecondaryTruncated = src[i].SecondaryTruncated || len(src[i].Secondary) > MaxSnapshotOrdersPerList
+	}
+	return dst
 }

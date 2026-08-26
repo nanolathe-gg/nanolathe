@@ -21,7 +21,7 @@
 package movement
 
 import (
-	"math"
+	"math/bits"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
@@ -69,6 +69,7 @@ type System struct {
 	sessions     []*path.Session         // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
 	prevMoveTier map[pool.Handle]int     // cached mover tier per unit for MoveRate edge emission [04 §5.2][GAP T15] C18
 	prevSFXBand  map[pool.Handle]int     // cached setSFXoccupy band per unit for edge emission [04 §5.2][GAP T15] C17 C18
+	avoidNext    map[pool.Handle]uint32  // named deterministic land-avoidance cadence
 
 	// world is the units world bound via BindWorld (or via Tick for legacy path).
 	// StepUnit needs it to fetch the *units.Unit for a handle without passing
@@ -85,18 +86,18 @@ type System struct {
 	pathFailures map[pool.Handle]PathFailure // last non-success publish per handle [04 §7.3] C12 [P0-08][P0-12]
 }
 
-// arrivalToleranceWorld is the goal tolerance for movement arrival [04 §7.3] C15.
-// Route pruning uses dx²+dz² ≤25 (5-cell radius) [04 §7.3] C15; that radius is
-// the only established movement arrival radius. Session's generic move arrival
-// (dist ≤2 world units [04 §3.5]) is stricter and is handled at the order
-// layer, but for StepResult we use the looser pruning radius so that a unit
-// that has consumed its route is considered arrived without requiring sub-cell
-// precision.
-// TODO(question): exact retail waypoint arrival tolerance beyond pruning 25 is not established [04 §8.1].
-const arrivalToleranceWorld = numeric.Fixed(5 * 16 * 65536) // 5 cells ×16 pixels ×65536 [03 §2.1][04 §7.3] C15
+// localSteeringThresholdSquared is only the near-waypoint brake/steering
+// threshold. It is not final Move_Ground completion; that tolerance remains an
+// explicit R-P0-01 question. [04 §3.5]
+const localSteeringThresholdSquared uint64 = uint64(2*65536) * uint64(2*65536)
 
-const pathFailureRetryInterval = 30 // TODO(question): exact bound not established [04 §7.3][P0-08][P0-12], N>=30 placeholder
-const pathFailureMaxRetries = 1     // TODO(question): exact retry count not established [P0-08][P0-12]; bounded placeholder
+// These are explicit Nanolathe land-skirmish retry policy values. Retail's
+// dynamic-blocker retry cadence/count remain unresolved [R-P1-10]; they are not
+// presented as recovered executable constants.
+const (
+	landPathFailureRetryInterval = 30
+	landPathFailureMaxRetries    = 1
+)
 
 type PathFailure struct {
 	Status    path.Status
@@ -107,13 +108,13 @@ type PathFailure struct {
 
 // StepResult is the per-unit movement result for the slot visit [04 §8.1][04 §8.2].
 // Arrived is true only when the unit was dispatched with an active route and is now
-// within goal tolerance (not merely "route became active") [task].
-// DistToGoal is the Euclidean world distance (Fixed 16.16) to the order goal
-// (or to the last waypoint when no order goal exists) after the step.
+// within the unresolved final order tolerance (not merely "route became
+// active") [R-P0-01]. DistToGoal is a publication-only integer-sqrt
+// diagnostic in Fixed 16.16 units.
 type StepResult struct {
 	Handle     pool.Handle   // the stepped handle
-	Arrived    bool          // true when within arrivalToleranceWorld and had an active route at entry
-	DistToGoal numeric.Fixed // Euclidean distance after step; large sentinel (1<<30) when no goal
+	Arrived    bool          // final completion remains false until R-P0-01 closes
+	DistToGoal numeric.Fixed // diagnostic distance after step; sentinel when no goal
 	HasRoute   bool          // route.Active after step (pruning may have cleared it)
 	Moved      bool          // position changed this tick
 	Blocked    bool          // collision blocked this tick [04 §8.2] C24
@@ -136,6 +137,7 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 		profiles:     make(map[pool.Handle]Profile),
 		prevMoveTier: make(map[pool.Handle]int),
 		prevSFXBand:  make(map[pool.Handle]int),
+		avoidNext:    make(map[pool.Handle]uint32),
 		pathFailures: make(map[pool.Handle]PathFailure),
 	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
@@ -175,54 +177,123 @@ func (s *System) World() *units.World {
 	return s.world
 }
 
-// distToGoal computes the Euclidean world distance from u to its order goal
-// (or to the last route waypoint when no order goal exists) [04 §7.3][04 §8.1].
-// When no goal exists it returns a large sentinel (1<<30) so Arrived stays false.
-func (s *System) distToGoal(u *units.Unit) numeric.Fixed {
+// isqrt returns floor(sqrt(n)) with integer arithmetic. It is used only for a
+// diagnostic distance; authoritative completion uses the squared domain.
+func isqrt(n uint64) uint64 {
+	if n == 0 {
+		return 0
+	}
+	// Start at a power-of-two ceiling for sqrt(n). bits.Len64 avoids the
+	// 1<<32 multiplication overflow that made the old initialization opaque.
+	bit := bits.Len64(n) - 1
+	x := uint64(1) << uint((bit+2)/2)
+	for {
+		y := (x + n/x) >> 1
+		if y >= x {
+			return x
+		}
+		x = y
+	}
+}
+
+const maxUint64 = ^uint64(0)
+const maxInt64 = int64(^uint64(0) >> 1)
+const minInt64 = -maxInt64 - 1
+
+func addSignedSaturating(a, b int64) int64 {
+	if b > 0 && a > maxInt64-b {
+		return maxInt64
+	}
+	if b < 0 && a < minInt64-b {
+		return minInt64
+	}
+	return a + b
+}
+
+// absDiffUnsigned computes |a-b| without overflowing signed subtraction.
+func absDiffUnsigned(a, b int64) uint64 {
+	if a >= b {
+		return uint64(a) - uint64(b)
+	}
+	return uint64(b) - uint64(a)
+}
+
+func squareSaturating(v uint64) uint64 {
+	if v != 0 && v > maxUint64/v {
+		return maxUint64
+	}
+	return v * v
+}
+
+func addSaturating(a, b uint64) uint64 {
+	if maxUint64-a < b {
+		return maxUint64
+	}
+	return a + b
+}
+
+// squaredDistanceFixed is the authoritative integer distance domain. Each
+// axis is widened before subtraction and each product/sum saturates, so an
+// extreme coordinate cannot wrap into the near-steering threshold.
+func squaredDistanceFixed(ax, az, bx, bz int64) uint64 {
+	x := squareSaturating(absDiffUnsigned(ax, bx))
+	z := squareSaturating(absDiffUnsigned(az, bz))
+	return addSaturating(x, z)
+}
+
+// distSqToGoal computes the squared fixed-point world distance without a
+// floating-point decision path. The bool is false when no goal exists, so a
+// diagnostic sentinel can never enter a steering decision.
+func (s *System) distSqToGoal(u *units.Unit) (uint64, bool) {
 	if u == nil {
-		return numeric.Fixed(1 << 30)
+		return 0, false
 	}
 	q := orders.QueueForUnit(u)
 	if q != nil && q.LenPrimary() > 0 {
 		head := q.Primary()[0]
 		if head != nil && (head.GoalX != 0 || head.GoalZ != 0 || head.GoalY != 0 || head.Target != 0) {
-			dx := int64(head.GoalX) - int64(u.X)
-			dz := int64(head.GoalZ) - int64(u.Z)
-			d := math.Hypot(float64(dx), float64(dz))
-			return numeric.Fixed(int64(d))
-		}
-		// Also consider Primary()[0] for compatibility with older queue shape
-		if head != nil && head.GoalX == 0 && head.GoalZ == 0 {
-			// no explicit goal, fall through to route
-		} else if head != nil {
-			dx := int64(head.GoalX) - int64(u.X)
-			dz := int64(head.GoalZ) - int64(u.Z)
-			d := math.Hypot(float64(dx), float64(dz))
-			return numeric.Fixed(int64(d))
+			return squaredDistanceFixed(int64(head.GoalX), int64(head.GoalZ), int64(u.X), int64(u.Z)), true
 		}
 	}
 	route := s.Routes[u.Handle]
 	if route != nil && route.Active && route.Count > 0 {
 		last := route.Points[route.Count-1]
-		wpX := world.CellToWorld(last.X)
-		wpZ := world.CellToWorld(last.Z)
-		wpX = numeric.Fixed(int64(wpX) + 524288)
-		wpZ = numeric.Fixed(int64(wpZ) + 524288)
-		dx := int64(wpX) - int64(u.X)
-		dz := int64(wpZ) - int64(u.Z)
-		d := math.Hypot(float64(dx), float64(dz))
-		return numeric.Fixed(int64(d))
+		wpX := addSignedSaturating(int64(world.CellToWorld(last.X)), 524288)
+		wpZ := addSignedSaturating(int64(world.CellToWorld(last.Z)), 524288)
+		return squaredDistanceFixed(wpX, wpZ, int64(u.X), int64(u.Z)), true
 	}
-	// Check alternate queue accessor for session-style orders (Head())
 	if q != nil {
 		if h := q.Head(); h != nil && (h.GoalX != 0 || h.GoalZ != 0) {
-			dx := int64(h.GoalX) - int64(u.X)
-			dz := int64(h.GoalZ) - int64(u.Z)
-			d := math.Hypot(float64(dx), float64(dz))
-			return numeric.Fixed(int64(d))
+			return squaredDistanceFixed(int64(h.GoalX), int64(h.GoalZ), int64(u.X), int64(u.Z)), true
 		}
 	}
-	return numeric.Fixed(1 << 30)
+	return 0, false
+}
+
+// distToGoal is a deterministic integer-sqrt diagnostic, never a completion
+// predicate [I2].
+func (s *System) distToGoal(u *units.Unit) numeric.Fixed {
+	d2, ok := s.distSqToGoal(u)
+	if !ok {
+		// Publication-only sentinel; callers must use distSqToGoal's bool for
+		// decisions. This is intentionally not a square.
+		return numeric.Fixed(1 << 30)
+	}
+	return numeric.Fixed(int64(isqrt(d2)))
+}
+
+// finalGoalReached deliberately does not turn route pruning into order
+// completion. R-P0-01 did not establish the final Move_Ground tolerance or
+// comparison domain; retaining the order active is the safe deterministic
+// behavior until that question is answered.
+func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
+	if !hadRoute || u == nil {
+		return false
+	}
+	// TODO(question): exact final Move_Ground completion tolerance, units, and
+	// inclusive comparison remain unresolved by R-P0-01. Do not fabricate a
+	// five-cell or two-world-unit threshold here.
+	return false
 }
 
 // resolveProfile derives a unit's movement profile from its definition's
@@ -282,11 +353,11 @@ func (s *System) recordPathFailure(h pool.Handle, status path.Status, tick uint3
 		rec.Status = status
 		rec.Tick = tick
 		rec.Retries++
-		rec.NextRetry = tick + pathFailureRetryInterval
+		rec.NextRetry = tick + landPathFailureRetryInterval
 		s.pathFailures[h] = rec
 		return
 	}
-	s.pathFailures[h] = PathFailure{Status: status, Tick: tick, Retries: 0, NextRetry: tick + pathFailureRetryInterval}
+	s.pathFailures[h] = PathFailure{Status: status, Tick: tick, Retries: 0, NextRetry: tick + landPathFailureRetryInterval}
 }
 
 func (s *System) HasPathFailure(h pool.Handle) bool {
@@ -364,7 +435,7 @@ func (s *System) IsGoalCellPassable(h pool.Handle, cell path.Cell) bool {
 		return true
 	}
 	profile := s.ProfileFor(h)
-	return profile.IsPassable(s.Terrain, cell.X, cell.Z)
+	return profile.IsPassableFootprint(s.Terrain, cell.X, cell.Z)
 }
 
 // EnsureUnit initializes per-unit surfaces for u if not already present. It stamps
@@ -449,6 +520,7 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		Mode:        1,
 		Blocked:     false,
 		Dirty:       false,
+		BlockerID:   -1,
 	}
 	// Quantized anchor via half bias [04 §8.2] C23
 	// Use footprint-derived half bias if not set
@@ -517,6 +589,35 @@ func (s *System) SubmitMove(handle pool.Handle, player uint8, start, goal path.C
 	s.Scheduler.Submit(req)
 }
 
+// replanDynamicBlock applies the explicit land-skirmish avoidance policy from
+// the overnight plan: stable lower pool slots have priority; a higher slot
+// yields and submits a route from its current anchor to the original order
+// goal. The one-tick cadence is a named Nanolathe policy because retail retry
+// timing is not established [R-P1-10]. No reverse, push, crush, or teleport.
+func (s *System) replanDynamicBlock(u *units.Unit, tick uint32, blockerID int) {
+	if s == nil || u == nil || blockerID < 0 || int(u.Handle) <= blockerID || s.Scheduler == nil {
+		return
+	}
+	if s.avoidNext == nil {
+		s.avoidNext = make(map[pool.Handle]uint32)
+	}
+	if next := s.avoidNext[u.Handle]; tick < next {
+		return
+	}
+	s.avoidNext[u.Handle] = tick + 1 // deterministic local policy cadence
+	q := orders.QueueForUnit(u)
+	if q == nil || q.LenPrimary() == 0 {
+		return
+	}
+	head := q.Primary()[0]
+	if head == nil || (head.GoalX == 0 && head.GoalZ == 0) {
+		return
+	}
+	start := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
+	goal := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
+	s.SubmitMove(u.Handle, u.Owner, start, goal)
+}
+
 // searchFunc is the injected SearchFunc bound to path.Search with profile passability
 // over System.Terrain and occupancy. It honors the 100-pops-per-request-per-call
 // budget and full-or-empty publication [04 §7.3] C11 C12 via a resumable Session
@@ -546,7 +647,7 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) ([]path.Poi
 		profile := s.ProfileFor(r.Unit)
 		isPassable := func(c path.Cell) bool {
 			if s.Terrain != nil {
-				if !profile.IsPassable(s.Terrain, c.X, c.Z) {
+				if !profile.IsPassableFootprint(s.Terrain, c.X, c.Z) {
 					return false
 				}
 			}
@@ -601,12 +702,41 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 		mPoints[i] = Point{X: p.X, Z: p.Z}
 	}
 	route.Publish(mPoints)
+	// Overnight land policy: Kbots may use aggressive legality-only line of
+	// sight smoothing; vehicles retain conservative forward-only waypoints until
+	// authored turning/braking feasibility is fully recovered [plan §3.1].
+	// The complete footprint predicate is used for every ray cell, so a shortcut
+	// cannot cut a diagonal corner. Exact bad-slope speed/cost remains TODO.
+	if s.world != nil {
+		if u := s.world.Unit(r.Unit); u != nil && u.Def != nil {
+			smoothLandRoute(route, u.Def, s.ProfileFor(r.Unit), s.Terrain)
+		}
+	}
 	route.Status = status
 	if status == path.StatusRejected {
 		s.recordPathFailure(r.Unit, status, s.tick)
 	} else {
 		s.ClearPathFailure(r.Unit)
 	}
+}
+
+func aggressiveLandSmoothing(def *content.UnitDef) bool {
+	return def != nil && strings.HasPrefix(strings.ToLower(strings.TrimSpace(def.MovementClass)), "kbot")
+}
+
+// smoothLandRoute encodes the explicit overnight policy: only Kbots take the
+// aggressive legality-only shortcut; vehicles retain their conservative route
+// until authored forward turning/braking feasibility is established.
+func smoothLandRoute(route *Route, def *content.UnitDef, profile Profile, terrain *world.Terrain) {
+	if route == nil || !aggressiveLandSmoothing(def) {
+		return
+	}
+	route.Smooth(func(p Point) bool {
+		if terrain == nil {
+			return true
+		}
+		return profile.IsPassableFootprint(terrain, p.X-int32(profile.FootPrintX)/2, p.Z-int32(profile.FootPrintZ)/2)
+	})
 }
 
 // headingFromDelta computes a uint16 heading for a ground delta dx (east), dz (north)
@@ -850,10 +980,12 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	var directX, directZ numeric.Fixed
 	if !hadRoute {
 		d := s.distToGoal(u)
-		const strictThresh = 2 * 65536
-		if d.Raw() <= strictThresh {
+		d2, hasGoal := s.distSqToGoal(u)
+		if hasGoal && d2 <= localSteeringThresholdSquared {
 			s.emitMovementCallbacks(u, 0)
-			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: true}
+			// Route absence is not proof of final order completion; the
+			// order-layer tolerance remains unresolved [R-P0-01].
+			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
 		}
 		s.emitMovementCallbacks(u, 0)
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
@@ -867,15 +999,12 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		}
 		route.Prune(moverPt)
 		if !route.Active || route.Count == 0 {
-			// No waypoint left this tick: check strict arrival, else fall through to direct goal movement.
+			// No waypoint left this tick: check only the local steering threshold,
+			// then fall through to direct goal movement. This is not completion.
 			d := s.distToGoal(u)
-			const strictThresh = 2 * 65536
-			if d.Raw() <= strictThresh {
-				arrived := hadRoute && d <= arrivalToleranceWorld
-				// Also consider strict threshold for order; for route prune case, within 2 is arrived.
-				if d.Raw() <= strictThresh {
-					arrived = true
-				}
+			d2, hasGoal := s.distSqToGoal(u)
+			if hasGoal && d2 <= localSteeringThresholdSquared {
+				arrived := s.finalGoalReached(u, hadRoute)
 				s.emitMovementCallbacks(u, 0) // arrived => tier 0 [04 §5.2][GAP T15] C18 ensure StopMoving
 				return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
 			}
@@ -885,7 +1014,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 				directX = head.GoalX
 				directZ = head.GoalZ
 			} else {
-				arrived := hadRoute && d <= arrivalToleranceWorld
+				arrived := s.finalGoalReached(u, hadRoute)
 				s.emitMovementCallbacks(u, 0)
 				return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
 			}
@@ -918,7 +1047,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	}
 	if dx == 0 && dz == 0 {
 		d := s.distToGoal(u)
-		arrived := hadRoute && d <= arrivalToleranceWorld
+		arrived := s.finalGoalReached(u, hadRoute)
 		s.emitMovementCallbacks(u, 0) // no delta => tier 0 [04 §5.2][GAP T15] C18
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: arrived}
 	}
@@ -933,7 +1062,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		if flight == nil {
 			d := s.distToGoal(u)
 			s.emitMovementCallbacks(u, 0)
-			return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: d <= arrivalToleranceWorld && hadRoute}
+			return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: s.finalGoalReached(u, hadRoute)}
 		}
 		flight.X = int32(u.X.Raw())
 		flight.Y = int32(u.Y.Raw())
@@ -972,7 +1101,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		if steer == nil || coll == nil {
 			d := s.distToGoal(u)
 			s.emitMovementCallbacks(u, 0)
-			return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: d <= arrivalToleranceWorld && hadRoute}
+			return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: s.finalGoalReached(u, hadRoute)}
 		}
 		steer.X = int32(u.X.Raw())
 		steer.Z = int32(u.Z.Raw())
@@ -1022,20 +1151,32 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			coll.MaxVelocity = int32(u.Def.MaxVelocity)
 		}
 		moverProfile := s.ProfileFor(handle) // [04 §6.1][04 §8.2] per-unit profile
+		blockerID := -1
 		perCell := func(c Cell) bool {
-			if s.Terrain != nil && !moverProfile.IsPassable(s.Terrain, c.X, c.Z) {
-				return false
-			}
 			if s.Grid != nil {
 				if occ, ok := s.Grid.OccupantAt(c); ok && occ != coll.ID {
+					blockerID = occ
 					return false
 				}
 			}
 			return true
 		}
-		aggregate := func() bool { return true }
+		aggregate := func() bool {
+			if s.Terrain == nil {
+				return true
+			}
+			bx, bz := coll.HalfBias()
+			anchor := QuantizedAnchor(coll.X+coll.VX, coll.Z+coll.VZ, bx, bz)
+			return moverProfile.IsPassableFootprint(s.Terrain, anchor.X, anchor.Z)
+		}
 		_, isBlocked := coll.CommitOne(s.Grid, coll.Mode, perCell, aggregate) // [04 §8.2] C23 C24: sync clear-then-stamp before next slot
 		blocked = isBlocked
+		coll.BlockerID = blockerID
+		if blocked && blockerID >= 0 {
+			// Lower slot wins the deterministic priority; higher slot yields
+			// and requests a fresh route from its current anchor.
+			s.replanDynamicBlock(u, tick, blockerID)
+		}
 		u.X = numeric.Fixed(int64(coll.X))
 		u.Z = numeric.Fixed(int64(coll.Z))
 		if s.Terrain != nil {
@@ -1057,7 +1198,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	}
 	// Arrival via goal tolerance, not merely route active [task]
 	d2 := s.distToGoal(u)
-	arrived := hadRoute && d2 <= arrivalToleranceWorld
+	arrived := s.finalGoalReached(u, hadRoute)
 	// Published routes consumed without duplicate submission: StepUnit does not
 	// call SubmitMove; the scheduler's HasRequest gate in session path-submit
 	// remains authority [04 §7.3] C11 C12.

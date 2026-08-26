@@ -15,6 +15,9 @@ import (
 // DefinitionHeader must be the first field per catalog convention [02 §5].
 type UnitDef struct {
 	DefinitionHeader
+	// UnitDefID is the stable 1-based catalog ID (zero is the null sentinel)
+	// used by category membership masks [02 §5] [R-P0-03].
+	UnitDefID uint32
 	// Identity and presentation [02 "Unit record (.fbi)"].
 	UnitName              string // unitname string 32 empty — canonical catalog name [02 "Unit record"]
 	Name                  string // language-prefixed name trial <Language>name then name [02 §3] C7, 32 default empty
@@ -36,6 +39,16 @@ type UnitDef struct {
 	BadTargetCategoryWSEC string // wsec_badTargetCategory string 100 default none [02 "Unit record"]
 	BadTargetCategoryWSPE string // wspe_badTargetCategory string 100 default none [02 "Unit record"]
 	NoChaseCategory       string // noChaseCategory string 100 default none [02 "Unit record"]
+	// Linked category masks. These are value sets indexed by candidate unit
+	// definition ID; downstream code need not re-tokenize authored strings
+	// [R-P0-03; 06 §3.1].
+	BadTargetCategoryWPRIMask CategoryMask
+	BadTargetCategoryWSECMask CategoryMask
+	BadTargetCategoryWSPEMask CategoryMask
+	NoChaseCategoryMask       CategoryMask
+	// UnitMask is this definition's own single-ID membership value. Consumers
+	// can intersect it with linked target masks without re-tokenizing strings.
+	UnitMask CategoryMask
 
 	// Economy [02 "Unit record"].
 	BuildCostEnergy int32   // buildcostenergy integer default 0 [02 "Unit record"]
@@ -158,6 +171,16 @@ type UnitDef struct {
 	// Unknown retains inert parsed keys so a later phase can consume without re-parsing [02 §5] C14.
 	// Keys are OriginalKey preserved case; e.g., wacky, noautofire, ovradjust, steeringmode, TEDClass etc have no behavior.
 	Unknown map[string]string
+}
+
+// DefinitionMask returns the prelinked single-bit identity mask for this
+// unit definition. It is a value copy and therefore safe to intersect with a
+// weapon's linked category mask [R-P0-03; 06 §3.1].
+func (u *UnitDef) DefinitionMask() CategoryMask {
+	if u == nil {
+		return CategoryMask{}
+	}
+	return u.UnitMask
 }
 
 // UnknownKeysSorted returns inert keys sorted for hash stability (I1).
@@ -525,7 +548,8 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 // drift.
 func writeUnitCanonical(u *UnitDef) []byte {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|%s|%s|", u.CanonicalKey, u.UnitName, u.Name, u.Description, u.Side, u.ObjectName, u.Category, u.SoundCategory, u.Corpse)
+	fmt.Fprintf(&b, "%s|%d|%s|%s|%s|%s|%s|%s|%s|", u.CanonicalKey, u.UnitDefID, u.UnitName, u.Name, u.Description, u.Side, u.ObjectName, u.Category, u.SoundCategory)
+	fmt.Fprintf(&b, "%s|", u.Corpse)
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|", u.MovementClass, u.Weapon1, u.Weapon2, u.Weapon3, u.ExplodeAs, u.SelfDestructAs, u.YardMap)
 	fmt.Fprintf(&b, "%d|%d|", u.MinWaterDepth, u.MaxWaterDepth)
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|", u.DefaultMissionType, u.BadTargetCategoryWPRI, u.BadTargetCategoryWSEC, u.BadTargetCategoryWSPE, u.NoChaseCategory)
@@ -551,6 +575,12 @@ func writeUnitCanonical(u *UnitDef) []byte {
 	}
 	fmt.Fprintf(&b, "%d|", u.Limit)
 	fmt.Fprintf(&b, "%s|%t|", u.SelfDestructCountdown, u.SelfDestructCountdownPresent)
+	fmt.Fprintf(&b, "catmasks|")
+	for _, m := range []CategoryMask{u.UnitMask, u.BadTargetCategoryWPRIMask, u.BadTargetCategoryWSECMask, u.BadTargetCategoryWSPEMask, u.NoChaseCategoryMask} {
+		for _, word := range m.Words {
+			fmt.Fprintf(&b, "%08x|", word)
+		}
+	}
 	b.WriteString("unknown|")
 	for _, k := range u.UnknownKeysSorted() {
 		fmt.Fprintf(&b, "%s=%s|", k, u.Unknown[k])
