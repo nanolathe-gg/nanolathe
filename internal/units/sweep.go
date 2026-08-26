@@ -228,6 +228,7 @@ func (w *World) FinalizeDeath(handle pool.Handle, tick uint32) DeathResult {
 	}
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	player := int(u.Owner)
+	u.Flags &^= ClassifierEligibleStatus
 	u.Alive = false
 	w.units[idx] = nil
 	w.pool.Free(handle)

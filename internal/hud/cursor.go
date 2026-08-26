@@ -108,9 +108,8 @@ func ChooseCursor(latch input.Latch, sel CursorSelection, h CursorHover) int {
 // finished building.
 //
 // TODO(question): retail also requires the runtime active-state bit `0x20` and
-// an empty current-task field [07 §8][07 §9]. Bit `0x20` is claimed by
-// `construction.FlagInBuildStance` here and no writer sets an active bit, so
-// gating on it would make this predicate permanently false. Add both gates when
+// an empty current-task field [07 §8][07 §9]. The active-state bit is distinct
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // the runtime flag word is reconciled with [07 §9].
 func isInspectable(t *units.Unit, viewer uint8) bool {
 	if t == nil || !t.Alive {

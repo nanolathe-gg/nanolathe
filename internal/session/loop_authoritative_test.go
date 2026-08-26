@@ -600,7 +600,7 @@ func TestLoop_BuildProgress(t *testing.T) {
 	hFactory, _ := s.Units.Create(factoryDef, 0, numeric.Fixed(10*65536), 0, numeric.Fixed(10*65536))
 	factory := s.Units.Unit(hFactory)
 	// Simulate COB having set in-build-stance bit so factory can proceed past State1 [05 "Factory production lifecycle"]
-	factory.Flags |= 1 << 5 // FlagInBuildStance [04 §4.4][05]
+	factory.InBuildStance = true // INBUILDSTANCE port 5 [04 §4.4][05]
 	ensureMovementForAll(s)
 	publishVisibilityForAll(s)
 	// Queue factory build

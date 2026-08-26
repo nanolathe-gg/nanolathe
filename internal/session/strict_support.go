@@ -92,7 +92,10 @@ func HashState(s *Session) string {
 			if u == nil || !u.Alive {
 				continue
 			}
-			fmt.Fprintf(h, "U%d:%d:%d:%d:%.2f:%d|", u.Handle, int64(u.X.Raw()), int64(u.Z.Raw()), u.Health, u.Remaining, u.Flags)
+			// Group is authoritative manager/control-group state. It is hashed
+			// separately from the tactical vectors below so an unlisted unit's
+			// group transition cannot alias an otherwise identical state.
+			fmt.Fprintf(h, "U%d:%d:%d:%d:%.2f:%d:%d|", u.Handle, int64(u.X.Raw()), int64(u.Z.Raw()), u.Health, u.Remaining, u.Flags, u.Group)
 		}
 	}
 	if s.Combat != nil {
@@ -128,6 +131,28 @@ func HashState(s *Session) string {
 				math.Float32bits(p.AIProduction[economy.Energy]),
 				math.Float32bits(p.AIConsumption[economy.Metal]),
 				math.Float32bits(p.AIConsumption[economy.Energy]))
+		}
+	}
+	// Manager tactical vectors affect future AI admissions and task choices;
+	// include their exact recovered slot order in the authoritative hash
+	// [R-P0-04]. Handle sequence is meaningful because vector insertion uses
+	// pool order and wave merge uses replace-with-last removal.
+	for player, m := range s.AI {
+		if m == nil {
+			continue
+		}
+		fmt.Fprintf(h, "G%d:", player)
+		groups := [][]pool.Handle{
+			m.GroupResource, m.GroupWaveA, m.GroupRegroupA,
+			m.GroupConstruction, m.GroupNull, m.GroupWaveB,
+			m.GroupRegroupB, m.GroupExplore, m.GroupRally,
+		}
+		for slot, members := range groups {
+			fmt.Fprintf(h, "%d[", slot+1)
+			for _, handle := range members {
+				fmt.Fprintf(h, "%d,", handle)
+			}
+			fmt.Fprint(h, "];")
 		}
 	}
 	sum := h.Sum(nil)

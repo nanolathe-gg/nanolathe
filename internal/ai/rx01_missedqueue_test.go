@@ -62,6 +62,7 @@ func TestRX01_MissedCallbacks_MobileSitePath(t *testing.T) {
 		Factory:      b,
 		Terrain:      rx01Terrain(),
 	}
+	seedAIGroup(mgr, b, 4)
 	mgr.Strategic.Catalog = cat
 	econ := rx01Econ()
 	for k := TaskKind(0); k < TaskKindCount; k++ {
@@ -100,6 +101,7 @@ func TestRX01_MissedCallbacks_FactoryQueuePath(t *testing.T) {
 		Factory:      f,
 		Terrain:      rx01Terrain(),
 	}
+	seedAIGroup(mgr, f, 4)
 	mgr.Strategic.Catalog = cat
 	econ := rx01Econ()
 	for k := TaskKind(0); k < TaskKindCount; k++ {

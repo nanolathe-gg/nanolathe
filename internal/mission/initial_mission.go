@@ -147,7 +147,7 @@ func RunInitialMissionsWithHooks(m *Mission, w *units.World, cat *content.Catalo
 		// Postlude C12: when at least one order queued, bit5 clears and unless
 		// suppressTail latch (set by numeric a, p, d, s) a final MakeSelectable queues [P0-06].
 		if ctx.queued > 0 {
-			u.Flags &^= 1 << 5 // [04 §3.6] bit 5
+			u.ClearClassifierEligibility() // [04 §3.6] runtime status bit 5
 			if !ctx.suppressTail {
 				id := orders.Lookup("MakeSelectable") // [04 §3.6] C12 zero aux args
 				if id != 0 {

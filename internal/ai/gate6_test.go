@@ -170,6 +170,7 @@ func TestGate6EndToEnd(t *testing.T) {
 		Catalog:      cat,
 		Factory:      builderUnit,
 	}
+	seedAIGroup(mgr, builderUnit, 4)
 	mgr.Strategic.Catalog = cat
 	mgr.CandidateSource = nil
 	mgr.MissionGateFlag = 0
@@ -328,6 +329,7 @@ func TestGate6EndToEnd(t *testing.T) {
 		Catalog:      cat2,
 		Factory:      builderUnit2,
 	}
+	seedAIGroup(mgr2, builderUnit2, 4)
 	mgr2.Strategic.Catalog = cat2
 	mgr2.CandidateSource = nil
 	mgr2.MissionGateFlag = 0

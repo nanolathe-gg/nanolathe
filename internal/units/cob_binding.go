@@ -54,6 +54,39 @@ func BindCOBWithPorts(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model, sim 
 // BindCOBWithPortsAndVisibility is the full production seam. The visibility
 // predicate is installed before Create so emit-sfx cannot bypass gameplay LOS.
 func BindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink, visible func(piece int, sfxType int32) bool) (*cob.Binding, error) {
+	return bindCOBWithPortsAndVisibility(fs, def, mdl, sim, sink, visible, nil)
+}
+
+// BindCOBWithPortsAndVisibilityForUnit is the production binding seam for a
+// live unit. Instance-owned engine ports are installed before Create runs.
+func BindCOBWithPortsAndVisibilityForUnit(fs vfs.FSOps, u *Unit, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink, visible func(piece int, sfxType int32) bool) (*cob.Binding, error) {
+	if u == nil {
+		return nil, fmt.Errorf("nanolathe: COB binding: nil unit")
+	}
+	return bindCOBWithPortsAndVisibility(fs, u.Def, mdl, sim, sink, visible, u)
+}
+
+func bindUnitPortHandlers(vm *cob.VM, u *Unit) {
+	if vm == nil || u == nil {
+		return
+	}
+	vm.BindPort(cob.Port(5), func(args []int32) int32 {
+		if len(args) >= 2 {
+			u.InBuildStance = args[1]&1 != 0
+			return 0
+		}
+		if u.InBuildStance {
+			return 1
+		}
+		return 0
+	})
+}
+
+// bindCOBWithPortsAndVisibility is the unit-aware strict binding path. The
+// instance port handlers are installed before Create runs, matching retail's
+// mode-I initialization order. The exported helper above remains a generic
+// asset-binding seam for callers without an owning Unit instance.
+func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink, visible func(piece int, sfxType int32) bool, u *Unit) (*cob.Binding, error) {
 	if def == nil {
 		return nil, fmt.Errorf("nanolathe: COB binding: nil unit definition")
 	}
@@ -66,7 +99,7 @@ func BindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 	for i := range mdl.Pieces {
 		modelPieces[i] = mdl.Pieces[i].Name
 	}
-	return cob.BindStrict(fs, cob.BindingRequest{
+	req := cob.BindingRequest{
 		UnitName:         def.UnitName,
 		ScriptPath:       "scripts/" + def.UnitName + ".cob",
 		Model:            mdl,
@@ -75,7 +108,21 @@ func BindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 		SimulationRNG:    sim,
 		SFXVisible:       visible,
 		PresentationSink: sink,
-	})
+	}
+	if u != nil {
+		req.PortFuncs = map[cob.Port]func([]int32) int32{}
+		req.PortFuncs[cob.Port(5)] = func(args []int32) int32 {
+			if len(args) >= 2 {
+				u.InBuildStance = args[1]&1 != 0
+				return 0
+			}
+			if u.InBuildStance {
+				return 1
+			}
+			return 0
+		}
+	}
+	return cob.BindStrict(fs, req)
 }
 
 // BindCOBWithEntries is the strict binding seam for callers that know a

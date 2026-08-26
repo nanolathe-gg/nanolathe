@@ -58,7 +58,7 @@ func buildTable() {
 	}
 	// Batch 2: 22
 	b2 := []Descriptor{
-		{Name: "MakeSelectable", StateLabel: "Unit is available", Class: 0x00, AckGroup: 19, StaticGate: 0x4},
+		{Name: "MakeSelectable", StateLabel: "Unit is available", Class: 0x00, AckGroup: 19, StaticGate: 0x4, Handler: makeSelectableHandler},
 		{Name: "MobileBuild", StateLabel: "Nanolathing", Class: 0x13, AckGroup: 0, StaticGate: 0x100508},
 		{Name: "Move_Ground", StateLabel: "Moving", Class: 0x12, AckGroup: 14, StaticGate: 0x402},
 		{Name: "Paralyze", StateLabel: "Paralyzed", Class: 0x00, AckGroup: 19, StaticGate: 0x24},

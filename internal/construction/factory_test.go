@@ -369,7 +369,7 @@ func TestNanoframeCreationValues(t *testing.T) {
 	if prod.Health != 0 {
 		t.Fatalf("health %d want 0", prod.Health)
 	}
-	if prod.Flags&FlagInBuildStance != 0 {
+	if prod.InBuildStance {
 		t.Fatalf("build stance not cleared")
 	}
 	if prod.MaxHealth != int32(prodDef.MaxDamage) {
@@ -871,14 +871,14 @@ func TestStateGates(t *testing.T) {
 	// (or no Activate script) cannot raise the script-owned yard-door stance,
 	// so the service sets it on its behalf. Real retail factories always carry
 	// scripts; synthetic fixtures do not.
-	factory3.Flags &^= FlagInBuildStance
+	factory3.InBuildStance = false
 	q3 := orders.QueueForUnit(factory3)
 	q3.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State1)})
 	head3 := q3.Primary()[0]
 	head3.Phase = uint8(State1)
 	svc3 := NewService(nil, cat, w3, &economy.Service{})
 	svc3.Pump(factory3, 10)
-	if factory3.Flags&FlagInBuildStance == 0 {
+	if !factory3.InBuildStance {
 		t.Fatalf("scriptless factory should have stance self-set (documented approximation)")
 	}
 	if head3.Phase != uint8(State2) {
@@ -891,7 +891,7 @@ func TestStateGates(t *testing.T) {
 	h4, _ := w4.Create(facDef, 0, 0, 0, 0)
 	factory4 := w4.Unit(h4)
 	factory4.Def = facDef
-	factory4.Flags &^= FlagInBuildStance
+	factory4.InBuildStance = false
 	factory4.SetScript(cob.NewVM(&cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{"Activate": 0}, Pieces: []string{"base"}}))
 	q4 := orders.QueueForUnit(factory4)
 	q4.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State1)})
@@ -905,7 +905,7 @@ func TestStateGates(t *testing.T) {
 	if head4.DynamicGate != WakeBit2 {
 		t.Fatalf("state1 wait wake bit2")
 	}
-	factory4.Flags |= FlagInBuildStance
+	factory4.InBuildStance = true
 	svc4.Pump(factory4, 11)
 	if head4.Phase != uint8(State2) {
 		t.Fatalf("state1 with in-stance should advance to state2")

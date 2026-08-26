@@ -1778,8 +1778,11 @@ func (v *VM) runThread(idx int) {
 			// Bitmap branch spawns effects per bit ascending, plus physical debris if not bitmap-only; here no presentation effect.
 			t.PC += 2
 		case 0x10082000: // engine write [04 §4.3]
-			val, _ := t.stackPop()
+			// Compiled COB pushes the value first and the identifier second
+			// (top: value, identifier) [R-P0-10]. Pop the identifier before
+			// the value so `push 1; push 5; set` means port 5 <- 1.
 			id, _ := t.stackPop()
+			val, _ := t.stackPop()
 			// If id has no write arm only sets script-touched marker [04 §4.4]; we treat as no-op beyond hook.
 			if fn, ok := v.portFuncs[Port(id)]; ok && fn != nil {
 				_ = fn([]int32{id, val})

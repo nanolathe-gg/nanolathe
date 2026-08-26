@@ -168,7 +168,7 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 		// combat acquisition; it never mutates authoritative state [03 §3.2].
 		return s.IsUnitVisible(localPlayerForSession(s), u)
 	}
-	binding, err := units.BindCOBWithPortsAndVisibility(fs, u.Def, mdl, s.SimRNG(), sink, visible)
+	binding, err := units.BindCOBWithPortsAndVisibilityForUnit(fs, u, mdl, s.SimRNG(), sink, visible)
 	if err != nil {
 		return fmt.Errorf("unit %q model %q script binding: %w", u.Def.UnitName, mdl.Name, err)
 	}

@@ -741,8 +741,13 @@ var (
 // Version 7 adds the per-unit control-group value [07 §9].
 // Version 8 adds the four settled AI economy aggregates consumed by the
 // strategic score [R-P0-05]. Older states decode these fields as zero.
+// Version 9 adds all nine manager tactical vectors in recovered retail slot
+// order [R-P0-04]. Older v8 states decode the legacy six vectors and default
+// the three newly recovered vectors to empty.
+// The next version adds script-owned INBUILDSTANCE and any continuation
+// fields whose prior version has already been allocated.
 
-const StateV1VersionConst uint32 = 8
+const StateV1VersionConst uint32 = 9
 const StateV1Version1 uint32 = 1
 const StateV1Version2 uint32 = 2
 const StateV1Version3 uint32 = 3
@@ -751,20 +756,22 @@ const StateV1Version5 uint32 = 5
 const StateV1Version6 uint32 = 6
 const StateV1Version7 uint32 = 7
 const StateV1Version8 uint32 = 8
+const StateV1Version9 uint32 = 9
 
 // UnitRecord is one slot-indexed unit record, canonically ordered by slot
 // ascending for determinism (I1) [01 §6.1] [PLAN_14 C18]. Reconstruction uses
 // only published package APIs (e.g., units.World.CreateWithForcedSlot via catalog lookup) —
 // no direct memory image [P0-I11]. Slots are forced identity, not lowest-free [01 §6.1].
 type UnitRecord struct {
-	Slot      int32
-	DefName   string
-	Owner     uint8
-	X, Y, Z   int32 // 16.16 fixed raw (numeric.Fixed bits) — int32 suffices for test fixtures
-	Health    int32
-	Remaining float32 // construction remaining 1→0 [05 "Construction target state"] [I2]
-	Flags     uint32
-	Group     uint8 // one stored control-group value 0..9 [07 §9]
+	Slot          int32
+	DefName       string
+	Owner         uint8
+	X, Y, Z       int32 // 16.16 fixed raw (numeric.Fixed bits) — int32 suffices for test fixtures
+	Health        int32
+	Remaining     float32 // construction remaining 1→0 [05 "Construction target state"] [I2]
+	Flags         uint32
+	Group         uint8 // one stored control-group value 0..9 [07 §9]
+	InBuildStance bool  // COB INBUILDSTANCE port 5, separate from Flags [04 §4.4][R-P0-10]
 	// Extended per-unit mutable state for full continuation [P0-I11][01 §6][04][05][06].
 	MaxHealth         int32  // [04 §2.3]
 	Dying             bool   // death mark before Cleanup [04 §2.4]
@@ -1127,12 +1134,17 @@ type StrategicSingleVectorRecord struct {
 
 // AIGroupsSnapshot mirrors Manager groups
 type AIGroupsSnapshot struct {
-	WaveA    []int32
-	WaveB    []int32
-	Explore  []int32
-	Rally    []int32
-	RegroupA []int32
-	RegroupB []int32
+	// Fields follow the recovered manager record order (+0x20 through
+	// +0x120), not presentation or task-dispatch order [R-P0-04].
+	Resource     []int32
+	WaveA        []int32
+	RegroupA     []int32
+	Construction []int32
+	Null         []int32
+	WaveB        []int32
+	RegroupB     []int32
+	Explore      []int32
+	Rally        []int32
 }
 
 // VisibilitySnapshot mirrors visibility grids [03 §3][P0-I11].
@@ -1194,7 +1206,7 @@ type BuilderLinkRecord struct {
 // every mutable authoritative service, slot-indexed, plus both RNG states+draw counts and hash guards [PLAN_14 C18] [GAP T25] [P0-I11].
 // Version 2 adds full continuation via forced slot identity and full per-system snapshots [P0-I11].
 type StateV1 struct {
-	Version      uint32 // supported versions 1..8; current writer emits 8 [PLAN_14 C18][P0-I11]
+	Version      uint32 // supported versions 1..9; current writer emits 9 [PLAN_14 C18][P0-I11]
 	CatalogHash  string // [02 §5] C12 catalog hash
 	ManifestHash string // vfs.ManifestHash
 
@@ -1294,6 +1306,9 @@ func MarshalStateV1(s *StateV1) []byte {
 		binaryWriteUint32(&buf, u.Flags)
 		if ver >= 7 {
 			buf.WriteByte(u.Group)
+		}
+		if ver >= 9 {
+			buf.WriteByte(boolToByte(u.InBuildStance))
 		}
 		if ver >= 2 {
 			binaryWriteInt32(&buf, u.MaxHealth)
@@ -1663,29 +1678,33 @@ func MarshalStateV1(s *StateV1) []byte {
 				writeString(&buf, c.Key)
 				buf.WriteByte(byte(c.Value))
 			}
-			binaryWriteUint32(&buf, uint32(len(m.Groups.WaveA)))
-			for _, h := range m.Groups.WaveA {
-				binaryWriteInt32(&buf, h)
+			writeGroupVector := func(v []int32) {
+				binaryWriteUint32(&buf, uint32(len(v)))
+				for _, h := range v {
+					binaryWriteInt32(&buf, h)
+				}
 			}
-			binaryWriteUint32(&buf, uint32(len(m.Groups.WaveB)))
-			for _, h := range m.Groups.WaveB {
-				binaryWriteInt32(&buf, h)
-			}
-			binaryWriteUint32(&buf, uint32(len(m.Groups.Explore)))
-			for _, h := range m.Groups.Explore {
-				binaryWriteInt32(&buf, h)
-			}
-			binaryWriteUint32(&buf, uint32(len(m.Groups.Rally)))
-			for _, h := range m.Groups.Rally {
-				binaryWriteInt32(&buf, h)
-			}
-			binaryWriteUint32(&buf, uint32(len(m.Groups.RegroupA)))
-			for _, h := range m.Groups.RegroupA {
-				binaryWriteInt32(&buf, h)
-			}
-			binaryWriteUint32(&buf, uint32(len(m.Groups.RegroupB)))
-			for _, h := range m.Groups.RegroupB {
-				binaryWriteInt32(&buf, h)
+			if ver >= StateV1Version9 {
+				// [R-P0-04] exact manager record order: resource, wave A,
+				// regroup A, construction, null, wave B, regroup B, explore, rally.
+				writeGroupVector(m.Groups.Resource)
+				writeGroupVector(m.Groups.WaveA)
+				writeGroupVector(m.Groups.RegroupA)
+				writeGroupVector(m.Groups.Construction)
+				writeGroupVector(m.Groups.Null)
+				writeGroupVector(m.Groups.WaveB)
+				writeGroupVector(m.Groups.RegroupB)
+				writeGroupVector(m.Groups.Explore)
+				writeGroupVector(m.Groups.Rally)
+			} else {
+				// Preserve the pre-v9 wire order for explicitly requested old
+				// versions. v8 has no resource/construction/null fields.
+				writeGroupVector(m.Groups.WaveA)
+				writeGroupVector(m.Groups.WaveB)
+				writeGroupVector(m.Groups.Explore)
+				writeGroupVector(m.Groups.Rally)
+				writeGroupVector(m.Groups.RegroupA)
+				writeGroupVector(m.Groups.RegroupB)
 			}
 			binaryWriteInt32(&buf, m.SurfaceMetal)
 			binaryWriteInt32(&buf, m.OriginX)
@@ -1760,7 +1779,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 	if err := binary.Read(r, binary.LittleEndian, &ver); err != nil {
 		return nil, err
 	}
-	if ver != StateV1VersionConst && ver != StateV1Version7 && ver != StateV1Version6 && ver != StateV1Version5 && ver != StateV1Version4 && ver != StateV1Version3 && ver != StateV1Version2 && ver != StateV1Version1 {
+	if ver != StateV1VersionConst && ver != StateV1Version8 && ver != StateV1Version7 && ver != StateV1Version6 && ver != StateV1Version5 && ver != StateV1Version4 && ver != StateV1Version3 && ver != StateV1Version2 && ver != StateV1Version1 {
 		return nil, ErrStateV1Version
 	}
 	catHash, err := readString(r)
@@ -1845,17 +1864,26 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 				return nil, err
 			}
 		}
+		var inBuildStance bool
+		if ver >= 9 {
+			stance, readErr := r.ReadByte()
+			if readErr != nil {
+				return nil, readErr
+			}
+			inBuildStance = stance != 0
+		}
 		rec := UnitRecord{
-			Slot:      slot,
-			DefName:   defName,
-			Owner:     ownerByte,
-			X:         x,
-			Y:         y,
-			Z:         z,
-			Health:    health,
-			Remaining: math.Float32frombits(remBits),
-			Flags:     flags,
-			Group:     group,
+			Slot:          slot,
+			DefName:       defName,
+			Owner:         ownerByte,
+			X:             x,
+			Y:             y,
+			Z:             z,
+			Health:        health,
+			Remaining:     math.Float32frombits(remBits),
+			Flags:         flags,
+			Group:         group,
+			InBuildStance: inBuildStance,
 		}
 		if ver >= 2 {
 			var maxHealth int32
@@ -3179,63 +3207,66 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 				}
 				svs = append(svs, StrategicSingleVectorRecord{Key: k, Value: int8(vb)})
 			}
-			nWaveA, err := readStateCount(r, "AI wave A", 4)
-			if err != nil {
-				return nil, err
-			}
-			waveA := make([]int32, nWaveA)
-			for idx := uint32(0); idx < nWaveA; idx++ {
-				if err := binary.Read(r, binary.LittleEndian, &waveA[idx]); err != nil {
+			readGroupVector := func(label string) ([]int32, error) {
+				n, err := readStateCount(r, label, 4)
+				if err != nil {
 					return nil, err
 				}
+				v := make([]int32, n)
+				for idx := uint32(0); idx < n; idx++ {
+					if err := binary.Read(r, binary.LittleEndian, &v[idx]); err != nil {
+						return nil, err
+					}
+				}
+				return v, nil
 			}
-			nWaveB, err := readStateCount(r, "AI wave B", 4)
-			if err != nil {
-				return nil, err
-			}
-			waveB := make([]int32, nWaveB)
-			for idx := uint32(0); idx < nWaveB; idx++ {
-				if err := binary.Read(r, binary.LittleEndian, &waveB[idx]); err != nil {
+			var resource, construction, nullGroup []int32
+			var waveA, waveB, exp, rally, regA, regB []int32
+			if ver >= StateV1Version9 {
+				if resource, err = readGroupVector("AI resource"); err != nil {
 					return nil, err
 				}
-			}
-			nExp, err := readStateCount(r, "AI explore", 4)
-			if err != nil {
-				return nil, err
-			}
-			exp := make([]int32, nExp)
-			for idx := uint32(0); idx < nExp; idx++ {
-				if err := binary.Read(r, binary.LittleEndian, &exp[idx]); err != nil {
+				if waveA, err = readGroupVector("AI wave A"); err != nil {
 					return nil, err
 				}
-			}
-			nRally, err := readStateCount(r, "AI rally", 4)
-			if err != nil {
-				return nil, err
-			}
-			rally := make([]int32, nRally)
-			for idx := uint32(0); idx < nRally; idx++ {
-				if err := binary.Read(r, binary.LittleEndian, &rally[idx]); err != nil {
+				if regA, err = readGroupVector("AI regroup A"); err != nil {
 					return nil, err
 				}
-			}
-			nRegA, err := readStateCount(r, "AI regroup A", 4)
-			if err != nil {
-				return nil, err
-			}
-			regA := make([]int32, nRegA)
-			for idx := uint32(0); idx < nRegA; idx++ {
-				if err := binary.Read(r, binary.LittleEndian, &regA[idx]); err != nil {
+				if construction, err = readGroupVector("AI construction"); err != nil {
 					return nil, err
 				}
-			}
-			nRegB, err := readStateCount(r, "AI regroup B", 4)
-			if err != nil {
-				return nil, err
-			}
-			regB := make([]int32, nRegB)
-			for idx := uint32(0); idx < nRegB; idx++ {
-				if err := binary.Read(r, binary.LittleEndian, &regB[idx]); err != nil {
+				if nullGroup, err = readGroupVector("AI null"); err != nil {
+					return nil, err
+				}
+				if waveB, err = readGroupVector("AI wave B"); err != nil {
+					return nil, err
+				}
+				if regB, err = readGroupVector("AI regroup B"); err != nil {
+					return nil, err
+				}
+				if exp, err = readGroupVector("AI explore"); err != nil {
+					return nil, err
+				}
+				if rally, err = readGroupVector("AI rally"); err != nil {
+					return nil, err
+				}
+			} else {
+				if waveA, err = readGroupVector("AI wave A"); err != nil {
+					return nil, err
+				}
+				if waveB, err = readGroupVector("AI wave B"); err != nil {
+					return nil, err
+				}
+				if exp, err = readGroupVector("AI explore"); err != nil {
+					return nil, err
+				}
+				if rally, err = readGroupVector("AI rally"); err != nil {
+					return nil, err
+				}
+				if regA, err = readGroupVector("AI regroup A"); err != nil {
+					return nil, err
+				}
+				if regB, err = readGroupVector("AI regroup B"); err != nil {
 					return nil, err
 				}
 			}
@@ -3252,11 +3283,14 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 			ais = append(ais, AIManagerRecord{
 				Player: playerB, Deadlines: dl,
 				Strategic:    StrategicSnapshot{CenterX: cx, CenterZ: cz, Radius: rad, LastRefreshTick: lrt, LastClassRecomputeTick: lcrt, Counts: counts, ClassVectors: cvs, InitVectors: ivs, SingleVectors: svs},
-				Groups:       AIGroupsSnapshot{WaveA: waveA, WaveB: waveB, Explore: exp, Rally: rally, RegroupA: regA, RegroupB: regB},
+				Groups:       AIGroupsSnapshot{Resource: resource, WaveA: waveA, RegroupA: regA, Construction: construction, Null: nullGroup, WaveB: waveB, RegroupB: regB, Explore: exp, Rally: rally},
 				SurfaceMetal: surf, OriginX: ox, OriginZ: oz,
 			})
 		}
 		sort.Slice(ais, func(i, j int) bool { return ais[i].Player < ais[j].Player })
+		if err := validateAIGroups(ais); err != nil {
+			return nil, err
+		}
 		st.AI = ais
 		// Visibility
 		var vis VisibilitySnapshot
@@ -3426,6 +3460,50 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		}
 	}
 	return st, nil
+}
+
+// validateAIGroups rejects malformed native group records before they can be
+// applied to a live session. A retail manager group is a single-owner,
+// single-membership vector: the direct writer removes a unit from its old
+// record before appending it to the new record [R-P0-04]. A zero/null handle,
+// duplicate handle, or duplicate manager player therefore cannot describe a
+// recoverable StateV1. This is deliberately a structural check; Unit.Group
+// ownership/coherence is checked by session.RestoreStateV1 once the forced
+// unit slots are available.
+func validateAIGroups(managers []AIManagerRecord) error {
+	seenPlayers := make(map[uint8]struct{}, len(managers))
+	seenHandles := make(map[int32]uint8)
+	for _, m := range managers {
+		if m.Player >= 10 {
+			return fmt.Errorf("save: AI manager player %d out of range", m.Player)
+		}
+		if _, ok := seenPlayers[m.Player]; ok {
+			return fmt.Errorf("save: duplicate AI manager player %d", m.Player)
+		}
+		seenPlayers[m.Player] = struct{}{}
+		vectors := []struct {
+			name string
+			list []int32
+		}{
+			{"resource", m.Groups.Resource}, {"wave A", m.Groups.WaveA},
+			{"regroup A", m.Groups.RegroupA}, {"construction", m.Groups.Construction},
+			{"null", m.Groups.Null}, {"wave B", m.Groups.WaveB},
+			{"regroup B", m.Groups.RegroupB}, {"explore", m.Groups.Explore},
+			{"rally", m.Groups.Rally},
+		}
+		for _, v := range vectors {
+			for _, h := range v.list {
+				if h <= 0 {
+					return fmt.Errorf("save: AI %s group contains null handle %d", v.name, h)
+				}
+				if prior, ok := seenHandles[h]; ok {
+					return fmt.Errorf("save: duplicate AI group handle players=%d,%d handle=%d", prior, m.Player, h)
+				}
+				seenHandles[h] = m.Player
+			}
+		}
+	}
+	return nil
 }
 
 // WriteStateV1 writes the StateV1 box into the Nanolathe account [PLAN_14 C18].

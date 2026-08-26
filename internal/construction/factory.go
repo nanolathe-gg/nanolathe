@@ -46,7 +46,10 @@ const (
 
 // Flags on units.Unit.Flags for COB edges [04 §4.4] [05].
 const (
-	FlagInBuildStance uint32 = 1 << 5     // port 5 INBUILDSTANCE [04 §4.4]
+	// FlagInBuildStance is retained for old fixture compatibility. The
+	// authoritative INBUILDSTANCE state is units.Unit.InBuildStance; bit 0x20
+	// in Unit.Flags is the unrelated AI classifier input [04 §4.4][R-P0-04].
+	FlagInBuildStance uint32 = 1 << 5
 	FlagActivated     uint32 = 1 << 0     // activate edge placeholder [05 "Factory production lifecycle"] TODO(question): exact bit not located
 	FlagCompleted     uint32 = 0x00002000 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	FlagInitCloak     uint32 = 0x00004000 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -856,7 +859,7 @@ func initializeNanoframe(prod *units.Unit, def *content.UnitDef) {
 	prod.Remaining = 1
 	prod.Health = 0
 	prod.MaxHealth = int32(def.MaxDamage)
-	prod.Flags &^= FlagInBuildStance
+	prod.InBuildStance = false
 	prod.Alive = true
 }
 
@@ -1371,13 +1374,13 @@ func (s *Service) handleState1(factory *units.Unit, node *orders.Node, tick uint
 	}
 	// Synthetic factories without COB or without Activate script: set stance directly [05]
 	if factory.Script == nil {
-		factory.Flags |= FlagInBuildStance
+		factory.InBuildStance = true
 	} else if prog := getVMProgram(factory.Script); prog == nil {
-		factory.Flags |= FlagInBuildStance
+		factory.InBuildStance = true
 	} else if _, ok := prog.Scripts["Activate"]; !ok {
-		factory.Flags |= FlagInBuildStance
+		factory.InBuildStance = true
 	}
-	if factory.Flags&FlagInBuildStance != 0 {
+	if factory.InBuildStance {
 		node.Phase = uint8(State2)
 		node.DynamicGate = 0
 		node.Deadline = -1

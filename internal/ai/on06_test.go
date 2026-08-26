@@ -50,6 +50,7 @@ func TestTypedBuildRequestPreservesCoordinates(t *testing.T) {
 		Factory:      builder,
 		Terrain:      terrain,
 	}
+	seedAIGroup(mgr, builder, 4)
 	mgr.Strategic.Catalog = cat
 	var captured BuildRequest
 	var capturedCount int
@@ -104,6 +105,7 @@ func TestTypedBuildRequestPreservesCoordinates(t *testing.T) {
 		Factory:   facUnit,
 		Terrain:   terrain,
 	}
+	seedAIGroup(mgr2, facUnit, 4)
 	mgr2.Strategic.Catalog = cat
 	var facReq BuildRequest
 	mgr2.QueueBuildTyped = func(req BuildRequest) error {
@@ -230,6 +232,7 @@ func TestMilestoneSequenceObservesProduction(t *testing.T) {
 	mgr.Terrain = terrain
 	mgr.Catalog = cat
 	mgr.Strategic.Catalog = cat
+	seedAIGroup(mgr, com, 4)
 	mgr.Strategic.CenterX = world.CellToWorld(8)
 	mgr.Strategic.CenterZ = world.CellToWorld(8)
 	mgr.QueueBuildTyped = func(req BuildRequest) error {
@@ -307,18 +310,24 @@ func TestMilestoneSequenceObservesProduction(t *testing.T) {
 	cu := w.Unit(hC)
 	cu.Remaining = 0
 	// A completed combat unit is observed independently of tactical-group
-	// population. R-P0-04 found no bounded retail writer that seeds manager
-	// task vectors, so ordinary unit creation must not assign this unit.
+	// population. The recovered classifier is a separate 30-entry pass gated by
+	// runtime bit 0x20; ordinary unit creation initializes that bit, but this
+	// tick is intentionally before the classifier's 30-entry cadence.
+	if cu.Flags&classifierEligibleBit == 0 {
+		t.Fatalf("ordinary unit creation must initialize classifier eligibility bit")
+	}
 	mgr.Tick(4, w, &econ)
 	if _, ok := mgr.Milestones()[MilestoneCombatUnitCompleted]; !ok {
 		t.Fatalf("CombatUnitCompleted not set")
 	}
-	if got := mgr.groupMemberCount(); got != 0 {
-		t.Fatalf("completed combat unit populated unreachable tactical vectors: %d", got)
+	for group := uint8(1); group <= 9; group++ {
+		if list := mgr.groupVector(group); list != nil && containsHandle(*list, cu.Handle) {
+			t.Fatalf("completed combat unit populated unreachable tactical vector %d", group)
+		}
 	}
-	// No group means no task-produced attack order. The attack sink remains
-	// covered by groups_test with explicitly seeded vectors, matching the only
-	// recovered manager producer (wave merge).
+	// No group means no task-produced attack order in this fixture. The attack
+	// sink remains covered by groups_test with explicitly admitted vectors; this
+	// fixture does not reach the classifier cadence.
 	hE, _ := w.Create(cat.Units[content.CanonicalKey("armflash")], 1, world.CellToWorld(10), 0, world.CellToWorld(10))
 	enemy := w.Unit(hE)
 	enemy.Remaining = 0
@@ -497,8 +506,8 @@ func TestDeterministicSeededRuns(t *testing.T) {
 		econ.Players[0].Stock[economy.Metal] = 400
 		econ.Players[0].Capacity[economy.Energy] = 1000
 		econ.Players[0].Capacity[economy.Metal] = 500
-	econ.Players[0].AIProduction[economy.Energy] = 300
-	econ.Players[0].AIProduction[economy.Metal] = 10
+		econ.Players[0].AIProduction[economy.Energy] = 300
+		econ.Players[0].AIProduction[economy.Metal] = 10
 		for k := TaskKind(0); k < TaskKindCount; k++ {
 			mgr.Deadlines[k] = 0
 		}

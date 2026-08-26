@@ -71,7 +71,7 @@ func TestStateV1Version7AIAggregatesDefaultZero(t *testing.T) {
 
 func TestStateV1Version8AddsFourFloat32FieldsPerPlayer(t *testing.T) {
 	v7 := MarshalStateV1(&StateV1{Version: StateV1Version7})
-	v8 := MarshalStateV1(&StateV1{Version: StateV1VersionConst})
+	v8 := MarshalStateV1(&StateV1{Version: StateV1Version8})
 	if got, want := len(v8)-len(v7), 10*4*4; got != want {
 		t.Fatalf("StateV1 v8 payload delta = %d bytes, want %d", got, want)
 	}

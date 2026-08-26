@@ -1,6 +1,10 @@
 package orders
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nanolathe/nanolathe/internal/units"
+)
 
 func TestDescriptorTable(t *testing.T) {
 	tbl := Table()
@@ -39,5 +43,19 @@ func TestDescriptorTable(t *testing.T) {
 	}
 	if DescriptorFor(Lookup("SelfDestruct")).StaticGate != 0x40040 {
 		t.Fatalf("SelfDestruct gate %x, want 0x40040", DescriptorFor(Lookup("SelfDestruct")).StaticGate)
+	}
+}
+
+func TestMakeSelectableHandler(t *testing.T) {
+	u := &units.Unit{Flags: units.ClassifierEligibleStatus | 0x8000}
+	id := Lookup("MakeSelectable")
+	if id == 0 || DescriptorFor(id).Handler == nil {
+		t.Fatal("MakeSelectable handler is not registered")
+	}
+	if got := DescriptorFor(id).Handler(u, &Node{}, 0); got != Code(5) {
+		t.Fatalf("MakeSelectable returned %d, want 5", got)
+	}
+	if u.Flags != units.ClassifierEligibleStatus {
+		t.Fatalf("MakeSelectable flags %08x, want %08x", u.Flags, units.ClassifierEligibleStatus)
 	}
 }

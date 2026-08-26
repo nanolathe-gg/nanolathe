@@ -269,7 +269,7 @@ func TestAllocatorNanoframeInitializationAndInvalidRollback(t *testing.T) {
 	if err != nil || product == nil {
 		t.Fatalf("allocator product=%v err=%v", product, err)
 	}
-	if product.Remaining != 1 || product.Health != 0 || product.MaxHealth != def.MaxDamage || product.Flags&FlagInBuildStance != 0 {
+	if product.Remaining != 1 || product.Health != 0 || product.MaxHealth != def.MaxDamage || product.InBuildStance {
 		t.Fatalf("allocator nanoframe not initialized: %+v", product)
 	}
 	if _, ok := svc.BuilderLink(product.Handle); ok {

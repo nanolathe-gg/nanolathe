@@ -8,10 +8,25 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// high input bits below retain opaque retail semantics; the output bits are
+// kept named only by their observed masks because no design-level name is
+// established [R-P0-04 "Classifier eligibility, destinations, and order"].
+const (
+	classifierEligibleBit uint32 = units.ClassifierEligibleStatus
+	classifierInputA      uint32 = 0x20000000
+	classifierInputB      uint32 = 0x80000000
+	classifierOutputA     uint32 = 0x00040000
+	classifierOutputB     uint32 = 0x00080000
+	classifierOutputMask  uint32 = 0x00100000
+	classifierOutputSet   uint32 = 0x00200000
+)
+
 // isCombatUnit reports the conservative combat classification used by the
-// observed-state milestone recorder. It is deliberately not used to populate
-// manager tactical groups: the retail group eligibility predicate and initial
-// writer are not established [08 "Eco toggle and group-vector population"].
+// observed-state milestone recorder. It is deliberately not used by the
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// group writer"].
 func isCombatUnit(def *content.UnitDef) bool {
 	if def == nil {
 		return false
@@ -78,28 +93,190 @@ func cleanGroup(list []pool.Handle, w *units.World, player uint8) []pool.Handle 
 	return list[:n]
 }
 
-// updateGroups applies the established cleanup pass to manager tactical
-// vectors. Retail allocates these vectors empty and the bounded writer census
-// found no initial population path. The only located manager-vector producer
-// is wave merge, which transfers members between already-populated wave
-// vectors; it is not an initializer [08 "Strategy manager and its task graph";
-// 08 "Eco toggle and group-vector population"].
-//
-// Do not scan the world or classify units here. Doing so changes an inert stock
-// manager into a synthetic order producer. A future runtime trace may add the
-// exact producer and lifecycle hooks; until then an empty vector must remain
-// empty (TODO(question), R-P0-04).
+// updateGroups applies the established lifecycle cleanup pass to manager
+// tactical vectors. Classification is intentionally separate: retail calls
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// pass therefore cannot discover a unit merely because a task callback ran
+// [R-P0-04].
 func (m *Manager) updateGroups(w *units.World) {
 	if m == nil || w == nil {
 		return
 	}
+	m.GroupResource = cleanGroup(m.GroupResource, w, m.Player)
 	// Clean existing groups.
 	m.GroupWaveA = cleanGroup(m.GroupWaveA, w, m.Player)
+	m.GroupRegroupA = cleanGroup(m.GroupRegroupA, w, m.Player)
+	m.GroupConstruction = cleanGroup(m.GroupConstruction, w, m.Player)
+	m.GroupNull = cleanGroup(m.GroupNull, w, m.Player)
 	m.GroupWaveB = cleanGroup(m.GroupWaveB, w, m.Player)
+	m.GroupRegroupB = cleanGroup(m.GroupRegroupB, w, m.Player)
 	m.GroupExplore = cleanGroup(m.GroupExplore, w, m.Player)
 	m.GroupRally = cleanGroup(m.GroupRally, w, m.Player)
-	m.GroupRegroupA = cleanGroup(m.GroupRegroupA, w, m.Player)
-	m.GroupRegroupB = cleanGroup(m.GroupRegroupB, w, m.Player)
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// owner slice in pool order. A unit must carry runtime bit 0x20 and have no
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// and stores that record number back in Group. The two high runtime bits and
+// the definition predicates retain their opaque retail names; their exact
+// tests are established even where the semantic names are not [R-P0-04].
+func (m *Manager) classifyGroups(w *units.World) {
+	if m == nil || w == nil {
+		return
+	}
+	for _, u := range w.IterSliced() {
+		if u == nil || !u.Alive || u.Owner != m.Player {
+			continue
+		}
+		if u.Flags&classifierEligibleBit == 0 {
+			continue
+		}
+		// The status-byte/word writes precede the group-zero gate in the retail
+		// sweep. They are observable on already-grouped units as well as on
+		// newly classified units, so do not move them inside the assignment
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if u.Def != nil && u.Def.CanCapture {
+			u.Flags = (u.Flags &^ classifierOutputB) | classifierOutputA
+		} else {
+			u.Flags = (u.Flags &^ classifierOutputA) | classifierOutputB
+		}
+		u.Flags = (u.Flags &^ classifierOutputMask) | classifierOutputSet
+		if u.Group != 0 {
+			continue
+		}
+		group := uint8(0)
+		if u.Flags&classifierInputA != 0 {
+			if u.Flags&classifierInputB == 0 {
+				group = 1
+			} else {
+				group = 5
+			}
+		} else if u.Def != nil {
+			switch {
+			case u.Def.Builder:
+				group = 4
+			case u.Def.CanFly:
+				group = 8
+			case u.Def.MaxSlope > 0:
+				group = 7
+			case u.Flags&classifierInputB != 0:
+				group = 3
+			}
+		}
+		if group != 0 {
+			m.writeGroup(u, int8(group))
+		}
+	}
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// removes the unit from its old manager record by replacing the removed slot
+// with the last element, then appends to the destination and finally stores
+// the new group value. A newGroup of -1 is represented by Group==0 because
+// Unit.Group is the public 0..9 control-group field; death callers do not
+// retain a negative sentinel after the unit is torn down. Group zero is the
+// ungrouped record and is intentionally not one of the nine task vectors.
+// There is no gameplay cap and no RNG in this writer [R-P0-04].
+func (m *Manager) writeGroup(u *units.Unit, newGroup int8) {
+	if m == nil || u == nil {
+		return
+	}
+	m.removeGroupMember(u.Group, u.Handle)
+	if newGroup < 0 {
+		u.Group = 0
+		return
+	}
+	group := uint8(newGroup)
+	if group == 0 {
+		u.Group = 0
+		return
+	}
+	if group > 9 {
+		return
+	}
+	m.insertGroupMember(u.Handle, group)
+	u.Group = group
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// replace-with-last, not stable compaction; preserving that order matters to
+// subsequent farthest-member ties and save bytes [R-P0-04].
+func (m *Manager) removeGroupMember(group uint8, h pool.Handle) bool {
+	if m == nil || group == 0 || group > 9 {
+		return false
+	}
+	list := m.groupVector(group)
+	if list == nil {
+		return false
+	}
+	for i, candidate := range *list {
+		if candidate != h {
+			continue
+		}
+		last := len(*list) - 1
+		(*list)[i] = (*list)[last]
+		*list = (*list)[:last]
+		return true
+	}
+	return false
+}
+
+// groupVector returns the mutable task vector for its retail record number.
+// The switch deliberately enumerates every record, including the currently
+// inert null slot, so a later lifecycle/control-group writer cannot silently
+// collapse one of the nine records into another task [R-P0-04].
+func (m *Manager) groupVector(group uint8) *[]pool.Handle {
+	if m == nil {
+		return nil
+	}
+	switch group {
+	case 1:
+		return &m.GroupResource
+	case 2:
+		return &m.GroupWaveA
+	case 3:
+		return &m.GroupRegroupA
+	case 4:
+		return &m.GroupConstruction
+	case 5:
+		return &m.GroupNull
+	case 6:
+		return &m.GroupWaveB
+	case 7:
+		return &m.GroupRegroupB
+	case 8:
+		return &m.GroupExplore
+	case 9:
+		return &m.GroupRally
+	default:
+		return nil
+	}
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// does not draw RNG; Go's append supplies the growable vector semantics.
+func (m *Manager) insertGroupMember(h pool.Handle, group uint8) {
+	if m == nil || group < 1 || group > 9 {
+		return
+	}
+	if list := m.groupVector(group); list != nil {
+		*list = append(*list, h)
+	}
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// The vector transfer itself is performed by mergeWaveGroups; this helper
+// keeps the named instance field coherent for subsequent classifier gates and
+// control-group/save consumers.
+func (m *Manager) stampGroupValues(w *units.World, handles []pool.Handle, group uint8) {
+	if m == nil || w == nil || group == 0 || group > 9 {
+		return
+	}
+	for _, h := range handles {
+		if u := w.Unit(h); u != nil {
+			u.Group = group
+		}
+	}
 }
 
 // mergeWaveGroups is the sole recovered producer for manager tactical
@@ -222,7 +399,7 @@ func (m *Manager) isInAnyGroup(h pool.Handle) bool {
 	if m == nil {
 		return false
 	}
-	return containsHandle(m.GroupWaveA, h) || containsHandle(m.GroupWaveB, h) || containsHandle(m.GroupExplore, h) || containsHandle(m.GroupRally, h) || containsHandle(m.GroupRegroupA, h) || containsHandle(m.GroupRegroupB, h)
+	return containsHandle(m.GroupResource, h) || containsHandle(m.GroupWaveA, h) || containsHandle(m.GroupRegroupA, h) || containsHandle(m.GroupConstruction, h) || containsHandle(m.GroupNull, h) || containsHandle(m.GroupWaveB, h) || containsHandle(m.GroupRegroupB, h) || containsHandle(m.GroupExplore, h) || containsHandle(m.GroupRally, h)
 }
 
 // findEnemyTarget deterministically selects an enemy unit nearest strategic center.

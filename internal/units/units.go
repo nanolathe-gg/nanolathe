@@ -21,6 +21,15 @@ const (
 	DeathSelfDestruct
 )
 
+// ClassifierEligibleStatus is the runtime unit-status bit consumed by the
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// and is cleared by death finalization [R-P0-04 "Runtime eligibility bit
+// lifecycle"].
+const ClassifierEligibleStatus uint32 = 0x00000020
+
+const classifierSelectableClear uint32 = 0x00008000
+
 // TODO(question): [04 §3.5] establishes the per-unit dedup array but not its capacity.
 const GuardLatchSize = 8
 
@@ -55,13 +64,14 @@ type Unit struct {
 	// Build progress remaining 1→0 [04 §2.3] C3. float32 per the I2 allowlist
 	// row "Construction remaining fraction" [05 "Construction target state"].
 	// Owned exclusively by construction.Service; Units.Tick never mutates it [05 "Construction arithmetic"].
-	Remaining    float32
-	Flags        uint32       // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Group        uint8        // one stored control-group value 0..9 [07 §9]
-	Pending      uint32       // capability/pending word for gate intersection [04 §3.3] C6
-	Orders       any          // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
-	Script       *cob.VM      // typed COB VM per-unit [04 §4.2][P1-I01] — not any, typed per acceptance
-	GuardLatches GuardLatches // per-unit dedup array for guard assistance [04 §3.5]
+	Remaining     float32
+	Flags         uint32       // runtime status bits; bit 0x20 is allocator-initialized [R-P0-04]
+	InBuildStance bool         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Group         uint8        // one stored control-group value 0..9 [07 §9]
+	Pending       uint32       // capability/pending word for gate intersection [04 §3.3] C6
+	Orders        any          // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
+	Script        *cob.VM      // typed COB VM per-unit [04 §4.2][P1-I01] — not any, typed per acceptance
+	GuardLatches  GuardLatches // per-unit dedup array for guard assistance [04 §3.5]
 
 	// Typed per-unit state introduced for P0-I02 real pipeline [04 §1.3][04 §4][06][GAP T15].
 	// These fields own the authoritative per-unit data that the phase-2 sweep
@@ -94,6 +104,24 @@ type Unit struct {
 	PlacementIdx      int // index in Mission.Units placement order, -1 if not scenario-spawned
 	PlacementIdent    string
 	PlacementUnitName string
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// 0x8000, then set the classifier/selection eligibility bit 0x20. The order
+// operates on the runtime status word (Flags here); it does not synthesize
+// COB INBUILDSTANCE, which is kept in InBuildStance.
+func (u *Unit) MakeSelectable() {
+	if u == nil {
+		return
+	}
+	u.Flags = (u.Flags &^ classifierSelectableClear) | ClassifierEligibleStatus
+}
+
+// ClearClassifierEligibility clears the retail runtime eligibility bit.
+func (u *Unit) ClearClassifierEligibility() {
+	if u != nil {
+		u.Flags &^= ClassifierEligibleStatus
+	}
 }
 
 // EconomyActive reports whether the unit is eligible for passive economy
@@ -329,6 +357,7 @@ func (w *World) attachCOB(u *Unit) error {
 		}
 	}
 	vm := cob.NewVM(prog)
+	bindUnitPortHandlers(vm, u)
 	u.SetScript(vm)
 	// Run Create immediately with wake flag (delta 0 barrier) so hide/show etc. are visible before first snapshot [04 §4.1][GAP T15].
 	if prog != nil {
@@ -447,6 +476,7 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 			Y:            y,
 			Z:            z,
 			Alive:        true,
+			Flags:        ClassifierEligibleStatus,
 			Remaining:    0,
 			MaxHealth:    int32(def.MaxDamage),
 			Health:       int32(def.MaxDamage),
@@ -506,6 +536,7 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 		Y:            y,
 		Z:            z,
 		Alive:        true,
+		Flags:        ClassifierEligibleStatus,
 		Remaining:    0,
 		MaxHealth:    int32(def.MaxDamage),
 		Health:       int32(def.MaxDamage),
@@ -594,6 +625,7 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 			Y:            y,
 			Z:            z,
 			Alive:        true,
+			Flags:        ClassifierEligibleStatus,
 			Remaining:    0,
 			MaxHealth:    int32(def.MaxDamage),
 			Health:       int32(def.MaxDamage),
@@ -633,6 +665,7 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		Y:            y,
 		Z:            z,
 		Alive:        true,
+		Flags:        ClassifierEligibleStatus,
 		Remaining:    0,
 		MaxHealth:    int32(def.MaxDamage),
 		Health:       int32(def.MaxDamage),
@@ -727,6 +760,7 @@ func (w *World) FreeImmediate(h pool.Handle) {
 	// but slotIndex retained stale [P0-16 §3.4].
 	player := int(u.Owner)
 	u.Alive = false
+	u.Flags &^= ClassifierEligibleStatus
 	w.units[idx] = nil
 	w.pool.Free(h)
 	if player >= 0 && player < 10 && w.liveCounters[player] > 0 {
@@ -775,6 +809,7 @@ func (w *World) Cleanup() {
 		u := w.units[i]
 		if u != nil && u.Dying {
 			player := int(u.Owner)
+			u.Flags &^= ClassifierEligibleStatus
 			u.Alive = false
 			w.units[i] = nil
 			w.pool.Free(pool.Handle(i))

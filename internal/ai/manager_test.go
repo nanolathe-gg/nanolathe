@@ -617,6 +617,7 @@ func TestManagerSelectPlaceQueueChain(t *testing.T) {
 				Factory:      builder,
 				Terrain:      terrain,
 			}
+			seedAIGroup(mgr, builder, 4)
 			for k := TaskKind(0); k < TaskKindCount; k++ {
 				mgr.Deadlines[k] = 1000
 			}
@@ -759,6 +760,7 @@ func TestManagerPlaceFailureRetry(t *testing.T) {
 		Factory:   builder,
 		Terrain:   ter,
 	}
+	seedAIGroup(mgr, builder, 4)
 	for k := TaskKind(0); k < TaskKindCount; k++ {
 		mgr.Deadlines[k] = 1000
 	}

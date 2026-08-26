@@ -87,4 +87,3 @@ func TestClassVectorOldProxiesCannotAffectChoice(t *testing.T) {
 		t.Fatalf("old proxy fields changed class choice: a=%+v/%d b=%+v/%d", s.ClassVectors["a"], s.SingleVectors["a"], s.ClassVectors["b"], s.SingleVectors["b"])
 	}
 }
-

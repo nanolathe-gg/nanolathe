@@ -90,6 +90,7 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 				Remaining:         u.Remaining,
 				Flags:             flags,
 				Group:             u.Group,
+				InBuildStance:     u.InBuildStance,
 				MaxHealth:         u.MaxHealth,
 				Dying:             u.Dying,
 				DeathCause:        uint8(u.DeathCause),
@@ -626,24 +627,21 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 				rec.Strategic.SingleVectors = append(rec.Strategic.SingleVectors, save.StrategicSingleVectorRecord{Key: k, Value: v})
 			}
 			sort.Slice(rec.Strategic.SingleVectors, func(i, j int) bool { return rec.Strategic.SingleVectors[i].Key < rec.Strategic.SingleVectors[j].Key })
-			for _, h := range m.GroupWaveA {
-				rec.Groups.WaveA = append(rec.Groups.WaveA, int32(h))
+			appendHandles := func(dst *[]int32, src []pool.Handle) {
+				for _, h := range src {
+					*dst = append(*dst, int32(h))
+				}
 			}
-			for _, h := range m.GroupWaveB {
-				rec.Groups.WaveB = append(rec.Groups.WaveB, int32(h))
-			}
-			for _, h := range m.GroupExplore {
-				rec.Groups.Explore = append(rec.Groups.Explore, int32(h))
-			}
-			for _, h := range m.GroupRally {
-				rec.Groups.Rally = append(rec.Groups.Rally, int32(h))
-			}
-			for _, h := range m.GroupRegroupA {
-				rec.Groups.RegroupA = append(rec.Groups.RegroupA, int32(h))
-			}
-			for _, h := range m.GroupRegroupB {
-				rec.Groups.RegroupB = append(rec.Groups.RegroupB, int32(h))
-			}
+			// [R-P0-04] preserve the exact nine-vector manager record order.
+			appendHandles(&rec.Groups.Resource, m.GroupResource)
+			appendHandles(&rec.Groups.WaveA, m.GroupWaveA)
+			appendHandles(&rec.Groups.RegroupA, m.GroupRegroupA)
+			appendHandles(&rec.Groups.Construction, m.GroupConstruction)
+			appendHandles(&rec.Groups.Null, m.GroupNull)
+			appendHandles(&rec.Groups.WaveB, m.GroupWaveB)
+			appendHandles(&rec.Groups.RegroupB, m.GroupRegroupB)
+			appendHandles(&rec.Groups.Explore, m.GroupExplore)
+			appendHandles(&rec.Groups.Rally, m.GroupRally)
 			st.AI = append(st.AI, rec)
 		}
 		sort.Slice(st.AI, func(i, j int) bool { return st.AI[i].Player < st.AI[j].Player })
@@ -710,6 +708,9 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 func (s *Session) RestoreStateV1(st *save.StateV1) error {
 	if s == nil || st == nil {
 		return fmt.Errorf("session: nil restore")
+	}
+	if err := validateSavedAIGroups(st); err != nil {
+		return err
 	}
 	// Hashes already validated by Unmarshal
 	// RNG per-session isolated [RS-06][I4] — restore into session, sync global for backward compat.
@@ -780,6 +781,7 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 				u.Remaining = rec.Remaining
 				u.Flags = rec.Flags &^ ((1 << 16) | (1 << 17))
 				u.Group = rec.Group
+				u.InBuildStance = rec.InBuildStance
 				u.Activated = rec.Flags&(1<<16) != 0
 				u.IsCloaked = rec.Flags&(1<<17) != 0
 				// Backward compat for saves before P1-I04: non-OnOffable complete units default to active.
@@ -1344,30 +1346,42 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 			for _, c := range rec.Strategic.SingleVectors {
 				m.Strategic.SingleVectors[c.Key] = c.Value
 			}
-			// Groups
-			m.GroupWaveA = make([]pool.Handle, len(rec.Groups.WaveA))
-			for i, h := range rec.Groups.WaveA {
-				m.GroupWaveA[i] = pool.Handle(h)
+			// Groups: exact manager record order [R-P0-04]. The vectors are
+			// restored independently of Unit.Group; the coherence check below
+			// verifies that every member carries its matching manager group.
+			toHandles := func(src []int32) []pool.Handle {
+				dst := make([]pool.Handle, len(src))
+				for i, h := range src {
+					dst[i] = pool.Handle(h)
+				}
+				return dst
 			}
-			m.GroupWaveB = make([]pool.Handle, len(rec.Groups.WaveB))
-			for i, h := range rec.Groups.WaveB {
-				m.GroupWaveB[i] = pool.Handle(h)
-			}
-			m.GroupExplore = make([]pool.Handle, len(rec.Groups.Explore))
-			for i, h := range rec.Groups.Explore {
-				m.GroupExplore[i] = pool.Handle(h)
-			}
-			m.GroupRally = make([]pool.Handle, len(rec.Groups.Rally))
-			for i, h := range rec.Groups.Rally {
-				m.GroupRally[i] = pool.Handle(h)
-			}
-			m.GroupRegroupA = make([]pool.Handle, len(rec.Groups.RegroupA))
-			for i, h := range rec.Groups.RegroupA {
-				m.GroupRegroupA[i] = pool.Handle(h)
-			}
-			m.GroupRegroupB = make([]pool.Handle, len(rec.Groups.RegroupB))
-			for i, h := range rec.Groups.RegroupB {
-				m.GroupRegroupB[i] = pool.Handle(h)
+			m.GroupResource = toHandles(rec.Groups.Resource)
+			m.GroupWaveA = toHandles(rec.Groups.WaveA)
+			m.GroupRegroupA = toHandles(rec.Groups.RegroupA)
+			m.GroupConstruction = toHandles(rec.Groups.Construction)
+			m.GroupNull = toHandles(rec.Groups.Null)
+			m.GroupWaveB = toHandles(rec.Groups.WaveB)
+			m.GroupRegroupB = toHandles(rec.Groups.RegroupB)
+			m.GroupExplore = toHandles(rec.Groups.Explore)
+			m.GroupRally = toHandles(rec.Groups.Rally)
+			if st.Version >= save.StateV1Version9 && s.Units != nil {
+				groupVectors := []struct {
+					group uint8
+					list  []pool.Handle
+				}{
+					{1, m.GroupResource}, {2, m.GroupWaveA}, {3, m.GroupRegroupA},
+					{4, m.GroupConstruction}, {5, m.GroupNull}, {6, m.GroupWaveB},
+					{7, m.GroupRegroupB}, {8, m.GroupExplore}, {9, m.GroupRally},
+				}
+				for _, gv := range groupVectors {
+					for _, h := range gv.list {
+						u := s.Units.Unit(h)
+						if u == nil || u.Owner != rec.Player || u.Group != gv.group {
+							return fmt.Errorf("session: AI group/vector mismatch player=%d group=%d handle=%d", rec.Player, gv.group, h)
+						}
+					}
+				}
 			}
 		}
 	}
@@ -1405,6 +1419,65 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 			links = append(links, construction.LinkRecord{Builder: pool.Handle(r.Builder), Product: pool.Handle(r.Product)})
 		}
 		s.Build.RestoreLinks(links)
+	}
+	return nil
+}
+
+// validateSavedAIGroups checks the cross-record invariants that the binary
+// save codec cannot know: every vector member must refer to a saved unit owned
+// by that manager and carry the corresponding retail group value. Units that
+// are ungrouped (Group==0), dying, or otherwise absent from every vector are
+// valid; only a vector's explicit membership is constrained [R-P0-04]. The
+// check runs before RestoreStateV1 mutates RNG, clock, or pools.
+func validateSavedAIGroups(st *save.StateV1) error {
+	if st == nil || st.Version < save.StateV1Version9 {
+		return nil
+	}
+	type unitIdentity struct {
+		owner uint8
+		group uint8
+	}
+	unitsBySlot := make(map[int32]unitIdentity, len(st.Units))
+	for _, u := range st.Units {
+		if u.Slot <= 0 {
+			return fmt.Errorf("session: saved unit slot %d is invalid", u.Slot)
+		}
+		if _, exists := unitsBySlot[u.Slot]; exists {
+			return fmt.Errorf("session: duplicate saved unit slot %d", u.Slot)
+		}
+		unitsBySlot[u.Slot] = unitIdentity{owner: u.Owner, group: u.Group}
+	}
+	seen := make(map[int32]struct{})
+	for _, m := range st.AI {
+		vectors := []struct {
+			group uint8
+			name  string
+			list  []int32
+		}{
+			{1, "resource", m.Groups.Resource}, {2, "wave A", m.Groups.WaveA},
+			{3, "regroup A", m.Groups.RegroupA}, {4, "construction", m.Groups.Construction},
+			{5, "null", m.Groups.Null}, {6, "wave B", m.Groups.WaveB},
+			{7, "regroup B", m.Groups.RegroupB}, {8, "explore", m.Groups.Explore},
+			{9, "rally", m.Groups.Rally},
+		}
+		for _, v := range vectors {
+			for _, h := range v.list {
+				if h <= 0 {
+					return fmt.Errorf("session: AI %s group contains null handle %d", v.name, h)
+				}
+				identity, ok := unitsBySlot[h]
+				if !ok {
+					return fmt.Errorf("session: AI %s group references missing unit handle=%d", v.name, h)
+				}
+				if identity.owner != m.Player || identity.group != v.group {
+					return fmt.Errorf("session: AI group/vector mismatch player=%d group=%d handle=%d", m.Player, v.group, h)
+				}
+				if _, exists := seen[h]; exists {
+					return fmt.Errorf("session: duplicate AI group membership handle=%d", h)
+				}
+				seen[h] = struct{}{}
+			}
+		}
 	}
 	return nil
 }

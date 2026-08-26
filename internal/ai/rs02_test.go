@@ -156,6 +156,7 @@ func TestRS02_RNGDrawLedgerMatchesHandAuthoredSequence(t *testing.T) {
 		Terrain:      terrain,
 		SurfaceMetal: 0,
 	}
+	seedAIGroup(mgr, u, 1)
 	mgr.Strategic.Catalog = cat
 	mgr.Strategic.Init([]string{"armcom", "armmex_onoff"})
 	mgr.Strategic.LastRefreshTick = 0

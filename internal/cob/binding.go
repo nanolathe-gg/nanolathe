@@ -26,6 +26,10 @@ type BindingRequest struct {
 	SFXSink              SFXSink
 	SFXVisible           func(piece int, sfxType int32) bool
 	PresentationSink     PresentationSink
+	// PortFuncs are installed before the mode-I Create callback. Production
+	// unit bindings use this for instance-owned engine-port state such as
+	// INBUILDSTANCE; leaving it nil preserves the existing default no-op ports.
+	PortFuncs map[Port]func(args []int32) int32
 }
 
 // BindingDiagnosticCode identifies one strict binding failure. Codes are
@@ -160,6 +164,11 @@ func BindStrict(fs vfs.FSOps, req BindingRequest) (*Binding, error) {
 	}
 
 	vm := NewVM(program)
+	for port, fn := range req.PortFuncs {
+		if fn != nil {
+			vm.BindPort(port, fn)
+		}
+	}
 	bridge := NewCallbackBridge(vm)
 	bridge.SetSimulationRNG(req.SimulationRNG)
 	bridge.SetSFXSink(req.SFXSink, req.SFXVisible)

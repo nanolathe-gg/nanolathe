@@ -101,17 +101,22 @@ type Manager struct {
 	// P0-07: alliance awareness [P0-07] ON-06. Nil means same-owner-only (default) [08].
 	IsAlliance func(a, b uint8) bool // alliance test injected at construction; default same-owner-only [P0-07]
 
-	// Manager task vectors for tactical coordination. Retail initializes these
-	// vectors empty; updateGroups only applies lifecycle cleanup, while the
-	// recovered wave merge transfers members between existing wave vectors
-	// [08 "Eco toggle and group-vector population"].
-	// Each slice holds pool handles in deterministic order.
-	GroupWaveA    []pool.Handle
-	GroupWaveB    []pool.Handle
-	GroupExplore  []pool.Handle
-	GroupRally    []pool.Handle
-	GroupRegroupA []pool.Handle
-	GroupRegroupB []pool.Handle
+	// Manager task vectors for tactical coordination. The retail manager owns
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// vector order. Resource/construction/null are retained even though their
+	// current task handlers do not consume the vectors, so the writer's
+	// destination is not silently collapsed into another task.
+	GroupResource     []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GroupWaveA        []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GroupRegroupA     []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GroupConstruction []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GroupNull         []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GroupWaveB        []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GroupRegroupB     []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GroupExplore      []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GroupRally        []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 
 	entryCount         uint32 // eligible manager entries for classification cadence [08][PLAN_11 C3]
 	classificationRuns int
@@ -417,8 +422,10 @@ func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 	if m.Catalog != nil || m.Strategic.Catalog != nil {
 		m.Strategic.MaybeRefresh(tick, m.simRNG(), m.Player, w)
 	}
-	// R-P0-04: clean manager task vectors; no bounded retail writer populates
-	// them from ordinary unit creation/completion.
+	// R-P0-04: clean manager task vectors before the separate 30-entry
+	// classifier admission pass. Ordinary unit creation/completion does not
+	// itself append to these vectors; established writer paths do so through
+	// group assignment, load, control-group, and wave-transfer operations.
 	m.updateGroups(w)
 	// P0-07: observe milestones from production state [P0-07] ON-06.
 	m.observeMilestones(tick, w)
@@ -449,10 +456,11 @@ func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 func (m *Manager) runClassifications(tick uint32, w *units.World, econ *economy.Service) {
 	m.classificationRuns++
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Placeholder: no state change beyond counting; real work would read completed counts / profile.
-	// For P0-I12, we ensure strategic center is fresh (already via MaybeRefresh above) and that
-	// classifications produce varied scores via existing ClassVectors (established via Init).
-	_, _, _ = tick, w, econ
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// group value is zero. Keep the cadence counter and call shape here so the
+	// writer remains on the established manager entry path [R-P0-04].
+	_, _ = tick, econ
+	m.classifyGroups(w)
 }
 
 // runDueTasks executes due virtual tasks based on absolute deadlines [08 "Established AI-facing data and rooted planner"] [PLAN_11 C3][P0-02].
@@ -539,13 +547,16 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 	if w == nil || econ == nil {
 		return
 	}
-	// Find best builder+candidate across all owned completed builders [P0-I12].
-	// Iterate builders in deterministic sliced order [I1] and pick highest scoring candidate.
+	// Find best builder+candidate in this task's assigned construction vector
+	// [P0-02]. The retail task does not rediscover builders from the world when
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// admissions to this input.
 	var bestBuilder *units.Unit
 	var bestCand Candidate
 	var bestScore int32 = -1
 	found := false
-	for _, u := range w.IterSliced() {
+	for _, h := range m.GroupConstruction {
+		u := w.Unit(h)
 		if u == nil || !u.Alive || u.Owner != m.Player || u.Remaining != 0 {
 			continue
 		}
@@ -567,16 +578,7 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 		}
 	}
 	if !found || bestBuilder == nil {
-		// Fallback to old findBuilder for compatibility
-		bestBuilder = m.findBuilder(w)
-		if bestBuilder == nil {
-			return
-		}
-		cand, ok := Select(m, bestBuilder, econ)
-		if !ok {
-			return
-		}
-		bestCand = cand
+		return
 	}
 	builder := bestBuilder
 	cand := bestCand
@@ -650,8 +652,11 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// per-pass reporting counters [R-P0-05].
 	netEnergy := econ.Players[m.Player].AIProduction[economy.Energy] - econ.Players[m.Player].AIConsumption[economy.Energy]
-	// Iterate completed units in sliced order (I1) stable ordering, no map iteration.
-	for _, u := range w.IterSliced() {
+	// The eco task scans its assigned resource/activity vector, not the whole
+	// owner slice [08][R-P0-04].
+	m.updateGroups(w)
+	for _, h := range m.GroupResource {
+		u := w.Unit(h)
 		if u == nil || !u.Alive || u.Owner != m.Player {
 			continue
 		}
@@ -686,11 +691,6 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 			// units adapter owns that mutable state and economy reads it through
 			// EconomyActive [05 "Unit instance economy state"] [P0-02].
 			u.SetActivated(enable)
-			// Also try repair of damaged units via builder orders when resource allows.
-			// This provides stock-reachable reclaim/repair behavior via ordinary orders [P0-I12].
-			if enable {
-				m.tryRepair(tick, w)
-			}
 		}
 	}
 }
@@ -771,13 +771,19 @@ func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, thr
 	group = cleanGroup(group, w, m.Player)
 	peer = cleanGroup(peer, w, m.Player)
 	group, peer = mergeWaveGroups(group, peer, w, threshold)
-	// Update stored group after clean
+	// Update stored group after clean, then mirror the unit group fields for the
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// swap-delete/append result produced by mergeWaveGroups.
 	if threshold == waveAThreshold {
 		m.GroupWaveA = group
 		m.GroupWaveB = peer
+		m.stampGroupValues(w, group, 2)
+		m.stampGroupValues(w, peer, 6)
 	} else {
 		m.GroupWaveB = group
 		m.GroupWaveA = peer
+		m.stampGroupValues(w, group, 6)
+		m.stampGroupValues(w, peer, 2)
 	}
 	if len(group) < min {
 		return
@@ -846,18 +852,11 @@ func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, 
 	var ownGroup []pool.Handle
 	var peerGroup []pool.Handle
 	if peer == TaskWaveA {
-		ownGroup = m.GroupWaveA
+		ownGroup = m.GroupRegroupA
 		peerGroup = m.GroupWaveB
-		// Alternative: use Regroup slices if they have members, else wave
-		if len(m.GroupRegroupA) > 0 {
-			ownGroup = m.GroupRegroupA
-		}
 	} else {
-		ownGroup = m.GroupWaveB
+		ownGroup = m.GroupRegroupB
 		peerGroup = m.GroupWaveA
-		if len(m.GroupRegroupB) > 0 {
-			ownGroup = m.GroupRegroupB
-		}
 	}
 	ownGroup = cleanGroup(ownGroup, w, m.Player)
 	peerGroup = cleanGroup(peerGroup, w, m.Player)
@@ -900,7 +899,9 @@ func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, 
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): population of manager task group vectors is bounded negative [P0-02]; this task is inert as static image until a runtime writer is found. It issues ordinary move orders only when the explore group is non-empty via proven producer; otherwise it returns without tick-derived coordinates or extra RNG.
+// The explore vector is populated by the recovered classifier (category 8),
+// load, control-group, or wave-transfer writers. An empty vector remains a
+// normal no-op; no world scan is permitted here [P0-02][R-P0-04].
 func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) {
 	_, _, _ = tick, w, econ
 	if w == nil {
@@ -944,7 +945,8 @@ func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) 
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): see doExplore — inert until group population writer found; no tick-derived coordinates or extra RNG beyond deadline's 150 bound.
+// An empty rally vector remains a normal no-op. Category 9 is not emitted by
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 	_, _, _ = tick, w, econ
 	if w == nil {
