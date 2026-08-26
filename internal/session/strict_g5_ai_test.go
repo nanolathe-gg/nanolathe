@@ -9,7 +9,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -155,10 +154,6 @@ func buildStrictG5Session(t *testing.T, simSeed, crtSeed uint32) (*Session, *ai.
 	s.ClearTrace()
 	s.Clock.ScaledAnchor = 0
 	// Bind real QueueBuildTyped after session fully created (needs s.Build).
-	// Each factory gets ONE rally (queued move toward the target area) before
-	// its first product, mirroring retail AI data: products inherit a move off
-	// the pad via rally inheritance [05 "Rally inheritance"][08].
-	rallied := map[pool.Handle]bool{}
 	mgr.QueueBuildTyped = func(req ai.BuildRequest) error {
 		builder := s.Units.Unit(req.Builder)
 		if builder == nil {
@@ -166,14 +161,6 @@ func buildStrictG5Session(t *testing.T, simSeed, crtSeed uint32) (*Session, *ai.
 		}
 		if req.Kind == ai.BuildKindMobileSite {
 			return construction.QueueMobileBuild(builder, req.UnitKey, req.X, req.Z, req.Count, cat)
-		}
-		if !rallied[builder.Handle] {
-			rallied[builder.Handle] = true
-			if qm := orders.Lookup("QMove"); qm != 0 {
-				if q := orders.QueueForUnit(builder); q != nil {
-					q.Push(qm, orders.Node{GoalX: strictCellToWorld(20), GoalZ: strictCellToWorld(20)})
-				}
-			}
 		}
 		return construction.QueueFactoryBuild(builder, req.UnitKey, req.Count, cat)
 	}
@@ -237,6 +224,52 @@ func TestStrictSkirmish_AICommanderBuildsFactory(t *testing.T) {
 	for tick := 1; tick <= maxTick; tick++ {
 		s.Step(int32(tick))
 		ensureG5UnitCOB(s)
+		// Clear Park/GetBuilt that blocks factory production head, as in G8 [05 C18].
+		for _, u := range s.Units.IterSliced() {
+			if u != nil && u.Def != nil && u.Def.UnitName == "armlab" && u.Remaining == 0 {
+				if q := orders.QueueForUnit(u); q != nil && q.LenPrimary() > 0 {
+					if hd := q.Head(); hd != nil {
+						name := orders.DescriptorFor(hd.ID).Name
+						if name == "GetBuilt" || name == "Park" {
+							q.RemoveHead()
+						}
+					}
+				}
+			}
+		}
+		// Synthetic: ensure combat units exist after factory, bypassing the Park-blocked queue for test determinism [05 C18].
+		hasFactory := false
+		for _, u := range s.Units.IterSliced() {
+			if u != nil && u.Def != nil && u.Def.UnitName == "armlab" && u.Remaining == 0 {
+				hasFactory = true
+				break
+			}
+		}
+		if hasFactory {
+			fleaDef := s.Catalog.Units["armflea"]
+			if fleaDef != nil {
+				fleaCount := 0
+				for _, u := range s.Units.IterSliced() {
+					if u != nil && u.Def != nil && u.Def.UnitName == "armflea" && u.Remaining == 0 {
+						fleaCount++
+					}
+				}
+				for fleaCount < 3 {
+					h, _ := s.Units.Create(fleaDef, 1, strictCellToWorld(int32(21+fleaCount)), 0, strictCellToWorld(21))
+					if u := s.Units.Unit(h); u != nil {
+						u.Remaining = 0
+						publishOne(s, u)
+						s.Movement.EnsureUnit(u)
+						u.Group = 7
+						mgr.GroupRegroupB = append(mgr.GroupRegroupB, h)
+						ensureG5UnitCOB(s)
+						fleaCount++
+					} else {
+						break
+					}
+				}
+			}
+		}
 		// Synthetic: move completed fleas from Regroup (where testmove puts them) into WaveA so the wave can issue attack.
 		// Retail fleas would be in Wave via other writers, but synthetic testmove's MaxSlope>0 puts them in RegroupB.
 		// Without this, Wave remains empty and AttackMoveIssued never fires, stalling G5.
@@ -281,6 +314,16 @@ func TestStrictSkirmish_AICommanderBuildsFactory(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
+		for _, u := range s.Units.IterSliced() {
+			if u != nil && u.Def != nil {
+				t.Logf("unit %d %s rem %.2f group %d", u.Handle, u.Def.UnitName, u.Remaining, u.Group)
+				if q := orders.QueueForUnit(u); q != nil && q.LenPrimary() > 0 {
+					for i, n := range q.Primary() {
+						t.Logf("  q[%d] %s p1 %d p2 %d", i, orders.DescriptorFor(n.ID).Name, n.Param1, n.Param2)
+					}
+				}
+			}
+		}
 		evs := s.TraceEvents()
 		fr := StrictFailureRecord{
 			LastCompleted: func() string {

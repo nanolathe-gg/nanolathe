@@ -126,6 +126,16 @@ func TestSleepZeroCostsOneTick(t *testing.T) {
 	}
 }
 
+func TestEngineRootSignalMaskSeed(t *testing.T) {
+	vm := NewVM(&Program{Code: []uint32{0x10065000}, Scripts: map[string]int{"Create": 0}, ScriptsByID: []int{0}})
+	if !vm.StartByName("Create", nil) {
+		t.Fatal("root start failed")
+	}
+	if got := vm.Threads[0].SignalMask; got != 1 {
+		t.Fatalf("root signal mask=%d want 1 [R-P0-10]", got)
+	}
+}
+
 func TestStackUnderflowOverflow(t *testing.T) {
 	// Underflow: add with empty stack should not panic, pop zeros, push 0 [04 §4.3] C13
 	prog := synthProg([]uint32{0x10031000, 0x10065000}, []string{"base"}, 0, []int{0})

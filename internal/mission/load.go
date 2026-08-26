@@ -39,6 +39,14 @@ type Mission struct {
 	Victory     []*triggers.Trigger // victory conditions [PLAN_10 C14-C17]
 	Defeat      []*triggers.Trigger // defeat conditions [PLAN_10 C14-C17]
 	IsRestore   bool                // BetweenMissions restore: InitialMission also runs on restores [04 §3.6] C9
+	// Campaign provenance for progression [08 "Campaign discovery"] [08 "Progression"].
+	// For TypeCampaign loaded via camps/*.tdf:MISSION%d, CampaignPath is the
+	// logical VFS path (e.g. "camps/arm campaign.tdf") with provenance from
+	// Discover / ReadFileLimit, and CampaignIndex is the MISSION%d suffix.
+	// For non-campaign missions these are empty / -1.
+	CampaignPath  string // logical path of the camps/*.tdf file, "" if not campaign [08 "Campaign discovery"]
+	CampaignIndex int    // MISSION%d index, -1 if not campaign
+	Difficulty    int    // difficulty value used for schema selection, -1 if not campaign
 	// order witness for ordering assertion [C4][C5]: schema -> placement -> wind
 	order []string
 }
@@ -244,7 +252,15 @@ func LoadCampaignWithSink(fs vfs.FSOps, campaignPath string, missionIndex int, d
 		return nil, err
 	}
 	// Compose mission body in established order: schema -> placement -> wind -> useonly. [C4][C5][C8]
-	return composeMission(fs, TypeCampaign, ota, terrKey, difficulty, playerCount, sink)
+	m, err := composeMission(fs, TypeCampaign, ota, terrKey, difficulty, playerCount, sink)
+	if err != nil {
+		return nil, err
+	}
+	// Provenance for progression: retain campaign file and index [08 "Campaign discovery"].
+	m.CampaignPath = campaignPath
+	m.CampaignIndex = missionIndex
+	m.Difficulty = difficulty
+	return m, nil
 }
 
 // LoadWithSink is LoadWithType with sink. [ORCH §7]
@@ -563,18 +579,21 @@ func composeMission(fs vfs.FSOps, typ Type, ota *formats.OTA, terrainKey string,
 	order = append(order, "triggers")
 
 	m := &Mission{
-		Type:        typ,
-		OTA:         ota,
-		TerrainKey:  terrainKey,
-		Schema:      selected,
-		Units:       units,
-		Specials:    specials,
-		Features:    features,
-		WindBounds:  wind,
-		UseOnlyPath: useOnly,
-		Victory:     victory,
-		Defeat:      defeat,
-		order:       order,
+		Type:          typ,
+		OTA:           ota,
+		TerrainKey:    terrainKey,
+		Schema:        selected,
+		Units:         units,
+		Specials:      specials,
+		Features:      features,
+		WindBounds:    wind,
+		UseOnlyPath:   useOnly,
+		Victory:       victory,
+		Defeat:        defeat,
+		CampaignPath:  "",
+		CampaignIndex: -1,
+		Difficulty:    -1,
+		order:         order,
 	}
 	_ = terrainKey
 	return m, nil

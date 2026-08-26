@@ -877,6 +877,7 @@ func TestStateGates(t *testing.T) {
 	head3 := q3.Primary()[0]
 	head3.Phase = uint8(State1)
 	svc3 := NewService(nil, cat, w3, &economy.Service{})
+	svc3.AllowSyntheticFactoryStance = true
 	svc3.Pump(factory3, 10)
 	if !factory3.InBuildStance {
 		t.Fatalf("scriptless factory should have stance self-set (documented approximation)")

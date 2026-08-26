@@ -403,6 +403,69 @@ type PlacementRules struct {
 	ProfileResolved bool
 }
 
+// PlacementRulesForUnit resolves the same compiled movement/FBI profile used
+// by construction. Preview and commit callers must share this resolver so a
+// zero-value, unresolved profile cannot make the ghost disagree with the sim
+// [R-P0-08][07 §9].
+func PlacementRulesForUnit(cat *content.Catalog, def *content.UnitDef) (PlacementRules, error) {
+	if def == nil {
+		return PlacementRules{}, fmt.Errorf("world: placement profile unavailable: nil product definition [TODO(question)]")
+	}
+	rules := PlacementRules{Waterline: def.Waterline}
+	if cat != nil && def.MovementClass != "" {
+		if mc, ok := cat.Movement[content.CanonicalKey(def.MovementClass)]; ok && mc != nil {
+			rules.MaxSlope = mc.MaxSlope
+			rules.MaxWaterSlope = mc.MaxWaterSlope
+			rules.MaxWaterDepth = mc.MaxWaterDepth
+			rules.MinWaterDepth = mc.MinWaterDepth
+			rules.Terrain = true
+			rules.ProfileResolved = true
+			return rules, nil
+		}
+		return PlacementRules{}, fmt.Errorf("world: movement profile %q unavailable for placement [TODO(question)]", def.MovementClass)
+	}
+	if !def.BMCode {
+		rules.MaxSlope = def.MaxSlope
+		rules.MaxWaterDepth = def.MaxWaterDepth
+		rules.MinWaterDepth = def.MinWaterDepth
+		rules.Terrain = true
+		rules.ProfileResolved = true
+		return rules, nil
+	}
+	return PlacementRules{}, fmt.Errorf("world: class-less product %q has no compiled placement profile [TODO(question)]", def.UnitName)
+}
+
+// FootprintForUnit resolves the compiled footprint for a unit definition per
+// [07 §9] "The site": the footprint comes from the movement profile copied into
+// the definition at compile time, falling back to the authored FBI extent.
+// This helper is shared by the HUD ghost preview and the sim so the two
+// cannot diverge on movement-class footprints (C-7). The result is clamped to
+// at least 1 on each axis so a definition that authors neither still occupies a
+// square [04 §6.2].
+func FootprintForUnit(cat *content.Catalog, def *content.UnitDef) (footX, footZ int32) {
+	if def == nil {
+		return 1, 1
+	}
+	footX, footZ = def.FootprintX, def.FootprintZ
+	if cat != nil && def.MovementClass != "" {
+		if mc, ok := cat.Movement[content.CanonicalKey(def.MovementClass)]; ok && mc != nil {
+			if mc.FootprintX > 0 {
+				footX = mc.FootprintX
+			}
+			if mc.FootprintZ > 0 {
+				footZ = mc.FootprintZ
+			}
+		}
+	}
+	if footX <= 0 {
+		footX = 1
+	}
+	if footZ <= 0 {
+		footZ = 1
+	}
+	return footX, footZ
+}
+
 // PlacementQuery is the immutable input to the canonical placement legality
 // predicate. A non-nil Yard describes a building yard map. Mobile products set
 // Mobile and leave Yard nil; their footprint terrain and occupancy checks apply

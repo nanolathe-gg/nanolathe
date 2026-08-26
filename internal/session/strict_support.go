@@ -95,7 +95,7 @@ func HashState(s *Session) string {
 			// Group is authoritative manager/control-group state. It is hashed
 			// separately from the tactical vectors below so an unlisted unit's
 			// group transition cannot alias an otherwise identical state.
-			fmt.Fprintf(h, "U%d:%d:%d:%d:%.2f:%d:%d:%t|", u.Handle, int64(u.X.Raw()), int64(u.Z.Raw()), u.Health, u.Remaining, u.Flags, u.Group, u.InBuildStance)
+			fmt.Fprintf(h, "U%d:%d:%d:%d:%.2f:%d:%d:%t:%t:%t:%t:%t|", u.Handle, int64(u.X.Raw()), int64(u.Z.Raw()), u.Health, u.Remaining, u.Flags, u.Group, u.InBuildStance, u.Busy, u.YardOpen, u.BuggerOff, u.Armored)
 		}
 	}
 	if s.Combat != nil {

@@ -109,11 +109,12 @@ func TestSnapshotPublishesActiveEffectsFromOrderedEvents(t *testing.T) {
 	if got.ID != frame.Events[0].ID || got.EventSeq != frame.Events[0].Sequence || got.EffectID != 6 || got.Piece != 6 || got.X != 11 || got.TargetZ != 23 {
 		t.Fatalf("effect publication = %+v events=%+v", got, frame.Events)
 	}
-	// The event window is one-shot, while an unknown-duration effect remains
-	// explicitly active rather than being silently reduced to one tick.
+	// Both Events and Effects are one-shot windows derived from the same
+	// ordered admission: each visual event produces exactly one EffectView for
+	// that tick, and neither persists beyond the window [F-P0-034][03 §1] C5.
 	s.publishSnapshot(5)
 	_, next, ok := s.Snapshot.Read()
-	if !ok || len(next.Events) != 0 || len(next.Effects) != 1 || next.Effects[0].Lifetime != 0 || next.Effects[0].ExpiryTick != 0 {
+	if !ok || len(next.Events) != 0 || len(next.Effects) != 0 {
 		t.Fatalf("effect/event lifecycle = %+v", next)
 	}
 }

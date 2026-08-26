@@ -58,7 +58,22 @@ func TestAIGroupVectorsCaptureRestoreAndHashCoherence(t *testing.T) {
 	}
 	// Unit.Group is also authoritative even when the unit is currently in the
 	// ungrouped record (or is dying and therefore absent from a task vector).
-	ungrouped := s2.Units.Unit(5)
+	// The sliced pool only has 2 handles per player (1-2 for 0, 3-4 for 1) when
+	// catalog has 2 defs, so hardcoding handle 5 (player 2) is stale [01 §6.1][P0-16].
+	// Find any live unit whose Group is currently 0 (ungrouped) instead.
+	var ungroupedFoundHandle pool.Handle
+	foundUnit := false
+	for _, u := range s2.Units.IterSliced() {
+		if u != nil && u.Group == 0 {
+			ungroupedFoundHandle = u.Handle
+			foundUnit = true
+			break
+		}
+	}
+	if !foundUnit {
+		t.Fatal("strict fixture missing ungrouped unit")
+	}
+	ungrouped := s2.Units.Unit(ungroupedFoundHandle)
 	if ungrouped == nil {
 		t.Fatal("strict fixture missing ungrouped unit")
 	}

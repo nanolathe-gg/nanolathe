@@ -419,7 +419,10 @@ func (v *VM) Start(script int, args []int32) bool {
 	t := &v.Threads[idx]
 	t.Status = ThreadRunning
 	t.PC = script
-	t.SignalMask = 0 // engine starters start with mask 0 [fmt cob]
+	// Engine-created root threads start with signal mask 1. Child threads
+	// inherit their caller's mask below; this seed is the retail factory/COB
+	// contract, not the generic format default [R-P0-10].
+	t.SignalMask = 1
 	t.WaitThread = -1
 	t.WaitPiece = -1
 	t.WaitAxis = -1
@@ -496,7 +499,9 @@ func (v *VM) CallQuery(script int, args []int32) (started, returned bool) {
 	v.lastReturnValid[idx] = false
 	v.lastReturnValue[idx] = 0
 	t.PC = script
-	t.SignalMask = 0
+	// Synchronous engine-created roots use the same signal mask seed as
+	// asynchronous roots [R-P0-10].
+	t.SignalMask = 1
 	t.WaitThread = -1
 	t.WaitPiece = -1
 	t.WaitAxis = -1

@@ -79,6 +79,18 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 			if u.IsCloaked {
 				flags |= 1 << 17
 			}
+			if u.Busy {
+				flags |= 1 << 18
+			}
+			if u.YardOpen {
+				flags |= 1 << 19
+			}
+			if u.BuggerOff {
+				flags |= 1 << 20
+			}
+			if u.Armored {
+				flags |= 1 << 21
+			}
 			rec := save.UnitRecord{
 				Slot:              int32(u.Handle),
 				DefName:           name,
@@ -823,11 +835,15 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 				u.Health = rec.Health
 				u.MaxHealth = rec.MaxHealth
 				u.Remaining = rec.Remaining
-				u.Flags = rec.Flags &^ ((1 << 16) | (1 << 17))
+				u.Flags = rec.Flags &^ ((1 << 16) | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20) | (1 << 21))
 				u.Group = rec.Group
 				u.InBuildStance = rec.InBuildStance
 				u.Activated = rec.Flags&(1<<16) != 0
 				u.IsCloaked = rec.Flags&(1<<17) != 0
+				u.Busy = rec.Flags&(1<<18) != 0
+				u.YardOpen = rec.Flags&(1<<19) != 0
+				u.BuggerOff = rec.Flags&(1<<20) != 0
+				u.Armored = rec.Flags&(1<<21) != 0
 				// Backward compat for saves before P1-I04: non-OnOffable complete units default to active.
 				if !u.Activated && u.Def != nil && !u.Def.OnOffable && u.Remaining == 0 {
 					u.Activated = true

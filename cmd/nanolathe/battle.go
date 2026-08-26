@@ -17,6 +17,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -76,9 +77,10 @@ type battleSession struct {
 	// order-queue markers on it the way retail's battle draw does [07 §9].
 	// pointerX/Y mirror the last polled pointer so the overlay can gate on the
 	// live region rather than on the site the ghost was last moved to.
-	shiftHeld bool
-	pointerX  int32
-	pointerY  int32
+	shiftHeld        bool
+	shiftLatchSticky bool
+	pointerX         int32
+	pointerY         int32
 
 	msAccum float64 // renderer delta → scaled-now for Session.Step
 
@@ -109,9 +111,10 @@ type battleSession struct {
 
 	// Injection points ON-09/session must bind [R-P0-03]. When nil the
 	// battleSession fallback paths use construction/orders directly.
-	mobileBuildFn   func(product string, wx, wz numeric.Fixed, queued bool) error
-	factoryBuildFn  func(product string, queued bool) error
-	orderDispatchFn func(latch input.Latch, x, y int32, queued bool)
+	mobileBuildFn       func(product string, wx, wz numeric.Fixed, queued bool) error
+	factoryBuildFn      func(product string, queued bool) error
+	factoryBuildDeltaFn func(product string, count int) error
+	orderDispatchFn     func(latch input.Latch, x, y int32, queued bool)
 	// commandDispatchFn is the typed battle/application boundary. All
 	// world-mutating input is represented as a battleCommand before application;
 	// composition does not currently bind this callback to a separate session
@@ -126,6 +129,19 @@ type battleSession struct {
 	// fixture sessions may explicitly exercise legacy fallbacks.
 	requireCommandDispatch bool
 	controller             *BattleController
+}
+
+// factoryBuildDelta applies the retail signed button count: left click adds
+// one, Shift-left adds five; right-click variants pass negative values.
+func factoryBuildDelta(shiftHeld, rightClick bool) int {
+	count := 1
+	if shiftHeld {
+		count = 5
+	}
+	if rightClick {
+		count = -count
+	}
+	return count
 }
 
 type panelButton struct {
@@ -421,6 +437,12 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	mx, my := int32(mouse.X), int32(mouse.Y)
 	b.shiftHeld = kbd.HasShift()
 	b.pointerX, b.pointerY = mx, my
+	// Any latch held by Shift retires on the live Shift-up, regardless of
+	// order family [R-P0-11].
+	if !b.shiftHeld && b.shiftLatchSticky {
+		b.latch = input.LatchNormal
+		b.shiftLatchSticky = false
+	}
 
 	// Minimap click-to-jump [C-6][07 §10] using camera.Minimap math (ToCamera/ToWorld).
 	// This is presentation-only and never writes sim [I6].
@@ -570,12 +592,21 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	if kbd.KeyDown(input.KeyEscape) {
 		b.disarmPlacement()
 		b.latch = input.LatchNormal
+		b.shiftLatchSticky = false
 		b.hudCaptured = false
 		b.dragActive = false
 		return
 	}
 	// Right button is deselect/cancel only: every world order fires on left [07 §9][04 §3.4].
 	if mouse.Pressed(input.MouseButtonRight) {
+		// A factory product button is the one right-click exception: it
+		// subtracts one/five from the matching tail node [R-P0-11].
+		if b.hud != nil && b.hud.hitTestFor(b, mx, my) && b.hud.consumeRightClick(b, mx, my) {
+			return
+		}
+		if len(b.panelButtons) > 0 && b.isOverPanel(mx, my) && b.panelClickDelta(mx, my, true) {
+			return
+		}
 		if b.buildDef != "" {
 			// Cancel armed placement before affecting selection [R-P0-03][F-P0-003][07 §9].
 			b.disarmPlacement()
@@ -585,6 +616,7 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		if b.latch != input.LatchNormal {
 			// Cancel armed order latch to idle [07 §9][07 §8][07 §9].
 			b.latch = input.LatchNormal
+			b.shiftLatchSticky = false
 			return
 		}
 		if b.hasSelection() {
@@ -696,8 +728,11 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 					b.orderSelected(code, mx, my, additive)
 				}
 				// Return latch to Normal after dispatch unless shift-queuing keeps it [07 §9][P0-I14].
-				if !additive {
+				if additive {
+					b.shiftLatchSticky = true
+				} else {
 					b.latch = input.LatchNormal
+					b.shiftLatchSticky = false
 				}
 			} else {
 				// Idle latch left-click: every world command is left-click; right-click is deselect/cancel only [07 §9][04 §3.4].
@@ -1056,19 +1091,12 @@ func (b *battleSession) dispatchMobileBuildFallback(product string, wx, wz numer
 	if !ok || def == nil {
 		return nil
 	}
-	footX, footZ := int32(def.FootprintX), int32(def.FootprintZ)
-	if footX <= 0 {
-		footX = 1
-	}
-	if footZ <= 0 {
-		footZ = 1
-	}
+	footX, footZ := footprintCellsForCatalog(b.cat, def)
 	cx, cz := world.WorldToCell(wx), world.WorldToCell(wz)
 	cx -= footX / 2
 	cz -= footZ / 2
-	yard, _ := world.ParseYardMap(def.YardMap, int(footX), int(footZ))
 	if b.sess != nil && b.sess.World != nil {
-		if err := b.sess.World.ValidatePlacement(cx, cz, yard, int(footX), int(footZ), uint16(builder.Handle)); err != nil {
+		if _, err := b.checkProductPlacement(cx, cz, def, footX, footZ, uint16(builder.Handle)); err != nil {
 			return nil // illegal -> queue nothing [R-P0-03]
 		}
 	}
@@ -1097,6 +1125,12 @@ func (b *battleSession) dispatchMobileBuildFallback(product string, wx, wz numer
 
 // dispatchFactoryBuildFallback is the ON-09 fallback for factory builds [R-P0-03].
 func (b *battleSession) dispatchFactoryBuildFallback(product string, queued bool) error {
+	// Compatibility entry point for asset-free fixtures. The retail product
+	// path below is count-based; the legacy bool has no replacement semantics.
+	return b.dispatchFactoryBuildDeltaFallback(product, 1)
+}
+
+func (b *battleSession) dispatchFactoryBuildDeltaFallback(product string, count int) error {
 	fac := b.selectedFactory()
 	if fac == nil {
 		// Fallback: any immobile builder works for synthetic tests where Builder+!CanMove encodes factory.
@@ -1108,32 +1142,26 @@ func (b *battleSession) dispatchFactoryBuildFallback(product string, queued bool
 	if b.cat != nil && fac.Def != nil && !hud.ValidateBuildProduct(b.cat, fac.Def.CanonicalKey, product) {
 		return nil
 	}
-	return b.queueFactoryDirect(fac, product, queued)
+	return b.queueFactoryDirectDelta(fac, product, count)
 }
 
 // queueFactoryDirect queues a factory product via construction path [R-P0-03][05].
 func (b *battleSession) queueFactoryDirect(fac *units.Unit, product string, queued bool) error {
+	return b.queueFactoryDirectDelta(fac, product, 1)
+}
+
+// queueFactoryDirectDelta applies the signed factory button delta. Product
+// clicks never purge the existing queue; positive deltas tail-coalesce and
+// negative deltas cancel the tail-most matching product [R-P0-11].
+func (b *battleSession) queueFactoryDirectDelta(fac *units.Unit, product string, count int) error {
 	if fac == nil || b.cat == nil {
 		return nil
 	}
-	if !queued {
-		if q := orders.QueueForUnit(fac); q != nil {
-			q.PurgeUnprotected()
-			q.DropLeadingAutoOps()
-		}
+	if count > 0 {
+		return construction.QueueFactoryBuild(fac, product, count, b.cat)
 	}
-	if err := construction.QueueFactoryBuild(fac, product, 1, b.cat); err != nil {
-		return err
-	}
-	if q := orders.QueueForUnit(fac); q != nil && q.LenPrimary() > 0 {
-		prim := q.Primary()
-		if tail := prim[len(prim)-1]; tail != nil {
-			if queued {
-				tail.Flags |= orders.FlagPurgeSurvivor
-			} else {
-				tail.Flags &^= orders.FlagPurgeSurvivor
-			}
-		}
+	if count < 0 {
+		return construction.CancelProductCount(fac, product, -count)
 	}
 	return nil
 }
@@ -1257,6 +1285,10 @@ func (b *battleSession) appendFallbackBuildPanel(productKeys []string) {
 // queue immediately via injected callback with progress/count shown thereafter
 // [R-P0-03][F-P1-008]. Illegal products are rejected (queues nothing).
 func (b *battleSession) panelClick(mx, my int32) bool {
+	return b.panelClickDelta(mx, my, false)
+}
+
+func (b *battleSession) panelClickDelta(mx, my int32, rightClick bool) bool {
 	if b == nil {
 		return false
 	}
@@ -1264,12 +1296,21 @@ func (b *battleSession) panelClick(mx, my int32) bool {
 		if mx >= btn.X && mx < btn.X+panelButtonW && my >= btn.Y && my < btn.Y+panelButtonH {
 			switch btn.Kind {
 			case "cancel":
+				if rightClick {
+					return true
+				}
 				b.cancelSelectedProduction()
 				return true
 			case "onoff":
+				if rightClick {
+					return true
+				}
 				b.toggleOnOffSelected(false)
 				return true
 			case "stockpile":
+				if rightClick {
+					return true
+				}
 				b.stockpileSelected(false)
 				return true
 			case "build":
@@ -1321,7 +1362,10 @@ func (b *battleSession) panelClick(mx, my int32) bool {
 				// builder's mobility [07 §9]: a building arms placement, and
 				// anything else queues immediately.
 				if !hud.ProductArmsPlacement(def) {
-					_ = b.DispatchFactoryBuild(def.CanonicalKey, false)
+					_ = b.DispatchFactoryBuildDelta(def.CanonicalKey, factoryBuildDelta(b.shiftHeld, rightClick))
+					return true
+				}
+				if rightClick {
 					return true
 				}
 				b.armPlacement(def)
@@ -1661,7 +1705,7 @@ func (b *battleSession) armPlacement(def *content.UnitDef) {
 		return
 	}
 	b.buildDef = def.CanonicalKey
-	b.buildFootX, b.buildFootZ = footprintCells(def)
+	b.buildFootX, b.buildFootZ = footprintCellsForCatalog(b.cat, def)
 	b.buildOK = false
 	b.buildSticky = false
 	b.latch = input.LatchMobileBuild
@@ -1710,17 +1754,58 @@ func (b *battleSession) updatePlacement(mx, my int32) {
 	} else if u := b.selectedBuilder(); u != nil {
 		self = uint16(u.Handle)
 	}
-	yard, yerr := world.ParseYardMap(b.yardMapFor(), int(b.buildFootX), int(b.buildFootZ))
-	if yerr != nil {
-		yard = nil
+	footX, footZ := b.buildFootX, b.buildFootZ
+	var def *content.UnitDef
+	if b.cat != nil {
+		def, _ = b.cat.Unit(b.buildDef)
 	}
-	footX, footZ := int(b.buildFootX), int(b.buildFootZ)
-	b.buildOK = b.sess.World.ValidatePlacement(b.buildCellX, b.buildCellZ, yard, footX, footZ, self) == nil
+	result, err := b.checkProductPlacement(b.buildCellX, b.buildCellZ, def, footX, footZ, self)
+	b.buildOK = err == nil
 	waterline := int32(0)
-	if def, found := b.cat.Unit(b.buildDef); found && def != nil {
+	if def != nil {
 		waterline = def.Waterline
 	}
-	b.buildSiteH = b.sess.World.SiteHeight(b.buildCellX, b.buildCellZ, yard, footX, footZ, waterline)
+	if err == nil {
+		b.buildSiteH = result.SiteHeight
+	} else {
+		// Keep an informative ghost height while illegal; legality itself is
+		// decided only by the canonical query above.
+		yard, _ := world.ParseYardMap(b.yardMapFor(), int(footX), int(footZ))
+		b.buildSiteH = b.sess.World.SiteHeight(b.buildCellX, b.buildCellZ, yard, int(footX), int(footZ), waterline)
+	}
+}
+
+// checkProductPlacement is the battle-side adapter to the canonical
+// preview/commit predicate. It resolves movement/FBI terrain rules and uses
+// the product's compiled footprint, matching construction exactly [R-P0-08]
+// [07 §9].
+func (b *battleSession) checkProductPlacement(cx, cz int32, def *content.UnitDef, footX, footZ int32, self uint16) (world.PlacementResult, error) {
+	if b == nil || b.sess == nil || b.sess.World == nil {
+		return world.PlacementResult{}, fmt.Errorf("battle: placement world unavailable")
+	}
+	if def == nil {
+		return world.PlacementResult{}, fmt.Errorf("battle: placement definition unavailable")
+	}
+	extent, err := world.NewFootprintExtent(footX, footZ)
+	if err != nil {
+		return world.PlacementResult{}, err
+	}
+	rect, err := world.NewFootprintRect(world.NewFootprintAnchor(cx, cz), extent)
+	if err != nil {
+		return world.PlacementResult{}, err
+	}
+	rules, err := world.PlacementRulesForUnit(b.cat, def)
+	if err != nil {
+		return world.PlacementResult{}, err
+	}
+	var yard []world.YardCell
+	if !def.BMCode {
+		yard, err = world.ParseYardMap(def.YardMap, int(footX), int(footZ))
+		if err != nil {
+			return world.PlacementResult{}, err
+		}
+	}
+	return b.sess.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: self, Mobile: def.BMCode})
 }
 
 // placementRect returns the armed site's footprint as a screen rectangle
@@ -1877,6 +1962,13 @@ func footprintCells(def *content.UnitDef) (footX, footZ int32) {
 	return footX, footZ
 }
 
+func footprintCellsForCatalog(cat *content.Catalog, def *content.UnitDef) (footX, footZ int32) {
+	// HUD preview must resolve the same compiled movement/FBI footprint as the
+	// sim [R-P0-08][07 §9] C-7: prefer the world helper so the two cannot
+	// diverge.
+	return world.FootprintForUnit(cat, def)
+}
+
 // drawOverlay renders the build panel and placement ghost after units.
 // It exposes retail GUI assets: anchors, build pages, command buttons, panel slide offset,
 // resource bars, minimap contacts, messages, queue counts [07 §6][02 §6][P0-I14].
@@ -1917,7 +2009,13 @@ func (b *battleSession) drawOverlay(c *client.Client, fnt *formats.FNT) {
 			}
 			c.UIFillRect(x, y, panelButtonW, panelButtonH, bg)
 			c.UIFrameRect(x, y, panelButtonW, panelButtonH, 250)
-			c.UIText(fnt, btn.Name, x+4, y+6, 250)
+			label := btn.Name
+			if frame, ok := b.currentSnapshot(); ok {
+				if count := hud.QueueCountLabel(frame.OrderQueues, btn.Name); count != "" {
+					label += " " + count
+				}
+			}
+			c.UIText(fnt, label, x+4, y+6, 250)
 		}
 		// Latch indicator and page hint [07 §9][P0-I14].
 		latchText := "Latch: " + b.latch.String()
@@ -2475,12 +2573,72 @@ func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 		if b.continueFunc != nil {
 			b.continueFunc(cl)
 		} else if b.shell != nil && b.sess != nil {
-			// Try campaign continue via session then shell
-			if b.sess.ContinueCampaign() {
-				// For now, treat as return to main; real next-mission load would be here
-				b.shell.openMenu(modeMenuMain)
+			// Campaign Continue: on victory load next MISSION slot+1 [07 §11][08 "Progression"]; on defeat stay at menu [P1-01 §7.5].
+			// This is the fallback when no continueFunc was installed (e.g. synthetic battleSession); production path uses gameShell.continueFunc.
+			if b.sess.Mission != nil && b.sess.Mission.Type == mission.TypeCampaign {
+				isWin := false
+				if b.sess.CampaignSlot >= 0 && b.sess.CampaignSlot < len(b.sess.Progress.WL) && b.sess.Progress.WL[b.sess.CampaignSlot] == 'W' {
+					isWin = true
+				} else if b.sess.Latch.IsWin() {
+					isWin = true
+				} else if b.sess.VictoryDone && !b.sess.DefeatDone {
+					isWin = true
+				} else if r := b.sess.GetResult(); r.Ended && r.Kind == "victory" {
+					isWin = true
+				}
+				if !isWin && b.sess.Mission.CampaignIndex >= 0 && b.sess.Mission.CampaignIndex < len(b.sess.Progress.WL) && b.sess.Progress.WL[b.sess.Mission.CampaignIndex] == 'W' {
+					isWin = true
+				}
+				if isWin {
+					campaignPath := b.sess.Mission.CampaignPath
+					curIdx := b.sess.Mission.CampaignIndex
+					if curIdx < 0 {
+						curIdx = b.sess.CampaignSlot
+					}
+					difficulty := b.sess.Mission.Difficulty
+					if difficulty < 0 && b.shell != nil {
+						difficulty = b.shell.missionDifficulty()
+					}
+					// Ensure WL written before advancing [P1-01 §2.3].
+					_ = b.sess.ContinueCampaign()
+					if campaignPath != "" && curIdx >= 0 {
+						if nextIdx, hasNext, err := mission.NextCampaignMission(b.fs, campaignPath, curIdx); err == nil && hasNext {
+							nextPath := fmt.Sprintf("%s:MISSION%d", campaignPath, nextIdx)
+							prevProgress := b.sess.Progress
+							prevSlot := curIdx
+							b.shell.beginLoad("", modeMenuMission, func(state *loadingState) (*session.Session, error) {
+								sess2, err := session.NewMissionWithProgress(b.fs, nil, nextPath, difficulty, state.report)
+								if err != nil {
+									return nil, err
+								}
+								sess2.Progress = prevProgress
+								if prevSlot >= 0 && prevSlot < len(sess2.Progress.WL) && sess2.Progress.WL[prevSlot] == 0 {
+									sess2.Progress.WL[prevSlot] = 'W'
+								}
+								sess2.CampaignSlot = nextIdx
+								return sess2, nil
+							})
+							b.resultDismissed = true
+							return
+						}
+					}
+					// Campaign complete or provenance missing: return to main.
+					// TODO(question): retail end-of-campaign briefing/report/credits sequence not established [07 §11]; treat as menu return.
+					if b.sess.State == session.StatePostBattle {
+						_ = b.sess.ContinueCampaign()
+					}
+					b.shell.openMenu(modeMenuMain)
+				} else {
+					// TODO(question): losing Continue vs Retry distinction not established; current behavior returns to main, Retry handles same-mission reload [P1-01 §7.5].
+					_ = b.sess.ContinueCampaign()
+					b.shell.openMenu(modeMenuMain)
+				}
 			} else {
-				b.shell.openMenu(modeMenuMain)
+				if b.sess.ContinueCampaign() {
+					b.shell.openMenu(modeMenuMain)
+				} else {
+					b.shell.openMenu(modeMenuMain)
+				}
 			}
 		} else if b.returnToMenu != nil {
 			b.returnToMenu(cl)

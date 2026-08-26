@@ -484,6 +484,9 @@ func createAndBindServices(s *Session) error {
 		return u.COBBinding().Model
 	}
 	s.Build.Presentation = s.Presentation
+	// Walk-to-site uses normal Move_Ground machinery [REVIEW_OX_ALPHA E-8][04 §3.4][R-P0-06].
+	// Bind the movement system so mobile builders walk into nano range before state 2.
+	s.Build.Movement = s.Movement
 	// Placement release is an independent lifecycle observer. The primary
 	// OnDeath hook remains owned by the session loop for triggers/corpse/Killed;
 	// this observer only releases unfinished construction occupancy once.

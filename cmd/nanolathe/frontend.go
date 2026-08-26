@@ -488,16 +488,84 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 			return
 		}
 		s := g.battle.sess
-		if s.Mission != nil && s.Mission.Type == 1 {
-			if s.ContinueCampaign() {
-				// For now, return to main; real next-mission load would inspect Progress.WL and load MISSION slot+1
-				g.returnFromBattle(cl)
+		if s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
+			// Determine win vs loss for progression. [08 "Progression"] latch bits 0x10 win / 0x40 lose, and Progress.WL slot.
+			// Victory is AND across victory triggers, defeat OR, victory first [08 "Evaluation"]; latch arms 4→-1 ~150 ticks [P1-01].
+			isWin := false
+			if s.CampaignSlot >= 0 && s.CampaignSlot < len(s.Progress.WL) && s.Progress.WL[s.CampaignSlot] == 'W' {
+				isWin = true
+			} else if s.Latch.IsWin() {
+				isWin = true
+			} else if s.VictoryDone && !s.DefeatDone {
+				isWin = true
 			} else {
-				g.returnFromBattle(cl)
+				if r := s.GetResult(); r.Ended && r.Kind == "victory" {
+					isWin = true
+				}
 			}
-		} else {
+			// Also consider Progress.WL at mission's provenance index when CampaignSlot not set correctly for old saves.
+			if !isWin && s.Mission != nil && s.Mission.CampaignIndex >= 0 && s.Mission.CampaignIndex < len(s.Progress.WL) && s.Progress.WL[s.Mission.CampaignIndex] == 'W' {
+				isWin = true
+			}
+			if isWin {
+				campaignPath := ""
+				curIdx := -1
+				difficulty := -1
+				if s.Mission != nil {
+					campaignPath = s.Mission.CampaignPath
+					curIdx = s.Mission.CampaignIndex
+					difficulty = s.Mission.Difficulty
+				}
+				// Fallback: CampaignSlot holds mission list slot [P1-01 §2.3]; prefer Mission provenance when present.
+				if campaignPath == "" && s.CampaignSlot >= 0 {
+					// TODO(question): campaign file provenance not retained for old sessions without Mission.CampaignPath; cannot determine next deterministically. Fallback to menu.
+					_ = s.ContinueCampaign()
+					g.returnFromBattle(cl)
+					return
+				}
+				if curIdx < 0 {
+					curIdx = s.CampaignSlot
+				}
+				if difficulty < 0 {
+					difficulty = g.missionDifficulty()
+				}
+				// Ensure progress W/L is written exactly once [P1-01 §2.3] before advancing.
+				_ = s.ContinueCampaign()
+				nextIdx, hasNext, err := mission.NextCampaignMission(g.cs.fs, campaignPath, curIdx)
+				if err != nil || !hasNext {
+					// Campaign complete or discovery error: return to menu; no next mission to load.
+					// TODO(question): retail briefing/report/credits sequence between missions not established [08 "Progression"] [07 §11]; treat as return to main.
+					g.returnFromBattle(cl)
+					return
+				}
+				// Load next mission linear advance cur+1 [07 §11] [08 "Progression"] contiguous MISSION0..N until first gap [08 "Campaign discovery"] C1.
+				nextPath := fmt.Sprintf("%s:MISSION%d", campaignPath, nextIdx)
+				// Copy progress so new session retains W/L history [P0-05][P1-01 §2.3] Summary/BetweenMissions bank split TODO(question) exact persistence.
+				prevProgress := s.Progress
+				prevSlot := curIdx
+				g.beginLoad("", modeMenuMission, func(state *loadingState) (*session.Session, error) {
+					sess2, err := session.NewMissionWithProgress(g.cs.fs, nil, nextPath, difficulty, state.report)
+					if err != nil {
+						return nil, err
+					}
+					// Retain campaign progression history in new session.
+					sess2.Progress = prevProgress
+					// Ensure the winning slot is marked 'W' if latch write was missed.
+					if prevSlot >= 0 && prevSlot < len(sess2.Progress.WL) && sess2.Progress.WL[prevSlot] == 0 {
+						sess2.Progress.WL[prevSlot] = 'W'
+					}
+					sess2.CampaignSlot = nextIdx
+					return sess2, nil
+				})
+				return
+			}
+			// Losing path: retail Continue after defeat not established as auto-retry [07 §11]; keep menu return.
+			// TODO(question): losing Continue vs Retry distinction not established; current behavior returns to main, Retry button handles same-mission reload [P1-01 §7.5].
+			_ = s.ContinueCampaign()
 			g.returnFromBattle(cl)
+			return
 		}
+		g.returnFromBattle(cl)
 	}
 	g.mode = modeBattle
 	if clPtr != nil {

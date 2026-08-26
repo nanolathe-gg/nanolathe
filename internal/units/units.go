@@ -64,9 +64,16 @@ type Unit struct {
 	// Build progress remaining 1→0 [04 §2.3] C3. float32 per the I2 allowlist
 	// row "Construction remaining fraction" [05 "Construction target state"].
 	// Owned exclusively by construction.Service; Units.Tick never mutates it [05 "Construction arithmetic"].
-	Remaining     float32
-	Flags         uint32       // runtime status bits; bit 0x20 is allocator-initialized [R-P0-04]
+	Remaining float32
+	Flags     uint32 // runtime status bits; bit 0x20 is allocator-initialized [R-P0-04]
+	// The six engine-write port markers occupy the instance stance byte's
+	// low six bits [R-P0-10]. They remain named fields so production code does
+	// not confuse the classifier bit in Flags with COB state.
 	InBuildStance bool         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Busy          bool         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	YardOpen      bool         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	BuggerOff     bool         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Armored       bool         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	Group         uint8        // one stored control-group value 0..9 [07 §9]
 	Pending       uint32       // capability/pending word for gate intersection [04 §3.3] C6
 	Orders        any          // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)

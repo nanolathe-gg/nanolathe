@@ -702,10 +702,24 @@ func (s *System) SubmitMove(handle pool.Handle, player uint8, start, goal path.C
 }
 
 func (s *System) submitMove(handle pool.Handle, player uint8, start, goal path.Cell, activation uint64) {
-	goalObj := path.PointGoal(goal, 0) // radius 0 [task]
+	goalObj := path.PointGoal(goal, 0) // radius 0 [task] — legacy direct path (fixtures, tests) remains PointGoal [04 §7.2] C8
 	req := path.Request{
 		Unit:       handle,
 		Player:     player,
+		Start:      start,
+		Goal:       goalObj,
+		Activation: activation,
+	}
+	s.Scheduler.Submit(req)
+}
+
+func (s *System) submitMoveForOrder(u *units.Unit, head *orders.Node, start, goal path.Cell, activation uint64) {
+	// OW-3-P: select Goal family per order [04 §7.2][04 §7.4][04 §3.5] — Annulus for attack/guard stand-off where retail establishes it, Point otherwise.
+	// RectPerimeterGoal and SavedGoal remain unwired (no established producer) per goals.go header [04 §7.2][04 §7.4][M-4].
+	goalObj := s.goalForOrder(goal, head)
+	req := path.Request{
+		Unit:       u.Handle,
+		Player:     u.Owner,
 		Start:      start,
 		Goal:       goalObj,
 		Activation: activation,
@@ -748,7 +762,7 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	s.activeOrders[u.Handle] = &activeMove{order: head, token: token}
 	start := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
 	goal := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
-	s.submitMove(u.Handle, u.Owner, start, goal, token)
+	s.submitMoveForOrder(u, head, start, goal, token)
 	s.bindArrivalHandle(u, head)
 	return true
 }
@@ -776,7 +790,7 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	s.activeOrders[u.Handle].token = token
 	start := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
 	goal := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
-	s.submitMove(u.Handle, u.Owner, start, goal, token)
+	s.submitMoveForOrder(u, head, start, goal, token)
 	s.bindArrivalHandle(u, head)
 	return true
 }

@@ -121,15 +121,26 @@ func TestHumanBuildMetadataIsStampedAtInputBoundary(t *testing.T) {
 	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanMobileBuild, MobileBuild: HumanMobileBuildCommand{Builder: hb, Product: "product", WX: 2 << 16, WZ: 3 << 16, Queued: true}})
 	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanFactoryBuild, FactoryBuild: HumanFactoryBuildCommand{Builder: hf, Product: "product", Queued: true}})
 	s.applyHumanCommands(42)
-	for _, h := range []pool.Handle{hb, hf} {
-		q := orders.QueueForUnit(w.Unit(h))
-		if q == nil || q.LenPrimary() == 0 {
-			t.Fatalf("no build node for %d", h)
-		}
-		n := q.Head()
-		if n.Owner != h || n.CreationTick != 42 || n.Flags&orders.FlagPurgeSurvivor == 0 {
-			t.Fatalf("build metadata for %d: owner=%d tick=%d flags=%x", h, n.Owner, n.CreationTick, n.Flags)
-		}
+	// Mobile build is queued → survivor flag set [04 §3.3]; factory products are
+	// counted nodes and are no-purge per [R-P0-11][SC17] even when Queued true.
+	qm := orders.QueueForUnit(w.Unit(hb))
+	if qm == nil || qm.LenPrimary() == 0 {
+		t.Fatalf("no build node for %d", hb)
+	}
+	nm := qm.Head()
+	if nm.Owner != hb || nm.CreationTick != 42 || nm.Flags&orders.FlagPurgeSurvivor == 0 {
+		t.Fatalf("mobile build metadata for %d: owner=%d tick=%d flags=%x", hb, nm.Owner, nm.CreationTick, nm.Flags)
+	}
+	qf := orders.QueueForUnit(w.Unit(hf))
+	if qf == nil || qf.LenPrimary() == 0 {
+		t.Fatalf("no build node for %d", hf)
+	}
+	nf := qf.Head()
+	if nf.Owner != hf || nf.CreationTick != 42 {
+		t.Fatalf("factory build metadata for %d: owner=%d tick=%d flags=%x", hf, nf.Owner, nf.CreationTick, nf.Flags)
+	}
+	if nf.Flags&orders.FlagPurgeSurvivor != 0 {
+		t.Fatalf("factory counted node should be no-purge even when Queued true, got flags %x [R-P0-11]", nf.Flags)
 	}
 }
 

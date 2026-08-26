@@ -729,6 +729,37 @@ func LinkUnitWeapons(units map[string]*UnitDef, weapons map[string]*WeaponDef) {
 	}
 }
 
+// ApplyMovementFootprints copies the compiled movement profile footprint into
+// each referencing unit definition. Retail's placement/locomotion definition
+// uses this compiled copy; an authored FBI extent is retained only when the
+// profile leaves that axis absent [07 §9] "The site".
+func ApplyMovementFootprints(units map[string]*UnitDef, movement map[string]*MovementClass) {
+	keys := make([]string, 0, len(units))
+	for key := range units {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		u := units[key]
+		if u == nil || u.MovementClass == "" || movement == nil {
+			continue
+		}
+		mc := movement[CanonicalKey(u.MovementClass)]
+		if mc == nil {
+			continue
+		}
+		if mc.FootprintX > 0 {
+			u.FootprintX = mc.FootprintX
+		}
+		if mc.FootprintZ > 0 {
+			u.FootprintZ = mc.FootprintZ
+		}
+		// The footprint is part of the immutable compiled definition and thus
+		// must participate in its canonical identity/hash.
+		u.Hash = HashDefinition(writeUnitCanonical(u))
+	}
+}
+
 // EnforceDownloadable walks every unit definition and compares its name case-insensitively
 // against every build-menu button name. A match whose downloadable bit is clear raises the
 // exact warning "Hey! Somebody forgot to set downloadable=1 for %s" once, silently forces

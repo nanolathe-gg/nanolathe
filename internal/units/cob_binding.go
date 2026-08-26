@@ -66,20 +66,63 @@ func BindCOBWithPortsAndVisibilityForUnit(fs vfs.FSOps, u *Unit, mdl *model.Mode
 	return bindCOBWithPortsAndVisibility(fs, u.Def, mdl, sim, sink, visible, u)
 }
 
-func bindUnitPortHandlers(vm *cob.VM, u *Unit) {
-	if vm == nil || u == nil {
-		return
+func unitPortHandlers(vm *cob.VM, u *Unit) map[cob.Port]func([]int32) int32 {
+	if u == nil {
+		return nil
 	}
-	vm.BindPort(cob.Port(5), func(args []int32) int32 {
-		if len(args) >= 2 {
-			u.InBuildStance = args[1]&1 != 0
+	ports := make(map[cob.Port]func([]int32) int32, 6)
+	bindUnitPort := func(port cob.Port, get func() bool, set func(bool)) {
+		ports[port] = func(args []int32) int32 {
+			if len(args) >= 2 {
+				set(args[1]&1 != 0)
+				return 0
+			}
+			if get() {
+				return 1
+			}
 			return 0
 		}
-		if u.InBuildStance {
+	}
+	bindUnitPort(cob.Port(5), func() bool { return u.InBuildStance }, func(v bool) { u.InBuildStance = v })
+	bindUnitPort(cob.Port(6), func() bool { return u.Busy }, func(v bool) { u.Busy = v })
+	bindUnitPort(cob.Port(18), func() bool { return u.YardOpen }, func(v bool) { u.YardOpen = v })
+	bindUnitPort(cob.Port(19), func() bool { return u.BuggerOff }, func(v bool) { u.BuggerOff = v })
+	bindUnitPort(cob.Port(20), func() bool { return u.Armored }, func(v bool) { u.Armored = v })
+	// Port 1 is the activation edge input. The callback starts the authored
+	// lifecycle script only on an actual edge; engine-side activation raises
+	// use the same named callbacks elsewhere in construction/economy [R-P0-10].
+	ports[cob.Port(1)] = func(args []int32) int32 {
+		if len(args) >= 2 {
+			on := args[1]&1 != 0
+			if on != u.Activated {
+				u.Activated = on
+				callbackVM := vm
+				if callbackVM == nil {
+					callbackVM = u.Script
+				}
+				if callbackVM != nil && on {
+					_ = callbackVM.StartByName("Activate", nil)
+				} else if callbackVM != nil {
+					_ = callbackVM.StartByName("Deactivate", nil)
+				}
+			}
+			return 0
+		}
+		if u.Activated {
 			return 1
 		}
 		return 0
-	})
+	}
+	return ports
+}
+
+func bindUnitPortHandlers(vm *cob.VM, u *Unit) {
+	if vm == nil {
+		return
+	}
+	for port, fn := range unitPortHandlers(vm, u) {
+		vm.BindPort(port, fn)
+	}
 }
 
 // bindCOBWithPortsAndVisibility is the unit-aware strict binding path. The
@@ -110,17 +153,9 @@ func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 		PresentationSink: sink,
 	}
 	if u != nil {
-		req.PortFuncs = map[cob.Port]func([]int32) int32{}
-		req.PortFuncs[cob.Port(5)] = func(args []int32) int32 {
-			if len(args) >= 2 {
-				u.InBuildStance = args[1]&1 != 0
-				return 0
-			}
-			if u.InBuildStance {
-				return 1
-			}
-			return 0
-		}
+		// Keep the production and fixture binding paths identical. The helper
+		// installs all six researched engine-write arms before Create.
+		req.PortFuncs = unitPortHandlers(nil, u)
 	}
 	return cob.BindStrict(fs, req)
 }

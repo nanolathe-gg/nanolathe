@@ -174,6 +174,26 @@ func TestCancelTailMostTombstone(t *testing.T) {
 	}
 }
 
+func TestCancelProductCountPartialAndExact(t *testing.T) {
+	f := &units.Unit{Handle: 7, Owner: 0}
+	q := orders.QueueForUnit(f)
+	if err := QueueFactoryBuild(f, "armflash", 5, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := CancelProductCount(f, "armflash", 2); err != nil {
+		t.Fatal(err)
+	}
+	if q.LenPrimary() != 1 || q.Primary()[0].Param2 != 3 {
+		t.Fatalf("partial cancellation got len=%d count=%d", q.LenPrimary(), q.Primary()[0].Param2)
+	}
+	if err := CancelProductCount(f, "armflash", 5); err != nil {
+		t.Fatal(err)
+	}
+	if q.LenPrimary() != 0 {
+		t.Fatalf("exact/over cancellation left %d nodes", q.LenPrimary())
+	}
+}
+
 func TestVerbatimExhaustionMessage(t *testing.T) {
 	if ErrLimitMessage != "Unable to create any more units" {
 		t.Fatalf("verbatim message mismatch %q", ErrLimitMessage)

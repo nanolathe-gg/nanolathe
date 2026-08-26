@@ -1,7 +1,10 @@
 package hud
 
 import (
+	"fmt"
+
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // RetailBuildButtonsPerPage is the stock builder-page product count. The
@@ -138,4 +141,37 @@ func ProductsForPage(all []string, page, perPage int) []string {
 		end = len(all)
 	}
 	return all[start:end]
+}
+
+// QueueCountLabel returns the retail product-button count text. Primary and
+// secondary lists are summed independently for the matching product; the
+// secondary count is the queued "+N" half [R-P0-11].
+func QueueCountLabel(queues []snapshot.OrderQueueView, product string) string {
+	key := content.CanonicalKey(product)
+	if key == "" {
+		return ""
+	}
+	var primary, secondary uint32
+	for _, q := range queues {
+		for _, o := range q.Primary {
+			if content.CanonicalKey(o.BuildProduct) == key {
+				primary += o.BuildCount
+			}
+		}
+		for _, o := range q.Secondary {
+			if content.CanonicalKey(o.BuildProduct) == key {
+				secondary += o.BuildCount
+			}
+		}
+	}
+	if primary == 0 && secondary == 0 {
+		return ""
+	}
+	if primary == 0 {
+		return fmt.Sprintf("+%d", secondary)
+	}
+	if secondary == 0 {
+		return fmt.Sprintf("%d", primary)
+	}
+	return fmt.Sprintf("%d +%d", primary, secondary)
 }

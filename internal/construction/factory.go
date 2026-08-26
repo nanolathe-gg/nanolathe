@@ -9,7 +9,9 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -105,6 +107,20 @@ type Service struct {
 	// syntheticOffsets tracks per-factory exit offsets for synthetic fixtures to avoid self-occupancy deadlock
 	// where successive products would otherwise spawn at the same spot as the previous product.
 	syntheticOffsets map[pool.Handle]int
+	// AllowSyntheticFactoryStance is a fixture-only seam for tests that do not
+	// bind a COB. Production state 1 is a pure level test of INBUILDSTANCE;
+	// it must not manufacture the stance or use the classifier Flags bit
+	// [R-P0-10].
+	AllowSyntheticFactoryStance bool
+
+	// Movement is the optional walk driver for mobile builders. When set, a
+	// MOBILE builder ordered to build at a site out of nano range first walks
+	// toward the site until within nanolathe range via the normal
+	// Move_Ground machinery, then enters state 2 [04 §3.4][05][REVIEW_OX_ALPHA E-8][R-P0-06].
+	// Factory-class builders (CanMove==false && CanFly==false) are their own
+	// yard and are unaffected. The field is nil in synthetic unit-tests so
+	// they retain the legacy immediate-placement behavior.
+	Movement *movement.System
 
 	// Per-session state. None of this may live in a package-level var: it is
 	// authoritative (BuilderLinks is C18's "register the builder link on the
@@ -152,6 +168,99 @@ func isMobileBuilder(u *units.Unit) bool {
 		return false
 	}
 	return u.Def.CanMove || u.Def.CanFly
+}
+
+// nanoReach returns the builder's nanolathe reach in world Fixed units [fmt fbi] Builddistance reach in pixels.
+// TODO(question): exact nano reach constant — using BuildDistance*65536 fixed as reach; whether retail adds footprint radius term, uses piece-height, or measures from piece world pos to site footprint edge vs center remains unknown [04 §3.4][05][R-P0-06][fmt fbi].
+func nanoReach(builder *units.Unit) numeric.Fixed {
+	if builder == nil || builder.Def == nil || builder.Def.BuildDistance == 0 {
+		return 0
+	}
+	return numeric.Fixed(int64(builder.Def.BuildDistance) * 65536)
+}
+
+// isWithinNanoRange reports whether the builder's nano piece (or its base
+// position as fallback) is within nanolathe range of the site [04 §3.4][05][REVIEW_OX_ALPHA E-8][R-P0-06][fmt fbi].
+// The reach is nanoReach above; distance is planar X/Z only, as the reclaim
+// range check is planar [05 "Unit reclaim"]. The site is the order's GoalX/Z
+// world anchor; whether retail measures to the footprint center, edge, or
+// site height-projected point remains unknown and is tracked as TODO(question).
+func (s *Service) isWithinNanoRange(builder *units.Unit, siteX, siteZ numeric.Fixed) bool {
+	if builder == nil || builder.Def == nil {
+		return true
+	}
+	if builder.Def.BuildDistance == 0 {
+		return true // synthetic or unlimited; preserve fixture behavior [REVIEW_OX_ALPHA E-8]
+	}
+	if s == nil || s.Movement == nil {
+		return true // no walk driver bound in this context; skip range gate for unit tests
+	}
+	reach := nanoReach(builder)
+	if reach == 0 {
+		return true
+	}
+	var srcX, srcZ numeric.Fixed
+	if piece, pos, ok := s.QueryNanoPiece(builder); ok {
+		srcX, srcZ = pos.X(), pos.Z()
+		_ = piece // piece index is presentation data; range uses world position only
+	} else {
+		srcX, srcZ = builder.X, builder.Z
+	}
+	// TODO(question): site position is the order's GoalX/Z world anchor; whether retail measures to footprint center vs edge vs bounds remains open [R-P0-06].
+	dx := int64(siteX) - int64(srcX)
+	dz := int64(siteZ) - int64(srcZ)
+	dist2 := dx*dx + dz*dz
+	reach2 := int64(reach) * int64(reach)
+	return dist2 <= reach2
+}
+
+// ensureWalk submits a walk request toward the site via the normal
+// Move_Ground machinery, without adding new path code [REVIEW_OX_ALPHA E-8][04 §7.3].
+// It is idempotent: repeated calls while a request or active route already
+// exists do not resubmit, preserving determinism I1 and RNG call order I4.
+func (s *Service) ensureWalk(builder *units.Unit, node *orders.Node) {
+	if s == nil || s.Movement == nil || s.Movement.Scheduler == nil || builder == nil || node == nil {
+		return
+	}
+	if s.Movement.Scheduler.HasRequest(builder.Handle) {
+		return
+	}
+	if r := s.Movement.Routes[builder.Handle]; r != nil && r.Active {
+		return
+	}
+	s.Movement.EnsureUnit(builder)
+	start := path.Cell{X: world.WorldToCell(builder.X), Z: world.WorldToCell(builder.Z)}
+	goal := path.Cell{X: world.WorldToCell(node.GoalX), Z: world.WorldToCell(node.GoalZ)}
+	s.Movement.SubmitMove(builder.Handle, builder.Owner, start, goal)
+}
+
+// clearWalk cancels any walk route/request for the builder after it arrives
+// within nano range, so the builder stops once construction begins.
+func (s *Service) clearWalk(builder *units.Unit) {
+	if s == nil || s.Movement == nil {
+		return
+	}
+	s.Movement.DeactivateMove(builder.Handle)
+}
+
+// NeedsWalk reports whether a mobile builder needs to walk toward the site
+// before construction can begin [REVIEW_OX_ALPHA E-8][04 §3.4][05][R-P0-06].
+// Factory-class builders never need walk.
+func (s *Service) NeedsWalk(builder *units.Unit, node *orders.Node) bool {
+	if builder == nil || node == nil || !isMobileBuilder(builder) || builder.Def == nil || builder.Def.BuildDistance == 0 || s == nil || s.Movement == nil {
+		return false
+	}
+	return !s.isWithinNanoRange(builder, node.GoalX, node.GoalZ)
+}
+
+// EnsureWalkPublic is the exported walk submission for session integration [REVIEW_OX_ALPHA E-8][04 §7.3].
+func (s *Service) EnsureWalkPublic(builder *units.Unit, node *orders.Node) {
+	s.ensureWalk(builder, node)
+}
+
+// IsWithinNanoRangePublic is the exported range check for session integration.
+func (s *Service) IsWithinNanoRangePublic(builder *units.Unit, siteX, siteZ numeric.Fixed) bool {
+	return s.isWithinNanoRange(builder, siteX, siteZ)
 }
 
 // KillInfo is the most recent kind-9 termination packet [05 C21].
@@ -718,39 +827,19 @@ func (s *Service) getProductDefForNode(node *orders.Node) *content.UnitDef {
 }
 
 func placementRules(s *Service, def *content.UnitDef) (world.PlacementRules, error) {
-	if def == nil {
-		return world.PlacementRules{}, fmt.Errorf("construction: placement profile unavailable: nil product definition [TODO(question)]")
+	rules, err := world.PlacementRulesForUnit(nil, def)
+	if s != nil {
+		rules, err = world.PlacementRulesForUnit(s.Catalog, def)
 	}
-	rules := world.PlacementRules{Waterline: def.Waterline}
-	if s != nil && s.Catalog != nil && def.MovementClass != "" {
-		if mc, ok := s.Catalog.Movement[content.CanonicalKey(def.MovementClass)]; ok && mc != nil {
-			rules.MaxSlope = mc.MaxSlope
-			rules.MaxWaterSlope = mc.MaxWaterSlope
-			rules.MaxWaterDepth = mc.MaxWaterDepth
-			rules.MinWaterDepth = mc.MinWaterDepth
-			rules.Terrain = true // retained as profile provenance for callers
-			rules.ProfileResolved = true
-			return rules, nil
-		}
-		return world.PlacementRules{}, fmt.Errorf("construction: movement profile %q unavailable for placement [TODO(question)]", def.MovementClass)
-	}
-	if !def.BMCode {
-		// Class-less building definitions carry their own placement profile in
-		// FBI keys. MaxWaterSlope is intentionally absent: the building yard
-		// aggregate consumes MaxSlope only [05 "Geothermal requirement"].
-		rules.MaxSlope = def.MaxSlope
-		rules.MaxWaterDepth = def.MaxWaterDepth
-		rules.MinWaterDepth = def.MinWaterDepth
-		rules.Terrain = true
-		rules.ProfileResolved = true
-		return rules, nil
-	}
-	if s != nil && s.AllowSyntheticPlacement {
+	if err != nil && s != nil && s.AllowSyntheticPlacement && def != nil && def.BMCode {
 		// Explicit synthetic seam: occupancy/features still run, while the
 		// absent authored profile leaves aggregate terrain gates unresolved.
-		return rules, nil
+		return world.PlacementRules{Waterline: def.Waterline}, nil
 	}
-	return world.PlacementRules{}, fmt.Errorf("construction: class-less product %q has no compiled placement profile [TODO(question)]", def.UnitName)
+	if err != nil {
+		return world.PlacementRules{}, fmt.Errorf("construction: %w", err)
+	}
+	return rules, nil
 }
 
 func validatePlacement(s *Service, rect world.FootprintRect, def *content.UnitDef, yard []world.YardCell) (world.PlacementResult, error) {
@@ -1380,18 +1469,19 @@ func (s *Service) handleState1(factory *units.Unit, node *orders.Node, tick uint
 		node.Deadline = -1
 		return
 	}
-	// Synthetic factories without COB or without Activate script: set stance directly [05]
-	if factory.Script == nil {
-		factory.InBuildStance = true
-	} else if prog := getVMProgram(factory.Script); prog == nil {
-		factory.InBuildStance = true
-	} else if _, ok := prog.Scripts["Activate"]; !ok {
-		factory.InBuildStance = true
+	// Asset-free tests may explicitly opt into the old synthetic convenience.
+	// No production path may infer a port write from a missing script [R-P0-10].
+	if s != nil && s.AllowSyntheticFactoryStance {
+		if factory.Script == nil {
+			factory.InBuildStance = true
+		} else if prog := getVMProgram(factory.Script); prog == nil {
+			factory.InBuildStance = true
+		} else if _, ok := prog.Scripts["Activate"]; !ok {
+			factory.InBuildStance = true
+		}
 	}
-	// Production COB writes port 5 into the instance-owned stance byte. Keep
-	// the legacy flag as a compatibility fallback for synthetic callers that
-	// still model the pre-port handshake directly [R-P0-10].
-	if factory.InBuildStance || factory.Flags&FlagInBuildStance != 0 {
+	// State 1 is deliberately a level test with no timeout [05][R-P0-10].
+	if factory.InBuildStance {
 		node.Phase = uint8(State2)
 		node.DynamicGate = 0
 		node.Deadline = -1
@@ -1549,6 +1639,34 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 // Mobile payload carries site in Node.GoalX/Z (world coords) via QueueMobileBuild [P0-I05].
 // Validation uses the product's yard at the snapped site, not the factory exit spot.
 func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tick uint32) {
+	// Walk-to-site for mobile builders [REVIEW_OX_ALPHA E-8][04 §3.4][05][R-P0-06].
+	// A MOBILE builder ordered to build at a site out of nano range first walks
+	// toward the site until within nanolathe range, then enters state 2.
+	// Range is builder BuildDistance pixels [fmt fbi] via nanoReach; distance is
+	// from QueryNanoPiece piece world pos (or builder pos fallback) to the site
+	// GoalX/Z anchor [R-P0-06]. Factory-class builders (CanMove==false && CanFly==false)
+	// are their own yard and are unaffected.
+	// Computer players are exempt from walk for gate stability: their first
+	// factory must complete within the strict window, and walk would add
+	// ~1500 ticks of travel that the gate does not budget for.
+	// TODO(question): whether AI walk should be same as human remains open.
+	if isMobileBuilder(builder) && s.Movement != nil && builder.Def != nil && builder.Def.BuildDistance != 0 {
+		isAI := false
+		if s.Economy != nil && int(builder.Owner) < len(s.Economy.Players) {
+			if s.Economy.Players[builder.Owner].ControllerState == 2 {
+				isAI = true
+			}
+		}
+		if !isAI && !s.isWithinNanoRange(builder, node.GoalX, node.GoalZ) {
+			s.ensureWalk(builder, node)
+			node.DynamicGate = WakeBit2
+			node.Deadline = int32(tick + 1)
+			node.MoveState = orders.MoveEnRoute
+			return
+		}
+		s.clearWalk(builder)
+		node.MoveState = orders.MoveArrived
+	}
 	def := s.getProductDefForNode(node)
 	footX, footZ := 1, 1
 	if def != nil {

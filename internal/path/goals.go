@@ -336,3 +336,38 @@ func (g *savedGoal) StartSatisfied(start Cell) bool {
 	// Acceptance is via enumerated cells, not this early-exit [04 §7.2].
 	return false
 }
+
+// Inspection helpers for wiring verification [OW-3-P] [04 §7.2][04 §7.4].
+// They expose the private family fields so movement/order wiring can be
+// tested without inventing a public Kind field on Goal. No retail constant
+// is invented; helpers are presentation-only for tests and save codecs.
+
+func IsPointGoal(g Goal) (center Cell, radius int32, ok bool) {
+	if pg, ok2 := g.(*pointGoal); ok2 {
+		return pg.center, pg.radius, true
+	}
+	return Cell{}, 0, false
+}
+
+func IsAnnulusGoal(g Goal) (center Cell, inner, outer int32, ok bool) {
+	if ag, ok2 := g.(*annulusGoal); ok2 {
+		return ag.center, ag.inner, ag.outer, true
+	}
+	return Cell{}, 0, 0, false
+}
+
+func IsRectGoal(g Goal) (r Rect, ok bool) {
+	if rg, ok2 := g.(*rectGoal); ok2 {
+		return rg.rect, true
+	}
+	return Rect{}, false
+}
+
+func IsSavedGoal(g Goal) (cells []Cell, ok bool) {
+	if sg, ok2 := g.(*savedGoal); ok2 {
+		cp := make([]Cell, len(sg.cells))
+		copy(cp, sg.cells)
+		return cp, true
+	}
+	return nil, false
+}

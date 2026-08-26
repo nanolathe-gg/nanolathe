@@ -27,6 +27,32 @@ func TestCOBInBuildStancePortIsInstanceState(t *testing.T) {
 	}
 }
 
+func TestCOBInstancePorts(t *testing.T) {
+	u := &Unit{Activated: true}
+	vm := cob.NewVM(&cob.Program{})
+	ports := unitPortHandlers(vm, u)
+	for _, tc := range []struct {
+		port cob.Port
+		set  func()
+		get  func() bool
+	}{
+		{cob.Port(5), func() { ports[cob.Port(5)]([]int32{5, 1}) }, func() bool { return u.InBuildStance }},
+		{cob.Port(6), func() { ports[cob.Port(6)]([]int32{6, 1}) }, func() bool { return u.Busy }},
+		{cob.Port(18), func() { ports[cob.Port(18)]([]int32{18, 1}) }, func() bool { return u.YardOpen }},
+		{cob.Port(19), func() { ports[cob.Port(19)]([]int32{19, 1}) }, func() bool { return u.BuggerOff }},
+		{cob.Port(20), func() { ports[cob.Port(20)]([]int32{20, 1}) }, func() bool { return u.Armored }},
+	} {
+		tc.set()
+		if !tc.get() || ports[tc.port]([]int32{int32(tc.port)}) != 1 {
+			t.Fatalf("port %d did not round-trip", tc.port)
+		}
+	}
+	ports[cob.Port(1)]([]int32{1, 0})
+	if u.Activated {
+		t.Fatal("activation port did not clear activation")
+	}
+}
+
 func TestClassifierEligibilityStatusLifecycle(t *testing.T) {
 	world := New(4, nil)
 	def := &content.UnitDef{UnitName: "status-lifecycle", MaxDamage: 100, Limit: -1}

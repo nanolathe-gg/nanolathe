@@ -240,6 +240,26 @@ func CancelTailMost(factory *units.Unit, defKey string) error {
 	return nil
 }
 
+// CancelProductCount subtracts count units from the tail-most matching
+// factory product. Each subtraction uses the queue's existing tombstone,
+// unlink, and Param2 decrement behavior [05 "Queue subtraction"] [R-P0-11].
+// A partial cancellation is valid: retail removes as many matching units as
+// remain and stops when no matching node is left.
+func CancelProductCount(factory *units.Unit, defKey string, count int) error {
+	if count <= 0 {
+		return ErrBadCount
+	}
+	for i := 0; i < count; i++ {
+		if err := CancelTailMost(factory, defKey); err != nil {
+			if i == 0 {
+				return err
+			}
+			break
+		}
+	}
+	return nil
+}
+
 // CancelMobileTailMost cancels the tail-most matching mobile build for defKey and site [P0-I05].
 func CancelMobileTailMost(builder *units.Unit, defKey string, siteX, siteZ numeric.Fixed) error {
 	if builder == nil {

@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -131,7 +132,7 @@ func TestRS02_RNGDrawLedgerMatchesHandAuthoredSequence(t *testing.T) {
 	plot := world.ExpandPlot(attrs, 4, 4)
 	terrain := &world.Terrain{CellW: 4, CellH: 4, Plot: plot, Version: world.VersionCanonical}
 	w := units.New(16, cat)
-	defOnOff := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armmex_onoff")}, UnitName: "armmex_onoff", FootprintX: 1, FootprintZ: 1, YardMap: "o", OnOffable: true, MaxDamage: 100}
+	defOnOff := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armmex_onoff")}, UnitName: "armmex_onoff", FootprintX: 1, FootprintZ: 1, YardMap: "o", OnOffable: true, MaxDamage: 100, MakesMetal: 10}
 	cat.Units[content.CanonicalKey("armmex_onoff")] = defOnOff
 	h, _ := w.Create(defOnOff, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
 	u := w.Unit(h)
@@ -143,6 +144,8 @@ func TestRS02_RNGDrawLedgerMatchesHandAuthoredSequence(t *testing.T) {
 	econ.Players[0].StatusHalfwordAt144 = 1
 	econ.Players[0].Stock[economy.Metal] = 100
 	econ.Players[0].Stock[economy.Energy] = 50
+	econ.Players[0].AIProduction[economy.Energy] = 10
+	econ.Players[0].AIConsumption[economy.Energy] = 0
 	econ.Players[0].PassProduced[economy.Energy] = 10
 	econ.Players[0].PassConsumed[economy.Energy] = 0
 	econ.Players[0].UpdateTime = 1000
@@ -163,6 +166,8 @@ func TestRS02_RNGDrawLedgerMatchesHandAuthoredSequence(t *testing.T) {
 	mgr.Deadlines[ai.TaskOther900] = 100
 	mgr.Deadlines[ai.TaskOther150] = 100
 	mgr.Deadlines[ai.TaskResource] = 100
+	// Resource task draws RNG(5) only for makesmetal units in its vector [P0-02 §3.3]; populate it.
+	mgr.GroupResource = []pool.Handle{h}
 	before := rng.Global.Sim.Draws()
 	mgr.Tick(100, w, &econ)
 	after := rng.Global.Sim.Draws()

@@ -1,6 +1,10 @@
 package hud
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nanolathe/nanolathe/internal/snapshot"
+)
 
 func TestBuildProductsDataDrivenPaging(t *testing.T) {
 	// Paging changes page data-driven [R-P0-03][07 §9] C10: no hardcoding, guard prevents overflow
@@ -67,5 +71,18 @@ func TestBuildValidationNoInvention(t *testing.T) {
 	all := []string{"armsolar", "armfav"}
 	if ValidateBuildProductForTest(all, "armcom") {
 		t.Fatalf("should not invent armcom")
+	}
+}
+
+func TestQueueCountLabelSumsPrimaryAndSecondary(t *testing.T) {
+	queues := []snapshot.OrderQueueView{{
+		Primary:   []snapshot.OrderView{{BuildProduct: "ArmFlash", BuildCount: 2}},
+		Secondary: []snapshot.OrderView{{BuildProduct: "armflash", BuildCount: 3}},
+	}}
+	if got := QueueCountLabel(queues, "armflash"); got != "2 +3" {
+		t.Fatalf("queue label=%q want %q", got, "2 +3")
+	}
+	if got := QueueCountLabel(queues, "armflea"); got != "" {
+		t.Fatalf("missing product label=%q want empty", got)
 	}
 }

@@ -91,7 +91,7 @@ type battleMobileBuildCommand struct {
 type battleFactoryBuildCommand struct {
 	Builder pool.Handle
 	Product string
-	Queued  bool
+	Count   int
 }
 
 type battleCancelProductionCommand struct{ Unit pool.Handle }
@@ -131,7 +131,7 @@ type battleGroupCommand struct {
 // Injection points session must bind (short):
 //
 //	mobileBuildFn(product string, wx, wz numeric.Fixed, queued bool) error
-//	factoryBuildFn(product string, queued bool) error
+//	factoryBuildDeltaFn(product string, count int) error
 //	orderDispatchFn(latch input.Latch, x, y int32, queued bool)
 //
 // All are func fields on battleSession; when nil the fallback construction/
@@ -139,6 +139,7 @@ type battleGroupCommand struct {
 // product names data-driven from BuildMenus without needing a live Session.
 type battleDispatch interface {
 	DispatchMobileBuild(product string, wx, wz numeric.Fixed, queued bool) error
+	DispatchFactoryBuildDelta(product string, count int) error
 	DispatchFactoryBuild(product string, queued bool) error
 	DispatchOrderLatch(latch input.Latch, x, y int32, queued bool)
 	DispatchOrderCommand(cmd battleOrderCommand) error
@@ -174,6 +175,10 @@ func (b *battleSession) DispatchMobileBuild(product string, wx, wz numeric.Fixed
 	}})
 }
 func (b *battleSession) DispatchFactoryBuild(product string, queued bool) error {
+	return b.DispatchFactoryBuildDelta(product, 1)
+}
+
+func (b *battleSession) DispatchFactoryBuildDelta(product string, count int) error {
 	var builder pool.Handle
 	if f, ok := b.currentSnapshot(); ok {
 		builder = f.CommandPage.Builder
@@ -190,7 +195,7 @@ func (b *battleSession) DispatchFactoryBuild(product string, queued bool) error 
 		}
 	}
 	return b.submitBattleCommand(battleCommand{Kind: battleCommandFactoryBuild, FactoryBuild: battleFactoryBuildCommand{
-		Builder: builder, Product: product, Queued: queued,
+		Builder: builder, Product: product, Count: count,
 	}})
 }
 
@@ -305,10 +310,17 @@ func (b *battleSession) submitBattleCommand(cmd battleCommand) error {
 		}
 		return b.dispatchMobileBuildFallback(cmd.MobileBuild.Product, cmd.MobileBuild.WX, cmd.MobileBuild.WZ, cmd.MobileBuild.Queued)
 	case battleCommandFactoryBuild:
-		if b.factoryBuildFn != nil {
-			return b.factoryBuildFn(cmd.FactoryBuild.Product, cmd.FactoryBuild.Queued)
+		count := cmd.FactoryBuild.Count
+		if count == 0 {
+			count = 1
 		}
-		return b.dispatchFactoryBuildFallback(cmd.FactoryBuild.Product, cmd.FactoryBuild.Queued)
+		if b.factoryBuildDeltaFn != nil {
+			return b.factoryBuildDeltaFn(cmd.FactoryBuild.Product, count)
+		}
+		if b.factoryBuildFn != nil {
+			return b.factoryBuildFn(cmd.FactoryBuild.Product, count > 1)
+		}
+		return b.dispatchFactoryBuildDeltaFallback(cmd.FactoryBuild.Product, count)
 	case battleCommandCancelProduction:
 		b.dispatchCancelProductionFallback(cmd.CancelProduction.Unit)
 		return nil
@@ -405,7 +417,11 @@ func (b *battleSession) sessionHumanCommand(c battleCommand) (session.HumanComma
 	case battleCommandMobileBuild:
 		return session.HumanCommand{Kind: session.HumanMobileBuild, MobileBuild: session.HumanMobileBuildCommand{Builder: c.MobileBuild.Builder, Product: c.MobileBuild.Product, WX: c.MobileBuild.WX, WY: c.MobileBuild.WY, WZ: c.MobileBuild.WZ, Queued: c.MobileBuild.Queued}}, true
 	case battleCommandFactoryBuild:
-		return session.HumanCommand{Kind: session.HumanFactoryBuild, FactoryBuild: session.HumanFactoryBuildCommand{Builder: c.FactoryBuild.Builder, Product: c.FactoryBuild.Product, Queued: c.FactoryBuild.Queued}}, true
+		count := c.FactoryBuild.Count
+		if count == 0 {
+			count = 1
+		}
+		return session.HumanCommand{Kind: session.HumanFactoryBuild, FactoryBuild: session.HumanFactoryBuildCommand{Builder: c.FactoryBuild.Builder, Product: c.FactoryBuild.Product, Count: count}}, true
 	case battleCommandCancelProduction:
 		return session.HumanCommand{Kind: session.HumanCancelProduction, CancelProduction: session.HumanCancelProductionCommand{Unit: c.CancelProduction.Unit}}, true
 	case battleCommandStockpile:

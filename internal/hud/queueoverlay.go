@@ -79,6 +79,7 @@ type QueueOverlayOptions struct {
 	BuildRect   func(snapshot.OrderView) (QueueRect, bool)
 	Circle      func(snapshot.OrderView) (int32, bool)
 	Icon        func(snapshot.OrderView, uint32) (int32, bool)
+	Range       func(snapshot.UnitView) (int32, bool)
 }
 
 // QueueOverlay returns stable queue instructions while Shift is held.  The
@@ -126,10 +127,16 @@ func QueueOverlay(frame *snapshot.Frame, opt QueueOverlayOptions) []QueuePrimiti
 		if !ok {
 			continue
 		}
-		isSelected := selected[q.Unit] || q.Unit == opt.HoveredUnit
+		isSelected := selected[q.Unit]
+		isHovered := q.Unit == opt.HoveredUnit
 		mask := QueueOverlayMask(QueueMarkerMask)
-		if isSelected {
+		if isHovered {
 			mask = QueueMarkerMask | QueueDashMask | QueueCircleMask | QueueIconMask | QueueRangeMask
+		} else if isSelected {
+			// The selected queue remains a line/marker pass; hovering one of
+			// those units upgrades only that queue to the full five-bit mask
+			// [R-P0-11].
+			mask = QueueMarkerMask | QueueDashMask
 		} else if !hasBuilder {
 			continue
 		}
@@ -180,6 +187,14 @@ func QueueOverlay(frame *snapshot.Frame, opt QueueOverlayOptions) []QueuePrimiti
 						center := points[len(points)-1]
 						out = append(out, QueuePrimitive{Kind: QueuePrimitiveIcon, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Center: center, IconFrame: icon, IconKnown: true})
 					}
+				}
+			}
+		}
+		if (isSelected || isHovered) && opt.Range != nil {
+			if radius, ok := opt.Range(u); ok && radius > 0 {
+				center := opt.Project(u.X, u.Y, u.Z)
+				for _, chord := range circle15(center, radius) {
+					out = append(out, QueuePrimitive{Kind: QueuePrimitiveCircle, Unit: q.Unit, OrderKind: "range", Mask: QueueRangeMask, Selected: isSelected, A: chord[0], B: chord[1], Center: center, Radius: radius})
 				}
 			}
 		}

@@ -632,6 +632,12 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	}
 	// 11. register every authoritative phase once [01 §4.4] I7
 	s.RegisterAll()
+	// Publish initial immutable frame so production input can locate commanders
+	// via snapshot before first tick [PLAN_03 C15][03 §2.4] I6. Clock is at 0
+	// before any authoritative tick; this frame is the baseline for interpolation.
+	if s.Snapshot != nil {
+		s.publishSnapshot(s.Clock.GlobalTick)
+	}
 	// Alliance-aware skirmish victory: team eliminated when all its commanders
 	// are dead; when <=1 hostile team remains, latch result (draw on mutual
 	// destruction) [08 "Victory and defeat triggers"][08 "Skirmish configuration"]

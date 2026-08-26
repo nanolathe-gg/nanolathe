@@ -131,7 +131,7 @@ func TestCOBPresentationSinkMapsPieceIdentity(t *testing.T) {
 func TestCompositionBinderFutureAllocationIsStrictAndPreCreate(t *testing.T) {
 	root := t.TempDir()
 	writeCompositionModel(t, root, "fixture", 1)
-	writeCompositionCOB(t, root, "testunit", []string{"cobchild", "cobroot"})
+	writeCompositionCOB(t, root, "testunit", []string{"modelroot", "modelchild"})
 	fs := vfs.New()
 	if err := fs.MountDirectory(root, 10); err != nil {
 		t.Fatal(err)

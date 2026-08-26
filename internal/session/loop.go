@@ -233,7 +233,9 @@ type HumanMobileBuildCommand struct {
 type HumanFactoryBuildCommand struct {
 	Builder pool.Handle
 	Product string
-	Queued  bool
+	Count   int
+	// Queued remains for old callers that only supplied the pre-count command.
+	Queued bool
 }
 type HumanCancelProductionCommand struct{ Unit pool.Handle }
 type HumanStockpileCommand struct {
@@ -932,6 +934,20 @@ func (s *Session) authoritativeTick(tick uint32) {
 			}
 			name := orders.DescriptorFor(head.ID).Name
 			isMove := name == "Move_Ground" || name == "VTOL_Move" || name == "QMove" || name == "Patrol" || name == "QPatrol" || name == "VTOL_Patrol" || name == "RepairPatrol" || name == "VTOL_RepairPatrol"
+			// Walk-to-site for mobile builders [REVIEW_OX_ALPHA E-8][04 §3.4][05][R-P0-06].
+			// A MOBILE builder with a MobileBuild order out of nano range walks
+			// via normal Move_Ground machinery before state 2. This pre-pass
+			// submission ensures the scheduler sees the request before its Tick,
+			// and prevents the non-move DeactivateMove below from cancelling it.
+			isWalk := false
+			if s.Build != nil && (name == "MobileBuild" || name == "VTOL_MobileBuild") && s.Build.NeedsWalk(u, head) {
+				isWalk = true
+			}
+			if isWalk {
+				s.Build.EnsureWalkPublic(u, head)
+				head.MoveState = orders.MoveEnRoute
+				continue
+			}
 			if !isMove {
 				// The primary order head is authoritative.  Drop any path binding
 				// as soon as a non-move head becomes active so a late publication
@@ -1102,7 +1118,14 @@ func (s *Session) authoritativeTick(tick uint32) {
 				if active != nil {
 					activeName := orders.DescriptorFor(active.ID).Name
 					activeMove := activeName == "Move_Ground" || activeName == "VTOL_Move" || activeName == "QMove" || activeName == "Patrol" || activeName == "QPatrol" || activeName == "VTOL_Patrol" || activeName == "RepairPatrol" || activeName == "VTOL_RepairPatrol"
-					if activeMove {
+					isWalk := false
+					if s.Build != nil && (activeName == "MobileBuild" || activeName == "VTOL_MobileBuild") && s.Build.NeedsWalk(u, active) {
+						isWalk = true
+					}
+					if isWalk {
+						s.Build.EnsureWalkPublic(u, active)
+						active.MoveState = orders.MoveEnRoute
+					} else if activeMove {
 						if active.Target != 0 {
 							var target *units.Unit
 							if qActive.Lookup != nil {
@@ -2014,14 +2037,20 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if u == nil || s.Catalog == nil {
 			return
 		}
-		if !c.FactoryBuild.Queued {
-			if q := orders.QueueForUnit(u); q != nil {
-				q.PurgeUnprotected()
-				q.DropLeadingAutoOps()
-			}
+		count := c.FactoryBuild.Count
+		if count == 0 {
+			count = 1
 		}
-		if err := construction.QueueFactoryBuild(u, c.FactoryBuild.Product, 1, s.Catalog); err == nil {
-			stampHumanBuild(u, c.FactoryBuild.Product, tick, c.FactoryBuild.Queued)
+		var err error
+		if count > 0 {
+			err = construction.QueueFactoryBuild(u, c.FactoryBuild.Product, count, s.Catalog)
+		} else {
+			err = construction.CancelProductCount(u, c.FactoryBuild.Product, -count)
+		}
+		if err == nil && count > 0 {
+			// Counted factory nodes are no-purge commands. The old boolean is
+			// retained only for source compatibility with pre-count callers.
+			stampHumanBuild(u, c.FactoryBuild.Product, tick, false)
 		}
 	case HumanCancelProduction:
 		u := s.humanUnit(c.CancelProduction.Unit)
@@ -2393,16 +2422,17 @@ func (s *Session) publishSnapshot(tick uint32) {
 				TargetX:        p.TargetPos.X,
 				TargetY:        p.TargetPos.Y,
 				TargetZ:        p.TargetPos.Z,
-				TrailFrame:     0, // no authored/runtime trail-frame field is established [I9]
-				// Selector stays zero: rendertype-4 suppression input is unknown [03 §5.4][I9].
+				TrailFrame:     0,  // no authored/runtime trail-frame field is established [I9]
+				Selector:       -1, // explicit suppression sentinel when no selector art is established [03 §5.4]
 			}
 			if s.Catalog != nil {
 				if w, ok := s.Catalog.WeaponByID(p.WeaponID); ok && w != nil {
 					pv.Model = w.Model
 					pv.Graphic = w.Model
 					pv.RenderType = w.RenderType
-					// Creation-family presentation mapping is unresolved; do not infer
-					// it from weapon authored data [03 §5.4][I9].
+					// Creation-family is established via Weapon record flags
+					// (Ballistic/VLaunch/etc.) and is presentation-relevant per [03 §5.4] C6 [06 §6.2].
+					pv.Family = int32(combat.CreationFamilyForWeapon(w))
 					pv.SmokeTrail = w.SmokeTrail
 					// [03 §5.4] leaves the lifetime-scaled GAF input as a caller
 					// parameter (commonly WeaponTimer or Duration); no projectile

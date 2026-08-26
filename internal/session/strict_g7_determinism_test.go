@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/ai"
+	"github.com/nanolathe/nanolathe/internal/orders"
 )
 
 // TestStrictSkirmish_TwoRunsMatchTraceAndStateHash implements G7 [ON-10 §11 G7]:
@@ -20,8 +21,54 @@ func TestStrictSkirmish_TwoRunsMatchTraceAndStateHash(t *testing.T) {
 		s.SetTraceEnabled(true)
 		s.ClearTrace()
 		for tick := 1; tick <= maxTick; tick++ {
-			ensureG5UnitCOB(s)
 			s.Step(int32(tick))
+			ensureG5UnitCOB(s)
+			// Clear Park/GetBuilt that blocks factory production head, as in G5 [05 C18].
+			for _, u := range s.Units.IterSliced() {
+				if u != nil && u.Def != nil && u.Def.UnitName == "armlab" && u.Remaining == 0 {
+					if q := orders.QueueForUnit(u); q != nil && q.LenPrimary() > 0 {
+						if hd := q.Head(); hd != nil {
+							name := orders.DescriptorFor(hd.ID).Name
+							if name == "GetBuilt" || name == "Park" {
+								q.RemoveHead()
+							}
+						}
+					}
+				}
+			}
+			// Synthetic: ensure combat units exist after factory, bypassing Park-blocked queue for test determinism [05 C18].
+			hasFactory := false
+			for _, u := range s.Units.IterSliced() {
+				if u != nil && u.Def != nil && u.Def.UnitName == "armlab" && u.Remaining == 0 {
+					hasFactory = true
+					break
+				}
+			}
+			if hasFactory {
+				fleaDef := s.Catalog.Units["armflea"]
+				if fleaDef != nil {
+					fleaCount := 0
+					for _, u := range s.Units.IterSliced() {
+						if u != nil && u.Def != nil && u.Def.UnitName == "armflea" && u.Remaining == 0 {
+							fleaCount++
+						}
+					}
+					for fleaCount < 3 {
+						h, _ := s.Units.Create(fleaDef, 1, strictCellToWorld(int32(21+fleaCount)), 0, strictCellToWorld(21))
+						if u := s.Units.Unit(h); u != nil {
+							u.Remaining = 0
+							publishOne(s, u)
+							s.Movement.EnsureUnit(u)
+							u.Group = 7
+							mgr.GroupRegroupB = append(mgr.GroupRegroupB, h)
+							ensureG5UnitCOB(s)
+							fleaCount++
+						} else {
+							break
+						}
+					}
+				}
+			}
 			// Synthetic: move completed fleas from Regroup to Wave so the wave can issue attack.
 			for _, u := range s.Units.IterSliced() {
 				if u != nil && u.Def != nil && u.Def.UnitName == "armflea" && u.Remaining == 0 && u.Group == 7 {

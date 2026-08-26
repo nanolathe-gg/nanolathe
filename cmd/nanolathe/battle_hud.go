@@ -20,6 +20,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
+	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -805,6 +806,16 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 			if len(gad.Labels) != 0 {
 				text = gad.Labels[0]
 			}
+			if f != nil {
+				candidates := []string{gad.Name, gad.Text}
+				candidates = append(candidates, gad.Labels...)
+				for _, candidate := range candidates {
+					if label := hud.QueueCountLabel(f.OrderQueues, candidate); label != "" {
+						text += " " + label
+						break
+					}
+				}
+			}
 			if text != "" {
 				c.UITextWidth(h.guiFont, text, int(r.X)+3, int(r.Y)+(int(r.H)-int(h.guiFont.Height))/2, int(r.W), h.guiColor(byte(gad.ColorF)))
 			}
@@ -822,6 +833,17 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 // is consumed to prevent leak into world drag [07 §3][F-P0-003]. Page next/prev
 // are data-driven with count guard [R-P0-03][07 §9] C10.
 func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
+	return h.consumeClickDelta(b, x, y, false)
+}
+
+// consumeRightClick handles the signed cancellation form of a factory
+// product button. Other authored controls are consumed without an action;
+// right-click remains deselect/cancel on the world [R-P0-11].
+func (h *retailBattleHUD) consumeRightClick(b *battleSession, x, y int32) bool {
+	return h.consumeClickDelta(b, x, y, true)
+}
+
+func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightClick bool) bool {
 	if h == nil || b == nil {
 		return false
 	}
@@ -872,14 +894,23 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 		upperText := strings.ToUpper(gad.Text)
 		// Page navigation data-driven [R-P0-03][07 §9] C10
 		if strings.Contains(upperName, "NEXTPAGE") || strings.Contains(upperName, "NEXT") && strings.Contains(upperName, "PAGE") || strings.Contains(upperName, "PAGEDOWN") {
+			if rightClick {
+				return true
+			}
 			b.nextBuildPage()
 			return true
 		}
 		if strings.Contains(upperName, "PREVPAGE") || strings.Contains(upperName, "PREV") && strings.Contains(upperName, "PAGE") || strings.Contains(upperName, "PAGEUP") {
+			if rightClick {
+				return true
+			}
 			b.prevBuildPage()
 			return true
 		}
 		if strings.Contains(upperName, "NEXT") || strings.Contains(upperText, "NEXT") {
+			if rightClick {
+				return true
+			}
 			// Generic NEXT button fallback only when builder has paging
 			if b.requireCommandDispatch {
 				if f != nil && f.CommandPage.PageCount > 1 {
@@ -894,6 +925,9 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 			}
 		}
 		if strings.Contains(upperName, "PREV") || strings.Contains(upperText, "PREV") {
+			if rightClick {
+				return true
+			}
 			if b.requireCommandDispatch {
 				if f != nil && f.CommandPage.PageCount > 1 {
 					b.prevBuildPage()
@@ -963,17 +997,23 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 				// one falls back to classifying the builder.
 				if prodDef != nil {
 					if !hud.ProductArmsPlacement(prodDef) {
-						_ = b.DispatchFactoryBuild(prodKey, false)
+						_ = b.DispatchFactoryBuildDelta(prodKey, factoryBuildDelta(b.shiftHeld, rightClick))
+						return true
+					}
+					if rightClick {
 						return true
 					}
 					b.armPlacement(prodDef)
 					return true
 				}
 				if hud.IsFactoryBuilder(selectedDef) {
-					_ = b.DispatchFactoryBuild(prodKey, false)
+					_ = b.DispatchFactoryBuildDelta(prodKey, factoryBuildDelta(b.shiftHeld, rightClick))
 					return true
 				}
 				if hud.IsMobileBuilder(selectedDef) {
+					if rightClick {
+						return true
+					}
 					// Arm placement mode with definition retained [R-P0-03] cursorfindsite 0xE requires non-empty list
 					if prodDef == nil {
 						if d, ok := b.cat.Unit(prodKey); ok {
@@ -982,14 +1022,7 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 					}
 					if prodDef != nil {
 						b.buildDef = prodDef.CanonicalKey
-						b.buildFootX = int32(prodDef.FootprintX)
-						b.buildFootZ = int32(prodDef.FootprintZ)
-						if b.buildFootX <= 0 {
-							b.buildFootX = 1
-						}
-						if b.buildFootZ <= 0 {
-							b.buildFootZ = 1
-						}
+						b.buildFootX, b.buildFootZ = world.FootprintForUnit(b.cat, prodDef)
 						b.buildOK = false
 						b.latch = input.LatchMobileBuild
 					} else {
@@ -1002,14 +1035,7 @@ func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 				if selectedDef.Builder {
 					if prodDef != nil {
 						b.buildDef = prodDef.CanonicalKey
-						b.buildFootX = int32(prodDef.FootprintX)
-						b.buildFootZ = int32(prodDef.FootprintZ)
-						if b.buildFootX <= 0 {
-							b.buildFootX = 1
-						}
-						if b.buildFootZ <= 0 {
-							b.buildFootZ = 1
-						}
+						b.buildFootX, b.buildFootZ = world.FootprintForUnit(b.cat, prodDef)
 						b.buildOK = false
 						b.latch = input.LatchMobileBuild
 					}

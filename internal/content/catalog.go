@@ -135,21 +135,9 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 		return nil, fmt.Errorf("content: catalog movement: %w", err)
 	}
 	report.Report(FamilyMovement, 100)
-	// Footprint override: movement profile FootPrintX/Z copied into unit definition when present [07 §9][R-P0-08] C-7.
-	// Retail copies the profile's footprint into the definition at compile time, falling back to authored FBI values.
-	// Do not invent: only override when profile exists and authored footprint is non-zero; preserve provenance.
-	for _, u := range units {
-		if u.MovementClass != "" {
-			if mc, ok := movement[CanonicalKey(u.MovementClass)]; ok && mc != nil {
-				if mc.FootprintX > 0 {
-					u.FootprintX = mc.FootprintX
-				}
-				if mc.FootprintZ > 0 {
-					u.FootprintZ = mc.FootprintZ
-				}
-			}
-		}
-	}
+	// Link movement footprints before any unit definition is exposed to
+	// placement, build menus, or model consumers [07 §9] "The site".
+	ApplyMovementFootprints(units, movement)
 	sides, err := CompileSides(fs)
 	if err != nil {
 		// SIDEDATA missing is fatal [02 §6] C8; missing font fatal [GAP T14].
