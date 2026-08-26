@@ -36,7 +36,9 @@ func buildStrictG5Session(t *testing.T, simSeed, crtSeed uint32) (*Session, *ai.
 	labDef.CanonicalKey = content.CanonicalKey(labDef.UnitName)
 	labDef.WorkerTime = 60
 	cat.Units[labDef.CanonicalKey] = labDef
-	soldierDef := &content.UnitDef{UnitName: "armflea", MaxDamage: 200, BuildTime: 100, BuildCostMetal: 50, BuildCostEnergy: 50, FootprintX: 1, FootprintZ: 1, CanMove: true, MaxVelocity: 65536, TurnRate: 300, SightDistance: 300, CanAttack: true, MovementClass: "testmove", MaxSlope: 10}
+	// BMCode marks the soldier mobile, as every stock mobile unit authors it
+	// [08 "Classifier eligibility, destinations, and order"].
+	soldierDef := &content.UnitDef{UnitName: "armflea", MaxDamage: 200, BuildTime: 100, BuildCostMetal: 50, BuildCostEnergy: 50, FootprintX: 1, FootprintZ: 1, CanMove: true, MaxVelocity: 65536, TurnRate: 300, SightDistance: 300, CanAttack: true, MovementClass: "testmove", MaxSlope: 10, BMCode: true}
 	soldierDef.CanonicalKey = content.CanonicalKey(soldierDef.UnitName)
 	soldierDef.CanMove = true
 	soldierDef.MovementClass = "testmove"

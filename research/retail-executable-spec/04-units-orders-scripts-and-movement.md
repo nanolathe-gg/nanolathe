@@ -1849,10 +1849,24 @@ cell = (goalWorld - bias*0x80000 + 0x80000) >> 20
 ```
 
 an arithmetic shift, with bias the footprint half-extent pair. The threshold
-is `floor(radiusParam/16)` squared; for HUD/AI-issued ground moves radiusParam
-is the definition's SightDistance plus 4, so the predicate reads
-`dist² <= floor((SightDistance + 4)/16)²`. The radius parameter's provenance
-for QMove/Patrol issuance is TODO(question).
+is `floor(radiusParam/16)` squared.
+
+**Correction — radiusParam provenance (audit note):** the earlier text read
+"for HUD/AI-issued ground moves radiusParam is the definition's SightDistance
+plus 4, so the predicate reads `dist² <= floor((SightDistance + 4)/16)²`" and
+left QMove/Patrol provenance TODO(question). Direct static re-trace of the
+ground move handler supersedes it: the Move_Ground phase-0 handler binds the
+goal handle with the order node's radius field plus 4, and that field is zero
+at order creation, so **HUD/AI-issued ground moves bind radiusParam 4 and the
+threshold is `floor(4/16)² = 0` — the order completes only when the committed
+tile equals the goal cell**. The sight-distance reads in the traced handler
+region feed range/acquire paths, never the goal handle; the earlier
+SightDistance+4 attribution was a misassociation. The VTOL_Move handler
+instead passes the definition's kamikaze distance field clamped to at least
+16, so the VTOL arrival threshold is `floor(max(kamikaze,16)/16)²`.
+Patrol-family substates bind other radii (halved or zero) whose exact
+per-substate values remain TODO(question); the fallback for unimplemented
+variants is the ground default (4).
 
 **Established fact — satisfied-bit notification:** On arrival the movement
 layer ORs bit 0x20 into the order record's accumulated satisfied word. The
@@ -1883,8 +1897,10 @@ acknowledgement notification and returns result 5 — the pump unlinks and frees
 the record, ORDER COMPLETE; otherwise it returns 9 — dropped while further
 records follow, else the record resets its phase and waits `30 + RNG(30)`
 ticks (range 30 to 59). The VTOL_MOVE handler shares the mechanism: the same
-0xE0 gate, a goal snapped to a half-cell grid with a radius parameter of half
-an authored definition field (exact field identity not established here), and
+0xE0 gate, a goal snapped to a half-cell grid, and a radius parameter of the
+definition's kamikaze distance field clamped to at least 16 — the
+"half an authored definition field" reading above is corrected here: the
+handler reads the full kamikaze distance, not half a field — and
 a terminal phase returning 5 with the acknowledgement only when it is the last
 record; hover controllers notify bit 0x20 from their own per-tick visit.
 TODO(question): the trigger that advances the VTOL handler from its phase-1

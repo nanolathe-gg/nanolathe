@@ -53,8 +53,8 @@ const (
 	// overlaps the modern classifier status and is only a legacy fallback.
 	FlagInBuildStance uint32 = 1 << 5
 	FlagActivated     uint32 = 1 << 0     // activate edge placeholder [05 "Factory production lifecycle"] TODO(question): exact bit not located
-	FlagCompleted     uint32 = 0x00002000 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	FlagInitCloak     uint32 = 0x00004000 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	FlagCompleted     uint32 = 0x00002000 // completion marker in the instance flag word [R-P0-09]
+	FlagInitCloak     uint32 = 0x00004000 // init-cloak posture in the instance flag word [R-P0-09]
 	FlagStartBuilding uint32 = 1 << 2     // start-building edge [05]
 	FlagDeactivate    uint32 = 1 << 1     // deactivate edge [05 C21]
 )
@@ -901,7 +901,8 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 			}
 		}
 		initializeNanoframe(prod, def)
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Extractor yield is sampled once at placement and stored on the product
+		// [P1-10][P1-15]: Σ(cellMetal+1)*extractsMetal, never resampled.
 		if prod != nil && def.ExtractsMetal != 0 && s.Terrain != nil {
 			if v, err := s.Terrain.SampleMetal(rect.MinX(), rect.MinZ(), int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
 				prod.SpotMetal = v // once, never resampled [P1-10]
@@ -934,7 +935,8 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 	}
 	s.recordPlacement(prod.Handle, rect)
 	initializeNanoframe(prod, def)
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Extractor yield is sampled once at placement and stored on the product
+	// [P1-10][P1-15]: Σ(cellMetal+1)*extractsMetal, never resampled.
 	if def.ExtractsMetal != 0 && s.Terrain != nil {
 		if v, err := s.Terrain.SampleMetal(rect.MinX(), rect.MinZ(), int(def.FootprintX), int(def.FootprintZ), float32(def.ExtractsMetal)); err == nil {
 			prod.SpotMetal = v // once, never resampled [P1-10]
@@ -970,7 +972,8 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	s.logMessage("Starting construction")
 
 	// Register builder link on product [05 C18].
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Builder/product links are cleared on completion. The death/capture
+	// teardown performs no builder-link walk, so links leak there [P0-14].
 	s.SetBuilderLink(productHandle, factory.Handle)
 	if s.getBuiltLinks == nil {
 		s.getBuiltLinks = make(map[pool.Handle]pool.Handle)
@@ -1388,47 +1391,40 @@ func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint
 	node.GoalX = 0
 	node.GoalY = 0
 	node.GoalZ = 0
-	// For building-class contexts a positive count raises activate edge and waits while nonpositive lowers it and frees node;
-	// non-building contexts fall through to cancel-all [05].
-	isBuildingClass := false
-	if factory.Def != nil {
-		// Building class determined by yard map presence or Builder flag? Use YardMap non-empty as building [05].
-		if factory.Def.YardMap != "" {
-			isBuildingClass = true
-		} else if factory.Def.FootprintX > 0 && factory.Def.FootprintZ > 0 && !factory.Def.CanMove {
-			isBuildingClass = true
+	// Building class is the runtime status bit the allocator initializer sets
+	// from the authored bmcode — not a yard-map, footprint or immobility
+	// heuristic [05 "Factory production lifecycle"]. The previous predicate
+	// guessed at all three and could disagree with retail on any definition
+	// whose yard map, footprint and mobility did not line up with its bmcode.
+	if factory.Flags&units.BuildingClassStatus == 0 {
+		// Non-building contexts return the cancel-all result code; the handler
+		// itself never touches the queue. Routing this through the queue's own
+		// cancel path also keeps the queue's service bindings, which the
+		// previous rebind-a-fresh-queue implementation silently dropped
+		// [04 §3.3][05 "Queue subtraction"].
+		if q := orders.QueueForUnit(factory); q != nil {
+			q.CancelAll()
 		}
-	}
-	if isBuildingClass {
-		if int32(node.Param2) > 0 {
-			// Positive count raises activate edge and waits [05].
-			// Raise activate edge if not already set.
-			s.activate(factory)
-			// Wait — stay in state0 with wake? Spec says waits; we stay and will be retried via pump?
-			// Set retry 1 tick? Not specified. For now stay without deadline, pump will retry next tick when pending?
-			// To avoid tight loop, set deadline tick+1 and wake bit? But not defined.
-			// We'll advance to state1 after one tick to allow yard-door handshake.
-			// For determinism, advance to state1 immediately after raising edge? But spec says waits while nonpositive lowers and frees.
-			// Let's advance to state1 for positive count after raising.
-			node.Phase = uint8(State1)
-			node.DynamicGate = WakeBit2
-			node.Deadline = int32(tick + 1)
-			return
-		}
-		// Nonpositive count lowers it and frees node [05].
-		s.deactivate(factory)
-		// Free node via removeHead
-		s.removeHead(factory, node)
 		return
 	}
-	// Non-building contexts fall through to cancel-all [05] => result 7.
-	// Cancel-all: remove all primary and secondary nodes via pump's case 7 logic? For factory, we will clear queue.
-	q := orders.QueueForUnit(factory)
-	if q != nil {
-		// Clear primary and secondary
-		newQ := &orders.Queue{}
-		orders.BindQueue(factory, newQ)
+	if int32(node.Param2) > 0 {
+		// Positive count raises the activate edge and returns the advance
+		// result: the phase increments and the pump restarts at the head in
+		// the SAME pass, so state 1 runs immediately. There is no deadline and
+		// no wake bit in state 0 — the previous one-tick deadline plus wake
+		// bit 2 was invented, and it delayed every factory product by a tick
+		// and armed a gate retail never arms [05 "Factory production
+		// lifecycle"].
+		s.activate(factory)
+		node.Phase = uint8(State1)
+		node.DynamicGate = 0
+		node.Deadline = -1
+		s.handleState1(factory, node, tick)
+		return
 	}
+	// Non-positive count lowers the edge and frees the node.
+	s.deactivate(factory)
+	s.removeHead(factory, node)
 }
 
 // handleState1 advances only when script has set in-build-stance bit, otherwise waits with wake bit 2 [05].
@@ -1844,8 +1840,10 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	if node.Target != 0 && s.World != nil {
 		product = s.World.Unit(node.Target)
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// StopBuilding precedes the completion helper [P0-14]: the engine lowers the
+	// StartBuilding bit before the helper runs.
+	// Builder/product links are cleared on completion. The death/capture
+	// teardown performs no builder-link walk, so links leak there [P0-14].
 	// Note: product LOS after settlement phase5, targetable already phase3, GetBuilt same/next tick by slot [P0-14].
 	// Trigger BuildUnitType only on local 30-tick deadline [P0-14].
 	// Interrupt masks 2/8 bodies known, producers TODO(T25) [P0-14].
@@ -1860,7 +1858,8 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 		if node.Param2 > 0 {
 			node.Param2--
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Clear builder/product link on completion [P0-14]; the death/capture
+		// teardown does not walk these links, so they leak there instead.
 		if product != nil {
 			delete(s.builderLinks, product.Handle)
 		}
@@ -1940,8 +1939,9 @@ func (s *Service) PumpAll(tick uint32) {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(T25): the producers of interrupt masks 2 and 8 are still unknown — no
+// writer appears within the searched boundaries [P0-14][P0-15]. Both interrupt
+// bodies are established; the UI/network command layer that sets the bits is not.
 
 // Pump implements the factory production handler entry per [05] with interrupt priority [PLAN_08].
 // Primary-only factory queue (68-desc census) — bit 0x40000 only on BuildWeapon/SelfDestruct [P0-14].

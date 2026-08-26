@@ -676,7 +676,6 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service) {
-	_ = tick
 	if w == nil || econ == nil {
 		return
 	}
@@ -727,7 +726,45 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 			// units adapter owns that mutable state and economy reads it through
 			// EconomyActive [05 "Unit instance economy state"] [P0-02].
 			u.SetActivated(enable)
+			continue
 		}
+		// Second branch: a building that does not make metal but does carry
+		// build options is a factory, and this task is what queues its
+		// products [08 "Eco toggle and group-vector population"]. The
+		// construction task never sees a factory, because the classifier sends
+		// every building to this record and only mobile builders to the
+		// construction record.
+		//
+		// This branch was missing entirely: nanolathe queued factory products
+		// from the construction task instead, which only worked while the
+		// classifier misfiled buildings into the construction group.
+		if !m.hasBuildOptionsForDef(u.Def) {
+			continue
+		}
+		// A factory with anything already on its primary queue is skipped, so
+		// products are queued one at a time as the queue drains.
+		if q := orders.QueueForUnit(u); q == nil || len(q.Primary()) > 0 {
+			continue
+		}
+		cand, ok := Select(m, u, econ)
+		if !ok {
+			continue
+		}
+		if m.QueueBuildTyped == nil {
+			m.missedQueueCallbacks++
+			continue
+		}
+		req := BuildRequest{
+			Builder: u.Handle,
+			UnitKey: cand.DefKey,
+			Count:   1,
+			Kind:    BuildKindFactoryQueue,
+		}
+		if err := m.QueueBuildTyped(req); err != nil {
+			continue
+		}
+		m.recordMilestone(MilestoneBuildRequestAccepted, tick)
+		m.recordMilestone(MilestoneFactoryProductQueued, tick)
 	}
 }
 
@@ -784,12 +821,20 @@ func (m *Manager) tryRepair(tick uint32, w *units.World) {
 	q.Push(id, node)
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// outliers at inclusive dist² >= threshold*n and collects peer members at
-// strict dist² < threshold*n [P0-02 §1.3][P0-02 §3.4].
-// Task vectors are cleaned and merged only through the recovered wave path;
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// doWave implements the attack wave A/B task at +300 [08 "Wave merge"][P0-02].
+// Thresholds 20000/50000, min 3 max 6. The merge seeds an empty wave from its
+// peer's first member, sheds the wave's outliers at inclusive dist² >=
+// threshold*n, and collects peer members at strict dist² < threshold*n
+// [08 "Wave merge"].
+//
+// The peer is the task's PAIRED REGROUP record — wave A with regroup A, wave B
+// with regroup B — carried as an authored peer slot index on the task
+// instance. It is not the other wave. This was previously wired wave A ↔ wave
+// B with no bootstrap, which left both wave records permanently empty: the
+// classifier never assigns a wave, so nothing could ever seed one and the
+// computer player issued no attack order [08 "Wave merge" correction].
+//
+// Tasks then issue ordinary move/attack orders [P0-02][08].
 func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, threshold int32, min, max int) {
 	_, _ = econ, threshold
 	if w == nil {
@@ -797,29 +842,31 @@ func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, thr
 	}
 	m.updateGroups(w)
 	var group, peer []pool.Handle
+	var groupID, peerID uint8
 	if threshold == waveAThreshold {
-		group = m.GroupWaveA
-		peer = m.GroupWaveB
+		group, groupID = m.GroupWaveA, 2
+		peer, peerID = m.GroupRegroupA, 3
 	} else {
-		group = m.GroupWaveB
-		peer = m.GroupWaveA
+		group, groupID = m.GroupWaveB, 6
+		peer, peerID = m.GroupRegroupB, 7
 	}
 	group = cleanGroup(group, w, m.Player)
 	peer = cleanGroup(peer, w, m.Player)
 	group, peer = mergeWaveGroups(group, peer, w, threshold)
-	// Update stored group after clean, then mirror the unit group fields for the
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// swap-delete/append result produced by mergeWaveGroups.
+	// Update stored groups after clean, then mirror the unit group fields for
+	// the members the transfer helper moved. The vector order is already the
+	// exact swap-delete/append result produced by mergeWaveGroups.
 	if threshold == waveAThreshold {
 		m.GroupWaveA = group
-		m.GroupWaveB = peer
-		m.stampGroupValues(w, group, 2)
-		m.stampGroupValues(w, peer, 6)
+		m.GroupRegroupA = peer
 	} else {
 		m.GroupWaveB = group
-		m.GroupWaveA = peer
-		m.stampGroupValues(w, group, 6)
-		m.stampGroupValues(w, peer, 2)
+		m.GroupRegroupB = peer
+	}
+	m.stampGroupValues(w, group, groupID)
+	m.stampGroupValues(w, peer, peerID)
+	if len(group) > 0 {
+		m.recordMilestone(MilestoneGroupAssigned, tick)
 	}
 	if len(group) < min {
 		return

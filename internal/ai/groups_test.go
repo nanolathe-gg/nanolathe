@@ -296,3 +296,148 @@ func (m *Manager) groupMemberCount() int {
 	}
 	return len(m.GroupResource) + len(m.GroupWaveA) + len(m.GroupRegroupA) + len(m.GroupConstruction) + len(m.GroupNull) + len(m.GroupWaveB) + len(m.GroupRegroupB) + len(m.GroupExplore) + len(m.GroupRally)
 }
+
+// TestMergeWaveGroupsBootstrapsFromEmptyWave locks the step that makes the
+// attack waves reachable at all [08 "Wave merge" step 2].
+//
+// The classifier assigns only resource, construction, explore, regroup A,
+// regroup B and null — never a wave. A wave therefore starts empty and can
+// only acquire its first member from its paired regroup record, which the
+// merge does by moving the peer's FIRST member across. This function used to
+// return early on an empty current group, so both wave records stayed empty
+// forever and the computer player never issued an attack order.
+func TestMergeWaveGroupsBootstrapsFromEmptyWave(t *testing.T) {
+	def := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflash")},
+		UnitName:         "armflash",
+		CanMove:          true,
+		CanAttack:        true,
+		MaxVelocity:      100,
+		MaxDamage:        100,
+	}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
+	w := units.New(16, cat)
+	create := func(x, z int32) pool.Handle {
+		h, err := w.Create(def, 0, numeric.Fixed(x)*numeric.Fixed(1<<16), 0, numeric.Fixed(z)*numeric.Fixed(1<<16))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Unit(h).Remaining = 0
+		return h
+	}
+
+	// An empty wave and an empty peer stay empty: the merge discovers nothing
+	// from the world.
+	current, peer := mergeWaveGroups(nil, nil, w, waveAThreshold)
+	if len(current) != 0 || len(peer) != 0 {
+		t.Fatalf("merge with two empty vectors produced current=%v peer=%v; it must not discover units", current, peer)
+	}
+
+	// Four colocated regroup members. The bootstrap takes the peer's first
+	// member and removes it by replace-with-last, so the peer becomes
+	// [d b c]; the absorb step then collects all three in that order, since
+	// colocated members satisfy the strict distance test. The resulting wave
+	// order is the observable proof of both the transfer order and the
+	// swap-delete: a front shift would have produced [a b c d] instead.
+	a, b, c, d := create(0, 0), create(0, 0), create(0, 0), create(0, 0)
+	current, peer = mergeWaveGroups(nil, []pool.Handle{a, b, c, d}, w, waveAThreshold)
+	if len(peer) != 0 {
+		t.Fatalf("peer after colocated merge = %v, want empty", peer)
+	}
+	if len(current) != 4 || current[0] != a || current[1] != d || current[2] != b || current[3] != c {
+		t.Fatalf("wave after colocated merge = %v, want [%d %d %d %d] "+
+			"(bootstrap a, replace-with-last leaves [d b c], absorb in that order)",
+			current, a, d, b, c)
+	}
+
+	// With a distant peer the absorb step collects nothing, so the bootstrap
+	// alone is visible: exactly one member crosses per call.
+	far1, far2 := create(4000, 0), create(9000, 0)
+	current, peer = mergeWaveGroups(nil, []pool.Handle{far1, far2}, w, waveAThreshold)
+	if len(current) != 1 || current[0] != far1 {
+		t.Fatalf("distant bootstrap current=%v, want exactly [%d]", current, far1)
+	}
+	if len(peer) != 1 || peer[0] != far2 {
+		t.Fatalf("distant bootstrap peer=%v, want [%d]", peer, far2)
+	}
+}
+
+// TestMergeWaveGroupsKeepsLastMember locks that the shed loop stops at one
+// member: retail breaks out when the group count reaches one, so a lone
+// outlier is never evicted into an empty wave [08 "Wave merge" step 4].
+func TestMergeWaveGroupsKeepsLastMember(t *testing.T) {
+	def := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflash")},
+		UnitName:         "armflash",
+		CanMove:          true,
+		CanAttack:        true,
+		MaxVelocity:      100,
+		MaxDamage:        100,
+	}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
+	w := units.New(16, cat)
+	h, err := w.Create(def, 0, numeric.Fixed(9000)*numeric.Fixed(1<<16), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Unit(h).Remaining = 0
+
+	current, peer := mergeWaveGroups([]pool.Handle{h}, nil, w, waveAThreshold)
+	if len(current) != 1 || current[0] != h {
+		t.Fatalf("single-member wave = %v, want it retained [%d]", current, h)
+	}
+	if len(peer) != 0 {
+		t.Fatalf("single-member wave shed into peer=%v", peer)
+	}
+}
+
+// TestDoWavePairsWithRegroupNotTheOtherWave locks the authored peer wiring:
+// wave A pairs with regroup A and wave B with regroup B. Pairing the two waves
+// with each other is unreachable — neither can ever be seeded.
+func TestDoWavePairsWithRegroupNotTheOtherWave(t *testing.T) {
+	def := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflash")},
+		UnitName:         "armflash",
+		CanMove:          true,
+		CanAttack:        true,
+		MaxVelocity:      100,
+		MaxDamage:        100,
+	}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
+	w := units.New(16, cat)
+	mk := func() pool.Handle {
+		h, err := w.Create(def, 0, numeric.Fixed(64)*numeric.Fixed(1<<16), 0, numeric.Fixed(64)*numeric.Fixed(1<<16))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Unit(h).Remaining = 0
+		return h
+	}
+	ra, rb := mk(), mk()
+
+	m := &Manager{Player: 0}
+	m.GroupRegroupA = []pool.Handle{ra}
+	m.GroupRegroupB = []pool.Handle{rb}
+
+	m.doWave(1, w, nil, waveAThreshold, 3, 6)
+	if len(m.GroupWaveA) != 1 || m.GroupWaveA[0] != ra {
+		t.Fatalf("wave A = %v, want regroup A's member [%d]", m.GroupWaveA, ra)
+	}
+	if len(m.GroupRegroupA) != 0 {
+		t.Errorf("regroup A still holds %v after the transfer", m.GroupRegroupA)
+	}
+	if len(m.GroupWaveB) != 0 || len(m.GroupRegroupB) != 1 {
+		t.Errorf("wave A's merge disturbed the B pair: waveB=%v regroupB=%v", m.GroupWaveB, m.GroupRegroupB)
+	}
+	if u := w.Unit(ra); u == nil || u.Group != 2 {
+		t.Errorf("transferred unit group field = %v, want wave A record 2", u.Group)
+	}
+
+	m.doWave(2, w, nil, waveBThreshold, 3, 6)
+	if len(m.GroupWaveB) != 1 || m.GroupWaveB[0] != rb {
+		t.Fatalf("wave B = %v, want regroup B's member [%d]", m.GroupWaveB, rb)
+	}
+	if u := w.Unit(rb); u == nil || u.Group != 6 {
+		t.Errorf("transferred unit group field = %v, want wave B record 6", u.Group)
+	}
+}

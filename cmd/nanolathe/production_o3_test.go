@@ -63,7 +63,13 @@ type o3BuildObservation struct {
 // a non-zero loaded metal sample.  The run is repeated with identical streams
 // and its milestone/state trace compared byte-for-byte.
 func TestProductionInputARMEconomyBuildReplay(t *testing.T) {
-	t.Skip("TODO(question): O3 production input via battle controller picking requires established viewport transform and HUD latch handling for retail Ashap Plateau; current battleSession picking offset and initial snapshot timing not yet established [07 §8][07 §9] – see production_o3_test")
+	// RELEASE-GATE-DISABLED (registry: internal/session/strict_gate_policy_test.go).
+	// Measured with the skip removed and NANOLATHE_TA_ROOT set: the gate fails
+	// in preflight, before any picking or build command is issued, because the
+	// site scan finds no legal production site for armsolar (5x5 footprint) on
+	// retail Ashap Plateau. The earlier skip blamed an unestablished viewport
+	// transform; that reason was stale and did not match the observed failure.
+	t.Skip("RELEASE-GATE-DISABLED: O3 fails in preflight — no legal production site for armsolar (5x5) on Ashap Plateau; see disabledGates registry")
 	root := o3RetailRoot(t)
 	a := runO3ProductionReplay(t, root)
 	b := runO3ProductionReplay(t, root)

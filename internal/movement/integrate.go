@@ -106,7 +106,7 @@ type arrivalHandle struct {
 	order    *orders.Node
 	goalX    int32 // goal cells (bias-corrected) [R-P0-01]
 	goalZ    int32
-	threshSq int32 // floor((SightDistance+4)/16)² inclusive [R-P0-01]
+	threshSq int32 // floor(radiusParam/16)² inclusive [R-P0-01]; 0 for ground moves
 }
 
 // localSteeringThresholdSquared is only the near-waypoint brake/steering
@@ -135,16 +135,34 @@ type PathFailure struct {
 	NextRetry uint32
 }
 
-// thresholdSqFromSight computes threshold² = floor((SightDistance+4)/16)² [R-P0-01].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func thresholdSqFromSight(sight int32) int32 {
-	rp := int64(sight) + 4 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	if rp < 0 {
-		rp = 0
-	}
-	t := rp / 16 // floor for non-negative; sight non-negative in practice
-	// cdq/and 0xf/sar 4/imul in decompile is arithmetic floor division by 16
+// thresholdSqFromRadius computes the goal-handle threshold² = floor(radiusParam/16)² [R-P0-01].
+// The movement-goal handle stores radiusParam and precomputes floor(radiusParam/16)²
+// (signed arithmetic shift with sign correction, then square). Negative radii clamp
+// the shift to zero.
+func thresholdSqFromRadius(radiusParam int32) int32 {
+	rp := int64(radiusParam)
+	t := rp / 16 // arithmetic floor for non-negative; radii are non-negative in practice
 	return int32(t * t)
+}
+
+// goalRadiusParamFor returns the movement-goal handle radius parameter for a
+// move-family order head [R-P0-01 corrected]. The traced Move_Ground handler
+// binds the goal handle with the node's radius field plus 4; the field is 0
+// for HUD/AI-issued point moves, so the ground arrival radius is 4 and the
+// handle threshold is floor(4/16)² = 0 — the order completes only when the
+// committed tile equals the goal cell. The VTOL_Move handler instead passes
+// the definition's kamikaze distance clamped to at least 16. Patrol
+// substates bind other radii (halved/zero); their exact per-substate values are
+// not recovered, so the patrol family keeps the ground default.
+func goalRadiusParamFor(name string, def *content.UnitDef) int32 {
+	if name == "VTOL_Move" {
+		rp := int32(16)
+		if def != nil && def.KamikazeDistance > rp {
+			rp = def.KamikazeDistance
+		}
+		return rp
+	}
+	return 4 // radius field (0 at order creation) + 4 [R-P0-01 corrected]
 }
 
 // goalCellForWorld computes goal cells (goal − bias·0x80000 + 0x80000) >>20 [R-P0-01].
@@ -164,8 +182,8 @@ func goalCellForWorld(goal numeric.Fixed, foot int32) int32 {
 	return int32(floorDiv(v, cell))
 }
 
-// ThresholdSqFromSight is exported helper for tests [R-P0-01].
-func ThresholdSqFromSight(sight int32) int32 { return thresholdSqFromSight(sight) }
+// ThresholdSqFromRadius is exported helper for tests [R-P0-01].
+func ThresholdSqFromRadius(radiusParam int32) int32 { return thresholdSqFromRadius(radiusParam) }
 
 // ArrivalHandleFor returns the cached arrival handle for a unit, if any [R-P0-01].
 func (s *System) ArrivalHandleFor(h pool.Handle) (goalX, goalZ int32, threshSq int32, ok bool) {
@@ -852,11 +870,14 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 	}
 	goalX := goalCellForWorld(head.GoalX, int32(footX))
 	goalZ := goalCellForWorld(head.GoalZ, int32(footZ))
-	sight := int32(0)
-	if u.Def != nil {
-		sight = u.Def.SightDistance
-	}
-	threshSq := thresholdSqFromSight(sight) // [R-P0-01] floor((SightDistance+4)/16)²
+	// [R-P0-01 corrected] radiusParam for the goal handle: ground move-family
+	// binds the node's radius field plus 4, and the field is 0 at order
+	// creation (threshold 0 — exact goal cell); VTOL_Move binds
+	// max(KamikazeDistance,16). The sight-derived radius previously used here
+	// was a misattribution: the sight reads in the traced handlers feed
+	// range/acquire paths, never the goal handle.
+	radiusParam := goalRadiusParamFor(name, u.Def)
+	threshSq := thresholdSqFromRadius(radiusParam) // [R-P0-01] floor(radiusParam/16)²
 	s.arrivalHandles[u.Handle] = &arrivalHandle{order: head, goalX: goalX, goalZ: goalZ, threshSq: threshSq}
 	// [R-P0-01] initial gate must be 0 so phase 0 handler can arm 0xE0; otherwise static 0x402 would block.
 	if head.Phase == 0 && head.DynamicGate != 0 {
@@ -1281,8 +1302,18 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			// threshold; completion is via the arrival handle above [R-P0-01].
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
 		}
-		s.emitMovementCallbacks(u, 0)
-		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
+		// No active route (failed search, or route pruned out last tick): the
+		// mover still drives straight at the order goal — retail keeps steering
+		// at the goal handle once the route is exhausted, and the arrival
+		// predicate completes the order when the tile lands on the goal cell.
+		if head != nil && (head.GoalX != 0 || head.GoalZ != 0) {
+			directGoal = true
+			directX = head.GoalX
+			directZ = head.GoalZ
+		} else {
+			s.emitMovementCallbacks(u, 0)
+			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
+		}
 	} else {
 		// Prune(mover pos) [04 §7.3] C15. The stored points carry the half-footprint bias,
 		// so the mover's position is compared in the same biased domain [04 §7.1] C1.
@@ -1497,7 +1528,9 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// call SubmitMove; the scheduler's HasRequest gate in session path-submit
 	// remains authority [04 §7.3] C11 C12.
 	hasRouteAfter := route != nil && route.Active
-	return StepResult{Handle: handle, DistToGoal: d2, HasRoute: hasRouteAfter, EmptyRoute: false, Moved: moved, Blocked: blocked, Arrived: arrived}
+	// EmptyRoute reports route absence at entry: with no route the mover still
+	// steers straight at the order goal, so the flag and movement are orthogonal.
+	return StepResult{Handle: handle, DistToGoal: d2, HasRoute: hasRouteAfter, EmptyRoute: !hadRoute, Moved: moved, Blocked: blocked, Arrived: arrived}
 }
 
 // Tick runs the per-unit integration glue for all alive units in w.

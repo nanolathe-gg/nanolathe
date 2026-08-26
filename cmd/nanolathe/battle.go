@@ -229,6 +229,11 @@ func runBattleView(opts Options, cs *contentSet) error {
 		fmt.Fprintf(os.Stderr, "nanolathe: %v\n", cerr)
 	}
 	cl.Overlay = func(c *client.Client) { b.hud.draw(c, b) }
+	// Join the session's audio queue/cache/music to the client's device and
+	// per-frame drain [03 §8.2][03 §8.3][03 §8.4]. Without this the client
+	// drains a queue it was never given and no cue reaches playback.
+	attachBattleAudio(cl, sess, cs.fs)
+	defer detachBattleAudio(cl, sess)
 	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select left-click=action right-click=deselect/cancel M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9=buildpage Shift=queue")
 	return client.RunGame(cl)
 }

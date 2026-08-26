@@ -274,22 +274,23 @@ func randBelow30() uint32 {
 	if rng.Global.Sim == nil {
 		panic("orders: rng.Global.Sim not seeded")
 	}
-	return rng.Global.Sim.Uint32n(30) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	return rng.Global.Sim.Uint32n(30) // [R-P0-01] code 9's last re-arm draws RNG(30), a distinct draw site from code 3's RNG(15)
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// moveGroundHandler implements the Move_Ground-family handler [R-P0-01].
 // Phase 0 arms gate 0xE0 and returns 1; phase 1 tests satisfied&0x20 -> 5 else 9.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// The attach check returns 7 while the unit's carrier handle is nonzero [R-P0-01].
 func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 	if u != nil && u.Attachment.Carrier != 0 {
 		return 7 // reject while attached [R-P0-01]
 	}
 	if n.Phase == 0 {
-		n.DynamicGate = 0xE0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		n.DynamicGate = 0xE0 // [R-P0-01] phase 0 arms gate 0xE0
 		return 1
 	}
 	if satisfied&0x20 != 0 { // [R-P0-01] combined&0x20 -> ack + return 5
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): acknowledgement emission (kind 6) is not yet wired to
+		// presentation; return 5 drives the pump unlink
 		return 5
 	}
 	return 9 // [R-P0-01] drop when further records else 30+RNG30 wait
@@ -724,7 +725,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			if len(q.primary) == 1 {
 				n.Phase = 0
 				n.DynamicGate = 1
-				n.Deadline = int32(tick + 30 + randBelow30()) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				n.Deadline = int32(tick + 30 + randBelow30()) // [R-P0-01] 30+RNG(30), a distinct draw site from code 3's RNG(15)
 				return
 			}
 			cleanupNode(n)
@@ -733,7 +734,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			continue
 		default:
 			if code > 9 {
-				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				// Result code >9 delegates to the expiry helper:
 				// single-node unlink+cleanup+free, no RNG, no tail, not
 				// cancel-all [P0-08][04 §3.3]. Whole-queue cancel is
 				// exclusively code 7 [P0-08] A09.
@@ -923,4 +924,15 @@ func (q *Queue) RemovePrimaryNode(node *Node, tombstone bool) *Node {
 	q.primary = append(q.primary[:idx], q.primary[idx+1:]...)
 	q.ensureSingleActive()
 	return removed
+}
+
+// CancelAll is the exported entry to result code 7's whole-queue cancel
+// [04 §3.3][05 "Queue pumping and result codes"]. It preserves queue identity
+// and every queue-owned service binding; callers must never express a cancel
+// by rebinding a fresh Queue to the unit.
+func (q *Queue) CancelAll() {
+	if q == nil {
+		return
+	}
+	q.cancelAll()
 }

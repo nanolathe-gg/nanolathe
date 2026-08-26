@@ -28,7 +28,52 @@ const (
 // lifecycle"].
 const ClassifierEligibleStatus uint32 = 0x00000020
 
+// BuildingClassStatus and ArmedStatus are the two remaining high bits of the
+// runtime unit-status word. Both are written once by the common allocator
+// initializer from the definition and by nothing else — a whole-image scan of
+// the status word finds exactly one write site for each — so they are stable
+// for the unit's lifetime.
+//
+// BuildingClassStatus is set when the definition's authored bmcode is zero,
+// which is what makes a definition a building rather than a mobile unit; the
+// same authored byte gates whether a YardMap is parsed at all. It is the
+// factory production handler's building-class gate and the manager
+// classifier's first high input [08 "Classifier eligibility, destinations,
+// and order"; 05 "Factory production lifecycle"].
+//
+// ArmedStatus is set when the definition resolved at least one of its three
+// weapon slots. It is the manager classifier's second high input, separating
+// armed from unarmed buildings and selecting the regroup-A destination for
+// ordinary armed ground units [08 "Classifier eligibility, destinations, and
+// order"].
+//
+// Both were previously carried as opaque masks in internal/ai with no writer
+// anywhere, so every branch that depended on them was dead.
+const (
+	BuildingClassStatus uint32 = 0x20000000
+	ArmedStatus         uint32 = 0x80000000
+)
+
 const classifierSelectableClear uint32 = 0x00008000
+
+// initialStatusFlags is the status word the allocator initializer produces for
+// a freshly created unit [08 "Classifier eligibility, destinations, and
+// order"].
+func initialStatusFlags(def *content.UnitDef) uint32 {
+	flags := ClassifierEligibleStatus
+	if def == nil {
+		return flags
+	}
+	// Building class is the authored bmcode being zero, not a yard-map,
+	// footprint or immobility heuristic.
+	if !def.BMCode {
+		flags |= BuildingClassStatus
+	}
+	if def.Weapon1Def != nil || def.Weapon2Def != nil || def.Weapon3Def != nil {
+		flags |= ArmedStatus
+	}
+	return flags
+}
 
 // TODO(question): [04 §3.5] establishes the per-unit dedup array but not its capacity.
 const GuardLatchSize = 8
@@ -483,7 +528,7 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 			Y:            y,
 			Z:            z,
 			Alive:        true,
-			Flags:        ClassifierEligibleStatus,
+			Flags:        initialStatusFlags(def),
 			Remaining:    0,
 			MaxHealth:    int32(def.MaxDamage),
 			Health:       int32(def.MaxDamage),
@@ -543,7 +588,7 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 		Y:            y,
 		Z:            z,
 		Alive:        true,
-		Flags:        ClassifierEligibleStatus,
+		Flags:        initialStatusFlags(def),
 		Remaining:    0,
 		MaxHealth:    int32(def.MaxDamage),
 		Health:       int32(def.MaxDamage),
@@ -632,7 +677,7 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 			Y:            y,
 			Z:            z,
 			Alive:        true,
-			Flags:        ClassifierEligibleStatus,
+			Flags:        initialStatusFlags(def),
 			Remaining:    0,
 			MaxHealth:    int32(def.MaxDamage),
 			Health:       int32(def.MaxDamage),
@@ -672,7 +717,7 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		Y:            y,
 		Z:            z,
 		Alive:        true,
-		Flags:        ClassifierEligibleStatus,
+		Flags:        initialStatusFlags(def),
 		Remaining:    0,
 		MaxHealth:    int32(def.MaxDamage),
 		Health:       int32(def.MaxDamage),

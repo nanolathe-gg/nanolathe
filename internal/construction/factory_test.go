@@ -847,7 +847,10 @@ func TestStateGates(t *testing.T) {
 	h2, _ := w2.Create(facDef, 0, 0, 0, 0)
 	factory2 := w2.Unit(h2)
 	factory2.Def = facDef
-	factory2.Flags = FlagActivated
+	// OR rather than assign: the allocator-initialized status word carries the
+	// building-class bit the state-0 gate reads [05 "Factory production
+	// lifecycle"].
+	factory2.Flags |= FlagActivated
 	q2 := orders.QueueForUnit(factory2)
 	q2.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 0, Phase: uint8(State0)})
 	head2 := q2.Primary()[0]

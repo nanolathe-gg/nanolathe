@@ -282,7 +282,11 @@ func runO6NaturalResult(t *testing.T, simSeed, crtSeed uint32) o6ResultRun {
 // The AI tactical-group producer remains a documented R-P0-04 unknown, so
 // this gate does not seed manager vectors or claim natural AI wave behavior.
 func TestStrictSkirmish_NaturalCommanderDeathResult(t *testing.T) {
-	t.Skip("TODO(question): O6 commander death via typed attack requires established weapon handshake (AimPrimary→FirePrimary) and projectile damage path for synthetic commander pair; current COB/weapon plumbing does not complete within 600 ticks [06 §3.3][06 §5.1] – see runO6NaturalResult trace")
+	// RELEASE-GATE-DISABLED (registry: internal/session/strict_gate_policy_test.go).
+	// Measured with the skip removed: the typed attack is admitted, but the
+	// weapon handshake never completes — aim, COB return and fire are all
+	// still false at tick 600 [06 §3.3][06 §5.1].
+	t.Skip("RELEASE-GATE-DISABLED: typed attack admitted but weapon handshake never completes (aim/cob_return/fire all false at tick 600); see disabledGates registry")
 	const simSeed, crtSeed uint32 = 601, 701
 	a := runO6NaturalResult(t, simSeed, crtSeed)
 	b := runO6NaturalResult(t, simSeed, crtSeed)

@@ -25,7 +25,6 @@ import (
 // selection, or snapshot slice is written by the test after command admission.
 // The synthetic definitions are authored fixture data, not retail assumptions.
 func TestProductionInputShiftQueueReplayO5(t *testing.T) {
-	t.Skip("TODO(question): O5 shift-queue via battle controller requires established picking/viewport transform for synthetic 32x32 world; current battleSession picking offset not yet established [07 §8][07 §9] – see production_o5_test")
 	cat, builderDef, targetDef, productKey := o5QueueCatalog()
 	world := testWorldON05(32, 32)
 	unitsWorld := units.New(32, cat)

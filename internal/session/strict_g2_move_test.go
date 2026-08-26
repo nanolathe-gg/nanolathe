@@ -79,9 +79,11 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 	initialX, initialZ := u.X, u.Z
 	routeCountBefore := -1
 	distBefore := numeric.Fixed(1 << 30)
-	// [R-P0-01] arrival threshold floor((SightDistance+4)/16) cells inclusive.
-	const sightForG2 = int32(200)
-	thresholdCells := (sightForG2 + 4) / 16 // 12
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// completes only when the committed tile equals the goal cell, inclusive.
+	// Ground move radiusParam is 4 → arrival threshold 0 cells [R-P0-01 corrected].
+	thresholdCells := 0 // radiusParam 4 → floor(4/16) = 0 [R-P0-01 corrected]
 	thresholdSq := int64(thresholdCells) * int64(thresholdCells)
 	for tick := 1; tick <= maxTick; tick++ {
 		s.Step(int32(tick))

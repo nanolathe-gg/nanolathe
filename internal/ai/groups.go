@@ -8,14 +8,16 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// high input bits below retain opaque retail semantics; the output bits are
-// kept named only by their observed masks because no design-level name is
-// established [R-P0-04 "Classifier eligibility, destinations, and order"].
+// The following status bits are the exact writes made by the classifier
+// sweep. The two high input bits are the building-class and armed bits, both
+// written once by the unit allocator initializer from the definition; the
+// output bits are kept named only by their observed masks because no
+// design-level name is established [08 "Classifier eligibility, destinations,
+// and order"].
 const (
 	classifierEligibleBit uint32 = units.ClassifierEligibleStatus
-	classifierInputA      uint32 = 0x20000000
-	classifierInputB      uint32 = 0x80000000
+	classifierBuilding    uint32 = units.BuildingClassStatus
+	classifierArmed       uint32 = units.ArmedStatus
 	classifierOutputA     uint32 = 0x00040000
 	classifierOutputB     uint32 = 0x00080000
 	classifierOutputMask  uint32 = 0x00100000
@@ -145,8 +147,10 @@ func (m *Manager) classifyGroups(w *units.World) {
 			continue
 		}
 		group := uint8(0)
-		if u.Flags&classifierInputA != 0 {
-			if u.Flags&classifierInputB == 0 {
+		if u.Flags&classifierBuilding != 0 {
+			// Buildings: unarmed ones are the eco-toggle task's input, armed
+			// ones are parked in the inert null record.
+			if u.Flags&classifierArmed == 0 {
 				group = 1
 			} else {
 				group = 5
@@ -159,7 +163,10 @@ func (m *Manager) classifyGroups(w *units.World) {
 				group = 8
 			case u.Def.MaxSlope > 0:
 				group = 7
-			case u.Flags&classifierInputB != 0:
+			case u.Flags&classifierArmed != 0:
+				// Ordinary armed ground units land in regroup A, which is the
+				// wave-A merge's peer and therefore the source the attack wave
+				// bootstraps from [08 "Wave merge"].
 				group = 3
 			}
 		}
@@ -279,22 +286,52 @@ func (m *Manager) stampGroupValues(w *units.World, handles []pool.Handle, group 
 	}
 }
 
-// mergeWaveGroups is the sole recovered producer for manager tactical
-// vectors. It is intentionally limited to transferring members between the
-// two already-populated wave vectors; it never discovers units from World.
+// mergeWaveGroups is the producer for the manager's wave vectors. It transfers
+// members between a wave record and its PAIRED REGROUP record — never between
+// the two waves — and it never discovers units from World.
+//
+// The first step is the bootstrap: when the wave record is empty and the peer
+// regroup record is not, the peer's FIRST member moves into the wave. That is
+// the only step that lets a wave start from nothing, and it moves exactly one
+// member per call, so a wave fills from its regroup peer over successive
+// 300-tick task runs rather than all at once [08 "Wave merge"].
+//
+// This function previously returned early on an empty current group, which —
+// combined with the wave↔wave peering in doWave — made the wave records
+// unreachable: the classifier assigns only resource, construction, explore,
+// regroup A, regroup B and null, so no wave could ever acquire a first member
+// and the computer player never issued an attack order.
+//
 // The distance arithmetic is in retail's signed integer world-coordinate
 // domain (unit fixed-point positions truncated toward zero before squaring),
-// not in authoritative 16.16 coordinates [R-P0-04 "Located producers and
-// transfer order"; 08 "Strategy manager and its task graph"].
+// not in authoritative 16.16 coordinates [08 "Wave merge"; R-P0-04 "Located
+// producers and transfer order"].
 func mergeWaveGroups(current, peer []pool.Handle, w *units.World, threshold int32) ([]pool.Handle, []pool.Handle) {
-	if w == nil || len(current) == 0 {
+	if w == nil {
 		return current, peer
+	}
+	if len(current) == 0 {
+		// Bootstrap: an empty wave takes the peer regroup record's first
+		// member, in vector order, and nothing else this call [08 "Wave
+		// merge" step 2].
+		if len(peer) == 0 {
+			return current, peer
+		}
+		// The transfer goes through the same direct group writer as every
+		// other move, so the peer loses its first member by replace-with-last,
+		// not by a front shift: peer[0] takes the value of the last element
+		// and the vector shrinks by one [08 "The direct manager-group writer"].
+		first := peer[0]
+		last := len(peer) - 1
+		peer[0] = peer[last]
+		peer = peer[:last]
+		current = append(current, first)
 	}
 	centroidX, centroidZ, ok := retailGroupCentroid(current, w)
 	if !ok {
 		return current, peer
 	}
-	for len(current) > 0 {
+	for len(current) > 1 {
 		count := int64(len(current))
 		limit := int64(threshold) * count
 		farthest := -1
@@ -315,8 +352,12 @@ func mergeWaveGroups(current, peer []pool.Handle, w *units.World, threshold int3
 		if farthest < 0 || farthestDistance < limit {
 			break
 		}
+		// Same direct group writer: remove by replace-with-last, then append
+		// to the destination [08 "The direct manager-group writer"].
 		peer = append(peer, current[farthest])
-		current = append(current[:farthest], current[farthest+1:]...)
+		last := len(current) - 1
+		current[farthest] = current[last]
+		current = current[:last]
 		centroidX, centroidZ, ok = retailGroupCentroid(current, w)
 		if !ok {
 			break
@@ -348,7 +389,11 @@ func mergeWaveGroups(current, peer []pool.Handle, w *units.World, threshold int3
 			if candidate != h {
 				continue
 			}
-			peer = append(peer[:i], peer[i+1:]...)
+			// Replace-with-last, as the direct group writer does
+			// [08 "The direct manager-group writer"].
+			last := len(peer) - 1
+			peer[i] = peer[last]
+			peer = peer[:last]
 			break
 		}
 		current = append(current, h)

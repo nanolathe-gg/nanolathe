@@ -92,7 +92,14 @@ func o6NaturalOrderError(m map[string]uint32) string {
 // available, an incomplete natural run fails with the ordered trace and
 // state evidence needed to research the gap [F-P0-045].
 func TestStrictSkirmish_NaturalAIRealAssets(t *testing.T) {
-	t.Skip("TODO(question): O6 natural AI requires FactoryCompleted and subsequent combat milestones within 12000 ticks on real assets; current AI placeholder does not achieve this in tick budget – see G5 [R-P0-04][P0-02] (NaturalAIRealAssets)")
+	// RELEASE-GATE-DISABLED (registry: internal/session/strict_gate_policy_test.go).
+	// Measured with the skip removed and retail assets mounted, twice with
+	// identical streams: the natural run reaches ProfileLoaded,
+	// PlacementSelected, BuildRequestAccepted, NanoframeObserved and
+	// GroupAssigned, then stalls — FactoryCompleted never arrives inside 12000
+	// ticks. The wave-group producer of [R-P0-04] is the next unknown after
+	// that, not the first one: the run does not get far enough to exercise it.
+	t.Skip("RELEASE-GATE-DISABLED: natural AI stalls before FactoryCompleted within 12000 ticks; see disabledGates registry")
 	if os.Getenv("NANOLATHE_TA_ROOT") == "" && os.Getenv("NANOLATHE_RETAIL_ASSETS") == "" {
 		if root, err := os.UserHomeDir(); err != nil || root == "" {
 			t.Skip("retail assets not available: set NANOLATHE_TA_ROOT")

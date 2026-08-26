@@ -1034,6 +1034,35 @@ The building-production handler runs as a five-state machine driven by the
 primary pump; interrupt masks are tested before the state machine with
 cancel-current first.
 
+**State 0: the count gate — Established (2026-08-26).** State 0 is three
+branches long and takes no deadline and no wake bit:
+
+1. clear the order node's presentation goal payload;
+2. if the factory's **building-class runtime status bit** is clear, return the
+   cancel-all result code — the handler itself never touches the queue, the
+   pump performs the cancel;
+3. otherwise, if the node's remaining count is greater than zero, raise the
+   activate edge and return the advance result code, so the phase increments
+   and the pump restarts at the head **in the same pass** — state 1 runs
+   immediately, with no one-tick wait;
+4. if the count is not greater than zero, lower the edge and return the free
+   result code, unlinking and freeing the node.
+
+The building-class test is the runtime status bit the allocator initializer
+sets from the definition's authored `bmcode` byte, described under
+[08 "Classifier eligibility, destinations, and order"]. It is **not** a
+yard-map, footprint, or immobility heuristic; a definition whose yard map,
+footprint, and mobility disagree with its bmcode would be classified
+differently by such a heuristic.
+
+Audit: an earlier implementation gave state 0 a one-tick deadline and armed
+wake bit 2 before entering state 1, and derived building class from a local
+yard-map/footprint/immobility predicate. Both were guesses recorded as such at
+the site; neither appears in the handler. The invented deadline delayed every
+factory product by one tick and armed a gate retail never arms. The same
+implementation expressed the cancel-all branch by binding a fresh queue to the
+unit, which additionally discarded the queue's service bindings.
+
 **Exit-spot acquisition (state 2).** Exact order:
 
 1. query the factory script's build-info piece (the query argument is

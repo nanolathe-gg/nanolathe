@@ -216,8 +216,13 @@ func strictMinimalCatalog() *content.Catalog {
 	mv["testmove"].CanonicalKey = content.CanonicalKey("testmove")
 	cat := &content.Catalog{
 		Units: map[string]*content.UnitDef{
-			"armcom": {UnitName: "armcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, BuildTime: 100, WorkerTime: 30, CanMove: true, MaxVelocity: 2000, TurnRate: 1000, Builder: true},
-			"corcom": {UnitName: "corcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, BuildTime: 100, WorkerTime: 30, CanMove: true, MaxVelocity: 2000, TurnRate: 1000, Builder: true},
+			// BMCode is what makes a definition mobile rather than a
+			// building; every stock mobile unit authors it, and a fixture
+			// modelling a commander must too, or the runtime building-class
+			// status bit sends it down the structure branches
+			// [08 "Classifier eligibility, destinations, and order"].
+			"armcom": {UnitName: "armcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, BuildTime: 100, WorkerTime: 30, CanMove: true, MaxVelocity: 2000, TurnRate: 1000, Builder: true, BMCode: true},
+			"corcom": {UnitName: "corcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, BuildTime: 100, WorkerTime: 30, CanMove: true, MaxVelocity: 2000, TurnRate: 1000, Builder: true, BMCode: true},
 		},
 		Movement: mv,
 		Sides: []*content.SideDef{
