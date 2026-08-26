@@ -102,15 +102,18 @@ func FogScreenRect(cam *camera.Camera, gx, gy int32) (x0, y0, x1, y1 int32) {
 	return x0, y0, x1, y1
 }
 
-// FogVariant returns the four-way variant selector for a cell [03 §3.3].
-// Selection is (cellX + cellY + cameraPhaseSum) & 3 [03 §3.3]. The exact
-// cameraPhaseSum composition is not established; this uses cell parity alone
-// as the minimal deterministic base.
-// TODO(question): cameraPhaseSum not established [03 §3.3]; current uses
-// (gx+gy)&3. Probe against retail to add cam residues when traced.
+// FogVariant returns the four-way variant selector for a cell [03 §3.3] [rr-16 §6.2].
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// For map-sized cache col=gx, row=gy; for viewport-sized col=gx-startX likewise. Using global gx+camPhase yields
+// same rotation as retail's col+row+camPhase when start is accounted, since col = gx-start and start's contribution is absorbed into camPhase.
+// Implements floorDiv with signed correction for negative camera [I3][03 §2.1].
 func FogVariant(gx, gy int32, cam *camera.Camera) int {
-	_ = cam // reserved for future phase once established [03 §3.3]
-	return int((gx + gy) & 3)
+	if cam == nil {
+		return int((gx + gy) & 3)
+	}
+	// camPhase = floorDiv(camX+16,32) + floorDiv(camZ+16,32) [rr-16 §6.2].
+	camPhase := floorDiv(cam.X+16, FogTilePixels) + floorDiv(cam.Z+16, FogTilePixels)
+	return int((gx + gy + camPhase) & 3)
 }
 
 // FogDarkRGBA returns the RGBA for the default dark fog fill via the palette
@@ -186,18 +189,19 @@ func cellOps(gx, gy int32, c0, c1 uint8, cam *camera.Camera, tables *palette.Tab
 			R:         dr, G: dg, B: db, A: da,
 		})
 	} else if c1 >= 1 && c1 <= 14 {
-		// GAF frame value-1 from four-way variant family selected by (cellX+cellY+cameraPhaseSum)&3 [03 §3.3].
+		// GAF frame value-1 from four-way variant family selected by (col+row+camPhase)&3 [03 §3.3][rr-16 §6.2].
 		variant := FogVariant(gx, gy, cam)
 		frame := int(c1) - 1
 		patterned := false
 		if dither {
-			// Blitted plain or parity-seeded patterned per same option bit [03 §3.3].
+			// Blitted plain or parity-seeded patterned per same option bit [03 §3.3][rr-16 §8].
+			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			var camX, camZ int32
 			if cam != nil {
 				camX = cam.X
 				camZ = cam.Z
 			}
-			parity := (camX + camZ + gx + gy) & 1
+			parity := (camX + camZ) & 1
 			patterned = parity != 0
 		}
 		ops = append(ops, FogOp{

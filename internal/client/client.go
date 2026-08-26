@@ -107,6 +107,14 @@ type Client struct {
 	featureCursor map[string]int               // lower "filename|seqname" -> anim cursor index for animating=1 [05]
 	featureYSort  bool                         // when true force Y-bucket sort for feature pass [03 §1]
 
+	// Fog overlay — anims/fog.gaf handles, presentation-only [03 §3.3] [rr-16 §9.1].
+	fogGAF      *formats.GAF         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	fogGray     [4]*formats.GAFEntry // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	fogBlack    [4]*formats.GAFEntry // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	fogLoaded   bool
+	fogLoadErr  error
+	ditheredFog bool // options byte bit6 0x40 DitheredFog [rr-16 §8]
+
 	// Software cursor, drawn last over the composed surface [07 §8].
 	cursors *Cursors
 
@@ -222,7 +230,49 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.featureFrames = map[string]*formats.GAFFrame{}
 	c.featureGACErr = map[string]error{}
 	c.featureCursor = map[string]int{}
+	c.fogGAF = nil
+	c.fogLoaded = false
+	c.fogLoadErr = nil
+	for i := range c.fogGray {
+		c.fogGray[i] = nil
+		c.fogBlack[i] = nil
+	}
 	c.buildTextureIndex()
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (c *Client) SetDitheredFog(v bool) { c.ditheredFog = v }
+
+// DitheredFog returns the current DitheredFog bit.
+func (c *Client) DitheredFog() bool { return c.ditheredFog }
+
+// ensureFogGAF loads anims/fog.gaf lazily and binds Gray1-4/Black1-4 [rr-16 §9.1].
+// It is presentation-only and never touches sim state (I6).
+func (c *Client) ensureFogGAF() {
+	if c.fogLoaded || c.modelFS == nil {
+		return
+	}
+	c.fogLoaded = true
+	gaf, err := formats.LoadGAFFile(c.modelFS, "anims/fog.gaf")
+	if err != nil {
+		c.fogLoadErr = err
+		return
+	}
+	c.fogGAF = gaf
+	namesGray := [4]string{"Gray1", "Gray2", "Gray3", "Gray4"}
+	namesBlack := [4]string{"Black1", "Black2", "Black3", "Black4"}
+	for i, n := range namesGray {
+		if e, ok := gaf.Find(n); ok {
+			c.fogGray[i] = e
+		}
+	}
+	for i, n := range namesBlack {
+		if e, ok := gaf.Find(n); ok {
+			c.fogBlack[i] = e
+		}
+	}
 }
 
 // ComposeFrame reads the published buffer, composes one frame at alpha 1.0,
@@ -420,6 +470,125 @@ func (c *Client) blitGAFFrame(frame *formats.GAFFrame, dstX, dstY int, isShadow 
 					darkPix = 0
 				}
 				c.indexed[dstIdx] = darkPix
+				continue
+			}
+			pix := frame.Pixels[idx]
+			c.indexed[dstOff+x] = pix
+		}
+	}
+}
+
+// blitFogGAF blits a fog GAF frame at (dstX,dstY) which is the cell's screen rect origin [rr-16 §6.2].
+// It copies opaque indexed pixels directly (palette mapping at present time C7), clipped to viewport.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (c *Client) blitFogGAF(frame *formats.GAFFrame, dstX, dstY int) {
+	if frame == nil || c.indexed == nil {
+		return
+	}
+	w := c.width
+	h := c.height
+	fw := int(frame.Width)
+	fh := int(frame.Height)
+	if fw <= 0 || fh <= 0 {
+		return
+	}
+	srcX0, srcY0 := 0, 0
+	if dstX < 0 {
+		srcX0 = -dstX
+		dstX = 0
+	}
+	if dstY < 0 {
+		srcY0 = -dstY
+		dstY = 0
+	}
+	if dstX >= w || dstY >= h {
+		return
+	}
+	copyW := fw - srcX0
+	copyH := fh - srcY0
+	if dstX+copyW > w {
+		copyW = w - dstX
+	}
+	if dstY+copyH > h {
+		copyH = h - dstY
+	}
+	if copyW <= 0 || copyH <= 0 {
+		return
+	}
+	for y := 0; y < copyH; y++ {
+		srcY := srcY0 + y
+		dstYPos := dstY + y
+		dstOff := dstYPos*w + dstX
+		srcRow := srcY*fw + srcX0
+		for x := 0; x < copyW; x++ {
+			idx := srcRow + x
+			if idx < 0 || idx >= len(frame.Pixels) {
+				continue
+			}
+			if idx < len(frame.Transparent) && frame.Transparent[idx] {
+				continue
+			}
+			pix := frame.Pixels[idx]
+			c.indexed[dstOff+x] = pix
+		}
+	}
+}
+
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// It skips every other pixel in a 2×2 checker seeded by camera parity (camX+camZ)&1 [rr-16 §6.2].
+func (c *Client) blitFogGAFPatterned(frame *formats.GAFFrame, dstX, dstY int) {
+	if frame == nil || c.indexed == nil {
+		return
+	}
+	w := c.width
+	h := c.height
+	fw := int(frame.Width)
+	fh := int(frame.Height)
+	if fw <= 0 || fh <= 0 {
+		return
+	}
+	parity := int32(0)
+	if c.cam != nil {
+		parity = (c.cam.X + c.cam.Z) & 1
+	}
+	srcX0, srcY0 := 0, 0
+	if dstX < 0 {
+		srcX0 = -dstX
+		dstX = 0
+	}
+	if dstY < 0 {
+		srcY0 = -dstY
+		dstY = 0
+	}
+	if dstX >= w || dstY >= h {
+		return
+	}
+	copyW := fw - srcX0
+	copyH := fh - srcY0
+	if dstX+copyW > w {
+		copyW = w - dstX
+	}
+	if dstY+copyH > h {
+		copyH = h - dstY
+	}
+	if copyW <= 0 || copyH <= 0 {
+		return
+	}
+	for y := 0; y < copyH; y++ {
+		srcY := srcY0 + y
+		dstYPos := dstY + y
+		dstOff := dstYPos*w + dstX
+		srcRow := srcY*fw + srcX0
+		for x := 0; x < copyW; x++ {
+			// Checker: skip where (screenX+screenY+parity)&1==0 approximates retail's 2×2 block via AND 1 / ADD 2.
+			if ((int32(dstX+x) + int32(dstYPos) + parity) & 1) == 0 {
+				continue
+			}
+			idx := srcRow + x
+			if idx < 0 || idx >= len(frame.Pixels) {
+				continue
+			}
+			if idx < len(frame.Transparent) && frame.Transparent[idx] {
 				continue
 			}
 			pix := frame.Pixels[idx]

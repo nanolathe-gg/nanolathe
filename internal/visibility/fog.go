@@ -76,16 +76,19 @@ func (f *FogCache) SetChannel(x, y int32, c0, c1 uint8) {
 	f.ch1[idx] = c1 & 0x0F
 }
 
-// RebuildFog lazily rebuilds the two-channel cache [03 §3.3] C13.
-// The cache never writes word mask; values 15 are solid dark (channel0) or patterned fill (channel1).
+// RebuildFog lazily rebuilds the two-channel cache [03 §3.3] C13 [rr-16].
+// The cache never writes word mask; values 15 are solid dark (channel0 Black/history) or patterned fill (channel1 Gray/current).
 // Values 1..14 select GAF frame value-1 from variant families keyed by cell parity plus camera phase.
-// Channel one renders first.
+// Channel one (hi/Gray/current) renders first, then channel zero (lo/Black/history) [03 §3.3] [rr-16 §6.1/6.2].
 //
-// TODO(question): the engine-side conversion producing the cached channel
-// values is an unresolved residual of [03 §3.3] — how visible/hidden history
-// and current coverage map into the two nibbles, and which option bit selects
-// the patterned fill. The fill below is a placeholder (15 solid dark when not
-// currently visible, 0 otherwise); it is NOT attested retail output.
+// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// lo accumulates word-grid history mask 1<<player regardless [rr-16 §6.1]; each holds a 4-bit nibble 0..15 via four bounded
+// OR 1,2,4,8 sites (0 transparent, 15 solid dark, 1..14 index value-1 into Gray=hi/current and Black=lo/history four-way variant families
+// with variant=(col+row+camPhase)&3 deterministically from floorMod(camera,32) residues [rr-16 §6.1/6.2]), edge rows/cols forced to 15
+// when viewport extends beyond map [rr-16 §6.1]. Corner→bit 1=NW,2=NE,4=SW,8=SE remains supported inference pending asymmetric probe [rr-16 §6.1].
+// Camera residues/offX are used for viewport-sized cache alignment; for Nanolathe's map-sized cache we generate for the whole map and
+// let BuildFogOps handle viewport clipping via hard 32 edges [03 §3.3] C13 — viewport edge forcing is therefore a render-time concern
+// and the cache remains map-aligned for simplicity (divergence documented as TODO(question) for exact viewport-sized residue alignment).
 func (s *Service) RebuildFog(cameraX, cameraY int32) {
 	if s == nil || s.fog.ch0 == nil {
 		return
@@ -93,38 +96,97 @@ func (s *Service) RebuildFog(cameraX, cameraY int32) {
 	if s.fog.valid {
 		return
 	}
-	// Deterministic fill: channel0 = 15 if word bit set? Actually fog = not-visible.
-	// But we lack history bit; use wordMask local bit as history proxy.
-	bit := cellBit(s.local)
-	for y := int32(0); y < s.H; y++ {
-		for x := int32(0); x < s.W; x++ {
-			idx := int(y*s.W + x)
-			visible := false
-			if idx < len(s.wordMask) && s.wordMask[idx]&bit != 0 {
-				visible = true
-			}
-			// Also consider byte grid
-			if s.mode&ModeCurrentEnabled != 0 && int(s.local) < len(s.byteGrids) && s.byteGrids[s.local] != nil {
-				if s.byteGrids[s.local][idx] != 0 {
-					visible = true
+	// Clear entire cache (rep stos) [rr-16 §6.1].
+	for i := range s.fog.ch0 {
+		s.fog.ch0[i] = 0
+		s.fog.ch1[i] = 0
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// is sufficient for correctness of nibble values since each visibility tile's fog contribution is local to its 4 neighbours).
+	w := int(s.fog.w)
+	h := int(s.fog.h)
+	if w <= 0 || h <= 0 {
+		s.fog.valid = true
+		return
+	}
+	// Hi channel (ch1) — current visibility, only when mode bit 1 (ModeCurrentEnabled, 0x2) is set [rr-16 §6.1: TEST 2].
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	if s.mode&ModeCurrentEnabled != 0 {
+		localGrid := s.byteGrids[s.local]
+		if localGrid != nil {
+			visW := int(s.W)
+			visH := int(s.H)
+			for gy := 0; gy < visH; gy++ {
+				for gx := 0; gx < visW; gx++ {
+					idxVis := gy*visW + gx
+					if idxVis < 0 || idxVis >= len(localGrid) {
+						continue
+					}
+					if localGrid[idxVis] != 0 {
+						continue // visible -> no fog contribution
+					}
+					// Fogged visibility tile (cur==0) contributes to up to 4 cache neighbours.
+					// Mapping per RR-16 §6.1: cache (gx,gy) bit 1, (gx-1,gy) bit 2, (gx,gy-1) bit 4, (gx-1,gy-1) bit 8.
+					if gx >= 0 && gy >= 0 && gx < w && gy < h {
+						s.fog.ch1[gy*w+gx] |= 1
+					}
+					if gx-1 >= 0 && gy >= 0 && gx-1 < w && gy < h {
+						s.fog.ch1[gy*w+(gx-1)] |= 2
+					}
+					if gx >= 0 && gy-1 >= 0 && gx < w && gy-1 < h {
+						s.fog.ch1[(gy-1)*w+gx] |= 4
+					}
+					if gx-1 >= 0 && gy-1 >= 0 && gx-1 < w && gy-1 < h {
+						s.fog.ch1[(gy-1)*w+(gx-1)] |= 8
+					}
 				}
 			}
-			var c0, c1 uint8
-			if !visible {
-				// Placeholder fill; see TODO(question) above — not attested.
-				c0 = 15
-				c1 = 0
-			} else {
-				c0 = 0
-				c1 = 0
-			}
-			// Variant families keyed by (cellX+cellY+cameraPhase)&3 omitted for now; values 0..15 as above.
-			_ = cameraX
-			_ = cameraY
-			s.fog.ch0[idx] = c0
-			s.fog.ch1[idx] = c1
 		}
 	}
+	// Lo channel (ch0) — history/unexplored, always from word grid [rr-16 §6.1: after hi loop, lo loop unconditional].
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	bit := cellBit(s.local)
+	if len(s.wordMask) > 0 {
+		visW := int(s.W)
+		visH := int(s.H)
+		for gy := 0; gy < visH; gy++ {
+			for gx := 0; gx < visW; gx++ {
+				idxVis := gy*visW + gx
+				if idxVis < 0 || idxVis >= len(s.wordMask) {
+					continue
+				}
+				if s.wordMask[idxVis]&bit != 0 {
+					continue // explored -> no lo contribution
+				}
+				if gx >= 0 && gy >= 0 && gx < w && gy < h {
+					s.fog.ch0[gy*w+gx] |= 1
+				}
+				if gx-1 >= 0 && gy >= 0 && gx-1 < w && gy < h {
+					s.fog.ch0[gy*w+(gx-1)] |= 2
+				}
+				if gx >= 0 && gy-1 >= 0 && gx < w && gy-1 < h {
+					s.fog.ch0[(gy-1)*w+gx] |= 4
+				}
+				if gx-1 >= 0 && gy-1 >= 0 && gx-1 < w && gy-1 < h {
+					s.fog.ch0[(gy-1)*w+(gx-1)] |= 8
+				}
+			}
+		}
+	}
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// For Nanolathe's map-sized cache, the viewport-sized equivalent is that cells beyond the map are considered
+	// fogged (out-of-bounds visibility considered unexplored). Retail forces those border cache rows/cols to 15
+	// when camera tile start <0 or end > map. We approximate by treating virtual out-of-bounds tiles as fogged for
+	// outer ring when the corresponding visibility border is fogged — handled implicitly by the OR pattern where
+	// missing neighbours would have contributed bits 2/4/8 at the edge but were skipped. To ensure map outer edge
+	// appears solid when the edge is fogged, we optionally force outer ring partially-fogged cells to 15.
+	// This is a supported inference for map-sized cache; full viewport-sized residue handling remains TODO(question)
+	// for exact offX/offZ alignment [rr-16 §7/10].
+	// No additional forcing here preserves partial transition at map edge, which matches the hard 32 edge without extra fill.
+	// Callers that need beyond-map solid can rely on BuildFogOps viewport culling leaving out-of-bounds as no-cache (treated as visible
+	// in current BuildFogOps, but terrain void beyond map is already black via BlitTerrain clipping).
+	_ = cameraX
+	_ = cameraY
 	s.fog.valid = true
 }
 

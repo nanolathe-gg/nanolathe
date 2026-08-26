@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/visibility"
@@ -344,7 +345,7 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 			}
 		}
 		// Fog presentation [03 §3.3] C13 — reads snapshot fog cache copied from visibility.Service.Fog() each tick (I6).
-		// The cache is presentation-only and never writes sim state. Fog uses hard 32-pixel tiles [03 §3.3].
+		// The cache is presentation-only and never writes sim state. Fog uses hard 32-pixel tiles [03 §3.3][rr-16].
 		if ok && cur != nil && cur.Fog.Valid && c.cam != nil {
 			fc := &visibility.FogCache{}
 			// Reconstruct cache from snapshot channels via SetChannel [03 §3.3] I6.
@@ -358,9 +359,18 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 				}
 			}
 			fc.Validate()
-			ops := render.BuildFogOps(fc, c.cam, c.cam.ViewW, c.cam.ViewH, cur.Fog.W, cur.Fog.H, c.pal, false)
+			c.ensureFogGAF()
+			ops := render.BuildFogOps(fc, c.cam, c.cam.ViewW, c.cam.ViewH, cur.Fog.W, cur.Fog.H, c.pal, c.ditheredFog)
 			for _, op := range ops {
 				x0, y0, x1, y1 := op.ScreenX0, op.ScreenY0, op.ScreenX1, op.ScreenY1
+				// Rebase from retail viewport origin (128,32) to Nanolathe full-window shell origin (0,0)
+				// so fog aligns with terrain blitted via BlitTerrainOrigin 0,0 [03 §2.5][PLAN_04A C1].
+				if c.cam != nil {
+					x0 -= camera.OriginX
+					y0 -= camera.OriginY
+					x1 -= camera.OriginX
+					y1 -= camera.OriginY
+				}
 				if x0 < 0 {
 					x0 = 0
 				}
@@ -376,14 +386,89 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 				if x0 >= x1 || y0 >= y1 {
 					continue
 				}
-				// TODO(question): GAF fog frames (1..14) currently fill solid dark; retail GAF blit not yet wired.
-				// Patterned fog uses checker.
-				for py := y0; py < y1; py++ {
-					for px := x0; px < x1; px++ {
-						if op.Kind == render.FogKindPatterned && (px+py)%2 == 0 {
+				switch op.Kind {
+				case render.FogKindSolidDark:
+					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					for py := y0; py < y1; py++ {
+						base := int(py)*w + int(x0)
+						for px := x0; px < x1; px++ {
+							c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
+						}
+					}
+				case render.FogKindDark:
+					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					for py := y0; py < y1; py++ {
+						base := int(py)*w + int(x0)
+						for px := x0; px < x1; px++ {
+							c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
+						}
+					}
+				case render.FogKindPatterned:
+					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					// Checker skips every other pixel in 2×2 block seeded by parity.
+					parity := int32(0)
+					if c.cam != nil {
+						parity = (c.cam.X + c.cam.Z) & 1
+					}
+					for py := y0; py < y1; py++ {
+						base := int(py)*w + int(x0)
+						for px := x0; px < x1; px++ {
+							// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+							// Approximate as checker where (px+py+parity)&1==0 is skipped (transparent, shows terrain).
+							if (px+py+parity)&1 == 0 {
+								continue
+							}
+							c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
+						}
+					}
+				case render.FogKindGAFCh1:
+					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					if c.fogGAF != nil && op.Variant >= 0 && op.Variant < 4 && op.Frame >= 0 {
+						entry := c.fogGray[op.Variant]
+						if entry != nil && op.Frame < len(entry.Frames) && entry.Frames[op.Frame].Frame != nil {
+							frame := entry.Frames[op.Frame].Frame
+							if op.Patterned {
+								c.blitFogGAFPatterned(frame, int(x0), int(y0))
+							} else {
+								c.blitFogGAF(frame, int(x0), int(y0))
+							}
 							continue
 						}
-						c.indexed[int(py)*w+int(px)] = render.FogDarkPaletteIndex
+					}
+					// Fallback solid dark when GAF missing (missing entry returns 0 → skip blit [rr-16 §9.3]).
+					for py := y0; py < y1; py++ {
+						base := int(py)*w + int(x0)
+						for px := x0; px < x1; px++ {
+							if op.Patterned && (px+py)&1 == 0 {
+								continue
+							}
+							c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
+						}
+					}
+				case render.FogKindGAFCh0:
+					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					if c.fogGAF != nil && op.Variant >= 0 && op.Variant < 4 && op.Frame >= 0 {
+						entry := c.fogBlack[op.Variant]
+						if entry != nil && op.Frame < len(entry.Frames) && entry.Frames[op.Frame].Frame != nil {
+							frame := entry.Frames[op.Frame].Frame
+							c.blitFogGAF(frame, int(x0), int(y0))
+							continue
+						}
+					}
+					// Fallback solid dark.
+					for py := y0; py < y1; py++ {
+						base := int(py)*w + int(x0)
+						for px := x0; px < x1; px++ {
+							c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
+						}
+					}
+				default:
+					// visible shouldn't produce ops, but fallback.
+					for py := y0; py < y1; py++ {
+						base := int(py)*w + int(x0)
+						for px := x0; px < x1; px++ {
+							c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
+						}
 					}
 				}
 			}
