@@ -32,8 +32,8 @@ func rx01Econ() *economy.Service {
 	econ.Players[0].Stock[economy.Metal] = 400
 	econ.Players[0].Capacity[economy.Energy] = 1000
 	econ.Players[0].Capacity[economy.Metal] = 500
-	econ.Players[0].PassProduced[economy.Energy] = 300
-	econ.Players[0].PassProduced[economy.Metal] = 10
+	econ.Players[0].AIProduction[economy.Energy] = 300
+	econ.Players[0].AIProduction[economy.Metal] = 10
 	return &econ
 }
 
@@ -93,7 +93,7 @@ func TestRX01_MissedCallbacks_FactoryQueuePath(t *testing.T) {
 	f.Remaining = 0
 	mgr := &Manager{
 		Player: 0, Profile: prof, Catalog: cat,
-		Strategic:    Strategic{CenterX: world.CellToWorld(8), CenterZ: world.CellToWorld(8), Counts: map[string]int32{}, ClassVectors: map[string]ClassVector{}},
+		Strategic:    Strategic{CenterX: world.CellToWorld(8), CenterZ: world.CellToWorld(8), Counts: map[string]int32{}, ClassVectors: map[string]ClassVector{content.CanonicalKey("armflea"): {C0: 40}}},
 		OriginX:      world.CellToWorld(2),
 		OriginZ:      world.CellToWorld(2),
 		SurfaceMetal: 0,

@@ -52,8 +52,8 @@ func TestP0I16_Isolation_TwoManagersInterleaved(t *testing.T) {
 	econA.Players[0].Stock[economy.Metal] = 400
 	econA.Players[0].Capacity[economy.Energy] = 1000
 	econA.Players[0].Capacity[economy.Metal] = 500
-	econA.Players[0].PassProduced[economy.Energy] = 300
-	econA.Players[0].PassProduced[economy.Metal] = 10
+	econA.Players[0].AIProduction[economy.Energy] = 300
+	econA.Players[0].AIProduction[economy.Metal] = 10
 	econB = econA
 
 	rng.SeedGlobal(42, 0)
@@ -134,8 +134,8 @@ func TestP0I16_SaveReloadIsolation(t *testing.T) {
 	econ.Players[1].Stock[economy.Metal] = 400
 	econ.Players[1].Capacity[economy.Energy] = 1000
 	econ.Players[1].Capacity[economy.Metal] = 500
-	econ.Players[1].PassProduced[economy.Energy] = 300
-	econ.Players[1].PassProduced[economy.Metal] = 10
+	econ.Players[1].AIProduction[economy.Energy] = 300
+	econ.Players[1].AIProduction[economy.Metal] = 10
 	rng.SeedGlobal(1, 0)
 	// Gate should still block because flag=1 and candidate in set
 	if _, ok := Select(reloaded, builder, &econ); ok {

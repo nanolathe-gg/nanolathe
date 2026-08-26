@@ -131,7 +131,7 @@ func TestRS02_RNGDrawLedgerMatchesHandAuthoredSequence(t *testing.T) {
 	terrain := &world.Terrain{CellW: 4, CellH: 4, Plot: plot, Version: world.VersionCanonical}
 	w := units.New(16, cat)
 	// Create an activatable building for resource branch: OnOffable true, so doResource will consider it
-	defOnOff := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armmex_onoff")}, UnitName: "armmex_onoff", FootprintX: 1, FootprintZ: 1, YardMap: "o", OnOffable: true, MaxDamage: 100}
+	defOnOff := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armmex_onoff")}, UnitName: "armmex_onoff", FootprintX: 1, FootprintZ: 1, YardMap: "o", MakesMetal: 1, MaxDamage: 100}
 	cat.Units[content.CanonicalKey("armmex_onoff")] = defOnOff
 	h, _ := w.Create(defOnOff, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
 	u := w.Unit(h)
@@ -144,8 +144,8 @@ func TestRS02_RNGDrawLedgerMatchesHandAuthoredSequence(t *testing.T) {
 	econ.Players[0].StatusHalfwordAt144 = 1
 	econ.Players[0].Stock[economy.Metal] = 100 // 2*100=200 > energy 50 => true
 	econ.Players[0].Stock[economy.Energy] = 50
-	econ.Players[0].PassProduced[economy.Energy] = 10
-	econ.Players[0].PassConsumed[economy.Energy] = 0 // net 10 >=1
+	econ.Players[0].AIProduction[economy.Energy] = 10
+	econ.Players[0].AIConsumption[economy.Energy] = 0 // net 10 >=1
 	econ.Players[0].UpdateTime = 1000
 	econ.Players[0].Helper1Deadline = 1000
 	econ.Players[0].Helper2Deadline = 1000

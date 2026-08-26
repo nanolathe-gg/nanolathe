@@ -8,9 +8,10 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// isCombatUnit reports whether def is a combat unit eligible for wave/explore groups.
-// We exclude builders and pure economy buildings; require mobility and attack capability [P0-02][08].
-// TODO(question): exact retail classification for group eligibility is not established; this heuristic uses CanMove/CanAttack/weapon presence.
+// isCombatUnit reports the conservative combat classification used by the
+// observed-state milestone recorder. It is deliberately not used to populate
+// manager tactical groups: the retail group eligibility predicate and initial
+// writer are not established [08 "Eco toggle and group-vector population"].
 func isCombatUnit(def *content.UnitDef) bool {
 	if def == nil {
 		return false
@@ -77,10 +78,17 @@ func cleanGroup(list []pool.Handle, w *units.World, player uint8) []pool.Handle 
 	return list[:n]
 }
 
-// updateGroups maintains AI groups from unit creation/death/completion.
-// It is called each tick before task dispatch to ensure groups reflect live state [P0-I12].
-// Groups are populated deterministically by scanning units.World in sliced order (player asc, slot asc) [I1].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// updateGroups applies the established cleanup pass to manager tactical
+// vectors. Retail allocates these vectors empty and the bounded writer census
+// found no initial population path. The only located manager-vector producer
+// is wave merge, which transfers members between already-populated wave
+// vectors; it is not an initializer [08 "Strategy manager and its task graph";
+// 08 "Eco toggle and group-vector population"].
+//
+// Do not scan the world or classify units here. Doing so changes an inert stock
+// manager into a synthetic order producer. A future runtime trace may add the
+// exact producer and lifecycle hooks; until then an empty vector must remain
+// empty (TODO(question), R-P0-04).
 func (m *Manager) updateGroups(w *units.World) {
 	if m == nil || w == nil {
 		return
@@ -92,37 +100,121 @@ func (m *Manager) updateGroups(w *units.World) {
 	m.GroupRally = cleanGroup(m.GroupRally, w, m.Player)
 	m.GroupRegroupA = cleanGroup(m.GroupRegroupA, w, m.Player)
 	m.GroupRegroupB = cleanGroup(m.GroupRegroupB, w, m.Player)
+}
 
-	// Scan for ungrouped combat units and assign to groups.
-	for _, u := range w.IterSliced() {
-		if u == nil || !u.Alive || u.Owner != m.Player || u.Remaining != 0 {
-			continue
+// mergeWaveGroups is the sole recovered producer for manager tactical
+// vectors. It is intentionally limited to transferring members between the
+// two already-populated wave vectors; it never discovers units from World.
+// The distance arithmetic is in retail's signed integer world-coordinate
+// domain (unit fixed-point positions truncated toward zero before squaring),
+// not in authoritative 16.16 coordinates [R-P0-04 "Located producers and
+// transfer order"; 08 "Strategy manager and its task graph"].
+func mergeWaveGroups(current, peer []pool.Handle, w *units.World, threshold int32) ([]pool.Handle, []pool.Handle) {
+	if w == nil || len(current) == 0 {
+		return current, peer
+	}
+	centroidX, centroidZ, ok := retailGroupCentroid(current, w)
+	if !ok {
+		return current, peer
+	}
+	for len(current) > 0 {
+		count := int64(len(current))
+		limit := int64(threshold) * count
+		farthest := -1
+		var farthestDistance int64
+		for i, h := range current {
+			u := w.Unit(h)
+			if u == nil || !u.Alive {
+				continue
+			}
+			distance := retailDistanceSquared(u, centroidX, centroidZ)
+			// Strictly retain the first member on ties: the vector order is
+			// the retail deterministic tie-break.
+			if farthest < 0 || distance > farthestDistance {
+				farthest = i
+				farthestDistance = distance
+			}
 		}
-		if u.Def == nil {
-			continue
+		if farthest < 0 || farthestDistance < limit {
+			break
 		}
-		if !isCombatUnit(u.Def) {
-			continue
-		}
-		h := u.Handle
-		if containsHandle(m.GroupWaveA, h) || containsHandle(m.GroupWaveB, h) || containsHandle(m.GroupExplore, h) || containsHandle(m.GroupRally, h) || containsHandle(m.GroupRegroupA, h) || containsHandle(m.GroupRegroupB, h) {
-			continue
-		}
-		// Prefer wave groups up to waveMax, then explore, then rally.
-		if len(m.GroupWaveA) < waveMax {
-			m.GroupWaveA = append(m.GroupWaveA, h)
-		} else if len(m.GroupWaveB) < waveMax {
-			m.GroupWaveB = append(m.GroupWaveB, h)
-		} else if len(m.GroupExplore) < 10 {
-			m.GroupExplore = append(m.GroupExplore, h)
-		} else if len(m.GroupRally) < 10 {
-			m.GroupRally = append(m.GroupRally, h)
-		} else if len(m.GroupRegroupA) < waveMax {
-			m.GroupRegroupA = append(m.GroupRegroupA, h)
-		} else if len(m.GroupRegroupB) < waveMax {
-			m.GroupRegroupB = append(m.GroupRegroupB, h)
+		peer = append(peer, current[farthest])
+		current = append(current[:farthest], current[farthest+1:]...)
+		centroidX, centroidZ, ok = retailGroupCentroid(current, w)
+		if !ok {
+			break
 		}
 	}
+
+	// Recompute the current-group limit after outlier transfers. Members are
+	// collected in peer-vector order and transferred in that same order.
+	if len(current) == 0 {
+		return current, peer
+	}
+	centroidX, centroidZ, ok = retailGroupCentroid(current, w)
+	if !ok {
+		return current, peer
+	}
+	limit := int64(threshold) * int64(len(current))
+	collected := make([]pool.Handle, 0, len(peer))
+	for _, h := range peer {
+		u := w.Unit(h)
+		if u != nil && u.Alive && retailDistanceSquared(u, centroidX, centroidZ) < limit {
+			collected = append(collected, h)
+		}
+	}
+	if len(collected) == 0 {
+		return current, peer
+	}
+	for _, h := range collected {
+		for i, candidate := range peer {
+			if candidate != h {
+				continue
+			}
+			peer = append(peer[:i], peer[i+1:]...)
+			break
+		}
+		current = append(current, h)
+	}
+	return current, peer
+}
+
+func retailGroupCentroid(handles []pool.Handle, w *units.World) (int32, int32, bool) {
+	if len(handles) == 0 || w == nil {
+		return 0, 0, false
+	}
+	var sumX, sumZ int64
+	var count int64
+	for _, h := range handles {
+		u := w.Unit(h)
+		if u == nil || !u.Alive {
+			continue
+		}
+		sumX += int64(retailCoord(u.X))
+		sumZ += int64(retailCoord(u.Z))
+		count++
+	}
+	if count == 0 {
+		return 0, 0, false
+	}
+	return int32(sumX / count), int32(sumZ / count), true
+}
+
+func retailDistanceSquared(u *units.Unit, x, z int32) int64 {
+	if u == nil {
+		return 0
+	}
+	dx := int64(retailCoord(u.X)) - int64(x)
+	dz := int64(retailCoord(u.Z)) - int64(z)
+	return dx*dx + dz*dz
+}
+
+// retailCoord converts a 16.16 position to the signed pixel word read by the
+// recovered helpers. The executable reads the high signed word of the raw
+// position, so this is an arithmetic shift (floor for negative fractional
+// values), not Fixed.Int's truncation-toward-zero path [03 §2.1; I3].
+func retailCoord(v numeric.Fixed) int32 {
+	return int32(v >> 16)
 }
 
 // isInAnyGroup reports whether h is in any AI group.
@@ -183,22 +275,14 @@ func (m *Manager) enemyCentroid(w *units.World) (numeric.Fixed, numeric.Fixed) {
 
 // groupCentroid computes centroid of group handles; returns false if empty.
 func groupCentroid(handles []pool.Handle, w *units.World) (numeric.Fixed, numeric.Fixed, bool) {
-	if len(handles) == 0 || w == nil {
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// and shifts the result back to 16.16; it does not average the low 16
+	// fractional bits of the authoritative position [R-P0-04 "Located
+	// producers and transfer order"; 08 "Strategy manager and its task graph"].
+	// Keep regroup's centroid in the same domain as wave merge.
+	x, z, ok := retailGroupCentroid(handles, w)
+	if !ok {
 		return 0, 0, false
 	}
-	var sumX, sumZ int64
-	var n int64
-	for _, h := range handles {
-		u := w.Unit(h)
-		if u == nil || !u.Alive {
-			continue
-		}
-		sumX += int64(u.X)
-		sumZ += int64(u.Z)
-		n++
-	}
-	if n == 0 {
-		return 0, 0, false
-	}
-	return numeric.Fixed(sumX / n), numeric.Fixed(sumZ / n), true
+	return numeric.Fixed(int64(x) << 16), numeric.Fixed(int64(z) << 16), true
 }

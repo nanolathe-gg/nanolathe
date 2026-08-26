@@ -80,6 +80,7 @@ func (s *Service) settleOneResource(p int, res Res, w *units.World) {
 
 	// Sums in float32, accumulated in stable slot order per I1 and [05 "Authoritative settlement order"] C6.
 	var totalProduction float32
+	var totalRequested float32
 	var sumDebt float32
 	var sumAccepted float32
 
@@ -95,13 +96,23 @@ func (s *Service) settleOneResource(p int, res Res, w *units.World) {
 			s.ensureUnitBuckets(h)
 			b := s.unitBuckets[h].Buckets[res]
 			totalProduction = totalProduction + b.Production
+			totalRequested = totalRequested + b.Requested
 			sumDebt = sumDebt + b.Carry
 			sumAccepted = sumAccepted + b.Accepted
 		})
 	}
 	totalProduction = totalProduction + player.Mirror[res].Production
+	totalRequested = totalRequested + player.Mirror[res].Requested
 	sumDebt = sumDebt + player.Mirror[res].Carry
 	sumAccepted = sumAccepted + player.Mirror[res].Accepted
+
+	// The strategic helpers read the settled per-pass production/request
+	// aggregates, which include every live unit bucket and the player mirror.
+	// They are not Stock or the mirror-only reporting counters [05 "Unit
+	// instance economy state"; 05 "Player slot"] [R-P0-05].
+	player.AIProduction[res] = totalProduction
+	player.AIConsumption[res] = totalRequested
+	player.aiAggregatesPrepared = true
 
 	opening := player.Stock[res]
 	pool, debtRatio, _, acceptRatio, closingStock := settlePure(opening, totalProduction, sumDebt, sumAccepted)
@@ -172,6 +183,7 @@ func (s *Service) Settle(p int, tick uint32, w *units.World) {
 	if s.OnSettle != nil {
 		s.OnSettle(p, tick)
 	}
+	s.Players[p].aiAggregatesPrepared = false
 	// 1. Capacity is rebuilt from scratch each pass [05 "Storage capacity"] C14.
 	RebuildCapacity(s, w)
 	// 1b. Per-unit production fills (maker stall, extractor, passive, negative refund) [P1-06].

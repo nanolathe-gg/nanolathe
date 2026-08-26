@@ -101,8 +101,11 @@ type Manager struct {
 	// P0-07: alliance awareness [P0-07] ON-06. Nil means same-owner-only (default) [08].
 	IsAlliance func(a, b uint8) bool // alliance test injected at construction; default same-owner-only [P0-07]
 
-	// Groups for AI tactical coordination — populated from unit creation/death/completion via updateGroups [P0-I12].
-	// Each slice holds pool handles in deterministic order; cleaned each tick before dispatch.
+	// Manager task vectors for tactical coordination. Retail initializes these
+	// vectors empty; updateGroups only applies lifecycle cleanup, while the
+	// recovered wave merge transfers members between existing wave vectors
+	// [08 "Eco toggle and group-vector population"].
+	// Each slice holds pool handles in deterministic order.
 	GroupWaveA    []pool.Handle
 	GroupWaveB    []pool.Handle
 	GroupExplore  []pool.Handle
@@ -414,7 +417,8 @@ func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 	if m.Catalog != nil || m.Strategic.Catalog != nil {
 		m.Strategic.MaybeRefresh(tick, m.simRNG(), m.Player, w)
 	}
-	// P0-I12: populate and maintain AI groups from unit creation/death/completion.
+	// R-P0-04: clean manager task vectors; no bounded retail writer populates
+	// them from ordinary unit creation/completion.
 	m.updateGroups(w)
 	// P0-07: observe milestones from production state [P0-07] ON-06.
 	m.observeMilestones(tick, w)
@@ -643,7 +647,9 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 	}
 	metalStock := econ.Players[m.Player].Stock[economy.Metal]
 	energyStock := econ.Players[m.Player].Stock[economy.Energy]
-	netEnergy := econ.Players[m.Player].PassProduced[economy.Energy] - econ.Players[m.Player].PassConsumed[economy.Energy]
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// per-pass reporting counters [R-P0-05].
+	netEnergy := econ.Players[m.Player].AIProduction[economy.Energy] - econ.Players[m.Player].AIConsumption[economy.Energy]
 	// Iterate completed units in sliced order (I1) stable ordering, no map iteration.
 	for _, u := range w.IterSliced() {
 		if u == nil || !u.Alive || u.Owner != m.Player {
@@ -656,7 +662,8 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 			continue
 		}
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		if u.Def.OnOffable {
+		// [P0-02 §3.3] [R-P0-05].
+		if u.Def.MakesMetal != 0 {
 			// Branch 2*metal > energy ?
 			enable := false
 			if 2*metalStock > energyStock && netEnergy >= 1 {
@@ -674,16 +681,11 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 			} else {
 				enable = false
 			}
-			// Ordinary toggle via unit Flags bit for metal maker [P0-I12].
+			// Ordinary toggle via the unit activation state. Retail's
 			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// We mutate Flags bit 12 as active marker; economy can observe via Flags if extended.
-			// This is ordinary mutation via unit instance, not privileged economy write.
-			const activeBit uint32 = 1 << 12 // INFERENCE for OnOffable active state
-			if enable {
-				u.Flags |= activeBit
-			} else {
-				u.Flags &^= activeBit
-			}
+			// units adapter owns that mutable state and economy reads it through
+			// EconomyActive [05 "Unit instance economy state"] [P0-02].
+			u.SetActivated(enable)
 			// Also try repair of damaged units via builder orders when resource allows.
 			// This provides stock-reachable reclaim/repair behavior via ordinary orders [P0-I12].
 			if enable {
@@ -748,6 +750,9 @@ func (m *Manager) tryRepair(tick uint32, w *units.World) {
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// outliers at inclusive dist² >= threshold*n and collects peer members at
+// strict dist² < threshold*n [P0-02 §1.3][P0-02 §3.4].
+// Task vectors are cleaned and merged only through the recovered wave path;
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, threshold int32, min, max int) {
 	_, _ = econ, threshold
@@ -755,18 +760,24 @@ func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, thr
 		return
 	}
 	m.updateGroups(w)
-	var group []pool.Handle
+	var group, peer []pool.Handle
 	if threshold == waveAThreshold {
 		group = m.GroupWaveA
+		peer = m.GroupWaveB
 	} else {
 		group = m.GroupWaveB
+		peer = m.GroupWaveA
 	}
 	group = cleanGroup(group, w, m.Player)
+	peer = cleanGroup(peer, w, m.Player)
+	group, peer = mergeWaveGroups(group, peer, w, threshold)
 	// Update stored group after clean
 	if threshold == waveAThreshold {
 		m.GroupWaveA = group
+		m.GroupWaveB = peer
 	} else {
 		m.GroupWaveB = group
+		m.GroupWaveA = peer
 	}
 	if len(group) < min {
 		return

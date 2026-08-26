@@ -56,10 +56,12 @@ func TestClassRecomputeCadence(t *testing.T) {
 	s.Init(types)
 
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// BMCode. Only authored build-list membership contributes in this fixture
+	// [P0-01 §2.2] [R-P0-05].
 	for _, ck := range types {
 		canon := content.CanonicalKey(ck)
-		if v := s.InitVectors[canon]; v != 40 {
-			t.Fatalf("init single %s = %d want 40 (40 when category flag clear) [P0-01]", ck, v)
+		if v := s.InitVectors[canon]; v != 0 {
+			t.Fatalf("init single %s = %d want 0 with unresolved [layout omitted] and no build list [P0-01]", ck, v)
 		}
 		// Class vectors after init should be within [-100,100] and deterministic, not placeholder constant.
 		cv := s.ClassVectors[canon]
@@ -173,21 +175,22 @@ func TestClassVectors_RetailVectors(t *testing.T) {
 	types := []string{"armcom", "corcom", "armex", "armsolar", "armlab", "armvp"}
 	s := &Strategic{Catalog: cat}
 	s.Init(types)
-	// Check InitVectors: armlab/armvp/armcom have build list => 40+20=60, others 40
-	if v := s.InitVectors[content.CanonicalKey("armlab")]; v != 60 {
-		t.Fatalf("armlab init %d want 60 (40+20) [P0-01]", v)
+	// Check InitVectors: only authored build-list membership is established;
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	if v := s.InitVectors[content.CanonicalKey("armlab")]; v != 20 {
+		t.Fatalf("armlab init %d want 20 (build list only) [P0-01]", v)
 	}
-	if v := s.InitVectors[content.CanonicalKey("armvp")]; v != 60 {
-		t.Fatalf("armvp init %d want 60", v)
+	if v := s.InitVectors[content.CanonicalKey("armvp")]; v != 20 {
+		t.Fatalf("armvp init %d want 20", v)
 	}
-	if v := s.InitVectors[content.CanonicalKey("armcom")]; v != 60 {
-		t.Fatalf("armcom init %d want 60", v)
+	if v := s.InitVectors[content.CanonicalKey("armcom")]; v != 20 {
+		t.Fatalf("armcom init %d want 20", v)
 	}
-	if v := s.InitVectors[content.CanonicalKey("armex")]; v != 40 {
-		t.Fatalf("armex init %d want 40 (no build list)", v)
+	if v := s.InitVectors[content.CanonicalKey("armex")]; v != 0 {
+		t.Fatalf("armex init %d want 0 (no build list)", v)
 	}
-	if v := s.InitVectors[content.CanonicalKey("armsolar")]; v != 40 {
-		t.Fatalf("armsolar init %d want 40", v)
+	if v := s.InitVectors[content.CanonicalKey("armsolar")]; v != 0 {
+		t.Fatalf("armsolar init %d want 0", v)
 	}
 	// Check triples are within clamp and not all equal (retail varies per type) [P0-01 §6]
 	seen := make(map[ClassVector]bool)

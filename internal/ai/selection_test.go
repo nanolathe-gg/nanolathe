@@ -45,10 +45,10 @@ func testEcon(player uint8, curEnergy, capEnergy, curMetal, capMetal float32, pr
 	svc.Players[player].Capacity[economy.Energy] = capEnergy
 	svc.Players[player].Stock[economy.Metal] = curMetal
 	svc.Players[player].Capacity[economy.Metal] = capMetal
-	svc.Players[player].PassProduced[economy.Energy] = prodE
-	svc.Players[player].PassProduced[economy.Metal] = prodM
-	svc.Players[player].PassConsumed[economy.Energy] = consE
-	svc.Players[player].PassConsumed[economy.Metal] = consM
+	svc.Players[player].AIProduction[economy.Energy] = prodE
+	svc.Players[player].AIProduction[economy.Metal] = prodM
+	svc.Players[player].AIConsumption[economy.Energy] = consE
+	svc.Players[player].AIConsumption[economy.Metal] = consM
 	return &svc
 }
 
@@ -121,7 +121,7 @@ func TestReservoirSingleDraw(t *testing.T) {
 		},
 	}
 	builder := testBuilder("armcom")
-	econ := testEcon(1, 800, 1000, 400, 500, 300, 10, 0, 0) // use prod 300 etc to get positive scores but will override inputs via PassProduced mapping
+	econ := testEcon(1, 800, 1000, 400, 500, 300, 10, 0, 0) // use settled runtime aggregates for positive scores
 
 	// Use explicit candidates that will have positive scores
 	cands := []string{"armfav", "corfav", "armship"}
@@ -129,7 +129,7 @@ func TestReservoirSingleDraw(t *testing.T) {
 	// Overwrite economy to starved-like but with curEnergy >=50, curMetal >=25 to pass C5 gates
 	// diff still large: 1000-50=950 =>118+20+100=238
 	econStarved := testEcon(1, 50, 1000, 25, 500, 0, 0, 0, 0)
-	// Need to set PassConsumed zero so net 0 -> +20 each
+	// Need to set AIConsumption zero so the settled net remains production.
 	rng.SeedGlobal(seed, 0)
 	before := rng.Global.Sim.Draws()
 	_, ok := SelectWithCandidates(sel, builder, econStarved, cands)
@@ -172,10 +172,10 @@ func TestReservoirSingleDraw(t *testing.T) {
 	econOne := testEcon(1, 1000, 1000, 500, 500, 300, 10, 0, 0) // use high prod to avoid bumps, net 300>1 etc so 0 raw
 
 	// Set net to 2 (>1) to avoid +20, prod 300 to avoid +100 => raw 0
-	econOne.Players[1].PassProduced[economy.Energy] = 300
-	econOne.Players[1].PassProduced[economy.Metal] = 10
-	econOne.Players[1].PassConsumed[economy.Energy] = 0 // net 300
-	econOne.Players[1].PassConsumed[economy.Metal] = 0  // net 10
+	econOne.Players[1].AIProduction[economy.Energy] = 300
+	econOne.Players[1].AIProduction[economy.Metal] = 10
+	econOne.Players[1].AIConsumption[economy.Energy] = 0 // net 300
+	econOne.Players[1].AIConsumption[economy.Metal] = 0  // net 10
 
 	// But our ScoreInputsFromEconomy net = prod - cons =300,10 both >1 so no +20, raw 0. Good.
 	before = rng.Global.Sim.Draws()

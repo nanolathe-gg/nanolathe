@@ -56,6 +56,12 @@ func TestCommitOrdering(t *testing.T) {
 	if p.PassConsumed[Metal] != 7 {
 		t.Fatalf("C10: PassConsumed Metal = %v, want 7", p.PassConsumed[Metal])
 	}
+	if p.AIProduction[Metal] != 10 || p.AIProduction[Energy] != 20 {
+		t.Fatalf("AI production aggregates = %v, want [10 20]", p.AIProduction)
+	}
+	if p.AIConsumption[Metal] != 7 || p.AIConsumption[Energy] != 14 {
+		t.Fatalf("AI consumption aggregates = %v, want [7 14]", p.AIConsumption)
+	}
 	if p.TotalProduced[Metal] != 10 {
 		t.Fatalf("C10: TotalProduced should be 10, got %v", p.TotalProduced[Metal])
 	}

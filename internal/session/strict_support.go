@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os/exec"
 	"strings"
 
@@ -112,7 +113,21 @@ func HashState(s *Session) string {
 			if !p.Exists {
 				continue
 			}
-			fmt.Fprintf(h, "E%d:%.2f:%.2f|", i, p.Stock[economy.Metal], p.Stock[economy.Energy])
+			// Hash the exact float32 payloads used by the authoritative economy,
+			// rather than a rounded display representation. The latter aliases
+			// distinct stocks and can make a resumed state appear equivalent.
+			fmt.Fprintf(h, "E%d:%08x:%08x|", i,
+				math.Float32bits(p.Stock[economy.Metal]),
+				math.Float32bits(p.Stock[economy.Energy]))
+			// The strategic score consumes the four settled aggregates, not the
+			// mirror-only pass counters. Hash raw float32 payloads so every
+			// authoritative bit (including signed zero/NaN payloads) is covered
+			// deterministically in player then resource order [R-P0-05].
+			fmt.Fprintf(h, "A%d:%08x:%08x:%08x:%08x|", i,
+				math.Float32bits(p.AIProduction[economy.Metal]),
+				math.Float32bits(p.AIProduction[economy.Energy]),
+				math.Float32bits(p.AIConsumption[economy.Metal]),
+				math.Float32bits(p.AIConsumption[economy.Energy]))
 		}
 	}
 	sum := h.Sum(nil)

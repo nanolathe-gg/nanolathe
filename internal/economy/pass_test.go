@@ -67,6 +67,38 @@ func TestTickPlayerSettlesPerUnitState(t *testing.T) {
 	}
 }
 
+// TestSettledAIAggregatesIncludeUnitAndMirror locks the fields consumed by the
+// strategic score: settlement folds the fixed-order unit buckets and player
+// mirror, rather than publishing the mirror-only reporting counters [R-P0-05].
+func TestSettledAIAggregatesIncludeUnitAndMirror(t *testing.T) {
+	var svc Service
+	pl := settlingPlayer(&svc, 0)
+	w, hs := settleTestWorld(t, 1)
+	unit := svc.UnitBuckets(hs[0])
+	unit[Energy].Production = 3
+	unit[Energy].Requested = 4
+	unit[Metal].Production = 5
+	unit[Metal].Requested = 6
+	pl.Mirror[Energy].Production = 7
+	pl.Mirror[Energy].Requested = 8
+	pl.Mirror[Metal].Production = 9
+	pl.Mirror[Metal].Requested = 10
+
+	svc.Settle(0, 0, w)
+	if got, want := pl.AIProduction[Energy], float32(10); got != want {
+		t.Fatalf("AI energy production = %v, want %v", got, want)
+	}
+	if got, want := pl.AIConsumption[Energy], float32(12); got != want {
+		t.Fatalf("AI energy consumption = %v, want %v", got, want)
+	}
+	if got, want := pl.AIProduction[Metal], float32(14); got != want {
+		t.Fatalf("AI metal production = %v, want %v", got, want)
+	}
+	if got, want := pl.AIConsumption[Metal], float32(16); got != want {
+		t.Fatalf("AI metal consumption = %v, want %v", got, want)
+	}
+}
+
 // TestCarrySurvivesThePass locks steps 6 and 8 of [05 "Authoritative settlement
 // order"]: carry is written back and survives; only the pass inputs clear.
 // Zeroing the whole subrecord makes oldCarry permanently zero and the debt

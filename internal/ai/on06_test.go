@@ -125,8 +125,8 @@ func TestTypedBuildRequestPreservesCoordinates(t *testing.T) {
 	econ.Players[0].Stock[economy.Metal] = 400
 	econ.Players[0].Capacity[economy.Energy] = 1000
 	econ.Players[0].Capacity[economy.Metal] = 500
-	econ.Players[0].PassProduced[economy.Energy] = 300
-	econ.Players[0].PassProduced[economy.Metal] = 10
+	econ.Players[0].AIProduction[economy.Energy] = 300
+	econ.Players[0].AIProduction[economy.Metal] = 10
 	econ.Players[0].StatusHalfwordAt144 = 1
 	econ.Players[0].StatusWordAt140 = 0
 	econ.Players[0].GameEnded = false
@@ -256,8 +256,8 @@ func TestMilestoneSequenceObservesProduction(t *testing.T) {
 	econ.Players[0].Stock[economy.Metal] = 400
 	econ.Players[0].Capacity[economy.Energy] = 1000
 	econ.Players[0].Capacity[economy.Metal] = 500
-	econ.Players[0].PassProduced[economy.Energy] = 300
-	econ.Players[0].PassProduced[economy.Metal] = 10
+	econ.Players[0].AIProduction[economy.Energy] = 300
+	econ.Players[0].AIProduction[economy.Metal] = 10
 	econ.SeedDeadlines(0)
 	// Trigger construction via Tick at 0 (TaskConstruction due)
 	mgr.Deadlines[TaskConstruction] = 0
@@ -306,43 +306,23 @@ func TestMilestoneSequenceObservesProduction(t *testing.T) {
 	hC, _ := w.Create(cat.Units[content.CanonicalKey("armflash")], 0, world.CellToWorld(6), 0, world.CellToWorld(6))
 	cu := w.Unit(hC)
 	cu.Remaining = 0
-	// Force group assignment via updateGroups
+	// A completed combat unit is observed independently of tactical-group
+	// population. R-P0-04 found no bounded retail writer that seeds manager
+	// task vectors, so ordinary unit creation must not assign this unit.
 	mgr.Tick(4, w, &econ)
 	if _, ok := mgr.Milestones()[MilestoneCombatUnitCompleted]; !ok {
 		t.Fatalf("CombatUnitCompleted not set")
 	}
-	if _, ok := mgr.Milestones()[MilestoneGroupAssigned]; !ok {
-		t.Fatalf("GroupAssigned not set after combat unit assigned")
+	if got := mgr.groupMemberCount(); got != 0 {
+		t.Fatalf("completed combat unit populated unreachable tactical vectors: %d", got)
 	}
-	// Attack move issued: need enemy target and wave to fire.
-	// Create enemy unit for targeting
-	enemyDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflash")}, UnitName: "armflash", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", Builder: false, CanMove: true, CanAttack: true, MaxDamage: 100, Weapon1Def: &content.WeaponDef{}}
-	_ = enemyDef
-	// Create enemy at distance
+	// No group means no task-produced attack order. The attack sink remains
+	// covered by groups_test with explicitly seeded vectors, matching the only
+	// recovered manager producer (wave merge).
 	hE, _ := w.Create(cat.Units[content.CanonicalKey("armflash")], 1, world.CellToWorld(10), 0, world.CellToWorld(10))
 	enemy := w.Unit(hE)
 	enemy.Remaining = 0
 	enemy.Owner = 1
-	// Ensure AI has enough group members to trigger wave (need 3 for wave min)
-	// Create 2 more combat units
-	for i := 0; i < 2; i++ {
-		hx, _ := w.Create(cat.Units[content.CanonicalKey("armflash")], 0, world.CellToWorld(6+int32(i)), 0, world.CellToWorld(6))
-		ux := w.Unit(hx)
-		ux.Remaining = 0
-	}
-	mgr.Tick(5, w, &econ)
-	// Force wave due
-	mgr.Deadlines[TaskWaveA] = 5
-	mgr.Tick(5, w, &econ)
-	if _, ok := mgr.Milestones()[MilestoneAttackMoveIssued]; !ok {
-		// Try explore/rally as fallback: ensure at least one attack order was issued via any wave
-		// If still not, force a direct wave call
-		mgr.Deadlines[TaskWaveA] = 5
-		mgr.Tick(5, w, &econ)
-		if _, ok2 := mgr.Milestones()[MilestoneAttackMoveIssued]; !ok2 {
-			t.Fatalf("AttackMoveIssued not set after wave")
-		}
-	}
 	// Hostile damage observed
 	mgr.ObserveHostileDamage(6, enemy.Handle, w)
 	if _, ok := mgr.Milestones()[MilestoneHostileDamageObserved]; !ok {
@@ -517,8 +497,8 @@ func TestDeterministicSeededRuns(t *testing.T) {
 		econ.Players[0].Stock[economy.Metal] = 400
 		econ.Players[0].Capacity[economy.Energy] = 1000
 		econ.Players[0].Capacity[economy.Metal] = 500
-		econ.Players[0].PassProduced[economy.Energy] = 300
-		econ.Players[0].PassProduced[economy.Metal] = 10
+	econ.Players[0].AIProduction[economy.Energy] = 300
+	econ.Players[0].AIProduction[economy.Metal] = 10
 		for k := TaskKind(0); k < TaskKindCount; k++ {
 			mgr.Deadlines[k] = 0
 		}

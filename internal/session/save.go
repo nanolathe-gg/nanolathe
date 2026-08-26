@@ -451,6 +451,10 @@ func (s *Session) CaptureStateV1() *save.StateV1 {
 				StorageBonusEnabled: p.StorageBonusEnabled,
 				StorageBonusMetal:   p.StorageBonus[0],
 				StorageBonusEnergy:  p.StorageBonus[1],
+				AIProductionMetal:   p.AIProduction[economy.Metal],
+				AIProductionEnergy:  p.AIProduction[economy.Energy],
+				AIConsumptionMetal:  p.AIConsumption[economy.Metal],
+				AIConsumptionEnergy: p.AIConsumption[economy.Energy],
 			}
 			st.Economy.Players[i] = rec
 		}
@@ -1082,6 +1086,10 @@ func (s *Session) RestoreStateV1(st *save.StateV1) error {
 			p.StorageBonusEnabled = rec.StorageBonusEnabled
 			p.StorageBonus[0] = rec.StorageBonusMetal
 			p.StorageBonus[1] = rec.StorageBonusEnergy
+			p.AIProduction[economy.Metal] = rec.AIProductionMetal
+			p.AIProduction[economy.Energy] = rec.AIProductionEnergy
+			p.AIConsumption[economy.Metal] = rec.AIConsumptionMetal
+			p.AIConsumption[economy.Energy] = rec.AIConsumptionEnergy
 			// ReferencePlayer and SensorShareCalls are service-level but we stored per player rec; use first
 			if i == 0 {
 				s.Econ.ReferencePlayer = int(rec.ReferencePlayer)

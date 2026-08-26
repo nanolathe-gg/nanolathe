@@ -30,9 +30,18 @@ type Bucket struct {
 // Stocks and capacities are single precision per [05 "Player slot"] and I2.
 // Cumulative totals and waste are double precision per [05 "Stocks, counters, and waste"] and I2.
 type Player struct {
-	Stock          [2]float32
-	Capacity       [2]float32
-	Mirror         [2]Bucket
+	Stock    [2]float32
+	Capacity [2]float32
+	Mirror   [2]Bucket
+	// AIProduction and AIConsumption are the four settled player aggregates
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// distinct from PassProduced/PassConsumed: the latter are reporting
+	// counters for the most recent pass, while these values are the runtime
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// slot"] [08 "Established AI-facing data and rooted planner"]
+	// [R-P0-05].
+	AIProduction   [2]float32
+	AIConsumption  [2]float32
 	UpdateTime     uint32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	WinLoseTime    uint32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	DisplayTimer   uint32 // sibling deadline #2 [05 "Saving economy, construction, and features"] TODO(question): consumer beyond save key unknown
@@ -77,8 +86,9 @@ type Player struct {
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// int semantics truncated toward zero per I3 (FILD exact for 200..tens of thousands) [I3].
-	StorageBonusEnabled bool       // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	StorageBonus        [2]float32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	StorageBonusEnabled  bool       // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	StorageBonus         [2]float32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	aiAggregatesPrepared bool       // composed settlement populated AI fields before post-commit [R-P0-05]
 }
 
 // Service is the economy service skeleton per plan public API.
@@ -321,8 +331,17 @@ func (p *Player) CommitPostSettlement() {
 	if p == nil {
 		return
 	}
+	prepared := p.aiAggregatesPrepared
 	// Per-pass counters and cumulative totals committed before stock fold per C10.
 	for r := Metal; r <= Energy; r++ {
+		// Strategic AI observes the settled player record on the next manager
+		// dispatch. A composed Settle call has already populated these fields
+		// from all unit buckets plus the player mirror. Keep the mirror fallback
+		// for direct unit-less CommitPostSettlement fixtures [R-P0-05].
+		if !prepared {
+			p.AIProduction[r] = p.Mirror[r].Production
+			p.AIConsumption[r] = p.Mirror[r].Requested
+		}
 		p.PassProduced[r] = p.Mirror[r].Production
 		p.PassConsumed[r] = p.Mirror[r].Requested
 		p.TotalProduced[r] += float64(p.Mirror[r].Production)
@@ -346,6 +365,7 @@ func (p *Player) CommitPostSettlement() {
 	for r := Metal; r <= Energy; r++ {
 		clearPassInputs(&p.Mirror[r])
 	}
+	p.aiAggregatesPrepared = false
 }
 
 // clearPassInputs zeroes the three pass-local accumulators and preserves the
@@ -394,9 +414,12 @@ func InitPlayer(p *Player) {
 	for r := Metal; r <= Energy; r++ {
 		p.Mirror[r] = Bucket{}
 		p.ArchivedMirror[r] = Bucket{}
+		p.AIProduction[r] = 0
+		p.AIConsumption[r] = 0
 		p.PassProduced[r] = 0
 		p.PassConsumed[r] = 0
 	}
+	p.aiAggregatesPrepared = false
 	// Stock, Capacity, Waste, totals are zeroed by caller as needed; no float constants here.
 	// Initialize control countdown to -1 so gate starts satisfied per [05 "Authoritative settlement order"].
 	p.EndGameCountdown = -1

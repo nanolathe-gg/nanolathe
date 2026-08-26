@@ -25,6 +25,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strings"
@@ -738,8 +739,10 @@ var (
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // Version 6 adds construction builder-product links [05 "Factory production lifecycle"] C18 [RS-10].
 // Version 7 adds the per-unit control-group value [07 §9].
+// Version 8 adds the four settled AI economy aggregates consumed by the
+// strategic score [R-P0-05]. Older states decode these fields as zero.
 
-const StateV1VersionConst uint32 = 7
+const StateV1VersionConst uint32 = 8
 const StateV1Version1 uint32 = 1
 const StateV1Version2 uint32 = 2
 const StateV1Version3 uint32 = 3
@@ -747,6 +750,7 @@ const StateV1Version4 uint32 = 4
 const StateV1Version5 uint32 = 5
 const StateV1Version6 uint32 = 6
 const StateV1Version7 uint32 = 7
+const StateV1Version8 uint32 = 8
 
 // UnitRecord is one slot-indexed unit record, canonically ordered by slot
 // ascending for determinism (I1) [01 §6.1] [PLAN_14 C18]. Reconstruction uses
@@ -990,6 +994,14 @@ type EconomyPlayerRecord struct {
 	StorageBonusEnabled bool    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	StorageBonusMetal   float32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	StorageBonusEnergy  float32 // +0x37/+0xDC max(startEnergy,200)
+	// Settled per-player aggregates consumed by the strategic AI score. These
+	// are distinct from PassProduced/PassConsumed and include unit buckets plus
+	// the player mirror [R-P0-05]. The wire form is raw float32 bits so NaN and
+	// signed-zero payloads survive a round trip exactly.
+	AIProductionMetal   float32
+	AIProductionEnergy  float32
+	AIConsumptionMetal  float32
+	AIConsumptionEnergy float32
 }
 
 // BucketRecord mirrors economy.Bucket [05].
@@ -1182,7 +1194,7 @@ type BuilderLinkRecord struct {
 // every mutable authoritative service, slot-indexed, plus both RNG states+draw counts and hash guards [PLAN_14 C18] [GAP T25] [P0-I11].
 // Version 2 adds full continuation via forced slot identity and full per-system snapshots [P0-I11].
 type StateV1 struct {
-	Version      uint32 // must be 2 [PLAN_14 C18][P0-I11]
+	Version      uint32 // supported versions 1..8; current writer emits 8 [PLAN_14 C18][P0-I11]
 	CatalogHash  string // [02 §5] C12 catalog hash
 	ManifestHash string // vfs.ManifestHash
 
@@ -1520,6 +1532,12 @@ func MarshalStateV1(s *StateV1) []byte {
 				binaryWriteUint32(&buf, math.Float32bits(pl.StorageBonusMetal))
 				binaryWriteUint32(&buf, math.Float32bits(pl.StorageBonusEnergy))
 			}
+			if ver >= 8 {
+				binaryWriteUint32(&buf, math.Float32bits(pl.AIProductionMetal))
+				binaryWriteUint32(&buf, math.Float32bits(pl.AIProductionEnergy))
+				binaryWriteUint32(&buf, math.Float32bits(pl.AIConsumptionMetal))
+				binaryWriteUint32(&buf, math.Float32bits(pl.AIConsumptionEnergy))
+			}
 		}
 		binaryWriteUint32(&buf, uint32(len(s.Economy.UnitBuckets)))
 		for _, ub := range s.Economy.UnitBuckets {
@@ -1742,7 +1760,7 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 	if err := binary.Read(r, binary.LittleEndian, &ver); err != nil {
 		return nil, err
 	}
-	if ver != StateV1VersionConst && ver != StateV1Version6 && ver != StateV1Version5 && ver != StateV1Version4 && ver != StateV1Version3 && ver != StateV1Version2 && ver != StateV1Version1 {
+	if ver != StateV1VersionConst && ver != StateV1Version7 && ver != StateV1Version6 && ver != StateV1Version5 && ver != StateV1Version4 && ver != StateV1Version3 && ver != StateV1Version2 && ver != StateV1Version1 {
 		return nil, ErrStateV1Version
 	}
 	catHash, err := readString(r)
@@ -1776,13 +1794,13 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		return nil, err
 	}
 	var clockBox [28]byte
-	if _, err := r.Read(clockBox[:]); err != nil {
+	if _, err := io.ReadFull(r, clockBox[:]); err != nil {
 		return nil, fmt.Errorf("save: StateV1 clock box short")
 	}
 	var clk clock.State
 	clk.LoadBox(clockBox)
-	var numUnits uint32
-	if err := binary.Read(r, binary.LittleEndian, &numUnits); err != nil {
+	numUnits, err := readStateCount(r, "units", 8)
+	if err != nil {
 		return nil, err
 	}
 	units := make([]UnitRecord, 0, numUnits)
@@ -1928,8 +1946,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 			if err := binary.Read(r, binary.LittleEndian, &carrier); err != nil {
 				return nil, err
 			}
-			var cargoLen uint32
-			if err := binary.Read(r, binary.LittleEndian, &cargoLen); err != nil {
+			cargoLen, err := readStateCount(r, "unit cargo", 4)
+			if err != nil {
 				return nil, err
 			}
 			cargo := make([]int32, cargoLen)
@@ -2015,8 +2033,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 			hasCOB := byteToBool(hasCOBByte)
 			var cobRec COBRecord
 			if hasCOB {
-				var nStatics uint32
-				if err := binary.Read(r, binary.LittleEndian, &nStatics); err != nil {
+				nStatics, err := readStateCount(r, "COB statics", 4)
+				if err != nil {
 					return nil, err
 				}
 				statics := make([]int32, nStatics)
@@ -2052,8 +2070,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 					if err := binary.Read(r, binary.LittleEndian, &smask); err != nil {
 						return nil, err
 					}
-					var stackLen uint32
-					if err := binary.Read(r, binary.LittleEndian, &stackLen); err != nil {
+					stackLen, err := readStateCount(r, "COB stack", 4)
+					if err != nil {
 						return nil, err
 					}
 					stack := make([]int32, stackLen)
@@ -2075,8 +2093,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 					}
 				}
 				if ver >= 3 {
-					var nPieces uint32
-					if err := binary.Read(r, binary.LittleEndian, &nPieces); err != nil {
+					nPieces, err := readStateCount(r, "COB pieces", 14)
+					if err != nil {
 						return nil, err
 					}
 					if nPieces > 0 {
@@ -2106,19 +2124,19 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 						}
 						cobRec.Pieces = pieces
 					}
-					var nFlags uint32
-					if err := binary.Read(r, binary.LittleEndian, &nFlags); err != nil {
+					nFlags, err := readStateCount(r, "COB flags", 1)
+					if err != nil {
 						return nil, err
 					}
 					if nFlags > 0 {
 						flags := make([]uint8, nFlags)
-						if _, err := r.Read(flags); err != nil {
+						if _, err := io.ReadFull(r, flags); err != nil {
 							return nil, err
 						}
 						cobRec.Flags = flags
 					}
-					var nAnims uint32
-					if err := binary.Read(r, binary.LittleEndian, &nAnims); err != nil {
+					nAnims, err := readStateCount(r, "COB animations", 120)
+					if err != nil {
 						return nil, err
 					}
 					if nAnims > 0 {
@@ -2198,8 +2216,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		}
 		units = append(units, rec)
 	}
-	var numQueues uint32
-	if err := binary.Read(r, binary.LittleEndian, &numQueues); err != nil {
+	numQueues, err := readStateCount(r, "queues", 16)
+	if err != nil {
 		return nil, err
 	}
 	queues := make([]QueueRecord, 0, numQueues)
@@ -2216,13 +2234,13 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		if err := binary.Read(r, binary.LittleEndian, &count); err != nil {
 			return nil, err
 		}
-		var payloadLen uint32
-		if err := binary.Read(r, binary.LittleEndian, &payloadLen); err != nil {
+		payloadLen, err := readStateCount(r, "queue payload", 1)
+		if err != nil {
 			return nil, err
 		}
 		payload := make([]byte, payloadLen)
 		if payloadLen > 0 {
-			if _, err := r.Read(payload); err != nil {
+			if _, err := io.ReadFull(r, payload); err != nil {
 				return nil, fmt.Errorf("save: StateV1 queue payload short")
 			}
 		}
@@ -2255,8 +2273,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 	}
 	if ver >= 2 {
 		// Orders
-		var nOrders uint32
-		if err := binary.Read(r, binary.LittleEndian, &nOrders); err != nil {
+		nOrders, err := readStateCount(r, "orders", 8)
+		if err != nil {
 			return nil, err
 		}
 		orders := make([]OrderRecord, 0, nOrders)
@@ -2397,8 +2415,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		})
 		st.Orders = orders
 		// MovementRoutes
-		var nRoutes uint32
-		if err := binary.Read(r, binary.LittleEndian, &nRoutes); err != nil {
+		nRoutes, err := readStateCount(r, "movement routes", 8)
+		if err != nil {
 			return nil, err
 		}
 		routes := make([]MovementRouteRecord, 0, nRoutes)
@@ -2441,8 +2459,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		sort.Slice(routes, func(i, j int) bool { return routes[i].Unit < routes[j].Unit })
 		st.MovementRoutes = routes
 		// SchedulerPending
-		var nPend uint32
-		if err := binary.Read(r, binary.LittleEndian, &nPend); err != nil {
+		nPend, err := readStateCount(r, "pending paths", 8)
+		if err != nil {
 			return nil, err
 		}
 		pend := make([]SchedulerPendingRecord, 0, nPend)
@@ -2482,8 +2500,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		sort.Slice(pend, func(i, j int) bool { return pend[i].Unit < pend[j].Unit })
 		st.SchedulerPending = pend
 		if ver >= 4 {
-			var nSteer uint32
-			if err := binary.Read(r, binary.LittleEndian, &nSteer); err != nil {
+			nSteer, err := readStateCount(r, "movement steers", 8)
+			if err != nil {
 				return nil, err
 			}
 			steers := make([]MovementSteerRecord, 0, nSteer)
@@ -2712,6 +2730,21 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 					return nil, err
 				}
 			}
+			var aipm, aipe, aicm, aice uint32
+			if ver >= 8 {
+				if err := binary.Read(r, binary.LittleEndian, &aipm); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &aipe); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &aicm); err != nil {
+					return nil, err
+				}
+				if err := binary.Read(r, binary.LittleEndian, &aice); err != nil {
+					return nil, err
+				}
+			}
 			pl = EconomyPlayerRecord{
 				Exists: byteToBool(existsB), ControllerState: ctrlB, IsObserver: byteToBool(obsB),
 				StockMetal: math.Float32frombits(sm), StockEnergy: math.Float32frombits(se),
@@ -2729,11 +2762,13 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 				StatusHalfwordAt144: sh, StatusWordAt140: sw, GameEnded: byteToBool(geB), EndGameCountdown: egc,
 				Helper1Deadline: h1, Helper2Deadline: h2, Helper1Calls: h1c, Helper2Calls: h2c, WeaponRefreshCalls: wrc, ReferencePlayer: rp, SensorShareCalls: ssc,
 				StorageBonusEnabled: sbe, StorageBonusMetal: math.Float32frombits(sbm), StorageBonusEnergy: math.Float32frombits(sbe32),
+				AIProductionMetal: math.Float32frombits(aipm), AIProductionEnergy: math.Float32frombits(aipe),
+				AIConsumptionMetal: math.Float32frombits(aicm), AIConsumptionEnergy: math.Float32frombits(aice),
 			}
 			econ.Players[i] = pl
 		}
-		var nUB uint32
-		if err := binary.Read(r, binary.LittleEndian, &nUB); err != nil {
+		nUB, err := readStateCount(r, "economy unit buckets", 8)
+		if err != nil {
 			return nil, err
 		}
 		ubs := make([]EconomyUnitBucketRecord, 0, nUB)
@@ -2815,8 +2850,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		if err := binary.Read(r, binary.LittleEndian, &lri); err != nil {
 			return nil, err
 		}
-		var nInst uint32
-		if err := binary.Read(r, binary.LittleEndian, &nInst); err != nil {
+		nInst, err := readStateCount(r, "features", 8)
+		if err != nil {
 			return nil, err
 		}
 		insts := make([]FeatureInstanceRecord, 0, nInst)
@@ -2899,8 +2934,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		feat.Instances = insts
 		st.Features = feat
 		// Projectiles
-		var nProj uint32
-		if err := binary.Read(r, binary.LittleEndian, &nProj); err != nil {
+		nProj, err := readStateCount(r, "projectiles", 8)
+		if err != nil {
 			return nil, err
 		}
 		projs := make([]ProjectileRecord, 0, nProj)
@@ -3038,8 +3073,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		sort.Slice(projs, func(i, j int) bool { return projs[i].Handle < projs[j].Handle })
 		st.Projectiles = projs
 		// AI
-		var nAI uint32
-		if err := binary.Read(r, binary.LittleEndian, &nAI); err != nil {
+		nAI, err := readStateCount(r, "AI managers", 8)
+		if err != nil {
 			return nil, err
 		}
 		ais := make([]AIManagerRecord, 0, nAI)
@@ -3072,8 +3107,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 			if err := binary.Read(r, binary.LittleEndian, &lcrt); err != nil {
 				return nil, err
 			}
-			var nCounts uint32
-			if err := binary.Read(r, binary.LittleEndian, &nCounts); err != nil {
+			nCounts, err := readStateCount(r, "AI strategic counts", 8)
+			if err != nil {
 				return nil, err
 			}
 			counts := make([]StrategicCountRecord, 0, nCounts)
@@ -3088,8 +3123,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 				}
 				counts = append(counts, StrategicCountRecord{Key: k, Value: v})
 			}
-			var nCV uint32
-			if err := binary.Read(r, binary.LittleEndian, &nCV); err != nil {
+			nCV, err := readStateCount(r, "AI class vectors", 8)
+			if err != nil {
 				return nil, err
 			}
 			cvs := make([]StrategicClassVectorRecord, 0, nCV)
@@ -3112,8 +3147,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 				}
 				cvs = append(cvs, StrategicClassVectorRecord{Key: k, C0: int8(c0), C1: int8(c1), C2: int8(c2)})
 			}
-			var nIV uint32
-			if err := binary.Read(r, binary.LittleEndian, &nIV); err != nil {
+			nIV, err := readStateCount(r, "AI init vectors", 8)
+			if err != nil {
 				return nil, err
 			}
 			ivs := make([]StrategicInitVectorRecord, 0, nIV)
@@ -3128,8 +3163,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 				}
 				ivs = append(ivs, StrategicInitVectorRecord{Key: k, Value: int8(vb)})
 			}
-			var nSV uint32
-			if err := binary.Read(r, binary.LittleEndian, &nSV); err != nil {
+			nSV, err := readStateCount(r, "AI single vectors", 8)
+			if err != nil {
 				return nil, err
 			}
 			svs := make([]StrategicSingleVectorRecord, 0, nSV)
@@ -3144,8 +3179,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 				}
 				svs = append(svs, StrategicSingleVectorRecord{Key: k, Value: int8(vb)})
 			}
-			var nWaveA uint32
-			if err := binary.Read(r, binary.LittleEndian, &nWaveA); err != nil {
+			nWaveA, err := readStateCount(r, "AI wave A", 4)
+			if err != nil {
 				return nil, err
 			}
 			waveA := make([]int32, nWaveA)
@@ -3154,8 +3189,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 					return nil, err
 				}
 			}
-			var nWaveB uint32
-			if err := binary.Read(r, binary.LittleEndian, &nWaveB); err != nil {
+			nWaveB, err := readStateCount(r, "AI wave B", 4)
+			if err != nil {
 				return nil, err
 			}
 			waveB := make([]int32, nWaveB)
@@ -3164,8 +3199,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 					return nil, err
 				}
 			}
-			var nExp uint32
-			if err := binary.Read(r, binary.LittleEndian, &nExp); err != nil {
+			nExp, err := readStateCount(r, "AI explore", 4)
+			if err != nil {
 				return nil, err
 			}
 			exp := make([]int32, nExp)
@@ -3174,8 +3209,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 					return nil, err
 				}
 			}
-			var nRally uint32
-			if err := binary.Read(r, binary.LittleEndian, &nRally); err != nil {
+			nRally, err := readStateCount(r, "AI rally", 4)
+			if err != nil {
 				return nil, err
 			}
 			rally := make([]int32, nRally)
@@ -3184,8 +3219,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 					return nil, err
 				}
 			}
-			var nRegA uint32
-			if err := binary.Read(r, binary.LittleEndian, &nRegA); err != nil {
+			nRegA, err := readStateCount(r, "AI regroup A", 4)
+			if err != nil {
 				return nil, err
 			}
 			regA := make([]int32, nRegA)
@@ -3194,8 +3229,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 					return nil, err
 				}
 			}
-			var nRegB uint32
-			if err := binary.Read(r, binary.LittleEndian, &nRegB); err != nil {
+			nRegB, err := readStateCount(r, "AI regroup B", 4)
+			if err != nil {
 				return nil, err
 			}
 			regB := make([]int32, nRegB)
@@ -3232,8 +3267,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		if err := binary.Read(r, binary.LittleEndian, &hv); err != nil {
 			return nil, err
 		}
-		var nWord uint32
-		if err := binary.Read(r, binary.LittleEndian, &nWord); err != nil {
+		nWord, err := readStateCount(r, "visibility word mask", 2)
+		if err != nil {
 			return nil, err
 		}
 		wordMask := make([]uint16, nWord)
@@ -3244,13 +3279,13 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		}
 		var byteGrids [10][]uint8
 		for p := 0; p < 10; p++ {
-			var nByte uint32
-			if err := binary.Read(r, binary.LittleEndian, &nByte); err != nil {
+			nByte, err := readStateCount(r, "visibility byte grid", 1)
+			if err != nil {
 				return nil, err
 			}
 			b := make([]uint8, nByte)
 			if nByte > 0 {
-				if _, err := r.Read(b); err != nil {
+				if _, err := io.ReadFull(r, b); err != nil {
 					return nil, err
 				}
 			}
@@ -3264,8 +3299,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		if err := binary.Read(r, binary.LittleEndian, &mode); err != nil {
 			return nil, err
 		}
-		var nStatus uint32
-		if err := binary.Read(r, binary.LittleEndian, &nStatus); err != nil {
+		nStatus, err := readStateCount(r, "visibility status", 8)
+		if err != nil {
 			return nil, err
 		}
 		status := make([]VisibilityStatusRecord, 0, nStatus)
@@ -3280,8 +3315,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 			}
 			status = append(status, VisibilityStatusRecord{Handle: h, Status: s})
 		}
-		var nDecloak uint32
-		if err := binary.Read(r, binary.LittleEndian, &nDecloak); err != nil {
+		nDecloak, err := readStateCount(r, "visibility decloak", 8)
+		if err != nil {
 			return nil, err
 		}
 		decloak := make([]VisibilityDecloakRecord, 0, nDecloak)
@@ -3366,8 +3401,8 @@ func UnmarshalStateV1(data []byte, expectedCatalogHash, expectedManifestHash str
 		wind.Pending = byteToBool(pendingB)
 		st.Wind = wind
 		if ver >= 6 {
-			var nLinks uint32
-			if err := binary.Read(r, binary.LittleEndian, &nLinks); err != nil {
+			nLinks, err := readStateCount(r, "construction links", 8)
+			if err != nil {
 				return nil, err
 			}
 			links := make([]BuilderLinkRecord, 0, nLinks)
@@ -3625,8 +3660,34 @@ func readString(r *bytes.Reader) (string, error) {
 		return "", nil
 	}
 	b := make([]byte, l)
-	if _, err := r.Read(b); err != nil {
+	if _, err := io.ReadFull(r, b); err != nil {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// readStateCount reads a variable-length StateV1 collection count and rejects
+// counts that cannot fit in the remaining payload before allocating. StateV1
+// is a native continuation box, but its bytes still cross an untrusted save
+// boundary; a corrupt count must produce an error rather than an OOM or a
+// partially decoded state [PLAN_14 C18][I11]. minBytes is only a lower bound
+// used for the pre-allocation check; each record's full parser still performs
+// exact EOF checks as it consumes variable-length fields.
+const maxStateCollectionEntries = 1 << 20
+
+func readStateCount(r *bytes.Reader, label string, minBytes int) (uint32, error) {
+	if minBytes < 1 {
+		minBytes = 1
+	}
+	var n uint32
+	if err := binary.Read(r, binary.LittleEndian, &n); err != nil {
+		return 0, err
+	}
+	if n > maxStateCollectionEntries {
+		return 0, fmt.Errorf("save: StateV1 %s count %d exceeds bound", label, n)
+	}
+	if uint64(n)*uint64(minBytes) > uint64(r.Len()) {
+		return 0, fmt.Errorf("save: StateV1 %s count %d exceeds remaining payload", label, n)
+	}
+	return n, nil
 }

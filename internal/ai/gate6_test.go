@@ -97,10 +97,10 @@ func makeGateEconomy(player uint8) economy.Service {
 	p.Stock[economy.Metal] = 400
 	p.Capacity[economy.Energy] = 1000
 	p.Capacity[economy.Metal] = 500
-	p.PassProduced[economy.Energy] = 300
-	p.PassProduced[economy.Metal] = 10
-	p.PassConsumed[economy.Energy] = 0
-	p.PassConsumed[economy.Metal] = 0
+	p.AIProduction[economy.Energy] = 300
+	p.AIProduction[economy.Metal] = 10
+	p.AIConsumption[economy.Energy] = 0
+	p.AIConsumption[economy.Metal] = 0
 	// Seed deadlines to tick 0 phase-aligned.
 	svc.SeedDeadlines(0)
 	// SeedDeadlines overrides Stock/Capacity? It only touches deadlines, so restore our seeded stock/capacity.
@@ -109,8 +109,8 @@ func makeGateEconomy(player uint8) economy.Service {
 	p.Stock[economy.Metal] = 400
 	p.Capacity[economy.Energy] = 1000
 	p.Capacity[economy.Metal] = 500
-	p.PassProduced[economy.Energy] = 300
-	p.PassProduced[economy.Metal] = 10
+	p.AIProduction[economy.Energy] = 300
+	p.AIProduction[economy.Metal] = 10
 	return svc
 }
 

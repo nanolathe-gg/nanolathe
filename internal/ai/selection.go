@@ -161,10 +161,14 @@ func hasGate241(candidateKey string, m Selector) bool {
 	return ok
 }
 
-// ScoreInputsFromEconomy derives ScoreInputs from an economy.Service snapshot for player [08 "Established AI-facing data and rooted planner"] [PLAN 11 C6] [05 "Player slot"].
+// ScoreInputsFromEconomy derives ScoreInputs from the settled player record for
+// player [08 "Established AI-facing data and rooted planner"] [R-P0-05].
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// "Player slot"] [INVARIANTS I2]. Prod/Net read the four strategic runtime
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// AIProduction and AIConsumption. They are deliberately not reconstructed
+// from stock or PassProduced: those are separate fields with separate
+// settlement/reporting lifetimes [R-P0-05].
 func ScoreInputsFromEconomy(econ *economy.Service, player uint8) ScoreInputs {
 	if econ == nil || int(player) >= len(econ.Players) {
 		return ScoreInputs{}
@@ -174,15 +178,12 @@ func ScoreInputsFromEconomy(econ *economy.Service, player uint8) ScoreInputs {
 	capE := p.Capacity[economy.Energy]
 	curM := p.Stock[economy.Metal]
 	capM := p.Capacity[economy.Metal]
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Direct PassProduced alone is per-pass production without leftover and stays <3 for metal, keeping metalMix at 100 [P2].
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	prodEInclusive := p.Stock[economy.Energy] + p.PassProduced[economy.Energy]
-	prodMInclusive := p.Stock[economy.Metal] + p.PassProduced[economy.Metal]
-	prodE := prodEInclusive
-	prodM := prodMInclusive
-	netE := prodE - p.PassConsumed[economy.Energy]
-	netM := prodM - p.PassConsumed[economy.Metal]
+	prodE := p.AIProduction[economy.Energy]
+	prodM := p.AIProduction[economy.Metal]
+	consE := p.AIConsumption[economy.Energy]
+	consM := p.AIConsumption[economy.Metal]
+	netE := prodE - consE
+	netM := prodM - consM
 	return ScoreInputs{
 		CurEnergy:  curE,
 		CapEnergy:  capE,

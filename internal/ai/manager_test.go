@@ -523,10 +523,10 @@ func TestC12OnlyOrdinaryPaths(t *testing.T) {
 	econ.Players[1].Stock[economy.Metal] = 200
 	econ.Players[1].Capacity[economy.Energy] = 1000
 	econ.Players[1].Capacity[economy.Metal] = 500
-	econ.Players[1].PassProduced[economy.Energy] = 300
-	econ.Players[1].PassProduced[economy.Metal] = 10
-	econ.Players[1].PassConsumed[economy.Energy] = 0
-	econ.Players[1].PassConsumed[economy.Metal] = 0
+	econ.Players[1].AIProduction[economy.Energy] = 300
+	econ.Players[1].AIProduction[economy.Metal] = 10
+	econ.Players[1].AIConsumption[economy.Energy] = 0
+	econ.Players[1].AIConsumption[economy.Metal] = 0
 	econ.Players[1].Exists = true
 	econ.Players[1].ControllerState = 2
 
@@ -600,10 +600,10 @@ func TestManagerSelectPlaceQueueChain(t *testing.T) {
 			econ.Players[1].Stock[economy.Metal] = 400
 			econ.Players[1].Capacity[economy.Energy] = 1000
 			econ.Players[1].Capacity[economy.Metal] = 500
-			econ.Players[1].PassProduced[economy.Energy] = 300
-			econ.Players[1].PassProduced[economy.Metal] = 10
-			econ.Players[1].PassConsumed[economy.Energy] = 0
-			econ.Players[1].PassConsumed[economy.Metal] = 0
+			econ.Players[1].AIProduction[economy.Energy] = 300
+			econ.Players[1].AIProduction[economy.Metal] = 10
+			econ.Players[1].AIConsumption[economy.Energy] = 0
+			econ.Players[1].AIConsumption[economy.Metal] = 0
 
 			prof := &Profile{Weight: map[string]int32{content.CanonicalKey("chainfavee"): 100}, Limit: map[string]int32{}}
 			mgr := &Manager{
@@ -746,8 +746,8 @@ func TestManagerPlaceFailureRetry(t *testing.T) {
 	econ.Players[2].Stock[economy.Metal] = 400
 	econ.Players[2].Capacity[economy.Energy] = 1000
 	econ.Players[2].Capacity[economy.Metal] = 500
-	econ.Players[2].PassProduced[economy.Energy] = 300
-	econ.Players[2].PassProduced[economy.Metal] = 10
+	econ.Players[2].AIProduction[economy.Energy] = 300
+	econ.Players[2].AIProduction[economy.Metal] = 10
 	prof := &Profile{Weight: map[string]int32{content.CanonicalKey("geothermalplant"): 100}, Limit: map[string]int32{}}
 	mgr := &Manager{
 		Player:    2,

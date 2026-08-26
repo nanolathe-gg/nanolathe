@@ -110,7 +110,10 @@ func (s *Strategic) Init(types []string) {
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Build-option list non-empty is checked via AICatalog.BuildMenus or def.Builder fallback [P0-01 §2.2].
+// intentionally left as an explicit unknown; BMCode is not a substitute
+// [P0-01 §2.2] [R-P0-05] [I9].
+// Build-option list non-empty is checked only via the compiled catalog's
+// authored BuildMenus entry [P0-01 §2.2] [R-P0-05].
 func (s *Strategic) InitClassVectors() {
 	if s.InitVectors == nil {
 		s.InitVectors = make(map[string]int8)
@@ -138,14 +141,9 @@ func (s *Strategic) InitClassVectors() {
 		def := s.lookupDef(ck)
 		c := int32(0)
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		isZero := true
-		if def != nil {
-			isZero = !def.BMCode
-		}
-		if isZero {
-			c += 40
-		}
+		// is unresolved. Do not substitute BMCode or another similarly named
+		// FBI flag; until the field is mapped, this initialization addend is
+		// intentionally absent [P0-01 §2.2] [R-P0-05] [I9].
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		hasBuild := s.hasBuildOptions(ck, def)
 		if hasBuild {
@@ -300,17 +298,17 @@ func lookupDef(ck string) *content.UnitDef {
 	return (&Strategic{}).lookupDef(ck)
 }
 
+// hasBuildOptions reports whether def has a non-empty build-option list at
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Checks s.Catalog.BuildMenus for the builder, falling back to def.Builder flag [P0-I16].
+// adapter. A Builder flag without a resolved list is not a substitute for the
+// runtime count [R-P0-05] [I9].
 func (s *Strategic) hasBuildOptions(ck string, def *content.UnitDef) bool {
 	if s != nil && s.Catalog != nil && s.Catalog.BuildMenus != nil {
 		if page, ok := s.Catalog.BuildMenus[ck]; ok && page != nil && len(page.Buttons) > 0 {
 			return true
 		}
 	}
-	if def != nil && def.Builder {
-		return true
-	}
+	_ = def
 	return false
 }
 
@@ -319,16 +317,15 @@ func hasBuildOptions(ck string, def *content.UnitDef) bool {
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Compared <0.0 to add 10 or 50 to coefficients. Semantic meaning is mobile vs building score [P0-01 §8] INFERENCE.
-// Returns -1 for mobile, +1 for building. Uses CanMove/MaxVelocity as proxy. TODO(question) exact semantics unknown [P0-01].
+// against zero by the class routine, but the helper's definition inputs and
+// semantic name were not recovered. Do not proxy it with CanMove,
+// MaxVelocity, or standing-order flags [P0-01 §2.2] [R-P0-05] [I9].
 func classify(def *content.UnitDef) float32 {
-	if def == nil {
-		return 0
-	}
-	if def.CanMove || def.MaxVelocity > 0 || def.CanPatrol {
-		return -1.0
-	}
-	return 1.0
+	_ = def
+	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// signed result. Zero is the documented neutral placeholder; callers
+	// therefore do not invent either side of the <0 comparison.
+	return 0.0
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -402,7 +399,7 @@ func (s *Strategic) recomputeClassVectors() {
 		if def != nil && def.ExtractsMetal != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			acc0 = 11
 		}
-		if def != nil && def.OnOffable { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.MakesMetal != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			acc0 += 10
 		}
 		fval := classify(def)
@@ -424,7 +421,7 @@ func (s *Strategic) recomputeClassVectors() {
 
 		// weapon budget
 		wBase := int32(1)
-		if def != nil && def.Builder { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.CanAttack { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			wBase = 11
 		}
 		wSum := wBase
@@ -435,6 +432,9 @@ func (s *Strategic) recomputeClassVectors() {
 					continue
 				}
 				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				// not represented by the immutable weapon definition. A resolved
+				// weapon link is the only available slot identity here; do not
+				// infer activity from unrelated unit flags [R-P0-05].
 				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 				dmg := int32(wp.DamageDefault)
 				reload := int32(wp.ReloadTime)
@@ -448,10 +448,10 @@ func (s *Strategic) recomputeClassVectors() {
 
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 		acc1 := int32(0)
-		if def != nil && def.Builder { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.CanAttack { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			acc1 = 21
 		}
-		if def != nil && def.CanMove && count < 3 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.Builder && count < 3 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			acc1 += 30
 		}
 		if fval < 0 {
@@ -460,16 +460,16 @@ func (s *Strategic) recomputeClassVectors() {
 		if def != nil && def.ExtractsMetal != 0 {
 			acc1 += 50
 		}
-		if def != nil && def.OnOffable {
+		if def != nil && def.MakesMetal != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			acc1 += 25
 		}
-		if def != nil && def.CanPatrol { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.CanFly { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			acc1 += 40
 		}
-		if def != nil && def.FootprintZ != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.SonarDistance != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			acc1 += 15
 		}
-		if def != nil && def.FootprintX != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.RadarDistance != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			acc1 += 5
 		}
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -480,24 +480,22 @@ func (s *Strategic) recomputeClassVectors() {
 		} else if count == 1 {
 			val = val * 2
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		if def != nil && def.Waterline >= 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.MaxSlope >= 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			val = val * 3
 		}
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// stock state leaves this global comparison false [R-P0-05].
 		// Zero-izing branches
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		if def != nil && def.Stealth { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.CanLoad { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			val = 0
+		}
+		if def != nil && def.IsFeature { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			val = 0
 		}
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		if def != nil && def.NoRestrict { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			val = 0
-		}
 		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		if def != nil && def.EnergyUse != 0 {
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		}
+		// branch false, so no proxy field is consulted [R-P0-05].
 		val = clamp100(val) // clamp to 100 max, negative kept [P0-01 §3]
 		// store to C0
 		cv := s.ClassVectors[ck]
@@ -523,7 +521,7 @@ func (s *Strategic) recomputeClassVectors() {
 			baseVal = 100
 		}
 		metalAdj := int32(0)
-		if def != nil && def.OnOffable {
+		if def != nil && def.MakesMetal != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			metalAdj = -25 // -0x19 via NEG SBB [P0-01 §3]
 		}
 		adjf := costMetal*float32(-0.02) + float32(metalAdj) // FC9D4
