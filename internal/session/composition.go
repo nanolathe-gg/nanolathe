@@ -13,7 +13,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
-	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/movement"
@@ -566,12 +565,9 @@ func createAndBindServices(s *Session) error {
 			}
 		}
 	}
-	// Ensure Clock, Kernel, Snapshot non-nil (AI is fixed [10] per RS-02, no make needed)
+	// Ensure Clock and Snapshot are available (AI is fixed [10] per RS-02).
 	if s.Clock == nil {
 		s.Clock = &clock.State{Requested: 10, Active: 10}
-	}
-	if s.Kernel == nil {
-		s.Kernel = &kernel.Kernel{}
 	}
 	if s.Snapshot == nil {
 		s.Snapshot = &snapshot.Buffer{}

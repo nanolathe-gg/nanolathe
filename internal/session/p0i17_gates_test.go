@@ -18,7 +18,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
-	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	pathpkg "github.com/nanolathe/nanolathe/internal/path"
@@ -1040,7 +1039,7 @@ func TestP0I17_Gate7_Mission(t *testing.T) {
 		}
 	}
 	m2 := &mission.Mission{Type: mission.TypeCampaign, TerrainKey: "test", Schema: mission.Schema{Name: "Schema 0"}}
-	s2 := &Session{Catalog: cat, World: terrain, Mission: m2, Clock: &clock.State{Requested: 10, Active: 10}, Kernel: &kernel.Kernel{}, Snapshot: &snapshot.Buffer{}, State: StatePostBattle, Latch: NewEndLatch()}
+	s2 := &Session{Catalog: cat, World: terrain, Mission: m2, Clock: &clock.State{Requested: 10, Active: 10}, Snapshot: &snapshot.Buffer{}, State: StatePostBattle, Latch: NewEndLatch()}
 	s2.Units = w
 	s2.Econ = s.Econ
 	s2.RegisterAll()
@@ -1074,7 +1073,7 @@ func TestP0I17_Gate8_Save(t *testing.T) {
 	terrain := minimalTerrain()
 	m := syntheticMission()
 	build := func() *Session {
-		s := &Session{Catalog: cat, World: terrain, Mission: m, Clock: &clock.State{Requested: 10, Active: 10}, Kernel: &kernel.Kernel{}, Snapshot: &snapshot.Buffer{}, Econ: &economy.Service{}, Latch: NewEndLatch()}
+		s := &Session{Catalog: cat, World: terrain, Mission: m, Clock: &clock.State{Requested: 10, Active: 10}, Snapshot: &snapshot.Buffer{}, Econ: &economy.Service{}, Latch: NewEndLatch()}
 		w, _ := newSlicedWorld(cat)
 		s.Units = w
 		for i := 0; i < 2; i++ {
@@ -1187,7 +1186,7 @@ func TestP0I17_Gate9_PresentationIsolation(t *testing.T) {
 	terrain := minimalTerrain()
 	m := syntheticMission()
 	build := func() *Session {
-		s := &Session{Catalog: cat, World: terrain, Mission: m, Clock: &clock.State{Requested: 10, Active: 10}, Kernel: &kernel.Kernel{}, Snapshot: &snapshot.Buffer{}, Econ: &economy.Service{}, Latch: NewEndLatch()}
+		s := &Session{Catalog: cat, World: terrain, Mission: m, Clock: &clock.State{Requested: 10, Active: 10}, Snapshot: &snapshot.Buffer{}, Econ: &economy.Service{}, Latch: NewEndLatch()}
 		w, _ := newSlicedWorld(cat)
 		s.Units = w
 		for i := 0; i < 2; i++ {
@@ -1385,7 +1384,6 @@ func TestP0I17_Gate10_Corpus(t *testing.T) {
 // Ensure imports used.
 var (
 	_ = clock.State{}
-	_ = kernel.Kernel{}
 	_ = snapshot.Buffer{}
 	_ = world.NewWind
 	_ = features.NewService

@@ -322,7 +322,8 @@ func TestRenderBatchAbortsOnGlobalGAFAdmissionFailure(t *testing.T) {
 		2: {RenderType: RenderTypeBeam, Color: 1, Color2: 0},
 	}
 	// admitOK returns false -> should abort and produce no specs beyond, aborted true.
-	specs, aborted := RenderBatch([]combat.Projectile{p1, p2}, weapons, 10, nil, nil, nil, nil, func() bool { return false })
+	alwaysVisible := func(combat.Vec3) bool { return true }
+	specs, aborted := RenderBatch([]combat.Projectile{p1, p2}, weapons, 10, nil, nil, nil, alwaysVisible, func() bool { return false })
 	if !aborted {
 		t.Fatalf("render batch should abort on global GAF admission failure [03 §5.4]")
 	}
@@ -330,12 +331,32 @@ func TestRenderBatchAbortsOnGlobalGAFAdmissionFailure(t *testing.T) {
 		t.Fatalf("aborted batch should yield 0 specs until abort, got %d [03 §5.4]", len(specs))
 	}
 	// admitOK true -> no abort, second draws.
-	specs, aborted = RenderBatch([]combat.Projectile{p2, p1}, weapons, 10, nil, nil, nil, nil, func() bool { return true })
+	specs, aborted = RenderBatch([]combat.Projectile{p2, p1}, weapons, 10, nil, nil, nil, alwaysVisible, func() bool { return true })
 	if aborted {
 		t.Fatalf("admit true should not abort")
 	}
 	if len(specs) == 0 {
 		t.Fatalf("non-aborted batch should have specs")
+	}
+}
+
+// TestProjectileVisibilityFailsClosed verifies that an absent visibility
+// service cannot admit a projectile [03 §5.4].
+func TestProjectileVisibilityFailsClosed(t *testing.T) {
+	pos := combat.Vec3{X: numeric.Fixed(1 << 16)}
+	if IsProjectileVisible(pos, nil, 0) {
+		t.Fatal("nil visibility service must reject projectile")
+	}
+}
+
+// TestRenderBatchNilVisibilityFailsClosed verifies that an absent visibility
+// callback emits no projectile specs [03 §5.4].
+func TestRenderBatchNilVisibilityFailsClosed(t *testing.T) {
+	p := combat.Projectile{WeaponID: 1, Pos: combat.Vec3{X: numeric.Fixed(1 << 16)}}
+	weapons := map[int32]*content.WeaponDef{1: {RenderType: RenderTypeBeam, Color: 1}}
+	specs, aborted := RenderBatch([]combat.Projectile{p}, weapons, 1, nil, nil, nil, nil, nil)
+	if aborted || len(specs) != 0 {
+		t.Fatalf("nil visibility must fail closed: specs=%v aborted=%v", specs, aborted)
 	}
 }
 

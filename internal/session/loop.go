@@ -13,7 +13,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/hud"
-	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
@@ -69,7 +68,6 @@ type Session struct {
 	pendingBattle bool
 
 	Clock    *clock.State
-	Kernel   *kernel.Kernel
 	Catalog  *content.Catalog
 	World    *world.Terrain
 	Units    *units.World
@@ -531,9 +529,6 @@ func (s *Session) ValidateComposition() error {
 	if s.Clock == nil {
 		return fmt.Errorf("session: missing Clock [01 §4.4]")
 	}
-	if s.Kernel == nil {
-		return fmt.Errorf("session: missing Kernel [01 §4.4]")
-	}
 	if s.Catalog == nil {
 		return fmt.Errorf("session: missing Catalog [02 §5]")
 	}
@@ -866,7 +861,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 	// Must run after orders-pump's head is established but before scheduler tick so request is visible this tick [P0-I03].
 	// In authoritativeTick the per-unit pump runs after scheduler in the current structure (one-tick delay), but we still submit for the
 	// existing heads deterministically before scheduler so the fallback path-submit defect [ON-10] is closed. Deterministic player 0..9 asc, slots asc, no map range [INVARIANTS I1].
-	// Duplicate of kernel's path-submit phase loop.go:1425 replicated here for the fast path [04 §7.3].
+	// This path-submit loop is kept at the direct session activation boundary [04 §7.3].
 	if s.Units != nil && s.Movement != nil && s.Movement.Scheduler != nil {
 		sched := s.Movement.Scheduler
 		s.Path = sched
@@ -2660,17 +2655,14 @@ func publishVisibilityView(vis *visibility.Service, local uint8, out *snapshot.V
 	*out = snapshot.VisibilityView{W: w, H: h, Explored: explored, Visible: visible, Valid: true}
 }
 
-// RegisterAll centralizes subsystem registration in kernel phase order
-// with a comment naming each phase (I7, PLAN_03 C7, [01 §4.4]).
-// No package registers itself from init().
+// RegisterAll installs the session state handlers and cross-service lifecycle
+// hooks. The authoritative tick is called directly by Step; no callback graph
+// or secondary scheduler is involved.
 func (s *Session) RegisterAll() {
-	if s.Kernel == nil {
-		s.Kernel = &kernel.Kernel{}
-	}
 	if s.Clock == nil {
 		s.Clock = &clock.State{Requested: 10, Active: 10}
 	}
-	// Install eight-state handlers before kernel phases so state machine governs lifecycle [08][P0-I10].
+	// Install eight-state handlers before simulation so the state machine governs lifecycle [08][P0-I10].
 	s.installStateHandlers()
 	// Ensure Shutdown exists in documented startup order [01 §2.1][01 §2.3] for teardown variants 0/1 P0-I10.
 	if s.Shutdown == nil {
@@ -2906,13 +2898,6 @@ func (s *Session) RegisterAll() {
 		}
 	}
 
-	// The former package-wide kernel phase graph (network-drain, units-tick,
-	// weapons-fire, orders-pump, path-submit, movement-integrate, cadence-flip,
-	// …) was retired here [RX-08][ON-09]: authoritativeTick above is the single
-	// production tick and implements the researched stage order itself
-	// ([01 §4.4][04 §7.3][05 "Authoritative settlement order"]). Nothing may
-	// re-register phases or drive Kernel.Run/SubTick in production; gate2's
-	// legacy diagnostic builds its own kernel and does not touch this one.
 }
 
 // coordinatePlayers is the session-owned per-player loop that supplies AI
@@ -2962,9 +2947,6 @@ func (s *Session) coordinatePlayers(tick uint32) {
 func (s *Session) Step(scaledNow int32) {
 	if s.Clock == nil {
 		s.Clock = &clock.State{Requested: 10, Active: 10}
-	}
-	if s.Kernel == nil {
-		s.Kernel = &kernel.Kernel{}
 	}
 	// State machine governs lifecycle [08 "Session states"] P0-I10.
 	// If not in battle or pendingBattle, drive one state dispatch and do not tick this frame.

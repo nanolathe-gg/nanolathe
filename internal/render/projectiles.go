@@ -351,7 +351,7 @@ func IsProjectileVisible(pos combat.Vec3, svc interface {
 	VisiblePoint(player uint8, x, y, z numeric.Fixed) bool
 }, localPlayer uint8) bool { // [03 §5.4] (I6)
 	if svc == nil {
-		return true // fixture: no visibility service means always visible
+		return false // absent visibility dependency fails closed [03 §5.4]
 	}
 	return svc.VisiblePoint(localPlayer, pos.X, pos.Y, pos.Z) // [03 §5.4] one-point form
 }
@@ -364,7 +364,7 @@ func RenderBatch(projectiles []combat.Projectile, weapons map[int32]*content.Wea
 	aborted := false
 	// Deterministic iteration: projectiles already in stable pool order (I1) [03 §1].
 	for _, p := range projectiles {
-		if visible != nil && !visible(p.Pos) { // [03 §5.4] draw gate once per record
+		if visible == nil || !visible(p.Pos) { // [03 §5.4] draw gate once per record; absent dependency fails closed
 			continue
 		}
 		var w *content.WeaponDef

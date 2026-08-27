@@ -1,8 +1,8 @@
 // Package world — wind field.
 //
 // Wind state seeded at battle entry and advanced by the two global RNG
-// streams. It registers callbacks into kernel phases 8 (wind jitter/interval)
-// and 9 (wind-field update) [01 §4.4].
+// streams. Session.authoritativeTick calls its two update steps directly in
+// phase order [01 §4.4].
 //
 // Retail wind draws [01 §7.3], [05 "Wind generation"], [GAP T13]:
 //
@@ -23,7 +23,6 @@
 package world
 
 import (
-	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
@@ -174,27 +173,6 @@ func (w *Wind) publish(tick uint32) {
 	w.DirX, w.DirZ = windVectors(w.Strength, w.Heading)
 	w.LastChange = tick
 	w.Changed = true
-}
-
-// Register wires the holder into the kernel's twelve-phase graph: phase 8 takes
-// the CRT interval draw, phase 9 takes the simulation strength/heading draws
-// [01 §4.4], [01 §7.3].
-//
-// Both streams are explicit. There is deliberately no fallback to rng.Global:
-// a nil stream that silently produces no draws is a run that looks
-// deterministic and reproduces nothing (I4). Register once per session, from
-// the single registration site in internal/session (PLAN_14 WU-14-2) — calling
-// it twice registers duplicate callbacks and doubles the draws.
-func (w *Wind) Register(k *kernel.Kernel, crt *rng.CRT, sim *rng.Simulation) {
-	if w == nil || k == nil {
-		return
-	}
-	k.Register(kernel.PhaseWindJitter, "wind-jitter", func(tick uint32) {
-		w.Jitter(tick, crt)
-	})
-	k.Register(kernel.PhaseWindField, "wind-field", func(tick uint32) {
-		w.Field(tick, sim)
-	})
 }
 
 // windScalar is the normalized strength published to wind generators: exactly

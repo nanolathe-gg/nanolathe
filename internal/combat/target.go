@@ -255,7 +255,7 @@ func (a *Acquisition) directlyVisible(c Candidate) bool {
 		return false // underwater without 0x200 alias reject [06 §3.1] P0-10 P0-11
 	}
 	if a.Visible == nil {
-		return true // nil samples nothing and admits (no visibility service) [06 §3.1]
+		return false // hostile acquisition requires the direct-visibility predicate [06 §3.1]
 	}
 	return a.Visible(c) // 4-point hull sampling [03 §3.2] P0-11
 }

@@ -7,13 +7,23 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/visibility"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
+
+// allVisibleAudioService supplies the explicit, valid visibility dependency
+// needed by tests whose subject is audio playback rather than LOS. Mode zero
+// initializes the in-map word mask with every player bit set.
+func allVisibleAudioService() *visibility.Service {
+	return visibility.New(&world.Terrain{CellW: 64, CellH: 64}, 0)
+}
 
 func TestInstallAudioBridge_MapsHitSound(t *testing.T) {
 	s := &Session{}
 	s.AudioQueue = audio.NewQueue()
 	s.AudioQueue.Seed(1)
 	s.AudioCache = audio.NewCache(nil)
+	s.Vis = allVisibleAudioService()
 	// preload a dummy sample for the hit alias
 	_, _ = s.AudioCache.Put("hit_alias", []byte{128, 128})
 	s.Combat = &combat.Service{}
@@ -96,6 +106,7 @@ func TestEmitPositionalHeadlessNoDevice(t *testing.T) {
 	s := &Session{}
 	s.AudioQueue = audio.NewQueue()
 	s.AudioCache = audio.NewCache(nil)
+	s.Vis = allVisibleAudioService()
 	_, _ = s.AudioCache.Put("pos_alias", []byte{128, 128})
 	be := audio.NewBackend(true)
 	old := audio.GlobalBackend()
@@ -104,7 +115,7 @@ func TestEmitPositionalHeadlessNoDevice(t *testing.T) {
 	pos := [3]numeric.Fixed{0, 0, 0}
 	pan, vol, ok := s.EmitPositional("pos_alias", pos)
 	if !ok {
-		t.Fatal("positional should be audible with no vis")
+		t.Fatal("positional should be audible with explicit visibility")
 	}
 	if be.PlayCount() != 1 {
 		t.Fatalf("positional play count %d want 1 pan %v vol %d aliases %v", be.PlayCount(), pan, vol, be.PlayedAliases())
@@ -112,6 +123,29 @@ func TestEmitPositionalHeadlessNoDevice(t *testing.T) {
 	// headless should not have context
 	if be.IsHeadless() == false {
 		t.Fatal("headless backend should be headless")
+	}
+}
+
+func TestEmitPositionalRequiresVisibility(t *testing.T) {
+	s := &Session{AudioCache: audio.NewCache(nil)}
+	_, _ = s.AudioCache.Put("pos_alias", []byte{128, 128})
+	be := audio.NewBackend(true)
+	old := audio.GlobalBackend()
+	audio.SetGlobalBackend(be)
+	defer audio.SetGlobalBackend(old)
+
+	if _, _, ok := s.EmitPositional("pos_alias", [3]numeric.Fixed{}); ok {
+		t.Fatal("positional audio should fail closed without visibility")
+	}
+	if be.PlayCount() != 0 {
+		t.Fatalf("positional audio without visibility played %d times", be.PlayCount())
+	}
+
+	// A zero-dimension service is not a valid audience grid and must also fail
+	// closed rather than acting as an always-audible fixture.
+	s.Vis = visibility.New(&world.Terrain{CellW: 1, CellH: 1}, 0)
+	if _, _, ok := s.EmitPositional("pos_alias", [3]numeric.Fixed{}); ok {
+		t.Fatal("positional audio should fail closed with invalid visibility dimensions")
 	}
 }
 

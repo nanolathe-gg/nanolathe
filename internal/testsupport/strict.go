@@ -201,7 +201,7 @@ func proprietaryAssetFilesystemWalk(root string) ([]string, error) {
 // WallClockScan scans authoritative packages for time.Now usage [I6].
 // Returns list of files with forbidden wall-clock.
 func WallClockScan(root string) ([]string, error) {
-	return grepScan(root, regexp.MustCompile(`time\.Now|time\.Since|time\.Until`), []string{"internal/clock", "internal/kernel", "internal/units", "internal/orders", "internal/cob", "internal/movement", "internal/path", "internal/economy", "internal/construction", "internal/features", "internal/combat", "internal/visibility", "internal/ai", "internal/mission", "internal/triggers", "internal/session"})
+	return grepScan(root, regexp.MustCompile(`time\.Now|time\.Since|time\.Until`), []string{"internal/clock", "internal/units", "internal/orders", "internal/cob", "internal/movement", "internal/path", "internal/economy", "internal/construction", "internal/features", "internal/combat", "internal/visibility", "internal/ai", "internal/mission", "internal/triggers", "internal/session"})
 }
 
 // MapIterationScan scans for `range .*map\[` in authoritative packages [I1].

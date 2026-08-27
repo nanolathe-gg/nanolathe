@@ -37,7 +37,7 @@ import (
 
 // System is the per-unit integration glue. It owns the three mover surfaces per unit
 // plus the route, and the scheduler/grid/terrain it was bound to at construction.
-// One System is created per gate2Session (or later per session) and is the sole writer
+// One System is created per authoritative session and is the sole writer
 // of per-unit movement state for that world.
 type System struct {
 	Terrain *world.Terrain

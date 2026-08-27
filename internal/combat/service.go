@@ -599,7 +599,11 @@ func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.Wor
 		Ballistic:     weapon.Ballistic,
 		RNG:           simRNG,
 	}
-	if vis != nil {
+	if vis == nil {
+		// Hostile acquisition is visibility-gated. Keep the predicate installed
+		// even when the caller supplied no service so Acquisition fails closed.
+		acq.Visible = func(Candidate) bool { return false }
+	} else {
 		acq.Visible = func(c Candidate) bool {
 			candUnit := w.Unit(c.Handle)
 			if candUnit == nil {

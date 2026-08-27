@@ -13,12 +13,12 @@ func fixed(v int) numeric.Fixed { return numeric.Fixed(int64(v) * 65536) }
 // acq builds the ordinary non-water acquisition gate for these fixtures. Sea
 // level is zero and every candidate sits at height 1, so the [06 §3.1]
 // above-sea-level requirement passes and the test is about selection, not
-// admission. The nil Visible port samples nothing and admits, which is what a
-// session with no visibility service wired has.
+// admission. Tests that need a different visibility result override Visible.
 func acq(sx, sz numeric.Fixed, weaponRange int32, badMask uint32, r *rng.Simulation) Acquisition {
 	return Acquisition{
 		ShooterX: sx, ShooterZ: sz, ShooterY: fixed(1),
 		SeaLevel: 0, Range: weaponRange, BadMask: badMask, RNG: r,
+		Visible: func(Candidate) bool { return true },
 	}
 }
 

@@ -89,8 +89,6 @@ var Baseline = map[string]int{
 	"internal/hud/cursor.go":                        1,
 	"internal/hud/minimap_test.go":                  7,
 	"internal/hud/selection_test.go":                2,
-	"internal/kernel/kernel.go":                     1,
-	"internal/kernel/kernel_test.go":                1,
 	"internal/mission/catalog.go":                   1,
 	"internal/mission/initial_mission.go":           6,
 	"internal/mission/mission_globals.go":           135,

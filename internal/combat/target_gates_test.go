@@ -13,7 +13,10 @@ import (
 // advances the shared simulation stream differently.
 
 func base(r *rng.Simulation) Acquisition {
-	return Acquisition{ShooterX: 0, ShooterZ: 0, ShooterY: fixed(10), SeaLevel: fixed(5), Range: 1000, RNG: r}
+	return Acquisition{
+		ShooterX: 0, ShooterZ: 0, ShooterY: fixed(10), SeaLevel: fixed(5), Range: 1000, RNG: r,
+		Visible: func(Candidate) bool { return true },
+	}
 }
 
 func hostileAt(h pool.Handle, x, y int) Candidate {
@@ -110,6 +113,15 @@ func TestDirectVisibilityPredicate(t *testing.T) {
 	sub.UnderwaterSeen = true
 	if _, ok := AcquireTarget([]Candidate{sub}, a); !ok {
 		t.Fatalf("an underwater candidate carrying its status bit was rejected")
+	}
+}
+
+func TestMissingVisibilityRejectsHostileCandidate(t *testing.T) {
+	r := rng.NewSimulation(1)
+	a := base(&r)
+	a.Visible = nil
+	if _, ok := AcquireTarget([]Candidate{hostileAt(1, 10, 9)}, a); ok {
+		t.Fatalf("hostile candidate acquired without a visibility predicate")
 	}
 }
 

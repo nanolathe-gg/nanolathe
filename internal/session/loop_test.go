@@ -1,41 +1,15 @@
 package session
 
 import (
-	"os"
-	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/economy"
-	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
-
-// TestRegistrationOrder verifies C5: subsystem registration is centralized here
-// and written in kernel phase order with a comment naming each phase
-// (I7, PLAN_03 C7, [01 §4.4]).
-// TestNoKernelPhaseRegistrations locks the RX-08 topology contract: loop.go is
-// the single authoritative tick ([01 §4.4][ON-09]) and must not register any
-// package-wide kernel phases. The old twelve-phase graph was retired; nothing
-// may resurrect a second production tick path.
-func TestNoKernelPhaseRegistrations(t *testing.T) {
-	data, err := os.ReadFile("loop.go")
-	if err != nil {
-		t.Fatalf("read loop.go: %v", err)
-	}
-	text := string(data)
-	if strings.Contains(text, "func init(") {
-		t.Fatalf("loop.go must not use init() (C5)")
-	}
-	re := regexp.MustCompile(`s\.Kernel\.Register\(`)
-	if matches := re.FindAllString(text, -1); len(matches) != 0 {
-		t.Fatalf("loop.go must not register kernel phases (%d found); authoritativeTick is the single production tick [RX-08]", len(matches))
-	}
-}
 
 // TestPublishAfterEachSubTick verifies C6: 0..5 sub-ticks publishing after phase 12
 // of each completed sub-tick. A five-tick burst therefore advances the buffer five
@@ -43,7 +17,6 @@ func TestNoKernelPhaseRegistrations(t *testing.T) {
 func TestPublishAfterEachSubTick(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Kernel:   &kernel.Kernel{},
 		Snapshot: &snapshot.Buffer{},
 		Units:    units.New(10, nil),
 	}
@@ -73,7 +46,6 @@ func TestPublishAfterEachSubTick(t *testing.T) {
 	// Test 0 ticks case: no publish, buffer unchanged.
 	s2 := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 10},
-		Kernel:   &kernel.Kernel{},
 		Snapshot: &snapshot.Buffer{},
 	}
 	s2.RegisterAll()
@@ -93,7 +65,6 @@ func TestPublishAfterEachSubTick(t *testing.T) {
 func TestPauseUnpauseBurstCap(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0, Paused: true},
-		Kernel:   &kernel.Kernel{},
 		Snapshot: &snapshot.Buffer{},
 	}
 	s.RegisterAll()
@@ -125,7 +96,6 @@ func TestPauseUnpauseBurstCap(t *testing.T) {
 	// Verify burst never exceeds 5 even with huge delta
 	s2 := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Kernel:   &kernel.Kernel{},
 		Snapshot: &snapshot.Buffer{},
 	}
 	s2.RegisterAll()
@@ -143,7 +113,6 @@ func TestRenderOncePerBatch(t *testing.T) {
 	var alphas []float32
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Kernel:   &kernel.Kernel{},
 		Snapshot: &snapshot.Buffer{},
 		OnRender: func(alpha float32) {
 			renderCalls++
@@ -212,7 +181,6 @@ func TestAICallbackInsideTickPlayer(t *testing.T) {
 	// Instead, we will test via coordinatePlayers directly and verify that AI Tick was called.
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10},
-		Kernel:   &kernel.Kernel{},
 		Econ:     econ,
 		Units:    units.New(10, nil),
 		AI:       [10]*ai.Manager{0: mgr},
@@ -284,7 +252,7 @@ func TestAICallbackInsideTickPlayer(t *testing.T) {
 		t.Fatalf("UpdateTime should be 40 after TickPlayer (10+30) [05] C2, got %d", econ.Players[0].UpdateTime)
 	}
 
-	// Now test that Session's coordinator wires it correctly: Step should invoke AI via kernel.
+	// The session coordinator invokes AI through the direct tick path.
 	_ = capturedHelper1
 	_ = capturedUpdateTime
 	_ = testMgr
@@ -310,12 +278,11 @@ func TestAICallbackInsideTickPlayer(t *testing.T) {
 	mgr2 := &ai.Manager{Player: 1}
 	mgr2.Deadlines[ai.TaskResource] = 0
 	s2 := &Session{
-		Clock:  &clock.State{Requested: 10, Active: 10},
-		Kernel: &kernel.Kernel{},
-		Econ:   econ2,
-		Units:  units.New(10, nil),
-		AI:     [10]*ai.Manager{1: mgr2}, // index 1 is player 1 per RS-02
-		World:  &world.Terrain{CellW: 10, CellH: 10},
+		Clock: &clock.State{Requested: 10, Active: 10},
+		Econ:  econ2,
+		Units: units.New(10, nil),
+		AI:    [10]*ai.Manager{1: mgr2}, // index 1 is player 1 per RS-02
+		World: &world.Terrain{CellW: 10, CellH: 10},
 	}
 	s2.RegisterAll()
 	// Run coordinator at tick 20
@@ -362,11 +329,10 @@ func TestCoordinatorIteratesPlayersAscending(t *testing.T) {
 	// Instead, we will test that economy.TickPlayer was called in ascending order by observing helper call order.
 	// For this test, we just verify that coordinatePlayers iterates 0..9 by checking that managers' entryCount all 1 after one tick.
 	s := &Session{
-		Clock:  &clock.State{Requested: 10, Active: 10},
-		Kernel: &kernel.Kernel{},
-		Econ:   econ,
-		Units:  units.New(10, nil),
-		AI:     managers,
+		Clock: &clock.State{Requested: 10, Active: 10},
+		Econ:  econ,
+		Units: units.New(10, nil),
+		AI:    managers,
 	}
 	s.RegisterAll()
 	s.coordinatePlayers(100)

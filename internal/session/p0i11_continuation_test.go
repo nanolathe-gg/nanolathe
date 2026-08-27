@@ -9,7 +9,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
-	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
@@ -61,7 +60,6 @@ func TestP0I11_SaveContinuationMatchesUninterrupted(t *testing.T) {
 			World:    terrain,
 			Mission:  m,
 			Clock:    &clock.State{Requested: 10, Active: 10},
-			Kernel:   &kernel.Kernel{},
 			Snapshot: &snapshot.Buffer{},
 			Econ:     &economy.Service{},
 			Latch:    NewEndLatch(),

@@ -3,8 +3,6 @@ package world
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/clock"
-	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
@@ -98,23 +96,20 @@ func TestWindScalarClampsAtOne(t *testing.T) {
 	}
 }
 
-// TestRegisteredPhaseOrder locks the stream ordering across the kernel: the
-// phase-8 CRT draw happens strictly before the phase-9 simulation draws
+// TestDirectPhaseOrder locks the stream ordering of the direct session calls:
+// the phase-8 CRT draw happens strictly before the phase-9 simulation draws
 // [01 §4.4], [01 §7.3].
-func TestRegisteredPhaseOrder(t *testing.T) {
+func TestDirectPhaseOrder(t *testing.T) {
 	crt := rng.NewCRT(1)
 	sim := rng.NewSimulation(7)
 	w := NewWind(100, 2000)
 	w.SeedBriefing(&crt, 0)
 
-	var k kernel.Kernel
-	w.Register(&k, &crt, &sim)
-
-	var state clock.State
 	changes := 0
-	for state.GlobalTick < 900 {
+	for tick := uint32(1); tick <= 900; tick++ {
 		before := w.LastChange
-		k.SubTick(&state)
+		w.Jitter(tick, &crt)
+		w.Field(tick, &sim)
 		if w.LastChange != before {
 			changes++
 		}

@@ -332,7 +332,7 @@ func projectileFrameCount(v snapshot.ProjectileView, opts ProjectileDispatchOpti
 func BuildProjectileDraws(projectiles []snapshot.ProjectileView, now uint32, visible func(snapshot.ProjectileView) bool, admitGlobalGAF func(snapshot.ProjectileView) bool, opts ProjectileDispatchOptions) ([]ProjectileDraw, bool) {
 	out := make([]ProjectileDraw, 0, len(projectiles))
 	for _, v := range projectiles {
-		if visible != nil && !visible(v) {
+		if visible == nil || !visible(v) { // [03 §5.4] absent visibility dependency fails closed
 			continue
 		}
 		// The global sequence reserves/draws its destination before looking up

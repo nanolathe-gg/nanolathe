@@ -226,13 +226,13 @@ func runBattleView(opts Options, cs *contentSet) error {
 		cl.SetPalette(pal)
 	}
 	cl.SetFNT(b.hud.console)
-	// Software cursor [07 §8]. A missing cursor GAF is not fatal: the battle
-	// view falls back to the window system's own pointer.
-	if cursors, cerr := client.LoadCursors(cs.fs); cerr == nil {
-		cl.SetCursors(cursors)
-	} else {
-		fmt.Fprintf(os.Stderr, "nanolathe: %v\n", cerr)
+	// Software cursor [07 §8]. The cursor GAF is mandatory for a windowed
+	// battle, and installation happens before entering Ebitengine's loop.
+	cursors, cerr := client.LoadCursors(cs.fs)
+	if cerr != nil {
+		return cerr
 	}
+	cl.SetCursors(cursors)
 	cl.Overlay = func(c *client.Client) { b.hud.draw(c, b) }
 	// Join the session's audio queue/cache/music to the client's device and
 	// per-frame drain [03 §8.2][03 §8.3][03 §8.4]. Without this the client
@@ -316,9 +316,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// Do not advance simulation while result overlay is visible; Step would early-return
 		// due to StatePostBattle anyway, but we skip it entirely to keep the countdown frozen
 		// and to prevent the automatic 7→2 transition until the user chooses an action.
-		if cursors := cl.Cursors(); cursors != nil {
-			cursors.SetIndex(render.CursorNormal)
-		}
+		cl.Cursors().SetIndex(render.CursorNormal)
 		return
 	}
 	if in != nil && in.Kbd != nil && in.Kbd.KeyDown(input.KeyTab) {
@@ -352,9 +350,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		return
 	}
 	if b.menu != battleMenuClosed {
-		if cursors := cl.Cursors(); cursors != nil {
-			cursors.SetIndex(render.CursorNormal)
-		}
+		cl.Cursors().SetIndex(render.CursorNormal)
 	} else {
 		b.updateCursor(cl)
 	}

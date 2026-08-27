@@ -37,6 +37,50 @@ func synthProg(code []uint32, pieces []string, statics int, byID []int) *Program
 	}
 }
 
+// newTestVM makes the visibility dependency explicit for tests whose behavior
+// is unrelated to visibility. Production composition supplies the concrete
+// gate; an accidentally missing dependency makes emit-sfx fail closed [GAP T15] C19.
+func newTestVM(prog *Program) *VM {
+	vm := NewVM(prog)
+	vm.SetSFXVisible(func(piece int, sfxType int32) bool { return true })
+	return vm
+}
+
+type vmSFXSink struct{ calls int }
+
+func (s *vmSFXSink) EmitSFX(int, int32, SFXKind) { s.calls++ }
+
+func TestEmitSFXMissingVisibilityFailsClosed(t *testing.T) {
+	// A missing visibility dependency suppresses presentation only. The opcode
+	// still pops its effect type, advances the PC, and leaves normal scheduling
+	// intact [GAP T15] C19.
+	prog := synthProg([]uint32{
+		0x10021001, 1, // push vector effect type [04 §4.3] F
+		0x1000f000, 0, // emit-sfx piece 0; pops the effect type [04 §4.3] B
+		0x10021001, 0, // push zero sleep duration
+		0x10013000, // sleep yields after the emit-sfx instruction
+	}, []string{"base"}, 0, []int{0})
+	vm := NewVM(prog)
+	sink := &vmSFXSink{}
+	vm.SetSFXSink(sink)
+	vm.Threads[0].Status = ThreadRunning
+	vm.Threads[0].PC = 0
+	vm.Drain(1)
+
+	if sink.calls != 0 {
+		t.Fatalf("emit-sfx without visibility must fail closed, got %d sink calls", sink.calls)
+	}
+	if vm.Threads[0].Status != ThreadSleeping {
+		t.Fatalf("emit-sfx missing visibility changed scheduling: status %d want sleeping", vm.Threads[0].Status)
+	}
+	if vm.Threads[0].PC != 7 {
+		t.Fatalf("emit-sfx missing visibility did not preserve operand/PC advance: PC %d want 7", vm.Threads[0].PC)
+	}
+	if vm.Threads[0].SP != 0 {
+		t.Fatalf("emit-sfx missing visibility did not consume operands normally: SP %d want 0", vm.Threads[0].SP)
+	}
+}
+
 func TestOpcodeDispatch(t *testing.T) {
 	// C11 exactly 57 dispatched values [04 §4.3].
 	if len(dispatchKeys) != 57 {
@@ -66,7 +110,7 @@ func TestOpcodeDispatch(t *testing.T) {
 		}
 		// Verify VM kill path for one unknown.
 		prog := synthProg([]uint32{uk}, []string{"base"}, 0, []int{0})
-		vm := NewVM(prog)
+		vm := newTestVM(prog)
 		// Manually start a thread at PC 0 (bypass isValidEntry which would reject unknown entry;
 		// for dispatch test we set thread directly).
 		vm.Threads[0].Status = ThreadRunning
@@ -83,7 +127,7 @@ func TestOpcodeDispatch(t *testing.T) {
 	// (The runThread drain has no iteration cap — retail wedges on tight loops
 	// and so do we — so a jump-loop program must not be used here.)
 	prog2 := synthProg([]uint32{0x10005000, 0, 0x10065000}, []string{"base"}, 0, []int{0}) // show piece 0 + return
-	vm2 := NewVM(prog2)
+	vm2 := newTestVM(prog2)
 	vm2.Threads[0].Status = ThreadRunning
 	vm2.Threads[0].PC = 0
 	vm2.Drain(1)
@@ -107,7 +151,7 @@ func TestSleepZeroCostsOneTick(t *testing.T) {
 		0x10065000, // return
 	}
 	prog := synthProg(code, []string{"base"}, 1, []int{0})
-	vm := NewVM(prog)
+	vm := newTestVM(prog)
 	if !vm.Start(0, nil) {
 		t.Fatalf("Start failed")
 	}
@@ -127,7 +171,7 @@ func TestSleepZeroCostsOneTick(t *testing.T) {
 }
 
 func TestEngineRootSignalMaskSeed(t *testing.T) {
-	vm := NewVM(&Program{Code: []uint32{0x10065000}, Scripts: map[string]int{"Create": 0}, ScriptsByID: []int{0}})
+	vm := newTestVM(&Program{Code: []uint32{0x10065000}, Scripts: map[string]int{"Create": 0}, ScriptsByID: []int{0}})
 	if !vm.StartByName("Create", nil) {
 		t.Fatal("root start failed")
 	}
@@ -139,7 +183,7 @@ func TestEngineRootSignalMaskSeed(t *testing.T) {
 func TestStackUnderflowOverflow(t *testing.T) {
 	// Underflow: add with empty stack should not panic, pop zeros, push 0 [04 §4.3] C13
 	prog := synthProg([]uint32{0x10031000, 0x10065000}, []string{"base"}, 0, []int{0})
-	vm := NewVM(prog)
+	vm := newTestVM(prog)
 	vm.Threads[0].Status = ThreadRunning
 	vm.Threads[0].PC = 0
 	vm.Threads[0].SP = 0
@@ -148,7 +192,7 @@ func TestStackUnderflowOverflow(t *testing.T) {
 	// program stores the result in static 0 and returns (the drain has no
 	// iteration cap — C14 — so no jump-loop programs).
 	prog2 := synthProg([]uint32{0x10031000, 0x10023004, 0, 0x10065000}, []string{"base"}, 1, []int{0}) // add, pop-static 0, return
-	vm2 := NewVM(prog2)
+	vm2 := newTestVM(prog2)
 	vm2.Threads[0].Status = ThreadRunning
 	vm2.Threads[0].PC = 0
 	vm2.Threads[0].SP = 0
@@ -167,7 +211,7 @@ func TestStackUnderflowOverflow(t *testing.T) {
 	code = append(code, 0x10023004, 0) // pop-static 0
 	code = append(code, 0x10065000)    // return
 	prog3 := synthProg(code, []string{"base"}, 1, []int{0})
-	vm3 := NewVM(prog3)
+	vm3 := newTestVM(prog3)
 	vm3.Threads[0].Status = ThreadRunning
 	vm3.Threads[0].PC = 0
 	vm3.Drain(1)
@@ -198,7 +242,7 @@ func TestPushPopAddressingModes(t *testing.T) {
 		0x10021001, 0, // push 0 for sleep
 		0x10013000, // sleep [04 §4.3]
 	}, []string{"base"}, 1, []int{0})
-	vm := NewVM(prog)
+	vm := newTestVM(prog)
 	vm.Threads[0].Status = ThreadRunning
 	vm.Threads[0].PC = 0
 	vm.Drain(1)
@@ -226,7 +270,7 @@ func TestPushPopAddressingModes(t *testing.T) {
 
 func TestStaticsZeroInit(t *testing.T) {
 	prog := synthProg([]uint32{0x10065000}, []string{"base"}, 3, []int{0})
-	vm := NewVM(prog)
+	vm := newTestVM(prog)
 	for i, v := range vm.statics {
 		if v != 0 {
 			t.Fatalf("statics[%d]=%d want 0 zero-init per [fmt cob] [04 §4.2]", i, v)
@@ -237,7 +281,7 @@ func TestStaticsZeroInit(t *testing.T) {
 
 func TestThreadSlotSelectionOrder(t *testing.T) {
 	prog := synthProg([]uint32{0x10065000}, []string{"base"}, 0, []int{0})
-	vm := NewVM(prog)
+	vm := newTestVM(prog)
 	// Alloc order lowest clear [01 §6.1] C13
 	for i := 0; i < 3; i++ {
 		ok := vm.Start(0, nil)
@@ -279,7 +323,7 @@ func TestStartScriptFullPoolArgRetention(t *testing.T) {
 		0x10013000, // sleep to yield
 	}
 	prog := synthProg(code, []string{"base"}, 0, []int{0})
-	vm := NewVM(prog)
+	vm := newTestVM(prog)
 	for i := 0; i < 8; i++ {
 		vm.Threads[i].Status = ThreadSleeping
 		vm.Threads[i].Sleep = 100
@@ -316,7 +360,7 @@ func TestCallScriptFullPoolLeak(t *testing.T) {
 		0x10005000, 0, // show to keep alive if succeeds (not taken when leak)
 	}
 	prog := synthProg(code, []string{"base"}, 0, []int{0})
-	vm := NewVM(prog)
+	vm := newTestVM(prog)
 	for i := 0; i < 8; i++ {
 		vm.Threads[i].Status = ThreadSleeping
 		vm.Threads[i].Sleep = 100
@@ -346,7 +390,7 @@ func TestCallScriptFullPoolLeak(t *testing.T) {
 func TestSignalWake(t *testing.T) {
 	// Signal wake: signal kills every thread whose mask intersects popped mask, waking waiters [04 §4.3]
 	prog := synthProg([]uint32{0x10065000}, []string{"base"}, 0, []int{0})
-	vm := NewVM(prog)
+	vm := newTestVM(prog)
 	// Thread1 will be callee with mask 0x02
 	vm.Threads[1].Status = ThreadRunning
 	vm.Threads[1].PC = 0
@@ -372,7 +416,7 @@ func TestSignalWake(t *testing.T) {
 	// so a jump-loop program cannot be used to keep the thread alive).
 	code2 := []uint32{0x10067000, 0x10021001, 7, 0x10023004, 0, 0x10065000} // signal, push 7, pop-static 0, return
 	prog2 := synthProg(code2, []string{"base"}, 1, []int{0})
-	vm2 := NewVM(prog2)
+	vm2 := newTestVM(prog2)
 	vm2.Threads[3].Status = ThreadRunning
 	vm2.Threads[3].PC = 0
 	vm2.Threads[3].SignalMask = 0x04
@@ -390,7 +434,7 @@ func TestSignalWake(t *testing.T) {
 		t.Fatalf("opcode signal incorrectly killed self (static %d want 7)", vm2.getStatic(0))
 	}
 	// Self-kill via signal
-	vm3 := NewVM(prog2)
+	vm3 := newTestVM(prog2)
 	vm3.Threads[3].Status = ThreadRunning
 	vm3.Threads[3].PC = 0
 	vm3.Threads[3].SignalMask = 0x04
@@ -417,7 +461,7 @@ func TestDividePanics(t *testing.T) {
 		0x10034000, // divide 10/0 → thread kill fallback [P2-03][04 §4.3] C14
 		0x10065000,
 	}, []string{"base"}, 0, []int{0})
-	vm := NewVM(prog)
+	vm := newTestVM(prog)
 	vm.Threads[0].Status = ThreadRunning
 	vm.Threads[0].PC = 0
 	vm.Drain(1)
@@ -434,7 +478,7 @@ func TestDividePanics(t *testing.T) {
 		0x10034000,
 		0x10065000,
 	}, []string{"base"}, 0, []int{0})
-	vm2 := NewVM(prog2)
+	vm2 := newTestVM(prog2)
 	vm2.Threads[0].Status = ThreadRunning
 	vm2.Threads[0].PC = 0
 	vm2.Drain(1)
@@ -451,7 +495,7 @@ func TestPieceMoveInterpolate(t *testing.T) {
 		0x10001000, 0, 0, // move piece0 axis0 [04 §4.3]
 		0x10065000, // return (no jump loop: the drain has no iteration cap, C14)
 	}, []string{"base"}, 0, []int{0})
-	vm := NewVM(prog)
+	vm := newTestVM(prog)
 	vm.Threads[0].Status = ThreadRunning
 	vm.Threads[0].PC = 0
 	// Two pushes then move schedules, then interpolate
@@ -484,7 +528,7 @@ func TestPieceMoveInterpolate(t *testing.T) {
 		0x10023004, 0, // pop-static 0 marker
 		0x10065000,
 	}, []string{"base"}, 1, []int{0})
-	vm2 := NewVM(prog2)
+	vm2 := newTestVM(prog2)
 	vm2.Threads[0].Status = ThreadRunning
 	vm2.Threads[0].PC = 0
 	vm2.Drain(1) // move scheduled, piece 0->2, wait starts
@@ -552,7 +596,7 @@ func TestAssetGuardedRealCOB(t *testing.T) {
 		if len(prog.Code) == 0 {
 			continue
 		}
-		vm := NewVM(prog)
+		vm := newTestVM(prog)
 		// Run Create if present [04 §5.1]
 		if pc, ok := prog.Scripts["Create"]; ok {
 			rng.SeedGlobal(1, 1) // deterministic [01 §7.1] I4

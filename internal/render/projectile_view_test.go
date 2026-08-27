@@ -158,3 +158,14 @@ func TestBuildProjectileDrawsVisibilityAndGlobalAbort(t *testing.T) {
 		t.Fatalf("visibility/abort got draws=%+v aborted=%v", draws, aborted)
 	}
 }
+
+// TestBuildProjectileDrawsNilVisibilityFailsClosed verifies that an absent
+// visibility callback emits no projectile draw specs [03 §5.4].
+func TestBuildProjectileDrawsNilVisibilityFailsClosed(t *testing.T) {
+	views := []snapshot.ProjectileView{{Handle: pool.Handle(1), RenderType: RenderTypeBeam}}
+	opts := ProjectileDispatchOptions{Color: func(snapshot.ProjectileView) (int32, int32, bool) { return 1, 0, true }}
+	draws, aborted := BuildProjectileDraws(views, 1, nil, nil, opts)
+	if aborted || len(draws) != 0 {
+		t.Fatalf("nil visibility must fail closed: draws=%v aborted=%v", draws, aborted)
+	}
+}

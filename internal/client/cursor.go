@@ -13,6 +13,7 @@ package client
 // sequence [07 §8].
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -62,21 +63,27 @@ func cursorProviders(fs vfs.FSOps) string {
 	return ""
 }
 
-// LoadCursors opens the cursor GAF root and resolves the handle array [07 §8].
-// A missing cursor GAF is degradable: the caller retains the OS cursor and
-// the frame loop nil-guards every cursor call [07 §8]. The error includes a
-// provider-aware diagnostic (logical path + providers searched) [AGENTS.md §Diagnostics].
-// A missing entry leaves its slot nil; the caller falls back to cursornormal.
+// LoadCursors opens the mandatory cursor GAF root and resolves the complete
+// handle array [07 §8]. The error includes a provider-aware diagnostic
+// (logical path + providers searched) [AGENTS.md §Diagnostics].
 func LoadCursors(fs vfs.FSOps) (*Cursors, error) {
 	gaf, err := formats.LoadGAFFile(fs, CursorGAFPath)
 	if err != nil {
-		return nil, fmt.Errorf("client: cursors: logical path %s, providers searched [%s]: %w", CursorGAFPath, cursorProviders(fs), err)
+		return nil, fmt.Errorf("nanolathe: load retail cursor GAF: logical path %s, providers searched [%s], expected retail cursor GAF: %w", CursorGAFPath, cursorProviders(fs), err)
 	}
 	cs := &Cursors{gaf: gaf}
 	for idx := 1; idx < render.CursorCount; idx++ {
-		if e, ok := render.ResolveCursorEntry(gaf, idx); ok {
-			cs.entries[idx] = e
+		e, ok := render.ResolveCursorEntry(gaf, idx)
+		if !ok || e == nil || len(e.Frames) == 0 {
+			name := render.CursorName(idx)
+			// TODO(question): retail behavior for a missing or zero-frame named
+			// cursor entry is not established; settle it with an executable trace
+			// and a deliberately malformed cursor GAF fixture before relaxing this
+			// mandatory validation.
+			cause := errors.New("cursor entry is missing or has no frames")
+			return nil, fmt.Errorf("nanolathe: load retail cursor entry: logical path %s, providers searched [%s], expected cursor GAF entry %q: %w", CursorGAFPath, cursorProviders(fs), name, cause)
 		}
+		cs.entries[idx] = e
 	}
 	cs.SetIndex(render.CursorNormal)
 	return cs, nil
@@ -91,23 +98,19 @@ func (cs *Cursors) Index() int {
 }
 
 // SetIndex installs a cursor shape, diffing against the shape already shown so
-// an unchanged index does not restart the sequence [07 §8]. An index with no
-// resolved entry falls back to cursornormal; if that is missing too the cursor
-// is left uninstalled and draws nothing.
+// an unchanged index does not restart the sequence [07 §8]. LoadCursors
+// validates every named entry before a Cursors value can be installed, so an
+// invalid index is ignored rather than selecting a different shape.
 func (cs *Cursors) SetIndex(idx int) {
 	if cs == nil || idx == cs.idx {
 		return
 	}
 	if !render.IsValidCursorIndex(idx) || cs.entries[idx] == nil {
-		if idx == render.CursorNormal || cs.entries[render.CursorNormal] == nil {
-			cs.idx = 0
-			cs.play.Clear()
-			return
-		}
-		idx = render.CursorNormal
-		if idx == cs.idx {
-			return
-		}
+		// TODO(question): retail handling of an out-of-range or slot-zero
+		// cursor index is not established; settle it with an executable trace.
+		// Placeholder: ignore the write because all authored indices are validated
+		// during LoadCursors and no alternate shape is established here.
+		return
 	}
 	cs.idx = idx
 	// Cursor sequences loop: retail never lets the pointer go blank at the end
@@ -139,8 +142,8 @@ func (cs *Cursors) Frame() *formats.GAFFrame {
 	return f
 }
 
-// SetCursors installs the software cursor. Passing nil removes it and the
-// window system's own pointer is shown again.
+// SetCursors installs the software cursor. Windowed clients keep the software
+// pointer as their only pointer once it has been installed [07 §8].
 func (c *Client) SetCursors(cs *Cursors) {
 	c.cursors = cs
 	c.applyCursorMode()
@@ -155,7 +158,6 @@ func (c *Client) Cursors() *Cursors { return c.cursors }
 // The frame's authored x_offset/y_offset is the hotspot: that pixel lands on
 // the pointer, so the blit origin is the pointer minus the offset
 // [07 §8][fmt gaf "Placement offsets"].
-// When cursor assets are missing the OS cursor remains and this is a no-op [07 §8].
 func (c *Client) drawCursor() {
 	if c == nil || c.cursors == nil {
 		return

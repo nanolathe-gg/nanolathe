@@ -221,7 +221,7 @@ func (c *Client) PlayPositional(alias string, pos [3]numeric.Fixed, isAudible fu
 	if c == nil || alias == "" {
 		return audio.Pan{}, 0, false
 	}
-	if isAudible != nil && !isAudible(pos) {
+	if isAudible == nil || !isAudible(pos) {
 		return audio.Pan{}, 0, false
 	}
 	var pan audio.Pan

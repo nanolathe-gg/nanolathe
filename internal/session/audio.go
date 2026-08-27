@@ -267,16 +267,24 @@ func (s *Session) EmitCancelDestruct(unit pool.Handle) bool {
 // [03 §3.1]. Off-map is silent. Presentation-only, uses no Sim RNG [I4].
 func (s *Session) IsAudibleAt(pos [3]numeric.Fixed) bool {
 	if s == nil || s.Vis == nil {
-		return true // no vis: assume audible for fixtures degraded [P1-02 §2.2]
+		return false // positional audio requires the session visibility service [03 §8.3]
 	}
 	cx, cz := audio.CellFromWorld2D(pos)
 	w, h := s.Vis.GridDimensions()
-	if w == 0 || h == 0 {
-		return true
+	if w <= 0 || h <= 0 {
+		return false
 	}
 	wordMask, byteGrids := s.Vis.GridSnapshot()
 	local := localPlayerForSession(s)
 	mode := audio.VisibilityMode(s.Vis.Mode() & 0x02) // bit1 chooses byte vs word [03 §3.1][03 §8.3]
+	gridLen := int(w) * int(h)
+	if mode&audio.ModeExplored != 0 {
+		if local < 0 || local >= len(byteGrids) || len(byteGrids[local]) != gridLen {
+			return false
+		}
+	} else if len(wordMask) != gridLen {
+		return false
+	}
 	return audio.IsAudible(cx, cz, local, mode, wordMask, byteGrids, int(w), int(h))
 }
 
@@ -544,13 +552,15 @@ func (s *Session) PlayBriefing() bool {
 		alias = audio.BriefingAlias(g, b, n, h)
 	}
 	if alias != "" {
-		if _, err := s.loadAudioAlias(alias); err == nil {
-			// Briefing alias available; queue as unitcomplete? For now play
-			// via EmitPositional at origin (non-positional briefing).
-			// Use world origin as pos; audible check trivially passes when no Vis.
-			pos := [3]numeric.Fixed{0, 0, 0}
-			_, _, ok := s.EmitPositional(alias, pos)
-			return ok
+		if sample, err := s.loadAudioAlias(alias); err == nil {
+			// Briefing audio has no world position: play at unity volume with no
+			// pan, independently of the battle visibility service [03 §8.4].
+			if sample != nil {
+				if be := audio.GlobalBackend(); be != nil {
+					_ = be.PlaySample(sample, 1.0, 0)
+				}
+			}
+			return true
 		}
 	}
 	// CD fallback via music controller [03 §8.4].

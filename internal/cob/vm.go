@@ -92,7 +92,7 @@ type VM struct {
 	simRng      *rng.Simulation
 	portFuncs   map[Port]func(args []int32) int32   // minimal hook for WU-06-7; nil means default 0 [04 §4.4]
 	sfxSink     SFXSink                             // presentation-only sink for emit-sfx [GAP T15] C19; nil discards
-	sfxVisible  func(piece int, sfxType int32) bool // visibility gate for emit-sfx [GAP T15] C19; nil means always visible in tests
+	sfxVisible  func(piece int, sfxType int32) bool // visibility gate for emit-sfx [GAP T15] C19; nil fails closed
 	diagnostics []string                            // [P2-03] fallback diagnostics (divide, overflow, corrupt) not fatal
 
 	lastStarted     int      // last thread allocated by Start/StartByName, -1 if none [06 §3.3] ON-04 Aim dispatch
@@ -295,9 +295,9 @@ func (v *VM) BindPort(p Port, fn func(args []int32) int32) {
 func (v *VM) SetSFXSink(s SFXSink) { v.sfxSink = s }
 
 // SetSFXVisible installs the visibility gate for emit-sfx [GAP T15] C19.
-// When nil the sink is considered always visible (tests). When set, the
-// gate is called with (piece, sfxType) and must return true for the effect
-// to be emitted.
+// When nil, presentation emission is suppressed (the missing dependency fails
+// closed). When set, the gate is called with (piece, sfxType) and must return
+// true for the effect to be emitted. The gate affects presentation only.
 func (v *VM) SetSFXVisible(fn func(piece int, sfxType int32) bool) { v.sfxVisible = fn }
 
 // SetSimulationRNG binds the session-owned simulation stream to this VM. COB
@@ -1223,14 +1223,11 @@ func (v *VM) runThread(idx int) {
 			// Classification is SFXKind via ClassifySFX in ports.go [GAP T15] C19.
 			if v.sfxSink != nil {
 				kind := ClassifySFX(effectType) // [GAP T15] C19
-				if kind != SFXIgnored {
-					visible := true
-					if v.sfxVisible != nil {
-						visible = v.sfxVisible(piece, effectType)
-					}
-					if visible {
-						v.sfxSink.EmitSFX(piece, effectType, kind) // [GAP T15] C19
-					}
+				// A visibility dependency is required for presentation emission;
+				// absent visibility fails closed. Classification and operand
+				// consumption remain independent of the presentation gate.
+				if kind != SFXIgnored && v.sfxVisible != nil && v.sfxVisible(piece, effectType) {
+					v.sfxSink.EmitSFX(piece, effectType, kind) // [GAP T15] C19
 				}
 			}
 			t.PC += 2

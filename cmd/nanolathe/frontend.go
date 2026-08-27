@@ -217,13 +217,13 @@ func runGameShell(opts Options, cs *contentSet) error {
 	if shell.font != nil {
 		cl.SetFNT(shell.font)
 	}
-	// Software cursor [07 §8]. A missing cursor GAF is not fatal: the shell
-	// falls back to the window system's own pointer.
-	if cursors, cerr := client.LoadCursors(cs.fs); cerr == nil {
-		cl.SetCursors(cursors)
-	} else {
-		fmt.Fprintf(os.Stderr, "nanolathe: %v\n", cerr)
+	// Software cursor [07 §8]. The cursor GAF is mandatory for the windowed
+	// frontend, and installation happens before entering Ebitengine's loop.
+	cursors, cerr := client.LoadCursors(cs.fs)
+	if cerr != nil {
+		return cerr
 	}
+	cl.SetCursors(cursors)
 	cl.Overlay = func(c *client.Client) { shell.draw(c) }
 	fmt.Fprintf(os.Stderr, "nanolathe: retail frontend: %d skirmish maps\n", len(maps))
 	return client.RunGame(cl)
@@ -375,13 +375,12 @@ func (g *gameShell) step(delta float64, cl *client.Client) {
 		// The transition that blocks on catalog and map loading installs the
 		// hourglass shape [07 §8]; the frontend's own idle shape returns with
 		// the next menu.
-		if cursors := cl.Cursors(); cursors != nil {
-			cursors.SetIndex(render.CursorHourglass)
-			g.cursorAccum += delta * 30
-			if n := int(g.cursorAccum); n > 0 {
-				cursors.Step(n)
-				g.cursorAccum -= float64(n)
-			}
+		cursors := cl.Cursors()
+		cursors.SetIndex(render.CursorHourglass)
+		g.cursorAccum += delta * 30
+		if n := int(g.cursorAccum); n > 0 {
+			cursors.Step(n)
+			g.cursorAccum -= float64(n)
 		}
 		g.stepLoading(delta)
 	default:
@@ -389,13 +388,12 @@ func (g *gameShell) step(delta float64, cl *client.Client) {
 		// installed by the transition that blocks on catalog and map loading
 		// [07 §8]. Menu animation still advances at the renderer's cadence so a
 		// visible hourglass keeps turning.
-		if cursors := cl.Cursors(); cursors != nil {
-			cursors.SetIndex(render.CursorNormal)
-			g.cursorAccum += delta * 30
-			if n := int(g.cursorAccum); n > 0 {
-				cursors.Step(n)
-				g.cursorAccum -= float64(n)
-			}
+		cursors := cl.Cursors()
+		cursors.SetIndex(render.CursorNormal)
+		g.cursorAccum += delta * 30
+		if n := int(g.cursorAccum); n > 0 {
+			cursors.Step(n)
+			g.cursorAccum -= float64(n)
 		}
 		g.menuInput(cl)
 	}

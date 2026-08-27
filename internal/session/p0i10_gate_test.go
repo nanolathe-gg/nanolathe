@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/clock"
-	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -14,7 +13,6 @@ import (
 func TestP0I10_LoadingCannotTick(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Kernel:   &kernel.Kernel{},
 		Snapshot: &snapshot.Buffer{},
 		Units:    units.New(10, nil),
 		State:    StateLoading,
@@ -44,7 +42,6 @@ func TestP0I10_LoadingCannotTick(t *testing.T) {
 func TestP0I10_LoadingCompletionDeferred(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Kernel:   &kernel.Kernel{},
 		Snapshot: &snapshot.Buffer{},
 		State:    StateLoading,
 	}
@@ -79,7 +76,6 @@ func TestP0I10_LoadingCompletionDeferred(t *testing.T) {
 func TestP0I10_VictoryReachesPostBattleExactlyOnce(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Kernel:   &kernel.Kernel{},
 		Snapshot: &snapshot.Buffer{},
 		Units:    units.New(10, nil),
 		State:    StateBattle,
@@ -139,7 +135,6 @@ func TestP0I10_RetryReloadsSameMission(t *testing.T) {
 	// Use a minimal mission with one feature/unit not needed for state check.
 	s := &Session{
 		Clock:   &clock.State{Requested: 10, Active: 10},
-		Kernel:  &kernel.Kernel{},
 		Mission: m,
 		State:   StatePostBattle,
 		Latch:   NewEndLatch(),
@@ -177,7 +172,6 @@ func TestP0I10_ContinueWritesProgress(t *testing.T) {
 	m := &mission.Mission{Type: mission.TypeCampaign}
 	s := &Session{
 		Clock:        &clock.State{Requested: 10, Active: 10},
-		Kernel:       &kernel.Kernel{},
 		Mission:      m,
 		State:        StatePostBattle,
 		Latch:        NewEndLatch(),
@@ -276,7 +270,6 @@ func TestP0I10_TeardownReleasesInDocumentedOrder(t *testing.T) {
 func TestP0I10_AbortTransitionsThroughRouter(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Kernel:   &kernel.Kernel{},
 		Snapshot: &snapshot.Buffer{},
 		Units:    units.New(10, nil),
 		State:    StateBattle,

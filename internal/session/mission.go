@@ -10,7 +10,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
-	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -96,7 +95,6 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 		World:    terrain,
 		Mission:  m,
 		Clock:    &clock.State{Requested: 10, Active: 10},
-		Kernel:   &kernel.Kernel{},
 		Snapshot: &snapshot.Buffer{},
 		Units:    unitsWorld,
 		Econ:     &economy.Service{},
@@ -375,9 +373,8 @@ func BattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
 	// InitialMission runs ONCE on the loading worker after ALL mission units
 	// exist [04 §3.6] C9 — here, between unit placement and the start barrier.
 	// It queues orders; from the next tick the ordinary pump consumes them.
-	// TODO(question): the dedicated kernel registration site for the trigger
-	// poll and this interpreter's exact position in the retail loading pass
-	// are inferred from vtable layout ([GAP T10] residual).
+	// TODO(question): this interpreter's exact position in the retail loading
+	// pass is inferred from vtable layout ([GAP T10] residual).
 	mission.RunInitialMissionsWithCatalog(m, s.Units, s.Catalog)
 	// Wire cargo/transport from i-verb immediate attach [04 §3.6] P0-04.
 	wireMissionCargo(s, m)

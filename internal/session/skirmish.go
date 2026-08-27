@@ -12,7 +12,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
-	"github.com/nanolathe/nanolathe/internal/kernel"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -450,7 +449,6 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		Mission:    m,
 		Skirmish:   cfg,
 		Clock:      &clock.State{Requested: 10, Active: 10},
-		Kernel:     &kernel.Kernel{},
 		Snapshot:   &snapshot.Buffer{},
 		Units:      unitsWorld,
 		Econ:       &economy.Service{},
@@ -656,7 +654,7 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	// destruction) [08 "Victory and defeat triggers"][08 "Skirmish configuration"]
 	// CommanderDeath==1. Countdown via EndLatch [P1-01 §2.2] before visible.
 	// Victory evaluation runs inside authoritativeTick (loop.go) after ledger
-	// cleanup [RX-08][ON-09]; the old kernel-phase registration is retired.
+	// cleanup [RX-08][ON-09]; victory evaluation is part of the direct session tick.
 	// TODO(question): CommanderDeath==0 annihilation mode not researched; defer [08 "Skirmish configuration"].
 	// 12. transition through state machine [08 "Session states"] C3
 	if err := s.SelectForGametype(GametypeMultiplayer); err != nil {
@@ -757,7 +755,6 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		Mission:    m,
 		Skirmish:   cfg,
 		Clock:      &clock.State{Requested: 10, Active: 10},
-		Kernel:     &kernel.Kernel{},
 		Snapshot:   &snapshot.Buffer{},
 		Units:      unitsWorld,
 		Econ:       &economy.Service{},
@@ -960,7 +957,7 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		}
 	}
 	s.RegisterAll()
-	// Victory evaluation runs inside authoritativeTick [RX-08]; no phase registration.
+	// Victory evaluation runs inside authoritativeTick [RX-08].
 	_ = s.SelectForGametype(GametypeMultiplayer)
 	return s, nil
 }
@@ -1394,7 +1391,6 @@ func skirmishGrantResourcesDirect(s *Session, cfg SkirmishConfig) {
 // Ensure imports are used.
 var (
 	_ = clock.State{}
-	_ = kernel.Kernel{}
 	_ = snapshot.Buffer{}
 	_ = world.NewWind
 	_ = numeric.Fixed(0)

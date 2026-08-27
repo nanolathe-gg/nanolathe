@@ -3,11 +3,30 @@ package client
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/vfs"
 )
+
+func TestMissingCursorRootIsExplicitError(t *testing.T) {
+	fs := vfs.New()
+	_, err := LoadCursors(fs)
+	if err == nil {
+		t.Fatal("expected LoadCursors to fail on empty FS")
+	}
+	for _, want := range []string{
+		"nanolathe: load retail cursor GAF",
+		"logical path anims/cursors.gaf",
+		"providers searched []",
+		"expected retail cursor GAF",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("cursor error missing %q: %v", want, err)
+		}
+	}
+}
 
 // mountRetail opens the reference install, or skips.
 func mountRetail(t *testing.T) *vfs.FS {
@@ -58,10 +77,10 @@ func TestCursorsResolveAndSwap(t *testing.T) {
 	if cs.play.Idx != before {
 		t.Fatalf("re-selecting the shown index restarted playback: %d → %d [07 §8]", before, cs.play.Idx)
 	}
-	// An unresolvable index falls back to cursornormal rather than blanking.
+	// An invalid runtime index does not select another cursor shape.
 	cs.SetIndex(render.CursorCount + 5)
-	if cs.Index() != render.CursorNormal {
-		t.Fatalf("out-of-range index gave %d want cursornormal", cs.Index())
+	if cs.Index() != render.CursorAttack {
+		t.Fatalf("out-of-range index gave %d want unchanged attack", cs.Index())
 	}
 }
 

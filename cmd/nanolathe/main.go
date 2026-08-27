@@ -1,6 +1,4 @@
-// Command nanolathe runs the engine. Phase 0 boots headless: it resolves a
-// retail install, reports what it found, and fails with a diagnostic naming
-// the missing product and every provider searched.
+// Command nanolathe runs the retail engine.
 package main
 
 import (
@@ -34,57 +32,6 @@ func runOptions(opts Options, out, errOut *os.File) int {
 		return 1
 	}
 	return 0
-}
-
-// wantsViewer is shared by run and the Darwin entry point. On macOS the latter
-// must start CocoaRunApp on the process main thread before Ebitengine creates a
-// window; headless and dump commands must not enter the AppKit run loop.
-func wantsViewer(opts Options) bool {
-	return !opts.Headless && opts.Map != "" && opts.Dump == ""
-}
-
-// shouldRunShot reports whether run() will dispatch to runShot [P5].
-func shouldRunShot(opts Options) bool {
-	return opts.Shot != ""
-}
-
-// shouldRunHeadlessSession reports whether run() will dispatch to
-// runSessionHeadless [P5][P6]. It mirrors the condition in run() after the
-// shot and load checks: shot takes precedence over headless, and Mission is
-// included alongside Map.
-func shouldRunHeadlessSession(opts Options) bool {
-	if opts.Shot != "" {
-		return false
-	}
-	if opts.Headless && opts.Load != "" {
-		return false
-	}
-	return opts.Headless && (opts.Map != "" || opts.Mission != "") && opts.Dump == ""
-}
-
-// dispatchKind is the testable form of run()'s branch ordering [P5][P6].
-// It returns the name of the branch run() would take for opts, without
-// performing I/O.
-func dispatchKind(opts Options) string {
-	if opts.Dump == "route" {
-		return "route"
-	}
-	if opts.Headless && opts.Load != "" {
-		return "load"
-	}
-	if opts.Shot != "" {
-		return "shot"
-	}
-	if opts.Headless && (opts.Map != "" || opts.Mission != "") && opts.Dump == "" {
-		return "headless"
-	}
-	if !opts.Headless && opts.Dump == "" {
-		return "shell"
-	}
-	if wantsViewer(opts) {
-		return "viewer"
-	}
-	return "report"
 }
 
 // seedsFor resolves the two stream seeds.
@@ -121,29 +68,14 @@ func run(opts Options, out *os.File) error {
 	rng.SeedGlobal(simSeed, crtSeed)
 	fmt.Fprintf(out, "seed: sim=%d crt=%d\n", simSeed, crtSeed)
 
-	// --dump route: headless route diagnostic [PLAN_07] task C14–C16
-	if opts.Dump == "route" {
-		if opts.Map == "" {
-			return fmt.Errorf("nanolathe: --dump route requires --map")
-		}
-		return runGate2RouteDump(opts, content, out)
-	}
-
 	// Native save/load: headless continuation through internal/save's StateV1
 	// box [PLAN_14 C18]. --load wins over a fresh skirmish.
 	if opts.Headless && opts.Load != "" {
 		return runLoadAndContinue(opts, content, out)
 	}
-	// Programmatic screenshot: compose frames headless and write a PNG.
-	// Must precede headless-session branch: --headless --map shadows --shot
-	// was unreachable [P5]. Shot path handles map/session itself via runShot.
-	if opts.Shot != "" {
-		return runShot(opts, content, out)
-	}
 	// Headless --map/--mission runs the REAL integrated session per Gate 5 [PLAN_14]:
 	// session.NewSkirmish / NewMission → Step loop → deterministic summary. (--save rides it.)
-	// Include Mission in dispatch: --headless --mission was silently falling through to report [P6].
-	if opts.Headless && (opts.Map != "" || opts.Mission != "") && opts.Dump == "" {
+	if opts.Headless && (opts.Map != "" || opts.Mission != "") {
 		if err := runSessionHeadless(opts, content, out); err != nil {
 			return err
 		}
@@ -151,9 +83,9 @@ func run(opts Options, out *os.File) error {
 	}
 	// Windowed play goes through the game shell (menus → battle view);
 	// --map skips menus and enters the battle directly [PLAN_14].
-	if !opts.Headless && opts.Dump == "" {
+	if !opts.Headless {
 		return runGameShell(opts, content)
 	}
 
-	return report(opts, content, out)
+	return fmt.Errorf("nanolathe: headless mode requires --map or --mission")
 }

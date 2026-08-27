@@ -14,6 +14,14 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
+// allVisibleService supplies an explicit, valid visibility dependency for
+// tests whose subject is weapon or VM behavior rather than LOS. Mode zero is
+// the established no-history/no-current mode, whose initialized word mask
+// admits every in-map point.
+func allVisibleService(terrain *world.Terrain) *visibility.Service {
+	return visibility.New(terrain, 0)
+}
+
 // TestRS08_ThreeAimSlotsOneDrain verifies exactly one VM drain per unit visit [04 §4.2][GAP T15][I7].
 func TestRS08_ThreeAimSlotsOneDrain(t *testing.T) {
 	w, terrain, shooter, target := newTestWorldAndUnits(t)
@@ -223,9 +231,9 @@ func TestRS08_CandidateFacts(t *testing.T) {
 	validH, _ := w.Create(defValid, 2, numeric.FixedFromInt(int64(30)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(30)))
 	validUnit := w.Unit(validH)
 	_ = validUnit
-	// visible service with empty grid: all points visible? Use nil vis to bypass LOS for this test, but we want to test cloak/underwater filtering before vis
-	// Our acquire uses isHostile + isCloaked + isUnderwater before vis, so those should be tested even with nil vis
-	h, ok := acquireTargetForSlot(shooter, shooter.SlotAt(0), 0, w, nil, terrain, nil, econ)
+	// Use an explicit valid visibility service so this test exercises the
+	// hostility, cloak, underwater, and category filters independently of LOS.
+	h, ok := acquireTargetForSlot(shooter, shooter.SlotAt(0), 0, w, allVisibleService(terrain), terrain, nil, econ)
 	if !ok {
 		t.Fatalf("acquire should succeed with valid enemy, but got not ok")
 	}
@@ -257,7 +265,7 @@ func TestRS08_CandidateFacts(t *testing.T) {
 	prefH, _ := w2.Create(defPref, 2, numeric.FixedFromInt(int64(110)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(10)))
 	fallH, _ := w2.Create(defFall, 2, numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(10)))
 	// Need econ same
-	h2, ok2 := acquireTargetForSlot(sh2, sh2.SlotAt(0), 0, w2, nil, terrain2, nil, econ)
+	h2, ok2 := acquireTargetForSlot(sh2, sh2.SlotAt(0), 0, w2, allVisibleService(terrain2), terrain2, nil, econ)
 	if !ok2 {
 		t.Fatalf("category pref acquire failed")
 	}
@@ -289,7 +297,7 @@ func TestRS08_SamplingBoundary50_51(t *testing.T) {
 	acq50 := Acquisition{
 		ShooterX: shooterX, ShooterZ: shooterZ, ShooterY: numeric.FixedFromInt(int64(10)),
 		SeaLevel: numeric.FixedFromInt(int64(0)), Range: weaponRange, BadMask: 0,
-		RNG: nil,
+		RNG: nil, Visible: func(Candidate) bool { return true },
 	}
 	cands50 := buildCandidates(50)
 	r50 := rng.NewSimulation(42)
@@ -309,7 +317,7 @@ func TestRS08_SamplingBoundary50_51(t *testing.T) {
 	acq51 := Acquisition{
 		ShooterX: shooterX, ShooterZ: shooterZ, ShooterY: numeric.FixedFromInt(int64(10)),
 		SeaLevel: numeric.FixedFromInt(int64(0)), Range: weaponRange, BadMask: 0,
-		RNG: nil,
+		RNG: nil, Visible: func(Candidate) bool { return true },
 	}
 	cands51 := buildCandidates(51)
 	r51 := rng.NewSimulation(42)
@@ -352,8 +360,9 @@ func TestRS08_NaturalFireImpactDeath(t *testing.T) {
 	cat.RebuildWeaponIndex()
 	var svc Service
 	rSim := rng.NewSimulation(123)
-	// Need visibility: bypass with nil vis (always visible)
-	sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, &rSim, nil)
+	// Supply an explicit valid visibility service; this test is about natural
+	// projectile impact, not an absent LOS dependency.
+	sum := svc.StepWeaponsForUnit(shooter, 1, w, allVisibleService(terrain), terrain, nil, cat, &rSim, nil)
 	if sum.Fired == 0 {
 		t.Fatalf("expected fire, got %d", sum.Fired)
 	}
@@ -410,13 +419,14 @@ func TestRS08_VisibilityCanonical(t *testing.T) {
 			econ.Players[i].Allies[j] = (i == j)
 		}
 	}
-	// With nil vis, LOS is bypassed ( Visible == nil returns true in directlyVisible) [06 §3.1] so acquire should succeed via hostility+category only
-	h, ok := acquireTargetForSlot(shooter, shooter.SlotAt(0), 0, w, nil, terrain, nil, econ)
+	// An explicit valid visibility service admits the nearby enemy; the later
+	// empty service verifies that acquisition still routes through LOS.
+	h, ok := acquireTargetForSlot(shooter, shooter.SlotAt(0), 0, w, allVisibleService(terrain), terrain, nil, econ)
 	if !ok {
-		t.Fatalf("acquire with nil vis should succeed via hostility/category, got not ok")
+		t.Fatalf("acquire with visible service should succeed via hostility/category, got not ok")
 	}
 	if h != enemyVisibleH && h != 0 {
-		// Accept any valid enemy when vis nil, but ensure it's one of the two enemies
+		// Accept either valid enemy handle only when the explicit service admits it.
 	}
 	// Now with a vis service that has no coverage (worldMask zero, history enabled), visible check should fail and acquire should find no candidate, demonstrating vis routing
 	vis := visibility.New(terrain, visibility.ModeHistoryEnabled)
@@ -426,6 +436,10 @@ func TestRS08_VisibilityCanonical(t *testing.T) {
 		t.Fatalf("with empty vis (no coverage) acquire should fail due to LOS, but got h %d", h2)
 	}
 	_ = h
+	// A nil visibility service cannot authorize a hostile acquisition.
+	if _, ok := acquireTargetForSlot(shooter, shooter.SlotAt(0), 0, w, nil, terrain, nil, econ); ok {
+		t.Fatalf("acquire with nil visibility should fail closed")
+	}
 }
 
 func TestRS08_MissingScriptNoVMNeverFiresAgain(t *testing.T) {

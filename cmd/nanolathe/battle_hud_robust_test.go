@@ -112,59 +112,15 @@ func TestBattleHUDLoadsARMAndCORE(t *testing.T) {
 			// with retail assets no coropt exists, so CORE options should be nil (degradable).
 			// If it's non-nil, it means we fell back to ARM — which violates the
 			// "do not load ARM-specific options unconditionally for CORE" rule.
-			// Accept nil only for CORE.
+			// CORE has no ARM-specific options window in the retail asset set.
 			t.Fatalf("CORE side should not have ARM options window loaded unconditionally; got %v", hud.optionsWin.Name)
 		}
 	}
 }
 
-// TestMissingCursorDoesNotPanic checks nil-guard every cursor call [07 §8].
-// When cursor assets are missing the OS cursor is retained and the frame loop
-// previously dereferenced cl.Cursors() unconditionally.
-func TestMissingCursorDoesNotPanic(t *testing.T) {
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("missing cursor panicked: %v", r)
-		}
-	}()
-	// Headless client with no cursors installed.
-	cl, err := client.New(client.Options{Width: 64, Height: 64, Headless: true})
-	if err != nil {
-		t.Fatalf("New client: %v", err)
-	}
-	if cl.Cursors() != nil {
-		t.Fatal("expected nil cursors initially")
-	}
-	// drawCursor, Step, SetIndex must be nil-guarded.
-	cl.ComposeFrame() // internally calls drawCursor with nil cursors
-	// Direct Step on nil cursor via battle path: simulate viewerStep's Step call.
-	// viewerStep does: if cursors := cl.Cursors(); cursors != nil { cursors.Step(1) }
-	// Verify that pattern does not panic when cursors nil.
-	if cursors := cl.Cursors(); cursors != nil {
-		cursors.Step(1)
-	}
-	// Also test client.LoadCursors failure produces provider diagnostic but no panic.
-	fs := vfs.New()
-	// Empty FS has no providers; still should return error with diagnostic, not panic.
-	if _, err := client.LoadCursors(fs); err == nil {
-		t.Fatal("expected cursors load to fail on empty FS")
-	} else if !strings.Contains(err.Error(), "logical path anims/cursors.gaf") || !strings.Contains(err.Error(), "providers searched") {
-		t.Fatalf("cursor error missing diagnostic: %v", err)
-	}
-	// Test battleSession viewerStep nil-guard with synthetic HUD.
-	opts := Options{Map: "ashap plateau", Seed: 1}
-	_ = opts
-	// Use a minimal battleSession that has no cursors.
-	b := &battleSession{sess: &session.Session{}}
-	b.sess = &session.Session{}
-	// Pass client with nil cursors — viewerStep should not panic (we already tested compose).
-	// We don't have a full session, but updateCursor should handle nil cursors.
-	b.updateCursor(cl) // should be no-op
-}
-
-// TestMissingOptionalStillEntersBattle verifies that a missing optional
-// pause/title/options resource does not prevent battle entry [07 §8][07 §11].
-// Valid core battle reaches first frame even when optional modal/cursor resource unavailable.
+// TestMissingOptionalStillEntersBattle verifies that missing optional
+// pause/title/options modal resources do not prevent battle entry [07 §8][07 §11].
+// Valid core battle reaches its first frame while those optional resources are unavailable.
 func TestMissingOptionalStillEntersBattle(t *testing.T) {
 	root := retailRootForRobust(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
@@ -182,7 +138,6 @@ func TestMissingOptionalStillEntersBattle(t *testing.T) {
 		{"guis/exitmenu.gui"},
 		{"guis/yesorno.gui"},
 		{"anims/hattfont12.gaf"},
-		{"anims/cursors.gaf"},
 	} {
 		hfs := newHiddenFS(base, providers, hide...)
 		// Need a session for each test.
@@ -214,16 +169,6 @@ func TestMissingOptionalStillEntersBattle(t *testing.T) {
 		cl.SetPalette(pal)
 		cl.SetFNT(hud.console)
 		cl.SetModelFS(cs.fs)
-		// Cursors missing case should still allow frame.
-		if _, cerr := client.LoadCursors(hfs); cerr == nil {
-			// If cursors somehow loaded despite hide, still test nil case.
-		} else {
-			// Expected to fail for cursors hide; ensure diagnostic.
-			if !strings.Contains(cerr.Error(), "logical path anims/cursors.gaf") {
-				t.Fatalf("cursor hide diagnostic missing: %v", cerr)
-			}
-		}
-		// Don't set cursors to simulate missing cursor.
 		b := &battleSession{sess: sess, cat: sess.Catalog, cam: nil, hud: hud}
 		cl.Overlay = func(c *client.Client) { hud.draw(c, b) }
 		// Advance one tick and compose — should not panic.
