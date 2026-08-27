@@ -1017,8 +1017,8 @@ func (v *VM) runThread(idx int) {
 			}
 			piece := int(v.prog.Code[t.PC+1])
 			axis := int(v.prog.Code[t.PC+2])
-			accel, _ := t.stackPop() // top accel [fmt cob] "spin ... speed S accelerate A" pushes speed then accel
-			speed, _ := t.stackPop()
+			speed, _ := t.stackPop() // top speed [fmt cob] "spin ... speed S accelerate A" pushes accel then speed (retail order) [04 §4.3]
+			accel, _ := t.stackPop()
 			if piece < 0 || piece >= len(v.anims) || axis < 0 || axis >= 3 {
 				v.killThread(idx)
 				return

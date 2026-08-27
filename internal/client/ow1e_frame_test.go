@@ -26,11 +26,11 @@ func TestOW1F_ProjectileVisibleUsesPublishedGrid(t *testing.T) {
 }
 
 func TestOW1F_ProjectileDispatchOptionsBeamNotSuppressed(t *testing.T) {
-	opts := projectileDispatchOptions()
-	v := snapshot.ProjectileView{RenderType: render.RenderTypeBeam, PaletteRow: 13}
+	opts := (&Client{}).projectileDispatchOptions()
+	v := snapshot.ProjectileView{RenderType: render.RenderTypeBeam, PrimaryColor: 13, HasPrimaryColor: true}
 	d, aborted := render.BuildProjectileDraws([]snapshot.ProjectileView{v}, 0, nil, nil, opts)
 	if aborted || len(d) != 1 || d[0].Kind != "beam" {
-		t.Fatalf("beam dispatch with fallback color failed: draws=%+v aborted=%v", d, aborted)
+		t.Fatalf("beam dispatch with published color failed: draws=%+v aborted=%v", d, aborted)
 	}
 	if d[0].Color != 13 {
 		t.Fatalf("beam color from palette row want 13 got %d", d[0].Color)
@@ -40,7 +40,7 @@ func TestOW1F_ProjectileDispatchOptionsBeamNotSuppressed(t *testing.T) {
 func TestOW1E_EffectDrawOptionsNeverInventsArtwork(t *testing.T) {
 	// effectDrawOptions returns nil ResolveFrame, so any graphic stays unresolved and is skipped, not invented.
 	c := &Client{}
-	opts := effectDrawOptions(c)
+	opts := c.effectDrawOptions()
 	if opts.ResolveFrame != nil {
 		if _, ok := opts.ResolveFrame(snapshot.EffectView{Graphic: "explosion"}, 0); ok {
 			t.Fatal("effect artwork should not be invented")

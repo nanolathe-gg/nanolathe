@@ -40,6 +40,25 @@ func (s *Session) presentationClock() *presentation.Clock {
 	return s.audioClock
 }
 
+// PresentationClock returns the session-local presentation clock shared by
+// the battle client and audio services. It is intentionally separate from the
+// authoritative simulation clock [03 §1][I6].
+func (s *Session) PresentationClock() *presentation.Clock {
+	if s == nil {
+		return nil
+	}
+	if s.audioClock == nil {
+		s.audioClock = &presentation.Clock{}
+	}
+	return s.audioClock
+}
+
+// PresentationCRT returns the session-owned CRT wrapper shared by all
+// presentation consumers. It never creates a second stream [01 §7.2][I4].
+func (s *Session) PresentationCRT() *presentation.CRTRandom {
+	return s.sharedAudioCRT()
+}
+
 // InitAudio creates the presentation audio queue/cache/music for the session
 // [03 §8.3][03 §8.4] C16 C18 C20. It is presentation-only and uses the CRT
 // stream for variant draws [03 §8.3] C19 [I4]; it never touches the simulation
@@ -101,11 +120,18 @@ func (s *Session) InitAudio(fs vfs.FSOps) {
 			return
 		}
 		id := s.AudioRegistry.Lookup(alias)
+		if id == audio.MissingAlias {
+			id = s.AudioRegistry.Register(alias)
+		}
 		sample, err := s.AudioRegistry.Load(id)
 		if err == nil {
 			if be := audio.GlobalBackend(); be != nil {
 				_ = be.PlaySample(sample, 1.0, 0)
 			}
+		} else if be := audio.GlobalBackend(); be != nil {
+			// Preserve the resolved identity at the backend boundary even when
+			// optional sample data is unavailable; the backend degrades silently.
+			_ = be.PlayAlias(alias, nil, 1.0, 0)
 		}
 	})
 	// Speech sink is presentation only; keep no-op for now but preserve call order [03 §8.3] C17.
@@ -145,7 +171,11 @@ func (s *Session) loadAudioAlias(alias string) (*audio.Sample, error) {
 		return nil, nil
 	}
 	if s.AudioRegistry != nil {
-		return s.AudioRegistry.Load(s.AudioRegistry.Lookup(alias))
+		id := s.AudioRegistry.Lookup(alias)
+		if id == audio.MissingAlias {
+			id = s.AudioRegistry.Register(alias)
+		}
+		return s.AudioRegistry.Load(id)
 	}
 	if s.AudioCache != nil {
 		return s.AudioCache.Load(alias)
@@ -301,6 +331,9 @@ func (s *Session) EmitPositional(alias string, pos [3]numeric.Fixed) (audio.Pan,
 	var sample *audio.Sample
 	if s.AudioRegistry != nil {
 		id := s.AudioRegistry.Lookup(alias)
+		if id == audio.MissingAlias {
+			id = s.AudioRegistry.Register(alias)
+		}
 		sample, _ = s.AudioRegistry.Load(id)
 	} else if s.AudioCache != nil {
 		sample, _ = s.AudioCache.Load(alias)

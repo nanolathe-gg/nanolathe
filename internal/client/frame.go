@@ -1,50 +1,15 @@
 package client
 
 import (
-	"sort"
+	"strconv"
 
-	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
-
-// frameShake holds presentation-only screen shake per client. It is keyed by
-// Client pointer so a shared package-level map avoids mutating the Client
-// struct owned by another lane [I6][03 §5.6]. Two CRT draws per active tick
-// are preserved via the companion CRT map [I4].
-var (
-	frameShakeMap    = make(map[*Client]*render.Shake)
-	frameShakeCRTMap = make(map[*Client]*rng.CRT)
-)
-
-func getFrameShake(c *Client) *render.Shake {
-	if c == nil {
-		return nil
-	}
-	if s, ok := frameShakeMap[c]; ok {
-		return s
-	}
-	s := &render.Shake{}
-	frameShakeMap[c] = s
-	return s
-}
-
-func getFrameShakeCRT(c *Client) *rng.CRT {
-	if c == nil {
-		return nil
-	}
-	if crt, ok := frameShakeCRTMap[c]; ok {
-		return crt
-	}
-	crt := &rng.CRT{}
-	*crt = rng.NewCRT(1)
-	frameShakeCRTMap[c] = crt
-	return crt
-}
 
 // projectileVisible is the one-point projectile gate from the immutable
 // local-player coverage grid [03 §3.2][03 §5.4]. An invalid/missing grid is
@@ -112,51 +77,6 @@ func unitVisibleForFrame(frame *snapshot.Frame, u snapshot.UnitView, viewer uint
 	return SnapshotVisible(frame, u, viewer)
 }
 
-// projectileDispatchOptions supplies only metadata established by the
-// immutable snapshot. Unresolved families stay suppressed rather than
-// synthesizing artwork [I9].
-func projectileDispatchOptions() render.ProjectileDispatchOptions {
-	return render.ProjectileDispatchOptions{
-		FrameCount: func(v snapshot.ProjectileView) (int, bool) { return 0, false },
-		Color: func(v snapshot.ProjectileView) (int32, int32, bool) {
-			if v.PaletteRow != 0 {
-				return int32(v.PaletteRow), 0, true
-			}
-			return 210, 0, true
-		},
-		ResolveGAF: func(req render.ProjectileGAFRequest) (*formats.GAFFrame, bool) {
-			if req.Base {
-				// Minimal 1×1 opaque placeholder for model families that require
-				// a base sprite. It preserves the researched model draw path
-				// without inventing an authored GAF entry [I9].
-				return &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{210}, Transparent: []bool{false}}, true
-			}
-			return nil, false
-		},
-		SegmentPoints: func(v snapshot.ProjectileView) ([]render.ProjectilePoint, []render.ProjectilePoint, bool) {
-			return nil, nil, false
-		},
-	}
-}
-
-// effectDrawOptions keeps LHT admission terrain-bounded [03 §4.3.1]. Authored
-// LHT row/radius and effect GAF sequences remain unresolved until the
-// producer publishes them, so DrawEffectViews emits no fabricated effect [I9].
-func effectDrawOptions(c *Client) EffectDrawOptions {
-	return EffectDrawOptions{
-		ResolveFrame: func(ev snapshot.EffectView, _ int32) (*formats.GAFFrame, bool) { return nil, false },
-		LHTGeometry:  func(ev snapshot.EffectView) (int, int, bool) { return 0, 0, false },
-		TerrainCoverage: func(x, y int) bool {
-			if c == nil || c.terrain == nil || c.cam == nil || c.terrain.CellW <= 0 || c.terrain.CellH <= 0 {
-				return false
-			}
-			mapX := int64(x) + int64(c.cam.X)
-			mapZ := int64(y) + int64(c.cam.Z)
-			return mapX >= 0 && mapZ >= 0 && mapX < int64(c.terrain.CellW*16) && mapZ < int64(c.terrain.CellH*16)
-		},
-	}
-}
-
 // Frame draws one frame; never mutates sim. It reads snapshot.Buffer.Read()
 // and interpolates with alpha clamped [0,1] (C9). The sim is authoritative at
 // 30 Hz and the renderer interpolates between ticks for smooth modern motion
@@ -198,6 +118,10 @@ func (c *Client) Frame(alpha float32) {
 	}
 	// Audio: drain queue once per rendered frame outside simulation [03 §8.3] C18.
 	// Presentation-only; uses CRT stream [03 §8.3] C19 [I4]; never touches Sim RNG.
+	prev, cur, ok := c.buffer.Read()
+	if cur != nil {
+		c.beginPresentationFrame(cur.Tick)
+	}
 	c.TickAudio()
 	// Keep audio viewport in sync with camera for positional pan/attenuation [03 §8.3].
 	if c.cam != nil {
@@ -209,9 +133,8 @@ func (c *Client) Frame(alpha float32) {
 	// renderer sees only the final pair; intermediate ticks are not drawn
 	// (PLAN_03 C15). If ticksToRun==0 the same pair is returned again and
 	// alpha saturates at 1.0 with no extrapolation.
-	prev, cur, ok := c.buffer.Read()
-
 	c.composeIndexed(alpha, prev, cur, ok)
+	c.frameBegun = false
 	// The software cursor is drawn after the offscreen battle/front-end surface
 	// is prepared, so it sits above world, HUD, and modal overlays [07 §8].
 	c.drawCursor()
@@ -222,50 +145,170 @@ func (c *Client) Frame(alpha float32) {
 	c.convertIndexedToRGBA()
 }
 
-// composeIndexed fills c.indexed at the logical size. It demonstrates a
-// visibly correct alpha ramp at 60 fps vs 30 Hz stub and, when a snapshot is
-// present, shows tick coupling without extrapolating. When a real terrain
-// and camera are present (Gate 1), it draws the TNT terrain instead.
+// composeIndexed delegates battle ordering to render.Composer. Each client
+// adapter is stage-specific, so terrain, world objects, projectiles, effects,
+// fog, selection, and interface work occur at the composer's barriers without
+// a second hand-written ordering in the client [03 §1].
 func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok bool) {
+	if c == nil || len(c.indexed) != c.width*c.height {
+		return
+	}
+	c.ensureComposer()
+	if cur != nil && !c.frameBegun {
+		c.beginPresentationFrame(cur.Tick)
+	}
+	c.composePrev, c.composeCur, c.composeAlpha, c.composeOK = prev, cur, alpha, ok
+	c.selectionChrome = c.selectionChrome[:0]
+	mode := 0
+	if c.cam != nil {
+		mode = 1
+	}
+	c.composer.Frame(cur, alpha, mode)
+	// A direct composeIndexed call is itself one presentation frame. The
+	// windowed Frame method pre-begins its shared clock before audio, so both
+	// paths clear the one-frame guard here.
+	c.frameBegun = false
+}
+
+func (c *Client) beginPresentationFrame(tick uint32) {
+	if c == nil {
+		return
+	}
+	if c.clock == nil {
+		c.clock = &presentation.Clock{}
+	}
+	c.clock.BeginFrame(tick, 0)
+	c.frameBegun = true
+}
+
+// ensureComposer installs the live client adapters once. The callbacks are
+// presentation-only and capture no simulation state; all ordering remains in
+// render.Composer.Frame [03 §1][I6].
+func (c *Client) ensureComposer() {
+	if c == nil || c.composer != nil {
+		return
+	}
+	c.composer = &render.Composer{}
+	c.composer.Hooks.PreWorld = func() { c.traceAdapter("preworld"); c.consumeShake() }
+	c.composer.Hooks.Terrain = func() { c.traceAdapter("terrain"); c.drawBattleStage(stageTerrain) }
+	c.composer.Hooks.Minimap = func() { c.traceAdapter("minimap") }
+	c.composer.Hooks.Clip = func() { c.traceAdapter("clip") }
+	c.composer.Hooks.DrawStrip = func(idx int) { c.traceAdapter("strip" + strconv.Itoa(idx)) }
+	c.composer.Hooks.BucketBuild = func() { c.traceAdapter("bucket") }
+	c.composer.Hooks.FeaturePass = func() { c.traceAdapter("features"); c.drawBattleStage(stageFeatures) }
+	c.composer.Hooks.UnitTraversal = func(kind string) {
+		if kind == "mid" {
+			c.traceAdapter("units")
+			c.drawBattleStage(stageUnits)
+		}
+	}
+	c.composer.Hooks.Projectiles = func() { c.traceAdapter("projectiles"); c.drawBattleStage(stageProjectiles) }
+	c.composer.Hooks.Effects = func() { c.traceAdapter("effects"); c.drawBattleStage(stageEffects) }
+	c.composer.Hooks.Fog = func() { c.traceAdapter("fog"); c.drawBattleStage(stageFog) }
+	c.composer.Hooks.Selection = func() { c.traceAdapter("selection"); c.drawSelectionStage() }
+	c.composer.Hooks.Interface = func() { c.traceAdapter("interface"); c.drawBattleStage(stageInterface) }
+}
+
+func (c *Client) traceAdapter(name string) {
+	if c != nil {
+		c.operationTrace = append(c.operationTrace, name)
+	}
+}
+
+const (
+	stageTerrain = iota
+	stageFeatures
+	stageUnits
+	stageProjectiles
+	stageEffects
+	stageFog
+	stageInterface
+)
+
+type selectionChrome struct {
+	view    snapshot.UnitView
+	screenX int32
+	screenY int32
+}
+
+// consumeShake admits each published shake event once and advances the
+// presentation shake only at a new simulation tick. Repainting a snapshot
+// therefore cannot consume CRT values or move the camera again [03 §5.6].
+func (c *Client) consumeShake() {
+	if c == nil || c.composeCur == nil || c.clock == nil || !c.clock.ConsumeNewSimTick() {
+		return
+	}
+	for _, ev := range c.composeCur.Events {
+		if ev.Kind != snapshot.EventKindShake {
+			continue
+		}
+		key := shakeEventKey{sequence: ev.Sequence, tick: ev.Tick, id: ev.ID}
+		if _, seen := c.shakeEvents[key]; seen {
+			continue
+		}
+		c.shakeEvents[key] = struct{}{}
+		// A zero authored duration remains zero. The retail contract does not
+		// establish a fallback duration, so no compatibility constant is used
+		// here [03 §5.6].
+		c.shake.Request(ev.Magnitude, ev.Lifetime)
+	}
+	if c.crt != nil && c.cam != nil {
+		c.shake.TickWithRandom(c.cam, c.crt)
+	}
+}
+
+// drawBattleStage is a stage-local adapter for authored draw services. It has
+// no ordering responsibilities; render.Composer invokes one stage at each
+// position in the canonical pass trace [03 §1].
+func (c *Client) drawBattleStage(stage int) {
+	alpha, prev, cur, ok := c.composeAlpha, c.composePrev, c.composeCur, c.composeOK
 	w := c.width
 	h := c.height
 	if len(c.indexed) != w*h {
+		return
+	}
+	if stage == stageTerrain {
+		if c.cam != nil && c.terrain != nil {
+			BlitTerrain(c.indexed, w, h, c.terrain, c.cam)
+			return
+		}
+		// Front-end frames have no world camera. Keep their existing software
+		// surface local to this terrain-preparation stage.
+		c.drawBaseSurface(alpha, prev, cur, ok)
+		return
+	}
+	if stage == stageInterface {
+		if c.Overlay != nil {
+			c.Overlay(c)
+		}
+		if c.opts.DebugOverlay && c.fnt != nil {
+			var tick uint32
+			var camX, camZ int32
+			if ok && cur != nil {
+				tick = cur.Tick
+			}
+			if c.cam != nil {
+				camX, camZ = c.cam.X, c.cam.Z
+			}
+			info := DebugInfo{Tick: tick, Alpha: alpha, CamX: camX, CamZ: camZ}
+			DrawDebugOverlayWithShadow(c.indexed, w, h, c.fnt, info, 255, 0, true)
+		}
+		return
+	}
+	if c.cam == nil {
 		return
 	}
 	// Gate 1: real terrain from TNT + palette [PLAN_04A]. Units draw whenever
 	// a camera is bound (menu mode binds one without terrain); terrain blits
 	// only when a world is attached.
 	if c.cam != nil {
-		// Shake: consume ordered shake events presentation-only [03 §5.6][I4][I6].
-		// Request accumulates magnitude/duration, Tick applies two CRT draws
-		// per active tick with permanent walk clamped to map [03 §5.6].
-		if ok && cur != nil {
-			for _, ev := range cur.Events {
-				if ev.Kind == snapshot.EventKindShake {
-					dur := ev.Lifetime
-					if dur == 0 {
-						dur = ev.Magnitude
-					}
-					if dur == 0 {
-						dur = 10
-					}
-					getFrameShake(c).Request(ev.Magnitude, dur)
-				}
-			}
-			// ShakeHook is the composer seam; for the software framebuffer we
-			// tick directly once per frame after world strips [03 §1][03 §5.6].
-			getFrameShake(c).Tick(c.cam, getFrameShakeCRT(c))
-		}
-		if c.terrain != nil {
-			BlitTerrain(c.indexed, w, h, c.terrain, c.cam)
-		}
 		// Gate 2: draw interpolated units Previous→Current at alpha [03 §2.4] I6.
 		// Publish happens after phase 12 each sub-tick; renderer interpolates
 		// with alpha clamped [0,1] (C15/C16). When paused ticksToRun==0 the same
 		// pair is returned and Lerp at any alpha yields the same position, so
 		// holding alpha at 1.0 shows no jitter. Draw BEFORE debug overlay so
 		// text remains on top.
-		if ok && prev != nil && cur != nil && (len(cur.Units) > 0 || len(cur.Features) > 0) {
+		if (stage == stageFeatures || stage == stageUnits) && ok && prev != nil && cur != nil {
 			// Single painter pass: merge units+features Y-sorted [03 §1] fixing trees-over-tanks.
 			// Retail Y-bucket is ((zPix - camZ + bias)>>4)+16 with stable append [rr-10];
 			// we sort by screen-Y then stable handle tie [03 §1][I1] via sort.SliceStable (presentation-only).
@@ -290,71 +333,67 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 			isEnemyVisible := func(u snapshot.UnitView) bool { return unitVisibleForFrame(cur, u, viewer) }
 			type drawable struct {
 				sy       int32
-				tie      int64
 				isUnit   bool
 				unit     snapshot.UnitView
 				usx, usy int32
 				feat     snapshot.FeatureView
 				fsx, fsy int32
-				featName string
 			}
 			var drawables []drawable
 			// Collect units with admission.
-			for _, cv := range cur.Units {
-				var pv snapshot.UnitView
-				if idx, ok2 := prevBySlot[uint16(cv.Slot)]; ok2 {
-					pv = prev.Units[idx]
-				} else {
-					pv = cv
-				}
-				lerped := LerpUnitView(pv, cv, alpha)
-				if lerped.Owner != viewer {
-					if isUnexploredUnit(lerped) {
-						continue
+			if stage == stageUnits {
+				for _, cv := range cur.Units {
+					var pv snapshot.UnitView
+					if idx, ok2 := prevBySlot[uint16(cv.Slot)]; ok2 {
+						pv = prev.Units[idx]
+					} else {
+						pv = cv
 					}
-					if !isEnemyVisible(lerped) {
-						continue
+					lerped := LerpUnitView(pv, cv, alpha)
+					if lerped.Owner != viewer {
+						if isUnexploredUnit(lerped) {
+							continue
+						}
+						if !isEnemyVisible(lerped) {
+							continue
+						}
 					}
+					sx0, sy0 := c.cam.WorldToScreen(lerped.X, lerped.Y, lerped.Z) // [03 §2.5] C1 beam
+					sx := sx0 - 128
+					sy := sy0 - 32 // shell [PLAN_04A C1]
+					drawables = append(drawables, drawable{sy: sy, isUnit: true, unit: lerped, usx: sx, usy: sy})
 				}
-				sx0, sy0 := c.cam.WorldToScreen(lerped.X, lerped.Y, lerped.Z) // [03 §2.5] C1 beam
-				sx := sx0 - 128
-				sy := sy0 - 32 // shell [PLAN_04A C1]
-				drawables = append(drawables, drawable{sy: sy, tie: int64(lerped.Slot), isUnit: true, unit: lerped, usx: sx, usy: sy})
 			}
 			// Collect features with fog admission [03 §3.3] feature pass owns unexplored marker.
-			for _, cvf := range cur.Features {
-				if isUnexploredFeat(cvf) {
-					continue
+			if stage == stageFeatures {
+				for _, cvf := range cur.Features {
+					if isUnexploredFeat(cvf) {
+						continue
+					}
+					var pvf snapshot.FeatureView
+					if idx, ok2 := prevByKey[featKey{cvf.DefName, cvf.CX, cvf.CZ}]; ok2 && idx < len(prev.Features) {
+						pvf = prev.Features[idx]
+					} else {
+						pvf = cvf
+					}
+					fx := snapshot.Lerp(pvf.X, cvf.X, alpha)
+					fy := snapshot.Lerp(pvf.Y, cvf.Y, alpha)
+					fz := snapshot.Lerp(pvf.Z, cvf.Z, alpha)
+					interp := cvf
+					interp.X, interp.Y, interp.Z = fx, fy, fz
+					sx, sy := c.featureScreenPos(interp)
+					drawables = append(drawables, drawable{sy: sy, isUnit: false, feat: interp, fsx: sx, fsy: sy})
 				}
-				var pvf snapshot.FeatureView
-				if idx, ok2 := prevByKey[featKey{cvf.DefName, cvf.CX, cvf.CZ}]; ok2 && idx < len(prev.Features) {
-					pvf = prev.Features[idx]
-				} else {
-					pvf = cvf
-				}
-				fx := snapshot.Lerp(pvf.X, cvf.X, alpha)
-				fy := snapshot.Lerp(pvf.Y, cvf.Y, alpha)
-				fz := snapshot.Lerp(pvf.Z, cvf.Z, alpha)
-				interp := cvf
-				interp.X, interp.Y, interp.Z = fx, fy, fz
-				sx, sy := c.featureScreenPos(interp)
-				tie := int64(cvf.CX)<<32 | int64(uint32(cvf.CZ))
-				drawables = append(drawables, drawable{sy: sy, tie: tie, isUnit: false, feat: interp, fsx: sx, fsy: sy, featName: cvf.DefName})
 			}
-			// Y-sorted painter order [03 §1] stable by handle/featName.
-			sort.SliceStable(drawables, func(i, j int) bool {
-				if drawables[i].sy != drawables[j].sy {
-					return drawables[i].sy < drawables[j].sy
-				}
-				if drawables[i].tie != drawables[j].tie {
-					return drawables[i].tie < drawables[j].tie
-				}
-				if !drawables[i].isUnit && !drawables[j].isUnit {
-					return drawables[i].featName < drawables[j].featName
-				}
-				return drawables[i].isUnit && !drawables[j].isUnit
-			})
-			for _, d := range drawables {
+			// Y-bucket insertion is the retail ordering primitive. In-row order
+			// is the source enumeration order; no handle/name/coordinate tie
+			// breaker is permitted [03 §1][I1].
+			var drawBuckets render.YBuckets
+			for i, d := range drawables {
+				drawBuckets.Insert(int(d.sy), i)
+			}
+			for _, drawIndex := range drawBuckets.Ordered() {
+				d := drawables[drawIndex]
 				if d.isUnit {
 					lerped := d.unit
 					sx, sy := d.usx, d.usy
@@ -362,53 +401,24 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					// Buildings (IsBuilding) at 2x supersampled with per-piece DontShade shading [03 §2.4.1][04 §4.3];
 					// mobiles at 1x without shading.
 					if lerped.Model != "" && c.drawUnitModel(lerped, sx, sy) {
-						c.drawUnitChrome(lerped, sx, sy)
-						continue
+						c.selectionChrome = append(c.selectionChrome, selectionChrome{view: lerped, screenX: sx, screenY: sy})
 					}
-					if lerped.FootX > 0 && lerped.FootZ > 0 {
-						c.drawUnitOriented(lerped, sx, sy)
-						continue
-					}
-					selected := lerped.Flags&SelectionFlag != 0
-					inner := byte(250)
-					if selected {
-						inner = 200
-					}
-					for dy := -2; dy <= 2; dy++ {
-						for dx := -2; dx <= 2; dx++ {
-							px := int(sx) + dx
-							py := int(sy) + dy
-							if px < 0 || px >= w || py < 0 || py >= h {
-								continue
-							}
-							if dx == -2 || dx == 2 || dy == -2 || dy == 2 {
-								c.indexed[py*w+px] = 0
-							} else {
-								c.indexed[py*w+px] = inner
-							}
-						}
-					}
+					// Missing authored model art is a compatibility no-op. Footprint
+					// boxes are diagnostics/fallback art and are not part of the retail
+					// compositor [I9].
+					continue
 				} else {
 					cvf := d.feat
 					sx, sy := d.fsx, d.fsy
 					// 3DO path for object features (corpses, walls) [fmt 3do][02 "Feature record"] — try first.
 					is3DO := cvf.Model != "" && cvf.Filename == "" || (cvf.Filename == "" && cvf.SeqName == "")
 					if is3DO && cvf.Model != "" {
-						if c.drawFeatureModel(cvf) {
-							continue
-						}
+						_ = c.drawFeatureModel(cvf)
+						continue
 					}
 					// Sprite GAF path [03 §5.1.1].
 					normalFrame := c.featureFrameFor(cvf, false)
 					shadowFrame := c.featureFrameFor(cvf, true)
-					if cvf.Geothermal && normalFrame != nil && normalFrame.Width == 1 && normalFrame.Height == 1 && (shadowFrame == nil || (shadowFrame.Width == 1 && shadowFrame.Height == 1)) {
-						xp := int(sx)
-						yp := int(sy)
-						if xp >= 0 && xp < w && yp >= 0 && yp < h {
-							c.indexed[yp*w+xp] = 48
-						}
-						continue
-					}
 					drawn := false
 					if shadowFrame != nil {
 						dstX := int(sx) - int(shadowFrame.XOffset)
@@ -425,68 +435,34 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 					if drawn {
 						continue
 					}
-					sx2, sy2 := sx, sy
-					paletteIdx := byte(96) // default tree green
-					if cvf.Geothermal {
-						paletteIdx = 48
-					} else if !cvf.Reclaimable && cvf.Blocking {
-						paletteIdx = 72 // blocking non-reclaimable (e.g. hurt rock)
-					} else if !cvf.Reclaimable && !cvf.Blocking {
-						paletteIdx = 40 // metal deposit non-blocking (traversable)
-					} else if cvf.IsBurning {
-						paletteIdx = 200 // burnt
-					}
-					if cvf.FootX > 0 && cvf.FootZ > 0 {
-						const pxPerCell = 16
-						hw := int(cvf.FootX) * pxPerCell / 2
-						hh := int(cvf.FootZ) * pxPerCell / 2
-						if hw < 3 {
-							hw = 3
-						}
-						if hh < 3 {
-							hh = 3
-						}
-						for dy := -hh; dy <= hh; dy++ {
-							for dx := -hw; dx <= hw; dx++ {
-								xp := int(sx2) + dx
-								yp := int(sy2) + dy
-								if xp < 0 || xp >= w || yp < 0 || yp >= h {
-									continue
-								}
-								if dx == -hw || dx == hw || dy == -hh || dy == hh {
-									c.indexed[yp*w+xp] = 40
-								} else {
-									c.indexed[yp*w+xp] = paletteIdx
-								}
-							}
-						}
-					} else {
-						for dy := -1; dy <= 1; dy++ {
-							for dx := -1; dx <= 1; dx++ {
-								xp := int(sx2) + dx
-								yp := int(sy2) + dy
-								if xp < 0 || xp >= w || yp < 0 || yp >= h {
-									continue
-								}
-								c.indexed[yp*w+xp] = paletteIdx
-							}
-						}
-					}
+					// Missing authored sprite art is a compatibility no-op; no
+					// synthetic footprint or 1×1 marker is emitted [I9].
+					continue
 				}
 			}
 		}
-		// Projectiles and effects occupy		// Projectiles and effects occupy the researched strip-6/7 window:
+		if stage == stageFeatures || stage == stageUnits {
+			return
+		}
+		// Projectiles and effects occupy the researched strip-6/7 window:
 		// after unit/feature traversals and before fog/interface [03 §1][03 §5.4].
 		// They are deliberately outside the unit-length guard so a frame with
 		// only projectiles or effects still draws [I6]. Both adapters consume
 		// immutable snapshots and never inspect live pools.
-		if ok && prev != nil && cur != nil {
+		if stage == stageProjectiles && ok && prev != nil && cur != nil {
 			if len(cur.Projectiles) > 0 {
-				c.DrawProjectileViews(prev.Projectiles, cur.Projectiles, alpha, cur.Tick, projectileVisible(cur.Visibility), func(snapshot.ProjectileView) bool { return false }, projectileDispatchOptions())
+				c.DrawProjectileViews(prev.Projectiles, cur.Projectiles, alpha, cur.Tick, projectileVisible(cur.Visibility), func(snapshot.ProjectileView) bool { return false }, c.projectileDispatchOptions())
 			}
+			return
+		}
+		if stage == stageEffects && ok && prev != nil && cur != nil {
 			if len(cur.Effects) > 0 {
-				c.DrawEffectViews(cur.Effects, effectDrawOptions(c))
+				c.DrawEffectViews(cur.Effects, c.effectDrawOptions())
 			}
+			return
+		}
+		if stage != stageFog {
+			return
 		}
 		// Fog presentation [03 §3.3] C13 — reads snapshot fog cache copied from visibility.Service.Fog() each tick (I6).
 		// The cache is presentation-only and never writes sim state. Fog uses hard 32-pixel tiles [03 §3.3][03 §3.3].
@@ -598,27 +574,16 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 				}
 			}
 		}
-		// Battle chrome (build panel, ghosts, menus) after units [I6].
-		if c.Overlay != nil {
-			c.Overlay(c)
-		}
-		if c.opts.DebugOverlay {
-			// Nanolathe diagnostics are intentionally opt-in. The retail HUD
-			// owns the top strip and would be overwritten by this otherwise.
-			if c.fnt != nil {
-				var tick uint32
-				if ok && cur != nil {
-					tick = cur.Tick
-				}
-				info := DebugInfo{Tick: tick, Alpha: alpha, CamX: c.cam.X, CamZ: c.cam.Z}
-				DrawDebugOverlayWithShadow(c.indexed, w, h, c.fnt, info, 255, 0, true)
-			}
-		}
 		return
 	}
+	// No world stage has work outside the explicit adapters above.
+}
+
+func (c *Client) drawBaseSurface(alpha float32, prev, cur *snapshot.Frame, ok bool) {
+	w, h := c.width, c.height
 	// Base: horizontal gradient plus alpha nudge so the image visibly shifts
-	// each render frame rather than only each tick. The shift is small enough
-	// to be smooth at 60 fps.
+	// each render frame rather than only each tick. This is front-end surface
+	// preparation, not battle-world ordering.
 	alphaNudge := int(alpha * 64)
 	for y := 0; y < h; y++ {
 		base := y * w
@@ -649,31 +614,17 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 			}
 		}
 	}
-	// Menu chrome (front-end panels) draws over the placeholder too, so the
-	// shell can present menus without a terrain bound [I6].
-	if c.Overlay != nil {
-		c.Overlay(c)
-	}
-	// If explicitly requested, encode the tick in the top rows for diagnostics.
-	if c.opts.DebugOverlay && ok && prev != nil && cur != nil {
-		// Example future interpolation point: unit positions would use
-		// snapshot.Lerp(prevPos, curPos, alpha) with truncation toward zero (I3).
-		_ = prev
-		_ = cur
+}
 
-		// Encode cur.Tick in the top 4 rows as a binary bar so 30 Hz ticks are
-		// visible stepping while alpha bar glides.
-		tick := cur.Tick
-		for y := 0; y < 4 && y < h; y++ {
-			for x := 0; x < 16 && x < w; x++ {
-				bit := (tick >> uint(x)) & 1
-				val := byte(30)
-				if bit == 1 {
-					val = 200
-				}
-				c.indexed[y*w+x] = val
-			}
-		}
+// drawSelectionStage emits unit selection and health chrome after fog. The
+// body stage only records model positions, so these pixels remain visible
+// above the fog overlay as required by the frame contract [03 §1][03 §3.3].
+func (c *Client) drawSelectionStage() {
+	if c == nil {
+		return
+	}
+	for _, item := range c.selectionChrome {
+		c.drawUnitChrome(item.view, item.screenX, item.screenY)
 	}
 }
 

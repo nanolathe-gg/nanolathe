@@ -13,7 +13,6 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
@@ -89,18 +88,41 @@ func projectileTail(v snapshot.ProjectileView) ProjectilePoint {
 	return point(v.TailX, v.TailY, v.TailZ)
 }
 
+// LabeledRandom is the small presentation-RNG seam needed by render consumers
+// that must appear in the shared CRT ledger. The underlying point generator
+// still accepts CRTRandomSource, so raw rng.CRT fixtures remain compatible.
+type LabeledRandom interface {
+	Draw(...string) int32
+}
+
+type projectileSegmentedRandom struct{ random LabeledRandom }
+
+func (r projectileSegmentedRandom) Rand() int32 {
+	return r.random.Draw("projectile-segmented")
+}
+
+// ProjectileSegmentedRandom labels the draws made by both rendertype-7
+// passes while keeping one underlying stream. A nil source suppresses the
+// geometry through the existing CRTRandomSource nil path.
+func ProjectileSegmentedRandom(random LabeledRandom) CRTRandomSource {
+	if random == nil {
+		return nil
+	}
+	return projectileSegmentedRandom{random: random}
+}
+
 // SnapshotSegmentedPoints applies the established rendertype-7 span and CRT
-// jitter helper to immutable snapshot endpoints. A nil CRT intentionally
+// jitter helper to immutable snapshot endpoints. A nil source intentionally
 // yields nil: presentation must not silently consume a different RNG stream
 // or draw an invented straight-line substitute [03 §5.4][I4].
-func SnapshotSegmentedPoints(v snapshot.ProjectileView, crt *rng.CRT) []ProjectilePoint {
-	if crt == nil {
+func SnapshotSegmentedPoints(v snapshot.ProjectileView, random CRTRandomSource) []ProjectilePoint {
+	if random == nil {
 		return nil
 	}
 	pts := SegmentedBeamPoints(
 		combat.Vec3{X: v.X, Y: v.Y, Z: v.Z},
 		combat.Vec3{X: v.TailX, Y: v.TailY, Z: v.TailZ},
-		crt,
+		random,
 	)
 	if len(pts) == 0 {
 		return nil
@@ -116,12 +138,12 @@ func SnapshotSegmentedPoints(v snapshot.ProjectileView, crt *rng.CRT) []Projecti
 // same stable order as the two researched rendertype-7 passes. A missing CRT
 // or zero-span endpoint suppresses both passes rather than drawing a guessed
 // straight line [03 §5.4][I4].
-func SnapshotSegmentedPointPasses(v snapshot.ProjectileView, crt *rng.CRT) (first, second []ProjectilePoint, ok bool) {
-	if crt == nil {
+func SnapshotSegmentedPointPasses(v snapshot.ProjectileView, random CRTRandomSource) (first, second []ProjectilePoint, ok bool) {
+	if random == nil {
 		return nil, nil, false
 	}
-	first = SnapshotSegmentedPoints(v, crt)
-	second = SnapshotSegmentedPoints(v, crt)
+	first = SnapshotSegmentedPoints(v, random)
+	second = SnapshotSegmentedPoints(v, random)
 	if len(first) == 0 || len(second) == 0 {
 		return nil, nil, false
 	}

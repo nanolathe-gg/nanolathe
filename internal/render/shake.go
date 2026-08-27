@@ -47,6 +47,13 @@ type Shake struct {
 	disabled  bool // preference bit 0x10 [03 §5.6]
 }
 
+// PresentationRandom is the minimal labeled draw surface required by shake.
+// The label keeps shake's two draws visible in the session CRT ledger while
+// allowing legacy raw-stream tests to use Tick below [01 §7.2][03 §5.6].
+type PresentationRandom interface {
+	Draw(consumer ...string) int32
+}
+
 // SetDisabled controls the preference bit 0x10 gate [03 §5.6].
 // When disabled is true Request returns with state untouched.
 func (s *Shake) SetDisabled(disabled bool) {
@@ -160,7 +167,25 @@ func (s *Shake) RequestXY(magX, magY, authoredDuration int32) {
 // It is presentation-only: it reads the CRT stream and mutates the camera but
 // never mutates simulation state (I6).
 func (s *Shake) Tick(cam *camera.Camera, crt *rng.CRT) {
-	if s == nil || cam == nil || crt == nil {
+	if crt == nil {
+		return
+	}
+	s.tickWithRandom(cam, labeledCRT{crt})
+}
+
+// TickWithRandom consumes exactly two labeled draws from the shared
+// presentation CRT wrapper. It is the live-session entry point [01 §7.2]
+// [03 §5.6].
+func (s *Shake) TickWithRandom(cam *camera.Camera, random PresentationRandom) {
+	s.tickWithRandom(cam, random)
+}
+
+type labeledCRT struct{ crt *rng.CRT }
+
+func (r labeledCRT) Draw(_ ...string) int32 { return r.crt.Rand() }
+
+func (s *Shake) tickWithRandom(cam *camera.Camera, random PresentationRandom) {
+	if s == nil || cam == nil || random == nil {
 		return
 	}
 	if !s.active {
@@ -178,15 +203,16 @@ func (s *Shake) Tick(cam *camera.Camera, crt *rng.CRT) {
 	sx := s.ampX * s.remaining / s.duration
 	sy := s.ampY * s.remaining / s.duration
 	// Two CRT draws per active tick [03 §5.6] (I4) — presentation stream, not simulation (I4).
-	rx := crt.Rand() // 0..0x7FFF [01 §7.2]
-	ry := crt.Rand()
+	rx := random.Draw("shake-x") // 0..0x7FFF [01 §7.2]
+	ry := random.Draw("shake-y")
 	dx := int32(int64(rx)*int64(sx)/0x8000 - int64(abs32(sx)>>1))
 	dy := int32(int64(ry)*int64(sy)/0x8000 - int64(abs32(sy)>>1))
 	cam.X += dx
 	cam.Z += dy
-	// Camera clamp holds both axes inside the map [03 §5.6] [07 §10].
-	cam.X = clampAxis(cam.X, cam.MapW, cam.ViewW)
-	cam.Z = clampAxis(cam.Z, cam.MapH, cam.ViewH)
+	// Camera clamp holds both axes inside the map [03 §5.6] [07 §10]. Use the
+	// camera's shared clamp so zoomed presentation uses the same effective view
+	// as pan, zoom, and picking.
+	cam.Clamp()
 	s.remaining--
 }
 

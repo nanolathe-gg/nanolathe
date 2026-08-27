@@ -104,6 +104,21 @@ type Client struct {
 	// cannot share animation phase or orientation caches [03 §1][I6].
 	modelPresentation map[modelTextureKey]*modelTextureCursor
 	modelOrientation  map[uint64]*presentationrender.OrientationCache
+	// The composer is the sole owner of battle-world pass ordering. The client
+	// supplies draw adapters through its hooks rather than hand-ordering the
+	// world in composeIndexed [03 §1].
+	composer        *presentationrender.Composer
+	clock           *presentation.Clock
+	shake           presentationrender.Shake
+	crt             *presentation.CRTRandom
+	shakeEvents     map[shakeEventKey]struct{}
+	composePrev     *snapshot.Frame
+	composeCur      *snapshot.Frame
+	composeAlpha    float32
+	composeOK       bool
+	frameBegun      bool
+	operationTrace  []string // test-only live adapter trace; presentation state
+	selectionChrome []selectionChrome
 	// model diagnostics: structured fallback emitted once per unit, not per frame [ON-08].
 	modelErrors    map[string]error    // model name -> last load error (presentation-only)
 	modelFallbacks map[uint16]struct{} // unit Slot -> logged fallback diagnostic
@@ -140,6 +155,12 @@ type Client struct {
 	audioClock    *presentation.Clock
 }
 
+type shakeEventKey struct {
+	sequence uint64
+	tick     uint32
+	id       uint32
+}
+
 // New creates a client. It allocates the indexed framebuffer at the negotiated
 // logical size and prepares fallback palette tables. Window creation happens
 // in RunGame; in headless mode no window is ever created.
@@ -169,6 +190,7 @@ func New(opts Options) (*Client, error) {
 		texIndex:          map[string]texRef{},
 		modelPresentation: map[modelTextureKey]*modelTextureCursor{},
 		modelOrientation:  map[uint64]*presentationrender.OrientationCache{},
+		shakeEvents:       map[shakeEventKey]struct{}{},
 		featureGAFs:       map[string]*formats.GAF{},
 		featureFrames:     map[string]*formats.GAFFrame{},
 		featureGACErr:     map[string]error{},
@@ -298,6 +320,7 @@ func (c *Client) ensureFogGAF() {
 func (c *Client) ComposeFrame() *image.RGBA {
 	prev, cur, ok := c.buffer.Read()
 	c.composeIndexed(1.0, prev, cur, ok)
+	c.frameBegun = false
 	c.drawCursor() // cursor last, over the composed surface [07 §8]
 	c.convertIndexedToRGBA()
 	img := image.NewRGBA(image.Rect(0, 0, c.width, c.height))

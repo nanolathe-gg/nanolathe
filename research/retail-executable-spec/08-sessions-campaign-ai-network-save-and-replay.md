@@ -14,10 +14,27 @@ from another engine, a replacement implementation, executable-comparison
 tooling, or original data files as evidence.
 
 Some parts of this category are much less complete than the simulation and
-renderer. In particular, an older analysis incorrectly labeled the scenario
-unit reconstructor as the strategic AI planner. That analysis is retracted.
-This document treats the strategic planner as unknown and retains only the AI
-fields and control paths that the executable directly establishes.
+renderer. An older analysis incorrectly labeled the scenario unit reconstructor
+as the strategic AI planner. That analysis is retracted. The later whole-image
+static census instead positively roots a distinct strategic planner and
+establishes its recovered scope: the class-vector refresh and classifier, ten
+manager task slots (nine active and one null), direct task-group writer, wave
+bootstrap/merge, task deadlines and dispatch gates, economy-mixed scoring and
+profile handling, and placement selection and helpers [P0-01] [P0-02] [P0-03]
+[R-P0-04] [R-P0-05]. Those contracts are specified in the AI sections below.
+
+**Correction to the prior summary.** The earlier sentence that this document
+“treats the strategic planner as unknown and retains only the AI fields and
+control paths that the executable directly establishes” was wrong. It carried
+the scenario-reconstructor identity error forward as if it were evidence that
+no strategic planner had been found; the positive manager, classifier, group,
+wave, scoring, and placement paths now establish the planner itself. The
+planner is established only to that recovered scope. Its remaining bounded
+residuals — the semantic name of the classification helper, the two opaque
+high runtime status-bit semantics, the strategic half-capacity state writer,
+any additional indirect task-vector writer, and transport/naval/air policy or
+geometry — remain explicitly Unknown below and must not be filled by
+inference. [P0-01] [P0-02] [P0-03] [R-P0-04] [R-P0-05]
 
 Evidence terms:
 

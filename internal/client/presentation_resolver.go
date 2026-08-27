@@ -93,6 +93,15 @@ func (c *Client) projectileDispatchOptions() render.ProjectileDispatchOptions {
 		},
 		// GAF frames and segmented geometry are resolved by the battle asset
 		// adapter. There is intentionally no compatibility fallback here.
+		SegmentPoints: func(v snapshot.ProjectileView) (first, second []render.ProjectilePoint, ok bool) {
+			if c == nil || c.crt == nil {
+				return nil, nil, false
+			}
+			// The two passes consume the same session CRT in admission order;
+			// no straight-line substitute is emitted when the stream is absent
+			// [03 §5.4][I4].
+			return render.SnapshotSegmentedPointPasses(v, render.ProjectileSegmentedRandom(c.crt))
+		},
 	}
 }
 

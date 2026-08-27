@@ -32,6 +32,7 @@ func attachBattleAudio(cl *client.Client, sess *session.Session, fs vfs.FSOps) {
 	cl.SetAudioQueue(sess.AudioQueue)
 	cl.SetAudioCache(sess.AudioCache)
 	cl.SetMusicController(sess.AudioMusic)
+	cl.SetPresentationCRT(sess.PresentationCRT())
 
 	// The viewport is refreshed from the camera every frame by Client.Frame;
 	// seed it once here so a cue queued before the first rendered frame still

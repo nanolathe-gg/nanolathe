@@ -162,6 +162,7 @@ const (
 // ComposerHooks are draw-callback seams for the skeleton [03 §1].
 // Actual blitters are later units' callbacks (C1–C4).
 type ComposerHooks struct {
+	PreWorld      func()                       // pre-world presentation (shake/camera) [03 §5.6]
 	Terrain       func()                       // terrain/static prep [03 §1] step1
 	Minimap       func()                       // minimap/radar prep [03 §1] step1
 	Clip          func()                       // viewport clip [03 §1] step1
@@ -277,6 +278,9 @@ func (c *Composer) Frame(f *snapshot.Frame, alpha float32, mode int) {
 	c.Barriers = c.Barriers[:0]
 
 	// 1 Terrain/static preparation, minimap/radar preparation, and viewport clip, unconditionally [03 §1].
+	if c.Hooks.PreWorld != nil {
+		c.Hooks.PreWorld()
+	}
 	if c.Hooks.Terrain != nil {
 		c.Hooks.Terrain()
 	}

@@ -111,8 +111,22 @@ func (c *Camera) EffectiveView() (int32, int32) {
 // the clamp maximum is mapSize - viewSize, so the max origin is PlayRight-ViewW etc.
 // With zoom, clamp uses effective world view size View/Scale [F-P1-008].
 func (c *Camera) Pan(dx, dz int32) { // [07 §10]
+	if c == nil {
+		return
+	}
 	c.X += dx
 	c.Z += dz
+	c.Clamp()
+}
+
+// Clamp applies the map-boundary clamp to the camera's current origin. It is
+// public so presentation effects such as screen shake can mutate the real
+// camera and then use exactly the same bounds as pan, zoom, and picking
+// [03 §5.6][07 §10].
+func (c *Camera) Clamp() {
+	if c == nil {
+		return
+	}
 	eW, eH := c.EffectiveView()
 	c.X = clampAxis(c.X, c.MapW, eW)
 	c.Z = clampAxis(c.Z, c.MapH, eH)
