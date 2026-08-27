@@ -38,7 +38,6 @@ var Baseline = map[string]int{
 	"internal/camera/camera.go":                     2,
 	"internal/camera/minimap.go":                    29,
 	"internal/camera/minimap_test.go":               16,
-	"internal/client/audio.go":                      3,
 	"internal/client/minimap_draw_test.go":          2,
 	"internal/client/unitdraw.go":                   9,
 	"internal/clock/clock.go":                       11,

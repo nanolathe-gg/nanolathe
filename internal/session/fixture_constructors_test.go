@@ -138,9 +138,16 @@ func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficul
 		p.EndGameCountdown = -1
 	}
 	s.Econ.SeedDeadlines(0)
-	if err := fixtureBattleEntry(s, m, nil); err != nil {
+	if err := placeFeatures(s, m); err != nil {
 		return nil, err
 	}
+	if err := reconstructUnitsFixture(s, m); err != nil {
+		return nil, err
+	}
+	initCOBForSession(s)
+	mission.RunInitialMissionsWithCatalog(m, s.Units, s.Catalog)
+	wireMissionCargo(s, m)
+	grantResourcesDirect(s, m)
 	if s.World != nil && s.Movement == nil {
 		grid := movement.NewOccupancyGrid()
 		fallback := movement.Profile{FootPrintX: 1, FootPrintZ: 1}
@@ -207,33 +214,6 @@ func reconstructUnitsFixture(s *Session, m *mission.Mission) error {
 			}
 		}
 	}
-	return nil
-}
-
-func fixtureBattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
-	if s == nil {
-		return fmt.Errorf("session: nil session")
-	}
-	if m == nil {
-		return fmt.Errorf("session: nil mission")
-	}
-	spy.record("features")
-	if err := placeFeatures(s, m); err != nil {
-		return err
-	}
-	spy.record("units")
-	if err := reconstructUnitsFixture(s, m); err != nil {
-		return err
-	}
-	initCOBForSession(s)
-	mission.RunInitialMissionsWithCatalog(m, s.Units, s.Catalog)
-	wireMissionCargo(s, m)
-	spy.record("barrier")
-	if err := crossBarrier(s); err != nil {
-		return err
-	}
-	spy.record("resources")
-	grantResourcesDirect(s, m)
 	return nil
 }
 
@@ -430,8 +410,21 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		}
 	}
 	prepareFixtureSkirmishCatalog(cat, &cfg)
-	if err := skirmishBattleEntryFixture(s, &cfg, m, nil); err != nil {
+	if err := skirmishPlaceFeatures(s, m); err != nil {
 		return nil, err
+	}
+	if err := skirmishReconstructUnits(s, cfg, m); err != nil {
+		return nil, err
+	}
+	initCOBForSession(s)
+	wireMissionCargo(s, m)
+	if s.Econ != nil {
+		for p := 0; p < cfg.NumPlayers && p < len(s.Econ.Players); p++ {
+			if s.Econ.Players[p].Exists {
+				economy.CreditSpawn(&s.Econ.Players[p], economy.Metal, float32(cfg.Players[p].Metal))
+				economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, float32(cfg.Players[p].Energy))
+			}
+		}
 	}
 	if s.World != nil && s.Movement != nil {
 		for _, u := range s.Units.Iter() {

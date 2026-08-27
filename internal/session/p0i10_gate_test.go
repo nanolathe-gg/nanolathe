@@ -38,40 +38,6 @@ func TestP0I10_LoadingCannotTick(t *testing.T) {
 	}
 }
 
-// TestP0I10_LoadingCompletionDeferred verifies C2 next-dispatch deferral via production handlers.
-func TestP0I10_LoadingCompletionDeferred(t *testing.T) {
-	s := &Session{
-		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Snapshot: &frame.Buffer{},
-		State:    StateLoading,
-	}
-	s.RegisterAll()
-	var battleRuns int
-	// Overwrite battle handler after RegisterAll to count, but keep loading handler that does CompleteLoading.
-	s.SetHandler(StateBattle, func(ss *Session) { battleRuns++ })
-	// First dispatch: loading -> pending battle, battle not run inline.
-	s.Advance()
-	if battleRuns != 0 {
-		t.Fatalf("battle handler must NOT run inline on loading completion [08] C2: got %d", battleRuns)
-	}
-	if s.State != StateBattle || !s.IsPendingBattle() {
-		t.Fatalf("after loading dispatch state should be battle pending [08] C2: %v pending %v", s.State, s.IsPendingBattle())
-	}
-	// Next dispatch: battle handler first run.
-	s.Advance()
-	if battleRuns != 1 {
-		t.Fatalf("battle handler first run should happen on next dispatch [08] C2: got %d", battleRuns)
-	}
-	if s.IsPendingBattle() {
-		t.Fatalf("pendingBattle should clear after first battle dispatch [08] C2")
-	}
-	// Subsequent dispatch runs again.
-	s.Advance()
-	if battleRuns != 2 {
-		t.Fatalf("second battle dispatch should run again, got %d", battleRuns)
-	}
-}
-
 // TestP0I10_VictoryReachesPostBattleExactlyOnce ensures victory latch transitions 6->7 exactly once [08][P1-01].
 func TestP0I10_VictoryReachesPostBattleExactlyOnce(t *testing.T) {
 	s := &Session{

@@ -425,6 +425,7 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 	g.battle.returnToMenu = g.returnFromBattle
 	g.battle.returnToSkirmish = func(cl *client.Client) {
 		if g != nil {
+			detachBattleAudio(cl, sess)
 			g.battle = nil
 			g.openMenu(modeMenuSkirmish)
 			if cl != nil {
@@ -573,6 +574,13 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 		}
 		clPtr.SetFNT(battleHUD.console)
 		clPtr.Overlay = func(c *client.Client) { battleHUD.draw(c, g.battle) }
+		// The menu morphs its own client into the battle rather than building a
+		// new one, so it must make the same session joins the direct battle
+		// entry makes. Without this the client has no presentation CRT, and
+		// every consumer of that stream degrades silently: nano particles all
+		// draw the same trajectory, screen shake never jitters, and no cue
+		// reaches the audio device [01 §7.2][03 §5.5][03 §5.6][03 §8.3].
+		attachBattleAudio(clPtr, sess, g.cs.fs)
 	}
 	return nil
 }
@@ -587,6 +595,9 @@ func (g *gameShell) returnFromBattle(cl *client.Client) {
 	}
 	if g.battle != nil {
 		g.battle.closeBattleMenu()
+		// Release what entering the battle joined, so the abandoned session's
+		// music stops and the device is not held across the hand-off.
+		detachBattleAudio(cl, g.battle.sess)
 	}
 	g.battle = nil
 	g.cam = &camera.Camera{ViewW: retailScreenW, ViewH: retailScreenH, MapW: retailScreenW, MapH: retailScreenH}

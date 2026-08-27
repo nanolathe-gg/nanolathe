@@ -17,32 +17,81 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// authoritativeTick implements the researched authoritative tick per [01 §4.4][05 "Authoritative settlement order"][ON-09].
-// Order follows the established twelve-phase retail tick [01 §4.4]: input,
-// live unit sweep, projectiles, effects/feature motion, player work, feature
-// lifecycle, sequence cursors, wind change, wind field, camera, object lists,
-// and cadence flip. Sharing is the transport tail after phase 12; trigger
-// polling belongs to the local player's phase-5 work. The post-loop commit and
-// immutable publication follow that tail.
-//
-// Slot behavior per [01 §4.4] R-P0-04: newly created unit visible to later same-tick readers when player+slot ahead
-// of current scan position, already-visited waits for next tick; freed slot immediate reuse via lowest-free scan,
-// no generation counter. Implemented via VisitActiveSlots live Alive check at visit moment [01 §4.4] and immediate
-// Free in FinalizeDeath, so later same-tick readers correctly skip freed slot via Alive flag.
-func (s *Session) authoritativeTick(tick uint32) {
+// stepAuthoritativePhases runs one complete authoritative tick for focused
+// same-package tests and callers that already own the tick number. Step keeps
+// the canonical sequence visible at its call site; this helper is deliberately
+// only a phase-call wrapper, not a second implementation of any phase.
+func (s *Session) stepAuthoritativePhases(tick uint32) {
 	if s == nil {
 		return
 	}
-	// Sync per-session RNG to global for any remaining global draws, and ensure per-session initialized [RS-06][I4].
-	// Use pointer assignment so Global and per-session share same state during tick — any draw via either advances same state [I4][RS-06].
+	// The phase order below is the authoritative retail sequence [01 §4.4].
+	// Keep these calls in this order: their pool visibility, side effects, and RNG
+	// draw order are observable.
 	_ = s.SimRNG()
 	_ = s.CrtRNG()
 	rng.Global.Sim = s.SimRNG()
 	rng.Global.Crt = s.CrtRNG()
-	// 1 network/input boundary — drain local typed commands before orders/build [01 §4.4] PhaseNetwork. The queue is presentation-owned until this point.
-	// [01 §4.4] PhaseNetwork. The queue is presentation-owned until this point.
+
+	// 1. network/input boundary (single-player drains due human commands).
 	s.applyHumanCommands(tick)
 
+	// 2. deterministic unit-slot sweep: unit update, weapons/COB, orders,
+	// construction, movement, and slot-end death handling.
+	s.stepUnitPhase(tick)
+
+	// 3. projectiles: captured-span integration, collision, and detonation.
+	s.stepProjectilePhase(tick)
+
+	// 4. effects and feature motion.
+	s.stepEffectPhase(tick)
+
+	// 5. player orders/economy work and the phase-5 path boundary.
+	s.stepPlayerPhase(tick)
+
+	// 6. feature lifecycle and reclaim/death processing.
+	s.stepFeatureLifecyclePhase(tick)
+
+	// 7. sequence/effect-strip cursors. TODO(question): strip advancement is
+	// presentation-owned in nanolathe [03 §1]; no sim state advances here.
+
+	// 8/9. wind change, wind field, then meteor scheduling.
+	s.stepWindAndMeteorPhase(tick)
+
+	// 10. camera/scroll update. TODO(question): nanolathe's camera is
+	// presentation-owned; no sim-side scroll target or shake state exists yet
+	// [01 §4.4].
+
+	// 11. ten object-list sweeps. TODO(question): the object family is not yet
+	// identified [01 §4.4]; nothing registers lists yet.
+
+	// 12. every-eight-sub-tick cadence flip. TODO(question): no consumer is
+	// wired in nanolathe; the flip drives nothing yet.
+
+	// Visibility/LOS and sensor refresh remain at this seam because their exact
+	// relationship to the twelve phases is not established [03 §3.2][03 §3.4].
+	// TODO(question): establish its placement relative to phase 12 and sharing.
+	s.stepVisibilityPhase(tick)
+
+	// Sharing is the transport tail after phase 12 [01 §4.4].
+	s.stepSharingPhase(tick)
+
+	// Post-loop cleanup and configured skirmish result evaluation.
+	s.stepCleanupAndResultPhase(tick)
+
+	// Synchronize the session streams back to the process-visible handles, then
+	// publish exactly one committed frame for this completed sub-tick [I4][I6].
+	if rng.Global.Sim != nil {
+		*rng.Global.Sim = s.rngSim
+	}
+	if rng.Global.Crt != nil {
+		*rng.Global.Crt = s.rngCrt
+	}
+	s.publishSnapshot(tick)
+}
+
+// stepUnitPhase is phase 2 of the authoritative tick [01 §4.4].
+func (s *Session) stepUnitPhase(tick uint32) {
 	// Begin movement's per-tick occupancy transaction for the phase-2 unit sweep.
 	if s.Movement != nil {
 		if s.Units != nil {
@@ -215,7 +264,10 @@ func (s *Session) authoritativeTick(tick uint32) {
 	if s.Movement != nil {
 		s.Movement.EndTick(tick)
 	}
+}
 
+// stepProjectilePhase is phase 3 of the authoritative tick [01 §4.4][06 §5].
+func (s *Session) stepProjectilePhase(tick uint32) {
 	// 3 projectile integration and collision + pool compactor [01 §4.4][06 §5][06 §11.2]
 	// Interceptor guidance pre-step before motion [06 §11.2]
 	s.interceptorGuidanceTick()
@@ -268,7 +320,10 @@ func (s *Session) authoritativeTick(tick uint32) {
 		}
 	}
 	s.interceptorDetonationTick()
+}
 
+// stepEffectPhase is phase 4 of the authoritative tick [01 §4.4].
+func (s *Session) stepEffectPhase(tick uint32) {
 	// 4 general effects and feature motion [01 §4.4]. The effect pool is
 	// advanced once at this phase boundary. Admission consumes the current
 	// ordered presentation window; publication only snapshots the resulting
@@ -283,7 +338,11 @@ func (s *Session) authoritativeTick(tick uint32) {
 	if s.Features != nil {
 		s.Features.TickMotion(tick)
 	}
+}
 
+// stepPlayerPhase is phase 5 of the authoritative tick [01 §4.4][05
+// "Authoritative settlement order"].
+func (s *Session) stepPlayerPhase(tick uint32) {
 	// 5 per-player orders, path, economy, and occupancy work [01 §4.4] — outer loop players 0..9 ascending; the AI coordinator tick (30-tick cadence, deadline-gated subtasks) runs before the settlement deadline compare and the nine-step settlement pass [05 "Authoritative settlement order"] [INVARIANTS I1].
 	// Due AI player work at researched deadline relationship (beforeDeadline) + economy request/accept/settlement via economy.TickPlayer per player
 	// No map-defined player order [ON-09].
@@ -296,17 +355,20 @@ func (s *Session) authoritativeTick(tick uint32) {
 	} else if s.Path != nil {
 		s.Path.Tick(tick)
 	}
+}
 
+// stepFeatureLifecyclePhase is phase 6 of the authoritative tick [01 §4.4].
+func (s *Session) stepFeatureLifecyclePhase(tick uint32) {
 	// 6 feature lifecycle and reclaim or death processing (burn, wind probes, successor hops; reclaim credits become visible at the next settlement) [01 §4.4][05 "Feature burning"][05 "Feature sinking"][06 §13.1]
 	if s.Features != nil {
 		s.Features.TickLifecycle(tick)
 	}
+}
 
-	// 7 sequence and effect-strip advancement [01 §4.4] — the global animation-
-	// sequence cursor list (frame counter, remaining duration, loop flag per cursor).
-	// TODO(question): strip advancement is presentation-owned in nanolathe [03 §1];
-	// no sim state advances here.
-
+// stepWindAndMeteorPhase runs phases 8 and 9, preserving their separate RNG
+// draws and the meteor scheduler's position after projectile integration [01
+// §4.4][06 §6.5].
+func (s *Session) stepWindAndMeteorPhase(tick uint32) {
 	// 8/9 wind change and wind-field update [01 §4.4] — phase 8 draws the CRT interval and phase 9 the Sim strength/heading (order is behavior [I4]); projectiles, effects and features in earlier phases therefore read the previous tick's wind, as retail's phase order dictates. An earlier 'prepass at tick top' reading is superseded by the established order.
 	if s.Wind != nil {
 		// [01 §7.3] split: phase 8 draws CRT interval, phase 9 draws Sim strength/heading; order is behavior [INVARIANTS I4][RS-P0-018] per-session isolated
@@ -322,22 +384,11 @@ func (s *Session) authoritativeTick(tick uint32) {
 	// 9b Meteor scheduler after the wind phases so scheduling draws start deterministically after wind, and after the projectile phase so spawns move next tick [08 "Meteor showers"] [06 §6.5]. Cadence is interval+duration ticks per storm and per-hit delay trunc(30/density) [02 Meteor scheduler]; draws are CRT six per meteor (four scheduling even when disabled + two lateral) [06 §6.5] I4 with zero sim draws.
 	// Cadence is interval+duration ticks per storm and per-hit delay trunc(30/density) [02 Meteor scheduler]; draws are CRT six per meteor (four scheduling even when disabled + two lateral) [06 §6.5] I4 with zero sim draws.
 	s.tickMeteor(tick)
+}
 
-	// 10 camera/scroll position update [01 §4.4] — the camera steps toward its scroll
-	// target (clamped at ±320 per tick, half-step when closer) and the shake driver
-	// adds a CRT-drawn jitter while a shake is active. TODO(question): nanolathe's
-	// camera is presentation-owned (internal/camera); no sim-side scroll target or
-	// shake state exists yet.
-
-	// 11 ten object-list update sweeps [01 §4.4] — a table of ten linked lists of
-	// vtable-backed objects allocated at battle entry; each object's update virtual
-	// runs, and objects returning zero are destroyed and removed with inline
-	// compaction. TODO(question): the object family is not yet identified [01 §4.4];
-	// nothing registers lists yet.
-
-	// 12 every-eight-sub-tick cadence flip [01 §4.4]. TODO(question): no consumer is
-	// wired in nanolathe; the flip drives nothing yet.
-
+// stepVisibilityPhase refreshes LOS and the multi-player sensor state at the
+// established seam after phase 12 [03 §3.2][03 §3.4].
+func (s *Session) stepVisibilityPhase(tick uint32) {
 	// Visibility/LOS/radar deadline work and publication is retained at this
 	// seam because its exact relationship to the twelve runtime phases is not
 	// established by the cited visibility contract [03 §3.2][03 §3.4].
@@ -428,17 +479,20 @@ func (s *Session) authoritativeTick(tick uint32) {
 			}
 		}
 	}
+}
 
+// stepSharingPhase is the transport tail after phase 12 [01 §4.4].
+func (s *Session) stepSharingPhase(tick uint32) {
 	// Sharing cadence is the transport tail after phase 12 [01 §4.4][05
 	// "Allied resource and sensor sharing"].
 	if s.Econ != nil {
 		s.Econ.ShareTick(tick)
 		// No map iteration inside ShareTick (it iterates players 0..9 asc)
 	}
+}
 
-	// 16 AI auxiliary deadlines [08 "Established AI-facing data and rooted planner"] — managers already ticked via player traversal beforeDeadline; auxiliary tasks with later deadlines (+150/+300 etc.) are also handled inside same Tick via runDueTasks [P0-02].
-	// auxiliary tasks with later deadlines (+150/+300 etc.) are also handled inside same Tick via runDueTasks [P0-02].
-
+// stepCleanupAndResultPhase runs post-loop cleanup and result evaluation.
+func (s *Session) stepCleanupAndResultPhase(tick uint32) {
 	// Post-loop executor tail [01 §4.4] — barriers, deadline-ring slide and
 	// missile/interceptor compaction are retail post-loop structures; nanolathe's
 	// deterministic commit and RNG synchronization live here.
@@ -472,25 +526,8 @@ func (s *Session) authoritativeTick(tick uint32) {
 	if s.Mission != nil && s.Mission.Type == mission.TypeSkirmish && s.Skirmish.NumPlayers > 0 {
 		s.EvaluateResult(tick)
 	}
-
-	// Sync global to per-session RNG for single-session determinism and test Global draw checks [RS-06][I4].
-	if rng.Global.Sim != nil {
-		*rng.Global.Sim = s.rngSim
-	}
-	if rng.Global.Crt != nil {
-		*rng.Global.Crt = s.rngCrt
-	}
-
-	// One immutable snapshot publication after commit [03 §2.4][PLAN_03 C15][I6].
-	s.publishSnapshot(tick)
-
-	// TODO(question): phases 7 (sequence cursors), 10 (camera/scroll), 11
-	// (object-list sweeps) and 12 (cadence flip) are staged above as no-ops:
-	// research establishes the passes, but their sim-side consumers are not yet
-	// implemented or identified [01 §4.4]. Strip advancement is presentation-only
-	// [03 §1]; the object family is unidentified [01 §4.4]; the cadence flip has
-	// no wired consumer.
 }
+
 func (s *Session) initMeteor() {
 	if s == nil || s.Meteor.Initialized {
 		return
@@ -904,9 +941,71 @@ func (s *Session) Step(scaledNow int32) {
 		if s.State != StateBattle {
 			break // abort or victory transitioned out mid-batch [08] 6->2 or 6->7
 		}
-		// Authoritative researched tick per [01 §4.4][05][08][ON-09] — increments GlobalTick before phase 1 [01 §4.4] C6
+		// BeginSubTick increments GlobalTick before phase 1 [01 §4.4] C6.
 		tick := s.Clock.BeginSubTick()
-		s.authoritativeTick(tick)
+		// The phase order below is the authoritative retail sequence [01 §4.4].
+		// Keep these calls in this order: their pool visibility, side effects, and RNG
+		// draw order are observable.
+		_ = s.SimRNG()
+		_ = s.CrtRNG()
+		rng.Global.Sim = s.SimRNG()
+		rng.Global.Crt = s.CrtRNG()
+
+		// 1. network/input boundary (single-player drains due human commands).
+		s.applyHumanCommands(tick)
+
+		// 2. deterministic unit-slot sweep: unit update, weapons/COB, orders,
+		// construction, movement, and slot-end death handling.
+		s.stepUnitPhase(tick)
+
+		// 3. projectiles: captured-span integration, collision, and detonation.
+		s.stepProjectilePhase(tick)
+
+		// 4. effects and feature motion.
+		s.stepEffectPhase(tick)
+
+		// 5. player orders/economy work and the phase-5 path boundary.
+		s.stepPlayerPhase(tick)
+
+		// 6. feature lifecycle and reclaim/death processing.
+		s.stepFeatureLifecyclePhase(tick)
+
+		// 7. sequence/effect-strip cursors. TODO(question): strip advancement is
+		// presentation-owned in nanolathe [03 §1]; no sim state advances here.
+
+		// 8/9. wind change, wind field, then meteor scheduling.
+		s.stepWindAndMeteorPhase(tick)
+
+		// 10. camera/scroll update. TODO(question): nanolathe's camera is
+		// presentation-owned; no sim-side scroll target or shake state exists yet
+		// [01 §4.4].
+
+		// 11. ten object-list sweeps. TODO(question): the object family is not yet
+		// identified [01 §4.4]; nothing registers lists yet.
+
+		// 12. every-eight-sub-tick cadence flip. TODO(question): no consumer is
+		// wired in nanolathe; the flip drives nothing yet.
+
+		// Visibility/LOS and sensor refresh remain at this seam because their exact
+		// relationship to the twelve phases is not established [03 §3.2][03 §3.4].
+		// TODO(question): establish its placement relative to phase 12 and sharing.
+		s.stepVisibilityPhase(tick)
+
+		// Sharing is the transport tail after phase 12 [01 §4.4].
+		s.stepSharingPhase(tick)
+
+		// Post-loop cleanup and configured skirmish result evaluation.
+		s.stepCleanupAndResultPhase(tick)
+
+		// Synchronize the session streams back to the process-visible handles, then
+		// publish exactly one committed frame for this completed sub-tick [I4][I6].
+		if rng.Global.Sim != nil {
+			*rng.Global.Sim = s.rngSim
+		}
+		if rng.Global.Crt != nil {
+			*rng.Global.Crt = s.rngCrt
+		}
+		s.publishSnapshot(tick)
 		if s.State != StateBattle {
 			break // latch armed->ending transitioned to postbattle same tick [P1-01 §2.2]
 		}

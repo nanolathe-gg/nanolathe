@@ -42,6 +42,7 @@ Allowed floating point, exhaustively:
 | Per-unit order-guard float (eligibility exact compare `== 0.0`; nonzero while an order is processed) | `float32` | `[07 §8]`, `[07 §9]` |
 | Simulation trig-table construction at initialization | `float64` transient; authoritative table entries are integers | `[04 §5.1]` |
 | Model piece rotation trig in the draw path | `float64`, round-to-nearest | `[03 §2.4]` |
+| Nanolathe particle travel distance (`sqrt`, truncated to the tick count) and the nanoframe reveal's barycentric interpolants | `float64` presentation temporaries, never stored | `[03 §5.5]`, `[03 §5.2]` |
 
 Everything else is integer. Simulation velocity integration uses the fixed-point
 trig tables, **not** the float path `[03 §2.4]`.

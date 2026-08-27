@@ -2,39 +2,7 @@ package session
 
 import (
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/units"
 )
-
-// AttachForTransport hides a cargo unit's coverage while attached to a carrier [04 §4.4].
-// The cargo's footprint is removed from the byte refcount (word mask never decrements) and its
-// throttled footprint is forgotten so a later detach republishes without stale height.
-func (s *Session) AttachForTransport(carrier, cargo pool.Handle) {
-	if s == nil || s.Vis == nil || s.Units == nil {
-		return
-	}
-	u := s.Units.Unit(cargo)
-	if u == nil {
-		return
-	}
-	unpublishOne(s, u)
-	// TODO(T25): carrier/cargo linkage AttachPiece etc. is owned by units.AttachmentState;
-	// this helper currently only handles visibility. Movement and COB attach callbacks remain.
-	_ = carrier
-	_ = units.GuardLatchSize
-}
-
-// DetachFromTransport restores a cargo unit's coverage after transport detach [04 §4.4].
-func (s *Session) DetachFromTransport(carrier, cargo pool.Handle) {
-	if s == nil || s.Vis == nil || s.Units == nil {
-		return
-	}
-	u := s.Units.Unit(cargo)
-	if u == nil {
-		return
-	}
-	publishOne(s, u)
-	_ = carrier
-}
 
 // CaptureUnit transfers ownership and republishes coverage under the new owner [P0-11].
 // It removes the old owner's byte refcount and publishes under the new owner synchronously.

@@ -1013,10 +1013,10 @@ func (b *battleSession) disarmPlacement() {
 // and `notoktobuild` on a refused one; both are ordinary sound aliases, not a
 // separate UI audio path.
 func (b *battleSession) playUICue(cl *client.Client, alias string) {
-	if cl == nil {
+	if b == nil || b.sess == nil || b.sess.Audio == nil {
 		return
 	}
-	cl.PlayUICue(alias)
+	_ = b.sess.Audio.PlayUICue(alias)
 }
 
 // updatePlacement tracks the ghost under the cursor and validates it against

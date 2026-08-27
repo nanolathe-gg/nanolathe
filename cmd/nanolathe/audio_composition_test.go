@@ -19,10 +19,9 @@ const drainWindowFrames = 30
 // step actually joins the session's audio state to the client, using a
 // recording (headless) backend as the observation point.
 //
-// Before attachBattleAudio existed, no production path called SetAudioQueue,
-// SetAudioCache or SetMusicController: the client drained a queue it had never
-// been given, so an ordinary acknowledgement never reached playback in the
-// windowed battle. This test fails if that seam is unwired again.
+// The composition step must bind the concrete service before the client
+// drains it, so an ordinary acknowledgement reaches playback in the windowed
+// battle. This test fails if that seam is unwired again.
 func TestAttachBattleAudio_CueReachesBackend(t *testing.T) {
 	prev := audio.GlobalBackend()
 	t.Cleanup(func() { audio.SetGlobalBackend(prev) })
@@ -49,14 +48,8 @@ func TestAttachBattleAudio_CueReachesBackend(t *testing.T) {
 
 	attachBattleAudio(cl, b.sess, nil)
 
-	if cl.AudioQueue() == nil || cl.AudioQueue() != b.sess.AudioQueue {
-		t.Fatalf("client queue is not the session queue after composition")
-	}
-	if cl.AudioCache() == nil || cl.AudioCache() != b.sess.AudioCache {
-		t.Fatalf("client cache is not the session cache after composition")
-	}
-	if cl.AudioMusic() == nil || cl.AudioMusic() != b.sess.AudioMusic {
-		t.Fatalf("client music controller is not the session controller after composition")
+	if b.sess.Audio == nil || b.sess.Audio.Queue == nil || b.sess.Audio.Cache == nil || b.sess.Audio.Music == nil {
+		t.Fatalf("session audio service was not initialized")
 	}
 	// The composition must not have replaced the headless recording backend
 	// with a device [I5][I6].
@@ -75,7 +68,7 @@ func TestAttachBattleAudio_CueReachesBackend(t *testing.T) {
 	if !b.sess.EmitOK(commander.Handle) {
 		t.Fatalf("EmitOK was refused; the queue rejected an ordinary acknowledgement")
 	}
-	if b.sess.AudioQueue.Count == 0 {
+	if b.sess.Audio.Queue.Count == 0 {
 		t.Fatalf("acknowledgement did not reach the session queue")
 	}
 
@@ -85,7 +78,7 @@ func TestAttachBattleAudio_CueReachesBackend(t *testing.T) {
 	cl.TickAudio()
 	if rec.PlayCount() == before {
 		t.Fatalf("queued acknowledgement never reached the backend; "+
-			"queue count %d, aliases %v", b.sess.AudioQueue.Count, rec.PlayedAliases())
+			"queue count %d, aliases %v", b.sess.Audio.Queue.Count, rec.PlayedAliases())
 	}
 	if got := rec.PlayedAliases(); len(got) == 0 || got[len(got)-1] != "ok1" {
 		t.Errorf("backend received %v, want the authored ok1 variant last", got)
@@ -117,7 +110,7 @@ func TestDetachBattleAudio_ReleasesDevice(t *testing.T) {
 	if audio.GlobalBackend() != nil {
 		t.Errorf("detach left the global audio backend installed")
 	}
-	if b.sess.AudioMusic.IsPlaying() {
+	if b.sess.Audio.Music.IsPlaying() {
 		t.Errorf("detach left music playing")
 	}
 }

@@ -510,8 +510,8 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	if err := createAndBindServices(s); err != nil {
 		return nil, err
 	}
-	// 7-9. battle entry: place features → units → barrier → resources (InitialMission inside) [08 "Placement and battle entry"] C9
-	if err := SkirmishBattleEntry(s, cfg, m, nil); err != nil {
+	// 7-9. battle entry: place features → units → resources (InitialMission inside) [08 "Placement and battle entry"] C9
+	if err := skirmishBattleEntry(s, cfg, m); err != nil {
 		return nil, err
 	}
 	report.Report(FamilyPlacement, 100)
@@ -695,39 +695,12 @@ func skirmishCommander(cat *content.Catalog, sideIdx, playerIdx int) (*content.U
 	return def, nil
 }
 
-// SkirmishBattleEntry performs the battle entry order per [08 "Placement and battle entry"] C9
-// via the SAME four-step order mission.go's BattleEntry uses:
-// place features → reconstruct units → cross the placement/start barrier →
+// skirmishBattleEntry performs the single-player battle-entry order per [08
+// "Placement and battle entry"] C9: place features → reconstruct units →
 // grant starting resources DIRECTLY to live stock outside the ledger
 // (economy.CreditSpawn) [05 "Authoritative settlement order"].
-// The spy records each step before the real work so order is observable.
-// This is the shared path skirmish must use; no second draw path exists [C17].
-func SkirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy *BattleEntrySpy) error {
-	if s == nil {
-		return fmt.Errorf("session: nil session")
-	}
-	if m == nil {
-		return fmt.Errorf("session: nil mission")
-	}
-	if s.Catalog == nil {
-		return fmt.Errorf("session: missing Catalog for skirmish battle entry [02 §5]")
-	}
-	if s.World == nil {
-		return fmt.Errorf("session: missing World for skirmish battle entry [03 §2.2]")
-	}
-	if s.Features == nil {
-		return fmt.Errorf("session: missing Features for skirmish battle entry [05]")
-	}
-	if s.Units == nil {
-		return fmt.Errorf("session: missing Units for skirmish battle entry [01 §6.1]")
-	}
-	if s.Econ == nil {
-		return fmt.Errorf("session: missing Economy for skirmish battle entry [05]")
-	}
-	return skirmishBattleEntry(s, cfg, m, spy)
-}
-
-func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy *BattleEntrySpy) error {
+// No second draw path exists [C17].
+func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission) error {
 	if s == nil {
 		return fmt.Errorf("session: nil session")
 	}
@@ -737,11 +710,9 @@ func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy
 	if err := requireGlobalRNGStreams(); err != nil {
 		return err
 	}
-	spyRecord(spy, "features")
 	if err := skirmishPlaceFeatures(s, m); err != nil {
 		return err
 	}
-	spyRecord(spy, "units")
 	if err := skirmishReconstructUnits(s, cfg, m); err != nil {
 		return err
 	}
@@ -751,11 +722,6 @@ func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy
 	}
 	// Wire cargo from i-verb if any scenario units carry attachments (reuses mission helper)
 	wireMissionCargo(s, m)
-	spyRecord(spy, "barrier")
-	if err := skirmishCrossBarrier(s); err != nil {
-		return err
-	}
-	spyRecord(spy, "resources")
 	skirmishGrantResourcesDirect(s, cfg)
 	// Initialize sharing thresholds once from rebuilt capacity after units exist [P1-06] [P1-I04].
 	// Note: thresholds are bonus-inclusive because RebuildCapacity includes the
@@ -766,12 +732,6 @@ func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy
 	// the storage bonus is applied [02_ledger_exact.md §4.1].
 	s.InitShareThresholds()
 	return nil
-}
-
-func spyRecord(spy *BattleEntrySpy, step string) {
-	if spy != nil {
-		spy.Order = append(spy.Order, step)
-	}
 }
 
 func skirmishPlaceFeatures(s *Session, m *mission.Mission) error {
@@ -981,9 +941,6 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 			if sp != nil {
 				x = numeric.Fixed(int32(sp.X) * 65536)
 				z = numeric.Fixed(int32(sp.Z) * 65536)
-			} else {
-				// Missing StartPos retains the interior jitter; surplus positions are unused.
-				_ = fmt.Sprintf("skirmish: missing StartPos%d for slot %d", perm+1, playerIdx)
 			}
 		}
 		if s.World != nil {
@@ -1085,11 +1042,6 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 	return nil
 }
 
-func skirmishCrossBarrier(s *Session) error {
-	_ = s
-	return nil
-}
-
 func skirmishGrantResourcesDirect(s *Session, cfg SkirmishConfig) {
 	if s == nil || s.Econ == nil {
 		return
@@ -1145,6 +1097,4 @@ var (
 	_ = content.CanonicalKey
 )
 
-// aliases for vet
-var _ = fmt.Sprintf
 var _ = strings.TrimSpace

@@ -27,6 +27,7 @@ const (
 	KindLHTFlash        = EventKindLHTFlash
 	KindShake           = EventKindShake
 	KindCorpse          = EventKindCorpse
+	KindAudio           = EventKindAudio
 )
 
 const (
@@ -74,6 +75,10 @@ type Event struct {
 	NanolatheIndex         int32
 	NanolatheCount         int32
 	NanolatheGeometryKnown bool
+	Sound                  string
+	AudioPositional        bool
+	AudioWater             bool
+	AudioAudible           bool
 }
 
 // Limits are presentation-only admission bounds. They do not limit the
@@ -151,6 +156,15 @@ func (c *EventBuffer) Admit(e Event) bool {
 	}
 	c.events = append(c.events, e)
 	return true
+}
+
+// EmitAudio admits one already-gated positional audio cue for presentation.
+// It shares the committed event ordering with impact and effect cues.
+func (c *EventBuffer) EmitAudio(e Event) bool {
+	e.Kind = KindAudio
+	e.AudioPositional = true
+	e.AudioAudible = true
+	return c.Admit(e)
 }
 
 // Reset starts a new deterministic admission window. IDs and sequence values
@@ -272,6 +286,7 @@ func (c *EventBuffer) SnapshotEventsInto(dst []EventView) []EventView {
 			FlashRadius: e.FlashRadius, FlashLevel: e.FlashLevel, HasFlashDisc: e.HasFlashDisc,
 			Strip: e.Strip, NanolatheIndex: e.NanolatheIndex, NanolatheCount: e.NanolatheCount,
 			NanolatheGeometryKnown: e.NanolatheGeometryKnown,
+			Sound:                  e.Sound, AudioPositional: e.AudioPositional, AudioWater: e.AudioWater, AudioAudible: e.AudioAudible,
 		}
 	}
 	return dst
@@ -281,7 +296,7 @@ func (c *EventBuffer) countEffects() int {
 	return len(c.events)
 }
 
-func validKind(k Kind) bool { return k >= KindCOBSFX && k <= KindCorpse }
+func validKind(k Kind) bool { return k >= KindCOBSFX && k <= KindAudio }
 
 func cloneEvent(e Event) Event {
 	e.DurationsA = append([]int32(nil), e.DurationsA...)

@@ -91,7 +91,7 @@ func runSessionHashStatePresentation(t *testing.T, present bool) sessionHashStat
 	if present {
 		// Attach the published audio queue so this enabled path includes the
 		// presentation drain seam while remaining device-free in headless mode.
-		c.SetAudioQueue(audio.NewQueue())
+		c.SetAudioService(audio.NewService(nil))
 	}
 
 	before := sessionFixtureStateFingerprint(s)

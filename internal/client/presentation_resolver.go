@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // ProjectileVisibilityMode selects the published coverage representation.
@@ -20,12 +21,19 @@ const ProjectileVisibilityModeBytes = 1
 // sheared cell is used for either representation; no rendertype branch may
 // call this again [03 §5.4].
 func ProjectileVisible(v frame.VisibilityView, p frame.ProjectileView, mode uint8, localPlayer uint8) bool {
+	return PointVisible(v, p.X, p.Y, p.Z, mode, localPlayer)
+}
+
+// PointVisible is the one-point coverage gate shared by every world-space
+// presentation pixel: the projected tile is the world X and the world Z less
+// half the world height, both in thirty-two unit tiles [03 §3.2][03 §5.4].
+func PointVisible(v frame.VisibilityView, x, y, z numeric.Fixed, mode uint8, localPlayer uint8) bool {
 	if !v.Valid || v.W <= 0 || v.H <= 0 {
 		return false
 	}
-	px := int32(int16(int64(p.X) >> 16))
-	py := int32(int16(int64(p.Y) >> 16))
-	pz := int32(int16(int64(p.Z) >> 16))
+	px := int32(int16(int64(x) >> 16))
+	py := int32(int16(int64(y) >> 16))
+	pz := int32(int16(int64(z) >> 16))
 	u := px >> 5
 	row := (pz - (py >> 1)) >> 5
 	if u < 0 || row < 0 || u >= v.W || row >= v.H {

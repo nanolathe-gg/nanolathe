@@ -1810,6 +1810,65 @@ angle through the same slot machinery.
 
 Texture mapping is corner-index affine 16.16 (direct-static): quads map index order `0→(0,0) 1→(1,0) 2→(1,1) 3→(0,1)`; n-gons 5–16 are `n`-edge affine polygons through the edge-table scanline mappers (ten-dword edge records) with per-edge `(dx<<16)/dy`, per-scanline `(uR-uL)/width` and `rowStep=(rowR-rowL)/width`, sampling `SHD[row*256+texel]` per pixel; the flat path is quads-only and fills the span directly. No stored UVs, no perspective divide (bounded-negative), clamp to `w-1/h-1`, nearest sample; transparent holes skip `SHD`. Face row is `trunc(dot(N,L)*5.0)&0x1F` with `L=(-0.8,1,0.25)`; `dont-shade` (definition flags bit 2) pins the identity row `15`; the gouraud row interpolates as `row delta/width` for both fixed and mobile textured paths (direct-static); the flat path bypasses `SHD`. Row `0x0F` is identity, rows `0..14` darken, `16..31` brighten (see §4.3.2).
 
+#### Nanoframe reveal [R-P0-19-N]
+
+An unfinished unit is composed exactly like a finished one, into the unit's own
+offscreen indexed image, and then recoloured in place before the image is
+blitted. Everything below is **Established (direct-static)**.
+
+**The height key.** While the model rasterizes, every vertex carries a third
+component beside its two screen coordinates: `key = trunc(vertexY/2) + bias`,
+where `vertexY` is the vertex's whole-world-unit height above the unit origin
+and `bias` is `50`, or `125` when one unit-definition flag bit is set
+(`TODO(question)`: the authored name of that bit is not identified; every stock
+path observed takes the `50` branch). The span filler interpolates the key in
+16.16 across each scanline and writes it, truncated to a byte, into the image's
+second plane — the same plane it uses as the unit's own depth test: a pixel is
+written only when the stored key is less than or equal to the incoming one, so
+the highest face at each pixel wins and ties go to the later face. That second
+plane is what the reveal reads.
+
+**The reveal.** With `p = trunc(remaining × 255)` from the construction
+remaining fraction (`1` at request, `0` at completion, so `p` counts down), the
+pass derives a sweep line `t` and a four-deep band `[max(t-4,0), t)` beneath it,
+all in byte arithmetic, and assigns each composed pixel one of three verdicts by
+where its height key falls: **below** the band, **inside** it, or **at or above**
+the line. A verdict is either a palette index, *erase* (write the image's
+background index, so the pixel does not appear), or *keep* (leave the composed
+texture or flat colour). Five stages, in build order:
+
+| `p` | sweep line `t` | below band | in band | at/above line |
+|---|---|---|---|---|
+| `> 235` | `(p-235)×255/20` | erase | pulse A | erase |
+| `200 < p ≤ 235` | `(p-200)×255/35` | erase | pulse A | erase |
+| `115 < p ≤ 200` | `(115-p)×255/85 − 1` | pulse A | pulse B | erase |
+| `30 < p ≤ 115` | `(30-p)×255/85 − 1` | keep | pulse B | pulse A |
+| `≤ 30` | `p×255/30` | keep | pulse A | keep |
+
+Divisions truncate toward zero and the line is consumed as a byte, so the two
+negative-line stages wrap into an ascending line. The visible result is: an
+empty body swept twice by a bright line, then a solid green fill rising from the
+model's base, then the texture rising from the base with solid green still above
+it, then the finished texture swept once more.
+
+**The pulses.** Two colours ping-pong across the sixteen-entry green ramp based
+at `0xa0`: `pulse A` from `(unitID ^ 5) + tick×33/30` and `pulse B` from
+`(unitID ^ 9) + tick×57/30`, each folded as `value & 0x10 ? 0xaf - (value & 0xf)
+: 0xa0 + (value & 0xf)`. `unitID` is the unit's own sixteen-bit identifier — the
+one its diagnostic text formats — so two adjacent nanoframes do not pulse
+together.
+
+**The outline.** After the recolour, every primitive of every visible piece is
+overdrawn as a closed polyline in `pulse B`, with the load-time selection
+primitive the one exclusion — the same primitive the raster pass skips. The
+outline is not depth-tested, so the whole wireframe shows through the body. This
+is why a nanoframe reads as a pulsing wireframe at the start of construction:
+the body is entirely erased and only the outline remains.
+
+**Not the reveal.** The construction fraction also forces the mobile image-cache
+path and suppresses one shadow branch. Neither changes the soft/hard draw
+classification or the bucket key.
+
 ### 5.3 Projected shadows and feature shadows
 
 Options distinguish master shadows, feature shadows, vehicle shadows, and a
@@ -1976,9 +2035,56 @@ tick count stored at the frame-reference array entry (frame base plus index
 times eight, plus four) — consumed by the standard countdown cursor, so flash
 and explosion animation timing is simulation-tick countdown ticks like every
 other sequence family. Build/reclaim direction uses the builder and target
-positions; the segment color is the fixed palette index 6 (established,
-direct-static) for both reclaim/capture and build-assist emissions, while the
-per-segment fade/lifetime remains `TODO(question)`.
+positions.
+
+**Correction (2026-08-27).** This section previously read "the segment color is
+the fixed palette index 6 (established, direct-static) for both reclaim/capture
+and build-assist emissions, while the per-segment fade/lifetime remains
+`TODO(question)`." That was wrong on both counts. The literal `6` those producers
+pass is the **strip selector**, not a colour — the same number doc 05 closes as
+"selector 6 and strip 6 are one number" — and the record carries no colour field
+at all. There is also no fade: a nano record is a particle emitter whose
+particles carry their own colours and lifetimes, described next. Nothing in the
+executable writes a palette index 6 for a nano segment.
+
+**The nanolathe spray [R-P0-19-P].** Established (direct-static). A nano segment
+record is an emitter, not a line. It is constructed from a source **point** (the
+`QueryNanoPiece` world position, passed as a degenerate box) and a target
+**box** (the target's world bounding box: the target's position plus the two
+bounding-corner triples its definition stores next to the model top). Both boxes
+are immediately narrowed, per axis, to the span between their `4/11` and `7/11`
+interpolants and stored as origin plus extent — so a particle's landing point is
+drawn from the middle three elevenths of the target's box, and that narrowed box
+is what gives the spray its cone.
+
+Every tick, a record spawns **five particles**, each costing **six CRT draws** —
+three to pick a point in the source box and three to pick a point in the target
+box, each as `origin + rand()×extent/0x8000`. The draws come from the **CRT
+presentation stream**, never the simulation stream, so nano presentation cannot
+perturb lockstep. A particle's lifetime is `trunc(distance/4)` ticks, taken as a
+signed sixteen-bit count from a floating-point distance: it travels four whole
+world units per tick, and a zero-length hop is discarded before the particle is
+written. Its colour is `0xa0 | nibble`, the nibble starting at `1 + (spawn index
+mod 7)` and advancing by one every tick, wrapping seven back to one — a shimmer
+up the green ramp `0xa1..0xa7`, never `0xa0`.
+
+The record's own spawn window closes one tick after creation, so each accepted
+work step contributes **ten particles over two ticks**; continuous construction
+therefore holds two live records and ten new particles per tick. Per tick the
+record's update advances each particle, drops the ones whose expiry tick has
+passed, and the record itself is destroyed once its particle list empties.
+
+Each particle draws at its world position through the ordinary projection,
+gated by the local player's coverage at its own projected tile — the same
+one-point gate the projectile path uses. The draw fills the rectangle from the
+particle's pixel to one pixel right and down, and the rectangle filler is
+**inclusive on both edges** (its span width is `right - left + 1` and it runs
+`bottom - top + 1` rows; the clipper's reject tests are inclusive to match), so
+a particle's mark is **two by two**, not one pixel. At one pixel the spray reads
+as a thin dotted line rather than the dense cone retail draws — the four-fold
+difference in coverage is what makes it look like a spray at all. The particle
+record carries one further field, set to `0x100` at spawn and read by nothing
+observed; its purpose is `TODO(question)`.
 
 **Nanolathe presentation pipeline [R-P0-19]:** Construction and reclaim work
 producers route their nano events through the beam-family strip-6 identity and
@@ -2694,10 +2800,11 @@ and unknown" without a resolution plan.
   bits of the stored projectile orientation fed to the Z rotation slot.
 - Beam fixed-point scale/lifetime edge cases, collision ordering at map borders,
   and line-color remap initialization.
-- Missile target invalidation, smoke/effect-strip lifetime and fade, and the
-  nanolathe per-segment fade/lifetime (the nanolathe segment color is
-  established: fixed palette index 6). Trail cadence is closed (additive deadline;
-  zero-delay emits every tick).
+- Missile target invalidation and smoke/effect-strip lifetime and fade. Trail
+  cadence is closed (additive deadline; zero-delay emits every tick). Nanolathe
+  segment fade/lifetime is closed and the earlier "fixed palette index 6" colour
+  claim is retracted — see §5.5 "The nanolathe spray" [R-P0-19-P]; the one field
+  still open there is the particle word set to `0x100` at spawn.
 - Flash/explosion animation cadence is closed for families using the countdown
   cursor: per-frame duration is the frame reference's second word (32-bit tick
   count at frame base + index*8 + 4), simulation-tick countdown ticks; cursor

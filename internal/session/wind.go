@@ -42,27 +42,16 @@ func NewBattleWindFromBounds(bounds mission.WindBounds, crt *rng.CRT, tick uint3
 }
 
 // InitWindForSession creates or replaces s.Wind from s.Mission's retained
-// WindBounds and seeds the briefing draws per [01 §7.3] C17. If s.Mission is
-// nil the terrain's WindMin/WindMax are used as fallback; if s.World is also
-// nil a zero range is used (still consumes the three draws per I4, see
-// world/wind.go SeedBriefing comment). The caller supplies the CRT stream and
-// the authoritative tick at which the battle entry occurs (normally the clock's
-// GlobalTick before the first sub-tick).
+// WindBounds and seeds the briefing draws per [01 §7.3] C17. A session without
+// a mission has no authored bounds and is left uninitialized; strict session
+// composition reports that missing dependency. The caller supplies the CRT
+// stream and the authoritative tick at which battle entry occurs (normally the
+// clock's GlobalTick before the first sub-tick).
 func (s *Session) InitWindForSession(crt *rng.CRT, tick uint32) {
-	if s == nil {
+	if s == nil || s.Mission == nil {
 		return
 	}
-	var w *world.Wind
-	if s.Mission != nil {
-		w = NewBattleWindFromBounds(s.Mission.WindBounds, crt, tick)
-	} else if s.World != nil {
-		w = world.NewWind(s.World.WindMin, s.World.WindMax)
-		InitBattleWind(w, crt, tick)
-	} else {
-		w = world.NewWind(0, 0)
-		InitBattleWind(w, crt, tick)
-	}
-	s.Wind = w
+	s.Wind = NewBattleWindFromBounds(s.Mission.WindBounds, crt, tick)
 }
 
 // Later wind arithmetic [01 §7.3] [GAP T13] is intentionally absent here.

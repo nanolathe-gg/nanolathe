@@ -103,6 +103,10 @@ type Client struct {
 	crt               *rng.CRT
 	shakeEvents       map[shakeEventKey]struct{}
 	lastShakeTick     uint32
+	frameTick         uint32                       // committed tick of the frame being composed
+	nano              presentationrender.NanoField // live nanolathe particle records [03 §5.5]
+	lastNanoTick      uint32
+	nanoDepth         []uint8 // per-pixel nanoframe height/depth key [03 §5.2]
 	worldBuckets      worldBuckets
 	fogCache          *visibility.FogCache
 	fogOps            []presentationrender.FogOp
@@ -128,15 +132,9 @@ type Client struct {
 
 	in InputState
 
-	// Audio is presentation-only and never feeds simulation [03 §8.3] C19 I6.
-	// Queue drain runs once per rendered frame outside simulation C18;
-	// variant selection uses CRT stream [03 §8.3] C17; positional helper uses
-	// audience gating (mode &2) and viewport pan/attenuation [03 §8.3].
-	audioQueue    *audio.Queue
-	audioCache    *audio.SampleCache
-	audioMusic    *audio.Controller
-	audioViewport audio.Viewport
-	audioFrame    uint32
+	// Audio is the concrete internal/audio owner. The client only binds the
+	// service and drains it at the rendered-frame boundary [03 §8.3–§8.4] [I6].
+	audioService *audio.Service
 }
 
 type shakeEventKey struct {

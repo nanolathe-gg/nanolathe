@@ -297,7 +297,7 @@ func TestLoop_DeathFinalizeBeforeLaterSlot(t *testing.T) {
 	uB.Dying = true
 	uB.DeathCause = units.DeathKilled
 	s.Clock.GlobalTick = 30
-	s.authoritativeTick(30)
+	s.stepAuthoritativePhases(30)
 	// At tick 30, A's pre-update has run before B finalization, while C's has
 	// not. After the full sweep both live units must have observed the update.
 	if finalizeTick != 30 || aAtFinalize == 0 || cAtFinalize != 0 {

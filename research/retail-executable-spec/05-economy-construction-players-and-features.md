@@ -1619,12 +1619,19 @@ update draws its position jitter from the **CRT** random stream (six draws
 per iteration, five iterations — 30 draws per record per tick), never from
 the simulation stream, so nano presentation cannot perturb the sim RNG.
 
-```text
-TODO(question): the renderer-side consumers of strip 6 — the per-segment
-fade curve and the logical-to-palette color mapping — remain open
-(presentation lane); the engine-side record carries positions, interpolation
-deltas, and a value of 0xa1 + (iteration % 7) whose consumer was not traced.
-```
+**Closed (2026-08-27).** This addendum previously carried a `TODO(question)`
+reading "the renderer-side consumers of strip 6 — the per-segment fade curve and
+the logical-to-palette color mapping — remain open (presentation lane); the
+engine-side record carries positions, interpolation deltas, and a value of
+0xa1 + (iteration % 7) whose consumer was not traced." Both are now traced and
+the framing was wrong: there is no fade curve, because the record is a particle
+emitter rather than a drawn segment, and the `0xa1 + (iteration % 7)` value is
+the particle's own palette index, advanced one step up the green ramp every
+tick. The `4/11` and `7/11` factors narrow the source and target boxes rather
+than animating a segment. The full contract — box narrowing, five particles and
+six CRT draws per tick, the four-world-units-per-tick travel and its
+`trunc(distance/4)` lifetime, the colour cycle, and the single-pixel LOS-gated
+draw — is written up at [03 §5.5 "The nanolathe spray"] as `[R-P0-19-P]`.
 
 ## Repair
 

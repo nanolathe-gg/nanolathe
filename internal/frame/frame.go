@@ -325,10 +325,11 @@ const (
 	EventKindLHTFlash
 	EventKindShake
 	EventKindCorpse
+	EventKindAudio
 )
 
 func (k EventKind) String() string {
-	names := [...]string{"invalid", "cob_sfx", "nanolathe", "muzzle_flash", "smoke_start", "smoke_end", "projectile_trail", "impact", "water_impact", "explosion", "lht_flash", "shake", "corpse"}
+	names := [...]string{"invalid", "cob_sfx", "nanolathe", "muzzle_flash", "smoke_start", "smoke_end", "projectile_trail", "impact", "water_impact", "explosion", "lht_flash", "shake", "corpse", "audio"}
 	if int(k) >= len(names) {
 		return names[0]
 	}
@@ -370,6 +371,10 @@ type EventView struct {
 	NanolatheIndex            int32
 	NanolatheCount            int32
 	NanolatheGeometryKnown    bool
+	Sound                     string
+	AudioPositional           bool
+	AudioWater                bool
+	AudioAudible              bool
 }
 
 // ResultScore is one player's committed result statistic.

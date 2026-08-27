@@ -72,68 +72,43 @@ func TestStateTransitions(t *testing.T) {
 	}
 }
 
-func TestNextDispatchFirstRun(t *testing.T) {
-	// C2: completing the state-5 loading thread installs state 6 whose FIRST RUN
-	// happens on the NEXT dispatch, not inline [08 "Session states"].
-	s := &Session{State: StateLoading}
-	var loadingRuns, battleRuns int
-	s.SetHandler(StateLoading, func(ss *Session) { loadingRuns++ })
-	s.SetHandler(StateBattle, func(ss *Session) { battleRuns++ })
+func TestAdvanceDispatchesEachConcreteState(t *testing.T) {
+	// Advance selects the retail operation directly for every state. These
+	// assertions cover the state graph without installing test callbacks
+	// [08 "Session states"].
+	tests := []struct {
+		name State
+		want State
+	}{
+		{StateTeardownA, StateRouter},
+		{StateTeardownB, StateRouter},
+		{StateRouter, StateLoading},
+		{StateNetworkPreload, StateLoading},
+		{StateLocalPreload, StateLoading},
+		{StateLoading, StateBattle},
+		{StateBattle, StateBattle},
+		{StatePostBattle, StateRouter},
+	}
+	for _, test := range tests {
+		s := &Session{State: test.name}
+		if test.name == StateBattle {
+			s.pendingBattle = true
+		}
+		s.Advance()
+		if s.State != test.want {
+			t.Errorf("Advance(%v) state = %v want %v", test.name, s.State, test.want)
+		}
+		if test.name == StateBattle && s.IsPendingBattle() {
+			t.Errorf("Advance(%v) should clear deferred first-run marker", test.name)
+		}
+	}
 
-	// Loading handler runs when we dispatch in state 5.
+	// An unknown state is unsupported and idle; it must not call any state
+	// operation or alter the value [08 "Session states"].
+	s := &Session{State: State(8)}
 	s.Advance()
-	if loadingRuns != 1 || battleRuns != 0 {
-		t.Fatalf("first dispatch in state 5: loadingRuns=%d battleRuns=%d want 1,0", loadingRuns, battleRuns)
-	}
-	// Simulate loading thread completion installing state 6.
-	if !s.CompleteLoading() {
-		t.Fatalf("CompleteLoading should succeed from state 5")
-	}
-	if s.State != StateBattle {
-		t.Fatalf("CompleteLoading should install state 6, got %v", s.State)
-	}
-	if !s.IsPendingBattle() {
-		t.Fatalf("pendingBattle should be true after install before next dispatch")
-	}
-	if battleRuns != 0 {
-		t.Fatalf("battle handler must NOT run inline on CompleteLoading, battleRuns=%d", battleRuns)
-	}
-	// Next dispatch runs battle for first time.
-	s.Advance()
-	if battleRuns != 1 {
-		t.Fatalf("battle handler first run should happen on next dispatch, got %d", battleRuns)
-	}
-	if s.IsPendingBattle() {
-		t.Fatalf("pendingBattle should clear after first run")
-	}
-	// Subsequent dispatch runs again.
-	s.Advance()
-	if battleRuns != 2 {
-		t.Fatalf("second battle dispatch should run again, got %d", battleRuns)
-	}
-	// CompleteLoading from wrong state is no-op.
-	s.State = StateRouter
-	if s.CompleteLoading() {
-		t.Fatalf("CompleteLoading from non-loading state should return false")
-	}
-	// Normal inline 5->6 via handler also defers to next dispatch (single-dispatch guarantee).
-	s2 := &Session{State: StateLoading}
-	var s2BattleRuns int
-	s2.SetHandler(StateBattle, func(ss *Session) { s2BattleRuns++ })
-	s2.SetHandler(StateLoading, func(ss *Session) {
-		// handler transitions 5->6 inline
-		ss.TransitionTo(StateBattle)
-	})
-	s2.Advance()
-	if s2.State != StateBattle {
-		t.Fatalf("handler-initiated 5->6 should update State to 6")
-	}
-	if s2BattleRuns != 0 {
-		t.Fatalf("handler-initiated 5->6 must not run battle handler inline, got %d", s2BattleRuns)
-	}
-	s2.Advance()
-	if s2BattleRuns != 1 {
-		t.Fatalf("battle handler should run on next dispatch after inline transition, got %d", s2BattleRuns)
+	if s.State != State(8) {
+		t.Fatalf("Advance(8) changed unsupported state to %v", s.State)
 	}
 }
 

@@ -140,14 +140,14 @@ func TestStrictCatalogValidatesSuppliedCatalog(t *testing.T) {
 	missingMovement := &content.Catalog{
 		Sides: []*content.SideDef{{Name: "ARM"}},
 	}
-	if _, err := strictCatalog(nil, missingMovement); err == nil || !strings.Contains(err.Error(), "moveinfo.tdf") {
+	if _, err := strictCatalogWithProgress(nil, missingMovement, nil); err == nil || !strings.Contains(err.Error(), "moveinfo.tdf") {
 		t.Fatalf("missing MOVEINFO supplied catalog error = %v, want exact validation diagnostic", err)
 	}
 
 	missingSides := &content.Catalog{
 		Movement: map[string]*content.MovementClass{"testmove": {}},
 	}
-	if _, err := strictCatalog(nil, missingSides); err == nil || !strings.Contains(err.Error(), "sidedata.tdf") {
+	if _, err := strictCatalogWithProgress(nil, missingSides, nil); err == nil || !strings.Contains(err.Error(), "sidedata.tdf") {
 		t.Fatalf("missing SIDEDATA supplied catalog error = %v, want exact validation diagnostic", err)
 	}
 
@@ -155,7 +155,7 @@ func TestStrictCatalogValidatesSuppliedCatalog(t *testing.T) {
 		Movement: map[string]*content.MovementClass{"testmove": {}},
 		Sides:    []*content.SideDef{{Name: "ARM"}},
 	}
-	got, err := strictCatalog(nil, valid)
+	got, err := strictCatalogWithProgress(nil, valid, nil)
 	if err != nil {
 		t.Fatalf("minimally valid supplied catalog: %v", err)
 	}

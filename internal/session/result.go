@@ -471,22 +471,6 @@ func (s *Session) GetResultArmedTick() uint32 {
 	return s.resultArmedTick
 }
 
-// ClearResult is used only by tests to reset state between fixtures.
-func (s *Session) ClearResult() {
-	if s == nil {
-		return
-	}
-	s.result = Result{}
-	s.resultPending = false
-	s.resultPendingWinner = 0
-	s.resultPendingLosers = nil
-	s.resultPendingReason = ""
-	s.resultPendingDraw = false
-	s.resultArmedTick = 0
-	s.resultNextDue = 0
-	s.Latch = NewEndLatch()
-}
-
 // ResetResultForRetry clears result and latch for a clean retry [RS-05].
 func (s *Session) ResetResultForRetry() {
 	if s == nil {

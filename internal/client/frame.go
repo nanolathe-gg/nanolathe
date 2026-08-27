@@ -133,11 +133,11 @@ func (c *Client) Frame() {
 	// Presentation-only; uses CRT stream [03 §8.3] C19 [I4]; never touches Sim RNG.
 	cur := c.buffer.Current()
 	ok := cur != nil
-	c.TickAudio()
 	// Keep audio viewport in sync with camera for positional pan/attenuation [03 §8.3].
 	if c.cam != nil {
 		c.UpdateAudioViewportFromCamera()
 	}
+	c.TickAudio()
 
 	// C9: read the committed frame only; intermediate ticks are not drawn
 	// (PLAN_03 C15). A paused simulation simply presents the same frame.
@@ -243,7 +243,14 @@ func (c *Client) drawProjectiles(cur *frame.Frame) {
 }
 
 func (c *Client) drawEffects(cur *frame.Frame) {
-	if c == nil || cur == nil || c.cam == nil || len(cur.Effects) == 0 {
+	if c == nil || cur == nil || c.cam == nil {
+		return
+	}
+	// Nano segments are emitters, not sprites: they advance once per committed
+	// tick and then paint their live particles [03 §5.5].
+	c.tickNanolathe(cur)
+	c.drawNanolathe(cur)
+	if len(cur.Effects) == 0 {
 		return
 	}
 	c.DrawEffectViews(cur.Effects, c.effectDrawOptions())

@@ -183,12 +183,6 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 	return nil
 }
 
-// strictCatalog compiles a single immutable catalog from the VFS. It never
-// fabricates an empty fallback. [02 §5]
-func strictCatalog(fs vfs.FSOps, cat *content.Catalog) (*content.Catalog, error) {
-	return strictCatalogWithProgress(fs, cat, nil)
-}
-
 func strictCatalogWithProgress(fs vfs.FSOps, cat *content.Catalog, report content.Progress) (*content.Catalog, error) {
 	if cat != nil {
 		if err := cat.Validate(); err != nil {
@@ -523,7 +517,7 @@ func createAndBindServices(s *Session) error {
 			}
 		case combat.EventStartSound:
 			// Start sound is emitted by the common initializer before Fire/RockUnit;
-			// route the authored alias through the session-owned direct audio queue.
+			// route the authored alias into the committed presentation event stream.
 			if ev.Sound != "" {
 				_, _, _ = s.EmitWeaponStart(ev.Sound, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z})
 			}
@@ -573,10 +567,10 @@ func createAndBindServices(s *Session) error {
 	if s.Mission == nil {
 		return fmt.Errorf("session: missing Mission [08]")
 	}
-	// Audio is presentation-only but owned by session so events can queue
-	// without client import cycle [03 §8.3][03 §8.4] I6. Init lazily if not yet.
-	if s.AudioQueue == nil || s.AudioCache == nil || s.AudioMusic == nil {
-		s.InitAudio(s.audioFS)
+	// Audio arbitration and media state belong to internal/audio; initialize
+	// its concrete owner before event producers are installed [03 §8.2–§8.4].
+	if s.Audio == nil {
+		s.InitAudio(nil)
 	}
 	return nil
 }

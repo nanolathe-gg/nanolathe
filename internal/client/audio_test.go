@@ -8,22 +8,22 @@ import (
 )
 
 func TestPlayPositionalRequiresVisibilityPredicate(t *testing.T) {
-	c, err := New(Options{Width: 64, Height: 64, Headless: true})
+	_, err := New(Options{Width: 64, Height: 64, Headless: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache := audio.NewCache(nil)
-	if _, err := cache.Put("pos_alias", []byte{128, 128}); err != nil {
+	service := audio.NewService(nil)
+	if _, err := service.Cache.Put("pos_alias", []byte{128, 128}); err != nil {
 		t.Fatal(err)
 	}
-	c.SetAudioCache(cache)
+	service.SetViewport(audio.Viewport{})
 	be := audio.NewBackend(true)
 	old := audio.GlobalBackend()
 	audio.SetGlobalBackend(be)
 	defer audio.SetGlobalBackend(old)
 
 	pos := [3]numeric.Fixed{}
-	if _, _, ok := c.PlayPositional("pos_alias", pos, nil); ok {
+	if _, _, ok := service.PlayPositional("pos_alias", pos, nil); ok {
 		t.Fatal("positional audio should fail closed without a visibility predicate")
 	}
 	if be.PlayCount() != 0 {
@@ -32,7 +32,7 @@ func TestPlayPositionalRequiresVisibilityPredicate(t *testing.T) {
 
 	// Other positional contracts may opt into an explicit always-audible test
 	// predicate; this must continue to exercise pan/attenuation and playback.
-	if _, _, ok := c.PlayPositional("pos_alias", pos, func([3]numeric.Fixed) bool { return true }); !ok {
+	if _, _, ok := service.PlayPositional("pos_alias", pos, func([3]numeric.Fixed) bool { return true }); !ok {
 		t.Fatal("explicit visibility predicate should admit positional audio")
 	}
 	if be.PlayCount() != 1 {

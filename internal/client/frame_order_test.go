@@ -3,6 +3,7 @@ package client
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/palette"
@@ -10,6 +11,38 @@ import (
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
+
+func TestFrameRefreshesAudioViewportBeforeDrain(t *testing.T) {
+	buf := frame.NewBuffer()
+	w := buf.BeginWrite()
+	w.Events = []frame.EventView{{Kind: frame.EventKindAudio, AudioPositional: true, AudioAudible: true, Sound: "shot", X: numeric.FixedFromInt(40), Z: numeric.FixedFromInt(50)}}
+	if err := buf.Publish(1); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(Options{Buffer: buf, Width: 64, Height: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := audio.NewService(nil)
+	if _, err := service.Cache.Put("shot", []byte{128, 129}); err != nil {
+		t.Fatal(err)
+	}
+	service.Registry.SetCache(service.Cache)
+	c.SetAudioService(service)
+	c.SetCamera(&camera.Camera{X: 32, Z: 48, ViewW: 64, ViewH: 64, MapW: 256, MapH: 256})
+	old := audio.GlobalBackend()
+	b := audio.NewBackend(true)
+	audio.SetGlobalBackend(b)
+	t.Cleanup(func() { audio.SetGlobalBackend(old) })
+	c.Frame()
+	volumes := b.PlayedVolumes()
+	if len(volumes) != 1 {
+		t.Fatalf("played volumes=%v, want one positional playback", volumes)
+	}
+	if volumes[0] != audio.VolumeFromAttenuation(audio.VolInView) {
+		t.Fatalf("audio drained before camera viewport refresh: volume=%v want in-view %v", volumes[0], audio.VolumeFromAttenuation(audio.VolInView))
+	}
+}
 
 func TestDrawWorldPassProcessesAllDrawablesInPainterOrder(t *testing.T) {
 	c := newTestClient(t)

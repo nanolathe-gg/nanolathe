@@ -45,18 +45,14 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 	for i, d := range draws {
 		view := effects[i]
 		if d.Kind == frame.EventKindNanolathe.String() && d.Strip == 6 {
-			// Nanolathe cadence/count/color are established, but exact per-segment
-			// target-footprint offsets are not. Do not draw duplicate full-length
-			// lines until an authoritative geometry producer supplies them [03 §5.5].
+			// A nano segment is an emitter, not a line. Its particles are owned
+			// by the nanolathe field, which advances once per committed tick and
+			// paints itself before this pass [03 §5.5]. A segment whose geometry
+			// producer is unresolved emits nothing at all.
 			if !view.NanolatheGeometryKnown {
 				stats.Skipped++
 				continue
 			}
-			// Nanolathe is an authored primitive: construction modes use semantic
-			// GUI palette index 6 [03 §5.5].
-			hx, hy := c.cam.WorldToScreen(d.X, d.Y, d.Z)
-			tx, ty := c.cam.WorldToScreen(d.TargetX, d.TargetY, d.TargetZ)
-			c.drawIndexedLine(hx-128, hy-32, tx-128, ty-32, c.GUIColor(render.NanolatheColor))
 			stats.Strokes++
 			continue
 		}

@@ -10,13 +10,9 @@ import (
 // attachBattleAudio is the single composition step that joins the session's
 // audio state to the battle client [03 §8.2][03 §8.3][03 §8.4].
 //
-// The session owns the event queue, sample cache and music controller so
+// The audio service owns the event queue, sample cache and music controller so
 // simulation events can be queued without a client import cycle; the client
-// owns the device and drains the queue once per rendered frame outside the
-// tick. Both halves existed, but nothing joined them: no production path
-// called SetAudioQueue, SetAudioCache or SetMusicController, so Client.Frame
-// drained a queue it had never been given and no ordinary acknowledgement or
-// weapon cue could reach playback in the windowed battle.
+// binds that service and drains it once per rendered frame outside the tick.
 //
 // Everything here is presentation-only [I6]: no simulation state is read or
 // written. The client owns the platform audio device at the presentation
@@ -25,14 +21,10 @@ func attachBattleAudio(cl *client.Client, sess *session.Session, fs vfs.FSOps) {
 	if cl == nil || sess == nil {
 		return
 	}
-	// The session builds queue/cache/music lazily; make sure they exist before
-	// they are handed over, and give the cache the mounted content FS so alias
-	// resolution can reach retail samples.
+	// The session's audio service owns queue/cache/music; the client receives
+	// only that owner and drains it at the presentation boundary.
 	sess.InitAudio(fs)
-
-	cl.SetAudioQueue(sess.AudioQueue)
-	cl.SetAudioCache(sess.AudioCache)
-	cl.SetMusicController(sess.AudioMusic)
+	cl.SetAudioService(sess.Audio)
 	cl.SetPresentationCRT(sess.PresentationCRT())
 
 	// The viewport is refreshed from the camera every frame by Client.Frame;
@@ -42,11 +34,10 @@ func attachBattleAudio(cl *client.Client, sess *session.Session, fs vfs.FSOps) {
 }
 
 // detachBattleAudio releases the device and stops music when the battle view
-// closes. The queue, cache and controller stay owned by the session.
+// closes. The queue, cache and controller stay owned by the audio service.
 func detachBattleAudio(cl *client.Client, sess *session.Session) {
-	if sess != nil && sess.AudioMusic != nil {
-		sess.AudioMusic.Stop()
-		sess.AudioMusic.Close()
+	if sess != nil && sess.Audio != nil {
+		sess.Audio.Close()
 	}
 	if cl == nil {
 		return

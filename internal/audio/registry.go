@@ -51,6 +51,29 @@ func (r *Registry) Cache() *SampleCache {
 	return r.cache
 }
 
+// SetFS updates the resolver for an existing registry without replacing its
+// ordered alias identities or decoded samples.
+func (r *Registry) SetFS(fs vfs.FSOps) {
+	if r == nil || fs == nil {
+		return
+	}
+	r.fs = fs
+	if r.cache != nil {
+		r.cache.SetFS(fs)
+	}
+}
+
+// SetCache retains an externally supplied cache while keeping registry and
+// cache ownership in the audio package.
+func (r *Registry) SetCache(cache *SampleCache) {
+	if r != nil && cache != nil {
+		r.cache = cache
+		if r.fs != nil {
+			cache.SetFS(r.fs)
+		}
+	}
+}
+
 func aliasName(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) > 32 {

@@ -67,7 +67,7 @@ func TestMeteorDeterminism_TwoRunsIdentical(t *testing.T) {
 		}
 		s.SeedSessionRNG(seedSim, seedCrt)
 		for tick := uint32(1); tick <= 200; tick++ {
-			s.authoritativeTick(tick)
+			s.stepAuthoritativePhases(tick)
 		}
 		projCount = s.Combat.Count()
 		crtDraws = s.CrtRNG().Draws()
@@ -111,7 +111,7 @@ func TestMeteorDeterminism_TwoRunsIdentical(t *testing.T) {
 		}
 		s.SeedSessionRNG(seedSim, seedCrt)
 		for tick := uint32(1); tick <= 200; tick++ {
-			s.authoritativeTick(tick)
+			s.stepAuthoritativePhases(tick)
 		}
 		return s.CrtRNG().Draws(), s.SimRNG().Draws()
 	}
@@ -153,7 +153,7 @@ func TestMeteorWithoutTerrainDoesNotSchedule(t *testing.T) {
 		Combat: &combat.Service{},
 	}
 	s.SeedSessionRNG(12345, 67890)
-	s.authoritativeTick(1)
+	s.stepAuthoritativePhases(1)
 	if got := s.Combat.Count(); got != 0 {
 		t.Fatalf("nil-world meteor scheduled %d projectiles", got)
 	}

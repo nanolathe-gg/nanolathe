@@ -127,7 +127,7 @@ func TestRS06_MapSeedNotAffectState(t *testing.T) {
 		uw.Create(cat.Units["armcom"], 0, 0, 0, 0)
 		uw.Create(cat.Units["cormex"], 1, 0, 0, 0)
 		for i := 0; i < 5; i++ {
-			s.authoritativeTick(uint32(i))
+			s.stepAuthoritativePhases(uint32(i))
 		}
 		return s, HashState(s)
 	}
@@ -169,16 +169,16 @@ func TestRS06_TwoSessionsIsolated(t *testing.T) {
 	sA_iso := makeSession(seedA1, crtA1)
 	sB_iso := makeSession(seedB1, crtB1)
 	for i := 0; i < 10; i++ {
-		sA_iso.authoritativeTick(uint32(i))
+		sA_iso.stepAuthoritativePhases(uint32(i))
 	}
 	for i := 0; i < 10; i++ {
-		sB_iso.authoritativeTick(uint32(i))
+		sB_iso.stepAuthoritativePhases(uint32(i))
 	}
 	sA_int := makeSession(seedA1, crtA1)
 	sB_int := makeSession(seedB1, crtB1)
 	for i := 0; i < 10; i++ {
-		sA_int.authoritativeTick(uint32(i))
-		sB_int.authoritativeTick(uint32(i))
+		sA_int.stepAuthoritativePhases(uint32(i))
+		sB_int.stepAuthoritativePhases(uint32(i))
 	}
 	hashA_iso := HashState(sA_iso)
 	hashB_iso := HashState(sB_iso)
@@ -320,8 +320,8 @@ func TestRS06_LegacyProductionGuard(t *testing.T) {
 			t.Fatalf("legacy production tick graph called in Session.Step: %q [RS-06]", pat)
 		}
 	}
-	if !strings.Contains(snippet, "authoritativeTick") {
-		t.Fatalf("Step must call authoritativeTick [RS-06]")
+	if !strings.Contains(snippet, "stepUnitPhase") {
+		t.Fatalf("Step must contain the direct retail phase sequence [RS-06]")
 	}
 }
 

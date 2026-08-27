@@ -85,6 +85,11 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool, mode int) {
 	if c == nil || len(c.indexed) != c.width*c.height {
 		return
 	}
+	// The committed tick drives every presentation animator that reads it
+	// directly (nanoframe pulse, nanolathe particles) [03 §5.2][03 §5.5].
+	if cur != nil {
+		c.frameTick = cur.Tick
+	}
 	// A missing terrain source is an empty indexed surface. No synthetic art is
 	// emitted when the frontend has no world attachment [I9].
 	for i := range c.indexed {

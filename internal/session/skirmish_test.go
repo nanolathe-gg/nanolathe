@@ -1,7 +1,6 @@
 package session
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -9,8 +8,6 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/economy"
-	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -49,39 +46,6 @@ func prepareFixtureSkirmishCatalog(cat *content.Catalog, cfg *SkirmishConfig) {
 	} else if cat.Sides[0] == nil || cat.Sides[0].Commander == "" {
 		cat.Sides[0] = &content.SideDef{Commander: commander}
 	}
-}
-
-func skirmishBattleEntryFixture(s *Session, cfg *SkirmishConfig, m *mission.Mission, spy *BattleEntrySpy) error {
-	if s == nil {
-		return fmt.Errorf("session: nil session")
-	}
-	if m == nil || cfg == nil {
-		return fmt.Errorf("session: nil mission or config")
-	}
-	spyRecord(spy, "features")
-	if err := skirmishPlaceFeatures(s, m); err != nil {
-		return err
-	}
-	spyRecord(spy, "units")
-	if err := skirmishReconstructUnits(s, *cfg, m); err != nil {
-		return err
-	}
-	initCOBForSession(s)
-	wireMissionCargo(s, m)
-	spyRecord(spy, "barrier")
-	if err := skirmishCrossBarrier(s); err != nil {
-		return err
-	}
-	spyRecord(spy, "resources")
-	if s.Econ != nil {
-		for p := 0; p < cfg.NumPlayers && p < len(s.Econ.Players); p++ {
-			if s.Econ.Players[p].Exists {
-				economy.CreditSpawn(&s.Econ.Players[p], economy.Metal, float32(cfg.Players[p].Metal))
-				economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, float32(cfg.Players[p].Energy))
-			}
-		}
-	}
-	return nil
 }
 
 func fsFromMapSkirmish(t *testing.T, files map[string]string) *vfs.FS {
@@ -262,78 +226,6 @@ func TestSkirmishDefaults(t *testing.T) {
 	if s.Skirmish.MapName != cfg2.MapName || s.Skirmish.NumPlayers != cfg2.NumPlayers ||
 		s.Skirmish.Players[1].Controller != cfg2.Players[1].Controller {
 		t.Fatalf("session did not retain lobby config: %+v", s.Skirmish)
-	}
-}
-
-func TestSkirmishBattleEntryOrder(t *testing.T) {
-	restoreRNG := scopeTestRNGStreams()
-	defer restoreRNG()
-	// C9 via the SAME shared order mission.go uses [08 "Placement and battle entry"].
-	ota := "[GlobalHeader]\n{\nminwindspeed=15;\nmaxwindspeed=35;\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=10;\nZPos=20;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=30;\nZPos=40;\n}\n}\n[units]\n{\n[unit0]\n{\nUnitname=armcom;\nXPos=100;\nZPos=200;\nPlayer=0;\n}\n}\n[features]\n{\n[feature0]\n{\nFeaturename=tree;\nXPos=5;\nZPos=5;\n}\n}\n}\n}\n"
-	fs := fsFromMapSkirmish(t, map[string]string{"maps/battle.ota": ota})
-	cat := &content.Catalog{
-		Units: map[string]*content.UnitDef{"armcom": {UnitName: "armcom", MaxDamage: 100, SightDistance: 128}},
-		Maps:  map[string]*content.MapHeader{},
-	}
-	m, err := mission.LoadWithType(fs, mission.TypeSkirmish, "battle.ota", 0, 2, nil)
-	if err != nil {
-		t.Fatalf("load mission: %v", err)
-	}
-	cfg := SkirmishConfig{MapName: "battle", NumPlayers: 2}
-	cfg.ApplyDefaults()
-	s := &Session{Econ: &economy.Service{}, Catalog: cat}
-	s.Econ.Players[0].Exists = true
-	s.Econ.Players[0].ControllerState = 1
-	s.Econ.Players[1].Exists = true
-	s.Econ.Players[1].ControllerState = 1
-	// Mirror untouched before
-	beforeMirror := s.Econ.Players[0].Mirror
-	spy := &BattleEntrySpy{}
-	prepareFixtureSkirmishCatalog(cat, &cfg)
-	if err := skirmishBattleEntryFixture(s, &cfg, m, spy); err != nil {
-		t.Fatalf("SkirmishBattleEntry: %v", err)
-	}
-	want := []string{"features", "units", "barrier", "resources"}
-	if len(spy.Order) != len(want) {
-		t.Fatalf("battle entry order = %v want %v [08 \"Placement and battle entry\"] C9", spy.Order, want)
-	}
-	for i, w := range want {
-		if spy.Order[i] != w {
-			t.Fatalf("step %d = %q want %q", i, spy.Order[i], w)
-		}
-	}
-	// Verify starting resources directly to live stock outside ledger [05][C9]
-	if s.Econ.Players[0].Stock[economy.Metal] != 1000 || s.Econ.Players[0].Stock[economy.Energy] != 1000 {
-		t.Fatalf("skirmish resources must CreditSpawn 1000 directly to stock C9 got metal %v energy %v", s.Econ.Players[0].Stock[economy.Metal], s.Econ.Players[0].Stock[economy.Energy])
-	}
-	if s.Econ.Players[0].Mirror != beforeMirror {
-		t.Fatalf("grant must not touch Mirror ledger C9 before %v after %v", beforeMirror, s.Econ.Players[0].Mirror)
-	}
-	// Units spawned at start positions per [08 "Placement and battle entry"] C9
-	if s.Units.Used() == 0 {
-		t.Fatalf("units spawned at start positions: no units created")
-	}
-	// Check at least NumPlayers commanders spawned
-	if s.Units.Used() < 2 {
-		t.Fatalf("skirmish should spawn at least NumPlayers units, got %d", s.Units.Used())
-	}
-	// Verify those units are near start positions (10,20) or (30,40) in fixed *65536)
-	// P0-04: Location==0 shuffles via CRT Fisher-Yates; owner 0 may be at either start with seed 0 gate.
-	found := false
-	for _, u := range s.Units.Iter() {
-		if u.Owner != 0 {
-			continue
-		}
-		if (u.X == 10*65536 && u.Z == 20*65536) || (u.X == 30*65536 && u.Z == 40*65536) {
-			found = true
-		}
-	}
-	if !found {
-		var positions []string
-		for _, u := range s.Units.Iter() {
-			positions = append(positions, fmt.Sprintf("%d %d", u.X.Raw(), u.Z.Raw()))
-		}
-		t.Fatalf("unit at start position not found; positions %v", positions)
 	}
 }
 

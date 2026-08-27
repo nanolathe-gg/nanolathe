@@ -19,11 +19,14 @@ func TestCombatStartEventsPublishOnceInOrderWithoutStateHashFeedback(t *testing.
 	s.Combat.Events(combat.Event{Kind: combat.EventStartSound, Tick: 7, Source: 4, Position: pos, Sound: "sound/start.wav"})
 	s.Combat.Events(combat.Event{Kind: combat.EventStartSmoke, Tick: 7, Source: 4, Target: 9, Position: pos})
 	events := s.publication.events.Events()
-	if len(events) != 1 {
-		t.Fatalf("presentation events %d, want visual smoke only: %+v", len(events), events)
+	if len(events) != 2 {
+		t.Fatalf("presentation events %d, want ordered audio and visual cues: %+v", len(events), events)
 	}
-	if events[0].Kind != frame.KindSmokeStart || events[0].EffectID != uint32(pool.Handle(9)) {
-		t.Fatalf("start smoke event %+v, want visual smoke and projectile handle 9", events[0])
+	if events[0].Kind != frame.KindAudio || events[0].Sound != "sound/start.wav" || !events[0].AudioPositional {
+		t.Fatalf("start audio event %+v, want positional sound", events[0])
+	}
+	if events[1].Kind != frame.KindSmokeStart || events[1].EffectID != uint32(pool.Handle(9)) {
+		t.Fatalf("start smoke event %+v, want visual smoke and projectile handle 9", events[1])
 	}
 	if got := HashState(s); got != before {
 		t.Fatalf("presentation callbacks changed authoritative state hash %s -> %s", before, got)

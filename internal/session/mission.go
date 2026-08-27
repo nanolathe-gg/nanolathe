@@ -14,7 +14,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -121,7 +120,7 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 	if err := createAndBindServices(s); err != nil {
 		return nil, err
 	}
-	if err := BattleEntry(s, m, nil); err != nil {
+	if err := BattleEntry(s, m); err != nil {
 		return nil, err
 	}
 	report.Report(FamilyPlacement, 100)
@@ -226,45 +225,11 @@ func RouteForGametype(s *Session, gametype int) error {
 	return s.SelectForGametype(gametype)
 }
 
-// GrantStartingResources credits starting metal/energy DIRECTLY to live stock
-// outside the ledger per [05 "Authoritative settlement order"] C9 and
-// [08 "Placement and battle entry"] via economy.CreditSpawn. The ledger's
-// Mirror/Accepted/Carry buckets are untouched; only Stock moves. Amounts are
-// per-player; zero amounts are no-ops.
-func GrantStartingResources(s *Session, perPlayer [10][2]float32) {
-	if s == nil || s.Econ == nil {
-		return
-	}
-	for p := 0; p < 10; p++ {
-		if perPlayer[p][economy.Metal] != 0 {
-			economy.CreditSpawn(&s.Econ.Players[p], economy.Metal, perPlayer[p][economy.Metal])
-		}
-		if perPlayer[p][economy.Energy] != 0 {
-			economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, perPlayer[p][economy.Energy])
-		}
-	}
-}
-
-// BattleEntrySpy records the battle-entry order for C9 assertions. Tests set it
-// as the callback target; production code passes nil and the helpers become
-// no-ops.
-type BattleEntrySpy struct {
-	Order []string
-}
-
-func (sp *BattleEntrySpy) record(step string) {
-	if sp != nil {
-		sp.Order = append(sp.Order, step)
-	}
-}
-
-// BattleEntry performs the battle entry order per [08 "Placement and battle entry"]
-// C9: place features → reconstruct units → cross the placement/start barrier →
+// BattleEntry performs the single-player battle-entry order per [08
+// "Placement and battle entry"] C9: place features → reconstruct units →
 // grant starting resources DIRECTLY to live stock outside the ledger
-// (economy.CreditSpawn, [05 "Authoritative settlement order"]). The spy records
-// each step before the real work so order is observable even when the world is
-// before any battle state is exposed.
-func BattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
+// (economy.CreditSpawn, [05 "Authoritative settlement order"]).
+func BattleEntry(s *Session, m *mission.Mission) error {
 	if s == nil {
 		return fmt.Errorf("session: nil session")
 	}
@@ -286,11 +251,9 @@ func BattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
 	if s.Econ == nil {
 		return fmt.Errorf("session: missing Economy for mission battle entry [05]")
 	}
-	spy.record("features")
 	if err := placeFeatures(s, m); err != nil {
 		return err
 	}
-	spy.record("units")
 	if err := reconstructUnits(s, m); err != nil {
 		return err
 	}
@@ -299,18 +262,14 @@ func BattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
 		return err
 	}
 	// InitialMission runs ONCE on the loading worker after ALL mission units
-	// exist [04 §3.6] C9 — here, between unit placement and the start barrier.
+	// exist [04 §3.6] C9 — here, immediately after unit placement and before
+	// resources are granted.
 	// It queues orders; from the next tick the ordinary pump consumes them.
 	// TODO(question): this interpreter's exact position in the retail loading
 	// pass is inferred from vtable layout ([GAP T10] residual).
 	mission.RunInitialMissionsWithCatalog(m, s.Units, s.Catalog)
 	// Wire cargo/transport from i-verb immediate attach [04 §3.6] P0-04.
 	wireMissionCargo(s, m)
-	spy.record("barrier")
-	if err := crossBarrier(s); err != nil {
-		return err
-	}
-	spy.record("resources")
 	if err := grantResourcesStrict(s, m); err != nil {
 		return err
 	}
@@ -434,15 +393,6 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 			}
 		}
 	}
-	return nil
-}
-
-func crossBarrier(s *Session) error {
-	// Placement/start barrier: multiplayer pumps network and sleeps 50ms
-	// [08 "Placement and battle entry"]; single-player crosses immediately.
-	// No simulation tick is driven by the sleep; it is confined to barrier
-	// behavior [08 "Placement and battle entry"].
-	_ = s
 	return nil
 }
 
@@ -616,85 +566,6 @@ func wireMissionCargo(s *Session, m *mission.Mission) {
 				carrier.Attachment.Cargo = append(carrier.Attachment.Cargo, target.Handle)
 			}
 		}
-	}
-}
-
-// VisibilityLoadSpy records post-load visibility ordering for C10 assertions
-// per [03 §3.3] and [08 "Placement and battle entry"].
-type VisibilityLoadSpy struct {
-	Order []string
-	// Published holds the owners published synchronously before loader return
-	// per C10 (no empty-coverage frame).
-	Published []visibility.PlayerID
-}
-
-func (sp *VisibilityLoadSpy) record(step string) {
-	if sp != nil {
-		sp.Order = append(sp.Order, step)
-	}
-}
-
-// PostLoadVisibility performs the post-load visibility ordering per [03 §3.3] C10:
-// visibility rebuilds BEFORE the serialized mapping is read and every unit
-// publishes its footprint synchronously before the loader returns — no
-// empty-coverage frame [PLAN_05 C16]. The mapping blob is opaque; a missing or
-// size-mismatched blob leaves the array unchanged while publication still
-// proceeds per [03 §3.3]. The spy records ordering; the real service is updated
-// when non-nil.
-func PostLoadVisibility(s *Session, mapping []byte, observers []visibility.Observer, spy *VisibilityLoadSpy) {
-	spy.record("rebuild")
-	if s != nil && s.Vis != nil {
-		// Rebuild before mapping read per [03 §3.3]. Both stores are prefilled:
-		// history cells all-set when history disabled, current grids 1 when
-		// current disabled, then any already-present units republished. C10
-		// requires this before the mapping blob is touched.
-		s.Vis.RebuildAll(nil)
-	}
-	spy.record("mapping")
-	_ = mapping // read the serialized mapping blob (opaque); size mismatch leaves array unchanged [03 §3.3]
-	// Every unit publishes its footprint synchronously before loader returns.
-	for _, ob := range observers {
-		spy.record("publish")
-		spy.Published = append(spy.Published, ob.Owner)
-		if s != nil && s.Vis != nil {
-			s.Vis.Publish(ob.Owner, ob.CX, ob.CZ, ob.HeightByte, ob.Radius)
-		}
-	}
-}
-
-// PublishAllUnits is the helper that publishes every live unit's footprint
-// synchronously after a rebuild per [03 §3.3] C10. It is the single place that
-// turns a units.World into visibility Observers so the loader's "every unit
-// publishes before return" guarantee is not duplicated.
-func PublishAllUnits(s *Session, spy *VisibilityLoadSpy) {
-	if s == nil || s.Units == nil || s.Vis == nil {
-		return
-	}
-	for _, u := range s.Units.Iter() {
-		if u == nil || !u.Alive {
-			continue
-		}
-		// Coverage tile is half-resolution [03 §3.1]: cell/2. Height byte and
-		// radius uses catalog values when available; a zero definition keeps the
-		// established default radius.
-		var cx, cz int32
-		var radius int32 = 32
-		var height uint8
-		if s.World != nil {
-			// Same derivation the per-tick refresh uses, so a
-			// loaded session publishes the footprints it would have published
-			// while running.
-			height = heightByteAt(u, seaLevelFor(s))
-			cx, cz = observerTile(u, height)
-		}
-		if u.Def != nil && u.Def.SightDistance > 0 {
-			radius = int32(u.Def.SightDistance)
-		}
-		ob := visibility.Observer{Owner: visibility.PlayerID(u.Owner), CX: cx, CZ: cz, HeightByte: height, Radius: radius}
-		spy.record("publish")
-		spy.Published = append(spy.Published, ob.Owner)
-		s.Vis.Publish(ob.Owner, ob.CX, ob.CZ, ob.HeightByte, ob.Radius)
-		_ = units.GuardLatchSize // reference to keep import used if stripped
 	}
 }
 

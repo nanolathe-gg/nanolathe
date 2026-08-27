@@ -23,7 +23,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
-	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // MeteorState holds the shower scheduler per [08 "Meteor showers"] [02 "Map files"] [06 §6.5].
@@ -88,13 +87,12 @@ func (s *Session) ensurePublicationState() *publicationState {
 }
 
 // Session is the canonical full Session per PLAN_14 Public API [08 "Session states"].
-// State/dispatch fields (State, handlers, pendingBattle) are shared with state.go's
+// State/dispatch fields (State, pendingBattle) are shared with state.go's
 // eight-state machine C1-C4; the remaining fields are the authoritative simulation
 // services owned centrally by this package C5.
 // Go allows methods in any file, but the struct is defined once here.
 type Session struct {
 	State         State
-	handlers      [8]func(*Session)
 	pendingBattle bool
 
 	Clock    *clock.State
@@ -187,21 +185,11 @@ type Session struct {
 	visDecloak     map[int]uint32
 	sensorSurfaces *sensorSurfacesImpl
 
-	// Audio is presentation-only and never feeds back into simulation
-	// [03 §8.3] C19 [I4][I6]. Queue is 8-deep sorted with cooldowns and
-	// per-slot global nextAllowed; variants and aliases are consumed at
-	// Resolve via CRT draw [03 §8.3] C16 C17. Positional helper uses
-	// audience cell + mode &2 choosing explored vs LOS, viewport pan
-	// dx/dy with half-height shear and two-level attenuation [03 §8.3].
-	// Music/CD fallback is briefing/music/CD probing via Controller [03 §8.4].
-	AudioQueue    *audio.Queue       // eight-slot arbitration queue [03 §8.3] C16 C18
-	AudioCache    *audio.SampleCache // alias→sample cache capped 255 [03 §8.2] C20
-	AudioRegistry *audio.Registry    // session-owned alias identities and samples [03 §8.2][03 §8.3]
-	AudioMusic    *audio.Controller  // CD/MCI controller with 5 modes [03 §8.4]
-	audioViewport audio.Viewport     // presentation viewport for pan/attenuation [03 §8.3]
-	audioFrame    uint32             // presentation frame counter for Drain [03 §8.3] C18
-	audioFS       vfs.FSOps          // VFS for cache loads, presentation-only
-	audioCRT      *rng.CRT
+	// Audio is a reference to the concrete internal/audio owner. Queue/cache/
+	// controller state and presentation draining live in that package; Session
+	// only produces authoritative cues and supplies world-owned resolver data
+	// [03 §8.2–§8.4] [I6].
+	Audio *audio.Service
 
 	// pendingHuman is the session-owned immutable input queue. Presentation
 	// enqueues value commands; authoritativeTick drains it at the network/input
@@ -451,23 +439,6 @@ func (s *Session) IsUnitVisible(viewer int, target *units.Unit) bool {
 	return s.Vis.IsVisible(vid, t)
 }
 
-// installStateHandlers installs the eight-state dispatch table handlers per
-// [08 "Session states"] C1-C2 P0-I10.  State 0/1 teardown variants, 2 routing,
-// 4 campaign player setup, 5 sync/async load completion, 6 battle stepping,
-// 7 report/progression cleanup.  Single-player takes 2->5 directly; state 3
-// network preload remains present and unreachable [08 "Session states"] C1.
-func (s *Session) installStateHandlers() {
-	// Capture handlers exactly once per session; re-install is idempotent.
-	s.SetHandler(StateTeardownA, handleTeardownA)
-	s.SetHandler(StateTeardownB, handleTeardownB)
-	s.SetHandler(StateRouter, handleRouter)
-	s.SetHandler(StateNetworkPreload, handleNetworkPreload)
-	s.SetHandler(StateLocalPreload, handleLocalPreload)
-	s.SetHandler(StateLoading, handleLoading)
-	s.SetHandler(StateBattle, handleBattle)
-	s.SetHandler(StatePostBattle, handlePostBattle)
-}
-
 // handleTeardownA implements state 0 cleanup variant A, then state 2 [08 "Session states"].
 // Platform resources are owned and released by the command/platform edge; the
 // authoritative session only advances the lifecycle state here [01 §2.3].
@@ -596,9 +567,9 @@ func handlePostBattle(s *Session) {
 	_ = s.TransitionTo(StateRouter)
 }
 
-// RegisterAll installs the session state handlers and cross-service lifecycle
-// hooks. The authoritative tick is called directly by Step; no callback graph
-// or secondary scheduler is involved.
+// RegisterAll installs cross-service lifecycle hooks. State dispatch is a
+// concrete switch in Advance; the authoritative tick is called directly by
+// Step with no callback graph or secondary scheduler.
 func (s *Session) RegisterAll() {
 	// Direct Session literals used by loaders/tests still pass through the same
 	// publication topology before any authoritative producer is installed.
@@ -606,8 +577,6 @@ func (s *Session) RegisterAll() {
 	if s.Clock == nil {
 		s.Clock = &clock.State{Requested: 10, Active: 10}
 	}
-	// Install eight-state handlers before simulation so the state machine governs lifecycle [08][P0-I10].
-	s.installStateHandlers()
 	// Ensure single canonical scheduler: Session.Path is alias to Movement.Scheduler [04 §7.3][P0-I03].
 	if s.Movement != nil && s.Movement.Scheduler != nil && s.Path != s.Movement.Scheduler {
 		s.Path = s.Movement.Scheduler
@@ -799,9 +768,8 @@ func (s *Session) RegisterAll() {
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitCreated, u)
 			}
 			// Audio: completed build emits unitcomplete [03 §8.3] slot 8.
-			if s.AudioQueue != nil && u != nil && s.Clock != nil && s.Clock.GlobalTick > 0 {
-				s.AudioQueue.SetNow(s.Clock.GlobalTick)
-				_ = s.AudioQueue.InsertAt(s.Clock.GlobalTick, audio.SlotUnitComplete, h, "")
+			if s.Audio != nil && u != nil && s.Clock != nil && s.Clock.GlobalTick > 0 {
+				_ = s.Audio.Emit(s.Clock.GlobalTick, audio.SlotUnitComplete, h, "")
 			}
 		}
 		s.Units.OnCapture = func(h pool.Handle, oldOwner, newOwner uint8, u *units.Unit) {
@@ -811,9 +779,8 @@ func (s *Session) RegisterAll() {
 				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitCaptured, u)
 			}
-			if s.AudioQueue != nil && u != nil && s.Clock != nil {
-				s.AudioQueue.SetNow(s.Clock.GlobalTick)
-				_ = s.AudioQueue.InsertAt(s.Clock.GlobalTick, audio.SlotCapture, h, "")
+			if s.Audio != nil && u != nil && s.Clock != nil {
+				_ = s.Audio.Emit(s.Clock.GlobalTick, audio.SlotCapture, h, "")
 			}
 		}
 	}

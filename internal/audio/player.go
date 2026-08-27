@@ -128,6 +128,31 @@ func (b *Backend) PlayedAliases() []string {
 	return out
 }
 
+// PlayedPans returns the recorded presentation pan values in playback order.
+// It is a device-independent observation hook for presentation tests.
+func (b *Backend) PlayedPans() []float64 {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]float64, len(b.pans))
+	copy(out, b.pans)
+	return out
+}
+
+// PlayedVolumes returns recorded presentation volume values in playback order.
+func (b *Backend) PlayedVolumes() []float64 {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]float64, len(b.volumes))
+	copy(out, b.volumes)
+	return out
+}
+
 // Reset clears the recorded play history (tests).
 func (b *Backend) Reset() {
 	if b == nil {

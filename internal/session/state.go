@@ -2,8 +2,8 @@ package session
 
 import "fmt"
 
-// State is the eight-state dispatch-table index used by the session state
-// machine [08 "Session states"].
+// State is the eight-state index used by the session state machine
+// [08 "Session states"].
 type State uint8
 
 // Eight states per [08 "Session states"].
@@ -117,9 +117,9 @@ func StateForGametype(gametype int) (State, bool) {
 }
 
 // Session is defined in session.go (canonical full struct per PLAN_14 Public
-// API). This file implements the eight-state dispatch table [08 "Session
-// states"] and transition helpers C1-C4; state-machine methods remain here
-// while the complete field set is kept with the type definition.
+// API). This file implements the eight-state machine [08 "Session states"] and
+// transition helpers C1-C4; state-machine methods remain here while the
+// complete field set is kept with the type definition.
 
 // New creates a session in teardown state 0. Callers normally transition to
 // StateRouter (2) before use.
@@ -129,19 +129,12 @@ func New() *Session {
 	return s
 }
 
-// SetHandler installs the callback for one state. A nil handler is allowed
-// and means the dispatch is a no-op for that state.
-func (s *Session) SetHandler(st State, fn func(*Session)) {
-	if st <= StatePostBattle {
-		s.handlers[st] = fn
-	}
-}
-
 // CanTransitionTo reports whether s.State can transition to next state per C1.
 func (s *Session) CanTransitionTo(next State) bool { return CanTransition(s.State, next) }
 
 // TransitionTo attempts from s.State to next. It returns true and updates
-// s.State on a valid edge, false otherwise. No handler runs inline.
+// s.State on a valid edge, false otherwise. No subsequent state operation runs
+// inline.
 func (s *Session) TransitionTo(next State) bool {
 	if !CanTransition(s.State, next) {
 		return false
@@ -187,26 +180,39 @@ func (s *Session) SelectForGametype(gametype int) error {
 	return nil
 }
 
-// Advance performs one state-machine dispatch: it runs the handler for the
-// current state exactly once [08 "Session states"]. If the handler changes
-// State, the new state's handler does not run until the next Advance call.
+// Advance performs one state-machine dispatch for the current state exactly
+// once [08 "Session states"]. The concrete state operation is selected here;
+// if it changes State, the new state's operation does not run until the next
+// Advance call.
 // Completion of the state-5 loading thread installs state 6 whose FIRST RUN
 // happens on the NEXT dispatch, not inline [08 "Session states"] C2.
 func (s *Session) Advance() {
-	if s.State > StatePostBattle {
+	if s == nil || s.State > StatePostBattle {
 		return
 	}
-	// C2 deferred first run after CompleteLoading.
-	if s.pendingBattle && s.State == StateBattle {
-		s.pendingBattle = false
-		if fn := s.handlers[StateBattle]; fn != nil {
-			fn(s)
+	switch s.State {
+	case StateTeardownA:
+		handleTeardownA(s)
+	case StateTeardownB:
+		handleTeardownB(s)
+	case StateRouter:
+		handleRouter(s)
+	case StateNetworkPreload:
+		handleNetworkPreload(s)
+	case StateLocalPreload:
+		handleLocalPreload(s)
+	case StateLoading:
+		handleLoading(s)
+	case StateBattle:
+		// C2 defers the first state-6 operation until this dispatch after
+		// loading completion. The battle operation itself is intentionally
+		// idle; authoritative ticks are driven by Step.
+		if s.pendingBattle {
+			s.pendingBattle = false
 		}
-		return
-	}
-	fn := s.handlers[s.State]
-	if fn != nil {
-		fn(s)
+		handleBattle(s)
+	case StatePostBattle:
+		handlePostBattle(s)
 	}
 }
 

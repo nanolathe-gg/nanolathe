@@ -294,6 +294,14 @@ type SampleCache struct {
 	index    map[string]*Sample
 }
 
+// SetFS updates VFS resolution for an existing cache without discarding
+// already decoded samples or their stable eviction order.
+func (c *SampleCache) SetFS(fs vfs.FSOps) {
+	if c != nil && fs != nil {
+		c.fs = fs
+	}
+}
+
 // NewCache creates a cache resolving through fs and capped at 255 [GAP T14] C20.
 func NewCache(fs vfs.FSOps) *SampleCache {
 	return &SampleCache{fs: fs, cap: 255, retained: true, index: make(map[string]*Sample)}
