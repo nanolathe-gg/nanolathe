@@ -2,8 +2,26 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/internal/audio"
+	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
+
+// SetPresentationClock binds the shared presentation clock used by audio
+// draining and music polling. A nil clock restores the legacy explicit-frame
+// fallback for isolated callers and tests.
+func (c *Client) SetPresentationClock(clock *presentation.Clock) {
+	if c == nil {
+		return
+	}
+	c.audioClock = clock
+}
+
+func (c *Client) presentationClock() *presentation.Clock {
+	if c == nil {
+		return nil
+	}
+	return c.audioClock
+}
 
 // SetAudioQueue attaches the eight-slot queue [03 §8.3] C16 C18. The queue is
 // presentation-owned; Drain runs once per rendered frame outside simulation
@@ -122,12 +140,22 @@ func (c *Client) TickAudio() {
 		return
 	}
 	c.ensureAudioBackend()
-	c.audioFrame++
+	frame := c.audioFrame + 1
+	clock := c.presentationClock()
+	if clock != nil {
+		frame = clock.FrameSerial
+	} else {
+		c.audioFrame = frame
+	}
 	if c.audioQueue != nil {
-		c.audioQueue.Drain(c.audioFrame)
+		c.audioQueue.Drain(frame)
 	}
 	if c.audioMusic != nil {
-		c.audioMusic.Tick(c.audioMusic.IsPlaying())
+		if clock != nil {
+			c.audioMusic.TickFrame(clock, c.audioMusic.IsPlaying())
+		} else {
+			c.audioMusic.Tick(c.audioMusic.IsPlaying())
+		}
 	}
 }
 
@@ -148,15 +176,18 @@ func (c *Client) UpdateAudioViewportFromCamera() {
 		mapW = int32(c.width)
 		mapH = int32(c.height)
 	}
-	// Viewport dimensions in tiles*16 pixels; camera X/Z are world 16.16, hiword is pixel.
+	// Width and Height are tile counts because the pan formula expands their
+	// half-size by 16 [03 §8.3]. Camera X/Z are already map pixels.
 	v := audio.Viewport{
-		Left:          int32(c.cam.X >> 16),
-		Top:           int32(c.cam.Z >> 16),
-		Width:         int32(c.width / 16), // approximate tiles; precise value not critical for headless fallback
-		Height:        int32(c.height / 16),
-		MapW:          mapW,
-		MapH:          mapH,
-		StereoCapable: true, // assume stereo capable; mono fallback is still handled via Attenuate
+		Left:   c.cam.X,
+		Top:    c.cam.Z,
+		Width:  int32(c.width / 16), // approximate tiles; precise value not critical for headless fallback
+		Height: int32(c.height / 16),
+		MapW:   mapW,
+		MapH:   mapH,
+	}
+	if be := audio.GlobalBackend(); be != nil {
+		v.StereoCapable = be.Capabilities().Stereo
 	}
 	c.audioViewport = v
 }

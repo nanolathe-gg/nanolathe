@@ -85,11 +85,10 @@ func New(t *world.Terrain, mode Mode) *Service {
 				s.byteGrids[i] = make([]uint8, n)
 			}
 			s.fog = FogCache{
-				w:     s.W,
-				h:     s.H,
-				ch0:   make([]uint8, n),
-				ch1:   make([]uint8, n),
-				valid: s.mode.FogCacheValid(),
+				w:   s.W,
+				h:   s.H,
+				ch0: make([]uint8, n),
+				ch1: make([]uint8, n),
 			}
 		}
 		// C7 initial fill via RebuildAll with no units, respecting mode bits.
@@ -161,7 +160,6 @@ func (s *Service) SetMode(m Mode) {
 		return
 	}
 	s.mode = m & 0x0f
-	s.fog.Invalidate()
 	s.mode &^= ModeFogCacheValid
 }
 
@@ -252,7 +250,6 @@ func (s *Service) RebuildAll(observers []Observer) {
 		s.Publish(ob.Owner, ob.CX, ob.CZ, ob.HeightByte, ob.Radius)
 	}
 	// Any rebuild dirty-invalidates the fog presentation cache; it rebuilds lazily when valid bit clears [03 §3.3] C13.
-	s.fog.valid = false
 	s.mode &^= ModeFogCacheValid
 }
 

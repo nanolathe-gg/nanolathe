@@ -271,9 +271,9 @@ func TestFogScreenRectViewportClipping(t *testing.T) {
 func TestFogChannelSemantics(t *testing.T) {
 	// 3x3 grid; the semantics under test target centre cell (1,1), which has
 	// all four neighbours in-map so its nibble can reach any value 0..15.
-	// Cache values are set producer-style: bit1 of each channel marks the
-	// tile fogged/unexplored and BuildFogOps reconstructs the nibble by the
-	// retail OR pattern (1 self, 2 west tile, 4 north tile, 8 NW tile).
+	// Cache values are already producer-computed nibbles. BuildFogOps is only
+	// the canonical cache-to-blit translator; edge propagation belongs to the
+	// viewport cache builder [03 §3.3].
 	cache := testFogCache(t, 3, 3)
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: 96, MapH: 96}
 	tables := &palette.Tables{}
@@ -285,22 +285,21 @@ func TestFogChannelSemantics(t *testing.T) {
 	// setTiles configures the four tiles around cell (1,1): [y][x] booleans
 	// are the per-channel bit1 flags for tiles (1,1),(2,1),(1,2),(2,2).
 	setTiles := func(c0 [2][2]bool, c1 [2][2]bool) {
-		coords := [4][2]int32{{1, 1}, {2, 1}, {1, 2}, {2, 2}}
+		var b0, b1 uint8
+		for i := 0; i < 4; i++ {
+			if c0[i/2][i%2] {
+				b0 |= 1 << i
+			}
+			if c1[i/2][i%2] {
+				b1 |= 1 << i
+			}
+		}
 		for y := int32(0); y < 3; y++ {
 			for x := int32(0); x < 3; x++ {
 				cache.SetChannel(x, y, 0, 0)
 			}
 		}
-		for i, p := range coords {
-			var b0, b1 uint8
-			if c0[i/2][i%2] {
-				b0 = 1
-			}
-			if c1[i/2][i%2] {
-				b1 = 1
-			}
-			cache.SetChannel(p[0], p[1], b0, b1)
-		}
+		cache.SetChannel(1, 1, b0, b1)
 	}
 	all := [2][2]bool{{true, true}, {true, true}}
 	none := [2][2]bool{}
@@ -473,6 +472,26 @@ func TestFogPaletteDarkening(t *testing.T) {
 // south/east edge, south/east void cells stay untouched, and the NW void
 // corner combines both passes into the short-circuit value.
 func TestFogBorderFixups(t *testing.T) {
+	// Border propagation is performed by visibility.RebuildFogWindow. The
+	// renderer consumes the resulting cache verbatim, including a zero-origin
+	// window; it must not synthesize a second map-sized producer [03 §3.3].
+	cache := testFogCache(t, 2, 2)
+	cache.SetChannel(0, 0, 1, 0)
+	ops := BuildFogOps(cache, nil, 0, 0, 2, 2, nil, false)
+	if len(ops) != 1 || ops[0].GridX != 0 || ops[0].GridY != 0 || ops[0].Channel0 != 1 {
+		t.Fatalf("cache translator must preserve the authored cell, got %+v", ops)
+	}
+	for _, op := range ops {
+		if op.GridX < 0 || op.GridY < 0 {
+			t.Fatalf("renderer must not synthesize edge cells: %+v", op)
+		}
+	}
+}
+
+// testFogBorderFixupsLegacy retains the former producer fixture as a record of
+// the superseded split implementation; edge behavior is now covered by the
+// visibility window builder and this package tests only translation.
+func testFogBorderFixupsLegacy(t *testing.T) {
 	build := func(ops []FogOp) map[[2]int32]FogOp {
 		m := make(map[[2]int32]FogOp)
 		for _, op := range ops {

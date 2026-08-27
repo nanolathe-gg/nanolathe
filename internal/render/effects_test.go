@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // helper to make a persistent effect record for ordering tests.
@@ -313,6 +314,48 @@ func TestFixedEffectAnimStepping(t *testing.T) {
 	}
 	if got.AnimB.Active {
 		t.Fatalf("AnimB should remain inactive")
+	}
+}
+
+func TestFixedEffectAuthoredDurationsAndSnapshotIsolation(t *testing.T) {
+	var p FixedEffectPool
+	input := snapshot.EffectView{
+		ID: 9, PresentationID: 19, EventSeq: 20, Kind: "explosion",
+		DurationsA: []int32{2, 3}, LoopA: false, HasModel: true,
+	}
+	if !p.AppendView(input) {
+		t.Fatal("authored effect admission failed")
+	}
+	input.DurationsA[0] = 99
+	if got := p.SnapshotViews()[0].DurationsA[0]; got != 2 {
+		t.Fatalf("effect duration aliased input: %d", got)
+	}
+	p.Update(1)
+	if got := p.SnapshotViews()[0].SeqA; got != 0 {
+		t.Fatalf("frame advanced before authored duration elapsed: %d", got)
+	}
+	p.Update(2)
+	if got := p.SnapshotViews()[0].SeqA; got != 1 {
+		t.Fatalf("authored duration frame = %d, want 1", got)
+	}
+	view := p.SnapshotViews()
+	view[0].DurationsA[0] = 77
+	if got := p.SnapshotViews()[0].DurationsA[0]; got != 2 {
+		t.Fatalf("pool snapshot aliases internal duration: %d", got)
+	}
+}
+
+func TestFixedEffectRejectsMalformedTimingWithoutOneTickFallback(t *testing.T) {
+	var p FixedEffectPool
+	if !p.AppendView(snapshot.EffectView{ID: 1, Kind: "impact", DurationsA: []int32{2, 0}}) {
+		t.Fatal("malformed timing admission should preserve metadata record")
+	}
+	if got := p.Records()[0].AnimA.Active; got {
+		t.Fatal("malformed authored timing activated a synthetic cursor")
+	}
+	p.Update(1)
+	if p.Len() != 0 {
+		t.Fatalf("unresolved timing record did not retire without a visual player: %d", p.Len())
 	}
 }
 

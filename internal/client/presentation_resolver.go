@@ -12,6 +12,39 @@ import (
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
+// ProjectileVisibilityMode selects the published coverage representation.
+// Byte coverage is the current local-player grid; zero selects the local bit
+// in the one-point word grid [03 §5.4].
+const ProjectileVisibilityModeBytes = 1
+
+// ProjectileVisible evaluates exactly one gate for one projectile. The same
+// sheared cell is used for either representation; no rendertype branch may
+// call this again [03 §5.4].
+func ProjectileVisible(v snapshot.VisibilityView, p snapshot.ProjectileView, mode uint8, localPlayer uint8) bool {
+	if !v.Valid || v.W <= 0 || v.H <= 0 {
+		return false
+	}
+	px := int32(int16(int64(p.X) >> 16))
+	py := int32(int16(int64(p.Y) >> 16))
+	pz := int32(int16(int64(p.Z) >> 16))
+	u := px >> 5
+	row := (pz - (py >> 1)) >> 5
+	if u < 0 || row < 0 || u >= v.W || row >= v.H {
+		return false
+	}
+	idx := int(row*v.W + u)
+	if mode&ProjectileVisibilityModeBytes != 0 || v.CoverageBytes {
+		return idx < len(v.Visible) && v.Visible[idx] != 0
+	}
+	if idx >= len(v.WordVisible) {
+		return false
+	}
+	if localPlayer >= 16 {
+		return false
+	}
+	return v.WordVisible[idx]&(uint16(1)<<localPlayer) != 0
+}
+
 // projectileVisibility is the one-point projectile gate from the immutable
 // local-player coverage grid [03 §3.2].  Session publication copies the local
 // player's byte grid into Visibility.Visible, so no live visibility service or
@@ -41,7 +74,26 @@ func projectileVisibility(v snapshot.VisibilityView) func(snapshot.ProjectileVie
 // shared-GAF key/frame-count/color publication, so unresolved families stay
 // suppressed rather than selecting a synthetic sprite or palette byte.
 func (c *Client) projectileDispatchOptions() render.ProjectileDispatchOptions {
-	return render.ProjectileDispatchOptions{}
+	return render.ProjectileDispatchOptions{
+		FrameCount: func(v snapshot.ProjectileView) (int, bool) {
+			if v.FrameCount <= 0 {
+				return 0, false
+			}
+			return int(v.FrameCount), true
+		},
+		Color: func(v snapshot.ProjectileView) (int32, int32, bool) {
+			if !v.HasPrimaryColor {
+				return 0, 0, false
+			}
+			var secondary int32
+			if v.HasSecondaryColor {
+				secondary = int32(v.SecondaryColor)
+			}
+			return int32(v.PrimaryColor), secondary, true
+		},
+		// GAF frames and segmented geometry are resolved by the battle asset
+		// adapter. There is intentionally no compatibility fallback here.
+	}
 }
 
 // effectDrawOptions keeps LHT admission terrain-bounded.  Authored LHT row,

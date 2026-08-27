@@ -146,3 +146,26 @@ func TestMusic_SingleRepeat(t *testing.T) {
 		t.Fatalf("single repeat %d want 3", m.CurTrack())
 	}
 }
+
+func TestMusic_SingleZeroStopsAndResumeReappliesVolume(t *testing.T) {
+	m := NewMusicController()
+	m.Open(5)
+	m.Configure(ModeSingle, 0)
+	m.Play(3)
+	m.SetPosition(1234)
+	m.SetVolume(17)
+	before := m.VolumeApplications()
+	m.Pause(true)
+	m.Pause(false)
+	if m.Status() != StatusPlaying || m.Position() != 1234 {
+		t.Fatalf("resume status=%d position=%d", m.Status(), m.Position())
+	}
+	if m.VolumeApplications() != before+1 {
+		t.Fatalf("resume should reapply volume: %d -> %d", before, m.VolumeApplications())
+	}
+	m.Stop()
+	m.Tick(false)
+	if m.CurTrack() != 0 || m.Status() != StatusIdle {
+		t.Fatalf("single requested zero must stop, cur=%d status=%d", m.CurTrack(), m.Status())
+	}
+}

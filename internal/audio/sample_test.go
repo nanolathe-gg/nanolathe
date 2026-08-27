@@ -176,8 +176,8 @@ func TestDecode_DIGI_Remap(t *testing.T) {
 	if s.SampleRate != 11025 {
 		t.Fatalf("remap got %d want 11025", s.SampleRate)
 	}
-	if len(s.Data) != 20 {
-		t.Fatalf("digi len %d want 20", len(s.Data))
+	if len(s.Data) != 10 {
+		t.Fatalf("digi len %d want 10 after SDAT wrapper trim", len(s.Data))
 	}
 	data11025 := buildDIGI(11025, pcm)
 	s2, err := Decode("digi11025", data11025)

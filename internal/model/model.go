@@ -37,6 +37,10 @@ type Piece struct {
 	Translate  [3]numeric.Fixed
 	Vertices   [][3]numeric.Fixed
 	Primitives []Primitive
+	// Selection marks the load-time selection primitive.  It remains in the
+	// primitive list at index zero so consumers can exclude it without
+	// reinterpreting the source geometry [03 §2.4.1].
+	Selection bool
 }
 
 // Model is an immutable compiled 3DO model [03 §2.4].
@@ -69,7 +73,10 @@ type PieceState struct {
 	RotZ uint16 // Z axis [03 §2.4] C21–C22
 	// Trans is the script-driven translation offset summed with the authored
 	// parent translation per [03 §2.4] C21: t_i = authored + script.
-	Trans [3]numeric.Fixed
+	Trans      [3]numeric.Fixed
+	DontShade  bool // presentation flag selecting identity SHD row [03 §2.4.1]
+	Hidden     bool // presentation visibility state [03 §2.4.1]
+	DontShadow bool // presentation shadow suppression state [03 §5.3]
 }
 
 // SetAngle sets the accumulator for axis, last writer wins per [03 §2.4] C22.
@@ -251,6 +258,7 @@ func buildModel(three *formats.ThreeDO, name string) (*Model, error) {
 			p.Vertices[j] = [3]numeric.Fixed{x, y, z}
 		}
 		p.Primitives = make([]Primitive, len(obj.Primitives))
+		p.Selection = obj.Selection == 0
 		for j, pr := range obj.Primitives {
 			cp := make([]uint16, len(pr.VertexIndices))
 			copy(cp, pr.VertexIndices)

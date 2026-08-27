@@ -28,7 +28,6 @@ func (s *Service) Publish(owner PlayerID, cx, cz int32, heightByte uint8, radius
 	// Only a LOCAL player's cell change clears the fog-cache-valid bit and wakes
 	// the composer; remote players' changes dirty nothing [03 §3.2] C15.
 	if owner == s.local && changed {
-		s.fog.Invalidate()
 		s.mode &^= ModeFogCacheValid
 	}
 }
@@ -51,7 +50,6 @@ func (s *Service) Unpublish(owner PlayerID, cx, cz int32, heightByte uint8, radi
 		s.walkSpriteMask(cx, cz, radius, visit)
 	}
 	if owner == s.local && changed {
-		s.fog.Invalidate()
 		s.mode &^= ModeFogCacheValid
 	}
 	return changed

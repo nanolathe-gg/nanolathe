@@ -69,6 +69,23 @@ type Event struct {
 	Magnitude                 int32
 	EffectID                  uint32
 	SoundID                   int32
+	// Authored asset/timing metadata is value-only and copied into the
+	// snapshot.  A zero/empty value is an unresolved optional resource, never
+	// permission to choose fallback art [03 §5.4][03 §5.5][I9].
+	AssetID                string
+	SequenceID             string
+	DurationsA             []int32
+	DurationsB             []int32
+	LoopA                  bool
+	LoopB                  bool
+	FlashRadius            int32
+	FlashLevel             int32
+	HasFlashDisc           bool
+	Strip                  int8
+	Producer               StripProducer
+	NanolatheIndex         int32
+	NanolatheCount         int32
+	NanolatheGeometryKnown bool
 }
 
 // Limits are presentation-only admission bounds. They do not limit the
@@ -122,6 +139,7 @@ func (c *Collector) Admit(e Event) bool {
 		c.noteDrop(false)
 		return false
 	}
+	e = RoutedEvent(e)
 	if len(c.events) >= c.limits.MaxEvents {
 		c.noteDrop(true)
 		return false
@@ -244,6 +262,12 @@ func (c *Collector) SnapshotEvents() []snapshot.EventView {
 			Team:       e.Team,
 			PaletteRow: e.PaletteRow,
 			Magnitude:  e.Magnitude,
+			AssetID:    e.AssetID, SequenceID: e.SequenceID,
+			DurationsA: append([]int32(nil), e.DurationsA...), DurationsB: append([]int32(nil), e.DurationsB...),
+			LoopA: e.LoopA, LoopB: e.LoopB,
+			FlashRadius: e.FlashRadius, FlashLevel: e.FlashLevel, HasFlashDisc: e.HasFlashDisc,
+			Strip: e.Strip, NanolatheIndex: e.NanolatheIndex, NanolatheCount: e.NanolatheCount,
+			NanolatheGeometryKnown: e.NanolatheGeometryKnown,
 		}
 	}
 	return out

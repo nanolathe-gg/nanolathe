@@ -20,6 +20,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/presentation"
+	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
@@ -355,7 +356,9 @@ func createAndBindServices(s *Session) error {
 		s.Presentation = presentation.NewCollector(presentation.Limits{})
 	}
 	if s.Effects == nil {
-		s.Effects = presentation.NewEffectService(presentation.EffectCapacity)
+		// The render pool is the sole active-effect owner. Presentation only
+		// admits detached event views and reads its immutable snapshot [03 §1].
+		s.Effects = presentation.NewEffectServiceWithPool(presentation.EffectCapacity, &render.FixedEffectPool{})
 	}
 	// Production worlds carry a VFS source. Install one strict binder before
 	// battle entry so scenario, construction, and forced-slot creation all

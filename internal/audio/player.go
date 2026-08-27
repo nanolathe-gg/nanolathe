@@ -17,6 +17,8 @@ import (
 type Backend struct {
 	headless   bool
 	sampleRate int
+	master     bool
+	effects    float64
 	mu         sync.Mutex
 	ctx        *audio.Context
 	players    []*audio.Player
@@ -42,7 +44,50 @@ func NewBackendWithRate(headless bool, rate int) *Backend {
 	return &Backend{
 		headless:   headless,
 		sampleRate: rate,
+		master:     true,
+		effects:    1,
 	}
+}
+
+// BackendCapabilities describes the platform-neutral audio surface exposed to
+// presentation. A headless backend has no device and is never stereo-capable.
+type BackendCapabilities struct {
+	Device bool
+	Stereo bool
+}
+
+func (b *Backend) Capabilities() BackendCapabilities {
+	if b == nil {
+		return BackendCapabilities{}
+	}
+	return BackendCapabilities{Device: !b.headless, Stereo: !b.headless}
+}
+
+func (b *Backend) StereoCapable() bool {
+	return b != nil && !b.headless
+}
+
+func (b *Backend) SetMasterEnabled(enabled bool) {
+	if b != nil {
+		b.master = enabled
+	}
+}
+
+func (b *Backend) SetEffectsVolume(volume float64) {
+	if b == nil {
+		return
+	}
+	if volume < 0 {
+		volume = 0
+	}
+	if volume > 1 {
+		volume = 1
+	}
+	b.effects = volume
+}
+
+func (b *Backend) CanPlay() bool {
+	return b != nil && b.master && b.effects > 0
 }
 
 // IsHeadless reports whether this backend is headless and will never create a device [I6].
@@ -175,6 +220,10 @@ func (b *Backend) PlaySample(s *Sample, volume float64, pan float64) error {
 	if b == nil || s == nil {
 		return nil
 	}
+	if !b.CanPlay() {
+		return nil
+	}
+	volume *= b.effects
 	alias := s.Alias
 	b.mu.Lock()
 	b.played = append(b.played, alias)

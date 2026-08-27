@@ -11,6 +11,8 @@
 package render
 
 import (
+	"math"
+
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/palette"
@@ -34,6 +36,7 @@ const halfCircle = 0x8000 // 32768 [03 §5.2]
 // The renderer compares its cached triple against the unit's bank, heading, pitch;
 // when ANY axis differs by more than 7 it refreshes the cache and schedules a rebuild [03 §5.2] C13.
 type OrientationCache struct {
+	Model   string // model identity is part of the cached visual state [03 §5.2]
 	Heading uint16 // Y [03 §2.4] C24 [03 §5.2]
 	Pitch   uint16 // X [03 §2.4] C24 [03 §5.2]
 	Bank    uint16 // Z [03 §2.4] C24 [03 §5.2]
@@ -75,8 +78,19 @@ func (c *OrientationCache) NeedsRebuild(heading, pitch, bank uint16) bool {
 // Update refreshes the cache when NeedsRebuild is true and reports whether a rebuild was scheduled [03 §5.2] C13.
 // The cache is refreshed at most once per dirty detection; callers use the return to schedule subtree rebuild [03 §5.2].
 func (c *OrientationCache) Update(heading, pitch, bank uint16) bool {
+	return c.UpdateKey("", heading, pitch, bank)
+}
+
+// UpdateKey invalidates the orientation cache when either the model identity
+// or any orientation axis changes beyond the strict seven-unit threshold
+// [03 §5.2].
+func (c *OrientationCache) UpdateKey(modelKey string, heading, pitch, bank uint16) bool {
 	if c == nil {
 		return false
+	}
+	if c.Model != modelKey {
+		c.Model = modelKey
+		c.Valid = false
 	}
 	if c.NeedsRebuild(heading, pitch, bank) {
 		c.Heading = heading
@@ -178,6 +192,36 @@ type PrimitiveDraw struct {
 	VertexIndices []uint16           // in load-fixed order [03 §2.4] C20
 	WorldVerts    [][3]numeric.Fixed // world-space vertices for this primitive [03 §5.2] C13 position only at final placement [03 §2.4] C24
 	ShadeRow      int                // placeholder mid row [03 §4.3] TODO(question)
+	ShadeRows     []int              // one SHD row per primitive corner [03 §2.4.1]
+}
+
+// DefaultModelLight is the shipped model light direction [03 §2.4.1].
+var DefaultModelLight = [3]float64{-0.8, 1.0, 0.25}
+
+// ShadeRowForNormal computes one textured-face corner's SHD row. The normal
+// is deliberately not renormalized: retail averages already-normalized face
+// normals and applies the dot product to that average [03 §2.4.1].
+func ShadeRowForNormal(normal, light [3]float64, dontShade bool) int {
+	if dontShade {
+		return 15
+	}
+	dot := normal[0]*light[0] + normal[1]*light[1] + normal[2]*light[2]
+	return int(dot*5.0) & 31 // int conversion truncates toward zero [I3]
+}
+
+func faceNormal(a, b, c [3]numeric.Fixed) [3]float64 {
+	ax := float64((b[0] - a[0]).Raw())
+	ay := float64((b[1] - a[1]).Raw())
+	az := float64((b[2] - a[2]).Raw())
+	bx := float64((b[0] - c[0]).Raw())
+	by := float64((b[1] - c[1]).Raw())
+	bz := float64((b[2] - c[2]).Raw())
+	n := [3]float64{ay*bz - az*by, az*bx - ax*bz, ax*by - ay*bx}
+	l := math.Sqrt(n[0]*n[0] + n[1]*n[1] + n[2]*n[2])
+	if l == 0 {
+		return [3]float64{0, 1, 0}
+	}
+	return [3]float64{n[0] / l, n[1] / l, n[2] / l}
 }
 
 // PieceDraw is the per-piece draw list for one unit piece [03 §2.4] C21 [03 §5.2].
@@ -230,6 +274,42 @@ func BuildPieceDraws(m *model.Model, states []model.PieceState, lerpPos [3]numer
 				local[2].Add(lerpPos[2]),
 			}
 		}
+		// Build smooth normals from the pristine transformed piece geometry.
+		// The average is intentionally left unnormalized (see ShadeRowForNormal).
+		normals := make([][3]float64, len(piece.Vertices))
+		normalCount := make([]int, len(piece.Vertices))
+		for _, pr := range piece.Primitives {
+			if len(pr.VertexIndices) < 3 {
+				continue
+			}
+			a, b, c := pr.VertexIndices[0], pr.VertexIndices[1], pr.VertexIndices[2]
+			if int(a) >= len(worldVerts) || int(b) >= len(worldVerts) || int(c) >= len(worldVerts) {
+				continue
+			}
+			n := faceNormal(worldVerts[a], worldVerts[b], worldVerts[c])
+			for _, vi := range pr.VertexIndices {
+				if int(vi) >= len(normals) {
+					continue
+				}
+				normals[vi][0] += n[0]
+				normals[vi][1] += n[1]
+				normals[vi][2] += n[2]
+				normalCount[vi]++
+			}
+		}
+		rows := make([]int, len(normals))
+		for vi := range normals {
+			if normalCount[vi] == 0 {
+				rows[vi] = 15
+				continue
+			}
+			avg := normals[vi]
+			count := float64(normalCount[vi])
+			avg[0] /= count
+			avg[1] /= count
+			avg[2] /= count
+			rows[vi] = ShadeRowForNormal(avg, DefaultModelLight, i < len(states) && states[i].DontShade)
+		}
 		// Primitives in load-fixed order [03 §2.4] C20 [GAP 02-A6] — never resort here
 		prims := make([]PrimitiveDraw, len(piece.Primitives))
 		for pi, pr := range piece.Primitives {
@@ -246,14 +326,25 @@ func BuildPieceDraws(m *model.Model, states []model.PieceState, lerpPos [3]numer
 					}
 				}
 			}
-			prims[pi] = PrimitiveDraw{
+			pd := PrimitiveDraw{
 				ColorIndex:    pr.ColorIndex,
 				TextureName:   pr.TextureName,
 				IsColored:     pr.IsColored,
 				VertexIndices: idxCopy,
 				WorldVerts:    worldPrimVerts,
-				ShadeRow:      ModelShadeMidRow, // TODO(question) [03 §4.3]
+				ShadeRow:      ModelShadeMidRow,
+				ShadeRows:     make([]int, len(pr.VertexIndices)),
 			}
+			for k, vi := range pr.VertexIndices {
+				if k >= len(pd.ShadeRows) || int(vi) >= len(rows) {
+					continue
+				}
+				pd.ShadeRows[k] = rows[vi]
+			}
+			if len(pr.VertexIndices) > 0 && int(pr.VertexIndices[0]) < len(rows) {
+				pd.ShadeRow = rows[pr.VertexIndices[0]]
+			}
+			prims[pi] = pd
 		}
 		isLeaf := len(piece.Primitives) == 0 && len(piece.Vertices) > 0 // [03 §2.4] C23
 		// Also leaf in hierarchy sense: sibling/child links depth-first [fmt 3do] — a piece with no primitives but with children is not a leaf;
@@ -295,7 +386,7 @@ func BuildUnitDraw(m *model.Model, base []model.PieceState, heading, pitch, bank
 	}
 	needsRebuild := false
 	if cache != nil {
-		needsRebuild = cache.Update(heading, pitch, bank) // [03 §5.2] C13
+		needsRebuild = cache.UpdateKey(m.Name, heading, pitch, bank) // [03 §5.2] C13
 	} else {
 		// Without cache, treat as dirty if any orientation non-zero to force rebuild path coverage; but spec says per drawn unit comparison.
 		// For determinism without cache, rebuild is false — caller must handle.

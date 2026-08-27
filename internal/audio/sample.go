@@ -85,21 +85,16 @@ const (
 	containerRIFF = 2
 )
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// 0 raw, 1 DIGI, 2 RIFF/WAVE. Retail checks DIGI→HSHD→SDAT magic positions before
-// falling through to RIFF. We reproduce the magic positions deterministically.
+// detectContainer checks the fixed legacy markers before RIFF/WAVE [fmt wav]
+// [03 §8.2]. 0 raw, 1 DIGI, 2 RIFF/WAVE.
 func detectContainer(data []byte) int {
-	if len(data) >= 4 && string(data[0:4]) == "DIGI" {
-		if len(data) >= 12 && string(data[8:12]) == "HSHD" {
-			if len(data) >= 16 {
-				hsz := int(binary.BigEndian.Uint32(data[12:16]))
-				sdatOff := 8 + hsz
-				if sdatOff+4 <= len(data) && string(data[sdatOff:sdatOff+4]) == "SDAT" {
-					return containerDIGI
-				}
-			}
-		}
-		// DIGI magic at 0 but inner structure invalid falls through to raw per retail
+	// The legacy detector is deliberately positional.  In particular, a file
+	// beginning with DIGI but carrying a damaged HSHD/SDAT header is classified
+	// as raw only when one of these fixed markers is absent; this keeps malformed
+	// recognized containers on their decode/error path.
+	if len(data) >= 36 && string(data[0:4]) == "DIGI" &&
+		string(data[8:12]) == "HSHD" && string(data[32:36]) == "SDAT" {
+		return containerDIGI
 	}
 	if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WAVE" {
 		return containerRIFF
@@ -175,9 +170,13 @@ func decodeRIFF(alias string, data []byte) (*Sample, error) {
 		if size&1 != 0 {
 			size++
 		}
-		off = payload + int(size)
+		next := payload + int(size)
+		if next > len(data) {
+			return nil, fmt.Errorf("audio: %s chunk padding truncated %q", chunkID, alias)
+		}
+		off = next
 	}
-	if !haveFmt || !haveData {
+	if !haveFmt || !haveData || dataSize == 0 {
 		return nil, fmt.Errorf("audio: missing fmt or data %q", alias)
 	}
 	if audioFormat == 0 || channels == 0 || sampleRate == 0 || blockAlign == 0 {
@@ -202,11 +201,11 @@ func decodeRIFF(alias string, data []byte) (*Sample, error) {
 	}
 	dup := make([]byte, dataSize)
 	copy(dup, data[dataOff:dataOff+dataSize])
-	// PCM alignment check: data must be multiple of blockAlign
-	if len(dup)%int(blockAlign) != 0 {
-		// retail would still play truncated; we error to surface malformed synthetic files
-		// but for retail files this never triggers (verified vs install)
-		return nil, fmt.Errorf("audio: data not aligned %q", alias)
+	// Retail submits the declared data bytes to the device and truncates a
+	// partial final frame.  A misaligned payload is therefore playable rather
+	// than a malformed-container failure.
+	if rem := len(dup) % int(blockAlign); rem != 0 {
+		dup = dup[:len(dup)-rem]
 	}
 	return &Sample{
 		Alias:         alias,
@@ -246,42 +245,21 @@ func decodeDIGI(alias string, data []byte) (*Sample, error) {
 	payloadOff := sdatOff + 8
 	payloadSize := sdatSize - 8
 
-	// Sample rate is at file offset 0x16 (22) per retail note [00_fnt_pcx_wav.md §3.4].
-	// Bytes at 22 are little-endian 11,025 (0x2b11) for SING.WAV; remap 0x2af8→0x2b11.
+	// The fixed rate word is at file offset 22 [03 §8.2]. It is little-endian.
 	var rate uint32 = 11025 // default per retail
 	if len(data) >= 26 {
-		// Read LE uint32 at 22 for compatibility with observed file; also try BE if LE implausible.
-		le := binary.LittleEndian.Uint32(data[22:26])
-		be := binary.BigEndian.Uint32(data[22:26])
-		// Prefer LE if it yields plausible audio rate (8k..48k). Otherwise fallback.
-		candidate := le
-		if le < 8000 || le > 48000 {
-			if be >= 8000 && be <= 48000 {
-				candidate = be
-			} else {
-				candidate = 0
-			}
-		}
-		if candidate != 0 {
-			rate = candidate
-		}
+		rate = binary.LittleEndian.Uint32(data[22:26])
 	}
 	// [03 §8.2] C20 remap 11,000→11,025 [fmt wav] [GAP T14]
 	if rate == 11000 {
 		rate = 11025
 	}
-	// Trim ten-byte wrapper per C20. Retail SING.WAV payload starts immediately with
-	// PCM (80 7f...), so trimming would discard valid samples. The plan's wrapper
-	// is established but its exact 10-byte location within the DIGI container is
-	// not fully disambiguated vs header overhead. For now we preserve payload as
-	// SDAT bytes; if a wrapper of zeros exists at front we skip it.
-	// TODO(question): exact ten-byte wrapper location — is it inside SDAT payload front,
-	// HSHD header, or file-size overhead? Current decode preserves SDAT payload
-	// verbatim to match observed SING.WAV (no extra trim). If probes show a
-	// dedicated 10-byte PCM prefix wrapper, switch to payloadOff+=10 payloadSize-=10.
-	if payloadSize < 0 {
+	// The SDAT payload includes a fixed ten-byte wrapper [03 §8.2].
+	if payloadSize < 10 {
 		return nil, fmt.Errorf("audio: digi payload negative %q", alias)
 	}
+	payloadOff += 10
+	payloadSize -= 10
 	if payloadOff+payloadSize > len(data) {
 		return nil, fmt.Errorf("audio: digi payload out of range %q", alias)
 	}
@@ -306,15 +284,19 @@ func decodeDIGI(alias string, data []byte) (*Sample, error) {
 // beyond the alias cap, so FIFO is a deterministic placeholder.
 // TODO(question): is sample cache cap exactly 255 and is eviction FIFO/LRU?
 type SampleCache struct {
-	fs    vfs.FSOps
-	cap   int
-	order []string // canonical aliases oldest→newest, stable iteration (I1)
-	index map[string]*Sample
+	fs  vfs.FSOps
+	cap int
+	// retained is true for the registry-owned session cache.  Explicitly
+	// bounded test caches retain the historical eviction helper, while live
+	// aliases remain resident until teardown [03 §8.2].
+	retained bool
+	order    []string // canonical aliases oldest→newest, stable iteration (I1)
+	index    map[string]*Sample
 }
 
 // NewCache creates a cache resolving through fs and capped at 255 [GAP T14] C20.
 func NewCache(fs vfs.FSOps) *SampleCache {
-	return NewCacheWithCap(fs, 255)
+	return &SampleCache{fs: fs, cap: 255, retained: true, index: make(map[string]*Sample)}
 }
 
 // NewCacheWithCap creates a cache with explicit cap for tests. Cap <=0 means 255.
@@ -327,6 +309,15 @@ func NewCacheWithCap(fs vfs.FSOps, cap int) *SampleCache {
 		cap:   cap,
 		index: make(map[string]*Sample),
 	}
+}
+
+// NewEvictingCache is a diagnostic/test helper for callers that explicitly
+// need a bounded cache. The live alias registry never uses this mode.
+func NewEvictingCache(fs vfs.FSOps, cap int) *SampleCache {
+	if cap <= 0 {
+		cap = 255
+	}
+	return &SampleCache{fs: fs, cap: cap, index: make(map[string]*Sample)}
 }
 
 // Cap returns the capacity.
@@ -383,7 +374,7 @@ func (c *SampleCache) putSample(alias string, s *Sample) *Sample {
 		c.index[k] = s
 		return existing
 	}
-	if len(c.order) >= c.cap {
+	if !c.retained && len(c.order) >= c.cap {
 		// deterministic FIFO eviction oldest-first (I1)
 		oldest := c.order[0]
 		delete(c.index, oldest)
@@ -412,6 +403,32 @@ func (c *SampleCache) Load(alias string) (*Sample, error) {
 		return nil, fmt.Errorf("audio: no VFS for alias %q", alias)
 	}
 	data, prov, err := c.resolve(alias)
+	if err != nil {
+		return nil, err
+	}
+	s, err := Decode(alias, data)
+	if err != nil {
+		return nil, err
+	}
+	s.Provenance = prov
+	c.putSample(alias, s)
+	return s, nil
+}
+
+// loadCandidates resolves an already-registered identity using its authored
+// path candidates. The cache key remains the alias, preserving one sample per
+// registered identity.
+func (c *SampleCache) loadCandidates(alias string, candidates []string) (*Sample, error) {
+	if c == nil {
+		return nil, fmt.Errorf("audio: nil cache")
+	}
+	if s, ok := c.Get(alias); ok {
+		return s, nil
+	}
+	if c.fs == nil {
+		return nil, fmt.Errorf("audio: no VFS for alias %q", alias)
+	}
+	data, prov, err := c.resolveCandidates(candidates)
 	if err != nil {
 		return nil, err
 	}
@@ -476,9 +493,15 @@ func (c *SampleCache) resolve(alias string) ([]byte, vfs.Provenance, error) {
 	if !hasWav {
 		candidates = append(candidates, clean+".wav")
 	}
-	// also try without sounds prefix but with lower/upper variations? VFS handles case-insensitive.
+	return c.resolveCandidates(candidates)
+}
+
+func (c *SampleCache) resolveCandidates(candidates []string) ([]byte, vfs.Provenance, error) {
 	var lastErr error
 	for _, cand := range candidates {
+		if strings.TrimSpace(cand) == "" {
+			continue
+		}
 		// use Open to capture provenance
 		f, err := c.fs.Open(cand)
 		if err != nil {
@@ -496,7 +519,7 @@ func (c *SampleCache) resolve(alias string) ([]byte, vfs.Provenance, error) {
 			if n > 0 {
 				if total+int64(n) > limit {
 					f.Close()
-					return nil, vfs.Provenance{}, fmt.Errorf("audio: %q too large", alias)
+					return nil, vfs.Provenance{}, fmt.Errorf("audio: candidate %q too large", cand)
 				}
 				data = append(data, buf[:n]...)
 				total += int64(n)
@@ -515,5 +538,5 @@ func (c *SampleCache) resolve(alias string) ([]byte, vfs.Provenance, error) {
 	if lastErr == nil {
 		lastErr = fmt.Errorf("not found")
 	}
-	return nil, vfs.Provenance{}, fmt.Errorf("audio: alias %q not found, tried %q: %w", alias, candidates, lastErr)
+	return nil, vfs.Provenance{}, fmt.Errorf("audio: paths %q not found: %w", candidates, lastErr)
 }

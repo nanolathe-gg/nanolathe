@@ -2,6 +2,7 @@ package audio
 
 import (
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/presentation"
 )
 
 // Slot is a sound event slot [03 §8.3]. Slot 0 is an unused sentinel.
@@ -40,16 +41,23 @@ type Queue struct {
 
 	now             uint32
 	crtState        uint32
+	crt             *presentation.CRTRandom
 	audioThreshold  uint8
 	speechThreshold uint8
 	soundEnabled    bool
 	speechEnabled   bool
+	effectsVolume   float32
+	soundFlags      uint8
+	backendEnabled  bool
+	gateInitialized bool
+	nextAllowed     [24]uint32
 	onPlay          func(alias string, slot Slot, unit pool.Handle)
 	onSpeech        func(line string)
 	resolver        func(pool.Handle) (*Category, string, bool)
 	categories      map[pool.Handle]*Category
 	unitNames       map[pool.Handle]string
 	alive           map[pool.Handle]bool
+	chatEnabled     map[pool.Handle]bool
 }
 
 const (
@@ -96,14 +104,9 @@ var slotTable = [24]slotInfo{
 	23: {"canceldestruct", "Self destruct terminated", 10, 0},
 }
 
-// nextAllowed is the per-slot next-allowed frame cache [03 §8.3] (C15).
-var nextAllowed [24]uint32
-
-// ResetCooldowns clears the global per-slot cooldowns, for tests.
+// ResetCooldowns is retained for source compatibility. Cooldowns are owned by
+// each Queue, so constructing a new Queue is the reset operation.
 func ResetCooldowns() {
-	for i := range nextAllowed {
-		nextAllowed[i] = 0
-	}
 }
 
 // SlotStatic returns the static table entry for a slot [03 §8.3].
@@ -117,10 +120,7 @@ func SlotStatic(s Slot) (key, speech string, priority int8, cooldown uint32, ok 
 
 // NextAllowed returns the mutable next-allowed frame for a slot.
 func NextAllowed(s Slot) uint32 {
-	if int(s) < 0 || int(s) >= len(nextAllowed) {
-		return 0
-	}
-	return nextAllowed[s]
+	return 0
 }
 
 // NewQueue creates a queue with permissive defaults [03 §8.3].
@@ -131,14 +131,23 @@ func NewQueue() *Queue {
 		soundEnabled:    true,
 		speechEnabled:   true,
 		crtState:        1,
+		crt:             presentation.NewCRTRandom(1),
+		effectsVolume:   1,
+		soundFlags:      0x47,
+		backendEnabled:  true,
+		gateInitialized: true,
 		categories:      make(map[pool.Handle]*Category),
 		unitNames:       make(map[pool.Handle]string),
 		alive:           make(map[pool.Handle]bool),
+		chatEnabled:     make(map[pool.Handle]bool),
 	}
 	return q
 }
 
 func (q *Queue) ensureInit() {
+	if q == nil {
+		return
+	}
 	if q.categories == nil {
 		q.categories = make(map[pool.Handle]*Category)
 	}
@@ -147,6 +156,9 @@ func (q *Queue) ensureInit() {
 	}
 	if q.alive == nil {
 		q.alive = make(map[pool.Handle]bool)
+	}
+	if q.chatEnabled == nil {
+		q.chatEnabled = make(map[pool.Handle]bool)
 	}
 	// defaults if zero values
 	if !q.soundEnabled && !q.speechEnabled && q.audioThreshold == 0 && q.speechThreshold == 0 && q.crtState == 0 {
@@ -162,6 +174,14 @@ func (q *Queue) ensureInit() {
 	if q.crtState == 0 {
 		q.crtState = 1
 	}
+	if !q.gateInitialized {
+		// A zero-value Queue is usable with the same enabled defaults as
+		// NewQueue. Explicit gate configuration can restore silence later.
+		q.effectsVolume = 1
+		q.soundFlags = 0x47
+		q.backendEnabled = true
+		q.gateInitialized = true
+	}
 }
 
 // SetNow sets the current frame used by Insert without explicit frame [03 §8.3] (C16).
@@ -176,7 +196,50 @@ func (q *Queue) SetNow(frame uint32) {
 func (q *Queue) Seed(seed uint32) {
 	if q != nil {
 		q.crtState = seed
+		q.crt = presentation.NewCRTRandom(seed)
 	}
+}
+
+// SetCRTRandom injects the session-owned presentation stream. Queue and music
+// must share this object so silent resolves consume the same stream as every
+// other presentation consumer [01 §7.2][03 §8.3].
+func (q *Queue) SetCRTRandom(r *presentation.CRTRandom) {
+	if q != nil {
+		q.crt = r
+	}
+}
+
+func (q *Queue) CRTRandom() *presentation.CRTRandom {
+	if q == nil {
+		return nil
+	}
+	return q.crt
+}
+
+// ConfigureBackendGates supplies the effects-volume, sound-flags, and device
+// gates applied after queue crowding thresholds. Flags bits 0..2 are the
+// established master sound gate; exact secondary meanings remain unknown.
+func (q *Queue) ConfigureBackendGates(effectsVolume float32, soundFlags uint8, backendEnabled bool) {
+	if q == nil {
+		return
+	}
+	q.effectsVolume, q.soundFlags, q.backendEnabled = effectsVolume, soundFlags, backendEnabled
+	q.gateInitialized = true
+}
+
+// ConfigureThresholdGauges converts the 0..10 menu gauges to their byte
+// thresholds (five units per gauge step) [03 §8.3].
+func (q *Queue) ConfigureThresholdGauges(audioGauge, speechGauge uint8) {
+	if q == nil {
+		return
+	}
+	if audioGauge > 10 {
+		audioGauge = 10
+	}
+	if speechGauge > 10 {
+		speechGauge = 10
+	}
+	q.audioThreshold, q.speechThreshold = audioGauge*5, speechGauge*5
 }
 
 // Configure sets the crowding thresholds and enable flags [03 §8.3] (C17).
@@ -228,6 +291,16 @@ func (q *Queue) Register(unit pool.Handle, cat *Category, name string, alive boo
 		delete(q.unitNames, unit)
 	}
 	q.alive[unit] = alive
+	q.chatEnabled[unit] = alive
+}
+
+// SetChatEnabled updates the live unit chat latch used by speech emission.
+func (q *Queue) SetChatEnabled(unit pool.Handle, enabled bool) {
+	if q == nil || unit == 0 {
+		return
+	}
+	q.ensureInit()
+	q.chatEnabled[unit] = enabled
 }
 
 // drawCRT advances the presentation CRT stream once and returns 0..0x7FFF
@@ -235,6 +308,11 @@ func (q *Queue) Register(unit pool.Handle, cat *Category, name string, alive boo
 func (q *Queue) drawCRT() uint32 {
 	if q == nil {
 		return 0
+	}
+	if q.crt != nil {
+		v := uint32(q.crt.Draw("audio.variant"))
+		q.crtState = q.crt.State()
+		return v
 	}
 	q.crtState = q.crtState*214013 + 2531011
 	return (q.crtState >> 16) & 0x7FFF
@@ -266,7 +344,7 @@ func (q *Queue) InsertAt(frame uint32, s Slot, unit pool.Handle, text string) bo
 }
 
 func (q *Queue) insertAt(now uint32, s Slot, unit pool.Handle, text string) bool {
-	if now < nextAllowed[s] {
+	if now < q.nextAllowed[s] {
 		return false
 	}
 	for i := 0; i < q.Count; i++ {
@@ -319,8 +397,6 @@ func (q *Queue) resolve(e Entry, now uint32, audible, showText bool) {
 		return
 	}
 	info := slotTable[e.Slot]
-	// always draw variant even if not audible [03 §8.3] (I4)
-	draw := q.drawCRT()
 	var cat *Category
 	var unitName string
 	var alive bool
@@ -330,6 +406,7 @@ func (q *Queue) resolve(e Entry, now uint32, audible, showText bool) {
 		cat = q.categories[e.Unit]
 		unitName = q.unitNames[e.Unit]
 		alive = q.alive[e.Unit]
+		alive = alive && q.chatEnabled[e.Unit]
 		// if unit was never registered but handle non-zero, treat as alive with empty name for tests that don't register
 		if _, ok := q.alive[e.Unit]; !ok && e.Unit != 0 {
 			// keep alive false unless explicitly registered; speech prefix requires alive check,
@@ -346,7 +423,12 @@ func (q *Queue) resolve(e Entry, now uint32, audible, showText bool) {
 	}
 	var alias string
 	var caption string
+	// Variant selection is presentation-random even for a silent resolve, but
+	// a row with no variants has no random choice and consumes no draw [03
+	// §8.3].
+	draw := uint32(0)
 	if len(variants) > 0 {
+		draw = q.drawCRT()
 		idx := int(draw) * len(variants) / variantRange
 		if idx >= len(variants) {
 			idx = len(variants) - 1
@@ -356,13 +438,17 @@ func (q *Queue) resolve(e Entry, now uint32, audible, showText bool) {
 			caption = captions[idx]
 		}
 	}
-	if audible && len(variants) > 0 && int(10-q.audioThreshold) < int(info.Priority) && q.soundEnabled {
-		if q.onPlay != nil && alias != "" {
+	audioCrowding := int16(10) - int16(q.audioThreshold)
+	if audible && len(variants) > 0 && audioCrowding < int16(info.Priority) && q.soundEnabled && q.soundFlags&0x40 != 0 {
+		// Re-arm on the audible gate even when dispatch has no path or sink.
+		q.nextAllowed[e.Slot] = now + info.Cooldown*cooldownUnit
+		// Master backend gates apply only to dispatch, after the crowding gate.
+		if q.effectsVolume != 0 && q.soundFlags&7 != 0 && q.backendEnabled && q.onPlay != nil {
 			q.onPlay(alias, e.Slot, e.Unit)
 		}
-		nextAllowed[e.Slot] = now + info.Cooldown*cooldownUnit
 	}
-	if showText && int(10-q.speechThreshold) < int(info.Priority) && q.speechEnabled {
+	speechCrowding := int16(10) - int16(q.speechThreshold)
+	if showText && speechCrowding < int16(info.Priority) && q.speechEnabled {
 		line := e.Text
 		if line == "" {
 			if caption != "" {
@@ -371,17 +457,9 @@ func (q *Queue) resolve(e Entry, now uint32, audible, showText bool) {
 				line = info.Speech
 			}
 		}
-		if line != "" {
-			if alive && unitName != "" {
-				line = unitName + ": " + line
-			} else if alive && unitName == "" {
-				// still print line without prefix if name empty but alive
-			} else if !alive {
-				// retail prints prefixed only when unit still alive; if dead, print line without prefix?
-				// However spec says prefixed when still alive; for dead, print line as is (no prefix)
-			}
+		if line != "" && alive && unitName != "" {
+			line = unitName + ": " + line
 			if q.onSpeech != nil {
-				// only prefix when alive and name non-empty per spec
 				q.onSpeech(line)
 			}
 		}

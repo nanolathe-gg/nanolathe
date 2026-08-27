@@ -491,7 +491,7 @@ func (c *Client) composeIndexed(alpha float32, prev, cur *snapshot.Frame, ok boo
 		// Fog presentation [03 §3.3] C13 — reads snapshot fog cache copied from visibility.Service.Fog() each tick (I6).
 		// The cache is presentation-only and never writes sim state. Fog uses hard 32-pixel tiles [03 §3.3][03 §3.3].
 		if ok && cur != nil && cur.Fog.Valid && c.cam != nil {
-			fc := visibility.NewFogCacheFromChannels(cur.Fog.W, cur.Fog.H, cur.Fog.Ch0, cur.Fog.Ch1)
+			fc := visibility.NewFogCacheFromChannelsAt(cur.Fog.W, cur.Fog.H, cur.Fog.OriginX, cur.Fog.OriginZ, cur.Fog.Ch0, cur.Fog.Ch1)
 			c.ensureFogGAF()
 			ops := render.BuildFogOps(fc, c.cam, c.cam.ViewW, c.cam.ViewH, cur.Fog.W, cur.Fog.H, c.pal, c.ditheredFog)
 			for _, op := range ops {

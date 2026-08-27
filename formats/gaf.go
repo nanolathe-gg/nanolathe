@@ -38,11 +38,9 @@ type GAFFrameRef struct {
 type GAFFrame struct {
 	Width, Height    uint16
 	XOffset, YOffset int16
-	// ColorKey is frame header byte +8. On the raw path (Compressed==0)
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// (`mov ah,[ebp+0x18]; mov al,[esi]; cmp al,ah; je skip`), the byte
-	// being passed straight from the frame header by the generic frame draw
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// ColorKey is frame header byte +8. On the raw path (Compressed==0), the
+	// indexed blitter skips every source pixel equal to this byte. It is 9 in
+	// every retail frame, so index 9 is the
 	// transparent color of raw frames; the RLE path carries its own skip
 	// runs and ignores the key.
 	ColorKey    uint8
@@ -73,7 +71,10 @@ func LoadGAF(data []byte) (*GAF, error) {
 	if count > uint64((len(data)-12)/4) {
 		return nil, fmt.Errorf("gaf: entry offset table is truncated")
 	}
-	gaf.Entries = make([]GAFEntry, 0, gaf.EntryCount)
+	// The on-disk count is a u32, but only its low word is consumed by the
+	// retail reader. Cap the Go allocation by the validated low-word count;
+	// malformed high bits must not turn into an unbounded allocation.
+	gaf.Entries = make([]GAFEntry, 0, int(count))
 	frameCache := make(map[uint32]*GAFFrame)
 	for i := uint64(0); i < count; i++ {
 		offset := uint64(binary.LittleEndian.Uint32(data[12+i*4 : 16+i*4]))
@@ -95,7 +96,7 @@ func LoadGAF(data []byte) (*GAF, error) {
 		}
 		refsStart := offset + 40
 		refBytes := uint64(frameCount) * 8
-		if refBytes > uint64(len(data))-refsStart {
+		if refsStart > uint64(len(data)) || refBytes > uint64(len(data))-refsStart {
 			return nil, fmt.Errorf("gaf: entry %q frame table is truncated", entry.Name)
 		}
 		entry.Frames = make([]GAFFrameRef, frameCount)
@@ -109,6 +110,9 @@ func LoadGAF(data []byte) (*GAF, error) {
 			}
 			entry.Frames[frame].Frame = decoded
 		}
+		// Names are case-insensitive. Preserve the authored table's existing
+		// last-assignment behavior for duplicate names; duplicate-name handling
+		// is outside the established retail contract.
 		gaf.byName[strings.ToLower(entry.Name)] = len(gaf.Entries)
 		gaf.Entries = append(gaf.Entries, entry)
 	}
@@ -146,6 +150,9 @@ func (f *GAFFrame) At(x, y int) (byte, bool) {
 		return 0, false
 	}
 	index := y*int(f.Width) + x
+	if index >= len(f.Pixels) || index >= len(f.Transparent) {
+		return 0, false
+	}
 	return f.Pixels[index], !f.Transparent[index]
 }
 
@@ -187,11 +194,10 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 	if frame.Compressed != 0 && frame.Compressed != 1 {
 		return nil, fmt.Errorf("frame 0x%x has compression %d", offset, frame.Compressed)
 	}
-	// Retail subframe count is a single byte at header[10] (02:GAF) with
-	// header[11]==0 for strict parity; synthetic frames may use other
-	// values and remain loadable for the viewer.
-	if subCountByte := header[10]; subCountByte != 0 {
-		subCount := uint16(subCountByte)
+	// The subframe count is the complete little-endian u16 at +10. Reading
+	// only its low byte silently turns a valid high-byte count into a raw
+	// frame and can also bypass the table bounds check.
+	if subCount := binary.LittleEndian.Uint16(header[10:12]); subCount != 0 {
 		dataStart := uint64(frame.DataOffset)
 		bytesNeeded := uint64(subCount) * 4
 		if dataStart > uint64(len(data)) || bytesNeeded > uint64(len(data))-dataStart {
@@ -249,8 +255,8 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 		}
 		copy(frame.Pixels, data[dataStart:dataStart+pixelCount])
 		// Raw frames carry no skip runs: their only transparency is the
-		// frame's own color key, which retail compares per pixel in
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// frame's own color key, which the indexed blitter compares per pixel
+		// [fmt gaf]. The mask families anims/fog.gaf,
 		// anims/fogtiles.gaf and anims/vismasks.gaf are built entirely from
 		// key pixels and index 0, so without this the fog clouds blit as
 		// solid palette 9 (84,84,252) instead of black, and every sight

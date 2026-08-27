@@ -269,12 +269,24 @@ func CompileSoundCategoriesSorted(fs vfs.FSOps) ([]*SoundCategory, error) {
 // 32-byte alias name [02 "Sound aliases"].
 // It returns a map keyed by CanonicalKey(alias name).
 func CompileSoundAliases(fs vfs.FSOps) (map[string]*SoundAlias, error) {
+	result, _, err := compileSoundAliasesOrdered(fs)
+	return result, err
+}
+
+// CompileSoundAliasesOrdered returns the alias map and the same registrations
+// in authored section order. The order is consumed by the session registry;
+// the map remains for existing catalog lookup callers.
+func CompileSoundAliasesOrdered(fs vfs.FSOps) (map[string]*SoundAlias, []*SoundAlias, error) {
+	return compileSoundAliasesOrdered(fs)
+}
+
+func compileSoundAliasesOrdered(fs vfs.FSOps) (map[string]*SoundAlias, []*SoundAlias, error) {
 	if fs == nil {
-		return nil, fmt.Errorf("content: nil VFS")
+		return nil, nil, fmt.Errorf("content: nil VFS")
 	}
 	data, err := fs.ReadFileLimit("gamedata/allsound.tdf", 1<<20)
 	if err != nil {
-		return nil, fmt.Errorf("content: gamedata/allsound.tdf: %w", err)
+		return nil, nil, fmt.Errorf("content: gamedata/allsound.tdf: %w", err)
 	}
 	prov := Provenance{}
 	if info, statErr := fs.Stat("gamedata/allsound.tdf"); statErr == nil {
@@ -282,9 +294,10 @@ func CompileSoundAliases(fs vfs.FSOps) (map[string]*SoundAlias, error) {
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, fmt.Errorf("content: gamedata/allsound.tdf: %w", err)
+		return nil, nil, fmt.Errorf("content: gamedata/allsound.tdf: %w", err)
 	}
 	result := make(map[string]*SoundAlias)
+	ordered := make([]*SoundAlias, 0, 255)
 	// ReadDir order not relevant here; section order in file is the registration order.
 	// Cap at 255 per [02 "Sound aliases"].
 	count := 0
@@ -302,18 +315,10 @@ func CompileSoundAliases(fs vfs.FSOps) (map[string]*SoundAlias, error) {
 		}
 		soundVal, _ := section.StringValue("sound", "")
 		key := CanonicalKey(aliasName)
-		// Deduplicate: last wins is deterministic within cap.
+		// Deduplicate: the first registration owns the identity.  The runtime
+		// registry is ordered and case-insensitive; later authored sections do
+		// not replace an already registered alias [03 §8.3].
 		if _, exists := result[key]; exists {
-			// Duplicate alias — overwrite but do not increase count again.
-			result[key] = &SoundAlias{
-				DefinitionHeader: DefinitionHeader{
-					CanonicalKey: key,
-					Provenance:   prov,
-					Hash:         HashDefinition([]byte(fmt.Sprintf("%s|%s|", key, soundVal))),
-				},
-				Alias: aliasName,
-				Sound: soundVal,
-			}
 			continue
 		}
 		sa := &SoundAlias{
@@ -326,9 +331,10 @@ func CompileSoundAliases(fs vfs.FSOps) (map[string]*SoundAlias, error) {
 			Sound: soundVal,
 		}
 		result[key] = sa
+		ordered = append(ordered, sa)
 		count++
 	}
-	return result, nil
+	return result, ordered, nil
 }
 
 // compileSoundAliases is an unexported alias for Catalog integration.
@@ -355,6 +361,7 @@ func CompileSoundAliasesSorted(fs vfs.FSOps) ([]*SoundAlias, error) {
 type SoundData struct {
 	Categories map[string]*SoundCategory
 	Aliases    map[string]*SoundAlias
+	AliasOrder []*SoundAlias
 }
 
 // CompileSounds compiles both sound categories and aliases.
@@ -364,11 +371,11 @@ func CompileSounds(fs vfs.FSOps) (*SoundData, error) {
 	if err != nil {
 		return nil, err
 	}
-	aliases, err := CompileSoundAliases(fs)
+	aliases, aliasOrder, err := compileSoundAliasesOrdered(fs)
 	if err != nil {
 		return nil, err
 	}
-	return &SoundData{Categories: cats, Aliases: aliases}, nil
+	return &SoundData{Categories: cats, Aliases: aliases, AliasOrder: aliasOrder}, nil
 }
 
 // compileSounds is an unexported alias for Catalog integration.

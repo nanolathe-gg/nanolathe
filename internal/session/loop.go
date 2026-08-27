@@ -20,6 +20,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/presentation"
+	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
@@ -173,10 +174,13 @@ type Session struct {
 	// Music/CD fallback is briefing/music/CD probing via Controller [03 §8.4].
 	AudioQueue    *audio.Queue       // eight-slot arbitration queue [03 §8.3] C16 C18
 	AudioCache    *audio.SampleCache // alias→sample cache capped 255 [03 §8.2] C20
+	AudioRegistry *audio.Registry    // session-owned alias identities and samples [03 §8.2][03 §8.3]
 	AudioMusic    *audio.Controller  // CD/MCI controller with 5 modes [03 §8.4]
 	audioViewport audio.Viewport     // presentation viewport for pan/attenuation [03 §8.3]
 	audioFrame    uint32             // presentation frame counter for Drain [03 §8.3] C18
 	audioFS       vfs.FSOps          // VFS for cache loads, presentation-only
+	audioCRT      *presentation.CRTRandom
+	audioClock    *presentation.Clock
 
 	// Trace is the optional ordered debug sink [ON-09]. Disabled by default,
 	// appends in authoritative order, never ranges maps, never calls RNG,
@@ -2159,7 +2163,8 @@ func (s *Session) publishSnapshot(tick uint32) {
 		presentationEvents = s.Presentation.Events()
 	}
 	if s.Effects == nil {
-		s.Effects = presentation.NewEffectService(presentation.EffectCapacity)
+		// Keep one active-effect owner across publication paths [03 §1].
+		s.Effects = presentation.NewEffectServiceWithPool(presentation.EffectCapacity, &render.FixedEffectPool{})
 	}
 	// Effects consume the same ordered value events that are published below.
 	// They are advanced even when the current event window is empty so explicit
@@ -2341,9 +2346,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 			ch0, ch1 := fc.Channels()
 			frame.Fog.W = w
 			frame.Fog.H = h
+			frame.Fog.OriginX, frame.Fog.OriginZ = fc.Origin()
 			frame.Fog.Ch0 = ch0
 			frame.Fog.Ch1 = ch1
-			frame.Fog.Valid = fc.IsValid()
+			frame.Fog.Valid = s.Vis.FogCacheValid()
 		}
 	}
 	if s.Features != nil {
@@ -2564,14 +2570,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 			frame.EventsTruncated = true
 		}
 		frame.EventAdmissionsDropped = batch.Dropped
-		// Effects are the visual subset of the same ordered event window, one
-		// EffectView per admitted visual event with presentation-only payload.
-		// Authored GAF/art identity comes from weapon-compiled explosion fields
-		// where established; empty stays empty and never invents artwork [03 §1] C5 [I9].
-		// Nano selector is 6, source piece via QueryNanoPiece, target footprint
-		// bounds, reclaim reversed, shared strip evicts oldest beyond 400 [R-P0-06].
-		// Admission budgets are already enforced by the collector [F-P0-034].
-		frame.Effects = effectsFromEvents(batch.Events)
+		// Effects were already admitted and advanced by the sole fixed pool owner
+		// above. Publish its detached view; do not create a parallel event-derived
+		// lifecycle in the snapshot boundary [03 §1][I6].
+		frame.Effects = s.Effects.Snapshot()
 		if len(frame.Effects) > snapshot.MaxSnapshotEffects {
 			// Preserve newest, evict oldest beyond fixed pool [03 §1] C5 and strip beyond 400 [R-P0-06].
 			frame.Effects = frame.Effects[len(frame.Effects)-snapshot.MaxSnapshotEffects:]
@@ -2586,57 +2588,6 @@ func (s *Session) publishSnapshot(tick uint32) {
 	}
 	// Headless or no presentation collector: no effects to publish.
 	s.Snapshot.Publish(frame)
-}
-
-// effectsFromEvents maps the ordered, already-admitted visual events to the
-// immutable EffectView hand-off, one per event. It is presentation-only and
-// never invents artwork; empty Graphic stays empty [03 §1] C5 [I9]. Shake and
-// sound kinds are not effects and are omitted here; they are consumed via
-// Frame.Events by the audio/shake sinks [03 §5.6][03 §8.3].
-func effectsFromEvents(events []snapshot.EventView) []snapshot.EffectView {
-	if len(events) == 0 {
-		return nil
-	}
-	out := make([]snapshot.EffectView, 0, len(events))
-	for _, e := range events {
-		switch e.Kind {
-		case snapshot.EventKindShake, snapshot.EventKindSound:
-			continue // not a visual effect; handled via Events [03 §5.6][03 §8.3]
-		}
-		view := snapshot.EffectView{
-			ID:         e.ID,
-			EventSeq:   e.Sequence,
-			Source:     e.Source,
-			Target:     e.Target,
-			EffectID:   e.EffectID,
-			Piece:      e.Piece,
-			SFXType:    e.SFXType,
-			SFXClass:   e.SFXClass,
-			Mode:       e.Mode,
-			StartTick:  e.Tick,
-			ExpiryTick: e.ExpiryTick,
-			Lifetime:   e.Lifetime,
-			X:          e.X,
-			Y:          e.Y,
-			Z:          e.Z,
-			TargetX:    e.TargetX,
-			TargetY:    e.TargetY,
-			TargetZ:    e.TargetZ,
-			Kind:       e.Kind.String(),
-			Graphic:    e.Graphic,
-			PaletteRow: e.PaletteRow,
-			Light:      e.Kind == snapshot.EventKindLHTFlash,
-			Shake:      e.Magnitude,
-		}
-		if view.ExpiryTick == 0 && view.Lifetime > 0 {
-			view.ExpiryTick = view.StartTick + uint32(view.Lifetime)
-		}
-		out = append(out, view)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // publishVisibilityView copies the local player's visibility masks into the

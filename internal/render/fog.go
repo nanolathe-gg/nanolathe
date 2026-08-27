@@ -11,11 +11,123 @@
 package render
 
 import (
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 )
+
+// FogFrames is the resolved, immutable fog art supplied by the presentation
+// asset catalog. A nil entry is an ordinary optional-resource miss.
+type FogFrames struct {
+	Gray  [4][]*formats.GAFFrame
+	Black [4][]*formats.GAFFrame
+}
+
+// BlitFog applies the canonical fog operations to an indexed framebuffer.
+// The gray channel is applied before black; keyed GAF pixels leave the
+// destination untouched. Missing families/frames are no-ops, never fallback
+// art. [03 §3.3] [R-RR16-A §1–§8]
+func BlitFog(dst []byte, width, height int, ops []FogOp, frames *FogFrames, tables *palette.Tables, camX, camZ int32) {
+	if len(dst) == 0 || width <= 0 || height <= 0 {
+		return
+	}
+	for _, op := range ops {
+		x0, y0 := int(op.ScreenX0-camera.OriginX), int(op.ScreenY0-camera.OriginY)
+		x1, y1 := int(op.ScreenX1-camera.OriginX), int(op.ScreenY1-camera.OriginY)
+		if x0 < 0 {
+			x0 = 0
+		}
+		if y0 < 0 {
+			y0 = 0
+		}
+		if x1 > width {
+			x1 = width
+		}
+		if y1 > height {
+			y1 = height
+		}
+		if x0 >= x1 || y0 >= y1 {
+			continue
+		}
+		switch op.Kind {
+		case FogKindSolidDark:
+			for y := y0; y < y1; y++ {
+				for x := x0; x < x1; x++ {
+					dst[y*width+x] = FogDarkPaletteIndex
+				}
+			}
+		case FogKindGrayRemap:
+			if tables != nil {
+				for y := y0; y < y1; y++ {
+					for x := x0; x < x1; x++ {
+						dst[y*width+x] = tables.Gray[dst[y*width+x]]
+					}
+				}
+			}
+		case FogKindPatterned:
+			parity := (camX + camZ) & 1
+			for y := y0; y < y1; y++ {
+				for x := x0; x < x1; x++ {
+					if (int32(x)+int32(y)+parity)&1 == 1 {
+						dst[y*width+x] = FogDarkPaletteIndex
+					}
+				}
+			}
+		case FogKindGAFCh1, FogKindGAFCh0:
+			if frames == nil || op.Variant < 0 || op.Variant >= 4 || op.Frame < 0 {
+				continue
+			}
+			families := &frames.Black
+			if op.Kind == FogKindGAFCh1 {
+				families = &frames.Gray
+			}
+			if op.Variant >= len(families) || op.Frame >= len((*families)[op.Variant]) {
+				continue
+			}
+			frame := (*families)[op.Variant][op.Frame]
+			if frame == nil || frame.Width == 0 || frame.Height == 0 {
+				continue
+			}
+			blitFogFrame(dst, width, height, frame, x0, y0, op.Kind == FogKindGAFCh1, op.Patterned, tables, camX, camZ)
+		}
+	}
+}
+
+func blitFogFrame(dst []byte, width, height int, frame *formats.GAFFrame, x, y int, gray, patterned bool, tables *palette.Tables, camX, camZ int32) {
+	x -= int(frame.XOffset)
+	y -= int(frame.YOffset)
+	parity := (camX + camZ) & 1
+	for sy := 0; sy < int(frame.Height); sy++ {
+		dy := y + sy
+		if dy < 0 || dy >= height {
+			continue
+		}
+		for sx := 0; sx < int(frame.Width); sx++ {
+			dx := x + sx
+			if dx < 0 || dx >= width || (patterned && (int32(dx)+int32(dy)+parity)&1 == 0) {
+				continue
+			}
+			i := sy*int(frame.Width) + sx
+			if i < 0 || i >= len(frame.Pixels) || (i < len(frame.Transparent) && frame.Transparent[i]) {
+				continue
+			}
+			if gray {
+				// Gray family is a mask over existing pixels, not a source-pixel copy.
+				if tables != nil {
+					dst[dy*width+dx] = tables.Gray[dst[dy*width+dx]]
+				}
+				continue
+			}
+			if patterned {
+				dst[dy*width+dx] = FogDarkPaletteIndex
+			} else {
+				dst[dy*width+dx] = frame.Pixels[i]
+			}
+		}
+	}
+}
 
 // FogTilePixels is the hard fog tile size in map pixels [03 §3.3][03 §2.1].
 // One visibility cell covers 32 world pixels and edges are hard [03 §3.3].
@@ -256,173 +368,26 @@ func BuildFogOps(cache *visibility.FogCache, cam *camera.Camera, viewW, viewH in
 	if cache == nil {
 		return nil
 	}
-	if gridW <= 0 || gridH <= 0 {
-		if cam != nil && cam.MapW > 0 && cam.MapH > 0 {
-			gridW = cam.MapW / FogTilePixels // MapW = CellW*16 = gridW*32 [03 §2.1][03 §3.1]
-			gridH = cam.MapH / FogTilePixels
-			if gridW <= 0 {
-				gridW = cam.MapW / FogTilePixels
-			}
-			if gridH <= 0 {
-				gridH = cam.MapH / FogTilePixels
-			}
-		}
-		if gridW <= 0 || gridH <= 0 {
-			return nil
-		}
-	}
-	if viewW <= 0 && cam != nil {
-		viewW = cam.ViewW
-	}
-	if viewH <= 0 && cam != nil {
-		viewH = cam.ViewH
-	}
-
-	// Window of fog cells whose 32x32 rects intersect the viewport, plus a
-	// one-cell border ring replicating the retail viewport+border cache
-	// [03 §3.3]. FogScreenRect returns retail viewport
-	// coordinates (including OriginX/Y) which the composer rebases to the
-	// shell framebuffer by subtracting OriginX/Y, so a cell's framebuffer
-	// extent is map pixel [gx*32+16, gx*32+48) − camX. Cell g therefore
-	// intersects framebuffer [0,viewW) iff its map extent intersects
-	// [camX, camX+viewW): 32g+48 > camX and 32g+16 < camX+viewW — the exact
-	// range below. The math must use the raw camera position: deriving it
-	// from camX−OriginX shifts the whole window one OriginX west and leaves
-	// the last OriginX-wide framebuffer columns/rows unfogged. The ring
-	// extension is clipped by the composer and engages the border fixups like
-	// the retail cache border [03 §3.3]. Range is NOT clamped to the grid:
-	// cells beyond the map are part of the retail cache and receive the
-	// border fixups (§ below).
-	var startX, endX, startY, endY int32
-	useViewport := cam != nil && viewW > 0 && viewH > 0
-	if useViewport {
-		startX = floorDiv(cam.X-FogTilePixels/2, FogTilePixels) - 1
-		endX = floorDiv(cam.X+viewW-FogTilePixels/2+FogTilePixels-1, FogTilePixels) + 1
-		startY = floorDiv(cam.Z-FogTilePixels/2, FogTilePixels) - 1
-		endY = floorDiv(cam.Z+viewH-FogTilePixels/2+FogTilePixels-1, FogTilePixels) + 1
-	} else {
-		// No camera: enumerate the whole map plus its void ring (test path).
-		startX, endX = int32(-1), gridW+1
-		startY, endY = int32(-1), gridH+1
-	}
-	winW := endX - startX
-	winH := endY - startY
-	if winW <= 0 || winH <= 0 {
+	// FogCache is the sole producer of viewport nibbles. This function only
+	// translates the already-aligned cache to ordered blits; a zero origin is
+	// valid and is not a sentinel for a map-sized cache. [03 §3.3]
+	_ = viewW
+	_ = viewH
+	_ = gridW
+	_ = gridH
+	ox, oz := cache.Origin()
+	w, h := cache.Dimensions()
+	if w <= 0 || h <= 0 {
 		return nil
 	}
-
-	// Rebuild the retail producer's window content in a presentation-only
-	// working buffer (I6: the published cache is never mutated):
-	//
-	//  1. seed: every in-map visibility tile with cache bit1 set (hi: current
-	//     fogged — mode-gated at production so a disabled mode leaves hi zero;
-	//     lo: unexplored) ORs 1,2,4,8 into the cell and its NW neighbours
-	//     [03 §3.3]. Void cells receive the bits that
-	//     leak across the map boundary exactly as the retail cache does.
-	//  2. border fixups in retail order top, bottom, left, right: top and left
-	//     propagate fog into the void row/column adjacent
-	//     to the map (bit4→1, bit8→2 / bit8→4, bit2→1); bottom/right thicken
-	//     the last in-map row/column toward the map edge (bit1→4, bit2→8 /
-	//     bit4→8, bit1→2) on the row/col two from the window end (h-2),
-	//     which is a no-op on void rows since their bits 1/2 are always zero.
-	win0 := make([]uint8, winW*winH)
-	win1 := make([]uint8, winW*winH)
-	winIdx := func(gx, gy int32) int {
-		return int((gy-startY)*winW + (gx - startX))
-	}
-	inWin := func(gx, gy int32) bool {
-		return gx >= startX && gx < endX && gy >= startY && gy < endY
-	}
-	orSeed := func(win []uint8, tx, ty int32) {
-		if inWin(tx, ty) {
-			win[winIdx(tx, ty)] |= 1
-		}
-		if inWin(tx-1, ty) {
-			win[winIdx(tx-1, ty)] |= 2
-		}
-		if inWin(tx, ty-1) {
-			win[winIdx(tx, ty-1)] |= 4
-		}
-		if inWin(tx-1, ty-1) {
-			win[winIdx(tx-1, ty-1)] |= 8
-		}
-	}
-	for ty := startY; ty <= endY; ty++ {
-		if ty < 0 || ty >= gridH {
-			continue
-		}
-		for tx := startX; tx <= endX; tx++ {
-			if tx < 0 || tx >= gridW {
+	out := make([]FogOp, 0, int(w*h))
+	for row := int32(0); row < h; row++ {
+		for col := int32(0); col < w; col++ {
+			c0, c1 := cache.Channel(col, row)
+			if c0 == 0 && c1 == 0 {
 				continue
 			}
-			c0, c1 := cache.Channel(tx, ty) // read-only [I6]
-			if c1&1 != 0 {
-				orSeed(win1, tx, ty)
-			}
-			if c0&1 != 0 {
-				orSeed(win0, tx, ty)
-			}
-		}
-	}
-	// Border fixup helper: applies two (mask → set-bit) rules to one cell.
-	applyFixup := func(win []uint8, gx, gy int32, mA, vA, mB, vB uint8) {
-		if !inWin(gx, gy) {
-			return
-		}
-		i := winIdx(gx, gy)
-		if win[i]&mA != 0 {
-			win[i] |= vA
-		}
-		if win[i]&mB != 0 {
-			win[i] |= vB
-		}
-	}
-	// Top edge: void row -1 when the window crosses north of the map.
-	if startY <= -1 {
-		for gx := startX; gx < endX; gx++ {
-			applyFixup(win1, gx, -1, 0x04, 0x01, 0x08, 0x02)
-			applyFixup(win0, gx, -1, 0x04, 0x01, 0x08, 0x02)
-		}
-	}
-	// Bottom edge: row endY-2 when the window crosses south of the map;
-	// no-op on void rows (their bits 1/2 are always zero there).
-	if endY > gridH {
-		row := endY - 2
-		for gx := startX; gx < endX; gx++ {
-			applyFixup(win1, gx, row, 0x01, 0x04, 0x02, 0x08)
-			applyFixup(win0, gx, row, 0x01, 0x04, 0x02, 0x08)
-		}
-	}
-	// Left edge: void column -1 when the window crosses west of the map.
-	if startX <= -1 {
-		for gy := startY; gy < endY; gy++ {
-			applyFixup(win1, -1, gy, 0x08, 0x04, 0x02, 0x01)
-			applyFixup(win0, -1, gy, 0x08, 0x04, 0x02, 0x01)
-		}
-	}
-	// Right edge: column endX-2 when the window crosses east of the map;
-	// no-op on void columns.
-	if endX > gridW {
-		col := endX - 2
-		for gy := startY; gy < endY; gy++ {
-			applyFixup(win1, col, gy, 0x04, 0x08, 0x01, 0x02)
-			applyFixup(win0, col, gy, 0x04, 0x08, 0x01, 0x02)
-		}
-	}
-
-	var out []FogOp
-	// Deterministic row-major iteration [I1]: y outer, x inner.
-	for gy := startY; gy < endY; gy++ {
-		for gx := startX; gx < endX; gx++ {
-			i := winIdx(gx, gy)
-			c0, c1 := win0[i], win1[i]
-			if c0 == 0 && c1 == 0 {
-				continue // visible or untouched void: no fog draw [03 §3.3]
-			}
-			ops := cellOps(gx, gy, c0, c1, cam, tables, dither)
-			if len(ops) > 0 {
-				out = append(out, ops...)
-			}
+			out = append(out, cellOps(ox+col, oz+row, c0, c1, cam, tables, dither)...)
 		}
 	}
 	return out

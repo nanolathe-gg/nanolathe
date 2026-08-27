@@ -107,6 +107,24 @@ type ProjectileView struct {
 	SmokeTrail                bool          // authored smoke-trail flag [06 §13.2]
 	TrailFrame                int32         // immutable trail frame/selector state
 	PaletteRow                int16         // authored palette/light row, unresolved values remain zero
+	// Authored presentation metadata is copied at publication time.  These
+	// fields deliberately remain IDs/values rather than pointers into the
+	// content catalog, so a renderer cannot discover or mutate assets while
+	// drawing [03 §5.4][03 §13.3][I6]. Empty IDs mean that the optional
+	// authored resource is absent; consumers must leave pixels untouched.
+	AssetID              string
+	BaseAssetID          string
+	SelectorSequence     int32
+	FrameCount           int32
+	PrimaryColor         uint8
+	SecondaryColor       uint8
+	HasPrimaryColor      bool
+	HasSecondaryColor    bool
+	OrientationLow       uint16 // low orientation word; semantic name remains unresolved [03 §5.4]
+	OrientationHigh      uint16
+	HasDirectOrientation bool
+	SecondaryModel       string
+	SecondaryModelUntil  uint32
 }
 
 // FeatureView is the presentation view of one live feature [05 "Feature instance and terrain cell"].
@@ -167,6 +185,7 @@ type EffectView struct {
 	TargetY        numeric.Fixed
 	TargetZ        numeric.Fixed
 	VX, VY, VZ     numeric.Fixed // velocity if any
+	Gravity        numeric.Fixed // authored per-effect gravity when present
 	Kind           string        // palette/effect discriminator if known
 	HasModel       bool
 	SeqA           int32  // current frame index for anim A if active
@@ -175,6 +194,22 @@ type EffectView struct {
 	PaletteRow     int16  // LHT/SHD/palette selector when established
 	Light          bool   // apply established LHT presentation transform
 	Shake          int32  // authored shake magnitude; zero when not supplied
+	// Immutable authored identities and timing are published alongside the
+	// effect value.  A missing sequence is a no-op in compatibility drawing;
+	// no one-tick or synthetic frame is implied [03 §4.4][03 §5.5][I9].
+	AssetID                string
+	SequenceID             string
+	DurationsA             []int32
+	DurationsB             []int32
+	LoopA                  bool
+	LoopB                  bool
+	FlashRadius            int32
+	FlashLevel             int32
+	HasFlashDisc           bool
+	Strip                  int8
+	NanolatheIndex         int32
+	NanolatheCount         int32
+	NanolatheGeometryKnown bool
 }
 
 // OrderView is the presentation view of one unit order head [04 §3][04 §7.3].
@@ -277,12 +312,14 @@ type EconomyView struct {
 // VisibilityView is the versioned presentation copy of explored/visible/radar
 // masks. Mask bytes are opaque to snapshot and never interpreted by simulation [03 §3.3] C13.
 type VisibilityView struct {
-	Version  uint32
-	W, H     int32
-	Explored []uint8
-	Visible  []uint8
-	Radar    []uint8
-	Valid    bool
+	Version       uint32
+	W, H          int32
+	Explored      []uint8
+	Visible       []uint8
+	Radar         []uint8
+	WordVisible   []uint16
+	CoverageBytes bool
+	Valid         bool
 }
 
 // EventKind is the typed presentation-event discriminator shared by the
@@ -350,6 +387,19 @@ type EventView struct {
 	Team                      uint8
 	PaletteRow                int16
 	Magnitude                 int32
+	AssetID                   string
+	SequenceID                string
+	DurationsA                []int32
+	DurationsB                []int32
+	LoopA                     bool
+	LoopB                     bool
+	FlashRadius               int32
+	FlashLevel                int32
+	HasFlashDisc              bool
+	Strip                     int8
+	NanolatheIndex            int32
+	NanolatheCount            int32
+	NanolatheGeometryKnown    bool
 }
 
 // ResourceView is the presentation copy of per-player economy stocks [05 "Player slot"] (I2 allowlist).
@@ -458,9 +508,10 @@ type ResultView struct {
 
 // FogView is the presentation copy of the two-channel fog cache [03 §3.3] C13.
 type FogView struct {
-	W, H     int32
-	Ch0, Ch1 []uint8
-	Valid    bool
+	W, H             int32
+	OriginX, OriginZ int32
+	Ch0, Ch1         []uint8
+	Valid            bool
 }
 
 // Buffer is the double-buffered presentation state. The sim writes Current at
@@ -627,10 +678,11 @@ func cloneFrame(f *Frame) Frame {
 		Selection:   f.Selection,
 		CommandPage: f.CommandPage,
 		Visibility: VisibilityView{
-			Version: f.Visibility.Version,
-			W:       f.Visibility.W,
-			H:       f.Visibility.H,
-			Valid:   f.Visibility.Valid,
+			Version:       f.Visibility.Version,
+			W:             f.Visibility.W,
+			H:             f.Visibility.H,
+			CoverageBytes: f.Visibility.CoverageBytes,
+			Valid:         f.Visibility.Valid,
 		},
 	}
 	if len(f.Units) > 0 {
@@ -644,6 +696,10 @@ func cloneFrame(f *Frame) Frame {
 	nf.ProjectilesTruncated = f.ProjectilesTruncated || len(f.Projectiles) > MaxSnapshotProjectiles
 	nf.Features = cloneBounded(f.Features, 0)
 	nf.Effects = cloneBounded(f.Effects, MaxSnapshotEffects)
+	for i := range nf.Effects {
+		nf.Effects[i].DurationsA = cloneBounded(f.Effects[i].DurationsA, 0)
+		nf.Effects[i].DurationsB = cloneBounded(f.Effects[i].DurationsB, 0)
+	}
 	nf.EffectsTruncated = f.EffectsTruncated || len(f.Effects) > MaxSnapshotEffects
 	nf.Orders = cloneOrders(f.Orders, 0)
 	nf.OrderQueues = cloneOrderQueues(f.OrderQueues, MaxSnapshotOrderQueueUnits)
@@ -654,18 +710,31 @@ func cloneFrame(f *Frame) Frame {
 	nf.SoundsTruncated = f.SoundsTruncated || len(f.Sounds) > MaxSnapshotSounds
 	nf.Builds = cloneBounded(f.Builds, 0)
 	nf.Events = cloneBounded(f.Events, MaxSnapshotEvents)
+	for i := range nf.Events {
+		nf.Events[i].DurationsA = cloneBounded(f.Events[i].DurationsA, 0)
+		nf.Events[i].DurationsB = cloneBounded(f.Events[i].DurationsB, 0)
+	}
 	nf.EventsTruncated = f.EventsTruncated || len(f.Events) > MaxSnapshotEvents
 	nf.Selection.Handles = cloneBounded(f.Selection.Handles, 0)
 	nf.CommandPage.ProductKeys = cloneBounded(f.CommandPage.ProductKeys, 0)
 	nf.Visibility.Explored = cloneBytes(f.Visibility.Explored, MaxSnapshotVisibilityMaskBytes)
 	nf.Visibility.Visible = cloneBytes(f.Visibility.Visible, MaxSnapshotVisibilityMaskBytes)
 	nf.Visibility.Radar = cloneBytes(f.Visibility.Radar, MaxSnapshotVisibilityMaskBytes)
+	if len(f.Visibility.WordVisible) > 0 {
+		n := len(f.Visibility.WordVisible)
+		if n > MaxSnapshotVisibilityMaskBytes/2 {
+			n = MaxSnapshotVisibilityMaskBytes / 2
+		}
+		nf.Visibility.WordVisible = append([]uint16(nil), f.Visibility.WordVisible[:n]...)
+	}
 	nf.VisibilityExploredTruncated = f.VisibilityExploredTruncated || len(f.Visibility.Explored) > MaxSnapshotVisibilityMaskBytes
 	nf.VisibilityVisibleTruncated = f.VisibilityVisibleTruncated || len(f.Visibility.Visible) > MaxSnapshotVisibilityMaskBytes
 	nf.VisibilityRadarTruncated = f.VisibilityRadarTruncated || len(f.Visibility.Radar) > MaxSnapshotVisibilityMaskBytes
 	nf.EventAdmissionsDropped = f.EventAdmissionsDropped
 	nf.Fog.W = f.Fog.W
 	nf.Fog.H = f.Fog.H
+	nf.Fog.OriginX = f.Fog.OriginX
+	nf.Fog.OriginZ = f.Fog.OriginZ
 	nf.Fog.Valid = f.Fog.Valid
 	if len(f.Fog.Ch0) > 0 {
 		nf.Fog.Ch0 = make([]uint8, len(f.Fog.Ch0))

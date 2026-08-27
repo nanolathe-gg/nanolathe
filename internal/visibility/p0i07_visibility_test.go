@@ -169,11 +169,11 @@ func TestP0I07_SaveLoadRebuildOrder(t *testing.T) {
 		t.Fatalf("byte grid for owner 1 should be restored")
 	}
 	// Fog invalidated on rebuild and on local publish.
-	if s.Fog().IsValid() {
+	if s.FogCacheValid() {
 		t.Fatalf("fog should be invalid after rebuild+publish until RebuildFog")
 	}
 	s.RebuildFog(0, 0)
-	if !s.Fog().IsValid() {
+	if !s.FogCacheValid() {
 		t.Fatalf("fog should be valid after RebuildFog")
 	}
 }

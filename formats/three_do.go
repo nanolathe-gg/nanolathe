@@ -281,8 +281,8 @@ func LoadThreeDOFile(fs vfs.FSOps, name string) (*ThreeDO, error) {
 func Load3DOFile(fs vfs.FSOps, name string) (*ThreeDO, error) { return LoadThreeDOFile(fs, name) }
 
 // ModelTop returns the model's top extent in 16.16 world units, matching the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// retail loader helper whose result the unit definition stores for
+// presentation and visibility [03 §3.2].
 //
 // Retail walks the piece and its siblings, taking the maximum of
 // `vertex.Y + piece.Translation.Y` over every vertex, and for each child
@@ -297,13 +297,13 @@ func (t *ThreeDO) ModelTop() int32 {
 	if t == nil || len(t.Objects) == 0 {
 		return 0
 	}
-	return t.modelTopFrom(0)
+	return t.modelTopFrom(t.Root)
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// modelTopFrom walks one piece and every
 // following sibling, each contributing its own vertices and its child subtree.
 func (t *ThreeDO) modelTopFrom(index int32) int32 {
-	var top int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	var top int32 // the model-top accumulator starts at zero [03 §2.4]
 	for index >= 0 && int(index) < len(t.Objects) {
 		obj := &t.Objects[index]
 		ty := obj.Translation[1]

@@ -1,0 +1,90 @@
+package render
+
+import "github.com/nanolathe/nanolathe/internal/presentation"
+
+// TexturePlayer is the presentation cursor for one model instance.  It owns
+// no global clock and therefore two instances created at different ticks do
+// not accidentally share a phase [03 §2.4.1][03 §4.4].
+//
+// Durations are authored whole simulation ticks.  A zero duration is retained
+// as authored data; the cursor advances at the next tick rather than inventing
+// a replacement duration for malformed content.
+type TexturePlayer struct {
+	frames      []presentation.AssetID
+	durations   []uint32
+	index       int
+	remaining   uint32
+	initialized bool
+}
+
+// NewTexturePlayer copies one authored sequence into an independent cursor.
+func NewTexturePlayer(sequence presentation.AssetSequence) *TexturePlayer {
+	p := &TexturePlayer{
+		frames:    append([]presentation.AssetID(nil), sequence.Frames...),
+		durations: append([]uint32(nil), sequence.Durations...),
+	}
+	if len(p.frames) != 0 {
+		p.remaining = p.duration(0)
+		p.initialized = true
+	}
+	return p
+}
+func (p *TexturePlayer) duration(index int) uint32 {
+	if p == nil || index < 0 || index >= len(p.frames) {
+		return 0
+	}
+	if index >= len(p.durations) {
+		// Missing duration is not a valid authored sequence. Keep the frame
+		// visible indefinitely instead of manufacturing timing.
+		return ^uint32(0)
+	}
+	return p.durations[index]
+}
+
+// Frame returns the current immutable asset identity. A missing sequence is a
+// normal unresolved-art result.
+func (p *TexturePlayer) Frame() (presentation.AssetID, bool) {
+	if p == nil || p.index < 0 || p.index >= len(p.frames) {
+		return "", false
+	}
+	return p.frames[p.index], true
+}
+
+// Step advances one simulation tick. It is intentionally separate from
+// presentation frame rendering: callers invoke it only when Clock.NewSimTick
+// is true, never once per draw pass [03 §4.4].
+func (p *TexturePlayer) Step() {
+	if p == nil || len(p.frames) <= 1 || !p.initialized {
+		return
+	}
+	if p.remaining > 1 {
+		p.remaining--
+		return
+	}
+	p.index++
+	if p.index >= len(p.frames) {
+		p.index = 0
+	}
+	p.remaining = p.duration(p.index)
+}
+
+// Advance advances exactly once when the caller consumed a new simulation
+// tick. Passing false is a no-op, allowing every model instance to observe the
+// same presentation.Clock boundary without consuming it independently.
+func (p *TexturePlayer) Advance(newSimTick bool) {
+	if newSimTick {
+		p.Step()
+	}
+}
+
+// Reset returns the cursor to its authored first frame and duration.
+func (p *TexturePlayer) Reset() {
+	if p == nil {
+		return
+	}
+	p.index = 0
+	p.initialized = len(p.frames) != 0
+	if p.initialized {
+		p.remaining = p.duration(0)
+	}
+}

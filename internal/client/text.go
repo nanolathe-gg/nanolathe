@@ -125,21 +125,16 @@ func TruncateToWidth(fnt *formats.FNT, text string, maxWidth int) string { // [0
 		return text
 	}
 	const limit = 300 // retail bounded buffer [07 §7]
-	// Bounded copy into 300-byte buffer. Bytes at or after the first 0x0A/NUL
-	// are not part of the measured advance [02 §7], so we truncate the source
-	// at the first terminator before the bounded copy.
-	end := len(text)
-	for i := 0; i < len(text); i++ {
-		if text[i] == 0x0A || text[i] == 0x00 {
-			end = i
-			break
-		}
-	}
-	src := text[:end]
+	// Bounded copy into the 300-byte buffer. The measured prefix ends at the
+	// first newline/NUL, but the bytes after that terminator remain harmless
+	// data in the bounded text buffer when no width truncation is needed; the
+	// draw and measure loops stop at the terminator [02 §7].
+	src := text
 	if len(src) > limit {
 		src = src[:limit]
 	}
-	// If it already fits, return it (without the terminator suffix).
+	// If it already fits, return the bounded copy unchanged; drawing and
+	// measurement still stop at the first terminator.
 	if MeasureText(fnt, src) <= maxWidth {
 		return src
 	}

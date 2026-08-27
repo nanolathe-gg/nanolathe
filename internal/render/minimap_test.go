@@ -397,8 +397,8 @@ func TestMinimapNoRadarAndPaletteFallback(t *testing.T) {
 	contacts := []MinimapContact{{WorldX: 10, WorldZ: 10, WorldY: 0, Palette: 0, Owner: 5, NoRadar: true}}
 	final := RebuildFinal(mapped, m, 100, 100, contacts, BlinkState{Phase: 1}, nil)
 	rx, ry := RadarProjection(10, 10, 0, 100, 100, m)
-	if v, _ := final.At(int(rx), int(ry)); v != 0 {
-		t.Fatalf("NoRadar should skip drawing, got %d", v)
+	if v, _ := final.At(int(rx), int(ry)); v != 0x80+5 {
+		t.Fatalf("NoRadar should not suppress the contact blip, got %d", v)
 	}
 	contacts[0].NoRadar = false
 	final2 := RebuildFinal(mapped, m, 100, 100, contacts, BlinkState{Phase: 1}, nil)

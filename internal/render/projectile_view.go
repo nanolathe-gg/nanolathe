@@ -28,23 +28,28 @@ type ProjectilePoint struct {
 // instruction only when Suppressed is true or when its authored asset is
 // unavailable; it must not replace it with a generic marker.
 type ProjectileDraw struct {
-	Handle     uint16
-	RenderType int32
-	Kind       string
-	Graphic    string
-	Model      string
-	Frame      int
-	Selector   int32
-	Head       ProjectilePoint
-	Tail       ProjectilePoint
-	Segments   []ProjectilePoint
-	Segments2  []ProjectilePoint
-	Color      int32
-	Color2     int32
-	Suppressed bool
-	Aborted    bool
-	BaseFrame  *formats.GAFFrame // common projectile sprite for model families
-	FrameAsset *formats.GAFFrame // selected authored GAF frame for GAF families
+	Handle               uint16
+	RenderType           int32
+	Kind                 string
+	Graphic              string
+	Model                string
+	Frame                int
+	Selector             int32
+	Head                 ProjectilePoint
+	Tail                 ProjectilePoint
+	Segments             []ProjectilePoint
+	Segments2            []ProjectilePoint
+	Color                int32
+	Color2               int32
+	Suppressed           bool
+	Aborted              bool
+	OrientationLow       uint16
+	OrientationHigh      uint16
+	HasDirectOrientation bool
+	SecondaryModel       string
+	SecondaryModelUntil  uint32
+	BaseFrame            *formats.GAFFrame // common projectile sprite for model families
+	FrameAsset           *formats.GAFFrame // selected authored GAF frame for GAF families
 }
 
 // ProjectileGAFRequest identifies one authored GAF lookup. The renderer does
@@ -56,6 +61,7 @@ type ProjectileGAFRequest struct {
 	Sequence int32
 	Frame    int
 	Base     bool
+	AssetID  string // resolved authored identity; empty means absent [03 §5.4]
 }
 
 // ProjectileDispatchOptions supplies presentation metadata that is not part
@@ -128,18 +134,29 @@ func SnapshotSegmentedPointPasses(v snapshot.ProjectileView, crt *rng.CRT) (firs
 // The returned instruction is presentation-only [I6].
 func DispatchProjectileView(v snapshot.ProjectileView, now uint32, opts ProjectileDispatchOptions) ProjectileDraw {
 	d := ProjectileDraw{
-		Handle:     uint16(v.Handle),
-		RenderType: v.RenderType,
-		Kind:       "unknown",
-		Graphic:    v.Graphic,
-		Model:      v.Model,
-		Selector:   v.Selector,
-		Head:       projectileHead(v),
-		Tail:       projectileTail(v),
+		Handle:               uint16(v.Handle),
+		RenderType:           v.RenderType,
+		Kind:                 "unknown",
+		Graphic:              v.Graphic,
+		Model:                v.Model,
+		Selector:             v.Selector,
+		Head:                 projectileHead(v),
+		Tail:                 projectileTail(v),
+		OrientationLow:       v.OrientationLow,
+		OrientationHigh:      v.OrientationHigh,
+		HasDirectOrientation: v.HasDirectOrientation,
+		SecondaryModel:       v.SecondaryModel,
+		SecondaryModelUntil:  v.SecondaryModelUntil,
 	}
 	colorOK := false
 	if opts.Color != nil {
 		d.Color, d.Color2, colorOK = opts.Color(v)
+	} else if v.HasPrimaryColor {
+		d.Color = int32(v.PrimaryColor)
+		if v.HasSecondaryColor {
+			d.Color2 = int32(v.SecondaryColor)
+		}
+		colorOK = true
 	}
 
 	switch v.RenderType {
@@ -155,7 +172,7 @@ func DispatchProjectileView(v snapshot.ProjectileView, now uint32, opts Projecti
 			d.Suppressed = true
 			return d
 		}
-		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: -1, Frame: 0, Base: true})
+		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: -1, Frame: 0, Base: true, AssetID: v.BaseAssetID})
 		if !ok || frame == nil {
 			d.Suppressed = true
 			return d
@@ -167,7 +184,7 @@ func DispatchProjectileView(v snapshot.ProjectileView, now uint32, opts Projecti
 			d.Suppressed = true
 			return d
 		}
-		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: 0, Frame: 0})
+		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: 0, Frame: 0, AssetID: v.AssetID})
 		if !ok || frame == nil {
 			d.Suppressed = true
 			return d
@@ -179,7 +196,7 @@ func DispatchProjectileView(v snapshot.ProjectileView, now uint32, opts Projecti
 			d.Suppressed = true
 			return d
 		}
-		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: -1, Frame: 0, Base: true})
+		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: -1, Frame: 0, Base: true, AssetID: v.BaseAssetID})
 		if !ok || frame == nil {
 			d.Suppressed = true
 			return d
@@ -187,11 +204,16 @@ func DispatchProjectileView(v snapshot.ProjectileView, now uint32, opts Projecti
 		d.BaseFrame = frame
 	case RenderTypeSelectorGAF:
 		d.Kind = "selector-gaf"
-		if v.Selector == -1 || opts.FrameCount == nil {
+		selector := v.Selector
+		if selector == -1 && v.SelectorSequence != -1 {
+			selector = v.SelectorSequence
+		}
+		if selector == -1 {
 			d.Suppressed = true
 			return d
 		}
-		frameCount, ok := opts.FrameCount(v)
+		d.Selector = selector
+		frameCount, ok := projectileFrameCount(v, opts)
 		if !ok || frameCount <= 0 {
 			d.Suppressed = true
 			return d
@@ -201,7 +223,7 @@ func DispatchProjectileView(v snapshot.ProjectileView, now uint32, opts Projecti
 			d.Suppressed = true
 			return d
 		}
-		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: v.Selector, Frame: d.Frame})
+		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: selector, Frame: d.Frame, AssetID: v.AssetID})
 		if !ok || frame == nil {
 			d.Suppressed = true
 			return d
@@ -209,11 +231,11 @@ func DispatchProjectileView(v snapshot.ProjectileView, now uint32, opts Projecti
 		d.FrameAsset = frame
 	case RenderTypeLifetimeGAF:
 		d.Kind = "lifetime-gaf"
-		if v.Lifetime <= 0 || opts.FrameCount == nil {
+		if v.Lifetime <= 0 {
 			d.Suppressed = true
 			return d
 		}
-		frameCount, ok := opts.FrameCount(v)
+		frameCount, ok := projectileFrameCount(v, opts)
 		if !ok || frameCount <= 0 {
 			d.Suppressed = true
 			return d
@@ -231,7 +253,7 @@ func DispatchProjectileView(v snapshot.ProjectileView, now uint32, opts Projecti
 			d.Suppressed = true
 			return d
 		}
-		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: 0, Frame: d.Frame})
+		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: 0, Frame: d.Frame, AssetID: v.AssetID})
 		if !ok || frame == nil {
 			d.Suppressed = true
 			return d
@@ -243,7 +265,7 @@ func DispatchProjectileView(v snapshot.ProjectileView, now uint32, opts Projecti
 			d.Suppressed = true
 			return d
 		}
-		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: -1, Frame: 0, Base: true})
+		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: -1, Frame: 0, Base: true, AssetID: v.BaseAssetID})
 		if !ok || frame == nil {
 			d.Suppressed = true
 			return d
@@ -271,6 +293,16 @@ func DispatchProjectileView(v snapshot.ProjectileView, now uint32, opts Projecti
 	return d
 }
 
+func projectileFrameCount(v snapshot.ProjectileView, opts ProjectileDispatchOptions) (int, bool) {
+	if v.FrameCount > 0 {
+		return int(v.FrameCount), true
+	}
+	if opts.FrameCount == nil {
+		return 0, false
+	}
+	return opts.FrameCount(v)
+}
+
 // BuildProjectileDraws dispatches an already stable snapshot slice in order
 // (I1). The visibility callback runs before rendertype dispatch [03 §5.4]. A
 // global-GAF admission failure aborts the batch, preserving the researched
@@ -281,12 +313,13 @@ func BuildProjectileDraws(projectiles []snapshot.ProjectileView, now uint32, vis
 		if visible != nil && !visible(v) {
 			continue
 		}
-		d := DispatchProjectileView(v, now, opts)
-		if d.RenderType == RenderTypeGlobalGAF && admitGlobalGAF != nil && !admitGlobalGAF(v) {
-			d.Suppressed = true
-			d.Aborted = true
+		// The global sequence reserves/draws its destination before looking up
+		// the frame. A failed admission aborts the whole renderer and must not
+		// perform any later asset work [03 §5.4].
+		if v.RenderType == RenderTypeGlobalGAF && admitGlobalGAF != nil && !admitGlobalGAF(v) {
 			return out, true
 		}
+		d := DispatchProjectileView(v, now, opts)
 		if !d.Suppressed {
 			out = append(out, d)
 		}

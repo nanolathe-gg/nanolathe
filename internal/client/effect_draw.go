@@ -29,6 +29,7 @@ type EffectDrawStats struct {
 	Sprites  int
 	Halos    int
 	Skipped  int
+	Strokes  int
 }
 
 // DrawEffectViews draws snapshot effects in stable producer admission order.
@@ -43,12 +44,29 @@ func (c *Client) DrawEffectViews(effects []snapshot.EffectView, options EffectDr
 	stats.Admitted = len(draws)
 	for i, d := range draws {
 		view := effects[i]
-		if d.Light {
-			if options.LHTGeometry == nil {
+		if d.Kind == snapshot.EventKindNanolathe.String() && d.Strip == 6 {
+			// Nanolathe cadence/count/color are established, but exact per-segment
+			// target-footprint offsets are not. Do not draw duplicate full-length
+			// lines until an authoritative geometry producer supplies them [03 §5.5].
+			if !view.NanolatheGeometryKnown {
 				stats.Skipped++
 				continue
 			}
-			radius, level, ok := options.LHTGeometry(view)
+			// Nanolathe is an authored primitive: construction modes use semantic
+			// GUI palette index 6 [03 §5.5].
+			hx, hy := c.cam.WorldToScreen(d.X, d.Y, d.Z)
+			tx, ty := c.cam.WorldToScreen(d.TargetX, d.TargetY, d.TargetZ)
+			c.drawIndexedLine(hx-128, hy-32, tx-128, ty-32, c.GUIColor(render.NanolatheColor))
+			stats.Strokes++
+			continue
+		}
+		if d.Light {
+			radius, level, ok := 0, 0, false
+			if options.LHTGeometry != nil {
+				radius, level, ok = options.LHTGeometry(view)
+			} else if view.HasFlashDisc {
+				radius, level, ok = int(view.FlashRadius), int(view.FlashLevel), true
+			}
 			// LHT row 0 is authored and near-identity; only negative rows are
 			// invalid. A resolver returning ok=true, level=0 must still admit the
 			// halo [03 §4.3.1].
@@ -83,7 +101,7 @@ func (c *Client) DrawEffectViews(effects []snapshot.EffectView, options EffectDr
 // or choose a radius/row; those come from the event/content resolver [03
 // §4.3.1][F-P0-036].
 func (c *Client) drawLHTHalo(cx, cy, radius, level int, terrainCoverage func(x, y int) bool) {
-	if c == nil || c.pal == nil || radius <= 0 || level <= 0 {
+	if c == nil || c.pal == nil || radius <= 0 || level < 0 {
 		return
 	}
 	if terrainCoverage == nil {

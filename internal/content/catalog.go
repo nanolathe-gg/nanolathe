@@ -59,6 +59,9 @@ type Catalog struct {
 	// sound names through them; they live here so no downstream package
 	// re-parses a TDF.
 	Aliases map[string]*SoundAlias
+	// AliasOrder preserves gamedata/allsound.tdf section order for runtime
+	// registration identity [03 §8.3].
+	AliasOrder []*SoundAlias
 
 	// Warnings collects non-fatal load diagnostics verbatim, e.g. the
 	// downloadable enforcement's "Hey! Somebody forgot to set
@@ -160,8 +163,10 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 		sounds = make(map[string]*SoundCategory)
 	}
 	var aliases map[string]*SoundAlias
+	var aliasOrder []*SoundAlias
 	if soundData != nil {
 		aliases = soundData.Aliases
+		aliasOrder = soundData.AliasOrder
 	}
 	report.Report(FamilySounds, 100)
 	maps, err := compileMapsWithProgress(fs, report)
@@ -234,6 +239,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 		Meteor:       meteorDefaults,
 		AIProfiles:   aiProfiles,
 		Aliases:      aliases,
+		AliasOrder:   aliasOrder,
 		BuildMenus:   buildMenus,
 		Warnings:     warnings,
 		Manifest:     manifest,
@@ -641,6 +647,17 @@ func (c *Catalog) Clone() *Catalog {
 			}
 			cp := *v
 			out.Aliases[k] = &cp
+		}
+	}
+	if c.AliasOrder != nil {
+		out.AliasOrder = make([]*SoundAlias, 0, len(c.AliasOrder))
+		for _, v := range c.AliasOrder {
+			if v == nil {
+				continue
+			}
+			if cp, ok := out.Aliases[v.CanonicalKey]; ok {
+				out.AliasOrder = append(out.AliasOrder, cp)
+			}
 		}
 	}
 	// BuildMenus deep copy [02 "Build-menu catalog keys"]

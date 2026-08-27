@@ -3,11 +3,35 @@ package presentation
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
+type stubEffectPool struct {
+	views   []snapshot.EffectView
+	updates int
+}
+
+func (p *stubEffectPool) Len() int      { return len(p.views) }
+func (p *stubEffectPool) Update(uint32) { p.updates++ }
+func (p *stubEffectPool) AppendView(v snapshot.EffectView) bool {
+	p.views = append(p.views, v)
+	return true
+}
+func (p *stubEffectPool) SnapshotViews() []snapshot.EffectView { return cloneViews(p.views) }
+func (p *stubEffectPool) RemoveMatching(source, target pool.Handle, kind string) {
+	for i, v := range p.views {
+		if v.Kind == kind && v.Source == source && (v.Target == target || target == 0 || v.Target == 0) {
+			copy(p.views[i:], p.views[i+1:])
+			p.views = p.views[:len(p.views)-1]
+			return
+		}
+	}
+}
+
 func TestEffectServiceAdmissionOrderAndExplicitExpiry(t *testing.T) {
-	svc := NewEffectService(4)
+	owner := &stubEffectPool{}
+	svc := NewEffectServiceWithPool(4, owner)
 	events := []Event{
 		{ID: 7, Sequence: 11, Tick: 10, Kind: KindNanolathe, Lifetime: 3, Graphic: "nano"},
 		{ID: 8, Sequence: 12, Tick: 10, Kind: KindImpact, Graphic: "impact"},
@@ -24,23 +48,19 @@ func TestEffectServiceAdmissionOrderAndExplicitExpiry(t *testing.T) {
 		t.Fatalf("unknown lifetime was guessed = %+v", got[1])
 	}
 	svc.Advance(12, nil)
-	if len(svc.Snapshot()) != 2 {
-		t.Fatal("effect expired before its authored deadline")
-	}
-	svc.Advance(13, nil)
-	got = svc.Snapshot()
-	if len(got) != 1 || got[0].ID != 8 {
-		t.Fatalf("expiry/compaction = %+v", got)
+	if owner.updates != 2 || len(svc.Snapshot()) != 2 {
+		t.Fatalf("adapter advanced owner twice or changed its records: updates=%d effects=%+v", owner.updates, svc.Snapshot())
 	}
 	// Replaying an already published event window cannot duplicate an effect.
 	svc.Advance(14, events)
-	if len(svc.Snapshot()) != 1 || svc.Snapshot()[0].ID != 8 {
+	if len(svc.Snapshot()) != 2 || svc.Snapshot()[0].ID != 7 {
 		t.Fatalf("duplicate event admission = %+v", svc.Snapshot())
 	}
 }
 
 func TestEffectServiceAuthoredFrameTiming(t *testing.T) {
-	svc := NewEffectService(4)
+	owner := &stubEffectPool{}
+	svc := NewEffectServiceWithPool(4, owner)
 	svc.SetTimingResolver(func(e Event) (FrameTiming, bool) {
 		if e.Graphic != "authored" {
 			return FrameTiming{}, false
@@ -51,22 +71,17 @@ func TestEffectServiceAuthoredFrameTiming(t *testing.T) {
 	if got := svc.Snapshot()[0].SeqA; got != 0 {
 		t.Fatalf("initial authored frame = %d", got)
 	}
-	svc.Advance(11, nil)
 	if got := svc.Snapshot()[0].SeqA; got != 0 {
-		t.Fatalf("frame advanced too soon = %d", got)
+		t.Fatalf("initial authored frame = %d", got)
 	}
-	svc.Advance(12, nil)
-	if got := svc.Snapshot()[0].SeqA; got != 1 {
-		t.Fatalf("authored frame cadence = %d, want 1", got)
-	}
-	svc.Advance(15, nil)
-	if len(svc.Snapshot()) != 0 {
-		t.Fatalf("non-looping authored effect survived terminal frame: %+v", svc.Snapshot())
+	if got := svc.Snapshot()[0].DurationsA[1]; got != 3 {
+		t.Fatalf("authored duration metadata = %d, want 3", got)
 	}
 }
 
 func TestEffectServiceSmokeEndAndBound(t *testing.T) {
-	svc := NewEffectService(1)
+	owner := &stubEffectPool{}
+	svc := NewEffectServiceWithPool(1, owner)
 	start := Event{ID: 4, Sequence: 4, Tick: 1, Kind: KindSmokeStart, Source: 3, Target: 9, Graphic: "smoke"}
 	svc.Advance(1, []Event{start})
 	svc.Advance(2, []Event{{ID: 5, Sequence: 5, Tick: 2, Kind: KindSmokeStart, Source: 4, Graphic: "second"}})
@@ -87,7 +102,8 @@ func TestEffectServiceSmokeEndAndBound(t *testing.T) {
 }
 
 func TestEffectServiceIncludesCOBSFXAndPreservesSelector(t *testing.T) {
-	svc := NewEffectService(2)
+	owner := &stubEffectPool{}
+	svc := NewEffectServiceWithPool(2, owner)
 	svc.Advance(3, []Event{{ID: 1, Sequence: 1, Tick: 3, Kind: KindCOBSFX, EffectID: 5, Piece: 2, SFXType: 3, X: 10, TargetX: 20}})
 	got := svc.Snapshot()
 	if len(got) != 1 || got[0].Kind != snapshot.EventKindCOBSFX.String() || got[0].EffectID != 5 || got[0].Piece != 2 || got[0].TargetX != 20 {
@@ -97,7 +113,8 @@ func TestEffectServiceIncludesCOBSFXAndPreservesSelector(t *testing.T) {
 
 func TestEffectServiceSnapshotIsDetachedAndPresentationOnly(t *testing.T) {
 	e := Event{ID: 9, Sequence: 9, Tick: 2, Kind: KindLHTFlash, X: 11, Y: 12, Z: 13}
-	svc := NewEffectService(2)
+	owner := &stubEffectPool{}
+	svc := NewEffectServiceWithPool(2, owner)
 	svc.Advance(2, []Event{e})
 	got := svc.Snapshot()
 	got[0].X = 99

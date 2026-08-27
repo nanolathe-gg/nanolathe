@@ -1,10 +1,10 @@
 package client
 
-// Software 3DO model presentation [fmt 3do][03 §2.5][decompile rendering §3/§5].
+// Software 3DO model presentation [fmt 3do][03 §2.5].
 //
 // Presentation only (I6): this file never touches sim state. It expands a
-// loaded ThreeDO into world-space triangles once (fan triangulation per
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// loaded ThreeDO into world-space triangles once (fan triangulation), rotates
+// them by the unit heading at draw time (model draw
 // trig is on the I2 float allowlist), projects through the orthographic
 // half-shear [03 §2.5], and rasterizes with painter's order.
 //
@@ -19,14 +19,15 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe/nanolathe/internal/presentation"
+	presentationrender "github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// the shipped default].
+// lightDir is retail's shipped default model light [03 §2.4.1].
 var lightDir = [3]float64{-0.8, 1.0, 0.25}
 
 func sqrt3(x float64) float64 { return math.Sqrt(x) }
@@ -42,7 +43,7 @@ type modelTri struct {
 	color  uint8
 	hasTex bool     // resolved to a texture (static, team, or animated)
 	ref    texRef   // texture resolution; animated frames pick at draw time
-	row    [3]int   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	row    [3]int   // per-corner SHD row [03 §2.4.1]
 	vkey   [3]int64 // packed piece+vertex id, resolved to rows post-walk
 	order  int      // expansion order; draw order is load-fixed [03 2.4]
 }
@@ -70,6 +71,10 @@ type primModel struct {
 
 // unitModel is the compiled 3DO after load-time reorder, half-turn, and texture resolve [fmt 3do][03 §2.4][03 §2.4.1].
 type unitModel struct {
+	// compiled is the canonical hierarchy product.  The pieceModel fields are
+	// a deliberately thin raster adapter retained for the client framebuffer;
+	// they are copied from compiled and never perform another 3DO conversion.
+	compiled    *compiledmodel.Model
 	pieces      []pieceModel
 	pieceByName map[string]int // lower-case name → piece index
 	tris        []modelTri     // legacy flat list kept for fallback when piece transforms unavailable
@@ -89,7 +94,7 @@ type xformNode struct {
 	ax, ay, az uint16
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// texKind classifies a resolved texture entry [03 §2.4.1]:
 // one frame is static, exactly ten is a LOGOS team texture (frame = owner,
 // never animated), anything else is an animated sequence ticked by the
 // simulation frame with per-frame delays from the GAF table.
@@ -104,10 +109,132 @@ const (
 // texRef is one texture-name resolution.
 type texRef struct {
 	kind  texKind
+	key   string            // immutable catalog identity used to key per-instance cursors
 	frame *formats.GAFFrame // static frame (kind static)
 	entry *formats.GAFEntry // team/animated: full frame list
 	cum   []int             // animated: cumulative delay ticks per frame
 	total int               // animated: full-cycle length in ticks
+}
+
+// modelTextureCursor binds the generic presentation cursor to decoded GAF
+// frames. The cursor owns only an AssetID sequence; this adapter keeps the
+// already-resolved frame pointers alongside it, so draw loops never perform a
+// VFS lookup or share animation phase between instances [03 §2.4.1][03 §4.4].
+type modelTextureCursor struct {
+	player *presentationrender.TexturePlayer
+	frames []*formats.GAFFrame
+}
+
+type modelTextureKey struct {
+	kind uint8
+	id   uint64
+	tex  string
+}
+
+// resolveTextureRef makes side-before-default precedence explicit. Callers
+// pass the already compiled side set and fallback set; enumeration order is
+// never allowed to decide which authored entry wins [03 §2.4.1].
+func resolveTextureRef(side, fallback map[string]texRef, name string) (texRef, bool) {
+	key := strings.ToLower(name)
+	if ref, ok := side[key]; ok {
+		return ref, true
+	}
+	ref, ok := fallback[key]
+	return ref, ok
+}
+
+func (c *Client) orientationCache(id uint64) *presentationrender.OrientationCache {
+	if c == nil {
+		return nil
+	}
+	if c.modelOrientation == nil {
+		c.modelOrientation = make(map[uint64]*presentationrender.OrientationCache)
+	}
+	cache := c.modelOrientation[id]
+	if cache == nil {
+		cache = &presentationrender.OrientationCache{}
+		c.modelOrientation[id] = cache
+	}
+	return cache
+}
+
+func (c *Client) modelCursor(key modelTextureKey, ref texRef) *modelTextureCursor {
+	if c == nil || ref.kind != texAnimated || ref.entry == nil {
+		return nil
+	}
+	if c.modelPresentation == nil {
+		c.modelPresentation = make(map[modelTextureKey]*modelTextureCursor)
+	}
+	if p := c.modelPresentation[key]; p != nil {
+		return p
+	}
+	frames := make([]*formats.GAFFrame, len(ref.entry.Frames))
+	ids := make([]presentation.AssetID, len(frames))
+	durations := make([]uint32, len(frames))
+	for i, frame := range ref.entry.Frames {
+		frames[i] = frame.Frame
+		ids[i] = presentation.AssetID(ref.key + "#" + fmt.Sprint(i))
+		durations[i] = uint32(frame.Value)
+	}
+	p := &modelTextureCursor{
+		player: presentationrender.NewTexturePlayer(presentation.AssetSequence{
+			ID: presentation.AssetID(ref.key), Frames: ids, Durations: durations, Loop: true,
+		}),
+		frames: frames,
+	}
+	c.modelPresentation[key] = p
+	return p
+}
+
+func (c *Client) modelAnimatedFrame(ref texRef, kind uint8, id uint64) *formats.GAFFrame {
+	p := c.modelCursor(modelTextureKey{kind: kind, id: id, tex: ref.key}, ref)
+	if p == nil {
+		return ref.frame
+	}
+	asset, ok := p.player.Frame()
+	if !ok {
+		return nil
+	}
+	for i := range p.frames {
+		if presentation.AssetID(ref.key+"#"+fmt.Sprint(i)) == asset {
+			return p.frames[i]
+		}
+	}
+	return nil
+}
+
+func unitPresentationID(v snapshot.UnitView) uint64 {
+	if v.InstanceID != 0 {
+		return v.InstanceID
+	}
+	return uint64(v.Slot)
+}
+
+func featurePresentationID(v snapshot.FeatureView) uint64 {
+	if v.InstanceID != 0 {
+		return v.InstanceID
+	}
+	return uint64(uint32(v.CX))<<32 | uint64(uint32(v.CZ))
+}
+
+func projectilePresentationID(v snapshot.ProjectileView) uint64 {
+	if v.PresentationID != 0 {
+		return v.PresentationID
+	}
+	return uint64(v.Handle)
+}
+
+// animatedGAFFrame is the same per-instance cursor adapter for feature
+// sequences. The instance identity comes from FeatureView.InstanceID.
+func (c *Client) animatedGAFFrame(key string, id uint64, entry *formats.GAFEntry) *formats.GAFFrame {
+	if entry == nil || len(entry.Frames) <= 1 {
+		if entry != nil && len(entry.Frames) == 1 {
+			return entry.Frames[0].Frame
+		}
+		return nil
+	}
+	ref := texRef{kind: texAnimated, key: key, entry: entry, frame: entry.Frames[0].Frame}
+	return c.modelAnimatedFrame(ref, 2, id)
 }
 
 func (k texKind) String() string {
@@ -127,22 +254,14 @@ func (k texKind) String() string {
 // apart; Nanolathe phases all instances from one clock until snapshots carry
 // spawn ticks.
 func (c *Client) TickTextureAnimators(n int) {
-	c.animClock += n
-}
-
-// animatedFrame picks the current frame of an animated entry from the clock,
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func animatedFrame(ref texRef, clock int) *formats.GAFFrame {
-	if ref.total <= 0 || len(ref.cum) == 0 {
-		return ref.frame
+	if c == nil || n <= 0 {
+		return
 	}
-	t := ((clock % ref.total) + ref.total) % ref.total
-	for i, c := range ref.cum {
-		if t < c {
-			return ref.entry.Frames[i].Frame
+	for i := 0; i < n; i++ {
+		for _, p := range c.modelPresentation {
+			p.player.Advance(true)
 		}
 	}
-	return ref.entry.Frames[len(ref.entry.Frames)-1].Frame
 }
 
 // buildTextureIndex enumerates textures/*.gaf and indexes entries by name.
@@ -167,23 +286,21 @@ func (c *Client) buildTextureIndex() {
 		if err != nil {
 			continue
 		}
+		isLogos := p == "textures/logos.gaf"
 		for i := range g.Entries {
 			entry := &g.Entries[i]
 			if len(entry.Frames) == 0 || entry.Frames[0].Frame == nil {
 				continue
 			}
-			ref := texRef{frame: entry.Frames[0].Frame, entry: entry}
+			ref := texRef{frame: entry.Frames[0].Frame, entry: entry, key: p + "|" + strings.ToLower(entry.Name)}
 			switch {
-			case len(entry.Frames) == 10:
+			case isLogos && len(entry.Frames) == 10:
 				ref.kind = texTeam // frame n = player n, never animated
 			case len(entry.Frames) > 1:
 				ref.kind = texAnimated
 				total := 0
 				for _, fr := range entry.Frames {
 					d := int(fr.Value)
-					if d < 1 {
-						d = 1 // zero delay would flicker every tick
-					}
 					total += d
 					ref.cum = append(ref.cum, total)
 				}
@@ -194,8 +311,7 @@ func (c *Client) buildTextureIndex() {
 	}
 }
 
-// unitModelFor expands and caches a model; nil when the 3DO is unavailable
-// (callers fall back to footprint bodies).
+// unitModelFor expands and caches a model; nil when the authored 3DO is unavailable.
 func (c *Client) unitModelFor(name string) *unitModel {
 	if name == "" {
 		return nil
@@ -207,7 +323,7 @@ func (c *Client) unitModelFor(name string) *unitModel {
 		return nil
 	}
 	m := c.expandModel(name)
-	c.models[name] = m // nil caches too: missing models stay fallback
+	c.models[name] = m // nil caches too: unresolved authored models draw no pixels
 	return m
 }
 
@@ -223,86 +339,47 @@ func (c *Client) unitModelFor(name string) *unitModel {
 //
 // Pieces walk depth-first (root → child → sibling); primitives fan-triangulate
 // [03 §2.4 "N-gon primitives"]. Faces draw double-sided in the 8-bit path —
-// no backface cull exists in retail's composer [decompile wave_d §3.2].
+// no backface cull exists in the established model composer [03 §2.4.1].
 // This version stores the hierarchy for dynamic piece transforms [03 §2.4] C21–C22.
 func (c *Client) expandModel(name string) *unitModel {
-	data, err := c.modelFS.ReadFile("objects3d/" + name + ".3do")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "nanolathe: model %s: read: %v\n", name, err)
-		return nil
+	path := name
+	if !strings.Contains(strings.ToLower(path), ".3do") {
+		path = "objects3d/" + path + ".3do"
 	}
-	m3, err := formats.LoadThreeDO(data)
-	if err != nil || len(m3.Objects) == 0 {
-		fmt.Fprintf(os.Stderr, "nanolathe: model %s: parse: %v\n", name, err)
+	compiled, err := compiledmodel.Load(c.modelFS, path)
+	if err != nil || compiled == nil || len(compiled.Pieces) == 0 {
+		if err != nil {
+			c.modelErrors[name] = err
+		}
 		return nil
 	}
 	um := &unitModel{
-		pieces:      make([]pieceModel, len(m3.Objects)),
+		compiled:    compiled,
+		pieces:      make([]pieceModel, len(compiled.Pieces)),
 		pieceByName: map[string]int{},
 	}
 	order := 0
-	// Build per-piece authored data after half-turn [03 §2.4].
-	for i, o := range m3.Objects {
+	// Adapt the canonical hierarchy to the rasterizer.  Half-turn conversion,
+	// selection swap, and primitive ordering have already happened in
+	// formats/internal-model at load time [03 §2.4].
+	for i, o := range compiled.Pieces {
 		p := &um.pieces[i]
 		p.name = o.Name
 		p.parent = int(o.Parent)
-		// half-turn translation [03 §2.4]
-		tx := numeric.Fixed(o.Translation[0])
-		ty := numeric.Fixed(o.Translation[1])
-		tz := numeric.Fixed(o.Translation[2])
-		tx = -tx
-		tz = -tz
-		p.translate = [3]numeric.Fixed{tx, ty, tz}
-		// half-turn vertices [03 §2.4]
-		p.vertices = make([][3]numeric.Fixed, len(o.Vertices))
-		for j, v := range o.Vertices {
-			x := numeric.Fixed(v.X)
-			y := numeric.Fixed(v.Y)
-			z := numeric.Fixed(v.Z)
-			x = -x
-			z = -z
-			p.vertices[j] = [3]numeric.Fixed{x, y, z}
-		}
+		p.translate = o.Translate
+		p.vertices = append([][3]numeric.Fixed(nil), o.Vertices...)
+		p.hasSelection = o.Selection
 		um.pieceByName[strings.ToLower(o.Name)] = i
-		// Load-time primitive reorder [03 §2.4]: selection swap + bubble sort by mean Y
-		prims := make([]*formats.ThreeDOPrimitive, len(o.Primitives))
-		for j := range o.Primitives {
-			prims[j] = &o.Primitives[j]
-		}
-		sel := int32(-1)
-		if o.Selection >= 0 && o.Selection < int32(len(prims)) {
-			prims[0], prims[o.Selection] = prims[o.Selection], prims[0]
-			sel = 0
-		}
-		if len(prims) > 1 {
-			// Bubble sort from 1 upward to preserve retail tie order [03 §2.4] (formats uses bubble)
-			for end := len(prims) - 1; end > 1; end-- {
-				swapped := false
-				for j := 1; j < end; j++ {
-					if primMeanY(&m3.Objects[i], prims[j+1]) < primMeanY(&m3.Objects[i], prims[j]) {
-						prims[j], prims[j+1] = prims[j+1], prims[j]
-						swapped = true
-					}
-				}
-				if !swapped {
-					break
-				}
-			}
-		}
-		if sel == 0 {
-			p.hasSelection = true
-		}
-		for pi, pp := range prims {
-			isSel := int32(pi) == sel
+		for pi, pp := range o.Primitives {
 			hasTex := false
 			var ref texRef
-			color := uint8(pp.ColorIndex)
+			color := uint8(pp.ColorIndex & 0xff)
 			if pp.TextureName != "" {
 				if r, ok := c.texIndex[strings.ToLower(pp.TextureName)]; ok {
 					hasTex = true
 					ref = r
 				} else {
-					color = 0xd1 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					color = 0xd1 // authored texture miss becomes the established flat quad [03 §2.4.1]
 				}
 			}
 			// Keep all primitives for completeness; draw will skip flat non-quads and selection plate.
@@ -313,10 +390,9 @@ func (c *Client) expandModel(name string) *unitModel {
 				hasTex:      hasTex,
 				ref:         ref,
 				order:       order,
-				isSelection: isSel,
+				isSelection: o.Selection && pi == 0,
 			})
 			order++
-			_ = isSel
 		}
 	}
 	// Build children lists from parent [fmt 3do][03 §2.4]
@@ -329,7 +405,7 @@ func (c *Client) expandModel(name string) *unitModel {
 			um.pieces[par].children = append(um.pieces[par].children, i)
 		}
 	}
-	// Legacy flat tris kept empty; new path uses pieces. Keep for fallback if needed.
+	// Legacy flat tris remain empty; all authored models use the hierarchy path.
 	um.tris = nil
 	if len(um.pieces) == 0 {
 		return nil
@@ -337,23 +413,10 @@ func (c *Client) expandModel(name string) *unitModel {
 	return um
 }
 
-func primMeanY(o *formats.ThreeDOObject, p *formats.ThreeDOPrimitive) int64 {
-	if len(p.VertexIndices) == 0 {
-		return 0
-	}
-	var sum int64
-	for _, vi := range p.VertexIndices {
-		if int(vi) < len(o.Vertices) {
-			sum += int64(o.Vertices[vi].Y)
-		}
-	}
-	return sum / int64(len(p.VertexIndices))
-}
-
 type screenTri struct {
 	x, y  [3]int32
 	u, v  [3]float64
-	row   [3]float64 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	row   [3]float64 // interpolated SHD row, per corner [03 §2.4.1]
 	color uint8
 	frame *formats.GAFFrame
 	entry *formats.GAFEntry
@@ -362,19 +425,19 @@ type screenTri struct {
 	depth int32 // mean screen y for painter order
 }
 
-// drawUnitModel projects and rasterizes the unit's model; false when no
-// model is available (caller draws the footprint body fallback).
+// drawUnitModel projects and rasterizes the unit's authored model; false when
+// no model is available so the caller may use its separate diagnostic body.
 // It uses hierarchical piece transforms via VM.Pieces [03 §2.4] C21–C22, heading
 // folded into root [03 §2.4] C24, SHD row = trunc(dot*5) mod 32 with
 // per-vertex averaged normals and dont-shade pin 15 [03 §2.4.1], flat quads
 // only and textured any count [03 §2.4.1], selection plate never draws
 // (primitive loop starts at 1) [03 §2.4.1], team LOGOS 10 frames per-owner
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [fmt 3do], miss 0xd1 gray [03 §2.4.1], shadows [03 §5.3], and
 // nanoframe presentation [03 §5.7][05 "Construction target state"].
 func (c *Client) drawUnitModelDirect(v snapshot.UnitView, sx, sy int32) bool {
 	m := c.unitModelFor(v.Model)
 	if m == nil || c.cam == nil || len(m.pieces) == 0 {
-		// Model-load fallback diagnostic emitted once per unit slot (structured), not per frame spam [ON-08].
+		// Model-load diagnostic emitted once per unit slot, not per frame spam [ON-08].
 		if m == nil && c.cam != nil && v.Model != "" {
 			if c.modelFallbacks == nil {
 				c.modelFallbacks = map[uint16]struct{}{}
@@ -385,7 +448,7 @@ func (c *Client) drawUnitModelDirect(v snapshot.UnitView, sx, sy int32) bool {
 				if err == nil {
 					err = fmt.Errorf("model not available")
 				}
-				fmt.Fprintf(os.Stderr, "{\"level\":\"warn\",\"msg\":\"model fallback\",\"slot\":%d,\"model\":%q,\"owner\":%d,\"error\":%q}\n", v.Slot, v.Model, v.Owner, err.Error())
+				fmt.Fprintf(os.Stderr, "{\"level\":\"warn\",\"msg\":\"authored model unavailable\",\"slot\":%d,\"model\":%q,\"owner\":%d,\"error\":%q}\n", v.Slot, v.Model, v.Owner, err.Error())
 				c.modelFallbacks[key] = struct{}{}
 			}
 		}
@@ -431,14 +494,6 @@ func (c *Client) drawUnitModelDirect(v snapshot.UnitView, sx, sy int32) bool {
 		states[root].rotX += v.Pitch
 	}
 	ux, uy, uz := int32(v.X>>16), int32(v.Y>>16), int32(v.Z>>16)
-	// Ground height for shadow projection [03 §5.3]; fallback to unit Y.
-	groundY := uy
-	_ = groundY // shadow ground height used for projection [03 §5.3]
-	if c.terrain != nil {
-		if h := c.terrain.HeightAt(v.X, v.Z); h != numeric.Fixed(-1) {
-			groundY = int32(h >> 16)
-		}
-	}
 	owner := int(v.Owner) % 10
 	isNanoframe := v.BuildRemaining > 0
 	// Collect tris for painter order: no per-frame sort, load-fixed order across pieces [03 §2.4].
@@ -477,7 +532,7 @@ func (c *Client) drawUnitModelDirect(v snapshot.UnitView, sx, sy int32) bool {
 		worldVerts := make([][3]numeric.Fixed, len(piece.vertices))
 		modelVertsF := make([][3]float64, len(piece.vertices)) // for normals (model space, without world pos)
 		for vi, lv := range piece.vertices {
-			modelPos := c.applyChain(lv, chain)
+			modelPos := c.applyPiece(m, pi, lv, states)
 			worldVerts[vi] = [3]numeric.Fixed{
 				modelPos[0].Add(numeric.Fixed(int64(ux) << 16)),
 				modelPos[1].Add(numeric.Fixed(int64(uy) << 16)),
@@ -549,11 +604,6 @@ func (c *Client) drawUnitModelDirect(v snapshot.UnitView, sx, sy int32) bool {
 			nx := normAcc[vi][0] / float64(cnt)
 			ny := normAcc[vi][1] / float64(cnt)
 			nz := normAcc[vi][2] / float64(cnt)
-			if l := math.Sqrt(nx*nx + ny*ny + nz*nz); l > 1e-9 {
-				nx, ny, nz = nx/l, ny/l, nz/l
-			} else {
-				nx, ny, nz = 0, 1, 0
-			}
 			d := nx*lightDir[0] + ny*lightDir[1] + nz*lightDir[2]
 			vertRows[vi] = int(d*5.0) & 31
 		}
@@ -575,13 +625,16 @@ func (c *Client) drawUnitModelDirect(v snapshot.UnitView, sx, sy int32) bool {
 			if pr.hasTex {
 				switch pr.ref.kind {
 				case texAnimated:
-					frame = animatedFrame(pr.ref, c.animClock)
+					frame = c.modelAnimatedFrame(pr.ref, 0, unitPresentationID(v))
 				case texTeam:
 					frame = pr.ref.frame
 					entry = pr.ref.entry
 					isTeam = true
 				default:
 					frame = pr.ref.frame
+				}
+				if frame == nil {
+					continue
 				}
 			}
 			// Handle quad UVs and n-gon bbox UVs [fmt 3do][03 §2.4.1]
@@ -689,56 +742,15 @@ func (c *Client) drawUnitModelDirect(v snapshot.UnitView, sx, sy int32) bool {
 					st.depth += py
 				}
 				st.depth /= 3
-				// Shadow handling: if not dontShadow and not nanoframe, also queue shadow tri
-				// Shadow is projected onto groundY with same X/Z [03 §5.3]
-				if !states[pi].dontShadow && !isNanoframe {
-					// Shadow tri will be drawn before model with dark index; we emit shadow tris into separate list?
-					// For simplicity, draw shadow immediately with dark color using same geometry but Y=groundY
-					// We defer shadow drawing to after tris collection to ensure it is underneath.
-				}
 				tris = append(tris, st)
 			}
 		}
 	}
-	// No per-frame sort: load-fixed order is painter order [03 §2.4]; also Y-bucket already in composer.
-	// Draw shadows first (dark, underneath) [03 §5.3]
-	if !isNanoframe {
-		for i := range tris {
-			t := &tris[i]
-			// Shadow is same triangle but projected onto ground: use groundY for wy
-			// We approximate by offsetting py by (uy - groundY)>>1 shear difference?
-			// Instead reproject shadow vertices: shadowY = groundY, so pyShadow = wz - (groundY>>1) - cam.Z
-			// Our t already has py = wz - (wy>>1) - camZ. So shadow py = py + ((wy - groundY)>>1)
-			// For flat ground, shadow is slightly below model. Use dark palette index via Shade row 0 or palette 0.
-			shadow := *t
-			// Darken: use flat color 0 for shadow if textured, else keep? For textured we will fill with dark via palette.
-			// For shadow, we draw with palette index 0 (black) at low opacity approximated by stipple.
-			// To avoid heavy per-pixel, just draw same tri with color 1 (near-black) if flat, or with Shade row 0 if textured.
-			if shadow.frame != nil {
-				// Textured shadow: use row 0 (dark) [03 §4.3] row 0 near-black
-				shadow.row = [3]float64{0, 0, 0}
-				// Keep frame but will be shaded dark via Shade[0]
-			} else {
-				shadow.color = 1 // near-black [03 §4.3] SHD row 0 approx
-			}
-			// Offset shadow slightly south-east to mimic light direction (-0.8,1,0.25) -> shadow offset? Simple offset (2,2)
-			for k := 0; k < 3; k++ {
-				shadow.x[k] += 2
-				shadow.y[k] += 2
-			}
-			if shadow.frame != nil {
-				sFrame := shadow.frame
-				if shadow.team && shadow.entry != nil && owner < len(shadow.entry.Frames) {
-					sFrame = shadow.entry.Frames[owner].Frame
-				}
-				if sFrame != nil {
-					c.blitTexturedTri(&shadow, sFrame)
-					continue
-				}
-			}
-			c.fillTri(&shadow, shadow.color)
-		}
-	}
+	// Model shadows are intentionally not emitted by this compatibility
+	// raster adapter. The established stencil requires option, terrain-depth,
+	// SHD-row, and dither inputs that this path does not own; a guessed offset
+	// triangle would violate [03 §5.3]. The canonical shadow compositor will
+	// consume those inputs when published.
 	// Draw model tris
 	for i := range tris {
 		t := &tris[i]
@@ -777,22 +789,208 @@ func (c *Client) drawUnitModelDirect(v snapshot.UnitView, sx, sy int32) bool {
 	return true
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// drawUnitModel dispatches the authored model raster path:
 // fixed buildings (IsBuilding) take the 2x supersampled path with per-piece
 // dont-shade [03 §2.4.1][04 §4.3] 0x1000e000, mobile units take the 1x cached
 // path with no shading and then both blit in Y-bucket order [03 §1].
 // Offscreen caches are per-unit and then blitted, matching retail's
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func (c *Client) drawUnitModel(v snapshot.UnitView, sx, sy int32) bool {
+	// A model identity is an authored visual request.  Once present, the
+	// compatibility renderer must not replace an unresolved or non-rasterizable
+	// model with a guessed footprint body; missing art is an empty draw [03 §5.1].
+	// The concrete paths still run for their one-shot diagnostic accounting.
+	if v.Model != "" {
+		if v.IsBuilding {
+			_ = c.drawBuildingModelOffscreen(v)
+		} else {
+			_ = c.drawMobileModelOffscreen(v)
+		}
+		return true
+	}
 	if v.IsBuilding {
 		return c.drawBuildingModelOffscreen(v)
 	}
 	return c.drawMobileModelOffscreen(v)
 }
 
-// collectUnitTris builds the triangle list for v at 1x shell coords.
-// useShade true respects per-piece DontShade (buildings); false forces row 15 (units) [03 §2.4.1].
+// collectUnitTris builds the triangle list through internal/render's canonical
+// transform and normal pipeline. The client owns only indexed raster
+// adaptation; authored geometry and shade rows come from the canonical model
+// draw records [03 §2.4][03 §2.4.1].
 func (c *Client) collectUnitTris(v snapshot.UnitView, useShade bool) ([]screenTri, int32, int32, int32, int32) {
+	m := c.unitModelFor(v.Model)
+	if m == nil || m.compiled == nil || c.cam == nil {
+		return c.collectUnitTrisLegacy(v, useShade)
+	}
+	base := make([]compiledmodel.PieceState, len(m.compiled.Pieces))
+	for _, pv := range v.Pieces {
+		idx := -1
+		if pv.Name != "" {
+			if found, ok := m.pieceByName[strings.ToLower(pv.Name)]; ok {
+				idx = found
+			}
+		} else if pv.Index >= 0 && pv.Index < len(base) {
+			idx = pv.Index
+		}
+		if idx < 0 || idx >= len(base) {
+			continue
+		}
+		base[idx] = compiledmodel.PieceState{
+			RotX: pv.RotX, RotY: pv.RotY, RotZ: pv.RotZ,
+			Trans:     [3]numeric.Fixed{pv.Tx, pv.Ty, pv.Tz},
+			DontShade: pv.DontShade, Hidden: pv.Hidden, DontShadow: pv.DontShadow,
+		}
+	}
+	draw := presentationrender.BuildUnitDraw(m.compiled, base, v.Heading, v.Pitch, v.Bank, v, v, 0, c.orientationCache(unitPresentationID(v)))
+	if draw == nil {
+		return nil, 0, 0, 0, 0
+	}
+	var tris []screenTri
+	owner := int(v.Owner) % 10
+	for pi, piece := range draw.Pieces {
+		if pi < len(m.compiled.Pieces) && m.compiled.Pieces[pi].Selection {
+			// Selection plates remain in the compiled record but are excluded
+			// from the face raster pass [03 §2.4.1].
+			if len(piece.Primitives) > 0 {
+				piece.Primitives = piece.Primitives[1:]
+			}
+		}
+		for _, pr := range piece.Primitives {
+			n := len(pr.VertexIndices)
+			if n < 3 {
+				continue
+			}
+			ref, textured := resolveTextureRef(nil, c.texIndex, pr.TextureName)
+			color := uint8(pr.ColorIndex & 0xff)
+			if pr.TextureName != "" && !textured {
+				color = 0xd1
+			}
+			var frame *formats.GAFFrame
+			var entry *formats.GAFEntry
+			team := false
+			if textured {
+				switch ref.kind {
+				case texAnimated:
+					frame = c.modelAnimatedFrame(ref, 0, unitPresentationID(v))
+				case texTeam:
+					entry, team = ref.entry, true
+					if owner >= 0 && owner < len(ref.entry.Frames) {
+						frame = ref.entry.Frames[owner].Frame
+					}
+				default:
+					frame = ref.frame
+				}
+				if frame == nil {
+					continue // an unresolved authored frame contributes no pixels [I9]
+				}
+			}
+			uvFor := func(corner int, vi int) (float64, float64) {
+				if n == 4 {
+					uvs := [4][2]float64{{0, 0}, {1, 0}, {1, 1}, {0, 1}}
+					return uvs[corner][0], uvs[corner][1]
+				}
+				// N-gons use affine edge coordinates over their dominant
+				// projected extents; this preserves every original corner's row
+				// and UV before fan expansion [03 §2.4.1].
+				if vi < 0 || vi >= len(piece.WorldVertices) {
+					return 0, 0
+				}
+				var minX, maxX, minZ, maxZ int64
+				first := true
+				for _, idx := range pr.VertexIndices {
+					if int(idx) >= len(piece.WorldVertices) {
+						continue
+					}
+					p := piece.WorldVertices[idx]
+					x, z := p[0].Raw(), p[2].Raw()
+					if first {
+						minX, maxX, minZ, maxZ, first = x, x, z, z, false
+						continue
+					}
+					if x < minX {
+						minX = x
+					}
+					if x > maxX {
+						maxX = x
+					}
+					if z < minZ {
+						minZ = z
+					}
+					if z > maxZ {
+						maxZ = z
+					}
+				}
+				if maxX == minX {
+					maxX = minX + 1
+				}
+				if maxZ == minZ {
+					maxZ = minZ + 1
+				}
+				p := piece.WorldVertices[vi]
+				return float64(p[0].Raw()-minX) / float64(maxX-minX), float64(p[2].Raw()-minZ) / float64(maxZ-minZ)
+			}
+			for k := 1; k+1 < n; k++ {
+				indices := [3]int{int(pr.VertexIndices[0]), int(pr.VertexIndices[k]), int(pr.VertexIndices[k+1])}
+				var st screenTri
+				st.color, st.frame, st.entry, st.team, st.order = color, frame, entry, team, pi
+				for corner, vi := range indices {
+					if vi < 0 || vi >= len(piece.WorldVertices) {
+						st.x[corner], st.y[corner] = 0, 0
+						continue
+					}
+					wv := piece.WorldVertices[vi]
+					wx, wy, wz := int32(wv[0]>>16), int32(wv[1]>>16), int32(wv[2]>>16)
+					st.x[corner] = wx - c.cam.X
+					st.y[corner] = wz - (wy >> 1) - c.cam.Z
+					st.depth += st.y[corner]
+					if vi < len(pr.ShadeRows) {
+						st.row[corner] = float64(pr.ShadeRows[vi])
+					} else {
+						st.row[corner] = 15
+					}
+				}
+				st.depth /= 3
+				if frame != nil {
+					st.u[0], st.v[0] = uvFor(0, indices[0])
+					st.u[1], st.v[1] = uvFor(k, indices[1])
+					st.u[2], st.v[2] = uvFor(k+1, indices[2])
+				}
+				tris = append(tris, st)
+			}
+		}
+	}
+	_ = useShade // both fixed and mobile textured paths consume canonical rows [03 §2.4.1]
+	return triBounds(tris)
+}
+
+func triBounds(tris []screenTri) ([]screenTri, int32, int32, int32, int32) {
+	if len(tris) == 0 {
+		return nil, 0, 0, 0, 0
+	}
+	minX, minY, maxX, maxY := tris[0].x[0], tris[0].y[0], tris[0].x[0], tris[0].y[0]
+	for _, t := range tris {
+		for i := 0; i < 3; i++ {
+			if t.x[i] < minX {
+				minX = t.x[i]
+			}
+			if t.x[i] > maxX {
+				maxX = t.x[i]
+			}
+			if t.y[i] < minY {
+				minY = t.y[i]
+			}
+			if t.y[i] > maxY {
+				maxY = t.y[i]
+			}
+		}
+	}
+	return tris, minX, minY, maxX, maxY
+}
+
+// collectUnitTrisLegacy is retained solely for synthetic client fixtures that
+// construct a unitModel without a compiled internal/model.Model.
+func (c *Client) collectUnitTrisLegacy(v snapshot.UnitView, useShade bool) ([]screenTri, int32, int32, int32, int32) {
 	m := c.unitModelFor(v.Model)
 	if m == nil || len(m.pieces) == 0 {
 		if m == nil && c.cam != nil && v.Model != "" {
@@ -805,7 +1003,7 @@ func (c *Client) collectUnitTris(v snapshot.UnitView, useShade bool) ([]screenTr
 				if err == nil {
 					err = fmt.Errorf("model not available")
 				}
-				fmt.Fprintf(os.Stderr, "{\"level\":\"warn\",\"msg\":\"model fallback\",\"slot\":%d,\"model\":%q,\"owner\":%d,\"error\":%q}\n", v.Slot, v.Model, v.Owner, err.Error())
+				fmt.Fprintf(os.Stderr, "{\"level\":\"warn\",\"msg\":\"authored model unavailable\",\"slot\":%d,\"model\":%q,\"owner\":%d,\"error\":%q}\n", v.Slot, v.Model, v.Owner, err.Error())
 				c.modelFallbacks[key] = struct{}{}
 			}
 		}
@@ -884,7 +1082,7 @@ func (c *Client) collectUnitTris(v snapshot.UnitView, useShade bool) ([]screenTr
 		worldVerts := make([][3]numeric.Fixed, len(piece.vertices))
 		modelVertsF := make([][3]float64, len(piece.vertices))
 		for vi, lv := range piece.vertices {
-			mp := c.applyChain(lv, chain)
+			mp := c.applyPiece(m, pi, lv, states)
 			worldVerts[vi] = [3]numeric.Fixed{mp[0].Add(numeric.Fixed(int64(ux) << 16)), mp[1].Add(numeric.Fixed(int64(uy) << 16)), mp[2].Add(numeric.Fixed(int64(uz) << 16))}
 			modelVertsF[vi] = [3]float64{float64(mp[0].Raw()) / 65536, float64(mp[1].Raw()) / 65536, float64(mp[2].Raw()) / 65536}
 		}
@@ -946,11 +1144,6 @@ func (c *Client) collectUnitTris(v snapshot.UnitView, useShade bool) ([]screenTr
 			nx := normAcc[vi][0] / float64(cnt)
 			ny := normAcc[vi][1] / float64(cnt)
 			nz := normAcc[vi][2] / float64(cnt)
-			if l := math.Sqrt(nx*nx + ny*ny + nz*nz); l > 1e-9 {
-				nx, ny, nz = nx/l, ny/l, nz/l
-			} else {
-				nx, ny, nz = 0, 1, 0
-			}
 			d := nx*lightDir[0] + ny*lightDir[1] + nz*lightDir[2]
 			vertRows[vi] = int(d*5.0) & 31
 		}
@@ -971,13 +1164,16 @@ func (c *Client) collectUnitTris(v snapshot.UnitView, useShade bool) ([]screenTr
 			if pr.hasTex {
 				switch pr.ref.kind {
 				case texAnimated:
-					frame = animatedFrame(pr.ref, c.animClock)
+					frame = c.modelAnimatedFrame(pr.ref, 0, unitPresentationID(v))
 				case texTeam:
 					frame = pr.ref.frame
 					entry = pr.ref.entry
 					isTeam = true
 				default:
 					frame = pr.ref.frame
+				}
+				if frame == nil {
+					continue
 				}
 			}
 			uvs := [4][2]float64{{0, 0}, {1, 0}, {1, 1}, {0, 1}}
@@ -1287,6 +1483,30 @@ func (c *Client) buildPieceChain(m *unitModel, idx int, states []pieceState) []x
 	return nodes
 }
 
+// applyPiece uses the canonical internal/model transform for models loaded
+// from authored 3DO data. Synthetic test models retain the small local adapter
+// path, but production geometry has one rotate-then-translate implementation
+// [03 §2.4].
+func (c *Client) applyPiece(m *unitModel, idx int, local [3]numeric.Fixed, states []pieceState) [3]numeric.Fixed {
+	if m != nil && m.compiled != nil && idx >= 0 && idx < len(m.compiled.Pieces) {
+		canonical := make([]compiledmodel.PieceState, len(m.compiled.Pieces))
+		for i := range states {
+			if i >= len(canonical) {
+				break
+			}
+			canonical[i].RotX = states[i].rotX
+			canonical[i].RotY = states[i].rotY
+			canonical[i].RotZ = states[i].rotZ
+			canonical[i].Trans = [3]numeric.Fixed{states[i].tx, states[i].ty, states[i].tz}
+			canonical[i].DontShade = states[i].dontShade
+			canonical[i].Hidden = states[i].hidden
+			canonical[i].DontShadow = states[i].dontShadow
+		}
+		return compiledmodel.Compose(m.compiled, canonical, idx).Apply(local)
+	}
+	return c.applyChain(local, c.buildPieceChain(m, idx, states))
+}
+
 // applyChain transforms point p via nodes leaf→root [03 §2.4] C21.
 func (c *Client) applyChain(p [3]numeric.Fixed, nodes []xformNode) [3]numeric.Fixed {
 	x := float64(p[0].Raw())
@@ -1483,8 +1703,8 @@ func (c *Client) fillTri(t *screenTri, color uint8) {
 // blitTexturedTri affinely samples the texture frame across the triangle,
 // routing every sample through PALETTE.SHD at the barycentrically
 // interpolated per-vertex row: row = ftol(dot(N, L)*5) & 31 with the piece's
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// no SHD at all — decompile two-normal probe]. Transparent texels skip.
+// smooth vertex normals [03 §2.4.1]; flat-colored faces take no SHD at all.
+// Transparent texels skip.
 func (c *Client) blitTexturedTri(t *screenTri, frame *formats.GAFFrame) {
 	minX, minY, maxX, maxY := t.x[0], t.y[0], t.x[0], t.y[0]
 	for k := 1; k < 3; k++ {
@@ -1606,11 +1826,10 @@ func (c *Client) drawFeatureModel(f snapshot.FeatureView) bool {
 	ux, uy, uz := int32(f.X>>16), int32(f.Y>>16), int32(f.Z>>16)
 	var tris []screenTri
 	for pi, piece := range m.pieces {
-		chain := c.buildPieceChain(m, pi, states)
 		worldVerts := make([][3]numeric.Fixed, len(piece.vertices))
 		modelVertsF := make([][3]float64, len(piece.vertices))
 		for vi, lv := range piece.vertices {
-			mp := c.applyChain(lv, chain)
+			mp := c.applyPiece(m, pi, lv, states)
 			worldVerts[vi] = [3]numeric.Fixed{mp[0].Add(numeric.Fixed(int64(ux) << 16)), mp[1].Add(numeric.Fixed(int64(uy) << 16)), mp[2].Add(numeric.Fixed(int64(uz) << 16))}
 			modelVertsF[vi] = [3]float64{float64(mp[0].Raw()) / 65536, float64(mp[1].Raw()) / 65536, float64(mp[2].Raw()) / 65536}
 		}
@@ -1664,9 +1883,6 @@ func (c *Client) drawFeatureModel(f snapshot.FeatureView) bool {
 			nx := normAcc[vi][0] / float64(cnt)
 			ny := normAcc[vi][1] / float64(cnt)
 			nz := normAcc[vi][2] / float64(cnt)
-			if l := math.Sqrt(nx*nx + ny*ny + nz*nz); l > 1e-9 {
-				nx, ny, nz = nx/l, ny/l, nz/l
-			}
 			d := nx*lightDir[0] + ny*lightDir[1] + nz*lightDir[2]
 			vertRows[vi] = int(d*5.0) & 31
 		}
@@ -1687,13 +1903,16 @@ func (c *Client) drawFeatureModel(f snapshot.FeatureView) bool {
 			if pr.hasTex {
 				switch pr.ref.kind {
 				case texAnimated:
-					frame = animatedFrame(pr.ref, c.animClock)
+					frame = c.modelAnimatedFrame(pr.ref, 1, featurePresentationID(f))
 				case texTeam:
 					frame = pr.ref.frame
 					entry = pr.ref.entry
 					isTeam = true
 				default:
 					frame = pr.ref.frame
+				}
+				if frame == nil {
+					continue
 				}
 			}
 			uvs := [4][2]float64{{0, 0}, {1, 0}, {1, 1}, {0, 1}}
@@ -1829,11 +2048,10 @@ func (c *Client) drawProjectileModel(p snapshot.ProjectileView, alpha float32) b
 	x, y, z := int32(p.X>>16), int32(p.Y>>16), int32(p.Z>>16)
 	var tris []screenTri
 	for pi, piece := range m.pieces {
-		chain := c.buildPieceChain(m, pi, states)
 		worldVerts := make([][3]numeric.Fixed, len(piece.vertices))
 		modelVertsF := make([][3]float64, len(piece.vertices))
 		for vi, lv := range piece.vertices {
-			mp := c.applyChain(lv, chain)
+			mp := c.applyPiece(m, pi, lv, states)
 			worldVerts[vi] = [3]numeric.Fixed{mp[0].Add(numeric.Fixed(int64(x) << 16)), mp[1].Add(numeric.Fixed(int64(y) << 16)), mp[2].Add(numeric.Fixed(int64(z) << 16))}
 			modelVertsF[vi] = [3]float64{float64(mp[0].Raw()) / 65536, float64(mp[1].Raw()) / 65536, float64(mp[2].Raw()) / 65536}
 		}
@@ -1887,9 +2105,6 @@ func (c *Client) drawProjectileModel(p snapshot.ProjectileView, alpha float32) b
 			nx := normAcc[vi][0] / float64(cnt)
 			ny := normAcc[vi][1] / float64(cnt)
 			nz := normAcc[vi][2] / float64(cnt)
-			if l := math.Sqrt(nx*nx + ny*ny + nz*nz); l > 1e-9 {
-				nx, ny, nz = nx/l, ny/l, nz/l
-			}
 			d := nx*lightDir[0] + ny*lightDir[1] + nz*lightDir[2]
 			vertRows[vi] = int(d*5.0) & 31
 		}
@@ -1907,13 +2122,16 @@ func (c *Client) drawProjectileModel(p snapshot.ProjectileView, alpha float32) b
 			if pr.hasTex {
 				switch pr.ref.kind {
 				case texAnimated:
-					frame = animatedFrame(pr.ref, c.animClock)
+					frame = c.modelAnimatedFrame(pr.ref, 2, projectilePresentationID(p))
 				case texTeam:
 					frame = pr.ref.frame
 					entry = pr.ref.entry
 					isTeam = true
 				default:
 					frame = pr.ref.frame
+				}
+				if frame == nil {
+					continue
 				}
 			}
 			uvs := [4][2]float64{{0, 0}, {1, 0}, {1, 1}, {0, 1}}
@@ -2020,7 +2238,8 @@ func (c *Client) drawProjectileModel(p snapshot.ProjectileView, alpha float32) b
 	return true
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Destination helpers for the offscreen cache share the same raster rules as
+// fillTri/blitTexturedTri while writing an arbitrary indexed target.
 
 func fillTriToDest(dest []byte, mask []bool, w, h int, t *screenTri, color uint8) {
 	minX, minY, maxX, maxY := t.x[0], t.y[0], t.x[0], t.y[0]

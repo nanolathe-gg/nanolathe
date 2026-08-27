@@ -38,6 +38,15 @@ func TestIsAudible_ExploredAndLOS(t *testing.T) {
 	}
 }
 
+func TestIsAudibleRejectsInvalidLocalSlot(t *testing.T) {
+	wordMask := []uint16{0xffff}
+	for _, slot := range []int{-1, 10, 31} {
+		if IsAudible(0, 0, slot, 0, wordMask, [10][]uint8{}, 1, 1) {
+			t.Fatalf("invalid local slot %d must not alias a player bit", slot)
+		}
+	}
+}
+
 func TestCellFromWorld_Floor(t *testing.T) {
 	// tile = 32*65536 = 2097152
 	// pos 0 → cell 0

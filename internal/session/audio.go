@@ -7,10 +7,38 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/vfs"
 )
+
+func (s *Session) sharedAudioCRT() *presentation.CRTRandom {
+	if s == nil {
+		return nil
+	}
+	if s.audioCRT == nil {
+		s.audioCRT = presentation.WrapCRT(s.CrtRNG())
+	}
+	return s.audioCRT
+}
+
+// SetPresentationClock binds the frame-domain clock used by audio. Session
+// simulation ticks remain valid only for authoritative work; queue timing is
+// presentation FrameSerial timing [03 §8.3][I6].
+func (s *Session) SetPresentationClock(c *presentation.Clock) {
+	if s == nil {
+		return
+	}
+	s.audioClock = c
+}
+
+func (s *Session) presentationClock() *presentation.Clock {
+	if s == nil {
+		return nil
+	}
+	return s.audioClock
+}
 
 // InitAudio creates the presentation audio queue/cache/music for the session
 // [03 §8.3][03 §8.4] C16 C18 C20. It is presentation-only and uses the CRT
@@ -30,6 +58,21 @@ func (s *Session) InitAudio(fs vfs.FSOps) {
 		s.AudioQueue.Seed(1)
 		s.AudioQueue.Configure(10, 10, true, true)
 	}
+	if s.AudioRegistry == nil {
+		if s.audioFS != nil {
+			s.AudioRegistry = audio.NewRegistry(s.audioFS)
+		} else {
+			s.AudioRegistry = audio.NewRegistry(fs)
+		}
+	}
+	s.AudioCache = s.AudioRegistry.Cache()
+	if s.Catalog != nil {
+		for _, alias := range s.Catalog.AliasOrder {
+			if alias != nil {
+				s.AudioRegistry.RegisterPath(alias.Alias, alias.Sound)
+			}
+		}
+	}
 	if s.AudioCache == nil {
 		if s.audioFS != nil {
 			s.AudioCache = audio.NewCache(s.audioFS)
@@ -42,19 +85,26 @@ func (s *Session) InitAudio(fs vfs.FSOps) {
 	if s.AudioMusic == nil {
 		s.AudioMusic = audio.NewMusicController()
 	}
+	// Both services wrap the session-owned CRT stream.  They must not seed
+	// private generators: silent voice resolves and CD picks share draw order
+	// with every other presentation consumer [01 §7.2][03 §8.3–§8.4].
+	sharedCRT := s.sharedAudioCRT()
+	s.AudioQueue.SetCRTRandom(sharedCRT)
+	s.AudioMusic.SetCRTRandom(sharedCRT)
 	// Resolver maps unit handle to its sound category via catalog [02 "Sound category record"] [03 §8.3] C17.
 	s.AudioQueue.SetResolver(s.audioResolver)
 	// Playback sink loads the sample via cache; missing alias degrades silently [03 §8.2] C20.
 	// When a backend is present it also plays via PCM [03 §8.3] [I6]; headless
 	// backends record the alias without constructing a device [I5].
 	s.AudioQueue.OnPlay(func(alias string, slot audio.Slot, unit pool.Handle) {
-		if s.AudioCache != nil && alias != "" {
-			_, _ = s.AudioCache.Load(alias)
+		if alias == "" || s.AudioRegistry == nil {
+			return
 		}
-		if alias != "" {
+		id := s.AudioRegistry.Lookup(alias)
+		sample, err := s.AudioRegistry.Load(id)
+		if err == nil {
 			if be := audio.GlobalBackend(); be != nil {
-				// UI/category cues are non-positional at full volume [03 §8.3].
-				_ = be.PlayAlias(alias, s.AudioCache, 1.0, 0)
+				_ = be.PlaySample(sample, 1.0, 0)
 			}
 		}
 	})
@@ -90,6 +140,19 @@ func (s *Session) audioResolver(h pool.Handle) (*audio.Category, string, bool) {
 	return audio.CategoryFromContent(sc), u.Def.UnitName, u.Alive && !u.Dying
 }
 
+func (s *Session) loadAudioAlias(alias string) (*audio.Sample, error) {
+	if s == nil || strings.TrimSpace(alias) == "" {
+		return nil, nil
+	}
+	if s.AudioRegistry != nil {
+		return s.AudioRegistry.Load(s.AudioRegistry.Lookup(alias))
+	}
+	if s.AudioCache != nil {
+		return s.AudioCache.Load(alias)
+	}
+	return nil, nil
+}
+
 // SetAudioViewport sets the presentation viewport for positional pan and
 // attenuation [03 §8.3] audience gating. It is presentation-only and never
 // mutates authoritative state [I6].
@@ -119,7 +182,9 @@ func (s *Session) EmitSound(slot audio.Slot, unit pool.Handle, text string) bool
 		return false
 	}
 	var frame uint32
-	if s.Clock != nil {
+	if clock := s.presentationClock(); clock != nil {
+		frame = clock.FrameSerial
+	} else if s.Clock != nil {
 		frame = s.Clock.GlobalTick
 	} else {
 		frame = s.audioFrame
@@ -233,13 +298,19 @@ func (s *Session) EmitPositional(alias string, pos [3]numeric.Fixed) (audio.Pan,
 		vol = s.PositionalAttenuation(pos)
 		pan = audio.Pan{}
 	}
-	if s.AudioCache != nil {
-		_, _ = s.AudioCache.Load(alias) // degrade silently if missing [P1-02 §2.2]
+	var sample *audio.Sample
+	if s.AudioRegistry != nil {
+		id := s.AudioRegistry.Lookup(alias)
+		sample, _ = s.AudioRegistry.Load(id)
+	} else if s.AudioCache != nil {
+		sample, _ = s.AudioCache.Load(alias)
 	}
 	if be := audio.GlobalBackend(); be != nil {
 		volF := audio.VolumeFromAttenuation(vol)
 		panF := audio.PanFloat(pan, s.audioViewport)
-		_ = be.PlayAlias(alias, s.AudioCache, volF, panF)
+		if sample != nil {
+			_ = be.PlaySample(sample, volF, panF)
+		}
 	}
 	return pan, vol, true
 }
@@ -276,6 +347,21 @@ func (s *Session) TickAudio(presentationFrame uint32) {
 	// controller.IsPlaying(); retail would query mciSendStringA status.
 	if s.AudioMusic != nil {
 		s.AudioMusic.Tick(s.AudioMusic.IsPlaying())
+	}
+}
+
+// TickAudioClock drains and polls music using the shared presentation clock.
+// It is the preferred live-path entry point; TickAudio(uint32) remains for
+// deterministic fixtures that explicitly provide a FrameSerial.
+func (s *Session) TickAudioClock(clock *presentation.Clock) {
+	if s == nil || s.AudioQueue == nil || clock == nil {
+		return
+	}
+	s.SetPresentationClock(clock)
+	s.AudioQueue.Drain(clock.FrameSerial)
+	s.audioFrame = clock.FrameSerial
+	if s.AudioMusic != nil {
+		s.AudioMusic.TickFrame(clock, s.AudioMusic.IsPlaying())
 	}
 }
 
@@ -354,7 +440,7 @@ func (s *Session) preloadBriefing() error {
 	if alias == "" {
 		return nil
 	}
-	_, err := s.AudioCache.Load(alias)
+	_, err := s.loadAudioAlias(alias)
 	if err != nil {
 		// Fallback to music/CD path already probed; degrade not fatal [P1-02 §2.2].
 		return err
@@ -424,8 +510,8 @@ func (s *Session) PlayBriefing() bool {
 		h, _ := s.Mission.OTA.Global.StringValue("missionhint", "")
 		alias = audio.BriefingAlias(g, b, n, h)
 	}
-	if alias != "" && s.AudioCache != nil {
-		if _, err := s.AudioCache.Load(alias); err == nil {
+	if alias != "" {
+		if _, err := s.loadAudioAlias(alias); err == nil {
 			// Briefing alias available; queue as unitcomplete? For now play
 			// via EmitPositional at origin (non-positional briefing).
 			// Use world origin as pos; audible check trivially passes when no Vis.

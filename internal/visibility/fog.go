@@ -1,20 +1,18 @@
 // Package visibility fog implements C13, C14, C15 [PLAN_05 WU-05-5].
 package visibility
 
-// FogCache is presentation-only fog [03 §3.3] C13.
-// It rebuilds lazily when valid bit clears, never writes word mask.
+// FogCache is presentation-only fog [03 §3.3] C13. Its validity is solely
+// Service.mode bit 3; the cache itself never carries a second validity flag.
 type FogCache struct {
-	w, h  int32
-	ch0   []uint8 // channel zero: values 0..15
-	ch1   []uint8 // channel one: values 0..15
-	valid bool
+	w, h int32
+	ch0  []uint8 // channel zero: values 0..15
+	ch1  []uint8 // channel one: values 0..15
+	// originX/originZ identify the first cache cell in a viewport-aligned window.
+	originX, originZ int32
 }
 
 // Fog returns the presentation fog cache [PLAN_05 Public API].
 func (s *Service) Fog() *FogCache { return &s.fog }
-
-// IsValid reports whether the cache is valid.
-func (f *FogCache) IsValid() bool { return f != nil && f.valid }
 
 // Dimensions returns the fog grid dimensions [03 §3.1] C1.
 func (f *FogCache) Dimensions() (int32, int32) {
@@ -22,6 +20,15 @@ func (f *FogCache) Dimensions() (int32, int32) {
 		return 0, 0
 	}
 	return f.w, f.h
+}
+
+// Origin returns the map-cell origin of a viewport-aligned cache window.
+// Map-sized snapshots return (0,0). [03 §3.3]
+func (f *FogCache) Origin() (int32, int32) {
+	if f == nil {
+		return 0, 0
+	}
+	return f.originX, f.originZ
 }
 
 // Channels returns copies of the two channel slices for snapshot presentation [03 §3.3] C13.
@@ -37,28 +44,21 @@ func (f *FogCache) Channels() ([]uint8, []uint8) {
 	return c0, c1
 }
 
-// Invalidate clears the valid bit, waking composer [03 §3.3] C13.
-func (f *FogCache) Invalidate() {
-	if f != nil {
-		f.valid = false
-	}
-}
-
-// Validate sets valid after rebuild.
-func (f *FogCache) Validate() {
-	if f != nil {
-		f.valid = true
-	}
-}
-
-// NewFogCacheFromChannels creates a presentation FogCache from snapshot channels [03 §3.3] (I6).
-// It allocates w*h entries and copies ch0/ch1 (each 0..15) then marks valid.
+// NewFogCacheFromChannels creates a detached presentation FogCache from
+// snapshot channels [03 §3.3] (I6). It has no validity state; callers that
+// need validity read the owning Service mode bit.
 func NewFogCacheFromChannels(w, h int32, ch0, ch1 []uint8) *FogCache {
+	return NewFogCacheFromChannelsAt(w, h, 0, 0, ch0, ch1)
+}
+
+// NewFogCacheFromChannelsAt reconstructs the detached cache with its
+// viewport origin preserved across the snapshot boundary [03 §3.3].
+func NewFogCacheFromChannelsAt(w, h, originX, originZ int32, ch0, ch1 []uint8) *FogCache {
 	if w <= 0 || h <= 0 {
-		return &FogCache{w: w, h: h, valid: true}
+		return &FogCache{w: w, h: h, originX: originX, originZ: originZ}
 	}
 	n := int(w * h)
-	fc := &FogCache{w: w, h: h, ch0: make([]uint8, n), ch1: make([]uint8, n), valid: true}
+	fc := &FogCache{w: w, h: h, originX: originX, originZ: originZ, ch0: make([]uint8, n), ch1: make([]uint8, n)}
 	if len(ch0) >= n {
 		copy(fc.ch0, ch0[:n])
 	} else if len(ch0) > 0 {
@@ -117,108 +117,117 @@ func (f *FogCache) SetChannel(x, y int32, c0, c1 uint8) {
 // let BuildFogOps handle viewport clipping via hard 32 edges [03 §3.3] C13 — viewport edge forcing is therefore a render-time concern
 // and the cache remains map-aligned for simplicity (divergence documented as TODO(question) for exact viewport-sized residue alignment).
 func (s *Service) RebuildFog(cameraX, cameraY int32) {
-	if s == nil || s.fog.ch0 == nil {
+	if s == nil || s.fog.ch0 == nil || s.mode.FogCacheValid() {
 		return
 	}
-	if s.fog.valid {
+	// Keep the historical entry point as a compatibility adapter. The only
+	// producer is the viewport-aligned builder; a full-map view preserves the
+	// old snapshot call while retaining edge residues and fixups.
+	s.RebuildFogWindow(cameraX, cameraY, s.W*32, s.H*32)
+}
+
+// RebuildFogWindow rebuilds a cache sized to the camera viewport plus the
+// one-cell border.  The cache is aligned to visibility-cell corners and is
+// derived from the authoritative stores without modifying them. [03 §3.3]
+//
+// The cache is always window-addressed, including a zero-origin window.
+func (s *Service) RebuildFogWindow(cameraX, cameraZ, viewW, viewH int32) {
+	if s == nil || viewW <= 0 || viewH <= 0 || s.W <= 0 || s.H <= 0 {
 		return
 	}
-	// Clear the entire cache before rebuilding it [03 §3.3].
-	for i := range s.fog.ch0 {
-		s.fog.ch0[i] = 0
-		s.fog.ch1[i] = 0
-	}
-	// Dimensions: fog cache is W×H. Nanolathe keeps a map-sized cache while
-	// retail's cache follows the viewport [03 §3.3]; the map-sized form
-	// preserves nibble values because each tile contributes only to its four
-	// neighboring cells.
-	w := int(s.fog.w)
-	h := int(s.fog.h)
+	// Window cells cover the camera viewport and one border cell on each side.
+	startX := floorDivFog(cameraX-16, 32) - 1
+	startZ := floorDivFog(cameraZ-16, 32) - 1
+	endX := floorDivFog(cameraX+viewW-16+31, 32) + 1
+	endZ := floorDivFog(cameraZ+viewH-16+31, 32) + 1
+	w, h := endX-startX, endZ-startZ
 	if w <= 0 || h <= 0 {
-		s.fog.valid = true
 		return
 	}
-	// Hi channel (ch1) — current visibility, only when mode bit 1 (ModeCurrentEnabled, 0x2) is set [03 §3.3].
-	// A fogged visibility tile ORs corner bits 1, 2, 4, and 8 into its four
-	// neighboring cache cells [03 §3.3].
-	if s.mode&ModeCurrentEnabled != 0 {
-		localGrid := s.byteGrids[s.local]
-		if localGrid != nil {
-			visW := int(s.W)
-			visH := int(s.H)
-			for gy := 0; gy < visH; gy++ {
-				for gx := 0; gx < visW; gx++ {
-					idxVis := gy*visW + gx
-					if idxVis < 0 || idxVis >= len(localGrid) {
-						continue
-					}
-					if localGrid[idxVis] != 0 {
-						continue // visible -> no fog contribution
-					}
-					// Fogged visibility tile (cur==0) contributes to up to 4 cache neighbours.
-					// Mapping per RR-16 §6.1: cache (gx,gy) bit 1, (gx-1,gy) bit 2, (gx,gy-1) bit 4, (gx-1,gy-1) bit 8.
-					if gx >= 0 && gy >= 0 && gx < w && gy < h {
-						s.fog.ch1[gy*w+gx] |= 1
-					}
-					if gx-1 >= 0 && gy >= 0 && gx-1 < w && gy < h {
-						s.fog.ch1[gy*w+(gx-1)] |= 2
-					}
-					if gx >= 0 && gy-1 >= 0 && gx < w && gy-1 < h {
-						s.fog.ch1[(gy-1)*w+gx] |= 4
-					}
-					if gx-1 >= 0 && gy-1 >= 0 && gx-1 < w && gy-1 < h {
-						s.fog.ch1[(gy-1)*w+(gx-1)] |= 8
-					}
-				}
+	if s.mode.FogCacheValid() && s.fog.originX == startX && s.fog.originZ == startZ && s.fog.w == w && s.fog.h == h {
+		return
+	}
+	n := int(w * h)
+	if s.fog.w != w || s.fog.h != h || len(s.fog.ch0) != n {
+		s.fog.w, s.fog.h = w, h
+		s.fog.ch0 = make([]uint8, n)
+		s.fog.ch1 = make([]uint8, n)
+	}
+	s.fog.originX, s.fog.originZ = startX, startZ
+	for i := range s.fog.ch0 {
+		s.fog.ch0[i], s.fog.ch1[i] = 0, 0
+	}
+	put := func(dst []uint8, gx, gz int32, bit uint8) {
+		if gx < startX || gx >= endX || gz < startZ || gz >= endZ {
+			return
+		}
+		dst[int((gz-startZ)*w+(gx-startX))] |= bit
+	}
+	seed := func(dst []uint8, gx, gz int32) {
+		put(dst, gx, gz, 1)
+		put(dst, gx-1, gz, 2)
+		put(dst, gx, gz-1, 4)
+		put(dst, gx-1, gz-1, 8)
+	}
+	local := s.local
+	bit := cellBit(local)
+	for gz := int32(0); gz < s.H; gz++ {
+		for gx := int32(0); gx < s.W; gx++ {
+			i := int(gz*s.W + gx)
+			if s.mode.CurrentEnabled() && i < len(s.byteGrids[local]) && s.byteGrids[local][i] == 0 {
+				seed(s.fog.ch1, gx, gz)
+			}
+			if i < len(s.wordMask) && s.wordMask[i]&bit == 0 {
+				seed(s.fog.ch0, gx, gz)
 			}
 		}
 	}
-	// Lo channel (ch0) — history/unexplored, always from word grid [03 §3.3].
-	// An unexplored visibility tile uses the same four corner-bit writes
-	// [03 §3.3].
-	bit := cellBit(s.local)
-	if len(s.wordMask) > 0 {
-		visW := int(s.W)
-		visH := int(s.H)
-		for gy := 0; gy < visH; gy++ {
-			for gx := 0; gx < visW; gx++ {
-				idxVis := gy*visW + gx
-				if idxVis < 0 || idxVis >= len(s.wordMask) {
-					continue
-				}
-				if s.wordMask[idxVis]&bit != 0 {
-					continue // explored -> no lo contribution
-				}
-				if gx >= 0 && gy >= 0 && gx < w && gy < h {
-					s.fog.ch0[gy*w+gx] |= 1
-				}
-				if gx-1 >= 0 && gy >= 0 && gx-1 < w && gy < h {
-					s.fog.ch0[gy*w+(gx-1)] |= 2
-				}
-				if gx >= 0 && gy-1 >= 0 && gx < w && gy-1 < h {
-					s.fog.ch0[(gy-1)*w+gx] |= 4
-				}
-				if gx-1 >= 0 && gy-1 >= 0 && gx-1 < w && gy-1 < h {
-					s.fog.ch0[(gy-1)*w+(gx-1)] |= 8
-				}
-			}
+	// Border fixups are conditional ORs and run in the established order.
+	fix := func(dst []uint8, gx, gz int32, a, b, c, d uint8) {
+		if gx < startX || gx >= endX || gz < startZ || gz >= endZ {
+			return
+		}
+		i := int((gz-startZ)*w + gx - startX)
+		if dst[i]&a != 0 {
+			dst[i] |= b
+		}
+		if dst[i]&c != 0 {
+			dst[i] |= d
 		}
 	}
-	// Edge fixup for viewport beyond map [03 §3.3].
-	// For Nanolathe's map-sized cache, the viewport-sized equivalent is that cells beyond the map are considered
-	// fogged (out-of-bounds visibility considered unexplored). Retail forces those border cache rows/cols to 15
-	// when camera tile start <0 or end > map. We approximate by treating virtual out-of-bounds tiles as fogged for
-	// outer ring when the corresponding visibility border is fogged — handled implicitly by the OR pattern where
-	// missing neighbours would have contributed bits 2/4/8 at the edge but were skipped. To ensure map outer edge
-	// appears solid when the edge is fogged, we optionally force outer ring partially-fogged cells to 15.
-	// This is a supported inference for map-sized cache; full viewport-sized residue handling remains TODO(question)
-	// for exact offX/offZ alignment [03 §3.3].
-	// No additional forcing here preserves partial transition at map edge, which matches the hard 32 edge without extra fill.
-	// Callers that need beyond-map solid can rely on BuildFogOps viewport culling leaving out-of-bounds as no-cache (treated as visible
-	// in current BuildFogOps, but terrain void beyond map is already black via BlitTerrain clipping).
-	_ = cameraX
-	_ = cameraY
-	s.fog.valid = true
+	if startZ < 0 {
+		for gx := startX; gx < endX; gx++ {
+			fix(s.fog.ch1, gx, startZ, 4, 1, 8, 2)
+			fix(s.fog.ch0, gx, startZ, 4, 1, 8, 2)
+		}
+	}
+	if endZ > s.H {
+		for gx := startX; gx < endX; gx++ {
+			fix(s.fog.ch1, gx, endZ-2, 1, 4, 2, 8)
+			fix(s.fog.ch0, gx, endZ-2, 1, 4, 2, 8)
+		}
+	}
+	if startX < 0 {
+		for gz := startZ; gz < endZ; gz++ {
+			fix(s.fog.ch1, startX, gz, 8, 4, 2, 1)
+			fix(s.fog.ch0, startX, gz, 8, 4, 2, 1)
+		}
+	}
+	if endX > s.W {
+		for gz := startZ; gz < endZ; gz++ {
+			fix(s.fog.ch1, endX-2, gz, 4, 8, 1, 2)
+			fix(s.fog.ch0, endX-2, gz, 4, 8, 1, 2)
+		}
+	}
+	s.mode |= ModeFogCacheValid
+}
+
+func floorDivFog(a, b int32) int32 {
+	q := a / b
+	if a%b != 0 && (a < 0) != (b < 0) {
+		q--
+	}
+	return q
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.

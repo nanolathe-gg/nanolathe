@@ -101,14 +101,22 @@ func (m Minimap) ToWorldPlay(mouseX, mouseY, playW, playH int32) (wx, wz int32) 
 	return m.RadarToWorld(mouseX, mouseY, playW, playH)
 }
 
-// ToCameraPlay converts a minimap click directly to a clamped camera origin
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// It composes ToWorldPlay with view-centering and the standard clamp order
-// [07 §10]: maximum = mapSize - viewSize; if camera < 0 → 0 else if > maximum → maximum.
+// ToCameraPlay is the historical centered helper retained for callers that
+// explicitly request a view-centered camera. The exact retail lens branch is
+// exposed as ToCameraLensPlay below. [07 §10]
 func (m Minimap) ToCameraPlay(mouseX, mouseY, playW, playH, viewW, viewH int32) (cx, cz int32) { // [07 §10]
 	wx, wz := m.ToWorldPlay(mouseX, mouseY, playW, playH)
 	cx = wx - viewW/2
 	cz = wz - viewH/2
+	cx = clampAxis(cx, playW, viewW)
+	cz = clampAxis(cz, playH, viewH)
+	return
+}
+
+// ToCameraLensPlay is the exact minimap lens branch: the inverse-projected
+// point becomes the camera origin without a view-half recenter term. [03 §3.11]
+func (m Minimap) ToCameraLensPlay(mouseX, mouseY, playW, playH, viewW, viewH int32) (cx, cz int32) {
+	cx, cz = m.ToWorldPlay(mouseX, mouseY, playW, playH)
 	cx = clampAxis(cx, playW, viewW)
 	cz = clampAxis(cz, playH, viewH)
 	return

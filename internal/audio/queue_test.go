@@ -294,6 +294,47 @@ func TestAudioOneVoicePer30(t *testing.T) {
 	}
 }
 
+func TestQueueSignedGaugeGateAndBitSix(t *testing.T) {
+	q := NewQueue()
+	q.Register(1, categoryFixture(), "Unit", true)
+	q.ConfigureThresholdGauges(10, 10)
+	q.ConfigureBackendGates(1, 0x40, true) // audible bit set, master bits absent
+	var plays int
+	q.OnPlay(func(string, Slot, pool.Handle) { plays++ })
+	if !q.InsertAt(100, 11, 1, "") {
+		t.Fatal("insert working")
+	}
+	q.Drain(100)
+	if plays != 0 {
+		t.Fatal("bit 6 must gate audible dispatch")
+	}
+	q.ConfigureBackendGates(1, 0x47, true)
+	if q.InsertAt(120, 11, 1, "") {
+		t.Fatal("audible gate should re-arm cooldown despite blocked dispatch")
+	}
+	if !q.InsertAt(130, 11, 1, "") {
+		t.Fatal("cooldown should expire at frame 130")
+	}
+	q.Drain(130)
+	if plays != 1 {
+		t.Fatal("signed threshold at gauge 10 should pass priority 2")
+	}
+}
+
+func TestQueueDeadUnitDoesNotPrintSpeech(t *testing.T) {
+	q := NewQueue()
+	q.Register(1, categoryFixture(), "Unit", false)
+	var lines []string
+	q.OnSpeech(func(line string) { lines = append(lines, line) })
+	if !q.InsertAt(100, 2, 1, "override") {
+		t.Fatal("insert underattack")
+	}
+	q.Drain(100)
+	if len(lines) != 0 {
+		t.Fatalf("dead unit speech=%v", lines)
+	}
+}
+
 func TestDrainOutsideSim(t *testing.T) {
 	data, err := os.ReadFile("queue.go")
 	if err != nil {

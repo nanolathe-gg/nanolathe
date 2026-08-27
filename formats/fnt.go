@@ -65,9 +65,18 @@ func LoadFNTFile(fs vfs.FSOps, name string) (*FNT, error) {
 }
 
 func (g *FNTGlyph) On(x, y int) bool {
+	if g == nil {
+		return false
+	}
 	if x < 0 || y < 0 || x >= int(g.Width) || y >= int(g.Height) {
 		return false
 	}
 	bit := y*int(g.Width) + x
+	if bit/8 >= len(g.Bits) {
+		// A manually assembled or partially decoded glyph must fail soft at
+		// the raster boundary rather than panic. LoadFNT validates this bound
+		// for file-backed glyphs [fmt fnt].
+		return false
+	}
 	return g.Bits[bit/8]&(0x80>>uint(bit%8)) != 0
 }

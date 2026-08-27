@@ -112,7 +112,7 @@ func (c *Client) DrawMinimap(surf *render.RadarSurface, hudRect hud.Rect, viewpo
 			dstRadarX1 = hl + (hudW-dstRadarW)/2
 			dstRadarY1 = ht + (hudH-dstRadarH)/2
 		} else {
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// Letterbox with HUD zoom: scale through the displayed layout [03 §3.7].
 			dstRadarW = int32(int64(surf.W) * int64(hudW) / int64(longSide))
 			dstRadarH = int32(int64(surf.H) * int64(hudH) / int64(longSide))
 			if dstRadarW <= 0 {
@@ -166,11 +166,11 @@ func (c *Client) DrawMinimap(surf *render.RadarSurface, hudRect hud.Rect, viewpo
 		}
 	}
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Draw viewport rect 1-pixel via paletteViewport when enabled [03 §3.9][07 §10].
 	// ViewportRect is inclusive, clipped to HUD rect, 1-pixel Bresenham, hiColor DDA placeholder.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): exact viewport palette source remains unresolved [03 §3.9].
 	vl, vt, vr, vb := viewportRect.Ordered()
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Only draw if viewportRect is non-empty and paletteViewport is non-zero.
 	if paletteViewport != 0 && vl <= vr && vt <= vb {
 		// Clip viewport rect to framebuffer (and to HUD rect already via ViewportRect)
 		if vl < 0 {
@@ -185,7 +185,7 @@ func (c *Client) DrawMinimap(surf *render.RadarSurface, hudRect hud.Rect, viewpo
 		if vb >= int32(c.height) {
 			vb = int32(c.height - 1)
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Draw 1-pixel rectangle outline (not filled) via integer rasterization [03 §3.9].
 		// Use direct indexed writes at viewportRect coordinates (assumed screen coords; if ViewportRect was canvas-local at hud origin 0,
 		// then hl offset already accounted for via dstRadar positioning? ViewportRect from hud.ViewportRect is canvas-local at 0 origin,
 		// but Draw call expects absolute screen coords; however ViewportRect already clipped to hudRect which is at hl,ht, so
@@ -213,6 +213,63 @@ func (c *Client) DrawMinimap(surf *render.RadarSurface, hudRect hud.Rect, viewpo
 	}
 }
 
+// DrawMinimapLayout is the canonical minimap blitter. It maps the radar
+// surface into the 126-pixel aspect-fitted canvas using the same camera.Minimap
+// layout used by input; letterbox bars are untouched. markerCenterX/Y are
+// canvas-local camera-center coordinates. [03 §3.6][03 §3.11][03 §3.12]
+func (c *Client) DrawMinimapLayout(surf *render.RadarSurface, hudRect hud.Rect, layout camera.Minimap, markerMode byte, markerCenterX, markerCenterY int32, paletteViewport byte) {
+	if c == nil || surf == nil || len(surf.Bits) < surf.W*surf.H || surf.W <= 0 || surf.H <= 0 || c.indexed == nil {
+		return
+	}
+	hl, ht, hr, hb := hudRect.Ordered()
+	hudW, hudH := hr-hl+1, hb-ht+1
+	if hudW <= 0 || hudH <= 0 || layout.W <= 0 || layout.H <= 0 {
+		return
+	}
+	for dy := int32(0); dy < hudH; dy++ {
+		cy := dy * camera.MinimapLongSide / hudH
+		if cy < layout.PadY || cy > layout.Bottom() {
+			continue
+		}
+		sy := (cy - layout.PadY) * int32(surf.H) / layout.H
+		if sy < 0 || sy >= int32(surf.H) {
+			continue
+		}
+		for dx := int32(0); dx < hudW; dx++ {
+			cx := dx * camera.MinimapLongSide / hudW
+			if cx < layout.PadX || cx > layout.Right() {
+				continue
+			}
+			sx := (cx - layout.PadX) * int32(surf.W) / layout.W
+			if sx < 0 || sx >= int32(surf.W) {
+				continue
+			}
+			x, y := hl+dx, ht+dy
+			if x < 0 || y < 0 || x >= int32(c.width) || y >= int32(c.height) {
+				continue
+			}
+			c.indexed[int(y)*c.width+int(x)] = surf.Bits[int(sy)*surf.W+int(sx)]
+		}
+	}
+	if markerMode == 2 && paletteViewport != 0 {
+		// The marker is exactly two one-pixel lines crossing at one pixel.
+		for _, p := range [][2]int32{{0, 0}, {-2, 0}, {2, 0}, {0, -2}, {0, 2}} {
+			// Marker coordinates are in the canonical 126×126 canvas. Scale
+			// them through the displayed HUD, preserving five pixels at the
+			// rendered center and clipping to the fitted radar rectangle.
+			cx := hl + markerCenterX*hudW/camera.MinimapLongSide
+			cy := ht + markerCenterY*hudH/camera.MinimapLongSide
+			x, y := cx+p[0], cy+p[1]
+			if markerCenterX < layout.PadX || markerCenterX > layout.Right() || markerCenterY < layout.PadY || markerCenterY > layout.Bottom() {
+				continue
+			}
+			if x >= 0 && y >= 0 && x < int32(c.width) && y < int32(c.height) {
+				c.indexed[int(y)*c.width+int(x)] = paletteViewport
+			}
+		}
+	}
+}
+
 // clampAxis implements the per-axis retail clamp order [07 §10] C3:
 // maximum = mapSize - viewSize; if camera <0 →0 else if camera >maximum →maximum
 // Ordered form controls negative-maximum domain [07 §10].
@@ -227,10 +284,9 @@ func clampAxis(camera, mapSize, viewSize int32) int32 { // [07 §10]
 	return camera
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// HandleMinimapInput routes a mouse click/drag to camera movement via the two-branch lens [07 §10][03 §3.11].
 // Returns true if input was consumed as minimap interaction (inside HUD rect).
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// inside uses inverse projection and clamp; outside-or-drag uses camera plus mouse delta.
 // This helper is pure: it takes mouse X,Y, button state via isInside and drag latch *bool, and returns new camera via mutation; it does not read time.Now or mutate sim [I6].
 func HandleMinimapInput(cam *camera.Camera, m camera.Minimap, hudRect hud.Rect, playW, playH int32, mouseX, mouseY int32, isInside bool, dragActive *bool) bool {
 	if cam == nil {
@@ -245,23 +301,21 @@ func HandleMinimapInput(cam *camera.Camera, m camera.Minimap, hudRect hud.Rect, 
 	hl, ht, hr, hb := hudRect.Ordered()
 	var newCamX, newCamZ int32
 	if isInside && !isDrag {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Inside branch: inverse lens via RadarToWorld then clamp [03 §3.11].
 		// Mouse is screen HUD coords; convert to canvas-local by subtracting hudRect origin.
 		canvasX := mouseX - hl
 		canvasY := mouseY - ht
 		// For fallback square HUD, canvasX already 0..126 includes letterbox bars.
 		// RadarToWorld does (canvas - Pad)*Play/Radar TRUNC [07 §10].
 		wx, wz := m.RadarToWorld(canvasX, canvasY, playW, playH)
-		eW, eH := cam.ViewW, cam.ViewH
-		if cam.Scale != 0 {
-			eW, eH = cam.EffectiveView()
-		}
-		newCamX = wx - eW/2
-		newCamZ = wz - eH/2
+		// The lens branch writes the inverse-projected point as the camera
+		// origin. It has no view-half recenter term; the drag branch below is
+		// the separate mouse-delta operation. [03 §3.11]
+		newCamX = wx
+		newCamZ = wz
 		// Inside click does not latch drag unless caller sets it; keep dragActive unchanged.
 	} else {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Drag branch: camera plus mouse delta, clamped [07 §10][03 §3.11].
 		cx := mouseX
 		if cx < hl {
 			cx = hl

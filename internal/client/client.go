@@ -22,6 +22,8 @@ import (
 	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe/nanolathe/internal/presentation"
+	presentationrender "github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -95,10 +97,13 @@ type Client struct {
 	cam     *camera.Camera
 	fnt     *formats.FNT
 
-	modelFS   *vfs.FS
-	models    map[string]*unitModel
-	texIndex  map[string]texRef
-	animClock int // texture-animation clock in sim frames
+	modelFS  *vfs.FS
+	models   map[string]*unitModel
+	texIndex map[string]texRef
+	// Model presentation state is owned by this client so independent windows
+	// cannot share animation phase or orientation caches [03 §1][I6].
+	modelPresentation map[modelTextureKey]*modelTextureCursor
+	modelOrientation  map[uint64]*presentationrender.OrientationCache
 	// model diagnostics: structured fallback emitted once per unit, not per frame [ON-08].
 	modelErrors    map[string]error    // model name -> last load error (presentation-only)
 	modelFallbacks map[uint16]struct{} // unit Slot -> logged fallback diagnostic
@@ -108,7 +113,6 @@ type Client struct {
 	featureGAFs   map[string]*formats.GAF      // lower filename -> GAF
 	featureFrames map[string]*formats.GAFFrame // lower "filename|seqname" -> frame
 	featureGACErr map[string]error             // memoised load failures (presentation-only)
-	featureCursor map[string]int               // lower "filename|seqname" -> anim cursor index for animating=1 [05]
 	featureYSort  bool                         // when true force Y-bucket sort for feature pass [03 §1]
 
 	// Fog overlay — anims/fog.gaf handles, presentation-only [03 §3.3].
@@ -133,6 +137,7 @@ type Client struct {
 	audioMusic    *audio.Controller
 	audioViewport audio.Viewport
 	audioFrame    uint32
+	audioClock    *presentation.Clock
 }
 
 // New creates a client. It allocates the indexed framebuffer at the negotiated
@@ -152,20 +157,21 @@ func New(opts Options) (*Client, error) {
 		buf = &snapshot.Buffer{}
 	}
 	c := &Client{
-		opts:           opts,
-		buffer:         buf,
-		width:          w,
-		height:         h,
-		indexed:        make([]uint8, w*h),
-		rgba:           make([]byte, w*h*4),
-		models:         map[string]*unitModel{},
-		modelErrors:    map[string]error{},
-		modelFallbacks: map[uint16]struct{}{},
-		texIndex:       map[string]texRef{},
-		featureGAFs:    map[string]*formats.GAF{},
-		featureFrames:  map[string]*formats.GAFFrame{},
-		featureGACErr:  map[string]error{},
-		featureCursor:  map[string]int{},
+		opts:              opts,
+		buffer:            buf,
+		width:             w,
+		height:            h,
+		indexed:           make([]uint8, w*h),
+		rgba:              make([]byte, w*h*4),
+		models:            map[string]*unitModel{},
+		modelErrors:       map[string]error{},
+		modelFallbacks:    map[uint16]struct{}{},
+		texIndex:          map[string]texRef{},
+		modelPresentation: map[modelTextureKey]*modelTextureCursor{},
+		modelOrientation:  map[uint64]*presentationrender.OrientationCache{},
+		featureGAFs:       map[string]*formats.GAF{},
+		featureFrames:     map[string]*formats.GAFFrame{},
+		featureGACErr:     map[string]error{},
 	}
 	c.in = *newInputState()
 	// Fallback palette: grayscale base and identity logical table. This keeps
@@ -232,6 +238,8 @@ func (c *Client) ExitRequested() bool { return c.exitRequested }
 // texture-name index. Presentation state only.
 func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.modelFS = fs
+	c.modelPresentation = map[modelTextureKey]*modelTextureCursor{}
+	c.modelOrientation = map[uint64]*presentationrender.OrientationCache{}
 	c.models = map[string]*unitModel{}
 	c.texIndex = map[string]texRef{}
 	c.modelErrors = map[string]error{}
@@ -239,7 +247,6 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.featureGAFs = map[string]*formats.GAF{}
 	c.featureFrames = map[string]*formats.GAFFrame{}
 	c.featureGACErr = map[string]error{}
-	c.featureCursor = map[string]int{}
 	c.fogGAF = nil
 	c.fogLoaded = false
 	c.fogLoadErr = nil
@@ -330,9 +337,10 @@ func (c *Client) featureGAFFor(filename string) (*formats.GAF, error) {
 }
 
 // featureFrameFor resolves seqName inside filename's GAF, with per-frame durations.
-// For static features it returns the first frame; for animated features the cursor
-// is advanced via c.animClock using the entry's per-frame Value ticks [03 §4.4].
-// Returns nil on missing filename/seq or load failure (caller falls back to rect) [05 "Feature catalog and placement"].
+// For static features it returns the first frame; animated features use an
+// independent cursor keyed by the feature's stable presentation identity [03 §4.4].
+// Returns nil on missing filename/seq or load failure; no authored pixels are
+// emitted for an unresolved sequence [05 "Feature catalog and placement"].
 func (c *Client) featureFrameFor(f snapshot.FeatureView, shadow bool) *formats.GAFFrame {
 	filename := f.Filename
 	seq := f.SeqName
@@ -356,48 +364,15 @@ func (c *Client) featureFrameFor(f snapshot.FeatureView, shadow bool) *formats.G
 		}
 		return nil
 	}
-	// Animated: cycle through frames using per-frame Value ticks (whole ticks) [03 §4.4].
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// sprites from the global animClock (presentation-only, I6).
-	total := 0
-	for _, fr := range entry.Frames {
-		d := int(fr.Value)
-		if d < 1 {
-			d = 1
-		}
-		total += d
-	}
-	if total <= 0 {
-		if entry.Frames[0].Frame != nil {
-			return entry.Frames[0].Frame
-		}
-		return nil
-	}
-	t := ((c.animClock % total) + total) % total
-	acc := 0
-	for _, fr := range entry.Frames {
-		d := int(fr.Value)
-		if d < 1 {
-			d = 1
-		}
-		acc += d
-		if t < acc {
-			return fr.Frame
-		}
-	}
-	if entry.Frames[len(entry.Frames)-1].Frame != nil {
-		return entry.Frames[len(entry.Frames)-1].Frame
-	}
-	return nil
+	return c.animatedGAFFrame(strings.ToLower(filename)+"|"+strings.ToLower(seq), featurePresentationID(f), entry)
 }
 
 // blitGAFFrame blits a GAF indexed frame to the indexed framebuffer at
 // top-left (dstX,dstY) = anchor - frame offsets, clipped to the viewport [03 §4.4] [fmt gaf].
 // It copies opaque indexed pixels directly (palette mapping happens at present time, C7).
 // Shadow path darkens the underlying terrain via PALETTE.SHD instead of copying
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// `SHD[row*256 + dstPix]` where row 0 is near-black (mean -97) and the mask is
-// the shadow GAF's opaque pixels; with dither the effect is translucent. For
+// the shadow sprite's own indices. The mask is the shadow GAF's opaque pixels;
+// with dither the effect is translucent. For
 // feature shadows `shadTrans` selects the dithered translucent path (checker)
 // vs solid darken. Row 8 is a mid-dark row that is visible but not pure black.
 func (c *Client) blitGAFFrame(frame *formats.GAFFrame, dstX, dstY int, isShadow bool, shadTrans bool) {
@@ -438,9 +413,8 @@ func (c *Client) blitGAFFrame(frame *formats.GAFFrame, dstX, dstY int, isShadow 
 		return
 	}
 	// Shadow stencil darkens the destination (ground) where the shadow GAF
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// where the mask is the shadow GAF's opaque pixels; the feature path at
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// is opaque, via PALETTE.SHD. The authored translucent flag selects the
+	// dithered versus opaque route
 	// but both are stencil darkens, not sprite copies. Row 0 is near-black,
 	// row 8 is mid-dark; retail's exact row for feature shadows is not fully
 	// established, but the effect is a solid darkening, not a checker dither.
@@ -607,7 +581,7 @@ func (c *Client) featureScreenPos(f snapshot.FeatureView) (int32, int32) {
 		cz := f.CZ
 		footX := int32(f.FootX)
 		footZ := int32(f.FootZ)
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Collect heights across the footprint's four-corner sample pattern:
 		// h0 = cell, h1 = cell+W*0xD+4 next-X, h2 = next-Z, h3 = diag.
 		// For foot >1 the footprint center is used, but height avg still over covered cells' heights.
 		// Use coarse average over footprint via CoarseHeightAt as approximation for multi-cell.
@@ -666,6 +640,15 @@ func (c *Client) updatePublishAnchor() {
 		return
 	}
 	if !c.hasPublish || cur.Tick != c.lastPublishTick {
+		if c.hasPublish {
+			// Model and feature texture cursors advance only across consumed
+			// simulation ticks, never once per render. A burst may publish a
+			// later tick directly, so consume the whole observed delta [03 §4.4].
+			delta := uint32(cur.Tick - c.lastPublishTick)
+			if delta != 0 {
+				c.TickTextureAnimators(int(delta))
+			}
+		}
 		c.lastPublishTick = cur.Tick
 		c.tickBaseRuntime = c.runtime
 		c.hasPublish = true

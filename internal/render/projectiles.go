@@ -6,7 +6,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
 // Rendertype IDs per [03 §5.4] C6.
@@ -299,7 +298,11 @@ func SegmentCount(head, tail combat.Vec3) int { // [03 §5.4]
 // [03 §5.4] to X, height (Y), and Z. It draws exactly three CRT values per point
 // preserving deterministic call order per [03 §5.4] and I4.
 // Presentation only (I6); never uses simulation RNG.
-func SegmentedJitter(crt *rng.CRT, x, y, z numeric.Fixed) (numeric.Fixed, numeric.Fixed, numeric.Fixed) { // [03 §5.4] [I4] (I6)
+type CRTRandomSource interface {
+	Rand() int32
+}
+
+func SegmentedJitter(crt CRTRandomSource, x, y, z numeric.Fixed) (numeric.Fixed, numeric.Fixed, numeric.Fixed) { // [03 §5.4] [I4] (I6)
 	if crt == nil {
 		return x, y, z
 	}
@@ -319,7 +322,7 @@ func SegmentedJitter(crt *rng.CRT, x, y, z numeric.Fixed) (numeric.Fixed, numeri
 // per [03 §5.4]. It returns head, jittered intermediates, and tail, using
 // exactly three CRT draws per interior point. When segment count is zero it
 // returns nil and the caller skips drawing [03 §5.4].
-func SegmentedBeamPoints(head, tail combat.Vec3, crt *rng.CRT) []combat.Vec3 { // [03 §5.4] [I4] (I6)
+func SegmentedBeamPoints(head, tail combat.Vec3, crt CRTRandomSource) []combat.Vec3 { // [03 §5.4] [I4] (I6)
 	n := SegmentCount(head, tail) // [03 §5.4]
 	if n == 0 {                   // skipped when zero [03 §5.4]
 		return nil

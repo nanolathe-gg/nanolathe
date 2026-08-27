@@ -224,20 +224,20 @@ func TestFogLocalOnly(t *testing.T) {
 	terrain := &world.Terrain{CellW: 32, CellH: 32}
 	s := newTestService(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
 	s.SetLocal(0)
-	s.fog.valid = true
+	s.mode |= ModeFogCacheValid
 	// Remote player publish should not dirty fog [C15]
 	s.Publish(1, 8, 8, 0, 320)
-	if !s.fog.valid {
+	if !s.FogCacheValid() {
 		t.Fatalf("remote player publish should not clear fog-cache-valid")
 	}
 	// Local publish should dirty
 	s.Publish(0, 8, 8, 0, 320)
-	if s.fog.valid {
+	if s.FogCacheValid() {
 		t.Fatalf("local player publish should clear fog-cache-valid")
 	}
 	// Rebuild fog should validate
 	s.RebuildFog(0, 0)
-	if !s.fog.valid {
+	if !s.FogCacheValid() {
 		t.Fatalf("RebuildFog should set valid")
 	}
 }
