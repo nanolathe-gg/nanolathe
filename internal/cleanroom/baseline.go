@@ -92,7 +92,7 @@ var Baseline = map[string]int{
 	"internal/kernel/kernel.go":                     1,
 	"internal/kernel/kernel_test.go":                1,
 	"internal/mission/catalog.go":                   1,
-	"internal/mission/initial_mission.go":           7,
+	"internal/mission/initial_mission.go":           6,
 	"internal/mission/mission_globals.go":           135,
 	"internal/mission/placement.go":                 18,
 	"internal/mission/sparse_test.go":               1,

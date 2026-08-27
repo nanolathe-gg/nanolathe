@@ -7,17 +7,16 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// Mode is the mode-word bits [03 §3.1][P0-18] [PLAN_05 C2].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Word u16 OR idempotent vs u8 wrap inc/dec [P0-18].
+// Mode is the four low mode-word bits [03 §3.1] [PLAN_05 C2].
+// Bit 3 is solely the presentation fog-cache-valid bit; it is not a terrain
+// height-word dirty flag.
 type Mode uint32
 
 const (
 	ModeHistoryEnabled Mode = 1 << 0 // 0x1 history — when clear, word grid init fills all-bits-set [03 §3.2] C7 [P0-18]
 	ModeCurrentEnabled Mode = 1 << 1 // 0x2 byte-vs-word — selects predicate source; when clear, byte grids fill with 1 [03 §3.2] C7 [P0-18]
 	ModeTerrainRay     Mode = 1 << 2 // 0x4 ray-vs-sprite — selects raster shape [03 §3.2] C2 [P0-18]
-	ModeLazyDirty      Mode = 1 << 3 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	ModeFogCacheValid  Mode = 1 << 8 // presentation dirty bit (alias of lazy dirty's high bit for fog); Service owns waking composer [03 §3.3]
+	ModeFogCacheValid  Mode = 1 << 3 // 0x8 fog/minimap cache valid [03 §3.1]
 )
 
 // PlayerID is a player slot 0..9 [04 §2] [03 §3.1] ten usable bits.
@@ -47,7 +46,8 @@ type Service struct {
 
 	// surfaces receives the sensor phase's circles. They are separate from the
 	// word mask and wiped each tick [03 §3.4] C11.
-	surfaces SensorSurfaces
+	surfaces     SensorSurfaces
+	sensorInputs []SensorInput
 }
 
 // ObserverID identifies one sight source across ticks — the owning unit's pool
@@ -68,7 +68,7 @@ type footprint struct {
 // New creates a Service for terrain t and mode [03 §3.1] C1.
 // Allocation is (cellW/2)*(cellH/2) bytes*2 = cellW*cellH/2 bytes as []uint16 [03 §3.1].
 func New(t *world.Terrain, mode Mode) *Service {
-	s := &Service{terrain: t, mode: mode, local: 0}
+	s := &Service{terrain: t, mode: mode & 0x0f, local: 0}
 	if t != nil {
 		s.W = t.CellW / 2
 		s.H = t.CellH / 2
@@ -89,7 +89,7 @@ func New(t *world.Terrain, mode Mode) *Service {
 				h:     s.H,
 				ch0:   make([]uint8, n),
 				ch1:   make([]uint8, n),
-				valid: false,
+				valid: s.mode.FogCacheValid(),
 			}
 		}
 		// C7 initial fill via RebuildAll with no units, respecting mode bits.
@@ -133,28 +133,69 @@ func (s *Service) WordMask() []uint16 { return s.wordMask }
 
 // ByteGrid returns the per-player byte grid for diagnostics.
 func (s *Service) ByteGrid(p PlayerID) []uint8 {
-	if int(p) >= len(s.byteGrids) {
+	if s == nil || !validPlayer(p) {
 		return nil
 	}
 	return s.byteGrids[p]
 }
 
 // SetLocal sets the local player for fog dirty semantics [03 §3.2] C15.
-func (s *Service) SetLocal(p PlayerID) { s.local = p }
+// Invalid slots are ignored; they must not alias slot zero.
+func (s *Service) SetLocal(p PlayerID) {
+	if s != nil && validPlayer(p) {
+		s.local = p
+	}
+}
 
 // Mode returns the current mode word.
-func (s *Service) Mode() Mode { return s.mode }
+func (s *Service) Mode() Mode {
+	if s == nil {
+		return 0
+	}
+	return s.mode
+}
 
 // SetMode updates the mode word; callers use it for history/current toggles.
-func (s *Service) SetMode(m Mode) { s.mode = m }
+func (s *Service) SetMode(m Mode) {
+	if s == nil {
+		return
+	}
+	s.mode = m & 0x0f
+	s.fog.Invalidate()
+	s.mode &^= ModeFogCacheValid
+}
+
+// The helpers keep mode tests at call sites explicit and prevent higher bits
+// from becoming accidental second meanings [03 §3.1].
+func HistoryEnabled(m Mode) bool { return m.HistoryEnabled() }
+func CurrentEnabled(m Mode) bool { return m.CurrentEnabled() }
+func TerrainRay(m Mode) bool     { return m.TerrainRay() }
+func FogCacheValid(m Mode) bool  { return m.FogCacheValid() }
+
+func (m Mode) HistoryEnabled() bool { return m&ModeHistoryEnabled != 0 }
+func (m Mode) CurrentEnabled() bool { return m&ModeCurrentEnabled != 0 }
+func (m Mode) TerrainRay() bool     { return m&ModeTerrainRay != 0 }
+func (m Mode) FogCacheValid() bool  { return m&ModeFogCacheValid != 0 }
+
+func (s *Service) HistoryEnabled() bool { return s != nil && s.mode.HistoryEnabled() }
+func (s *Service) CurrentEnabled() bool { return s != nil && s.mode.CurrentEnabled() }
+func (s *Service) TerrainRay() bool     { return s != nil && s.mode.TerrainRay() }
+func (s *Service) FogCacheValid() bool  { return s != nil && s.mode.FogCacheValid() }
 
 // cellBit returns the bit for a player [03 §3.1] C1 ten usable bits.
-func cellBit(p PlayerID) uint16 { return 1 << (p % 10) }
+func cellBit(p PlayerID) uint16 {
+	if !validPlayer(p) {
+		return 0
+	}
+	return 1 << p
+}
+
+func validPlayer(p PlayerID) bool { return p < 10 }
 
 // setWordBit sets the owner's bit if absent; idempotent, never decrements [03 §3.2] C4.
 // Returns true if the cell changed.
 func (s *Service) setWordBit(idx int, owner PlayerID) bool {
-	if idx < 0 || idx >= len(s.wordMask) {
+	if idx < 0 || idx >= len(s.wordMask) || !validPlayer(owner) {
 		return false
 	}
 	bit := cellBit(owner)
@@ -197,18 +238,22 @@ func (s *Service) decByteGrid(idx int, owner PlayerID) bool {
 // With history disabled word fills all-bits-set else zero; with current disabled byte grids fill 1 else zero.
 // Then all active footprints republish.
 func (s *Service) RebuildAll(observers []Observer) {
-	// Ownership note (PLAN_05 C16): at battle load retail runs this rebuild
-	// BEFORE the serialized mapping is read, and each reconstructed unit
-	// publishes synchronously before the loader returns — no empty-coverage
-	// first frame. The session/load path owns that ordering; it does not
-	// exist until phase 14 wires it, so callers today must not assume C16
-	// holds.
+	if s == nil {
+		return
+	}
+	// The session load path invokes this before reading serialized mapping and
+	// publishes reconstructed units synchronously, so no empty-coverage frame
+	// can escape to presentation [03 §3.3] C16.
 	s.rebuildFills()
+	// A rebuild replaces the stores, so no old record may throttle a
+	// republication or later retirement.
+	s.footprints = make(map[ObserverID]footprint, len(observers))
 	for _, ob := range observers {
 		s.Publish(ob.Owner, ob.CX, ob.CZ, ob.HeightByte, ob.Radius)
 	}
 	// Any rebuild dirty-invalidates the fog presentation cache; it rebuilds lazily when valid bit clears [03 §3.3] C13.
 	s.fog.valid = false
+	s.mode &^= ModeFogCacheValid
 }
 
 // Observer is the minimal footprint source for RebuildAll [PLAN_05].

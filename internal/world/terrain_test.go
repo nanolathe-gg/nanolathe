@@ -22,6 +22,7 @@ func synth(t *testing.T, cellW, cellH int32, attrs []formats.TNTAttribute, defs 
 		Plot:        ExpandPlot(attrs, int(cellW), int(cellH)),
 		FeatureDefs: defs,
 	}
+	ter.BuildLOSHeightWordsForTest()
 	ter.stampFeatureAnchors()
 	return ter
 }
@@ -142,7 +143,7 @@ func TestSurfaceMetalSeeding(t *testing.T) {
 }
 
 // TestLOSHeightAggregates locks the polarity of the LOS height word, which the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// builder settles [R-P0-18-B]: the table is seeded low=0x00 /
 // high=0xFF and updated with `low = max`, `high = min`, so the LOW byte
 // (admission) is the neighbourhood MAXIMUM and the HIGH byte (horizon advance)
 // its MINIMUM.
@@ -343,6 +344,9 @@ func TestLegacyTerrainLoads(t *testing.T) {
 	}
 	if ter.Version != VersionLegacy {
 		t.Fatalf("version = %v, want legacy", ter.Version)
+	}
+	if got := ter.LOSHeightBuildCount(); got != 1 {
+		t.Fatalf("LOS height build count = %d, want 1 immediately after load", got)
 	}
 	if ter.WindMin != 500 || ter.WindMax != 800 {
 		t.Fatalf("wind = %d/%d, want 500/800 (header values, no OTA)", ter.WindMin, ter.WindMax)

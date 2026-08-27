@@ -1,7 +1,6 @@
 package mission
 
 import (
-	"hash/fnv"
 	"strconv"
 	"strings"
 
@@ -296,16 +295,28 @@ func timeToTicks(secs float64) int32 {
 	return int32(secs * 30) // [04 §3.6] times scale by 30, trunc toward zero [I3]
 }
 
-// productID derives the order payload's product identity for `b`. Retail
-// stores a u16 catalog TYPE id resolved by binary search at the verb site
-// [04 §3.6]; the compiled catalog carries no numeric unit id yet.
-// TODO(question): plumb content's numeric unit identity and replace this
-// hash; until then it is a deterministic stand-in keyed on the canonical key.
-func productID(defKey string) uint32 {
+// productIdentity resolves an authored unit name to the product identity that
+// runtime consumers actually read: the canonical catalog key, and the catalog
+// definition index alongside it.
+//
+// This previously returned an FNV hash of the canonical key. Nothing consumes
+// such a value: construction resolves a build node by BuildDefKey first and
+// falls back to the catalog index in Param1, so an authored initial build
+// order carried an identity that matched neither and could be queued but never
+// resolved to a definition. Retail stores a catalog type id resolved at the
+// verb site [04 §3.6]; the canonical key is the stable spelling of that same
+// identity across catalog changes and save/load, so it is what the node
+// carries, with the index kept beside it for the index-keyed fallback.
+//
+// The index is zero when no catalog is bound (fixtures drive existence through
+// hooks instead); BuildDefKey still resolves in that case.
+func productIdentity(cat *content.Catalog, defKey string) (string, uint32) {
 	ck := content.CanonicalKey(defKey)
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(ck))
-	return h.Sum32()
+	if cat == nil {
+		return ck, 0
+	}
+	idx, _ := cat.UnitDefIndex(ck)
+	return ck, idx
 }
 
 func typeExists(ctx *interpCtx, name string) bool {
@@ -315,8 +326,8 @@ func typeExists(ctx *interpCtx, name string) bool {
 	if strings.TrimSpace(name) == "" {
 		return false
 	}
-	// Production path: the type exists when the catalog holds it [04 §3.6]
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Production path: the type exists when the catalog holds it [04 §3.6];
+	// retail resolves the authored name by binary search over the catalog.
 	if ctx != nil && ctx.catalog != nil {
 		_, ok := ctx.catalog.Unit(content.CanonicalKey(name))
 		return ok
@@ -481,9 +492,15 @@ func handleA(token string, ctx *interpCtx) {
 	if id == 0 {
 		return
 	}
-	pid := productID(name)
+	// TODO(question): AttackUType is registered in the order table but has no
+	// runtime consumer, so an authored attack-by-type order is admitted and
+	// never executed. What is unknown is the retail handler's target
+	// acquisition rule for a type-targeted attack; tracing the AttackUType
+	// verb site would settle it.
+	ck, idx := productIdentity(ctx.catalog, name)
 	node := orders.Node{
-		Param1: uint32(pid), // product type identity [04 §3.2]
+		BuildDefKey: ck,  // canonical product identity [04 §3.2][02 §5]
+		Param1:      idx, // catalog index fallback [04 §3.2]
 	}
 	q := orders.QueueForUnit(ctx.unit)
 	q.Push(id, node)
@@ -544,13 +561,14 @@ func handleB(token string, ctx *interpCtx) {
 	if id == 0 {
 		return
 	}
-	pid := productID(name)
+	ck, idx := productIdentity(ctx.catalog, name)
 	node := orders.Node{
-		Param1: uint32(pid),
-		Param2: uint32(n), // count n [04 §3.6]
-		GoalX:  floatToFixed(fx),
-		GoalZ:  floatToFixed(fy),
-		GoalY:  ctx.unit.Y,
+		BuildDefKey: ck,        // canonical product identity construction resolves first [02 §5]
+		Param1:      idx,       // catalog index fallback [04 §3.2]
+		Param2:      uint32(n), // count n [04 §3.6]
+		GoalX:       floatToFixed(fx),
+		GoalZ:       floatToFixed(fy),
+		GoalY:       ctx.unit.Y,
 	}
 	q := orders.QueueForUnit(ctx.unit)
 	q.Push(id, node)

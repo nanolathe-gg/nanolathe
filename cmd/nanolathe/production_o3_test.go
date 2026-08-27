@@ -69,7 +69,7 @@ func TestProductionInputARMEconomyBuildReplay(t *testing.T) {
 	// site scan finds no legal production site for armsolar (5x5 footprint) on
 	// retail Ashap Plateau. The earlier skip blamed an unestablished viewport
 	// transform; that reason was stale and did not match the observed failure.
-	t.Skip("RELEASE-GATE-DISABLED: O3 fails in preflight — no legal production site for armsolar (5x5) on Ashap Plateau; see disabledGates registry")
+	t.Skip("RELEASE-GATE-DISABLED: builder paths to the footprint centre instead of a perimeter candidate, so it stands inside its own 6x6 armlab site and the nanoframe is never allocated; see disabledGates registry")
 	root := o3RetailRoot(t)
 	a := runO3ProductionReplay(t, root)
 	b := runO3ProductionReplay(t, root)
@@ -363,7 +363,11 @@ func o3SnapshotScreenPos(t *testing.T, b *battleSession, handle pool.Handle) (in
 
 func o3Click(c *BattleController, x, y int32, elapsed float64) {
 	c.Step(BattleInputFrame{MouseX: x, MouseY: y, Buttons: BattleMouseButtons{Left: true}, Elapsed: elapsed}, nil)
-	c.Step(BattleInputFrame{MouseX: x, MouseY: y, Buttons: BattleMouseButtons{Left: false}}, nil)
+	// Placement commits on release, so the command is enqueued after the press
+	// frame's tick. The real loop keeps stepping frames afterwards and consumes
+	// it on the next tick; a release frame carrying no elapsed time left it
+	// pending, and an assertion made right after mouse-up saw no queue node.
+	c.Step(BattleInputFrame{MouseX: x, MouseY: y, Buttons: BattleMouseButtons{Left: false}, Elapsed: elapsed}, nil)
 }
 
 func o3SelectUnit(t *testing.T, b *battleSession, controller *BattleController, handle pool.Handle) {
@@ -547,37 +551,55 @@ func o3AdvanceUntil(s *session.Session, owner *units.Unit, key string, max int) 
 func o3FindProductionSite(t *testing.T, b *battleSession, def *content.UnitDef, mex bool) (int32, int32, bool) {
 	t.Helper()
 	fx, fz := footprintCells(def)
-	// Stable row-major terrain scan, with the loaded map and its feature/metal
-	// data as the only source of coordinates.
-	for z := int32(0); z < b.sess.World.CellH; z++ {
-		for x := int32(0); x < b.sess.World.CellW; x++ {
-			if mex {
-				metal := false
-				for dz := int32(0); dz < fz; dz++ {
-					for dx := int32(0); dx < fx; dx++ {
-						if c := b.sess.World.PlotAt(x+dx, z+dz); c != nil && c.Metal() != 0 {
-							metal = true
-						}
-					}
-				}
-				if !metal {
-					continue
-				}
-			}
-			wx, wz := world.PlacementCenter(x, z, fx, fz)
-			sx, sy := b.cam.WorldToScreen(wx, 0, wz)
-			sx -= camera.OriginX
-			sy -= camera.OriginY
-			if sx < 1 || sy < 1 || sx >= 639 || sy >= 447 {
+	// Scan viewport pixels, not cells. The earlier scan projected each cell
+	// centre with WorldToScreen at height 0 and then required the ghost to
+	// resolve back to that same cell. Cursor-to-ground reads the real terrain
+	// height (SC20), so on any map whose ground is not at height 0 the two
+	// disagree by the height shear -- on Ashap Plateau, ground height 245 put
+	// every resolved cell 8 rows further in Z, and not one of the 711 legal
+	// in-view sites ever round-tripped. Sweeping screen positions is what a
+	// player does with the mouse and needs no inverse projection at all, so a
+	// sheared map cannot desynchronise the scan from the engine [07 §9].
+	// Sweep outward from the middle of the view, and stay clear of the border:
+	// a site pinned to the extreme edge is not a position a player can click.
+	const margin = 32
+	for ring := int32(0); ring < 240; ring += 2 {
+		for sy := 224 - ring; sy <= 224+ring; sy += 2 {
+			if sy < margin || sy >= 448-margin {
 				continue
 			}
-			b.updatePlacement(sx, sy)
-			if b.buildOK && b.buildCellX == x && b.buildCellZ == z {
+			for sx := 320 - ring; sx <= 320+ring; sx += 2 {
+				if sx < margin || sx >= 640-margin {
+					continue
+				}
+				if ring > 0 && sx != 320-ring && sx != 320+ring && sy != 224-ring && sy != 224+ring {
+					continue
+				}
+				b.updatePlacement(sx, sy)
+				if !b.buildOK {
+					continue
+				}
+				if mex && !o3FootprintHasMetal(b, b.buildCellX, b.buildCellZ, fx, fz) {
+					continue
+				}
 				return sx, sy, true
 			}
 		}
 	}
 	return 0, 0, false
+}
+
+// o3FootprintHasMetal reports whether the footprint anchored at the given cell
+// covers any loaded metal, which is what an extractor site requires.
+func o3FootprintHasMetal(b *battleSession, cx, cz, fx, fz int32) bool {
+	for dz := int32(0); dz < fz; dz++ {
+		for dx := int32(0); dx < fx; dx++ {
+			if c := b.sess.World.PlotAt(cx+dx, cz+dz); c != nil && c.Metal() != 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func hasBuildNode(u *units.Unit, key string) bool {

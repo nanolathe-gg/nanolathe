@@ -32,7 +32,7 @@ type SensorUnit struct {
 	X, Z   numeric.Fixed // 16.16 world position
 	Y      numeric.Fixed
 	Alive  bool
-	Hidden bool // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Hidden bool // hidden/cloaked instance bit [03 §3.2]
 
 	// Authored sensor distances [02 "Unit record"] P0-11. Zero means absent.
 	RadarDistance    int32
@@ -45,16 +45,26 @@ type SensorUnit struct {
 	DecloakDeadline *uint32
 }
 
+// SensorInput is an immutable per-tick contact snapshot for presentation.
+// SensorInputs returns copies so the renderer cannot mutate authoritative
+// sensor state [03 §3.4].
+type SensorInput struct {
+	Owner   PlayerID
+	X, Y, Z numeric.Fixed
+	Status  uint32
+	Hidden  bool
+}
+
 // SensorSurfaces receives the rasterized circles [03 §3.4] C11 P0-11.
 //
 // Radar, sonar and jammers NEVER author the word mask: they rasterize onto
 // separate minimap surfaces (RADAR FINAL etc at 0x142DB/E3/EB) that are wiped each tick while the LOS mask persists [03 §3.4] P0-11.
 // The three callback tables are distinct; jammer circles are drawn onto same FINAL with last-writer-wins presentation-only, never OR into word mask.
 type SensorSurfaces interface {
-	Wipe()                       // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Sensor(u, v, radius int32)   // combined radar/sonar outer max(radar,sonar) single circle color 0xDD5 P0-11
-	RadarJam(u, v, radius int32) // separate table 0x20A color 0xDD7 P0-11
-	SonarJam(u, v, radius int32) // separate table 0x20C color 0xDD7 P0-11
+	Wipe()                       // wiped each tick [03 §3.4]
+	Sensor(u, v, radius int32)   // combined radar/sonar outer circle [03 §3.4]
+	RadarJam(u, v, radius int32) // separate radar-jam circle [03 §3.4]
+	SonarJam(u, v, radius int32) // separate sonar-jam circle [03 §3.4]
 }
 
 // SetSurfaces binds the sensor backing surfaces. Nil discards them.
@@ -62,6 +72,16 @@ func (s *Service) SetSurfaces(sf SensorSurfaces) {
 	if s != nil {
 		s.surfaces = sf
 	}
+}
+
+// SensorInputs returns the last completed sensor pass's contact inputs.
+func (s *Service) SensorInputs() []SensorInput {
+	if s == nil || len(s.sensorInputs) == 0 {
+		return nil
+	}
+	out := make([]SensorInput, len(s.sensorInputs))
+	copy(out, s.sensorInputs)
+	return out
 }
 
 // surfaceProject maps a world coordinate onto a sensor surface cell: one cell
@@ -74,10 +94,10 @@ func surfaceProject(v numeric.Fixed) int32 {
 //
 // It runs ONLY when more than one player is active (activePlayers>1 via CMP 1 JBE skip) [03 §3.4] P0-11.
 // Passes in order P0-11:
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//  1. ownership/status: clear expired decloak state, then set friendly bits;
+//  2. sensor circles: each active unit with radar or sonar emits one outer circle, with separate jam circles;
+//  3. minimum-cloak proximity: qualifying cloaked units search by squared planar distance;
+//  4. final visibility: use the shared four-point predicate and set SeenBit.
 //
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // Ally vision never OR'd: writer ORs only own bit, reader tests only local bit [03 §3.4] P0-11.
@@ -85,6 +105,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 	if s == nil || playerCount <= 1 {
 		return // more than one player required [03 §3.4] P0-11 activePlayers>1 gate
 	}
+	s.sensorInputs = s.sensorInputs[:0]
 	// 1. Ownership and status + decloak timeout.
 	for i := range units {
 		u := &units[i]
@@ -107,7 +128,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 		}
 	}
 	// 2. Sensor and jam circles onto the backing surfaces [03 §3.4] C11 P0-11.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Surfaces are wiped each tick while the LOS mask persists [03 §3.4].
 	if s.surfaces != nil {
 		s.surfaces.Wipe()
 		for i := range units {
@@ -133,7 +154,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 	} else {
 		// Even with nil surfaces, we still conceptually wipe; nothing to do.
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// 3. Minimum-cloak proximity [03 §3.2] C10 [03 §3.4] C12.
 	for i := range units {
 		src := &units[i]
 		if !src.Alive || !src.Hidden || src.MinCloakDistance <= 0 || src.Status == nil {
@@ -175,9 +196,9 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 		}
 		_ = decloaked
 	}
-	// 4. Final visibility pass via 4-point line [03 §3.2] P0-11 [03 §3.4] C12 P0-11.
-	// Sets SeenBit 0x100 when 4-point hull admits via mode-selected source.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// 4. Final visibility pass uses the standard single-point half-height
+	// projection through the mode-selected source [03 §3.4]. It sets SeenBit
+	// for an admitted point after the hidden/decloak gates above.
 	for i := range units {
 		u := &units[i]
 		if u.Status == nil || !u.Alive {
@@ -189,29 +210,16 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 		if u.Hidden && (*u.Status&DecloakBit) == 0 {
 			continue // cloaked and not within 90-tick decloak window → not visible P0-11
 		}
-		// 4-point hull test via IsVisible-equivalent 4-point line: center→east→north→west mutating triple [03 §3.2] P0-11
-		// Use s.sample as single point for each hull sample? IsVisible does 4-point hull with extents.
-		// Here SensorUnit has no extents; use zero extents which still exercises 4-point line (same point 4 times).
-		// For proper hull, we need extents from def; we use zero as placeholder, which is correct for point units.
-		// Build Target for IsVisible with status and hidden handling already done.
-		t := Target{
-			Owner:  u.Owner,
-			X:      u.X,
-			Y:      u.Y,
-			Z:      u.Z,
-			Hidden: false, // already checked decloak above, so don't re-apply hidden early-out
-			Status: *u.Status,
-		}
-		// Use IsVisible's 4-point line but with zero hull extents; it will still check owner bypass, underwater exempt, then 4 samples.
-		// However IsVisible will re-check Hidden which we cleared; set Hidden false to avoid double early-out.
-		// Instead we can directly test sample with hull zero: need to call s.sample for hull 4 points? For zero extents, single sample suffices.
-		// Use s.IsVisible with Hidden false and status including Decloak handling already.
-		// To keep extents zero, we call s.IsVisible with Target that has zero extents (we haven't set extents, they default zero).
-		if s.IsVisible(s.local, t) {
+		// The sensor final pass is the single-point form. It deliberately does
+		// not apply the owner bypass or gameplay hull/sea checks [03 §3.4].
+		if s.VisiblePoint(s.local, u.X, u.Y, u.Z) {
 			*u.Status |= SeenBit
-		} else {
-			// Fallback single-point sample for zero-extent units when IsVisible fails due to extents zero? IsVisible does 4-point with zero extents = 4 identical samples, so same as single.
-			// Keep as is.
+		}
+	}
+	for i := range units {
+		u := &units[i]
+		if u.Alive && u.Status != nil {
+			s.sensorInputs = append(s.sensorInputs, SensorInput{Owner: u.Owner, X: u.X, Y: u.Y, Z: u.Z, Status: *u.Status, Hidden: u.Hidden})
 		}
 	}
 }

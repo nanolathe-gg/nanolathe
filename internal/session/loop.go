@@ -1181,22 +1181,10 @@ func (s *Session) authoritativeTick(tick uint32) {
 			// slot-end death, cleanup, corpse, occupancy, target invalidation (FinalizeDeath + vis unpublish + Feature.PlaceCorpse) [01 §4.4][04 §2.4]
 			if s.Units.NeedsDeathFinalization(h) {
 				res := s.Units.FinalizeDeath(h, tick)
-				// Occupancy clear for movement grid [04 §8.2] C22 immediate reuse
-				if s.Movement != nil && s.Movement.Grid != nil {
-					if coll, ok := s.Movement.Collisions[h]; ok && coll != nil {
-						s.Movement.Grid.Clear(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, int(h))
-						delete(s.Movement.Collisions, h)
-					}
-					delete(s.Movement.Steers, h)
-					delete(s.Movement.Flights, h)
-					delete(s.Movement.Routes, h)
-					// profiles retained for determinism? Clear to allow re-resolve on reuse
-					// Keep but delete if present to avoid stale on reuse
-					delete(s.Movement.Routes, h)
-				}
+				// Every per-handle movement contribution, including the grid
+				// stamp, goes with the slot [04 §8.2] C22.
 				if s.Movement != nil {
-					s.Movement.ClearPathFailure(h)
-					s.Movement.DeactivateMove(h)
+					s.Movement.ForgetUnit(h)
 				}
 				// Path scheduler cancel for freed handle
 				if s.Movement != nil && s.Movement.Scheduler != nil {
@@ -1491,7 +1479,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 			}
 			if latched && s.Latch.IsEnding() && s.State == StateBattle {
 				win := s.Latch.IsWin()
-				s.Progress.ApplyCampaignResult(0, win)
+				s.Progress.ApplyCampaignResult(s.CampaignSlot, win)
 				// RS-05: campaign latch also becomes terminal result for snapshot and callback [08][P1-01]
 				shouldFire := false
 				s.resultMu.Lock()
@@ -1575,19 +1563,8 @@ func (s *Session) authoritativeTick(tick uint32) {
 					continue
 				}
 				h := u.Handle
-				if coll, ok := s.Movement.Collisions[h]; ok && coll != nil {
-					if s.Movement.Grid != nil {
-						s.Movement.Grid.Clear(coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ, int(h))
-					}
-					delete(s.Movement.Collisions, h)
-				}
-				delete(s.Movement.Steers, h)
-				delete(s.Movement.Flights, h)
-				delete(s.Movement.Routes, h)
-				s.Movement.DeactivateMove(h)
-				if s.Movement.Scheduler != nil {
-					s.Movement.Scheduler.Cancel(h)
-				} else if s.Path != nil {
+				s.Movement.ForgetUnit(h)
+				if s.Movement.Scheduler == nil && s.Path != nil {
 					s.Path.Cancel(h)
 				}
 				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceDeathFinalize, Handle: h, Value: int32(u.DeathCause)})
@@ -1601,7 +1578,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 		if s.Latch.Countdown >= 0 {
 			if latched := s.Latch.TickNoHuman(); latched && s.Latch.IsEnding() && s.State == StateBattle {
 				win := s.Latch.IsWin()
-				s.Progress.ApplyCampaignResult(0, win)
+				s.Progress.ApplyCampaignResult(s.CampaignSlot, win)
 				_ = s.TransitionTo(StatePostBattle)
 			}
 			if s.Econ != nil {

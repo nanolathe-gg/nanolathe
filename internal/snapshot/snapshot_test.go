@@ -43,6 +43,29 @@ func TestPublishCopiesInput(t *testing.T) {
 	}
 }
 
+func TestPublishPreservesStablePresentationIdentities(t *testing.T) {
+	var b Buffer
+	in := &Frame{
+		Tick:        7,
+		Units:       []UnitView{{InstanceID: 101}},
+		Projectiles: []ProjectileView{{PresentationID: 202}},
+		Features:    []FeatureView{{InstanceID: 303}},
+		Effects:     []EffectView{{PresentationID: 404, EventSeq: 405}},
+	}
+	b.Publish(in)
+	in.Units[0].InstanceID = 0
+	in.Projectiles[0].PresentationID = 0
+	in.Features[0].InstanceID = 0
+	in.Effects[0].PresentationID = 0
+	_, got, ok := b.Read()
+	if !ok {
+		t.Fatal("identity frame was not published")
+	}
+	if got.Units[0].InstanceID != 101 || got.Projectiles[0].PresentationID != 202 || got.Features[0].InstanceID != 303 || got.Effects[0].PresentationID != 404 || got.Effects[0].EventSeq != 405 {
+		t.Fatalf("stable identities changed after publication: %#v", got)
+	}
+}
+
 func TestPublishPreservesPausedClockState(t *testing.T) {
 	var b Buffer
 	b.Publish(&Frame{Tick: 1, Paused: true})

@@ -884,3 +884,43 @@ func TestMissionOFlagBits(t *testing.T) {
 		}
 	}
 }
+
+// TestInitialBuildCarriesResolvableProductIdentity locks the identity an
+// authored initial build order hands to construction. The parser used to store
+// an FNV hash of the canonical key in Param1, which nothing resolves:
+// construction looks up BuildDefKey first and falls back to the catalog index,
+// so the order was queueable but could never name a definition [02 §5]
+// [04 §3.2]. Both the build verb and attack-by-type must carry the canonical
+// key.
+func TestInitialBuildCarriesResolvableProductIdentity(t *testing.T) {
+	hooks := &Hooks{
+		UnitTypeExists: func(string) bool { return true },
+		IsBuildingType: func(name string) bool { return strings.EqualFold(name, "ARMFAB") },
+	}
+
+	w := units.New(5, nil)
+	h, _ := w.Create(testDef("ARMCOM"), 0, 0, 0, 0)
+	u := w.Unit(h)
+	u.Flags |= 1 << 5
+	m := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "b ARMFAB 2 500 600"}}}
+	RunInitialMissionsWithHooks(m, w, nil, hooks)
+	n := findNode(u, "BuildingBuild")
+	if n == nil {
+		t.Fatalf("b ARMFAB queued nothing: %v", primaryNodes(u))
+	}
+	if want := content.CanonicalKey("ARMFAB"); n.BuildDefKey != want {
+		t.Fatalf("build node product identity: got BuildDefKey %q want %q", n.BuildDefKey, want)
+	}
+
+	w2 := units.New(5, nil)
+	h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
+	u2 := w2.Unit(h2)
+	u2.Flags |= 1 << 5
+	m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "a ARMFAB"}}}
+	RunInitialMissionsWithHooks(m2, w2, nil, hooks)
+	if a := findNode(u2, "AttackUType"); a == nil {
+		t.Fatalf("a ARMFAB queued nothing: %v", primaryNodes(u2))
+	} else if want := content.CanonicalKey("ARMFAB"); a.BuildDefKey != want {
+		t.Fatalf("attack-by-type product identity: got BuildDefKey %q want %q", a.BuildDefKey, want)
+	}
+}

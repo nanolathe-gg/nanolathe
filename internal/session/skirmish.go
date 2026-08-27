@@ -58,6 +58,19 @@ const (
 	SkirmishControllerObserver = 3 // observer [GAP T14] (distinct from legacy 2 used as computer)
 )
 
+// IsHuman, IsObserver and IsComputer are the exact controller predicates.
+//
+// Composition used to ask "is the controller nonzero?" to mean "is this a
+// computer player". Observer is a distinct nonzero controller, so an observer
+// slot was given an AI manager, units, economy actions and a share of result
+// ownership. Computer stays "neither human nor observer" so the legacy
+// controller value 2 keeps being treated as a computer [GAP T14].
+func (p SkirmishPlayer) IsHuman() bool { return p.Controller == SkirmishControllerHuman }
+
+func (p SkirmishPlayer) IsObserver() bool { return p.Controller == SkirmishControllerObserver }
+
+func (p SkirmishPlayer) IsComputer() bool { return !p.IsHuman() && !p.IsObserver() }
+
 // SkirmishPlayer is per-slot skirmish state per [GAP T14].
 // Absent per-slot values install defaults: controller 0, ally group 5,
 // metal and energy 1000, color the slot index, side slot&1, nicknames
@@ -418,14 +431,14 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		if i == localOwner {
 			continue
 		}
-		if cfg.Players[i].Controller != SkirmishControllerHuman && cfg.Players[i].AllyGroup != cfg.Players[localOwner].AllyGroup {
+		if cfg.Players[i].IsComputer() && cfg.Players[i].AllyGroup != cfg.Players[localOwner].AllyGroup {
 			enemyOwner = i
 			break
 		}
 	}
 	if enemyOwner == 0 && cfg.NumPlayers > 1 {
 		for i := 0; i < cfg.NumPlayers && i < 10; i++ {
-			if i != localOwner && cfg.Players[i].Controller != SkirmishControllerHuman {
+			if i != localOwner && cfg.Players[i].IsComputer() {
 				enemyOwner = i
 				break
 			}
@@ -540,7 +553,7 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	// AI profile load failure is explicit startup error [08].
 	hasComputer := false
 	for i := 0; i < nPlayers && i < 10; i++ {
-		if cfg.Players[i].Controller != 0 {
+		if cfg.Players[i].IsComputer() {
 			hasComputer = true
 			break
 		}
@@ -564,7 +577,7 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		if i >= 10 {
 			break
 		}
-		if p.Controller == 0 {
+		if !p.IsComputer() {
 			continue
 		}
 		mgr := &ai.Manager{Player: uint8(i), Profile: sharedProf}
@@ -725,14 +738,14 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		if i == localOwner {
 			continue
 		}
-		if cfg.Players[i].Controller != SkirmishControllerHuman && cfg.Players[i].AllyGroup != cfg.Players[localOwner].AllyGroup {
+		if cfg.Players[i].IsComputer() && cfg.Players[i].AllyGroup != cfg.Players[localOwner].AllyGroup {
 			enemyOwner = i
 			break
 		}
 	}
 	if enemyOwner == 0 && cfg.NumPlayers > 1 {
 		for i := 0; i < cfg.NumPlayers && i < 10; i++ {
-			if i != localOwner && cfg.Players[i].Controller != SkirmishControllerHuman {
+			if i != localOwner && cfg.Players[i].IsComputer() {
 				enemyOwner = i
 				break
 			}

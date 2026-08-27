@@ -57,6 +57,10 @@ type PieceView struct {
 // sim at tick end and consumed by the renderer. Fields are a stable snapshot
 // of authoritative state; mutation after Publish does not affect the buffer.
 type UnitView struct {
+	// InstanceID is a stable presentation identity assigned by the publisher;
+	// it is not a pointer or a pool generation and remains valid for the frame
+	// pair used by interpolation [03 §1].
+	InstanceID           uint64
 	Slot                 pool.Handle
 	DefID                uint16
 	Owner                uint8
@@ -74,6 +78,10 @@ type UnitView struct {
 
 // ProjectileView is the projectile presentation view [06 §5.1] P0-I04.
 type ProjectileView struct {
+	// PresentationID is the stable record/event identity used to correlate
+	// animation state without retaining an authoritative projectile pointer
+	// [03 §1], [06 §5.1].
+	PresentationID            uint64
 	Handle                    pool.Handle
 	X, Y, Z                   numeric.Fixed
 	WeaponID                  int32
@@ -105,6 +113,7 @@ type ProjectileView struct {
 // Published by the features phase and consumed by the renderer. Fields are a
 // stable snapshot of authoritative state; mutation after Publish does not affect the buffer.
 type FeatureView struct {
+	InstanceID   uint64
 	CX, CZ       int32 // anchor cell
 	X, Y, Z      numeric.Fixed
 	DefName      string // canonical key or name
@@ -123,43 +132,49 @@ type FeatureView struct {
 	SeqName     string // idle sequence name, e.g. "leaf1" [02 "Feature record"]
 	SeqNameShad string // shadow sequence [02 "Feature record"]
 	Animating   bool   // animating flag drives cursor stepping [05 "Feature catalog and placement"]
-	AnimTrans   bool   // translucent normal blit (0x0004) [05 "Feature catalog and placement"]
-	ShadTrans   bool   // translucent shadow blit (0x0008) [05 "Feature catalog and placement"]
-	Blocking    bool   // blocking=1 => impassable footprint [02 "Feature record"] [04 §6.2]
-	Reclaimable bool   // reclaimable gate [02 "Feature record"]
-	Height      int32  // feature height in pixels, gates fog/memory [03 §5.1] tall >=10 [05]
-	Geothermal  bool   // geothermal=1 => YardMap 'G' acceptance [05 "Geothermal requirement"]
+	// AnimationStartTick is stable presentation timing data copied from the
+	// publisher. Its precise cursor-origin relationship is unresolved.
+	// TODO(question): establish whether this value is an authored start tick or
+	// a publisher timing anchor before using it to advance a cursor [03 §2.4.1].
+	AnimationStartTick uint32
+	AnimTrans          bool  // translucent normal blit (0x0004) [05 "Feature catalog and placement"]
+	ShadTrans          bool  // translucent shadow blit (0x0008) [05 "Feature catalog and placement"]
+	Blocking           bool  // blocking=1 => impassable footprint [02 "Feature record"] [04 §6.2]
+	Reclaimable        bool  // reclaimable gate [02 "Feature record"]
+	Height             int32 // feature height in pixels, gates fog/memory [03 §5.1] tall >=10 [05]
+	Geothermal         bool  // geothermal=1 => YardMap 'G' acceptance [05 "Geothermal requirement"]
 }
 
 // EffectView is the presentation view of one fixed effect / strip object [03 §1] C5.
 // Published from the fixed effect pool or strip objects and consumed by the renderer.
 // Fields are a stable snapshot of authoritative state; mutation after Publish does not affect the buffer.
 type EffectView struct {
-	ID         uint32 // stable presentation identity within a frame
-	EventSeq   uint64 // producer sequence that admitted this effect
-	Source     pool.Handle
-	Target     pool.Handle
-	EffectID   uint32 // authored selector/semantic ID when established [R-P0-06]
-	Piece      int32  // authored COB piece when the producer supplies one [R-P0-06]
-	SFXType    int32
-	SFXClass   SFXClass
-	Mode       uint8 // build/assist/reclaim mode [R-P0-06]
-	StartTick  uint32
-	ExpiryTick uint32        // explicit lifetime deadline; zero means unknown
-	Lifetime   int32         // authored lifetime when known; no guessed duration
-	X, Y, Z    numeric.Fixed // position [03 §1]
-	TargetX    numeric.Fixed // endpoint supplied by an admitted producer [R-P0-06]
-	TargetY    numeric.Fixed
-	TargetZ    numeric.Fixed
-	VX, VY, VZ numeric.Fixed // velocity if any
-	Kind       string        // palette/effect discriminator if known
-	HasModel   bool
-	SeqA       int32  // current frame index for anim A if active
-	SeqB       int32  // current frame index for anim B if active
-	Graphic    string // authored GAF/model key when known
-	PaletteRow int16  // LHT/SHD/palette selector when established
-	Light      bool   // apply established LHT presentation transform
-	Shake      int32  // authored shake magnitude; zero when not supplied
+	PresentationID uint64 // stable identity across the immutable event hand-off [03 §1]
+	ID             uint32 // stable presentation identity within a frame
+	EventSeq       uint64 // producer sequence that admitted this effect
+	Source         pool.Handle
+	Target         pool.Handle
+	EffectID       uint32 // authored selector/semantic ID when established [R-P0-06]
+	Piece          int32  // authored COB piece when the producer supplies one [R-P0-06]
+	SFXType        int32
+	SFXClass       SFXClass
+	Mode           uint8 // build/assist/reclaim mode [R-P0-06]
+	StartTick      uint32
+	ExpiryTick     uint32        // explicit lifetime deadline; zero means unknown
+	Lifetime       int32         // authored lifetime when known; no guessed duration
+	X, Y, Z        numeric.Fixed // position [03 §1]
+	TargetX        numeric.Fixed // endpoint supplied by an admitted producer [R-P0-06]
+	TargetY        numeric.Fixed
+	TargetZ        numeric.Fixed
+	VX, VY, VZ     numeric.Fixed // velocity if any
+	Kind           string        // palette/effect discriminator if known
+	HasModel       bool
+	SeqA           int32  // current frame index for anim A if active
+	SeqB           int32  // current frame index for anim B if active
+	Graphic        string // authored GAF/model key when known
+	PaletteRow     int16  // LHT/SHD/palette selector when established
+	Light          bool   // apply established LHT presentation transform
+	Shake          int32  // authored shake magnitude; zero when not supplied
 }
 
 // OrderView is the presentation view of one unit order head [04 §3][04 §7.3].
@@ -472,16 +487,14 @@ func (b *Buffer) SetResultView(v ResultView) {
 		return
 	}
 	b.mu.Lock()
-	b.result = v
-	b.mu.Unlock()
+	b.result = cloneResult(v)
 	// Also patch the current frame in place so a result that becomes visible
 	// mid-tick (after the publish of that tick) is still observable without
 	// waiting for the next tick's Publish.
-	b.mu.Lock()
 	if b.cur != nil {
 		// Copy-on-write patch: clone cur, mutate, swap.
 		patched := *b.cur
-		patched.Result = v
+		patched.Result = cloneResult(v)
 		// Deep-copy slices already owned by cur are immutable, so sharing is safe
 		// for this patch; we only mutate Result.
 		b.cur = &patched
@@ -501,9 +514,9 @@ func (b *Buffer) GetResultView() ResultView {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if b.cur != nil {
-		return b.cur.Result
+		return cloneResult(b.cur.Result)
 	}
-	return b.result
+	return cloneResult(b.result)
 }
 
 // Publish stores f as the Current frame and shifts the previous Current to
@@ -518,13 +531,10 @@ func (b *Buffer) Publish(f *Frame) {
 		return
 	}
 	b.mu.RLock()
-	rv := b.result
+	rv := cloneResult(b.result)
 	b.mu.RUnlock()
 	// Ensure the published frame carries the committed result view [08][P1-01].
-	if f.Result.Ended == false && rv.Ended {
-		f.Result = rv
-	} else if rv.Ended && f.Result.Ended == false {
-		// Prefer buffer's committed result when frame hasn't yet been patched.
+	if !f.Result.Ended && rv.Ended {
 		f.Result = rv
 	}
 	// If frame already has Result (e.g., test directly sets), keep it.
@@ -594,7 +604,7 @@ func cloneFrame(f *Frame) Frame {
 	if f == nil {
 		return Frame{}
 	}
-	r := f.Result
+	r := cloneResult(f.Result)
 	if len(r.Winners) > 0 {
 		cp := make([]int, len(r.Winners))
 		copy(cp, r.Winners)
@@ -666,6 +676,19 @@ func cloneFrame(f *Frame) Frame {
 		copy(nf.Fog.Ch1, f.Fog.Ch1)
 	}
 	return nf
+}
+
+func cloneResult(v ResultView) ResultView {
+	if len(v.Winners) > 0 {
+		v.Winners = append([]int(nil), v.Winners...)
+	}
+	if len(v.Losers) > 0 {
+		v.Losers = append([]int(nil), v.Losers...)
+	}
+	if len(v.Scores) > 0 {
+		v.Scores = append([]ResultScore(nil), v.Scores...)
+	}
+	return v
 }
 
 // cloneBounded copies a value slice in producer order and truncates only at a

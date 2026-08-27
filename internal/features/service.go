@@ -420,10 +420,8 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 			s.Terrain.FeatureDefs = []*content.FeatureDef{def}
 		}
 	}
-	// Plot grid WH*0xD already allocated; footprint clipping ensures no overflow [P1-15].
-	s.Terrain.Plot[idx].SetFeature(featIdx)
-	s.Terrain.Plot[idx].SetFlagByte(0)
-	// Create instance.
+	// Normalize zero/negative extents to the service's established 1x1
+	// placement behavior before invoking the shared terrain writer.
 	footX := def.FootprintX
 	footZ := def.FootprintZ
 	if footX <= 0 {
@@ -432,6 +430,14 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 	if footZ <= 0 {
 		footZ = 1
 	}
+	// Plot grid WH*0xD already allocated. The terrain stamper owns all feature
+	// words and signed fringe deltas; placement retains silent failure when the
+	// validated rectangle cannot be stamped [03 §5.1.2].
+	if err := s.Terrain.StampFeatureRect(int32(cx), int32(cz), featIdx, footX, footZ); err != nil {
+		return nil
+	}
+	s.Terrain.Plot[idx].SetFlagByte(0)
+	// Create instance.
 	inst := &Instance{
 		Def:        def,
 		Terrain:    s.Terrain,
@@ -449,8 +455,7 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 	inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
 	inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
 	s.instances[idx] = inst
-	// Stamp fringe cells with sentinel 0xFFFE and signed offsets to anchor
-	// [SPEC_CONFLICTS SC6] signed-offset reading [02 "Terrain file"].
+	// Service-owned flags remain separate from the shared feature/delta writer.
 	for dz := 0; dz < int(footZ); dz++ {
 		for dx := 0; dx < int(footX); dx++ {
 			if dx == 0 && dz == 0 {
@@ -462,9 +467,9 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 				continue
 			}
 			fIdx := pz*w + px
-			s.Terrain.Plot[fIdx].SetFeature(world.PlotFeatureFringe)
-			s.Terrain.Plot[fIdx].SetAnchorSigned(int8(cx-px), int8(cz-pz))
-			s.Terrain.Plot[fIdx].SetFlagByte(0)
+			if s.Terrain.Plot[fIdx].IsFringe() {
+				s.Terrain.Plot[fIdx].SetFlagByte(0)
+			}
 		}
 	}
 	return inst

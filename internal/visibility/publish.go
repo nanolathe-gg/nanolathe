@@ -6,41 +6,55 @@ package visibility
 // Mode bit 2 selects the raster shape only; both paths write the same word mask
 // and the same per-player byte refcount [C2].
 func (s *Service) Publish(owner PlayerID, cx, cz int32, heightByte uint8, radius int32) {
-	if s == nil || s.wordMask == nil || s.W == 0 || s.H == 0 {
+	if s == nil || !validPlayer(owner) || s.wordMask == nil || s.W == 0 || s.H == 0 {
 		return
 	}
+	changed := false
+	visit := func(idx int) {
+		// Disabled stores are prefilled by rebuild and are not publication
+		// targets. This also makes the dirty result describe the selected mode.
+		if s.mode.HistoryEnabled() {
+			changed = s.setWordBit(idx, owner) || changed
+		}
+		if s.mode.CurrentEnabled() {
+			changed = s.incByteGrid(idx, owner) || changed
+		}
+	}
 	if s.mode&ModeTerrainRay != 0 {
-		s.walkTerrainRay(cx, cz, heightByte, radius, func(idx int) {
-			s.setWordBit(idx, owner)
-			s.incByteGrid(idx, owner)
-		})
+		s.walkTerrainRay(cx, cz, heightByte, radius, visit)
 	} else {
-		s.walkSpriteMask(cx, cz, radius, func(idx int) {
-			s.setWordBit(idx, owner)
-			s.incByteGrid(idx, owner)
-		})
+		s.walkSpriteMask(cx, cz, radius, visit)
 	}
 	// Only a LOCAL player's cell change clears the fog-cache-valid bit and wakes
 	// the composer; remote players' changes dirty nothing [03 §3.2] C15.
-	if owner == s.local {
-		s.fog.valid = false
+	if owner == s.local && changed {
+		s.fog.Invalidate()
+		s.mode &^= ModeFogCacheValid
 	}
 }
 
 // Unpublish removes an observer's contribution from the byte refcount. The word
 // mask never decrements — it is cleared only by a full rebuild [03 §3.2] C4.
-func (s *Service) Unpublish(owner PlayerID, cx, cz int32, heightByte uint8, radius int32) {
-	if s == nil || s.byteGrids[owner] == nil || s.W == 0 || s.H == 0 {
-		return
+func (s *Service) Unpublish(owner PlayerID, cx, cz int32, heightByte uint8, radius int32) bool {
+	if s == nil || !validPlayer(owner) || s.wordMask == nil || s.W == 0 || s.H == 0 {
+		return false
+	}
+	changed := false
+	visit := func(idx int) {
+		if s.mode.CurrentEnabled() {
+			changed = s.decByteGrid(idx, owner) || changed
+		}
 	}
 	if s.mode&ModeTerrainRay != 0 {
-		s.walkTerrainRay(cx, cz, heightByte, radius, func(idx int) { s.decByteGrid(idx, owner) })
+		s.walkTerrainRay(cx, cz, heightByte, radius, visit)
 	} else {
-		s.walkSpriteMask(cx, cz, radius, func(idx int) { s.decByteGrid(idx, owner) })
+		s.walkSpriteMask(cx, cz, radius, visit)
 	}
-	if owner == s.local {
-		s.fog.valid = false
+	if owner == s.local && changed {
+		s.fog.Invalidate()
+		s.mode &^= ModeFogCacheValid
 	}
+	return changed
 }
 
 // spriteShapeIndex quantizes a sight radius to a shape index [03 §3.2] C2 [P0-18].
@@ -152,7 +166,8 @@ func (s *Service) walkTerrainRay(cx, cz int32, heightByte uint8, radius int32, v
 	if len(spokes) == 0 {
 		return
 	}
-	// Origin admitted unconditionally [C5].
+	// Origin admitted unconditionally when the selected authored table exists
+	// [C5]. A missing table is an absent asset, not a synthetic one.
 	if uint32(cx) < uint32(s.W) && uint32(cz) < uint32(s.H) {
 		visit(int(cz*s.W + cx))
 	}
@@ -201,7 +216,7 @@ func (s *Service) walkTerrainRay(cx, cz int32, heightByte uint8, radius int32, v
 // Publish and Unpublish remain the unconditional primitives underneath; this is
 // the state machine that decides whether to call them.
 func (s *Service) Refresh(id ObserverID, ob Observer) {
-	if s == nil || s.wordMask == nil {
+	if s == nil || !validPlayer(ob.Owner) || s.wordMask == nil {
 		return
 	}
 	if s.footprints == nil {
@@ -215,7 +230,7 @@ func (s *Service) Refresh(id ObserverID, ob Observer) {
 
 	old, had := s.footprints[id]
 	if had && old.live {
-		moved := old.cx != ob.CX || old.cz != ob.CZ
+		moved := old.cx != ob.CX || old.cz != ob.CZ || old.owner != ob.Owner
 		var changed bool
 		if ray {
 			d := int32(ob.HeightByte) - int32(old.heightByte)
@@ -232,9 +247,7 @@ func (s *Service) Refresh(id ObserverID, ob Observer) {
 		// Remove the old current-coverage footprint, gated exactly as [C6]
 		// states: only when current coverage is enabled and the stored height
 		// byte was nonzero.
-		if s.mode&ModeCurrentEnabled != 0 && old.heightByte != 0 {
-			s.Unpublish(old.owner, old.cx, old.cz, old.heightByte, old.radius)
-		}
+		s.removeFootprint(old)
 	}
 
 	next := footprint{
@@ -253,6 +266,30 @@ func (s *Service) Refresh(id ObserverID, ob Observer) {
 	next.live = true
 	s.footprints[id] = next
 	s.Publish(ob.Owner, ob.CX, ob.CZ, ob.HeightByte, ob.Radius)
+}
+
+// RetireObserver removes the stored current-coverage footprint, rather than
+// reconstructing one from a unit that may already have moved or changed owner.
+// It returns whether local presentation was dirtied [03 §3.2].
+func (s *Service) RetireObserver(id ObserverID) bool {
+	if s == nil || s.footprints == nil {
+		return false
+	}
+	old, ok := s.footprints[id]
+	if !ok {
+		return false
+	}
+	dirty := s.removeFootprint(old)
+	delete(s.footprints, id)
+	return dirty
+}
+
+func (s *Service) removeFootprint(old footprint) bool {
+	if s == nil || !old.live || !s.mode.CurrentEnabled() || old.heightByte == 0 {
+		return false
+	}
+	changed := s.Unpublish(old.owner, old.cx, old.cz, old.heightByte, old.radius)
+	return old.owner == s.local && changed
 }
 
 // Forget drops an observer's stored footprint without touching the grids. The

@@ -38,8 +38,8 @@ const disabledGateMarker = "RELEASE-GATE-DISABLED"
 // fails this test, and an entry with no matching skip fails it too. A gate
 // may only leave this map by being fixed.
 var disabledGates = map[string]string{
-	"cmd/nanolathe/production_o3_test.go::TestProductionInputARMEconomyBuildReplay":             "site scan finds no legal production site for armsolar (5x5 footprint) on retail Ashap Plateau; fails before any picking or build command is issued",
-	"internal/session/strict_o6_natural_ai_test.go::TestStrictSkirmish_NaturalAIRealAssets":     "natural AI stalls in placement, not selection: candidate selection succeeds from tick 0 (CORMEX, score ~97) but no legal site is found until tick ~4771, so FactoryCompleted never arrives within 12000 ticks. The synthetic G5 gate exercises the same production and attack-wave path end to end and passes, which localizes the remaining gap to AI site search",
+	"cmd/nanolathe/production_o3_test.go::TestProductionInputARMEconomyBuildReplay":             "armsolar and armmex now build end to end; armlab does not. The mobile builder is handed the footprint centre as its movement goal instead of a perimeter candidate [07 \u00a79][04 \u00a77.4], so it walks inside its own 6x6 site and the commit-time placement check — which passes a null self identity — rejects the spot forever, retrying every 15 ticks with no nanoframe",
+	"internal/session/strict_o6_natural_ai_test.go::TestStrictSkirmish_NaturalAIRealAssets":     "natural AI stalls in placement, not selection: candidate selection succeeds from tick 0 (CORMEX, score ~97) but no legal site is found until tick ~4771, so FactoryCompleted never arrives within 12000 ticks. Extractor helper A is unimplemented (always ReasonNoPatchData) and helper B discards its radius/angle draws instead of running the researched radial search",
 	"internal/session/strict_o6_result_test.go::TestStrictSkirmish_NaturalCommanderDeathResult": "typed attack is admitted but the weapon handshake never completes: aim=false, cob_return=false, fire=false within 600 ticks",
 }
 

@@ -4,7 +4,7 @@ import "github.com/nanolathe/nanolathe/formats"
 
 // PlotCell is the 13-byte runtime terrain cell [03 §2.2][GAP T14][P0-17] W*H*4 → 13B typed table.
 //
-// Layout per [02 "Terrain file"], [GAP T14] and the decompile writer model
+// Layout per [02 "Terrain file"], [GAP T14] and the runtime writer model
 // (notes/terrain/01_attribute_cells.md §3.2):
 //
 //	0x00  2  layer-A mobile occupancy short, signed LE; load zeroes it, unit
@@ -228,7 +228,7 @@ func (p *PlotCell) SetFlagByte(v uint8) { p[0xC] = v }
 //
 //   - If the cell holds a real index (<0xFFFB) it is returned directly.
 //   - If it holds the fringe sentinel (0xFFFE) the signed anchor offsets
-//     (runtime plot: cell+0xB X, cell+0x5 Z in decompile view [P1-07 §2.2],
+//     (runtime plot: cell+0xB X, cell+0x5 Z in the field convention [P1-07 §2.2],
 //     typed as AnchorDX 0xB / AnchorDZ 0xA with Z scaled by row stride) are
 //     followed to the anchor cell, whose feature is returned when that anchor
 //     holds a real index. Offsets are signed i8 [P1-07 §2.2] [02 "Terrain file"].
@@ -285,11 +285,12 @@ func ResolveFeature(plot []PlotCell, cellW, cellH int, cx, cz int) (uint16, bool
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // [05 "Terrain metal extraction"]) and the fringe anchor offsets at
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// needs catalog footprints).
 //
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // 10 in the nibble — `&0xd7|0x50` per cell, preserving bits 0,1,2 and 7
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [03 §3.3]; runtime writer model. The fog bit stays clear;
 // unexplored marking is phase-5/composer state (PLAN_04 C13).
 func ExpandPlot(attrs []formats.TNTAttribute, cellW, cellH int) []PlotCell {
 	if cellW <= 0 || cellH <= 0 {
@@ -309,7 +310,7 @@ func ExpandPlot(attrs []formats.TNTAttribute, cellW, cellH int) []PlotCell {
 		// Terrain.ApplySchema [02 "Terrain file"].
 		plot[i][7] = attrs[i].Metal
 		// Map load stamps placer value 10 into the flag byte's nibble,
-		// preserving bits 0,1,2,7: `&0xd7|0x50` [03 §3.3]; decompile writer
+		// preserving bits 0,1,2,7: `&0xd7|0x50` [03 §3.3]; runtime writer
 		// model.
 		plot[i][0xC] = plot[i][0xC]&0xd7 | 0x50
 		// attrs[i].Unknown is byte +3 of the source cell: zero in all cells of

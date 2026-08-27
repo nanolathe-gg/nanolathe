@@ -99,12 +99,12 @@ func TestStrictSkirmish_NaturalAIRealAssets(t *testing.T) {
 	// GroupAssigned, then stalls — FactoryCompleted never arrives inside 12000
 	// ticks. The wave-group producer of [R-P0-04] is the next unknown after
 	// that, not the first one: the run does not get far enough to exercise it.
-	t.Skip("RELEASE-GATE-DISABLED: natural AI stalls before FactoryCompleted within 12000 ticks; see disabledGates registry")
 	if os.Getenv("NANOLATHE_TA_ROOT") == "" && os.Getenv("NANOLATHE_RETAIL_ASSETS") == "" {
 		if root, err := os.UserHomeDir(); err != nil || root == "" {
 			t.Skip("retail assets not available: set NANOLATHE_TA_ROOT")
 		}
 	}
+	t.Skip("RELEASE-GATE-DISABLED: natural AI stalls before FactoryCompleted within 12000 ticks; extractor placement helper A is unimplemented and helper B does not perform the researched radial search; see disabledGates registry")
 	root := retailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {

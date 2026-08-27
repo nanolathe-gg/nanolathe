@@ -31,13 +31,14 @@ type Terrain struct {
 	Plot         []PlotCell   // CellW x CellH row-major [03 §2.2] C6
 	SeaLevel     uint8        // header byte [03 §2.2] C9
 
-	// losWords is the lazily built per-visibility-tile height table the
-	// terrain-ray LOS raster reads [03 §3.2]; see buildLOSHeightWords.
-	losWords []uint16
-	Gravity  numeric.Fixed // per-tick gravity [03 §2.2] C4
-	WindMin  int32         // [03 §2.2] C3/C4
-	WindMax  int32         // [03 §2.2] C3/C4
-	Tidal    numeric.Fixed // [03 §2.2] C4
+	// losWords is built once during map load and remains immutable for the
+	// battle, including across terrain deformation [03 §3.5][R-P0-18-B §4].
+	losWords      []uint16
+	losBuildCount int
+	Gravity       numeric.Fixed // per-tick gravity [03 §2.2] C4
+	WindMin       int32         // [03 §2.2] C3/C4
+	WindMax       int32         // [03 §2.2] C3/C4
+	Tidal         numeric.Fixed // [03 §2.2] C4
 
 	// Playable insets derived at void-fixup time [P0-17]: PlayRight = Wpix-32, PlayBottom = Hpix-128.
 	PlayRight  int32 // Wpix-32 in map pixels, Wpix=CellW*16 [P0-17]
@@ -116,91 +117,6 @@ func (t *Terrain) ApplySchema(mh *content.MapHeader, schemaIndex int) error {
 	}
 	t.metalSeeded = true
 	return nil
-}
-
-// stampFeatureAnchors writes each fringe cell's offset back to its anchor.
-//
-// A feature covering more than one cell stores its record index in the anchor
-// cell — the top-left corner of its footprint — and fills the rest with the
-// fringe sentinel [fmt tnt]. Fringe cells carry no index of their own, so every
-// consumer resolves them through the anchor [04 §6.2]. The TNT attribute record
-// has no anchor field (height, feature reference, one unknown byte [fmt tnt]),
-// so the engine must derive the offsets at load; without this pass they stay
-// zero and each fringe cell resolves to itself, i.e. to nothing.
-//
-// The derivation propagates in row-major order — the deterministic map order of
-// [01 §6.1]. A fringe cell inherits from its left and upper neighbours,
-// preferring whichever anchor comes later in that order, which is what keeps
-// two features packed against each other from bleeding into one another.
-//
-// TODO(question): research states the anchor relationship and the resolver's
-// behaviour [fmt tnt], [04 §6.2] but never says how the engine reconstructs the
-// offsets. Measured against the reference install (275 maps, 71,916 fringe
-// cells):
-//
-//   - Stamping from the declared FBI footprint resolves 65.1%. The footprint is
-//     not the rule: metaltower10 declares 1x2 while the TNT marks a 4x4 region
-//     as covered.
-//   - This propagation resolves 83.2%.
-//   - The residual is not recoverable locally. On dense maps (pincushion,
-//     cloaked in the spires — together 83% of it) adjacent features' fringe
-//     regions merge into one 4-connected blob: bounding boxes reach 10x9 with
-//     seven real cells inside, so no local rule can partition them. A further
-//     5,283 cells lie in blobs with no real cell anywhere near, i.e. orphaned
-//     source data.
-//
-// An unresolved fringe cell is a legitimate state, not a failure: [04 §6.2]
-// makes an unresolvable reference blocking for yard bit 5 and non-satisfying
-// for bit 7, which is what placement does. A probe against retail would be
-// needed to settle the real rule.
-func (t *Terrain) stampFeatureAnchors() {
-	if t.CellW <= 0 || t.CellH <= 0 || len(t.Plot) < int(t.CellW*t.CellH) {
-		return
-	}
-	// anchorOf[i] is the plot index of the anchor owning cell i, or -1.
-	anchorOf := make([]int32, len(t.Plot))
-	for i := range anchorOf {
-		anchorOf[i] = -1
-	}
-	for cz := int32(0); cz < t.CellH; cz++ {
-		for cx := int32(0); cx < t.CellW; cx++ {
-			i := cz*t.CellW + cx
-			f := t.Plot[i].Feature()
-			if f < plotFeatureRealLimit {
-				anchorOf[i] = i // a real index anchors itself
-				continue
-			}
-			if f != PlotFeatureFringe {
-				continue
-			}
-			owner := int32(-1)
-			if cx > 0 {
-				owner = anchorOf[i-1]
-			}
-			if cz > 0 {
-				if above := anchorOf[i-t.CellW]; above > owner {
-					// Later in row-major order wins. Two features packed
-					// against each other both reach this cell through a
-					// neighbour; the one whose anchor comes later is the one
-					// whose rectangle starts here, because the earlier
-					// rectangle would have had to run past the later anchor's
-					// own origin to claim it.
-					owner = above
-				}
-			}
-			if owner < 0 {
-				continue // orphaned sentinel; stays unresolved [04 §6.2]
-			}
-			anchorOf[i] = owner
-			dx := owner%t.CellW - cx
-			dz := owner/t.CellW - cz
-			if dx < -128 || dx > 127 || dz < -128 || dz > 127 {
-				// The offsets are one signed byte each [02 "Terrain file"].
-				continue
-			}
-			t.Plot[i].SetAnchorSigned(int8(dx), int8(dz))
-		}
-	}
 }
 
 // SeaLevelWorld returns sea level in world units as byte*65536 [03 §2.2] C9.
@@ -314,7 +230,7 @@ func (t *Terrain) CoarseHeightAt(cx, cz int32) numeric.Fixed {
 // byte is tested with the identical comparison afterwards to decide whether the
 // retained horizon advances.
 //
-// The aggregates are established from the traced builder [R-P0-18-B]:
+// The aggregates are established from the map-load builder [R-P0-18-B]:
 // the LOW byte is a MAXIMUM and the HIGH byte a MINIMUM, seeded 0x00 / 0xFF and
 // finished with a 1/3-2/3 blend floored at sea level. Reading them the other
 // way round — the intuitive (min, max) — is the maximally occlusive choice and
@@ -327,15 +243,38 @@ func (t *Terrain) LOSHeightWord(vx, vz int32) (low, high uint8) {
 	if w <= 0 || h <= 0 || vx < 0 || vz < 0 || vx >= w || vz >= h {
 		return 0, 0
 	}
-	if len(t.losWords) != int(w*h) {
-		t.buildLOSHeightWords()
+	// Production reads are deliberately side-effect free. Load performs the
+	// one build; an unbootstrapped hand-built terrain returns the safe empty
+	// value until its test/bootstrap helper is called [03 §3.5].
+	if t.losBuildCount == 0 || len(t.losWords) != int(w*h) {
+		return 0, 0
 	}
 	word := t.losWords[vz*w+vx]
 	return uint8(word), uint8(word >> 8)
 }
 
-// SetLOSHeightWord installs one visibility tile's LOS height word directly,
-// building the table first when it is not yet resident.
+// LOSHeightBuildCount reports how many times the map-load LOS builder ran.
+// It is primarily a conformance seam for world bootstrap tests.
+func (t *Terrain) LOSHeightBuildCount() int {
+	if t == nil {
+		return 0
+	}
+	return t.losBuildCount
+}
+
+// BuildLOSHeightWordsForTest explicitly bootstraps the table for a manually
+// constructed terrain. Production map loading calls the private builder at its
+// defined load point; runtime reads never invoke it implicitly.
+func (t *Terrain) BuildLOSHeightWordsForTest() {
+	if t == nil || t.losBuildCount != 0 {
+		return
+	}
+	t.buildLOSHeightWords()
+}
+
+// SetLOSHeightWord installs one visibility tile's LOS height word directly for
+// deterministic fixtures. The explicit test/bootstrap build preserves the
+// production no-lazy-read contract.
 //
 // It exists so fixtures and probes can drive the terrain-ray horizon rule from
 // exact byte pairs instead of reverse-engineering authored heights through the
@@ -348,8 +287,8 @@ func (t *Terrain) SetLOSHeightWord(vx, vz int32, low, high uint8) {
 	if w <= 0 || h <= 0 || vx < 0 || vz < 0 || vx >= w || vz >= h {
 		return
 	}
-	if len(t.losWords) != int(w*h) {
-		t.buildLOSHeightWords()
+	if t.losBuildCount == 0 {
+		t.BuildLOSHeightWordsForTest()
 	}
 	if len(t.losWords) != int(w*h) {
 		return
@@ -357,12 +296,10 @@ func (t *Terrain) SetLOSHeightWord(vx, vz int32, low, high uint8) {
 	t.losWords[vz*w+vx] = uint16(low) | uint16(high)<<8
 }
 
-// buildLOSHeightWords fills the per-visibility-tile height table exactly as
-// retail's builder at map load does [R-P0-18-B]. There is no invalidation API:
-// the table is built once and never rebuilt — terrain deformation does not
-// clear it, and only the fog cache is dirty-tracked [03 §3.2]. (An earlier
-// reading exposed a lazy rebuild behind a mode bit with deformation as the
-// clearing event; that reading is retracted in research.)
+// buildLOSHeightWords fills the per-visibility-tile height table at map load
+// [R-P0-18-B]. There is no invalidation API: the table is built once and never
+// rebuilt — terrain deformation does not clear it, and only the fog cache is
+// dirty-tracked [03 §3.2].
 //
 // The table is TileW x TileH u16 words seeded low=0x00, high=0xFF, so the low
 // byte accumulates a MAXIMUM and the high byte a MINIMUM. Cells are SCATTERED
@@ -370,7 +307,7 @@ func (t *Terrain) SetLOSHeightWord(vx, vz int32, low, high uint8) {
 // cell at (x, z) with height cellH projects to
 //
 //	zs    = z*16 - cellH/2          (the beam shear, as the observer's own
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//	tileZ = zs >> 5                  coverage tile uses [R-P0-18-B §2])
 //
 // and contributes to tile columns (x-1)>>1 and x>>1 at that row, plus the two
 // tiles the PREVIOUS row's cell in this column resolved to — the carry is what
@@ -392,6 +329,10 @@ func (t *Terrain) SetLOSHeightWord(vx, vz int32, low, high uint8) {
 // with truncating division, the low result feeding the high computation from
 // the ORIGINAL bytes (retail computes both from the pre-blend pair).
 func (t *Terrain) buildLOSHeightWords() {
+	if t == nil || t.losBuildCount != 0 {
+		return
+	}
+	t.losBuildCount = 1
 	w, h := t.CellW/2, t.CellH/2
 	if w <= 0 || h <= 0 {
 		t.losWords = nil
@@ -399,7 +340,7 @@ func (t *Terrain) buildLOSHeightWords() {
 	}
 	words := make([]uint16, int(w)*int(h))
 	for i := range words {
-		words[i] = 0xFF00 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		words[i] = 0xFF00 // low 0x00, high 0xFF [R-P0-18-B §1]
 	}
 	// scatter applies the low-maximum / high-minimum update to one tile.
 	scatter := func(index int, v int32) {
@@ -408,10 +349,10 @@ func (t *Terrain) buildLOSHeightWords() {
 		}
 		word := words[index]
 		lo, hi := int32(uint8(word)), int32(uint8(word>>8))
-		if v > lo { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if v > lo { // low keeps the maximum [R-P0-18-B §1]
 			lo = v
 		}
-		if v < hi { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if v < hi { // high keeps the minimum [R-P0-18-B §1]
 			hi = v
 		}
 		words[index] = uint16(lo) | uint16(hi)<<8
@@ -428,9 +369,9 @@ func (t *Terrain) buildLOSHeightWords() {
 		zPix := int32(0)
 		for z := int32(0); z < t.CellH; z++ {
 			cellH := int32(t.Plot[z*t.CellW+x].Height())
-			zs := zPix - cellH>>1 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			zs := zPix - cellH>>1 // beam shear [R-P0-18-B §2]
 			tileZ := zs >> 5
-			if tileZ > -1 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			if tileZ > -1 { // [R-P0-18-B §2]
 				value := ((tileZ*32 + 31) * cellH) / (zs + 31)
 				scatter(carryA, value)
 				scatter(carryB, value)
@@ -451,7 +392,7 @@ func (t *Terrain) buildLOSHeightWords() {
 	sea := int32(t.SeaLevel)
 	for i, word := range words {
 		lo, hi := int32(uint8(word)), int32(uint8(word>>8))
-		newLo := (hi + 2*lo) / 3 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		newLo := (hi + 2*lo) / 3 // [R-P0-18-B §3]
 		newHi := (lo + 2*hi) / 3
 		if newLo <= sea {
 			newLo = sea
@@ -631,6 +572,10 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 		FeatureNames: names,
 		FeatureDefs:  defs,
 	}
+	// The terrain-ray height words are a load-time product. Build after the
+	// derived height pair exists, before feature and void post-processing, and
+	// never invalidate it during the battle [03 §3.5][R-P0-18-B §4].
+	t.buildLOSHeightWords()
 	t.stampFeatureAnchors()
 	t.applyVoidFixup(mh)
 

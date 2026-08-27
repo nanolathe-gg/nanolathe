@@ -60,7 +60,7 @@ func pixel(v numeric.Fixed) int32 {
 // Evaluation order: 1 owner bypass, 2 hidden with decloak GT+90, 3 below sea level with 0x200 exempt, 4 sample
 // projection against the mode-selected source with 4-point hull [03 §3.2] P0-11.
 func (s *Service) IsVisible(viewer PlayerID, t Target) bool {
-	if s == nil {
+	if s == nil || !validPlayer(viewer) || !validPlayer(t.Owner) {
 		return false
 	}
 	// 1. owner identity bypass — queried record equals unit's owner ⇒ visible [C8.1] P0-11.
@@ -68,7 +68,7 @@ func (s *Service) IsVisible(viewer PlayerID, t Target) bool {
 	if viewer == t.Owner {
 		return true
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// 2. hidden/cloaked instance bit → false unless 0x1000 decloak set [03 §3.2] [03 §3.4].
 	// Cloak is a predicate early-out, never a mask edit [C10] P0-11; no firing decloak (NEGATIVE-BOUNDED) P0-11.
 	if t.Hidden {
 		if t.Status&decloakBit == 0 {
@@ -110,6 +110,9 @@ func (s *Service) IsVisible(viewer PlayerID, t Target) bool {
 // sample projects one world point and tests the mode-selected source
 // [03 §3.2] C8 step 4.
 func (s *Service) sample(viewer PlayerID, x, y, z numeric.Fixed) bool {
+	if !validPlayer(viewer) {
+		return false
+	}
 	// Half-height shear on the pixel components [03 §3.2] C8 step 4.
 	u := int64(pixel(x) >> 5)
 	v := int64((pixel(z) - (pixel(y) >> 1)) >> 5)
@@ -147,7 +150,7 @@ func (s *Service) seaLevelWorld() numeric.Fixed {
 // VisiblePoint is the reduced one-point predicate used by projectiles
 // [03 §3.2]. It has no owner, no hull and no cloak state — just the projection.
 func (s *Service) VisiblePoint(viewer PlayerID, x, y, z numeric.Fixed) bool {
-	if s == nil || s.W == 0 || s.H == 0 {
+	if s == nil || !validPlayer(viewer) || s.W == 0 || s.H == 0 {
 		return false
 	}
 	return s.sample(viewer, x, y, z)
@@ -156,7 +159,7 @@ func (s *Service) VisiblePoint(viewer PlayerID, x, y, z numeric.Fixed) bool {
 // VisibleExtents is the two-corner feature predicate [03 §3.2]. The feature
 // draw pass tests the footprint's opposite corners rather than a hull.
 func (s *Service) VisibleExtents(viewer PlayerID, b Box) bool {
-	if s == nil || s.W == 0 || s.H == 0 {
+	if s == nil || !validPlayer(viewer) || !validPlayer(b.Owner) || s.W == 0 || s.H == 0 {
 		return false
 	}
 	if viewer == b.Owner {

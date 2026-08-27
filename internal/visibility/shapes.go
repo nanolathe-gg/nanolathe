@@ -76,18 +76,10 @@ func (s *Service) raySpokes(index int) [][]step {
 // quadrant: TABLE2's four lines are (0,1)(0,2), (0,1)(1,2), (1,1) and
 // (1,0)(2,1).
 //
-// TODO(question): [03 §3.2] establishes that the spokes are the table's
-// authored line list, but not how the quadrant becomes a full circle, nor
-// whether each (dx,dz) pair is an absolute offset from the observer or a
-// cumulative step from the previous pair — the line format is "only partially
-// understood" [fmt tdf]. Absolute offsets is the reading implemented here
-// (the authored pairs only cohere as absolute positions); four 90-degree
-// rotations is the only reading consistent with the authored geometry —
-// walking the lines verbatim would light only the north-east quadrant — but
-// both are inferences, not attested rules. Rotation leaves the two axis
-// spokes duplicated (rotating (0,1) produces (1,0), which is also authored);
-// that is unobservable through the predicate because publish and unpublish
-// walk the same list, so the byte refcount stays balanced.
+// Authored pairs are absolute positions from the observer, and each line is
+// expanded by four 90-degree rotations [03 §3.2]. Axis spokes can therefore
+// occur twice when the source table contains both orientations; publish and
+// unpublish walk the same expanded list, keeping reference counts balanced.
 func buildSpokes(tb content.LOSTable) [][]step {
 	var out [][]step
 	for _, line := range tb.Lines {

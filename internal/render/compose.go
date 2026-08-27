@@ -182,6 +182,14 @@ type ComposerHooks struct {
 	Shake         func()                       // shake consumption seam [03 §5.6]
 }
 
+// IndexedCompositor is the narrow service boundary consumed by a client
+// frame. The frame owns no simulation or asset pointers; implementations read
+// immutable snapshots and emit indexed pixels through their own backend [03
+// §1], [I6].
+type IndexedCompositor interface {
+	Compose(*snapshot.Frame, float32, int)
+}
+
 // Composer is the ten-strip frame composer [03 §1] C1–C4.
 type Composer struct {
 	Strips  [10]Strip
@@ -427,6 +435,14 @@ func (c *Composer) Frame(f *snapshot.Frame, alpha float32, mode int) {
 	if c.Hooks.Interface != nil {
 		c.Hooks.Interface()
 	}
+}
+
+// Compose is the canonical compositor entry point. Frame is retained as the
+// historical name for existing callers; both paths execute the same ordered
+// ten-strip composer so a client cannot accidentally select a second draw
+// order [03 §1].
+func (c *Composer) Compose(f *snapshot.Frame, alpha float32, mode int) {
+	c.Frame(f, alpha, mode)
 }
 
 // Update evaluates removal BEFORE update for every strip and stably compacts
