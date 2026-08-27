@@ -194,12 +194,12 @@ func (g *gameShell) startBattleLoad(mapName string) {
 // the same six bars; only the map line is gated off for a mission.
 func (g *gameShell) startMissionLoad() {
 	if g.campaignIdx < 0 || g.campaignIdx >= len(g.campaignOptions) {
-		g.showRetailMessage("no campaign selected")
+		reportRetailMessageError(g.showRetailMessage("no campaign selected"))
 		return
 	}
 	c := g.campaignOptions[g.campaignIdx]
 	if g.missionIdx < 0 || g.missionIdx >= len(c.Missions) {
-		g.showRetailMessage("no mission selected")
+		reportRetailMessageError(g.showRetailMessage("no mission selected"))
 		return
 	}
 	path := fmt.Sprintf("%s:MISSION%d", c.Path, c.Missions[g.missionIdx].Index)
@@ -239,12 +239,12 @@ func (g *gameShell) stepLoading(delta float64) {
 		g.loading = nil
 		if res.err != nil {
 			g.openMenu(g.loadingReturn)
-			g.showRetailMessage(res.err.Error())
+			reportRetailMessageError(g.showRetailMessage(res.err.Error()))
 			return
 		}
 		if err := g.enterBattle(res.sess, res.sess.Catalog); err != nil {
 			g.openMenu(g.loadingReturn)
-			g.showRetailMessage(err.Error())
+			reportRetailMessageError(g.showRetailMessage(err.Error()))
 		}
 	default:
 	}

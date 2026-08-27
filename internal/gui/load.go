@@ -74,12 +74,10 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 			// These cover the remaining two embedded-file and two single-purpose slots; treat as handled for completeness.
 			isHandled = true
 		default:
-			// Unhandled: skip exactly as research describes [07 §4].
-			if kind > 15 {
-				continue
-			}
-			// For ids 0..15 not listed, we still treat as handled via generic path to avoid silent loss.
-			isHandled = true
+			// Unhandled stored kinds have no established runtime family. Preserve
+			// the parser's authored records only for the closed set above; do not
+			// synthesize a generic widget for an unknown kind [07 §4].
+			continue
 		}
 		if !isHandled {
 			continue

@@ -6,7 +6,9 @@ import (
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/ui"
 )
 
 func TestPlaceBattleModalCentersOverRetailPlayfield(t *testing.T) {
@@ -37,31 +39,31 @@ func TestPlaceBattleModalCentersOverRetailPlayfield(t *testing.T) {
 }
 
 func TestBattleMenuPauseAndResume(t *testing.T) {
-	b := &battleSession{sess: &session.Session{Clock: &clock.State{}}, menuPressed: -1}
+	b := &battleSession{sess: &session.Session{Clock: &clock.State{}}}
 	b.openBattleMenu()
-	if b.menu != battleMenuOptions || !b.sess.Clock.Paused {
-		t.Fatalf("open menu = state %d paused %v; want options and paused", b.menu, b.sess.Clock.Paused)
+	if b.battleState().Modal() != ui.BattleModalOptions || !b.sess.Clock.Paused {
+		t.Fatalf("open menu = state %d paused %v; want options and paused", b.battleState().Modal(), b.sess.Clock.Paused)
 	}
 	b.closeBattleMenu()
-	if b.menu != battleMenuClosed || b.sess.Clock.Paused {
-		t.Fatalf("close menu = state %d paused %v; want closed and running", b.menu, b.sess.Clock.Paused)
+	if b.battleState().Modal() != ui.BattleModalClosed || b.sess.Clock.Paused {
+		t.Fatalf("close menu = state %d paused %v; want closed and running", b.battleState().Modal(), b.sess.Clock.Paused)
 	}
 }
 
 func TestBattleMenuExitGameConfirmationRequestsTermination(t *testing.T) {
-	b := &battleSession{sess: &session.Session{Clock: &clock.State{}}, menuPressed: -1}
+	b := &battleSession{sess: &session.Session{Clock: &clock.State{}}}
 	cl, err := client.New(client.Options{Headless: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	b.openBattleMenu()
 	b.activateBattleMenuButton("EXIT", cl)
-	if b.menu != battleMenuExit {
-		t.Fatalf("EXIT state = %d; want exit menu", b.menu)
+	if b.battleState().Modal() != ui.BattleModalExit {
+		t.Fatalf("EXIT state = %d; want exit menu", b.battleState().Modal())
 	}
 	b.activateBattleMenuButton("EXITGAME", cl)
-	if b.menu != battleMenuConfirmExit {
-		t.Fatalf("EXITGAME state = %d; want confirmation", b.menu)
+	if b.battleState().Modal() != ui.BattleModalConfirmExit {
+		t.Fatalf("EXITGAME state = %d; want confirmation", b.battleState().Modal())
 	}
 	b.activateBattleMenuButton("CHOICE1", cl)
 	if !cl.ExitRequested() {
@@ -70,17 +72,52 @@ func TestBattleMenuExitGameConfirmationRequestsTermination(t *testing.T) {
 }
 
 func TestBattleMenuMainMenuConfirmationInvokesReturn(t *testing.T) {
-	b := &battleSession{sess: &session.Session{Clock: &clock.State{}}, menuPressed: -1}
+	b := &battleSession{sess: &session.Session{Clock: &clock.State{}}}
 	returned := false
 	b.returnToMenu = func(*client.Client) { returned = true }
 	b.openBattleMenu()
 	b.activateBattleMenuButton("EXIT", nil)
 	b.activateBattleMenuButton("MAINMENU", nil)
-	if b.menu != battleMenuConfirmMain {
-		t.Fatalf("MAINMENU state = %d; want main-menu confirmation", b.menu)
+	if b.battleState().Modal() != ui.BattleModalConfirmMain {
+		t.Fatalf("MAINMENU state = %d; want main-menu confirmation", b.battleState().Modal())
 	}
 	b.activateBattleMenuButton("CHOICE1", nil)
 	if !returned {
 		t.Fatal("Yes did not invoke frontend return")
+	}
+}
+
+func TestBattleMenuTabCloseConsumesClosingFrame(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	b.openBattleMenu()
+	if b.battleState().Modal() != ui.BattleModalOptions {
+		t.Fatal("test setup did not open options modal")
+	}
+	cl, err := client.New(client.Options{
+		Buffer:   b.sess.Snapshot,
+		Width:    640,
+		Height:   480,
+		Headless: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := cl.Input()
+	in.Kbd.InjectKey(input.KeyTab, true)
+	in.Kbd.InjectKey(input.KeyM, true)
+	in.Mouse.InjectMouseMove(200, 200)
+	in.Mouse.InjectMouseButton(input.MouseButtonLeft, true)
+
+	// The frame starts modal, so Tab closes ARMOPT but the simultaneous M and
+	// mouse edges must not arm an order or enqueue a world action [07 §2][07 §3].
+	b.viewerStep(0, cl)
+	if b.battleState().Modal() != ui.BattleModalClosed {
+		t.Fatalf("Tab did not close options modal: %d", b.battleState().Modal())
+	}
+	if b.latch != input.LatchNormal {
+		t.Fatalf("closing modal frame leaked M hotkey and armed latch %d", b.latch)
+	}
+	if got := b.sess.PendingHumanCommands(); len(got) != 0 {
+		t.Fatalf("closing modal frame leaked %d human commands", len(got))
 	}
 }

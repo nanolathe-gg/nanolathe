@@ -467,7 +467,32 @@ Other named values include `Games` and `AllMissions` (campaign progress
 gating), and `user_images`, which participates in building the image output
 path with the pattern `<directory>\\<name>`.
 
-A unit limit of 250 is applied before clamping elsewhere in the startup path.
+**Unit limit (R-CONTENT-03, opener).** The previous text said only "a unit
+limit of 250 is applied before clamping elsewhere in the startup path"; the
+source is now traced. **Established:** at startup the executable reads the
+limit from the Windows profile file `<executable directory>\totala.ini`,
+section `[Preferences]`, key `UnitLimit`, through the integer-profile accessor
+with default **250**, clamps the result into **20..500** (below 20 becomes 20,
+above 500 becomes 500), and stores it as a 16-bit configured limit. It also
+sets a "unit limit" mode flag to 1 alongside the read; a bounded census finds
+**no reader** of that flag anywhere in the recovered executable, so it is
+retained-and-inert as far as static analysis reached (write sites: the startup
+store and one battle-setup store that takes the flag's value as a parameter).
+
+**Established:** the configured limit is overridden by an integer item named
+`maxunits` when a save or mission file carries one, and the map loader reads
+`maxunits` from the OTA global section (default **200**, see the map-global
+key table below) into the **active** limit word used during play; the active
+word is also seeded at session entry from the lobby setting or the configured
+limit. The active limit's consumers (construction admission, AI production,
+lobby display) are owned by document 05 ("Unit creation and limits") and are
+not enumerated here.
+
+**Established (bounded-negative):** there is **no per-unit-definition limit
+key** in the executable. The string vocabulary contains no `maxthisunit` or
+`unitlimit` FBI key in any spelling; `limit` belongs to the AI-profile grammar
+(see the `ai_weight` note above). Any implementation field for a per-definition
+unit limit keyed from FBI data has no retail source and must not be invented.
 
 The language setting is read as a string. An empty value selects English.
 The language string is kept in one global buffer and drives two distinct
@@ -798,7 +823,7 @@ does not abort; each reference family has its own failure outcome:
 
 | Reference | Missing → behavior | Fatal? | Evidence |
 |---|---|---|---|
-| Weapon (`weapon1..3`, `explodeas`, `selfdestructas`) | the weapon slot stays inactive (the unresolved id is the all-ones sentinel); no abort | no | direct |
+| Weapon (`weapon1..3`, `explodeas`, `selfdestructas`) | the name lookup against the weapon record table misses and the slot is filled with a reference to record 0 — the inactive sentinel (R-CONTENT-02); no abort | no | direct |
 | Corpse (`corpse`) | the `0xFFFF` no-corpse sentinel; the unit leaves no wreck | no | direct |
 | Movement class (`movementclass`) | the unit compiler falls back to a scratch record — 255 slopes, depth limits ±10000 — parsed from the unit's own FBI keys (see "Movement class record"); a null profile otherwise | no (degraded) | direct |
 | Model (`objectname`) | the model cache slot stays empty; rendering degrades (no model) | no (degraded) | supported inference |
@@ -818,6 +843,87 @@ default of -1 **first**, and uses it to select the weapon record it fills. The
 section name is then stored into that record as the weapon's catalog name, and
 `name` is read separately as a 64-byte display string. A weapon section without
 an authored `ID` therefore selects the slot before the table.
+
+#### R-CONTENT-02 — Weapon-family discovery and same-ID merge (closed)
+
+**Correction.** PLAN_02's post-review amendment recorded — and earlier
+revisions of this document implied — that `gamedata\weapons.tdf` parses before
+the `weapons\` directory, so referenced names survive a stock ID 36 collision
+between `[earthquake]` there and `[cormine2]` in `weapons/cormine2_weapon.tdf`.
+That premise is **wrong**: the executable never parses `gamedata\weapons.tdf`.
+The correction is behavioral, not speculative: the only weapon-family pattern
+in the executable's string vocabulary is `Weapons\*.tdf`, pushed at exactly two
+sites (the weapon-record compiler and the unit-catalog loader below), and the
+bounded census of every `gamedata\` path-building site accounts for version,
+sidedata (twice), moveinfo, sound, allsound, los, help, meteor, category, and
+the full-path `gamedata\translate.tdf` literal — none name a weapons file.
+The stock "ID 36 collision" is between a file retail never reads and the
+parsed family; retail never sees it. **Established.**
+
+**Discovery order — Established.** The weapon family is exactly the union
+enumeration of `Weapons\*.tdf`: provider mount precedence first, then the
+host's unsorted directory order within one provider's directory (§2, SC3),
+with duplicate logical paths resolved first-provider-wins. Two independent
+passes walk it — their relative call order does not affect either result:
+
+* The **weapon-record compiler** parses every file and feeds **every
+  top-level section, in file order**, to the record parser.
+* The **unit-catalog loader** re-parses the same family into its own document
+  set and resolves the unit record's `weapon1..3`, `explodeas`, and
+  `selfdestructas` names against those documents (see below).
+
+**Record table — Established.** The catalog is a fixed table of **256 weapon
+records** (277 bytes each) that the compiler initializes in place before any
+parsing: each record's catalog-name bytes are emptied and each record's
+**slot-number byte is stamped once with its own index** (0..255). The record a
+section fills is `table + ID × 277`; with the default -1 an ID-less section
+fills the 277-byte scratch slot immediately **before** record 0 — all ID-less
+sections clobber the same unreachable slot, and the last one wins it.
+
+**Same-ID merge — Established.** The record parser is called once per section
+and behaves as follows: it reads `ID` first; copies the **section name** over
+the record's catalog-name bytes; reads `name` as the 64-byte display string;
+and then **unconditionally stores every field it parses** — the authored value
+when the key is present, the accessor default when it is not. A later section
+with the same ID therefore does not sparse-merge with the earlier one: it
+**replaces** every parser-owned field of the record (authored-or-default) and
+rewrites the catalog name. The surviving catalog name is the **later**
+section's name; the record's slot-number byte is never rewritten by the
+parser. Record 0 is special: consumers treat a weapon reference as inactive
+when it points at record 0 (recognized by its zero slot-number byte), and the
+stock corpus fills it with `[noweapon]` (`ID=0` in `weapons/weapons.tdf`).
+
+**Runtime name resolution — Established.** A weapon name resolves by a linear
+scan of the record table from slot 0 upward, comparing case-insensitively
+against each record's catalog name; the **first** matching slot wins. A name
+that matches no record returns not-found. When the FBI compiler resolves
+`weapon1..3`, `explodeas`, or `selfdestructas`, a miss is replaced by a
+reference to **record 0** — the inactive sentinel — not by an error. This
+corrects the cross-reference table below, whose previous text said the
+unresolved weapon id was an all-ones sentinel; the sentinel is record 0
+identified by its zero slot-number byte.
+
+**Unit identity contribution — Established accumulator, Supported inference
+for its role.** While resolving the five weapon-name keys, the unit-catalog
+loader finds each named section in the parsed weapon documents and
+exclusive-ors a per-section value into one definition word. That per-section
+value is the section's **own raw-text content checksum** — the same
+four-accumulator checksum as §6, computed by the TDF parser when a section
+closes and stored on the section. The accumulated word is a definition-identity
+input (§6's "one further definition word" in the unit composite hash), not a
+weapon slot; the composite-hash consumer link is the Supported inference.
+
+**Stock corpus census — Established for this corpus, not a claim about every
+edition.** The union `Weapons\*.tdf` view holds 77 files with 198 top-level
+sections, and **every authored ID is unique** — there is no same-ID collision
+anywhere in the parsed family. ID 36 is `[cormine2]`
+(`weapons/cormine2_weapon.tdf`) alone. `[earthquake]` in the parsed family is
+`weapons/earthquake.tdf` at ID **227**. `gamedata\weapons.tdf` (present in
+three providers, 23 KB, 33 sections with authored IDs scattered across
+0..36, including `[earthquake] ID=36`) is inert for the retail executable. A name lookup for a superseded
+spelling has no stock instance; with a hypothetical same-ID collision, the
+superseded (earlier) section's name would match no record and resolve to the
+record-0 inactive sentinel.
 
 **Unit conversions.** The weapon record is where the authored second-based unit
 system is converted to ticks and 16.16 world units. The conversions are exact:
@@ -966,11 +1072,11 @@ order is contract:
 
 1. `FootPrintX` — integer, default 0, stored as 16-bit.
 2. `FootPrintZ` — integer, default 0, stored as 16-bit.
-3. `MaxWaterDepth` — integer, default the class's prior value (preserved).
-4. `MinWaterDepth` — integer, default the class's prior value (preserved).
-5. `MaxSlope` — integer, default the class's prior value (preserved), stored as a byte.
+3. `MaxWaterDepth` — integer, default the record's own prior value (preserved; zero on the first parse).
+4. `MinWaterDepth` — integer, default the record's own prior value (preserved).
+5. `MaxSlope` — integer, default the record's own prior value (preserved), stored as a byte.
 6. `BadSlope` — integer, default **half (`>>1`) of the `MaxSlope` value just read**.
-7. `MaxWaterSlope` — integer, default the class's prior value (preserved), byte.
+7. `MaxWaterSlope` — integer, default the record's own prior value (preserved), byte.
 8. `BadWaterSlope` — integer, default **half (`>>1`) of the `MaxWaterSlope` value just read**.
 
 Three clamps then run **unconditionally on every class**, in order:
@@ -981,26 +1087,71 @@ Three clamps then run **unconditionally on every class**, in order:
 
 **Established fact:** The comparisons are unsigned byte comparisons with no authored gate; the three checks execute for every class regardless of which keys were authored.
 
-**Pool initialization — established, and it is NOT a 255 template.** The class
-pool (32 records × 32 bytes) lives in the executable's data section beyond the
-raw-data extent, so it is **zero-filled at load**. The catalog loader writes
-only each record's name pointer and parsed fields; no writer initializes any
-field to 255 before the first parse (a bounded census over the whole text
-segment finds the catalog loop as the pool's only writer). The consequence is
-arithmetically forced: every class that omits `MaxWaterSlope` computes
-`MaxSlope = 0` after the unconditional first clamp, and the stock catalog's
-thirteen omitting classes (only `TANKDH3` and the two hover classes author
-`MaxWaterSlope`) compile to `MaxSlope = 0` — `TODO(question)`: the traced
-arithmetic contradicts the assumed stock playability (a slope-0 class is
-hard-blocked on every non-flat land cell by the movement classifier below);
-all writers and comparisons are enumerated and byte-verified, so the decider
-is a runtime trace of the compiled pool or of a unit definition's slope copy,
-not further static analysis. Nanolathe's gated clamps (clamps 1 and 3 gated on
-whether `MaxWaterSlope` was authored, per `docs/SPEC_CONFLICTS.md` SC5) remain
-the install-compatible divergence; the earlier hypothesis that a profile
-template carries `MaxWaterSlope = 255` before parsing is **falsified** — the
-template that does exist initializes the *fallback* record used when an FBI
-movement class cannot be resolved (below).
+#### R-CONTENT-01 — Movement-profile template initialization (closed)
+
+**Correction.** The previous text carried a standing `TODO(question)` whose
+working escape hatch was a profile template pre-filling each record (with
+`MaxWaterSlope ≈ 255`) before the first class parses, so that an absent
+`maxwaterslope` would preserve a large value and the clamps would be identity.
+That hypothesis is **falsified**: it was written when the pool's initial bytes
+were unproven; the executable-layout verification (against the PE
+section table) shows the pool is zero-filled at load, and the bounded writer
+census shows the `CLASS` loop is the pool's only writer. There is no template
+write before the first parse. **Established.**
+
+The initialization contract, settled:
+
+* **Initial values — Established.** The class pool (32 records × 32 bytes)
+  lives in the executable's data section beyond the raw-data extent, so the PE
+  loader zero-fills it; the loader's prologue performs no fill and no template
+  copy, and a bounded census over the whole text segment finds the `CLASS`
+  loop as the pool's only writer. Every record therefore starts with a null
+  name slot and all eight fields **zero** before the first parse.
+* **Reset between classes — Established: none.** Each `CLASS%d` index owns one
+  record slot, and each slot is parsed at most once per compile. The "prior
+  value" defaults read the record's **own** prior bytes — not the previous
+  class's values and not a shared template. Because the pool starts zeroed
+  and nothing else writes it, a later class that omits `maxwaterslope` holds
+  **zero** (its own zero prior). The battle-entry catalog rebuild (§8)
+  re-parses the same pool in place, so on a re-parse an omitted key defaults
+  to that record's own previous-parse value; for stock content the re-parse
+  result is bit-identical.
+* **Clamp conditionality — Established: none.** All three clamps are unsigned
+  byte comparisons and run on every class. No clamp is conditional on key
+  presence, and none can be: the parser reads every field through the integer
+  accessor, which cannot distinguish an absent key from an authored zero (§4),
+  so a key-presence gate is not expressible with the accessor retail uses
+  here. The bounded search found no authored-flag storage beside the record.
+* **Record fields — Established.** Each 32-byte record holds the interned
+  authored `name` value in its head (a missing `name` key yields the empty
+  string, still interned) followed by the eight parsed fields; the remaining
+  bytes are never written and stay zero.
+
+**Per-field conversion — Established.** Every field goes through the integer
+accessor: optional sign, decimal digits, trailing junk ignored, 32-bit result
+— and then stores with truncation to the field width. There is no scaling and
+no range clamp on the authored value itself.
+
+| Key | Authored domain | Stored width | Arithmetic |
+|---|---|---|---|
+| `FootPrintX`, `FootPrintZ` | any integer | 16-bit, used signed | store low 16 bits |
+| `maxwaterdepth`, `minwaterdepth` | any integer | 16-bit signed | store low 16 bits |
+| `maxslope`, `badslope`, `maxwaterslope`, `badwaterslope` | any integer | 8-bit | store low 8 bits; all consumers compare unsigned |
+| `badslope` default | — | 8-bit | `(maxslope just read & 0xFF) >> 1` — logical shift, 0..127 |
+| `badwaterslope` default | — | 8-bit | `(maxwaterslope just read & 0xFF) >> 1` |
+
+**Consequence and remaining paradox — Unknown.** The arithmetic is forced:
+every class that omits `MaxWaterSlope` computes `MaxSlope = 0` after the
+unconditional first clamp, and the stock catalog's thirteen omitting classes
+(only `TANKDH3` and the two hover classes author `MaxWaterSlope`) compile to
+`MaxSlope = 0` — while the movement classifier below hard-blocks every land
+cell whose slope exceeds `MaxSlope`. All writers and comparisons are
+enumerated and byte-verified; the contradiction with assumed stock playability
+is a genuine bounded unknown whose decider is a runtime trace of the compiled
+pool or of a unit definition's slope copy, not further static analysis.
+Nanolathe's gated clamps (clamps 1 and 3 gated on whether `MaxWaterSlope` was
+authored, per `docs/SPEC_CONFLICTS.md` SC5) remain the install-compatible
+divergence.
 
 **Record identity and FBI resolution.** Each parsed record's head is the
 interned value of the section's authored `name` key (string accessor, 100
@@ -1959,7 +2110,21 @@ replacement sequence; the catalog rebuild at every battle entry; the
 cross-reference failure policy for missing weapons/corpses/movement
 classes/models/sides/sound categories; and the `ai_weight` consumer / 
 `ai_limit` bounded-negative split with the AI-side identity of the build
-picker's enclosing routines.
+picker's enclosing routines. Closed in this revision (R-CONTENT-01/02/03):
+the movement-profile initialization contract (zero-filled pool, no template,
+no reset between classes, unconditional unsigned clamps, per-field conversion
+table — the 255-template hypothesis explicitly falsified); the weapon-family
+discovery order (`Weapons\*.tdf` union enumeration only, two independent
+passes; `gamedata\weapons.tdf` never parsed — PLAN_02's parse-order amendment
+premise falsified), the 256-record ID-indexed weapon table with
+last-writer-wins whole-record replacement for same-ID sections, the
+record-table name scan with the record-0 inactive sentinel (correcting the
+all-ones reading), and the weapon-section-text-checksum XOR identity
+contribution; and the unit-limit writer contract (`totala.ini`
+`[Preferences]` `UnitLimit`, default 250, clamp 20..500, inert mode flag,
+`maxunits` save/mission item override, OTA `maxunits` default 200 into the
+active limit) with the bounded-negative absence of any per-unit-definition
+limit key.
 
 Still open:
 
@@ -2008,9 +2173,18 @@ Still open:
   byte-exact lookup are established in §3; the message-site census remains).
 * The empty/sentinel category registry entry is closed (it is the token
   `ALL`); what remains is document 06's mask-helper consumer list.
-* The movement-class slope arithmetic paradox (traced unconditional clamps
-  on a zero-initialized pool zero the slope of every stock class omitting
-  `MaxWaterSlope`, which contradicts assumed stock playability; all writers
-  and comparisons are enumerated — see §5 "Movement class record")
-  `TODO(question)`: a runtime trace of the compiled pool or of a unit
-  definition's slope copy is the decider.
+* The movement-class slope arithmetic paradox (R-CONTENT-01 closed the
+  initialization question — the pool is zero-filled with no template, so the
+  traced unconditional clamps compile every stock class omitting
+  `MaxWaterSlope` to `MaxSlope = 0`, which contradicts assumed stock
+  playability; all writers and comparisons are enumerated — see §5 "Movement
+  class record", R-CONTENT-01) `TODO(question)`: a runtime trace of the
+  compiled pool or of a unit definition's slope copy is the decider.
+* The unit limit's runtime consumers (which of the active-limit read sites
+  gate construction, AI production, and the lobby display, and the exact
+  per-player versus global counter split) — document 05 owns the enforcement
+  contract; R-CONTENT-03 established only the writer side and the key
+  vocabulary above.
+* Whether the unit-limit mode flag (written at startup and once at battle
+  setup) is ever read by unrecovered code — bounded-negative in the recovered
+  corpus, so it is retained-and-inert here.

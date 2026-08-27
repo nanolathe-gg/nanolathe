@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/ui"
 )
 
 func TestGameSpeedKeysClampAndMessage(t *testing.T) {
@@ -120,7 +121,6 @@ func TestESCMenuTokenPath(t *testing.T) {
 	b.sess.Snapshot = &frame.Buffer{}
 	b.latch = input.LatchNormal
 	b.buildDef = ""
-	b.menu = battleMenuClosed
 	// ESC when latch normal and not placing should open menu [07 §2]
 	cl, _ := client.New(client.Options{Headless: true, Buffer: b.sess.Snapshot, Width: 640, Height: 480})
 	cl.SetCamera(b.cam)
@@ -131,26 +131,25 @@ func TestESCMenuTokenPath(t *testing.T) {
 	if b.latch == input.LatchNormal && b.buildDef == "" {
 		b.openBattleMenu()
 	}
-	if b.menu != battleMenuOptions {
-		t.Fatalf("ESC should open battle menu when idle, got %v", b.menu)
+	if b.battleState().Modal() != ui.BattleModalOptions {
+		t.Fatalf("ESC should open battle menu when idle, got %v", b.battleState().Modal())
 	}
 	// ESC when menu open should be handled by handleBattleMenuInput (close or back)
 	// Simulate second ESC to close options
 	b.handleBattleMenuInput(in, cl)
 	// After handling ESC in menu, it should close (since options -> closed)
-	if b.menu != battleMenuClosed {
+	if b.battleState().Modal() != ui.BattleModalClosed {
 		// handleBattleMenuInput with ESC when options should close
 		// We already injected Escape, but need to call again with fresh edge
 		in2 := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 		in2.Kbd.InjectKey(input.KeyEscape, true)
 		b.handleBattleMenuInput(in2, cl)
-		if b.menu != battleMenuClosed {
-			t.Fatalf("ESC in menu should close, got %v", b.menu)
+		if b.battleState().Modal() != ui.BattleModalClosed {
+			t.Fatalf("ESC in menu should close, got %v", b.battleState().Modal())
 		}
 	}
 	// ESC when latch armed should disarm, not open menu [07 §9]
 	b.latch = input.LatchMove
-	b.menu = battleMenuClosed
 	b.buildDef = ""
 	in3 := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 	in3.Kbd.InjectKey(input.KeyEscape, true)
@@ -158,7 +157,7 @@ func TestESCMenuTokenPath(t *testing.T) {
 	if b.latch != input.LatchNormal {
 		t.Fatalf("ESC should disarm latch, got %v", b.latch)
 	}
-	if b.menu != battleMenuClosed {
+	if b.battleState().Modal() != ui.BattleModalClosed {
 		t.Fatalf("ESC disarm should not open menu when latch was armed")
 	}
 	// Now second ESC after disarm should open menu
@@ -168,7 +167,7 @@ func TestESCMenuTokenPath(t *testing.T) {
 	if b.latch == input.LatchNormal && b.buildDef == "" {
 		b.openBattleMenu()
 	}
-	if b.menu != battleMenuOptions {
+	if b.battleState().Modal() != ui.BattleModalOptions {
 		t.Fatalf("second ESC after disarm should open menu")
 	}
 }

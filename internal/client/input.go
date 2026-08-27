@@ -165,7 +165,9 @@ func (m *MouseState) InjectMouseMove(x, y float32) {
 	m.X, m.Y = x, y
 }
 
-// InjectWheel injects wheel deltas for the next tick (presentation-only zoom) [07 §10].
+// InjectWheel injects wheel deltas for the next tick. The canonical UI layer
+// consumes this sample for an authored list only; battle camera code does not
+// interpret wheel input [07 §2][07 §10].
 func (m *MouseState) InjectWheel(dx, dy float32) {
 	if m == nil {
 		return

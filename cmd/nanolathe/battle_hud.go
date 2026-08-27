@@ -20,6 +20,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/ui"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -247,7 +248,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		hudAssetWarning(fs, titlesPath, "igtitles.gaf [07 §11]", ferr)
 	}
 	// EXITMENU and YESORNO are opened with the executable's 0x1000 placement
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// flag. The modal initializer replaces their authored origins with sentinels,
 	// then centers them in the 512-pixel playfield to the right of the rail.
 	if exitWin != nil {
 		placeBattleModal(exitWin, 640, 480)
@@ -268,7 +269,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	}, nil
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// placeBattleModal applies the established 0x1000 modal placement at the
 // negotiated logical display size. The battle rail occupies x=0..127; modal
 // centering therefore uses the remaining width and adds 128 [07 "Tab options
 // menu and manual exit"].
@@ -422,17 +423,20 @@ func (h *retailBattleHUD) drawPausedTitle(c *client.Client) {
 }
 
 func (h *retailBattleHUD) drawBattleMenu(c *client.Client, b *battleSession) {
-	if h == nil || c == nil || b == nil || b.menu == battleMenuClosed {
+	if h == nil || c == nil || b == nil || b.battleState() == nil || b.battleState().Modal() == ui.BattleModalClosed {
 		return
 	}
-	h.drawGUIWindow(c, h.optionsWin, h.optionsGAF, "")
-	if b.menu >= battleMenuExit {
+	state := b.battleState()
+	if state.HasOptionsLayer() {
+		h.drawGUIWindow(c, h.optionsWin, h.optionsGAF, "")
+	}
+	if state.HasExitLayer() {
 		h.drawGUIWindow(c, h.exitWin, nil, "")
 	}
-	if b.menu == battleMenuConfirmMain {
-		h.drawGUIWindow(c, h.confirmWin, nil, "Surrender this battle and return to main menu?")
-	} else if b.menu == battleMenuConfirmExit {
-		h.drawGUIWindow(c, h.confirmWin, nil, "Exit the Battle")
+	if state.Modal() == ui.BattleModalConfirmMain {
+		h.drawGUIWindow(c, h.confirmWin, nil, state.ConfirmTitle())
+	} else if state.Modal() == ui.BattleModalConfirmExit {
+		h.drawGUIWindow(c, h.confirmWin, nil, state.ConfirmTitle())
 	}
 }
 
@@ -500,7 +504,7 @@ func (h *retailBattleHUD) drawWindowBackground(c *client.Client, window *gui.Win
 	frame := h.modalArtFrame(window.Header.Panel, page)
 	if frame == nil {
 		// YESORNO.GUI has no usable PANEL value. Retail does not treat that as
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// a transparent dialog: the initializer makes one final literal BackTile
 		// lookup after the file-specific and GUI-context searches.
 		frame = h.modalArtFrame("BackTile", page)
 	}
@@ -529,7 +533,8 @@ func (h *retailBattleHUD) modalArtFrame(name string, page *formats.GAF) *formats
 	return nil
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// modalGadgetRect returns the runtime rectangle installed by the modal
+// initializer.
 // Stock button selection replaces the authored width/height with the chosen
 // frame dimensions (YESORNO's 95x20 choices therefore become 96x20).
 func (h *retailBattleHUD) modalGadgetRect(window *gui.Window, index int, page *formats.GAF) gui.Rect {

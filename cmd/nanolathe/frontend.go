@@ -19,6 +19,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/settings"
+	"github.com/nanolathe/nanolathe/internal/ui"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -70,7 +71,7 @@ type menuAssets struct {
 }
 
 // gameShell owns only frontend state and the battle hand-off. Menu state is
-// kept in retailPanelState in retail_menu.go and is reset whenever retail
+// kept in ui.Panel in retail_menu.go and is reset whenever retail
 // opens a new .GUI panel.
 type gameShell struct {
 	opts Options
@@ -119,25 +120,9 @@ type gameShell struct {
 	// loadingReturn is the screen a failed load falls back to.
 	loadingReturn shellMode
 
-	panel        *retailPanelState
-	modal        *retailPanelState
-	modalPressed bool
-
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// window in front of the one already open and keeps a SAVE UNDER surface
-	// for it, so a panel window with no background bitmap — SELMAP.GUI is the
-	// single-player case — is drawn over the screen beneath it rather than
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	under     *retailPanelState
-	underMode shellMode
-
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// left button is down on an associated list scrollbar.  It is presentation
-	// state only; the list's top item remains the model used by the authored
-	// MAPNAMES/Campaign/Missions controls.
-	scrollDrag         retailScrollDrag
-	retailPressed      int
-	retailRightPressed int
+	// panels owns the active authored window, its save-under predecessor, modal
+	// message, focus/press latches, and list thumb capture [07 §3][07 §4].
+	panels ui.PanelStack
 
 	cam    *camera.Camera
 	battle *battleSession
@@ -307,17 +292,17 @@ func loadRetailPanel(cs *contentSet, guiName, pcxName, gafName string) *retailPa
 }
 
 func (g *gameShell) openMenu(mode shellMode) {
-	g.under, g.underMode = nil, mode
-	if g.panel != nil && mode != g.mode && g.panelWindowNeedsUnder(mode) {
-		g.under, g.underMode = g.panel, g.mode
+	oldPanel, oldMode := g.activePanel(), g.mode
+	if oldPanel != nil {
+		// Clear a gesture before replacing the active window. This used to sit
+		// after panel=nil and was unreachable, allowing a held press to leak
+		// into the next authored screen [07 §3].
+		oldPanel.ResetPress()
+		oldPanel.CancelScrollDrag()
 	}
 	g.mode = mode
-	g.panel = nil
-	g.modal = nil
-	g.modalPressed = false
-	g.scrollDrag = retailScrollDrag{}
-	g.retailPressed = -1
-	g.retailRightPressed = -1
+	g.panels.CloseModal()
+	var panel *ui.Panel
 	if g.assets != nil {
 		if mode == modeMenuMission {
 			// NEWGAME.GUI is reused for both New Campaign and Play Any Game.
@@ -327,19 +312,42 @@ func (g *gameShell) openMenu(mode shellMode) {
 			g.applyRetailMissionLayout()
 		}
 		if p := g.assets.panel[mode]; p != nil && p.window != nil {
-			g.panel = newRetailPanelState(p.window)
+			panel = ui.NewPanel(p.window)
 		}
 	}
 	if mode == modeMenuSkirmish {
 		g.installSkirmishDynamicGadgets()
 		if g.assets != nil {
 			if p := g.assets.panel[mode]; p != nil && p.window != nil {
-				g.panel = newRetailPanelState(p.window)
+				panel = ui.NewPanel(p.window)
 			}
 		}
 	}
+	if panel == nil {
+		g.panels.Replace(nil)
+	} else if oldPanel != nil && mode != oldMode && g.panelWindowNeedsUnder(mode) {
+		g.panels.Push(panel)
+	} else {
+		g.panels.Replace(panel)
+	}
 	g.refreshRetailPanel()
 	g.resolveRetailButtonGeometry()
+}
+
+func (g *gameShell) activePanel() *ui.Panel {
+	if g == nil {
+		return nil
+	}
+	if modal := g.panels.Modal(); modal != nil {
+		return g.panels.Under()
+	}
+	return g.panels.Top()
+}
+
+func reportRetailMessageError(err error) {
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
 }
 
 // panelWindowNeedsUnder reports whether opening mode pushes a panel window
@@ -421,7 +429,7 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 	if err != nil {
 		return err
 	}
-	g.battle = &battleSession{sess: sess, cat: cat, cam: g.cam, hud: battleHUD, fs: g.cs.fs, shell: g, latch: input.LatchNormal, menuPressed: -1}
+	g.battle = &battleSession{sess: sess, cat: cat, cam: g.cam, hud: battleHUD, fs: g.cs.fs, shell: g, latch: input.LatchNormal}
 	g.battle.returnToMenu = g.returnFromBattle
 	g.battle.returnToSkirmish = func(cl *client.Client) {
 		if g != nil {

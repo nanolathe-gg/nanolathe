@@ -212,7 +212,7 @@ func TestRetailNoSelectionUsesSideGeneralWindow(t *testing.T) {
 		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
 	}
 	centerOnCommanderForSession(sess, cam, winW, winH)
-	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal, menuPressed: -1}
+	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal}
 	pal := loadPalette(cs)
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
 	if err != nil {
@@ -235,11 +235,11 @@ func TestRetailNoSelectionUsesSideGeneralWindow(t *testing.T) {
 		b.openBattleMenu()
 		switch os.Getenv("NANOLATHE_HUD_MENU_STATE") {
 		case "exit":
-			b.menu = battleMenuExit
+			b.battleState().ShowExit()
 		case "confirm":
-			b.menu = battleMenuConfirmExit
+			b.battleState().ShowConfirmation(false)
 		case "confirm-main":
-			b.menu = battleMenuConfirmMain
+			b.battleState().ShowConfirmation(true)
 		}
 		cl, err := client.New(client.Options{Buffer: sess.Snapshot, Width: winW, Height: winH, Headless: true})
 		if err != nil {

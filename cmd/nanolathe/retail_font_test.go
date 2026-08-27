@@ -67,7 +67,7 @@ func TestRetailMainMenuUsesPrimaryGAFGlyphPixels(t *testing.T) {
 
 	var single gui.Gadget
 	found := false
-	for _, gadget := range shell.panel.window.Gadgets {
+	for _, gadget := range shell.panels.Top().Window.Gadgets {
 		if gadget.Name == "SINGLE" {
 			single, found = gadget, true
 			break

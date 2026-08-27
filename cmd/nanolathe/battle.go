@@ -24,6 +24,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/settings"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/ui"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -91,9 +92,7 @@ type battleSession struct {
 	statusMessage string
 	statusUntil   uint32 // GlobalTick expiry
 
-	menu             battleMenuState
-	menuPressed      int
-	menuPressedState battleMenuState
+	battleUI         *ui.BattleState
 	returnToMenu     func(*client.Client)
 	returnToSkirmish func(*client.Client)
 	retryFunc        func(*client.Client)
@@ -157,7 +156,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 	cam.Pan(0, 0)
 	centerOnCommanderForSession(sess, cam, winW, winH)
 
-	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs, latch: input.LatchNormal}
+	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs, latch: input.LatchNormal, battleUI: ui.NewBattleState()}
 	b.retryFunc = func(cl *client.Client) { b.doRetry(cl) }
 	b.returnToMenu = func(cl *client.Client) {
 		// The battle view has no menu shell callback; mark it ended and exit.
@@ -267,16 +266,21 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		cl.Cursors().SetIndex(render.CursorNormal)
 		return
 	}
+	state := b.battleState()
+	// Modal ownership is decided at frame entry. Closing ARMOPT with Tab or
+	// Escape must not hand the same frame's remaining mouse/key edges to the
+	// battle controller [07 §2][07 §3].
+	modalAtFrameStart := state.Modal() != ui.BattleModalClosed
 	if in != nil && in.Kbd != nil && in.Kbd.KeyDown(input.KeyTab) {
-		switch b.menu {
-		case battleMenuClosed:
+		switch state.Modal() {
+		case ui.BattleModalClosed:
 			b.openBattleMenu()
-		case battleMenuOptions:
+		case ui.BattleModalOptions:
 			b.closeBattleMenu()
 		}
 	}
 	// ESC-menu token path [07 §2]: ESC reuses Tab menu machinery; also disarms latch as today [07 §9].
-	if in != nil && in.Kbd != nil && in.Kbd.KeyDown(input.KeyEscape) && b.menu == battleMenuClosed {
+	if in != nil && in.Kbd != nil && in.Kbd.KeyDown(input.KeyEscape) && state.Modal() == ui.BattleModalClosed {
 		if b.latch == input.LatchNormal && b.buildDef == "" {
 			b.openBattleMenu()
 		} else {
@@ -286,7 +290,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			b.dragActive = false
 		}
 	}
-	if b.menu != battleMenuClosed {
+	if modalAtFrameStart || state.Modal() != ui.BattleModalClosed {
 		b.handleBattleMenuInput(in, cl)
 	} else {
 		if b.controller == nil {
@@ -297,7 +301,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b.ended {
 		return
 	}
-	if b.menu != battleMenuClosed {
+	if state.Modal() != ui.BattleModalClosed {
 		cl.Cursors().SetIndex(render.CursorNormal)
 	} else {
 		b.updateCursor(cl)
@@ -311,7 +315,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// - focus gating before edge [07 §10]
 	// - scroll setting from persisted settings byte [02 "Settings"] default 32 [C-5]
 	// W/A/S/D remain unbound per ON-05 (do not pan) [F-P1-008].
-	if b.cam != nil && b.menu == battleMenuClosed {
+	if b.cam != nil && state.Modal() == ui.BattleModalClosed {
 		kbd := cl.Input().Kbd
 		mouse := cl.Input().Mouse
 		rawDelta := int32(delta * 1000)
@@ -335,7 +339,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		}
 		talkActive := b.isTalkGUIActive()
 		overMinimap := b.isOverMinimap(effX, effY)
-		modalActive := b.menu != battleMenuClosed
+		modalActive := state.Modal() != ui.BattleModalClosed
 		// Held-arrow branches gated on TALK absence [07 §10]; edge branches gated on focus, modal, and minimap.
 		// Left: (Left held && !talk) OR (x==0 && y<H) [07 §10]
 		if kbd.KeyHeld(input.KeyLeft) && !talkActive {
@@ -369,10 +373,9 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 				b.cam.Drag(dx, dy)
 			}
 		}
-		// Wheel zoom presentation-only, centered where practical (cursor) [F-P1-008].
-		if mouse.Scrolled() && mouse.ScrollY != 0 {
-			b.cam.AddZoom(mouse.ScrollY, int32(mouse.X), int32(mouse.Y))
-		}
+		// Wheel belongs to the active GUI list under the pointer. It is not a
+		// battle-camera control [07 §2][07 §10]. The UI boundary consumes it
+		// before this camera pass.
 		b.prevMouseX = mouse.X
 		b.prevMouseY = mouse.Y
 	}
@@ -1747,26 +1750,23 @@ func (b *battleSession) statusVisible() bool {
 	return b.sess.Clock.GlobalTick <= b.statusUntil
 }
 
-// adjustGameSpeed clamps Clock.Requested to 1..20 and emits the retail status
-// message [07 §11][07 §2].
+// adjustGameSpeed emits a concrete UI scheduling intent; Session performs the
+// clamp and applies it at the scheduling boundary [07 §11][07 §2].
 func (b *battleSession) adjustGameSpeed(delta int) {
-	if b == nil || b.sess == nil || b.sess.Clock == nil {
+	if b == nil || b.sess == nil {
 		return
 	}
-	old := b.sess.Clock.Requested
-	newReq := old + int32(delta)
-	if newReq < 1 {
-		newReq = 1
-	}
-	if newReq > 20 {
-		newReq = 20
-	}
-	if newReq == old {
+	b.applyBattleSchedule(ui.SpeedIntent(delta))
+}
+
+func (b *battleSession) setGameSpeed(delta int) {
+	if b == nil || b.sess == nil {
 		return
 	}
-	b.sess.Clock.Requested = newReq
-	// Retail updates Active immediately as well as Requested [07 §11].
-	b.sess.Clock.Active = newReq
+	newReq, changed := b.sess.AdjustSpeed(delta)
+	if !changed {
+		return
+	}
 	var msg string
 	if newReq == 10 {
 		msg = "Game Speed Normal" // [07 §2]
@@ -1780,12 +1780,16 @@ func (b *battleSession) adjustGameSpeed(delta int) {
 
 // togglePause flips the pause bit and emits retail message [07 §11] igpaused overlay is the established indicator; TODO(question): exact on-screen pause string not recovered, using "Game Paused"/"Game Resumed" as placeholder behind TODO.
 func (b *battleSession) togglePause() {
-	if b == nil || b.sess == nil || b.sess.Clock == nil {
+	if b == nil || b.sess == nil {
 		return
 	}
-	b.sess.Clock.Paused = !b.sess.Clock.Paused
+	paused := true
+	if b.sess.Clock != nil {
+		paused = !b.sess.Clock.Paused
+	}
+	b.applyBattleSchedule(ui.PauseIntent(paused))
 	var msg string
-	if b.sess.Clock.Paused {
+	if paused {
 		msg = "Game Paused" // TODO(question): retail pause localized message not established beyond igpaused GAF [07 §11]; verify with decompile
 	} else {
 		msg = "Game Resumed"

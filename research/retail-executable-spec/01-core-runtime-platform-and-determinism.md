@@ -87,7 +87,8 @@ The established startup sequence for the normal process entry is:
 10. Enter the application pump and game-mode dispatcher.
 
 The Park–Miller simulation random stream is **not** seeded during this process
-startup; it is seeded at battle entry from `QueryPerformanceCounter`.
+startup; it is seeded at battle entry from `QueryPerformanceCounter` (battle
+entry also reseeds the CRT stream there; §7.2).
 
 The process title and registered class both identify the game as “Total
 Annihilation”. The default display dimensions are 640 by 480. The startup notes
@@ -379,21 +380,30 @@ twelve-phase order is:
    nonzero), the direction vector pair computed as −2 × the fixed-point trig
    of the heading with the speed as the magnitude, the published ratio
    `speed / 5000` clamped at exactly 1.0, and the change flag;
-9. wind-field update — a second deadline gates recomputation of the moving
-   wind-field point (map-dimension-scaled base plus per-axis jitter, CRT
-   draws), a gust component (magnitude and angle, CRT draws), and the spawn of
-   the invisible wind-field projectile into the shared projectile pool
-   (append at tail; silent drop when the pool is full), broadcast as a
-   network packet when networked;
+9. meteor-shower strike scheduler — when the next-strike deadline passes,
+    the strike window and following strike are re-armed from the mission's
+    duration and interval (each authored in seconds and converted to ticks),
+    a strike target is drawn anywhere on the map and a spawn origin offset
+    from it (four CRT draws, consumed even when the storm is disabled), then
+    per hit a radius and an angle draw (CRT) launch one invisible meteor
+    projectile into the shared projectile pool (append at tail; silent drop
+    when the pool is full), broadcast as a network packet when networked;
+    this state family is the meteor shower — full arithmetic and the
+    parameter sources in §4.4.1 [R-CORE-01] and doc 06 §6.5;
 10. camera/scroll position update — the camera steps toward its scroll target
-    (clamped at ±320 per tick, half-step when closer), the camera shake driver
-    adds a CRT-drawn jitter while a shake is active, and the view is refreshed;
-11. ten object-list update sweeps — a table of ten linked lists of
-    vtable-backed objects allocated at battle entry; each object's update
-    virtual runs, and objects returning zero are destroyed and removed with
-    inline compaction. The object family is not yet identified
-    (`TODO(question)`); the pass is real work whenever the lists are
-    non-empty, not a no-op;
+     (clamped at ±320 per tick, half-step when closer), the camera shake
+     driver adds a CRT-drawn jitter while a shake is active (exactly two CRT
+     draws per active tick, linear-decay envelope; details in §4.4.1
+     [R-CORE-01]), and the view is refreshed;
+11. ten object-list update sweeps — the ten effect strips of the rendering
+    contract (doc 03 "Strip storage and lifecycle"): ten vectors of
+    vtable-backed objects in a table allocated at battle entry; per strip in
+    ascending index and per object in insertion order, a removal verdict
+    virtual is evaluated before the update virtual: a positive verdict
+    destroys the object (destructor invoked with argument 1) and removes it
+    with stable in-place compaction, a zero verdict runs the update virtual
+    and keeps the object; empty strips are skipped without touching any
+    global (details in §4.4.1 [R-CORE-01]);
 12. an every-eight-sub-tick cadence flip.
 
 At the tail of every sub-tick, when networked and the transport flag is set,
@@ -429,6 +439,103 @@ unit-owner projectile purge (see §6.1).
   map iteration and no generation-tagged handles for simulation identities
   [P0-09][P1-14].
 
+### 4.4.1 R-CORE-01 closure — phase 9 identity, phase 10 shake arithmetic, phase 11 object family, and the visibility publication seam [R-CORE-01]
+
+**Phase 9 is the meteor shower, not a "wind field" (correction).** The
+previous text (here and in §7.3) called phase 9 the "wind-field update"
+producing a "wind-field projectile". That family label is wrong: the phase's
+state block is saved and restored under the section name **"Meteor"** with the
+keys `Enabled`, `Active`, `Next Strike Time`, `Time Strike Ends`,
+`Next Hit Time`, `Origin X/Z`, `Target X/Z`; its configuration is written by
+the mission/OTA loader from the `MeteorWeapon`, `MeteorRadius`,
+`MeteorDensity`, `MeteorDuration`, and `MeteorInterval` keys; and its
+mechanics match doc 06 §6.5 exactly. The earlier "wind-field" label was an
+inference from the phase's position after the wind change; the save-section
+vocabulary and the OTA key chain disprove it. Established.
+
+**Phase 9 mechanics (Established).** All draws are CRT; the simulation stream
+is never touched by this phase. When the next-strike deadline passes (a
+non-strict comparison against the global tick):
+
+1. The active flag is set; the strike end is re-armed at
+   `tick + trunc(duration × 30)`; the next strike at
+   `strikeEnd + trunc(interval × 30)` — the duration and interval are the
+   mission's authored seconds converted to ticks once at load; the per-hit
+   spacing is `trunc(30 / density)` ticks and also serves as the initial
+   next-strike value written at battle entry.
+2. Scheduling draws, consumed on every due evaluation even when the storm is
+   disabled: strike target = one draw scaled by the map depth then one by the
+   map width; spawn origin = target plus a depth-axis offset
+   `(draw × 10) / 0x8000 − 15` (always −15 through −6) and a width-axis
+   offset `(draw × 30) / 0x8000 − 15` (−15 through +14).
+3. While the storm is active, each hit (first on the strike's opening tick,
+   then every per-hit spacing) draws a radius `(draw × radiusValue) / 0x8000`
+   converted to fixed-point and an angle `draw × 2` (always even, one full
+   16-bit turn), resolves the lateral scatter through the fixed-point sine and
+   cosine tables, and spawns one meteor: spawn height 1350 world units, drop
+   velocity −15 per tick, horizontal velocity
+   `trunc(((target − origin) << 20) / 90)` per axis. The spawner appends at
+   the projectile pool tail and silently drops the individual meteor when the
+   pool is full (no retry, no event; the hit timer has already advanced).
+   When networked it broadcasts the field data as a packet.
+
+**Phase 10 shake (Established; extends the previous one-line description).**
+A shake request arrives from the authoritative impact dispatcher with one
+amplitude value applied to both axes and one duration taken from the
+impacting weapon's definition. If no shake is active the two amplitude
+accumulators are cleared; the new duration is
+`trunc((requested + current) / 2)` blended with any current duration, the
+remaining counter is set to it, the amplitudes accumulate, and the active
+flag is set when the duration is positive. An options bit can make requests
+return untouched. Each sub-tick with an active shake and a positive counter
+consumes **exactly two CRT draws** (one per axis) and steps the camera
+origin by
+
+```
+sx = amplitudeX * remaining / duration      (signed, truncating)
+offsetX = rand() * sx / 0x8000 − sx / 2     (signed truncating division)
+```
+
+so the envelope decays linearly with the remaining counter. The tick after
+the counter reaches zero clears the active flag and consumes **no draws**.
+The jitter lands in the authoritative camera origin; the final view clamp
+holds it inside the map.
+
+**Phase 11 object family (correction + closure).** The previous text said
+"each object's update virtual runs, and objects returning zero are destroyed
+and removed" and left the family unidentified. Both halves are superseded by
+direct reads of the sweep: the evaluated virtual is a **removal verdict
+evaluated before the update work** — a **positive** verdict destroys (calling
+the object's destructor entry with argument 1) and removes the object with
+stable left compaction, while a **zero** verdict runs a second virtual (the
+update work) and keeps the object. The polarity matters: doc 03's strip
+lifecycle ("destroying and stably compacting on a positive verdict") is the
+correct reading and always was; the inverted phrasing came from an earlier
+note. Established. The family is closed as **the ten effect strips of the
+rendering contract**: the table holds ten vector descriptors (each a tag
+byte, a zeroed word, and begin/end pointers), allocated at battle entry and
+freed at battle exit with every object destroyed; producers append at the
+vector end chosen by a literal strip index (doc 03's producer census), with
+the pre-insert count above 400 destroying the oldest object first; strips are
+swept in ascending index and objects in insertion order. A presentation-side
+helper also walks whole strips to invoke a per-object notification entry.
+The sweep consumes no random draws and changes no globals when every strip is
+empty. The per-object update internals are doc 03's territory.
+
+**Visibility publication seam (Established, phase placement).** The per-unit
+coverage writers live inside phase 5 itself: the phase runs the path
+scheduler first, then per player in ascending order dispatches orders and
+per-player work, then sweeps that player's unit slice stamping coverage for
+each unit flagged in-game — the stamp is dirty-checked, re-rasterizing a
+unit's coverage only when its stored stamp cell or sight range changed (so a
+unit that moved in phase 2 is re-stamped in the same tick's phase 5, and an
+unchanged unit writes nothing). The bulk wipe-and-rebuild runs at battle
+entry and, inside phase 5, only in the commander spawn/defeat branches —
+never per tick. There is no visibility pass in phase 12, the cadence flip,
+or the post-loop tail: the phase-5 sweep is the final publisher, and phases
+6 and later read the same-tick updated coverage for every player already
+processed (ascending order).
+
 ## 5. Threads, TLS, locks, and synchronization
 
 ### 5.1 Threads
@@ -446,7 +553,8 @@ bit 2) remain enabled in that same call.
 The C-runtime thread-local block is 116 bytes. It stores thread identity and a
 four-byte `rand` state in the historical Microsoft layout (seed established at
 startup from local/system time and time-zone conversion at one-second
-resolution). Each thread obtains the block lazily with `TlsGetValue`; missing
+resolution, and reseeded at battle entry from the same helper; §7.2). Each
+thread obtains the block lazily with `TlsGetValue`; missing
 state is allocated, initialized, and installed with `TlsSetValue`. No gameplay
 worker pool is established by the current call census.
 
@@ -565,9 +673,12 @@ For a positive bound of at least 2, update the state with the Lehmer recurrence,
 add the modulus when the intermediate value is nonpositive, then return the
 unsigned remainder modulo the bound. Bounds below 2 return zero without a
 useful draw. Startup seeds this stream from the sum of the low and high parts
-of `QueryPerformanceCounter`, XORed with a fixed constant and forced odd. A
-single state is shared by placement, wind, effects, combat, and other callers;
-call order, not entity identity, isolates consumers.
+of `QueryPerformanceCounter`, XORed with a fixed constant and forced odd; the
+seed setter has exactly one call site in the recovered image — the
+battle-entry orchestrator — so neither startup, loading, nor any packet
+handler reseeds it elsewhere. A single state is shared by placement, wind,
+effects, combat, and other callers; call order, not entity identity, isolates
+consumers.
 
 ### 7.2 Microsoft CRT stream
 
@@ -580,11 +691,19 @@ return (state >> 16) & 32767
 
 The state is the four-byte field in the 116-byte TLS block. Startup seeds it
 from local/system time and time-zone conversion, at effectively one-second
-resolution. The stream supplies wind draws and interval jitter plus UI/media
-variants, and is also consumed by the camera-shake driver inside the tick
-(two draws per shake step while a shake is active); it is not the simulation
-Park–Miller stream. The wind tick consumes both streams for different
-outputs, making the separation observable.
+resolution, and **battle entry reseeds it again** from the same time-of-day
+helper: the seed helper has exactly two call sites in the recovered image,
+process startup and the battle-entry orchestrator. The battle-entry seed
+writes the calling thread's block — the main thread whose state every
+gameplay draw reads — so battle entry references and replaces the same
+stream state; no copy of "process CRT state" is taken, and with the normal
+startup creating no helper thread the main thread's block is the only
+battle-relevant CRT stream. The stream supplies the meteor-shower draws, the
+wind-change interval jitter, and UI/media variants, and is also consumed by
+the camera-shake driver inside the tick (two draws per shake step while a
+shake is active); it is not the simulation Park–Miller stream. The wind tick
+consumes both streams for different outputs, making the separation
+observable.
 
 Sampling bounds above 32,767 use a chunk-concatenation loop before the final
 modulo: starting with mask and result both `0x7FFF`, while the mask is below
@@ -598,30 +717,43 @@ wherever a CRT draw needs a wider range.
 Placement draws X then Y from the global simulation stream. Wind consumption
 spans both streams and is fully recovered:
 
-- At briefing-screen entry, before the simulation consumes either value, the
-  CRT stream draws the initial wind speed `rand() % (maxWind − minWind + 1) +
-  minWind` from the mission's parsed minimum/maximum bounds, then the initial
-  direction `rand() & 0x3F`.
+- (Corrected) At briefing-screen entry the CRT stream draws
+  `rand() % (maxWind − minWind + 1) + minWind` from the mission's parsed
+  minimum/maximum bounds and then `rand() & 0x3F`. The earlier text presented
+  these as the battle's initial wind values; they are **front-end display
+  state only** — the two values are stored in briefing-screen globals whose
+  only readers are the briefing/front-end region itself, and no battle-side
+  reader exists in the recovered image. The battle's actual initial wind is
+  drawn by the wind-change routine at tick 1 (see below).
 - In simulation, the wind change falls due when the global tick passes the
-  wind deadline; the next deadline advances by `((CRT draw * 10) / 0x8000 +
-  5) * 30` ticks — five through fourteen seconds quantized to 30-tick units,
-  using 64-bit multiply/divide.
+  wind deadline (a strict comparison); the next deadline advances by
+  `((CRT draw * 10) / 0x8000 + 5) * 30` ticks — five through fourteen seconds
+  quantized to 30-tick units, using 64-bit multiply/divide, drawn **before**
+  the new speed and heading.
 - When due, the new speed is a bounded simulation-stream draw
   `simRand(maxWind − minWind) + minWind`. The new heading is a simulation draw
   of `simRand(0x10000)` truncated to 16 bits, taken only when the speed is
   nonzero; the direction vector pair is computed as **−2 × the fixed-point
   trig** of the heading (the −2 factor was omitted from earlier revisions).
+  Battle entry itself initializes the wind by zeroing the deadline and
+  calling the wind-change routine — but with the global tick still zero the
+  strict gate does not fire, so that call consumes **no draws**; the first
+  wind chain runs inside the first sub-tick, after the executor has
+  incremented the global tick.
 - The published float ratio is `(float)speed / (float)5000` — the denominator
   is a fixed constant written once at battle entry — stored as a 32-bit float
   and clamped from above at exactly 1.0 (overflow stores the float bit
   pattern for 1.0).
-- A second deadline gates the wind-field update: CRT draws produce a moving
-  map point (per-axis draws scaled by the map cell dimensions, plus per-axis
-  jitter) and a gust component (magnitude and angle draws), and the field is
-  embodied as an invisible projectile reserved from the shared projectile
-  pool at the append tail — when the pool is full the reservation fails
-  silently (no retry, no event) and the network variant broadcasts the field
-  data as a packet.
+- (Corrected) The second deadline gates the **meteor-shower strike
+  scheduler** (see §4.4.1 [R-CORE-01] and doc 06 §6.5), not a wind-field
+  update. Its draws are all CRT and in a fixed order: four scheduling draws
+  on every due evaluation even when the storm is disabled (map-depth-scaled
+  then map-width-scaled target draws, then a depth-axis and a width-axis
+  origin offset), then per hit a radius draw and an angle draw
+  (`draw × 2`, always even) before each invisible meteor projectile is
+  reserved from the shared projectile pool at the append tail — when the pool
+  is full the reservation fails silently (no retry, no event) and the network
+  variant broadcasts the field data as a packet.
 
 Random sound variants use the CRT path. There is no recovered per-player or
 per-weapon RNG state, explicit peer RNG synchronization, or complete saved RNG
@@ -630,6 +762,58 @@ match is expected to continue the exact pre-save stream.
 
 The fixed-step scheduler block is **saved** (see below). RNG state is not part
 of that block.
+
+#### R-CORE-02 closure — battle RNG seeding and a chronological draw census [R-CORE-02]
+
+**Seeding (Established).** At battle entry the orchestrator seeds both
+streams before any battle setup runs: the simulation stream is seeded from
+the `QueryPerformanceCounter` sample (low part plus high part, XOR the fixed
+constant, forced odd), and the CRT stream is reseeded from the time-of-day
+helper (local time with time-zone and daylight handling, one-second
+resolution). The CRT seed helper has exactly two call sites — process startup
+and battle entry — and the simulation seed setter exactly one (battle entry).
+Both writes land in the calling (main) thread's state: the CRT write replaces
+the same TLS block every gameplay draw reads; nothing is copied. Because both
+seeds are taken fresh at battle entry, **every draw made before battle entry
+is wiped from the streams' state** — pre-battle consumption cannot influence
+battle determinism (only the seed instants can).
+
+**Chronological draw census (process start through early battle ticks):**
+
+| When | Stream | Draws | Consumer |
+|---|---|---|---|
+| Process startup | CRT | 0 (seed only) | TLS stream state ← time-of-day helper |
+| Menu/front-end screens | CRT | unbounded (variant paths) | UI/media random variants; not censused exhaustively |
+| Briefing-screen entry | CRT | 2 | wind display: speed `% (max−min+1) + min`, then direction `& 0x3F` — front-end display globals, no battle-side reader |
+| Battle entry | both | 0 (reseeds only) | simulation ← QPC sum; CRT ← time-of-day; global tick ← 0 |
+| Battle entry, skirmish setup | CRT | count−1 (Fisher-Yates swap draws), plus one 50/50 gate draw when fewer than three qualifying players | player-slot assignment shuffle (skirmish start positions; skipped entirely when a saved game is being loaded) |
+| Battle entry, networked setup | sim | 2 per placed commander (one per axis of the start point) | commander start placement |
+| Battle entry, campaign/mission setup | sim | 2 per placed unit (X then Y) | initial-mission unit creation |
+| Battle entry, wind initialization | — | 0 | the wind-change routine is called with a zeroed deadline while the global tick is still zero; the strict gate does not fire |
+| First sub-tick (global tick 1) | CRT, then sim | 1 CRT (interval), then 1 sim (speed), then 1 sim (heading) only when speed ≠ 0 | phase 8 wind change, now due (deadline 0 < tick 1) |
+| Sub-tick when a strike is due | CRT | 4 scheduling draws, + 2 per meteor hit (radius, then angle) | phase 9 meteor shower |
+| Sub-tick with an active shake | CRT | 2 | phase 10 camera shake |
+| Sub-tick with non-empty strips | object-internal | none at the dispatcher level | phase 11 strip sweep |
+
+Front-end draws between startup and battle entry are real CRT consumption
+but carry no battle consequence because battle entry reseeds both streams;
+they matter only for reproducing front-end behavior itself (for example the
+briefing wind display).
+
+**Save/load (Established; wording corrected).** Loading re-enters the
+battle-entry orchestrator, so both streams are reseeded unconditionally
+**before** the saved state is read: the earlier wording "reseeded from
+`QueryPerformanceCounter` and `time(NULL)`" named the mechanism imprecisely —
+the CRT source is the same time-of-day helper as at startup, not the C
+library `time()` directly, and the reseed is a consequence of load re-running
+the battle-entry path rather than a separate loader step. The first post-load
+draws are the battle-entry setup draws appropriate to the mode (the
+skirmish shuffle is skipped when a save is present), then the tick-1 wind
+chain — the wind deadline is re-zeroed unconditionally by battle entry, so
+the wind is always redrawn on the first loaded tick — and any meteor hit due
+at once if the restored meteor box re-arms a due strike. The meteor
+scheduling box itself is restored from the save (its keys are listed in
+§4.4.1); the streams are not.
 
 #### Scheduler persistence
 
@@ -641,11 +825,13 @@ fails the scheduler restore without partial application). The layout is:
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-RNG state (Park–Miller at process data and CRT TLS state) is outside this block
+RNG state (Park–Miller process-wide and CRT TLS state) is outside this block
 and is absent from the bounded save-writer graph; on load both streams are
-reseeded (Park–Miller from `QueryPerformanceCounter`, CRT from `time(NULL)`) so
-a resumed game does not continue the pre-save random sequence bit-identically.
-Replay formats are not covered by this save-box contract.
+reseeded because load re-enters the battle-entry orchestrator (see
+§7.3 [R-CORE-02]), so a resumed game does not continue the pre-save random
+sequence bit-identically. The meteor-scheduling state, by contrast, is saved
+and restored in its own box. Replay formats are not covered by this save-box
+contract.
 
 ## 8. x87 floating point and integer conversion
 
@@ -753,11 +939,13 @@ subsystem-specific.
 - Fixed unit/projectile/feature/COB/construction pools and documented queue
   capacities/order where the ledger is explicit.
 - One global Park–Miller stream, one CRT TLS stream, x87 53-bit default, and
-  truncating `__ftol` conversion; wind draws span both streams with the exact
-  arithmetic recovered (briefing-entry speed/direction draws, interval jitter,
-  bounded position draw, 16-bit heading draw, −2 vector factor, ratio over the
-  fixed denominator 5000 clamped at exactly 1.0, and the wind-field projectile
-  spawn at the phase-9 gate).
+  truncating `__ftol` conversion; both streams are seeded at battle entry
+  (simulation from the performance counter, CRT from the time-of-day helper;
+  single call sites per §7.1/§7.2), and wind draws span both streams with the
+  exact arithmetic recovered (interval jitter, bounded speed draw, 16-bit
+  heading draw, −2 vector factor, ratio over the fixed denominator 5000
+  clamped at exactly 1.0) while the meteor shower consumes only the CRT
+  stream (§7.3 [R-CORE-02]).
 - Registry/profile/legacy multimedia compatibility surface, loose-file-first
   lookup, and ordered archive-provider behavior with exact window styles
   (`WS_EX_APPWINDOW`, `WS_POPUP|WS_VISIBLE|WS_SYSMENU`, `CS_DBLCLKS`) and popup
@@ -786,10 +974,26 @@ subsystem-specific.
 - Phase 10 was previously labelled "ledger and death cleanup"; it is the
   camera/scroll position update with camera shake (a CRT consumer). The dying
   latch and finalization belong to phase 2's slot-end death handling.
-- Phase 11 was previously kept as a `TODO(T23)` no-op registration point; it
-  is a real per-object update sweep over ten vtable-backed object lists
-  (removal and destruction on zero return). Only the object family remains
-  unidentified.
+- Phase 11 was previously kept as a `TODO(T23)` no-op registration point, then
+  described as "a real per-object update sweep over ten vtable-backed object
+  lists (removal and destruction on zero return)" with the object family
+  unidentified. Both refinements are superseded: the sweep evaluates a
+  removal verdict **before** the update work and destroys on a **positive**
+  verdict (the zero-return-destruction wording was inverted), and the family
+  is now identified as the ten effect strips of doc 03's rendering contract
+  (§4.4.1 [R-CORE-01]).
+- Phase 9 was described as a "wind-field update" spawning a "wind-field
+  projectile". The family label is retracted: the state block is the meteor
+  shower — saved under the section name "Meteor", configured from the
+  mission's `Meteor*` keys, and mechanically identical to doc 06 §6.5
+  (§4.4.1 [R-CORE-01]). The mechanical descriptions (deadlines, draws, pool
+  append, silent drop) were correct and stand.
+- §7.3 previously presented the briefing-screen wind draws as the battle's
+  initial wind values "before the simulation consumes either value". They
+  are front-end display state with no battle-side reader; the battle's
+  initial wind is drawn by phase 8 at tick 1, and battle entry's own
+  wind-change call consumes nothing because its deadline gate is strict and
+  both sides are zero (§7.3 [R-CORE-02]).
 - The AI coordinator dispatch before the settlement deadline (phase 5) was a
   supported inference from a shared entry; it is now direct: the per-player
   coordinator tick runs every tick for every eligible player ahead of the
@@ -867,16 +1071,31 @@ invented behavior.
   the pause send's byte layout remains a network-framing residual.
 - Network future-frame overflow policy, retransmission wrap, and all late-join/
   resynchronization behavior.
-- RNG state persistence (established as not saved; reseeded on load) versus
+- RNG state persistence (established as not saved; reseeded because load
+  re-enters battle entry, §7.3 [R-CORE-02]) versus
   scheduler block persistence (established as saved above); network state and
   replay formats remain separate unknowns; the per-tick deadline ring of the
   post-loop tail is not serialized (its account would appear in the save
   writer's fixed account list, which contains none).
-- Phase 11's ten object lists are narrowed: the pass runs a per-object update
-  virtual with removal-and-destruction on zero return over a table allocated
-  at battle entry; only the object family's identity (no recovered writer
-  registers items) and the three empty post-loop barriers' hidden work remain
-  open.
+- Phase 11's ten object lists are closed (§4.4.1 [R-CORE-01]): the family is
+  the ten effect strips of the rendering contract (doc 03 "Strip storage and
+  lifecycle"), the sweep evaluates a removal verdict before the update work
+  and destroys on a positive verdict, and the three post-loop barrier calls
+  decompile to empty bodies (no hidden work). The remaining strip questions —
+  producers for strips 0, 1, 3, 5, and 8, and per-object update internals —
+  live in doc 03's account.
+- The compiled weapon-record fields that carry the camera-shake magnitude and
+  duration into the impact dispatcher's shake request are established
+  behaviorally (§4.4.1 [R-CORE-01]); their positions in doc 06's compiled
+  weapon-record field map remain unmapped (`TODO(question)`). The authored
+  keys (`shakemagnitude`/`shakeduration`) and the duration × 30 compile-time
+  conversion are already established in [fmt tdf] and doc 06.
+- Whether the briefing wind display globals have any reader outside the
+  briefing/front-end region (bounded absence: none in the recovered image; a
+  dataflow census over unrecovered regions would settle it).
+- Whether the networked-mode commander placement loop also runs when a saved
+  networked game is loaded (the loop is not gated on the save box; only
+  affects multiplayer, which is out of scope).
 - Complete list of authoritative `__ftol` callers and any non-default x87
   control-word mutation reachable from simulation; the scaled-clock factor
   field is resolved as 30 (not a control word).
@@ -895,9 +1114,10 @@ invented behavior.
   decompiled corpus); stale handles alias later occupants.
 - Failure side effects of specialized projectile allocators beyond the meteor
   spawner, whose placement is closed (it appends to the shared projectile pool
-  from a scheduler phase after wind jitter and silently drops when the pool is
-  full, with the hit timer already advanced so the slot is not retried). The
-  wind-field projectile shares this append-and-silently-drop contract.
+  from phase 9 — the meteor-shower strike scheduler — and silently drops when
+  the pool is full, with the hit timer already advanced so the slot is not
+  retried). The earlier "wind-field projectile" name for that spawner is
+  retracted; it is the meteor spawner (§4.4.1 [R-CORE-01]).
 - Effect-strip layouts are largely typed — ten fixed strips drawn in barrier
   order, fed by one shared segment pool capped at 400 entries with oldest-first
   FIFO eviction and a per-tick compaction pass; what remains open is per-strip
