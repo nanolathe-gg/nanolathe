@@ -18,13 +18,13 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	pathpkg "github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
@@ -1038,7 +1038,7 @@ func TestP0I17_Gate7_Mission(t *testing.T) {
 		}
 	}
 	m2 := &mission.Mission{Type: mission.TypeCampaign, TerrainKey: "test", Schema: mission.Schema{Name: "Schema 0"}}
-	s2 := &Session{Catalog: cat, World: terrain, Mission: m2, Clock: &clock.State{Requested: 10, Active: 10}, Snapshot: &snapshot.Buffer{}, State: StatePostBattle, Latch: NewEndLatch()}
+	s2 := &Session{Catalog: cat, World: terrain, Mission: m2, Clock: &clock.State{Requested: 10, Active: 10}, Snapshot: &frame.Buffer{}, State: StatePostBattle, Latch: NewEndLatch()}
 	s2.Units = w
 	s2.Econ = s.Econ
 	s2.RegisterAll()
@@ -1061,7 +1061,7 @@ func TestP0I17_Gate9_PresentationIsolation(t *testing.T) {
 	terrain := minimalTerrain()
 	m := syntheticMission()
 	build := func() *Session {
-		s := &Session{Catalog: cat, World: terrain, Mission: m, Clock: &clock.State{Requested: 10, Active: 10}, Snapshot: &snapshot.Buffer{}, Econ: &economy.Service{}, Latch: NewEndLatch()}
+		s := &Session{Catalog: cat, World: terrain, Mission: m, Clock: &clock.State{Requested: 10, Active: 10}, Snapshot: &frame.Buffer{}, Econ: &economy.Service{}, Latch: NewEndLatch()}
 		w, _ := newSlicedWorld(cat)
 		s.Units = w
 		for i := 0; i < 2; i++ {
@@ -1091,14 +1091,12 @@ func TestP0I17_Gate9_PresentationIsolation(t *testing.T) {
 	sHeadless := build()
 	rng.SeedGlobal(777, 888)
 	sRendered := build()
-	sRendered.OnRender = func(alpha float32) {
-		prev, cur, ok := sRendered.Snapshot.Read()
-		if !ok {
+	sRendered.OnRender = func() {
+		cur := sRendered.Snapshot.Current()
+		if cur == nil {
 			return
 		}
-		_ = prev
 		_ = cur
-		_ = alpha
 		if cur.Fog.Valid {
 			_ = cur.Fog.Ch0
 			_ = cur.Fog.Ch1
@@ -1253,7 +1251,7 @@ func TestP0I17_Gate10_Corpus(t *testing.T) {
 // Ensure imports used.
 var (
 	_ = clock.State{}
-	_ = snapshot.Buffer{}
+	_ = frame.Buffer{}
 	_ = world.NewWind
 	_ = features.NewService
 	_ = combat.Service{}

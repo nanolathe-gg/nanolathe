@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -13,7 +13,7 @@ import (
 func TestP0I10_LoadingCannotTick(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 		Units:    units.New(10, nil),
 		State:    StateLoading,
 	}
@@ -42,7 +42,7 @@ func TestP0I10_LoadingCannotTick(t *testing.T) {
 func TestP0I10_LoadingCompletionDeferred(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 		State:    StateLoading,
 	}
 	s.RegisterAll()
@@ -76,7 +76,7 @@ func TestP0I10_LoadingCompletionDeferred(t *testing.T) {
 func TestP0I10_VictoryReachesPostBattleExactlyOnce(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 		Units:    units.New(10, nil),
 		State:    StateBattle,
 		Mission:  &mission.Mission{Type: mission.TypeCampaign},
@@ -270,7 +270,7 @@ func TestP0I10_TeardownReleasesInDocumentedOrder(t *testing.T) {
 func TestP0I10_AbortTransitionsThroughRouter(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 		Units:    units.New(10, nil),
 		State:    StateBattle,
 	}

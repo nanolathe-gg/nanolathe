@@ -17,13 +17,13 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -334,8 +334,8 @@ func runO3ProductionReplay(t *testing.T, root string) o3Run {
 	return o3Run{traceHash: hex.EncodeToString(h.Sum(nil)), stateHash: hex.EncodeToString(state.Sum(nil)), milestones: milestones}
 }
 
-func o3ResourceCapacity(frame *snapshot.Frame, player uint8) (float32, float32, bool) {
-	for _, resource := range frame.Resources {
+func o3ResourceCapacity(frame *frame.Frame, player uint8) (float32, float32, bool) {
+	for _, resource := range frame.Economy {
 		if resource.Player == player {
 			return resource.MetalCapacity, resource.EnergyCapacity, true
 		}
@@ -343,22 +343,22 @@ func o3ResourceCapacity(frame *snapshot.Frame, player uint8) (float32, float32, 
 	return 0, 0, false
 }
 
-func (b *battleSession) currentSnapshotOrFail(t *testing.T) *snapshot.Frame {
+func (b *battleSession) currentSnapshotOrFail(t *testing.T) *frame.Frame {
 	t.Helper()
-	frame, ok := b.currentSnapshot()
+	f, ok := b.currentSnapshot()
 	if !ok {
 		t.Fatalf("no immutable snapshot")
 	}
-	return frame
+	return f
 }
 
 func o3SnapshotScreenPos(t *testing.T, b *battleSession, handle pool.Handle) (int32, int32) {
 	t.Helper()
-	frame, ok := b.currentSnapshot()
+	f, ok := b.currentSnapshot()
 	if !ok {
 		t.Fatalf("no immutable frame while locating unit %d", handle)
 	}
-	view, found := snapshotUnitByHandle(frame, handle)
+	view, found := snapshotUnitByHandle(f, handle)
 	if !found {
 		t.Fatalf("unit %d absent from immutable frame while locating it", handle)
 	}
@@ -377,13 +377,13 @@ func o3Click(c *BattleController, x, y int32, elapsed float64) {
 
 func o3SelectUnit(t *testing.T, b *battleSession, controller *BattleController, handle pool.Handle) {
 	t.Helper()
-	frame, ok := b.currentSnapshot()
+	f, ok := b.currentSnapshot()
 	if !ok {
 		t.Fatalf("no immutable frame while selecting unit %d", handle)
 	}
-	var view snapshot.UnitView
+	var view frame.UnitView
 	found := false
-	for _, candidate := range frame.Units {
+	for _, candidate := range f.Units {
 		if candidate.Slot == handle {
 			view, found = candidate, true
 			break
@@ -471,13 +471,13 @@ func o3AdvanceUntil(s *session.Session, owner *units.Unit, key string, max int) 
 	havePreviousProgress := false
 	for i := 0; i < max; i++ {
 		o3Step(s, 1)
-		frame, ok := (&battleSession{sess: s}).currentSnapshot()
+		f, ok := (&battleSession{sess: s}).currentSnapshot()
 		if !ok {
 			continue
 		}
-		var progress *snapshot.BuildProgressView
-		for i := range frame.Builds {
-			candidate := &frame.Builds[i]
+		var progress *frame.BuildProgressView
+		for i := range f.Builds {
+			candidate := &f.Builds[i]
 			if candidate.Builder == owner.Handle && candidate.ProductKey == canonical {
 				progress = candidate
 				break

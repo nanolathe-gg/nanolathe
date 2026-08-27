@@ -27,12 +27,6 @@ func TestMinimapRadarSurfaceAtSet(t *testing.T) {
 	}
 }
 
-func TestMinimapLetterboxFill(t *testing.T) {
-	if got := LetterboxFill(); got != 0 {
-		t.Fatalf("LetterboxFill want 0 got %d [03 §3.6] TODO(question)", got)
-	}
-}
-
 func TestMinimapLayoutLetterboxWideTallSquare(t *testing.T) {
 	// Square: mapW==mapH -> RadarW=126, RadarH=126, Origin 0,0 [07 §10][03 §3.6]
 	m := camera.LayoutMinimap(100, 100)
@@ -74,7 +68,7 @@ func TestMinimapLayoutLetterboxWideTallSquare(t *testing.T) {
 
 func TestMinimapRadarProjectionHalfShear(t *testing.T) {
 	// rx=worldX*RadarW/PlayRight, ry=(worldZ - (worldY>>1))*RadarH/PlayBottom SAR 1 [03 §3.9]
-	m := camera.Minimap{W: 126, H: 63, PadX: 0, PadY: 31} // arbitrary
+	m := camera.Minimap{W: 126, H: 63, PadX: 3, PadY: 31} // arbitrary
 	playW := int32(1000)
 	playH := int32(1000)
 	// without Y
@@ -148,7 +142,8 @@ func TestMinimapBuildRadarPictureLetterboxAndGuard(t *testing.T) {
 	if m.W <= 0 || m.H <= 0 {
 		t.Fatalf("layout got %+v", m)
 	}
-	pic := BuildRadarPicture(ter, ter.PlayRight, ter.PlayBottom, m, nil, 0, 0, nil)
+	tables := identityALP()
+	pic := BuildRadarPicture(ter, ter.PlayRight, ter.PlayBottom, m, nil, 0, 0, &tables)
 	if pic == nil {
 		t.Fatalf("pic nil")
 	}
@@ -161,19 +156,15 @@ func TestMinimapBuildRadarPictureLetterboxAndGuard(t *testing.T) {
 	if len(pic.Bits) != pic.W*pic.H {
 		t.Fatalf("bits len %d want %d", len(pic.Bits), pic.W*pic.H)
 	}
-	// Due to supersampling with tile0 fallback, first pixel should be 0x11 (guard case)
-	// worldX for tx=0, ty=0 is 0, tileIdx at (0,0) is 5 -> guard to 0 -> pix 0x11, blended nearest without ALP gives 0x11.
+	// Due to supersampling with the established out-of-range tile-index guard,
+	// first pixel should be 0x11 [03 §3.7].
 	if pic.Bits[0] != 0x11 {
 		t.Fatalf("guard idx>=TileCount→0 failed, got %02x want 0x11 [03 §3.7] [analysis omitted]:3C", pic.Bits[0])
 	}
-	// Test baked path still produces w*h
-	baked := make([]byte, 4*4)
-	for i := range baked {
-		baked[i] = byte(i)
-	}
-	pic2 := BuildRadarPicture(ter, ter.PlayRight, ter.PlayBottom, m, baked, 4, 4, nil)
-	if len(pic2.Bits) != pic2.W*pic2.H {
-		t.Fatalf("baked rescale len")
+	// Non-integral baked source scaling is intentionally suppressed until its
+	// sampling rule is traced [03 §3.7].
+	if pic2 := BuildRadarPicture(ter, ter.PlayRight, ter.PlayBottom, m, make([]byte, 4*4), 4, 4, &tables); pic2 != nil {
+		t.Fatalf("untraced baked scaling must be suppressed")
 	}
 }
 
@@ -187,46 +178,38 @@ func TestMinimapBuildRadarPictureFromWorld(t *testing.T) {
 		ter.TileSet[0][i] = 0x33
 	}
 	m := camera.LayoutMinimap(ter.CellW*16, ter.CellH*16)
-	pic := BuildRadarPictureFromWorld(ter, m, nil, 0, 0, nil)
-	if pic == nil || pic.W != int(m.W) {
+	tables := identityALP()
+	if pic := BuildRadarPictureFromWorld(ter, m, nil, 0, 0, &tables); pic == nil || pic.W != int(m.W) {
 		t.Fatalf("FromWorld failed %+v", pic)
 	}
 	// nil terrain helper
-	pic2 := BuildRadarPictureFromWorld(nil, m, nil, 0, 0, nil)
-	if pic2 == nil || pic2.W != int(m.W) {
-		t.Fatalf("FromWorld nil terrain")
+	if pic2 := BuildRadarPictureFromWorld(nil, m, nil, 0, 0, &tables); pic2 != nil {
+		t.Fatalf("FromWorld nil terrain must be suppressed")
 	}
 }
 
 func TestMinimapBuildRadarPictureALPBlend(t *testing.T) {
-	// Verify ALP path when tables non-nil vs fallback nearest.
-	ter := &world.Terrain{CellW: 4, CellH: 12, PlayRight: 32, PlayBottom: 64}
-	tileW := int(ter.CellW / 2)
-	tileH := int(ter.CellH / 2)
-	ter.TileIndices = make([]uint16, tileW*tileH)
-	ter.TileSet = make([][1024]byte, 1)
-	// Make tile with distinct pattern to test blend: every pixel distinct? Simplify: tile0 has gradient.
-	for i := 0; i < 1024; i++ {
-		ter.TileSet[0][i] = byte(i & 0xFF)
-	}
-	m := camera.Minimap{W: 2, H: 2}
+	// Asymmetric entries lock the established row-first, two-level order
+	// [03 §3.7].
 	var tables palette.Tables
-	// Fill Alpha as identity-ish: Alpha[a*256+b] = (a+b)/2 average for test determinism.
+	tables.Alpha[1*256+2] = 10
+	tables.Alpha[3*256+4] = 20
+	tables.Alpha[10*256+20] = 30
+	baked := []byte{1, 2, 3, 4}
+	pic := BuildRadarPicture(nil, 1, 1, camera.Minimap{W: 1, H: 1}, baked, 2, 2, &tables)
+	if pic == nil || len(pic.Bits) != 1 || pic.Bits[0] != 30 {
+		t.Fatalf("row-first ALP result got %#v want 30", pic)
+	}
+}
+
+func identityALP() palette.Tables {
+	var tables palette.Tables
 	for i := 0; i < 256; i++ {
 		for j := 0; j < 256; j++ {
-			tables.Alpha[i*256+j] = byte((i + j) / 2)
+			tables.Alpha[i*256+j] = byte(i)
 		}
 	}
-	picWith := BuildRadarPicture(ter, ter.PlayRight, ter.PlayBottom, m, nil, 0, 0, &tables)
-	picWithout := BuildRadarPicture(ter, ter.PlayRight, ter.PlayBottom, m, nil, 0, 0, nil)
-	if picWith == nil || picWithout == nil {
-		t.Fatalf("nil pic")
-	}
-	// Without tables fallback is nearest (p00), with tables blended average should differ for non-uniform region.
-	// At least both produce valid bits.
-	if len(picWith.Bits) != 4 || len(picWithout.Bits) != 4 {
-		t.Fatalf("len")
-	}
+	return tables
 }
 
 func TestMinimapBuildMappedVisIdxAndGateOrder(t *testing.T) {
@@ -301,7 +284,13 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 		{WorldX: 50, WorldZ: 50, WorldY: 0, Owner: 0, Palette: 20, IsCommander: false},
 	}
 	blink := BlinkState{Countdown: 7, Phase: 1}
-	final := RebuildFinal(mapped, m, playW, playH, contacts, blink, nil)
+	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) {
+		dst.Set(x, y, color)
+		if commander {
+			dst.Set(x+1, y, color)
+		}
+	}
+	final := RebuildFinalExact(mapped, m, playW, playH, contacts, blink, blit, 0xA0, 0xB0, 0xC0)
 	if final == nil {
 		t.Fatalf("final nil")
 	}
@@ -318,7 +307,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 		{WorldX: 20, WorldZ: 20, WorldY: 0, Palette: 10, IsCommander: false},
 		{WorldX: 20, WorldZ: 20, WorldY: 0, Palette: 30, IsCommander: true},
 	}
-	final2 := RebuildFinal(mapped, m, playW, playH, contacts2, blink, nil)
+	final2 := RebuildFinalExact(mapped, m, playW, playH, contacts2, blink, blit, 0xA0, 0xB0, 0xC0)
 	rx2, ry2 := RadarProjection(20, 20, 0, playW, playH, m)
 	if v, _ := final2.At(int(rx2), int(ry2)); v != 30 {
 		t.Fatalf("commander should overwrite blip at same pixel, got %d want 30", v)
@@ -331,7 +320,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 	contacts3 := []MinimapContact{
 		{WorldX: 50, WorldZ: 50, WorldY: 0, Palette: 10, RawDistRadar: 20}, // outer radius ~ 10*20/100=2
 	}
-	final3 := RebuildFinal(mapped, m, playW, playH, contacts3, blink, nil)
+	final3 := RebuildFinalExact(mapped, m, playW, playH, contacts3, blink, blit, 0xA0, 0xB0, 0xC0)
 	// circle radius 2 should overwrite blip at offset: blip at rx,ry, circle outline at rx+2,ry should be circle color (0xA0 placeholder)
 	rx3, ry3 := RadarProjection(50, 50, 0, playW, playH, m)
 	r := RadarRadius(20, m.W, playW)
@@ -349,6 +338,38 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 	}
 }
 
+func TestMinimapNoRadarCircleGate(t *testing.T) {
+	m := camera.Minimap{W: 10, H: 10}
+	playW, playH := int32(100), int32(100)
+	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) {
+		dst.Set(x, y, color)
+	}
+	contact := MinimapContact{
+		WorldX: 50, WorldZ: 50, Visible: true, Palette: 9,
+		RawDistRadar: 20, NoRadar: true,
+	}
+	centerX, centerY := RadarProjection(contact.WorldX, contact.WorldZ, 0, playW, playH, m)
+	outerX := centerX + RadarRadius(contact.RawDistRadar, m.W, playW)
+
+	// An unstealthed no-radar unit still emits its blip, but suppresses sensor
+	// circles [03 §3.9].
+	mapped := &RadarSurface{W: 10, H: 10, Bits: make([]byte, 100)}
+	final := RebuildFinalExact(mapped, m, playW, playH, []MinimapContact{contact}, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	if got, _ := final.At(int(centerX), int(centerY)); got != 9 {
+		t.Fatalf("no-radar must not suppress blip: got %d want 9", got)
+	}
+	if got, _ := final.At(int(outerX), int(centerY)); got != 0 {
+		t.Fatalf("unstealthed no-radar must suppress circle: got %d", got)
+	}
+
+	// Stealth overrides no-radar for sensor circles [03 §3.9].
+	contact.Stealth = true
+	final = RebuildFinalExact(mapped, m, playW, playH, []MinimapContact{contact}, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	if got, _ := final.At(int(outerX), int(centerY)); got != 7 {
+		t.Fatalf("stealthed no-radar must retain circle: got %d want 7", got)
+	}
+}
+
 func TestMinimapBlinkGate(t *testing.T) {
 	m := camera.Minimap{W: 10, H: 10}
 	mapped := &RadarSurface{W: 10, H: 10, Bits: make([]byte, 100)}
@@ -356,14 +377,17 @@ func TestMinimapBlinkGate(t *testing.T) {
 		mapped.Bits[i] = 5
 	}
 	contacts := []MinimapContact{{WorldX: 10, WorldZ: 10, WorldY: 0, Palette: 9, Stealth: true}}
+	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) {
+		dst.Set(x, y, color)
+	}
 	blinkOff := BlinkState{Countdown: 7, Phase: 0}
-	finalOff := RebuildFinal(mapped, m, 100, 100, contacts, blinkOff, nil)
+	finalOff := RebuildFinalExact(mapped, m, 100, 100, contacts, blinkOff, blit, 0xA0, 0xB0, 0xC0)
 	rx, ry := RadarProjection(10, 10, 0, 100, 100, m)
 	if v, _ := finalOff.At(int(rx), int(ry)); v != 5 {
 		t.Fatalf("stealth hidden when blink==0, got %d want mapped 5 [03 §3.9]", v)
 	}
 	blinkOn := BlinkState{Countdown: 7, Phase: 1}
-	finalOn := RebuildFinal(mapped, m, 100, 100, contacts, blinkOn, nil)
+	finalOn := RebuildFinalExact(mapped, m, 100, 100, contacts, blinkOn, blit, 0xA0, 0xB0, 0xC0)
 	if v, _ := finalOn.At(int(rx), int(ry)); v != 9 {
 		t.Fatalf("stealth visible when blink==1, got %d want 9", v)
 	}
@@ -388,22 +412,5 @@ func TestMinimapBlinkGate(t *testing.T) {
 	}
 	if b.Phase != 0 {
 		t.Fatalf("phase should toggle every 8, got %d want 0", b.Phase)
-	}
-}
-
-func TestMinimapNoRadarAndPaletteFallback(t *testing.T) {
-	m := camera.Minimap{W: 10, H: 10}
-	mapped := &RadarSurface{W: 10, H: 10, Bits: make([]byte, 100)}
-	contacts := []MinimapContact{{WorldX: 10, WorldZ: 10, WorldY: 0, Palette: 0, Owner: 5, NoRadar: true}}
-	final := RebuildFinal(mapped, m, 100, 100, contacts, BlinkState{Phase: 1}, nil)
-	rx, ry := RadarProjection(10, 10, 0, 100, 100, m)
-	if v, _ := final.At(int(rx), int(ry)); v != 0x80+5 {
-		t.Fatalf("NoRadar should not suppress the contact blip, got %d", v)
-	}
-	contacts[0].NoRadar = false
-	final2 := RebuildFinal(mapped, m, 100, 100, contacts, BlinkState{Phase: 1}, nil)
-	wantPal := byte(0x80 + 5)
-	if v, _ := final2.At(int(rx), int(ry)); v != wantPal {
-		t.Fatalf("palette fallback want %d got %d", wantPal, v)
 	}
 }

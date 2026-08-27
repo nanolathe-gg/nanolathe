@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
+	"github.com/nanolathe/nanolathe/internal/frame"
 )
 
 func TestModelTexturePlayersAreInstanceLocal(t *testing.T) {
@@ -38,8 +38,8 @@ func TestModelTexturePlayersAreInstanceLocal(t *testing.T) {
 		t.Fatal("clients share model cursor ownership")
 	}
 
-	zeroA := snapshot.UnitView{Slot: 1}
-	zeroB := snapshot.UnitView{Slot: 2}
+	zeroA := frame.UnitView{Slot: 1}
+	zeroB := frame.UnitView{Slot: 2}
 	if c.orientationCache(unitPresentationID(zeroA)) == c.orientationCache(unitPresentationID(zeroB)) {
 		t.Fatal("zero-ID units with distinct stable slots share an orientation cache")
 	}

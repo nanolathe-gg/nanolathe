@@ -117,14 +117,14 @@ func TestResult_TwoPlayerHostileCommanderDeath(t *testing.T) {
 	}
 	// ResultView snapshot should expose ended state
 	if s.Snapshot != nil {
-		_, cur, ok := s.Snapshot.Read()
-		if !ok {
+		cur := s.Snapshot.Current()
+		if cur == nil {
 			// Publish a frame to ensure snapshot has result
 			// Trigger a tick to publish
 			s.Step(200)
-			_, cur, ok = s.Snapshot.Read()
+			cur = s.Snapshot.Current()
 		}
-		if ok && !cur.Result.Ended {
+		if cur != nil && !cur.Result.Ended {
 			t.Fatalf("ResultView should expose ended state via snapshot, got %+v", cur.Result)
 		}
 	}
@@ -351,7 +351,7 @@ func TestResult_ResultViewExposesEnded(t *testing.T) {
 	s.RegisterAll()
 	// Initially not ended
 	if s.Snapshot != nil {
-		if view := s.Snapshot.GetResultView(); view.Ended {
+		if cur := s.Snapshot.Current(); cur != nil && cur.Result.Ended {
 			t.Fatalf("initial ResultView should not be ended")
 		}
 	}
@@ -361,7 +361,7 @@ func TestResult_ResultViewExposesEnded(t *testing.T) {
 	}
 	// After latch, snapshot view should be ended
 	if s.Snapshot != nil {
-		view := s.Snapshot.GetResultView()
+		view := s.Snapshot.Current().Result
 		if !view.Ended {
 			t.Fatalf("ResultView should be ended after latch, got %+v", view)
 		}
@@ -369,8 +369,8 @@ func TestResult_ResultViewExposesEnded(t *testing.T) {
 			t.Fatalf("ResultView winner mismatch")
 		}
 		// Also check via Read()
-		_, cur, ok := s.Snapshot.Read()
-		if ok && !cur.Result.Ended {
+		cur := s.Snapshot.Current()
+		if cur != nil && !cur.Result.Ended {
 			t.Fatalf("Frame Result should be ended")
 		}
 	}

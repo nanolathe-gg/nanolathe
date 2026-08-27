@@ -7,7 +7,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -27,100 +26,6 @@ func testFogCache(t *testing.T, w, h int32) *visibility.FogCache {
 		t.Fatalf("fog cache nil")
 	}
 	return cache
-}
-
-// TestFogOrderingViaComposer verifies fog hook sits after world strips but before selection/interface [03 §1] C1 C2.
-func TestFogOrderingViaComposer(t *testing.T) {
-	cache := testFogCache(t, 4, 4)
-	// fill one fog cell to ensure ops non-empty but hook itself is ordering, not content
-	cache.SetChannel(0, 0, 15, 0) // dark solid [03 §3.3]
-	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: 128, MapH: 128}
-	tables := &palette.Tables{}
-	for i := 0; i < 256; i++ {
-		tables.Logical[i] = byte(i)
-	}
-
-	var order []string
-	var c Composer
-	c.Cam = cam
-	c.Fog = cache
-	// Wire Hooks to record order; we use FogHook as the fog hook seam [PLAN_13 WU-13-5].
-	c.Hooks.Terrain = func() { order = append(order, "terrain") }
-	c.Hooks.DrawStrip = func(idx int) { order = append(order, "strip") }
-	c.Hooks.BucketBuild = func() { order = append(order, "bucket") }
-	c.Hooks.FeaturePass = func() { order = append(order, "feature") }
-	c.Hooks.UnitTraversal = func(kind string) { order = append(order, "traversal:"+kind) }
-	c.Hooks.Projectiles = func() { order = append(order, "projectiles") }
-	c.Hooks.Effects = func() { order = append(order, "effects") }
-	c.Hooks.KeyOverlay = func() { order = append(order, "key") }
-	c.Hooks.OverlayA = func() { order = append(order, "overlayA") }
-	c.Hooks.OverlayB = func() { order = append(order, "overlayB") }
-	// Use our FogHook closure as the fog seam [PLAN_13 WU-13-5].
-	gridW, gridH := int32(4), int32(4)
-	c.Hooks.Fog = FogHook(cache, cam, gridW, gridH, tables, false)
-	// wrap to record
-	origFog := c.Hooks.Fog
-	c.Hooks.Fog = func() {
-		order = append(order, "fog")
-		if origFog != nil {
-			origFog()
-		}
-	}
-	c.Hooks.Selection = func() { order = append(order, "selection") }
-	c.Hooks.Interface = func() { order = append(order, "interface") }
-	c.Frame(&snapshot.Frame{}, 0, 1) // mode nonzero so fog runs [03 §1]
-
-	// Find positions
-	idxFog, idxSel, idxIface, idxStrip8, idxProj := -1, -1, -1, -1, -1
-	for i, o := range order {
-		switch o {
-		case "fog":
-			idxFog = i
-		case "selection":
-			idxSel = i
-		case "interface":
-			idxIface = i
-		case "projectiles":
-			idxProj = i
-		}
-		// strip order includes Barrier but we just check fog after world strips: strip is generic
-		if o == "strip" && idxStrip8 == -1 {
-			// approximations: last strip before fog is strip8
-		}
-	}
-	if idxFog == -1 {
-		t.Fatalf("fog not called in composer frame order %v", order)
-	}
-	if idxSel == -1 || idxIface == -1 {
-		t.Fatalf("selection/interface missing %v", order)
-	}
-	if !(idxFog < idxSel && idxSel < idxIface) {
-		t.Fatalf("fog must be before selection/interface [03 §1] C2 fog=%d sel=%d iface=%d order %v", idxFog, idxSel, idxIface, order)
-	}
-	// Ensure fog after world projectiles/effects (which are between strips 6 and 7) [03 §1] C2
-	if idxProj != -1 && !(idxProj < idxFog) {
-		t.Fatalf("fog must be after projectiles/effects [03 §1] hook order proj=%d fog=%d %v", idxProj, idxFog, order)
-	}
-	// With mode 0 fog should not run [03 §1] C1 step10 gated on nonzero mode
-	order = nil
-	c.Frame(&snapshot.Frame{}, 0, 0)
-	for _, o := range order {
-		if o == "fog" {
-			t.Fatalf("fog should not run with mode 0 [03 §1] order %v", order)
-		}
-	}
-	hasSel, hasIface := false, false
-	for _, o := range order {
-		if o == "selection" {
-			hasSel = true
-		}
-		if o == "interface" {
-			hasIface = true
-		}
-	}
-	if !hasSel || !hasIface {
-		t.Fatalf("selection/interface must still run with mode 0 even when fog gated [03 §1] %v", order)
-	}
 }
 
 // TestFogHardEdges32 verifies fog tile geometry is hard 32 world units / pixels [03 §3.3] and signed residues [03 §2.1][I3].
@@ -447,11 +352,6 @@ func TestFogPaletteDarkening(t *testing.T) {
 	if ops[0].R != r || ops[0].G != g || ops[0].B != b {
 		t.Fatalf("op dark color mismatch: op %d,%d,%d want %d,%d,%d", ops[0].R, ops[0].G, ops[0].B, r, g, b)
 	}
-	// SHD variant placeholder returns same until row traced [TODO(question)]
-	r2, g2, b2, a2 := FogSHDDarkRGBA(tables)
-	if r2 != r || g2 != g || b2 != b || a2 != a {
-		t.Fatalf("SHD placeholder mismatch")
-	}
 	// Nil tables returns black opaque 0,0,0,255 without panic
 	rn, gn, bn, an := FogDarkRGBA(nil)
 	if rn != 0 || gn != 0 || bn != 0 || an != 255 {
@@ -655,10 +555,6 @@ func TestFogNeverMutatesVisibility(t *testing.T) {
 	tables := &palette.Tables{}
 	_ = BuildFogOps(cache, cam, cam.ViewW, cam.ViewH, 3, 3, tables, false)
 	_ = BuildFogOps(cache, cam, cam.ViewW, cam.ViewH, 3, 3, tables, true)
-	// FogHook closure should also not mutate
-	hook := FogHook(cache, cam, 3, 3, tables, false)
-	hook()
-
 	for y := int32(0); y < 3; y++ {
 		for x := int32(0); x < 3; x++ {
 			c0, c1 := cache.Channel(x, y)
@@ -713,9 +609,4 @@ func TestFogEmptyCacheAndNil(t *testing.T) {
 	if len(ops) != 0 {
 		// cache initially all 0,0 visible => no ops
 	}
-	// hook with nil cache/cam should not panic
-	hook := FogHook(nil, nil, 0, 0, nil, false)
-	hook()
-	hook2 := FogHook(testFogCache(t, 2, 2), nil, 0, 0, nil, false)
-	hook2() // nil cam handled
 }

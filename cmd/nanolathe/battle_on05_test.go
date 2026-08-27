@@ -7,11 +7,11 @@ import (
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -81,7 +81,7 @@ func newTestBattle(cat *content.Catalog, terrain *world.Terrain) *battleSession 
 		World:    terrain,
 		Units:    uw,
 		Catalog:  cat,
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 		Clock:    &clock.State{Active: 10, Requested: 10},
 	}
 	// Ensure orders table initialized (orders.Lookup needs table)
@@ -219,7 +219,7 @@ func TestWASDUnbound(t *testing.T) {
 	b.cam.X = 500
 	b.cam.Z = 500
 	// Place minimal client for viewerStep
-	buf := &snapshot.Buffer{}
+	buf := &frame.Buffer{}
 	cl, _ := client.New(client.Options{Buffer: buf, Width: 640, Height: 480, Headless: true, Step: func(delta float64) {}})
 	cl.SetCamera(b.cam)
 	cl.Input().Mouse.InjectMouseMove(320, 240) // center to avoid edge scroll

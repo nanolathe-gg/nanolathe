@@ -232,24 +232,23 @@ func DrawTextWithShadow(frame []uint8, width, height int, fnt *formats.FNT, text
 }
 
 // DebugInfo carries the values shown in the debug overlay [PLAN_04A C8].
-// All fields are presentation values; the caller fetches tick/alpha from the
-// snapshot or clock, camera from internal/camera, and RNG draws from
+// All fields are presentation values; the caller fetches tick from the
+// committed frame, camera from internal/camera, and RNG draws from
 // internal/sim/rng.Global.*.Draws().
 type DebugInfo struct {
-	Tick     uint32  // authoritative global tick at publish time (snapshot.Frame.Tick)
-	Alpha    float32 // render interpolation fraction clamped [0,1] (C9)
-	CamX     int32   // camera origin X in map pixels [07 §10]
-	CamZ     int32   // camera origin Z in map pixels [07 §10]
-	SimDraws uint64  // simulation RNG draws (Park-Miller) [01 §7.1]
-	CrtDraws uint64  // CRT RNG draws (*214013+2531011) [01 §7.2]
+	Tick     uint32 // authoritative global tick at publish time (frame.Frame.Tick)
+	CamX     int32  // camera origin X in map pixels [07 §10]
+	CamZ     int32  // camera origin Z in map pixels [07 §10]
+	SimDraws uint64 // simulation RNG draws (Park-Miller) [01 §7.1]
+	CrtDraws uint64 // CRT RNG draws (*214013+2531011) [01 §7.2]
 }
 
-// DrawDebugOverlay draws the Gate-1 debug overlay showing tick, alpha, camera,
+// DrawDebugOverlay draws the Gate-1 debug overlay showing tick, camera,
 // and RNG draw counts [PLAN_04A WU-04A-7] C8.
 //
 // It draws up to four lines at the top-left of the indexed framebuffer:
 //
-//	tick <n>  alpha <f>
+//	tick <n>
 //	cam <x>,<z>
 //	sim <n>  crt <n>
 //
@@ -271,7 +270,7 @@ func DrawDebugOverlayWithShadow(frame []uint8, width, height int, fnt *formats.F
 	}
 	// Format lines with standard library; formatting is presentation-only (I6).
 	lines := [4]string{
-		fmt.Sprintf("tick %d  alpha %.2f", info.Tick, info.Alpha),
+		fmt.Sprintf("tick %d", info.Tick),
 		fmt.Sprintf("cam %d,%d", info.CamX, info.CamZ),
 		fmt.Sprintf("sim %d  crt %d", info.SimDraws, info.CrtDraws),
 		// Fourth line reserved for future (e.g., map size / view size) — keep

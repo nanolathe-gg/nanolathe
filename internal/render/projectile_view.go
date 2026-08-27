@@ -12,8 +12,8 @@ package render
 import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/combat"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // ProjectilePoint is a world-space endpoint in the immutable presentation
@@ -55,7 +55,7 @@ type ProjectileDraw struct {
 // not know which retail archive/entry supplies a family; the immutable
 // content boundary resolves that identity and returns false when absent.
 type ProjectileGAFRequest struct {
-	View     snapshot.ProjectileView
+	View     frame.ProjectileView
 	Family   int32
 	Sequence int32
 	Frame    int
@@ -64,58 +64,35 @@ type ProjectileGAFRequest struct {
 }
 
 // ProjectileDispatchOptions supplies presentation metadata that is not part
-// of the per-projectile snapshot.  Frame counts are resolved from immutable
+// of the per-projectile frame.  Frame counts are resolved from immutable
 // content by the caller; a missing count stays missing and suppresses only
 // the frame-selected family.  No fallback constant is invented [I9].
 type ProjectileDispatchOptions struct {
-	FrameCount func(snapshot.ProjectileView) (count int, ok bool)
-	Color      func(snapshot.ProjectileView) (primary, secondary int32, ok bool)
+	FrameCount func(frame.ProjectileView) (count int, ok bool)
+	Color      func(frame.ProjectileView) (primary, secondary int32, ok bool)
 	// ResolveGAF admits only authored frames. Returning false is an unresolved
 	// asset, never permission to substitute a marker or empty sprite.
 	ResolveGAF func(ProjectileGAFRequest) (*formats.GAFFrame, bool)
 	// SegmentPoints admits both researched CRT jitter passes for rendertype 7.
 	// Returning ok=false is an explicit unresolved result, not a fallback.
-	SegmentPoints func(snapshot.ProjectileView) (first, second []ProjectilePoint, ok bool)
+	SegmentPoints func(frame.ProjectileView) (first, second []ProjectilePoint, ok bool)
 }
 
 func point(x, y, z numeric.Fixed) ProjectilePoint { return ProjectilePoint{X: x, Y: y, Z: z} }
 
-func projectileHead(v snapshot.ProjectileView) ProjectilePoint {
+func projectileHead(v frame.ProjectileView) ProjectilePoint {
 	return point(v.X, v.Y, v.Z)
 }
 
-func projectileTail(v snapshot.ProjectileView) ProjectilePoint {
+func projectileTail(v frame.ProjectileView) ProjectilePoint {
 	return point(v.TailX, v.TailY, v.TailZ)
-}
-
-// LabeledRandom is the small presentation-RNG seam needed by render consumers
-// that must appear in the shared CRT ledger. The underlying point generator
-// still accepts CRTRandomSource, so raw rng.CRT fixtures remain compatible.
-type LabeledRandom interface {
-	Draw(...string) int32
-}
-
-type projectileSegmentedRandom struct{ random LabeledRandom }
-
-func (r projectileSegmentedRandom) Rand() int32 {
-	return r.random.Draw("projectile-segmented")
-}
-
-// ProjectileSegmentedRandom labels the draws made by both rendertype-7
-// passes while keeping one underlying stream. A nil source suppresses the
-// geometry through the existing CRTRandomSource nil path.
-func ProjectileSegmentedRandom(random LabeledRandom) CRTRandomSource {
-	if random == nil {
-		return nil
-	}
-	return projectileSegmentedRandom{random: random}
 }
 
 // SnapshotSegmentedPoints applies the established rendertype-7 span and CRT
 // jitter helper to immutable snapshot endpoints. A nil source intentionally
 // yields nil: presentation must not silently consume a different RNG stream
 // or draw an invented straight-line substitute [03 §5.4][I4].
-func SnapshotSegmentedPoints(v snapshot.ProjectileView, random CRTRandomSource) []ProjectilePoint {
+func SnapshotSegmentedPoints(v frame.ProjectileView, random CRTRandomSource) []ProjectilePoint {
 	if random == nil {
 		return nil
 	}
@@ -138,7 +115,7 @@ func SnapshotSegmentedPoints(v snapshot.ProjectileView, random CRTRandomSource) 
 // same stable order as the two researched rendertype-7 passes. A missing CRT
 // or zero-span endpoint suppresses both passes rather than drawing a guessed
 // straight line [03 §5.4][I4].
-func SnapshotSegmentedPointPasses(v snapshot.ProjectileView, random CRTRandomSource) (first, second []ProjectilePoint, ok bool) {
+func SnapshotSegmentedPointPasses(v frame.ProjectileView, random CRTRandomSource) (first, second []ProjectilePoint, ok bool) {
 	if random == nil {
 		return nil, nil, false
 	}
@@ -154,7 +131,7 @@ func SnapshotSegmentedPointPasses(v snapshot.ProjectileView, random CRTRandomSou
 // snapshot record.  It mirrors DispatchRendertype's selector and lifetime
 // arithmetic while avoiding a conversion back to mutable combat.Projectile.
 // The returned instruction is presentation-only [I6].
-func DispatchProjectileView(v snapshot.ProjectileView, now uint32, opts ProjectileDispatchOptions) ProjectileDraw {
+func DispatchProjectileView(v frame.ProjectileView, now uint32, opts ProjectileDispatchOptions) ProjectileDraw {
 	d := ProjectileDraw{
 		Handle:               uint16(v.Handle),
 		RenderType:           v.RenderType,
@@ -315,7 +292,7 @@ func DispatchProjectileView(v snapshot.ProjectileView, now uint32, opts Projecti
 	return d
 }
 
-func projectileFrameCount(v snapshot.ProjectileView, opts ProjectileDispatchOptions) (int, bool) {
+func projectileFrameCount(v frame.ProjectileView, opts ProjectileDispatchOptions) (int, bool) {
 	if v.FrameCount > 0 {
 		return int(v.FrameCount), true
 	}
@@ -329,7 +306,7 @@ func projectileFrameCount(v snapshot.ProjectileView, opts ProjectileDispatchOpti
 // (I1). The visibility callback runs before rendertype dispatch [03 §5.4]. A
 // global-GAF admission failure aborts the batch, preserving the researched
 // whole-renderer abort behavior.
-func BuildProjectileDraws(projectiles []snapshot.ProjectileView, now uint32, visible func(snapshot.ProjectileView) bool, admitGlobalGAF func(snapshot.ProjectileView) bool, opts ProjectileDispatchOptions) ([]ProjectileDraw, bool) {
+func BuildProjectileDraws(projectiles []frame.ProjectileView, now uint32, visible func(frame.ProjectileView) bool, admitGlobalGAF func(frame.ProjectileView) bool, opts ProjectileDispatchOptions) ([]ProjectileDraw, bool) {
 	out := make([]ProjectileDraw, 0, len(projectiles))
 	for _, v := range projectiles {
 		if visible == nil || !visible(v) { // [03 §5.4] absent visibility dependency fails closed

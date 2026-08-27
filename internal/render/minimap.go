@@ -48,12 +48,6 @@ func (r *RadarSurface) Set(x, y int, v byte) bool {
 	return true
 }
 
-// LetterboxFill returns minimapLetterboxFill = 0 TODO(question) [03 §3.6] letterbox bars inference 0 black pending capture.
-func LetterboxFill() byte {
-	// TODO(question): bars beyond RadarW×RadarH retain heap bytes — inference 0 black pending capture [03 §3.6][07 §10].
-	return 0
-}
-
 // floorDiv returns floor(a/b) with sign correction [03 §2.1][INVARIANTS I3].
 func minimapFloorDiv(a, b int64) int64 {
 	q := a / b
@@ -67,77 +61,31 @@ func minimapFloorDiv(a, b int64) int64 {
 // playW = Wpix-32, playH = Hpix-128; RadarW/H are letterboxed via camera.LayoutMinimap.
 // baked == nil or len==0 uses 2× supersampled tile sampling and ALP 2×2→1 blending [03 §3.7][fmt tnt][fmt pal].
 // When baked != nil, it is rescaled through the established picture path [03 §3.7].
-// Letterbox bars fill 0 black pending capture TODO(question) [03 §3.6].
-// Tables may be nil in tests — fallback to nearest without ALP, still indices.
+// The ALP table is mandatory: there is no nearest-neighbor compatibility path.
+// Baked source dimensions other than the established 2× temporary are
+// suppressed until the non-integral source sampling is traced [03 §3.7].
+// TODO(question): letterbox bar fill is outside the exact w×h picture surface
+// and remains unresolved [03 §3.7].
 func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, baked []byte, bakedW, bakedH int, tables *palette.Tables) *RadarSurface {
-	if m.W <= 0 || m.H <= 0 {
-		w := int(m.W)
-		h := int(m.H)
-		if w < 0 {
-			w = 0
-		}
-		if h < 0 {
-			h = 0
-		}
-		pitch := (w + 3) &^ 3 // [03 §3.6] DWORD-aligned
-		return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: make([]byte, w*h)}
+	if m.W <= 0 || m.H <= 0 || tables == nil {
+		return nil
 	}
 	w := int(m.W)
 	h := int(m.H)
 	pitch := (w + 3) &^ 3 // [03 §3.6][03 §4.1] pitch (w+3)&~3
 	bits := make([]byte, w*h)
-	fill := LetterboxFill()
-	for i := range bits {
-		bits[i] = fill
-	}
 
 	// Baked path: rescale through the established picture path [03 §3.7].
-	if baked != nil && len(baked) > 0 && bakedW > 0 && bakedH > 0 {
-		// Exact 2× supersampled baked → ALP blend when tables present [03 §3.7].
-		if bakedW == 2*w && bakedH == 2*h && tables != nil {
-			for y := 0; y < h; y++ {
-				for x := 0; x < w; x++ {
-					// TODO(T23): verify the ALP quadrant order against an asymmetric palette probe [03 §3.7].
-					p00 := baked[(y*2)*bakedW+(x*2)]
-					p01 := baked[(y*2)*bakedW+(x*2+1)]
-					p10 := baked[(y*2+1)*bakedW+(x*2)]
-					p11 := baked[(y*2+1)*bakedW+(x*2+1)]
-					a0 := tables.Alpha[int(p00)*256+int(p01)] // [fmt pal] 256×256 nearest-color blend
-					a1 := tables.Alpha[int(p10)*256+int(p11)]
-					blended := tables.Alpha[int(a0)*256+int(a1)]
-					bits[y*w+x] = blended
-				}
-			}
-		} else {
-			// Generic TRUNC rescale [07 §10] playW/playH analog; use trunc division.
-			for y := 0; y < h; y++ {
-				srcY := y * bakedH / h // TRUNC [03 §3.7][07 §10]
-				if srcY < 0 {
-					srcY = 0
-				}
-				if srcY >= bakedH {
-					srcY = bakedH - 1
-				}
-				for x := 0; x < w; x++ {
-					srcX := x * bakedW / w
-					if srcX < 0 {
-						srcX = 0
-					}
-					if srcX >= bakedW {
-						srcX = bakedW - 1
-					}
-					idx := srcY*bakedW + srcX
-					if idx >= 0 && idx < len(baked) {
-						bits[y*w+x] = baked[idx]
-					}
-				}
-			}
+	if baked != nil && len(baked) > 0 {
+		if bakedW <= 0 || bakedH <= 0 || bakedW != 2*w || bakedH != 2*h || bakedW > len(baked)/bakedH {
+			return nil
 		}
+		downsampleALP(bits, w, baked, bakedW, tables)
 		return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
 	}
 
 	if t == nil || len(t.TileSet) == 0 || len(t.TileIndices) == 0 || playW <= 0 || playH <= 0 {
-		return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
+		return nil
 	}
 
 	tw := 2 * w
@@ -146,8 +94,8 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 
 	tileW := int(t.CellW / 2) // [03 §2.2] TileW=Wcells/2 [03 §3.7]
 	tileH := int(t.CellH / 2)
-	if tileW <= 0 || tileH <= 0 {
-		return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
+	if tileW <= 0 || tileH <= 0 || len(t.TileIndices) < tileW*tileH {
+		return nil
 	}
 	tileCount := len(t.TileSet)
 
@@ -165,66 +113,64 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 
 			var pix byte
 			if tileX < 0 || tileX >= int64(tileW) || tileZ < 0 || tileZ >= int64(tileH) {
-				pix = LetterboxFill() // TODO(question) OOB retains heap/inference 0 [03 §3.6]
+				// TODO(question): the source map's out-of-domain sample behavior is
+				// untraced; suppress this picture rather than inventing a fill index.
+				return nil
 			} else {
 				idx := int(tileZ)*tileW + int(tileX)
 				if idx < 0 || idx >= len(t.TileIndices) {
-					pix = LetterboxFill()
-				} else {
-					tileIdx := t.TileIndices[idx]
-					// Guard an authored tile index outside the tile set [03 §3.7].
-					if int(tileIdx) >= tileCount {
-						tileIdx = 0
-					}
-					// intra-tile offset (world &31) with sign-correct floor [03 §3.7]
-					ox := int(int64(worldX) - tileX*32) // 0..31
-					oz := int(int64(worldZ) - tileZ*32)
-					if ox < 0 {
-						ox += 32
-					}
-					if ox >= 32 {
-						ox %= 32
-					}
-					if oz < 0 {
-						oz += 32
-					}
-					if oz >= 32 {
-						oz %= 32
-					}
-					// Tile 32×32 indexed pixels row-major [fmt tnt]
-					tile := t.TileSet[tileIdx]
-					pix = tile[oz*32+ox] // [03 §3.7] pix = *(u8*)(tileBase + (worldZ&31)*32 + (worldX&31))
+					return nil
 				}
+				tileIdx := t.TileIndices[idx]
+				// Guard an authored tile index outside the tile set [03 §3.7].
+				if int(tileIdx) >= tileCount {
+					tileIdx = 0
+				}
+				// intra-tile offset (world &31) with sign-correct floor [03 §3.7]
+				ox := int(int64(worldX) - tileX*32) // 0..31
+				oz := int(int64(worldZ) - tileZ*32)
+				if ox < 0 {
+					ox += 32
+				}
+				if ox >= 32 {
+					ox %= 32
+				}
+				if oz < 0 {
+					oz += 32
+				}
+				if oz >= 32 {
+					oz %= 32
+				}
+				// Tile 32×32 indexed pixels row-major [fmt tnt]
+				tile := t.TileSet[tileIdx]
+				pix = tile[oz*32+ox] // [03 §3.7] pix = *(u8*)(tileBase + (worldZ&31)*32 + (worldX&31))
 			}
 			temp[ty*tw+tx] = pix // opaque indexed sample [03 §3.7]
 		}
 	}
 
-	// Blend 2×2 via the 256×256 ALP table [03 §3.7][fmt pal].
-	// blended = ALP[ ALP[p00*256+p01]*256 + ALP[p10*256+p11] ] (two lookups, exact quadrant order SUPPORTED-INFERENCE) TODO(T23).
-	if tables != nil {
-		for y := 0; y < h; y++ {
-			for x := 0; x < w; x++ {
-				p00 := temp[(y*2)*tw+(x*2)]
-				p01 := temp[(y*2)*tw+(x*2+1)]
-				p10 := temp[(y*2+1)*tw+(x*2)]
-				p11 := temp[(y*2+1)*tw+(x*2+1)]
-				a0 := tables.Alpha[int(p00)*256+int(p01)]
-				a1 := tables.Alpha[int(p10)*256+int(p11)]
-				blended := tables.Alpha[int(a0)*256+int(a1)]
-				bits[y*w+x] = blended
-			}
-		}
-	} else {
-		// Tables may be nil in tests — fallback to nearest without ALP, still indices [03 §3.7].
-		for y := 0; y < h; y++ {
-			for x := 0; x < w; x++ {
-				bits[y*w+x] = temp[(y*2)*tw+(x*2)]
-			}
-		}
-	}
+	// Two-level row-first ALP blend [03 §3.7].
+	downsampleALP(bits, w, temp, tw, tables)
 
 	return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
+}
+
+// downsampleALP applies the established row-first two-stage palette blend.
+// Both intermediate values are palette indices, so the second lookup uses the
+// same authored table [03 §3.7][fmt pal].
+func downsampleALP(dst []byte, dstW int, src []byte, srcPitch int, tables *palette.Tables) {
+	dstH := len(dst) / dstW
+	for y := 0; y < dstH; y++ {
+		for x := 0; x < dstW; x++ {
+			p00 := src[(y*2)*srcPitch+(x*2)]
+			p01 := src[(y*2)*srcPitch+(x*2+1)]
+			p10 := src[(y*2+1)*srcPitch+(x*2)]
+			p11 := src[(y*2+1)*srcPitch+(x*2+1)]
+			top := tables.Alpha[int(p00)*256+int(p01)]
+			bottom := tables.Alpha[int(p10)*256+int(p11)]
+			dst[y*dstW+x] = tables.Alpha[int(top)*256+int(bottom)]
+		}
+	}
 }
 
 // BuildRadarPictureFromWorld is a helper that derives playW/H from terrain [03 §3.6][03 §2.2].
@@ -301,10 +247,10 @@ func BuildMapped(picture *RadarSurface, wordMask []uint16, byteGrid []uint8, map
 type MinimapContact struct {
 	WorldX, WorldZ, WorldY int32 // map pixels (short narrow already), WorldY high word for shear [03 §3.9]
 	Owner                  uint8
-	Palette                byte // owner palette index; zero selects fallback [03 §3.9]
+	Palette                byte // caller-resolved owning-player palette index [03 §3.9]
 	IsCommander            bool // when true draws commander GAF after blip [03 §3.9]
 	Stealth                bool // when true gate on blink [03 §3.9]
-	NoRadar                bool // TODO(question) alias 0x245&4 [03 §3.9]
+	NoRadar                bool // authored no-radar flag; affects sensor circles only [03 §3.9]
 	// Status and BlinkSuppress are copied from the immutable unit record. The
 	// contact gate uses FriendlyMask/owner, while the suppress byte admits a
 	// blip only during the shared blink phase. [03 §3.9]
@@ -329,16 +275,21 @@ type MinimapContact struct {
 type MinimapContactBlitter func(dst *RadarSurface, x, y int, palette byte, commander bool)
 
 // RebuildFinalExact wipes FINAL from MAPPED and applies the established
-// contacts/circles order. It never invents a pixel for a missing blip asset;
-// use RebuildFinal only as the old diagnostic fixture adapter. [03 §3.9]
+// contacts/circles order. Missing authored blit data leaves the destination
+// untouched; callers own the unresolved start-marker and no-radar decisions.
+// [03 §3.9][03 §3.12]
 func RebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int32, contacts []MinimapContact, blink BlinkState, blit MinimapContactBlitter, radarColor, jammerColor, ringColor byte) *RadarSurface {
+	return rebuildFinalExact(mapped, m, playW, playH, contacts, nil, blink, blit, radarColor, jammerColor, ringColor)
+}
+
+func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int32, contacts []MinimapContact, sensors []MinimapCircle, blink BlinkState, blit MinimapContactBlitter, radarColor, jammerColor, ringColor byte) *RadarSurface {
 	if mapped == nil || mapped.W <= 0 || mapped.H <= 0 || len(mapped.Bits) < mapped.W*mapped.H {
 		return nil
 	}
 	final := &RadarSurface{W: mapped.W, H: mapped.H, Pitch: (mapped.W + 3) &^ 3, Bits: make([]byte, mapped.W*mapped.H)}
 	copy(final.Bits, mapped.Bits)
+	// Unit blips precede all circles, and commander art is the next layer.
 	for _, c := range contacts {
-		// No-radar suppresses circles, not the contact blip. [03 §3.9]
 		admit := c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 || c.Status&0x300 != 0 || c.Owner == c.LocalPlayer
 		if !admit || (c.BlinkSuppress != 0 && blink.Phase&1 == 0) || c.Stealth && !blink.IsBlinkOn() {
 			continue
@@ -346,42 +297,80 @@ func RebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int3
 		rx, ry := RadarProjection(c.WorldX, c.WorldZ, c.WorldY, playW, playH, m)
 		if blit != nil {
 			blit(final, int(rx), int(ry), c.Palette, false)
-			if c.IsCommander {
-				blit(final, int(rx), int(ry), c.Palette, true)
+		}
+	}
+	for _, c := range contacts {
+		admit := c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 || c.Status&0x300 != 0 || c.Owner == c.LocalPlayer
+		if !admit || (c.BlinkSuppress != 0 && blink.Phase&1 == 0) || c.Stealth && !blink.IsBlinkOn() || !c.IsCommander {
+			continue
+		}
+		rx, ry := RadarProjection(c.WorldX, c.WorldZ, c.WorldY, playW, playH, m)
+		if blit != nil {
+			blit(final, int(rx), int(ry), c.Palette, true)
+		}
+	}
+
+	// Sensor circles follow every contact blit. The no-radar flag suppresses
+	// these circles only while stealth is inactive; it never suppresses blips
+	// [03 §3.9].
+	for _, c := range contacts {
+		admit := c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 || c.Status&0x300 != 0 || c.Owner == c.LocalPlayer
+		if !admit || (c.BlinkSuppress != 0 && blink.Phase&1 == 0) || c.Stealth && !blink.IsBlinkOn() {
+			continue
+		}
+		if c.NoRadar && !c.Stealth {
+			continue
+		}
+		rx, ry := RadarProjection(c.WorldX, c.WorldZ, c.WorldY, playW, playH, m)
+		if c.RawDistRadar != 0 || c.RawDistSonar != 0 {
+			d := c.RawDistRadar
+			if c.RawDistSonar > d {
+				d = c.RawDistSonar
+			}
+			if r := RadarRadius(d, m.W, playW); r > 0 {
+				drawCircle(final, int(rx), int(ry), int(r), radarColor)
 			}
 		}
-		// Blips and circles have separate gates: no-radar suppresses the
-		// ordinary circle path, except a stealthed source still contributes its
-		// established sensor circle [03 §3.9].
-		if c.Stealth || !c.NoRadar {
-			if c.RawDistRadar != 0 || c.RawDistSonar != 0 {
-				d := c.RawDistRadar
-				if c.RawDistSonar > d {
-					d = c.RawDistSonar
-				}
-				if r := RadarRadius(d, m.W, playW); r > 0 {
-					drawCircle(final, int(rx), int(ry), int(r), radarColor)
-				}
+		if c.RawDistJamR != 0 {
+			if r := RadarRadius(c.RawDistJamR, m.W, playW); r > 0 {
+				drawCircle(final, int(rx), int(ry), int(r), jammerColor)
 			}
-			if c.RawDistJamR != 0 {
-				if r := RadarRadius(c.RawDistJamR, m.W, playW); r > 0 {
-					drawCircle(final, int(rx), int(ry), int(r), jammerColor)
-				}
+		}
+		if c.RawDistJamS != 0 {
+			if r := RadarRadius(c.RawDistJamS, m.W, playW); r > 0 {
+				drawCircle(final, int(rx), int(ry), int(r), jammerColor)
 			}
-			if c.RawDistJamS != 0 {
-				if r := RadarRadius(c.RawDistJamS, m.W, playW); r > 0 {
-					drawCircle(final, int(rx), int(ry), int(r), jammerColor)
-				}
-			}
-			if c.RingEnabled {
-				r := RadarRadius(c.RingRange-512, m.W, playW)
-				if r > 0 {
-					if c.RingDashed {
-						drawDashedCircle(final, int(rx), int(ry), int(r), ringColor, blink.Phase&1 != 0)
-					} else {
-						drawCircle(final, int(rx), int(ry), int(r), ringColor)
-					}
-				}
+		}
+	}
+
+	// Sensor callbacks are the final surface's circle layer and precede rings
+	// [03 §3.9][03 §3.10]. Their coordinates are 128-world-unit cells.
+	for _, c := range sensors {
+		rx, ry := RadarProjection(c.U<<7, c.V<<7, 0, playW, playH, m)
+		r := RadarRadius(c.Radius, m.W, playW)
+		if r <= 0 {
+			continue
+		}
+		color := radarColor
+		if c.Kind != 0 {
+			color = jammerColor
+		}
+		drawCircle(final, int(rx), int(ry), int(r), color)
+	}
+
+	// Rings are a separate layer after sensor circles [03 §3.9].
+	for _, c := range contacts {
+		admit := c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 || c.Status&0x300 != 0 || c.Owner == c.LocalPlayer
+		if !admit || (c.BlinkSuppress != 0 && blink.Phase&1 == 0) || c.Stealth && !blink.IsBlinkOn() || !c.RingEnabled {
+			continue
+		}
+		rx, ry := RadarProjection(c.WorldX, c.WorldZ, c.WorldY, playW, playH, m)
+		r := RadarRadius(c.RingRange-512, m.W, playW)
+		if r > 0 {
+			if c.RingDashed {
+				drawDashedCircle(final, int(rx), int(ry), int(r), ringColor, blink.Phase&1 != 0)
+			} else {
+				drawCircle(final, int(rx), int(ry), int(r), ringColor)
 			}
 		}
 	}
@@ -431,73 +420,6 @@ func RadarRadius(dist int32, radarSize int32, playSize int32) int32 {
 		return 0
 	}
 	return int32(int64(radarSize) * int64(dist) / int64(playSize)) // TRUNC [03 §3.10]
-}
-
-// RebuildFinal implements FINAL wipe + contacts (presentation-only, no LOS mutation) in the established layer order [03 §3.9][07 §10].
-// It wipes FINAL from MAPPED via copy, then in pool order (slice order is caller-stable ascending) draws blip (palette byte) then commander on top,
-// then circles DD5/DD7/DDA via Bresenham placeholder, then returns FINAL. Keeps layer order painter: later overwrites earlier [03 §3.9].
-func RebuildFinal(mapped *RadarSurface, m camera.Minimap, playW, playH int32, contacts []MinimapContact, blink BlinkState, _ *palette.Tables) *RadarSurface {
-	if mapped == nil || mapped.Bits == nil || mapped.W <= 0 || mapped.H <= 0 {
-		return nil
-	}
-	w := mapped.W
-	h := mapped.H
-	pitch := (w + 3) &^ 3
-	final := &RadarSurface{W: w, H: h, Pitch: pitch, Bits: make([]byte, w*h)}
-	copy(final.Bits, mapped.Bits) // wipe FINAL from MAPPED via copy [03 §3.9]
-
-	for _, c := range contacts {
-		// Blink gate for stealthed contacts [03 §3.9]: only when blink==1.
-		if c.Stealth && !blink.IsBlinkOn() {
-			continue
-		}
-		rx, ry := RadarProjection(c.WorldX, c.WorldZ, c.WorldY, playW, playH, m)
-
-		pal := c.Palette
-		if pal == 0 {
-			// Fallback owner palette identity [03 §3.9].
-			pal = byte(0x80 + (c.Owner & 0x0F)) // TODO(question) exact fallback palette derivation
-		}
-
-		// Layer 1: authored blip [03 §3.9].
-		final.Set(int(rx), int(ry), pal)
-
-		// Layer 2: commander art when applicable [03 §3.9].
-		if c.IsCommander {
-			// painter: later overwrites earlier [03 §3.9]; ensure commander visibly on top by second pixel offset and overwrite.
-			final.Set(int(rx), int(ry), pal)
-			final.Set(int(rx+1), int(ry), pal)
-		}
-
-		// Layers 3a/b/c circles DD5/DD7/DDA via the 32-segment integer raster [03 §3.10][03 §3.9].
-		// Use truncated radii rRadar=RadarW*dist/PlayRight etc [03 §3.10].
-		// TODO(T23): the DDA dash palette/source is not established [03 §3.9].
-		if c.RawDistRadar != 0 || c.RawDistSonar != 0 {
-			outer := c.RawDistRadar
-			if c.RawDistSonar > outer {
-				outer = c.RawDistSonar
-			}
-			r := RadarRadius(outer, m.W, playW)
-			if r > 0 {
-				// DD5 radar outer max(radar,sonar) [03 §3.10]
-				drawCircle(final, int(rx), int(ry), int(r), 0xA0) // TODO(question): exact authored radar color [03 §3.10].
-			}
-		}
-		if c.RawDistJamR != 0 {
-			r := RadarRadius(c.RawDistJamR, m.W, playW)
-			if r > 0 {
-				drawCircle(final, int(rx), int(ry), int(r), 0xB0) // placeholder DD7 jammer TODO(question)
-			}
-		}
-		if c.RawDistJamS != 0 {
-			r := RadarRadius(c.RawDistJamS, m.W, playW)
-			if r > 0 {
-				drawCircle(final, int(rx), int(ry), int(r), 0xB0)
-			}
-		}
-	}
-
-	return final
 }
 
 // drawCircle joins the 32 authored angular samples with clipped integer lines.

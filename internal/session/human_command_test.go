@@ -5,10 +5,10 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -250,10 +250,10 @@ func TestCommandPagePublicationIsImmutableAndUsesSelectedPage(t *testing.T) {
 	w := units.New(8, cat)
 	h, _ := w.Create(bdef, 0, 0, 0, 0)
 	w.Unit(h).Flags = 0x10 | hud.EncodePageBits(0, 1)
-	s := &Session{Units: w, Catalog: cat, LocalOwner: 0, Snapshot: &snapshot.Buffer{}}
+	s := &Session{Units: w, Catalog: cat, LocalOwner: 0, Snapshot: &frame.Buffer{}}
 	s.publishSnapshot(4)
-	_, frame, ok := s.Snapshot.Read()
-	if !ok || frame.CommandPage.Page != 1 || len(frame.CommandPage.ProductKeys) != 1 || frame.CommandPage.ProductKeys[0] != "g" {
+	frame := s.Snapshot.Current()
+	if frame == nil || frame.CommandPage.Page != 1 || len(frame.CommandPage.ProductKeys) != 1 || frame.CommandPage.ProductKeys[0] != "g" {
 		t.Fatalf("published page=%d products=%v", frame.CommandPage.Page, frame.CommandPage.ProductKeys)
 	}
 	menu.Buttons[6] = "mutated-after-publish"
@@ -279,7 +279,7 @@ func TestHumanBuildPageRejectsMixedAndMultiBuilderSelection(t *testing.T) {
 	h, _ := w.Create(bdef, 0, 0, 0, 0)
 	n, _ := w.Create(workerDef, 0, 0, 0, 0)
 	o, _ := w.Create(otherBuilder, 0, 0, 0, 0)
-	s := &Session{Units: w, Catalog: cat, LocalOwner: 0, Snapshot: &snapshot.Buffer{}}
+	s := &Session{Units: w, Catalog: cat, LocalOwner: 0, Snapshot: &frame.Buffer{}}
 
 	// A builder mixed with an ordinary unit has aggregate command state and
 	// cannot mutate a single-builder page [07 §9].
@@ -294,8 +294,8 @@ func TestHumanBuildPageRejectsMixedAndMultiBuilderSelection(t *testing.T) {
 		t.Fatalf("mixed builder/non-builder selection changed page to %d", got)
 	}
 	s.publishSnapshot(1)
-	_, frame, ok := s.Snapshot.Read()
-	if !ok || frame.CommandPage.Builder != 0 {
+	frame := s.Snapshot.Current()
+	if frame == nil || frame.CommandPage.Builder != 0 {
 		t.Fatalf("mixed selection published builder page: %+v", frame.CommandPage)
 	}
 
@@ -311,8 +311,8 @@ func TestHumanBuildPageRejectsMixedAndMultiBuilderSelection(t *testing.T) {
 		t.Fatalf("multi-builder selection changed page to %d", got)
 	}
 	s.publishSnapshot(2)
-	_, frame, ok = s.Snapshot.Read()
-	if !ok || frame.CommandPage.Builder != 0 {
+	frame = s.Snapshot.Current()
+	if frame == nil || frame.CommandPage.Builder != 0 {
 		t.Fatalf("multi-builder selection published builder page: %+v", frame.CommandPage)
 	}
 }

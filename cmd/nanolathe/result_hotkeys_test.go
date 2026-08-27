@@ -5,8 +5,8 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/input"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 func TestGameSpeedKeysClampAndMessage(t *testing.T) {
@@ -14,7 +14,7 @@ func TestGameSpeedKeysClampAndMessage(t *testing.T) {
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
 	b.sess.Clock = &clock.State{Requested: 10, Active: 10}
-	b.sess.Snapshot = &snapshot.Buffer{}
+	b.sess.Snapshot = &frame.Buffer{}
 	// need snapshot for hasSelection? not needed
 	// Decrease below 1 should clamp at 1 [07 §11][07 §2]
 	b.sess.Clock.Requested = 1
@@ -117,7 +117,7 @@ func TestESCMenuTokenPath(t *testing.T) {
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
 	b.sess.Clock = &clock.State{Requested: 10, Active: 10}
-	b.sess.Snapshot = &snapshot.Buffer{}
+	b.sess.Snapshot = &frame.Buffer{}
 	b.latch = input.LatchNormal
 	b.buildDef = ""
 	b.menu = battleMenuClosed
@@ -180,14 +180,16 @@ func TestResultOverlayUsesIGTitlesFrames(t *testing.T) {
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
 	b.sess.Clock = &clock.State{Requested: 10, Active: 10}
-	b.sess.Snapshot = &snapshot.Buffer{}
+	b.sess.Snapshot = &frame.Buffer{}
 	// Create a minimal HUD with no frames (degradable path)
 	hud := &retailBattleHUD{console: nil, victoryFrame: nil, defeatFrame: nil, pausedFrame: nil}
 	// Should not panic when frames nil
 	cl, _ := client.New(client.Options{Headless: true, Buffer: b.sess.Snapshot, Width: 640, Height: 480})
 	// Simulate result visible with nil frames; the overlay must remain safe and
 	// must not substitute text for the missing authored title.
-	b.sess.Snapshot.SetResultView(snapshot.ResultView{Ended: true, Kind: "victory", WinnerTeam: 0})
+	w := b.sess.Snapshot.BeginWrite()
+	w.Result = frame.ResultView{Ended: true, Kind: "victory", WinnerTeam: 0}
+	_ = b.sess.Snapshot.Publish(1)
 	if !b.isResultVisible() {
 		t.Fatalf("result should be visible")
 	}
@@ -217,21 +219,20 @@ func TestResultStatisticsFromSimData(t *testing.T) {
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
 	b.sess.Clock = &clock.State{Requested: 10, Active: 10}
-	b.sess.Snapshot = &snapshot.Buffer{}
+	b.sess.Snapshot = &frame.Buffer{}
 	// Publish a frame with economy data [07 §11] P1-01
-	frame := &snapshot.Frame{
+	f := &frame.Frame{
 		Tick: 100,
-		Economy: []snapshot.EconomyView{
+		Economy: []frame.EconomyView{
 			{Player: 0, MetalProduced: 123, EnergyProduced: 456, MetalConsumed: 50, EnergyConsumed: 60},
 		},
-		Resources: []snapshot.ResourceView{
-			{Player: 0, MetalProduced: 123, EnergyProduced: 456},
-		},
 	}
-	b.sess.Snapshot.Publish(frame)
-	view := snapshot.ResultView{
+	w := b.sess.Snapshot.BeginWrite()
+	*w = *f
+	_ = b.sess.Snapshot.Publish(f.Tick)
+	view := frame.ResultView{
 		Ended: true, Kind: "victory", WinnerTeam: 0,
-		Scores: []snapshot.ResultScore{{Player: 0, Team: 1, Kills: 0, Losses: 0, Score: 100, Kind: "win"}},
+		Scores: []frame.ResultScore{{Player: 0, Team: 1, Kills: 0, Losses: 0, Score: 100, Kind: "win"}},
 	}
 	hud := &retailBattleHUD{console: nil}
 	cl, _ := client.New(client.Options{Headless: true, Buffer: b.sess.Snapshot, Width: 640, Height: 480})

@@ -1,6 +1,6 @@
 package audio
 
-import "github.com/nanolathe/nanolathe/internal/presentation"
+import "github.com/nanolathe/nanolathe/internal/sim/rng"
 
 // Music uses WinMM MCI strings for cdaudio open/close/stop/status/play/pause
 // [03 §8.4]. Failure behavior on missing CD and history persistence across
@@ -43,7 +43,7 @@ type Controller struct {
 	trackCategory [100]uint8 // (i%4)+1 cycle, retail builds 100 entries
 	offset        int        // playhead offset used by a backend adapter
 	crtState      uint32     // fallback CRT state for isolated tests
-	crt           *presentation.CRTRandom
+	crt           *rng.CRT
 	position      int
 	volume        int
 	volumeApplied int
@@ -58,7 +58,7 @@ func NewMusicController() *Controller {
 		playMode:     ModeSequential,
 		musicEnabled: true,
 		crtState:     1,
-		crt:          presentation.NewCRTRandom(1),
+		crt:          func() *rng.CRT { v := rng.NewCRT(1); return &v }(),
 		curTrack:     0,
 		nextTrack:    0,
 		status:       StatusIdle,
@@ -157,19 +157,20 @@ func (c *Controller) Seed(s uint32) {
 			s = 1
 		}
 		c.crtState = s
-		c.crt = presentation.NewCRTRandom(s)
+		v := rng.NewCRT(s)
+		c.crt = &v
 	}
 }
 
 // SetCRTRandom injects the session-owned presentation stream shared by music
 // and all other presentation random consumers [01 §7.2][03 §8.4].
-func (c *Controller) SetCRTRandom(r *presentation.CRTRandom) {
+func (c *Controller) SetCRTRandom(r *rng.CRT) {
 	if c != nil {
 		c.crt = r
 	}
 }
 
-func (c *Controller) CRTRandom() *presentation.CRTRandom {
+func (c *Controller) CRTRandom() *rng.CRT {
 	if c == nil {
 		return nil
 	}
@@ -181,8 +182,8 @@ func (c *Controller) drawCRT() uint32 {
 		return 0
 	}
 	if c.crt != nil {
-		v := uint32(c.crt.Draw("music"))
-		c.crtState = c.crt.State()
+		v := uint32(c.crt.Rand())
+		c.crtState = c.crt.State
 		return v
 	}
 	c.crtState = c.crtState*214013 + 2531011
@@ -190,20 +191,16 @@ func (c *Controller) drawCRT() uint32 {
 }
 
 // TickFrame runs at most once for a presentation frame. This keeps media
-// polling in the explicit FrameSerial domain [03 §8.4]. A failed poll is
+// polling in the committed frame identity domain [03 §8.4]. A failed poll is
 // passed as playing=false and follows the normal transition path.
-func (c *Controller) TickFrame(clock *presentation.Clock, playing bool) {
+func (c *Controller) TickFrame(frame uint32, playing bool) {
 	if c == nil {
 		return
 	}
-	if clock == nil {
-		c.Tick(playing)
+	if c.hasFrame && c.lastFrame == frame {
 		return
 	}
-	if c.hasFrame && c.lastFrame == clock.FrameSerial {
-		return
-	}
-	c.hasFrame, c.lastFrame = true, clock.FrameSerial
+	c.hasFrame, c.lastFrame = true, frame
 	c.Tick(playing)
 }
 

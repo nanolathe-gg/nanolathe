@@ -14,12 +14,12 @@ import (
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -274,7 +274,7 @@ func strictNewSessionWithUnits(t *testing.T, nUnits int, simSeed, crtSeed uint32
 	s := &Session{
 		Catalog: cat, World: terrain, Mission: m,
 		Clock:    &clock.State{Requested: 10, Active: 10},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 	}
 	w, _ := newSlicedWorld(cat)
 	s.Units = w

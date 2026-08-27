@@ -3,7 +3,7 @@ package hud
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/snapshot"
+	"github.com/nanolathe/nanolathe/internal/frame"
 )
 
 func TestBuildProductsDataDrivenPaging(t *testing.T) {
@@ -75,9 +75,9 @@ func TestBuildValidationNoInvention(t *testing.T) {
 }
 
 func TestQueueCountLabelSumsPrimaryAndSecondary(t *testing.T) {
-	queues := []snapshot.OrderQueueView{{
-		Primary:   []snapshot.OrderView{{BuildProduct: "ArmFlash", BuildCount: 2}},
-		Secondary: []snapshot.OrderView{{BuildProduct: "armflash", BuildCount: 3}},
+	queues := []frame.OrderQueueView{{
+		Primary:   []frame.OrderView{{BuildProduct: "ArmFlash", BuildCount: 2}},
+		Secondary: []frame.OrderView{{BuildProduct: "armflash", BuildCount: 3}},
 	}}
 	if got := QueueCountLabel(queues, "armflash"); got != "2 +3" {
 		t.Fatalf("queue label=%q want %q", got, "2 +3")

@@ -89,8 +89,8 @@ func TestRetailFactoryProductClickQueuesAndBuilds(t *testing.T) {
 	for step := int32(31); step <= 60; step++ {
 		sess.Step(step)
 	}
-	_, cur, ok := sess.Snapshot.Read()
-	if !ok || cur == nil {
+	cur := sess.Snapshot.Current()
+	if cur == nil {
 		t.Fatal("no published frame")
 	}
 	if cur.CommandPage.Builder != labHandle {

@@ -3,15 +3,14 @@ package client
 import (
 	"bytes"
 	"crypto/sha256"
-	"fmt"
 	"hash/crc32"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/frame"
+	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 type pieceInfo struct {
@@ -32,71 +31,39 @@ type syntheticTri struct {
 // helper to make a synthetic model with specified pieces and triangles.
 // pieces: slice of pieceInfo, tris: slice of syntheticTri already with local corners.
 func syntheticModel(pieces []pieceInfo, tris []syntheticTri, root int) *unitModel {
-	um := &unitModel{
-		pieces:      make([]pieceModel, len(pieces)),
-		pieceByName: map[string]int{},
-	}
+	m := &compiledmodel.Model{Pieces: make([]compiledmodel.Piece, len(pieces)), Root: root, Name: "synthetic"}
 	for i, p := range pieces {
-		pm := &um.pieces[i]
-		pm.name = p.name
-		pm.parent = p.parent
-		pm.translate = [3]numeric.Fixed{numeric.Fixed(int64(p.translate[0] * 65536)), numeric.Fixed(int64(p.translate[1] * 65536)), numeric.Fixed(int64(p.translate[2] * 65536))}
-		if p.name != "" {
-			um.pieceByName[strings.ToLower(p.name)] = i
+		m.Pieces[i].Name = p.name
+		m.Pieces[i].Parent = p.parent
+		m.Pieces[i].Translate = [3]numeric.Fixed{numeric.Fixed(int64(p.translate[0] * 65536)), numeric.Fixed(int64(p.translate[1] * 65536)), numeric.Fixed(int64(p.translate[2] * 65536))}
+		if p.parent >= 0 && p.parent < len(m.Pieces) {
+			m.Pieces[p.parent].Children = append(m.Pieces[p.parent].Children, i)
 		}
 	}
-	// Build children lists.
-	for i := range um.pieces {
-		um.pieces[i].children = nil
-	}
-	for i, p := range um.pieces {
-		if p.parent >= 0 && p.parent < len(um.pieces) {
-			um.pieces[p.parent].children = append(um.pieces[p.parent].children, i)
-		}
-	}
-	_ = root
-	// Convert modelTri list into per-piece vertices + prims.
-	// Each tri contributes 3 unique vertices to its piece.
 	for _, tri := range tris {
 		pi := tri.piece
-		if pi < 0 || pi >= len(um.pieces) {
+		if pi < 0 || pi >= len(m.Pieces) {
 			continue
 		}
-		piece := &um.pieces[pi]
-		base := len(piece.vertices)
+		piece := &m.Pieces[pi]
+		base := len(piece.Vertices)
 		for k := 0; k < 3; k++ {
 			c := tri.c[k]
-			x := numeric.Fixed(int64(c.x * 65536))
-			y := numeric.Fixed(int64(c.y * 65536))
-			z := numeric.Fixed(int64(c.z * 65536))
-			piece.vertices = append(piece.vertices, [3]numeric.Fixed{x, y, z})
+			piece.Vertices = append(piece.Vertices, [3]numeric.Fixed{
+				numeric.Fixed(int64(c.x * 65536)), numeric.Fixed(int64(c.y * 65536)), numeric.Fixed(int64(c.z * 65536)),
+			})
 		}
-		// Create a primitive with 3 indices forming one triangle (fan).
-		// For flat shading test we need hasTex=false; but flat only quads would be rejected if not tex.
-		// So mark hasTex=true with a dummy texture? Instead we ensure n==4 path not taken: test uses flat color 42 etc.
-		// The new draw rejects flat non-quads (n !=4). To allow single triangles for test, force hasTex=true with no actual texture but pass filter.
-		// Better: create quad by duplicating third vertex to make 4 indices where last duplicates first? No.
-		// Instead create a quad primitive from triangle: indices [base, base+1, base+2, base+2] (degenerate quad) or make hasTex=true with order.
-		// Simpler: create a prim with hasTex=false but patch draw to allow triangles for tests? Instead make prim with 4 indices forming quad covering triangle area twice.
-		// For test purposes, we create a 3-index prim and patch piece.prims handling to allow it via hasTex=true path where any n>=3 allowed.
-		// Use hasTex=false with 3 indices will be skipped (flat only quads). So we make hasTex true and rely on flat color fallback.
-		// But hasTex true without texIndex will fallback to gray (0xd1) not desired color.
-		// Instead we directly create a 4-vertex quad that approximates triangle: add a duplicate vertex near third.
-		// We'll store as 4 indices: 0,1,2,0 (last duplicate) to satisfy n==4 flat path.
-		// That will draw two triangles covering similar area, which is fine for pixel presence tests.
-		idx0 := uint16(base)
-		idx1 := uint16(base + 1)
-		idx2 := uint16(base + 2)
-		// duplicate idx0 as fourth to make quad fan (0,1,2) and (0,2,3) where 3==0 degenerate but second tri is line.
-		// Better duplicate idx2 as fourth: quad (0,1,2,2) gives one tri + degenerate.
-		piece.prims = append(piece.prims, primModel{
-			color:   tri.color,
-			indices: []uint16{idx0, idx1, idx2, idx2},
-			hasTex:  false,
-			order:   tri.order,
+		piece.Primitives = append(piece.Primitives, compiledmodel.Primitive{
+			ColorIndex: uint32(tri.color), VertexIndices: []uint16{uint16(base), uint16(base + 1), uint16(base + 2), uint16(base + 2)}, IsColored: 1,
 		})
 	}
-	return um
+	byName := make(map[string]int, len(m.Pieces))
+	for i, p := range m.Pieces {
+		if p.Name != "" {
+			byName[strings.ToLower(p.Name)] = i
+		}
+	}
+	return &unitModel{compiled: m, pieceByName: byName}
 }
 
 // newTestClient creates a 640x480 headless client with camera at origin.
@@ -153,14 +120,14 @@ func TestPieceParentChildComposition(t *testing.T) {
 	um := syntheticModel(pieces, []syntheticTri{triTurret}, 0)
 	c.models["syn_parent"] = um
 	// Snapshot with script translation (5,0,2) on turret.
-	view := snapshot.UnitView{
+	view := frame.UnitView{
 		Slot:  1,
 		Owner: 0,
 		X:     0,
 		Z:     0,
 		Y:     0,
 		Model: "syn_parent",
-		Pieces: []snapshot.PieceView{
+		Pieces: []frame.PieceView{
 			{Index: 0, Name: "base"},
 			{Index: 1, Name: "turret", Tx: numeric.Fixed(5 * 65536), Tz: numeric.Fixed(2 * 65536)},
 		},
@@ -192,9 +159,9 @@ func TestPieceParentChildComposition(t *testing.T) {
 	}
 	// Now test that without script translation, the triangle is elsewhere.
 	clearIndexed(c)
-	view2 := snapshot.UnitView{
+	view2 := frame.UnitView{
 		Slot: view.Slot, Owner: view.Owner, X: view.X, Y: view.Y, Z: view.Z, Model: view.Model,
-		Pieces: []snapshot.PieceView{
+		Pieces: []frame.PieceView{
 			{Index: 0, Name: "base"},
 			{Index: 1, Name: "turret", Tx: 0, Tz: 0},
 		},
@@ -238,9 +205,9 @@ func TestHiddenPieceAbsent(t *testing.T) {
 	triTurret := makeTriangle(1, "turret", [3][3]float64{{20, 0, 20}, {25, 0, 20}, {20, 0, 25}}, 22, 1)
 	um := syntheticModel(pieces, []syntheticTri{triBase, triTurret}, 0)
 	c.models["syn_hidden"] = um
-	view := snapshot.UnitView{
+	view := frame.UnitView{
 		Slot: 2, Owner: 0, X: 0, Y: 0, Z: 0, Model: "syn_hidden",
-		Pieces: []snapshot.PieceView{
+		Pieces: []frame.PieceView{
 			{Index: 0, Name: "base", Hidden: false},
 			{Index: 1, Name: "turret", Hidden: true}, // hidden
 		},
@@ -271,9 +238,9 @@ func TestHiddenPieceAbsent(t *testing.T) {
 	}
 	_ = count11
 	// Also test child of hidden parent is hidden: make turret child of hidden base? Already turret parent base but base visible; hide base should hide turret too even if turret not hidden.
-	view2 := snapshot.UnitView{
+	view2 := frame.UnitView{
 		Slot: view.Slot, Owner: view.Owner, X: view.X, Y: view.Y, Z: view.Z, Model: view.Model,
-		Pieces: []snapshot.PieceView{
+		Pieces: []frame.PieceView{
 			{Index: 0, Name: "base", Hidden: true},
 			{Index: 1, Name: "turret", Hidden: false},
 		},
@@ -308,9 +275,9 @@ func TestFlareFlashPolicy(t *testing.T) {
 	triFlare := makeTriangle(1, "flare", [3][3]float64{{0, 0, 0}, {2, 0, 0}, {0, 0, 2}}, 44, 1)
 	um := syntheticModel(pieces, []syntheticTri{triBase, triFlare}, 0)
 	c.models["syn_flare"] = um
-	viewVisible := snapshot.UnitView{
+	viewVisible := frame.UnitView{
 		Slot: 3, Owner: 0, X: 0, Y: 0, Z: 0, Model: "syn_flare",
-		Pieces: []snapshot.PieceView{
+		Pieces: []frame.PieceView{
 			{Index: 0, Name: "base", Hidden: false},
 			{Index: 1, Name: "flare", Hidden: false},
 		},
@@ -328,9 +295,9 @@ func TestFlareFlashPolicy(t *testing.T) {
 	if !hasFlare {
 		t.Fatalf("flare piece with Hidden=false should be rasterized; no flare color found (policy requires no silent drop)")
 	}
-	viewHidden := snapshot.UnitView{
+	viewHidden := frame.UnitView{
 		Slot: viewVisible.Slot, Owner: viewVisible.Owner, X: viewVisible.X, Y: viewVisible.Y, Z: viewVisible.Z, Model: viewVisible.Model,
-		Pieces: []snapshot.PieceView{
+		Pieces: []frame.PieceView{
 			{Index: 0, Name: "base", Hidden: false},
 			{Index: 1, Name: "flare", Hidden: true},
 		},
@@ -363,16 +330,16 @@ func TestTurretRotationChangesPixels(t *testing.T) {
 	triBase := makeTriangle(0, "base", [3][3]float64{{-5, 0, -5}, {-1, 0, -5}, {-5, 0, -1}}, 66, 1)
 	um := syntheticModel(pieces, []syntheticTri{tri, triBase}, 0)
 	c.models["syn_rot"] = um
-	view0 := snapshot.UnitView{
+	view0 := frame.UnitView{
 		Slot: 4, Owner: 0, X: 0, Y: 0, Z: 0, Model: "syn_rot",
-		Pieces: []snapshot.PieceView{
+		Pieces: []frame.PieceView{
 			{Index: 0, Name: "base"},
 			{Index: 1, Name: "turret", RotY: 0},
 		},
 	}
-	view90 := snapshot.UnitView{
+	view90 := frame.UnitView{
 		Slot: 4, Owner: 0, X: 0, Y: 0, Z: 0, Model: "syn_rot",
-		Pieces: []snapshot.PieceView{
+		Pieces: []frame.PieceView{
 			{Index: 0, Name: "base"},
 			{Index: 1, Name: "turret", RotY: 16384}, // 90 deg [03 §2.4] 65536 per circle
 		},
@@ -408,9 +375,9 @@ func TestSameSnapshotIdenticalFramebuffer(t *testing.T) {
 	um := syntheticModel(pieces, []syntheticTri{tri}, 0)
 	c1.models["syn_ident"] = um
 	c2.models["syn_ident"] = um
-	view := snapshot.UnitView{
+	view := frame.UnitView{
 		Slot: 5, Owner: 1, X: numeric.Fixed(100 * 65536), Y: 0, Z: numeric.Fixed(50 * 65536), Model: "syn_ident",
-		Pieces:  []snapshot.PieceView{{Index: 0, Name: "base", RotY: 12345, Tx: numeric.Fixed(2 * 65536)}},
+		Pieces:  []frame.PieceView{{Index: 0, Name: "base", RotY: 12345, Tx: numeric.Fixed(2 * 65536)}},
 		Heading: 1000, Pitch: 2000, Bank: 3000,
 	}
 	// Draw with c1
@@ -438,55 +405,6 @@ func TestSameSnapshotIdenticalFramebuffer(t *testing.T) {
 	}
 }
 
-// TestFallbackDiagnosticEmittedOnce verifies model-load fallback diagnostic emitted once per unit (structured), not per frame spam [ON-08].
-func TestFallbackDiagnosticEmittedOnce(t *testing.T) {
-	c := newTestClient(t)
-	// Do not set modelFS, use missing model name.
-	view := snapshot.UnitView{Slot: 99, Owner: 0, X: 0, Y: 0, Z: 0, Model: "missing_model_xyz"}
-	// Capture stderr.
-	oldStderr := os.Stderr
-	r, w, _ := os.Pipe()
-	os.Stderr = w
-	// Ensure maps initialized.
-	if c.modelFallbacks == nil {
-		c.modelFallbacks = map[uint16]struct{}{}
-	}
-	if c.modelErrors == nil {
-		c.modelErrors = map[string]error{}
-	}
-	c.modelErrors["missing_model_xyz"] = fmt.Errorf("not found")
-	sx, sy := int32(0), int32(0)
-	// Call drawUnitModel twice for same slot.
-	c.drawUnitModel(view, sx, sy)
-	c.drawUnitModel(view, sx, sy)
-	// Different slot with same missing model should log again (once per unit).
-	view2 := view
-	view2.Slot = 100
-	c.drawUnitModel(view2, sx, sy)
-	c.drawUnitModel(view2, sx, sy)
-	w.Close()
-	os.Stderr = oldStderr
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-	out := buf.String()
-	// Count occurrences of slot 99 and 100.
-	count99 := strings.Count(out, "\"slot\":99")
-	count100 := strings.Count(out, "\"slot\":100")
-	if count99 != 1 {
-		t.Fatalf("fallback diagnostic for slot 99 should be emitted once, got %d in %q", count99, out)
-	}
-	if count100 != 1 {
-		t.Fatalf("fallback diagnostic for slot 100 should be emitted once, got %d in %q", count100, out)
-	}
-	// Ensure structured JSON-like contains model field.
-	if !strings.Contains(out, "\"model\":\"missing_model_xyz\"") {
-		t.Fatalf("structured diagnostic should contain model field, got %q", out)
-	}
-	if !strings.Contains(out, "\"level\":\"warn\"") {
-		t.Fatalf("structured diagnostic should contain level warn, got %q", out)
-	}
-}
-
 // TestSelectionPickingStable ensures selection picking comment: picking uses footprint, not animated extents.
 // This is a light check that ApplyDragSelectionWorld still works with piece transforms present.
 // We verify that unit's screen position for selection is still via UnitView.X/Z, not piece offset.
@@ -499,9 +417,9 @@ func TestSelectionPickingStable(t *testing.T) {
 	tri := makeTriangle(1, "turret", [3][3]float64{{0, 0, 0}, {4, 0, 0}, {0, 0, 4}}, 88, 0)
 	um := syntheticModel(pieces, []syntheticTri{tri}, 0)
 	c.models["syn_pick"] = um
-	view := snapshot.UnitView{
+	view := frame.UnitView{
 		Slot: 6, Owner: 0, X: numeric.Fixed(50 * 65536), Y: 0, Z: numeric.Fixed(50 * 65536), Model: "syn_pick", FootX: 2, FootZ: 2,
-		Pieces: []snapshot.PieceView{
+		Pieces: []frame.PieceView{
 			{Index: 0, Name: "base"},
 			{Index: 1, Name: "turret", Tx: numeric.Fixed(100 * 65536)}, // visual far but selection should stay at unit center
 		},

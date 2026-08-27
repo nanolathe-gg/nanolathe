@@ -55,7 +55,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	var curReady bool
 	for step := int32(1); step <= 30; step++ {
 		sess.Step(step)
-		if _, cur, ok := sess.Snapshot.Read(); ok && cur != nil {
+		if cur := sess.Snapshot.Current(); cur != nil {
 			curReady = true
 			break
 		}
@@ -95,8 +95,8 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	if got := b.hud.modalGadgetRect(b.hud.confirmWin, choice1, nil); got.W != 96 || got.H != 20 {
 		t.Fatalf("YESORNO CHOICE1 runtime size = %dx%d, want stock frame 96x20", got.W, got.H)
 	}
-	_, cur, ok := sess.Snapshot.Read()
-	if !ok || cur == nil {
+	cur := sess.Snapshot.Current()
+	if cur == nil {
 		t.Fatal("selected commander snapshot disappeared")
 	}
 	w, _ := b.hud.windowFor(b, cur)
@@ -201,7 +201,7 @@ func TestRetailNoSelectionUsesSideGeneralWindow(t *testing.T) {
 	}
 	for step := int32(1); step <= 30; step++ {
 		sess.Step(step)
-		if _, cur, ok := sess.Snapshot.Read(); ok && cur != nil {
+		if cur := sess.Snapshot.Current(); cur != nil {
 			break
 		}
 	}
@@ -218,8 +218,8 @@ func TestRetailNoSelectionUsesSideGeneralWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, cur, ok := sess.Snapshot.Read()
-	if !ok || cur == nil {
+	cur := sess.Snapshot.Current()
+	if cur == nil {
 		t.Fatal("no-selection snapshot not published")
 	}
 	window, _ := b.hud.windowFor(b, cur)

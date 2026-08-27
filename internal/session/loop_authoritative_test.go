@@ -9,11 +9,11 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -37,7 +37,7 @@ func newLoopTestSession(t *testing.T, nUnits int) *Session {
 		World:    terrain,
 		Mission:  m,
 		Clock:    &clock.State{Requested: 10, Active: 10},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 	}
 	w, err := newSlicedWorld(cat)
 	if err != nil {
@@ -180,7 +180,7 @@ func TestLoop_SlotCreationSameTickVisibility(t *testing.T) {
 		World:    terrain,
 		Mission:  m,
 		Clock:    &clock.State{Requested: 10, Active: 10},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 	}
 	w, _ := newSlicedWorld(cat)
 	s.Units = w
@@ -343,7 +343,7 @@ func TestLoop_DeathFinalizeBeforeLaterSlot(t *testing.T) {
 		World:    terrain,
 		Mission:  m,
 		Clock:    &clock.State{Requested: 10, Active: 10},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 	}
 	w, _ := newSlicedWorld(cat)
 	s.Units = w
@@ -476,7 +476,7 @@ func TestLoop_MoveArrival(t *testing.T) {
 		World:    terrain,
 		Mission:  m,
 		Clock:    &clock.State{Requested: 10, Active: 10},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 	}
 	w, _ := newSlicedWorld(cat)
 	s.Units = w
@@ -568,7 +568,7 @@ func TestLoop_BuildProgress(t *testing.T) {
 		World:    terrain,
 		Mission:  m,
 		Clock:    &clock.State{Requested: 10, Active: 10},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 	}
 	w, _ := newSlicedWorld(cat)
 	s.Units = w
@@ -655,7 +655,7 @@ func TestLoop_AimReturnControlsProjectile(t *testing.T) {
 		World:    terrain,
 		Mission:  m,
 		Clock:    &clock.State{Requested: 10, Active: 10},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 	}
 	w, _ := newSlicedWorld(cat)
 	s.Units = w

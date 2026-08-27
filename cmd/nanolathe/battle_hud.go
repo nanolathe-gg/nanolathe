@@ -13,13 +13,13 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/session"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -60,7 +60,7 @@ type retailBattleHUD struct {
 	// Retail refreshes the displayed production/consumption counters on a
 	// one-second (30 tick) cadence while the stock bars remain live [07 §6].
 	rateSampleTick uint32
-	rateSample     snapshot.ResourceView
+	rateSample     frame.EconomyView
 	rateSampleOK   bool
 }
 
@@ -357,10 +357,11 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 	// queue walker is deliberately fed only published state; Shift is the live
 	// presentation gate and releasing it returns without constructing or
 	// mutating any authoritative data [I6][07 §9][R-P0-11 §4].
-	var cur *snapshot.Frame
+	var cur *frame.Frame
 	frameOK := false
 	if buf := c.Buffer(); buf != nil {
-		_, cur, frameOK = buf.Read()
+		cur = buf.Current()
+		frameOK = cur != nil
 	}
 	// World-space overlays come first, while the composed world is still the
 	// whole surface: retail draws the build ghost and the order-queue overlay
@@ -389,17 +390,16 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 	}
 	blitBattlePanel(c, h.panelSide, 0, offset)
 
-	var prev *snapshot.Frame
 	ok := false
 	if buf := c.Buffer(); buf != nil {
-		prev, cur, ok = buf.Read()
+		cur = buf.Current()
+		ok = cur != nil
 	}
 	if ok && cur != nil {
 		h.drawResources(c, cur)
 		h.drawSelectedUnit(c, cur)
 		h.drawTopStatusValues(c, cur)
 	}
-	_ = prev
 	h.drawSidePage(c, b, offset, cur)
 	if ok && cur != nil && cur.Paused {
 		h.drawPausedTitle(c)
@@ -594,11 +594,11 @@ func (h *retailBattleHUD) modalGadgetFrame(gad gui.Gadget, page *formats.GAF, pr
 	return nil
 }
 
-func (h *retailBattleHUD) drawResources(c *client.Client, f *snapshot.Frame) {
-	var res *snapshot.ResourceView
-	for i := range f.Resources {
-		if f.Resources[i].Player == h.owner {
-			res = &f.Resources[i]
+func (h *retailBattleHUD) drawResources(c *client.Client, f *frame.Frame) {
+	var res *frame.EconomyView
+	for i := range f.Economy {
+		if f.Economy[i].Player == h.owner {
+			res = &f.Economy[i]
 			break
 		}
 	}
@@ -686,7 +686,7 @@ func formatEnergyRate(value float32) string {
 	return fmt.Sprintf("%d", int(value))
 }
 
-func (h *retailBattleHUD) drawTopStatusValues(c *client.Client, f *snapshot.Frame) {
+func (h *retailBattleHUD) drawTopStatusValues(c *client.Client, f *frame.Frame) {
 	if f == nil {
 		return
 	}
@@ -704,8 +704,8 @@ func (h *retailBattleHUD) drawTopStatusValues(c *client.Client, f *snapshot.Fram
 	}
 }
 
-func (h *retailBattleHUD) drawSelectedUnit(c *client.Client, f *snapshot.Frame) {
-	var selected *snapshot.UnitView
+func (h *retailBattleHUD) drawSelectedUnit(c *client.Client, f *frame.Frame) {
+	var selected *frame.UnitView
 	for i := range f.Units {
 		u := &f.Units[i]
 		if u.Owner == h.owner && u.Flags&client.SelectionFlag != 0 {
@@ -764,7 +764,7 @@ func (h *retailBattleHUD) drawHealthBar(c *client.Client, r hud.Rect, health, ma
 	}
 }
 
-func (h *retailBattleHUD) defFor(u *snapshot.UnitView) (*content.UnitDef, bool) {
+func (h *retailBattleHUD) defFor(u *frame.UnitView) (*content.UnitDef, bool) {
 	if h == nil || h.cat == nil || u == nil {
 		return nil, false
 	}
@@ -776,7 +776,7 @@ func (h *retailBattleHUD) defFor(u *snapshot.UnitView) (*content.UnitDef, bool) 
 	return h.cat.UnitDefByIndex(uint32(u.DefID))
 }
 
-func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offset int, f *snapshot.Frame) {
+func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offset int, f *frame.Frame) {
 	if b == nil || b.cat == nil {
 		return
 	}
@@ -986,12 +986,9 @@ func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
 	if h == nil || b == nil {
 		return false
 	}
-	var f *snapshot.Frame
+	var f *frame.Frame
 	if b.sess != nil && b.sess.Snapshot != nil {
-		_, cur, ok := b.sess.Snapshot.Read()
-		if ok {
-			f = cur
-		}
+		f = b.sess.Snapshot.Current()
 	}
 	window, _ := h.windowFor(b, f)
 	if window == nil {
@@ -1018,12 +1015,9 @@ func (h *retailBattleHUD) buttonAt(b *battleSession, x, y int32) int {
 	if h == nil || b == nil {
 		return -1
 	}
-	var f *snapshot.Frame
+	var f *frame.Frame
 	if b.sess != nil && b.sess.Snapshot != nil {
-		_, cur, ok := b.sess.Snapshot.Read()
-		if ok {
-			f = cur
-		}
+		f = b.sess.Snapshot.Current()
 	}
 	window, _ := h.windowFor(b, f)
 	if window == nil {
@@ -1075,7 +1069,7 @@ func (h *retailBattleHUD) buildPageCount(def *content.UnitDef) int {
 	return count
 }
 
-func (h *retailBattleHUD) windowFor(b *battleSession, f *snapshot.Frame) (*gui.Window, *formats.GAF) {
+func (h *retailBattleHUD) windowFor(b *battleSession, f *frame.Frame) (*gui.Window, *formats.GAF) {
 	// Cache resolved GUI/model once instead of reparsing on draw/click [ON-05 1]
 	// Name selection is data-driven with paging: builder's page bits select guis/<unit><page>.gui [R-P0-03][07 §9] C10
 	name := ""

@@ -6,7 +6,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/economy"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -17,7 +17,7 @@ import (
 func TestPublishAfterEachSubTick(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 		Units:    units.New(10, nil),
 	}
 	s.RegisterAll()
@@ -30,33 +30,28 @@ func TestPublishAfterEachSubTick(t *testing.T) {
 	if s.Clock.GlobalTick != 3 {
 		t.Fatalf("GlobalTick = %d, want 3", s.Clock.GlobalTick)
 	}
-	prev, cur, ok := s.Snapshot.Read()
-	if !ok {
+	cur := s.Snapshot.Current()
+	if cur == nil {
 		t.Fatalf("snapshot not published")
 	}
 	if cur.Tick != 3 {
 		t.Fatalf("snapshot cur tick = %d, want 3", cur.Tick)
 	}
-	if prev.Tick != 2 {
-		t.Fatalf("publish-after-each-subtick: prev tick = %d, want 2 (need publish after each of 3 ticks, not just final) [PLAN_03 C15]", prev.Tick)
-	}
-	// Now test burst of 5 vs single-batch publish: if impl published only once,
-	// prev would be initial (0 or 3?) — we already checked prev is 2, so it published each time.
 
 	// Test 0 ticks case: no publish, buffer unchanged.
 	s2 := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 10},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 	}
 	s2.RegisterAll()
 	s2.State = StateBattle // P0-I10: Step ticks only in battle
 	// ScaledNow equals anchor => 0 ticks
 	s2.Step(10)
-	prev2, cur2, ok2 := s2.Snapshot.Read()
-	if ok2 {
+	cur2 := s2.Snapshot.Current()
+	if cur2 != nil {
 		// If 0 ticks, buffer should remain empty (no publish). But RegisterAll does not publish initial.
 		// So ok should be false or ticks 0 => no publish. Our Step does 0 SubTicks, so no publish.
-		t.Fatalf("0-tick Step should not publish: got prev %v cur %v", prev2, cur2)
+		t.Fatalf("0-tick Step should not publish: got %v", cur2)
 	}
 }
 
@@ -65,7 +60,7 @@ func TestPublishAfterEachSubTick(t *testing.T) {
 func TestPauseUnpauseBurstCap(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0, Paused: true},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 	}
 	s.RegisterAll()
 	s.State = StateBattle // P0-I10: Step ticks only in battle
@@ -96,7 +91,7 @@ func TestPauseUnpauseBurstCap(t *testing.T) {
 	// Verify burst never exceeds 5 even with huge delta
 	s2 := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 	}
 	s2.RegisterAll()
 	s2.State = StateBattle // P0-I10
@@ -110,13 +105,11 @@ func TestPauseUnpauseBurstCap(t *testing.T) {
 // the same batch; Step must publish after each sub-tick but render exactly once.
 func TestRenderOncePerBatch(t *testing.T) {
 	renderCalls := 0
-	var alphas []float32
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Snapshot: &snapshot.Buffer{},
-		OnRender: func(alpha float32) {
+		Snapshot: &frame.Buffer{},
+		OnRender: func() {
 			renderCalls++
-			alphas = append(alphas, alpha)
 		},
 	}
 	s.RegisterAll()
@@ -125,19 +118,16 @@ func TestRenderOncePerBatch(t *testing.T) {
 	if renderCalls != 1 {
 		t.Fatalf("render must run exactly once per Step batch [PLAN_03 C15], got %d", renderCalls)
 	}
-	if len(alphas) != 1 || alphas[0] < 0 || alphas[0] > 1 || alphas[0] != alphas[0] {
-		t.Fatalf("alpha must be in [0,1] and not NaN, got %v", alphas)
-	}
-	// Second batch with 0 ticks still renders once per batch (alpha saturates)
+	// Second batch with 0 ticks still renders once per batch.
 	renderCalls = 0
 	s.Step(5) // anchor now 5, scaledNow 5 => 0 ticks
 	if renderCalls != 1 {
 		t.Fatalf("render must run once even with 0 ticks [PLAN_03 C15], got %d", renderCalls)
 	}
-	// Verify that publishes happened 5 times but renders only once: snapshot cur tick should be 5, prev 4
-	prev, cur, _ := s.Snapshot.Read()
-	if cur.Tick != 5 || prev.Tick != 4 {
-		t.Fatalf("after 5-tick batch snapshot prev %d cur %d want 4/5 (publish each tick)", prev.Tick, cur.Tick)
+	// Verify that the committed frame is the final tick after the batch.
+	cur := s.Snapshot.Current()
+	if cur == nil || cur.Tick != 5 {
+		t.Fatalf("after 5-tick batch current tick %v want 5", cur)
 	}
 }
 
@@ -184,7 +174,7 @@ func TestAICallbackInsideTickPlayer(t *testing.T) {
 		Econ:     econ,
 		Units:    units.New(10, nil),
 		AI:       [10]*ai.Manager{0: mgr},
-		Snapshot: &snapshot.Buffer{},
+		Snapshot: &frame.Buffer{},
 	}
 	s.RegisterAll()
 

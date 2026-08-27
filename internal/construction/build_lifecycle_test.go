@@ -6,10 +6,10 @@ import (
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -233,10 +233,10 @@ func TestAcceptedWorkEmitsNanoAndStallDoesNot(t *testing.T) {
 	svc := NewService(nil, cat, w, nil)
 	svc.AllowSyntheticPlacement = true
 	svc.ModelForUnit = func(*units.Unit) *model.Model { return trivialModel(1, nil) }
-	collector := presentation.NewCollector(presentation.Limits{})
+	collector := frame.NewEventBuffer(frame.Limits{})
 	svc.Presentation = collector
 	svc.StepUnit(TickContext{Tick: 7, World: w, Catalog: cat}, h)
-	if product.Remaining >= 0.5 || len(collector.Events()) != 1 || collector.Events()[0].Kind != presentation.KindNanolathe {
+	if product.Remaining >= 0.5 || len(collector.Events()) != 1 || collector.Events()[0].Kind != frame.KindNanolathe {
 		t.Fatalf("accepted work remaining=%v events=%v", product.Remaining, collector.Events())
 	}
 	collector.Reset()

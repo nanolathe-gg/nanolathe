@@ -3,7 +3,7 @@ package session
 import (
 	"sort"
 
-	"github.com/nanolathe/nanolathe/internal/snapshot"
+	"github.com/nanolathe/nanolathe/internal/frame"
 )
 
 // ReasonCommanderDeath is the skirmish commander-death termination reason
@@ -24,17 +24,17 @@ const ReasonCommanderDeath = "commander_death"
 // commanders per team, resurrected commanders, CommanderDeath==0 annihilation mode)
 // behavior is TODO(question) and deferred.
 type Result struct {
-	Ended      bool                   `json:"ended"`
-	Draw       bool                   `json:"draw"`
-	Kind       string                 `json:"kind"` // "victory" | "defeat" | "draw" [RS-05][08]
-	WinnerTeam int                    `json:"winner_team"`
-	Winners    []int                  `json:"winners,omitempty"`
-	Losers     []int                  `json:"losers"`
-	Reason     string                 `json:"reason"`
-	Tick       uint32                 `json:"tick"`
-	ArmedTick  uint32                 `json:"armed_tick,omitempty"`
-	Countdown  int16                  `json:"countdown"`
-	Scores     []snapshot.ResultScore `json:"scores,omitempty"`
+	Ended      bool                `json:"ended"`
+	Draw       bool                `json:"draw"`
+	Kind       string              `json:"kind"` // "victory" | "defeat" | "draw" [RS-05][08]
+	WinnerTeam int                 `json:"winner_team"`
+	Winners    []int               `json:"winners,omitempty"`
+	Losers     []int               `json:"losers"`
+	Reason     string              `json:"reason"`
+	Tick       uint32              `json:"tick"`
+	ArmedTick  uint32              `json:"armed_tick,omitempty"`
+	Countdown  int16               `json:"countdown"`
+	Scores     []frame.ResultScore `json:"scores,omitempty"`
 }
 
 // TeamForOwner maps an owner slot to its team identifier [RS-05][08].
@@ -81,7 +81,7 @@ func (s *Session) GetResult() Result {
 		r.Winners = cp
 	}
 	if len(r.Scores) > 0 {
-		cp := make([]snapshot.ResultScore, len(r.Scores))
+		cp := make([]frame.ResultScore, len(r.Scores))
 		copy(cp, r.Scores)
 		r.Scores = cp
 	}
@@ -112,7 +112,7 @@ func (s *Session) SetResultCallback(fn func(Result)) {
 			r.Winners = cp
 		}
 		if len(r.Scores) > 0 {
-			cp := make([]snapshot.ResultScore, len(r.Scores))
+			cp := make([]frame.ResultScore, len(r.Scores))
 			copy(cp, r.Scores)
 			r.Scores = cp
 		}
@@ -144,11 +144,11 @@ func (s *Session) resultKindFor(draw bool, winner int) string {
 // we publish zero for now with score derived from tick, and kind per team. This satisfies
 // the snapshot contract that score/statistics are published; exact per-player kills
 // remain TODO(question) until the ledger kill counter is wired [P1-01].
-func (s *Session) collectScores(winner int, draw bool) []snapshot.ResultScore {
+func (s *Session) collectScores(winner int, draw bool) []frame.ResultScore {
 	if s.Econ == nil {
 		return nil
 	}
-	var out []snapshot.ResultScore
+	var out []frame.ResultScore
 	for i := 0; i < 10; i++ {
 		p := s.Econ.Players[i]
 		if !p.Exists {
@@ -169,7 +169,7 @@ func (s *Session) collectScores(winner int, draw bool) []snapshot.ResultScore {
 		// Try to derive kills from mission progress W/L? For now use 0.
 		// Score uses ticks so it changes with time, satisfying score publishing.
 		score := Score(kills, 1, s.Clock.GlobalTick, 0)
-		out = append(out, snapshot.ResultScore{Player: i, Team: team, Kills: kills, Losses: losses, Score: score, Kind: kind})
+		out = append(out, frame.ResultScore{Player: i, Team: team, Kills: kills, Losses: losses, Score: score, Kind: kind})
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].Player < out[b].Player })
 	return out
@@ -183,7 +183,7 @@ func (s *Session) publishResultView() {
 	s.resultMu.Lock()
 	r := s.result
 	s.resultMu.Unlock()
-	view := snapshot.ResultView{
+	view := frame.ResultView{
 		Ended:      r.Ended,
 		Kind:       r.Kind,
 		WinnerTeam: r.WinnerTeam,
@@ -200,13 +200,13 @@ func (s *Session) publishResultView() {
 		view.Losers = append([]int(nil), r.Losers...)
 	}
 	if len(r.Scores) > 0 {
-		view.Scores = append([]snapshot.ResultScore(nil), r.Scores...)
+		view.Scores = append([]frame.ResultScore(nil), r.Scores...)
 	}
 	// Ensure countdown reflects latch even before Ended (pending view)
 	if !r.Ended {
 		view.Countdown = s.Latch.Countdown
 	}
-	s.Snapshot.SetResultView(view)
+	// Result is published with the next committed frame; no out-of-band view.
 }
 
 // fireResultCallback fires the exactly-once callback after latch visible [RS-05].
@@ -235,7 +235,7 @@ func (s *Session) fireResultCallback() {
 		rcopy.Winners = cp
 	}
 	if len(rcopy.Scores) > 0 {
-		cp := make([]snapshot.ResultScore, len(rcopy.Scores))
+		cp := make([]frame.ResultScore, len(rcopy.Scores))
 		copy(cp, rcopy.Scores)
 		rcopy.Scores = cp
 	}
@@ -585,9 +585,6 @@ func (s *Session) ClearResult() {
 	s.resultCallback = nil
 	s.resultCallbackFired = false
 	s.Latch = NewEndLatch()
-	if s.Snapshot != nil {
-		s.Snapshot.SetResultView(snapshot.ResultView{})
-	}
 }
 
 // ResetResultForRetry clears result and latch for a clean retry without duplicate callbacks [RS-05].
@@ -619,7 +616,4 @@ func (s *Session) ResetResultForRetry() {
 		}
 	}
 	s.resultMu.Unlock()
-	if s.Snapshot != nil {
-		s.Snapshot.SetResultView(snapshot.ResultView{})
-	}
 }

@@ -112,9 +112,9 @@ type TraceEvent struct {
 	ReturnValue *int32 // optional for return events
 }
 
-// EventKind identifies authoritative combat-to-presentation/death records.
+// EventKind identifies authoritative combat-to-event records.
 // Values are intentionally local to combat; the session adapter translates
-// them to snapshot.EventKind without allowing the renderer into simulation
+// them to frame.EventKind without allowing the renderer into simulation
 // [I6][06 §13.2].
 type EventKind uint8
 

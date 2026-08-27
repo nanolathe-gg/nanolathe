@@ -15,7 +15,6 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/palette"
-	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -23,9 +22,9 @@ import (
 // logical ID. Pixel bytes are copied when returned by Frame, so a caller
 // cannot mutate the battle-lifetime catalog.
 type PresentationFrame struct {
-	ID       presentation.AssetID
-	GAF      presentation.AssetID
-	Entry    presentation.AssetID
+	ID       AssetID
+	GAF      AssetID
+	Entry    AssetID
 	Index    int
 	Width    uint16
 	Height   uint16
@@ -40,10 +39,10 @@ type PresentationFrame struct {
 // surface used by renderers. FNTs and detached GAF frame data are retained for
 // adapters that need authored pixels.
 type PresentationCatalog struct {
-	assets presentation.Assets
-	frames map[presentation.AssetID]PresentationFrame
-	pixels map[presentation.AssetID]framePixels
-	fonts  map[presentation.AssetID]*formats.FNT
+	assets Assets
+	frames map[AssetID]PresentationFrame
+	pixels map[AssetID]framePixels
+	fonts  map[AssetID]*formats.FNT
 	pal    *palette.Tables
 }
 
@@ -53,9 +52,9 @@ type framePixels struct {
 }
 
 // Assets returns the immutable service consumed by presentation code.
-func (c *PresentationCatalog) Assets() presentation.Assets {
+func (c *PresentationCatalog) Assets() Assets {
 	if c == nil {
-		return presentation.NewAssets()
+		return NewAssets()
 	}
 	return c.assets
 }
@@ -75,7 +74,7 @@ func (c *PresentationCatalog) Palette() *palette.Tables {
 
 // Frame returns detached authored frame data. A missing ID is an ordinary
 // optional-resource miss and returns false.
-func (c *PresentationCatalog) Frame(id presentation.AssetID) (formats.GAFFrame, bool) {
+func (c *PresentationCatalog) Frame(id AssetID) (formats.GAFFrame, bool) {
 	if c == nil {
 		return formats.GAFFrame{}, false
 	}
@@ -95,7 +94,7 @@ func (c *PresentationCatalog) Frame(id presentation.AssetID) (formats.GAFFrame, 
 
 // FrameMeta returns stable dimensions, placement, color-key, and authored
 // duration without exposing decoded pixel storage.
-func (c *PresentationCatalog) FrameMeta(id presentation.AssetID) (PresentationFrame, bool) {
+func (c *PresentationCatalog) FrameMeta(id AssetID) (PresentationFrame, bool) {
 	if c == nil {
 		return PresentationFrame{}, false
 	}
@@ -104,7 +103,7 @@ func (c *PresentationCatalog) FrameMeta(id presentation.AssetID) (PresentationFr
 }
 
 // Font returns a detached FNT value by stable logical ID.
-func (c *PresentationCatalog) Font(id presentation.AssetID) (*formats.FNT, bool) {
+func (c *PresentationCatalog) Font(id AssetID) (*formats.FNT, bool) {
 	if c == nil {
 		return nil, false
 	}
@@ -131,10 +130,10 @@ func LoadPresentationAssets(fs vfs.FSOps, defs ...*Catalog) (*PresentationCatalo
 		return nil, errors.New("content: nil VFS")
 	}
 	c := &PresentationCatalog{
-		assets: presentation.NewAssets(),
-		frames: make(map[presentation.AssetID]PresentationFrame),
-		pixels: make(map[presentation.AssetID]framePixels),
-		fonts:  make(map[presentation.AssetID]*formats.FNT),
+		assets: NewAssets(),
+		frames: make(map[AssetID]PresentationFrame),
+		pixels: make(map[AssetID]framePixels),
+		fonts:  make(map[AssetID]*formats.FNT),
 	}
 	loaded := make(map[string]*loadedGAF)
 	for _, dir := range []string{"anims", "textures"} {
@@ -159,7 +158,7 @@ func LoadPresentationAssets(fs vfs.FSOps, defs ...*Catalog) (*PresentationCatalo
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
-	spec := presentation.AssetCatalog{}
+	spec := AssetCatalog{}
 	for _, logical := range paths {
 		addGAF(c, &spec, loaded[logical])
 	}
@@ -167,7 +166,7 @@ func LoadPresentationAssets(fs vfs.FSOps, defs ...*Catalog) (*PresentationCatalo
 		linkDefinitionAssets(&spec, defs[0], loaded)
 	}
 	c.loadFonts(fs)
-	c.assets = presentation.NewAssets(spec)
+	c.assets = NewAssets(spec)
 	// Palette tables are a single eager operation. Unlike optional image
 	// entries, a partial table set cannot produce a coherent palette, so nil is
 	// retained and the presentation backend decides its documented no-art path.
@@ -191,13 +190,13 @@ func (c *PresentationCatalog) loadFonts(fs vfs.FSOps) {
 		if err != nil {
 			continue
 		}
-		c.fonts[presentation.AssetID(logical)] = font
+		c.fonts[AssetID(logical)] = font
 	}
 }
 
 // BuildPresentationAssets is the narrow helper used by session setup when it
-// only needs the merged presentation.Assets interface.
-func BuildPresentationAssets(fs vfs.FSOps, defs ...*Catalog) (presentation.Assets, error) {
+// only needs the merged Assets interface.
+func BuildPresentationAssets(fs vfs.FSOps, defs ...*Catalog) (Assets, error) {
 	c, err := LoadPresentationAssets(fs, defs...)
 	if err != nil {
 		return nil, err
@@ -206,7 +205,7 @@ func BuildPresentationAssets(fs vfs.FSOps, defs ...*Catalog) (presentation.Asset
 }
 
 // CompilePresentationAssets is an alias named after the content compiler.
-func CompilePresentationAssets(fs vfs.FSOps, defs ...*Catalog) (presentation.Assets, error) {
+func CompilePresentationAssets(fs vfs.FSOps, defs ...*Catalog) (Assets, error) {
 	return BuildPresentationAssets(fs, defs...)
 }
 
@@ -215,12 +214,12 @@ type loadedGAF struct {
 	gaf  *formats.GAF
 }
 
-func addGAF(c *PresentationCatalog, spec *presentation.AssetCatalog, loaded *loadedGAF) {
+func addGAF(c *PresentationCatalog, spec *AssetCatalog, loaded *loadedGAF) {
 	if loaded == nil || loaded.gaf == nil {
 		return
 	}
-	fileID := presentation.AssetID(loaded.path)
-	seenEntries := make(map[presentation.AssetID]struct{}, len(loaded.gaf.Entries))
+	fileID := AssetID(loaded.path)
+	seenEntries := make(map[AssetID]struct{}, len(loaded.gaf.Entries))
 	for entryIndex := range loaded.gaf.Entries {
 		entry := &loaded.gaf.Entries[entryIndex]
 		entryID := entryAssetID(loaded.path, entry.Name)
@@ -246,9 +245,9 @@ func addGAF(c *PresentationCatalog, spec *presentation.AssetCatalog, loaded *loa
 		// team art [03 §4.4][fmt gaf].
 		if strings.HasPrefix(loaded.path, "textures/") {
 			if spec.Models == nil {
-				spec.Models = make(map[presentation.AssetID]presentation.ModelAsset)
+				spec.Models = make(map[AssetID]ModelAsset)
 			}
-			spec.Models[entryID] = presentation.ModelAsset{ID: entryID, Textures: presentation.TextureSet{
+			spec.Models[entryID] = ModelAsset{ID: entryID, Textures: TextureSet{
 				ID: entryID, Default: entryID, Durations: append([]uint32(nil), seq.Durations...),
 			}}
 			if loaded.path == "textures/logos.gaf" && len(entry.Frames) == 10 {
@@ -260,36 +259,36 @@ func addGAF(c *PresentationCatalog, spec *presentation.AssetCatalog, loaded *loa
 		}
 		if strings.HasPrefix(loaded.path, "anims/") {
 			if spec.Effects == nil {
-				spec.Effects = make(map[presentation.AssetID]presentation.EffectAsset)
+				spec.Effects = make(map[AssetID]EffectAsset)
 			}
 			// The entry's authored path and name are the only identity here;
 			// semantic producer ownership remains with the event catalog.
-			spec.Effects[entryID] = presentation.EffectAsset{ID: entryID, Sequence: seq}
+			spec.Effects[entryID] = EffectAsset{ID: entryID, Sequence: seq}
 		}
 		if loaded.path == "anims/cursors.gaf" {
 			if spec.Cursors == nil {
-				spec.Cursors = make(map[presentation.AssetID]presentation.CursorAsset)
+				spec.Cursors = make(map[AssetID]CursorAsset)
 			}
 			first := entry.Frames[0].Frame
-			spec.Cursors[entryID] = presentation.CursorAsset{ID: entryID, Frames: seq, HotspotX: first.XOffset, HotspotY: first.YOffset}
+			spec.Cursors[entryID] = CursorAsset{ID: entryID, Frames: seq, HotspotX: first.XOffset, HotspotY: first.YOffset}
 		}
 		// Keep explicitly named fog files addressable without claiming that an
 		// entry is a different semantic channel than its authored identity.
 		if loaded.path == "anims/fog.gaf" || loaded.path == "anims/fogtiles.gaf" {
 			if spec.Fog == nil {
-				spec.Fog = make(map[presentation.AssetID]presentation.FogAsset)
+				spec.Fog = make(map[AssetID]FogAsset)
 			}
-			spec.Fog[entryID] = presentation.FogAsset{ID: entryID, Current: seq}
+			spec.Fog[entryID] = FogAsset{ID: entryID, Current: seq}
 		}
 	}
 }
 
-func linkDefinitionAssets(spec *presentation.AssetCatalog, defs *Catalog, loaded map[string]*loadedGAF) {
+func linkDefinitionAssets(spec *AssetCatalog, defs *Catalog, loaded map[string]*loadedGAF) {
 	if defs == nil {
 		return
 	}
 	if spec.Features == nil {
-		spec.Features = make(map[presentation.AssetID]presentation.FeatureAsset)
+		spec.Features = make(map[AssetID]FeatureAsset)
 	}
 	featureKeys := make([]string, 0, len(defs.Features))
 	for key := range defs.Features {
@@ -301,11 +300,11 @@ func linkDefinitionAssets(spec *presentation.AssetCatalog, defs *Catalog, loaded
 		if f == nil {
 			continue
 		}
-		id := presentation.AssetID("feature:" + CanonicalKey(key))
+		id := AssetID("feature:" + CanonicalKey(key))
 		modelName := CanonicalKey(f.Object)
-		asset := presentation.FeatureAsset{ID: id}
+		asset := FeatureAsset{ID: id}
 		if modelName != "" {
-			asset.Model = presentation.AssetID("model:" + modelName)
+			asset.Model = AssetID("model:" + modelName)
 		}
 		gaf, ok := loaded[explicitGAFPath(f.Filename)]
 		if ok {
@@ -315,7 +314,7 @@ func linkDefinitionAssets(spec *presentation.AssetCatalog, defs *Catalog, loaded
 		spec.Features[id] = asset
 	}
 	if spec.Projectiles == nil {
-		spec.Projectiles = make(map[presentation.AssetID]presentation.ProjectileAsset)
+		spec.Projectiles = make(map[AssetID]ProjectileAsset)
 	}
 	weaponKeys := make([]string, 0, len(defs.Weapons))
 	for key := range defs.Weapons {
@@ -327,29 +326,29 @@ func linkDefinitionAssets(spec *presentation.AssetCatalog, defs *Catalog, loaded
 		if w == nil {
 			continue
 		}
-		id := presentation.AssetID("projectile:" + CanonicalKey(key))
+		id := AssetID("projectile:" + CanonicalKey(key))
 		modelName := CanonicalKey(w.Model)
-		asset := presentation.ProjectileAsset{ID: id}
+		asset := ProjectileAsset{ID: id}
 		if modelName != "" {
-			asset.Model = presentation.AssetID("model:" + modelName)
+			asset.Model = AssetID("model:" + modelName)
 		}
 		spec.Projectiles[id] = asset
 	}
 }
 
-func sequenceForName(g *loadedGAF, name string) presentation.AssetSequence {
+func sequenceForName(g *loadedGAF, name string) AssetSequence {
 	if g == nil || strings.TrimSpace(name) == "" {
-		return presentation.AssetSequence{}
+		return AssetSequence{}
 	}
 	entry, ok := g.gaf.Find(name)
 	if !ok {
-		return presentation.AssetSequence{}
+		return AssetSequence{}
 	}
 	return sequenceFromEntry(entryAssetID(g.path, entry.Name), entry)
 }
 
-func sequenceFromEntry(id presentation.AssetID, entry *formats.GAFEntry) presentation.AssetSequence {
-	seq := presentation.AssetSequence{ID: id}
+func sequenceFromEntry(id AssetID, entry *formats.GAFEntry) AssetSequence {
+	seq := AssetSequence{ID: id}
 	if entry == nil {
 		return seq
 	}
@@ -382,10 +381,10 @@ func explicitGAFPath(name string) string {
 	return name
 }
 
-func entryAssetID(file, entry string) presentation.AssetID {
-	return presentation.AssetID(canonicalPath(file) + "#" + CanonicalKey(entry))
+func entryAssetID(file, entry string) AssetID {
+	return AssetID(canonicalPath(file) + "#" + CanonicalKey(entry))
 }
 
-func frameAssetID(entry presentation.AssetID, index int) presentation.AssetID {
-	return presentation.AssetID(string(entry) + "/frame/" + strconv.Itoa(index))
+func frameAssetID(entry AssetID, index int) AssetID {
+	return AssetID(string(entry) + "/frame/" + strconv.Itoa(index))
 }

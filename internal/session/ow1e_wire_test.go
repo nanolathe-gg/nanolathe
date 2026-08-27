@@ -3,36 +3,32 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/presentation"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 func TestOW1E_EffectsFromEventsOnePerVisual(t *testing.T) {
-	c := presentation.NewCollector(presentation.Limits{})
-	if !c.EmitNanolathe(presentation.Event{Tick: 4, Source: 2, Target: 3, Piece: 6, EffectID: 6, X: numeric.Fixed(11 << 16), TargetX: numeric.Fixed(21 << 16)}) {
+	c := frame.NewEventBuffer(frame.Limits{})
+	if !c.EmitNanolathe(frame.Event{Tick: 4, Source: 2, Target: 3, Piece: 6, EffectID: 6, X: numeric.Fixed(11 << 16), TargetX: numeric.Fixed(21 << 16)}) {
 		t.Fatal("admit nanolathe")
 	}
-	if !c.EmitExplosion(presentation.Event{Tick: 4, Graphic: "explosion", X: numeric.Fixed(100 << 16)}) {
+	if !c.EmitExplosion(frame.Event{Tick: 4, Graphic: "explosion", X: numeric.Fixed(100 << 16)}) {
 		t.Fatal("admit explosion")
 	}
-	if !c.EmitShake(presentation.Event{Tick: 4, Magnitude: 5, Lifetime: 10}) {
+	if !c.EmitShake(frame.Event{Tick: 4, Magnitude: 5, Lifetime: 10}) {
 		t.Fatal("admit shake")
 	}
-	if !c.EmitSound(presentation.Event{Tick: 4, Alias: "boom"}) {
-		t.Fatal("admit sound")
-	}
-	s := &Session{Snapshot: &snapshot.Buffer{}, Presentation: c}
+	s := &Session{Snapshot: &frame.Buffer{}, Presentation: c}
 	s.publishSnapshot(4)
-	_, cur, ok := s.Snapshot.Read()
-	if !ok {
+	cur := s.Snapshot.Current()
+	if cur == nil {
 		t.Fatal("no frame")
 	}
-	if len(cur.Events) != 4 {
-		t.Fatalf("events %d want 4", len(cur.Events))
+	if len(cur.Events) != 3 {
+		t.Fatalf("events %d want 3 visual cues", len(cur.Events))
 	}
 	if len(cur.Effects) != 2 {
-		t.Fatalf("effects %d want 2 (shake/sound excluded) got %+v", len(cur.Effects), cur.Effects)
+		t.Fatalf("effects %d want 2 (shake excluded) got %+v", len(cur.Effects), cur.Effects)
 	}
 	// Nano must preserve selector 6, piece, endpoints.
 	nano := cur.Effects[0]
@@ -52,8 +48,8 @@ func TestOW1E_EffectsFromEventsOnePerVisual(t *testing.T) {
 	}
 	// Next tick with no events must have empty Effects (one-shot) but Events empty.
 	s.publishSnapshot(5)
-	_, nxt, ok := s.Snapshot.Read()
-	if !ok {
+	nxt := s.Snapshot.Current()
+	if nxt == nil {
 		t.Fatal("no second frame")
 	}
 	if len(nxt.Events) != 0 {
@@ -65,13 +61,13 @@ func TestOW1E_EffectsFromEventsOnePerVisual(t *testing.T) {
 }
 
 func TestOW1E_EffectsNeverInventArtwork(t *testing.T) {
-	c := presentation.NewCollector(presentation.Limits{})
-	if !c.EmitExplosion(presentation.Event{Tick: 1, Graphic: ""}) {
+	c := frame.NewEventBuffer(frame.Limits{})
+	if !c.EmitExplosion(frame.Event{Tick: 1, Graphic: ""}) {
 		t.Fatal("admit")
 	}
-	s := &Session{Snapshot: &snapshot.Buffer{}, Presentation: c}
+	s := &Session{Snapshot: &frame.Buffer{}, Presentation: c}
 	s.publishSnapshot(1)
-	_, cur, _ := s.Snapshot.Read()
+	cur := s.Snapshot.Current()
 	if len(cur.Effects) != 1 {
 		t.Fatal("want 1 effect")
 	}
@@ -83,13 +79,13 @@ func TestOW1E_EffectsNeverInventArtwork(t *testing.T) {
 func TestOW1E_NanoReclaimReversedEndpointPreserved(t *testing.T) {
 	// Reclaim emits target->builder direction; we preserve whatever the
 	// producer supplied as X/TargetX without reinterpreting [R-P0-06].
-	c := presentation.NewCollector(presentation.Limits{})
-	if !c.EmitNanolathe(presentation.Event{Tick: 2, Source: 3, Target: 9, X: numeric.Fixed(30 << 16), TargetX: numeric.Fixed(10 << 16), EffectID: 6, Mode: 2}) {
+	c := frame.NewEventBuffer(frame.Limits{})
+	if !c.EmitNanolathe(frame.Event{Tick: 2, Source: 3, Target: 9, X: numeric.Fixed(30 << 16), TargetX: numeric.Fixed(10 << 16), EffectID: 6, Mode: 2}) {
 		t.Fatal("admit reclaim nano")
 	}
-	s := &Session{Snapshot: &snapshot.Buffer{}, Presentation: c}
+	s := &Session{Snapshot: &frame.Buffer{}, Presentation: c}
 	s.publishSnapshot(2)
-	_, cur, _ := s.Snapshot.Read()
+	cur := s.Snapshot.Current()
 	if len(cur.Effects) != 1 || cur.Effects[0].Mode != 2 {
 		t.Fatalf("reclaim mode preserved %+v", cur.Effects)
 	}

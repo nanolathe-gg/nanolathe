@@ -89,7 +89,7 @@ func TestBattleControllerReleasesKeysAndRendersZeroElapsed(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
 	b.latch = input.LatchNormal
 	renders := 0
-	b.sess.OnRender = func(float32) { renders++ }
+	b.sess.OnRender = func() { renders++ }
 	cl, err := client.New(client.Options{Buffer: b.sess.Snapshot, Width: 640, Height: 480, Headless: true})
 	if err != nil {
 		t.Fatalf("client.New: %v", err)

@@ -23,8 +23,6 @@ func (a *ebitenApp) Update() error {
 	if a.c.opts.Step != nil {
 		a.c.opts.Step(dt)
 	}
-	// [PLAN_03 C16] anchor alpha to last publish.
-	a.c.updatePublishAnchor()
 	if a.c.ExitRequested() {
 		return ebiten.Termination
 	}
@@ -38,7 +36,7 @@ func (a *ebitenApp) Draw(screen *ebiten.Image) {
 	if c.img == nil || c.img.Bounds().Dx() != c.width || c.img.Bounds().Dy() != c.height {
 		c.img = ebiten.NewImage(c.width, c.height)
 	}
-	c.Frame(c.computeAlpha())
+	c.Frame()
 	c.img.WritePixels(c.rgba)
 	op := &ebiten.DrawImageOptions{}
 	screen.DrawImage(c.img, op)

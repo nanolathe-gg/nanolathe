@@ -7,12 +7,12 @@ import (
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -39,7 +39,7 @@ func placeClickFixture(t *testing.T, cellW, cellH int32) (*battleSession, *sessi
 		Units:      uw,
 		LocalOwner: 0,
 		Clock:      &clock.State{Requested: 10, Active: 10},
-		Snapshot:   &snapshot.Buffer{},
+		Snapshot:   &frame.Buffer{},
 	}
 	b := &battleSession{
 		sess:  s,

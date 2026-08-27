@@ -33,9 +33,8 @@ func TestStrictSkirmish_Hygiene(t *testing.T) {
 	// These 3 files are unformatted on main at fbc1dd6; fixing them is ON-00 scope,
 	// but strict gate should not hide them — emit warning and track as TODO.
 	knownDebt := map[string]bool{
-		"internal/client/frame.go":      true,
-		"internal/client/model.go":      true,
-		"internal/snapshot/snapshot.go": true,
+		"internal/client/frame.go": true,
+		"internal/client/model.go": true,
 	}
 	var simUnformatted []string
 	var debtUnformatted []string

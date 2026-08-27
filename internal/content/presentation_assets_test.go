@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/palette"
-	"github.com/nanolathe/nanolathe/internal/presentation"
 )
 
 func TestLoadPresentationAssetsEagerlyIndexesAuthoredEntries(t *testing.T) {
@@ -22,22 +21,22 @@ func TestLoadPresentationAssetsEagerlyIndexesAuthoredEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	assets := catalog.Assets()
-	cursorID := presentation.AssetID("anims/cursors.gaf#pointer")
+	cursorID := AssetID("anims/cursors.gaf#pointer")
 	cursor, ok := assets.Cursor(cursorID)
 	if !ok || len(cursor.Frames.Frames) != 2 || cursor.HotspotX != 3 || cursor.HotspotY != -2 {
 		t.Fatalf("cursor asset = %#v, ok=%v", cursor, ok)
 	}
-	logoID := presentation.AssetID("textures/logos.gaf#team")
+	logoID := AssetID("textures/logos.gaf#team")
 	logo, ok := assets.Model(logoID)
 	if !ok || logo.Textures.Logos != logoID || len(logo.Textures.Durations) != 10 {
 		t.Fatalf("LOGOS asset = %#v, ok=%v", logo, ok)
 	}
-	ordinaryID := presentation.AssetID("textures/logos.gaf#onoff01")
+	ordinaryID := AssetID("textures/logos.gaf#onoff01")
 	ordinary, ok := assets.Model(ordinaryID)
 	if !ok || ordinary.Textures.Logos != "" || ordinary.Textures.Default != ordinaryID || len(ordinary.Textures.Durations) != 2 {
 		t.Fatalf("ordinary logos entry was misclassified: %#v, ok=%v", ordinary, ok)
 	}
-	frameID := presentation.AssetID("anims/cursors.gaf#pointer/frame/0")
+	frameID := AssetID("anims/cursors.gaf#pointer/frame/0")
 	frame, ok := catalog.Frame(frameID)
 	if !ok || catalog.frames[frameID].Duration != 1 || frame.Pixels[0] != 7 {
 		t.Fatalf("frame = %#v, ok=%v", frame, ok)

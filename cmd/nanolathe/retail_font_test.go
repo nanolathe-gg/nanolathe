@@ -5,8 +5,8 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 func syntheticRetailGAFFont() *formats.GAFEntry {
@@ -57,7 +57,7 @@ func TestRetailMainMenuUsesPrimaryGAFGlyphPixels(t *testing.T) {
 	if shell.retailGAFTextFont() == nil {
 		t.Fatal("primary anims/hattfont12.gaf slot was not loaded")
 	}
-	cl, err := client.New(client.Options{Buffer: &snapshot.Buffer{}, Width: 640, Height: 480, Headless: true})
+	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 640, Height: 480, Headless: true})
 	if err != nil {
 		t.Fatal(err)
 	}

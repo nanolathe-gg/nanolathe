@@ -122,7 +122,6 @@ var Baseline = map[string]int{
 	"internal/session/strict_g2_move_test.go":       2,
 	"internal/settings/settings.go":                 10,
 	"internal/settings/settings_test.go":            1,
-	"internal/snapshot/snapshot.go":                 3,
 	"internal/triggers/eval.go":                     10,
 	"internal/triggers/triggers.go":                 2,
 	"internal/units/pipeline.go":                    10,

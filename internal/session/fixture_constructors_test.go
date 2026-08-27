@@ -13,11 +13,11 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -332,7 +332,7 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		Mission:    m,
 		Skirmish:   cfg,
 		Clock:      &clock.State{Requested: 10, Active: 10},
-		Snapshot:   &snapshot.Buffer{},
+		Snapshot:   &frame.Buffer{},
 		Units:      unitsWorld,
 		Econ:       &economy.Service{},
 		Latch:      NewEndLatch(),

@@ -8,12 +8,12 @@ import (
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -83,7 +83,7 @@ type Service struct {
 	// Presentation receives already-admitted construction cues. It is optional
 	// for headless simulation and never feeds back into authoritative state
 	// [R-P0-06][EVENT-01].
-	Presentation interface{ EmitNanolathe(presentation.Event) bool }
+	Presentation interface{ EmitNanolathe(frame.Event) bool }
 	// ModelForUnit resolves the current model used by QueryNanoPiece. The
 	// factory hook remains the compatibility name for factory/model fixtures.
 	ModelForUnit func(unit *units.Unit) *model.Model
@@ -791,7 +791,7 @@ func (s *Service) emitAcceptedNano(tick uint32, builder, product *units.Unit) {
 	// Selector 6 is the established construction segment selector. Lifetime
 	// and geometry beyond the supplied endpoint are intentionally unknown
 	// [R-P0-06]; the collector only admits this value event.
-	s.Presentation.EmitNanolathe(presentation.Event{
+	s.Presentation.EmitNanolathe(frame.Event{
 		Tick: tick, Source: builder.Handle, Target: product.Handle, Piece: piece,
 		X: source.X(), Y: source.Y(), Z: source.Z(),
 		TargetX: product.X, TargetY: product.Y, TargetZ: product.Z,

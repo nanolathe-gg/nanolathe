@@ -3,8 +3,8 @@ package render
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // helper to make a persistent effect record for ordering tests.
@@ -151,24 +151,26 @@ func TestFixedEffectRemovalWithinSameCall(t *testing.T) {
 	// Effect pool already removed in same call as shown above, so contrast holds.
 }
 
-// TestFixedEffectIntegrationWithStripOrder verifies Composer.Update ticks strips
-// with removal-before-update and effects with same-call compaction together deterministically [03 §1] C4 C5.
+// TestFixedEffectIntegrationWithStripOrder verifies direct strip/effect updates
+// preserve their distinct lifecycle semantics deterministically [03 §1] C4 C5.
 func TestFixedEffectIntegrationWithStripOrder(t *testing.T) {
-	var c Composer
+	var strip Strip
+	var effects FixedEffectPool
 	// Strip: two objects, second is shouldRem true => removed before update; first updated.
 	a := &mockObj{id: 1}
 	b := &mockObj{id: 2, shouldRem: true}
-	c.Strips[0].Append(a)
-	c.Strips[0].Append(b)
+	strip.Append(a)
+	strip.Append(b)
 
 	// Effects: one persistent, one dying (same-call removal)
-	c.Effects.Append(persistentEffect(20))
-	c.Effects.Append(dyingEffect(21))
+	effects.Append(persistentEffect(20))
+	effects.Append(dyingEffect(21))
 
-	c.Update(42)
+	strip.Update(42)
+	effects.Update(42)
 
-	if len(c.Strips[0].Objects) != 1 || c.Strips[0].Objects[0].(*mockObj).id != 1 {
-		t.Fatalf("strip removal-before-update failed in Composer.Update [03 §1] C4")
+	if len(strip.Objects) != 1 || strip.Objects[0].(*mockObj).id != 1 {
+		t.Fatalf("strip removal-before-update failed [03 §1] C4")
 	}
 	if a.updated != 1 {
 		t.Fatalf("strip survivor should be updated once, got %d", a.updated)
@@ -176,20 +178,21 @@ func TestFixedEffectIntegrationWithStripOrder(t *testing.T) {
 	if b.updated != 0 {
 		t.Fatalf("strip removed should not be updated, got %d", b.updated)
 	}
-	if c.Effects.Len() != 1 {
-		t.Fatalf("effects same-call compaction failed in Composer.Update len %d want 1 [03 §1] C5", c.Effects.Len())
+	if effects.Len() != 1 {
+		t.Fatalf("effects same-call compaction failed len %d want 1 [03 §1] C5", effects.Len())
 	}
-	if int64(c.Effects.Records()[0].X>>16) != 20 {
+	if int64(effects.Records()[0].X>>16) != 20 {
 		t.Fatalf("effects survivor wrong")
 	}
 
 	// Second tick: ensure no cross-contamination and stable order
-	c.Update(43)
-	if len(c.Strips[0].Objects) != 1 {
-		t.Fatalf("strip second update len %d", len(c.Strips[0].Objects))
+	strip.Update(43)
+	effects.Update(43)
+	if len(strip.Objects) != 1 {
+		t.Fatalf("strip second update len %d", len(strip.Objects))
 	}
-	if c.Effects.Len() != 1 {
-		t.Fatalf("effects second update len %d", c.Effects.Len())
+	if effects.Len() != 1 {
+		t.Fatalf("effects second update len %d", effects.Len())
 	}
 }
 
@@ -319,7 +322,7 @@ func TestFixedEffectAnimStepping(t *testing.T) {
 
 func TestFixedEffectAuthoredDurationsAndSnapshotIsolation(t *testing.T) {
 	var p FixedEffectPool
-	input := snapshot.EffectView{
+	input := frame.EffectView{
 		ID: 9, PresentationID: 19, EventSeq: 20, Kind: "explosion",
 		DurationsA: []int32{2, 3}, LoopA: false, HasModel: true,
 	}
@@ -347,7 +350,7 @@ func TestFixedEffectAuthoredDurationsAndSnapshotIsolation(t *testing.T) {
 
 func TestFixedEffectRejectsMalformedTimingWithoutOneTickFallback(t *testing.T) {
 	var p FixedEffectPool
-	if !p.AppendView(snapshot.EffectView{ID: 1, Kind: "impact", DurationsA: []int32{2, 0}}) {
+	if !p.AppendView(frame.EffectView{ID: 1, Kind: "impact", DurationsA: []int32{2, 0}}) {
 		t.Fatal("malformed timing admission should preserve metadata record")
 	}
 	if got := p.Records()[0].AnimA.Active; got {
@@ -396,17 +399,19 @@ func TestFixedEffectDeterminism(t *testing.T) {
 	}
 }
 
-// TestFixedEffectComposerIntegrationDeterminism ensures Composer.Update is deterministic
-// across two identical runs with interleaved strip and effect operations.
-func TestFixedEffectComposerIntegrationDeterminism(t *testing.T) {
+// TestFixedEffectAndStripIntegrationDeterminism ensures direct pool updates are deterministic.
+func TestFixedEffectAndStripIntegrationDeterminism(t *testing.T) {
 	run := func() (int, int) {
-		var c Composer
-		c.Strips[1].Append(&mockObj{id: 5})
-		c.Effects.Append(persistentEffect(77))
-		c.Effects.Append(dyingEffect(88))
-		c.Update(10)
-		c.Update(11)
-		return len(c.Strips[1].Objects), c.Effects.Len()
+		var strip Strip
+		var effects FixedEffectPool
+		strip.Append(&mockObj{id: 5})
+		effects.Append(persistentEffect(77))
+		effects.Append(dyingEffect(88))
+		strip.Update(10)
+		effects.Update(10)
+		strip.Update(11)
+		effects.Update(11)
+		return len(strip.Objects), effects.Len()
 	}
 	s1, e1 := run()
 	s2, e2 := run()

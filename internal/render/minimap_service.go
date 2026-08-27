@@ -10,18 +10,19 @@ const (
 	MinimapDirtyMapped uint8 = 1 << 2
 )
 
-// MinimapService owns the four battle radar surfaces. Picture is immutable
-// after map load, mapped is rebuilt only when dirty, final is rebuilt each
-// tick, and temp is scratch for picture generation. [03 §3.6]
+// MinimapService owns the persistent battle radar surfaces. Picture is
+// immutable after map load, mapped is rebuilt only when dirty, and final is
+// rebuilt each tick. Radar temp is local scratch in picture construction, not
+// a service-owned surface [03 §3.6].
 type MinimapService struct {
-	picture, mapped, final, temp *RadarSurface
-	dirty                        uint8
-	blink                        BlinkState
-	mapW, mapH                   int
-	local                        uint8
-	dcb                          byte
-	remap                        []byte
-	sensorCircles                []MinimapCircle
+	picture, mapped, final *RadarSurface
+	dirty                  uint8
+	blink                  BlinkState
+	mapW, mapH             int
+	local                  uint8
+	dcb                    byte
+	remap                  []byte
+	sensorCircles          []MinimapCircle
 }
 
 // MinimapCircle is a presentation-only sensor callback result. Coordinates
@@ -58,12 +59,6 @@ func NewMinimapService(cfg MinimapServiceConfig) *MinimapService {
 	return s
 }
 
-// NewMinimapServiceFromPicture is a convenience constructor for adapters that
-// already have the map dimensions and indexed picture.
-func NewMinimapServiceFromPicture(picture *RadarSurface, mapW, mapH int, localSlot uint8, fogFill byte, guiRemap []byte) *MinimapService {
-	return NewMinimapService(MinimapServiceConfig{Picture: picture, MapW: mapW, MapH: mapH, LocalSlot: localSlot, FogFill: fogFill, GUIRemap: guiRemap})
-}
-
 func cloneRadarSurface(src *RadarSurface) *RadarSurface {
 	if src == nil {
 		return nil
@@ -74,7 +69,6 @@ func cloneRadarSurface(src *RadarSurface) *RadarSurface {
 func (s *MinimapService) Picture() *RadarSurface { return cloneRadarSurface(s.picture) }
 func (s *MinimapService) Mapped() *RadarSurface  { return cloneRadarSurface(s.mapped) }
 func (s *MinimapService) Final() *RadarSurface   { return cloneRadarSurface(s.final) }
-func (s *MinimapService) Temp() *RadarSurface    { return cloneRadarSurface(s.temp) }
 func (s *MinimapService) Dirty() uint8 {
 	if s == nil {
 		return 0
@@ -126,23 +120,7 @@ func (s *MinimapService) RebuildFinal(m camera.Minimap, playW, playH int32, cont
 			contacts[i].RawDistJamS = 0
 		}
 	}
-	s.final = RebuildFinalExact(s.mapped, m, playW, playH, contacts, s.blink, blit, radarColor, jammerColor, ringColor)
-	if s.final != nil {
-		for _, c := range s.sensorCircles {
-			x := c.U << 7
-			z := c.V << 7
-			rx, ry := RadarProjection(x, z, 0, playW, playH, m)
-			r := RadarRadius(c.Radius, m.W, playW)
-			if r <= 0 {
-				continue
-			}
-			color := radarColor
-			if c.Kind != 0 {
-				color = jammerColor
-			}
-			drawCircle(s.final, int(rx), int(ry), int(r), color)
-		}
-	}
+	s.final = rebuildFinalExact(s.mapped, m, playW, playH, contacts, s.sensorCircles, s.blink, blit, radarColor, jammerColor, ringColor)
 	s.dirty &^= MinimapDirtyFinal
 	return s.final != nil
 }

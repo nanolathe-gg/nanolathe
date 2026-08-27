@@ -1,15 +1,14 @@
 package client
 
-// Presentation-only adapters for the active Ebitengine frame.  These helpers
-// intentionally expose unresolved authored projectile/effect assets as false;
-// the snapshot currently does not publish the shared projectile GAF identity,
-// selector sequence names, frame counts, weapon color bytes, or LHT geometry.
-// Choosing a guessed archive/entry would make the image look plausible while
-// violating the clean-room contract [03 §5.4][I9].
+// Presentation-only resolution at the active Ebitengine frame boundary.
+// Authored projectile/effect assets whose archive route is not published stay
+// unresolved; choosing a guessed archive/entry would make the image look
+// plausible while violating the clean-room contract [03 §5.4][I9].
 
 import (
+	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // ProjectileVisibilityMode selects the published coverage representation.
@@ -20,7 +19,7 @@ const ProjectileVisibilityModeBytes = 1
 // ProjectileVisible evaluates exactly one gate for one projectile. The same
 // sheared cell is used for either representation; no rendertype branch may
 // call this again [03 §5.4].
-func ProjectileVisible(v snapshot.VisibilityView, p snapshot.ProjectileView, mode uint8, localPlayer uint8) bool {
+func ProjectileVisible(v frame.VisibilityView, p frame.ProjectileView, mode uint8, localPlayer uint8) bool {
 	if !v.Valid || v.W <= 0 || v.H <= 0 {
 		return false
 	}
@@ -34,54 +33,33 @@ func ProjectileVisible(v snapshot.VisibilityView, p snapshot.ProjectileView, mod
 	}
 	idx := int(row*v.W + u)
 	if mode&ProjectileVisibilityModeBytes != 0 || v.CoverageBytes {
-		return idx < len(v.Visible) && v.Visible[idx] != 0
+		if _, ok := visibilityGridSize(v.W, v.H, len(v.Visible)); !ok {
+			return false
+		}
+		return v.Visible[idx] != 0
 	}
-	if idx >= len(v.WordVisible) {
+	if _, ok := visibilityGridSize(v.W, v.H, len(v.WordVisible)); !ok {
 		return false
 	}
-	if localPlayer >= 16 {
+	if localPlayer >= 10 {
 		return false
 	}
 	return v.WordVisible[idx]&(uint16(1)<<localPlayer) != 0
 }
 
-// projectileVisibility is the one-point projectile gate from the immutable
-// local-player coverage grid [03 §3.2].  Session publication copies the local
-// player's byte grid into Visibility.Visible, so no live visibility service or
-// owner-side state is read here.  An invalid/missing grid rejects admission.
-func projectileVisibility(v snapshot.VisibilityView) func(snapshot.ProjectileView) bool {
-	return func(p snapshot.ProjectileView) bool {
-		if !v.Valid || v.W <= 0 || v.H <= 0 || len(v.Visible) != int(v.W*v.H) {
-			return false
-		}
-		px := int32(int16(int64(p.X) >> 16))
-		py := int32(int16(int64(p.Y) >> 16))
-		pz := int32(int16(int64(p.Z) >> 16))
-		// Visibility uses the same signed map-pixel narrowing and half-height
-		// shear as the authoritative one-point predicate.  The unsigned bounds
-		// check is deliberate: negative projected coordinates fail admission.
-		u := (px >> 5)
-		row := (pz - (py >> 1)) >> 5
-		if u < 0 || row < 0 || u >= v.W || row >= v.H {
-			return false
-		}
-		return v.Visible[int(row*v.W+u)] != 0
-	}
-}
-
 // projectileDispatchOptions supplies only metadata established by the
-// immutable publication boundary.  The current snapshot has no authored
-// shared-GAF key/frame-count/color publication, so unresolved families stay
-// suppressed rather than selecting a synthetic sprite or palette byte.
+// immutable publication boundary. Shared-GAF lookup remains unresolved because
+// the committed view does not publish its archive/entry route; those families
+// stay suppressed rather than selecting a synthetic sprite or palette byte.
 func (c *Client) projectileDispatchOptions() render.ProjectileDispatchOptions {
 	return render.ProjectileDispatchOptions{
-		FrameCount: func(v snapshot.ProjectileView) (int, bool) {
+		FrameCount: func(v frame.ProjectileView) (int, bool) {
 			if v.FrameCount <= 0 {
 				return 0, false
 			}
 			return int(v.FrameCount), true
 		},
-		Color: func(v snapshot.ProjectileView) (int32, int32, bool) {
+		Color: func(v frame.ProjectileView) (int32, int32, bool) {
 			if !v.HasPrimaryColor {
 				return 0, 0, false
 			}
@@ -93,14 +71,21 @@ func (c *Client) projectileDispatchOptions() render.ProjectileDispatchOptions {
 		},
 		// GAF frames and segmented geometry are resolved by the battle asset
 		// adapter. There is intentionally no compatibility fallback here.
-		SegmentPoints: func(v snapshot.ProjectileView) (first, second []render.ProjectilePoint, ok bool) {
+		SegmentPoints: func(v frame.ProjectileView) (first, second []render.ProjectilePoint, ok bool) {
 			if c == nil || c.crt == nil {
 				return nil, nil, false
 			}
 			// The two passes consume the same session CRT in admission order;
 			// no straight-line substitute is emitted when the stream is absent
 			// [03 §5.4][I4].
-			return render.SnapshotSegmentedPointPasses(v, render.ProjectileSegmentedRandom(c.crt))
+			return render.SnapshotSegmentedPointPasses(v, c.crt)
+		},
+		ResolveGAF: func(req render.ProjectileGAFRequest) (*formats.GAFFrame, bool) {
+			// TODO(question): the committed projectile view does not publish the
+			// archive/entry route needed to resolve AssetID and sequence names.
+			// Suppress only this unresolved instruction; global-GAF admission below
+			// remains open so unrelated authored projectiles are not discarded.
+			return nil, false
 		},
 	}
 }

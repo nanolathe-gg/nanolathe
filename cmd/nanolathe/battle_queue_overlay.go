@@ -7,10 +7,10 @@ package main
 
 import (
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -18,8 +18,8 @@ import (
 // It consumes only a published frame and input presentation state.  Releasing
 // Shift returns before constructing instructions and cannot mutate orders or
 // influence an authoritative hash [07 §9][R-P0-11 §4].
-func drawQueueOverlay(c *client.Client, frame *snapshot.Frame, tick uint32, shiftHeld bool, localOwner uint8, hovered pool.Handle) {
-	if c == nil || frame == nil || !shiftHeld {
+func drawQueueOverlay(c *client.Client, f *frame.Frame, tick uint32, shiftHeld bool, localOwner uint8, hovered pool.Handle) {
+	if c == nil || f == nil || !shiftHeld {
 		return
 	}
 	project := func(x, y, z numeric.Fixed) hud.QueuePoint {
@@ -32,7 +32,7 @@ func drawQueueOverlay(c *client.Client, frame *snapshot.Frame, tick uint32, shif
 		LocalOwner:  localOwner,
 		HoveredUnit: hovered,
 		Project:     project,
-		BuildRect: func(o snapshot.OrderView) (hud.QueueRect, bool) {
+		BuildRect: func(o frame.OrderView) (hud.QueueRect, bool) {
 			fx, fz := int32(o.FootX), int32(o.FootZ)
 			if fx <= 0 || fz <= 0 {
 				// A missing authored footprint is not a square to be guessed.
@@ -51,7 +51,7 @@ func drawQueueOverlay(c *client.Client, frame *snapshot.Frame, tick uint32, shif
 		// immutable frame yet.  Suppressing these callbacks is required by the
 		// clean-room contract; do not substitute a guessed radius/artwork.
 	}
-	for _, op := range hud.QueueOverlay(frame, opts) {
+	for _, op := range hud.QueueOverlay(f, opts) {
 		switch op.Kind {
 		case hud.QueuePrimitiveMarker:
 			for _, seg := range op.Segments {

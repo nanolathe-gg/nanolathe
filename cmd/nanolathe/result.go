@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/nanolathe/nanolathe/internal/client"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
+	"github.com/nanolathe/nanolathe/internal/frame"
 )
 
 // drawResultOverlay renders the retail victory/defeat overlay [07 §11][RS-05][08][P1-01]
@@ -97,19 +97,19 @@ const maxResultPlayers = 10
 // Categories: Kills, Losses, EProduced, MProduced, EWasted, MWasted, Score gated per player by enable-byte table.
 // Retail animates seven categories one at a time behind +10-tick gate substate 0→6 with EndGameStatBar/EndGameScore cues; we render all rows statically as TODO(question): animation cadence not wired.
 // Data sources: ResultView.Scores for Kills/Losses/Score (kills/losses currently 0 placeholder TODO(question) [P1-01 §2.3]); snapshot Economy/Resources for E/M Produced/Consumed/Wasted where available.
-func (h *retailBattleHUD) drawResultStatistics(c *client.Client, b *battleSession, view snapshot.ResultView, bx, y, bw, bh int) {
+func (h *retailBattleHUD) drawResultStatistics(c *client.Client, b *battleSession, view frame.ResultView, bx, y, bw, bh int) {
 	if h == nil || c == nil || b == nil || h.console == nil {
 		return
 	}
 	// Per-player lookup indexed by slot. Invariant: presentation traverses
 	// player slots 0..9 ascending and never ranges a map, so the rendered row
 	// order is the same on every run [INVARIANTS I1][P1-019].
-	var curEconomy [maxResultPlayers]snapshot.EconomyView
+	var curEconomy [maxResultPlayers]frame.EconomyView
 	var haveEconomy [maxResultPlayers]bool
-	var curResources [maxResultPlayers]snapshot.ResourceView
+	var curResources [maxResultPlayers]frame.EconomyView
 	var haveResources [maxResultPlayers]bool
 	economyCount := 0
-	collect := func(f *snapshot.Frame) {
+	collect := func(f *frame.Frame) {
 		for _, e := range f.Economy {
 			if int(e.Player) < maxResultPlayers && !haveEconomy[e.Player] {
 				curEconomy[e.Player] = e
@@ -117,17 +117,17 @@ func (h *retailBattleHUD) drawResultStatistics(c *client.Client, b *battleSessio
 				economyCount++
 			}
 		}
-		for _, r := range f.Resources {
+		for _, r := range f.Economy {
 			if int(r.Player) < maxResultPlayers {
 				curResources[r.Player] = r
 				haveResources[r.Player] = true
 			}
 		}
 	}
-	if _, cur, ok := c.Buffer().Read(); ok && cur != nil {
+	if cur := c.Buffer().Current(); cur != nil {
 		collect(cur)
 	} else if b.sess != nil && b.sess.Snapshot != nil {
-		if _, cur2, ok2 := b.sess.Snapshot.Read(); ok2 && cur2 != nil {
+		if cur2 := b.sess.Snapshot.Current(); cur2 != nil {
 			collect(cur2)
 		}
 	}

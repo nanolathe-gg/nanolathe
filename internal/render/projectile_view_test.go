@@ -4,24 +4,24 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 func testProjectileFrame() *formats.GAFFrame {
 	return &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{7}, Transparent: []bool{false}}
 }
 
-func testFrameCount(snapshot.ProjectileView) (int, bool) { return 10, true }
+func testFrameCount(frame.ProjectileView) (int, bool) { return 10, true }
 
 func testGAF(req ProjectileGAFRequest) (*formats.GAFFrame, bool) {
 	return testProjectileFrame(), true
 }
 
 func TestDispatchProjectileViewPreservesFamilyTailAndRequiresBeamColor(t *testing.T) {
-	v := snapshot.ProjectileView{
+	v := frame.ProjectileView{
 		Handle:     pool.Handle(7),
 		X:          numeric.Fixed(9 << 16),
 		Y:          numeric.Fixed(3 << 16),
@@ -38,7 +38,7 @@ func TestDispatchProjectileViewPreservesFamilyTailAndRequiresBeamColor(t *testin
 	if !d.Suppressed {
 		t.Fatal("unresolved beam color must suppress draw")
 	}
-	d = DispatchProjectileView(v, 20, ProjectileDispatchOptions{Color: func(snapshot.ProjectileView) (int32, int32, bool) { return 4, 5, true }})
+	d = DispatchProjectileView(v, 20, ProjectileDispatchOptions{Color: func(frame.ProjectileView) (int32, int32, bool) { return 4, 5, true }})
 	if d.Suppressed || d.Kind != "beam" || d.Color != 4 || d.Color2 != 5 {
 		t.Fatalf("resolved beam metadata got %+v", d)
 	}
@@ -48,7 +48,7 @@ func TestDispatchProjectileViewPreservesFamilyTailAndRequiresBeamColor(t *testin
 }
 
 func TestDispatchProjectileViewAllAuthoredGAFFamilies(t *testing.T) {
-	base := snapshot.ProjectileView{CreationTick: 100, ExpiryTick: 120, Lifetime: 20, Selector: 2, Model: "peewee.3do"}
+	base := frame.ProjectileView{CreationTick: 100, ExpiryTick: 120, Lifetime: 20, Selector: 2, Model: "peewee.3do"}
 	for _, tc := range []struct {
 		rt   int32
 		kind string
@@ -78,7 +78,7 @@ func TestDispatchProjectileViewAllAuthoredGAFFamilies(t *testing.T) {
 }
 
 func TestDispatchProjectileViewMissingAuthoredDataSuppresses(t *testing.T) {
-	base := snapshot.ProjectileView{Model: "peewee.3do", Selector: 2, CreationTick: 100, ExpiryTick: 120, Lifetime: 20}
+	base := frame.ProjectileView{Model: "peewee.3do", Selector: 2, CreationTick: 100, ExpiryTick: 120, Lifetime: 20}
 	missing := ProjectileDispatchOptions{FrameCount: testFrameCount, ResolveGAF: func(ProjectileGAFRequest) (*formats.GAFFrame, bool) { return nil, false }}
 	for _, rt := range []int32{RenderTypeBaseSpriteModel, RenderTypeGlobalGAF, RenderTypeBaseModelDistinct, RenderTypeSelectorGAF, RenderTypeLifetimeGAF, RenderTypeRecordOrientation} {
 		v := base
@@ -102,7 +102,7 @@ func TestDispatchProjectileViewMissingAuthoredDataSuppresses(t *testing.T) {
 }
 
 func TestDispatchProjectileViewFrameFamilies(t *testing.T) {
-	base := snapshot.ProjectileView{CreationTick: 100, ExpiryTick: 120, Lifetime: 20, Selector: 2}
+	base := frame.ProjectileView{CreationTick: 100, ExpiryTick: 120, Lifetime: 20, Selector: 2}
 	selector := base
 	selector.RenderType = RenderTypeSelectorGAF
 	d := DispatchProjectileView(selector, 105, ProjectileDispatchOptions{FrameCount: testFrameCount, ResolveGAF: testGAF})
@@ -118,7 +118,7 @@ func TestDispatchProjectileViewFrameFamilies(t *testing.T) {
 }
 
 func TestSnapshotSegmentedPointPassesUseBothDeterministicStreams(t *testing.T) {
-	v := snapshot.ProjectileView{X: numeric.Fixed(20 << 16), TailX: 0}
+	v := frame.ProjectileView{X: numeric.Fixed(20 << 16), TailX: 0}
 	first, second, ok := SnapshotSegmentedPointPasses(v, funcCRT(7))
 	if !ok || len(first) < 2 || len(second) < 2 {
 		t.Fatalf("segmented passes missing: first=%d second=%d ok=%v", len(first), len(second), ok)
@@ -131,8 +131,8 @@ func TestSnapshotSegmentedPointPassesUseBothDeterministicStreams(t *testing.T) {
 	}
 	v.RenderType = RenderTypeSegmented
 	d := DispatchProjectileView(v, 1, ProjectileDispatchOptions{
-		Color: func(snapshot.ProjectileView) (int32, int32, bool) { return 1, 2, true },
-		SegmentPoints: func(snapshot.ProjectileView) ([]ProjectilePoint, []ProjectilePoint, bool) {
+		Color: func(frame.ProjectileView) (int32, int32, bool) { return 1, 2, true },
+		SegmentPoints: func(frame.ProjectileView) ([]ProjectilePoint, []ProjectilePoint, bool) {
 			return first, second, true
 		},
 	})
@@ -147,13 +147,13 @@ func funcCRT(seed uint32) *rng.CRT {
 }
 
 func TestBuildProjectileDrawsVisibilityAndGlobalAbort(t *testing.T) {
-	views := []snapshot.ProjectileView{
+	views := []frame.ProjectileView{
 		{Handle: pool.Handle(1), RenderType: RenderTypeBeam},
 		{Handle: pool.Handle(2), RenderType: RenderTypeGlobalGAF},
 		{Handle: pool.Handle(3), RenderType: RenderTypeBeam},
 	}
-	opts := ProjectileDispatchOptions{Color: func(snapshot.ProjectileView) (int32, int32, bool) { return 1, 0, true }, ResolveGAF: testGAF}
-	draws, aborted := BuildProjectileDraws(views, 1, func(v snapshot.ProjectileView) bool { return v.Handle != pool.Handle(3) }, func(v snapshot.ProjectileView) bool { return false }, opts)
+	opts := ProjectileDispatchOptions{Color: func(frame.ProjectileView) (int32, int32, bool) { return 1, 0, true }, ResolveGAF: testGAF}
+	draws, aborted := BuildProjectileDraws(views, 1, func(v frame.ProjectileView) bool { return v.Handle != pool.Handle(3) }, func(v frame.ProjectileView) bool { return false }, opts)
 	if !aborted || len(draws) != 1 || draws[0].Handle != 1 {
 		t.Fatalf("visibility/abort got draws=%+v aborted=%v", draws, aborted)
 	}
@@ -162,8 +162,8 @@ func TestBuildProjectileDrawsVisibilityAndGlobalAbort(t *testing.T) {
 // TestBuildProjectileDrawsNilVisibilityFailsClosed verifies that an absent
 // visibility callback emits no projectile draw specs [03 §5.4].
 func TestBuildProjectileDrawsNilVisibilityFailsClosed(t *testing.T) {
-	views := []snapshot.ProjectileView{{Handle: pool.Handle(1), RenderType: RenderTypeBeam}}
-	opts := ProjectileDispatchOptions{Color: func(snapshot.ProjectileView) (int32, int32, bool) { return 1, 0, true }}
+	views := []frame.ProjectileView{{Handle: pool.Handle(1), RenderType: RenderTypeBeam}}
+	opts := ProjectileDispatchOptions{Color: func(frame.ProjectileView) (int32, int32, bool) { return 1, 0, true }}
 	draws, aborted := BuildProjectileDraws(views, 1, nil, nil, opts)
 	if aborted || len(draws) != 0 {
 		t.Fatalf("nil visibility must fail closed: draws=%v aborted=%v", draws, aborted)

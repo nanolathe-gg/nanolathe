@@ -2,9 +2,9 @@
 package render
 
 import (
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // NanolatheColor is the fixed segment color for build/reclaim beams [03 §5.5].
@@ -96,7 +96,7 @@ type EffectRecord struct {
 	EffectID       uint32
 	Piece          int32
 	SFXType        int32
-	SFXClass       snapshot.SFXClass
+	SFXClass       frame.SFXClass
 	Mode           uint8
 	StartTick      uint32
 	Kind           string
@@ -125,7 +125,7 @@ type EffectRecord struct {
 // AppendView admits one immutable event view into the canonical fixed pool.
 // Missing authored timing remains missing; no synthetic frame or lifetime is
 // manufactured here [03 §4.4][03 §5.5][I9].
-func (p *FixedEffectPool) AppendView(v snapshot.EffectView) bool {
+func (p *FixedEffectPool) AppendView(v frame.EffectView) bool {
 	if p == nil {
 		return false
 	}
@@ -159,13 +159,28 @@ func (p *FixedEffectPool) AppendView(v snapshot.EffectView) bool {
 
 // SnapshotViews returns a detached, stable read-only view of the active pool.
 // It is the only data presentation consumers need from the mutable pool [I6].
-func (p *FixedEffectPool) SnapshotViews() []snapshot.EffectView {
+func (p *FixedEffectPool) SnapshotViews() []frame.EffectView {
 	if p == nil || len(p.records) == 0 {
 		return nil
 	}
-	out := make([]snapshot.EffectView, 0, len(p.records))
+	return p.SnapshotViewsInto(nil)
+}
+
+// SnapshotViewsInto copies the active pool in stable order while reusing the
+// caller's top-level and nested timing storage.
+func (p *FixedEffectPool) SnapshotViewsInto(out []frame.EffectView) []frame.EffectView {
+	if p == nil || len(p.records) == 0 {
+		return out[:0]
+	}
+	if cap(out) < len(p.records) {
+		out = make([]frame.EffectView, 0, len(p.records))
+	}
+	out = out[:0]
 	for _, r := range p.records {
-		out = append(out, snapshot.EffectView{
+		i := len(out)
+		out = out[:i+1]
+		a, b := out[i].DurationsA, out[i].DurationsB
+		out[i] = frame.EffectView{
 			PresentationID: r.PresentationID,
 			ID:             r.ID, EventSeq: r.EventSeq,
 			Source: r.Source, Target: r.Target, EffectID: r.EffectID,
@@ -173,14 +188,14 @@ func (p *FixedEffectPool) SnapshotViews() []snapshot.EffectView {
 			Mode: r.Mode, StartTick: r.StartTick,
 			Kind: r.Kind, Graphic: r.Graphic, AssetID: r.AssetID, SequenceID: r.SequenceID,
 			SeqA: r.AnimA.Idx, SeqB: r.AnimB.Idx,
-			DurationsA: append([]int32(nil), r.AnimA.Durations...), DurationsB: append([]int32(nil), r.AnimB.Durations...),
+			DurationsA: append(a[:0], r.AnimA.Durations...), DurationsB: append(b[:0], r.AnimB.Durations...),
 			LoopA: r.AnimA.Loop, LoopB: r.AnimB.Loop,
 			X: r.X, Y: r.Y, Z: r.Z, VX: r.VX, VY: r.VY, VZ: r.VZ,
 			TargetX: r.TargetX, TargetY: r.TargetY, TargetZ: r.TargetZ,
 			HasModel: r.HasModel,
 			Gravity:  r.Gravity, ExpiryTick: r.ExpiryTick,
 			NanolatheGeometryKnown: r.NanolatheGeometryKnown,
-		})
+		}
 	}
 	return out
 }

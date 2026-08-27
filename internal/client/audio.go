@@ -2,35 +2,17 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/internal/audio"
-	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
-
-// SetPresentationClock binds the shared presentation clock used by audio
-// draining and music polling. A nil clock restores the legacy explicit-frame
-// fallback for isolated callers and tests.
-func (c *Client) SetPresentationClock(clock *presentation.Clock) {
-	if c == nil {
-		return
-	}
-	c.audioClock = clock
-	c.clock = clock
-}
 
 // SetPresentationCRT binds the session-owned presentation CRT stream. Shake,
 // audio, music, and projectile presentation must share this stream; a client
 // never seeds a private stream for live play [01 §7.2][03 §5.6].
-func (c *Client) SetPresentationCRT(crt *presentation.CRTRandom) {
+func (c *Client) SetPresentationCRT(crt *rng.CRT) {
 	if c != nil {
 		c.crt = crt
 	}
-}
-
-func (c *Client) presentationClock() *presentation.Clock {
-	if c == nil {
-		return nil
-	}
-	return c.audioClock
 }
 
 // SetAudioQueue attaches the eight-slot queue [03 §8.3] C16 C18. The queue is
@@ -150,28 +132,13 @@ func (c *Client) TickAudio() {
 		return
 	}
 	c.ensureAudioBackend()
-	// Direct TickAudio callers (diagnostics/tests) are presentation frames too.
-	// The normal Frame path begins the shared clock before this method, so it
-	// does not double-advance the frame serial [03 §8.3][I6].
-	if c.audioClock != nil && !c.frameBegun {
-		c.audioClock.BeginFrame(c.audioClock.SimTick, 0)
-	}
 	frame := c.audioFrame + 1
-	clock := c.presentationClock()
-	if clock != nil {
-		frame = clock.FrameSerial
-	} else {
-		c.audioFrame = frame
-	}
+	c.audioFrame = frame
 	if c.audioQueue != nil {
 		c.audioQueue.Drain(frame)
 	}
 	if c.audioMusic != nil {
-		if clock != nil {
-			c.audioMusic.TickFrame(clock, c.audioMusic.IsPlaying())
-		} else {
-			c.audioMusic.Tick(c.audioMusic.IsPlaying())
-		}
+		c.audioMusic.TickFrame(frame, c.audioMusic.IsPlaying())
 	}
 }
 

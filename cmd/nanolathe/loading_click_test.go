@@ -4,9 +4,9 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // TestSkirmishStartLeavesForLoadingScreen is the regression for the crash that
@@ -49,7 +49,7 @@ func TestSkirmishStartLeavesForLoadingScreen(t *testing.T) {
 	}
 	rect := shell.panel.window.PlacedRect(idx)
 
-	cl, err := client.New(client.Options{Buffer: &snapshot.Buffer{}, Width: 640, Height: 480, Headless: true})
+	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 640, Height: 480, Headless: true})
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}

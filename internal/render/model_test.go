@@ -1,13 +1,12 @@
 package render
 
 import (
-	"math"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // TestUnitOrientationFoldOrder verifies bank→Z, heading→Y, pitch→X as outermost factor [03 §2.4] C24 [03 §5.2] C13.
@@ -90,17 +89,14 @@ func TestUnitOrientationFoldOrder(t *testing.T) {
 	// Verify RT composition order Z then X then Y via combined non-commuting case [03 §2.4] C21
 	// Use non-zero on same accumulator chain? The outermost factor is root, so check that
 	// heading+ pitch+baking combined yields Compose with Z→X→Y order already validated in model package.
-	// Additional check: BuildUnitDraw via cache path uses cur angles sampled as committed, not lerp [03 §2.4] C12.
-	prev := snapshot.UnitView{Slot: 1, X: numeric.Fixed(0), Heading: 0, Pitch: 0, Bank: 0}
-	cur := snapshot.UnitView{Slot: 1, X: numeric.Fixed(65536), Heading: 16384, Pitch: 16384, Bank: 0}
-	// alpha 0.5 interpolates position to 32768 but should use cur angles (16384) not interpolant 8192 [03 §2.4] C12
-	draw := BuildUnitDraw(m, nil, cur.Heading, cur.Pitch, cur.Bank, prev, cur, 0.5, nil)
+	// BuildUnitDraw samples position and angles from the committed current view [03 §2.4].
+	cur := frame.UnitView{Slot: 1, X: numeric.Fixed(65536), Heading: 16384, Pitch: 16384, Bank: 0}
+	draw := BuildUnitDraw(m, nil, cur.Heading, cur.Pitch, cur.Bank, cur, nil)
 	if draw == nil {
 		t.Fatal("BuildUnitDraw nil")
 	}
-	// LerpPos should be midpoint 32768 [03 §2.4] C12
-	if draw.LerpPos[0] != numeric.Fixed(32768) {
-		t.Fatalf("lerp pos half: got %d want 32768", draw.LerpPos[0])
+	if draw.WorldPos[0] != numeric.Fixed(65536) {
+		t.Fatalf("committed world pos: got %d want 65536", draw.WorldPos[0])
 	}
 	// States should reflect cur heading/pitch not interpolated
 	if draw.PieceStates[m.Root].RotY != 49152 || draw.PieceStates[m.Root].RotX != 16384 {
@@ -364,6 +360,43 @@ func TestLeafAttachmentEmit(t *testing.T) {
 	}
 }
 
+func TestBuildPieceDrawsSuppressesHiddenAncestors(t *testing.T) {
+	m := &model.Model{
+		Root: 0,
+		Pieces: []model.Piece{
+			{Name: "root", Parent: -1, Children: []int{1}},
+			{Name: "child", Parent: 0, Vertices: [][3]numeric.Fixed{{0, 0, 0}}, Children: nil},
+		},
+	}
+	states := []model.PieceState{{Hidden: true}, {}}
+	draws := BuildPieceDraws(m, states, [3]numeric.Fixed{}, false)
+	if len(draws) != 2 {
+		t.Fatalf("piece count %d want 2", len(draws))
+	}
+	if len(draws[0].WorldVertices) != 0 || len(draws[1].WorldVertices) != 0 {
+		t.Fatalf("hidden ancestor leaked geometry: root=%d child=%d", len(draws[0].WorldVertices), len(draws[1].WorldVertices))
+	}
+}
+
+func TestBuildPieceDrawsBoundsCyclicParentWalk(t *testing.T) {
+	m := &model.Model{
+		Root: 0,
+		Pieces: []model.Piece{
+			{Name: "a", Parent: 1, Children: []int{1}, Vertices: [][3]numeric.Fixed{{0, 0, 0}}},
+			{Name: "b", Parent: 0, Children: []int{0}, Vertices: [][3]numeric.Fixed{{1, 0, 0}}},
+		},
+	}
+	draws := BuildPieceDraws(m, nil, [3]numeric.Fixed{}, false)
+	if len(draws) != 2 {
+		t.Fatalf("piece count %d want 2", len(draws))
+	}
+	for i, draw := range draws {
+		if len(draw.WorldVertices) != 0 {
+			t.Fatalf("cyclic piece %d emitted geometry", i)
+		}
+	}
+}
+
 // TestOrientationCacheThreshold verifies >7 triggers rebuild [03 §5.2] C13.
 func TestOrientationCacheThreshold(t *testing.T) {
 	c := &OrientationCache{}
@@ -410,35 +443,3 @@ func TestOrientationCacheThreshold(t *testing.T) {
 		t.Fatalf("no change should not report rebuild")
 	}
 }
-
-// TestInterpolationPositions verifies world-space draw positions use Lerp and not angles [03 §2.4] C12.
-func TestInterpolationPositions(t *testing.T) {
-	prev := snapshot.UnitView{X: numeric.Fixed(0), Y: numeric.Fixed(0), Z: numeric.Fixed(0), Heading: 0, Pitch: 0, Bank: 0}
-	cur := snapshot.UnitView{X: numeric.Fixed(65536), Y: numeric.Fixed(131072), Z: numeric.Fixed(196608), Heading: 1000, Pitch: 2000, Bank: 3000}
-	// alpha 0 -> prev, 1 -> cur, 0.5 -> mid [03 §2.4] C12
-	pos0 := LerpUnitWorldPos(prev, cur, 0)
-	if pos0[0] != 0 || pos0[1] != 0 || pos0[2] != 0 {
-		t.Fatalf("alpha0 pos %v", pos0)
-	}
-	pos1 := LerpUnitWorldPos(prev, cur, 1)
-	if pos1[0] != cur.X || pos1[1] != cur.Y || pos1[2] != cur.Z {
-		t.Fatalf("alpha1 pos %v want %v", pos1, cur)
-	}
-	posHalf := LerpUnitWorldPos(prev, cur, 0.5)
-	if posHalf[0] != numeric.Fixed(32768) || posHalf[1] != numeric.Fixed(65536) || posHalf[2] != numeric.Fixed(98304) {
-		t.Fatalf("half pos %v", posHalf)
-	}
-	// NaN and out-of-range clamp via snapshot.Lerp [03 §2.4] C12
-	if LerpUnitWorldPos(prev, cur, float32(math.NaN()))[0] != 0 {
-		t.Fatalf("NaN should clamp to prev")
-	}
-	if LerpUnitWorldPos(prev, cur, -1)[0] != 0 {
-		t.Fatalf("negative alpha clamp")
-	}
-	if LerpUnitWorldPos(prev, cur, 2)[0] != cur.X {
-		t.Fatalf("alpha >1 clamp to cur")
-	}
-}
-
-// dummy to ensure math import used
-var _ = math.Pi

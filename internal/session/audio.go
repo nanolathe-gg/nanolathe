@@ -7,55 +7,24 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-func (s *Session) sharedAudioCRT() *presentation.CRTRandom {
+func (s *Session) sharedAudioCRT() *rng.CRT {
 	if s == nil {
 		return nil
 	}
 	if s.audioCRT == nil {
-		s.audioCRT = presentation.WrapCRT(s.CrtRNG())
+		s.audioCRT = s.CrtRNG()
 	}
 	return s.audioCRT
 }
 
-// SetPresentationClock binds the frame-domain clock used by audio. Session
-// simulation ticks remain valid only for authoritative work; queue timing is
-// presentation FrameSerial timing [03 §8.3][I6].
-func (s *Session) SetPresentationClock(c *presentation.Clock) {
-	if s == nil {
-		return
-	}
-	s.audioClock = c
-}
-
-func (s *Session) presentationClock() *presentation.Clock {
-	if s == nil {
-		return nil
-	}
-	return s.audioClock
-}
-
-// PresentationClock returns the session-local presentation clock shared by
-// the battle client and audio services. It is intentionally separate from the
-// authoritative simulation clock [03 §1][I6].
-func (s *Session) PresentationClock() *presentation.Clock {
-	if s == nil {
-		return nil
-	}
-	if s.audioClock == nil {
-		s.audioClock = &presentation.Clock{}
-	}
-	return s.audioClock
-}
-
-// PresentationCRT returns the session-owned CRT wrapper shared by all
+// PresentationCRT returns the session-owned CRT stream shared by all
 // presentation consumers. It never creates a second stream [01 §7.2][I4].
-func (s *Session) PresentationCRT() *presentation.CRTRandom {
+func (s *Session) PresentationCRT() *rng.CRT {
 	return s.sharedAudioCRT()
 }
 
@@ -208,9 +177,7 @@ func (s *Session) EmitSound(slot audio.Slot, unit pool.Handle, text string) bool
 		return false
 	}
 	var frame uint32
-	if clock := s.presentationClock(); clock != nil {
-		frame = clock.FrameSerial
-	} else if s.Clock != nil {
+	if s.Clock != nil {
 		frame = s.Clock.GlobalTick
 	} else {
 		frame = s.audioFrame
@@ -385,50 +352,6 @@ func (s *Session) TickAudio(presentationFrame uint32) {
 	if s.AudioMusic != nil {
 		s.AudioMusic.Tick(s.AudioMusic.IsPlaying())
 	}
-}
-
-// TickAudioClock drains and polls music using the shared presentation clock.
-// It is the preferred presentation entry point; TickAudio(uint32) remains for
-// callers that explicitly provide a FrameSerial.
-func (s *Session) TickAudioClock(clock *presentation.Clock) {
-	if s == nil || s.AudioQueue == nil || clock == nil {
-		return
-	}
-	s.SetPresentationClock(clock)
-	s.AudioQueue.Drain(clock.FrameSerial)
-	s.audioFrame = clock.FrameSerial
-	if s.AudioMusic != nil {
-		s.AudioMusic.TickFrame(clock, s.AudioMusic.IsPlaying())
-	}
-}
-
-// CollectAudioForSnapshot copies pending audio cues into a snapshot frame's
-// Sounds slice [03 §8.3][03 §2.4] I6. It is presentation-only and does not
-// mutate simulation state; snapshot publish is the sole writer of frame.Sounds
-// [I1][I6]. Call just before Snapshot.Publish so client can read Sounds without
-// touching the live queue. Alias is resolved via variant draw at Drain time,
-// so this copy stores Slot/Unit/Frame only; alias is filled at playback via
-// OnPlay.
-func (s *Session) CollectAudioForSnapshot(frame *snapshot.Frame) {
-	if s == nil || frame == nil || s.AudioQueue == nil {
-		return
-	}
-	if s.AudioQueue.Count == 0 {
-		frame.Sounds = nil
-		return
-	}
-	// Copy pending entries as SoundEvent in queue order (already sorted descending priority FIFO) [I1].
-	out := make([]snapshot.SoundEvent, 0, s.AudioQueue.Count)
-	for i := 0; i < s.AudioQueue.Count; i++ {
-		e := s.AudioQueue.Entries[i]
-		out = append(out, snapshot.SoundEvent{
-			Alias: "", // filled at Drain via OnPlay variant draw [03 §8.3] C17
-			Slot:  uint8(e.Slot),
-			Unit:  e.Unit,
-			Frame: e.Frame,
-		})
-	}
-	frame.Sounds = out
 }
 
 // initMusicTracks probes VFS for CD/music track count and configures the

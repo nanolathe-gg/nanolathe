@@ -3,12 +3,12 @@ package render
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/presentation"
+	"github.com/nanolathe/nanolathe/internal/content"
 )
 
 func TestTexturePlayersAreIndependentAndTickBound(t *testing.T) {
-	seq := presentation.AssetSequence{
-		Frames: []presentation.AssetID{"a", "b"}, Durations: []uint32{2, 1},
+	seq := content.AssetSequence{
+		Frames: []content.AssetID{"a", "b"}, Durations: []uint32{2, 1},
 	}
 	a := NewTexturePlayer(seq)
 	b := NewTexturePlayer(seq)

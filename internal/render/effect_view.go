@@ -1,8 +1,8 @@
 package render
 
 import (
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // EffectDraw is the immutable presentation instruction for one admitted
@@ -34,7 +34,7 @@ type EffectDraw struct {
 // BuildEffectDraws copies effect metadata in admission order.  The source is
 // already a bounded immutable snapshot; no effect is synthesized when the
 // producer emitted none [F-P0-034][I6].
-func BuildEffectDraws(effects []snapshot.EffectView) []EffectDraw {
+func BuildEffectDraws(effects []frame.EffectView) []EffectDraw {
 	if len(effects) == 0 {
 		return nil
 	}

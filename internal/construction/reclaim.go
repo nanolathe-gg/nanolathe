@@ -1,8 +1,8 @@
 package construction
 
 import (
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -180,7 +180,7 @@ func (s *Service) emitReclaimNano(tick uint32, builder, target *units.Unit) {
 	}
 	// Selector 6 and one event per admitted reclaim pulse are established;
 	// exact strip/lifetime/color fields remain presentation TODO [R-P0-06].
-	s.Presentation.EmitNanolathe(presentation.Event{
+	s.Presentation.EmitNanolathe(frame.Event{
 		Tick: tick, Source: builder.Handle, Target: target.Handle, Piece: piece,
 		X: source.X(), Y: source.Y(), Z: source.Z(),
 		TargetX: target.X, TargetY: target.Y, TargetZ: target.Z,

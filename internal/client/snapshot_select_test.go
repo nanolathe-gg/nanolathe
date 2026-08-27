@@ -4,13 +4,13 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 func TestPickSnapshotUnitTieAndImmutable(t *testing.T) {
 	cam := &camera.Camera{ViewW: 640, ViewH: 480, MapW: 1024, MapH: 1024}
-	frame := &snapshot.Frame{Units: []snapshot.UnitView{
+	frame := &frame.Frame{Units: []frame.UnitView{
 		{Slot: 2, Owner: 0, X: numeric.Fixed(10 << 16), Z: numeric.Fixed(10 << 16)},
 		{Slot: 1, Owner: 0, X: numeric.Fixed(10 << 16), Z: numeric.Fixed(10 << 16)},
 	}}
@@ -32,7 +32,7 @@ func TestPickSnapshotUnitTieAndImmutable(t *testing.T) {
 
 func TestSnapshotUnitHandlesInRectVisibility(t *testing.T) {
 	cam := &camera.Camera{ViewW: 640, ViewH: 480, MapW: 1024, MapH: 1024}
-	frame := &snapshot.Frame{Visibility: snapshot.VisibilityView{Valid: true, W: 4, H: 4, Visible: make([]uint8, 16)}, Units: []snapshot.UnitView{
+	frame := &frame.Frame{Visibility: frame.VisibilityView{Valid: true, W: 4, H: 4, Visible: make([]uint8, 16)}, Units: []frame.UnitView{
 		{Slot: 1, Owner: 0, X: numeric.Fixed(4 << 16), Z: numeric.Fixed(4 << 16)},
 		{Slot: 2, Owner: 1, X: numeric.Fixed(4 << 16), Z: numeric.Fixed(4 << 16)},
 	}}
@@ -45,7 +45,7 @@ func TestSnapshotUnitHandlesInRectVisibility(t *testing.T) {
 }
 
 func TestSnapshotVisibilityRejectsInvalidViewerAndMasks(t *testing.T) {
-	frame := &snapshot.Frame{Visibility: snapshot.VisibilityView{Valid: true, W: 1, H: 1, Visible: []uint8{1}}, Units: []snapshot.UnitView{{Slot: 1, Owner: 1, X: 0, Z: 0}}}
+	frame := &frame.Frame{Visibility: frame.VisibilityView{Valid: true, W: 1, H: 1, Visible: []uint8{1}}, Units: []frame.UnitView{{Slot: 1, Owner: 1, X: 0, Z: 0}}}
 	if SnapshotVisible(frame, frame.Units[0], 10) {
 		t.Fatal("viewer outside 0..9 must not see foreign unit")
 	}

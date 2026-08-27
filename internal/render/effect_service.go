@@ -1,12 +1,29 @@
-package presentation
+package render
 
 import (
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
+)
+
+// Event and Kind are local aliases for the ordered cue input; routing and admission remain outside the renderer.
+type Event = frame.Event
+type Kind = frame.Kind
+
+const (
+	KindCOBSFX          = frame.KindCOBSFX
+	KindNanolathe       = frame.KindNanolathe
+	KindMuzzleFlash     = frame.KindMuzzleFlash
+	KindSmokeStart      = frame.KindSmokeStart
+	KindProjectileTrail = frame.KindProjectileTrail
+	KindImpact          = frame.KindImpact
+	KindWaterImpact     = frame.KindWaterImpact
+	KindExplosion       = frame.KindExplosion
+	KindLHTFlash        = frame.KindLHTFlash
+	KindCorpse          = frame.KindCorpse
 )
 
 // EffectCapacity is the fixed active-effect pool bound [01 §6.1][03 §1].
-const EffectCapacity = snapshot.MaxSnapshotEffects
+const EffectCapacity = 300 // [03 §1] fixed active-effect pool capacity
 
 // FrameTiming is optional authored GAF timing supplied by a read-only asset
 // resolver. Missing or malformed timing is not replaced by a cursor guess
@@ -25,9 +42,10 @@ type TimingResolver func(Event) (FrameTiming, bool)
 type EffectPool interface {
 	Len() int
 	Update(uint32)
-	AppendView(snapshot.EffectView) bool
-	SnapshotViews() []snapshot.EffectView
+	AppendView(frame.EffectView) bool
+	SnapshotViews() []frame.EffectView
 	RemoveMatching(pool.Handle, pool.Handle, string)
+	SnapshotViewsInto([]frame.EffectView) []frame.EffectView
 }
 
 // EffectService is an admission/snapshot adapter around the one canonical
@@ -37,7 +55,7 @@ type EffectPool interface {
 type EffectService struct {
 	max          int
 	owner        EffectPool
-	pending      []snapshot.EffectView
+	pending      []frame.EffectView
 	nextID       uint32
 	lastSequence uint64
 	dropped      uint64
@@ -94,7 +112,7 @@ func (s *EffectService) Advance(tick uint32, events []Event) {
 		if e.Sequence != 0 {
 			s.lastSequence = e.Sequence
 		}
-		if e.Kind == KindSmokeEnd {
+		if e.Kind == frame.KindSmokeEnd {
 			s.removePending(e.Source, e.Target)
 			if s.owner != nil {
 				s.owner.RemoveMatching(e.Source, e.Target, KindSmokeStart.String())
@@ -104,19 +122,44 @@ func (s *EffectService) Advance(tick uint32, events []Event) {
 		if !effectKind(e.Kind) {
 			continue
 		}
-		s.admit(tick, RoutedEvent(e))
+		s.admit(tick, e)
 	}
 }
 
 // Snapshot returns a detached copy of the canonical pool's stable order.
-func (s *EffectService) Snapshot() []snapshot.EffectView {
+func (s *EffectService) Snapshot() []frame.EffectView {
 	if s == nil {
 		return nil
 	}
-	if s.owner != nil {
-		return s.owner.SnapshotViews()
+	return s.SnapshotInto(nil)
+}
+
+// SnapshotInto copies the active effect views into dst, retaining destination
+// capacity and nested authored timing slices for steady-state publication.
+func (s *EffectService) SnapshotInto(dst []frame.EffectView) []frame.EffectView {
+	if s == nil {
+		return dst[:0]
 	}
-	return cloneViews(s.pending)
+	if s.owner != nil {
+		return s.owner.SnapshotViewsInto(dst)
+	}
+	return copyEffectViews(dst, s.pending)
+}
+
+func copyEffectViews(dst, src []frame.EffectView) []frame.EffectView {
+	if cap(dst) < len(src) {
+		dst = make([]frame.EffectView, 0, len(src))
+	}
+	dst = dst[:0]
+	for _, srcView := range src {
+		n := len(dst)
+		dst = dst[:n+1]
+		a, b := dst[n].DurationsA, dst[n].DurationsB
+		dst[n] = srcView
+		dst[n].DurationsA = append(a[:0], srcView.DurationsA...)
+		dst[n].DurationsB = append(b[:0], srcView.DurationsB...)
+	}
+	return dst
 }
 
 func (s *EffectService) admit(now uint32, e Event) {
@@ -138,7 +181,7 @@ func (s *EffectService) admit(now uint32, e Event) {
 			s.nextID = ^uint32(0)
 		}
 	}
-	view := snapshot.EffectView{
+	view := frame.EffectView{
 		ID: id, EventSeq: e.Sequence, Source: e.Source, Target: e.Target,
 		EffectID: e.EffectID, Piece: e.Piece, SFXType: e.SFXType,
 		SFXClass: e.SFXClass, Mode: e.Mode, StartTick: e.Tick,
@@ -192,15 +235,11 @@ func (s *EffectService) removePending(source, target pool.Handle) {
 	s.pending = s.pending[:write]
 }
 
-func sameEndpoint(a, b, c, d pool.Handle) bool {
-	return (a == b && (c == d || b == 0 || d == 0)) || (a == 0 && b == 0)
-}
-
-func cloneViews(in []snapshot.EffectView) []snapshot.EffectView {
+func cloneViews(in []frame.EffectView) []frame.EffectView {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]snapshot.EffectView, len(in))
+	out := make([]frame.EffectView, len(in))
 	for i, view := range in {
 		out[i] = view
 		out[i].DurationsA = append([]int32(nil), view.DurationsA...)

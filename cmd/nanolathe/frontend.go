@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/mission"
@@ -18,7 +19,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/settings"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -190,7 +190,7 @@ func runGameShell(opts Options, cs *contentSet) error {
 
 	const winW, winH = 640, 480
 	shell.cam = &camera.Camera{X: 0, Z: 0, ViewW: winW, ViewH: winH, MapW: winW, MapH: winH}
-	buf := &snapshot.Buffer{}
+	buf := &frame.Buffer{}
 	var cl *client.Client
 	cl, err = client.New(client.Options{
 		Buffer:   buf,
@@ -323,7 +323,7 @@ func (g *gameShell) openMenu(mode shellMode) {
 			// NEWGAME.GUI is reused for both New Campaign and Play Any Game.
 			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			// Any branch, so restore/apply that runtime mutation before the
-			// panel state takes its snapshot.
+			// panel state takes its frame.
 			g.applyRetailMissionLayout()
 		}
 		if p := g.assets.panel[mode]; p != nil && p.window != nil {
@@ -428,7 +428,7 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 			g.battle = nil
 			g.openMenu(modeMenuSkirmish)
 			if cl != nil {
-				cl.SetSnapshot(&snapshot.Buffer{})
+				cl.SetSnapshot(&frame.Buffer{})
 				cl.SetTerrain(nil)
 				cl.SetCamera(g.cam)
 				if g.assets != nil && g.assets.pal != nil {
@@ -594,7 +594,7 @@ func (g *gameShell) returnFromBattle(cl *client.Client) {
 	if cl == nil {
 		return
 	}
-	cl.SetSnapshot(&snapshot.Buffer{})
+	cl.SetSnapshot(&frame.Buffer{})
 	cl.SetTerrain(nil)
 	cl.SetCamera(g.cam)
 	if g.assets != nil {

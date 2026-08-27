@@ -4,9 +4,9 @@ import (
 	"math"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 func mathCos(t float64) float64 { return math.Cos(t) }
@@ -125,7 +125,7 @@ func (c *Client) frameIndexedRect(x, y, w, h int, idx uint8) {
 // rectangle rotated by its heading, with health bar and selection brackets.
 // Heading rotates about the projected center; the long axis follows heading
 // (north at 0) matching TA's top-down presentation.
-func (c *Client) drawUnitOriented(v snapshot.UnitView, sx, sy int32) {
+func (c *Client) drawUnitOriented(v frame.UnitView, sx, sy int32) {
 	fx, fz := int(v.FootX), int(v.FootZ)
 	if fx <= 0 {
 		fx = 1

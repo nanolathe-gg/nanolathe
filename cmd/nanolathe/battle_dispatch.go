@@ -3,26 +3,26 @@ package main
 import (
 	"fmt"
 
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
-func snapshotUnitByHandle(f *snapshot.Frame, h pool.Handle) (snapshot.UnitView, bool) {
+func snapshotUnitByHandle(f *frame.Frame, h pool.Handle) (frame.UnitView, bool) {
 	if f == nil {
-		return snapshot.UnitView{}, false
+		return frame.UnitView{}, false
 	}
 	for i := range f.Units {
 		if f.Units[i].Slot == h {
 			return f.Units[i], true
 		}
 	}
-	return snapshot.UnitView{}, false
+	return frame.UnitView{}, false
 }
 
-func (b *battleSession) snapshotBuilder(v snapshot.UnitView) bool {
+func (b *battleSession) snapshotBuilder(v frame.UnitView) bool {
 	if b == nil || b.cat == nil {
 		return false
 	}

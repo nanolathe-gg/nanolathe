@@ -199,8 +199,8 @@ func TestP0I07_FogSnapshot(t *testing.T) {
 	// Run one subtick via Step.
 	s.Clock.ScaledAnchor = 0
 	s.Step(1)
-	prev, cur, ok := s.Snapshot.Read()
-	if !ok {
+	cur := s.Snapshot.Current()
+	if cur == nil {
 		t.Fatalf("snapshot not published after Step")
 	}
 	if cur.Fog.W == 0 || cur.Fog.H == 0 {
@@ -213,7 +213,6 @@ func TestP0I07_FogSnapshot(t *testing.T) {
 		t.Fatalf("fog channels empty")
 	}
 	// Second tick with 0 delta still publishes fog (valid remains).
-	_ = prev
 }
 
 // TestP0I07_MovementRefreshViaTick verifies coverage updates at retail threshold (cell/2) [03 §3.2] C6.

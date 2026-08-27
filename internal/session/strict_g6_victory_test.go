@@ -108,8 +108,7 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 		}
 		// Stage 6 windowed snapshot exposes end state — check snapshot
 		if s.Snapshot != nil {
-			_, cur, ok := s.Snapshot.Read()
-			if ok {
+			if cur := s.Snapshot.Current(); cur != nil {
 				if cur.Result.WinnerTeam != res.WinnerTeam {
 					t.Logf("G6 two_player: snapshot winner mismatch %d vs %d", cur.Result.WinnerTeam, res.WinnerTeam)
 				}

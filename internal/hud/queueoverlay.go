@@ -6,9 +6,9 @@ package hud
 // draw instructions and never retains a pointer into simulation state.
 
 import (
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // QueueOverlayMask is the five-bit helper mask used by retail's descriptor
@@ -68,7 +68,7 @@ type QueuePrimitive struct {
 }
 
 // QueueOverlayOptions supplies the two camera/content facts not carried by a
-// generic snapshot.  A missing callback suppresses only the affected helper;
+// generic frame.  A missing callback suppresses only the affected helper;
 // it never invents a footprint, range, circle radius, or GAF frame.
 type QueueOverlayOptions struct {
 	Tick        uint32
@@ -76,22 +76,22 @@ type QueueOverlayOptions struct {
 	LocalOwner  uint8
 	HoveredUnit pool.Handle
 	Project     func(x, y, z numeric.Fixed) QueuePoint
-	BuildRect   func(snapshot.OrderView) (QueueRect, bool)
-	Circle      func(snapshot.OrderView) (int32, bool)
-	Icon        func(snapshot.OrderView, uint32) (int32, bool)
-	Range       func(snapshot.UnitView) (int32, bool)
+	BuildRect   func(frame.OrderView) (QueueRect, bool)
+	Circle      func(frame.OrderView) (int32, bool)
+	Icon        func(frame.OrderView, uint32) (int32, bool)
+	Range       func(frame.UnitView) (int32, bool)
 }
 
 // QueueOverlay returns stable queue instructions while Shift is held.  The
 // release path returns nil and performs no mutation, so it cannot alter an
 // authoritative state or hash [07 §9][R-P0-11 §4].
-func QueueOverlay(frame *snapshot.Frame, opt QueueOverlayOptions) []QueuePrimitive {
-	if frame == nil || !opt.ShiftHeld || opt.Project == nil {
+func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
+	if f == nil || !opt.ShiftHeld || opt.Project == nil {
 		return nil
 	}
 
-	units := make(map[pool.Handle]snapshot.UnitView, len(frame.Units))
-	for _, u := range frame.Units {
+	units := make(map[pool.Handle]frame.UnitView, len(f.Units))
+	for _, u := range f.Units {
 		if (u.MaxHealth > 0 || u.Health > 0 || u.Slot != 0) && u.Owner == opt.LocalOwner {
 			if u.Slot == 0 {
 				continue
@@ -99,8 +99,8 @@ func QueueOverlay(frame *snapshot.Frame, opt QueueOverlayOptions) []QueuePrimiti
 			units[u.Slot] = u
 		}
 	}
-	selected := make(map[pool.Handle]bool, len(frame.Selection.Handles))
-	for _, h := range frame.Selection.Handles {
+	selected := make(map[pool.Handle]bool, len(f.Selection.Handles))
+	for _, h := range f.Selection.Handles {
 		selected[h] = true
 	}
 	// Queue overlays walk the local slice.  The marker-only path is only
@@ -109,12 +109,12 @@ func QueueOverlay(frame *snapshot.Frame, opt QueueOverlayOptions) []QueuePrimiti
 	// IsBuilding alone is insufficient: factories, mexes, and other fixed
 	// structures are not necessarily builders.
 	hasBuilder := false
-	if frame.CommandPage.Builder != 0 {
-		_, hasBuilder = units[frame.CommandPage.Builder]
+	if f.CommandPage.Builder != 0 {
+		_, hasBuilder = units[f.CommandPage.Builder]
 	}
 	if !hasBuilder {
 		for h := range selected {
-			if _, ok := units[h]; ok && hasBuildOrder(frame.OrderQueues, h) {
+			if _, ok := units[h]; ok && hasBuildOrder(f.OrderQueues, h) {
 				hasBuilder = true
 				break
 			}
@@ -122,7 +122,7 @@ func QueueOverlay(frame *snapshot.Frame, opt QueueOverlayOptions) []QueuePrimiti
 	}
 
 	var out []QueuePrimitive
-	for _, q := range frame.OrderQueues {
+	for _, q := range f.OrderQueues {
 		_, ok := units[q.Unit]
 		if !ok {
 			continue
@@ -142,7 +142,7 @@ func QueueOverlay(frame *snapshot.Frame, opt QueueOverlayOptions) []QueuePrimiti
 		}
 		u := units[q.Unit]
 		prev := opt.Project(u.X, u.Y, u.Z)
-		for list, orders := range [][]snapshot.OrderView{q.Primary, q.Secondary} {
+		for list, orders := range [][]frame.OrderView{q.Primary, q.Secondary} {
 			for _, order := range orders {
 				orderMask := queueOrderMask(order.Kind) & mask
 				if orderMask == 0 {
@@ -202,12 +202,12 @@ func QueueOverlay(frame *snapshot.Frame, opt QueueOverlayOptions) []QueuePrimiti
 	return out
 }
 
-func hasBuildOrder(queues []snapshot.OrderQueueView, unit pool.Handle) bool {
+func hasBuildOrder(queues []frame.OrderQueueView, unit pool.Handle) bool {
 	for _, q := range queues {
 		if q.Unit != unit {
 			continue
 		}
-		for _, list := range [][]snapshot.OrderView{q.Primary, q.Secondary} {
+		for _, list := range [][]frame.OrderView{q.Primary, q.Secondary} {
 			for _, o := range list {
 				if o.BuildProduct != "" {
 					return true
@@ -236,7 +236,7 @@ func queueOrderMask(kind string) QueueOverlayMask {
 	}
 }
 
-func orderPoints(o snapshot.OrderView, project func(numeric.Fixed, numeric.Fixed, numeric.Fixed) QueuePoint) []QueuePoint {
+func orderPoints(o frame.OrderView, project func(numeric.Fixed, numeric.Fixed, numeric.Fixed) QueuePoint) []QueuePoint {
 	points := make([]QueuePoint, 0, len(o.Route)+1)
 	for _, route := range o.Route {
 		points = append(points, project(route.X, route.Y, route.Z))

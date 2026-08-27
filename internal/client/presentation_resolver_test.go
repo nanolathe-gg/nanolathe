@@ -4,28 +4,42 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 func TestProjectileVisibilityUsesPublishedLocalCoverageAndShear(t *testing.T) {
 	mask := make([]uint8, 4)
 	mask[3] = 1 // u=1,row=1
-	vis := projectileVisibility(snapshot.VisibilityView{W: 2, H: 2, Visible: mask, Valid: true})
-	if !vis(snapshot.ProjectileView{X: numeric.Fixed(32 << 16), Z: numeric.Fixed(48 << 16)}) {
+	vis := frame.VisibilityView{W: 2, H: 2, Visible: mask, Valid: true}
+	if !ProjectileVisible(vis, frame.ProjectileView{X: numeric.Fixed(32 << 16), Z: numeric.Fixed(48 << 16)}, 0, 0) {
 		t.Fatal("projectile in published coverage cell was rejected")
 	}
-	if vis(snapshot.ProjectileView{X: numeric.Fixed(31 << 16), Z: numeric.Fixed(48 << 16)}) {
+	if ProjectileVisible(vis, frame.ProjectileView{X: numeric.Fixed(31 << 16), Z: numeric.Fixed(48 << 16)}, 0, 0) {
 		t.Fatal("projectile in uncovered cell was admitted")
 	}
-	if vis(snapshot.ProjectileView{X: numeric.Fixed(-1)}) {
+	if ProjectileVisible(vis, frame.ProjectileView{X: numeric.Fixed(-1)}, 0, 0) {
 		t.Fatal("negative projected cell was admitted")
 	}
-	if projectileVisibility(snapshot.VisibilityView{W: 2, H: 2, Visible: mask})(snapshot.ProjectileView{}) {
+	if ProjectileVisible(frame.VisibilityView{W: 2, H: 2, Visible: mask}, frame.ProjectileView{}, 0, 0) {
 		t.Fatal("invalid visibility publication was admitted")
+	}
+}
+
+func TestProjectileVisibleRejectsMalformedGridAndReservedPlayer(t *testing.T) {
+	p := frame.ProjectileView{X: numeric.Fixed(32 << 16), Z: numeric.Fixed(48 << 16)}
+	if ProjectileVisible(frame.VisibilityView{
+		W: 2, H: 2, Visible: []uint8{0, 0, 0, 1, 1}, Valid: true,
+	}, p, ProjectileVisibilityModeBytes, 0) {
+		t.Fatal("oversized byte grid was admitted")
+	}
+	if ProjectileVisible(frame.VisibilityView{
+		W: 2, H: 2, WordVisible: []uint16{0, 0, 0, 1}, Valid: true,
+	}, p, 0, 10) {
+		t.Fatal("reserved player slot was admitted")
 	}
 }
 
@@ -52,19 +66,17 @@ func TestDrawProjectileViewsDropsEarlierInstructionsOnGlobalAbort(t *testing.T) 
 		indexed: make([]uint8, 64),
 		cam:     &camera.Camera{},
 	}
-	views := []snapshot.ProjectileView{
+	views := []frame.ProjectileView{
 		{Handle: 1, RenderType: render.RenderTypeBeam},
 		{Handle: 2, RenderType: render.RenderTypeGlobalGAF},
 	}
 	stats := c.DrawProjectileViews(
-		nil,
 		views,
 		1,
-		1,
 		nil,
-		func(snapshot.ProjectileView) bool { return false },
+		func(frame.ProjectileView) bool { return false },
 		render.ProjectileDispatchOptions{
-			Color: func(snapshot.ProjectileView) (int32, int32, bool) { return 7, 0, true },
+			Color: func(frame.ProjectileView) (int32, int32, bool) { return 7, 0, true },
 		},
 	)
 	if !stats.Aborted || stats.Dispatched != 0 {
@@ -85,8 +97,8 @@ func TestDrawEffectViewsAdmitsAuthoredLHTRowZero(t *testing.T) {
 		cam:     &camera.Camera{},
 		pal:     &palette.Tables{},
 	}
-	stats := c.DrawEffectViews([]snapshot.EffectView{{ID: 1, Light: true}}, EffectDrawOptions{
-		LHTGeometry: func(snapshot.EffectView) (int, int, bool) { return 1, 0, true },
+	stats := c.DrawEffectViews([]frame.EffectView{{ID: 1, Light: true}}, EffectDrawOptions{
+		LHTGeometry: func(frame.EffectView) (int, int, bool) { return 1, 0, true },
 		TerrainCoverage: func(x, y int) bool {
 			return x == 0 && y == 0
 		},

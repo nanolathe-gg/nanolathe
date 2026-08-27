@@ -252,38 +252,26 @@ func FogDarkRGBA(tables *palette.Tables) (r, g, b, a uint8) {
 	return tables.RGBA(FogDarkPaletteIndex) // C7 logical→physical [03 §4.3]
 }
 
-// FogSHDDarkRGBA is a placeholder for SHD-based darkening.
-// Research notes SHD 32 rows for shading/darkening [03 §4.3] and the 32-row
-// table but states the exact SHD row selection formula is not established
-// [PLAN_13 Explicit unknowns] TODO(question).
-// This helper returns the same as FogDarkRGBA using the identity mid row
-// until the row selection is traced.
-func FogSHDDarkRGBA(tables *palette.Tables) (r, g, b, a uint8) {
-	// TODO(question): SHD row selection not established [03 §4.3]; use mid row 16 placeholder.
-	_ = tables
-	return FogDarkRGBA(tables)
-}
-
-// cellOps builds the fog ops for a single cell (gx,gy) with raw channels c0,c1
-// [03 §3.3]. It never mutates the cache (I6). Ordering is channel one BEFORE
-// channel zero [03 §3.3]. Channel zero ==15 short-circuits the cell [03 §3.3].
-func cellOps(gx, gy int32, c0, c1 uint8, cam *camera.Camera, tables *palette.Tables, dither bool) []FogOp {
+// cellOpsInto builds the fog ops for a single cell (gx,gy) with raw channels
+// c0,c1 [03 §3.3]. It never mutates the cache (I6). Ordering is channel one
+// BEFORE channel zero [03 §3.3]. Channel zero ==15 short-circuits the cell
+// [03 §3.3].
+func cellOpsInto(ops []FogOp, gx, gy int32, c0, c1 uint8, cam *camera.Camera, tables *palette.Tables, dither bool) []FogOp {
 	x0, y0, x1, y1 := FogScreenRect(cam, gx, gy) // hard 32 [03 §3.3]
 	dr, dg, db, da := FogDarkRGBA(tables)        // palette [03 §4.3] C7
 
 	// Channel zero ==15: fill whole 32x32 with default dark; nothing else [03 §3.3].
 	if c0 == 15 {
-		return []FogOp{{
+		return append(ops, FogOp{
 			GridX: gx, GridY: gy,
 			ScreenX0: x0, ScreenY0: y0, ScreenX1: x1, ScreenY1: y1,
 			Channel0: c0, Channel1: c1,
 			Kind:    FogKindSolidDark,
 			Variant: -1, Frame: -1,
 			R: dr, G: dg, B: db, A: da,
-		}}
+		})
 	}
 
-	var ops []FogOp
 	// Channel one handling before channel zero [03 §3.3].
 	if c1 == 15 {
 		// The DitheredFog option selects black checker pixels instead of a gray
@@ -334,7 +322,7 @@ func cellOps(gx, gy int32, c0, c1 uint8, cam *camera.Camera, tables *palette.Tab
 	}
 
 	if len(ops) == 0 {
-		return nil // visible [03 §3.3]
+		return ops[:0] // visible [03 §3.3]
 	}
 	return ops
 }
@@ -365,8 +353,15 @@ func cellOps(gx, gy int32, c0, c1 uint8, cam *camera.Camera, tables *palette.Tab
 // [03 §3.3]. South/east void cells stay zero
 // (retail draws nothing there); the terrain blit leaves out-of-map black.
 func BuildFogOps(cache *visibility.FogCache, cam *camera.Camera, viewW, viewH int32, gridW, gridH int32, tables *palette.Tables, dither bool) []FogOp {
+	return BuildFogOpsInto(nil, cache, cam, viewW, viewH, gridW, gridH, tables, dither)
+}
+
+// BuildFogOpsInto is the reusable-scratch variant for the live client frame
+// path. It preserves row-major operation order while avoiding an operation
+// slice allocation after warmup [03 §3.3][I1].
+func BuildFogOpsInto(out []FogOp, cache *visibility.FogCache, cam *camera.Camera, viewW, viewH int32, gridW, gridH int32, tables *palette.Tables, dither bool) []FogOp {
 	if cache == nil {
-		return nil
+		return out[:0]
 	}
 	// FogCache is the sole producer of viewport nibbles. This function only
 	// translates the already-aligned cache to ordered blits; a zero origin is
@@ -378,39 +373,20 @@ func BuildFogOps(cache *visibility.FogCache, cam *camera.Camera, viewW, viewH in
 	ox, oz := cache.Origin()
 	w, h := cache.Dimensions()
 	if w <= 0 || h <= 0 {
-		return nil
+		return out[:0]
 	}
-	out := make([]FogOp, 0, int(w*h))
+	out = out[:0]
+	if cap(out) < int(w*h) {
+		out = make([]FogOp, 0, int(w*h))
+	}
 	for row := int32(0); row < h; row++ {
 		for col := int32(0); col < w; col++ {
 			c0, c1 := cache.Channel(col, row)
 			if c0 == 0 && c1 == 0 {
 				continue
 			}
-			out = append(out, cellOps(ox+col, oz+row, c0, c1, cam, tables, dither)...)
+			out = cellOpsInto(out, ox+col, oz+row, c0, c1, cam, tables, dither)
 		}
 	}
 	return out
-}
-
-// FogHook returns a composer hook closure that draws the fog overlay after
-// world strips but before selection/interface [03 §1] step 10 C1 C2.
-//
-// It captures cache, camera, palette and dither bit and builds ops
-// deterministically each invocation without mutating sim state (I6).
-// The hook is intended for assignment to Composer.Hooks.Fog [03 §1].
-func FogHook(cache *visibility.FogCache, cam *camera.Camera, gridW, gridH int32, tables *palette.Tables, dither bool) func() {
-	return func() {
-		if cache == nil || cam == nil {
-			return
-		}
-		ops := BuildFogOps(cache, cam, cam.ViewW, cam.ViewH, gridW, gridH, tables, dither)
-		_ = ops // presentation blit omitted in headless unit; ordering and determinism are locked by BuildFogOps [03 §1][I6]
-	}
-}
-
-// FogComposerHook is an alias for FogHook for API compatibility with WU-13-1
-// seam naming [03 §1]. The composer's fog hook is the seam [PLAN_13 WU-13-5].
-func FogComposerHook(cache *visibility.FogCache, cam *camera.Camera, gridW, gridH int32, tables *palette.Tables, dither bool) func() {
-	return FogHook(cache, cam, gridW, gridH, tables, dither)
 }

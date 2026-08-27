@@ -1,6 +1,6 @@
 package render
 
-import "github.com/nanolathe/nanolathe/internal/presentation"
+import "github.com/nanolathe/nanolathe/internal/content"
 
 // TexturePlayer is the presentation cursor for one model instance.  It owns
 // no global clock and therefore two instances created at different ticks do
@@ -10,7 +10,7 @@ import "github.com/nanolathe/nanolathe/internal/presentation"
 // as authored data; the cursor advances at the next tick rather than inventing
 // a replacement duration for malformed content.
 type TexturePlayer struct {
-	frames      []presentation.AssetID
+	frames      []content.AssetID
 	durations   []uint32
 	index       int
 	remaining   uint32
@@ -18,9 +18,9 @@ type TexturePlayer struct {
 }
 
 // NewTexturePlayer copies one authored sequence into an independent cursor.
-func NewTexturePlayer(sequence presentation.AssetSequence) *TexturePlayer {
+func NewTexturePlayer(sequence content.AssetSequence) *TexturePlayer {
 	p := &TexturePlayer{
-		frames:    append([]presentation.AssetID(nil), sequence.Frames...),
+		frames:    append([]content.AssetID(nil), sequence.Frames...),
 		durations: append([]uint32(nil), sequence.Durations...),
 	}
 	if len(p.frames) != 0 {
@@ -43,7 +43,7 @@ func (p *TexturePlayer) duration(index int) uint32 {
 
 // Frame returns the current immutable asset identity. A missing sequence is a
 // normal unresolved-art result.
-func (p *TexturePlayer) Frame() (presentation.AssetID, bool) {
+func (p *TexturePlayer) Frame() (content.AssetID, bool) {
 	if p == nil || p.index < 0 || p.index >= len(p.frames) {
 		return "", false
 	}
@@ -70,7 +70,7 @@ func (p *TexturePlayer) Step() {
 
 // Advance advances exactly once when the caller consumed a new simulation
 // tick. Passing false is a no-op, allowing every model instance to observe the
-// same presentation.Clock boundary without consuming it independently.
+// same committed-tick boundary without consuming it independently.
 func (p *TexturePlayer) Advance(newSimTick bool) {
 	if newSimTick {
 		p.Step()

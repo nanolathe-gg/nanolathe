@@ -21,10 +21,11 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/palette"
-	"github.com/nanolathe/nanolathe/internal/presentation"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -36,7 +37,7 @@ type Options struct {
 	Step func(delta float64) // injected owner of clock/sub-ticks/snapshot publish (C9)
 
 	// Presentation snapshot source. If nil, an empty buffer is used.
-	Buffer *snapshot.Buffer
+	Buffer *frame.Buffer
 
 	// Negotiated window size: the HUD panel arithmetic in phase 12 depends on
 	// it, so it is not invented per frame. Zero means 640×480.
@@ -56,7 +57,7 @@ type Options struct {
 
 // Client is the software framebuffer, palette, camera, and snapshot reader. It
 // keeps retail's 8-bit indexed renderer and presents one RGBA upload per
-// frame. Rendering interpolates Previous→Current at render fraction (I6).
+// frame. Rendering consumes only the currently committed frame (I6).
 type Client struct {
 	opts Options
 
@@ -67,21 +68,15 @@ type Client struct {
 	// Overlay draws battle-view chrome after world units. Presentation only
 	// [I6]. Debug text is separately opt-in through Options.DebugOverlay.
 	Overlay func(c *Client)
-	buffer  *snapshot.Buffer
+	buffer  *frame.Buffer
 
 	width, height int
 	indexed       []uint8
 	rgba          []byte
 	img           *ebiten.Image // backend-presented frame; lazily sized
 
-	// Accumulated presented seconds drive the render interpolation fraction;
-	// wall-clock time never reaches the sim (I6) — only this presentation
-	// fraction derives from it.
+	// Runtime is presentation-only bookkeeping for backend frame cadence.
 	runtime float64
-	// [PLAN_03 C16] tick-anchored alpha: runtime at last publish.
-	tickBaseRuntime float64
-	lastPublishTick uint32
-	hasPublish      bool
 
 	// Palette fallback (WU-04A-2 replaces this with full tables). Every indexed
 	// pixel goes logical → physical through the 256-byte table at present time
@@ -104,24 +99,14 @@ type Client struct {
 	// cannot share animation phase or orientation caches [03 §1][I6].
 	modelPresentation map[modelTextureKey]*modelTextureCursor
 	modelOrientation  map[uint64]*presentationrender.OrientationCache
-	// The composer is the sole owner of battle-world pass ordering. The client
-	// supplies draw adapters through its hooks rather than hand-ordering the
-	// world in composeIndexed [03 §1].
-	composer        *presentationrender.Composer
-	clock           *presentation.Clock
-	shake           presentationrender.Shake
-	crt             *presentation.CRTRandom
-	shakeEvents     map[shakeEventKey]struct{}
-	composePrev     *snapshot.Frame
-	composeCur      *snapshot.Frame
-	composeAlpha    float32
-	composeOK       bool
-	frameBegun      bool
-	operationTrace  []string // test-only live adapter trace; presentation state
-	selectionChrome []selectionChrome
-	// model diagnostics: structured fallback emitted once per unit, not per frame [ON-08].
-	modelErrors    map[string]error    // model name -> last load error (presentation-only)
-	modelFallbacks map[uint16]struct{} // unit Slot -> logged fallback diagnostic
+	shake             presentationrender.Shake
+	crt               *rng.CRT
+	shakeEvents       map[shakeEventKey]struct{}
+	lastShakeTick     uint32
+	worldBuckets      worldBuckets
+	fogCache          *visibility.FogCache
+	fogOps            []presentationrender.FogOp
+	selectionChrome   []selectionChrome
 
 	// Feature GAF presentation — sprite class [02 "Feature record"] [03 §5.1.1].
 	// Loaded lazily from anims/<filename>.gaf via modelFS; cache is presentation-only (I6).
@@ -152,13 +137,21 @@ type Client struct {
 	audioMusic    *audio.Controller
 	audioViewport audio.Viewport
 	audioFrame    uint32
-	audioClock    *presentation.Clock
 }
 
 type shakeEventKey struct {
 	sequence uint64
 	tick     uint32
 	id       uint32
+}
+
+type labeledCRT struct{ crt *rng.CRT }
+
+func (r labeledCRT) Draw(...string) int32 {
+	if r.crt == nil {
+		return 0
+	}
+	return int32(r.crt.Rand())
 }
 
 // New creates a client. It allocates the indexed framebuffer at the negotiated
@@ -175,7 +168,7 @@ func New(opts Options) (*Client, error) {
 	}
 	buf := opts.Buffer
 	if buf == nil {
-		buf = &snapshot.Buffer{}
+		buf = &frame.Buffer{}
 	}
 	c := &Client{
 		opts:              opts,
@@ -185,8 +178,6 @@ func New(opts Options) (*Client, error) {
 		indexed:           make([]uint8, w*h),
 		rgba:              make([]byte, w*h*4),
 		models:            map[string]*unitModel{},
-		modelErrors:       map[string]error{},
-		modelFallbacks:    map[uint16]struct{}{},
 		texIndex:          map[string]texRef{},
 		modelPresentation: map[modelTextureKey]*modelTextureCursor{},
 		modelOrientation:  map[uint64]*presentationrender.OrientationCache{},
@@ -230,12 +221,9 @@ func (c *Client) SetFNT(fnt *formats.FNT) { c.fnt = fnt }
 
 // SetSnapshot repoints presentation at another published buffer — used when
 // the shell transitions from front-end menus into a live battle session [I6].
-func (c *Client) SetSnapshot(b *snapshot.Buffer) {
+func (c *Client) SetSnapshot(b *frame.Buffer) {
 	if b != nil {
 		c.buffer = b
-		// Reset publish anchor so alpha re-anchors to the new session [PLAN_03 C16].
-		c.hasPublish = false
-		c.lastPublishTick = 0
 	}
 }
 
@@ -247,7 +235,7 @@ func (c *Client) IsHeadless() bool { return c != nil && c.opts.Headless }
 
 // Buffer exposes the presentation snapshot source (diagnostics publish into
 // it directly; the session path owns it in normal play).
-func (c *Client) Buffer() *snapshot.Buffer { return c.buffer }
+func (c *Client) Buffer() *frame.Buffer { return c.buffer }
 
 // RequestExit asks the window backend to terminate after the current update.
 // Headless callers can inspect the request without creating a window.
@@ -264,8 +252,6 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.modelOrientation = map[uint64]*presentationrender.OrientationCache{}
 	c.models = map[string]*unitModel{}
 	c.texIndex = map[string]texRef{}
-	c.modelErrors = map[string]error{}
-	c.modelFallbacks = map[uint16]struct{}{}
 	c.featureGAFs = map[string]*formats.GAF{}
 	c.featureFrames = map[string]*formats.GAFFrame{}
 	c.featureGACErr = map[string]error{}
@@ -314,13 +300,12 @@ func (c *Client) ensureFogGAF() {
 	}
 }
 
-// ComposeFrame reads the published buffer, composes one frame at alpha 1.0,
+// ComposeFrame reads the published buffer and composes one current frame,
 // and returns it as an RGBA image. It works headless — presentation never
 // requires a window (I6) — and is the basis of the --shot diagnostic path.
 func (c *Client) ComposeFrame() *image.RGBA {
-	prev, cur, ok := c.buffer.Read()
-	c.composeIndexed(1.0, prev, cur, ok)
-	c.frameBegun = false
+	cur := c.buffer.Current()
+	c.composeIndexed(cur, cur != nil)
 	c.drawCursor() // cursor last, over the composed surface [07 §8]
 	c.convertIndexedToRGBA()
 	img := image.NewRGBA(image.Rect(0, 0, c.width, c.height))
@@ -364,7 +349,7 @@ func (c *Client) featureGAFFor(filename string) (*formats.GAF, error) {
 // independent cursor keyed by the feature's stable presentation identity [03 §4.4].
 // Returns nil on missing filename/seq or load failure; no authored pixels are
 // emitted for an unresolved sequence [05 "Feature catalog and placement"].
-func (c *Client) featureFrameFor(f snapshot.FeatureView, shadow bool) *formats.GAFFrame {
+func (c *Client) featureFrameFor(f frame.FeatureView, shadow bool) *formats.GAFFrame {
 	filename := f.Filename
 	seq := f.SeqName
 	if shadow {
@@ -590,7 +575,7 @@ func (c *Client) blitFogGAF(frame *formats.GAFFrame, dstX, dstY int, mode fogBli
 // for the shear and add footprint-half offset explicitly for non-centered callers.
 // When terrain is available the Y uses the averaged heights at the footprint's four corners
 // matching the four-corner averaging contract. Presentation-only (I6).
-func (c *Client) featureScreenPos(f snapshot.FeatureView) (int32, int32) {
+func (c *Client) featureScreenPos(f frame.FeatureView) (int32, int32) {
 	if c.cam == nil {
 		// Fallback deterministic when no camera: use world high word directly [03 §2.5].
 		wx := int32(int64(f.X) >> 16)
@@ -622,58 +607,4 @@ func (c *Client) featureScreenPos(f snapshot.FeatureView) (int32, int32) {
 	sx -= camera.OriginX
 	sy -= camera.OriginY
 	return sx, sy
-}
-
-// computeAlpha derives the render interpolation fraction anchored to publish cadence [PLAN_03 C16].
-// Previous free-run frac(runtime*30) could beat the 30 Hz publish cadence under burst; now anchored to last publish tick.
-func (c *Client) computeAlpha() float32 {
-	if !c.hasPublish {
-		ticks := c.runtime * 30.0
-		frac := ticks - float64(int64(ticks))
-		if frac < 0 {
-			frac = 0
-		} else if frac > 1 {
-			frac = 1
-		}
-		if frac != frac { // NaN
-			return 0
-		}
-		return float32(frac)
-	}
-	elapsed := c.runtime - c.tickBaseRuntime
-	alpha := elapsed * 30.0
-	if alpha < 0 {
-		alpha = 0
-	} else if alpha > 1 {
-		alpha = 1
-	}
-	if alpha != alpha { // NaN
-		return 0
-	}
-	return float32(alpha)
-}
-
-// updatePublishAnchor records the runtime at the last published tick [PLAN_03 C15][PLAN_03 C16].
-func (c *Client) updatePublishAnchor() {
-	if c == nil || c.buffer == nil {
-		return
-	}
-	_, cur, ok := c.buffer.Read()
-	if !ok || cur == nil {
-		return
-	}
-	if !c.hasPublish || cur.Tick != c.lastPublishTick {
-		if c.hasPublish {
-			// Model and feature texture cursors advance only across consumed
-			// simulation ticks, never once per render. A burst may publish a
-			// later tick directly, so consume the whole observed delta [03 §4.4].
-			delta := uint32(cur.Tick - c.lastPublishTick)
-			if delta != 0 {
-				c.TickTextureAnimators(int(delta))
-			}
-		}
-		c.lastPublishTick = cur.Tick
-		c.tickBaseRuntime = c.runtime
-		c.hasPublish = true
-	}
 }

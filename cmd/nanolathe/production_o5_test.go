@@ -9,12 +9,12 @@ import (
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -46,7 +46,7 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 		Units:      unitsWorld,
 		LocalOwner: 0,
 		Clock:      &clock.State{Requested: 10, Active: 10},
-		Snapshot:   &snapshot.Buffer{},
+		Snapshot:   &frame.Buffer{},
 	}
 	s.SetTraceEnabled(true)
 	b := &battleSession{
@@ -64,12 +64,12 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 	sx, sy := o5ScreenPos(b.cam, builderHandle, unitsWorld)
 	controller.Step(BattleInputFrame{MouseX: sx, MouseY: sy, Buttons: BattleMouseButtons{Left: true}, Elapsed: 1.0 / 30.0}, nil)
 	controller.Step(BattleInputFrame{MouseX: sx, MouseY: sy, Elapsed: 1.0 / 30.0}, nil)
-	frame, ok := b.currentSnapshot()
-	if !ok || frame.Selection.Primary != builderHandle || frame.CommandPage.Builder != builderHandle {
-		t.Fatalf("selection/page not published through authoritative boundary: ok=%v selection=%+v page=%+v", ok, frame.Selection, frame.CommandPage)
+	f, ok := b.currentSnapshot()
+	if !ok || f.Selection.Primary != builderHandle || f.CommandPage.Builder != builderHandle {
+		t.Fatalf("selection/page not published through authoritative boundary: ok=%v selection=%+v page=%+v", ok, f.Selection, f.CommandPage)
 	}
-	if !ok || frame.Selection.Primary != builderHandle || frame.CommandPage.Builder != builderHandle {
-		t.Fatalf("selection/page not published through authoritative boundary: ok=%v selection=%+v page=%+v", ok, frame.Selection, frame.CommandPage)
+	if !ok || f.Selection.Primary != builderHandle || f.CommandPage.Builder != builderHandle {
+		t.Fatalf("selection/page not published through authoritative boundary: ok=%v selection=%+v page=%+v", ok, f.Selection, f.CommandPage)
 	}
 
 	// Build, move, and attack are admitted in that order through the same
@@ -96,13 +96,13 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 	controller.Step(BattleInputFrame{HeldKeys: []input.Key{input.KeyShift}, Modifiers: BattleModifiers{Shift: true}, Elapsed: 1.0 / 30.0}, nil)
 	o5Advance(t, s)
 
-	frame, ok = b.currentSnapshot()
+	f, ok = b.currentSnapshot()
 	if !ok {
 		t.Fatal("no immutable frame after O5 command replay")
 	}
-	queue, ok := o5Queue(frame, builderHandle)
+	queue, ok := o5Queue(f, builderHandle)
 	if !ok {
-		t.Fatalf("builder queue absent from immutable frame: %+v", frame.OrderQueues)
+		t.Fatalf("builder queue absent from immutable frame: %+v", f.OrderQueues)
 	}
 	if len(queue.Primary) < 3 {
 		t.Fatalf("primary queue=%+v, want build/move/attack sequence", queue.Primary)
@@ -129,19 +129,19 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 	project := func(x, y, z numeric.Fixed) hud.QueuePoint {
 		return hud.QueuePoint{X: int32(x >> 16), Y: int32(z >> 16)}
 	}
-	buildRect := func(o snapshot.OrderView) (hud.QueueRect, bool) {
+	buildRect := func(o frame.OrderView) (hud.QueueRect, bool) {
 		if o.FootX <= 0 || o.FootZ <= 0 {
 			return hud.QueueRect{}, false
 		}
 		left, top := int32(o.GoalX>>16), int32(o.GoalZ>>16)
 		return hud.QueueRect{Left: left, Top: top, Right: left + int32(o.FootX)*16, Bottom: top + int32(o.FootZ)*16}, true
 	}
-	beforeHash := o5AuthoritativeHash(t, s, frame)
-	held := hud.QueueOverlay(frame, hud.QueueOverlayOptions{
-		Tick:        frame.Tick,
+	beforeHash := o5AuthoritativeHash(t, s, f)
+	held := hud.QueueOverlay(f, hud.QueueOverlayOptions{
+		Tick:        f.Tick,
 		ShiftHeld:   true,
-		LocalOwner:  frame.Selection.LocalPlayer,
-		HoveredUnit: frame.Selection.Primary,
+		LocalOwner:  f.Selection.LocalPlayer,
+		HoveredUnit: f.Selection.Primary,
 		Project:     project,
 		BuildRect:   buildRect,
 	})
@@ -170,10 +170,10 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 	if !moveEndpoint {
 		t.Fatal("held Shift omitted the queued move route endpoint")
 	}
-	if released := hud.QueueOverlay(frame, hud.QueueOverlayOptions{Tick: frame.Tick, LocalOwner: frame.Selection.LocalPlayer, Project: project, BuildRect: buildRect}); released != nil {
+	if released := hud.QueueOverlay(f, hud.QueueOverlayOptions{Tick: f.Tick, LocalOwner: f.Selection.LocalPlayer, Project: project, BuildRect: buildRect}); released != nil {
 		t.Fatalf("released Shift returned overlay instructions: %+v", released)
 	}
-	if afterHash := o5AuthoritativeHash(t, s, frame); beforeHash != afterHash {
+	if afterHash := o5AuthoritativeHash(t, s, f); beforeHash != afterHash {
 		t.Fatalf("presentation-only Shift inspection changed authoritative state/trace hash: before=%x after=%x", beforeHash, afterHash)
 	}
 }
@@ -225,19 +225,19 @@ func o5Click(t *testing.T, controller *BattleController, x, y int32, modifiers B
 	controller.Step(BattleInputFrame{MouseX: x, MouseY: y, Modifiers: modifiers, Elapsed: 1.0 / 30.0}, nil)
 }
 
-func o5Queue(frame *snapshot.Frame, unit pool.Handle) (snapshot.OrderQueueView, bool) {
-	if frame == nil {
-		return snapshot.OrderQueueView{}, false
+func o5Queue(f *frame.Frame, unit pool.Handle) (frame.OrderQueueView, bool) {
+	if f == nil {
+		return frame.OrderQueueView{}, false
 	}
-	for _, q := range frame.OrderQueues {
+	for _, q := range f.OrderQueues {
 		if q.Unit == unit {
 			return q, true
 		}
 	}
-	return snapshot.OrderQueueView{}, false
+	return frame.OrderQueueView{}, false
 }
 
-func o5AuthoritativeHash(t *testing.T, s *session.Session, frame *snapshot.Frame) [32]byte {
+func o5AuthoritativeHash(t *testing.T, s *session.Session, frame *frame.Frame) [32]byte {
 	t.Helper()
 	state, err := json.Marshal(frame)
 	if err != nil {

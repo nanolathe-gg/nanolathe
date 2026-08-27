@@ -3,21 +3,21 @@ package hud
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 func TestSnapshotStatusSelectedBuildAndFactory(t *testing.T) {
 	const builder = pool.Handle(7)
-	f := snapshot.Frame{
-		Units: []snapshot.UnitView{{Slot: builder, Owner: 2, Health: 13, MaxHealth: 100}},
-		Builds: []snapshot.BuildProgressView{{
+	f := frame.Frame{
+		Units: []frame.UnitView{{Slot: builder, Owner: 2, Health: 13, MaxHealth: 100}},
+		Builds: []frame.BuildProgressView{{
 			Builder: builder, Product: 19, ProductKey: "armmex", Remaining: 0.375,
 			Health: 25, MaxHealth: 100, Factory: true, QueueIndex: 0, Stalled: true,
 		}},
-		OrderQueues: []snapshot.OrderQueueView{{
+		OrderQueues: []frame.OrderQueueView{{
 			Unit: builder,
-			Primary: []snapshot.OrderView{{Unit: builder, Kind: "Move_Ground", BuildProduct: "armmex"},
+			Primary: []frame.OrderView{{Unit: builder, Kind: "Move_Ground", BuildProduct: "armmex"},
 				{Unit: builder, Kind: "Build", BuildProduct: "armllt"}},
 		}},
 	}
@@ -42,7 +42,7 @@ func TestSnapshotStatusSelectedBuildAndFactory(t *testing.T) {
 }
 
 func TestResourceStatusFormatting(t *testing.T) {
-	f := snapshot.Frame{Economy: []snapshot.EconomyView{{
+	f := frame.Frame{Economy: []frame.EconomyView{{
 		Player: 3, Metal: 12.9, MetalCapacity: 100.9, Energy: 150000.9, EnergyCapacity: 250000.9,
 		MetalProduced: 2.25, MetalConsumed: 1.5, EnergyProduced: 120001.9, EnergyConsumed: 100000.9,
 	}}}
@@ -62,7 +62,7 @@ func TestResourceStatusFormatting(t *testing.T) {
 }
 
 func TestSnapshotStatusAbsentAndUnknown(t *testing.T) {
-	f := snapshot.Frame{Builds: []snapshot.BuildProgressView{{Builder: 4, QueueIndex: -1}}}
+	f := frame.Frame{Builds: []frame.BuildProgressView{{Builder: 4, QueueIndex: -1}}}
 	got := SnapshotStatus(&f, 1, []pool.Handle{9})
 	if got.Selected.Present || got.Resources.Present {
 		t.Fatalf("absent status = %+v", got)
@@ -78,20 +78,23 @@ func TestSnapshotStatusAbsentAndUnknown(t *testing.T) {
 
 func TestSnapshotStatusPublishedFrameIsImmutable(t *testing.T) {
 	const builder = pool.Handle(3)
-	producer := snapshot.Frame{
-		Builds:      []snapshot.BuildProgressView{{Builder: builder, Product: 8, ProductKey: "armmex", Remaining: 0.5, Health: 40, MaxHealth: 80}},
-		OrderQueues: []snapshot.OrderQueueView{{Unit: builder, Primary: []snapshot.OrderView{{Unit: builder, Kind: "Move_Ground", BuildProduct: "armmex"}}}},
-		Economy:     []snapshot.EconomyView{{Player: 0, Metal: 2, MetalCapacity: 10}},
+	producer := frame.Frame{
+		Builds:      []frame.BuildProgressView{{Builder: builder, Product: 8, ProductKey: "armmex", Remaining: 0.5, Health: 40, MaxHealth: 80}},
+		OrderQueues: []frame.OrderQueueView{{Unit: builder, Primary: []frame.OrderView{{Unit: builder, Kind: "Move_Ground", BuildProduct: "armmex"}}}},
+		Economy:     []frame.EconomyView{{Player: 0, Metal: 2, MetalCapacity: 10}},
 	}
-	var buffer snapshot.Buffer
-	buffer.Publish(&producer)
-	producer.Builds[0].Product = 99
-	producer.Builds[0].ProductKey = "mutated"
-	producer.Builds[0].Remaining = 0
-	producer.OrderQueues[0].Primary[0].Kind = "mutated"
-	producer.Economy[0].Metal = 999
-	_, frame, ok := buffer.Read()
-	if !ok {
+	var buffer frame.Buffer
+	w := buffer.BeginWrite()
+	*w = producer
+	_ = buffer.Publish(producer.Tick)
+	// The writer must not mutate a committed slot. BeginWrite selects the
+	// alternate slot, so changes there leave Current stable without cloning.
+	next := buffer.BeginWrite()
+	next.Builds = append(next.Builds, frame.BuildProgressView{Builder: builder, Product: 99, ProductKey: "mutated"})
+	next.OrderQueues = append(next.OrderQueues, frame.OrderQueueView{Unit: builder, Primary: []frame.OrderView{{Kind: "mutated"}}})
+	next.Economy = append(next.Economy, frame.EconomyView{Player: 0, Metal: 999})
+	frame := buffer.Current()
+	if frame == nil {
 		t.Fatal("published frame unavailable")
 	}
 	got := SnapshotStatus(frame, 0, []pool.Handle{builder})

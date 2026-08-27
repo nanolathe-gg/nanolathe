@@ -8,8 +8,8 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -117,7 +117,7 @@ func TestCompositionModelCacheIncludesWinningProvider(t *testing.T) {
 }
 
 func TestCOBPresentationSinkMapsPieceIdentity(t *testing.T) {
-	s := &Session{Presentation: presentation.NewCollector(presentation.Limits{})}
+	s := &Session{Presentation: frame.NewEventBuffer(frame.Limits{})}
 	sink := &cobPresentationSink{session: s, source: 1}
 	sink.SetCOBPieceMap([]int{1, 0})
 	sink.EmitCOBEvent(cob.PresentationEvent{Kind: cob.PresentationSFX, Piece: 0, SFXType: 1})
@@ -139,7 +139,7 @@ func TestCompositionBinderFutureAllocationIsStrictAndPreCreate(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	good := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testunit"}, UnitName: "testunit", ObjectName: "fixture", MaxDamage: 10, Limit: -1}
 	cat.Units[good.CanonicalKey] = good
-	s := &Session{rngSim: rng.NewSimulation(77), rngCrt: rng.NewCRT(9), rngInitialized: true, Presentation: presentation.NewCollector(presentation.Limits{})}
+	s := &Session{rngSim: rng.NewSimulation(77), rngCrt: rng.NewCRT(9), rngInitialized: true, Presentation: frame.NewEventBuffer(frame.Limits{})}
 	w := units.New(2, cat)
 	w.SetCOBSource(fs, globalCobLoader)
 	w.SetCOBBinder(func(u *units.Unit) error { return s.bindUnitCOB(fs, u) })

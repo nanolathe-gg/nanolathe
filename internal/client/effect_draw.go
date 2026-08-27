@@ -6,16 +6,16 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // EffectDrawOptions supplies authored asset and LHT metadata.  Unknown frame
 // or halo geometry is represented by a false return; the adapter does not
 // invent durations, radii, or palette rows [I9].
 type EffectDrawOptions struct {
-	ResolveFrame func(snapshot.EffectView, int32) (*formats.GAFFrame, bool)
-	LHTGeometry  func(snapshot.EffectView) (radius, level int, ok bool)
+	ResolveFrame func(frame.EffectView, int32) (*formats.GAFFrame, bool)
+	LHTGeometry  func(frame.EffectView) (radius, level int, ok bool)
 	// TerrainCoverage admits only indexed pixels belonging to the already
 	// composed terrain. A nil predicate leaves a light effect unresolved; the
 	// halo must never brighten units, effects, or HUD pixels [03 §4.3.1].
@@ -35,7 +35,7 @@ type EffectDrawStats struct {
 // DrawEffectViews draws snapshot effects in stable producer admission order.
 // The caller supplies asset resolution because the content catalog is owned
 // outside the client; no generic explosion/smoke sprite is selected here.
-func (c *Client) DrawEffectViews(effects []snapshot.EffectView, options EffectDrawOptions) EffectDrawStats {
+func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawOptions) EffectDrawStats {
 	var stats EffectDrawStats
 	if c == nil || c.cam == nil {
 		return stats
@@ -44,7 +44,7 @@ func (c *Client) DrawEffectViews(effects []snapshot.EffectView, options EffectDr
 	stats.Admitted = len(draws)
 	for i, d := range draws {
 		view := effects[i]
-		if d.Kind == snapshot.EventKindNanolathe.String() && d.Strip == 6 {
+		if d.Kind == frame.EventKindNanolathe.String() && d.Strip == 6 {
 			// Nanolathe cadence/count/color are established, but exact per-segment
 			// target-footprint offsets are not. Do not draw duplicate full-length
 			// lines until an authoritative geometry producer supplies them [03 §5.5].

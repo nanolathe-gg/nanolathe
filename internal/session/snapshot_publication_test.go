@@ -6,13 +6,92 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/visibility"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
+
+func TestSnapshotVisibilityOwnsMasksAcrossBeginWrite(t *testing.T) {
+	vis := visibility.New(&world.Terrain{CellW: 64, CellH: 64}, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
+	vis.Publish(0, 0, 0, 0, 0)
+	serviceWord := vis.WordMask()[0]
+	s := &Session{Snapshot: frame.NewBuffer(), Vis: vis, LocalOwner: 0}
+	s.publishSnapshot(1)
+	committed := s.Snapshot.Current()
+	if committed == nil || len(committed.Visibility.WordVisible) == 0 {
+		t.Fatal("visibility was not published")
+	}
+	committedWord := committed.Visibility.WordVisible[0]
+	write := s.Snapshot.BeginWrite()
+	write.Visibility.WordVisible = append(write.Visibility.WordVisible, 0xffff)
+	write.Visibility.WordVisible[0] = 0
+	if vis.WordMask()[0] != serviceWord {
+		t.Fatalf("write slot mutated visibility service: got %x want %x", vis.WordMask()[0], serviceWord)
+	}
+	if committed.Visibility.WordVisible[0] != committedWord {
+		t.Fatalf("write/reset mutated prior committed visibility: got %x want %x", committed.Visibility.WordVisible[0], committedWord)
+	}
+}
+
+func TestSnapshotPublishFailurePreservesStagedEvents(t *testing.T) {
+	c := frame.NewEventBuffer(frame.Limits{})
+	if !c.EmitImpact(frame.Event{Tick: 4, Graphic: "pending"}) {
+		t.Fatal("admit event")
+	}
+	s := &Session{Snapshot: frame.NewBuffer(), Presentation: c}
+	s.publishSnapshot(4)
+	if !c.EmitExplosion(frame.Event{Tick: 4, Graphic: "must-remain"}) {
+		t.Fatal("admit duplicate-tick event")
+	}
+	// publishSnapshot treats a duplicate tick as an impossible session
+	// invariant and panics only after copying, never resetting, staging.
+	func() {
+		defer func() { _ = recover() }()
+		s.publishSnapshot(4)
+	}()
+	events := c.Events()
+	if len(events) != 1 || events[0].Graphic != "must-remain" {
+		t.Fatalf("failed publication discarded staged event: %+v", events)
+	}
+	c.Reset()
+	if !c.EmitImpact(frame.Event{Tick: 3, Graphic: "retrograde-must-remain"}) {
+		t.Fatal("admit retrograde event")
+	}
+	func() {
+		defer func() { _ = recover() }()
+		s.publishSnapshot(3)
+	}()
+	events = c.Events()
+	if len(events) != 1 || events[0].Graphic != "retrograde-must-remain" {
+		t.Fatalf("retrograde publication discarded staged event: %+v", events)
+	}
+}
+
+func TestSnapshotWarmPublicationReusesFrameStorage(t *testing.T) {
+	c := frame.NewEventBuffer(frame.Limits{MaxEvents: 2, MaxEffectEvents: 2})
+	s := &Session{Snapshot: frame.NewBuffer(), Presentation: c}
+	for tick := uint32(1); tick <= 3; tick++ {
+		if !c.EmitExplosion(frame.Event{Tick: tick, Graphic: "steady"}) {
+			t.Fatal("warm event admission")
+		}
+		s.publishSnapshot(tick)
+	}
+	next := uint32(4)
+	allocs := testing.AllocsPerRun(20, func() {
+		if !c.EmitExplosion(frame.Event{Tick: next, Graphic: "steady"}) {
+			t.Fatal("steady event admission")
+		}
+		s.publishSnapshot(next)
+		next++
+	})
+	if allocs != 0 {
+		t.Fatalf("warm committed publication allocated %v times", allocs)
+	}
+}
 
 func TestSnapshotContainsProjectileRenderState(t *testing.T) {
 	w := &content.WeaponDef{
@@ -43,10 +122,10 @@ func TestSnapshotContainsProjectileRenderState(t *testing.T) {
 	p.BurstRemaining, p.MuzzlePiece = 2, 7
 	p.TargetUnit = 3
 
-	s := &Session{Catalog: cat, Combat: combatSvc, Snapshot: &snapshot.Buffer{}}
+	s := &Session{Catalog: cat, Combat: combatSvc, Snapshot: &frame.Buffer{}}
 	s.publishSnapshot(10)
-	_, frame, ok := s.Snapshot.Read()
-	if !ok || len(frame.Projectiles) != 1 {
+	frame := s.Snapshot.Current()
+	if frame == nil || len(frame.Projectiles) != 1 {
 		t.Fatalf("projectile frame = %#v, ok=%v", frame, ok)
 	}
 	got := frame.Projectiles[0]
@@ -68,42 +147,42 @@ func TestSnapshotContainsProjectileRenderState(t *testing.T) {
 }
 
 func TestSnapshotPublishesEventsInAdmissionOrderExactlyOnce(t *testing.T) {
-	c := presentation.NewCollector(presentation.Limits{})
-	if !c.EmitImpact(presentation.Event{Tick: 4, Graphic: "first"}) || !c.EmitExplosion(presentation.Event{Tick: 4, Graphic: "second"}) {
+	c := frame.NewEventBuffer(frame.Limits{})
+	if !c.EmitImpact(frame.Event{Tick: 4, Graphic: "first"}) || !c.EmitExplosion(frame.Event{Tick: 4, Graphic: "second"}) {
 		t.Fatal("admit presentation events")
 	}
-	s := &Session{Snapshot: &snapshot.Buffer{}, Presentation: c}
+	s := &Session{Snapshot: &frame.Buffer{}, Presentation: c}
 	s.publishSnapshot(4)
-	_, first, ok := s.Snapshot.Read()
-	if !ok || len(first.Events) != 2 {
-		t.Fatalf("first events = %#v, ok=%v", first, ok)
+	first := s.Snapshot.Current()
+	if first == nil || len(first.Events) != 2 {
+		t.Fatalf("first events = %#v", first)
 	}
 	if first.Events[0].Graphic != "first" || first.Events[1].Graphic != "second" || first.Events[0].Sequence >= first.Events[1].Sequence {
 		t.Fatalf("event order = %+v", first.Events)
 	}
-	if first.EventAdmissionsDropped != 0 || len(c.Events()) != 0 || c.Dropped() != 0 {
+	if len(c.Events()) != 0 || c.Dropped() != 0 {
 		t.Fatalf("collector not reset after publication: dropped=%d events=%d", c.Dropped(), len(c.Events()))
 	}
 	s.publishSnapshot(5)
-	_, second, ok := s.Snapshot.Read()
-	if !ok || len(second.Events) != 0 {
-		t.Fatalf("events repeated on next frame = %#v, ok=%v", second, ok)
+	second := s.Snapshot.Current()
+	if second == nil || len(second.Events) != 0 {
+		t.Fatalf("events repeated on next frame = %#v", second)
 	}
 }
 
 func TestSnapshotPublishesActiveEffectsFromOrderedEvents(t *testing.T) {
-	c := presentation.NewCollector(presentation.Limits{})
-	if !c.EmitNanolathe(presentation.Event{
+	c := frame.NewEventBuffer(frame.Limits{})
+	if !c.EmitNanolathe(frame.Event{
 		Tick: 4, Source: 2, Target: 3, Piece: 6, EffectID: 6,
 		X: 11, Y: 12, Z: 13, TargetX: 21, TargetY: 22, TargetZ: 23,
 	}) {
 		t.Fatal("admit nanolathe event")
 	}
-	s := &Session{Snapshot: &snapshot.Buffer{}, Presentation: c}
+	s := &Session{Snapshot: &frame.Buffer{}, Presentation: c}
 	s.publishSnapshot(4)
-	_, frame, ok := s.Snapshot.Read()
-	if !ok || len(frame.Effects) != 1 {
-		t.Fatalf("effects = %#v, ok=%v", frame.Effects, ok)
+	frame := s.Snapshot.Current()
+	if frame == nil || len(frame.Effects) != 1 {
+		t.Fatalf("effects = %#v", frame.Effects)
 	}
 	got := frame.Effects[0]
 	if got.ID != frame.Events[0].ID || got.EventSeq != frame.Events[0].Sequence || got.EffectID != 6 || got.Piece != 6 || got.X != 11 || got.TargetZ != 23 {
@@ -113,8 +192,8 @@ func TestSnapshotPublishesActiveEffectsFromOrderedEvents(t *testing.T) {
 	// ordered admission: each visual event produces exactly one EffectView for
 	// that tick, and neither persists beyond the window [F-P0-034][03 §1] C5.
 	s.publishSnapshot(5)
-	_, next, ok := s.Snapshot.Read()
-	if !ok || len(next.Events) != 0 || len(next.Effects) != 0 {
+	next := s.Snapshot.Current()
+	if next == nil || len(next.Events) != 0 || len(next.Effects) != 0 {
 		t.Fatalf("effect/event lifecycle = %+v", next)
 	}
 }
@@ -137,11 +216,11 @@ func TestSnapshotPublishesConstructionLink(t *testing.T) {
 	productUnit.Health = 80
 	build := construction.NewService(nil, cat, unitsWorld, nil)
 	build.SetBuilderLink(product, builder)
-	s := &Session{Catalog: cat, Units: unitsWorld, Build: build, Snapshot: &snapshot.Buffer{}}
+	s := &Session{Catalog: cat, Units: unitsWorld, Build: build, Snapshot: &frame.Buffer{}}
 	s.publishSnapshot(9)
-	_, frame, ok := s.Snapshot.Read()
-	if !ok || len(frame.Builds) != 1 {
-		t.Fatalf("build frame = %#v, ok=%v", frame, ok)
+	frame := s.Snapshot.Current()
+	if frame == nil || len(frame.Builds) != 1 {
+		t.Fatalf("build frame = %#v", frame)
 	}
 	got := frame.Builds[0]
 	if got.Builder != builder || got.Product != product || got.ProductKey != productDef.CanonicalKey || got.Remaining != productUnit.Remaining || got.Health != productUnit.Health || got.FootX != 1 || got.FootZ != 1 {

@@ -1,0 +1,156 @@
+package client
+
+import (
+	"testing"
+
+	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+)
+
+func TestDrawWorldPassProcessesAllDrawablesInPainterOrder(t *testing.T) {
+	c := newTestClient(t)
+	c.models["world_order"] = syntheticModel(
+		[]pieceInfo{{name: "root", parent: -1}},
+		[]syntheticTri{makeTriangle(0, "root", [3][3]float64{{0, 0, 0}, {4, 0, 0}, {0, 0, 4}}, 17, 0)},
+		0,
+	)
+	cur := &frame.Frame{
+		Selection: frame.SelectionView{LocalPlayer: 0},
+		Units: []frame.UnitView{
+			{Slot: 1, Owner: 0, Z: numeric.Fixed(20 << 16), Model: "world_order"},
+			{Slot: 2, Owner: 0, Z: numeric.Fixed(10 << 16), Model: "world_order"},
+			{Slot: 3, Owner: 0, Z: numeric.Fixed(10 << 16), Model: "world_order"},
+		},
+	}
+
+	c.drawWorldPass(cur, true)
+	want := []pool.Handle{2, 3, 1}
+	if len(c.selectionChrome) != len(want) {
+		t.Fatalf("drawn units = %d, want %d", len(c.selectionChrome), len(want))
+	}
+	for i, w := range want {
+		if got := c.selectionChrome[i].view.Slot; got != w {
+			t.Fatalf("draw order[%d] = %d, want %d", i, got, w)
+		}
+	}
+}
+
+func TestWorldBucketsStableEqualRows(t *testing.T) {
+	var b worldBuckets
+	b.add(worldDrawable{row: 10, screenX: 1})
+	b.add(worldDrawable{row: 5, screenX: 2})
+	b.add(worldDrawable{row: 10, screenX: 3})
+	var got []int32
+	for _, v := range b.ordered() {
+		got = append(got, v.screenX)
+	}
+	want := []int32{2, 1, 3}
+	if len(got) != len(want) {
+		t.Fatalf("ordered length %d want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ordered[%d] = %d want %d", i, got[i], want[i])
+		}
+	}
+	// Reusing the bucket does not change the source-order contract.
+	b.reset()
+	b.add(worldDrawable{row: 10, screenX: 4})
+	b.add(worldDrawable{row: 10, screenX: 5})
+	got = got[:0]
+	for _, v := range b.ordered() {
+		got = append(got, v.screenX)
+	}
+	if len(got) != 2 || got[0] != 4 || got[1] != 5 {
+		t.Fatalf("reused equal-row bucket = %v, want [4 5]", got)
+	}
+}
+
+func TestWorldBucketsReuseWithoutPerFrameAllocation(t *testing.T) {
+	var b worldBuckets
+	for i := 0; i < 8; i++ {
+		b.add(worldDrawable{row: int32(i % 3), screenX: int32(i)})
+	}
+	_ = b.ordered()
+	allocs := testing.AllocsPerRun(100, func() {
+		b.reset()
+		for i := 0; i < 8; i++ {
+			b.add(worldDrawable{row: int32(i % 3), screenX: int32(i)})
+		}
+		_ = b.ordered()
+	})
+	if allocs != 0 {
+		t.Fatalf("warm world bucket pass allocations = %f, want 0", allocs)
+	}
+}
+
+func TestCommittedFrameFogGateAndInterfacePrecedence(t *testing.T) {
+	buf := &frame.Buffer{}
+	write := buf.BeginWrite()
+	*write = frame.Frame{
+		Tick: 1,
+		Fog:  frame.FogView{Valid: true, W: 1, H: 1, Ch0: []byte{0}, Ch1: []byte{15}},
+	}
+	if err := buf.Publish(1); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(Options{Buffer: buf, Width: 4, Height: 4, Headless: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Center the one fog cell at the shell origin: FogScreenRect places its
+	// rebased rectangle at (16-cam.X, 16-cam.Z) [03 §3.3].
+	c.SetCamera(&camera.Camera{X: 16, Z: 16, ViewW: 4, ViewH: 4, MapW: 16, MapH: 16})
+	c.pal = &palette.Tables{}
+	c.pal.Gray[0] = 123
+	seenByInterface := byte(0)
+	c.Overlay = func(c *Client) {
+		seenByInterface = c.indexed[0]
+		c.indexed[0] = 77
+	}
+	c.drawCommittedFrame(write, true, 1)
+	if seenByInterface != 123 {
+		t.Fatalf("interface observed %d, want fog remap 123 before interface", seenByInterface)
+	}
+	if got := c.indexed[0]; got != 77 {
+		t.Fatalf("interface pixel = %d, want 77 after fog/selection [03 §1]", got)
+	}
+	seenByInterface = 0
+	c.drawCommittedFrame(write, true, 0)
+	if seenByInterface != 0 {
+		t.Fatalf("mode 0 interface observed fog pixel %d", seenByInterface)
+	}
+}
+
+func TestSelectionChromeFollowsFog(t *testing.T) {
+	// Match the committed-frame fixture's cell-center camera so the fog cell
+	// covers pixel (0,0) after the retail-origin rebase [03 §3.3].
+	c := &Client{width: 4, height: 4, indexed: make([]uint8, 16), pal: &palette.Tables{}, cam: &camera.Camera{X: 16, Z: 16, ViewW: 4, ViewH: 4, MapW: 16, MapH: 16}}
+	c.pal.Gray[0] = 123
+	f := &frame.Frame{Fog: frame.FogView{Valid: true, W: 1, H: 1, Ch0: []byte{0}, Ch1: []byte{15}}}
+	c.drawFog(f)
+	if c.indexed[0] != 123 {
+		t.Fatalf("fog pixel = %d, want 123 before selection", c.indexed[0])
+	}
+	c.selectionChrome = []selectionChrome{{view: frame.UnitView{Flags: SelectionFlag, FootX: 1, FootZ: 1}, screenX: 8, screenY: 8}}
+	c.drawSelectionStage()
+	if c.indexed[0] == 123 {
+		t.Fatal("selection chrome did not overwrite fog at its established later slot")
+	}
+}
+
+func TestUnresolvedGlobalGAFDoesNotAbortOtherProjectiles(t *testing.T) {
+	c := &Client{width: 8, height: 8, indexed: make([]uint8, 64), cam: &camera.Camera{}}
+	views := []frame.ProjectileView{
+		{Handle: 1, RenderType: render.RenderTypeGlobalGAF, AssetID: "unpublished"},
+		{Handle: 2, RenderType: render.RenderTypeBeam, PrimaryColor: 7, HasPrimaryColor: true},
+	}
+	stats := c.DrawProjectileViews(views, 1, func(frame.ProjectileView) bool { return true }, func(frame.ProjectileView) bool { return true }, c.projectileDispatchOptions())
+	if stats.Aborted {
+		t.Fatal("unresolved global GAF aborted unrelated projectile dispatch")
+	}
+}

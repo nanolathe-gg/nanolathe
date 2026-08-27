@@ -1,4 +1,4 @@
-package presentation
+package content
 
 // AssetID is a stable, typed identity resolved before the first battle frame.
 // An empty ID or a failed lookup means the authored asset is absent; callers
@@ -105,99 +105,102 @@ type AssetCatalog struct {
 
 // Catalog is the concrete immutable lookup implementation. Its fields are
 // private; callers receive only the Assets interface or value copies.
-type Catalog struct{ data AssetCatalog }
+type AssetCatalogService struct{ data AssetCatalog }
 
 // NewAssets copies an optional catalog specification into a read-only service.
-func NewAssets(spec ...AssetCatalog) *Catalog {
+func NewAssets(spec ...AssetCatalog) *AssetCatalogService {
 	var src AssetCatalog
 	if len(spec) != 0 {
 		src = spec[0]
 	}
-	return &Catalog{data: cloneCatalog(src)}
+	return &AssetCatalogService{data: cloneAssetCatalog(src)}
 }
 
 // NewAssetCatalog is a descriptive alias for NewAssets.
 func NewAssetCatalog(spec AssetCatalog) Assets { return NewAssets(spec) }
 
-func (c *Catalog) Feature(id AssetID) (FeatureAsset, bool) {
+func (c *AssetCatalogService) Feature(id AssetID) (FeatureAsset, bool) {
 	if c == nil {
 		return FeatureAsset{}, false
 	}
 	v, ok := c.data.Features[id]
-	return cloneFeature(v), ok
+	return cloneAssetFeature(v), ok
 }
-func (c *Catalog) Model(id AssetID) (ModelAsset, bool) {
+func (c *AssetCatalogService) Model(id AssetID) (ModelAsset, bool) {
 	if c == nil {
 		return ModelAsset{}, false
 	}
 	v, ok := c.data.Models[id]
-	return cloneModel(v), ok
+	return cloneAssetModel(v), ok
 }
-func (c *Catalog) Projectile(id AssetID) (ProjectileAsset, bool) {
+func (c *AssetCatalogService) Projectile(id AssetID) (ProjectileAsset, bool) {
 	if c == nil {
 		return ProjectileAsset{}, false
 	}
 	v, ok := c.data.Projectiles[id]
-	return cloneProjectile(v), ok
+	return cloneAssetProjectile(v), ok
 }
-func (c *Catalog) Effect(id AssetID) (EffectAsset, bool) {
+func (c *AssetCatalogService) Effect(id AssetID) (EffectAsset, bool) {
 	if c == nil {
 		return EffectAsset{}, false
 	}
 	v, ok := c.data.Effects[id]
-	return cloneEffect(v), ok
+	return cloneAssetEffect(v), ok
 }
-func (c *Catalog) Fog(id AssetID) (FogAsset, bool) {
+func (c *AssetCatalogService) Fog(id AssetID) (FogAsset, bool) {
 	if c == nil {
 		return FogAsset{}, false
 	}
 	v, ok := c.data.Fog[id]
-	return cloneFog(v), ok
+	return cloneAssetFog(v), ok
 }
-func (c *Catalog) Minimap(id AssetID) (MinimapAsset, bool) {
+func (c *AssetCatalogService) Minimap(id AssetID) (MinimapAsset, bool) {
 	if c == nil {
 		return MinimapAsset{}, false
 	}
 	v, ok := c.data.Minimap[id]
 	return v, ok
 }
-func (c *Catalog) Cursor(id AssetID) (CursorAsset, bool) {
+func (c *AssetCatalogService) Cursor(id AssetID) (CursorAsset, bool) {
 	if c == nil {
 		return CursorAsset{}, false
 	}
 	v, ok := c.data.Cursors[id]
-	return cloneCursor(v), ok
+	return cloneAssetCursor(v), ok
 }
 
-func cloneSequence(s AssetSequence) AssetSequence {
+func cloneAssetSequence(s AssetSequence) AssetSequence {
 	s.Frames = append([]AssetID(nil), s.Frames...)
 	s.Durations = append([]uint32(nil), s.Durations...)
 	return s
 }
-func cloneFeature(v FeatureAsset) FeatureAsset {
-	v.Body = cloneSequence(v.Body)
-	v.Shadow = cloneSequence(v.Shadow)
+func cloneAssetFeature(v FeatureAsset) FeatureAsset {
+	v.Body = cloneAssetSequence(v.Body)
+	v.Shadow = cloneAssetSequence(v.Shadow)
 	return v
 }
-func cloneTexture(v TextureSet) TextureSet {
-	v.Side = cloneSide(v.Side)
+func cloneAssetTexture(v TextureSet) TextureSet {
+	v.Side = cloneAssetSide(v.Side)
 	v.Durations = append([]uint32(nil), v.Durations...)
 	return v
 }
-func cloneModel(v ModelAsset) ModelAsset { v.Textures = cloneTexture(v.Textures); return v }
-func cloneProjectile(v ProjectileAsset) ProjectileAsset {
-	v.Selectors = cloneSequence(v.Selectors)
+func cloneAssetModel(v ModelAsset) ModelAsset { v.Textures = cloneAssetTexture(v.Textures); return v }
+func cloneAssetProjectile(v ProjectileAsset) ProjectileAsset {
+	v.Selectors = cloneAssetSequence(v.Selectors)
 	v.Colors = append([]uint8(nil), v.Colors...)
 	return v
 }
-func cloneEffect(v EffectAsset) EffectAsset { v.Sequence = cloneSequence(v.Sequence); return v }
-func cloneFog(v FogAsset) FogAsset {
-	v.Current = cloneSequence(v.Current)
-	v.History = cloneSequence(v.History)
+func cloneAssetEffect(v EffectAsset) EffectAsset {
+	v.Sequence = cloneAssetSequence(v.Sequence)
 	return v
 }
-func cloneCursor(v CursorAsset) CursorAsset { v.Frames = cloneSequence(v.Frames); return v }
-func cloneSide(src map[uint8]AssetID) map[uint8]AssetID {
+func cloneAssetFog(v FogAsset) FogAsset {
+	v.Current = cloneAssetSequence(v.Current)
+	v.History = cloneAssetSequence(v.History)
+	return v
+}
+func cloneAssetCursor(v CursorAsset) CursorAsset { v.Frames = cloneAssetSequence(v.Frames); return v }
+func cloneAssetSide(src map[uint8]AssetID) map[uint8]AssetID {
 	if len(src) == 0 {
 		return nil
 	}
@@ -208,32 +211,32 @@ func cloneSide(src map[uint8]AssetID) map[uint8]AssetID {
 	return dst
 }
 
-func cloneCatalog(src AssetCatalog) AssetCatalog {
+func cloneAssetCatalog(src AssetCatalog) AssetCatalog {
 	dst := AssetCatalog{
 		Features: make(map[AssetID]FeatureAsset, len(src.Features)), Models: make(map[AssetID]ModelAsset, len(src.Models)),
 		Projectiles: make(map[AssetID]ProjectileAsset, len(src.Projectiles)), Effects: make(map[AssetID]EffectAsset, len(src.Effects)),
 		Fog: make(map[AssetID]FogAsset, len(src.Fog)), Minimap: make(map[AssetID]MinimapAsset, len(src.Minimap)), Cursors: make(map[AssetID]CursorAsset, len(src.Cursors)),
 	}
 	for k, v := range src.Features {
-		dst.Features[k] = cloneFeature(v)
+		dst.Features[k] = cloneAssetFeature(v)
 	}
 	for k, v := range src.Models {
-		dst.Models[k] = cloneModel(v)
+		dst.Models[k] = cloneAssetModel(v)
 	}
 	for k, v := range src.Projectiles {
-		dst.Projectiles[k] = cloneProjectile(v)
+		dst.Projectiles[k] = cloneAssetProjectile(v)
 	}
 	for k, v := range src.Effects {
-		dst.Effects[k] = cloneEffect(v)
+		dst.Effects[k] = cloneAssetEffect(v)
 	}
 	for k, v := range src.Fog {
-		dst.Fog[k] = cloneFog(v)
+		dst.Fog[k] = cloneAssetFog(v)
 	}
 	for k, v := range src.Minimap {
 		dst.Minimap[k] = v
 	}
 	for k, v := range src.Cursors {
-		dst.Cursors[k] = cloneCursor(v)
+		dst.Cursors[k] = cloneAssetCursor(v)
 	}
 	return dst
 }

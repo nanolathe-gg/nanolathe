@@ -6,8 +6,8 @@ package client
 // ownership of render dispatch or asset policy.
 
 import (
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // ProjectileDrawStats reports what the adapter actually rendered.  A
@@ -22,14 +22,13 @@ type ProjectileDrawStats struct {
 	Aborted    bool
 }
 
-// DrawProjectileViews interpolates the previous/current immutable projectile
-// views and draws each typed rendertype instruction.  The previous lookup is
-// presentation-only; simulation never observes alpha [I6].
+// DrawProjectileViews draws each typed rendertype instruction from the
+// committed projectile views. No historical frame is retained [03 §2.4].
 //
 // frameCount and colors are resolved by immutable content at the call site.
 // A nil resolver deliberately leaves frame-selected families absent instead
 // of inventing a frame count or palette color [I9].
-func (c *Client) DrawProjectileViews(prev, current []snapshot.ProjectileView, alpha float32, now uint32, visible func(snapshot.ProjectileView) bool, admitGlobalGAF func(snapshot.ProjectileView) bool, options render.ProjectileDispatchOptions) ProjectileDrawStats {
+func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32, visible func(frame.ProjectileView) bool, admitGlobalGAF func(frame.ProjectileView) bool, options render.ProjectileDispatchOptions) ProjectileDrawStats {
 	var stats ProjectileDrawStats
 	if c == nil || c.cam == nil || len(current) == 0 {
 		return stats
@@ -50,14 +49,6 @@ func (c *Client) DrawProjectileViews(prev, current []snapshot.ProjectileView, al
 			stats.Skipped++
 			continue
 		}
-		if pv, ok := projectileViewByHandleOK(prev, d.Handle); ok {
-			view.X = snapshot.Lerp(pv.X, view.X, alpha)
-			view.Y = snapshot.Lerp(pv.Y, view.Y, alpha)
-			view.Z = snapshot.Lerp(pv.Z, view.Z, alpha)
-			view.TailX = snapshot.Lerp(pv.TailX, view.TailX, alpha)
-			view.TailY = snapshot.Lerp(pv.TailY, view.TailY, alpha)
-			view.TailZ = snapshot.Lerp(pv.TailZ, view.TailZ, alpha)
-		}
 		switch d.RenderType {
 		case render.RenderTypeBaseSpriteModel, render.RenderTypeBaseModelDistinct, render.RenderTypeRecordOrientation:
 			// These are the three researched model-bearing families.  Do not let
@@ -77,7 +68,7 @@ func (c *Client) DrawProjectileViews(prev, current []snapshot.ProjectileView, al
 			x, y := c.cam.WorldToScreen(view.X, view.Y, view.Z)
 			c.UIBlitAnchor(d.BaseFrame, int(x-128), int(y-32))
 			stats.Sprites++
-			if !c.drawProjectileModel(view, alpha) {
+			if !c.drawProjectileModel(view) {
 				stats.Skipped++
 				continue
 			}
@@ -110,25 +101,25 @@ func (c *Client) DrawProjectileViews(prev, current []snapshot.ProjectileView, al
 	return stats
 }
 
-func projectileViewByHandle(views []snapshot.ProjectileView, handle uint16) snapshot.ProjectileView {
+func projectileViewByHandle(views []frame.ProjectileView, handle uint16) frame.ProjectileView {
 	v, _ := projectileViewByHandleOK(views, handle)
 	return v
 }
 
-func projectileViewByHandleOK(views []snapshot.ProjectileView, handle uint16) (snapshot.ProjectileView, bool) {
+func projectileViewByHandleOK(views []frame.ProjectileView, handle uint16) (frame.ProjectileView, bool) {
 	for _, v := range views { // snapshot order is stable; no map dependence [I1]
 		if uint16(v.Handle) == handle {
 			return v, true
 		}
 	}
-	return snapshot.ProjectileView{}, false
+	return frame.ProjectileView{}, false
 }
 
-func (c *Client) drawProjectileBeam(d render.ProjectileDraw, v snapshot.ProjectileView) int {
+func (c *Client) drawProjectileBeam(d render.ProjectileDraw, v frame.ProjectileView) int {
 	if c == nil || c.cam == nil {
 		return 0
 	}
-	// Use the interpolated snapshot endpoints rather than the mutable combat
+	// Use the committed snapshot endpoints rather than the mutable combat
 	// projectile.  Tail is explicit in ProjectileView for beam latch state.
 	hx, hy := c.cam.WorldToScreen(v.X, v.Y, v.Z)
 	tx, ty := c.cam.WorldToScreen(v.TailX, v.TailY, v.TailZ)

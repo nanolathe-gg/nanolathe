@@ -12,8 +12,8 @@ import (
 	"math"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // HUD palette roles are logical GUI entries, not physical palette indices.
@@ -104,7 +104,7 @@ type FactoryStatus struct {
 }
 
 // OrderStatus is the canonical descriptor status shown for a selected unit.
-// Name is the immutable descriptor name from the snapshot. Label is populated
+// Name is the immutable descriptor name from the frame. Label is populated
 // only for established descriptor labels; unknown kinds keep Label empty.
 type OrderStatus struct {
 	Present      bool
@@ -141,7 +141,7 @@ type Status struct {
 // frame's immutable Selection.Handles are used only when Selection.LocalPlayer
 // matches localPlayer. A non-nil selected slice is used verbatim in caller
 // order; it is never sorted or mutated.
-func SnapshotStatus(f *snapshot.Frame, localPlayer uint8, selected []pool.Handle) Status {
+func SnapshotStatus(f *frame.Frame, localPlayer uint8, selected []pool.Handle) Status {
 	if f == nil {
 		return Status{}
 	}
@@ -157,12 +157,12 @@ func SnapshotStatus(f *snapshot.Frame, localPlayer uint8, selected []pool.Handle
 }
 
 // HUDStatus is an explicit-name alias useful at integration call sites.
-func HUDStatus(f *snapshot.Frame, localPlayer uint8, selected []pool.Handle) Status {
+func HUDStatus(f *frame.Frame, localPlayer uint8, selected []pool.Handle) Status {
 	return SnapshotStatus(f, localPlayer, selected)
 }
 
 // StatusForFrame is a descriptive alias for SnapshotStatus.
-func StatusForFrame(f *snapshot.Frame, localPlayer uint8, selected []pool.Handle) Status {
+func StatusForFrame(f *frame.Frame, localPlayer uint8, selected []pool.Handle) Status {
 	return SnapshotStatus(f, localPlayer, selected)
 }
 
@@ -170,7 +170,7 @@ func StatusForFrame(f *snapshot.Frame, localPlayer uint8, selected []pool.Handle
 // factory fields come only from BuildProgress and OrderQueue publications;
 // health falls back to the selected UnitView when no construction target is
 // published.
-func SelectedStatusFor(f *snapshot.Frame, localPlayer uint8, selected []pool.Handle) SelectedStatus {
+func SelectedStatusFor(f *frame.Frame, localPlayer uint8, selected []pool.Handle) SelectedStatus {
 	if f == nil {
 		return SelectedStatus{}
 	}
@@ -180,7 +180,7 @@ func SelectedStatusFor(f *snapshot.Frame, localPlayer uint8, selected []pool.Han
 	return selectedStatus(f, localPlayer, selected)
 }
 
-func selectedStatus(f *snapshot.Frame, localPlayer uint8, selected []pool.Handle) SelectedStatus {
+func selectedStatus(f *frame.Frame, localPlayer uint8, selected []pool.Handle) SelectedStatus {
 	for _, handle := range selected {
 		if handle == 0 {
 			continue
@@ -214,7 +214,7 @@ func selectedStatus(f *snapshot.Frame, localPlayer uint8, selected []pool.Handle
 	return SelectedStatus{}
 }
 
-func unitForLocal(f *snapshot.Frame, handle pool.Handle, player uint8) *snapshot.UnitView {
+func unitForLocal(f *frame.Frame, handle pool.Handle, player uint8) *frame.UnitView {
 	for i := range f.Units {
 		if f.Units[i].Slot == handle && f.Units[i].Owner == player {
 			return &f.Units[i]
@@ -223,16 +223,16 @@ func unitForLocal(f *snapshot.Frame, handle pool.Handle, player uint8) *snapshot
 	return nil
 }
 
-func buildFor(f *snapshot.Frame, builder pool.Handle) (snapshot.BuildProgressView, bool) {
+func buildFor(f *frame.Frame, builder pool.Handle) (frame.BuildProgressView, bool) {
 	for _, b := range f.Builds {
 		if b.Builder == builder {
 			return b, true
 		}
 	}
-	return snapshot.BuildProgressView{}, false
+	return frame.BuildProgressView{}, false
 }
 
-func buildForSelection(f *snapshot.Frame, selected pool.Handle) (snapshot.BuildProgressView, bool) {
+func buildForSelection(f *frame.Frame, selected pool.Handle) (frame.BuildProgressView, bool) {
 	if b, ok := buildFor(f, selected); ok {
 		return b, true
 	}
@@ -243,10 +243,10 @@ func buildForSelection(f *snapshot.Frame, selected pool.Handle) (snapshot.BuildP
 			return b, true
 		}
 	}
-	return snapshot.BuildProgressView{}, false
+	return frame.BuildProgressView{}, false
 }
 
-func constructionStatus(b snapshot.BuildProgressView) ConstructionStatus {
+func constructionStatus(b frame.BuildProgressView) ConstructionStatus {
 	remaining := b.Remaining
 	if remaining < 0 {
 		remaining = 0
@@ -289,7 +289,7 @@ func healthPercent(current, max int32) int {
 	return percent
 }
 
-func factoryStatus(f *snapshot.Frame, b snapshot.BuildProgressView) FactoryStatus {
+func factoryStatus(f *frame.Frame, b frame.BuildProgressView) FactoryStatus {
 	out := FactoryStatus{
 		Present: b.Factory, Builder: b.Builder, Product: b.Product, ProductKey: b.ProductKey,
 		QueueIndex: b.QueueIndex, QueueIndexKnown: b.QueueIndex >= 0,
@@ -313,7 +313,7 @@ func factoryStatus(f *snapshot.Frame, b snapshot.BuildProgressView) FactoryStatu
 	return out
 }
 
-func orderFor(f *snapshot.Frame, handle pool.Handle) OrderStatus {
+func orderFor(f *frame.Frame, handle pool.Handle) OrderStatus {
 	for _, q := range f.OrderQueues {
 		if q.Unit != handle {
 			continue
@@ -325,17 +325,10 @@ func orderFor(f *snapshot.Frame, handle pool.Handle) OrderStatus {
 			return orderStatus(q.Secondary[0])
 		}
 	}
-	// Orders is the published primary-head view and is valid when a complete
-	// queue was not included in this frame. It is not reconstructed from units.
-	for _, o := range f.Orders {
-		if o.Unit == handle {
-			return orderStatus(o)
-		}
-	}
 	return OrderStatus{}
 }
 
-func orderStatus(o snapshot.OrderView) OrderStatus {
+func orderStatus(o frame.OrderView) OrderStatus {
 	name, label := canonicalOrderName(o.Kind)
 	return OrderStatus{Present: true, Unit: o.Unit, Target: o.Target, Name: name, Label: label,
 		List: o.List, Index: o.Index, State: o.State, MoveState: o.MoveState, BuildProduct: o.BuildProduct}
@@ -345,7 +338,7 @@ func orderStatus(o snapshot.OrderView) OrderStatus {
 // snapshot, trimmed but otherwise unchanged. Descriptor names are already
 // canonical content keys; unknown names remain unknown rather than being
 // mapped to a guessed display label.
-func CanonicalOrderStatus(o snapshot.OrderView) OrderStatus { return orderStatus(o) }
+func CanonicalOrderStatus(o frame.OrderView) OrderStatus { return orderStatus(o) }
 
 func canonicalOrderName(name string) (string, string) {
 	name = strings.TrimSpace(name)
@@ -360,10 +353,9 @@ func canonicalOrderName(name string) (string, string) {
 	return name, ""
 }
 
-// ResourceStatusFor returns stocks/capacities/rates for player. Economy is
-// preferred when it is published; Resources is the compatibility publication
-// and is used only when no matching EconomyView exists.
-func ResourceStatusFor(f *snapshot.Frame, player uint8) ResourceStatus {
+// ResourceStatusFor returns stocks/capacities/rates for player from the
+// committed economy view.
+func ResourceStatusFor(f *frame.Frame, player uint8) ResourceStatus {
 	if f == nil {
 		return ResourceStatus{}
 	}
@@ -382,19 +374,6 @@ func ResourceStatusFor(f *snapshot.Frame, player uint8) ResourceStatus {
 		energyProduced, energyConsumed = e.EnergyProduced, e.EnergyConsumed
 		found = true
 		break
-	}
-	if !found {
-		for _, r := range f.Resources {
-			if r.Player != player {
-				continue
-			}
-			metal, energy = r.Metal, r.Energy
-			metalCap, energyCap = r.MetalCapacity, r.EnergyCapacity
-			metalProduced, metalConsumed = r.MetalProduced, r.MetalConsumed
-			energyProduced, energyConsumed = r.EnergyProduced, r.EnergyConsumed
-			found = true
-			break
-		}
 	}
 	if !found {
 		return ResourceStatus{}

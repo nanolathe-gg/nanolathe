@@ -6,7 +6,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -44,7 +44,7 @@ func TestProbeArmcomTriangles(t *testing.T) {
 		}
 	}
 	t.Logf("expanded %d tris: %d textured, %d flat", len(m.tris), textured, flat)
-	v := snapshot.UnitView{Model: name, Owner: 0, X: 3506 << 16, Z: 172 << 16}
+	v := frame.UnitView{Model: name, Owner: 0, X: 3506 << 16, Z: 172 << 16}
 	pieceBounds := map[string][4]int32{}
 	min := func(a, b int32) int32 {
 		if a < b {

@@ -2,7 +2,7 @@ package audio
 
 import (
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/presentation"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
 // Slot is a sound event slot [03 §8.3]. Slot 0 is an unused sentinel.
@@ -41,7 +41,7 @@ type Queue struct {
 
 	now             uint32
 	crtState        uint32
-	crt             *presentation.CRTRandom
+	crt             *rng.CRT
 	audioThreshold  uint8
 	speechThreshold uint8
 	soundEnabled    bool
@@ -131,7 +131,7 @@ func NewQueue() *Queue {
 		soundEnabled:    true,
 		speechEnabled:   true,
 		crtState:        1,
-		crt:             presentation.NewCRTRandom(1),
+		crt:             func() *rng.CRT { v := rng.NewCRT(1); return &v }(),
 		effectsVolume:   1,
 		soundFlags:      0x47,
 		backendEnabled:  true,
@@ -196,20 +196,21 @@ func (q *Queue) SetNow(frame uint32) {
 func (q *Queue) Seed(seed uint32) {
 	if q != nil {
 		q.crtState = seed
-		q.crt = presentation.NewCRTRandom(seed)
+		v := rng.NewCRT(seed)
+		q.crt = &v
 	}
 }
 
 // SetCRTRandom injects the session-owned presentation stream. Queue and music
 // must share this object so silent resolves consume the same stream as every
 // other presentation consumer [01 §7.2][03 §8.3].
-func (q *Queue) SetCRTRandom(r *presentation.CRTRandom) {
+func (q *Queue) SetCRTRandom(r *rng.CRT) {
 	if q != nil {
 		q.crt = r
 	}
 }
 
-func (q *Queue) CRTRandom() *presentation.CRTRandom {
+func (q *Queue) CRTRandom() *rng.CRT {
 	if q == nil {
 		return nil
 	}
@@ -310,8 +311,8 @@ func (q *Queue) drawCRT() uint32 {
 		return 0
 	}
 	if q.crt != nil {
-		v := uint32(q.crt.Draw("audio.variant"))
-		q.crtState = q.crt.State()
+		v := uint32(q.crt.Rand())
+		q.crtState = q.crt.State
 		return v
 	}
 	q.crtState = q.crtState*214013 + 2531011

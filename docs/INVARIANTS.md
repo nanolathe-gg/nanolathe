@@ -128,15 +128,19 @@ presentation `[06 §5.2]`.
 ## I6 — Presentation boundary
 
 **Rule.** Sim never reads wall-clock time, input state, camera, or renderer
-state. Presentation never writes sim state. The only channel is
-`internal/snapshot`, published after every completed sub-tick and read by the renderer
-with an interpolation `alpha`.
+state. Presentation never writes sim state. The only channel is the committed
+frame, published once after every completed sub-tick and sampled at the
+current committed tick by the renderer. There is no previous-frame
+interpolation or render `alpha`.
 
-**Why.** This is the one deliberate divergence from retail's draw path, which
-samples committed state with no interpolation `[03 §2.4]`. We interpolate for
-modern motion; the sim is unaffected because it never observes `alpha`.
+**Why.** The previous wording incorrectly documented interpolation as a
+deliberate divergence. Retail's draw path samples the accumulators exactly as
+committed at the current tick; no interpolation between updates exists
+`[03 §2.4]`. The frame boundary remains immutable for presentation, while the
+simulation continues to publish only after the complete phase sequence
+`[01 §4.4]`.
 
-**Check.** `grep -rn "time.Now\|time.Since" internal/{clock,kernel,units,orders,cob,movement,path,economy,construction,features,combat,visibility,ai,mission,triggers}` returns nothing. `internal/client` imports sim packages; no sim package imports `internal/client`.
+**Check.** `grep -rn "time.Now\|time.Since" internal/{clock,kernel,units,orders,cob,movement,path,economy,construction,features,combat,visibility,ai,mission,triggers}` returns nothing. `internal/client` imports sim packages; no sim package imports `internal/client`. The production frame path has no `Lerp`, `alpha`, or previous-frame read.
 
 ## I7 — Tick phase order
 

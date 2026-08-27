@@ -1,52 +1,42 @@
-// Package presentation contains deterministic, presentation-only admission
-// contracts. Producers submit value events at tick boundaries; consumers get
-// a copied ordered list and cannot feed anything back into authoritative state.
-package presentation
+// EventBuffer contains deterministic ordered cue admission
+// state. Producers submit value events at tick boundaries; consumers get
+// an ordered value list and cannot feed anything back into authoritative state.
+package frame
 
 import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 )
 
 // Kind identifies the authored presentation cue. The ordering of these values
-// is not a sorting key: Collector preserves admission order [F-P0-031]. It is
+// is not a sorting key: EventBuffer preserves admission order [F-P0-031]. It is
 // aliased to the snapshot boundary type so no stringly conversion is required.
-type Kind = snapshot.EventKind
+type Kind = EventKind
 
 const (
-	KindInvalid         = snapshot.EventKindInvalid
-	KindCOBSFX          = snapshot.EventKindCOBSFX
-	KindNanolathe       = snapshot.EventKindNanolathe
-	KindMuzzleFlash     = snapshot.EventKindMuzzleFlash
-	KindSmokeStart      = snapshot.EventKindSmokeStart
-	KindSmokeEnd        = snapshot.EventKindSmokeEnd
-	KindProjectileTrail = snapshot.EventKindProjectileTrail
-	KindImpact          = snapshot.EventKindImpact
-	KindWaterImpact     = snapshot.EventKindWaterImpact
-	KindExplosion       = snapshot.EventKindExplosion
-	KindLHTFlash        = snapshot.EventKindLHTFlash
-	KindShake           = snapshot.EventKindShake
-	KindSound           = snapshot.EventKindSound
-	KindCorpse          = snapshot.EventKindCorpse
+	KindInvalid         = EventKindInvalid
+	KindCOBSFX          = EventKindCOBSFX
+	KindNanolathe       = EventKindNanolathe
+	KindMuzzleFlash     = EventKindMuzzleFlash
+	KindSmokeStart      = EventKindSmokeStart
+	KindSmokeEnd        = EventKindSmokeEnd
+	KindProjectileTrail = EventKindProjectileTrail
+	KindImpact          = EventKindImpact
+	KindWaterImpact     = EventKindWaterImpact
+	KindExplosion       = EventKindExplosion
+	KindLHTFlash        = EventKindLHTFlash
+	KindShake           = EventKindShake
+	KindCorpse          = EventKindCorpse
 )
 
-// SFXClass is the typed COB SFX classification carried by an event. Numeric
-// values follow cob.ClassifySFX; the collector deliberately does not import
-// the COB VM, avoiding a presentation-to-authority dependency.
-type SFXClass = snapshot.SFXClass
-
 const (
-	SFXVector     = snapshot.SFXVector
-	SFXWhiteSmoke = snapshot.SFXWhiteSmoke
-	SFXBlackSmoke = snapshot.SFXBlackSmoke
-	SFXSubBubbles = snapshot.SFXSubBubbles
+	defaultEventCapacity = 4096
 )
 
 // Event is a value-only presentation cue. Lifetime and ExpiryTick are
 // supplied by the producer when established; zero means unknown and is not a
 // guessed duration [F-P0-034][I9]. Coordinates remain fixed-point at this
-// boundary. ID and Sequence are assigned by Collector on admission.
+// boundary. ID and Sequence are assigned by EventBuffer on admission.
 type Event struct {
 	ID                        uint32
 	Sequence                  uint64
@@ -58,7 +48,6 @@ type Event struct {
 	SFXType                   int32
 	SFXClass                  SFXClass
 	Graphic                   string
-	Alias                     string
 	X, Y, Z                   numeric.Fixed
 	TargetX, TargetY, TargetZ numeric.Fixed
 	Lifetime                  int32
@@ -68,9 +57,8 @@ type Event struct {
 	PaletteRow                int16
 	Magnitude                 int32
 	EffectID                  uint32
-	SoundID                   int32
 	// Authored asset/timing metadata is value-only and copied into the
-	// snapshot.  A zero/empty value is an unresolved optional resource, never
+	// frame.  A zero/empty value is an unresolved optional resource, never
 	// permission to choose fallback art [03 §5.4][03 §5.5][I9].
 	AssetID                string
 	SequenceID             string
@@ -94,13 +82,12 @@ type Event struct {
 type Limits struct {
 	MaxEvents       int
 	MaxEffectEvents int // TODO(question): exact retail family cap remains unresolved [F-P0-034]
-	MaxSounds       int
 }
 
-// Collector admits typed value events in producer order. It has no callback,
+// EventBuffer admits typed value events in producer order. It has no callback,
 // session, world, or simulation reference, so admission cannot provide
 // authoritative feedback (EVENT-01/I6).
-type Collector struct {
+type EventBuffer struct {
 	limits       Limits
 	events       []Event
 	nextID       uint32
@@ -110,24 +97,21 @@ type Collector struct {
 	exhausted    bool
 }
 
-func NewCollector(limits Limits) *Collector {
+func NewEventBuffer(limits Limits) *EventBuffer {
 	if limits.MaxEvents <= 0 {
-		limits.MaxEvents = snapshot.MaxSnapshotEvents
+		limits.MaxEvents = defaultEventCapacity
 	}
 	if limits.MaxEffectEvents <= 0 {
 		// This is an event-admission bound, not the fixed active-effect pool
 		// bound. The exact retail family allocation is unresolved.
 		limits.MaxEffectEvents = limits.MaxEvents
 	}
-	if limits.MaxSounds <= 0 {
-		limits.MaxSounds = snapshot.MaxSnapshotSounds
-	}
-	return &Collector{limits: limits, nextID: 1, nextSequence: 1}
+	return &EventBuffer{limits: limits, nextID: 1, nextSequence: 1}
 }
 
 // Admit appends one event if its kind, lifetime, and deterministic bounds are
 // valid. Rejected events consume neither an ID nor a sequence number.
-func (c *Collector) Admit(e Event) bool {
+func (c *EventBuffer) Admit(e Event) bool {
 	if c == nil {
 		return false
 	}
@@ -144,12 +128,7 @@ func (c *Collector) Admit(e Event) bool {
 		c.noteDrop(true)
 		return false
 	}
-	if e.Kind == KindSound {
-		if c.countSounds() >= c.limits.MaxSounds {
-			c.noteDrop(true)
-			return false
-		}
-	} else if c.countEffects() >= c.limits.MaxEffectEvents {
+	if c.countEffects() >= c.limits.MaxEffectEvents {
 		c.noteDrop(true)
 		return false
 	}
@@ -177,7 +156,7 @@ func (c *Collector) Admit(e Event) bool {
 // Reset starts a new deterministic admission window. IDs and sequence values
 // remain monotonic across windows, while this window's events and admission
 // status are cleared.
-func (c *Collector) Reset() {
+func (c *EventBuffer) Reset() {
 	if c == nil {
 		return
 	}
@@ -189,16 +168,16 @@ func (c *Collector) Reset() {
 // Dropped reports admissions rejected by a bound or invalid value. Overflow
 // remains visible to the caller so a bounded presentation stream cannot fail
 // silently. Dropped is scoped to the current admission window.
-func (c *Collector) Dropped() uint64 {
+func (c *EventBuffer) Dropped() uint64 {
 	if c == nil {
 		return 0
 	}
 	return c.dropped
 }
 
-func (c *Collector) Overflow() bool { return c != nil && c.overflow }
+func (c *EventBuffer) Overflow() bool { return c != nil && c.overflow }
 
-func (c *Collector) noteDrop(overflow bool) {
+func (c *EventBuffer) noteDrop(overflow bool) {
 	if overflow {
 		c.overflow = true
 	}
@@ -207,7 +186,7 @@ func (c *Collector) noteDrop(overflow bool) {
 	}
 }
 
-func (c *Collector) Events() []Event {
+func (c *EventBuffer) Events() []Event {
 	if c == nil || len(c.events) == 0 {
 		return nil
 	}
@@ -216,16 +195,27 @@ func (c *Collector) Events() []Event {
 	return out
 }
 
+// StagingEvents exposes the current admission window to the session publisher
+// for one synchronous publication pass. The returned slice aliases staging and
+// must not be retained after Reset; external consumers should use Events or
+// SnapshotEvents instead.
+func (c *EventBuffer) StagingEvents() []Event {
+	if c == nil || len(c.events) == 0 {
+		return nil
+	}
+	return c.events
+}
+
 // EventBatch is the immutable hand-off plus admission status. A consumer can
 // therefore distinguish an empty frame from a bounded frame that dropped
 // authored cues.
 type EventBatch struct {
-	Events   []snapshot.EventView
+	Events   []EventView
 	Dropped  uint64
 	Overflow bool
 }
 
-func (c *Collector) Snapshot() EventBatch {
+func (c *EventBuffer) Snapshot() EventBatch {
 	if c == nil {
 		return EventBatch{}
 	}
@@ -233,14 +223,30 @@ func (c *Collector) Snapshot() EventBatch {
 }
 
 // SnapshotEvents converts admitted values to the immutable snapshot schema.
-// The returned slice and all string/value fields are detached from Collector.
-func (c *Collector) SnapshotEvents() []snapshot.EventView {
+// The returned slice and all string/value fields are detached from EventBuffer.
+func (c *EventBuffer) SnapshotEvents() []EventView {
 	if c == nil || len(c.events) == 0 {
 		return nil
 	}
-	out := make([]snapshot.EventView, len(c.events))
-	for i, e := range c.events {
-		out[i] = snapshot.EventView{
+	return c.SnapshotEventsInto(nil)
+}
+
+// SnapshotEventsInto copies the current staging window into dst, retaining
+// destination capacity and nested duration storage. The returned values are
+// detached from the staging events.
+func (c *EventBuffer) SnapshotEventsInto(dst []EventView) []EventView {
+	if c == nil || len(c.events) == 0 {
+		return dst[:0]
+	}
+	if cap(dst) < len(c.events) {
+		dst = make([]EventView, 0, len(c.events))
+	}
+	dst = dst[:0]
+	for _, e := range c.events {
+		n := len(dst)
+		dst = dst[:n+1]
+		a, b := dst[n].DurationsA, dst[n].DurationsB
+		dst[n] = EventView{
 			ID:       e.ID,
 			Sequence: e.Sequence,
 			Tick:     e.Tick,
@@ -248,12 +254,10 @@ func (c *Collector) SnapshotEvents() []snapshot.EventView {
 			Source:   e.Source,
 			Target:   e.Target,
 			EffectID: e.EffectID,
-			SoundID:  e.SoundID,
 			Piece:    e.Piece,
 			SFXType:  e.SFXType,
 			SFXClass: e.SFXClass,
 			Graphic:  e.Graphic,
-			Alias:    e.Alias,
 			X:        e.X, Y: e.Y, Z: e.Z,
 			TargetX: e.TargetX, TargetY: e.TargetY, TargetZ: e.TargetZ,
 			Lifetime:   e.Lifetime,
@@ -263,49 +267,44 @@ func (c *Collector) SnapshotEvents() []snapshot.EventView {
 			PaletteRow: e.PaletteRow,
 			Magnitude:  e.Magnitude,
 			AssetID:    e.AssetID, SequenceID: e.SequenceID,
-			DurationsA: append([]int32(nil), e.DurationsA...), DurationsB: append([]int32(nil), e.DurationsB...),
+			DurationsA: append(a[:0], e.DurationsA...), DurationsB: append(b[:0], e.DurationsB...),
 			LoopA: e.LoopA, LoopB: e.LoopB,
 			FlashRadius: e.FlashRadius, FlashLevel: e.FlashLevel, HasFlashDisc: e.HasFlashDisc,
 			Strip: e.Strip, NanolatheIndex: e.NanolatheIndex, NanolatheCount: e.NanolatheCount,
 			NanolatheGeometryKnown: e.NanolatheGeometryKnown,
 		}
 	}
-	return out
+	return dst
 }
 
-func (c *Collector) countSounds() int {
-	n := 0
-	for _, e := range c.events {
-		if e.Kind == KindSound {
-			n++
-		}
-	}
-	return n
-}
-
-func (c *Collector) countEffects() int {
-	return len(c.events) - c.countSounds()
+func (c *EventBuffer) countEffects() int {
+	return len(c.events)
 }
 
 func validKind(k Kind) bool { return k >= KindCOBSFX && k <= KindCorpse }
 
-func (c *Collector) emit(kind Kind, e Event) bool {
+func cloneEvent(e Event) Event {
+	e.DurationsA = append([]int32(nil), e.DurationsA...)
+	e.DurationsB = append([]int32(nil), e.DurationsB...)
+	return e
+}
+
+func (c *EventBuffer) emit(kind Kind, e Event) bool {
 	e.Kind = kind
 	return c.Admit(e)
 }
 
 // The typed entry points retain the common value payload while preventing a
 // producer from accidentally admitting a cue under the wrong kind.
-func (c *Collector) EmitCOBSFX(e Event) bool          { return c.emit(KindCOBSFX, e) }
-func (c *Collector) EmitNanolathe(e Event) bool       { return c.emit(KindNanolathe, e) }
-func (c *Collector) EmitMuzzleFlash(e Event) bool     { return c.emit(KindMuzzleFlash, e) }
-func (c *Collector) EmitSmokeStart(e Event) bool      { return c.emit(KindSmokeStart, e) }
-func (c *Collector) EmitSmokeEnd(e Event) bool        { return c.emit(KindSmokeEnd, e) }
-func (c *Collector) EmitProjectileTrail(e Event) bool { return c.emit(KindProjectileTrail, e) }
-func (c *Collector) EmitImpact(e Event) bool          { return c.emit(KindImpact, e) }
-func (c *Collector) EmitWaterImpact(e Event) bool     { return c.emit(KindWaterImpact, e) }
-func (c *Collector) EmitExplosion(e Event) bool       { return c.emit(KindExplosion, e) }
-func (c *Collector) EmitLHTFlash(e Event) bool        { return c.emit(KindLHTFlash, e) }
-func (c *Collector) EmitShake(e Event) bool           { return c.emit(KindShake, e) }
-func (c *Collector) EmitSound(e Event) bool           { return c.emit(KindSound, e) }
-func (c *Collector) EmitCorpse(e Event) bool          { return c.emit(KindCorpse, e) }
+func (c *EventBuffer) EmitCOBSFX(e Event) bool          { return c.emit(KindCOBSFX, e) }
+func (c *EventBuffer) EmitNanolathe(e Event) bool       { return c.emit(KindNanolathe, e) }
+func (c *EventBuffer) EmitMuzzleFlash(e Event) bool     { return c.emit(KindMuzzleFlash, e) }
+func (c *EventBuffer) EmitSmokeStart(e Event) bool      { return c.emit(KindSmokeStart, e) }
+func (c *EventBuffer) EmitSmokeEnd(e Event) bool        { return c.emit(KindSmokeEnd, e) }
+func (c *EventBuffer) EmitProjectileTrail(e Event) bool { return c.emit(KindProjectileTrail, e) }
+func (c *EventBuffer) EmitImpact(e Event) bool          { return c.emit(KindImpact, e) }
+func (c *EventBuffer) EmitWaterImpact(e Event) bool     { return c.emit(KindWaterImpact, e) }
+func (c *EventBuffer) EmitExplosion(e Event) bool       { return c.emit(KindExplosion, e) }
+func (c *EventBuffer) EmitLHTFlash(e Event) bool        { return c.emit(KindLHTFlash, e) }
+func (c *EventBuffer) EmitShake(e Event) bool           { return c.emit(KindShake, e) }
+func (c *EventBuffer) EmitCorpse(e Event) bool          { return c.emit(KindCorpse, e) }

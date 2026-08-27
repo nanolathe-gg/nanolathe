@@ -6,12 +6,12 @@ import (
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -179,16 +179,18 @@ func TestClickAtRenderedCommanderPositionUsesSnapshotPicker(t *testing.T) {
 	b.sess.LocalOwner = 0
 	b.latch = input.LatchNormal
 	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
-	b.sess.Snapshot.Publish(&snapshot.Frame{
-		Units: []snapshot.UnitView{{
+	w := b.sess.Snapshot.BeginWrite()
+	*w = frame.Frame{
+		Units: []frame.UnitView{{
 			Slot:  commander.Handle,
 			Owner: b.sess.LocalOwner,
 			X:     commander.X,
 			Y:     commander.Y,
 			Z:     commander.Z,
 		}},
-		Selection: snapshot.SelectionView{LocalPlayer: b.sess.LocalOwner},
-	})
+		Selection: frame.SelectionView{LocalPlayer: b.sess.LocalOwner},
+	}
+	_ = b.sess.Snapshot.Publish(w.Tick)
 
 	beamX, beamY := b.cam.WorldToScreen(commander.X, commander.Y, commander.Z)
 	sx, sy := beamX-camera.OriginX, beamY-camera.OriginY

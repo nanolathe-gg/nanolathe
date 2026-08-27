@@ -13,16 +13,15 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -132,7 +131,7 @@ func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
 	if s.session.Clock != nil {
 		tick = s.session.Clock.GlobalTick
 	}
-	e := presentation.Event{Tick: tick, Source: s.source, Piece: int32(s.pieceMap[ev.Piece]), SFXType: ev.SFXType, SFXClass: presentation.SFXClass(ev.SFXClass), X: ev.Source[0], Y: ev.Source[1], Z: ev.Source[2], TargetX: ev.Target[0], TargetY: ev.Target[1], TargetZ: ev.Target[2]}
+	e := frame.Event{Tick: tick, Source: s.source, Piece: int32(s.pieceMap[ev.Piece]), SFXType: ev.SFXType, SFXClass: frame.SFXClass(ev.SFXClass), X: ev.Source[0], Y: ev.Source[1], Z: ev.Source[2], TargetX: ev.Target[0], TargetY: ev.Target[1], TargetZ: ev.Target[2]}
 	// Selector is an authored effect discriminator when the producer supplied
 	// one. Negative/absent selectors remain unknown; EffectID is unsigned at
 	// the snapshot boundary, so never convert the unresolved sentinel [I9].
@@ -367,12 +366,12 @@ func createAndBindServices(s *Session) error {
 		return fmt.Errorf("session: incomplete COB source for service wiring [04 §4.1]")
 	}
 	if s.Presentation == nil {
-		s.Presentation = presentation.NewCollector(presentation.Limits{})
+		s.Presentation = frame.NewEventBuffer(frame.Limits{})
 	}
 	if s.Effects == nil {
 		// The render pool is the sole active-effect owner. Presentation only
 		// admits detached event views and reads its immutable snapshot [03 §1].
-		s.Effects = presentation.NewEffectServiceWithPool(presentation.EffectCapacity, &render.FixedEffectPool{})
+		s.Effects = render.NewEffectServiceWithPool(render.EffectCapacity, &render.FixedEffectPool{})
 	}
 	// Worlds with an authored source use one binder before battle entry so
 	// scenario, construction, and forced-slot creation resolve the same model
@@ -509,20 +508,21 @@ func createAndBindServices(s *Session) error {
 		if s.Presentation == nil {
 			return
 		}
-		pe := presentation.Event{
+		pe := frame.Event{
 			Tick: ev.Tick, Source: ev.Source, Target: ev.Target,
 			X: ev.Position.X, Y: ev.Position.Y, Z: ev.Position.Z,
-			Graphic: ev.Graphic, Alias: ev.Sound, Magnitude: ev.Magnitude,
+			Graphic: ev.Graphic, Magnitude: ev.Magnitude,
 		}
 		switch ev.Kind {
 		case combat.EventShake:
 			s.Presentation.EmitShake(pe)
 		case combat.EventHitSound, combat.EventWaterSound:
-			s.Presentation.EmitSound(pe)
+			if ev.Sound != "" {
+				_, _, _ = s.EmitWeaponHit(ev.Sound, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, ev.Kind == combat.EventWaterSound)
+			}
 		case combat.EventStartSound:
 			// Start sound is emitted by the common initializer before Fire/RockUnit;
-			// admit it once and route the authored alias through session-owned audio.
-			s.Presentation.EmitSound(pe)
+			// route the authored alias through the session-owned direct audio queue.
 			if ev.Sound != "" {
 				_, _, _ = s.EmitWeaponStart(ev.Sound, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z})
 			}
@@ -567,7 +567,7 @@ func createAndBindServices(s *Session) error {
 		s.Clock = &clock.State{Requested: 10, Active: 10}
 	}
 	if s.Snapshot == nil {
-		s.Snapshot = &snapshot.Buffer{}
+		s.Snapshot = frame.NewBuffer()
 	}
 	if s.Mission == nil {
 		return fmt.Errorf("session: missing Mission [08]")

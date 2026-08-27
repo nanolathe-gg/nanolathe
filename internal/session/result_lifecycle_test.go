@@ -212,7 +212,7 @@ func TestResult_LocalWinLossViaSnapshot(t *testing.T) {
 	if len(res.Winners) == 0 || len(res.Losers) == 0 {
 		t.Fatalf("winners/losers missing win %+v", res)
 	}
-	if view := s.Snapshot.GetResultView(); !view.Ended || view.Kind != "victory" {
+	if view := s.Snapshot.Current().Result; !view.Ended || view.Kind != "victory" {
 		t.Fatalf("snapshot victory not published %+v", view)
 	}
 	if s.Latch.Countdown != -1 {
@@ -235,7 +235,7 @@ func TestResult_LocalWinLossViaSnapshot(t *testing.T) {
 	if res2.Kind != "defeat" {
 		t.Fatalf("local loss kind want defeat got %s", res2.Kind)
 	}
-	if view := s2.Snapshot.GetResultView(); !view.Ended || view.Kind != "defeat" {
+	if view := s2.Snapshot.Current().Result; !view.Ended || view.Kind != "defeat" {
 		t.Fatalf("snapshot defeat not published %+v", view)
 	}
 }

@@ -12,17 +12,16 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/presentation"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
@@ -80,11 +79,11 @@ type Session struct {
 	Combat   *combat.Service
 	AI       [10]*ai.Manager // fixed player-indexed, nil holes per RS-02 [08] I4 single stream
 	Mission  *mission.Mission
-	Snapshot *snapshot.Buffer
+	Snapshot *frame.Buffer
 	Shutdown *Shutdown // ordered shutdown in reverse-init order [01 §2.1][01 §2.3] P0-I10
 
-	Presentation *presentation.Collector     // typed presentation event admission [EVENT-01]
-	Effects      *presentation.EffectService // bounded immutable effect publication [F-P0-034]
+	Presentation *frame.EventBuffer    // typed presentation event admission [EVENT-01]
+	Effects      *render.EffectService // bounded immutable effect publication [F-P0-034]
 	// CampaignSlot is the mission list slot for progress W/L [P1-01 §2.3] [P0-05].
 	CampaignSlot int
 
@@ -152,10 +151,9 @@ type Session struct {
 	rngCrt         rng.CRT
 	rngInitialized bool
 
-	// OnRender is called exactly once per Step after the sub-tick batch, with
-	// alpha from the final snapshot pair. It is presentation-only; sim never
-	// reads it [PLAN_03 C15][PLAN_14 C6]. Tests set this to count renders.
-	OnRender func(alpha float32)
+	// OnRender is called exactly once per Step after the sub-tick batch. It is
+	// presentation-only; sim never reads it [PLAN_03 C15][PLAN_14 C6].
+	OnRender func()
 
 	// Visibility sensor state [03 §3.4] P0-11: per-unit status bits (0x100 seen, 0x300 friendly, 0x1000 decloak)
 	// and decloak deadlines tick+90, plus presentation-only jammer/radar surfaces.
@@ -177,8 +175,7 @@ type Session struct {
 	audioViewport audio.Viewport     // presentation viewport for pan/attenuation [03 §8.3]
 	audioFrame    uint32             // presentation frame counter for Drain [03 §8.3] C18
 	audioFS       vfs.FSOps          // VFS for cache loads, presentation-only
-	audioCRT      *presentation.CRTRandom
-	audioClock    *presentation.Clock
+	audioCRT      *rng.CRT
 
 	// Trace is the optional ordered debug sink [ON-09]. Disabled by default,
 	// appends in authoritative order, never ranges maps, never calls RNG,
@@ -1540,7 +1537,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 	// 17 post-loop executor tail [01 §4.4] — barriers, the deadline-ring slide and missile/interceptor compaction are retail post-loop structures; nanolathe's deterministic commit (movement occupancy clear for Dying units, unit cleanup, campaign no-human countdown, victory evaluation) and the RNG global sync live here
 	if s.Units != nil {
 		// RS-08: projectile damage after slot visit marks Dying after that visit [01 §4.4][GAP T15];
-		// retain for feature/visibility/trigger same tick but clear movement occupancy before next tick and before snapshot.
+		// retain for feature/visibility/trigger same tick but clear movement occupancy before next tick and before frame.
 		if s.Movement != nil {
 			for _, u := range s.Units.IterSliced() {
 				if u == nil || !u.Dying {
@@ -2148,32 +2145,33 @@ func (s *Session) publishSnapshot(tick uint32) {
 	if s.Snapshot == nil {
 		return
 	}
-	frame := &snapshot.Frame{Tick: tick, Paused: s.Clock != nil && s.Clock.Paused}
-	var presentationEvents []presentation.Event
+	published := s.Snapshot.BeginWrite()
+	if published == nil {
+		return
+	}
+	published.Tick = tick
+	published.Paused = s.Clock != nil && s.Clock.Paused
+	var presentationEvents []frame.Event
 	if s.Presentation != nil {
-		presentationEvents = s.Presentation.Events()
+		presentationEvents = s.Presentation.StagingEvents()
 	}
 	if s.Effects == nil {
 		// Keep one active-effect owner across publication paths [03 §1].
-		s.Effects = presentation.NewEffectServiceWithPool(presentation.EffectCapacity, &render.FixedEffectPool{})
+		s.Effects = render.NewEffectServiceWithPool(render.EffectCapacity, &render.FixedEffectPool{})
 	}
 	// Effects consume the same ordered value events that are published below.
 	// They are advanced even when the current event window is empty so explicit
 	// deadlines and authored frame timing expire independently of rendering [I6].
 	s.Effects.Advance(tick, presentationEvents)
-	frame.Effects = s.Effects.Snapshot()
-	if len(frame.Effects) > snapshot.MaxSnapshotEffects || s.Effects.Dropped() != 0 {
-		frame.EffectsTruncated = true
-	}
+	published.Effects = s.Effects.SnapshotInto(published.Effects)
 	if s.Units != nil {
-		views := make([]snapshot.UnitView, 0, s.Units.Used())
-		ordersViews := make([]snapshot.OrderView, 0)
-		orderQueues := make([]snapshot.OrderQueueView, 0)
+		views := published.Units[:0]
+		orderQueues := published.OrderQueues[:0]
 		for _, u := range s.Units.Iter() {
 			if u == nil || !u.Alive {
 				continue
 			}
-			v := snapshot.UnitView{
+			v := frame.UnitView{
 				Slot:           u.Handle,
 				Owner:          u.Owner,
 				X:              u.X,
@@ -2213,6 +2211,8 @@ func (s *Session) publishSnapshot(tick uint32) {
 					v.IsBuilding = true
 				}
 			}
+			views = appendUnitView(views, v)
+			vp := &views[len(views)-1]
 			if vm := u.GetScript(); vm != nil {
 				if vmPieces := vm.Pieces; len(vmPieces) > 0 {
 					flags := vm.SnapshotFlags()
@@ -2221,9 +2221,9 @@ func (s *Session) publishSnapshot(tick uint32) {
 					if prog != nil {
 						names = prog.Pieces
 					}
-					v.Pieces = make([]snapshot.PieceView, len(vmPieces))
+					vp.Pieces = vp.Pieces[:0]
 					for i, ps := range vmPieces {
-						pv := snapshot.PieceView{
+						pv := frame.PieceView{
 							Index: i,
 							RotX:  ps.RotX,
 							RotY:  ps.RotY,
@@ -2242,11 +2242,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 							pv.DontShadow = (f & 0x08) == 0 // dont-shadow [04 §4.3] 0x1000a000
 							// DontCache (0x02) not needed in snapshot; renderer decides via IsBuilding.
 						}
-						v.Pieces[i] = pv
+						vp.Pieces = append(vp.Pieces, pv)
 					}
 				}
 			}
-			views = append(views, v)
 			if q := orders.QueueForUnit(u); q != nil && (q.LenPrimary() > 0 || q.LenSecondary() > 0) {
 				activeHead := q.Head()
 				queue := orders.SnapshotQueueOf(q, u.Handle, func(n *orders.Node) []orders.SnapshotRoutePoint {
@@ -2267,57 +2266,52 @@ func (s *Session) publishSnapshot(tick uint32) {
 					}
 					return points
 				})
-				ov := snapshotOrderQueueView(queue, s.Catalog)
-				orderQueues = append(orderQueues, ov)
-				if len(ov.Primary) > 0 {
-					ordersViews = append(ordersViews, ov.Primary[0])
-				}
+				orderQueues = appendOrderQueueView(orderQueues, queue, s.Catalog)
 			}
 		}
-		frame.Units = views
-		frame.Orders = ordersViews
-		frame.OrderQueues = orderQueues
+		published.Units = views
+		published.OrderQueues = orderQueues
 		// Selection is authoritative unit state (bit 0x10), not a renderer-side
 		// cache [07 §9]. Preserve pool order so a frame is deterministic [I1].
 		for _, u := range views {
 			if u.Owner != s.LocalOwner || u.Flags&0x10 == 0 {
 				continue
 			}
-			frame.Selection.Handles = append(frame.Selection.Handles, u.Slot)
-			if frame.Selection.Primary == 0 {
-				frame.Selection.Primary = u.Slot
+			published.Selection.Handles = append(published.Selection.Handles, u.Slot)
+			if published.Selection.Primary == 0 {
+				published.Selection.Primary = u.Slot
 			}
 		}
-		frame.Selection.LocalPlayer = s.LocalOwner
-		frame.Selection.Count = uint16(len(frame.Selection.Handles))
+		published.Selection.LocalPlayer = s.LocalOwner
+		published.Selection.Count = uint16(len(published.Selection.Handles))
 		// Command-page state is authored by the selected builder's CANBUILD
 		// page. Shift/input latches are presentation-owned and therefore remain
 		// at their zero value until a typed input state is introduced [07 §9].
-		if frame.Selection.Count == 1 && frame.Selection.Primary != 0 && s.Catalog != nil {
+		if published.Selection.Count == 1 && published.Selection.Primary != 0 && s.Catalog != nil {
 			// A command page is a single-selected-builder surface. Do not
 			// promote one builder from a mixed or multi-builder selection to
 			// the page owner; aggregate command state is distinct [07 §9].
-			if u := s.Units.Unit(frame.Selection.Primary); u != nil && u.Alive && u.Owner == s.LocalOwner && u.Flags&0x10 != 0 && u.Def != nil && u.Def.Builder {
+			if u := s.Units.Unit(published.Selection.Primary); u != nil && u.Alive && u.Owner == s.LocalOwner && u.Flags&0x10 != 0 && u.Def != nil && u.Def.Builder {
 				if page := s.Catalog.BuildMenus[content.CanonicalKey(u.Def.CanonicalKey)]; page != nil {
-					frame.CommandPage.Builder = u.Handle
+					published.CommandPage.Builder = u.Handle
 					const buttonsPerPage = 6 // authored build rail page [07 §9]
-					frame.CommandPage.PageCount = uint16((len(page.Buttons) + buttonsPerPage - 1) / buttonsPerPage)
-					if frame.CommandPage.PageCount == 0 {
-						frame.CommandPage.PageCount = 1
+					published.CommandPage.PageCount = uint16((len(page.Buttons) + buttonsPerPage - 1) / buttonsPerPage)
+					if published.CommandPage.PageCount == 0 {
+						published.CommandPage.PageCount = 1
 					}
 					pageNumber := 0
 					if hud.IsPaged(u.Flags) {
 						pageNumber = hud.DecodePage(u.Flags)
 					}
-					pageNumber = hud.ClampPage(pageNumber, int(frame.CommandPage.PageCount))
-					frame.CommandPage.Page = uint16(pageNumber)
+					pageNumber = hud.ClampPage(pageNumber, int(published.CommandPage.PageCount))
+					published.CommandPage.Page = uint16(pageNumber)
 					start := pageNumber * buttonsPerPage
 					end := start + buttonsPerPage
 					if start < len(page.Buttons) {
 						if end > len(page.Buttons) {
 							end = len(page.Buttons)
 						}
-						frame.CommandPage.ProductKeys = append([]string(nil), page.Buttons[start:end]...)
+						published.CommandPage.ProductKeys = append(published.CommandPage.ProductKeys[:0], page.Buttons[start:end]...)
 					}
 				}
 			}
@@ -2330,27 +2324,27 @@ func (s *Session) publishSnapshot(tick uint32) {
 	// service currently has no generation counter; Version consequently stays
 	// zero rather than inventing one [I9].
 	if s.Vis != nil {
-		publishVisibilityView(s.Vis, s.LocalOwner, &frame.Visibility)
+		publishVisibilityView(s.Vis, s.LocalOwner, &published.Visibility)
 		s.Vis.RebuildFog(0, 0)
 		if fc := s.Vis.Fog(); fc != nil {
 			w, h := fc.Dimensions()
 			ch0, ch1 := fc.Channels()
-			frame.Fog.W = w
-			frame.Fog.H = h
-			frame.Fog.OriginX, frame.Fog.OriginZ = fc.Origin()
-			frame.Fog.Ch0 = ch0
-			frame.Fog.Ch1 = ch1
-			frame.Fog.Valid = s.Vis.FogCacheValid()
+			published.Fog.W = w
+			published.Fog.H = h
+			published.Fog.OriginX, published.Fog.OriginZ = fc.Origin()
+			published.Fog.Ch0 = copyBytesInto(published.Fog.Ch0, ch0)
+			published.Fog.Ch1 = copyBytesInto(published.Fog.Ch1, ch1)
+			published.Fog.Valid = s.Vis.FogCacheValid()
 		}
 	}
+	published.Features = published.Features[:0]
 	if s.Features != nil {
 		insts := s.Features.Instances()
-		fviews := make([]snapshot.FeatureView, 0, len(insts))
 		for _, inst := range insts {
 			if inst == nil || inst.Def == nil {
 				continue
 			}
-			fv := snapshot.FeatureView{
+			fv := frame.FeatureView{
 				CX:        int32(inst.CX),
 				CZ:        int32(inst.CZ),
 				X:         inst.X,
@@ -2380,10 +2374,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 			if fv.Model == "" {
 				fv.Model = inst.Def.Filename
 			}
-			fviews = append(fviews, fv)
+			published.Features = append(published.Features, fv)
 		}
-		frame.Features = fviews
 	}
+	published.Projectiles = published.Projectiles[:0]
 	if s.Combat != nil {
 		for i := 0; i < s.Combat.Count(); i++ {
 			h := pool.Handle(i + 1)
@@ -2394,7 +2388,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				continue
 			}
 			p := s.Combat.Records[i]
-			pv := snapshot.ProjectileView{
+			pv := frame.ProjectileView{
 				Handle:         h,
 				X:              p.Pos.X,
 				Y:              p.Pos.Y,
@@ -2438,7 +2432,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 					// Lifetime explicitly unknown rather than guessing [I9].
 				}
 			}
-			frame.Projectiles = append(frame.Projectiles, pv)
+			published.Projectiles = append(published.Projectiles, pv)
 		}
 	}
 	if s.Build != nil && s.Units != nil {
@@ -2451,7 +2445,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 			if builder == nil || product == nil || !builder.Alive || !product.Alive {
 				continue
 			}
-			b := snapshot.BuildProgressView{
+			b := frame.BuildProgressView{
 				Builder:    link.Builder,
 				Product:    link.Product,
 				Remaining:  product.Remaining,
@@ -2467,29 +2461,17 @@ func (s *Session) publishSnapshot(tick uint32) {
 			if builder.Def != nil {
 				b.Factory = !builder.Def.CanMove && !builder.Def.CanFly
 			}
-			frame.Builds = append(frame.Builds, b)
+			published.Builds = append(published.Builds, b)
 		}
 	}
 	if s.Econ != nil {
-		var resViews []snapshot.ResourceView
-		var econViews []snapshot.EconomyView
+		published.Economy = published.Economy[:0]
 		for p := 0; p < 10; p++ {
 			pl := s.Econ.Players[p]
 			if !pl.Exists {
 				continue
 			}
-			resViews = append(resViews, snapshot.ResourceView{
-				Player:         uint8(p),
-				Metal:          pl.Stock[economy.Metal],
-				Energy:         pl.Stock[economy.Energy],
-				MetalCapacity:  pl.Capacity[economy.Metal],
-				EnergyCapacity: pl.Capacity[economy.Energy],
-				MetalProduced:  pl.PassProduced[economy.Metal],
-				MetalConsumed:  pl.PassConsumed[economy.Metal],
-				EnergyProduced: pl.PassProduced[economy.Energy],
-				EnergyConsumed: pl.PassConsumed[economy.Energy],
-			})
-			econViews = append(econViews, snapshot.EconomyView{
+			published.Economy = append(published.Economy, frame.EconomyView{
 				Player:         uint8(p),
 				Metal:          pl.Stock[economy.Metal],
 				Energy:         pl.Stock[economy.Energy],
@@ -2502,8 +2484,8 @@ func (s *Session) publishSnapshot(tick uint32) {
 				Active:         pl.Exists && !pl.IsObserver,
 			})
 		}
-		frame.Resources = resViews
-		frame.Economy = econViews
+	} else {
+		published.Economy = published.Economy[:0]
 	}
 	// RS-05: publish authoritative result (kind, tick, winners/losers, scores, countdown) [08][P1-01]
 	// Countdown is visible even before Ended (pending) via Latch.Countdown; winners/losers/scores
@@ -2512,7 +2494,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 		s.resultMu.Lock()
 		r := s.result
 		s.resultMu.Unlock()
-		view := snapshot.ResultView{
+		view := frame.ResultView{
 			Ended:      r.Ended,
 			Kind:       r.Kind,
 			WinnerTeam: r.WinnerTeam,
@@ -2522,15 +2504,9 @@ func (s *Session) publishSnapshot(tick uint32) {
 			Countdown:  r.Countdown,
 			Draw:       r.Draw,
 		}
-		if len(r.Winners) > 0 {
-			view.Winners = append([]int(nil), r.Winners...)
-		}
-		if len(r.Losers) > 0 {
-			view.Losers = append([]int(nil), r.Losers...)
-		}
-		if len(r.Scores) > 0 {
-			view.Scores = append([]snapshot.ResultScore(nil), r.Scores...)
-		}
+		view.Winners = copyIntsInto(published.Result.Winners, r.Winners)
+		view.Losers = copyIntsInto(published.Result.Losers, r.Losers)
+		view.Scores = copyScoresInto(published.Result.Scores, r.Scores)
 		// Even when not Ended, publish Countdown from latch for HUD countdown display [P1-01][RR-04].
 		if !view.Ended {
 			view.Countdown = s.Latch.Countdown
@@ -2541,51 +2517,29 @@ func (s *Session) publishSnapshot(tick uint32) {
 				view.ArmedTick = s.result.ArmedTick
 				view.Reason = s.result.Reason
 				view.Draw = s.result.Draw
-				if len(s.result.Winners) > 0 {
-					view.Winners = append([]int(nil), s.result.Winners...)
-				}
-				if len(s.result.Losers) > 0 {
-					view.Losers = append([]int(nil), s.result.Losers...)
-				}
+				view.Winners = copyIntsInto(view.Winners, s.result.Winners)
+				view.Losers = copyIntsInto(view.Losers, s.result.Losers)
 				s.resultMu.Unlock()
 			}
 		}
-		frame.Result = view
+		published.Result = view
 	}
-	s.CollectAudioForSnapshot(frame)
 	if s.Presentation != nil {
-		batch := s.Presentation.Snapshot()
-		frame.Events = batch.Events
-		if len(frame.Events) > snapshot.MaxSnapshotEvents {
-			frame.Events = frame.Events[:snapshot.MaxSnapshotEvents]
-			frame.EventsTruncated = true
-		}
-		frame.EventAdmissionsDropped = batch.Dropped
-		// Effects were already admitted and advanced by the sole fixed pool owner
-		// above. Publish its detached view; do not create a parallel event-derived
-		// lifecycle in the snapshot boundary [03 §1][I6].
-		frame.Effects = s.Effects.Snapshot()
-		if len(frame.Effects) > snapshot.MaxSnapshotEffects {
-			// Preserve newest, evict oldest beyond fixed pool [03 §1] C5 and strip beyond 400 [R-P0-06].
-			frame.Effects = frame.Effects[len(frame.Effects)-snapshot.MaxSnapshotEffects:]
-			frame.EffectsTruncated = true
-		}
-		// Buffer.Publish deep-copies the frame. Reset only after that successful
-		// hand-off, so events survive exactly once and remain queued on a nil
-		// buffer path [I6][F-P0-031].
-		s.Snapshot.Publish(frame)
-		s.Presentation.Reset()
-		return
+		published.Events = s.Presentation.SnapshotEventsInto(published.Events)
 	}
-	// Headless or no presentation collector: no effects to publish.
-	s.Snapshot.Publish(frame)
+	if err := s.Snapshot.Publish(tick); err != nil {
+		panic(fmt.Sprintf("session: committed frame publication failed at tick %d: %v", tick, err))
+	}
+	if s.Presentation != nil {
+		s.Presentation.Reset()
+	}
 }
 
 // publishVisibilityView copies the local player's visibility masks into the
 // immutable presentation frame. Radar has no authoritative mask source in the
 // visibility service.
-func snapshotOrderQueueView(src orders.SnapshotQueue, cat *content.Catalog) snapshot.OrderQueueView {
-	return snapshot.OrderQueueView{
+func snapshotOrderQueueView(src orders.SnapshotQueue, cat *content.Catalog) frame.OrderQueueView {
+	return frame.OrderQueueView{
 		Unit:               src.Unit,
 		Primary:            snapshotOrderViews(src.Primary, cat),
 		Secondary:          snapshotOrderViews(src.Secondary, cat),
@@ -2594,11 +2548,11 @@ func snapshotOrderQueueView(src orders.SnapshotQueue, cat *content.Catalog) snap
 	}
 }
 
-func snapshotOrderViews(src []orders.SnapshotNode, cat *content.Catalog) []snapshot.OrderView {
+func snapshotOrderViews(src []orders.SnapshotNode, cat *content.Catalog) []frame.OrderView {
 	if len(src) == 0 {
 		return nil
 	}
-	dst := make([]snapshot.OrderView, len(src))
+	dst := make([]frame.OrderView, len(src))
 	for i, n := range src {
 		var footX, footZ int8
 		if cat != nil && n.BuildProduct != "" {
@@ -2606,7 +2560,7 @@ func snapshotOrderViews(src []orders.SnapshotNode, cat *content.Catalog) []snaps
 				footX, footZ = int8(def.FootprintX), int8(def.FootprintZ)
 			}
 		}
-		dst[i] = snapshot.OrderView{
+		dst[i] = frame.OrderView{
 			Unit: n.Owner, Target: n.Target,
 			GoalX: n.GoalX, GoalY: n.GoalY, GoalZ: n.GoalZ,
 			Kind: n.Kind, StateLabel: n.State, MoveState: n.MoveState,
@@ -2620,16 +2574,16 @@ func snapshotOrderViews(src []orders.SnapshotNode, cat *content.Catalog) []snaps
 			RouteTruncated: n.RouteTruncated,
 		}
 		if len(n.Route) > 0 {
-			dst[i].Route = make([]snapshot.RoutePoint, len(n.Route))
+			dst[i].Route = make([]frame.RoutePoint, len(n.Route))
 			for j, p := range n.Route {
-				dst[i].Route[j] = snapshot.RoutePoint{X: p.X, Y: p.Y, Z: p.Z, Flags: p.Flags}
+				dst[i].Route[j] = frame.RoutePoint{X: p.X, Y: p.Y, Z: p.Z, Flags: p.Flags}
 			}
 		}
 	}
 	return dst
 }
 
-func publishVisibilityView(vis *visibility.Service, local uint8, out *snapshot.VisibilityView) {
+func publishVisibilityView(vis *visibility.Service, local uint8, out *frame.VisibilityView) {
 	if vis == nil || out == nil || local >= 10 {
 		return
 	}
@@ -2639,16 +2593,10 @@ func publishVisibilityView(vis *visibility.Service, local uint8, out *snapshot.V
 	if w <= 0 || h <= 0 || len(word) != int(w*h) || len(current) != int(w*h) {
 		return
 	}
-	explored := make([]uint8, len(word))
-	bit := uint16(1) << (local % 10)
-	for i, cell := range word {
-		if cell&bit != 0 {
-			explored[i] = 1
-		}
-	}
-	visible := make([]uint8, len(current))
-	copy(visible, current)
-	*out = snapshot.VisibilityView{W: w, H: h, Explored: explored, Visible: visible, Valid: true}
+	out.Visible = copyBytesInto(out.Visible, current)
+	out.WordVisible = copyWordsInto(out.WordVisible, word)
+	out.W, out.H = w, h
+	out.CoverageBytes, out.Valid = true, true
 }
 
 // RegisterAll installs the session state handlers and cross-service lifecycle
@@ -2844,7 +2792,7 @@ func (s *Session) RegisterAll() {
 						}
 						s.Combat.ExplodeWeaponAt(s.Units, s.World, weapon, impact, h, tick) // [06 §9.3][06 §12.1] shared splash
 						if s.Presentation != nil {
-							pe := presentation.Event{Tick: tick, Source: h, X: u.X, Y: u.Y, Z: u.Z, Graphic: weapon.ExplosionGaf, Alias: weapon.SoundHit}
+							pe := frame.Event{Tick: tick, Source: h, X: u.X, Y: u.Y, Z: u.Z, Graphic: weapon.ExplosionGaf}
 							if weapon.ExplosionGaf != "" || weapon.ExplosionArt != "" {
 								s.Presentation.EmitExplosion(pe) // [06 §13.2] C27
 							}
@@ -2935,7 +2883,7 @@ func (s *Session) tickPlayers(tick uint32) {
 // calls clock.AdvanceSP(scaledNow) which short-circuits behind the SP pause gate
 // (anchor stalls, unpause yields one capped burst ≤5) [01 §4.3] C7,
 // runs 0..5 sub-ticks publishing after phase 12 of each completed sub-tick, and
-// renders once with alpha from the final snapshot pair. Rendering never runs
+// renders once after the final committed frame. Rendering never runs
 // between sub-ticks of the same batch [PLAN_03 C15].
 //
 // P0-I10: Session.Step executes authoritative ticks only in StateBattle (6) [08 "Session states"].
@@ -2966,21 +2914,7 @@ func (s *Session) Step(scaledNow int32) {
 			// Not yet ready to tick: still not in battle, or just became pending,
 			// or just transitioned Router/Preload->Loading. Render once and return.
 			if s.OnRender != nil {
-				var alpha float32
-				if s.Clock != nil {
-					a := s.Clock.Carry
-					if a < 0 {
-						a = 0
-					}
-					if a > 1 {
-						a = 1
-					}
-					if a != a {
-						a = 0
-					}
-					alpha = a
-				}
-				s.OnRender(alpha)
+				s.OnRender()
 			}
 			return
 		}
@@ -2988,21 +2922,7 @@ func (s *Session) Step(scaledNow int32) {
 	// Authoritative ticks only in StateBattle [08][P0-I10].
 	if s.State != StateBattle {
 		if s.OnRender != nil {
-			var alpha float32
-			if s.Clock != nil {
-				a := s.Clock.Carry
-				if a < 0 {
-					a = 0
-				}
-				if a > 1 {
-					a = 1
-				}
-				if a != a {
-					a = 0
-				}
-				alpha = a
-			}
-			s.OnRender(alpha)
+			s.OnRender()
 		}
 		return
 	}
@@ -3018,27 +2938,9 @@ func (s *Session) Step(scaledNow int32) {
 			break // latch armed->ending transitioned to postbattle same tick [P1-01 §2.2]
 		}
 	}
-	// Render once with alpha from final snapshot pair [PLAN_03 C15][PLAN_03 C16][I6].
-	// Alpha is presentation-only and computed in the client as
-	// clamp((nowNanos - tickStartNanos)/tickPeriodNanos,0,1); here we use the clock's
-	// fractional carry as a stable placeholder in [0,1) so tests can observe a value
-	// without coupling to wall-clock. Sim never reads this value.
+	// Render once after the final committed frame [PLAN_03 C15][I6].
 	if s.OnRender != nil {
-		var alpha float32
-		if s.Clock != nil {
-			a := s.Clock.Carry
-			if a < 0 {
-				a = 0
-			}
-			if a > 1 {
-				a = 1
-			}
-			if a != a { // NaN
-				a = 0
-			}
-			alpha = a
-		}
-		s.OnRender(alpha)
+		s.OnRender()
 	}
 }
 

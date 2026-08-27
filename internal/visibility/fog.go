@@ -78,6 +78,39 @@ func NewFogCacheFromChannelsAt(w, h, originX, originZ int32, ch0, ch1 []uint8) *
 	return fc
 }
 
+// ReplaceChannelsAt refreshes a detached presentation cache in place. It
+// retains channel storage when dimensions are unchanged so frame presentation
+// does not allocate a new cache on every publication [03 §3.3][I6].
+func (f *FogCache) ReplaceChannelsAt(w, h, originX, originZ int32, ch0, ch1 []uint8) bool {
+	if f == nil || w <= 0 || h <= 0 {
+		return false
+	}
+	product := int64(w) * int64(h)
+	maxInt := int64(^uint(0) >> 1)
+	if product <= 0 || product > maxInt {
+		return false
+	}
+	n := int(product)
+	if len(ch0) != n || len(ch1) != n {
+		return false
+	}
+	if f.w != w || f.h != h || cap(f.ch0) < n || cap(f.ch1) < n {
+		f.ch0 = make([]uint8, n)
+		f.ch1 = make([]uint8, n)
+	} else {
+		f.ch0 = f.ch0[:n]
+		f.ch1 = f.ch1[:n]
+	}
+	f.w, f.h, f.originX, f.originZ = w, h, originX, originZ
+	copy(f.ch0, ch0)
+	copy(f.ch1, ch1)
+	for i := 0; i < n; i++ {
+		f.ch0[i] &= 0x0F
+		f.ch1[i] &= 0x0F
+	}
+	return true
+}
+
 // Channel returns the two channel values for cell (x,y) for tests.
 func (f *FogCache) Channel(x, y int32) (uint8, uint8) {
 	if f == nil || f.ch0 == nil {

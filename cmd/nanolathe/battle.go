@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
@@ -23,7 +24,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/settings"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -700,19 +700,19 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 				if b.sess != nil {
 					viewer = visibility.PlayerID(b.sess.LocalOwner)
 				}
-				frame, ok := b.currentSnapshot()
+				f, ok := b.currentSnapshot()
 				if !ok {
 					return
 				}
 				var bh pool.Handle
-				var bu snapshot.UnitView
+				var bu frame.UnitView
 				var hit bool
 				// The framebuffer composer already rebases the projected world point
 				// from the beam origin before drawing it. Mouse coordinates are in that
 				// same logical framebuffer, so do not subtract the HUD viewport origin
 				// a second time [03 §2.5][07 §8].
 				shellX, shellY := mx, my
-				bh, bu, hit = client.PickSnapshotUnit(frame, shellX, shellY, b.cam, uint8(viewer))
+				bh, bu, hit = client.PickSnapshotUnit(f, shellX, shellY, b.cam, uint8(viewer))
 				hitOwn := hit && bh != 0 && bu.Owner == b.sess.LocalOwner
 				if hitOwn {
 					if additive {
@@ -736,11 +736,11 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 			// The drag rectangle is already in the framebuffer coordinate space
 			// used by the rendered world [03 §2.5][07 §8].
 			shellRect := rect
-			frame, ok := b.currentSnapshot()
+			f, ok := b.currentSnapshot()
 			if !ok {
 				return
 			}
-			handles := client.SnapshotUnitHandlesInRect(frame, b.cam, shellRect, b.sess.LocalOwner)
+			handles := client.SnapshotUnitHandlesInRect(f, b.cam, shellRect, b.sess.LocalOwner)
 			kind := session.HumanSelectionReplace
 			if additive {
 				kind = session.HumanSelectionToggle
@@ -759,12 +759,12 @@ func (b *battleSession) routeDigit(digit int, altHeld, shiftHeld bool) {
 	_ = b.DispatchGroupRecall(digit, shiftHeld)
 }
 
-func (b *battleSession) currentSnapshot() (*snapshot.Frame, bool) {
+func (b *battleSession) currentSnapshot() (*frame.Frame, bool) {
 	if b == nil || b.sess == nil || b.sess.Snapshot == nil {
 		return nil, false
 	}
-	_, cur, ok := b.sess.Snapshot.Read()
-	return cur, ok && cur != nil
+	cur := b.sess.Snapshot.Current()
+	return cur, cur != nil
 }
 
 func (b *battleSession) hasSelection() bool {
@@ -1459,10 +1459,7 @@ func (b *battleSession) isResultVisible() bool {
 		return true
 	}
 	if b.sess.Snapshot != nil {
-		if view := b.sess.Snapshot.GetResultView(); view.Ended {
-			return true
-		}
-		if _, cur, ok := b.sess.Snapshot.Read(); ok && cur != nil && cur.Result.Ended {
+		if cur := b.sess.Snapshot.Current(); cur != nil && cur.Result.Ended {
 			return true
 		}
 	}
@@ -1473,21 +1470,18 @@ func (b *battleSession) isResultVisible() bool {
 }
 
 // resultView returns the current authoritative result view for overlay [RS-05].
-func (b *battleSession) resultView() snapshot.ResultView {
+func (b *battleSession) resultView() frame.ResultView {
 	if b == nil || b.sess == nil {
-		return snapshot.ResultView{}
+		return frame.ResultView{}
 	}
 	if b.sess.Snapshot != nil {
-		if view := b.sess.Snapshot.GetResultView(); view.Ended {
-			return view
-		}
-		if _, cur, ok := b.sess.Snapshot.Read(); ok && cur != nil && cur.Result.Ended {
+		if cur := b.sess.Snapshot.Current(); cur != nil && cur.Result.Ended {
 			return cur.Result
 		}
 	}
 	r := b.sess.GetResult()
 	if r.Ended {
-		view := snapshot.ResultView{
+		view := frame.ResultView{
 			Ended:      r.Ended,
 			Kind:       r.Kind,
 			WinnerTeam: r.WinnerTeam,
@@ -1504,11 +1498,11 @@ func (b *battleSession) resultView() snapshot.ResultView {
 			view.Losers = append([]int(nil), r.Losers...)
 		}
 		if len(r.Scores) > 0 {
-			view.Scores = append([]snapshot.ResultScore(nil), r.Scores...)
+			view.Scores = append([]frame.ResultScore(nil), r.Scores...)
 		}
 		return view
 	}
-	return snapshot.ResultView{}
+	return frame.ResultView{}
 }
 
 // ensureResultButtons builds the result overlay button set [RS-05][07 §8].
