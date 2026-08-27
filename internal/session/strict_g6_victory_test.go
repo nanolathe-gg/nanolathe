@@ -49,8 +49,6 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 		publishOne(s, s.Units.Unit(h1))
 		s.Movement.EnsureUnit(s.Units.Unit(h0))
 		s.Movement.EnsureUnit(s.Units.Unit(h1))
-		s.SetTraceEnabled(true)
-		s.ClearTrace()
 		s.Clock.ScaledAnchor = 0
 		// Stage 1: final hostile team eliminated — kill enemy commander via production Destroy (marks Dying, finalizes at slot visit)
 		s.Units.Destroy(h1, 1)
@@ -67,13 +65,12 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 			}
 		}
 		if !resultLatched {
-			evs := s.TraceEvents()
 			fr := StrictFailureRecord{
 				LastCompleted: "final_hostile_eliminated", CurrentTick: s.Clock.GlobalTick, Seed: simSeed, CrtSeed: crtSeed,
 				Handles: []string{string(rune(h0)), string(rune(h1))}, DefKeys: []string{def0.UnitName, def1.UnitName},
 				QueueHead: strictQueueHeadString(h0, s), PathStatus: strictPathStatus(h0, s),
 				ResourceStocks: strictResourceStocks(0, s), ProjectileCount: 0,
-				ResultLatch: strictResultLatch(s), Last50Trace: LastNTraceStrings(evs, 50),
+				ResultLatch: strictResultLatch(s),
 			}
 			t.Logf("G6 two_player FAILURE: %s", FormatFailure(fr))
 			t.Fatalf("G6 two_player: result not latched [G6 1..6] winner %d", winnerTeam)
@@ -118,7 +115,6 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 			Commit: strictCommit(), ContentManifest: strictCatalogHash(cat), Map: "test", Seed: simSeed, CrtSeed: crtSeed,
 			Players: []map[string]any{{"slot": 0, "control": "human", "ally_group": 1}, {"slot": 1, "control": "computer", "ally_group": 2}},
 			MaxTick: 30, Milestones: map[string]uint32{"victory": res.Tick}, Winner: res.WinnerTeam, Reason: res.Reason,
-			FinalTick: s.Clock.GlobalTick, FinalStateHash: HashState(s), TraceHash: HashTrace(s.TraceEvents()),
 		}
 		t.Logf("G6 two_player evidence: %s", FormatEvidence(ev))
 	})
@@ -168,8 +164,6 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 		publishOne(s, s.Units.Unit(h0))
 		publishOne(s, s.Units.Unit(h1))
 		publishOne(s, s.Units.Unit(h2))
-		s.SetTraceEnabled(true)
-		s.ClearTrace()
 		s.Clock.ScaledAnchor = 0
 		// Kill one enemy (player1 group2) — with groups 1,2,1, killing group2 leaves only group1 (players 0+2 allied), so hostile eliminated → should end [G6]
 		s.Units.Destroy(h1, 1)
@@ -215,8 +209,6 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 		publishOne(s2, s2.Units.Unit(h0b))
 		publishOne(s2, s2.Units.Unit(h1b))
 		publishOne(s2, s2.Units.Unit(h2b))
-		s2.SetTraceEnabled(true)
-		s2.ClearTrace()
 		s2.Clock.ScaledAnchor = 0
 		s2.Units.Destroy(h1b, 1)
 		for tick := 1; tick <= 200; tick++ {
@@ -242,7 +234,6 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 			Commit: strictCommit(), ContentManifest: strictCatalogHash(cat), Map: "test", Seed: simSeed, CrtSeed: crtSeed,
 			Players: []map[string]any{{"slot": 0, "ally_group": 1}, {"slot": 1, "ally_group": 2}, {"slot": 2, "ally_group": 3}},
 			MaxTick: 400, Milestones: map[string]uint32{"three_player_alliance": resFinal.Tick}, Winner: resFinal.WinnerTeam, Reason: resFinal.Reason,
-			FinalTick: s2.Clock.GlobalTick, FinalStateHash: HashState(s2), TraceHash: HashTrace(s2.TraceEvents()),
 		}
 		t.Logf("G6 three_player evidence: %s", FormatEvidence(ev))
 		_ = h0

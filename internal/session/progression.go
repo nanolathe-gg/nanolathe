@@ -8,14 +8,14 @@ package session
 import "math"
 
 // Latch arms to 4 then decrements ~1/s before latch word bits [P0-05][P1-01].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// arms to 4 when <0 inside local deadline block (several branches) and at
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Retail stores an int16 countdown starting at -1, then arms to 4 when <0
+// inside the local deadline block and at the post-loop per-tick site
+// [P1-01 §2.2].
 // Decrements on subsequent eligible invocations; latch site decrements
 // post-loop once per phase invocation regardless of deadlines when
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// latch, 0x10|0x20 win, 0x40 lose (lose clears win via AND ~0x10 at
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// humanCount==0 [P1-01 §2.2]. The latch bits are 0x04 ending always on
+// latch, 0x10|0x20 win, and 0x40 lose (lose clears win via AND ~0x10)
+// [P1-01 §2.2]. Latch never clears 0x04 once set (only OR) [P1-01].
 // Settlement freeze gates countdown<0 && NOT latched (countdown<0 && NOT
 // (latch&0x04)) plus UpdateTime deadline [P1-01 §2.2].
 const (
@@ -28,8 +28,8 @@ const (
 )
 
 // EndLatch holds countdown and win/lose bits [P0-05][P1-01].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Countdown and Bits are session-owned fields [P1-01 §2.2].
+// Initial value -1 (0xFFFF) means "not armed" [P1-01].
 // Pending stores the outcome armed but not yet latched: 0 none, 1 win, 2 lose.
 // It is set at arm time and consumed when Countdown crosses below zero to
 // write the latch word. Bits win/lose are not written until that crossing
@@ -79,7 +79,7 @@ func (l *EndLatch) Tick(tick uint32) bool {
 }
 
 // TickNoHuman decrements the countdown every tick for the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// humanCount==0 post-loop site
 // [P1-01 §7.2]. On no-human saves the latch fires in 5 ticks, not 150.
 // When Countdown crosses below zero it writes the latch word with ending
 // plus pending win/lose bits [P1-01 §2.2][08 "Evaluation"].
@@ -136,7 +136,7 @@ func (l *EndLatch) AdvanceWin(isDeadlineDue bool) bool {
 }
 
 // AdvanceLose advances for defeat (only when victory not candidate).
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Lose sets 0x40 and clears win bit 0x10 via AND ~0x10
 // [P1-01 §2.2][08 "Evaluation"]. Pending lose is armed at 4 and not written until crossing.
 func (l *EndLatch) AdvanceLose(isDeadlineDue bool) bool {
 	if !isDeadlineDue {
@@ -170,7 +170,7 @@ func (l *EndLatch) Win() {
 }
 
 // Lose sets lose bit 0x40 and clears win bit 0x10 [P0-05][P1-01][08 "Evaluation"].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Retail does OR 0x40 then AND ~0x10 [P1-01 §2.2]; 0x20 is not
 // cleared on the lose path — it remains only where a prior Win set it.
 func (l *EndLatch) Lose() {
 	l.Bits &^= LatchBitWin1 // [08 "Evaluation"] lose clears 0x10, not 0x20
@@ -184,9 +184,11 @@ func (l *EndLatch) IsWin() bool { return l.Bits&LatchBitWin1 != 0 }
 func (l *EndLatch) IsLose() bool { return l.Bits&LatchBitLose != 0 }
 
 // Score computes retail score: int(kills*killmul) + int(ticks/1800.0*timemul) clamp>=0 [P0-05][P1-01 §2.3][P1-01 §4].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// killmul and timemul are authored score multipliers; ticks is GlobalTick,
+// incremented per subtick [P1-01 §4].
 // Retail does float multiplies via FLD then FTOL trunc toward zero, sum then clamp via TEST/JGE; XOR.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Kills and losses are player counters incremented by the combat/death path
+// [P1-01 §2.3].
 // TODO(question): default killmul/timemul when absent (0 vs 1.0) not proven [P1-01 §8].
 func Score(kills int, killmul float32, ticks uint32, timemul float32) int {
 	killPart := float64(kills) * float64(killmul)
@@ -213,20 +215,20 @@ func (l *EndLatch) SettlementFrozen() bool {
 }
 
 // Registry holds difficulty and flags that persist via HKCU registry
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// AllMissions at 0x38D7F bit0, Games at 0x37F2F bit1 under DisplaymodeDepth guard,
-// Difficulty at 0x37EEE [P0-05].
+// via the installed software registry path [P0-05].
+// AllMissions uses bit 0, Games uses bit 1 under the DisplaymodeDepth guard,
+// and Difficulty stores the selected difficulty [P0-05].
 // TODO(P0-05): HAPIBANK persistence for Summary/BetweenMissions etc not yet wired; registry vs bank split noted here.
 // DisplaymodeDepth guard: Games bit1 only when DisplaymodeDepth==0x100 [P0-05].
 type Registry struct {
-	Difficulty         int // 0/1/2 else fail [P0-05]; stored at 0x37EEE
-	Games              int // bit1 at 0x37F2F under DisplaymodeDepth==0x100 guard [P0-05]
-	AllMissions        int // bit0 at 0x38D7F [P0-05]
+	Difficulty         int // 0/1/2 else fail [P0-05]
+	Games              int // bit1 under DisplaymodeDepth==0x100 guard [P0-05]
+	AllMissions        int // bit0 [P0-05]
 	NumSkirmishPlayers int // no-op validation: both branches store raw [P0-05]
 }
 
 // ValidateNumSkirmishPlayers is retail no-op: both branches store raw
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// val unchanged [P0-05] SPEC_CONFLICTS.
 func (r *Registry) ValidateNumSkirmishPlayers(val int) int {
 	// No clamping, store raw even if out of 2..10
 	r.NumSkirmishPlayers = val
@@ -235,17 +237,17 @@ func (r *Registry) ValidateNumSkirmishPlayers(val int) int {
 
 // BankProgress holds BetweenMissions and allied persistence via HAPIBANK
 // Summary/BetweenMissions=1 and Players/Alliances/W/L boxes [P0-05][P1-01].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// BetweenMissions 1 selects campaign continuation while the other route
+// restores battle state [P1-13]; Summary timing is post-battle after latch,
+// before returning to the router [P1-01 §2.4].
 type BankProgress struct {
 	BetweenMissions int // 1 outside live battle [P0-05][P1-01] — Summary/BetweenMissions
 	Alliances       [11]byte
-	WL              [10]byte // 'W'/'L' at 0x391CF+slot [P0-05][P1-01 §2.3]
+	WL              [10]byte // 'W'/'L' at the mission slot [P0-05][P1-01 §2.3]
 }
 
 // TeardownOrder documents the final-tick order per [P1-01 §2.4] and
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [01 §4.4] via the 12-phase tree with globalTick incremented before phase 1.
 // Order: network→units→projectiles→player/economy/triggers→sharing→features etc
 // [P1-01 §2.4]. Projectile phase captures count at entry; trigger poll sits
 // inside player phase after settlement gate [P1-01 §3]. Latch freezes
@@ -253,8 +255,8 @@ type BankProgress struct {
 // TODO(question): exact WinLoseTime/DisplayTimer UI consumers outside save [P1-01 §8].
 const TeardownOrder = "network→units→projectiles→player/economy/triggers→sharing→features→visibility→wind→cleanup→barrier→cadence"
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// ApplyCampaignResult writes 'W'/'L' at the mission slot and updates
+// BetweenMissions persistence via the post-battle handler [P1-01 §2.3].
 // slot is the mission list slot; win true writes 'W' else 'L'.
 func (b *BankProgress) ApplyCampaignResult(slot int, win bool) {
 	if slot < 0 || slot >= len(b.WL) {
@@ -270,7 +272,7 @@ func (b *BankProgress) ApplyCampaignResult(slot int, win bool) {
 // Retry semantics: RETRY path reloads same mission via state 5 directly
 // without rewriting campaign progress beyond current slot, while CONTINUE
 // or RETURN routes via post-battle handler that writes W/L and unlocks next
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// mission before returning to the front-end router [P1-01 §7.5].
 // TODO(question): campaign progress registry vs file persistence location
 // and write timing relative to report ticker remains TODO(question) [P1-01 §8].
 type CampaignTransition int
@@ -278,5 +280,5 @@ type CampaignTransition int
 const (
 	TransitionRetry    CampaignTransition = iota // reload same mission via state 5 directly [P1-01 §7.5]
 	TransitionContinue                           // next mission via post-battle W/L [P1-01 §7.5]
-	TransitionReturn                             // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	TransitionReturn                             // return to front-end [P1-01 §7.5]
 )

@@ -201,67 +201,17 @@ func TestP0I10_ContinueWritesProgress(t *testing.T) {
 	}
 }
 
-// TestP0I10_TeardownReleasesInDocumentedOrder ensures teardown releases state in documented order [01 §2.1][01 §2.3].
-func TestP0I10_TeardownReleasesInDocumentedOrder(t *testing.T) {
-	// Record shutdown order via custom Shutdown steps
-	sd := &Shutdown{}
-	var order []string
-	for _, name := range ShutdownOrder {
-		n := name
-		sd.Register(func() error {
-			order = append(order, n)
-			return nil
-		})
-	}
-	s := &Session{
-		State:    StateTeardownA,
-		Shutdown: sd,
-	}
-	s.RegisterAll()
-	// Override shutdown with our recorded one (RegisterAll already created one, replace)
-	s.Shutdown = sd
-	if s.State != StateTeardownA {
-		t.Fatalf("initial state should be teardown 0")
-	}
-	s.Advance()
-	if s.State != StateRouter {
-		t.Fatalf("teardown 0 should transition 0->2 [08] C1: got %v", s.State)
-	}
-	// Check reverse order: Shutdown.Run is called inside teardown, which runs reverse startup.
-	// Startup order is ShutdownOrder: window, display, sound, archives, semaphore, registryAudio
-	// So Run should execute reverse: registryAudio, semaphore, archives, sound, display, window
-	expectedReverse := make([]string, len(ShutdownOrder))
-	for i, name := range ShutdownOrder {
-		expectedReverse[len(ShutdownOrder)-1-i] = name
-	}
-	if len(order) != len(expectedReverse) {
-		t.Fatalf("teardown order length %d want %d", len(order), len(expectedReverse))
-	}
-	for i := range order {
-		if order[i] != expectedReverse[i] {
-			t.Fatalf("teardown order mismatch at %d: got %s want %s [01 §2.1][01 §2.3] ShutdownOrder %v", i, order[i], expectedReverse[i], ShutdownOrder)
-		}
-	}
-	// Test variant B as well
-	sd2 := &Shutdown{}
-	var order2 []string
-	for _, name := range ShutdownOrder {
-		n := name
-		sd2.Register(func() error { order2 = append(order2, n); return nil })
-	}
-	s2 := &Session{State: StateTeardownB, Shutdown: sd2}
-	s2.RegisterAll()
-	s2.Shutdown = sd2
-	s2.Advance()
-	if s2.State != StateRouter {
-		t.Fatalf("teardown 1 should transition 1->2 [08] C1: got %v", s2.State)
-	}
-	if len(order2) != len(expectedReverse) {
-		t.Fatalf("teardown B order length %d want %d", len(order2), len(expectedReverse))
-	}
-	for i := range order2 {
-		if order2[i] != expectedReverse[i] {
-			t.Fatalf("teardown B order mismatch at %d: got %s want %s", i, order2[i], expectedReverse[i])
+// TestP0I10_TeardownReturnsToRouter keeps the authoritative lifecycle edge
+// covered without giving the session ownership of platform resources. The
+// window, display, sound, archive, semaphore, and registry owners are all at
+// the command/platform edge [01 §2.3].
+func TestP0I10_TeardownReturnsToRouter(t *testing.T) {
+	for _, state := range []State{StateTeardownA, StateTeardownB} {
+		s := &Session{State: state}
+		s.RegisterAll()
+		s.Advance()
+		if s.State != StateRouter {
+			t.Fatalf("teardown state %v should transition to router (2) [08]: got %v", state, s.State)
 		}
 	}
 }

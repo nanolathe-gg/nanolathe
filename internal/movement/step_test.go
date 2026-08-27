@@ -38,6 +38,65 @@ func syntheticTerrainFlat() *world.Terrain {
 	return t
 }
 
+// TestStepUnitMobileBuildStopsOnMoveArrived locks the mobile-build walk stop
+// [04 §7.4][04 §3.5]: a MobileBuild head's GoalX/Z is a build-site anchor, not
+// a movement destination, so once the approach reports MoveArrived the mover
+// must stop instead of steering straight into the site (the direct-goal
+// fallback). While en-route the direct-goal fallback still drives toward the
+// goal so the builder can approach before a route publishes.
+func TestStepUnitMobileBuildStopsOnMoveArrived(t *testing.T) {
+	terrain := syntheticTerrainFlat()
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
+	grid := NewOccupancyGrid()
+	system := NewSystem(terrain, profile, grid)
+	w := units.New(10, nil)
+	def := &content.UnitDef{UnitName: "corcom", MaxVelocity: 3 * 65536, TurnRate: 800, SightDistance: 120}
+	def.MaxDamage = 100
+	def.FootprintX = 1
+	def.FootprintZ = 1
+	startWorldX := world.CellToWorld(1)
+	startWorldZ := world.CellToWorld(1)
+	h, err := w.Create(def, 0, startWorldX, terrain.HeightAt(startWorldX, startWorldZ), startWorldZ)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	u := w.Unit(h)
+	system.BindWorld(w)
+	system.EnsureUnit(u)
+	mid := orders.Lookup("MobileBuild")
+	if mid == 0 {
+		t.Fatalf("MobileBuild not found")
+	}
+	goalX := world.CellToWorld(12)
+	goalZ := world.CellToWorld(1)
+
+	drive := func(moveState uint8) StepResult {
+		q := orders.QueueForUnit(u)
+		q.Push(mid, orders.Node{GoalX: goalX, GoalZ: goalZ, MoveState: moveState})
+		// No path request is submitted, so no route publishes: the direct-goal
+		// fallback is the only way the mover could advance.
+		system.Scheduler.Tick(1)
+		beforeX := u.X
+		system.BeginTick(2)
+		res := system.StepUnit(h, 2)
+		system.EndTick(2)
+		_ = beforeX
+		q.CancelAll()
+		return res
+	}
+
+	// En-route: the direct-goal fallback drives the builder toward the site.
+	enRoute := drive(orders.MoveEnRoute)
+	if !enRoute.Moved {
+		t.Fatalf("en-route MobileBuild head did not drive toward the site: %+v", enRoute)
+	}
+	// Arrived: the builder must stop (no direct-goal drive into the build site).
+	arrived := drive(orders.MoveArrived)
+	if arrived.Moved {
+		t.Fatalf("arrived MobileBuild head kept driving into the build site: %+v", arrived)
+	}
+}
+
 // TestStepUnitGroundRoutePruneDoesNotComplete proves route pruning is not
 // order completion. [R-P0-01] arrival is via cell-domain inclusive threshold
 // floor(radiusParam/16)² = 0 (ground radiusParam 4) vs cached tile, not via

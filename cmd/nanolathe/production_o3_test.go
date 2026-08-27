@@ -42,7 +42,6 @@ func o3RetailRoot(t *testing.T) string {
 }
 
 type o3Run struct {
-	traceHash  string
 	stateHash  string
 	milestones []string
 }
@@ -62,7 +61,7 @@ type o3BuildObservation struct {
 // chain.  Sites are selected by scanning the loaded terrain and checking the
 // same placement path used by the build ghost; the mex additionally requires
 // a non-zero loaded metal sample.  The run is repeated with identical streams
-// and its milestone/state trace compared byte-for-byte.
+// and its observable state compared byte-for-byte.
 func TestProductionInputARMEconomyBuildReplay(t *testing.T) {
 	// RELEASE-GATE-DISABLED (registry: internal/session/strict_gate_policy_test.go).
 	// Measured with the skip removed and NANOLATHE_TA_ROOT set: the whole build
@@ -80,10 +79,10 @@ func TestProductionInputARMEconomyBuildReplay(t *testing.T) {
 	root := o3RetailRoot(t)
 	a := runO3ProductionReplay(t, root)
 	b := runO3ProductionReplay(t, root)
-	if a.traceHash != b.traceHash || a.stateHash != b.stateHash {
-		t.Fatalf("O3 replay nondeterministic: first trace=%s state=%s second trace=%s state=%s", a.traceHash, a.stateHash, b.traceHash, b.stateHash)
+	if a.stateHash != b.stateHash {
+		t.Fatalf("O3 replay nondeterministic: first state=%s second state=%s", a.stateHash, b.stateHash)
 	}
-	t.Logf("O3 milestones=%s trace=%s state=%s", strings.Join(a.milestones, ","), a.traceHash, a.stateHash)
+	t.Logf("O3 milestones=%s state=%s", strings.Join(a.milestones, ","), a.stateHash)
 }
 
 func runO3ProductionReplay(t *testing.T, root string) o3Run {
@@ -114,7 +113,6 @@ func runO3ProductionReplay(t *testing.T, root string) o3Run {
 	if err != nil {
 		t.Fatalf("strict production session: %v", err)
 	}
-	s.SetTraceEnabled(true)
 	commander := firstUnitDef(t, s.Units, manifest.Commander, s.LocalOwner)
 	if commander == nil {
 		t.Fatalf("authored commander %q was not placed", manifest.Commander)
@@ -316,11 +314,6 @@ func runO3ProductionReplay(t *testing.T, root string) o3Run {
 		t.Fatalf("solar production continued after reclaim: before=%v after=%v", postReclaimTotalEnergy, s.Econ.Players[s.LocalOwner].TotalProduced[1])
 	}
 
-	trace := s.TraceEvents()
-	h := sha256.New()
-	for _, ev := range trace {
-		fmt.Fprintf(h, "%d/%s/%d/%d/%d/%d\n", ev.Tick, ev.Kind, ev.Handle, ev.Value, ev.X, ev.Z)
-	}
 	state := sha256.New()
 	for _, u := range s.Units.Iter() {
 		if u == nil || !u.Alive {
@@ -331,7 +324,7 @@ func runO3ProductionReplay(t *testing.T, root string) o3Run {
 	for i := range s.Econ.Players {
 		fmt.Fprintf(state, "p%d/%.6g/%.6g/%.6g/%.6g\n", i, s.Econ.Players[i].Stock[0], s.Econ.Players[i].Stock[1], s.Econ.Players[i].Capacity[0], s.Econ.Players[i].Capacity[1])
 	}
-	return o3Run{traceHash: hex.EncodeToString(h.Sum(nil)), stateHash: hex.EncodeToString(state.Sum(nil)), milestones: milestones}
+	return o3Run{stateHash: hex.EncodeToString(state.Sum(nil)), milestones: milestones}
 }
 
 func o3ResourceCapacity(frame *frame.Frame, player uint8) (float32, float32, bool) {

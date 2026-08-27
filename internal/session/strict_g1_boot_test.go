@@ -127,8 +127,6 @@ func TestStrictSkirmish_BootCatalogMapCommanders(t *testing.T) {
 			t.Fatalf("G1 synthetic: expected 2 commanders, got %d", count)
 		}
 		// Run a few ticks to ensure shell enters battle and no composition failure
-		s.SetTraceEnabled(true)
-		s.ClearTrace()
 		s.Clock.ScaledAnchor = 0
 		for i := 0; i < maxTick; i++ {
 			s.Step(int32(i + 1))
@@ -140,7 +138,6 @@ func TestStrictSkirmish_BootCatalogMapCommanders(t *testing.T) {
 			Commit: strictCommit(), ContentManifest: strictCatalogHash(cat), Map: "test", Seed: 1, CrtSeed: 2,
 			Players: []map[string]any{{"slot": 0, "control": "human"}, {"slot": 1, "control": "computer"}},
 			MaxTick: maxTick, Milestones: map[string]uint32{"boot": 0}, Winner: -1, Reason: "synthetic G1",
-			FinalTick: s.Clock.GlobalTick, FinalStateHash: HashState(s), TraceHash: HashTrace(s.TraceEvents()),
 			Fallbacks: []string{}, Warnings: []string{},
 		}
 		t.Logf("G1 synthetic evidence: %s", FormatEvidence(ev))
@@ -283,7 +280,7 @@ func TestStrictSkirmish_BootCatalogMapCommanders(t *testing.T) {
 			Commit: strictCommit(), ContentManifest: strictCatalogHash(cat), Map: mapKey, Seed: 100, CrtSeed: 200,
 			Players: []map[string]any{{"slot": 0, "control": "human"}, {"slot": 1, "control": "computer"}},
 			MaxTick: 10, Milestones: map[string]uint32{"retail_boot": 0}, Winner: -1, Reason: "retail G1",
-			FinalTick: sess.Clock.GlobalTick, FinalStateHash: HashState(sess), TraceHash: "",
+			FinalTick: sess.Clock.GlobalTick, FinalStateHash: HashState(sess),
 			Fallbacks: fallbacks, Warnings: []string{},
 		}
 		t.Logf("G1 retail evidence: %s", FormatEvidence(ev))

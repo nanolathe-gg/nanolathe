@@ -1,0 +1,886 @@
+package session
+
+import (
+	"fmt"
+	"sync"
+
+	"github.com/nanolathe/nanolathe/internal/ai"
+	"github.com/nanolathe/nanolathe/internal/audio"
+	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/combat"
+	"github.com/nanolathe/nanolathe/internal/construction"
+	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/features"
+	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/movement"
+	"github.com/nanolathe/nanolathe/internal/path"
+	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/triggers"
+	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/visibility"
+	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe/nanolathe/vfs"
+)
+
+// MeteorState holds the shower scheduler per [08 "Meteor showers"] [02 "Map files"] [06 §6.5].
+// Nine fields persist in the Meteor account: enabled, active, next-strike, strike-end,
+// next-hit, origin X/Z, target X/Z, plus resolved weapon [08 "Meteor showers"].
+// Timing is integral: per-hit delay trunc(30/density), duration trunc(duration*30),
+// interval trunc(interval*30) [02 Meteor scheduler]. Draws are CRT stream six per
+// meteor (four scheduling even when disabled + two lateral) [06 §6.5] I4; meteors
+// consume zero sim draws and are side-neutral [06 §6.5].
+type MeteorState struct {
+	Enabled       bool
+	Active        bool
+	NextStrike    uint32
+	StrikeEnds    uint32
+	NextHit       uint32
+	OriginX       int32
+	OriginZ       int32
+	TargetX       int32
+	TargetZ       int32
+	Density       float64
+	Radius        int32
+	DurationTicks int32
+	IntervalTicks int32
+	PerHitDelay   int32
+	WeaponName    string
+	Weapon        *content.WeaponDef
+	Initialized   bool
+}
+
+// publicationState is the session's compact committed-frame staging boundary.
+// Simulation producers append typed events to events during a tick; effects
+// advance once from that ordered window and publish.go copies both views into
+// the public frame. Keeping these coupled prevents a second event/effect owner
+// from entering the authoritative graph [01 §4.4][03 §1].
+type publicationState struct {
+	events  *frame.EventBuffer
+	effects *render.EffectService
+}
+
+func newPublicationState(events *frame.EventBuffer) *publicationState {
+	if events == nil {
+		events = frame.NewEventBuffer(frame.Limits{})
+	}
+	return &publicationState{
+		events:  events,
+		effects: render.NewEffectServiceWithPool(render.EffectCapacity, &render.FixedEffectPool{}),
+	}
+}
+
+// ensurePublicationState initializes the one session-owned publication
+// boundary without replacing an existing staged window or active-effect pool.
+// Every construction path calls this helper before installing producers
+// [01 §4.4][03 §1].
+func (s *Session) ensurePublicationState() *publicationState {
+	if s == nil {
+		return nil
+	}
+	if s.publication == nil {
+		s.publication = newPublicationState(nil)
+	}
+	return s.publication
+}
+
+// Session is the canonical full Session per PLAN_14 Public API [08 "Session states"].
+// State/dispatch fields (State, handlers, pendingBattle) are shared with state.go's
+// eight-state machine C1-C4; the remaining fields are the authoritative simulation
+// services owned centrally by this package C5.
+// Go allows methods in any file, but the struct is defined once here.
+type Session struct {
+	State         State
+	handlers      [8]func(*Session)
+	pendingBattle bool
+
+	Clock    *clock.State
+	Catalog  *content.Catalog
+	World    *world.Terrain
+	Units    *units.World
+	Vis      *visibility.Service
+	Path     *path.Scheduler
+	Econ     *economy.Service
+	Build    *construction.Service
+	Features *features.Service
+	Movement *movement.System // Gate-5 integration: ground steering/routes [PLAN_14 C5 movement integration]
+	Combat   *combat.Service
+	AI       [10]*ai.Manager // fixed player-indexed, nil holes per RS-02 [08] I4 single stream
+	Mission  *mission.Mission
+	Snapshot *frame.Buffer
+
+	publication *publicationState // staged events and admitted effects at the committed-frame boundary [01 §4.4][03 §1]
+	// CampaignSlot is the mission list slot for progress W/L [P1-01 §2.3] [P0-05].
+	CampaignSlot int
+
+	// Skirmish retains the lobby/setup values that selected this battle. The
+	// placement and spawn paths consume Location and per-slot resources now;
+	// the remaining round rules stay available to visibility/endgame wiring
+	// without being silently replaced by map-global defaults.
+	Skirmish SkirmishConfig
+
+	// VictoryDone / DefeatDone latch the mission end conditions [08
+	// "Evaluation"]. They are set by the trigger poll site below and are
+	// one-way: a completed condition stays completed.
+	VictoryDone bool
+	DefeatDone  bool
+
+	// LocalOwner and EnemyOwner are the player identities the trigger owner
+	// gates compare against [08 "Evaluation"]. Victory conditions gate on the
+	// enemy index, CommanderKilled on the local one; UnitTypeKilled and
+	// AllUnitsKilledOfType accept any owner. PollContext and all notification
+	// sites use these, not hard-coded 0/1 [P0-I13].
+	LocalOwner uint8
+	EnemyOwner uint8
+
+	// triggerDue is the local-player mission-trigger deadline. It is separate
+	// from economy save fields: the saved WinLoseTime value has no runtime
+	// trigger reader [08 "Evaluation"].
+	triggerDue      uint32
+	triggerDueValid bool
+
+	// Latch is the global end-of-mission countdown and win/lose bits
+	// [P1-01 §2.2]. It starts unarmed, arms at four, and publishes ending plus
+	// the outcome bits when the countdown crosses below zero.
+	// Latch never clears 0x04 once set [P1-01]. Settlement freeze gates
+	// countdown<0 && NOT latched [P1-01 §2.2]. Countdown arms to 4 without
+	// yet setting Bits; Bits are written only when Countdown crosses below
+	// zero [P1-01 §2.2][08 "Evaluation"].
+	Latch EndLatch
+
+	// Progress holds campaign W/L and BetweenMissions persistence
+	// [P1-01 §2.3] via the post-battle progression handler after latch.
+	Progress BankProgress
+
+	// Result ownership [08][RS-05] is session-local. The authoritative tick is
+	// the sole writer; presentation receives a copy through the committed frame.
+	// One point where result becomes terminal is when latch becomes visible
+	// (Ended) and Result.Ended is set; simulation stops after State leaves Battle.
+	result              Result
+	resultPending       bool
+	resultPendingWinner int
+	resultPendingLosers []int
+	resultPendingReason string
+	resultPendingDraw   bool
+	resultArmedTick     uint32
+	resultNextDue       uint32
+
+	Wind *world.Wind
+
+	// MeteorState is the shower scheduler per [08 "Meteor showers"] [02 "Map files"] [06 §6.5].
+	// Nine fields (enabled, active, next-strike, strike-end, next-hit, origin/target) persist
+	// in the Meteor account [08 "Meteor showers"]; spawn uses shared projectile pool [06 §6.5].
+	Meteor MeteorState
+
+	// Per-session RNG state [I4][RS-06]: isolated per-session copies of the single global Park-Miller and CRT streams.
+	// Two interleaved sessions must not cross-contaminate draws; moved from process-global rng.Global [INVARIANTS I4][RS-P0-018].
+	rngSim         rng.Simulation
+	rngCrt         rng.CRT
+	rngInitialized bool
+
+	// Visibility sensor state [03 §3.4] P0-11: per-unit status bits (0x100 seen, 0x300 friendly, 0x1000 decloak)
+	// and decloak deadlines tick+90, plus presentation-only jammer/radar surfaces.
+	visStatus      map[int]uint32
+	visDecloak     map[int]uint32
+	sensorSurfaces *sensorSurfacesImpl
+
+	// Audio is presentation-only and never feeds back into simulation
+	// [03 §8.3] C19 [I4][I6]. Queue is 8-deep sorted with cooldowns and
+	// per-slot global nextAllowed; variants and aliases are consumed at
+	// Resolve via CRT draw [03 §8.3] C16 C17. Positional helper uses
+	// audience cell + mode &2 choosing explored vs LOS, viewport pan
+	// dx/dy with half-height shear and two-level attenuation [03 §8.3].
+	// Music/CD fallback is briefing/music/CD probing via Controller [03 §8.4].
+	AudioQueue    *audio.Queue       // eight-slot arbitration queue [03 §8.3] C16 C18
+	AudioCache    *audio.SampleCache // alias→sample cache capped 255 [03 §8.2] C20
+	AudioRegistry *audio.Registry    // session-owned alias identities and samples [03 §8.2][03 §8.3]
+	AudioMusic    *audio.Controller  // CD/MCI controller with 5 modes [03 §8.4]
+	audioViewport audio.Viewport     // presentation viewport for pan/attenuation [03 §8.3]
+	audioFrame    uint32             // presentation frame counter for Drain [03 §8.3] C18
+	audioFS       vfs.FSOps          // VFS for cache loads, presentation-only
+	audioCRT      *rng.CRT
+
+	// pendingHuman is the session-owned immutable input queue. Presentation
+	// enqueues value commands; authoritativeTick drains it at the network/input
+	// boundary before any order/build work [01 §4.4][I6].
+	humanMu      sync.Mutex
+	pendingHuman []HumanCommand
+	// nextHumanSequence is assigned only while holding humanMu. It gives the
+	// input boundary a total order independent of producer timing; commands
+	// with one due tick are applied in this order [01 §4.4].
+	nextHumanSequence uint64
+}
+
+// SimRNG returns the per-session simulation RNG [INVARIANTS I4][RS-P0-018].
+// It is isolated per Session so two interleaved sessions do not cross-contaminate draws [RS-06].
+func (s *Session) SimRNG() *rng.Simulation {
+	if s == nil {
+		return rng.Global.Sim
+	}
+	if !s.rngInitialized {
+		if rng.Global.Sim != nil {
+			s.rngSim = *rng.Global.Sim
+		} else {
+			s.rngSim = rng.NewSimulation(1)
+		}
+		if rng.Global.Crt != nil {
+			s.rngCrt = *rng.Global.Crt
+		} else {
+			s.rngCrt = rng.NewCRT(1)
+		}
+		s.rngInitialized = true
+	}
+	return &s.rngSim
+}
+
+// CrtRNG returns the per-session CRT RNG [INVARIANTS I4][RS-P0-018].
+func (s *Session) CrtRNG() *rng.CRT {
+	if s == nil {
+		return rng.Global.Crt
+	}
+	if !s.rngInitialized {
+		if rng.Global.Sim != nil {
+			s.rngSim = *rng.Global.Sim
+		} else {
+			s.rngSim = rng.NewSimulation(1)
+		}
+		if rng.Global.Crt != nil {
+			s.rngCrt = *rng.Global.Crt
+		} else {
+			s.rngCrt = rng.NewCRT(1)
+		}
+		s.rngInitialized = true
+	}
+	return &s.rngCrt
+}
+
+// SeedSessionRNG seeds the per-session RNGs from the given seeds [I4][RS-06].
+// It also seeds the process-global for backward compatibility with code that still reads rng.Global.
+func (s *Session) SeedSessionRNG(simSeed, crtSeed uint32) {
+	if s == nil {
+		return
+	}
+	rng.SeedGlobal(simSeed, crtSeed)
+	s.rngSim = rng.NewSimulation(simSeed)
+	s.rngCrt = rng.NewCRT(crtSeed)
+	// Preserve draw counters at zero for fresh session [01 §7.1][01 §7.2].
+	s.rngInitialized = true
+	// Bind AI managers to this session's RNG for isolation [RS-06][I4].
+	for _, mgr := range s.AI {
+		if mgr != nil {
+			mgr.RNG = s.SimRNG()
+		}
+	}
+}
+
+// SyncGlobalRNG syncs the process-global RNG to this session's state for code that still reads rng.Global [RS-06][I4].
+// Call before any legacy global draw to keep global in sync with session-local.
+func (s *Session) SyncGlobalRNG() {
+	if s == nil || !s.rngInitialized {
+		return
+	}
+	if rng.Global.Sim != nil {
+		*rng.Global.Sim = s.rngSim
+	}
+	if rng.Global.Crt != nil {
+		*rng.Global.Crt = s.rngCrt
+	}
+}
+
+// ValidateComposition checks that every required authoritative service and
+// cross-service port is non-nil and bound. It returns the first missing
+// diagnostic and is the gate for P0-I01. [08 "Session states"] [01 §4.4]
+func (s *Session) ValidateComposition() error {
+	if s == nil {
+		return fmt.Errorf("session: nil session [08 \"Session states\"]")
+	}
+	// Every AI manager must have the typed build queue bound [RX-01][F-P0-004].
+	// A computer slot without a binder is a passive "computer", never a real AI.
+	// RS-02: assert player-indexed ownership — mgr.Player must equal array index [08].
+	for i, mgr := range s.AI {
+		if mgr != nil {
+			if int(mgr.Player) != i {
+				return fmt.Errorf("session: ai manager player %d at index %d mismatch [RS-02][08]", mgr.Player, i)
+			}
+			if mgr.QueueBuildTyped == nil {
+				return fmt.Errorf("session: ai manager player %d has no QueueBuildTyped binding [RX-01][F-P0-004]", mgr.Player)
+			}
+		}
+	}
+	if s.Clock == nil {
+		return fmt.Errorf("session: missing Clock [01 §4.4]")
+	}
+	if s.Catalog == nil {
+		return fmt.Errorf("session: missing Catalog [02 §5]")
+	}
+	if s.World == nil {
+		return fmt.Errorf("session: missing World [03 §2.2]")
+	}
+	if s.Units == nil {
+		return fmt.Errorf("session: missing Units [01 §6.1]")
+	}
+	if !s.Units.IsSliced() {
+		return fmt.Errorf("session: Units not sliced retail [P0-16] [01 §6.1]")
+	}
+	if s.Econ == nil {
+		return fmt.Errorf("session: missing Econ [05 \"Authoritative settlement order\"]")
+	}
+	if s.Features == nil {
+		return fmt.Errorf("session: missing Features [05 \"Feature instance and terrain cell\"]")
+	}
+	if s.Features.Terrain != s.World {
+		return fmt.Errorf("session: Features.Terrain mismatch [05]")
+	}
+	if s.Vis == nil {
+		return fmt.Errorf("session: missing Vis [03 §3.2]")
+	}
+	if w, h := s.Vis.GridDimensions(); w == 0 || h == 0 {
+		return fmt.Errorf("session: Vis zero dimensions [03 §3.1]")
+	}
+	if w, h := s.Vis.GridDimensions(); w != s.World.CellW/2 || h != s.World.CellH/2 {
+		return fmt.Errorf("session: Vis dimensions %dx%d != terrain %dx%d/2 [03 §3.1]", w, h, s.World.CellW, s.World.CellH)
+	}
+	if s.Movement == nil {
+		return fmt.Errorf("session: missing Movement [04 §8.1]")
+	}
+	if s.Movement.Terrain != s.World {
+		return fmt.Errorf("session: Movement.Terrain mismatch [04 §8.1]")
+	}
+	if s.Movement.Classes == nil {
+		return fmt.Errorf("session: Movement.Classes not bound [02 \"Movement class record\"]")
+	}
+	if s.Movement.Scheduler == nil {
+		return fmt.Errorf("session: Movement.Scheduler nil [04 §7.3]")
+	}
+	if s.Path == nil {
+		return fmt.Errorf("session: missing Path [04 §7.3]")
+	}
+	if s.Path != s.Movement.Scheduler {
+		return fmt.Errorf("session: Path != Movement.Scheduler [04 §7.3]")
+	}
+	if s.Build == nil {
+		return fmt.Errorf("session: missing Build [05 \"Factory production lifecycle\"]")
+	}
+	if s.Combat == nil {
+		return fmt.Errorf("session: missing Combat [06 §5.1]")
+	}
+	if s.Mission == nil {
+		return fmt.Errorf("session: missing Mission [08 \"Mission type dispatch\"]")
+	}
+	if s.Snapshot == nil {
+		return fmt.Errorf("session: missing Snapshot [03 §2.4]")
+	}
+	if s.Wind == nil {
+		return fmt.Errorf("session: missing Wind [01 §7.3]")
+	}
+	// AI is fixed [10]*Manager per RS-02 — nil holes are valid (human players); no missing-array check.
+	return nil
+}
+
+// humanCount returns the number of human players (ControllerState==1)
+// among economy slots [P1-01 §7.2] for the no-human post-loop path.
+func (s *Session) humanCount() int {
+	if s.Econ == nil {
+		return 0
+	}
+	n := 0
+	for i := 0; i < 10; i++ {
+		p := &s.Econ.Players[i]
+		if p.Exists && !p.IsObserver && p.ControllerState == 1 {
+			n++
+		}
+	}
+	return n
+}
+
+// activePlayerCount returns the number of active players (Exists && !IsObserver) [03 §3.4] P0-11.
+// The sensor phase runs only when more than one player is active (activePlayers>1 via CMP 1 JBE skip).
+func (s *Session) activePlayerCount() int {
+	if s.Econ == nil {
+		return 0
+	}
+	n := 0
+	for i := 0; i < 10; i++ {
+		p := &s.Econ.Players[i]
+		if p.Exists && !p.IsObserver {
+			n++
+		}
+	}
+	return n
+}
+
+// IsVisible is the canonical gameplay LOS predicate [03 §3.2] C8 P0-11.
+// It wraps visibility.Service.IsVisible with the session's local player and sea-level handling.
+// Owner bypass, cloak, underwater (Y <= water), and no-allied-OR are preserved [03 §3.2] C9.
+func (s *Session) IsVisible(viewer visibility.PlayerID, t visibility.Target) bool {
+	if s.Vis == nil {
+		return false
+	}
+	return s.Vis.IsVisible(viewer, t)
+}
+
+// IsUnitVisible reports whether target unit is visible to viewer via the canonical predicate [03 §3.2] C8.
+// It builds a Target from the target unit's authoritative position, hull extents (zero for now),
+// and sensor status (friendly/underwater/decloak bits).
+func (s *Session) IsUnitVisible(viewer int, target *units.Unit) bool {
+	if s == nil || s.Vis == nil || target == nil {
+		return false
+	}
+	vid := visibility.PlayerID(viewer)
+	tid := int(target.Handle)
+	var status uint32
+	if s.visStatus != nil {
+		status = s.visStatus[tid]
+	}
+	hidden := (target.Flags & 0x04) != 0
+	if !hidden && target.Def != nil && target.Def.InitCloaked {
+		hidden = true
+	}
+	// Underwater exemption is stored as FriendlyMask 0x200 via sensor phase; we include it if present.
+	t := visibility.Target{
+		Owner:  visibility.PlayerID(target.Owner),
+		X:      target.X,
+		Y:      target.Y,
+		Z:      target.Z,
+		Hidden: hidden,
+		Status: status,
+	}
+	return s.Vis.IsVisible(vid, t)
+}
+
+// installStateHandlers installs the eight-state dispatch table handlers per
+// [08 "Session states"] C1-C2 P0-I10.  State 0/1 teardown variants, 2 routing,
+// 4 campaign player setup, 5 sync/async load completion, 6 battle stepping,
+// 7 report/progression cleanup.  Single-player takes 2->5 directly; state 3
+// network preload remains present and unreachable [08 "Session states"] C1.
+func (s *Session) installStateHandlers() {
+	// Capture handlers exactly once per session; re-install is idempotent.
+	s.SetHandler(StateTeardownA, handleTeardownA)
+	s.SetHandler(StateTeardownB, handleTeardownB)
+	s.SetHandler(StateRouter, handleRouter)
+	s.SetHandler(StateNetworkPreload, handleNetworkPreload)
+	s.SetHandler(StateLocalPreload, handleLocalPreload)
+	s.SetHandler(StateLoading, handleLoading)
+	s.SetHandler(StateBattle, handleBattle)
+	s.SetHandler(StatePostBattle, handlePostBattle)
+}
+
+// handleTeardownA implements state 0 cleanup variant A, then state 2 [08 "Session states"].
+// Platform resources are owned and released by the command/platform edge; the
+// authoritative session only advances the lifecycle state here [01 §2.3].
+func handleTeardownA(s *Session) {
+	if s == nil {
+		return
+	}
+	s.teardown(0)
+	_ = s.TransitionTo(StateRouter)
+}
+
+// handleTeardownB implements state 1 alternate cleanup, then state 2 [08 "Session states"].
+func handleTeardownB(s *Session) {
+	if s == nil {
+		return
+	}
+	s.teardown(1)
+	_ = s.TransitionTo(StateRouter)
+}
+
+// teardown preserves the state-machine callback without owning platform
+// resources. Window, display, sound, archive, semaphore, and registry cleanup
+// belong to their concrete command/platform owners [01 §2.3]. Simulation pools
+// remain owned by their respective services.
+func (s *Session) teardown(variant int) {
+	_ = variant
+}
+
+// handleRouter implements state 2 front-end/session router, selects 3|4|5 [08 "Session states"].
+// Single-player takes 2->5 directly; state 3 is present and unreachable in single-player C1.
+func handleRouter(s *Session) {
+	if s == nil {
+		return
+	}
+	// Campaign saves ride via 4 first, skirmish via 5 directly [08 "Session states"] C3.
+	// If mission type is campaign and we have not yet configured local players, go via 4.
+	if s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
+		if s.Econ != nil && s.Econ.Players[0].ControllerState != 1 {
+			_ = s.TransitionTo(StateLocalPreload)
+			return
+		}
+		// Even if already configured, router for campaign should still prefer 4 when coming from teardown
+		// to ensure two-player records are initialized [08 "Session states"].
+		// But to avoid infinite loop when already in campaign after Continue/Retry, we allow direct 5
+		// if already at correct state. For P0-I10 gate, single-player router ->5 is sufficient.
+	}
+	// Network preload (3) is unreachable in single-player; keep handler present [08] C1.
+	_ = s.TransitionTo(StateLoading)
+}
+
+// handleNetworkPreload implements state 3 network startup polling, then state 5 [08 "Session states"].
+// No network in single-player; handler still transitions to 5 to preserve graph presence.
+func handleNetworkPreload(s *Session) {
+	if s == nil {
+		return
+	}
+	_ = s.TransitionTo(StateLoading)
+}
+
+// handleLocalPreload implements state 4 initializes local two-player records, then state 5 [08 "Session states"].
+// Established behavior: configures two campaign players (human local 0, computer enemy 1) [08][P0-05].
+func handleLocalPreload(s *Session) {
+	if s == nil {
+		return
+	}
+	if s.Econ != nil {
+		for i := 0; i < 2 && i < 10; i++ {
+			p := &s.Econ.Players[i]
+			p.Exists = true
+			if i == 0 {
+				p.ControllerState = 1
+			} else {
+				p.ControllerState = 2
+			}
+			p.IsObserver = false
+			p.StatusHalfwordAt144 = 1
+			p.StatusWordAt140 = 0
+			p.GameEnded = false
+			p.EndGameCountdown = -1
+		}
+		// Seed the local trigger deadline from the battle tick [08
+		// "Evaluation"]. This is independent of the economy save deadlines.
+		var tick uint32
+		if s.Clock != nil {
+			tick = s.Clock.GlobalTick
+		}
+		s.Econ.SeedDeadlines(tick)
+		s.LocalOwner = 0
+		s.EnemyOwner = 1
+		s.triggerDue = tick
+		s.triggerDueValid = true
+	}
+	_ = s.TransitionTo(StateLoading)
+}
+
+// handleLoading implements state 5 loading UI/thread and readiness barrier [08 "Session states"].
+// Established: completion installs state 6; its first run happens on NEXT dispatch, not inline C2.
+// Supports synchronous (immediate CompleteLoading) and asynchronous (external CompleteLoading) paths.
+func handleLoading(s *Session) {
+	if s == nil {
+		return
+	}
+	if s.IsPendingBattle() {
+		return
+	}
+	// The loading barrier installs battle state; its first dispatch remains deferred
+	// until the next Advance call [08 "Session states"] C2.
+	_ = s.CompleteLoading()
+}
+
+// handleBattle implements state 6 live battle loop [08 "Session states"].
+// No-op: authoritative ticks are driven by Session.Step which checks State==StateBattle [P0-I10].
+func handleBattle(s *Session) {
+	_ = s
+}
+
+// handlePostBattle implements state 7 post-battle handling — results/postgame [08 "Session states"].
+// It performs report/progression cleanup through the post-battle handler after
+// latch [P1-01 §2.3][P1-01 §2.4].
+func handlePostBattle(s *Session) {
+	if s == nil {
+		return
+	}
+	// BetweenMissions persistence is already written at latch time via ApplyCampaignResult [P1-01 §2.3];
+	// this handler ensures we return to router exactly once [08 "Session states"] 7->2.
+	_ = s.TransitionTo(StateRouter)
+}
+
+// RegisterAll installs the session state handlers and cross-service lifecycle
+// hooks. The authoritative tick is called directly by Step; no callback graph
+// or secondary scheduler is involved.
+func (s *Session) RegisterAll() {
+	// Direct Session literals used by loaders/tests still pass through the same
+	// publication topology before any authoritative producer is installed.
+	s.ensurePublicationState()
+	if s.Clock == nil {
+		s.Clock = &clock.State{Requested: 10, Active: 10}
+	}
+	// Install eight-state handlers before simulation so the state machine governs lifecycle [08][P0-I10].
+	s.installStateHandlers()
+	// Ensure single canonical scheduler: Session.Path is alias to Movement.Scheduler [04 §7.3][P0-I03].
+	if s.Movement != nil && s.Movement.Scheduler != nil && s.Path != s.Movement.Scheduler {
+		s.Path = s.Movement.Scheduler
+	}
+	if s.Path != nil && s.Movement != nil && s.Movement.Scheduler == nil {
+		s.Movement.Scheduler = s.Path
+	}
+	// Trigger and visibility hooks [08 "Evaluation"] are bound exactly once via
+	// units.World hooks at the single fire points: Create (slot 3), Death
+	// (first Destroy latch, slot 1), and Capture transfer (slot 2). The hook
+	// identities are derived from the session's actual local/enemy owners, not
+	// hard-coded 0/1 [P0-I13][08 "Evaluation"]. Visibility unpublish/corpse
+	// remain here so the byte refcount plain wraps 0→255 and word mask never
+	// decrements [03 §3.1] P0-11; corpse uses correct chain depth [06 §12.1] C23.
+	if s.Units != nil {
+		// Derive actual local/enemy identities from session state if not yet set
+		// [P0-I13]. Skirmish stores them from SkirmishConfig, mission from
+		// economy player slots and controller states [08 "Established AI-facing data"].
+		if s.LocalOwner == 0 && s.EnemyOwner == 0 {
+			// Try SkirmishConfig first
+			foundLocal := false
+			foundEnemy := false
+			var local, enemy uint8
+			if s.Skirmish.NumPlayers > 0 {
+				for i := 0; i < 10; i++ {
+					ctrl := s.Skirmish.Players[i].Controller
+					if !foundLocal && ctrl == 0 && i < s.Skirmish.NumPlayers {
+						local = uint8(i)
+						foundLocal = true
+					}
+					if !foundEnemy && ctrl != 0 && i < s.Skirmish.NumPlayers {
+						enemy = uint8(i)
+						foundEnemy = true
+					}
+				}
+				if foundLocal {
+					s.LocalOwner = local
+				}
+				if foundEnemy {
+					s.EnemyOwner = enemy
+				}
+			}
+			if s.LocalOwner == 0 && s.EnemyOwner == 0 && s.Econ != nil {
+				// Derive from economy controller states 1/2 [08 "Established AI-facing data"]
+				var l, e uint8
+				foundL, foundE := false, false
+				for i := 0; i < 10; i++ {
+					p := s.Econ.Players[i]
+					if !p.Exists {
+						continue
+					}
+					if !foundL && p.ControllerState == 1 {
+						l = uint8(i)
+						foundL = true
+					}
+					if !foundE && p.ControllerState == 2 {
+						e = uint8(i)
+						foundE = true
+					}
+				}
+				if foundL {
+					s.LocalOwner = l
+				}
+				if foundE {
+					s.EnemyOwner = e
+				}
+			}
+		}
+		localOwner := s.LocalOwner
+		enemyOwner := s.EnemyOwner
+		s.Units.OnDeath = func(h pool.Handle, cause units.DeathCause, u *units.Unit) {
+			if s.Vis != nil && u != nil {
+				unpublishOne(s, u)
+			}
+			// Notification slot driven at death finalization [08 "Evaluation"].
+			// Polled queues use LocalOwner/EnemyOwner gating, not alliance; type-gated countdown
+			// decrements only here, never from poll [08 "Evaluation"].
+			if s.Mission != nil && u != nil {
+				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
+				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitDied, u)
+			}
+			// Audio: death does not map to a queued voice directly, but an
+			// under-attack cue for nearby allies could be queued elsewhere.
+			// For now, no death voice; weapon hit already queues via impact sink.
+			// Local authoritative death runs the synchronous 4-cell Killed query
+			// BEFORE the death packet is emitted [04 §5.1]; severity clamp → corpse
+			// chain depth + death-explosion weapon trigger (DoExplosion) per
+			// [06 §12.1] C22–C25. Deterministic, no wall-clock, no map iteration (I1, I4, I6).
+			if s.Features != nil && u != nil && u.Def != nil && s.World != nil {
+				// Map units death cause to combat cause [06 §12.1] for the shared path.
+				var c combat.Cause
+				switch cause {
+				case units.DeathKilled:
+					c = combat.CauseOrdinary // 1 [06 §12.1]
+				case units.DeathSelfDestruct:
+					c = combat.CauseSelfDestruct // 3 [06 §12.1]
+				case units.DeathReclaimed:
+					c = combat.CauseReclaim // 5 [06 §12.1] C24 bypass
+				default:
+					if u.Health <= 0 {
+						c = combat.CauseOrdinary
+					} else {
+						c = combat.CauseReclaim
+					}
+				}
+				// IsFeature direct conversion cause 7 handling: when def isfeature,
+				// retail writes cause 7 DIRECT store not via packet builder [06 §12.1].
+				// We treat isfeature kills as FeatureConversion when cause is killed and isfeature true and corpse exists?
+				// Keep ordinary for now; TODO(question) on isfeature cause-7 producer gating [06 §12.1].
+				ctx := combat.DeathContext{
+					Health:            u.Health,
+					MaxHealth:         u.MaxHealth,
+					PriorSample:       u.PriorSample, // [04 §5.1] saved prior-byte sample
+					Cause:             c,
+					RemainingFraction: u.Remaining, // [06 §12.1] 0.0 when normal/grounded
+					UnitDef:           u.Def,
+				}
+				var featMap map[string]*content.FeatureDef
+				if s.Catalog != nil {
+					featMap = s.Catalog.Features
+				}
+				// Synchronous 4-cell Killed query drains script threads inline [04 §5.1] C25 (I1, I4)
+				syncKilled := func(sev int32) (int32, bool) {
+					if vm := u.GetScript(); vm != nil {
+						v, ok := combat.KilledVariantFromVM(vm, sev) // [04 §5.1][06 §12.1] C23 C25
+						return v, ok
+					}
+					return 0, false
+				}
+				res := combat.ResolveDeath(ctx, featMap, syncKilled) // [04 §5.1][06 §12.1] C22-C25
+				// Corpse depth comes from the Killed-variant low nibble [04 §5.1][06 §12.1] C23, replacing the constant switch.
+				if res.DoCorpse && u.Def.Corpse != "" {
+					depth := res.Variant & 0x0F // low nibble [06 §12.1] C23
+					var corpseDef *content.FeatureDef
+					if s.Catalog != nil && s.Catalog.Features != nil {
+						corpseDef = features.CorpseDefFor(u.Def, s.Catalog.Features, depth) // [06 §12.1] C23 low nibble
+						if corpseDef == nil && depth != 0 {
+							// Fallback to direct catalog lookup for depth1 when chain helper misses
+							if d, ok := s.Catalog.Features[content.CanonicalKey(u.Def.Corpse)]; ok && depth == 1 {
+								corpseDef = d
+							}
+						}
+					} else {
+						for _, d := range s.World.FeatureDefs {
+							if d != nil && d.CanonicalKey == content.CanonicalKey(u.Def.Corpse) {
+								if depth != 0 {
+									corpseDef = features.CorpseDefFor(u.Def, map[string]*content.FeatureDef{content.CanonicalKey(u.Def.Corpse): d}, depth)
+									if corpseDef == nil && depth == 1 {
+										corpseDef = d
+									}
+								}
+								break
+							}
+						}
+					}
+					if corpseDef != nil {
+						_ = s.Features.PlaceCorpse(u.X, u.Z, corpseDef, u.Def.IsFeature)
+					}
+				}
+				// Death-explosion weapon trigger (DoExplosion) [06 §12.1] C22-C25
+				// Shared with projectile splash via ExplodeWeaponAt [06 §9.3] (I1, I2)
+				if res.DoExplosion {
+					weapon := combat.SelectDeathExplosionWeapon(u.Def, c) // [06 §12.1][02 "Unit record"]
+					if weapon != nil && s.Combat != nil {
+						impact := combat.Vec3{X: u.X, Y: u.Y, Z: u.Z}
+						tick := uint32(0)
+						if s.Clock != nil {
+							tick = s.Clock.GlobalTick
+						}
+						s.Combat.ExplodeWeaponAt(s.Units, s.World, weapon, impact, h, tick) // [06 §9.3][06 §12.1] shared splash
+						if s.publication != nil && s.publication.events != nil {
+							pe := frame.Event{Tick: tick, Source: h, X: u.X, Y: u.Y, Z: u.Z, Graphic: weapon.ExplosionGaf}
+							if weapon.ExplosionGaf != "" || weapon.ExplosionArt != "" {
+								s.publication.events.EmitExplosion(pe) // [06 §13.2] C27
+							}
+						}
+					}
+				}
+			} else if u != nil && u.Def != nil && u.Def.Corpse != "" && s.World != nil {
+				// Fallback when no authoritative resolution (nil def etc) — keep deterministic no-op; TODO(question) on missing def path
+				_ = h
+			}
+		}
+		s.Units.OnCreate = func(h pool.Handle, u *units.Unit) {
+			// Created notification is present but unused by shipped conditions [08
+			// "Evaluation"]; it is still driven.
+			if s.Mission != nil && u != nil {
+				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
+				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitCreated, u)
+			}
+			// Audio: completed build emits unitcomplete [03 §8.3] slot 8.
+			if s.AudioQueue != nil && u != nil && s.Clock != nil && s.Clock.GlobalTick > 0 {
+				s.AudioQueue.SetNow(s.Clock.GlobalTick)
+				_ = s.AudioQueue.InsertAt(s.Clock.GlobalTick, audio.SlotUnitComplete, h, "")
+			}
+		}
+		s.Units.OnCapture = func(h pool.Handle, oldOwner, newOwner uint8, u *units.Unit) {
+			// Capture/transfer notification is driven here [08 "Evaluation"];
+			// type-gated CaptureUnitType decrements only here.
+			if s.Mission != nil && u != nil {
+				ctx := triggers.PollContext{Tick: s.Clock.GlobalTick, World: s.Units, LocalOwner: localOwner, EnemyOwner: enemyOwner}
+				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitCaptured, u)
+			}
+			if s.AudioQueue != nil && u != nil && s.Clock != nil {
+				s.AudioQueue.SetNow(s.Clock.GlobalTick)
+				_ = s.AudioQueue.InsertAt(s.Clock.GlobalTick, audio.SlotCapture, h, "")
+			}
+		}
+	}
+
+}
+
+// AbortBattle transitions 6->2 abort/return path [08 "Session states"] C1.
+// It is the overlay abort path that must not leave battle ticking behind overlay [P0-I10].
+func (s *Session) AbortBattle() bool {
+	if s == nil {
+		return false
+	}
+	if s.State == StateBattle {
+		return s.TransitionTo(StateRouter)
+	}
+	if s.State == StatePostBattle {
+		return s.TransitionTo(StateRouter)
+	}
+	return false
+}
+
+// Retry reloads the same mission via state 5 directly [P1-01 §7.5][08 "Session states"] [RS-05].
+// RETRY path reloads same mission without rewriting campaign progress beyond current slot,
+// while CONTINUE writes W/L and selects next mission. For the gate we ensure Retry
+// keeps the same Mission object and ends in Loading, ready for next dispatch.
+// RS-05: retry must create/reload a clean session [RS-P0-012]. We reset the
+// Session-owned result state so the new match can latch exactly once again,
+// and clear the snapshot view.
+func (s *Session) Retry() bool {
+	if s == nil {
+		return false
+	}
+	if s.State != StatePostBattle && s.State != StateBattle {
+		return false
+	}
+	// Reset result and latch to clean state for new match [RS-05] RS-P0-012.
+	s.ResetResultForRetry()
+	s.triggerDueValid = false
+	// Direct to loading for same mission; transition must respect graph: 6/7->2->5.
+	// If we are in PostBattle (7) we can go 7->2, then 2->5. If in Battle (6) go 6->2->5.
+	if s.State == StatePostBattle || s.State == StateBattle {
+		if !s.TransitionTo(StateRouter) {
+			return false
+		}
+	}
+	if s.State == StateRouter {
+		return s.TransitionTo(StateLoading)
+	}
+	// Fallback: try direct 5->6 pending path via CompleteLoading? For retry we want loading.
+	if s.State == StateLoading {
+		return true
+	}
+	return false
+}
+
+// ContinueCampaign writes progress and selects next mission via post-battle W/L [P1-01 §7.5][P0-I10].
+// It must be called from PostBattle (7) after victory latch has written Progress.WL.
+// It transitions 7->2 (front-end return) and leaves Progress written exactly once.
+func (s *Session) ContinueCampaign() bool {
+	if s == nil {
+		return false
+	}
+	if s.State != StatePostBattle {
+		return false
+	}
+	// Campaign progress is committed when the terminal latch becomes visible;
+	// CONTINUE only follows the established post-battle transition [P1-01 §2.3]
+	// [P1-01 §7.5].
+	return s.TransitionTo(StateRouter)
+}

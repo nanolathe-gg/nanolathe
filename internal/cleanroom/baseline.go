@@ -6,13 +6,12 @@ package cleanroom
 // line that still has to be rewritten as clean-room prose, with its
 // address-level trail moved to /tmp/ta-decompile/notes/.
 //
-// Total at baseline: 1554 occurrences across 129 files.
+// Total at baseline: 1424 occurrences across 118 files.
 //
 // A file absent from this map must have zero occurrences. Counts may only
 // go down, and going down requires updating this file in the same change.
 var Baseline = map[string]int{
 	"cmd/nanolathe/allies_test.go":                  1,
-	"cmd/nanolathe/battle.go":                       5,
 	"cmd/nanolathe/battle_controller.go":            1,
 	"cmd/nanolathe/battle_hud.go":                   4,
 	"cmd/nanolathe/frontend.go":                     21,
@@ -41,12 +40,11 @@ var Baseline = map[string]int{
 	"internal/camera/minimap_test.go":               16,
 	"internal/client/audio.go":                      3,
 	"internal/client/minimap_draw_test.go":          2,
-	"internal/client/model.go":                      2,
 	"internal/client/unitdraw.go":                   9,
 	"internal/clock/clock.go":                       11,
 	"internal/cob/ports.go":                         8,
 	"internal/cob/ports_test.go":                    3,
-	"internal/cob/vm.go":                            105,
+	"internal/cob/vm.go":                            104,
 	"internal/combat/aim.go":                        1,
 	"internal/combat/damage.go":                     7,
 	"internal/combat/death.go":                      2,
@@ -105,20 +103,12 @@ var Baseline = map[string]int{
 	"internal/render/minimap_test.go":               2,
 	"internal/render/model_test.go":                 1,
 	"internal/save/bank_test.go":                    1,
-	"internal/save/boxes.go":                        17,
-	"internal/save/bulk.go":                         30,
-	"internal/session/audio.go":                     2,
+	"internal/save/retail_corpus_test.go":           1,
 	"internal/session/battle_entry_test.go":         6,
 	"internal/session/composition.go":               7,
 	"internal/session/economy.go":                   4,
-	"internal/session/loop.go":                      16,
 	"internal/session/los_emitter_test.go":          4,
-	"internal/session/mission.go":                   8,
-	"internal/session/o6_group_save_test.go":        1,
-	"internal/session/progression.go":               27,
-	"internal/session/result.go":                    2,
-	"internal/session/skirmish.go":                  18,
-	"internal/session/state.go":                     1,
+	"internal/session/skirmish.go":                  2,
 	"internal/session/strict_g2_move_test.go":       2,
 	"internal/settings/settings.go":                 10,
 	"internal/settings/settings_test.go":            1,

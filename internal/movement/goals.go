@@ -137,3 +137,12 @@ func (s *System) goalForOrderInternal(goalCell path.Cell, n *orders.Node) path.G
 // The above helper is the sole new producers of AnnulusGoal; call sites in
 // integrate.go (ActivateMove/ReplanMove) are the only consumers. Rect and Saved
 // producers are intentionally NOT added here; see file header.
+
+// HeadingFromDelta returns the world heading (uint16, 0..65535 per circle)
+// that points along the planar delta (dx, dz) in 16.16 fixed units [04 §5.1].
+// It is the same heading the ground mover computes toward a waypoint; the
+// mobile-build success path uses it to turn the builder to face the build site
+// before raising the slot-form StartBuilding [04 §5.3][cob A-7].
+func HeadingFromDelta(dx, dz int64) uint16 {
+	return headingFromDelta(dx, dz)
+}

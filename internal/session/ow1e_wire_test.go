@@ -9,16 +9,17 @@ import (
 
 func TestOW1E_EffectsFromEventsOnePerVisual(t *testing.T) {
 	c := frame.NewEventBuffer(frame.Limits{})
-	if !c.EmitNanolathe(frame.Event{Tick: 4, Source: 2, Target: 3, Piece: 6, EffectID: 6, X: numeric.Fixed(11 << 16), TargetX: numeric.Fixed(21 << 16)}) {
+	if !c.EmitNanolathe(frame.Event{Tick: 4, Source: 2, Target: 3, Piece: 6, EffectID: 6, Lifetime: 1, X: numeric.Fixed(11 << 16), TargetX: numeric.Fixed(21 << 16)}) {
 		t.Fatal("admit nanolathe")
 	}
-	if !c.EmitExplosion(frame.Event{Tick: 4, Graphic: "explosion", X: numeric.Fixed(100 << 16)}) {
+	if !c.EmitExplosion(frame.Event{Tick: 4, Graphic: "explosion", Lifetime: 1, X: numeric.Fixed(100 << 16)}) {
 		t.Fatal("admit explosion")
 	}
 	if !c.EmitShake(frame.Event{Tick: 4, Magnitude: 5, Lifetime: 10}) {
 		t.Fatal("admit shake")
 	}
-	s := &Session{Snapshot: &frame.Buffer{}, Presentation: c}
+	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c)}
+	s.publication.effects.Advance(4, c.StagingEvents())
 	s.publishSnapshot(4)
 	cur := s.Snapshot.Current()
 	if cur == nil {
@@ -47,6 +48,7 @@ func TestOW1E_EffectsFromEventsOnePerVisual(t *testing.T) {
 		t.Fatal("empty graphic should stay empty, not invented")
 	}
 	// Next tick with no events must have empty Effects (one-shot) but Events empty.
+	s.publication.effects.Advance(5, nil)
 	s.publishSnapshot(5)
 	nxt := s.Snapshot.Current()
 	if nxt == nil {
@@ -65,7 +67,8 @@ func TestOW1E_EffectsNeverInventArtwork(t *testing.T) {
 	if !c.EmitExplosion(frame.Event{Tick: 1, Graphic: ""}) {
 		t.Fatal("admit")
 	}
-	s := &Session{Snapshot: &frame.Buffer{}, Presentation: c}
+	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c)}
+	s.publication.effects.Advance(1, c.StagingEvents())
 	s.publishSnapshot(1)
 	cur := s.Snapshot.Current()
 	if len(cur.Effects) != 1 {
@@ -83,7 +86,8 @@ func TestOW1E_NanoReclaimReversedEndpointPreserved(t *testing.T) {
 	if !c.EmitNanolathe(frame.Event{Tick: 2, Source: 3, Target: 9, X: numeric.Fixed(30 << 16), TargetX: numeric.Fixed(10 << 16), EffectID: 6, Mode: 2}) {
 		t.Fatal("admit reclaim nano")
 	}
-	s := &Session{Snapshot: &frame.Buffer{}, Presentation: c}
+	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c)}
+	s.publication.effects.Advance(2, c.StagingEvents())
 	s.publishSnapshot(2)
 	cur := s.Snapshot.Current()
 	if len(cur.Effects) != 1 || cur.Effects[0].Mode != 2 {

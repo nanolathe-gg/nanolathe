@@ -19,7 +19,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -102,9 +101,10 @@ func loadAuthoredModel(fs vfs.FSOps, objectName string) (*model.Model, vfs.Prove
 // cobPresentationSink admits only already-resolved COB events. It supplies
 // the originating unit identity while the collector assigns sequence/order.
 type cobPresentationSink struct {
-	session  *Session
-	source   pool.Handle
-	pieceMap []int
+	publication *publicationState
+	clock       *clock.State
+	source      pool.Handle
+	pieceMap    []int
 }
 
 // SetCOBPieceMap is called by strict binding before mode-I Create. The map is
@@ -118,7 +118,7 @@ func (s *cobPresentationSink) SetCOBPieceMap(pieceMap []int) {
 }
 
 func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
-	if s.session == nil || s.session.Presentation == nil {
+	if s == nil || s.publication == nil || s.publication.events == nil {
 		return
 	}
 	if ev.Piece < 0 || int(ev.Piece) >= len(s.pieceMap) || s.pieceMap[ev.Piece] < 0 {
@@ -128,8 +128,8 @@ func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
 		return
 	}
 	tick := uint32(0)
-	if s.session.Clock != nil {
-		tick = s.session.Clock.GlobalTick
+	if s.clock != nil {
+		tick = s.clock.GlobalTick
 	}
 	e := frame.Event{Tick: tick, Source: s.source, Piece: int32(s.pieceMap[ev.Piece]), SFXType: ev.SFXType, SFXClass: frame.SFXClass(ev.SFXClass), X: ev.Source[0], Y: ev.Source[1], Z: ev.Source[2], TargetX: ev.Target[0], TargetY: ev.Target[1], TargetZ: ev.Target[2]}
 	// Selector is an authored effect discriminator when the producer supplied
@@ -140,17 +140,22 @@ func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
 	}
 	switch ev.Kind {
 	case cob.PresentationSFX:
-		s.session.Presentation.EmitCOBSFX(e)
+		s.publication.events.EmitCOBSFX(e)
 	case cob.PresentationNano:
-		s.session.Presentation.EmitNanolathe(e)
+		// Script-emitted nano events are beam-family strip-6 effects with the
+		// same geometry gate as construction/reclaim work [03 §5.5][R-P0-06 §5].
+		e.Producer = frame.ProducerBeam
+		e.PaletteRow = 6
+		e.NanolatheGeometryKnown = true
+		s.publication.events.EmitNanolathe(e)
 	case cob.PresentationMuzzle:
-		s.session.Presentation.EmitMuzzleFlash(e)
+		s.publication.events.EmitMuzzleFlash(e)
 	case cob.PresentationSmoke:
-		s.session.Presentation.EmitSmokeStart(e)
+		s.publication.events.EmitSmokeStart(e)
 	case cob.PresentationTrail:
-		s.session.Presentation.EmitProjectileTrail(e)
+		s.publication.events.EmitProjectileTrail(e)
 	case cob.PresentationImpact:
-		s.session.Presentation.EmitImpact(e)
+		s.publication.events.EmitImpact(e)
 	}
 }
 
@@ -162,7 +167,7 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 	if err != nil {
 		return fmt.Errorf("unit %q model %s: %w", u.Def.UnitName, prov.ProviderID(), err)
 	}
-	sink := &cobPresentationSink{session: s, source: u.Handle}
+	sink := &cobPresentationSink{publication: s.publication, clock: s.Clock, source: u.Handle}
 	visible := func(_ int, _ int32) bool {
 		// This is the established unit-level gameplay visibility gate used by
 		// combat acquisition; it never mutates authoritative state [03 §3.2].
@@ -365,14 +370,10 @@ func createAndBindServices(s *Session) error {
 	if (cobFS == nil) != (cobLoader == nil) {
 		return fmt.Errorf("session: incomplete COB source for service wiring [04 §4.1]")
 	}
-	if s.Presentation == nil {
-		s.Presentation = frame.NewEventBuffer(frame.Limits{})
-	}
-	if s.Effects == nil {
-		// The render pool is the sole active-effect owner. Presentation only
-		// admits detached event views and reads its immutable snapshot [03 §1].
-		s.Effects = render.NewEffectServiceWithPool(render.EffectCapacity, &render.FixedEffectPool{})
-	}
+	// Composition is the central topology site for the session's committed-frame
+	// publication boundary [01 §4.4][03 §1]. The helper is idempotent so an
+	// existing staged event window or effect pool survives re-binding.
+	s.ensurePublicationState()
 	// Worlds with an authored source use one binder before battle entry so
 	// scenario, construction, and forced-slot creation resolve the same model
 	// and script path [04 §4.1].
@@ -481,7 +482,7 @@ func createAndBindServices(s *Session) error {
 		}
 		return u.COBBinding().Model
 	}
-	s.Build.Presentation = s.Presentation
+	s.Build.Presentation = s.publication.events
 	// Walk-to-site uses normal Move_Ground machinery [04 §3.4][R-P0-06].
 	// Bind the movement system so mobile builders walk into nano range before state 2.
 	s.Build.Movement = s.Movement
@@ -505,7 +506,7 @@ func createAndBindServices(s *Session) error {
 	// collector is presentation-only; EventUnitKilled remains a death/corpse
 	// notification in Units.OnDeath and is not duplicated here.
 	s.Combat.Events = func(ev combat.Event) {
-		if s.Presentation == nil {
+		if s.publication == nil || s.publication.events == nil {
 			return
 		}
 		pe := frame.Event{
@@ -515,7 +516,7 @@ func createAndBindServices(s *Session) error {
 		}
 		switch ev.Kind {
 		case combat.EventShake:
-			s.Presentation.EmitShake(pe)
+			s.publication.events.EmitShake(pe)
 		case combat.EventHitSound, combat.EventWaterSound:
 			if ev.Sound != "" {
 				_, _, _ = s.EmitWeaponHit(ev.Sound, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, ev.Kind == combat.EventWaterSound)
@@ -530,20 +531,20 @@ func createAndBindServices(s *Session) error {
 			// Target carries the projectile handle solely as presentation identity;
 			// no authoritative state is read or mutated at this boundary.
 			pe.EffectID = uint32(ev.Target)
-			s.Presentation.EmitSmokeStart(pe)
+			s.publication.events.EmitSmokeStart(pe)
 		case combat.EventEndSmoke:
-			s.Presentation.EmitSmokeEnd(pe)
+			s.publication.events.EmitSmokeEnd(pe)
 		case combat.EventExplosion:
-			s.Presentation.EmitExplosion(pe)
+			s.publication.events.EmitExplosion(pe)
 		case combat.EventWaterExplosion:
-			s.Presentation.EmitWaterImpact(pe)
+			s.publication.events.EmitWaterImpact(pe)
 		case combat.EventProjectileImpact:
-			s.Presentation.EmitImpact(pe)
+			s.publication.events.EmitImpact(pe)
 		case combat.EventUnitKilled, combat.EventCorpse:
 			// Death/corpse lifecycle is owned by Units.OnDeath exactly once;
 			// a separate authored corpse event, when emitted, is presentation-only.
 			if ev.Kind == combat.EventCorpse {
-				s.Presentation.EmitCorpse(pe)
+				s.publication.events.EmitCorpse(pe)
 			}
 		}
 	}

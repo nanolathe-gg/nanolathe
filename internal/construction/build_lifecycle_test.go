@@ -184,27 +184,31 @@ func TestFactoryReservationReleaseAndCompletedRetention(t *testing.T) {
 	}
 	product := w.Unit(node.Target)
 	cell := terrain.PlotAt(4, 4)
-	if cell == nil || cell.OccupantA() != int16(product.Handle) || !cell.Occupied() {
-		t.Fatalf("reservation missing: cell=%v occupant=%d occupied=%t", cell, cell.OccupantA(), cell.Occupied())
+	if cell == nil || cell.OccupantA() != int16(product.Handle) || cell.Occupied() {
+		t.Fatalf("reservation missing: cell=%v occupant=%d", cell, cell.OccupantA())
 	}
 	if !svc.ReleasePlacement(product.Handle) {
 		t.Fatal("unfinished product reservation was not released")
 	}
 	if cell.OccupantA() != 0 || cell.Occupied() {
-		t.Fatalf("reservation leaked after release: occupant=%d occupied=%t", cell.OccupantA(), cell.Occupied())
+		t.Fatalf("reservation leaked after release: occupant=%d", cell.OccupantA())
 	}
-	// Completed live structures retain their occupancy until removal.
+	// A COMPLETED product must not hold the mobile-occupancy shorts — its own
+	// stamp would deadlock its factory's exit-spot validation forever. Blocking
+	// duty for finished buildings moves to the structures registry [04 §6.2];
+	// this completion still reserves while unfinished (through state3 work).
 	rect, _ := world.NewFootprintRect(world.NewFootprintAnchor(4, 4), mustExtent(2, 2))
 	if err := svc.reservePlacement(product.Handle, nil, rect); err != nil {
 		t.Fatal(err)
 	}
 	svc.recordPlacement(product.Handle, rect)
-	product.Remaining = 0
-	if svc.ReleasePlacement(product.Handle) {
-		t.Fatal("completed live product released occupancy")
+	svc.applyCompletionPosture(product)
+	if cell.OccupantA() != 0 || cell.Occupied() {
+		t.Fatalf("completed product kept the occupancy short: occupant=%d", cell.OccupantA())
 	}
-	if cell.OccupantA() != int16(product.Handle) || !cell.Occupied() {
-		t.Fatal("completed live product lost its occupancy")
+	bh, blocked := svc.StructureBlocks(0, rect)
+	if !blocked || bh != product.Handle {
+		t.Fatalf("completed building rect not registered in structures registry: (%d,%v)", bh, blocked)
 	}
 }
 
@@ -214,6 +218,51 @@ func mustExtent(x, z int32) world.FootprintExtent {
 		panic(err)
 	}
 	return e
+}
+
+// TestReservePlacementYardGatesOccupancy locks the reservePlacement contract
+// [R-P0-08]: a product's yard map decides which cells reject a foreign
+// occupant (bits 1-2). An open yard cell (e.g. a building's 'y' corner) is
+// passable and may coexist with another unit, matching the placement validator;
+// the solid 'o' cells still reject. Previously reservePlacement rejected any
+// foreign occupant in any cell, so a valid site that touched another building's
+// open yard corner was refused forever after validation passed.
+func TestReservePlacementYardGatesOccupancy(t *testing.T) {
+	terrain := &world.Terrain{CellW: 8, CellH: 8, Plot: make([]world.PlotCell, 64)}
+	for i := range terrain.Plot {
+		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
+	}
+	svc := NewService(terrain, nil, nil, nil)
+	// 3x2 product with yard "yoy/ooo": the top-left 'y' cell is open (no bits
+	// 1-2), every other cell ('o') requires occupancy clearance. Non-square
+	// dimensions lock the row-major (dz*fx+dx) yard indexing.
+	def := &content.UnitDef{UnitName: "tst", FootprintX: 3, FootprintZ: 2, YardMap: "yoy ooo", BMCode: false}
+	def.CanonicalKey = content.CanonicalKey("tst")
+	rect, err := world.NewFootprintRect(world.NewFootprintAnchor(1, 1), mustExtent(3, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A foreign occupant in a solid cell must reject.
+	terrain.PlotAt(2, 1).SetOccupantA(99) // local (1,0) 'o'
+	if err := svc.reservePlacement(7, def, rect); err == nil {
+		t.Fatal("solid yard cell with foreign occupant was admitted")
+	}
+	terrain.PlotAt(2, 1).SetOccupantA(0)
+	// A foreign occupant in the open corner cell must be tolerated, matching
+	// the yard-gated validator; only the solid cells are stamped.
+	terrain.PlotAt(1, 1).SetOccupantA(99) // local (0,0) 'y'
+	if err := svc.reservePlacement(7, def, rect); err != nil {
+		t.Fatalf("open yard cell with foreign occupant was rejected: %v", err)
+	}
+	if got := terrain.PlotAt(1, 1).OccupantA(); got != 99 {
+		t.Fatalf("open yard cell occupant was overwritten: %d", got)
+	}
+	if got := terrain.PlotAt(2, 1).OccupantA(); got != 7 {
+		t.Fatalf("solid yard cell was not stamped: %d", got)
+	}
+	if got := terrain.PlotAt(1, 2).OccupantA(); got != 7 {
+		t.Fatalf("second row solid cell was not stamped: %d", got)
+	}
 }
 
 func TestAcceptedWorkEmitsNanoAndStallDoesNot(t *testing.T) {

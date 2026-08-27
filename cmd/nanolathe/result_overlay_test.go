@@ -94,7 +94,7 @@ func TestWindowResultDisplaysAndDismisses(t *testing.T) {
 	if sess.Clock.GlobalTick != prevTick {
 		t.Fatalf("hidden tick while overlay: %d -> %d [RS-05]", prevTick, sess.Clock.GlobalTick)
 	}
-	// Test retry path: reset and ensure clean without duplicate callbacks [RS-05]
+	// Test retry path: reset and ensure clean terminal state [RS-05]
 	// Create a fresh session for retry (simulates shell recreating clean session)
 	cat2 := testCatalogON05()
 	for _, u := range cat2.Units {
@@ -115,8 +115,6 @@ func TestWindowResultDisplaysAndDismisses(t *testing.T) {
 	hA2, _ := b2.sess.Units.Create(defA2, 0, 0, 0, 0)
 	hB2, _ := b2.sess.Units.Create(defB2, 1, 0, 0, 0)
 	_ = hA2
-	count := 0
-	b2.sess.SetResultCallback(func(r session.Result) { count++ })
 	b2.sess.Units.Destroy(hB2, 1)
 	for tick := 1; tick < 300; tick++ {
 		b2.sess.Step(int32(tick))
@@ -124,14 +122,15 @@ func TestWindowResultDisplaysAndDismisses(t *testing.T) {
 			break
 		}
 	}
-	if count != 1 {
-		t.Fatalf("retry callback should fire exactly once, got %d", count)
+	if !b2.sess.GetResult().Ended {
+		t.Fatalf("retry battle should reach terminal result")
 	}
-	// Further steps should not fire again
+	// Further steps should not advance the terminal result.
+	terminalTick := b2.sess.GetResult().Tick
 	for tick := 300; tick < 310; tick++ {
 		b2.sess.Step(int32(tick))
 	}
-	if count != 1 {
-		t.Fatalf("duplicate callback after retry, got %d", count)
+	if got := b2.sess.GetResult().Tick; got != terminalTick {
+		t.Fatalf("terminal result changed after retry battle: %d -> %d", terminalTick, got)
 	}
 }

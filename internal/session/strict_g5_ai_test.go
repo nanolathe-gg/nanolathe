@@ -152,8 +152,6 @@ func buildStrictG5Session(t *testing.T, simSeed, crtSeed uint32) (*Session, *ai.
 		mm.OriginX = u1.X
 		mm.OriginZ = u1.Z
 	}
-	s.SetTraceEnabled(true)
-	s.ClearTrace()
 	s.Clock.ScaledAnchor = 0
 	// Bind real QueueBuildTyped after session fully created (needs s.Build).
 	mgr.QueueBuildTyped = func(req ai.BuildRequest) error {
@@ -326,7 +324,6 @@ func TestStrictSkirmish_AICommanderBuildsFactory(t *testing.T) {
 				}
 			}
 		}
-		evs := s.TraceEvents()
 		fr := StrictFailureRecord{
 			LastCompleted: func() string {
 				if len(stages) == 0 {
@@ -343,7 +340,7 @@ func TestStrictSkirmish_AICommanderBuildsFactory(t *testing.T) {
 			DefKeys:   []string{"armcom"},
 			QueueHead: strictQueueHeadString(1, s), PathStatus: strictPathStatus(1, s),
 			AimState: strictAimState(1, s), ResourceStocks: strictResourceStocks(1, s),
-			ProjectileCount: s.Combat.Count(), ResultLatch: strictResultLatch(s), Last50Trace: LastNTraceStrings(evs, 50),
+			ProjectileCount: s.Combat.Count(), ResultLatch: strictResultLatch(s),
 		}
 		t.Logf("G5 FAILURE missing %v: %s", missing, FormatFailure(fr))
 		t.Fatalf("G5 strict AI gate missing milestones %v [G5 1..10]", missing)
@@ -352,7 +349,6 @@ func TestStrictSkirmish_AICommanderBuildsFactory(t *testing.T) {
 		Commit: strictCommit(), ContentManifest: strictCatalogHash(s.Catalog), Map: "test", Seed: simSeed, CrtSeed: crtSeed,
 		Players: []map[string]any{{"slot": 0, "control": "human"}, {"slot": 1, "control": "computer", "ai_profile": "default"}},
 		MaxTick: maxTick, Milestones: stages, Winner: -1, Reason: "G5 AI",
-		FinalTick: s.Clock.GlobalTick, FinalStateHash: HashState(s), TraceHash: HashTrace(s.TraceEvents()),
 	}
 	t.Logf("G5 evidence: %s", FormatEvidence(ev))
 }

@@ -2,8 +2,8 @@ package session
 
 import "fmt"
 
-// State is the eight-state callback table index driven by the session
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// State is the eight-state dispatch-table index used by the session state
+// machine [08 "Session states"].
 type State uint8
 
 // Eight states per [08 "Session states"].
@@ -116,15 +116,18 @@ func StateForGametype(gametype int) (State, bool) {
 	}
 }
 
-// Session is defined in loop.go (canonical full struct per PLAN_14 Public API).
-// This file implements the eight-state dispatch table [08 "Session states"]
-// and transition helpers C1-C4; the struct's State, handlers and pendingBattle
-// fields are defined alongside the full field set in loop.go to keep the type
-// defined once (Go allows methods in any file).
+// Session is defined in session.go (canonical full struct per PLAN_14 Public
+// API). This file implements the eight-state dispatch table [08 "Session
+// states"] and transition helpers C1-C4; state-machine methods remain here
+// while the complete field set is kept with the type definition.
 
 // New creates a session in teardown state 0. Callers normally transition to
 // StateRouter (2) before use.
-func New() *Session { return &Session{State: StateTeardownA} }
+func New() *Session {
+	s := &Session{State: StateTeardownA}
+	s.ensurePublicationState()
+	return s
+}
 
 // SetHandler installs the callback for one state. A nil handler is allowed
 // and means the dispatch is a no-op for that state.

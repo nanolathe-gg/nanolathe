@@ -80,6 +80,15 @@ func TestWalkToSite(t *testing.T) {
 			if dist2 > reach*reach {
 				t.Fatalf("allocated while out of range dist2 %d reach2 %d", dist2, reach*reach)
 			}
+			// The builder must stand OUTSIDE the product footprint: the walk
+			// targets a build-site perimeter candidate, never the site centre
+			// [04 §7.4], so the builder never parks under its own building.
+			if ax, az, fx, fz, okFoot := svc.siteAnchorCell(node); okFoot {
+				cx, cz := world.WorldToCell(builder.X), world.WorldToCell(builder.Z)
+				if cx >= ax && cx < ax+fx && cz >= az && cz < az+fz {
+					t.Fatalf("allocated while builder centre inside footprint (%d,%d) in [%d,%d)x[%d,%d)", cx, cz, ax, az, ax+fx, az+fz)
+				}
+			}
 			return
 		}
 	}

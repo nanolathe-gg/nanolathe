@@ -103,8 +103,8 @@ func TestRS06_TwoDamagedEnemiesSlotOrder(t *testing.T) {
 	}
 }
 
-// TestRS06_MapSeedNotAffectTrace verifies that randomized Go map seed cannot change trace [RS-06][INVARIANTS I1].
-func TestRS06_MapSeedNotAffectTrace(t *testing.T) {
+// TestRS06_MapSeedNotAffectState verifies that randomized Go map seed cannot change state [RS-06][INVARIANTS I1].
+func TestRS06_MapSeedNotAffectState(t *testing.T) {
 	const simSeed, crtSeed uint32 = 777, 888
 	build := func() (*Session, string) {
 		rng.SeedGlobal(simSeed, crtSeed)
@@ -124,18 +124,17 @@ func TestRS06_MapSeedNotAffectTrace(t *testing.T) {
 			Clock:   &clock.State{GlobalTick: 0},
 		}
 		s.SeedSessionRNG(simSeed, crtSeed)
-		s.SetTraceEnabled(true)
 		uw.Create(cat.Units["armcom"], 0, 0, 0, 0)
 		uw.Create(cat.Units["cormex"], 1, 0, 0, 0)
 		for i := 0; i < 5; i++ {
 			s.authoritativeTick(uint32(i))
 		}
-		return s, HashTrace(s.TraceEvents())
+		return s, HashState(s)
 	}
 	s1, h1 := build()
 	s2, h2 := build()
 	if h1 != h2 {
-		t.Fatalf("trace hash mismatch with same seed: %s vs %s (map seed may have affected ordering) [RS-06]", h1, h2)
+		t.Fatalf("state hash mismatch with same seed: %s vs %s (map seed may have affected ordering) [RS-06]", h1, h2)
 	}
 	_ = s1
 	_ = s2
@@ -163,7 +162,6 @@ func TestRS06_TwoSessionsIsolated(t *testing.T) {
 			Clock:   &clock.State{GlobalTick: 0},
 		}
 		s.SeedSessionRNG(simSeed, crtSeed)
-		s.SetTraceEnabled(true)
 		uw.Create(cat.Units["armcom"], 0, 0, 0, 0)
 		uw.Create(cat.Units["cormex"], 1, 0, 0, 0)
 		return s
@@ -176,23 +174,23 @@ func TestRS06_TwoSessionsIsolated(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		sB_iso.authoritativeTick(uint32(i))
 	}
-	hashA_iso := HashTrace(sA_iso.TraceEvents())
-	hashB_iso := HashTrace(sB_iso.TraceEvents())
 	sA_int := makeSession(seedA1, crtA1)
 	sB_int := makeSession(seedB1, crtB1)
 	for i := 0; i < 10; i++ {
 		sA_int.authoritativeTick(uint32(i))
 		sB_int.authoritativeTick(uint32(i))
 	}
-	hashA_int := HashTrace(sA_int.TraceEvents())
-	hashB_int := HashTrace(sB_int.TraceEvents())
+	hashA_iso := HashState(sA_iso)
+	hashB_iso := HashState(sB_iso)
+	hashA_int := HashState(sA_int)
+	hashB_int := HashState(sB_int)
 	if hashA_iso != hashA_int {
 		t.Fatalf("session A isolated vs interleaved mismatch: iso %s int %s", hashA_iso, hashA_int)
 	}
 	if hashB_iso != hashB_int {
 		t.Fatalf("session B isolated vs interleaved mismatch: iso %s int %s", hashB_iso, hashB_int)
 	}
-	// Distinct seeds may still produce same trace if no RNG draws in this minimal scenario; isolation is proven by iso==int, not by distinctness
+	// Distinct seeds may still produce the same state if no RNG draws occur in this minimal scenario; isolation is proven by iso==int, not by distinctness.
 	_ = hashA_iso
 	_ = hashB_iso
 }
@@ -303,9 +301,9 @@ func TestRS06_FloatAudit(t *testing.T) {
 // TestRS06_LegacyProductionGuard ensures Session.Step does not call retired kernel graph [RS-06].
 func TestRS06_LegacyProductionGuard(t *testing.T) {
 	root := findRepoRoot(t)
-	b, err := os.ReadFile(root + "/internal/session/loop.go")
+	b, err := os.ReadFile(root + "/internal/session/step.go")
 	if err != nil {
-		t.Fatalf("read loop.go: %v", err)
+		t.Fatalf("read step.go: %v", err)
 	}
 	content := string(b)
 	idx := strings.Index(content, "func (s *Session) Step")
@@ -332,7 +330,10 @@ func TestRS06_MapIterationDetector(t *testing.T) {
 	root := findRepoRoot(t)
 	re := regexp.MustCompile(`for\s+\w+.*:=\s*range\s+\w+`)
 	filesToCheck := []string{
-		"internal/session/loop.go",
+		"internal/session/session.go",
+		"internal/session/step.go",
+		"internal/session/commands.go",
+		"internal/session/publish.go",
 		"internal/combat/service.go",
 		"internal/orders/pump.go",
 		"internal/ai/manager.go",
@@ -375,14 +376,14 @@ func TestRS06_MapIterationDetector(t *testing.T) {
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
 	if b, err := os.ReadFile("../../go.mod"); err == nil && strings.Contains(string(b), "module github.com/nanolathe/nanolathe") {
-		if _, err := os.Stat("../../internal/session/loop.go"); err == nil {
+		if _, err := os.Stat("../../internal/session/session.go"); err == nil {
 			return "../.."
 		}
 	}
-	if _, err := os.Stat("loop.go"); err == nil {
+	if _, err := os.Stat("session.go"); err == nil {
 		return "."
 	}
-	if _, err := os.Stat("internal/session/loop.go"); err == nil {
+	if _, err := os.Stat("internal/session/session.go"); err == nil {
 		return "."
 	}
 	if _, err := os.Stat("/path/to/home/src/nanolathe-wt-rs06-determinism/internal/session/loop.go"); err == nil {

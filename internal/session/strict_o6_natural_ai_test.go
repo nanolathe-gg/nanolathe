@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -20,17 +21,18 @@ import (
 // manager installed by NewSkirmishWithFS and all state changes come from the
 // normal Session.Step path [F-P0-045][AI-03].
 type o6NaturalRun struct {
-	Map        string
-	Milestones map[string]uint32
-	TraceHash  string
-	StateHash  string
-	FinalTick  uint32
-	Result     Result
-	DeathSeen  bool
-	DeathTick  uint32
-	DeathUnit  uint32
-	LastTrace  []string
-	Missing    []string
+	Map            string
+	Milestones     map[string]uint32
+	StateHash      string
+	FinalTick      uint32
+	Result         Result
+	DeathSeen      bool
+	DeathTick      uint32
+	DeathUnit      uint32
+	LocalDeathSeen bool
+	LocalDeathTick uint32
+	LocalDeathUnit uint32
+	Missing        []string
 }
 
 var o6NaturalRequired = []string{
@@ -89,7 +91,7 @@ func o6NaturalOrderError(m map[string]uint32) string {
 //
 // The test is asset-gated because the retail bundle is intentionally never
 // committed.  Missing assets are the sole skip condition; once a bundle is
-// available, an incomplete natural run fails with the ordered trace and
+// available, an incomplete natural run fails with the observed state and
 // state evidence needed to research the gap [F-P0-045].
 func TestStrictSkirmish_NaturalAIRealAssets(t *testing.T) {
 	// RELEASE-GATE-DISABLED (registry: internal/session/strict_gate_policy_test.go).
@@ -185,53 +187,67 @@ func TestStrictSkirmish_NaturalAIRealAssets(t *testing.T) {
 				t.Fatalf("natural O6 %s: selected retail asset %q is absent from compiled catalog", label, key)
 			}
 		}
-		// Tracing is a presentation-free diagnostic sink.  It does not feed the
-		// authoritative loop and is enabled before the first tick.
-		sess.SetTraceEnabled(true)
-		sess.ClearTrace()
+		var localCommander, targetCommander pool.Handle
+		for _, unit := range sess.Units.IterSliced() {
+			if unit == nil || unit.Def == nil || !unit.Def.Commander {
+				continue
+			}
+			switch unit.Owner {
+			case 0:
+				localCommander = unit.Handle
+			case 1:
+				targetCommander = unit.Handle
+			}
+		}
+		if localCommander == 0 || targetCommander == 0 {
+			t.Fatalf("natural O6 %s: ordered unit world did not expose both commanders: local=%d target=%d", label, localCommander, targetCommander)
+		}
+		localDeathSeen, targetDeathSeen := false, false
+		var localDeathTick, targetDeathTick uint32
 		for tick := 1; tick <= maxTick; tick++ {
+			localPresent := sess.Units.Unit(localCommander) != nil
+			targetPresent := sess.Units.Unit(targetCommander) != nil
 			sess.Step(int32(tick))
+			if localPresent && !localDeathSeen && sess.Units.Unit(localCommander) == nil {
+				localDeathSeen = true
+				localDeathTick = sess.Clock.GlobalTick
+			}
+			if targetPresent && !targetDeathSeen && sess.Units.Unit(targetCommander) == nil {
+				targetDeathSeen = true
+				targetDeathTick = sess.Clock.GlobalTick
+			}
 			if sess.GetResult().Ended {
 				break
 			}
 		}
 
 		milestones := mgr.Milestones()
-		deathSeen := false
-		var deathTick uint32
-		var deathUnit uint32
-		for _, ev := range sess.TraceEvents() {
-			if ev.Kind == TraceDeathFinalize {
-				deathSeen = true
-				if deathTick == 0 || ev.Tick < deathTick {
-					deathTick = ev.Tick
-					deathUnit = uint32(ev.Handle)
-				}
-			}
-		}
 		result := sess.GetResult()
+		deathSeen := targetDeathSeen
+		deathTick := targetDeathTick
 		missing := o6NaturalMissing(milestones, deathSeen, deathTick, result)
 		run := o6NaturalRun{
-			Map:        sel.MapKey,
-			Milestones: milestones,
-			TraceHash:  HashTrace(sess.TraceEvents()),
-			StateHash:  HashState(sess),
-			FinalTick:  sess.Clock.GlobalTick,
-			Result:     result,
-			DeathSeen:  deathSeen,
-			DeathTick:  deathTick,
-			DeathUnit:  deathUnit,
-			LastTrace:  LastNTraceStrings(sess.TraceEvents(), 50),
-			Missing:    missing,
+			Map:            sel.MapKey,
+			Milestones:     milestones,
+			StateHash:      HashState(sess),
+			FinalTick:      sess.Clock.GlobalTick,
+			Result:         result,
+			DeathSeen:      deathSeen,
+			DeathTick:      deathTick,
+			DeathUnit:      uint32(targetCommander),
+			LocalDeathSeen: localDeathSeen,
+			LocalDeathTick: localDeathTick,
+			LocalDeathUnit: uint32(localCommander),
+			Missing:        missing,
 		}
-		t.Logf("O6 natural %s map=%q tick=%d milestones=%v result=%+v trace=%s state=%s missing=%v", label, run.Map, run.FinalTick, run.Milestones, run.Result, run.TraceHash, run.StateHash, run.Missing)
+		t.Logf("O6 natural %s map=%q tick=%d milestones=%v result=%+v state=%s missing=%v", label, run.Map, run.FinalTick, run.Milestones, run.Result, run.StateHash, run.Missing)
 		return run
 	}
 
 	first := run("run1")
 	second := run("run2")
-	if first.Map != second.Map || first.TraceHash != second.TraceHash || first.StateHash != second.StateHash || first.FinalTick != second.FinalTick {
-		t.Fatalf("O6 natural determinism mismatch: first map=%q tick=%d trace=%s state=%s; second map=%q tick=%d trace=%s state=%s", first.Map, first.FinalTick, first.TraceHash, first.StateHash, second.Map, second.FinalTick, second.TraceHash, second.StateHash)
+	if first.Map != second.Map || first.StateHash != second.StateHash || first.FinalTick != second.FinalTick {
+		t.Fatalf("O6 natural determinism mismatch: first map=%q tick=%d state=%s; second map=%q tick=%d state=%s", first.Map, first.FinalTick, first.StateHash, second.Map, second.FinalTick, second.StateHash)
 	}
 	for _, stage := range o6NaturalRequired {
 		firstTick, firstOK := first.Milestones[stage]
@@ -243,7 +259,7 @@ func TestStrictSkirmish_NaturalAIRealAssets(t *testing.T) {
 	if orderErr := o6NaturalOrderError(first.Milestones); orderErr != "" {
 		t.Fatalf("O6 natural milestone order invalid: %s", orderErr)
 	}
-	if first.DeathSeen != second.DeathSeen || first.DeathTick != second.DeathTick || first.DeathUnit != second.DeathUnit || first.Result.Ended != second.Result.Ended || first.Result.Tick != second.Result.Tick || first.Result.WinnerTeam != second.Result.WinnerTeam || first.Result.Draw != second.Result.Draw || first.Result.Reason != second.Result.Reason || first.Result.Kind != second.Result.Kind || !reflect.DeepEqual(first.Result.Winners, second.Result.Winners) || !reflect.DeepEqual(first.Result.Losers, second.Result.Losers) {
+	if first.DeathSeen != second.DeathSeen || first.DeathTick != second.DeathTick || first.DeathUnit != second.DeathUnit || first.LocalDeathSeen != second.LocalDeathSeen || first.LocalDeathTick != second.LocalDeathTick || first.LocalDeathUnit != second.LocalDeathUnit || first.Result.Ended != second.Result.Ended || first.Result.Tick != second.Result.Tick || first.Result.WinnerTeam != second.Result.WinnerTeam || first.Result.Draw != second.Result.Draw || first.Result.Reason != second.Result.Reason || first.Result.Kind != second.Result.Kind || !reflect.DeepEqual(first.Result.Winners, second.Result.Winners) || !reflect.DeepEqual(first.Result.Losers, second.Result.Losers) {
 		t.Fatalf("O6 natural determinism lifecycle mismatch: first death=%v result=%+v second death=%v result=%+v", first.DeathSeen, first.Result, second.DeathSeen, second.Result)
 	}
 
@@ -261,10 +277,9 @@ func TestStrictSkirmish_NaturalAIRealAssets(t *testing.T) {
 			Reason:          "O6 natural AI",
 			FinalTick:       first.FinalTick,
 			FinalStateHash:  first.StateHash,
-			TraceHash:       first.TraceHash,
 		}
 		evidenceJSON, _ := json.Marshal(evidence)
-		t.Fatalf("O6 natural AI gate missing milestones=%v; deterministic trace=%s state=%s; evidence=%s; last trace=%s", first.Missing, first.TraceHash, first.StateHash, evidenceJSON, strings.Join(first.LastTrace, " | "))
+		t.Fatalf("O6 natural AI gate missing milestones=%v; deterministic state=%s; evidence=%s", first.Missing, first.StateHash, evidenceJSON)
 	}
 	if !first.Result.Ended {
 		t.Fatalf("O6 natural AI gate reached all AI milestones but no terminal result")

@@ -101,36 +101,6 @@ func TestPauseUnpauseBurstCap(t *testing.T) {
 	}
 }
 
-// TestRenderOncePerBatch verifies C6: rendering never runs between sub-ticks of
-// the same batch; Step must publish after each sub-tick but render exactly once.
-func TestRenderOncePerBatch(t *testing.T) {
-	renderCalls := 0
-	s := &Session{
-		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
-		Snapshot: &frame.Buffer{},
-		OnRender: func() {
-			renderCalls++
-		},
-	}
-	s.RegisterAll()
-	s.State = StateBattle // P0-I10: Step ticks only in battle
-	s.Step(5)             // 5 ticks
-	if renderCalls != 1 {
-		t.Fatalf("render must run exactly once per Step batch [PLAN_03 C15], got %d", renderCalls)
-	}
-	// Second batch with 0 ticks still renders once per batch.
-	renderCalls = 0
-	s.Step(5) // anchor now 5, scaledNow 5 => 0 ticks
-	if renderCalls != 1 {
-		t.Fatalf("render must run once even with 0 ticks [PLAN_03 C15], got %d", renderCalls)
-	}
-	// Verify that the committed frame is the final tick after the batch.
-	cur := s.Snapshot.Current()
-	if cur == nil || cur.Tick != 5 {
-		t.Fatalf("after 5-tick batch current tick %v want 5", cur)
-	}
-}
-
 // TestAICallbackInsideTickPlayer verifies the player coordinator supplies AI
 // callbacks to TickPlayer per PLAN_11 C11 and that the callback is invoked
 // inside TickPlayer's beforeDeadline window (after per-tick helpers but before

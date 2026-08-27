@@ -39,7 +39,12 @@ func TestMeteorDeterminism_TwoRunsIdentical(t *testing.T) {
 	cat.Weapons[w1.CanonicalKey] = w1
 
 	run := func(seedSim, seedCrt uint32) (projCount int, crtDraws uint64, simDraws uint64, met MeteorState) {
-		terrain := &world.Terrain{CellW: 64, CellH: 64}
+		terrain := &world.Terrain{CellW: 64, CellH: 64, Plot: make([]world.PlotCell, 64*64)}
+		// Production terrains always carry a full plot ([GAP T14]: ExpandPlot
+		// sizes Plot to CellW*CellH); collision indexing trusts that invariant.
+		for i := range terrain.Plot {
+			terrain.Plot[i].SetFeature(world.PlotFeatureNone)
+		}
 		s := &Session{
 			Catalog: cat,
 			Combat:  &combat.Service{},
@@ -86,7 +91,12 @@ func TestMeteorDeterminism_TwoRunsIdentical(t *testing.T) {
 		t.Fatalf("meteor determinism: scheduler state diverged %+v vs %+v", m1, m2)
 	}
 	runNoMeteor := func(seedSim, seedCrt uint32) (uint64, uint64) {
-		terrain := &world.Terrain{CellW: 64, CellH: 64}
+		terrain := &world.Terrain{CellW: 64, CellH: 64, Plot: make([]world.PlotCell, 64*64)}
+		// Production terrains always carry a full plot ([GAP T14]: ExpandPlot
+		// sizes Plot to CellW*CellH); collision indexing trusts that invariant.
+		for i := range terrain.Plot {
+			terrain.Plot[i].SetFeature(world.PlotFeatureNone)
+		}
 		s := &Session{
 			Catalog: cat,
 			Combat:  &combat.Service{},

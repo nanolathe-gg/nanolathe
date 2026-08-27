@@ -1053,9 +1053,11 @@ func TestP0I17_Gate7_Mission(t *testing.T) {
 	}
 }
 
-// TestP0I17_Gate9_PresentationIsolation verifies headless vs rendered dumps equal [I6].
-// Command: go test -run TestP0I17_Gate9_PresentationIsolation ./internal/session -count=1
-func TestP0I17_Gate9_PresentationIsolation(t *testing.T) {
+// TestP0I17_Gate9_CommittedFrameReadIsolation verifies that an external reader
+// can consume each committed frame (including fog surfaces) without changing
+// authoritative state [I6].
+// Command: go test -run TestP0I17_Gate9_CommittedFrameReadIsolation ./internal/session -count=1
+func TestP0I17_Gate9_CommittedFrameReadIsolation(t *testing.T) {
 	rng.SeedGlobal(777, 888)
 	cat := minimalCatalogForStrict()
 	terrain := minimalTerrain()
@@ -1091,25 +1093,32 @@ func TestP0I17_Gate9_PresentationIsolation(t *testing.T) {
 	sHeadless := build()
 	rng.SeedGlobal(777, 888)
 	sRendered := build()
-	sRendered.OnRender = func() {
-		cur := sRendered.Snapshot.Current()
-		if cur == nil {
-			return
-		}
-		_ = cur
-		if cur.Fog.Valid {
-			_ = cur.Fog.Ch0
-			_ = cur.Fog.Ch1
-		}
-	}
+	frameReads := make([]string, 0, 100)
 	for i := 0; i < 100; i++ {
 		sHeadless.Step(int32(i + 1))
 		sRendered.Step(int32(i + 1))
+		// Read the public committed frame as a renderer would, outside Session.
+		// Include fog dimensions and both channel payloads so this test exercises
+		// the detached frame boundary rather than merely checking publication.
+		committed := sRendered.Snapshot.Current()
+		if committed == nil {
+			t.Fatalf("committed frame missing after step %d", i+1)
+		}
+		if committed.Tick != sRendered.Clock.GlobalTick {
+			t.Fatalf("committed tick %d does not match clock %d", committed.Tick, sRendered.Clock.GlobalTick)
+		}
+		fogHash := sha256.New()
+		_, _ = fogHash.Write(committed.Fog.Ch0)
+		_, _ = fogHash.Write(committed.Fog.Ch1)
+		frameReads = append(frameReads, fmt.Sprintf("tick=%d fog=%dx%d valid=%t hash=%x units=%d effects=%d", committed.Tick, committed.Fog.W, committed.Fog.H, committed.Fog.Valid, fogHash.Sum(nil), len(committed.Units), len(committed.Effects)))
+	}
+	if len(frameReads) != 100 || frameReads[0] == frameReads[len(frameReads)-1] {
+		t.Fatalf("external committed-frame reads were not distinct: first=%q last=%q", frameReads[0], frameReads[len(frameReads)-1])
 	}
 	dH := authoritativeDump(sHeadless)
 	dR := authoritativeDump(sRendered)
 	if dH != dR {
-		t.Fatalf("presentation isolation: headless vs rendered dumps differ:\nheadless %s\nrendered %s", dH, dR)
+		t.Fatalf("committed-frame read changed authoritative state:\nheadless %s\nread-side %s", dH, dR)
 	}
 	if sHeadless.Clock.GlobalTick != sRendered.Clock.GlobalTick {
 		t.Fatalf("clock diverge headless %d rendered %d", sHeadless.Clock.GlobalTick, sRendered.Clock.GlobalTick)

@@ -132,6 +132,15 @@ type Service struct {
 	getBuiltLinks map[pool.Handle]pool.Handle         // product -> builder until GetBuilt consumes it [R-P0-09]
 	messages      []string                            // verbatim diagnostics [05 C18][05 C21][05 C22]
 	lastKill      KillInfo                            // most recent kind-9 kill packet [05 C21]
+	// structures records the footprint rectangle of every COMPLETED building.
+	// It is this engine's stand-in for retail's separate building-mask layer
+	// [04 §6.2]: completed buildings must keep blocking new placement after
+	// their plot occupancy shorts are released, because those shorts are
+	// mobile-occupancy state and a factory's own stamp would otherwise block
+	// its exit spot forever ([04 §6.2] names terrain versus building-mask as
+	// distinct layers; movement models the latter via OccupancyGrid stamps).
+	// save persistence TODO(question), same gap as placements.
+	structures map[pool.Handle]world.FootprintRect
 }
 
 // TickContext carries per-tick shared services for unit-local stepping (ON-02).
@@ -312,6 +321,7 @@ func NewService(terrain *world.Terrain, catalog *content.Catalog, w *units.World
 	s.placements = make(map[pool.Handle]world.FootprintRect)
 	s.getBuiltLinks = make(map[pool.Handle]pool.Handle)
 	s.syntheticOffsets = make(map[pool.Handle]int)
+	s.structures = make(map[pool.Handle]world.FootprintRect)
 	s.buildProductIndex()
 	return s
 }
@@ -450,10 +460,38 @@ func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, re
 				continue // another owner keeps the cell; see TODO(question) above
 			}
 			cell.SetOccupantA(id)
-			cell.SetOccupied(true)
 		}
 	}
 	return nil
+}
+
+// retirePlacement releases a nanoframe's plot occupancy reservation and
+// records the completed building's footprint in the structures registry.
+// Occupancy shorts are mobile-occupancy state ([fmt tnt] runtime writer model:
+// unit stomp/unstomp), so a finished building must not keep squatting them —
+// its own stamp is what deadlocked every factory's first exit-spot validation.
+// Blocking duty moves to s.structures, the building-mask stand-in [04 §6.2].
+func (s *Service) retirePlacement(product pool.Handle) {
+	if s == nil || product == 0 {
+		return
+	}
+	rect, ok := s.placements[product]
+	s.releaseFrameStamps(product)
+	if !ok {
+		// Nothing was reserved for this product (fixture-created units); the
+		// structures registry only tracks footprints construction itself laid.
+		return
+	}
+	// Only building-class completions join the structures registry. A finished
+	// mobile unit walks away, so blocking overlap against it must not persist;
+	// its frame stamps still release like every other product's [04 §6.2].
+	if u := s.World.Unit(product); u != nil && u.Def != nil && u.Flags&units.BuildingClassStatus == 0 {
+		return
+	}
+	if s.structures == nil {
+		s.structures = make(map[pool.Handle]world.FootprintRect)
+	}
+	s.structures[product] = rect
 }
 
 // reservationYard resolves the product's yard-map control bytes over its
@@ -490,17 +528,9 @@ func yardTestsOccupancy(yard []world.YardCell, rect world.FootprintRect, x, z in
 	return yard[idx]&0x06 != 0
 }
 
-// ReleasePlacement removes an unfinished/dead product's reserved footprint.
-// Completed live products retain occupancy; callers handling a death/removal
-// invoke this before the unit leaves the pool [R-P0-09].
-func (s *Service) ReleasePlacement(product pool.Handle) bool {
+func (s *Service) releaseFrameStamps(product pool.Handle) bool {
 	if s == nil || s.placements == nil {
 		return false
-	}
-	if s.World != nil {
-		if u := s.World.Unit(product); u != nil && u.Alive && !u.Dying && u.Remaining == 0 {
-			return false
-		}
 	}
 	rect, ok := s.placements[product]
 	if !ok {
@@ -515,14 +545,52 @@ func (s *Service) ReleasePlacement(product pool.Handle) bool {
 					continue
 				}
 				cell.SetOccupantA(0)
-				if cell.OccupantB() == 0 {
-					cell.SetOccupied(false)
-				}
 			}
 		}
 	}
 	delete(s.placements, product)
 	return true
+}
+
+// ReleasePlacement removes an unfinished/dead product's reserved frame
+// footprint and any completed-structure registry entry for the handle; the
+// death/teardown observer calls this exactly once per leaving unit [R-P0-09].
+func (s *Service) ReleasePlacement(product pool.Handle) bool {
+	dropped := s.releaseFrameStamps(product)
+	if s != nil && s.structures != nil {
+		if _, ok := s.structures[product]; ok {
+			delete(s.structures, product)
+			dropped = true
+		}
+	}
+	return dropped
+}
+
+// StructureBlocks reports whether any completed building other than self
+// covers any cell of rect. Callers that validate a producer against its own
+// body pass that body as self so a factory exit inside its own yard stays
+// legal while foreign structures still block [05 "Factory production
+// lifecycle"][04 §6.2]. Deterministic scan: keys sorted ascending (I1).
+func (s *Service) StructureBlocks(self pool.Handle, rect world.FootprintRect) (pool.Handle, bool) {
+	if s == nil || len(s.structures) == 0 {
+		return 0, false
+	}
+	keys := make([]pool.Handle, 0, len(s.structures))
+	for h := range s.structures {
+		keys = append(keys, h)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	for _, h := range keys {
+		if h == self {
+			continue
+		}
+		r := s.structures[h]
+		if rect.MinX() < r.MaxX() && r.MinX() < rect.MaxX() &&
+			rect.MinZ() < r.MaxZ() && r.MinZ() < rect.MaxZ() {
+			return h, true
+		}
+	}
+	return 0, false
 }
 
 // BuilderLinks returns a copy of all builder/product links (ON-02).
@@ -788,14 +856,21 @@ func (s *Service) emitAcceptedNano(tick uint32, builder, product *units.Unit) {
 	if !ok {
 		return
 	}
-	// Selector 6 is the established construction segment selector. Lifetime
-	// and geometry beyond the supplied endpoint are intentionally unknown
-	// [R-P0-06]; the collector only admits this value event.
+	// Selector 6 is the established construction segment selector. The source
+	// is the QueryNanoPiece world position; the target is the product's world
+	// anchor [R-P0-06]. One event per accepted work step (mobile construction
+	// emits one segment, unlike build assist's two) [R-P0-06 §1][R-P0-06 §3].
+	// The producer identity routes the event to effect strip 6 (beam/muzzle/
+	// nanolathe) and the geometry flag opens the client's nanolathe draw gate
+	// [03 §5.5][R-P0-06 §5].
 	s.Presentation.EmitNanolathe(frame.Event{
 		Tick: tick, Source: builder.Handle, Target: product.Handle, Piece: piece,
 		X: source.X(), Y: source.Y(), Z: source.Z(),
 		TargetX: product.X, TargetY: product.Y, TargetZ: product.Z,
 		EffectID: 6, Mode: 1, Team: builder.Owner,
+		Producer:               frame.ProducerBeam,
+		PaletteRow:             6,
+		NanolatheGeometryKnown: true,
 	})
 }
 
@@ -893,18 +968,37 @@ func placementRules(s *Service, def *content.UnitDef) (world.PlacementRules, err
 	return rules, nil
 }
 
-func validatePlacement(s *Service, rect world.FootprintRect, def *content.UnitDef, yard []world.YardCell) (world.PlacementResult, error) {
+// validatePlacement runs the shared placement legality query for construction.
+// self is the identity exempted from occupancy rejection — the producing
+// factory at a factory exit or the walking builder at its own site ([05
+// "Factory production lifecycle"], [04 §6.4] "a nonzero occupant other than
+// the passed self identity rejects"). skipAggregates marks the factory
+// exit-spot query, whose caller mode is outside the recovered inline
+// terrain-check mode (see PlacementQuery.SkipTerrainAggregates). Completed
+// buildings register in s.structures and reject overlap here so releasing
+// frame stamps cannot let structures stack.
+func (s *Service) validatePlacement(self pool.Handle, rect world.FootprintRect, def *content.UnitDef, yard []world.YardCell, skipAggregates bool) (world.PlacementResult, error) {
 	if s == nil || s.Terrain == nil {
 		if s != nil && s.AllowSyntheticPlacement {
 			return world.PlacementResult{Rect: rect}, nil
 		}
 		return world.PlacementResult{}, fmt.Errorf("construction: placement terrain unavailable")
 	}
+	if _, blocked := s.StructureBlocks(self, rect); blocked {
+		return world.PlacementResult{}, fmt.Errorf("construction: footprint overlaps a completed structure")
+	}
 	rules, err := placementRules(s, def)
 	if err != nil {
 		return world.PlacementResult{}, err
 	}
-	return s.Terrain.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Mobile: def != nil && def.BMCode})
+	return s.Terrain.CheckPlacement(world.PlacementQuery{
+		Rect:                  rect,
+		Yard:                  yard,
+		Rules:                 rules,
+		Self:                  uint16(self),
+		Mobile:                def != nil && def.BMCode,
+		SkipTerrainAggregates: skipAggregates,
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -1357,6 +1451,11 @@ func (s *Service) applyCompletionPosture(product *units.Unit) {
 		product.IsCloaked = true
 	}
 	product.Health = product.MaxHealth
+	// Completion releases the frame's plot occupancy stamps and hands blocking
+	// duty to the structures registry: finished buildings must not occupy the
+	// mobile-occupancy shorts, or every factory's exit-spot validation would
+	// deadlock against its own yard [04 §6.2][05 "Factory production lifecycle"].
+	s.retirePlacement(product.Handle)
 }
 
 // removeHead removes the head node from factory's primary queue without
@@ -1616,7 +1715,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 				yard[i] = 0x06 // bits 1-2 set [04 §6.2]
 			}
 		}
-		if _, err := validatePlacement(s, factoryPlacement.Rect(), def, yard); err != nil {
+		if _, err := s.validatePlacement(factory.Handle, factoryPlacement.Rect(), def, yard, true); err != nil {
 			// Silent blocked revalidation: retry in exactly 15 ticks, stays — no
 			// message/sound/allocation; repeats every 15 while obstructed; NO
 			// timeout [05 C17]. Wake mask is bits {1,2}: schedule(node,15) sets
@@ -1733,7 +1832,7 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 			yard[i] = 0x06 // bits 1-2 reject any occupant [04 §6.2]
 		}
 	}
-	result, err := validatePlacement(s, rect, def, yard)
+	result, err := s.validatePlacement(builder.Handle, rect, def, yard, false)
 	if err != nil {
 		node.DynamicGate = WakeBit1 | WakeBit2
 		node.Deadline = int32(tick + 15)
@@ -1781,6 +1880,15 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 		pq := orders.QueueForUnit(product)
 		pq.Push(getBuiltID, orders.Node{Param2: 0})
 	}
+	// Turn the builder to face the build site before raising StartBuilding.
+	// Retail computes the bearing from the builder to the site and passes it to
+	// the slot-form StartBuilding so the script's aim/turn plays before the
+	// beam [04 §5.3][cob A-7]. We set the unit heading to the site bearing and
+	// pass the same value through startBuilding. TODO(question): whether retail
+	// also rotates the unit heading or leaves it to the script's turn is not
+	// traced; the slot-form arg is the established producer heading [cob A-7].
+	heading := movement.HeadingFromDelta(int64(node.GoalX)-int64(builder.X), int64(node.GoalZ)-int64(builder.Z))
+	builder.Move.Heading = heading
 	s.startBuilding(builder)
 	if s != nil && s.OnRefresh != nil {
 		s.OnRefresh(builder)

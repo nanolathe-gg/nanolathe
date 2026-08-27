@@ -107,3 +107,40 @@ func TestDrawEffectViewsAdmitsAuthoredLHTRowZero(t *testing.T) {
 		t.Fatalf("authored LHT row 0 was rejected: %+v", stats)
 	}
 }
+
+// TestDrawEffectViewsNanolatheBeamGate locks the strip-6 nanolathe draw branch
+// [03 §5.5]: an authoritative-geometry nanolathe effect on strip 6 draws one
+// stroke, while one without the geometry flag is skipped — the draw gate that
+// previously swallowed every construction/reclaim beam.
+func TestDrawEffectViewsNanolatheBeamGate(t *testing.T) {
+	base := Client{
+		width:   64,
+		height:  64,
+		indexed: make([]uint8, 64*64),
+		cam:     &camera.Camera{},
+		pal:     &palette.Tables{},
+	}
+	// Authoritative geometry: the beam must be drawn (one stroke, no skip).
+	c := base
+	c.indexed = make([]uint8, 64*64)
+	stats := c.DrawEffectViews([]frame.EffectView{{
+		ID: 1, Kind: frame.KindNanolathe.String(), Strip: 6,
+		NanolatheGeometryKnown: true,
+		X:                      numeric.Fixed(3 << 16), Y: numeric.Fixed(2 << 16), Z: numeric.Fixed(1 << 16),
+		TargetX: numeric.Fixed(9 << 16), TargetY: numeric.Fixed(2 << 16), TargetZ: numeric.Fixed(5 << 16),
+	}}, EffectDrawOptions{})
+	if stats.Strokes != 1 || stats.Skipped != 0 {
+		t.Fatalf("authoritative nanolathe beam was not drawn: %+v", stats)
+	}
+	// Unresolved geometry: the draw gate must skip, never fabricate a line.
+	c2 := base
+	c2.indexed = make([]uint8, 64*64)
+	stats = c2.DrawEffectViews([]frame.EffectView{{
+		ID: 2, Kind: frame.KindNanolathe.String(), Strip: 6,
+		X: numeric.Fixed(3 << 16), Y: numeric.Fixed(2 << 16), Z: numeric.Fixed(1 << 16),
+		TargetX: numeric.Fixed(9 << 16), TargetY: numeric.Fixed(2 << 16), TargetZ: numeric.Fixed(5 << 16),
+	}}, EffectDrawOptions{})
+	if stats.Strokes != 0 || stats.Skipped != 1 {
+		t.Fatalf("unresolved nanolathe geometry gate = %+v, want 1 skipped", stats)
+	}
+}

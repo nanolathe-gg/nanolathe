@@ -218,12 +218,12 @@ func TestPlacementDispatchUsesProducedDefinitionClass(t *testing.T) {
 	svc := NewService(terrain, cat, nil, nil)
 	extent, _ := world.NewFootprintExtent(1, 1)
 	rect, _ := world.NewFootprintRect(world.NewFootprintAnchor(0, 0), extent)
-	if _, err := validatePlacement(svc, rect, prod, []world.YardCell{0}); err == nil {
+	if _, err := svc.validatePlacement(0, rect, prod, []world.YardCell{0}, false); err == nil {
 		t.Fatal("factory mobile product used building yard path and ignored occupancy")
 	}
 
 	prod.BMCode = false // mobile-builder path placing a building product
-	if _, err := validatePlacement(svc, rect, prod, []world.YardCell{0}); err != nil {
+	if _, err := svc.validatePlacement(0, rect, prod, []world.YardCell{0}, false); err != nil {
 		t.Fatalf("building product did not use yard path: %v", err)
 	}
 }
@@ -237,11 +237,12 @@ func TestSilentFifteen(t *testing.T) {
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 		terrain.Plot[i].SetOccupied(false)
 	}
-	// Mark cell (4,4) as mobile-occupied at the factory exit spot: yard bits
+	// Mark cell (4,4) as mobile-occupied by a FOREIGN unit at the factory
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// bit [04 §6.2].
+	// the feature-instance bit, and reject any occupant other than the passed
+	// self identity (the producing factory here has handle 1) [04 §6.2].
 	idx := 4*10 + 4
-	terrain.Plot[idx].SetOccupantA(1)
+	terrain.Plot[idx].SetOccupantA(9)
 
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	facDef := newFactoryDef("armfac", 2, 2, 300)
@@ -302,7 +303,7 @@ func TestSilentFifteen(t *testing.T) {
 	if len(svc.Messages()) != 0 {
 		t.Fatalf("still silent")
 	}
-	// Unblock: clear the layer-A occupancy stamp
+	// Unblock: clear the foreign layer-A occupancy stamp
 	terrain.Plot[idx].SetOccupantA(0)
 	// Next pump should succeed allocation (nanoframe)
 	tick = uint32(40)

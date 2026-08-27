@@ -37,7 +37,6 @@ type StrictGateEvidence struct {
 	Reason          string            `json:"reason"`
 	FinalTick       uint32            `json:"final_tick"`
 	FinalStateHash  string            `json:"final_state_hash"`
-	TraceHash       string            `json:"trace_hash"`
 	Fallbacks       []string          `json:"fallbacks"`
 	Warnings        []string          `json:"warnings"`
 }
@@ -58,7 +57,6 @@ type StrictFailureRecord struct {
 	AITask          string              `json:"ai_task,omitempty"`
 	AIDeadline      uint32              `json:"ai_deadline,omitempty"`
 	ResultLatch     string              `json:"result_latch,omitempty"`
-	Last50Trace     []string            `json:"last_50_trace"`
 	Evidence        *StrictGateEvidence `json:"evidence,omitempty"`
 }
 
@@ -69,16 +67,6 @@ func strictCommit() string {
 		return "unknown"
 	}
 	return strings.TrimSpace(string(out))
-}
-
-// HashTrace returns deterministic sha256 of ordered trace events [INVARIANTS I1][I4].
-func HashTrace(evs []SessionTraceEvent) string {
-	h := sha256.New()
-	for _, e := range evs {
-		fmt.Fprintf(h, "%d:%s:%d:%d:%d:%d:%d:%d:%d;", e.Tick, e.Kind, e.Player, e.Handle, e.Slot, e.WeaponID, e.X.Raw(), e.Z.Raw(), e.Value)
-	}
-	sum := h.Sum(nil)
-	return hex.EncodeToString(sum[:8])
 }
 
 // HashState returns deterministic state hash for session (units + projectiles).
@@ -160,22 +148,6 @@ func HashState(s *Session) string {
 	}
 	sum := h.Sum(nil)
 	return hex.EncodeToString(sum[:8])
-}
-
-// LastNTraceStrings returns formatted last N trace events for diagnostics.
-func LastNTraceStrings(evs []SessionTraceEvent, n int) []string {
-	if len(evs) <= n {
-		n = len(evs)
-	}
-	start := len(evs) - n
-	if start < 0 {
-		start = 0
-	}
-	out := make([]string, 0, len(evs)-start)
-	for _, e := range evs[start:] {
-		out = append(out, fmt.Sprintf("T%d %s P%d H%d S%d W%d X%d Z%d V%d", e.Tick, e.Kind, e.Player, e.Handle, e.Slot, e.WeaponID, e.X.Raw(), e.Z.Raw(), e.Value))
-	}
-	return out
 }
 
 // FormatEvidence returns JSON indented evidence for logging.
@@ -405,5 +377,4 @@ func strictResultLatch(s *Session) string {
 }
 
 var _ = strictCommit
-var _ = HashTrace
 var _ = HashState

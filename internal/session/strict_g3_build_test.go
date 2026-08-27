@@ -86,8 +86,6 @@ func TestStrictSkirmish_MobileBuildStarvesResumesCompletes(t *testing.T) {
 	t.Logf("G3 stage1 descriptor retains coords at tick %d", s.Clock.GlobalTick)
 	stages := map[string]uint32{"descriptor_coords": 0}
 	lastCompleted := "descriptor_coords"
-	s.SetTraceEnabled(true)
-	s.ClearTrace()
 	var nanoframeHandle pool.Handle
 	initialBX, initialBZ := b.X, b.Z
 	builderMoved := false
@@ -140,13 +138,12 @@ nanoframeLoop:
 		}
 	}
 	if _, ok := stages["nanoframe"]; !ok {
-		evs := s.TraceEvents()
 		fr := StrictFailureRecord{
 			LastCompleted: lastCompleted, CurrentTick: s.Clock.GlobalTick, Seed: simSeed, CrtSeed: crtSeed,
 			Handles: []string{fmt.Sprintf("%d", hBuilder)}, DefKeys: []string{productDef.UnitName},
 			QueueHead: strictQueueHeadString(hBuilder, s), PathStatus: strictPathStatus(hBuilder, s),
 			ResourceStocks: strictResourceStocks(0, s), ProjectileCount: s.Combat.Count(),
-			ResultLatch: strictResultLatch(s), Last50Trace: LastNTraceStrings(evs, 50),
+			ResultLatch: strictResultLatch(s),
 		}
 		t.Logf("G3 FAILURE nanoframe not found: %s", FormatFailure(fr))
 		t.Fatalf("G3 stage4 nanoframe not allocated [G3 1..10] last %s tick %d", lastCompleted, s.Clock.GlobalTick)
@@ -223,12 +220,11 @@ nanoframeLoop:
 		}
 	}
 	if !resumed {
-		evs := s.TraceEvents()
 		fr := StrictFailureRecord{
 			LastCompleted: lastCompleted, CurrentTick: s.Clock.GlobalTick, Seed: simSeed, CrtSeed: crtSeed,
 			Handles: []string{fmt.Sprintf("%d builder %d product", hBuilder, nanoframeHandle)}, DefKeys: []string{productDef.UnitName},
 			QueueHead: strictQueueHeadString(hBuilder, s), ResourceStocks: strictResourceStocks(0, s),
-			ProjectileCount: s.Combat.Count(), Last50Trace: LastNTraceStrings(evs, 50),
+			ProjectileCount: s.Combat.Count(),
 		}
 		t.Logf("G3 FAILURE work resume: %s", FormatFailure(fr))
 		t.Fatalf("G3 stage9 work resume failed")
@@ -269,13 +265,12 @@ nanoframeLoop:
 	if dx < -tol || dx > tol || dz < -tol || dz > tol {
 		t.Fatalf("G3 completed unit not at site")
 	}
-	evs := s.TraceEvents()
 	_ = world.CellToWorld
 	ev := StrictGateEvidence{
 		Commit: strictCommit(), ContentManifest: strictCatalogHash(cat), Map: "test", Seed: simSeed, CrtSeed: crtSeed,
 		Players: []map[string]any{{"slot": 0, "control": "human"}},
 		MaxTick: maxTick, Milestones: stages, Winner: -1, Reason: "G3 mobile build",
-		FinalTick: s.Clock.GlobalTick, FinalStateHash: HashState(s), TraceHash: HashTrace(evs),
+		FinalTick: s.Clock.GlobalTick, FinalStateHash: HashState(s),
 	}
 	t.Logf("G3 evidence: %s", FormatEvidence(ev))
 }

@@ -1678,6 +1678,31 @@ class-specific footprint validation → allocate the product only on success. A
 blocked factory exit schedules an exact 15-tick retry before allocation,
 emitting no product, sound, or placement event.
 
+**Supported inference — exit spots overlap the producing factory's own body,
+so finished buildings cannot live on the unit-stomp occupancy shorts
+[R-P0-08-A §1] (2026-08-27).** Stock factory COBs author their build-info door
+piece inside their own footprint, so the snapped exit rectangle always
+intersects cells the factory itself covers — yet stock factories produce. Two
+consequences follow for the bits-1–2 occupant test above: the occupants it
+reads are the plot's mobile stomp/unstomp shorts ([02 "Terrain file"]), which
+finished buildings never write; and building blocking is a separate layer
+(the building-mask layer named in §6.2). An earlier Nanolathe implementation
+kept a completed product's construction reservation stamped on those same
+shorts, and its own factory then failed exit validation in the silent 15-tick
+blocked-revalidation loop forever — every first product of every stock lab.
+The retention was corrected forward: frame reservations release at completion
+and completed buildings register in a structures registry that placement
+consults instead. Self identity passed to the validator exempts only the
+producing factory or walking builder; foreign stamps still block silently.
+
+`TODO(question)`: the exit caller's terrain-check mode value is unresolved —
+the inline aggregate gates (slope/height/water, recovered mode value 1)
+need not run at exits at all. Nanolathe currently runs factory exit-spot
+validation outside those aggregates (`PlacementQuery.SkipTerrainAggregates`)
+while mobile builder site builds keep them; a targeted executable trace of
+the mode argument at the production state machine's validation call would
+settle it.
+
 **Established fact — yard control bytes [R-P0-08]:** The compiled yard-map
 characters are:
 
@@ -1973,6 +1998,17 @@ clamps compare RAW authored radii while its arrival predicate uses
 must be reproduced as-is, not "fixed" [P0-13 A19].
 
 **Established fact:** Build-site generation enumerates perimeter candidates around a footprint, filters by range and placement validation, sorts a bounded list of candidates, and passes a selected point goal into path search.
+
+**Mobile-build walk target [R-P0-19]:** Nanolathe drives the mobile-build
+walk with a rectangle-perimeter goal around the product footprint expanded
+outward by the builder's footprint half-extents, so a builder resting its
+centre on the expanded border clears the product footprint. The builder stops
+when its nano piece is within nanolathe reach of the footprint's nearest edge
+and the order reports its approach complete, so the mover no longer keeps
+steering at the build-site anchor. The exact retail perimeter-candidate
+ranking and expansion remain `TODO(question)`; the half-extent expansion is the
+placeholder that reproduces the established stop-outside-the-footprint
+outcome.
 
 **Established fact:** Dynamic blockers update a profile revision. Existing heap entries are not eagerly purged; passability is rechecked lazily when a node is expanded. This can turn a previously open node into a blocked one without rebuilding the whole heap.
 
@@ -2461,6 +2497,10 @@ Function identities that a later re-derivation corrected — in particular the m
 ## Missing and unknown
 
 ### Simulation and identity
+
+- The placement validator's caller-mode value at the factory exit-spot call
+  (whether the inline aggregate terrain gates run there at all) — see
+  [R-P0-08-A §1] in section 6.4.
 
 - Complete lockstep packet ordering, replay state, state-hash contents, and resynchronization behavior.
 - Complete serialization of transient order queues, script callbacks, and

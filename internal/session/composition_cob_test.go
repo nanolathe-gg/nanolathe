@@ -79,7 +79,7 @@ func TestCompositionRetailCOBBindings(t *testing.T) {
 
 func TestCompositionStrictBindingRejectsMissingModel(t *testing.T) {
 	fs := vfs.New()
-	s := &Session{Presentation: nil}
+	s := &Session{}
 	u := &units.Unit{Def: &content.UnitDef{UnitName: "armcom", ObjectName: "missing"}}
 	if err := s.bindUnitCOB(fs, u); err == nil {
 		t.Fatal("missing authored model unexpectedly entered production binding")
@@ -117,12 +117,12 @@ func TestCompositionModelCacheIncludesWinningProvider(t *testing.T) {
 }
 
 func TestCOBPresentationSinkMapsPieceIdentity(t *testing.T) {
-	s := &Session{Presentation: frame.NewEventBuffer(frame.Limits{})}
-	sink := &cobPresentationSink{session: s, source: 1}
+	s := &Session{publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}))}
+	sink := &cobPresentationSink{publication: s.publication, clock: s.Clock, source: 1}
 	sink.SetCOBPieceMap([]int{1, 0})
 	sink.EmitCOBEvent(cob.PresentationEvent{Kind: cob.PresentationSFX, Piece: 0, SFXType: 1})
 	sink.EmitCOBEvent(cob.PresentationEvent{Kind: cob.PresentationSFX, Piece: 2, SFXType: 1})
-	events := s.Presentation.Events()
+	events := s.publication.events.Events()
 	if len(events) != 1 || events[0].Piece != 1 {
 		t.Fatalf("mapped presentation events = %#v, want one model piece 1", events)
 	}
@@ -139,7 +139,7 @@ func TestCompositionBinderFutureAllocationIsStrictAndPreCreate(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	good := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testunit"}, UnitName: "testunit", ObjectName: "fixture", MaxDamage: 10, Limit: -1}
 	cat.Units[good.CanonicalKey] = good
-	s := &Session{rngSim: rng.NewSimulation(77), rngCrt: rng.NewCRT(9), rngInitialized: true, Presentation: frame.NewEventBuffer(frame.Limits{})}
+	s := &Session{rngSim: rng.NewSimulation(77), rngCrt: rng.NewCRT(9), rngInitialized: true, publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}))}
 	w := units.New(2, cat)
 	w.SetCOBSource(fs, globalCobLoader)
 	w.SetCOBBinder(func(u *units.Unit) error { return s.bindUnitCOB(fs, u) })

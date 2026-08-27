@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -300,40 +301,6 @@ func TestResult_MutualDestructionDraw(t *testing.T) {
 	}
 }
 
-func TestResult_CallbackFiresOnce(t *testing.T) {
-	rng.SeedGlobal(6, 6)
-	cat := minimalCatalogForStrict()
-	for _, u := range cat.Units {
-		u.Commander = true
-	}
-	fs := fsWithMap(t, "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=10;\nZPos=10;\n}\n}\n}\n}\n")
-	cfg := SkirmishConfig{MapName: "test", NumPlayers: 2}
-	cfg.ApplyDefaults()
-	s, err := NewSkirmishForTest(fs, cat, cfg)
-	if err != nil {
-		t.Fatalf("NewSkirmishForTest: %v", err)
-	}
-	s.State = StateBattle
-	s.RegisterAll()
-	count := 0
-	s.SetResultCallback(func(r Result) { count++ })
-	// Kill enemy
-	s.Units.Destroy(poolHandle(commanderHandles(s)[1][0]), units.DeathKilled)
-	for tick := uint32(0); tick < 200; tick++ {
-		s.EvaluateResult(tick)
-	}
-	if count != 1 {
-		t.Fatalf("callback should fire once, got %d", count)
-	}
-	// Further evaluations should not fire again (200..300 covers next due windows)
-	for tick := uint32(200); tick < 310; tick++ {
-		s.EvaluateResult(tick)
-	}
-	if count != 1 {
-		t.Fatalf("callback fired more than once: %d", count)
-	}
-}
-
 func TestResult_ResultViewExposesEnded(t *testing.T) {
 	rng.SeedGlobal(7, 7)
 	cat := minimalCatalogForStrict()
@@ -359,6 +326,9 @@ func TestResult_ResultViewExposesEnded(t *testing.T) {
 	for tick := uint32(0); tick < 200; tick++ {
 		s.EvaluateResult(tick)
 	}
+	// A committed frame is the sole result publication path; direct evaluator
+	// calls in this fixture need one explicit frame commit before inspection.
+	s.publishSnapshot(199)
 	// After latch, snapshot view should be ended
 	if s.Snapshot != nil {
 		view := s.Snapshot.Current().Result
@@ -386,6 +356,95 @@ func TestResult_AIProfileLoadFailure(t *testing.T) {
 	_, err := NewSkirmishWithFS(fs, cat, cfg)
 	if err == nil {
 		t.Fatalf("expected AI profile load failure error for computer player without profile")
+	}
+}
+
+func newLobbyEndRuleSession(t *testing.T, commanderDeath int, addEnemyUnit bool) (*Session, pool.Handle) {
+	t.Helper()
+	cat := minimalCatalogForStrict()
+	ordinary := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "corllt"},
+		UnitName:         "corllt",
+		MaxDamage:        500,
+		FootprintX:       1,
+		FootprintZ:       1,
+	}
+	cat.Units[ordinary.CanonicalKey] = ordinary
+	fs := fsWithMap(t, "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=100;\nZPos=100;\n}\n}\n}\n}\n")
+	cfg := SkirmishConfig{MapName: "test", NumPlayers: 2}
+	cfg.ApplyDefaults()
+	cfg.CommanderDeath = commanderDeath
+	cfg.Players[0].Controller = 0
+	cfg.Players[1].Controller = 0
+	s, err := NewSkirmishForTest(fs, cat, cfg)
+	if err != nil {
+		t.Fatalf("NewSkirmishForTest: %v", err)
+	}
+	s.State = StateBattle
+	s.RegisterAll()
+	if !addEnemyUnit {
+		return s, 0
+	}
+	h, err := s.Units.Create(ordinary, 1, numeric.Fixed(120<<16), 0, numeric.Fixed(120<<16))
+	if err != nil {
+		t.Fatalf("create enemy ordinary unit: %v", err)
+	}
+	return s, h
+}
+
+func stepLobbyThrough(t *testing.T, s *Session, first, last int32) {
+	t.Helper()
+	for now := first; now <= last; now++ {
+		s.Step(now)
+	}
+}
+
+func TestSkirmishLobby_DefaultMissionTriggersDoNotEndLiveMatch(t *testing.T) {
+	for _, commanderDeath := range []int{0, 1} {
+		t.Run(string(rune('0'+commanderDeath)), func(t *testing.T) {
+			s, _ := newLobbyEndRuleSession(t, commanderDeath, false)
+			if len(s.Mission.Victory) == 0 || len(s.Mission.Defeat) == 0 {
+				t.Fatalf("fixture must contain injected default mission triggers")
+			}
+			stepLobbyThrough(t, s, 0, 220)
+			if s.Clock.GlobalTick <= 180 {
+				t.Fatalf("advanced only %d ticks, want beyond 180", s.Clock.GlobalTick)
+			}
+			if s.State != StateBattle || s.GetResult().Ended || s.Latch.Countdown != -1 {
+				t.Fatalf("live lobby match ended: state=%v result=%+v latch=%+v", s.State, s.GetResult(), s.Latch)
+			}
+			if s.Mission.Victory[0].Completed || s.Mission.Defeat[0].Completed {
+				t.Fatalf("lobby polled OTA default triggers: victory=%v defeat=%v", s.Mission.Victory[0].Completed, s.Mission.Defeat[0].Completed)
+			}
+		})
+	}
+}
+
+func TestSkirmishLobby_CommanderDeathModeEndsWithOtherUnitsAlive(t *testing.T) {
+	s, ordinary := newLobbyEndRuleSession(t, 1, true)
+	killCommander(t, s, 1)
+	stepLobbyThrough(t, s, 0, 220)
+	if u := s.Units.Unit(ordinary); u == nil || !u.Alive || u.Dying {
+		t.Fatalf("ordinary enemy unit did not survive commander loss")
+	}
+	res := s.GetResult()
+	if s.State != StatePostBattle || !res.Ended || res.Reason != ReasonCommanderDeath {
+		t.Fatalf("commander-death mode did not end on commander loss: state=%v result=%+v", s.State, res)
+	}
+}
+
+func TestSkirmishLobby_AllUnitsModeWaitsForFinalUnit(t *testing.T) {
+	s, ordinary := newLobbyEndRuleSession(t, 0, true)
+	killCommander(t, s, 1)
+	stepLobbyThrough(t, s, 0, 220)
+	if s.State != StateBattle || s.GetResult().Ended || s.Latch.Countdown != -1 {
+		t.Fatalf("all-units mode ended while enemy unit survived: state=%v result=%+v latch=%+v", s.State, s.GetResult(), s.Latch)
+	}
+	s.Units.Destroy(ordinary, units.DeathKilled)
+	stepLobbyThrough(t, s, 221, 450)
+	res := s.GetResult()
+	if s.State != StatePostBattle || !res.Ended || res.Reason != ReasonAllUnits {
+		t.Fatalf("all-units mode did not end after final unit: state=%v result=%+v", s.State, res)
 	}
 }
 

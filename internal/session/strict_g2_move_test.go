@@ -1,7 +1,6 @@
 package session
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"testing"
 
@@ -71,14 +70,11 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 		t.Fatalf("G2 stage1 order queued failed")
 	}
 	t.Logf("G2 stage1 order queued handle %d goal %d %d", h, goalX.Raw(), goalZ.Raw())
-	s.SetTraceEnabled(true)
-	s.ClearTrace()
 	stages := map[string]uint32{"order_queued": 0}
 	lastCompleted := "order_queued"
 	var pathSubmittedTick, routePublishedTick, movementBeginsTick, routeAdvanceTick, goalToleranceTick, orderCompleteTick *uint32
 	initialX, initialZ := u.X, u.Z
 	routeCountBefore := -1
-	distBefore := numeric.Fixed(1 << 30)
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// completes only when the committed tile equals the goal cell, inclusive.
@@ -96,7 +92,7 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 			if route != nil && route.Active && route.Count > 0 {
 				hasReq = true // route implies request was submitted
 			}
-			// Also check trace for path submission via scheduler Tick? Use HasRequest history
+			// The scheduler request/route state is the observable path boundary.
 			if hasReq {
 				stages["path_request_submitted"] = uint32(tick)
 				tmp := uint32(tick)
@@ -151,35 +147,10 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 					t.Logf("G2 stage5 route points advance at tick %d count %d -> %d", tick, routeCountBefore, route.Count)
 					routeCountBefore = int(route.Count)
 				}
-			}
-			evs := s.TraceEvents()
-			for _, ev := range evs {
-				if ev.Kind == TraceMovementStep && ev.Handle == h {
-					if distBefore.Raw() != 1<<30 && ev.X.Raw() < distBefore.Raw() && ev.X.Raw() > 0 && ev.X.Raw() < int64(1<<28) {
-						if _, ok := stages["route_points_advance"]; !ok && ev.X.Raw() != distBefore.Raw() {
-							// DistToGoal decreasing indicates progress
-							// Only mark if we have moved at least once
-							if u.X != initialX || u.Z != initialZ {
-								stages["route_points_advance"] = uint32(tick)
-								tmp := uint32(tick)
-								routeAdvanceTick = &tmp
-								lastCompleted = "route_points_advance"
-								t.Logf("G2 stage5 route points advance via dist %d -> %d at tick %d", distBefore.Raw(), ev.X.Raw(), tick)
-							}
-						}
-					}
-					distBefore = ev.X
-				}
-			}
-		} else {
-			// Update routeCountBefore for next tick
-			if route := s.Movement.Routes[h]; route != nil {
-				routeCountBefore = int(route.Count)
-			}
-			// Still track dist for logging
-			for _, ev := range s.TraceEvents() {
-				if ev.Kind == TraceMovementStep && ev.Handle == h {
-					distBefore = ev.X
+			} else {
+				// Update routeCountBefore for next tick
+				if route := s.Movement.Routes[h]; route != nil {
+					routeCountBefore = int(route.Count)
 				}
 			}
 		}
@@ -232,10 +203,7 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 	requiredOrder := []string{"order_queued", "path_request_submitted", "route_published", "movement_begins", "route_points_advance", "goal_tolerance", "order_complete"}
 	for i, name := range requiredOrder {
 		if _, ok := stages[name]; !ok {
-			evs := s.TraceEvents()
-			last50 := LastNTraceStrings(evs, 50)
 			stateHash := HashState(s)
-			traceHash := HashTrace(evs)
 			manifest := strictCatalogHash(cat)
 			handles := []string{fmt.Sprintf("%d", h)}
 			defKeys := []string{def.UnitName}
@@ -252,13 +220,13 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 				Commit: strictCommit(), ContentManifest: manifest, Map: "test", Seed: simSeed, CrtSeed: crtSeed,
 				Players: []map[string]any{{"slot": 0, "control": "human"}, {"slot": 1, "control": "computer"}},
 				MaxTick: maxTick, Milestones: stages, Winner: -1, Reason: "G2 move", FinalTick: s.Clock.GlobalTick,
-				FinalStateHash: stateHash, TraceHash: traceHash,
+				FinalStateHash: stateHash,
 			}
 			fr := StrictFailureRecord{
 				LastCompleted: lastCompleted, CurrentTick: s.Clock.GlobalTick, Seed: simSeed, CrtSeed: crtSeed,
 				Handles: handles, DefKeys: defKeys, QueueHead: queueHead, PathStatus: pathStatus,
 				AimState: aimState, ResourceStocks: resourceStocks, ProjectileCount: projCount,
-				ResultLatch: resultLatch, Last50Trace: last50, Evidence: &evidence,
+				ResultLatch: resultLatch, Evidence: &evidence,
 			}
 			t.Logf("G2 FAILURE record: %s", FormatFailure(fr))
 			for _, n := range requiredOrder {
@@ -281,9 +249,7 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 		}
 		prevTick = tick
 	}
-	evs := s.TraceEvents()
 	stateHash := HashState(s)
-	traceHash := HashTrace(evs)
 	rng.SeedGlobal(simSeed, crtSeed)
 	cat2 := strictMinimalCatalog()
 	for _, d := range cat2.Units {
@@ -321,16 +287,10 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 	}
 	q2 := orders.QueueForUnit(u2)
 	q2.Push(id2, orders.NewMoveNode(id2, goalX, goalZ, s2.Clock.GlobalTick, h2, false))
-	s2.SetTraceEnabled(true)
-	s2.ClearTrace()
 	for tick := 1; tick <= int(stages["order_complete"]); tick++ {
 		s2.Step(int32(tick))
 	}
-	traceHash2 := HashTrace(s2.TraceEvents())
 	stateHash2 := HashState(s2)
-	if traceHash != traceHash2 {
-		t.Fatalf("G2 determinism: trace hash mismatch %s vs %s", traceHash, traceHash2)
-	}
 	if stateHash != stateHash2 {
 		t.Fatalf("G2 determinism: state hash mismatch %s vs %s", stateHash, stateHash2)
 	}
@@ -349,9 +309,8 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 			"order_complete":         *orderCompleteTick,
 		},
 		Winner: -1, Reason: "G2 move arrival", FinalTick: s.Clock.GlobalTick,
-		FinalStateHash: stateHash, TraceHash: traceHash, Fallbacks: fallbacks, Warnings: warnings,
+		FinalStateHash: stateHash, Fallbacks: fallbacks, Warnings: warnings,
 	}
-	_ = sha256.Sum256
 	_ = fmt.Sprintf
 	t.Logf("G2 evidence: %s", FormatEvidence(ev))
 }

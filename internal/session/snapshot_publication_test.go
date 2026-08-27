@@ -42,7 +42,7 @@ func TestSnapshotPublishFailurePreservesStagedEvents(t *testing.T) {
 	if !c.EmitImpact(frame.Event{Tick: 4, Graphic: "pending"}) {
 		t.Fatal("admit event")
 	}
-	s := &Session{Snapshot: frame.NewBuffer(), Presentation: c}
+	s := &Session{Snapshot: frame.NewBuffer(), publication: newPublicationState(c)}
 	s.publishSnapshot(4)
 	if !c.EmitExplosion(frame.Event{Tick: 4, Graphic: "must-remain"}) {
 		t.Fatal("admit duplicate-tick event")
@@ -73,7 +73,7 @@ func TestSnapshotPublishFailurePreservesStagedEvents(t *testing.T) {
 
 func TestSnapshotWarmPublicationReusesFrameStorage(t *testing.T) {
 	c := frame.NewEventBuffer(frame.Limits{MaxEvents: 2, MaxEffectEvents: 2})
-	s := &Session{Snapshot: frame.NewBuffer(), Presentation: c}
+	s := &Session{Snapshot: frame.NewBuffer(), publication: newPublicationState(c)}
 	for tick := uint32(1); tick <= 3; tick++ {
 		if !c.EmitExplosion(frame.Event{Tick: tick, Graphic: "steady"}) {
 			t.Fatal("warm event admission")
@@ -151,7 +151,8 @@ func TestSnapshotPublishesEventsInAdmissionOrderExactlyOnce(t *testing.T) {
 	if !c.EmitImpact(frame.Event{Tick: 4, Graphic: "first"}) || !c.EmitExplosion(frame.Event{Tick: 4, Graphic: "second"}) {
 		t.Fatal("admit presentation events")
 	}
-	s := &Session{Snapshot: &frame.Buffer{}, Presentation: c}
+	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c)}
+	s.publication.effects.Advance(4, c.StagingEvents())
 	s.publishSnapshot(4)
 	first := s.Snapshot.Current()
 	if first == nil || len(first.Events) != 2 {
@@ -173,12 +174,13 @@ func TestSnapshotPublishesEventsInAdmissionOrderExactlyOnce(t *testing.T) {
 func TestSnapshotPublishesActiveEffectsFromOrderedEvents(t *testing.T) {
 	c := frame.NewEventBuffer(frame.Limits{})
 	if !c.EmitNanolathe(frame.Event{
-		Tick: 4, Source: 2, Target: 3, Piece: 6, EffectID: 6,
+		Tick: 4, Source: 2, Target: 3, Piece: 6, EffectID: 6, Lifetime: 1,
 		X: 11, Y: 12, Z: 13, TargetX: 21, TargetY: 22, TargetZ: 23,
 	}) {
 		t.Fatal("admit nanolathe event")
 	}
-	s := &Session{Snapshot: &frame.Buffer{}, Presentation: c}
+	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c)}
+	s.publication.effects.Advance(4, c.StagingEvents())
 	s.publishSnapshot(4)
 	frame := s.Snapshot.Current()
 	if frame == nil || len(frame.Effects) != 1 {
@@ -191,6 +193,7 @@ func TestSnapshotPublishesActiveEffectsFromOrderedEvents(t *testing.T) {
 	// Both Events and Effects are one-shot windows derived from the same
 	// ordered admission: each visual event produces exactly one EffectView for
 	// that tick, and neither persists beyond the window [F-P0-034][03 §1] C5.
+	s.publication.effects.Advance(5, nil)
 	s.publishSnapshot(5)
 	next := s.Snapshot.Current()
 	if next == nil || len(next.Events) != 0 || len(next.Effects) != 0 {

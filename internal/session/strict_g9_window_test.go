@@ -36,8 +36,6 @@ func TestStrictSkirmish_WindowedHumanUsability(t *testing.T) {
 	u := s.Units.Unit(h)
 	publishOne(s, u)
 	s.Movement.EnsureUnit(u)
-	s.SetTraceEnabled(true)
-	s.ClearTrace()
 	s.Clock.ScaledAnchor = 0
 	// Simulate deterministic input replay: select commander, left-click contextual move, etc.
 	// For scaffold, we just verify that snapshot is readable and that HUD click does not leak into selection
@@ -55,7 +53,6 @@ func TestStrictSkirmish_WindowedHumanUsability(t *testing.T) {
 		Commit: strictCommit(), ContentManifest: strictCatalogHash(cat), Map: "test", Seed: simSeed, CrtSeed: crtSeed,
 		Players: []map[string]any{{"slot": 0, "control": "human"}},
 		MaxTick: 1, Milestones: map[string]uint32{"windowed_scaffold": 1}, Winner: -1, Reason: "G9 windowed scaffold",
-		FinalTick: s.Clock.GlobalTick, FinalStateHash: afterHash, TraceHash: HashTrace(s.TraceEvents()),
 		Fallbacks: []string{"windowed test scaffold - no real window required [G9]"}, Warnings: []string{},
 	}
 	t.Logf("G9 evidence: %s", FormatEvidence(ev))

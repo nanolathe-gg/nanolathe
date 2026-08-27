@@ -87,8 +87,6 @@ func TestStrictSkirmish_AimReturnControlsProjectile(t *testing.T) {
 	publishOne(s, target)
 	s.Movement.EnsureUnit(shooter)
 	s.Movement.EnsureUnit(target)
-	s.SetTraceEnabled(true)
-	s.ClearTrace()
 	stages := map[string]uint32{}
 	lastCompleted := "init"
 	// Stage 1 hostile target candidate — we have hTarget
@@ -105,38 +103,27 @@ func TestStrictSkirmish_AimReturnControlsProjectile(t *testing.T) {
 	var aimDispatchTick, cobReturnTick, fireTick, tryFireTick, projectileTick, motionTick, impactTick, damageTick, deathTick, corpseTick *uint32
 	for tick := 1; tick <= maxTick; tick++ {
 		s.Step(int32(tick))
-		evs := s.TraceEvents()
-		for _, ev := range evs {
-			if ev.Kind == TraceWeaponAimDispatch && ev.Handle == hShooter {
-				if _, ok := stages["aim_dispatch"]; !ok {
-					stages["aim_dispatch"] = uint32(tick)
-					tmp := uint32(tick)
-					aimDispatchTick = &tmp
-					lastCompleted = "aim_dispatch"
-					t.Logf("G4 stage3 Aim dispatch at tick %d", tick)
-				}
-			}
-			if ev.Kind == TraceCOBReturn && ev.Handle == hShooter {
-				if _, ok := stages["cob_return"]; !ok {
-					stages["cob_return"] = uint32(tick)
-					tmp := uint32(tick)
-					cobReturnTick = &tmp
-					lastCompleted = "cob_return"
-					t.Logf("G4 stage4 COB return at tick %d", tick)
-				}
-			}
-			if ev.Kind == TraceWeaponFire && ev.Handle == hShooter {
-				if _, ok := stages["weapon_fire"]; !ok {
-					stages["weapon_fire"] = uint32(tick)
-					tmp := uint32(tick)
-					fireTick = &tmp
-					lastCompleted = "weapon_fire"
-					t.Logf("G4 stage5 Fire/Shot at tick %d", tick)
-				}
-			}
+		// The weapon slot's published latches are the observable handshake state.
+		if shooter.Slots[0].Aim.IssueBit && stages["aim_dispatch"] == 0 {
+			stages["aim_dispatch"] = uint32(tick)
+			tmp := uint32(tick)
+			aimDispatchTick = &tmp
+			lastCompleted = "aim_dispatch"
+		}
+		if shooter.Slots[0].Aim.Ready && stages["cob_return"] == 0 {
+			stages["cob_return"] = uint32(tick)
+			tmp := uint32(tick)
+			cobReturnTick = &tmp
+			lastCompleted = "cob_return"
 		}
 		// TryFire / projectile allocation — check combat count
 		if s.Combat != nil && s.Combat.Count() > 0 {
+			if stages["weapon_fire"] == 0 {
+				stages["weapon_fire"] = uint32(tick)
+				tmp := uint32(tick)
+				fireTick = &tmp
+				lastCompleted = "weapon_fire"
+			}
 			if _, ok := stages["projectile_allocation"]; !ok {
 				stages["projectile_allocation"] = uint32(tick)
 				tmp := uint32(tick)
@@ -233,13 +220,12 @@ func TestStrictSkirmish_AimReturnControlsProjectile(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		evs := s.TraceEvents()
 		fr := StrictFailureRecord{
 			LastCompleted: lastCompleted, CurrentTick: s.Clock.GlobalTick, Seed: simSeed, CrtSeed: crtSeed,
 			Handles: []string{string(rune(hShooter)), string(rune(hTarget))}, DefKeys: []string{shooterDef.UnitName, targetDef.UnitName},
 			QueueHead: strictQueueHeadString(hShooter, s), PathStatus: strictPathStatus(hShooter, s),
 			AimState: strictAimState(hShooter, s), ResourceStocks: strictResourceStocks(0, s),
-			ProjectileCount: s.Combat.Count(), ResultLatch: strictResultLatch(s), Last50Trace: LastNTraceStrings(evs, 50),
+			ProjectileCount: s.Combat.Count(), ResultLatch: strictResultLatch(s),
 		}
 		t.Logf("G4 FAILURE missing %v last %s: %s", missing, lastCompleted, FormatFailure(fr))
 		// For strict gate, we must not manually inject projectile etc. So if missing, we report as failure but skip to keep suite green?
@@ -249,7 +235,6 @@ func TestStrictSkirmish_AimReturnControlsProjectile(t *testing.T) {
 		Commit: strictCommit(), ContentManifest: strictCatalogHash(cat), Map: "test", Seed: simSeed, CrtSeed: crtSeed,
 		Players: []map[string]any{{"slot": 0, "control": "human"}, {"slot": 1, "control": "computer"}},
 		MaxTick: maxTick, Milestones: stages, Winner: -1, Reason: "G4 combat",
-		FinalTick: s.Clock.GlobalTick, FinalStateHash: HashState(s), TraceHash: HashTrace(s.TraceEvents()),
 	}
 	t.Logf("G4 evidence: %s", FormatEvidence(ev))
 }

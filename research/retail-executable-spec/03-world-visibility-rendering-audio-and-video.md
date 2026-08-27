@@ -1980,6 +1980,15 @@ positions; the segment color is the fixed palette index 6 (established,
 direct-static) for both reclaim/capture and build-assist emissions, while the
 per-segment fade/lifetime remains `TODO(question)`.
 
+**Nanolathe presentation pipeline [R-P0-19]:** Construction and reclaim work
+producers route their nano events through the beam-family strip-6 identity and
+mark the segment geometry authoritative (source = `QueryNanoPiece` world
+position, target = product/footprint anchor). The fixed effect pool preserves
+the strip destination, so the client's strip-6 nanolathe draw branch fires
+instead of skipping the beam. One segment is emitted per accepted work step
+(mobile/factory construction and reclaim), matching the per-path cadence of
+[R-P0-06 §1]; build assist's two-segment cadence is separate.
+
 The cursor is software-drawn. Cursor GAF entries are loaded into a table;
 `GetCursorPos` and configured hotspots determine placement. The renderer saves
 and restores dirty cursor rectangles, changes cursor icon/mode for move, attack,

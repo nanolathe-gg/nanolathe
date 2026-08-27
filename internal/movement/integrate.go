@@ -1316,11 +1316,19 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		// predicate completes the order when the tile lands on the goal cell.
 		// The handle, not the order's stored position, is the target: a build
 		// order stores the site centre but is walked to a perimeter candidate
-		// [04 §8.3][04 §7.4].
-		if gx, gz, okGoal := s.moveGoalFor(handle, head); okGoal {
-			directGoal = true
-			directX = gx
-			directZ = gz
+		// [04 §8.3][04 §7.4]. A head that reports MoveArrived has completed its
+		// approach (mobile build sets it once the builder is within nanolathe
+		// reach of the site), so the mover stops rather than keep steering at
+		// the goal handle [04 §7.4][04 §3.5].
+		if head != nil && head.MoveState != orders.MoveArrived {
+			if gx, gz, okGoal := s.moveGoalFor(handle, head); okGoal {
+				directGoal = true
+				directX = gx
+				directZ = gz
+			} else {
+				s.emitMovementCallbacks(u, 0)
+				return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
+			}
 		} else {
 			s.emitMovementCallbacks(u, 0)
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
@@ -1345,10 +1353,18 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 				return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
 			}
 			// Still far: direct move to the goal handle [04 §8.3][04 §7.4].
-			if gx, gz, okGoal := s.moveGoalFor(handle, head); okGoal {
-				directGoal = true
-				directX = gx
-				directZ = gz
+			// A head that reports MoveArrived has completed its approach (mobile
+			// build), so stop instead of steering at the goal handle.
+			if head != nil && head.MoveState != orders.MoveArrived {
+				if gx, gz, okGoal := s.moveGoalFor(handle, head); okGoal {
+					directGoal = true
+					directX = gx
+					directZ = gz
+				} else {
+					arrived := s.finalGoalReached(u, hadRoute)
+					s.emitMovementCallbacks(u, 0)
+					return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
+				}
 			} else {
 				arrived := s.finalGoalReached(u, hadRoute)
 				s.emitMovementCallbacks(u, 0)

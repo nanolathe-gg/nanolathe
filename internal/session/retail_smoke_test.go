@@ -57,10 +57,8 @@ type retailSmokeReport struct {
 	ResultDraw       bool               `json:"result_draw"`
 	ResultArmedTick  uint32             `json:"result_armed_tick"`
 	Milestones       map[string]uint32  `json:"milestones"`
-	TraceHash        string             `json:"trace_hash"`
 	StateHash        string             `json:"state_hash"`
 	DeterminismMatch bool               `json:"determinism_match"`
-	SecondTraceHash  string             `json:"second_trace_hash"`
 	SecondStateHash  string             `json:"second_state_hash"`
 	FrameHashes      map[string]string  `json:"frame_hashes"`
 	SoakTicks        int                `json:"soak_ticks"`
@@ -637,7 +635,6 @@ func TestRetailSmoke(t *testing.T) {
 	const maxTick = 12000
 
 	type runResult struct {
-		traceHash   string
 		stateHash   string
 		finalTick   uint32
 		result      Result
@@ -807,8 +804,6 @@ func TestRetailSmoke(t *testing.T) {
 		if !hasAI {
 			t.Fatalf("no AI managers created [ON-11] expected computer player")
 		}
-		sess.SetTraceEnabled(true)
-		sess.ClearTrace()
 		// Setup headless client for frame composition at checkpoints
 		var pal *palette.Tables
 		if p, err := palette.Load(fs); err == nil {
@@ -1191,10 +1186,8 @@ func TestRetailSmoke(t *testing.T) {
 				}
 			}
 		}
-		traceHash := HashTrace(sess.TraceEvents())
 		stateHash := HashState(sess)
 		return &runResult{
-			traceHash:   traceHash,
 			stateHash:   stateHash,
 			finalTick:   finalTick,
 			result:      result,
@@ -1211,21 +1204,21 @@ func TestRetailSmoke(t *testing.T) {
 	res1 := runOnce(simSeed, crtSeed)
 	t.Logf("first run finalTick %d result ended %v winner %d reason %s draw %v", res1.finalTick, res1.result.Ended, res1.result.WinnerTeam, res1.result.Reason, res1.result.Draw)
 	t.Logf("milestones %v", res1.milestones)
-	t.Logf("traceHash %s stateHash %s", res1.traceHash, res1.stateHash)
+	t.Logf("stateHash %s", res1.stateHash)
 	t.Logf("frameHashes %v", res1.frameHashes)
 	t.Logf("fallbacks %v warnings %v", res1.fallbacks, res1.warnings)
 	t.Logf("poolCounts %v resources %v", res1.poolCounts, res1.resources)
 
 	// Second run for determinism
 	res2 := runOnce(simSeed, crtSeed)
-	t.Logf("second run finalTick %d trace %s state %s", res2.finalTick, res2.traceHash, res2.stateHash)
+	t.Logf("second run finalTick %d state %s", res2.finalTick, res2.stateHash)
 
-	determinismMatch := res1.traceHash == res2.traceHash && res1.stateHash == res2.stateHash && res1.finalTick == res2.finalTick
+	determinismMatch := res1.stateHash == res2.stateHash && res1.finalTick == res2.finalTick
 	if !determinismMatch {
-		t.Fatalf("determinism mismatch: first trace %s vs second %s ; state %s vs %s ; tick %d vs %d",
-			res1.traceHash, res2.traceHash, res1.stateHash, res2.stateHash, res1.finalTick, res2.finalTick)
+		t.Fatalf("determinism mismatch: first state %s vs second %s ; tick %d vs %d",
+			res1.stateHash, res2.stateHash, res1.finalTick, res2.finalTick)
 	}
-	t.Logf("determinism match OK trace %s state %s", res1.traceHash, res1.stateHash)
+	t.Logf("determinism match OK state %s", res1.stateHash)
 
 	// Acceptance checks per ON-11
 	// 1. No mandatory selected asset falls back silently (diagnostics emitted once per unit, not per frame) — check fallbacks empty
@@ -1313,10 +1306,8 @@ func TestRetailSmoke(t *testing.T) {
 		ResultDraw:       res1.result.Draw,
 		ResultArmedTick:  res1.result.ArmedTick,
 		Milestones:       res1.milestones,
-		TraceHash:        res1.traceHash,
 		StateHash:        res1.stateHash,
 		DeterminismMatch: determinismMatch,
-		SecondTraceHash:  res2.traceHash,
 		SecondStateHash:  res2.stateHash,
 		FrameHashes:      res1.frameHashes,
 		PoolCounts:       res1.poolCounts,
@@ -1380,7 +1371,6 @@ func TestRetailSmoke(t *testing.T) {
 			}
 		}
 	}
-	sessSoak.SetTraceEnabled(false)
 	// soak loop with panic recovery
 	soakDiagnostics := "soak ok"
 	func() {

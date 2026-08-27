@@ -520,6 +520,20 @@ If the mission creates no victory condition, the engine inserts a default
 destroy-all-units condition. If it creates no defeat condition, it inserts a
 default all-units-killed condition.
 
+**Configured lobby skirmish ownership — Supported inference; exact retail
+dispatch distinction Unknown.** The previous text treated every type-2 mission
+object as owning and polling these injected queues. That conflated a direct OTA
+type-2 session with a skirmish created from populated lobby configuration.
+Retail's save graph persists trigger queues only for campaign, while a skirmish
+save carries the lobby rule words instead; stock network OTAs may omit end keys,
+and one also authors `DestroyAllUnits`, whose established immediate-satisfaction
+quirk would end an ordinary lobby match on its first countdown if the injected
+or authored queue were authoritative. Nanolathe therefore treats a populated
+lobby configuration as owning its end condition and does not poll its OTA
+trigger queues; direct OTA type-2 sessions retain the established type-2 poll
+behavior below. The exact executable branch that distinguishes those two
+construction paths has not yet been isolated.
+
 ### Evaluation
 
 **Architecture — poll versus notification — Established.** Triggers are vtable objects, not type-byte structs [08 "Trigger object"]. Each of the eighteen conditions carries an eight-slot table — shared destructor/helper slots plus six named behavioural slots: a tick poll, a unit-died notification, a capture/transfer notification, a created notification (present but unused by any shipped condition), and save/load [08 "Evaluation"]. The tick site calls only the poll slot; the notification slots are driven by the corresponding gameplay events. A poll therefore never consumes a kill or capture — the countdown in `KillUnitType` advances only from the unit-died slot [08 "Evaluation"].
@@ -552,7 +566,7 @@ Completion sets the trigger's `Completed` flag and, if `Celebrated` is still cle
 
 The created notification slot is present in every vtable but unused by any shipped condition [08 "Evaluation"].
 
-**The tick site — Established, corrected for all mission types.** The victory and defeat queues are polled from the per-player tick phase, **in the LOCAL player's slice only**, on that slot's own **once-per-30-tick cadence** (`globalTick >= dueTick` then `dueTick += 30` — the same next-due-plus-30 shape the economy settlement deadline uses) [08 "Evaluation"]. The earlier "campaign type 1 only / types 2 and 3 never poll" reading is retracted: the poll block runs for every mission type, with per-type precedence (below). Poll order is the victory array then the defeat array, in builder order.
+**The tick site — Established for mission-owned queues; lobby distinction is a Supported inference.** The victory and defeat queues are polled from the per-player tick phase, **in the LOCAL player's slice only**, on that slot's own **once-per-30-tick cadence** (`globalTick >= dueTick` then `dueTick += 30` — the same next-due-plus-30 shape the economy settlement deadline uses) [08 "Evaluation"]. The earlier "campaign type 1 only / types 2 and 3 never poll" reading remains retracted: the poll block handles direct mission types 1, 2, and 3, with per-type precedence (below). The later wording that this necessarily included a populated lobby skirmish was too broad: lobby construction owns separate rule words and omits trigger queues from saves, as described under Default triggers. Poll order is the victory array then the defeat array, in builder order.
 
 **Combination and precedence — Established, per type.** Victory is an **AND** across its queue — every victory trigger must report `Completed`. Defeat is an **OR** — any single defeat trigger ends the mission. For campaign (type 1), **victory is evaluated first**, so a tick on which both would fire resolves as a victory [08 "Evaluation"]. For skirmish and multiplayer (types 2/3), the **defeat branch is evaluated before the victory poll** and the defeat queue is polled only when the local side's commander marker (a runtime bit on the local player's side definition) is clear — the commander-dead test — so a simultaneous commander death and victory resolves as defeat; the victory queue is polled unconditionally. Completion arms a shared end-of-mission countdown at **four**, which then decrements roughly once per second (once per local 30-tick due: `4 → -1` over five invocations, ~150 ticks) before the end-latch word is written; the latch distinguishes "ending" (bit 2, value `0x04`), "won" (`0x10` or `0x20`) and "lost" (`0x40`, clearing `0x10`) and the lose path clears the win bit it would otherwise share [08 "Evaluation"]. The `~1/sec` rate is the poll cadence, not a separate timer. **A second, per-tick countdown site exists for multiplayer only (mission type 3, commander-death rule not value two, no active player remaining): it decrements the same shared countdown every tick (latch in about five ticks).** The earlier "no-human campaign path decrements per-tick" reading is retracted — the fast site is gated on the multiplayer type; a humanless campaign keeps the 30-tick cadence. The skirmish/multiplayer commander-death rule is a lobby value, not a mission key: value two respawns a new commander (valid-placement search with up to 9999 trials, two simulation draws per trial, plus terrain and lava gates; then resources and visibility rebuild), any other value ends the game through the watch-mode path ("You're out! Continue watching?").
 
@@ -587,7 +601,14 @@ game-mode word and consumed by the per-player phase, not a mission key: value
 one ends the game through the watch-mode path when the local commander dies,
 and value two respawns a new commander (a valid-placement search with up to
 9999 trials of two simulation draws each, plus terrain and lava gates, then
-metal/energy grants and a visibility rebuild). The rule word also selects the
+metal/energy grants and a visibility rebuild). The lobby UI identifies value
+zero as continuing after commander destruction. **Supported inference:** for
+Nanolathe's two offered menu choices, value zero keeps a team active while any
+live, non-dying unit remains (including a building), while value one keeps it
+active only while a commander remains. This matches the observed
+commander-versus-all-units setup semantics, but the exact retail value-zero
+all-live-unit sweep and its alliance aggregation have not been isolated and
+remain **Unknown**. The rule word also selects the
 multiplayer no-active-player fast countdown site. The retail `LineOfSight`
 callback is a three-state control: it
 cycles from elevation-aware LOS (`LineOfSight=1`, `LineOfSightType=1`), to
@@ -1942,7 +1963,7 @@ The following work remains before this category is a complete retail design:
   mission value and the physics stores are distinct.
 - Placement order for mission units, start-position specials, and features (strict units then specials then features) and the sparse two-pass unit spawner with null gaps, plus attacker and feature stamping convergence, are established; cargo and feature successor handling beyond the shared stamping service, delayed creation countdown (parsed but no reader), and script attachment beyond the immediate attach verb remain bounded negative; the meteor scheduler's phase (after wind jitter and projectiles) is established. [P0-04] [P0-06]
 - Player-to-start-position selection for skirmish is established for the CRT Fisher–Yates shuffle versus simulation jitter split, eligibility predicate (non-zero slot, control one through three, terminator not newline), schema Network 1 through 4 trial with largest-so-far fallback and difficulty permutation, and commander interior jitter with degenerate no-advance; the transport-selection policy beyond generic move orders and any distinct naval or air geometry remain unknown. [P0-04]
-- Trigger ownership and evaluation are closed: owner gating is a player-index compare (no alliance merge), the tick site is the local player's once-per-30-tick block for every mission type, campaign polls victory before defeat (AND then OR), skirmish/multiplayer poll defeat before victory with the defeat queue gated on the local commander marker, and disconnect/resign precedence is closed (host-loss and resign latch ended-without-win directly and can override an armed countdown; the countdown itself keeps per-type precedence). Evaluator bodies, comparisons, counts, record shapes, the vtable map, and the per-condition saved fields are established.
+- Trigger evaluator bodies and direct-mission polling are closed: owner gating is a player-index compare (no alliance merge), the tick site is the local player's once-per-30-tick block, campaign polls victory before defeat (AND then OR), direct type-2/3 missions poll defeat before victory with the defeat queue gated on the local commander marker, and disconnect/resign precedence is closed (host-loss and resign latch ended-without-win directly and can override an armed countdown; the countdown itself keeps per-type precedence). The remaining ownership Unknown is the exact executable branch by which a populated lobby skirmish uses its rule words without making injected/authored OTA triggers authoritative. The value-zero all-units survival sweep used by Nanolathe is likewise a Supported inference pending that executable trace. Record shapes, the vtable map, and the per-condition saved fields remain established.
 - Meteor spawning, motion, damage, scoring, and persistence are closed (see
   Meteor showers above); only presentation of meteors outside the world
   renderer remains a rendering-lane question.

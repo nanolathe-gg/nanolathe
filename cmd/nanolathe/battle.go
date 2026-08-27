@@ -1080,6 +1080,13 @@ func (b *battleSession) checkProductPlacement(cx, cz int32, def *content.UnitDef
 			return world.PlacementResult{}, err
 		}
 	}
+	// Completed buildings live in the construction service's structures
+	// registry once their frame occupancy stamps are released; the ghost must
+	// reject overlap with them exactly like the sim validator [04 §6.2][05].
+	selfHandle := pool.Handle(self)
+	if _, blocked := b.sess.Build.StructureBlocks(selfHandle, rect); blocked {
+		return world.PlacementResult{}, fmt.Errorf("battle: footprint overlaps a completed structure")
+	}
 	return b.sess.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: self, Mobile: def.BMCode})
 }
 

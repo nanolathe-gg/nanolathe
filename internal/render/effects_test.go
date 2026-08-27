@@ -362,6 +362,26 @@ func TestFixedEffectRejectsMalformedTimingWithoutOneTickFallback(t *testing.T) {
 	}
 }
 
+// TestFixedEffectPreservesStripThroughPool locks the strip-6 nanolathe draw
+// path [03 §5.5][R-P0-06 §5]: the effect-strip destination routed at admission
+// must survive the fixed pool so the client's strip-6 nanolathe branch fires.
+func TestFixedEffectPreservesStripThroughPool(t *testing.T) {
+	var p FixedEffectPool
+	if !p.AppendView(frame.EffectView{ID: 3, Kind: "nanolathe", Strip: 6, NanolatheGeometryKnown: true}) {
+		t.Fatal("nanolathe admission failed")
+	}
+	got := p.SnapshotViews()
+	if len(got) != 1 || got[0].Strip != 6 {
+		t.Fatalf("strip dropped through pool: %+v", got)
+	}
+	if !got[0].NanolatheGeometryKnown {
+		t.Fatal("nanolathe geometry flag dropped through pool")
+	}
+	if rec := p.Records()[0]; rec.Strip != 6 {
+		t.Fatalf("record strip = %d, want 6", rec.Strip)
+	}
+}
+
 // TestFixedEffectDeterminism verifies stable order and no RNG [03 §1][I4][I1].
 func TestFixedEffectDeterminism(t *testing.T) {
 	run := func() []int64 {

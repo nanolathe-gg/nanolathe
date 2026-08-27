@@ -8,10 +8,15 @@ import (
 
 // appendUnitView reuses the destination unit and nested piece storage left by
 // Frame.Reset. The source value is copied only after its destination slot's
-// retained pieces have been saved.
+// retained pieces have been saved. A frame without reserved capacity still
+// grows (append), so a session published before any Frame.Reserve call works.
 func appendUnitView(dst []frame.UnitView, src frame.UnitView) []frame.UnitView {
 	i := len(dst)
-	dst = dst[:i+1]
+	if i < cap(dst) {
+		dst = dst[:i+1]
+	} else {
+		dst = append(dst, frame.UnitView{})
+	}
 	pieces := dst[i].Pieces
 	dst[i] = src
 	dst[i].Pieces = pieces[:0]
@@ -20,7 +25,11 @@ func appendUnitView(dst []frame.UnitView, src frame.UnitView) []frame.UnitView {
 
 func appendOrderQueueView(dst []frame.OrderQueueView, src orders.SnapshotQueue, cat *content.Catalog) []frame.OrderQueueView {
 	i := len(dst)
-	dst = dst[:i+1]
+	if i < cap(dst) {
+		dst = dst[:i+1]
+	} else {
+		dst = append(dst, frame.OrderQueueView{})
+	}
 	primary, secondary := dst[i].Primary, dst[i].Secondary
 	dst[i] = frame.OrderQueueView{
 		Unit: src.Unit, PrimaryTruncated: src.PrimaryTruncated, SecondaryTruncated: src.SecondaryTruncated,

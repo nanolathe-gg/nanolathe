@@ -71,8 +71,10 @@ func TestResult_StateTransitionAndNoTick(t *testing.T) {
 	}
 }
 
-// TestResult_RetryCleanNoDuplicateCallback verifies retry creates clean session without duplicate callbacks [RS-05].
-func TestResult_RetryCleanNoDuplicateCallback(t *testing.T) {
+// TestResult_RetryResetsAuthoritativeState verifies retry clears the terminal
+// result and latch so the next battle starts from a clean attempt [08
+// "Session states"].
+func TestResult_RetryResetsAuthoritativeState(t *testing.T) {
 	rng.SeedGlobal(101, 201)
 	cat := minimalCatalogForStrict()
 	for _, u := range cat.Units {
@@ -87,8 +89,6 @@ func TestResult_RetryCleanNoDuplicateCallback(t *testing.T) {
 	}
 	s.RegisterAll()
 	s.State = StateBattle
-	count := 0
-	s.SetResultCallback(func(r Result) { count++ })
 	// First match: kill enemy
 	s.Units.Destroy(poolHandle(commanderHandles(s)[1][0]), 1)
 	for tick := uint32(1); tick < 300; tick++ {
@@ -97,8 +97,8 @@ func TestResult_RetryCleanNoDuplicateCallback(t *testing.T) {
 			break
 		}
 	}
-	if count != 1 {
-		t.Fatalf("first callback want 1 got %d", count)
+	if !s.GetResult().Ended {
+		t.Fatalf("first match did not reach terminal result")
 	}
 	// Retry via clean session recreation (simulates shell retry) [RS-05]
 	// Use NewSkirmishForTest to ensure clean terrain without VFS TNT dependency
@@ -106,11 +106,8 @@ func TestResult_RetryCleanNoDuplicateCallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retry NewSkirmishForTest: %v", err)
 	}
-	// Install new callback, should fire exactly once for second match
-	count2 := 0
 	s2.RegisterAll()
 	s2.State = StateBattle
-	s2.SetResultCallback(func(r Result) { count2++ })
 	// Kill enemy again in new session
 	s2.Units.Destroy(poolHandle(commanderHandles(s2)[1][0]), 1)
 	for tick := uint32(1); tick < 300; tick++ {
@@ -119,11 +116,8 @@ func TestResult_RetryCleanNoDuplicateCallback(t *testing.T) {
 			break
 		}
 	}
-	if count2 != 1 {
-		t.Fatalf("retry callback second match want 1 got %d", count2)
-	}
-	if count != 1 {
-		t.Fatalf("original callback should remain 1 after retry, got %d", count)
+	if !s2.GetResult().Ended {
+		t.Fatalf("second match did not reach terminal result")
 	}
 	// Also test Session.Retry on same object resets cleanly
 	s3, _ := NewSkirmishForTest(fs, cat, cfg)
@@ -132,8 +126,6 @@ func TestResult_RetryCleanNoDuplicateCallback(t *testing.T) {
 	s3.Latch.Countdown = -1
 	s3.Latch.Bits = LatchBitEnding | LatchBitWin1
 	s3.result = Result{Ended: true, Tick: 100}
-	s3.resultCallbackFired = true
-	s3.SetResultCallback(func(r Result) { count2++ })
 	// Retry should clear and allow new latch
 	_ = s3.Retry()
 	if s3.GetResult().Ended {
@@ -144,12 +136,6 @@ func TestResult_RetryCleanNoDuplicateCallback(t *testing.T) {
 	}
 	if s3.State != StateLoading {
 		t.Fatalf("after Retry want Loading got %v", s3.State)
-	}
-	// Ensure callback can fire again after retry + new latch
-	// Simulate new latch by killing commander in a fresh battle session derived from s3's config
-	// For simplicity, just verify that callbackFired was reset
-	if s3.resultCallbackFired {
-		t.Fatalf("retry should reset callbackFired")
 	}
 }
 

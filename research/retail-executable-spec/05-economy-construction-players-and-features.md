@@ -1166,6 +1166,18 @@ silent — no message, no sound, no allocation — and repeats every 15 ticks fo
 as long as the footprint is obstructed. There is no timeout and no
 force-placement.
 
+Audit note (2026-08-27), see [04 §6.4 R-P0-08-A §1] for the full argument:
+"obstructed" cannot include cells stamped by the producing factory itself.
+Stock exits sit inside the factory's own footprint, so retail's validator
+must be reading an occupancy layer finished buildings do not write; an
+implementation that retains a completed product on the same mobile-stomp
+shorts its exit validation reads will deadlock every first product. The
+"Nanoframe creation … remaining fraction one, health zero" wording below is
+the established nanoframe contract; the reservation lifecycle around it
+(release at completion, structures registry as the building-mask stand-in)
+is Nanolathe-side bookkeeping and carries no retail claim beyond this audit
+note.
+
 **Nanoframe creation at the exit spot.** On validation success the allocator
 creates the unit *at* the exit spot with owner, product definition, remaining
 fraction one, health zero, and build stance cleared; the product pointer is

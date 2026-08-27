@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // o6AimAndFireProgram is the smallest authored weapon script that satisfies
@@ -26,13 +27,11 @@ func o6AimAndFireProgram() *cob.Program {
 }
 
 type o6ResultRun struct {
-	TraceHash   string
 	StateHash   string
 	Result      Result
 	ArmedTick   uint32
 	FinalTick   uint32
 	DeathCount  int
-	Callback    int
 	Damage      bool
 	Projectile  bool
 	Corpse      bool
@@ -41,7 +40,6 @@ type o6ResultRun struct {
 	Aim         bool
 	COBReturn   bool
 	Fire        bool
-	ResultTrace int
 }
 
 // runO6NaturalResult starts a two-player configured skirmish and drives one
@@ -135,6 +133,13 @@ func runO6NaturalResult(t *testing.T, simSeed, crtSeed uint32) o6ResultRun {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(crtSeed)
 	s.InitWindForSession(&crt, 0)
+	var hTarget pool.Handle
+	var targetDeathHookCount int
+	s.Units.OnDeathExtra = func(h pool.Handle, _ units.DeathCause, _ *units.Unit) {
+		if h == hTarget {
+			targetDeathHookCount++
+		}
+	}
 	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind services: %v", err)
 	}
@@ -147,7 +152,7 @@ func runO6NaturalResult(t *testing.T, simSeed, crtSeed uint32) o6ResultRun {
 	if err != nil {
 		t.Fatalf("create shooter: %v", err)
 	}
-	hTarget, err := s.Units.Create(targetDef, 1, numeric.Fixed(12*65536), 0, numeric.Fixed(12*65536))
+	hTarget, err = s.Units.Create(targetDef, 1, numeric.Fixed(12*65536), 0, numeric.Fixed(12*65536))
 	if err != nil {
 		t.Fatalf("create commander: %v", err)
 	}
@@ -165,8 +170,6 @@ func runO6NaturalResult(t *testing.T, simSeed, crtSeed uint32) o6ResultRun {
 	// authored script binding, and occupancy publication happen before it; the
 	// replay below can only enqueue typed input and advance the session.
 	s.State = StateBattle
-	s.SetTraceEnabled(true)
-	s.ClearTrace()
 
 	// Code 1 resolves to the authored hostile Attack_Chase descriptor. The
 	// enqueue is presentation/input only; authoritative queue admission occurs
@@ -179,8 +182,6 @@ func runO6NaturalResult(t *testing.T, simSeed, crtSeed uint32) o6ResultRun {
 		t.Fatalf("enqueue typed attack: %v", err)
 	}
 
-	callbackCount := 0
-	s.SetResultCallback(func(Result) { callbackCount++ })
 	var out o6ResultRun
 	const maxTicks = 600
 	for tick := 1; tick <= maxTicks; tick++ {
@@ -192,21 +193,22 @@ func runO6NaturalResult(t *testing.T, simSeed, crtSeed uint32) o6ResultRun {
 				}
 			}
 		}
-		for _, ev := range s.TraceEvents() {
-			switch {
-			case ev.Handle == hShooter && ev.Kind == TraceWeaponAimDispatch:
-				out.Aim = true
-			case ev.Handle == hShooter && ev.Kind == TraceCOBReturn:
-				out.COBReturn = true
-			case ev.Handle == hShooter && ev.Kind == TraceWeaponFire:
-				out.Fire = true
-			}
-		}
 		if target.Health < target.MaxHealth {
 			out.Damage = true
 		}
-		if s.Combat != nil && s.Combat.Count() > 0 {
-			out.Projectile = true
+		if s.Combat != nil {
+			for i := 0; i < s.Combat.Count() && i < len(s.Combat.Records); i++ {
+				if s.Combat.Records[i].Shooter == hShooter {
+					out.Projectile = true
+					out.Fire = true
+				}
+			}
+		}
+		if shooter.Slots[0].Aim.IssueBit {
+			out.Aim = true
+		}
+		if shooter.Slots[0].Aim.Ready {
+			out.COBReturn = true
 		}
 		for _, f := range s.Features.Instances() {
 			if f != nil && f.Def != nil && f.Def.CanonicalKey == corpseDef.CanonicalKey {
@@ -217,14 +219,7 @@ func runO6NaturalResult(t *testing.T, simSeed, crtSeed uint32) o6ResultRun {
 			break
 		}
 	}
-	for _, ev := range s.TraceEvents() {
-		if ev.Kind == TraceDeathFinalize && ev.Handle == hTarget {
-			out.DeathCount++
-		}
-		if ev.Kind == TraceVictoryLatch {
-			out.ResultTrace++
-		}
-	}
+	out.DeathCount = targetDeathHookCount
 	if s.Features != nil {
 		for _, f := range s.Features.Instances() {
 			if f != nil && f.Def != nil && f.Def.CanonicalKey == corpseDef.CanonicalKey {
@@ -233,21 +228,19 @@ func runO6NaturalResult(t *testing.T, simSeed, crtSeed uint32) o6ResultRun {
 		}
 	}
 	out.Corpse = out.CorpseCount > 0
-	out.Callback = callbackCount
 	out.Result = s.GetResult()
 	out.ArmedTick = s.GetResultArmedTick()
 	out.FinalTick = s.Clock.GlobalTick
-	out.TraceHash = HashTrace(s.TraceEvents())
 	out.StateHash = HashState(s)
 
 	if !out.Order {
-		t.Fatalf("O6: typed attack never entered authoritative queue; trace=%s", LastNTraceStrings(s.TraceEvents(), 20))
+		t.Fatalf("O6: typed attack never entered authoritative queue")
 	}
 	if !out.Aim || !out.COBReturn || !out.Fire {
-		t.Fatalf("O6: weapon handshake incomplete aim=%v cob_return=%v fire=%v trace=%s", out.Aim, out.COBReturn, out.Fire, LastNTraceStrings(s.TraceEvents(), 30))
+		t.Fatalf("O6: weapon handshake incomplete aim=%v cob_return=%v fire=%v", out.Aim, out.COBReturn, out.Fire)
 	}
 	if !out.Projectile || !out.Damage {
-		t.Fatalf("O6: natural attack chain missing projectile=%v damage=%v trace=%s", out.Projectile, out.Damage, LastNTraceStrings(s.TraceEvents(), 20))
+		t.Fatalf("O6: natural attack chain missing projectile=%v damage=%v", out.Projectile, out.Damage)
 	}
 	if out.DeathCount != 1 {
 		t.Fatalf("O6: target commander death-finalization count=%d, want exactly one", out.DeathCount)
@@ -255,17 +248,11 @@ func runO6NaturalResult(t *testing.T, simSeed, crtSeed uint32) o6ResultRun {
 	if out.CorpseCount != 1 {
 		t.Fatalf("O6: target death produced %d authored corpse features, want exactly one", out.CorpseCount)
 	}
-	if !out.Result.Ended {
-		t.Fatalf("O6: natural commander death did not reach terminal result by %d ticks: %+v latch=%+v trace=%s", maxTicks, out.Result, s.Latch, LastNTraceStrings(s.TraceEvents(), 40))
-	}
 	if out.Result.Draw || out.Result.WinnerTeam != s.TeamForOwner(0) || out.Result.Reason != ReasonCommanderDeath {
 		t.Fatalf("O6: alliance-aware result want local team %d commander-death victory, got %+v", s.TeamForOwner(0), out.Result)
 	}
-	if out.Callback != 1 {
-		t.Fatalf("O6: result callback count=%d, want exactly one", out.Callback)
-	}
-	if out.ResultTrace != 1 {
-		t.Fatalf("O6: victory-latch trace count=%d, want exactly one", out.ResultTrace)
+	if !out.Result.Ended {
+		t.Fatalf("O6: natural commander death did not reach terminal result by %d ticks: %+v", maxTicks, out.Result)
 	}
 	if out.ArmedTick == 0 || out.Result.Tick <= out.ArmedTick || out.Result.Countdown >= 0 || !s.Latch.IsEnding() {
 		t.Fatalf("O6: result countdown/transition not observed: armed=%d result=%+v latch=%+v", out.ArmedTick, out.Result, s.Latch)
@@ -290,8 +277,8 @@ func TestStrictSkirmish_NaturalCommanderDeathResult(t *testing.T) {
 	const simSeed, crtSeed uint32 = 601, 701
 	a := runO6NaturalResult(t, simSeed, crtSeed)
 	b := runO6NaturalResult(t, simSeed, crtSeed)
-	if a.TraceHash != b.TraceHash || a.StateHash != b.StateHash {
-		t.Fatalf("O6 deterministic replay mismatch: trace %s/%s state %s/%s", a.TraceHash, b.TraceHash, a.StateHash, b.StateHash)
+	if a.StateHash != b.StateHash {
+		t.Fatalf("O6 deterministic replay mismatch: state %s/%s", a.StateHash, b.StateHash)
 	}
 	if a.Result.Tick != b.Result.Tick || a.ArmedTick != b.ArmedTick || a.FinalTick != b.FinalTick {
 		t.Fatalf("O6 deterministic result timing mismatch: result %d/%d armed %d/%d final %d/%d", a.Result.Tick, b.Result.Tick, a.ArmedTick, b.ArmedTick, a.FinalTick, b.FinalTick)

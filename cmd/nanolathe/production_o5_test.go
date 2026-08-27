@@ -48,7 +48,6 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 		Clock:      &clock.State{Requested: 10, Active: 10},
 		Snapshot:   &frame.Buffer{},
 	}
-	s.SetTraceEnabled(true)
 	b := &battleSession{
 		sess:  s,
 		cat:   cat,
@@ -136,7 +135,7 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 		left, top := int32(o.GoalX>>16), int32(o.GoalZ>>16)
 		return hud.QueueRect{Left: left, Top: top, Right: left + int32(o.FootX)*16, Bottom: top + int32(o.FootZ)*16}, true
 	}
-	beforeHash := o5AuthoritativeHash(t, s, f)
+	beforeHash := o5AuthoritativeHash(t, f)
 	held := hud.QueueOverlay(f, hud.QueueOverlayOptions{
 		Tick:        f.Tick,
 		ShiftHeld:   true,
@@ -173,8 +172,8 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 	if released := hud.QueueOverlay(f, hud.QueueOverlayOptions{Tick: f.Tick, LocalOwner: f.Selection.LocalPlayer, Project: project, BuildRect: buildRect}); released != nil {
 		t.Fatalf("released Shift returned overlay instructions: %+v", released)
 	}
-	if afterHash := o5AuthoritativeHash(t, s, f); beforeHash != afterHash {
-		t.Fatalf("presentation-only Shift inspection changed authoritative state/trace hash: before=%x after=%x", beforeHash, afterHash)
+	if afterHash := o5AuthoritativeHash(t, f); beforeHash != afterHash {
+		t.Fatalf("presentation-only Shift inspection changed authoritative state hash: before=%x after=%x", beforeHash, afterHash)
 	}
 }
 
@@ -237,15 +236,11 @@ func o5Queue(f *frame.Frame, unit pool.Handle) (frame.OrderQueueView, bool) {
 	return frame.OrderQueueView{}, false
 }
 
-func o5AuthoritativeHash(t *testing.T, s *session.Session, frame *frame.Frame) [32]byte {
+func o5AuthoritativeHash(t *testing.T, frame *frame.Frame) [32]byte {
 	t.Helper()
 	state, err := json.Marshal(frame)
 	if err != nil {
 		t.Fatalf("marshal immutable frame: %v", err)
 	}
-	trace, err := json.Marshal(s.TraceEvents())
-	if err != nil {
-		t.Fatalf("marshal trace: %v", err)
-	}
-	return sha256.Sum256(append(state, trace...))
+	return sha256.Sum256(state)
 }

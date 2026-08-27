@@ -10,19 +10,24 @@ import (
 // [08 "Skirmish configuration"] CommanderDeath default 1 = commander death ends the game.
 const ReasonCommanderDeath = "commander_death"
 
-// Result is the authoritative latched terminal result for a skirmish session
-// [08 "Victory and defeat triggers"] trigger queues polled ONLY for mission type 1
-// (campaign); skirmish sessions do NOT poll them — skirmish result computed from
-// team/unit state instead. [08 "Skirmish configuration"] CommanderDeath==1.
+// ReasonAllUnits is the lobby skirmish all-units termination reason. The
+// value-zero survival sweep is a supported inference pending an exact retail
+// evaluator trace [08 "Skirmish configuration"].
+const ReasonAllUnits = "all_units"
+
+// Result is the authoritative latched terminal result for a skirmish session.
+// Configured lobby skirmishes do not own the OTA mission-trigger queues; their
+// result is computed from team/unit state instead. Direct OTA sessions retain
+// the type-specific trigger path [08 "Evaluation"][08 "Skirmish configuration"].
 // EndLatch countdown/bits per [P1-01 §2.2] already implemented in progression.go —
 // reuse, do not bypass. Result is owned by Session (RS-05 RS-P0-012) not a
 // package global; one terminal point is latch visible (Ended) and one stop point
 // is State != Battle. Research does NOT decompose the general alliance endgame
-// sweep: implement CommanderDeath==1 skirmish rule as: a team is eliminated when
-// all its commanders are dead; when <=1 hostile team remains, latch result (draw
-// on mutual destruction). TODO(question): for research-silent cases (extra
-// commanders per team, resurrected commanders, CommanderDeath==0 annihilation mode)
-// behavior is TODO(question) and deferred.
+// sweep: CommanderDeath==1 eliminates a team when all its commanders are dead;
+// CommanderDeath==0 uses the supported-inference all-live-unit survival rule.
+// TODO(question): trace the exact retail value-zero team-elimination sweep and
+// its handling of extra/resurrected commanders; the UI text and observed setup
+// semantics establish the distinction but not the executable sweep.
 type Result struct {
 	Ended      bool                `json:"ended"`
 	Draw       bool                `json:"draw"`
@@ -67,8 +72,6 @@ func (s *Session) GetResult() Result {
 	if s == nil {
 		return Result{}
 	}
-	s.resultMu.Lock()
-	defer s.resultMu.Unlock()
 	r := s.result
 	if len(r.Losers) > 0 {
 		cp := make([]int, len(r.Losers))
@@ -88,45 +91,6 @@ func (s *Session) GetResult() Result {
 	return r
 }
 
-// SetResultCallback installs a callback that fires exactly once when the
-// terminal result becomes visible (after EndLatch Bits). If result already
-// ended, it fires immediately (once).
-func (s *Session) SetResultCallback(fn func(Result)) {
-	if s == nil {
-		return
-	}
-	s.resultMu.Lock()
-	defer s.resultMu.Unlock()
-	if s.result.Ended && !s.resultCallbackFired {
-		s.resultCallbackFired = true
-		r := s.result
-		// Copy slices for callback isolation.
-		if len(r.Losers) > 0 {
-			cp := make([]int, len(r.Losers))
-			copy(cp, r.Losers)
-			r.Losers = cp
-		}
-		if len(r.Winners) > 0 {
-			cp := make([]int, len(r.Winners))
-			copy(cp, r.Winners)
-			r.Winners = cp
-		}
-		if len(r.Scores) > 0 {
-			cp := make([]frame.ResultScore, len(r.Scores))
-			copy(cp, r.Scores)
-			r.Scores = cp
-		}
-		cb := fn
-		s.resultMu.Unlock()
-		if cb != nil {
-			cb(r)
-		}
-		s.resultMu.Lock()
-		return
-	}
-	s.resultCallback = fn
-}
-
 // resultKindFor returns "victory" | "defeat" | "draw" for local perspective [RS-05][08].
 func (s *Session) resultKindFor(draw bool, winner int) string {
 	if draw {
@@ -140,10 +104,10 @@ func (s *Session) resultKindFor(draw bool, winner int) string {
 }
 
 // collectScores builds per-player ResultScore slice [P1-01 §2.3] RS-05.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// we publish zero for now with score derived from tick, and kind per team. This satisfies
-// the snapshot contract that score/statistics are published; exact per-player kills
-// remain TODO(question) until the ledger kill counter is wired [P1-01].
+// Kills/Losses are tracked by player counters, but are not yet in
+// economy.Player [P1-01 §2.3]. Until those counters and authored multipliers
+// are wired, the snapshot carries neutral zero counters and score, plus the
+// result kind per team.
 func (s *Session) collectScores(winner int, draw bool) []frame.ResultScore {
 	if s.Econ == nil {
 		return nil
@@ -163,94 +127,23 @@ func (s *Session) collectScores(winner int, draw bool) []frame.ResultScore {
 		} else {
 			kind = "lose"
 		}
-		// Placeholder kills/losses until ledger kill counter is wired [P1-01 §2.3] TODO(question)
 		kills := 0
 		losses := 0
-		// Try to derive kills from mission progress W/L? For now use 0.
-		// Score uses ticks so it changes with time, satisfying score publishing.
-		score := Score(kills, 1, s.Clock.GlobalTick, 0)
+		// TODO(question): identify the authored kill/time multipliers and wire the
+		// player kill/loss counters before deriving a nonzero score [P1-01 §2.3][P1-01 §8].
+		score := 0
 		out = append(out, frame.ResultScore{Player: i, Team: team, Kills: kills, Losses: losses, Score: score, Kind: kind})
 	}
-	sort.Slice(out, func(a, b int) bool { return out[a].Player < out[b].Player })
 	return out
 }
 
-// publishResultView copies authoritative result into snapshot Buffer for presentation [I6][RS-05].
-func (s *Session) publishResultView() {
-	if s.Snapshot == nil {
-		return
-	}
-	s.resultMu.Lock()
-	r := s.result
-	s.resultMu.Unlock()
-	view := frame.ResultView{
-		Ended:      r.Ended,
-		Kind:       r.Kind,
-		WinnerTeam: r.WinnerTeam,
-		Reason:     r.Reason,
-		Tick:       r.Tick,
-		ArmedTick:  r.ArmedTick,
-		Countdown:  r.Countdown,
-		Draw:       r.Draw,
-	}
-	if len(r.Winners) > 0 {
-		view.Winners = append([]int(nil), r.Winners...)
-	}
-	if len(r.Losers) > 0 {
-		view.Losers = append([]int(nil), r.Losers...)
-	}
-	if len(r.Scores) > 0 {
-		view.Scores = append([]frame.ResultScore(nil), r.Scores...)
-	}
-	// Ensure countdown reflects latch even before Ended (pending view)
-	if !r.Ended {
-		view.Countdown = s.Latch.Countdown
-	}
-	// Result is published with the next committed frame; no out-of-band view.
-}
-
-// fireResultCallback fires the exactly-once callback after latch visible [RS-05].
-func (s *Session) fireResultCallback() {
-	if s == nil {
-		return
-	}
-	s.resultMu.Lock()
-	if s.resultCallbackFired || !s.result.Ended {
-		s.resultMu.Unlock()
-		return
-	}
-	cb := s.resultCallback
-	rcopy := s.result
-	s.resultCallbackFired = true
-	s.resultCallback = nil
-	// Copy slices for callback
-	if len(rcopy.Losers) > 0 {
-		cp := make([]int, len(rcopy.Losers))
-		copy(cp, rcopy.Losers)
-		rcopy.Losers = cp
-	}
-	if len(rcopy.Winners) > 0 {
-		cp := make([]int, len(rcopy.Winners))
-		copy(cp, rcopy.Winners)
-		rcopy.Winners = cp
-	}
-	if len(rcopy.Scores) > 0 {
-		cp := make([]frame.ResultScore, len(rcopy.Scores))
-		copy(cp, rcopy.Scores)
-		rcopy.Scores = cp
-	}
-	s.resultMu.Unlock()
-	if cb != nil {
-		cb(rcopy)
-	}
-}
-
 // EvaluateResult is the alliance-aware victory evaluator [08][RS-05][RR-04].
-// It is callable standalone and hookable so the future central loop can
-// invoke it after death finalization each tick. It computes active teams
-// from live commanders each evaluation, uses the skirmish CommanderDeath==1
-// rule (team eliminated when all its commanders are dead; when <=1 hostile
-// team remains, latch result, draw on mutual destruction), preserves the
+// The authoritative tick invokes it after death finalization each tick. It
+// computes active teams from live units each evaluation. CommanderDeath==1
+// counts only commanders; CommanderDeath==0 counts every unit, including
+// buildings, as a supported inference from the lobby's commander-versus-all-
+// units setup semantics [08 "Skirmish configuration"]. When <=1 hostile team
+// remains it latches the result (draw on mutual destruction), preserving the
 // researched EndLatch countdown via Arm/AdvanceWin/AdvanceLose with once-per-
 // 30-tick cadence [08 "Evaluation"][RR-04] (4 → -1 over five invocations,
 // ~150 ticks) before declaring the terminal result visible, and latches
@@ -263,89 +156,115 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 	if s == nil || s.Units == nil {
 		return false
 	}
-	if s.Skirmish.CommanderDeath == 0 {
+	commanderOnly := false
+	switch s.Skirmish.CommanderDeath {
+	case 0:
+		// Supported inference: the menu's continue-after-commander-death mode
+		// keeps a team alive while any unit remains. TODO(question): trace the
+		// exact retail value-zero all-units sweep [08 "Skirmish configuration"].
+	case 1:
+		commanderOnly = true
+	default:
+		// TODO(question): value two has an established commander-respawn path,
+		// but Session does not yet implement that placement/resource sequence.
 		return false
 	}
-	s.resultMu.Lock()
 	if s.result.Ended {
-		s.resultMu.Unlock()
 		return false
 	}
 	// Compute allTeams from SkirmishConfig players (fallback per-owner).
-	allTeams := make(map[int]struct{})
+	var allTeams [10]int
+	allTeamCount := 0
+	addTeam := func(team int) {
+		for i := 0; i < allTeamCount; i++ {
+			if allTeams[i] == team {
+				return
+			}
+		}
+		if allTeamCount < len(allTeams) {
+			allTeams[allTeamCount] = team
+			allTeamCount++
+		}
+	}
 	if s.Skirmish.NumPlayers > 0 {
 		n := s.Skirmish.NumPlayers
 		if n > 10 {
 			n = 10
 		}
 		for i := 0; i < n; i++ {
-			team := s.teamForOwner(i)
-			allTeams[team] = struct{}{}
+			addTeam(s.teamForOwner(i))
 		}
 	} else {
 		for _, u := range s.Units.IterSliced() {
 			if u == nil {
 				continue
 			}
-			team := s.teamForOwner(int(u.Owner))
-			allTeams[team] = struct{}{}
+			addTeam(s.teamForOwner(int(u.Owner)))
 		}
 		if s.Econ != nil {
 			for i := 0; i < 10; i++ {
 				if s.Econ.Players[i].Exists {
-					team := s.teamForOwner(i)
-					allTeams[team] = struct{}{}
+					addTeam(s.teamForOwner(i))
 				}
 			}
 		}
-		if len(allTeams) == 0 {
+		if allTeamCount == 0 {
 			for i := 0; i < 10; i++ {
-				allTeams[100+i] = struct{}{}
+				addTeam(100 + i)
 			}
 		}
 	}
 	// Active teams: those with at least one alive non-dying commander.
-	active := make(map[int]struct{})
+	var active [10]int
+	activeCount := 0
+	addActive := func(team int) {
+		for i := 0; i < activeCount; i++ {
+			if active[i] == team {
+				return
+			}
+		}
+		if activeCount < len(active) {
+			active[activeCount] = team
+			activeCount++
+		}
+	}
 	for _, u := range s.Units.IterSliced() {
 		if u == nil || !u.Alive || u.Dying {
 			continue
 		}
-		if u.Def == nil || !u.Def.Commander {
+		if commanderOnly && (u.Def == nil || !u.Def.Commander) {
 			continue
 		}
-		team := s.teamForOwner(int(u.Owner))
-		active[team] = struct{}{}
+		addActive(s.teamForOwner(int(u.Owner)))
 	}
-	activeCount := len(active)
 	if activeCount > 1 {
-		s.resultMu.Unlock()
 		return false
 	}
 	var winner int
 	var losers []int
 	var winners []int
 	var draw bool
-	reason := ReasonCommanderDeath
+	reason := ReasonAllUnits
+	if commanderOnly {
+		reason = ReasonCommanderDeath
+	}
 	if activeCount == 0 {
 		draw = true
 		winner = -1
-		for t := range allTeams {
-			losers = append(losers, t)
+		for i := 0; i < allTeamCount; i++ {
+			losers = append(losers, allTeams[i])
 		}
 		sort.Ints(losers)
 	} else {
-		for t := range active {
-			winner = t
-			break
-		}
+		winner = active[0]
 		winners = []int{winner}
-		for t := range allTeams {
+		for i := 0; i < allTeamCount; i++ {
+			t := allTeams[i]
 			if t != winner {
 				losers = append(losers, t)
 			}
 		}
 		sort.Ints(losers)
-		sort.Ints(winners)
 	}
 	kind := s.resultKindFor(draw, winner)
 	// If not yet pending, arm the latch.
@@ -378,7 +297,8 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 				s.Econ.Players[i].EndGameCountdown = int32(s.Latch.Countdown)
 			}
 		}
-		// Prepare pending view for snapshot (countdown 4, not yet Ended)
+		// Store pending result metadata for the next committed frame (countdown
+		// 4, not yet Ended).
 		scores := s.collectScores(winner, draw)
 		pending := Result{
 			Ended:      false,
@@ -395,14 +315,10 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		}
 		// Hold pending result for snapshot? We store in result but Ended false means not terminal.
 		// Keep result.Ended false until latch visible; but store pending for later commit.
-		// Publish a non-terminal countdown view via snapshot directly (not via result Ended).
 		s.result = pending
-		s.resultMu.Unlock()
-		s.publishResultView()
 		// Check immediate latch edge (Countdown already <0) — rare
 		if s.Latch.IsEnding() {
 			// commit now
-			s.resultMu.Lock()
 			scores2 := s.collectScores(s.resultPendingWinner, s.resultPendingDraw)
 			kind2 := s.resultKindFor(s.resultPendingDraw, s.resultPendingWinner)
 			w2 := s.resultPendingWinner
@@ -423,12 +339,9 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 				Countdown:  s.Latch.Countdown,
 				Scores:     scores2,
 			}
-			s.resultMu.Unlock()
-			s.publishResultView()
 			if s.State == StateBattle {
 				_ = s.TransitionTo(StatePostBattle)
 			}
-			s.fireResultCallback()
 			return true
 		}
 		return false
@@ -465,8 +378,6 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 			Countdown:  s.Latch.Countdown,
 			Scores:     scores,
 		}
-		s.resultMu.Unlock()
-		s.publishResultView()
 		if s.Econ != nil {
 			for i := 0; i < 10; i++ {
 				s.Econ.Players[i].GameEnded = s.Latch.IsEnding()
@@ -524,12 +435,9 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 			Countdown:  s.Latch.Countdown,
 			Scores:     scores,
 		}
-		s.resultMu.Unlock()
-		s.publishResultView()
 		if s.State == StateBattle {
 			_ = s.TransitionTo(StatePostBattle)
 		}
-		s.fireResultCallback()
 		return true
 	}
 	// Not yet latched: update pending view and publish countdown.
@@ -552,8 +460,6 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		Countdown:  s.Latch.Countdown,
 		Scores:     scores,
 	}
-	s.resultMu.Unlock()
-	s.publishResultView()
 	return false
 }
 
@@ -562,8 +468,6 @@ func (s *Session) GetResultArmedTick() uint32 {
 	if s == nil {
 		return 0
 	}
-	s.resultMu.Lock()
-	defer s.resultMu.Unlock()
 	return s.resultArmedTick
 }
 
@@ -572,8 +476,6 @@ func (s *Session) ClearResult() {
 	if s == nil {
 		return
 	}
-	s.resultMu.Lock()
-	defer s.resultMu.Unlock()
 	s.result = Result{}
 	s.resultPending = false
 	s.resultPendingWinner = 0
@@ -582,17 +484,14 @@ func (s *Session) ClearResult() {
 	s.resultPendingDraw = false
 	s.resultArmedTick = 0
 	s.resultNextDue = 0
-	s.resultCallback = nil
-	s.resultCallbackFired = false
 	s.Latch = NewEndLatch()
 }
 
-// ResetResultForRetry clears result and latch for a clean retry without duplicate callbacks [RS-05].
+// ResetResultForRetry clears result and latch for a clean retry [RS-05].
 func (s *Session) ResetResultForRetry() {
 	if s == nil {
 		return
 	}
-	s.resultMu.Lock()
 	s.result = Result{}
 	s.resultPending = false
 	s.resultPendingWinner = 0
@@ -601,11 +500,6 @@ func (s *Session) ResetResultForRetry() {
 	s.resultPendingDraw = false
 	s.resultArmedTick = 0
 	s.resultNextDue = 0
-	// Do not carry fired state to new attempt; allow callback again exactly once.
-	s.resultCallbackFired = false
-	// Keep callback for retry? Caller should reinstall if needed; clear to avoid double fire.
-	// Preserve callback if not fired yet, but reset fired flag.
-	// s.resultCallback remains.
 	s.Latch = NewEndLatch()
 	s.VictoryDone = false
 	s.DefeatDone = false
@@ -615,5 +509,4 @@ func (s *Session) ResetResultForRetry() {
 			s.Econ.Players[i].EndGameCountdown = -1
 		}
 	}
-	s.resultMu.Unlock()
 }

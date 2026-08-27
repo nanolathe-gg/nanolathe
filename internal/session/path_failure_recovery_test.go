@@ -114,19 +114,10 @@ func TestPathFailureRecovery_ImpasseGoalRecovers(t *testing.T) {
 	}
 	node := orders.NewMoveNode(id, goalX, goalZ, sess.Clock.GlobalTick, comHandle, false)
 	q.Push(id, node)
-	sess.SetTraceEnabled(true)
-	sess.ClearTrace()
-	failed := false
 	popped := false
 	for i := 0; i < 200; i++ {
 		now++
 		sess.Step(now)
-		evs := sess.TraceEvents()
-		for _, ev := range evs {
-			if ev.Kind == TracePathFailed && ev.Handle == comHandle {
-				failed = true
-			}
-		}
 		q2 := orders.QueueForUnit(sess.Units.Unit(comHandle))
 		if q2 == nil || q2.LenPrimary() == 0 {
 			popped = true
@@ -149,9 +140,8 @@ func TestPathFailureRecovery_ImpasseGoalRecovers(t *testing.T) {
 				headInfo = orders.DescriptorFor(h.ID).Name
 			}
 		}
-		t.Fatalf("bad order not popped within 200 ticks head %s failedTrace %v", headInfo, failed)
+		t.Fatalf("bad order not popped within 200 ticks head %s", headInfo)
 	}
-	sess.ClearTrace()
 	beforeX := sess.Units.Unit(comHandle).X
 	beforeZ := sess.Units.Unit(comHandle).Z
 	var landCell path.Cell

@@ -105,6 +105,10 @@ type EffectRecord struct {
 	SequenceID     string
 	FrameA         int32
 	FrameB         int32
+	// Strip is the effect-strip destination (beam/muzzle/nanolathe = 6 etc.)
+	// routed at admission [03 §5.5][R-P0-06 §5]. It is preserved through the
+	// pool so the client's strip-6 nanolathe draw gate can fire.
+	Strip int8
 	// Position and velocity in 16.16 world units [I2][03 §2.1].
 	X, Y, Z                   numeric.Fixed // current position [03 §1]
 	TargetX, TargetY, TargetZ numeric.Fixed // producer endpoint metadata [03 §5.5]
@@ -140,6 +144,7 @@ func (p *FixedEffectPool) AppendView(v frame.EffectView) bool {
 		Graphic:    v.Graphic,
 		AssetID:    v.AssetID,
 		SequenceID: v.SequenceID,
+		Strip:      v.Strip,
 		X:          v.X, Y: v.Y, Z: v.Z,
 		TargetX: v.TargetX, TargetY: v.TargetY, TargetZ: v.TargetZ,
 		VX: v.VX, VY: v.VY, VZ: v.VZ,
@@ -190,7 +195,8 @@ func (p *FixedEffectPool) SnapshotViewsInto(out []frame.EffectView) []frame.Effe
 			SeqA: r.AnimA.Idx, SeqB: r.AnimB.Idx,
 			DurationsA: append(a[:0], r.AnimA.Durations...), DurationsB: append(b[:0], r.AnimB.Durations...),
 			LoopA: r.AnimA.Loop, LoopB: r.AnimB.Loop,
-			X: r.X, Y: r.Y, Z: r.Z, VX: r.VX, VY: r.VY, VZ: r.VZ,
+			Strip: r.Strip,
+			X:     r.X, Y: r.Y, Z: r.Z, VX: r.VX, VY: r.VY, VZ: r.VZ,
 			TargetX: r.TargetX, TargetY: r.TargetY, TargetZ: r.TargetZ,
 			HasModel: r.HasModel,
 			Gravity:  r.Gravity, ExpiryTick: r.ExpiryTick,

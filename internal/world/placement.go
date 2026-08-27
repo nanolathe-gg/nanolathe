@@ -476,6 +476,14 @@ type PlacementQuery struct {
 	Rules  PlacementRules
 	Self   uint16
 	Mobile bool
+	// SkipTerrainAggregates marks a query from a caller outside the recovered
+	// inline terrain-check mode (mode value 1) [04 §6.4]: the bounds, unit-
+	// occupancy and blocking-feature gates still apply, but the slope/height/
+	// water aggregates do not. Factory exit-spot validation uses it while that
+	// caller's mode value remains unresolved — TODO(question): recovering the
+	// mode argument at the production state machine's validation call settles
+	// whether any aggregate gate belongs at factory exits.
+	SkipTerrainAggregates bool
 }
 
 // PlacementResult contains the only derived value placement consumers need
@@ -587,24 +595,30 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 	}
 
 	sea := int32(t.SeaLevel)
+	// Aggregate terrain legality only applies when the caller requests the
+	// inline terrain-check mode [04 §6.4]; queries outside it (factory exit
+	// spots) keep siteHeight from the plain bounds pass for allocation height.
+	skipAggregates := q.SkipTerrainAggregates || !q.Rules.ProfileResolved
 	siteHeight := sea - q.Rules.Waterline
 	if maxHigh >= minLow {
 		siteHeight = minLow
-		water := sea > minLow
-		limit := q.Rules.MaxSlope
-		// Building yards use MaxSlope. Only the inline mobile path selects
-		// MaxWaterSlope from the complete footprint's water state [04 §6.1].
-		if q.Mobile && water {
-			limit = q.Rules.MaxWaterSlope
-		}
-		if q.Rules.ProfileResolved && maxHigh-minLow > limit {
-			return PlacementResult{}, fmt.Errorf("world: placement slope %d exceeds limit %d [04 §6.1]", maxHigh-minLow, limit)
+		if !skipAggregates {
+			water := sea > minLow
+			limit := q.Rules.MaxSlope
+			// Building yards use MaxSlope. Only the inline mobile path selects
+			// MaxWaterSlope from the complete footprint's water state [04 §6.1].
+			if q.Mobile && water {
+				limit = q.Rules.MaxWaterSlope
+			}
+			if maxHigh-minLow > limit {
+				return PlacementResult{}, fmt.Errorf("world: placement slope %d exceeds limit %d [04 §6.1]", maxHigh-minLow, limit)
+			}
 		}
 	}
-	if q.Rules.ProfileResolved && bit4Max > siteHeight {
+	if !skipAggregates && bit4Max > siteHeight {
 		return PlacementResult{}, fmt.Errorf("world: placement height peak %d exceeds site height %d [05 %q]", bit4Max, siteHeight, "Geothermal requirement")
 	}
-	if q.Rules.ProfileResolved && minLow < sea-q.Rules.MaxWaterDepth {
+	if !skipAggregates && minLow < sea-q.Rules.MaxWaterDepth {
 		return PlacementResult{}, fmt.Errorf("world: placement water depth exceeds %d [05 %q]", q.Rules.MaxWaterDepth, "Geothermal requirement")
 	}
 	maxSample := maxHigh
@@ -614,7 +628,7 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 	// MinWaterDepth ==0 means no minimum-depth requirement (land buildings) [R-P0-08][05 "Geothermal requirement"].
 	// Retail land definitions author MinWaterDepth 0 and must be placeable above sea level; the strict > check
 	// would otherwise reject any positive height when sea==0. Gate on non-zero to preserve land placement.
-	if q.Rules.ProfileResolved && q.Rules.MinWaterDepth != 0 && maxSample > sea-q.Rules.MinWaterDepth {
+	if !skipAggregates && q.Rules.MinWaterDepth != 0 && maxSample > sea-q.Rules.MinWaterDepth {
 		return PlacementResult{}, fmt.Errorf("world: placement is deeper than minimum water depth %d [05 %q]", q.Rules.MinWaterDepth, "Geothermal requirement")
 	}
 	return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight}, nil

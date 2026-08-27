@@ -85,11 +85,9 @@ func TestBattleInputFrameFromClientRetainsLogicalState(t *testing.T) {
 	}
 }
 
-func TestBattleControllerReleasesKeysAndRendersZeroElapsed(t *testing.T) {
+func TestBattleControllerReleasesKeysAndHandlesZeroElapsed(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
 	b.latch = input.LatchNormal
-	renders := 0
-	b.sess.OnRender = func() { renders++ }
 	cl, err := client.New(client.Options{Buffer: b.sess.Snapshot, Width: 640, Height: 480, Headless: true})
 	if err != nil {
 		t.Fatalf("client.New: %v", err)
@@ -116,15 +114,9 @@ func TestBattleControllerReleasesKeysAndRendersZeroElapsed(t *testing.T) {
 	if b.sess.Clock.GlobalTick != beforeTick {
 		t.Fatalf("zero elapsed replay advanced GlobalTick from %d to %d", beforeTick, b.sess.Clock.GlobalTick)
 	}
-	if renders != 2 {
-		t.Fatalf("zero-scaled controller frames must render once each, got %d", renders)
-	}
 	c.Step(BattleInputFrame{}, cl)
 	if c.in.Kbd.KeyDown(input.KeyW) || c.in.Kbd.KeyDown(input.KeyShift) {
 		t.Fatal("continuously absent keys retriggered press edges")
-	}
-	if renders != 3 {
-		t.Fatalf("third zero-scaled frame did not render, got %d", renders)
 	}
 }
 

@@ -246,7 +246,9 @@ func TestRS10_FactoryBlockedRetryAndLimit(t *testing.T) {
 	for i := range terrain.Plot {
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 	}
-	terrain.Plot[4*10+4].SetOccupantA(1)
+	// Foreign occupant (handle 9, distinct from the producing factory) on the
+	// exit cell: self-exemption must never swallow genuinely foreign stamps.
+	terrain.Plot[4*10+4].SetOccupantA(9)
 
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	facDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armfac"}, UnitName: "armfac", FootprintX: 2, FootprintZ: 2, YardMap: "oo\n00", Builder: true, MaxDamage: 200, WorkerTime: 300}

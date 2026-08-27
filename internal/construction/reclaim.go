@@ -178,12 +178,17 @@ func (s *Service) emitReclaimNano(tick uint32, builder, target *units.Unit) {
 	if !ok {
 		return
 	}
-	// Selector 6 and one event per admitted reclaim pulse are established;
-	// exact strip/lifetime/color fields remain presentation TODO [R-P0-06].
+	// Selector 6 and one event per admitted reclaim pulse are established; the
+	// producer identity routes the event to effect strip 6 (beam/muzzle/
+	// nanolathe) and the geometry flag opens the client's nanolathe draw gate
+	// [R-P0-06][03 §5.5].
 	s.Presentation.EmitNanolathe(frame.Event{
 		Tick: tick, Source: builder.Handle, Target: target.Handle, Piece: piece,
 		X: source.X(), Y: source.Y(), Z: source.Z(),
 		TargetX: target.X, TargetY: target.Y, TargetZ: target.Z,
 		EffectID: 6, Mode: 2, Team: builder.Owner,
+		Producer:               frame.ProducerBeam,
+		PaletteRow:             6,
+		NanolatheGeometryKnown: true,
 	})
 }

@@ -120,10 +120,13 @@ func TestStrictSkirmish_Hygiene(t *testing.T) {
 	t.Logf("G0 hygiene: no wall-clock in authoritative packages [I6]")
 
 	// 5. No hidden map iteration [I1] — check deterministic iteration comment
-	// We scan for `range` over map in authoritative loop files; allow content compile-time.
-	// This is informational: we fail only if loop.go contains unordered map iteration that affects sim state.
+	// We scan for `range` over map in authoritative session files; allow content compile-time.
+	// This is informational: we fail only if session phase files contain unordered map iteration that affects sim state.
 	mapScanFiles := []string{
-		filepath.Join(root, "internal/session/loop.go"),
+		filepath.Join(root, "internal/session/session.go"),
+		filepath.Join(root, "internal/session/step.go"),
+		filepath.Join(root, "internal/session/commands.go"),
+		filepath.Join(root, "internal/session/publish.go"),
 		filepath.Join(root, "internal/combat/service.go"),
 		filepath.Join(root, "internal/economy/tick.go"),
 		filepath.Join(root, "internal/movement/integrate.go"),
@@ -171,7 +174,6 @@ func TestStrictSkirmish_Hygiene(t *testing.T) {
 		Reason:         "hygiene",
 		FinalTick:      0,
 		FinalStateHash: "",
-		TraceHash:      "",
 		Fallbacks:      []string{},
 		Warnings:       []string{},
 	}
