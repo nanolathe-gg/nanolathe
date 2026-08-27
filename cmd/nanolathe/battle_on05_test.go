@@ -197,8 +197,10 @@ func TestLegalPlacementQueuesMobileBuild(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	builder := placeUnit(b, "armcons", numeric.Fixed(0), numeric.Fixed(0))
 	builder.Flags |= client.SelectionFlag
+	applyPendingBattleCommands(b)
 	b.armBuildPanel()
 	// Arm product
 	btn := b.panelButtons[0]
@@ -206,6 +208,7 @@ func TestLegalPlacementQueuesMobileBuild(t *testing.T) {
 	if b.buildDef == "" {
 		t.Fatalf("not armed")
 	}
+	product := b.buildDef
 	// Simulate placement at legal site: screen that maps inside map
 	// Shell viewport: world = shell + cam. Choose shell 160,120 -> world 160,120
 	// With foot 2x2, cell = 10,7 minus half => 9,6 inside 20
@@ -214,15 +217,6 @@ func TestLegalPlacementQueuesMobileBuild(t *testing.T) {
 	b.updatePlacement(160, 120)
 	if !b.buildOK {
 		t.Fatalf("expected legal placement at center, got blocked")
-	}
-	// Inject recording
-	var queuedProduct string
-	var qx, qz numeric.Fixed
-	b.mobileBuildFn = func(prod string, wx, wz numeric.Fixed, queued bool) error {
-		queuedProduct = prod
-		qx, qz = wx, wz
-		// Also perform real queue for verification
-		return b.dispatchMobileBuildFallback(prod, wx, wz, queued)
 	}
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 	in.Mouse.InjectMouseMove(160, 120)
@@ -235,13 +229,16 @@ func TestLegalPlacementQueuesMobileBuild(t *testing.T) {
 	expCellX, expCellZ := b.buildCellX, b.buildCellZ
 	expFootX, expFootZ := b.buildFootX, b.buildFootZ
 	b.handleInput(in, nil)
-	// Check that one mobile build was queued
+	pending := b.sess.PendingHumanCommands()
+	if len(pending) != 1 || pending[0].Kind != session.HumanMobileBuild || pending[0].MobileBuild.Builder != builder.Handle || pending[0].MobileBuild.Product != product {
+		t.Fatalf("legal placement did not queue typed mobile build: %+v", pending)
+	}
+	// Apply the command at the authoritative input boundary before inspecting
+	// the order queue [01 §4.4].
+	applyPendingBattleCommands(b)
 	q := orders.QueueForUnit(builder)
 	if q.LenPrimary() != 1 {
 		t.Fatalf("legal placement should queue 1, got %d", q.LenPrimary())
-	}
-	if queuedProduct != b.buildDef && queuedProduct != "armsolar" {
-		// fallback may be empty if we used dispatch directly, but check tail
 	}
 	// The order carries the footprint's center, not the cursor point [07 §9]:
 	// retail snaps the site to whole cells and stores ((foot + 2*cell) << 19).
@@ -253,8 +250,6 @@ func TestLegalPlacementQueuesMobileBuild(t *testing.T) {
 	if tail.GoalX != numeric.Fixed(int64(expCellX*16+expFootX*8)<<16) {
 		t.Fatalf("site center %d is not the footprint midpoint of cell %d", tail.GoalX, expCellX)
 	}
-	_ = qx
-	_ = qz
 }
 
 // Test 4: illegal placement queues nothing [R-P0-03]
@@ -262,6 +257,7 @@ func TestIllegalPlacementQueuesNothing(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(1, 1) // compact map has no visible 2x2 placement site
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	builder := placeUnit(b, "armcons", numeric.Fixed(0), numeric.Fixed(0))
 	builder.Flags |= client.SelectionFlag
 	b.armBuildPanel()
@@ -294,18 +290,13 @@ func TestFactoryProductClickQueuesFactoryItem(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	fac := placeUnit(b, "armfac", numeric.Fixed(0), numeric.Fixed(0))
 	fac.Flags |= client.SelectionFlag
+	applyPendingBattleCommands(b)
 	b.armBuildPanel()
 	if len(b.panelButtons) == 0 {
 		t.Fatalf("factory panel empty")
-	}
-	var queued string
-	b.factoryBuildFn = func(prod string, q bool) error {
-		queued = prod
-		_ = q
-		// Use fallback to actually queue
-		return b.dispatchFactoryBuildFallback(prod, false)
 	}
 	// Find button
 	btn := b.panelButtons[0]
@@ -321,6 +312,11 @@ func TestFactoryProductClickQueuesFactoryItem(t *testing.T) {
 	if b.buildDef != "" {
 		t.Fatalf("factory click should not arm placement, got %s", b.buildDef)
 	}
+	pending := b.sess.PendingHumanCommands()
+	if len(pending) != 1 || pending[0].Kind != session.HumanFactoryBuild || pending[0].FactoryBuild.Builder != fac.Handle || pending[0].FactoryBuild.Product != btn.Name || pending[0].FactoryBuild.Count != 1 {
+		t.Fatalf("factory product click did not queue typed build: %+v", pending)
+	}
+	applyPendingBattleCommands(b)
 	q := orders.QueueForUnit(fac)
 	if q.LenPrimary() != before+1 {
 		t.Fatalf("factory product click should queue 1, got %d", q.LenPrimary())
@@ -329,7 +325,6 @@ func TestFactoryProductClickQueuesFactoryItem(t *testing.T) {
 	if tail.BuildDefKey == "" {
 		t.Fatalf("factory queue missing BuildDefKey")
 	}
-	_ = queued
 }
 
 // Test 6: paging changes page data-driven [R-P0-03][07 §9] C10
@@ -562,6 +557,7 @@ func TestBuildDefRetainedAndFactoryQueue(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	builder := placeUnit(b, "armcons", numeric.Fixed(0), numeric.Fixed(0))
 	builder.Flags |= client.SelectionFlag
 	b.armBuildPanel()
@@ -577,6 +573,7 @@ func TestBuildDefRetainedAndFactoryQueue(t *testing.T) {
 	// Deselect builder, select factory
 	builder.Flags &^= client.SelectionFlag
 	fac.Flags |= client.SelectionFlag
+	applyPendingBattleCommands(b)
 	b.armBuildPanel()
 	if len(b.panelButtons) == 0 {
 		t.Fatalf("factory panel empty")
@@ -588,6 +585,7 @@ func TestBuildDefRetainedAndFactoryQueue(t *testing.T) {
 	if b.buildDef != "" {
 		t.Fatalf("factory should queue not arm, got buildDef %s", b.buildDef)
 	}
+	applyPendingBattleCommands(b)
 	qAfter := orders.QueueForUnit(fac).LenPrimary()
 	if qAfter != qBefore+1 {
 		t.Fatalf("factory queue should increase by 1, before %d after %d", qBefore, qAfter)

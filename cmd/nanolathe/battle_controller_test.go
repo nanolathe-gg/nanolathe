@@ -7,7 +7,6 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/input"
-	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
@@ -23,6 +22,7 @@ func replayBattleFrame(c *BattleController, cl *client.Client, f BattleInputFram
 // state is written by the test itself [07 §8][07 §9].
 func TestStrictSkirmish_ProductionInputReplayG10A(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
+	bindBattleSessionCommandDispatch(b)
 	b.latch = input.LatchNormal
 	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
 	for _, u := range b.sess.Units.Iter() {
@@ -53,6 +53,7 @@ func TestStrictSkirmish_ProductionInputReplayG10A(t *testing.T) {
 	if got := replayBattleFrame(c, cl, frame); got == nil {
 		t.Fatal("select release did not render a frame")
 	}
+	applyPendingBattleCommands(b)
 	if commander.Flags&client.SelectionFlag == 0 {
 		t.Fatalf("production replay did not select commander at screen=%d,%d", sx, sy)
 	}
@@ -60,23 +61,14 @@ func TestStrictSkirmish_ProductionInputReplayG10A(t *testing.T) {
 	// Empty terrain click is the retail contextual move path. Keep it inside
 	// the logical viewport and away from the commander.
 	moveX, moveY := int32(300), int32(300)
-	qBefore := 0
-	if q := orders.QueueForUnit(commander); q != nil {
-		qBefore = q.LenPrimary()
-	}
 	frame.MouseX, frame.MouseY = moveX, moveY
 	frame.Buttons.Left = true
 	replayBattleFrame(c, cl, frame)
 	frame.Buttons.Left = false
 	replayBattleFrame(c, cl, frame)
-	q := orders.QueueForUnit(commander)
-	if q == nil || q.LenPrimary() != qBefore+1 {
-		t.Fatalf("production replay move: queue length before=%d after=%d", qBefore, func() int {
-			if q == nil {
-				return 0
-			}
-			return q.LenPrimary()
-		}())
+	pending := b.sess.PendingHumanCommands()
+	if len(pending) == 0 || pending[len(pending)-1].Kind != session.HumanOrder || pending[len(pending)-1].Order.Code != 1 {
+		t.Fatalf("production replay did not enqueue contextual move: pending=%+v", pending)
 	}
 }
 

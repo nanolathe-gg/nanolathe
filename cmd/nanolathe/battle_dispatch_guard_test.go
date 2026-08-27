@@ -12,9 +12,9 @@ import (
 )
 
 func TestProductionDispatchGuardRequiresBindingAndSnapshot(t *testing.T) {
-	b := &battleSession{requireCommandDispatch: true}
-	if err := b.submitBattleCommand(battleCommand{Kind: battleCommandStop}); err == nil {
-		t.Fatal("production command without dispatcher must fail")
+	b := &battleSession{}
+	if err := b.submitBattleCommand(battleCommand{Kind: battleCommandStop}); err == nil || err.Error() != "battle: production command dispatch is unbound" {
+		t.Fatalf("production command without dispatcher error=%v", err)
 	}
 	b.commandDispatchFn = func(battleCommand) error { return nil }
 	if err := b.DispatchOrderCommand(battleOrderCommand{Latch: input.LatchMove, Position: orders.ResolvePos{}}); err == nil {

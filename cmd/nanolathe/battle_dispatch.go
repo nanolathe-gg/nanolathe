@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
@@ -117,16 +116,10 @@ type battleGroupCommand struct {
 // internals directly [R-P0-03][07 §9]. Cycle ON-09/session must bind these to
 // the real construction/order pumps.
 //
-// A future composition layer may bind the typed command records to
-// session-owned pumps. The current battle application uses the direct typed
-// fallback below:
-//   - mobileBuild: construction.QueueMobileBuild(builder, product, wx, wz, 1, cat)
-//   - factoryBuild: construction.QueueFactoryBuild(factory, product, 1, cat)
-//   - order/stop/activation/stockpile/cancel: orders.Resolve or the canonical
-//     descriptor transition, then Queue.Push via session
-//
-// The present battleSession implements this interface via its methods; headless
-// tests can supply recording doubles without a live Session.
+// The composition layer binds these typed command records to session-owned
+// pumps. The battleSession methods below perform validation and submit one
+// command through commandDispatchFn; the legacy helper fields remain only
+// until their separately serialized cleanup unit removes them.
 //
 // Injection points session must bind (short):
 //
@@ -134,9 +127,8 @@ type battleGroupCommand struct {
 //	factoryBuildDeltaFn(product string, count int) error
 //	orderDispatchFn(latch input.Latch, x, y int32, queued bool)
 //
-// All are func fields on battleSession; when nil the fallback construction/
-// order paths run. Tests inject recording funcs to verify coordinates and
-// product names data-driven from BuildMenus without needing a live Session.
+// All are legacy func fields on battleSession retained for that later cleanup
+// unit. Production command submission does not invoke them.
 type battleDispatch interface {
 	DispatchMobileBuild(product string, wx, wz numeric.Fixed, queued bool) error
 	DispatchFactoryBuildDelta(product string, count int) error
@@ -285,109 +277,10 @@ func (b *battleSession) DispatchGroupRecall(group int, preserve bool) error {
 }
 
 func (b *battleSession) submitBattleCommand(cmd battleCommand) error {
-	if b == nil {
-		return nil
-	}
-	if b.commandDispatchFn != nil {
-		return b.commandDispatchFn(cmd)
-	}
-	if b.requireCommandDispatch {
+	if b == nil || b.commandDispatchFn == nil {
 		return fmt.Errorf("battle: production command dispatch is unbound")
 	}
-	switch cmd.Kind {
-	case battleCommandOrder:
-		b.dispatchOrderFallback(cmd.Order)
-		return nil
-	case battleCommandStop:
-		b.dispatchStopFallback()
-		return nil
-	case battleCommandActivation:
-		b.dispatchActivationFallback(cmd.Activation)
-		return nil
-	case battleCommandMobileBuild:
-		if b.mobileBuildFn != nil {
-			return b.mobileBuildFn(cmd.MobileBuild.Product, cmd.MobileBuild.WX, cmd.MobileBuild.WZ, cmd.MobileBuild.Queued)
-		}
-		return b.dispatchMobileBuildFallback(cmd.MobileBuild.Product, cmd.MobileBuild.WX, cmd.MobileBuild.WZ, cmd.MobileBuild.Queued)
-	case battleCommandFactoryBuild:
-		count := cmd.FactoryBuild.Count
-		if count == 0 {
-			count = 1
-		}
-		if b.factoryBuildDeltaFn != nil {
-			return b.factoryBuildDeltaFn(cmd.FactoryBuild.Product, count)
-		}
-		if b.factoryBuildFn != nil {
-			return b.factoryBuildFn(cmd.FactoryBuild.Product, count > 1)
-		}
-		return b.dispatchFactoryBuildDeltaFallback(cmd.FactoryBuild.Product, count)
-	case battleCommandCancelProduction:
-		b.dispatchCancelProductionFallback(cmd.CancelProduction.Unit)
-		return nil
-	case battleCommandStockpile:
-		b.dispatchStockpileFallback(cmd.Stockpile)
-		return nil
-	case battleCommandBuildPage:
-		if !b.requireCommandDispatch {
-			// Fixture fallback still mutates only through the same unit flag
-			// encoding; production always takes the session queue branch.
-			if u := b.selectedBuilder(); u != nil && b.cat != nil {
-				if pm := b.cat.BuildMenus[u.Def.CanonicalKey]; pm != nil {
-					count := hud.PageCountFromButtons(len(pm.Buttons), hud.RetailBuildButtonsPerPage)
-					view := hud.SelectUnit{Flags: u.Flags, DefID: b.catalogDefID(u)}
-					hud.SetBuildPage(&view, cmd.BuildPage.Page, count, nil)
-					u.Flags = view.Flags
-				}
-			}
-		}
-		return nil
-	case battleCommandGroupAssign:
-		if b.requireCommandDispatch {
-			return fmt.Errorf("battle: production group assignment requires session dispatch")
-		}
-		b.dispatchGroupFallback(cmd.Group, true)
-		return nil
-	case battleCommandGroupRecall:
-		if b.requireCommandDispatch {
-			return fmt.Errorf("battle: production group recall requires session dispatch")
-		}
-		b.dispatchGroupFallback(cmd.Group, false)
-		return nil
-	case battleCommandSelectionReplace:
-		if b.sess != nil && b.sess.Units != nil {
-			for _, u := range b.sess.Units.Iter() {
-				if u != nil && u.Owner == b.sess.LocalOwner {
-					u.Flags &^= client.SelectionFlag
-				}
-			}
-			for _, h := range cmd.Selection.Handles {
-				if u := b.sess.Units.Unit(h); u != nil && u.Owner == b.sess.LocalOwner {
-					u.Flags |= client.SelectionFlag
-				}
-			}
-		}
-		return nil
-	case battleCommandSelectionToggle:
-		if b.sess != nil && b.sess.Units != nil {
-			for _, h := range cmd.Selection.Handles {
-				if u := b.sess.Units.Unit(h); u != nil && u.Owner == b.sess.LocalOwner {
-					u.Flags ^= client.SelectionFlag
-				}
-			}
-		}
-		return nil
-	case battleCommandSelectionClear:
-		if b.sess != nil && b.sess.Units != nil {
-			for _, u := range b.sess.Units.Iter() {
-				if u != nil && u.Owner == b.sess.LocalOwner {
-					u.Flags &^= client.SelectionFlag
-				}
-			}
-		}
-		return nil
-	default:
-		return nil
-	}
+	return b.commandDispatchFn(cmd)
 }
 
 // sessionHumanCommand converts the UI value into the session-owned command

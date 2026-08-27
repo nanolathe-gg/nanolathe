@@ -23,9 +23,9 @@ func TestOW1G_FogUnexploredUnit(t *testing.T) {
 	if fogUnexploredUnit(fog, u1) {
 		t.Fatalf("tile (1,0) with Ch0==0 should be explored")
 	}
-	// Invalid fog never reports unexplored (fixtures visible) [I9].
-	if fogUnexploredUnit(snapshot.FogView{}, u0) {
-		t.Fatalf("invalid fog should never be unexplored")
+	// An invalid fog publication is fail-closed.
+	if !fogUnexploredUnit(snapshot.FogView{}, u0) {
+		t.Fatalf("invalid fog must be treated as unexplored")
 	}
 	// Feature at CX=0 (tile 0) unexplored, CX=2 (tile1) explored.
 	f0 := snapshot.FeatureView{CX: 0, CZ: 0}
@@ -40,7 +40,7 @@ func TestOW1G_FogUnexploredUnit(t *testing.T) {
 
 func TestOW1G_VisibilityAdmission_OwnAlwaysEnemySuppressed(t *testing.T) {
 	// Visibility grid 4x4, only cell (2,2) visible (index 10). Fog 4x4 for tile equivalence.
-	vis := snapshot.VisibilityView{W: 4, H: 4, Valid: true, Visible: make([]uint8, 16)}
+	vis := snapshot.VisibilityView{W: 4, H: 4, Valid: true, CoverageBytes: true, Visible: make([]uint8, 16)}
 	vis.Visible[10] = 1 // cell (2,2)
 	fog := snapshot.FogView{W: 4, H: 4, Valid: true, Ch0: make([]uint8, 16), Ch1: make([]uint8, 16)}
 	frame := &snapshot.Frame{Visibility: vis, Fog: fog, Selection: snapshot.SelectionView{LocalPlayer: 0}}
@@ -63,10 +63,10 @@ func TestOW1G_VisibilityAdmission_OwnAlwaysEnemySuppressed(t *testing.T) {
 	if !unitVisibleForFrame(frame, ownHidden, 0) {
 		t.Fatalf("own unit should always be visible even in fog")
 	}
-	// Invalid visibility grid treated as visible for fixtures [I9].
+	// An invalid visibility publication must not expose foreign units.
 	frameInvalid := &snapshot.Frame{Visibility: snapshot.VisibilityView{}, Fog: fog, Selection: snapshot.SelectionView{LocalPlayer: 0}}
-	if !unitVisibleForFrame(frameInvalid, enemyHidden, 0) {
-		t.Fatalf("invalid visibility should be treated as visible")
+	if unitVisibleForFrame(frameInvalid, enemyHidden, 0) {
+		t.Fatalf("invalid visibility must cull foreign units")
 	}
 	// Fog unexplored still suppresses enemy even if visibility says visible.
 	// Fog tile (1,1) corresponds to cells (2..3,2..3); cell (2,2) -> tile (1,1) index 5.

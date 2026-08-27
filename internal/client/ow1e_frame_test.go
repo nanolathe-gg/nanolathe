@@ -10,25 +10,43 @@ import (
 )
 
 func TestOW1F_ProjectileVisibleUsesPublishedGrid(t *testing.T) {
-	vis := snapshot.VisibilityView{W: 2, H: 2, Valid: true, Visible: []uint8{0, 0, 0, 1}}
-	fn := projectileVisible(vis)
+	vis := snapshot.VisibilityView{W: 2, H: 2, Valid: true, CoverageBytes: true, Visible: []uint8{0, 0, 0, 1}}
+	fn := projectileVisible(vis, 0)
 	if !fn(snapshot.ProjectileView{X: numeric.Fixed(32 << 16), Z: numeric.Fixed(48 << 16)}) {
 		t.Fatal("visible projectile rejected")
 	}
 	if fn(snapshot.ProjectileView{X: numeric.Fixed(0), Z: numeric.Fixed(0)}) {
 		t.Fatal("invisible projectile admitted")
 	}
-	// Invalid grid is treated as visible for fixtures.
-	fn2 := projectileVisible(snapshot.VisibilityView{})
-	if !fn2(snapshot.ProjectileView{}) {
-		t.Fatal("invalid visibility should be treated as visible")
+	// An invalid publication is fail-closed.
+	fn2 := projectileVisible(snapshot.VisibilityView{}, 0)
+	if fn2(snapshot.ProjectileView{}) {
+		t.Fatal("invalid visibility must cull projectiles")
+	}
+}
+
+func TestOW1F_ProjectileVisibleSelectsHistoryWordMask(t *testing.T) {
+	vis := snapshot.VisibilityView{W: 1, H: 1, Valid: true, WordVisible: []uint16{1 << 2}}
+	if !projectileVisible(vis, 2)(snapshot.ProjectileView{}) {
+		t.Fatal("projectile in local history word cell was rejected")
+	}
+	if projectileVisible(vis, 1)(snapshot.ProjectileView{}) {
+		t.Fatal("projectile admitted through another player's history bit")
+	}
+	if projectileVisible(snapshot.VisibilityView{W: 1, H: 1, Valid: true, WordVisible: []uint16{}}, 0)(snapshot.ProjectileView{}) {
+		t.Fatal("missing history word mask must cull projectiles")
+	}
+	allVisible := snapshot.VisibilityView{W: 1, H: 1, Valid: true, WordVisible: []uint16{1 << 10}}
+	if projectileVisible(allVisible, 10)(snapshot.ProjectileView{}) {
+		t.Fatal("reserved player slot 10 must cull projectiles")
 	}
 }
 
 func TestOW1F_ProjectileDispatchOptionsBeamNotSuppressed(t *testing.T) {
 	opts := (&Client{}).projectileDispatchOptions()
 	v := snapshot.ProjectileView{RenderType: render.RenderTypeBeam, PrimaryColor: 13, HasPrimaryColor: true}
-	d, aborted := render.BuildProjectileDraws([]snapshot.ProjectileView{v}, 0, nil, nil, opts)
+	alwaysVisible := func(snapshot.ProjectileView) bool { return true }
+	d, aborted := render.BuildProjectileDraws([]snapshot.ProjectileView{v}, 0, alwaysVisible, nil, opts)
 	if aborted || len(d) != 1 || d[0].Kind != "beam" {
 		t.Fatalf("beam dispatch with published color failed: draws=%+v aborted=%v", d, aborted)
 	}
@@ -66,8 +84,9 @@ func TestOW1E_ProjectileRendersRegardlessOfUnitCount(t *testing.T) {
 	c.cam = &camera.Camera{X: 0, Z: 0, ViewW: 64, ViewH: 64, MapW: 512, MapH: 512}
 	// Minimal terrain for coverage.
 	c.indexed = make([]uint8, 64*64)
-	prev := &snapshot.Frame{Tick: 1, Projectiles: []snapshot.ProjectileView{{Handle: 1, X: numeric.Fixed(32 << 16), Z: numeric.Fixed(32 << 16), RenderType: render.RenderTypeBeam, PaletteRow: 210}}}
-	cur := &snapshot.Frame{Tick: 2, Projectiles: []snapshot.ProjectileView{{Handle: 1, X: numeric.Fixed(33 << 16), Z: numeric.Fixed(33 << 16), RenderType: render.RenderTypeBeam, PaletteRow: 210}}}
+	vis := snapshot.VisibilityView{W: 2, H: 2, Valid: true, CoverageBytes: true, Visible: []uint8{1, 1, 1, 1}}
+	prev := &snapshot.Frame{Tick: 1, Visibility: vis, Projectiles: []snapshot.ProjectileView{{Handle: 1, X: numeric.Fixed(32 << 16), Z: numeric.Fixed(32 << 16), RenderType: render.RenderTypeBeam, PaletteRow: 210}}}
+	cur := &snapshot.Frame{Tick: 2, Visibility: vis, Projectiles: []snapshot.ProjectileView{{Handle: 1, X: numeric.Fixed(33 << 16), Z: numeric.Fixed(33 << 16), RenderType: render.RenderTypeBeam, PaletteRow: 210}}}
 	buf := &snapshot.Buffer{}
 	buf.Publish(prev)
 	buf.Publish(cur)

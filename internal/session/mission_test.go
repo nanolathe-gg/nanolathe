@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -240,6 +241,46 @@ func TestNewMissionUsesWindBoundsWithoutDraws(t *testing.T) {
 	}
 	if s.State != StateLocalPreload {
 		t.Fatalf("NewMission must route via Gametype 1 -> StateLocalPreload [08 \"Session states\"] C3 got %v", s.State)
+	}
+}
+
+func TestNewMissionWithFSKeepsCampaignLoadStrict(t *testing.T) {
+	// A direct Type 1 load must not use the Type 2/3 fuzzy resolver when the
+	// requested mission is absent. Supplying a different valid OTA makes the
+	// old fallback observable without requiring terrain or retail assets.
+	fs := fsFromMap(t, map[string]string{
+		"maps/Available.ota": "[GlobalHeader]\n{\nmissionname=Available;\n[Schema 0]\n{\nType=Easy;\n}\n}\n",
+	})
+	cat := &content.Catalog{Maps: map[string]*content.MapHeader{}}
+	_, err := NewMissionWithFS(fs, cat, "Missing.ota", 0)
+	if err == nil {
+		t.Fatal("strict campaign load must fail when the requested mission is absent")
+	}
+	if got := err.Error(); !strings.Contains(got, "The requested mission file, Missing.ota, does not exist.") {
+		t.Fatalf("strict campaign diagnostic = %q, want the Type 1 missing-file diagnostic", got)
+	}
+}
+
+func TestLoadCampaignAIProfileRequiresAuthoredProfile(t *testing.T) {
+	fs := fsFromMap(t, map[string]string{})
+	_, err := loadCampaignAIProfile(fs, "mission-ai")
+	if err == nil {
+		t.Fatal("missing mission and default AI profiles must fail campaign construction")
+	}
+	if got := err.Error(); !strings.Contains(got, "session: ai profile \"mission-ai\"") || !strings.Contains(got, "fallback") {
+		t.Fatalf("missing AI profile diagnostic = %q, want profile and fallback context", got)
+	}
+
+	// The established fallback remains valid when ai/default.txt exists.
+	fsWithDefault := fsFromMap(t, map[string]string{
+		"ai/default.txt": "plan any\nweight armcom 1.0\n",
+	})
+	prof, err := loadCampaignAIProfile(fsWithDefault, "mission-ai")
+	if err != nil {
+		t.Fatalf("default AI profile fallback: %v", err)
+	}
+	if prof == nil || prof.Name() != "default" {
+		t.Fatalf("fallback profile = %#v, want authored default profile", prof)
 	}
 }
 

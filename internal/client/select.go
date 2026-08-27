@@ -422,7 +422,8 @@ func SelectedUnits(w *units.World) []int { // int slot for test convenience
 // It returns the nearest unit within pickRadius pixels (16 pixel radius
 // [07 §9] overlap tolerance) whose screen projection is within the radius and
 // whose fog state is visible to localPlayer via visibility.Service.IsVisible
-// when vis is non-nil [03 §3.2] C8. On equal distance the lower pool slot wins
+// [03 §3.2] C8. A missing visibility service fails closed for foreign units;
+// local-owner units retain the visibility owner bypass. On equal distance the lower pool slot wins
 // deterministically (strict <) and iteration is stable ascending slot order
 // (I1) [07 §9]. Callers that also need feature picking should test unit result
 // first and fall back to feature probing only when no unit hit, preserving
@@ -442,9 +443,13 @@ func PickUnit(sx, sy int32, cam *camera.Camera, unitsWorld *units.World, vis *vi
 		if u == nil || !u.Alive {
 			continue
 		}
-		if vis != nil {
+		owner := visibility.PlayerID(u.Owner)
+		if owner != localPlayer {
+			if vis == nil {
+				continue // foreign units are absent when visibility is unavailable
+			}
 			t := visibility.Target{
-				Owner:  visibility.PlayerID(u.Owner),
+				Owner:  owner,
 				X:      u.X,
 				Y:      u.Y,
 				Z:      u.Z,

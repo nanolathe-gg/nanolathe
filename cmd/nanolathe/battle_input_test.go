@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -49,6 +50,7 @@ func clickAt(b *battleSession, sx, sy int32, shift bool) {
 	in.Mouse.InjectMouseMove(float32(sx), float32(sy))
 	in.Mouse.InjectMouseButton(input.MouseButtonLeft, false)
 	b.handleInput(in, nil)
+	applyPendingBattleCommands(b)
 }
 
 func rightClickAt(b *battleSession, sx, sy int32, shift bool) {
@@ -59,6 +61,7 @@ func rightClickAt(b *battleSession, sx, sy int32, shift bool) {
 	in.Mouse.InjectMouseMove(float32(sx), float32(sy))
 	in.Mouse.InjectMouseButton(input.MouseButtonRight, true)
 	b.handleInput(in, nil)
+	applyPendingBattleCommands(b)
 }
 
 func dragSelect(b *battleSession, sx0, sy0, sx1, sy1 int32, shift bool) {
@@ -85,6 +88,23 @@ func dragSelect(b *battleSession, sx0, sy0, sx1, sy1 int32, shift bool) {
 	in.Mouse.InjectMouseMove(float32(sx1), float32(sy1))
 	in.Mouse.InjectMouseButton(input.MouseButtonLeft, false)
 	b.handleInput(in, nil)
+	applyPendingBattleCommands(b)
+}
+
+// applyPendingBattleCommands advances the real session input boundary used by
+// production. Input helpers bind the typed queue explicitly, then run one
+// authoritative tick so assertions inspect applied state rather than a test
+// fallback [01 §4.4][07 §9].
+func applyPendingBattleCommands(b *battleSession) {
+	if b == nil || b.sess == nil {
+		return
+	}
+	b.sess.State = session.StateBattle
+	now := int32(1)
+	if b.sess.Clock != nil && b.sess.Clock.GlobalTick > 0 {
+		now = int32(b.sess.Clock.GlobalTick + 1)
+	}
+	b.sess.Step(now)
 }
 
 // TestClickCommanderSelectsExactlyOne [07 §9][RS-P0-003] small-click selects exactly one via canonical picker.
@@ -92,6 +112,7 @@ func TestClickCommanderSelectsExactlyOne(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	cam := b.cam
 	// Place commander inside the visible battle surface. The renderer's world
@@ -128,6 +149,7 @@ func TestClickCommanderSelectsExactlyOne(t *testing.T) {
 // the HUD viewport origin a second time [03 §2.5][07 §8].
 func TestClickAtRenderedCommanderPosition(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
+	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	b.latch = input.LatchNormal
 	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
@@ -147,6 +169,7 @@ func TestClickAtRenderedCommanderPosition(t *testing.T) {
 // rendered rather than the live-pool fallback [03 §2.5][07 §9].
 func TestClickAtRenderedCommanderPositionUsesSnapshotPicker(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
+	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	b.latch = input.LatchNormal
 	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
@@ -176,6 +199,7 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(30, 30)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	a := placeUnit(b, "armcons", numeric.Fixed(180*65536), numeric.Fixed(100*65536))
 	c := placeUnit(b, "armsolar", numeric.Fixed(320*65536), numeric.Fixed(220*65536))
@@ -311,6 +335,7 @@ func TestFoggedEnemyCannotBeSelectedOrTargeted(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	// Ensure visibility service is empty (W==0 => enemy invisible) [03 §3.2] C8
 	b.sess.Vis = &visibility.Service{} // empty
@@ -354,6 +379,7 @@ func TestEqualOverlapTieLowerSlotWins(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	x := numeric.Fixed(200 * 65536)
 	z := numeric.Fixed(120 * 65536)
@@ -405,6 +431,7 @@ func TestLocalOwnerNonzeroReceivesCommands(t *testing.T) {
 	// Prepare orders table
 	_ = orders.Lookup("Move_Ground")
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 1 // human is player 1, not 0 [RS-P0-004]
 	// Place two units, one owned by 1 (local), one owned by 0
 	localUnit := placeUnit(b, "armcons", numeric.Fixed(180*65536), numeric.Fixed(100*65536))
@@ -432,6 +459,7 @@ func TestLocalOwnerNonzeroReceivesCommands(t *testing.T) {
 	// Acquire orders for local unit
 	// Use orderSelected direct: code 2 = MOVE
 	b.orderSelected(2, 300, 300, false) // ground point
+	applyPendingBattleCommands(b)
 	qLocal := orders.QueueForUnit(localUnit)
 	if qLocal == nil || qLocal.LenPrimary() == 0 {
 		t.Fatalf("local owner unit should receive move order")
@@ -498,12 +526,15 @@ func TestCanonicalPayloadIdentical(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	u := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
 	u.Flags |= client.SelectionFlag
+	applyPendingBattleCommands(b)
 	// Hotkey latch Move then dispatch
 	b.latch = input.LatchMove
 	b.orderSelected(2, 200, 200, false)
+	applyPendingBattleCommands(b)
 	q := orders.QueueForUnit(u)
 	if q.LenPrimary() != 1 {
 		t.Fatalf("hotkey latch move should queue 1")
@@ -518,6 +549,7 @@ func TestCanonicalPayloadIdentical(t *testing.T) {
 	// Need selection still
 	u.Flags |= client.SelectionFlag
 	b.orderSelected(1, 210, 210, false)
+	applyPendingBattleCommands(b)
 	if q.LenPrimary() != 1 {
 		t.Fatalf("left-click contextual should queue 1")
 	}

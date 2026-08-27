@@ -98,6 +98,7 @@ var retailLoadStageOf = map[string]int{
 // retailLoadStageWeight is how many families feed each bar, so a bar can show
 // its own families completing one at a time.
 var retailLoadStageWeight = func() (w [retailLoadStages]int) {
+	// Counting into a fixed array: the result does not depend on map order.
 	for _, stage := range retailLoadStageOf {
 		w[stage]++
 	}
@@ -162,6 +163,8 @@ func (l *loadingState) report(family string, percent int) {
 	}
 	l.family[family] = int32(percent)
 	total := int32(0)
+	// Integer sum over the bar's families: the result does not depend on map
+	// order, so this traversal stays deterministic [INVARIANTS I1].
 	for name, value := range l.family {
 		if retailLoadStageOf[name] == stage {
 			total += value

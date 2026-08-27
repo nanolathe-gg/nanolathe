@@ -110,6 +110,10 @@ func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession) 
 	}
 }
 
+// maxResultPlayers is the player-slot count the session publishes economy and
+// resource views for [05 "Player slot"].
+const maxResultPlayers = 10
+
 // drawResultStatistics renders per-player statistics rows [07 §11] P1-01.
 // Categories: Kills, Losses, EProduced, MProduced, EWasted, MWasted, Score gated per player by enable-byte table.
 // Retail animates seven categories one at a time behind +10-tick gate substate 0→6 with EndGameStatBar/EndGameScore cues; we render all rows statically as TODO(question): animation cadence not wired.
@@ -118,24 +122,34 @@ func (h *retailBattleHUD) drawResultStatistics(c *client.Client, b *battleSessio
 	if h == nil || c == nil || b == nil || h.console == nil {
 		return
 	}
-	// Build lookup for economy per player if available via snapshot
-	curEconomy := map[int]snapshot.EconomyView{}
-	curResources := map[int]snapshot.ResourceView{}
+	// Per-player lookup indexed by slot. Invariant: presentation traverses
+	// player slots 0..9 ascending and never ranges a map, so the rendered row
+	// order is the same on every run [INVARIANTS I1][P1-019].
+	var curEconomy [maxResultPlayers]snapshot.EconomyView
+	var haveEconomy [maxResultPlayers]bool
+	var curResources [maxResultPlayers]snapshot.ResourceView
+	var haveResources [maxResultPlayers]bool
+	economyCount := 0
+	collect := func(f *snapshot.Frame) {
+		for _, e := range f.Economy {
+			if int(e.Player) < maxResultPlayers && !haveEconomy[e.Player] {
+				curEconomy[e.Player] = e
+				haveEconomy[e.Player] = true
+				economyCount++
+			}
+		}
+		for _, r := range f.Resources {
+			if int(r.Player) < maxResultPlayers {
+				curResources[r.Player] = r
+				haveResources[r.Player] = true
+			}
+		}
+	}
 	if _, cur, ok := c.Buffer().Read(); ok && cur != nil {
-		for _, e := range cur.Economy {
-			curEconomy[int(e.Player)] = e
-		}
-		for _, r := range cur.Resources {
-			curResources[int(r.Player)] = r
-		}
+		collect(cur)
 	} else if b.sess != nil && b.sess.Snapshot != nil {
 		if _, cur2, ok2 := b.sess.Snapshot.Read(); ok2 && cur2 != nil {
-			for _, e := range cur2.Economy {
-				curEconomy[int(e.Player)] = e
-			}
-			for _, r := range cur2.Resources {
-				curResources[int(r.Player)] = r
-			}
+			collect(cur2)
 		}
 	}
 	// Enable-byte gating: retail uses enable-byte table per player; we gate on Scores existence or Economy existence [07 §11]
@@ -156,32 +170,38 @@ func (h *retailBattleHUD) drawResultStatistics(c *client.Client, b *battleSessio
 		eWaste := 0
 		mWaste := 0
 		// TODO(question): retail establishes EProduced/MProduced/EWasted/MWasted counters [07 §11] but sim does not yet track them authoritatively; we map EnergyProduced/MetalProduced and use 0 placeholders for waste until ledger wired [P1-01 §2.3] [05 "Player slot"].
-		if ev, ok := curEconomy[sc.Player]; ok {
-			eProd = int(ev.EnergyProduced)
-			mProd = int(ev.MetalProduced)
-			// EWasted/MWasted not tracked; use placeholder 0 with TODO(question): wasted counters not established in sim [07 §11]
-			_ = ev.EnergyConsumed
-			_ = ev.MetalConsumed
-		} else if rv, ok := curResources[sc.Player]; ok {
-			eProd = int(rv.EnergyProduced)
-			mProd = int(rv.MetalProduced)
+		if slot := sc.Player; slot >= 0 && slot < maxResultPlayers {
+			if ev := curEconomy[slot]; haveEconomy[slot] {
+				eProd = int(ev.EnergyProduced)
+				mProd = int(ev.MetalProduced)
+				// EWasted/MWasted not tracked; use placeholder 0 with TODO(question): wasted counters not established in sim [07 §11]
+				_ = ev.EnergyConsumed
+				_ = ev.MetalConsumed
+			} else if rv := curResources[slot]; haveResources[slot] {
+				eProd = int(rv.EnergyProduced)
+				mProd = int(rv.MetalProduced)
+			}
 		}
 		// Kills/Losses currently hardcoded 0 behind snapshot view field [P1-01 §2.3] TODO(question): wire ledger kill counter
 		line := fmt.Sprintf("P%d T%d K:%d L:%d E:%d M:%d EW:%d MW:%d S:%d %s", sc.Player, sc.Team, sc.Kills, sc.Losses, eProd, mProd, eWaste, mWaste, sc.Score, sc.Kind)
 		c.UIText(h.console, line, bx+10, yPos, 7)
 		yPos += lineH
 	}
-	// If no scores but still have economy, show economy-only rows gated by enable byte
-	if len(view.Scores) == 0 && len(curEconomy) > 0 {
-		for pid, ev := range curEconomy {
+	// If no scores but still have economy, show economy-only rows gated by
+	// enable byte, in ascending slot order [P1-019].
+	if len(view.Scores) == 0 && economyCount > 0 {
+		for pid := 0; pid < maxResultPlayers; pid++ {
+			if !haveEconomy[pid] {
+				continue
+			}
 			if yPos+lineH > y+bh-30 {
 				break
 			}
+			ev := curEconomy[pid]
 			line := fmt.Sprintf("P%d EProd:%d MProd:%d EWaste:0 MWaste:0", pid, int(ev.EnergyProduced), int(ev.MetalProduced))
 			c.UIText(h.console, line, bx+10, yPos, 7)
 			yPos += lineH
 		}
-		_ = curResources
 	}
 }
 

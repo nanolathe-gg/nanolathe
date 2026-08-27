@@ -93,7 +93,7 @@ func TestRS02_TwoAIsRunOnceEachInAscendingOrder(t *testing.T) {
 	if m0.EntryCount() != 1 || m1.EntryCount() != 1 {
 		t.Fatalf("each manager should have entryCount 1, got %d %d", m0.EntryCount(), m1.EntryCount())
 	}
-	// Also test Session coordinatePlayers order
+	// Also test Session tickPlayers order
 	order = nil
 	s := &Session{
 		Econ:  &econ,
@@ -111,9 +111,9 @@ func TestRS02_TwoAIsRunOnceEachInAscendingOrder(t *testing.T) {
 	m0b.TestHook = func(tick uint32, player uint8) { order2 = append(order2, int(player)) }
 	m1b.TestHook = func(tick uint32, player uint8) { order2 = append(order2, int(player)) }
 	s.AI = [10]*ai.Manager{0: m0b, 1: m1b}
-	s.coordinatePlayers(100)
+	s.tickPlayers(100)
 	if len(order2) != 2 || order2[0] != 0 || order2[1] != 1 {
-		t.Fatalf("Session coordinatePlayers should run in ascending order, got %v", order2)
+		t.Fatalf("Session tickPlayers should run in ascending order, got %v", order2)
 	}
 }
 

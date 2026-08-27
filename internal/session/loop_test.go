@@ -178,7 +178,7 @@ func TestAICallbackInsideTickPlayer(t *testing.T) {
 
 	// Wrap manager tick to capture helper counts inside beforeDeadline window.
 	// We cannot easily intercept without modifying manager, so we use the econ's helper counts.
-	// Instead, we will test via coordinatePlayers directly and verify that AI Tick was called.
+	// Instead, we will test via tickPlayers directly and verify that AI Tick was called.
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10},
 		Econ:     econ,
@@ -199,8 +199,8 @@ func TestAICallbackInsideTickPlayer(t *testing.T) {
 	// Use custom manager that records
 	called := false
 	spyMgr = &ai.Manager{Player: 0}
-	// We need to make AI invoked via beforeDeadline; we will verify after coordinatePlayers that spy was called.
-	// Instead of wrapping, we can directly test coordinatePlayers invokes manager.
+	// We need to make AI invoked via beforeDeadline; we will verify after tickPlayers that spy was called.
+	// Instead of wrapping, we can directly test tickPlayers invokes manager.
 	// For timing window, we need to verify that TickPlayer's helper work ran before AI.
 
 	// Setup econ player to be due and helpers due
@@ -286,9 +286,9 @@ func TestAICallbackInsideTickPlayer(t *testing.T) {
 	}
 	s2.RegisterAll()
 	// Run coordinator at tick 20
-	s2.coordinatePlayers(20)
+	s2.tickPlayers(20)
 	if mgr2.EntryCount() == 0 {
-		t.Fatalf("AI manager not invoked via Session.coordinatePlayers [PLAN_11 C11]")
+		t.Fatalf("AI manager not invoked via Session.tickPlayers [PLAN_11 C11]")
 	}
 	// Verify that AI manager's entryCount incremented exactly once and helpers ran
 	if econ2.Players[1].Helper1Calls != 1 {
@@ -319,7 +319,7 @@ func TestCoordinatorIteratesPlayersAscending(t *testing.T) {
 		m := &ai.Manager{Player: uint8(ii)}
 		// Wrap to record order via OnSettle? Simpler: record via manager's Tick by inspecting econ share?
 		// We can record order by having each manager's Tick append to order slice via closure.
-		// But Manager.Tick is method; we can instead test coordinatePlayers order by checking that econ's UpdateTime advanced in order?
+		// But Manager.Tick is method; we can instead test tickPlayers order by checking that econ's UpdateTime advanced in order?
 		// Alternative: create spy managers that record player index when Tick called.
 		managers[ii] = m
 	}
@@ -327,7 +327,7 @@ func TestCoordinatorIteratesPlayersAscending(t *testing.T) {
 	// We will create custom managers that record order by using a global slice updated in Tick.
 	// Since Manager.Tick increments entryCount, we can check entryCount but not order.
 	// Instead, we will test that economy.TickPlayer was called in ascending order by observing helper call order.
-	// For this test, we just verify that coordinatePlayers iterates 0..9 by checking that managers' entryCount all 1 after one tick.
+	// For this test, we just verify that tickPlayers iterates 0..9 by checking that managers' entryCount all 1 after one tick.
 	s := &Session{
 		Clock: &clock.State{Requested: 10, Active: 10},
 		Econ:  econ,
@@ -335,7 +335,7 @@ func TestCoordinatorIteratesPlayersAscending(t *testing.T) {
 		AI:    managers,
 	}
 	s.RegisterAll()
-	s.coordinatePlayers(100)
+	s.tickPlayers(100)
 	for i := 0; i < 10; i++ {
 		if managers[i].EntryCount() != 1 {
 			t.Fatalf("player %d entryCount = %d, want 1 (ascending iteration) [I1]", i, managers[i].EntryCount())

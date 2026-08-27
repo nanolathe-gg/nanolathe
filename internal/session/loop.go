@@ -1257,42 +1257,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 	// 5 per-player orders, path, economy, and occupancy work [01 §4.4] — outer loop players 0..9 ascending; the AI coordinator tick (30-tick cadence, deadline-gated subtasks) runs before the settlement deadline compare and the nine-step settlement pass [05 "Authoritative settlement order"] [INVARIANTS I1].
 	// Due AI player work at researched deadline relationship (beforeDeadline) + economy request/accept/settlement via economy.TickPlayer per player
 	// No map-defined player order [ON-09].
-	for player := 0; player < 10; player++ {
-		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TracePlayerBegin, Player: player})
-		mgr := s.AI[player] // direct player-indexed access per RS-02 [08] I1
-		// Bind per-session RNG for isolation [RS-06][I4] — ensure manager uses session's stream, not shared global.
-		if mgr != nil && mgr.RNG == nil {
-			mgr.RNG = s.SimRNG()
-		}
-		if s.Econ == nil {
-			if mgr != nil {
-				mgr.Tick(tick, s.Units, nil)
-				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIDeadline, Player: player})
-			}
-			continue
-		}
-		// Capture economy helper/carry state before to emit EconomyRequest/Settle accurately without map iteration
-		beforeUpdateTime := s.Econ.Players[player].UpdateTime
-		before := func() {
-			if mgr != nil {
-				mgr.Tick(tick, s.Units, s.Econ)
-				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIDeadline, Player: player})
-			}
-		}
-		s.Econ.TickPlayer(player, tick, s.Units, before)
-		// Economy traces: request/accept are always recorded inside TickPlayer's settlement when due; emit after call
-		// We emit EconomyRequest whenever the player's deadline was due (UpdateTime advanced) or helper ran; for determinism emit per active player
-		p := &s.Econ.Players[player]
-		if p.Exists && !p.IsObserver {
-			// Helpers always run before deadline compare [05]; settlement only when UpdateTime advanced by exactly 30 [05 C2]
-			if beforeUpdateTime != p.UpdateTime {
-				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomyRequest, Player: player})
-				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomySettle, Player: player})
-			} else if p.Helper1Calls > 0 || p.Helper2Calls > 0 {
-				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomyRequest, Player: player})
-			}
-		}
-	}
+	s.tickPlayers(tick)
 
 	// 6 feature lifecycle and reclaim or death processing (burn, wind probes, successor hops; reclaim credits become visible at the next settlement) [01 §4.4][05 "Feature burning"][05 "Feature sinking"][06 §13.1]
 	if s.Features != nil {
@@ -2900,36 +2865,54 @@ func (s *Session) RegisterAll() {
 
 }
 
-// coordinatePlayers is the session-owned per-player loop that supplies AI
-// callbacks to economy.TickPlayer per PLAN_11 C11 [05 "Authoritative settlement order"].
-// It iterates players 0..9 ascending (I1), and for each player calls
-// Econ.TickPlayer with a beforeDeadline closure that dispatches the AI manager
-// after per-tick helpers but before the settlement deadline compare. The
-// identification of AI as that auxiliary helper is supported inference from the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func (s *Session) coordinatePlayers(tick uint32) {
-	if s.Econ == nil {
-		// No economy: still dispatch AI directly per player in ascending order
-		// so headless tests that construct managers without economy still tick.
-		// This path is not the retail shape but keeps tests deterministic.
-		for i := 0; i < 10; i++ {
-			m := s.AI[i] // direct player-indexed per RS-02 [08] I1
-			if m != nil {
-				m.Tick(tick, s.Units, nil)
-			}
-		}
-		return
-	}
+// tickPlayers is stage 5 of the authoritative tick: the per-player orders,
+// path, economy and occupancy pass.
+//
+// Invariant: players are traversed 0..9 ascending with no map-defined order
+// [INVARIANTS I1], and for each player the AI coordinator runs inside
+// economy.TickPlayer's beforeDeadline hook — after the per-tick helpers and
+// before the settlement deadline compare
+// [05 "Authoritative settlement order"][PLAN_11 C11]. That AI is the
+// auxiliary player-level update is a supported inference [08 "Established
+// AI-facing data and rooted planner"]. This is the only per-player settlement
+// loop in the package; a second one with a different hook position would be a
+// second settlement order.
+func (s *Session) tickPlayers(tick uint32) {
 	for player := 0; player < 10; player++ {
-		p := player
-		mgr := s.AI[p] // direct player-indexed per RS-02 [08] I1
+		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TracePlayerBegin, Player: player})
+		mgr := s.AI[player] // direct player-indexed access per RS-02 [08] I1
+		// Bind per-session RNG for isolation [RS-06][I4] — ensure manager uses session's stream, not shared global.
+		if mgr != nil && mgr.RNG == nil {
+			mgr.RNG = s.SimRNG()
+		}
+		if s.Econ == nil {
+			if mgr != nil {
+				mgr.Tick(tick, s.Units, nil)
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIDeadline, Player: player})
+			}
+			continue
+		}
+		// Capture economy helper/carry state before to emit EconomyRequest/Settle accurately without map iteration
+		beforeUpdateTime := s.Econ.Players[player].UpdateTime
 		before := func() {
 			if mgr != nil {
-				// supported inference: AI is the auxiliary player-level update [08][PLAN_11 C11]
 				mgr.Tick(tick, s.Units, s.Econ)
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIDeadline, Player: player})
 			}
 		}
-		s.Econ.TickPlayer(p, tick, s.Units, before)
+		s.Econ.TickPlayer(player, tick, s.Units, before)
+		// Economy traces: request/accept are always recorded inside TickPlayer's settlement when due; emit after call
+		// We emit EconomyRequest whenever the player's deadline was due (UpdateTime advanced) or helper ran; for determinism emit per active player
+		p := &s.Econ.Players[player]
+		if p.Exists && !p.IsObserver {
+			// Helpers always run before deadline compare [05]; settlement only when UpdateTime advanced by exactly 30 [05 C2]
+			if beforeUpdateTime != p.UpdateTime {
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomyRequest, Player: player})
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomySettle, Player: player})
+			} else if p.Helper1Calls > 0 || p.Helper2Calls > 0 {
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomyRequest, Player: player})
+			}
+		}
 	}
 }
 

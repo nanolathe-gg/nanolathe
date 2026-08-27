@@ -11,68 +11,99 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
+// visibilityGridSize validates a published mask before a projected cell is
+// used. A malformed publication cannot be interpreted as visible data [03
+// §3.1][03 §5.4].
+func visibilityGridSize(w, h int32, length int) (int, bool) {
+	if w <= 0 || h <= 0 {
+		return 0, false
+	}
+	n := int64(w) * int64(h)
+	maxInt := int64(^uint(0) >> 1)
+	if n <= 0 || n > maxInt || int(n) != length {
+		return 0, false
+	}
+	return int(n), true
+}
+
 // projectileVisible is the one-point projectile gate from the immutable
-// local-player coverage grid [03 §3.2][03 §5.4]. An invalid/missing grid is
-// treated as visible so fixtures without a visibility service still draw
-// projectiles [03 §5.4][I9].
-func projectileVisible(v snapshot.VisibilityView) func(snapshot.ProjectileView) bool {
+// local-player coverage grid [03 §3.2][03 §5.4]. The published mode selects
+// current byte coverage or the history word mask; an invalid/missing source
+// rejects the projectile rather than exposing it.
+// The frame path supplies the committed local-player slot explicitly.
+func projectileVisible(v snapshot.VisibilityView, localPlayer uint8) func(snapshot.ProjectileView) bool {
+	mode := uint8(0)
+	if v.CoverageBytes {
+		mode = ProjectileVisibilityModeBytes
+	}
 	return func(p snapshot.ProjectileView) bool {
-		if !v.Valid || v.W <= 0 || v.H <= 0 || len(v.Visible) != int(v.W*v.H) {
-			return true
-		}
-		px := int32(int16(int64(p.X) >> 16))
-		py := int32(int16(int64(p.Y) >> 16))
-		pz := int32(int16(int64(p.Z) >> 16))
-		u := px >> 5
-		row := (pz - (py >> 1)) >> 5
-		if u < 0 || row < 0 || u >= v.W || row >= v.H {
+		// The local player table has exactly ten usable slots [03 §3.1].
+		// Keep the wrapper's contract narrower than the generic uint16 mask
+		// helper, which also serves contexts that address reserved bits.
+		if localPlayer >= 10 {
 			return false
 		}
-		return v.Visible[int(row*v.W+u)] != 0
+		return ProjectileVisible(v, p, mode, localPlayer)
 	}
 }
 
 // fogUnexploredUnit reports whether a unit's anchor visibility tile is never-explored [03 §3.3][03 §3.3].
-// It checks Fog Ch0 ==15 (solid dark, all four neighbours fogged) via the immutable FogView, which is the presentation equivalent of the plot flag 0x04 [03 §3.3]. Invalid or missing fog is treated as explored so fixtures remain visible [I9].
+// It checks Fog Ch0 ==15 (solid dark, all four neighbours fogged) via the
+// immutable FogView, which is the presentation equivalent of the plot flag
+// 0x04 [03 §3.3]. Invalid or missing fog is treated as unexplored so foreign
+// content cannot be exposed by an incomplete publication.
 func fogUnexploredUnit(fog snapshot.FogView, u snapshot.UnitView) bool {
-	if !fog.Valid || fog.W <= 0 || fog.H <= 0 || len(fog.Ch0) != int(fog.W*fog.H) {
-		return false
+	if !fog.Valid {
+		// TODO(question): whether retail emits a pre-first-frame fog view is not established; fail closed until a committed cache exists [03 §3.3].
+		return true
 	}
-	tx := world.WorldToTile(u.X)
-	tz := world.WorldToTile(u.Z)
+	if _, ok := visibilityGridSize(fog.W, fog.H, len(fog.Ch0)); !ok {
+		return true
+	}
+	tx := world.WorldToTile(u.X) - fog.OriginX
+	tz := world.WorldToTile(u.Z) - fog.OriginZ
 	if tx < 0 || tz < 0 || tx >= fog.W || tz >= fog.H {
-		return false
+		return true
 	}
 	idx := int(tz*fog.W + tx)
 	return fog.Ch0[idx] == 15
 }
 
 // fogUnexploredFeature reports whether a feature's anchor cell maps to an unexplored fog tile [03 §3.3][03 §3.3].
-// Feature CX/CZ are cell coordinates; fog is per visibility tile (2x2 cells) so tile = cell>>1 [03 §2.1][03 §3.1]. Invalid fog is treated as explored [I9].
+// Feature CX/CZ are cell coordinates; fog is per visibility tile (2x2 cells) so tile = cell>>1 [03 §2.1][03 §3.1]. Invalid fog is treated as unexplored so an incomplete publication cannot expose content.
 func fogUnexploredFeature(fog snapshot.FogView, f snapshot.FeatureView) bool {
-	if !fog.Valid || fog.W <= 0 || fog.H <= 0 || len(fog.Ch0) != int(fog.W*fog.H) {
-		return false
+	if !fog.Valid {
+		// TODO(question): whether retail emits a pre-first-frame fog view is not established; fail closed until a committed cache exists [03 §3.3].
+		return true
 	}
-	tx := f.CX >> 1
-	tz := f.CZ >> 1
+	if _, ok := visibilityGridSize(fog.W, fog.H, len(fog.Ch0)); !ok {
+		return true
+	}
+	tx := (f.CX >> 1) - fog.OriginX
+	tz := (f.CZ >> 1) - fog.OriginZ
 	if tx < 0 || tz < 0 || tx >= fog.W || tz >= fog.H {
-		return false
+		return true
 	}
 	idx := int(tz*fog.W + tx)
 	return fog.Ch0[idx] == 15
 }
 
 // unitVisibleForFrame is the enemy-visibility predicate for the painter [03 §3.2] C8.
-// Own units always pass (owner bypass) [03 §3.2] step1; invalid visibility is treated as visible for fixtures [I9]; otherwise it delegates to SnapshotVisible which checks cloaked flag and the current-coverage byte grid.
+// Own units always pass (owner bypass) [03 §3.2] step1; invalid visibility
+// rejects foreign units; otherwise it delegates to SnapshotVisible, preserving
+// the hidden/cloaked early-out before the selected visibility source.
 func unitVisibleForFrame(frame *snapshot.Frame, u snapshot.UnitView, viewer uint8) bool {
 	if frame == nil {
+		return false
+	}
+	if viewer >= 10 {
 		return false
 	}
 	if u.Owner == viewer {
 		return true
 	}
-	if !frame.Visibility.Valid || frame.Visibility.W <= 0 || frame.Visibility.H <= 0 || len(frame.Visibility.Visible) != int(frame.Visibility.W*frame.Visibility.H) {
-		return true
+	if !frame.Visibility.Valid {
+		return false
 	}
 	return SnapshotVisible(frame, u, viewer)
 }
@@ -451,7 +482,7 @@ func (c *Client) drawBattleStage(stage int) {
 		// immutable snapshots and never inspect live pools.
 		if stage == stageProjectiles && ok && prev != nil && cur != nil {
 			if len(cur.Projectiles) > 0 {
-				c.DrawProjectileViews(prev.Projectiles, cur.Projectiles, alpha, cur.Tick, projectileVisible(cur.Visibility), func(snapshot.ProjectileView) bool { return false }, c.projectileDispatchOptions())
+				c.DrawProjectileViews(prev.Projectiles, cur.Projectiles, alpha, cur.Tick, projectileVisible(cur.Visibility, cur.Selection.LocalPlayer), func(snapshot.ProjectileView) bool { return false }, c.projectileDispatchOptions())
 			}
 			return
 		}

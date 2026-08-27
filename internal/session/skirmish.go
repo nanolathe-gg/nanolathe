@@ -412,15 +412,8 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	}
 	for i := 0; i < nPlayersCheck; i++ {
 		sideIdx := cfg.Players[i].Side
-		if sideIdx < 0 || sideIdx >= len(cat.Sides) {
-			return nil, fmt.Errorf("session: side %d out of range for player %d [02 §6]", sideIdx, i)
-		}
-		sd := cat.Sides[sideIdx]
-		if sd == nil || sd.Commander == "" {
-			return nil, fmt.Errorf("session: side %d missing commander [02 §6]", sideIdx)
-		}
-		if _, ok := cat.Unit(sd.Commander); !ok {
-			return nil, fmt.Errorf("session: commander %q for side %d not found [02]", sd.Commander, sideIdx)
+		if _, err := skirmishCommander(cat, sideIdx, i); err != nil {
+			return nil, err
 		}
 	}
 	// Derive LocalOwner from configured human row, not zero default [08 "Skirmish configuration"].
@@ -558,12 +551,15 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	}
 	var sharedProf *ai.Profile
 	if hasComputer {
-		prof, perr := ai.LoadProfile(fs, "default")
-		if perr != nil || prof == nil {
-			if perr == nil {
-				perr = fmt.Errorf("ai: nil profile")
+		profileName := "default"
+		if m != nil && m.OTA != nil && m.OTA.Global != nil {
+			if mg := mission.DecodeMissionGlobals(m.OTA.Global); mg != nil && strings.TrimSpace(mg.AIProfile) != "" {
+				profileName = mg.AIProfile
 			}
-			return nil, fmt.Errorf("session: ai profile default: %w", perr)
+		}
+		prof, perr := loadSkirmishAIProfile(fs, profileName)
+		if perr != nil {
+			return nil, perr
 		}
 		sharedProf = prof
 	}
@@ -664,6 +660,39 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		return nil, fmt.Errorf("session: composition invalid: %w", err)
 	}
 	return s, nil
+}
+
+// loadSkirmishAIProfile resolves the authored mission profile through the
+// established ai/default.txt fallback. A computer player without a profile
+// cannot run the rooted planner, so strict construction fails closed
+// [08 "Established AI-facing data and rooted planner"].
+func loadSkirmishAIProfile(fs vfs.FSOps, name string) (*ai.Profile, error) {
+	prof, err := ai.LoadProfile(fs, name)
+	if err != nil {
+		return nil, fmt.Errorf("session: ai profile %q: %w", name, err)
+	}
+	if prof == nil {
+		return nil, fmt.Errorf("session: ai profile %q: nil profile", name)
+	}
+	return prof, nil
+}
+
+// skirmishCommander resolves the configured side commander. Strict callers
+// must use the authored side and unit definitions; there is no built-in
+// commander substitute [08 "Skirmish configuration"].
+func skirmishCommander(cat *content.Catalog, sideIdx, playerIdx int) (*content.UnitDef, error) {
+	if cat == nil || sideIdx < 0 || sideIdx >= len(cat.Sides) {
+		return nil, fmt.Errorf("session: side %d out of range for player %d [02 §6]", sideIdx, playerIdx)
+	}
+	sd := cat.Sides[sideIdx]
+	if sd == nil || strings.TrimSpace(sd.Commander) == "" {
+		return nil, fmt.Errorf("session: side %d missing commander [02 §6]", sideIdx)
+	}
+	def, ok := cat.Unit(sd.Commander)
+	if !ok || def == nil {
+		return nil, fmt.Errorf("session: commander %q for side %d not found [02]", sd.Commander, sideIdx)
+	}
+	return def, nil
 }
 
 // NewSkirmishForTest is the fixture constructor. It retains the previous
@@ -857,7 +886,7 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 			s.Path = s.Movement.Scheduler
 		}
 	}
-	if err := SkirmishBattleEntry(s, cfg, m, nil); err != nil {
+	if err := skirmishBattleEntry(s, cfg, m, nil, false); err != nil {
 		return nil, err
 	}
 	if err := ensureCOBForAll(s, fs); err != nil {
@@ -970,6 +999,10 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 // The spy records each step before the real work so order is observable even with nil world in fixtures.
 // This is the shared path skirmish must use; no second draw path exists [C17].
 func SkirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy *BattleEntrySpy) error {
+	return skirmishBattleEntry(s, cfg, m, spy, true)
+}
+
+func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy *BattleEntrySpy, strict bool) error {
 	if s == nil {
 		return fmt.Errorf("session: nil session")
 	}
@@ -981,7 +1014,7 @@ func SkirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy
 		return err
 	}
 	spyRecord(spy, "units")
-	if err := skirmishReconstructUnits(s, cfg, m); err != nil {
+	if err := skirmishReconstructUnits(s, cfg, m, strict); err != nil {
 		return err
 	}
 	// Initialize COB before any scripted orders (mirrors mission path) [04 §4.1]
@@ -1057,8 +1090,11 @@ func skirmishPlaceFeatures(s *Session, m *mission.Mission) error {
 	return nil
 }
 
-func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission) error {
+func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission, strict bool) error {
 	if s.Units == nil {
+		if strict {
+			return fmt.Errorf("session: missing Units for skirmish battle entry [01 §6.1]")
+		}
 		s.Units = units.New(600, s.Catalog)
 	}
 	// Collect StartPos specials deterministically [P0-04]. No sorting beyond
@@ -1187,25 +1223,20 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		}
 		// Side/commander lookup
 		sideIdx := cfg.Players[playerIdx].Side
-		var def *content.UnitDef
-		var ok bool
-		if s.Catalog != nil && len(s.Catalog.Sides) > 0 && sideIdx >= 0 && sideIdx < len(s.Catalog.Sides) {
-			sd := s.Catalog.Sides[sideIdx]
-			if sd != nil && sd.Commander != "" {
-				def, ok = s.Catalog.Unit(sd.Commander)
-			}
-		}
-		if !ok {
+		def, commanderErr := skirmishCommander(s.Catalog, sideIdx, playerIdx)
+		if commanderErr != nil && !strict {
+			// Fixture-only compatibility retains the historical commander search.
 			for _, cand := range []string{"armcom", "corcom"} {
 				if d, found := s.Catalog.Unit(cand); found && d != nil {
 					def = d
-					ok = true
 					break
 				}
 			}
-		}
-		if !ok || def == nil {
-			def = &content.UnitDef{UnitName: "armcom", MaxDamage: 100, SightDistance: 128}
+			if def == nil {
+				def = &content.UnitDef{UnitName: "armcom", MaxDamage: 100, SightDistance: 128}
+			}
+		} else if commanderErr != nil {
+			return commanderErr
 		}
 		// Sim jitter with degenerate no-advance [P0-04]
 		var jx, jz numeric.Fixed
@@ -1250,7 +1281,12 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 				y = 0
 			}
 		}
-		h, _ := s.Units.Create(def, uint8(playerIdx), x, y, z)
+		h, err := s.Units.Create(def, uint8(playerIdx), x, y, z)
+		if err != nil {
+			// The normal allocator may fail; battle entry keeps the sparse
+			// creation entry null and continues [08 "Placement and battle entry"].
+			continue
+		}
 		if u := s.Units.Unit(h); u != nil {
 			// Mark as commander? No extra flags here but preserve placement linkage for debugging
 			u.PlacementIdx = -1

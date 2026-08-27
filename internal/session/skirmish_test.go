@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -30,6 +31,49 @@ func fsFromMapSkirmish(t *testing.T, files map[string]string) *vfs.FS {
 		t.Fatalf("MountDirectory: %v", err)
 	}
 	return fs
+}
+
+func TestLoadSkirmishAIProfileUsesAuthoredNameAndDefaultFallback(t *testing.T) {
+	fs := fsFromMapSkirmish(t, map[string]string{
+		"ai/default.txt": "plan any\nweight fallback 0.5\n",
+		"ai/mission.txt": "plan any\nweight authored 0.75\n",
+	})
+	profile, err := loadSkirmishAIProfile(fs, "mission")
+	if err != nil {
+		t.Fatalf("authored AI profile: %v", err)
+	}
+	if profile == nil || profile.Name() != "mission" {
+		t.Fatalf("authored profile = %#v, want mission", profile)
+	}
+
+	profile, err = loadSkirmishAIProfile(fs, "missing")
+	if err != nil {
+		t.Fatalf("default AI profile fallback: %v", err)
+	}
+	if profile == nil || profile.Name() != "default" {
+		t.Fatalf("fallback profile = %#v, want default", profile)
+	}
+
+	fsEmpty := fsFromMapSkirmish(t, map[string]string{})
+	_, err = loadSkirmishAIProfile(fsEmpty, "missing")
+	if err == nil || !strings.Contains(err.Error(), "fallback") {
+		t.Fatalf("missing authored/default profile error = %v, want fallback diagnostic", err)
+	}
+}
+
+func TestSkirmishCommanderRequiresConfiguredSideDefinition(t *testing.T) {
+	cat := &content.Catalog{
+		Sides: []*content.SideDef{{Commander: "missing"}},
+		Units: map[string]*content.UnitDef{},
+	}
+	if _, err := skirmishCommander(cat, 0, 1); err == nil || !strings.Contains(err.Error(), `commander "missing"`) {
+		t.Fatalf("missing configured commander error = %v, want explicit commander diagnostic", err)
+	}
+
+	cat.Sides[0].Commander = "armcom"
+	if _, err := skirmishCommander(cat, 0, 1); err == nil || !strings.Contains(err.Error(), `commander "armcom"`) {
+		t.Fatalf("missing commander definition error = %v, want explicit commander diagnostic", err)
+	}
 }
 
 func TestSkirmishDefaults(t *testing.T) {
@@ -173,7 +217,7 @@ func TestSkirmishBattleEntryOrder(t *testing.T) {
 	// Mirror untouched before
 	beforeMirror := s.Econ.Players[0].Mirror
 	spy := &BattleEntrySpy{}
-	if err := SkirmishBattleEntry(s, cfg, m, spy); err != nil {
+	if err := skirmishBattleEntry(s, cfg, m, spy, false); err != nil {
 		t.Fatalf("SkirmishBattleEntry: %v", err)
 	}
 	want := []string{"features", "units", "barrier", "resources"}

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -254,23 +255,41 @@ func runLoadAndContinue(opts Options, cs *contentSet, out *os.File) error {
 	if err != nil {
 		return fmt.Errorf("load %s: %w", opts.Load, err)
 	}
-	// The saved summary carries the map selection; --map is optional on --load.
+	// The saved summary carries the map selection and the game type; --map is
+	// optional on --load.
 	cfg := skirmishConfigFor(opts)
-	if cfg.MapName == "" {
-		if sum, ok := save.ReadSummary(bank); ok {
-			cfg.MapName = sum.MapName
-		}
+	sum, haveSummary := save.ReadSummary(bank)
+	if cfg.MapName == "" && haveSummary {
+		cfg.MapName = sum.MapName
+	}
+	// This path composes a skirmish. A campaign save restored into one would
+	// silently continue with the wrong mode, topology and result ownership, so
+	// say so instead of guessing [08 "Summary"] [GAP T9].
+	// TODO(question): mission composition from a save header is W5-2/W5-5; the
+	// Summary already carries Campaign and Mission names, but the mission path
+	// and index needed to recompose the session are not established.
+	if haveSummary && sum.Gametype == 1 {
+		return fmt.Errorf("nanolathe: cannot resume a campaign save through the skirmish path: campaign %q mission %q, expected a skirmish save",
+			sum.Campaign, sum.Mission)
 	}
 	sess, err := session.NewSkirmishWithFS(cs.fs, cat, cfg)
 	if err != nil {
 		return err
 	}
-	restoreSessionState(sess, cat, state)
+	if err := restoreSessionState(sess, state); err != nil {
+		return fmt.Errorf("load %s: %w", opts.Load, err)
+	}
 	start := state.Clock.GlobalTick + 1
 	stepFrom(sess, start, opts.Ticks)
 	printSessionSummary(sess, out)
 	if opts.Save != "" {
-		if err := saveSession(sess, opts.Save, opts.Map); err != nil {
+		// Preserve the identity we loaded: --map is optional on --load, so
+		// resaving with opts.Map alone dropped the map name from the new file.
+		resaveMap := opts.Map
+		if resaveMap == "" {
+			resaveMap = cfg.MapName
+		}
+		if err := saveSession(sess, opts.Save, resaveMap); err != nil {
 			return fmt.Errorf("save %s: %w", opts.Save, err)
 		}
 		fmt.Fprintf(out, "saved: %s\n", opts.Save)
@@ -291,11 +310,12 @@ func stepFrom(sess *session.Session, start uint32, ticks int) {
 // Reconstruction uses published APIs only and forced slot identity [01 §6.1][P0-I11].
 func saveSession(sess *session.Session, path, mapName string) error {
 	b := save.NewBuilder("Total Annihilation 3.0")
-	save.WriteSummary(b, save.Summary{MapName: mapName})
+	save.WriteSummary(b, sessionSummary(sess, mapName))
 	if sess.Clock != nil {
 		save.WriteGameTime(b, sess.Clock)
 	}
-	save.WriteAlliances(b, 0, [11]byte{})
+	selfSlot, alliances := sessionAlliances(sess)
+	save.WriteAlliances(b, selfSlot, alliances)
 	// Sole codec: session.CaptureStateV1 via internal/save [P0-I11]
 	if sess != nil {
 		st := sess.CaptureStateV1()
@@ -306,14 +326,67 @@ func saveSession(sess *session.Session, path, mapName string) error {
 	return save.WriteBankFile(path, b.Bytes())
 }
 
-// restoreSessionState restores via the sole codec with forced slot identity [P0-I11][01 §6.1][PLAN_14 C18].
-func restoreSessionState(sess *session.Session, cat *content.Catalog, st *save.StateV1) {
+// restoreSessionState restores via the sole codec with forced slot identity
+// [P0-I11][01 §6.1][PLAN_14 C18].
+//
+// The restore error used to be discarded, so a failed or partial restore was
+// followed by a perfectly normal-looking continuation summary. A restore that
+// did not succeed must not reach simulation.
+func restoreSessionState(sess *session.Session, st *save.StateV1) error {
 	if sess == nil || st == nil {
-		return
+		return fmt.Errorf("nanolathe: restore: no session or no saved state")
 	}
 	// Delegate to session's sole restore path which handles RNG, clock, forced slots,
 	// orders, movement routes, economy, features, projectiles, AI, visibility, latch, wind [P0-I11].
-	_ = cat
-	_ = sess.RestoreStateV1(st)
+	if err := sess.RestoreStateV1(st); err != nil {
+		return fmt.Errorf("nanolathe: restore saved state: %w", err)
+	}
 	sess.RecalcLocalOwner()
+	return nil
+}
+
+// sessionSummary fills the established Summary provenance from the live
+// session instead of writing a lone map name. Without it a resave lost the
+// map, the game type, the player count and every selected rule, so the saved
+// file could not say what it was a save OF [08 "Summary"].
+func sessionSummary(sess *session.Session, mapName string) save.Summary {
+	sum := save.Summary{MapName: mapName}
+	if sess == nil {
+		return sum
+	}
+	if sum.MapName == "" {
+		sum.MapName = sess.Skirmish.MapName
+	}
+	cfg := sess.Skirmish
+	sum.Players = int32(cfg.NumPlayers)
+	sum.Side = int32(cfg.Players[sess.LocalOwner].Side)
+	sum.Difficulty = int32(cfg.Difficulty)
+	sum.CommanderDeath = int32(cfg.CommanderDeath)
+	sum.Location = int32(cfg.Location)
+	sum.Mapping = int32(cfg.Mapping)
+	sum.LineOfSight = int32(cfg.LineOfSight)
+	sum.LineOfSightType = int32(cfg.LOSType)
+	if sess.Mission != nil && sess.Mission.Type == mission.TypeCampaign {
+		sum.Gametype = 1 // campaign [08 "Summary"] [GAP T9]
+	}
+	return sum
+}
+
+// sessionAlliances reports the local slot and the per-slot alliance byte row
+// the save should carry. The writer used to hand in a hardcoded empty row and
+// slot zero, which described a save with no alliances at all regardless of
+// what the battle actually had [08 "Player records"].
+func sessionAlliances(sess *session.Session) (int, [11]byte) {
+	var row [11]byte
+	if sess == nil {
+		return 0, row
+	}
+	local := int(sess.LocalOwner)
+	cfg := sess.Skirmish
+	for i := 0; i < cfg.NumPlayers && i < len(row); i++ {
+		if cfg.Players[i].AllyGroup == cfg.Players[sess.LocalOwner].AllyGroup {
+			row[i] = 1
+		}
+	}
+	return local, row
 }

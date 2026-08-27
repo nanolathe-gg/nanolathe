@@ -73,11 +73,11 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 	} else {
 		m, err = mission.LoadWithType(fs, mission.TypeCampaign, path, difficulty, 0, nil)
 		if err != nil {
-			m2, err2 := mission.Load(fs, cat, path)
-			if err2 != nil {
-				return nil, err
-			}
-			m = m2
+			// Type 1 is the strict campaign path. Types 2 and 3 are the only
+			// mission kinds that use the direct OTA fuzzy resolver; falling back
+			// here would turn a campaign load failure into a different mission
+			// type and violate the retail dispatch contract [08 "Mission type dispatch"].
+			return nil, err
 		}
 	}
 	terrain, err := loadTerrainStrict(fs, cat, m)
@@ -149,9 +149,9 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 	}
 	for i := 0; i < 2; i++ {
 		if s.Econ.Players[i].ControllerState == 2 {
-			prof, perr := ai.LoadProfile(fs, aiProfileName)
-			if perr != nil || prof == nil {
-				continue
+			prof, perr := loadCampaignAIProfile(fs, aiProfileName)
+			if perr != nil {
+				return nil, perr
 			}
 			mgr := &ai.Manager{Player: uint8(i), Profile: prof, Terrain: s.World, Catalog: s.Catalog}
 			bindAIQueue(mgr, s)
@@ -204,6 +204,22 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 		return nil, fmt.Errorf("session: composition invalid: %w", err)
 	}
 	return s, nil
+}
+
+// loadCampaignAIProfile requires the authored mission profile (with the
+// established ai/default.txt fallback implemented by ai.LoadProfile). A
+// computer-controlled campaign slot without a profile cannot run the rooted
+// planner, so construction must fail rather than silently creating a passive
+// computer player [08 "Established AI-facing data and rooted planner"].
+func loadCampaignAIProfile(fs vfs.FSOps, name string) (*ai.Profile, error) {
+	prof, err := ai.LoadProfile(fs, name)
+	if err != nil {
+		return nil, fmt.Errorf("session: ai profile %q: %w", name, err)
+	}
+	if prof == nil {
+		return nil, fmt.Errorf("session: ai profile %q: nil profile", name)
+	}
+	return prof, nil
 }
 
 // NewMissionForTest is the fixture constructor retaining lenient fallback.

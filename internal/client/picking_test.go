@@ -57,8 +57,10 @@ func TestPickUnitFogAndOverlap(t *testing.T) {
 		t.Fatalf("fogged: PickUnit should return no unit when enemy not visible, got %v %v", bh, bu)
 	}
 
-	// Now make them visible by using nil vis (no fog) — should pick lower slot on tie [07 §9].
-	bh, bu = PickUnit(sx, sy, cam, w, nil, visibility.PlayerID(0))
+	// An explicit all-visible service represents a configured visibility source;
+	// nil is unavailable and must fail closed for these foreign units.
+	allVisible := visibility.New(terrain, 0)
+	bh, bu = PickUnit(sx, sy, cam, w, allVisible, visibility.PlayerID(0))
 	if bh != h1 || bu != u1 {
 		t.Fatalf("overlap tie: want lower slot h1 %v got %v (h2 %v)", h1, bh, h2)
 	}
@@ -69,13 +71,13 @@ func TestPickUnitFogAndOverlap(t *testing.T) {
 	sx20, sy20 := cam.WorldToScreen(u2.X, u2.Y, u2.Z)
 	sx2, sy2 := sx20-camera.OriginX, sy20-camera.OriginY
 	// Cursor at u2's screen pos should pick u2 now.
-	bh, bu = PickUnit(sx2, sy2, cam, w, nil, visibility.PlayerID(0))
+	bh, bu = PickUnit(sx2, sy2, cam, w, allVisible, visibility.PlayerID(0))
 	if bh != h2 {
 		t.Fatalf("nearest wins: want h2 %v got %v (dist to u1 includes 1px offset)", h2, bh)
 	}
 
 	// Ensure deterministic iteration: call twice yields same result.
-	bh2, _ := PickUnit(sx, sy, cam, w, nil, visibility.PlayerID(0))
+	bh2, _ := PickUnit(sx, sy, cam, w, allVisible, visibility.PlayerID(0))
 	if bh2 != bh && bh == h1 {
 		// this branch not needed
 	}
@@ -96,11 +98,14 @@ func TestPickUnitRespectsFogViaVisibility(t *testing.T) {
 	sx, sy := sx0-camera.OriginX, sy0-camera.OriginY
 
 	// With visibility that marks player 0's own units visible but enemy not, we can test own bypass.
-	// Create a service that would mark enemy invisible; using nil vis means no fog (all visible).
+	// An empty service makes foreign units invisible; nil means visibility is unavailable and fails closed.
 	// To test fog we use a vis with zero grid (W==0) which returns false for enemy [predicate.go].
 	visEmpty := &visibility.Service{} // W==0 => IsVisible false for enemy
 	if bh, _ := PickUnit(sx, sy, cam, w, visEmpty, visibility.PlayerID(0)); bh != 0 {
 		t.Fatalf("fogged enemy should not be picked with empty vis, got %v", bh)
+	}
+	if bh, _ := PickUnit(sx, sy, cam, w, nil, visibility.PlayerID(0)); bh != 0 {
+		t.Fatalf("foreign unit should not be picked without visibility, got %v", bh)
 	}
 	// Owner bypass: unit owned by viewer should be visible even with empty vis [03 §3.2] C8 step 1.
 	w2 := units.New(8, cat)
@@ -111,6 +116,9 @@ func TestPickUnitRespectsFogViaVisibility(t *testing.T) {
 	bh, bu := PickUnit(sxOwn, syOwn, cam, w2, visEmpty, visibility.PlayerID(0))
 	if bh != hOwn || bu != own {
 		t.Fatalf("owner bypass: want own unit %v got %v", hOwn, bh)
+	}
+	if bh, bu := PickUnit(sxOwn, syOwn, cam, w2, nil, visibility.PlayerID(0)); bh != hOwn || bu != own {
+		t.Fatalf("owner bypass without visibility: want own unit %v got %v", hOwn, bh)
 	}
 	_ = u
 }
