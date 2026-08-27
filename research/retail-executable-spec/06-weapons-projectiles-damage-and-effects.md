@@ -145,17 +145,29 @@ optionally require a ballistic solution, and then test planar range. Water
 weapons apply two candidate depth/type predicates and planar range. Some
 definition/controller branches can bypass parts of this gate.
 
-**Established fact:** Ordinary automatic candidates come from per-player lists
-rebuilt on a cadence of at least 30 ticks. The primary list requires hostility
-and a direct-visibility predicate. That predicate accepts own-side units,
-rejects cloaked units, rejects underwater units without their dedicated status
-bit, and samples multiple target-bounds points against the player's visibility
-state. A secondary status list is consulted only when the primary in-radius
-set is empty and the owning player has an active targeting-upgrade aggregate
-supplied by an active allied or same-player unit with the corresponding
-definition flag. If primary candidates exist but all later fail ordinary
-candidate selection, the secondary list is not retried. Its exact sensor name
-is not yet proved.
+**Established fact:** Automatic candidates are drawn from the live per-player
+unit lists, which are maintained continuously by allocation and release rather
+than rebuilt on any timer. The candidate array itself is built fresh on every
+acquisition attempt from those lists, with planar distance and a
+direct-visibility predicate as admission. That predicate accepts own-side
+units, rejects cloaked units, rejects underwater units without their dedicated
+status bit, and samples multiple target-bounds points against the player's
+visibility state. The autonomous scan is a round-robin walk over the owning
+player's pool that visits about one thirtieth of the pool per tick, so a given
+slot is rescanned roughly every 30 ticks; the order-work acquisition path
+builds its sight-distance candidate list per call. An earlier reading that the
+candidate lists themselves are "rebuilt on a cadence of at least 30 ticks" is
+corrected: the 30-tick cadence is the scan throttle and the unrelated
+per-unit state refresh, not a candidate-list rebuild.
+
+**Supported inference (unproven sensor gate):** An earlier reading that a
+secondary status list is consulted only when the primary in-radius set is
+empty and the owning player has an active targeting-upgrade aggregate supplied
+by an active allied or same-player unit with a corresponding definition flag
+remains unproven: no test of such an aggregate exists in the recovered
+acquisition functions (bounded search over the scan, the acquisition, the list
+builder, the range helper, and the per-slot pipeline, which performs no
+acquisition of its own). Its exact sensor name is not proved.
 
 **Established fact:** Retained-target checks do not rerun visibility, sensor,
 range, medium, aircraft, or ballistic acquisition tests. Shot-time admission
@@ -203,17 +215,21 @@ then applies physical admission (height above sea level, to-air and
 ballistic feasibility, and planar range). Only candidates passing all three
 groups enter the filtered set, which retains that stable order.
 
-**Established fact:** The filtered set is then sampled to at most 50
-candidates. If its length is 50 or fewer, no simulation-RNG draw is consumed
-and the sampled order equals the filtered stable order. If it is larger, the
-engine performs a swap-remove random selection for 50 iterations, each drawing
-from the simulation stream with a bound equal to the remaining length. The
-resulting sampled order is RNG-driven. The candidates are then split into
-two buckets: preferred (category not intersecting the weapon's bad-target
-mask) and fallback (matching the mask). No winner in the preferred bucket is
-retried as a failure of the whole acquisition; fallback is only consulted
-when preferred yields nothing, and when both exist preferred always wins
-over fallback.
+**Established fact:** The filtered set is then sampled by swap-remove random
+selection: the engine repeatedly draws from the simulation stream with a bound
+equal to the remaining candidate count, removes the picked entry by swapping
+the last element into its place, and repeats until the array is exhausted or
+50 picks have been made. A draw with bound one returns zero without advancing
+the stream, so a set of N at most 50 candidates consumes N draws of bounds
+N down to 1, of which N minus one advance the stream; a larger set consumes 50
+draws of bounds N down to N minus 49. An earlier reading that a set of 50 or
+fewer candidates consumes no sampling draw and preserves the filtered stable
+order is corrected: the sampled order is always RNG-driven. The candidates are
+then split into two buckets: preferred (category not intersecting the weapon's
+bad-target mask) and fallback (matching the mask). No winner in the preferred
+bucket is retried as a failure of the whole acquisition; fallback is only
+consulted when preferred yields nothing, and when both exist preferred always
+wins over fallback.
 
 **Established fact:** Within each bucket every sampled candidate receives one
 score. The bound for the draw is the sum of the high 32-bit halves of the
@@ -282,8 +298,12 @@ therefore still reach physical admission.
 Infeasible turret geometry or excessive drift clears the Aim-request latch.
 Turret and vertical-launch allocation failure preserve ready state, while
 successful allocation clears the result and latch. The angular-drift helper
-does not consume the parsed accuracy, tolerance, or pitch-tolerance fields. The
-ballistic no-solution sentinel (the angle-domain value 0x8000) suppresses Aim
+consumes the parsed tolerance and pitch-tolerance fields when authored
+nonzero (see the corrected census below): the yaw-error gate is the authored
+tolerance value (falling back to 2000, or 150 for the non-air class, when
+tolerance is zero) and the pitch-error gate is the authored pitch-tolerance
+value (falling back to the tolerance value and then to the same defaults).
+The ballistic no-solution sentinel (the angle-domain value 0x8000) suppresses Aim
 dispatch entirely. A missing Aim script, a zero completion delivery, or an
 exhausted projectile pool therefore means the turret and vertical-launch
 families cannot fire; the line-of-sight/self-propelled family's query fallback
@@ -300,7 +320,13 @@ gate do not perform terrain/hill or visibility/sensor tests.
 weapon, both shooter and candidate reference heights must be strictly above sea
 level, expressed as world Y greater than sea level scaled to fixed-point.
 Water weapons skip that height test and instead apply two candidate depth and
-type predicates. The to-air weapon flag, when requested by the acquisition
+type predicates, whose arithmetic is closed: the candidate is rejected when it
+lacks the definition's floater flag and its Y word is strictly above the
+sea-level byte; and when its definition carries the canhover flag, it is
+rejected when its Y word plus half its top-height offset is strictly above the
+sea-level byte. After both predicates, planar range applies. (The
+setSFXoccupy occupancy bands are presentation classes, not these admission
+predicates.) The to-air weapon flag, when requested by the acquisition
 context, requires the candidate to be an air target; non-water paths enforce
 it while water paths do not. The weapon-timer branch is taken when velocity
 is zero or when the no-auto-range flag is set, in which case the expiry uses
@@ -318,11 +344,13 @@ domain. When velocity is zero and the ballistic creator is reached, the pool
 reservation has already incremented the active count and is not rolled back
 when the subsequent divide raises an exception.
 
-**Established fact:** Parsed accuracy, tolerance, and pitch-tolerance values are
-stored but never read from the weapon definition by gameplay code in this
-retail build. This is a bounded whole-image result, including both direct
-field references and pointer-advance forms. They are dead catalog data here:
-direct-fire spread, aim readiness, and projectile motion must not consume them.
+**Established fact:** Parsed accuracy, tolerance, and pitch-tolerance values
+are consumed by gameplay code in this retail build; an earlier reading that
+they are dead catalog data is superseded by a fresh bounded census. Accuracy
+is the base of the slot-executor spread bound of §4.4. Tolerance and
+pitch-tolerance are the authored angular-drift gates of §3.3 (with the 2000/
+150 class defaults when tolerance is zero). Nothing else in the firing,
+readiness, or projectile-motion paths consumes them.
 
 **Established fact:** The simulation keeps three distinct visibility-like
 layers. The authoritative word mask is a 16-bit word per map tile quarter, each
@@ -515,33 +543,44 @@ with integer truncation in this order:
 
 `stored reload = floor(health factor × veteran reload / 100)`
 
-Stockpile launch does not write reload. Zero maximum health, negative health,
-and overflow outside ordinary state remain malformed-state unknowns.
+Stockpile launch does not write reload. The zero-maximum-health contract is
+closed in §9.1 (healing clamps to zero without dividing; the TakeDamage
+percentage and this health term perform unguarded unsigned divisions and must
+be guarded as an error path). Negative health and overflow outside ordinary
+state remain malformed-state unknowns.
 
 ### 4.3 Burst state
 
 **Established fact:** A weapon's burst count is copied into the root projectile. The projectile stores a burst deadline and decrements its remaining count when a burst shot is emitted. The burst interval is added to the next deadline.
 
 **Established fact:** Burst spray uses the simulation RNG and trigonometric
-helpers. Random decay adds a second RNG-derived timing or velocity perturbation
-where configured. Burst allocation can fail when the pool is full.
+helpers. Random decay adds a second RNG-derived expiry perturbation where
+configured. An earlier "spray sampling shape" reading — two draws bounded by
+the authored spray-angle field and a "wobble field adjacent to it", both
+applied to the projectile's stored yaw and pitch — is superseded by direct
+re-derivation; there is no wobble field (the weapon record's spray-angle and
+random-decay fields are separated by the duration field), and the burst
+path's two draws are:
 
-**Supported inference (spray sampling shape).** The draw bounds are the
-*authored* spray fields, not constants: the weapon record's spray-angle field
-and the wobble field adjacent to it. Each sample is re-centred by subtracting
-half its own bound, so a bound of *B* yields a symmetric offset in
-`[-B/2, B/2 - 1]`; the offsets are applied to the projectile's stored yaw and
-pitch accumulators, and the velocity components are then **recomputed** from
-those angles through the same fixed-point angle helpers the spawner used for
-the initial aim — not incremented in Cartesian space. Two gameplay draws are
-consumed per successful attempt when the spray term is nonzero.
+1. **Random-decay draw (first):** when the authored random-decay value is
+   nonzero, one simulation-RNG draw with bound equal to it; the successful
+   clone's expiry is incremented by `draw - randomDecay/2` — a centered
+   expiry jitter on the clone only.
+2. **Spray draw (second):** when the authored spray-angle value is nonzero,
+   one simulation-RNG draw with bound equal to it; the PARENT's stored
+   heading is rewritten as `heading - sprayAngle/2 + draw`, and the parent's
+   velocity X and Z are recomputed from the new heading and the UNCHANGED
+   pitch through the same fixed-point angle helpers, using the weapon
+   velocity as magnitude — not incremented in Cartesian space. Pitch is never
+   jittered in the burst path.
 
-This is the sampling *shape*, at medium confidence; the exact field widths and
-the order of the two draws relative to each other are not closed. What is
-established and must not be softened is that the bounds are authored values and
-the draw count is two, because both are inputs to the shared simulation
-sequence: a wrong bound or a wrong count desynchronizes every later draw in the
-game, not merely the pellet.
+Both draws are consumed only when the clone allocation succeeded; a pool-full
+burst attempt consumes neither. The bounds are authored values and the count
+is two, so both are inputs to the shared simulation sequence: a wrong bound or
+a wrong count desynchronizes every later draw in the game, not merely the
+pellet. The two-draw yaw-and-pitch site of the earlier reading is actually the
+slot executor's accuracy spread of §4.4, whose bound is computed, not
+authored.
 
 **Established fact:** A root whose remaining burst count is nonzero is a
 scheduler/template, not an ordinary moving projectile. It is a stationary
@@ -597,9 +636,18 @@ geometry, not through cost or reload state.
 allocation retains target and trajectory validation, the synchronous muzzle
 query, the weapon-slot angle mutation, and the executor's internal spread
 computation, including up to two simulation-RNG draws whenever the spread term
-is nonzero. The parsed weapon-definition accuracy, tolerance, and
-pitch-tolerance fields remain dead catalog stores; the retained accuracy work
-is the executor's internal spread mathematics, not those fields. Suppressed on
+is nonzero. The spread bound is computed from the parsed ACCURACY field, the
+shooter's health and maximum health, and the shooter's kill count: the health
+term is `trunc(health * 2048 / maximumHealth)`; the numerator is
+`accuracy + 2048 - healthTerm` truncated to 16 bits; the divisor is
+`trunc(kills / 12)`, and the bound is the numerator divided by the divisor,
+computed only when the divisor exceeds one (24 or more kills). When the bound
+is nonzero, two simulation-RNG draws with that same bound are applied to the
+slot's stored yaw and pitch as `draw - bound/2` each. An earlier reading that
+this spread does not consume the parsed fields is corrected: accuracy is its
+base term (tolerance and pitch-tolerance belong to the §3.3 drift gate, not
+this spread). The retained draws occur before the spawner call, so they are
+consumed even when allocation fails. Suppressed on
 failure: the record itself, Fire/RockUnit callbacks, start smoke, the shot
 packet, the pending-slot clear, reload, ammunition, firing state, and resource
 mutation.
@@ -915,7 +963,17 @@ orientation advanced by dedicated stored angular-rate shorts is superseded.
 
 **Established fact:** The cruise flag, not command-fire, selects the cruise waypoint helper. Cruise ignores the retained unit and projectile-link choices and uses the stored target point.
 
-**Established fact:** When converted three-dimensional distance to the stored target is greater than 1,024 in the helper's comparison domain, cruise copies target X/Z into the second point, forces its height word to 700, and steers toward that point. At or below the threshold it copies the stored point and replaces height with the greater of terrain height and sea level.
+**Established fact:** When converted three-dimensional distance to the stored
+target is greater than 1,024 in the helper's comparison domain, cruise copies
+target X/Z into the second point, forces its height word to 700, and steers
+toward that point. At or below the threshold it copies the stored point and
+replaces height with the greater of terrain height and sea level. The
+comparison domain is now closed: the helper computes the square root of the
+summed squares of the raw fixed-point deltas, truncates it, and compares the
+high word of the truncated result against 1,024 as a SIGNED short with a
+strict greater-than. A distance whose high word reaches 32,768 whole world
+units (2,048 cells) wraps negative and inverts the branch; that is unreachable
+for in-bounds map geometry.
 
 **Established fact:** A lost non-cruise unit target falls back to the stored point. It does not autonomously reacquire another unit. The exact stale-reference behavior when slots are reused remains a separate compatibility issue.
 
@@ -969,7 +1027,18 @@ implementation must reproduce it:
 
 **Established fact:** Flight time, hold time, burst interval, duration, smoke delay, and random decay are consumed as raw logical tick counts after catalog truncation. Values are not generally multiplied by 30 at projectile tick time.
 
-**Unknown:** Negative or out-of-range authored timer values, zero-speed burst combinations, and all integer overflow behavior are not fully closed. Retail lacks several defensive guards.
+**Established fact:** Catalog float conversions truncate toward zero, so a
+negative authored value truncates toward zero rather than flooring; a 16-bit
+store then wraps the truncated value modulo 65,536. Enumerated wrap edges: the
+remaining burst count is a 16-bit word, so an authored 65,535 makes a burst
+anchor attempt one clone per tick until the pool starves; burst deadlines and
+expiry wrap modulo 2^32 with the unsigned comparisons tested after wrap; a
+zero burst interval makes the first attempt due in the creation tick; the
+clone expiry division by scalar speed (when the weapon timer is zero) raises
+the divide exception on zero speed. Stock weapons never author these edges.
+
+**Unknown:** All remaining integer overflow behavior is not fully closed.
+Retail lacks several defensive guards.
 
 ## 8. Collision and impact selection
 
@@ -995,6 +1064,17 @@ implementation must reproduce it:
 **Established fact:** Projectile-link proximity uses squared three-dimensional current-point distance and a strict `< radius²` test. It calls impact without a direct unit but does not return afterward, and the resolver NEVER rechecks the dead bit. A second same-call impact — unit slot, feature, terrain, or water — is therefore reachable WITHOUT no-explode; the flag additionally keeps the record available on future ticks.
 
 **Established fact:** Unit slot zero requires a nonzero unit, a side byte different from the projectile side, and projectile height strictly below the unit upper/reference bound. It has no lower-bound test. Unit slot one uses the same nonzero/different-side gates and requires height inclusively between lower and upper bounds. The first successful slot impacts that unit and returns. This fixed slot order is the visible unit tie policy; this function does not consult the alliance matrix.
+
+**Established fact:** The two cell slots are class-assigned by the occupancy
+stamper, not by insertion order: ground-class units (movement mode 1) write
+cell slot zero, flying-class units (movement mode 2) write cell slot one,
+mode-zero records write nothing, and the yard-map branch for feature-unit
+records writes slot zero with a water-state-dependent mask. An occupied slot
+is overwritten by the later stamper and both units receive mutual-block status
+bits. This is the semantic reason for the height-gate asymmetry: slot zero
+holds ground occupants whose vertical extent runs base-to-top (no lower gate),
+slot one holds the flying class in an altitude band (inclusive lower and upper
+gates).
 
 **Established fact:** Units-only returns after both unit slots miss. It suppresses feature, terrain, bounce, and water-plane impact handling, not only feature damage.
 
@@ -1072,6 +1152,11 @@ TakeDamage. HitByWeapon receives two 400-radius trigonometric components
 derived from the packet direction byte, not a weapon ID or raw heading.
 TakeDamage receives remaining-health percentage, computed with low-32-bit
 multiply, unsigned division by maximum health, and a clamp to 0 through 100.
+The division is unguarded: a maximum health of zero raises the divide
+exception. Healing never divides: it clamps the sum to the unsigned maximum,
+so a zero maximum clamps healed health to zero. Stock definitions never author
+zero; the unguarded divisions belong to the malformed-state error policy
+(TODO(T25)).
 Healing and paralyzer packets do not emit this pair.
 
 ### 9.2 Armor and veterancy
@@ -1171,9 +1256,18 @@ different result flag otherwise. This helper does not apply impulse.
 
 ### 9.4 Impulse and pushing absence
 
-**Established fact:** The decompilation census found writes to a unit impulse/shove field from blast and related paths, but no bounded reads that turn that field into movement, mass-weighted pushing, or a separate collision resolver.
+**Established fact:** An earlier reading that blast paths write a unit
+impulse/shove field is corrected: the blast tail calls a shooter-feedback
+helper that sets one of two status bits on the SHOOTER unit — bit 6 when enemy
+damage exceeds twice friendly damage, bit 5 otherwise — and that status byte
+has no reader anywhere in the bounded corpus. There is no impulse or shove
+field, and no bounded reads turn any blast output into movement,
+mass-weighted pushing, or a separate collision resolver.
 
-**Supported inference:** A clean-room implementation should not add blast displacement or mass-weighted push behavior until a consumer is found. The write-only field may be a dormant feature, presentation handoff, or incomplete path.
+**Supported inference:** A clean-room implementation should not add blast
+displacement or mass-weighted push behavior. The shooter-status byte is
+write-only in the bounded corpus; it may feed presentation or an unrecovered
+consumer.
 
 ## 10. Paralyzer behavior
 
@@ -1257,10 +1351,17 @@ debit; its resource cost belongs to the production path. Launch is checked
 before production in the same unit slot, so a round completed by the secondary
 queue cannot launch until the next simulation tick.
 
-**Unknown:** The exact slot-to-node mapping for every weapon combination,
-byte overflow or wrap for malformed preexisting values, cancellation interaction
-with admitted carry, repeat requeue, and save and load reconstruction beyond
-the established queue count, progress, and slot-byte persistence remain open.
+**Established fact:** The queue node's slot index is the caller-supplied
+build-type argument stored verbatim by the node constructor; there is no
+weapon-id-to-slot translation anywhere in the queue path. The UI alias path
+always supplies zero (slot 0), which is where shipped stockpile weapons live.
+A malformed build-type of three or greater indexes past the unit record with
+no bounds check.
+
+**Unknown:** Byte overflow or wrap for malformed preexisting slot values,
+cancellation interaction with admitted carry, repeat requeue, and save and
+load reconstruction beyond the established queue count, progress, and
+slot-byte persistence remain open.
 
 ### 11.2 Interceptors
 
@@ -1312,8 +1413,15 @@ first record whose stored target position and weapon index byte all match.
 The spawner path then performs no ammunition, reload, firing-state, or
 resource mutation, matching the ordinary slot pipeline's failure path.
 
-**Unknown:** Dead-candidate behavior when the claimed target dies between aim
-and fire scans, the multiplayer reconstruction index-versus-pointer anomaly that
+**Established fact:** Neither interceptor scan tests liveness. A
+dead-but-uncompacted targetable enemy projectile within coverage and unclaimed
+is still selected by the aim-time scan and by the fire-time rescan, and its
+frozen current point is still tracked and proximally impacted. The earlier
+"dead-candidate behavior between the two scans" question is closed: the scans
+cannot distinguish dead from live candidates; "both dead" prevents a shot only
+through the coverage and claim state, never through a dead-bit test.
+
+**Unknown:** The multiplayer reconstruction index-versus-pointer anomaly that
 can store a small pool index as a raw pointer, and side effects of other
 interceptor-adjacent failure modes remain open.
 
@@ -1350,8 +1458,16 @@ health immediately before the lethal packet.
 
 **Established fact:** The synchronous Killed query receives severity and a
 mutable corpse-chain value and drains the unit's script threads inline. The
-death packet stores the low four bits of the returned value as a corpse-chain
-depth and the high four bits as the death cause. This value is not a wreck
+death packet packs `(cause << 4) | (variant & 0x0F)`; an earlier reading that
+"the death packet stores the low four bits of the returned value as a
+corpse-chain depth and the high four bits as the death cause" is corrected:
+the HIGH nibble is the death cause, taken from the packet's cause argument —
+the last damage-kind byte recorded at damage time — and is not part of the
+script return at all. The LOW nibble is the query's second output cell, which
+shipped Killed bodies write through their second parameter (see §12.1's
+authorship note below); an explicit script `return` is delivered to a
+completion receiver (none is installed for this query) or dropped, and never
+rewrites either nibble. This value is not a wreck
 probability. If the returned depth is zero, no corpse is placed; depth one
 selects the authored Corpse feature; larger depths follow that feature's
 featuredead link exactly `depth - 1` times, stopping on the no-feature
@@ -1378,6 +1494,16 @@ veterancy and scales the cause-5 bounty. The full pipeline — any cause outside
 the query, drains all of the unit's script threads inline, and copies back
 severity plus the script-selected variant; absent a Killed body, the variant
 cell keeps its caller-indeterminate value except where the build-fraction rule
+forces zero.
+
+**Established fact (Killed authorship):** A bytecode census of the shipped COB
+corpus settles the variant-cell authorship question: every shipped unit with a
+Killed body (153 of 157 extracted scripts) declares the two-parameter form and
+writes its second parameter — the corpse-depth cell — and none reassigns the
+severity cell, so the packet severity is always the computed severity and the
+depth nibble is always authored. The four remaining shipped scripts (the two
+commanders and the two dragon bosses) have no Killed body; their variant cell
+is deterministic-but-opaque stack history unless the build-fraction rule
 forces zero.
 
 **Established fact:** Death credit is a cause-gated switch, not merely the
@@ -1461,8 +1587,13 @@ placement instead patches the placed animation state for sinking and suppresses
 that notification.
 
 **Established fact:** When the cause and severity gates request a death
-explosion, the handler selects one of the unit's two resolved death-weapon
-definitions, constructs an ordinary projectile-shaped impact record at the
+explosion — packet severity positive and the remaining-build-fraction float
+exactly zero — the handler selects between the unit's TWO resolved
+death-weapon fields: the self-destruct field when the cause nibble is 3, the
+explode field otherwise. Both resolve from the authored `selfdestructas` and
+`explodeas` names at catalog load; an unresolved or absent name produces no
+explosion at all (there is no third default candidate in the executable). It
+constructs an ordinary projectile-shaped impact record at the
 victim's position with its current velocity, and calls the central impact
 path. The explosion is authoritative: it can deal armor-scaled direct/area
 damage and trigger the normal feature and sound effects. It is not merely a
@@ -1476,7 +1607,7 @@ presentation event.
 
 **Established fact:** Feature damage reads feature damage and weapon firestarter/burn weapon data. Flammable features can allocate burn state, select a random spark deadline through one draw of `simulationRandom(sparktime / 2) + (sparktime / 2)`, and emit a treeburn/fire event. The feature phase runs every simulation tick; animation advance and burn countdown decrement run every tick; only smoke emission is gated on `globalTick % 3 == 0`.
 
-**Established fact:** Fire spread uses the candidate's spread chance and simulation RNG, scans at most 48 candidates in a 7 by 7 window excluding the origin in row-major order, and makes five cumulative wind-direction attempts that collapse to no draws at zero wind. Drawing occurs only after every cheap legality check (off-map, empty, already attached, not flammable). Spread consults the candidate's own `spreadchance`, never the burning feature's. Burn weapons route back through the ordinary projectile and area-damage subsystem after both spread passes.
+**Established fact:** Fire spread uses the candidate's spread chance and simulation RNG, scans at most 48 candidates in a 7 by 7 window excluding the origin in row-major order, and makes five cumulative wind-direction attempts that collapse to no draws at zero wind. Drawing occurs only after every cheap legality check (off-map, empty, already attached, not flammable). Spread consults the candidate's own `spreadchance`, never the burning feature's. Burn weapons route back through the ordinary projectile and area-damage subsystem after both spread passes: the burn weapon's impact is built as a synthetic projectile-shaped record with a NULL shooter and a zeroed side byte and pushed through the ordinary area enumeration, so burn-weapon damage awards no veterancy and no kill credit; the friendly/enemy damage-sum classification compares side zero against each recipient. An earlier inference that attribution equals the igniting projectile's side is corrected.
 
 **Established fact:** A burn ends only when the burn animation finishes. Advancing past the last frame of a non-looping sequence clears the animation pointer, and the same feature visit clears the burning cell and stamps the `featureburnt` successor when one is linked. The countdown fires one spread and burn-weapon event and then stays at zero; it does not end the burn. A looping sequence would burn forever, but the loader forces the runtime loop byte to zero for every shipped burn sequence, so all 79 shipped `seqnameburn` features have finite lifetimes (46-282 visits). Burning filename-based features cannot be reclaimed and are immune to further blast-damage accumulation.
 
@@ -1582,23 +1713,31 @@ ledger and close its former contradiction.
   complete sonar and jammer interactions outside the closed primary
   direct-visibility list; weapon `noradar` is established as presentation-only
   with no gameplay reader in the bounded census and single stock definition
-  `EARTHQUAKE`.
+  `EARTHQUAKE`. The "targeting-upgrade aggregate" gate has no recovered reader
+  in the acquisition functions (bounded) and remains unproven; the per-slot
+  pipeline performs no acquisition of its own.
 - Exact manual unit/point target encoding, command-fire replacement, and all
   manual-versus-autonomous latch callers.
-- Semantic names of the water-weapon candidate masks, all acquisition bypasses,
-  and category behavior for non-unit target types.
-- Exact range behavior for no-auto-range and zero-velocity weapons.
+- Remaining acquisition bypasses and category behavior for non-unit target
+  types. The two water-weapon candidate predicates are closed (floater/above-
+  sea rejection and canhover half-height rejection, §3.3); the no-auto-range
+  flag bit is closed (bit 27 of the weapon flag word, §2.2's list).
+- Exact range behavior for zero-velocity weapons beyond the closed
+  weapon-timer branch.
 - The exact Aim-completion closure writer/consumer in the weapon-slot record is
   open (see §3.4 [R-P0-07]): the zero/nonzero delivery and no-timeout contract
-  is established, but the stored-result mutation is not named. Target
+  is established, but the stored-result mutation is not named (shared with
+  lane 04; the store census is lane 04's). Target
   replacement during an outstanding Aim and malformed-state interactions around
   the closed family readiness gates remain open.
 - The exact boundary between the general muzzle query and the per-family
   dropped/meteor muzzle paths, and the full side effects of the shared muzzle
   fallback on malformed piece indices, remain at medium confidence (see §3.4
   [R-P0-07]).
-- Candidate-list order before random sampling and RNG behavior for zero or
-  overflowed squared-distance bounds.
+- Candidate sampling is closed: the filtered set is always swap-remove sampled
+  with RNG bounds equal to the remaining count (see §3.1); zero/overflow
+  behavior of the squared-distance score bound is closed by the RNG's bound
+  guard.
 
 ### Projectile pool and phase
 
@@ -1613,11 +1752,13 @@ ledger and close its former contradiction.
 - Reachability and effects of a record marked dead before its captured-span
   turn, because the updater has no dead-bit filter at loop entry.
 - All stale unit/target pointer validation and slot-reuse aliases outside the
-  closed damage-packet identity rules.
+  closed damage-packet identity rules. The projectile-link compaction repair
+  census is closed (moved sources only, live-marker check only; sources before
+  the first dead hole keep their old raw pointer, and the later dereferences
+  perform no generation, count, dead-bit, or weapon identity check).
 - Integer overflow, negative timer, and zero-speed burst combinations outside
-  the closed ballistic cases and the pool-full retention matrix.
-- Signed and wrapping behavior for malformed or negative burst counts and
-  deadlines.
+  the closed ballistic cases, the enumerated §7.3 wrap edges, and the
+  pool-full retention matrix.
 - Consumer of the projectile record's cached average-height scratch value
   outside the projectile family; the record layout hole is preserved for it.
 
@@ -1632,13 +1773,14 @@ ledger and close its former contradiction.
 - Semantic names and every writer for the two-phase state bits, plus unusual
   flag combinations and wrapping flight-time deadlines; fixed launch delay is
   closed as absent.
-- Exact fixed-point scale and overflow behavior of the cruise distance
-  threshold; cruise versus command-fire and waypoint selection are closed.
+- Cruise versus command-fire and waypoint selection are closed; the cruise
+  threshold is closed (truncated three-dimensional distance high word compared
+  strictly greater than 1,024, signed-short wrap at 32,768 whole world units).
 - Exact stale-reference behavior for retained units and every producer/lifetime
   invariant of the optional projectile-to-projectile link; autonomous
   projectile-side reacquisition is closed as absent.
-- Complete pre-fire water eligibility masks and target-definition meanings;
-  the runtime self-propelled water/torpedo integrator is closed as shared.
+- The runtime self-propelled water/torpedo integrator is closed as shared; the
+  pre-fire water eligibility predicates are closed (§3.3).
 - Meteor reachability is closed: the stock reach is shower-only (no unit
   carries a meteor weapon; a unit-fired order for one would misread the
   yaw/pitch order fields as velocity — a bounded absence of stock authorship),
@@ -1650,7 +1792,8 @@ ledger and close its former contradiction.
   closed (cached-cell suppression, bounce bypass, off-map retirement, the
   unguarded second same-call impact); the complete later-tick contact CADENCE
   enumeration for no-explode records across changing geometry and family
-  states remains open.
+  states remains open (predicate-driven, no latch — a state-search bound, not
+  a contract gap).
 - Exact authored relationships among beam, lightning render type, flame,
   firestarter, burn-blow, and no-explode. No separate lightning or flame
   collision integrator was found.
@@ -1659,51 +1802,72 @@ ledger and close its former contradiction.
 
 ### Collision and damage
 
-- Complete unit-grid insertion rules that assign candidates to the two fixed
-  cell slots, and the semantic reason for slot zero's absent lower-height gate.
+- Complete unit-grid insertion rules are closed: the two cell slots are
+  class-assigned (ground class and the yard-map branch write slot zero,
+  flying class writes slot one, mode zero writes nothing), which is the
+  semantic reason for slot zero's absent lower-height gate (§8.1).
 - Exact footprint-anchor coordinate conventions and malformed sentinel
   behavior.
 - Exact quantization and overflow of the repeated-feature-cell cache at
   negative or extreme coordinates.
-- Meaning and writers of the opaque terrain/liquid mode that suppresses
-  selected underwater impact and splash branches.
+- The opaque terrain/liquid mode is closed: it is the mission `nosealeveltrigger`
+  setting written by the mission parser (and the mission-globals reset); it
+  suppresses the underwater impact retirement and crossing splash.
 - Exact sign/scale conventions for vertical velocity, terrain height, and sea
   level outside ordinary map ranges. Point collision, slot/feature/terrain
   ordering, arithmetic-quarter bounce, and crossing splash are closed.
 - Complete malformed-name, duplicate-key, and signed-overflow behavior in
   damage-table construction and lookup.
-- Named configuration meanings of the recovered global double/half damage
-  gates and malformed-input overflow outside the ordinary value range.
-- Producers and semantic names for packet kinds outside the closed ordinary
-  damage, healing, paralyzer, kind-11, and cause-producer dispatcher paths.
-- Behavior when maximum health is zero in healing or TakeDamage percentage.
-- Authorship of the Killed query's second output slot: whether shipped Killed
-  bodies write the death-variant cell or leave the caller-indeterminate value,
-  except where the build-fraction rule forces zero.
+- The global double/half damage gates are closed as stock-inert: the reader is
+  direct (bit 7 doubles, bit 8 halves, in that order) and the full-image
+  census found no writer of either bit; the named configuration alias stays
+  unknown (bounded negative).
+- Packet-kind producers are closed: the whole-image caller census found only
+  kinds 1, 2, 3, 4, 5, 9, 10, 11 (two producers each for 3 and 5), with 3-9
+  reaching the dispatcher only as death-cause producers.
+- Behavior when maximum health is zero is closed: healing clamps to zero
+  without dividing; the TakeDamage percentage and the reload health term
+  perform unguarded unsigned divisions (divide exception). Stock never authors
+  zero; Nanolathe guards the divisions as an error path (TODO(T25)).
+- Authorship of the Killed query's second output slot is closed: every shipped
+  Killed body (153 of 157 extracted scripts) writes the death-variant cell via
+  its second parameter; the four scripts without a Killed body leave
+  deterministic-but-opaque stack history except where the build-fraction rule
+  forces zero.
 - Practical reachability of signed 16-bit AOE distance wrap and of more than
   20 unique unit or 64 unique feature-cell candidates in accepted retail maps.
-- Blast impulse consumer, if any; no movement/push consumer was found.
+- Blast feedback is closed: the blast tail sets shooter-status bits (enemy
+  damage exceeding twice friendly damage, otherwise the other bit) on a byte
+  with no reader in the bounded corpus; no impulse or push consumer exists.
 - Kill attribution is cause-resolved by the producer table in section 12.1.
-  Still open: burn-weapon attribution specifics beyond that table.
+  Burn-weapon attribution is closed: burn weapons fire as synthetic impact
+  records with a null shooter and zeroed side byte, so they award no
+  veterancy and no kill credit.
 - Resurrection interaction with the death pipeline; ordering detail among
   multiple concurrent reclaimers issuing simultaneous repair/damage packets —
   which pulse becomes fatal.
-- Writers of the remaining-build-fraction float are narrowed to spawn, flight,
-  and construction progress; the death-explosion gate itself (equal to zero)
-  is closed.
+- Writers of the remaining-build-fraction float are closed by census: two
+  float writers (parameterized spawn, capture) and five integer writers
+  (allocator grounded/airborne initialization, two construction progress
+  sites, deconstruction reset, reconstructor); the death-explosion gate itself
+  (equal to zero) is closed.
 
 ### Stockpile and interceptor
 
-- Remaining slot-to-node mapping validation for every weapon combination,
-  malformed slot-byte overflow, cancellation interaction with admitted carry,
-  repeat requeue, and save/load beyond the established queue count, progress,
-  and slot-byte persistence; stockpile progress step, cost timing, retry
-  deadlines, completion mutations, 200-round cap, and launch-before-production
-  ordering are established.
-- Dead-candidate behavior between the two interceptor scans, the multiplayer
-  index-versus-pointer anomaly, and other failure modes beyond the closed
-  single-process coverage square, reservation at spawn, current-point tracking,
-  linked contact, explosion sweep, and pending-shot failure path.
+- The slot-to-node mapping is closed: the queue node's slot index is the
+  caller-supplied build-type stored verbatim, with no weapon-id translation
+  (the UI alias path always uses zero). Remaining: malformed slot-byte
+  overflow, cancellation interaction with admitted carry, repeat requeue, and
+  save/load beyond the established queue count, progress, and slot-byte
+  persistence; stockpile progress step, cost timing, retry deadlines,
+  completion mutations, 200-round cap, and launch-before-production ordering
+  are established.
+- Dead-candidate behavior between the two interceptor scans is closed: neither
+  scan tests liveness, so a dead-but-uncompacted candidate remains selectable,
+  reservable, tracked, and proximally impacted. Remaining: the multiplayer
+  index-versus-pointer anomaly and other failure modes beyond the closed
+  single-process coverage square, reservation at spawn, current-point
+  tracking, linked contact, explosion sweep, and pending-shot failure path.
 
 ### Features and effects
 
@@ -1711,9 +1875,12 @@ ledger and close its former contradiction.
   filename-based extinction, finite lifetimes, 48-candidate neighborhood,
   smoke-only gating, one-shot event, reclaim rejection, blast immunity, and
   the reproduction walker contract in section 13.1.
-- Feature damage/armor interaction and burn damage to units.
-- Exact sound-trigger burst cadence under allocation failure.
-- Ordering of corpse-feature creation relative to the closed impact event
-  sequence; the smoke/sound/splash/explosion ordering itself is closed by the
+- Feature damage/armor interaction and burn damage to units beyond the closed
+  burn-weapon attribution (null shooter, no credit).
+- Sound-trigger burst cadence is closed: the pellet sound is gated on
+  successful clone allocation, so a pool-full burst attempt emits none.
+- Ordering of corpse-feature creation is closed: the death explosion runs
+  before corpse stamping, and damage is routed last in the impact sequence;
+  the smoke/sound/splash/explosion ordering itself is closed by the
   section 13.2 matrix.
 - Renderer interpolation and visual lifetime, intentionally outside this specification.

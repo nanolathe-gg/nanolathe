@@ -847,63 +847,11 @@ func (s *Session) authoritativeTick(tick uint32) {
 	_ = s.CrtRNG()
 	rng.Global.Sim = s.SimRNG()
 	rng.Global.Crt = s.CrtRNG()
-	// 1 Global wind prepass [01 §7.3][01 §4.4] — phase 8+9 moved to top per P0-09; meteor runs after projectile phase so spawns move next tick [08 "Meteor showers"] [06 §6.5]
-	if s.Wind != nil {
-		// [01 §7.3] split: phase 8 draws CRT interval, phase 9 draws Sim strength/heading; order is behavior [INVARIANTS I4][RS-P0-018] per-session isolated
-		s.Wind.Jitter(tick, s.CrtRNG())
-		_ = s.Wind.Field(tick, s.SimRNG())
-		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWindMeteor})
-	}
-	// Meteor scheduler initialization lazy: merge OTA meteor params with METEOR.TDF defaults [02 "Map files"] [08 "Meteor showers"] [06 §6.5].
-	// Done once before first scheduling evaluation so scheduling draws start deterministically after wind.
-	if !s.Meteor.Initialized {
-		s.initMeteor()
-	}
-	// 2 Network/input boundary — drain local typed commands before orders/build
+	// 1 network/input boundary — drain local typed commands before orders/build [01 §4.4] PhaseNetwork. The queue is presentation-owned until this point.
 	// [01 §4.4] PhaseNetwork. The queue is presentation-owned until this point.
 	s.applyHumanCommands(tick)
 
-	// 3 Player traversal deterministic slot order 0..9 [05 "Authoritative settlement order"][INVARIANTS I1]
-	// Due AI player work at researched deadline relationship (beforeDeadline) + economy request/accept/settlement via economy.TickPlayer per player
-	// No map-defined player order [ON-09].
-	for player := 0; player < 10; player++ {
-		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TracePlayerBegin, Player: player})
-		mgr := s.AI[player] // direct player-indexed access per RS-02 [08] I1
-		// Bind per-session RNG for isolation [RS-06][I4] — ensure manager uses session's stream, not shared global.
-		if mgr != nil && mgr.RNG == nil {
-			mgr.RNG = s.SimRNG()
-		}
-		if s.Econ == nil {
-			if mgr != nil {
-				mgr.Tick(tick, s.Units, nil)
-				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIDeadline, Player: player})
-			}
-			continue
-		}
-		// Capture economy helper/carry state before to emit EconomyRequest/Settle accurately without map iteration
-		beforeUpdateTime := s.Econ.Players[player].UpdateTime
-		before := func() {
-			if mgr != nil {
-				mgr.Tick(tick, s.Units, s.Econ)
-				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIDeadline, Player: player})
-			}
-		}
-		s.Econ.TickPlayer(player, tick, s.Units, before)
-		// Economy traces: request/accept are always recorded inside TickPlayer's settlement when due; emit after call
-		// We emit EconomyRequest whenever the player's deadline was due (UpdateTime advanced) or helper ran; for determinism emit per active player
-		p := &s.Econ.Players[player]
-		if p.Exists && !p.IsObserver {
-			// Helpers always run before deadline compare [05]; settlement only when UpdateTime advanced by exactly 30 [05 C2]
-			if beforeUpdateTime != p.UpdateTime {
-				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomyRequest, Player: player})
-				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomySettle, Player: player})
-			} else if p.Helper1Calls > 0 || p.Helper2Calls > 0 {
-				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomyRequest, Player: player})
-			}
-		}
-	}
-
-	// Prepare movement shared indexing once per tick [04 §8.2][04 §10.2] before unit visits
+	// 2 movement shared indexing + path submission (before the unit sweep; not a retail phase — nanolathe's pathing is A* on a grid) [04 §8.2][04 §10.2][04 §7.3]
 	if s.Movement != nil {
 		if s.Units != nil {
 			s.Movement.BindWorld(s.Units)
@@ -1059,7 +1007,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 		s.Path.Tick(tick)
 	}
 
-	// 4 One deterministic active unit-slot traversal ascending [01 §4.4][01 §6.1][INVARIANTS I1]
+	// 3 one deterministic active unit-slot traversal ascending [01 §4.4][01 §6.1][INVARIANTS I1]
 	// Each active unit visited exactly once under researched rule; new/dead units follow same-tick visibility [01 §4.4] R-P0-04
 	if s.Units != nil {
 		ordersPump := &orders.Pump{World: s.Units}
@@ -1264,7 +1212,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 		s.Movement.EndTick(tick)
 	}
 
-	// 5 Projectile pool update and impact (TickProjectiles + interceptor guidance/detonation) [06 §5][06 §11.2]
+	// 4 projectile integration and collision + pool compactor [01 §4.4][06 §5][06 §11.2]
 	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceProjectileStep})
 	// Interceptor guidance pre-step before motion [06 §11.2]
 	s.interceptorGuidanceTick()
@@ -1319,11 +1267,47 @@ func (s *Session) authoritativeTick(tick uint32) {
 	}
 	s.interceptorDetonationTick()
 
-	// 5b Meteor shower scheduler after wind jitter and after projectile phase so spawns move next tick [08 "Meteor showers"] [06 §6.5].
-	// Cadence is interval+duration ticks per storm and per-hit delay trunc(30/density) [02 Meteor scheduler]; draws are CRT six per meteor (four scheduling even when disabled + two lateral) [06 §6.5] I4 with zero sim draws.
-	s.tickMeteor(tick)
+	// 5 per-player orders, path, economy, and occupancy work [01 §4.4] — outer loop players 0..9 ascending; the AI coordinator tick (30-tick cadence, deadline-gated subtasks) runs before the settlement deadline compare and the nine-step settlement pass [05 "Authoritative settlement order"] [INVARIANTS I1].
+	// Due AI player work at researched deadline relationship (beforeDeadline) + economy request/accept/settlement via economy.TickPlayer per player
+	// No map-defined player order [ON-09].
+	for player := 0; player < 10; player++ {
+		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TracePlayerBegin, Player: player})
+		mgr := s.AI[player] // direct player-indexed access per RS-02 [08] I1
+		// Bind per-session RNG for isolation [RS-06][I4] — ensure manager uses session's stream, not shared global.
+		if mgr != nil && mgr.RNG == nil {
+			mgr.RNG = s.SimRNG()
+		}
+		if s.Econ == nil {
+			if mgr != nil {
+				mgr.Tick(tick, s.Units, nil)
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIDeadline, Player: player})
+			}
+			continue
+		}
+		// Capture economy helper/carry state before to emit EconomyRequest/Settle accurately without map iteration
+		beforeUpdateTime := s.Econ.Players[player].UpdateTime
+		before := func() {
+			if mgr != nil {
+				mgr.Tick(tick, s.Units, s.Econ)
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIDeadline, Player: player})
+			}
+		}
+		s.Econ.TickPlayer(player, tick, s.Units, before)
+		// Economy traces: request/accept are always recorded inside TickPlayer's settlement when due; emit after call
+		// We emit EconomyRequest whenever the player's deadline was due (UpdateTime advanced) or helper ran; for determinism emit per active player
+		p := &s.Econ.Players[player]
+		if p.Exists && !p.IsObserver {
+			// Helpers always run before deadline compare [05]; settlement only when UpdateTime advanced by exactly 30 [05 C2]
+			if beforeUpdateTime != p.UpdateTime {
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomyRequest, Player: player})
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomySettle, Player: player})
+			} else if p.Helper1Calls > 0 || p.Helper2Calls > 0 {
+				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceEconomyRequest, Player: player})
+			}
+		}
+	}
 
-	// 6 Feature/fire lifecycle (TickLifecycle, TickMotion as per phase) [05 "Feature burning"][05 "Feature sinking"][06 §13.1]
+	// 6 feature lifecycle and reclaim or death processing (burn, wind probes, successor hops; reclaim credits become visible at the next settlement) [01 §4.4][05 "Feature burning"][05 "Feature sinking"][06 §13.1]
 	if s.Features != nil {
 		// TickMotion is reproduction walker top of phase [06 §13.1] C25, lifecycle is burn/sink
 		// Maintain order: TickMotion then TickLifecycle to avoid double reproduce
@@ -1332,7 +1316,44 @@ func (s *Session) authoritativeTick(tick uint32) {
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceFeatureLifecycle})
 	}
 
-	// 7 visibility/LOS/radar deadline work and publication (Refresh, SensorTick) [03 §3.2][03 §3.4]
+	// 7 sequence and effect-strip advancement [01 §4.4] — the global animation-
+	// sequence cursor list (frame counter, remaining duration, loop flag per cursor).
+	// TODO(question): strip advancement is presentation-owned in nanolathe [03 §1];
+	// no sim state advances here.
+
+	// 8/9 wind change and wind-field update [01 §4.4] — phase 8 draws the CRT interval and phase 9 the Sim strength/heading (order is behavior [I4]); projectiles, effects and features in earlier phases therefore read the previous tick's wind, as retail's phase order dictates. An earlier 'prepass at tick top' reading is superseded by the established order.
+	if s.Wind != nil {
+		// [01 §7.3] split: phase 8 draws CRT interval, phase 9 draws Sim strength/heading; order is behavior [INVARIANTS I4][RS-P0-018] per-session isolated
+		s.Wind.Jitter(tick, s.CrtRNG())
+		_ = s.Wind.Field(tick, s.SimRNG())
+		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceWindMeteor})
+	}
+	// Meteor scheduler initialization lazy: merge OTA meteor params with METEOR.TDF defaults [02 "Map files"] [08 "Meteor showers"] [06 §6.5].
+	// Done once before first scheduling evaluation so scheduling draws start deterministically after wind.
+	if !s.Meteor.Initialized {
+		s.initMeteor()
+	}
+
+	// 9b Meteor scheduler after the wind phases so scheduling draws start deterministically after wind, and after the projectile phase so spawns move next tick [08 "Meteor showers"] [06 §6.5]. Cadence is interval+duration ticks per storm and per-hit delay trunc(30/density) [02 Meteor scheduler]; draws are CRT six per meteor (four scheduling even when disabled + two lateral) [06 §6.5] I4 with zero sim draws.
+	// Cadence is interval+duration ticks per storm and per-hit delay trunc(30/density) [02 Meteor scheduler]; draws are CRT six per meteor (four scheduling even when disabled + two lateral) [06 §6.5] I4 with zero sim draws.
+	s.tickMeteor(tick)
+
+	// 10 camera/scroll position update [01 §4.4] — the camera steps toward its scroll
+	// target (clamped at ±320 per tick, half-step when closer) and the shake driver
+	// adds a CRT-drawn jitter while a shake is active. TODO(question): nanolathe's
+	// camera is presentation-owned (internal/camera); no sim-side scroll target or
+	// shake state exists yet.
+
+	// 11 ten object-list update sweeps [01 §4.4] — a table of ten linked lists of
+	// vtable-backed objects allocated at battle entry; each object's update virtual
+	// runs, and objects returning zero are destroyed and removed with inline
+	// compaction. TODO(question): the object family is not yet identified [01 §4.4];
+	// nothing registers lists yet.
+
+	// 12 every-eight-sub-tick cadence flip [01 §4.4]. TODO(question): no consumer is
+	// wired in nanolathe; the flip drives nothing yet.
+
+	// 13 visibility/LOS/radar deadline work and publication (Refresh, SensorTick) [03 §3.2][03 §3.4] — no retail phase slot; LOS has no RNG draws, so its tail placement does not perturb the sim draw order
 	if s.Vis != nil && s.Units != nil {
 		// Visibility refresh throttled [03 §3.2] C6 — iterate deterministic
 		for _, u := range s.Units.IterSliced() {
@@ -1420,7 +1441,7 @@ func (s *Session) authoritativeTick(tick uint32) {
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceVisibilityDeadline})
 	}
 
-	// 8 Trigger polling [08 "Evaluation"][P1-01 §3] — victory/defeat queues are polled
+	// 14 Trigger polling [08 "Evaluation"][P1-01 §3] — victory/defeat queues are polled
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// settlement) [08 "Evaluation"], and only when mission type is 1 (campaign)
@@ -1532,19 +1553,19 @@ func (s *Session) authoritativeTick(tick uint32) {
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceTriggerPoll})
 	}
 
-	// 9 sharing cadence [05 "Allied resource and sensor sharing"] — once per tick after player phase, for reference player only
+	// 15 sharing cadence [05 "Allied resource and sensor sharing"] — retail runs it at the sub-tick tail after phase 12; once per tick for the reference player only
 	if s.Econ != nil {
 		s.Econ.ShareTick(tick)
 		// Sharing emits no per-unit trace but we emit one per tick for determinism
 		// No map iteration inside ShareTick (it iterates players 0..9 asc)
 	}
 
-	// 10 AI auxiliary deadlines [08 "Established AI-facing data and rooted planner"] — managers already ticked via player traversal beforeDeadline;
+	// 16 AI auxiliary deadlines [08 "Established AI-facing data and rooted planner"] — managers already ticked via player traversal beforeDeadline; auxiliary tasks with later deadlines (+150/+300 etc.) are also handled inside same Tick via runDueTasks [P0-02].
 	// auxiliary tasks with later deadlines (+150/+300 etc.) are also handled inside same Tick via runDueTasks [P0-02].
 	// Emit the stage marker for the trace contract; VictoryLatch is reserved for actual result latches.
 	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIAux})
 
-	// 11 deterministic commit/barrier [01 §4.4] PhaseBarrier + ledger cleanup
+	// 17 post-loop executor tail [01 §4.4] — barriers, the deadline-ring slide and missile/interceptor compaction are retail post-loop structures; nanolathe's deterministic commit (movement occupancy clear for Dying units, unit cleanup, campaign no-human countdown, victory evaluation) and the RNG global sync live here
 	if s.Units != nil {
 		// RS-08: projectile damage after slot visit marks Dying after that visit [01 §4.4][GAP T15];
 		// retain for feature/visibility/trigger same tick but clear movement occupancy before next tick and before snapshot.
@@ -1606,15 +1627,19 @@ func (s *Session) authoritativeTick(tick uint32) {
 	if rng.Global.Crt != nil {
 		*rng.Global.Crt = s.rngCrt
 	}
-	// 12 one immutable snapshot publication [03 §2.4][PLAN_03 C15][INVARIANTS I6]
+
+	// 18 one immutable snapshot publication [03 §2.4][PLAN_03 C15][INVARIANTS I6]
 	s.publishSnapshot(tick)
 	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceSnapshotPublish})
 	s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceTickEnd})
-	// TODO(question): phase-12 cadence flip every eight sub-ticks [01 §4.4] 12 and effect-strip advancement phases 4/7 [01 §4.4] 4,7 are established as phase names, but their consumer is the T23 ten-object barrier [01 §4.4] 11 and presentation strip compaction whose ownership and lifetime are not fully established [03 §1] [GAP T23]; authoritative tick currently implements phases 4/7 via feature lifecycle visibly but strip advancement is presentation-only. No simulation state mutation is required for this cadence here; keep as no-op until strip ownership is closed.
-}
 
-// initMeteor merges OTA meteor params with METEOR.TDF defaults per [02 "Map files"] [08 "Meteor showers"] [06 §6.5].
-// Empty MeteorWeapon disables shower; zero radius/density/duration/interval substitute defaults while remaining enabled [02][06 §6.5].
+	// TODO(question): phases 7 (sequence cursors), 10 (camera/scroll), 11
+	// (object-list sweeps) and 12 (cadence flip) are staged above as no-ops:
+	// research establishes the passes, but their sim-side consumers are not yet
+	// implemented or identified [01 §4.4]. Strip advancement is presentation-only
+	// [03 §1]; the object family is unidentified [01 §4.4]; the cadence flip has
+	// no wired consumer.
+}
 func (s *Session) initMeteor() {
 	if s == nil || s.Meteor.Initialized {
 		return

@@ -140,15 +140,23 @@ mode work:
 - A queued message, or a mode that is not waiting on multiplayer work, enters a
   blocking `GetMessageA`/`TranslateMessage`/`DispatchMessage` sequence. Quit
   messages terminate this loop.
-- When there is no immediately queued message and multiplayer work is active,
-  the pump runs its housekeeping helper and then, when at least 99 milliseconds
+- When there is no immediately queued message and the windowed/network
+  condition holds (display-mode flag set or networked session), the pump runs
+  its housekeeping helper and then, when at least 99 milliseconds
   have elapsed since the previous one, exactly one media-keepalive call that
   walks the audio/media channel arrays (eight then thirty-two object slots,
-  invoking each live object's keepalive virtual and clearing dead slots). That
+  invoking each live object's keepalive virtual and clearing dead slots; the
+  "keepalive" reading of that virtual is an inference — the walk itself, its
+  slot counts, and its ≥99 ms gate are established). That
   ≥99 ms gate drives only this keepalive. The network/game dispatcher itself
   runs every busy iteration; it tail-dispatches the session callback, which
   evaluates the fixed wall-clock budget each time. The loop does not use a
-  33-millisecond `Sleep` to drive simulation.
+  33-millisecond `Sleep` to drive simulation. A second, distinct keepalive is
+  the network control message: on the networked zero-budget path the
+  dispatcher sends one control byte every 60 scaled units (two seconds),
+  gated on its own stamp. The two cadences must not be conflated: the ≥99 ms
+  gate belongs to the pump's media walk, the 60-unit gate to the network
+  control send.
 - Audio/CD status is polled from this same application activity. Media playback
   is not proven to have a general-purpose audio worker owned by the game.
 
@@ -174,9 +182,17 @@ that the helper *creates* the key path even on a read, and that a missing value
 is written back with its default at startup.
 
 The executable also refers to an INI path ending in `totala.ini` and uses
-`GetPrivateProfileIntA`. The exact precedence between registry, INI, command
-line, and defaults is not fully established. Keep all four sources separate
-until precedence is measured.
+`GetPrivateProfileIntA`, but the INI imports are confined to the diagnostics
+helpers — no INI read exists on the startup, front-end, or battle
+configuration path (bounded by the WinMain body, the front-end router, and
+the settings loader). The registry settings loader runs at front-end entry
+with default-and-write-back for every value; the command-line parser runs in
+WinMain before display initialization and sets its own switch bits and scalar
+slots. Precedence for the overlapping scalars is therefore defaults, then
+registry, then command line; the exact interaction of the two scalar command-
+line slots with the registry values is not individually mapped
+(`TODO(question)`). Language precedence is command line, then registry, then
+English fallback.
 
 Startup temporarily mutates a machine AudioCD registry shell value, then
 restores the prior value. This is a compatibility side effect, not a game
@@ -184,7 +200,9 @@ state setting; it should be isolated from deterministic simulation state.
 
 Evidence: the clean-room account is
 the main-loop call chain plus the configuration string vocabulary. The behavior is
-high confidence for key names and registry API family, medium for precedence.
+high confidence for key names, registry API family, and the narrowed
+defaults < registry < command-line precedence; medium only for the two
+unmapped scalar command-line slots.
 
 ### 3.2 Virtual filesystem boundary
 
@@ -272,10 +290,11 @@ repaired as elapsed time.
 
 ### 4.3 Speed state and adaptation
 
-The user/network request is clamped to 1..20 by the common setter; keyboard
-controls expose a narrower 2..19 range. The effective speed is the value used
-in the budget. The budget’s hysteresis counter decrements on normal (<6) work
-and increments on capped (>=6) work:
+The user/network request is clamped to 1..20 by the common setter; the
+keyboard speed keys reach the full 1..20 range (speed-up is skipped when the
+requested value is already 20, speed-down when it is 1). The effective speed
+is the value used in the budget. The budget's hysteresis counter decrements
+on normal (<6) work and increments on capped (>=6) work:
 
 - after more than 100 normal observations, effective speed may rise one step
   toward the requested value;
@@ -286,9 +305,13 @@ and increments on capped (>=6) work:
 The common setter can set requested and active values together, while the budget
 can subsequently regulate active speed under sustained load. A pending-speed
 flag records active/requested disagreement. In multiplayer, pause and speed
-packets are handled by the peer dispatcher; recipients apply them without
-rebroadcasting. Exact packet framing is a network concern and remains partly
-unresolved, but the pause/speed state transition is established.
+packets are handled by the peer dispatcher; the receive case for the
+pause/speed packet is established: a sub-type byte of zero updates the pause
+bit from the value byte, any other sub-type applies the speed through the
+common setter with the rebroadcast flag cleared — recipients apply without
+rebroadcasting. The send-side byte layout of the pause packet remains a
+network-framing residual (`TODO(question)`), while the speed packet send is
+the common setter's own broadcast of `{type, sub-type, speed}`.
 
 Pause asymmetry between the dispatch paths is established. The dispatcher
 branches on the session's network flag:
@@ -329,29 +352,62 @@ twelve-phase order is:
 3. projectile integration and collision — captures active count at entry; a
    zero-burst root spawned in phase 2 is inside the span and can move and collide
    the same tick, while burst clones appended during iteration are outside and
-   wait for the next tick [P0-09];
-4. general effects, feature motion, and compaction pre-pass;
+   wait for the next tick [P0-09]; the phase tail runs the projectile-pool
+   compactor, which reads the current (post-append) count and removes dead
+   records in place preserving survivor order (see §6.1);
+4. general effects and feature motion — side-list sweep (updating entries
+   removed when their update returns zero), then the effect pool: position
+   integration with gravity and wind terms, map-bound bounce or removal,
+   per-effect animation-strip cursor advance, and an order-preserving in-place
+   compaction of finished records;
 5. per-player orders, path, economy, and occupancy work — outer loop players
-   0 through 9 in ascending order; for each eligible player: per-tick helpers,
-   then the AI coordinator callback before the settlement deadline compare, then
+   0 through 9 in ascending order; for each eligible player: the per-player AI
+   coordinator tick (runs every tick for every eligible player, with a 30-tick
+   internal cadence and ten deadline-gated vtable subtask objects) before the
+   occupancy re-stamp sweep, then the settlement deadline compare, then
    deadline `tick + 30` single add (catch-up via consecutive ticks), then the
    nine-step settlement pass when the gate chain passes [P0-09];
 6. feature lifecycle and reclaim or death processing (burn, wind probes,
    successor hops; reclaim credits become visible at the next settlement);
-7. sequence and effect-strip advancement;
-8. wind jitter and randomized interval update (interval uses the CRT stream);
-9. wind-field update (vectors from direction and strength);
-10. ledger and death cleanup;
-11. a ten-object vtable-backed barrier pass whose consumer is not identified
-   — keep as `TODO(T23)` no-op registration point [P0-09];
+7. sequence and effect-strip advancement — the global animation-sequence
+   cursor list (frame counter, remaining duration, loop flag per cursor; each
+   cursor advances with the same step used per-effect in phase 4); this is not
+   a line-of-sight or occupancy scan;
+8. wind change — when due: interval draw `((CRT*10)/0x8000 + 5) * 30` ticks,
+   new speed `simRand(maxWind − minWind) + minWind`, new heading
+   `simRand(0x10000)` truncated to 16 bits (drawn only when the speed is
+   nonzero), the direction vector pair computed as −2 × the fixed-point trig
+   of the heading with the speed as the magnitude, the published ratio
+   `speed / 5000` clamped at exactly 1.0, and the change flag;
+9. wind-field update — a second deadline gates recomputation of the moving
+   wind-field point (map-dimension-scaled base plus per-axis jitter, CRT
+   draws), a gust component (magnitude and angle, CRT draws), and the spawn of
+   the invisible wind-field projectile into the shared projectile pool
+   (append at tail; silent drop when the pool is full), broadcast as a
+   network packet when networked;
+10. camera/scroll position update — the camera steps toward its scroll target
+    (clamped at ±320 per tick, half-step when closer), the camera shake driver
+    adds a CRT-drawn jitter while a shake is active, and the view is refreshed;
+11. ten object-list update sweeps — a table of ten linked lists of
+    vtable-backed objects allocated at battle entry; each object's update
+    virtual runs, and objects returning zero are destroyed and removed with
+    inline compaction. The object family is not yet identified
+    (`TODO(question)`); the pass is real work whenever the lists are
+    non-empty, not a no-op;
 12. an every-eight-sub-tick cadence flip.
 
-After the sub-tick loop, multiplayer may share frames and perform a network
-barrier, then timer dispatch and deferred projectile compaction run. There are
-three null and barrier calls around this tail. The old interpretation of the
-sequence phase as a line-of-sight scan is explicitly superseded by the current
-notes; the LOS writer is a separate visibility path. The ten-object barrier is
-not proven to be a renderer barrier.
+At the tail of every sub-tick, when networked and the transport flag is set,
+the engine runs resource sharing (60-tick and 450-tick cadences) and flushes
+the packet transport. This sharing block is inside the sub-tick loop, after
+phase 12 — an earlier reading placed it after the loop. After the loop the
+executor runs three empty barrier functions, then a 30-entry deadline-ring
+slide (head advances when the head record's deadline has passed; the ring
+sits beside the network receive queue and is most plausibly the receive-frame
+window — supported inference, `TODO(question)` for the record owner), then
+the missile/interceptor pending-list compaction (expired records invoke their
+expiry callback and are removed in place). The projectile-pool compactor does
+**not** run here; it runs at the projectile-phase tail (phase 3) and from the
+unit-owner projectile purge (see §6.1).
 
 **Established fact — event visibility across phases [P0-09]:**
 
@@ -367,7 +423,7 @@ not proven to be a renderer barrier.
   order and builder links before the next trigger poll; victory checks are polled
   locally every 30 ticks and need the next poll to observe the product.
 - Kill damage sets a dying latch but defers final pool clearing to slot-end
-  death handling or ledger cleanup; a victim remains observable through settlement
+  death handling; a victim remains observable through settlement
   of the current tick and is removed before the next unit sweep.
 - Stable iteration is by ascending player and ascending slot; there is no hidden
   map iteration and no generation-tagged handles for simulation identities
@@ -428,7 +484,7 @@ are established:
 | Pool | Capacity/record contract | Allocation and retirement |
 | --- | --- | --- |
 | Unit instances | 280-byte records; capacity is a game value derived from setup multiplied by ten plus one, yielding roughly two thousand to five thousand stock slots rather than the 500 folklore; the pool is sliced per player by sorted player order, each slice holding as many records as there are definition types, with slot zero reserved as null; allocation scans the owning player's slice for the lowest free flag and reuses it immediately, and an alive mask marks a live slot; per-definition limits are enforced by a flag and a value of minus one meaning unlimited, counted by scanning the slice; the canonical allocator is the sole allocation site for every creation path and the reconstructor validates a forced slot against slice bounds and occupancy, with every limit, slice-full, out-of-bounds, or occupied case returning a null handle and consuming no RNG; freeing clears alive masks, heaps, order queues, and attachments but retains the stored slot index; saving uses forced-slot reconstruction and a stale 16-bit packet that validates only slot nonzero and alive, so it aliases a reused occupant silently |
-| Projectiles | Exactly 300 records, 107 bytes each | Allocation appends at the active-span tail. Retirement sets a dead flag without changing the count. Stable compaction normally runs at projectile-phase tail, removes dead records, preserves survivor order, and repairs the affected projectile and follow-camera links. |
+| Projectiles | Exactly 300 records, 107 bytes each | Allocation appends at the active-span tail. Retirement sets a dead flag without changing the count. Stable compaction runs at the projectile-phase tail every sub-tick (reading the current post-append count), and again immediately after the unit-owner projectile purge when a unit dies; it removes dead records, preserves survivor order, and repairs the affected projectile and follow-camera links. The post-loop pass is a different structure (see §6.2). |
 | Feature definitions | Each type has a 128-byte copy; type table records use a 256-byte stride | Preallocated at map/catalog load; type IDs are stable for the loaded catalog. |
 | Live features | A 48-byte live record plus a 13-byte plot cell per map attribute cell | Plot cells point to feature anchors; removal returns the cell to the free sentinel and releases the live record. Map-row order is deterministic. |
 | COB threads | Eight 164-byte thread records per unit | Lowest clear thread-mask bit is selected. Ending/sleeping a thread clears its active bit; the scan is fixed order. |
@@ -458,8 +514,17 @@ later occupant after reuse.
 - Path requests are per-player linked queues. A search drains at most 100 nodes
   per pass; a 150-tick deadline is also recorded. Duplicate goals can overwrite
   an existing request.
-- Timer dispatch uses circular storage and deadline comparison after the tick
-  body; it is not deduplicated by the generic order queue.
+- The post-loop ring is a 30-entry circular window of 72-byte deadline
+  records: after the tick body, while the head entry's deadline (record value
+  plus the current window offset times thirty ticks) has passed, the head
+  advances one slot with wraparound. The ring sits beside the network receive
+  queue and matches the 30-frame future window, so it is most plausibly the
+  receive-frame window (supported inference); it is not a generic timer
+  queue. A separate post-loop pass compacts the missile/interceptor pending
+  list (24-byte-stride records with deadline fields), invoking each expired
+  record's expiry callback and removing it in place — this is the "deferred
+  compaction" of earlier notes, distinct from the projectile-pool compactor
+  of §6.1.
 - Delayed status events use deadlines of `globalTick + 30 + random(300 or
   900)`, with the choice depending on the event family.
 - Audio arbitration uses an eight-slot channel ring, described in document 03.
@@ -516,8 +581,10 @@ return (state >> 16) & 32767
 The state is the four-byte field in the 116-byte TLS block. Startup seeds it
 from local/system time and time-zone conversion, at effectively one-second
 resolution. The stream supplies wind draws and interval jitter plus UI/media
-variants; it is not the simulation Park–Miller stream. The wind tick consumes
-both streams for different outputs, making the separation observable.
+variants, and is also consumed by the camera-shake driver inside the tick
+(two draws per shake step while a shake is active); it is not the simulation
+Park–Miller stream. The wind tick consumes both streams for different
+outputs, making the separation observable.
 
 Sampling bounds above 32,767 use a chunk-concatenation loop before the final
 modulo: starting with mask and result both `0x7FFF`, while the mask is below
@@ -535,17 +602,26 @@ spans both streams and is fully recovered:
   CRT stream draws the initial wind speed `rand() % (maxWind − minWind + 1) +
   minWind` from the mission's parsed minimum/maximum bounds, then the initial
   direction `rand() & 0x3F`.
-- In simulation, a wind change falls due when the global tick passes the wind
-  deadline; the next deadline advances by `((CRT draw * 10) / 0x8000 + 5) *
-  30` ticks — five through fourteen seconds quantized to 30-tick units, using
-  64-bit multiply/divide.
+- In simulation, the wind change falls due when the global tick passes the
+  wind deadline; the next deadline advances by `((CRT draw * 10) / 0x8000 +
+  5) * 30` ticks — five through fourteen seconds quantized to 30-tick units,
+  using 64-bit multiply/divide.
 - When due, the new speed is a bounded simulation-stream draw
   `simRand(maxWind − minWind) + minWind`. The new heading is a simulation draw
   of `simRand(0x10000)` truncated to 16 bits, taken only when the speed is
-  nonzero; direction vectors derive from it through fixed-point trig helpers.
-- The published float ratio is `(float)speed / (float)denominator`, stored as
-  a 32-bit float and clamped from above at exactly 1.0 (overflow stores the
-  float bit pattern for 1.0).
+  nonzero; the direction vector pair is computed as **−2 × the fixed-point
+  trig** of the heading (the −2 factor was omitted from earlier revisions).
+- The published float ratio is `(float)speed / (float)5000` — the denominator
+  is a fixed constant written once at battle entry — stored as a 32-bit float
+  and clamped from above at exactly 1.0 (overflow stores the float bit
+  pattern for 1.0).
+- A second deadline gates the wind-field update: CRT draws produce a moving
+  map point (per-axis draws scaled by the map cell dimensions, plus per-axis
+  jitter) and a gust component (magnitude and angle draws), and the field is
+  embodied as an invisible projectile reserved from the shared projectile
+  pool at the append tail — when the pool is full the reservation fails
+  silently (no retry, no event) and the network variant broadcasts the field
+  data as a packet.
 
 Random sound variants use the CRT path. There is no recovered per-player or
 per-weapon RNG state, explicit peer RNG synchronization, or complete saved RNG
@@ -602,6 +678,14 @@ masking exceptions. Trigonometric helpers may temporarily set a canonical
 precision/mask pattern and restore it. No stable simulation policy was found
 that globally changes precision per phase.
 
+A recurring confusion must be resolved explicitly: the scaled-clock factor
+(30) is a plain integer field of the display context, written once by the
+timebase installer and read by the scaled clock and by the window procedure's
+input timestamps. The value 0x27F is the default x87 control word asserted by
+the C-runtime floating-point helpers (they check-and-restore it before FP
+operations). The two values are not the same field; earlier corpus notes read
+both into one display-context field, which is wrong.
+
 ## 9. Diagnostics, anti-tamper, and error paths
 
 Startup can load `DebugHelper.dll` when the debug-helper switch is present,
@@ -627,9 +711,13 @@ chat command (handler inferred).
 
 An internal code-checksum routine returns zero unconditionally in retail,
 leaving its guarded code-segment-checksum-error diagnostic branch dead;
-self-checks run only when switching front-end states, never per tick. An
-orchestrator referencing numbered `.zrb` scenario files remains untraced,
-including its guard relationship to the checksum path.
+self-checks run only when switching front-end states, never per tick. The
+front-end/game-mode state machine (the "orchestrator" of earlier notes) is
+recovered: it switches between game modes over a router state byte with
+sub-states, runs the checksum self-check between every state transition, and
+loads the numbered `1.zrb`..`5.zrb` list files from the `Data` directory at
+specific states; what the list machinery does with the loaded bytes (mission
+list parsing) remains in unrecovered code.
 
 Profiling stores per-phase `GetTickCount` deltas, frame-rate counters, and a
 rolling sample history. Those counters are diagnostics and must not feed the
@@ -652,7 +740,8 @@ subsystem-specific.
 - 30-Hz scaled `GetTickCount` budget, carry, truncation, zero-to-five cap, and
   50-ms barrier waits that are not the tick driver; the ≥99 ms pump gate drives
   exactly one media-keepalive call while the budget itself is evaluated every
-  busy pump iteration.
+  busy pump iteration, and the networked zero-budget path sends a separate
+  one-byte control keepalive every 60 scaled units.
 - Single-player pause stalls the budget anchor (one capped burst on unpause);
   multiplayer pause discards the integer budget while keeping the fractional
   remainder (no burst). Movie capture and the screenshot hotkey reset the
@@ -666,7 +755,9 @@ subsystem-specific.
 - One global Park–Miller stream, one CRT TLS stream, x87 53-bit default, and
   truncating `__ftol` conversion; wind draws span both streams with the exact
   arithmetic recovered (briefing-entry speed/direction draws, interval jitter,
-  bounded position draw, 16-bit heading draw, ratio clamped at exactly 1.0).
+  bounded position draw, 16-bit heading draw, −2 vector factor, ratio over the
+  fixed denominator 5000 clamped at exactly 1.0, and the wind-field projectile
+  spawn at the phase-9 gate).
 - Registry/profile/legacy multimedia compatibility surface, loose-file-first
   lookup, and ordered archive-provider behavior with exact window styles
   (`WS_EX_APPWINDOW`, `WS_POPUP|WS_VISIBLE|WS_SYSMENU`, `CS_DBLCLKS`) and popup
@@ -692,6 +783,28 @@ subsystem-specific.
 
 - Some older notes called the sequence phase LOS and the ten-vtable pass a
   renderer; current corrected notes retract both labels.
+- Phase 10 was previously labelled "ledger and death cleanup"; it is the
+  camera/scroll position update with camera shake (a CRT consumer). The dying
+  latch and finalization belong to phase 2's slot-end death handling.
+- Phase 11 was previously kept as a `TODO(T23)` no-op registration point; it
+  is a real per-object update sweep over ten vtable-backed object lists
+  (removal and destruction on zero return). Only the object family remains
+  unidentified.
+- The AI coordinator dispatch before the settlement deadline (phase 5) was a
+  supported inference from a shared entry; it is now direct: the per-player
+  coordinator tick runs every tick for every eligible player ahead of the
+  deadline compare, with a 30-tick internal cadence.
+- Projectile-pool compaction runs at the projectile-phase tail (and on the
+  unit-owner projectile purge), not in the post-loop tail; the post-loop
+  compactor is the missile/interceptor pending list, and the post-loop "timer
+  dispatch" is a 30-entry deadline-ring slide beside the network receive
+  queue (owner inferred).
+- The keyboard speed range is the full 1..20, not 2..19.
+- The multiplayer sharing block runs at the tail of every sub-tick (inside
+  the loop), not after it.
+- The display-context field at the scaled-clock factor offset holds 30; the
+  0x27F control word belongs to the C-runtime FP helpers and is a different
+  site.
 - The scheduler anchor, raw delta, and float carry were previously interchanged;
   the current wall-clock note is authoritative for their roles.
 - Earlier revisions described the window as overlapped-style and left style bits
@@ -701,7 +814,8 @@ subsystem-specific.
   implementation is conditional and disabled in the normal path.
 - Earlier revisions listed scheduler persistence as unknown; the 28-byte
   `Players/GameTime` block is now established as saved, while RNG persistence
-  remains absent and replay/timer-queue coverage remains separate.
+  remains absent and replay coverage remains separate (the post-loop deadline
+  ring is the network frame window, not a timer queue).
 - Earlier revisions described periodic peer hash packets as abort-on-mismatch
   checks; receivers provably copy pushed state without any comparison, and the
   internal code-checksum stub makes its error branch unreachable in retail.
@@ -709,7 +823,8 @@ subsystem-specific.
   open is also closed by the asymmetry described in section 4.3.
 - Function-boundary recovery is incomplete, so absence claims are bounded by
   the current import/decompile census rather than proof over every byte.
-- Timer-queue, network, and replay save coverage remains incomplete.
+- Network and replay save coverage remains incomplete (no timer queue exists
+  on the tick path; the post-loop deadline ring is not serialized).
 
 ## Missing and unknown
 
@@ -723,67 +838,96 @@ invented behavior.
 - Exact meanings of any remaining window style/ex-style bits outside the
   established `0x90080000`/`0x00040000`/`CS_DBLCLKS` values and client-area
   adjustment.
-- Detailed handling within the dispatched WndProc cases (e.g., per-message
-  parameter semantics) beyond the case list above.
+- Per-message parameter semantics beyond the case list above are closed by the
+  dispatch-table note: activation flag byte, close-hook call, key translation
+  helpers, input-event timestamp arithmetic, device-change/custom-message
+  handler indirection, and palette-realize branches are all traced; no
+  `WM_TIMER`/`SetTimer` usage exists in the window procedure.
 - Singleton semaphore release and full shutdown ordering after exceptional
   failures (second-instance path returns `-1` with no handoff or activation).
-- Watchdog/conditional helper thread purpose beyond its `GetMessage` diagnostic
-  loop, and its termination signal/priority if ever enabled; normal path
-  creates no thread and that thread is not proven to mutate game state.
+- Watchdog/conditional helper thread purpose is closed: a debug-helper dialog
+  message loop with a transient priority boost, no simulation-global access;
+  normal startup creates no thread. Termination signal is the `WM_QUIT` of its
+  own message loop.
 - Every `CreateThread`, TLS destructor, thread priority, and critical-section
-  callsite not covered by the current notes.
+  callsite not covered by the current notes — the bounded census (3 thread
+  creation sites, 1 TLS allocation, 8 critical-section initializations,
+  12 enter/leave pairs) is in the thread note; the destructor and
+  `DeleteCriticalSection` sites remain outside the recovered window.
 - Owners and lifetime of `VirtualProtect`, `VirtualQuery`, file mappings,
   device-control, console-handler, environment, locale, and module-loader
-  calls.
+  calls — the bounded site census is in the platform note (each facility has
+  exactly one recovered wrapper site plus its consumers).
 
 ### Clock, network, and determinism
 
-- Complete pause/speed packet framing and host-permission rules.
+- Complete pause/speed packet framing and host-permission rules: the receive
+  side is established (sub-type byte selects pause-bit update or speed apply
+  without rebroadcast) and the speed send is the common setter's broadcast;
+  the pause send's byte layout remains a network-framing residual.
 - Network future-frame overflow policy, retransmission wrap, and all late-join/
   resynchronization behavior.
 - RNG state persistence (established as not saved; reseeded on load) versus
-  scheduler block persistence (established as saved above); timer queues,
-  network state, and replay formats remain separate unknowns.
-- Exact ordering of the ten-vtable barrier consumers is narrowed: the per-frame
-  tail runs three barrier no-ops, then a circular timer dispatch, then the
-  deferred compaction pass; the phase-order tail barriers themselves are
-  confirmed, and only hidden work inside the no-op barriers remains open.
+  scheduler block persistence (established as saved above); network state and
+  replay formats remain separate unknowns; the per-tick deadline ring of the
+  post-loop tail is not serialized (its account would appear in the save
+  writer's fixed account list, which contains none).
+- Phase 11's ten object lists are narrowed: the pass runs a per-object update
+  virtual with removal-and-destruction on zero return over a table allocated
+  at battle entry; only the object family's identity (no recovered writer
+  registers items) and the three empty post-loop barriers' hidden work remain
+  open.
 - Complete list of authoritative `__ftol` callers and any non-default x87
-  control-word mutation reachable from simulation.
+  control-word mutation reachable from simulation; the scaled-clock factor
+  field is resolved as 30 (not a control word).
 
 ### Memory and queues
 
-- The allocator’s backing implementation, arena boundaries, zero-fill policy,
-  and behavior under allocation failure.
-- The universal unit-pool maximum and generation/stale-handle policy beyond the
-  immediate slot-reuse observations.
+- The allocator’s backing implementation is narrowed: `HeapCreate`/`HeapAlloc`
+  wrappers over the process heap with tagged blocks; fixed pools are
+  zero-filled by their initializers, transient allocations are not; wrappers
+  return 0 on failure and callers either propagate the null or show a
+  message box and quit. Arena boundaries beyond the pool initializers remain
+  open.
+- The universal unit-pool maximum is closed: physical cap = catalog unit-
+  definition count × 10 + 1 with per-player slices, slot 0 null, lowest-free
+  immediate reuse, no generation counter (bounded-negative over the
+  decompiled corpus); stale handles alias later occupants.
 - Failure side effects of specialized projectile allocators beyond the meteor
   spawner, whose placement is closed (it appends to the shared projectile pool
   from a scheduler phase after wind jitter and silently drops when the pool is
-  full, with the hit timer already advanced so the slot is not retried).
+  full, with the hit timer already advanced so the slot is not retried). The
+  wind-field projectile shares this append-and-silently-drop contract.
 - Effect-strip layouts are largely typed — ten fixed strips drawn in barrier
   order, fed by one shared segment pool capped at 400 entries with oldest-first
   FIFO eviction and a per-tick compaction pass; what remains open is per-strip
   ownership registration for effects outside the nanolathe/beam/smoke families,
-  plus timer, mission-object, path-debt, and audio-node layouts.
+  plus mission-object, path-debt, and audio-node layouts (the "timer" layout of
+  earlier revisions is resolved as the network deadline ring).
 - Queue overflow, linked-list cycle defense, and whether all same-tick inserts
   are drained immediately or deferred by queue family.
 - Save serialization is narrowed but not complete: order/task nodes serialize
-  across both queue segments including their duration credit and wake state;
+  across both queue segments including their duration credit and wake state
+  (their save/load pair is traced); feature saves are a plotmap census into
+  three typed record families with counts — no free-list serialization exists;
   stockpile production state (slot byte, queue rounds, progress) survives;
   meteor shower globals persist in their own save block; player economy stock,
   counters, and capacities are raw single-precision bits live and therefore
-  serialize bit-exact. Still open: feature free lists, delayed status records,
-  and any remaining box-level field maps.
+  serialize bit-exact. Still open: remaining box-level field maps.
 
 ### Configuration and I/O
 
-- Registry versus INI versus command-line precedence and fallback roots. The
-  registry side is fully enumerated in document 02; the INI and command-line
-  sides are not. Language precedence is command line, then registry, then
-  English fallback.
+- Registry versus INI versus command-line precedence is narrowed: INI reads
+  are confined to diagnostics helpers (none on the startup/front-end/battle
+  config path); registry values load at front-end entry with
+  default-and-write-back; command-line switches are parsed in WinMain before
+  display init. Precedence for overlapping scalars: defaults, then registry,
+  then command line; the two scalar command-line slots are not individually
+  mapped against their registry twins.
 - Archive enumeration order within one wildcard group (host `FindFirstFileA`
-  order, not sorted) and CD-drive selection when several drives are present.
+  order, not sorted) and CD-drive behavior: every `DRIVE_CDROM` drive is
+  scanned in drive-letter order and contributes its archives to the mount
+  table in that order; there is no pick-one CD selection.
   Same-archive duplicate-name resolution and backslash-only slash/traversal
   rules are established in document 02 and §3.2.
 - Exact save header/version compatibility and all replay chunk semantics; the
@@ -797,10 +941,19 @@ invented behavior.
 
 ### Error and diagnostics
 
-- Which failures merely select a fallback and which terminate the process.
-- Exception-filter reporting and minidump/debug-helper protocol.
-- How the integrity-breach UI maps to disconnect state; internals of the zrb
-  orchestrator and its guard relationship to the front-end-switch checksum
-  path. Anti-tamper coverage is otherwise closed: the code-checksum stub
-  returns zero (dead branch) and self-checks run only on front-end state
-  switches, never per tick.
+- Which failures merely select a fallback and which terminate the process:
+  singleton failure exits `-1` silently; display init failure shows
+  "Environment Initialization Failed!" and cleans up; file-mapping failures
+  carry graded codes 1/2/3; heap failures propagate null or message-box-and-
+  quit; input-queue full is a silent drop.
+- Exception-filter reporting and minidump/debug-helper protocol: the filter is
+  installed once at startup unless masked; the debug-helper DLL and imagehlp
+  minidump machinery engage only with the enable switches.
+- How the integrity-breach UI maps to disconnect state (the breach packet is
+  type `0x27`; posts the translated chat notice repeatedly, then kick and
+  disconnect cleanup); the front-end state machine's `.zrb` list files are
+  loaded at specific states and the checksum self-check runs between every
+  state transition, but the list-file parse itself is in unrecovered code.
+  Anti-tamper coverage is otherwise closed: the code-checksum stub returns
+  zero (dead branch) and self-checks run only on front-end state switches,
+  never per tick.

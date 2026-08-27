@@ -79,7 +79,25 @@ Held state is queried by `GetAsyncKeyState` with the low toggle bit removed:
 `VK_DOWN` → `0xF7`, `VK_INSERT` → `0xEE`, `VK_DELETE` → `0xEF`; F-keys and
 Ctrl composition are table-driven, with `VK_PAUSE` closing physical pause
 provenance (pause token `0xF8` toggles the local pause bit and emits packet
-`0x19`). OEM ranges `0xBA..0xC0` and `0xDB..0xDE` remain unknown table aliases.
+`0x19`).
+
+**The OEM aliases and the dispatch table are closed.** The translator first
+queries Ctrl (toggle bit masked off) and dispatches through a byte table
+indexed by `virtual-key − 0x13` whose values select Pause; PgUp/PgDn/End/Home/
+Left/Up/Right/Down; Insert; Delete; F1..F12; or the default path. In ordinary
+mode without Ctrl the default path returns zero for every key outside the
+handled sets (Space, Enter, Escape, Tab, and friends produce no token through
+this translator). Digits `0x30..0x39` pass through as themselves and with Ctrl
+map to `0xC4..0xCD`; letters `A..Z` map to lowercase `0x61..0x7A` and with Ctrl
+to `0xAA..0xC3`; F1..F12 map to `0xE2..0xED` and with Ctrl to `0xCE..0xD9`. The
+OEM punctuation ranges are written as immediate values in the translator, not
+copied tables: `0xBA..0xC0` map to `;` `=` `,` `-` `.` `/` `` ` `` (tokens
+`0x3B`, `0x3D`, `0x2C`, `0x2D`, `0x2E`, `0x2F`, `0x60`) and `0xDB..0xDE` map to
+`[` `\` `]` `'` (tokens `0x5B`, `0x5C`, `0x5D`, `0x27`). System-key mode
+(`WM_SYSKEYDOWN`) bypasses the ordinary-mode zero gate so the same mappings
+apply with Alt held. Enqueued tokens go through the 30-position ring with the
+reserved-slot refusal (producer and consumer both unchanged when the ring is
+full).
 
 Mouse position is read from the window system. Focus is checked before edge
 scrolling or other world-level pointer behavior. If the game window does not
@@ -105,6 +123,15 @@ in the presentation object with separate base, capacity, producer, and
 consumer fields. The producer computes its next position first; if that
 position equals the consumer index the record is refused and neither index
 changes (reserved-slot wraparound; the oldest entry is never overwritten).
+
+**Motion consumers are closed.** The motion path copies the record wholesale
+into the presentation object's fixed 24-byte current-pointer slot. Each host
+frame the input pass polls the mouse: when the button ring is non-empty it
+pops the next button record, otherwise it copies the motion slot; either way
+the record lands in the game state's canonical pointer record, which the
+pointer update (cursor shape, hover, placement validity), the GUI hit tests,
+and the click/drag dispatch consume. The record's message-number field selects
+the click (down/up/double) handling in the pointer update.
 
 **Clipboard paste is closed.** Paste tokens `0xBF` and `0xEE`, handled inside
 the focused text editor, open the window clipboard and request exactly one
@@ -141,12 +168,19 @@ serialization.
 ### Unknown
 
 The full Win32/internal key-to-token table beyond the proven held-key and
-special-key submaps, all OEM punctuation aliases, user-remappable controls,
-keyboard repeat policy, text-input code page, IME behavior, and the internal
-consumers of mouse motion records are not established. The mouse button record
-model (including double-click fields and queue refusal), middle-button/wheel
-default processing, drag/double-click capture into timestamped records, and
-the `CF_TEXT`-only clipboard contract are established above.
+special-key submaps, all OEM aliases, unsupported-device census, and every
+battle/front-end consumer are not established. The translator dispatch table,
+the OEM punctuation aliases, the Ctrl composition ranges, and the ordinary-mode
+zero gate are established above. The remaining unknown is consumer coverage:
+which of the battle/front-end input paths handle which tokens beyond the hotkey
+dispatcher's cases. Text-input code page, IME behavior, and keyboard repeat
+policy are not established; the mouse motion-record consumers are closed (the
+motion record lands in the presentation object's current-pointer slot, polled
+by the frame input pass into the canonical pointer record — §2, mouse records). The
+mouse button record model (including double-click fields and queue refusal),
+middle-button/wheel default processing, drag/double-click capture into
+timestamped records, and the `CF_TEXT`-only clipboard contract are established
+above.
 
 ## 3. Modal windows, focus, and event ownership
 
@@ -201,12 +235,17 @@ tests and prevents a click intended for a dialog from selecting a world unit.
 
 ### Unknown
 
-The user-facing naming of every GUI mode/flag bit (including the
-extra-redraw flag `0x800`), the complete per-dialog Escape/Enter/
-focus-restoration matrix, default-control rules for every panel, event
-bubbling between parent and child panels, whether keyboard focus can be
+The user-facing naming of every GUI mode/flag bit, the complete per-dialog
+Escape/Enter/focus-restoration matrix, default-control rules for every panel,
+event bubbling between parent and child panels, whether keyboard focus can be
 shared by a list and textbox, and complete overlap/capture/association
-redirection precedence remain unknown. Top-object close, predecessor
+redirection precedence remain unknown. Two of the flag meanings are
+mechanically named: `0x800` requests one extra redraw pass when the window
+closes, and `0x1000` centers a modal window in the playfield right of the
+128-pixel rail (§11). The per-dialog Escape/Enter/focus defaults are authored
+data — each GUI file declares its own `escdefault`, `crdefault`, and
+`defaultfocus` controls — so there is no hard-coded matrix to inventory; a
+reimplementation must honor the authored fields. Top-object close, predecessor
 reactivation, token suppression range, and hit-test bounds are established
 above.
 
@@ -451,11 +490,12 @@ wizard:
 | Main | `mainmenu.gui` | `frontendx.pcx`, `mainmenu.gaf`, `commongui.gaf` | `SINGLE` opens `single.gui`; `EXIT` enters the frontend close state |
 | Single-player chooser | `single.gui` | `singlebg.pcx`, `single.gaf`, `commongui.gaf` | `NewCamp` opens `newgame.gui`; `Skirmish` opens `skirmish.gui` directly |
 | Campaign/mission | `newgame.gui` | `newcampaign4.pcx` or `newcampaign4x.pcx`, `newgame.gaf` | Campaign and mission list gadgets are populated from discovered `camps` data; `Side0/Side1`, `Difficulty`, `Start`, and `PrevMenu` retain their authored callbacks |
-| Map selection | `selmap.gui` | `dselectmap2.pcx`, `commongui.gaf`, plus the TNT minimap surface | The map-selection callback opens the window through the window-open routine with flags `0x880`, then hands `DSELECTMAP2` to the bitmap cache, which installs it on the open window through the bitmap-install path. The authored `494×420` record at origin `(84,12)` is a panel window composed over the screen it was reached from; `MAPNAMES`, `SLIDER`, `MAPPIC`, `DESCRIPTION`, `SIZE`, `LOAD`, and `PREVMENU` remain window-local records placed at that origin |
+| Map selection | `selmap.gui` | `dselectmap2.pcx`, `commongui.gaf`, plus the TNT minimap surface | The map-selection callback opens the window through the window-open routine with flags `0x980`, then hands `DSELECTMAP2` to the bitmap cache, which installs it on the open window through the bitmap-install path. The authored `494×420` record at origin `(84,12)` is a panel window composed over the screen it was reached from; `MAPNAMES`, `SLIDER`, `MAPPIC`, `DESCRIPTION`, `SIZE`, `LOAD`, and `PREVMENU` remain window-local records placed at that origin |
 | Skirmish setup | `skirmish.gui` | `skirmsetup4x.pcx`, `skirmish.gaf`, `commongui.gaf`, `textures/logos.gaf` | `Player%d`, `Side%d`, `Color%d`, `Allies%d`, `Metal%d`, and `Energy%d` are appended by the runtime builder; their row geometry is `step=200/n`, `y=(180-(n-1)*step)/2+79` |
 
 `selectgame2x.pcx` is not part of this path: the multiplayer `SELGAME.GUI`
-lobby path loads it, and that lobby is out of scope for the single-player
+lobby path loads it (verified: the selmap callback fetches `DSELECTMAP2` from
+the bitmap cache, and the SELGAME opener fetches `selectgame2x`), and that lobby is out of scope for the single-player
 slice. `dselectmap2.pcx` is a `640×480` file whose panel art occupies only the
 top-left `494×420`, which is exactly the `selmap.gui` window rectangle: the
 window fill copies the bitmap into the window's own surface at `(0,0)`, so the
@@ -476,7 +516,9 @@ then calls the alliance-icon refresher, which rewrites the frame index of
 frame index. For each row the refresher counts the configured rows, meaning
 controller not `Open`, whose alliance number equals that row's, then selects the `TEAMICONSx`
 frame: a count of zero gives frame `10`, exactly one gives `group*2 + 1`, and
-two or more give `group*2`. The entry's twelve frames are six symbols in that
+two or more give `group*2` (re-verified: the refresher counts the matching
+configured rows and writes the frame index into the row's surface field with
+exactly that three-way branch). The entry's twelve frames are six symbols in that
 order, the odd frame of each pair split in half and the even frame whole, so a
 row alone in its alliance shows the broken symbol and a row sharing it shows
 the joined one. Alliance `5`, the unassigned sentinel of
@@ -511,12 +553,19 @@ writes, while GAF image and GAF-font bytes are copied directly.
 Frontend initialization installs `anims/hattfont12.gaf` as GAF-font slot 0 and
 `anims/hattfont11.gaf` as slot 1. The GUI text routine prefers slot 0; only a
 null GAF-font slot falls back to the active FNT. At GAF-font load, the
-font-loader routine finds the capital-I frame and subtracts its height from
-every frame's runtime `YOffset`. The glyph blitter then places a frame at
+font-loader routine finds the capital-I frame — the hattfont frames are
+indexed by character, so this is the frame at the ASCII position of `I` — and
+subtracts its height from
+every frame's runtime `YOffset` (re-verified: the loader reads the `I` frame's
+height and subtracts it from every frame's stored YOffset in one pass). The
+glyph blitter then places a frame at
 `penX-XOffset, penY-normalizedYOffset`; the text loop passes the pen directly
 and does not pre-add either offset. Consequently, stock `hattfont12` glyphs
 whose raw `YOffset` is 11 rasterize one pixel below their pen because the
-capital-I height is 12. The startup context also selects `fonts/COMIX.FNT`
+capital-I height is 12. TODO(question): the exact text-pen arithmetic
+`y + trunc((height - 1 - fontHeight) / 2) + (stages != 0)` with the capital-I
+height plus two as the metric is not re-verified; the pen site that applies it
+was not located in this pass. The startup context also selects `fonts/COMIX.FNT`
 (the active slot of the font registry, chosen by the font-selection routine)
 for the fallback path; `SMLFONT.FNT` is a separate preloaded font slot. [07 §4]
 
@@ -670,11 +719,16 @@ language-prefixed accessor replaces a stem only when it returns something
 different. No map file is opened to build the list — only the selected map is
 read, by the map-OTA reader — and the packed list is sorted before it is
 installed: the map-selection callback passes it through the `SORTED LIST1`
-sort routine, a bubble sort whose comparison is the ASCII-only `_stricmp`, so
+sort routine, a bubble sort whose comparison is the ASCII-only case-insensitive
+string compare (the same comparator the order-descriptor sort and lookup use,
+and proven case-insensitive because the order-kind switch names such as
+`VTOL_MOVE` match descriptor records named `VTOL_Move`), so
 the list is ascending and case-insensitive rather than archive order. The
 map-description filler fills the two text controls from the selected map's
 OTA: `DESCRIPTION` receives
-`missiondescription` verbatim — the authored string already carries its own
+`missiondescription` verbatim (read by the map-OTA reader into a bounded buffer
+with a `No description available` fallback) — the authored string already
+carries its own
 `16 X 17 ` size prefix — and `SIZE` is formatted `"%s  %s: %s"` from `memory`,
 the localized `Players` label, and `numplayers`, giving `16 mb  Players: 2, 4, 8`.
 The wrapping decision compares the label's inclusive height against twice the
@@ -752,7 +806,12 @@ same place — a redundant repaint with no visible effect.
 
 The load thread itself is the battle entry: it seeds the
 performance-counter RNG, resolves the mission or skirmish schema, places
-commanders, and finishes by opening `MAIN2.GUI`, the in-game HUD.
+commanders, and finishes by opening `MAIN2.GUI`, the in-game HUD — the
+`<side>main2.gui` window whose name is stored as the battle root's command-
+window name (see §6). The transition that starts the thread also fixes the
+battle viewport rectangle to `(0, 32, W-1, H-33)` and initializes the
+player-slot ready table; the map line, the mission-type-1 gate, the row colors,
+and the thread entry are all verified above.
 
 #### Multiplayer
 
@@ -811,7 +870,15 @@ by masking its command-table entries against that route word. If the first
 non-space byte of the committed text is `+`, the remainder enters the command
 path instead of chat display, routed with bits `1`, or `7` when the chat-
 alias flag byte has bit `1` set, additionally OR'd with `2` when a referenced
-dword is nonzero. The `+` command vocabulary itself is not inventoried.
+dword is nonzero. The `+` command vocabulary is closed: the message-builder's
+dispatch table registers exactly three commands — `plan`, `weight`, and
+`limit` — each with route mask 8 that no chat route (1/7/2) matches, and the
+default-handler slot is never installed, so the dispatch never consumes a chat
+`+` message. The chat commit callback itself handles the mini-language inline:
+`+<digit>` (occupied slot) sets the per-player custom-recipient byte for that
+digit, `+a`/`+e` (case-insensitive) set the recipient-mode byte to allies or
+enemies with the matching label, and any other `+...` sends the whole text as
+plain chat.
 
 Activating the `TALK` control commits: the callback closes the dialog
 (clearing chat-active bit `0x04` when the gadget association is generic),
@@ -903,12 +970,22 @@ that directly stamps decoded pixels must either stamp them at the final origin
 or reproduce both halves of this contract; applying only the call-site
 addition is not retail behavior. This is distinct from ordinary `.GUI` gadget
 art: a gadget frame is copied at the translated authored gadget rectangle and
-its GAF offsets are not added. The command-panel
-GUI window `guis/<prefix>main.gui` is the underlying battle/root window, not
-the empty-selection command page. When the selected-unit count becomes zero,
-the command-window switch formats and opens `guis/<prefix>gen.gui`. A
-non-builder selection uses that same general page; a selected builder uses its
-authored `guis/<unit>1.gui` page. Named page art is resolved from
+its GAF offsets are not added. **Command-window switch is closed.** The underlying battle/root window is
+`guis/<prefix>main2.gui` — the only "main" GUI name the executable ever
+composes (`%sMAIN2.GUI`, opened by the battle entry and stored as the root's
+command-window name) — not `main.gui`; the asset `<prefix>main.gui` (OPTIONS/
+SHARE/ALLIES) is never opened by any image path, and `blank.gui` is an
+authoring template with no opener. When the selected-unit count becomes zero,
+the command-window switch closes the command windows down to the root and opens
+nothing; the root `MAIN2.GUI` shows through. A multiple selection or a single
+non-builder selection formats and opens `guis/<prefix>gen.gui` (the general
+command page); a single builder on page 0 whose definition has no authored page
+falls to that same general page, and otherwise opens its authored
+`guis/<unit>N.gui` when the definition's authored-page bit is set (the page-
+existence probe that sets it checks the file), with the generated page assembly
+patching the builder's products into gadget slots `buttonByte + 4 .. 9` — six
+product slots, chosen by the authored button byte — when the authored page is
+absent or stale. Named page art is resolved from
 that page's `<unit>1.gaf`, then the side/main support GAFs, then the common
 `BUTTONS0` stock-size groups. A left-button hold inside a gadget selects its
 armed frame; pointer hover alone does not tint or change an ordinary button.
@@ -928,12 +1005,21 @@ not synthesize a GUI-colored frame or a second palette layer.
 resource display and metal is the second. Current and capacity values use
 integer text, and the authored `ENERGY0`/`METAL0` anchors receive a literal
 `0`. Energy production and consumption use integer text, switching to a
-truncated integer `K` suffix outside the inclusive `-99999..99999` range;
-metal production and consumption use one fractional digit. Consumption is
-shown with a negative sign. Normal text uses logical palette entry 15,
-production entry 10, and consumption entry 12. Production/consumption values
-are latched every 30 simulation ticks; the current-over-capacity bars remain a
-live presentation of committed stock.
+truncated integer `K` suffix (`value/1000`) outside the inclusive
+`-99999..99999` range — the production form when the value exceeds `99999` and
+the consumption form when it falls below `-99999`; in the normal range the
+consumption magnitude is shown with its sign stripped. Metal production and
+consumption use one fractional digit (`%.1f`; consumption is absolute-valued).
+Normal text uses the color-map entry 15,
+production entry 10, and consumption entry 12, resolved through the
+logical-to-physical map. Production/consumption values are latched every 30
+simulation ticks — the master composer holds a per-resource-record next-due
+tick and re-samples the four rate values only when it is due, advancing the
+due tick by 30 — while the current-over-capacity bars and the current numbers
+remain a live presentation of committed stock, drawn every frame. An earlier
+corpus reading that tied the step-30 pair to the scrollback ring concerned
+different state (the chat/status ring indices) and does not contradict the
+composer's own 30-tick sample latch.
 
 **Unit health color thresholds are closed.** The retail health primitive uses
 the active logical-to-physical table entries `dcb[10]`, `dcb[12]`, and
@@ -955,8 +1041,15 @@ passes: terrain tiles → features/wrecks → soft units → hard units → shad
 numbers (medium confidence on the projectile/explosion order — a swap would
 still match the observed call count). The squad-number pass draws `'0' +
 squadId` digits when a squad-overlay bit is set or the squad id is nonzero.
-The minimap viewport rectangle thickness varies between 6 and 4 pixels with
-latch-flag bit `0x40`.
+The minimap viewport indicator is not a thick rectangle: in minimap mode the
+composer draws two one-pixel Bresenham lines crossing at the camera point plus
+the `(128,32)` view origin — a five-pixel horizontal run at the projected row
+and a five-pixel vertical run at the projected column — in color-map entry 15
+[03 §3.12]. The "thickness varies between 6 and 4 pixels with latch-flag bit
+`0x40`" reading of an earlier revision was a mis-transcription: the 6/4 values
+are the drag-selection rectangle's outer color-map entries chosen by that same
+latch bit while the armed latch is MOBILEBUILD (outer entry 6 when the bit is
+set, 4 when clear, else entry 15; inner entry 0), not a viewport thickness.
 
 ### Supported inference
 
@@ -1051,9 +1144,13 @@ viewport or over the minimap; when neither is set the index is forced to
 `cursornormal` and nothing else is consulted. Second, the mobile-build latch
 with a live placement ghost takes the site-validity branch above. Third, the
 selected units of the local player — walked over the owner's inclusive range at
-the fixed 280-byte stride, admitted by the membership bit `0x10` — are each
-asked for a shape, and **the lowest index wins**, so the table's numbering is
-also its shape priority order. Fourth, when that candidate set is empty the
+the fixed 280-byte stride, admitted by the membership bit `0x10` — together
+with the hovered unit are
+each asked for a shape, and **the lowest index wins**, so the table's numbering is
+also its shape priority order (re-verified: the chooser collects the selected
+units plus the hover id, evaluates each through the per-latch shape table, and
+keeps the smallest index with a strict `<` reduction). Fourth, when that
+candidate set is empty the
 idle latch over an own, active, finished, untasked unit gives `cursorselect`
 and everything else gives `cursornormal`.
 
@@ -1114,9 +1211,9 @@ inverse.** One routine per pointer update turns the pointer into a world point.
 It first picks a branch: over the minimap the pointer scales through the radar
 rectangle (§10), otherwise the pointer is clamped into the battle viewport
 rectangle and rebased to map pixels as `camera + clamp(pointer, vpLeft, vpRight)
-− vpLeft` on X and the same on Y against `vpTop`/`vpBottom`. Two bits of the
-placement flag byte record which branch ran and whether the pointer was inside
-the viewport at all.
+− vpLeft` on X and the same on Y against `vpTop`/`vpBottom`. Three bits of the
+placement flag byte record the branch: bit 0 the minimap branch, bit 1 whether
+the pointer was inside the viewport, and bit 2 their OR.
 
 The map-pixel pair then goes through the ground resolver, which returns a 16.16
 world triple `(X, Y, Z)`. That resolver exists because the two halves of the
@@ -1139,15 +1236,20 @@ clicked, by half the terrain height there. The resolver instead searches:
    returns the ninth candidate unrefined.
 4. Probe once more one cell further south to bracket the answer, then interpolate
    `Z += ((clickedRow − projNorth) << 20) / (projSouth − projNorth)` and sample
-   the height at the interpolated row for the returned `Y`. Two guards keep the
-   unrefined candidate instead: a non-increasing projection pair, and a clicked
-   row south of the far bracket.
+   the height at the interpolated row for the returned `Y`. The unrefined
+   candidate is kept only on budget exhaustion or when the clicked row lies
+   south of the far bracket (`clickedRow > projSouth`). A non-increasing
+   projection pair (`projNorth >= projSouth`) is **not** a guard: retail falls
+   through into the division, whose divisor is then zero when the pair is equal
+   — the degenerate bracket.
 
 The division is unguarded in retail, so a degenerate bracket faults; nothing in
 the stock corpus reaches it. The interpolation is linear in the projected rows,
 not in the terrain, so on steep ground the returned point can still project a
 few pixels off the clicked row — that residue is retail's own approximation, not
-an error to correct.
+an error to correct. The probe loop, budget, start offset, clamp bounds, and
+the `max(height, sea level)` water pick were re-verified constant-for-constant
+against the resolver.
 
 The triple is stored for the frame, and its cell index (`>> 20` per axis) is what
 the order dispatcher, the build-site validator, and the hover/status readout all
@@ -1165,8 +1267,14 @@ cell, minimap, or GUI control consumes the action.
 
 ### Unknown
 
-Exact geometric picking hulls, object priority in overlap cases, fog-edge
-behavior, and cursor handle slot 0 identity are not completely recovered. The
+Picking hulls and object priority are closed: the hull is the unit's
+transformed piece-hierarchy bounding box projected as a four-corner quad with
+the half-height shear and a polygon hit test, and the pick walks the
+sensor-built hot-unit lists (units only — features win nowhere in the pick;
+the reclaim-family paths resolve features on demand at the point). The
+visibility gate is the word-grid bit `1 << (localPlayer & 0x1F)` versus the
+per-viewer byte grid selected by a visibility-mode bit. Cursor handle slot 0
+identity (the unused/overflow slot) is the only remaining item. The
 named-entry index table, the hotspot convention, the four-step shape chooser
 with its lowest-index-wins reduction, the per-latch shape table, the
 cursor-to-ground resolver, and the build-site validity/ghost cursor selection
@@ -1174,16 +1282,30 @@ are established above. The world overlays' palette entries are no longer open:
 they are GUI semantic indices resolved through the GUIPAL-to-display map
 [03 §4.3], and §9 lists the ones each overlay uses.
 
-One branch of the idle latch remains unresolved. A global byte, distinct from
-the latch and from the region bits, diverts the idle path to a two-shape
-answer: `cursorred` over a hostile target and `cursorgrn` over a friendly one,
-after the same own-finished-unit test that otherwise gives `cursorselect`. The
-byte's writer has not been located, so the condition that arms this branch is
-unknown and it is not implemented.
+One branch of the idle latch is resolved. The red/green divert exists and is
+gated on the interface-type option (a runtime word the options and settings
+loaders write from the `Interface Type` registry value, clamped to 0/1):
+when the option equals `1`, the idle latch answers `cursorred` over a hostile
+target and `cursorgrn` over a friendly one, after the same own-finished-unit
+test that otherwise gives `cursorselect`, and the can-reclaim/can-attack
+branches also resolve to the green validity shape; when it equals `0` (the
+default), the specific per-latch shapes of the table above apply (including the
+idle ATTACK/RECLAIM rewrite over hostile targets). The earlier claim that the
+diverting condition was "not implemented because its byte's writer was not
+located" is superseded: the writers are the option loaders and the gate is the
+option value itself.
 
 The runtime active-state bit `0x20` and the empty-current-task field that the
 own-unit inspect predicate also tests are established for retail but have no
 counterpart in the current runtime flag word (see `docs/SPEC_CONFLICTS.md`).
+The shared eligibility predicate's exact single-precision compare is **equal to
+`0.0`**, not `1.0`: all eligibility sites compile to an exact compare against
+the constant `0.0`, and the compared field is a per-unit order guard float —
+zeroed at unit creation and at order completion, written with a clamped `0..1`
+ratio while an order is being processed — so eligibility means the unit is not
+mid-order. An earlier reading of the constant as `1.0` (and the corpus note
+that endorsed it) misread the compared value; the machine code and the
+constant's bytes are unambiguous.
 
 ## 9. Selection, control groups, orders, and build pages
 
@@ -1202,7 +1324,9 @@ owning player's inclusive unit range in ascending address order at a fixed
 280-byte unit-record stride, so iteration stays stable regardless of writes
 made during the walk. The shared eligibility predicate tests authoritative
 fields: the active-state bit `0x20` of unit runtime flags; an exact runtime
-single-precision value compared equal to `1.0`; no disqualifying state
+single-precision value compared equal to `0.0` — a per-unit order-guard float
+zeroed at unit creation and at order completion, nonzero while an order is
+being processed; no disqualifying state
 reference (zero); and either no parent-unit reference or a parent whose
 runtime flags carry state bit `0x40000000`. Selection membership is bit
 `0x10` of unit runtime flags. Bulk changes also clear the selected-builder
@@ -1255,7 +1379,13 @@ toggle argument. Recall selects eligible members whose stored group matches
 and clears nonmembers when that argument is clear; a secondary branch keys on
 a matching unit that also carries runtime flag `0x80000000`, where the
 authored `CTRL_F` type-filter bitset — a 256-bit category mask indexed by
-definition id — changes which matching units remain selected.
+definition id — changes which matching units remain selected. The flag has
+readers (the recall filter branch, the unit-info panel, and an AI-side path)
+but **no writer anywhere in the image** — the filter branch is unreachable
+from retail's own code; a save file or external write is the only way to arm
+it. Group recall never centers the camera: a whole-image census of camera
+writes covers only the camera/scroll family, and neither the recall export nor
+the hotkey dispatcher writes the camera.
 
 Order names are mapped into canonical order classes before local execution or
 network transmission. Observed classes include move, attack, blast, defend,
@@ -1293,8 +1423,15 @@ families) or the `specialorders` cue (REPAIR/RECLAIM/CAPTURE families).
 Latch-flag bit `0x40` selects immediate-versus-special helptext, bit `0x20`
 marks placement-valid pending, and bit `0x08` additionally gates placement
 drawing; the dispatcher clears bit `0x08` while the Escape cancel path clears
-bit `0x20`. Latch values `0xB` (TELEPORT) and `0xE` (MOBILEBUILD) are armed
-by other reviewed paths, not by the order-button dispatcher.
+bit `0x20`. The latch writers are now census-complete: the order-button
+dispatcher arms `1..9`, `0xC`, `0xD`; the battle-HUD build-button handler arms
+`0xE` (MOBILEBUILD) when the product's `BMcode` byte is zero, storing the
+product id in the pending-build word and playing `addbuild` — the click arms
+it, not the ghost show; idle resets write `1`. **Latch value `0xB` (TELEPORT)
+has no writer anywhere in the image** — it is a consumer-only switch key
+(order dispatch, shape table), so the "exact arming trigger for the two
+off-button values" question closes as: MOBILEBUILD armed by the build-button
+click, TELEPORT never armed by retail's own code.
 
 Build pages are driven by `CANBUILD`, `BUILDER.GUI`, per-builder GUI files,
 and side/build GAF assets. A builder’s available products are patched into
@@ -1421,15 +1558,19 @@ selects which of five helpers run for it: a build-site marker, a travelling-dash
 chain, a circle at the order point, a queued-order icon, and a per-unit pass that
 draws range rings once (per-bit dispatch in R-P0-11 §3 below).
 The hovered/selected unit is drawn with the full mask and other local units with
-the marker-only subset, and only when some builder context exists. Stock masks
-give MOBILEBUILD marker+dashes+rings, VTOL_MOBILEBUILD marker+dashes, MOVE and
-PATROL dashes+rings, and QMOVE dashes; the attack family uses the icon and circle
-helpers. The per-order-kind mask byte values remain **supported inference**
-[R-P0-11 §3]. An earlier reading of this paragraph — a four-bit mask, a plain
+the marker-only subset, and only when some builder context exists. The
+per-order-kind mask byte values are now closed from the registration tables
+[R-P0-11 §3]:
+MOBILEBUILD marker+dashes+rings (`0x13`), VTOL_MOBILEBUILD marker+dashes
+(`0x03`), MOVE and PATROL dashes+rings (`0x12`), QMOVE/QPATROL dashes (`0x02`),
+and every attack-family kind icon-only (`0x08`) — the circle bit is set by no
+stock record. An earlier reading of this paragraph — a four-bit mask, a plain
 connecting line, a line-only subset for other selected units, and no stock order
 using the circle bit — was superseded: no stock helper draws a plain connecting
-segment (the dash chain is the only connector), the bit-4 helper is a circle, and
-the icon helper (bit 8) was missing from the enumeration.
+segment (the dash chain is the only connector), the bit-4 helper is a circle,
+and the icon helper (bit 8) was missing from the enumeration. A later revision
+that re-added the circle bit to the attack family was itself wrong: the attack
+family is icon-only, and no stock order uses the circle.
 
 **The build-site marker is eight lines with a ten-tick sweep.** For an order
 carrying a nonzero build definition id, the footprint rectangle is projected
@@ -1535,28 +1676,20 @@ bits dispatch:
 | Bit | Helper |
 |---:|---|
 | `1` | Build-site marker — the eight lines of the marker paragraph above. Age is the global tick minus the order's birth tick, clamped `0..10`, driving the `(w·age)/10` and `(h·age)/10` offsets; the color pair is that paragraph's 3/10 vs 1/9, outer/inner. |
-| `2` | Travelling-dash chain between the order's previous position and its anchor (target tracking and the cached-position flag live in the anchor getter). The distance is a float square root truncated toward zero; segments under one world unit draw nothing. The artwork is **not procedural**: sprites come from a GAF sprite chain (a frame table with a ticks-per-frame field), blitted through the ordinary GAF byte-copy blitter, with frame index `(age/tpf) % nFrames` where age is the global tick minus the order's birth tick — the cadence is driven by the order's **creation tick**, not the global phase. The chain's phase offset starts at `((age mod 30) * 3 << 20) * 23 / 240` (compiled as an exact magic-divide multiply-shift sequence) and advances `3 << 20` per sprite until the segment end; the 30-tick wrap of the phase is what makes the dashes march. |
-| `4` | A fifteen-segment circle at the order point. The radius is the truncated product `src * 0.9` where `src` is the target unit definition's radius field for unit targets and a constant 32 otherwise; chords are drawn through the line primitive in a GUI-context color-map color. |
-| `8` | Queued-order icon: an animated cursor-GAF frame at the order point, index `tick/(tpf*2) % nFrames` into a per-icon handle list, the icon index coming from the order descriptor's icon byte. |
-| `16` | Once per unit: labeled range rings — sight/radar/sonar/jammer/build-distance/maneuver/kamikaze radii read straight from the unit definition's fields, weapon ranges from the weapon definition's authored range field — in a GUI-context color-map color; weapon rings alternate between two color-map entries on the low bit of the global tick, and the hover variant pulses with `tick mod 60`. |
+| `2` | Travelling-dash chain between the order's previous position and its anchor (target tracking and the cached-position flag live in the anchor getter). The distance is a float square root truncated toward zero; segments under one world unit draw nothing. The artwork is **not procedural**: sprites come from a GAF sprite chain (a frame table with a ticks-per-frame field), blitted through the ordinary GAF byte-copy blitter, with frame index `(age/tpf) % nFrames` where age is the global tick minus the order's birth tick — the cadence is driven by the order's **creation tick**, not the global phase. The chain's phase offset starts at `((age mod 30) * 3 << 20) / 30` (integer division) and advances `3 << 20` per sprite until the segment end; the 30-tick wrap of the phase is what makes the dashes march. Each sprite's position interpolates the segment linearly with a 16.16 fraction `(phase << 16) / distance`, so sprites sit three cells apart. |
+| `4` | A sixteen-segment circle at the order point. The radius is the truncated product `src * 0.9` where `src` is the target unit definition's radius field for unit targets and a constant 32 otherwise; chords are drawn through the line primitive in color-map entry 12. |
+| `8` | Queued-order icon: an animated cursor-GAF frame at the order point, index `tick/(tpf*2) % nFrames` into the cursor handle array at the descriptor's icon byte, drawn with the half-height shear; in battle the attack icons (1/2) alternate color-map entries 12/4 on the low tick bit and additionally draw the weapon AOE/coverage/attack-length rings. |
+| `16` | Once per unit: labeled range rings — sight/radar/sonar/jammer/build-distance/maneuver/kamikaze radii read straight from the unit definition's fields, weapon ranges from the weapon definition's authored range field — in color-map entries 15/12/14 per branch; the weapon-range pulse grows from 8 to the authored range over `tick mod 60`. |
 
-Descriptor-table facts: the table is runtime-built with base and end pointers
-installed at startup; the records are fixed-stride with stride 25, proven by
-the binary-search divisor in the kind lookup and by every consumer. Each record
-carries the order-kind id, the draw-mask word, the icon byte, the order-flags
-word (copied onto each node the order issues), and a name pointer. The
-always-on selected-unit connecting quad uses a single GUI-context color-map
-color; there is no owned-vs-other color pair in the overlay itself —
-differentiation is by mask width (full `0x1F` vs marker-only `1`), not color.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 Corrections to the overlay paragraph above: the mask is **five bits, not
 four** — the icon helper (bit 8) was missing from that enumeration, and the
 bit-4 helper is a circle, not a plain connecting line; no stock helper draws a
-plain connecting segment, so the dash chain is the only connector. The earlier
-claim that no stock order sets the circle bit is superseded: the attack family
-uses the icon and circle helpers. The per-order-kind mask byte values in the
-runtime-built table are **supported inference** (the registration initializers
-that fill the table were not decoded), now with exact bit identities.
+plain connecting segment, so the dash chain is the only connector. The
+per-order-kind mask byte values in the runtime-built table are now
+**established** from the three static registration tables (the full census is
+in the helper table above), with exact bit identities.
 
 ##### Latch persistence under Shift (R-P0-11 §4)
 
@@ -1589,20 +1722,13 @@ contract, and it is recorded here so the consolidation loses nothing.)
 
 ##### Unknowns carried from R-P0-11
 
-TODO(question): The runtime writer of the overlay color-map bytes (block-copied
-at init, no immediate stores found) is not located. Their values are needed to
-pin the exact palette entries for the dash chains, circles, and sensor rings;
-the marker pair (3/10 vs 1/9) is already established.
-
-TODO(question): The per-order-kind draw-mask byte values in the runtime-built
-descriptor table. The registration initializers that fill the table were not
-decoded; the outline mapping (MOBILEBUILD marker+dashes+rings, MOVE/PATROL
-dashes+rings, QMOVE dashes-only, attack icon/circle) remains **supported
-inference**, now with exact bit identities.
-
-TODO(question): The exact fixed-point scaling of the dash-chain phase unit —
-sprite spacing in world units and the precise sub-spacing travel per tick are
-recovered in outline only.
+The overlay color-map questions are closed: the map itself is the boot-installed
+256-byte logical-to-physical table, and every helper's entry is pinned — marker
+1/9 and 3/10, circle 12, rings 12/14/15, attack-ring alternation 12/4; the
+dash helper reads no map entry (it blits GAF frame bytes directly). The
+per-order-kind draw-mask bytes are established from the registration tables
+(above). The dash-chain phase arithmetic is established (above); the only
+remaining open cell is the text-pen formula of §5.
 
 ### Supported inference
 
@@ -1613,19 +1739,26 @@ orders, and multiplayer packets.
 
 ### Unknown
 
-Repeated group-recall centering behavior and the writer lifetime of selection
-flag `0x80000000`, hull geometry and jammer versus radar-contact picking,
-page rebuild timing versus factory completion,
-and the exact arming trigger for the two off-button latch values remain
-incomplete. MOBILEBUILD's arming trigger is no longer among them: a build gadget
-whose product authors BMcode zero arms it, as the build-placement contract above
-records. The dash cadence, travelling-dash artwork, circle, icon, and ring radii of the
+Repeated group-recall centering (never centers: negative-bounded over the whole
+image), the writer lifetime of selection
+flag `0x80000000` (reader-only, no writer in the image — the `CTRL_F` filter
+branch is unreachable from retail's own code), hull geometry and jammer versus
+radar-contact picking (hull = projected bounding-box quad over the sensor-built
+hot-unit lists; the word-grid gate bit is the local player's index — both
+established in §8),
+page rebuild timing versus factory completion (completion sets the HUD dirty
+when the completing or produced unit is selected),
+and the exact arming trigger for the two off-button latch values (MOBILEBUILD
+armed by the build-button click on a `BMcode`-zero product; TELEPORT has no
+writer) are resolved above. The dash cadence, travelling-dash artwork, circle, icon, and ring radii of the
 queue overlay are established above ([R-P0-11 §3]); the per-order-kind draw-mask
-byte values in the runtime-built descriptor table and the runtime writer of the
-overlay color-map bytes remain open. Factory product clicks and the queue-count
-label are established too ([R-P0-11 §1, §2]). The drag-rectangle toggle truth table, eligibility predicate,
+byte values in the runtime-built descriptor table and the overlay color-map
+entries are established too. Factory product clicks and the queue-count
+label are established as well ([R-P0-11 §1, §2]). The drag-rectangle toggle truth table, eligibility predicate,
 overlap pick order with strict `<` tie-break and inclusive `min <= x <= max`,
-fog word versus byte gate, toggle versus held-Shift styles,
+fog word versus byte gate (word grid bit `1 << (localPlayer & 0x1F)` versus the
+per-viewer byte grid, selected by a visibility-mode bit — exact test in §8),
+toggle versus held-Shift styles,
 group assignment and recall gating, digit routing, pagination bit encoding,
 latch and dispatcher and cursor tables, mixed-selection AND gate, build
 cancellation with tombstone (always tombstoned for BuildWeapon and
@@ -1712,16 +1845,23 @@ Minimap rendering and visibility masks are separate concepts.
 ### Supported inference
 
 Camera and minimap conversion should remain an explicit compatibility
-boundary. The current evidence does not prove that world rendering, picking,
-and minimap input all share one conversion routine.
+boundary. The retail paths do not share one conversion routine: the minimap
+lens does not reuse the main view's cursor-to-world projection [03 §3.11], and
+the ground resolver is a distinct search (§8).
 
 ### Unknown
 
-Exact camera bounds, clamp behavior at map edges, zoom/rotation support,
-terrain-height projection, click-vs-drag thresholds, and radar/visibility
-update cadence remain incomplete. Minimap generation (126-pixel canvas, 2x
-supersample, picture/temp/mapped/final surfaces) is closed above; per-contact
-color rules beyond the dedicated palette entries are not.
+The camera clamp order, the direct-radar conversion, the drag/current-camera
+branch, the click-vs-drag gate, the terrain-height projection, and the
+radar/visibility update cadence are established above (minimap generation:
+126-pixel canvas, 2x supersample, picture/temp/mapped/final surfaces; the lens
+indicator is two one-pixel lines in map entry 15, §6). What remains open is
+the behavior of the camera clamp in unusual domains — maps whose view size
+exceeds the map size on an axis, where the ordered clamp form is the only
+established behavior — and per-contact color rules beyond the dedicated
+palette entries (blip = owning player's palette byte; circles entry 10; jam 12;
+rings 15; dot 14; contacts per tick, MAPPED per dirty, blink every 8 host
+frames; start-position markers remain doc 03's item).
 
 ## 11. Running display, pause, chat, options, and outcomes
 
@@ -1745,11 +1885,18 @@ In-battle options and message-box panels are modal. Load/save, restart, CD
 check, and exit flows all use dialog GUIs and share text, button, list, and
 scrollbar rendering.
 
-**Tab options menu and manual exit.** In a non-network battle, the Tab key
-opens the hard-coded `guis/armopt.gui` window with `anims/armopt.gaf`; this
+**Tab strip and manual exit.** In a non-network battle, the Tab key
+plays `SmallButton` and opens the hard-coded `guis/tabmenu.gui` window — a
+510×33 top strip (authored origin `y=-33`) carrying `OPTIONS`, `SHARE`,
+`ALLIES`, and `CONTROL`; this name is not side-prefixed. A second Tab while it
+is open closes it (the Tab-menu word bit `0x20` toggles). In battle mode the
+opener hides the diplomacy gadgets for non-diplomatic contexts. This supersedes
+the earlier reading that Tab opens `guis/armopt.gui`: the ESC-menu path (token
+`0xE3` while the battle-interface ESC bit is clear) opens the hard-coded
+`guis/armopt.gui` window with `anims/armopt.gaf`; this
 name is not side-prefixed. Opening it sets both the battle modal bit and the
 single-player pause bit, and pauses the runtime audio path. Closing the root
-window clears the modal and pause bits and resumes audio. A second Tab while
+window clears the modal and pause bits and resumes audio. A second ESC while
 the root options window is active therefore closes it and resumes the battle.
 The authored root controls are `LOADGAME`, `SAVEGAME`, `PREFS`, `MISSION`,
 `HELP`, `EXIT`, and `OK` (`Resume`). Network mode takes a separate path and
@@ -1794,7 +1941,7 @@ and causes an `igpaused` title overlay to be drawn. Victory/defeat overlays
 come from the `igtitles` GAF family — handles `igvictory`, `igdefeat`, and
 `igpaused` — gated by mode-word bits: victory on bit 5 of one mode word,
 defeat on bit 6 of it, pause on bit 0 of the pause-mode word. Victory/defeat
-states later transition to end-mission/endgame report screens. Tab's local
+states later transition to end-mission/endgame report screens. The ESC
 options-window pause path is established above; the separate Pause-key path
 remains outside this closure.
 
@@ -1826,7 +1973,8 @@ for chat/pause/speed packets, chat commit-versus-cancel semantics on every
 send route (including terminator inclusion per route), scrollback drain
 ownership in the in-battle HUD (only the heartbeat drain is closed), outcome
 transition timing, and the per-value endgame bar-fill animation mechanism are
-incomplete. The chat open/send contract, the scrollback ring, the overlay
+incomplete. The chat open/send contract, the `+` command mini-language
+(`+<digit>`, `+a`/`+e`), the scrollback ring, the overlay
 gates, and the category-cadence statistics animation are established above.
 
 ## 12. Lobby and session shell
@@ -1896,56 +2044,78 @@ minimum-ping write-back are established above.
 
 ## Missing and unknown
 
-* The complete Win32/internal token table beyond the proven held-key and
-  special-key submaps, all OEM aliases, unsupported-device census, and every
-  battle/front-end consumer.
-* Mouse motion-record consumer internals and downstream ownership of button
-  records beyond queue admission (button down/up/double-click records,
-  reserved-slot refusal, and middle-button/wheel default processing are
-  established).
-* Text-input code page, IME behavior, chat commit-versus-cancel semantics on
-  every send route including terminator inclusion, scrollback drain ownership
-  in the in-battle HUD, and the `+` command vocabulary (CF_TEXT-only
-  clipboard and paste/truncate bounds are established).
-* GUI mode/flag-bit naming (including extra-redraw flag `0x800`), the
-  complete per-dialog Escape/Enter/focus-restoration matrix, event bubbling,
-  and overlap/capture/association redirection precedence (top-object close,
-  predecessor reactivation, token suppression range, and hit-test bounds are
-  established).
+* The full Win32/internal token table and all OEM aliases are established
+  (§2); what remains is the complete battle/front-end consumer census —
+  which input paths handle which tokens beyond the hotkey dispatcher's cases —
+  and the unsupported-device census.
+* Mouse motion-record consumers and downstream button-record ownership are
+  closed: the motion record lands in the presentation object's fixed
+  current-pointer slot, the frame input pass polls it (queue record when the
+  button ring is non-empty, motion slot otherwise) into the canonical pointer
+  record, and the pointer update, GUI hit tests, and click/drag dispatch
+  consume it. Middle-button/wheel default processing and the reserved-slot
+  queue refusal are established.
+* Text-input code page and IME behavior (`TODO(T23)`: presentation-level
+  platform detail, no retail contract observed beyond the ASCII token set),
+  chat commit-versus-cancel semantics on every send route including
+  terminator inclusion, and scrollback drain ownership in the in-battle HUD
+  (CF_TEXT-only clipboard, paste/truncate bounds, the chat `+` vocabulary —
+  `+<digit>` custom recipients, `+a`/`+e` recipient modes, and the
+  mask-8-only dispatch table entries `plan`/`weight`/`limit` that no chat
+  route matches — are established).
+* GUI mode/flag-bit naming: `0x800` (extra redraw on close) and `0x1000`
+  (modal centering) are mechanically named; the complete per-dialog
+  Escape/Enter/focus-restoration matrix is authored data (per-GUI
+  `escdefault`/`crdefault`/`defaultfocus` fields), not a hard-coded matrix;
+  event bubbling and overlap/capture/association redirection precedence remain
+  unknown.
 * Listbox, scrollbar, font, and picture-box behavior beyond the observed
   common paths, and the complete widget callback map. The `.gui` grammar,
   field lengths, control defaults, control-kind parsing, and runtime
-  control-kind dispatch are established.
+  control-kind dispatch are established; the callback targets are
+  data-driven through the authored gadget association ids resolved by each
+  window's handler, and the full per-window association census is open.
 * Exact frontend transition-graph edges (successor/cancel/error per screen
   family), movie/intro/credits handling, load-failure restoration, and abort
   recovery (controller phase/substate mechanism, post-battle phases, planet
   briefing tables, and chat contract are established).
-* Complete HUD side-anchor to draw/hit-test consumer mapping, provider/
+* Complete HUD side-anchor to draw/hit-test consumer mapping (the resource
+  anchors' consumers are established in §6 — text, `0` literals, current
+  values, production/consumption, and bar fills in the composer's side record
+  — the remaining anchors' consumers stay open), provider/
   palette/font/art failure policy, and slide/modal combinations (anchor list,
   tuple order, slide animation, and frame-composition passes are established).
 * Exact battle HUD optional-asset fallback behavior beyond the closed
   `intgaf` panel entries, side fonts, authored GUI page, page GAF, support GAF,
   and common-button resolution above.
-* Full FNT text wrapping, drop-color defaults, code-page behavior, font
+* Full FNT text wrapping, drop-color defaults, code-page behavior
+  (`TODO(T23)`), font
   fallback order, and translation-table missing-key rules (truncate-before-
-  clip and the presentation-context drop-shadow switch are established).
+  clip and the presentation-context drop-shadow switch are established). The
+  GAF-font loader's capital-I YOffset normalization is established; the
+  button text-pen formula is a `TODO(question)` (§5).
 * Complete translation lookup and missing-string fallback behavior.
-* Exact cursor hotspots, remaining command-specific validity rules, and cursor
+* Exact cursor hotspots (established: the GAF frame's authored offsets),
+  remaining command-specific validity rules, and cursor
   handle slot 0 identity (latch-value table, cursor index table, build-site
-  validity cursors, and the queue-overlay marker color pairs 3/10 and 1/9 are
-  established; the overlay color-map bytes' runtime writer and the dash, circle,
-  and ring entries remain open — [R-P0-11 §3]).
-* Picking hull geometry, feature versus unit priority in exact overlap, and
-  fog-edge versus jammer or radar-contact interaction beyond the local-player
-  word versus per-viewer byte gate.
+  validity cursors, and the queue-overlay color pairs 3/10 and 1/9 are
+  established; the overlay color-map entries are closed in [R-P0-11 §3]).
+* Picking hull geometry and fog gates are closed: the hull is the unit's
+  transformed bounding box projected as a four-corner quad with the half-height
+  shear, hit-tested as a polygon; the pick walks the sensor-built hot-unit
+  lists (units only, so units win over features by construction); the
+  visibility gate is the word-grid bit `1 << (localPlayer & 0x1F)` versus the
+  per-viewer byte grid. What remains is the per-viewer byte grid's writer
+  semantics on the visibility side (doc 03's surface).
 * Selection overlap pick order — drag endpoints sorted independently, inclusive
   `min <= x <= max` tested per axis, stable pool sweep with strict `<` distance
   tie-break favoring lower slot [P1-14] — and fog word bit versus byte
   distinction, toggle versus commit modifier styles (`GetAsyncKeyState`-style held
   query for world commit versus drag word bit 2), and mixed-selection gate as
-  AND across the selected set [P1-14] are established; what remains is repeated
-  group-recall centering behavior and the writer lifetime of selection flag
-  `0x80000000`.
+  AND across the selected set [P1-14] are established; repeated group-recall
+  never centers the camera (whole-image bounded-negative), and selection flag
+  `0x80000000` is reader-only — no writer exists in the image, so the `CTRL_F`
+  filter branch is unreachable from retail's own code.
 * Build cancellation and refund — tail-most matching walk with tombstone bit
   that skips `TargetCleared`, with `BuildWeapon` and `SelfDestruct` always
   tombstoned because the tombstone compares against the front anchor regardless
@@ -1955,30 +2125,37 @@ minimum-ping write-back are established above.
   unit-target discrimination (ATTACK picks unit when hit and hostile, otherwise
   ground; BLAST always ground) [P1-14] are established; factory product clicks are a separate counted producer
   (+1/+5/-1/-5 with the no-purge insert hard-set, tail-most cancellation, and
-  the `+%d`/`%d +%d` queue-count label) — [R-P0-11 §1, §2]. What remains is the
-  exact arming trigger for the two off-button latch values (TELEPORT and
-  MOBILEBUILD placement preview versus click) and the producers for interrupt
-  masks 2 and 8.
+  the `+%d`/`%d +%d` queue-count label) — [R-P0-11 §1, §2]. The off-button
+  latch writers are closed: MOBILEBUILD is armed by the build-button click on a
+  `BMcode`-zero product, and TELEPORT has no writer in the image (consumer-only
+  switch key).
 * Order-class semantics for immediate and special commands are established via
   the fixed dispatcher chain STOP into ATTACK, BLAST, DEFEND, REPAIR, PATROL,
   RECLAIM, CAPTURE, UNLOAD, LOAD or PICKUP alias, and default MOVE with gate
   check, and latch values for TELEPORT and MOBILEBUILD as off-button consumers
-  of the same 14-entry table [P1-14]; what remains is the exact writer site
-  that arms those two off-button values (placement preview region) and minor
-  OEM aliases.
+  of the same 14-entry table [P1-14]; the TELEPORT arming site does not exist
+  (bounded-negative whole image) and MOBILEBUILD's is the build-button click;
+  minor OEM aliases are closed (§2).
 * Build-page patching and rebuild timing — page-number bit encoding
   `(page & 7) << 23` cleared by mask `0xFC7FFFFF` with bit 22 paged indicator
-  cleared by `0xFFBFFFFF`, and page-count guard are established [P1-14]; what
-  remains is dirty-scope versus factory completion and indicator animation
-  details.
+  cleared by `0xFFBFFFFF`, and page-count guard are established [P1-14];
+  factory completion marks the HUD dirty when the completing or produced unit
+  is selected; the product-slot count is six (gadget slots 4..9, chosen by the
+  authored button byte).
 * Alternate minimap drag/current-camera branch boundary vectors and mode-bit
-  truth table, unusual-domain camera bounds, terrain-height projection, and
-  all dirty-field semantics (core clamp, edge predicates, direct radar
-  conversion now established).
-* Minimap/radar colors beyond the dedicated contact palette entries and
-  visibility update cadence.
-* Running-display refresh cadence and hover ownership (30-entry fixed-stride
-  scrollback ring and heartbeat drain are established).
+  truth table are established (drag branch: camera plus viewport-clamped mouse
+  minus origin; lens branch: `(mouse − origin)·play/radar`; branch bits 0/1 and
+  the derived bit 2); unusual-domain camera bounds (view exceeding map on an
+  axis) remain open; terrain-height projection and dirty-field semantics are
+  established.
+* Minimap/radar colors are established (blip = owning player's palette byte;
+  circles entry 10; jam 12; rings 15; dot 14; contacts per tick, MAPPED per
+  dirty, blink every 8 host frames); start-position markers remain doc 03's
+  item.
+* Running-display refresh cadence and hover ownership are closed: the pointer
+  update (hover, cursor shape, placement validity) runs once per host frame as
+  the battle frame handler, and the 30-entry fixed-stride scrollback ring and
+  heartbeat drain are established.
 * Multiplayer pause authorization, speed UI synchronization, chat/pause
   packet forwarding authority, and the role separation of shared player-word
   bit `0x20` between READY display and map-control gate (both consumers
@@ -1986,4 +2163,6 @@ minimum-ping write-back are established above.
 * TCP/modem/serial setup semantics, timeout rules, and map-preview behavior.
 * Campaign continuation timing and the endgame per-value bar-fill animation
   mechanism (message-box surface, header strings, per-player stat rows, and
-  the seven-category +10-tick statistics cycle are established).
+  the seven-category +10-tick statistics cycle are established; the per-value
+  easing may ride the type-13 timed/range gadget path — not separately
+  closed).

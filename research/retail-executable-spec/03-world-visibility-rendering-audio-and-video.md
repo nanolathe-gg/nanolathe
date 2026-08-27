@@ -69,14 +69,19 @@ order.
 decompiled corpus (1,326 files, 355,769 lines of disassembly) searched for
 producers that pass the strip index as a literal immediate argument to the
 append invocation, establishing: strips 2, 4, 6, 7, 9 have literal-index producers —
-2 shockwave, 4 crater/decal, 6 beam/muzzle (one literal site plus sites
-computing the low word `0x0006` — supported inference pending full data-flow,
-direct-static for the literal site), 7 lightning/flame, 9 smoke/splash (twelve
-sites) — and strips 0, 1, 3, 5, 8 have no literal-index producer in the bounded
-set (bounded-negative, no established producer). The early producers for
+2 shockwave, 4 crater/decal, 6 beam/muzzle/nanolathe (all seventeen call sites of
+the two strip-6 producer families pass a literal 6 — the earlier reading of
+"sites computing the low word `0x0006`" was a misreading of position-struct stack
+writes for the strip argument, retracted 2026-08-26, direct-static), 7
+lightning/flame, 9 smoke/splash (twelve sites) — and strips 0, 1, 3, 5, 8 have no
+literal-index producer in the bounded set (bounded-negative, re-verified over the
+current 355,769-line corpus: no `push 0/3/5` precedes any producer call, and the
+`push 1`/`push 8` immediates that do appear are secondary parameters of the
+strip-7/2 producers, not strip indices). The early producers for
 strips 0, 1, 3, 5, 8 remain `TODO(T23)` pending the vtable inventory. This
 upgrades the strip-owner mapping from supported inference to direct-static for
-the literal set and bounded-negative for the absent set.
+the literal set (now including every strip-6 site) and bounded-negative for the
+absent set.
 
 | Strip | Established producer evidence | Status |
 |---|---|---|
@@ -86,7 +91,7 @@ the literal set and bounded-negative for the absent set.
 | 3 | none found | Bounded-negative, `TODO(T23)` for early candidate |
 | 4 | crater/decal, literal index 4 | Established |
 | 5 | none found | Bounded-negative, `TODO(T23)` |
-| 6 | beam/muzzle, literal index 6 + computed `0x0006` | Established (literal direct-static, computed supported inference) |
+| 6 | beam/muzzle/nanolathe, literal index 6 (all sites) | Established (direct-static) |
 | 7 | lightning/flame, literal index 7 | Established |
 | 8 | none found (unconditional outside render-mode gate) | Bounded-negative, `TODO(T23)` |
 | 9 | smoke/splash, literal index 9 (12 sites) | Established |
@@ -179,33 +184,53 @@ returns the anchor's feature when that anchor word is `< 0xFFFB`; otherwise the
 fringe remains not-found (blocking for yard-occupancy bit 5, non-satisfying for
 geothermal bit 7). No hidden map sections or separate flood-fill geometry exists
 beyond this array — a bounded writer census found only the expansion zero and the
-derived stamp. Merged fringe blobs and about 5,283 orphaned fringe cells need a
-non-local partition rule; the row-major left/above later-wins heuristic that
-resolves 83.2% of the 71,916 fringe cells across 275 maps is retained as
-`TODO(question)` — full retail partition is not established. Declaration
-footprints alone resolve 65.1%.
+derived stamp. **Fringe partition is the placement order, not a heuristic.** The
+feature stamper writes every `0xFFFE` cell at stamp time with its anchor→fringe
+offset (`0..footX-1` in the X byte, `0..footZ-1` in the width-scaled Z byte) as it
+stamps the feature's footprint rectangle, in the loader's row-major attribute
+order. A TNT-authored `0xFFFE` that no footprint rectangle covers is never
+stamped and ends up `0xFFFF` after load — such cells are not fringe at all, they
+disappear (measured: about 5,283 such cells across the 275-map corpus). Merged
+blobs resolve by last-stamp-wins: a later footprint overwrites an earlier one's
+fringe cells with its own offsets, which is why the retired 83.2% row-major
+left/above later-wins heuristic misassigned the seam cells of overlapping blobs
+(the heuristic had no adjacency path to a later anchor that was not left/above a
+fringe cell). Declaration footprints alone resolve 65.1% of raw fringe; the
+sequential stamp resolves 100% of footprint-covered fringe by construction.
+`TODO(question)` remains only for the dense-pack rule — whether a footprint that
+overlaps a live anchor cell is rejected or silently overwrites — which the
+stamper's occupancy guard decides per consumer.
 
 Void and edge generation runs after the full-map minimum/maximum recompute and
 after feature placement. Right columns `Width-2` and `Width-1` are set to
-`0xFFFD` for every row unconditionally. Playable insets `PlayRight = WidthPixels
+`0xFFFD` where the feature word is empty or fringe — live features and anchors
+in those columns survive (an earlier copy of this sentence said "every row
+unconditionally"; superseded by document 02 §6's traced edge rules). Playable
+insets `PlayRight = WidthPixels
 - 32` and `PlayBottom = HeightPixels - 128` are set at that time and gate the
 camera clamp. When the mission `lavaworld` flag is set, a bulk sweep sets
 `0xFFFD` for every cell where `hmin ≤ SeaLevel` and the feature word is
-`0xFFFF` or `0xFFFE`. North and south height-dependent void strips beyond the
-right two columns are observed but the exact predicate is `TODO(question)`.
+`0xFFFF` or `0xFFFE`. North and south height-dependent void strips are
+established in document 02 §6 (north `z*16 < height>>1` on raw height,
+south `(Height-1-z)*16 + (height>>1) < 112`; empty-or-fringe cells only) —
+an earlier copy of this paragraph carried the predicate as `TODO(question)`.
 Outside the map rectangle, height returns sentinel `-1` with unsigned
 candidate bounds before any terrain read; movement is blocked for generic modes
 and allowed only for factory-exit search mode 2; the LOS writer stores an empty
 footprint and returns; projectiles do not collide with terrain; and the camera
 remains clamped to the playable insets.
 
-Per-cell metal is uniform: every cell's metal byte is seeded from the single
-mission `SurfaceMetal` value. The TNT unknown byte is zero corpus-wide and is not
-a metal source, and no `Width × Height` metal raster is allocated. An extractor
+Per-cell metal is uniform on canonical maps: every cell's metal byte is seeded
+from the single mission `SurfaceMetal` value (non-negative, canonical version
+only; negative or legacy seed 0). The TNT unknown byte is zero corpus-wide and
+is not a metal source, and no `Width × Height` metal raster is allocated. The
+legacy terrain version seeds each cell from its 8-byte attribute record's
+per-cell metal byte — there is no varying metal file; the legacy attribute
+byte is the only per-cell source (document 02 §6, superseding the earlier
+`TODO(question)`). An extractor
 at placement sums `unsigned(metalByte) + 1` over its footprint and multiplies by
 its `extractsmetal` scalar; the stored result is never resampled. Feature metal
-is reclaim reward only. North/south void edge height predicates and any varying
-per-cell metal file beyond the uniform byte remain `TODO(question)`.
+is reclaim reward only.
 
 Sea level is copied from the map header as a byte and is compared in world
 units by multiplying by 65,536. Water/lava map state and minimum/maximum water
@@ -226,9 +251,10 @@ neighbourhood maximum and minimum that feed the coarse query and the LOS
 aggregation.
 
 The LOS writer uses a different, coarser height representation. It quantizes
-to 32-pixel visibility tiles and reads a lazily rebuilt `uint16` word per
-visibility tile (see section 3.2), aggregated from the terrain heights — not the
-four-corner bilinear query. The builder is now traced and the aggregation is
+to 32-pixel visibility tiles and reads a `uint16` word per visibility tile (see
+section 3.2), aggregated from the terrain heights at map load — not the
+four-corner bilinear query, and not rebuilt during a battle. The builder is now
+traced and the aggregation is
 established — and it is the REVERSE of what was inferred here: the table is
 seeded low = `0x00` / high = `0xFF` and updated with `low = max`, `high = min`,
 so the **low byte is the neighbourhood MAXIMUM and the high byte its MINIMUM**.
@@ -238,7 +264,8 @@ the pair by thirds and floors both at sea level. See §3.5
 `[R-P0-18-B §1–§4]` for the derivation; the earlier
 (minimum, maximum) reading is the maximally occlusive pairing and produces
 false shadows on ground retail leaves visible. A tall feature does not raise
-the LOS ray height unless its terrain/plot data itself changes.
+the LOS ray height — nothing but the map-load build does, since the word is
+never invalidated.
 
 ### 2.4 3DO model hierarchy
 
@@ -261,7 +288,10 @@ remaining primitives from index one upward are then bubble-sorted into ascending
 order of the integer mean of their vertices' second coordinate. A separate
 recursive pass then negates the first and third vertex coordinates and the first
 and third parent translations of every object in the hierarchy, a half-turn about
-the vertical axis applied to the whole model. The trailing sign on Z seen in projection helpers is the `Z - Y/2` orthographic shear — the high word of Z is transiently negated in place, then half of Y is subtracted, with the `+32` viewport bias, and the result is never stored back — not a second model-space sign fixup; the load-time half-turn (negating X and Z of each vertex and each parent translation) remains the sole persistent conversion (`H_A` net `-X,-Z` established, `H_C` net `-X` rejected, `H_B` already rejected). Child `flare` and piece translations queried at muzzle reuse the pristine post-load vectors without a second negation; a flare authored at `(2,1,-30)` appears at `(-2,1,+30)` world plus unit origin (direct-static for `H_A` vs `H_C` via store-path data-flow, bounded-negative for a second store; heading-zero nose mapping remains supported inference). Draw order within a piece is
+the vertical axis applied to the whole model. The trailing sign on Z seen in projection helpers is the `Z - Y/2` orthographic shear — the high word of Z is transiently negated in place, then half of Y is subtracted, with the `+32` viewport bias, and the result is never stored back — not a second model-space sign fixup; the load-time half-turn (negating X and Z of each vertex and each parent translation) remains the sole persistent conversion (`H_A` net `-X,-Z` established, `H_C` net `-X` rejected, `H_B` already rejected). Child `flare` and piece translations queried at muzzle reuse the pristine post-load vectors without a second negation; a flare authored at `(2,1,-30)` appears at `(-2,1,+30)` world plus unit origin (direct-static for `H_A` vs `H_C` via store-path data-flow, bounded-negative for a second store; heading-zero nose mapping remains
+supported inference, probe-pending — the `ta_probe_xz` fixture (child
+translation signs at headings 0/90/180/270) is designed to settle it, see
+rr-06 §4). Draw order within a piece is
 therefore fixed at load time, not recomputed per frame, and a per-frame sort
 does not reproduce retail tie order.
 
@@ -396,7 +426,13 @@ memory, and radar:
 A mode word governs which raster and which predicate are active. Bit 0
 selects history versus always-visible mapping, bit 1 selects the byte-grid
 predicate versus the word-mask predicate, bit 2 selects sprite-mask versus
-terrain-ray raster, and bit 3 marks the terrain-word cache dirty. The
+terrain-ray raster, and bit 3 marks the fog-cache-valid state — the
+composer's two-byte fog/minimap overlay cache (section 3.3) is rebuilt when it
+is clear and the bit is set again after the rebuild. It is cleared at map load,
+on camera moves, and by LOS publication (any local coverage change), so a
+visibility change or camera pan triggers one fog-cache rebuild — it does not
+gate the LOS terrain-height word, which is built once at map load and never
+invalidated (section 3.5). The
 byte-grid path treats any nonzero `uint8` count as visible; its increment is a
 plain wrapping `uint8` addition with no clamp (256 overlapping observers wraps to
 zero and reads as fogged) and its decrement is the matching plain subtract. The
@@ -457,8 +493,10 @@ Neither raster uses a synthesized circle or a fixed spoke set.
 
 **Terrain height word for the ray.** The LOS reader does not use the per-cell
 `hmax`/`hmin` at per-step granularity; it reads a dense `uint16` word per
-visibility tile (`TileW × TileH` words, two bytes per tile) that was rebuilt
-lazily from the terrain heights. The low byte is tested for admission and the
+visibility tile (`TileW × TileH` words, two bytes per tile) that was built once
+at map load from the terrain heights and is never rebuilt during a battle
+(invalidation by deformation does not exist; only the fog cache is
+dirty-tracked). The low byte is tested for admission and the
 high byte is tested to advance the retained horizon — identical strict
 comparisons, but the low byte decides whether the cell is seen and the high byte
 decides whether the horizon rises. The full builder contract is **Established**
@@ -469,14 +507,18 @@ exact formula open as `TODO(question)` — was **inverted**: the low byte is the
 the **minimum** of perspective-scaled values, with the pair blended by thirds
 and floored at sea level in a final pass. The old pairing is the maximally
 occlusive one and scatters false shadows across ground retail leaves fully
-visible. The rebuild is triggered when the cache-valid mode bit is clear and
-fills the whole word array at once.
+visible. The builder fills the whole word array in one pass at load; the lazy
+cache that rebuilds "when the cache-valid mode bit is clear" is the fog/minimap
+overlay cache of section 3.3, not this table.
 
 **Spoke geometry.** Each LOS.TDF line is expanded into four mirrored quadrants
-by 90-degree rotation. Whether authored offsets are absolute from the observer
-or cumulative along the spoke is `TODO(question)` — pairs cohere as absolute
-offsets after rotation, but the retail stepper's stride interpretation remains
-open.
+by 90-degree rotation. The authored offsets are **absolute positions from the
+observer, not cumulative deltas** (established): the ray stepper applies each
+rotated pair directly to the origin cell (`x = tileX + dx`, `y = tileY + dy`)
+with no running accumulation, and the step-distance counter used by the horizon
+test counts from one — both only cohere if the authored pairs are absolute
+positions along the spoke. The earlier `TODO(question)` on absolute versus
+cumulative is closed.
 
 **Jammer separation is closed.** The sensor phase's jammer circles are drawn onto
 separate radar-presentation surfaces that are wiped each tick and never affect
@@ -594,11 +636,11 @@ not a raw pixel grid. Evaluation order:
 The remaining consumers apply equivalent tests rather than calling this gate:
 weapon placement/order validation inlines a word-grid-first reject plus the
 same mode-selected source test at the projected cell; projectiles use the
-one-point form; feature drawing uses a two-corner form over footprint
-extents — `TODO(question):` the feature-memory LOS test is recorded as
-four-corner in §5.1.5; one of the two readings is wrong, or they are two
-different gates (adjudicate before implementing); the sensor phase's final
-pass inlines a single-point test.
+one-point form; feature drawing uses a **two-corner form** over footprint
+extents — first corner at the cell origin (sheared), then a single corner
+displaced by the footprint offsets; the earlier four-corner reading in §5.1.5
+was wrong and is corrected there; the sensor phase's
+final pass inlines a single-point test.
 
 **Ally semantics are closed: never OR’d.** The writer ORs only the source
 unit’s own player-slot bit into each cell, and every reader tests only the
@@ -648,7 +690,9 @@ checkerboard fog to the LOS mask.
 
 Unexplored map borders/voids can remain black where no valid tile blit reaches
 the backbuffer. The clean-room evidence is medium for the exact distinction
-between an in-map void tile and an out-of-map clipped region, but high that
+between an in-map void tile and an out-of-map clipped region (probe-pending:
+a capture at the map edge distinguishes them and shows whether the backbuffer
+persists stale bytes beyond the play rect), but high that
 visibility culling itself is binary and hard-edged.
 
 The mapping word grid is serialized in a save blob; the transient byte sight
@@ -679,7 +723,7 @@ the camera in 32-pixel cells including signed residues. Per cell:
   via the plain blitter. Channel one therefore renders BEFORE channel zero.
 
 This overlay sits at the compositor position after all strips/effects and
-before selection/interface (section 1). The cached channel derivation is now established (direct-static): hi accumulates the per-player byte-grid (`cur==0`) only when mode bit 1 is set else zeroed, lo accumulates the word-grid history mask `1<<player` regardless; each holds a 4-bit nibble `0..15` via four bounded bit-OR sites for masks `1,2,4,8` (`0` transparent, `15` solid dark, `1..14` index `value-1` into the Gray=hi=current and Black=lo=history four-way variant families with `variant=(col+row+camPhase)&3` deterministically from `floorMod(camera,32)` residues `0..31` via `offX/offZ=(res<16?-16:+16)-res` and `rect=[vpLeft+offX+col*32, vpTop+offZ+row*32, +31]` inclusive), edge rows/cols forced to `15` when the viewport extends beyond the map. Corner→bit `1=NW,2=NE,4=SW,8=SE` remains supported inference pending asymmetric fog.gaf probe; retail’s hard fog edge must not be softened to improve image metrics.
+before selection/interface (section 1). The cached channel derivation is now established (direct-static): hi accumulates the per-player byte-grid (`cur==0`) only when mode bit 1 is set else zeroed, lo accumulates the word-grid history mask `1<<player` regardless; each holds a 4-bit nibble `0..15` via four bounded bit-OR sites for masks `1,2,4,8` (`0` transparent, `15` solid dark, `1..14` index `value-1` into the Gray=hi=current and Black=lo=history four-way variant families with `variant=(col+row+camPhase)&3` deterministically from `floorMod(camera,32)` residues `0..31` via `offX/offZ=(res<16?-16:+16)-res` and `rect=[vpLeft+offX+col*32, vpTop+offZ+row*32, +31]` inclusive), edge rows/cols reached by conditional border fixups when the viewport extends beyond the map (see the fixup table below — never unconditional 15 stores). The bit→cache-cell geometry is direct-static (re-exported 2026-08-26): a fogged tile ORs bit 1 into the cache cell of its own tile, bit 2 into the west cell, bit 4 into the north cell, bit 8 into the northwest cell — the cell accumulates from the four tiles around its centre corner. Corner→bit `1=NW,2=NE,4=SW,8=SE` (which GAF quarter each bit paints) remains supported inference pending asymmetric fog.gaf probe; retail’s hard fog edge must not be softened to improve image metrics.
 
 **Fog art and family behavior [R-RR16-A].** The four-way variant selector is
 world-anchored, not camera-relative: substituting the cache-relative column
@@ -801,9 +845,11 @@ Each tick, radar blips are projected from unit/world coordinates into radar
 coordinates. Radar and sonar range circles, jammer circles, and weapon-range
 circles are rasterized onto the radar surface using distinct palette colors.
 The radar-mapped surface is wiped and rebuilt each tick, while the authoritative
-LOS mask persists untouched by this path. The exact effect of jammers on
-authoritative contact state remains incomplete and must not be inferred solely
-from the minimap drawing path.
+LOS mask persists untouched by this path. **The effect of jammers on
+authoritative contact state is closed: there is none.** No reader ORs the
+jammer (or sensor-circle) surfaces into the mapping word grid, and the gameplay
+visibility predicate never samples them — jammer influence is presentation-only
+distortion (bounded-negative over the sensor and predicate families).
 
 **Sensor and proximity phase.** The per-tick sensor phase runs only when more
 than one player is present. An ownership/status first pass walks the indexed
@@ -829,8 +875,16 @@ enabled, else the word grid at the local bit; admission sets runtime status
 bit 0x100, the per-frame “seen” marker. Status-field roles: 0x100 =
 seen-marker, 0x300 = friendly contact (whose upper bit doubles as the
 underwater-rejection exemption of section 3.2), 0x1000 = decloak timer.
-Residual: arbitration among the three sensor/jammer callback tables — what
-overlapping marks write to the backing surfaces — remains open.
+**Sensor/jammer arbitration is partially closed:** the three callback tables
+rasterize onto the minimap presentation surface sequentially — radar/sonar outer
+circle first, then the two jam circles — with last-writer-wins per pixel
+(plain pixel stores, not OR), each circle family in its own palette index, and
+nothing reaching the mapping word grid or the per-player byte grids; the
+per-table palette mapping (which table draws the radar versus the jammer index)
+remains supported inference. The unresolved gameplay side is the identity of the
+secondary radar-like candidate list that targeting may consult when the primary
+in-radius set is empty — that flag's authored name is not proved, and targeting
+is owned by document 06.
 
 ### 3.5 LOS observer height, coverage tile, and the terrain height word [R-P0-18-A] [R-P0-18-B]
 
@@ -838,7 +892,12 @@ Status: every finding below is **Established** (direct static evidence). This
 section folds R-P0-18-A and R-P0-18-B; it supersedes the supported-inference
 paragraph "Terrain height word for the ray" in §3.2 and closes its
 `TODO(question)` entries: the emitter-height addend provenance, the coverage
-tile's Z term, and the aggregated two-byte height-word derivation.
+tile's Z term, and the aggregated two-byte height-word derivation. The
+aggregation formula was re-verified instruction-by-instruction against the map-load
+builder in 2026-08-26 (including the per-column carry, which appears in no
+earlier note); the only claim corrected since the previous revision is §4's
+"lazy rebuild", which misidentified the fog-cache builder as this table's
+producer — the terrain word is built once per map load and never rebuilt.
 
 #### R-P0-18-A §1 — Observer emitter height and model-top provenance
 
@@ -986,12 +1045,20 @@ Both results are computed from the ORIGINAL pair — not chained. The blend pull
 the two bytes a third of the way toward each other (on flat ground they
 converge); the floor is the map's sea-level byte.
 
-#### R-P0-18-B §4 — Lazy rebuild
+#### R-P0-18-B §4 — Build lifetime: once per map load, no lazy rebuild
 
-The table is torn down and rebuilt behind the mode word's
-cache-dirty bit (bit 3, §3.1), filling the whole word array at once. Terrain
-deformation — plot-data changes — is the event that invalidates it; a tall
-feature never does, only plot data does (§2.3).
+The table is built exactly once per map load: the TNT loader calls the builder
+after the derived height pass and before the void fixup, and the array is freed
+at battle teardown. There is **no** lazy rebuild and no invalidation during a
+battle — terrain deformation does not refresh it, a tall feature never does,
+and the mode word's bit 3 is not a terrain-word dirty bit: it is the
+fog-cache-valid bit of section 3.1, whose lazy rebuild (the fog/minimap overlay
+cache) was the routine misidentified in an earlier research pass as this
+table's producer. (This paragraph corrects the previous text, which claimed
+the table is "torn down and rebuilt behind the mode word's cache-dirty bit
+(bit 3, §3.1), filling the whole word array at once. Terrain deformation —
+plot-data changes — is the event that invalidates it".) A reimplementation must
+build the word once at map load and keep it stale for the battle.
 
 Regression fixtures locking this contract: `internal/session/los_emitter_test.go`;
 `internal/world/terrain_test.go` (`TestLOSHeightAggregates`, locking the
@@ -1029,8 +1096,9 @@ the viewport fog cache.
 
 **Lifecycles.** The panel surfaces live from battle enter until battle exit. The
 radar surfaces' lifetimes are tied to map load; the temp buffer is the only
-radar surface explicitly freed — `TODO(question):` the free path for the
-picture, mapped, and final surfaces has not been traced.
+radar surface explicitly freed — the free path for the picture, mapped, and
+final surfaces is bounded-negative in the traced corpus (no free site observed)
+and remains `TODO(T23)`.
 
 **Cadence.** A radar dirty word carries the schedule: bit 0 is the blink phase,
 bit 1 is final dirty (set by the mapped composite and by the contacts pass),
@@ -1163,7 +1231,12 @@ Layer order on the final surface (later layers overwrite; no blending):
 1. wipe final from mapped;
 2. unit blip GAF, colored with the owning player's blip color (a palette index
    read from the player record), drawn when the visibility gate passes AND the
-   unit is not stealthed (hidden byte nonzero) OR the blink phase bit is set;
+   unit's per-instance blink-suppress byte reads zero OR the blink phase bit
+   is set — so the blip draws when `blinkSuppressByte == 0 || blinkPhase`. The
+   byte is a per-unit countdown, decremented each tick while nonzero, that
+   forces the blip into blink-only mode while it runs; the earlier "(hidden
+   byte nonzero)" wording was inverted — it is the byte reading zero that
+   admits the blip;
 3. commander blip GAF when the unit's identity matches the commander slot held
    in engine root state;
 4. sensor circles (radar/sonar outer, jammer) in their distinct palette indices
@@ -1188,8 +1261,11 @@ ry = (unitMapZ - (unitMapY >> 1)) * RadarH / PlayBottom   half-height shear
 ```
 
 A second pass repeats the same projection over the projectile/feature list.
-`TODO(question):` whether that list is partitioned or shared with another
-consumer.
+The list is the entry-captured projectile/feature span (pointer and count in
+engine root state, fixed-size records): one shared list written by the
+projectile/feature capture path and read by the sensor first pass, the contacts
+pass, and the pool walker — it is not partitioned per consumer
+(bounded-negative).
 
 **HOT list.** Every unit visited in pool (ascending-slot) order appends a
 10-byte entry — id, originX + rx, originY + ry, and two pad shorts — to the
@@ -1201,7 +1277,8 @@ reimplementation must enforce the cap itself rather than reproduce the
 unbounded write.
 
 **Blink.** A per-host-frame ticker decrements the countdown 7..0, reloading to
-7, and toggles the blink phase bit every 8 frames. Stealthed units show their
+7, and toggles the blink phase bit every 8 frames. Units whose per-instance
+blink-suppress byte is nonzero (a per-tick-decremented countdown) show their
 blip only while the blink phase bit is set.
 
 **Weapon/interceptor rings.** A unit-definition flags dword bit 29 enables the
@@ -1218,10 +1295,12 @@ clipping drops). When the slot's interceptor flag byte is zero the ring is
 solid via the solid-circle rasterizer; otherwise it is dashed, and the
 dashed-circle routine receives the same radius, the ring palette index, a
 literal 32, and the blink phase bit. **Established.** Both variants use the
-ring palette index, and the literal 32 is present. **Supported inference.** 32
-denotes dash segments (mirroring the solid routine's 32 segments) rather than
-a pixel dash length. `TODO(question):` the exact dash pattern is untraced —
-the dashed-circle routine's body has not been analyzed.
+ring palette index. **Established.** The literal 32 is the segment count: the
+dashed routine divides the full circle into `0x10000 / 32 = 0x800`-unit angular
+steps and draws alternating one-segment dashes and one-segment gaps — a
+segment is emitted only when `(segmentIndex + blinkPhase) & 1 == 1`, so the
+dash parity is seeded by the blink phase bit and flips per segment. The dash
+pattern is fully determined; the earlier `TODO(question)` is closed.
 
 **No-radar gate on sensor circles.** Circles draw when `stealthActive OR NOT
 noRadar`: the gate tests the unit's instance-state stealth bit, and only when
@@ -1229,9 +1308,12 @@ that is clear tests the authored no-radar flag — bit 2 (mask 0x04) of the
 definition's flags byte. A stealthed no-radar unit still shows circles; an
 unstealthed no-radar unit suppresses them. **Bounded-negative.** No other alias
 of the no-radar flag is tested at this gate; the 32-bit definition flags dword
-is used at a different site in the same loop (the ring enable).
-`TODO(question):` whether no-radar should also suppress the blip itself — the
-blip gate tests only the hidden byte and the blink phase, never no-radar.
+is used at a different site in the same loop (the ring enable). **No-radar does
+not suppress the blip:** the blip gate tests only the per-instance
+blink-suppress byte and the blink phase (above), never no-radar — the earlier
+`TODO(question)` on this point is
+closed (an ambiguous earlier note read the no-radar test as part of the blip
+gate; the traced gate belongs to the circle branch).
 
 **Start-position markers.** **Bounded-negative.** No start-marker GAF and no
 START string literal is found near the minimap build or contacts paths. The
@@ -1263,6 +1345,13 @@ Otherwise the **lens branch** recenters: new camera = (mouse − rect origin) ·
 playArea / radarSize. Either way the result is clamped to the play area and the
 terrain height queried at the result. The lens inverts the minimap projection
 directly; it does not reuse the main view's cursor-to-world projection.
+**Established.** The lens branch is exactly `(mouseX − letterboxOriginX) ·
+PlayRight / RadarW` and `(mouseY − letterboxOriginY) · PlayBottom / RadarH`,
+truncating (sub, multiply, signed divide) — there is no −viewSize/2 recenter
+and no mapWidth/mapHeight scale; the rect origin subtracted is the letterbox
+origin, and the drag branch adds the clamped viewport delta to the stored
+camera. (Document 07's reading with a recenter term is the one to correct; the
+two documents must match.)
 
 ### 3.12 Viewport marker (composer-time)
 
@@ -1272,12 +1361,21 @@ drawn in the viewport palette index: a horizontal segment and a vertical
 segment crossing at the camera-derived radar position offset by the constants
 +128 in X and +32 in Y, each segment spanning ±2 pixels about the crossing
 (five pixels long). The lines clip to the inclusive minimap rect. **Established.**
-The color is the ring/viewport palette index, distinct from the radar-circle
-and jammer indices. **Bounded-negative.** The minimap rect is written by
-exactly one routine (the surface allocator); the composer only reads it — no
-hidden second writer. **Supported inference.** The ±2 endpoints read as a
-five-pixel cross; whether the retail figure is shaped or thickened differently
-is open pending a capture. `TODO(question):` exact figure and thickness.
+The two line calls are `(cx+126, cy+32) → (cx+130, cy+32)` and `(cx+128, cy+30)
+→ (cx+128, cy+34)` where `cx = cameraCenterX − camX` and `cy = cameraCenterZ −
+(cameraCenterY >> 1) − camZ` — the camera centre projected with the same
+half-height shear as world drawing — so the figure is exactly the five-pixel
+cross of two one-pixel lines, and the endpoints are literals, not an inference.
+The color is the ring/viewport palette index held in engine root state — the
+same index the weapon/interceptor rings use — distinct
+from the radar-circle and jammer indices. **Bounded-negative.** The minimap rect
+is written by exactly one routine (the surface allocator); the composer only
+reads it — no hidden second writer. A capture probe is retained only for visual
+confirmation of the figure, which the calls fully determine; the earlier
+`TODO(question)` on figure and thickness is closed, and thickness claims of 6/4
+pixels belong to the selection brackets, not this marker (the marker is 1-pixel
+lines). (Corpus trail: minimap note §5.5, viewport note §2, and the composer
+decompile; the corresponding resolution note is r03-03 §4.)
 
 ## 4. Indexed renderer, palettes, and asset layers
 
@@ -1309,7 +1407,10 @@ window, requests the configured width/height at 8 bits per pixel, creates a
 primary/backbuffer surface, attaches/installs a palette, composites into the
 surface, and presents with DirectDraw surface blit/flip calls. The observed
 surface descriptor is the legacy 108-byte form with primary/backbuffer flags;
-exact flag naming and all lost-surface recovery are medium-confidence.
+exact flag naming remains medium-confidence, but lost-surface recovery is
+documented: the surface blit/copy wrappers retry on the lost-surface error
+through a restore callback held in the surface record, so a lost surface is
+restored and the blit replayed rather than dropped.
 
 The GDI DIBSection descriptor (`w,h,pitch,bits`) and a primary lock descriptor
 mirroring the OFFSCREEN surface record are held in presentation state; GDI
@@ -1392,7 +1493,9 @@ animation, and the disc itself is seeded from the CRT presentation random
 stream (`*214013+2531011`), not the simulation stream. The effect is
 presentation-only, not authoritative, not hashed, and not save/loaded.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+`LHT` never darkens; darkening is through `SHD` rows 0–14. The `discByte→level` mapping is established (direct-static for the byte thresholds — the flash-disc precompute was re-exported and verified in 2026-08-26): the disc canvas is filled per pixel with one CRT draw each, `R = trunc(CRT*10/0x8000)` in `0..9`, radial distance `sqrt(1.33*dx*dx + dy*dy)` (floating-point square root, the 1.33 ellipticity factor applied to the x-axis term), `q = trunc((R + sqrt)*32.0)`, then the stored byte is `0x6F − q` while `(0x20 − q) mod 256 < 0x20`, `0x6E` while that byte-compare lies in `0x20..0x21`, and `0xFF` from `0x22` up — the 0xFF band is what makes the disc's outer area transparent, the visible region being the band where `q mod 256` lies in `0..31`. The halo level is `clamp(discByte − 0x50, 0, 31) = 31 − q` bright centre to rim, and the disc is drawn to screen as radial spokes from angle `0x800` through `0x10000` in steps of `0x800` through the sin/cos helper pair (the same angular step as the minimap circle rasterizers). (This corrects the earlier parenthetical "0x6E ring for alpha==0, 0xFF for alpha>=33" and "q = trunc((R+sqrt)/cx*32)": the ring condition is the byte-compare window `0x20..0x21` on `(0x20−q) mod 256`, the 0xFF threshold is that compare at `0x22`, and the multiplier is ×32 with no division.) Multi-tick fading envelope remains presentation tuning; the 32-row/256-column layout, the near-identity row 0, the +51.51 bright end, and the exclusive flash binding are direct. The two brightening ramps overlap: `LHT` row 3 and `SHD` row 16
+both lift mean luminance by +6.83, `LHT` row 5 and `SHD` row 17 both by +12.60,
+but the files are distinct and neither is synthesized from the other.
 
 #### 4.3.2 SHD shading
 
@@ -1612,7 +1715,11 @@ Per-frame visibility for features is a predicate-consensus:
   do not carry the `nodrawundergray` flag draw unconditionally once explored.
   Features that do (Great Divide has none of these on its native table, but
   wall/fort types do) draw only when the plot's placer nibble equals the local
-  player slot or when the four-corner LOS test passes. The placer nibble is
+  player slot or when the two-corner LOS test passes — first corner at the
+  sheared cell origin, then a single corner displaced by the footprint offsets.
+  (This corrects the earlier "four-corner LOS test" reading in this section:
+  the feature predicate evaluates two corners, per the traced predicate; the
+  section 3.2 cross-reference is now consistent.) The placer nibble is
   stamped as `(placer & 0xF) << 3`, with a nibble of 10 for map-authored
   features and the owning player's slot for corpses, so owned wrecks are
   remembered. This corrects the older §5.1 reading of a "team-memory nibble":
@@ -1637,14 +1744,10 @@ the clear/draw order inverted.)
 
 Fog presentation afterwards draws a hard 32-pixel overlay from the visibility
 grid, leaving unexplored cells dark (section 3.3). The feature passes themselves
-are the authors of the per-cell never-seen bit.
-
-`TODO(question):` the corner count of the memory-gate LOS test. Section 3.2
-records "feature drawing uses a two-corner form over footprint extents", while
-this consolidated research records a four-corner LOS test for
-`nodrawundergray` features. One of the two readings is wrong, or they are two
-different gates; trace the feature acceptance predicate and state which,
-before implementation.
+are the authors of the per-cell never-seen bit. The corner-count
+`TODO(question)` that pitted the two-corner form of section 3.2 against the
+four-corner reading here is resolved: the feature predicate is two-corner, and
+this section now records it as such.
 
 #### 5.1.6 Animation and the burning lifecycle
 
@@ -1660,11 +1763,12 @@ before implementation.
 - **Burning** — ignition selects the burn and burn-shadow sequences with a
   one-shot countdown derived from `sparktime`. The burn animation is advanced
   every tick until its cursor clears, at which point the cell is cleared and
-  the `featureburnt` successor is stamped if one exists.
-  `TODO(question):` the exact `sparktime`-to-countdown arithmetic is not
-  stated in this consolidated source; document 05's fire contract is the
-  owner (see `[05 "Feature burning"]` for the authoritative countdown
-  `simulationRandom(sparktime/2) + (sparktime/2)`).
+  the `featureburnt` successor is stamped if one exists. The countdown is the
+  established one-shot `simulationRandom(sparktime / 2) + (sparktime / 2)`
+  (one Park-Miller draw of `sparktime/2` plus `sparktime/2`), owned by
+  document 05's fire contract (`[05 "Feature burning"]`, mirrored in `[06]`
+  weapon firestarter handling); the earlier deferral `TODO(question)` here is
+  closed.
 - **Clipping and transparency** — GAF drawing composes subframes clipped to
   the parent canvas; later opaque pixels overwrite earlier ones; skip commands
   are the sole transparency mechanism. Shadow drawing may select the
@@ -1720,8 +1824,54 @@ second interleaved pass over screen-Y bucket rows mixing soft units and
 deferred tall/shadow features, painter-ordered by projected Y; per feature the
 shadow blit precedes the normal blit at the same anchor (section 5.1.3).
 SHD palette rows and optional dither participate in the shadow/light
-pass. Projection coefficients, exact shadow footprint clipping, and whether all
-shadow categories share one stencil are not established.
+pass. **Shadow presentation is now established** (this replaces the stale
+"Projection coefficients, exact shadow footprint clipping, and whether all
+shadow categories share one stencil are not established"):
+
+- **Option bits.** One options word (engine root state) carries six visual
+  bits: bit 1 Anti_Alias (which also gates the model-shadow stencil doubling),
+  bit 2 Shadows master, bit 3 VehicleShadows (unit model shadows), bit 4
+  FeatureShadows (feature/sprite shadows — read directly by the feature
+  shadow gate), bit 5 Shading (enables the tinted shadow blitter), bit 6
+  DitheredFog (shadow dither parity). The bulk INI key writes bit 4 then fans
+  out bit 4→bit 3→bit 2 so one toggle makes all three shadow bits equal;
+  the per-category keys set only their own bit, so feature and vehicle
+  shadows toggle independently.
+- **Per-unit suppression.** The FBI `noshadow` key writes a per-type flag bit;
+  the model-shadow stencil additionally requires a runtime instance status
+  bit. Ships and structures authored with `noshadow` therefore suppress the
+  stencil even with the global bits set; aircraft are not exempt — no altitude
+  test exists in the shadow path (bounded-negative), so air units cast model
+  shadows when vehicle shadows are enabled.
+- **Projection.** Model shadows use the same orthographic projection as
+  bodies: `screenX = worldX − camX`, `screenY = worldZ − (worldY >> 1) − camZ`
+  with the viewport constants folded in — the height dependence enters as a
+  palette-index term, base 0x32 (50) on land, 0x32 + 0x4B = 0x7D (125) on
+  water, plus half the world Y. Feature sprite shadows sample the terrain
+  height under the anchor: the four plot height bytes (current cell, its
+  +X neighbour, the anchor cell, the anchor's +X neighbour) are averaged with
+  `>> 3` (the sum of four bytes divided by 8 — the half-height shear at
+  map-pixel scale) and subtracted into the screen Y.
+- **Two raster families.** (A) GAF sprite shadows (features) blit the shadow
+  frame through the opaque or the tinted blitter (the tinted path selected by
+  the definition's translucent flag and gated on the Shading bit), clipped by
+  an inclusive-rect intersect. (B) Model shadows build a doubled stencil image
+  and compose it over the ground with a per-pixel depth compare
+  `dstDepth <= srcDepth + bias` — equal-height overlaps coalesce to a single
+  darken rather than double-darkening — and darken through an `SHD` row
+  (`result = SHD[row*256 + groundIndex]`, near-black row); the dither variant
+  seeds a checker stencil with the 0x01010101 pattern and a screen parity
+  term. ALP is not used in either shadow family (bounded-negative).
+- **Order.** Per bucket row the shadow is drawn before the body for both the
+  soft and hard unit traversals, and per feature the shadow GAF precedes the
+  body GAF; all shadow work sits between the terrain tiles and the units/
+  features, and the fog overlay (after all strips) covers shadows like all
+  world drawing. The feature-memory marker makes a tall feature's shadow
+  persist independent of current line of sight.
+- `TODO(question)` residuals retained: the exact water-flag bit semantics
+  (the 0x4B offset's source definition bit), the exact darken row identity
+  within SHD, the interplay between the dither option and the shading gate,
+  and aircraft altitude versus ground-projection distortion.
 
 #### 5.3.1 Feature shadow selection and blit order
 
@@ -1733,11 +1883,11 @@ runtime shadow cursor copy pre-wired at load; burning instances use the slot's
 shadow cursor. The shadow path respects the same clipping as the normal path;
 `shadtrans=1` selects the translucent darkening blitter. On Great Divide
 trees, rocks, and the vent all carry `shadtrans=1`, so their shadows are
-translucent. This refines the statement above with the exact selection rules.
-
-`TODO(question):` shadow projection coefficients, exact shadow-footprint
-clipping, and whether all shadow categories (feature and model) share one
-stencil remain open.
+translucent. This refines the statement above with the exact selection rules;
+the earlier `TODO(question)` on projection coefficients, footprint clipping,
+and stencil sharing is closed by the subsection above (the two raster
+families are separate primitives; the model family's inclusive-rect clipping
+and per-pixel depth compare are direct evidence).
 
 ### 5.4 Projectiles and laser beams
 
@@ -1826,8 +1976,9 @@ tick count stored at the frame-reference array entry (frame base plus index
 times eight, plus four) — consumed by the standard countdown cursor, so flash
 and explosion animation timing is simulation-tick countdown ticks like every
 other sequence family. Build/reclaim direction uses the builder and target
-positions; exact color variation and per-segment fade/lifetime are not fully
-recovered.
+positions; the segment color is the fixed palette index 6 (established,
+direct-static) for both reclaim/capture and build-assist emissions, while the
+per-segment fade/lifetime remains `TODO(question)`.
 
 The cursor is software-drawn. Cursor GAF entries are loaded into a table;
 `GetCursorPos` and configured hotspots determine placement. The renderer saves
@@ -1990,9 +2141,10 @@ crashes.
 
 **Allocation modes.** Each decoded sample is dispatched by mode: mode 0 builds
 an in-memory PCM blob (the PlaySound path), mode 1 preloads a sound buffer,
-mode 2 streams (returning a sentinel handle rather than a real buffer). Which
-aliases use which mode is not traced beyond the dispatch sites — keep
-`TODO(question): per-alias mode selection`.
+mode 2 streams (returning a sentinel handle rather than a real buffer). The
+three dispatch sites and the fail-to-silence rule are established; which
+aliases use which mode is a bounded-negative gap (no per-alias mode field was
+found at registration) — keep `TODO(question): per-alias mode selection`.
 
 **Caching.** Samples are cached at the alias level: one decoded PCM blob per
 alias, retained for the life of the session, with no eviction beyond the alias
@@ -2315,6 +2467,11 @@ by the output-rate setting, and separate capture/encode helpers are present.
 Whether capture is raw indexed frames or a secondary encoder output, the exact
 Smacker pixel formats, frame timing, dropped-frame policy, palette handoff,
 fullscreen transition, and movie/audio synchronization are not established.
+The contract here is the import/invocation census: Smacker DLL ordinals for
+open/decode/frame-access/teardown, the cinematic message-loop ownership, and
+the 30-Hz capture gate are all that is evidenced; everything below that line
+is out of scope for Nanolathe's single-player scope and is listed in "Missing
+and unknown" without a resolution plan.
 
 ## 10. Established facts, supported inference, and confidence
 
@@ -2339,7 +2496,16 @@ fullscreen transition, and movie/audio synchronization are not established.
 - The frame composer’s ten-strip numeric order with render-mode gates,
   removal-before-update strip lifecycle, oldest-first eviction past 400
   records (steady bound 401), and the separate 300-record effect pool with
-  same-invocation compaction are established.
+  same-invocation compaction are established. Strip 6's producer set is
+  fully direct-static (all seventeen call sites of its two families pass the
+  literal 6); strips 0, 1, 3, 5, 8 remain bounded-negative with `TODO(T23)`
+  for the early producers.
+- The LOS terrain-height word contract is established end to end: built once
+  per map load from raw plot heights with the weighted shear aggregation
+  (low = max, high = min, blend by thirds, sea clamp, per-column carry),
+  never rebuilt mid-battle, read by the ray raster's strict two-byte horizon
+  test; the fog/minimap overlay cache (bit 3 of the mode word) is the only
+  lazily rebuilt grid.
 - All eight projectile rendertype presentations are established, including the
   whole-renderer abort on case-2 admission failure and randomized segmented
   lines for case 7.
@@ -2347,6 +2513,16 @@ fullscreen transition, and movie/audio synchronization are not established.
   channel rules of section 3.3; plot-flag semantics (instance-present,
   no-build, never-explored marker, placer nibble) are adjudicated;
   post-load visibility publication is synchronous with unit reconstruction.
+  Fringe-anchor partition is placement order (sequential rectangle stamps,
+  last-stamp-wins; orphaned raw fringe vanishes), replacing the retired
+  row-major heuristic.
+- Shadow presentation is established: option-bit gates, per-unit `noshadow`,
+  orthographic projection with the 0x32/0x7D palette base and four-byte
+  terrain average, the GAF-sprite and model-stencil families (per-pixel depth
+  compare, SHD darken, 0x01010101 dither), inclusive-rect clipping, and
+  shadow-before-body order. The minimap viewport marker is a five-pixel cross
+  of two 1-pixel Bresenham lines at +128/+32 from the sheared camera centre
+  in the ring palette index.
 - Piece transforms compose as ordered in-place rotate-then-translate passes in
   Z, X, Y chronological order using floating-point trigonometry, with
   bank/heading/pitch injected into the root piece’s Z/Y/X slots; there is no
@@ -2377,14 +2553,15 @@ fullscreen transition, and movie/audio synchronization are not established.
 
 ### Confidence limits
 
-- SHD row selection and the semantic naming of individual strips remain medium.
+- SHD row selection and the semantic naming of individual strips remain medium
+  (the numeric strip order and the strip-6/2/4/7/9 producers are established).
   GAF frame-duration interpretation for the
   simulation-tick and wall-clock countdown cursors is established (section 4.4);
   sequence-flag naming and families not shown to use that cursor remain medium.
 - In-map void rendering versus out-of-map clipped regions is less certain than
-  the hard cull;
-  tile clipping and persistent backbuffer behavior need focused executable
-  analysis.
+  the hard cull; the exact distinction and the persistent backbuffer behavior
+  are probe-pending (a capture at the map edge settles which pixels the
+  backbuffer retains beyond the play rect).
 - Audio buffer flags, category cooldown units, channel field meanings, CD
   notification behavior, and Smacker ordinal names are incomplete.
 - The current absence of a water mesh and 3D audio is a bounded negative census,
@@ -2399,14 +2576,18 @@ fullscreen transition, and movie/audio synchronization are not established.
    (height, feature `uint16`, zero unknown) and the 13-byte plot-cell stride
    are established. Fringe-anchor encoding is established as signed offsets
    (`int8` DX and DZ, DZ scaled by width, threshold `0xFFFB`, width proof to
-   402×408 — SC6 resolved); merged-blobs and orphaned fringe partition beyond
-    the 83.2% row-major heuristic remains `TODO(question)`. Plot flag bit 7 and
-    whether any unexported code writes placer-nibble values into it remain
-    `TODO(question)`; flag bits 0,1,2 and 3–6 are adjudicated, and the
-    owner-memory accept is closed: it is gated by the definition's
-    `nodrawundergray` flag (§5.1.5). The feature-memory LOS test corner count
-    (two-corner §3.2 versus four-corner §5.1.5) is a flagged `TODO(question)`.
-    Tall features do not raise LOS ray height.
+   402×408 — SC6 resolved), and the fringe partition rule is established as
+   sequential placement-order rectangle stamps (anchor→fringe offsets written
+   at stamp time; last-stamp-wins on overlap; raw fringe no footprint covers
+   ends as `0xFFFF`); the retired 83.2% row-major heuristic is replaced. Plot
+   flag bit 7 and whether any unexported code writes placer-nibble values into
+   it remain `TODO(question)`; flag bits 0,1,2 and 3–6 are adjudicated, and the
+   owner-memory accept is closed: it is gated by the definition's
+   `nodrawundergray` flag (§5.1.5). The feature-memory LOS test is the
+   two-corner predicate (first corner plus one footprint-displaced corner);
+   the four-corner reading was wrong and is corrected. The dense-pack rule for
+   a footprint overlapping a live anchor cell remains `TODO(question)`. Tall
+   features do not raise LOS ray height.
 - Bilinear height at map edges returns sentinel `-1` and the four-corner
    read guards `cx+1 < Width` and `cz+1 < Height`; outside the rectangle,
    movement is blocked for generic modes and allowed only for factory-exit
@@ -2424,8 +2605,11 @@ fullscreen transition, and movie/audio synchronization are not established.
    `0x00`/`0xFF` with strict max/min updates, cells scattered through the height
    shear (skip when `tileZ <= -1`) with a per-column carry, perspective-scaled
    value then raw height, tail blend by thirds with both floored at sea level,
-   lazy rebuild behind the cache-dirty mode bit — the earlier reading recorded
-   here (low = minimum, high = maximum) was inverted. Fog-cache channel values
+   built once at map load — the earlier reading recorded here (low = minimum,
+   high = maximum) was inverted, and the earlier "lazy rebuild behind the
+   cache-dirty mode bit" was a mis-identification of the fog-cache builder
+   (bit 3 gates the fog/minimap overlay cache; the terrain word is never
+   rebuilt mid-battle). Fog-cache channel values
    `0/15` vs `1..14→value-1` are now **established** as `Gray=hi=current` (byte-grid gated `mode&2`) and `Black=lo=history` (word-grid `1<<player`), `variant=(col+row+camPhase)&3` via `offX/offZ` residues, collapsing to the world-anchored `(gx+gy+2)&3`; the `hi==15` state is a gray-table LUT remap (not a fill), the border fixups are conditional bit ORs gated on the cache window crossing the map edge (not unconditional 15 stores), and `1=NW` corner→bit remains supported inference pending asymmetric fog.gaf probe [R-RR16-A]. The vismasks shape count (10
    frames in `anims/vismasks.gaf` entry `vismask`) versus LOS.TDF declared
    table count (9) mismatch is closed: the sprite path clamps to the 10-frame
@@ -2443,29 +2627,44 @@ fullscreen transition, and movie/audio synchronization are not established.
 - Cloak/stealth early-outs (including the minimum-cloak-distance proximity
    breach) are established; jammer circles are established as minimap-only
    (three callback tables onto separate surfaces wiped each tick, never the LOS
-   word mask) — separation is closed. Still open are the full stealth/init-cloak
-   spawn state walk, gameplay radar-versus-sonar contact rules beyond the
-   presentation circles, backing-surface layout plus mark arbitration among the
-   three sensor/jammer callback tables, and whether any unresolved identity path
-   shares visibility grids across players — multiplayer LOS sharing is closed as
-   never-OR through the mask itself.
+   word mask) — separation is closed, and the arbitration among the three
+   tables is partially closed (sequential last-writer-wins per pixel on the
+   presentation surface; per-table palette mapping remains inference). Still
+   open: the full stealth/init-cloak spawn state walk (the init-cloaked spawn
+   writer is bounded-negative only — one candidate site, not closed),
+   gameplay radar-versus-sonar contact rules beyond the presentation circles
+   (owned by document 06, including the secondary candidate list's authored
+   flag name), and whether any unresolved identity path shares visibility
+   grids across players — multiplayer LOS sharing is closed as never-OR
+   through the mask itself.
 - Exact edge behavior for unexplored in-map void cells, map border clipping,
-  and persistent backbuffer pixels.
+  and persistent backbuffer pixels — probe-pending (capture at the map edge
+  distinguishes in-map void from out-of-map clipping and shows whether the
+  backbuffer retains stale bytes beyond the play rect).
 
 ### Renderer
 
-- Full windowed/fullscreen mode transitions, DirectDraw surface flags, lost
-  surface recovery, palette-loss recovery, and exact blit/flip error policy.
+- Full windowed/fullscreen mode transitions, DirectDraw surface flags,
+  palette-loss recovery, and exact blit/flip error policy; lost-surface
+  recovery at the blit wrappers is documented (retry through the restore
+  callback).
 - Complete pass table is closed: ten fixed-order strips inside the single frame
   composer with Y-bucket insertion and no depth test, exact numeric order,
   render-mode gates, removal-before-update lifecycle, the 401 steady eviction
-  bound, and the 300-record effect pool (section 1). Still open: semantic strip
-  names, every effect-strip owner/flush point beyond the reviewed producer
-  family, and full producer coverage.
-- SHD/LHT row/index formula is now established for model `SHD` (`dont-shade→15`, `row=trunc(dot*5)&0x1F`, gouraud `rowStep=(rowR-rowL)/width`) and halo `LHT` (`disc 0x6F/0x6E/0xFF→level 31-(0x6F-disc)`) (direct-static for thresholds/row, supported inference for exact half-step/fade); remaining open is ALP usage by non-LOS UI/fade path.
+  bound, and the 300-record effect pool (section 1). Strip producers: literal
+  direct-static for strips 2, 4, 6 (all sites), 7, 9; still open are semantic
+  strip names, every effect-strip owner/flush point beyond the reviewed
+  producer family, and the early producers for strips 0, 1, 3, 5, 8
+  (`TODO(T23)`, bounded-negative).
+- SHD/LHT row/index formula is now established for model `SHD` (`dont-shade→15`, `row=trunc(dot*5)&0x1F`, gouraud `rowStep=(rowR-rowL)/width`) and halo `LHT` (disc precompute verified: per-pixel CRT draw, `q = trunc((R+sqrt(1.33·dx²+dy²))·32)`, byte `0x6F−q` / ring `0x6E` / transparent `0xFF` on the `(0x20−q) mod 256` compare, level `31−q`); remaining open is ALP usage by any non-LOS UI/fade path — bounded-negative over the renderer cluster (ALP loads only in the minimap picture downsample).
 - Model lighting normals (`normalize(cross(b-a,b-c))` over first three indexes, degenerate `(0,1,0)`, per-vertex `avg/cnt` no renormalize) and texture coordinate policy (corner-index affine 16.16 through the edge-table scanline mapper and per-pixel `SHD` sampler, no stored UVs, flat direct-fill only, clamp/nearest/no perspective) and flat-color quads-only are now established (direct-static); remaining open is exact team/logo per-player dimension deltas and pitch/bank naming.
-- Shadow projection coefficients, feature/model stencil geometry, shadow
-  clipping, dither pattern, and shadow-vs-fog interaction at boundaries.
+- Shadow presentation is established (option bits, per-unit `noshadow`,
+  projection with the 0x32/0x7D palette base and four-byte terrain average,
+  GAF-sprite versus model-stencil families, inclusive clipping, dither
+  stencil, shadow-before-body order); remaining `TODO(question)`: the exact
+  water-flag bit semantics behind the 0x4B offset, the identity of the SHD
+  darken row, the dither-option/shading-gate interplay, and aircraft altitude
+  versus ground projection.
 - Water wake rectangle interpolation, underwater tint, splash timing, and proof
   that no hidden animated-water surface writer exists.
 - Cursor hotspot metadata, subframe lifetime, animation speed for families not
@@ -2479,15 +2678,16 @@ fullscreen transition, and movie/audio synchronization are not established.
 ### Projectiles and effects
 
 - Projectile rendertype dispatch is closed (all eight cases, section 5.4).
-  Still open: the physical calibration of the case-7 segmentation constant 327680
-  (map-space versus projected-space units) and whether its presentation RNG
-  draws must interleave deterministically with other presentation consumers;
-  also the semantic of the low 16 bits of the stored projectile orientation fed
-  to the Z rotation slot.
+  The case-7 segmentation constant 327680 is exact (direct-static); its
+  presentation RNG draws are CRT-stream only, zero simulation draws
+  (closed); the physical units of the constant (map-space versus
+  projected-space) are probe-pending. Also open: the semantic of the low 16
+  bits of the stored projectile orientation fed to the Z rotation slot.
 - Beam fixed-point scale/lifetime edge cases, collision ordering at map borders,
   and line-color remap initialization.
-- Missile target invalidation, smoke/effect-strip lifetime and fade, and
-  construction/nanolathe colors. Trail cadence is closed (additive deadline;
+- Missile target invalidation, smoke/effect-strip lifetime and fade, and the
+  nanolathe per-segment fade/lifetime (the nanolathe segment color is
+  established: fixed palette index 6). Trail cadence is closed (additive deadline;
   zero-delay emits every tick).
 - Flash/explosion animation cadence is closed for families using the countdown
   cursor: per-frame duration is the frame reference's second word (32-bit tick

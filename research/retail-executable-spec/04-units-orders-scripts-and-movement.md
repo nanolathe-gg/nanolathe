@@ -83,7 +83,14 @@ later phases likewise wait for the next projectile phase [P0-09].
 
 **Established fact:** The retail runtime has ten fixed player slots. Player records hold side, ally/autonomy state, resource state, unit slices, and visibility-related state. The unit sweep and several sharing paths iterate all ten slots in stable order.
 
-**Supported inference:** A player's side byte is used for same-side filtering, projectile ownership, and callbacks. Full alliance semantics are not closed by the unit notes; ally checks must remain a dedicated predicate rather than simple side equality.
+**Established fact:** Hostility between two units is derived from a per-side
+diplomacy byte on the acting player's record indexed by the TARGET's side:
+byte zero means hostile, nonzero means friendly — side equality alone is
+neither necessary nor sufficient [P0-R02 §2.4]. The resolver family applies
+this in both its shapes. Full alliance semantics beyond this predicate are
+not closed by the unit notes; ally checks must remain a dedicated predicate
+rather than simple side equality. *(Upgraded from Supported inference — the
+hostility half is direct; the alliance half stays open.)*
 
 **Unknown:** The complete semantic mapping of player category values, autonomous/AI values, and ally masks is not recovered here. Lobby state and mission setup should not be treated as proof of strategic AI behavior.
 
@@ -124,7 +131,16 @@ after cleanup without a generation counter.
 
 **Established fact:** Save reconstruction preserves unit slot identity and repairs cross-unit references after the units are reconstructed. A failed unit allocation can cause the saved record to be skipped.
 
-**Unknown:** The exact maximum unit count is not resolved. Notes contain two competing limit derivations; implementations must not encode either as a final retail constant without further evidence.
+**Established fact — pool capacity [P0-16]:** The physical pool capacity is
+`(u16)catalogDefCount · 10 + 1` records of 0x118 bytes, allocated at battle
+entry. The pool is laid out as per-player slices of `catalogDefCount`
+records; slot 0 is the null sentinel. Allocation scans each player's slice
+lowest-free and enforces the per-definition limit gate (the definition's
+limit-enable bit plus its limit field). The mission `maxunits` field is NOT
+read by the allocator — it does not bound allocation (bounded-negative,
+2641-TU census) — and save restore verifies the forced slot. The earlier
+"exact maximum unit count is not resolved" reading is superseded by this
+derivation [R-P0-16].
 
 ### 2.4 Unit flags and state transitions
 
@@ -315,7 +331,14 @@ the code-9 last-record wait drew a random value below 15 like code 3 (range
 30 to 44). The direct recovery in R-P0-01 (section 8.3) shows the code-9
 last-record arm draws a random value below 30 — range 30 to 59 — and that only
 the code-3 arm draws below 15. The 30-to-59 range is the contract; document
-05's table is superseded by section 8.3.
+05's table is superseded by section 8.3. **Confirmed by pump re-export
+(2026-08-26):** the primary pump's switch shows the code-3 arm loading the
+bound 15 and the code-9 last-record arm loading the bound 30 into the SAME
+shared draw epilogue (`gate |= 1`, `deadline = tick + draw + 30`); the two
+corpus arms conflicted only because the bound is a register load, not a push,
+and earlier censuses searched for a push. The code-9 non-last arm unlinks and
+frees. The secondary pump draws only for its code-3 arm; its code-9 arm is a
+plain remove, and the above-9 delegate never draws.
 
 Consequences a reimplementation must preserve: one pump call can cascade a
 record through several phases in the same tick until a waiting or blocked code
@@ -335,9 +358,19 @@ latency; sections 1.1, 8.3).
 (Construction stopped) are known — for the first, a metal refund of
 trunc((1 − remaining)·cost) plus a cause-9 kill; for the second, a single
 count decrement after which the restart path frees the node when the count is
-exhausted — but bounded scan found no writer for those wake bits, so producers
-remain `TODO(T25)` and must not be invented [R-P0-09][R-P0-10] (full semantics
-in section 3.8). The bounded census for the small class parameter above (3901 boundaries) similarly
+exhausted — and both bodies are confirmed in the construction handler
+(2026-08-26). The mask-2 delivery path is now established: node cleanup
+invokes the handler with mask 2 whenever the removed record's state-mask byte
+still has bit 1 set, so the producers of the cancel notification are exactly
+the removal paths (counted cancel, non-queued purge, pump removals, death/
+capture teardown). No instruction anywhere ORs bit 2 or bit 8 into a record's
+satisfied word or the unit's capability word (bounded census of every writer
+of both words over the whole instruction listing), so the Construction-stopped
+WAKE-BIT producer remains `TODO(T25)` and must not be invented
+[R-P0-09][R-P0-10] (full semantics in section 3.8); the flag-byte dispatcher
+the audit once named as the interrupt site operates on the unit's
+activation/building flag byte, not on order wake bits. The bounded census for
+the small class parameter above (3901 boundaries) similarly
 found no reader. All producers — HUD, AI, InitialMission, COB, network, rally
 inheritance, and factory completion — enter through the common queue tail-append
 path that coalesces only at the tail or inserts immediately after the active
@@ -367,7 +400,10 @@ purging), Shift-queue (`QMove`/`QPatrol` family) is an alias with identical
 mechanics except for the descriptor's queued class, and the pump's own
 empty-list creation is **Internal-Auto** (head-insert with the auto flag
 inherited from the old head). The descriptor's rear-segment gate flag selects
-the list for every modifier.
+the list for every modifier. At runtime the `QMove`/`QPatrol` records share
+one handler whose entire behavior is: set the deadline to the current tick
+plus 60 and return the move-to-tail code — a pure 60-tick delayed tail-rotate
+with no goal binding (2026-08-26).
 
 **Established fact:** Counted adds coalesce only at the tail. A counted
 insertion walks to the tail of the selected segment; when the tail matches
@@ -415,7 +451,7 @@ failed capability gate produces the reject identity.
 | 7 | guard or follow | can-guard, target friendly | ground or air follow |
 | 8 | assist or repair | target is reachable by a nanolathe | build assistance while the target is unfinished, otherwise repair |
 | 9 | patrol | can-patrol | a patrol with no target becomes the queued patrol; a builder with the repair-patrol capability becomes the repair patrol; otherwise ground or air patrol |
-| 10 | internal | — | an internal command whose label is not established |
+| 10 | internal | — | **no resolver case exists**: neither resolver has a code-10 arm; both fall to their defaults — the identity-form resolver returns the `GetBuilt`-shaped identity 0x13, the name-form resolver writes an empty name (reject) — and no caller inside the bounded census emits code 10 [P0-R02] |
 | 11 | teleport | none | teleport |
 | 12 | reclaim or resurrect | can-reclaim | a wreck feature with the resurrect capability becomes resurrect; otherwise feature reclaim or unit reclaim, in the ground or air variant |
 | 13 | capture | can-capture, target hostile and differently owned | capture |
@@ -468,6 +504,27 @@ assist path retries on the 30-tick cadence behind its dedup latch. Per-order
 leash and orbit vtables share the same deadline and arrival contract above:
 dedup latches prevent immediate re-enqueue, and strict `dist <= 2` with
 `abs diff < 3` guards the banded-goal transition [P0-08].
+
+**Audit note — attack-chase orbit substates (2026-08-26):** the chase handler
+was re-exported and the orbit substate arithmetic is now direct, confirming
+and refining the paragraph above: the leash test is a strict `leash <=
+distance from the guard/fight anchor` removal (the anchor pair is the order's
+stored 16-bit pair); the admit phase seeds the goal with the unit's own
+position and picks the weapon slot; the engage-setup range-gates through the
+weapon-class helper and binds two slots before arming the dynamic gate
+`0x13808`; the orbit substate counter (0..8) drives: default states — a
+vertical separation beyond exactly 8 world units rebinds the target with the
+standoff HALVED (substate 6), otherwise the orbit binds a goal at the target
+minus the standoff·direction step where the direction is the bearing to the
+target minus 90 degrees plus a full-circle random draw (±90° orbit choice),
+with radius parameter one QUARTER of the standoff; substate 5 halves the
+standoff variable; substate 6 binds the target with radius parameter ZERO;
+substates 7 and 8 bind the banded goal pairs `(standoff, standoff/2)` and
+`(2·standoff, standoff)`; substate 8 wraps to 0. Re-engage re-range-gates and
+rebinds on pass (gate `0x148e8`, 30-tick wait) or clears the slots on fail
+(gate `0x100e8`, 30-tick wait). The only remaining inference is the standoff
+VALUE itself (produced by the weapon-slot engagement-distance helper); every
+ratio and threshold above is direct.
 
 **Established fact — goal vtables and queue modifiers [P0-08]:** Leash and orbit
 behaviour is per-order via virtual tables with strict arrival `dist <= 2` and
@@ -539,6 +596,10 @@ completion-transition order, and same-tick publication windows are in section
 maps an operation byte to handlers. The precise meaning of every operation byte
 is not recovered, so an implementation should keep unknown operations
 observable and reject or preserve them rather than assigning new behavior.
+The handler SET itself is now closed: every one of the 68 descriptors'
+handler identities is recovered from the descriptor table (2026-08-26), so
+the residual is limited to the per-phase operation-byte values inside the
+construction handler family.
 
 **Unknown:** Exact resource carry and debt, queued admission ratios,
 construction operation-byte meanings, and completion callback timing belong to
@@ -578,7 +639,7 @@ variants from capabilities. Numeric coordinates parse as floats scaled by
 | `p x,y,t` | patrol to x,y with t scaled by 30 as timeout ticks (suppresses the tail) |
 | `s` | MakeSelectable (suppresses the tail) |
 | `u x,y` | unload/transport-drop at x,y |
-| `w secs[,n]` | Wait for secs×30 ticks carrying trailing integer n |
+| `w secs[,n]` | Wait for secs×30 ticks carrying trailing integer n — the trailing integer is a wait-for-unit selector: the handler scans for a matching unit around the acting unit each visit and completes immediately on a match, otherwise it drains the timeout budget in chunks of 150 plus a random value below 30 and waits that long (2026-08-26) |
 | `wa name` | WaitForAttack targeting the named unit, falling back to self when unresolved |
 
 One dispatch quirk is part of the contract: an uppercase-led `W…` token
@@ -777,10 +838,14 @@ census — the old list stays on the dead factory's order anchors — and the
 exact allocator/slot-reuse cleanup when a dead factory slot is reused remains
 TODO(question); do not invent reclamation or inheritance.
 
-`TODO(T25)`: the upstream producers of production-node wake masks 2
-(cancel-current) and 8 (Construction stopped) remain unlocated — their handler
-semantics are closed in section 3.3 and above, but no UI or network producer
-was found in the bounded corpus, and none must be invented.
+`TODO(T25)`: the upstream producers of production-node wake mask 8
+(Construction stopped) remain unlocated — the handler semantics are closed in
+section 3.3 and above, and a bounded census of every writer of the record
+satisfied word and the unit capability word over the whole instruction
+listing (2026-08-26) finds no instruction that ORs bit 2 or bit 8 into
+either; the mask-2 cancel notification is instead delivered by the node
+cleanup path (section 3.3), whose producers are the ordinary removal paths.
+The mask-8 wake-bit producer must not be invented.
 
 ## 4. COB loader, VM, threads, and script timing
 
@@ -1116,7 +1181,36 @@ severity.
 
 **Supported inference (medium confidence) — axis mapping and retarget:** Model-coordinate handedness and any one-time 3DO conversion belong to model loading, not per-tick COB arithmetic. The script axis mapping `axis + piece*19` is passed directly to the model adapter's get-position/get-angle/set-position/set-angle with no sign inversion or axis remap at those call sites — adapter identity per-tick.
 
-**Unknown — bounded-negative (TODO(question)):** The three anonymous snapshot dwords per piece at per-piece wire offsets `0x54..0x60` (written from the adapter's three snapshot slots) have no located consumer; their meaning remains `TODO(question)`. Invalid piece index fault behaviour is bounded-negative (no bounds check found in the bounded export census; corpus guarantees validity) — `TODO(question)`. Allocation-failure deterministic fault policy where retail would abort through its allocator's abort path remains `TODO(question)`. Zero-denominator defence is likewise bounded-negative and must be a guarded thread-kill, not a trap.
+**Closed — the anonymous snapshot dwords (2026-08-26):** the three per-piece
+snapshot slots at the piece wire offsets `0x54..0x60` are uninitialized-local
+leaks copied to the piece save image at save time — they carry no engine
+semantics, which is exactly why no consumer exists [P1-13]. Store them
+verbatim for byte-exact save reproduction; do not interpret them.
+
+**Closed — invalid piece index fault policy (2026-08-26):** the interpreter
+was re-exported and the piece-op family contains NO comparison of the piece
+index against the piece count anywhere — an out-of-range index is an
+out-of-bounds access (undefined behavior in retail), not a thread kill. The
+interpreter's thread-kill path is reached only from an UNRECOGNIZED opcode
+value in any family and from the thread-return opcode. The earlier
+bounded-negative ("no bounds check found in the bounded export census;
+corpus guarantees validity") stands, with the mechanism now pinned: Nanolathe
+must either validate the index itself or treat the operand as engine-guaranteed
+valid — retail provides no check to clone. The prior note reading "bad piece
+index kills the thread" was a misattribution of the unknown-opcode kill path
+[p1-11] and is superseded here.
+
+**Unknown — allocation-failure deterministic fault policy:** where retail
+would abort through its allocator's abort path remains `TODO(question)`; the
+thread-pool-full semantics (argument retention, wedged wait slot) are
+established in section 4.3.
+
+**Closed — zero-denominator defence (2026-08-26):** the four divide sites are
+unguarded signed divides in the interpreter as well; a synthetic zero
+denominator raises the processor divide fault and terminates retail. The
+"must be a guarded thread-kill, not a trap" sentence above is the Nanolathe
+divergence note and stays as written; the retail contract is "the process
+dies".
 
 ### 4.7 Engine port write semantics, the factory stance handshake, and thread-start masks [R-P0-10]
 
@@ -1124,9 +1218,23 @@ severity.
 exactly six write arms — ports 1, 5, 6, 18, 19, 20. There is no STANDGROUND,
 no WEAPON1/2/3, and no CLOAKED write port; an identifier without a write arm
 only sets the unit's script-touched marker, and every write arm sets that
-marker in addition to its own effect (section 4.4). The compiled form writes
-the value first and the identifier last. A census of shipped scripts exercises
-all six arms and reads only ports 4, 17, and 18.
+marker in addition to its own effect (section 4.4). The compiled form pushes
+the identifier first and the value second, so the value sits on top of the
+stack, and the opcode pops the value first and the identifier last. A census
+of shipped scripts (armlab, armcom, and every write site in each) shows the
+identical `push <identifier>; push <value>; set` layout; the compiler's
+`set INBUILDSTANCE to 1` is exactly `push 5; push 1; set`. A census of shipped
+scripts exercises all six arms and reads only ports 4, 17, and 18.
+
+**Audit note (2026-08-26):** the earlier wording — "the compiled form writes
+the value first and the identifier last" — was read as describing the
+instruction-stream order and implemented by popping the identifier first. That
+inverted every engine write on retail content: `set INBUILDSTANCE to 1`
+became a port-1 write of value 5, the stance never rose, and every factory
+stalled in production state 1. The asset census settles the order: identifier
+pushed first, value on top, opcode consumes value then identifier. The
+opcode-table row "pops a value and a value identifier" is consistent with
+either reading and is not the deciding evidence.
 
 Per-port write effects:
 
@@ -1214,18 +1322,32 @@ flagged itself as an unprobed community report.
 
 **Open questions [R-P0-10]:** `TODO(question)` — the consumer of the
 script-touched marker is unlocated: every write arm sets it and no reviewed
-reader consumes it. `TODO(question)` — the semantic name of the busy bit
-beyond the transport scripts that write it, and whether transport load
-admission checks it. `TODO(question)` — the name of the engine-driven
+reader consumes it (write-only in the bounded census; store it opaque).
+`TODO(question)` — the semantic NAME of the busy bit beyond the transport
+scripts that write it; the admission half is closed: the nine-gate transport
+admission predicate performs no busy-bit test (bounded census of the
+admission predicate) [P1-05]. `TODO(question)` — the name of the engine-driven
 cloak-family bit (bit 2 of the first state byte) and its writers outside the
-edge machine. `TODO(question)` — the axis naming of the packed position
+edge machine (naming-only; the edge behavior is established). `TODO(question)`
+— the axis naming of the packed position
 halves: whether the word section 4.4 calls Z is Z (as asserted there) or X (as
 an external host convention states) needs one controlled probe. `TODO(question)`
 — the exact yard-character class matrix inside the yard-open admission gate
 defers to the TNT yard-map format document rather than re-deriving byte masks.
 `TODO(question)` — whether mission or third-party content depends on a bare
 `get UNIT_HEIGHT` returning nonzero (retail returns 0 with a zero-filled
-argument slot).
+argument slot); answerable by an asset census of shipped scripts, not
+recorded yet (see the lane report).
+
+**Closed — placement bit-0 alias and mode matrix (2026-08-26):** the
+footprint validator was re-exported and its mode branches are direct: mode 0
+runs the occupancy rejections unconditionally; a nonzero mode runs them only
+when the authoritative visibility/occupancy predicate passes — the cell's
+LOS word tested for the LOCAL (human) player's team bit, or, under the
+footprint-overlay global mode, the overlay character map's byte at the cell
+being nonzero. The player alias is therefore the local player's team bit, not
+the placing player's; section 6.4's bit-0 row is updated accordingly, and the
+branch must still not be equated with the presentation fog surface.
 
 ## 5. Engine-to-COB callbacks
 
@@ -1375,7 +1497,28 @@ values are always written to window words 0–3 but only the byte arity sets
 the logical top (`depth = arity − 1`). There is no fixed callback name for
 this path.
 
-**Unknown:** The closure object installed as the `Aim*` completion receiver and the exact write it performs remain unlocated (`TODO(question)` R-1); the zero/nonzero readiness grant itself is established above via the adapter receiver delivery and the carried non-zero-sets-ready semantics. Behavior when all eight script slots are occupied is established in section 4.3 and differs by starter (deferred `Aim*`/`HitByWeapon`/`TakeDamage` deliver `0` through the receiver path; `Create` via the zero-argument name-form adapter has no receiver). <!-- source orchestration-research-cob-callbacks.md -->
+**Closed — the Aim* receiver closure (2026-08-26):** the completion receiver
+the producer passes to the name-form starter is a pointer to the weapon-slot
+record itself (the slot's completion-receiver word). The starter stores the
+receiver in the VM thread slot and pushes the argument cells; when the script
+name is absent it invokes the receiver's closure immediately with value 0.
+The interpreter's return opcode pops the script's return value and, when the
+thread's receiver word is non-null, invokes `(*(*receiver))(value)` — the
+receiver is re-read at return time and its first word is called with the
+returned cell. The "exact write" is therefore that invocation: zero has no
+effect, any nonzero value marks the aim ready — the zero/nonzero grant is now
+derived from the returned cell directly, not carried. The residual narrows to
+the identity of the closure target (the dword at the receiver word and the
+function it points to): a bounded indexed-store census of the whole
+instruction listing finds no indexed writer of the receiver word (the
+per-slot init writes only the commanded heading/pitch words), so that target
+is presumably written by the per-definition slot fill with a non-indexed
+pattern — keep `TODO(question)` R-1 for it (coordinated with document 06
+section 3.4, which carries the same residual). Behavior when all eight script
+slots are occupied is established in section 4.3 and differs by starter
+(deferred `Aim*`/`HitByWeapon`/`TakeDamage` deliver `0` through the receiver
+path; `Create` via the zero-argument name-form adapter has no receiver).
+<!-- source orchestration-research-cob-callbacks.md -->
 
 ### 5.4 Same-tick callback windows [GAP T15]
 
@@ -1411,7 +1554,26 @@ publication happen after settlement (section 3.8).
 
 ### 6.1 Terrain classification
 
-**Established fact:** Movement profiles are movement class records compiled from `CLASS` sections. Each class reads eight keys in parse order — `FootPrintX`, `FootPrintZ`, `MaxWaterDepth`, `MinWaterDepth`, `MaxSlope`, `BadSlope`, `MaxWaterSlope`, `BadWaterSlope` — where `FootPrintX/Z` default 0, depth and slope fields default to the class's prior value (preserved), and `BadSlope`/`BadWaterSlope` default to half (`>>1`) of the `MaxSlope`/`MaxWaterSlope` value just read. Three unsigned-byte clamps then run unconditionally on every class: MaxWaterSlope caps MaxSlope, the resulting MaxSlope caps BadSlope, and MaxWaterSlope caps BadWaterSlope. Stock ship data only authors `MaxWaterSlope = 255` for hover classes (`TANKHOVER3/4`); the other thirteen classes omit it yet remain land-passable, so the stock movement template must carry a large `MaxWaterSlope` (255) before parsing so an omitted key preserves 255 and the clamps are identity — `TODO(question)` for the template writer. Nanolathe currently gates the first and third clamps on whether `MaxWaterSlope` was authored; this is a deliberate, install-compatible divergence retained with `TODO(question)` until the template initialization is proven.
+**Established fact:** Movement profiles are movement class records compiled from `CLASS` sections. Each class reads eight keys in parse order — `FootPrintX`, `FootPrintZ`, `MaxWaterDepth`, `MinWaterDepth`, `MaxSlope`, `BadSlope`, `MaxWaterSlope`, `BadWaterSlope` — where `FootPrintX/Z` default 0, depth and slope fields default to the class's prior value (preserved), and `BadSlope`/`BadWaterSlope` default to half (`>>1`) of the `MaxSlope`/`MaxWaterSlope` value just read. Three unsigned-byte clamps then run unconditionally on every class: MaxWaterSlope caps MaxSlope, the resulting MaxSlope caps BadSlope, and MaxWaterSlope caps BadWaterSlope.
+
+**Closed — template-writer question (2026-08-26):** the MOVEINFO loader was
+re-exported in full and contains NO template pre-fill: the `[CLASS_n]`
+sections parse in order into a fixed zero-initialized record array and the
+"preserved prior" defaults are the record's own values, which start at zero.
+The earlier reading — "the stock movement template must carry a large
+`MaxWaterSlope` (255) before parsing so an omitted key preserves 255 and the
+clamps are identity; `TODO(question)` for the template writer" — is
+superseded: there is no template writer. The executable-proven consequence
+is that the FIRST class omitting `MaxWaterSlope` receives 0 and its
+`MaxSlope` is clamped to 0, so the shipped MOVEINFO file must order a
+MaxWaterSlope-authoring class (stock census: `TANKHOVER3/4` author 255)
+before the classes that omit it, letting the self-carry propagate 255. The
+shipped file's exact class ordering is a data census not yet recorded
+(archive extraction was not completed this session). Nanolathe's gated
+clamps remain an install-compatible divergence under that ordering; matching
+retail exactly means unconditional clamps with self-carry defaults. The same
+wording in document 02 section 5 must be corrected together (lane 02
+coordination).
 
 **Established fact:** The map terrain grid uses fixed-size attribute cells. The plot expansion derives per-cell MinHeight and MaxHeight as the minimum and maximum of up to four height bytes (cell, east, south, southeast, with edge guards) — slope is computed from these derived values, not a single sample. Height queries use bilinear interpolation of the four corner heights with low-four-bit fractions and signed-bias correction.
 
@@ -1433,7 +1595,7 @@ The path reader adds a fourth state for building occupancy. The steep and clear 
 
 **Established fact:** Footprint dimensions are baked into profile terrain stamps. The path search validates the unit's center cell; it does not sweep a footprint at each path edge. Placement validation separately uses the unit yard map and footprint rectangle.
 
-**Supported inference:** This explains why a path can be geometrically valid while a later placement validator rejects the exact build position. The two checks must remain separate.
+**Established fact:** This explains why a path can be geometrically valid while a later placement validator rejects the exact build position. The two checks must remain separate: path search validates the unit's center cell against the pre-stamped terrain and building-mask layers, while placement separately walks the footprint rectangle with the yard map and the aggregate gates — both sides are direct, so this paragraph is upgraded from Supported inference.
 
 ### 6.3 Build footprint anchor and model center [R-P0-02]
 
@@ -1539,7 +1701,7 @@ Each covered cell's yard byte gates independent tests:
 
 | Yard bit | Gate | Meaning |
 |---:|---|---|
-| 0 | enemy-visibility/occupancy branch | tests the authoritative visibility/occupancy predicate only when the mode and bit branch request it; the exact owner/visibility alias and full mode matrix remain open |
+| 0 | enemy-visibility/occupancy branch | tests the authoritative visibility/occupancy predicate only when the mode and bit branch request it; mode 0 applies the occupancy rejections unconditionally, a nonzero mode gates them on the LOCAL player's team bit in the cell's LOS word (or, under the footprint-overlay global, the overlay char at the cell) — the alias and mode matrix are closed in section 4.7 |
 | 1–2 | unit occupancy | a nonzero occupant other than the passed self identity rejects |
 | 3 | slope aggregate participation | contributes the cell's low and high terrain heights to the footprint aggregate |
 | 4 | height aggregate participation | contributes the high terrain height to the separate height maximum |
@@ -1557,8 +1719,8 @@ not blocking; an out-of-range feature identity blocks for bit 5 and satisfies
 neither bit 6 nor bit 7. The bit-0 branch is an authoritative
 visibility/occupancy check, not a minimap or fog-presentation lookup — the
 placement predicate reuses the gameplay predicate family selected by its mode,
-and `TODO(question)` the exact player alias and all mode combinations for this
-branch remain open; do not equate it with the presentation fog surface.
+with the local player's team bit as the alias (closed in section 4.7); do not
+equate it with the presentation fog surface.
 
 **Established fact — footprint aggregates and strict comparisons [R-P0-08]:**
 For yard bytes that request terrain sampling the validator maintains
@@ -1628,17 +1790,55 @@ relocation fallback inside the validator.
 with one cell covering 16 map pixels. Waypoints are generated from cell
 coordinates plus the movement profile's half-footprint bias.
 
-**Established fact:** The eight neighbor directions are visited in this order: north, northwest, west, southwest, south, southeast, east, northeast. The first expansion is deliberately wide: it attempts nine entries, which covers all eight directions plus one harmless duplicate. Subsequent expansions use a directed five-entry fan centered on the parent travel direction. The exact duplicate-direction position (which direction is duplicated) and the start fan's centre direction provenance are `TODO(question)`.
+**Established fact:** The eight neighbor directions are visited in this order: north, northwest, west, southwest, south, southeast, east, northeast. The first expansion is deliberately wide: it attempts nine entries, which covers all eight directions plus one harmless duplicate. Subsequent expansions use a directed five-entry fan centered on the parent travel direction.
 
-**Established fact:** Diagonal movement is endpoint-only: only the destination cell's stamped terrain and building mask are tested, not both cardinal corner cells. A footprint is not swept during expansion because the profile stamp already marked cells that would intersect static blockers. Whether duplicate neighbours are suppressed before or after cost computation and the greedy ray's exact bidirectional meet rule remain `TODO(question)`; debt-array layout and the heuristic-scale settings string value are also `TODO(question)`.
+**Closed — fan geometry (2026-08-26):** the expansion loop is
+`for u in -k..k: expand(cell, u & 7)` with the fan half-width k at the
+request's fan field, seeded to 4 at request setup and rewritten to 2 after
+the first fan. The first expansion therefore tries the directions
+`(c-4, c-3, ..., c+4)` mod 8 — the duplicated direction is the direction four
+steps from the fan centre (the reverse of travel, 180° back), attempted FIRST
+and LAST; later expansions are five unique directions `(c-2..c+2)`. The fan
+centre c is the current record's stored direction; for the START record the
+request setup derives it from the unit's current heading quantized to eight
+sectors (`(heading + 0x1000) >> 13 & 7`), NOT north as a file hypothesis once
+suggested. Heap tie-breaks therefore depend on: the reverse direction being
+expanded twice (first and last) in the first fan, the strict-less heap
+comparison, and the equal-g no-reparent rule of section 7.2.
+
+**Established fact:** Diagonal movement is endpoint-only: only the destination cell's stamped terrain and building mask are tested, not both cardinal corner cells. A footprint is not swept during expansion because the profile stamp already marked cells that would intersect static blockers.
+
+**Closed — duplicate suppression ordering (2026-08-26):** a neighbour that is
+already open is re-visited, the new cost is computed FIRST, and the parent/
+direction are updated only when the new cost is STRICTLY lower; equal-cost
+re-visits never re-parent (matching the heap's strict-less ordering). There
+is no suppression before cost computation.
+
+**Closed — greedy-ray meet rule (2026-08-26):** the ray is FORWARD-ONLY from
+the start toward the goal — there is no reverse search and no bidirectional
+meet. It terminates when it reaches a goal-flagged cell (return 0), when its
+scaled-heuristic budget reaches 0 (return 0), or when a full wall-follow
+sweep returns to the starting cell with the same direction (return the best
+scaled h seen, which seeds the A* threshold); the returned value is the
+minimum scaled h along the ray. Section 7.2's "bidirectional" wording is
+superseded.
+
+**Closed — debt-array layout (2026-08-26):** the per-player budget state is
+two 10-entry globals indexed by player slot — cumulative step counters and
+per-player budgets, the latter recomputed every 150 ticks from the counters
+as `counter / divisor` tiered to `requestBase × {6, 3, 1}` — plus a
+per-request 10-word accumulator array that receives `totalSteps /
+playerCount` per tick and whose SUM is the scheduler's per-call step budget.
+There is no per-player-direction debt. The heuristic-scale settings string
+value remains a data question (section 7.2, `TODO(question)`).
 
 ### 7.2 A* state and costs
 
 **Established fact:** The search maintains open/closed status, parent direction, a heap, and a packed coordinate per node. The heap key is `f = g + h`. Equal keys preserve insertion order because the heap compares strictly less, not less-or-equal. Equal `g` values do not replace an existing parent.
 
-**Established fact:** Cardinal steps cost 16 and diagonal steps cost 22. A direction-change table adds turn penalties of 0, 40, 60, 80, 100, 80, 60, and 40 for the eight directional differences. The fixed initial penalty of 30 applies while the heap holds at most one entry (the start expansion), and the short-run penalty of 75 applies when the parent chain's straight-run length is below five and a parent exists.
+**Established fact:** Cardinal steps cost 16 and diagonal steps cost 22. A direction-change table adds turn penalties of 0, 40, 60, 80, 100, 80, 60, and 40 indexed by the raw fan offset — equivalently `(candidate − current) & 7` — so the table IS a turn-difference table (label now Established, not inference). A fixed penalty of 30 is added to EVERY neighbour in the live main-loop expansion path (the only code shape where the term is absent has no callers in the bounded census), and the short-run penalty of 75 applies when the candidate direction is not straight and the parent chain's straight-run length is below five; the run counter resets to 1 on any turn and increments on straight steps. The earlier reading "the fixed initial penalty of 30 applies while the heap holds at most one entry (the start expansion)" is superseded: the watched register is a zero constant at the call site, so the term is unconditional on the live path.
 
-**Supported inference:** The eight-entry table is a turn-difference table, not a terrain-state table. The symmetric values and the absence of a terrain branch in the expansion support that interpretation.
+**Supported inference:** The eight-entry table is a turn-difference table, not a terrain-state table. The symmetric values and the absence of a terrain branch in the expansion support that interpretation. *(This label is now Established — the table is indexed by the raw fan offset, i.e. the direction difference; the sentence is kept for continuity.)*
 
 **Established fact:** The search is a weighted A\*. Every heuristic value
 passes through one scaling pipeline: `hScaled = (h · scale) >> 16`, with the
@@ -1686,7 +1886,7 @@ inferred from geometry and constructor argument shapes; every formula and
 constant is direct.
 
 **Established fact:** Arrival tolerance uses a write-once threshold. Before
-seeding, a greedy bidirectional ray walk stores the minimum scaled h seen
+seeding, a greedy FORWARD-ONLY ray walk stores the minimum scaled h seen
 along its frontier into a single slot that is never updated again. During
 expansion, an opened neighbor whose scaled h is at or below that threshold
 receives open-plus-goal status, and popping such a node terminates the search
@@ -1694,7 +1894,8 @@ and reconstructs — so EVERY opened cell within the tolerance region is an
 acceptable route endpoint, not just enumerated goal cells. Enumerated goal
 cells are additionally marked directly; enumeration is bounds-checked and
 tracks the cell nearest the start by squared distance for the ray-check
-direction choice.
+direction choice. (The ray is forward-only; section 7.1's closure note
+supersedes the earlier "bidirectional" wording.)
 
 **Established fact:** Early exits, in order after goal enumeration: a nonzero
 start-satisfies-goal predicate publishes an empty route with completion
@@ -1766,9 +1967,10 @@ enumerate, respectively: the single packed center cell; a single cell biased
 along z by `(inner + outer) / 32` toward the far side of the stand-off ring
 (bias intent inferred, arithmetic direct); exactly the rectangle border; and,
 for restored-from-save goals, an internally stored list. A radius-unit
-mismatch is real and unresolved: the annulus h clamps compare RAW authored
-radii while its arrival predicate uses `>>4`-quantized squared radii — two
-unit systems coexist in one family.
+mismatch is real and established as a dual-unit contract: the annulus h
+clamps compare RAW authored radii while its arrival predicate uses
+`>>4`-quantized squared radii — two unit systems coexist in one family and
+must be reproduced as-is, not "fixed" [P0-13 A19].
 
 **Established fact:** Build-site generation enumerates perimeter candidates around a footprint, filters by range and placement validation, sorts a bounded list of candidates, and passes a selected point goal into path search.
 
@@ -1814,7 +2016,7 @@ applies terrain height, gravity and lean, and the fixed-point position commit.
 
 **Established fact (negative-bounded):** No mass-weighted pushing, impulse-based movement resolver, axis-slide resolver, automatic repath timeout, or yielding/wait-queue was recovered within the bounded mover call graph. Absence is contract: a blocked mover only receives the half-speed clamp and dirty clamp above; it does not push, slide, or wait.
 
-**Supported inference:** Mobile units are hard blockers at the movement commit stage even though they are not inserted into the static A* layer. Feature/building and owner-mask details remain separate predicates.
+**Established fact:** Mobile units are hard blockers at the movement commit stage even though they are not inserted into the static A* layer: the commit validator reads the cell's mobile-occupancy count, and the three-function search bound (request setup, scheduler, expansion) contains no reference to the mobile pool — mobile occupancy is never part of path search, directly or via a revision. Feature/building and owner-mask details remain separate predicates. *(Upgraded from Supported inference — both sides are direct.)*
 
 ### 8.3 Final-order arrival and the satisfied-bit handshake [R-P0-01]
 
@@ -1861,20 +2063,39 @@ at order creation, so **HUD/AI-issued ground moves bind radiusParam 4 and the
 threshold is `floor(4/16)² = 0` — the order completes only when the committed
 tile equals the goal cell**. The sight-distance reads in the traced handler
 region feed range/acquire paths, never the goal handle; the earlier
-SightDistance+4 attribution was a misassociation. The VTOL_Move handler
-instead passes the definition's kamikaze distance field clamped to at least
-16, so the VTOL arrival threshold is `floor(max(kamikaze,16)/16)²`.
-Patrol-family substates bind other radii (halved or zero) whose exact
-per-substate values remain TODO(question); the fallback for unimplemented
-variants is the ground default (4).
+SightDistance+4 attribution was a misassociation.
+
+**Closed — patrol radii and the VTOL radius (2026-08-26):** ground Patrol's
+phase-1 bind passes radiusParam ZERO (threshold `floor(0/16)² = 0`,
+tile-equality arrival), and the patrol phase-2 arrival rotates the record to
+the tail (result 6) and resets to phase 1 — the patrol "waypoint rotate".
+The earlier "Patrol-family substates bind other radii (halved or zero) whose
+exact per-substate values remain TODO(question)" is closed: the ground
+patrol radius is zero; the air patrol builds its path marker with the
+arrival-radius flag 336 (`0x150`) — a fourth radius alongside the
+48/128/320 family of section 10.1 — and orbits the goal at a 20-world-unit
+offset with a random enemy-pick landing fallback when hostile units are
+within 0xf00. The VTOL_Move arrival threshold attribution below is also
+corrected: the handler reads the cruise-altitude field HALVED for the marker
+height offset only; no kamikaze read exists in the handler. The goal-handle
+threshold family `floor(radiusParam/16)²` therefore applies to the ground
+handlers (Move_Ground, Patrol) only; the VTOL family uses the marker's
+hypot-based arrival test of section 10.1 (see C5 closure below).
 
 **Established fact — satisfied-bit notification:** On arrival the movement
 layer ORs bit 0x20 into the order record's accumulated satisfied word. The
 same word carries: 0x100/0x200 for path request done / no-path (written by the
-path service); 0x40 for route released before arrival; and 0x80 for
-goal-handle detach or rebind. The ground-move handler tests only 0x20; 0x40 or
-0x80 reaching its completion phase fall into the drop/wait return path, and
-their retry interplay with the re-armed gate is TODO(question).
+path service through the goal-handle slot — section 7.2's early exits); 0x40
+for route released before arrival; and 0x80 for
+goal-handle detach or rebind.
+
+**Closed — 0x40/0x80 retry interplay (2026-08-26):** the ground-move handler
+tests only 0x20; when 0x40 or 0x80 reaches its completion phase the handler
+returns result 9, and for the LAST record that re-arms the record (phase
+reset to zero, gate re-armed, wait `30 + RNG(30)`) — the next pump visit
+re-runs phase 0, which rebinds the goal handle and re-arms the 0xE0 gate. It
+is re-arm, not drop; non-last records are unlinked and freed by the pump, so
+a released route in the middle of the queue removes that record.
 
 **Established fact — pump gate halt:** The primary pump combines the record's
 satisfied word with the unit's capability word, masked by the record's dynamic
@@ -1896,15 +2117,31 @@ a nonzero combination: if bit 0x20 is set it issues the move-complete
 acknowledgement notification and returns result 5 — the pump unlinks and frees
 the record, ORDER COMPLETE; otherwise it returns 9 — dropped while further
 records follow, else the record resets its phase and waits `30 + RNG(30)`
-ticks (range 30 to 59). The VTOL_MOVE handler shares the mechanism: the same
-0xE0 gate, a goal snapped to a half-cell grid, and a radius parameter of the
-definition's kamikaze distance field clamped to at least 16 — the
-"half an authored definition field" reading above is corrected here: the
-handler reads the full kamikaze distance, not half a field — and
-a terminal phase returning 5 with the acknowledgement only when it is the last
-record; hover controllers notify bit 0x20 from their own per-tick visit.
-TODO(question): the trigger that advances the VTOL handler from its phase-1
-wait to the terminal phase.
+ticks (range 30 to 59).
+
+**Closed — VTOL_MOVE phase trigger and C5 mechanism split (2026-08-26):** the
+VTOL_MOVE handler is a THREE-phase machine, not a two-phase one: phase 0
+(alive + canfly gate) clears weapon slots, detaches from a carrier, raises
+the activation edge, builds the 0x36-byte path marker on the unit's position
+with the cruise-altitude field halved as the marker height offset, installs
+it, and arms gate 0xE0; phase 1 clears the weapon targets, RE-SNAPS the goal
+to the half-cell grid relative to the unit (`newGoal = (unitPos + 2 ·
+quantize(goal − unitPos)) << 16` per axis), builds and installs a fresh
+marker, re-arms 0xE0, and advances; phase 2 completes unconditionally
+(acknowledgement only when the record is last) with result 5. The trigger
+that advances the handler from its phase-1 wait to the terminal phase is
+therefore the state machine itself: each visit requires a nonzero gate
+combination, and phase 2 runs on the first satisfied visit after the
+phase-1 re-arm. The earlier reading — "a radius parameter of the
+definition's kamikaze distance field clamped to at least 16, threshold
+`floor(max(kamikaze,16)/16)²`" — is superseded: the handler contains no
+kamikaze read; the marker's height offset is `cruisealt/2`, and arrival is
+the marker's hypot test of section 10.1. This closes C5: the two arrival
+mechanisms split by ORDER FAMILY — ground orders (Move_Ground, Patrol) use
+the 20-byte goal handle with the tile-threshold predicate; VTOL orders
+(VTOL_Move, VTOL_Patrol) use the 0x36-byte path marker with the hypot
+predicate (radii 48/128/320, or 336 for patrol, default 0.5 world units).
+The two mechanisms never cross order families.
 
 **Audit note — completion-wait ranges [R-P0-01]:** the code-9 last-record
 wait is `30 + RNG(30)` (range 30 to 59), NOT `30 + RNG(15)`: only the code-3
@@ -1922,11 +2159,20 @@ waypoint/steering logic only — it never appears in the order-completion chain
 without a replan, yield, or queue transition (section 8.2's blocked-mover
 contract).
 
-**Unknown [R-P0-01]:** The compact ground controller class — selected when
-the owning player record's state byte holds value 3 — wires its per-tick hook
-to a plain return, so the arrival notification is not wired there; how that
-population's ground orders complete is TODO(question). The VTOL phase trigger
-above is likewise unrecovered; both must not be guessed.
+**Closed — compact ground controller (2026-08-26):** the per-unit sweep
+gates the order pumps, the movement tick, and the height snap on the owner
+player's state byte being 1 or 2; state-3 owners' units receive the script
+drain, the stun/paralyze timers, and the death check but NO order pump and NO
+movement integration, so their orders cannot complete through the sweep
+because the whole pump+mover block is skipped. The player phase additionally
+treats state 3 with the watch-mode ("You're out — Continue Watching?")
+branch, so state 3 reads as the eliminated/defeated watch player state
+(Supported inference for the label; the skip itself is direct). The earlier
+wording — "wires its per-tick hook to a plain return, so the arrival
+notification is not wired there; how that population's ground orders complete
+is TODO(question)" — is superseded: the mechanism is the sweep's state-gate,
+not a hook, and the population is the watch/defeated one, whose units are
+inert in the sweep by design.
 
 ## 9. Hover, floaters, and amphibious behavior
 
@@ -1984,7 +2230,23 @@ increments the killer's credited-kill counter.
 renderer to reproduce the callback contract; wake effects and medium bands in
 shipped content are script-authored behavior gated on the bands above.
 
-**Unknown:** Complete wake and SFX-piece mapping for every band transition,
+**Reconciliation with document 03 (2026-08-26):** document 03 section 5.7
+describes engine-side "wake rectangles" produced from mover bounds and filled
+with a palette tint under a fog gate. The two claims are reconciled as
+complementary presentation layers, not competitors: the script-emitted
+`emit-sfx` wake effects (types 2 through 5, spawned by shipped hover scripts
+via the band classifier) are the authoritative medium-band behavior this
+document owns, while the mover-bound rectangles of document 03 are a
+presentation-side artifact keyed on mover bounds and bands with no
+authoritative simulation role. Neither document asserts the other's mechanism
+in its own section; this paragraph records the agreed split (ships/sea
+rectangles live in document 03, hover wake effects live here). Document 03
+section 11's open "wake rectangle interpolation" item remains open there.
+
+**Unknown:** Complete wake and SFX-piece mapping for every band transition
+(the script-emitted wake effects are established as spawner-driven in
+section 5.2; the presentation-side wake rectangles of document 03 section 5.7
+are that document's artifact — see the reconciliation note above),
 sea-floor following, and wake rectangle interpolation beyond the band
 arithmetic; the semantic label of mover modes `0` and `3`.
 
@@ -2066,7 +2328,7 @@ commit drives the lean-decay / velocity-delta / gravity pipeline that writes
 bank from the bank-scale-scaled X residual and pitch from the
 pitch-scale-scaled Z residual into the two visual angle words.
 
-**Established fact:** Cruise altitude for point and follow commands is `targetY = (max(sea level, terrain height at target XZ) + signed offset) × 65536` capped at `0x1FF0000` (about 511 world units), where terrain height is the bilinear four-corner query and the offset is `cruisealt` (full altitude) or `cruisealt/2` for the initial climb, or the negated attach-piece world Y for a hanging cargo. Sea level is the terrain header byte; terrain height is sampled at the cursor or at the followed unit's piece world position; there is no lower clamp. Arrival radii are horizontal and strict: explicit air arrivals test `hypot(dx,dz) < radius` with radii 48, 128, or 320 world units depending on order (flagged via the arrival-radius field), while the default test is `dx*dx+dz*dz <= 0.25` (0.5 world units) and for explicit-altitude commands also `|dy| < 65537` (one world unit plus one subunit).
+**Established fact:** Cruise altitude for point and follow commands is `targetY = (max(sea level, terrain height at target XZ) + signed offset) × 65536` capped at `0x1FF0000` (about 511 world units), where terrain height is the bilinear four-corner query and the offset is `cruisealt` (full altitude) or `cruisealt/2` for the initial climb, or the negated attach-piece world Y for a hanging cargo. Sea level is the terrain header byte; terrain height is sampled at the cursor or at the followed unit's piece world position; there is no lower clamp. Arrival radii are horizontal and strict: explicit air arrivals test `hypot(dx,dz) < radius` with radii 48, 128, or 320 world units depending on order (flagged via the arrival-radius field), while the default test is `dx*dx+dz*dz <= 0.25` (0.5 world units) and for explicit-altitude commands also `|dy| < 65537` (one world unit plus one subunit). The radius-flag family now includes a fourth value, 336, used by the air patrol orbit (section 8.3). The marker machinery behind this paragraph — the 0x36-byte path marker, its arrival test (hypot with the 0.5-world-unit default and the flag-driven radius), the cruise-altitude height setter, and the goal re-snap — is established direct (2026-08-26); the order-family split between this hypot mechanism and the ground tile-threshold mechanism of section 8.3 is closed there (C5).
 
 **Supported inference:** Can-fly movers bypass some ordinary ground footprint checks during travel, but air order admission and landing-pad checks still use separate validators.
 
@@ -2077,7 +2339,7 @@ pitch-scale-scaled Z residual into the two visual angle words.
 **Established fact:** Transport service lifecycle is exact for admission, carry,
 unload, pads, and death:
 
-*Admission.* `carrier, candidate` is admitted only if, in this order, none of these nine rejects fires: 1) candidate `cantbetransported` set; 2) carrier lacks `canload`; 3) carried-count (entries in the carrier cargo list whose parent equals the carrier) reaches carrier `transportcapacity` (count, not summed sizes; unauthored `0` therefore blocks loading); 4) carrier `transportsize` below candidate `FootPrintX` (signed compare, FootPrintX is the movement class footprint width); 5) candidate has no mover; 6) candidate committed mover mode is active locomotion (mode 2, moving) — moving cargo is rejected; 7) ground carrier (`canfly` clear) with candidate `MinWaterDepth >= 0`; 8) candidate `Y + modelTop` at or below `sea level × 65536` (submerged); 9) candidate landed-float field not exactly `0.0` (still under construction). Missing `transportcapacity` and `transportsize` default to `0`. The effective boarding range is the first enabled weapon slot's `range` (scanned via the weapon-slot enabled flag); shipped unarmed fallback is weapon record `0` (`NOWEAPON`, Range 16), so shipped unarmed pickup range is `16`. Ownership or alliance is not tested in this predicate; whether allied cross-owner commands are permitted is an upstream command-layer question left open (`TODO(question)`).
+*Admission.* `carrier, candidate` is admitted only if, in this order, none of these nine rejects fires: 1) candidate `cantbetransported` set; 2) carrier lacks `canload`; 3) carried-count (entries in the carrier cargo list whose parent equals the carrier) reaches carrier `transportcapacity` (count, not summed sizes; unauthored `0` therefore blocks loading); 4) carrier `transportsize` below candidate `FootPrintX` (signed compare, FootPrintX is the movement class footprint width); 5) candidate has no mover; 6) candidate committed mover mode is active locomotion (mode 2, moving) — moving cargo is rejected; 7) ground carrier (`canfly` clear) with candidate `MinWaterDepth >= 0`; 8) candidate `Y + modelTop` at or below `sea level × 65536` (submerged); 9) candidate landed-float field not exactly `0.0` (still under construction). Missing `transportcapacity` and `transportsize` default to `0`. The effective boarding range is the first enabled weapon slot's `range` (scanned via the weapon-slot enabled flag); shipped unarmed fallback is weapon record `0` (`NOWEAPON`, Range 16), so shipped unarmed pickup range is `16`. Ownership or alliance is not tested in this predicate, and the two command resolvers contain no alliance gate either (bounded-negative within them), so whether allied cross-owner commands are permitted remains an upstream command-layer question left open (`TODO(question)`).
 
 *Load executor entry gates.* Independent of admission, every phase of the
 canonical load executor re-checks four gates in order before doing work: the
@@ -2173,14 +2435,15 @@ independent question.
 
 **Supported inference:** The recurrence itself is the contract; treating the
 seven-station observation as an exact array size would misstate the executable
-behavior.
+behavior. The per-waypoint travel time is a consequence of the integrator
+(computable, not an authored constant), so the §11 bullet on it is closed as a
+consequence, not a separate contract [movement/13].
 
-**Unknown:** Exact travel time between generated waypoints, ground-following
-and sea behavior while orbiting, pad reservation beyond the landing-pad
-selection described in 10.2, carrier collision beyond the ordinary shared-mover
-rules, and the order-layer command-target supply for each non-construction
-air class beyond the established altitude authority and integrator arithmetic
-of section 10.1.
+**Unknown:** Ground-following and sea behavior while orbiting, pad reservation
+beyond the landing-pad selection described in 10.2, carrier collision beyond
+the ordinary shared-mover rules, and the order-layer command-target supply for
+each non-construction air class beyond the established altitude authority and
+integrator arithmetic of section 10.1.
 
 ## 11. Evidence basis and correction boundaries
 
@@ -2200,8 +2463,13 @@ Function identities that a later re-derivation corrected — in particular the m
 ### Simulation and identity
 
 - Complete lockstep packet ordering, replay state, state-hash contents, and resynchronization behavior.
-- Exact unit pool capacity and all slot-limit failure paths.
-- Complete serialization of transient order queues, script callbacks, pending path requests, and medium state.
+- Complete serialization of transient order queues, script callbacks, and
+  medium state; pending path-request state is byte-exact via the goal
+  handle's save slot (0x36-byte marker image, two-bit route count,
+  active-bit gating) and pending order state is saved in full on BOTH queue
+  segments by the unit save writer (front and rear heads walked, each node
+  serialized with its owner and slot-derived name, 2026-08-26); the restore
+  side of pending script state remains partial [P1-13].
 - Exact same-tick visibility for every possible unit creation caller
   (factory-product publication windows are established in section 3.8
   [R-P0-09]); slot-relative reuse and order-created units beyond the factory
@@ -2210,41 +2478,47 @@ Function identities that a later re-derivation corrected — in particular the m
 
 ### Orders and queues
 
-- Meaning of every construction/factory operation selector and retry mask.
+- Per-phase operation-byte VALUES inside the construction/factory handler
+  family (the 68-descriptor handler set itself is closed — every handler
+  identity is recovered from the descriptor table, 2026-08-26).
 - Consumers for the descriptor class parameter and for the unnamed gate-mask
   bits.
 - Where the interface and network layers replace or cancel the front order,
-  which the queue pump itself never does.
-- Exact attack, reclaim, guard, and patrol goal predicates (the ground-move
-  and VTOL final-order arrival predicate is established in section 8.3
-  [R-P0-01], and the factory exit path in sections 3.8 and 6.4).
-- Order behavior when a path is empty, stale, blocked, or budget-delayed.
-- The label of the one internal command code whose resolved name is not
-  established.
-- Consumer-side meaning of the `Wait` trailing integer and of the `bw`/`b`
-  stockpile count passed by InitialMission tokens (section 3.6); both live in
-  their handlers.
+  which the queue pump itself never does; the mask-2 cancel notification
+  itself is delivered by the node cleanup path (section 3.3, 2026-08-26).
+- Exact attack, reclaim, guard, and patrol goal predicates: the attack-chase
+  orbit substate arithmetic is now direct (leash test, 8-world-unit vertical
+  threshold, quarter/half/zero standoff binds, the two banded pairs, the
+  ±90° randomized orbit direction) with the standoff VALUE itself still
+  inference (produced by the weapon-slot engagement-distance helper); the
+  patrol radii are closed in section 8.3.
+- Order behavior when a path is empty, stale, blocked, or budget-delayed:
+  the path-service statuses 0x100/0x200 and the handler-level re-arm
+  reactions are established in sections 7.2 and 8.3; the movement-layer
+  consumption of a released route remains in the integrators.
 - Exact construction/economy carry and worktime-under-one-tick behavior
   (document 05); completion ordering and the completion/activation/rally
   callbacks are established in section 3.8 [R-P0-09].
 
 ### COB
 
-- The operand shape of the legacy two-argument effect opcode, though that opcode is a no-op on units. The per-piece flag polarity is now established in section 4.3.
-- Reserved opcode `0x10063000`: behavior when a synthetic or corrupted script emits it.
-- Independent verification of the conventionally-named bitwise opcodes.
-- Stack overflow, invalid piece index, allocation failure, and corrupted-save fault policy.
-- The `Aim*` ready-writer closure object and the exact write it performs; the
-  zero/nonzero readiness grant and the full callback argument catalog are
-  established in section 5. Thread-slot exhaustion behavior is established in
-  section 4.3.
-- Compact ground-controller order completion (owner player state byte value 3)
-  and the VTOL_MOVE phase-1-to-terminal trigger — TODO(question) in section
-  8.3 [R-P0-01].
-- The script-touched marker consumer, the busy-bit semantic, the
-  engine-driven cloak-family bit name, the packed position-half axis naming,
-  the yard-open admission class matrix, and bare-`get UNIT_HEIGHT` dependency
-  — TODO(question) in section 4.7 [R-P0-10].
+- Reserved opcode `0x10063000`: behavior when a synthetic or corrupted script
+  emits it (count exceeding the window depth reads stale window words —
+  undefined behavior, not a kill).
+- Stack overflow, allocation failure, and corrupted-save fault policy; the
+  invalid-piece-index half is closed (no bounds check in the interpreter;
+  out-of-range index is out-of-bounds access, not a kill — the kill path is
+  unknown-opcode and thread-return only, 2026-08-26).
+- The `Aim*` ready-writer closure: the receiver protocol and the write it
+  performs are closed in section 5.3 (return-opcode invocation of the
+  receiver with the script's returned cell); the identity of the closure
+  target (the dword at the receiver word) remains `TODO(question)` R-1,
+  coordinated with document 06 section 3.4.
+- The script-touched marker consumer, the busy-bit semantic NAME (the
+  transport-admission half is closed: no busy-bit test in the nine gates),
+  the engine-driven cloak-family bit name, the packed position-half axis
+  naming, the yard-open admission class matrix, and bare-`get UNIT_HEIGHT`
+  dependency — TODO(question) in section 4.7 [R-P0-10].
 - Semantic unit of the footprint-path `SetSpeed` argument, and serialization
   of the unassigned `Killed` variant cell when the script neither assigns it
   nor the work-fraction gate forces zero.
@@ -2255,27 +2529,22 @@ Function identities that a later re-derivation corrected — in particular the m
 - Retail default content of the settings string feeding the heuristic-weight
   parse (the ×65536 fixed-point form and {6, 3, 1} tiers are established), and
   any runtime surface that rewrites that base besides settings application.
-- Unit-system reconciliation between the annulus goal's raw-radius h clamps
-  and its `>>4`-quantized squared arrival radii (section 7.4).
 - Class-D restored-from-save goal usage frequency, and whether loaded saves
   ever re-issue fresh point/annulus/rectangle goals replacing them.
 - Exact order-layer identity of each point-goal wrapper call site beyond the
   classified exemplars; heuristic family, formulas, scaling, threshold, and
   goal constructors are established in section 7.2.
-- Per-player debt-array layout and any path-budget edge cases.
-- Exact semantics of terrain state one versus clear state three beyond passability.
+- Exact semantics of terrain state one versus clear state three beyond
+  passability: the expansion applies no per-edge terrain-state cost (the
+  neighbour cost is step cost plus turn penalty plus the fixed 30 plus the
+  short-run 75 only — bounded-negative, 2026-08-26).
 - Full static feature/yard/owner-mask interaction.
-- Whether any order adds dynamic mobile occupancy to search before movement commit.
 - Exact out-of-bounds goal handling for every order type.
 - Heap OOM policy and integer overflow behavior; route caps are established
   (20 published points, 64-point reconstruction ring, 3 saved waypoints).
 
 ### Ground movement
 
-- Braking and blocked-state behavior at zero speed or a moving target and its
-  interaction with the exact pitch and below-water caps (the final-order
-  arrival predicate itself is established in section 8.3 [R-P0-01], and the
-  speed-derived settling family is steering-only there).
 - Collision behavior for simultaneous multi-unit contacts beyond the established
   sequential sweep commit and row-major footprint scan, including interactions
   with features, buildings, and map boundaries; the per-unit validator and the
@@ -2292,24 +2561,27 @@ Function identities that a later re-derivation corrected — in particular the m
 - Semantic name and domain of the global sentinel compared against the unit's
   sector-list head field, which bypasses the flight vertical assignment
   entirely (bypass behavior itself is established in section 10.1).
-- Sea-floor behavior, wake rectangle interpolation, and detailed wake and
-  SFX-piece mapping beyond the exact `setSFXoccupy` five-band classifier; the
-  band thresholds, their height-byte domain, overwrite order, mode dependency,
-  and edge-triggered delivery are established.
-- `amphibious` runtime role beyond the parser-only bounded absence, and any
-  unrecovered per-tick consumer of that bit outside the bounded movement/medium/
-  targeting/transport census.
+- Sea-floor behavior and detailed wake and SFX-piece mapping beyond the exact
+  `setSFXoccupy` five-band classifier; the presentation-side wake rectangles
+  of document 03 are that document's artifact under the reconciliation note
+  in section 9.2; the band thresholds, their height-byte domain, overwrite
+  order, mode dependency, and edge-triggered delivery are established.
 - Can-fly terrain bypass conditions for every order beyond the established
   flight selection in the mover fan-in.
 - Cruise-altitude reference details beyond the established order-goal `Y`
   authority (upper cap `0x1FF0000`, sources `cruisealt`, `cruisealt/2`,
-  `modelBottom`, and negated attach-piece Y), landing and descent arrival radii
-  (`0x30`, `0x80`, `0x140` are horizontal arrival radii, not descent rates),
-  pad reservation beyond the four-candidate `QueryLandingPad` selection and the
-  `0`/`30+rand(15)` retry protocol, and carrier collision beyond the ordinary
-  shared-mover commit rules; the load/unload executor entry gates, six-phase
-  tables, statuses, and event codes 12/13 are established in section 10.2.
+  `modelBottom`, and negated attach-piece Y; the cruise-altitude field read
+  by the VTOL handlers is pinned, 2026-08-26), landing and descent arrival
+  radii (`0x30`, `0x80`, `0x140` are horizontal arrival radii, not descent
+  rates; the patrol orbit adds a 0x150 radius), pad reservation beyond the
+  four-candidate `QueryLandingPad` selection and the `0`/`30+rand(15)`
+  retry protocol (the rand(15) arm is the code-3 wait, confirmed; the
+  code-9 arm is rand(30) — section 3.3), and carrier collision beyond the
+  ordinary shared-mover commit rules; the load/unload executor entry gates,
+  six-phase tables, statuses, and event codes 12/13 are established in
+  section 10.2.
 - Air patrol orbit admission beyond the established `150`-tick recurrence at
-  `builddistance << 16` with offset `0xDB6E` and build power `work/30` per tick;
-  exact travel time between generated construction waypoints and construction
-  target-eligibility gates.
+  `builddistance << 16` with offset `0xDB6E` and build power `work/30` per
+  tick; exact travel time between generated construction waypoints is a
+  consequence of the integrator, not an authored constant (section 10.3), and
+  construction target-eligibility gates.

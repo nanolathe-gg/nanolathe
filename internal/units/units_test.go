@@ -290,3 +290,27 @@ func TestOnDeathExtraFiresExactlyOnceAlongsidePrimary(t *testing.T) {
 		t.Fatalf("second FinalizeDeath = %#v hooks=%d/%d, duplicated or freed", got, primary, extra)
 	}
 }
+
+// TestEligiblePredicate locks the shared eligibility predicate [07 §8/§9]:
+// status bit 0x20 set AND the order-guard float exactly 0.0 (not mid-order).
+// A guard of 0.0001 (any nonzero) must fail the exact compare.
+func TestEligiblePredicate(t *testing.T) {
+	u := &Unit{Alive: true, Flags: ClassifierEligibleStatus}
+	if !u.Eligible() {
+		t.Fatalf("fresh eligible unit rejected")
+	}
+	u.OrderGuard = 0.0001
+	if u.Eligible() {
+		t.Fatalf("mid-order unit accepted (guard %v)", u.OrderGuard)
+	}
+	u.OrderGuard = 0.0
+	u.Flags &^= ClassifierEligibleStatus
+	if u.Eligible() {
+		t.Fatalf("bit-0x20-clear unit accepted")
+	}
+	u.Flags |= ClassifierEligibleStatus
+	u.Dying = true
+	if u.Eligible() {
+		t.Fatalf("dying unit accepted")
+	}
+}

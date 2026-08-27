@@ -1,11 +1,15 @@
 package world
 
 import (
+	"encoding/binary"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // synth builds a Terrain directly from attribute cells, bypassing the VFS.
@@ -40,7 +44,7 @@ func TestFloorPairIsDerived(t *testing.T) {
 
 	// Cell (0,0) spans corners (0,0),(1,0),(0,1),(1,1) so it sees the peak.
 	if lo, hi := ter.PlotAt(0, 0).MinHeight(), ter.PlotAt(0, 0).MaxHeight(); lo != 10 || hi != 30 {
-		t.Fatalf("cell (0,0) floor pair = %d/%d, want 10/30", lo, hi)
+		t.Fatalf("cell (0,0) floor pair = %d/%d, want 00/30", lo, hi)
 	}
 	if got := ter.CoarseHeightAt(0, 0); got != 20*65536 {
 		t.Fatalf("CoarseHeightAt(0,0) = %d, want %d", got, 20*65536)
@@ -195,5 +199,190 @@ func TestHeightAtBilinear(t *testing.T) {
 	half := numeric.Fixed(8 * 65536)
 	if got := ter.HeightAt(half, 0); got != 8*65536 {
 		t.Fatalf("HeightAt(half cell) = %d, want %d", got, 8*65536)
+	}
+}
+
+// TestVoidEdgeRules locks the four engine-derived void rules of
+// [02 "Terrain file"]: right columns void only where empty/fringe (live
+// features survive), the north strip z*16 < height>>1, the south strip
+// (Height-1-z)*16 + (height>>1) < 112, and the lava flood on hmin.
+func TestVoidEdgeRules(t *testing.T) {
+	// 12x12 flat map at height 10; put a live feature in the rightmost
+	// column and one on the north edge so their survival is asserted.
+	attrs := flat(12, 12, 10)
+	// Feature index 1 at (10, 5): right column W-2.
+	attrs[5*12+10] = formats.TNTAttribute{Height: 10, Feature: 1}
+	// Feature index 2 at (3, 0): north edge, would otherwise void.
+	attrs[0*12+3] = formats.TNTAttribute{Height: 10, Feature: 2}
+	ter := synth(t, 12, 12, attrs, nil)
+	ter.applyVoidFixup(nil)
+
+	// Right columns: empty cells voided, the placed feature survives.
+	if got := ter.PlotAt(11, 5).Feature(); got != PlotFeatureVoid {
+		t.Fatalf("right column empty cell = %#x, want %#x", got, PlotFeatureVoid)
+	}
+	if got := ter.PlotAt(10, 5).Feature(); got != 1 {
+		t.Fatalf("right column feature = %d, want 0 (must survive)", got)
+	}
+	// North strip: height 10 at row 0 has z*16=0 < 10>>1=5, so voided;
+	// the feature at (3,0) survives.
+	if got := ter.PlotAt(5, 0).Feature(); got != PlotFeatureVoid {
+		t.Fatalf("north strip cell = %#x, want %#x", got, PlotFeatureVoid)
+	}
+	if got := ter.PlotAt(3, 0).Feature(); got != 2 {
+		t.Fatalf("north edge feature = %d, want 2 (must survive)", got)
+	}
+	// Rows 1..4 are never voided by either strip on this map: north needs
+	// z*16 < height>>1 (row 0 only at height 10) and south needs
+	// (12-1-z)*16+5 < 112 (rows 5..11 only).
+	if got := ter.PlotAt(5, 3).Feature(); got != PlotFeatureNone {
+		t.Fatalf("mid row cell = %#x, want %#x", got, PlotFeatureNone)
+	}
+	// South strip: last row z=11 gives (0)*16 + 5 = 5 < 112, voided.
+	if got := ter.PlotAt(5, 11).Feature(); got != PlotFeatureVoid {
+		t.Fatalf("south strip cell = %#x, want %#x", got, PlotFeatureVoid)
+	}
+	// ... but a tall south cell (height 240, half 120) survives: 5+120 >= 112.
+	// (recheck on a fresh map)
+	attrs2 := flat(12, 12, 10)
+	attrs2[11*12+5] = formats.TNTAttribute{Height: 240, Feature: PlotFeatureNone}
+	ter2 := synth(t, 12, 12, attrs2, nil)
+	ter2.applyVoidFixup(nil)
+	if got := ter2.PlotAt(5, 11).Feature(); got != PlotFeatureNone {
+		t.Fatalf("tall south cell = %#x, want %#x", got, PlotFeatureNone)
+	}
+}
+
+// TestVoidLavaFlood locks the lavaworld bulk flood: empty/fringe cells with
+// hmin <= SeaLevel become void; placed features survive [02 "Terrain file"].
+func TestVoidLavaFlood(t *testing.T) {
+	attrs := flat(8, 8, 0)
+	attrs[4*8+4] = formats.TNTAttribute{Height: 0, Feature: 3} // basin feature
+	ter := synth(t, 8, 8, attrs, nil)
+	ter.SeaLevel = 10
+	ter.applyVoidFixup(&content.MapHeader{LavaWorld: 1})
+	if got := ter.PlotAt(2, 2).Feature(); got != PlotFeatureVoid {
+		t.Fatalf("basin cell = %#x, want %#x", got, PlotFeatureVoid)
+	}
+	if got := ter.PlotAt(4, 4).Feature(); got != 3 {
+		t.Fatalf("basin feature = %d, want 3 (must survive)", got)
+	}
+}
+
+// legacyTNTBytes builds a structurally valid legacy (0x1020) TNT file:
+// 16x16 cells at height 10, two live features, per-cell metal seeds in the
+// 8-byte attribute records (byte 6), and header wind/gravity in slots
+// 10/11/13 [02 "Terrain file"].
+func legacyTNTBytes(t *testing.T) []byte {
+	t.Helper()
+	le := binary.LittleEndian
+	tileMap := 64 * 2    // (16/2)*(16/2) uint16 tile indices
+	attrs := 16 * 16 * 8 // 8-byte legacy records
+	gfx := 1 * 1024
+	feats := 2 * 132
+	offAttr := 0x40 + tileMap
+	offGfx := offAttr + attrs
+	offFeat := offGfx + gfx
+	offMini := offFeat + feats
+	b := make([]byte, offMini+8)
+	le.PutUint32(b[0x00:], 0x1020) // version
+	le.PutUint32(b[0x04:], 16)     // width
+	le.PutUint32(b[0x08:], 16)     // height
+	le.PutUint32(b[0x0c:], 0x40)   // tile map
+	le.PutUint32(b[0x10:], uint32(offAttr))
+	le.PutUint32(b[0x14:], uint32(offGfx))
+	le.PutUint32(b[0x18:], 1) // tile count
+	le.PutUint32(b[0x1c:], 2) // feature records
+	le.PutUint32(b[0x20:], uint32(offFeat))
+	le.PutUint32(b[0x24:], 0)               // sea level
+	le.PutUint32(b[0x28:], 500)             // slot 10: min wind
+	le.PutUint32(b[0x2c:], 800)             // slot 11: max wind
+	le.PutUint32(b[0x34:], 112)             // slot 13: gravity
+	le.PutUint32(b[0x38:], uint32(offMini)) // slot 14: minimap
+	le.PutUint32(b[0x3c:], 0)               // slot 15: minimap flag
+	for i := 0; i < 16*16; i++ {
+		rec := b[offAttr+i*8 : offAttr+i*8+8]
+		rec[0] = 10 // height
+		rec[6] = byte(1 + i%9)
+		// Feature: index 1 at (14,8), index 2 at (3,0); band elsewhere.
+		if i == 8*16+14 {
+			rec[2] = 0
+		} else if i == 0*16+3 {
+			rec[2] = 1
+		} else {
+			rec[2] = 0xFF
+		}
+	}
+	for n := 0; n < 2; n++ {
+		feat := b[offFeat+n*132 : offFeat+n*132+132]
+		le.PutUint32(feat, uint32(n))
+		copy(feat[4:], []byte("tree"+string(rune('a'+n))))
+	}
+	return b
+}
+
+// TestLegacyTerrainLoads locks the world side of the legacy (0x1020) path:
+// header wind/gravity always win, per-cell metal comes from attribute byte 6,
+// and ApplySchema must not overwrite it [02 "Terrain file"]. Void fixup still
+// derives the engine edges.
+func TestLegacyTerrainLoads(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "maps"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "maps", "legacy.tnt"), legacyTNTBytes(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fs := vfs.New()
+	if err := fs.MountDirectory(dir, 0); err != nil {
+		t.Fatalf("mount: %v", err)
+	}
+	ter, err := Load(fs, nil, "legacy")
+	if err != nil {
+		t.Fatalf("legacy Load: %v", err)
+	}
+	if ter.Version != VersionLegacy {
+		t.Fatalf("version = %v, want legacy", ter.Version)
+	}
+	if ter.WindMin != 500 || ter.WindMax != 800 {
+		t.Fatalf("wind = %d/%d, want 500/800 (header values, no OTA)", ter.WindMin, ter.WindMax)
+	}
+	if want := numeric.Fixed(112 * 65536 / 900); ter.Gravity != want {
+		t.Fatalf("gravity = %d, want %d (header gravity via *65536/900)", ter.Gravity, want)
+	}
+	// Per-cell metal from attribute byte 6; interior cell (5,5) stays clean
+	// (rows 1..8 clear of both strips, columns 0..13 clear of the right edge).
+	if got := ter.PlotAt(5, 5).Metal(); got != byte(1+(5*16+5)%9) {
+		t.Fatalf("legacy per-cell metal at (5,5) = %d", got)
+	}
+	if got := ter.PlotAt(5, 5).Feature(); got != PlotFeatureNone {
+		t.Fatalf("interior cell = %#x, want empty", got)
+	}
+	// Engine edges still derive: right column, north strip, south strip.
+	if got := ter.PlotAt(14, 5).Feature(); got != PlotFeatureVoid {
+		t.Fatalf("right column = %#x, want void", got)
+	}
+	if got := ter.PlotAt(5, 0).Feature(); got != PlotFeatureVoid {
+		t.Fatalf("north strip = %#x, want void", got)
+	}
+	if got := ter.PlotAt(5, 12).Feature(); got != PlotFeatureVoid {
+		t.Fatalf("south strip = %#x, want void", got)
+	}
+	// Placed features survive the edges: (14,8) in the right column, (3,0) in
+	// the north strip.
+	if got := ter.PlotAt(14, 8).Feature(); got != 0 {
+		t.Fatalf("right-column feature = %d, want 0", got)
+	}
+	if got := ter.PlotAt(3, 0).Feature(); got != 1 {
+		t.Fatalf("north-strip feature = %d, want 1", got)
+	}
+	// ApplySchema must not overwrite the legacy per-cell seeds; the uniform
+	// SurfaceMetal write is canonical-only [02 "Terrain file"].
+	before := ter.PlotAt(5, 5).Metal()
+	if err := ter.ApplySchema(&content.MapHeader{Schemas: []content.MapSchema{{SurfaceMetal: 42}}}, 0); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	if got := ter.PlotAt(5, 5).Metal(); got != before {
+		t.Fatalf("ApplySchema overwrote legacy per-cell metal %d -> %d", before, got)
 	}
 }

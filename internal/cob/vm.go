@@ -1783,11 +1783,15 @@ func (v *VM) runThread(idx int) {
 			// Bitmap branch spawns effects per bit ascending, plus physical debris if not bitmap-only; here no presentation effect.
 			t.PC += 2
 		case 0x10082000: // engine write [04 §4.3]
-			// Compiled COB pushes the value first and the identifier second
-			// (top: value, identifier) [R-P0-10]. Pop the identifier before
-			// the value so `push 1; push 5; set` means port 5 <- 1.
-			id, _ := t.stackPop()
+			// The shipped compiler emits the identifier first and the value
+			// second, so the value sits on top of the stack and the identifier
+			// is popped last: `push 5; push 1; set` is port 5 <- 1 in every
+			// stock script census (armlab, armcom, and friends all follow it).
+			// A reading that pushed the value first and popped the identifier
+			// first inverted every engine write on retail content — `set
+			// INBUILDSTANCE to 1` became a port-1 write of value 5 [R-P0-10].
 			val, _ := t.stackPop()
+			id, _ := t.stackPop()
 			// If id has no write arm only sets script-touched marker [04 §4.4]; we treat as no-op beyond hook.
 			if fn, ok := v.portFuncs[Port(id)]; ok && fn != nil {
 				_ = fn([]int32{id, val})

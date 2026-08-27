@@ -71,11 +71,18 @@ with a diagnostic on module-name retrieval truncation or `SetCurrentDirectoryA`
 failure rather than reproducing unsafe memory reads.
 
 Missing core resources are reported through a fatal content-error path. The
-known hard requirements include `MOVEINFO.TDF` and `GAMEDATA.TDF`. The
-translation table `gamedata\translate.tdf` is **not** a hard requirement:
-missing data leaves an empty table and lookup returns the source string
-unchanged (byte-exact compare). Optional animation, sound, and presentation
-resources can degrade through separate paths.
+known hard requirements are `MOVEINFO.TDF` and `SIDEDATA.TDF`; a missing
+`gamedata\` directory is fatal as well. **`GAMEDATA.TDF` as a file is not a
+hard requirement**: the reference install contains no `gamedata.tdf` anywhere
+and boots (see `docs/SPEC_CONFLICTS.md` SC2 — an earlier revision of this
+document listed `GAMEDATA.TDF` as fatal; the fatal resource is the
+`gamedata\` directory, and the "Can't load GAMEDATA.TDF" diagnostic is pushed
+from the side-data loader region but its branch is unreachable when the
+directory exists without the file). The translation table
+`gamedata\translate.tdf` is **not** a hard requirement: missing data leaves an
+empty table and lookup returns the source string unchanged (byte-exact
+compare). Optional animation, sound, and presentation resources can degrade
+through separate paths.
 
 ### Supported inference
 
@@ -88,16 +95,39 @@ content set.
 
 ### Unknown
 
-The exact command-line path grammar beyond the bare language token, the
-complete handling of a current-directory switch named by command-line option
-`C`/`c` (which involves `online.dll`/`ONLGetVersion`/`ONLLoadConfigFile` and a
-version gate), and behavior when the executable is launched from a non-install
-directory remain unknown. Directory fallback on `GetModuleFileNameA`/
-`SetCurrentDirectoryA` failure is not a deliberate retail fallback. The exact
-fatal-versus-recoverable classification for every remaining resource family
-is also incomplete beyond the classifications stated in this document,
-though `MOVEINFO.TDF`/`GAMEDATA.TDF` are fatal while the
-translation table is explicitly optional.
+The command-line grammar beyond the bare language token is now established:
+the command line is whitespace-tokenized; a token not starting with `-` or
+`/` is copied into the language buffer (the last such token wins); `-`/`/`
+switches comprise nineteen recognized developer switches (`-memfussy`,
+`-memnofussy`, `-memfrontalign`, `-gonzo`, `-memset`, `-memnoset`,
+`-fpufussy`, `-fpunofussy`, `-dprinton`, `-dprintoff`, `-dprintfile`,
+`-memorystatus`, `-performancestatus`, `-disableimagehlp`,
+`-enableimagehlp`, `-disableimagehlplines`, `-enableimagehlplines`,
+`-debughelper`, `-saveresources`), the multiplayer lobby flag words `lock`,
+`deathends`, `deathplays`, `deathmatch`, `fixedloc`, `mapping`, `circlos`,
+`truelos`, `permlos`, `cheating`, `watching`, a numeric-argument switch
+clamped to the 30..300 window, and the `C`/`c` config switch. Unknown
+switches are ignored.
+
+The `C`/`c` switch takes a config reference (attached to the switch or as the
+following token) and loads it through `online.dll`: the executable resolves
+its own directory, loads `online.dll` from it, requires the exported
+`ONLGetVersion` to return exactly **3**, and then calls
+`ONLLoadConfigFile(config, buffer, 336)` into a 336-byte config block; a
+missing DLL, missing export, or wrong version leaves the block zeroed with no
+fallback dialog. What remains unknown is the data contract of
+`ONLLoadConfigFile` — it is defined by the DLL, not by the executable — and
+the lobby-flag words' exact bit consumers (document 08).
+
+Behavior when the executable is launched from a non-install directory is fully
+covered by the established `GetModuleFileNameA`-based content-root pinning:
+nothing in the command-line path alters the content root. Directory fallback
+on `GetModuleFileNameA`/`SetCurrentDirectoryA` failure is not a deliberate
+retail fallback. The exact fatal-versus-recoverable classification for every
+remaining resource family is incomplete beyond the classifications stated in
+this document, though `MOVEINFO.TDF`/`SIDEDATA.TDF` are fatal while the
+translation table is explicitly optional and `GAMEDATA.TDF` as a file is not
+fatal (SC2).
 
 ## 2. Virtual file system and provider precedence
 
@@ -110,8 +140,18 @@ observed mount/search sequence, established by the mount append order, is:
 2. The revision/patch archive `rev<name>.GP3` with keep-open flag 1.
 3. Every `*.CCX` with keep-open flag 1.
 4. Every `*.UFO` with flag 0.
-5. Local `*.HPI` with flag 0, up to ten successfully mounted archives (the
-   eleventh successful local HPI is not mounted).
+5. Local `*.HPI` with flag 0. The mount loop carries a ten-valued budget
+   that decrements only when a candidate is **newly mounted** (validation
+   passed and the full path was not already mounted); the loop abandons the
+   enumeration when the budget reaches zero, so the eleventh *new* local HPI
+   of a given pass is not even attempted in that pass. The budget is
+   per-invocation: the mount orchestrator runs at several call sites, each
+   restarting the budget, and already-mounted archives never consume it, so
+   repeated invocations converge to every valid local HPI mounted. This
+   reconciles the earlier "eleventh successful local HPI is not mounted"
+   reading with the 13-HPI reference install (`docs/SPEC_CONFLICTS.md` SC1):
+   the cap is real but per-pass, not a global limit; mounting every local HPI
+   in one pass reproduces the converged retail state.
 6. `*.hpi` discovered on each `DRIVE_CDROM` drive with flag 0.
 
 The exact mounted revision and base archive names are installation-dependent
@@ -132,23 +172,34 @@ already-mounted providers; an equal full path suppresses the second mount.
 Append order is precedence order.
 
 The CD-ROM tier scans every drive reported as a CD-ROM and offers its
-`%c:\*.hpi` discoveries for mounting. Acceptance of a CD in the full
-bootstrap is additionally gated by an identity check that reads
-`<drive>:\TOTALA.ID` and inspects its `Contents` content (supported
-inference: the gate lives in the loader adjacent to the mount loop; its exact
-sequencing relative to mounting is not traced).
+`%c:\*.hpi` discoveries for mounting (this tier has no identity check and no
+budget). CD *content-path* selection is a separate path: the CD-content
+loader adjacent to the mount loop walks each CD-ROM drive, reads
+`<drive>:\TOTALA.ID`, parses it as TDF, locates the `Contents` section, and
+reads the integer key named by the bootstrap mode (`Campaign` for campaign
+entry, `Multiplayer` for multiplayer); a nonzero value accepts that drive and
+its letter feeds the `%c:\%s` content paths (retried once), a missing
+file/section/zero value advances to the next CD-ROM drive. The sequencing
+question is therefore settled structurally: the identity gate is not part of
+the mount loop — it gates which drive serves CD content, while the mount
+loop's CD tier mounts `%c:\*.hpi` from every CD-ROM drive it finds. This
+upgrades the earlier supported inference to established fact.
 
 The VFS supports both single-file reads and union enumeration. Enumeration
 is used for catalogs, maps, campaigns, GUI files, save slots, and sound
 aliases; its results deduplicate by canonical entry name under
 case-insensitive equality — the first physical backing wins — and filter the
 host filesystem's internal pseudo-entry names and directory entries. A
-provider can be rejected during mounting; invalid providers are
-pruned before the final VFS is exposed. Union visibility is rebuilt by
-recursively clearing mutable entry bit 2 before rebuilding; the installed
+`flag & 1` marks a subdirectory. **Flag census (established):** the union
+enumerator skips every entry whose flag byte has bit 1 (`0x02`) set — the
+mutable enumeration-visibility bit, recursively cleared before union rebuild —
+and classifies the surviving entries by bit 0 (set → directory, clear →
+file with a size read from the file record). No other flag bit is tested by
+the mount, validate, or enumerate paths; synthetic flag values beyond these
+two bits have no executable-defined meaning. Union visibility is rebuilt by
+recursively clearing mutable entry bit 1 before rebuilding; the installed
 corpus contains only persisted entry flags 0 for files and 1 for directories
-across 303 directories and 7,889 files — other persisted bits are synthetic
-and their retail handling remains unknown beyond the keep-open flag.
+across 303 directories and 7,889 files.
 
 Path and identifier matching is case-insensitive. Wildcards are supported.
 The implementation must retain the logical requested path separately from the
@@ -175,9 +226,17 @@ finds `0000` within the template `Copyright 0000 Cavedog Entertainment`,
 overwrites the corresponding four footer bytes with literal `0000`, and then
 requires the normalized footer to equal the template. The accepted shape is
 therefore `Copyright <any four bytes> Cavedog Entertainment` with no digit
-check. A mismatch in the tag, the version bytes, or the normalized footer
-rejects the archive; the provider object is released and never enters the
-mount list. **Installed-corpus observation** (this corpus only, not a claim
+check. **Mount-time validation is exactly three checks.** The reader requires: fopen
+success; the four magic bytes `HAPI`; the version bytes `00 00 01 00` at
+offset 4; and the normalized footer. Nothing else is validated at mount: the
+directory-blob size is not bounded against the file, relocated offsets are not
+checked against the blob, and entry counts are trusted. A structurally
+malformed but header-valid archive therefore **mounts** and its failures
+surface at read time (short reads, decompression errors, and the all-ones
+failure value with the chunk diagnostics), not at mount time. A mismatch in
+the tag, the version bytes, or the normalized footer rejects the archive; the
+provider object is released and never enters the mount list.
+**Installed-corpus observation** (this corpus only, not a claim
 about every edition): 30 root archives use footer years `1997:3`, `1998:25`,
 `1999:1`, `2000:1`.
 
@@ -307,14 +366,16 @@ precedence is unaffected), and the footer four-byte wildcard are established
 above. What remains open is narrower: enumeration order within one wildcard
 group is decided by the host directory listing, which retail does not sort, so
 it is not a property of the executable; the entry flag bits beyond the
-subdirectory bit and the mutable enumeration-visibility bit (bit 2,
-recursively cleared before union rebuild) are not enumerated for synthetic
-values; the exact recovery behavior for a structurally malformed but
-header-valid archive is untraced (see safety note); whether any shipped
+subdirectory bit and the mutable enumeration-visibility bit (bit 1, mask
+`0x02`, recursively cleared before union rebuild) are not enumerated for
+synthetic values — no other flag bit is tested by any mount/validate/enumerate
+path, so synthetic values are inert; the exact recovery behavior for a
+structurally malformed but header-valid archive is established at the
+validation level (below); whether any shipped
 archive variant outside the installed corpus departs from the container above
-has not been established from the executable alone; and the exact sequencing
-of the `TOTALA.ID` CD identity gate relative to the mount loop is not fully
-traced (the gate itself is carried as supported inference above).
+has not been established from the executable alone (the container contract —
+magic, version, footer wildcard, cipher, directory shape, duplicate and
+separator rules — is itself established above).
 
 ## 3. Registry configuration, language, and localization
 
@@ -461,7 +522,8 @@ plus four `japanesename` prefixes in FBI records with no corresponding
 translation-table key in this corpus — not a claim about every edition),
 code-page behavior for high bytes, language-specific font fallback, the
 precedence among registry/INI/command-line for non-language configuration, and
-which runtime messages pass through the translation lookup.
+which runtime messages pass through the translation lookup. Code-page behavior
+for high bytes is a `TODO(T23)` platform residual.
 
 **Installed-corpus observation:** 21 font filename spellings (20
 case-folded identities); both startup-required `COMIX.FNT` and `SMLFONT.FNT`
@@ -563,11 +625,22 @@ if a compatibility accessor follows retail first/last behavior.
 
 ### Unknown
 
-Floating `INF`/`NAN` and malformed exponent behavior, line-length limits, and
-caller-specific duplicate-section merging policies are not established. The
-duplicate-key winner mechanism, the parse-diagnostics set with its title and
-empty-tree failure policy, and comment-blanking offset preservation are now
-established above.
+Floating `INF`/`NAN` and malformed-exponent behavior is now established: the
+floating accessor hands the stored text to the CRT `atof` conversion
+unchanged, so the behavior is exactly the C run-time's `strtod` family —
+leading whitespace and an optional sign, decimal digits, an `e`/`E` exponent,
+partial parses stopping at the first invalid character (`1e` and `1e+` both
+read as 1.0), the case-insensitive spellings `inf`/`infinity`/`nan` reading as
+±infinity/NaN, and unparsable text reading as zero. There is no custom float
+code in the accessor. Line-length limits are likewise settled: the tokenizer
+parses the whole file and has no fixed line limit — tokens are whitespace-
+trimmed and interned, and the only length caps are caller-side destination
+limits (the string accessor's caller-supplied limit and the 255-byte section
+name buffer). Caller-specific duplicate-section merging policies are not
+established; the first-match section accessor and the enumerator behavior are
+established above, as are the duplicate-key winner mechanism, the
+parse-diagnostics set with its title and empty-tree failure policy, and
+comment-blanking offset preservation.
 
 ## 5. Catalog construction and linking
 
@@ -618,9 +691,10 @@ located consumer is a weighted build-choice roulette over an acting unit's
 build list: cumulative weights select a candidate through the simulation RNG,
 and the winning candidate's `side` string is then compared byte-for-byte —
 case-sensitively — against the acting unit's own; any mismatch rejects the
-pick. The enclosing routine feeds the result into the unit-definition table,
-consistent with strategic-AI build selection; its exact identity is a
-residual (supported inference that it is AI-side).
+pick. The enclosing routines are the strategic-AI build passes: the periodic
+AI planner and a companion builder-refresh pass both iterate builder units,
+run the roulette, and index the unit-definition table with the pick result —
+the classification as AI-side is now established.
 
 **Economy**
 
@@ -682,8 +756,11 @@ static analysis reached.
 **Downloadable enforcement.** After build-menu pages compile, the loader
 walks every unit definition and compares its name case-insensitively against
 every build-menu button name. A match whose `downloadable` bit is clear
-raises the exact warning `Hey! Somebody forgot to set downloadable=1 for %s`
-once, silently forces the bit on, and re-sorts and re-finalizes the catalog.
+raises the exact warning `Hey!  Somebody forgot to set downloadable=1 for %s`
+(two spaces after `Hey!`, verbatim) — the string exists at two push sites in
+the executable, one in the catalog region and one in the downloader region,
+so the "raised once" reading is per-site, not a counted global — silently
+forces the bit on, and re-sorts and re-finalizes the catalog.
 A unit reachable from any build menu therefore behaves as downloadable for
 the rest of the session.
 
@@ -694,7 +771,14 @@ an authored value from an absent key.
 designation metadata, `noautofire`, `ovradjust`, `steeringmode`, and several
 alternate transport names have no reader. They must be retained as unknown
 source fields and must not be given behavior. `ai_weight` and `ai_limit` are
-retained as raw strings; their strategic consumer is not located.
+retained as raw strings, but their fates differ: **`ai_weight` is consumed**
+— the strategic-AI pass parses its text with the profile grammar, its
+`weight` directives reach the live per-unit-type weight array (default 100,
+clamped to 0..100) that scales build-candidate scores, and embedded `limit`
+directives are registered too; **`ai_limit` has no runtime reader** — the
+live per-type limit array is populated only by the ai/ profile parser's
+`limit` token, never by this FBI key (bounded-negative; do not treat
+`ai_limit` as the source of the retail candidate limit).
 
 ### Build-menu catalog keys
 
@@ -706,6 +790,24 @@ the loop. The executable's key vocabulary also names `MENU`, `UNITMENU`,
 order menus; the download tier additionally keys off the unit `downloadable`
 flag (enforcement rule above). Wiring of those sections beyond this presence
 is supported inference.
+
+### Cross-reference failure policy
+
+When a unit definition names a resource that cannot be resolved, the catalog
+does not abort; each reference family has its own failure outcome:
+
+| Reference | Missing → behavior | Fatal? | Evidence |
+|---|---|---|---|
+| Weapon (`weapon1..3`, `explodeas`, `selfdestructas`) | the weapon slot stays inactive (the unresolved id is the all-ones sentinel); no abort | no | direct |
+| Corpse (`corpse`) | the `0xFFFF` no-corpse sentinel; the unit leaves no wreck | no | direct |
+| Movement class (`movementclass`) | the unit compiler falls back to a scratch record — 255 slopes, depth limits ±10000 — parsed from the unit's own FBI keys (see "Movement class record"); a null profile otherwise | no (degraded) | direct |
+| Model (`objectname`) | the model cache slot stays empty; rendering degrades (no model) | no (degraded) | supported inference |
+| Side (`side`) | the build-pick filter compares the authored string; a mismatch rejects the pick — an empty side mismatches every acting side | no, but affects AI builds | direct |
+| Sound category (`soundcategory`) | the category index falls back to a muted placeholder; playback is skipped | no (muted) | supported inference |
+
+The feature-record equivalent is different: a feature name found in no parsed
+feature node raises the fatal diagnostic `Record "%s" missing from feature
+files` (§5 above).
 
 ### Weapon record
 
@@ -853,9 +955,14 @@ on a loop byte carried from the GAF.
 
 ### Movement class record
 
-Movement classes come from `CLASS` sections in the movement catalog. Each class
-reads eight keys **in this parse order**, and defaults chain off values read
-earlier in the same record, so order is contract:
+Movement classes come from `CLASS` sections in the movement catalog. The
+loader scans `CLASS0` through `CLASS31` — the loop is bounded by the 32-slot
+pool, **not** by section presence: a missing section skips that index without
+terminating the loop (this corrects the earlier "until a gap" reading; stock
+content happens to author `CLASS0..CLASS14` contiguously, which is why the two
+readings coincide there). Each parsed class reads eight keys **in this parse
+order**, and defaults chain off values read earlier in the same record, so
+order is contract:
 
 1. `FootPrintX` — integer, default 0, stored as 16-bit.
 2. `FootPrintZ` — integer, default 0, stored as 16-bit.
@@ -874,12 +981,74 @@ Three clamps then run **unconditionally on every class**, in order:
 
 **Established fact:** The comparisons are unsigned byte comparisons with no authored gate; the three checks execute for every class regardless of which keys were authored.
 
-**Supported inference / deliberate divergence:** Retail ship data has only two classes authoring `MaxWaterSlope = 255` (`TANKHOVER3/4`); the other thirteen omit it. If the class record started zero-filled, the unconditional first clamp would set `MaxSlope` to zero for all land classes, making land impassable, which contradicts stock play. The stock movement template therefore must carry a large `MaxWaterSlope` (255) before parsing so an omitted key preserves 255 and the clamps are identity — `TODO(question)` the template writer has not been located in the bounded scan. Nanolathe currently gates the first and third clamps on whether `MaxWaterSlope` was authored to reproduce stock slopes; this is a deliberate, install-compatible divergence retained with `TODO(question)` until the template initialization is proven.
+**Pool initialization — established, and it is NOT a 255 template.** The class
+pool (32 records × 32 bytes) lives in the executable's data section beyond the
+raw-data extent, so it is **zero-filled at load**. The catalog loader writes
+only each record's name pointer and parsed fields; no writer initializes any
+field to 255 before the first parse (a bounded census over the whole text
+segment finds the catalog loop as the pool's only writer). The consequence is
+arithmetically forced: every class that omits `MaxWaterSlope` computes
+`MaxSlope = 0` after the unconditional first clamp, and the stock catalog's
+thirteen omitting classes (only `TANKDH3` and the two hover classes author
+`MaxWaterSlope`) compile to `MaxSlope = 0` — `TODO(question)`: the traced
+arithmetic contradicts the assumed stock playability (a slope-0 class is
+hard-blocked on every non-flat land cell by the movement classifier below);
+all writers and comparisons are enumerated and byte-verified, so the decider
+is a runtime trace of the compiled pool or of a unit definition's slope copy,
+not further static analysis. Nanolathe's gated clamps (clamps 1 and 3 gated on
+whether `MaxWaterSlope` was authored, per `docs/SPEC_CONFLICTS.md` SC5) remain
+the install-compatible divergence; the earlier hypothesis that a profile
+template carries `MaxWaterSlope = 255` before parsing is **falsified** — the
+template that does exist initializes the *fallback* record used when an FBI
+movement class cannot be resolved (below).
 
-The executable contains no key evidence for pivot-turn, reverse, arc-turn,
-minimum turn radius, or minimum turn speed.
+**Record identity and FBI resolution.** Each parsed record's head is the
+interned value of the section's authored `name` key (string accessor, 100
+bytes, default empty) — not the `CLASS%d` section name. The FBI compiler
+resolves its `movementclass` string by a linear scan of the 32 records with
+the case-insensitive comparison against that interned name value; records with
+a null name slot are skipped; a miss yields the null profile. This closes the
+question of whether `MovementClass=TANKSH2` resolves against `CLASS%d` names
+or the authored `Name`: it resolves against the authored `Name` value, exactly
+as `research/formats/tdf.md` states.
 
-**Supported inference:** Slope is derived from a 2×2 height neighbourhood. The plot expansion computes per-cell derived `MinHeight` and `MaxHeight` as the minimum and maximum of up to four height bytes (cell, east, south, southeast, with edge guards) — these derived values are the slope inputs, not a single height sample. Height queries use bilinear interpolation of the four corner heights with low-four-bit fractions and signed-bias correction. Validation aggregates `min of mins` and `max of maxes` across the footprint rectangle, selects land vs water slope by whether the footprint is above water (sea level at or below the footprint minimum chooses movement class MaxSlope, otherwise MaxWaterSlope), and tests passability with strict `<` (`slope == limit` passes) for both slope and water-depth gates. `BadSlope`/`BadWaterSlope` are not hard blocks in the validator; they are soft tiers retained for cost.
+**Fallback template for an unresolvable movement class.** When the FBI
+movement-class lookup fails, the unit's compiler initializes a scratch record
+with `MaxSlope = BadSlope = MaxWaterSlope = BadWaterSlope = 255`,
+`MaxWaterDepth = 10000`, `MinWaterDepth = -10000`, and then parses that
+scratch record with the same eight-key parser against the unit's own section —
+so an FBI that authors footprint/slope/depth keys supplies them, and everything
+unwritten keeps the 255/±10000 defaults. The unit definition then copies from
+the resolved record (pool or scratch): footprint extents, the two depth
+limits, `MaxSlope`, and `MaxWaterSlope`.
+
+**Slope consumers — established.** Three consumers read the class record:
+
+* The **movement classifier** that builds the 2-bit passability layer used by
+  path search reads the record's four slope bytes directly. Per cell it
+  computes `slope = hmax − hmin` (the derived 2×2 heights). On land (`hmin ≥
+  SeaLevel`): `slope ≤ BadSlope` is clear; `BadSlope < slope ≤ MaxSlope` is the
+  passable-but-penalized steep tier; `slope > MaxSlope` is hard-blocked. Under
+  water (`hmin < SeaLevel`) the same three-way split uses `BadWaterSlope` and
+  `MaxWaterSlope`. **`BadSlope`/`BadWaterSlope` are therefore read, and the
+  "soft tier retained for cost" reading is the steep band of this
+  classifier** — upgraded from supported inference to established fact for
+  the three-way split; the path cost the steep band carries is owned by
+  document 04.
+* The **structure validator** (building placement, yard-gated) aggregates the
+  footprint's derived minima/maxima over the yard-selected cells and fails
+  when `bMax − bMin > MaxSlope`; it never reads `MaxWaterSlope`, and its
+  non-land branch compares the peak contributor against the sea level minus
+  the unit's waterline. Water-depth gates fail when the footprint minimum is
+  below `SeaLevel − MaxWaterDepth` or the maximum is above
+  `SeaLevel − MinWaterDepth`.
+* The **mobile-movement wrapper** (non-structure units) applies a per-cell
+  depth-excess gate: `(SeaLevel − MaxWaterDepth) − hmin ≤ MaxSlope`, or, when
+  the cell is underwater, `≤ MaxWaterSlope`. This is a depth gate, not a
+  terrain-slope test; with the stock clamped values it degenerates to the pure
+  `MaxWaterDepth` limit.
+
+**Established:** Slope is derived from a 2×2 height neighbourhood. The plot expansion computes per-cell derived `MinHeight` and `MaxHeight` as the minimum and maximum of up to four height bytes (cell, east, south, southeast, with edge guards) — these derived values are the slope inputs, not a single height sample. Height queries use bilinear interpolation of the four corner heights with low-four-bit fractions and signed-bias correction. Validation aggregates `min of mins` and `max of maxes` across the footprint rectangle. Passability comparisons are strict `<` for the hard blocks (`slope == limit` passes) and `≤` for the clear/steep boundary. Land-vs-water slope selection happens per cell in the movement classifier (`hmin` below sea level switches to the water pair) and in the mobile-movement wrapper; the structure validator's slope gate always uses the land pair.
 
 ### Sound aliases
 
@@ -888,6 +1057,9 @@ is one alias; its `sound` key names the sample. Alias registration
 deduplicates path/alias entries and is capped at **255** registrations, each
 holding a 32-byte alias name. Decoded samples are cached for subsequent
 playback; the cache and mixer are separate from the byte-level sample decoder.
+Alias-cache eviction is bounded-negative (no eviction site found in the
+census) `TODO(question)`; sample precedence follows the VFS mount order
+established in §2.
 
 ### Sound category record
 
@@ -999,13 +1171,17 @@ token scan that also reports the consumed-character count). Each token is
 looked up or created in the registry, then the current unit ID bit is ORed into
 that token's bitset. Empty or repeated whitespace has no semantic effect.
 
-After the token loop, the compiler also looks up the registry's
-empty/sentinel entry and sets the current unit ID bit in that bitset.
-Sentinel membership is mandatory; the sentinel is recovered as an internal
-empty-name entry rather than an authored field name, so its exact
-user-visible spelling or semantic label is not established — implementations
-must preserve the mandatory sentinel membership without inventing a display
-token.
+After the token loop, the compiler also looks up the registry entry named
+by the literal token `ALL` and sets the current unit ID bit in that bitset.
+`ALL` membership is mandatory and unconditional: every compiled unit is a
+member of the `ALL` category regardless of its authored tokens, and an
+authored `ALL` token is a no-op duplicate. This corrects the earlier reading
+of an "empty/sentinel entry with no established spelling": the entry is the
+ordinary token `ALL`, and it is consumed through the ordinary registry
+lookup — a mask built from the name `ALL` (for example an authored
+`noChaseCategory=ALL`) matches every unit. The `ALL` literal also appears in
+the campaign-side selector (a `campaignside` value of `ALL` matches any
+side), which is a separate consumer.
 
 Unit category fields and weapon masks use the same registry. The bad-target
 fields (`wpri_badTargetCategory`, `wsec_badTargetCategory`, and
@@ -1022,7 +1198,7 @@ compiled into that token [06 §3.1].
 | Duplicate token in one `category` string | OR the same unit bit again; no duplicate membership and no second registry entry. | Established |
 | Same token with different case | Case-insensitive lookup returns the same registry entry/bitset. | Established |
 | Duplicate category names across units | One registry entry; each unit ID is ORed into that entry's bitset. | Established |
-| Empty/missing category value | Token loop contributes none, but the mandatory empty/sentinel registry membership is still set. | Supported inference — direct static path; sentinel label unknown |
+| Empty/missing category value | Token loop contributes none, but the mandatory `ALL` registry membership is still set. | Established |
 | `none` default mask | Ordinary registry lookup; zero unless a unit is a member of `none`. | Established, with authored-data caveat |
 
 Unknown category text is thus tolerated data, not a hash collision and not an
@@ -1067,13 +1243,13 @@ floating-point step participates.
   unknown keys: §5 above.
 - Category masks as unit-target membership sets: [06 §3.1].
 - Exact registry shape, case-insensitive sorted insertion, zeroed 16-word
-  allocation, whitespace tokenization, unit-ID word/mask calculation, and
-  sentinel membership: static-analysis notes kept outside the repository.
+  allocation, whitespace tokenization, unit-ID word/mask calculation, and the
+  mandatory `ALL` membership: static-analysis notes kept outside the
+  repository.
 
 Confidence is high for registry identity, bitset layout, unknown/duplicate
-behavior, and unit-ID indexing. Confidence is medium for the sentinel's
-user-visible name and semantics, because the recovered pointer is an internal
-empty-name/sentinel entry rather than an authored field name.
+behavior, unit-ID indexing, and the `ALL` sentinel token; the earlier
+"empty/sentinel entry with unknown spelling" reading is retracted.
 
 #### §8 — Implementation guidance and unresolved question
 
@@ -1083,13 +1259,7 @@ case-insensitive comparison, sort registry entries for deterministic lookup,
 retain unknown names with zero masks, and OR duplicate memberships. Assign unit
 IDs only after the stable case-insensitive unit catalog ordering. Keep `none`
 as a normal token default unless content analysis proves an authored special
-case.
-
-```text
-TODO(question): What exact internal string (if any) is attached to the
-empty/sentinel category registry entry, and which retail systems consume that
-sentinel membership beyond the recovered category compiler?
-```
+case. Set every unit's ID bit in the `ALL` entry as the mandatory membership.
 
 
 ## 6. Interface, side, map, animation, model, and script files
@@ -1167,7 +1337,9 @@ with default 0 unless noted.
 default 0, stored as 16-bit), and `panel`, `crdefault`, `escdefault`, and
 `defaultfocus` (strings, 16 bytes each, default empty). The header may also
 contain a `[VERSION]` subsection with `major`, `minor`, and `revision`
-(integers, default 0, stored as bytes); the subsection is optional.
+(integers, default 0, stored as bytes); **the subsection is optional in the
+parser** — a missing `[VERSION]` is skipped silently and the three bytes stay
+zero — even though every one of the 368 retail GUIs authors it.
 
 **Button keys:** `status` (integer, 16-bit), `text` (string), `quickkey`
 (string, stored as a byte), `grayedout` (integer, 16-bit), `stages` (integer,
@@ -1292,8 +1464,12 @@ A unit placement compiles to a **36-byte** record. The strings `Unitname`,
 stored as pointers into a tail heap appended after the record array.
 Coordinates store fixed-point dwords (authored value shifted left 16) in
 X/Z/Y slot order (supported inference on the exact slot assignment). `Angle`
-converts authored degrees onto the engine's 65,536-per-turn angle scale (the
-exact rounding chain is supported inference). `BuildPriority`,
+converts authored degrees onto the engine's 65,536-per-turn angle scale by a
+fixed-point magic multiply with truncation toward zero (see document 08, which
+owns the exact equivalence domain: identical to `trunc(degrees × 65536 /
+360)` for non-negative degrees below the 32-bit wrap, plus one unit for
+negative degrees, wrapping correctly through 360..65535; an earlier reading
+held the exact rounding chain as supported inference — superseded). `BuildPriority`,
 `HealthPercentage` (default **100**), and `CreationCountdown` fill dedicated
 fields; `Player` defaults 0 with negatives clamped to 0; the four flags
 `MissionCriticalUnit`, `AiIgnore`, `AiPriorityTarget`, and `Immunity` pack as
@@ -1311,14 +1487,30 @@ coordinates are cleared before stamping.
 OTA features are added through the same feature stamping path used by the
 terrain file.
 
-**Mission-file diagnostics.** The mission open path owns five exact strings.
-Four report through the status pane: `The requested mission file, %s, does not exist.`,
-`Hey, joker!  Mission file %s is corrupt (no header found).`
-(two spaces after `joker!`), `Old TED format no longer supported!`, and
-`No GlobalHeader block in mission file!`. The fifth,
-`No suitable schema type in mission file!`, uses a different message channel,
-emitted when the schema selector accepts no schema. Campaign loads own the
-sibling `The requested campaign file, %s, does not exist.`.
+**Mission-file diagnostics.** The mission open path owns six exact strings
+(five previously recorded; the sixth was missing from the census). Five
+report through the status pane:
+
+* `The requested mission file, %s, does not exist.` — a campaign-mission
+  request whose `MISSION%d` section is absent from the campaign file;
+* `Hey, joker!  Mission file %s is corrupt (no header found).`
+  (two spaces after `joker!`) — a campaign-mission OTA that parses but has no
+  `GlobalHeader` section;
+* `Hey, joker!  There is no mission defintion for this mission: %s`
+  (two spaces after `joker!`; the misspelling "defintion" is verbatim) — a
+  campaign-mission request whose `Maps\<missionfile>.OTA` file fails to open
+  or parse, the `%s` being the authored `missionfile` name;
+* `Old TED format no longer supported!` — a campaign-mission request whose
+  `missionfile` key is absent;
+* `No GlobalHeader block in mission file!` — a directly supplied (skirmish/
+  multiplayer) OTA that parses but has no `GlobalHeader` section.
+
+The sixth string, `No suitable schema type in mission file!`, uses a
+different message channel, emitted when the schema selector accepts no
+schema. A directly supplied OTA whose file fails to open/parse emits **no**
+diagnostic: the loader retries through the alias probe and returns silently.
+Campaign loads own the sibling `The requested campaign file, %s, does not
+exist.`.
 
 **Terrain file.** The terrain loader accepts exactly two version words and
 rejects anything else with a diagnostic naming the value. Both versions share
@@ -1330,8 +1522,8 @@ all offsets are file-relative and biased by the file base at load.
 The two versions differ in the tail of the header and in the attribute record:
 
 * The **legacy** version carries minimum wind, maximum wind, and gravity in
-  its own header, plus a minimap offset and a minimap-present flag, and uses a
-  narrower attribute record.
+  its own header, plus a minimap offset and a minimap-present flag, and uses
+  an 8-byte attribute record whose layout is established below.
 * The **canonical** version reuses those header slots for the minimap offset
   and its flag, and **hard-codes** minimum wind 100, maximum wind 2,000, and
   gravity 0 as the fallbacks. Its attribute record is four bytes and carries a
@@ -1351,7 +1543,7 @@ The canonical attribute array is `Width × Height × 4` bytes, one record per
 attribute cell: height byte at the first byte, feature reference as little-endian
 `uint16` at the next two bytes, and an unknown byte that is zero across the
 entire retail corpus (171 canonical maps) and is not carried into runtime state.
-The loader validates the `0x2000` version, allocates a tile map of
+The loader accepts both versions, allocates a tile map of
 `(Width/2 × Height/2)` `uint16` entries, allocates tile graphics, reads the
 feature name table (`TileAnims × 132` bytes: `uint32` index plus 128-byte name),
 and then expands the attribute array into a dense plot array of `Width × Height`
@@ -1374,33 +1566,34 @@ are little-endian.
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-Fringe-anchor reconstruction is a derived step, not a loaded field. The TNT
-attribute record carries no anchor data, and the declared feature-definition
-footprint (`FootPrintX/Z`) is demonstrably not the stamping rule — measured
-examples show a 1×2 definition stamping a 4×4 fringe region — so map-authored
-fringe regions are independent of the definition. The current reimplementation
-derives fringe offsets by a row-major propagation that inherits the nearest left
-or above anchor with a later-wins tie, which resolves 83.2% of the 71,916 fringe
-cells across 275 maps; declared footprints alone resolve 65.1%. Merged blobs
-(up to 10×9 bounding boxes containing 7 distinct real cells) and about 5,283
-orphaned fringe cells with no nearby real index remain unresolved and need a
-non-local partition rule — retained as `TODO(question)` heuristic. An unresolved
-fringe stays not-found per the resolver above.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 Void and edge generation runs after the derived minimum/maximum heights are
 recomputed for the full map and after feature placement. It performs:
 
 * **Right-edge void:** columns `Width-2` and `Width-1` are set to `0xFFFD` for
-  every row unconditionally — `2 × Height` cells. The playable inset is also
-  set to `PlayRight = WidthPixels - 0x20` (32 pixels, two cells) and
-  `PlayBottom = HeightPixels - 0x80` (128 pixels, eight cells), which the
-  camera clamp enforces.
+  every row where the feature word is `0xFFFF` or `0xFFFE` — `2 × Height`
+  cells at most; live features and anchors in those columns survive. The
+  playable inset is also set to `PlayRight = WidthPixels - 0x20` (32 pixels,
+  two cells) and `PlayBottom = HeightPixels - 0x80` (128 pixels, eight
+  cells), which the camera clamp enforces.
+* **North-edge void:** an empty-or-fringe cell at row z is set to `0xFFFD`
+  when `z*16 − (height >> 1) < 0` — i.e. when the cell's raw height byte
+  exceeds `z*32`, so its half-height pokes above the north map edge. Row 0
+  voids any height ≥ 1, row 1 heights > 32, row 2 > 64, row 3 > 96, row 4 >
+  128, row 5 > 160, row 6 > 192, row 7 > 224, rows 8 and beyond never.
+* **South-edge void:** walking rows upward from `Height-1`, an empty-or-fringe
+  cell at row z is set to `0xFFFD` when `z*16 − (height >> 1) > PlayBottom`,
+  equivalently `(Height-1-z)*16 + (height >> 1) < 112` — low cells near the
+  south edge whose terrain surface would fall below the play area. The last
+  row voids heights < 224, `Height-2` < 192, `Height-3` < 160, `Height-4` <
+  128, `Height-5` < 96, `Height-6` < 64, `Height-7` < 32, `Height-8` never.
+  (This closes the earlier `TODO(question)` on the north/south predicates.)
 * **Lava-world flood:** when the mission `lavaworld` flag is set, a bulk sweep
   sets `0xFFFD` for every cell where `hmin ≤ SeaLevel` and the feature word is
   `0xFFFF` or `0xFFFE`, turning the entire low basin into void.
-* **Other edges:** north and south height-dependent void strips have been
-  observed but the exact height predicate beyond the right two columns is not
-  fully traced — retained as `TODO(question)`.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 Outside the map rectangle, height returns the sentinel `-1` with unsigned
 candidate bounds before any terrain read; the movement validator returns
@@ -1411,11 +1604,7 @@ above.
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-The exact byte layout of the legacy attribute record, beyond what feeds these
-runtime cells, is the only remaining terrain-format unknown. North/south
-height-dependent void edge predicates beyond the right two columns, and any
-legacy metal-source file beyond the uniform `SurfaceMetal`, remain
-`TODO(question)`.
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 ### Animation archive (GAF)
 
@@ -1443,20 +1632,35 @@ offset 8.
 base at load, and a 32-bit **duration in whole simulation ticks**, which the
 loader leaves untouched.
 
-**Frame header.** Width and height as 16-bit values, signed 16-bit x and y
-offsets, a reserved byte, a compression flag byte, a subframe count byte, a
-reserved word, a 32-bit data offset, and a trailing reserved word. The data
-offset is always biased by the file base.
+**Frame header, 24 bytes.** Width and height as 16-bit values, signed 16-bit
+x and y offsets, a color-key byte (constant 9 across the whole retail corpus;
+it is the transparent palette index of the raw-pixel path — the blitter skips
+every source pixel equal to it), a compression flag byte (0 = raw pixels,
+1 = per-row RLE), a 16-bit subframe count, a 4-byte zero field, a 32-bit data
+offset, and a trailing reserved word. The data offset is always biased by the
+file base. (This corrects an earlier description that summed to a 21-byte
+header with a "reserved" byte at offset 8 and a one-byte subframe count: the
+byte at +8 is the color key, the subframe count is a 16-bit value at +10, and
+the header is 24 bytes; see `research/formats/gaf.md` [fmt gaf].)
+
+**Raw frame payload.** When the compression flag is clear, the data offset
+points directly at `width × height` bytes, row-major, one palette index per
+pixel. Raw frames carry no skip runs: their only transparency is the frame's
+own color key, so palette index 0 is opaque on this path. (This path was
+missing from earlier revisions; 6,068 of the 48,519 retail frames are raw.)
 
 **Compressed frame payload.** When the compression flag is set, the data
 offset points at a row table: one 16-bit stored byte count per row followed by
-that row's command stream. Each command is a 16-bit word read as:
+that row's command stream. Each command is a **byte** read as:
 
-* low bit set — skip `(word >> 1)` pixels, leaving destination untouched
-  (this skip is the only transparency mechanism; palette index 0 is opaque
-  black);
-* otherwise bit 1 set — repeat the following byte `(word >> 2) + 1` times;
-* otherwise — copy `(word >> 2) + 1` literal bytes.
+* low bit set — skip `(command >> 1)` pixels, leaving destination untouched
+  (this skip is the only transparency mechanism on the RLE path; palette
+  index 0 is opaque black);
+* otherwise bit 1 set — repeat the following byte `(command >> 2) + 1` times;
+* otherwise — copy `(command >> 2) + 1` literal bytes.
+
+(The earlier "16-bit word" command reading is wrong — commands are bytes;
+a word-width decoder mis-decodes every RLE row.)
 
 Rows decode left to right until the row width is covered, then the next row's
 count and stream follow. A zero width or height still allocates its header but
@@ -1581,11 +1785,16 @@ interface file whose name begins with the unit name in the interface
 directory, the checksum of the unit's downloadable data file when one exists,
 and one further definition word.
 
-An override path accompanies that hash: for each unit definition, an archive
-component spelled `OVR` is probed for an account named `Compatability` under
-the title `TA Unit Override`; when present, its value replaces the computed
-definition hash at its definition offset. Which gate consumes the replaced
-hash, and whether further accounts are read, are not established (residual).
+An override path accompanies that hash and is now fully traced: for each unit
+definition, the loader builds the logical path `units\<unitname>.OVR` and
+opens it as a HapiBank with the account filter `TA Unit Override`; if an
+account named `Compatability` exists, the bank's integer item named by the
+decimal spelling of the unit's computed checksum is read and **replaces the
+computed definition hash** at its definition offset. No further accounts or
+items are probed. Which gate consumes the replaced hash is owned by document
+08 (the content-identity comparison in lobby/network metadata); the residual
+is reduced to that cross-reference. `.OVR` is not a mounted extension in the
+installed corpus (bounded-negative), so the path is stock-inert.
 
 ## 7. Font, image, and sample files
 
@@ -1669,6 +1878,15 @@ than sample data.
   are fixed up in a second pass.
 * OTA/TNT map data and catalog records are retained for the lifetime of the
   active mission/session and are rebuilt when a new map or save is loaded.
+  The rebuild is now traced: the battle-entry path calls the same catalog
+  compiler that serves startup (unit definitions, movement classes, models,
+  scripts, build-menu pages, and side data) immediately after the terrain
+  loader and meteor/wind initialization, so each battle entry recompiles the
+  catalog in place — the unit-definition array is preserved and re-sorted,
+  movement-class records and per-unit fields are re-parsed, and per-map plot
+  and tile allocations are remade inside the same path. There is no
+  finer-grained invalidation: compilation is all-or-nothing per battle entry,
+  and the between-missions flag gates feature placement in the terrain loader.
 
 ### Supported inference
 
@@ -1699,51 +1917,65 @@ the content checksum. Closed in this revision: the full meteor merge,
 scheduler-timing, geometry, CRT-rand-stream, and save-persistence contract;
 the feature reproduction cadence including its unconditional per-visit RNG
 draw; the TDF parse-diagnostics set, empty-tree failure policy, offset-
-preserving comment blanking, and duplicate-key winner mechanism; the fatal
+preserving comment blanking, duplicate-key winner mechanism, and the floating
+accessor's CRT `atof` semantics (INF/NAN/malformed exponents) with the
+absence of tokenizer line limits; the fatal
 feature cross-reference diagnostic; the mission-object record shapes and the
-mission-file diagnostic vocabulary; the SIDEDATA `[GENERAL]` height, per-side
+mission-file diagnostic vocabulary (now six strings with their exact
+triggers); the SIDEDATA `[GENERAL]` height, per-side
 interface-GAF panel binding, bar palette indices, and fatal side-font path;
-the build-menu catalog keys and the downloadable warning with its silent
-flag repair; the CD identity gate, mount deduplication, and
-union-enumeration dedup; the WAV detector order, DIGI normalization, and
+the build-menu catalog keys and the downloadable warning (verbatim, two
+spaces) with its silent flag repair; the CD identity gate and its structural
+separation from the mount loop; mount deduplication and
+union-enumeration dedup with the entry-flag census (subdirectory bit,
+visibility bit, no other bits tested) and the mount-time validation set
+(magic/version/footer only — malformed-but-header-valid archives mount and
+fail per-read); the WAV detector order, DIGI normalization, and
 three allocation modes plus the 255-entry alias cap; the PCX validation,
 run clamping, and marker-less palette read; the FNT descender/bias split;
 the skirmish per-slot defaults with the `NumSkirmishPlayers` no-op
 validation; the TNT feature-reference sentinel refinement; the fringe-anchor
-signed-offset encoding (signed bytes, DZ scaled by width, threshold `0xFFFB`,
-width proof to 402×408 — content specified above; SC6 resolved, A11 closed); the void-edge generation
-(right `W-2,W-1` always void, `PlayRight`/`PlayBottom` insets, lava-world bulk
-flood on `hmin≤SeaLevel` — content specified above; A29 closed); and the per-cell metal uniform
-`SurfaceMetal` seeding with no raster and extractor `Σ(byte+1)` sampling
-(content specified above; A28 closed, varying file `TODO(question)`); and the
+stamp-time writer contract (positive anchor→fringe offsets written by the
+footprint placement in stamp order, later stamps overwriting earlier fringe —
+replacing the row-major heuristic; SC6 resolved); the void-edge generation
+(right `W-2,W-1`, north/south height predicates `z*16 < height>>1` /
+`(H-1-z)*16 + (height>>1) < 112`, lava-world flood on `hmin≤SeaLevel`); the
+per-cell metal question (canonical uniform `SurfaceMetal` seed with no
+raster; legacy maps seed per-cell from attribute byte 6 — no varying file
+exists); the
 category token registry — case-insensitive sorted entries, 16-word 512-bit
 unit-membership bitsets (`word = unitID >> 5`, `mask = 1 << (unitID & 31)`),
-whitespace tokenization of `category`, mandatory empty/sentinel membership,
+whitespace tokenization of `category`, mandatory `ALL` membership (the
+sentinel is the literal token `ALL`, not an empty entry),
 `none` as an ordinary token, and the unit-name-first mask helper (R-P0-03
-folded into §5).
+folded into §5); the movement-class pool initialization (zero-filled, no
+255 template; unconditional clamps; the fallback scratch template for
+unresolvable classes; FBI resolution against the authored `Name` value; the
+clear/steep/hard slope classifier with BadSlope as the clear-vs-steep
+boundary); the command-line grammar (bare-token language capture, the
+developer and lobby switch vocabulary) and the `C`/`c` config switch with
+its `online.dll`/`ONLGetVersion()==3` gate; the OVR `Compatability` hash
+replacement sequence; the catalog rebuild at every battle entry; the
+cross-reference failure policy for missing weapons/corpses/movement
+classes/models/sides/sound categories; and the `ai_weight` consumer / 
+`ai_limit` bounded-negative split with the AI-side identity of the build
+picker's enclosing routines.
 
 Still open:
 
-* Exact handling of `C`/`c` command-line path/configuration, full command-line
-  grammar for non-language switches, and behavior when the executable is
-  launched from a non-install directory (beyond the `GetModuleFileNameA` CWD
-  established above).
+* The data contract of `ONLLoadConfigFile` (defined by `online.dll`, not the
+  executable) and the lobby flag-word switches' exact bit consumers (document
+  08). Everything else about the command line — grammar, unknown-switch
+  tolerance, `C`/`c` handling, non-install-directory launch — is specified in
+  §1.
 * Archive entry flag bits beyond the subdirectory bit and the mutable
-  enumeration-visibility bit (bit 2) for synthetic values.
-* Recovery behavior for a structurally malformed but header-valid archive
-  beyond the safety hardening noted above, and whether any shipped archive
-  variant outside the installed corpus departs from the container specified
-  here.
-* Exact generic TDF behavior for malformed floating values, line limits,
-  and caller-specific section merging (the parse-diagnostics set,
-  empty-tree failure policy, comment blanking, and duplicate-key winner
-  are now specified in §4).
-* Cross-reference failure policy when a unit names a missing weapon, corpse,
-  movement class, model, or sound category (the feature-record equivalent is
-  the fatal diagnostic specified in §5).
-* Exact strategic-AI use of `ai_weight` and `ai_limit`, and the identity of
-  the enclosing routine behind the `side`-filtering build picker (mechanics
-  confirmed in §5; its classification as AI code is supported inference).
+  enumeration-visibility bit (bit 1, mask `0x02`) for synthetic values — no
+  other bit is tested by any mount/validate/enumerate path, so synthetic
+  values are inert; and whether any shipped archive variant outside the
+  installed corpus departs from the container specified here.
+* Caller-specific duplicate-section merging policies (the first-match
+  section accessor and the enumerator behavior are specified in §4; the
+  malformed-float and line-limit questions are closed there).
 * Shipped burn animations are forced to non-looping at load (finite 46–282
    visits, completion only when the animation pointer clears); malformed or
    missing burn sequences for non-filename features remain `TODO(question)`.
@@ -1751,36 +1983,34 @@ Still open:
    document 05, and no geothermal registry exists — enforcement is the
    footprint validator's yardmap-bit-7 check.
 * Complete sound alias precedence, eviction, and DirectSound streaming rules.
+   VFS-tier precedence is established; alias-cache eviction is bounded-negative
+   (no eviction site found) `TODO(question)`; streaming flags are
+   `TODO(question)`.
 * The draw-time interpretation of model primitive colour, texture, and flag
   fields is narrowed in document 03 (flat colours bypass the shade table,
   indexed texture pixels use it, team textures select per-player frames,
   no backface culling); the compressed-animation pixel decoder itself is now
   specified above.
 * GUI widget callback map (the parser-side control-kind mapping is closed
-  above) and texture lifetime behavior.
+  above; the `[VERSION]` subsection is optional in the parser) and texture
+  lifetime behavior — document 07 owns the callback map.
 * Map schema fallback, map hash inputs, and initial-mission script
   interpretation. Meteor processing is fully specified above (merge
   contract, scheduler position and timing, geometry, CRT-rand stream, save
-  persistence).
-* Full override semantics of the OVR archive's `Compatability` account hash
-  replacement (which gate consumes the replaced hash; whether further
-  accounts are read).
-* Exact sequencing of the CD `TOTALA.ID`/`Contents` identity gate relative
-  to the mount loop (gate behavior carried as supported inference in §2).
-* The legacy terrain attribute record's exact byte layout beyond what feeds
-   the runtime plot cells above.
-* Fringe-anchor reconstruction for merged blobs and orphaned fringe cells —
-   row-major left/above later-wins resolves 83.2% of the corpus's fringe cells,
-   but the full retail partition rule for the residual is `TODO(question)`.
-* North/south height-dependent void strips beyond the right two columns
-   (`W-2,W-1`) and any varying per-cell metal source file beyond the uniform
-   `SurfaceMetal` byte are `TODO(question)` — the corpus shows only the right
-   two columns and the uniform byte.
-* Remaining code-page behavior for high bytes and localized font selection
-   beyond the installed-corpus census; and which runtime messages pass through
-   the translation lookup.
-* Exact cache invalidation boundaries across map changes, saves, and lobby
-   sessions.
-* The empty/sentinel category registry entry's exact internal string, and
-   which retail systems consume that sentinel membership beyond the category
-   compiler — `TODO(question)` under R-P0-03 in §5.
+  persistence). The InitialMission command vocabulary is closed in document
+  08 ([p0-06]); the schema-selector fallback string is recorded in
+  `research/formats/ota.md`; the map content-hash inputs (header, plot,
+  features, map descriptor) are partially traced and document 08 owns the
+  lobby consumer.
+* Remaining code-page behavior for high bytes (`TODO(T23)` platform
+  residual), localized font selection beyond the installed-corpus census, and
+  which runtime messages pass through the translation lookup (the loader and
+  byte-exact lookup are established in §3; the message-site census remains).
+* The empty/sentinel category registry entry is closed (it is the token
+  `ALL`); what remains is document 06's mask-helper consumer list.
+* The movement-class slope arithmetic paradox (traced unconditional clamps
+  on a zero-initialized pool zero the slope of every stock class omitting
+  `MaxWaterSlope`, which contradicts assumed stock playability; all writers
+  and comparisons are enumerated — see §5 "Movement class record")
+  `TODO(question)`: a runtime trace of the compiled pool or of a unit
+  definition's slope copy is the decider.

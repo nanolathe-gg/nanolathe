@@ -161,13 +161,18 @@ type WorkResult struct {
 }
 
 // isMobileBuilder reports whether the builder is a mobile builder [04 §3.1][P0-I05].
-// Mobile builders use MobileBuild/VTOL_MobileBuild descriptors; factories use BuildingBuild.
-// A mobile builder is any builder whose definition can move or fly.
+// Mobile builders use MobileBuild/VTOL_MobileBuild descriptors; factories use
+// BuildingBuild. The distinction is the runtime building-class status bit the
+// allocator initializer derives from the definition's authored bmcode [05
+// "Factory production lifecycle"]; mobility is not the contract — stock
+// buildings (kbot lab, factories) author CanMove=1, so a mobility heuristic
+// classifies them as mobile and rejects every factory order [08 "Classifier
+// eligibility, destinations, and order"].
 func isMobileBuilder(u *units.Unit) bool {
-	if u == nil || u.Def == nil {
+	if u == nil {
 		return false
 	}
-	return u.Def.CanMove || u.Def.CanFly
+	return u.Flags&units.BuildingClassStatus == 0
 }
 
 // nanoReach returns the builder's nanolathe reach in world Fixed units [fmt fbi] Builddistance reach in pixels.

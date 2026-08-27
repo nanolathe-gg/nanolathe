@@ -39,6 +39,7 @@ Allowed floating point, exhaustively:
 | Ballistic discriminant, `acos`, `sqrt` | `float64` | `[06 §3.3]` |
 | Flight brake integration temporaries (`hypot`, `h`, `b`, ratio) | `float64`, narrowed at the named fixed-point stores | `[04 §10.1]` |
 | AI resource-score expressions (`energyRaw`, `metalRaw`) | `float32` temporaries and inputs; `TODO(question)` on exact x87 spills | `[08 "Established AI-facing data and rooted planner"]` |
+| Per-unit order-guard float (eligibility exact compare `== 0.0`; nonzero while an order is processed) | `float32` | `[07 §8]`, `[07 §9]` |
 | Simulation trig-table construction at initialization | `float64` transient; authoritative table entries are integers | `[04 §5.1]` |
 | Model piece rotation trig in the draw path | `float64`, round-to-nearest | `[03 §2.4]` |
 

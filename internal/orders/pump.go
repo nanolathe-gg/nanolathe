@@ -218,6 +218,16 @@ func (p *Pump) PumpUnit(handle pool.Handle, tick uint32) PumpResult {
 	q.Pump(u, tick)
 	prim := q.LenPrimary()
 	sec := q.LenSecondary()
+	// Order-guard float [07 §8/§9]: nonzero (a clamped 0..1 ratio) while the
+	// unit is mid-order, zero at order completion — i.e. when the primary
+	// queue empties (completion, cancellation, or expiry all land here). The
+	// exact ratio source is unattested; only the 0/nonzero distinction is
+	// established, so the ratio is written as 1.0 TODO(question).
+	if prim > 0 {
+		u.OrderGuard = 1.0
+	} else {
+		u.OrderGuard = 0.0
+	}
 	diags := q.Diagnostics()
 	return PumpResult{Handle: handle, Found: true, HadQueue: had, PrimaryLen: prim, SecondaryLen: sec, Diagnostics: append([]string(nil), diags...)}
 }
@@ -617,6 +627,19 @@ func (q *Queue) Pump(u *units.Unit, tick uint32) {
 	if q == nil || u == nil {
 		return
 	}
+	// Order-guard float [07 §8/§9]: nonzero (a clamped 0..1 ratio) while the
+	// unit is mid-order, zero at order completion — i.e. when the primary
+	// queue empties (completion, cancellation, or expiry all land here). The
+	// defer covers every pump exit. The exact ratio source is unattested; only
+	// the 0/nonzero distinction is established, so the ratio is written as 1.0
+	// TODO(question).
+	defer func() {
+		if len(q.primary) > 0 {
+			u.OrderGuard = 1.0
+		} else {
+			u.OrderGuard = 0.0
+		}
+	}()
 
 	q.pumpPrimary(u, tick)
 	if len(q.primary) > 0 {

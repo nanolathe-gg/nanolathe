@@ -85,7 +85,7 @@ not give them behavior.
 | `Ovradjust` | 173 | — |
 | `SteeringMode` | 152 | No engine steering distinction is selected by it. |
 | `BadTargetCategory` (unprefixed) | 99 | Only `wpri_`, `wsec_` and `wspe_` prefixed spellings are read. `NoChaseCategory` *is* read unprefixed. |
-| `GermanName`, `FrenchName`, `ItalianName`, `SpanishName` and the four matching `*Description` keys | 276–277 | Localization comes from `gamedata/Translate.tdf`, not the FBI. |
+| `GermanName`, `FrenchName`, `ItalianName`, `SpanishName` and the four matching `*Description` keys | 276–277 | **Read, via the language-prefixed accessor.** The unit catalog reads `name`/`description` through an accessor that tries `<language><key>` first and falls back to the plain key, so authored per-language names ARE honored. **Correction (2026-08-26):** an earlier reading in this document called these keys inert ("Localization comes from `gamedata/Translate.tdf`, not the FBI") — that is wrong; the translation table and the language-prefixed FBI keys are two separate mechanisms, and both are live. The translation table covers runtime messages; the prefixed keys cover authored unit names/descriptions. |
 | `Scale` | 28 | — |
 | `AltFromSeaLevel` | 8 | `CruiseAlt` is the only altitude key read. |
 | `TransportMaxUnits`, `TransMaxUnits` | 3, 1 | `TransportCapacity` and `TransportSize` are the read pair. |
@@ -127,7 +127,7 @@ what it doesn't know.
 | `Name` | Display name |
 | `Description` | Selection/tooltip description |
 | `Copyright` | Retail files require the exact Cavedog copyright string (lore: units failed to load without it) |
-| `GermanName`, `FrenchDescription`, `SpanishName`, `ItalianDescription`, `JapaneseName`, `PigLatinName`, … | Localized `Name`/`Description` variants — the pattern is the language name directly followed by `Name` or `Description` |
+| `GermanName`, `FrenchDescription`, `SpanishName`, `ItalianDescription`, `JapaneseName`, `PigLatinName`, … | Localized `Name`/`Description` variants — the pattern is the language name directly followed by `Name` or `Description`. **The engine honors them** via the language-prefixed accessor (see the correction above). |
 | `TEDClass` | Editor classification: `TANK`, `KBOT`, `PLANT`, `VTOL`, `WATER`, `SPECIAL`, `FORT`, `METAL`, `ENERGY`, `COMMANDER`, `CNSTR` … The engine cannot read it, so it drives the map editor only, never AI or gameplay. |
 | `Category` | Space-separated tag list (e.g. `ARM TANK LEVEL1 WEAPON NOTAIR NOTSUB`). Tags are matched by the per-slot `wpri_`/`wsec_`/`wspe_BadTargetCategory`, by `NoChaseCategory`, and by AI text files; tags need no central declaration. |
 | `Downloadable` | Appears on add-on units. The engine reads it and carries the diagnostic `Hey!  Somebody forgot to set downloadable=1 for %s`, so it gates whether an add-on unit is accepted. |
@@ -286,7 +286,7 @@ mobile incorrectly replaces that gradient with mobile flat-face shading.
 | `ThreeD` | Always `1`; the engine has no string for it. |
 | `SoundCategory` | Category in `gamedata/SOUND.TDF` |
 | `Corpse` | Feature left on death ([tdf.md](tdf.md)); chained via the feature's `featuredead` |
-| `ai_limit`, `ai_weight` | Complete AI profile directives, merged beneath map-profile global and difficulty sections (`ai_limit=limit CORVOYR 2;`) |
+| `ai_limit`, `ai_weight` | AI directives stored as raw text. **Split (2026-08-26):** `ai_weight` IS consumed — the strategic-AI pass parses its text with the profile grammar; `weight` directives reach the live per-unit-type weight array (default 100, clamped to 0..100) that scales build-candidate scores, and embedded `limit` directives are registered too. `ai_limit` has NO runtime reader — the live per-type limit array is populated only by the `ai/` profile parser's `limit` token, never by this key; do not treat `ai_limit` as the source of the retail candidate limit. |
 | `Ovradjust` | Authored as `1` on 173 retail units. Its name makes legacy 3D overlap adjustment a candidate meaning, but it cannot select a uniform parent/child bias: both `ARMSOLAR` and `ARMAP` set it while their shallow piece intersections resolve differently. Exact semantics remain unconfirmed. |
 | `sortbias` | Read by the engine; effect unconfirmed. |
 | `armoredstate` | Read by the engine and authored by no shipped unit: the starting value of the armored flag that `DamageModifier` scales. |

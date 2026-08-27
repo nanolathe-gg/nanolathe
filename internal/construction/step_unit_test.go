@@ -102,7 +102,7 @@ func TestStepUnit_Isolation(t *testing.T) {
 
 func TestStepUnit_MobileSiteSurvives(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
-	builderDef := &content.UnitDef{UnitName: "armck", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", Builder: true, MaxDamage: 100, WorkerTime: 30, CanMove: true, BuildTime: 100}
+	builderDef := &content.UnitDef{UnitName: "armck", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", Builder: true, MaxDamage: 100, WorkerTime: 30, CanMove: true, BMCode: true, BuildTime: 100}
 	builderDef.CanonicalKey = content.CanonicalKey("armck")
 	prodDef := &content.UnitDef{UnitName: "armllt", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100, BuildTime: 100, BuildCostMetal: 100, BuildCostEnergy: 100}
 	prodDef.CanonicalKey = content.CanonicalKey("armllt")
@@ -194,7 +194,7 @@ func TestStepUnit_MobileSiteSurvives(t *testing.T) {
 
 func TestStepUnit_DistinctDescriptors(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
-	mobileDef := &content.UnitDef{UnitName: "armck", FootprintX: 2, FootprintZ: 2, YardMap: "o", Builder: true, MaxDamage: 100, WorkerTime: 30, CanMove: true}
+	mobileDef := &content.UnitDef{UnitName: "armck", FootprintX: 2, FootprintZ: 2, YardMap: "o", Builder: true, MaxDamage: 100, WorkerTime: 30, CanMove: true, BMCode: true}
 	mobileDef.CanonicalKey = content.CanonicalKey("armck")
 	factoryDef := &content.UnitDef{UnitName: "armfac", FootprintX: 4, FootprintZ: 4, YardMap: "o", Builder: true, MaxDamage: 200, WorkerTime: 30}
 	factoryDef.CanonicalKey = content.CanonicalKey("armfac")

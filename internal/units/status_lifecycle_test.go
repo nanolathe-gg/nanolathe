@@ -10,9 +10,12 @@ import (
 
 func TestCOBInBuildStancePortIsInstanceState(t *testing.T) {
 	u := &Unit{}
+	// The retail compiler emits the identifier first and the value second,
+	// so the value sits on top of the stack: `push 5; push 1; set` is
+	// INBUILDSTANCE <- 1 [R-P0-10] (asset census: armlab, armcom).
 	vm := cob.NewVM(&cob.Program{Code: []uint32{
-		0x10021001, 1, // push value
 		0x10021001, 5, // push INBUILDSTANCE id
+		0x10021001, 1, // push value
 		0x10082000, // set
 	}})
 	bindUnitPortHandlers(vm, u)

@@ -71,20 +71,13 @@ Immediately followed by `frame_count` × 8-byte **frame references**:
 | Offset | Size | Type | Description |
 | ---: | ---: | --- | --- |
 | +0 | 4 | u32 | absolute offset of the frame header |
-| +4 | 4 | u32 | small integer, 1–10 in retail data, constant across all frames of an entry. Very likely the per-frame display duration/rate (see below); not confirmed by any primary source. |
+| +4 | 4 | u32 | small integer, 1–10 in retail data, constant across all frames of an entry. **Per-frame display duration in whole simulation ticks (established 2026-08-26):** the executable's playback cursor loads this value as the per-frame countdown and steps in whole ticks; the loader leaves it untouched. The earlier "not confirmed by any primary source" caveat and the GAFBuilder 2/10 two-state hypothesis are superseded — the cursor arithmetic is the primary source, and the spread of values 1–10 matches tick counts. |
 
 The second frame-reference value correlates with animation speed in retail
 data — fast-spinning cursors in `anims/CURSORS.GAF` store small values
 (`cursorairstrike`, 16 frames, value 1; `cursorpickup`, 24 frames, value
 2), slow or static art stores 10 (`cursornormal`, build-menu gadget pics).
-A plausible reading is "game ticks (1/30 s) per frame". Treat as a strong
-hypothesis, not established fact.
-
-A competing historical reading, from the 1998–2001 community `GAFBuilder`
-tool's source: it types this field `Animated As Long` and its load/save code
-only ever reads/writes exactly `2` ("animated") or `10` ("fixed") — a 2-state
-flag, not a continuous duration. Retail data's spread of small values (not
-just 2/10) doesn't cleanly fit either reading; both remain unconfirmed.
+These are whole simulation ticks per frame.
 
 Real example — entry 0 of `ARMALAB.GAF`:
 
@@ -185,8 +178,8 @@ pixels never covered by an opaque subframe pixel are transparent.
 
 - Frame header byte +8 is the raw path's color key (see the frame-header
   table); the trailing u32 (garbage) has no confirmed semantics. The
-  frame-reference u32 is very likely per-frame duration but unconfirmed.
-  Preserve all three, interpret cautiously.
+  frame-reference u32 is the per-frame display duration in whole simulation
+  ticks (established; see above). Preserve all three, interpret cautiously.
 - Because the key is constant `9`, index 9 is effectively transparent in every
   raw retail frame. Across the 958 GAFs in the reference install only 274 of
   6,068 raw frames contain it at all, and three of them account for 99.9% of

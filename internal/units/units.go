@@ -136,6 +136,14 @@ type Unit struct {
 	// SpotMetal is the extractor yield sampled once at placement: Σ(cellMetal+1)*extractsMetal [05 "Terrain metal extraction"] C14 [P1-10][P1-15].
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	SpotMetal float32 // [P1-10] once Σ(byte+1)*extractsMetal, [P1-15] uniform char write
+	// OrderGuard is the per-unit order-guard float of the shared eligibility
+	// predicate [07 §8/§9]: zero at unit creation and at order completion,
+	// nonzero (a clamped 0..1 ratio) while an order is being processed.
+	// Eligibility compares it exactly equal to 0.0, so the guard means "not
+	// mid-order". float32 per the I2 allowlist row "Per-unit order-guard
+	// float". Written by the orders pump; the exact ratio source is
+	// unattested — only the 0/nonzero distinction is established TODO(question).
+	OrderGuard float32
 	// TODO(question): direct World.Create bypasses extractor sampling; session reconstructUnits and
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// but save-restore forced-slot and any other direct Create caller must also sample via the same hook
@@ -174,6 +182,20 @@ func (u *Unit) ClearClassifierEligibility() {
 	if u != nil {
 		u.Flags &^= ClassifierEligibleStatus
 	}
+}
+
+// Eligible implements the shared eligibility predicate [07 §8/§9]: the
+// classifier/selection status bit 0x20 is set, and the per-unit order-guard
+// float compares exactly equal to 0.0 — the unit is not mid-order. The
+// predicate's remaining retail clauses (no disqualifying state reference; a
+// parent unit whose status word carries bit 0x40000000) have no nanolathe
+// counterpart yet TODO(question): map parent status bits when the
+// transport/carrier flag set is closed.
+func (u *Unit) Eligible() bool {
+	if u == nil || !u.Alive || u.Dying {
+		return false
+	}
+	return u.Flags&ClassifierEligibleStatus != 0 && u.OrderGuard == 0.0
 }
 
 // EconomyActive reports whether the unit is eligible for passive economy

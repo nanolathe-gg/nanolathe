@@ -73,6 +73,11 @@ type battleSession struct {
 	buildCellZ  int32
 	buildSiteH  int32
 	buildSticky bool
+	// placeCaptured is the placement half of the input-capture latch above: a
+	// left press the placement path consumed owns that button until it is
+	// released, so the rest of a held click cannot also run a world path
+	// [07 §9 "Mouse-button assignment is closed"].
+	placeCaptured bool
 	// shiftHeld mirrors the last polled Shift state so the overlay can gate the
 	// order-queue markers on it the way retail's battle draw does [07 §9].
 	// pointerX/Y mirror the last polled pointer so the overlay can gate on the
@@ -673,6 +678,22 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		return
 	}
 
+	// A left press the placement path already consumed owns that button until
+	// it is released. Retail routes one press/release pair through exactly one
+	// world path [07 §9]; because placement commits on the press edge and then
+	// disarms, the remaining held frames of an ordinary human click used to
+	// fall through to drag selection, and its release issued a contextual Move
+	// that purged the build order the same click had just queued.
+	if b.placeCaptured {
+		if !mouse.Held(input.MouseButtonLeft) {
+			b.placeCaptured = false
+		}
+		if b.buildDef != "" {
+			b.updatePlacement(mx, my)
+		}
+		return
+	}
+
 	// Build placement mode captures left-clicks before selection handling [R-P0-03].
 	// Right-click cancellation is handled at the top of handleInput with the
 	// latch/selection precedence of [07 §9].
@@ -688,6 +709,9 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	if b.buildDef != "" {
 		b.updatePlacement(mx, my)
 		if mouse.Pressed(input.MouseButtonLeft) {
+			// The press belongs to placement whatever it decides below —
+			// placed, refused, or rejected by the command boundary.
+			b.placeCaptured = true
 			if !b.buildOK {
 				// An illegal site queues nothing and stays armed; the player
 				// hears the refusal and can move the ghost [07 §9].

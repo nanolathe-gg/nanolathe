@@ -883,3 +883,34 @@ func TestQueueModifiers_SegmentMapping(t *testing.T) {
 		t.Fatalf("auto leading drop should remove head auto only")
 	}
 }
+
+// TestOrderGuardFloat locks the per-unit order-guard float [07 §8/§9]: zero
+// when the primary queue is empty, nonzero (1.0 placeholder, the exact ratio
+// source unattested) while an order is queued, and zero again once the queue
+// empties. Eligibility reads it via an exact == 0.0 compare.
+func TestOrderGuardFloat(t *testing.T) {
+	rng.SeedGlobal(7, 0)
+	moveID := Lookup("Move_Ground")
+	if moveID == 0 {
+		t.Fatalf("lookup Move_Ground")
+	}
+	q := &Queue{}
+	u := newTestUnit()
+	if u.OrderGuard != 0 {
+		t.Fatalf("fresh unit guard = %v, want 0", u.OrderGuard)
+	}
+	// Queue a Move_Ground with a handler that never completes it (code 2).
+	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(2) })
+	defer restore()
+	q.primary = append(q.primary, &Node{ID: moveID, DynamicGate: 0, Deadline: -1})
+	q.Pump(u, 0)
+	if u.OrderGuard != 1.0 {
+		t.Fatalf("guard mid-order = %v, want 1.0", u.OrderGuard)
+	}
+	// Empty the queue: completion path (head removed) clears the guard.
+	q.primary = q.primary[1:]
+	q.Pump(u, 1)
+	if u.OrderGuard != 0.0 {
+		t.Fatalf("guard after completion = %v, want 0", u.OrderGuard)
+	}
+}

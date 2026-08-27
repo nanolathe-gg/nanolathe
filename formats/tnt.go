@@ -22,6 +22,12 @@ const (
 // [02 "Terrain file"], [GAP T14].
 const featureSentinelBase uint16 = 0xFFFB
 
+// legacyFeatureSentinelBase is the legacy 8-byte record's sentinel band: a
+// one-byte feature reference below 0xFC is a feature-table index, and 0xFC and
+// above are void/none — a single sentinel band rather than the canonical
+// quaternary [02 "Terrain file"].
+const legacyFeatureSentinelBase uint16 = 0xFC
+
 // TNTLimits bounds allocations made while decoding untrusted map data. The
 // defaults are deliberately large enough for the retail corpus, but finite.
 type TNTLimits struct {
@@ -39,13 +45,21 @@ func DefaultTNTLimits() TNTLimits {
 	}
 }
 
-// TNTAttribute is one 16x16 source cell [P0-17][P1-15] W*H*4 attribute records (height + u16 feature + unk0).
-// Feature is intentionally uint16: 0xfffc, 0xfffe and 0xffff are distinct source sentinels [P0-17][fmt tnt] and 0xFFFD derived void [P1-15].
-// Unknown (byte 3, unk3) is uniformly 0 corpus-wide [P1-15]; no per-cell metal raster allocated, metal derived via uniform SurfaceMetal char write [P1-15].
+// TNTAttribute is one 16x16 source cell [P0-17][P1-15].
+// Canonical: W*H*4 attribute records (height + u16 feature + unk0); Feature is
+// intentionally uint16 — 0xfffc, 0xfffe and 0xffff are distinct source
+// sentinels [P0-17][fmt tnt] and 0xFFFD is the derived void [P1-15].
+// Legacy (0x1020): W*H*8 records; byte 0 height, byte 2 a one-byte feature
+// reference normalized to the canonical sentinel band here (the 0xFC+ band is
+// void/none [02 "Terrain file"]), byte 6 the per-cell metal seed; bytes
+// 1, 3, 4, 5, 7 never read. Metal is zero on canonical records, where the
+// per-cell metal is seeded uniformly from the mission SurfaceMetal scalar at
+// load [02 "Terrain file"].
 type TNTAttribute struct {
 	Height  byte
 	Feature uint16
-	Unknown byte // unk3==0 corpus [P1-15]
+	Unknown byte // canonical byte 3: zero across the retail corpus, not carried [P1-15]
+	Metal   byte // legacy byte 6: per-cell metal seed; zero on canonical [02 "Terrain file"]
 }
 
 type TNTFeatureRecord struct {
@@ -148,14 +162,6 @@ func LoadTNTWithLimits(data []byte, limits TNTLimits) (*TNT, error) {
 		result.LegacyGravity = u32(0x34) // slot 13
 		result.MiniMapOffset = u32(0x38) // slot 14
 		result.MiniMapPresent = u32(0x3c)&1 != 0
-		// The narrower legacy attribute record is the one remaining
-		// terrain-format unknown [02 "Terrain file"]. Decoding it as the
-		// canonical four-byte record would silently mis-parse every cell, so
-		// reject rather than invent a stride (I9). Every map in the retail
-		// corpus is canonical [fmt tnt].
-		return nil, fmt.Errorf("tnt: legacy version 0x1020 is not supported: "+
-			"the width of its attribute record is unrecovered "+
-			"[02 \"Terrain file\"], [03 §2.2] (map is %dx%d)", result.Width, result.Height)
 	default:
 		// [03 §2.2][P1-02 §2.2]: the loader accepts exactly two versions and rejects any
 		// other version word with a diagnostic — mandatory TNT version 0x2000/0x1020 fatal.
@@ -205,20 +211,46 @@ func LoadTNTWithLimits(data []byte, limits TNTLimits) (*TNT, error) {
 			return nil, fmt.Errorf("tnt: tile index %d at cell %d exceeds tile count %d", result.TileIndices[i], i, result.Tiles)
 		}
 	}
-	attrBytes, err := section("attribute map", result.PtrMapAttr, attrCount, 4)
+	attrStride := uint64(4)
+	if Version(result.Version) == VersionLegacy {
+		attrStride = 8 // legacy 8-byte record [02 "Terrain file"]
+	}
+	attrBytes, err := section("attribute map", result.PtrMapAttr, attrCount, attrStride)
 	if err != nil {
 		return nil, err
 	}
 	result.Attributes = make([]TNTAttribute, int(attrCount))
 	for i := range result.Attributes {
-		b := attrBytes[i*4:]
-		result.Attributes[i] = TNTAttribute{Height: b[0], Feature: binary.LittleEndian.Uint16(b[1:3]), Unknown: b[3]}
+		b := attrBytes[i*int(attrStride):]
+		var feature uint16
+		var metal byte
+		var unknown byte
+		if Version(result.Version) == VersionLegacy {
+			// Legacy record: byte 0 height, byte 2 a one-byte feature
+			// reference with a single 0xFC+ sentinel band (void/none), byte 6
+			// the per-cell metal seed; bytes 1, 3, 4, 5, 7 never read
+			// [02 "Terrain file"]. The band is expanded to the canonical
+			// empty sentinel: the legacy record does not distinguish empty
+			// from void, so mapping the band to void would block movement on
+			// featureless terrain.
+			if b[2] >= byte(legacyFeatureSentinelBase) {
+				feature = 0xFFFF // canonical empty sentinel [02 "Terrain file"]
+			} else {
+				feature = uint16(b[2])
+			}
+			metal = b[6]
+		} else {
+			feature = binary.LittleEndian.Uint16(b[1:3])
+			unknown = b[3]
+		}
+		result.Attributes[i] = TNTAttribute{Height: b[0], Feature: feature, Unknown: unknown, Metal: metal}
 		// Values at or above 0xFFFB are the sentinel band, not indices: 0xFFFF
 		// empty, 0xFFFE footprint fringe, 0xFFFD void hole, with 0xFFFB/0xFFFC
 		// acting as further void thresholds because consumers test below 0xFFFB
 		// before dereferencing [02 "Terrain file"], [GAP T14]. On disk the
 		// retail corpus uses 0xFFFC for void [fmt tnt]; accept the whole band.
-		feature := result.Attributes[i].Feature
+		// Legacy indices were already normalized below the band above.
+		feature = result.Attributes[i].Feature
 		if feature < featureSentinelBase && uint32(feature) >= result.TileAnims {
 			return nil, fmt.Errorf("tnt: feature index %d at cell %d exceeds feature record count %d", feature, i, result.TileAnims)
 		}

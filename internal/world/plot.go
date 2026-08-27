@@ -303,9 +303,14 @@ func ExpandPlot(attrs []formats.TNTAttribute, cellW, cellH int) []PlotCell {
 	for i := 0; i < limit; i++ {
 		plot[i][4] = attrs[i].Height
 		plot[i].SetFeature(attrs[i].Feature)
+		// Legacy (0x1020) records carry a per-cell metal seed in attribute
+		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// (zero), and the uniform SurfaceMetal write happens in
+		// Terrain.ApplySchema [02 "Terrain file"].
+		plot[i][7] = attrs[i].Metal
 		// Map load stamps placer value 10 into the flag byte's nibble,
 		// preserving bits 0,1,2,7: `&0xd7|0x50` [03 §3.3]; decompile writer
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// model.
 		plot[i][0xC] = plot[i][0xC]&0xd7 | 0x50
 		// attrs[i].Unknown is byte +3 of the source cell: zero in all cells of
 		// all retail maps, meaning unknown [fmt tnt]. Not carried across.

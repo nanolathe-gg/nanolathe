@@ -81,8 +81,11 @@ func (t *Terrain) FeatureDefAt(feature uint16) (*content.FeatureDef, bool) {
 // ApplySchema seeds the per-cell metal byte from the mission's uniform surface
 // metal value [05 "Terrain metal extraction"] [P1-15]: uniform SurfaceMetal scalar
 // via char write to every plot cell +7 (truncates via uint8), no W*H metal raster
-// allocated and TNT unk3 byte uniformly 0 corpus-wide [P1-15]. Per-cell varying
-// metal file beyond uniform remains TODO(question) [P1-15].
+// allocated and TNT unk3 byte uniformly 0 corpus-wide [P1-15]. The uniform write
+// applies to canonical maps only: a legacy (0x1020) map's per-cell metal was
+// already seeded from the legacy attribute record's byte 6 during plot
+// expansion, which is the only varying per-cell source — the earlier
+// "per-cell varying metal file" question is closed [02 "Terrain file"].
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 //
@@ -105,9 +108,11 @@ func (t *Terrain) ApplySchema(mh *content.MapHeader, schemaIndex int) error {
 	// The cell field is one unsigned byte; retail stores the schema value
 	// through a char, i.e. it truncates rather than clamps
 	// (notes/terrain/01_attribute_cells.md +7).
-	cellByte := uint8(value)
-	for i := range t.Plot {
-		t.Plot[i][7] = cellByte
+	if t.Version != VersionLegacy {
+		cellByte := uint8(value)
+		for i := range t.Plot {
+			t.Plot[i][7] = cellByte
+		}
 	}
 	t.metalSeeded = true
 	return nil
@@ -309,7 +314,7 @@ func (t *Terrain) CoarseHeightAt(cx, cz int32) numeric.Fixed {
 // byte is tested with the identical comparison afterwards to decide whether the
 // retained horizon advances.
 //
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// The aggregates are established from the traced builder [R-P0-18-B]:
 // the LOW byte is a MAXIMUM and the HIGH byte a MINIMUM, seeded 0x00 / 0xFF and
 // finished with a 1/3-2/3 blend floored at sea level. Reading them the other
 // way round — the intuitive (min, max) — is the maximally occlusive choice and
@@ -352,17 +357,12 @@ func (t *Terrain) SetLOSHeightWord(vx, vz int32, low, high uint8) {
 	t.losWords[vz*w+vx] = uint16(low) | uint16(high)<<8
 }
 
-// InvalidateLOSHeightWords drops the cached LOS height table so the next query
-// rebuilds it. Retail rebuilds lazily behind a mode bit [03 §3.2]; terrain
-// deformation is the event that clears it.
-func (t *Terrain) InvalidateLOSHeightWords() {
-	if t != nil {
-		t.losWords = nil
-	}
-}
-
 // buildLOSHeightWords fills the per-visibility-tile height table exactly as
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// retail's builder at map load does [R-P0-18-B]. There is no invalidation API:
+// the table is built once and never rebuilt — terrain deformation does not
+// clear it, and only the fog cache is dirty-tracked [03 §3.2]. (An earlier
+// reading exposed a lazy rebuild behind a mode bit with deformation as the
+// clearing event; that reading is retracted in research.)
 //
 // The table is TileW x TileH u16 words seeded low=0x00, high=0xFF, so the low
 // byte accumulates a MAXIMUM and the high byte a MINIMUM. Cells are SCATTERED
@@ -553,13 +553,20 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 	} else {
 		tidal = numeric.Fixed(32768) // fallback when no catalog/OTA [03 §2.2] C4
 	}
-	{
+	if ver == VersionLegacy {
+		// Legacy (0x1020) carries minimum wind, maximum wind and gravity in
+		// its own header and always uses those values — the OTA overrides do
+		// not apply [03 §2.2] C3. The gravity integer converts like the OTA
+		// key (*65536/900); its unit is the same authored data model
+		// [fmt ota]. No fallback replacement for a legacy header gravity;
+		// keep even if 0.
+		windMin = int32(tnt.LegacyMinWind)
+		windMax = int32(tnt.LegacyMaxWind)
+		gravity = gravityFromAuthored(int32(tnt.LegacyGravity))
+	} else {
 		// [03 §2.2] C3: canonical hard-codes gravity 0, wind 100/2000, and an
 		// authored non-negative OTA wind/gravity overrides the terrain value —
-		// for canonical maps only. The legacy branch that read wind and gravity
-		// from header slots 10/11/13 is gone: formats.LoadTNT now rejects
-		// version 0x1020 outright because the width of its attribute record is
-		// unrecovered [02 "Terrain file"], so no legacy terrain reaches here.
+		// for canonical maps only.
 		windMin = 100
 		windMax = 2000
 		gravity = numeric.Fixed(0)
@@ -632,12 +639,27 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 
 // applyVoidFixup derives engine void edges after materialization [P0-17].
 //
-//   - Right columns W-2,W-1 are always void 0xFFFD (two eastmost reserve columns).
-//   - Playable insets PlayRight = Wpix-32 and PlayBottom = Hpix-128 are set at void-fixup time.
-//   - Lava-world bulk flood sets 0xFFFD when lavaworld is set and hmin ≤ SeaLevel for 0xFFFF/0xFFFE cells.
+// All four edge rules follow [02 "Terrain file"]: only cells whose feature
+// word is empty (0xFFFF) or fringe (0xFFFE) are converted — placed features
+// and anchors are never voided:
 //
-// Map-authored void sentinels still load verbatim; only engine-derived edges are added here.
-// North/south height-dependent void strips beyond the right two columns remain TODO(question) [P0-17].
+//   - Right-edge: columns W-2,W-1 become 0xFFFD where empty/fringe (live
+//     features and anchors in those columns survive).
+//   - North-edge: an empty/fringe cell at row z becomes 0xFFFD when
+//     z*16 − (height >> 1) < 0 — the cell's half-height pokes above the
+//     north map edge. Row 0 voids any height ≥ 1, row 1 heights > 32, ...
+//     rows 8 and beyond never.
+//   - South-edge: walking rows upward from H-1, an empty/fringe cell at row z
+//     becomes 0xFFFD when (Height-1-z)*16 + (height >> 1) < 112 — low cells
+//     near the south edge whose surface would fall below the play area.
+//   - Lava-world flood: when lavaworld is set, any 0xFFFF/0xFFFE cell with
+//     hmin ≤ SeaLevel becomes 0xFFFD.
+//
+// Playable insets PlayRight = Wpix-32 and PlayBottom = Hpix-128 are set at
+// void-fixup time. Map-authored void sentinels still load verbatim; only
+// engine-derived edges are added here. (The earlier copies of this function
+// voided the right columns unconditionally and carried the north/south
+// predicates as TODO(question); both superseded by the traced edge rules.)
 func (t *Terrain) applyVoidFixup(mh *content.MapHeader) {
 	if t == nil || t.Plot == nil || t.CellW <= 0 || t.CellH <= 0 {
 		return
@@ -645,22 +667,46 @@ func (t *Terrain) applyVoidFixup(mh *content.MapHeader) {
 	// Playable insets [P0-17]: Wpix = CellW*16, Hpix = CellH*16.
 	t.PlayRight = t.CellW*16 - 32
 	t.PlayBottom = t.CellH*16 - 128
-	// Right two columns always void 0xFFFD [P0-17].
+	// Empty-or-fringe test shared by every edge rule [02 "Terrain file"].
+	convertible := func(f uint16) bool {
+		return f == PlotFeatureNone || f == PlotFeatureFringe
+	}
+	// Right-edge void: columns W-2,W-1 per row where empty/fringe [02 "Terrain file"].
 	if t.CellW >= 2 {
 		for cz := int32(0); cz < t.CellH; cz++ {
 			for _, cx := range []int32{t.CellW - 2, t.CellW - 1} {
 				idx := int(cz*t.CellW + cx)
-				if idx >= 0 && idx < len(t.Plot) {
+				if idx >= 0 && idx < len(t.Plot) && convertible(t.Plot[idx].Feature()) {
 					t.Plot[idx].SetFeature(PlotFeatureVoid)
 				}
+			}
+		}
+	}
+	// North-edge void: z*16 − (height>>1) < 0 on the raw height byte [02 "Terrain file"].
+	for cz := int32(0); cz < t.CellH; cz++ {
+		row := int(cz * t.CellW)
+		for cx := int32(0); cx < t.CellW; cx++ {
+			cell := &t.Plot[row+int(cx)]
+			if convertible(cell.Feature()) && cz*16 < int32(cell.Height()>>1) {
+				cell.SetFeature(PlotFeatureVoid)
+			}
+		}
+	}
+	// South-edge void: walking rows upward from Height-1, void when
+	// (Height-1-z)*16 + (height>>1) < 112 [02 "Terrain file"].
+	for cz := t.CellH - 1; cz >= 0; cz-- {
+		row := int(cz * t.CellW)
+		for cx := int32(0); cx < t.CellW; cx++ {
+			cell := &t.Plot[row+int(cx)]
+			if convertible(cell.Feature()) && (t.CellH-1-cz)*16+int32(cell.Height()>>1) < 112 {
+				cell.SetFeature(PlotFeatureVoid)
 			}
 		}
 	}
 	// Lava-world bulk flood [P0-17]: when lavaworld !=0, any 0xFFFF/0xFFFE cell with hmin ≤ SeaLevel becomes void.
 	if mh != nil && mh.LavaWorld != 0 {
 		for i := range t.Plot {
-			f := t.Plot[i].Feature()
-			if f == PlotFeatureNone || f == PlotFeatureFringe {
+			if convertible(t.Plot[i].Feature()) {
 				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 				if t.Plot[i].MinHeight() <= t.SeaLevel {
 					t.Plot[i].SetFeature(PlotFeatureVoid)
@@ -668,6 +714,4 @@ func (t *Terrain) applyVoidFixup(mh *content.MapHeader) {
 			}
 		}
 	}
-	// TODO(question): north/south height-dependent void strips beyond right columns remain unknown [P0-17].
-	// Engine-derived void edges for those strips are not implemented — map-authored sentinels remain.
 }

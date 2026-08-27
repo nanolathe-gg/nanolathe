@@ -132,14 +132,14 @@ func TestLoop_TraceOrder(t *testing.T) {
 			t.Fatalf("order violation: %q at %d not before %q at %d", a, ai, b, bi)
 		}
 	}
-	mustBefore(TraceTickBegin, TraceWindMeteor)
-	mustBefore(TraceWindMeteor, TracePlayerBegin)
-	mustBefore(TracePlayerBegin, TraceUnitBegin)
+	mustBefore(TraceTickBegin, TracePlayerBegin)
 	mustBefore(TraceUnitBegin, TraceOrderPump)
 	mustBefore(TraceOrderPump, TraceMovementStep)
 	mustBefore(TraceMovementStep, TraceProjectileStep)
-	mustBefore(TraceProjectileStep, TraceFeatureLifecycle)
-	mustBefore(TraceFeatureLifecycle, TraceVisibilityDeadline)
+	mustBefore(TraceProjectileStep, TracePlayerBegin)
+	mustBefore(TracePlayerBegin, TraceFeatureLifecycle)
+	mustBefore(TraceFeatureLifecycle, TraceWindMeteor)
+	mustBefore(TraceWindMeteor, TraceVisibilityDeadline)
 	mustBefore(TraceVisibilityDeadline, TraceTriggerPoll)
 	mustBefore(TraceTriggerPoll, TraceSnapshotPublish)
 	mustBefore(TraceSnapshotPublish, TraceTickEnd)
@@ -560,6 +560,7 @@ func TestLoop_BuildProgress(t *testing.T) {
 	factoryDef := cat.Units["armcom"]
 	factoryDef.Builder = true
 	factoryDef.CanMove = false
+	factoryDef.BMCode = false   // building class is authored bmcode, not mobility [08 "Classifier eligibility, destinations, and order"]
 	factoryDef.WorkerTime = 300 // quantum 10
 	factoryDef.YardMap = ""
 	productDef := &content.UnitDef{UnitName: "testunit0", MaxDamage: 100, BuildTime: 300, BuildCostEnergy: 10, BuildCostMetal: 10, FootprintX: 1, FootprintZ: 1}

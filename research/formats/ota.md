@@ -139,7 +139,7 @@ terrain, so readers can ignore it.
 | `MohoMetal` | Nominally the extraction concentration for moho mines. Authored by all 275 retail maps and **inert**: only `SurfaceMetal` scales extraction, and a moho mine's advantage is its own larger `ExtractsMetal`. |
 | `HumanMetal`, `HumanEnergy` | Player starting resources |
 | `ComputerMetal`, `ComputerEnergy` | AI starting resources |
-| `MeteorWeapon`, `MeteorRadius`, `MeteorDensity`, `MeteorDuration`, `MeteorInterval` | Meteor storms (weapon name from [tdf.md](tdf.md); defaults in `gamedata/METEOR.TDF`). Meteors are disabled when `MeteorWeapon` is empty, or when the radius, density, duration, or interval is zero. |
+| `MeteorWeapon`, `MeteorRadius`, `MeteorDensity`, `MeteorDuration`, `MeteorInterval` | Meteor storms (weapon name from [tdf.md](tdf.md); defaults in `gamedata/METEOR.TDF`). **Enable rule (correction 2026-08-26):** only an empty `MeteorWeapon` disables the shower. Zero radius/density/duration/interval do NOT disable — they substitute all five values from the `[Default]` record and the shower stays enabled. An earlier reading in this document ("disabled when the radius, density, duration, or interval is zero") was wrong. A map authoring nonzero parameters with no weapon key is disabled with its parameters discarded. |
 
 ### Mission end conditions
 
@@ -315,6 +315,9 @@ file!`, `Old TED format no longer supported!`, and `Hey, joker!  Mission file
   examples only.
 - Exact win-vs-lose semantics of each end-condition key, and
   `BuildPriority`'s meaning, are engine behavior not recoverable from data.
+- The mission open path's six diagnostics, including the misspelled
+  `Hey, joker!  There is no mission defintion for this mission: %s`, are
+  recorded in the executable spec doc 02 §6 "Mission-file diagnostics".
 
 ## Sources
 

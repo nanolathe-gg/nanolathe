@@ -435,10 +435,15 @@ func (s *Strategic) recomputeClassVectors() {
 				// not represented by the immutable weapon definition. A resolved
 				// weapon link is the only available slot identity here; do not
 				// infer activity from unrelated unit flags [R-P0-05].
-				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				// The class routine reads the damage word (the weapon parser's
+				// DAMAGE/default key) divided by 40 and the range word (the range
+				// key) divided by 100; reloadtime is stored elsewhere (scaled by
+				// thirty) and is not read by this routine — an earlier "reload
+				// divided by 100" reading is retracted [08 "Class routine weapon
+				// reads"].
 				dmg := int32(wp.DamageDefault)
-				reload := int32(wp.ReloadTime)
-				wSum = wSum + dmg/0x28 + 5 + reload/100
+				rnge := int32(wp.Range)
+				wSum = wSum + dmg/0x28 + 5 + rnge/100
 			}
 		}
 		wSum = clamp100(wSum) // also clamp to 100 via intermediate steps [P0-01 §3]

@@ -219,15 +219,14 @@ func windInterval(crt *rng.CRT) uint32 {
 }
 
 // windVectors recomputes the world X/Z wind vectors from strength and heading
-// using the shared simulation trig table [04 §5.1].
+// using the shared simulation trig table [04 §5.1]. The direction vector pair
+// is −2 × the fixed-point trig of the heading with the speed as the magnitude
+// [01 §4.4].
 //
-// TODO(question): [01 §7.3] and [05 "Wind generation"] establish only that "the
-// world X/Z wind vectors are recomputed from direction and strength". Neither
-// the -2 amplitude factor nor the cos->X / sin->Z axis assignment below is
-// attested anywhere in research. They are carried forward from the prior
-// implementation. Nothing reads DirX/DirZ yet; the first consumer (particle
-// drift is presentation-side [05 "Wind generation"]) must settle this before
-// depending on it.
+// TODO(question): the cos→X / sin→Z axis assignment below is not attested in
+// research — only the −2 amplitude factor is established. Nothing reads
+// DirX/DirZ yet; the first consumer (particle drift is presentation-side
+// [05 "Wind generation"]) must settle the axis before depending on it.
 func windVectors(strength int32, heading uint16) (int32, int32) {
 	if strength == 0 {
 		return 0, 0

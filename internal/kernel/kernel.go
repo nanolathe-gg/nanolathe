@@ -22,8 +22,8 @@ const (
 	PhaseSequences                         // 7 sequence/effect-strip advancement
 	PhaseWindJitter                        // 8 wind jitter/randomized interval update
 	PhaseWindField                         // 9 wind-field update
-	PhaseLedgerCleanup                     // 10 ledger/death cleanup
-	PhaseBarrier                           // 11 ten-object vtable-backed barrier pass — TODO(T23): consumers unidentified
+	PhaseCameraScroll                      // 10 camera/scroll position update (scroll target step, shake jitter)
+	PhaseObjectSweeps                      // 11 ten object-list update sweeps — TODO(question): object family unidentified
 	PhaseCadenceFlip                       // 12 every-eight-sub-tick cadence flip
 	PhaseCount
 )
@@ -39,8 +39,8 @@ var phaseNames = [PhaseCount]string{
 	PhaseSequences:            "sequences",
 	PhaseWindJitter:           "wind-jitter",
 	PhaseWindField:            "wind-field",
-	PhaseLedgerCleanup:        "ledger-cleanup",
-	PhaseBarrier:              "barrier",
+	PhaseCameraScroll:         "camera-scroll",
+	PhaseObjectSweeps:         "object-sweeps",
 	PhaseCadenceFlip:          "cadence-flip",
 }
 

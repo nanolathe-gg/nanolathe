@@ -147,11 +147,23 @@ A unit placement record can contain:
   extracted as the byte's high bit and applied to the created unit;
 - initial mission string.
 
+The creation reader also consumes the **facing angle**: it copies the
+authored angle word from the placement record into the created unit's
+heading word, and that heading word is read by the steering code. The
+placement record's fixed fields in order are: the three interned name
+pointers, the fixed X/Z/Y coordinates, the angle word, the health
+percentage word, the creation-countdown dword, the build-priority word,
+the player byte, and the flag byte — the build-priority word sits between
+the countdown and the player byte, not after the health word as earlier
+noted.
+
 The executable parses these fields into fixed records before unit creation.
 A complete reader census over the runtime unit record closes the parsed-only
 list above: `MissionCriticalUnit`, `AiIgnore`, `AiPriorityTarget`,
 `InitialGroup`, `BuildPriority` and the delayed-creation countdown have no
-reader anywhere in the image. The immunity high bit *is* transferred to a
+reader anywhere in the image — the earlier phrasing "the creation reader
+copies build priority" is retracted; the copy it observed was the angle.
+The immunity high bit *is* transferred to a
 runtime status bit on the created unit — and that bit likewise has no reader,
 so the single consumed flag is itself inert in this executable. Retain all of
 them verbatim for save fidelity and diagnostics; act on none of them.
@@ -159,13 +171,13 @@ them verbatim for save fidelity and diagnostics; act on none of them.
 resource resolver into the campaign `camps\useonly` area — path-building
 evidence that it feeds the campaign restricted-units mechanism.
 
-Facing angle for each placement record is converted from authored degrees to a 16-bit circle by a fixed-point magic multiply that is equivalent to truncate toward zero of degrees times 65536 divided by 360. The retail sequence multiplies the scaled degrees by a fixed magic constant and corrects with a division by 360 scaled to 65536, all with truncation toward zero; the result is bitwise identical to a floating-point conversion for the small angles that appear in stock assets but differs for negative or greater-than-360 values, and it wraps modulo the circle. [P0-06]
+Facing angle for each placement record is converted from authored degrees to a 16-bit circle by a fixed-point magic multiply. The retail sequence multiplies the scaled degrees by a fixed magic constant and corrects with a division by 360 scaled to 65536, all with truncation toward zero. The equivalence domain is now settled: for non-negative degrees below the 32-bit wrap it is bitwise identical to truncate toward zero of degrees times 65536 divided by 360; for negative degrees the result is that truncation **plus one** unit (about 0.0055 degrees of bias); degrees in the 360..65535 range wrap correctly and stay identical to the floating formula modulo the circle; only |degrees| at or beyond 65536 (where the degrees-times-65536 intermediate wraps 32-bit) diverge from the floating formula. The earlier "differs for greater-than-360 values" phrasing is retracted (it wraps correctly), and "equivalent for the whole integer range" is retracted (negative degrees carry the one-unit bias). [P0-06] [lane 08 angle equivalence]
 
-The initial-mission string is interpreted once at battle start, on the loading worker after all units exist, for mission type 1 and for BetweenMissions restores only, and before any creation script, movement, or visibility publication for that tick. No other consumer of the stored script strings is located in the bounded search. [P0-06]
+The initial-mission string is interpreted once at battle start, on the loading worker after all units exist, for fresh mission-type-1 starts and for BetweenMissions-continuation loads (the save-blob gate runs the same fresh spawner when the BetweenMissions flag is present), and before any creation script, movement, or visibility publication for that tick. No other consumer of the stored script strings is located in the bounded search. [P0-06] [lane 08 BetweenMissions polarity]
 
 Tokenization scans the string for the comma character, copies each span into a 256-byte frame, and splits on every comma; the scan restarts past the comma with whitespace skipped. Tokens whose first character lies outside the A through w range are ignored and scanning resumes at the next comma. The remaining tokens dispatch through a 23-entry table that is case-insensitive for most verbs but carries a quirk: an uppercase-led W enters the build block rather than the wait block, so a plain wait can only be written lowercase as w and a wait-for-attack as lowercase wa, while an uppercase W with a following w character selects the stockpile build form. The families that appear in stock assets are move, attack with a numeric coordinate form and a by-type name form, build and stockpile build, self-destruct, guard, immediate attach, flag-bit write, patrol with timeout, make-selectable, unload, wait with seconds and an optional trailing integer, and wait-for-attack by name. Unknown letters, digits, and punctuation are ignored silently with no diagnostic and scanning resumes. [P0-06]
 
-Argument parsing uses the retail scan-format family with formats for two floats, three floats, integer pairs, and name scansets that accept alphanumerics, underscore, and dot. Only the numeric attack form tests that two floats were converted and only the wait-for-attack form tests that a name was converted; every other verb ignores the conversion count and still queues an order with whatever values the scan left in the frame, which for malformed numbers means zero-valued or stale stack values but still a queued order. Names for guard, immediate attach, and the name form of attack are resolved by scanning the sparse created array in placement order from zero upward, testing Ident case-insensitively first and then Unitname, returning the first occurrence and skipping null gaps left by failed allocations; duplicate names therefore resolve to the lowest placement index. A failed type lookup for attack or build produces no queue, while a failed unit lookup for guard produces no queue and for wait-for-attack falls back to self. The order queues and position scaling use truncate toward zero of floats multiplied by 65536 for coordinates and by 30 for timeouts, matching the retail helper's truncation; the flag verb writes bits without queuing and the immediate attach verb posts an internal attach without queuing. [P0-06]
+Argument parsing uses the retail scan-format family with formats for two floats, three floats, integer pairs, and name scansets that accept alphanumerics, underscore, and dot — with one exception: the wait-for-attack scanset is `" %[a-zA-Z0-9.]"` and excludes the underscore (the earlier "all name scansets accept underscore" phrasing is retracted; attack-by-type and guard do include it). Only the numeric attack form tests that two floats were converted and only the wait-for-attack form tests that a name was converted; every other verb ignores the conversion count and still queues an order with whatever values the scan left in the frame, which for malformed numbers means zero-valued or stale stack values but still a queued order. Names for guard, immediate attach, and the name form of attack are resolved by scanning the sparse created array in placement order from zero upward, testing Ident case-insensitively first and then Unitname, returning the first occurrence and skipping null gaps left by failed allocations; duplicate names therefore resolve to the lowest placement index. A failed type lookup for attack or build produces no queue, while a failed unit lookup for guard produces no queue and for wait-for-attack falls back to self. The order queues and position scaling use truncate toward zero of floats multiplied by 65536 for coordinates and by 30 for timeouts, matching the retail helper's truncation; the flag verb writes bits without queuing and the immediate attach verb posts an internal attach without queuing. [P0-06]
 
 A postlude runs after the string is exhausted: when at least one order was queued it clears bit 5 of the unit's class word, and unless the string contained a numeric attack, patrol, self-destruct, or make-selectable, it queues a final make-selectable with zero auxiliaries. The census over the shipped mission corpus shows every verb shape is exercised in stock assets, with illustrative counts such as selectable near two thousand, guard above two thousand, flag-bit writes near one thousand, wait and move each above one thousand, and build, stockpile, wait-for-attack, and unload each in the hundreds; malformed-argument paths beyond the two tested verbs are not present in stock assets but still queue silently. [P0-06]
 
@@ -282,9 +294,9 @@ Missing optional media can fall back or suppress presentation without aborting b
 
 The executable contains campaign selection, mission list, briefing, end-mission, score and report, and between-mission state. The end-of-mission latch is established: the trigger queues are polled once per 30 ticks in the local player's slice only, with victory as an AND across its queue and defeat as an OR, and victory evaluated first so simultaneous completion resolves as victory. When either side completes, the latch arms a countdown at four that decrements roughly once per second before a latch word is written with separate bits for ending, won, and lost; the lose path clears the win bit it would otherwise share. The score helper that writes the campaign result combines kills multiplied by a kill multiplier and elapsed ticks divided by 1800 multiplied by a time multiplier, both truncated and clamped at zero, and stores a W or L character per mission slot. [P0-05]
 
-Persistence is split. Difficulty, the skirmish lobby fields, and two registry mirrors for unlock state are kept under the installed software registry path and written back immediately when absent so a first run fully populates the registry. One mirror holds the difficulty value masked to 16 bits and cycled by the difficulty controls; a second mirror holds a games flag gated on a display mode, and a third holds an all-missions flag as a single bit. The per-mission W and L characters in memory and the between-missions bank account named Summary that carries a BetweenMissions flag are written through the bank system, not the registry. The bank's timing block that persists scheduler state is a 28-byte binary box; larger boxes have trailing bytes ignored, and the bank's string pool, header, and account enumeration are not range-checked. Campaign continuation on load inspects the saved Summary account for the BetweenMissions flag to decide between fresh mission spawning and battle reconstruction.
+Persistence is split. Difficulty, the skirmish lobby fields, and three registry mirrors — difficulty, a games flag, and an all-missions flag — are kept under the installed software registry path and written back immediately when absent so a first run fully populates the registry (the earlier "two registry mirrors" count is corrected: the enumeration below lists three). One mirror holds the difficulty value masked to 16 bits and cycled by the difficulty controls; a second mirror holds a games flag gated on a display mode, and a third holds an all-missions flag as a single bit. The per-mission W and L characters in memory and the between-missions bank account named Summary that carries a BetweenMissions flag are written through the bank system, not the registry. The bank's timing block that persists scheduler state is a 28-byte binary box; larger boxes have trailing bytes ignored, and the bank's string pool, header, and account enumeration are not range-checked. Campaign continuation on load inspects the saved Summary account for the BetweenMissions flag to decide between fresh mission spawning and battle reconstruction — the battle-entry gate routes the flag-present case to the fresh spawner and the flag-absent case to battle restoration, never the reverse. [P0-05] [lane 08 BetweenMissions polarity]
 
-VFS first-win, first-gap termination, language-prefixed names, wind draws from the CRT stream before simulation, the latch bits and scoring arithmetic, and the registry versus bank split are established. The exact consumer of the all-missions registry bit and the full unlock rule for the campaign list, including whether the registry bit gates the list or only the progression write, remain bounded negative: the only located writer for that bit is the registry loader, no reader that gates the list is located in the bounded search, so the transition to unlock remains unknown. The provider-specific enumeration order beyond mount order is host-dependent but deterministic for a given filesystem, and the exact narration and glamour fallback beyond silent suppression is not closed. [P0-05]
+VFS first-win, first-gap termination, language-prefixed names, wind draws from the CRT stream before simulation, the latch bits and scoring arithmetic, and the registry versus bank split are established. The all-missions registry bit's consumer is located: the single-player panel shows its "Any Msn" control and keeps the bit when set, a toggle callback (inert while the panel's text field holds the "DRDEATH" easter-egg string) flips the bit, toggles the control, and writes the bit back to the registry, and a writeback helper persists it. The mission-list build always counts every mission and neither the new-game panel nor the end-mission screen filters the list by the bit — the exact listbox-selection effect of the toggle remains the bounded residual (the earlier "no reader anywhere" is superseded). The provider-specific enumeration order beyond mount order is host-dependent but deterministic for a given filesystem, and the exact narration and glamour fallback beyond silent suppression is not closed. [P0-05] [lane 08 AllMissions]
 
 
 
@@ -329,10 +341,17 @@ literal candidate values tried in fixed trial order:
 
 For skirmish/multiplayer, each candidate additionally counts its `StartPos`
 special records and is accepted when that count equals the player count
-(counting nonzero lobby entries), **or** the counted player count is zero,
+(counted as the last occupied lobby slot index plus one — equivalent to the
+player count for the dense skirmish lobby; the "counting nonzero lobby
+entries" phrasing is corrected), **or** the counted player count is zero
+(with the candidate still required to have at least one StartPos),
 **or** — as a fallback while no exact match has been found — this candidate's
-StartPos count is the largest seen so far. The first accepted schema name is
-copied out and fed to the placement builder.
+StartPos count is the largest seen so far. A schema with zero StartPos
+records is never accepted when the player count is non-zero. The last
+accepted schema name is copied out and fed to the placement builder: after an
+exact match only later equal-count candidates overwrite it, and in the
+no-exact-match fallback a strictly larger count overwrites the previous
+choice — "first accepted" is retracted.
 
 Selection happens before placement records are instantiated, so all peers must
 agree on the same schema.
@@ -352,31 +371,42 @@ Directly read mission fields include:
 - planet;
 - no-movie flag;
 - memory requirement;
-- player count;
+- player count (stored as an 80-byte string in the mission object; it is a
+  presentation field — schema selection uses the lobby occupancy count, not
+  this value, and no tick consumer reads it);
 - wind minimum/maximum and related wind state;
 - gravity;
 - tidal strength;
 - water and lava behavior;
 - surface metal;
 - human and computer starting energy/metal;
-- kill and time score multipliers;
+- kill and time score multipliers (defaults 0.0 when absent);
 - briefing, narration, hint, glamour, and glamour-sound names;
 - allowed-unit restrictions;
 - AI profile name;
-- mission unit limit;
+- mission unit limit (campaign branch only, default 200, stored as the
+  16-bit unit-limit word);
 - meteor configuration;
-- other game-mode flags.
+- other game-mode flags (`mapping`/`lineofsight` set the campaign-mode LOS
+  defaults merged at battle entry; there is no mission-level
+  `commanderDeath` key — that rule is a lobby value).
 
 The content and world specifications define numeric parsing and how these
-values initialize subsystems.
+values initialize subsystems. The `commanderDeath`, `numplayers`, and
+`maxunits` dispositions above are closed by the mission loader and per-player
+phase; the earlier "commanderDeath injection" question is resolved — no
+mission key exists and no defeat trigger is injected for it.
 
 ### Meteor showers
 
 Meteor processing is closed. Authored parameters merge with the
 `gamedata/METEOR.TDF` `[Default]` record exactly as specified in document 02;
 an empty `MeteorWeapon` is the only disable predicate. Nine scheduler fields
-(enabled, active, next-strike, strike-end, next-hit, origin X/Z, target X/Z,
-and the resolved weapon) all persist in the save's `Meteor` account.
+(enabled, active, next-strike, strike-end, next-hit, origin X/Z, target X/Z)
+persist in the save's `Meteor` account — the "and the resolved weapon"
+phrasing is retracted: the account carries nine integer items and no weapon
+identity; the weapon is resolved at load from the authored mission
+configuration. [lane 08 meteor account]
 
 Scheduling runs in the tick phase **after wind jitter** and after the
 projectile phase, so a spawned meteor first moves on the next tick. When the
@@ -401,7 +431,7 @@ The common-tail mission loader validates a global header block and required keys
 
 ### Schema and start-position selection — Established [P0-04] [P0-05]
 
-Schema choice precedes placement record instantiation so all peers agree on the same schema. Campaign mode tries difficulty literals in a difficulty-dependent permutation: difficulty zero tries Easy, Medium, Hard; one tries Medium, Easy, Hard; two tries Hard, Medium, Easy; any other difficulty value fails. Skirmish and multiplayer modes try Network 1 through Network 4 in order, counting per-schema start-position specials by scanning for the StartPos prefix. A candidate is accepted when its start-position count equals the counted player count, or the counted player count is zero, or — while no exact match has been found — this candidate's count is the largest seen so far. The first accepted schema name is copied out and fed to the placement builder; the counting of lobby players uses non-zero slot occupancy for skirmish and a distinct closed-value sentinel for the multiplayer path, both dense when the lobby is densely packed but counted as last occupied index plus one. [P0-04]
+Schema choice precedes placement record instantiation so all peers agree on the same schema. Campaign mode tries difficulty literals in a difficulty-dependent permutation: difficulty zero tries Easy, Medium, Hard; one tries Medium, Easy, Hard; two tries Hard, Medium, Easy; any other difficulty value fails. Skirmish and multiplayer modes try Network 1 through Network 4 in order, counting per-schema start-position specials by scanning for the StartPos prefix. A candidate is accepted when its start-position count equals the counted player count, or the counted player count is zero (the candidate still needs at least one StartPos), or — while no exact match has been found — this candidate's count is the largest seen so far; the last accepted schema name is copied out and fed to the placement builder (after an exact match only later equal-count candidates overwrite it; in the fallback only a strictly larger count does). The counting of lobby players uses non-zero slot occupancy for skirmish and a distinct closed-value sentinel for the multiplayer path, both dense when the lobby is densely packed but counted as last occupied index plus one. [P0-04]
 
 Start-position eligibility is established as three conjuncts: the ten fixed player slots are scanned in order, a slot participates only when its base value is non-zero, its control value is one, two, or three, and its terminator byte is not the newline sentinel. Special records that fail the StartPos prefix test are ignored for this purpose. [P0-04]
 
@@ -413,9 +443,9 @@ Commander fallback placement for eligible slots draws from the simulation stream
 
 ### Unit creation and InitialMission timing — Established [P0-04] [P0-06]
 
-Mission-unit creation during battle entry uses a two-pass sparse array. The loader allocates a created array sized by the unit count and zeroes it. Pass one walks the unit records in placement order from zero upward: it validates the unit type name exists, adjusts the authored player number from one-based to zero-based with a zero-to-one fixup, checks the same eligibility predicate used for start positions and emits a diagnostic for invalid player numbers but still proceeds to a position fixup helper and the normal unit allocator. The allocator scans for the lowest free pool slot in the owning player's slice and can fail; on failure the entry stays null and no unit is created. Successful creation copies the immunity high bit into a runtime status bit, scales health by percentage, and copies build priority. Pass two walks the same order again and invokes the InitialMission interpreter only when the record carries a non-null script string and the corresponding created entry is non-null; the interpreter tokenizes the string and queues orders. A per-record creation countdown field is parsed but has no reader in the image; no delayed queue, cargo loop, or separate attachment pass exists beyond the immediate attach verb. Recursive reconstruction for linked or carried units uses the same allocator path for saves but not for fresh mission spawns. [P0-04] [P0-06]
+Mission-unit creation during battle entry uses a two-pass sparse array. The loader allocates a created array sized by the unit count and zeroes it. Pass one walks the unit records in placement order from zero upward: it validates the unit type name exists, adjusts the authored player number from one-based to zero-based with a zero-to-one fixup, checks the same eligibility predicate used for start positions and emits a diagnostic for invalid player numbers but still proceeds to a position fixup helper and the normal unit allocator. The allocator scans for the lowest free pool slot in the owning player's slice and can fail; on failure the entry stays null and no unit is created. Successful creation copies the immunity high bit into a runtime status bit, scales health by percentage, and copies the authored **facing angle** into the unit's heading word (the earlier "copies build priority" is retracted — build priority is parsed but never copied or read; the placement record's angle word is the copy source). Pass two walks the same order again and invokes the InitialMission interpreter only when the record carries a non-null script string and the corresponding created entry is non-null; the interpreter tokenizes the string and queues orders. A per-record creation countdown field is parsed but has no reader in the image; no delayed queue, cargo loop, or separate attachment pass exists beyond the immediate attach verb. Recursive reconstruction for linked or carried units uses the same allocator path for saves but not for fresh mission spawns. [P0-04] [P0-06] [lane 08 facing angle]
 
-Timing is fixed: the mission loader's common tail runs, then for multiplayer a barrier pumps network state and sleeps fifty milliseconds until peers arrive, then start-position assignment stamps slots, then commanders are created with the jitter described above and resources are granted as floating-point metal and energy, then camera focus is chosen, then the sparse two-pass spawner runs, then visibility and mapping are rebuilt, then the first authoritative tick runs. The InitialMission strings are therefore interpreted after every mission unit exists at its fixed-point position but before any creation script, movement, or visibility publication for that tick, and they never take a tick of their own. BetweenMissions handling for saves uses a bank account named Summary that carries a BetweenMissions flag; when that flag is present the loader restores player and feature state from the bank instead of running the fresh spawner. [P0-04] [P0-05]
+Timing is fixed: the mission loader's common tail runs, then for multiplayer a barrier pumps network state and sleeps fifty milliseconds until peers arrive, then start-position assignment stamps slots, then commanders are created with the jitter described above and resources are granted as floating-point metal and energy, then camera focus is chosen, then the sparse two-pass spawner runs, then visibility and mapping are rebuilt, then the first authoritative tick runs. The InitialMission strings are therefore interpreted after every mission unit exists at its fixed-point position but before any creation script, movement, or visibility publication for that tick, and they never take a tick of their own. BetweenMissions handling for saves uses a bank account named Summary that carries a BetweenMissions flag; **the polarity is settled by the battle-entry save-blob gate: when the flag is absent (the in-battle marker) the loader runs the battle restoration dispatcher and skips the fresh spawner; when the flag is present the loader skips battle restoration and runs the fresh spawner — the campaign continuation rebuilds the mission from the authored mission file.** The earlier contradictory phrasing (flag-present → restore player and feature state from the bank) is retracted: a BetweenMissions save contains only the Summary account, so the flag-present route could not restore a battle; the gate's two branches verify this. [P0-04] [P0-05] [lane 08 BetweenMissions polarity]
 
 ### Feature and terrain convergence — Established [P0-04] [P0-05]
 
@@ -505,13 +535,13 @@ Completion sets the trigger's `Completed` flag and, if `Celebrated` is still cle
 
 The created notification slot is present in every vtable but unused by any shipped condition [08 "Evaluation"].
 
-**The tick site — Established.** The victory and defeat queues are polled from the per-player tick phase, **in the LOCAL player's slice only**, on that slot's own **once-per-30-tick cadence** (`globalTick >= dueTick` then `dueTick += 30` — the same next-due-plus-30 shape the economy settlement deadline uses) [08 "Evaluation"], and **only when the mission type is 1** (campaign) [08 "Evaluation"]. Skirmish and multiplayer sessions (types 2/3) never poll these queues. Poll order is the victory array then the defeat array, in builder order.
+**The tick site — Established, corrected for all mission types.** The victory and defeat queues are polled from the per-player tick phase, **in the LOCAL player's slice only**, on that slot's own **once-per-30-tick cadence** (`globalTick >= dueTick` then `dueTick += 30` — the same next-due-plus-30 shape the economy settlement deadline uses) [08 "Evaluation"]. The earlier "campaign type 1 only / types 2 and 3 never poll" reading is retracted: the poll block runs for every mission type, with per-type precedence (below). Poll order is the victory array then the defeat array, in builder order.
 
-**Combination and precedence — Established.** Victory is an **AND** across its queue — every victory trigger must report `Completed`. Defeat is an **OR** — any single defeat trigger ends the mission. **Victory is evaluated first**, so a tick on which both would fire resolves as a victory [08 "Evaluation"]. Completion arms a shared end-of-mission countdown at **four**, which then decrements roughly once per second (once per local 30-tick due: `4 → -1` over five invocations, ~150 ticks) before the end-latch word is written; the latch distinguishes "ending" (bit 2, value `0x04`), "won" (`0x10` or `0x20`) and "lost" (`0x40`, clearing `0x10`) and the lose path clears the win bit it would otherwise share [08 "Evaluation"]. The `~1/sec` rate is the poll cadence, not a separate timer.
+**Combination and precedence — Established, per type.** Victory is an **AND** across its queue — every victory trigger must report `Completed`. Defeat is an **OR** — any single defeat trigger ends the mission. For campaign (type 1), **victory is evaluated first**, so a tick on which both would fire resolves as a victory [08 "Evaluation"]. For skirmish and multiplayer (types 2/3), the **defeat branch is evaluated before the victory poll** and the defeat queue is polled only when the local side's commander marker (a runtime bit on the local player's side definition) is clear — the commander-dead test — so a simultaneous commander death and victory resolves as defeat; the victory queue is polled unconditionally. Completion arms a shared end-of-mission countdown at **four**, which then decrements roughly once per second (once per local 30-tick due: `4 → -1` over five invocations, ~150 ticks) before the end-latch word is written; the latch distinguishes "ending" (bit 2, value `0x04`), "won" (`0x10` or `0x20`) and "lost" (`0x40`, clearing `0x10`) and the lose path clears the win bit it would otherwise share [08 "Evaluation"]. The `~1/sec` rate is the poll cadence, not a separate timer. **A second, per-tick countdown site exists for multiplayer only (mission type 3, commander-death rule not value two, no active player remaining): it decrements the same shared countdown every tick (latch in about five ticks).** The earlier "no-human campaign path decrements per-tick" reading is retracted — the fast site is gated on the multiplayer type; a humanless campaign keeps the 30-tick cadence. The skirmish/multiplayer commander-death rule is a lobby value, not a mission key: value two respawns a new commander (valid-placement search with up to 9999 trials, two simulation draws per trial, plus terrain and lava gates; then resources and visibility rebuild), any other value ends the game through the watch-mode path ("You're out! Continue watching?").
 
 **Owner gating is a player-index compare, not an alliance test — Established.** Each poll-time scan that walks live units compares the unit's player index against `LocalOwner` or `EnemyOwner` as above; no ally-group merge is performed [08 "Evaluation"]. `UnitTypeKilled` and `AllUnitsKilledOfType` explicitly accept any owner [08 "Evaluation"].
 
-**Record shapes, the eighteen-entry vtable map, these evaluator bodies, the tick site, and the combination rules are established.** Remaining explicit unknowns: the exact presentation sequence between latch write and session teardown (the battle-to-postgame transition beyond the bit writes), and whether any non-stock `SIDEDATA` divergence would expose the commander-flag vs table distinction (stock content agrees, but a synthetic side definition could diverge — retained as bounded residual, not a poll-vs-notification gap). The timer comparison beyond `>=` unsigned and the `MoveUnitToRadius` axis pair beyond X/Z planar are now closed; do not retain them as Unknown.
+**Record shapes, the eighteen-entry vtable map, these evaluator bodies, the tick site, and the combination rules are established.** The presentation sequence between latch write and session teardown is closed in the Session end section (post-battle handler: network drain, multiplayer frame copy, music stop, timed display, CD check, campaign progress and end-of-mission screen, outro movie, score/statistics screen, front-end return). Whether any non-stock `SIDEDATA` divergence would expose the commander-flag vs table distinction (stock content agrees, but a synthetic side definition could diverge — retained as bounded residual, not a poll-vs-notification gap). The timer comparison beyond `>=` unsigned and the `MoveUnitToRadius` axis pair beyond X/Z planar are now closed; do not retain them as Unknown.
 
 ## Skirmish configuration
 
@@ -535,7 +565,14 @@ The installed scalar lobby defaults are difficulty 1 (Medium), location 1
 the game), mapping 1 (terrain is blacked out until explored), line-of-sight 1,
 and line-of-sight type 1 (terrain elevations affect LOS). Difficulty, location,
 commander death, and mapping each toggle/cycle through their ordinary menu
-alternatives. The retail `LineOfSight` callback is a three-state control: it
+alternatives. The commander-death rule is a lobby value carried into the
+game-mode word and consumed by the per-player phase, not a mission key: value
+one ends the game through the watch-mode path when the local commander dies,
+and value two respawns a new commander (a valid-placement search with up to
+9999 trials of two simulation draws each, plus terrain and lava gates, then
+metal/energy grants and a visibility rebuild). The rule word also selects the
+multiplayer no-active-player fast countdown site. The retail `LineOfSight`
+callback is a three-state control: it
 cycles from elevation-aware LOS (`LineOfSight=1`, `LineOfSightType=1`), to
 elevation-agnostic LOS (`1,0`), to all mapped terrain visible
 (`LineOfSight=0`, `LineOfSightType=1`), then back to the default. These defaults
@@ -646,7 +683,7 @@ Per-definition inputs consumed in plain terms are:
 - footprint and yard-related size flags that contribute small constants and gate multipliers;
 - a slope-related field that triples one accumulator when non-negative;
 - a weapon-related floating field that can zero one accumulator when combined with a global half-compare;
-- the weapon table entries themselves, where active weapons contribute damage divided by 40 plus reload divided by 100 plus small constants;
+- the weapon table entries themselves, where active weapons contribute damage divided by 40 plus **range** divided by 100 plus small constants — the TDF identities are closed: the weapon parser stores the `DAMAGE` section's `default` key into the damage word (the /40 read) and the `range` key into the range word (the /100 read); `reloadtime` is stored elsewhere (scaled by thirty) and is not read by this routine. The earlier "reload divided by 100" phrasing is retracted; it is range divided by 100, consistent with the weapons ballistics field assignment;
 - a global helper that returns a signed classification value compared against zero;
 - per-type completed counts from the strategic state that double or quadruple one accumulator and gate halving from the previously computed single-byte coefficient;
 - a player-wide flag that gates halving of one accumulator.
@@ -831,15 +868,17 @@ The placement root is called by the construction task after a candidate has been
 
 Helper selection for extractor candidates is strict and opposite to the earlier inference. When the candidate's extracts-metal flag compares equal to floating zero, the root calls the statistical scatter helper directly without drawing. Otherwise it draws once with bound 255 and calls the exhaustive patch helper when the mission's uniform surface metal value is strictly less than the draw; otherwise it calls the scatter helper. The test is strictly less-than, so equality chooses the scatter path.
 
-The exhaustive patch helper scans a precomputed metal-patch record vector within the search circle whose radius is scaled by four, filters by distance squared, sorts the qualifying patches by distance, and then validates each candidate in sorted order with the footprint blocker and a blocking score. It stops early when the distance of the next patch exceeds the best distance found by a slack of 160. The statistical scatter helper attempts up to 30 trials around the origin, quantizing each trial to the map grid and to per-region bounds selected by the candidate's slope sign; each trial draws up to four values (a radius-scaled offset, a direction, and region-cell offsets) and validates with a placement checker and a metal-product score compared against a limit computed as surface metal times footprint X times footprint Z times two. The scatter path writes the chosen placement as fixed-point world coordinates derived from the quantized grid, scaling the grid index by a fixed factor that corresponds to half-tile increments.
+The exhaustive patch helper scans a precomputed metal-patch record vector within the search circle whose radius is scaled by four, filters by distance squared, sorts the qualifying patches by distance, and then validates each candidate in sorted order with the footprint blocker and the metal score. The score is the **sum of the per-cell metal bytes across the footprint** (the blocker accumulates each footprint cell's metal byte; the score getter is a trivial read of that accumulator). The exhaustive helper keeps the candidate with the highest accumulated metal sum (strict greater-than; ties keep the earlier sorted entry). It stops early when the distance of the next patch exceeds the best distance found by a slack of 160. The statistical scatter helper attempts up to 30 trials around the origin, quantizing each trial to the map grid and to per-region bounds selected by the candidate's slope sign; each trial draws up to four values (a radius-scaled offset, a direction, and region-cell offsets) and validates with the placement validator and a comparison of the same metal-byte-sum score against a limit computed as surface metal times footprint X times footprint Z times two. The scatter path writes the chosen placement as fixed-point world coordinates derived from the quantized grid, scaling the grid index by a fixed factor that corresponds to half-tile increments.
 
-Failed exhaustive helper does not fall through to the scatter helper; it returns failure for the entire placement attempt. Success requires the yard and occupancy validator to report placeable; missing yard data is not treated as permissive. The scatter helper's limit check is established as the product above, and the exhaustive helper contributes no random draws while the scatter helper contributes only the draws counted per trial. The selector's single draw is the only random draw on the extractor path when the candidate is non-extractor. [P0-03]
+Water legality is now located: neither placement helper consults the waterline value directly. The placement validator's yard path (which the scatter helper uses with the waterline-check flag) rejects footprint cells whose terrain height byte falls outside the band defined by the candidate's slope fields relative to the waterline; its non-yard path delegates to the footprint blocker with no waterline test. The exhaustive helper therefore has no waterline test at all — a "water-only extractor filter" remains a heuristic, as stated above, but the mechanism behind water legality is the yard path's waterline band.
 
-RNG sites for AI planning are the outer 30 gate, the cumulative weighted reservoir, the extractor selector with bound 255, the positioning scatter with bounds up to the current radius and 65536, and the two periodic tasks with bounds five, one hundred fifty, and nine hundred. Any other bound in this package is a bug. [P0-01] [P0-02] [P0-03]
+Failed exhaustive helper does not fall through to the scatter helper; it returns failure for the entire placement attempt. Success requires the yard and occupancy validator to report placeable; missing yard data is not treated as permissive. The scatter helper's limit check is established as the product above, and the exhaustive helper contributes no random draws while the scatter helper contributes only the draws counted per trial. The selector's single draw is the only random draw on the extractor path when the candidate is non-extractor. [P0-03] [lane 08 placement score and water]
+
+RNG sites for AI planning are the outer 30 gate, the cumulative weighted reservoir, the extractor selector with bound 255, the positioning scatter with bounds up to the current radius and 65536, the unit-loss throttle (deadline is current tick plus 30 plus a draw bounded 300), the strategic-state constructor (eight draws at setup, in order: 10, 3, then the two slope-negative region widths, then 20, 3, then the two slope-positive region widths — these seed the region and offset words the scatter helper later reads), the eco toggle with bound five, the explore task (deadline draw bounded 900, plus body draws bounded 2 and the map-dimension fractions), and the rally task (deadline draw bounded 150, drift-seed gate bounded 10, two drift draws bounded 65536, and score-comparison draws bounded by the score values). The wave, regroup, and merge bodies draw nothing. "Any other bound in this package is a bug" is retracted; the throttle, constructor, and task-body draws above complete the inventory. Separately, the session package's skirmish commander-respawn path (commander-death rule value two) draws twice per placement trial (map-width and map-height bounds) with up to 9999 trials. [P0-01] [P0-02] [P0-03] [lane 08 RNG inventory]
 
 #### R-P0-05 §1 — Score inputs and update order — Established [R-P0-05]
 
-The AI candidate score must consume the retail player economy aggregates and the strategic class vectors, not a proxy of current stock plus per-pass produced values. The runtime production and net-production accessors read player-record aggregates that are populated from the ledger's per-unit production and request buckets plus leftover stock; current stock and capacity are separate fields on the same record. The exact bucket arithmetic and settlement order are the economy contract. [05 "Player slot"; 05 "Settlement cadence"]
+The AI candidate score must consume the retail player economy aggregates and the strategic class vectors, not a proxy of current stock plus per-pass produced values. The runtime production and net-production accessors read player-record aggregates that are populated from the ledger's per-unit production and request buckets plus leftover stock; current stock and capacity are separate fields on the same record. The exact bucket arithmetic and settlement order are the economy contract. [05 "Player slot"; 05 "Settlement cadence"] This wording is deliberately aligned with document 05's settlement contract: the aggregates are the settled ledger values, and this doc's "per-pass snapshots" phrasing is not used — a candidate selection never sees the current pass's un-settled production.
 
 The score has two layers: dynamic economy pressure read from the player record at candidate-selection time, and per-definition class coefficients stored in the strategic state and recomputed only on the established cadence. Update order matters: in the per-player tick loop the manager task dispatch runs before the strategic refresh, and the economy ledger runs later in that loop. A manager selection therefore observes the previous settled economy values and the previous class vectors for that tick; refresh and ledger writes become inputs to later ticks (see R-P0-05 §6).
 
@@ -921,12 +960,17 @@ weaponBase = 11 if CanAttack else 1
 weaponSum = weaponBase
 for each of the three weapon slots:
     if weapon.active != 0:
-        weaponSum += weapon.damage / 40 + 5 + weapon.reload / 100
+        weaponSum += weapon.damage / 40 + 5 + weapon.range / 100
 weaponSum = clamp(weaponSum, -100, 100)
 coefficient = clamp(weaponSum + t1, -100, 100)
 ```
 
-The damage and reload field widths and divisions are established; the exact TDF key identity for the two weapon fields remains an explicit residual (see R-P0-05 §8).
+The damage and range field identities, widths, and divisions are established
+(the `DAMAGE/default` word and the `range` word of the weapon parser); the
+earlier "reload /100" reading is retracted, and the two weapon-field TDF-key
+residual in R-P0-05 §8 is closed. The strategic half-capacity state field
+remains: its writer is bounded-negative and stock state leaves its branch
+false (see R-P0-05 §8).
 
 The triple class coefficients — the other-mix accumulator starts at zero and receives these addends:
 
@@ -954,7 +998,7 @@ metal = clamp(trunc(metalBase
                     - (25 if MakesMetal != 0 else 0)), -100, 100)
 ```
 
-The definition inputs consumed by the routine — extracts-metal, makes-metal, metal and energy build costs, can-attack, builder, can-fly, can-load, is-feature, max-slope, radar and sonar distance, and wind-generator — are recovered runtime field mappings, not guesses based on similarly named proxies. Confidence is high for the comparisons, constants, cadence, and field mappings; medium for the classification helper's semantic name and the two weapon-field key identities.
+The definition inputs consumed by the routine — extracts-metal, makes-metal, metal and energy build costs, can-attack, builder, can-fly, can-load, is-feature, max-slope, radar and sonar distance, and wind-generator — are recovered runtime field mappings, not guesses based on similarly named proxies. Confidence is high for the comparisons, constants, cadence, and field mappings; medium for the classification helper's semantic name; the two weapon-field key identities are closed as the `DAMAGE/default` word and the `range` word.
 
 #### R-P0-05 §6 — Cadence and same-tick ordering — Established [R-P0-05]
 
@@ -982,14 +1026,14 @@ Replace the economy adapter's stock-plus-produced proxy with the player runtime 
 Locked by the score fixtures in internal/ai (o6_score_test.go, strategic_test.go) and the economy aggregate fixtures in internal/economy.
 
 ```text
-TODO(question): What exact TDF keys populate the weapon damage and reload fields read by the class routine, and what is the exact runtime meaning and writer of the strategic half-capacity state field?
+TODO(question): What is the exact runtime meaning and writer of the strategic half-capacity state field? (The weapon-field TDF identities are closed: `DAMAGE/default` feeds the damage read and `range` feeds the range read of the class routine; `reloadtime` is not read by it.)
 
-TODO(question): What are the exact geometry and water-legality contracts of the two placement helpers beyond the established extractor selector draw?
+TODO(question): What are the exact geometry and water-legality contracts of the two placement helpers beyond the established extractor selector draw? (Narrowed: the metal score is the footprint per-cell metal-byte sum and the waterline band is enforced only by the yard path of the placement validator — see the Placement root section.)
 ```
 
 ### What remains not established — Supported inference and unknown [P0-01] [P0-02] [P0-03]
 
-The class routine's per-definition inputs now have recovered field identities — extracts-metal, makes-metal, can-attack, builder, can-fly, can-load, is-feature, max-slope, radar and sonar distance, and wind-generator — as runtime field mappings (R-P0-05 §5). Audit: this doc previously claimed the addend-gating flag names were not closed; the field-level census recovered those identities, so the residual narrows to the semantic name of the classification helper, the TDF identities of the two weapon fields, and the strategic half-capacity state writer. The classifier's two high runtime status bits retain opaque semantic names while their tests and destinations are fixed (R-P0-04 §3). Weapon table field identities beyond damage divided by 40 and reload divided by 100 remain inference. The exact metric returned by the metal and blocking score helpers beyond a placeable versus blocked predicate and a product limit is inference.
+The class routine's per-definition inputs now have recovered field identities — extracts-metal, makes-metal, can-attack, builder, can-fly, can-load, is-feature, max-slope, radar and sonar distance, and wind-generator — as runtime field mappings (R-P0-05 §5). Audit: this doc previously claimed the addend-gating flag names were not closed; the field-level census recovered those identities, so the residual narrows to the semantic name of the classification helper and the strategic half-capacity state writer. The classifier's two high runtime status bits retain opaque semantic names while their tests and destinations are fixed (R-P0-04 §3). The weapon table field identities are closed: the class routine reads the `DAMAGE/default` word (damage divided by 40) and the `range` word (range divided by 100); `reloadtime` is not read by it (the earlier "reload divided by 100" was inference and is retracted). The metal score returned by the placement helpers is established as the footprint per-cell metal-byte sum (the exhaustive helper maximizes it; the scatter helper compares it against surface metal times footprint X times footprint Z times two), and water legality is the yard path's waterline band.
 
 The population of the nine manager task group vectors is now positive-static
 for the direct writer and the six classifier destinations; no additional
@@ -1244,7 +1288,20 @@ The recovered synchronization state requires peer agreement on:
 - selected map and mission schema;
 - player-slot configuration;
 - initial placements and options;
-- simulation timing and random state.
+- simulation timing.
+
+**Random state is not agreed.** The battle-entry orchestrator reseeds the
+Park–Miller stream from its own `QueryPerformanceCounter` sample (the
+seed-setter has exactly one call site in the whole image — battle entry)
+and the CRT stream from its own clock; the packet registry (all 46 declared
+types with byte-exact layouts) contains no seed-exchange packet, no handler
+writes the seed state, and the pre-battle readiness barrier exchanges only
+readiness and assignment data. Peers therefore run divergent random
+streams, which is consistent with the engine's known desync behavior; the
+earlier "requires peer agreement on random state" phrasing is retracted.
+The doc 01 §7.1 seed formula (sum of low and high parts of
+`QueryPerformanceCounter`, XORed with a fixed constant, forced odd) is
+authoritative and is what battle entry applies. [lane 08 seed agreement]
 
 Matching executable, mounted-provider, and full catalog identity is a sensible
 compatibility requirement, but it is not a closed field in the recovered
@@ -1539,10 +1596,19 @@ is ignored.
 
 **Established fact — battle versus campaign continuations and timing.** Load
 preflight accepts only game type 1 (campaign) and 2 (multiplayer); any other
-value fails as invalid. A save with BetweenMissions equals 1 routes through
-campaign-continuation handling to the two-player setup path, while a save with
-the in-battle marker routes through the six-state path and directly enters
-battle restoration. The 28-byte scheduler block is persisted verbatim and then
+value fails as invalid. **A save with BetweenMissions equal to 1 routes
+through campaign-continuation handling: battle restoration is skipped and
+the fresh mission spawner rebuilds the battle from the authored mission file
+(the campaign's Summary metadata — Campaign, Mission, Difficulty, Thumbs
+W/L marks — drives the front end). A save without the BetweenMissions item
+(the in-battle marker) routes through the six-state path and directly enters
+battle restoration.** This settles the earlier contradictory corpus readings
+(flag-present → restore versus flag-present → continuation): the battle-entry
+gate checks the Summary BetweenMissions item twice, and only the absent/zero
+case calls the battle restore dispatcher; the present case falls through to
+the fresh spawner, and a BetweenMissions save contains only Summary so no
+battle state could be restored by any other reading. The 28-byte scheduler
+block is persisted verbatim and then
 recomputed on the first budget pass from a stale anchor, which can produce a
 capped five-tick catch-up, zero, or pause; the per-player UpdateTime deadline
 is an absolute tick advanced by 30 when due and gates settlement. Both random
@@ -1647,8 +1713,14 @@ value compared against the global tick and advanced by thirty when due; see
 document 05 for the settlement cadence. Deadlines are persisted as absolute
 values and are not re-seeded on load; battle init seeds `UpdateTime`,
 `WinLoseTime`, and `DisplayTimer` to the current tick for all active slots
-before load overwrites them. Consumers of `WinLoseTime`/`DisplayTimer` beyond
-their save keys remain open.
+before load overwrites them. The consumer census for the sibling fields is
+closed: `WinLoseTime` has **no reader anywhere in the image** beyond the
+save writer (the earlier display-candidate attributions were targeting and
+feature helpers that do not reference it) — it is persisted verbatim for
+compatibility and otherwise inert; `DisplayTimer` is the **HUD resource-rate
+refresh deadline**: a presentation function advances it by thirty whenever
+it trails the global tick and refreshes the four displayed resource-rate
+floats from the player record.
 
 The `Alliances` box is exactly 11 bytes and loads only when the selected box
 size is exactly 11; afterwards the player's own self-alliance byte is forced
@@ -1712,8 +1784,9 @@ summary also writes `globalTick` as integer `Game Time` presentation metadata.
 Bounded census of the complete random-state writer graph and every bank
 account/item/box API invocation site shows no serialization of the Park-Miller
 simulation RNG or the per-thread CRT RNG. The load path reseeds both families (the
-simulation seed from `QueryPerformanceCounter` halves and the CRT seed from
-`time(NULL)`) before any bank
+simulation seed from the sum of the low and high parts of
+`QueryPerformanceCounter`, XORed with a fixed constant and forced odd per
+document 01 §7.1, and the CRT seed from local/system time) before any bank
 restoration, so no bit-identical RNG continuation exists even in the same
 process. Consequently, loading a save resumes logical world state and the 28-byte
 timing block, but not bit-identical future random consumption.
@@ -1769,9 +1842,24 @@ multiplayer uses score/report/end-multiplayer screens. Statistics are derived
 from authoritative player state and saved/reported using the interface and
 localization systems.
 
-The exact tick at which simulation stops, whether final network commands are
-drained, and the order of music, overlays, score calculation, save updates,
-and lobby teardown remain incomplete.
+The closed prefix of the post-battle order: the latch bits drive the session
+router into the results/postgame state, whose handler drains the network at
+entry, then (multiplayer) copies the last game frame and shows a message box,
+stops the music, runs a ten-unit timed display, performs the campaign CD
+check, writes campaign progress and shows the end-of-mission screen (outcome
+art, the full mission list ordered by W/L marks with the next unplayed
+mission selected, difficulty refresh), plays the outro movie, and finally
+shows the score/statistics screen with per-player stat bars (kills, losses,
+energy and metal produced and wasted, score) before returning to the
+front-end router. The score values come from the score helper's display
+array, which multiplies kills by the kill multiplier and elapsed ticks over
+1800 by the time multiplier with truncation and a zero clamp. Resign and
+host-loss latch ended-without-win directly (the end-game dialog callbacks and
+the peer-loss path, respectively) and can override an armed victory, while
+ordinary victory/defeat run through the shared four-count countdown. The
+exact tick at which simulation stops is the session's switch out of the live
+battle state; the residual is only the precise presentation sequencing of the
+overlay transitions inside the front-end router.
 
 ## Required implementation invariants
 
@@ -1789,8 +1877,10 @@ properties:
 - Mission time values used by triggers are converted at thirty ticks per
   second.
 - Missing victory and defeat lists receive executable-defined defaults.
+- Victory/defeat trigger queues are polled in the local player's once-per-30-tick block for every mission type: campaign polls victory first (AND) then defeat (OR); skirmish and multiplayer poll the defeat queue first, gated on the local commander marker, then the victory queue. No alliance merge is performed by any poll.
+- The simulation random stream is never synchronized across peers: each process reseeds Park–Miller from its own `QueryPerformanceCounter` sample (per doc 01 §7.1) and the CRT stream from its own clock at battle entry; no packet carries or writes a seed.
 - Scenario unit reconstruction is a load path, not the strategic AI.
-- Computer-player strategic construction selection, profile `plan`/`weight`/`limit` handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation with outer gate bound 30 and x87 truncation, full manager deadline graph and dispatch gates, direct manager-group writer/classifier for six destinations, eco toggle with eighty percent gate, and placement origin step, radius, selector, and two helper contracts are established; the AI score inputs (player economy aggregates and strategic class vectors), hard gates, pressure arithmetic, three-way mix, cumulative weighted reservoir selection, profile plan/weight/limit defaults, and manager-before-refresh-before-ledger update order are established (R-P0-05); the manager task-vector slot order, direct group-writer semantics, classifier branch order, and wave merge strictness are established (R-P0-04); any additional distinct group writer, transport geometry, and exact metal-score metric beyond placeable versus blocked remain bounded negative or inference. [P0-01] [P0-02] [P0-03] [R-P0-04] [R-P0-05]
+- Computer-player strategic construction selection, profile `plan`/`weight`/`limit` handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation with outer gate bound 30 and x87 truncation, full manager deadline graph and dispatch gates, direct manager-group writer/classifier for six destinations, eco toggle with eighty percent gate, and placement origin step, radius, selector, and two helper contracts are established (the metal score is the footprint per-cell metal-byte sum; water legality is the yard path's waterline band); the AI score inputs (player economy aggregates and strategic class vectors), hard gates, pressure arithmetic, three-way mix, cumulative weighted reservoir selection, profile plan/weight/limit defaults, and manager-before-refresh-before-ledger update order are established (R-P0-05); the manager task-vector slot order, direct group-writer semantics, classifier branch order, and wave merge strictness are established (R-P0-04); the class routine's weapon reads are the `DAMAGE/default` word divided by 40 and the `range` word divided by 100; any additional distinct group writer or transport geometry remain bounded negative or inference. [P0-01] [P0-02] [P0-03] [R-P0-04] [R-P0-05]
 - Multiplayer transport is DirectPlay in the retail process.
 - Packet dispatch starts with a one-byte type and uses a fixed handler table.
 - Network input is consumed before the rest of an authoritative tick.
@@ -1819,22 +1909,23 @@ The following work remains before this category is a complete retail design:
 - Recover UI-level names for session states 0–4 (their behavior, transitions,
   callbacks, and admission-mask classes are established above), and close any
   provider-specific DirectPlay transitions outside the reviewed callbacks.
-- Campaign progression latch (countdown four then roughly one per second, win and lose bits, scoring), MissionList as allocation tag with first-gap termination, language-prefixed mission names, VFS first-provider-wins, wind CRT draws before simulation, and registry versus bank split are established; the exact consumer of the all-missions registry bit and the full unlock rule remain bounded negative. [P0-05]
+- Campaign progression latch (countdown four then roughly one per second, win and lose bits, scoring), MissionList as allocation tag with first-gap termination, language-prefixed mission names, VFS first-provider-wins, wind CRT draws before simulation, and registry versus bank split are established; the all-missions bit's consumer is the single-player panel's AnyMsn toggle and its exact listbox-selection effect remains the bounded residual (the earlier "no reader at all" is superseded). [P0-05] [lane 08 AllMissions]
 - Campaign and mission catalog ordering across multiple VFS providers (mount order loose then patched then expansion then base then CD-ROM, first-provider-wins, MissionList allocation tag, contiguous Mission sections until first gap, language-prefixed names) are established. [P0-05]
 - Derive exact planet, panorama, rotation, briefing, narration, glamour, and
   optional-media fallback rules.
 - Inventory every mission-global key, type, default, clamp, and consumer. The
-  census is narrowed: `maxunits` feeds the interface/HUD limit display while
-  the allocator enforces per-definition limits from definition fields (see
-  document 05), so the mission value and the physics stores are distinct.
+  census is completed: `maxunits` (campaign branch only, default 200, stored
+  as the 16-bit unit-limit word that also seeds the AI half-capacity
+  global), `numplayers` (stored as an 80-byte string, presentation only, no
+  numeric consumer), `mapping`/`lineofsight` (campaign-mode LOS defaults
+  merged at battle entry), and `commanderDeath` (a lobby value, not a
+  mission key; consumed by the skirmish defeat gate and respawn path) are
+  closed; `killmul`/`timemul` defaults are 0.0. The allocator enforces
+  per-definition limits from definition fields (see document 05), so the
+  mission value and the physics stores are distinct.
 - Placement order for mission units, start-position specials, and features (strict units then specials then features) and the sparse two-pass unit spawner with null gaps, plus attacker and feature stamping convergence, are established; cargo and feature successor handling beyond the shared stamping service, delayed creation countdown (parsed but no reader), and script attachment beyond the immediate attach verb remain bounded negative; the meteor scheduler's phase (after wind jitter and projectiles) is established. [P0-04] [P0-06]
 - Player-to-start-position selection for skirmish is established for the CRT Fisher–Yates shuffle versus simulation jitter split, eligibility predicate (non-zero slot, control one through three, terminator not newline), schema Network 1 through 4 trial with largest-so-far fallback and difficulty permutation, and commander interior jitter with degenerate no-advance; the transport-selection policy beyond generic move orders and any distinct naval or air geometry remain unknown. [P0-04]
-- Close trigger alliance semantics and short-circuit/ordering rules when
-  multiple conditions fire; evaluator bodies, comparisons, counts, record
-  shapes, the vtable map, and the per-condition saved fields are established.
-- Determine the exact tick phase and cadence of trigger evaluation.
-- Specify simultaneous victory/defeat, timer, commander, disconnect, and resign
-  precedence.
+- Trigger ownership and evaluation are closed: owner gating is a player-index compare (no alliance merge), the tick site is the local player's once-per-30-tick block for every mission type, campaign polls victory before defeat (AND then OR), skirmish/multiplayer poll defeat before victory with the defeat queue gated on the local commander marker, and disconnect/resign precedence is closed (host-loss and resign latch ended-without-win directly and can override an armed countdown; the countdown itself keeps per-type precedence). Evaluator bodies, comparisons, counts, record shapes, the vtable map, and the per-condition saved fields are established.
 - Meteor spawning, motion, damage, scoring, and persistence are closed (see
   Meteor showers above); only presentation of meteors outside the world
   renderer remains a rendering-lane question.
@@ -1842,8 +1933,8 @@ The following work remains before this category is a complete retail design:
   campaign useonly area, `Immunity` is consumed at unit creation, and
   mission-critical/AI-ignore/AI-priority-target/build-priority/initial-group
   are parsed but unread (bounded negative).
-- Computer-player strategic construction selection, profile plan/weight/limit handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation (single-byte init 40 plus 20 versus three-byte triple, outer gate bound 30, x87 constants and truncation), full manager deadline graph (construction plus 90, eco plus 30, waves plus 300 and plus 150, explore plus 30 plus 900, rally plus 30 plus 150, one empty slot), direct manager-group writer/classifier for six destinations, eco toggle with eighty percent gate, and placement radius and helper selection (fixed-point 16.16 origin step, radius plus 160 capped, strict less-than selector opposite inferred, exhaustive patch sorted versus scatter 30 trials with four draws per trial, product limit, no fall-through, yard validator required) are established [P0-01] [P0-02] [P0-03] [R-P0-04]; AI score fields and update order — player economy aggregates, hard gates, pressure and mix arithmetic, cumulative weighted reservoir selection, class-vector compilation, manager-before-refresh-before-ledger ordering, and profile gates — are established [R-P0-05], with the weapon-field TDF identities and the strategic half-capacity state writer as explicit residuals (R-P0-05 §8); the manager task-vector slot order, direct group-writer semantics, classifier branch order, and wave merge strictness are established [R-P0-04]; any additional distinct group writer, transport geometry, and exact metal-score metric beyond placeable versus blocked remain bounded negative or supported inference, and inert mission fields plus definition `ai_limit` remain closed as bounded negative.
-- Specify remaining computer-player expansion, scouting, attack, targeting, retreat, repair, reclaim, transport, naval, and air policies beyond the rooted construction/selection path.
+- Computer-player strategic construction selection, profile plan/weight/limit handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation (single-byte init 40 plus 20 versus three-byte triple, outer gate bound 30, x87 constants and truncation), full manager deadline graph (construction plus 90, eco plus 30, waves plus 300 and plus 150, explore plus 30 plus 900, rally plus 30 plus 150, one empty slot), direct manager-group writer/classifier for six destinations, eco toggle with eighty percent gate, and placement radius and helper selection (fixed-point 16.16 origin step, radius plus 160 capped, strict less-than selector opposite inferred, exhaustive patch sorted versus scatter 30 trials with four draws per trial, product limit, no fall-through, yard validator required; the metal score is the footprint per-cell metal-byte sum, and water legality is the yard path's waterline band) are established [P0-01] [P0-02] [P0-03] [R-P0-04]; AI score fields and update order — player economy aggregates, hard gates, pressure and mix arithmetic, cumulative weighted reservoir selection, class-vector compilation, manager-before-refresh-before-ledger ordering, and profile gates — are established [R-P0-05], with the weapon-field TDF identities closed (`DAMAGE/default` and `range` feed the damage and range reads; `reloadtime` is not read by the class routine) and the strategic half-capacity state writer as the explicit residual (R-P0-05 §8); the manager task-vector slot order, direct group-writer semantics, classifier branch order, and wave merge strictness are established [R-P0-04]; the AI RNG inventory is complete (throttle draw bounded 300, eight strategic-constructor draws, explore and rally body draws; the "any other bound is a bug" sentence is retracted); any additional distinct group writer and transport geometry remain bounded negative, and inert mission fields plus definition `ai_limit` remain closed as bounded negative.
+- Remaining computer-player expansion, scouting, targeting, retreat, repair, reclaim, transport, naval, and air policies: the complete task-dispatch surface is bounded-negative over the seven vtable addresses (one contiguous family; six task classes plus the intentional null class; each class has exactly two virtual slots and only the first is ever invoked; the only vtable writers are the task and manager constructors). No distinct transport/naval/air/repair/reclaim/retreat policy table exists; such behavior can only act through the ordinary order service. The semantic names of several definition flag bits and any behavior only a dynamic trace could reveal remain the largest AI unknowns. [lane 08 task tables]
 - Reconcile every lobby slot-state value, host privilege, ready flag, blocked
   state, edit permission, and start condition.
 - Complete DirectPlay provider/session enumeration, lobby handoff, connection
@@ -1872,27 +1963,21 @@ The following work remains before this category is a complete retail design:
   and mismatch handling; trace the zrb orchestrator, recover packet `0x27`'s
   trailing-integrity-data producer algorithm, and recover the exact
   throttle-acknowledgement format in the participant-state receiver.
-- Establish initial simulation-random seed agreement between peers.
+- Initial simulation-random seed agreement between peers: **closed as a bounded absence.** The simulation seed setter has exactly one call site in the image (battle entry, from the low-plus-high `QueryPerformanceCounter` sum per doc 01 §7.1); the CRT seed has two (process startup and battle entry); the packet registry contains no seed-exchange packet and no handler writes either seed state. Each peer reseeds from its own clock, so peer streams are not identical — consistent with the engine's known desync behavior.
 - Recover reconnect, late join, spectator join, and temporary transport-loss
   behavior, or establish their bounded absence. Host-authority migration is
   closed as deterministic selection of the numerically greatest DPID among
   eligible roles.
 - Complete the byte layout inside each bulk binary box beyond the now-established lengths, descriptor groups, and sampled field maps (unit 184-byte `0xB8` records with three 24-byte embeddings, 58-byte order records and subtype codes, `Feature Type Names` 128-byte names, normal 8/animating 10/3D 26-byte feature records, radar preview header). Many unit/order words still lack retail source names and are typed by width and exact runtime offset. The container, account inventory, and scalar entry names are established.
-- Close script-thread, operand-stack, local/static, wait, signal, callback, and
-  piece-animation persistence.
-- Complete path, effect, trigger, radar, mapping, terrain, feature, AI,
-  transport, attachment, and order persistence, plus projectile persistence in
-  replay or any nonstandard snapshot path.
-- Determine whether the known simulation/CRT random states and scheduler carry
-  are serialized indirectly.
-- Close consumers of `WinLoseTime`/`DisplayTimer` beyond their save keys.
+- Close script-thread and operand-stack persistence beyond the established record: the COB persistence family is byte-exact (identity word, eight-snapshot blocks with one zeroed word per block, stack words, per-piece records whose two gap words leak stack bytes into per-piece virtual setters); the residual is the semantic naming of the individual snapshot words (local versus static versus control), which belongs to the script/COB lane.
+- Path, effect, projectile, and AI-history persistence: closed as a bounded absence for standard battle saves (no writers in the reachable save graph; the projectile pool is reset before reconstruction; path working state is recomputed; effects and AI history are omitted). Trigger, radar-preview, mapping, terrain-metal, feature, attachment, and order persistence are established.
+- Indirect serialization of the simulation/CRT random states: **closed** — the writer census over the complete reachable save graph finds zero writers for either state; the scheduler's fractional carry is the only indirect persistence (the 28-byte block). [p1-13 §5]
+- Consumers of `WinLoseTime`/`DisplayTimer` beyond their save keys: **closed** — `WinLoseTime` has no reader anywhere in the image (persisted verbatim, inert); `DisplayTimer` is the HUD resource-rate refresh deadline (advanced by thirty when trailing the global tick, refreshing the four displayed rate floats).
 - Close upstream multiplayer GUI authority/menu enablement for saving (whether
   all peers can reach the save callback) and the upstream save-name
   edit-character policy and code page.
-- Inventory campaign progress saved outside battle `.sav` files.
-- Extend bounded replay searches to dynamically built file names, packet-log
-  writers, debug modes, shell integrations, and media/capture paths.
+- Campaign progress saved outside battle `.sav` files is inventoried: the in-memory W/L array (one byte per mission slot, `'U'` unplayed), the Summary `Thumbs` item carrying it across BetweenMissions saves, the registry difficulty/games/all-missions mirrors, and the BetweenMissions flag itself; the residual is only the AnyMsn toggle's exact listbox-selection effect.
+- Bounded replay searches are extended to dynamically built file names, debug modes, and media/capture paths: the whole-image sweep finds only movie capture (`MOVIE%03i` pattern) and screenshot vocabulary; no replay file name, extension, or vocabulary exists. The replay absence bound now covers these paths.
 - If a replay path is found, derive its framing, initial snapshot, command
   timing, random state, seek behavior, version checks, and UI.
-- Close session-end ordering for final tick, network drain, music, overlays,
-  statistics, score report, campaign progress, save updates, and cleanup.
+- Session-end ordering: the post-battle prefix is closed (network drain at entry, multiplayer frame copy and message box, music stop, ten-unit timed display, campaign CD check, campaign-progress write and end-of-mission screen, outro movie, score/statistics screen with per-player stat bars, front-end return); the residual is only the precise presentation sequencing of the overlay transitions inside the front-end router.

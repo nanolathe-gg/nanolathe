@@ -35,6 +35,17 @@ resolves content.
 diagnostic naming them, so the discrepancy stays visible. The spec's cap is
 recorded here rather than implemented.
 
+**Update (2026-08-26):** the conflict is resolved by decompilation. The mount
+loop carries a ten-valued budget that decrements only when a candidate is
+*newly mounted* (validation passed and the full path not already mounted) and
+abandons the enumeration when the budget hits zero; the budget is
+per-invocation — the mount orchestrator runs at several call sites, each
+restarting the budget, and already-mounted archives never consume it, so
+repeated invocations converge to every valid local HPI mounted. The cap is
+real but per-pass, not a global limit; mounting every local HPI reproduces the
+converged retail state. See [02 §2] and the mount-orchestrator note in the
+raw corpus.
+
 **Falsifies:** the earlier PLAN_01 contract C2. Do not reintroduce it.
 
 ---
@@ -141,6 +152,21 @@ to zero. If a fresh profile actually carries a large `maxwaterslope`, all three
 clamps run unconditionally and reproduce retail with no branch — which is the
 shape to aim for. The open question is recorded as a `TODO(question)` at
 `internal/content/compile_movement.go`.
+
+**Update (2026-08-26):** decompilation falsified the "template pre-fill 255"
+escape. The class pool is a zero-filled BSS tail (verified against the PE
+section table); the loader parses `CLASS0` first with no template write; the
+parser defaults every depth/slope field to the record's own prior value and
+runs the three clamps unconditionally; the movement classifier hard-blocks
+land cells with `slope > maxslope` (strict). The stock file omits
+`maxwaterslope` in `CLASS0..2` (which parse first) and authors 255 only in the
+last classes (`CLASS13/14`), so the traced arithmetic really does compile the
+first land classes to `maxslope = 0` — a bounded paradox with stock
+playability. Decider: a runtime trace of the compiled pool or a unit
+definition's slope copy; until then the gated clamps remain the
+install-compatible divergence. See `research/formats/tdf.md` (MOVEINFO caveat),
+`[02 §5 "Movement class record"]`, `[04 §6.1]`, and the raw-corpus note
+`moveinfo-maxslope-paradox.md`.
 
 **Falsifies:** nothing yet. It defers PLAN_02 C6's "then apply the three clamps
 in order" until the profile's initial value is known.

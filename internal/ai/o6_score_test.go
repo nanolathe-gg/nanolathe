@@ -47,14 +47,18 @@ func TestClassVectorUsesRuntimeDefinitionFields(t *testing.T) {
 	def.RadarDistance = 1
 	def.SonarDistance = 1
 	def.MaxSlope = 0
+	// Weapon slot reads: damage word (DAMAGE/default) /40 plus range word
+	// (range) /100 plus 5; reloadtime must not enter this sum [08 "Class
+	// routine weapon reads"]. 400/40 = 10, 600/100 = 6.
+	def.Weapon1Def = &content.WeaponDef{DamageDefault: 400, Range: 600, ReloadTime: 999}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
 	s := &Strategic{Catalog: cat, Counts: map[string]int32{def.CanonicalKey: 0}, ClassVectors: map[string]ClassVector{def.CanonicalKey: {}}, SingleVectors: map[string]int8{def.CanonicalKey: 0}}
 	s.recomputeClassVectors()
 
-	// single: (11 base + makesmetal 10) + canattack weapon base 11 = 22.
+	// single: (11 base + makesmetal 10) + weapon budget 11 + 10 + 5 + 6 = 43.
 	// other: (21 + 30 + 25 + 40 + 15 + 5) * 4 * 3 clamps to 100.
 	// metal: 0 - makesmetal 25 = -25; energy is zero.
-	if got, want := s.SingleVectors[def.CanonicalKey], int8(22); got != want {
+	if got, want := s.SingleVectors[def.CanonicalKey], int8(43); got != want {
 		t.Fatalf("single vector = %d, want %d", got, want)
 	}
 	if got, want := s.ClassVectors[def.CanonicalKey], (ClassVector{C0: 100, C1: -25, C2: 0}); got != want {

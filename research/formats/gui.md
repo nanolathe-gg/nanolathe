@@ -81,7 +81,7 @@ out-of-range value as "unset".
 | `crdefault` | Button triggered by Return (name); exact behavior unconfirmed |
 | `escdefault` | Button triggered by Escape (name) |
 | `defaultfocus` | Gadget name that starts focused |
-| `[VERSION] { major=; minor=; revision=; }` | Required sub-section; values are arbitrary in retail files |
+| `[VERSION] { major=; minor=; revision=; }` | Required in all 368 retail GUIs, but **optional in the parser**: the executable's panel-header loader seeks the subsection and skips it silently when absent, leaving the three byte fields zero (see the executable spec doc 02 §6). Values are arbitrary in retail files. |
 
 ### Button (`id=1`)
 

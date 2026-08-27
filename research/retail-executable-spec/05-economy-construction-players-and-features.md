@@ -125,8 +125,8 @@ player-level mirror bucket used for non-unit contributions.
 
 | Accumulator | Contributors | Gates |
 |---|---|---|
-| energy production | authored passive `energymake`; the current wind scalar times `windgenerator`; the map tidal strength times `tidalgenerator`; the refund branch for a negative authored `energyuse` | passive make and storage require a zero remaining-construction fraction; wind and tidal require the unit's operational bit and a secondary state bit |
-| metal production | the metal value sampled at placement when `extractsmetal` is positive; a literal one when `makesmetal` is set; authored passive `metalmake` | extraction and maker output require the unit's energy carry to be non-positive at dispatch; passive make requires a zero remaining fraction |
+| energy production | authored passive `energymake`; the current wind scalar times `windgenerator`; the map tidal strength times `tidalgenerator`; the refund branch for a negative authored `energyuse` | passive make and storage require a zero remaining-construction fraction; wind and tidal require the unit's operational bit and a secondary state bit; every positive contribution is scaled by the state-2 selector discount when the owner is in the special second state |
+| metal production | the metal value sampled at placement when `extractsmetal` is positive; a literal one when `makesmetal` is set; authored passive `metalmake` | extraction and maker output require the unit's energy carry to be non-positive at dispatch; passive make requires a zero remaining fraction; every positive contribution is scaled by the state-2 selector discount when the owner is in the special second state |
 | energy requested | positive authored `energyuse`; the cloak debit; every build admission; repair-family one-resource admission | none — always recorded |
 | energy accepted | the same positive `energyuse` when energy carry is non-positive; admitted build demands when both carries are non-positive; repair-family admission when energy carry is non-positive | energy carry non-positive (both carries for the two-resource build path) |
 | metal requested | every build admission | none — always recorded |
@@ -134,8 +134,25 @@ player-level mirror bucket used for non-unit contributions.
 | energy and metal carry | written only by settlement's apply-back step | — |
 
 The negative-`energyuse` refund adds the negated authored value to production
-in the ordinary case; under the special player modes it instead subtracts one
-half or seven tenths of it.
+in the ordinary case; under the special player modes it instead credits only
+one half or seven tenths of it. The engine reaches the scaled credit by
+multiplying the negated amount by a negative half or seven-tenths constant
+and subtracting the product, so production still grows — by half or seven
+tenths of the negated value. An earlier revision of this document read the
+special modes as *turning the refund into a subtraction*; the byte-level
+arithmetic is a reduced positive credit.
+
+**Established fact — the state-2 discount applies to every positive
+production contribution.** The same selector discount (state 2 owner,
+global selector: 0 → half, 1 → seven tenths, else full) wraps **every**
+positive contribution to the energy and metal production buckets in the
+settlement visit — passive `energymake`, passive `metalmake`, extraction
+output, maker output, wind output, tidal output, and the negative-`energyuse`
+refund alike. Storage contributions and the cloak debit are not discounted.
+The discount family is therefore a general production handicap for the
+special second state, not a refund-only rule; an implementation must apply it
+at every contribution site with the same pairing and the same negative-
+constant-subtraction arithmetic.
 
 **Established fact — gather order.** All accumulator feeds are
 per-settlement-pass amounts, consumed once per ~30 ticks per player under
@@ -157,7 +174,8 @@ only to ordinary single-precision rounding. Cumulative totals and cumulative
 waste are doubles. Capacity is recomputed from zero every pass by accumulating
 each idle unit's authored storage, plus a bonus term when a player flag is set.
 Reserve thresholds are written once at battle setup from capacity and are read
-by automatic sharing and by the resource-bar colouring.
+by the automatic-sharing dispatcher; a resource-bar colouring read of the
+threshold fields is not visible in the reviewed corpus and remains unverified.
 
 Other economy-relevant unit state includes:
 
@@ -479,8 +497,9 @@ structure per slot index, ascending:
    following must hold before the settlement entry is called: the player
    record exists; the state byte is active; the observer byte excludes
    observers; the status-pair predicate holds (a nonzero halfword at one
-   field **or** a zero word at its neighbor — preserved literally, since the
-   pair has no located writer and its semantics are open); the state byte is
+   field **or** a zero word at its neighbor — preserved literally; the same
+   read-only predicate recurs at three other player walks and no writer was
+   found in the bounded scan, so it is carried verbatim); the state byte is
    narrowed to one of the two settling states (the third traverses but never
    settles); the game-ended flag bit is clear; and the end-of-game countdown
    is negative.
@@ -491,8 +510,10 @@ structure per slot index, ascending:
 The deadline catch-up edge: because the advance is a single conditional add
 rather than a loop, a slot whose deadline fell more than 30 ticks behind the
 global tick would settle once per tick on consecutive ticks until it caught
-up. No natural runtime path that desynchronizes a slot was identified; this
-is structural behavior, not ordinary-play cadence.
+up. No natural runtime path that desynchronizes a slot was identified
+(documentary inference, not an established path: the structure admits the
+burst; no runtime trigger was found), so this is structural behavior, not
+ordinary-play cadence.
 
 **Established fact — seeding, setup pass, and persistence.** Battle
 initialization seeds every active player's settlement deadline (and two
@@ -500,7 +521,8 @@ sibling deadline fields) to the current global tick, so all players share the
 same initial phase; mission setup then runs one full pass of the player phase
 before starting resources are granted, and spawn credits are written directly
 to live stocks outside the ledger — starting resources never flow through the
-settlement allocator. There is no mid-game re-seeding path. Each player's
+settlement allocator. There is no mid-game re-seeding path (bounded negative:
+the reset helper's caller chain has exactly one site). Each player's
 deadline is persisted in saves under the key `UpdateTime` (sibling keys
 `WinLoseTime` and `DisplayTimer` for the two sibling fields) and restored
 verbatim: deadlines are absolute tick values and are not re-seeded on load,
@@ -550,12 +572,14 @@ player's 30-tick deadline block behind mission-end predicates and human-
 presence checks; a second site sits after the slot loop and decrements every
 tick for games with no human participants. Both arm the counter at 4 and
 decrement on their own cadence; after roughly five one-second steps it passes
-below zero and latches the game-ended flag bits (bit patterns vary by
-victory/defeat/watch branch). The network path latches the game-ended bit
-directly on a game-over message. Nothing ever clears the game-ended bit once
-set, so the economy stays frozen for the rest of the session. The freeze
-pair's pacing still yields the observed ≈5-step confirmation delay before the
-latch.
+below zero and latches the game-ended flag bits — bit 0x04 always, plus
+0x40 and/or 0x10/0x20 depending on the victory/defeat/watch branch. The
+network path latches bit 0x04 directly on a game-over message. Nothing ever
+clears the game-ended bit once set, so the economy stays frozen for the rest
+of the session. The freeze pair's pacing still yields the observed ≈5-step
+confirmation delay before the latch. The semantic names of the individual
+bits and of the two mission-end predicates remain open; the bit patterns and
+the never-cleared property are established.
 
 ## Resource contributions
 
@@ -576,15 +600,21 @@ metal values to its per-pass production buckets. These authored values enter
 the ledger as direct per-settlement-pass deltas, delivered once per
 settlement pass — once per ~30 ticks per player under ordinary play. The
 retail path neither divides nor multiplies ordinary production and use values
-by thirty.
+by thirty. When the owner is in the special second state, both passive
+contributions are additionally scaled by the state-2 selector discount
+(above).
 
 Negative authored energy use takes a distinct refund/production path. Special
 player states can apply one of two executable-defined discounts through a
-global mode selector: selector value 0 scales the amount by 0.5 and selector
-value 1 scales it by 0.7 (the refund subtracts the scaled amount instead of
-adding it). The user-facing identity of those player modes remains open, so a
-clean-room implementation should isolate that adjustment behind a
-compatibility rule.
+global mode selector: selector value 0 credits half the negated amount and
+selector value 1 credits seven tenths of it (the engine multiplies the
+negated amount by a negative half or seven-tenths double and subtracts the
+product, so production grows by the scaled credit; an earlier revision that
+described the special modes as subtracting the scaled amount was wrong at
+byte level). The user-facing identity of those player modes remains open
+(state 2 is the computer-policy state per the AI-manager gate inference;
+states 1 and 3 remain unnamed), so a clean-room implementation should
+isolate that adjustment behind a compatibility rule.
 
 ### Wind generation
 
@@ -593,7 +623,9 @@ normalized scalar. An eligible wind generator contributes:
 
 `energy production = current wind scalar × unit wind multiplier`
 
-The generation contract is closed. At battle setup the briefing seeds strength
+The wind-generator output is subject to the state-2 selector discount when
+the owning player is in the special second state. The generation contract is
+closed. At battle setup the briefing seeds strength
 as `CRT() % (max-min+1) + min` and a six-bit direction as `CRT() & 0x3f`.
 The next update is scheduled from another CRT draw as
 `((CRT() * 10) / 0x8000 + 5) * 30` ticks ahead — **150 to 420 ticks**, about five
@@ -616,27 +648,42 @@ An eligible tidal generator contributes:
 `energy production = map tidal strength × unit tidal multiplier`
 
 Tidal strength is loaded for the battle and does not use the current wind
-scalar.
+scalar. The tidal output is subject to the state-2 selector discount when the
+owning player is in the special second state.
 
 ### Constant metal makers
 
 The constant metal-maker field is stored as a byte. When it is enabled and
 the unit passes its active-state gates, the economy path converts the byte to
-a floating-point value and contributes that value to metal production. A
+a floating-point value and contributes that value to metal production (the
+contributing maker's output is subject to the state-2 selector discount and
+to the stall gate). A
 stored value of one therefore contributes one unit of metal per settlement
 pass (once per ~30 ticks per player under ordinary play). Energy consumption
 is a separate authored active-use demand;
 the maker's metal output and energy admission must therefore be evaluated as
 two coupled pieces of unit state rather than as an invented conversion ratio.
 
-The exact stall interaction for a maker whose energy request cannot be paid is
-not fully closed.
+**Established — the maker stall rule.** A metal maker or an extractor
+contributes nothing for a settlement pass when the owning unit's energy carry
+is strictly positive. The unit's own upkeep acceptance gates its output at
+gather time: the maker's `energyuse` demand must itself be accepted (energy
+carry non-positive), otherwise the maker contributes no metal that pass and
+its upkeep is request-only — no callback fires. Output resumes when the
+stage-A paydown returns the carry to non-positive; sustained shortage keeps
+the maker stalled across passes, so metal production drops to passive
+`metalmake` only.
 
 ### Terrain metal extraction
 
-Terrain attribute cells carry an unsigned metal byte. When the mission provides
-a uniform surface-metal value, map loading initializes the cell metal field
-from it; maps can also supply per-cell values.
+Terrain attribute cells carry an unsigned metal byte. When the mission
+provides a uniform surface-metal value, map loading initializes the cell metal
+field from it. There is **no per-cell metal raster** in retail: the loader
+copies the uniform scalar into every cell's seed byte and never allocates a
+varying per-cell source (bounded negative over the loader and the shipped
+171-map corpus, whose per-attribute unknown byte is uniformly zero and is not
+read as metal). The only per-cell nuance is the legacy TNT format, whose
+per-attribute byte feeds the same seed field.
 
 When a metal-extracting unit is placed, the engine samples every cell in its
 footprint. For each cell it adds one to the unsigned metal byte before adding
@@ -651,7 +698,11 @@ preserve the retail conversion and rounding order.
 
 The sampled amount is stored on the unit instance. It is not resampled every
 economy pass. While the extractor is eligible and active, that stored amount
-is added directly to its metal-production bucket.
+is added directly to its metal-production bucket — subject to the state-2
+selector discount when the owning player is in the special second state, and
+to the maker-stall gate (the extractor's output also requires the owning
+unit's own energy admission, so a positive energy carry stalls extraction
+too).
 
 This produces several important consequences:
 
@@ -696,8 +747,10 @@ the cloak gate is due, the engine:
    environment and truncation toward zero;
 3. compares that integerized cost with the owner's live energy stock;
 4. if affordable, subtracts it immediately and records an energy request;
-5. toggles the unit's operational/building bit through the normal transition
-   helper;
+5. toggles the unit's op-bit 2 (mask value 4) through the normal transition
+   helper — this fires the COB callback pair #14/#15 plus a network packet,
+   not StartBuilding/StopBuilding and not Activate/Deactivate (an earlier
+   revision that named the operational/building bit was imprecise);
 6. if unaffordable, takes the failure transition without a partial payment.
 
 Because units are visited in stable order, simultaneous cloak costs are
@@ -705,10 +758,22 @@ sequential: an earlier slot can make a later slot fail during the same pass.
 The debit executes at the settlement cadence — at most once per 30 ticks per
 owning player, in the settlement's stable unit-slot order; authored cloak
 costs are per-settlement-pass amounts like every other authored economy
-field. A separate per-unit cloak payment deadline gates *whether* an
-individual unit owes a debit on a given pass (alongside its cooldown state);
-it paces eligibility, not ledger visitation. The full predicate that enables
-this debit for special player states remains open.
+field.
+
+**Established — the full debit predicate.** The debit block runs when the
+unit carries the init-cloaked instance bit (seeded once at spawn from the
+definition's `init_cloaked`; no runtime toggler exists in the reviewed
+image), the moving-cost bit is clear, and the unit's per-unit cloak payment
+deadline is due — the gate is bit clear **and** deadline due. An earlier
+reading that OR-ed a cooldown bit into the gate was falsified at byte level,
+and the owner-state-3 condition that would suppress the whole block is
+inert during live play because the settlement caller excludes state 3.
+Authored reach is exactly the mine family (`init_cloaked=1`); commanders,
+spies, and snipers carry cloak costs but never enter this block. The per-unit
+deadline itself is written by nine handler sites as the global tick plus
+150, 300, or 900 (repair, build/get-built/resurrection, and
+capture/reclaim respectively); idle cloaked units therefore pay every pass
+from the first.
 
 ## Resource admission and carry
 
@@ -804,7 +869,11 @@ transfer helpers, the spawn-credit grant, and the construction-termination
 credit for metal spent on an unfinished build. Exactly two call sites use the
 two-resource helper, there is **no factory queue-draw writer**, and units
 spawned directly (mission setup) receive their production credit at spawn.
-The consumers of the per-unit archived snapshots remain open.
+The consumers of the per-unit archived snapshots remain open as a bounded
+negative: a search of the reviewed image (3901 boundaries) found no reader of
+the archived slots outside the ledger's own redistribution — treat as no
+consumer within the reviewed boundary. The writer-set closure above likewise
+rests on that bounded census.
 
 ## Activation and stall transitions
 
@@ -870,8 +939,13 @@ extractor contributes nothing for that settlement pass when the owning unit's
 energy carry is strictly positive — the maker stalls. An authored negative
 energy use is not a demand but a refund: it is added to energy production, and
 when the owning player's control state is the special second state the refund
-is scaled by one half or seven tenths depending on a global mode selector, with
-the pairing inverted relative to the capture refund site.
+is credited at one half or seven tenths of its value depending on a global
+mode selector, with the same pairing used by the factory cancel-current
+refund and the shared work helper's reverse arm (selector 0 → half,
+selector 1 → seven tenths). An earlier revision that called this pairing
+"inverted relative to the capture refund site" was wrong at byte level, and
+the referenced site is a misnomer: there is no capture refund — the site is
+the factory cancel-current refund, which shares the same pairing.
 
 ### Sensor sharing
 
@@ -924,10 +998,19 @@ more units" message plus an exact 300-tick retry. Exhausting the player's
 instance pool produces the same failure path.
 
 The `norestrict` capability parses into the definition's capability word but no
-reviewed consumer reads it — bounded absence; the limit check does not consult
-it. No parser key or reviewed initializer writes the per-definition limit
-field, so stock defaults come from outside the reviewed corpus (the -1
-sentinel implies unlimited by default).
+reviewed consumer reads it — bounded absence over the reviewed corpus; the
+limit check does not consult it. No parser key or reviewed initializer writes
+the per-definition limit field, so stock defaults come from outside the
+reviewed corpus (the -1 sentinel implies unlimited by default); both absences
+are recorded as bounded negatives in the factory-contract analysis.
+
+**Established fact — numeric pool capacity.** The physical unit pool is
+sized once at battle setup as `(catalog definition count) × 10 + 1` records
+per player slice (slot zero of each slice reserved as the null identity);
+there is no other numeric cap on live units. The mission logical `maxunits`
+field has no allocator reader (bounded negative over the reviewed corpus) —
+it is not an allocator gate, so pool exhaustion follows the physical size
+alone.
 
 ## Build request and factory queue behavior
 
@@ -1134,13 +1217,15 @@ counterpart.
 **Established fact — link lifetime and completion order.** The builder and
 product links on the factory node are cleared on normal completion. If the
 factory dies or is captured before completion, the links are not walked and the
-nodes leak with the dead header — there is no death-time reclamation walk over
-the order lists. Completion lowers the StopBuilding edge before running the
-completion transition, not after. Health and remaining fraction written by the
-shared work helper are visible immediately to later builders visited in the same
-unit sweep, so the lowest-slot builder among multiple contributors wins the
-final step; a later builder seeing zero remaining simply returns without further
-work.
+nodes leak with the dead header — established: the death finalizer's bounded
+census shows no queue walk, and capture drops the queues (the ownership
+replacement starts with empty queues), so queued products are lost on both
+paths rather than transferred or reclaimed. Completion lowers the StopBuilding
+edge before running the completion transition, not after. Health and remaining
+fraction written by the shared work helper are visible immediately to later
+builders visited in the same unit sweep, so the lowest-slot builder among
+multiple contributors wins the final step; a later builder seeing zero
+remaining simply returns without further work.
 
 **Established fact — same-tick visibility.** A product's health and remaining
 fraction, lowered by the builder that completes it, are therefore authoritative
@@ -1189,16 +1274,27 @@ attached:
 1. compute the refund `trunc((1 - remaining fraction) × metal build cost)`;
 2. normally **add** that amount to the builder's metal bucket; but when the
    referenced player object is in the special second state, a global mode
-   selector decides: selector value 0 subtracts seven tenths of the amount,
-   selector value 1 subtracts one half of it, any other value falls back to
-   adding. (This site's pairing is inverted relative to the ledger's
-   negative-energy-use refund site; both pairings are verified.)
+   selector decides: selector value 0 credits **half** the amount, selector
+   value 1 credits **seven tenths** of it, any other value adds the full
+   amount. The engine reaches the scaled credits by multiplying the amount by
+   a negative half (selector 0) or negative seven-tenths (selector 1) double
+   and subtracting the product, so the bucket grows by 0.5× or 0.7× the
+   amount. **Correction (2026-08-26):** an earlier revision of this document
+   stated that selector 0 subtracts seven tenths, selector 1 subtracts one
+   half, and that this site's pairing is inverted relative to the ledger's
+   negative-energy-use refund site; both claims were wrong at byte level.
+   The selector mapping is selector 0 → 0.5, selector 1 → 0.7 at all three
+   sites (ledger refund, this cancel-current site, and the shared work
+   helper's reverse arm) — the pairing is the same, nothing is inverted, and
+   both special modes are reduced positive credits.
 3. run the completion transition;
 4. send the ordinary kill packet — kind-9 damage of exactly 30000 through
    the normal death flow, unscaled by the armor branch because scaling
-   requires damage below 30000 — so wreck rules apply; note cause-9 deaths
-   skip the killed-severity script query entirely (severity zero, no
-   explosion, no corpse);
+   requires damage below 30000. Cause-9 deaths skip the killed-severity
+   script query entirely: severity is zero, so there is no explosion and no
+   corpse — the product simply vanishes. (An earlier revision's phrase "so
+   wreck rules apply" was a leftover of an earlier reading and is
+   withdrawn; severity zero means no wreck is produced.)
 5. lower the deactivate and start-building callback bits in one edge call
    (firing both COB callbacks together), refresh the interface, and return
    the drop result — the whole node drops **without decrementing its
@@ -1279,9 +1375,15 @@ The helper clamps the new remaining value between zero and one, so no fraction
 escapes that range. Completion of a factory product lowers StopBuilding before
 the transition helper runs, as noted above.
 
-The exact order of every completion side effect beyond that is not fully typed. The
-remaining-fraction transition and health arithmetic are established; callback,
-yard, sensor, and factory-exit ordering remain incomplete.
+The exact order of every completion side effect beyond that is closed by the
+construction-completion corpus analysis [R-P0-14 §3]: StopBuilding is lowered
+before the transition helper runs; occupancy and line-of-sight stamping happen
+after settlement in the same tick; AI completed-counts refresh at the next
+30-tick strategic refresh (up to 30 ticks of lag); and trigger polling that
+checks completed-unit counts runs only for the local player when that
+player's settlement deadline is due. The remaining-fraction transition and
+health arithmetic are established; the completion side-effect ordering beyond
+those steps is closed as cited.
 
 ### Stockpile production
 
@@ -1317,10 +1419,20 @@ Eight stockpile weapon definitions are shipped (`amd_rocket`, `armemp_weapon`,
 `fmd_rocket`, `nuclear_missile`); the behavior above is therefore stock-visible
 rather than malformed-only.
 
-**Unknown for stockpile:** all-slot mapping validation for every weapon
-combination, byte wrap for malformed preexisting values above 200,
-cancellation interaction with admitted carry, repeat requeue, and presentation
-behavior beyond the refresh call.
+**Closed residuals — byte wrap, cancellation, and repeat requeue.** The slot
+byte is a uint8: completion increments wrap 255→0, and the fire gate prevents
+launch underflow (a launch only decrements a nonzero byte); a saved or
+otherwise malformed value in 200–255 blocks new production with the 300-tick
+wait until launches drain it below 200. Cancelling a stockpile node does not
+refund its already-accepted carry: the admitted amounts remain in the
+builder's buckets and are paid at the next settlement — the carry is wasted,
+not credited. Repeat requeue is the established retry-10-on-admission-failure
+and state machine 0/1/2 restart; there is no refund path in the state machine.
+
+**Unknown for stockpile:** the exact weapon-id-to-slot translation performed
+when the queue node is created (the node stores a slot index 0..2 that is
+read without a bounds check), and presentation behavior beyond the selected-
+unit refresh call.
 
 ## Construction nano cadence and admission [R-P0-06]
 
@@ -1477,16 +1589,29 @@ event is a consumer of an accepted authoritative transition, not its gate.
 
 **Confidence.** Query mode/seed, accepted-work gating, ordinary construction
 cadence, selector value 6, endpoint ownership, and cap/order behavior are
-established. The allocator gate's complete failure side effects and the
-assignment of nano records to one particular strip among the shared effect
-families are of medium confidence and remain open.
+established.
+
+**Established — the record constructor and allocator epilogue [R-P0-06 §5
+addendum].** The submission helper constructs the 76-byte segment record
+inline: a one-time lazy zeroing of the record template, the vtable pointer,
+the selector byte (the same value that selects the strip), then the geometry
+initializer that copies the caller's source and target triples and derives
+the per-tick 4/11 and 7/11 interpolation deltas. The selector value is the
+strip index: nano records append to **strip 6** of the shared ten-strip
+family — "selector 6" and "strip 6" are one number, closing the strip-
+ownership question. The record comes from a fixed pool; exhaustion makes the
+append a silent no-op with no query side effect and no rollback of already
+committed work. The pre-insert count check evicts the oldest record when the
+count exceeds 400, keeping the steady bound at 401. The record's per-tick
+update draws its position jitter from the **CRT** random stream (six draws
+per iteration, five iterations — 30 draws per record per tick), never from
+the simulation stream, so nano presentation cannot perturb the sim RNG.
 
 ```text
-TODO(question): Recover the complete nano-segment record constructor and
-allocator epilogue: exact strip ownership, allocation-failure side effects,
-logical-to-palette color mapping, random presentation draws, and per-segment
-fade/lifetime remain open. Do not invent these fields from the selector value
-6 alone.
+TODO(question): the renderer-side consumers of strip 6 — the per-segment
+fade curve and the logical-to-palette color mapping — remain open
+(presentation lane); the engine-side record carries positions, interpolation
+deltas, and a value of 0xa1 + (iteration % 7) whose consumer was not traced.
 ```
 
 ## Repair
@@ -1518,8 +1643,11 @@ accepted repair visit, and an unfinished repair target retries the work state
 one tick later, so the presentation follows accepted repair work rather than a
 free-running timer [R-P0-06 §3].
 
-A variant reverses the context and target arguments; its user-interface
-identity and the behavior for zero or negative authored values remain open.
+A variant reverses the context and target arguments; its existence is
+confirmed in the earlier handler corpus (that note was removed during a
+corpus reorganization and needs re-derivation via IDA backfill of the early
+handler region, shared with the orders lane); its user-interface identity and
+the behavior for zero or negative authored values remain open.
 
 ## Unit reclaim
 
@@ -1571,8 +1699,11 @@ cause-5 branch of the synchronous death finalizer computes the refund as
 and, in the ordinary player-state branch, adds that floating-point amount to
 the killing attacker's metal production bucket. The branch contains no
 corresponding energy credit. The two special player-mode branches apply the
-already-observed 0.5 or 0.7 scaling family instead of the ordinary addition;
-their user-facing mode names remain open. The payment is a death-side event
+already-observed 0.5 or 0.7 scaling family instead of the ordinary addition
+(the same selector pairing as the refund family: selector 0 → half,
+selector 1 → seven tenths); their user-facing mode names remain open (state 2
+is the computer-policy state per the AI-manager gate inference; states 1 and
+3 remain unnamed). The payment is a death-side event
 after ordinary cause-5 lethal handling and before death explosion, corpse
 placement, and final teardown. The builder whose kind-5 packet is fatal
 supplies the recipient.
@@ -1649,9 +1780,17 @@ next capture is derived from the target's kill count divided by five using
 integer truncation. Multiple captors operate independently; each has its own
 node and timer, and the first to reach lethal progress wins the transfer.
 
-**Unknown:** exact updates to player counts and limits beyond the table above,
-and the full failure-message mapping, remain open. The resource cost is
-established as none, and the multi-captor rule is first-wins as described.
+**Closed residuals — counts, limits, and failure messages.** Capture carries
+no resource cost (bounded: no admission call in the handler). The ownership
+replacement increments the new owner's slice count at allocation, with a
+transient double-count until the old victim's death teardown decrements it.
+The failure-message mapping is closed: capture immunity → "That unit cannot
+be captured"; a non-idle victim → "That unit is a cloud of vapor and cannot
+be captured"; a failed transfer → "Capture failed" with the node freed; a
+per-definition limit or pool failure inside the transfer is silent but the
+node still frees. The multi-captor rule is first-wins as described; a later
+captor's stale target handle can alias a reused slot (documented stale-
+handle risk).
 
 ## Resurrection
 
@@ -1686,17 +1825,31 @@ and only to build a successor order node.
 
 **Established fact — reverse and deconstruction.** The shared construction
 helper has a distinct reverse arm that grows the remaining fraction instead of
-shrinking it. That arm credits only metal, through a different admission path
-that writes the builder's metal bucket directly, with no corresponding energy
-credit. If the remaining fraction is clamped to one, the victim is killed with
-cause-9, which is the no-corpse, no-explosion path (severity zero). Both arms
-share the same health difference-of-truncations, but their resource paths are
-distinct.
+shrinking it: with a negative worker factor, `newRem = clamp(oldRem −
+worker/buildTime, 0, 1)` rises by `|worker|/buildTime` per visit. The arm
+credits only metal, directly to the target unit's metal production bucket (no
+admission, no energy credit): `refund = metal build cost × (newRem − oldRem)`.
+When the target's owner player is in the special second state, the global
+mode selector scales the credit — selector 0 → half, selector 1 → seven
+tenths — with the same pairing and sign family as the ledger refund and the
+factory cancel-current refund; nothing is inverted. If the remaining fraction
+is clamped to one, the unit kills itself with a kind-9 30000 packet — the
+no-corpse, no-explosion path (severity zero). The arm draws no RNG. In the
+sole real caller the builder and target are the same unit (the GetBuilt
+under-construction wait path passes a negative factor of `−11 × buildTime /
+energyCost` on its 11-tick wake cadence), so "the builder's bucket" and "the
+victim's bucket" coincide. Both arms share the same health
+difference-of-truncations, but their resource paths are distinct.
 
-**Unknown:** exact owner selection and full corpse-chain eligibility beyond the
-underscore truncation and slot-exhaustion response remain open, but the ledger
-is established as not involved and the metal-only refund is established as
-above.
+**Closed residuals — owner selection, corpse eligibility, exhaustion.**
+Resurrection has no ledger cost (bounded: no admission call in the handler);
+its owner is the builder's owner byte; corpse eligibility is the catalog
+corpse flag plus the underscore-truncated name lookup (a corpse name without
+an underscore fails the lookup with the misspelled failure string); slot or
+per-definition exhaustion prints "Unable to create any more units" with an
+exact 300-tick retry; the feature is removed before the new unit is marked
+alive (remaining zero, health one); one simulation draw is consumed for
+placement jitter.
 
 ## Feature catalog and placement
 
@@ -1742,7 +1895,13 @@ The successor used depends on cause:
 - reclaim completion uses the reclaimed successor.
 
 Cause-specific priority when multiple transitions occur during the same tick is
-not fully closed.
+partially closed: burning instances reject reclaim and ignore further blast
+(no applicable accumulation branch), blast damage accumulates on
+instance-less cells against the definition's hit points, and a dead hop
+(fringe whose anchor resolves empty) is the one unresolvable case the
+blocking test lets through. The full precedence ordering when damage, burn
+completion, and reclaim arrive in the same tick beyond those rules is not
+fully closed.
 
 ### Definition flags, teardown, and the Great Divide partition
 
@@ -1903,16 +2062,44 @@ runs every simulation tick; only smoke emission is gated on `globalTick % 3
 == 0`. Animation advance and countdown decrement run every tick, and the
 countdown event fires only once per burn.
 
-**Established fact — shipped burn lifetimes are finite.** The loader forces the
-runtime loop byte to zero for every resolved burn, burn-shadow, death, and
-reclaim sequence, so the source GAF loop byte does not control looping after
-the standard load path. All 79 shipped `seqnameburn` features resolve and their
+**Established fact — shipped burn lifetimes are finite (asset census).** The
+loader forces the runtime loop byte to zero for every resolved burn,
+burn-shadow, death, and reclaim sequence, so the source GAF loop byte does
+not control looping after the standard load path — that forcing is
+executable-side and established. The lifetime list below is a **data-side
+asset census** of the shipped GAF corpus, not executable control flow: all
+79 shipped `seqnameburn` features resolve and their
 burn GAF entries have finite lifetimes between 46 and 282 feature-phase visits;
 distinct lifetimes observed are 46, 56, 58, 70, 84, 92, 114, 120, 122, 126, 141,
 144, 159, 186, 192, 196, 200, 204, 208, 258, 264, 276, and 282 visits. Only
 `Shrub1`, `Shrub2`, and `Shrub3` lack a `featureburnt` successor; the other 76
 have one. Malformed or missing burn sequences and non-filename object/fire
 combinations remain separate loader edges.
+
+## Feature reproduction
+
+**Established fact — per-tick reproduction walk (RNG-live even though
+stock-inert).** The feature phase runs a reproduction walker every tick: a
+rotating cursor is decremented per tick and wraps, visiting **one cell per
+tick in descending order** (the wrap tick stores `W×H−1` and skips
+evaluation, so the last cell is never scanned). A cell is eligible when its
+anchor holds a feature index below the catalog sentinel and the cell has no
+attached animation instance (GAF features at rest). For every eligible visit
+the engine draws `simulationRandom(100)` — **the draw is consumed even when
+the feature authors `reproduce = 0`** — and only if the draw is below the
+definition's `reproduce` value does it continue: two more simulation draws
+give `dx`/`dz` offsets in `±reproducearea/2`, the target cell must be
+in-bounds, the source cell's occupancy word must be zero, the target cell's
+feature word must be exactly empty, and the spawn then goes through the
+ordinary placement service.
+
+The shipped corpus authors `reproduce = 0` on every feature (with
+`reproducearea = 6` where present), so **stock reproduction is inert as
+placement, but the RNG draw is not**: one simulation draw per eligible cell
+per tick is consumed regardless. A faithful implementation must keep the
+walk and the draw-before-check order, or every later simulation draw after
+the feature phase shifts. This walk is the sole per-tick feature-phase RNG
+consumer beyond burning and meteors.
 
 ## Feature sinking and water interaction
 
@@ -2050,6 +2237,16 @@ preserve these invariants:
 - Unit reclaim's fatal payment is metal-only: `(1 - remaining fraction) ×
   metal build cost` credited to the killer's metal production bucket at death
   finalization, with no per-pulse payment and no energy credit.
+- The special-player discount family is identical at every positive
+  production contribution in the ledger (passive makes, extraction, maker,
+  wind, tidal, and the negative-energy-use refund) and at the two refund
+  sites (factory cancel-current and the shared work helper reverse arm):
+  selector 0 credits half, selector 1 credits seven tenths, any other value
+  credits the full amount — reduced positive credits, never subtractions,
+  with no inverted pairing.
+- The feature phase's reproduction walk consumes one simulation draw per
+  eligible cell per tick (draw before the `reproduce` comparison), even
+  though every shipped feature authors `reproduce = 0`.
 - Stockpile production advances progress by five capped at the weapon's
   reload-time, computes per-visit cost as a difference of truncated cumulative
   proportional costs through the two-resource admission, retries after ten ticks
@@ -2068,106 +2265,124 @@ preserve these invariants:
 The following work remains necessary before this category is a complete retail
 contract:
 
-- Reconcile every unrecovered early construction and order-handler boundary.
+- Reconcile every unrecovered early construction and order-handler boundary
+  (IDA backfill of the early handler region; shared with the orders lane).
+  The reversed-argument repair variant's identity and its malformed-input
+  behavior remain open; the ordinary repair energy term and energy-only
+  admission are established.
 - Close the exact operation-byte table that dispatches build, repair, unit
-  reclaim, feature reclaim, capture, and resurrection.
-- Establish the precise same-tick order between each work handler, economy
-  admission, settlement, operational callback, occupancy change, and
-  presentation event; the nano-event admission/ordering contract is closed in
-  [R-P0-06 §6].
-- Confirm the semantic names of the game-ended flag bits and of the two
-  mission-end predicates behind the confirmation delay. The gate's effect on
-  settlement — a freeze at end of game, not a cadence — is established.
-- Find the consumers of the per-unit archived economy snapshots. The mirror
-  bucket's writer set, its read side, and the absence of any factory-draw or
-  external request/accept writer are established.
+  reclaim, feature reclaim, capture, and resurrection; the handler identities
+  themselves are established.
+- The same-tick order between work handler, economy admission, settlement,
+  occupancy, and presentation is closed in [R-P0-14 §3]: phase-2 unit sweep →
+  projectiles → phase-5 settlement → occupancy/LOS stamping; StopBuilding
+  before the completion transition; GetBuilt same-tick iff the product slot
+  sorts after the builder; trigger polling on the local player's
+  deadline-due settlement; AI completed-counts at the next 30-tick refresh.
+- Name the semantic meaning of the game-ended flag bits and of the two
+  mission-end predicates behind the confirmation delay. The bit patterns are
+  established (arm at 4; latch bit 0x04 always plus 0x40 and/or 0x10/0x20 per
+  victory/defeat/watch branch; a network latch; never cleared) and the
+  freeze-on-settlement effect is established.
+- The consumers of the per-unit archived economy snapshots are a bounded
+  negative (no reader in the reviewed image outside the ledger's own
+  redistribution); the mirror bucket's writer set is closed on the same
+  bound.
 - Name the user-facing identities of the special player modes behind the
-  0.5/0.7 scaling selector, and close the full enabling predicate for the
-  cloak debit under those modes.
-- Prove the metal-maker stall rule when energy is insufficient.
-- Prove whether negative ordinary economy fields use refund, demand, or
-  undefined behavior in every branch.
+  0.5/0.7 scaling selector: state 2 is the computer-policy state (AI-manager
+  gate inference); states 1 and 3 remain unnamed. The cloak debit's enabling
+  predicate is closed (init-cloaked bit, moving-cost bit clear, per-unit
+  deadline due; owner-state-3 condition inert under live play; toggles op-bit
+  2 firing callbacks #14/#15).
+- The metal-maker stall rule is established (own-upkeep acceptance gates
+  output at gather; positive carry stalls with request-only upkeep and no
+  callback; recovers via stage-A paydown).
+- Negative ordinary economy fields are established as signed contributions
+  (negative `energymake`/`metalmake` subtract via the floating-point add, no
+  clamp; negative `energyuse` is the refund path with the state-2 discount).
 - Specify all floating-point evaluation points needed for bit-exact economy
-  settlement, including exceptional values, overflow, signed zero, and NaN.
-- Close threshold initialization, source share-buffer refill, the remaining
-  status/alliance predicate names, destination over-cap behavior, state-2
-  credit discounts, and resource-share packet application.
-- Reconcile the numeric unit-pool capacity and any mission overrides; the
-  per-definition limit check (allocator-only, owner slice, -1 sentinel,
-  no queue reservation, 300-tick retry, capture validation) is established.
+  settlement, including exceptional values, overflow, signed zero, and NaN;
+  the truncation sites (cloak debit single conversion, counter stores,
+  capacity accumulation) and float-vs-double widths are pinned, exceptional
+  values are not.
+- Sharing residuals: threshold initialization, destination over-cap clamping,
+  and packet application are closed; the source share-buffer refill rules and
+  the state-2 recipient discount scalar in the transfer helpers remain open;
+  the remaining status/alliance predicate names are open (numeric predicates
+  established).
+- The numeric unit-pool capacity is established: physical cap =
+  `catalog definition count × 10 + 1` per player slice; the mission
+  `maxunits` field has no allocator reader (bounded negative).
 - Locate the writer or initializer of the per-definition limit field (absent
-  from the reviewed corpus; -1 implies unlimited by default) and any consumer
-  of the parsed-but-unread `norestrict` capability bit.
+  from the reviewed corpus; the -1 sentinel implies unlimited by default)
+  and any consumer of the parsed-but-unread `norestrict` capability bit —
+  both remain bounded negatives.
 - Identify the upstream UI/network producers of the factory production
   interrupts: cancel-current (mask 2) versus "Construction stopped" (mask 8).
-  Handler-side semantics for both are established.
-- Determine whether order nodes queued on a factory are reclaimed when the
-  factory dies outside the pump/cancel/purge paths (no death-time node
-  reclamation site was found).
-- Close the settlement status-pair semantics: no writer of the pair was
-  found in exported code, so its predicate is preserved literally; also name
-  the three controller states (settlement excludes the third) and find
-  consumers of the `WinLoseTime`/`DisplayTimer` sibling deadlines beyond
-  their save keys.
-- Determine whether the pre-gameplay setup pass can perform a real
-  settlement (depends on unit placement and slot states at that instant),
-  and whether the deadline catch-up burst (one pass per tick until caught up)
-  is reachable without a hand-edited save.
-- Close stockpile all-slot mapping validation for every weapon combination,
-  byte-wrap for malformed preexisting values, cancellation interaction with
-  admitted carry, and presentation beyond the selected-unit refresh;
-  stockpile progress step, cost timing, retry deadlines, completion
-  mutations, and the 200-round start block are established.
-- Establish the complete construction-completion side-effect order beyond
-  the closed completion transition: occupancy, yard state, sensors, and
-  network event ordering relative to the fraction/health/callback steps.
-- Resolve the user-interface identity of the reversed-argument repair variant
-  and malformed zero or negative input behavior; the ordinary repair energy term
-  derived from energy build cost and its energy-only admission gated on energy
-  carry are established.
-- Close the reversed/deconstruction refund branch details: the negative
-  (work-increasing) arm of the shared construction work helper and the
-  production handler's interrupt arms — refund formula, cadence,
-  bucket/player destination, callback edges, and interaction with the
-  cause-9 killed-severity bypass.
-- Close capture costs, resistance if any, multi-captor behavior, and callback
-  order; the capture timer equation, the ownership-transfer steps, and identical
-  limit validation at transfer are established.
-- Close resurrection resource costs, owner selection, corpse eligibility,
-  slot-exhaustion response, and callbacks. The delay equation, the completion
-  sequence, and the restored health are established.
-- Vent persistence beneath a completed geothermal plant, multi-vent
-   at-least-one satisfaction, and persistence after destruction are established
-   as read-only validator behavior with no registry and no restore step; wreck
-   transitions beyond ordinary feature placement remain narrow `TODO(question)`.
-- Terrain metal is sampled once at placement as `extractsmetal × Σ(byte+1)` and
-   never resampled; any varying per-cell metal source file beyond the uniform
-   `SurfaceMetal` byte remains `TODO(question)` — the retail corpus shows only
-   the uniform byte and no varying raster.
-- Feature allocation limits are established: catalog `0x100` bytes per entry,
-   animation pool `0x800` slots of `0x30` bytes, plot cell `0xD` bytes, and
-   map-bounds checks — exhaustion is a silent failure with no retry;
-   narrow edge cases for simultaneous exhaustion remain `TODO(question)`.
-- Reconcile feature-definition table size, serialized copy size, live-record
-   size, and all unknown fields without conflating the structures.
-- Close feature damage, indestructibility, reclaimability, and successor
-   precedence when multiple causes occur in one tick.
-- For shipped filename-based burns the looping rule (forced non-looping at
-   load, finite 46-282 visits), neighbourhood size (48), smoke-only gating,
-   animation-driven extinction, one-shot countdown after `sparktime`, reclaim
-   rejection, and blast immunity are established; malformed or missing burn
-   animations and non-filename object/fire combinations remain
-   `TODO(question)`.
-- Presentation clipping of sunken wrecks and slot-velocity inheritance across
-  teardown-reuse in practice; the sinking state machine itself is closed.
-- Close feature save/load record fields for all normal, animated, and 3D
-  variants, including malformed counts, unknown type names, and allocation
-  failures.
+  Handler-side semantics for both are established; the producers sit in the
+  UI/network command layer (shared with the orders lane).
+- Order nodes queued on a factory leak when the factory dies or is captured:
+  established (no death-time reclamation walk; capture drops the queues).
+- Settlement status-pair semantics: the predicate is preserved literally and
+  recurs read-only at three other walks with no writer found (bounded
+  negative); the three controller states' names are open (settlement excludes
+  the third; state 2 = computer per inference); the `WinLoseTime`/
+  `DisplayTimer` sibling deadlines' consumers beyond their save keys are
+  open.
+- The pre-gameplay setup pass is established as: reset → optional load →
+  one full phase pass → spawn credits outside the ledger, with deadlines
+  seeded to the current tick; the deadline catch-up burst is structurally
+  present with no natural trigger identified (documented inference).
+- Stockpile residuals: byte wrap (uint8, 255→0), the 200–255 production
+  block, cancellation-with-admitted-carry (no refund; carry wasted), and
+  repeat requeue are closed; the weapon-id-to-slot translation at node
+  creation and presentation beyond the refresh call remain open.
+- Feature save/load record layouts are reconciled: name table 0x80 per
+  entry; Normal 8 bytes {x, z, featId, cell word}; Animating 10 bytes {x, z,
+  featId, anim state, frame, state byte}; 3D 26 bytes; unknown names are
+  parsed on demand from the feature TDF and malformed/short records are
+  skipped silently. The meanings of the carried live-record animation fields
+  beyond position/velocity remain open (renderer/animation lane).
+- Feature damage and successor precedence when multiple causes occur in one
+  tick is partially closed (burning instances reject reclaim and further
+  blast; blast accumulation on instance-less cells; the dead-hop fringe
+  case); full same-tick multi-cause precedence remains open.
+- Malformed or missing burn animations and non-filename object/fire
+  combinations remain loader edges (`TODO(question)`); the shipped
+  filename-based burn contract (forced non-looping at load — executable
+  side — and the 46–282 visit lifetime census — asset side) is established.
+- Presentation clipping of sunken wrecks is open (renderer-side); the
+  slot-velocity inheritance across teardown-reuse is established (successor
+  restamp carries the sunk position and typically the stale downward
+  velocity).
 - Identify every statistic/UI field derived from the economy and distinguish
-  authoritative totals from presentation-only cached values.
-- Close the nano-segment record constructor and allocator epilogue — exact
-  effect-strip ownership, allocation-failure side effects,
-  logical-to-palette color mapping, random presentation draws, and
-  per-segment fade/lifetime — `TODO(question)` in [R-P0-06 §5]. Emission
-  cadences, accepted-work gating, selector 6, endpoint ownership, and strip
-  cap/order are established.
+  authoritative totals from presentation-only cached values; the live-stock
+  and pass-counter HUD readers are partially enumerated.
+- Feature allocation limits are established (catalog `0x100` bytes per entry,
+  animation pool `0x800` slots of `0x30` bytes, plot cell `0xD` bytes, map
+  bounds; exhaustion is a silent failure with no retry); the simultaneous
+  catalog/anim-pool exhaustion ordering remains a narrow `TODO(question)`.
+- Vent persistence beneath a completed geothermal plant, multi-vent
+  at-least-one satisfaction, and persistence after destruction are established
+  as read-only validator behavior with no registry and no restore step; wreck
+  transitions at vent cells remain a narrow `TODO(question)`.
+- Terrain metal is sampled once at placement as `extractsmetal × Σ(byte+1)`
+  and never resampled; there is no varying per-cell metal raster (bounded
+  negative over the loader and the 171-map corpus); the only per-cell nuance
+  is the legacy TNT format's attribute byte feeding the same seed field —
+  the earlier `TODO(question)` on a per-cell source file is closed as a
+  bounded negative.
+- The nano-segment record constructor and allocator epilogue are closed on
+  the engine side: inline construction, strip index 6 (the selector value),
+  silent pool-exhaustion no-op, the 400→401 eviction bound, and the
+  per-record CRT-stream jitter draws (30 per record per tick, never the
+  simulation stream). `TODO(question)` remains only for the renderer-side
+  fade curve and logical-to-palette mapping, tracked at the single site in
+  [R-P0-06 §5]. Emission cadences, accepted-work gating, selector 6, endpoint
+  ownership, and strip cap/order are established.
+- The special-player discount family (selector 0 → half, selector 1 → seven
+  tenths, plain otherwise) is established at every positive production
+  contribution in the ledger (passive makes, extraction, maker, wind, tidal,
+  refund), at the factory cancel-current refund, and at the shared work
+  helper's reverse arm — reduced positive credits with identical pairing
+  everywhere; the mode names remain open as above.

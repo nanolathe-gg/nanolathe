@@ -39,8 +39,12 @@ Rules established by the retail corpus and community documentation:
 - `/* ... */` block comments also appear in retail data
   (`weapons/WEAPONS.TDF`: `rendertype=4;	/* 2D bitmap */`), including
   inline after assignments; `//` comments may follow values on a line.
-- Duplicate keys and duplicate sibling section names are not defined by any
-  source; retail data avoids them. (OpenTA rejects duplicates.)
+- Duplicate keys with identical spelling resolve last-write-wins (one entry);
+  case-variant spellings coexist as separate sorted entries and typed lookups
+  return the lower-bound variant (deterministic, not last-wins). Duplicate
+  sibling section names are kept as separate nodes; a first-match section
+  accessor returns the first. Retail data avoids duplicates, so these rules
+  matter only for third-party content.
 - Files are ASCII/Windows-1252; localized strings carry high-byte
   characters (`GermanDescription=Überschwerer...`). No BOM, no NULs.
 - Line endings are CRLF in retail data; accept any.
@@ -97,14 +101,19 @@ buildable — download-menu entries also add build buttons; see below.
 ```
 
 Sections are `[CLASS0]`, `[CLASS1]`, …; the `Name` value is what FBI files
-reference. The retail file has 15 classes and four further keys:
+reference (the engine interns each section's authored `Name` value into the
+class record head and resolves the FBI `MovementClass` string against those
+interned values, case-insensitively — confirmed by direct analysis
+2026-08-26). The loader scans `CLASS0` through `CLASS31`, bounded by its
+32-slot pool: a missing section is skipped without stopping the scan. The
+retail file has 15 classes and four further keys:
 
 | Key | Classes | Meaning |
 | --- | ---: | --- |
 | `MinWaterDepth` | 5 | Minimum depth the class needs (ship classes) |
-| `MaxWaterSlope` | 3 | Slope limit that applies over water, separately from `MaxSlope`. `TANKDH3` authors `30`; both hover classes author `255` alongside `MaxSlope=12`, which is what lets a hovercraft cross steep sea floor. |
-| `BadSlope` | 2 | Hover classes only, `12`. Reads as a soft/penalised limit paired with the hard `MaxSlope`, but no source establishes this. |
-| `BadWaterSlope` | 2 | Hover classes only, `255`. Same caveat. |
+| `MaxWaterSlope` | 3 | Slope limit that applies over water, separately from `MaxSlope`. `TANKDH3` authors `30`; both hover classes author `255` alongside `MaxSlope=12`, which is what lets a hovercraft cross steep sea floor. **Caveat:** the class pool starts zero-filled, and the engine runs three unconditional clamps (`MaxSlope = min(MaxSlope, MaxWaterSlope)`, then the two Bad values clamped to their Max counterparts), so any class omitting `MaxWaterSlope` computes `MaxSlope = 0` — including the stock land classes. The retail executable really computes this; how stock play tolerates it is an open question (see the spec doc 02 §5 "Movement class record" `TODO(question)`); Nanolathe gates clamps 1 and 3 on authorship (`docs/SPEC_CONFLICTS.md` SC5). |
+| `BadSlope` | 2 | Hover classes only, `12`. **Established (2026-08-26):** the movement classifier reads it as the clear-vs-steep boundary — slopes at or below `BadSlope` are clear, slopes between `BadSlope` and `MaxSlope` are the passable-but-penalized steep tier, slopes above `MaxSlope` are hard-blocked. The earlier "no source establishes this" caveat is superseded. |
+| `BadWaterSlope` | 2 | Hover classes only, `255`. Same mechanism over water. |
 
 OpenTA compiles all four into `MovementDef` and applies `MaxWaterSlope` to
 any footprint touching water. `BadSlope`/`BadWaterSlope` are preserved as
@@ -294,7 +303,7 @@ table below appears in that census except three:
 
 | Key | Authored in | Status |
 | --- | ---: | --- |
-| `ID` | 71 files, 180 records | **Inert.** No `id` string exists in the executable; weapons are resolved by section name, so the "255 IDs" limit is a content convention, not an engine one. |
+| `ID` | 71 files, 180 records | **Read, and it selects the record slot.** The weapon parser reads `ID` with the integer accessor and a default of −1 *first*; the authored value chooses which weapon record the parser fills, and the section name is then copied into that record as its catalog name (`name` is a separate 64-byte display string). **Correction (2026-08-26):** an earlier reading in this document called `ID` inert ("no `id` string exists in the executable; weapons are resolved by section name") — the whole-string census behind that verdict misses very short strings (the same artifact that hid the textual `HAPI` magic), and the executable's weapon-key table does carry `ID`. An implementation that resolves weapons by section name only mis-assigns records whenever authored `ID` values differ from file order. The "255 IDs" content convention still holds as an authoring bound (weapons in retail data use `ID` 0–255, and `ID` −1 selects the slot before the table). |
 | `aimrate` | 3 files | **Inert**, despite being documented in `gamedata/WEAPONS.TDF` itself. Nothing in the executable can read it. |
 | `startfire` | 1 file | **Inert.** |
 
@@ -331,7 +340,7 @@ and velocity.
 
 | Key | Meaning |
 | --- | --- |
-| `ID` | Numeric weapon ID. Content convention only — see above; the engine cannot read it. |
+| `ID` | Numeric weapon ID. **Read by the engine and used to select the weapon record slot** (default −1 = the slot before the table); the section name becomes the record's catalog name. See the correction in the census table above. |
 | `name` | Display name |
 | `rendertype` | Projectile rendering: 0 laser, 1 3D model, 2 not rendered, 3 dgun, 4 plasma/bitmap shell, 5 flame, 6 bomb, 7 lightning |
 | `model` | 3DO model (rendertype 1), no extension |
@@ -458,8 +467,9 @@ Units not listed are grayed out in build menus during that mission.
   `aimrate` is documented in that header and has no string in the executable.
   `hitdensity` is a settled case in the other direction: it is inert.
 - `MOVEINFO.TDF`'s `BadSlope`/`BadWaterSlope` pair is authored only by the
-  two hover classes and has no documented meaning, but both keys are read by
-  the engine along with `MaxWaterSlope`.
+  two hover classes; both keys are read by the engine along with
+  `MaxWaterSlope`, as the clear-vs-steep boundary of the movement classifier
+  (see the table above).
   The third-party controller keys `pivotturn`, `reverse`, `arcturn`,
   `minturnradius` and `minturnspeed` have no strings in the executable.
 - Retail authors `featurereclamamate` (a typo for `featurereclamate`) ten
