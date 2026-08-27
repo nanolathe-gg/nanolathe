@@ -16,7 +16,7 @@ func TestBindBattleSessionCommandDispatchUsesCurrentSession(t *testing.T) {
 	b := &battleSession{sess: first}
 	bindBattleSessionCommandDispatch(b)
 
-	if !b.requireCommandDispatch || b.commandDispatchFn == nil {
+	if b.commandDispatchFn == nil {
 		t.Fatal("binder did not install strict command dispatch")
 	}
 	cmd := battleCommand{Kind: battleCommandOrder, Order: battleOrderCommand{

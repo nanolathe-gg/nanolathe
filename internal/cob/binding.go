@@ -120,8 +120,7 @@ type Binding struct {
 }
 
 // BindStrict resolves, parses, links, and initializes one production COB
-// binding. Missing files are fatal here; callers that need a synthetic VM
-// must use NewSyntheticEmptyVM explicitly. RequiredScripts defaults to Create
+// binding. Missing files are fatal here. RequiredScripts defaults to Create
 // because every live unit is initialized through Create in mode I [04 §5.1].
 // Each RequiredScriptGroups group is an explicit any-of requirement: at least
 // one named entry in each group must exist. This models established fallback
@@ -404,14 +403,3 @@ func modelPieceIndex(modelPieces []string, name string) int {
 	}
 	return -1
 }
-
-// NewSyntheticEmptyProgram creates an explicitly synthetic empty definition
-// for tests/tools. Production binding must use BindStrict and never this API.
-func NewSyntheticEmptyProgram() *Program {
-	return &Program{Code: []uint32{}, Scripts: map[string]int{}, Pieces: []string{}, ScriptsByID: []int{}}
-}
-
-// NewSyntheticEmptyVM creates an explicitly synthetic empty VM for tests/tools
-// that do not have retail assets. It is intentionally separate from BindStrict
-// so missing production content cannot silently become playable.
-func NewSyntheticEmptyVM() *VM { return NewVM(NewSyntheticEmptyProgram()) }

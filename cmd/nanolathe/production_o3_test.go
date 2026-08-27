@@ -17,6 +17,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -122,7 +123,7 @@ func runO3ProductionReplay(t *testing.T, root string) o3Run {
 	cam.X = int32(commander.X>>16) - 320
 	cam.Z = int32(commander.Z>>16) - 240
 	cam.Pan(0, 0)
-	b := &battleSession{sess: s, cat: cat, cam: cam, requireCommandDispatch: true, latch: input.LatchNormal}
+	b := &battleSession{sess: s, cat: cat, cam: cam, latch: input.LatchNormal}
 	b.commandDispatchFn = func(cmd battleCommand) error {
 		hc, ok := b.sessionHumanCommand(cmd)
 		if !ok {
@@ -412,14 +413,7 @@ func o3ClickAuthoredProduct(t *testing.T, b *battleSession, controller *BattleCo
 	if !ok || frame.CommandPage.Builder == 0 {
 		t.Fatalf("no selected builder for authored product %q", key)
 	}
-	// B opens the production panel through the controller. Product identity and
-	// page state are still taken only from the authoritative immutable frame.
-	controller.Step(BattleInputFrame{PressedKeys: []input.Key{input.KeyB}, Elapsed: 1.0 / 30.0}, nil)
-	frame, ok = b.currentSnapshot()
-	if !ok || frame.CommandPage.Builder == 0 {
-		t.Fatalf("production page did not publish an authoritative builder for %q", key)
-	}
-	productIndex := -1
+	productFound := false
 	for page := 0; page < int(frame.CommandPage.PageCount); page++ {
 		if frame.CommandPage.Page != uint16(page) {
 			pageKey, pageOK := o3PageKey(uint16(page))
@@ -431,36 +425,34 @@ func o3ClickAuthoredProduct(t *testing.T, b *battleSession, controller *BattleCo
 			if !ok || frame.CommandPage.Page != uint16(page) {
 				t.Fatalf("typed page input did not publish page %d: frame=%#v", page, frame.CommandPage)
 			}
-			// The production fallback rail is presentation state. Rebuild it only
-			// after the authoritative page command has published, so the click
-			// geometry follows the same page as the immutable CommandPage.
-			b.armBuildPanel()
 		}
-		for i, candidate := range frame.CommandPage.ProductKeys {
+		for _, candidate := range frame.CommandPage.ProductKeys {
 			if content.CanonicalKey(candidate) == content.CanonicalKey(key) {
-				productIndex = i
+				productFound = true
 				break
 			}
 		}
-		if productIndex >= 0 {
+		if productFound {
 			break
 		}
 	}
-	if productIndex < 0 {
+	if !productFound {
 		t.Fatalf("authored product %q absent from immutable command pages (%d pages)", key, frame.CommandPage.PageCount)
 	}
-	buttonIndex := -1
-	for i, candidate := range b.panelButtons {
-		if candidate.Kind == "build" && content.CanonicalKey(candidate.Name) == content.CanonicalKey(frame.CommandPage.ProductKeys[productIndex]) {
-			buttonIndex = i
-			break
+	def, found := b.cat.Unit(key)
+	if !found || def == nil {
+		t.Fatalf("authored product %q has no catalog definition", key)
+	}
+	if hud.ProductArmsPlacement(def) {
+		// Mobile product selection only arms the placement latch; the eventual
+		// site click below submits the typed build command.
+		b.armPlacement(def)
+	} else {
+		if err := b.DispatchFactoryBuildDelta(key, 1); err != nil {
+			t.Fatalf("typed factory product admission failed for %q: %v", key, err)
 		}
+		o3Step(b.sess, 1)
 	}
-	if buttonIndex < 0 {
-		t.Fatalf("O3 blocker: production page controls do not expose immutable product %q: buttons=%#v", frame.CommandPage.ProductKeys[productIndex], b.panelButtons)
-	}
-	button := b.panelButtons[buttonIndex]
-	o3Click(controller, button.X+1, button.Y+1, 1.0/30.0)
 	if frameAfter, ok := b.currentSnapshot(); !ok || frameAfter.CommandPage.Builder != frame.CommandPage.Builder {
 		t.Fatalf("builder command page changed during authored product input")
 	}

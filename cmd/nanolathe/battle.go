@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
@@ -33,7 +32,7 @@ import (
 
 // battleSession is the composition root for the windowed battle view. It owns
 // the integrated session (all twelve kernel phases) and the interaction state:
-// selection, order latch, build panel and placement.
+// selection, order latch, and build placement.
 type battleSession struct {
 	sess  *session.Session
 	cat   *content.Catalog
@@ -102,14 +101,9 @@ type battleSession struct {
 	ended            bool
 	resultDismissed  bool
 	resultButtons    []panelButton // buttons for result overlay [RS-05]
-	panelButtons     []panelButton
 
-	// Legacy fixture-only fallback state. Production battles always install
-	// retailBattleHUD below; these fields remain for the small synthetic input
-	// fixtures which have no mounted retail asset set.
 	anchors   hud.Anchors
 	anchorsOK bool
-	panel     *hud.Panel
 	guiWin    *gui.Window
 	guiOK     bool
 
@@ -121,10 +115,7 @@ type battleSession struct {
 	// publisher for this byte, so the composition value remains zero until
 	// that producer is wired (TODO(question): identify the mode-byte writer).
 	battleMode byte
-	// requireCommandDispatch identifies the real production composition; command
-	// paths still require a committed frame in every mode.
-	requireCommandDispatch bool
-	controller             *BattleController
+	controller *BattleController
 }
 
 // factoryBuildDelta applies the retail signed button count: left click adds
@@ -170,9 +161,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 	centerOnCommanderForSession(sess, cam, winW, winH)
 
 	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs, latch: input.LatchNormal}
-	b.requireCommandDispatch = true
-	// Production composition owns the typed command queue; fixtures that exercise
-	// input must bind the same dispatcher explicitly.
+	// Production composition owns the typed command queue.
 	b.commandDispatchFn = func(cmd battleCommand) error {
 		hc, ok := b.sessionHumanCommand(cmd)
 		if !ok {
@@ -182,7 +171,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 	}
 	b.retryFunc = func(cl *client.Client) { b.doRetry(cl) }
 	b.returnToMenu = func(cl *client.Client) {
-		// Headless battle view has no shell; just mark ended
+		// The battle view has no menu shell callback; mark it ended and exit.
 		b.ended = true
 		if cl != nil {
 			cl.RequestExit()
@@ -242,8 +231,8 @@ func newBattleSession(opts Options, cs *contentSet) (*session.Session, *content.
 }
 
 // newBattleSessionWithConfig is the windowed composition path used by the
-// skirmish lobby. The menu's per-slot and round settings must reach the same
-// session constructor as the headless path [08 "Skirmish configuration"].
+// skirmish lobby. The menu's per-slot and round settings reach the canonical
+// session constructor [08 "Skirmish configuration"].
 func newBattleSessionWithConfig(opts Options, cs *contentSet, cfg session.SkirmishConfig) (*session.Session, *content.Catalog, error) {
 	if cfg.MapName == "" {
 		cfg.MapName = opts.Map
@@ -254,21 +243,6 @@ func newBattleSessionWithConfig(opts Options, cs *contentSet, cfg session.Skirmi
 		return nil, nil, err
 	}
 	return sess, sess.Catalog, nil
-}
-
-// centerOnCommander pans the camera to LocalOwner's commander if present. The
-// SIDEDATA commander name ends in "com" ([02 §6] side anchors table).
-// Deprecated: use centerOnCommanderForSession with Session.LocalOwner [08 "Skirmish configuration"].
-func centerOnCommander(w *units.World, cam *camera.Camera, winW, winH int32) {
-	for _, u := range w.Iter() {
-		if u != nil && u.Alive && u.Def != nil &&
-			strings.HasSuffix(strings.ToLower(u.Def.UnitName), "com") {
-			cam.X = int32(u.X>>16) - winW/2
-			cam.Z = int32(u.Z>>16) - winH/2
-			cam.Pan(0, 0)
-			return
-		}
-	}
 }
 
 // centerOnCommanderForSession pans to the Session.LocalOwner commander [08 "Skirmish configuration"].
@@ -292,12 +266,6 @@ func centerOnCommanderForSession(sess *session.Session, cam *camera.Camera, winW
 func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b == nil || cl == nil {
 		return
-	}
-	// Panel slide target from Space polarity [07 §6] C14: Space held slides toward -31 unless text-editor focused.
-	if b.panel != nil {
-		spaceHeld := cl.Input().Kbd.KeyHeld(input.KeySpace)
-		b.panel.SetTarget(spaceHeld, false)
-		b.panel.Step(uint32(time.Now().UnixMilli() & 0xffffffff))
 	}
 	in := cl.Input()
 	// RS-05: result overlay takes precedence over menu and world input [08][P1-01] and
@@ -421,6 +389,12 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	}
 }
 
+// isOverMinimap identifies the existing radar interaction region [07 §10].
+func (b *battleSession) isOverMinimap(x, y int32) bool {
+	const mmX, mmY, mmW, mmH = 540, 360, 90, 90
+	return x >= mmX && x < mmX+mmW && y >= mmY && y < mmY+mmH
+}
+
 // handleInput processes selection, orders, and build placement.
 // It converts input into complete canonical commands with target/position and
 // queue modifiers (shift-queued) via one picking routine that respects fog,
@@ -517,9 +491,6 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	if kbd.KeyDown(input.KeyD) {
 		b.latch = input.LatchBlast
 	}
-	if kbd.KeyDown(input.KeyB) {
-		b.armBuildPanel()
-	}
 	if kbd.KeyDown(input.KeyX) {
 		b.cancelSelectedProduction()
 	}
@@ -529,7 +500,8 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	if kbd.KeyDown(input.KeyN) {
 		b.stockpileSelected(kbd.HasShift())
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Game-speed and pause keys [07 §2][07 §11]: +/- clamp Requested 1..20
+	// with localized messages; Pause toggles pause with the retail message.
 	if kbd.KeyDown(input.KeyPause) {
 		b.togglePause()
 	}
@@ -579,13 +551,6 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	if kbd.KeyDown(input.KeyNext) || kbd.KeyDown(input.KeyLeft) && kbd.HasShift() {
 		b.prevBuildPage()
 	}
-	// Also handle comma/period as next/prev for headless tests (period maps to unknown but we use Insert/Delete as proxies)
-	if kbd.KeyDown(input.KeyInsert) {
-		b.nextBuildPage()
-	}
-	if kbd.KeyDown(input.KeyDelete) {
-		b.prevBuildPage()
-	}
 	if kbd.KeyDown(input.KeyEscape) {
 		b.disarmPlacement()
 		b.latch = input.LatchNormal
@@ -599,9 +564,6 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		// A factory product button is the one right-click exception: it
 		// subtracts one/five from the matching tail node [R-P0-11].
 		if b.hud != nil && b.hud.hitTestFor(b, mx, my) && b.hud.consumeRightClick(b, mx, my) {
-			return
-		}
-		if len(b.panelButtons) > 0 && b.isOverPanel(mx, my) && b.panelClickDelta(mx, my, true) {
 			return
 		}
 		if b.buildDef != "" {
@@ -635,9 +597,6 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		if b.hud != nil && b.hud.hitTestFor(b, mx, my) {
 			overHUD = true
 		}
-		if len(b.panelButtons) > 0 && b.isOverPanel(mx, my) {
-			overHUD = true
-		}
 		if overHUD {
 			b.hudCaptured = true
 			b.hudPressX = mx
@@ -653,11 +612,6 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		b.dragActive = false
 		if b.hud != nil && b.hud.sameButton(b, b.hudPressX, b.hudPressY, mx, my) && b.hud.consumeClick(b, mx, my) {
 			return
-		}
-		if len(b.panelButtons) > 0 && b.sameFallbackButton(b.hudPressX, b.hudPressY, mx, my) {
-			if b.panelClick(mx, my) {
-				return
-			}
 		}
 		return
 	}
@@ -896,47 +850,6 @@ func (b *battleSession) catalogDefID(u *units.Unit) uint16 {
 	return uint16(id)
 }
 
-// isOverPanel reports whether a screen point is over the minimal build panel
-// area used by this overlay [F-P0-003]. The retail HUD uses overWorld/hitTest.
-func (b *battleSession) isOverPanel(mx, my int32) bool {
-	if len(b.panelButtons) == 0 {
-		return false
-	}
-	if my < 480-panelButtonH-32 {
-		return false
-	}
-	// Any y in the panel band is considered HUD chrome for capture.
-	return true
-}
-
-func (b *battleSession) fallbackButtonAt(x, y int32) int {
-	for i, btn := range b.panelButtons {
-		if x >= btn.X && x < btn.X+panelButtonW && y >= btn.Y && y < btn.Y+panelButtonH {
-			return i
-		}
-	}
-	return -1
-}
-
-func (b *battleSession) sameFallbackButton(x0, y0, x1, y1 int32) bool {
-	pressed := b.fallbackButtonAt(x0, y0)
-	return pressed >= 0 && pressed == b.fallbackButtonAt(x1, y1)
-}
-
-// buildPageCount follows the retail DOWNLOADMENU mapping when mounted HUD
-// pages are available. Synthetic fixtures fall back to the six-product page
-// grouping documented by SIDEDATA's CANBUILD contract [fmt tdf] and confirmed
-// by the stock <unit>N.GUI pages [07 §9].
-func (b *battleSession) buildPageCount(u *units.Unit, page *content.BuildMenuPage) int {
-	if u == nil || u.Def == nil || page == nil {
-		return 0
-	}
-	if b.hud != nil {
-		return b.hud.buildPageCount(u.Def)
-	}
-	return hud.PageCountFromButtons(len(page.Buttons), hud.RetailBuildButtonsPerPage)
-}
-
 // switchBuildPage handles digit 1..9 build page switching [07 §9] C10.
 // Page number lives in flag bits 23-25 with bit 22 paged indicator [07 §9].
 func (b *battleSession) switchBuildPage(digit int) {
@@ -967,212 +880,6 @@ func (b *battleSession) prevBuildPage() {
 	target := hud.ClampPage(int(frame.CommandPage.Page)-1, int(frame.CommandPage.PageCount))
 	_ = b.DispatchBuildPage(target)
 }
-
-// armBuildPanel resolves the selected builder's CANBUILD page into buttons
-// [02 "Build-menu catalog keys"]. Authored page.Buttons order is preserved
-// verbatim — do NOT sort alphabetically [P0-I03][02 "Build-menu catalog keys"].
-// Pagination is applied via flag bits 23-25 with bit 22 paged [07 §9] C10.
-func (b *battleSession) armBuildPanel() {
-	b.panelButtons = b.panelButtons[:0]
-	// The production fallback rail is presentation state. Its builder, page,
-	// and product slice must come from the immutable frame published by the
-	// authoritative input phase; reading selectedBuilder here would cross the
-	// presentation boundary and can observe a stale/mutated live flag [I6].
-	if b.requireCommandDispatch {
-		if b.hud != nil {
-			// The mounted retail HUD owns the authored GUI rail. There is no
-			// fallback geometry to refresh in this path.
-			return
-		}
-		frame, ok := b.currentSnapshot()
-		if !ok || b.cat == nil || frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount == 0 {
-			return
-		}
-		builderView, found := snapshotUnitByHandle(frame, frame.CommandPage.Builder)
-		if !found || b.sess == nil || builderView.Owner != b.sess.LocalOwner || !b.snapshotBuilder(builderView) {
-			return
-		}
-		if int(frame.CommandPage.Page) >= int(frame.CommandPage.PageCount) {
-			return
-		}
-		builderDef, found := b.cat.Unit(builderView.DefName)
-		if !found || builderDef == nil {
-			return
-		}
-		b.appendFallbackBuildPanel(frame.CommandPage.ProductKeys)
-		return
-	}
-	u := b.selectedBuilder()
-	if u == nil || b.cat == nil {
-		return
-	}
-	// Production uses the authored <unit>N.GUI buttons. The custom rectangle
-	// fallback exists only for asset-free fixtures and must never overlap or
-	// intercept a real retail rail.
-	if b.hud != nil {
-		return
-	}
-	page, ok := b.cat.BuildMenus[u.Def.CanonicalKey]
-	if !ok || page == nil {
-		return
-	}
-	// Preserve authored order [02 "Build-menu catalog keys"] — Buttons already authored.
-	// Pagination: split Buttons into pages via data-driven helper [R-P0-03][07 §9] C10.
-	const buttonsPerPage = hud.RetailBuildButtonsPerPage
-	count := hud.PageCountFromButtons(len(page.Buttons), buttonsPerPage)
-	if count == 0 {
-		count = 1
-	}
-	curPage := 0
-	if hud.IsPaged(u.Flags) {
-		curPage = hud.DecodePage(u.Flags)
-	}
-	curPage = hud.ClampPage(curPage, count)
-	pageButtons := hud.ProductsForPage(page.Buttons, curPage, buttonsPerPage)
-	b.appendFallbackBuildPanel(pageButtons)
-}
-
-// appendFallbackBuildPanel lays out the small synthetic/headless rail from an
-// already-resolved product slice. Production callers pass CommandPage keys;
-// fixture callers pass the authored catalog page. The slice is never sorted or
-// rewritten, preserving the producer's authored order [02 "Build-menu catalog
-// keys"] and making page refreshes deterministic [I1][I6].
-func (b *battleSession) appendFallbackBuildPanel(productKeys []string) {
-	if b == nil || b.cat == nil {
-		return
-	}
-	// Main build buttons for this page [02 "Build-menu catalog keys"] C8 order preserved.
-	x := int32(8)
-	y := int32(480 - panelButtonH - 28)
-	for _, name := range productKeys {
-		if _, found := b.cat.Unit(name); !found {
-			continue
-		}
-		b.panelButtons = append(b.panelButtons, panelButton{Name: name, X: x, Y: y, Kind: "build"})
-		x += panelButtonW + 4
-		if x > 640-panelButtonW {
-			break
-		}
-	}
-	// Pagination affordance: if more than one page, show page indicator as non-clickable
-	// but keep authored order; the digit keys and page switching already covered.
-	// Append command controls after build buttons for minimal HUD that issues same orders [P0-I14].
-	// These are data-driven in the sense they map to canonical orders via orders.NewNodeForOrder;
-	// retail assets would provide same via side anchors [02 §6].
-	y2 := int32(480 - panelButtonH - 8)
-	x2 := int32(8)
-	// Command controls are minimal fallback for stockpile/on-off/cancel [P0-I14].
-	// They are presented as text buttons; clicking them issues the correct order.
-	controls := []struct {
-		label string
-		kind  string
-	}{
-		{"Cancel", "cancel"},
-		{"On/Off", "onoff"},
-		{"Stock+1", "stockpile"},
-	}
-	for _, c := range controls {
-		b.panelButtons = append(b.panelButtons, panelButton{Name: c.label, X: x2, Y: y2, Kind: c.kind})
-		x2 += panelButtonW + 4
-		if x2 > 640-panelButtonW {
-			break
-		}
-	}
-}
-
-// panelClick handles a click against the armed build panel; returns true when
-// a button was hit and placement armed or command issued [R-P0-03].
-// Build products are data-driven from cat.BuildMenus; no hardcoded unit names
-// [R-P0-03]. Mobile builders arm placement (definition retained); factories
-// queue immediately via typed command with progress/count shown thereafter
-// [R-P0-03][F-P1-008]. Illegal products are rejected (queues nothing).
-func (b *battleSession) panelClick(mx, my int32) bool {
-	return b.panelClickDelta(mx, my, false)
-}
-
-func (b *battleSession) panelClickDelta(mx, my int32, rightClick bool) bool {
-	if b == nil {
-		return false
-	}
-	for _, btn := range b.panelButtons {
-		if mx >= btn.X && mx < btn.X+panelButtonW && my >= btn.Y && my < btn.Y+panelButtonH {
-			switch btn.Kind {
-			case "cancel":
-				if rightClick {
-					return true
-				}
-				b.cancelSelectedProduction()
-				return true
-			case "onoff":
-				if rightClick {
-					return true
-				}
-				b.toggleOnOffSelected(false)
-				return true
-			case "stockpile":
-				if rightClick {
-					return true
-				}
-				b.stockpileSelected(false)
-				return true
-			case "build":
-				fallthrough
-			default:
-				if b.cat == nil {
-					return true // consume an authored button while the catalog is unavailable
-				}
-				def, found := b.cat.Unit(btn.Name)
-				if !found || def == nil {
-					return true // consumed; nothing placeable
-				}
-				// Data-driven guard: product must be in the selected builder's
-				// authored list [R-P0-03]. The immutable command page is the only
-				// command producer input; without it the click is consumed as a no-op.
-				frame, ok := b.currentSnapshot()
-				if !ok || b.cat == nil || frame.CommandPage.Builder == 0 {
-					return true
-				}
-				builderView, found := snapshotUnitByHandle(frame, frame.CommandPage.Builder)
-				if !found || b.sess == nil || builderView.Owner != b.sess.LocalOwner {
-					return true
-				}
-				builderDef, found := b.cat.Unit(builderView.DefName)
-				if !found || builderDef == nil || !hud.ValidateBuildProduct(b.cat, builderDef.CanonicalKey, def.CanonicalKey) {
-					return true // consumed but not placeable (illegal product)
-				}
-				// The visible button may have been armed from an older frame.
-				// Require the clicked product to remain in the current immutable
-				// page before dispatching it; the catalog menu alone is not a
-				// sufficient page identity [07 §9][I6].
-				pageProduct := false
-				for _, key := range frame.CommandPage.ProductKeys {
-					if content.CanonicalKey(key) == content.CanonicalKey(def.CanonicalKey) {
-						pageProduct = true
-						break
-					}
-				}
-				if !pageProduct {
-					return true
-				}
-				// Retail branches on the product's authored BMcode, not on the
-				// builder's mobility [07 §9]: a building arms placement, and
-				// anything else queues immediately.
-				if !hud.ProductArmsPlacement(def) {
-					_ = b.DispatchFactoryBuildDelta(def.CanonicalKey, factoryBuildDelta(b.shiftHeld, rightClick))
-					return true
-				}
-				if rightClick {
-					return true
-				}
-				b.armPlacement(def)
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// isOverPanel helper defined earlier; panelClick uses panelButtons
 
 // handleHudOrderButton binds named order buttons to the existing command path
 // via injected dispatch [R-P0-03][07 §9]. It is used by retail HUD consumeClick.
@@ -1254,207 +961,6 @@ func (b *battleSession) isTalkGUIActive() bool { // [07 §10]
 	return false
 }
 
-// isOverMinimap reports whether a screen point is over the minimap HUD interaction region [07 §10].
-func (b *battleSession) isOverMinimap(x, y int32) bool { // [07 §10]
-	const mmX, mmY, mmW, mmH = 540, 360, 90, 90 // HUD minimap stub region [C-6] drawn in drawOverlay
-	return x >= mmX && x < mmX+mmW && y >= mmY && y < mmY+mmH
-}
-
-// drawMinimap renders terrain-minimap + fog + contacts using camera.Minimap math [07 §10] C4 [C-6].
-// It uses LayoutMinimap/ToCamera/ToWorld via camera.Minimap [C-6] and is presentation-only [I6].
-func (b *battleSession) drawMinimap(c *client.Client, fnt *formats.FNT) { // [07 §10][C-6]
-	const mmX, mmY, mmW, mmH = 540, 360, 90, 90
-	c.UIFillRect(mmX, mmY, mmW, mmH, 0)
-	c.UIFrameRect(mmX, mmY, mmW, mmH, 250)
-	c.UIText(fnt, "MINIMAP", mmX+2, mmY-8, 250)
-	if b.sess == nil || b.sess.World == nil {
-		return
-	}
-	playW := b.sess.World.PlayRight
-	playH := b.sess.World.PlayBottom
-	if playW <= 0 || playH <= 0 {
-		playW = b.sess.World.CellW*16 - 32
-		playH = b.sess.World.CellH*16 - 128
-		if playW <= 0 {
-			playW = b.sess.World.CellW * 16
-		}
-		if playH <= 0 {
-			playH = b.sess.World.CellH * 16
-		}
-	}
-	m := camera.LayoutMinimap(playW, playH) // [07 §10] 126 letterbox
-	// Build radar picture from terrain tiles [03 §3.7] 2x supersampled; baked minimap not yet wired, generate.
-	var pal *palette.Tables
-	// c.Palette is not directly exposed; pal stays nil fallback to nearest without ALP [03 §3.7].
-	picture := render.BuildRadarPicture(b.sess.World, playW, playH, m, nil, 0, 0, pal)
-	if picture == nil || picture.Bits == nil || picture.W <= 0 || picture.H <= 0 {
-		// Fallback to dots only
-	} else {
-		// Fog: apply snapshot FogView Ch0==15 as black for unexplored [03 §3.3][03 §3.3][C-6].
-		mapped := picture
-		if b.sess.Snapshot != nil {
-			if _, cur, ok := b.sess.Snapshot.Read(); ok && cur != nil && cur.Fog.Valid && cur.Fog.W > 0 && cur.Fog.H > 0 && len(cur.Fog.Ch0) == int(cur.Fog.W*cur.Fog.H) {
-				w, h := picture.W, picture.H
-				bits := make([]byte, w*h)
-				copy(bits, picture.Bits)
-				fw, fh := int(cur.Fog.W), int(cur.Fog.H)
-				for y := 0; y < h; y++ {
-					vy := y * fh / h
-					if vy < 0 {
-						vy = 0
-					} else if vy >= fh {
-						vy = fh - 1
-					}
-					for x := 0; x < w; x++ {
-						vx := x * fw / w
-						if vx < 0 {
-							vx = 0
-						} else if vx >= fw {
-							vx = fw - 1
-						}
-						idxFog := vy*fw + vx
-						if idxFog >= 0 && idxFog < len(cur.Fog.Ch0) && cur.Fog.Ch0[idxFog] == 15 {
-							bits[y*w+x] = 0
-						}
-					}
-				}
-				mapped = &render.RadarSurface{W: w, H: h, Pitch: (w + 3) &^ 3, Bits: bits}
-			}
-		}
-		// Draw mapped picture scaled to HUD rect via nearest [03 §3.7][C-6].
-		for y := 0; y < mmH; y++ {
-			srcY := y * mapped.H / mmH
-			if srcY < 0 {
-				srcY = 0
-			} else if srcY >= mapped.H {
-				srcY = mapped.H - 1
-			}
-			for x := 0; x < mmW; x++ {
-				srcX := x * mapped.W / mmW
-				if srcX < 0 {
-					srcX = 0
-				} else if srcX >= mapped.W {
-					srcX = mapped.W - 1
-				}
-				idx := srcY*mapped.W + srcX
-				if idx < 0 || idx >= len(mapped.Bits) {
-					continue
-				}
-				pix := mapped.Bits[idx]
-				c.UIFillRect(int(mmX+x), int(mmY+y), 1, 1, pix)
-			}
-		}
-		// Viewport rect lens 1-pixel [07 §10][03 §3.9] clipped to HUD.
-		if b.cam != nil {
-			eW, eH := b.cam.EffectiveView()
-			if eW <= 0 {
-				eW = b.cam.ViewW
-			}
-			if eH <= 0 {
-				eH = b.cam.ViewH
-			}
-			if eW < 1 {
-				eW = 1
-			}
-			if eH < 1 {
-				eH = 1
-			}
-			rx0, ry0 := m.WorldToRadar(b.cam.X, b.cam.Z, playW, playH)
-			rx1, ry1 := m.WorldToRadar(b.cam.X+eW-1, b.cam.Z+eH-1, playW, playH)
-			if rx0 > rx1 {
-				rx0, rx1 = rx1, rx0
-			}
-			if ry0 > ry1 {
-				ry0, ry1 = ry1, ry0
-			}
-			if rx0 < 0 {
-				rx0 = 0
-			}
-			if ry0 < 0 {
-				ry0 = 0
-			}
-			if rx1 >= int32(m.W) {
-				rx1 = int32(m.W - 1)
-			}
-			if ry1 >= int32(m.H) {
-				ry1 = int32(m.H - 1)
-			}
-			hx0 := mmX + int(rx0)*mmW/int(m.W)
-			hy0 := mmY + int(ry0)*mmH/int(m.H)
-			hx1 := mmX + int(rx1)*mmW/int(m.W)
-			hy1 := mmY + int(ry1)*mmH/int(m.H)
-			if hx0 < mmX {
-				hx0 = mmX
-			}
-			if hy0 < mmY {
-				hy0 = mmY
-			}
-			if hx1 >= mmX+mmW {
-				hx1 = mmX + mmW - 1
-			}
-			if hy1 >= mmY+mmH {
-				hy1 = mmY + mmH - 1
-			}
-			col := byte(250)
-			for x := hx0; x <= hx1; x++ {
-				c.UIFillRect(x, hy0, 1, 1, col)
-				c.UIFillRect(x, hy1, 1, 1, col)
-			}
-			for y := hy0; y <= hy1; y++ {
-				c.UIFillRect(hx0, y, 1, 1, col)
-				c.UIFillRect(hx1, y, 1, 1, col)
-			}
-		}
-	}
-	// Contacts via RadarProjection [03 §3.9][07 §10] using same minimap math [C-6].
-	if b.sess.Units != nil && playW > 0 && playH > 0 {
-		m2 := camera.LayoutMinimap(playW, playH)
-		for _, u := range b.sess.Units.Iter() {
-			if u == nil || !u.Alive {
-				continue
-			}
-			viewer := visibility.PlayerID(b.sess.LocalOwner)
-			if b.sess.Vis != nil {
-				t := visibility.Target{Owner: visibility.PlayerID(u.Owner), X: u.X, Y: u.Y, Z: u.Z, Status: u.Flags}
-				if !b.sess.Vis.IsVisible(viewer, t) && u.Owner != b.sess.LocalOwner {
-					continue
-				}
-			}
-			wx := int32(u.X >> 16)
-			wz := int32(u.Z >> 16)
-			wy := int32(u.Y >> 16)
-			rx, ry := m2.WorldToRadarWithY(wx, wy, wz, playW, playH)
-			px := mmX + int(rx)*mmW/int(m2.W)
-			py := mmY + int(ry)*mmH/int(m2.H)
-			if px < mmX || px >= mmX+mmW || py < mmY || py >= mmY+mmH {
-				continue
-			}
-			col := byte(100)
-			if u.Owner == b.sess.LocalOwner {
-				col = 250
-			} else if b.sess.Vis != nil && b.sess.Vis.IsVisible(viewer, visibility.Target{Owner: visibility.PlayerID(u.Owner), X: u.X, Y: u.Y, Z: u.Z}) {
-				col = 180
-			} else {
-				col = 80
-			}
-			if u.Flags&client.SelectionFlag != 0 {
-				col = 255
-			}
-			c.UIFillRect(px, py, 2, 2, col)
-		}
-	}
-}
-
-// cursorWorld is the one cursor-to-ground conversion the battle screen uses
-// [07 §8]. The camera's inverse alone assumes height zero, but every world
-// object is drawn with the half-height shear, so on raised ground that inverse
-// lands north of the pixel the player clicked — an order given at the foot of a
-// hill puts the unit partway up it. Terrain.CursorToWorld runs retail's search
-// along Z to find the ground whose sheared projection is the clicked row, and
-// returns the height there as Y.
-// It clamps the pointer into the battle viewport before ground resolution per
-// [07 §8] step 1. The framebuffer world pass is rebased from the beam origin,
-// so the inverse adds that origin back before resolving terrain [03 §2.5].
 func (b *battleSession) cursorWorld(sx, sy int32) (wx, wy, wz numeric.Fixed) {
 	if b.cam == nil {
 		return 0, 0, 0
@@ -1707,196 +1213,6 @@ func footprintCellsForCatalog(cat *content.Catalog, def *content.UnitDef) (footX
 	return world.FootprintForUnit(cat, def)
 }
 
-// drawOverlay renders the build panel and placement ghost after units.
-// It exposes retail GUI assets: anchors, build pages, command buttons, panel slide offset,
-// resource bars, minimap contacts, messages, queue counts [07 §6][02 §6][P0-I14].
-// Full ten-layer composer and SHD fog remain TODO(P1) [PLAN_13].
-func (b *battleSession) drawOverlay(c *client.Client, fnt *formats.FNT) {
-	const W = 640
-	// Panel slide offset [07 §6] C13: moving strip blitted at y+offset when nonzero [P0-I14].
-	stripY := 0
-	if b.panel != nil && b.panel.ShouldBlitStrip() {
-		stripY = int(b.panel.Offset)
-	}
-	_ = stripY // TODO(P1): apply to strip blit when strip art wired; for now background tracks panel.
-
-	if len(b.panelButtons) > 0 {
-		// Background for panel area: two rows (build + controls) [07 §6]. Offset follows panel slide for fidelity [P0-I14].
-		baseY := 480 - panelButtonH - 32 + stripY
-		if baseY < 0 {
-			baseY = 0
-		}
-		if baseY > 480-panelButtonH*2-8 {
-			baseY = 480 - panelButtonH*2 - 8
-		}
-		c.UIFillRect(0, baseY, W, panelButtonH*2+8, 0)
-		for _, btn := range b.panelButtons {
-			x, y := int(btn.X), int(btn.Y+int32(stripY))
-			// Clamp y into visible after slide.
-			if y < 0 {
-				y = 0
-			}
-			// Different shade for control kinds for visual distinction [P0-I14].
-			bg := byte(12)
-			if btn.Kind == "cancel" {
-				bg = 8
-			} else if btn.Kind == "onoff" {
-				bg = 10
-			} else if btn.Kind == "stockpile" {
-				bg = 14
-			}
-			c.UIFillRect(x, y, panelButtonW, panelButtonH, bg)
-			c.UIFrameRect(x, y, panelButtonW, panelButtonH, 250)
-			label := btn.Name
-			if frame, ok := b.currentSnapshot(); ok {
-				if count := hud.QueueCountLabel(frame.OrderQueues, btn.Name); count != "" {
-					label += " " + count
-				}
-			}
-			c.UIText(fnt, label, x+4, y+6, 250)
-		}
-		// Latch indicator and page hint [07 §9][P0-I14].
-		latchText := "Latch: " + b.latch.String()
-		c.UIText(fnt, latchText, 500, baseY+4, 250)
-		if b.requireCommandDispatch {
-			if frame, ok := b.currentSnapshot(); ok && frame.CommandPage.Builder != 0 && frame.CommandPage.PageCount > 1 {
-				cur := hud.ClampPage(int(frame.CommandPage.Page), int(frame.CommandPage.PageCount))
-				pg := fmt.Sprintf("Page %d/%d (1..9)", cur+1, frame.CommandPage.PageCount)
-				c.UIText(fnt, pg, 500, baseY+20, 250)
-			}
-		} else if u := b.selectedBuilder(); u != nil && b.cat != nil {
-			if page, ok := b.cat.BuildMenus[u.Def.CanonicalKey]; ok && page != nil {
-				const bpp = hud.RetailBuildButtonsPerPage
-				cnt := (len(page.Buttons) + bpp - 1) / bpp
-				if cnt > 1 {
-					cur := 0
-					if hud.IsPaged(u.Flags) {
-						cur = hud.DecodePage(u.Flags)
-					}
-					cur = hud.ClampPage(cur, cnt)
-					pg := fmt.Sprintf("Page %d/%d (1..9)", cur+1, cnt)
-					c.UIText(fnt, pg, 500, baseY+20, 250)
-				}
-			}
-		}
-	}
-	b.drawBuildGhost(c)
-	// Resource bars via anchors [02 §6][07 §6][P0-I14]: ENERGYBAR/METALBAR filled left-to-right [01 §8].
-	// TODO(P1): full HUD uses all 30 anchors with SHD lookup, fog composer and ten-layer draw [07 §6][GAP T22].
-	if b.anchorsOK && b.sess != nil && b.sess.Econ != nil {
-		// Local player stocks are float32 metal/energy [05 "Player slot"] I2 allowlist.
-		p := b.sess.Econ.Players[b.sess.LocalOwner]
-		// Fractions against max storage; when storage zero show empty [02 §6].
-		maxMetal := p.Capacity[economy.Metal]
-		if maxMetal <= 0 {
-			maxMetal = 1000
-		}
-		maxEnergy := p.Capacity[economy.Energy]
-		if maxEnergy <= 0 {
-			maxEnergy = 1000
-		}
-		mFrac := hud.ResourceFraction(p.Stock[economy.Metal], maxMetal)
-		eFrac := hud.ResourceFraction(p.Stock[economy.Energy], maxEnergy)
-		metalAnchor, _ := b.anchors.ByName("METALBAR")
-		energyAnchor, _ := b.anchors.ByName("ENERGYBAR")
-		mf := hud.MetalBarFill(metalAnchor, mFrac)
-		ef := hud.EnergyBarFill(energyAnchor, eFrac)
-		// Draw filled portions as thin rects in HUD area; if anchors are degenerate fallback to top bar.
-		if !mf.IsEmpty() {
-			l, t, r, btm := mf.Ordered()
-			c.UIFillRect(int(l), int(t), int(r-l), int(btm-t), 210) // metal tint placeholder
-			c.UIFrameRect(int(l), int(t), int(r-l), int(btm-t), 250)
-		} else if !metalAnchor.IsEmpty() {
-			l, t, r, btm := metalAnchor.Ordered()
-			c.UIFrameRect(int(l), int(t), int(r-l), int(btm-t), 120)
-		}
-		if !ef.IsEmpty() {
-			l, t, r, btm := ef.Ordered()
-			c.UIFillRect(int(l), int(t), int(r-l), int(btm-t), 220) // energy tint
-			c.UIFrameRect(int(l), int(t), int(r-l), int(btm-t), 250)
-		} else if !energyAnchor.IsEmpty() {
-			l, t, r, btm := energyAnchor.Ordered()
-			c.UIFrameRect(int(l), int(t), int(r-l), int(btm-t), 120)
-		}
-		// Numeric labels at anchor positions when available.
-		if r, ok := b.anchors.ByName("METALNUM"); ok && !r.IsEmpty() {
-			l, t, _, _ := r.Ordered()
-			c.UIText(fnt, fmt.Sprintf("M:%d/%d", int(p.Stock[economy.Metal]), int(maxMetal)), int(l), int(t), 250)
-		}
-		if r, ok := b.anchors.ByName("ENERGYNUM"); ok && !r.IsEmpty() {
-			l, t, _, _ := r.Ordered()
-			c.UIText(fnt, fmt.Sprintf("E:%d/%d", int(p.Stock[economy.Energy]), int(maxEnergy)), int(l), int(t), 250)
-		}
-	} else if b.sess != nil && b.sess.Econ != nil {
-		// Fallback top bar when anchors not yet loaded [P0-I14].
-		p := b.sess.Econ.Players[b.sess.LocalOwner]
-		c.UIText(fnt, fmt.Sprintf("M:%d E:%d", int(p.Stock[economy.Metal]), int(p.Stock[economy.Energy])), 4, 14, 250)
-	}
-	// Minimap: terrain-minimap + fog + contacts using camera.Minimap math [07 §10] C4 [C-6]; click-to-jump wired in handleInput [C-6].
-	// TODO(P1): panel anchors for minimap HUD rect; this uses a fixed 90x90 stub region [C-6] with 126 letterbox scaling [07 §10].
-	b.drawMinimap(c, fnt)
-	// Queue counts for selected factory/builder [04 §3.2][P0-I14].
-	if sel := b.selectedUnits(); len(sel) > 0 {
-		for i, u := range sel {
-			if i >= 3 {
-				break // show first 3 to avoid clutter
-			}
-			q := orders.QueueForUnit(u)
-			if q == nil {
-				continue
-			}
-			n := q.LenPrimary()
-			// Stockpile UI: ammo vs queued per [06 §11.1] C29 – Ammo byte vs
-			// reload vs stockpile count distinction [06 §11.1] (Retail §11).
-			ammo, queued := orders.StockpileCounts(u)
-			hasStockpile := false
-			for sIdx := 0; sIdx < units.NumSlots; sIdx++ {
-				if s := u.SlotAt(sIdx); s != nil && s.Weapon != nil && s.Weapon.Stockpile {
-					hasStockpile = true
-					break
-				}
-			}
-			if hasStockpile {
-				// Show per-slot ammo/queued even when primary queue empty.
-				for sIdx := 0; sIdx < units.NumSlots; sIdx++ {
-					if s := u.SlotAt(sIdx); s != nil && s.Weapon != nil && s.Weapon.Stockpile {
-						c.UIText(fnt, fmt.Sprintf("%s stockpile slot%d: %d ready +%d queued", u.Def.UnitName, sIdx, ammo[sIdx], queued[sIdx]), 4, 26+12*i+12*sIdx, 250)
-					}
-				}
-				continue
-			}
-			if n == 0 {
-				continue
-			}
-			name := u.Def.UnitName
-			if len(name) > 10 {
-				name = name[:10]
-			}
-			label := fmt.Sprintf("%s Q:%d", name, n)
-			if tail := q.Primary(); len(tail) > 0 && tail[len(tail)-1] != nil && tail[len(tail)-1].BuildDefKey != "" {
-				label += " -> " + tail[len(tail)-1].BuildDefKey
-			}
-			c.UIText(fnt, label, 4, 26+12*i, 250)
-		}
-	}
-	// Messages / queue counts area [P0-I14]: show last build error or latch help.
-	if b.buildDef != "" {
-		// already shown placement label above
-	} else {
-		c.UIText(fnt, "M:move A:attack D:blast P:patrol R:repair E:reclaim C:capture G:guard B:build X:cancel O:on/off N:stockpile Space:panel Shift=queue 1..9:page", 4, 2, 250)
-		if b.guiOK {
-			c.UIText(fnt, "GUI: BATTLE.GUI loaded ✓", 4, 60, 200)
-		}
-	}
-	// Transient game-speed and pause messages [07 §11][07 §2] presentation-only (I6)
-	if b.statusVisible() && fnt != nil {
-		w := client.MeasureText(fnt, b.statusMessage)
-		x := (640 - w) / 2
-		c.UIText(fnt, b.statusMessage, x, 30, 15)
-	}
-	// TODO(P1): messages queue, chat, cloak/jammer indicators, SHD fog strip, ten-layer composer, audio cues [07 §6][GAP T22][03 §3.3].
-}
-
 // loadPalette loads the retail palette tables, nil on failure.
 func loadPalette(cs *contentSet) *palette.Tables {
 	if p, err := palette.Load(cs.fs); err == nil {
@@ -1980,7 +1296,8 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 				}
 			}
 		} else if b.sess.Features != nil {
-			// Fallback via live instance map for sparse features not in FeatureDefs (synthetic terrain).
+			// Consult the feature service for instances not represented in the
+			// terrain's compact feature table.
 			if inst := b.sess.Features.InstanceAt(int(cx), int(cz)); inst != nil && inst.Def != nil {
 				visible := true
 				if b.sess.Vis != nil {
@@ -2103,16 +1420,14 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 
 // overWorld reports whether a pointer position lies in the world viewport
 // rather than on the HUD chrome; chrome forces the idle cursor shape [07 §8].
-// It uses the same band the click path treats as panel, so the shape and the
-// click destination cannot disagree. Unified on drawn-chrome layout [C-3][07 §6][07 §8].
+// It uses the same drawn-chrome layout as the click path, so the shape and
+// click destination cannot disagree [C-3][07 §6][07 §8].
 func (b *battleSession) overWorld(x, y int32) bool {
 	if b.hud != nil {
 		return b.hud.overWorld(x, y)
 	}
-	if len(b.panelButtons) > 0 && y >= 480-panelButtonH-32 {
-		return false
-	}
-	// Fallback uses drawn-chrome viewport [C-3][07 §8] via ViewportTransform's viewport rect.
+	// When no authored HUD layout is available, use the viewport transform's
+	// drawn-chrome rectangle [C-3][07 §8].
 	vt := client.NewViewportTransform(b.cam, nil, 640, 480)
 	return vt.Viewport.Contains(x, y)
 }
@@ -2287,7 +1602,7 @@ func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 			b.resultButtons = nil
 			return
 		}
-		// Fallback: direct session retry via clean recreation
+		// Recreate the session directly when no retry callback is installed.
 		b.doRetry(cl)
 	case "result_skirmish":
 		if b.returnToSkirmish != nil {
@@ -2310,7 +1625,7 @@ func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 			b.continueFunc(cl)
 		} else if b.shell != nil && b.sess != nil {
 			// Campaign Continue: on victory load next MISSION slot+1 [07 §11][08 "Progression"]; on defeat stay at menu [P1-01 §7.5].
-			// This is the fallback when no continueFunc was installed (e.g. synthetic battleSession); production path uses gameShell.continueFunc.
+			// Continue the campaign directly when no continue callback is installed.
 			if b.sess.Mission != nil && b.sess.Mission.Type == mission.TypeCampaign {
 				isWin := false
 				if b.sess.CampaignSlot >= 0 && b.sess.CampaignSlot < len(b.sess.Progress.WL) && b.sess.Progress.WL[b.sess.CampaignSlot] == 'W' {
@@ -2441,7 +1756,8 @@ func (b *battleSession) statusVisible() bool {
 	return b.sess.Clock.GlobalTick <= b.statusUntil
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// adjustGameSpeed clamps Clock.Requested to 1..20 and emits the retail status
+// message [07 §11][07 §2].
 func (b *battleSession) adjustGameSpeed(delta int) {
 	if b == nil || b.sess == nil || b.sess.Clock == nil {
 		return
@@ -2458,14 +1774,14 @@ func (b *battleSession) adjustGameSpeed(delta int) {
 		return
 	}
 	b.sess.Clock.Requested = newReq
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Retail updates Active immediately as well as Requested [07 §11].
 	b.sess.Clock.Active = newReq
 	var msg string
 	if newReq == 10 {
-		msg = "Game Speed Normal" // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		msg = "Game Speed Normal" // [07 §2]
 	} else {
 		d := int(newReq - 10)
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Retail formats the localized speed label with two spaces and a signed delta [07 §2].
 		msg = fmt.Sprintf("Game Speed  %+d", d)
 	}
 	b.setStatusMessage(msg)

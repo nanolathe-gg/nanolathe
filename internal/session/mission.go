@@ -11,7 +11,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
-	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
@@ -32,8 +31,7 @@ func NewMission(path string, difficulty int) (*Session, error) {
 }
 
 // NewMissionWithFS is the strict production constructor. It never fabricates
-// nil terrain, empty catalog, or missing service. Fixtures must use
-// NewMissionForTest. [02 §5][03 §2.2][P0-16]
+// nil terrain, empty catalog, or missing service. [02 §5][03 §2.2][P0-16]
 func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int) (*Session, error) {
 	return NewMissionWithProgress(fs, cat, path, difficulty, nil)
 }
@@ -218,104 +216,6 @@ func loadCampaignAIProfile(fs vfs.FSOps, name string) (*ai.Profile, error) {
 	return prof, nil
 }
 
-// NewMissionForTest is the fixture constructor retaining lenient fallback.
-func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int) (*Session, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return nil, fmt.Errorf("session: empty mission path")
-	}
-	if fs == nil {
-		fs = vfs.New()
-	}
-	// Lenient catalog: if compile fails keep what we have
-	if cat == nil {
-		if compiled, err := content.Compile(fs); err == nil {
-			cat = compiled
-		}
-	}
-	var m *mission.Mission
-	var err error
-	if strings.Contains(path, ":") {
-		parts := strings.SplitN(path, ":", 2)
-		campaignPath := strings.TrimSpace(parts[0])
-		missionPart := strings.TrimSpace(parts[1])
-		var idx int
-		if strings.HasPrefix(strings.ToLower(missionPart), "mission") {
-			num := strings.TrimSpace(missionPart[len("mission"):])
-			fmt.Sscanf(num, "%d", &idx)
-		} else {
-			fmt.Sscanf(missionPart, "%d", &idx)
-		}
-		m, err = mission.LoadCampaignWithSink(fs, campaignPath, idx, difficulty, 0, nil)
-	} else {
-		m, err = mission.LoadWithType(fs, mission.TypeCampaign, path, difficulty, 0, nil)
-		if err != nil {
-			m2, err2 := mission.Load(fs, cat, path)
-			if err2 != nil {
-				return nil, err
-			}
-			m = m2
-			err = nil
-		}
-	}
-	if err != nil {
-		return nil, err
-	}
-	s := &Session{
-		Catalog: cat,
-		Mission: m,
-		Latch:   NewEndLatch(),
-	}
-	if err := s.SelectForGametype(GametypeCampaign); err != nil {
-		return nil, err
-	}
-	var crt *rng.CRT
-	if rng.Global.Crt != nil {
-		crt = rng.Global.Crt
-	} else {
-		tmp := rng.NewCRT(0)
-		crt = &tmp
-	}
-	s.InitWindForSession(crt, 0)
-	s.InitAudio(fs)
-	if s.Econ == nil {
-		s.Econ = &economy.Service{}
-	}
-	for i := 0; i < 2 && i < len(s.Econ.Players); i++ {
-		p := &s.Econ.Players[i]
-		p.Exists = true
-		p.ControllerState = 1
-		p.IsObserver = false
-		p.StatusHalfwordAt144 = 1
-		p.StatusWordAt140 = 0
-		p.GameEnded = false
-		p.EndGameCountdown = -1
-	}
-	s.Econ.SeedDeadlines(0) // WinLoseTime deadline for trigger poll [08 "Evaluation"] seeded per [05] C5
-	if err := fixtureBattleEntry(s, m, nil); err != nil {
-		return nil, err
-	}
-	if s.Units != nil && fs != nil {
-		s.Units.SetCOBSource(fs, globalCobLoader)
-		if err := ensureCOBForAll(s, fs); err != nil {
-			return nil, err
-		}
-	}
-	if s.World != nil && s.Movement == nil {
-		grid := movement.NewOccupancyGrid()
-		fallback := movement.Profile{FootPrintX: 1, FootPrintZ: 1}
-		s.Movement = movement.NewSystem(s.World, fallback, grid)
-		if cat != nil {
-			s.Movement.SetClasses(cat.Movement)
-		}
-		for _, u := range s.Units.Iter() {
-			s.Movement.EnsureUnit(u)
-		}
-	}
-	s.RegisterAll()
-	return s, nil
-}
-
 // RouteForGametype selects the initial state for a save based on gametype via
 // the existing state-machine helpers per [08 "Session states"] C3. Gametype 1
 // (campaign) selects StateLocalPreload (4) which then takes the same StateLoading
@@ -462,10 +362,11 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 	for idx, up := range m.Units {
 		def, ok := s.Catalog.Unit(up.UnitName)
 		if !ok || def == nil {
-			continue // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			continue // Missing unit definition leaves this placement slot empty.
 		}
 		// Retail mapping: 0→1 then idx=byte-1, so 0 and 1 both map to 0 (human), 2→1, etc. [P0-04] I13.
-		// This is the production path; fixtures that need distinct 0/1 should use NewMissionForTest with adjusted Player values.
+		// Production mapping collapses placement player values 0 and 1 to human
+		// owner 0, then maps subsequent values to their corresponding owner. [P0-04][I13]
 		p := up.Player
 		if p == 0 {
 			p = 1
@@ -520,88 +421,6 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 			}
 		}
 	}
-	return nil
-}
-
-func reconstructUnitsFixture(s *Session, m *mission.Mission) error {
-	if s.Units == nil {
-		s.Units = units.New(600, s.Catalog)
-	}
-	// Fixture mapping retains distinct 0/1 for test compatibility. Production uses retail 0→1 collapse [P0-04].
-	for idx, up := range m.Units {
-		def, ok := s.Catalog.Unit(up.UnitName)
-		if !ok || def == nil {
-			continue
-		}
-		owner := uint8(up.Player)
-		if owner > 9 {
-			owner = 9
-		}
-		h, err := s.Units.Create(def, owner, numeric.Fixed(int64(up.X)), numeric.Fixed(int64(up.Y)), numeric.Fixed(int64(up.Z)))
-		if err != nil {
-			continue
-		}
-		u := s.Units.Unit(h)
-		if u != nil {
-			u.PlacementIdx = idx
-			u.PlacementIdent = up.Ident
-			u.PlacementUnitName = up.UnitName
-			if up.HealthPercentage != 0 && up.HealthPercentage != 100 {
-				u.Health = int32(int64(u.MaxHealth) * int64(up.HealthPercentage) / 100)
-			}
-			if up.IsImmune() {
-				u.Flags |= 1 << 15
-			}
-			if def.ExtractsMetal != 0 && s.World != nil {
-				cx := world.WorldToCell(numeric.Fixed(int64(up.X)))
-				cz := world.WorldToCell(numeric.Fixed(int64(up.Z)))
-				footX := int(def.FootprintX)
-				footZ := int(def.FootprintZ)
-				if footX <= 0 {
-					footX = 1
-				}
-				if footZ <= 0 {
-					footZ = 1
-				}
-				cx -= int32(footX / 2)
-				cz -= int32(footZ / 2)
-				if v, err := s.World.SampleMetal(cx, cz, footX, footZ, float32(def.ExtractsMetal)); err == nil {
-					u.SpotMetal = v
-				}
-			}
-			publishOne(s, u)
-			if s.Movement != nil && s.Movement.Routes != nil {
-				s.Movement.EnsureUnit(u)
-			}
-		}
-	}
-	return nil
-}
-
-func fixtureBattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
-	if s == nil {
-		return fmt.Errorf("session: nil session")
-	}
-	if m == nil {
-		return fmt.Errorf("session: nil mission")
-	}
-	spy.record("features")
-	if err := placeFeatures(s, m); err != nil {
-		return err
-	}
-	spy.record("units")
-	if err := reconstructUnitsFixture(s, m); err != nil {
-		return err
-	}
-	initCOBForSession(s)
-	mission.RunInitialMissionsWithCatalog(m, s.Units, s.Catalog)
-	wireMissionCargo(s, m)
-	spy.record("barrier")
-	if err := crossBarrier(s); err != nil {
-		return err
-	}
-	spy.record("resources")
-	grantResourcesDirect(s, m)
 	return nil
 }
 

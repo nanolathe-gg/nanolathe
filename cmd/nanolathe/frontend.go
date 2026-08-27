@@ -151,7 +151,6 @@ func bindBattleSessionCommandDispatch(b *battleSession) {
 	if b == nil {
 		return
 	}
-	b.requireCommandDispatch = true
 	b.commandDispatchFn = func(cmd battleCommand) error {
 		if b.sess == nil {
 			return fmt.Errorf("battle: production command dispatch has no session")
@@ -165,9 +164,7 @@ func bindBattleSessionCommandDispatch(b *battleSession) {
 }
 
 // newGameShell builds the frontend state: the skirmish map list, the retail
-// resource set, and the opening panel. The windowed entry and the headless
-// menu screenshot path share it so a captured frame is the same composition
-// the window shows.
+// resource set, and the opening panel used by the windowed entry.
 func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	shell := &gameShell{opts: opts, cs: cs, mode: modeMenuMain}
 	maps, err := enumerateSkirmishMaps(cs.fs)

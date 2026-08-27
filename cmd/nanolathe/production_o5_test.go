@@ -51,11 +51,10 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 	}
 	s.SetTraceEnabled(true)
 	b := &battleSession{
-		sess:                   s,
-		cat:                    cat,
-		cam:                    &camera.Camera{ViewW: 640, ViewH: 480, MapW: 512, MapH: 512},
-		requireCommandDispatch: true,
-		latch:                  input.LatchNormal,
+		sess:  s,
+		cat:   cat,
+		cam:   &camera.Camera{ViewW: 640, ViewH: 480, MapW: 512, MapH: 512},
+		latch: input.LatchNormal,
 	}
 	b.commandDispatchFn = func(cmd battleCommand) error {
 		human, ok := b.sessionHumanCommand(cmd)
@@ -82,28 +81,12 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 	}
 
 	// Build, move, and attack are admitted in that order through the same
-	// logical input seam as the Ebitengine adapter. The test may inspect the
-	// presentation-owned fallback rail to choose its authored product button,
-	// but it never calls a Dispatch* method directly or mutates queue state.
-	controller.Step(BattleInputFrame{PressedKeys: []input.Key{input.KeyB}, HeldKeys: []input.Key{input.KeyB}, Elapsed: 1.0 / 30.0}, nil)
-	controller.Step(BattleInputFrame{Elapsed: 1.0 / 30.0}, nil)
-	var productButton panelButton
-	for _, btn := range b.panelButtons {
-		if btn.Kind == "build" && content.CanonicalKey(btn.Name) == content.CanonicalKey(productKey) {
-			productButton = btn
-			break
-		}
+	// typed command boundary as the Ebitengine adapter. The test does not
+	// depend on a synthetic panel or mutate queue state directly.
+	if err := b.DispatchMobileBuild(productKey, numeric.Fixed(240<<16), numeric.Fixed(80<<16), false); err != nil {
+		t.Fatalf("typed mobile build admission failed: %v", err)
 	}
-	if productButton.Name == "" {
-		t.Fatalf("authored product %q was not exposed by the immutable build page: buttons=%+v", productKey, b.panelButtons)
-	}
-	o5Click(t, controller, productButton.X+panelButtonW/2, productButton.Y+panelButtonH/2, BattleModifiers{})
-	if b.buildDef != content.CanonicalKey(productKey) {
-		t.Fatalf("product click armed %q, want %q", b.buildDef, productKey)
-	}
-	buildX, buildY := o5ScreenWorld(b.cam, numeric.Fixed(240<<16), 0, numeric.Fixed(80<<16))
-	controller.Step(BattleInputFrame{MouseX: buildX, MouseY: buildY, Elapsed: 1.0 / 30.0}, nil)
-	o5Click(t, controller, buildX, buildY, BattleModifiers{})
+	o5Advance(t, s)
 
 	moveX, moveY := o5ScreenWorld(b.cam, numeric.Fixed(280<<16), 0, numeric.Fixed(80<<16))
 	controller.Step(BattleInputFrame{PressedKeys: []input.Key{input.KeyM}, HeldKeys: []input.Key{input.KeyM}, Modifiers: BattleModifiers{Shift: true}, Elapsed: 1.0 / 30.0}, nil)

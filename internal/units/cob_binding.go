@@ -38,7 +38,7 @@ func appendUniqueEntry(entries []string, names ...string) []string {
 // BindCOB strictly binds a compiled unit script to its loaded model and
 // initializes its VM. The returned VM has completed the one mode-I Create
 // start before this function returns [04 §4.1][04 §5.1]. A nil model or any
-// missing/malformed asset is an error; use SyntheticCOBForTests for fixtures.
+// missing/malformed asset is an error.
 func BindCOB(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model) (*cob.Binding, error) {
 	return BindCOBWithPorts(fs, def, mdl, nil, nil)
 }
@@ -153,7 +153,7 @@ func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 		PresentationSink: sink,
 	}
 	if u != nil {
-		// Keep the production and fixture binding paths identical. The helper
+		// Keep the generic and instance-aware binding paths identical. The helper
 		// installs all six researched engine-write arms before Create.
 		req.PortFuncs = unitPortHandlers(nil, u)
 	}
@@ -187,8 +187,7 @@ func BindCOBWithRequirements(fs vfs.FSOps, unitName string, mdl *model.Model, en
 
 // AttachCOBBinding attaches only a fully initialized strict production
 // binding. Create must already have run exactly once in mode I before the unit
-// receives a playable script [04 §4.1][04 §5.1]. Synthetic fixtures should use
-// SetScript or SyntheticCOBForTests explicitly.
+// receives a playable script [04 §4.1][04 §5.1].
 func (u *Unit) AttachCOBBinding(binding *cob.Binding) error {
 	if u == nil {
 		return fmt.Errorf("nanolathe: COB attachment: nil unit")
@@ -208,14 +207,10 @@ func (u *Unit) AttachCOBBinding(binding *cob.Binding) error {
 }
 
 // COBBinding returns the strict production binding attached to the unit, or
-// nil for synthetic/legacy script state.
+// nil when no strict binding is attached.
 func (u *Unit) COBBinding() *cob.Binding {
 	if u == nil || u.ScriptState == nil {
 		return nil
 	}
 	return u.ScriptState.Binding
 }
-
-// SyntheticCOBForTests is an explicit empty-script constructor for fixtures
-// and tools. It must not be used by production composition.
-func SyntheticCOBForTests() *cob.VM { return cob.NewSyntheticEmptyVM() }

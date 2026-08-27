@@ -33,7 +33,8 @@ func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession) 
 		c.UIText(h.console, hdr, tx, by+6, 7)
 	}
 
-	// Title frame from igtitles: igvictory / igdefeat / draw fallback [07 §11] gated by mode-word bits 5/6 and pause bit
+	// Title frame from igtitles: igvictory or igdefeat [07 §11], gated by
+	// mode-word bits 5/6 and pause bit. Draw has no established title handle.
 	title := "VICTORY"
 	if view.Draw {
 		title = "DRAW"
@@ -54,38 +55,16 @@ func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession) 
 		x := (640 - int(titleFrame.Width)) / 2
 		y := by + 18
 		c.UIBlit(titleFrame, x, y)
-		// Keep text fallback for accessibility even when art is present? Retail shows only GAF; we keep text small beneath
-		if h.console != nil {
-			tx := bx + (bw-client.MeasureText(h.console, title))/2
-			c.UIText(h.console, title, tx, y+int(titleFrame.Height)+4, 15)
-		}
-	} else if h.console != nil {
-		tx := bx + (bw-client.MeasureText(h.console, title))/2
-		c.UIText(h.console, title, tx, by+22, 15)
 	}
 
 	yBase := by + 50
 	if titleFrame != nil {
 		yBase = by + 18 + int(titleFrame.Height) + 18
 	}
-	if h.console != nil {
-		reason := view.Reason
-		if reason == "" {
-			reason = "commander_death"
-		}
-		c.UIText(h.console, reason, bx+10, yBase, 7)
-		c.UIText(h.console, fmt.Sprintf("Tick %d Armed %d Countdown %d", view.Tick, view.ArmedTick, view.Countdown), bx+10, yBase+12, 7)
-		wStr := fmt.Sprintf("Winners: %v", view.Winners)
-		if view.Draw {
-			wStr = "Winners: none (draw)"
-		}
-		c.UIText(h.console, wStr, bx+10, yBase+24, 7)
-		c.UIText(h.console, fmt.Sprintf("Losers: %v", view.Losers), bx+10, yBase+36, 7)
-	}
 
 	// End-mission statistics screen per [07 §11]/P1-01: 58-byte-style stat rows up to ten players.
 	// Populate rows ONLY from data sim already publishes; anything retail-establishes-but-we-don't-track is TODO(question) placeholder [07 §11].
-	h.drawResultStatistics(c, b, view, bx, yBase+52, bw, bh-(yBase+52-by))
+	h.drawResultStatistics(c, b, view, bx, yBase, bw, bh-(yBase-by))
 
 	// Footer "Click to continue." after delay gate [07 §11]; we show immediately (delay not established)
 	if h.console != nil {

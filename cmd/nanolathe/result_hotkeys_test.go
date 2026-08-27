@@ -175,7 +175,7 @@ func TestESCMenuTokenPath(t *testing.T) {
 
 func TestResultOverlayUsesIGTitlesFrames(t *testing.T) {
 	// Verify that result overlay prefers igvictory/igdefeat frames when available [07 §11]
-	// This is asset-gated: if igtitles.gaf not present, frames remain nil and fallback text is used
+	// This is asset-gated: if igtitles.gaf is not present, no title substitute is drawn.
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
@@ -185,7 +185,8 @@ func TestResultOverlayUsesIGTitlesFrames(t *testing.T) {
 	hud := &retailBattleHUD{console: nil, victoryFrame: nil, defeatFrame: nil, pausedFrame: nil}
 	// Should not panic when frames nil
 	cl, _ := client.New(client.Options{Headless: true, Buffer: b.sess.Snapshot, Width: 640, Height: 480})
-	// Simulate result visible with nil frames -> should use text fallback
+	// Simulate result visible with nil frames; the overlay must remain safe and
+	// must not substitute text for the missing authored title.
 	b.sess.Snapshot.SetResultView(snapshot.ResultView{Ended: true, Kind: "victory", WinnerTeam: 0})
 	if !b.isResultVisible() {
 		t.Fatalf("result should be visible")

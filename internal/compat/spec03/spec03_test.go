@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -56,15 +57,15 @@ func TestLiveCompositorScheduleDigests(t *testing.T) {
 	}
 }
 
-// TestPresentationLeavesSessionHashStateUnchanged compares a published
+// TestPresentationLeavesSessionStateUnchanged compares a published
 // headless presentation run with an otherwise identical non-presented run.
-// The session has non-empty economy state so the published HashState gate
-// proves an authoritative field, not an empty-state coincidence [01 §4.4][I6].
-func TestPresentationLeavesSessionHashStateUnchanged(t *testing.T) {
+// The fixture fingerprint covers exactly the economy fields this test creates,
+// including their float32 payload bits [01 §4.4][I6].
+func TestPresentationLeavesSessionStateUnchanged(t *testing.T) {
 	on := runSessionHashStatePresentation(t, true)
 	off := runSessionHashStatePresentation(t, false)
 	if on.before == "" || off.before == "" {
-		t.Fatal("session HashState unexpectedly empty for non-empty economy state")
+		t.Fatal("session fixture fingerprint unexpectedly empty for non-empty economy state")
 	}
 	if on.before != on.after || off.before != off.after {
 		t.Fatalf("presentation changed session HashState: on %s -> %s, off %s -> %s", on.before, on.after, off.before, off.after)
@@ -102,13 +103,25 @@ func runSessionHashStatePresentation(t *testing.T, present bool) sessionHashStat
 		c.SetAudioQueue(audio.NewQueue())
 	}
 
-	before := session.HashState(s)
+	before := sessionFixtureStateFingerprint(s)
 	if present {
 		c.ComposeFrame()
 		c.TickAudio()
 	}
-	after := session.HashState(s)
+	after := sessionFixtureStateFingerprint(s)
 	return sessionHashStateResult{before: before, after: after}
+}
+
+// sessionFixtureStateFingerprint is intentionally local to this external test:
+// it covers only the state constructed above and keeps presentation tests from
+// depending on a shipping-package evidence helper.
+func sessionFixtureStateFingerprint(s *session.Session) string {
+	if s == nil || s.Econ == nil {
+		return ""
+	}
+	p := &s.Econ.Players[0]
+	return fmt.Sprintf("exists=%t metal=%08x energy=%08x", p.Exists,
+		math.Float32bits(p.Stock[economy.Metal]), math.Float32bits(p.Stock[economy.Energy]))
 }
 
 // TestModeGateTrace locks both sides of the render-mode gate, including the

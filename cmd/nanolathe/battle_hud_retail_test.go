@@ -69,7 +69,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 		ViewW: winW, ViewH: winH,
 		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
 	}
-	centerOnCommander(sess.Units, cam, winW, winH)
+	centerOnCommanderForSession(sess, cam, winW, winH)
 	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal}
 	pal := loadPalette(cs)
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
@@ -211,7 +211,7 @@ func TestRetailNoSelectionUsesSideGeneralWindow(t *testing.T) {
 		ViewW: winW, ViewH: winH,
 		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
 	}
-	centerOnCommander(sess.Units, cam, winW, winH)
+	centerOnCommanderForSession(sess, cam, winW, winH)
 	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal, menuPressed: -1}
 	pal := loadPalette(cs)
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)

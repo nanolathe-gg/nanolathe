@@ -114,10 +114,10 @@ func TestBindStrictAlternativeEntryGroup(t *testing.T) {
 	}
 }
 
-func TestSyntheticEmptyVMIsExplicit(t *testing.T) {
-	vm := NewSyntheticEmptyVM()
+func TestEmptyVMIsExplicit(t *testing.T) {
+	vm := NewVM(&Program{})
 	if vm == nil || vm.Program() == nil {
-		t.Fatal("synthetic VM has no empty program")
+		t.Fatal("empty VM has no empty program")
 	}
 	if len(vm.Program().Pieces) != 0 || len(vm.Program().Scripts) != 0 {
 		t.Fatalf("synthetic program = %#v, want no pieces/scripts", vm.Program())

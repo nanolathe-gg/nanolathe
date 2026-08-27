@@ -103,7 +103,6 @@ func TestRetailFactoryProductClickQueuesAndBuilds(t *testing.T) {
 		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
 	}
 	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal}
-	b.requireCommandDispatch = true
 	b.commandDispatchFn = func(cmd battleCommand) error {
 		hc, ok := b.sessionHumanCommand(cmd)
 		if !ok {

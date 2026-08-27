@@ -30,7 +30,7 @@ func TestProductionBuildUsesSnapshotCommandPageBuilder(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"scout": nonBuilder, "lab": builder}}
 	s := &session.Session{LocalOwner: 0, Snapshot: &snapshot.Buffer{}}
 	s.Snapshot.Publish(&snapshot.Frame{Units: []snapshot.UnitView{{Slot: 1, Owner: 0, DefName: "scout"}, {Slot: 2, Owner: 0, DefName: "lab"}}, Selection: snapshot.SelectionView{Handles: []pool.Handle{1, 2}}, CommandPage: snapshot.CommandPageView{Builder: 2}})
-	b := &battleSession{sess: s, cat: cat, requireCommandDispatch: true}
+	b := &battleSession{sess: s, cat: cat}
 	var got pool.Handle
 	b.commandDispatchFn = func(c battleCommand) error { got = c.MobileBuild.Builder; return nil }
 	if err := b.DispatchMobileBuild("scout", 0, 0, false); err != nil {
@@ -38,105 +38,6 @@ func TestProductionBuildUsesSnapshotCommandPageBuilder(t *testing.T) {
 	}
 	if got != 2 {
 		t.Fatalf("builder handle=%d, want command-page builder 2", got)
-	}
-}
-
-func TestProductionBuildPanelUsesImmutableCommandPage(t *testing.T) {
-	builder := &content.UnitDef{UnitName: "lab", Builder: true}
-	builder.CanonicalKey = "lab"
-	first := &content.UnitDef{UnitName: "prod-b"}
-	first.CanonicalKey = "prod-b"
-	second := &content.UnitDef{UnitName: "prod-a"}
-	second.CanonicalKey = "prod-a"
-	cat := &content.Catalog{Units: map[string]*content.UnitDef{
-		builder.CanonicalKey: builder,
-		first.CanonicalKey:   first,
-		second.CanonicalKey:  second,
-	}}
-	s := &session.Session{LocalOwner: 0, Snapshot: &snapshot.Buffer{}}
-	s.Snapshot.Publish(&snapshot.Frame{
-		Units: []snapshot.UnitView{{Slot: 7, Owner: 0, DefName: "lab"}},
-		CommandPage: snapshot.CommandPageView{
-			Builder:     7,
-			Page:        1,
-			PageCount:   2,
-			ProductKeys: []string{"prod-b", "prod-a"},
-		},
-	})
-	// No live unit pool is installed. A production armBuildPanel must still
-	// resolve the immutable builder/page and publish the authored key order.
-	b := &battleSession{sess: s, cat: cat, requireCommandDispatch: true}
-	b.armBuildPanel()
-	if len(b.panelButtons) < 2 || b.panelButtons[0].Name != "prod-b" || b.panelButtons[1].Name != "prod-a" {
-		t.Fatalf("production panel=%#v, want immutable product order", b.panelButtons)
-	}
-	if b.panelButtons[0].Kind != "build" || b.panelButtons[1].Kind != "build" {
-		t.Fatalf("production panel product kinds=%q,%q", b.panelButtons[0].Kind, b.panelButtons[1].Kind)
-	}
-
-	// A later published page replaces the geometry from the frame only; no live
-	// selection flags or catalog menu ordering participate in the refresh.
-	s.Snapshot.Publish(&snapshot.Frame{
-		Units: []snapshot.UnitView{{Slot: 7, Owner: 0, DefName: "lab"}},
-		CommandPage: snapshot.CommandPageView{
-			Builder:     7,
-			Page:        0,
-			PageCount:   2,
-			ProductKeys: []string{"prod-a"},
-		},
-	})
-	b.armBuildPanel()
-	if len(b.panelButtons) < 1 || b.panelButtons[0].Name != "prod-a" {
-		t.Fatalf("refreshed production panel=%#v, want page-0 immutable key", b.panelButtons)
-	}
-}
-
-func TestProductionBuildPanelRejectsStaleProductAfterPagePublication(t *testing.T) {
-	builder := &content.UnitDef{UnitName: "lab", Builder: true}
-	builder.CanonicalKey = "lab"
-	product := &content.UnitDef{UnitName: "armllt", BMCode: true}
-	product.CanonicalKey = "armllt"
-	cat := &content.Catalog{
-		Units: map[string]*content.UnitDef{"lab": builder, "armllt": product},
-		BuildMenus: map[string]*content.BuildMenuPage{
-			"lab": {Buttons: []string{"armllt"}},
-		},
-	}
-	s := &session.Session{LocalOwner: 0, Snapshot: &snapshot.Buffer{}}
-	s.Snapshot.Publish(&snapshot.Frame{
-		Units:       []snapshot.UnitView{{Slot: 7, Owner: 0, DefName: "lab"}},
-		CommandPage: snapshot.CommandPageView{Builder: 7, PageCount: 1, ProductKeys: []string{"other"}},
-	})
-	b := &battleSession{sess: s, cat: cat, requireCommandDispatch: true,
-		panelButtons: []panelButton{{Name: "armllt", X: 8, Y: 432, Kind: "build"}}}
-	dispatched := false
-	b.commandDispatchFn = func(battleCommand) error {
-		dispatched = true
-		return nil
-	}
-	if !b.panelClick(9, 433) {
-		t.Fatal("stale production panel button was not consumed")
-	}
-	if dispatched {
-		t.Fatal("stale production panel button dispatched after immutable page changed")
-	}
-
-	// Once the newly published page names the product, the same authored
-	// button becomes dispatchable through the typed command boundary.
-	s.Snapshot.Publish(&snapshot.Frame{
-		Units:       []snapshot.UnitView{{Slot: 7, Owner: 0, DefName: "lab"}},
-		CommandPage: snapshot.CommandPageView{Builder: 7, PageCount: 1, ProductKeys: []string{"armllt"}},
-	})
-	if !b.panelClick(9, 433) || !dispatched {
-		t.Fatal("current immutable production page did not dispatch authored product")
-	}
-}
-
-func TestProductionBuildPanelNilCatalogIsSafe(t *testing.T) {
-	b := &battleSession{requireCommandDispatch: true}
-	b.armBuildPanel()
-	if len(b.panelButtons) != 0 {
-		t.Fatalf("nil production catalog produced panel buttons: %#v", b.panelButtons)
 	}
 }
 
@@ -168,7 +69,7 @@ func TestProductionDigitRoutingUsesBattleModeAltGate(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			b := &battleSession{sess: s, cat: cat, requireCommandDispatch: true, battleMode: tc.mode}
+			b := &battleSession{sess: s, cat: cat, battleMode: tc.mode}
 			var got battleCommand
 			b.commandDispatchFn = func(c battleCommand) error {
 				got = c
@@ -201,7 +102,7 @@ func TestProductionDigitGroupPathDoesNotEmitPageForNonBuilder(t *testing.T) {
 		Selection:   snapshot.SelectionView{Handles: []pool.Handle{1}, Primary: 1, Count: 1},
 		CommandPage: snapshot.CommandPageView{},
 	})
-	b := &battleSession{sess: s, cat: cat, requireCommandDispatch: true, battleMode: 1}
+	b := &battleSession{sess: s, cat: cat, battleMode: 1}
 	var got battleCommand
 	b.commandDispatchFn = func(c battleCommand) error {
 		got = c
@@ -217,7 +118,7 @@ func TestProductionDigitGroupPathDoesNotEmitPageForNonBuilder(t *testing.T) {
 }
 
 func TestProductionCtrlDigitAssignsGroupWithoutPageCommand(t *testing.T) {
-	b := &battleSession{requireCommandDispatch: true}
+	b := &battleSession{}
 	var got battleCommand
 	b.commandDispatchFn = func(c battleCommand) error {
 		got = c

@@ -42,11 +42,10 @@ func placeClickFixture(t *testing.T, cellW, cellH int32) (*battleSession, *sessi
 		Snapshot:   &snapshot.Buffer{},
 	}
 	b := &battleSession{
-		sess:                   s,
-		cat:                    cat,
-		cam:                    &camera.Camera{ViewW: 640, ViewH: 480, MapW: cellW * 16, MapH: cellH * 16},
-		requireCommandDispatch: true,
-		latch:                  input.LatchNormal,
+		sess:  s,
+		cat:   cat,
+		cam:   &camera.Camera{ViewW: 640, ViewH: 480, MapW: cellW * 16, MapH: cellH * 16},
+		latch: input.LatchNormal,
 	}
 	b.commandDispatchFn = func(cmd battleCommand) error {
 		human, ok := b.sessionHumanCommand(cmd)

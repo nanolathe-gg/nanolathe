@@ -300,44 +300,6 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 	// Drag semantics also covered via ApplyDragSelectionWorld already, but verify drag replace/toggle still filtered to LocalOwner
 }
 
-// TestHUDPressDragReleaseNeverSelects [07 §3][F-P1-008] HUD capture latch.
-func TestHUDPressDragReleaseNeverSelects(t *testing.T) {
-	cat := testCatalogON05()
-	terrain := testWorldON05(20, 20)
-	b := newTestBattle(cat, terrain)
-	bindBattleSessionCommandDispatch(b)
-	b.sess.LocalOwner = 0
-	wx := numeric.Fixed(int64(10*16) << 16) // but worldToCell uses fixed; simpler place at 100,100 px
-	_ = wx
-	u := placeUnit(b, "armsolar", numeric.Fixed(10*65536), numeric.Fixed(10*65536))
-	builder := placeUnit(b, "armcons", numeric.Fixed(2*65536), numeric.Fixed(2*65536))
-	replaceSelectionForTest(t, b, builder)
-	b.armBuildPanel()
-	if len(b.panelButtons) == 0 {
-		t.Fatalf("panel empty")
-	}
-	sxU, syU := screenPos(b.cam, u)
-	// Press begins on HUD panel band (>=428 y with panel)
-	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
-	in.Mouse.InjectMouseMove(10, 450)
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, true)
-	b.handleInput(in, nil)
-	if !b.hudCaptured {
-		t.Fatalf("HUD press should capture")
-	}
-	in.Mouse.ClearEdges()
-	in.Mouse.InjectMouseMove(float32(sxU), float32(syU))
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, true)
-	b.handleInput(in, nil)
-	in.Mouse.ClearEdges()
-	in.Mouse.InjectMouseMove(float32(sxU), float32(syU))
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, false)
-	b.handleInput(in, nil)
-	if u.Flags&client.SelectionFlag != 0 {
-		t.Fatalf("HUD press-drag-release leaked into world selection")
-	}
-}
-
 // TestFoggedEnemyCannotBeSelectedOrTargeted [03 §3.2] C8 local-owner word gate.
 func TestFoggedEnemyCannotBeSelectedOrTargeted(t *testing.T) {
 	cat := testCatalogON05()
