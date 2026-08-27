@@ -37,7 +37,7 @@ func TestP0I03_SingleSchedulerAlias(t *testing.T) {
 		Mission: &mission.Mission{Type: mission.TypeSkirmish, TerrainKey: "test", Schema: mission.Schema{Name: "test"}},
 	}
 	// Ensure wind and services via helper
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("createAndBindServices: %v", err)
 	}
 	if s.Path != s.Movement.Scheduler {

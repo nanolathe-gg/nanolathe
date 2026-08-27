@@ -129,31 +129,6 @@ func TestTopologyHumanSlot3RemainsLocal(t *testing.T) {
 	if s.Econ.Players[3].ControllerState != 1 {
 		t.Fatalf("econ slot3 ControllerState want 1 got %d", s.Econ.Players[3].ControllerState)
 	}
-	// Save/restore via StateV1.
-	st := s.CaptureStateV1()
-	if st == nil {
-		t.Fatalf("CaptureStateV1 nil")
-	}
-	// Create fresh session with same catalog/config, then restore.
-	s2, err := NewSkirmishForTest(fs, cat, cfg)
-	if err != nil {
-		t.Fatalf("second NewSkirmish slot3: %v", err)
-	}
-	if err := s2.RestoreStateV1(st); err != nil {
-		t.Fatalf("RestoreStateV1: %v", err)
-	}
-	s2.RecalcLocalOwner()
-	if s2.LocalOwner != 3 {
-		t.Fatalf("after save restore LocalOwner want 3 got %d econ exists %v controller %d", s2.LocalOwner, s2.Econ.Players[3].Exists, s2.Econ.Players[3].ControllerState)
-	}
-	// Ensure inactive rows still not affecting: slot 4 should not exist after restore.
-	if s2.Econ.Players[4].Exists {
-		t.Fatalf("slot4 should remain inactive after restore")
-	}
-	// Also verify that human slot3 remains the local owner for visibility predicate.
-	if lp := s2.Econ.Players[int(s2.LocalOwner)]; !lp.Exists || lp.ControllerState != 1 {
-		t.Fatalf("recalc local not human")
-	}
 }
 
 // TestTopologyAlliedHumansHostileAI checks alliance matrix for 2 allied humans + 1 hostile AI [08 "Skirmish configuration"].

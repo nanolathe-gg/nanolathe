@@ -141,9 +141,11 @@ func TestBulkPartialLoadNonTransactional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
-	res := ApplyBankNonTransactional(bank)
-	if res.Summary == nil || res.Camera == nil {
-		t.Fatalf("non-transactional should still have Summary/Camera [P1-13 §7]")
+	if _, ok := ReadSummary(bank); !ok {
+		t.Fatalf("Summary should remain readable [P1-13 §7]")
+	}
+	if _, ok := ReadCamera(bank); !ok {
+		t.Fatalf("Camera should remain readable [P1-13 §7]")
 	}
 }
 

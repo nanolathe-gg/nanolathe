@@ -56,7 +56,7 @@ func TestStrictSkirmish_AimReturnControlsProjectile(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(crtSeed)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("G4 bind: %v", err)
 	}
 	s.RegisterAll()

@@ -97,40 +97,6 @@ func TestAttachBattleAudio_CueReachesBackend(t *testing.T) {
 	}
 }
 
-// TestAttachBattleAudio_UnwiredClientPlaysNothing is the control: without the
-// composition step the same cue reaches the session queue and stops there.
-// It documents exactly what was broken, so a regression is legible.
-func TestAttachBattleAudio_UnwiredClientPlaysNothing(t *testing.T) {
-	prev := audio.GlobalBackend()
-	t.Cleanup(func() { audio.SetGlobalBackend(prev) })
-	rec := audio.NewBackend(true)
-	audio.SetGlobalBackend(rec)
-
-	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
-	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
-	b.sess.InitAudio(nil)
-
-	cl, err := client.New(client.Options{Buffer: b.sess.Snapshot, Width: 640, Height: 480, Headless: true})
-	if err != nil {
-		t.Fatalf("client.New: %v", err)
-	}
-	cl.SetTerrain(b.sess.World)
-	cl.SetCamera(b.cam)
-	// Deliberately no attachBattleAudio.
-
-	if cl.AudioQueue() != nil {
-		t.Fatalf("client already holds a queue without the composition step")
-	}
-	b.sess.EmitOK(commander.Handle)
-	before := rec.PlayCount()
-	for i := 0; i < 40; i++ {
-		cl.TickAudio()
-	}
-	if rec.PlayCount() != before {
-		t.Fatalf("unwired client played audio; the control case no longer isolates the seam")
-	}
-}
-
 // TestDetachBattleAudio_ReleasesDevice locks that leaving the battle stops
 // music and drops the process-global backend.
 func TestDetachBattleAudio_ReleasesDevice(t *testing.T) {

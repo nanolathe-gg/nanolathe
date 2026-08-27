@@ -37,7 +37,7 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(crtSeed)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("G2: bind: %v", err)
 	}
 	s.RegisterAll()
@@ -307,7 +307,7 @@ func TestStrictSkirmish_MoveOrderReachesGoal(t *testing.T) {
 	s2.Econ.SeedDeadlines(0)
 	var crt2 rng.CRT = rng.NewCRT(crtSeed)
 	s2.InitWindForSession(&crt2, 0)
-	_ = createAndBindServices(s2)
+	_ = createAndBindServicesForTest(t, s2)
 	s2.RegisterAll()
 	s2.State = StateBattle
 	s2.Clock.ScaledAnchor = 0

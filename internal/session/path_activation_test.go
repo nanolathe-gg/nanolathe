@@ -32,7 +32,7 @@ func TestPathActivationPreflightsGoalBeforeSubmission(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(200)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind services: %v", err)
 	}
 	s.RegisterAll()

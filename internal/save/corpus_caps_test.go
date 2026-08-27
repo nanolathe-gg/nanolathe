@@ -94,9 +94,7 @@ func TestCorpusSaveCaps_Retail(t *testing.T) {
 
 	// Box size guards: retail save bulk boxes are fixed sizes per bulk.go
 	// (UnitBoxSize 0xB8, OrderBoxSize 0x3A, ScriptSnapshotSize 0x528 etc.)
-	// Stock saves would use those sizes; our validation must not reject them.
-	// We just assert the constants match the spec and that a synthetic StateV1
-	// round-trip with max corpus values stays well below any OOM guard.
+	// Stock saves use those sizes; validation must not reject them.
 	if UnitBoxSize != 0xB8 {
 		t.Fatalf("UnitBoxSize %x want 0xB8", UnitBoxSize)
 	}

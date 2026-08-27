@@ -201,7 +201,7 @@ func TestValidateCompositionSuccess(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(0)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("createAndBindServices: %v", err)
 	}
 	if err := s.ValidateComposition(); err != nil {
@@ -227,7 +227,7 @@ func TestCreateAndBindServicesChainsDeathObserver(t *testing.T) {
 	var primary, priorExtra int
 	w.OnDeath = func(pool.Handle, units.DeathCause, *units.Unit) { primary++ }
 	w.OnDeathExtra = func(pool.Handle, units.DeathCause, *units.Unit) { priorExtra++ }
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatal(err)
 	}
 	def := cat.Units["armcom"]
@@ -263,7 +263,7 @@ func TestValidateCompositionMissing(t *testing.T) {
 		s.Econ.SeedDeadlines(0)
 		var crt rng.CRT = rng.NewCRT(0)
 		s.InitWindForSession(&crt, 0)
-		_ = createAndBindServices(s)
+		_ = createAndBindServicesForTest(t, s)
 		return s
 	}
 	cases := []string{"Clock", "World", "Units", "Vis", "Features", "Movement", "Path", "Combat", "Build", "Econ"}
@@ -319,7 +319,7 @@ func TestTopologySameForBothConstructors(t *testing.T) {
 		sSkirmish.Path = nil
 		sSkirmish.Build = nil
 		sSkirmish.Combat = nil
-		_ = createAndBindServices(sSkirmish)
+		_ = createAndBindServicesForTest(t, sSkirmish)
 		publishVisibilityForAll(sSkirmish)
 	}
 	sMission, err := NewMissionForTest(fs2, cat, "test.ota", 0)
@@ -334,7 +334,7 @@ func TestTopologySameForBothConstructors(t *testing.T) {
 		sMission.Path = nil
 		sMission.Build = nil
 		sMission.Combat = nil
-		_ = createAndBindServices(sMission)
+		_ = createAndBindServicesForTest(t, sMission)
 		publishVisibilityForAll(sMission)
 	}
 	checks := []struct {
@@ -400,7 +400,7 @@ func TestTwoSessionsCoexist(t *testing.T) {
 	s1a, _ := NewSkirmishForTest(fs1, cat, SkirmishConfig{MapName: "test", NumPlayers: 2})
 	if s1a.World == nil {
 		s1a.World = minimalTerrain()
-		_ = createAndBindServices(s1a)
+		_ = createAndBindServicesForTest(t, s1a)
 	}
 	// Ensure sliced pool already tested; just check Used counts stay same
 	usedA := s1a.Units.Used()
@@ -409,11 +409,11 @@ func TestTwoSessionsCoexist(t *testing.T) {
 	s2b, _ := NewSkirmishForTest(fs2, cat, SkirmishConfig{MapName: "test", NumPlayers: 2})
 	if s1b.World == nil {
 		s1b.World = minimalTerrain()
-		_ = createAndBindServices(s1b)
+		_ = createAndBindServicesForTest(t, s1b)
 	}
 	if s2b.World == nil {
 		s2b.World = minimalTerrain()
-		_ = createAndBindServices(s2b)
+		_ = createAndBindServicesForTest(t, s2b)
 	}
 	// After interleaved creation, ensure no cross contamination
 	if s1b.Units.Used() != usedA {
@@ -443,7 +443,7 @@ func TestCompositionGate(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(1)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	if s.Vis == nil || s.Features == nil || s.Path == nil || s.Combat == nil || s.Movement == nil || s.Build == nil || s.Econ == nil {

@@ -39,11 +39,12 @@ func TestMeteorDeterminism_TwoRunsIdentical(t *testing.T) {
 	cat.Weapons[w1.CanonicalKey] = w1
 
 	run := func(seedSim, seedCrt uint32) (projCount int, crtDraws uint64, simDraws uint64, met MeteorState) {
+		terrain := &world.Terrain{CellW: 64, CellH: 64}
 		s := &Session{
 			Catalog: cat,
 			Combat:  &combat.Service{},
+			World:   terrain,
 		}
-		s.World = nil // fallback 64x64 dimensions used in tickMeteor when world nil
 		s.Combat = &combat.Service{}
 		s.Wind = world.NewWind(100, 2000)
 		s.Catalog = cat
@@ -85,11 +86,12 @@ func TestMeteorDeterminism_TwoRunsIdentical(t *testing.T) {
 		t.Fatalf("meteor determinism: scheduler state diverged %+v vs %+v", m1, m2)
 	}
 	runNoMeteor := func(seedSim, seedCrt uint32) (uint64, uint64) {
+		terrain := &world.Terrain{CellW: 64, CellH: 64}
 		s := &Session{
 			Catalog: cat,
 			Combat:  &combat.Service{},
+			World:   terrain,
 		}
-		s.World = nil
 		s.Combat = &combat.Service{}
 		s.Wind = world.NewWind(100, 2000)
 		s.Catalog = cat
@@ -120,6 +122,33 @@ func TestMeteorDeterminism_TwoRunsIdentical(t *testing.T) {
 	}
 	if rCrt.Draws()-crtBefore != 4 {
 		t.Fatalf("MeteorSchedule must consume 4 CRT draws")
+	}
+}
+
+// TestMeteorWithoutTerrainDoesNotSchedule verifies that the scheduler has no
+// map-independent geometry source. An invalid session therefore leaves the
+// meteor state and CRT stream untouched rather than substituting dimensions.
+func TestMeteorWithoutTerrainDoesNotSchedule(t *testing.T) {
+	weapon := &content.WeaponDef{ID: 0, Meteor: true, Name: "meteor"}
+	s := &Session{
+		Meteor: MeteorState{
+			Enabled:       true,
+			Initialized:   true,
+			Weapon:        weapon,
+			WeaponName:    "meteor",
+			NextStrike:    0,
+			DurationTicks: 30,
+			PerHitDelay:   1,
+		},
+		Combat: &combat.Service{},
+	}
+	s.SeedSessionRNG(12345, 67890)
+	s.authoritativeTick(1)
+	if got := s.Combat.Count(); got != 0 {
+		t.Fatalf("nil-world meteor scheduled %d projectiles", got)
+	}
+	if got := s.CrtRNG().Draws(); got != 0 {
+		t.Fatalf("nil-world meteor consumed %d CRT draws", got)
 	}
 }
 

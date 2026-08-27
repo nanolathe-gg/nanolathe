@@ -13,7 +13,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -49,7 +48,7 @@ const (
 const (
 	SkirmishControllerHuman    = 0 // human local [GAP T14]
 	SkirmishControllerComputer = 1 // computer AI [GAP T14]
-	SkirmishControllerObserver = 3 // observer [GAP T14] (distinct from legacy 2 used as computer)
+	SkirmishControllerObserver = 3 // observer [GAP T14] (distinct from controller value 2 used as computer)
 )
 
 // IsHuman, IsObserver and IsComputer are the exact controller predicates.
@@ -57,7 +56,7 @@ const (
 // Composition used to ask "is the controller nonzero?" to mean "is this a
 // computer player". Observer is a distinct nonzero controller, so an observer
 // slot was given an AI manager, units, economy actions and a share of result
-// ownership. Computer stays "neither human nor observer" so the legacy
+// ownership. Computer stays "neither human nor observer" so controller value
 // controller value 2 keeps being treated as a computer [GAP T14].
 func (p SkirmishPlayer) IsHuman() bool { return p.Controller == SkirmishControllerHuman }
 
@@ -162,8 +161,8 @@ func (c *SkirmishConfig) ApplyDefaults() {
 }
 
 // Validate checks NumPlayers 2..10 and non-empty map per [GAP T14] C8.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// raw value unchanged [P0-05]. We preserve that as no-op for NumPlayers range
+// Retail validation stores the supplied player count unchanged in this path;
+// the player-count range branch is a compiled no-op [P0-05]. We preserve that as no-op for NumPlayers range
 // (only map emptiness is an error for load). [P0-05]
 func (c SkirmishConfig) Validate() error {
 	if strings.TrimSpace(c.MapName) == "" {
@@ -173,12 +172,13 @@ func (c SkirmishConfig) Validate() error {
 	return nil
 }
 
-// Normalize is the one canonical setup normalization path used by menu, direct window
-// and headless entry [08 "Skirmish configuration"] [GAP T14].
+// Normalize is the one canonical setup normalization path used by menu and direct
+// battle entry [08 "Skirmish configuration"] [GAP T14].
 // It trims map name, defaults missing NumPlayers to 4 only when zero, clamps 0..10,
 // clears inactive rows 2..9 beyond NumPlayers, fills per-slot defaults for active
-// rows, validates at least one human and one computer, and validates at least one
-// hostile alliance (all live ally groups equal is an error) [08 "Skirmish configuration"].
+// rows, and validates at least one hostile alliance (all live ally groups equal
+// is an error) [08 "Skirmish configuration"]. The production constructor applies
+// the separate human/computer presence check after normalization.
 // It is idempotent and must be called before session composition.
 func (c *SkirmishConfig) Normalize() error {
 	c.MapName = strings.TrimSpace(c.MapName)
@@ -236,8 +236,9 @@ func (c *SkirmishConfig) Normalize() error {
 		}
 	}
 	// Validate skirmish start per [08 "Skirmish configuration"]:
-	// At least one human and one computer is the retail start diagnostic, but fixtures
-	// may use 2 humans for topology wiring, so we do not enforce strictly here.
+	// The lobby's human/computer presence check is applied by the production
+	// constructor after normalization; this method also serves low-level config
+	// editing where controller rows may still be incomplete.
 	// Hostile alliance: at least one pair with different ally group, with sentinel
 	// exception that all groups 5 (unassigned) is allowed per retail [08 "Skirmish configuration"].
 	if n >= 2 {
@@ -263,7 +264,7 @@ func (c *SkirmishConfig) Normalize() error {
 	return nil
 }
 
-// DirectSkirmishConfig returns the canonical direct/headless 1v1 config [08 "Skirmish configuration"] [GAP T14].
+// DirectSkirmishConfig returns the canonical direct 1v1 config [08 "Skirmish configuration"] [GAP T14].
 // It explicitly sets NumPlayers=2 and clears rows 2..9 inactive, then normalizes.
 // It does not rely on ApplyDefaults default 4 remaining.
 func DirectSkirmishConfig(mapName string) SkirmishConfig {
@@ -301,12 +302,6 @@ func LocalOwnerForConfig(cfg SkirmishConfig) int {
 		n = 10
 	}
 	for i := 0; i < n; i++ {
-		if cfg.Players[i].Controller == SkirmishControllerHuman {
-			return i
-		}
-	}
-	// Fallback: first human in full 10 if NumPlayers not yet normalized.
-	for i := 0; i < 10; i++ {
 		if cfg.Players[i].Controller == SkirmishControllerHuman {
 			return i
 		}
@@ -369,8 +364,11 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	if err := validateSkirmishLobby(cfg); err != nil {
+		return nil, err
+	}
 	if fs == nil {
-		fs = vfs.New()
+		return nil, fmt.Errorf("session: nil filesystem for skirmish battle [02 §5]")
 	}
 	// 1. mount/receive VFS and compile one immutable catalog [02 §5]
 	cat, err := strictCatalogWithProgress(fs, cat, report)
@@ -662,6 +660,29 @@ func loadSkirmishAIProfile(fs vfs.FSOps, name string) (*ai.Profile, error) {
 	return prof, nil
 }
 
+func validateSkirmishLobby(cfg SkirmishConfig) error {
+	n := cfg.NumPlayers
+	if n < 0 {
+		n = 0
+	}
+	if n > 10 {
+		n = 10
+	}
+	human, computer := false, false
+	for i := 0; i < n; i++ {
+		switch cfg.Players[i].Controller {
+		case SkirmishControllerHuman:
+			human = true
+		case SkirmishControllerComputer:
+			computer = true
+		}
+	}
+	if !human || !computer {
+		return fmt.Errorf("session: There must be at least one player and one computer opponent [08 \"Skirmish configuration\"]")
+	}
+	return nil
+}
+
 // skirmishCommander resolves the configured side commander. Strict callers
 // must use the authored side and unit definitions; there is no built-in
 // commander substitute [08 "Skirmish configuration"].
@@ -685,34 +706,55 @@ func skirmishCommander(cat *content.Catalog, sideIdx, playerIdx int) (*content.U
 // place features → reconstruct units → cross the placement/start barrier →
 // grant starting resources DIRECTLY to live stock outside the ledger
 // (economy.CreditSpawn) [05 "Authoritative settlement order"].
-// The spy records each step before the real work so order is observable even with nil world in fixtures.
+// The spy records each step before the real work so order is observable.
 // This is the shared path skirmish must use; no second draw path exists [C17].
 func SkirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy *BattleEntrySpy) error {
-	return skirmishBattleEntry(s, cfg, m, spy, true)
-}
-
-func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy *BattleEntrySpy, strict bool) error {
 	if s == nil {
 		return fmt.Errorf("session: nil session")
 	}
 	if m == nil {
 		return fmt.Errorf("session: nil mission")
 	}
-	if strict {
-		if err := requireGlobalRNGStreams(); err != nil {
-			return err
-		}
+	if s.Catalog == nil {
+		return fmt.Errorf("session: missing Catalog for skirmish battle entry [02 §5]")
+	}
+	if s.World == nil {
+		return fmt.Errorf("session: missing World for skirmish battle entry [03 §2.2]")
+	}
+	if s.Features == nil {
+		return fmt.Errorf("session: missing Features for skirmish battle entry [05]")
+	}
+	if s.Units == nil {
+		return fmt.Errorf("session: missing Units for skirmish battle entry [01 §6.1]")
+	}
+	if s.Econ == nil {
+		return fmt.Errorf("session: missing Economy for skirmish battle entry [05]")
+	}
+	return skirmishBattleEntry(s, cfg, m, spy)
+}
+
+func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy *BattleEntrySpy) error {
+	if s == nil {
+		return fmt.Errorf("session: nil session")
+	}
+	if m == nil {
+		return fmt.Errorf("session: nil mission")
+	}
+	if err := requireGlobalRNGStreams(); err != nil {
+		return err
 	}
 	spyRecord(spy, "features")
 	if err := skirmishPlaceFeatures(s, m); err != nil {
 		return err
 	}
 	spyRecord(spy, "units")
-	if err := skirmishReconstructUnits(s, cfg, m, strict); err != nil {
+	if err := skirmishReconstructUnits(s, cfg, m); err != nil {
 		return err
 	}
 	// Initialize COB before any scripted orders (mirrors mission path) [04 §4.1]
-	initCOBForSession(s)
+	if err := requireCOBForSession(s); err != nil {
+		return err
+	}
 	// Wire cargo from i-verb if any scenario units carry attachments (reuses mission helper)
 	wireMissionCargo(s, m)
 	spyRecord(spy, "barrier")
@@ -722,10 +764,12 @@ func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy
 	spyRecord(spy, "resources")
 	skirmishGrantResourcesDirect(s, cfg)
 	// Initialize sharing thresholds once from rebuilt capacity after units exist [P1-06] [P1-I04].
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Note: thresholds are bonus-inclusive because RebuildCapacity includes the
+	// per-player storage bonus.
 	// Retail order is setup pass (0x497C10) before spawn credits/bonus (0x465E30→0x496E90), so
 	// thresholds from capacity BEFORE bonus would be stale (0). We keep bonus-inclusive and emit
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): confirm whether retail writes thresholds before or after
+	// the storage bonus is applied [02_ledger_exact.md §4.1].
 	s.InitShareThresholds()
 	return nil
 }
@@ -761,15 +805,6 @@ func skirmishPlaceFeatures(s *Session, m *mission.Mission) error {
 			def = s.Catalog.Features[content.CanonicalKey(name)]
 		}
 		if def == nil {
-			// Fallback: try terrain FeatureDefs by name match for synthetic maps
-			for _, d := range s.World.FeatureDefs {
-				if d != nil && d.CanonicalKey == content.CanonicalKey(name) {
-					def = d
-					break
-				}
-			}
-		}
-		if def == nil {
 			continue
 		}
 		cx, cz := int(fp.X), int(fp.Z)
@@ -784,12 +819,9 @@ func skirmishPlaceFeatures(s *Session, m *mission.Mission) error {
 	return nil
 }
 
-func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission, strict bool) error {
+func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission) error {
 	if s.Units == nil {
-		if strict {
-			return fmt.Errorf("session: missing Units for skirmish battle entry [01 §6.1]")
-		}
-		s.Units = units.New(600, s.Catalog)
+		return fmt.Errorf("session: missing Units for skirmish battle entry [01 §6.1]")
 	}
 	// Collect StartPos specials deterministically [P0-04]. No sorting beyond
 	// TDF enumeration order; we keep original order (already as decoded) and
@@ -819,7 +851,8 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 	if nPlayersLocal > 10 {
 		nPlayersLocal = 10
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Build the eligible-slot list per [P0-04]: occupied, participating control
+	// state, and a non-newline placement terminator.
 	// For skirmish, slot existence = idx < NumPlayers, ctrl 1/2/3 = ControllerState 1/2/3.
 	// We use s.Econ.Players existence + controller mapping.
 	var eligible []int
@@ -831,7 +864,8 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		if !pl.Exists {
 			continue
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): the placement terminator is not represented in Session;
+		// eligibility is therefore checked through controller state here.
 		cs := pl.ControllerState
 		if cs != 1 && cs != 2 && cs != 3 {
 			continue
@@ -843,22 +877,16 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 	var crt *rng.CRT
 	if rng.Global.Crt != nil {
 		crt = rng.Global.Crt
-	} else if strict {
-		return fmt.Errorf("session: missing global CRT RNG stream [01 §7.2]")
 	} else {
-		tmp := rng.NewCRT(0)
-		crt = &tmp
+		return fmt.Errorf("session: missing global CRT RNG stream [01 §7.2]")
 	}
 	var sim *rng.Simulation
 	if rng.Global.Sim != nil {
 		sim = rng.Global.Sim
-	} else if strict {
-		return fmt.Errorf("session: missing global simulation RNG stream [01 §7.1]")
 	} else {
-		tmp := rng.NewSimulation(0)
-		sim = &tmp
+		return fmt.Errorf("session: missing global simulation RNG stream [01 §7.1]")
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Build the permutation of eligible slots.
 	local28 := make([]int, n)
 	copy(local28, eligible)
 	if cfg.Location == 0 {
@@ -915,30 +943,21 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 			continue
 		}
 		ctrl := s.Econ.Players[playerIdx].ControllerState
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): the placement terminator is not represented in Session;
+		// eligibility is therefore checked through controller state here.
 		if ctrl != 1 && ctrl != 2 && ctrl != 3 {
 			continue
 		}
 		// Side/commander lookup
 		sideIdx := cfg.Players[playerIdx].Side
 		def, commanderErr := skirmishCommander(s.Catalog, sideIdx, playerIdx)
-		if commanderErr != nil && !strict {
-			// Fixture-only compatibility retains the historical commander search.
-			for _, cand := range []string{"armcom", "corcom"} {
-				if d, found := s.Catalog.Unit(cand); found && d != nil {
-					def = d
-					break
-				}
-			}
-			if def == nil {
-				def = &content.UnitDef{UnitName: "armcom", MaxDamage: 100, SightDistance: 128}
-			}
-		} else if commanderErr != nil {
+		if commanderErr != nil {
 			return commanderErr
 		}
 		// Sim jitter with degenerate no-advance [P0-04]
 		var jx, jz numeric.Fixed
-		// mapW/H in cells, fallback uses CellW/H; if no world, use 0 -> bound <=0 ->0
+		// Map dimensions are measured in cells. Non-positive bounds consume no
+		// random value, as required by the random helper contract.
 		var mapW, mapH int32
 		if s.World != nil {
 			mapW = s.World.CellW
@@ -969,7 +988,7 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 				x = numeric.Fixed(int32(sp.X) * 65536)
 				z = numeric.Fixed(int32(sp.Z) * 65536)
 			} else {
-				// Missing StartPos: retain jitter fallback; emit diagnostic per [P0-04] (surplus/missing handled gracefully)
+				// Missing StartPos retains the interior jitter; surplus positions are unused.
 				_ = fmt.Sprintf("skirmish: missing StartPos%d for slot %d", perm+1, playerIdx)
 			}
 		}
@@ -988,7 +1007,8 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		if u := s.Units.Unit(h); u != nil {
 			// Mark as commander? No extra flags here but preserve placement linkage for debugging
 			u.PlacementIdx = -1
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// Extractor yield is sampled once at placement [P1-10][P1-15] if a
+			// commander definition also extracts metal (not typical).
 			// Factory nanoframes sample in construction; mission-placed extractors sample here; direct World.Create remains TODO(question) if caller bypasses session [P1-10][P1-15].
 			if def.ExtractsMetal != 0 && s.World != nil {
 				cx := world.WorldToCell(x)
@@ -1042,7 +1062,7 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 					if up.IsImmune() {
 						u.Flags |= 1 << 15
 					}
-					// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+					// Extractor yield is sampled once at placement [P1-10][P1-15].
 					if def.ExtractsMetal != 0 && s.World != nil {
 						cx := world.WorldToCell(numeric.Fixed(int64(up.X)))
 						cz := world.WorldToCell(numeric.Fixed(int64(up.Z)))
@@ -1091,10 +1111,10 @@ func skirmishGrantResourcesDirect(s *Session, cfg SkirmishConfig) {
 		if !s.Econ.Players[p].Exists {
 			continue
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// [05 "Storage capacity"] [02_ledger_exact.md §4.1] [OX P1] per-player storage bonus.
+		// Retail enables the per-player storage bonus and applies a minimum
+		// capacity of 0xC8 (200) to each resource, storing the integer bonus
+		// as a float (truncation toward zero, I3).
 		// Bonus must be installed BEFORE spawn credits and before first settlement's RebuildCapacity
 		// so that CommitPostSettlement's bonus-inclusive capacity clamp preserves opening 1000/1000
 		// past tick 30/60 [OX P1]. ARM and CORE both get correct values derived from their own startMetal/Energy.

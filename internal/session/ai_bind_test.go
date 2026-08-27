@@ -38,7 +38,7 @@ func TestRX01_ProductionSessionsBindAIQueue(t *testing.T) {
 		s.Path = nil
 		s.Build = nil
 		s.Combat = nil
-		if err := createAndBindServices(s); err != nil {
+		if err := createAndBindServicesForTest(t, s); err != nil {
 			t.Fatalf("createAndBindServices: %v", err)
 		}
 		publishVisibilityForAll(s)

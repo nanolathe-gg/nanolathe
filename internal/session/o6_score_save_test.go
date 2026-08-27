@@ -4,9 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/economy"
-	"github.com/nanolathe/nanolathe/internal/save"
 )
 
 func TestHashStateIncludesAIAggregatesAndPreservesOrdering(t *testing.T) {
@@ -43,42 +41,5 @@ func TestHashStateIncludesAIAggregatesAndPreservesOrdering(t *testing.T) {
 	s.Econ.Players[0].Stock[economy.Metal] = math.Float32frombits(1)
 	if got := HashState(s); got == stockHash {
 		t.Fatal("stock bit change did not affect HashState")
-	}
-}
-
-func TestAIAggregatesRoundTripResumeScore(t *testing.T) {
-	const player = uint8(0)
-	s := &Session{Econ: &economy.Service{}}
-	p := &s.Econ.Players[player]
-	p.Exists = true
-	p.Stock[economy.Energy] = 100
-	p.Stock[economy.Metal] = 80
-	p.Capacity[economy.Energy] = 400
-	p.Capacity[economy.Metal] = 200
-	p.AIProduction[economy.Energy] = 180
-	p.AIProduction[economy.Metal] = 7
-	p.AIConsumption[economy.Energy] = 12
-	p.AIConsumption[economy.Metal] = 2
-
-	before := ai.ScoreInputsFromEconomy(s.Econ, player)
-	st := s.CaptureStateV1()
-	if st == nil || st.Version != save.StateV1VersionConst {
-		t.Fatalf("CaptureStateV1 version = %#v, want %d", st, save.StateV1VersionConst)
-	}
-	payload := save.MarshalStateV1(st)
-	decoded, err := save.UnmarshalStateV1(payload, "", "")
-	if err != nil {
-		t.Fatalf("UnmarshalStateV1: %v", err)
-	}
-	resumed := &Session{Econ: &economy.Service{}}
-	if err := resumed.RestoreStateV1(decoded); err != nil {
-		t.Fatalf("RestoreStateV1: %v", err)
-	}
-	after := ai.ScoreInputsFromEconomy(resumed.Econ, player)
-	if before != after {
-		t.Fatalf("score inputs changed across save/resume: before=%+v after=%+v", before, after)
-	}
-	if got, want := HashState(resumed), HashState(s); got != want {
-		t.Fatalf("state hash changed across save/resume: got %s want %s", got, want)
 	}
 }

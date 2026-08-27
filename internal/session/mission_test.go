@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
@@ -15,6 +16,44 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
+
+// initCOBForSession is test-only support for legacy unit fixtures. Production
+// entry requires an authored binding before InitialMission runs.
+func initCOBForSession(s *Session) {
+	if s == nil || s.Units == nil {
+		return
+	}
+	for _, u := range s.Units.IterSliced() {
+		if u == nil || !u.Alive || u.GetScript() != nil {
+			continue
+		}
+		u.SetScript(cob.NewVM(&cob.Program{Scripts: map[string]int{}}))
+	}
+}
+
+// grantResourcesDirect is test-only support for fixtures without an OTA
+// GlobalHeader. Production uses grantResourcesStrict and reports missing data.
+func grantResourcesDirect(s *Session, m *mission.Mission) {
+	if s == nil || s.Econ == nil {
+		return
+	}
+	if m != nil && m.OTA != nil && m.OTA.Global != nil {
+		mg := mission.DecodeMissionGlobals(m.OTA.Global)
+		for p := range s.Econ.Players {
+			if s.Econ.Players[p].Exists {
+				economy.CreditSpawn(&s.Econ.Players[p], economy.Metal, float32(mg.HumanMetal))
+				economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, float32(mg.HumanEnergy))
+			}
+		}
+		return
+	}
+	for p := range s.Econ.Players {
+		if s.Econ.Players[p].Exists {
+			economy.CreditSpawn(&s.Econ.Players[p], economy.Metal, 1000)
+			economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, 1000)
+		}
+	}
+}
 
 func fsFromMap(t *testing.T, files map[string]string) *vfs.FS {
 	t.Helper()
@@ -81,7 +120,7 @@ func TestBattleEntryOrder(t *testing.T) {
 		},
 	}
 	spy := &BattleEntrySpy{}
-	if err := BattleEntry(s, m, spy); err != nil {
+	if err := fixtureBattleEntry(s, m, spy); err != nil {
 		t.Fatalf("BattleEntry: %v", err)
 	}
 	want := []string{"features", "units", "barrier", "resources"}
@@ -119,7 +158,7 @@ func TestGrantStartingResourcesDirectToStock(t *testing.T) {
 	s2.Econ.Players[0].Mirror[economy.Metal].Production = 9
 	m := &mission.Mission{}
 	spy := &BattleEntrySpy{}
-	_ = BattleEntry(s2, m, spy)
+	_ = fixtureBattleEntry(s2, m, spy)
 	if s2.Econ.Players[0].Stock[economy.Metal] != 1000 {
 		t.Fatalf("BattleEntry resources must CreditSpawn 1000 [GAP T14] got %v", s2.Econ.Players[0].Stock[economy.Metal])
 	}

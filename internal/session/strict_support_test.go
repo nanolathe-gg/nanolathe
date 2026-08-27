@@ -8,6 +8,7 @@ import (
 	"math"
 	"os/exec"
 	"strings"
+	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/clock"
@@ -265,7 +266,8 @@ func strictEconomyForTest() *economy.Service {
 }
 
 // strictNewSessionWithUnits builds a strict session for N units distributed across players 0,1.
-func strictNewSessionWithUnits(nUnits int, simSeed, crtSeed uint32) *Session {
+func strictNewSessionWithUnits(t *testing.T, nUnits int, simSeed, crtSeed uint32) *Session {
+	t.Helper()
 	cat := strictMinimalCatalog()
 	terrain := strictMinimalTerrain()
 	m := strictSyntheticMission()
@@ -290,7 +292,7 @@ func strictNewSessionWithUnits(nUnits int, simSeed, crtSeed uint32) *Session {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(crtSeed)
 	s.InitWindForSession(&crt, 0)
-	_ = createAndBindServices(s)
+	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
 	s.State = StateBattle
 	def := cat.Units["armcom"]

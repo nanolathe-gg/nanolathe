@@ -58,7 +58,7 @@ func newLoopTestSession(t *testing.T, nUnits int) *Session {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(42)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("createAndBindServices: %v", err)
 	}
 	s.RegisterAll()
@@ -196,7 +196,7 @@ func TestLoop_SlotCreationSameTickVisibility(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(1)
 	s.InitWindForSession(&crt, 0)
-	_ = createAndBindServices(s)
+	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
 	s.State = StateBattle
 	def := cat.Units["armcom"]
@@ -359,7 +359,7 @@ func TestLoop_DeathFinalizeBeforeLaterSlot(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(1)
 	s.InitWindForSession(&crt, 0)
-	_ = createAndBindServices(s)
+	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
 	s.State = StateBattle
 	def := cat.Units["armcom"]
@@ -492,7 +492,7 @@ func TestLoop_MoveArrival(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(1)
 	s.InitWindForSession(&crt, 0)
-	_ = createAndBindServices(s)
+	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
 	s.State = StateBattle
 	def := cat.Units["armcom"]
@@ -589,7 +589,7 @@ func TestLoop_BuildProgress(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(1)
 	s.InitWindForSession(&crt, 0)
-	_ = createAndBindServices(s)
+	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
 	s.State = StateBattle
 	hFactory, _ := s.Units.Create(factoryDef, 0, numeric.Fixed(10*65536), 0, numeric.Fixed(10*65536))
@@ -671,7 +671,7 @@ func TestLoop_AimReturnControlsProjectile(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(1)
 	s.InitWindForSession(&crt, 0)
-	_ = createAndBindServices(s)
+	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
 	s.State = StateBattle
 	// Create shooter and target

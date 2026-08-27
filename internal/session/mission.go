@@ -7,7 +7,6 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
-	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
@@ -264,13 +263,28 @@ func (sp *BattleEntrySpy) record(step string) {
 // grant starting resources DIRECTLY to live stock outside the ledger
 // (economy.CreditSpawn, [05 "Authoritative settlement order"]). The spy records
 // each step before the real work so order is observable even when the world is
-// nil in fixtures.
+// before any battle state is exposed.
 func BattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
 	if s == nil {
 		return fmt.Errorf("session: nil session")
 	}
 	if m == nil {
 		return fmt.Errorf("session: nil mission")
+	}
+	if s.Catalog == nil {
+		return fmt.Errorf("session: missing Catalog for mission battle entry [02 §5]")
+	}
+	if s.World == nil {
+		return fmt.Errorf("session: missing World for mission battle entry [03 §2.2]")
+	}
+	if s.Features == nil {
+		return fmt.Errorf("session: missing Features for mission battle entry [05]")
+	}
+	if s.Units == nil {
+		return fmt.Errorf("session: missing Units for mission battle entry [01 §6.1]")
+	}
+	if s.Econ == nil {
+		return fmt.Errorf("session: missing Economy for mission battle entry [05]")
 	}
 	spy.record("features")
 	if err := placeFeatures(s, m); err != nil {
@@ -281,7 +295,9 @@ func BattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
 		return err
 	}
 	// Initialize COB before InitialMission [04 §4.1] – each unit's VM must exist before script runs.
-	initCOBForSession(s)
+	if err := requireCOBForSession(s); err != nil {
+		return err
+	}
 	// InitialMission runs ONCE on the loading worker after ALL mission units
 	// exist [04 §3.6] C9 — here, between unit placement and the start barrier.
 	// It queues orders; from the next tick the ordinary pump consumes them.
@@ -295,7 +311,9 @@ func BattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
 		return err
 	}
 	spy.record("resources")
-	grantResourcesDirect(s, m)
+	if err := grantResourcesStrict(s, m); err != nil {
+		return err
+	}
 	// Initialize sharing thresholds once from rebuilt capacity after units exist [P1-06] [P1-I04].
 	s.InitShareThresholds()
 	return nil
@@ -304,9 +322,7 @@ func BattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) error {
 func placeFeatures(s *Session, m *mission.Mission) error {
 	// Terrain-provided and mission-provided feature records converge on the same
 	// feature stamping service; deterministic load order matters [08 "Placement
-	// and battle entry"]. In fixtures s.World or s.Features may be nil; the
-	// ordering guarantee is what C9 locks, not the footprint derivation, so this
-	// is a no-op when no terrain is present. No RNG draws occur here [I4].
+	// and battle entry"]. No RNG draws occur here [I4].
 	if s.World == nil || s.Features == nil {
 		return nil
 	}
@@ -329,14 +345,6 @@ func placeFeatures(s *Session, m *mission.Mission) error {
 			def = s.Catalog.Features[content.CanonicalKey(name)]
 		}
 		if def == nil {
-			for _, d := range s.World.FeatureDefs {
-				if d != nil && d.CanonicalKey == content.CanonicalKey(name) {
-					def = d
-					break
-				}
-			}
-		}
-		if def == nil {
 			continue
 		}
 		cx, cz := int(fp.X), int(fp.Z)
@@ -350,14 +358,18 @@ func placeFeatures(s *Session, m *mission.Mission) error {
 
 func reconstructUnits(s *Session, m *mission.Mission) error {
 	if s.Units == nil {
-		s.Units = units.New(600, s.Catalog)
+		return fmt.Errorf("session: missing Units for mission battle entry [01 §6.1]")
+	}
+	if s.Catalog == nil {
+		return fmt.Errorf("session: missing Catalog for mission battle entry [02 §5]")
 	}
 	// P0-04/P0-06: two-pass spawner with sparse created[] [P0-04][P0-06].
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// or NULL on allocation/limit failure. No delayed CreationCountdown queue
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Pass one walks records in order, applies the player check, then invokes
+	// the normal allocator; allocation failure leaves a sparse nil entry. No delayed CreationCountdown queue
+	// (bounded negative: no reader for CreationCountdown). [P0-04]
+	// Eligibility checks the occupied slot, participating control state, and
+	// non-newline placement terminator [P0-04] – diagnostic
+	// but still creates the unit. We preserve sparse
 	// mapping for P0-06 first-occurrence scan skipping NULL gaps (A27).
 	for idx, up := range m.Units {
 		def, ok := s.Catalog.Unit(up.UnitName)
@@ -394,7 +406,8 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 			if up.IsImmune() {
 				u.Flags |= 1 << 15
 			}
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// Extractor yield is sampled once at placement [P1-10][P1-15]:
+			// Σ(cell+1)*extractsMetal, never resampled.
 			// Factory nanoframes sample in construction.allocateNanoframe; mission-placed extractors must sample here.
 			// Direct World.Create paths (e.g., save restore) remain TODO(question) if terrain not available at that site [P1-10][P1-15].
 			if def.ExtractsMetal != 0 && s.World != nil {
@@ -433,9 +446,9 @@ func crossBarrier(s *Session) error {
 	return nil
 }
 
-func grantResourcesDirect(s *Session, m *mission.Mission) {
-	if s.Econ == nil {
-		return
+func grantResourcesStrict(s *Session, m *mission.Mission) error {
+	if s == nil || s.Econ == nil {
+		return fmt.Errorf("session: missing Economy for mission battle entry [05]")
 	}
 	// Starting resources are credited DIRECTLY to live stock outside the ledger
 	// [08 "Placement and battle entry"] via economy.CreditSpawn per C9. No
@@ -443,14 +456,7 @@ func grantResourcesDirect(s *Session, m *mission.Mission) {
 	// HumanMetal/HumanEnergy vs ComputerMetal/ComputerEnergy from the OTA
 	// GlobalHeader per [P1-02 §2.1] (defaults 1000). Using CreditSpawn preserves I2's float32 stock identity.
 	if m == nil || m.OTA == nil || m.OTA.Global == nil {
-		// Fallback should not happen in strict production; retain 1000 for fixtures without OTA.
-		for p := 0; p < 10; p++ {
-			if s.Econ.Players[p].Exists {
-				economy.CreditSpawn(&s.Econ.Players[p], economy.Metal, 1000)
-				economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, 1000)
-			}
-		}
-		return
+		return fmt.Errorf("session: mission has no GlobalHeader for starting resources [08 \"Placement and battle entry\"]")
 	}
 	mg := mission.DecodeMissionGlobals(m.OTA.Global) // [P1-02 §2.1] defaults 1000
 	for p := 0; p < 10; p++ {
@@ -481,15 +487,14 @@ func grantResourcesDirect(s *Session, m *mission.Mission) {
 			economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, energy)
 		}
 	}
+	return nil
 }
 
-// initCOBForSession ensures each live unit has a COB VM before InitialMission [04 §4.1].
-// It creates an empty program when no retail COB is present; real COBs are loaded via
-// content compilation when available. The VM is bound via Unit.SetScript and Create is
-// started if present; the per-unit drain in units.Tick will then execute it [04 §4.2] C13.
-func initCOBForSession(s *Session) {
+// requireCOBForSession verifies that each live unit has an authored COB VM before
+// InitialMission [04 §4.1]. Unit creation binds the VM and starts Create.
+func requireCOBForSession(s *Session) error {
 	if s == nil || s.Units == nil {
-		return
+		return fmt.Errorf("session: missing Units before InitialMission [04 §4.1]")
 	}
 	for _, u := range s.Units.IterSliced() {
 		if u == nil || !u.Alive {
@@ -498,20 +503,9 @@ func initCOBForSession(s *Session) {
 		if u.ScriptState != nil && u.ScriptState.VM != nil {
 			continue
 		}
-		// Empty fallback program; if a real COB is later found via catalog/VFS it could be loaded here.
-		// For now create a minimal VM so the drain path has a VM to call [04 §4.2] and Init before InitialMission is satisfied.
-		prog := &cob.Program{
-			Code:        []uint32{},
-			Scripts:     map[string]int{},
-			Pieces:      []string{},
-			Statics:     0,
-			ScriptsByID: []int{},
-		}
-		vm := cob.NewVM(prog)
-		u.SetScript(vm)
-		// Start Create if script exists (empty prog has none, so no-op).
-		_, _ = vm.StartByName("Create", nil), prog
+		return fmt.Errorf("session: unit %d has no COB binding before InitialMission [04 §4.1]", u.Handle)
 	}
+	return nil
 }
 
 // wireMissionCargo wires immediate attach i-verb cargo from InitialMission [04 §3.6] P0-04.
@@ -681,13 +675,13 @@ func PublishAllUnits(s *Session, spy *VisibilityLoadSpy) {
 			continue
 		}
 		// Coverage tile is half-resolution [03 §3.1]: cell/2. Height byte and
-		// radius use catalog values when available; fixtures use zero/32 which
-		// still exercises the synchronous publication path.
+		// radius uses catalog values when available; a zero definition keeps the
+		// established default radius.
 		var cx, cz int32
 		var radius int32 = 32
 		var height uint8
 		if s.World != nil {
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// Same derivation the per-tick refresh uses, so a
 			// loaded session publishes the footprints it would have published
 			// while running.
 			height = heightByteAt(u, seaLevelFor(s))

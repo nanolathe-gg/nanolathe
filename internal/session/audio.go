@@ -62,8 +62,9 @@ func (s *Session) PresentationCRT() *presentation.CRTRandom {
 // InitAudio creates the presentation audio queue/cache/music for the session
 // [03 §8.3][03 §8.4] C16 C18 C20. It is presentation-only and uses the CRT
 // stream for variant draws [03 §8.3] C19 [I4]; it never touches the simulation
-// RNG. Missing VFS or catalog degrades silently [P1-02 §2.2] but the queue is
-// still created so Insert never panics. Call once after Catalog/Vis are bound.
+// RNG. Missing optional sample aliases resolve to silence [03 §8.2], while
+// the queue remains available for event production. Call once after
+// Catalog/Vis are bound.
 func (s *Session) InitAudio(fs vfs.FSOps) {
 	if s == nil {
 		return
@@ -73,7 +74,7 @@ func (s *Session) InitAudio(fs vfs.FSOps) {
 	}
 	if s.AudioQueue == nil {
 		s.AudioQueue = audio.NewQueue()
-		// Seed from CRT if available for determinism in tests; presentation RNG separate [I4].
+		// The queue starts with its presentation seed until the shared CRT is bound [I4].
 		s.AudioQueue.Seed(1)
 		s.AudioQueue.Configure(10, 10, true, true)
 	}
@@ -113,8 +114,7 @@ func (s *Session) InitAudio(fs vfs.FSOps) {
 	// Resolver maps unit handle to its sound category via catalog [02 "Sound category record"] [03 §8.3] C17.
 	s.AudioQueue.SetResolver(s.audioResolver)
 	// Playback sink loads the sample via cache; missing alias degrades silently [03 §8.2] C20.
-	// When a backend is present it also plays via PCM [03 §8.3] [I6]; headless
-	// backends record the alias without constructing a device [I5].
+	// When a backend is present it also plays via PCM [03 §8.3] [I6].
 	s.AudioQueue.OnPlay(func(alias string, slot audio.Slot, unit pool.Handle) {
 		if alias == "" || s.AudioRegistry == nil {
 			return
@@ -128,19 +128,15 @@ func (s *Session) InitAudio(fs vfs.FSOps) {
 			if be := audio.GlobalBackend(); be != nil {
 				_ = be.PlaySample(sample, 1.0, 0)
 			}
-		} else if be := audio.GlobalBackend(); be != nil {
-			// Preserve the resolved identity at the backend boundary even when
-			// optional sample data is unavailable; the backend degrades silently.
-			_ = be.PlayAlias(alias, nil, 1.0, 0)
 		}
 	})
 	// Speech sink is presentation only; keep no-op for now but preserve call order [03 §8.3] C17.
 	s.AudioQueue.OnSpeech(func(line string) {
 		_ = line
 	})
-	// Probe music tracks for CD/MCI fallback [03 §8.4].
+	// Probe the CD/MCI track path [03 §8.4].
 	s.initMusicTracks()
-	// Briefing alias fallback: try to preload briefing sound without playing.
+	// Preload the selected briefing alias without playing it [03 §8.4].
 	_ = s.preloadBriefing()
 }
 
@@ -193,8 +189,8 @@ func (s *Session) SetAudioViewport(v audio.Viewport) {
 	s.audioViewport = v
 }
 
-// ViewportForAudio returns the current audio viewport for tests and client
-// presentation. It is a copy; mutations do not affect session state.
+// ViewportForAudio returns the current audio viewport for client presentation.
+// It is a copy; mutations do not affect session state.
 func (s *Session) ViewportForAudio() audio.Viewport {
 	if s == nil {
 		return audio.Viewport{}
@@ -261,7 +257,7 @@ func (s *Session) EmitCancelDestruct(unit pool.Handle) bool {
 }
 
 // IsAudibleAt reports the retail audience gate for a world position
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [03 §8.3] presentation. It quantizes with sign-corrected floor division to visibility
 // tiles (pos>>20) and tests the mode-selected grid: explored byte grid when
 // mode &2 !=0 else LOS word mask at local player bit only (no ally OR)
 // [03 §3.1]. Off-map is silent. Presentation-only, uses no Sim RNG [I4].
@@ -313,12 +309,12 @@ func (s *Session) PositionalAttenuation(pos [3]numeric.Fixed) int32 {
 // viewport-relative placement [03 §8.3]. It first checks IsAudibleAt; off-map
 // or failing the local gate is silent locally. Otherwise it computes pan or
 // attenuation (caller can use the returned values for mixer), attempts to load
-// the sample via cache (degrade on missing [P1-02 §2.2]), and returns pan/vol
+// the sample via cache (missing aliases resolve to silence [03 §8.2]), and returns pan/vol
 // plus audible flag. Presentation-only, uses CRT for any variant draw inside
 // the cache path only if the alias is a category variant; direct alias load
 // does not draw [I4].
 // When a windowed backend is installed the alias is also played via PCM with
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// volume/pan derived from the positional math [03 §8.3] [I6].
 func (s *Session) EmitPositional(alias string, pos [3]numeric.Fixed) (audio.Pan, int32, bool) {
 	alias = strings.TrimSpace(alias)
 	if alias == "" || s == nil {
@@ -392,8 +388,8 @@ func (s *Session) TickAudio(presentationFrame uint32) {
 }
 
 // TickAudioClock drains and polls music using the shared presentation clock.
-// It is the preferred live-path entry point; TickAudio(uint32) remains for
-// deterministic fixtures that explicitly provide a FrameSerial.
+// It is the preferred presentation entry point; TickAudio(uint32) remains for
+// callers that explicitly provide a FrameSerial.
 func (s *Session) TickAudioClock(clock *presentation.Clock) {
 	if s == nil || s.AudioQueue == nil || clock == nil {
 		return
@@ -412,7 +408,7 @@ func (s *Session) TickAudioClock(clock *presentation.Clock) {
 // [I1][I6]. Call just before Snapshot.Publish so client can read Sounds without
 // touching the live queue. Alias is resolved via variant draw at Drain time,
 // so this copy stores Slot/Unit/Frame only; alias is filled at playback via
-// OnPlay. For tests that need alias, they can Drain first.
+// OnPlay.
 func (s *Session) CollectAudioForSnapshot(frame *snapshot.Frame) {
 	if s == nil || frame == nil || s.AudioQueue == nil {
 		return
@@ -436,8 +432,8 @@ func (s *Session) CollectAudioForSnapshot(frame *snapshot.Frame) {
 }
 
 // initMusicTracks probes VFS for CD/music track count and configures the
-// controller's mode and track count [03 §8.4]. Zero tracks degrades to silence
-// [P1-02 §2.2] but not fatal. Presentation-only.
+// controller's mode and track count [03 §8.4]. Zero tracks leaves the CD/MCI
+// controller idle, as on a missing disc. Presentation-only.
 func (s *Session) initMusicTracks() {
 	if s == nil || s.AudioMusic == nil {
 		return
@@ -447,7 +443,7 @@ func (s *Session) initMusicTracks() {
 		fs = s.audioFS
 	}
 	num := audio.ProbeMusicTracks(fs)
-	// Also consider briefing presence for mode single fallback.
+	// A briefing alias selects the single-track CD/MCI mode [03 §8.4].
 	hasBrief := false
 	if s.Mission != nil && s.Mission.OTA != nil && s.Mission.OTA.Global != nil {
 		// Decode quickly without full MissionGlobals to avoid import cycle; use raw string presence.
@@ -466,9 +462,9 @@ func (s *Session) initMusicTracks() {
 	}
 }
 
-// preloadBriefing attempts to load the mission briefing sound alias for
-// presentation fallback [03 §8.4][P1-02 §2.1]. Missing alias degrades silently
-// [P1-02 §2.2]. Presentation-only.
+// preloadBriefing attempts to load the mission briefing sound alias selected
+// by the retail field precedence [03 §8.4]. Missing aliases resolve to silence
+// [03 §8.2]. Presentation-only.
 func (s *Session) preloadBriefing() error {
 	if s == nil || s.AudioCache == nil || s.Mission == nil || s.Mission.OTA == nil || s.Mission.OTA.Global == nil {
 		return nil
@@ -483,7 +479,7 @@ func (s *Session) preloadBriefing() error {
 	}
 	_, err := s.loadAudioAlias(alias)
 	if err != nil {
-		// Fallback to music/CD path already probed; degrade not fatal [P1-02 §2.2].
+		// PlayBriefing may use the CD/MCI path when this alias is unavailable.
 		return err
 	}
 	return nil
@@ -495,7 +491,7 @@ func (s *Session) preloadBriefing() error {
 // and water sounds via EmitWeaponHit and start sounds via EmitWeaponStart.
 // Unit-complete etc. remain via the construction hooks. The orchestrator calls
 // this from composition.go after the combat service is bound; do NOT edit
-// composition.go directly. Headless never constructs a device [I5].
+// composition.go directly. Device ownership remains at the client boundary.
 func (s *Session) InstallAudioBridge() {
 	if s == nil || s.Combat == nil {
 		return
@@ -536,9 +532,9 @@ func InstallAudioBridge(s *Session) {
 }
 
 // PlayBriefing plays the mission briefing sound if present; otherwise it
-// falls back to music/CD playback [03 §8.4]. It uses the briefing alias
+// falls back to CD/MCI playback [03 §8.4]. It uses the briefing alias
 // resolution order GlamourSound → Brief → Narration → MissionHint
-// [P1-02 §2.1] and degrades silently when missing.
+// [03 §8.4] and resolves an unavailable alias through the CD/MCI path.
 func (s *Session) PlayBriefing() bool {
 	if s == nil {
 		return false

@@ -86,6 +86,25 @@ type Account struct {
 	Body       []byte
 }
 
+// mergeAccount folds a later account occurrence into the first occurrence.
+// Retail treats duplicate accounts as one logical account: scalar items are
+// last-writer-wins and repeated binary boxes append in descriptor order [08
+// "Save-file organization"].
+func mergeAccount(dst, src *Account) {
+	for _, item := range src.Ints {
+		dst.SetInt(item.Name, item.Value)
+	}
+	for _, item := range src.Doubles {
+		dst.SetDouble(item.Name, item.Value)
+	}
+	for _, item := range src.Strings {
+		dst.SetString(item.Name, item.Value)
+	}
+	for _, box := range src.Boxes {
+		dst.AppendBox(box.Name, box.Number, box.Data)
+	}
+}
+
 func (a *Account) SetInt(name string, value int32) {
 	for i := range a.Ints {
 		if a.Ints[i].Name == name {
@@ -584,7 +603,11 @@ func OpenBytes(data []byte, expectedTag string) (*Bank, error) {
 		// For raw banks, data after descriptors is the payload bytes themselves, and descriptor offsets point into that region.
 		// The above copy already extracts them; no extra handling needed.
 
-		bank.accounts = append(bank.accounts, account)
+		if existing, ok := bank.Account(account.Name); ok {
+			mergeAccount(existing, account)
+		} else {
+			bank.accounts = append(bank.accounts, account)
+		}
 		bank.warnings = warnings
 		cursor += int(span)
 		if cursor == poolEnd {

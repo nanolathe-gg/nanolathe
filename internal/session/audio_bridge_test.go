@@ -102,30 +102,6 @@ func TestInstallAudioBridge_PreservesQueueArbitration(t *testing.T) {
 	}
 }
 
-func TestEmitPositionalHeadlessNoDevice(t *testing.T) {
-	s := &Session{}
-	s.AudioQueue = audio.NewQueue()
-	s.AudioCache = audio.NewCache(nil)
-	s.Vis = allVisibleAudioService()
-	_, _ = s.AudioCache.Put("pos_alias", []byte{128, 128})
-	be := audio.NewBackend(true)
-	old := audio.GlobalBackend()
-	audio.SetGlobalBackend(be)
-	defer audio.SetGlobalBackend(old)
-	pos := [3]numeric.Fixed{0, 0, 0}
-	pan, vol, ok := s.EmitPositional("pos_alias", pos)
-	if !ok {
-		t.Fatal("positional should be audible with explicit visibility")
-	}
-	if be.PlayCount() != 1 {
-		t.Fatalf("positional play count %d want 1 pan %v vol %d aliases %v", be.PlayCount(), pan, vol, be.PlayedAliases())
-	}
-	// headless should not have context
-	if be.IsHeadless() == false {
-		t.Fatal("headless backend should be headless")
-	}
-}
-
 func TestEmitPositionalRequiresVisibility(t *testing.T) {
 	s := &Session{AudioCache: audio.NewCache(nil)}
 	_, _ = s.AudioCache.Put("pos_alias", []byte{128, 128})

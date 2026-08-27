@@ -28,7 +28,7 @@ func TestStrictSkirmish_WindowedHumanUsability(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(crtSeed)
 	s.InitWindForSession(&crt, 0)
-	_ = createAndBindServices(s)
+	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
 	s.State = StateBattle
 	def := cat.Units["armcom"]

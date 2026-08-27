@@ -33,7 +33,7 @@ func TestRX03_Trace_AimDispatchThenCOBReturnAreObserved(t *testing.T) {
 	targetDef := cat.Units["corcom"]
 	targetDef.MaxDamage = 200
 
-	s := strictNewSessionWithUnits(0, simSeed, crtSeed)
+	s := strictNewSessionWithUnits(t, 0, simSeed, crtSeed)
 	hShooter, _ := s.Units.Create(shooterDef, 0, numeric.Fixed(10*16*65536), 0, numeric.Fixed(10*16*65536))
 	hTarget, _ := s.Units.Create(targetDef, 1, numeric.Fixed(12*16*65536), 0, numeric.Fixed(12*16*65536))
 	shooter := s.Units.Unit(hShooter)
@@ -80,7 +80,7 @@ func TestRX03_Trace_AimDispatchThenCOBReturnAreObserved(t *testing.T) {
 }
 
 func TestRX03_Trace_NoVictoryLatchNoiseWithoutResult(t *testing.T) {
-	s := strictNewSessionWithUnits(2, 91, 92)
+	s := strictNewSessionWithUnits(t, 2, 91, 92)
 	s.SetTraceEnabled(true)
 	s.ClearTrace()
 	for tick := 1; tick <= 20; tick++ {
@@ -112,7 +112,7 @@ func TestRX03_Trace_NoVictoryLatchNoiseWithoutResult(t *testing.T) {
 // Weaponless scripted units must have their COB threads progressed by the
 // authoritative loop's exactly-once per-visit drain [04 §4.2][04 §4.6].
 func TestRX03_Drain_WeaponlessScriptThreadProgresses(t *testing.T) {
-	s := strictNewSessionWithUnits(2, 93, 94)
+	s := strictNewSessionWithUnits(t, 2, 93, 94)
 	def := strictMinimalCatalog().Units["armcom"]
 	h, _ := s.Units.Create(def, 0, strictCellToWorld(20), 0, strictCellToWorld(20))
 	u := s.Units.Unit(h)

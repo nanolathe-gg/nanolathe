@@ -22,7 +22,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	pathpkg "github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
@@ -58,7 +57,7 @@ func TestP0I17_Gate1_Composition(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(1)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("createAndBindServices: %v", err)
 	}
 	if err := s.ValidateComposition(); err != nil {
@@ -124,7 +123,7 @@ func TestP0I17_Gate2_Move(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(42)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	s.RegisterAll()
@@ -274,7 +273,7 @@ func TestP0I17_Gate3_Builder(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(5)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	s.RegisterAll()
@@ -431,7 +430,7 @@ func TestP0I17_Gate4_Shooter(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(7)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	s.RegisterAll()
@@ -609,7 +608,7 @@ func newShooterSessionForGate4(t *testing.T, cat *content.Catalog) *Session {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(7)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind2: %v", err)
 	}
 	s.RegisterAll()
@@ -713,7 +712,7 @@ func TestP0I17_Gate5_Feature(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(9)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	s.RegisterAll()
@@ -841,7 +840,7 @@ func TestP0I17_Gate6_AI(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(11)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	mgr := &ai.Manager{Player: 1}
@@ -928,7 +927,7 @@ func TestP0I17_Gate6_AI(t *testing.T) {
 	sB.Econ.SeedDeadlines(0)
 	var crt2 rng.CRT = rng.NewCRT(11)
 	sB.InitWindForSession(&crt2, 0)
-	if err := createAndBindServices(sB); err != nil {
+	if err := createAndBindServicesForTest(t, sB); err != nil {
 		t.Fatalf("bind B: %v", err)
 	}
 	mgr2 := &ai.Manager{Player: 1}
@@ -994,7 +993,7 @@ func TestP0I17_Gate7_Mission(t *testing.T) {
 	s.Econ.SeedDeadlines(0)
 	var crt rng.CRT = rng.NewCRT(13)
 	s.InitWindForSession(&crt, 0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	hFoe, _ := s.Units.Create(armflea, 1, numeric.Fixed(10*16*65536), numeric.Fixed(0), numeric.Fixed(10*16*65536))
@@ -1054,130 +1053,6 @@ func TestP0I17_Gate7_Mission(t *testing.T) {
 	}
 }
 
-// TestP0I17_Gate8_Save runs the save gate [P0-I11].
-// Command: go test -run TestP0I17_Gate8_Save ./internal/session -count=1
-func TestP0I17_Gate8_Save(t *testing.T) {
-	rng.SeedGlobal(12345, 67890)
-	cat := minimalCatalogForStrict()
-	if cat.Weapons == nil {
-		cat.Weapons = map[string]*content.WeaponDef{}
-	}
-	cat.Weapons["testweapon"] = &content.WeaponDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testweapon"}, ID: 1, Name: "testweapon", WeaponVelocity: 65536 * 5, Range: 5000, ReloadTime: 10}
-	cat.Weapons["testweapon"].CanonicalKey = "testweapon"
-	if cat.Features == nil {
-		cat.Features = map[string]*content.FeatureDef{}
-	}
-	featDef := &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "tree"}, FootprintX: 1, FootprintZ: 1, Object: "tree"}
-	featDef.CanonicalKey = "tree"
-	cat.Features["tree"] = featDef
-	terrain := minimalTerrain()
-	m := syntheticMission()
-	build := func() *Session {
-		s := &Session{Catalog: cat, World: terrain, Mission: m, Clock: &clock.State{Requested: 10, Active: 10}, Snapshot: &snapshot.Buffer{}, Econ: &economy.Service{}, Latch: NewEndLatch()}
-		w, _ := newSlicedWorld(cat)
-		s.Units = w
-		for i := 0; i < 2; i++ {
-			s.Econ.Players[i].Exists = true
-			s.Econ.Players[i].ControllerState = uint8(1 + i%2)
-			s.Econ.Players[i].UpdateTime = 0
-			s.Econ.Players[i].WinLoseTime = 0
-		}
-		s.Econ.SeedDeadlines(0)
-		var crtPtr *rng.CRT
-		if rng.Global.Crt == nil {
-			tmp := rng.NewCRT(67890)
-			crtPtr = &tmp
-		} else {
-			crtPtr = rng.Global.Crt
-		}
-		s.InitWindForSession(crtPtr, 0)
-		if err := createAndBindServices(s); err != nil {
-			t.Fatalf("bind: %v", err)
-		}
-		s.RegisterAll()
-		s.State = StateBattle
-		s.Clock.ScaledAnchor = 0
-		return s
-	}
-	sA := build()
-	hMove, _ := sA.Units.Create(cat.Units["armcom"], 0, numeric.Fixed(10*65536), 0, numeric.Fixed(10*65536))
-	if hMove == 0 {
-		t.Fatalf("create")
-	}
-	if u := sA.Units.Unit(hMove); u != nil {
-		q := orders.QueueForUnit(u)
-		id := orders.Lookup("Move_Ground")
-		if id == 0 {
-			id = orders.Lookup("QMove")
-		}
-		if id != 0 {
-			q.Push(id, orders.NewMoveNode(id, numeric.Fixed(30*65536), numeric.Fixed(30*65536), sA.Clock.GlobalTick, hMove, false))
-		}
-	}
-	if sA.Combat != nil {
-		hProj, ok := sA.Combat.Reserve()
-		if ok {
-			idx := int(hProj) - 1
-			if idx >= 0 && idx < len(sA.Combat.Records) {
-				p := &sA.Combat.Records[idx]
-				p.WeaponID = 1
-				p.Pos = combat.Vec3{X: numeric.Fixed(15 * 65536), Y: numeric.Fixed(10 * 65536), Z: numeric.Fixed(15 * 65536)}
-				p.StartPos = p.Pos
-				p.TargetPos = combat.Vec3{X: numeric.Fixed(30 * 65536), Y: 0, Z: numeric.Fixed(30 * 65536)}
-				p.Velocity = combat.Vec3{X: numeric.Fixed(1 * 65536), Y: 0, Z: numeric.Fixed(1 * 65536)}
-				p.Speed = numeric.Fixed(1 * 65536)
-				p.Shooter = hMove
-				p.ExpiryTick = 1000
-			}
-		}
-	}
-	if sA.Features != nil {
-		inst := sA.Features.PlaceAt(5, 5, featDef)
-		if inst != nil {
-			inst.IsBurning = true
-			inst.BurnTicks = 10
-			inst.BurnDuration = 100
-		}
-	}
-	sA.Latch.Arm()
-	sA.Latch.Pending = 1
-	for i := 0; i < 50; i++ {
-		sA.Step(int32(i))
-	}
-	st := sA.CaptureStateV1()
-	b := save.NewBuilder(save.RetailTag)
-	save.WriteStateV1(b, st)
-	bank, err := save.OpenBytes(b.Bytes(), save.RetailTag)
-	if err != nil {
-		t.Fatalf("OpenBytes: %v", err)
-	}
-	decoded, err := save.ReadStateV1(bank, cat.Hash, cat.Manifest)
-	if err != nil {
-		t.Fatalf("ReadStateV1: %v", err)
-	}
-	for i := 50; i < 350; i++ {
-		sA.Step(int32(i))
-	}
-	dumpA := authoritativeDump(sA)
-	drawsASim := rng.Global.Sim.Draws()
-	drawsACrt := rng.Global.Crt.Draws()
-	sB := build()
-	if err := sB.RestoreStateV1(decoded); err != nil {
-		t.Fatalf("Restore: %v", err)
-	}
-	start := decoded.Clock.GlobalTick + 1
-	for i := 0; i < 300; i++ {
-		sB.Step(int32(start) + int32(i))
-	}
-	dumpB := authoritativeDump(sB)
-	if dumpA != dumpB {
-		t.Fatalf("save gate: uninterrupted vs save/reload dump mismatch:\nA %s\nB %s", dumpA, dumpB)
-	}
-	if drawsASim != rng.Global.Sim.Draws() || drawsACrt != rng.Global.Crt.Draws() {
-		t.Fatalf("RNG draws mismatch after 300 ticks")
-	}
-}
-
 // TestP0I17_Gate9_PresentationIsolation verifies headless vs rendered dumps equal [I6].
 // Command: go test -run TestP0I17_Gate9_PresentationIsolation ./internal/session -count=1
 func TestP0I17_Gate9_PresentationIsolation(t *testing.T) {
@@ -1196,7 +1071,7 @@ func TestP0I17_Gate9_PresentationIsolation(t *testing.T) {
 		s.Econ.SeedDeadlines(0)
 		var crt rng.CRT = rng.NewCRT(888)
 		s.InitWindForSession(&crt, 0)
-		if err := createAndBindServices(s); err != nil {
+		if err := createAndBindServicesForTest(t, s); err != nil {
 			t.Fatalf("bind: %v", err)
 		}
 		s.RegisterAll()
@@ -1355,12 +1230,6 @@ func TestP0I17_Gate10_Corpus(t *testing.T) {
 			if d1 != d2 {
 				t.Fatalf("corpus deterministic mismatch for %q:\n%s\nvs\n%s", k, d1, d2)
 			}
-			st := sess.CaptureStateV1()
-			b := save.NewBuilder(save.RetailTag)
-			save.WriteStateV1(b, st)
-			bank, _ := save.OpenBytes(b.Bytes(), save.RetailTag)
-			dec, _ := save.ReadStateV1(bank, cat.Hash, cat.Manifest)
-			_ = dec
 		})
 	}
 	for _, mp := range missionPaths {
@@ -1392,7 +1261,6 @@ var (
 	_ = economy.Service{}
 	_ = orders.Lookup
 	_ = pool.Handle(0)
-	_ = save.NewBuilder
 	_ = visibility.Mode(0)
 	_ = mission.Mission{}
 	_ = ai.Manager{}

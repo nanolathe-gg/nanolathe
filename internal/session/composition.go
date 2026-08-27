@@ -180,8 +180,7 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 }
 
 // strictCatalog compiles a single immutable catalog from the VFS. It never
-// fabricates an empty fallback. Fixture constructors must explicitly supply a
-// catalog or use the ForTest variant. [02 §5]
+// fabricates an empty fallback. [02 §5]
 func strictCatalog(fs vfs.FSOps, cat *content.Catalog) (*content.Catalog, error) {
 	return strictCatalogWithProgress(fs, cat, nil)
 }
@@ -243,32 +242,26 @@ func applySchemaStrict(terrain *world.Terrain, cat *content.Catalog, m *mission.
 	if m == nil {
 		return fmt.Errorf("session: nil mission for ApplySchema")
 	}
-	// When catalog has map headers, enforce strict schema resolution.
-	// Fixture catalogs with no Maps are allowed to use zero metal.
-	if cat != nil && cat.Maps != nil && len(cat.Maps) > 0 {
-		key := content.CanonicalKey(m.TerrainKey)
-		mh, ok := cat.Maps[key]
-		if !ok {
-			return fmt.Errorf("session: map header %q not found [02 \"Map files\"]", m.TerrainKey)
-		}
-		idx := -1
-		for i, sch := range mh.Schemas {
-			if sch.Name == m.Schema.Name {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			return fmt.Errorf("session: schema %q not found for map %q", m.Schema.Name, m.TerrainKey)
-		}
-		if err := terrain.ApplySchema(mh, idx); err != nil {
-			return fmt.Errorf("session: ApplySchema: %w", err)
-		}
-		return nil
+	if cat == nil || len(cat.Maps) == 0 {
+		return fmt.Errorf("session: missing map metadata for terrain %q [02 \"Map files\"]", m.TerrainKey)
 	}
-	// Fixture path with no map header: seed zero metal so SampleMetal can run.
-	if err := terrain.ApplySchema(nil, 0); err != nil {
-		return fmt.Errorf("session: ApplySchema zero: %w", err)
+	key := content.CanonicalKey(m.TerrainKey)
+	mh, ok := cat.Maps[key]
+	if !ok || mh == nil {
+		return fmt.Errorf("session: map header %q not found [02 \"Map files\"]", m.TerrainKey)
+	}
+	idx := -1
+	for i, sch := range mh.Schemas {
+		if sch.Name == m.Schema.Name {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("session: schema %q not found for map %q", m.Schema.Name, m.TerrainKey)
+	}
+	if err := terrain.ApplySchema(mh, idx); err != nil {
+		return fmt.Errorf("session: ApplySchema: %w", err)
 	}
 	return nil
 }
@@ -295,30 +288,32 @@ func newSlicedWorld(cat *content.Catalog) (*units.World, error) {
 
 // newSlicedWorldWithCOB creates the sliced pool and installs the COB loader [04 §4.1][P1-I01].
 func newSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps) (*units.World, error) {
+	if fs == nil {
+		return nil, fmt.Errorf("session: missing filesystem for COB binding [04 §4.1]")
+	}
 	w, err := newSlicedWorld(cat)
 	if err != nil {
 		return nil, err
 	}
-	if fs != nil {
-		w.SetCOBSource(fs, globalCobLoader)
-	} else {
-		w.SetCOBSource(nil, globalCobLoader)
-	}
+	w.SetCOBSource(fs, globalCobLoader)
 	return w, nil
 }
 
 // ensureCOBForAll verifies that every production unit has the strict binding
 // installed by createAndBindServices. It never repairs a missing binding with
-// an empty VM; synthetic empty VMs remain explicit fixture-only state.
+// an empty VM.
 func ensureCOBForAll(s *Session, fs vfs.FSOps) error {
-	if s == nil || s.Units == nil {
-		return nil
+	if s == nil {
+		return fmt.Errorf("session: nil session while checking COB bindings [04 §4.1]")
+	}
+	if s.Units == nil {
+		return fmt.Errorf("session: missing Units while checking COB bindings [04 §4.1]")
 	}
 	if fs == nil {
-		return nil // explicit fixture path
+		return fmt.Errorf("session: missing filesystem while checking COB bindings [04 §4.1]")
 	}
 	if !s.Units.HasCOBBinder() {
-		return nil // legacy campaign fixture path has not entered composition
+		return fmt.Errorf("session: missing COB binder after battle entry [04 §4.1]")
 	}
 	for _, u := range s.Units.IterSliced() {
 		if u == nil || !u.Alive {
@@ -361,6 +356,16 @@ func createAndBindServices(s *Session) error {
 	if s.Units == nil {
 		return fmt.Errorf("session: missing Units for service wiring [01 §6.1]")
 	}
+	if err := requireGlobalRNGStreams(); err != nil {
+		return err
+	}
+	if s.Wind == nil {
+		return fmt.Errorf("session: missing Wind for service wiring [01 §7.3]")
+	}
+	cobFS, cobLoader := s.Units.COBSource()
+	if (cobFS == nil) != (cobLoader == nil) {
+		return fmt.Errorf("session: incomplete COB source for service wiring [04 §4.1]")
+	}
 	if s.Presentation == nil {
 		s.Presentation = presentation.NewCollector(presentation.Limits{})
 	}
@@ -369,12 +374,14 @@ func createAndBindServices(s *Session) error {
 		// admits detached event views and reads its immutable snapshot [03 §1].
 		s.Effects = presentation.NewEffectServiceWithPool(presentation.EffectCapacity, &render.FixedEffectPool{})
 	}
-	// Production worlds carry a VFS source. Install one strict binder before
-	// battle entry so scenario, construction, and forced-slot creation all
-	// resolve the same authored model/script path. Fixture worlds leave the
-	// source nil and may attach SyntheticCOBForTests explicitly.
-	if fs, _ := s.Units.COBSource(); fs != nil {
-		s.Units.SetCOBBinder(func(u *units.Unit) error { return s.bindUnitCOB(fs, u) })
+	// Worlds with an authored source use one binder before battle entry so
+	// scenario, construction, and forced-slot creation resolve the same model
+	// and script path [04 §4.1].
+	if cobFS != nil {
+		s.Units.SetCOBBinder(func(u *units.Unit) error { return s.bindUnitCOB(cobFS, u) })
+		if !s.Units.HasCOBBinder() {
+			return fmt.Errorf("session: missing COB binder for service wiring [04 §4.1]")
+		}
 	}
 	if s.Econ == nil {
 		s.Econ = &economy.Service{}
@@ -390,30 +397,10 @@ func createAndBindServices(s *Session) error {
 		}
 		return u.CloakCost() // [05 "Cloak debit"] stationary vs moving [P1-I04]
 	}
-	// Wind must already be present via InitWindForSession; if missing, create zero-range fallback
-	if s.Wind == nil {
-		var crt *rng.CRT
-		if rng.Global.Crt != nil {
-			crt = rng.Global.Crt
-		} else {
-			tmp := rng.NewCRT(0)
-			crt = &tmp
-		}
-		s.InitWindForSession(crt, 0)
-		s.Econ.Wind = s.Wind
-	}
 	// Features [05] with terrain, sim, crt, wind
 	if s.Features == nil {
 		sim := rng.Global.Sim
 		crt := rng.Global.Crt
-		if sim == nil {
-			tmp := rng.NewSimulation(0)
-			sim = &tmp
-		}
-		if crt == nil {
-			tmp := rng.NewCRT(0)
-			crt = &tmp
-		}
 		s.Features = features.NewService(s.World, sim, crt, s.Wind)
 		s.Features.PopulateFromTerrain()
 	} else if s.Features.Terrain != s.World {

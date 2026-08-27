@@ -40,7 +40,7 @@ func TestP0I07_VisibilityModeRespectsSkirmishConfig(t *testing.T) {
 		s.Econ.Players[0].ControllerState = 1
 		s.Econ.Players[1].Exists = true
 		s.Econ.Players[1].ControllerState = 1
-		if err := createAndBindServices(s); err != nil {
+		if err := createAndBindServicesForTest(t, s); err != nil {
 			t.Fatalf("%s: createAndBindServices: %v", tc.name, err)
 		}
 		mode := s.Vis.Mode()
@@ -80,7 +80,7 @@ func TestP0I07_SessionIsVisible(t *testing.T) {
 	s.Econ.Players[1].Exists = true
 	s.Econ.Players[1].ControllerState = 2
 	s.Econ.SeedDeadlines(0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	// Create two units far apart > sight. Y above sea (30) so not underwater.
@@ -161,7 +161,7 @@ func TestP0I07_SessionIsVisible(t *testing.T) {
 	s2.Econ.Players[1].ControllerState = 1
 	s2.Econ.Players[2].Exists = true
 	s2.Econ.Players[2].ControllerState = 2
-	if err := createAndBindServices(s2); err != nil {
+	if err := createAndBindServicesForTest(t, s2); err != nil {
 		t.Fatalf("bind2: %v", err)
 	}
 	// Publish ally 1 at 20,20
@@ -190,7 +190,7 @@ func TestP0I07_FogSnapshot(t *testing.T) {
 	s.Econ.Players[0].Exists = true
 	s.Econ.Players[0].ControllerState = 1
 	s.Econ.SeedDeadlines(0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	s.RegisterAll()
@@ -232,7 +232,7 @@ func TestP0I07_MovementRefreshViaTick(t *testing.T) {
 	s.Econ.Players[1].Exists = true
 	s.Econ.Players[1].ControllerState = 2
 	s.Econ.SeedDeadlines(0)
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	def := &content.UnitDef{UnitName: "scout", MaxDamage: 100, SightDistance: 160, FootprintX: 1, FootprintZ: 1}
@@ -288,7 +288,7 @@ func TestP0I07_SaveLoadRebuild(t *testing.T) {
 	s.Econ = economyForTest()
 	s.Econ.Players[0].Exists = true
 	s.Econ.Players[0].ControllerState = 1
-	if err := createAndBindServices(s); err != nil {
+	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	// Bind fixture sight shapes for sprite-mask raster (catalog has none in minimal fixture) [03 §3.2].
@@ -316,7 +316,7 @@ func TestP0I07_SaveLoadRebuild(t *testing.T) {
 	s2.Econ = economyForTest()
 	s2.Econ.Players[0].Exists = true
 	s2.Econ.Players[0].ControllerState = 1
-	if err := createAndBindServices(s2); err != nil {
+	if err := createAndBindServicesForTest(t, s2); err != nil {
 		t.Fatalf("bind2: %v", err)
 	}
 	s2.Vis.SetMode(visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled)

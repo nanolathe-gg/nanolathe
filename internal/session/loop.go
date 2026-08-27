@@ -792,9 +792,8 @@ func handleLoading(s *Session) {
 	if s.IsPendingBattle() {
 		return
 	}
-	// Synchronous path: if composition is valid (or at least terrain/catalog present), complete now.
-	// For fixtures that lack full composition, ValidateComposition would fail; we still complete to unblock tests.
-	// The gate requires newly constructed session cannot tick while loading, but loading handler must schedule battle for next dispatch.
+	// The loading barrier installs battle state; its first dispatch remains deferred
+	// until the next Advance call [08 "Session states"] C2.
 	_ = s.CompleteLoading()
 }
 
@@ -1417,12 +1416,6 @@ func (s *Session) authoritativeTick(tick uint32) {
 				p.WinLoseTime += 30
 				isDue = true
 			}
-		} else {
-			// Fixture-only fallback when Econ is nil; retail always has Econ for campaign.
-			// Tick%30 shape preserves ~1/sec when no deadline storage exists.
-			if tick%30 == 0 {
-				isDue = true
-			}
 		}
 		if isDue {
 			ctx := triggers.PollContext{Tick: tick, World: s.Units, LocalOwner: s.LocalOwner, EnemyOwner: s.EnemyOwner}
@@ -1586,7 +1579,6 @@ func (s *Session) initMeteor() {
 		return
 	}
 	s.Meteor.Initialized = true
-	// Default dimensions fallback 64x64 for fixtures without terrain.
 	var weaponName string
 	var radius int32
 	var density, duration, interval float64
@@ -1690,11 +1682,10 @@ func (s *Session) tickMeteor(tick uint32) {
 			return
 		}
 	}
-	mapW, mapH := int32(64), int32(64)
-	if s.World != nil {
-		mapW = s.World.CellW
-		mapH = s.World.CellH
+	if s.World == nil {
+		return
 	}
+	mapW, mapH := s.World.CellW, s.World.CellH
 	// Four scheduling-side draws consumed on every evaluation even when disabled [06 §6.5] I4.
 	sampledTX, sampledTZ, sampledOX, sampledOZ := combat.MeteorSchedule(crt, mapW, mapH)
 	if !s.Meteor.Enabled || s.Meteor.Weapon == nil {
@@ -2659,7 +2650,7 @@ func (s *Session) RegisterAll() {
 	if s.Units != nil {
 		// Derive actual local/enemy identities from session state if not yet set
 		// [P0-I13]. Skirmish stores them from SkirmishConfig, mission from
-		// economy player slots 0/1; fallback to 0/1 preserves fixture compatibility.
+		// economy player slots and controller states [08 "Established AI-facing data"].
 		if s.LocalOwner == 0 && s.EnemyOwner == 0 {
 			// Try SkirmishConfig first
 			foundLocal := false
@@ -2677,14 +2668,11 @@ func (s *Session) RegisterAll() {
 						foundEnemy = true
 					}
 				}
-				if foundLocal || foundEnemy {
+				if foundLocal {
 					s.LocalOwner = local
-					if foundEnemy {
-						s.EnemyOwner = enemy
-					} else {
-						// Single human skirmish fallback: enemy 1
-						s.EnemyOwner = 1
-					}
+				}
+				if foundEnemy {
+					s.EnemyOwner = enemy
 				}
 			}
 			if s.LocalOwner == 0 && s.EnemyOwner == 0 && s.Econ != nil {
@@ -2705,22 +2693,12 @@ func (s *Session) RegisterAll() {
 						foundE = true
 					}
 				}
-				if foundL || foundE {
-					if foundL {
-						s.LocalOwner = l
-					}
-					if foundE {
-						s.EnemyOwner = e
-					} else if s.EnemyOwner == 0 {
-						s.EnemyOwner = 1
-					}
-				} else {
-					s.LocalOwner = 0
-					s.EnemyOwner = 1
+				if foundL {
+					s.LocalOwner = l
 				}
-			} else if s.LocalOwner == 0 && s.EnemyOwner == 0 {
-				s.LocalOwner = 0
-				s.EnemyOwner = 1
+				if foundE {
+					s.EnemyOwner = e
+				}
 			}
 		}
 		localOwner := s.LocalOwner
@@ -2878,19 +2856,15 @@ func (s *Session) RegisterAll() {
 // loop in the package; a second one with a different hook position would be a
 // second settlement order.
 func (s *Session) tickPlayers(tick uint32) {
+	if s == nil || s.Econ == nil {
+		return
+	}
 	for player := 0; player < 10; player++ {
 		s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TracePlayerBegin, Player: player})
 		mgr := s.AI[player] // direct player-indexed access per RS-02 [08] I1
 		// Bind per-session RNG for isolation [RS-06][I4] — ensure manager uses session's stream, not shared global.
 		if mgr != nil && mgr.RNG == nil {
 			mgr.RNG = s.SimRNG()
-		}
-		if s.Econ == nil {
-			if mgr != nil {
-				mgr.Tick(tick, s.Units, nil)
-				s.emitTrace(SessionTraceEvent{Tick: tick, Kind: TraceAIDeadline, Player: player})
-			}
-			continue
 		}
 		// Capture economy helper/carry state before to emit EconomyRequest/Settle accurately without map iteration
 		beforeUpdateTime := s.Econ.Players[player].UpdateTime
@@ -3086,18 +3060,8 @@ func (s *Session) ContinueCampaign() bool {
 	if s.State != StatePostBattle {
 		return false
 	}
-	// Progress already written at latch time via trigger-poll ApplyCampaignResult [P1-01 §2.3].
-	// Ensure at least one slot holds W/L for gate: if Apply did not run (fixture without triggers),
-	// write current latch outcome.
-	if s.Progress.WL[s.CampaignSlot] == 0 {
-		win := s.Latch.IsWin()
-		if s.Latch.IsEnding() {
-			s.Progress.ApplyCampaignResult(s.CampaignSlot, win)
-		} else if s.VictoryDone {
-			s.Progress.ApplyCampaignResult(s.CampaignSlot, true)
-		} else if s.DefeatDone {
-			s.Progress.ApplyCampaignResult(s.CampaignSlot, false)
-		}
-	}
+	// Campaign progress is committed when the terminal latch becomes visible;
+	// CONTINUE only follows the established post-battle transition [P1-01 §2.3]
+	// [P1-01 §7.5].
 	return s.TransitionTo(StateRouter)
 }

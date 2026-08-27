@@ -19,7 +19,8 @@ import (
 // weapon cue could reach playback in the windowed battle.
 //
 // Everything here is presentation-only [I6]: no simulation state is read or
-// written, and a headless client never gets a device [I5].
+// written. The client owns the platform audio device at the presentation
+// boundary [03 §8.1].
 func attachBattleAudio(cl *client.Client, sess *session.Session, fs vfs.FSOps) {
 	if cl == nil || sess == nil {
 		return

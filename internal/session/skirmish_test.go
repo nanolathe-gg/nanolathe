@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -13,6 +14,75 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/vfs"
 )
+
+func prepareFixtureSkirmishCatalog(cat *content.Catalog, cfg *SkirmishConfig) {
+	if cat == nil || cfg == nil || len(cat.Units) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(cat.Units))
+	for name := range cat.Units {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	commander := ""
+	for _, name := range keys {
+		def := cat.Units[name]
+		if def != nil && def.UnitName != "" {
+			commander = def.UnitName
+			if def.Commander {
+				break
+			}
+		}
+	}
+	if commander == "" {
+		return
+	}
+	for i := 0; i < cfg.NumPlayers && i < 10; i++ {
+		side := cfg.Players[i].Side
+		if side >= 0 && side < len(cat.Sides) && cat.Sides[side] != nil && cat.Sides[side].Commander != "" {
+			continue
+		}
+		cfg.Players[i].Side = 0
+	}
+	if len(cat.Sides) == 0 {
+		cat.Sides = append(cat.Sides, &content.SideDef{Commander: commander})
+	} else if cat.Sides[0] == nil || cat.Sides[0].Commander == "" {
+		cat.Sides[0] = &content.SideDef{Commander: commander}
+	}
+}
+
+func skirmishBattleEntryFixture(s *Session, cfg *SkirmishConfig, m *mission.Mission, spy *BattleEntrySpy) error {
+	if s == nil {
+		return fmt.Errorf("session: nil session")
+	}
+	if m == nil || cfg == nil {
+		return fmt.Errorf("session: nil mission or config")
+	}
+	spyRecord(spy, "features")
+	if err := skirmishPlaceFeatures(s, m); err != nil {
+		return err
+	}
+	spyRecord(spy, "units")
+	if err := skirmishReconstructUnits(s, *cfg, m); err != nil {
+		return err
+	}
+	initCOBForSession(s)
+	wireMissionCargo(s, m)
+	spyRecord(spy, "barrier")
+	if err := skirmishCrossBarrier(s); err != nil {
+		return err
+	}
+	spyRecord(spy, "resources")
+	if s.Econ != nil {
+		for p := 0; p < cfg.NumPlayers && p < len(s.Econ.Players); p++ {
+			if s.Econ.Players[p].Exists {
+				economy.CreditSpawn(&s.Econ.Players[p], economy.Metal, float32(cfg.Players[p].Metal))
+				economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, float32(cfg.Players[p].Energy))
+			}
+		}
+	}
+	return nil
+}
 
 func fsFromMapSkirmish(t *testing.T, files map[string]string) *vfs.FS {
 	t.Helper()
@@ -196,6 +266,8 @@ func TestSkirmishDefaults(t *testing.T) {
 }
 
 func TestSkirmishBattleEntryOrder(t *testing.T) {
+	restoreRNG := scopeTestRNGStreams()
+	defer restoreRNG()
 	// C9 via the SAME shared order mission.go uses [08 "Placement and battle entry"].
 	ota := "[GlobalHeader]\n{\nminwindspeed=15;\nmaxwindspeed=35;\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=10;\nZPos=20;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=30;\nZPos=40;\n}\n}\n[units]\n{\n[unit0]\n{\nUnitname=armcom;\nXPos=100;\nZPos=200;\nPlayer=0;\n}\n}\n[features]\n{\n[feature0]\n{\nFeaturename=tree;\nXPos=5;\nZPos=5;\n}\n}\n}\n}\n"
 	fs := fsFromMapSkirmish(t, map[string]string{"maps/battle.ota": ota})
@@ -217,7 +289,8 @@ func TestSkirmishBattleEntryOrder(t *testing.T) {
 	// Mirror untouched before
 	beforeMirror := s.Econ.Players[0].Mirror
 	spy := &BattleEntrySpy{}
-	if err := skirmishBattleEntry(s, cfg, m, spy, false); err != nil {
+	prepareFixtureSkirmishCatalog(cat, &cfg)
+	if err := skirmishBattleEntryFixture(s, &cfg, m, spy); err != nil {
 		t.Fatalf("SkirmishBattleEntry: %v", err)
 	}
 	want := []string{"features", "units", "barrier", "resources"}

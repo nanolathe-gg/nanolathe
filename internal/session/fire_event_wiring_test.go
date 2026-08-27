@@ -10,7 +10,7 @@ import (
 )
 
 func TestCombatStartEventsPublishOnceInOrderWithoutStateHashFeedback(t *testing.T) {
-	s := strictNewSessionWithUnits(0, 17, 19)
+	s := strictNewSessionWithUnits(t, 0, 17, 19)
 	if s == nil || s.Combat == nil || s.Presentation == nil {
 		t.Fatal("strict session did not compose combat presentation")
 	}

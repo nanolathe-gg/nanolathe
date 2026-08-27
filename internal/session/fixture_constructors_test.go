@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
@@ -23,10 +24,56 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// scopeTestRNGStreams temporarily supplies deterministic streams to a fixture
+// constructor and restores only streams it installed.
+func scopeTestRNGStreams() func() {
+	oldSim, oldCRT := rng.Global.Sim, rng.Global.Crt
+	installedSim, installedCRT := false, false
+	if rng.Global.Sim == nil {
+		sim := rng.NewSimulation(0)
+		rng.Global.Sim = &sim
+		installedSim = true
+	}
+	if rng.Global.Crt == nil {
+		crt := rng.NewCRT(0)
+		rng.Global.Crt = &crt
+		installedCRT = true
+	}
+	return func() {
+		if installedSim {
+			rng.Global.Sim = oldSim
+		}
+		if installedCRT {
+			rng.Global.Crt = oldCRT
+		}
+	}
+}
+
+// createAndBindServicesForTest supplies the process dependencies that ordinary
+// same-package tests used to receive from composition fallbacks. Existing test
+// seeds and wind are preserved; absent values use deterministic test streams.
+func createAndBindServicesForTest(t *testing.T, s *Session) error {
+	if t != nil {
+		t.Helper()
+	}
+	restore := scopeTestRNGStreams()
+	if t != nil {
+		t.Cleanup(restore)
+	} else {
+		defer restore()
+	}
+	if s != nil && s.Wind == nil {
+		s.InitWindForSession(rng.Global.Crt, 0)
+	}
+	return createAndBindServices(s)
+}
+
 // NewMissionForTest is a fixture-only constructor. It retains lenient loading
 // behavior for same-package tests without placing that behavior in shipping
 // session construction.
 func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int) (*Session, error) {
+	restoreRNG := scopeTestRNGStreams()
+	defer restoreRNG()
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, fmt.Errorf("session: empty mission path")
@@ -75,14 +122,7 @@ func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficul
 	if err := s.SelectForGametype(GametypeCampaign); err != nil {
 		return nil, err
 	}
-	var crt *rng.CRT
-	if rng.Global.Crt != nil {
-		crt = rng.Global.Crt
-	} else {
-		tmp := rng.NewCRT(0)
-		crt = &tmp
-	}
-	s.InitWindForSession(crt, 0)
+	s.InitWindForSession(rng.Global.Crt, 0)
 	s.InitAudio(fs)
 	if s.Econ == nil {
 		s.Econ = &economy.Service{}
@@ -100,12 +140,6 @@ func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficul
 	s.Econ.SeedDeadlines(0)
 	if err := fixtureBattleEntry(s, m, nil); err != nil {
 		return nil, err
-	}
-	if s.Units != nil && fs != nil {
-		s.Units.SetCOBSource(fs, globalCobLoader)
-		if err := ensureCOBForAll(s, fs); err != nil {
-			return nil, err
-		}
 	}
 	if s.World != nil && s.Movement == nil {
 		grid := movement.NewOccupancyGrid()
@@ -208,6 +242,8 @@ func fixtureBattleEntry(s *Session, m *mission.Mission, spy *BattleEntrySpy) err
 // so existing deterministic fixtures continue to run. Production must use
 // NewSkirmishWithFS.
 func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (*Session, error) {
+	restoreRNG := scopeTestRNGStreams()
+	defer restoreRNG()
 	if err := cfg.Normalize(); err != nil {
 		return nil, err
 	}
@@ -243,9 +279,12 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 	var terrain *world.Terrain
 	if t, err := world.Load(fs, cat, cfg.MapName); err == nil {
 		terrain = t
-		// Best-effort ApplySchema for fixtures; ignore error when header missing
+		// Fixtures may supply an incomplete catalog/map pair. Use the explicit
+		// zero-metal schema only after the authored schema lookup fails.
 		if cat.Maps != nil && len(cat.Maps) > 0 {
-			_ = applySchemaStrict(terrain, cat, m)
+			if err := applySchemaStrict(terrain, cat, m); err != nil {
+				_ = terrain.ApplySchema(nil, 0)
+			}
 		} else {
 			_ = terrain.ApplySchema(nil, 0)
 		}
@@ -263,10 +302,11 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		}
 	} else {
 		unitsWorld = units.New(600, cat)
-		if fs != nil {
-			unitsWorld.SetCOBSource(fs, globalCobLoader)
-		}
 	}
+	// This constructor intentionally uses synthetic unit scripts. Keep the
+	// production COB source unset so fixture allocations do not enter strict
+	// authored-model binding.
+	unitsWorld.SetCOBSource(nil, nil)
 	localOwner := LocalOwnerForConfig(cfg)
 	enemyOwner := 0
 	for i := 0; i < cfg.NumPlayers && i < 10; i++ {
@@ -361,18 +401,13 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		return nil, fmt.Errorf("session: skirmish requires at least one hostile alliance [08 \"Skirmish configuration\"]")
 	}
 	s.Econ.SeedDeadlines(0)
-	var crt *rng.CRT
-	if rng.Global.Crt != nil {
-		crt = rng.Global.Crt
-	} else {
-		tmp := rng.NewCRT(0)
-		crt = &tmp
-	}
-	s.InitWindForSession(crt, 0)
+	s.InitWindForSession(rng.Global.Crt, 0)
 	s.InitAudio(fs)
-	// Create services best-effort for fixture: use strict helper but tolerate missing world
+	// Create the services needed by the fixture without entering the authored
+	// COB composition boundary.
 	if s.World != nil {
-		_ = createAndBindServices(s)
+		s.Features = features.NewService(s.World, rng.Global.Sim, rng.Global.Crt, s.Wind)
+		_ = createAndBindServicesForTest(nil, s)
 	} else {
 		// No terrain: still need at least combat etc for Validate? For fixture without world, we skip full binding
 		if s.Build == nil {
@@ -394,10 +429,8 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 			s.Path = s.Movement.Scheduler
 		}
 	}
-	if err := skirmishBattleEntry(s, cfg, m, nil, false); err != nil {
-		return nil, err
-	}
-	if err := ensureCOBForAll(s, fs); err != nil {
+	prepareFixtureSkirmishCatalog(cat, &cfg)
+	if err := skirmishBattleEntryFixture(s, &cfg, m, nil); err != nil {
 		return nil, err
 	}
 	if s.World != nil && s.Movement != nil {
