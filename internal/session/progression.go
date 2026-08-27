@@ -280,11 +280,3 @@ const (
 	TransitionContinue                           // next mission via post-battle W/L [P1-01 §7.5]
 	TransitionReturn                             // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 )
-
-// WindDraws performs the two briefing CRT draws before simulation [P0-05][01 §7.3].
-// Caller must have CRT seeded; sim not touched. Returns strength and direction.
-func WindDraws(min, max int32, crt interface{ Rand() int32 }) (int32, int32) {
-	// This is stub for docs: actual draws are in world.Wind.SeedBriefing via session wind.go
-	// Keep for citation.
-	return min, max
-}

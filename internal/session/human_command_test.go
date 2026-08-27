@@ -3,6 +3,7 @@ package session
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/orders"
@@ -10,6 +11,42 @@ import (
 	"github.com/nanolathe/nanolathe/internal/snapshot"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
+
+func TestHumanCommandSequenceAndDueTickAreSessionOwned(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout", MaxDamage: 10}
+	w := units.New(8, cat)
+	first, _ := w.Create(def, 0, 0, 0, 0)
+	second, _ := w.Create(def, 0, 0, 0, 0)
+	s := &Session{Units: w, LocalOwner: 0, Clock: &clock.State{GlobalTick: 7}}
+	// Caller metadata is ignored: the session is the sole owner of ordering
+	// and scheduling at the local input boundary [01 §4.4].
+	if err := s.EnqueueHumanCommand(HumanCommand{Sequence: 900, DueTick: 1, Kind: HumanSelectionReplace, Selection: HumanSelectionCommand{Handles: []pool.Handle{first}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnqueueHumanCommand(HumanCommand{Sequence: 1, DueTick: 1, Kind: HumanSelectionToggle, Selection: HumanSelectionCommand{Handles: []pool.Handle{first}}}); err != nil {
+		t.Fatal(err)
+	}
+	s.Clock.GlobalTick = 8
+	if err := s.EnqueueHumanCommand(HumanCommand{Sequence: 1, DueTick: 1, Kind: HumanSelectionReplace, Selection: HumanSelectionCommand{Handles: []pool.Handle{second}}}); err != nil {
+		t.Fatal(err)
+	}
+	pending := s.PendingHumanCommands()
+	if len(pending) != 3 || pending[0].Sequence != 1 || pending[1].Sequence != 2 || pending[2].Sequence != 3 || pending[0].DueTick != 8 || pending[1].DueTick != 8 || pending[2].DueTick != 9 {
+		t.Fatalf("session metadata = %+v, want sequence 1,2,3 and due ticks 8,8,9", pending)
+	}
+	s.applyHumanCommands(8)
+	if w.Unit(first).Flags&0x10 != 0 || w.Unit(second).Flags&0x10 != 0 {
+		t.Fatalf("same-tick commands did not apply in sequence order or future command applied early: first=%x second=%x", w.Unit(first).Flags, w.Unit(second).Flags)
+	}
+	if got := s.PendingHumanCommands(); len(got) != 1 || got[0].Sequence != 3 {
+		t.Fatalf("future queue = %+v, want sequence 3", got)
+	}
+	s.applyHumanCommands(9)
+	if w.Unit(first).Flags&0x10 != 0 || w.Unit(second).Flags&0x10 == 0 {
+		t.Fatalf("due commands did not apply in sequence order: first=%x second=%x", w.Unit(first).Flags, w.Unit(second).Flags)
+	}
+}
 
 func TestHumanSelectionCommandDrainsAtInputBoundary(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
@@ -118,7 +155,7 @@ func TestHumanBuildMetadataIsStampedAtInputBoundary(t *testing.T) {
 	hb, _ := w.Create(bdef, 0, 0, 0, 0)
 	hf, _ := w.Create(fdef, 0, 0, 0, 0)
 	s := &Session{Units: w, Catalog: cat, LocalOwner: 0}
-	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanMobileBuild, MobileBuild: HumanMobileBuildCommand{Builder: hb, Product: "product", WX: 2 << 16, WZ: 3 << 16, Queued: true}})
+	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanMobileBuild, MobileBuild: HumanMobileBuildCommand{Builder: hb, Product: "product", WX: 2 << 16, WY: 7 << 16, WZ: 3 << 16, Queued: true}})
 	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanFactoryBuild, FactoryBuild: HumanFactoryBuildCommand{Builder: hf, Product: "product", Queued: true}})
 	s.applyHumanCommands(42)
 	// Mobile build is queued → survivor flag set [04 §3.3]; factory products are
@@ -128,8 +165,8 @@ func TestHumanBuildMetadataIsStampedAtInputBoundary(t *testing.T) {
 		t.Fatalf("no build node for %d", hb)
 	}
 	nm := qm.Head()
-	if nm.Owner != hb || nm.CreationTick != 42 || nm.Flags&orders.FlagPurgeSurvivor == 0 {
-		t.Fatalf("mobile build metadata for %d: owner=%d tick=%d flags=%x", hb, nm.Owner, nm.CreationTick, nm.Flags)
+	if nm.Owner != hb || nm.CreationTick != 42 || nm.GoalY != 7<<16 || nm.Flags&orders.FlagPurgeSurvivor == 0 {
+		t.Fatalf("mobile build metadata for %d: owner=%d tick=%d goalY=%d flags=%x", hb, nm.Owner, nm.CreationTick, nm.GoalY, nm.Flags)
 	}
 	qf := orders.QueueForUnit(w.Unit(hf))
 	if qf == nil || qf.LenPrimary() == 0 {

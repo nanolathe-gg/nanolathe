@@ -8,7 +8,7 @@
 // 835 scripts), bitwise word XOR raw a^b [P1-11], stack overflow kills thread
 // (status cleared), bad piece kills, alloc failure start-script retains args
 // / call-script wedges waitSlot=-1 [P1-11]; aim-ready closure, SetSpeed domain,
-// Killed variant, save blob size validation remain TODO(question) [P1-11].
+// and Killed variant remain TODO(question) [P1-11].
 package cob
 
 import (
@@ -49,15 +49,12 @@ const (
 // scan order are. Stack depth 10 [04 §4.2] C13; overflow kills thread
 // (status cleared, active count --, drain yields) per [P1-11] §2.4 — same as
 // illegal opcode kill path. Bad piece index (<0 or >=pieceCount) also kills
-// [P1-11] §2.4. Save blob size validation is statics*4+pieces*76+threads*164
-// with fatal vs skip branch TODO(question) [P1-11] §2.4.
 // Corrupt COB/save: header offset bounds-checked vs retail no-check —
 // Nanolathe rejects with diagnostic and fallback empty VM (I11 divergence)
 // [P2-03]. Cycle detection via visited set, queue overflow via diagnostic drop
 // and iteration limit 200, divide-by-zero via thread kill (not process #DE)
 // [P2-03][04 §4.3] C14 I11.
-// TODO(question): exact save blob abort vs skip for piece vs thread count
-// mismatch remains open [P1-11]; TODO(question): Killed variant cell
+// TODO(question): Killed variant cell
 // unassigned and persistence [P1-11]; TODO(question): SetSpeed domain
 // (likely 16.16 vs 0x1AE/1B2 thresholds) [P1-11].
 type Thread struct {
@@ -120,24 +117,6 @@ type axisAnim struct {
 	spinTarget int32
 	spinAccel  int32
 	spinActive bool
-}
-
-// Exported anim save types for session/save persistence [04 §4.6][04 §4.2] P1-I01.
-// These mirror axisAnim/pieceAnim but are exported for codec.
-type AxisAnimSave struct {
-	MoveTarget int32
-	MoveSpeed  int32
-	MoveBusy   bool
-	TurnTarget uint16
-	TurnSpeed  int32
-	TurnBusy   bool
-	SpinSpeed  int32
-	SpinTarget int32
-	SpinAccel  int32
-	SpinActive bool
-}
-type PieceAnimSave struct {
-	Axes [3]AxisAnimSave
 }
 
 // dispatchKeys holds the 57 dispatched values sorted ascending [04 §4.3] C11.
@@ -226,10 +205,6 @@ func NewVM(prog *Program) *VM {
 
 // SetProgram binds prog to v, reallocating piece and static storage.
 // Callers that construct VM as a literal may call this after.
-// Save blob size validation is statics*4+pieces*76+threads*164 with fatal vs
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// expected = statics*4 + pieces*76 + threads*164; exact fatal vs skip branch
-// for piece vs thread count mismatch remains TODO(question) [P1-11].
 func (v *VM) SetProgram(prog *Program) {
 	v.prog = prog
 	if prog == nil {
@@ -318,7 +293,7 @@ func (v *VM) SimulationRNG() *rng.Simulation {
 }
 
 // Diagnostics returns fallback diagnostics collected for malformed COB paths
-// [P2-03] (divide, corrupt save, stack overflow guard). Not fatal.
+// [P2-03] (divide, corrupt input, stack overflow guard). Not fatal.
 func (v *VM) Diagnostics() []string {
 	if v == nil {
 		return nil

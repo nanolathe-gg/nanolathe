@@ -143,26 +143,6 @@ type gameShell struct {
 	battle *battleSession
 }
 
-// bindBattleSessionCommandDispatch connects the presentation command boundary
-// to the session-owned input queue. The session is read from b at invocation
-// time because retry replaces that field while the battle view remains alive
-// [01 §4.4][07 §9].
-func bindBattleSessionCommandDispatch(b *battleSession) {
-	if b == nil {
-		return
-	}
-	b.commandDispatchFn = func(cmd battleCommand) error {
-		if b.sess == nil {
-			return fmt.Errorf("battle: production command dispatch has no session")
-		}
-		hc, ok := b.sessionHumanCommand(cmd)
-		if !ok {
-			return fmt.Errorf("battle: unsupported command kind %d", cmd.Kind)
-		}
-		return b.sess.EnqueueHumanCommand(hc)
-	}
-}
-
 // newGameShell builds the frontend state: the skirmish map list, the retail
 // resource set, and the opening panel used by the windowed entry.
 func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
@@ -442,7 +422,6 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 		return err
 	}
 	g.battle = &battleSession{sess: sess, cat: cat, cam: g.cam, hud: battleHUD, fs: g.cs.fs, shell: g, latch: input.LatchNormal, menuPressed: -1}
-	bindBattleSessionCommandDispatch(g.battle)
 	g.battle.returnToMenu = g.returnFromBattle
 	g.battle.returnToSkirmish = func(cl *client.Client) {
 		if g != nil {

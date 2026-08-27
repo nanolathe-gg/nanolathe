@@ -118,7 +118,7 @@ func replaceSelectionForTest(t *testing.T, b *battleSession, us ...*units.Unit) 
 			handles = append(handles, u.Handle)
 		}
 	}
-	if err := b.submitBattleCommand(battleCommand{Kind: battleCommandSelectionReplace, Selection: battleSelectionCommand{Handles: handles}}); err != nil {
+	if err := b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: handles}}); err != nil {
 		t.Fatalf("replace selection: %v", err)
 	}
 	applyPendingBattleCommands(b)
@@ -129,7 +129,6 @@ func TestClickCommanderSelectsExactlyOne(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
-	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	cam := b.cam
 	// Place commander inside the visible battle surface. The renderer's world
@@ -160,7 +159,6 @@ func TestClickCommanderSelectsExactlyOne(t *testing.T) {
 // the HUD viewport origin a second time [03 §2.5][07 §8].
 func TestClickAtRenderedCommanderPosition(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
-	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	b.latch = input.LatchNormal
 	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
@@ -178,7 +176,6 @@ func TestClickAtRenderedCommanderPosition(t *testing.T) {
 // rendered rather than the live-pool fallback [03 §2.5][07 §9].
 func TestClickAtRenderedCommanderPositionUsesSnapshotPicker(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
-	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	b.latch = input.LatchNormal
 	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
@@ -207,7 +204,6 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(30, 30)
 	b := newTestBattle(cat, terrain)
-	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	a := placeUnit(b, "armcons", numeric.Fixed(180*65536), numeric.Fixed(100*65536))
 	c := placeUnit(b, "armsolar", numeric.Fixed(320*65536), numeric.Fixed(220*65536))
@@ -305,7 +301,6 @@ func TestFoggedEnemyCannotBeSelectedOrTargeted(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
-	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	// Ensure visibility service is empty (W==0 => enemy invisible) [03 §3.2] C8
 	b.sess.Vis = &visibility.Service{} // empty
@@ -348,7 +343,6 @@ func TestEqualOverlapTieLowerSlotWins(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
-	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	x := numeric.Fixed(200 * 65536)
 	z := numeric.Fixed(120 * 65536)
@@ -395,7 +389,6 @@ func TestLocalOwnerNonzeroReceivesCommands(t *testing.T) {
 	// Prepare orders table
 	_ = orders.Lookup("Move_Ground")
 	b := newTestBattle(cat, terrain)
-	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 1 // human is player 1, not 0 [RS-P0-004]
 	// Place two units, one owned by 1 (local), one owned by 0
 	localUnit := placeUnit(b, "armcons", numeric.Fixed(180*65536), numeric.Fixed(100*65536))
@@ -436,7 +429,7 @@ func TestLocalOwnerNonzeroReceivesCommands(t *testing.T) {
 	}
 	// Clear the local selection through the typed boundary; hasSelection then
 	// follows the committed frame rather than any live fixture state.
-	if err := b.submitBattleCommand(battleCommand{Kind: battleCommandSelectionClear}); err != nil {
+	if err := b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionClear}); err != nil {
 		t.Fatalf("clear local selection: %v", err)
 	}
 	applyPendingBattleCommands(b)
@@ -490,7 +483,6 @@ func TestCanonicalPayloadIdentical(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
-	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	u := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
 	replaceSelectionForTest(t, b, u)

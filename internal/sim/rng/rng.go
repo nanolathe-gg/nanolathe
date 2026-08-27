@@ -82,11 +82,6 @@ func (s *Simulation) Uint32n(bound uint32) uint32 {
 // participates in simulation state (I4).
 func (s *Simulation) Draws() uint64 { return s.draws }
 
-// RestoreDraws reinstates a saved draw count so a native StateV1 load resumes
-// with identical counters [PLAN_14 C18]. Retail saves reseed instead; this
-// serves only the Nanolathe-native codec.
-func (s *Simulation) RestoreDraws(n uint64) { s.draws = n }
-
 // CRT is the MSVCRT stream: state = state*214013 + 2531011, result
 // (state>>16) & 32767 [01 §7.2].
 type CRT struct {
@@ -157,9 +152,6 @@ func (c *CRT) Uint32n(bound uint32) uint32 {
 
 // Draws returns the number of draws consumed on this stream. I4.
 func (c *CRT) Draws() uint64 { return c.draws }
-
-// RestoreDraws mirrors Simulation.RestoreDraws for the CRT stream.
-func (c *CRT) RestoreDraws(n uint64) { c.draws = n }
 
 // Global holds the two process-wide streams.
 //

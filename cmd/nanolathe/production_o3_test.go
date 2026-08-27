@@ -70,7 +70,7 @@ func TestProductionInputARMEconomyBuildReplay(t *testing.T) {
 	// produces its authored product, and storage is published. The gate now
 	// fails at the typed activation contract, which is not a construction or
 	// movement concern: pressing O over a selected OnOffable structure queues
-	// nothing, and dispatching the same battleActivationCommand directly
+	// nothing, and dispatching the same session activation command directly
 	// enqueues one human command that the session consumes without ever
 	// flipping Unit.Activated. Measured directly: selectedUnits=1, selection
 	// flag set, OnOffable true, direct dispatch err=nil pending=1, then
@@ -124,13 +124,6 @@ func runO3ProductionReplay(t *testing.T, root string) o3Run {
 	cam.Z = int32(commander.Z>>16) - 240
 	cam.Pan(0, 0)
 	b := &battleSession{sess: s, cat: cat, cam: cam, latch: input.LatchNormal}
-	b.commandDispatchFn = func(cmd battleCommand) error {
-		hc, ok := b.sessionHumanCommand(cmd)
-		if !ok {
-			return fmt.Errorf("unsupported production command %d", cmd.Kind)
-		}
-		return s.EnqueueHumanCommand(hc)
-	}
 	controller := NewBattleController(b)
 
 	// Selection itself is exercised through the controller and snapshot command
@@ -516,14 +509,14 @@ func o3AdvanceUntil(s *session.Session, owner *units.Unit, key string, max int) 
 			continue
 		}
 		obs.ProgressPublished = true
-		buckets := s.Econ.SnapshotUnitBuckets()
-		if int(owner.Handle) >= len(buckets) {
+		buckets := s.Econ.UnitBuckets(owner.Handle)
+		if buckets == nil {
 			continue
 		}
 		accepted := false
 		admissionBlocked := false
 		carryEffect := false
-		for _, bucket := range buckets[owner.Handle].Buckets {
+		for _, bucket := range *buckets {
 			accepted = accepted || bucket.Accepted > 0
 			carryEffect = carryEffect || bucket.Carry > 0
 			admissionBlocked = admissionBlocked || (bucket.Requested > 0 && bucket.Accepted == 0 && bucket.Carry > 0)

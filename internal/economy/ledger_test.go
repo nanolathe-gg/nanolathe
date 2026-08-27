@@ -273,15 +273,7 @@ func TestMirrorClosedWriterSurface(t *testing.T) {
 	if p.Mirror[Metal].Production != 0 {
 		t.Fatal("ClearMirrorPerPass should zero")
 	}
-	// Save/load overlay stubs
-	p.Mirror[Energy].Production = 9
-	saved := SaveMirrorOverlay(&p)
-	p.Mirror[Energy].Production = 0
-	LoadMirrorOverlay(&p, saved)
-	if p.Mirror[Energy].Production != 9 {
-		t.Fatal("Save/Load overlay failed")
-	}
-	// Two admission helpers (bodies arrive with WU-08-3 — stubs now)
+	// Two admission helpers
 	var b [2]Bucket
 	b[Energy].Carry = 0
 	b[Metal].Carry = 0

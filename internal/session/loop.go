@@ -191,6 +191,10 @@ type Session struct {
 	// boundary before any order/build work [01 §4.4][I6].
 	humanMu      sync.Mutex
 	pendingHuman []HumanCommand
+	// nextHumanSequence is assigned only while holding humanMu. It gives the
+	// input boundary a total order independent of producer timing; commands
+	// with one due tick are applied in this order [01 §4.4].
+	nextHumanSequence uint64
 }
 
 // HumanCommandKind identifies a typed local-player command. Payloads contain
@@ -227,10 +231,11 @@ type HumanActivationCommand struct {
 	Activate, Queued bool
 }
 type HumanMobileBuildCommand struct {
-	Builder    pool.Handle
-	Product    string
-	WX, WY, WZ numeric.Fixed
-	Queued     bool
+	Builder pool.Handle
+	Product string
+	WX, WZ  numeric.Fixed
+	WY      numeric.Fixed // validated site height in world fixed units [07 §9]
+	Queued  bool
 }
 type HumanFactoryBuildCommand struct {
 	Builder pool.Handle
@@ -269,6 +274,10 @@ type HumanGroupCommand struct {
 // HumanCommand is an immutable-at-boundary command value. EnqueueHumanCommand
 // copies handle slices and strings so callers may reuse their input buffers.
 type HumanCommand struct {
+	// Sequence and DueTick are session-owned metadata. Callers leave both zero;
+	// EnqueueHumanCommand assigns them when the value enters the session queue.
+	Sequence         uint64
+	DueTick          uint32
 	Kind             HumanCommandKind
 	Selection        HumanSelectionCommand
 	Order            HumanOrderCommand
@@ -306,6 +315,24 @@ func (s *Session) EnqueueHumanCommand(c HumanCommand) error {
 	}
 	s.humanMu.Lock()
 	defer s.humanMu.Unlock()
+	// The retail input pass consumes the command at the next authoritative
+	// boundary. No researched latency/network offset exists for local commands,
+	// so the smallest truthful contract is the next session tick.
+	// TODO(question): verify whether a networked input frame can target a later
+	// frame; settle this from the future-frame receive probe before adding an
+	// offset here.
+	s.nextHumanSequence++
+	if s.nextHumanSequence == 0 {
+		// Sequence wrap is outside the established single-player lifetime. Keep
+		// zero reserved as "not assigned" while preserving deterministic order.
+		s.nextHumanSequence++
+	}
+	c.Sequence = s.nextHumanSequence
+	if s.Clock == nil {
+		c.DueTick = 1
+	} else {
+		c.DueTick = s.Clock.GlobalTick + 1
+	}
 	s.pendingHuman = append(s.pendingHuman, cloneHumanCommand(c))
 	return nil
 }
@@ -1737,8 +1764,20 @@ func (s *Session) applyHumanCommands(tick uint32) {
 		s.humanMu.Unlock()
 		return
 	}
-	cmds := s.pendingHuman
-	s.pendingHuman = nil
+	// Keep future commands queued. Enqueue assigns monotonically increasing
+	// sequence values, therefore the stable queue order is the authoritative
+	// same-tick order and needs no map or sort [I1].
+	cmds := make([]HumanCommand, 0, len(s.pendingHuman))
+	future := make([]HumanCommand, 0, len(s.pendingHuman))
+	for i := range s.pendingHuman {
+		c := s.pendingHuman[i]
+		if c.DueTick <= tick {
+			cmds = append(cmds, c)
+		} else {
+			future = append(future, c)
+		}
+	}
+	s.pendingHuman = future
 	s.humanMu.Unlock()
 	for _, c := range cmds {
 		s.applyHumanCommand(c, tick)
@@ -1884,7 +1923,7 @@ func (s *Session) normalizeSelectedBuilderPages() {
 	u.Flags = view.Flags
 }
 
-func stampHumanBuild(u *units.Unit, product string, tick uint32, queued bool) {
+func stampHumanBuild(u *units.Unit, product string, tick uint32, queued bool, goalY numeric.Fixed) {
 	if u == nil {
 		return
 	}
@@ -1899,6 +1938,7 @@ func stampHumanBuild(u *units.Unit, product string, tick uint32, queued bool) {
 	}
 	tail.Owner = u.Handle
 	tail.CreationTick = tick
+	tail.GoalY = goalY
 	if queued {
 		tail.Flags |= orders.FlagPurgeSurvivor
 	} else {
@@ -1986,7 +2026,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			}
 		}
 		if err := construction.QueueMobileBuild(u, c.MobileBuild.Product, c.MobileBuild.WX, c.MobileBuild.WZ, 1, s.Catalog); err == nil {
-			stampHumanBuild(u, c.MobileBuild.Product, tick, c.MobileBuild.Queued)
+			stampHumanBuild(u, c.MobileBuild.Product, tick, c.MobileBuild.Queued, c.MobileBuild.WY)
 		}
 	case HumanFactoryBuild:
 		u := s.humanUnit(c.FactoryBuild.Builder)
@@ -2006,7 +2046,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if err == nil && count > 0 {
 			// Counted factory nodes are no-purge commands. The old boolean is
 			// retained only for source compatibility with pre-count callers.
-			stampHumanBuild(u, c.FactoryBuild.Product, tick, false)
+			stampHumanBuild(u, c.FactoryBuild.Product, tick, false, 0)
 		}
 	case HumanCancelProduction:
 		u := s.humanUnit(c.CancelProduction.Unit)

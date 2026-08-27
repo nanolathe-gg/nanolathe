@@ -46,7 +46,6 @@ func TestBattleMoveAndBuildReachGoal(t *testing.T) {
 		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
 	}
 	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal}
-	bindBattleSessionCommandDispatch(b)
 	centerOnCommanderForSession(sess, b.cam, 640, 480)
 
 	var com *units.Unit
@@ -141,7 +140,11 @@ func TestBattleMoveAndBuildReachGoal(t *testing.T) {
 			bx := world.CellToWorld(site.X) + numeric.Fixed(524288)
 			bz := world.CellToWorld(site.Z) + numeric.Fixed(524288)
 			_ = pdef
-			if err := b.DispatchMobileBuild(product, bx, bz, false); err != nil {
+			validated, err := b.checkProductPlacement(site.X-footX/2, site.Z-footZ/2, pdef, footX, footZ, uint16(com.Handle))
+			if err != nil {
+				t.Fatalf("revalidate build site: %v", err)
+			}
+			if err := b.DispatchMobileBuild(product, bx, numeric.Fixed(int64(validated.SiteHeight)<<16), bz, false); err != nil {
 				t.Fatalf("dispatch build: %v", err)
 			}
 			walked := false

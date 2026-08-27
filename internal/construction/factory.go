@@ -563,40 +563,6 @@ func (s *Service) SnapshotLinks() []LinkRecord {
 	return out
 }
 
-// RestoreLinks rebinds builder-product links without firing gameplay hooks [RS-10].
-// It replaces the entire map with the supplied links sorted deterministically.
-// No COB callbacks, no interface refresh, no economy mutation — pure state rebind.
-func (s *Service) RestoreLinks(links []LinkRecord) {
-	if s == nil {
-		return
-	}
-	if s.builderLinks == nil {
-		s.builderLinks = make(map[pool.Handle]pool.Handle)
-	} else {
-		// Clear existing.
-		for k := range s.builderLinks {
-			delete(s.builderLinks, k)
-		}
-	}
-	for _, l := range links {
-		if l.Product == 0 || l.Builder == 0 {
-			continue
-		}
-		s.builderLinks[l.Product] = l.Builder
-	}
-}
-
-// ClearAllBuilderLinks removes all builder-product links without firing hooks [RS-10].
-// Used during session restore before rebinding.
-func (s *Service) ClearAllBuilderLinks() {
-	if s == nil || s.builderLinks == nil {
-		return
-	}
-	for k := range s.builderLinks {
-		delete(s.builderLinks, k)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // C24 Construction arithmetic [05 "Construction arithmetic"].
 // ---------------------------------------------------------------------------

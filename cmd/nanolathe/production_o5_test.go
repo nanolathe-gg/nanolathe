@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -56,13 +55,6 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 		cam:   &camera.Camera{ViewW: 640, ViewH: 480, MapW: 512, MapH: 512},
 		latch: input.LatchNormal,
 	}
-	b.commandDispatchFn = func(cmd battleCommand) error {
-		human, ok := b.sessionHumanCommand(cmd)
-		if !ok {
-			return fmt.Errorf("O5 replay: unsupported command %d", cmd.Kind)
-		}
-		return s.EnqueueHumanCommand(human)
-	}
 
 	// Establish the first immutable frame, then select through the typed
 	// production command path. The fixture unit handles are known from the
@@ -83,7 +75,7 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 	// Build, move, and attack are admitted in that order through the same
 	// typed command boundary as the Ebitengine adapter. The test does not
 	// depend on a synthetic panel or mutate queue state directly.
-	if err := b.DispatchMobileBuild(productKey, numeric.Fixed(240<<16), numeric.Fixed(80<<16), false); err != nil {
+	if err := b.DispatchMobileBuild(productKey, numeric.Fixed(240<<16), 0, numeric.Fixed(80<<16), false); err != nil {
 		t.Fatalf("typed mobile build admission failed: %v", err)
 	}
 	o5Advance(t, s)

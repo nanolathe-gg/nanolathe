@@ -12,7 +12,6 @@ import (
 
 func TestStopDispatchHasNoContextualOriginOrder(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
-	bindBattleSessionCommandDispatch(b)
 	u := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
 	replaceSelectionForTest(t, b, u)
 	b.handleHudOrderButton("stop")
@@ -32,7 +31,6 @@ func TestStopDispatchHasNoContextualOriginOrder(t *testing.T) {
 
 func TestAttackGroundUsesResolverRejectSentinel(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
-	bindBattleSessionCommandDispatch(b)
 	attacker := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
 	attacker.Def.CanAttack = true
 	replaceSelectionForTest(t, b, attacker)
@@ -51,14 +49,10 @@ func TestActivationCommandUsesEconomyStateNotProxyFlag(t *testing.T) {
 	u.Activated = false
 	u.Flags |= 0x1000 // legacy proxy bit must not control the command.
 	replaceSelectionForTest(t, b, u)
-	var got battleCommand
-	b.commandDispatchFn = func(cmd battleCommand) error {
-		got = cmd
-		return nil
-	}
 	b.toggleOnOffSelected(false)
-	if got.Kind != battleCommandActivation || got.Activation.Unit != u.Handle || !got.Activation.Activate {
-		t.Fatalf("activation command = %+v, want Activate for unit %d", got, u.Handle)
+	pending := b.sess.PendingHumanCommands()
+	if len(pending) != 1 || pending[0].Kind != session.HumanActivation || pending[0].Activation.Unit != u.Handle || !pending[0].Activation.Activate {
+		t.Fatalf("activation command = %+v, want Activate for unit %d", pending, u.Handle)
 	}
 	if u.Flags&0x1000 == 0 {
 		t.Fatal("activation changed the unrelated proxy flag")
@@ -89,7 +83,6 @@ func TestFeatureIdentityDistinguishesCorpseFromReclaimable(t *testing.T) {
 
 func TestTypedOrderCommandResolvesTargetHandleAtApplication(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
-	bindBattleSessionCommandDispatch(b)
 	attacker := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
 	attacker.Def.CanAttack = true
 	replaceSelectionForTest(t, b, attacker)

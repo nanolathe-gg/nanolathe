@@ -107,9 +107,6 @@ type battleSession struct {
 	guiWin    *gui.Window
 	guiOK     bool
 
-	// commandDispatchFn is the typed battle/application boundary. All
-	// world-mutating input is represented as a battleCommand before application.
-	commandDispatchFn func(battleCommand) error
 	// battleMode is the established runtime mode flag consumed by the digit
 	// gate [07 §9]. The production composition currently has no separate
 	// publisher for this byte, so the composition value remains zero until
@@ -161,14 +158,6 @@ func runBattleView(opts Options, cs *contentSet) error {
 	centerOnCommanderForSession(sess, cam, winW, winH)
 
 	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs, latch: input.LatchNormal}
-	// Production composition owns the typed command queue.
-	b.commandDispatchFn = func(cmd battleCommand) error {
-		hc, ok := b.sessionHumanCommand(cmd)
-		if !ok {
-			return fmt.Errorf("battle: unsupported command kind %d", cmd.Kind)
-		}
-		return sess.EnqueueHumanCommand(hc)
-	}
 	b.retryFunc = func(cl *client.Client) { b.doRetry(cl) }
 	b.returnToMenu = func(cl *client.Client) {
 		// The battle view has no menu shell callback; mark it ended and exit.
@@ -399,7 +388,7 @@ func (b *battleSession) isOverMinimap(x, y int32) bool {
 // It converts input into complete canonical commands with target/position and
 // queue modifiers (shift-queued) via one picking routine that respects fog,
 // unit/feature overlap, and command validity [07 §9][03 §3.2] C8 [P0-I14].
-// Order buttons are bound via injected dispatch [R-P0-03]; build products are
+// Order buttons enqueue session-owned commands directly [R-P0-03]; build products are
 // data-driven from cat.BuildMenus; input-capture latch prevents HUD presses
 // from leaking into world drag [F-P0-003][F-P1-008].
 func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
@@ -580,7 +569,7 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		}
 		if b.hasSelection() {
 			// Deselect is a typed command; UI never mutates live flags [I6].
-			_ = b.submitBattleCommand(battleCommand{Kind: battleCommandSelectionClear})
+			_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 			return
 		}
 		return
@@ -727,9 +716,9 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 				hitOwn := hit && bh != 0 && bu.Owner == b.sess.LocalOwner
 				if hitOwn {
 					if additive {
-						_ = b.submitBattleCommand(battleCommand{Kind: battleCommandSelectionToggle, Selection: battleSelectionCommand{Handles: []pool.Handle{bh}}})
+						_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionToggle, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{bh}}})
 					} else {
-						_ = b.submitBattleCommand(battleCommand{Kind: battleCommandSelectionReplace, Selection: battleSelectionCommand{Handles: []pool.Handle{bh}}})
+						_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{bh}}})
 					}
 				} else {
 					if b.hasSelection() {
@@ -738,7 +727,7 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 					} else {
 						// No selection and click not on own unit: clear if not additive, else preserve [07 §9] C6.
 						if !additive {
-							_ = b.submitBattleCommand(battleCommand{Kind: battleCommandSelectionClear})
+							_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 						}
 					}
 				}
@@ -752,11 +741,11 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 				return
 			}
 			handles := client.SnapshotUnitHandlesInRect(frame, b.cam, shellRect, b.sess.LocalOwner)
-			kind := battleCommandSelectionReplace
+			kind := session.HumanSelectionReplace
 			if additive {
-				kind = battleCommandSelectionToggle
+				kind = session.HumanSelectionToggle
 			}
-			_ = b.submitBattleCommand(battleCommand{Kind: kind, Selection: battleSelectionCommand{Handles: handles}})
+			_ = b.enqueueHumanCommand(session.HumanCommand{Kind: kind, Selection: session.HumanSelectionCommand{Handles: handles}})
 		}
 	}
 	// No right-button order path: right-click is deselect/cancel only, handled at the top [07 §9][04 §3.4].
@@ -881,8 +870,8 @@ func (b *battleSession) prevBuildPage() {
 	_ = b.DispatchBuildPage(target)
 }
 
-// handleHudOrderButton binds named order buttons to the existing command path
-// via injected dispatch [R-P0-03][07 §9]. It is used by retail HUD consumeClick.
+// handleHudOrderButton binds named order buttons to the session command path
+// [R-P0-03][07 §9]. It is used by retail HUD consumeClick.
 func (b *battleSession) handleHudOrderButton(name string) {
 	latch := hud.ParseButtonLatch(name, 1)
 	// STOP is a distinct immediate command. It must never dispatch contextual
@@ -923,7 +912,7 @@ func (b *battleSession) toggleOnOffSelected(queued bool) {
 		// Activation state is typed unit state, not the unrelated order flag
 		// word. The queued command is consumed by the ordinary order/COB edge
 		// machinery [05 "Unit instance economy state"].
-		_ = b.DispatchActivation(battleActivationCommand{
+		_ = b.DispatchActivation(session.HumanActivationCommand{
 			Unit: u.Handle, Activate: !u.Activated, Queued: queued,
 		})
 	}
@@ -1131,8 +1120,8 @@ func (b *battleSession) yardMapFor() string {
 
 // commitBuild queues a mobile-build order through the ordinary construction
 // path [PLAN_08 C12/C23][P0-I05]; the session's construction pump drives the lifecycle.
-// Site coordinates are passed at queue time and preserved on the queued node as GoalX/Z [P0-I05]:
-// the validated ghost anchor (buildMX/buildMY) carries the selected site via QueueMobileBuild.
+// Site coordinates are passed at queue time and preserved on the queued node as GoalX/Y/Z [P0-I05]:
+// the validated footprint center and site height carry the selected site via QueueMobileBuild.
 // It uses catalog indices (not FNV hash) [P0-I05] and respects queue modifier (shift=queued) [04 §3.3][P0-I14].
 // Every producer goes through one canonical payload constructor [P0-I03]: orders.NewMobileBuildNode / QueueMobileBuild.
 // It is data-driven: product must be in builder's BuildMenus list; illegal placement queues nothing [R-P0-03].
@@ -1159,7 +1148,8 @@ func (b *battleSession) commitBuild(queued bool) bool {
 	wx, wz := world.PlacementCenter(b.buildCellX, b.buildCellZ, b.buildFootX, b.buildFootZ)
 	// Queue the typed command; the session applies it at the authoritative input
 	// phase [01 §4.4][07 §9].
-	if err := b.DispatchMobileBuild(b.buildDef, wx, wz, queued); err != nil {
+	wy := numeric.Fixed(int64(b.buildSiteH) << 16)
+	if err := b.DispatchMobileBuild(b.buildDef, wx, wy, wz, queued); err != nil {
 		fmt.Fprintf(os.Stderr, "nanolathe: build %s: %v\n", b.buildDef, err)
 		return false
 	}
@@ -1346,8 +1336,8 @@ func (b *battleSession) orderSelected(code int, sx, sy int32, queued bool) {
 	if !ok {
 		return
 	}
-	_ = b.DispatchOrderCommand(battleOrderCommand{
-		Latch: latch, Target: targetHandle,
+	_ = b.DispatchOrderCommand(session.HumanOrderCommand{
+		Code: latchCode(latch), Target: targetHandle,
 		Position: *pos, Queued: queued,
 	})
 }

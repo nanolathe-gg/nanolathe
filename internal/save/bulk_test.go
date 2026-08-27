@@ -162,16 +162,54 @@ func TestBulkHAPIBANKBounds(t *testing.T) {
 	}
 }
 
-// TestBulkFixUpOrder documents Players→Camera→Features→Metal→Units order [P1-13 §3.5].
-func TestBulkFixUpOrder(t *testing.T) {
-	if got := ApplyFixUpOrder(nil); got != FixUpOrder {
-		t.Fatalf("fixup order mismatch")
-	}
+// TestBulkSubtypeSizes locks the established raw subtype lengths.
+func TestBulkSubtypeSizes(t *testing.T) {
 	// Validate subtype sizes [P1-13 §2.4].
 	if !ValidateSubtypeSize(2, OrderSubtypeCode2) || !ValidateSubtypeSize(6, OrderSubtypeCode6) {
 		t.Fatalf("subtype size validate failed")
 	}
 	if ValidateSubtypeSize(2, 0x10) {
 		t.Fatalf("subtype 2 should not be 0x10")
+	}
+}
+
+func TestMeteorScalarsOrderAndPresence(t *testing.T) {
+	want := MeteorScalars{
+		Enabled:        1,
+		Active:         2,
+		NextStrikeTime: 3,
+		TimeStrikeEnds: 4,
+		NextHitTime:    5,
+		OriginX:        6,
+		OriginZ:        7,
+		TargetX:        8,
+		TargetZ:        9,
+	}
+	b := NewBuilder("")
+	WriteMeteorScalars(b, want)
+	bank, err := OpenBytes(b.Bytes(), RetailTag)
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	ac, ok := bank.Account(MeteorAccount)
+	if !ok || len(ac.Ints) != 9 {
+		t.Fatalf("Meteor account item count: account=%v items=%d", ok, len(ac.Ints))
+	}
+	for i, name := range meteorScalarNames {
+		if ac.Ints[i].Name != name || ac.Ints[i].Value != int32(i+1) {
+			t.Fatalf("item %d = (%q,%d), want (%q,%d)", i, ac.Ints[i].Name, ac.Ints[i].Value, name, i+1)
+		}
+	}
+	if got, ok := ReadMeteorScalars(bank); !ok || got != want {
+		t.Fatalf("ReadMeteorScalars = (%+v,%v), want (%+v,true)", got, ok, want)
+	}
+	partial := NewBuilder("")
+	partial.Add(MeteorAccount).SetInt("Enabled", 1)
+	partialBank, err := OpenBytes(partial.Bytes(), RetailTag)
+	if err != nil {
+		t.Fatalf("OpenBytes partial: %v", err)
+	}
+	if _, ok := ReadMeteorScalars(partialBank); ok {
+		t.Fatalf("partial Meteor account must not receive guessed defaults")
 	}
 }

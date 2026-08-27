@@ -47,13 +47,6 @@ func placeClickFixture(t *testing.T, cellW, cellH int32) (*battleSession, *sessi
 		cam:   &camera.Camera{ViewW: 640, ViewH: 480, MapW: cellW * 16, MapH: cellH * 16},
 		latch: input.LatchNormal,
 	}
-	b.commandDispatchFn = func(cmd battleCommand) error {
-		human, ok := b.sessionHumanCommand(cmd)
-		if !ok {
-			return fmt.Errorf("place-click fixture: unsupported command %d", cmd.Kind)
-		}
-		return s.EnqueueHumanCommand(human)
-	}
 	return b, s, builder
 }
 
@@ -85,9 +78,9 @@ func TestHeldPlacementClickQueuesOnlyTheBuildOrder(t *testing.T) {
 			c := NewBattleController(b)
 			s.Step(s.Clock.ScaledAnchor + 1)
 
-			if err := b.submitBattleCommand(battleCommand{
-				Kind:      battleCommandSelectionReplace,
-				Selection: battleSelectionCommand{Handles: []pool.Handle{builder}},
+			if err := b.enqueueHumanCommand(session.HumanCommand{
+				Kind:      session.HumanSelectionReplace,
+				Selection: session.HumanSelectionCommand{Handles: []pool.Handle{builder}},
 			}); err != nil {
 				t.Fatalf("select: %v", err)
 			}
@@ -108,6 +101,7 @@ func TestHeldPlacementClickQueuesOnlyTheBuildOrder(t *testing.T) {
 			if !b.buildOK {
 				t.Fatalf("fixture site %d,%d is not a legal placement", sx, sy)
 			}
+			expectedY := numeric.Fixed(int64(b.buildSiteH) << 16)
 			heldClick(c, sx, sy, held)
 			s.Step(s.Clock.ScaledAnchor + 1)
 
@@ -127,6 +121,9 @@ func TestHeldPlacementClickQueuesOnlyTheBuildOrder(t *testing.T) {
 			if content.CanonicalKey(head.BuildDefKey) != prodDef.CanonicalKey {
 				t.Fatalf("queued product %q, want %q", head.BuildDefKey, prodDef.CanonicalKey)
 			}
+			if head.GoalY != expectedY {
+				t.Fatalf("queued build height %d, want validated site height %d", head.GoalY, expectedY)
+			}
 		})
 	}
 }
@@ -140,9 +137,9 @@ func TestHeldRefusedPlacementClickQueuesNothing(t *testing.T) {
 	b, s, builder := placeClickFixture(t, 20, 20)
 	c := NewBattleController(b)
 	s.Step(s.Clock.ScaledAnchor + 1)
-	if err := b.submitBattleCommand(battleCommand{
-		Kind:      battleCommandSelectionReplace,
-		Selection: battleSelectionCommand{Handles: []pool.Handle{builder}},
+	if err := b.enqueueHumanCommand(session.HumanCommand{
+		Kind:      session.HumanSelectionReplace,
+		Selection: session.HumanSelectionCommand{Handles: []pool.Handle{builder}},
 	}); err != nil {
 		t.Fatalf("select: %v", err)
 	}
@@ -177,9 +174,9 @@ func TestHeldRejectedPlacementClickQueuesNothing(t *testing.T) {
 	b, s, builder := placeClickFixture(t, 64, 64)
 	c := NewBattleController(b)
 	s.Step(s.Clock.ScaledAnchor + 1)
-	if err := b.submitBattleCommand(battleCommand{
-		Kind:      battleCommandSelectionReplace,
-		Selection: battleSelectionCommand{Handles: []pool.Handle{builder}},
+	if err := b.enqueueHumanCommand(session.HumanCommand{
+		Kind:      session.HumanSelectionReplace,
+		Selection: session.HumanSelectionCommand{Handles: []pool.Handle{builder}},
 	}); err != nil {
 		t.Fatalf("select: %v", err)
 	}

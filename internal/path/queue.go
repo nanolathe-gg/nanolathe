@@ -283,32 +283,3 @@ func (s *Scheduler) AllRequests() []Request {
 	}
 	return out
 }
-
-// Snapshot captures scheduler queues and replenish state for save [P0-I11].
-func (s *Scheduler) Snapshot() (queues [10][]Request, scales [10]int32, haveLast bool, lastReplenish uint32) {
-	if s == nil {
-		return
-	}
-	for p := 0; p < 10; p++ {
-		cp := make([]Request, len(s.queues[p]))
-		copy(cp, s.queues[p])
-		queues[p] = cp
-		scales[p] = s.scales[p]
-	}
-	return queues, scales, s.haveLast, s.lastReplenish
-}
-
-// RestoreSnapshot restores scheduler queues and replenish state [P0-I11].
-func (s *Scheduler) RestoreSnapshot(queues [10][]Request, scales [10]int32, haveLast bool, lastReplenish uint32) {
-	if s == nil {
-		return
-	}
-	for p := 0; p < 10; p++ {
-		cp := make([]Request, len(queues[p]))
-		copy(cp, queues[p])
-		s.queues[p] = cp
-		s.scales[p] = scales[p]
-	}
-	s.haveLast = haveLast
-	s.lastReplenish = lastReplenish
-}

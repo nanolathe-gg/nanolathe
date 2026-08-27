@@ -443,24 +443,6 @@ func ClearMirrorPerPass(p *Player) {
 	}
 }
 
-// SaveMirrorOverlay and LoadMirrorOverlay are stubs for save/load overlay per C11.
-// The player-level mirror bucket is not persisted by the player save path and is
-// reinitialized per [05 "Saving economy, construction, and features"].
-func SaveMirrorOverlay(p *Player) [2]Bucket {
-	if p == nil {
-		return [2]Bucket{}
-	}
-	return p.Mirror
-}
-
-// LoadMirrorOverlay restores the mirror bucket from save data per C11.
-func LoadMirrorOverlay(p *Player, m [2]Bucket) {
-	if p == nil {
-		return
-	}
-	p.Mirror = m
-}
-
 // AdmitTwoResource admits energy and metal demands as one transaction per [05 "Two-resource admission"].
 // It always records both requested amounts; it records both as accepted only if both carries are non-positive.
 func AdmitTwoResource(buckets *[2]Bucket, energy, metal float32) {

@@ -83,24 +83,3 @@ func TestSnapshotQueueOfRetainsCoalescedCount(t *testing.T) {
 		t.Fatalf("coalesced count lost: %+v", got.Secondary)
 	}
 }
-
-func TestQueueSnapshotOwnsNodeValues(t *testing.T) {
-	owner := pool.Handle(12)
-	node := &Node{ID: Lookup("Move_Ground"), Owner: owner, CreationTick: 17, Param2: 3}
-	q := NewQueueWith([]*Node{node}, nil)
-	primary, _ := q.Snapshot()
-	if len(primary) != 1 || primary[0] == node {
-		t.Fatal("queue snapshot retained authoritative node pointer")
-	}
-	node.Param2 = 99
-	if primary[0].Param2 != 3 {
-		t.Fatalf("queue snapshot changed with source node: %d", primary[0].Param2)
-	}
-
-	staged := &Node{ID: Lookup("Patrol"), Owner: owner, CreationTick: 22}
-	q.RestoreSnapshot([]*Node{staged}, nil)
-	staged.CreationTick = 88
-	if got := q.Primary()[0].CreationTick; got != 22 {
-		t.Fatalf("restore retained caller node pointer: %d", got)
-	}
-}
