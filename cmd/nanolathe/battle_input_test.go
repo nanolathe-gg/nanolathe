@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
@@ -24,6 +25,7 @@ func screenPos(cam *camera.Camera, u *units.Unit) (int32, int32) {
 }
 
 func clickAt(b *battleSession, sx, sy int32, shift bool) {
+	applyPendingBattleCommands(b)
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 	if shift {
 		in.Kbd.InjectKey(input.KeyShift, true)
@@ -65,6 +67,7 @@ func rightClickAt(b *battleSession, sx, sy int32, shift bool) {
 }
 
 func dragSelect(b *battleSession, sx0, sy0, sx1, sy1 int32, shift bool) {
+	applyPendingBattleCommands(b)
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 	if shift {
 		in.Kbd.InjectKey(input.KeyShift, true)
@@ -107,6 +110,20 @@ func applyPendingBattleCommands(b *battleSession) {
 	b.sess.Step(now)
 }
 
+func replaceSelectionForTest(t *testing.T, b *battleSession, us ...*units.Unit) {
+	t.Helper()
+	handles := make([]pool.Handle, 0, len(us))
+	for _, u := range us {
+		if u != nil {
+			handles = append(handles, u.Handle)
+		}
+	}
+	if err := b.submitBattleCommand(battleCommand{Kind: battleCommandSelectionReplace, Selection: battleSelectionCommand{Handles: handles}}); err != nil {
+		t.Fatalf("replace selection: %v", err)
+	}
+	applyPendingBattleCommands(b)
+}
+
 // TestClickCommanderSelectsExactlyOne [07 §9][RS-P0-003] small-click selects exactly one via canonical picker.
 func TestClickCommanderSelectsExactlyOne(t *testing.T) {
 	cat := testCatalogON05()
@@ -119,12 +136,6 @@ func TestClickCommanderSelectsExactlyOne(t *testing.T) {
 	// pass uses framebuffer coordinates, so points under the side rail are not
 	// valid click fixtures.
 	cmdr := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
-	// Ensure no prior selection
-	for _, u := range b.sess.Units.Iter() {
-		if u != nil {
-			u.Flags &^= client.SelectionFlag
-		}
-	}
 	b.latch = input.LatchNormal
 	sx, sy := screenPos(cam, cmdr)
 	clickAt(b, sx, sy, false)
@@ -153,8 +164,6 @@ func TestClickAtRenderedCommanderPosition(t *testing.T) {
 	b.sess.LocalOwner = 0
 	b.latch = input.LatchNormal
 	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
-	commander.Flags &^= client.SelectionFlag
-
 	beamX, beamY := b.cam.WorldToScreen(commander.X, commander.Y, commander.Z)
 	sx, sy := beamX-camera.OriginX, beamY-camera.OriginY
 	clickAt(b, sx, sy, false)
@@ -173,7 +182,6 @@ func TestClickAtRenderedCommanderPositionUsesSnapshotPicker(t *testing.T) {
 	b.sess.LocalOwner = 0
 	b.latch = input.LatchNormal
 	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
-	commander.Flags &^= client.SelectionFlag
 	b.sess.Snapshot.Publish(&snapshot.Frame{
 		Units: []snapshot.UnitView{{
 			Slot:  commander.Handle,
@@ -262,7 +270,7 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 		// Clear the queued move for the next sub-test.
 		q.PurgeUnprotected()
 		q.DropLeadingAutoOps()
-		a.Flags |= client.SelectionFlag
+		replaceSelectionForTest(t, b, a)
 	}
 	// Right empty clears when not additive [07 §9] — deselect branch.
 	// Right click must be outside minimap as well.
@@ -297,13 +305,13 @@ func TestHUDPressDragReleaseNeverSelects(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	wx := numeric.Fixed(int64(10*16) << 16) // but worldToCell uses fixed; simpler place at 100,100 px
 	_ = wx
 	u := placeUnit(b, "armsolar", numeric.Fixed(10*65536), numeric.Fixed(10*65536))
-	u.Flags &^= client.SelectionFlag
 	builder := placeUnit(b, "armcons", numeric.Fixed(2*65536), numeric.Fixed(2*65536))
-	builder.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, builder)
 	b.armBuildPanel()
 	if len(b.panelButtons) == 0 {
 		t.Fatalf("panel empty")
@@ -341,7 +349,6 @@ func TestFoggedEnemyCannotBeSelectedOrTargeted(t *testing.T) {
 	b.sess.Vis = &visibility.Service{} // empty
 	enemy := placeUnit(b, "armsolar", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
 	enemy.Owner = 1
-	enemy.Flags &^= client.SelectionFlag
 	b.latch = input.LatchNormal
 	sx, sy := screenPos(b.cam, enemy)
 	clickAt(b, sx, sy, false)
@@ -391,11 +398,6 @@ func TestEqualOverlapTieLowerSlotWins(t *testing.T) {
 		t.Fatalf("units not created")
 	}
 	b.latch = input.LatchNormal
-	for _, u := range b.sess.Units.Iter() {
-		if u != nil {
-			u.Flags &^= client.SelectionFlag
-		}
-	}
 	sx, sy := screenPos(b.cam, u1) // same as u2
 	// First via direct picker at the rendered framebuffer position [03 §2.5]
 	shellX := sx
@@ -436,10 +438,8 @@ func TestLocalOwnerNonzeroReceivesCommands(t *testing.T) {
 	// Place two units, one owned by 1 (local), one owned by 0
 	localUnit := placeUnit(b, "armcons", numeric.Fixed(180*65536), numeric.Fixed(100*65536))
 	localUnit.Owner = 1
-	localUnit.Flags &^= client.SelectionFlag
 	otherUnit := placeUnit(b, "armcons", numeric.Fixed(240*65536), numeric.Fixed(160*65536))
 	otherUnit.Owner = 0
-	otherUnit.Flags &^= client.SelectionFlag
 	// Try to select otherUnit via click – should not select because filter to LocalOwner [07 §9]
 	sxOther, syOther := screenPos(b.cam, otherUnit)
 	clickAt(b, sxOther, syOther, false)
@@ -468,16 +468,18 @@ func TestLocalOwnerNonzeroReceivesCommands(t *testing.T) {
 	if qOther != nil && qOther.LenPrimary() != 0 {
 		t.Fatalf("player 0 unit should not receive command when LocalOwner=1, got %d", qOther.LenPrimary())
 	}
-	// Also ensure hasSelection respects LocalOwner: otherUnit selected would not count
-	otherUnit.Flags |= client.SelectionFlag
+	// The committed frame reports the local selection used by command routing.
 	if !b.hasSelection() {
-		// hasSelection should be true because localUnit still selected
-		t.Fatalf("hasSelection should be true when local has selection despite foreign flag")
+		t.Fatalf("hasSelection should be true while local unit remains selected")
 	}
-	// Clear local, leave foreign flagged – hasSelection should be false (filtered)
-	localUnit.Flags &^= client.SelectionFlag
+	// Clear the local selection through the typed boundary; hasSelection then
+	// follows the committed frame rather than any live fixture state.
+	if err := b.submitBattleCommand(battleCommand{Kind: battleCommandSelectionClear}); err != nil {
+		t.Fatalf("clear local selection: %v", err)
+	}
+	applyPendingBattleCommands(b)
 	if b.hasSelection() {
-		t.Fatalf("hasSelection should be false when only foreign unit flagged and LocalOwner=1")
+		t.Fatalf("hasSelection should be false after typed clear with only foreign flag")
 	}
 }
 
@@ -529,8 +531,7 @@ func TestCanonicalPayloadIdentical(t *testing.T) {
 	bindBattleSessionCommandDispatch(b)
 	b.sess.LocalOwner = 0
 	u := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
-	u.Flags |= client.SelectionFlag
-	applyPendingBattleCommands(b)
+	replaceSelectionForTest(t, b, u)
 	// Hotkey latch Move then dispatch
 	b.latch = input.LatchMove
 	b.orderSelected(2, 200, 200, false)
@@ -547,7 +548,7 @@ func TestCanonicalPayloadIdentical(t *testing.T) {
 	q.PurgeUnprotected()
 	q.DropLeadingAutoOps()
 	// Need selection still
-	u.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, u)
 	b.orderSelected(1, 210, 210, false)
 	applyPendingBattleCommands(b)
 	if q.LenPrimary() != 1 {

@@ -46,6 +46,7 @@ func (s *System) ForgetUnit(h pool.Handle) {
 	delete(s.pathFailures, h)
 	delete(s.activeOrders, h)
 	delete(s.arrivalHandles, h)
+	delete(s.moveGoals, h)
 
 	// sessions is indexed by handle rather than keyed by it.
 	if idx := int(h); idx >= 0 && idx < len(s.sessions) {

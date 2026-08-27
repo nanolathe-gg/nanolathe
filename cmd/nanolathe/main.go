@@ -41,9 +41,8 @@ func runOptions(opts Options, out, errOut *os.File) int {
 // source at effectively one-second resolution [01 §2.1], [01 §7.1], [01 §7.2].
 // We mirror that split so an unseeded run does not accidentally couple them.
 //
-// --seed fixes both, which is the only handle a reproducible run has: RNG state
-// is not saved and is reseeded on load [08 "Scheduler and random state in
-// saves"]. PLAN_00 C4, PLAN_03 C10.
+// --seed fixes both, which is the only host-level handle a reproducible run
+// has. [01 §7.1], [01 §7.2]
 func seedsFor(opts Options) (sim, crt uint32) {
 	if opts.Seed >= 0 {
 		return uint32(opts.Seed), uint32(opts.Seed)
@@ -68,24 +67,7 @@ func run(opts Options, out *os.File) error {
 	rng.SeedGlobal(simSeed, crtSeed)
 	fmt.Fprintf(out, "seed: sim=%d crt=%d\n", simSeed, crtSeed)
 
-	// Native save/load: headless continuation through internal/save's StateV1
-	// box [PLAN_14 C18]. --load wins over a fresh skirmish.
-	if opts.Headless && opts.Load != "" {
-		return runLoadAndContinue(opts, content, out)
-	}
-	// Headless --map/--mission runs the REAL integrated session per Gate 5 [PLAN_14]:
-	// session.NewSkirmish / NewMission → Step loop → deterministic summary. (--save rides it.)
-	if opts.Headless && (opts.Map != "" || opts.Mission != "") {
-		if err := runSessionHeadless(opts, content, out); err != nil {
-			return err
-		}
-		return nil
-	}
-	// Windowed play goes through the game shell (menus → battle view);
-	// --map skips menus and enters the battle directly [PLAN_14].
-	if !opts.Headless {
-		return runGameShell(opts, content)
-	}
-
-	return fmt.Errorf("nanolathe: headless mode requires --map or --mission")
+	// All runtime entry points compose the retail game shell. The shell opens
+	// the authored menus, or enters the battle directly when --map is supplied.
+	return runGameShell(opts, content)
 }

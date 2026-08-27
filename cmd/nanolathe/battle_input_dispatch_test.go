@@ -3,7 +3,6 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
@@ -15,7 +14,7 @@ func TestStopDispatchHasNoContextualOriginOrder(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
 	bindBattleSessionCommandDispatch(b)
 	u := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
-	u.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, u)
 	b.handleHudOrderButton("stop")
 	applyPendingBattleCommands(b)
 	q := orders.QueueForUnit(u)
@@ -36,8 +35,7 @@ func TestAttackGroundUsesResolverRejectSentinel(t *testing.T) {
 	bindBattleSessionCommandDispatch(b)
 	attacker := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
 	attacker.Def.CanAttack = true
-	attacker.Flags |= client.SelectionFlag
-	applyPendingBattleCommands(b)
+	replaceSelectionForTest(t, b, attacker)
 	b.orderSelected(3, 300, 300, false)
 	applyPendingBattleCommands(b)
 	q := orders.QueueForUnit(attacker)
@@ -52,7 +50,7 @@ func TestActivationCommandUsesEconomyStateNotProxyFlag(t *testing.T) {
 	u.Def.OnOffable = true
 	u.Activated = false
 	u.Flags |= 0x1000 // legacy proxy bit must not control the command.
-	u.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, u)
 	var got battleCommand
 	b.commandDispatchFn = func(cmd battleCommand) error {
 		got = cmd
@@ -94,7 +92,7 @@ func TestTypedOrderCommandResolvesTargetHandleAtApplication(t *testing.T) {
 	bindBattleSessionCommandDispatch(b)
 	attacker := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
 	attacker.Def.CanAttack = true
-	attacker.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, attacker)
 	target := placeUnit(b, "armsolar", numeric.Fixed(16*65536), numeric.Fixed(16*65536))
 	target.Owner = 1
 	applyPendingBattleCommands(b)

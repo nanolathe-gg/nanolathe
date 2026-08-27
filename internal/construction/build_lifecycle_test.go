@@ -195,7 +195,7 @@ func TestFactoryReservationReleaseAndCompletedRetention(t *testing.T) {
 	}
 	// Completed live structures retain their occupancy until removal.
 	rect, _ := world.NewFootprintRect(world.NewFootprintAnchor(4, 4), mustExtent(2, 2))
-	if err := svc.reservePlacement(product.Handle, rect); err != nil {
+	if err := svc.reservePlacement(product.Handle, nil, rect); err != nil {
 		t.Fatal(err)
 	}
 	svc.recordPlacement(product.Handle, rect)
@@ -321,7 +321,7 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.reservePlacement(ph, placement); err != nil {
+	if err := svc.reservePlacement(ph, nil, placement); err != nil {
 		t.Fatal(err)
 	}
 	svc.recordPlacement(ph, placement)

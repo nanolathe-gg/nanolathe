@@ -115,8 +115,9 @@ func TestHUDProductClickArmsCorrectProduct(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	builder := placeUnit(b, "armcons", numeric.Fixed(0), numeric.Fixed(0))
-	builder.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, builder)
 	b.armBuildPanel()
 	if len(b.panelButtons) == 0 {
 		t.Fatalf("panelButtons empty")
@@ -160,14 +161,14 @@ func TestHUDReleaseNeverSelectsWorldUnit(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	// Place a unit at world (100,100) pixels -> screen approx 228,132 with cam 0, Origin 128,32
 	wx := numeric.Fixed(int64(100) << 16)
 	wz := numeric.Fixed(int64(100) << 16)
 	u := placeUnit(b, "armsolar", wx, wz)
-	u.Flags &^= client.SelectionFlag
 	// Ensure panel is armed so isOverPanel true
 	builder := placeUnit(b, "armcons", numeric.Fixed(0), numeric.Fixed(0))
-	builder.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, builder)
 	b.armBuildPanel()
 	// Simulate press that begins on HUD chrome (panel area)
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
@@ -199,8 +200,7 @@ func TestLegalPlacementQueuesMobileBuild(t *testing.T) {
 	b := newTestBattle(cat, terrain)
 	bindBattleSessionCommandDispatch(b)
 	builder := placeUnit(b, "armcons", numeric.Fixed(0), numeric.Fixed(0))
-	builder.Flags |= client.SelectionFlag
-	applyPendingBattleCommands(b)
+	replaceSelectionForTest(t, b, builder)
 	b.armBuildPanel()
 	// Arm product
 	btn := b.panelButtons[0]
@@ -259,7 +259,7 @@ func TestIllegalPlacementQueuesNothing(t *testing.T) {
 	b := newTestBattle(cat, terrain)
 	bindBattleSessionCommandDispatch(b)
 	builder := placeUnit(b, "armcons", numeric.Fixed(0), numeric.Fixed(0))
-	builder.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, builder)
 	b.armBuildPanel()
 	btn := b.panelButtons[0]
 	b.panelClick(btn.X+1, btn.Y+1)
@@ -292,8 +292,7 @@ func TestFactoryProductClickQueuesFactoryItem(t *testing.T) {
 	b := newTestBattle(cat, terrain)
 	bindBattleSessionCommandDispatch(b)
 	fac := placeUnit(b, "armfac", numeric.Fixed(0), numeric.Fixed(0))
-	fac.Flags |= client.SelectionFlag
-	applyPendingBattleCommands(b)
+	replaceSelectionForTest(t, b, fac)
 	b.armBuildPanel()
 	if len(b.panelButtons) == 0 {
 		t.Fatalf("factory panel empty")
@@ -332,20 +331,24 @@ func TestPagingChangesPageDataDriven(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	builder := placeUnit(b, "armcons", numeric.Fixed(0), numeric.Fixed(0))
-	builder.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, builder)
 	b.armBuildPanel()
 	// Initially page 0
-	if hud.IsPaged(builder.Flags) {
+	frame, ok := b.currentSnapshot()
+	if !ok || frame.CommandPage.Page != 0 {
 		t.Fatalf("initial should be page 0 not paged")
 	}
 	firstPageFirstBtn := b.panelButtons[0].Name
 	b.nextBuildPage()
-	if !hud.IsPaged(builder.Flags) {
+	applyPendingBattleCommands(b)
+	frame, ok = b.currentSnapshot()
+	if !ok || frame.CommandPage.Page != 1 {
 		t.Fatalf("after next, should be paged")
 	}
-	if hud.DecodePage(builder.Flags) != 1 {
-		t.Fatalf("page after next want 1 got %d", hud.DecodePage(builder.Flags))
+	if frame.CommandPage.Page != 1 {
+		t.Fatalf("page after next want 1 got %d", frame.CommandPage.Page)
 	}
 	b.armBuildPanel()
 	secondPageFirstBtn := b.panelButtons[0].Name
@@ -355,23 +358,30 @@ func TestPagingChangesPageDataDriven(t *testing.T) {
 	}
 	// Prev should return to 0
 	b.prevBuildPage()
-	if hud.DecodePage(builder.Flags) != 0 && hud.IsPaged(builder.Flags) {
-		// Page 0 is not paged (bit clear) or paged 0? EncodePageBits clears bit for 0
-		// So after prev, IsPaged should be false
-		if hud.IsPaged(builder.Flags) {
-			t.Fatalf("after prev to 0, should not be paged")
-		}
+	applyPendingBattleCommands(b)
+	frame, ok = b.currentSnapshot()
+	if !ok || frame.CommandPage.Page != 0 {
+		t.Fatalf("after prev want page 0, got %+v", frame.CommandPage)
 	}
 	// Guard: next beyond max stays
 	b.nextBuildPage()
+	applyPendingBattleCommands(b)
+	frame, ok = b.currentSnapshot()
+	if !ok || frame.CommandPage.Page != 1 {
+		t.Fatalf("guard should prevent beyond max, got %+v", frame.CommandPage)
+	}
 	b.nextBuildPage() // already at max 1, second next should stay 1
-	if hud.DecodePage(builder.Flags) != 1 {
-		t.Fatalf("guard should prevent beyond max")
+	applyPendingBattleCommands(b)
+	frame, ok = b.currentSnapshot()
+	if !ok || frame.CommandPage.Page != 1 {
+		t.Fatalf("guard should prevent beyond max, got %+v", frame.CommandPage)
 	}
 	// Digit page switching also guard
 	b.switchBuildPage(9) // digit 9 => page 8 clamped to 1
-	if hud.DecodePage(builder.Flags) != 1 {
-		t.Fatalf("digit page clamp failed")
+	applyPendingBattleCommands(b)
+	frame, ok = b.currentSnapshot()
+	if !ok || frame.CommandPage.Page != 1 {
+		t.Fatalf("digit page clamp failed, got %+v", frame.CommandPage)
 	}
 }
 
@@ -408,7 +418,6 @@ func TestReclaimClickResolvesFeature(t *testing.T) {
 	}
 	// Place reclaim unit elsewhere (2,2) so feature at 9,5 is not masked by unit [07 §8] unit>feature priority
 	recl := placeUnit(b, "armrecl", numeric.Fixed(int64(2*16)<<16), numeric.Fixed(int64(2*16)<<16))
-	recl.Flags |= client.SelectionFlag
 	// Place cam at 0
 	b.cam.X = 0
 	b.cam.Z = 0
@@ -559,7 +568,7 @@ func TestBuildDefRetainedAndFactoryQueue(t *testing.T) {
 	b := newTestBattle(cat, terrain)
 	bindBattleSessionCommandDispatch(b)
 	builder := placeUnit(b, "armcons", numeric.Fixed(0), numeric.Fixed(0))
-	builder.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, builder)
 	b.armBuildPanel()
 	btn := b.panelButtons[0]
 	b.panelClick(btn.X+1, btn.Y+1)
@@ -571,9 +580,7 @@ func TestBuildDefRetainedAndFactoryQueue(t *testing.T) {
 	// Factory
 	fac := placeUnit(b, "armfac", numeric.Fixed(0), numeric.Fixed(0))
 	// Deselect builder, select factory
-	builder.Flags &^= client.SelectionFlag
-	fac.Flags |= client.SelectionFlag
-	applyPendingBattleCommands(b)
+	replaceSelectionForTest(t, b, fac)
 	b.armBuildPanel()
 	if len(b.panelButtons) == 0 {
 		t.Fatalf("factory panel empty")
@@ -597,8 +604,9 @@ func TestRightClickCancelsPlacement(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	builder := placeUnit(b, "armcons", numeric.Fixed(0), numeric.Fixed(0))
-	builder.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, builder)
 	b.armBuildPanel()
 	b.panelClick(b.panelButtons[0].X+1, b.panelButtons[0].Y+1)
 	if b.buildDef == "" {
@@ -618,8 +626,9 @@ func TestEscapeCancelsPlacement(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	builder := placeUnit(b, "armcons", numeric.Fixed(0), numeric.Fixed(0))
-	builder.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, builder)
 	b.armBuildPanel()
 	b.panelClick(b.panelButtons[0].X+1, b.panelButtons[0].Y+1)
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
@@ -638,10 +647,11 @@ func TestFootprintPreviewLegalIllegal(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(39, 39)
 	b := newTestBattle(cat, terrain)
+	bindBattleSessionCommandDispatch(b)
 	b.cam.X = 0
 	b.cam.Z = 0
 	builder := placeUnit(b, "armcons", numeric.Fixed(0), numeric.Fixed(0))
-	builder.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, builder)
 	b.armBuildPanel()
 	b.panelClick(b.panelButtons[0].X+1, b.panelButtons[0].Y+1)
 	b.updatePlacement(320, 240) // center legal (500? but with large map 100*16=1600, center 192,208 inside)

@@ -64,7 +64,15 @@ func TestWalkToSite(t *testing.T) {
 		sys.BeginTick(tick)
 		res := sys.StepUnit(builder.Handle, tick)
 		sys.EndTick(tick)
-		dist2 := (int64(siteX)-int64(builder.X))*(int64(siteX)-int64(builder.X)) + (int64(siteZ)-int64(builder.Z))*(int64(siteZ)-int64(builder.Z))
+		// Build range is measured to the nearest point of the site's footprint
+		// rectangle, not to its centre: measuring to the centre would require a
+		// stock commander to stand inside a 6x6 lab's own footprint to build it
+		// (see Service.siteRangePoint) [R-P0-06][fmt fbi].
+		rx, rz, okRange := svc.SiteRangePointPublic(node, builder.X, builder.Z)
+		if !okRange {
+			rx, rz = siteX, siteZ
+		}
+		dist2 := (int64(rx)-int64(builder.X))*(int64(rx)-int64(builder.X)) + (int64(rz)-int64(builder.Z))*(int64(rz)-int64(builder.Z))
 		reach := int64(builder.Def.BuildDistance) * 65536
 		t.Logf("tick %d builder %d %d dist2 %d reach2 %d moved %v hasRoute %v phase %d target %d", tick, builder.X.Raw(), builder.Z.Raw(), dist2, reach*reach, res.Moved, res.HasRoute, node.Phase, node.Target)
 		if node.Target != 0 {

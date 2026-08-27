@@ -20,7 +20,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
-	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -847,35 +846,27 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 	if h == nil || b == nil {
 		return false
 	}
-	// Snapshot may be nil in headless tests; fall back to live selection for window choice.
-	var f *snapshot.Frame
-	if b.sess != nil && b.sess.Snapshot != nil {
-		_, cur, ok := b.sess.Snapshot.Read()
-		if ok {
-			f = cur
-		}
+	// A committed frame is required for every HUD action [I6]. A frame without
+	// a command-page builder still exposes the authored general/order controls.
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return false
 	}
 	window, _ := h.windowFor(b, f)
 	if window == nil {
 		return false
 	}
-	// Production HUD dispatch is snapshot-driven: the builder identity and
-	// visible product slice come from the immutable CommandPage. Live unit
-	// selection remains available only to asset-free fixture sessions [I6].
+	// Builder and product data are optional for general/order controls, but if
+	// present they come only from the immutable CommandPage [I6].
 	var selectedDef *content.UnitDef
 	var snapshotProducts []string
-	if b.requireCommandDispatch {
-		if f == nil || b.sess == nil || b.cat == nil || f.CommandPage.Builder == 0 {
-			return true
+	if f.CommandPage.Builder != 0 && f.CommandPage.PageCount != 0 && b.sess != nil && b.cat != nil {
+		if builderView, found := snapshotUnitByHandle(f, f.CommandPage.Builder); found && builderView.Owner == b.sess.LocalOwner {
+			if def, found := b.cat.Unit(builderView.DefName); found && def != nil && def.Builder {
+				selectedDef = def
+				snapshotProducts = f.CommandPage.ProductKeys
+			}
 		}
-		builderView, found := snapshotUnitByHandle(f, f.CommandPage.Builder)
-		if !found || builderView.Owner != b.sess.LocalOwner || b.cat == nil {
-			return true
-		}
-		selectedDef, _ = b.cat.Unit(builderView.DefName)
-		snapshotProducts = f.CommandPage.ProductKeys
-	} else if live := b.selectedBuilder(); live != nil {
-		selectedDef = live.Def
 	}
 	offset := int32(0)
 	if h.panel != nil {
@@ -911,33 +902,20 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 			if rightClick {
 				return true
 			}
-			// Generic NEXT button fallback only when builder has paging
-			if b.requireCommandDispatch {
-				if f != nil && f.CommandPage.PageCount > 1 {
-					b.nextBuildPage()
-					return true
-				}
-			} else if sel := b.selectedBuilder(); sel != nil && b.cat != nil {
-				if pm, ok := b.cat.BuildMenus[sel.Def.CanonicalKey]; ok && pm != nil && b.buildPageCount(sel, pm) > 1 {
-					b.nextBuildPage()
-					return true
-				}
+			// Generic NEXT is active only when the committed page has another
+			// page [07 §9].
+			if f.CommandPage.PageCount > 1 {
+				b.nextBuildPage()
+				return true
 			}
 		}
 		if strings.Contains(upperName, "PREV") || strings.Contains(upperText, "PREV") {
 			if rightClick {
 				return true
 			}
-			if b.requireCommandDispatch {
-				if f != nil && f.CommandPage.PageCount > 1 {
-					b.prevBuildPage()
-					return true
-				}
-			} else if sel := b.selectedBuilder(); sel != nil && b.cat != nil {
-				if pm, ok := b.cat.BuildMenus[sel.Def.CanonicalKey]; ok && pm != nil && b.buildPageCount(sel, pm) > 1 {
-					b.prevBuildPage()
-					return true
-				}
+			if f.CommandPage.PageCount > 1 {
+				b.prevBuildPage()
+				return true
 			}
 		}
 		// Build product binding data-driven [R-P0-03][02 "Build-menu catalog keys"].
@@ -951,17 +929,13 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 				}
 				// Direct canonical match or case-insensitive
 				var pageProductKey string
-				if b.requireCommandDispatch {
-					for _, key := range snapshotProducts {
-						if strings.EqualFold(content.CanonicalKey(key), content.CanonicalKey(cand)) {
-							pageProductKey = key
-							break
-						}
+				for _, key := range snapshotProducts {
+					if strings.EqualFold(content.CanonicalKey(key), content.CanonicalKey(cand)) {
+						pageProductKey = key
+						break
 					}
-					if pageProductKey == "" {
-						continue
-					}
-				} else if !hud.ValidateBuildProduct(b.cat, selectedDef.CanonicalKey, cand) {
+				}
+				if pageProductKey == "" {
 					continue
 				}
 				// Resolve canonical product name for dispatch
@@ -972,75 +946,23 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 					prodKey = pageProductKey
 				}
 				prodDef, _ := b.cat.Unit(prodKey)
-				if prodDef != nil {
-					prodKey = prodDef.CanonicalKey
-				} else if !b.requireCommandDispatch {
-					// Try canonical lookup via BuildMenus first entry match
-					for _, bm := range b.cat.BuildMenus[selectedDef.CanonicalKey].Buttons {
-						if strings.EqualFold(bm, cand) {
-							if d, ok := b.cat.Unit(bm); ok && d != nil {
-								prodKey = d.CanonicalKey
-							} else {
-								prodKey = bm
-							}
-							break
-						}
-					}
-				}
 				if prodDef == nil {
-					if d, ok := b.cat.Unit(prodKey); ok {
-						prodDef = d
-					}
-				}
-				// Retail branches on the product's BMcode, not on the builder
-				// [07 §9]. A resolvable product decides; only an unresolvable
-				// one falls back to classifying the builder.
-				if prodDef != nil {
-					if !hud.ProductArmsPlacement(prodDef) {
-						_ = b.DispatchFactoryBuildDelta(prodKey, factoryBuildDelta(b.shiftHeld, rightClick))
-						return true
-					}
-					if rightClick {
-						return true
-					}
-					b.armPlacement(prodDef)
+					// The committed page is the sole product identity source. An
+					// unresolved key is consumed but cannot be classified or queued.
 					return true
 				}
-				if hud.IsFactoryBuilder(selectedDef) {
+				prodKey = prodDef.CanonicalKey
+				// Retail branches on the product's BMcode, not on the builder
+				// [07 §9]. Product BMcode determines queue versus placement.
+				if !hud.ProductArmsPlacement(prodDef) {
 					_ = b.DispatchFactoryBuildDelta(prodKey, factoryBuildDelta(b.shiftHeld, rightClick))
 					return true
 				}
-				if hud.IsMobileBuilder(selectedDef) {
-					if rightClick {
-						return true
-					}
-					// Arm placement mode with definition retained [R-P0-03] cursorfindsite 0xE requires non-empty list
-					if prodDef == nil {
-						if d, ok := b.cat.Unit(prodKey); ok {
-							prodDef = d
-						}
-					}
-					if prodDef != nil {
-						b.buildDef = prodDef.CanonicalKey
-						b.buildFootX, b.buildFootZ = world.FootprintForUnit(b.cat, prodDef)
-						b.buildOK = false
-						b.latch = input.LatchMobileBuild
-					} else {
-						b.buildDef = prodKey
-						b.latch = input.LatchMobileBuild
-					}
+				if rightClick {
 					return true
 				}
-				// Builder type ambiguous: treat as mobile for placement
-				if selectedDef.Builder {
-					if prodDef != nil {
-						b.buildDef = prodDef.CanonicalKey
-						b.buildFootX, b.buildFootZ = world.FootprintForUnit(b.cat, prodDef)
-						b.buildOK = false
-						b.latch = input.LatchMobileBuild
-					}
-					return true
-				}
+				b.armPlacement(prodDef)
+				return true
 			}
 		}
 		upper := strings.ToUpper(gad.Name)
@@ -1056,20 +978,6 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 		// Any other GUI button still consumes the click to prevent world leak [07 §3]
 		return true
 	}
-	return false
-}
-
-// hitTest reports whether (x,y) hits any active button gadget in the current
-// window, used for input-capture latch [F-P0-003][07 §3].
-// This fallback is retained for callers without battleSession context.
-func (h *retailBattleHUD) hitTest(x, y int32) bool {
-	if h == nil || h.side == nil {
-		return false
-	}
-	// Without session context we cannot resolve the correct page window;
-	// report false so handleInput's session-aware hitTestFor is preferred.
-	_ = x
-	_ = y
 	return false
 }
 
@@ -1176,86 +1084,21 @@ func (h *retailBattleHUD) windowFor(b *battleSession, f *snapshot.Frame) (*gui.W
 	} else {
 		name = "gen"
 	}
-	var selected *snapshot.UnitView
-	if b != nil && b.requireCommandDispatch {
-		// Production window selection follows the authoritative command page,
-		// not live selection flags. A mixed selection can contain non-builders,
-		// while CommandPage.Builder is the executable's resolved producer [I6].
-		if f != nil && f.CommandPage.Builder != 0 {
-			if view, found := snapshotUnitByHandle(f, f.CommandPage.Builder); found && view.Owner == h.owner && b.snapshotBuilder(view) {
-				selectedView := view
-				selected = &selectedView
-			}
-		}
-	} else if f != nil {
-		for i := range f.Units {
-			u := &f.Units[i]
-			if u.Owner == h.owner && u.Flags&client.SelectionFlag != 0 {
-				selected = u
-				break
-			}
-		}
+	if b == nil || f == nil || b.cat == nil || f.CommandPage.Builder == 0 || f.CommandPage.PageCount == 0 {
+		return h.loadWindow(name)
 	}
-	// Fallback to live selection only for asset-free fixture sessions. Production
-	// never crosses back into the mutable unit pool when a frame is unavailable.
-	if selected == nil && b != nil && !b.requireCommandDispatch && b.sess != nil && b.sess.Units != nil {
-		if ub := b.selectedBuilder(); ub != nil && ub.Def != nil {
-			// Synthesize a view for window selection
-			selected = &snapshot.UnitView{Owner: h.owner, Flags: ub.Flags, DefID: uint16(0)}
-			// Use live def directly for name selection below
-			// Mark DefID zero but we will use live def path
-		} else if len(b.selectedUnits()) > 0 {
-			if su := b.selectedUnits()[0]; su != nil {
-				selected = &snapshot.UnitView{Owner: h.owner, Flags: su.Flags}
-				if su.Def != nil {
-					if idx, ok := b.cat.UnitDefIndex(su.Def.CanonicalKey); ok {
-						selected.DefID = uint16(idx)
-					}
-				}
-			}
-		}
+	// The committed CommandPage identifies both the builder and page. No live
+	// unit selection or synthesized view participates in GUI selection [I6].
+	view, found := snapshotUnitByHandle(f, f.CommandPage.Builder)
+	if !found || view.Owner != h.owner || !b.snapshotBuilder(view) {
+		return h.loadWindow(name)
 	}
-	if selected != nil && b != nil && b.cat != nil {
-		def, ok := h.defFor(selected)
-		if !ok || def == nil {
-			// Fallback to a live definition only for fixture sessions.
-			if !b.requireCommandDispatch {
-				if ub := b.selectedBuilder(); ub != nil {
-					def = ub.Def
-					ok = def != nil
-				} else if len(b.selectedUnits()) > 0 {
-					if su := b.selectedUnits()[0]; su != nil {
-						def = su.Def
-						ok = def != nil
-					}
-				}
-			}
-		}
-		if ok && def != nil {
-			if def.Builder {
-				pageNum := 0
-				if b.requireCommandDispatch {
-					// CommandPage.Page is the authoritative page after the typed
-					// navigation command publishes. Do not decode mutable flags.
-					if f == nil || f.CommandPage.PageCount == 0 {
-						return h.loadWindow(name)
-					}
-					pageNum = hud.ClampPage(int(f.CommandPage.Page), int(f.CommandPage.PageCount))
-				} else {
-					// Fixture path retains the flag encoding used by the live unit.
-					if hud.IsPaged(selected.Flags) {
-						pageNum = hud.DecodePage(selected.Flags)
-					}
-					pageNum = hud.ClampPage(pageNum, h.buildPageCount(def))
-				}
-				name = strings.ToLower(def.UnitName) + fmt.Sprintf("%d", pageNum+1)
-			} else {
-				if h.side != nil {
-					name = strings.ToLower(h.side.NamePrefix) + "gen"
-				}
-			}
-		}
+	def, ok := h.defFor(&view)
+	if !ok || def == nil || !def.Builder {
+		return h.loadWindow(name)
 	}
+	pageNum := hud.ClampPage(int(f.CommandPage.Page), int(f.CommandPage.PageCount))
+	name = strings.ToLower(def.UnitName) + fmt.Sprintf("%d", pageNum+1)
 	return h.loadWindow(name)
 }
 

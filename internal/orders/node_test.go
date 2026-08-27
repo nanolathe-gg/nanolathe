@@ -1,0 +1,56 @@
+package orders
+
+import (
+	"testing"
+
+	"github.com/nanolathe/nanolathe/internal/content"
+)
+
+func nodeTestCatalog() *content.Catalog {
+	one := &content.UnitDef{UnitName: "one"}
+	one.CanonicalKey = content.CanonicalKey(one.UnitName)
+	two := &content.UnitDef{UnitName: "two"}
+	two.CanonicalKey = content.CanonicalKey(two.UnitName)
+	return &content.Catalog{Units: map[string]*content.UnitDef{
+		one.CanonicalKey: one,
+		two.CanonicalKey: two,
+	}}
+}
+
+func TestBuildConstructorsKeepZeroForUnresolvedCatalogDefinition(t *testing.T) {
+	constructors := []struct {
+		name string
+		get  func(*content.Catalog, string) Node
+	}{
+		{name: "factory", get: func(cat *content.Catalog, key string) Node {
+			return NewFactoryBuildNode(cat, key, 1, 2, 3, false)
+		}},
+		{name: "mobile", get: func(cat *content.Catalog, key string) Node {
+			return NewMobileBuildNode(cat, key, 0, 0, 0, 1, 2, 3, false)
+		}},
+		{name: "mobile explicit id", get: func(cat *content.Catalog, key string) Node {
+			return NewMobileBuildNodeWithID(Lookup("MobileBuild"), cat, key, 0, 0, 0, 1, 2, 3, false)
+		}},
+	}
+	for _, tc := range constructors {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, test := range []struct {
+				name string
+				cat  *content.Catalog
+				key  string
+				want uint32
+			}{
+				{name: "known", cat: nodeTestCatalog(), key: "one", want: 1},
+				{name: "unknown", cat: nodeTestCatalog(), key: "missing", want: 0},
+				{name: "nil catalog", cat: nil, key: "one", want: 0},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					n := tc.get(test.cat, test.key)
+					if n.Param1 != test.want {
+						t.Fatalf("Param1=%d, want %d for %q", n.Param1, test.want, test.key)
+					}
+				})
+			}
+		})
+	}
+}

@@ -1,8 +1,6 @@
 package orders
 
 import (
-	"sync"
-
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -127,10 +125,8 @@ func NewAssistNode(id ID, target pool.Handle, progress uint32, tick uint32, owne
 }
 
 // catalogIndex maps a canonical key to a stable catalog index [P0-I05][02 §5].
-// If cat is nil or key not found, it falls back to a deterministic
-// intern table that is collision-free (sequential assignment) and not a hash.
-// The fallback is used only for headless tests without a catalog; production
-// always has a catalog and uses its sorted index (1-based, 0 sentinel).
+// A missing catalog or unknown key retains the catalog's zero reject sentinel;
+// no runtime identity is invented for an unresolved definition.
 func catalogIndex(cat *content.Catalog, canonicalKey string) (uint32, bool) {
 	if canonicalKey == "" {
 		return 0, false
@@ -140,28 +136,7 @@ func catalogIndex(cat *content.Catalog, canonicalKey string) (uint32, bool) {
 			return idx, true
 		}
 	}
-	// Fallback intern: collision-free sequential, not FNV hash [P0-I05].
-	return fallbackIndex(canonicalKey)
-}
-
-// fallback intern state for nil-catalog tests [P0-I05]. Not authoritative in
-// production; production always has cat.
-var (
-	fallbackMu            = make(map[string]uint32)
-	fallbackNext   uint32 = 100000 // start high to avoid overlapping real catalog 1..N (~500)
-	fallbackMuLock sync.Mutex
-)
-
-func fallbackIndex(ck string) (uint32, bool) {
-	fallbackMuLock.Lock()
-	defer fallbackMuLock.Unlock()
-	if id, ok := fallbackMu[ck]; ok {
-		return id, true
-	}
-	id := fallbackNext
-	fallbackNext++
-	fallbackMu[ck] = id
-	return id, true
+	return 0, false
 }
 
 // RemapBuildIndices remaps a node's catalog index from its BuildDefKey via the current catalog [P0-I05].

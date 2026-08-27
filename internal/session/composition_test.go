@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -15,6 +16,64 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
+
+func TestRequireGlobalRNGStreamsFailsClosedAndPreservesSeededStreams(t *testing.T) {
+	oldSim, oldCRT := rng.Global.Sim, rng.Global.Crt
+	t.Cleanup(func() {
+		rng.Global.Sim = oldSim
+		rng.Global.Crt = oldCRT
+	})
+
+	rng.Global.Sim = nil
+	rng.Global.Crt = nil
+	if err := requireGlobalRNGStreams(); err == nil || !strings.Contains(err.Error(), "simulation RNG") {
+		t.Fatalf("missing simulation stream error = %v, want explicit simulation diagnostic", err)
+	}
+
+	sim := rng.NewSimulation(123)
+	rng.Global.Sim = &sim
+	if err := requireGlobalRNGStreams(); err == nil || !strings.Contains(err.Error(), "CRT RNG") {
+		t.Fatalf("missing CRT stream error = %v, want explicit CRT diagnostic", err)
+	}
+
+	crt := rng.NewCRT(456)
+	rng.Global.Crt = &crt
+	simDraws, crtDraws := sim.Draws(), crt.Draws()
+	if err := requireGlobalRNGStreams(); err != nil {
+		t.Fatalf("seeded streams rejected: %v", err)
+	}
+	if rng.Global.Sim != &sim || rng.Global.Crt != &crt {
+		t.Fatal("seeded stream pointers changed")
+	}
+	if sim.Draws() != simDraws || crt.Draws() != crtDraws {
+		t.Fatalf("stream validation consumed draws: sim %d→%d CRT %d→%d", simDraws, sim.Draws(), crtDraws, crt.Draws())
+	}
+}
+
+func TestStrictSessionConstructorsRejectMissingGlobalRNG(t *testing.T) {
+	oldSim, oldCRT := rng.Global.Sim, rng.Global.Crt
+	t.Cleanup(func() {
+		rng.Global.Sim = oldSim
+		rng.Global.Crt = oldCRT
+	})
+	rng.Global.Sim = nil
+	rng.Global.Crt = nil
+	if _, err := NewMissionWithProgress(nil, nil, "missing", 0, nil); err == nil || !strings.Contains(err.Error(), "simulation RNG") {
+		t.Fatalf("strict mission constructor error = %v, want missing simulation stream", err)
+	}
+	if _, err := NewSkirmishWithProgress(nil, nil, SkirmishConfig{MapName: "missing"}, nil); err == nil || !strings.Contains(err.Error(), "simulation RNG") {
+		t.Fatalf("strict skirmish constructor error = %v, want missing simulation stream", err)
+	}
+
+	sim := rng.NewSimulation(123)
+	rng.Global.Sim = &sim
+	if _, err := NewMissionWithProgress(nil, nil, "missing", 0, nil); err == nil || !strings.Contains(err.Error(), "CRT RNG") {
+		t.Fatalf("strict mission constructor error = %v, want missing CRT stream", err)
+	}
+	if _, err := NewSkirmishWithProgress(nil, nil, SkirmishConfig{MapName: "missing"}, nil); err == nil || !strings.Contains(err.Error(), "CRT RNG") {
+		t.Fatalf("strict skirmish constructor error = %v, want missing CRT stream", err)
+	}
+}
 
 func minimalCatalogForStrict() *content.Catalog {
 	mv := map[string]*content.MovementClass{
@@ -75,6 +134,34 @@ func fsWithMap(t *testing.T, ota string) *vfs.FS {
 		t.Fatalf("mount: %v", err)
 	}
 	return fs
+}
+
+func TestStrictCatalogValidatesSuppliedCatalog(t *testing.T) {
+	missingMovement := &content.Catalog{
+		Sides: []*content.SideDef{{Name: "ARM"}},
+	}
+	if _, err := strictCatalog(nil, missingMovement); err == nil || !strings.Contains(err.Error(), "moveinfo.tdf") {
+		t.Fatalf("missing MOVEINFO supplied catalog error = %v, want exact validation diagnostic", err)
+	}
+
+	missingSides := &content.Catalog{
+		Movement: map[string]*content.MovementClass{"testmove": {}},
+	}
+	if _, err := strictCatalog(nil, missingSides); err == nil || !strings.Contains(err.Error(), "sidedata.tdf") {
+		t.Fatalf("missing SIDEDATA supplied catalog error = %v, want exact validation diagnostic", err)
+	}
+
+	valid := &content.Catalog{
+		Movement: map[string]*content.MovementClass{"testmove": {}},
+		Sides:    []*content.SideDef{{Name: "ARM"}},
+	}
+	got, err := strictCatalog(nil, valid)
+	if err != nil {
+		t.Fatalf("minimally valid supplied catalog: %v", err)
+	}
+	if got != valid {
+		t.Fatal("strict supplied catalog was replaced instead of returned unchanged")
+	}
 }
 
 func syntheticMission() *mission.Mission {

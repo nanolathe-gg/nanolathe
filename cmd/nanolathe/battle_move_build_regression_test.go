@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/camera"
-	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
@@ -47,6 +46,7 @@ func TestBattleMoveAndBuildReachGoal(t *testing.T) {
 		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
 	}
 	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal}
+	bindBattleSessionCommandDispatch(b)
 	centerOnCommanderForSession(sess, b.cam, 640, 480)
 
 	var com *units.Unit
@@ -62,7 +62,7 @@ func TestBattleMoveAndBuildReachGoal(t *testing.T) {
 	if com == nil {
 		t.Fatal("no local commander")
 	}
-	com.Flags |= client.SelectionFlag
+	replaceSelectionForTest(t, b, com)
 	t.Logf("commander at world %d,%d cell %d,%d", com.X.Raw(), com.Z.Raw(),
 		world.WorldToCell(com.X), world.WorldToCell(com.Z))
 

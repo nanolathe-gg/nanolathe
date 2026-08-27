@@ -109,7 +109,11 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	}
 	menu := cat.BuildMenus[content.CanonicalKey(commanderName)]
 	wantPages := hud.PageCountFromButtons(len(menu.Buttons), hud.RetailBuildButtonsPerPage)
-	if got := b.hud.buildPageCount(b.selectedBuilder().Def); got != wantPages {
+	commanderDef, ok := cat.Unit(commanderName)
+	if !ok || commanderDef == nil {
+		t.Fatalf("commander definition %q missing from catalog", commanderName)
+	}
+	if got := b.hud.buildPageCount(commanderDef); got != wantPages {
 		t.Fatalf("%s authored page count = %d; want %d from CANBUILD", commanderName, got, wantPages)
 	}
 

@@ -188,12 +188,8 @@ func strictCatalog(fs vfs.FSOps, cat *content.Catalog) (*content.Catalog, error)
 
 func strictCatalogWithProgress(fs vfs.FSOps, cat *content.Catalog, report content.Progress) (*content.Catalog, error) {
 	if cat != nil {
-		// Explicitly supplied catalog is taken as-is. For production it will
-		// have been compiled via strict path; for fixtures the caller owns the
-		// minimal content and Validate is not enforced here (production Validate
-		// is checked via ValidateComposition). Do not synthesize empty.
-		if cat.Units == nil && cat.Features == nil && cat.Maps == nil && len(cat.Sides) == 0 && cat.Movement == nil {
-			return nil, fmt.Errorf("session: empty catalog not allowed [02 §5]")
+		if err := cat.Validate(); err != nil {
+			return nil, fmt.Errorf("session: catalog validate: %w", err)
 		}
 		return cat, nil
 	}
@@ -331,6 +327,20 @@ func ensureCOBForAll(s *Session, fs vfs.FSOps) error {
 		if u.COBBinding() == nil {
 			return fmt.Errorf("session: unit %d has no strict COB binding after battle entry", u.Handle)
 		}
+	}
+	return nil
+}
+
+// requireGlobalRNGStreams enforces the process setup contract at strict
+// session boundaries. Retail seeds both streams before battle entry; a
+// missing stream must be reported rather than replaced with a seed-zero
+// stream [01 §7.1][01 §7.2].
+func requireGlobalRNGStreams() error {
+	if rng.Global.Sim == nil {
+		return fmt.Errorf("session: missing global simulation RNG stream [01 §7.1]")
+	}
+	if rng.Global.Crt == nil {
+		return fmt.Errorf("session: missing global CRT RNG stream [01 §7.2]")
 	}
 	return nil
 }

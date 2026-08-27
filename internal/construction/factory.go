@@ -187,9 +187,11 @@ func nanoReach(builder *units.Unit) numeric.Fixed {
 // isWithinNanoRange reports whether the builder's nano piece (or its base
 // position as fallback) is within nanolathe range of the site [04 §3.4][05][R-P0-06][fmt fbi].
 // The reach is nanoReach above; distance is planar X/Z only, as the reclaim
-// range check is planar [05 "Unit reclaim"]. The site is the order's GoalX/Z
-// world anchor; whether retail measures to the footprint center, edge, or
-// site height-projected point remains unknown and is tracked as TODO(question).
+// range check is planar [05 "Unit reclaim"]. The site point is supplied by the
+// caller: needsApproach and build-site selection both pass the nearest point of
+// the site's footprint rectangle, not its centre — see Service.siteRangePoint
+// for why the centre reading is disproved by the authored data, and for the
+// TODO(question) that remains on retail's own comparison [R-P0-06].
 func (s *Service) isWithinNanoRange(builder *units.Unit, siteX, siteZ numeric.Fixed) bool {
 	if builder == nil || builder.Def == nil {
 		return true
@@ -211,7 +213,9 @@ func (s *Service) isWithinNanoRange(builder *units.Unit, siteX, siteZ numeric.Fi
 	} else {
 		srcX, srcZ = builder.X, builder.Z
 	}
-	// TODO(question): site position is the order's GoalX/Z world anchor; whether retail measures to footprint center vs edge vs bounds remains open [R-P0-06].
+	// Callers now pass the point of the site's footprint rectangle nearest the
+	// builder rather than the site centre; see Service.siteRangePoint for the
+	// evidence and for what is still untraced [R-P0-06].
 	dx := int64(siteX) - int64(srcX)
 	dz := int64(siteZ) - int64(srcZ)
 	dist2 := dx*dx + dz*dz
@@ -223,9 +227,25 @@ func (s *Service) isWithinNanoRange(builder *units.Unit, siteX, siteZ numeric.Fi
 // Move_Ground machinery, without adding new path code [04 §7.3].
 // It is idempotent: repeated calls while a request or active route already
 // exists do not resubmit, preserving determinism I1 and RNG call order I4.
+//
+// The goal handed to path search is a build-site perimeter candidate, never
+// the footprint centre [07 §9][04 §7.4]: the order's stored position stays the
+// centre, but routing the builder there parks it inside its own site, where
+// the null-self commit check can never accept the placement
+// [05 "Silent blocked revalidation before allocation"]. See approach.go.
 func (s *Service) ensureWalk(builder *units.Unit, node *orders.Node) {
 	if s == nil || s.Movement == nil || s.Movement.Scheduler == nil || builder == nil || node == nil {
 		return
+	}
+	// Bind the movement goal BEFORE the idempotency guards below. The binding
+	// is derived state that no save box carries, so the first tick after a
+	// restore must re-establish it even when the restored route is still
+	// active — otherwise the mover would spend that route steering at the
+	// order's stored position and walk into the site [04 §8.3][04 §7.4].
+	goal := path.Cell{X: world.WorldToCell(node.GoalX), Z: world.WorldToCell(node.GoalZ)}
+	if _, standX, standZ, ok := s.selectBuildApproach(builder, node); ok {
+		goal = path.Cell{X: world.WorldToCell(standX), Z: world.WorldToCell(standZ)}
+		s.Movement.BindMoveGoal(builder.Handle, node, standX, standZ)
 	}
 	if s.Movement.Scheduler.HasRequest(builder.Handle) {
 		return
@@ -235,7 +255,6 @@ func (s *Service) ensureWalk(builder *units.Unit, node *orders.Node) {
 	}
 	s.Movement.EnsureUnit(builder)
 	start := path.Cell{X: world.WorldToCell(builder.X), Z: world.WorldToCell(builder.Z)}
-	goal := path.Cell{X: world.WorldToCell(node.GoalX), Z: world.WorldToCell(node.GoalZ)}
 	s.Movement.SubmitMove(builder.Handle, builder.Owner, start, goal)
 }
 
@@ -250,12 +269,14 @@ func (s *Service) clearWalk(builder *units.Unit) {
 
 // NeedsWalk reports whether a mobile builder needs to walk toward the site
 // before construction can begin [04 §3.4][05][R-P0-06].
-// Factory-class builders never need walk.
+// Factory-class builders never need walk. The condition itself lives in
+// needsApproach (approach.go), which also records what the reach test still
+// misses.
 func (s *Service) NeedsWalk(builder *units.Unit, node *orders.Node) bool {
-	if builder == nil || node == nil || !isMobileBuilder(builder) || builder.Def == nil || builder.Def.BuildDistance == 0 || s == nil || s.Movement == nil {
+	if builder == nil || node == nil || !isMobileBuilder(builder) {
 		return false
 	}
-	return !s.isWithinNanoRange(builder, node.GoalX, node.GoalZ)
+	return s.needsApproach(builder, node)
 }
 
 // EnsureWalkPublic is the exported walk submission for session integration [04 §7.3].
@@ -377,7 +398,25 @@ func (s *Service) recordPlacement(product pool.Handle, rect world.FootprintRect)
 // the exact structure-vs-mobile layer alias remains TODO(question) [04 §6.2].
 // The full rectangle is prechecked before any cell is stamped, so a failed
 // reservation cannot leave a partial occupancy footprint.
-func (s *Service) reservePlacement(product pool.Handle, rect world.FootprintRect) error {
+//
+// The precheck is gated by the yard map, exactly as the canonical validator
+// gates it [04 §6.2] C10 [R-P0-08]: only a cell whose control byte carries
+// bits 1-2 tests for a foreign occupant. It used to test every cell in the
+// rectangle unconditionally, which contradicted the validator and rejected
+// placements retail accepts — measured on ARMLAB, whose authored yard map
+// "yoccoy ooccoo ..." puts control byte 0x29 on its four corners, and 0x29
+// carries neither occupancy bit. A lab may therefore legally interlock a
+// corner with an existing building, and the canonical preview/commit check
+// said so while this reservation refused, so the order retried forever with
+// no nanoframe.
+//
+// TODO(question): whether retail stamps every footprint cell or only the
+// occupancy-gated ones is untraced. A cell already owned by another unit is
+// left with its owner rather than overwritten, which is the conservative
+// reading and the one ReleasePlacement already assumes — it clears only cells
+// whose layer-A occupant is the releasing product. Tracing the yard-map stamp
+// would settle whether a non-occupancy cell is stamped at all.
+func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, rect world.FootprintRect) error {
 	if s == nil || s.Terrain == nil {
 		if s != nil && s.AllowSyntheticPlacement {
 			return nil
@@ -388,11 +427,15 @@ func (s *Service) reservePlacement(product pool.Handle, rect world.FootprintRect
 		return fmt.Errorf("construction: placement identity %d exceeds occupancy identity range", product)
 	}
 	id := int16(product)
+	yard := reservationYard(def, rect)
 	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
 		for x := rect.MinX(); x < rect.MaxX(); x++ {
 			cell := s.Terrain.PlotAt(x, z)
 			if cell == nil {
 				return fmt.Errorf("construction: placement cell %d,%d unavailable", x, z)
+			}
+			if !yardTestsOccupancy(yard, rect, x, z) {
+				continue // [04 §6.2] C10: bits 1-2 clear, no occupant test
 			}
 			if (cell.OccupantA() != 0 && cell.OccupantA() != id) ||
 				(cell.OccupantB() != 0 && cell.OccupantB() != id) {
@@ -403,11 +446,48 @@ func (s *Service) reservePlacement(product pool.Handle, rect world.FootprintRect
 	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
 		for x := rect.MinX(); x < rect.MaxX(); x++ {
 			cell := s.Terrain.PlotAt(x, z)
+			if cell.OccupantA() != 0 && cell.OccupantA() != id {
+				continue // another owner keeps the cell; see TODO(question) above
+			}
 			cell.SetOccupantA(id)
 			cell.SetOccupied(true)
 		}
 	}
 	return nil
+}
+
+// reservationYard resolves the product's yard-map control bytes over its
+// footprint [04 §6.2] C10. A definition that authors no yard map reserves
+// every cell, which is the yard the commit validator synthesises for it.
+func reservationYard(def *content.UnitDef, rect world.FootprintRect) []world.YardCell {
+	w, d := int(rect.Width()), int(rect.Depth())
+	if w <= 0 || d <= 0 {
+		return nil
+	}
+	if def != nil && def.YardMap != "" {
+		if y, err := world.ParseYardMap(def.YardMap, w, d); err == nil && len(y) == w*d {
+			return y
+		}
+	}
+	y := make([]world.YardCell, w*d)
+	for i := range y {
+		y[i] = 0x06 // bits 1-2 reject any occupant [04 §6.2]
+	}
+	return y
+}
+
+// yardTestsOccupancy reports whether the yard byte covering (x,z) carries the
+// occupancy bits [04 §6.2] C10. An unresolvable yard falls back to testing,
+// so a parse failure can never silently loosen the check.
+func yardTestsOccupancy(yard []world.YardCell, rect world.FootprintRect, x, z int32) bool {
+	if len(yard) == 0 {
+		return true
+	}
+	idx := int((z-rect.MinZ())*rect.Width() + (x - rect.MinX()))
+	if idx < 0 || idx >= len(yard) {
+		return true
+	}
+	return yard[idx]&0x06 != 0
 }
 
 // ReleasePlacement removes an unfinished/dead product's reserved footprint.
@@ -914,7 +994,7 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 			}
 		}
 		if prod != nil {
-			if err := s.reservePlacement(prod.Handle, rect); err != nil {
+			if err := s.reservePlacement(prod.Handle, def, rect); err != nil {
 				prod.Alive = false
 				return nil, err
 			}
@@ -934,7 +1014,7 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 	if prod == nil {
 		return nil, fmt.Errorf("construction: failed to get product")
 	}
-	if err := s.reservePlacement(prod.Handle, rect); err != nil {
+	if err := s.reservePlacement(prod.Handle, def, rect); err != nil {
 		s.World.Destroy(prod.Handle, units.DeathKilled)
 		return nil, err
 	}
@@ -1629,7 +1709,7 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 				isAI = true
 			}
 		}
-		if !isAI && !s.isWithinNanoRange(builder, node.GoalX, node.GoalZ) {
+		if !isAI && s.needsApproach(builder, node) {
 			s.ensureWalk(builder, node)
 			node.DynamicGate = WakeBit2
 			node.Deadline = int32(tick + 1)

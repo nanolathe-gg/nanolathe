@@ -47,6 +47,9 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 	if path == "" {
 		return nil, fmt.Errorf("session: empty mission path")
 	}
+	if err := requireGlobalRNGStreams(); err != nil {
+		return nil, err
+	}
 	if fs == nil {
 		fs = vfs.New()
 	}
@@ -116,14 +119,7 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 		p.EndGameCountdown = -1
 	}
 	s.Econ.SeedDeadlines(0) // UpdateTime/WinLoseTime/DisplayTimer seeded to GlobalTick per [05] C5; WinLoseTime is trigger poll deadline [08 "Evaluation"]
-	var crt *rng.CRT
-	if rng.Global.Crt != nil {
-		crt = rng.Global.Crt
-	} else {
-		tmp := rng.NewCRT(0)
-		crt = &tmp
-	}
-	s.InitWindForSession(crt, 0)
+	s.InitWindForSession(rng.Global.Crt, 0)
 	s.InitAudio(fs)
 	if err := createAndBindServices(s); err != nil {
 		return nil, err

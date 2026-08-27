@@ -95,6 +95,7 @@ type System struct {
 	activeOrders   map[pool.Handle]*activeMove
 	nextActivation uint64
 	arrivalHandles map[pool.Handle]*arrivalHandle // per-unit Move_Ground arrival handle [R-P0-01]
+	moveGoals      map[pool.Handle]*moveGoal      // per-unit movement-goal handle [04 §8.3][04 §7.4]
 }
 
 type activeMove struct {
@@ -232,6 +233,7 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 		pathFailures:   make(map[pool.Handle]PathFailure),
 		activeOrders:   make(map[pool.Handle]*activeMove),
 		arrivalHandles: make(map[pool.Handle]*arrivalHandle),
+		moveGoals:      make(map[pool.Handle]*moveGoal),
 	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
 	// Use DefaultBase unless overridden [P0-I16]; no longer reads mutable global.
@@ -341,12 +343,10 @@ func (s *System) distSqToGoal(u *units.Unit) (uint64, bool) {
 	if u == nil {
 		return 0, false
 	}
-	q := orders.QueueForUnit(u)
-	if q != nil && q.LenPrimary() > 0 {
-		head := q.Primary()[0]
-		if head != nil && (head.GoalX != 0 || head.GoalZ != 0 || head.GoalY != 0 || head.Target != 0) {
-			return squaredDistanceFixed(int64(head.GoalX), int64(head.GoalZ), int64(u.X), int64(u.Z)), true
-		}
+	// The movement-goal handle is the authority, not the order's stored
+	// position: for a build order the two differ [04 §8.3][04 §7.4].
+	if gx, gz, ok := s.moveGoalForUnit(u); ok {
+		return squaredDistanceFixed(int64(gx), int64(gz), int64(u.X), int64(u.Z)), true
 	}
 	route := s.Routes[u.Handle]
 	if route != nil && route.Active && route.Count > 0 {
@@ -354,11 +354,6 @@ func (s *System) distSqToGoal(u *units.Unit) (uint64, bool) {
 		wpX := addSignedSaturating(int64(world.CellToWorld(last.X)), 524288)
 		wpZ := addSignedSaturating(int64(world.CellToWorld(last.Z)), 524288)
 		return squaredDistanceFixed(wpX, wpZ, int64(u.X), int64(u.Z)), true
-	}
-	if q != nil {
-		if h := q.Head(); h != nil && (h.GoalX != 0 || h.GoalZ != 0) {
-			return squaredDistanceFixed(int64(h.GoalX), int64(h.GoalZ), int64(u.X), int64(u.Z)), true
-		}
 	}
 	return 0, false
 }
@@ -779,7 +774,12 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	token := s.nextActivation
 	s.activeOrders[u.Handle] = &activeMove{order: head, token: token}
 	start := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
-	goal := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
+	// Path search is aimed at the goal handle, so a replan after a dynamic
+	// block re-paths to the same point the mover was already steering at —
+	// for a build order that is the selected perimeter candidate, not the
+	// site centre [04 §8.3][04 §7.4].
+	goalX, goalZ, _ := s.moveGoalFor(u.Handle, head)
+	goal := path.Cell{X: world.WorldToCell(goalX), Z: world.WorldToCell(goalZ)}
 	s.submitMoveForOrder(u, head, start, goal, token)
 	s.bindArrivalHandle(u, head)
 	return true
@@ -807,7 +807,12 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	token := s.nextActivation
 	s.activeOrders[u.Handle].token = token
 	start := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
-	goal := path.Cell{X: world.WorldToCell(head.GoalX), Z: world.WorldToCell(head.GoalZ)}
+	// Path search is aimed at the goal handle, so a replan after a dynamic
+	// block re-paths to the same point the mover was already steering at —
+	// for a build order that is the selected perimeter candidate, not the
+	// site centre [04 §8.3][04 §7.4].
+	goalX, goalZ, _ := s.moveGoalFor(u.Handle, head)
+	goal := path.Cell{X: world.WorldToCell(goalX), Z: world.WorldToCell(goalZ)}
 	s.submitMoveForOrder(u, head, start, goal, token)
 	s.bindArrivalHandle(u, head)
 	return true
@@ -868,8 +873,11 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 			footZ = 1
 		}
 	}
-	goalX := goalCellForWorld(head.GoalX, int32(footX))
-	goalZ := goalCellForWorld(head.GoalZ, int32(footZ))
+	// The handle's cell comes from the same accessor the mover steers by, so
+	// steering target and arrival test can never disagree [04 §8.3].
+	goalWorldX, goalWorldZ, _ := s.moveGoalFor(u.Handle, head)
+	goalX := goalCellForWorld(goalWorldX, int32(footX))
+	goalZ := goalCellForWorld(goalWorldZ, int32(footZ))
 	// [R-P0-01 corrected] radiusParam for the goal handle: ground move-family
 	// binds the node's radius field plus 4, and the field is 0 at order
 	// creation (threshold 0 — exact goal cell); VTOL_Move binds
@@ -1303,13 +1311,16 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
 		}
 		// No active route (failed search, or route pruned out last tick): the
-		// mover still drives straight at the order goal — retail keeps steering
+		// mover still drives straight at the goal handle — retail keeps steering
 		// at the goal handle once the route is exhausted, and the arrival
 		// predicate completes the order when the tile lands on the goal cell.
-		if head != nil && (head.GoalX != 0 || head.GoalZ != 0) {
+		// The handle, not the order's stored position, is the target: a build
+		// order stores the site centre but is walked to a perimeter candidate
+		// [04 §8.3][04 §7.4].
+		if gx, gz, okGoal := s.moveGoalFor(handle, head); okGoal {
 			directGoal = true
-			directX = head.GoalX
-			directZ = head.GoalZ
+			directX = gx
+			directZ = gz
 		} else {
 			s.emitMovementCallbacks(u, 0)
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
@@ -1333,11 +1344,11 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 				s.emitMovementCallbacks(u, 0) // arrived => tier 0 [04 §5.2][GAP T15] C18 ensure StopMoving
 				return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: false, Moved: false, Arrived: arrived}
 			}
-			// Still far: direct move to goal.
-			if head != nil && (head.GoalX != 0 || head.GoalZ != 0) {
+			// Still far: direct move to the goal handle [04 §8.3][04 §7.4].
+			if gx, gz, okGoal := s.moveGoalFor(handle, head); okGoal {
 				directGoal = true
-				directX = head.GoalX
-				directZ = head.GoalZ
+				directX = gx
+				directZ = gz
 			} else {
 				arrived := s.finalGoalReached(u, hadRoute)
 				s.emitMovementCallbacks(u, 0)

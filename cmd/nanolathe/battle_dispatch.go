@@ -3,15 +3,12 @@ package main
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/construction"
-	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/snapshot"
-	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 func snapshotUnitByHandle(f *snapshot.Frame, h pool.Handle) (snapshot.UnitView, bool) {
@@ -118,22 +115,11 @@ type battleGroupCommand struct {
 //
 // The composition layer binds these typed command records to session-owned
 // pumps. The battleSession methods below perform validation and submit one
-// command through commandDispatchFn; the legacy helper fields remain only
-// until their separately serialized cleanup unit removes them.
-//
-// Injection points session must bind (short):
-//
-//	mobileBuildFn(product string, wx, wz numeric.Fixed, queued bool) error
-//	factoryBuildDeltaFn(product string, count int) error
-//	orderDispatchFn(latch input.Latch, x, y int32, queued bool)
-//
-// All are legacy func fields on battleSession retained for that later cleanup
-// unit. Production command submission does not invoke them.
+// command through commandDispatchFn.
 type battleDispatch interface {
 	DispatchMobileBuild(product string, wx, wz numeric.Fixed, queued bool) error
 	DispatchFactoryBuildDelta(product string, count int) error
 	DispatchFactoryBuild(product string, queued bool) error
-	DispatchOrderLatch(latch input.Latch, x, y int32, queued bool)
 	DispatchOrderCommand(cmd battleOrderCommand) error
 	DispatchActivation(cmd battleActivationCommand) error
 	DispatchCancelProduction(unit pool.Handle) error
@@ -144,23 +130,20 @@ type battleDispatch interface {
 
 var _ battleDispatch = (*battleSession)(nil)
 
-// These stubs are overridden in battle.go with real logic; they exist here
-// only to document the injected contract for ON-09.
+// These methods validate typed input and submit it through the session command
+// boundary for the authoritative input phase [01 §4.4][07 §9].
 func (b *battleSession) DispatchMobileBuild(product string, wx, wz numeric.Fixed, queued bool) error {
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return fmt.Errorf("battle: production build has no current snapshot")
+	}
 	var builder pool.Handle
-	if f, ok := b.currentSnapshot(); ok {
-		builder = f.CommandPage.Builder
-		if v, found := snapshotUnitByHandle(f, builder); !found || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
-			builder = 0
-		}
+	builder = f.CommandPage.Builder
+	if v, found := snapshotUnitByHandle(f, builder); !found || b.sess == nil || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
+		builder = 0
 	}
-	if b.requireCommandDispatch && builder == 0 {
+	if builder == 0 {
 		return fmt.Errorf("battle: production build has no snapshot builder")
-	}
-	if builder == 0 && !b.requireCommandDispatch {
-		if u := b.selectedBuilder(); u != nil {
-			builder = u.Handle
-		}
 	}
 	return b.submitBattleCommand(battleCommand{Kind: battleCommandMobileBuild, MobileBuild: battleMobileBuildCommand{
 		Builder: builder, Product: product, WX: wx, WZ: wz, Queued: queued,
@@ -171,20 +154,17 @@ func (b *battleSession) DispatchFactoryBuild(product string, queued bool) error 
 }
 
 func (b *battleSession) DispatchFactoryBuildDelta(product string, count int) error {
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return fmt.Errorf("battle: production factory has no current snapshot")
+	}
 	var builder pool.Handle
-	if f, ok := b.currentSnapshot(); ok {
-		builder = f.CommandPage.Builder
-		if v, found := snapshotUnitByHandle(f, builder); !found || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
-			builder = 0
-		}
+	builder = f.CommandPage.Builder
+	if v, found := snapshotUnitByHandle(f, builder); !found || b.sess == nil || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
+		builder = 0
 	}
-	if b.requireCommandDispatch && builder == 0 {
+	if builder == 0 {
 		return fmt.Errorf("battle: production factory has no snapshot builder")
-	}
-	if builder == 0 && !b.requireCommandDispatch {
-		if u := b.selectedFactory(); u != nil {
-			builder = u.Handle
-		}
 	}
 	return b.submitBattleCommand(battleCommand{Kind: battleCommandFactoryBuild, FactoryBuild: battleFactoryBuildCommand{
 		Builder: builder, Product: product, Count: count,
@@ -198,30 +178,17 @@ func (b *battleSession) snapshotBuilder(v snapshot.UnitView) bool {
 	def, ok := b.cat.Unit(v.DefName)
 	return ok && def != nil && def.Builder
 }
-func (b *battleSession) DispatchOrderLatch(latch input.Latch, x, y int32, queued bool) {
-	// This compatibility entry point is retained for HUD integrations that
-	// still provide a screen point. Production world dispatch uses
-	// DispatchOrderCommand below, after picking has produced a typed payload.
-	if b.orderDispatchFn != nil {
-		b.orderDispatchFn(latch, x, y, queued)
-	}
-}
 
 // DispatchOrderCommand submits a picked, typed order payload. The command
 // contains no screen-space origin, so an order cannot be preceded by an
 // accidental contextual action at (0,0) [04 §3.4][07 §9].
 func (b *battleSession) DispatchOrderCommand(cmd battleOrderCommand) error {
-	if b.requireCommandDispatch {
-		if _, ok := b.currentSnapshot(); !ok {
-			return fmt.Errorf("battle: production order has no current snapshot")
-		}
-		// Empty handles mean resolve the authoritative selection at the input
-		// boundary, after any earlier queued selection command.
-		cmd.Handles = nil
+	if _, ok := b.currentSnapshot(); !ok {
+		return fmt.Errorf("battle: production order has no current snapshot")
 	}
-	if len(cmd.Handles) == 0 && !b.requireCommandDispatch {
-		cmd.Handles = b.selectedHandles()
-	}
+	// Empty handles mean resolve the authoritative selection at the input
+	// boundary, after any earlier queued selection command.
+	cmd.Handles = nil
 	return b.submitBattleCommand(battleCommand{Kind: battleCommandOrder, Order: cmd})
 }
 
@@ -245,19 +212,14 @@ func (b *battleSession) DispatchStockpile(unit pool.Handle, queued bool) error {
 // presentation controls. Production resolves the builder from the immutable
 // CommandPage and the session validates it again at the input boundary [07 §9].
 func (b *battleSession) DispatchBuildPage(page int) error {
-	var builder pool.Handle
-	if f, ok := b.currentSnapshot(); ok {
-		builder = f.CommandPage.Builder
-		if builder == 0 || page < 0 || page >= int(f.CommandPage.PageCount) {
-			return fmt.Errorf("battle: invalid build page %d", page)
-		}
-	} else if !b.requireCommandDispatch {
-		if u := b.selectedBuilder(); u != nil {
-			builder = u.Handle
-		}
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return fmt.Errorf("battle: build page has no current snapshot")
 	}
-	if b.requireCommandDispatch && builder == 0 {
-		return fmt.Errorf("battle: build page has no snapshot builder")
+	var builder pool.Handle
+	builder = f.CommandPage.Builder
+	if builder == 0 || page < 0 || page >= int(f.CommandPage.PageCount) {
+		return fmt.Errorf("battle: invalid build page %d", page)
 	}
 	return b.submitBattleCommand(battleCommand{Kind: battleCommandBuildPage, BuildPage: battleBuildPageCommand{Builder: builder, Page: page}})
 }
@@ -300,11 +262,7 @@ func (b *battleSession) sessionHumanCommand(c battleCommand) (session.HumanComma
 	case battleCommandOrder:
 		return session.HumanCommand{Kind: session.HumanOrder, Order: session.HumanOrderCommand{Handles: c.Order.Handles, Code: latchCode(c.Order.Latch), Target: c.Order.Target, Position: c.Order.Position, Queued: c.Order.Queued}}, true
 	case battleCommandStop:
-		var handles []pool.Handle
-		if !b.requireCommandDispatch {
-			handles = b.selectedHandles()
-		}
-		return session.HumanCommand{Kind: session.HumanStop, Stop: session.HumanStopCommand{Handles: handles}}, true
+		return session.HumanCommand{Kind: session.HumanStop}, true
 	case battleCommandActivation:
 		return session.HumanCommand{Kind: session.HumanActivation, Activation: session.HumanActivationCommand{Unit: c.Activation.Unit, Activate: c.Activation.Activate, Queued: c.Activation.Queued}}, true
 	case battleCommandMobileBuild:
@@ -327,216 +285,6 @@ func (b *battleSession) sessionHumanCommand(c battleCommand) (session.HumanComma
 		return session.HumanCommand{Kind: session.HumanGroupRecall, Group: session.HumanGroupCommand{Group: c.Group.Group, Preserve: c.Group.Preserve, Mask: c.Group.Mask}}, true
 	}
 	return session.HumanCommand{}, false
-}
-
-func (b *battleSession) dispatchCancelProductionFallback(handle pool.Handle) {
-	if b == nil || b.sess == nil || b.sess.Units == nil {
-		return
-	}
-	u := b.sess.Units.Unit(handle)
-	if u == nil || u.Def == nil {
-		return
-	}
-	q := orders.QueueForUnit(u)
-	if q == nil || q.LenPrimary() == 0 {
-		return
-	}
-	prim := q.Primary()
-	if len(prim) == 0 {
-		return
-	}
-	tail := prim[len(prim)-1]
-	if tail == nil || tail.BuildDefKey == "" {
-		return
-	}
-	if orders.IsMobileBuild(tail.ID) {
-		_ = construction.CancelMobileTailMost(u, tail.BuildDefKey, tail.GoalX, tail.GoalZ)
-	} else if orders.IsFactoryBuild(tail.ID) {
-		_ = construction.CancelTailMost(u, tail.BuildDefKey)
-	} else {
-		if err := construction.CancelTailMost(u, tail.BuildDefKey); err != nil {
-			_ = construction.CancelMobileTailMost(u, tail.BuildDefKey, tail.GoalX, tail.GoalZ)
-		}
-	}
-}
-
-func (b *battleSession) dispatchStockpileFallback(cmd battleStockpileCommand) {
-	if b == nil || b.sess == nil || b.sess.Units == nil {
-		return
-	}
-	u := b.sess.Units.Unit(cmd.Unit)
-	if u == nil || u.Def == nil {
-		return
-	}
-	hasStockpile := false
-	for i := 0; i < units.NumSlots; i++ {
-		if slot := u.SlotAt(i); slot != nil && slot.Weapon != nil && slot.Weapon.Stockpile {
-			hasStockpile = true
-			break
-		}
-	}
-	if !hasStockpile {
-		if u.Def.Weapon1Def == nil || !u.Def.Weapon1Def.Stockpile {
-			if u.Def.Weapon2Def == nil || !u.Def.Weapon2Def.Stockpile {
-				if u.Def.Weapon3Def == nil || !u.Def.Weapon3Def.Stockpile {
-					return
-				}
-			}
-		}
-	}
-	buildWeaponID := orders.Lookup("BuildWeapon")
-	if buildWeaponID == 0 {
-		return
-	}
-	slotIdx := -1
-	for i := 0; i < units.NumSlots; i++ {
-		if slot := u.SlotAt(i); slot != nil && slot.Weapon != nil && slot.Weapon.Stockpile {
-			slotIdx = i
-			break
-		}
-	}
-	if slotIdx < 0 {
-		return
-	}
-	tick := uint32(0)
-	if b.sess.Clock != nil {
-		tick = uint32(b.sess.Clock.GlobalTick)
-	}
-	node := orders.NewNodeForOrder(buildWeaponID, 0, 0, 0, 0, tick, u.Handle, cmd.Queued)
-	node.Param1, node.Param2 = uint32(slotIdx), 1
-	node.Param3 = 0
-	if q := orders.QueueForUnit(u); q != nil {
-		q.CoalesceTail(buildWeaponID, node)
-	}
-}
-
-func (b *battleSession) dispatchGroupFallback(cmd battleGroupCommand, assign bool) {
-	if b == nil || b.sess == nil || b.sess.Units == nil || b.cat == nil {
-		return
-	}
-	views := make([]*hud.SelectUnit, 0)
-	unitsByView := make([]*units.Unit, 0)
-	for _, u := range b.sess.Units.Iter() {
-		if u == nil || !u.Alive || u.Owner != b.sess.LocalOwner || u.Def == nil {
-			continue
-		}
-		id, ok := b.cat.UnitDefIndex(u.Def.CanonicalKey)
-		if !ok || id == 0 || id > 0xffff {
-			continue
-		}
-		views = append(views, &hud.SelectUnit{Flags: u.Flags, Group: u.Group, DefID: uint16(id)})
-		unitsByView = append(unitsByView, u)
-	}
-	if assign {
-		hud.AssignGroup(views, cmd.Group, nil)
-	} else {
-		mask := cmd.Mask
-		if mask == [32]byte{} {
-			for i := range mask {
-				mask[i] = 0xff
-			}
-		}
-		hud.RecallGroup(views, cmd.Group, cmd.Preserve, mask, nil)
-	}
-	for i, view := range views {
-		unitsByView[i].Flags = view.Flags
-		unitsByView[i].Group = view.Group
-	}
-}
-
-func (b *battleSession) dispatchStopFallback() {
-	if b == nil || b.sess == nil || b.sess.Units == nil {
-		return
-	}
-	tick := uint32(0)
-	if b.sess.Clock != nil {
-		tick = uint32(b.sess.Clock.GlobalTick)
-	}
-	stop := orders.Lookup("Stop")
-	if stop == 0 {
-		return
-	}
-	for _, u := range b.selectedUnits() {
-		q := orders.QueueForUnit(u)
-		if q == nil {
-			continue
-		}
-		q.PurgeUnprotected()
-		q.DropLeadingAutoOps()
-		q.Push(stop, orders.NewNodeForOrder(stop, 0, 0, 0, 0, tick, u.Handle, false))
-	}
-}
-
-func (b *battleSession) dispatchActivationFallback(cmd battleActivationCommand) {
-	if b == nil || b.sess == nil || b.sess.Units == nil {
-		return
-	}
-	u := b.sess.Units.Unit(cmd.Unit)
-	if u == nil || u.Def == nil || !u.Def.OnOffable {
-		return
-	}
-	name := "Deactivate"
-	if cmd.Activate {
-		name = "Activate"
-	}
-	id := orders.Lookup(name)
-	if id == 0 {
-		return
-	}
-	tick := uint32(0)
-	if b.sess.Clock != nil {
-		tick = uint32(b.sess.Clock.GlobalTick)
-	}
-	q := orders.QueueForUnit(u)
-	if q == nil {
-		return
-	}
-	if !cmd.Queued {
-		q.PurgeUnprotected()
-		q.DropLeadingAutoOps()
-	}
-	q.Push(id, orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, cmd.Queued))
-}
-
-func (b *battleSession) dispatchOrderFallback(cmd battleOrderCommand) {
-	if b == nil || b.sess == nil || b.sess.Units == nil {
-		return
-	}
-	code := latchCode(cmd.Latch)
-	if code == 0 {
-		return
-	}
-	tick := uint32(0)
-	if b.sess.Clock != nil {
-		tick = uint32(b.sess.Clock.GlobalTick)
-	}
-	var target *units.Unit
-	if cmd.Target != 0 {
-		// Resolve the smart-reference at application time. The typed command
-		// carries only its stable handle; target position/validity therefore
-		// cannot go stale while the input frame is waiting for application.
-		target = b.sess.Units.Unit(cmd.Target)
-	}
-	for _, u := range b.selectedUnits() {
-		id := orders.Resolve(code, u, target, &cmd.Position)
-		if id == 0 {
-			continue
-		}
-		gx, gy, gz := cmd.Position.X, cmd.Position.Y, cmd.Position.Z
-		if cmd.Target != 0 && target != nil {
-			gx, gy, gz = target.X, target.Y, target.Z
-		}
-		node := orders.NewNodeForOrder(id, cmd.Target, gx, gy, gz, tick, u.Handle, cmd.Queued)
-		q := orders.QueueForUnit(u)
-		if q == nil {
-			continue
-		}
-		if !cmd.Queued {
-			q.PurgeUnprotected()
-			q.DropLeadingAutoOps()
-		}
-		q.Push(id, node)
-	}
 }
 
 func latchCode(latch input.Latch) int {

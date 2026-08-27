@@ -502,6 +502,61 @@ window fill copies the bitmap into the window's own surface at `(0,0)`, so the
 art lands at the window origin and the rest of the file is outside the window
 and never presented.
 
+#### Frontend asset failure boundaries
+
+The single-player screen openers use one common `.GUI` window-open path and do
+not test the returned window before installing callbacks or reading its gadget
+list. A missing GUI file therefore does not select a second authored GUI, and
+a parser rejection does not enter a caller-level recovery branch. The exact
+process-level symptom of either case is not established; in particular, this
+is not evidence that the screen proceeds with an empty layout. **Unknown** for
+the final missing/malformed-`.GUI` outcome; the absence of a caller check is
+**Established**. [07 §4]
+
+The single-player PCX backgrounds in this table — `frontendx`, `singlebg`,
+the `newcampaign4`/`newcampaign4x` choice, `dselectmap2`, and `skirmsetup4x` —
+go through the shared bitmap loader. A missing file or a decode failure enters
+the common fatal content diagnostic and terminates the process; no `BackTile`,
+other screen, or caller-level error transition is selected. The same contract
+applies to the `loadgame2bg` background in the loading-screen transition. The
+bitmap path is therefore distinct from the panel-art `BackTile` fallback below.
+**Established; high confidence.** [01 "Error and diagnostics"] [02 §6]
+
+GUI-attached GAF roots are loaded by a separate optional binding path. If a
+screen root such as `mainmenu.gaf`, `single.gaf`, `newgame.gaf`, `skirmish.gaf`,
+or `commongui.gaf` is absent, its handle remains null; a decode failure is
+stored as the same null result rather than sent through the common fatal GAF
+loader. Named controls then try their authored support-root and stock fallback
+entries (including `BackTile` for panel fills and `BUTTONS0`/staged button
+families). When no entry is found, the control remains present with no art and
+the surface renderer uses its background fill. **Established for the shown
+lookup paths; medium confidence for malformed files whose decoder does not
+return null.** [07 §4] [07 §5]
+
+`textures/logos.gaf` is a texture-set resource rather than a required GUI root.
+The skirmish `Color%d` surface uses its selected frame when present; with no
+resolved frame, the generic no-entry surface path supplies the context
+background rather than a screen-level diagnostic. **Established for the
+no-entry path; medium confidence for all malformed texture payloads.** [07 §5]
+
+The physical palette loader first requests `palettes/PALETTE.PAL`. If that file
+is absent, it explicitly tries the authored `palettes/PALETTE.PCX` fallback. If
+the selected PAL file is present but cannot be decoded, the PCX fallback is not
+attempted; a failure of either selected input reaches the common fatal content
+diagnostic and terminates the process. **Established; high confidence.**
+[01 "Error and diagnostics"] [03 §4.3] [fmt pal] [fmt pcx]
+
+Startup preloads `fonts/COMIX.FNT` (and the separate `SMLFONT.FNT` slot) and
+checks the decoder result. A missing file or decoder-rejected input therefore
+uses the same fatal diagnostic path; there is no authored font fallback for
+COMIX. The two HATTFONT GAF slots are different: a missing HATTFONT file is
+accepted as a null slot, and GUI text falls back to the active FNT (COMIX in
+the frontend context). A malformed HATTFONT whose parser returns null is not
+cleanly handled by the loader's subsequent metric read, so its exact outcome
+remains **Unknown** rather than being specified as either a fallback or a
+clean abort. **Established for missing COMIX and missing HATTFONT; high
+confidence.** [02 §6] [07 §4]
+
 The skirmish callback dispatcher identifies a row before it identifies a
 control. It copies the activated gadget's name, converts its last
 character to an integer and stores that as the current row in the session's
@@ -2078,22 +2133,27 @@ minimum-ping write-back are established above.
 * Exact frontend transition-graph edges (successor/cancel/error per screen
   family), movie/intro/credits handling, load-failure restoration, and abort
   recovery (controller phase/substate mechanism, post-battle phases, planet
-  briefing tables, and chat contract are established).
+  briefing tables, and chat contract are established). The final
+  process-level outcome of a missing or parser-rejected required `.GUI` file
+  remains unknown even though its screen callers do not check the open result;
+  malformed HATTFONT and malformed GAF payloads whose decoders return null
+  likewise remain open.
 * Complete HUD side-anchor to draw/hit-test consumer mapping (the resource
   anchors' consumers are established in §6 — text, `0` literals, current
   values, production/consumption, and bar fills in the composer's side record
-  — the remaining anchors' consumers stay open), provider/
-  palette/font/art failure policy, and slide/modal combinations (anchor list,
-  tuple order, slide animation, and frame-composition passes are established).
+  — the remaining anchors' consumers stay open), and slide/modal combinations
+  (anchor list, tuple order, slide animation, and frame-composition passes are
+  established). The malformed non-null GAF payload outcome remains unknown.
 * Exact battle HUD optional-asset fallback behavior beyond the closed
   `intgaf` panel entries, side fonts, authored GUI page, page GAF, support GAF,
   and common-button resolution above.
 * Full FNT text wrapping, drop-color defaults, code-page behavior
-  (`TODO(T23)`), font
-  fallback order, and translation-table missing-key rules (truncate-before-
-  clip and the presentation-context drop-shadow switch are established). The
-  GAF-font loader's capital-I YOffset normalization is established; the
-  button text-pen formula is a `TODO(question)` (§5).
+  (`TODO(T23)`), language-specific font fallback order beyond the closed
+  missing-HATTFONT-to-active-FNT path, and translation-table missing-key rules
+  (truncate-before-clip and the presentation-context drop-shadow switch are
+  established). The GAF-font loader's capital-I YOffset normalization is
+  established; malformed HATTFONT handling and the button text-pen formula
+  are `TODO(question)` (§5).
 * Complete translation lookup and missing-string fallback behavior.
 * Exact cursor hotspots (established: the GAF frame's authored offsets),
   remaining command-specific validity rules, and cursor

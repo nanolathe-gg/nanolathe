@@ -25,11 +25,7 @@ func TestStrictSkirmish_ProductionInputReplayG10A(t *testing.T) {
 	bindBattleSessionCommandDispatch(b)
 	b.latch = input.LatchNormal
 	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
-	for _, u := range b.sess.Units.Iter() {
-		if u != nil {
-			u.Flags &^= client.SelectionFlag
-		}
-	}
+	applyPendingBattleCommands(b)
 	cl, err := client.New(client.Options{
 		Buffer:   b.sess.Snapshot,
 		Width:    640,

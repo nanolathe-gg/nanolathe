@@ -64,12 +64,18 @@ type o3BuildObservation struct {
 // and its milestone/state trace compared byte-for-byte.
 func TestProductionInputARMEconomyBuildReplay(t *testing.T) {
 	// RELEASE-GATE-DISABLED (registry: internal/session/strict_gate_policy_test.go).
-	// Measured with the skip removed and NANOLATHE_TA_ROOT set: the gate fails
-	// in preflight, before any picking or build command is issued, because the
-	// site scan finds no legal production site for armsolar (5x5 footprint) on
-	// retail Ashap Plateau. The earlier skip blamed an unestablished viewport
-	// transform; that reason was stale and did not match the observed failure.
-	t.Skip("RELEASE-GATE-DISABLED: builder paths to the footprint centre instead of a perimeter candidate, so it stands inside its own 6x6 armlab site and the nanoframe is never allocated; see disabledGates registry")
+	// Measured with the skip removed and NANOLATHE_TA_ROOT set: the whole build
+	// chain now completes — armsolar, armmex and armlab all finish, the lab
+	// produces its authored product, and storage is published. The gate now
+	// fails at the typed activation contract, which is not a construction or
+	// movement concern: pressing O over a selected OnOffable structure queues
+	// nothing, and dispatching the same battleActivationCommand directly
+	// enqueues one human command that the session consumes without ever
+	// flipping Unit.Activated. Measured directly: selectedUnits=1, selection
+	// flag set, OnOffable true, direct dispatch err=nil pending=1, then
+	// pending=0 and Activated unchanged across four ticks. The handler is in
+	// internal/session, which this unit does not own.
+	t.Skip("RELEASE-GATE-DISABLED: the authored build chain (solar, mex, lab, lab product) now completes; the gate fails at typed activation — a dispatched HumanActivation command is consumed by the session without flipping Unit.Activated; see disabledGates registry")
 	root := o3RetailRoot(t)
 	a := runO3ProductionReplay(t, root)
 	b := runO3ProductionReplay(t, root)
@@ -183,7 +189,12 @@ func runO3ProductionReplay(t *testing.T, root string) o3Run {
 		milestones = append(milestones, "nanoframe:"+key, "complete:"+key)
 	}
 	solar := findCompletedUnit(s.Units, manifest.Solar, s.LocalOwner)
-	if solar == nil || solar.Def == nil || solar.Def.EnergyMake <= 0 {
+	// A stock ARM solar collector authors EnergyMake=0 and EnergyUse=-20: the
+	// negative use IS the production. Requiring EnergyMake>0 rejected the very
+	// unit the preflight chain resolves, so accept either authored form. The
+	// production contract itself is asserted immediately below against
+	// PassProduced after a settlement pass, which is authoritative either way.
+	if solar == nil || solar.Def == nil || (solar.Def.EnergyMake <= 0 && solar.Def.EnergyUse >= 0) {
 		t.Fatalf("solar production contract unavailable: %#v", solar)
 	}
 	o3Step(s, 31)

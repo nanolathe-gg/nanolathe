@@ -51,9 +51,6 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if opts.Root == "" {
 		t.Fatal("default root is empty")
 	}
-	if opts.Headless {
-		t.Fatal("headless must default off")
-	}
 }
 
 func TestParseFlagsHelp(t *testing.T) {
@@ -91,58 +88,5 @@ func TestMissingRootDiagnostic(t *testing.T) {
 		if !strings.Contains(message, want) {
 			t.Fatalf("diagnostic %q is missing %q", message, want)
 		}
-	}
-}
-
-// mainTestRetailRoot skips when retail install is absent [AGENTS.md §Test policy].
-func mainTestRetailRoot(t *testing.T) string {
-	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		if home, herr := os.UserHomeDir(); herr == nil {
-			root = filepath.Join(home, "TotalAnnihilation")
-		} else {
-			t.Skip("no home directory")
-		}
-	}
-	if _, err := os.Stat(filepath.Join(root, "gamedata")); err != nil {
-		// Also accept loose HPI at root (real install has empty gamedata dir on disk
-		// but HPI at root). Check for a required archive as fallback.
-		if _, err2 := os.Stat(filepath.Join(root, "totala1.hpi")); err2 != nil {
-			t.Skip("retail assets not present")
-		}
-	}
-	return root
-}
-
-// TestHeadlessMissionRunsSession is the integrated headless-session check:
-// --mission constructs a session and prints a summary.
-func TestHeadlessMissionRunsSession(t *testing.T) {
-	root := mainTestRetailRoot(t)
-	out, err := os.CreateTemp(t.TempDir(), "out")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer out.Close()
-	opts := Options{
-		Root:     root,
-		Headless: true,
-		Mission:  "camps/arm campaign.tdf:MISSION0",
-		Ticks:    300,
-		Seed:     1,
-	}
-	if err := run(opts, out); err != nil {
-		t.Fatalf("run headless mission: %v", err)
-	}
-	data, err := os.ReadFile(out.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := string(data)
-	if !strings.Contains(s, "seed:") {
-		t.Fatalf("mission run missing seed header: %q", s)
-	}
-	if !strings.Contains(s, "rng sim:") && !strings.Contains(s, "skirmish unit") {
-		t.Fatalf("mission run did not produce session summary, got: %q", s)
 	}
 }

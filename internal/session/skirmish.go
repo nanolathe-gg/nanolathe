@@ -365,12 +365,9 @@ const (
 // so a caller painting the retail loading screen can drive it from one stream.
 // A nil observer makes this exactly NewSkirmishWithFS.
 func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig, report content.Progress) (*Session, error) {
-	// Battle-entry RNG seeding per [01 §7]: retail derives (QPC ^ 0x66e29572)|1 at
-	// battle entry; embedders that did not seed get the deterministic default 1 so
-	// library construction never runs with nil streams (the AI placement selector
-	// hard-fails on a nil stream). TODO(T23): QPC-derived seeding is platform
-	// residual parity, deferred with the other platform hooks.
-	rng.SeedGlobalIfUnset(1, 1)
+	if err := requireGlobalRNGStreams(); err != nil {
+		return nil, err
+	}
 	if err := cfg.Normalize(); err != nil {
 		return nil, err
 	}
@@ -513,14 +510,7 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	}
 	s.Econ.SeedDeadlines(0)
 	// 10. wind via shared path [01 §7.3] C17 – single initializer after retaining bounds
-	var crt *rng.CRT
-	if rng.Global.Crt != nil {
-		crt = rng.Global.Crt
-	} else {
-		tmp := rng.NewCRT(0)
-		crt = &tmp
-	}
-	s.InitWindForSession(crt, 0)
+	s.InitWindForSession(rng.Global.Crt, 0)
 	// Audio presentation queue/cache/music owned by session so unit/weapon/feature/UI events can queue without client import cycle [03 §8.3][03 §8.4] I6.
 	s.InitAudio(fs)
 	// 5. create every required service non-nil and bind ports [08][04 §7.2]
@@ -1009,6 +999,11 @@ func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission, spy
 	if m == nil {
 		return fmt.Errorf("session: nil mission")
 	}
+	if strict {
+		if err := requireGlobalRNGStreams(); err != nil {
+			return err
+		}
+	}
 	spyRecord(spy, "features")
 	if err := skirmishPlaceFeatures(s, m); err != nil {
 		return err
@@ -1149,6 +1144,8 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 	var crt *rng.CRT
 	if rng.Global.Crt != nil {
 		crt = rng.Global.Crt
+	} else if strict {
+		return fmt.Errorf("session: missing global CRT RNG stream [01 §7.2]")
 	} else {
 		tmp := rng.NewCRT(0)
 		crt = &tmp
@@ -1156,6 +1153,8 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 	var sim *rng.Simulation
 	if rng.Global.Sim != nil {
 		sim = rng.Global.Sim
+	} else if strict {
+		return fmt.Errorf("session: missing global simulation RNG stream [01 §7.1]")
 	} else {
 		tmp := rng.NewSimulation(0)
 		sim = &tmp

@@ -11,7 +11,6 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
-	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/gui"
@@ -114,24 +113,16 @@ type battleSession struct {
 	guiWin    *gui.Window
 	guiOK     bool
 
-	// Injection points ON-09/session must bind [R-P0-03]. When nil the
-	// battleSession fallback paths use construction/orders directly.
-	mobileBuildFn       func(product string, wx, wz numeric.Fixed, queued bool) error
-	factoryBuildFn      func(product string, queued bool) error
-	factoryBuildDeltaFn func(product string, count int) error
-	orderDispatchFn     func(latch input.Latch, x, y int32, queued bool)
 	// commandDispatchFn is the typed battle/application boundary. All
-	// world-mutating input is represented as a battleCommand before application;
-	// composition does not currently bind this callback to a separate session
-	// command queue, so the direct application fallback remains authoritative.
+	// world-mutating input is represented as a battleCommand before application.
 	commandDispatchFn func(battleCommand) error
 	// battleMode is the established runtime mode flag consumed by the digit
 	// gate [07 §9]. The production composition currently has no separate
 	// publisher for this byte, so the composition value remains zero until
 	// that producer is wired (TODO(question): identify the mode-byte writer).
 	battleMode byte
-	// requireCommandDispatch is true only for the real production composition;
-	// fixture sessions may explicitly exercise legacy fallbacks.
+	// requireCommandDispatch identifies the real production composition; command
+	// paths still require a committed frame in every mode.
 	requireCommandDispatch bool
 	controller             *BattleController
 }
@@ -180,8 +171,8 @@ func runBattleView(opts Options, cs *contentSet) error {
 
 	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs, latch: input.LatchNormal}
 	b.requireCommandDispatch = true
-	// Production composition owns the typed command queue. Synthetic fixtures
-	// intentionally leave this nil and use their explicit fallback helpers.
+	// Production composition owns the typed command queue; fixtures that exercise
+	// input must bind the same dispatcher explicitly.
 	b.commandDispatchFn = func(cmd battleCommand) error {
 		hc, ok := b.sessionHumanCommand(cmd)
 		if !ok {
@@ -766,6 +757,10 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 				if b.sess != nil {
 					viewer = visibility.PlayerID(b.sess.LocalOwner)
 				}
+				frame, ok := b.currentSnapshot()
+				if !ok {
+					return
+				}
 				var bh pool.Handle
 				var bu snapshot.UnitView
 				var hit bool
@@ -774,19 +769,7 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 				// same logical framebuffer, so do not subtract the HUD viewport origin
 				// a second time [03 §2.5][07 §8].
 				shellX, shellY := mx, my
-				if frame, ok := b.currentSnapshot(); ok {
-					bh, bu, hit = client.PickSnapshotUnit(frame, shellX, shellY, b.cam, uint8(viewer))
-				} else {
-					// Snapshot not yet available (e.g., initial loading frames). Fall back to live picker
-					// so a click is not silently dropped. For production this still routes through the
-					// typed human-command queue; for fixtures it would have taken this path anyway.
-					lh, lu := client.PickUnit(shellX, shellY, b.cam, b.sess.Units, b.sess.Vis, viewer)
-					bh = lh
-					if lu != nil {
-						bu = snapshot.UnitView{Slot: lu.Handle, Owner: lu.Owner, Flags: lu.Flags}
-						hit = true
-					}
-				}
+				bh, bu, hit = client.PickSnapshotUnit(frame, shellX, shellY, b.cam, uint8(viewer))
 				hitOwn := hit && bh != 0 && bu.Owner == b.sess.LocalOwner
 				if hitOwn {
 					if additive {
@@ -810,49 +793,16 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 			// The drag rectangle is already in the framebuffer coordinate space
 			// used by the rendered world [03 §2.5][07 §8].
 			shellRect := rect
-			if frame, ok := b.currentSnapshot(); ok {
-				handles := client.SnapshotUnitHandlesInRect(frame, b.cam, shellRect, b.sess.LocalOwner)
-				kind := battleCommandSelectionReplace
-				if additive {
-					kind = battleCommandSelectionToggle
-				}
-				_ = b.submitBattleCommand(battleCommand{Kind: kind, Selection: battleSelectionCommand{Handles: handles}})
-			} else {
-				// Snapshot not yet available – use live world rect as fallback. For fixtures this
-				// is the established path; for production we collect handles and still dispatch
-				// through the typed queue so the input boundary remains consistent.
-				if b.requireCommandDispatch {
-					// Collect visible handles in live world using the same shell rect and visibility.
-					var liveHandles []pool.Handle
-					if b.sess != nil && b.sess.Units != nil && b.cam != nil {
-						for _, u := range b.sess.Units.Iter() {
-							if u == nil || !u.Alive {
-								continue
-							}
-							// Visibility check via live service (owner bypass, fog, etc.)
-							if b.sess.Vis != nil {
-								t := visibility.Target{Owner: visibility.PlayerID(u.Owner), X: u.X, Y: u.Y, Z: u.Z, Hidden: u.Flags&0x4 != 0, Status: u.Flags}
-								if !b.sess.Vis.IsVisible(visibility.PlayerID(b.sess.LocalOwner), t) {
-									continue
-								}
-							}
-							sx0, sy0 := b.cam.WorldToScreen(u.X, u.Y, u.Z)
-							sx, sy := sx0-camera.OriginX, sy0-camera.OriginY
-							if shellRect.Contains(sx, sy) && u.Owner == b.sess.LocalOwner {
-								liveHandles = append(liveHandles, u.Handle)
-							}
-						}
-					}
-					kind := battleCommandSelectionReplace
-					if additive {
-						kind = battleCommandSelectionToggle
-					}
-					_ = b.submitBattleCommand(battleCommand{Kind: kind, Selection: battleSelectionCommand{Handles: liveHandles}})
-				} else {
-					client.ApplyDragSelectionWorld(b.sess.Units, b.cam, shellRect, additive)
-					b.filterSelectionToPlayer(b.sess.LocalOwner)
-				}
+			frame, ok := b.currentSnapshot()
+			if !ok {
+				return
 			}
+			handles := client.SnapshotUnitHandlesInRect(frame, b.cam, shellRect, b.sess.LocalOwner)
+			kind := battleCommandSelectionReplace
+			if additive {
+				kind = battleCommandSelectionToggle
+			}
+			_ = b.submitBattleCommand(battleCommand{Kind: kind, Selection: battleSelectionCommand{Handles: handles}})
 		}
 	}
 	// No right-button order path: right-click is deselect/cancel only, handled at the top [07 §9][04 §3.4].
@@ -866,15 +816,6 @@ func (b *battleSession) routeDigit(digit int, altHeld, shiftHeld bool) {
 	_ = b.DispatchGroupRecall(digit, shiftHeld)
 }
 
-// filterSelectionToPlayer clears selection on foreign units [08 "Skirmish configuration"].
-func (b *battleSession) filterSelectionToPlayer(owner uint8) {
-	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Owner != owner {
-			u.Flags &^= client.SelectionFlag
-		}
-	}
-}
-
 func (b *battleSession) currentSnapshot() (*snapshot.Frame, bool) {
 	if b == nil || b.sess == nil || b.sess.Snapshot == nil {
 		return nil, false
@@ -883,38 +824,32 @@ func (b *battleSession) currentSnapshot() (*snapshot.Frame, bool) {
 	return cur, ok && cur != nil
 }
 
-// selectedHandles reads only the immutable current frame in production. The
-// live-pool fallback is retained for asset-free synthetic fixtures.
-func (b *battleSession) selectedHandles() []pool.Handle {
-	if f, ok := b.currentSnapshot(); ok {
-		return append([]pool.Handle(nil), f.Selection.Handles...)
-	}
-	if b == nil || b.requireCommandDispatch || b.sess == nil || b.sess.Units == nil {
-		return nil
-	}
-	out := make([]pool.Handle, 0)
-	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == b.sess.LocalOwner && u.Flags&client.SelectionFlag != 0 {
-			out = append(out, u.Handle)
-		}
-	}
-	return out
-}
-
 func (b *battleSession) hasSelection() bool {
 	if f, ok := b.currentSnapshot(); ok {
 		return len(f.Selection.Handles) != 0
 	}
-	if b.sess == nil || b.sess.Units == nil {
-		return false
+	return false
+}
+
+// selectedCommandUnits resolves the committed selection for typed commands.
+// Live selection flags are presentation state; command application owns all
+// authoritative selection and queue mutation [01 §4.4][07 §9].
+func (b *battleSession) selectedCommandUnits() []*units.Unit {
+	if b == nil || b.sess == nil || b.sess.Units == nil {
+		return nil
 	}
-	owner := b.sess.LocalOwner
-	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == owner && u.Flags&client.SelectionFlag != 0 {
-			return true
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return nil
+	}
+	out := make([]*units.Unit, 0, len(f.Selection.Handles))
+	for _, h := range f.Selection.Handles {
+		u := b.sess.Units.Unit(h)
+		if u != nil && u.Alive && u.Owner == b.sess.LocalOwner {
+			out = append(out, u)
 		}
 	}
-	return false
+	return out
 }
 
 // selectedUnits returns all selected LocalOwner units in stable ascending order [I1][07 §9].
@@ -961,21 +896,6 @@ func (b *battleSession) catalogDefID(u *units.Unit) uint16 {
 	return uint16(id)
 }
 
-// selectedFactory returns the first selected immobile builder (factory) [R-P0-03][07 §9].
-func (b *battleSession) selectedFactory() *units.Unit {
-	if b.sess == nil || b.sess.Units == nil {
-		return nil
-	}
-	owner := b.sess.LocalOwner
-	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == owner && u.Flags&client.SelectionFlag != 0 &&
-			u.Def != nil && hud.IsFactoryBuilder(u.Def) {
-			return u
-		}
-	}
-	return nil
-}
-
 // isOverPanel reports whether a screen point is over the minimal build panel
 // area used by this overlay [F-P0-003]. The retail HUD uses overWorld/hitTest.
 func (b *battleSession) isOverPanel(mx, my int32) bool {
@@ -1020,204 +940,32 @@ func (b *battleSession) buildPageCount(u *units.Unit, page *content.BuildMenuPag
 // switchBuildPage handles digit 1..9 build page switching [07 §9] C10.
 // Page number lives in flag bits 23-25 with bit 22 paged indicator [07 §9].
 func (b *battleSession) switchBuildPage(digit int) {
-	if frame, productionFrame := b.currentSnapshot(); productionFrame {
-		if frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount == 0 || digit < 1 || digit > 9 {
-			return
-		}
-		target := hud.ClampPage(hud.DigitToPage(digit), int(frame.CommandPage.PageCount))
-		_ = b.DispatchBuildPage(target)
+	frame, ok := b.currentSnapshot()
+	if !ok || frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount == 0 || digit < 1 || digit > 9 {
 		return
 	}
-	u := b.selectedBuilder()
-	if u == nil || b.cat == nil {
-		return
-	}
-	page, ok := b.cat.BuildMenus[u.Def.CanonicalKey]
-	if !ok || page == nil || len(page.Buttons) == 0 {
-		return
-	}
-	count := b.buildPageCount(u, page)
-	if count <= 1 {
-		return
-	}
-	// Digit 1..9 maps to page digit-1 [07 §9] C10.
-	target := hud.DigitToPage(digit)
-	target = hud.ClampPage(target, count)
-	var dirty uint32
-	// BuildPage switching validates builder identity and page count [07 §9] C10.
-	su := &hud.SelectUnit{Flags: u.Flags, DefID: b.catalogDefID(u)}
-	if hud.SetBuildPage(su, target, count, &dirty) {
-		u.Flags = su.Flags
-		b.armBuildPanel()
-	}
+	target := hud.ClampPage(hud.DigitToPage(digit), int(frame.CommandPage.PageCount))
+	_ = b.DispatchBuildPage(target)
 }
 
 // nextBuildPage advances one page data-driven with guard [R-P0-03][07 §9] C10.
 func (b *battleSession) nextBuildPage() {
-	if frame, productionFrame := b.currentSnapshot(); productionFrame {
-		if frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount <= 1 {
-			return
-		}
-		target := hud.ClampPage(int(frame.CommandPage.Page)+1, int(frame.CommandPage.PageCount))
-		_ = b.DispatchBuildPage(target)
+	frame, ok := b.currentSnapshot()
+	if !ok || frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount <= 1 {
 		return
 	}
-	u := b.selectedBuilder()
-	if u == nil || b.cat == nil {
-		return
-	}
-	page, ok := b.cat.BuildMenus[u.Def.CanonicalKey]
-	if !ok || page == nil || len(page.Buttons) == 0 {
-		return
-	}
-	count := b.buildPageCount(u, page)
-	if count <= 1 {
-		return
-	}
-	var dirty uint32
-	su := &hud.SelectUnit{Flags: u.Flags, DefID: b.catalogDefID(u)}
-	cur := 0
-	if hud.IsPaged(u.Flags) {
-		cur = hud.DecodePage(u.Flags)
-	}
-	cur = hud.ClampPage(cur, count)
-	next := hud.ClampPage(cur+1, count)
-	if next == cur {
-		return
-	}
-	if hud.SetBuildPage(su, next, count, &dirty) {
-		u.Flags = su.Flags
-		b.armBuildPanel()
-	}
+	target := hud.ClampPage(int(frame.CommandPage.Page)+1, int(frame.CommandPage.PageCount))
+	_ = b.DispatchBuildPage(target)
 }
 
 // prevBuildPage goes back one page data-driven with guard [R-P0-03][07 §9] C10.
 func (b *battleSession) prevBuildPage() {
-	if frame, productionFrame := b.currentSnapshot(); productionFrame {
-		if frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount <= 1 {
-			return
-		}
-		target := hud.ClampPage(int(frame.CommandPage.Page)-1, int(frame.CommandPage.PageCount))
-		_ = b.DispatchBuildPage(target)
+	frame, ok := b.currentSnapshot()
+	if !ok || frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount <= 1 {
 		return
 	}
-	u := b.selectedBuilder()
-	if u == nil || b.cat == nil {
-		return
-	}
-	page, ok := b.cat.BuildMenus[u.Def.CanonicalKey]
-	if !ok || page == nil || len(page.Buttons) == 0 {
-		return
-	}
-	count := b.buildPageCount(u, page)
-	if count <= 1 {
-		return
-	}
-	var dirty uint32
-	su := &hud.SelectUnit{Flags: u.Flags, DefID: b.catalogDefID(u)}
-	cur := 0
-	if hud.IsPaged(u.Flags) {
-		cur = hud.DecodePage(u.Flags)
-	}
-	cur = hud.ClampPage(cur, count)
-	prev := hud.ClampPage(cur-1, count)
-	if prev == cur {
-		return
-	}
-	if hud.SetBuildPage(su, prev, count, &dirty) {
-		u.Flags = su.Flags
-		b.armBuildPanel()
-	}
-}
-
-// dispatchMobileBuildFallback is the ON-09 fallback for mobile builds [R-P0-03][PLAN_08 C12].
-func (b *battleSession) dispatchMobileBuildFallback(product string, wx, wz numeric.Fixed, queued bool) error {
-	builder := b.selectedBuilder()
-	if builder == nil || b.cat == nil {
-		return nil
-	}
-	if !hud.ValidateBuildProduct(b.cat, builder.Def.CanonicalKey, product) {
-		return nil
-	}
-	// Validate placement via ghost: if illegal, queue nothing [R-P0-03].
-	// Note: callers that already validated via updatePlacement can still call; we re-validate.
-	def, ok := b.cat.Unit(product)
-	if !ok || def == nil {
-		return nil
-	}
-	footX, footZ := footprintCellsForCatalog(b.cat, def)
-	cx, cz := world.WorldToCell(wx), world.WorldToCell(wz)
-	cx -= footX / 2
-	cz -= footZ / 2
-	if b.sess != nil && b.sess.World != nil {
-		if _, err := b.checkProductPlacement(cx, cz, def, footX, footZ, uint16(builder.Handle)); err != nil {
-			return nil // illegal -> queue nothing [R-P0-03]
-		}
-	}
-	if !queued {
-		if q := orders.QueueForUnit(builder); q != nil {
-			q.PurgeUnprotected()
-			q.DropLeadingAutoOps()
-		}
-	}
-	if err := construction.QueueMobileBuild(builder, product, wx, wz, 1, b.cat); err != nil {
-		return err
-	}
-	// Mark queued flag per [04 §3.3][P0-I14].
-	if q := orders.QueueForUnit(builder); q != nil && q.LenPrimary() > 0 {
-		prim := q.Primary()
-		if tail := prim[len(prim)-1]; tail != nil {
-			if queued {
-				tail.Flags |= orders.FlagPurgeSurvivor
-			} else {
-				tail.Flags &^= orders.FlagPurgeSurvivor
-			}
-		}
-	}
-	return nil
-}
-
-// dispatchFactoryBuildFallback is the ON-09 fallback for factory builds [R-P0-03].
-func (b *battleSession) dispatchFactoryBuildFallback(product string, queued bool) error {
-	// Compatibility entry point for asset-free fixtures. The retail product
-	// path below is count-based; the legacy bool has no replacement semantics.
-	return b.dispatchFactoryBuildDeltaFallback(product, 1)
-}
-
-func (b *battleSession) dispatchFactoryBuildDeltaFallback(product string, count int) error {
-	fac := b.selectedFactory()
-	if fac == nil {
-		// Fallback: any immobile builder works for synthetic tests where Builder+!CanMove encodes factory.
-		fac = b.selectedBuilder()
-		if fac == nil || fac.Def == nil || fac.Def.CanMove {
-			return nil
-		}
-	}
-	if b.cat != nil && fac.Def != nil && !hud.ValidateBuildProduct(b.cat, fac.Def.CanonicalKey, product) {
-		return nil
-	}
-	return b.queueFactoryDirectDelta(fac, product, count)
-}
-
-// queueFactoryDirect queues a factory product via construction path [R-P0-03][05].
-func (b *battleSession) queueFactoryDirect(fac *units.Unit, product string, queued bool) error {
-	return b.queueFactoryDirectDelta(fac, product, 1)
-}
-
-// queueFactoryDirectDelta applies the signed factory button delta. Product
-// clicks never purge the existing queue; positive deltas tail-coalesce and
-// negative deltas cancel the tail-most matching product [R-P0-11].
-func (b *battleSession) queueFactoryDirectDelta(fac *units.Unit, product string, count int) error {
-	if fac == nil || b.cat == nil {
-		return nil
-	}
-	if count > 0 {
-		return construction.QueueFactoryBuild(fac, product, count, b.cat)
-	}
-	if count < 0 {
-		return construction.CancelProductCount(fac, product, -count)
-	}
-	return nil
+	target := hud.ClampPage(int(frame.CommandPage.Page)-1, int(frame.CommandPage.PageCount))
+	_ = b.DispatchBuildPage(target)
 }
 
 // armBuildPanel resolves the selected builder's CANBUILD page into buttons
@@ -1336,7 +1084,7 @@ func (b *battleSession) appendFallbackBuildPanel(productKeys []string) {
 // a button was hit and placement armed or command issued [R-P0-03].
 // Build products are data-driven from cat.BuildMenus; no hardcoded unit names
 // [R-P0-03]. Mobile builders arm placement (definition retained); factories
-// queue immediately via injected callback with progress/count shown thereafter
+// queue immediately via typed command with progress/count shown thereafter
 // [R-P0-03][F-P1-008]. Illegal products are rejected (queues nothing).
 func (b *battleSession) panelClick(mx, my int32) bool {
 	return b.panelClickDelta(mx, my, false)
@@ -1378,39 +1126,33 @@ func (b *battleSession) panelClickDelta(mx, my int32, rightClick bool) bool {
 					return true // consumed; nothing placeable
 				}
 				// Data-driven guard: product must be in the selected builder's
-				// authored list [R-P0-03]. Production uses the immutable command
-				// page and unit view; fixture-only sessions retain the live lookup.
-				if b.requireCommandDispatch {
-					frame, ok := b.currentSnapshot()
-					if !ok || b.cat == nil || frame.CommandPage.Builder == 0 {
-						return true
+				// authored list [R-P0-03]. The immutable command page is the only
+				// command producer input; without it the click is consumed as a no-op.
+				frame, ok := b.currentSnapshot()
+				if !ok || b.cat == nil || frame.CommandPage.Builder == 0 {
+					return true
+				}
+				builderView, found := snapshotUnitByHandle(frame, frame.CommandPage.Builder)
+				if !found || b.sess == nil || builderView.Owner != b.sess.LocalOwner {
+					return true
+				}
+				builderDef, found := b.cat.Unit(builderView.DefName)
+				if !found || builderDef == nil || !hud.ValidateBuildProduct(b.cat, builderDef.CanonicalKey, def.CanonicalKey) {
+					return true // consumed but not placeable (illegal product)
+				}
+				// The visible button may have been armed from an older frame.
+				// Require the clicked product to remain in the current immutable
+				// page before dispatching it; the catalog menu alone is not a
+				// sufficient page identity [07 §9][I6].
+				pageProduct := false
+				for _, key := range frame.CommandPage.ProductKeys {
+					if content.CanonicalKey(key) == content.CanonicalKey(def.CanonicalKey) {
+						pageProduct = true
+						break
 					}
-					builderView, found := snapshotUnitByHandle(frame, frame.CommandPage.Builder)
-					if !found || b.sess == nil || builderView.Owner != b.sess.LocalOwner {
-						return true
-					}
-					builderDef, found := b.cat.Unit(builderView.DefName)
-					if !found || builderDef == nil || !hud.ValidateBuildProduct(b.cat, builderDef.CanonicalKey, def.CanonicalKey) {
-						return true // consumed but not placeable (illegal product)
-					}
-					// The visible button may have been armed from an older frame.
-					// Require the clicked product to remain in the current immutable
-					// page before dispatching it; the catalog menu alone is not a
-					// sufficient page identity [07 §9][I6].
-					pageProduct := false
-					for _, key := range frame.CommandPage.ProductKeys {
-						if content.CanonicalKey(key) == content.CanonicalKey(def.CanonicalKey) {
-							pageProduct = true
-							break
-						}
-					}
-					if !pageProduct {
-						return true
-					}
-				} else if builder := b.selectedBuilder(); builder != nil && builder.Def != nil && b.cat != nil {
-					if !hud.ValidateBuildProduct(b.cat, builder.Def.CanonicalKey, def.CanonicalKey) {
-						return true // consumed but not placeable (illegal product)
-					}
+				}
+				if !pageProduct {
+					return true
 				}
 				// Retail branches on the product's authored BMcode, not on the
 				// builder's mobility [07 §9]: a building arms placement, and
@@ -1445,10 +1187,6 @@ func (b *battleSession) handleHudOrderButton(name string) {
 	}
 	if latch.IsValid() {
 		b.latch = latch
-		if b.orderDispatchFn != nil {
-			// For button-originated latch, route through injected dispatcher for world-click path as well
-			// (tests can observe latch arming via b.latch)
-		}
 	}
 }
 
@@ -1461,7 +1199,7 @@ func containsStop(s string) bool {
 // It walks each selected factory/builder's primary queue tail-most and decrements or frees via
 // construction.CancelTailMost / CancelMobileTailMost. Tombstone bit ensures weapon-target-clear skip [04 §3.3].
 func (b *battleSession) cancelSelectedProduction() {
-	for _, u := range b.selectedUnits() {
+	for _, u := range b.selectedCommandUnits() {
 		if u != nil {
 			_ = b.DispatchCancelProduction(u.Handle)
 		}
@@ -1471,7 +1209,7 @@ func (b *battleSession) cancelSelectedProduction() {
 // toggleOnOffSelected issues Activate/Deactivate for OnOffable units [02 "Unit record"].
 // OnOffable is data-driven; the command is Activate/Deactivate via orders.NewNodeForOrder [P0-I14].
 func (b *battleSession) toggleOnOffSelected(queued bool) {
-	for _, u := range b.selectedUnits() {
+	for _, u := range b.selectedCommandUnits() {
 		if u == nil || u.Def == nil || !u.Def.OnOffable {
 			continue
 		}
@@ -1487,7 +1225,7 @@ func (b *battleSession) toggleOnOffSelected(queued bool) {
 // stockpileSelected queues one BuildWeapon round for stockpile weapons [06 §11.1].
 // Stockpile launch requires BuildWeapon descriptor (rear segment 0x40000) with count.
 func (b *battleSession) stockpileSelected(queued bool) {
-	for _, u := range b.selectedUnits() {
+	for _, u := range b.selectedCommandUnits() {
 		if u != nil {
 			_ = b.DispatchStockpile(u.Handle, queued)
 		}
@@ -1793,12 +1531,8 @@ func (b *battleSession) updatePlacement(mx, my int32) {
 	wx, _, wz := b.cursorWorld(mx, my)
 	b.buildCellX, b.buildCellZ = world.PlacementAnchor(wx, wz, b.buildFootX, b.buildFootZ)
 	self := uint16(0)
-	if b.requireCommandDispatch {
-		if frame, ok := b.currentSnapshot(); ok {
-			self = uint16(frame.CommandPage.Builder)
-		}
-	} else if u := b.selectedBuilder(); u != nil {
-		self = uint16(u.Handle)
+	if frame, ok := b.currentSnapshot(); ok {
+		self = uint16(frame.CommandPage.Builder)
 	}
 	footX, footZ := b.buildFootX, b.buildFootZ
 	var def *content.UnitDef
@@ -1897,26 +1631,15 @@ func (b *battleSession) yardMapFor() string {
 // Every producer goes through one canonical payload constructor [P0-I03]: orders.NewMobileBuildNode / QueueMobileBuild.
 // It is data-driven: product must be in builder's BuildMenus list; illegal placement queues nothing [R-P0-03].
 func (b *battleSession) commitBuild(queued bool) bool {
-	var builder *units.Unit
-	builderKey := ""
-	if b.requireCommandDispatch {
-		frame, ok := b.currentSnapshot()
-		if !ok || frame.CommandPage.Builder == 0 {
-			return false
-		}
-		v, found := snapshotUnitByHandle(frame, frame.CommandPage.Builder)
-		if !found || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
-			return false
-		}
-		builderKey = v.DefName
-	} else {
-		builder = b.selectedBuilder()
-		if builder == nil {
-			return false
-		}
-		builderKey = builder.Def.CanonicalKey
+	frame, ok := b.currentSnapshot()
+	if !ok || frame.CommandPage.Builder == 0 {
+		return false
 	}
-	if b.cat != nil && !hud.ValidateBuildProduct(b.cat, builderKey, b.buildDef) {
+	v, found := snapshotUnitByHandle(frame, frame.CommandPage.Builder)
+	if !found || b.sess == nil || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
+		return false
+	}
+	if b.cat != nil && !hud.ValidateBuildProduct(b.cat, v.DefName, b.buildDef) {
 		return false // GUI may not invent products absent from authored list [R-P0-03]
 	}
 	if !b.buildOK {
@@ -1928,42 +1651,11 @@ func (b *battleSession) commitBuild(queued bool) bool {
 	// site height as Y [07 §9]. Sending the cursor point instead would put the
 	// building half a footprint off the box the player aimed with.
 	wx, wz := world.PlacementCenter(b.buildCellX, b.buildCellZ, b.buildFootX, b.buildFootZ)
-	wy := numeric.Fixed(int64(b.buildSiteH) << 16)
-	// Use injected dispatch with fallback [R-P0-03][ON-09]
+	// Queue the typed command; the session applies it at the authoritative input
+	// phase [01 §4.4][07 §9].
 	if err := b.DispatchMobileBuild(b.buildDef, wx, wz, queued); err != nil {
 		fmt.Fprintf(os.Stderr, "nanolathe: build %s: %v\n", b.buildDef, err)
 		return false
-	}
-	// Ensure canonical fields populated for determinism [04 §3.2][P0-I05][P0-I03].
-	// The queue helper builds its node from the site alone, so the height, the
-	// owning builder and the creation tick are stamped here — for every builder
-	// the click ordered, not just the first. The creation tick is what the site
-	// marker measures its sweep from [07 §9]; an unstamped order simply renders
-	// at rest.
-	// Synthetic fixtures may stamp their live queue for legacy assertions. The
-	// production frame path must leave queue mutation to the authoritative input
-	// phase [I6].
-	if _, productionFrame := b.currentSnapshot(); !productionFrame && b.sess != nil && b.sess.Units != nil {
-		for _, u := range b.selectedUnits() {
-			q := orders.QueueForUnit(u)
-			if q == nil || q.LenPrimary() == 0 {
-				continue
-			}
-			prim := q.Primary()
-			tail := prim[len(prim)-1]
-			if tail == nil || tail.BuildDefKey != content.CanonicalKey(b.buildDef) {
-				continue
-			}
-			if tail.GoalY == 0 {
-				tail.GoalY = wy
-			}
-			if tail.Owner == 0 {
-				tail.Owner = u.Handle
-			}
-			if tail.CreationTick == 0 && b.sess.Clock != nil {
-				tail.CreationTick = b.sess.Clock.GlobalTick
-			}
-		}
 	}
 	return true
 }
