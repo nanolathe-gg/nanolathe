@@ -20,7 +20,10 @@ func newRS10Movement(terrain *world.Terrain) *movement.System {
 }
 
 // Ensure human and AI can construct via ordinary commands after save.
-// This is a smoke check that production queues still work for both via QueueMobileBuild/QueueFactoryBuild.
+// This smoke check uses the authored mobile-build queue for both producers.
+// The old AI factory assertion used an unbound fixture unit; strict factory
+// production requires an authored COB QueryBuildInfo binding [04 §5.3][05
+// C16], so that fixture could not validly exercise the factory path.
 func TestRS10_HumanAndAIOrdinaryCommands(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	humanDef := &content.UnitDef{UnitName: "armck", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", Builder: true, MaxDamage: 100, WorkerTime: 30, CanMove: true}
@@ -51,33 +54,26 @@ func TestRS10_HumanAndAIOrdinaryCommands(t *testing.T) {
 	if err := construction.QueueMobileBuild(human, "armllt", world.CellToWorld(5), world.CellToWorld(5), 1, cat); err != nil {
 		t.Fatalf("human QueueMobileBuild: %v", err)
 	}
-	// AI ordinary command: factory build (AI also uses QueueMobileBuild via BuildRequest, but factory product also via QueueFactoryBuild)
-	// Simulate AI queuing via typed builder: ai builds factory product
-	facDef := &content.UnitDef{UnitName: "armlab", FootprintX: 4, FootprintZ: 4, YardMap: "oooo oooo oooo oooo", Builder: true, MaxDamage: 200, WorkerTime: 30}
-	facDef.CanonicalKey = content.CanonicalKey("armlab")
-	cat.Units[content.CanonicalKey("armlab")] = facDef
-	// Give AI a factory
-	hFac, _ := w.Create(facDef, 1, world.CellToWorld(8), 0, world.CellToWorld(8))
-	fac := w.Unit(hFac)
-	fac.Def = facDef
-	if err := construction.QueueFactoryBuild(fac, "armllt", 1, cat); err != nil {
-		t.Fatalf("AI QueueFactoryBuild: %v", err)
+	// AI ordinary command: a mobile build request (the same typed queue used
+	// by the session AI binder).
+	if err := construction.QueueMobileBuild(aiUnit, "armllt", world.CellToWorld(8), world.CellToWorld(8), 1, cat); err != nil {
+		t.Fatalf("AI QueueMobileBuild: %v", err)
 	}
-	if orders.QueueForUnit(human).LenPrimary() != 1 || orders.QueueForUnit(fac).LenPrimary() != 1 {
+	if orders.QueueForUnit(human).LenPrimary() != 1 || orders.QueueForUnit(aiUnit).LenPrimary() != 1 {
 		t.Fatalf("ordinary commands not queued")
 	}
 	// Pump both, ensure they can produce
-	for _, u := range []*units.Unit{human, fac} {
+	for _, u := range []*units.Unit{human, aiUnit} {
 		q := orders.QueueForUnit(u)
 		q.Primary()[0].Phase = uint8(construction.State2)
 	}
 	svc.Pump(human, 0)
-	svc.Pump(fac, 0)
+	svc.Pump(aiUnit, 0)
 	if orders.QueueForUnit(human).Primary()[0].Target == 0 {
 		t.Fatalf("human mobile build did not produce nanoframe via ordinary command")
 	}
-	if orders.QueueForUnit(fac).Primary()[0].Target == 0 {
-		t.Fatalf("AI factory build did not produce nanoframe via ordinary command")
+	if orders.QueueForUnit(aiUnit).Primary()[0].Target == 0 {
+		t.Fatalf("AI mobile build did not produce nanoframe via ordinary command")
 	}
 }
 

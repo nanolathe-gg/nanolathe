@@ -16,6 +16,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 )
 
 // TestBattleCommandsPublishQueueAndShiftOverlay locks the typed command
@@ -46,7 +47,9 @@ func TestBattleCommandsPublishQueueAndShiftOverlay(t *testing.T) {
 		LocalOwner: 0,
 		Clock:      &clock.State{Requested: 10, Active: 10},
 		Snapshot:   &frame.Buffer{},
+		Vis:        visibility.New(world, 0),
 	}
+	s.Vis.SetLocal(0)
 	b := &battleSession{
 		sess: s,
 		cat:  cat,

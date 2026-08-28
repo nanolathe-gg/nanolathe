@@ -47,12 +47,12 @@ func TestUnitPoolLowestFreeAndImmediateReuse(t *testing.T) {
 	}
 	// Free h1 and reuse should give lowest-free 1
 	world.Destroy(h1, DeathKilled)
-	// Alive vs death mark are separate [04 §2.3] C2: before Cleanup the slot
-	// stays visible with Dying set; Cleanup clears it.
+	// Alive vs death mark are separate [04 §2.3] C2: before teardown cleanup the
+	// slot stays visible with Dying set; teardown cleanup clears it.
 	if u := world.Unit(h1); u == nil || !u.Dying {
 		t.Fatalf("destroyed unit should stay resolvable and marked Dying before cleanup")
 	}
-	world.Cleanup()
+	world.TeardownCleanup()
 	if world.Unit(h1) != nil {
 		t.Fatalf("destroyed unit should be nil after cleanup")
 	}

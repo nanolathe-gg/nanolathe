@@ -35,6 +35,26 @@ func (b *CallbackBridge) SetPresentationSink(sink PresentationSink) {
 	b.VM.SetSFXSink(PresentationSinkAdapter{Sink: sink})
 }
 
+// BindRenderFlags binds the unit-owned render-piece record [04 §"Piece flag polarity"] [R-COB-01 §1].
+// When bound, the six flag opcodes write into the unit's storage via the bridge, not the VM-local array.
+// The getter and setter capture the unit's RenderPieceFlags slice; the VM delegates every show/hide,
+// cache/dont-cache, shade/dont-shade write there.
+func (b *CallbackBridge) BindRenderFlags(get func() []uint8, set func(piece int, mask uint8, set bool) bool) {
+	if b == nil || b.VM == nil {
+		return
+	}
+	b.VM.BindRenderFlagHandlers(get, set)
+}
+
+// BindRenderFlagsSlice is the direct slice form of BindRenderFlags [04 §"Piece flag polarity"].
+// The VM shares the underlying array; writes via the VM affect the unit and vice versa.
+func (b *CallbackBridge) BindRenderFlagsSlice(flags []uint8) {
+	if b == nil || b.VM == nil {
+		return
+	}
+	b.VM.BindRenderFlags(flags)
+}
+
 // CallbackMode is the three engine-to-COB adapter modes [04 §4.2].
 type CallbackMode uint8
 

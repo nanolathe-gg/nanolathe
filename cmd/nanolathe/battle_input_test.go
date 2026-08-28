@@ -6,6 +6,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
@@ -412,10 +413,19 @@ func TestFeaturePickingOverlap(t *testing.T) {
 	b.sess.LocalOwner = 0
 	b.cam.X = 0
 	b.cam.Z = 0
+	b.sess.Features = features.NewService(terrain, nil, nil, nil)
+	if b.sess.Features.PlaceAt(9, 5, featDef) == nil {
+		t.Fatal("feature placement failed")
+	}
+	b.sess.Vis = visibility.New(terrain, 0)
+	b.sess.Vis.SetLocal(0)
 	// Place unit at same cell as feature to test unit>feature priority
 	u := placeUnit(b, "armsolar", numeric.Fixed(int64(9*16)<<16), numeric.Fixed(int64(5*16)<<16))
 	beamX, beamY := b.cam.WorldToScreen(numeric.Fixed(int64(9*16)<<16), 0, numeric.Fixed(int64(5*16)<<16))
 	sx, sy := beamX-camera.OriginX, beamY-camera.OriginY
+	// The production picker consumes the committed frame, so publish the
+	// feature and overlapping unit before checking priority [I6].
+	applyPendingBattleCommands(b)
 	// Pick at feature cell – unit should win
 	h, _, pos := b.pickTarget(sx, sy)
 	if h == 0 {
@@ -424,12 +434,15 @@ func TestFeaturePickingOverlap(t *testing.T) {
 	// Move unit away, feature should be found via HasFeature
 	u.X = numeric.Fixed(int64(2*16) << 16)
 	u.Z = numeric.Fixed(int64(2*16) << 16)
+	applyPendingBattleCommands(b)
 	_, _, pos2 := b.pickTarget(sx, sy)
 	if !pos2.HasFeature {
 		t.Fatalf("feature picking after unit moved: HasFeature false")
 	}
 	// Feature picking should respect fog: with empty vis, the feature is invisible.
-	b.sess.Vis = &visibility.Service{}
+	b.sess.Vis = visibility.New(terrain, visibility.ModeHistoryEnabled)
+	b.sess.Vis.SetLocal(0)
+	applyPendingBattleCommands(b)
 	_, _, pos3 := b.pickTarget(sx, sy)
 	// With empty vis and feature, our code checks VisiblePoint – empty returns false, so not visible.
 	if pos3.HasFeature {

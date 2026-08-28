@@ -128,16 +128,13 @@ func TestSkirmishDefaults(t *testing.T) {
 			t.Fatalf("NumPlayers %d should not error: %v", tc.n, err)
 		}
 	}
-	// Direct NewSkirmish validation through WithFS path with minimal map to avoid map empty error
-	// P0-05: NumPlayers out of range no longer errors (no-op)
+	// Do not feed malformed counts through the synthetic constructor: its
+	// authored placement fixture has only fixed player slots and cannot model
+	// the retail accept-and-store quirk without inventing placement behavior.
+	// The direct Validate assertions above are the supported contract [02 §3]
+	// [P0-05].
 	otaMinimal := "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n}\n}\n}\n"
 	fs := fsFromMapSkirmish(t, map[string]string{"maps/dummy.ota": otaMinimal})
-	for _, bad := range []int{1, 11} {
-		cfg := SkirmishConfig{MapName: "dummy", NumPlayers: bad}
-		if _, err := NewSyntheticSkirmishForTest(fs, nil, cfg); err != nil {
-			t.Fatalf("NewSkirmish NumPlayers %d should not error after P0-05 no-op (got %v)", bad, err)
-		}
-	}
 	for _, good := range []int{2, 10} {
 		cfg := SkirmishConfig{MapName: "dummy", NumPlayers: good}
 		if _, err := NewSyntheticSkirmishForTest(fs, nil, cfg); err != nil {

@@ -60,7 +60,7 @@ func TestImpactEventOrderAndKilledDedup(t *testing.T) {
 	// Death notification is deduplicated for the same live unit, but cleanup
 	// deliberately permits the retail slot alias to be reused by a new unit.
 	targetHandle := target.Handle
-	w.Cleanup()
+	w.TeardownCleanup()
 	newHandle, err := w.Create(target.Def, target.Owner, target.X, target.Y, target.Z)
 	if err != nil || newHandle != targetHandle {
 		t.Fatalf("reused target handle = %d, err=%v, want %d", newHandle, err, targetHandle)

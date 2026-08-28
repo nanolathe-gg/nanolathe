@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -180,6 +181,26 @@ func (s *Session) phaseCadenceFlip(tick uint32) {
 }
 
 // stepUnitPhase is phase 2 of the authoritative tick [01 §4.4].
+func (s *Session) finalizePhase2Death(h pool.Handle, tick uint32) {
+	if s == nil || s.Units == nil || !s.Units.NeedsDeathFinalization(h) {
+		return
+	}
+	if result := s.Units.FinalizeDeath(h, tick); !result.Freed {
+		return
+	}
+	// The slot finalizer is the sole gameplay teardown point for a running
+	// battle: remove occupancy/path state only after the unit has been freed.
+	// [01 §4.4][04 §2.4]
+	if s.Movement != nil {
+		s.Movement.ForgetUnit(h)
+		if s.Movement.Scheduler != nil {
+			s.Movement.Scheduler.Cancel(h)
+		}
+	} else if s.Path != nil {
+		s.Path.Cancel(h)
+	}
+}
+
 func (s *Session) stepUnitPhase(tick uint32) {
 	// Begin movement's per-tick occupancy transaction for the phase-2 unit sweep.
 	if s.Movement != nil {
@@ -198,7 +219,7 @@ func (s *Session) stepUnitPhase(tick uint32) {
 			// unit pre-update (StepPreUpdate) [04 "unit sweep"]
 			s.Units.StepPreUpdate(h, tick)
 			// weapon slot/service step per unit [06 §3][06 §4] — stable weapon index once-compiled [ON-04]
-			if s.Combat != nil && s.Catalog != nil && u != nil && u.Alive && !u.Dying {
+			if s.Combat != nil && s.Catalog != nil && u != nil && u.Alive {
 				wsum := s.Combat.StepWeaponsForUnit(u, tick, s.Units, s.Vis, s.World, s.Econ, s.Catalog, s.SimRNG(), s.CrtRNG())
 				// Exactly-one synchronous COB drain per unit visit [04 §4.2][04 §4.6][GAP T15 C17].
 				// Combat drains only inside the Aim handshake; when it did not, this visit owns
@@ -214,7 +235,6 @@ func (s *Session) stepUnitPhase(tick uint32) {
 					vm.Drain(1)
 				}
 			}
-
 			// order resolve/pump per unit (PumpUnit) [04 §3.3]. A unit with no
 			// order queue has no pump work; do not materialize an empty queue merely
 			// because the unit was visited. Producers bind queues when they create
@@ -347,21 +367,9 @@ func (s *Session) stepUnitPhase(tick uint32) {
 					}
 				}
 			}
-			// slot-end death, cleanup, corpse, occupancy, target invalidation (FinalizeDeath + vis unpublish + Feature.PlaceCorpse) [01 §4.4][04 §2.4]
-			if s.Units.NeedsDeathFinalization(h) {
-				s.Units.FinalizeDeath(h, tick)
-				// Every per-handle movement contribution, including the grid
-				// stamp, goes with the slot [04 §8.2] C22.
-				if s.Movement != nil {
-					s.Movement.ForgetUnit(h)
-				}
-				// Path scheduler cancel for freed handle
-				if s.Movement != nil && s.Movement.Scheduler != nil {
-					s.Movement.Scheduler.Cancel(h)
-				} else if s.Path != nil {
-					s.Path.Cancel(h)
-				}
-			}
+			// Slot-end death, cleanup, corpse, occupancy, target invalidation
+			// [01 §4.4][04 §2.4]. This is the only gameplay finalizer in battle.
+			s.finalizePhase2Death(h, tick)
 		})
 	}
 	if s.Movement != nil {

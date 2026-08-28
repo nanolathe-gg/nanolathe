@@ -157,9 +157,9 @@ func (w *World) cobDrain(u *Unit, tick uint32) {
 
 // slotEndDeathHandling marks slot-end death readiness [04 §2.4] C2 [GAP T15] C17.
 // If Health has reached zero or below and the unit is not yet Dying, latch the
-// mark via w.Destroy so the OnDeath hook fires exactly once [08 "Evaluation"]
-// and the unit stays visible to the sweep and to Unit() until the slot is
-// finalized. Lethal special damage and paralyzer paths use their own Destroy
+// mark via w.Destroy so the unit stays visible to the sweep and to Unit() until
+// the slot is finalized; OnDeath fires at that finalizer [08 "Evaluation"].
+// Lethal special damage and paralyzer paths use their own Destroy
 // callers; this handler is the generic health-exhausted at tick-end.
 func (w *World) slotEndDeathHandling(u *Unit, tick uint32) {
 	_ = tick
@@ -177,8 +177,8 @@ func (w *World) slotEndDeathHandling(u *Unit, tick uint32) {
 	// that path already marked Dying via Destroy. Here we handle generic
 	// health exhaustion observed at the end of the per-unit visit [04 §2.4].
 	if u.Health <= 0 {
-		// Use Destroy to get exactly-once hook semantics [08 "Evaluation"];
-		// the slot itself is freed by FinalizeDeath at slot-end or by Cleanup
+		// Use Destroy to defer exactly-once hook semantics to FinalizeDeath [08 "Evaluation"];
+		// the slot itself is freed by FinalizeDeath at slot-end or by teardown cleanup
 		// after the tick [04 §2.4] C2.
 		w.Destroy(u.Handle, DeathKilled)
 	}

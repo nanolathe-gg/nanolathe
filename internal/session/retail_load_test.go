@@ -9,6 +9,13 @@ import (
 
 func retailLoadBank(t *testing.T, summary save.Summary, includeSummary bool) *save.Bank {
 	t.Helper()
+	// WriteSummary emits BetweenMissions=1 when IsBattle is false (the zero
+	// value), even if the caller is modeling a battle save. Set the authored
+	// Summary mode explicitly so this fixture preserves the [08 "Summary"]
+	// distinction instead of silently changing the route under test.
+	if summary.BetweenMissions == 0 {
+		summary.IsBattle = true
+	}
 	b := save.NewBuilder(save.RetailTag)
 	if includeSummary {
 		save.WriteSummary(b, summary)

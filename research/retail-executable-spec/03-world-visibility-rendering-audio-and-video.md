@@ -105,11 +105,11 @@ argument at every call site. The complete strip → producer/event map:
 | 2 | COB emit-sfx vector types 2–5 (the "impact-effect switch" — see the re-verification note below): one jittered smoke puff (three CRT draws of `rand×7/0x8000 − 3` per axis) per spawn, spawn interval 1 tick with the per-site spacing parameter (16 or 8) scaling puff lifetime; palette colors `0x61`/`0x67` | 4 |
 | 3 | none | always empty |
 | 4 | none — the retired "crater/decal literal 4" is retracted (see §3.7) | always empty |
-| 5 | flame-weapon area scan (1 site): for every other unit inside the attacker's definition-relative box, a 30-tick flame-stream object that lays one animated segment every 10 ticks with a random start frame, plus an ignition callback; burning-feature smoke (1 site, phase 6 of doc 01 §4.4): one wind-drifted smoke puff every 3rd tick with two CRT jitter draws at the call site | 2 |
+| 5 | teleport order effect (1 site — see [R-LAYER §4]; an earlier reading called this a "flame-weapon area scan" plus an "ignition callback", both retracted: the producer is the Teleport order-state handler and the second call is the unit position commit): for every other unit inside the ordering unit's definition-relative world box, a 30-tick flame-stream object that lays one animated segment every 10 ticks with a random start frame while the handler commits that unit to its displaced position; burning-feature smoke (1 site, phase 6 of doc 01 §4.4): one wind-drifted smoke puff every 3rd tick with two CRT jitter draws at the call site | 2 |
 | 6 | construction/reclaim nanolathe emitters: a source point and a target box, five particles per spawn tick over a two-tick spawn window (six CRT draws per particle) | 16 |
 | 7 | flame-stream trail (2 sites): one animated flame segment per tick over a 6–7 tick flight from source to target; smoke sprinkle variant (1 site): the strip-2 family with 8-tick spacing and a 7-tick life | 3 |
 | 8 | none (the composer still draws the strip, unconditionally) | always empty |
-| 9 | impact smoke: the authoritative impact dispatcher under a weapon-definition flag (1), the projectile phase's trail-window and impact branches (2), the land/water/lava impact effect variants under a second weapon flag (3), the emit-sfx smoke point cases — white `0x101` and black `0x102`, two sites (see the re-verification note below), the fixed-effect-pool append side effect when the effect lands above sea level (1), and the sinking-wreck path's long-lived (900-tick) smoke column (1) | 12 |
+| 9 | impact smoke: the authoritative impact dispatcher under a weapon-definition flag (1), the projectile phase's trail-window and impact branches (2), the land/water/lava impact effect variants under a second weapon flag (3), the emit-sfx smoke point cases — white `0x101` and black `0x102`, two sites (see the re-verification note below), the fixed-effect-pool append side effect when the effect lands above sea level (1), and the death-corpse finalizer's land-path long-lived (900-tick) smoke column (1 — an earlier reading labeled this the "sinking-wreck path"; see [R-LAYER §3]) | 12 |
 
 The old census's strip-2 count (4 sites) and strip-9 count (12 sites) are
 confirmed; strip 6's count is sixteen sites in the reference graph, one short
@@ -175,6 +175,113 @@ segment (random start frame); the impact sprinkle spends three draws per spawn
 (per-axis jitter); the strip-7 trail spends none. The composer-time draw
 entries consume no draws. All of this randomness is presentation-stream only;
 the simulation Park–Miller stream is never touched by phase 11.
+
+#### R-LAYER §3 — the wreck-smoke trigger is the corpse finalizer's land path (2026-08-28)
+
+**Established (direct-static).** The long-lived smoke column of the strip-9
+producer census spawns inside the death-time corpse finalizer — the same pass
+that resolves the dying unit's corpse chain and stamps the wreck feature — and
+not at any point during sinking. Its complete trigger, per death:
+
+1. The death dispatcher passes three values: the dying unit, the corpse-chain
+   depth (the death packet's low nibble, [06 §12.1]), and a notification flag
+   computed as "the death packet's cause nibble is not the immediate-feature-
+   conversion cause" (cause 7 of [06 §12.1]'s severity bypass map) — deaths
+   that convert the unit straight into a feature never notify ([06 §12.1]
+   cause table; [05 "Feature sinking and water interaction"] "when the death
+   cause permits notification").
+2. The finalizer walks the `featuredead` chain depth-minus-one times; a
+   sentinel chain aborts silently with no wreck and no smoke.
+3. It classifies the medium by comparing the interpolated terrain height under
+   the victim against the sea-level byte (the same medium predicate that
+   decides the descent start of [05 "Feature sinking and water interaction"]).
+4. **Land path** (terrain above sea level): the corpse stamps normally and the
+   notification flag survives. **Underwater path** (terrain at or below sea
+   level): the corpse stamps with the −11468 fixed-point descent latch applied
+   when the dying definition lacks the isfeature flag, and the finalizer
+   **clears the notification flag** — the underwater path is silent.
+5. Only when the flag survives does the finalizer call the strip-9 smoke
+   producer at the wreck position with the long-lived variant: a 900-tick
+   smoke column (the smoke family's variant and life are the producer's
+   second and third arguments; the strip index is its fourth and is the
+   literal 9).
+
+The trigger is therefore the death/corpse-stamp event itself — a feature-state
+transition at death time — not a descent timer, not a height threshold during
+the descent, and not any state change of the sinking wreck afterwards. A
+sinking (underwater) wreck emits no smoke at all, which is exactly [05
+"Feature sinking and water interaction"]'s "underwater stamps are silent"; the
+900-tick column is the **land-wreck** smoke. The earlier strip-9 row wording
+"the sinking-wreck path's long-lived smoke column" was a misnomer carried from
+the first producer trace, which had named the whole corpse finalizer "the
+sinking path"; corrected above and in the strip-9 row. The producer's argument
+shape is also corrected here: the census note had recorded the sinking call as
+three arguments (position, variant, life); the smoke producer actually takes a
+fourth argument, the literal strip index, at both of its call sites —
+consistent with the census's "strip index is a literal argument at every call
+site" rule, which the note had collapsed for this family.
+
+#### R-LAYER §4 — strip 5 has no combat producer: the "flame scan" is the teleport order effect (2026-08-28)
+
+**Established (direct-static).** The standing open item "the weapon-class
+dispatch selector that reaches the strip-5 flame scan (owned by document 06)"
+dissolves: the strip-5 flame-stream producer is reached through the **order
+descriptor table, not any weapon path**. The producer's sole caller is the
+handler of the canonical **Teleport** order state (the order descriptor table's
+teleport entry — state label, handler, and the acknowledgement-ring
+presentation helper of the teleport family; document 04 §3.1 owns the table).
+The handler scans every *other* unit inside the ordering unit's
+definition-relative world box (six signed world-unit extents stored in the unit
+definition around its position), and for each boxed unit does exactly two
+things:
+
+1. spawns the strip-5 flame-stream object at that unit's position — a 30-tick
+   container that lays one animated 52-byte flame segment every 10 ticks
+   between the unit's old position and its displaced position; and
+2. commits that unit to its displaced position (destination-relative offset
+   preserved) through the direct position-commit path that unstamps and
+   restamps occupancy without the movement validator — the same commit the
+   carried-unit path uses every tick.
+
+The earlier "ignition callback" reading of the second call is retracted: the
+call is the position commit, not a combat ignition. **No combat event —
+projectile impact class, fire-damage application, or building burning state —
+produces strip-5 flame events anywhere in the image.** The flame *weapon*
+render type, `firestarter`, and feature fire (document 06 §6.10) have no
+producer on strip 5; their presentation effects run through the ordinary
+projectile, effect-pool, and feature-fire channels. Document 06 §6.10 carries
+the cross-reference.
+
+**Flame segment field layout (Established, 52 bytes),** supplementing
+[R-STRIP-01 §2]'s stride table — one segment, in order:
+
+- a word pair naming the GAF sequence to blit: the flame-stream animation
+  entry (the same entry the strip-7 trail family uses), with its frame count
+  read at spawn time;
+- the segment's source world position triple (16.16 fixed), copied from the
+  container's current flight position;
+- the segment's target world position triple, the flight endpoint for this
+  segment;
+- the per-step flight vector triple (container total displacement divided by
+  its segment count, computed once at container init);
+- the segment's expiry tick: spawn tick plus the container's per-segment
+  interval word, computed once at container init from the container lifetime
+  through a truncating float-to-int conversion and an integer division by
+  five. `TODO(question)`: the float expression feeding that conversion is not
+  preserved in the recovered code, so the exact interval derivation — 10 for
+  the teleport call's 30-tick container, which matches the re-armed next-lay
+  cadence below — is supported inference, not established;
+- the animation's frame count minus one; and
+- the start frame: one CRT-stream draw, scaled by `frame × (frameCount−1) /
+  0x8000` — the "random start frame" of the producer census.
+
+The update pass removes expired segments by stable in-place compaction and
+re-lays the next segment when the current tick reaches the container's
+next-spawn slot — the update loop re-arms that slot to "current tick + 10"
+after each lay, which is the established one-segment-per-10-ticks cadence —
+and the container dies when its last segment expires
+([R-STRIP-01 §2] removal verdict). The random start frame is the flame
+family's one CRT draw per segment already counted in [R-STRIP-01 §3].
 
 #### R-WIND-01 — the wind direction vector: which table feeds which axis
 
@@ -544,7 +651,78 @@ absent, never decremented, rebuilt by reset instead. The global word map is
 reset and rebuilt when the visibility mode or map state requires it. This
 establishes that the word grid gates a form of visibility or mapping without
 proving one universal semantic name. The byte grid is rebuilt by walking
-current sight sources.
+current sight sources. The grid's **consumer census is now closed**
+([R-LAYER §1] below): every non-presentation reader tests it as a per-player
+gate on path requests, placement validation, and order destination validation,
+and the path-search consumption that document 04 §6.1 ([R-DOC04-B]) calls the
+"owner/building-mask word" is this grid. What remains unnamed is the
+mode-word initialization semantics, not the gameplay role.
+
+#### R-LAYER §1 — the mapping word grid is the path search's "owner/building-mask": complete write-site census (2026-08-28)
+
+**Established (direct-static, bounded writer census).** The mode-dependent
+word grid of section 3.1 item 2 — allocated at map load as the mapped-memory
+array of `cellWidth × cellHeight / 2` bytes, one 16-bit word per 2×2-cell
+(32-pixel) tile, bits 0–9 per player slot — is the **same array** that
+document 04 §6.1's path consumption ([R-DOC04-B]) calls the "owner/building-
+mask word": identical allocation and geometry, and the path passability test
+reads the requesting player's own bit `1 << playerSlot` from exactly this
+grid, returning its bit-miss value 2 when the tile is not mapped for the
+requesting player. The name "owner/building-mask" is a misnomer that doc 04's
+text inherited from the first trace: **no building bit exists in the grid and
+no building state is ever written to it.** The tested bit is the requesting
+player's mapping bit; hard building blocking happens at the movement commit
+validator, as [R-DOC04-B] itself states. Document 04 should eventually be
+re-labeled; the finding is recorded here because the grid is doc 03's object.
+
+**Complete writer census.** Exactly three write sites exist:
+
+1. **Map load.** The terrain loader allocates the array and zero-fills it
+   (before any battle state exists).
+2. **The bulk wipe-and-rebuild.** At battle entry (after mode setup) and —
+   inside phase 5 — only in the commander-spawn and commander-defeat branches
+   ([01 §4.4]), never per tick. It fills the whole grid from mode-word bit 0
+   (all-zero when the history/mapping mode is enabled — nothing explored yet —
+   all-ones when disabled, the always-visible mode), refills every active
+   player's per-player byte grid from mode-word bit 1 (one everywhere when the
+   byte-grid predicate is disabled, zero when enabled), re-stamps every
+   eligible unit's coverage through the per-unit stamp when the byte-grid
+   predicate is active, and clears the fog-cache-valid bit.
+3. **The phase-5 per-player LOS stamp sweep — the only runtime bit writer.**
+   Per player 0..9 ascending, after that player's order dispatch and
+   per-player work and before the 30-tick cadence block ([01 §4.4]), the sweep
+   walks that player's unit slice over in-game (alive) units. Per unit it is
+   dirty-checked: a unit whose stored stamp cell and sight range are unchanged
+   writes nothing; otherwise the change path first unpublishes the old
+   byte-grid coverage, then re-stamps the new coverage, and the stamp ORs the
+   unit's **owner player's** bit into each covered tile's word. The word grid
+   is never decremented — bits persist until a bulk rebuild (mapping memory,
+   not current sight; current sight lives in the per-player byte grids).
+
+**What does not write it.** Unit creation, death/wreck conversion,
+construction completion, and feature spawn/remove/reclaim have **no write
+site**: a newly created unit stamps at its first sweep that reaches it (a
+building completed during the unit phase shows up in the next tick's phase-5
+sweep); a dead unit merely stops being swept and its already-mapped bits
+persist, which is the explored-memory behavior the idempotent-OR rule
+produces; features never touch the grid at all. A bounded image-wide census
+backs the closure: the raster that publishes bits is reached only from the
+per-unit stamp and the bulk rebuild, and no other function in the image
+writes through the grid's base pointer.
+
+**Same-tick ordering.** The path scheduler runs first in phase 5, before any
+player's stamp sweep, so a tick's path requests consume the previous tick's
+mapping state; placement and order validation later in the same phase see the
+same-tick stamps of players already processed (ascending player order). No
+visibility pass exists in phase 12, the cadence flip, or the post-loop tail —
+the phase-5 sweep is the final publisher ([01 §4.4]).
+
+**Consumers (all direct readers, none write).** The A\* passability test and
+greedy-ray probes ([04 §6.1 R-DOC04-B]); the build-site and placement
+validators; the order destination validators; and the mode-selected
+targeting/visibility predicates of section 3.1. This consumer set is what
+pins the grid's gameplay role as the per-player explored/mapping gate while
+the semantic naming hedge of section 3.1 item 2 stands.
 
 ### 3.2 Sight shape and terrain occlusion
 
@@ -1887,7 +2065,10 @@ and the same for Z), checks footprint collision by attempting a conditional
 teardown of any overlapping occupant (guarded by `indestructible`), stamps the
 anchor `feature = featureId` and the fringe cells `0xFFFE` with signed anchor
 deltas, and notifies derived occupancy. That service is the only writer of the
-plotted footprint; the invoking paths are responsible for ordering.
+plotted footprint; the invoking paths are responsible for ordering. Both the
+stamping service and the footprint teardown helper it uses for collision end
+by restamping every named movement class over the footprint rectangle —
+[R-LAYER §2] below.
 
 Four sources feed the stamper:
 
@@ -1919,6 +2100,58 @@ Four sources feed the stamper:
 one cell per sim tick; each visited cell draws one simulation-RNG value even at
 probability zero. Stock maps are inert because every shipped definition
 authors `reproduce=0`.
+
+#### R-LAYER §2 — feature changes restamp every movement class directly; they bypass the request revision pass (2026-08-28)
+
+**Established (direct-static, bounded caller census).** The movement-class
+layers of [04 §6.1 R-DOC04-B] — the packed 2-bit per-cell stamps, one heap per
+named class — are restamped at every feature change **synchronously inside the
+feature services themselves**, not through the 30-tick request revision pass.
+One shared "restamp every named class over a rectangle" service does the work:
+it iterates the movement-class records, skips the unnamed ones, and for each
+re-runs the rectangle form of the per-cell passability classifier over the
+rectangle, repacking the 2-bit values with the same local neighbor-demotion
+rule the map-load stamp applies ([04 §6.1 R-DOC04-B] classifier and contagion).
+The rectangle is the feature's anchor cell and footprint extents (the feature
+definition's footprint pair).
+
+**Call-site census — exactly five non-load callers share that service:**
+
+1. The **single stamping service** of §5.1.2, after it writes the anchor
+   feature word and fringe deltas — so a newly placed feature blocks its
+   footprint cells in every class layer in the same call that stamps the plot
+   cells. Map load's per-cell stamps route through the same service.
+2. The **footprint teardown helper** (used by the stamping service's collision
+   check, by the burn/reclaim/damage successor transitions, and by the
+   feature-maintenance walker's reproduce/fire teardowns): it first clears the
+   footprint's plot cells (feature word back to empty, flags bit cleared,
+   fringe reset) and *then* restamps — so removal unblocks the cells in the
+   same call, and every successor transition (`featureburnt`,
+   `featuredead`, `featurereclamate`) is a teardown-plus-restamp followed by a
+   fresh placement stamp.
+3. The **plot-occupancy stamp's completion path**: after the per-cell
+   occupancy loop it restamps the committed unit's footprint rectangle (rect
+   words built from the unit's cached cell and footprint bias).
+4./5. The two **building-commit/clear validation sites** in the movement
+   commit region, which restamp over the footprint rectangle the same way.
+
+So: feature creation, destruction, and reclaim each restamp all named class
+layers twice where a successor is involved (teardown, then placement) —
+always at change time, in the calling phase.
+
+**Relation to the request revision pass.** The revision pass of [04 §6.1
+R-DOC04-B] (watermark `max(tick,30) − 30`, run at path-request init) walks the
+**unit** pool only: alive units whose last occupancy-commit tick falls in the
+previous watermark window get their footprint rectangles restamped, and the
+requesting unit's commit tick is refreshed. Feature changes never route
+through it — the occupant-age machinery exists for mobile occupants, and the
+direct restamps above are how feature blocking enters and leaves the class
+layers. Unit-side building commits likewise restamp directly (sites 3–5), so
+the revision pass is purely the mobile-occupant aging channel.
+
+**Corrections this closes.** Doc 04's earlier phrasing that "dynamic
+placement/removal causes rectangle restamps" named the mechanism without its
+sites; the census above is that site list.
 
 #### 5.1.3 Composer staging and pool membership
 
@@ -2424,6 +2657,114 @@ Three consequences matter:
 The camera clamp that runs immediately afterwards holds both axes inside the
 map, so shake cannot push the view off-map, and the follow camera's
 glide-halfway-to-target behavior damps it while tracking a unit.
+
+### 5.6.1 CRD-006 follow-camera producer census [R-CRD-006 §2]
+
+This addendum narrows the earlier follow-camera description to the producer
+and lifetime paths that are established by the bounded retail census. The
+phase-10 consumer and its priority remain the contract in [07 §10] and
+[01 §4.4]: in-flight camera motion wins over a followed projectile, which wins
+over a valid tracked object. A selected point is converted to a desired origin
+by subtracting half the viewport span; for a ground object, the vertical point
+also includes the object's half-height shear. The desired origin is clamped
+before the current origin takes its bounded signed half-step. Follow runs
+before shake, and shake mutates only the current origin before the final clamp.
+
+**Established fact — in-flight camera-motion producers.** In-flight motion is
+created when the currently followed projectile reaches one of the ordinary
+projectile finalization paths: impact or expiry, completion of a burst/anchor
+retirement, or purge of projectiles owned by a unit being removed. The producer
+copies the projectile's final current/head world point into the three-component
+16.16 camera anchor, loads the signed remaining count from the projectile's
+authored camera-transition duration field, clears the followed-projectile
+selection, and then marks the projectile for removal. Owner purge performs the
+same hand-off before its immediate compaction. The battle-entry centering path
+sets current and desired origins together; the bounded camera-setter census
+found no separate anchor-only producer. Confidence is Established for these
+listed producers and Unknown for any producer outside that bounded caller
+census.
+
+The count is consumed only when the in-flight choice wins phase-10 selection.
+For a positive count, one invocation chooses the fixed anchor and decrements
+the count by one; a count of zero no longer wins priority, so the next
+invocation may select the followed projectile or tracked object. A zero
+transition duration therefore does not create an additional positive-count
+anchor interval. This is distinct from the target's own projectile lifetime
+and from the projectile pool's captured-count traversal [06 §5.2][06 §7.1].
+
+**Established fact — followed-projectile clear and compaction.** Finalization
+and owner-purge paths clear the followed-projectile selection when they create
+the in-flight anchor. Stable projectile compaction runs at the projectile
+phase tail and after owner purge. When a surviving followed projectile moves
+to a new pool slot, compaction rewrites the selection to that survivor, so the
+identity is not confused with the old slot. The recovered compaction path has
+no independent removal rule that can be relied on to clear a dead selection;
+the observed lifecycle clears it in the retirement or purge path before
+compaction. Whether a dead followed record can reach compaction without that
+prior clear, and whether a defensive clear is present in an unrecovered
+compaction branch, is Unknown. Nanolathe must not substitute a generic pool
+policy for this unresolved retail edge. [06 §5.2][08 "Account inventory"]
+
+**Unknown — followed-projectile assignment.** The phase-10 consumer requires
+an explicit nullable followed-projectile reference and reads that record's
+current/head point. It does not use the projectile's target unit, target
+projectile, shooter, or cruise target point as a surrogate. The bounded writer
+census recovered the finalization clears and compaction repair above, but did
+not recover the assignment store. The implementation seam must therefore
+provide an explicit set/clear operation (or event) owned by the gameplay path
+that chooses a projectile; it must remain uncalled until that producer is
+established. TODO(CRD-006): settle the assignment writer with a whole-image
+reference census or a retail input/gameplay trace before implementing a
+surrogate selection.
+
+**Established fact — tracked-object validation and clear.** If no higher
+priority target is active, phase 10 reads the tracked object's current world
+point only while its live/valid state is present. If the reference is
+invalid, retail clears the tracked selection and the dependent followed and
+in-flight state, then performs no target step from that invalid reference.
+The tracked point uses the same desired-origin construction and pre-step
+clamp described above. Projectile compaction does not repair a tracked-object
+reference: the two identities are separate, and only projectile handles
+participate in projectile compaction.
+
+**Unknown — tracked-object assignment.** No current Nanolathe session or
+camera type owns this nullable reference, and the bounded retail census did
+not recover a direct assignment producer. Order-marker rendering and unit
+selection are not evidence of camera tracking and must not be wired as a
+surrogate. The public seam is a nullable stable object handle plus an explicit
+set/clear operation and a validity/current-point query. TODO(CRD-006): identify
+the retail tracking command or producer before connecting that seam.
+
+**Established fact — producer/order boundary.** Host-frame direct scrolling
+remains a separate writer: it samples edge/keyboard intent and applies one
+bounded signed delta in host order. Phase 10 does not consume held arrows,
+pointer edges, the scroll setting, or the host raw delta. A phase-10 pass first
+selects and validates a follow producer, consumes an in-flight count when
+selected, constructs and clamps the desired origin, and steps current; shake
+then consumes its presentation random draws and mutates current in place,
+followed by the final camera clamp/view invalidation. The exact outer-frame
+interleaving between host scrolling and this phase callback is not established
+by the producer census. [07 §10][01 §4.4][03 §5.6]
+
+**Implementation-ready probes.** These probes isolate the closed lifecycle
+without assuming an assignment source that remains Unknown:
+
+| Probe | Required result |
+| --- | --- |
+| Followed projectile retires by impact/expiry or burst completion | Its final current/head point becomes the in-flight anchor; the followed reference clears; the authored transition count is loaded; the record is then removed. |
+| Followed projectile is removed by owner purge | The same anchor/count/clear hand-off occurs before the purge compaction. |
+| A surviving followed projectile moves left during stable compaction | The followed handle identifies the moved survivor, not the old slot. |
+| Retirement has already cleared the followed reference before compaction | No followed-projectile identity remains; do not require compaction to invent one. |
+| In-flight count `2`, with both other target families present | Three phase calls select the anchor for counts `2`, `1`, then allow the next priority target after the count reaches `0`; no other target may preempt the anchor. |
+| Invalid tracked object with no higher-priority target | Tracking and dependent follow state clear; that invocation does not step toward the invalid point. |
+| Target point `(x,y,z)` and viewport `(w,h)` | Desired X is `x - w/2`; desired Z is `z - y/2 - h/2`; clamp desired before applying the signed half-step. |
+| Current-to-desired deltas `0, ±1, ±2, ±319, ±320, ±321` | Movement is `0, 0, ±1, ±159, ±160, ±320`, with signed truncation toward zero. |
+| One host pass plus `0`, `1`, or `5` phase passes | The host delta is applied once; follow/shake run once per phase pass; held input is never consumed by phase 10. |
+
+The assignment rows are intentionally blocked by their TODOs. A future
+implementation test may inject an explicit followed-projectile or tracked
+object handle through the public seam, but must label that injection as a
+test seam rather than claiming that it is retail's producer.
 
 ### 5.7 Construction and water wakes
 
@@ -3057,11 +3398,12 @@ and unknown" without a resolution plan.
   closed for every strip ([R-STRIP-01 §1], superseding the 2026-08-25/26
   census): strips 2, 5, 6, 7, 9 have enumerated producers and per-site
   gameplay events; strips 0, 1, 3, 4, 8 have no producer anywhere in the
-  image and are always empty. Still open: the weapon-class dispatch selector
-  that reaches the strip-5 flame scan (owned by document 06), the identity of
-  the root flag byte that disables all strip allocation when set, semantic
-  strip naming beyond the GAF/asset bindings of [R-STRIP-01 §2], and the
-  ground-scar/crater authoring mechanism (§3.7 `TODO(question)`).
+   image and are always empty. The strip-5 dispatch route is closed
+   ([R-LAYER §4]: the producer is the Teleport order handler — no combat
+   event and no weapon-class selector is involved). Still open: the identity
+   of the root flag byte that disables all strip allocation when set, semantic
+   strip naming beyond the GAF/asset bindings of [R-STRIP-01 §2], and the
+   ground-scar/crater authoring mechanism (§3.7 `TODO(question)`).
 - SHD/LHT row/index formula is now established for model `SHD` (`dont-shade→15`, `row=trunc(dot*5)&0x1F`, gouraud `rowStep=(rowR-rowL)/width`) and halo `LHT` (disc precompute verified: per-pixel CRT draw, `q = trunc((R+sqrt(1.33·dx²+dy²))·32)`, byte `0x6F−q` / ring `0x6E` / transparent `0xFF` on the `(0x20−q) mod 256` compare, level `31−q`); remaining open is ALP usage by any non-LOS UI/fade path — bounded-negative over the renderer cluster (ALP loads only in the minimap picture downsample).
 - Model lighting normals (`normalize(cross(b-a,b-c))` over first three indexes, degenerate `(0,1,0)`, per-vertex `avg/cnt` no renormalize) and texture coordinate policy (corner-index affine 16.16 through the edge-table scanline mapper and per-pixel `SHD` sampler, no stored UVs, flat direct-fill only, clamp/nearest/no perspective) and flat-color quads-only are now established (direct-static); remaining open is exact team/logo per-player dimension deltas and pitch/bank naming.
 - Shadow presentation is established (option bits, per-unit `noshadow`,

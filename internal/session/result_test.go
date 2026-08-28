@@ -396,6 +396,13 @@ func stepLobbyThrough(t *testing.T, s *Session, first, last int32) {
 	t.Helper()
 	for now := first; now <= last; now++ {
 		s.Step(now)
+		// A terminal result is latched before the post-battle dispatch. Stop at
+		// that boundary so this helper does not drive the state machine back
+		// through Router and Loading while the result remains authoritative [08
+		// "Session states"].
+		if s.GetResult().Ended {
+			return
+		}
 	}
 }
 

@@ -243,7 +243,7 @@ func TestP0I02_IterationOrder(t *testing.T) {
 // finalized at slot end (FinalizeDeath frees the slot in-visit, mirroring the
 // session's phase 2), while a death marked AFTER the unit's visit — the
 // projectile-phase damage shape (RS-08) — stays resolvable until the
-// post-loop Cleanup.
+// explicit teardown cleanup.
 func TestP0I02_SlotEndDeathFinalization(t *testing.T) {
 	world := NewSliced(4, nil)
 	def := &content.UnitDef{MaxDamage: 100}
@@ -262,21 +262,22 @@ func TestP0I02_SlotEndDeathFinalization(t *testing.T) {
 	if world.Used() != 0 {
 		t.Fatalf("Used %d want 0 after slot-end finalization", world.Used())
 	}
-	// A death marked after the visit stays alive until Cleanup [04 §2.4] C2.
+	// A death marked after the visit stays alive until explicit teardown cleanup
+	// [04 §2.4] C2.
 	h2, _ := world.Create(def, 0, 0, 0, 0)
 	world.Destroy(h2, DeathKilled)
 	if world.Unit(h2) == nil {
-		t.Fatalf("death marked after the visit must stay resolvable until Cleanup [04 §2.4] C2")
+		t.Fatalf("death marked after the visit must stay resolvable until teardown cleanup [04 §2.4] C2")
 	}
 	if world.Used() != 1 {
 		t.Fatalf("Used %d want 1 before Cleanup", world.Used())
 	}
-	world.Cleanup()
+	world.TeardownCleanup()
 	if world.Unit(h2) != nil {
-		t.Fatalf("After Cleanup the post-visit death must be free [04 §2.4] C2")
+		t.Fatalf("After teardown cleanup the post-visit death must be free [04 §2.4] C2")
 	}
 	if world.Used() != 0 {
-		t.Fatalf("Used %d want 0 after Cleanup", world.Used())
+		t.Fatalf("Used %d want 0 after teardown cleanup", world.Used())
 	}
 }
 

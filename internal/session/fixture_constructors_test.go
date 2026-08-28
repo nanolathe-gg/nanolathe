@@ -404,10 +404,18 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 	if s.Econ != nil {
 		for p := 0; p < cfg.NumPlayers && p < len(s.Econ.Players); p++ {
 			if s.Econ.Players[p].Exists {
+				// Keep the synthetic entry seam aligned with production battle
+				// entry: retail installs the per-player storage bonus before
+				// direct spawn credit [05 "Storage capacity"] [08
+				// "Placement and battle entry"]. The old helper only credited
+				// stock, so tests that exercised the production contract saw a
+				// misleading zero bonus.
+				s.Econ.Players[p].InstallStorageBonus(cfg.Players[p].Metal, cfg.Players[p].Energy)
 				economy.CreditSpawn(&s.Econ.Players[p], economy.Metal, float32(cfg.Players[p].Metal))
 				economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, float32(cfg.Players[p].Energy))
 			}
 		}
+		economy.RebuildCapacity(s.Econ, s.Units)
 	}
 	if s.World != nil && s.Movement != nil {
 		for _, u := range s.Units.Iter() {

@@ -151,15 +151,20 @@ func TestNewMissionUsesWindBoundsWithoutDraws(t *testing.T) {
 func TestNewMissionWithFSKeepsCampaignLoadStrict(t *testing.T) {
 	// A direct Type 1 load must not use the Type 2/3 fuzzy resolver when the
 	// requested mission is absent. Supplying a different valid OTA makes the
-	// old fallback observable without requiring terrain or retail assets.
+	// old fallback observable without requiring terrain or retail assets. The
+	// supplied catalog is valid so catalog preflight does not mask the
+	// requested-file diagnostic [08 "Campaign discovery", "Mission and map
+	// schema selection"].
 	fs := fsFromMap(t, map[string]string{
 		"maps/Available.ota": "[GlobalHeader]\n{\nmissionname=Available;\n[Schema 0]\n{\nType=Easy;\n}\n}\n",
 	})
-	cat := &content.Catalog{Maps: map[string]*content.MapHeader{}}
+	cat := minimalCatalogForStrict()
 	_, err := NewMissionWithFS(fs, cat, "Missing.ota", 0)
 	if err == nil {
 		t.Fatal("strict campaign load must fail when the requested mission is absent")
 	}
+	// Type 1 names the requested file and does not substitute Available.ota;
+	// this preserves the established no-fuzzy-fallback contract [08].
 	if got := err.Error(); !strings.Contains(got, "The requested mission file, Missing.ota, does not exist.") {
 		t.Fatalf("strict campaign diagnostic = %q, want the Type 1 missing-file diagnostic", got)
 	}

@@ -7,7 +7,7 @@ package units
 // marking still triggers on a non-positive result at the caller's Destroy
 // and the slot-end death latch [06 §9.1][04 §5.1]. These tests lock the
 // STORAGE contract: the signed value survives through FinalizeDeath and
-// Cleanup. The synchronous Killed query consumer lands with a separate COB
+// teardown cleanup. The synchronous Killed query consumer lands with a separate COB
 // round; severity here is asserted through the established formula in
 // cob.KilledSeverity [04 §5.1].
 
@@ -83,7 +83,7 @@ func TestApplyDamageSmallOverkillRetainsSignedValueThroughFinalizeDeath(t *testi
 	}
 }
 
-func TestApplyDamageLargeOverkillRetainsSignedValueThroughCleanup(t *testing.T) {
+func TestApplyDamageLargeOverkillRetainsSignedValueThroughTeardownCleanup(t *testing.T) {
 	world, h := overkillWorld(t)
 	u := world.Unit(h)
 	if !world.ApplyDamage(h, 2500) {
@@ -96,12 +96,12 @@ func TestApplyDamageLargeOverkillRetainsSignedValueThroughCleanup(t *testing.T) 
 	if res := world.FinalizeDeath(h, 7); !res.Freed {
 		t.Fatal("death was not finalized")
 	}
-	world.Cleanup()
+	world.TeardownCleanup()
 	if u.Health != -2400 {
-		t.Fatalf("health after FinalizeDeath+Cleanup = %d, want -2400 retained", u.Health)
+		t.Fatalf("health after FinalizeDeath+teardown cleanup = %d, want -2400 retained", u.Health)
 	}
 	if world.Unit(h) != nil {
-		t.Fatal("slot should be free after Cleanup")
+		t.Fatal("slot should be free after teardown cleanup")
 	}
 }
 

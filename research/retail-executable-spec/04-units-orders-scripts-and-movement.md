@@ -737,22 +737,115 @@ handler re-issues a wait [P0-08]. A substate at or beyond nine, or any handler
 phase beyond three, cancels the unit's entire queue via the cancel-all return
 code.
 
-**Guard assistance triggers [P0-08].** The follow/guard handler evaluates,
-top-down on every visit: (a) **build assist** — if the ward has an active
-construction op that is friendly per the diplomacy byte and not already latched
-in the guarding unit's dedup array, enqueue assistance toward that op;
-(b) **auto-fire while holding position** — for each weapon slot with auto-target
-enabled whose weapon is not command-fire-only, acquire a candidate and
-range-gate it, binding the slot on success, each candidate deduped by id latch;
-(c) **repair assist** — when the ward is damaged and the guard can repair,
-resolve and enqueue the correct repair order for the ward; (d) **join the ward's
-build** — when the ward's own front order is a nanolathe-class build elsewhere,
-enqueue help-build toward that order's target; and (e) otherwise **follow
-maintenance** — refresh a banded goal around the ward and wait 30 ticks. Each
-assist path retries on the 30-tick cadence behind its dedup latch. Per-order
-leash and orbit vtables share the same deadline and arrival contract above:
-dedup latches prevent immediate re-enqueue, and strict `dist <= 2` with
-`abs diff < 3` guards the banded-goal transition [P0-08].
+### Closed — guard assistance retargeted and sized [R-UNIT-06 §1] (2026-08-28)
+
+**Correction — supersedes this section's earlier "Guard assistance triggers
+[P0-08]" paragraph.** That paragraph said the guard keeps a per-unit **dedup
+array** (a "dedup latch") gating re-enqueue, labeled branch (a) *build assist*
+toward the ward's construction op, described branch (b) as *acquiring*
+candidates with id-latch dedup, and closed with "dedup latches prevent
+immediate re-enqueue". The direct handler traces show there is **no dedup
+array and no latch in either guard handler** — re-enqueue discipline comes
+from the pump's deadline cadence and from satisfied-bit gates — branch (a) is
+a **combat join** (attack the ward's enemy), and branch (b) **re-targets**
+slots onto the ward's enemy rather than acquiring anything. The corrected
+contract below is **Established** (direct, both the ground and air guard
+handlers).
+
+**Established — entry gates, ground guard, in order.** A missing ward
+completes the order (code 5, not the abandon code); a guard that is itself
+carried cancels its whole queue (code 7); a ward whose definition can fly
+removes the order (code 8 — a ground guard follows only ground wards); a
+phase byte beyond 1 cancels all (code 7).
+
+**Established — admit phase (ground guard, phase 0).** Set the `Guarding`
+state label; clear all three weapon-slot build targets (the weapon-clear walk
+with its TargetCleared signals); compute the follow radius from the two
+footprint-width words (the signed footprint words the transport size gate
+also reads): `radius = (myFootWidth + wardFootWidth + 2) << 4`; draw **one**
+simulation RNG draw of a full circle (`RNG(65536)`) for the anchor direction;
+store the anchor offset triple as `(-sin(h)·radius, 0, -cos(h)·radius)`
+through the shared fixed-point sine table with round-to-nearest, with the
+radius scaled into 16.16 for the multiply — the resulting anchor band around
+the ward is about `(sum + 2) · 16` world units. Advance to phase 1 (code 1),
+which the same pump cascade re-enters immediately.
+
+**Established — the assist evaluation (phase 1), top-down:**
+
+1. **Combat join.** When the ward's engagement-target reference (a
+   unit-reference link on the ward, see below) is set, the ward's owner's
+   diplomacy byte toward the guard's side reads zero (allied), the satisfied
+   bits include the guard's re-arm bit (bit value `0x10`, see below), and the
+   ward target's definition is **not** in the guard's no-chase-category bit
+   array, the guard resolves the **attack-a-unit** command (code 3 of the
+   command resolver) against that target in queued mode and enqueues it at
+   the queue tail; on a successful enqueue the record's dynamic gate clears
+   and the handler returns the wait code. The queued-mode attack also bypasses
+   the standing-order gates the non-queued attack issue applies.
+2. **Slot re-target (auto-fire support).** Skipped entirely when the guard's
+   standing-move bits (18–19) and standing-fire bits (20–21) of the status
+   word are all clear. Per slot 0..2, requiring the slot assigned bit, the
+   slot tracking bit, and a weapon whose command-fire-only definition bit is
+   clear: resolve the slot's stored target; when the slot has **no target**,
+   that target is **out of range**, or the target's definition **is** in the
+   guard's per-slot bad-target-category bit array, the slot is **rebound onto
+   the ward's engagement target** (the same unit branch 1 attacks). Slots
+   already holding a legal in-range target are left alone. There is no
+   acquisition and no dedup latch.
+3. **Repair/assist the ward.** When the ward's health (signed word) compares
+   below its definition's maximum-damage word and the guard's definition has
+   the builder bit, resolve command code **8** (assist-or-repair: help-build
+   while unfinished, the repair order otherwise) through the canfly-forking
+   resolver against the ward itself; on a resolved name, clear the record's
+   goal payload, allocate and tail-append the new record (target = ward),
+   clear the dynamic gate, and return the wait code. An allocation failure
+   returns the wait code with no insert.
+4. **Join the ward's order.** When the ward's front order exists with a
+   nonzero descriptor, **both** guard and ward definitions have the builder
+   bit, the front order carries flag `0x100000`, and its target is not the
+   guard itself: when the front order's descriptor is the guard-resolved
+   mobile-build or factory-build descriptor, enqueue **help-build** (resolved
+   through the canfly fork, so VTOL guards get the VTOL variant) toward the
+   front order's target with the front order's goal position; when it is
+   instead a payload-carrying queued order, enqueue a **copy** of that order —
+   same descriptor, same target, same goal. Otherwise fall through.
+5. **Follow maintenance.** Install a ground point goal at the ward's position
+   plus the stored anchor offset; arm the record's own dynamic gate with the
+   re-arm bits (`0x18`, values `0x08` and `0x10`); set the deadline to
+   `tick + 30` **fixed** (no draw) through the shared deadline setter, which
+   also arms gate bit `0x01` — so the record re-dispatches on the 30-tick
+   deadline and on whichever re-arm event lands first; return the continue
+   code. The anchor direction itself was drawn once at admit; maintenance
+   draws nothing.
+
+**Established — the engagement-target link.** The ward's engagement-target
+reference is a unit-pointer link on the unit record, saved/restored by the
+unit save block (its save field sits beside the carrier-link field) and
+cleared by the per-unit tick refresh helper each tick. **Supported inference:**
+it is the ward's current combat target — the consumers (attack join +
+no-chase filter + slot re-target) admit no other reading. **Unknown:** which
+producer sets it during ordinary play; a bounded census over the decompiled
+function set and an instruction-pattern scan of the code sections found only
+the initializer zero, the save pair, and the tick-clear write.
+
+**Unknown — the guard's re-arm bit producers.** The guard arms its gate with
+bit values `0x08` and `0x10` (step 5) and branch 1 consumes `0x10`. The
+node-pending writers found anywhere are: the three goal-payload installers
+(which only clear bits 5–9), the single satisfied-bit raiser whose callers
+raise `0x20`/`0x40`/`0x80`/`0x100`/`0x200` only (bounded: all nine raiser call
+sites), the node constructor (zero), and the pump's deadline expiry (bit 0).
+No writer of `0x08`/`0x10` was located, so these belong to the same
+unlocated-writer family as the mask-2/mask-8 interrupt bits and the
+satisfied-bit-`0x10000` weapon-slot clear recorded in the Missing list. The
+consumer semantics above are Established; the producers remain open.
+
+**Established — air guard differences.** The VTOL follow handler adds an
+interrupt-bit pre-check (satisfied bits `0x48` fail the order) and a
+sentinel-sector diversion to a loiter path, but repeats branches 1–4
+byte-equivalently; its follow maintenance installs airspace circling (radius
+`0x80` arrival) and arms the same gate bits. The branch-1/branch-2 eligibility
+chain (diplomacy, `0x10` gate, no-chase array, standing-order bits, per-slot
+re-target) is identical.
 
 **Audit note — attack-chase orbit substates (2026-08-26):** the chase handler
 was re-exported and the orbit substate arithmetic is now direct, confirming
@@ -1806,6 +1899,63 @@ ticks it recomputes `clamp(health·100/maxHealth, 0, 100)`, stores it as the
 current severity-sample byte, and shifts the previous sample into the prior-sample byte — the severity input is
 therefore the PREVIOUS 30-tick-window health percentage.
 
+### Closed — the activation/production/yard edge machine [R-UNIT-06 §2] (2026-08-28)
+
+**Established — one byte, one machine.** All of the Activate/Deactivate,
+StartBuilding/StopBuilding edge-form callbacks and the yard-open edge ride a
+single engine-state byte on the unit record, written only through one edge
+machine. The machine takes a bit mask and an on/off value, computes the new
+byte (`byte | mask` or `byte & ~mask`), stores it, and — only when the byte
+actually changed — derives rising and falling edges from the old/new
+difference. Producer-side suppression of unchanged state is exactly this
+change test; there is no per-callback suppression beyond it. Established bit
+assignments: bit 0 = activated (the on/off state port 1 writes); bit 2 =
+yard-open; bit 3 = building/production. The remaining bits of the byte are
+written through the same machine by their producers and are otherwise opaque.
+
+**Established — edge effects, in evaluation order.** The state byte is
+written FIRST; the callbacks are started immediately after but in deferred
+mode (they execute in the visit's normal script drain, per [R-COB-02 §2]):
+
+- Rising bit 0: start the zero-argument `Activate` (deferred), then emit the
+  engine notification code 3.
+- Falling bit 0: start `Deactivate` (deferred), then notification code 4.
+- Rising bit 3: start `StartBuilding` (deferred, zero-argument edge form).
+- Falling bit 3: start `StopBuilding` (deferred).
+- Rising bit 2: emit notification code 14, then walk the unit's registered
+  waiter list — each entry carrying a callable object is invoked with the
+  constant `0x10000` (the yard-open wake).
+- Falling bit 2: notification code 15.
+- On any edge: if the unit belongs to the local player and is selected, mark
+  the battle-interface dirty bit (presentation-only).
+- On any edge, for a computer-player-owned unit: emit network event type
+  `0x11` carrying the unit's slot identity and the NEW engine-state byte.
+
+The callbacks fire AFTER the state mutation in the same visit: the byte the
+machine leaves behind is already visible to any code that runs between the
+machine and the next script drain, while the scripts themselves observe the
+new state one drain later unless a wake flush intervenes.
+
+**Established — the producer set.** The machine's call sites span: the order
+handlers (Stop, the cloak pair, the factory production state machine — which
+raises the building bit on production start after inserting the product's
+GetBuilt record), the load/unload/air executors (a load's first phase raises
+Activate and detaches a carried carrier through the same machine), the
+construction work helper, the mover-mode force helper inside movement
+integration, the per-player economy settlement pass (activation toggles), the
+COB port-1 write arm (so scripts and engine producers share one edge
+semantics), and the damage/capture funnel — whose site re-asserts the CURRENT
+byte as the mask with the "on" value, a resync pattern that converts any
+external byte mutation into proper edges. Bounded census: forty-five call
+sites in the code sections.
+
+**Established — the severity sample is two bytes.** The unit tick's 30-tick
+health sampler keeps a CURRENT and a PRIOR byte, shifting current into prior
+at each boundary; the local `Killed` severity query consumes the PRIOR byte
+(the section above already states the shift; this records that the two bytes
+are distinct storage, so an implementation keeping a single field delivers a
+one-window-newer severity input than retail).
+
 ### 5.2 Movement and medium callbacks
 
 **Established fact:** Edge-triggered callbacks include StartMoving, StopMoving, MoveRate1, MoveRate2, MoveRate3, and setSFXoccupy with a medium-band value. Start/stop callbacks are issued when movement transitions; rate callbacks are issued on movement-tier changes; occupancy callbacks are issued only when the computed band changes.
@@ -1868,6 +2018,64 @@ the code sections. The construction-command slot-form heading variant is not
 among those call sites; it starts the slot and emits its network event
 without touching the flag. Cleanup's flag consumption contract is unchanged
 (section 3.3). <!-- source orchestration-research-cob-callbacks.md -->
+
+### Closed — the StartBuilding argument vector and the stock-script census [R-UNIT-06 §4] (2026-08-28)
+
+**Correction — the record-form StartBuilding payload arrives as the FIRST
+script argument, not the fourth (supersedes [R-ORDER-02 §2]'s arrange
+description as quoted above and the Missing-list entry derived from it).**
+The earlier reading described the emission helper as arranging
+`(0, 0, 1, recordPointer & 0xffff, 0, 0)` and placed the record-pointer value
+"fourth". That tuple is the raw PUSH sequence of the starter call, not the
+script-visible argument vector. The starter's actual parameter map is
+(receiver, wake, arity, cell0, cell1, cell2, cell3): the receiver and wake
+consume the first two pushed zeros, the arity is the pushed `1`, and the four
+pushed cells `(recordPointer & 0xffff, 0, 0, 0)` are written **in order into
+window words 0..3** — four unconditional writes regardless of arity, with the
+logical top set to `arity − 1`. So the record-form emission delivers:
+
+- arity 1, wake clear (deferred), receiver none;
+- window word 0 = the low 16 bits of the issuing order-record pointer (the
+  FIRST script argument — the same slot the heading-form StartBuilding uses
+  for its heading);
+- window words 1..3 = 0.
+
+The same cell map holds for the other arranged callbacks: `TargetCleared`
+carries the slot index in window word 0 (fillers 0, arity 1), and the network
+mirror of a script-call emission carries (unit, callback identity, arity, the
+four cells). Two implementation consequences: a script's `StartBuilding(
+heading)` first parameter IS the record-pointer value on the nine
+nanolathe/assist paths, and an arrange vector shaped `(0, 0, 1, payload, ...)`
+would put a spurious `1` in word 2 and the payload in word 3 — neither
+matches retail.
+
+**Established — stock-script census (the settled TODO(question)).** A full
+decode of every shipped COB (835 scripts across the retail archives — base,
+expansion, patch, mission and tactic packs) locates 133 `StartBuilding`
+functions. Scanning each body for local reads:
+
+- **Zero** scripts read or write the fourth argument cell (window word 3).
+- 49 scripts read the FIRST argument — the shipped mobile-builder and
+  commander build scripts among them: they store it (into a static consumed
+  as the build/turret heading) or turn a piece to it directly; the ten
+  commander-family scripts additionally read the second argument (their
+  second declared parameter).
+- The remaining 84 bodies read no arguments at all.
+
+**Verdict.** The record pointer's low 16 bits are consumed by stock content —
+as a build-heading ANGLE in the 65536 domain, wherever the record-form
+producer fires (the nine nanolathe/assist paths). A placeholder of `0` is
+therefore NOT observationally equivalent on stock content: commander torsos
+and mobile-builder heading statics would take heading 0 instead of the
+pointer-derived value. An implementation cannot reproduce the value
+deterministically from a pointer (retail reads the low half of a heap
+address); the honest contract is: the first argument carries the issuing
+order record's identity value `& 0xffff`, and retail's observable use of it
+is as an arbitrary-but-stable per-record angle. Any Nanolathe substitution
+must be recorded as a divergence, not silently zeroed. The former
+Missing-list question "consumers of the fourth argument" is closed by this
+census; the residual question becomes the semantic NAME of that
+first-argument value (Established behavior, unresolved friendly name).
 
 **Established fact:** Engine-issued value callbacks convert exactly:
 `SetDirection` (issued by the general unit update, guarded on a definition float `>0.0` and a nonzero
@@ -3021,8 +3229,8 @@ unload, pads, and death:
 *Load executor entry gates.* Independent of admission, every phase of the
 canonical load executor re-checks four gates in order before doing work: the
 order's target reference must be non-null; the executor flags word must hold
-none of mask `0x10048`; the target's Y plus its definition's model-top value
-must be SIGNED greater than sea level shifted into 16.16; and the carrier's
+none of mask `0x10048`; the target's Y plus its definition's model
+total-height value must be SIGNED greater than sea level shifted into 16.16; and the carrier's
 cargo-list head must be null — the air-carrier executor requires an EMPTY
 cargo list even though general admission only compares count against
 capacity. Gate failures one and two share the `Transport mission failed`
@@ -3036,7 +3244,7 @@ also code 8; gate four returns code 8 with NO message.
 | 0 | Require a live carrier mover and `canfly` (else 7). Size gate: the target's cached footprint-X WORD, compared signed, must be at or below the carrier definition's `transportsize` BYTE zero-extended; otherwise emit `Unit is too heavy to transport` and return 8. Set status message `Loading`; notify carrier state 3; detach the carrier from ITS own parent when carried; raise Activate; force mover mode 2 from mode 1; queue a point command at the carrier's current X/Z with altitude `cruisealt/2` (signed, round toward zero) and NO arrival radius; status bits `|= 0xE0`. | 1 |
 | 1 | Queue the follow command toward the target with the full `cruisealt` altitude offset and horizontal arrival radius `0x30`; status `= 0x100E8`. | 1 |
 | 2 | Status `Preparing for transport`. Pre-seed the first `QueryTransport` output to `-1` and run the synchronous four-output query (unanswered outputs read 0, so the observed seed is `[-1, 0, 0, 0]`; a missing script leaves `-1`, the root-piece fallback). Retain output 0 as the attach piece; status `= 0x100E8`. | 1 |
-| 3 | Start asynchronous one-argument `BeginTransport` with the exact 32-bit target-definition model-top value, mirrored through the network forwarder; fetch the selected piece's world transform; construct the cargo follow order with altitude offset = NEGATED integer part of that piece's world Y — the cargo hangs below the piece; status `= 0x100EA`. | 1 |
+| 3 | Start asynchronous one-argument `BeginTransport` with the exact 32-bit value of the target definition's model total-height field — the height dword the engine derives from the 3DO bounds at definition load, not an authored FBI key (supersedes this row's earlier "model-top value" wording; see [R-UNIT-06 §3]) — mirrored through the network forwarder; fetch the selected piece's world transform; construct the cargo follow order with altitude offset = NEGATED integer part of that piece's world Y — the cargo hangs below the piece; status `= 0x100EA`. | 1 |
 | 4 interrupted | Interrupt-flag combination present (`flags & 0x42`): start the deferred zero-argument `EndTransport` and return WITHOUT attaching. | 8 |
 | 4 success | Attach the target to the carrier on the queried piece; emit event code 12; queue the climb-away point command at the carrier's current X/Z with altitude `cruisealt`, no radius; status `|= 0xE0`. | 1 |
 | 5 | No work. | 5 |
@@ -3046,13 +3254,16 @@ Successful-load callback order is exactly `QueryTransport` (synchronous) →
 `BeginTransport` (asynchronous) → attachment → event code 12. No successful
 load runs `EndTransport`: that callback fires on later release or on the
 phase-4 interruption edge only. The `BeginTransport` argument is the
-definition model-top field, NOT the attach-piece Y; the negated attach-piece
-Y value belongs solely to the cargo follow-order hang height of phase 3.
+definition's model total-height dword, NOT the attach-piece Y (supersedes the
+earlier "model-top field" wording — see [R-UNIT-06 §3]); the negated
+attach-piece Y value belongs solely to the cargo follow-order hang height of
+phase 3.
 
 *Load and carry.* A successful air load performs synchronous
 `QueryTransport` with four outputs (first cell retained as attach piece) and
-then asynchronous one-argument `BeginTransport` with the exact 32-bit value from
-the target definition's model-top field, mirrored through the network forwarder;
+then asynchronous one-argument `BeginTransport` with the exact 32-bit value of
+the target definition's model total-height field (see [R-UNIT-06 §3]), mirrored
+through the network forwarder;
 attachment uses the queried piece index. The carried-unit branch at the top of
 the occupancy commit slaves cargo each tick to the named attach piece's world
 transform, copies piece heading/pitch and carrier velocity/speed (zeroed if the
@@ -3093,6 +3304,100 @@ application.
 End transport writes cruise altitude and changes transport state only on the
 paths above; landing-pad queries first use the script query and then apply the
 fallback pad selection and failure handling described.
+
+### Closed — attachment state values and transport callback encoding [R-UNIT-06 §3] (2026-08-28)
+
+**Established — the attachment/detachment helper is the sole linkage writer.**
+One helper maintains the carrier/cargo linkage for every caller (transport
+load, unload, carrier-death cascade, save reconstruction, and the factory
+product's builder link): given (child, parent, piece, mode) it validates the
+child (alive, not building-class, no existing carrier) and the parent (alive,
+not self, uncarried), then — attach — records the piece on the child, links
+the child as the new HEAD of the parent's cargo list (each child's sibling
+link pointing at the previous head, so the list is LIFO and the unload release
+detaches the most recently attached cargo first), and — detach — clears the
+child's parent, sibling, and piece fields. After either half it overwrites the
+child's committed mover-mode pair with the request's mode value (unload
+release passes the parked mode; a load's self-detach of a carried carrier
+passes the take-off mode; the ordinary attach passes none/mode 0; the
+movement-mode force helper writes the same field directly). It then wakes the
+"becarried" re-arm path for computer-owned children whose parent is not an
+airbase (which purges the carried unit's queue through the ordinary cleanup),
+and finally deselects the child if it has become ineligible.
+
+**Established — the status word's transport/attachment bits.** Two bits of
+the unit status word are transport-relevant:
+
+- Bit `0x20000` — "carried without a piece link". SET by the attachment half
+  when the attach piece is the reserved no-piece index (piece `0xFF`: cargo
+  riding the carrier without following a piece — the sea-transport
+  re-attach idiom lands here), CLEARED by any attach with a real piece and by
+  every detach.
+- Bit `0x40000000` — a static mirror of the definition's `isairbase` flag,
+  written once by the unit initializer (cleared, then re-derived from the
+  definition bit) and never touched afterwards. It is NOT a dynamic transport
+  bit. Its consumer is the shared selection-eligibility predicate: a unit
+  with a parent reference is selectable only when the parent's status word
+  carries this bit — so cargo aboard an ordinary transport is not selectable,
+  while a child attached to an airbase (a landed pad guest, or a factory
+  product only if the factory definition is an airbase) is. This closes the
+  open question about the parent-status clause of the eligibility predicate.
+
+The attachment linkage fields themselves (parent reference, cargo-list head,
+sibling link, attach piece) are plain fields owned exclusively by the helper
+above; the save block serializes the parent and the piece and the
+reconstruction recursion restores them.
+
+**Established — which script the transport callbacks run on.** Every
+transport callback — `QueryTransport`, `BeginTransport`, `EndTransport`,
+`TransportPickup`, `TransportDrop` — runs on the CARRIER's (executing unit's)
+script. The cargo's script receives nothing on these paths.
+
+**Correction — the `BeginTransport` argument is the cargo definition's model
+TOTAL-HEIGHT dword.** Previous text (this section's phase-3 row and the two
+"Load and carry"/callback-order paragraphs, and the earlier transport packet)
+called it "the target definition's model-top value". There is no authored
+model-top field: the value is the dword the engine derives from the 3DO model
+bounds at definition load — the model's total height (max-Y), stored beside
+the min-Y bound and the height-minus-min derivative. The same dword feeds the
+load entry gate's "Y plus model height above sea level" test. The p1-05-era
+"signed short, sign-extended" reading is also wrong — the full dword is
+passed.
+
+**Established — callback argument cells.** The engine's arrange call carries
+(receiver, wake, arity, and four argument cells) and the four cells are
+written into the callee's window words 0..3 unconditionally, with the logical
+top set to `arity − 1` — so a cell beyond the arity is still physically
+present to the script. Applied to the transport family:
+
+- `QueryTransport`: synchronous four-output query; cell 0 pre-seeded `-1` and
+  copied back into the transport order's retained attach-piece field;
+  remaining cells null (seeded 0, no copy-back).
+- `BeginTransport`: arity 1, cell 0 = the cargo definition's model
+  total-height dword, fillers 0; wake flag set (the start performs the
+  immediate all-slot drain barrier).
+- `EndTransport`: zero-argument, deferred; issued at the load-interrupted
+  edge and, on successful unload release, BEFORE the detach.
+- `TransportPickup` (sea/hover pickup): arity 1, cell 0 = the cargo's stable
+  unit identity (its pool slot id), fillers 0, wake flag set; the engine also
+  emits notification event 12 right after.
+- `TransportDrop` (sea/hover drop): arity 1, cell 0 = the cargo's stable unit
+  identity, cell 1 = the packed drop point (destination X truncated to whole
+  world units in the high half, destination Z integer part in the low half),
+  remaining cells 0 — the position cell is physically present even though the
+  arity byte says one argument.
+- The network mirror of a script-call emission carries (unit, callback
+  identity, arity, the four cells) — the same cell vector the script sees.
+
+**Established — the executors' "status bits" are gate re-arms.** The
+load/unload phase-table writes rendered as `status |= 0xE0` /
+`= 0x100E8` / `= 0x100EA` are writes to the ORDER RECORD's dynamic gate word,
+not to any unit status word: the executor re-arms its own record's gate with
+the movement-service satisfied-bit values (`0x20`/`0x40`/`0x80`/`0x100`/
+`0x200`) so the record re-dispatches when the queued movement reports
+arrival, release, rebind, or the air-marker conditions. The goal-payload
+installers clear exactly those bits when a new goal is installed, which is
+why every rebind starts with a clean satisfied word.
 
 ### 10.3 Patrol and air construction orbit
 
@@ -3175,7 +3480,10 @@ Function identities that a later re-derivation corrected — in particular the m
   threshold, quarter/half/zero standoff binds, the two banded pairs, the
   ±90° randomized orbit direction) with the standoff VALUE itself still
   inference (produced by the weapon-slot engagement-distance helper); the
-  patrol radii are closed in section 8.3.
+  patrol radii are closed in section 8.3; the guard assistance branches,
+  their eligibility comparisons, and the admit-phase anchor draw are closed
+  in [R-UNIT-06 §1] — remaining there: the producers of the guard's re-arm
+  gate bits `0x08`/`0x10` and of the ward's engagement-target link (below).
 - Order behavior when a path is empty, stale, blocked, or budget-delayed:
   closed in [R-ORDER-02 §1] (2026-08-27) — the per-family result-code
   mapping, the masked-out path-status bits, and the bounded-retry census are
@@ -3183,12 +3491,21 @@ Function identities that a later re-derivation corrected — in particular the m
   route that was never published (unreachable goal as rebind loop versus
   silent stall), which needs the movement wrapper's per-tick release-callback
   states.
-- Consumers of the `StartBuilding` script event's fourth argument (the low
-  16 bits of the issuing record's identity, per [R-ORDER-02 §2]) — no retail
-  script consumer traced; the semantic name of the weapon-slot control byte's
-  bit 4 (set by the cleanup-variant clear, cleared by the mid-life variant);
-  and the producer pair behind the pump's satisfied-bit-0x10000 weapon-slot
-  clear (which handler arms that gate bit, what raises the bit).
+- Consumers of the `StartBuilding` script event's fourth argument: CLOSED by
+  [R-UNIT-06 §4] — the premise was wrong (the record-pointer value arrives in
+  the FIRST argument cell, not the fourth; no stock script touches a fourth
+  cell, and 49 stock scripts consume the first cell as a build-heading angle).
+  Residual: a friendly semantic name for that first-argument value.
+  Still open in the same cluster: the semantic name of the weapon-slot
+  control byte's bit 4 (set by the cleanup-variant clear, cleared by the
+  mid-life variant); the producer pair behind the pump's satisfied-bit-0x10000
+  weapon-slot clear; and the producers of the guard re-arm gate bits `0x08`/
+  `0x10` ([R-UNIT-06 §1]) — all one unlocated-writer family.
+- The producer that sets a unit's engagement-target link (the ward-side
+  reference both guard handlers attack toward, restored by save, cleared by
+  the per-tick refresh): consumer semantics are Supported inference
+  ([R-UNIT-06 §1]); the writer was not located in the bounded decompiled set
+  or by instruction-pattern scan.
 - Emission frequency of the nine nanolathe/assist StartBuilding sites
   ([R-ORDER-02 §2]): the tracer pins the call sites to the handlers but not
   their reachability per visit. Nanolathe places the emission once per record

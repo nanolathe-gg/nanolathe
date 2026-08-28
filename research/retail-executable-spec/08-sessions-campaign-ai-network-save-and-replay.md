@@ -2008,11 +2008,309 @@ adjacency; an implementation depending on one must carry the raw bytes
 through the staged image and settle its mapping with the corresponding
 field-isolation probe. [Unknown]
 
+#### R-SAVE-ORDER-01 — Per-unit order records and subtype payloads
+
+This addendum closes the save boundary for the dynamic order list. It
+supersedes the earlier statement that the 58-byte order record was only a
+length observation. The offsets below are positions in a save-file box, not
+native object layout. All integers are little-endian. The main record is
+exactly `0x3A` bytes and is named `u%04xm%04x`, where the first number is the
+parent unit's stable slot and the second is the order sequence emitted by the
+writer. [Established; [01 §6.1], [04 §3.1–§3.3]]
+
+**Main record map.** The first two identifiers are logical pool references;
+they are never native pointers. The twelve words after the two one-byte
+header fields are copied as words, including fields whose high bits are not
+currently named by a consumer.
+
+| Save bytes | Wire form | Restored order state |
+|---|---|---|
+| `0x00..0x01` | `u16` | Parent unit stable slot. It must equal the unit selected by the box name. A mismatch does not prevent retail from allocating/linking a default node; a transactional reader must reject the image before commit. [Established] |
+| `0x02..0x03` | `u16` | Linked unit stable slot, or zero for null. Resolve against the staged fixed-slot unit table after all base units are allocated. The exact order relation represented by this link is subtype/handler-owned and remains Unknown. [Established reference; Unknown relation] |
+| `0x04..0x07` | `u32` | Subtype code. Zero means no `g` payload. Codes 2–6 select the exact subtype sizes below; other nonzero codes are not established and must not be guessed. [Established wire dispatch; Unknown other codes] |
+| `0x08` | `u8` | Descriptor ordinal in the final case-sensitive sorted descriptor table. Zero is the empty/reject descriptor. [Established; [04 §3.1]] |
+| `0x09` | `u8` | Handler-private phase/state byte. Restore without normalization; handlers own its interpretation. [Established] |
+| `0x0A..0x0D` | `u32` | Dynamic gate/wake word copied from the order record. Its named low-bit consumers are the pump's pending/capability gates; retain all bits. [Established; [04 §3.2–§3.3]] |
+| `0x0E..0x11` | `i32` | Deadline tick, with `-1` meaning no deadline. Do not clamp or convert this absolute value. [Established; [04 §3.3]] |
+| `0x12..0x15` | `u32` | Goal X, 16.16 fixed-point. [Established; [04 §3.2]] |
+| `0x16..0x19` | `u32` | Goal Y, 16.16 fixed-point. [Established; [04 §3.2]] |
+| `0x1A..0x1D` | `u32` | Goal Z, 16.16 fixed-point. [Established; [04 §3.2]] |
+| `0x1E..0x21` | `u16,u16` | Guard/fight anchor pair. Preserve both signed 16-bit words; the exact axis labels are handler-owned. [Established wire role; [04 §3.2]] |
+| `0x22..0x25` | `u16,u16` | Cached target-position pair. Preserve both signed 16-bit words; validity is controlled by the gate mask, not by zero/nonzero inference. [Established wire role; [04 §3.2]] |
+| `0x26..0x29` | `u32` | General parameter 1. Family meanings include weapon slot/stance, build definition/template index, and guard standoff; the descriptor handler is authoritative. [Established; [04 §3.2]] |
+| `0x2A..0x2D` | `u32` | General parameter 2. Commonly remaining build count or an operation-specific progress/stance value. Preserve exactly. [Established wire copy; [04 §3.2]] |
+| `0x2E..0x31` | `u32` | General parameter 3. For mobile build this is the blocked-area retry counter; other family meanings are handler-owned. [Established; [04 §3.2]] |
+| `0x32..0x35` | `u32` | Static descriptor/queue flags. In particular, the `0x40000` bit selects the rear segment; active, purge, tombstone, and other bits are retained for queue behavior. [Established; [04 §3.1–§3.3]] |
+| `0x36..0x39` | `u32` | Accumulated satisfied-gate bits. Restore before the first pump so a saved wake/satisfaction state is not silently discarded. [Established; [04 §3.2–§3.3]] |
+
+The descriptor's canonical name is written as the string item
+`${box}_name`. On load, a present name is preferred; an absent name permits
+ordinal lookup. A present but unknown name leaves the newly allocated order at
+its defaults rather than silently selecting a different descriptor. The
+ordinal is therefore a compatibility fallback, not a second interpretation of
+an unresolvable name. The empty descriptor (ordinal zero or empty name) is a
+reject/null identity and must not be pumped as a real command. [Established;
+[04 §3.1], [01 §6.1]]
+
+For build-family orders, the definition name is carried by the existing
+`UTYPENAME%4d` string table. It remaps the definition index in parameter 1
+after the current catalog is loaded; an unknown definition remains unresolved
+and is a validation failure for a transactional restore. This side channel is
+not an order descriptor name and must not be used to infer a command ID.
+[Established; [02 §5], [05 "Factory production lifecycle"]]
+
+**Queue segment and order.** The descriptor's static `0x40000` bit chooses the
+secondary/rear list; all other records use the primary/front list. The loader
+enumerates sequence numbers in ascending order and inserts records in that
+order within each segment. It does not sort by descriptor, subtype, target, or
+creation tick. Consequently the stable order is the writer's traversal order,
+with primary and secondary relative order preserved independently. The active
+marker is a serialized flag and must be validated against the queue invariant
+(at most one active primary record); queue reconstruction must never derive it
+from a native next pointer. An image with no primary record has no active
+primary marker. [Established queue split and flag copy; Supported inference for
+writer traversal/order from sequential box naming and list insertion; [04
+§3.3]]
+
+Stage records detached from the live queue, resolve `0x02` and every subtype
+unit identifier against the complete staged unit table, then bind the queue to
+the owning session before making either list reachable. The binding must be in
+place before the first order pump; no post-load world sweep is required or
+permitted. This is the transactional equivalent of retail's per-unit
+reconstruction, which allocates a node, links it into the selected list, and
+then performs handler/presentation registration. [Established retail order;
+Supported inference for the pre-commit binding boundary; [01 §4.4], [04
+§3.3–§3.5]]
+
+**Subtype boxes.** A nonzero subtype code names one additional box `${box}g`.
+The reader requires the exact size shown. Every leading “leak” range is copied
+from the writer's scratch/prefix area but has no established consumer and is
+discarded by the retail reader; it is not a semantic field. The remaining
+words are exact payload positions. Where direct evidence identifies a unit
+identifier, it is resolved as a stable slot only after all units exist. All
+other payload words are opaque subtype state until their handler defines them.
+
+| Code | Exact size | Save payload map |
+|---:|---:|---|
+| `2` | `0x36` | `0x00..0x07`: leaked prefix, discard. `0x08..0x09`: unit stable slot. `0x0A..0x19`: 16-byte temporary/reference area; the reader consumes it as scratch and does not install it as a pointer. `0x1A..0x1B`: second unit stable slot. `0x1C..0x25`: five little-endian `u16` payload words. `0x26..0x35`: four little-endian `u32` payload words. The semantic subtype name and the relation represented by either unit are Unknown. [Established widths and reference positions; Unknown meanings] |
+| `3` | `0x2A` | `0x00..0x07`: leaked prefix, discard. `0x08..0x09`: unit stable slot. `0x0A..0x0B`: one `u16` payload word. `0x0C..0x23`: six `u32` payload words. `0x24..0x29`: three `u16` payload words. The unit reference's subtype relation is Unknown. [Established widths and reference position; Unknown meanings] |
+| `4` | `0x10` | `0x00..0x03`: leaked prefix word, discard. `0x04..0x0F`: three `u32` payload words. No logical reference is established. [Established] |
+| `5` | `0x18` | `0x00..0x03`: leaked prefix word, discard. `0x04..0x17`: five `u32` payload words. No logical reference is established. [Established] |
+| `6` | `0x14` | `0x00..0x03`: leaked prefix word, discard. `0x04..0x13`: four `u32` payload words. No logical reference is established. [Established] |
+
+The subtype table deliberately does not assign names such as target, weapon,
+path, or construction state to the opaque words. The bounded writer/reader
+census proves widths, copy positions, and the two code-2 plus one code-3 unit
+references, but it does not prove the subtype dispatcher's public vocabulary.
+Those words must be retained in a staged raw payload (or a typed structure
+whose unknown fields are losslessly preserved). Treating the 16-byte code-2
+temporary area as a native pointer would create a dangling reference and is
+specifically incorrect. [Established; [04 §3.2], [06 §11.1]]
+
+**Fix-up and failure rules.** The minimum deterministic reconstruction order is:
+
+1. Validate the `0x3A` main-box length, parent ID, descriptor side channel,
+   subtype code/length pair, and all referenced stable IDs against the staged
+   unit image. Validate sequence numbers as nonnegative box suffixes and keep
+   their ascending order; do not compact missing records silently.
+2. Allocate a zeroed order image with the owning unit, descriptor identity,
+   phase, twelve words, and unresolved logical IDs. Resolve the build name and
+   remap parameter 1 before the node becomes reachable.
+3. Decode each exact-size subtype into its staged payload, retaining opaque
+   words and recording the code-2/code-3 unit references.
+4. Link each node into its selected primary or secondary segment in sequence
+   order, establish exactly one primary active marker when primary is nonempty,
+   then install session QueueBinding and subtype target references.
+5. Run the established order registration/derived fix-up, followed by script
+   and visibility publication at the enclosing unit transaction boundary. The
+   first authoritative pump runs only after publication.
+
+Retail is permissive and non-transactional at these boundaries: a short main
+box still leaves an allocated node with later words at defaults; a parent-ID
+mismatch can leave a default node linked; and a wrong-size subtype leaves its
+subtype object at defaults after the exact read fails. A missing or unknown
+descriptor name likewise does not abort the retail load. A transactional
+reader must instead reject these cases before commit so a malformed image
+cannot partially replace a live queue. [Retail behavior Established;
+transactional rejection Supported inference; [01 §4.4], [08 "Unit and script
+records"]]
+
+The save does not contain native next links, queue anchors, active-marker
+ownership, handler callback state, movement path objects, or presentation
+payload pointers. It also does not persist any random stream state. These are
+rebuilt or reset by the owning session/order/script passes; preserving leaked
+prefix bytes cannot restore them. [Established omission; [01 §4.4], [04 §3.3,
+§3.5]]
+
+**Closure and residual probes.** The wire contract is sufficient for a
+transactional *wire-level* queue image: a loader can validate exact lengths,
+preserve every serialized word, maintain primary/secondary sequence, and fix
+up all explicitly represented unit IDs before publication. It is not yet
+sufficient to expose semantic typed constructors for subtype codes 2–6. The
+remaining Unknowns are the subtype family names, the relation of each unit
+reference, the meaning of code-2's temporary 16 bytes, and the meanings of
+the opaque numeric payload words. They must remain raw/opaque until a bounded
+handler census or retail probe closes them. [Established closure boundary;
+Unknown semantics]
+
+Implementation-ready probes are small and format-local: round-trip one record
+for each code at exactly its accepted size; change one payload word at a time;
+test code-2/code-3 references as zero, valid, missing, duplicate, and cyclic;
+reverse sequence box order and assert per-segment insertion order; omit the
+name side channel, use an unknown name with a valid ordinal, and use an
+unknown ordinal with a valid name; truncate the main record and each subtype
+by one byte; and verify that no leaked prefix byte or short-read residue
+changes the staged semantic fields. Assert that all tests fail before commit
+for a transactional reader, while a retail-compatibility fixture may record
+the documented partial/default result separately. [Supported inference for
+transactional assertions]
+
 ### Feature records
 
-Features are partitioned into normal, animated, and 3D records. Loading maps
-save-local feature type names to the current feature catalog and recreates
-footprints through the normal placement service.
+#### R-SAVE-FEATURE-01 — Feature record maps and staged reconstruction
+
+This addendum closes the feature portion of the battle image. It supersedes
+the preceding one-sentence description of the three partitions. The offsets
+below are positions inside save-file boxes, not executable layout. All integer
+fields are little-endian. The save contains a type-name side channel and a
+plot census; it does not contain the feature allocator's free list. [Established;
+[05 "Feature instance and terrain cell"]]
+
+**Writer census and stable order.** The `Features` writer first emits
+`Feature Type Names`, one 128-byte NUL-padded copy of each currently compiled
+feature definition name, in catalog order. It then scans the map's feature
+cells in row-major order (`z` outer, `x` inner). A cell is eligible only when
+its feature reference is below the reserved void/fringe range; empty cells and
+fringe/void sentinels do not produce records. The live definition class and
+the cell's animation-present bit select the destination box:
+
+| Box | Record size | Map |
+|---|---:|---|
+| `Normal Features` | 8 bytes | `0x00..0x01` cell X (`u16`), `0x02..0x03` cell Z (`u16`), `0x04..0x05` saved catalog ordinal (`u16`), `0x06..0x07` anchor/instance word copied from the cell (`u16`). |
+| `Animating Features` | 10 bytes | The first eight bytes are X, Z, and saved catalog ordinal as above; `0x06..0x07` is the live animation-state word, `0x08` is the live animation frame byte, and `0x09` contains the saved animation selector in its low nibble plus the live countdown's high nibble in its high nibble. |
+| `3D Features` | 26 bytes | `0x00..0x05` are X, Z, and saved catalog ordinal; `0x06..0x07` is the live animation-state word; `0x08..0x0B`, `0x0C..0x0F`, and `0x10..0x13` copy three live state words; `0x14..0x17` copies a fourth live state word; `0x18..0x19` copies a final live state halfword. |
+
+The three count items are `Number of Normal Features`, `Number of Animating
+Features`, and `Number of 3D Features`. Their values are the number of
+records appended to their respective boxes, not the number of catalog types
+or allocator slots. The writer classifies an object-backed definition as 3D;
+otherwise the cell animation bit distinguishes normal from animating. A
+feature footprint can cover multiple cells, but only the live anchor cell is
+eligible, so one live feature produces one record. [Established]
+
+The 3D words at `0x08..0x19` are copied losslessly, but the bounded census
+does not establish public names for them. They are live feature state consumed
+by the 3D/animation path, not coordinates that may be recomputed from X/Z or
+terrain. Keep them as opaque words in a staged image until a field-isolation
+trace identifies their semantics. The same rule applies to the animation-state
+word: its wire position and restoration are established, while its complete
+internal interpretation is not. [Established wire copy; Unknown semantic
+names]
+
+**Type-name remapping.** On load, the name box is interpreted as consecutive
+128-byte names; a trailing remainder is ignored. Each saved ordinal is mapped
+case-insensitively in this order:
+
+1. If the ordinal is within the current catalog and the name at that ordinal
+   matches, retain that ordinal.
+2. Otherwise scan the complete current catalog in catalog order and use the
+   first matching name.
+3. If no current definition matches, ask the feature-definition loader to
+   parse that name from the feature data. A newly compiled definition is then
+   the mapping result; if parsing fails, the mapping is the empty sentinel.
+
+When the name box is absent, the reader uses the current catalog's ordinal
+identity for the mapping table. A present short or long name box changes only
+the entries represented by complete 128-byte names; it does not establish a
+new feature identity scheme. The saved ordinal is therefore an optimization
+when the same catalog entry still has the same name, not permission to bind a
+renamed definition by number. [Established]
+
+The feature-definition loader also performs its normal successor fix-up after
+catalog entries are available. Missing definitions are not replaced by a
+different catalog entry: the remap remains empty and the corresponding
+placement has no effect on the retail path. The catalog can consequently gain
+a definition while a save is being read; a transactional implementation must
+stage that catalog change and discard it on a failed load. [Retail behavior
+Established; transactional consequence Supported inference; [05 "Feature
+catalog"]]
+
+**Reader and feature relationships.** The reader processes the three count
+and box pairs in the order normal, animating, then 3D. Every complete record
+is converted from its saved cell coordinates through the ordinary feature
+placement/stamping service. That service is the single owner of clipping,
+collision/removal policy, allocator acquisition, anchor/filler stamping,
+occupancy notification, and any feature-class presentation side effect; the
+save reader does not write the plot grid directly. This preserves terrain
+footprints and derived occupancy through the same path used by map load,
+replacement, fire, reclaim, and wreck creation. [Established; [05 "Feature
+instance and terrain cell"]]
+
+After a normal record is stamped, its saved anchor/instance word is copied
+back to the anchor cell. After an animating record is stamped, the low nibble
+of its state byte selects the already-established transition family: zero
+restarts the burn sequence, one selects the death transition, and two selects
+the reclaim transition. The reader then restores the saved animation-state
+word, frame byte, and countdown high nibble into the allocated live record.
+Other selector values do not establish a fourth transition and must remain
+uninterpreted. A 3D record passes its three state words, fourth state word,
+and final halfword through the placement path and then restores its animation
+state word. [Established; [05 "Feature burning"], [05 "Feature sinking"]]
+
+Because stamping replays the normal footprint operation, terrain and derived
+occupancy are rebuilt from the saved anchor coordinates and current feature
+definition footprint. The save does not preserve a separate free list,
+allocator head, or per-cell filler list; those are reconstructed by placement.
+Feature animation state is simulation state: the feature tick advances it in
+the authoritative tick domain, including when presentation does not draw the
+feature. Fire, successor, reclaim, and sinking behavior therefore continue
+from the restored live record and are not inferred from a renderer frame.
+[Established; [01 §4.4], [05 "Feature instance and terrain cell"]]
+
+**Retail malformed-input boundary.** The retail reader compares the bytes
+available for each record with its family size. A short normal, animating, or
+3D record is skipped without a placement attempt. A negative family count
+performs no iterations. A name-box size that is not a multiple of 128 ignores
+the incomplete tail. Allocation failure for the remap table or feature
+placement follows the ordinary silent no-placement path; the reader does not
+retry with another slot or validate the placement result. A coordinate outside
+the map reaches the normal cell lookup/stamping path rather than a dedicated
+save diagnostic; the bounded census does not establish a safe retail result
+for that case. Duplicate coordinates likewise have no save-specific duplicate
+check and are handled by normal sequential stamping and collision policy.
+[Established for the observed reader branches; Unknown for the resulting
+state of malformed out-of-range or duplicate records]
+
+These permissive paths are not a transactional contract. The CRD-009 loader
+must validate every complete record's length, coordinate, remapped type,
+family classification, and duplicate anchor before touching the live terrain,
+feature pool, catalog, or occupancy cache. It must stage the records in the
+writer's family order and row-major order, run placement against the staged
+world, and publish only after every family and every derived footprint has
+validated. Any failure discards the staged catalog additions, feature slots,
+animation records, terrain changes, and occupancy notifications together.
+This is an implementation boundary derived from the required whole-session
+transaction; retail's own loader is incremental and has no rollback. [Retail
+mutation order Established; transactional boundary Supported inference; CRD-009]
+
+**Closure and remaining unknowns.** The wire image is implementation-ready
+for lossless feature staging: names remap by case-insensitive identity, family
+sizes and fields are fixed, stable order is row-major within each family, and
+placement rebuilds terrain relationships and allocator state. The remaining
+unknowns are limited to the semantic names of the five 3D state values, the
+resulting retail state for out-of-range coordinates and duplicate anchors, and
+whether any unrecovered nonstandard snapshot path serializes additional
+feature state. Standard battle save/load has no such writer in the bounded
+account census. [Established closure boundary; Unknown residuals]
+
+Implementation probes should round-trip one record of each family at its exact
+size; alter each 3D word independently; reorder records within and across
+families; omit, truncate, and extend the name table; use renamed and unknown
+definitions; exercise selector nibbles 0, 1, 2, and an unknown value; and
+provide duplicate or out-of-range anchors. Transactional tests should assert
+that every malformed case leaves the live session and catalog unchanged,
+while a separate compatibility fixture may record the retail skip/no-op
+behavior. [Supported inference for transactional assertions]
 
 ### Player records
 
@@ -2299,7 +2597,7 @@ The following work remains before this category is a complete retail design:
   behavior, or establish their bounded absence. Host-authority migration is
   closed as deterministic selection of the numerically greatest DPID among
   eligible roles.
-- Complete the byte layout inside each bulk binary box beyond the now-established lengths, descriptor groups, and sampled field maps (unit 184-byte `0xB8` records with three 24-byte embeddings, 58-byte order records and subtype codes, `Feature Type Names` 128-byte names, normal 8/animating 10/3D 26-byte feature records, radar preview header). Many unit/order words still lack retail source names and are typed by width and exact runtime offset. The container, account inventory, and scalar entry names are established.
+- Complete the remaining semantic mappings inside the bulk binary boxes. Unit `0xB8` records, their three 24-byte embeddings, and the `0x3A` order wire record plus subtype lengths and copy positions are now closed by R-SAVE-UNIT-01, R-SAVE-WEAPON-01, and R-SAVE-ORDER-01. The remaining order gap is intentionally limited to subtype family names and the meanings of opaque subtype words/relations; `Feature Type Names` 128-byte names, normal 8/animating 10/3D 26-byte feature records, and the radar preview header remain separately bounded. Many unit/order words still lack retail source names and must stay opaque rather than being typed by width. The container, account inventory, and scalar entry names are established.
 - Close script-thread and operand-stack persistence beyond the established record: the COB persistence family is byte-exact (identity word, eight-snapshot blocks with one zeroed word per block, stack words, per-piece records whose two gap words leak stack bytes into per-piece virtual setters); the residual is the semantic naming of the individual snapshot words (local versus static versus control), which belongs to the script/COB lane.
 - Path, effect, projectile, and AI-history persistence: closed as a bounded absence for standard battle saves (no writers in the reachable save graph; the projectile pool is reset before reconstruction; path working state is recomputed; effects and AI history are omitted). Trigger, radar-preview, mapping, terrain-metal, feature, attachment, and order persistence are established.
 - Indirect serialization of the simulation/CRT random states: **closed** — the writer census over the complete reachable save graph finds zero writers for either state; the scheduler's fractional carry is the only indirect persistence (the 28-byte block). [p1-13 §5]

@@ -11,7 +11,7 @@
 // position, already-visited waits for next tick; freed slot immediately reusable
 // via lowest-free scan, no generation counter [01 §4.4]. A unit killed during
 // projectile processing retains state and final deletion is deferred to
-// slot-end death handling or ledger cleanup [01 §4.4].
+// slot-end death handling; explicit TeardownCleanup is teardown-only [01 §4.4].
 //
 // Per-unit micro-order within one visit [04 "unit sweep"][01 §4.4]:
 //  1. general unit update (StepPreUpdate) — exposed as boundary
@@ -34,8 +34,8 @@
 //	    }
 //	})
 //
-// Dead units cannot be stepped by later stages: StepPreUpdate is a no-op
-// when NeedsDeathFinalization is true or slot not alive [04 "unit sweep"].
+// A live death-marked unit is still stepped by normal stages; only the final
+// slot-end call retires it [04 "unit sweep"]. A freed slot cannot be stepped.
 // Death hooks and pool free happen exactly once via FinalizeDeath; second
 // call is a no-op [01 §4.4].
 package units
@@ -105,9 +105,8 @@ func (w *World) VisitActiveSlots(fn func(SlotVisit)) {
 // StepPreUpdate executes the per-unit pre-update/status work for the given
 // handle [04 "unit sweep"][01 §4.4]. It is the explicit first boundary call
 // that the central loop runs inside VisitActiveSlots before weapon/COB/
-// orders/movement stages. Dead units cannot be stepped: if the slot is not
-// alive, already Dying, or NeedsDeathFinalization, this is a no-op [04 "unit
-// sweep"].
+// orders/movement stages. A freed slot cannot be stepped; a live Dying unit
+// still reaches the normal stage sequence [04 §5.4].
 func (w *World) StepPreUpdate(handle pool.Handle, tick uint32) {
 	if w == nil || w.pool == nil || handle == 0 {
 		return
@@ -123,17 +122,11 @@ func (w *World) StepPreUpdate(handle pool.Handle, tick uint32) {
 	if u == nil || !u.Alive {
 		return
 	}
-	if u.Dying {
-		return
-	}
-	// Also respect death finalization pending: if NeedsDeathFinalization true,
-	// the unit is already latched dying and must not be stepped again.
-	// (Dying check above already covers it.)
 	w.unitPreUpdate(u, tick)
 }
 
 // NeedsDeathFinalization reports whether the handle's unit is latched Dying
-// and still Alive, needing slot-end death handling / ledger cleanup finalization
+// and still Alive, needing slot-end death handling finalization
 // [01 §4.4][04 "unit sweep"]. After FinalizeDeath it returns false because the
 // slot is freed [P0-16 §3.4].
 func (w *World) NeedsDeathFinalization(handle pool.Handle) bool {

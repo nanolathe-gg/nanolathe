@@ -55,7 +55,12 @@ func TestPhase2ComputerDeathUsesConstructedManagerRNG(t *testing.T) {
 	if got := s.SimRNG().Draws(); got != before+1 {
 		t.Fatalf("phase-2 death draws=%d, want one unit-loss draw", got-before)
 	}
-	wantDeadline := uint32(1 + 30 + wantOffset)
+	// SeedSessionRNG is the battle-entry boundary and resets the authoritative
+	// clock to tick zero [01 §7.1][R-CORE-02]. The phase receives tick one,
+	// but the death hook reads the reset session clock, so the throttle's
+	// deadline is based on zero rather than the caller's phase argument. The
+	// previous expectation incorrectly used one here.
+	wantDeadline := uint32(30 + wantOffset)
 	if got := mgr.UnitLossDeadline(); got != wantDeadline {
 		t.Fatalf("unit-loss deadline=%d, want %d", got, wantDeadline)
 	}

@@ -9,11 +9,11 @@ import (
 	"github.com/nanolathe/nanolathe/internal/triggers"
 )
 
-// TestStepOrderPathPublicationAfterMovement locks an observable phase
-// relationship: the unit sweep submits a new move request, phase-5 path work
-// publishes its route only after that sweep, and movement consumes it on the
-// following tick. If path work regresses before the unit sweep, the unit moves
-// on the first tick and this outcome fails [01 §4.4][04 §7.3].
+// TestStepOrderPathPublicationAfterMovement locks the corrected observable
+// relationship: phase 2 integrates movement, then phase 5 performs path
+// publication. A newly admitted move therefore can advance on the first
+// tick, while the resulting route is visible at the phase-5 boundary [01
+// §4.4][04 §7.3].
 func TestStepOrderPathPublicationAfterMovement(t *testing.T) {
 	rng.SeedGlobal(0x1234, 0x5678)
 	s := newLoopTestSession(t, 1)
@@ -35,8 +35,8 @@ func TestStepOrderPathPublicationAfterMovement(t *testing.T) {
 	startX, startZ := u.X, u.Z
 	s.Clock.ScaledAnchor = 0
 	s.Step(1)
-	if u.X != startX || u.Z != startZ {
-		t.Fatalf("unit moved before phase-5 route publication: start=(%d,%d) got=(%d,%d)", startX.Raw(), startZ.Raw(), u.X.Raw(), u.Z.Raw())
+	if u.X == startX && u.Z == startZ {
+		t.Fatalf("unit did not move during phase-2 integration: start=(%d,%d) got=(%d,%d)", startX.Raw(), startZ.Raw(), u.X.Raw(), u.Z.Raw())
 	}
 	route := s.Movement.Routes[u.Handle]
 	if route == nil || !route.Active || route.Count == 0 {
@@ -44,7 +44,7 @@ func TestStepOrderPathPublicationAfterMovement(t *testing.T) {
 	}
 	s.Step(2)
 	if u.X == startX && u.Z == startZ {
-		t.Fatalf("published route was not consumed by the next unit sweep")
+		t.Fatalf("published route was not consumed across the next unit sweep")
 	}
 }
 

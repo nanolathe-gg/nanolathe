@@ -146,7 +146,7 @@ func TestLoop_SlotCreationSameTickVisibility(t *testing.T) {
 	// To make behind, free h0 and allocate new unit that reuses h0's slot (lowest free)
 	s.Units.Destroy(h0, units.DeathKilled)
 	// Finalize death via cleanup to free slot
-	s.Units.Cleanup()
+	s.Units.TeardownCleanup()
 	// h0 slot is now free; next allocation for player 0 will reuse lowest free which is h0's old slot (earliest)
 	// Create a new unit after we have already visited player 0 in a new tick's VisitActiveSlots second half?
 	// Instead we can test that allocation during late visit into earlier slot is NOT visited same tick

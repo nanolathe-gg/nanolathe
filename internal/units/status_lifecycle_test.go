@@ -97,13 +97,20 @@ func TestClassifierEligibilityStatusLifecycle(t *testing.T) {
 		observedAtDeath = dead.Flags
 	}
 	world.Destroy(h, DeathKilled)
+	if observedAtDeath != 0 {
+		t.Fatalf("OnDeath fired at Destroy, want deferred finalization: status=%08x", observedAtDeath)
+	}
+	if !world.NeedsDeathFinalization(h) {
+		t.Fatal("death mark should remain pending until finalization")
+	}
+	world.FinalizeDeath(h, 1)
 	if observedAtDeath&ClassifierEligibleStatus == 0 {
 		t.Fatalf("OnDeath observed status=%08x, want bit before finalization", observedAtDeath)
 	}
-	if u.Flags&ClassifierEligibleStatus == 0 {
-		t.Fatalf("death mark cleared classifier bit before finalization: %08x", u.Flags)
+	if u.Flags&ClassifierEligibleStatus != 0 {
+		t.Fatalf("finalization left classifier bit set: %08x", u.Flags)
 	}
-	world.Cleanup()
+	world.TeardownCleanup()
 	if u.Flags&ClassifierEligibleStatus != 0 {
 		t.Fatalf("cleanup left classifier bit set: %08x", u.Flags)
 	}

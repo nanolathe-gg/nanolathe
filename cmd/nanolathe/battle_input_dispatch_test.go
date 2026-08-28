@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 )
 
 func TestStopDispatchHasNoContextualOriginOrder(t *testing.T) {
@@ -88,6 +89,10 @@ func TestTypedOrderCommandResolvesTargetHandleAtApplication(t *testing.T) {
 	replaceSelectionForTest(t, b, attacker)
 	target := placeUnit(b, "armsolar", numeric.Fixed(16*65536), numeric.Fixed(16*65536))
 	target.Owner = 1
+	// Foreign targets require committed coverage; the picker must not inspect
+	// the live pool as a visibility bypass [03 §3.2][07 §8].
+	b.sess.Vis = visibility.New(b.sess.World, 0)
+	b.sess.Vis.SetLocal(0)
 	applyPendingBattleCommands(b)
 	sx, sy := screenPos(b.cam, target)
 	b.orderSelected(3, sx, sy, false)

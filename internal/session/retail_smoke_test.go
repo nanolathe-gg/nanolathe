@@ -107,7 +107,11 @@ func retailUnit(s *Session, owner uint8, key string) *units.Unit {
 }
 
 func stepRetail(s *Session, ticks int) {
-	for tick := 0; tick < ticks; tick++ {
+	// The first dispatch completes loading and the next dispatch runs the
+	// state-6 handler before ticking [08 "Session states"] C2. Include that
+	// boundary call so this helper advances the requested number of
+	// authoritative ticks rather than silently producing ticks-1.
+	for tick := 0; tick <= ticks; tick++ {
 		s.Step(int32(tick))
 	}
 }
@@ -215,8 +219,25 @@ func TestRetailCombatPublishesProjectileAndDeath(t *testing.T) {
 		t.Fatal("CORE commander disappeared before explicit death")
 	}
 	s.Units.Destroy(enemy.Handle, units.DeathKilled)
+	// Destroy latches Dying immediately; the unit remains alive until the
+	// phase-2 slot-end finalization and cleanup [01 §4.4][04 §2.4]. The old
+	// assertion treated the latch as immediate pool removal.
+	if !enemy.Dying {
+		t.Fatal("destroyed authored commander did not latch Dying")
+	}
+	beforeTick := s.Clock.GlobalTick
+	// The next authoritative tick runs phase 2 and finalizes the deferred
+	// death; Destroy must not remove the unit in the calling phase [01 §4.4]
+	// [04 §2.4].
+	s.Step(40)
+	if s.Clock.GlobalTick <= beforeTick {
+		t.Fatalf("deferred death did not advance an authoritative tick: before=%d after=%d", beforeTick, s.Clock.GlobalTick)
+	}
 	if enemy.Alive {
-		t.Fatal("destroyed authored commander remains alive")
+		t.Fatal("destroyed authored commander remained alive after phase-2 finalization")
+	}
+	if got := retailUnit(s, 1, retailCORE); got != nil {
+		t.Fatalf("destroyed authored commander remained present after phase-2 finalization: %#v", got)
 	}
 }
 

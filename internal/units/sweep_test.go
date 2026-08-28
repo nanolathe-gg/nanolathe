@@ -133,6 +133,38 @@ func TestFreeCurrentDoesNotSkip(t *testing.T) {
 	}
 }
 
+// TestDeathDuringOwnVisitFinalizesAtVisitEnd models a lethal stage occurring
+// during the unit's own phase-2 visit: the mark remains live for the rest of
+// that visit, then the slot-end finalizer fires exactly once [01 §4.4].
+func TestDeathDuringOwnVisitFinalizesAtVisitEnd(t *testing.T) {
+	world := NewSliced(4, nil)
+	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
+	h, err := world.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks := 0
+	world.OnDeath = func(pool.Handle, DeathCause, *Unit) { hooks++ }
+	world.VisitActiveSlots(func(v SlotVisit) {
+		if v.Handle != h {
+			return
+		}
+		world.Destroy(h, DeathKilled)
+		if world.Unit(h) == nil || !world.NeedsDeathFinalization(h) {
+			t.Fatal("death mark must remain live and pending during its own visit")
+		}
+		if hooks != 0 {
+			t.Fatal("death hook fired before slot-end finalization")
+		}
+		if result := world.FinalizeDeath(h, 1); !result.Freed || !result.HookFired {
+			t.Fatalf("slot-end finalizer result=%+v, want freed and hook", result)
+		}
+	})
+	if hooks != 1 || world.Unit(h) != nil {
+		t.Fatalf("post-visit hooks=%d unit=%v, want one hook and freed slot", hooks, world.Unit(h))
+	}
+}
+
 // TestAllocationDuringTraversal follows same-tick rule: new unit ahead visited
 // same tick, behind waits [01 §4.4].
 func TestAllocationDuringTraversal(t *testing.T) {
@@ -223,8 +255,8 @@ func TestFinalizeDeathExactlyOnce(t *testing.T) {
 	world.OnDeath = func(_ pool.Handle, _ DeathCause, _ *Unit) { hookCount++ }
 	// Mark dying via Destroy
 	world.Destroy(h, DeathKilled)
-	if hookCount != 1 {
-		t.Fatalf("Destroy should fire hook once, got %d", hookCount)
+	if hookCount != 0 {
+		t.Fatalf("Destroy should defer hook until finalization, got %d", hookCount)
 	}
 	if !world.NeedsDeathFinalization(h) {
 		t.Fatalf("NeedsDeath should be true after Destroy")
@@ -233,8 +265,8 @@ func TestFinalizeDeathExactlyOnce(t *testing.T) {
 	if !res.Freed {
 		t.Fatalf("first FinalizeDeath should free")
 	}
-	if res.HookFired {
-		t.Fatalf("hook should not fire again via FinalizeDeath when already fired via Destroy (deduplicated)")
+	if !res.HookFired {
+		t.Fatalf("FinalizeDeath should fire deferred hook")
 	}
 	// hookCount should still be 1
 	if hookCount != 1 {

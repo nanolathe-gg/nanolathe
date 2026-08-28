@@ -993,6 +993,8 @@ for in-bounds map geometry.
 
 **Established fact:** No flame-specific projectile integrator was found. Burn-blow controls selected steering-failure and expiry outcomes. End-smoke changes impact presentation without suppressing damage.
 
+**Cross-reference — no combat producer on the presentation flame strip (2026-08-28, established in [03 "R-LAYER §4"]):** the renderer's strip-5 "flame" objects are spawned solely by the Teleport order-state handler as the teleport visual, and the strip-5 burning-feature smoke by the feature-fire walker. No projectile impact class, fire-damage application, or building burning state produces a strip-5 flame event, so flame render types, `firestarter`, and feature fire have no producer on that strip. The authored-relationship unknowns below are unaffected.
+
 **Established fact:** Persistent feature fire is a separate post-damage record system, not a projectile family. Radial feature damage can ignite only when feature fire is globally enabled, the feature type is flammable, and the weapon firestarter value is nonzero. Active fire records animate, emit smoke, expire, and can spread to eligible nearby or wind-selected feature cells using simulation RNG. This is feature-fire spread, not beam or lightning chaining.
 
 ## 7. Projectile timers and motion details

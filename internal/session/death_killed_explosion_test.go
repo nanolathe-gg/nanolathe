@@ -85,6 +85,7 @@ func TestDeathKilledCorpseDepth(t *testing.T) {
 	u.SetScript(vm)
 
 	s.Units.Destroy(h, units.DeathKilled)
+	s.Units.FinalizeDeath(h, 1)
 	found := false
 	for _, inst := range s.Features.Instances() {
 		if inst.Def != nil && inst.Def.CanonicalKey == "heap3" {
@@ -105,6 +106,7 @@ func TestDeathKilledCorpseDepth(t *testing.T) {
 	u2.SetScript(vm2)
 	prevCount := len(s.Features.Instances())
 	s.Units.Destroy(h2, units.DeathKilled)
+	s.Units.FinalizeDeath(h2, 1)
 	if len(s.Features.Instances()) != prevCount {
 		t.Fatalf("remaining non-zero should force variant 0 no corpse [06 §12.1] C24, got %d new instances", len(s.Features.Instances())-prevCount)
 	}
@@ -180,6 +182,7 @@ func TestDeathExplosionDamagesNeighbor(t *testing.T) {
 
 	healthBefore := uNbr.Health
 	s.Units.Destroy(hExpl, units.DeathKilled)
+	s.Units.FinalizeDeath(hExpl, 10)
 	if uNbr.Health >= healthBefore {
 		t.Fatalf("exploding death should damage neighbor health %d -> %d [06 §12.1] DoExplosion", healthBefore, uNbr.Health)
 	}
@@ -208,6 +211,7 @@ func TestDeathExplosionDamagesNeighbor(t *testing.T) {
 	uExpl2.X = world.CellToWorld(12)
 	uExpl2.Z = world.CellToWorld(10)
 	s.Units.Destroy(hExpl2, units.DeathKilled)
+	s.Units.FinalizeDeath(hExpl2, 10)
 	if uNbr2.Alive && !uNbr2.Dying {
 		if uNbr2.Health >= 10 {
 			t.Fatalf("lethal explosion should kill or damage neighbor2 health %d", uNbr2.Health)
@@ -253,25 +257,30 @@ func TestKilledDedupAcrossHandleReuse(t *testing.T) {
 		}
 	}
 	s.Units.Destroy(h1, units.DeathKilled)
-	if count != 1 {
-		t.Fatalf("first destroy should fire hook once got %d", count)
+	if count != 0 {
+		t.Fatalf("first destroy should defer hook until finalization, got %d", count)
 	}
 	s.Units.Destroy(h1, units.DeathKilled)
-	if count != 1 {
+	if count != 0 {
 		t.Fatalf("second destroy on already dying should not fire hook again got %d", count)
 	}
 	s.Units.FinalizeDeath(h1, 1)
+	if count != 1 {
+		t.Fatalf("first finalization should fire hook once got %d", count)
+	}
 	h2, _ := s.Units.Create(def, 0, numeric.Fixed(20*16*65536), 0, numeric.Fixed(20*16*65536))
 	if h2 == h1 {
 		s.Units.Destroy(h2, units.DeathKilled)
+		s.Units.FinalizeDeath(h2, 1)
 		if count != 2 {
 			t.Fatalf("reused handle destroy should fire hook again got %d want 2 [01 §4.4] dedup", count)
 		}
 	} else {
 		t.Logf("handle not reused h1=%d h2=%d, dedup still per handle", h1, h2)
 		s.Units.Destroy(h2, units.DeathKilled)
+		s.Units.FinalizeDeath(h2, 1)
 		if count != 2 {
-			t.Fatalf("second occupant destroy should fire hook got %d", count)
+			t.Fatalf("second occupant finalization should fire hook got %d", count)
 		}
 	}
 	if s.Combat != nil {

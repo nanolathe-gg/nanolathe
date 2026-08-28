@@ -239,7 +239,7 @@ func TestStableSlotOrderVisitation(t *testing.T) {
 	h3, _ := w.Create(def, 0, 0, 0, 0)
 	_ = h3
 	w.Destroy(h2, units.DeathKilled)
-	w.Cleanup()
+	w.TeardownCleanup()
 	h4, _ := w.Create(def, 0, 0, 0, 0)
 	if h4 != h2 {
 		t.Fatalf("reuse lowest-free got %d want %d", h4, h2)

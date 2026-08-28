@@ -7,12 +7,14 @@ import (
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -117,21 +119,13 @@ func TestFeatureClickResolvesReclaimOrder(t *testing.T) {
 	featDef, _ := cat.Features[content.CanonicalKey("armrock")]
 	terrain.FeatureNames = []string{"armrock"}
 	terrain.FeatureDefs = []*content.FeatureDef{featDef}
-	// Plot cell anchor at 9,5
-	idx := 5*int(terrain.CellW) + 9
-	terrain.Plot[idx][8] = 0
-	terrain.Plot[idx][9] = 0 // index 0
-	if f := terrain.Plot[idx].Feature(); f != 0 {
-		t.Fatalf("plot feature not set, got %d", f)
-	}
-	if ok := func() bool {
-		_, ok := world.ResolveFeature(terrain.Plot, int(terrain.CellW), int(terrain.CellH), 9, 5)
-		return ok
-	}(); !ok {
-		t.Fatalf("ResolveFeature direct failed at 9,5")
-	}
-	// Ensure anchor not fringe
 	b := newTestBattle(cat, terrain)
+	b.sess.Features = features.NewService(terrain, nil, nil, nil)
+	if b.sess.Features.PlaceAt(9, 5, featDef) == nil {
+		t.Fatalf("feature placement failed at 9,5")
+	}
+	b.sess.Vis = visibility.New(terrain, 0)
+	b.sess.Vis.SetLocal(0)
 	if ok := func() bool {
 		_, ok := world.ResolveFeature(b.sess.World.Plot, int(b.sess.World.CellW), int(b.sess.World.CellH), 9, 5)
 		return ok
@@ -140,6 +134,9 @@ func TestFeatureClickResolvesReclaimOrder(t *testing.T) {
 	}
 	// Place reclaim unit elsewhere (2,2) so feature at 9,5 is not masked by unit [07 §8] unit>feature priority
 	recl := placeUnit(b, "armrecl", numeric.Fixed(int64(2*16)<<16), numeric.Fixed(int64(2*16)<<16))
+	// Picking reads the committed feature/visibility publication, not live
+	// terrain or feature state [I6].
+	applyPendingBattleCommands(b)
 	// Place cam at 0
 	b.cam.X = 0
 	b.cam.Z = 0

@@ -6,6 +6,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -76,6 +77,100 @@ func initialStatusFlags(def *content.UnitDef) uint32 {
 	return flags
 }
 
+// BuildRenderPieceFlags builds the render-piece record [04 §"Piece flag polarity"].
+// Allocation is zero-filled then per piece sets bit 1 (0x02 cache) and bit 2 (0x04 shade)
+// unconditionally and bit 0 (0x01 draw) only when the piece's model object has at least
+// three vertices. The compiled model exposes per-piece vertex counts via Model.Pieces[i].Vertices
+// (internal/model — read-only use) [03 §2.4]; [04 §"Piece flag polarity"] and [R-COB-01 §1].
+// Geometry pieces default drawn+cached+shaded (0x07), bare attachment points default 0x06.
+func BuildRenderPieceFlags(mdl *model.Model) []uint8 {
+	if mdl == nil {
+		return nil
+	}
+	n := len(mdl.Pieces)
+	if n == 0 {
+		return nil
+	}
+	flags := make([]uint8, n) // zero-filled [04 §"Piece flag polarity"]
+	for i, p := range mdl.Pieces {
+		f := uint8(0x02 | 0x04) // bit1 cache and bit2 shade unconditionally [04 §"Piece flag polarity"]
+		if len(p.Vertices) >= 3 {
+			f |= 0x01 // bit0 draw when at least three vertices [04 §"Piece flag polarity"]
+		}
+		flags[i] = f
+	}
+	return flags
+}
+
+// BuildRenderPieceFlagsForProgram builds a prog-indexed flag view derived from the model.
+// For scripted units the COB piece index is the authoring index; the fill is still defined
+// per model object, so we map each prog piece name to its model piece and set bit0 based on
+// that model object's vertex count. Bits 1 and 2 stay unconditional [04 §"Piece flag polarity"].
+// When prog is nil the model-ordered flags are returned directly (scriptless case).
+func BuildRenderPieceFlagsForProgram(mdl *model.Model, prog *cob.Program, pieceMap []int) []uint8 {
+	if mdl == nil {
+		return nil
+	}
+	if prog == nil {
+		return BuildRenderPieceFlags(mdl)
+	}
+	if len(prog.Pieces) == 0 {
+		return nil
+	}
+	flags := make([]uint8, len(prog.Pieces))
+	for i := range prog.Pieces {
+		f := uint8(0x02 | 0x04)
+		modelIdx := -1
+		if i < len(pieceMap) {
+			modelIdx = pieceMap[i]
+		} else {
+			// Fallback: try name match if pieceMap absent
+			for mi, mp := range mdl.Pieces {
+				if mp.Name == prog.Pieces[i] {
+					modelIdx = mi
+					break
+				}
+			}
+		}
+		if modelIdx >= 0 && modelIdx < len(mdl.Pieces) && len(mdl.Pieces[modelIdx].Vertices) >= 3 {
+			f |= 0x01
+		} else if modelIdx == -1 && prog != nil {
+			// If prog piece has no model counterpart, it would have been rejected by strict
+			// binding diagnostics [cob/binding.go]; here we treat it as bare (no draw) rather
+			// than inventing geometry.
+		}
+		flags[i] = f
+	}
+	return flags
+}
+
+// SetRenderPieceFlag toggles one bit of the unit's render-piece record [04 §"Piece flag polarity"].
+// Mask is one of 0x01 (draw), 0x02 (cache), 0x04 (shade). Returns false if piece out of range.
+func (u *Unit) SetRenderPieceFlag(piece int, mask uint8, set bool) bool {
+	if u == nil || piece < 0 || piece >= len(u.RenderPieceFlags) {
+		return false
+	}
+	if mask != 0x01 && mask != 0x02 && mask != 0x04 {
+		return false
+	}
+	if set {
+		u.RenderPieceFlags[piece] |= mask // lower opcode sets [04 §"Piece flag polarity"]
+	} else {
+		u.RenderPieceFlags[piece] &^= mask // higher opcode clears
+	}
+	return true
+}
+
+// InitRenderPieceFlags installs the render-piece table from the model [04 §"Piece flag polarity"] [R-COB-01 §1].
+// It is the explicit scriptless branch's table builder and the scripted branch's model-driven
+// fill before the VM is bound; the VM must not own this storage.
+func (u *Unit) InitRenderPieceFlags(mdl *model.Model) {
+	if u == nil {
+		return
+	}
+	u.RenderPieceFlags = BuildRenderPieceFlags(mdl)
+}
+
 // TODO(question): [04 §3.5] establishes the per-unit dedup array but not its capacity.
 const GuardLatchSize = 8
 
@@ -99,13 +194,13 @@ type Unit struct {
 	X, Y, Z   numeric.Fixed
 	Health    int32 // current health; max from Def?
 	MaxHealth int32
-	Alive     bool // slot valid; cleared only by post-tick cleanup [04 §2.4] C2
+	Alive     bool // slot valid; cleared by the phase-2 finalizer [04 §2.4] C2
 	// Dying is the death mark, separate from Alive [04 §2.3] C2: Destroy sets
-	// it and the unit stays visible to the sweep and to Unit() until Cleanup
-	// frees the slot.
+	// it and the unit stays visible to later phases and Unit() until the next
+	// phase-2 slot finalizer frees the slot.
 	Dying               bool
 	DeathCause          DeathCause
-	deathHookFired      bool // internal: ensures OnDeath fires exactly once via Destroy or FinalizeDeath [01 §4.4][04 "unit sweep"]
+	deathHookFired      bool // internal: ensures OnDeath fires exactly once at FinalizeDeath [01 §4.4][04 "unit sweep"]
 	deathExtraHookFired bool // internal composition observer deduplication
 	// Build progress remaining 1→0 [04 §2.3] C3. float32 per the I2 allowlist
 	// row "Construction remaining fraction" [05 "Construction target state"].
@@ -125,6 +220,13 @@ type Unit struct {
 	Orders        any          // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
 	Script        *cob.VM      // typed COB VM per-unit [04 §4.2][P1-I01] — not any, typed per acceptance
 	GuardLatches  GuardLatches // per-unit dedup array for guard assistance [04 §3.5]
+	// RenderPieceFlags is the per-unit render-piece record [04 §"Piece flag polarity"] [R-COB-01 §1].
+	// One flags byte per piece in a separate array from the script's piece-animation state.
+	// Allocation is zero-filled then the fill pass sets bit 1 (0x02 cache) and bit 2 (0x04 shade)
+	// unconditionally and bit 0 (0x01 draw) only when the piece's model object has at least three
+	// vertices. A null-program (scriptless) unit still builds this table; it must NOT live inside
+	// the VM, which is only allocated for scripted units.
+	RenderPieceFlags []uint8
 
 	// Typed per-unit state introduced for P0-I02 real pipeline [04 §1.1][04 §4][06][GAP T15].
 	// These fields own the authoritative per-unit data that the phase-2 sweep
@@ -261,9 +363,9 @@ func (u *Unit) InitEconomyState() {
 	u.IsCloaked = u.Def.InitCloaked
 }
 
-// DeathHook is invoked exactly once per unit at the moment Destroy first
-// latches Dying [04 §2.4]. The session uses it to feed mission trigger death
-// notifications exactly once [08 "Evaluation"].
+// DeathHook is invoked exactly once per unit when the phase-2 slot finalizer
+// retires a Dying unit [01 §4.4][04 §2.4]. The session uses it to feed mission
+// trigger death notifications exactly once [08 "Evaluation"].
 type DeathHook func(h pool.Handle, cause DeathCause, u *Unit)
 
 // CreateHook is invoked exactly once per unit at creation, after the unit
@@ -300,11 +402,11 @@ type World struct {
 	catalog *content.Catalog
 
 	// OnDeath is the death-notification hook [08 "Evaluation"]; nil means no
-	// consumer. It fires exactly once per unit, at the first Destroy latch.
+	// consumer. It fires exactly once per unit at slot-end finalization.
 	OnDeath DeathHook
 	// OnDeathExtra is a narrow composition observer that survives replacement
-	// of the primary session hook. It fires at the same latch, independently
-	// deduplicated, and must not emit duplicate Killed/corpse notifications.
+	// of the primary session hook. It fires at the same finalizer boundary,
+	// independently deduplicated, and must not emit duplicate notifications.
 	OnDeathExtra DeathHook
 	// OnCreate is the creation-notification hook [08 "Evaluation"] slot 3;
 	// nil means no consumer. It fires exactly once per unit after Create inserts.
@@ -441,11 +543,29 @@ func (w *World) attachCOB(u *Unit) error {
 	if prog == nil || len(prog.Code) == 0 {
 		// Null program: scriptless creation — no VM, no Create, no diagnostic,
 		// no substitute [R-COB-01 §1] (UNIT-04). The unit stays fully live;
-		// its pieces render and animate never.
+		// its pieces render and animate never. The render-piece table is still
+		// built when a model is available via the strict binder; for this
+		// fixture path without a model we leave the table nil — the production
+		// strict binder (session) builds it from the authored 3DO [04 §"Piece flag polarity"].
 		return nil
 	}
 	vm := cob.NewVM(prog)
 	bindUnitPortHandlers(vm, u)
+	// Build the render-piece record for the fixture path [04 §"Piece flag polarity"].
+	// Without an authored model the geometry test cannot be applied, so we share
+	// the VM's default 0x07 table as the unit's table and delegate writes there
+	// via the bridge. Production scripted units with a model get their geometry-
+	// driven table from the strict binder; this fallback keeps fixture tests green.
+	if u.RenderPieceFlags == nil {
+		// SnapshotFlags returns the VM-local 0x07 defaults [04 §4.3].
+		if flags := vm.SnapshotFlags(); flags != nil {
+			u.RenderPieceFlags = flags
+			// Delegate VM flag writes to the unit record [04 §"Piece flag polarity"].
+			vm.BindRenderFlagHandlers(func() []uint8 { return u.RenderPieceFlags }, func(piece int, mask uint8, set bool) bool {
+				return u.SetRenderPieceFlag(piece, mask, set)
+			})
+		}
+	}
 	u.SetScript(vm)
 	// Run Create immediately with wake flag (delta 0 barrier) so hide/show etc. are visible before first snapshot [04 §4.1][GAP T15].
 	if _, ok := prog.Scripts["Create"]; ok {
@@ -768,11 +888,10 @@ func (w *World) NotifyCapture(h pool.Handle, oldOwner, newOwner uint8) {
 	w.OnCapture(h, oldOwner, newOwner, u)
 }
 
-// Destroy marks death; the slot stays alive and visible until post-tick
-// cleanup [04 §2.3][04 §2.4] C2. This is the deferred death path.
-// It fires OnDeath exactly once via an internal fired flag that FinalizeDeath
-// also respects, so hook and free are deduplicated across the two paths
-// [01 §4.4][04 "unit sweep"].
+// Destroy marks death; the slot stays alive and visible until the next phase-2
+// slot finalizer [04 §2.3][04 §2.4] C2. Death callbacks are deferred to that
+// finalizer so later phases can observe the marked unit without running
+// destruction side effects [01 §4.4][04 "unit sweep"].
 func (w *World) Destroy(h pool.Handle, cause DeathCause) {
 	if w == nil || w.pool == nil || !w.pool.Alive(h) {
 		return
@@ -787,16 +906,6 @@ func (w *World) Destroy(h pool.Handle, cause DeathCause) {
 	}
 	u.Dying = true
 	u.DeathCause = cause
-	// Exactly-once death notification [08 "Evaluation"]: the latch transition
-	// is the single fire point. Also deduped with FinalizeDeath.
-	if !u.deathHookFired && w.OnDeath != nil {
-		w.OnDeath(h, cause, u)
-		u.deathHookFired = true
-	}
-	if !u.deathExtraHookFired && w.OnDeathExtra != nil {
-		w.OnDeathExtra(h, cause, u)
-		u.deathExtraHookFired = true
-	}
 }
 
 // FreeImmediate performs the retail finalization free immediately within the
@@ -851,7 +960,7 @@ func (w *World) FreeImmediate(h pool.Handle) {
 // callbacks are finished. Death marking still triggers on a non-positive
 // result at the caller's Destroy (combat damage application, the reclaim
 // pulse, or the slot-end death latch), and the signed value is retained
-// through FinalizeDeath and Cleanup. Zero RNG draws.
+// through FinalizeDeath and TeardownCleanup. Zero RNG draws.
 func (w *World) ApplyDamage(target pool.Handle, dmg int32) bool {
 	if w == nil || w.pool == nil || target == 0 {
 		return false
@@ -867,11 +976,10 @@ func (w *World) ApplyDamage(target pool.Handle, dmg int32) bool {
 	return true
 }
 
-// Cleanup frees death-marked slots now that tick is done, matching retail
-// deferral [04 §2.4]. Call after Tick sweep. For sliced pools this clears
-// occupancy identity and alive and decrements per-player counters while
-// retaining the slot number stale. Zero RNG draws.
-func (w *World) Cleanup() {
+// TeardownCleanup frees death-marked slots during explicit world teardown.
+// Gameplay phase-2 visitation is the only in-battle finalizer; this method is
+// for non-running-world cleanup and test fixture disposal [01 §4.4][04 §2.4].
+func (w *World) TeardownCleanup() {
 	if w == nil || w.pool == nil {
 		return
 	}

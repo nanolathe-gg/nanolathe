@@ -85,7 +85,7 @@ type VM struct {
 	prog        *Program
 	statics     []int32
 	anims       []pieceAnim // per-piece per-axis animation state [04 §4.6]
-	pieceFlags  []uint8     // per-piece draw/cache/shade/shadow flags [04 §4.3]
+	pieceFlags  []uint8     // per-piece draw/cache/shade/shadow flags [04 §4.3] — fallback for fixture VMs; production flags live on units.Unit.RenderPieceFlags [04 §"Piece flag polarity"]
 	simRng      *rng.Simulation
 	portFuncs   map[Port]func(args []int32) int32   // minimal hook for WU-06-7; nil means default 0 [04 §4.4]
 	sfxSink     SFXSink                             // presentation-only sink for emit-sfx [GAP T15] C19; nil discards
@@ -104,6 +104,28 @@ type VM struct {
 	tickDenom int32
 
 	DrainCalls int // count of Drain invocations for RS-08 one-drain invariant [04 §4.2][GAP T15]
+
+	// Render-piece flag delegation [04 §"Piece flag polarity"] [R-COB-01 §1].
+	// Production units own RenderPieceFlags on units.Unit; the VM delegates its
+	// show/hide, cache/dont-cache, shade/dont-shade writes there via the bridge.
+	// Fixture VMs with no external binding keep their own pieceFlags.
+	renderFlagsBound bool
+	renderFlags      []uint8
+	renderFlagGet    func() []uint8
+	renderFlagSet    func(piece int, mask uint8, set bool) bool
+}
+
+var pendingRenderHandlers struct {
+	get func() []uint8
+	set func(piece int, mask uint8, set bool) bool
+}
+
+// SetPendingRenderHandlers installs a one-shot render-piece handler for the next VM bind [04 §"Piece flag polarity"].
+// The production binder builds the geometry table before the VM's Create runs, so that
+// Create's flag ops target the unit record from the start [R-COB-01 §1].
+func SetPendingRenderHandlers(get func() []uint8, set func(piece int, mask uint8, set bool) bool) {
+	pendingRenderHandlers.get = get
+	pendingRenderHandlers.set = set
 }
 
 // pieceAnim holds the per-piece per-axis interpolation lanes [04 §4.6].
@@ -228,6 +250,10 @@ func (v *VM) SetProgram(prog *Program) {
 		v.Pieces = nil
 		v.anims = nil
 		v.pieceFlags = nil
+		v.renderFlags = nil
+		v.renderFlagsBound = false
+		v.renderFlagGet = nil
+		v.renderFlagSet = nil
 		return
 	}
 	// Script statics: retail's bind performs NO zeroing pass over the statics
@@ -252,7 +278,24 @@ func (v *VM) SetProgram(prog *Program) {
 	// The geometry-driven fill walk itself belongs to the unit-creation binding
 	// (internal/units owns the model link) [R-COB-01 §1].
 	for i := range v.pieceFlags {
-		v.pieceFlags[i] = 0x07 // [04 §4.3] visible
+		v.pieceFlags[i] = 0x07 // [04 §4.3] visible — fixture fallback; production uses unit-owned table [04 §"Piece flag polarity"]
+	}
+	// Clear any prior render-piece delegation — the new program re-binds flags
+	// from the unit's model-driven table via BindRenderFlags [04 §"Piece flag polarity"].
+	v.renderFlags = nil
+	v.renderFlagsBound = false
+	v.renderFlagGet = nil
+	v.renderFlagSet = nil
+	// If a pending render-piece handler was installed before this bind (the
+	// production path builds the geometry table before the VM's Create runs
+	// [04 §"Piece flag polarity"]), install it now so Create's flag ops target
+	// the unit record from the start.
+	if pendingRenderHandlers.get != nil || pendingRenderHandlers.set != nil {
+		v.renderFlagGet = pendingRenderHandlers.get
+		v.renderFlagSet = pendingRenderHandlers.set
+		v.renderFlagsBound = true
+		pendingRenderHandlers.get = nil
+		pendingRenderHandlers.set = nil
 	}
 	// Construction clears only the status words; every other thread field
 	// keeps its prior content [R-COB-01 §1].
@@ -287,6 +330,89 @@ func (v *VM) BindPort(p Port, fn func(args []int32) int32) {
 		v.portFuncs = make(map[Port]func(args []int32) int32)
 	}
 	v.portFuncs[p] = fn
+}
+
+// BindRenderFlags attaches the unit-owned render-piece record [04 §"Piece flag polarity"].
+// When bound, show/hide (bit 0), cache/dont-cache (bit 1), shade/dont-shade (bit 2) write
+// into the unit's storage via the bridge, not the VM-local array [R-COB-01 §1].
+// The slice is shared memory; writes via the VM affect the unit and vice versa.
+func (v *VM) BindRenderFlags(flags []uint8) {
+	if v == nil {
+		return
+	}
+	v.renderFlags = flags
+	v.renderFlagsBound = true
+	v.renderFlagGet = nil
+	v.renderFlagSet = nil
+}
+
+// BindRenderFlagHandlers installs a handler pair for the unit's render-piece record [04 §"Piece flag polarity"].
+// Get returns the current flags copy; set toggles exactly one mask bit (0x01/0x02/0x04) on the
+// unit's record. When set, these handlers supersede the direct slice binding [R-COB-01 §1].
+// This is the bridge path: internal/cob/bridge.go installs closures capturing units.Unit.
+func (v *VM) BindRenderFlagHandlers(get func() []uint8, set func(piece int, mask uint8, set bool) bool) {
+	if v == nil {
+		return
+	}
+	v.renderFlagGet = get
+	v.renderFlagSet = set
+	if get != nil || set != nil {
+		v.renderFlagsBound = true
+	}
+}
+
+// UnbindRenderFlags clears the external render-piece binding (used in tests).
+func (v *VM) UnbindRenderFlags() {
+	if v == nil {
+		return
+	}
+	v.renderFlags = nil
+	v.renderFlagsBound = false
+	v.renderFlagGet = nil
+	v.renderFlagSet = nil
+}
+
+// renderPieceFlags returns the active flag storage: the unit-owned record when bound, otherwise the VM-local fallback [04 §"Piece flag polarity"].
+func (v *VM) renderPieceFlags() []uint8 {
+	if v == nil {
+		return nil
+	}
+	if v.renderFlagGet != nil {
+		return v.renderFlagGet()
+	}
+	if v.renderFlagsBound {
+		return v.renderFlags
+	}
+	return v.pieceFlags
+}
+
+// setRenderFlag writes one piece flag bit via the active storage [04 §"Piece flag polarity"].
+// Returns false if piece out of range or mask not one of 0x01/0x02/0x04.
+func (v *VM) setRenderFlag(piece int, mask uint8, set bool) bool {
+	if v == nil {
+		return false
+	}
+	if v.renderFlagSet != nil {
+		return v.renderFlagSet(piece, mask, set)
+	}
+	var flags []uint8
+	if v.renderFlagsBound {
+		flags = v.renderFlags
+	} else {
+		flags = v.pieceFlags
+	}
+	if piece < 0 || piece >= len(flags) {
+		return false
+	}
+	if mask != 0x01 && mask != 0x02 && mask != 0x04 {
+		return false
+	}
+	if set {
+		flags[piece] |= mask // lower opcode sets [04 §"Piece flag polarity"]
+	} else {
+		flags[piece] &^= mask // higher clears
+	}
+	return true
 }
 
 // SetSFXSink installs the presentation-only emit-sfx sink [GAP T15] C19.
@@ -1084,54 +1210,49 @@ func (v *VM) runThread(idx int) {
 				}
 			}
 			t.PC += 3
-		case 0x10005000: // show [04 §4.3] B
+		case 0x10005000: // show [04 §4.3] B — set bit 0 draw via unit record when bound [04 §"Piece flag polarity"]
 			if t.PC+1 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
 			}
 			piece := int(v.prog.Code[t.PC+1])
-			// Bad piece kills [P1-11] §2.4.
-			if piece < 0 || piece >= len(v.pieceFlags) {
+			if !v.setRenderFlag(piece, 0x01, true) {
 				v.killThread(idx)
 				return
 			}
-			v.pieceFlags[piece] |= 0x01 // bit 0 draw [04 §4.3]
 			t.PC += 2
-		case 0x10006000: // hide [04 §4.3]
+		case 0x10006000: // hide [04 §4.3] — clear bit 0 draw via unit record when bound
 			if t.PC+1 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
 			}
 			piece := int(v.prog.Code[t.PC+1])
-			if piece < 0 || piece >= len(v.pieceFlags) {
+			if !v.setRenderFlag(piece, 0x01, false) {
 				v.killThread(idx)
 				return
 			}
-			v.pieceFlags[piece] &^= 0x01
 			t.PC += 2
-		case 0x10007000: // cache [04 §4.3]
+		case 0x10007000: // cache [04 §4.3] — set bit 1 cache via unit record when bound
 			if t.PC+1 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
 			}
 			piece := int(v.prog.Code[t.PC+1])
-			if piece < 0 || piece >= len(v.pieceFlags) {
+			if !v.setRenderFlag(piece, 0x02, true) {
 				v.killThread(idx)
 				return
 			}
-			v.pieceFlags[piece] |= 0x02 // bit 1 [04 §4.3]
 			t.PC += 2
-		case 0x10008000: // dont-cache [04 §4.3]
+		case 0x10008000: // dont-cache [04 §4.3] — clear bit 1 cache via unit record when bound
 			if t.PC+1 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
 			}
 			piece := int(v.prog.Code[t.PC+1])
-			if piece < 0 || piece >= len(v.pieceFlags) {
+			if !v.setRenderFlag(piece, 0x02, false) {
 				v.killThread(idx)
 				return
 			}
-			v.pieceFlags[piece] &^= 0x02
 			t.PC += 2
 		case 0x10009000: // legacy two-arg effect (no-op) [04 §4.3][P1-11] — empty unit adapter stub, two-pop no-op on units
 			if t.PC+1 >= len(v.prog.Code) {
@@ -1204,29 +1325,27 @@ func (v *VM) runThread(idx int) {
 				anim.spinActive = false
 			}
 			t.PC += 3
-		case 0x1000d000: // shade [04 §4.3]
+		case 0x1000d000: // shade [04 §4.3] — set bit 2 shade via unit record when bound
 			if t.PC+1 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
 			}
 			piece := int(v.prog.Code[t.PC+1])
-			if piece < 0 || piece >= len(v.pieceFlags) {
+			if !v.setRenderFlag(piece, 0x04, true) {
 				v.killThread(idx)
 				return
 			}
-			v.pieceFlags[piece] |= 0x04 // bit 2 [04 §4.3]
 			t.PC += 2
-		case 0x1000e000: // dont-shade [04 §4.3]
+		case 0x1000e000: // dont-shade [04 §4.3] — clear bit 2 shade via unit record when bound
 			if t.PC+1 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
 			}
 			piece := int(v.prog.Code[t.PC+1])
-			if piece < 0 || piece >= len(v.pieceFlags) {
+			if !v.setRenderFlag(piece, 0x04, false) {
 				v.killThread(idx)
 				return
 			}
-			v.pieceFlags[piece] &^= 0x04
 			t.PC += 2
 		case 0x1000f000: // emit-sfx [04 §4.3]
 			if t.PC+1 >= len(v.prog.Code) {

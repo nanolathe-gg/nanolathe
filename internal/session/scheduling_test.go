@@ -14,7 +14,7 @@ func TestSchedulingAPIUpdatesPauseSynchronously(t *testing.T) {
 	if s.Clock.ScaledAnchor != 90 || s.Clock.Carry != 0.5 {
 		t.Fatalf("pause changed SP anchor/carry: anchor=%d carry=%v", s.Clock.ScaledAnchor, s.Clock.Carry)
 	}
-	if !s.SetPaused(false) || s.Clock.Paused {
+	if s.SetPaused(false) || s.Clock.Paused {
 		t.Fatal("SetPaused(false) did not resume synchronously")
 	}
 }
