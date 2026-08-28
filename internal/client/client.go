@@ -100,16 +100,18 @@ type Client struct {
 	// Nanolathe isolates the copy so render cadence cannot desync the sim.
 	// Next wave: move segment resolution to sim-published values and drop this
 	// field. Shrink-only.
-	crt             *rng.CRT
-	crtBound        bool
-	frameTick       uint32                       // committed tick of the frame being composed
-	nano            presentationrender.NanoField // live nanolathe particle records [03 §5.5]
-	lastNanoTick    uint32
-	nanoDepth       []uint8 // per-pixel nanoframe height/depth key [03 §5.2]
-	worldBuckets    worldBuckets
-	fogCache        *visibility.FogCache
-	fogOps          []presentationrender.FogOp
-	selectionChrome []selectionChrome
+	crt                *rng.CRT
+	crtBound           bool
+	frameTick          uint32                       // committed tick of the frame being composed
+	nano               presentationrender.NanoField // live nanolathe particle records [03 §5.5]
+	lastNanoTick       uint32
+	modelTargetColor   []uint8 // reusable per-unit indexed composition plane [03 §5.2]
+	modelTargetHeight  []uint8 // reusable per-unit height/key plane [03 §5.2]
+	modelTargetCovered []bool  // reusable per-unit coverage plane [03 §5.2]
+	worldBuckets       worldBuckets
+	fogCache           *visibility.FogCache
+	fogOps             []presentationrender.FogOp
+	selectionChrome    []selectionChrome
 
 	// Feature GAF presentation — sprite class [02 "Feature record"] [03 §5.1.1].
 	// Loaded lazily from anims/<filename>.gaf via modelFS; cache is presentation-only (I6).
@@ -157,20 +159,23 @@ func New(opts Options) (*Client, error) {
 		buf = &frame.Buffer{}
 	}
 	c := &Client{
-		opts:              opts,
-		buffer:            buf,
-		width:             w,
-		height:            h,
-		indexed:           make([]uint8, w*h),
-		rgba:              make([]byte, w*h*4),
-		models:            map[string]*unitModel{},
-		texIndex:          map[string]texRef{},
-		modelPresentation: map[modelTextureKey]*modelTextureCursor{},
-		modelPlayers:      nil,
-		modelOrientation:  map[uint64]*presentationrender.OrientationCache{},
-		featureGAFs:       map[string]*formats.GAF{},
-		featureFrames:     map[string]*formats.GAFFrame{},
-		featureGACErr:     map[string]error{},
+		opts:               opts,
+		buffer:             buf,
+		width:              w,
+		height:             h,
+		indexed:            make([]uint8, w*h),
+		rgba:               make([]byte, w*h*4),
+		modelTargetColor:   make([]uint8, w*h),
+		modelTargetHeight:  make([]uint8, w*h),
+		modelTargetCovered: make([]bool, w*h),
+		models:             map[string]*unitModel{},
+		texIndex:           map[string]texRef{},
+		modelPresentation:  map[modelTextureKey]*modelTextureCursor{},
+		modelPlayers:       nil,
+		modelOrientation:   map[uint64]*presentationrender.OrientationCache{},
+		featureGAFs:        map[string]*formats.GAF{},
+		featureFrames:      map[string]*formats.GAFFrame{},
+		featureGACErr:      map[string]error{},
 	}
 	c.in = *newInputState()
 	// Fallback palette: grayscale base and identity logical table. This keeps

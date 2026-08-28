@@ -394,6 +394,10 @@ type RadarCircleView struct {
 type RadarView struct {
 	Contacts []RadarContactView
 	Circles  []RadarCircleView
+	// BlinkPhase is the committed bit-0 radar phase. It carries no countdown
+	// or surface dirty flags; presentation consumes only this scalar
+	// [R-CORE-03][03 §3.6].
+	BlinkPhase uint8
 	// MarkerMode is the authoritative minimap composer mode. Zero is the
 	// explicit mode-off value until a simulation-owned source is available;
 	// presentation must not force the viewport marker on [03 §3.12][I6].

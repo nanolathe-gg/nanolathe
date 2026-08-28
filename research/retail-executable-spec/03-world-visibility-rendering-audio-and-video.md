@@ -572,8 +572,9 @@ N = per-vertex smooth normal:
 
    The row interpolates across the face with the corners. Rows are palette
    remaps, not brightness ramps (row 15 identity; row 0 near-black; row 31
-   saturated; intermediate rows shift hue per entry). `dont-shade` (definition
-   flags bit 2) forces row `0x0F` (15); else `row = trunc(dot*5.0) & 0x1F`
+   saturated; intermediate rows shift hue per entry). `dont-shade` (the
+   render-piece record's shade bit cleared by the COB adapter) forces row
+   `0x0F` (15); else `row = trunc(dot*5.0) & 0x1F`
    wrapping negatives to `27..31` (not clamped); the gouraud interpolant is
    `rowStep = (rowR-rowL)/width` in signed 16.16 fixed point for both the fixed
    and mobile textured scanline paths, and each pixel samples
@@ -590,6 +591,85 @@ N = per-vertex smooth normal:
    players ticked once per simulation frame with per-frame delays from the
    GAF table — except exactly-10-frame entries, which are the LOGOS team
    textures: never animated, frame selected by owner player at draw time.
+
+### OTA-RND-02A — model-path shading and stock reachability [R-RND-02A]
+
+The earlier shorthand that treated mobile units as unshaded, or treated
+building pieces as shaded by class, is corrected here. **Established
+(direct-static):** the fixed/mobile model split selects an image-cache/rebuild
+path from runtime draw state (main versus auxiliary draw, the runtime unit
+state bit, and construction fraction). It does not test FBI `BMcode`,
+`CanMove`, or `CanFly`. Both paths use the same per-vertex normal, `SHD` row,
+and Gouraud row interpolation described in section 2.4.1; untextured flat
+faces bypass `SHD` in both paths. The piece-level render flag is independent:
+the model fill starts each geometry-bearing piece shaded, and the script may
+clear that bit for an individual piece with `DONT_SHADE`. There is therefore
+no established class-wide mobile-unshaded rule.
+
+The stock asset census below is a bounded check of that separation. Values in
+the FBI columns are authored values (an absent key is the normal false
+default); `3DO` is `pieces / primitives / textured / flat / clear`, and
+`Create DONT` is the number of `DONT_SHADE` operations found in the named
+script's `Create` callback, followed by the addressed piece names where useful.
+All requested models had zero clear primitives. **Established (asset census,
+base `totala1.hpi`):**
+
+| Unit / observed counterpart | BMcode | CanMove | CanFly | 3DO | Create DONT |
+|---|---:|---:|---:|---:|---|
+| ARMCOM / CORCOM | 1 / 1 | 1 / 1 | 0 / 0 | 15/102/77/25/0 / 16/87/44/43/0 | 0 / 0 |
+| ARMPW / CORAK | 1 / 1 | 1 / 1 | 0 / 0 | 15/88/41/47/0 / 16/59/32/27/0 | 0 / 0 |
+| ARMSTUMP / no same-role CORE model in base corpus | 1 / — | 1 / — | 0 / — | 4/58/53/5/0 / — | 0 / — |
+| ARMFIG / CORVAMP | 1 / 1 | 1 / 1 | 1 / 1 | 8/59/54/5/0 / 9/52/46/6/0 | 0 / 0 |
+| ARMSOLAR / CORSOLAR | 0 / 0 | 0 / 0 | 0 / 0 | 5/39/38/1/0 / 10/63/58/5/0 | 0 / 10 (base, shell, leg1–4, wing1–4) |
+| ARMLAB / CORLAB | 0 / 0 | 1 / 1 | 0 / 0 | 16/107/103/4/0 / 19/174/165/9/0 | 15 / 18 |
+| ARMVP / CORVP | 0 / 0 | 1 / 1 | 0 / 0 | 14/165/160/5/0 / 17/110/107/3/0 | 11 / 15 |
+| ARMAAP / CORAAP | 0 / 0 | 1 / 1 | 0 / 0 | 12/165/164/1/0 / 19/170/164/6/0 | 11 / 18 |
+
+The `DONT_SHADE` piece operands were: CORSOLAR `base`, `leg1`–`leg4`,
+`shell`, `wing1`–`wing4`; ARMLAB `beam1`, `beam2`, `door1`, `door1A`,
+`door2`, `door2A`, `door3`, `door3A`, `door4`, `door4A`, `nano1`, `nano2`,
+`pad`, `stand1`, `stand2`; CORLAB `blink`, `beam1`, `beam2`, `gun1`, `gun2`,
+`lbox1`, `lbox2`, `ldoor1`, `ldoor2`, `lower1`, `lower2`, `pad`, `ubox1`,
+`ubox2`, `udoor1`, `udoor2`, `upper1`, `upper2`; ARMVP `doo2`, `door1`,
+`nano1`, `nano2`, `pad`, `plate1`, `plate2`, `post1`, `post2`, `side1`,
+`side2`; CORVP `arm1`, `arm2`, `pad`, `gun1`, `gun2`, `layer1a`–`layer1c`,
+`layer2a`–`layer2c`, `layer3a`–`layer3c` (the `pad` operation occurs twice);
+ARMAAP `lights`, `radar`, `beam1`, `beam2`, `building1`, `building2`, `nano1`,
+`nano2`, `nanobox1`, `nanobox2`, `pad`; and CORAAP `dish`, `blinks`, `beam1`,
+`beam2`, `block1`, `block2`, `bump1`, `bump2`, `conduit1`, `conduit2`, `gun1`,
+`gun2`, `head1`, `head2`, `pad`, `pedistal`, `sleeve1`, `sleeve2`. The
+zero-count rows have no addressed pieces. No additional FBI flag was found
+in the bounded renderer selector; the runtime state bit's authored semantic
+name remains Unknown.
+
+The apparent counterpart gaps are deliberate: the base archive contains no
+`CORSTUMP` or `CORFIG`, so this census does not substitute another model by
+name or presumed role. The `ARMPW` and `ARMFIG` rows use the observed
+`CORAK` and `CORVAMP` assets, respectively. `CanMove=1` on the BMcode-zero
+structures ARMLAB, ARMVP, ARMAAP and their CORE counterparts is a direct
+asset counterexample to using `CanMove` as the renderer classifier. The model
+format's primitive dispatch and texture fields are defined in [fmt 3do], and
+the FBI defaults and `BMcode` field are defined in [fmt fbi].
+
+The opcode census also changes the interpretation of “building piece
+shading”: stock factory scripts explicitly clear shading on selected pieces
+in `Create` (including nearly every piece of ARMLAB, CORLAB, ARMVP, CORVP,
+ARMAAP, and CORAAP), while the requested mobile scripts contain no such
+`Create` operation. This is piece/script-authored behavior, not an FBI class
+gate. **Established (static bytecode census):** no requested script uses
+`SHADE` or `DONT_SHADE` in `Activate`/`Deactivate`; no requested script uses
+`SHADE` in `Create`; `DONT_SHADE` is the only stock override found in the
+`Create`/activation callback set, and it addresses the named pieces in the
+table.
+
+The required identical-model six-variant runtime matrix was not run: the
+clean-room work-unit constraint forbids automating the retail executable.
+Thus the renderer-path equivalence above is established from the bounded
+static path and the shared mapper contract, while pixel-for-pixel outcomes of
+that synthetic matrix remain **Unknown**. OTA-RND-02B may use the single
+effective policy “apply the per-piece shade bit in both fixed and mobile
+textured paths; flat faces bypass `SHD`; do not add a `BMcode`/`CanMove`/
+`CanFly` class gate,” but must retain that runtime-matrix limitation.
 
 ### 2.5 Orthographic screen projection
 
@@ -1860,7 +1940,8 @@ rows 0–14 darken (row 0 near-black, only index 0 survives; mean −97.59),
 row 15 is near-identity (232 of 256 self, mean +0.17), and rows 16–31 brighten
 past identity to +53.53 at row 31 — a full signed ramp that `LHT` does not
 replicate. The `SHD` row selection is now established (direct-static):
-`dont-shade` pins row `15`, else `row = trunc(dot*5.0) & 0x1F` with
+the cleared render-piece shade bit (`DONT_SHADE`) pins row `15`, else
+`row = trunc(dot*5.0) & 0x1F` with
 `L=(-0.8,1,0.25)`, wrapping negatives; the row interpolates gouraud-style as
 `(rowR-rowL)/width` for both fixed and mobile textured paths, sampling
 `SHD[row*256+texel]` per pixel; the flat path bypasses `SHD` and fills the span
@@ -2294,7 +2375,7 @@ pitch the X slot, each with a constant negative half-circle (180-degree)
 authored model-facing offset — and a propeller-style variant feeds its spin
 angle through the same slot machinery.
 
-Texture mapping is corner-index affine 16.16 (direct-static): quads map index order `0→(0,0) 1→(1,0) 2→(1,1) 3→(0,1)`; n-gons 5–16 are `n`-edge affine polygons through the edge-table scanline mappers (ten-dword edge records) with per-edge `(dx<<16)/dy`, per-scanline `(uR-uL)/width` and `rowStep=(rowR-rowL)/width`, sampling `SHD[row*256+texel]` per pixel; the flat path is quads-only and fills the span directly. No stored UVs, no perspective divide (bounded-negative), clamp to `w-1/h-1`, nearest sample; transparent holes skip `SHD`. Face row is `trunc(dot(N,L)*5.0)&0x1F` with `L=(-0.8,1,0.25)`; `dont-shade` (definition flags bit 2) pins the identity row `15`; the gouraud row interpolates as `row delta/width` for both fixed and mobile textured paths (direct-static); the flat path bypasses `SHD`. Row `0x0F` is identity, rows `0..14` darken, `16..31` brighten (see §4.3.2).
+Texture mapping is corner-index affine 16.16 (direct-static): quads map index order `0→(0,0) 1→(1,0) 2→(1,1) 3→(0,1)`; n-gons 5–16 are `n`-edge affine polygons through the edge-table scanline mappers (ten-dword edge records) with per-edge `(dx<<16)/dy`, per-scanline `(uR-uL)/width` and `rowStep=(rowR-rowL)/width`, sampling `SHD[row*256+texel]` per pixel; the flat path is quads-only and fills the span directly. No stored UVs, no perspective divide (bounded-negative), clamp to `w-1/h-1`, nearest sample; transparent holes skip `SHD`. Face row is `trunc(dot(N,L)*5.0)&0x1F` with `L=(-0.8,1,0.25)`; a cleared render-piece shade bit (`DONT_SHADE`) pins the identity row `15`; the gouraud row interpolates as `row delta/width` for both fixed and mobile textured paths (direct-static); the flat path bypasses `SHD`. Row `0x0F` is identity, rows `0..14` darken, `16..31` brighten (see §4.3.2).
 
 #### Nanoframe reveal [R-P0-19-N]
 
@@ -3406,6 +3487,14 @@ and unknown" without a resolution plan.
    ground-scar/crater authoring mechanism (§3.7 `TODO(question)`).
 - SHD/LHT row/index formula is now established for model `SHD` (`dont-shade→15`, `row=trunc(dot*5)&0x1F`, gouraud `rowStep=(rowR-rowL)/width`) and halo `LHT` (disc precompute verified: per-pixel CRT draw, `q = trunc((R+sqrt(1.33·dx²+dy²))·32)`, byte `0x6F−q` / ring `0x6E` / transparent `0xFF` on the `(0x20−q) mod 256` compare, level `31−q`); remaining open is ALP usage by any non-LOS UI/fade path — bounded-negative over the renderer cluster (ALP loads only in the minimap picture downsample).
 - Model lighting normals (`normalize(cross(b-a,b-c))` over first three indexes, degenerate `(0,1,0)`, per-vertex `avg/cnt` no renormalize) and texture coordinate policy (corner-index affine 16.16 through the edge-table scanline mapper and per-pixel `SHD` sampler, no stored UVs, flat direct-fill only, clamp/nearest/no perspective) and flat-color quads-only are now established (direct-static); remaining open is exact team/logo per-player dimension deltas and pitch/bank naming.
+- OTA-RND-02A closes the reported mobile/building shading conflict for the
+  bounded static contract: fixed and mobile textured paths share the same
+  `SHD` mapper, flat faces bypass it, and only the per-piece render flag
+  selects identity versus computed shading. The stock FBI/3DO/COB census is
+  established for the requested rows, including factory `Create` overrides;
+  the identical-model six-variant retail runtime matrix was not run, so its
+  pixel-for-pixel result remains **Unknown**. The semantic name of the
+  runtime selector's unit-state bit is also **Unknown**.
 - Shadow presentation is established (option bits, per-unit `noshadow`,
   projection with the 0x32/0x7D palette base and four-byte terrain average,
   GAF-sprite versus model-stencil families, inclusive clipping, dither

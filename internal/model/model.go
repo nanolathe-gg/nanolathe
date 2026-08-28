@@ -43,12 +43,58 @@ type Piece struct {
 	Selection bool
 }
 
+// SelectionPrimitive identifies one valid authored selection face. The loader
+// keeps a declared selection primitive at index zero; this helper only exposes
+// that authored geometry and never substitutes a movement or footprint shape
+// [03 §2.4][03 §2.4.1].
+type SelectionPrimitive struct {
+	PieceIndex     int
+	PrimitiveIndex int
+	Primitive      Primitive
+}
+
 // Model is an immutable compiled 3DO model [03 §2.4].
 type Model struct {
 	Pieces []Piece
 	Root   int
 	Name   string
 	Hash   [32]byte
+}
+
+// SelectionPrimitives enumerates valid authored selection primitives in stable
+// piece order. A selection face must remain at primitive zero, have at least
+// three corners, and reference only vertices in its declaring piece [03 §2.4]
+// [03 §2.4.1].
+func (m *Model) SelectionPrimitives() []SelectionPrimitive {
+	if m == nil {
+		return nil
+	}
+	var out []SelectionPrimitive
+	for pieceIndex, piece := range m.Pieces {
+		if !piece.Selection || len(piece.Primitives) == 0 {
+			continue
+		}
+		primitive := piece.Primitives[0]
+		if len(primitive.VertexIndices) < 3 {
+			continue
+		}
+		valid := true
+		for _, vertexIndex := range primitive.VertexIndices {
+			if int(vertexIndex) >= len(piece.Vertices) {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue
+		}
+		indices := append([]uint16(nil), primitive.VertexIndices...)
+		primitive.VertexIndices = indices
+		out = append(out, SelectionPrimitive{
+			PieceIndex: pieceIndex, PrimitiveIndex: 0, Primitive: primitive,
+		})
+	}
+	return out
 }
 
 // Axis identifies a rotation axis for the mutation surface [03 §2.4] C21–C22.

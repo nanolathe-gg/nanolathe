@@ -2,10 +2,10 @@ package render
 
 import "github.com/nanolathe/nanolathe/internal/camera"
 
-// Minimap dirty bits match the radar dirty word: bit zero is the blink phase,
-// bit one invalidates FINAL, and bit two invalidates MAPPED. [03 §3.6]
+// Minimap dirty bits track presentation surface invalidation. The committed
+// blink phase is a separate scalar and is never folded into this word [03
+// §3.6][R-CORE-03].
 const (
-	MinimapDirtyBlink  uint8 = 1 << 0
 	MinimapDirtyFinal  uint8 = 1 << 1
 	MinimapDirtyMapped uint8 = 1 << 2
 )
@@ -17,7 +17,7 @@ const (
 type MinimapService struct {
 	picture, mapped, final *RadarSurface
 	dirty                  uint8
-	blink                  BlinkState
+	blinkPhase             uint8
 	mapW, mapH             int
 	local                  uint8
 	dcb                    byte
@@ -45,8 +45,10 @@ type MinimapServiceConfig struct {
 	GUIRemap  []byte
 }
 
-// NewMinimapService creates a surface lifecycle. A nil picture is allowed;
-// all rebuild methods then become no-ops, matching absent optional art.
+// NewMinimapService creates a surface lifecycle. A nil picture remains
+// representable for focused renderer fixtures and non-retail optional
+// bindings; the retail battle HUD rejects that state at initialization so a
+// missing source cannot become a silent blank rail [03 §3.7].
 func NewMinimapService(cfg MinimapServiceConfig) *MinimapService {
 	s := &MinimapService{mapW: cfg.MapW, mapH: cfg.MapH, local: cfg.LocalSlot, dcb: cfg.FogFill, dirty: MinimapDirtyMapped | MinimapDirtyFinal}
 	if cfg.Picture != nil {
@@ -55,7 +57,6 @@ func NewMinimapService(cfg MinimapServiceConfig) *MinimapService {
 	if len(cfg.GUIRemap) == 256 {
 		s.remap = append([]byte(nil), cfg.GUIRemap...)
 	}
-	s.blink.Countdown = 7
 	return s
 }
 
@@ -72,7 +73,22 @@ func (s *MinimapService) Blink() BlinkState {
 	if s == nil {
 		return BlinkState{}
 	}
-	return s.blink
+	return BlinkState{Phase: s.blinkPhase}
+}
+
+// SetBlinkPhase consumes the committed phase bit. Repeated presentation of
+// one committed frame is therefore idempotent; only a phase change requires a
+// FINAL rebuild [R-CORE-03][03 §3.6].
+func (s *MinimapService) SetBlinkPhase(phase uint8) {
+	if s == nil {
+		return
+	}
+	phase &= 1
+	if s.blinkPhase == phase {
+		return
+	}
+	s.blinkPhase = phase
+	s.dirty |= MinimapDirtyFinal
 }
 
 // RebuildMapped consumes LOS stores only when mapped is dirty. It does not
@@ -105,7 +121,7 @@ func (s *MinimapService) RebuildFinal(m camera.Minimap, playW, playH int32, cont
 			contacts[i].RawDistJamS = 0
 		}
 	}
-	s.final = rebuildFinalExact(s.mapped, m, playW, playH, contacts, s.sensorCircles, s.blink, blit, radarColor, jammerColor, ringColor)
+	s.final = rebuildFinalExact(s.mapped, m, playW, playH, contacts, s.sensorCircles, BlinkState{Phase: s.blinkPhase}, blit, radarColor, jammerColor, ringColor)
 	s.dirty &^= MinimapDirtyFinal
 	return s.final != nil
 }
@@ -137,19 +153,5 @@ func (s *MinimapService) SonarJam(u, v, radius int32) {
 	if s != nil {
 		s.sensorCircles = append(s.sensorCircles, MinimapCircle{U: u, V: v, Radius: radius, Kind: 2})
 		s.dirty |= MinimapDirtyFinal
-	}
-}
-
-// Tick advances the host-frame blink cadence and schedules FINAL. Callers
-// should then invoke RebuildMapped (if dirty) and RebuildFinal. [03 §3.6]
-func (s *MinimapService) Tick() {
-	if s == nil {
-		return
-	}
-	old := s.blink.Phase
-	s.blink.Tick()
-	s.dirty |= MinimapDirtyFinal
-	if old != s.blink.Phase {
-		s.dirty |= MinimapDirtyBlink
 	}
 }

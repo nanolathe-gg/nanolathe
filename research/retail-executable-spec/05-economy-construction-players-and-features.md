@@ -1258,6 +1258,95 @@ upstream producers of interrupt masks 2 and 8 sit in the UI and network command
 layers and remain unidentified. Their effects must be preserved behind those
 masks without inventing a producer.
 
+### OTA-FAC-01 bounded factory-release audit [R-FAC-01] (2026-08-28)
+
+This audit separates the factory production contract from the still-unclosed
+question of how a completed product clears the producer. The evidence is the
+factory handler, the primary/secondary descriptor tables, the product-side
+`GetBuilt` handler, and the shared VTOL movement handlers. No retail runtime
+probe or stock COB transform census was available for this audit; where that
+evidence is required, the result remains **Unknown**.
+
+**Target derivation — Established.** State 2 runs the factory script's
+`QueryBuildInfo` query with output cell 0 pre-initialized to `-1`, resolves the
+returned piece transform together with the factory origin, and stores that
+world position on the production record. It separately derives a snapped
+footprint anchor for validation. Successful allocation uses the resolved
+piece position, not the snapped anchor. No independent factory-heading,
+yard-map, model-extent, or fixed-cell-offset term is read by this path. The
+local transform authored by each stock factory, and whether it coincides with
+the model center, remain the data question already marked in [04 §6.3].
+
+**Movement/order form — Established at the factory boundary; release behavior
+Unknown.** The factory success epilogue creates a real `GetBuilt` node on the
+product's primary queue. The bounded handler has no additional factory-owned
+release node, protected egress order, or direct movement integration between
+allocation and `GetBuilt`; its states are only the count gate, script stance
+wait, exit validation/allocation, work, and completion. Whether another
+movement-layer mechanism not identified in this call graph supplies a
+post-completion release remains **Unknown**. `Park` must therefore remain a
+normal no-rally fallback, not be described as a proven release operation.
+
+**Rally sequencing — Established.** `GetBuilt` waits for the product's
+remaining fraction to reach zero, then walks the producer's primary queue and
+appends copied `QMove`/`QPatrol` records to the product, preserving order and
+patrol identity. It uses `Park` only when no such rally record exists. Thus
+inherited rally is a post-completion handoff; no intermediate factory-release
+segment was recovered, and no evidence says that the inherited rally itself
+must clear the producer footprint. Same-sweep dispatch still depends on the
+product slot sorting after the producer, as stated above.
+
+**Producer/product collision — Pre-allocation Established; post-allocation
+Unknown.** Before allocation there is no product, so the state-2 validator can
+only see existing terrain, feature, building, and mobile-occupancy state. The
+factory call supplies a null self identity and no producer/product pair to a
+post-allocation movement exemption. The bounded evidence finds no dedicated
+factory-product collision exemption after allocation. The supported
+occupancy-layer inference and its limits are recorded in [04 §6.4
+R-P0-08-A §1]; it must not be expanded into a global collision bypass.
+
+**Link lifetime — split contract.** The factory production record's product
+pointer is cleared on normal completion and the record is freed when its count
+is exhausted (**Established**). The product-side auxiliary builder link has no
+separate unlink in the bounded factory call graph; product teardown and
+factory death/capture cleanup beyond the paths already described remain
+**Unknown**. In particular, the death/capture path does not establish
+transfer of a pending product or queue to a replacement factory.
+
+**Blocked lane — split contract.** A blocked snapped exit is retried silently
+every 15 ticks before allocation, without a timeout or force-placement. An
+allocator refusal is a distinct 300-tick retry with its established message.
+Those are the only factory release-adjacent retry states recovered. Behavior
+of a hypothetical post-completion release lane when its destination stays
+blocked is **Unknown**, because no such lane is present in the bounded factory
+handler evidence.
+
+**Aircraft takeoff — generic movement Established; factory sequencing
+Unknown.** The VTOL movement family takes off implicitly when its first VTOL
+point/follow goal is installed: vertical rise is velocity-limited and uses the
+ordinary flight mover. The factory product path itself does not issue a
+factory-specific takeoff callback or state before `GetBuilt`; the descriptor
+set distinguishes `VTOL_MobileBuild`, but the exact aircraft factory handoff
+to that movement path is not established by the reviewed evidence. Therefore
+the order “takeoff before rally” remains **Unknown** for factory products.
+
+**Queue and heading boundaries — Established/Unknown.** Production records
+use the primary queue, whose blocked front stalls later records; the positive
+count gate, script-owned in-build stance, silent 15-tick blocked retry, and
+tail-only count coalescing are established above. Each successful product is
+revalidated before allocation, but the same-pass occupancy publication window
+means that a no-stacking guarantee for multiple coalesced products is not
+established. A rotated factory contributes orientation through the resolved
+`QueryBuildInfo` piece transform; no separate heading offset is read. The
+stock authored result for rotated factory variants remains **Unknown** pending
+the COB/asset census.
+
+This audit supersedes no established lifecycle text. It narrows the earlier
+release gap: the engine-side production and rally handoff are closed, while a
+retail post-completion egress/takeoff mechanism, its collision exemption, and
+its blocked-lane policy are not. Implementations must retain these as
+`TODO(question)` until executable or authored-data evidence closes them.
+
 ### Rally inheritance
 
 **Rally inheritance is the factory's own queued orders.** When a product
@@ -2289,6 +2378,11 @@ contract:
   The reversed-argument repair variant's identity and its malformed-input
   behavior remain open; the ordinary repair energy term and energy-only
   admission are established.
+- The response when a malformed factory product node bypasses queue preflight
+  and reaches state 2 remains Unknown: cancellation, retry, and termination
+  are not established. The current admission boundary records a bounded
+  diagnostic and leaves that internal node unchanged until a retail trace
+  settles the transition.
 - Close the exact operation-byte table that dispatches build, repair, unit
   reclaim, feature reclaim, capture, and resurrection; the handler identities
   themselves are established.
@@ -2298,6 +2392,13 @@ contract:
   before the completion transition; GetBuilt same-tick iff the product slot
   sorts after the builder; trigger polling on the local player's
   deadline-due settlement; AI completed-counts at the next 30-tick refresh.
+- **OTA-FAC-01 [R-FAC-01]:** the post-completion release target/order form,
+  producer/product collision exemption, indefinitely blocked release policy,
+  aircraft takeoff-before-rally handoff, rotated stock-authored exit
+  transforms, and a no-stacking guarantee for same-pass coalesced products
+  remain Unknown. The factory-side target derivation, primary-queue gate,
+  pre-allocation 15/300-tick retries, completion link clearing, and GetBuilt
+  rally sequencing are established in the bounded audit above.
 - Name the semantic meaning of the game-ended flag bits and of the two
   mission-end predicates behind the confirmation delay. The bit patterns are
   established (arm at 4; latch bit 0x04 always plus 0x40 and/or 0x10/0x20 per

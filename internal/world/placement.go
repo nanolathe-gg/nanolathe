@@ -27,6 +27,15 @@ var ErrInvalidFootprint = errors.New("world: footprint extents must be positive"
 // cell or world-coordinate types without wrapping.
 var ErrPlacementOverflow = errors.New("world: placement arithmetic overflow")
 
+// These sentinels let construction distinguish permanent content failures
+// from an otherwise valid footprint that is temporarily occupied. The error
+// text remains descriptive for existing diagnostic consumers [04 §6.4].
+var (
+	ErrMissingPlacementDefinition = errors.New("world: placement definition unavailable")
+	ErrMissingMovementProfile     = errors.New("world: movement profile unavailable")
+	ErrUnclassifiedMobile         = errors.New("world: mobile placement domain unavailable")
+)
+
 // FootprintExtent is an immutable width/depth pair in map cells. Keeping the
 // pair typed prevents a width/depth rectangle from being confused with a
 // world-space point. Construct it with NewFootprintExtent so all public
@@ -391,6 +400,7 @@ const (
 // unresolved profile rather than inventing a threshold [04 §6.1][02
 // "Movement class record"].
 type PlacementRules struct {
+	Domain        content.MobilityDomain
 	MaxSlope      int32
 	MaxWaterSlope int32
 	MaxWaterDepth int32
@@ -409,9 +419,28 @@ type PlacementRules struct {
 // [R-P0-08][07 §9].
 func PlacementRulesForUnit(cat *content.Catalog, def *content.UnitDef) (PlacementRules, error) {
 	if def == nil {
-		return PlacementRules{}, fmt.Errorf("world: placement profile unavailable: nil product definition [TODO(question)]")
+		return PlacementRules{}, fmt.Errorf("%w: nil product definition [04 §6.4]", ErrMissingPlacementDefinition)
 	}
-	rules := PlacementRules{Waterline: def.Waterline}
+	domain := def.MobilityDomain
+	// Definitions assembled directly by tests and older callers predate the
+	// compiled field. Derive only the established class split as an adapter;
+	// compiled definitions always carry the value above [04 §6.4].
+	if domain == content.MobilityUnknown {
+		if !def.BMCode {
+			domain = content.MobilityFixed
+		} else if def.CanFly {
+			domain = content.MobilityAircraft
+		} else if def.MovementClass != "" {
+			domain = content.MobilityGround
+		}
+	}
+	rules := PlacementRules{Domain: domain, Waterline: def.Waterline}
+	if domain == content.MobilityAircraft {
+		// Aircraft use the mobile occupancy/feature branch but do not require a
+		// ground terrain profile merely to acquire a factory exit [04 §6.4].
+		rules.ProfileResolved = true
+		return rules, nil
+	}
 	if cat != nil && def.MovementClass != "" {
 		if mc, ok := cat.Movement[content.CanonicalKey(def.MovementClass)]; ok && mc != nil {
 			rules.MaxSlope = mc.MaxSlope
@@ -422,9 +451,9 @@ func PlacementRulesForUnit(cat *content.Catalog, def *content.UnitDef) (Placemen
 			rules.ProfileResolved = true
 			return rules, nil
 		}
-		return PlacementRules{}, fmt.Errorf("world: movement profile %q unavailable for placement [TODO(question)]", def.MovementClass)
+		return PlacementRules{}, fmt.Errorf("%w %q [04 §6.4]", ErrMissingMovementProfile, def.MovementClass)
 	}
-	if !def.BMCode {
+	if domain == content.MobilityFixed {
 		rules.MaxSlope = def.MaxSlope
 		rules.MaxWaterDepth = def.MaxWaterDepth
 		rules.MinWaterDepth = def.MinWaterDepth
@@ -432,7 +461,7 @@ func PlacementRulesForUnit(cat *content.Catalog, def *content.UnitDef) (Placemen
 		rules.ProfileResolved = true
 		return rules, nil
 	}
-	return PlacementRules{}, fmt.Errorf("world: class-less product %q has no compiled placement profile [TODO(question)]", def.UnitName)
+	return PlacementRules{}, fmt.Errorf("%w: class-less product %q has no compiled placement profile [04 §6.4]", ErrUnclassifiedMobile, def.UnitName)
 }
 
 // FootprintForUnit resolves the compiled footprint for a unit definition per
@@ -598,7 +627,7 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 	// Aggregate terrain legality only applies when the caller requests the
 	// inline terrain-check mode [04 §6.4]; queries outside it (factory exit
 	// spots) keep siteHeight from the plain bounds pass for allocation height.
-	skipAggregates := q.SkipTerrainAggregates || !q.Rules.ProfileResolved
+	skipAggregates := q.SkipTerrainAggregates || q.Rules.Domain == content.MobilityAircraft || !q.Rules.ProfileResolved
 	siteHeight := sea - q.Rules.Waterline
 	if maxHigh >= minLow {
 		siteHeight = minLow

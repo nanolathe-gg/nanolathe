@@ -2,6 +2,7 @@
 package construction
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
@@ -249,6 +250,91 @@ func TestPlacementDispatchUsesProducedDefinitionClass(t *testing.T) {
 	prod.BMCode = false // mobile-builder path placing a building product
 	if _, err := svc.validatePlacement(0, rect, prod, []world.YardCell{0}, false); err != nil {
 		t.Fatalf("building product did not use yard path: %v", err)
+	}
+}
+
+func TestClasslessAircraftFactoryAdmission(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	factoryDef := newFactoryDef("armlab", 2, 2, 300)
+	airDef := newProductDef("armfig", 1, 1, 10, 30)
+	airDef.BMCode = true
+	airDef.CanFly = true
+	airDef.MovementClass = ""
+	airDef.YardMap = ""
+	cat.Units[factoryDef.CanonicalKey] = factoryDef
+	cat.Units[airDef.CanonicalKey] = airDef
+	w := newTestWorld(8)
+	h, err := w.Create(factoryDef, 0, world.CellToWorld(4), 0, world.CellToWorld(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := w.Unit(h)
+	factory.InBuildStance = true
+	bindConstructionFixture(factory, trivialModel(1, nil), true)
+	if err := QueueFactoryBuild(factory, airDef.UnitName, 1, cat); err != nil {
+		t.Fatalf("class-less aircraft rejected at queue boundary: %v", err)
+	}
+	q := orders.QueueForUnit(factory)
+	q.Primary()[0].Phase = uint8(State2)
+	svc := NewService(exitTerrain(8, 8), cat, w, &economy.Service{})
+	svc.ModelForFactory = func(*units.Unit) *model.Model { return trivialModel(1, nil) }
+	svc.Pump(factory, 1)
+	node := q.Primary()[0]
+	if node.Target == 0 {
+		t.Fatalf("class-less aircraft did not allocate: node=%+v diagnostics=%+v", node, svc.AdmissionDiagnostics())
+	}
+	trace := svc.AdmissionDiagnostics()
+	if len(trace) == 0 || trace[len(trace)-1].Status != AdmissionAdmitted {
+		t.Fatalf("admission trace=%+v, want admitted", trace)
+	}
+}
+
+func TestAircraftFactoryAdmissionIgnoresUnresolvedGroundClass(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, Movement: map[string]*content.MovementClass{}}
+	airDef := newProductDef("airwithclass", 1, 1, 10, 30)
+	airDef.BMCode = true
+	airDef.CanFly = true
+	airDef.MovementClass = "missing-ground-class"
+	airDef.MobilityDomain = content.MobilityAircraft
+	cat.Units[airDef.CanonicalKey] = airDef
+	factory := &units.Unit{Handle: 1}
+	if err := QueueFactoryBuild(factory, airDef.UnitName, 1, cat); err != nil {
+		t.Fatalf("aircraft with unresolved ground class rejected at queue boundary: %v", err)
+	}
+}
+
+func TestClasslessGroundFactoryRejectedBeforeQueue(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, Movement: map[string]*content.MovementClass{}}
+	factoryDef := newFactoryDef("armlab", 2, 2, 300)
+	broken := newProductDef("broken", 1, 1, 10, 30)
+	broken.BMCode = true
+	broken.CanFly = false
+	broken.MovementClass = ""
+	cat.Units[factoryDef.CanonicalKey] = factoryDef
+	cat.Units[broken.CanonicalKey] = broken
+	factory := &units.Unit{Handle: 1, Def: factoryDef}
+	err := QueueFactoryBuild(factory, broken.UnitName, 1, cat)
+	if !errors.Is(err, ErrMissingMovementProfile) {
+		t.Fatalf("queue error=%v, want ErrMissingMovementProfile", err)
+	}
+	if q := orders.QueueForUnit(factory); q != nil && q.LenPrimary() != 0 {
+		t.Fatalf("permanently invalid product entered queue: %+v", q.Primary())
+	}
+}
+
+func TestPermanentAdmissionDiagnosticIsBounded(t *testing.T) {
+	svc := &Service{}
+	factory := &units.Unit{Handle: 7}
+	node := &orders.Node{BuildDefKey: "broken"}
+	err := errors.New("missing movement profile")
+	svc.rejectPermanent(factory, node, 10, err)
+	svc.rejectPermanent(factory, node, 11, err)
+	trace := svc.AdmissionDiagnostics()
+	if len(trace) != 1 {
+		t.Fatalf("repeated permanent admission grew trace to %d entries: %+v", len(trace), trace)
+	}
+	if trace[0].Tick != 10 || trace[0].Builder != factory.Handle || trace[0].Product != "broken" || trace[0].Status != AdmissionRejectedPermanentDefinition || trace[0].Reason != err.Error() {
+		t.Fatalf("permanent admission trace=%+v, want first diagnostic preserved", trace)
 	}
 }
 

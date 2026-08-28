@@ -378,23 +378,11 @@ func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int3
 	return final
 }
 
-// BlinkState holds minimap blink countdown and phase [03 §3.9][03 §3.6].
+// BlinkState carries the committed minimap phase consumed by contact and ring
+// presentation. Countdown ownership remains in the phase-12 session state
+// and is never presented here [R-CORE-03][03 §3.6].
 type BlinkState struct {
-	Countdown int16 // 7..0
-	Phase     uint8 // bit0 blink phase, ^=1 every 8 frames [03 §3.6].
-}
-
-// Tick advances blink per host frame: if Countdown>0 dec else 7; ^=1 every 8 [03 §3.6].
-func (b *BlinkState) Tick() {
-	if b == nil {
-		return
-	}
-	if b.Countdown > 0 {
-		b.Countdown--
-		return
-	}
-	b.Countdown = 7
-	b.Phase ^= 1 // every 8 frames when countdown wraps [03 §3.6]
+	Phase uint8 // semantic bit 0 [R-CORE-03].
 }
 
 // IsBlinkOn reports whether stealth contacts should be visible [03 §3.9].

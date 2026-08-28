@@ -98,6 +98,29 @@ type retailBattleHUD struct {
 	// side-general page: GEN is selected only for the explicitly empty
 	// selection state [07 §6][07 §9].
 	assetErr error
+	// dispatchErr retains the last enqueue failure for diagnostics/tests. HUD
+	// clicks remain consumed; no new retail status text is synthesized [01
+	// §4.4][07 §3].
+	dispatchErr error
+	// factoryDispatch is a narrow test seam for the presentation boundary;
+	// production calls battleSession.DispatchFactoryBuildDelta directly.
+	factoryDispatch func(*battleSession, string, int) error
+}
+
+// LastDispatchError returns the last factory-command enqueue failure observed
+// by the HUD, if any. It is a diagnostic surface, not retail status text.
+func (h *retailBattleHUD) LastDispatchError() error {
+	if h == nil {
+		return nil
+	}
+	return h.dispatchErr
+}
+
+func (h *retailBattleHUD) dispatchFactoryBuild(b *battleSession, product string, count int) error {
+	if h != nil && h.factoryDispatch != nil {
+		return h.factoryDispatch(b, product, count)
+	}
+	return b.DispatchFactoryBuildDelta(product, count)
 }
 
 // hudFS is the read surface we need for HUD loads plus provider listing for diagnostics.
@@ -332,6 +355,18 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		return nil, err
 	}
 	picture := buildBattleRadar(fs, cat, sess.Skirmish.MapName, sess.World, pal)
+	if picture == nil {
+		// A battle HUD with no PICTURE cannot ever produce MAPPED or FINAL. Keep
+		// this an entry-time content error instead of installing a service whose
+		// later draw calls silently do nothing [03 §3.6][03 §3.7].
+		logical := "maps/" + strings.ToLower(strings.TrimSpace(sess.Skirmish.MapName)) + ".tnt"
+		if cat.Maps != nil {
+			if mh := cat.Maps[content.CanonicalKey(sess.Skirmish.MapName)]; mh != nil && mh.LogicalTNT != "" {
+				logical = mh.LogicalTNT
+			}
+		}
+		return nil, hudAssetError(fs, logical, "radar picture unavailable [03 §3.7]", fmt.Errorf("neither authored TNT minimap nor generated terrain picture is valid"))
+	}
 	mapW, mapH := 0, 0
 	if sess.World != nil {
 		// MAPPED's source grid is the terrain's visibility-tile lattice. Keep
@@ -516,8 +551,6 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 			drawQueueOverlay(c, cur, cur.Tick, b.battleState().Input.ShiftHeld, cur.Selection.LocalPlayer, cur.Selection.Primary)
 		}
 	}
-	h.drawMinimap(c, b, cur)
-
 	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. The two horizontal
 	// frames are static at the authored 129-pixel rail boundary; only the side
 	// strip and its GUI contents use the panel slide offset [07 §6].
@@ -537,6 +570,14 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 		h.drawTopStatusValues(c, cur)
 	}
 	h.drawSidePage(c, b, offset, cur)
+	// Stock ARMINT.GAF and CORINT.GAF inspection shows PANELSIDE's decoded
+	// 129×480 raster is opaque at every pixel, including the radar area; there
+	// is no authored transparent cutout to preserve by clipping [fmt gaf].
+	// Compose the radar after every moving-rail pass so the fixed 126×126 radar
+	// canvas survives both the side frame and panel slide states. Modal/result
+	// overlays remain later layers and may cover it transiently, without
+	// mutating the cached FINAL surface [03 §3.6][07 §6].
+	h.drawMinimap(c, b, cur)
 	if paused {
 		h.drawPausedTitle(c)
 	}
@@ -645,10 +686,10 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 	if h == nil || b == nil || b.sess == nil || h.radar == nil || cur == nil {
 		return nil
 	}
-	// Blink is a host-frame cadence, not a simulation-tick cadence. Calling
-	// Tick for every draw also forces FINAL to be rebuilt when the same committed
-	// frame is presented for multiple host frames [03 §3.6][03 §3.9].
-	h.radar.Tick()
+	// Consume only the committed phase. Presentation may redraw the same frame
+	// repeatedly without advancing or otherwise owning the cadence [R-CORE-03]
+	// [03 §3.6][I6].
+	h.radar.SetBlinkPhase(cur.Radar.BlinkPhase)
 	if cur.Visibility.Valid {
 		h.radar.RebuildMapped(cur.Visibility.WordVisible, cur.Visibility.Visible)
 	}
@@ -1354,7 +1395,9 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 				// Retail branches on the product's BMcode, not on the builder
 				// [07 §9]. Product BMcode determines queue versus placement.
 				if !hud.ProductArmsPlacement(prodDef) {
-					_ = b.DispatchFactoryBuildDelta(prodKey, factoryBuildDelta(b.battleState().Input.ShiftHeld, rightClick))
+					if err := h.dispatchFactoryBuild(b, prodKey, factoryBuildDelta(b.battleState().Input.ShiftHeld, rightClick)); err != nil {
+						h.dispatchErr = err
+					}
 					return true
 				}
 				if rightClick {

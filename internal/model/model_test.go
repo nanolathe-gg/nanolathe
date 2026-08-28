@@ -230,6 +230,32 @@ func TestLeafPiecesValidAttachment(t *testing.T) {
 	}
 }
 
+func TestSelectionPrimitivesEnumeratesValidAuthoredFaces(t *testing.T) {
+	m := &Model{
+		Pieces: []Piece{
+			{
+				Name: "root", Parent: -1, Selection: true,
+				Vertices:   [][3]numeric.Fixed{{}, {numeric.Fixed(1)}, {numeric.Fixed(1), 0, numeric.Fixed(1)}, {0, 0, numeric.Fixed(1)}},
+				Primitives: []Primitive{{VertexIndices: []uint16{0, 1, 2, 3}}},
+			},
+			{Name: "invalid", Parent: 0, Selection: true, Vertices: [][3]numeric.Fixed{{}}, Primitives: []Primitive{{VertexIndices: []uint16{0, 2, 0}}}},
+			{Name: "not-plate", Parent: 0, Selection: false, Vertices: [][3]numeric.Fixed{{}, {numeric.Fixed(1)}, {numeric.Fixed(1), 0, numeric.Fixed(1)}}, Primitives: []Primitive{{VertexIndices: []uint16{0, 1, 2}}}},
+		},
+		Root: 0,
+	}
+	plates := m.SelectionPrimitives()
+	if len(plates) != 1 {
+		t.Fatalf("selection primitive count=%d, want 1", len(plates))
+	}
+	if plates[0].PieceIndex != 0 || plates[0].PrimitiveIndex != 0 || len(plates[0].Primitive.VertexIndices) != 4 {
+		t.Fatalf("selection identity=%+v, want root primitive zero with four corners", plates[0])
+	}
+	plates[0].Primitive.VertexIndices[0] = 99
+	if m.Pieces[0].Primitives[0].VertexIndices[0] != 0 {
+		t.Fatal("selection primitive accessor aliases immutable model data")
+	}
+}
+
 func TestFoldRootAngles(t *testing.T) {
 	st := make([]PieceState, 2)
 	st[0].RotX = 1000

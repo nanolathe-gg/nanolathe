@@ -1,14 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/ui"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -107,6 +112,66 @@ func TestRadarPublishedOwnerZeroNeedsPublishedVisibility(t *testing.T) {
 	}
 }
 
+func TestRadarSurvivesCompleteBattleHUDComposition(t *testing.T) {
+	const radarPixel, panelPixel byte = 83, 17
+	const playW, playH int32 = 512, 512
+
+	buf := frame.NewBuffer()
+	cur := buf.BeginWrite()
+	cur.Selection.LocalPlayer = 0
+	cur.Visibility = frame.VisibilityView{
+		W: 1, H: 1, Valid: true, WordVisible: []uint16{1}, Visible: []uint8{1},
+	}
+	if err := buf.Publish(1); err != nil {
+		t.Fatal(err)
+	}
+
+	terrain := &world.Terrain{PlayRight: playW, PlayBottom: playH}
+	sess := &session.Session{Snapshot: buf, World: terrain, LocalOwner: 0}
+	h := &retailBattleHUD{
+		side: &content.SideDef{},
+		panelSide: &formats.GAFFrame{
+			Width: 129, Height: 480, Pixels: make([]byte, 129*480), Transparent: make([]bool, 129*480),
+		},
+		radar: render.NewMinimapService(render.MinimapServiceConfig{
+			Picture: &render.RadarSurface{W: 126, H: 126, Pitch: 128, Bits: bytes.Repeat([]byte{radarPixel}, 126*126)},
+			MapW:    1, MapH: 1, LocalSlot: 0,
+		}),
+		minimapAnchor:   hud.Rect{X1: 0, Y1: 0, X2: 125, Y2: 125},
+		minimapAnchorOK: true,
+	}
+	for i := range h.panelSide.Pixels {
+		h.panelSide.Pixels[i] = panelPixel
+	}
+	b := &battleSession{
+		sess: sess,
+		cam:  &camera.Camera{X: 0, Z: 0, ViewW: playW, ViewH: playH, MapW: playW, MapH: playH},
+		hud:  h,
+	}
+	c, err := client.New(client.Options{Buffer: buf, Width: 640, Height: 480})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetUIStage(battleHUDUIStage{hud: h, battle: b})
+
+	for _, offset := range []int8{ui.PanelVisible, ui.PanelParked} {
+		b.battleState().PanelOffset = offset
+		img := c.ComposeFrame()
+		for _, p := range [][2]int{{1, 1}, {63, 63}, {125, 125}} {
+			got := img.RGBAAt(p[0], p[1]).R
+			if got != radarPixel {
+				t.Fatalf("panel offset %d erased radar at (%d,%d): got %d, want %d", offset, p[0], p[1], got, radarPixel)
+			}
+		}
+		for _, p := range [][2]int{{126, 1}, {128, 63}, {126, 125}} {
+			got := img.RGBAAt(p[0], p[1]).R
+			if got != panelPixel {
+				t.Fatalf("panel offset %d changed PANELSIDE bezel at (%d,%d): got %d, want %d", offset, p[0], p[1], got, panelPixel)
+			}
+		}
+	}
+}
+
 func TestRadarContactRangeGateRequiresSelectionAndActivation(t *testing.T) {
 	c := frame.RadarContactView{Active: true}
 	if radarContactRangeEnabled(c) {
@@ -191,7 +256,7 @@ func TestRebuildRadarPublishedContactPixelsAndSelectedRange(t *testing.T) {
 	cur := &frame.Frame{
 		Selection:  frame.SelectionView{LocalPlayer: local},
 		Visibility: frame.VisibilityView{W: 1, H: 1, Valid: true, WordVisible: []uint16{1 << local}, Visible: []uint8{1}},
-		Radar: frame.RadarView{Contacts: []frame.RadarContactView{
+		Radar: frame.RadarView{BlinkPhase: 1, Contacts: []frame.RadarContactView{
 			// Selected, active, non-toggle unit: its published authored range
 			// produces a radar-colored circle and its authored blip pixel.
 			{Kind: frame.RadarContactUnit, Owner: local, X: numeric.Fixed(32 << 16), Z: numeric.Fixed(63 << 16), Status: 0x10, RangeStatus: true, Active: true, RadarDistance: 8, Palette: 0, PaletteKnown: true, Visible: true},
@@ -220,5 +285,13 @@ func TestRebuildRadarPublishedContactPixelsAndSelectedRange(t *testing.T) {
 	}
 	if got, _ := final.At(112, 63); got != 14 {
 		t.Fatalf("projectile dot pixel = %d, want projectile palette 14", got)
+	}
+	first := append([]byte(nil), final.Bits...)
+	second := h.rebuildRadar(b, cur, camera.Minimap{W: 126, H: 126})
+	if second == nil || !bytes.Equal(second.Bits, first) {
+		t.Fatal("rebuilding one committed frame changed radar output")
+	}
+	if got := h.radar.Blink().Phase; got != cur.Radar.BlinkPhase {
+		t.Fatalf("rebuild phase = %d, want committed %d", got, cur.Radar.BlinkPhase)
 	}
 }

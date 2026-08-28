@@ -21,6 +21,51 @@ import (
 // State is the factory production handler's phase byte [05 "Factory production lifecycle"].
 type State uint8
 
+// AdmissionStatus is the result class of factory state-2 admission. Only a
+// blocked footprint is retried; invalid content retains a permanent diagnostic
+// instead of entering the silent 15-tick loop [05
+// "Factory production lifecycle"][04 §6.4].
+type AdmissionStatus uint8
+
+const (
+	AdmissionAdmitted AdmissionStatus = iota + 1
+	AdmissionBlockedTransiently
+	AdmissionRejectedPermanentDefinition
+)
+
+func (s AdmissionStatus) String() string {
+	switch s {
+	case AdmissionAdmitted:
+		return "admitted"
+	case AdmissionBlockedTransiently:
+		return "blocked-transiently"
+	case AdmissionRejectedPermanentDefinition:
+		return "rejected-permanent-definition"
+	default:
+		return "unknown"
+	}
+}
+
+// AdmissionDiagnostic is a deterministic construction trace entry. It is
+// diagnostic state only and does not participate in simulation hashes.
+type AdmissionDiagnostic struct {
+	Tick    uint32
+	Builder pool.Handle
+	Product string
+	Status  AdmissionStatus
+	Reason  string
+}
+
+// CommandDiagnostic retains a rejected command at the authoritative boundary
+// so a discarded queue error cannot look like a no-op click.
+type CommandDiagnostic struct {
+	Tick    uint32
+	Builder pool.Handle
+	Product string
+	Count   int
+	Reason  string
+}
+
 const (
 	State0 State = 0 // presentation clear / activate gate [05]
 	State1 State = 1 // yard-door handshake waits for in-build-stance [05]
@@ -122,7 +167,11 @@ type Service struct {
 	productIndex  map[uint32]string                   // product id -> catalog key, built once
 	getBuiltLinks map[pool.Handle]pool.Handle         // product -> builder until GetBuilt consumes it [R-P0-09]
 	messages      []string                            // verbatim diagnostics [05 C18][05 C21][05 C22]
-	lastKill      KillInfo                            // most recent kind-9 kill packet [05 C21]
+	admissions    []AdmissionDiagnostic               // state-2 outcomes, diagnostic only
+	commands      []CommandDiagnostic                 // command-boundary rejections
+	lastPermanent AdmissionDiagnostic                 // bounded malformed-node dedupe key
+	hasPermanent  bool
+	lastKill      KillInfo // most recent kind-9 kill packet [05 C21]
 	// structures records the footprint rectangle of every COMPLETED building.
 	// It is this engine's stand-in for retail's separate building-mask layer
 	// [04 §6.2]: completed buildings must keep blocking new placement after
@@ -361,6 +410,89 @@ func (s *Service) Messages() []string { return append([]string(nil), s.messages.
 func (s *Service) ClearMessages() { s.messages = nil }
 
 func (s *Service) logMessage(msg string) { s.messages = append(s.messages, msg) }
+
+// AdmissionDiagnostics returns state-2 outcomes in visit order. The trace is
+// deliberately separate from Messages so callers can assert status classes
+// without parsing presentation text [04 §6.4].
+func (s *Service) AdmissionDiagnostics() []AdmissionDiagnostic {
+	if s == nil {
+		return nil
+	}
+	return append([]AdmissionDiagnostic(nil), s.admissions...)
+}
+
+// CommandDiagnostics returns rejected factory commands in input order.
+func (s *Service) CommandDiagnostics() []CommandDiagnostic {
+	if s == nil {
+		return nil
+	}
+	return append([]CommandDiagnostic(nil), s.commands...)
+}
+
+// RecordCommandRejection retains a queue/command error at the authoritative
+// boundary. It is called by session command processing and does not mutate the
+// simulation queue [01 §4.4][05 "Build request and factory queue behavior"].
+func (s *Service) RecordCommandRejection(tick uint32, builder pool.Handle, product string, count int, err error) {
+	if s == nil || err == nil {
+		return
+	}
+	s.commands = append(s.commands, CommandDiagnostic{
+		Tick: tick, Builder: builder, Product: content.CanonicalKey(product), Count: count, Reason: err.Error(),
+	})
+}
+
+func (s *Service) recordAdmission(tick uint32, builder pool.Handle, product string, status AdmissionStatus, err error) {
+	if s == nil {
+		return
+	}
+	reason := ""
+	if err != nil {
+		reason = err.Error()
+	}
+	s.admissions = append(s.admissions, AdmissionDiagnostic{
+		Tick: tick, Builder: builder, Product: content.CanonicalKey(product), Status: status, Reason: reason,
+	})
+}
+
+func (s *Service) rejectPermanent(factory *units.Unit, node *orders.Node, tick uint32, err error) {
+	if s == nil || node == nil {
+		return
+	}
+	product := node.BuildDefKey
+	if product == "" {
+		if def := s.productDef(uint32(node.Param1)); def != nil {
+			product = def.UnitName
+		}
+	}
+	var builder pool.Handle
+	if factory != nil {
+		builder = factory.Handle
+	}
+	reason := ""
+	if err != nil {
+		reason = err.Error()
+	}
+	diagnostic := AdmissionDiagnostic{
+		Tick: tick, Builder: builder, Product: content.CanonicalKey(product),
+		Status: AdmissionRejectedPermanentDefinition, Reason: reason,
+	}
+	// A malformed node may remain in an internal fixture indefinitely. Keep
+	// diagnostics observable without retaining every node pointer or appending
+	// one identical entry per tick.
+	if s.hasPermanent && s.lastPermanent.Builder == diagnostic.Builder &&
+		s.lastPermanent.Product == diagnostic.Product &&
+		s.lastPermanent.Status == diagnostic.Status && s.lastPermanent.Reason == diagnostic.Reason {
+		return
+	}
+	s.lastPermanent = diagnostic
+	s.hasPermanent = true
+	s.admissions = append(s.admissions, diagnostic)
+	// Malformed nodes are outside the established state-2 path: queue
+	// admission rejects them before they can reach this handler. Retain only a
+	// diagnostic if an internal fixture bypasses that boundary; do not invent a
+	// cancellation or retry transition [04 §6.4]. TODO(question): establish the
+	// retail response if a malformed node bypasses queue preflight.
+}
 
 // notifyStatus surfaces a verbatim order-handler notification through the
 // consumer-supplied status sink [R-ORDER-02 §1]. Unlike logMessage it is not
@@ -1575,6 +1707,20 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		s.handleMobileState2(factory, node, tick)
 		return
 	}
+	// Resolve and classify before arming a retry. Missing definitions,
+	// unresolved movement profiles, and malformed extents are permanent content
+	// failures; only a valid footprint rejected by occupancy/terrain is the
+	// established silent 15-tick retry [04 §6.4][05 C17].
+	def := s.getProductDefForNode(node)
+	if def == nil {
+		s.rejectPermanent(factory, node, tick,
+			fmt.Errorf("%w: product %q", world.ErrMissingPlacementDefinition, node.BuildDefKey))
+		return
+	}
+	if _, err := placementRules(s, def); err != nil {
+		s.rejectPermanent(factory, node, tick, err)
+		return
+	}
 	// Exit-spot acquisition exact order [05 C16] is performed via QueryBuildInfo path for factory.
 	// For handler we already have stored cell via QueryBuildInfo; but we need to compute again per tick?
 	// Use lastService for catalog lookup.
@@ -1590,20 +1736,15 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		}
 	}
 	// A missing current model is a production composition failure [R-P0-09].
-	def := s.getProductDefForNode(node)
-	footX, footZ := 1, 1
-	if def != nil {
-		footX, footZ = int(def.FootprintX), int(def.FootprintZ)
-		if footX <= 0 {
-			footX = 1
-		}
-		if footZ <= 0 {
-			footZ = 1
-		}
+	footX, footZ := int(def.FootprintX), int(def.FootprintZ)
+	if footX <= 0 || footZ <= 0 {
+		s.rejectPermanent(factory, node, tick,
+			fmt.Errorf("%w: product %q has malformed footprint %dx%d", world.ErrMissingPlacementDefinition, def.UnitName, footX, footZ))
+		return
 	}
 	extent, err := world.NewFootprintExtent(int32(footX), int32(footZ))
 	if err != nil {
-		node.DynamicGate, node.Deadline = WakeBit2, int32(tick+15)
+		s.rejectPermanent(factory, node, tick, err)
 		return
 	}
 	var modelPosition world.ModelWorldPosition
@@ -1614,12 +1755,13 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		ok = false
 	}
 	if !ok {
-		node.DynamicGate, node.Deadline = WakeBit2, int32(tick+15)
+		s.rejectPermanent(factory, node, tick,
+			fmt.Errorf("factory QueryBuildInfo did not resolve an exit piece"))
 		return
 	}
 	factoryPlacement, err := world.SnapFactoryPlacement(modelPosition, extent)
 	if err != nil {
-		node.DynamicGate, node.Deadline = WakeBit2, int32(tick+15)
+		s.rejectPermanent(factory, node, tick, err)
 		return
 	}
 	cell := factoryPlacement.Anchor().Cell()
@@ -1629,64 +1771,49 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	node.GoalZ = world.CellToWorld(cell.Z)
 
 	// Load product definition and attempt silent blocked revalidation [05 C17].
-	if def == nil {
-		// No product def => cannot proceed; stay and retry 15 silent? But spec says product def loaded after storing position.
-		// If missing, treat as blocked silent? For test we may not have product def; just skip validation and try allocation.
-	} else {
-		footX := int(def.FootprintX)
-		footZ := int(def.FootprintZ)
-		if footX <= 0 {
-			footX = 1
-		}
-		if footZ <= 0 {
-			footZ = 1
-		}
-		var yard []world.YardCell
-		if def.YardMap != "" {
-			y, err := world.ParseYardMap(def.YardMap, footX, footZ)
-			if err == nil {
-				yard = y
-			}
-		} else {
-			// No yardmap for mobile products => use nil yard (inline terrain loop) but factory mode still checks occupancy.
-			// For mobiles, the validator is inline terrain loop only when mode requests terrain checking; other modes accept immediately.
-			// Factory production state2 passes its own class/state flag pair as mode and null self identity, so any foreign occupant rejects [05 C17].
-			// For mobiles, we can still validate via occupancy check: if terrain occupied, fail.
-			// Use empty yard to trigger occupancy check via ValidatePlacement's bits 1-2? But empty yard has no bits, so it would pass.
-			// So for mobile without yard, we need to perform area occupancy check manually.
-			// We will treat nil yard as mobile inline check: validate rectangle occupancy via terrain.
-			yard = make([]world.YardCell, footX*footZ)
-			// Fill with occupancy-checking bits: bits 1-2 set to reject any nonzero occupant.
-			for i := range yard {
-				yard[i] = 0x06 // bits 1-2 set [04 §6.2]
-			}
-		}
-		if _, err := s.validatePlacement(factory.Handle, factoryPlacement.Rect(), def, yard, true); err != nil {
-			// Silent blocked revalidation: retry in exactly 15 ticks, stays — no
-			// message/sound/allocation; repeats every 15 while obstructed; NO
-			// timeout [05 C17]. Wake mask is bits {1,2}: schedule(node,15) sets
-			// bit 1 + deadline and the caller adds bit 2
-			// (notes/construction/05_promotion_factory_contract.md F4).
-			node.DynamicGate = WakeBit1 | WakeBit2
-			node.Deadline = int32(tick + 15)
-			// No message, no allocation — silent.
+	var yard []world.YardCell
+	if def.YardMap != "" {
+		y, err := world.ParseYardMap(def.YardMap, footX, footZ)
+		if err != nil {
+			s.rejectPermanent(factory, node, tick, err)
 			return
 		}
+		yard = y
+	} else {
+		// No yardmap for mobile products => use nil yard (inline terrain loop) but factory mode still checks occupancy.
+		// For mobiles, the validator is inline terrain loop only when mode requests terrain checking; other modes accept immediately.
+		// Factory production state2 passes its own class/state flag pair as mode and null self identity, so any foreign occupant rejects [05 C17].
+		// For mobiles, we can still validate via occupancy check: if terrain occupied, fail.
+		// Use empty yard to trigger occupancy check via ValidatePlacement's bits 1-2? But empty yard has no bits, so it would pass.
+		// So for mobile without yard, we need to perform area occupancy check manually.
+		// We will treat nil yard as mobile inline check: validate rectangle occupancy via terrain.
+		yard = make([]world.YardCell, footX*footZ)
+		// Fill with occupancy-checking bits: bits 1-2 set to reject any nonzero occupant.
+		for i := range yard {
+			yard[i] = 0x06 // bits 1-2 set [04 §6.2]
+		}
 	}
-
-	// On validation success, allocator creates unit AT exit spot [05 C18].
-	if def == nil {
-		// No def to create; treat as failure silent? But spec says allocator creates unit. Without def we cannot.
-		node.DynamicGate = WakeBit2
+	if _, err := s.validatePlacement(factory.Handle, factoryPlacement.Rect(), def, yard, true); err != nil {
+		s.recordAdmission(tick, factory.Handle, def.UnitName, AdmissionBlockedTransiently, err)
+		// Silent blocked revalidation: retry in exactly 15 ticks, stays — no
+		// message/sound/allocation; repeats every 15 while obstructed; NO
+		// timeout [05 C17]. Wake mask is bits {1,2}: schedule(node,15) sets
+		// bit 1 + deadline and the caller adds bit 2
+		// [05 "Factory production lifecycle"].
+		node.DynamicGate = WakeBit1 | WakeBit2
 		node.Deadline = int32(tick + 15)
+		// No message, no allocation — silent.
 		return
 	}
+	s.recordAdmission(tick, factory.Handle, def.UnitName, AdmissionAdmitted, nil)
+
+	// On validation success, allocator creates unit AT exit spot [05 C18].
 	product, err := s.allocateNanoframe(factory, def, factoryPlacement.Rect(), factoryPlacement.ModelPosition())
 	if err != nil {
 		// Allocator refusal prints verbatim "Unable to create any more units", retries in exactly 300 ticks (not randomized), stays state2 [05 C18].
 		s.logMessage(fmt.Sprintf("construction: allocation refused (%v)", err))
 		s.logMessage(ErrLimitMessage)
-		node.DynamicGate = WakeBit2 // F6b: the allocator refusal wakes on bit 2 (notes/construction/05_promotion_factory_contract.md)
+		node.DynamicGate = WakeBit2 // F6b: the allocator refusal wakes on bit 2 [05 "Factory production lifecycle"]
 		node.Deadline = int32(tick + 300)
 		// Stay in state2.
 		return

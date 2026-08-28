@@ -12,6 +12,33 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// MobilityDomain is the placement/routing domain selected from authored unit
+// capability fields.  It is deliberately narrower than CanMove: factory
+// admission needs to distinguish an aircraft from a ground mover even when
+// an aircraft has no movement-class record [04 §6.4][02 "Unit record"].
+type MobilityDomain uint8
+
+const (
+	MobilityUnknown MobilityDomain = iota
+	MobilityFixed
+	MobilityGround
+	MobilityAircraft
+)
+
+// String returns the stable diagnostic spelling for a mobility domain.
+func (d MobilityDomain) String() string {
+	switch d {
+	case MobilityFixed:
+		return "fixed"
+	case MobilityGround:
+		return "ground"
+	case MobilityAircraft:
+		return "aircraft"
+	default:
+		return "unknown"
+	}
+}
+
 // UnitDef is a compiled unit definition [02 "Unit record (.fbi)"].
 // DefinitionHeader must be the first field per catalog convention [02 §5].
 type UnitDef struct {
@@ -20,15 +47,19 @@ type UnitDef struct {
 	// used by category membership masks [02 §5] [R-P0-03].
 	UnitDefID uint32
 	// Identity and presentation [02 "Unit record (.fbi)"].
-	UnitName              string // unitname string 32 empty — canonical catalog name [02 "Unit record"]
-	Name                  string // language-prefixed name trial <Language>name then name [02 §3] C7, 32 default empty
-	Description           string // language-prefixed description [02 §3] C7, 64 default empty
-	Side                  string // side string 30 empty [02 "Unit record"] — faction tag
-	ObjectName            string // objectname string 32 empty — 3DO model name [02 "Unit record"]
-	Category              string // category string 100 empty — category token list [02 "Unit record"]
-	SoundCategory         string // soundcategory string 100 empty — resolves to sound-category index [02 "Unit record"]
-	Corpse                string // corpse string 100 empty — resolves to feature identity [02 "Unit record"]
-	MovementClass         string // movementclass string 100 empty — resolves to movement class [02 "Unit record"]
+	UnitName      string // unitname string 32 empty — canonical catalog name [02 "Unit record"]
+	Name          string // language-prefixed name trial <Language>name then name [02 §3] C7, 32 default empty
+	Description   string // language-prefixed description [02 §3] C7, 64 default empty
+	Side          string // side string 30 empty [02 "Unit record"] — faction tag
+	ObjectName    string // objectname string 32 empty — 3DO model name [02 "Unit record"]
+	Category      string // category string 100 empty — category token list [02 "Unit record"]
+	SoundCategory string // soundcategory string 100 empty — resolves to sound-category index [02 "Unit record"]
+	Corpse        string // corpse string 100 empty — resolves to feature identity [02 "Unit record"]
+	MovementClass string // movementclass string 100 empty — resolves to movement class [02 "Unit record"]
+	// MobilityDomain is derived after capability fields are read. A class-less
+	// aircraft is valid for factory admission; a class-less non-air mobile is
+	// unresolved and remains a permanent content error [04 §6.4].
+	MobilityDomain        MobilityDomain
 	Weapon1               string // weapon1 string 128 empty — resolves to weapon identity [02 "Unit record"]
 	Weapon2               string // weapon2 string 128 empty [02 "Unit record"]
 	Weapon3               string // weapon3 string 128 empty [02 "Unit record"]
@@ -208,6 +239,25 @@ type UnitDef struct {
 	// Unknown retains inert parsed keys so a later phase can consume without re-parsing [02 §5] C14.
 	// Keys are OriginalKey preserved case; e.g., wacky, noautofire, ovradjust, steeringmode, TEDClass etc have no behavior.
 	Unknown map[string]string
+}
+
+// deriveMobilityDomain applies the class split used by placement. BMcode
+// selects fixed/building versus mobile placement; among mobile definitions,
+// canfly is the established aircraft discriminator. All other profile-backed
+// mobile definitions share the ground/profile admission domain here; an
+// absent class remains Unknown so it cannot silently acquire ground rules
+// [04 §6.4][04 §9].
+func deriveMobilityDomain(bmcode, canFly bool, movementClass string) MobilityDomain {
+	if !bmcode {
+		return MobilityFixed
+	}
+	if canFly {
+		return MobilityAircraft
+	}
+	if movementClass != "" {
+		return MobilityGround
+	}
+	return MobilityUnknown
 }
 
 // DefinitionMask returns the prelinked single-bit identity mask for this
@@ -409,6 +459,7 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 
 	// Raw accessor for selfdestructcountdown so we can tell authored vs absent [02 "Unit record"].
 	selfDestructCountdown, selfDestructCountdownPresent := section.RawValue("selfdestructcountdown")
+	mobilityDomain := deriveMobilityDomain(bmcode, canFly, movementClass)
 
 	// Unknown inert keys retained [02 §5] C14.
 	unknown := make(map[string]string)
@@ -466,6 +517,7 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 		SoundCategory:                soundCategory,
 		Corpse:                       corpse,
 		MovementClass:                movementClass,
+		MobilityDomain:               mobilityDomain,
 		Weapon1:                      weapon1,
 		Weapon2:                      weapon2,
 		Weapon3:                      weapon3,
@@ -591,7 +643,7 @@ func writeUnitCanonical(u *UnitDef) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s|%d|%s|%s|%s|%s|%s|%s|%s|", u.CanonicalKey, u.UnitDefID, u.UnitName, u.Name, u.Description, u.Side, u.ObjectName, u.Category, u.SoundCategory)
 	fmt.Fprintf(&b, "%s|", u.Corpse)
-	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|", u.MovementClass, u.Weapon1, u.Weapon2, u.Weapon3, u.ExplodeAs, u.SelfDestructAs, u.YardMap)
+	fmt.Fprintf(&b, "%s|%d|%s|%s|%s|%s|%s|%s|", u.MovementClass, u.MobilityDomain, u.Weapon1, u.Weapon2, u.Weapon3, u.ExplodeAs, u.SelfDestructAs, u.YardMap)
 	fmt.Fprintf(&b, "%d|%d|%d|", u.MinWaterDepth, u.MaxWaterDepth, u.MaxSlope)
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|", u.DefaultMissionType, u.BadTargetCategoryWPRI, u.BadTargetCategoryWSEC, u.BadTargetCategoryWSPE, u.NoChaseCategory)
 	fmt.Fprintf(&b, "%s|", u.AIWeight)

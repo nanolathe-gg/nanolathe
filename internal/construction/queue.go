@@ -47,12 +47,14 @@ const fallbackBuildOrder = "MobileBuild"
 const ErrLimitMessage = "Unable to create any more units"
 
 var (
-	ErrNilFactory   = errors.New("construction: nil factory")
-	ErrEmptyDef     = errors.New("construction: empty defKey")
-	ErrBadCount     = errors.New("construction: count must be > 0")
-	ErrNoQueue      = errors.New("construction: no queue")
-	ErrNoBuildOrder = errors.New("construction: build order descriptor not found")
-	ErrLimit        = errors.New(ErrLimitMessage)
+	ErrNilFactory             = errors.New("construction: nil factory")
+	ErrEmptyDef               = errors.New("construction: empty defKey")
+	ErrBadCount               = errors.New("construction: count must be > 0")
+	ErrNoQueue                = errors.New("construction: no queue")
+	ErrNoBuildOrder           = errors.New("construction: build order descriptor not found")
+	ErrUnknownProduct         = errors.New("construction: product definition unavailable")
+	ErrMissingMovementProfile = errors.New("construction: product movement profile unavailable")
+	ErrLimit                  = errors.New(ErrLimitMessage)
 )
 
 // P0-I16: LimitChecker moved onto Service as authoritative session-owned hook.
@@ -127,6 +129,9 @@ func QueueFactoryBuild(factory *units.Unit, defKey string, count int, cat *conte
 		return ErrBadCount
 	}
 	ck := content.CanonicalKey(defKey)
+	if err := validateFactoryProduct(cat, ck); err != nil {
+		return err
+	}
 	pid := defIndex(cat, defKey)
 	q := orders.QueueForUnit(factory)
 	if q == nil {
@@ -152,6 +157,55 @@ func QueueFactoryBuild(factory *units.Unit, defKey string, count int, cat *conte
 	}
 	q.Push(bid, orders.Node{Owner: factory.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck})
 	return nil
+}
+
+// validateFactoryProduct is the command-boundary preflight for products that
+// have a catalog. Fixed definitions and canfly aircraft do not need a ground
+// movement profile. Other mobile products must resolve one before entering a
+// queue, preventing permanent content failures from becoming state-2 retries
+// [04 §6.4][05 "Unit creation and limits"]. A nil catalog remains the legacy
+// AI/test adapter and defers resolution to the handler.
+func validateFactoryProduct(cat *content.Catalog, key string) error {
+	if cat == nil {
+		return nil
+	}
+	def, ok := cat.Unit(key)
+	if !ok || def == nil {
+		return fmt.Errorf("%w: %q", ErrUnknownProduct, key)
+	}
+	domain := def.MobilityDomain
+	// Definitions assembled directly by older callers predate the compiled
+	// field. Apply the same established class split as the compiler adapter;
+	// once present, the compiled domain is authoritative for admission.
+	if domain == content.MobilityUnknown {
+		switch {
+		case !def.BMCode:
+			domain = content.MobilityFixed
+		case def.CanFly:
+			domain = content.MobilityAircraft
+		case def.MovementClass != "":
+			domain = content.MobilityGround
+		}
+	}
+	switch domain {
+	case content.MobilityFixed, content.MobilityAircraft:
+		// Aircraft admission is independent of any authored ground class. The
+		// class may be present for another consumer, but it is not a required
+		// aircraft ground profile [04 §6.4].
+		return nil
+	case content.MobilityGround:
+		if def.MovementClass == "" {
+			return fmt.Errorf("%w: ground product %q has no movement class", ErrMissingMovementProfile, key)
+		}
+		if _, ok := cat.Movement[content.CanonicalKey(def.MovementClass)]; !ok {
+			return fmt.Errorf("%w %q for product %q", ErrMissingMovementProfile, def.MovementClass, key)
+		}
+		return nil
+	default:
+		// Unknown mobile products cannot be admitted without inventing a
+		// placement domain or terrain profile [04 §6.4].
+		return fmt.Errorf("%w: class-less mobile product %q", ErrMissingMovementProfile, key)
+	}
 }
 
 // QueueMobileBuild enqueues a mobile build order with site anchor on builder's PRIMARY queue [P0-I05].

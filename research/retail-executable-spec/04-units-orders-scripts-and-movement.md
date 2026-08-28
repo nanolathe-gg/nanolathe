@@ -1180,6 +1180,54 @@ census — the old list stays on the dead factory's order anchors — and the
 exact allocator/slot-reuse cleanup when a dead factory slot is reused remains
 TODO(question); do not invent reclamation or inheritance.
 
+### OTA-FAC-01 movement boundary [R-FAC-01] (2026-08-28)
+
+The factory-side findings above close publication and the `GetBuilt` rally
+handoff, but they do not establish a separate post-completion egress order.
+The reviewed production state machine has no release-specific node or direct
+movement integration after allocation; it creates `GetBuilt` on the product's
+primary queue, and that node waits for completion before copying queued move or
+patrol rallies. `Park` is the no-rally fallback. Consequently, a product's
+ordinary inherited rally is not evidence of a mandatory release segment or of
+clearance from the producer footprint. The retail movement mechanism that
+would account for a no-rally product leaving its factory, if one exists
+outside this handler path, is **Unknown**.
+
+The state-2 target is nevertheless **Established**: `QueryBuildInfo` supplies
+the exit piece index, the piece transform is resolved with the factory origin,
+and that world position is retained for allocation while a separately snapped
+footprint anchor is validated. No independent factory-heading, yard-map,
+model-extent, or fixed-cell offset is read by the factory handler. Rotation
+therefore enters through the authored piece transform and its hierarchy; the
+stock authored transform for each rotated factory variant remains **Unknown**
+until the data census in [R-P0-02] is completed.
+
+The pre-allocation collision and retry contract is **Established**: the
+validator runs before a product exists, so it cannot be testing a
+producer/product pair; a rejected footprint waits silently for exactly 15
+ticks and has no timeout or force-placement. The allocation-failure branch is
+separate and waits exactly 300 ticks with its established diagnostic. No
+dedicated post-allocation producer/product exemption or blocked-release retry
+was recovered. Whether a later movement path permits that overlap, and what
+an indefinitely blocked release does, are **Unknown**. The occupancy-layer
+inference and its limits remain in [R-P0-08-A §1]; it must not be turned into a
+global collision bypass.
+
+For aircraft, the generic VTOL contract is **Established**: the first VTOL
+point/follow goal starts the ordinary velocity-limited climb, with no separate
+takeoff callback in the movement handler. The factory path does not show a
+factory-specific takeoff state before `GetBuilt`; the exact aircraft-factory
+takeoff-before-rally sequence is therefore **Unknown**. The same boundary
+applies to the no-stacking guarantee for multiple coalesced products: primary
+queue serialization and per-product pre-allocation validation are established,
+but occupancy is published later in the tick and the static evidence does not
+prove that a second same-pass allocation cannot stack.
+
+These are research boundaries, not replacements for the established factory
+completion contract. Keep the unresolved release, collision, blocked-lane,
+aircraft handoff, rotated-authored-transform, and multi-product questions as
+`TODO(question)` until executable or authored-data evidence closes them.
+
 `TODO(T25)`: the upstream producers of production-node wake mask 8
 (Construction stopped) remain unlocated — the handler semantics are closed in
 section 3.3 and above, and a bounded census of every writer of the record
@@ -1354,6 +1402,28 @@ it, skipping any piece whose bit 0 is clear.
 Consequently the defaults are: drawn for a piece with geometry, cached, and
 shaded — and the three "don't" opcodes are the ones that clear a default-set
 bit. All three bit assignments and both directions are established.
+
+### OTA-RND-02A script-side shading census [R-RND-02A]
+
+**Established (correction history, clean-room translation):** an earlier
+provisional render note used the opposite label for the bit-2 polarity. The
+load-time fill and the unit adapters settle the contract used here: bit 2 set
+means shading is enabled, `SHADE` sets it, and `DONT_SHADE` clears it. The
+renderer interprets the cleared state as the identity `SHD` row 15
+([03 §2.4.1]). This is a per-piece render-record flag, not an FBI definition
+flag and not a script-wide mobile/building class rule.
+
+The requested base-game COB census found no `SHADE` operation in any `Create`
+callback. `DONT_SHADE` does occur in `Create`, addressing individual pieces:
+none in ARMCOM, CORCOM, ARMPW, CORAK, ARMSTUMP, ARMFIG, or CORVAMP; 10 in
+CORSOLAR; 15 in ARMLAB; 18 in CORLAB; 11 in ARMVP; 15 in CORVP; 11 in
+ARMAAP; and 18 in CORAAP. The stock mobile scripts in this set therefore
+leave their model-fill shade default in place, while factory scripts make
+explicit per-piece exceptions. **Established (static bytecode census,
+`totala1.hpi`):** no class-wide shade initializer was found in this bounded
+corpus; no `SHADE` or `DONT_SHADE` occurs in the `Activate`/`Deactivate`
+callbacks. The exact runtime fixed/mobile selector remains owned by the
+renderer contract and does not change this piece-flag polarity.
 
 **Thread state words.** A thread's status word encodes its state in the high
 byte, with a sub-state in the next nibble for the waiting family: idle,
@@ -3460,6 +3530,12 @@ Function identities that a later re-derivation corrected — in particular the m
   (factory-product publication windows are established in section 3.8
   [R-P0-09]); slot-relative reuse and order-created units beyond the factory
   path remain open.
+- **OTA-FAC-01 [R-FAC-01]:** no separate post-completion factory egress
+  order, producer/product collision exemption, blocked-release policy, or
+  aircraft takeoff-before-rally transition was recovered. Generic VTOL
+  takeoff, QueryBuildInfo target derivation, primary-queue gating, and the
+  pre-allocation retry split are established; the stock rotated-transform and
+  multiple-product no-stacking questions remain Unknown.
 - Complete player category, side, ally, autonomy, and strategic-AI semantics.
 
 ### Orders and queues

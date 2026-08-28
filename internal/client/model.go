@@ -362,6 +362,95 @@ type screenTri struct {
 	depth int32 // mean screen y for painter order
 }
 
+// modelTarget is the per-unit indexed composition image. Its color, height,
+// and coverage planes stay private until the complete model (including its
+// nanoframe reveal) is finished; uncovered pixels therefore leave terrain and
+// earlier world passes untouched [03 §5.2].
+type modelTarget struct {
+	color, height          []uint8
+	covered                []bool
+	width, heightPx        int
+	minX, minY, maxX, maxY int32
+}
+
+func newModelTarget(width, height int) *modelTarget {
+	n := width * height
+	return &modelTarget{
+		color: make([]uint8, n), height: make([]uint8, n), covered: make([]bool, n),
+		width: width, heightPx: height, maxX: int32(width - 1), maxY: int32(height - 1),
+	}
+}
+
+func (t *modelTarget) admit(idx int, key uint8) bool {
+	if t.height[idx] > key {
+		return false
+	}
+	t.height[idx] = key
+	return true
+}
+
+func (t *modelTarget) write(idx int, color uint8, present bool) {
+	if !present {
+		// Nanoframe erase removes the composed unit pixel. It must not write
+		// an indexed zero into the destination world image [03 §5.2].
+		t.covered[idx] = false
+		return
+	}
+	t.color[idx], t.covered[idx] = color, true
+}
+
+func (t *modelTarget) commit(dst []uint8) {
+	for py := t.minY; py <= t.maxY; py++ {
+		row := int(py) * t.width
+		for px := t.minX; px <= t.maxX; px++ {
+			i := row + int(px)
+			if t.covered[i] {
+				dst[i] = t.color[i]
+			}
+		}
+	}
+}
+
+func (c *Client) reusableModelTarget(tris []screenTri) *modelTarget {
+	n := len(c.indexed)
+	if len(c.modelTargetColor) != n {
+		c.modelTargetColor = make([]uint8, n)
+		c.modelTargetHeight = make([]uint8, n)
+		c.modelTargetCovered = make([]bool, n)
+	}
+	t := &modelTarget{
+		color: c.modelTargetColor, height: c.modelTargetHeight, covered: c.modelTargetCovered,
+		width: c.width, heightPx: c.height, minX: 1, minY: 1, maxX: 0, maxY: 0,
+	}
+	if len(tris) == 0 {
+		return t
+	}
+	t.minX, t.minY, t.maxX, t.maxY = c.triBounds(&tris[0])
+	for i := 1; i < len(tris); i++ {
+		x0, y0, x1, y1 := c.triBounds(&tris[i])
+		if x0 < t.minX {
+			t.minX = x0
+		}
+		if y0 < t.minY {
+			t.minY = y0
+		}
+		if x1 > t.maxX {
+			t.maxX = x1
+		}
+		if y1 > t.maxY {
+			t.maxY = y1
+		}
+	}
+	for py := t.minY; py <= t.maxY; py++ {
+		row := int(py) * t.width
+		for px := t.minX; px <= t.maxX; px++ {
+			i := row + int(px)
+			t.height[i], t.color[i], t.covered[i] = 0, 0, false
+		}
+	}
+	return t
+}
+
 type modelPrimitiveMode uint8
 
 const (
@@ -408,6 +497,42 @@ func (c *Client) modelStates(m *unitModel, pieces []frame.PieceView) []compiledm
 		idx := pv.Index
 		if pv.Name != "" {
 			found, ok := m.pieceByName[strings.ToLower(pv.Name)]
+			if !ok {
+				continue
+			}
+			idx = found
+		}
+		if idx < 0 || idx >= len(states) {
+			continue
+		}
+		states[idx] = compiledmodel.PieceState{
+			RotX: pv.RotX, RotY: pv.RotY, RotZ: pv.RotZ,
+			Trans:     [3]numeric.Fixed{pv.Tx, pv.Ty, pv.Tz},
+			DontShade: pv.DontShade, Hidden: pv.Hidden, DontShadow: pv.DontShadow,
+		}
+	}
+	return states
+}
+
+// modelStatesForCompiled adapts the committed piece lanes for every model
+// presentation consumer. Keeping name/index resolution here makes selection
+// geometry and body drawing consume the same immutable hierarchy and pose
+// [03 §2.4][03 §5.2].
+func modelStatesForCompiled(m *compiledmodel.Model, pieces []frame.PieceView) []compiledmodel.PieceState {
+	if m == nil {
+		return nil
+	}
+	states := make([]compiledmodel.PieceState, len(m.Pieces))
+	byName := make(map[string]int, len(m.Pieces))
+	for i, piece := range m.Pieces {
+		if piece.Name != "" {
+			byName[strings.ToLower(piece.Name)] = i
+		}
+	}
+	for _, pv := range pieces {
+		idx := pv.Index
+		if pv.Name != "" {
+			found, ok := byName[strings.ToLower(pv.Name)]
 			if !ok {
 				continue
 			}
@@ -510,7 +635,10 @@ func (c *Client) collectDrawTris(draw *presentationrender.UnitDraw, owner uint8,
 					sx, sy := c.cam.WorldToScreen(v[0], v[1], v[2])
 					tri.x[corner], tri.y[corner] = sx-camera.OriginX, sy-camera.OriginY
 					tri.depth += tri.y[corner]
-					tri.key[corner] = float64(presentationrender.NanoframeHeightKey(int32((v[1] - draw.WorldPos[1]) >> 16)))
+					// Form the key from the transformed vertex's model-relative
+					// whole-world-unit Y. A right shift would floor negative values;
+					// retail narrowing truncates toward zero [I3][03 §5.2].
+					tri.key[corner] = float64(modelHeightKey(v[1].Sub(draw.WorldPos[1])))
 					primitiveCorner := [3]int{0, k, k + 1}[corner]
 					if primitiveCorner < len(pr.ShadeRows) {
 						tri.row[corner] = float64(pr.ShadeRows[primitiveCorner])
@@ -541,21 +669,23 @@ func (c *Client) drawModel(draw *presentationrender.UnitDraw, owner uint8, id ui
 	// frame has no visual-options word, terrain ground/depth input, or model
 	// shadow flag needed by the established pre-body shadow path [03 §5.3].
 	tris := c.collectDrawTris(draw, owner, id, kind)
-	if reveal != nil {
-		c.resetNanoDepth(tris)
-	}
+	// The indexed body and byte height plane are one per-unit render target.
+	// Completed and unfinished models both use this target; nanoframe reveal
+	// only adds a recolour/read step after ordinary admission [03 §5.2].
+	target := c.reusableModelTarget(tris)
 	for i := range tris {
 		switch {
 		case reveal != nil && tris[i].frame != nil:
-			c.blitTexturedTriNanoframe(&tris[i], tris[i].frame, *reveal)
+			c.blitTexturedTriNanoframeTarget(target, &tris[i], tris[i].frame, *reveal)
 		case reveal != nil:
-			c.fillTriNanoframe(&tris[i], tris[i].color, *reveal)
+			c.fillTriNanoframeTarget(target, &tris[i], tris[i].color, *reveal)
 		case tris[i].frame != nil:
-			c.blitTexturedTri(&tris[i], tris[i].frame)
+			c.blitTexturedTriTarget(target, &tris[i], tris[i].frame)
 		default:
-			c.fillTri(&tris[i], tris[i].color)
+			c.fillTriTarget(target, &tris[i], tris[i].color)
 		}
 	}
+	target.commit(c.indexed)
 	if reveal != nil {
 		c.drawModelOutline(draw, outline)
 	}
@@ -654,64 +784,77 @@ func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {
 	return c.drawModel(draw, 0, projectilePresentationID(p), modelCursorProjectile, nil, 0)
 }
 
-// nanoframeKeyAt is the pixel's interpolated height key, clamped to the byte
-// range the reveal compares against [03 §5.2].
-func nanoframeKeyAt(t *screenTri, l0, l1, l2 float64) uint8 {
-	ki := int(l0*t.key[0] + l1*t.key[1] + l2*t.key[2])
-	if ki < 0 {
+// modelHeightKey computes the per-vertex key shared by completed-model
+// composition and nanoframe reveal. The 125-bias definition bit is not yet
+// identified; all established stock paths use 50, so keep that branch out of
+// presentation state rather than guessing its field [03 §5.2].
+func modelHeightKey(relativeY numeric.Fixed) int32 {
+	whole := int32(relativeY.Raw() / (1 << 16)) // __ftol-style truncation [I3]
+	return whole/2 + presentationrender.NanoframeHeightBias
+}
+
+// scanlineHeightKey performs the model rasterizer's fixed-point height
+// progression. Each edge intersection is represented as 16.16 X and key;
+// the key is then stepped from the left intersection across the scanline,
+// with every division truncating toward zero before the final byte narrowing
+// [I3][03 §5.2]. It is intentionally separate from barycentric color/UV
+// interpolation, which follows their own established paths.
+func scanlineHeightKey(t *screenTri, px, py int32) uint8 {
+	type endpoint struct{ x, key int64 }
+	var hits [3]endpoint
+	n := 0
+	for i := 0; i < 3; i++ {
+		j := (i + 1) % 3
+		x0, y0 := int64(t.x[i]), int64(t.y[i])
+		x1, y1 := int64(t.x[j]), int64(t.y[j])
+		if int64(py) < minI64(y0, y1) || int64(py) > maxI64(y0, y1) {
+			continue
+		}
+		dy := y1 - y0
+		dx := x1 - x0
+		ky0, ky1 := int64(t.key[i]), int64(t.key[j])
+		if dy == 0 {
+			hits[n] = endpoint{x: x0 << 16, key: ky0 << 16}
+		} else {
+			relY := int64(py) - y0
+			hits[n] = endpoint{
+				x:   (x0 << 16) + ((dx << 16) * relY / dy),
+				key: (ky0 << 16) + (((ky1 - ky0) << 16) * relY / dy),
+			}
+		}
+		n++
+	}
+	if n == 0 {
 		return 0
 	}
-	if ki > 255 {
-		return 255
+	left, right := hits[0], hits[0]
+	for i := 1; i < n; i++ {
+		if hits[i].x < left.x {
+			left = hits[i]
+		}
+		if hits[i].x > right.x {
+			right = hits[i]
+		}
 	}
-	return uint8(ki)
+	key := left.key
+	if span := right.x - left.x; span != 0 {
+		key += ((int64(px)<<16 - left.x) * (right.key - left.key)) / span
+	}
+	return uint8(key / (1 << 16))
 }
 
-// nanoframeDepth is the per-pixel test the model rasterizer applies while
-// composing a unit: the height key doubles as the unit's own depth key and the
-// higher key wins, ties to the later face. Without it the reveal would read
-// two faces at different heights in the same pixel [03 §5.2].
-//
-// Nanolathe applies the test only on the nanoframe path, where the reveal
-// depends on it; the finished-unit path keeps its existing painter order.
-func (c *Client) nanoframeDepth(idx int, key uint8) bool {
-	if c.nanoDepth[idx] > key {
-		return false
+func minI64(a, b int64) int64 {
+	if a < b {
+		return a
 	}
-	c.nanoDepth[idx] = key
-	return true
+	return b
 }
 
-// resetNanoDepth clears the depth plane over one model's screen extent.
-func (c *Client) resetNanoDepth(tris []screenTri) {
-	if len(c.nanoDepth) != len(c.indexed) {
-		c.nanoDepth = make([]uint8, len(c.indexed))
+func maxI64(a, b int64) int64 {
+	if a > b {
+		return a
 	}
-	if len(tris) == 0 {
-		return
-	}
-	minX, minY, maxX, maxY := c.triBounds(&tris[0])
-	for i := 1; i < len(tris); i++ {
-		x0, y0, x1, y1 := c.triBounds(&tris[i])
-		if x0 < minX {
-			minX = x0
-		}
-		if y0 < minY {
-			minY = y0
-		}
-		if x1 > maxX {
-			maxX = x1
-		}
-		if y1 > maxY {
-			maxY = y1
-		}
-	}
-	for py := minY; py <= maxY; py++ {
-		row := int(py) * c.width
-		for px := minX; px <= maxX; px++ {
-			c.nanoDepth[row+int(px)] = 0
-		}
-	}
+	return b
 }
 
 // nanoframeVerdict resolves one composed nanoframe pixel. It returns the
@@ -719,6 +862,9 @@ func (c *Client) resetNanoDepth(tris []screenTri) {
 func nanoframeVerdict(rev presentationrender.NanoframeReveal, key uint8, composed uint8) (uint8, bool) {
 	switch v := rev.Verdict(key); v {
 	case presentationrender.NanoframeErase:
+		// Erase removes the composed scratch pixel. The target caller clears
+		// coverage; it never writes palette zero into the world destination
+		// [03 §5.2].
 		return 0, false
 	case presentationrender.NanoframeKeep:
 		return composed, true
@@ -727,8 +873,7 @@ func nanoframeVerdict(rev presentationrender.NanoframeReveal, key uint8, compose
 	}
 }
 
-// fillTriNanoframe fills a flat face through the nanoframe reveal [03 §5.2].
-func (c *Client) fillTriNanoframe(t *screenTri, color uint8, rev presentationrender.NanoframeReveal) {
+func (c *Client) fillTriNanoframeTarget(target *modelTarget, t *screenTri, color uint8, rev presentationrender.NanoframeReveal) {
 	minX, minY, maxX, maxY := c.triBounds(t)
 	d := baryDenom(t)
 	if d == 0 {
@@ -741,20 +886,21 @@ func (c *Client) fillTriNanoframe(t *screenTri, color uint8, rev presentationren
 			if l0 < 0 || l1 < 0 || l2 < 0 {
 				continue
 			}
-			key := nanoframeKeyAt(t, l0, l1, l2)
-			if !c.nanoframeDepth(int(row+px), key) {
+			key := scanlineHeightKey(t, px, py)
+			idx := int(row + px)
+			if !target.admit(idx, key) {
 				continue
 			}
 			if b, ok := nanoframeVerdict(rev, key, color); ok {
-				c.indexed[row+px] = b
+				target.write(idx, b, true)
+			} else {
+				target.write(idx, 0, false)
 			}
 		}
 	}
 }
 
-// blitTexturedTriNanoframe samples the texture exactly as the finished unit
-// does and then routes each pixel through the nanoframe reveal [03 §5.2].
-func (c *Client) blitTexturedTriNanoframe(t *screenTri, frame *formats.GAFFrame, rev presentationrender.NanoframeReveal) {
+func (c *Client) blitTexturedTriNanoframeTarget(target *modelTarget, t *screenTri, frame *formats.GAFFrame, rev presentationrender.NanoframeReveal) {
 	minX, minY, maxX, maxY := c.triBounds(t)
 	d := baryDenom(t)
 	if d == 0 {
@@ -772,15 +918,18 @@ func (c *Client) blitTexturedTriNanoframe(t *screenTri, frame *formats.GAFFrame,
 			if !ok {
 				continue
 			}
-			key := nanoframeKeyAt(t, l0, l1, l2)
-			if !c.nanoframeDepth(int(row+px), key) {
+			key := scanlineHeightKey(t, px, py)
+			idx := int(row + px)
+			if !target.admit(idx, key) {
 				continue
 			}
 			if c.pal != nil {
 				b = c.pal.Shade[shadeRowAt(t, l0, l1, l2)][b]
 			}
 			if b, ok := nanoframeVerdict(rev, key, b); ok {
-				c.indexed[row+px] = b
+				target.write(idx, b, true)
+			} else {
+				target.write(idx, 0, false)
 			}
 		}
 	}
@@ -816,25 +965,20 @@ func shadeRowAt(t *screenTri, l0, l1, l2 float64) int {
 	return ri
 }
 
-// fillTri fills a flat-coloured face; flat faces take no SHD row [03 §2.4.1].
-func (c *Client) fillTri(t *screenTri, color uint8) {
+func (c *Client) fillTriTarget(target *modelTarget, t *screenTri, color uint8) {
 	minX, minY, maxX, maxY := c.triBounds(t)
 	for py := minY; py <= maxY; py++ {
 		row := py * int32(c.width)
 		for px := minX; px <= maxX; px++ {
-			if pointInTri(t, px, py) {
-				c.indexed[row+px] = color
+			idx := int(row + px)
+			if pointInTri(t, px, py) && target.admit(idx, scanlineHeightKey(t, px, py)) {
+				target.write(idx, color, true)
 			}
 		}
 	}
 }
 
-// blitTexturedTri affinely samples the texture frame across the triangle,
-// routing every sample through PALETTE.SHD at the barycentrically
-// interpolated per-vertex row: row = ftol(dot(N, L)*5) & 31 with the piece's
-// smooth vertex normals [03 §2.4.1]; flat-colored faces take no SHD at all.
-// Transparent texels skip.
-func (c *Client) blitTexturedTri(t *screenTri, frame *formats.GAFFrame) {
+func (c *Client) blitTexturedTriTarget(target *modelTarget, t *screenTri, frame *formats.GAFFrame) {
 	minX, minY, maxX, maxY := c.triBounds(t)
 	d := baryDenom(t)
 	if d == 0 {
@@ -852,10 +996,14 @@ func (c *Client) blitTexturedTri(t *screenTri, frame *formats.GAFFrame) {
 			if !ok {
 				continue
 			}
+			idx := int(row + px)
+			if !target.admit(idx, scanlineHeightKey(t, px, py)) {
+				continue
+			}
 			if c.pal != nil {
 				b = c.pal.Shade[shadeRowAt(t, l0, l1, l2)][b]
 			}
-			c.indexed[row+px] = b
+			target.write(idx, b, true)
 		}
 	}
 }

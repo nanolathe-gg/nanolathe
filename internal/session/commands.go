@@ -461,6 +461,9 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		} else {
 			err = construction.CancelProductCount(u, c.FactoryBuild.Product, -count)
 		}
+		if err != nil && s.Build != nil {
+			s.Build.RecordCommandRejection(tick, u.Handle, c.FactoryBuild.Product, count, err)
+		}
 		if err == nil && count > 0 {
 			// Counted factory nodes are no-purge commands. The old boolean is
 			// retained only for source compatibility with pre-count callers.

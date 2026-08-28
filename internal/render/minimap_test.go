@@ -326,7 +326,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 		{WorldX: 50, WorldZ: 50, WorldY: 0, Owner: 0, Palette: 10, IsCommander: false},
 		{WorldX: 50, WorldZ: 50, WorldY: 0, Owner: 0, Palette: 20, IsCommander: false},
 	}
-	blink := BlinkState{Countdown: 7, Phase: 1}
+	blink := BlinkState{Phase: 1}
 	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) {
 		dst.Set(x, y, color)
 		if commander {
@@ -423,37 +423,65 @@ func TestMinimapBlinkGate(t *testing.T) {
 	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) {
 		dst.Set(x, y, color)
 	}
-	blinkOff := BlinkState{Countdown: 7, Phase: 0}
+	blinkOff := BlinkState{Phase: 0}
 	finalOff := rebuildFinalExact(mapped, m, 100, 100, contacts, nil, blinkOff, blit, 0xA0, 0xB0, 0xC0)
 	rx, ry := RadarProjection(10, 10, 0, 100, 100, m)
 	if v, _ := finalOff.At(int(rx), int(ry)); v != 5 {
 		t.Fatalf("stealth hidden when blink==0, got %d want mapped 5 [03 §3.9]", v)
 	}
-	blinkOn := BlinkState{Countdown: 7, Phase: 1}
+	blinkOn := BlinkState{Phase: 1}
 	finalOn := rebuildFinalExact(mapped, m, 100, 100, contacts, nil, blinkOn, blit, 0xA0, 0xB0, 0xC0)
 	if v, _ := finalOn.At(int(rx), int(ry)); v != 9 {
 		t.Fatalf("stealth visible when blink==1, got %d want 9", v)
 	}
-	// Tick: every 8 frames ^=1 [03 §3.6]
-	b := BlinkState{Countdown: 7, Phase: 0}
-	for i := 0; i < 7; i++ {
-		b.Tick()
-		if b.Phase != 0 {
-			t.Fatalf("phase should stay 0 while countdown >0, tick %d phase %d", i, b.Phase)
-		}
+}
+
+func TestMinimapServiceConsumesCommittedBlinkPhase(t *testing.T) {
+	s := NewMinimapService(MinimapServiceConfig{})
+	s.dirty = 0
+	s.SetBlinkPhase(3)
+	if got := s.Blink().Phase; got != 1 {
+		t.Fatalf("blink phase should normalize to bit 0, got %d", got)
 	}
-	if b.Countdown != 0 {
-		t.Fatalf("after 7 ticks Countdown want 0 got %d", b.Countdown)
+	if s.dirty != MinimapDirtyFinal {
+		t.Fatalf("phase change dirty bits = %d, want FINAL only", s.dirty)
 	}
-	b.Tick() // wraps 0->7 and toggles
-	if b.Countdown != 7 || b.Phase != 1 {
-		t.Fatalf("wrap Tick want Countdown 7 Phase1 got %d %d", b.Countdown, b.Phase)
+	s.dirty = 0
+	s.SetBlinkPhase(1)
+	if s.dirty != 0 {
+		t.Fatalf("equivalent phase change dirtied surfaces: %d", s.dirty)
 	}
-	// Next 8 ticks should toggle back
-	for i := 0; i < 8; i++ {
-		b.Tick()
+	s.SetBlinkPhase(2)
+	if got := s.Blink().Phase; got != 0 {
+		t.Fatalf("blink phase should mask higher bits, got %d", got)
 	}
-	if b.Phase != 0 {
-		t.Fatalf("phase should toggle every 8, got %d want 0", b.Phase)
+}
+
+func TestMinimapPhaseGatesRegularAndDashedPresentation(t *testing.T) {
+	m := camera.Minimap{W: 32, H: 32}
+	mapped := &RadarSurface{W: 32, H: 32, Bits: make([]byte, 32*32)}
+	contacts := []MinimapContact{{
+		WorldX: 50, WorldZ: 50, Visible: true, LocalPlayer: 1, Owner: 1,
+		BlinkSuppress: 1, Palette: 9,
+	}}
+	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) {
+		dst.Set(x, y, color)
+	}
+	rx, ry := RadarProjection(50, 50, 0, 100, 100, m)
+	off := rebuildFinalExact(mapped, m, 100, 100, contacts, nil, BlinkState{Phase: 0}, blit, 7, 8, 9)
+	on := rebuildFinalExact(mapped, m, 100, 100, contacts, nil, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	if got, _ := off.At(int(rx), int(ry)); got != 0 {
+		t.Fatalf("regular suppressed contact phase 0 pixel = %d, want mapped 0", got)
+	}
+	if got, _ := on.At(int(rx), int(ry)); got != 9 {
+		t.Fatalf("regular suppressed contact phase 1 pixel = %d, want blip 9", got)
+	}
+
+	phase0 := &RadarSurface{W: 32, H: 32, Bits: make([]byte, 32*32)}
+	phase1 := &RadarSurface{W: 32, H: 32, Bits: make([]byte, 32*32)}
+	drawDashedCircle(phase0, 16, 16, 8, 5, false)
+	drawDashedCircle(phase1, 16, 16, 8, 5, true)
+	if string(phase0.Bits) == string(phase1.Bits) {
+		t.Fatal("dashed ring parity did not change with committed phase")
 	}
 }
