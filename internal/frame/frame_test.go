@@ -125,6 +125,23 @@ func TestFrameResetRetainsNestedCapacities(t *testing.T) {
 	}
 }
 
+func TestFrameRadarResetRetainsContactsAndCircleStorage(t *testing.T) {
+	f := Frame{
+		Radar: RadarView{
+			Contacts: make([]RadarContactView, 1, 2),
+			Circles:  make([]RadarCircleView, 1, 2),
+		},
+	}
+	f.Radar.Contacts[0].Rings = make([]RadarRingView, 1, 3)
+	f.Reset()
+	if len(f.Radar.Contacts) != 0 || cap(f.Radar.Contacts) != 2 || len(f.Radar.Circles) != 0 || cap(f.Radar.Circles) != 2 {
+		t.Fatalf("radar top-level storage len/cap = %d/%d contacts, %d/%d circles", len(f.Radar.Contacts), cap(f.Radar.Contacts), len(f.Radar.Circles), cap(f.Radar.Circles))
+	}
+	if got := f.Radar.Contacts[:1][0].Rings; len(got) != 0 || cap(got) != 3 {
+		t.Fatalf("radar nested ring storage len/cap = %d/%d", len(got), cap(got))
+	}
+}
+
 func TestBufferWarmPublishAllocationsAfterWarmup(t *testing.T) {
 	b := NewBuffer(Capacities{
 		Units: 1, Projectiles: 1, Features: 1, Effects: 1,

@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/camera"
-	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -81,9 +81,9 @@ func TestRetailFactoryProductClickQueuesAndBuilds(t *testing.T) {
 		if u == nil {
 			continue
 		}
-		u.Flags &^= client.SelectionFlag
+		u.Flags &^= hud.SelectionFlag
 		if u.Handle == labHandle {
-			u.Flags |= client.SelectionFlag
+			u.Flags |= hud.SelectionFlag
 		}
 	}
 	for step := int32(31); step <= 60; step++ {

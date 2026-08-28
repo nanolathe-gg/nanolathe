@@ -193,12 +193,13 @@ func (m *Manager) GetGateCandidates() map[string]struct{} {
 	return m.GateCandidates
 }
 
-// GetRNG satisfies Selector RNG extension — returns per-manager RNG when set for session isolation [RS-06][I4], else Global.Sim per RS-02.
+// GetRNG satisfies Selector RNG extension — returns per-manager RNG when set for session isolation [RS-06][I4] DET-01.
+// Production requires injected RNG; nil means no draw (no global fallback).
 func (m *Manager) GetRNG() *rng.Simulation {
 	if m != nil && m.RNG != nil {
 		return m.RNG
 	}
-	return rng.Global.Sim
+	return nil
 }
 
 // GetQueueBuild returns the ordinary build path for P0-I16.
@@ -289,12 +290,13 @@ func (m *Manager) EnsureStrategicInitialized() {
 	m.Strategic.Init(types)
 }
 
-// simRNG returns the per-session isolated RNG when set [RS-06][I4], else the one global simulation RNG per RS-02.
+// simRNG returns the per-session isolated RNG when set [RS-06][I4] DET-01.
+// Production requires injected RNG; nil means no draw.
 func (m *Manager) simRNG() *rng.Simulation {
 	if m != nil && m.RNG != nil {
 		return m.RNG
 	}
-	return rng.Global.Sim
+	return nil
 }
 
 // findBuilder returns a valid builder for the manager's player [P0-I12].

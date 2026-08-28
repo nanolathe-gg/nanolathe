@@ -17,40 +17,46 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-func TestRequireGlobalRNGStreamsFailsClosedAndPreservesSeededStreams(t *testing.T) {
-	oldSim, oldCRT := rng.Global.Sim, rng.Global.Crt
-	t.Cleanup(func() {
-		rng.Global.Sim = oldSim
-		rng.Global.Crt = oldCRT
-	})
+// TestSeedSessionRNGWipesPreBattleDrawsAndLeavesGlobalAlone locks the DET-01
+// seeding contract [R-CORE-02]: seeding both session streams fresh wipes
+// every draw made before it (retail's reseed-wipes-history property at battle
+// entry), the seeded continuation is deterministic, and rng.Global is neither
+// read nor written. The old requireGlobalRNGStreams gate is gone — there is
+// no process-global stream left to validate.
+func TestSeedSessionRNGWipesPreBattleDrawsAndLeavesGlobalAlone(t *testing.T) {
+	s := &Session{}
+	// Pre-battle consumption on the fixture-default streams.
+	s.SimRNG().Uint32n(100)
+	s.CrtRNG().Rand()
+	if s.SimRNG().Draws() == 0 || s.CrtRNG().Draws() == 0 {
+		t.Fatal("pre-battle draws did not advance the session streams")
+	}
+	gsim, gcrt := rng.Global.Sim, rng.Global.Crt
 
-	rng.Global.Sim = nil
-	rng.Global.Crt = nil
-	if err := requireGlobalRNGStreams(); err == nil || !strings.Contains(err.Error(), "simulation RNG") {
-		t.Fatalf("missing simulation stream error = %v, want explicit simulation diagnostic", err)
+	s.SeedSessionRNG(42, 42)
+	if s.SimRNG().Draws() != 0 || s.CrtRNG().Draws() != 0 {
+		t.Fatalf("reseed must wipe draw history [R-CORE-02]: sim %d crt %d", s.SimRNG().Draws(), s.CrtRNG().Draws())
+	}
+	if rng.Global.Sim != gsim || rng.Global.Crt != gcrt {
+		t.Fatal("SeedSessionRNG mutated rng.Global [DET-01]")
 	}
 
-	sim := rng.NewSimulation(123)
-	rng.Global.Sim = &sim
-	if err := requireGlobalRNGStreams(); err == nil || !strings.Contains(err.Error(), "CRT RNG") {
-		t.Fatalf("missing CRT stream error = %v, want explicit CRT diagnostic", err)
+	// Same seeds produce identical continuations.
+	fresh := &Session{}
+	fresh.SeedSessionRNG(42, 42)
+	if a, b := s.SimRNG().Uint32n(1000), fresh.SimRNG().Uint32n(1000); a != b {
+		t.Fatalf("sim continuation diverged: %d vs %d", a, b)
 	}
-
-	crt := rng.NewCRT(456)
-	rng.Global.Crt = &crt
-	simDraws, crtDraws := sim.Draws(), crt.Draws()
-	if err := requireGlobalRNGStreams(); err != nil {
-		t.Fatalf("seeded streams rejected: %v", err)
-	}
-	if rng.Global.Sim != &sim || rng.Global.Crt != &crt {
-		t.Fatal("seeded stream pointers changed")
-	}
-	if sim.Draws() != simDraws || crt.Draws() != crtDraws {
-		t.Fatalf("stream validation consumed draws: sim %d→%d CRT %d→%d", simDraws, sim.Draws(), crtDraws, crt.Draws())
+	if a, b := s.CrtRNG().Rand(), fresh.CrtRNG().Rand(); a != b {
+		t.Fatalf("crt continuation diverged: %d vs %d", a, b)
 	}
 }
 
-func TestStrictSessionConstructorsRejectMissingGlobalRNG(t *testing.T) {
+// TestConstructorsDoNotRequireGlobalRNG supersedes the old
+// TestStrictSessionConstructorsRejectMissingGlobalRNG [R-CORE-02] DET-01:
+// constructors no longer consult or require the process-global streams, so
+// their diagnostics with nil globals are domain errors, never RNG errors.
+func TestConstructorsDoNotRequireGlobalRNG(t *testing.T) {
 	oldSim, oldCRT := rng.Global.Sim, rng.Global.Crt
 	t.Cleanup(func() {
 		rng.Global.Sim = oldSim
@@ -58,20 +64,12 @@ func TestStrictSessionConstructorsRejectMissingGlobalRNG(t *testing.T) {
 	})
 	rng.Global.Sim = nil
 	rng.Global.Crt = nil
-	if _, err := NewMissionWithProgress(nil, nil, "missing", 0, nil); err == nil || !strings.Contains(err.Error(), "simulation RNG") {
-		t.Fatalf("strict mission constructor error = %v, want missing simulation stream", err)
-	}
-	if _, err := NewSkirmishWithProgress(nil, nil, SkirmishConfig{MapName: "missing"}, nil); err == nil || !strings.Contains(err.Error(), "simulation RNG") {
-		t.Fatalf("strict skirmish constructor error = %v, want missing simulation stream", err)
-	}
 
-	sim := rng.NewSimulation(123)
-	rng.Global.Sim = &sim
-	if _, err := NewMissionWithProgress(nil, nil, "missing", 0, nil); err == nil || !strings.Contains(err.Error(), "CRT RNG") {
-		t.Fatalf("strict mission constructor error = %v, want missing CRT stream", err)
+	if _, err := NewMissionWithProgress(nil, nil, "missing", 0, nil); err == nil || strings.Contains(err.Error(), "RNG") {
+		t.Fatalf("mission constructor error = %v, want a domain error with no RNG dependency", err)
 	}
-	if _, err := NewSkirmishWithProgress(nil, nil, SkirmishConfig{MapName: "missing"}, nil); err == nil || !strings.Contains(err.Error(), "CRT RNG") {
-		t.Fatalf("strict skirmish constructor error = %v, want missing CRT stream", err)
+	if _, err := NewSkirmishWithProgress(nil, nil, SkirmishConfig{MapName: "missing"}, nil); err == nil || strings.Contains(err.Error(), "RNG") {
+		t.Fatalf("skirmish constructor error = %v, want a domain error with no RNG dependency", err)
 	}
 }
 

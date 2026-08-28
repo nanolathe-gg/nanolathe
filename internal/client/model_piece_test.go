@@ -406,7 +406,7 @@ func TestSameSnapshotIdenticalFramebuffer(t *testing.T) {
 }
 
 // TestSelectionPickingStable ensures selection picking comment: picking uses footprint, not animated extents.
-// This is a light check that ApplyDragSelectionWorld still works with piece transforms present.
+// This is a light check that piece transforms remain independent of selection projection.
 // We verify that unit's screen position for selection is still via UnitView.X/Z, not piece offset.
 func TestSelectionPickingStable(t *testing.T) {
 	c := newTestClient(t)

@@ -6,6 +6,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/render"
@@ -169,7 +170,7 @@ func TestSelectionChromeFollowsFog(t *testing.T) {
 	if c.indexed[0] != 123 {
 		t.Fatalf("fog pixel = %d, want 123 before selection", c.indexed[0])
 	}
-	c.selectionChrome = []selectionChrome{{view: frame.UnitView{Flags: SelectionFlag, FootX: 1, FootZ: 1}, screenX: 8, screenY: 8}}
+	c.selectionChrome = []selectionChrome{{view: frame.UnitView{Flags: hud.SelectionFlag, FootX: 1, FootZ: 1}, screenX: 8, screenY: 8}}
 	c.drawSelectionStage()
 	if c.indexed[0] == 123 {
 		t.Fatal("selection chrome did not overwrite fog at its established later slot")

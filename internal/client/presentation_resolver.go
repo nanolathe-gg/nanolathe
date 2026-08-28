@@ -83,9 +83,10 @@ func (c *Client) projectileDispatchOptions() render.ProjectileDispatchOptions {
 			if c == nil || c.crt == nil {
 				return nil, nil, false
 			}
-			// The two passes consume the same session CRT in admission order;
-			// no straight-line substitute is emitted when the stream is absent
-			// [03 §5.4][I4].
+			// The two passes consume the client's PRIVATE presentation CRT copy
+			// in admission order; the authoritative session stream is never
+			// drawn here (DET-01). No straight-line substitute is emitted when
+			// the copy is absent [03 §5.4][I4].
 			return render.SnapshotSegmentedPointPasses(v, c.crt)
 		},
 		ResolveGAF: func(req render.ProjectileGAFRequest) (*formats.GAFFrame, bool) {

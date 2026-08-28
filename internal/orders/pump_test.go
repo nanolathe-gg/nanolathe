@@ -10,6 +10,7 @@ import (
 
 func TestMain(m *testing.M) {
 	rng.SeedGlobal(12345, 0)
+	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 	os.Exit(m.Run())
 }
 
@@ -47,6 +48,7 @@ func TestPumpResultCodes(t *testing.T) {
 	}
 	t.Run("code0", func(t *testing.T) {
 		rng.SeedGlobal(1, 0)
+		SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 		q := &Queue{}
 		u := newTestUnit()
 		calls := 0
@@ -74,6 +76,7 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code1", func(t *testing.T) {
 		rng.SeedGlobal(2, 0)
+		SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 		q := &Queue{}
 		u := newTestUnit()
 		calls := 0
@@ -97,6 +100,7 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code2", func(t *testing.T) {
 		rng.SeedGlobal(3, 0)
+		SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 		q := &Queue{}
 		u := newTestUnit()
 		calls := 0
@@ -120,6 +124,7 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code3", func(t *testing.T) {
 		rng.SeedGlobal(42, 0)
+		SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 		q := &Queue{}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(3) })
@@ -140,6 +145,7 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code4", func(t *testing.T) {
 		rng.SeedGlobal(4, 0)
+		SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 		q := &Queue{}
 		u := newTestUnit()
 		calls := 0
@@ -289,6 +295,7 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code9 last rearm", func(t *testing.T) {
 		rng.SeedGlobal(99, 0)
+		SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 		q := &Queue{}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(9) })
@@ -413,6 +420,7 @@ func TestPumpBlockedHeadStalls(t *testing.T) {
 
 func TestDeadline(t *testing.T) {
 	rng.SeedGlobal(1, 0)
+	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 	q := &Queue{}
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
@@ -556,6 +564,7 @@ func TestPushSecondaryAutoInherit(t *testing.T) {
 
 func TestSecondarySkipsNotDue(t *testing.T) {
 	rng.SeedGlobal(7, 0)
+	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 	u := newTestUnit()
 	buildID := Lookup("BuildWeapon")
 	q2 := &Queue{}
@@ -577,6 +586,7 @@ func TestSecondarySkipsNotDue(t *testing.T) {
 
 func TestCascadeUntilWaiting(t *testing.T) {
 	rng.SeedGlobal(10, 0)
+	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 	q := &Queue{}
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
@@ -744,6 +754,7 @@ func TestNilHandlerDiagnostic(t *testing.T) {
 func TestSC8_RNG15_30_44(t *testing.T) {
 	moveID := Lookup("Move_Ground")
 	rng.SeedGlobal(1, 0)
+	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 	q := &Queue{}
 	u := newTestUnit()
 	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(3) })
@@ -760,6 +771,7 @@ func TestSC8_RNG15_30_44(t *testing.T) {
 	}
 	// code 9 last re-arms with RNG30 bound [R-P0-01] PUSH 0x1E
 	rng.SeedGlobal(99, 0)
+	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 	q2 := &Queue{}
 	u2 := newTestUnit()
 	restore2 := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(9) })
@@ -890,6 +902,7 @@ func TestQueueModifiers_SegmentMapping(t *testing.T) {
 // empties. Eligibility reads it via an exact == 0.0 compare.
 func TestOrderGuardFloat(t *testing.T) {
 	rng.SeedGlobal(7, 0)
+	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 	moveID := Lookup("Move_Ground")
 	if moveID == 0 {
 		t.Fatalf("lookup Move_Ground")

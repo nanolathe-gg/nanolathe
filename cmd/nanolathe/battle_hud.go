@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
@@ -19,8 +20,11 @@ import (
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/ui"
+	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -54,6 +58,11 @@ type retailBattleHUD struct {
 	panel *hud.Panel
 	fs    vfs.FSOps
 	pages map[string]*formats.GAF
+	// pageChecked is separate from the GUI cache: a probe may establish that a
+	// page window exists before the selected page is drawn, but it must not make
+	// the later art lookup disappear. A nil page is a valid result when the
+	// authored support-GAF fallback chain supplies the control art [07 §6].
+	pageChecked map[string]bool
 	// Cache resolved GUI/model once instead of reparsing on draw/click [ON-05 1][R-P0-03]
 	windows    map[string]*gui.Window
 	pageCounts map[string]int
@@ -63,6 +72,28 @@ type retailBattleHUD struct {
 	rateSampleTick uint32
 	rateSample     frame.EconomyView
 	rateSampleOK   bool
+
+	// radar owns the presentation-only PICTURE→MAPPED→FINAL lifecycle. Its
+	// inputs are rebuilt from the committed frame at draw time [03 §3.6].
+	radar *render.MinimapService
+
+	// FX radar markers are authored indexed GAF bytes. They are retained with
+	// the battle HUD so FINAL can copy the selected frame directly, without
+	// recoloring through the GUI palette [03 §3.9].
+	radarBlipGAF      *formats.GAFEntry
+	radarCommanderGAF *formats.GAFEntry
+	radarFeatureGAF   *formats.GAFEntry
+
+	// Retail's battle composer copies FINAL to the origin of the fixed 126-pixel
+	// radar canvas; aspect letterbox is inside that canvas [07 §6][07 §10].
+	minimapAnchor   hud.Rect
+	minimapAnchorOK bool
+
+	// assetErr records a required authored page failure encountered while
+	// resolving a committed command page. It is never converted into the
+	// side-general page: GEN is selected only for the explicitly empty
+	// selection state [07 §6][07 §9].
+	assetErr error
 }
 
 // hudFS is the read surface we need for HUD loads plus provider listing for diagnostics.
@@ -196,21 +227,15 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	oldMain := loadGAFOptional(fs, "anims/oldmain.gaf", "oldmain.gaf")
 	share := loadGAFOptional(fs, "anims/share.gaf", "share.gaf")
 	logos := loadGAFOptional(fs, "textures/logos.gaf", "textures/logos.gaf")
-	// Options menu — side-aware, degradable [07 "Tab options menu and manual exit"].
-	// Retail hard-codes guis/armopt.gui for the Tab menu (not side-prefixed), but
-	// we resolve by side where established: ARM uses armopt, CORE uses coropt
-	// where present. CORE never loads ARM-specific options unconditionally.
-	var optionsWin *gui.Window
-	var optionsGAF *formats.GAF
-	if strings.EqualFold(side.NamePrefix, "COR") {
-		optionsWin = loadGUIOptional(fs, "guis/coropt.gui", "options window (CORE) [07 \"Tab options menu and manual exit\"]")
-		optionsGAF = loadGAFOptional(fs, "anims/coropt.gaf", "options GAF (CORE) [07 \"Tab options menu and manual exit\"]")
-		// Do not load ARM-specific options unconditionally for CORE.
-	} else {
-		optionsWin = loadGUIOptional(fs, "guis/armopt.gui", "options window [07 \"Tab options menu and manual exit\"]")
-		optionsGAF = loadGAFOptional(fs, "anims/armopt.gaf", "options GAF [07 \"Tab options menu and manual exit\"]")
-	}
-	// Optional modal windows — degradable individually [07 "Tab options menu and manual exit"].
+	// The ESC options path is fixed to ARMOPT for every side; there is no
+	// COROPT branch in the retail opener [07 §11]. Its support GAF is likewise
+	// the ARMOPT root, and must never be selected from the local side prefix.
+	// These modal resources are isolated optional bindings. The executable's
+	// caller-level outcome for missing/malformed modal files is not established;
+	// keep a nil window/GAF rather than converting that uncertainty into a
+	// battle-entry failure or a fabricated modal [07 §11 "Missing and unknown"].
+	optionsWin := loadGUIOptional(fs, "guis/armopt.gui", "options window [07 \"Tab options menu and manual exit\"]")
+	optionsGAF := loadGAFOptional(fs, "anims/armopt.gaf", "options GAF [07 \"Tab options menu and manual exit\"]")
 	exitWin := loadGUIOptional(fs, "guis/exitmenu.gui", "exitmenu.gui [07 \"Tab options menu and manual exit\"]")
 	confirmWin := loadGUIOptional(fs, "guis/yesorno.gui", "yesorno.gui [07 \"Tab options menu and manual exit\"]")
 	// Optional modal font — degradable [07 §4].
@@ -256,7 +281,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	if confirmWin != nil {
 		placeBattleModal(confirmWin, 640, 480)
 	}
-	return &retailBattleHUD{
+	h := &retailBattleHUD{
 		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, pal: pal,
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
@@ -266,7 +291,79 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		pages:      make(map[string]*formats.GAF),
 		windows:    make(map[string]*gui.Window),
 		pageCounts: make(map[string]int),
-	}, nil
+	}
+	// The empty-selection command page is the first page composed at battle
+	// entry. Require its authored window now so a failed battle construction
+	// cannot defer a missing GUI to a blank draw path. Numbered builder pages
+	// are checked when their committed page is selected [07 §6][07 §9].
+	if side.NamePrefix == "" {
+		return nil, hudAssetError(fs, "gamedata/sidedata.tdf", "selected side has no prefix for the command GUI", fmt.Errorf("empty side prefix"))
+	}
+	if _, _, err := h.loadWindowRequired(strings.ToLower(side.NamePrefix) + "gen"); err != nil {
+		return nil, err
+	}
+	picture := buildBattleRadar(fs, cat, sess.Skirmish.MapName, sess.World, pal)
+	mapW, mapH := 0, 0
+	if sess.World != nil {
+		// MAPPED's source grid is the terrain's visibility-tile lattice. Keep
+		// the HUD on authored frame/terrain dimensions instead of reading the
+		// mutable visibility service during composition [03 §3.8][I6].
+		mapW, mapH = int(sess.World.CellW/2), int(sess.World.CellH/2)
+	}
+	// MAPPED consumes the palette-install GUI remap and the active logical fog
+	// index. Sensor callbacks are supplied from the committed frame by
+	// rebuildRadar; the HUD never binds to mutable visibility state [03
+	// §3.4][03 §3.8].
+	guiRemap := []byte(nil)
+	fogFill := render.FogDarkPaletteIndex
+	if pal != nil {
+		mapped := pal.GUIToBase()
+		guiRemap = mapped[:]
+		fogFill = pal.Logical[render.FogDarkPaletteIndex]
+	}
+	h.radar = render.NewMinimapService(render.MinimapServiceConfig{
+		Picture: picture, MapW: mapW, MapH: mapH, LocalSlot: sess.LocalOwner,
+		FogFill: fogFill, GUIRemap: guiRemap,
+	})
+	if fx := loadGAFOptional(fs, "anims/fx.gaf", "radar FX markers [03 §3.9]"); fx != nil {
+		h.radarBlipGAF, _ = fx.Find("radlogohigh")
+		h.radarCommanderGAF, _ = fx.Find("nuclogo")
+		h.radarFeatureGAF, _ = fx.Find("h2oboom2")
+	}
+	h.minimapAnchor = hud.Rect{X1: 0, Y1: 0, X2: int32(camera.MinimapLongSide - 1), Y2: int32(camera.MinimapLongSide - 1)}
+	h.minimapAnchorOK = true
+	return h, nil
+}
+
+// buildBattleRadar installs the production radar picture from the same map
+// asset that populated the session terrain. TNT's MiniMapPresent bit gates the
+// authored bytes; their recorded dimensions pass through the generic ALP
+// source/destination path, including the observed 252×252 and 252×256 maps
+// [fmt tnt][03 §3.7].
+func buildBattleRadar(fs vfs.FSOps, cat *content.Catalog, mapName string, terrain *world.Terrain, pal *palette.Tables) *render.RadarSurface {
+	if terrain == nil || pal == nil {
+		return nil
+	}
+	playW, playH := terrain.PlayRight, terrain.PlayBottom
+	layout := camera.LayoutMinimap(playW, playH)
+	if layout.W <= 0 || layout.H <= 0 {
+		return nil
+	}
+	var baked []byte
+	var bakedW, bakedH int
+	if fs != nil && cat != nil && cat.Maps != nil {
+		if mh := cat.Maps[content.CanonicalKey(mapName)]; mh != nil && mh.LogicalTNT != "" {
+			if data, err := fs.ReadFileLimit(mh.LogicalTNT, 32<<20); err == nil {
+				if tnt, err := formats.LoadTNT(data); err == nil {
+					w, h := int(tnt.MinimapWidth), int(tnt.MinimapHeight)
+					if tnt.MiniMapPresent && w > 0 && h > 0 && len(tnt.Minimap) == w*h {
+						baked, bakedW, bakedH = tnt.Minimap, w, h
+					}
+				}
+			}
+		}
+	}
+	return render.BuildRadarPicture(terrain, playW, playH, layout, baked, bakedW, bakedH, pal)
 }
 
 // placeBattleModal applies the established 0x1000 modal placement at the
@@ -378,6 +475,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 			drawQueueOverlay(c, cur, cur.Tick, b.shiftHeld, cur.Selection.LocalPlayer, cur.Selection.Primary)
 		}
 	}
+	h.drawMinimap(c, b)
 
 	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. The two horizontal
 	// frames are static at the authored 129-pixel rail boundary; only the side
@@ -410,6 +508,251 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 		b.drawStatusMessage(c)
 	}
 	h.drawResultOverlay(c, b)
+}
+
+// minimapRect returns the battle composer's fixed radar canvas rectangle.
+func (h *retailBattleHUD) minimapRect() (hud.Rect, bool) {
+	if h == nil || !h.minimapAnchorOK {
+		return hud.Rect{}, false
+	}
+	left, top, right, bottom := h.minimapAnchor.Ordered()
+	if right < left || bottom < top {
+		return hud.Rect{}, false
+	}
+	return h.minimapAnchor, true
+}
+
+// radarMapPixel performs the retail signed high-word narrowing before radar
+// projection. Keeping the narrowing explicit matters for map coordinates below
+// zero and for values whose high word does not fit an int32 map coordinate [03
+// §3.9].
+func radarMapPixel(v numeric.Fixed) int32 {
+	return int32(int16(int64(v) >> 16))
+}
+
+func radarGAFFrame(entry *formats.GAFEntry, index int) *formats.GAFFrame {
+	if entry == nil || index < 0 || index >= len(entry.Frames) {
+		return nil
+	}
+	return entry.Frames[index].Frame
+}
+
+func radarGAFFrameCount(entry *formats.GAFEntry) int {
+	if entry == nil {
+		return 0
+	}
+	return len(entry.Frames)
+}
+
+// blitRadarGAF copies an authored marker around its projected anchor. GAF
+// pixels are already PALETTE.PAL indexes; transparent bytes are skipped and
+// no GUI remap is applied [03 §3.9][fmt gaf].
+func blitRadarGAF(dst *render.RadarSurface, anchorX, anchorY int32, f *formats.GAFFrame) {
+	if dst == nil || f == nil {
+		return
+	}
+	left, top := int(anchorX)-int(f.XOffset), int(anchorY)-int(f.YOffset)
+	for y := 0; y < int(f.Height); y++ {
+		for x := 0; x < int(f.Width); x++ {
+			p, ok := f.At(x, y)
+			if ok {
+				dst.Set(left+x, top+y, p)
+			}
+		}
+	}
+}
+
+func radarContactAdmitted(c render.MinimapContact, blink render.BlinkState) bool {
+	// Player zero is a valid owner, but zero-valued unpublished records must
+	// not become visible merely because the local player is also zero. The
+	// authoritative visible/friendly bits cover genuine local-player contacts;
+	// nonzero owner identity is the only owner bypass at this seam [03 §3.9].
+	admit := c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 || c.Status&0x300 != 0 || c.Owner != 0 && c.Owner == c.LocalPlayer
+	return admit && (c.BlinkSuppress == 0 || blink.Phase&1 != 0) && (!c.Stealth || blink.IsBlinkOn())
+}
+
+func radarPublishedContactVisible(c frame.RadarContactView, local uint8) bool {
+	// Owner-local is a retail bypass, but a zero-valued feature/projectile
+	// record is not evidence of ownership. Publisher visibility/friendly state
+	// is authoritative for player zero [03 §3.9].
+	return c.Visible || c.Status&0x300 != 0 || c.OwnerKnown && c.Owner == local
+}
+
+func radarContactRangeEnabled(c frame.RadarContactView) bool {
+	// The publisher resolves the selected/range status and activation definition
+	// gate before the frame boundary. Consume that immutable result directly;
+	// presentation does not reconstruct it from mutable unit state [03 §3.9].
+	return c.RangeStatus
+}
+
+func radarProjectileDot(c frame.RadarContactView) bool {
+	return c.Kind == frame.RadarContactProjectile && c.Status&(1<<29|1<<30|0x40) == 0
+}
+
+func (h *retailBattleHUD) radarOwnerFrameIndex(b *battleSession, contact frame.RadarContactView, frameCount int) int {
+	if frameCount <= 0 {
+		return -1
+	}
+	if int(contact.Palette) < frameCount && contact.Palette != 0 {
+		return int(contact.Palette)
+	}
+	if b != nil && b.sess != nil && int(contact.Owner) < len(b.sess.Skirmish.Players) {
+		color := b.sess.Skirmish.Players[contact.Owner].Color
+		if color >= 0 && color < frameCount {
+			return color
+		}
+	}
+	return 0
+}
+
+// rebuildRadar consumes only the committed frame's radar payload. In
+// particular, circles come from the published callback list and contacts are
+// not reconstructed from the live unit or visibility services [03 §3.4][03
+// §3.6][03 §3.9].
+func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layout camera.Minimap) *render.RadarSurface {
+	if h == nil || b == nil || b.sess == nil || h.radar == nil || cur == nil {
+		return nil
+	}
+	// Blink is a host-frame cadence, not a simulation-tick cadence. Calling
+	// Tick for every draw also forces FINAL to be rebuilt when the same committed
+	// frame is presented for multiple host frames [03 §3.6][03 §3.9].
+	h.radar.Tick()
+	if cur.Visibility.Valid {
+		h.radar.RebuildMapped(cur.Visibility.WordVisible, cur.Visibility.Visible)
+	}
+	// Wipe and replay the completed callback sequence for this frame. This
+	// presentation cache is intentionally rebuilt from immutable values, so a
+	// stale callback cannot survive a frame with no sensors [03 §3.10].
+	h.radar.Wipe()
+	for _, circle := range cur.Radar.Circles {
+		switch circle.Kind {
+		case 1:
+			h.radar.RadarJam(circle.U, circle.V, circle.Radius)
+		case 2:
+			h.radar.SonarJam(circle.U, circle.V, circle.Radius)
+		default:
+			h.radar.Sensor(circle.U, circle.V, circle.Radius)
+		}
+	}
+	contacts := make([]render.MinimapContact, 0, len(cur.Radar.Contacts))
+	regularArt := make([]*formats.GAFFrame, 0, len(cur.Radar.Contacts))
+	commanderArt := make([]*formats.GAFFrame, 0, len(cur.Radar.Contacts))
+	blink := h.radar.Blink()
+	for _, published := range cur.Radar.Contacts {
+		// The renderer's contact adapter owns the unit/commander/ring passes.
+		// Projectile and feature records are applied below, after rings, in the
+		// order required by the retail contacts pass [03 §3.9].
+		if published.Kind != frame.RadarContactUnit {
+			continue
+		}
+		// Range circles belong to the selected/range-status branch. An active
+		// unit contributes its authored circles; an on/off-capable unit must also
+		// be active. Unselected units never inherit circles from their blip [03
+		// §3.9].
+		rangeCircles := radarContactRangeEnabled(published)
+		contact := render.MinimapContact{
+			WorldX:      radarMapPixel(published.X),
+			WorldZ:      radarMapPixel(published.Z),
+			WorldY:      radarMapPixel(published.Y),
+			Owner:       published.Owner,
+			IsCommander: published.Commander, Stealth: published.Stealth,
+			// The renderer's NoRadar slot carries the reviewed selected-unit
+			// circle gate: an on/off-capable unit contributes its authored range only
+			// while active. Cloak is kept separate for the blip blink gate [03 §3.9].
+			NoRadar: !rangeCircles, Status: published.Status,
+			BlinkSuppress: published.BlinkSuppress, Visible: published.Visible,
+			LocalPlayer:  cur.Selection.LocalPlayer,
+			RawDistRadar: published.RadarDistance, RawDistSonar: published.SonarDistance,
+			RawDistJamR: published.RadarJam, RawDistJamS: published.SonarJam,
+			MinimapMode: 1,
+		}
+		if radarContactAdmitted(contact, blink) {
+			regularArt = append(regularArt, radarGAFFrame(h.radarBlipGAF, h.radarOwnerFrameIndex(b, published, radarGAFFrameCount(h.radarBlipGAF))))
+			if contact.IsCommander {
+				commanderArt = append(commanderArt, radarGAFFrame(h.radarCommanderGAF, 0))
+			}
+		}
+		if len(published.Rings) != 0 {
+			ring := published.Rings[0]
+			contact.RingEnabled = ring.Enabled
+			contact.RingDashed = ring.Dashed
+			contact.RingRange = ring.Range
+		}
+		contacts = append(contacts, contact)
+		for _, ring := range published.Rings[1:] {
+			ringContact := render.MinimapContact{
+				WorldX: contact.WorldX, WorldZ: contact.WorldZ, WorldY: contact.WorldY,
+				Owner: contact.Owner, Status: contact.Status, Stealth: contact.Stealth,
+				NoRadar: contact.NoRadar, BlinkSuppress: contact.BlinkSuppress,
+				Visible: contact.Visible, LocalPlayer: contact.LocalPlayer, MinimapMode: 1,
+				RingEnabled: ring.Enabled, RingDashed: ring.Dashed, RingRange: ring.Range,
+			}
+			contacts = append(contacts, ringContact)
+			if radarContactAdmitted(ringContact, blink) {
+				regularArt = append(regularArt, nil)
+			}
+		}
+	}
+	playW, playH := b.sess.World.PlayRight, b.sess.World.PlayBottom
+	regularIndex, commanderIndex := 0, 0
+	returnFinal := h.radar.RebuildFinal(layout, playW, playH, contacts, func(dst *render.RadarSurface, x, y int, p byte, commander bool) {
+		if commander {
+			if commanderIndex < len(commanderArt) {
+				blitRadarGAF(dst, int32(x), int32(y), commanderArt[commanderIndex])
+			}
+			commanderIndex++
+			return
+		}
+		if regularIndex < len(regularArt) {
+			blitRadarGAF(dst, int32(x), int32(y), regularArt[regularIndex])
+		}
+		regularIndex++
+	}, h.paletteIndex(10), h.paletteIndex(12), h.paletteIndex(15))
+	if !returnFinal {
+		return nil
+	}
+	final := h.radar.Final()
+	if final == nil {
+		return nil
+	}
+	// The projectile/feature pass follows rings. The published payload carries
+	// the status and owner/visibility gates. Projectile dots use the dedicated
+	// palette entry; other status selects the authored feature marker [03 §3.9].
+	for _, published := range cur.Radar.Contacts {
+		if published.Kind == frame.RadarContactUnit || !radarPublishedContactVisible(published, cur.Selection.LocalPlayer) {
+			continue
+		}
+		rx, ry := render.RadarProjection(radarMapPixel(published.X), radarMapPixel(published.Z), radarMapPixel(published.Y), playW, playH, layout)
+		if radarProjectileDot(published) {
+			final.Set(int(rx), int(ry), h.paletteIndex(14))
+			continue
+		}
+		if published.Kind == frame.RadarContactFeature || published.Kind == frame.RadarContactProjectile {
+			index := h.radarOwnerFrameIndex(b, published, radarGAFFrameCount(h.radarFeatureGAF))
+			blitRadarGAF(final, rx, ry, radarGAFFrame(h.radarFeatureGAF, index))
+		}
+	}
+	return final
+}
+
+func (h *retailBattleHUD) drawMinimap(c *client.Client, b *battleSession) {
+	if h == nil || c == nil || b == nil || b.sess == nil || b.sess.World == nil || b.cam == nil || c.Buffer() == nil {
+		return
+	}
+	layout, dst, ok := b.minimapLayout()
+	if !ok {
+		return
+	}
+	cur := c.Buffer().Current()
+	surf := h.rebuildRadar(b, cur, layout)
+	if surf == nil {
+		return
+	}
+	viewW, viewH := b.cam.EffectiveView()
+	centerX, centerZ := b.cam.X+viewW/2, b.cam.Z+viewH/2
+	markerX, markerY := render.RadarProjection(centerX, centerZ, 0, b.sess.World.PlayRight, b.sess.World.PlayBottom, layout)
+	// Drawing and input receive the same layout and destination rectangle.
+	c.DrawMinimapLayout(surf, dst, layout, cur.Radar.MarkerMode, markerX+layout.PadX, markerY+layout.PadY, h.paletteIndex(15))
 }
 
 func (h *retailBattleHUD) drawPausedTitle(c *client.Client) {
@@ -713,7 +1056,7 @@ func (h *retailBattleHUD) drawSelectedUnit(c *client.Client, f *frame.Frame) {
 	var selected *frame.UnitView
 	for i := range f.Units {
 		u := &f.Units[i]
-		if u.Owner == h.owner && u.Flags&client.SelectionFlag != 0 {
+		if u.Owner == h.owner && u.Flags&hud.SelectionFlag != 0 {
 			selected = u
 			break
 		}
@@ -785,7 +1128,11 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 	if b == nil || b.cat == nil {
 		return
 	}
-	window, pageGAF := h.windowFor(b, f)
+	window, pageGAF, err := h.windowForRequired(b, f)
+	if err != nil {
+		h.assetErr = err
+		return
+	}
 	if window == nil {
 		return
 	}
@@ -857,7 +1204,11 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 	if !ok {
 		return false
 	}
-	window, _ := h.windowFor(b, f)
+	window, _, err := h.windowForRequired(b, f)
+	if err != nil {
+		h.assetErr = err
+		return false
+	}
 	if window == nil {
 		return false
 	}
@@ -995,7 +1346,11 @@ func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
 	if b.sess != nil && b.sess.Snapshot != nil {
 		f = b.sess.Snapshot.Current()
 	}
-	window, _ := h.windowFor(b, f)
+	window, _, err := h.windowForRequired(b, f)
+	if err != nil {
+		h.assetErr = err
+		return false
+	}
 	if window == nil {
 		return false
 	}
@@ -1024,7 +1379,11 @@ func (h *retailBattleHUD) buttonAt(b *battleSession, x, y int32) int {
 	if b.sess != nil && b.sess.Snapshot != nil {
 		f = b.sess.Snapshot.Current()
 	}
-	window, _ := h.windowFor(b, f)
+	window, _, err := h.windowForRequired(b, f)
+	if err != nil {
+		h.assetErr = err
+		return -1
+	}
 	if window == nil {
 		return -1
 	}
@@ -1065,7 +1424,7 @@ func (h *retailBattleHUD) buildPageCount(def *content.UnitDef) int {
 	count := 0
 	for page := 1; page <= 8; page++ {
 		name := fmt.Sprintf("%s%d", key, page)
-		if window, _ := h.loadWindow(name); window == nil {
+		if window, _ := h.loadWindowProbe(name); window == nil {
 			break
 		}
 		count++
@@ -1075,6 +1434,21 @@ func (h *retailBattleHUD) buildPageCount(def *content.UnitDef) int {
 }
 
 func (h *retailBattleHUD) windowFor(b *battleSession, f *frame.Frame) (*gui.Window, *formats.GAF) {
+	window, page, err := h.windowForRequired(b, f)
+	if err != nil {
+		if h != nil {
+			h.assetErr = err
+		}
+		return nil, nil
+	}
+	return window, page
+}
+
+// windowForRequired returns a selected authored page construction error to
+// every presentation and input caller. The two-value windowFor wrapper keeps
+// older inspection helpers source-compatible while retaining the diagnostic
+// on the HUD [07 §6][07 §9].
+func (h *retailBattleHUD) windowForRequired(b *battleSession, f *frame.Frame) (*gui.Window, *formats.GAF, error) {
 	// Cache resolved GUI/model once instead of reparsing on draw/click [ON-05 1]
 	// Name selection is data-driven with paging: builder's page bits select guis/<unit><page>.gui [R-P0-03][07 §9] C10
 	name := ""
@@ -1083,67 +1457,107 @@ func (h *retailBattleHUD) windowFor(b *battleSession, f *frame.Frame) (*gui.Wind
 	} else {
 		name = "gen"
 	}
-	if b == nil || f == nil || b.cat == nil || f.CommandPage.Builder == 0 || f.CommandPage.PageCount == 0 {
-		return h.loadWindow(name)
+	if b == nil || f == nil || f.CommandPage.Builder == 0 {
+		window, page := h.loadWindow(name)
+		return window, page, nil
+	}
+	if b.cat == nil || f.CommandPage.PageCount == 0 {
+		// A nonzero builder with no valid page count is malformed command-page
+		// state, not the established empty-selection case.
+		return nil, nil, nil
 	}
 	// The committed CommandPage identifies both the builder and page. No live
 	// unit selection or synthesized view participates in GUI selection [I6].
 	view, found := snapshotUnitByHandle(f, f.CommandPage.Builder)
 	if !found || view.Owner != h.owner || !b.snapshotBuilder(view) {
-		return h.loadWindow(name)
+		// A non-empty command-page identity is not an empty selection. Do not
+		// display GEN for stale/malformed builder state [07 §9].
+		return nil, nil, nil
 	}
 	def, ok := h.defFor(&view)
 	if !ok || def == nil || !def.Builder {
-		return h.loadWindow(name)
+		return nil, nil, nil
 	}
 	pageNum := hud.ClampPage(int(f.CommandPage.Page), int(f.CommandPage.PageCount))
 	name = strings.ToLower(def.UnitName) + fmt.Sprintf("%d", pageNum+1)
-	return h.loadWindow(name)
+	window, page, err := h.loadWindowRequired(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	return window, page, nil
 }
 
 func (h *retailBattleHUD) loadWindow(name string) (*gui.Window, *formats.GAF) {
+	window, page, _ := h.loadWindowInternal(name, false)
+	return window, page
+}
+
+// loadWindowProbe is used only while finding the contiguous authored page
+// prefix. The first absent page is the established terminator and must not
+// become a construction error [07 §9].
+func (h *retailBattleHUD) loadWindowProbe(name string) (*gui.Window, *formats.GAF) {
+	window, page, _ := h.loadWindowInternal(name, false)
+	return window, page
+}
+
+// loadWindowRequired resolves a committed numbered builder page. Unlike a
+// probe, a selected existing page reports a missing/malformed GUI and returns
+// no usable window. Numbered page art remains optional because the established
+// support-GAF and BUTTONS0 fallback chain supplies control frames [07 §6][07 §9].
+func (h *retailBattleHUD) loadWindowRequired(name string) (*gui.Window, *formats.GAF, error) {
+	return h.loadWindowInternal(name, true)
+}
+
+func (h *retailBattleHUD) loadWindowInternal(name string, required bool) (*gui.Window, *formats.GAF, error) {
 	if h == nil || h.fs == nil || name == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if cached, ok := h.windows[name]; ok {
 		if cached != nil {
-			return cached, h.pages[name]
+			return cached, h.resolvePageArt(name), nil
 		}
-		return nil, nil // cached miss
+		return nil, nil, nil
 	}
 	window, err := gui.Load(h.fs, "guis/"+name+".gui")
 	if err != nil {
-		if h.windows == nil {
-			h.windows = make(map[string]*gui.Window)
+		if required {
+			return nil, nil, hudAssetError(h.fs, "guis/"+name+".gui", "builder GUI "+name+" [07 §9]", err)
 		}
-		h.windows[name] = nil // cache miss to avoid repeated VFS hits [07 §4]
-		hudAssetWarning(h.fs, "guis/"+name+".gui", "builder GUI "+name+" [07 §9]", err)
-		return nil, nil
+		return nil, nil, nil
 	}
 	if h.windows == nil {
 		h.windows = make(map[string]*gui.Window)
 	}
 	h.windows[name] = window
-	var gaf *formats.GAF
-	if h.side != nil && name != strings.ToLower(h.side.NamePrefix)+"main" && name != strings.ToLower(h.side.NamePrefix)+"gen" {
-		if cached, ok := h.pages[name]; ok {
-			gaf = cached
-		} else if loaded, loadErr := formats.LoadGAFFile(h.fs, "anims/"+name+".gaf"); loadErr == nil {
-			if h.pages == nil {
-				h.pages = make(map[string]*formats.GAF)
-			}
-			h.pages[name] = loaded
-			gaf = loaded
-		} else {
-			// Missing builder GAF is degradable; cache miss and warn once [07 §9].
-			if h.pages == nil {
-				h.pages = make(map[string]*formats.GAF)
-			}
-			h.pages[name] = nil
-			hudAssetWarning(h.fs, "anims/"+name+".gaf", "builder GAF "+name+" [07 §9]", loadErr)
-		}
+	return window, h.resolvePageArt(name), nil
+}
+
+// resolvePageArt validates the page-specific GAF independently of the GUI
+// cache. Missing or malformed page art is a normal null result: gadgetFrame
+// then searches side/main support GAFs and common BUTTONS0 [07 §6].
+func (h *retailBattleHUD) resolvePageArt(name string) *formats.GAF {
+	if h == nil || h.side == nil || name == "" || name == strings.ToLower(h.side.NamePrefix)+"main" || name == strings.ToLower(h.side.NamePrefix)+"gen" {
+		return nil
 	}
-	return window, gaf
+	if h.pageChecked == nil {
+		h.pageChecked = make(map[string]bool)
+	}
+	if h.pageChecked[name] {
+		return h.pages[name]
+	}
+	h.pageChecked[name] = true
+	if loaded, err := formats.LoadGAFFile(h.fs, "anims/"+name+".gaf"); err == nil {
+		if h.pages == nil {
+			h.pages = make(map[string]*formats.GAF)
+		}
+		h.pages[name] = loaded
+		return loaded
+	}
+	if h.pages == nil {
+		h.pages = make(map[string]*formats.GAF)
+	}
+	h.pages[name] = nil
+	return nil
 }
 
 func (h *retailBattleHUD) gadgetFrame(gad gui.Gadget, page *formats.GAF, pressed, disabled bool) *formats.GAFFrame {
@@ -1232,10 +1646,8 @@ func guiRectContains(r gui.Rect, x, y int32) bool {
 // 129-pixel column; the top and bottom strips are as tall as their frames.
 // A pointer on the chrome forces the idle cursor shape [07 §8].
 //
-// TODO(question): retail's region summary is viewport **or minimap**, and the
-// minimap sets the same bit so world shapes appear over it [07 §8]. The rail
-// rectangle that holds this HUD's minimap is not separated out yet, so a
-// pointer over the minimap reads as chrome here.
+// The minimap is on the rail and is consumed before this world-region test;
+// pointers over it therefore remain chrome [07 §8][07 §10].
 func (h *retailBattleHUD) overWorld(x, y int32) bool {
 	if h == nil {
 		return true

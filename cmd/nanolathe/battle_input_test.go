@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -141,7 +142,7 @@ func TestClickCommanderSelectsExactlyOne(t *testing.T) {
 	count := 0
 	var selected *units.Unit
 	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Flags&client.SelectionFlag != 0 {
+		if u != nil && u.Flags&hud.SelectionFlag != 0 {
 			count++
 			selected = u
 		}
@@ -166,7 +167,7 @@ func TestClickAtRenderedCommanderPosition(t *testing.T) {
 	sx, sy := beamX-camera.OriginX, beamY-camera.OriginY
 	clickAt(b, sx, sy, false)
 
-	if commander.Flags&client.SelectionFlag == 0 {
+	if commander.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("rendered commander at (%d,%d) was not selected", sx, sy)
 	}
 }
@@ -196,7 +197,7 @@ func TestClickAtRenderedCommanderPositionUsesSnapshotPicker(t *testing.T) {
 	sx, sy := beamX-camera.OriginX, beamY-camera.OriginY
 	clickAt(b, sx, sy, false)
 
-	if commander.Flags&client.SelectionFlag == 0 {
+	if commander.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("snapshot-rendered commander at (%d,%d) was not selected", sx, sy)
 	}
 }
@@ -213,35 +214,35 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 	// Click A selects A
 	sxA, syA := screenPos(b.cam, a)
 	clickAt(b, sxA, syA, false)
-	if a.Flags&client.SelectionFlag == 0 {
+	if a.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("A should be selected after click")
 	}
 	// Click B without shift replaces: A cleared, B selected
 	sxC, syC := screenPos(b.cam, c)
 	clickAt(b, sxC, syC, false)
-	if a.Flags&client.SelectionFlag != 0 {
+	if a.Flags&hud.SelectionFlag != 0 {
 		t.Fatalf("A should be cleared after replace click on C")
 	}
-	if c.Flags&client.SelectionFlag == 0 {
+	if c.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("C should be selected after replace")
 	}
 	// Shift-click A adds A (now both selected) [07 §9] additive toggle inside
 	clickAt(b, sxA, syA, true)
-	if a.Flags&client.SelectionFlag == 0 || c.Flags&client.SelectionFlag == 0 {
+	if a.Flags&hud.SelectionFlag == 0 || c.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("shift-click should add A, want both selected")
 	}
 	// Shift-click A again toggles A off, leaving only C
 	clickAt(b, sxA, syA, true)
-	if a.Flags&client.SelectionFlag != 0 {
+	if a.Flags&hud.SelectionFlag != 0 {
 		t.Fatalf("shift toggle should deselect A")
 	}
-	if c.Flags&client.SelectionFlag == 0 {
+	if c.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("C should remain selected after toggling A off")
 	}
 	// Left empty with selection issues a contextual move order and does NOT clear [07 §9][04 §3.4] — right-click is deselect/cancel only.
 	// Use the mobile builder A (armcons, CanMove) for move tests; C is a building (armsolar) that cannot move.
 	clickAt(b, sxA, syA, false) // select mobile A
-	if a.Flags&client.SelectionFlag == 0 {
+	if a.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("A should be selected for move test")
 	}
 	qBefore := 0
@@ -249,13 +250,13 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 		qBefore = q.LenPrimary()
 	}
 	// Use a far empty ground location that is not within 16px of any unit.
-	// Use point outside minimap (540,360 90x90) so it is not intercepted as minimap jump [C-6][07 §10].
+	// Use a far empty point so it is not intercepted as minimap input [C-6][07 §10].
 	clickAt(b, 500, 300, false) // far empty ground
-	if a.Flags&client.SelectionFlag == 0 {
+	if a.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("left empty with selection should preserve selection (issues move instead of clear)")
 	}
-	if c.Flags&client.SelectionFlag != 0 {
-		t.Fatalf("left empty should not affect C, got %v", c.Flags&client.SelectionFlag != 0)
+	if c.Flags&hud.SelectionFlag != 0 {
+		t.Fatalf("left empty should not affect C, got %v", c.Flags&hud.SelectionFlag != 0)
 	}
 	if q := orders.QueueForUnit(a); q == nil || q.LenPrimary() != qBefore+1 {
 		t.Fatalf("left empty with selection should queue a contextual move, before %d after %d", qBefore, func() int {
@@ -273,8 +274,8 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 	// Right empty clears when not additive [07 §9] — deselect branch.
 	// Right click must be outside minimap as well.
 	rightClickAt(b, 500, 300, false)
-	if a.Flags&client.SelectionFlag != 0 || c.Flags&client.SelectionFlag != 0 {
-		t.Fatalf("right empty should clear all, A %v C %v", a.Flags&client.SelectionFlag != 0, c.Flags&client.SelectionFlag != 0)
+	if a.Flags&hud.SelectionFlag != 0 || c.Flags&hud.SelectionFlag != 0 {
+		t.Fatalf("right empty should clear all, A %v C %v", a.Flags&hud.SelectionFlag != 0, c.Flags&hud.SelectionFlag != 0)
 	}
 	// Shift+right empty still clears in current retail path (right does not queue).
 	// Select A again and verify shift+left empty preserves via queued move.
@@ -284,7 +285,7 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 		qBefore2 = q.LenPrimary()
 	}
 	clickAt(b, 500, 300, true) // shift left empty → queued move, preserves
-	if a.Flags&client.SelectionFlag == 0 {
+	if a.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("shift left empty should preserve selection via queued move")
 	}
 	if q := orders.QueueForUnit(a); q == nil || q.LenPrimary() != qBefore2+1 {
@@ -295,7 +296,8 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 			return 0
 		}())
 	}
-	// Drag semantics also covered via ApplyDragSelectionWorld already, but verify drag replace/toggle still filtered to LocalOwner
+	// Drag semantics are covered by the canonical HUD selection walker; verify
+	// the battle dispatcher still filters updates to LocalOwner.
 }
 
 // TestFoggedEnemyCannotBeSelectedOrTargeted [03 §3.2] C8 local-owner word gate.
@@ -311,7 +313,7 @@ func TestFoggedEnemyCannotBeSelectedOrTargeted(t *testing.T) {
 	b.latch = input.LatchNormal
 	sx, sy := screenPos(b.cam, enemy)
 	clickAt(b, sx, sy, false)
-	if enemy.Flags&client.SelectionFlag != 0 {
+	if enemy.Flags&hud.SelectionFlag != 0 {
 		t.Fatalf("fogged enemy should not be selectable")
 	}
 	// Targeting: armed attack latch should not acquire fogged unit handle
@@ -335,7 +337,7 @@ func TestFoggedEnemyCannotBeSelectedOrTargeted(t *testing.T) {
 	sxOwn, syOwn := screenPos(b.cam, own)
 	b.latch = input.LatchNormal
 	clickAt(b, sxOwn, syOwn, false)
-	if own.Flags&client.SelectionFlag == 0 {
+	if own.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("own unit should be selectable even with empty vis (owner bypass)")
 	}
 }
@@ -367,10 +369,10 @@ func TestEqualOverlapTieLowerSlotWins(t *testing.T) {
 	}
 	// Via click selection (expects viewport logical, handled via battle's conversion)
 	clickAt(b, sx, sy, false)
-	if u1.Flags&client.SelectionFlag == 0 {
+	if u1.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("lower slot should be selected on exact overlap click")
 	}
-	if u2.Flags&client.SelectionFlag != 0 {
+	if u2.Flags&hud.SelectionFlag != 0 {
 		t.Fatalf("higher slot should not be selected on tie")
 	}
 	// Nudge u2 to be 1px closer – should win despite higher slot (nearest wins)
@@ -400,16 +402,16 @@ func TestLocalOwnerNonzeroReceivesCommands(t *testing.T) {
 	// Try to select otherUnit via click – should not select because filter to LocalOwner [07 §9]
 	sxOther, syOther := screenPos(b.cam, otherUnit)
 	clickAt(b, sxOther, syOther, false)
-	if otherUnit.Flags&client.SelectionFlag != 0 {
+	if otherUnit.Flags&hud.SelectionFlag != 0 {
 		t.Fatalf("foreign unit (owner 0) should not be selectable when LocalOwner=1")
 	}
-	if localUnit.Flags&client.SelectionFlag != 0 {
+	if localUnit.Flags&hud.SelectionFlag != 0 {
 		t.Fatalf("local unit should not be selected after foreign click (empty clear)")
 	}
 	// Click local unit – should select
 	sxLocal, syLocal := screenPos(b.cam, localUnit)
 	clickAt(b, sxLocal, syLocal, false)
-	if localUnit.Flags&client.SelectionFlag == 0 {
+	if localUnit.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("local unit (owner 1) should be selectable when LocalOwner=1")
 	}
 	// Left-click contextual move should dispatch only to local selection via same canonical producer [P0-I03].

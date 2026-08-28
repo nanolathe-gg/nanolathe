@@ -6,7 +6,6 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -14,7 +13,7 @@ import (
 // TestRS02_Player1NeverRunsDuringPlayer0 verifies isolation per economy beforeDeadline [08][I4][RS-02].
 // Spy: record player ticked per economy beforeDeadline.
 func TestRS02_Player1NeverRunsDuringPlayer0(t *testing.T) {
-	rng.SeedGlobal(100, 200)
+	seedTestSim(100)
 	var econ economy.Service
 	for i := 0; i < 2; i++ {
 		p := &econ.Players[i]
@@ -26,8 +25,8 @@ func TestRS02_Player1NeverRunsDuringPlayer0(t *testing.T) {
 		p.Helper1Deadline = 10
 		p.Helper2Deadline = 10
 	}
-	m0 := &Manager{Player: 0}
-	m1 := &Manager{Player: 1}
+	m0 := &Manager{RNG: testSim, Player: 0}
+	m1 := &Manager{RNG: testSim, Player: 1}
 	for k := TaskKind(0); k < TaskKindCount; k++ {
 		m0.Deadlines[k] = 1000
 		m1.Deadlines[k] = 1000
@@ -57,7 +56,7 @@ func TestRS02_Player1NeverRunsDuringPlayer0(t *testing.T) {
 
 // TestRS02_TwoAIsRunOnceEachInAscendingOrder verifies both dispatch once in ascending order [08][I1][RS-02].
 func TestRS02_TwoAIsRunOnceEachInAscendingOrder(t *testing.T) {
-	rng.SeedGlobal(200, 300)
+	seedTestSim(200)
 	var econ economy.Service
 	for i := 0; i < 2; i++ {
 		p := &econ.Players[i]
@@ -71,7 +70,7 @@ func TestRS02_TwoAIsRunOnceEachInAscendingOrder(t *testing.T) {
 	}
 	var managers [10]*Manager
 	for i := 0; i < 2; i++ {
-		m := &Manager{Player: uint8(i)}
+		m := &Manager{RNG: testSim, Player: uint8(i)}
 		for k := TaskKind(0); k < TaskKindCount; k++ {
 			m.Deadlines[k] = 100
 		}
@@ -116,7 +115,7 @@ func TestRS02_RNGDrawLedgerMatchesHandAuthoredSequence(t *testing.T) {
 	// - TaskOther150 due => 1 draw RNG(150)
 	// - TaskResource branch taken => 1 draw RNG(5)
 	// Total 4 draws plus any selection/placement if triggered, but we isolate to just deadlines+strategic
-	rng.SeedGlobal(12345, 0)
+	seedTestSim(12345)
 	cat := &content.Catalog{
 		Units: map[string]*content.UnitDef{
 			"armcom": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armcom")}, UnitName: "armcom", FootprintX: 1, FootprintZ: 1, Builder: true},
@@ -150,7 +149,7 @@ func TestRS02_RNGDrawLedgerMatchesHandAuthoredSequence(t *testing.T) {
 	econ.Players[0].Helper1Deadline = 1000
 	econ.Players[0].Helper2Deadline = 1000
 
-	mgr := &Manager{
+	mgr := &Manager{RNG: testSim,
 		Player:       0,
 		Catalog:      cat,
 		Terrain:      terrain,
@@ -170,9 +169,9 @@ func TestRS02_RNGDrawLedgerMatchesHandAuthoredSequence(t *testing.T) {
 	// Ensure TaskActivity also due? Keep future to isolate
 	mgr.Deadlines[TaskActivity] = 1000
 
-	before := rng.Global.Sim.Draws()
+	before := testSimDraws()
 	mgr.Tick(100, w, &econ)
-	after := rng.Global.Sim.Draws()
+	after := testSimDraws()
 	draws := after - before
 	// Expected draws:
 	// - Strategic refresh: 1 (RNG30) because LastRefresh 0 +30 <=100 and catalog present
@@ -194,7 +193,7 @@ func TestRS02_RNGDrawLedgerMatchesHandAuthoredSequence(t *testing.T) {
 
 // TestRS02_TwoSessionsInOneProcessDoNotShareState verifies that two sessions' AI callbacks and state are isolated [RS-02].
 func TestRS02_TwoSessionsInOneProcessDoNotShareState(t *testing.T) {
-	rng.SeedGlobal(777, 888)
+	seedTestSim(777)
 	cat := &content.Catalog{
 		Units: map[string]*content.UnitDef{
 			"armcom": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armcom")}, UnitName: "armcom", FootprintX: 1, FootprintZ: 1, YardMap: "o", Builder: true, MaxDamage: 100, SightDistance: 300},
@@ -210,8 +209,8 @@ func TestRS02_TwoSessionsInOneProcessDoNotShareState(t *testing.T) {
 	_ = cat
 	_ = plot
 	// We test Manager isolation directly without full Session, to avoid heavy setup
-	mgrA := &Manager{Player: 0}
-	mgrB := &Manager{Player: 0}
+	mgrA := &Manager{RNG: testSim, Player: 0}
+	mgrB := &Manager{RNG: testSim, Player: 0}
 	// Give them different Profiles (should not be shared)
 	profA := &Profile{Weight: map[string]int32{"armcom": 100}}
 	profB := &Profile{Weight: map[string]int32{"armcom": 50}}

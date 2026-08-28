@@ -27,12 +27,17 @@ const sensorSurfaceShift = 23
 // authoritative output. Everything else it produces lands on the backing
 // surfaces, which are presentation.
 type SensorUnit struct {
-	Owner  PlayerID
-	Status *uint32       // runtime status field; the phase writes 0x100/0x300/0x1000 P0-11
-	X, Z   numeric.Fixed // 16.16 world position
-	Y      numeric.Fixed
-	Alive  bool
-	Hidden bool // hidden/cloaked instance bit [03 §3.2]
+	// ID correlates the sensor result with its committed unit pool slot.
+	ID        uint16
+	Owner     PlayerID
+	Status    *uint32       // runtime status field; the phase writes 0x100/0x300/0x1000 P0-11
+	X, Z      numeric.Fixed // 16.16 world position
+	Y         numeric.Fixed
+	Alive     bool
+	Hidden    bool // hidden/cloaked instance bit [03 §3.2]
+	Stealth   bool // definition stealth state also fed into gameplay visibility [03 §3.2][03 §3.4]
+	Active    bool // runtime activation/on-state bit required by sensor callbacks [03 §3.4]
+	OnOffable bool // definition on/off flag used by selected-unit circle presentation [03 §3.9]
 
 	// Authored sensor distances [02 "Unit record"] P0-11. Zero means absent.
 	RadarDistance    int32
@@ -49,10 +54,30 @@ type SensorUnit struct {
 // SensorInputs returns copies so the renderer cannot mutate authoritative
 // sensor state [03 §3.4].
 type SensorInput struct {
-	Owner   PlayerID
-	X, Y, Z numeric.Fixed
-	Status  uint32
-	Hidden  bool
+	ID        uint16
+	Owner     PlayerID
+	X, Y, Z   numeric.Fixed
+	Status    uint32
+	Hidden    bool
+	Stealth   bool // retained separately for the presentation blink gate
+	Active    bool
+	OnOffable bool
+	// Circles is populated on the first input and carries the callback result
+	// window without introducing a second mutable service side channel.
+	Circles []SensorCircle
+}
+
+// SensorCircle is one callback-table result from the completed sensor pass.
+// Coordinates are surface cells (one cell per 128 world units); Kind is zero
+// for the outer radar/sonar callback and nonzero for jammer callbacks [03 §3.4].
+type SensorCircle struct {
+	// SourceID identifies the live unit that emitted this callback. The
+	// committed publisher uses it to discard circles left behind when cleanup
+	// frees a unit after the sensor pass [03 §3.4][I6].
+	SourceID uint16
+	U, V     int32
+	Radius   int32
+	Kind     uint8
 }
 
 // SensorSurfaces receives the rasterized circles [03 §3.4] C11 P0-11.
@@ -81,7 +106,19 @@ func (s *Service) SensorInputs() []SensorInput {
 	}
 	out := make([]SensorInput, len(s.sensorInputs))
 	copy(out, s.sensorInputs)
+	if len(out) != 0 && len(out[0].Circles) != 0 {
+		out[0].Circles = append([]SensorCircle(nil), out[0].Circles...)
+	}
 	return out
+}
+
+// SensorCircles returns a copy of the callback results from the last completed
+// sensor pass [03 §3.4].
+func (s *Service) SensorCircles() []SensorCircle {
+	if s == nil || len(s.sensorInputs) == 0 || len(s.sensorInputs[0].Circles) == 0 {
+		return nil
+	}
+	return append([]SensorCircle(nil), s.sensorInputs[0].Circles...)
 }
 
 // surfaceProject maps a world coordinate onto a sensor surface cell: one cell
@@ -102,10 +139,22 @@ func surfaceProject(v numeric.Fixed) int32 {
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // Ally vision never OR'd: writer ORs only own bit, reader tests only local bit [03 §3.4] P0-11.
 func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b PlayerID) bool, units []SensorUnit) {
-	if s == nil || playerCount <= 1 {
-		return // more than one player required [03 §3.4] P0-11 activePlayers>1 gate
+	if s == nil {
+		return
+	}
+	// SeenBit is a per-frame marker. Clear it before the final visibility walk,
+	// including the single-player skip, so it cannot leak into another
+	// committed frame [03 §3.4].
+	for i := range units {
+		if units[i].Status != nil {
+			*units[i].Status &^= SeenBit
+		}
 	}
 	s.sensorInputs = s.sensorInputs[:0]
+	if playerCount <= 1 {
+		return // more than one player required [03 §3.4] P0-11 activePlayers>1 gate
+	}
+	var circles []SensorCircle
 	// 1. Ownership and status + decloak timeout.
 	for i := range units {
 		u := &units[i]
@@ -131,28 +180,37 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 	// Surfaces are wiped each tick while the LOS mask persists [03 §3.4].
 	if s.surfaces != nil {
 		s.surfaces.Wipe()
-		for i := range units {
-			u := &units[i]
-			if !u.Alive {
-				continue
+	}
+	for i := range units {
+		u := &units[i]
+		if !u.Alive {
+			continue
+		}
+		cu, cv := surfaceProject(u.X), surfaceProject(u.Z)
+		// Sensor callbacks require the unit's runtime active/on state. Cloak and
+		// hidden state belong to the separate visibility/decloak paths [03 §3.4].
+		if u.Active && (u.RadarDistance != 0 || u.SonarDistance != 0) {
+			outer := u.RadarDistance // ONE circle, the larger of the two [03 §3.4] P0-11
+			if u.SonarDistance > outer {
+				outer = u.SonarDistance
 			}
-			cu, cv := surfaceProject(u.X), surfaceProject(u.Z)
-			if u.RadarDistance != 0 || u.SonarDistance != 0 {
-				outer := u.RadarDistance // ONE circle, the larger of the two [03 §3.4] P0-11
-				if u.SonarDistance > outer {
-					outer = u.SonarDistance
-				}
+			circles = append(circles, SensorCircle{SourceID: u.ID, U: cu, V: cv, Radius: outer})
+			if s.surfaces != nil {
 				s.surfaces.Sensor(cu, cv, outer) // color 0xDD5 onto FINAL P0-11
 			}
-			if u.RadarJam != 0 {
+		}
+		if u.Active && u.RadarJam != 0 {
+			circles = append(circles, SensorCircle{SourceID: u.ID, U: cu, V: cv, Radius: u.RadarJam, Kind: 1})
+			if s.surfaces != nil {
 				s.surfaces.RadarJam(cu, cv, u.RadarJam) // separate table 0x20A color 0xDD7 P0-11
 			}
-			if u.SonarJam != 0 {
+		}
+		if u.Active && u.SonarJam != 0 {
+			circles = append(circles, SensorCircle{SourceID: u.ID, U: cu, V: cv, Radius: u.SonarJam, Kind: 2})
+			if s.surfaces != nil {
 				s.surfaces.SonarJam(cu, cv, u.SonarJam) // separate table 0x20C P0-11
 			}
 		}
-	} else {
-		// Even with nil surfaces, we still conceptually wipe; nothing to do.
 	}
 	// 3. Minimum-cloak proximity [03 §3.2] C10 [03 §3.4] C12.
 	for i := range units {
@@ -207,7 +265,11 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 		if *u.Status&SeenBit != 0 {
 			continue // already seen P0-11
 		}
-		if u.Hidden && (*u.Status&DecloakBit) == 0 {
+		// Definition stealth participates in the same gameplay hidden predicate
+		// as init-cloak/runtime cloak. It remains separately published so the
+		// presentation blink gate does not infer gameplay state from art bits
+		// [03 §3.2][03 §3.9].
+		if (u.Hidden || u.Stealth) && (*u.Status&DecloakBit) == 0 {
 			continue // cloaked and not within 90-tick decloak window → not visible P0-11
 		}
 		// The sensor final pass is the single-point form. It deliberately does
@@ -219,8 +281,11 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 	for i := range units {
 		u := &units[i]
 		if u.Alive && u.Status != nil {
-			s.sensorInputs = append(s.sensorInputs, SensorInput{Owner: u.Owner, X: u.X, Y: u.Y, Z: u.Z, Status: *u.Status, Hidden: u.Hidden})
+			s.sensorInputs = append(s.sensorInputs, SensorInput{ID: u.ID, Owner: u.Owner, X: u.X, Y: u.Y, Z: u.Z, Status: *u.Status, Hidden: u.Hidden, Stealth: u.Stealth, Active: u.Active, OnOffable: u.OnOffable})
 		}
+	}
+	if len(s.sensorInputs) != 0 && len(circles) != 0 {
+		s.sensorInputs[0].Circles = circles
 	}
 }
 

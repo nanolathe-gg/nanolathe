@@ -95,7 +95,7 @@ type battleSession struct {
 	battleUI         *ui.BattleState
 	returnToMenu     func(*client.Client)
 	returnToSkirmish func(*client.Client)
-	retryFunc        func(*client.Client)
+	retryFunc        func(*client.Client) error
 	continueFunc     func(*client.Client)
 	ended            bool
 	resultDismissed  bool
@@ -147,17 +147,22 @@ func runBattleView(opts Options, cs *contentSet) error {
 		return err
 	}
 	terrain := sess.World
-	pal := loadPalette(cs)
+	pal, err := loadPaletteStrict(cs)
+	if err != nil {
+		return err
+	}
 
 	const winW, winH = 640, 480
-	mapW := int32(terrain.CellW * 16)
-	mapH := int32(terrain.CellH * 16)
-	cam := &camera.Camera{X: 0, Z: 0, ViewW: winW, ViewH: winH, MapW: mapW, MapH: mapH}
+	terrainW := int32(terrain.CellW * 16)
+	terrainH := int32(terrain.CellH * 16)
+	// Camera clamp uses the same playable insets consumed by minimap input and
+	// marker projection; raw terrain extents include the void margins [07 §10].
+	cam := camera.NewFromTerrain(terrainW, terrainH, terrain.PlayRight, terrain.PlayBottom, winW, winH)
 	cam.Pan(0, 0)
 	centerOnCommanderForSession(sess, cam, winW, winH)
 
 	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs, latch: input.LatchNormal, battleUI: ui.NewBattleState()}
-	b.retryFunc = func(cl *client.Client) { b.doRetry(cl) }
+	b.retryFunc = func(cl *client.Client) error { return b.doRetry(cl) }
 	b.returnToMenu = func(cl *client.Client) {
 		// The battle view has no menu shell callback; mark it ended and exit.
 		b.ended = true
@@ -381,10 +386,44 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	}
 }
 
-// isOverMinimap identifies the existing radar interaction region [07 §10].
+// minimapLayout is the sole production adapter for radar geometry. PlayRight
+// and PlayBottom are authored by map loading; the rail destination is the
+// battle composer's fixed 126-pixel canvas origin [07 §6][07 §10].
+func (b *battleSession) minimapLayout() (camera.Minimap, hud.Rect, bool) {
+	if b == nil || b.sess == nil || b.sess.World == nil || b.hud == nil {
+		return camera.Minimap{}, hud.Rect{}, false
+	}
+	playW, playH := b.sess.World.PlayRight, b.sess.World.PlayBottom
+	if playW <= 0 || playH <= 0 {
+		return camera.Minimap{}, hud.Rect{}, false
+	}
+	dst, ok := b.hud.minimapRect()
+	if !ok {
+		return camera.Minimap{}, hud.Rect{}, false
+	}
+	return camera.LayoutMinimap(playW, playH), dst, true
+}
+
+// isOverMinimap identifies the authored radar interaction region [07 §10].
 func (b *battleSession) isOverMinimap(x, y int32) bool {
-	const mmX, mmY, mmW, mmH = 540, 360, 90, 90
-	return x >= mmX && x < mmX+mmW && y >= mmY && y < mmY+mmH
+	_, dst, ok := b.minimapLayout()
+	return ok && dst.Contains(x, y)
+}
+
+// isOnRadar distinguishes the fitted radar rectangle from its 126-pixel
+// canvas letterbox. The canvas remains the interaction capture region, while
+// only the fitted rectangle selects the direct lens branch [07 §10].
+func (b *battleSession) isOnRadar(x, y int32) bool {
+	m, dst, ok := b.minimapLayout()
+	if !ok {
+		return false
+	}
+	dl, dt, dr, db := dst.Ordered()
+	if x < dl || x > dr || y < dt || y > db {
+		return false
+	}
+	cx, cy, _ := m.DisplayToCanvas(x, y, dl, dt, dr-dl+1, db-dt+1)
+	return m.HitTest(cx, cy)
 }
 
 // handleInput processes selection, orders, and build placement.
@@ -407,48 +446,15 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		b.shiftLatchSticky = false
 	}
 
-	// Minimap click-to-jump [C-6][07 §10] using camera.Minimap math (ToCamera/ToWorld).
+	// Minimap click-to-jump [C-6][07 §10] uses the same layout adapter as draw.
 	// This is presentation-only and never writes sim [I6].
 	if b.isOverMinimap(mx, my) {
-		if mouse.Pressed(input.MouseButtonLeft) && b.cam != nil && b.sess != nil && b.sess.World != nil {
-			playW := b.sess.World.PlayRight
-			playH := b.sess.World.PlayBottom
-			if playW <= 0 || playH <= 0 {
-				playW = b.sess.World.CellW*16 - 32
-				playH = b.sess.World.CellH*16 - 128
-				if playW <= 0 {
-					playW = b.sess.World.CellW * 16
-				}
-				if playH <= 0 {
-					playH = b.sess.World.CellH * 16
-				}
+		if mouse.Pressed(input.MouseButtonLeft) && b.cam != nil {
+			m, dst, ok := b.minimapLayout()
+			if !ok {
+				return
 			}
-			m := camera.LayoutMinimap(playW, playH) // [07 §10]
-			const mmX, mmY, mmW, mmH = 540, 360, 90, 90
-			// Scale HUD 90x90 to 126 canvas for letterbox math [07 §10][03 §3.6].
-			canvasX := (mx - mmX) * 126 / mmW
-			canvasY := (my - mmY) * 126 / mmH
-			if canvasX < 0 {
-				canvasX = 0
-			} else if canvasX >= 126 {
-				canvasX = 125
-			}
-			if canvasY < 0 {
-				canvasY = 0
-			} else if canvasY >= 126 {
-				canvasY = 125
-			}
-			eW, eH := b.cam.EffectiveView()
-			if eW <= 0 {
-				eW = b.cam.ViewW
-			}
-			if eH <= 0 {
-				eH = b.cam.ViewH
-			}
-			cx, cz := m.ToCamera(canvasX, canvasY, playW, playH, eW, eH) // [07 §10] C4
-			b.cam.X = cx
-			b.cam.Z = cz
-			b.cam.Pan(0, 0)
+			client.HandleMinimapInput(b.cam, m, dst, b.sess.World.PlayRight, b.sess.World.PlayBottom, mx, my, b.isOnRadar(mx, my), nil)
 			return
 		}
 		// While over minimap, suppress world drag/selection [07 §10] minimap interaction region.
@@ -806,7 +812,7 @@ func (b *battleSession) selectedUnits() []*units.Unit {
 	}
 	var out []*units.Unit
 	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == owner && u.Flags&client.SelectionFlag != 0 {
+		if u != nil && u.Alive && u.Owner == owner && u.Flags&hud.SelectionFlag != 0 {
 			out = append(out, u)
 		}
 	}
@@ -820,7 +826,7 @@ func (b *battleSession) selectedBuilder() *units.Unit {
 	}
 	owner := b.sess.LocalOwner
 	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == owner && u.Flags&client.SelectionFlag != 0 &&
+		if u != nil && u.Alive && u.Owner == owner && u.Flags&hud.SelectionFlag != 0 &&
 			u.Def != nil && u.Def.Builder {
 			return u
 		}
@@ -1213,12 +1219,23 @@ func footprintCellsForCatalog(cat *content.Catalog, def *content.UnitDef) (footX
 	return world.FootprintForUnit(cat, def)
 }
 
-// loadPalette loads the retail palette tables, nil on failure.
+// loadPalette loads the retail palette tables for compatibility with focused
+// presentation tests. Production construction uses loadPaletteStrict so a
+// missing or malformed shared palette cannot become an unannounced nil.
 func loadPalette(cs *contentSet) *palette.Tables {
-	if p, err := palette.Load(cs.fs); err == nil {
-		return p
+	p, _ := loadPaletteStrict(cs)
+	return p
+}
+
+func loadPaletteStrict(cs *contentSet) (*palette.Tables, error) {
+	if cs == nil || cs.fs == nil {
+		return nil, retailFrontendAssetError(cs, "retail palette", "palettes/PALETTE.PAL", "the shared retail palette tables", fmt.Errorf("missing VFS"))
 	}
-	return nil
+	p, err := palette.Load(cs.fs)
+	if err != nil {
+		return nil, retailFrontendAssetError(cs, "retail palette", "palettes/PALETTE.PAL", "the shared retail palette tables", err)
+	}
+	return p, nil
 }
 
 // loadFNT loads the first available UI font, nil on failure.
@@ -1406,7 +1423,7 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 	}
 	sel := hud.CursorSelection{Viewer: b.sess.LocalOwner, Hostile: b.hostile}
 	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == b.sess.LocalOwner && u.Flags&client.SelectionFlag != 0 {
+		if u != nil && u.Alive && u.Owner == b.sess.LocalOwner && u.Flags&hud.SelectionFlag != 0 {
 			sel.Units = append(sel.Units, u)
 		}
 	}
@@ -1591,13 +1608,18 @@ func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 	switch kind {
 	case "result_retry":
 		if b.retryFunc != nil {
-			b.retryFunc(cl)
+			if err := b.retryFunc(cl); err != nil {
+				fmt.Fprintf(os.Stderr, "nanolathe: retry failed: %v\n", err)
+				return
+			}
 			b.resultDismissed = false
 			b.resultButtons = nil
 			return
 		}
 		// Recreate the session directly when no retry callback is installed.
-		b.doRetry(cl)
+		if err := b.doRetry(cl); err != nil {
+			fmt.Fprintf(os.Stderr, "nanolathe: retry failed: %v\n", err)
+		}
 	case "result_skirmish":
 		if b.returnToSkirmish != nil {
 			b.returnToSkirmish(cl)
@@ -1693,16 +1715,9 @@ func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 }
 
 // doRetry recreates a clean session for retry without duplicate callbacks [RS-05] RS-P0-012.
-func (b *battleSession) doRetry(cl *client.Client) {
+func (b *battleSession) doRetry(cl *client.Client) error {
 	if b == nil || b.sess == nil || b.fs == nil {
-		// Fallback: reset result state in place
-		if b.sess != nil {
-			b.sess.ResetResultForRetry()
-			_ = b.sess.Retry()
-		}
-		b.resultDismissed = false
-		b.resultButtons = nil
-		return
+		return fmt.Errorf("retry requires an existing session and mounted content")
 	}
 	cfg := b.sess.Skirmish
 	cat := b.cat
@@ -1711,24 +1726,41 @@ func (b *battleSession) doRetry(cl *client.Client) {
 	}
 	newSess, err := session.NewSkirmishWithFS(b.fs, cat, cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nanolathe: retry failed: %v\n", err)
-		return
+		return err
 	}
-	// Preserve callback? The new session should have no callback yet; shell will reinstall if needed.
+	// Build every replacement presentation dependency before changing the live
+	// battle. A failed palette/HUD load leaves the terminal session, HUD, and
+	// result overlay coherent for another retry attempt [RS-05].
+	newPal, err := palette.Load(b.fs)
+	if err != nil {
+		return hudAssetError(b.fs, "palettes/PALETTE.PAL", "retry palette", err)
+	}
+	newHUD, err := loadRetailBattleHUD(b.fs, newSess, newSess.Catalog, newPal)
+	if err != nil {
+		return err
+	}
+	centerOnCommanderForSession(newSess, b.cam, 640, 480)
+
+	// Commit only after all constructors above succeeded.
 	b.sess = newSess
 	b.cat = newSess.Catalog
+	b.hud = newHUD
 	b.resultDismissed = false
 	b.resultButtons = nil
-	centerOnCommanderForSession(newSess, b.cam, 640, 480)
 	if b.shell != nil {
 		b.shell.battle = b
-		if cl != nil {
-			cl.SetSnapshot(newSess.Snapshot)
-			cl.SetTerrain(newSess.World)
-		}
 	}
-	// Ensure battle state
+	if cl != nil {
+		cl.SetSnapshot(newSess.Snapshot)
+		cl.SetTerrain(newSess.World)
+		cl.SetCamera(b.cam)
+		cl.SetPalette(newPal)
+		cl.SetFNT(newHUD.console)
+		cl.Overlay = func(c *client.Client) { newHUD.draw(c, b) }
+	}
+	// Ensure battle state only after the replacement has been committed.
 	newSess.State = session.StateBattle
+	return nil
 }
 
 // setStatusMessage stores a transient on-screen message [07 §11][07 §2] presentation-only (I6).

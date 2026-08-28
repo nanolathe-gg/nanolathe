@@ -189,12 +189,12 @@ func (c *Camera) AddZoom(delta float32, mx, my int32) {
 	c.Z = clampAxis(c.Z, c.MapH, eH)
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// NewFromTerrain creates a camera whose map extents are the playable insets [P1-15].
 // PlayRight = Wpix-32, PlayBottom = Hpix-128 are the max extents set at void-fixup time [P1-15];
 // they are the clamp maxima, so MapW/MapH are set to PlayRight/PlayBottom when non-zero
 // (else fallback to raw terrainWpix/Hpix). The per-axis maximum is then MapW-ViewW / MapH-ViewH [07 §10].
 func NewFromTerrain(terrainWpix, terrainHpix, playRight, playBottom, viewW, viewH int32) *Camera {
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Use PlayRight/PlayBottom as the effective map size for clamp [P1-15].
 	mapW := terrainWpix
 	mapH := terrainHpix
 	if playRight != 0 {
@@ -273,84 +273,4 @@ func (c *Camera) ScreenToWorld(sx, sy int32) (x, z numeric.Fixed) { // [03 §2.5
 	wx := int64(float32(sx-OriginX)/s+float32(c.X)) << 16
 	wz := int64(float32(sy-OriginY)/s+float32(c.Z)) << 16
 	return numeric.Fixed(wx), numeric.Fixed(wz)
-}
-
-// Minimap is the 126-pixel letterboxed radar geometry [07 §10] C4.
-type Minimap struct {
-	PadX, PadY int32 // letterbox padding inside the 126×126 square
-	W, H       int32 // radarWidth, radarHeight
-}
-
-// LayoutMinimap computes the aspect-preserving letterbox inside a 126×126
-// square [07 §10] C4.
-//
-//	radarHeight=126, radarWidth=floor(mapWidth*126/mapHeight) when mapWidth < mapHeight
-//	else the transpose
-//	padX = trunc((126-radarWidth)/2) or padY accordingly
-//	rectangle is inclusive: right=padX+radarWidth-1
-func LayoutMinimap(mapW, mapH int32) Minimap { // [07 §10]
-	const longSide = 126
-	if mapW <= 0 || mapH <= 0 {
-		return Minimap{PadX: 0, PadY: 0, W: longSide, H: longSide}
-	}
-	if mapW < mapH {
-		// tall: preserve width
-		w := int32(int64(mapW) * longSide / int64(mapH)) // floor [07 §10]
-		if w < 1 {
-			w = 1
-		}
-		if w > longSide {
-			w = longSide
-		}
-		padX := (longSide - w) / 2 // trunc [07 §10]
-		return Minimap{PadX: padX, PadY: 0, W: w, H: longSide}
-	}
-	// wide or square
-	h := int32(int64(mapH) * longSide / int64(mapW)) // floor [07 §10]
-	if h < 1 {
-		h = 1
-	}
-	if h > longSide {
-		h = longSide
-	}
-	padY := (longSide - h) / 2 // trunc [07 §10]
-	return Minimap{PadX: 0, PadY: padY, W: longSide, H: h}
-}
-
-// Right returns the inclusive right edge padX+W-1 [07 §10].
-func (m Minimap) Right() int32 { return m.PadX + m.W - 1 }
-
-// Bottom returns the inclusive bottom edge padY+H-1 [07 §10].
-func (m Minimap) Bottom() int32 { return m.PadY + m.H - 1 }
-
-// ToWorld converts a mouse position inside the 126×126 canvas to world/map
-// coordinates [07 §10] C4:
-//
-//	worldX = (mouseX-padX)*mapWidth/radarWidth
-//	worldZ = (mouseY-padY)*mapHeight/radarHeight
-//
-// Signed integer division truncates toward zero. Caller may then derive the
-// camera with worldX-viewWidth/2 and the standard clamp [07 §10].
-func (m Minimap) ToWorld(mouseX, mouseY, mapW, mapH int32) (wx, wz int32) { // [07 §10]
-	if m.W == 0 || m.H == 0 {
-		return 0, 0
-	}
-	wx = (mouseX - m.PadX) * mapW / m.W
-	wz = (mouseY - m.PadY) * mapH / m.H
-	return
-}
-
-// ToCamera converts a minimap click directly to a clamped camera origin
-// [07 §10] C4. It composes ToWorld with the view-centering and standard clamp:
-//
-//	cameraX = worldX - viewWidth/2
-//	cameraZ = worldZ - viewHeight/2
-//	then clamp per clampAxis order.
-func (m Minimap) ToCamera(mouseX, mouseY, mapW, mapH, viewW, viewH int32) (cx, cz int32) { // [07 §10]
-	wx, wz := m.ToWorld(mouseX, mouseY, mapW, mapH)
-	cx = wx - viewW/2
-	cz = wz - viewH/2
-	cx = clampAxis(cx, mapW, viewW)
-	cz = clampAxis(cz, mapH, viewH)
-	return
 }

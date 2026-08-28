@@ -105,15 +105,10 @@ func TestBattleHUDLoadsARMAndCORE(t *testing.T) {
 		if hud.panelTop == nil || hud.panelSide == nil || hud.panelBottom == nil {
 			t.Fatalf("side %s missing mandatory panel frames [07 §6]", wantPrefix)
 		}
-		// CORE must not have loaded ARM-specific options unconditionally.
-		if strings.EqualFold(wantPrefix, "COR") && hud.optionsWin != nil {
-			// If COR options window is present, it must not be ARM's window leaking;
-			// we check that ARM-specific load was not attempted unconditionally:
-			// with retail assets no coropt exists, so CORE options should be nil (degradable).
-			// If it's non-nil, it means we fell back to ARM — which violates the
-			// "do not load ARM-specific options unconditionally for CORE" rule.
-			// CORE has no ARM-specific options window in the retail asset set.
-			t.Fatalf("CORE side should not have ARM options window loaded unconditionally; got %v", hud.optionsWin.Name)
+		// ESC opens the hard-coded ARMOPT modal for either side. CORE must use
+		// that same authored path; there is no COROPT branch [07 §11].
+		if hud.optionsWin == nil || !strings.EqualFold(hud.optionsWin.Name, "armopt.gui") {
+			t.Fatalf("%s options window = %#v; want ARMOPT.GUI", wantPrefix, hud.optionsWin)
 		}
 	}
 }

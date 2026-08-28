@@ -2,10 +2,23 @@ package audio
 
 import "github.com/nanolathe/nanolathe/internal/sim/rng"
 
+// presentationCRT is a presentation-only RNG with the same recurrence as the
+// retail CRT stream (*214013+2531011) but is a distinct type so presentation
+// does not consume the authoritative session CRT [DET-01][03 §8.4].
+// AUDIT(parity-spine): music random is presentation-only; this is an approved
+// divergence, not retail behavior — retail CD random shares the CRT stream, but
+// Nanolathe isolates it to preserve sim determinism across render cadences.
+type presentationCRT struct{ state uint32 }
+
+func (p *presentationCRT) Rand() uint32 {
+	p.state = p.state*214013 + 2531011
+	return (p.state >> 16) & 0x7FFF
+}
+
 // Music uses WinMM MCI strings for cdaudio open/close/stop/status/play/pause
 // [03 §8.4]. Failure behavior on missing CD and history persistence across
-// saves remain TODO(T23). This file is presentation-only, uses the CRT stream,
-// and never touches the simulation RNG [I4].
+// saves remain TODO(T23). This file is presentation-only, uses a
+// presentation-only CRT stream, and never touches the simulation RNG [I4].
 
 // PlayMode enumerates the five retail playback modes observed in
 // the five-mode playback switch.
@@ -42,8 +55,8 @@ type Controller struct {
 	desiredCat    int        // for mode 4, 1..4
 	trackCategory [100]uint8 // (i%4)+1 cycle, retail builds 100 entries
 	offset        int        // playhead offset used by a backend adapter
-	crtState      uint32     // fallback CRT state for isolated tests
-	crt           *rng.CRT
+	crtState      uint32     // last drawn presentation-CRT state for isolated tests
+	presCRT       *presentationCRT
 	position      int
 	volume        int
 	volumeApplied int
@@ -58,7 +71,7 @@ func NewMusicController() *Controller {
 		playMode:     ModeSequential,
 		musicEnabled: true,
 		crtState:     1,
-		crt:          func() *rng.CRT { v := rng.NewCRT(1); return &v }(),
+		presCRT:      &presentationCRT{state: 1},
 		curTrack:     0,
 		nextTrack:    0,
 		status:       StatusIdle,
@@ -157,33 +170,38 @@ func (c *Controller) Seed(s uint32) {
 			s = 1
 		}
 		c.crtState = s
-		v := rng.NewCRT(s)
-		c.crt = &v
+		if c.presCRT == nil {
+			c.presCRT = &presentationCRT{}
+		}
+		c.presCRT.state = s
 	}
 }
 
-// SetCRTRandom injects the session-owned presentation stream shared by music
-// and all other presentation random consumers [01 §7.2][03 §8.4].
+// SetCRTRandom receives the session CRT handoff. DET-01: music must not draw
+// the authoritative session stream, so only the stream STATE is copied into
+// the private presentation-only source; the session stream itself is never
+// retained or advanced here. AUDIT(parity-spine): approved divergence —
+// retail's CD random shares the live CRT stream; Nanolathe isolates music
+// draws so render cadence cannot affect simulation. The *rng.CRT parameter is
+// the composition boundary type; the import is signature-only.
+// Never label this stream retail behavior.
 func (c *Controller) SetCRTRandom(r *rng.CRT) {
-	if c != nil {
-		c.crt = r
+	if c != nil && r != nil {
+		if c.presCRT == nil {
+			c.presCRT = &presentationCRT{}
+		}
+		c.presCRT.state = r.State
+		c.crtState = r.State
 	}
-}
-
-func (c *Controller) CRTRandom() *rng.CRT {
-	if c == nil {
-		return nil
-	}
-	return c.crt
 }
 
 func (c *Controller) drawCRT() uint32 {
 	if c == nil {
 		return 0
 	}
-	if c.crt != nil {
-		v := uint32(c.crt.Rand())
-		c.crtState = c.crt.State
+	if c.presCRT != nil {
+		v := c.presCRT.Rand()
+		c.crtState = c.presCRT.state
 		return v
 	}
 	c.crtState = c.crtState*214013 + 2531011

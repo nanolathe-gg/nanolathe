@@ -6,13 +6,23 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
-// SetPresentationCRT binds the session-owned presentation CRT stream. Shake,
-// audio, music, and projectile presentation must share this stream; a client
-// never seeds a private stream for live play [01 §7.2][03 §5.6].
+// SetPresentationCRT binds the session's presentation CRT handoff. DET-01:
+// the client copies the stream STATE into a private presentation copy and
+// never retains or draws the authoritative session stream — variant selection
+// and segmented-projectile presentation advance only the copy, so render
+// cadence cannot affect simulation [01 §7.2][I4]. AUDIT(parity-spine):
+// approved divergence (retail presentation draws the live CRT stream); the
+// signature is kept because cmd composes with *rng.CRT.
 func (c *Client) SetPresentationCRT(crt *rng.CRT) {
-	if c != nil {
-		c.crt = crt
+	if c == nil {
+		return
 	}
+	if crt == nil {
+		return
+	}
+	v := *crt
+	c.crt = &v
+	c.crtBound = true
 }
 
 // SetAudioService binds the concrete retail audio owner. The client does not
@@ -137,7 +147,9 @@ func (c *Client) UpdateAudioViewportFromCamera() {
 	}
 }
 
-// HasPresentationCRT reports whether the session's CRT stream is bound. A
-// client without it silently degrades every presentation consumer of that
-// stream, so composition paths are checked against it [01 §7.2][I4].
-func (c *Client) HasPresentationCRT() bool { return c != nil && c.crt != nil }
+// HasPresentationCRT reports whether a presentation CRT copy has been bound
+// (see SetPresentationCRT). A client without it degrades the
+// presentation-only consumers of that copy, so composition paths are checked
+// against it [01 §7.2][I4]. DET-01: this never reports on the session's
+// authoritative stream — the client cannot draw it.
+func (c *Client) HasPresentationCRT() bool { return c != nil && c.crtBound }

@@ -362,18 +362,6 @@ func (w *Window) HitTest(x, y int32) int {
 	return -1
 }
 
-// Dispatch is a minimal stub for WU-12-1; full runtime dispatch per families 1,2,3,4,5,6,12,13 [07 §4] is owned by WU-12-2.
-// It routes hit test and returns whether a gadget would handle the event.
-func (w *Window) Dispatch(ev Event) Result {
-	// TODO(question): full dispatch routing for stored types 1,2,3,4,5,6,12,13 with callback/association/throttle semantics [07 §4] deferred.
-	idx := w.HitTest(ev.X, ev.Y)
-	if idx < 0 {
-		return Result{Handled: false, Index: -1}
-	}
-	// Basic handling: mark as handled if gadget is active and not grayed.
-	return Result{Handled: true, Index: idx}
-}
-
 func fieldInt(m map[string]string, key string, def int) int {
 	if v, ok := m[key]; ok {
 		return int(formats.ParseTDFInteger(v))

@@ -12,7 +12,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -42,9 +41,6 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, fmt.Errorf("session: empty mission path")
-	}
-	if err := requireGlobalRNGStreams(); err != nil {
-		return nil, err
 	}
 	if fs == nil {
 		fs = vfs.New()
@@ -115,7 +111,16 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 		p.EndGameCountdown = -1
 	}
 	s.Econ.SeedDeadlines(0) // UpdateTime/WinLoseTime/DisplayTimer seeded to GlobalTick per [05] C5; WinLoseTime is trigger poll deadline [08 "Evaluation"]
-	s.InitWindForSession(rng.Global.Crt, 0)
+	// DET-01 [R-CORE-02]: battle bootstrap seeds both streams fresh before any
+	// battle setup draw; battle-entry wind zeroes the deadline with NO draws
+	// and the meteor initial next-strike is written (no draws) [R-CORE-01
+	// §4.4.1].
+	// TODO(question): mission setup has no seed source yet (see
+	// SkirmishConfig.RNGSimSeed); the deterministic placeholder (1,1) keeps
+	// runs reproducible until cmd wires one.
+	s.SeedSessionRNG(1, 1)
+	s.InitBattleWindForSession()
+	s.initMeteor()
 	s.InitAudio(fs)
 	if err := createAndBindServices(s); err != nil {
 		return nil, err

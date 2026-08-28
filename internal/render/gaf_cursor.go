@@ -95,24 +95,6 @@ func CursorIndexFromName(name string) int {
 	return 0
 }
 
-// CursorForBuildSite chooses the cursor for mobile-build placement [07 §8].
-// Site validity picks cursorfindsite when placement is valid else cursortoofar [07 §8].
-func CursorForBuildSite(valid bool) int {
-	if valid {
-		return CursorFindSite
-	}
-	return CursorTooFar
-}
-
-// CursorForGhost chooses the ghost preview cursor [07 §8].
-// The ghost preview uses cursorred/cursorgrn [07 §8].
-func CursorForGhost(valid bool) int {
-	if valid {
-		return CursorGrn
-	}
-	return CursorRed
-}
-
 // ResolveCursorEntry resolves a cursor index to its GAF entry through formats.GAF [fmt gaf][07 §8].
 // It uses the index table's entry name and the GAF's case-insensitive lookup [fmt gaf].
 func ResolveCursorEntry(gaf *formats.GAF, idx int) (*formats.GAFEntry, bool) {

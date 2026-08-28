@@ -133,11 +133,15 @@ func TestNewMissionUsesWindBoundsWithoutDraws(t *testing.T) {
 	if s.Wind.Min != 15 || s.Wind.Max != 35 {
 		t.Fatalf("Wind bounds not retained into holder: %+v", s.Wind)
 	}
-	if s.Wind.Strength < 15 || s.Wind.Strength > 35 {
-		t.Fatalf("wind strength %d out of retained bounds", s.Wind.Strength)
+	// [R-CORE-02]: battle entry performs NO wind draws — the strength/heading
+	// stay at the zero value with the deadline zeroed, and the first wind
+	// chain runs in sub-tick 1. The earlier expectation of briefing-drawn
+	// values at construction is superseded.
+	if s.Wind.Strength != 0 || s.Wind.Heading != 0 {
+		t.Fatalf("battle entry drew wind values: strength %d heading %d, want 0/0 [R-CORE-02]", s.Wind.Strength, s.Wind.Heading)
 	}
-	if s.Wind.NextChange < 150 || s.Wind.NextChange > 420 {
-		t.Fatalf("wind deadline %d outside 150..420 [01 §7.3]", s.Wind.NextChange)
+	if s.Wind.NextChange != 0 {
+		t.Fatalf("wind deadline %d, want 0 (zeroed at entry) [R-CORE-02]", s.Wind.NextChange)
 	}
 	if s.State != StateLocalPreload {
 		t.Fatalf("NewMission must route via Gametype 1 -> StateLocalPreload [08 \"Session states\"] C3 got %v", s.State)

@@ -320,7 +320,8 @@ func TestON04_ScriptWithoutAimPrimary_Blocked(t *testing.T) {
 }
 
 func TestON04_StableWeaponLookup_Deterministic(t *testing.T) {
-	// Two catalogs with different insertion order resolve identically ON-04
+	// Two catalogs with different insertion order resolve identically [02 "Weapon record"] [PLAN_02 Post-review amendments]
+	// Last section processed wins (discovery order); when only map is available, deterministic surrogate is last in sorted order.
 	w1 := &content.WeaponDef{ID: 10, Range: 100}
 	w1.CanonicalKey = "apple"
 	w2 := &content.WeaponDef{ID: 10, Range: 200}
@@ -336,8 +337,8 @@ func TestON04_StableWeaponLookup_Deterministic(t *testing.T) {
 	if wdA.CanonicalKey != wdB.CanonicalKey {
 		t.Fatalf("stable lookup independent of insertion order failed: A %s B %s", wdA.CanonicalKey, wdB.CanonicalKey)
 	}
-	if wdA.CanonicalKey != "apple" {
-		t.Fatalf("smallest canonical key should win, got %s want apple", wdA.CanonicalKey)
+	if wdA.CanonicalKey != "zebra" {
+		t.Fatalf("last canonical key should win (discovery-order last, sorted last surrogate), got %s want zebra", wdA.CanonicalKey)
 	}
 }
 
@@ -354,8 +355,8 @@ func TestON04_DuplicateIDsDiagnosed(t *testing.T) {
 	if len(dups) != 1 {
 		t.Fatalf("expected 1 duplicate ID, got %v", dups)
 	}
-	if dups[0].ID != 20 || len(dups[0].Keys) != 2 || dups[0].Winner != "a" {
-		t.Fatalf("duplicate diagnostic wrong %v", dups[0])
+	if dups[0].ID != 20 || len(dups[0].Keys) != 2 || dups[0].Winner != "b" {
+		t.Fatalf("duplicate diagnostic wrong %v want winner b (last)", dups[0])
 	}
 }
 

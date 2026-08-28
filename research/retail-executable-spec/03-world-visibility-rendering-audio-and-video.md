@@ -886,6 +886,14 @@ secondary radar-like candidate list that targeting may consult when the primary
 in-radius set is empty — that flag's authored name is not proved, and targeting
 is owned by document 06.
 
+**Sensor callback gate correction (Established).** “Active” in the sensor
+phase means the unit instance's activation/on-state bit is set. A live unit
+whose radar or sonar distance is nonzero emits its outer circle only after
+that activation test. The cloak/hidden instance bit is not consulted by this
+circle-callback gate; it belongs to the separate visibility and decloak paths.
+The selected-unit circle presentation has an additional definition test
+documented in §3.9.
+
 ### 3.5 LOS observer height, coverage tile, and the terrain height word [R-P0-18-A] [R-P0-18-B]
 
 Status: every finding below is **Established** (direct static evidence). This
@@ -1165,13 +1173,18 @@ pairings are rejected by exhaustive search (bounded-negative).
 on screen remains open; an asymmetric-palette probe (row-first, column-first,
 and diagonal orderings yielding distinct results) settles it.
 
-**Established.** The baked path rescales through the same two-level ALP blend
-with the same table — both paths enter one generic downsample routine (two
-invocation sites, direct-static) that scales by integer arithmetic over
-arbitrary source/destination ratios; there is no nearest-neighbor path.
-`TODO(question):` the exact sampling when the baked source dimensions are not
-integer multiples of the destination (e.g. 256×256 baked into 84×126) is
-**supported inference** pending a probe.
+**Correction to the prior paragraph (Established, direct-static).** The prior
+text left non-integral baked sampling as a supported inference because the
+asset dimensions alone did not settle it. A bounded clean-room trace of the
+shared picture resampler shows that both picture legs enter one generic routine
+with independent source and destination dimensions. For each destination axis
+it truncates the source coordinate ratio, blends that sample with its adjacent
+source sample, and applies the same row-first three-lookup ALP sequence above.
+There is no nearest-neighbor path. This includes the authored 252×252 and
+252×256 TNT minimaps when the destination lens is 126×126; no exact
+`2*destination` dimension predicate is part of the gate. Confidence is
+**Established** for the ratio/truncation and ALP order; the source bytes and
+dimensions remain authored by the TNT format [fmt tnt].
 
 **Aspect and letterbox.** The play area is window width minus 32 by window
 height minus 128, derived from the mode maxima, not from the raw window
@@ -1229,22 +1242,29 @@ it never writes the word mask, and it sets the final-dirty bit when done.
 Layer order on the final surface (later layers overwrite; no blending):
 
 1. wipe final from mapped;
-2. unit blip GAF, colored with the owning player's blip color (a palette index
-   read from the player record), drawn when the visibility gate passes AND the
-   unit's per-instance blink-suppress byte reads zero OR the blink phase bit
-   is set — so the blip draws when `blinkSuppressByte == 0 || blinkPhase`. The
-   byte is a per-unit countdown, decremented each tick while nonzero, that
-   forces the blip into blink-only mode while it runs; the earlier "(hidden
-   byte nonzero)" wording was inverted — it is the byte reading zero that
-   admits the blip;
-3. commander blip GAF when the unit's identity matches the commander slot held
-   in engine root state;
+2. regular unit blip from the FX `radlogohigh` GAF, drawn when the visibility
+   gate passes AND the unit's per-instance blink-suppress byte reads zero OR
+   the blink phase bit is set — so the blip draws when
+   `blinkSuppressByte == 0 || blinkPhase`. The byte is a per-unit countdown,
+   decremented each tick while nonzero, that forces the blip into blink-only
+   mode while it runs; the earlier "(hidden byte nonzero)" wording was
+   inverted — it is the byte reading zero that admits the blip;
+3. commander blip from the FX `nuclogo` GAF, frame 0, when the unit's identity
+   matches the commander slot held in engine root state;
 4. sensor circles (radar/sonar outer, jammer) in their distinct palette indices
    via the solid-circle rasterizer (2,048 angular steps over 32 segments);
 5. weapon/interceptor rings (below);
 6. projectile dot, 1×1 pixel, in the projectile palette index, when the
    projectile's runtime status has bits 29 and 30 clear and its 0x40 bit clear,
-   LOS-gated; otherwise a feature GAF.
+   LOS-gated; otherwise a feature marker from the FX `h2oboom2` GAF.
+
+The three GAF handles above are loaded from the FX archive during battle-data
+initialization. A regular unit's owning-player record supplies the frame
+selector for `radlogohigh`; the feature branch uses the same owning-player
+selector for `h2oboom2`. The commander marker always selects frame 0 of
+`nuclogo`. The selected frame bytes are copied as indexed pixels through the
+GAF blitter, so they already refer to the active `PALETTE.PAL` and are not
+recolored through `GUIPAL.PAL` or a separate blit color argument. **Established.**
 
 **Blip gate.** The unit blip draws when any of: a global options word bit 9 is
 set, the minimap mode word's low two bits are zero, the unit carries the
@@ -1265,7 +1285,12 @@ The list is the entry-captured projectile/feature span (pointer and count in
 engine root state, fixed-size records): one shared list written by the
 projectile/feature capture path and read by the sensor first pass, the contacts
 pass, and the pool walker — it is not partitioned per consumer
-(bounded-negative).
+(bounded-negative). A candidate is admitted through the mode-selected local
+player visibility source at its projected cell; when that source does not
+admit it, the candidate's owner-local identity is the bypass. After admission,
+the runtime status mask selects the art family: a zero value for bits 29 and
+30 takes the projectile-dot path (which is then suppressed if bit 0x40 is set),
+while any bit in that mask takes the feature-marker path. **Established.**
 
 **HOT list.** Every unit visited in pool (ascending-slot) order appends a
 10-byte entry — id, originX + rx, originY + ry, and two pad shorts — to the
@@ -1302,18 +1327,27 @@ segment is emitted only when `(segmentIndex + blinkPhase) & 1 == 1`, so the
 dash parity is seeded by the blink phase bit and flips per segment. The dash
 pattern is fully determined; the earlier `TODO(question)` is closed.
 
-**No-radar gate on sensor circles.** Circles draw when `stealthActive OR NOT
-noRadar`: the gate tests the unit's instance-state stealth bit, and only when
-that is clear tests the authored no-radar flag — bit 2 (mask 0x04) of the
-definition's flags byte. A stealthed no-radar unit still shows circles; an
-unstealthed no-radar unit suppresses them. **Bounded-negative.** No other alias
-of the no-radar flag is tested at this gate; the 32-bit definition flags dword
-is used at a different site in the same loop (the ring enable). **No-radar does
-not suppress the blip:** the blip gate tests only the per-instance
-blink-suppress byte and the blink phase (above), never no-radar — the earlier
-`TODO(question)` on this point is
-closed (an ambiguous earlier note read the no-radar test as part of the blip
-gate; the traced gate belongs to the circle branch).
+**Selected-unit circle gate correction (Established).** The previous
+“no-radar” label was wrong. In the contact pass, the selected/range-status bit
+must be set, and circles are then drawn when the unit instance is active OR
+the definition's `onoffable` bit is clear. The unit parser stores `onoffable`
+in definition flags bit 2 (`0x04`); it does not load a unit `noradar` key.
+Thus an on/off-capable unit must be active for this selected-unit circle
+branch, while a unit without `onoffable` may draw its selected-unit circles
+regardless of activation state. The cloak/hidden instance bit and the
+definition `stealth` flag are not this callback gate. The blip gate remains
+independent: no `onoffable` or cloak test suppresses a blip once its visibility
+and blink conditions pass.
+
+**Contact layering and ring-only cases (Established).** The ascending unit
+pass draws at most one regular blip and, for the commander identity, one
+additional commander marker; it does not draw duplicate regular blips. Circles
+and weapon/interceptor rings are emitted later in that same unit iteration, so
+they overwrite earlier contact pixels where opaque. There is no independent
+ring-only contact list. A visible unit can appear ring-only when its regular
+blip is suppressed by the per-unit blink countdown on a non-blink phase, while
+the range/ring branches still run. Every admitted unit still contributes one
+HOT entry after those presentation branches.
 
 **Start-position markers.** **Bounded-negative.** No start-marker GAF and no
 START string literal is found near the minimap build or contacts paths. The
@@ -1341,17 +1375,20 @@ Click handling hit-tests the inclusive minimap rect first. When the click
 misses the rect, or the drag-mode flag is set, the **drag branch** applies:
 clamp the mouse to the viewport rectangle, then new camera = stored camera +
 (clamped mouse − viewport origin) — the camera moves by the mouse delta.
-Otherwise the **lens branch** recenters: new camera = (mouse − rect origin) ·
-playArea / radarSize. Either way the result is clamped to the play area and the
-terrain height queried at the result. The lens inverts the minimap projection
-directly; it does not reuse the main view's cursor-to-world projection.
-**Established.** The lens branch is exactly `(mouseX − letterboxOriginX) ·
-PlayRight / RadarW` and `(mouseY − letterboxOriginY) · PlayBottom / RadarH`,
-truncating (sub, multiply, signed divide) — there is no −viewSize/2 recenter
-and no mapWidth/mapHeight scale; the rect origin subtracted is the letterbox
-origin, and the drag branch adds the clamped viewport delta to the stored
-camera. (Document 07's reading with a recenter term is the one to correct; the
-two documents must match.)
+Otherwise the **lens branch** writes the projected world point directly as the
+new camera origin: `cameraX = (mouse − rect origin) · PlayRight / RadarW` and
+`cameraZ = (mouse − rect origin) · PlayBottom / RadarH`. Either way the result
+is clamped to the play area and the terrain height queried at the result. The
+lens inverts the minimap projection directly; it does not reuse the main
+view's cursor-to-world projection.
+**Correction to the prior wording (Established).** An earlier sentence in this
+section said that the lens branch recentered by subtracting half the viewport.
+The direct-static trace resolves that as incorrect: the lens branch performs
+only `(mouseX − letterboxOriginX) · PlayRight / RadarW` and
+`(mouseY − letterboxOriginY) · PlayBottom / RadarH`, truncating each operation;
+there is no `−viewSize/2` term and no mapWidth/mapHeight scale. The drag branch
+alone adds the clamped viewport delta to the stored camera. Document 07's
+recenter formula is the corresponding stale reading and is corrected there.
 
 ### 3.12 Viewport marker (composer-time)
 
@@ -1376,6 +1413,16 @@ confirmation of the figure, which the calls fully determine; the earlier
 pixels belong to the selection brackets, not this marker (the marker is 1-pixel
 lines). (Corpus trail: minimap note §5.5, viewport note §2, and the composer
 decompile; the corresponding resolution note is r03-03 §4.)
+
+**Mode-byte source (Unknown).** The composer-time marker condition is
+established as an equality test against value 2, but the available clean-room
+writer census found no simulation, session, mission, or map input that writes
+this distinct minimap mode byte. The existing battle input mode is a separate
+UI routing value and is not evidence for the marker condition. Nanolathe keeps
+the value as an explicit authoritative session input and publishes it unchanged
+through the frame; zero is therefore an explicit mode-off value until a traced
+writer is available. `TODO(question):` identify the retail mode-byte writer or
+the authoritative setup value that selects 2; do not infer it from HUD state.
 
 ## 4. Indexed renderer, palettes, and asset layers
 

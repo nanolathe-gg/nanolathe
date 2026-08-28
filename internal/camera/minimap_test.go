@@ -2,7 +2,7 @@ package camera
 
 import "testing"
 
-func TestMinimapLetterbox(t *testing.T) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func TestMinimapLetterbox(t *testing.T) { // [07 §10][03 §3.6]
 	// wide: mapW > mapH
 	m := LayoutMinimap(640, 480)
 	if m.W != 126 {
@@ -38,14 +38,11 @@ func TestMinimapLetterbox(t *testing.T) { // TODO(question): Historical analysis
 		t.Fatalf("square want 126x126 0,0 got %dx%d %d,%d", m.W, m.H, m.PadX, m.PadY)
 	}
 	// letterbox bars are fill inference 0 black [03 §3.6] TODO(question)
-	if minimapLetterboxFill != 0 {
-		t.Fatalf("letterbox fill inference want 0 black got %d", minimapLetterboxFill)
-	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// ALP blend downscale not needed here; picture generation uses ALP 64K [03 §3.7]
 	// TODO(question) ALP quadrant order is supported inference, not exercised in lens package.
 }
 
-func TestHitTestInclusive(t *testing.T) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func TestHitTestInclusive(t *testing.T) { // [07 §10][03 §3.11]
 	m := LayoutMinimap(640, 480) // wide: PadX 0, PadY (126-H)/2
 	// inside inclusive rect
 	if !m.HitTest(m.PadX, m.PadY) {
@@ -85,7 +82,7 @@ func TestHitTestInclusive(t *testing.T) { // TODO(question): Historical analysis
 	}
 }
 
-func TestWorldToRadarRadarToWorldRoundTrip(t *testing.T) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func TestWorldToRadarRadarToWorldRoundTrip(t *testing.T) { // [07 §10][03 §3.11] truncating arithmetic
 	cases := []struct {
 		mapW, mapH   int32
 		playW, playH int32
@@ -97,7 +94,7 @@ func TestWorldToRadarRadarToWorldRoundTrip(t *testing.T) { // TODO(question): Hi
 	}
 	for _, c := range cases {
 		m := LayoutMinimap(c.mapW, c.mapH)
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// PlayRight/Bottom are Wpix-32/Hpix-128 [03 §3.4], but mapW/mapH here are already pixels;
 		// use playW/playH as divisors per minimap §4, §8.
 		pts := []struct{ wx, wz int32 }{
 			{0, 0},
@@ -123,7 +120,7 @@ func TestWorldToRadarRadarToWorldRoundTrip(t *testing.T) { // TODO(question): Hi
 				dz = -dz
 			}
 			// TRUNC both ways: world->radar trunc then radar->world trunc.
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// Error bound is ceil(play / radarSize) due to quantization [03 §3.11].
 			// For lens where Play>>126, ±1 world pixel is not achievable; bound scales.
 			allowX := c.playW/m.W + 1
 			if m.W == 0 {
@@ -136,7 +133,7 @@ func TestWorldToRadarRadarToWorldRoundTrip(t *testing.T) { // TODO(question): Hi
 			if dx > allowX || dz > allowZ {
 				t.Fatalf("world->radar->world trunc error >allow (%d,%d): map %dx%d play %dx%d world (%d,%d) -> radar (%d,%d) -> world (%d,%d) delta %d,%d", allowX, allowZ, c.mapW, c.mapH, c.playW, c.playH, p.wx, p.wz, rx, ry, wx2, wz2, dx, dz)
 			}
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// radar->world->radar round-trip should be within ±1 radar pixel [03 §3.11]
 			rx2, ry2 := m.WorldToRadar(wx2, wz2, c.playW, c.playH)
 			drx := rx2 - rx
 			if drx < 0 {
@@ -160,7 +157,7 @@ func TestWorldToRadarRadarToWorldRoundTrip(t *testing.T) { // TODO(question): Hi
 				t.Fatalf("WorldToRadarWithY Y=0 mismatch: %d,%d vs %d,%d", rx3, ry3, rx, ry)
 			}
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// height shear: worldY half [03 §3.9]
 		m2 := m
 		wx, wy, wz := int32(200), int32(40), int32(300)
 		rx, ry := m2.WorldToRadarWithY(wx, wy, wz, c.playW, c.playH)
@@ -173,28 +170,26 @@ func TestWorldToRadarRadarToWorldRoundTrip(t *testing.T) { // TODO(question): Hi
 	}
 }
 
-func TestToCameraPlayClamp(t *testing.T) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func TestRadarToWorldIsDirectCameraOrigin(t *testing.T) { // [03 §3.11]
 	playW, playH := PlayRight(640), PlayBottom(480) // 608,352
 	m := LayoutMinimap(640, 480)
 	viewW, viewH := int32(128), int32(128)
-	// center click should center camera
+	// The lens writes the projected world point directly; it does not subtract
+	// half the viewport before the camera clamp [03 §3.11].
 	rx := m.PadX + m.W/2
 	ry := m.PadY + m.H/2
-	cx, cz := m.ToCameraPlay(rx, ry, playW, playH, viewW, viewH)
 	wx, wz := m.ToWorldPlay(rx, ry, playW, playH)
-	wantCx := clampAxis(wx-viewW/2, playW, viewW)
-	wantCz := clampAxis(wz-viewH/2, playH, viewH)
-	if cx != wantCx || cz != wantCz {
-		t.Fatalf("ToCameraPlay center want %d,%d got %d,%d", wantCx, wantCz, cx, cz)
+	if wx != int32(int64(rx-m.PadX)*int64(playW)/int64(m.W)) || wz != int32(int64(ry-m.PadY)*int64(playH)/int64(m.H)) {
+		t.Fatalf("direct inverse got %d,%d", wx, wz)
 	}
-	// corner 0,0 click with view larger than play clamps per clampAxis order [07 §10]
-	cx2, cz2 := m.ToCameraPlay(m.PadX, m.PadY, playW, playH, 800, 600)
-	if cx2 != clampAxis(-400, playW, 800) || cz2 != clampAxis(-300, playH, 600) {
-		t.Fatalf("ToCameraPlay clamp failed got %d,%d", cx2, cz2)
+	cam := &Camera{X: wx, Z: wz, ViewW: viewW, ViewH: viewH, MapW: playW, MapH: playH}
+	cam.Clamp()
+	if cam.X != clampAxis(wx, playW, viewW) || cam.Z != clampAxis(wz, playH, viewH) {
+		t.Fatalf("direct-origin clamp got %d,%d", cam.X, cam.Z)
 	}
 }
 
-func TestPlayHelpers(t *testing.T) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func TestPlayHelpers(t *testing.T) { // [03 §3.4]
 	if PlayRight(640) != 608 || PlayBottom(480) != 352 {
 		t.Fatalf("PlayRight/Bottom want 608/352 got %d/%d", PlayRight(640), PlayBottom(480))
 	}
@@ -209,12 +204,27 @@ func TestPlayHelpers(t *testing.T) { // TODO(question): Historical analysis omit
 	}
 }
 
+func TestMinimapDisplayCanvasRoundTrip(t *testing.T) {
+	m := LayoutMinimap(608, 352)
+	const left, top, width, height int32 = 410, 220, 252, 252
+	for _, p := range [][2]int32{{0, 0}, {m.PadX, m.PadY}, {m.Right(), m.Bottom()}, {125, 125}} {
+		x, y, ok := m.CanvasToDisplay(p[0], p[1], left, top, width, height)
+		if !ok {
+			t.Fatalf("canvas point %+v rejected", p)
+		}
+		cx, cy, ok := m.DisplayToCanvas(x, y, left, top, width, height)
+		if !ok || cx != p[0] || cy != p[1] {
+			t.Fatalf("canvas/display round trip (%d,%d) -> (%d,%d) -> (%d,%d)", p[0], p[1], x, y, cx, cy)
+		}
+	}
+}
+
 func TestMinimapLetterboxFillTODO(t *testing.T) { // TODO(question) 0 black [03 §3.6]
 	// Letterbox bars beyond RadarW×RadarH retain heap bytes — inference 0 black pending capture.
 	// This test locks the current inference so review knows it is deliberate.
 	if MinimapLongSide != 126 {
 		t.Fatalf("MinimapLongSide want 126 got %d", MinimapLongSide)
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// ALP blend downscale [03 §3.7] is not exercised in lens package;
 	// lens conversions are integer TRUNC only.
 }

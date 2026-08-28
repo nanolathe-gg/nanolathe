@@ -32,30 +32,28 @@ func UnitToScreen(cam *camera.Camera, u *units.Unit) (int32, int32) {
 // IsUnitViewInRect reports whether the projected UnitView falls inside the
 // inclusive drag rectangle [07 §9] C6. Rect is shell (window) coords.
 func IsUnitViewInRect(cam *camera.Camera, v frame.UnitView, rect Rect) bool {
-	if cam == nil || rect.IsEmpty() {
+	if cam == nil || rectEmpty(rect) {
 		return false
 	}
-	sx0, sy0 := UnitViewToScreen(cam, v)             // beam
-	sx, sy := sx0-camera.OriginX, sy0-camera.OriginY // shell [PLAN_04A C1]
-	return rect.Contains(sx, sy)
+	p := NewViewportTransform(cam, nil, 0, 0).WorldToSurface(v.X, v.Y, v.Z)
+	return rect.Contains(p.X, p.Y)
 }
 
 // IsUnitInRect reports whether the live Unit's projected position is inside
 // the inclusive drag rectangle [07 §9] C6. Rect is shell.
 func IsUnitInRect(cam *camera.Camera, u *units.Unit, rect Rect) bool {
-	if cam == nil || u == nil || rect.IsEmpty() {
+	if cam == nil || u == nil || rectEmpty(rect) {
 		return false
 	}
-	sx0, sy0 := UnitToScreen(cam, u) // beam
-	sx, sy := sx0-camera.OriginX, sy0-camera.OriginY
-	return rect.Contains(sx, sy)
+	p := NewViewportTransform(cam, nil, 0, 0).WorldToSurface(u.X, u.Y, u.Z)
+	return rect.Contains(p.X, p.Y)
 }
 
 // FilterViewsInRect returns the indices of views whose projected positions
 // fall inside rect inclusive [07 §9] C6. It does not mutate selection; it is a
 // pick helper for tests and for the composition root to build a selection set.
 func FilterViewsInRect(views []frame.UnitView, cam *camera.Camera, rect Rect) []int {
-	if cam == nil || len(views) == 0 || rect.IsEmpty() {
+	if cam == nil || len(views) == 0 || rectEmpty(rect) {
 		return nil
 	}
 	var out []int

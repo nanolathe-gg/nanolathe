@@ -17,6 +17,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/hud"
 	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
@@ -1038,7 +1039,7 @@ func (c *Client) drawUnitChrome(v frame.UnitView, sx, sy int32) {
 	if halfH < 4 {
 		halfH = 4
 	}
-	if v.Flags&SelectionFlag != 0 {
+	if v.Flags&hud.SelectionFlag != 0 {
 		corners := [4][2]int32{
 			{sx - halfW, sy - halfH}, {sx + halfW, sy - halfH},
 			{sx + halfW, sy + halfH}, {sx - halfW, sy + halfH},
@@ -1054,7 +1055,7 @@ func (c *Client) drawUnitChrome(v frame.UnitView, sx, sy int32) {
 			}
 		}
 	}
-	if v.MaxHealth > 0 && (v.Health != v.MaxHealth || v.Flags&SelectionFlag != 0) {
+	if v.MaxHealth > 0 && (v.Health != v.MaxHealth || v.Flags&hud.SelectionFlag != 0) {
 		bw := halfW * 2
 		if bw < 12 {
 			bw = 12

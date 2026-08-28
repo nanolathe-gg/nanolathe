@@ -1,22 +1,24 @@
 // Package world — wind field.
 //
-// Wind state seeded at battle entry and advanced by the two global RNG
-// streams. Session.authoritativeTick calls its two update steps directly in
-// phase order [01 §4.4].
+// Wind state is owned by the battle session and advanced by its two RNG
+// streams. The session's phase 8 performs the complete scheduled redraw
+// [01 §4.4][R-CORE-01 §4.4.1].
 //
-// Retail wind draws [01 §7.3], [05 "Wind generation"], [GAP T13]:
+// Retail wind draws [01 §7.3], [05 "Wind generation"], [GAP T13], [R-CORE-02]:
 //
-//   - Briefing (battle entry, before any sim tick): CRT draws the initial speed
-//     `rand() % (max-min+1) + min`, then the six-bit direction `rand() & 0x3F`,
-//     then the first next-change deadline `((crt*10)/0x8000+5)*30`. All three
-//     are raw inline CRT expressions, so all three consume a draw
-//     unconditionally — see rng.CRT.Uint32n.
+//   - The briefing-screen speed and direction draws (`rand() % (max-min+1)+min`,
+//     then `rand() & 0x3F`) are FRONT-END DISPLAY STATE only: their globals have
+//     no battle-side reader. Battle entry itself consumes NO wind draws — it
+//     zeroes the deadline, and the strict gate (not due while tick < deadline)
+//     leaves the zeroed deadline unfired at tick 0. The first wind chain runs
+//     inside the first sub-tick (tick 1 > 0) [R-CORE-02].
 //   - In sim, when the global tick passes the wind deadline: the deadline
-//     advances by the same CRT interval expression (one CRT draw, 64-bit
-//     multiply/divide), then the new strength is `simRand(maxWind-minWind)+min`
-//     (one simulation draw; bound<2 returns 0 without advancing) and, only when
-//     the strength is nonzero, the new heading is `simRand(0x10000)` (one
-//     simulation draw — not two; see rng.Simulation.Uint32n).
+//     advances by the CRT interval expression `((crt*10)/0x8000+5)*30` (one CRT
+//     draw, 64-bit multiply/divide), then the new strength is
+//     `simRand(maxWind-minWind)+min` (one simulation draw; bound<2 returns 0
+//     without advancing) and, only when the strength is nonzero, the new
+//     heading is `simRand(0x10000)` (one simulation draw — not two; see
+//     rng.Simulation.Uint32n).
 //   - The change takes effect instantly with no interpolation, the world X/Z
 //     vectors are recomputed, and the scalar published to generators is
 //     `(float)speed / (float)5000` clamped from above at exactly 1.0.
@@ -57,8 +59,6 @@ type Wind struct {
 	NextChange uint32 // tick the next redraw falls due [01 §7.3]
 	LastChange uint32 // tick of the last completed redraw
 	Changed    bool   // true for exactly one tick after a redraw (callback burst gate)
-
-	pending bool // jitter saw the deadline pass; field applies strength/heading
 }
 
 // NewWind creates a wind holder with the given inclusive bounds. A reversed
@@ -83,13 +83,23 @@ func boundFor(span int64) uint32 {
 	return uint32(span)
 }
 
-// SeedBriefing performs the briefing-screen draws, which happen at battle entry
-// before any simulation tick [01 §7.3], [08 "Wind initialization"].
+// SeedBriefing is the FRONT-END briefing-display draw helper [01 §7.3]
+// [R-CORE-02]. It renders the two briefing-screen display values — speed
+// `rand() % (max-min+1) + min`, then the six-bit direction `rand() & 0x3F` —
+// and arms the first deadline with one interval draw, exactly as the retail
+// briefing screen does when it enters.
 //
-// It consumes exactly three CRT draws, unconditionally. Retail writes these as
-// raw inline `rand() % n` expressions, so a map whose minimum and maximum wind
-// are equal still consumes the speed draw; skipping it would shift every later
-// CRT consumer by one.
+// It must NEVER run at battle entry: retail's battle bootstrap performs no
+// wind draws (it only zeroes the deadline), and the briefing values are
+// display state with no battle-side reader [R-CORE-02]. Nanolathe has no
+// briefing screen yet; no production caller exists. AUDIT(parity-spine):
+// retained as the clearly-labeled front-end presentation path for the future
+// briefing display.
+//
+// TODO(question): research gives the briefing direction as a six-bit value and
+// every later heading as a full 16-bit simRand(0x10000) [01 §7.3], but does
+// not state how the six-bit value is widened into the heading field. 64 steps
+// of 1024 is the arithmetically clean reading; it is not attested.
 func (w *Wind) SeedBriefing(crt *rng.CRT, tick uint32) {
 	if w == nil || crt == nil {
 		return
@@ -98,11 +108,6 @@ func (w *Wind) SeedBriefing(crt *rng.CRT, tick uint32) {
 	w.Strength = int32(crt.Uint32n(boundFor(int64(w.Max)-int64(w.Min)+1))) + w.Min
 
 	// 2. Initial direction: rand() & 0x3F, six bits [01 §7.3].
-	//
-	// TODO(question): research gives the briefing direction as a six-bit value
-	// and every later heading as a full 16-bit simRand(0x10000) [01 §7.3], but
-	// does not state how the six-bit value is widened into the heading field.
-	// 64 steps of 1024 is the arithmetically clean reading; it is not attested.
 	dir6 := uint16(crt.Rand() & 0x3F)
 	w.Heading = dir6 << 10
 
@@ -110,58 +115,42 @@ func (w *Wind) SeedBriefing(crt *rng.CRT, tick uint32) {
 
 	// 3. First next-change deadline [01 §7.3].
 	w.NextChange = tick + windInterval(crt)
-	w.pending = false
 }
 
-// Jitter is the phase-8 callback: wind jitter / randomized interval update
-// [01 §4.4].
+// Jitter is the phase-8 callback: the COMPLETE scheduled wind redraw
+// [01 §4.4][01 §7.3][R-CORE-01 §4.4.1]. DET-03: the earlier split (Jitter
+// drew only the CRT interval here and a phase-9 "Field" drew the sim
+// strength/heading) is wrong — phase 8 owns the whole chain and phase 9 is
+// the meteor shower, not a wind pass.
 //
-// It runs every sub-tick. When the deadline has not passed it only clears the
-// one-tick Changed burst flag. When it has, it advances the deadline by one CRT
-// interval draw and marks the change pending so the phase-9 callback consumes
-// the simulation draws in the same tick. The split matters: phase 8 draws from
-// the CRT stream strictly before phase 9 draws from the simulation stream, and
-// that ordering is behavior (I4).
-func (w *Wind) Jitter(tick uint32, crt *rng.CRT) {
-	if w == nil || crt == nil {
-		return
+// It runs every sub-tick. The deadline gate is strict: while `tick <
+// NextChange` the redraw is not due and only the one-tick Changed burst flag
+// clears. When due it consumes, in order: one CRT interval draw
+// `((crt*10)/0x8000+5)*30`, then the sim strength
+// `simRand(maxWind-minWind)+minWind`, then — only when the strength is
+// nonzero — the sim heading `simRand(0x10000)`, and finally the vectors,
+// scalar, and one-tick change flag [01 §7.3]. Battle entry zeroes
+// NextChange, so with the strict gate the first chain fires at tick 1 and
+// battle entry itself consumes no draws [R-CORE-02].
+func (w *Wind) Jitter(tick uint32, crt *rng.CRT, sim *rng.Simulation) bool {
+	if w == nil || crt == nil || sim == nil {
+		return false
 	}
 	if tick < w.NextChange {
 		w.Changed = false
-		w.pending = false
-		return
-	}
-	w.NextChange = tick + windInterval(crt) // one CRT draw [01 §7.3]
-	w.pending = true
-}
-
-// Field is the phase-9 callback: wind-field update [01 §4.4].
-//
-// When jitter marked the tick due, it draws the new strength and heading from
-// the simulation stream and republishes every derived value instantly — there
-// is no interpolation [05 "Wind generation"]. Wind generators receive their
-// SetDirection/SetSpeed burst only on a tick where this returns true.
-func (w *Wind) Field(tick uint32, sim *rng.Simulation) bool {
-	if w == nil || !w.pending {
 		return false
 	}
-	w.pending = false
-	if sim == nil {
-		w.Changed = false
-		return false
-	}
-
-	// New strength: simRand(maxWind-minWind) + minWind [01 §7.3]. Note the
-	// exclusive span here against the briefing draw's inclusive max-min+1.
-	// A span below 2 returns 0 without advancing, which is the helper's
-	// contract, so this call is made unconditionally.
+	// CRT interval draw, drawn before the new speed and heading [01 §7.3] —
+	// 64-bit multiply/divide path.
+	w.NextChange = tick + windInterval(crt)
+	// New strength: simRand(maxWind-minWind) + minWind [01 §7.3]. Exclusive
+	// span here vs briefing display's inclusive max-min+1. Bound<2 returns 0
+	// without advancing per [01 §7.1] contract.
 	w.Strength = int32(sim.Uint32n(boundFor(int64(w.Max)-int64(w.Min)))) + w.Min
-
 	// New heading only when the strength is nonzero [01 §7.3]. One draw.
 	if w.Strength != 0 {
 		w.Heading = uint16(sim.Uint32n(0x10000))
 	}
-
 	w.publish(tick)
 	return true
 }

@@ -50,6 +50,10 @@ func (r DragRect) Contains(x, y int32) bool { // [07 §9] C9
 	return x >= r.MinX && x <= r.MaxX && y >= r.MinY && y <= r.MaxY
 }
 
+// IsEmpty reports whether a drag rectangle has an inverted boundary. This is
+// a geometry query only; selection ownership remains in the HUD package.
+func (r DragRect) IsEmpty() bool { return r.MinX > r.MaxX || r.MinY > r.MaxY }
+
 // BuildPage holds a page number and the builder's page count [07 §9] C10.
 // The plan's Public API requires this type and EncodePageBits.
 type BuildPage struct {

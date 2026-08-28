@@ -99,18 +99,28 @@ type Client struct {
 	// cannot share animation phase or orientation caches [03 §1][I6].
 	modelPresentation map[modelTextureKey]*modelTextureCursor
 	modelOrientation  map[uint64]*presentationrender.OrientationCache
-	shake             presentationrender.Shake
-	crt               *rng.CRT
-	shakeEvents       map[shakeEventKey]struct{}
-	lastShakeTick     uint32
-	frameTick         uint32                       // committed tick of the frame being composed
-	nano              presentationrender.NanoField // live nanolathe particle records [03 §5.5]
-	lastNanoTick      uint32
-	nanoDepth         []uint8 // per-pixel nanoframe height/depth key [03 §5.2]
-	worldBuckets      worldBuckets
-	fogCache          *visibility.FogCache
-	fogOps            []presentationrender.FogOp
-	selectionChrome   []selectionChrome
+	// DET-04: shake state is authoritative phase 10; the client only applies
+	// the published offset from the committed frame and never draws CRT here.
+	// DET-01: crt is a PRIVATE presentation copy (struct value copied at bind
+	// time), never the session's authoritative stream. It feeds only the
+	// presentation-side segmented-projectile pass, whose draws are
+	// render-time and cannot affect simulation. AUDIT(parity-spine): approved
+	// divergence — retail resolves segmented projectiles from the live CRT;
+	// Nanolathe isolates the copy so render cadence cannot desync the sim.
+	// Next wave: move segment resolution to sim-published values and drop this
+	// field. Shrink-only.
+	crt              *rng.CRT
+	crtBound         bool
+	frameTick        uint32 // committed tick of the frame being composed
+	lastShakeOffsetX int32
+	lastShakeOffsetY int32
+	nano             presentationrender.NanoField // live nanolathe particle records [03 §5.5]
+	lastNanoTick     uint32
+	nanoDepth        []uint8 // per-pixel nanoframe height/depth key [03 §5.2]
+	worldBuckets     worldBuckets
+	fogCache         *visibility.FogCache
+	fogOps           []presentationrender.FogOp
+	selectionChrome  []selectionChrome
 
 	// Feature GAF presentation — sprite class [02 "Feature record"] [03 §5.1.1].
 	// Loaded lazily from anims/<filename>.gaf via modelFS; cache is presentation-only (I6).
@@ -135,21 +145,6 @@ type Client struct {
 	// Audio is the concrete internal/audio owner. The client only binds the
 	// service and drains it at the rendered-frame boundary [03 §8.3–§8.4] [I6].
 	audioService *audio.Service
-}
-
-type shakeEventKey struct {
-	sequence uint64
-	tick     uint32
-	id       uint32
-}
-
-type labeledCRT struct{ crt *rng.CRT }
-
-func (r labeledCRT) Draw(...string) int32 {
-	if r.crt == nil {
-		return 0
-	}
-	return int32(r.crt.Rand())
 }
 
 // New creates a client. It allocates the indexed framebuffer at the negotiated
@@ -179,7 +174,6 @@ func New(opts Options) (*Client, error) {
 		texIndex:          map[string]texRef{},
 		modelPresentation: map[modelTextureKey]*modelTextureCursor{},
 		modelOrientation:  map[uint64]*presentationrender.OrientationCache{},
-		shakeEvents:       map[shakeEventKey]struct{}{},
 		featureGAFs:       map[string]*formats.GAF{},
 		featureFrames:     map[string]*formats.GAFFrame{},
 		featureGACErr:     map[string]error{},

@@ -12,7 +12,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -95,6 +94,18 @@ type SkirmishConfig struct {
 	Mapping        int // 0 all terrain visible, 1 blacked out until explored [08 "Skirmish configuration"]
 	LineOfSight    int // 0 disables LOS, 1 enables it [08 "Skirmish configuration"]
 	LOSType        int // 0 elevations ignored, 1 elevations affect LOS [08 "Skirmish configuration"]
+
+	// Explicit battle RNG seeds [R-CORE-02] DET-01. Retail derives the sim
+	// seed from the QPC sum XOR a fixed constant (forced odd) and the CRT seed
+	// from the time-of-day helper, both AT BATTLE ENTRY, wiping every
+	// pre-battle draw. Nanolathe takes explicit seeds instead; the bootstrap
+	// seeds both streams fresh with these before any battle setup draw.
+	// TODO(question): cmd has no seed source wired yet; while both fields are
+	// zero the bootstrap uses the documented deterministic placeholder (1,1)
+	// so runs stay reproducible. Wire a wall-clock/QPC-analog source in cmd to
+	// match retail's seed instants.
+	RNGSimSeed uint32
+	RNGCrtSeed uint32
 
 	// rulesDefaultsApplied distinguishes a zero-value config (missing registry
 	// values) from an explicit Easy/randomized/off choice. It is deliberately
@@ -355,9 +366,6 @@ const (
 // so a caller painting the retail loading screen can drive it from one stream.
 // A nil observer makes this exactly NewSkirmishWithFS.
 func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig, report content.Progress) (*Session, error) {
-	if err := requireGlobalRNGStreams(); err != nil {
-		return nil, err
-	}
 	if err := cfg.Normalize(); err != nil {
 		return nil, err
 	}
@@ -366,6 +374,15 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	}
 	if err := validateSkirmishLobby(cfg); err != nil {
 		return nil, err
+	}
+	// DET-01 [R-CORE-02]: battle bootstrap seeds both streams fresh BEFORE any
+	// battle setup draw (skirmish slot shuffle, commander placement), wiping
+	// every pre-battle draw from the streams' state. The session is the sole
+	// RNG authority from here on; rng.Global is not consulted.
+	if cfg.RNGSimSeed == 0 && cfg.RNGCrtSeed == 0 {
+		// TODO(question): see SkirmishConfig.RNGSimSeed — deterministic
+		// placeholder until cmd wires a seed source.
+		cfg.RNGSimSeed, cfg.RNGCrtSeed = 1, 1
 	}
 	if fs == nil {
 		return nil, fmt.Errorf("session: nil filesystem for skirmish battle [02 §5]")
@@ -439,6 +456,9 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		LocalOwner: uint8(localOwner),
 		EnemyOwner: uint8(enemyOwner),
 	}
+	// Seed both streams fresh at battle bootstrap, before any battle setup
+	// draw [R-CORE-02] DET-01.
+	s.SeedSessionRNG(cfg.RNGSimSeed, cfg.RNGCrtSeed)
 	nPlayers := cfg.NumPlayers
 	if nPlayers < 0 {
 		nPlayers = 0
@@ -502,8 +522,12 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		return nil, fmt.Errorf("session: skirmish requires at least one hostile alliance [08 \"Skirmish configuration\"]")
 	}
 	s.Econ.SeedDeadlines(0)
-	// 10. wind via shared path [01 §7.3] C17 – single initializer after retaining bounds
-	s.InitWindForSession(rng.Global.Crt, 0)
+	// Battle-entry wind: deadline zeroed, NO draws — the first wind chain runs
+	// in sub-tick 1 [R-CORE-02] DET-03.
+	s.InitBattleWindForSession()
+	// Meteor scheduler state (initial next-strike = per-hit spacing) is
+	// written at battle entry; the write consumes no draws [R-CORE-01 §4.4.1].
+	s.initMeteor()
 	// Audio presentation queue/cache/music owned by session so unit/weapon/feature/UI events can queue without client import cycle [03 §8.3][03 §8.4] I6.
 	s.InitAudio(fs)
 	// 5. create every required service non-nil and bind ports [08][04 §7.2]
@@ -707,9 +731,6 @@ func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission) err
 	if m == nil {
 		return fmt.Errorf("session: nil mission")
 	}
-	if err := requireGlobalRNGStreams(); err != nil {
-		return err
-	}
 	if err := skirmishPlaceFeatures(s, m); err != nil {
 		return err
 	}
@@ -827,19 +848,9 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		eligible = append(eligible, i)
 	}
 	n := len(eligible)
-	// CRT vs sim streams [P0-04] I4.
-	var crt *rng.CRT
-	if rng.Global.Crt != nil {
-		crt = rng.Global.Crt
-	} else {
-		return fmt.Errorf("session: missing global CRT RNG stream [01 §7.2]")
-	}
-	var sim *rng.Simulation
-	if rng.Global.Sim != nil {
-		sim = rng.Global.Sim
-	} else {
-		return fmt.Errorf("session: missing global simulation RNG stream [01 §7.1]")
-	}
+	// CRT vs sim streams [P0-04] I4 DET-01: from session, not global.
+	crt := s.CrtRNG()
+	sim := s.SimRNG()
 	// Build the permutation of eligible slots.
 	local28 := make([]int, n)
 	copy(local28, eligible)

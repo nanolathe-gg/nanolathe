@@ -100,8 +100,13 @@ func getGateCandidates(m Selector) map[string]struct{} {
 }
 
 func getSelectorRNG(m Selector) *rng.Simulation {
-	// Single global simulation stream per I4 and RS-02 [08] — no per-manager RNG.
-	return rng.Global.Sim
+	// DET-01: per-manager RNG when set [RS-06][I4]; no global fallback.
+	if m != nil {
+		if r, ok := m.(interface{ GetRNG() *rng.Simulation }); ok {
+			return r.GetRNG()
+		}
+	}
+	return nil
 }
 
 // isWaterOnlyExtractor reports whether def extracts metal and authors a water

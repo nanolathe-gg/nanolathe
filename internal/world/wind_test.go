@@ -6,18 +6,19 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
-// TestBriefingConsumesThreeCRTDrawsRegardless is the R2 regression. Retail's
-// briefing draws are raw inline rand()%n expressions [01 §7.3], so a map whose
-// wind bounds are equal must still consume the speed draw. Skipping it shifts
-// every later CRT consumer — interval jitter, meteor geometry [06 §6.5], screen
-// shake [03 §5.6], audio variants [03 §8.3] — by one.
-func TestBriefingConsumesThreeCRTDrawsRegardless(t *testing.T) {
+// TestBriefingDisplayDraws is the R2 regression for the FRONT-END briefing
+// display helper. Retail's briefing draws are raw inline rand()%n expressions
+// [01 §7.3], so a map whose wind bounds are equal must still consume the speed
+// draw. [R-CORE-02]: these are front-end display values with no battle-side
+// reader — battle entry itself consumes NO wind draws; only the briefing
+// screen runs this path.
+func TestBriefingDisplayDraws(t *testing.T) {
 	for _, bounds := range [][2]int32{{100, 2000}, {500, 500}, {0, 0}} {
 		crt := rng.NewCRT(1)
 		w := NewWind(bounds[0], bounds[1])
 		w.SeedBriefing(&crt, 0)
 		if crt.Draws() != 3 {
-			t.Fatalf("bounds %v: briefing consumed %d CRT draws, want 3", bounds, crt.Draws())
+			t.Fatalf("bounds %v: briefing display consumed %d CRT draws, want 3", bounds, crt.Draws())
 		}
 		if w.Strength < bounds[0] || w.Strength > bounds[1] {
 			t.Fatalf("bounds %v: strength %d out of range", bounds, w.Strength)
@@ -28,57 +29,76 @@ func TestBriefingConsumesThreeCRTDrawsRegardless(t *testing.T) {
 	}
 }
 
-// TestWindChangeDrawCounts locks the per-change stream budget of [01 §7.3]:
-// one CRT draw for the interval in phase 8, then one simulation draw for the
-// strength and one for the heading in phase 9. The heading is simRand(0x10000);
-// if the simulation helper ever regains a chunk-concatenation path it becomes
-// two draws and this fails (R1).
+// TestWindChangeDrawCounts locks the per-change stream budget of [01 §7.3]
+// [R-CORE-01 §4.4.1]: phase 8's single redraw consumes one CRT draw for the
+// interval, then one simulation draw for the strength and one for the heading
+// only when the strength is nonzero. The heading is simRand(0x10000); if the
+// simulation helper ever regains a chunk-concatenation path it becomes two
+// draws and this fails (R1).
 func TestWindChangeDrawCounts(t *testing.T) {
 	crt := rng.NewCRT(1)
 	sim := rng.NewSimulation(7)
 	w := NewWind(100, 2000)
-	w.SeedBriefing(&crt, 0)
-
-	crtAfterBriefing := crt.Draws()
-	due := w.NextChange
-
-	// A tick before the deadline draws nothing at all.
-	w.Jitter(due-1, &crt)
-	if w.Field(due-1, &sim) {
-		t.Fatal("wind changed before its deadline")
-	}
-	if crt.Draws() != crtAfterBriefing || sim.Draws() != 0 {
-		t.Fatalf("undue tick drew: crt %d sim %d", crt.Draws()-crtAfterBriefing, sim.Draws())
+	// Battle entry zeroes the deadline; seedBriefing-style pre-draws are not
+	// part of battle entry, so start from the zero deadline and arm via the
+	// first change instead.
+	if w.NextChange != 0 {
+		t.Fatalf("fresh wind deadline = %d, want 0 [R-CORE-02]", w.NextChange)
 	}
 
-	// The due tick draws exactly one CRT and two simulation values.
-	w.Jitter(due, &crt)
-	if !w.Field(due, &sim) {
-		t.Fatal("wind did not change on its deadline")
+	// Tick 1 is due (deadline zeroed at entry, strict gate): exactly one CRT
+	// draw (interval) and two simulation draws (strength, heading).
+	if !w.Jitter(1, &crt, &sim) {
+		t.Fatal("tick 1 must be due [R-CORE-02]")
 	}
-	if got := crt.Draws() - crtAfterBriefing; got != 1 {
+	if got := crt.Draws(); got != 1 {
 		t.Fatalf("change consumed %d CRT draws, want 1 (interval)", got)
 	}
 	if sim.Draws() != 2 {
 		t.Fatalf("change consumed %d simulation draws, want 2 (strength, heading)", sim.Draws())
 	}
-	if !w.Changed || w.LastChange != due {
-		t.Fatalf("change not published at tick %d", due)
+	if !w.Changed || w.LastChange != 1 {
+		t.Fatalf("change not published at tick 1")
+	}
+
+	// A tick before the new deadline draws nothing at all.
+	crtAfter, simAfter := crt.Draws(), sim.Draws()
+	if w.Jitter(w.NextChange-1, &crt, &sim) {
+		t.Fatal("wind changed before its deadline")
+	}
+	if crt.Draws() != crtAfter || sim.Draws() != simAfter {
+		t.Fatalf("undue tick drew: crt %d sim %d", crt.Draws()-crtAfter, sim.Draws()-simAfter)
+	}
+
+	// The next due tick again draws exactly one CRT and two simulation values.
+	crtAfter, simAfter = crt.Draws(), sim.Draws()
+	due := w.NextChange
+	if !w.Jitter(due, &crt, &sim) {
+		t.Fatal("wind did not change on its deadline")
+	}
+	if got := crt.Draws() - crtAfter; got != 1 {
+		t.Fatalf("change consumed %d CRT draws, want 1 (interval)", got)
+	}
+	if got := sim.Draws() - simAfter; got != 2 {
+		t.Fatalf("change consumed %d simulation draws, want 2 (strength, heading)", got)
 	}
 }
 
 // TestZeroStrengthSkipsHeadingDraw: the heading draw is taken only when the new
-// strength is nonzero [01 §7.3].
+// strength is nonzero [01 §7.3]. A collapsed zero span returns 0 without
+// advancing, so a due tick costs one CRT draw and zero simulation draws.
 func TestZeroStrengthSkipsHeadingDraw(t *testing.T) {
 	crt := rng.NewCRT(1)
 	sim := rng.NewSimulation(7)
-	w := NewWind(0, 0) // span 0: strength draw returns 0 without advancing
-	w.SeedBriefing(&crt, 0)
-	due := w.NextChange
-	w.Jitter(due, &crt)
-	w.Field(due, &sim)
+	w := NewWind(0, 0)
+	if !w.Jitter(1, &crt, &sim) {
+		t.Fatal("tick 1 must be due")
+	}
 	if sim.Draws() != 0 {
 		t.Fatalf("zero-span change consumed %d simulation draws, want 0", sim.Draws())
+	}
+	if crt.Draws() != 1 {
+		t.Fatalf("zero-span change consumed %d CRT draws, want 1", crt.Draws())
 	}
 }
 
@@ -96,20 +116,18 @@ func TestWindScalarClampsAtOne(t *testing.T) {
 	}
 }
 
-// TestDirectPhaseOrder locks the stream ordering of the direct session calls:
-// the phase-8 CRT draw happens strictly before the phase-9 simulation draws
-// [01 §4.4], [01 §7.3].
-func TestDirectPhaseOrder(t *testing.T) {
+// TestScheduledRedrawCadence locks the scheduled-redraw cadence with the
+// single phase-8 call: one CRT interval draw per change and at most two
+// simulation draws per change [01 §7.3][R-CORE-01 §4.4.1].
+func TestScheduledRedrawCadence(t *testing.T) {
 	crt := rng.NewCRT(1)
 	sim := rng.NewSimulation(7)
 	w := NewWind(100, 2000)
-	w.SeedBriefing(&crt, 0)
 
 	changes := 0
 	for tick := uint32(1); tick <= 900; tick++ {
 		before := w.LastChange
-		w.Jitter(tick, &crt)
-		w.Field(tick, &sim)
+		w.Jitter(tick, &crt, &sim)
 		if w.LastChange != before {
 			changes++
 		}
@@ -118,8 +136,8 @@ func TestDirectPhaseOrder(t *testing.T) {
 		t.Fatalf("only %d wind changes in 900 ticks, want at least 2", changes)
 	}
 	// Every change is one CRT interval draw and at most two simulation draws.
-	if want := uint64(3 + changes); crt.Draws() != want {
-		t.Fatalf("crt draws = %d, want %d (3 briefing + 1 per change)", crt.Draws(), want)
+	if crt.Draws() != uint64(changes) {
+		t.Fatalf("crt draws = %d, want %d (1 per change)", crt.Draws(), changes)
 	}
 	if sim.Draws() != uint64(2*changes) {
 		t.Fatalf("sim draws = %d, want %d (2 per change)", sim.Draws(), 2*changes)

@@ -116,8 +116,22 @@ func TestMeteorDeterminism_TwoRunsIdentical(t *testing.T) {
 		return s.CrtRNG().Draws(), s.SimRNG().Draws()
 	}
 	crtNo, simNo := runNoMeteor(12345, 67890)
-	if dCrt1 <= crtNo {
-		t.Fatalf("meteor CRT consumption: enabled draws %d should exceed disabled %d (four per tick scheduling) [06 §6.5]", dCrt1, crtNo)
+	// [R-CORE-01 §4.4.1] corrected draw gating, exact deterministic census for
+	// this fixture. Both runs include exactly ONE wind interval draw (phase 8
+	// fires once in 200 ticks for bounds 100..2000).
+	// Enabled: 4 scheduling draws at the single due evaluation (tick 15,
+	// interval 1800) + 2 draws per hit (11 hits across the 150-tick window at
+	// spacing 15) + 1 wind = 27.
+	// Disabled: NextStrike = trunc(30/density) = 0 at entry and this synthetic
+	// fixture carries a zero interval, so the scheduler is due every other
+	// tick: 100 due evaluations × 4 draws + 1 wind = 401. The earlier
+	// "four per tick" reading is superseded — draws happen only on due
+	// evaluations [R-CORE-01 §4.4.1].
+	if dCrt1 != 27 {
+		t.Fatalf("enabled storm CRT draws = %d, want 27 (1 wind + 4 scheduling + 22 per-hit) [06 §6.5][R-CORE-01 §4.4.1]", dCrt1)
+	}
+	if crtNo != 401 {
+		t.Fatalf("disabled storm CRT draws = %d, want 401 (1 wind + 100 due evaluations x 4) [06 §6.5][R-CORE-01 §4.4.1]", crtNo)
 	}
 	if dSim1 != simNo {
 		t.Fatalf("meteor should consume zero sim draws [06 §6.5]: enabled sim %d vs disabled %d", dSim1, simNo)

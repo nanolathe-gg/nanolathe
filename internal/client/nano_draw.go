@@ -16,6 +16,15 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
+// presentationRNG is a presentation-only CRT with the same recurrence as the
+// retail CRT stream but isolated from the authoritative session CRT [DET-01].
+type presentationRNG struct{ state uint32 }
+
+func (p *presentationRNG) Rand() int32 {
+	p.state = p.state*214013 + 2531011
+	return int32((p.state >> 16) & 0x7FFF)
+}
+
 // tickNanolathe admits this tick's nano segments and advances the field once
 // per committed tick, so repainting one snapshot neither spawns particles
 // twice nor consumes CRT draws again.
@@ -35,8 +44,10 @@ func (c *Client) tickNanolathe(cur *frame.Frame) {
 		min, max := c.nanoTargetBox(cur, e)
 		c.nano.Add([3]numeric.Fixed{e.X, e.Y, e.Z}, min, max, cur.Tick)
 	}
-	crt := labeledCRT{crt: c.crt}
-	c.nano.Tick(cur.Tick, func() int32 { return crt.Draw("nanolathe") })
+	// DET-01: nanolathe spray is presentation-only; use a presentation-only
+	// RNG seeded from the committed tick so render cadence does not affect sim.
+	rng := presentationRNG{state: cur.Tick*214013 + 2531011}
+	c.nano.Tick(cur.Tick, func() int32 { return rng.Rand() })
 }
 
 // nanoTargetBox resolves the target's world bounding box. A target whose model

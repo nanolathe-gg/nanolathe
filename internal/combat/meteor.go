@@ -131,10 +131,11 @@ func IsMeteorEnabled(weaponName string) bool {
 	return strings.TrimSpace(weaponName) != ""
 }
 
-// MeteorTarget picks the shower target cell per [06 §6.5].
-// It consumes two CRT draws [01 §7.2] [06 §6.5] I4: targetZ then targetX as
-// crtRand * dimension /0x8000. Results are clamped to [0, dimension-1] when
-// dimension >0; dimension <=0 yields 0. Order is Z then X to match retail.
+// MeteorTarget picks the shower target cell per [06 §6.5] [R-CORE-01 §4.4.1].
+// It consumes two CRT draws [01 §7.2] [06 §6.5] I4: the map DEPTH draw first,
+// then the map WIDTH draw, as crtRand * dimension /0x8000. Results are
+// clamped to [0, dimension-1] when dimension >0; dimension <=0 yields 0.
+// Depth-then-width order is behavior.
 func MeteorTarget(crt *rng.CRT, mapWidth, mapHeight int32) (targetX, targetZ int32) {
 	// [06 §6.5] scheduling-side draws: four draws per evaluation even when disabled.
 	// This helper consumes two of them (targetZ, targetX). Caller must consume the
@@ -162,9 +163,10 @@ func MeteorOrigin(crt *rng.CRT, targetX, targetZ int32) (originX, originZ int32)
 	return originX, originZ
 }
 
-// MeteorSchedule consumes the full four scheduling-side CRT draws per [06 §6.5]:
-// targetZ, targetX, originZ offset, originX offset.
-// Every evaluation consumes all four even when the storm is disabled (I4).
+// MeteorSchedule consumes the full four scheduling-side CRT draws per [06 §6.5]
+// [R-CORE-01 §4.4.1]: targetZ, targetX, originZ offset, originX offset.
+// The caller consumes them on every DUE evaluation (next-strike deadline
+// passed, non-strict) even when the storm is disabled (I4).
 // Returns target and origin cells.
 func MeteorSchedule(crt *rng.CRT, mapWidth, mapHeight int32) (targetX, targetZ, originX, originZ int32) {
 	targetX, targetZ = MeteorTarget(crt, mapWidth, mapHeight)

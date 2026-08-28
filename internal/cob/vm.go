@@ -1906,12 +1906,7 @@ func (v *VM) simRandN(bound uint32) uint32 {
 	if v.simRng != nil {
 		return v.simRng.Uint32n(bound) // [01 §7.1] I4
 	}
-	if rng.Global.Sim != nil {
-		return rng.Global.Sim.Uint32n(bound)
-	}
-	// Fallback deterministic for testing without global seed [01 §7.1]
-	// Use a package fallback seeded 1; not authoritative but deterministic.
-	return fallbackSim.Uint32n(bound)
+	// DET-01: no global fallback; production requires injected RNG.
+	// Tests must bind a stream via SetSimulationRNG; otherwise return 0 without advancing.
+	return 0
 }
-
-var fallbackSim = rng.NewSimulation(1)

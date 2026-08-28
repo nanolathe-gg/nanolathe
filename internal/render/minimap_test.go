@@ -161,10 +161,11 @@ func TestMinimapBuildRadarPictureLetterboxAndGuard(t *testing.T) {
 	if pic.Bits[0] != 0x11 {
 		t.Fatalf("guard idx>=TileCount→0 failed, got %02x want 0x11 [03 §3.7] [analysis omitted]:3C", pic.Bits[0])
 	}
-	// Non-integral baked source scaling is intentionally suppressed until its
-	// sampling rule is traced [03 §3.7].
-	if pic2 := BuildRadarPicture(ter, ter.PlayRight, ter.PlayBottom, m, make([]byte, 4*4), 4, 4, &tables); pic2 != nil {
-		t.Fatalf("untraced baked scaling must be suppressed")
+	// Authored TNT dimensions are independent of the lens dimensions; the ALP
+	// path accepts arbitrary source sizes, including the observed tall variant
+	// [fmt tnt][03 §3.7].
+	if pic2 := BuildRadarPicture(ter, ter.PlayRight, ter.PlayBottom, m, make([]byte, 4*4), 4, 4, &tables); pic2 == nil || len(pic2.Bits) != pic2.W*pic2.H {
+		t.Fatalf("arbitrary baked scaling must produce a complete picture")
 	}
 }
 
@@ -199,6 +200,48 @@ func TestMinimapBuildRadarPictureALPBlend(t *testing.T) {
 	pic := BuildRadarPicture(nil, 1, 1, camera.Minimap{W: 1, H: 1}, baked, 2, 2, &tables)
 	if pic == nil || len(pic.Bits) != 1 || pic.Bits[0] != 30 {
 		t.Fatalf("row-first ALP result got %#v want 30", pic)
+	}
+}
+
+func TestMinimapBakedALPArbitraryRetailDimensions(t *testing.T) {
+	// The authored 252×252 and 252×256 sources both feed the 126×126 lens.
+	// ALP is deliberately non-identity so the expected values lock source
+	// coordinate truncation and the row-first three-look-up arithmetic [03 §3.7].
+	var tables palette.Tables
+	for i := 0; i < 256; i++ {
+		for j := 0; j < 256; j++ {
+			tables.Alpha[i*256+j] = byte((i + j) & 255)
+		}
+	}
+	makeSource := func(w, h int) []byte {
+		src := make([]byte, w*h)
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				src[y*w+x] = byte((x + 3*y) & 255)
+			}
+		}
+		return src
+	}
+	for _, tc := range []struct {
+		name       string
+		w, h       int
+		wantCenter byte
+		wantBottom byte
+	}{
+		{name: "square", w: 252, h: 252, wantCenter: 40, wantBottom: 248},
+		{name: "tall", w: 252, h: 256, wantCenter: 64, wantBottom: 28},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pic := BuildRadarPicture(nil, 0, 0, camera.Minimap{W: 126, H: 126}, makeSource(tc.w, tc.h), tc.w, tc.h, &tables)
+			if pic == nil {
+				t.Fatal("baked picture rejected")
+			}
+			center := 63*pic.W + 7
+			bottom := 125*pic.W + 7
+			if pic.Bits[center] != tc.wantCenter || pic.Bits[bottom] != tc.wantBottom {
+				t.Fatalf("pixels at (7,63)/(7,125) got %d/%d want %d/%d", pic.Bits[center], pic.Bits[bottom], tc.wantCenter, tc.wantBottom)
+			}
+		})
 	}
 }
 

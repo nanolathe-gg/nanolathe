@@ -43,9 +43,9 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 		if u == nil || u.Owner != sess.LocalOwner {
 			continue
 		}
-		u.Flags &^= client.SelectionFlag
+		u.Flags &^= hud.SelectionFlag
 		if commanderName == "" && u.Def != nil && u.Def.Builder && u.Def.CanMove {
-			u.Flags |= client.SelectionFlag
+			u.Flags |= hud.SelectionFlag
 			commanderName = u.Def.UnitName
 		}
 	}
@@ -76,6 +76,40 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if b.hud.radar == nil {
+		t.Fatal("production HUD did not install minimap service")
+	}
+	layout, dst, ok := b.minimapLayout()
+	if !ok {
+		t.Fatal("production HUD did not publish minimap layout")
+	}
+	if got := b.hud.radar.Picture(); got == nil || got.W != int(layout.W) || got.H != int(layout.H) {
+		t.Fatalf("production radar picture = %+v, want layout %dx%d", got, layout.W, layout.H)
+	}
+	// The first completed frame exercises the same load → published frame →
+	// rebuild path used by the draw loop. Radar callbacks and contacts are
+	// consumed from the committed payload, never rebound to visibility state
+	// or rebuilt from frame units [03 §3.4][03 §3.9].
+	cur := sess.Snapshot.Current()
+	if cur == nil {
+		t.Fatal("production HUD has no committed frame")
+	}
+	if len(cur.Radar.Contacts) == 0 {
+		t.Fatal("production frame did not publish radar contacts")
+	}
+	if got := b.hud.rebuildRadar(b, cur, layout); got == nil {
+		t.Fatal("production radar rebuild returned nil")
+	}
+	if !dst.Contains(dst.X1, dst.Y1) || !b.isOverMinimap(dst.X1, dst.Y1) {
+		t.Fatalf("production minimap input rectangle is not the drawn destination: %+v", dst)
+	}
+	// Lens input uses that exact destination/layout pair. Check the center
+	// maps through the canonical camera adapter and remains bounded.
+	mx := dst.X1 + (dst.X2-dst.X1)/2
+	my := dst.Y1 + (dst.Y2-dst.Y1)/2
+	if !client.HandleMinimapInput(b.cam, layout, dst, sess.World.PlayRight, sess.World.PlayBottom, mx, my, true, nil) {
+		t.Fatal("production minimap center input was not consumed")
+	}
 	if got := b.hud.exitWin.Rect; got.X != 309 || got.Y != 162 || got.W != 150 || got.H != 155 {
 		t.Fatalf("retail EXITMENU runtime rect = %+v, want (309,162,150,155)", got)
 	}
@@ -95,7 +129,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	if got := b.hud.modalGadgetRect(b.hud.confirmWin, choice1, nil); got.W != 96 || got.H != 20 {
 		t.Fatalf("YESORNO CHOICE1 runtime size = %dx%d, want stock frame 96x20", got.W, got.H)
 	}
-	cur := sess.Snapshot.Current()
+	cur = sess.Snapshot.Current()
 	if cur == nil {
 		t.Fatal("selected commander snapshot disappeared")
 	}
@@ -196,7 +230,7 @@ func TestRetailNoSelectionUsesSideGeneralWindow(t *testing.T) {
 	}
 	for _, u := range sess.Units.Iter() {
 		if u != nil {
-			u.Flags &^= client.SelectionFlag
+			u.Flags &^= hud.SelectionFlag
 		}
 	}
 	for step := int32(1); step <= 30; step++ {

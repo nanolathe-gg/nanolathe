@@ -1,28 +1,94 @@
-// Package camera minimap lens extends LayoutMinimap with retail lens arithmetic
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Package camera minimap lens owns the single aspect/layout and world mapping
+// used by radar drawing and minimap input [07 §10][03 §3.4][03 §3.6][03 §3.11].
 package camera
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// MinimapLongSide is the fixed long side of the radar canvas [07 §10][03 §3.6].
 const MinimapLongSide = 126 // [07 §10] long side
 
-// minimapLetterboxFill is the palette index used to fill letterbox bars beyond RadarW×RadarH.
-// TODO(question): bars beyond RadarW×RadarH retain heap bytes — inference 0 black pending capture. Assume 0 [03 §3.6].
-const minimapLetterboxFill = 0 // TODO(question) assume 0 black
+// Minimap is the aspect-preserving radar rectangle inside the fixed logical
+// canvas. PadX/PadY are canvas-local letterbox origins and W/H are inclusive
+// radar dimensions [03 §3.6][07 §10].
+type Minimap struct {
+	PadX, PadY int32
+	W, H       int32
+}
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// LayoutMinimap fits the playable map into the fixed 126×126 logical canvas.
+// The longer axis occupies 126 pixels; the shorter axis uses truncating
+// integer scale and is centered by truncating half-padding [03 §3.6][07 §10].
+func LayoutMinimap(mapW, mapH int32) Minimap {
+	if mapW <= 0 || mapH <= 0 {
+		return Minimap{}
+	}
+	if mapW < mapH {
+		w := int32(int64(mapW) * MinimapLongSide / int64(mapH))
+		if w < 1 {
+			w = 1
+		}
+		if w > MinimapLongSide {
+			w = MinimapLongSide
+		}
+		return Minimap{PadX: (MinimapLongSide - w) / 2, W: w, H: MinimapLongSide}
+	}
+	h := int32(int64(mapH) * MinimapLongSide / int64(mapW))
+	if h < 1 {
+		h = 1
+	}
+	if h > MinimapLongSide {
+		h = MinimapLongSide
+	}
+	return Minimap{PadY: (MinimapLongSide - h) / 2, W: MinimapLongSide, H: h}
+}
+
+// Right and Bottom return the inclusive radar edges in canvas coordinates.
+func (m Minimap) Right() int32  { return m.PadX + m.W - 1 }
+func (m Minimap) Bottom() int32 { return m.PadY + m.H - 1 }
+
+// CanvasToDisplay converts a canvas-local point to an inclusive logical HUD
+// rectangle. It returns false for points outside the fixed 126-pixel canvas.
+func (m Minimap) CanvasToDisplay(x, y, left, top, width, height int32) (int32, int32, bool) {
+	if width <= 0 || height <= 0 || x < 0 || x >= MinimapLongSide || y < 0 || y >= MinimapLongSide {
+		return 0, 0, false
+	}
+	return left + x*width/MinimapLongSide, top + y*height/MinimapLongSide, true
+}
+
+// DisplayToCanvas converts an inclusive logical HUD point to the fixed canvas.
+// The caller performs the minimap rectangle hit-test; this method only handles
+// the common origin/scale arithmetic and clamps the inclusive endpoint.
+func (m Minimap) DisplayToCanvas(x, y, left, top, width, height int32) (int32, int32, bool) {
+	if width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	cx := (x - left) * MinimapLongSide / width
+	cy := (y - top) * MinimapLongSide / height
+	if cx < 0 {
+		cx = 0
+	} else if cx >= MinimapLongSide {
+		cx = MinimapLongSide - 1
+	}
+	if cy < 0 {
+		cy = 0
+	} else if cy >= MinimapLongSide {
+		cy = MinimapLongSide - 1
+	}
+	return cx, cy, true
+}
+
+// PlayRight returns the playable width PlayRight = Wpix-32 [03 §3.4].
 // Wpix = Wcells*16, Hpix = Hcells*16. The minimap divisors are PlayRight/Bottom,
 // not raw Wpix/Hpix — camera.MapW/MapH are already PlayRight/Bottom when created
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func PlayRight(wPix int32) int32 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// via NewFromTerrain [03 §3.4].
+func PlayRight(wPix int32) int32 { // [03 §3.4]
 	return wPix - 32
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func PlayBottom(hPix int32) int32 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// PlayBottom returns the playable height PlayBottom = Hpix-128 [03 §3.4].
+func PlayBottom(hPix int32) int32 { // [03 §3.4]
 	return hPix - 128
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// PlaySize returns PlayRight, PlayBottom from pixel dimensions [03 §3.4].
 func PlaySize(wPix, hPix int32) (int32, int32) {
 	return PlayRight(wPix), PlayBottom(hPix)
 }
@@ -34,9 +100,9 @@ func PlaySizeFromCells(wCells, hCells int32) (int32, int32) {
 }
 
 // HitTest reports whether (x,y) lies inside the inclusive radar rectangle
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [07 §10][03 §3.11].
 // The rectangle is PadX..PadX+W-1 by PadY..PadY+H-1 inclusive.
-func (m Minimap) HitTest(x, y int32) bool { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (m Minimap) HitTest(x, y int32) bool { // [07 §10]
 	if m.W <= 0 || m.H <= 0 {
 		return false
 	}
@@ -44,24 +110,24 @@ func (m Minimap) HitTest(x, y int32) bool { // TODO(question): Historical analys
 }
 
 // WorldToRadar projects world map pixels to radar canvas coordinates
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [03 §3.9][03 §3.11].
 //
 //	world→radar rx = worldX*RadarW/PlayRight + OriginX
 //	            ry = (worldZ - worldYHalf)*RadarH/PlayBottom + OriginY
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//	all operations truncate toward zero.
 //
 // worldX/worldZ are map pixels in [0,PlayRight/Bottom). OriginX/Y are
 // Minimap.PadX/PadY inside the 126×126 canvas [03 §3.6]. PlayW/PlayH
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// are PlayRight/Bottom, not raw Wpix/Hpix [03 §3.4].
 // This variant assumes worldY == 0 (ground). Use WorldToRadarWithY for height-aware.
-func (m Minimap) WorldToRadar(worldX, worldZ int32, playW, playH int32) (rx, ry int32) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (m Minimap) WorldToRadar(worldX, worldZ int32, playW, playH int32) (rx, ry int32) { // [03 §3.11]
 	return m.WorldToRadarWithY(worldX, 0, worldZ, playW, playH)
 }
 
 // WorldToRadarWithY is the height-aware form of WorldToRadar
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func (m Minimap) WorldToRadarWithY(worldX, worldY, worldZ int32, playW, playH int32) (rx, ry int32) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [03 §3.9].
+// ry uses (worldZ - (worldY>>1)) with arithmetic shift [03 §2.5][03 §3.9].
+func (m Minimap) WorldToRadarWithY(worldX, worldY, worldZ int32, playW, playH int32) (rx, ry int32) { // [03 §3.9]
 	if playW == 0 || playH == 0 || m.W == 0 || m.H == 0 {
 		return m.PadX, m.PadY
 	}
@@ -78,11 +144,11 @@ func (m Minimap) WorldToRadarWithHeight(worldX, worldY, worldZ int32, playW, pla
 }
 
 // RadarToWorld inverts WorldToRadar: canvas radar → world map pixels
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [03 §3.11] with truncating integer arithmetic.
 //
 //	worldX = (rx-OriginX)*PlayRight/RadarW
 //	worldZ = (ry-OriginY)*PlayBottom/RadarH
-func (m Minimap) RadarToWorld(rx, ry int32, playW, playH int32) (wx, wz int32) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (m Minimap) RadarToWorld(rx, ry int32, playW, playH int32) (wx, wz int32) { // [03 §3.11]
 	if m.W == 0 || m.H == 0 {
 		return 0, 0
 	}
@@ -92,32 +158,11 @@ func (m Minimap) RadarToWorld(rx, ry int32, playW, playH int32) (wx, wz int32) {
 }
 
 // ToWorldPlay converts a mouse position inside the 126×126 canvas to world/map
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// coordinates using PlayRight/Bottom divisors [07 §10][03 §3.11].
 // This is the Play-aware variant of ToWorld; ToWorld's mapW/mapH are conceptually
 // PlayRight/Bottom when the camera was created via NewFromTerrain, but this
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// variant makes the divisor explicit [03 §3.4].
 // TRUNC via IDIV; inclusive rect handled by caller via HitTest.
-func (m Minimap) ToWorldPlay(mouseX, mouseY, playW, playH int32) (wx, wz int32) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func (m Minimap) ToWorldPlay(mouseX, mouseY, playW, playH int32) (wx, wz int32) { // [07 §10]
 	return m.RadarToWorld(mouseX, mouseY, playW, playH)
-}
-
-// ToCameraPlay is the historical centered helper retained for callers that
-// explicitly request a view-centered camera. The exact retail lens branch is
-// exposed as ToCameraLensPlay below. [07 §10]
-func (m Minimap) ToCameraPlay(mouseX, mouseY, playW, playH, viewW, viewH int32) (cx, cz int32) { // [07 §10]
-	wx, wz := m.ToWorldPlay(mouseX, mouseY, playW, playH)
-	cx = wx - viewW/2
-	cz = wz - viewH/2
-	cx = clampAxis(cx, playW, viewW)
-	cz = clampAxis(cz, playH, viewH)
-	return
-}
-
-// ToCameraLensPlay is the exact minimap lens branch: the inverse-projected
-// point becomes the camera origin without a view-half recenter term. [03 §3.11]
-func (m Minimap) ToCameraLensPlay(mouseX, mouseY, playW, playH, viewW, viewH int32) (cx, cz int32) {
-	cx, cz = m.ToWorldPlay(mouseX, mouseY, playW, playH)
-	cx = clampAxis(cx, playW, viewW)
-	cz = clampAxis(cz, playH, viewH)
-	return
 }

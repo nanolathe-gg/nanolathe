@@ -6,6 +6,8 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -14,6 +16,197 @@ import (
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
+
+func TestRadarStepPublishesAuthoritativeSensorIdentity(t *testing.T) {
+	def := &content.UnitDef{
+		DefinitionHeader:  content.DefinitionHeader{CanonicalKey: "radar"},
+		MaxDamage:         100,
+		RadarDistance:     320,
+		Stealth:           true,
+		OnOffable:         true,
+		ActivateWhenBuilt: true,
+	}
+	w := units.New(4, nil)
+	h, err := w.Create(def, 1, numeric.Fixed(10<<16), 0, numeric.Fixed(12<<16))
+	if err != nil {
+		t.Fatalf("create unit: %v", err)
+	}
+	vis := visibility.New(&world.Terrain{CellW: 64, CellH: 64}, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
+	econ := &economy.Service{}
+	econ.Players[0].Exists = true
+	econ.Players[1].Exists = true
+	s := &Session{Units: w, Vis: vis, Econ: econ}
+	s.stepSensorPhase(7)
+	inputs := vis.SensorInputs()
+	if len(inputs) != 1 {
+		t.Fatalf("sensor inputs = %+v, want one live unit", inputs)
+	}
+	got := inputs[0]
+	if got.ID != uint16(h) || !got.Stealth || !got.OnOffable || !got.Active || got.X != numeric.Fixed(10<<16) || got.Z != numeric.Fixed(12<<16) {
+		t.Fatalf("sensor identity/state = %+v, want handle=%d stealth+active+onoffable", got, h)
+	}
+}
+
+func TestRadarStepClearsSeenWithSingleActivePlayer(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "seen"}, MaxDamage: 1}
+	w := units.New(4, nil)
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create unit: %v", err)
+	}
+	vis := visibility.New(&world.Terrain{CellW: 64, CellH: 64}, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
+	econ := &economy.Service{}
+	econ.Players[0].Exists = true
+	s := &Session{Units: w, Vis: vis, Econ: econ, visStatus: map[int]uint32{int(h): visibility.SeenBit}}
+	s.stepSensorPhase(8)
+	if got := s.visStatus[int(h)]; got&visibility.SeenBit != 0 {
+		t.Fatalf("single-player SeenBit = %#x, want clear", got)
+	}
+}
+
+func TestRadarCirclesDropWhenSourceIsCleanedUp(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "circle"}, MaxDamage: 1}
+	w := units.New(4, nil)
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create unit: %v", err)
+	}
+	vis := visibility.New(&world.Terrain{CellW: 64, CellH: 64}, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
+	var status uint32
+	vis.SensorTick(1, 2, nil, []visibility.SensorUnit{{ID: uint16(h), Status: &status, Alive: true, Active: true, RadarDistance: 50}})
+	s := &Session{Units: w, Vis: vis, Snapshot: frame.NewBuffer()}
+	s.publishSnapshot(1)
+	if got := s.Snapshot.Current(); got == nil || len(got.Radar.Circles) != 1 {
+		t.Fatalf("live source circles = %#v, want one", got)
+	}
+	w.Unit(h).Alive = false
+	s.publishSnapshot(2)
+	if got := s.Snapshot.Current(); got == nil || len(got.Radar.Circles) != 0 {
+		t.Fatalf("cleaned source circles = %#v, want none", got)
+	}
+}
+
+func TestRadarProjectileContactUsesOwnerAndLocalVisibility(t *testing.T) {
+	vis := visibility.New(&world.Terrain{CellW: 64, CellH: 64}, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
+	combatSvc := &combat.Service{}
+	h, ok := combatSvc.Reserve()
+	if !ok {
+		t.Fatal("reserve projectile")
+	}
+	combatSvc.Records[int(h)-1] = combat.Projectile{Pos: combat.Vec3{X: 0, Y: 0, Z: 0}, ShooterSide: 1}
+	s := &Session{Snapshot: frame.NewBuffer(), Combat: combatSvc, Vis: vis, LocalOwner: 0}
+	s.publishSnapshot(1)
+	cur := s.Snapshot.Current()
+	if cur == nil || len(cur.Radar.Contacts) != 1 {
+		t.Fatalf("radar contacts = %#v", cur)
+	}
+	got := cur.Radar.Contacts[0]
+	if got.Owner != 1 || !got.OwnerKnown || got.Visible {
+		t.Fatalf("enemy projectile contact = %+v, want owner 1, known, hidden without LOS", got)
+	}
+	// A zero side with no shooter is unresolved, not local-player ownership.
+	combatSvc.Records[int(h)-1].ShooterSide = 0
+	s.publishSnapshot(2)
+	got = s.Snapshot.Current().Radar.Contacts[0]
+	if got.Owner != combat.NeutralSide || got.OwnerKnown || got.Visible {
+		t.Fatalf("unowned projectile contact = %+v, want neutral/unknown/hidden", got)
+	}
+	// An unresolved nonzero shooter with a zero side is equally ambiguous; it
+	// must not become known local-player-zero ownership.
+	combatSvc.Records[int(h)-1].Shooter = pool.Handle(99)
+	s.publishSnapshot(3)
+	got = s.Snapshot.Current().Radar.Contacts[0]
+	if got.Owner != combat.NeutralSide || got.OwnerKnown || got.Visible {
+		t.Fatalf("unresolved shooter contact = %+v, want neutral/unknown/hidden", got)
+	}
+}
+
+func TestRadarFeatureContactUsesPlacerOwnerAndExtents(t *testing.T) {
+	terrain := &world.Terrain{CellW: 64, CellH: 64, Plot: make([]world.PlotCell, 64*64)}
+	vis := visibility.New(terrain, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
+	local := uint8(0)
+	owned := frame.FeatureView{Owner: local, OwnerKnown: true, CX: 4, CZ: 4, FootX: 1, FootZ: 1, Y: 0}
+	if !radarFeatureVisible(&Session{Vis: vis, LocalOwner: local}, owned) {
+		t.Fatal("local placer owner should bypass feature LOS")
+	}
+	unknown := frame.FeatureView{Owner: combat.NeutralSide, OwnerKnown: false, CX: 4, CZ: 4, FootX: 1, FootZ: 1, Y: 0}
+	if radarFeatureVisible(&Session{Vis: vis, LocalOwner: local}, unknown) {
+		t.Fatal("unknown feature owner must not bypass LOS")
+	}
+	unknownZero := frame.FeatureView{Owner: 0, OwnerKnown: false, CX: 4, CZ: 4, FootX: 1, FootZ: 1, Y: 0}
+	if radarFeatureVisible(&Session{Vis: vis, LocalOwner: local}, unknownZero) {
+		t.Fatal("unknown owner-zero feature must not bypass LOS")
+	}
+	inst := &features.Instance{Terrain: terrain, CX: 4, CZ: 4}
+	if owner, known := featureOwnerSelector(inst); known || owner != combat.NeutralSide {
+		t.Fatalf("zero placer selector = (%d, %t), want neutral/unknown", owner, known)
+	}
+}
+
+func TestRadarSelectedRangeStatusGatePreservesSlotOrder(t *testing.T) {
+	defs := []*content.UnitDef{
+		{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "selected"}, MaxDamage: 1, RadarDistance: 100, OnOffable: false},
+		{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "off"}, MaxDamage: 1, RadarDistance: 200, OnOffable: true, ActivateWhenBuilt: false},
+		{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "unselected"}, MaxDamage: 1, RadarDistance: 300, OnOffable: false},
+	}
+	w := units.New(4, nil)
+	for i, def := range defs {
+		h, err := w.Create(def, 0, numeric.Fixed(int64(i+1)<<16), 0, 0)
+		if err != nil {
+			t.Fatalf("create unit %d: %v", i, err)
+		}
+		if i < 2 {
+			w.Unit(h).Flags |= 0x10 // authoritative selected bit [07 §9]
+		}
+	}
+	w.Unit(3).Flags &^= 0x10
+	s := &Session{Snapshot: frame.NewBuffer(), Units: w, LocalOwner: 0}
+	s.publishSnapshot(1)
+	contacts := s.Snapshot.Current().Radar.Contacts
+	if len(contacts) != 3 || contacts[0].Handle >= contacts[1].Handle || contacts[1].Handle >= contacts[2].Handle {
+		t.Fatalf("contact order = %+v, want ascending handles", contacts)
+	}
+	if !contacts[0].Selected || contacts[0].Status&0x10 == 0 || !contacts[0].RangeStatus || contacts[0].RadarDistance != 100 {
+		t.Fatalf("selected active range = %+v", contacts[0])
+	}
+	if !contacts[1].Selected || contacts[1].Status&0x10 == 0 || contacts[1].RangeStatus || contacts[1].RadarDistance != 0 {
+		t.Fatalf("inactive onoffable range = %+v", contacts[1])
+	}
+	if contacts[2].Selected || contacts[2].Status&0x10 != 0 || contacts[2].RangeStatus || contacts[2].RadarDistance != 0 {
+		t.Fatalf("unselected range = %+v", contacts[2])
+	}
+}
+
+func TestRadarGameplayVisibilityUsesStealthAndInitCloak(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "stealth"}, MaxDamage: 1, Stealth: true, InitCloaked: true}
+	w := units.New(4, nil)
+	_, err := w.Create(def, 1, numeric.Fixed(10<<16), 0, numeric.Fixed(10<<16))
+	if err != nil {
+		t.Fatalf("create unit: %v", err)
+	}
+	vis := visibility.New(&world.Terrain{CellW: 64, CellH: 64}, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
+	econ := &economy.Service{}
+	econ.Players[0].Exists, econ.Players[1].Exists = true, true
+	s := &Session{Units: w, Vis: vis, Econ: econ}
+	s.stepSensorPhase(1)
+	inputs := vis.SensorInputs()
+	if len(inputs) != 1 || !inputs[0].Stealth || !inputs[0].Hidden {
+		t.Fatalf("gameplay cloak state = %+v, want stealth and hidden", inputs)
+	}
+}
+
+func TestRadarMarkerModeDefaultsToExplicitOff(t *testing.T) {
+	s := &Session{Snapshot: frame.NewBuffer(), RadarMarkerMode: 2}
+	s.publishSnapshot(1)
+	if got := s.Snapshot.Current().Radar.MarkerMode; got != 2 {
+		t.Fatalf("marker mode = %d, want authoritative mode 2", got)
+	}
+	s.RadarMarkerMode = 0
+	s.publishSnapshot(2)
+	if got := s.Snapshot.Current().Radar.MarkerMode; got != 0 {
+		t.Fatalf("marker mode = %d, want explicit mode-off", got)
+	}
+}
 
 func TestSnapshotVisibilityOwnsMasksAcrossBeginWrite(t *testing.T) {
 	vis := visibility.New(&world.Terrain{CellW: 64, CellH: 64}, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)

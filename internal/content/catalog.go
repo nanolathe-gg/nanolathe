@@ -12,16 +12,20 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// WeaponDuplicate records a duplicate weapon ID collision for diagnostics [02 "Weapon record"].
-// Winner is the smallest canonical key (lexicographically) that wins the ID, losers are
-// additional keys sharing the same ID in sorted order. Deterministic: smallest wins, not last-wins-by-canonical-order.
-// TODO(question) R-P0-01 duplicate winner policy: smallest canonical key wins is a supported inference
-// from [02 §5] deterministic catalog requirement (I1) and [06 §3.3] family gating; last-wins-by-canonical-order
-// would be nondeterministic under map iteration and is NOT acceptable per ON-04.
+// WeaponDuplicate records sections that shared one weapon record slot, for
+// diagnostics [02 §5 R-CONTENT-02]. Keys are in discovery order; Winner is
+// the last key — the later section's name, which owns the slot after a
+// whole-record replacement. ID -1 is the shared scratch slot of the ID-less
+// sections: retail writes each of them just before record 0, the last one
+// wins it, and the runtime name scan never reaches that slot, so its winner
+// is unreachable by name here too. The superseded name matches no record —
+// an FBI link that names it resolves to the record-0 inactive sentinel
+// [02 §5 R-CONTENT-02]. Determinism comes from deterministic discovery
+// order (I1).
 type WeaponDuplicate struct {
 	ID     int32
-	Keys   []string // sorted ascending, winner first
-	Winner string   // Keys[0] when Keys non-empty
+	Keys   []string // discovery order, winner last
+	Winner string   // Keys[len(Keys)-1] when Keys non-empty
 }
 
 // Catalog is the compiled, immutable content catalog [02 §5] [PLAN 02 Public API].
@@ -76,9 +80,11 @@ type Catalog struct {
 	sortedModels []string       // distinct model names sorted case-insensitively [03 §2.4] C13
 	modelIndex   map[string]int // CanonicalKey(modelName) -> index in sortedModels [03 §2.4] C13
 
-	// Weapon index compiled once for stable deterministic lookup [02 "Weapon record"] ON-04.
-	// Smallest canonical key wins for duplicate IDs; duplicates exposed for diagnostics.
-	weaponByID       map[int32]*WeaponDef // ID -> winner def, smallest canonical key wins (I1)
+	// Weapon index compiled once for stable deterministic lookup [02 §5 R-CONTENT-02].
+	// One record per slot: a same-ID section replaced the earlier record whole,
+	// and ID-less sections are inert (scratch slot before record 0, never
+	// enters the map). Duplicates are exposed for diagnostics.
+	weaponByID       map[int32]*WeaponDef // ID -> the record occupying that slot (I1)
 	weaponDuplicates []WeaponDuplicate    // duplicate ID diagnostics, sorted by ID
 }
 
@@ -109,7 +115,8 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 
 	// Stage 1: discover and parse every family into typed records [02 §5] C1.
 	// Each compiler walks the VFS logical paths per PLAN_02 Discovery, filtering
-	// by extension already (units *.fbi, weapons *.tdf + gamedata/weapons.tdf,
+	// by extension already (units *.fbi, weapons *.tdf — the family is exactly
+	// Weapons/*.tdf; gamedata/weapons.tdf is never read [02 §5 R-CONTENT-02] —
 	// features recursive features/<group>/*.tdf, etc.).
 	weapons, weaponDuplicates, err := CompileWeaponsWithDuplicates(fs)
 	if err != nil {
@@ -246,7 +253,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 		sortedModels: sortedModels,
 		modelIndex:   modelIndex,
 	}
-	// ON-04 stable weapon index: smallest canonical key wins per ID, duplicates exposed.
+	// Stable weapon index: one record per slot [02 §5 R-CONTENT-02].
 	c.weaponByID, c.weaponDuplicates = buildWeaponIndex(weapons, weaponDuplicates)
 	// C12 Catalog.Hash computed over canonical bytes including defaults,
 	// independent of map iteration, identical across two runs (I1) [02 §5] C12.
@@ -254,17 +261,20 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	return c, nil
 }
 
-// buildWeaponIndex builds the once-compiled ID->def map and duplicate diagnostics ON-04.
-// Winner is smallest canonical key (I1), not last-wins-by-canonical-order.
-// TODO(question) duplicate winner policy: smallest canonical key wins is a supported inference from [02 §5] I1.
+// buildWeaponIndex builds the once-compiled ID->def map and duplicate diagnostics.
+// A compiled weapons map already holds exactly one record per nonnegative ID
+// (same-ID sections replace each other whole; ID-less sections are inert
+// [02 §5 R-CONTENT-02]), so this is a direct projection. For a hand-built map
+// that still carries colliding IDs, last in sorted key order stands in for
+// discovery-order last-wins.
 func buildWeaponIndex(weapons map[string]*WeaponDef, duplicates []WeaponDuplicate) (map[int32]*WeaponDef, []WeaponDuplicate) {
 	if weapons == nil {
 		return nil, duplicates
 	}
 	byID := make(map[int32]*WeaponDef, len(weapons))
-	// If duplicates already provided by CompileWeaponsWithDuplicates, we can trust them,
-	// but we still need to build byID deterministically as smallest wins.
-	// Iterate sorted keys to ensure smallest wins.
+	// Sorted-key overwrite: deterministic, and exact for a compiled map (one
+	// entry per slot). ID < 0 never enters the index — the scratch slot of the
+	// ID-less sections is unreachable by construction [02 §5 R-CONTENT-02].
 	keys := make([]string, 0, len(weapons))
 	for k := range weapons {
 		keys = append(keys, k)
@@ -275,13 +285,11 @@ func buildWeaponIndex(weapons map[string]*WeaponDef, duplicates []WeaponDuplicat
 		if wd == nil || wd.ID < 0 {
 			continue
 		}
-		if _, exists := byID[wd.ID]; !exists {
-			byID[wd.ID] = wd
-		}
+		byID[wd.ID] = wd
 	}
 	if duplicates == nil {
 		// Fallback: compute duplicates from weapons map alone if caller didn't provide them
-		// (e.g., manually constructed catalog). Group by ID.
+		// (e.g., manually constructed catalog). Group by ID in sorted order; winner is last.
 		dupMap := make(map[int32][]string)
 		for _, k := range keys {
 			wd := weapons[k]
@@ -294,8 +302,8 @@ func buildWeaponIndex(weapons map[string]*WeaponDef, duplicates []WeaponDuplicat
 			if len(ks) <= 1 {
 				continue
 			}
-			sort.Strings(ks)
-			dup := WeaponDuplicate{ID: id, Keys: append([]string(nil), ks...), Winner: ks[0]}
+			// ks already in sorted ascending order via keys iteration; winner is last (largest).
+			dup := WeaponDuplicate{ID: id, Keys: append([]string(nil), ks...), Winner: ks[len(ks)-1]}
 			duplicates = append(duplicates, dup)
 		}
 		sort.Slice(duplicates, func(i, j int) bool { return duplicates[i].ID < duplicates[j].ID })
@@ -695,7 +703,7 @@ func (c *Catalog) Clone() *Catalog {
 			out.modelIndex[k] = v
 		}
 	}
-	// ON-04 stable weapon index: rebuild for cloned defs so pointers refer to cloned entries (I1)
+	// Stable weapon index: rebuild for cloned defs so pointers refer to cloned entries (I1) [02 "Weapon record"]
 	if out.Weapons != nil {
 		out.weaponByID, out.weaponDuplicates = buildWeaponIndex(out.Weapons, nil)
 	} else if c.weaponByID != nil {
@@ -721,6 +729,8 @@ func (c *Catalog) Unit(key string) (*UnitDef, bool) {
 }
 
 // Weapon returns the weapon definition for a key case-insensitively [02 §5].
+// The catalog map holds one record per surviving catalog name, so a hit is the
+// record the runtime name scan returns; see WeaponByName for the scan contract.
 func (c *Catalog) Weapon(key string) (*WeaponDef, bool) {
 	if c == nil || c.Weapons == nil {
 		return nil, false
@@ -729,16 +739,85 @@ func (c *Catalog) Weapon(key string) (*WeaponDef, bool) {
 	return w, ok
 }
 
-// WeaponByID selects the weapon with the given ID case-insensitively and
-// deterministically (I1) [02 "Weapon record"] C2. ID is read with default -1
-// first to select the record [02 "Weapon record"] C2. The scan is over sorted
-// canonical keys so duplicate IDs have a stable winner independent of map iteration.
-// ON-04: once-compiled index is preferred when available for performance and determinism.
+// WeaponRecordsByID returns the weapon records in slot order — the order of
+// retail's fixed record table, slot 0 upward [02 §5 R-CONTENT-02]. A record's
+// slot is the ID its section selected; ID-less sections filled the unreachable
+// scratch slot before record 0 and never entered the catalog. The slice is a
+// copy; mutations do not affect the catalog.
+func (c *Catalog) WeaponRecordsByID() []*WeaponDef {
+	if c == nil || len(c.Weapons) == 0 {
+		return nil
+	}
+	out := make([]*WeaponDef, 0, len(c.Weapons))
+	for _, w := range c.Weapons {
+		if w == nil || w.ID < 0 {
+			continue
+		}
+		out = append(out, w)
+	}
+	// Ascending slot order, canonical key as the total-order tiebreaker (I1).
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ID != out[j].ID {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CanonicalKey < out[j].CanonicalKey
+	})
+	return out
+}
+
+// WeaponByName resolves a weapon catalog name the way retail does at runtime:
+// a linear scan of the record table from slot 0 upward, comparing
+// case-insensitively against each record's catalog name; the FIRST matching
+// slot wins [02 §5 R-CONTENT-02]. The catalog stores one record per surviving
+// name, so the scan reduces to visiting records in slot order and comparing
+// canonical keys.
+func (c *Catalog) WeaponByName(name string) (*WeaponDef, bool) {
+	ck := CanonicalKey(name)
+	if ck == "" {
+		return nil, false
+	}
+	for _, w := range c.WeaponRecordsByID() {
+		if w.CanonicalKey == ck {
+			return w, true
+		}
+	}
+	return nil, false
+}
+
+// WeaponLink resolves a unit weapon link (weapon1..3, explodeas,
+// selfdestructas) with retail's miss policy: a name that matches no record
+// fills the link slot with a reference to record 0 — the inactive sentinel,
+// stock [noweapon] — not an error [02 §5 R-CONTENT-02], [02 "Cross-reference
+// failure policy"]. Record 0 is inactive even when the name resolves to it
+// (consumers recognize the sentinel by its zero slot number), so active is
+// false whenever the link points there. When the catalog holds no record 0, a
+// miss returns a nil def with active false — the explicit inactive marker.
+//
+// LinkUnitWeapons (compile_unit.go) currently leaves a missed link's Def nil;
+// nil plays the inactive marker in that representation. Consumers that need
+// the record a link references — the sentinel record on a miss — resolve
+// through this method [02 §5 R-CONTENT-02].
+func (c *Catalog) WeaponLink(name string) (def *WeaponDef, active bool) {
+	if w, ok := c.WeaponByName(name); ok {
+		return w, w.ID != 0
+	}
+	// Miss: the link references record 0 when the table has one [02 §5 R-CONTENT-02].
+	if w, ok := c.WeaponByID(0); ok {
+		return w, false
+	}
+	return nil, false
+}
+
+// WeaponByID selects the record occupying the given slot (I1) [02 "Weapon
+// record"] C2, [02 §5 R-CONTENT-02]: ID is read first with default -1 to
+// select the record, so the slot number is the ID. A compiled map holds one
+// record per slot; for a hand-built map with colliding IDs, last in sorted
+// key order stands in for discovery-order last-wins. The once-compiled index
+// is preferred when available.
 func (c *Catalog) WeaponByID(id int32) (*WeaponDef, bool) {
 	if c == nil || c.Weapons == nil {
 		return nil, false
 	}
-	// Use once-compiled index if available ON-04 (I1)
 	if c.weaponByID != nil {
 		if wd, ok := c.weaponByID[id]; ok {
 			return wd, true
@@ -750,18 +829,21 @@ func (c *Catalog) WeaponByID(id int32) (*WeaponDef, bool) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	var found *WeaponDef
+	var ok bool
 	for _, k := range keys {
 		if c.Weapons[k].ID == id {
-			return c.Weapons[k], true
+			found = c.Weapons[k]
+			ok = true
 		}
 	}
-	return nil, false
+	return found, ok
 }
 
-// StableWeaponByID is an alias for WeaponByID that explicitly documents ON-04 stable index usage [02 "Weapon record"].
+// StableWeaponByID is an alias for WeaponByID that explicitly documents stable index usage [02 "Weapon record"].
 func (c *Catalog) StableWeaponByID(id int32) (*WeaponDef, bool) { return c.WeaponByID(id) }
 
-// WeaponDuplicates returns duplicate ID diagnostics ON-04 (sorted by ID, winner smallest key).
+// WeaponDuplicates returns duplicate ID diagnostics (sorted by ID, winner last).
 // The slice is a copy; mutations do not affect the catalog.
 func (c *Catalog) WeaponDuplicates() []WeaponDuplicate {
 	if c == nil || len(c.weaponDuplicates) == 0 {
@@ -776,7 +858,7 @@ func (c *Catalog) WeaponDuplicates() []WeaponDuplicate {
 	return out
 }
 
-// WeaponIndex returns a copy of the once-compiled ID->def map ON-04 (I1).
+// WeaponIndex returns a copy of the once-compiled ID->def map (I1) [02 "Weapon record"].
 // It is nil if the catalog has no compiled index (e.g., manually constructed fixture without Compile).
 func (c *Catalog) WeaponIndex() map[int32]*WeaponDef {
 	if c == nil || c.weaponByID == nil {
@@ -789,8 +871,8 @@ func (c *Catalog) WeaponIndex() map[int32]*WeaponDef {
 	return out
 }
 
-// RebuildWeaponIndex rebuilds the once-compiled index from the current Weapons map ON-04.
-// Useful for fixtures that manually assign Weapons without going through Compile.
+// RebuildWeaponIndex rebuilds the once-compiled index from the current Weapons map [02 "Weapon record"].
+// Useful for fixtures that manually assign Weapons without going through Compile; last wins.
 func (c *Catalog) RebuildWeaponIndex() {
 	if c == nil {
 		return

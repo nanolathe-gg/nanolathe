@@ -1,12 +1,9 @@
 package hud
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/input"
-	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // ParseButtonLatch parses a GUI order-button name into the armed latch byte
@@ -109,53 +106,3 @@ func LatchToCode(l input.Latch) int {
 		return 0
 	}
 }
-
-// Dispatch resolves a latched click for a single actor to an order ID via
-// orders.Resolve [04 §3.4] wire-through only [07 §9][GAP T22]. The latch byte
-// is translated to the resolver code 1..14 and forwarded; failed gates or an
-// invalid latch return 0 (the reject sentinel) [04 §3.1].
-func Dispatch(latch input.Latch, actor *units.Unit, target *units.Unit, pos *orders.ResolvePos) orders.ID {
-	code := LatchToCode(latch)
-	if code == 0 {
-		return 0
-	}
-	return orders.Resolve(code, actor, target, pos)
-}
-
-// DispatchSelection resolves the latch for each selected unit stably in
-// ascending Handle order per I1 [07 §9] and returns the per-unit order IDs
-// aligned with the sorted order. Wire-through only; no new order semantics
-// [GAP T22][04 §3.4].
-func DispatchSelection(latch input.Latch, selected []*units.Unit, target *units.Unit, pos *orders.ResolvePos) []orders.ID {
-	if len(selected) == 0 {
-		return nil
-	}
-	// Stable ascending Handle order (I1) regardless of input order.
-	sorted := make([]*units.Unit, len(selected))
-	copy(sorted, selected)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		if sorted[i] == nil && sorted[j] == nil {
-			return false
-		}
-		if sorted[i] == nil {
-			return true
-		}
-		if sorted[j] == nil {
-			return false
-		}
-		return sorted[i].Handle < sorted[j].Handle
-	})
-	code := LatchToCode(latch)
-	if code == 0 {
-		out := make([]orders.ID, len(sorted))
-		return out
-	}
-	out := make([]orders.ID, len(sorted))
-	for i, u := range sorted {
-		out[i] = orders.Resolve(code, u, target, pos)
-	}
-	return out
-}
-
-// LatchIsValid is a convenience wrapper over input.Latch.IsValid [GAP T22].
-func LatchIsValid(l input.Latch) bool { return l.IsValid() }

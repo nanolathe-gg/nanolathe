@@ -30,8 +30,17 @@ func makeEconWithControllers(ctrls map[int]uint8) *economy.Service {
 	return &s
 }
 
+// testSim is the shared test stream bound into managers [DET-01]: production
+// managers draw only from an injected session stream, never rng.Global.
+// seedTestSim reseeds it in place so existing bindings stay valid.
+var testSim = func() *rng.Simulation { v := rng.NewSimulation(1); return &v }()
+
+func seedTestSim(seed uint32) { *testSim = rng.NewSimulation(seed) }
+func testSimDraws() uint64    { return testSim.Draws() }
+
 func newManagerFor(player uint8, tick uint32) *Manager {
 	m := &Manager{Player: player}
+	m.RNG = testSim
 	// Seed deadlines to be due at tick for testing virtual task gating.
 	for k := TaskKind(0); k < TaskKindCount; k++ {
 		m.Deadlines[k] = tick
@@ -67,8 +76,8 @@ func TestBothGates(t *testing.T) {
 		m := newManagerFor(1, 20)
 		econ := makeEconWithControllers(map[int]uint8{1: ctrl})
 		// Seed RNG for rescheduling but inner gate should prevent any draws
-		rng.SeedGlobal(123, 0)
-		before := rng.Global.Sim.Draws()
+		seedTestSim(123)
+		before := testSimDraws()
 		m.Tick(20, nil, econ)
 		if m.EntryCount() != 1 {
 			t.Fatalf("controller %d: outer gate should count eligible entry, got %d", ctrl, m.EntryCount())
@@ -80,7 +89,7 @@ func TestBothGates(t *testing.T) {
 		if m.Deadlines[TaskConstruction] != 20 {
 			t.Fatalf("controller %d: deadline should stay 20 when inner gate blocks, got %d", ctrl, m.Deadlines[TaskConstruction])
 		}
-		if rng.Global.Sim.Draws() != before {
+		if testSimDraws() != before {
 			t.Fatalf("controller %d: blocked inner gate should not consume RNG draws", ctrl)
 		}
 	}
@@ -89,8 +98,8 @@ func TestBothGates(t *testing.T) {
 	m2 := newManagerFor(2, 30)
 	econ2 := makeEconWithControllers(map[int]uint8{2: 2})
 	// Use world nil so doConstruction early returns but deadline still rescheduled and taskRuns increments.
-	rng.SeedGlobal(99, 0)
-	beforeDraws := rng.Global.Sim.Draws()
+	seedTestSim(99)
+	beforeDraws := testSimDraws()
 	m2.Tick(30, nil, econ2)
 	if m2.EntryCount() != 1 {
 		t.Fatalf("controller 2 entryCount want 1 got %d", m2.EntryCount())
@@ -130,7 +139,7 @@ func TestBothGates(t *testing.T) {
 		t.Fatalf("TaskRegroupB deadline want %d got %d [P0-02]", 30+150, got)
 	}
 	// RNG tasks consume draws and produce correct ranges
-	afterDraws := rng.Global.Sim.Draws()
+	afterDraws := testSimDraws()
 	if afterDraws-beforeDraws != 2 { // 900 and 150 each one draw (resource 5 not drawn without units)
 		t.Fatalf("RNG draws for task reschedule: want 2 for 900/150, got %d", afterDraws-beforeDraws)
 	}
@@ -149,7 +158,7 @@ func TestBothGates(t *testing.T) {
 	}
 	econDispatch := makeEconWithControllers(map[int]uint8{0: 1, 1: 2, 2: 3, 3: 0, 4: 2})
 	// player 0 ctrl1 outer pass inner block, 1 ctrl2 both pass, 2 ctrl3 outer pass inner block, 3 ctrl0 outer block, 4 ctrl2 both pass
-	rng.SeedGlobal(7, 0)
+	seedTestSim(7)
 	Dispatch(40, econDispatch, managers, nil)
 	if managers[0].EntryCount() != 1 || managers[0].TaskRuns(TaskConstruction) != 0 {
 		t.Fatalf("dispatch player0 ctrl1: entry 1 no virtual tasks")
@@ -178,19 +187,19 @@ func TestDeadlineVectors(t *testing.T) {
 	// Fixed classes
 	m := newManagerFor(1, 100)
 	econ := makeEconWithControllers(map[int]uint8{1: 2})
-	rng.SeedGlobal(1, 0)
+	seedTestSim(1)
 	// Set deadlines to far future except one kind to isolate RNG consumption per kind
 	for k := TaskKind(0); k < TaskKindCount; k++ {
 		m.Deadlines[k] = 1000 // future
 	}
 	// Test construction +90 isolated
 	m.Deadlines[TaskConstruction] = 100
-	before := rng.Global.Sim.Draws()
+	before := testSimDraws()
 	m.Tick(100, nil, econ)
 	if m.Deadlines[TaskConstruction] != 190 {
 		t.Fatalf("construction deadline vector: tick 100 +90 want 190 got %d", m.Deadlines[TaskConstruction])
 	}
-	if rng.Global.Sim.Draws() != before {
+	if testSimDraws() != before {
 		t.Fatalf("construction should not draw RNG")
 	}
 	if m.TaskRuns(TaskConstruction) != 1 {
@@ -204,13 +213,13 @@ func TestDeadlineVectors(t *testing.T) {
 	}
 	econ = makeEconWithControllers(map[int]uint8{1: 2})
 	m.Deadlines[TaskResource] = 200
-	rng.SeedGlobal(2, 0)
-	before = rng.Global.Sim.Draws()
+	seedTestSim(2)
+	before = testSimDraws()
 	m.Tick(200, nil, econ)
 	if m.Deadlines[TaskResource] != 230 {
 		t.Fatalf("resource deadline vector: 200+30 want 230 got %d", m.Deadlines[TaskResource])
 	}
-	if rng.Global.Sim.Draws() != before {
+	if testSimDraws() != before {
 		t.Fatalf("resource should not draw RNG")
 	}
 
@@ -220,10 +229,10 @@ func TestDeadlineVectors(t *testing.T) {
 		m.Deadlines[k] = 1000
 	}
 	m.Deadlines[TaskOther900] = 300
-	rng.SeedGlobal(42, 0)
-	before = rng.Global.Sim.Draws()
+	seedTestSim(42)
+	before = testSimDraws()
 	m.Tick(300, nil, econ)
-	after := rng.Global.Sim.Draws()
+	after := testSimDraws()
 	if after-before != 1 {
 		t.Fatalf("other900 should consume exactly one RNG(900) draw, got %d", after-before)
 	}
@@ -247,10 +256,10 @@ func TestDeadlineVectors(t *testing.T) {
 		m.Deadlines[k] = 1000
 	}
 	m.Deadlines[TaskOther150] = 500
-	rng.SeedGlobal(99, 0)
-	before = rng.Global.Sim.Draws()
+	seedTestSim(99)
+	before = testSimDraws()
 	m.Tick(500, nil, econ)
-	after = rng.Global.Sim.Draws()
+	after = testSimDraws()
 	if after-before != 1 {
 		t.Fatalf("other150 should consume one RNG(150) draw")
 	}
@@ -264,8 +273,8 @@ func TestDeadlineVectors(t *testing.T) {
 	for k := TaskKind(0); k < TaskKindCount; k++ {
 		m.Deadlines[k] = 1000 // future
 	}
-	rng.SeedGlobal(5, 0)
-	before = rng.Global.Sim.Draws()
+	seedTestSim(5)
+	before = testSimDraws()
 	m.Tick(600, nil, econ)
 	if m.TaskRuns(TaskConstruction) != 0 {
 		t.Fatalf("future deadlines should not fire")
@@ -273,7 +282,7 @@ func TestDeadlineVectors(t *testing.T) {
 	if m.Deadlines[TaskConstruction] != 1000 {
 		t.Fatalf("future deadline should stay 1000")
 	}
-	if rng.Global.Sim.Draws() != before {
+	if testSimDraws() != before {
 		t.Fatalf("not-due should not consume RNG")
 	}
 }
@@ -391,10 +400,10 @@ func TestRNGBoundCensus(t *testing.T) {
 	m.Deadlines[TaskEmpty] = 1000
 	m.Deadlines[TaskNullSub] = 1000
 	econ := makeEconWithControllers(map[int]uint8{1: 2})
-	rng.SeedGlobal(100, 0)
-	before := rng.Global.Sim.Draws()
+	seedTestSim(100)
+	before := testSimDraws()
 	m.Tick(10, nil, econ)
-	after := rng.Global.Sim.Draws()
+	after := testSimDraws()
 	// Construction/positioning/resource/activity should not draw; other two each one draw => 2 draws (resource 5 not drawn without units)
 	if after-before != 2 {
 		t.Fatalf("execution RNG draws want 2 (900/150) got %d", after-before)
@@ -443,7 +452,7 @@ func TestWiringBeforeDeadline(t *testing.T) {
 	for k := TaskKind(0); k < TaskKindCount; k++ {
 		m.Deadlines[k] = 10
 	}
-	rng.SeedGlobal(1, 0)
+	seedTestSim(1)
 	// This is the wiring: session-owned coordinator passes Manager.Tick as beforeDeadline [PLAN_11 C11] [05 "Authoritative settlement order"]
 	// Supported inference: AI-as-auxiliary-helper from shared entry address [08]
 	beforeCalled := false
@@ -531,7 +540,7 @@ func TestC12OnlyOrdinaryPaths(t *testing.T) {
 	econ.Players[1].ControllerState = 2
 
 	// Seed RNG to ensure reservoir draw succeeds and construction queue path attempted
-	rng.SeedGlobal(12345, 0)
+	seedTestSim(12345)
 	// Trigger construction via runDueTasks directly to avoid other deadlines
 	m.Deadlines[TaskConstruction] = 0
 	m.Tick(0, w, &econ)
@@ -666,7 +675,7 @@ func TestManagerSelectPlaceQueueChain(t *testing.T) {
 			// If we used CandidateSource spy, Select will be observed as "select";
 			// Place will be observed as "place" via queueBuild var.
 
-			rng.SeedGlobal(0x12345678, 0)
+			seedTestSim(0x12345678)
 			mgr.Tick(0, w, &econ)
 
 			if useSourceSpy {
@@ -783,7 +792,7 @@ func TestManagerPlaceFailureRetry(t *testing.T) {
 		}
 		return construction.QueueFactoryBuild(builderUnit, req.UnitKey, req.Count, cat)
 	}
-	rng.SeedGlobal(1, 0)
+	seedTestSim(1)
 	mgr.Tick(0, w, &econ)
 	if calls != 0 {
 		t.Fatalf("Place failure should not queue, got %d queue calls", calls)
@@ -832,7 +841,7 @@ func TestDispatchSlice(t *testing.T) {
 		newManagerFor(1, 50),
 		newManagerFor(2, 50),
 	}
-	rng.SeedGlobal(1, 0)
+	seedTestSim(1)
 	DispatchSlice(50, econ, managers, nil)
 	if managers[0].EntryCount() != 1 {
 		t.Fatalf("slice dispatch player0 should run")

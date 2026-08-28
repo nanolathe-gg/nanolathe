@@ -171,3 +171,19 @@ func TestViewportNegativeProjectionUsesArithmeticShift(t *testing.T) {
 		t.Fatalf("negative viewport point=%+v, want (128,31)", got)
 	}
 }
+
+func TestViewportSurfaceProjectionSharesBeamOrigin(t *testing.T) {
+	cam := &camera.Camera{X: 40, Z: 24, ViewW: 512, ViewH: 416, MapW: 1024, MapH: 1024}
+	v := NewViewportTransform(cam, nil, 640, 480)
+	beam := v.WorldToBeam(numeric.Fixed(40<<16), 0, numeric.Fixed(24<<16))
+	surface := v.WorldToSurface(numeric.Fixed(40<<16), 0, numeric.Fixed(24<<16))
+	if beam != (Point{X: camera.OriginX, Y: camera.OriginY}) {
+		t.Fatalf("beam origin=%+v", beam)
+	}
+	if surface != (Point{}) {
+		t.Fatalf("surface origin=%+v", surface)
+	}
+	if got := v.SurfaceToBeam(surface); got != beam {
+		t.Fatalf("surface/beam round trip=%+v want %+v", got, beam)
+	}
+}

@@ -42,6 +42,8 @@ type Capacities struct {
 	Selection       int
 	CommandProducts int
 	Visibility      int
+	RadarContacts   int
+	RadarCircles    int
 	Fog             int
 }
 
@@ -83,6 +85,8 @@ type UnitView struct {
 type ProjectileView struct {
 	PresentationID            uint64
 	Handle                    pool.Handle
+	Owner                     uint8
+	OwnerKnown                bool
 	X, Y, Z                   numeric.Fixed
 	WeaponID                  int32
 	Shooter                   pool.Handle
@@ -125,13 +129,19 @@ type ProjectileView struct {
 // FeatureView is the committed copy of one live feature [05 "Feature
 // instance and terrain cell"].
 type FeatureView struct {
-	InstanceID         uint64
+	InstanceID uint64
+	// Owner is the plot's placer selector. Map-authored features use the
+	// non-player selector 10; corpse/runtime features carry their owner's
+	// player slot [03 §3.3][03 §3.9].
+	Owner              uint8
+	OwnerKnown         bool
 	CX, CZ             int32
 	X, Y, Z            numeric.Fixed
 	DefName            string
 	Model              string
 	Health             int32
 	MaxHealth          int32
+	Status             uint32
 	IsBurning          bool
 	IsSinking          bool
 	BurnTicks          int32
@@ -307,6 +317,81 @@ type VisibilityView struct {
 	Valid         bool
 }
 
+// RadarContactKind identifies the source record represented by a minimap
+// contact.  The kind is part of the committed payload so presentation does
+// not inspect the mutable projectile/feature pools [03 §3.9].
+type RadarContactKind uint8
+
+const (
+	RadarContactUnit RadarContactKind = iota
+	RadarContactProjectile
+	RadarContactFeature
+)
+
+// RadarRingView carries one weapon-range ring's authored flags.  A unit owns
+// three weapon slots; rings retain that slot order at the frame boundary
+// [03 §3.9].
+type RadarRingView struct {
+	Enabled   bool
+	Dashed    bool
+	Range     int32
+	Intercept bool
+}
+
+// RadarContactView is the immutable contact input used by minimap
+// presentation. Coordinates remain authoritative 16.16 values until the
+// renderer performs the documented signed narrowing [03 §3.9].
+type RadarContactView struct {
+	Kind          RadarContactKind
+	Handle        pool.Handle
+	Owner         uint8
+	OwnerKnown    bool
+	X, Y, Z       numeric.Fixed
+	Status        uint32
+	Hidden        bool
+	Stealth       bool
+	Active        bool
+	OnOffable     bool
+	Selected      bool
+	RangeStatus   bool
+	BlinkSuppress uint8
+	Seen          bool
+	Friendly      bool
+	Commander     bool
+	Palette       uint8
+	Visible       bool
+	RadarDistance int32
+	SonarDistance int32
+	RadarJam      int32
+	SonarJam      int32
+	Graphic       string
+	AssetID       string
+	Rings         []RadarRingView
+}
+
+// RadarCircleView is one callback result from the completed sensor pass.
+// U/V are the 128-world-unit callback coordinates and Kind preserves callback
+// table order (outer, radar jammer, sonar jammer) [03 §3.4].
+type RadarCircleView struct {
+	// SourceID identifies the live unit that emitted this callback. It is
+	// retained so cleanup cannot leave an orphaned circle in a committed frame.
+	SourceID uint16
+	U, V     int32
+	Radius   int32
+	Kind     uint8
+}
+
+// RadarView is the committed radar/contact payload. It is rebuilt at every
+// completed simulation tick and owns all nested slices [03 §3.6].
+type RadarView struct {
+	Contacts []RadarContactView
+	Circles  []RadarCircleView
+	// MarkerMode is the authoritative minimap composer mode. Zero is the
+	// explicit mode-off value until a simulation-owned source is available;
+	// presentation must not force the viewport marker on [03 §3.12][I6].
+	MarkerMode uint8
+}
+
 // EventKind identifies an ordered transient presentation cue.  Cues are not
 // authoritative state and must not be used to drive simulation decisions.
 type EventKind uint8
@@ -426,9 +511,20 @@ type Frame struct {
 	CommandPage CommandPageView
 	Builds      []BuildProgressView
 	Visibility  VisibilityView
+	Radar       RadarView
 	Events      []EventView
 	Fog         FogView
 	Result      ResultView
+	// Shake is the authoritative camera jitter offset produced at phase 10
+	// [03 §5.6][01 §4.4]. The session advances the shake driver with CRT draws
+	// and publishes the cumulative offset; presentation only applies it.
+	ShakeOffsetX   int32
+	ShakeOffsetY   int32
+	ShakeActive    bool
+	ShakeDuration  int32
+	ShakeRemaining int32
+	ShakeAmpX      int32
+	ShakeAmpY      int32
 }
 
 // Reserve preallocates top-level slices. It preserves existing values and
@@ -448,6 +544,8 @@ func (f *Frame) Reserve(c Capacities) {
 	f.Selection.Handles = reserve(f.Selection.Handles, c.Selection)
 	f.CommandPage.ProductKeys = reserve(f.CommandPage.ProductKeys, c.CommandProducts)
 	f.Visibility.Visible = reserve(f.Visibility.Visible, c.Visibility)
+	f.Radar.Contacts = reserve(f.Radar.Contacts, c.RadarContacts)
+	f.Radar.Circles = reserve(f.Radar.Circles, c.RadarCircles)
 	f.Fog.Ch0 = reserve(f.Fog.Ch0, c.Fog)
 	f.Fog.Ch1 = reserve(f.Fog.Ch1, c.Fog)
 }
@@ -523,9 +621,24 @@ func (f *Frame) Reset() {
 	f.Events = f.Events[:0]
 	f.Tick = 0
 	f.Paused = false
+	f.ShakeOffsetX = 0
+	f.ShakeOffsetY = 0
+	f.ShakeActive = false
+	f.ShakeDuration = 0
+	f.ShakeRemaining = 0
+	f.ShakeAmpX = 0
+	f.ShakeAmpY = 0
 	f.Selection = SelectionView{Handles: f.Selection.Handles}
 	f.CommandPage = CommandPageView{ProductKeys: f.CommandPage.ProductKeys}
 	f.Visibility = VisibilityView{Visible: f.Visibility.Visible, WordVisible: f.Visibility.WordVisible}
+	for i := range f.Radar.Contacts {
+		clear(f.Radar.Contacts[i].Rings)
+		f.Radar.Contacts[i] = RadarContactView{Rings: f.Radar.Contacts[i].Rings[:0]}
+	}
+	clear(f.Radar.Circles)
+	f.Radar.Contacts = f.Radar.Contacts[:0]
+	f.Radar.Circles = f.Radar.Circles[:0]
+	f.Radar = RadarView{Contacts: f.Radar.Contacts, Circles: f.Radar.Circles}
 	f.Fog = FogView{Ch0: f.Fog.Ch0, Ch1: f.Fog.Ch1}
 	f.Result = ResultView{Winners: f.Result.Winners, Losers: f.Result.Losers, Scores: f.Result.Scores}
 }

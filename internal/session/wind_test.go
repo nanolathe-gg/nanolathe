@@ -8,100 +8,88 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-func TestWindBattleEntryDrawCountAndValues(t *testing.T) {
-	// C17: briefing strength CRT()%(max-min+1)+min, direction CRT()&0x3f,
-	// first deadline ((CRT()*10)/0x8000+5)*30. Exactly three CRT draws [01 §7.3][GAP T13].
+// TestWindBattleEntryConsumesNoDraws locks the corrected battle-entry contract
+// [R-CORE-02]: battle entry performs NO wind draws — the briefing-screen
+// speed/direction values are front-end display state with no battle-side
+// reader — and only zeroes the deadline. The earlier assertion that battle
+// entry consumes exactly three CRT draws is superseded; the two briefing
+// display draws and the interval draw belong to the front-end briefing screen
+// (world.Wind.SeedBriefing), which nanolathe does not build yet.
+func TestWindBattleEntryConsumesNoDraws(t *testing.T) {
+	crt := rng.NewCRT(0x1234)
+	sim := rng.NewSimulation(0x1234)
+	simBefore := sim.Draws()
+
 	bounds := mission.WindBounds{Min: 100, Max: 2000}
-	seed := uint32(0x1234)
-
-	// Compute expected values by replicating the exact retail expressions on a
-	// reference CRT stream.
-	ref := rng.NewCRT(seed)
-	spanInclusive := uint32(bounds.Max - bounds.Min + 1) // 1901
-	expStrength := int32(ref.Uint32n(spanInclusive)) + bounds.Min
-	expDir6 := uint16(ref.Rand() & 0x3F)
-	expHeading := expDir6 << 10
-	expInterval := uint32((int64(ref.Rand())*10/0x8000 + 5) * 30)
-	expNext := uint32(10) + expInterval // tick 10
-	if ref.Draws() != 3 {
-		t.Fatalf("reference CRT draws = %d want 3", ref.Draws())
+	w := InitBattleWind(bounds)
+	if crt.Draws() != 0 {
+		t.Fatalf("battle entry consumed %d CRT draws, want 0 [R-CORE-02]", crt.Draws())
+	}
+	if sim.Draws() != simBefore {
+		t.Fatalf("battle entry consumed sim draws %d->%d [R-CORE-02]", simBefore, sim.Draws())
+	}
+	if w.NextChange != 0 {
+		t.Fatalf("battle entry must zero the wind deadline, got %d [R-CORE-02]", w.NextChange)
 	}
 
-	// Session initializer must produce identical values with identical draw count.
-	crt := rng.NewCRT(seed)
-	w := world.NewWind(bounds.Min, bounds.Max)
-	InitBattleWind(w, &crt, 10)
-	if crt.Draws() != 3 {
-		t.Fatalf("InitBattleWind CRT draws = %d want 3 [01 §7.3]", crt.Draws())
+	// Collapsed bounds behave identically: no draws either way.
+	w2 := InitBattleWind(mission.WindBounds{Min: 500, Max: 500})
+	if w2.NextChange != 0 {
+		t.Fatalf("collapsed bounds deadline = %d want 0 [R-CORE-02]", w2.NextChange)
 	}
-	if w.Strength != expStrength {
-		t.Fatalf("briefing strength = %d want %d [01 §7.3]", w.Strength, expStrength)
-	}
-	if w.Heading != expHeading {
-		t.Fatalf("briefing heading = %d want %d (dir6<<10) [01 §7.3]", w.Heading, expHeading)
-	}
-	if w.NextChange != expNext {
-		t.Fatalf("first deadline = %d want %d [01 §7.3]", w.NextChange, expNext)
-	}
-
-	// Repeat with collapsed range [500,500] inclusive =1, still consumes draw via
-	// raw rand()%1 expression [01 §7.3] [I4].
-	for _, r := range [][2]int32{{500, 500}, {0, 0}} {
-		crt2 := rng.NewCRT(7)
-		w2 := world.NewWind(r[0], r[1])
-		InitBattleWind(w2, &crt2, 0)
-		if crt2.Draws() != 3 {
-			t.Fatalf("collapsed bounds %v CRT draws = %d want 3", r, crt2.Draws())
-		}
-		if w2.Strength < r[0] || w2.Strength > r[1] {
-			t.Fatalf("collapsed bounds %v strength %d out of range", r, w2.Strength)
-		}
-	}
-
-	// Through NewBattleWindFromBounds helper (skirmish will also call it) the
-	// same single path must be observed, no second draw path.
-	crt3 := rng.NewCRT(seed)
-	w3 := NewBattleWindFromBounds(bounds, &crt3, 10)
-	if crt3.Draws() != 3 || w3.Strength != expStrength || w3.Heading != expHeading {
-		t.Fatalf("NewBattleWindFromBounds mismatch draws %d strength %d heading %d", crt3.Draws(), w3.Strength, w3.Heading)
-	}
-
-	// Later wind arithmetic belongs to world.Wind Jitter/Field, NOT duplicated
-	// here. Verify that after briefing exactly one CRT draw advances the deadline
-	// and one Sim draw takes strength, another takes heading when nonzero.
-	sim := rng.NewSimulation(7)
-	crt4 := rng.NewCRT(99)
-	w4 := world.NewWind(100, 2000)
-	w4.SeedBriefing(&crt4, 0)
-	due := w4.NextChange
-	crtAfter := crt4.Draws()
-	w4.Jitter(due, &crt4)
-	if crt4.Draws()-crtAfter != 1 {
-		t.Fatalf("Jitter should consume exactly one CRT draw [01 §7.3] got %d", crt4.Draws()-crtAfter)
-	}
-	if !w4.Field(due, &sim) {
-		t.Fatal("Field should change on due tick")
-	}
-	if sim.Draws() != 2 {
-		t.Fatalf("Field should consume 2 Sim draws (strength, heading) [01 §7.3] got %d", sim.Draws())
-	}
-	// Ensure the session package has no second implementation of later draws:
-	// grep via test - InitBattleWind must not call Sim stream at all.
 }
 
-func TestWindNoDuplicateDrawPath(t *testing.T) {
-	// Verify that InitBattleWind never touches the Sim stream (later draws are
-	// world.Wind Field only) and that briefing always consumes exactly 3 CRT
-	// draws regardless of bounds, per [01 §7.3][GAP T13] #17.
-	sim := rng.NewSimulation(123)
-	crt := rng.NewCRT(456)
-	w := world.NewWind(0, 0)
-	simBefore := sim.Draws()
-	InitBattleWind(w, &crt, 0)
-	if sim.Draws() != simBefore {
-		t.Fatalf("InitBattleWind must not draw from Sim stream; draws %d->%d", simBefore, sim.Draws())
+// TestWindTick1Chain locks the first sub-tick wind chain [R-CORE-02 census]:
+// with the deadline zeroed at entry and the strict gate (not due while
+// tick < deadline), phase 8 at tick 1 consumes exactly 1 CRT interval draw,
+// then 1 sim strength draw, then 1 sim heading draw only when the strength is
+// nonzero. A not-due tick consumes nothing.
+func TestWindTick1Chain(t *testing.T) {
+	// Nonzero-strength bounds: full chain = 1 CRT + 2 sim.
+	w := world.NewWind(100, 2000)
+	crt := rng.NewCRT(7)
+	sim := rng.NewSimulation(7)
+	if !w.Jitter(1, &crt, &sim) {
+		t.Fatal("tick 1 must be due (deadline zeroed at entry, tick 1 > 0) [R-CORE-02]")
 	}
-	if crt.Draws() != 3 {
-		t.Fatalf("InitBattleWind must consume exactly 3 CRT draws [01 §7.3] got %d", crt.Draws())
+	if crt.Draws() != 1 {
+		t.Fatalf("tick-1 chain CRT draws = %d want 1 [R-CORE-02]", crt.Draws())
+	}
+	if got := sim.Draws(); got != 2 {
+		t.Fatalf("tick-1 chain sim draws = %d want 2 (strength + heading) [R-CORE-02]", got)
+	}
+	if w.Strength < 100 || w.Strength > 2000 {
+		t.Fatalf("strength %d out of bounds", w.Strength)
+	}
+
+	// Zero-only bounds: the strength draw's span is 0, so Uint32n returns 0
+	// WITHOUT advancing [01 §7.1], and the zero strength skips the heading.
+	w0 := world.NewWind(0, 0)
+	crt0 := rng.NewCRT(7)
+	sim0 := rng.NewSimulation(7)
+	if !w0.Jitter(1, &crt0, &sim0) {
+		t.Fatal("tick 1 must be due for collapsed bounds too")
+	}
+	if crt0.Draws() != 1 {
+		t.Fatalf("collapsed-bounds CRT draws = %d want 1", crt0.Draws())
+	}
+	if got := sim0.Draws(); got != 0 {
+		t.Fatalf("collapsed-bounds sim draws = %d want 0 (bound<2 returns 0 without advancing [01 §7.1]; heading drawn only when strength != 0 [01 §7.3])", got)
+	}
+	if w0.Strength != 0 || w0.Heading != 0 {
+		t.Fatalf("collapsed bounds produced strength %d heading %d, want 0/0", w0.Strength, w0.Heading)
+	}
+
+	// A later not-due tick consumes nothing and clears the change flag.
+	crtDraws, simDraws := crt.Draws(), sim.Draws()
+	w.Changed = true
+	if w.Jitter(2, &crt, &sim) {
+		t.Fatal("tick 2 must not be due (interval > 0)")
+	}
+	if crt.Draws() != crtDraws || sim.Draws() != simDraws {
+		t.Fatal("not-due tick consumed draws")
+	}
+	if w.Changed {
+		t.Fatal("not-due tick must clear the one-tick change flag")
 	}
 }

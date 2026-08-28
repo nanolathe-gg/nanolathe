@@ -198,9 +198,10 @@ func TestRS08_CandidateFacts(t *testing.T) {
 	allyH, _ := w.Create(defAlly, 1, numeric.FixedFromInt(int64(15)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(15)))
 	enemyH, _ := w.Create(defEnemy, 2, numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(20)))
 	enemy2H, _ := w.Create(defEnemy2, 2, numeric.FixedFromInt(int64(25)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(25)))
-	// Make ally cloaked enemy
+	// Authored stealth is part of the gameplay cloak predicate, just like
+	// runtime cloak and initial cloak [03 §3.2].
 	cloakedEnemy := w.Unit(enemyH)
-	cloakedEnemy.IsCloaked = true
+	cloakedEnemy.Def.Stealth = true
 	// Make ally underwater (Y <= sea)
 	underwaterAlly := w.Unit(allyH)
 	_ = underwaterAlly

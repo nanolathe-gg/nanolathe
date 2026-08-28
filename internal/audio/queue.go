@@ -201,12 +201,17 @@ func (q *Queue) Seed(seed uint32) {
 	}
 }
 
-// SetCRTRandom injects the session-owned presentation stream. Queue and music
-// must share this object so silent resolves consume the same stream as every
-// other presentation consumer [01 §7.2][03 §8.3].
+// SetCRTRandom injects the session-owned presentation stream. DET-01: the
+// queue now copies the state so presentation variant draws do not affect the
+// authoritative session CRT [01 §7.2][03 §8.3]. Presentation draws are
+// presentation-only and must not leak into sim.
 func (q *Queue) SetCRTRandom(r *rng.CRT) {
-	if q != nil {
-		q.crt = r
+	if q != nil && r != nil {
+		v := *r
+		q.crt = &v
+		q.crtState = v.State
+	} else if q != nil {
+		q.crt = nil
 	}
 }
 

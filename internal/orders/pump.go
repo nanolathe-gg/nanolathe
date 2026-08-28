@@ -273,18 +273,26 @@ func isSecondary(id ID) bool {
 	return DescriptorFor(id).StaticGate&0x40000 != 0 // [04 §3.1] rear-segment selection flag
 }
 
+// DET-01: session-owned RNG injection — no rng.Global fallback.
+var injectedSim *rng.Simulation
+
+// SetSimulationRNG binds the session-owned simulation stream for order jitter draws [01 §7.1][I4].
+func SetSimulationRNG(sim *rng.Simulation) { injectedSim = sim }
+
+func simForJitter() *rng.Simulation { return injectedSim }
+
 func randBelow15() uint32 {
-	if rng.Global.Sim == nil {
-		panic("orders: rng.Global.Sim not seeded") // fail fast [01 §4.4] determinism
+	if simForJitter() == nil {
+		panic("orders: simulation RNG not injected [DET-01]")
 	}
-	return rng.Global.Sim.Uint32n(15) // gameplay jitter uses simulation stream [I4][04 §3.3]
+	return simForJitter().Uint32n(15) // gameplay jitter uses simulation stream [I4][04 §3.3]
 }
 
 func randBelow30() uint32 {
-	if rng.Global.Sim == nil {
-		panic("orders: rng.Global.Sim not seeded")
+	if simForJitter() == nil {
+		panic("orders: simulation RNG not injected [DET-01]")
 	}
-	return rng.Global.Sim.Uint32n(30) // [R-P0-01] code 9's last re-arm draws RNG(30), a distinct draw site from code 3's RNG(15)
+	return simForJitter().Uint32n(30) // [R-P0-01] code 9's last re-arm draws RNG(30), a distinct draw site from code 3's RNG(15)
 }
 
 // moveGroundHandler implements the Move_Ground-family handler [R-P0-01].

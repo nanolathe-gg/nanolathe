@@ -95,7 +95,7 @@ func TestWU03BSensorFinalUsesSinglePoint(t *testing.T) {
 	// gameplay owner bypass in the sensor's single-point final pass.
 	s.incByteGrid(int(2*s.W+2), 0)
 	var status uint32
-	units := []SensorUnit{{Owner: 1, Status: &status, Alive: true, X: 0, Y: 0, Z: 0, RadarDistance: 100, SonarDistance: 200}}
+	units := []SensorUnit{{Owner: 1, Status: &status, Alive: true, Active: true, X: 0, Y: 0, Z: 0, RadarDistance: 100, SonarDistance: 200}}
 	s.SensorTick(1, 2, nil, units)
 	if status&SeenBit != 0 {
 		t.Fatal("sensor final pass applied owner bypass or hull samples")

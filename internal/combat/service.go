@@ -88,10 +88,7 @@ func isCloakedUnit(u *units.Unit) bool {
 	if u.IsCloaked {
 		return true
 	}
-	if u.Flags&0x04 != 0 {
-		return true
-	}
-	if u.Def != nil && u.Def.InitCloaked {
+	if u.Def != nil && (u.Def.InitCloaked || u.Def.Stealth) {
 		return true
 	}
 	return false
@@ -466,8 +463,9 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 	if s == nil || w == nil {
 		return
 	}
+	// DET-01: no global fallback; session must inject simRNG.
 	if simRNG == nil {
-		simRNG = rng.Global.Sim
+		// nil means no draw (return 0 without advancing) — production always injects.
 	}
 	var unitList []*units.Unit
 	if w.IsSliced() {
@@ -877,9 +875,7 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 	if s == nil {
 		return
 	}
-	if simRNG == nil {
-		simRNG = rng.Global.Sim
-	}
+	// DET-01: no global fallback; session must inject simRNG.
 	// ON-04 stable lookup: use once-compiled catalog index, not per-tick map rebuild
 	muzzleForBurst := func(piece int16) Vec3 {
 		return Vec3{}
@@ -890,7 +886,11 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		if idx := catalog.WeaponIndex(); idx != nil {
 			weaponByID = idx
 		} else if catalog.Weapons != nil {
-			// Fallback for fixtures without compiled index: build deterministically smallest wins (I1)
+			// Fallback for fixtures without compiled index. [02 §5 R-CONTENT-02]:
+			// the same-ID merge is last-wins — the record parser unconditionally
+			// stores every field it parses, so a later section with the same ID
+			// overwrites the earlier one. Keys are sorted for a deterministic
+			// order (I1); the last same-ID weapon in that order wins.
 			weaponByID = make(map[int32]*content.WeaponDef, len(catalog.Weapons))
 			keys := make([]string, 0, len(catalog.Weapons))
 			for k := range catalog.Weapons {
@@ -902,9 +902,7 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 				if wd == nil {
 					continue
 				}
-				if _, exists := weaponByID[wd.ID]; !exists {
-					weaponByID[wd.ID] = wd
-				}
+				weaponByID[wd.ID] = wd
 			}
 		}
 	}

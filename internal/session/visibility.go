@@ -1,10 +1,30 @@
 package session
 
 import (
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 )
+
+// Visibility publication lives INSIDE phase 5 [R-CORE-01 §4.4.1] DET-06:
+// after the path scheduler and each player's orders/work, that player's unit
+// slice is swept stamping coverage per in-game unit. The stamp is
+// dirty-checked — a unit's coverage is re-rasterized only when its stored
+// stamp cell or sight range changed (a unit that moved in phase 2 is
+// re-stamped in the same tick's phase 5; an unchanged unit writes nothing).
+// Bulk wipe-and-rebuild happens ONLY at battle entry
+// (publishVisibilityForAll) and in the phase-5 commander spawn/defeat
+// branches — never per tick. There is no post-phase-12 visibility pass: the
+// phase-5 sweep is the final publisher.
+
+// visStamp is the dirty-check key of a unit's last-published stamp
+// [R-CORE-01 §4.4.1]: stamp cell (CX, CZ) and sight range. Accessed only by
+// handle key — never ranged (I1).
+type visStamp struct {
+	cx, cz int32
+	radius int32
+}
 
 // heightByteAt derives the observer emitter from the sea-level-clamped world
 // height and the immutable model-top extent [03 §3.2, §3.5].
@@ -47,17 +67,25 @@ func radiusFor(u *units.Unit) int32 {
 	return 32
 }
 
-// publishOne synchronously refreshes one unit's stored observer footprint.
+// publishOne synchronously refreshes one unit's stored observer footprint and
+// records its dirty-check key. Event-driven callers (battle entry, capture,
+// construction complete, death) publish immediately; the per-tick phase-5
+// sweep uses stampPlayerSlice's dirty check instead.
 func publishOne(s *Session, u *units.Unit) {
 	if s == nil || s.Vis == nil || u == nil || !u.Alive {
 		return
 	}
 	hb := heightByteAt(u, seaLevelFor(s))
 	cx, cz := observerTile(u, hb)
+	r := radiusFor(u)
 	s.Vis.Refresh(visibility.ObserverID(u.Handle), visibility.Observer{
 		Owner: visibility.PlayerID(u.Owner), CX: cx, CZ: cz,
-		HeightByte: hb, Radius: radiusFor(u),
+		HeightByte: hb, Radius: r,
 	})
+	if s.visStamps == nil {
+		s.visStamps = make(map[int]visStamp)
+	}
+	s.visStamps[int(u.Handle)] = visStamp{cx: cx, cz: cz, radius: r}
 }
 
 // unpublishOne retires the stored footprint. Reconstructing from the unit's
@@ -73,9 +101,15 @@ func unpublishOne(s *Session, u *units.Unit) {
 	if s.visDecloak != nil {
 		delete(s.visDecloak, int(u.Handle))
 	}
+	if s.visStamps != nil {
+		delete(s.visStamps, int(u.Handle))
+	}
 }
 
-// publishVisibilityForAll publishes all live units before the first frame.
+// publishVisibilityForAll is the battle-entry bulk wipe-and-rebuild
+// [R-CORE-01 §4.4.1]: every live unit's coverage is published before the
+// first frame. IterSliced order is player-ascending then slot-ascending
+// [01 §6.2].
 func publishVisibilityForAll(s *Session) {
 	if s == nil || s.Vis == nil || s.Units == nil {
 		return
@@ -84,5 +118,140 @@ func publishVisibilityForAll(s *Session) {
 		if u != nil && u.Alive {
 			publishOne(s, u)
 		}
+	}
+}
+
+// stampPlayerSlice is the phase-5 per-player stamp sweep [R-CORE-01 §4.4.1]:
+// walk player's unit slice slots ascending and re-stamp coverage for each
+// in-game unit whose stamp cell or sight range changed. Unchanged units write
+// nothing. Called after that player's orders/work inside phase 5.
+func stampPlayerSlice(s *Session, player int) {
+	if s == nil || s.Vis == nil || s.Units == nil {
+		return
+	}
+	start, end, ok := s.Units.SliceForPlayer(player)
+	if !ok {
+		return
+	}
+	for slot := start; slot <= end; slot++ {
+		if slot < 0 || slot >= s.Units.TotalRecords() {
+			continue
+		}
+		u := s.Units.Unit(pool.Handle(slot))
+		if u == nil || !u.Alive || int(u.Owner) != player {
+			continue
+		}
+		hb := heightByteAt(u, seaLevelFor(s))
+		cx, cz := observerTile(u, hb)
+		r := radiusFor(u)
+		if st, seen := s.visStamps[int(u.Handle)]; seen &&
+			st.cx == cx && st.cz == cz && st.radius == r {
+			continue // unchanged unit writes nothing [R-CORE-01 §4.4.1]
+		}
+		s.Vis.Refresh(visibility.ObserverID(u.Handle), visibility.Observer{
+			Owner: visibility.PlayerID(u.Owner), CX: cx, CZ: cz,
+			HeightByte: hb, Radius: r,
+		})
+		if s.visStamps == nil {
+			s.visStamps = make(map[int]visStamp)
+		}
+		s.visStamps[int(u.Handle)] = visStamp{cx: cx, cz: cz, radius: r}
+	}
+}
+
+// stepSensorPhase runs the multi-player sensor state (radar/sonar/jam/cloak
+// deadlines, SensorTick) adjacent to the phase-5 stamp sweep, preserving its
+// established behavior [03 §3.4] P0-11.
+// TODO(question): [R-CORE-01 §4.4.1] settles the visibility STAMP seam (inside
+// phase 5, per player) but does not settle where the sensor deadlines run
+// relative to the per-player stamp sweeps or the phase order. Kept adjacent to
+// the sweep, once per tick after all players, exactly as before the move; a
+// traced sensor seam would re-home this block.
+func (s *Session) stepSensorPhase(tick uint32) {
+	if s.Vis == nil || s.Units == nil {
+		return
+	}
+	if s.visStatus == nil {
+		s.visStatus = make(map[int]uint32)
+	}
+	if s.visDecloak == nil {
+		s.visDecloak = make(map[int]uint32)
+	}
+	// SensorTick owns the active-player gate, but still clears SeenBit and its
+	// prior callback snapshot when that gate skips [03 §3.4] P0-11 — so this
+	// pass calls it unconditionally.
+	active := s.activePlayerCount()
+	type holder struct {
+		statusPtr *uint32
+		deadPtr   *uint32
+		handle    int
+	}
+	var holders []holder
+	var sensorUnits []visibility.SensorUnit
+	for _, u := range s.Units.IterSliced() {
+		if u == nil || !u.Alive {
+			continue
+		}
+		h := int(u.Handle)
+		stVal := s.visStatus[h]
+		dlVal := s.visDecloak[h]
+		sp := new(uint32)
+		*sp = stVal
+		dp := new(uint32)
+		*dp = dlVal
+		holders = append(holders, holder{statusPtr: sp, deadPtr: dp, handle: h})
+		// Gameplay visibility owns the cloak state. Do not reuse unrelated
+		// presentation/status bits from Unit.Flags here: authored stealth and
+		// init-cloak both feed the predicate state, while the committed radar
+		// payload keeps its own presentation flags [03 §3.2][03 §3.4].
+		hidden := u.IsCloaked
+		stealth := false
+		var rd, sd, rj, sj, mc int32
+		onOffable := false
+		if u.Def != nil {
+			stealth = u.Def.Stealth
+			hidden = hidden || u.Def.Stealth || u.Def.InitCloaked
+			onOffable = u.Def.OnOffable
+			rd = u.Def.RadarDistance
+			sd = u.Def.SonarDistance
+			rj = u.Def.RadarDistanceJam
+			sj = u.Def.SonarDistanceJam
+			mc = u.Def.MinCloakDistance
+		}
+		sensorUnits = append(sensorUnits, visibility.SensorUnit{
+			ID:               uint16(u.Handle),
+			Owner:            visibility.PlayerID(u.Owner),
+			Status:           sp,
+			X:                u.X,
+			Z:                u.Z,
+			Y:                u.Y,
+			Alive:            true,
+			Hidden:           hidden,
+			Stealth:          stealth,
+			Active:           u.Activated,
+			OnOffable:        onOffable,
+			RadarDistance:    rd,
+			SonarDistance:    sd,
+			RadarJam:         rj,
+			SonarJam:         sj,
+			MinCloakDistance: mc,
+			DecloakDeadline:  dp,
+		})
+	}
+	allied := func(a, b visibility.PlayerID) bool {
+		if a == b {
+			return true
+		}
+		if s.Skirmish.NumPlayers > 0 {
+			if int(a) < 10 && int(b) < 10 {
+				return s.Skirmish.Players[a].AllyGroup == s.Skirmish.Players[b].AllyGroup
+			}
+		}
+		return false
+	}
+	s.Vis.SensorTick(tick, active, allied, sensorUnits)
+	for _, h := range holders {
+		s.visStatus[h.handle] = *h.statusPtr
+		s.visDecloak[h.handle] = *h.deadPtr
 	}
 }

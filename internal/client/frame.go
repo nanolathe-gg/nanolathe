@@ -172,34 +172,25 @@ type selectionChrome struct {
 	screenY int32
 }
 
-// consumeShake admits each published shake event once and advances the
-// presentation shake only at a new simulation tick. Repainting a snapshot
-// therefore cannot consume CRT values or move the camera again [03 §5.6].
+// consumeShake applies the authoritative shake offset published at phase 10
+// [03 §5.6][01 §4.4] DET-04. The session advances the shake driver with CRT draws;
+// presentation only applies the published cumulative offset, never consuming CRT.
 func (c *Client) consumeShake(cur *frame.Frame) {
-	if c == nil || cur == nil {
+	if c == nil || cur == nil || c.cam == nil {
 		return
 	}
-	if cur.Tick == c.lastShakeTick {
+	// Delta from last applied offset — session's offset is cumulative permanent
+	// random walk, so we add only the new delta and clamp [03 §5.6].
+	dx := cur.ShakeOffsetX - c.lastShakeOffsetX
+	dy := cur.ShakeOffsetY - c.lastShakeOffsetY
+	if dx == 0 && dy == 0 {
 		return
 	}
-	c.lastShakeTick = cur.Tick
-	for _, ev := range cur.Events {
-		if ev.Kind != frame.EventKindShake {
-			continue
-		}
-		key := shakeEventKey{sequence: ev.Sequence, tick: ev.Tick, id: ev.ID}
-		if _, seen := c.shakeEvents[key]; seen {
-			continue
-		}
-		c.shakeEvents[key] = struct{}{}
-		// A zero authored duration remains zero. The retail contract does not
-		// establish a fallback duration, so no compatibility constant is used
-		// here [03 §5.6].
-		c.shake.Request(ev.Magnitude, ev.Lifetime)
-	}
-	if c.crt != nil && c.cam != nil {
-		c.shake.TickWithRandom(c.cam, labeledCRT{crt: c.crt})
-	}
+	c.cam.X += dx
+	c.cam.Z += dy
+	c.cam.Clamp()
+	c.lastShakeOffsetX = cur.ShakeOffsetX
+	c.lastShakeOffsetY = cur.ShakeOffsetY
 }
 
 func (c *Client) drawTerrainPrep() {

@@ -168,6 +168,12 @@ var knownWeaponKeys = map[string]struct{}{
 // compileWeaponSection compiles a single top-level weapon section into a WeaponDef.
 // It reads ID first with default -1 to select the record [02 "Weapon record"] C2, then
 // applies conversions exactly as tabulated each truncated after multiply [02 "Weapon record"] C3.
+//
+// The result is always a complete record: every field is stored
+// unconditionally, the authored value when the key is present and the
+// accessor default when it is not — there is no conditionally skipped field.
+// A same-ID section therefore REPLACES the whole prior record, catalog name
+// included, rather than sparse-merging into it [02 §5 R-CONTENT-02].
 func compileWeaponSection(section *formats.Section, sectionName string, prov Provenance) *WeaponDef {
 	// C2 weapon identity: read ID first, default -1, use to select record; section name is catalog key; name is display string [02 "Weapon record"]
 	id := section.IntValue("ID", -1)
@@ -416,38 +422,56 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 	return wd
 }
 
-// CompileWeapons compiles weapons from the VFS. Discovery is weapons/*.tdf (77) AND gamedata/weapons.tdf
-// — one weapon per top-level section across all files [PLAN 02 Discovery]. It returns a map keyed by
-// CanonicalKey(section name) [02 §5]. The helper uses only typed accessors from formats/tdf_typed.go [02 §4].
+// CompileWeapons compiles weapons from the VFS. The weapon family is exactly
+// Weapons/*.tdf — retail never parses gamedata/weapons.tdf, which is inert
+// [02 §5 R-CONTENT-02] — one weapon per top-level section across all files.
+// It returns a map keyed by CanonicalKey(section name) [02 §5]. The helper
+// uses only typed accessors from formats/tdf_typed.go [02 §4].
 //
-// Record identity is by ID [02 "Weapon record"]: each section fills the record
-// selected by its authored ID, so two sections sharing an ID produce ONE
-// record whose catalog name is the later section's. Measured on the reference
-// install: ID 36 is shared by EARTHQUAKE (gamedata/weapons.tdf) and cormine2
-// (weapons/cormine2_weapon.tdf); every unit link references CORMINE2 and none
-// references EARTHQUAKE.
-//
-// Determinism ON-04: winner for duplicate IDs is the smallest canonical key
-// (lexicographically, I1), not last-wins-by-canonical-order nor file order.
-// Duplicates are recorded for diagnostics via CompileWeaponsWithDuplicates.
-// TODO(question) R-P0-01 duplicate winner policy: smallest canonical key wins is a supported inference
-// from [02 §5] deterministic catalog requirement (I1); last-wins would be nondeterministic
-// under map iteration and is NOT acceptable per ON-04.
+// Record identity is by ID [02 "Weapon record"]: the parser reads ID first
+// with default -1 and uses it to select the record it fills, then stores the
+// section name as the record's catalog name. Sections are processed in
+// discovery order and a later section sharing an ID REPLACES the record —
+// whole-record, authored-or-default per field, catalog name included; there
+// is no sparse merge [02 §5 R-CONTENT-02]. ID-less sections are inert (they
+// fill one unreachable scratch slot and never enter the catalog map)
+// [02 §5 R-CONTENT-02]. Measured stock: the parsed family has unique IDs —
+// ID 36 is [cormine2] (weapons/cormine2_weapon.tdf) alone and [earthquake] is
+// weapons/earthquake.tdf at ID 227 [02 §5 R-CONTENT-02]. Determinism comes
+// from deterministic discovery order (I1).
 func CompileWeapons(fs vfs.FSOps) (map[string]*WeaponDef, error) {
 	m, _, err := CompileWeaponsWithDuplicates(fs)
 	return m, err
 }
 
-// CompileWeaponsWithDuplicates is the stable implementation that also returns duplicate diagnostics ON-04.
-// It collects all weapon sections first, then selects winners deterministically as smallest canonical key
-// per ID, recording all colliding keys for diagnostics.
+// CompileWeaponsWithDuplicates is the stable implementation that also returns
+// duplicate diagnostics. Discovery is the union enumeration of Weapons/*.tdf:
+// provider mount precedence first, then host directory order within one
+// provider — which Nanolathe realizes as first-provider-wins dedup in mount
+// order followed by sorted logical paths, the documented lexical divergence
+// [SPEC_CONFLICTS SC3] — each file's sections in document order. Every
+// top-level section feeds the record parser in that order [02 §5 R-CONTENT-02].
+//
+// A later section with an already-seen ID replaces the earlier record whole,
+// catalog name included (the parser stores authored-or-default for every
+// field and copies the section name over the catalog name) [02 §5
+// R-CONTENT-02]. Sections without an authored ID (default -1) are inert: they
+// all write into the one scratch slot just before record 0, the last one wins
+// it, and the runtime name scan never reaches that slot — they appear only in
+// diagnostics here [02 §5 R-CONTENT-02].
 func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []WeaponDuplicate, error) {
 	if fs == nil {
 		return nil, nil, fmt.Errorf("content: nil VFS")
 	}
-	var allDefs []*WeaponDef
+	// Record table substitute: slot (ID) -> record, whole-record replacement.
+	slots := make(map[int32]*WeaponDef)
+	// keysPerID preserves discovery order per ID for the collision diagnostics.
+	keysPerID := make(map[int32][]string)
+	// ID-less sections share the unreachable scratch slot before record 0;
+	// their names never enter the catalog [02 §5 R-CONTENT-02].
+	var scratchKeys []string
 
-	processFileCollect := func(data []byte, prov Provenance) error {
+	processFile := func(data []byte, prov Provenance) error {
 		doc, err := formats.ParseTDF(data)
 		if err != nil {
 			return err
@@ -458,98 +482,92 @@ func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []Weapon
 				continue
 			}
 			wd := compileWeaponSection(section, name, prov)
-			allDefs = append(allDefs, wd)
+			if wd.ID >= 0 {
+				keysPerID[wd.ID] = append(keysPerID[wd.ID], wd.CanonicalKey)
+				// Whole-record replacement: the later section owns the slot,
+				// catalog name included [02 §5 R-CONTENT-02].
+				slots[wd.ID] = wd
+			} else {
+				scratchKeys = append(scratchKeys, wd.CanonicalKey)
+			}
 		}
 		return nil
 	}
 
-	if data, err := fs.ReadFileLimit("gamedata/weapons.tdf", 1<<20); err == nil {
-		prov := Provenance{LogicalPath: "gamedata/weapons.tdf"}
-		if info, statErr := fs.Stat("gamedata/weapons.tdf"); statErr == nil {
-			prov = ProvenanceFrom(info)
+	entries, err := fs.ReadDir("weapons")
+	if err != nil {
+		return nil, nil, fmt.Errorf("content: weapons: %w", err)
+	}
+	// ReadDir resolves duplicate logical paths first-provider-wins in mount
+	// order and then sorts by Path [vfs.ReadDir] — provider mount precedence,
+	// then host directory order with the lexical divergence [SPEC_CONFLICTS
+	// SC3]. This iteration is the discovery order (I1).
+	for _, e := range entries {
+		if e.IsDir {
+			continue
 		}
-		if err := processFileCollect(data, prov); err != nil {
-			return nil, nil, fmt.Errorf("content: gamedata/weapons.tdf: %w", err)
+		// Filter by extension — directory also holds .bat, .pl, .txt, .xls junk [PLAN Discovery]
+		if !strings.HasSuffix(strings.ToLower(e.Path), ".tdf") {
+			continue
+		}
+		data, err := fs.ReadFileLimit(e.Path, 1<<20)
+		if err != nil {
+			continue
+		}
+		prov := Provenance{
+			LogicalPath: e.Path,
+			ProviderID:  e.Source.SourcePath,
+			MountOrder:  e.Source.MountOrder,
+		}
+		// Fallback to Stat provenance if ReadDir entry lacks it (should not happen).
+		if prov.ProviderID == "" {
+			if info, serr := fs.Stat(e.Path); serr == nil {
+				prov = ProvenanceFrom(info)
+			}
+		}
+		if err := processFile(data, prov); err != nil {
+			return nil, nil, fmt.Errorf("content: %s: %w", e.Path, err)
 		}
 	}
 
-	entries, err := fs.ReadDir("weapons")
-	if err != nil {
-		// If gamedata already contributed weapons, allow missing weapons dir as empty.
-		if len(allDefs) == 0 {
-			return nil, nil, fmt.Errorf("content: weapons: %w", err)
-		}
-	} else {
-		// ReadDir already sorts by Path [vfs.ReadDir], so iteration is stable (I1).
-		for _, e := range entries {
-			if e.IsDir {
-				continue
-			}
-			// Filter by extension — directory also holds .bat, .pl, .txt, .xls junk [PLAN Discovery]
-			if !strings.HasSuffix(strings.ToLower(e.Path), ".tdf") {
-				continue
-			}
-			data, err := fs.ReadFileLimit(e.Path, 1<<20)
-			if err != nil {
-				continue
-			}
-			prov := Provenance{
-				LogicalPath: e.Path,
-				ProviderID:  e.Source.SourcePath,
-				MountOrder:  e.Source.MountOrder,
-			}
-			// Fallback to Stat provenance if ReadDir entry lacks it (should not happen).
-			if prov.ProviderID == "" {
-				if info, serr := fs.Stat(e.Path); serr == nil {
-					prov = ProvenanceFrom(info)
-				}
-			}
-			if err := processFileCollect(data, prov); err != nil {
-				return nil, nil, fmt.Errorf("content: %s: %w", e.Path, err)
-			}
-		}
-	}
-	// Deterministic winner selection: smallest canonical key wins per ID ON-04.
-	// Group by ID, keep smallest key as winner, record all colliding keys for diagnostics.
-	// ID < 0 (no ID) stays distinct per TODO(question) in processFileCollect comment.
-	sort.SliceStable(allDefs, func(i, j int) bool { return allDefs[i].CanonicalKey < allDefs[j].CanonicalKey })
-	result := make(map[string]*WeaponDef, len(allDefs))
-	byID := make(map[int32]*WeaponDef)
-	// dupKeys tracks all keys per ID in sorted winner-first order for diagnostics
-	dupKeys := make(map[int32][]string)
-	for _, wd := range allDefs {
-		if wd.ID >= 0 {
-			if _, exists := byID[wd.ID]; !exists {
-				byID[wd.ID] = wd
-				result[wd.CanonicalKey] = wd
-			}
-			// Record key for duplicate diagnostics (always append in sorted order)
-			dupKeys[wd.ID] = append(dupKeys[wd.ID], wd.CanonicalKey)
-		} else {
-			// TODO(question): ID-less sections stay distinct records per earlier comment
-			if _, exists := result[wd.CanonicalKey]; !exists {
-				result[wd.CanonicalKey] = wd
-			} else {
-				// Same canonical key duplicate with ID <0: keep first winner, record duplicate key
-				// For ID -1 we don't group by ID, but we can still note duplicate canonical
-				dupKeys[wd.ID] = append(dupKeys[wd.ID], wd.CanonicalKey)
-			}
-		}
-	}
-	// Build WeaponDuplicate slice for IDs where len >1, sorted by ID for determinism
+	// Collision diagnostics: every name that shared a slot, in discovery
+	// order, the surviving record's name last. ID -1 is the shared scratch
+	// slot of the ID-less sections — its "winner" wins a slot name lookup can
+	// never reach [02 §5 R-CONTENT-02].
 	var duplicates []WeaponDuplicate
-	for id, keys := range dupKeys {
+	for id, keys := range keysPerID {
 		if len(keys) <= 1 {
 			continue
 		}
-		// keys already in sorted order because allDefs sorted and we appended in that order
-		// but ensure sorted ascending for diagnostics
-		sort.Strings(keys)
-		// Ensure winner (smallest) first; after sort it is
-		dup := WeaponDuplicate{ID: id, Keys: append([]string(nil), keys...), Winner: keys[0]}
-		duplicates = append(duplicates, dup)
+		duplicates = append(duplicates, WeaponDuplicate{ID: id, Keys: append([]string(nil), keys...), Winner: keys[len(keys)-1]})
+	}
+	if len(scratchKeys) > 1 {
+		duplicates = append(duplicates, WeaponDuplicate{ID: -1, Keys: append([]string(nil), scratchKeys...), Winner: scratchKeys[len(scratchKeys)-1]})
 	}
 	sort.Slice(duplicates, func(i, j int) bool { return duplicates[i].ID < duplicates[j].ID })
+
+	// The name-keyed catalog is the runtime name resolution itself: walk the
+	// record table from slot 0 upward and keep the first record per catalog
+	// name — exactly the first match the case-insensitive linear scan returns
+	// [02 §5 R-CONTENT-02]. Slots are visited in ascending ID order (I1).
+	// Representation limit: two distinct IDs sharing one section name leave
+	// the higher-ID record unreachable through this name-keyed map. Retail's
+	// table holds both records and its name scan returns the lower slot; the
+	// resolution here matches, but no name-keyed view can also address the
+	// shadowed record by ID. No stock instance is known (IDs are unique; a
+	// name shared across IDs is unmeasured).
+	ids := make([]int32, 0, len(slots))
+	for id := range slots {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	result := make(map[string]*WeaponDef, len(ids))
+	for _, id := range ids {
+		wd := slots[id]
+		if _, exists := result[wd.CanonicalKey]; !exists {
+			result[wd.CanonicalKey] = wd
+		}
+	}
 	return result, duplicates, nil
 }
 
@@ -558,27 +576,31 @@ func compileWeapons(fs vfs.FSOps) (map[string]*WeaponDef, error) {
 	return CompileWeapons(fs)
 }
 
-// WeaponByID selects the weapon with the given ID. After CompileWeapons there
-// is exactly one record per nonnegative ID (same-ID sections merge into one
-// record whose name is the later section's [02 "Weapon record"]), so the scan
-// is deterministic regardless of order; it iterates sorted canonical keys (I1)
-// and returns the first match.
+// WeaponByID selects the record occupying the given slot. A compiled map has
+// exactly one record per nonnegative ID — same-ID sections replaced each other
+// whole, and ID-less sections never enter the map [02 §5 R-CONTENT-02] — so
+// the sole match is returned. For a hand-built map that still carries
+// colliding IDs, the last match in sorted key order stands in for
+// discovery-order last-wins, matching buildWeaponIndex's fallback (I1).
 func WeaponByID(weapons map[string]*WeaponDef, id int32) (*WeaponDef, bool) {
 	if weapons == nil {
 		return nil, false
 	}
-	// Deterministic iteration: sorted keys (I1)
+	// Deterministic iteration: sorted keys (I1).
 	keys := make([]string, 0, len(weapons))
 	for k := range weapons {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	var found *WeaponDef
+	var ok bool
 	for _, k := range keys {
 		if weapons[k].ID == id {
-			return weapons[k], true
+			found = weapons[k]
+			ok = true
 		}
 	}
-	return nil, false
+	return found, ok
 }
 
 // CompileWeaponsSorted returns weapons sorted by canonical key for hash-stable iteration (I1) [02 §5] C12.

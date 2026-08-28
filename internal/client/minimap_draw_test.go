@@ -9,104 +9,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-func TestMinimapDrawMinimapCopiesIndexed(t *testing.T) {
-	c, err := New(Options{Width: 64, Height: 64, Headless: true})
-	if err != nil {
-		t.Fatalf("New client: %v", err)
-	}
-	// Create a small radar surface 4x4 with distinct indices
-	surf := &render.RadarSurface{W: 4, H: 4, Pitch: 4, Bits: make([]byte, 16)}
-	for i := range surf.Bits {
-		surf.Bits[i] = byte(10 + i)
-	}
-	hudRect := hud.Rect{X1: 10, Y1: 10, X2: 13, Y2: 13} // 4x4 inclusive
-	viewportRect := hud.Rect{X1: 11, Y1: 11, X2: 12, Y2: 12}
-	paletteViewport := byte(0xAA) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	c.DrawMinimap(surf, hudRect, viewportRect, paletteViewport)
-	// Check that radar bits were copied to hudRect area
-	for y := 0; y < 4; y++ {
-		for x := 0; x < 4; x++ {
-			dstIdx := (10+y)*c.width + (10 + x)
-			want := surf.Bits[y*4+x]
-			// Viewport rect outline overwrites some pixels with paletteViewport at border of viewportRect
-			// viewportRect 11,11-12,12 inclusive is 2x2, outline is all four pixels (since 2x2 filled border)
-			// So inner of viewportRect will be paletteViewport where applicable
-			isViewportBorder := (x+10 >= 11 && x+10 <= 12 && (y+10 == 11 || y+10 == 12)) || (y+10 >= 11 && y+10 <= 12 && (x+10 == 11 || x+10 == 12))
-			if isViewportBorder {
-				if c.indexed[dstIdx] != paletteViewport {
-					t.Fatalf("viewport rect 1-pixel Bresenham hiColor DDA placeholder want palette %d got %d at %d,%d", paletteViewport, c.indexed[dstIdx], 10+x, 10+y)
-				}
-			} else {
-				if c.indexed[dstIdx] != want {
-					t.Fatalf("DrawMinimap copy want %d got %d at %d,%d", want, c.indexed[dstIdx], 10+x, 10+y)
-				}
-			}
-		}
-	}
-	// Check 1-pixel not filled: center of larger viewport should not be filled? For 2x2, all border, no interior. Test larger.
-	// Letterbox bars already 0: outside hudRect should remain 0 (initial indexed is 0 after New? Actually New fills? Check client.New fills indexed with 0? It allocates make with zero.
-}
-
-func TestMinimapDrawMinimapScaled(t *testing.T) {
-	c, _ := New(Options{Width: 32, Height: 32, Headless: true})
-	surf := &render.RadarSurface{W: 2, H: 2, Pitch: 4, Bits: []byte{1, 2, 3, 4}}
-	hudRect := hud.Rect{X1: 0, Y1: 0, X2: 3, Y2: 3} // 4x4, double size -> nearest scale 2x
-	viewportRect := hud.Rect{X1: 0, Y1: 0, X2: 0, Y2: 0}
-	c.DrawMinimap(surf, hudRect, viewportRect, 0) // palette 0 means no viewport draw
-	// With nearest scaling, 2x2 -> 4x4 should double each pixel
-	// src 0,0=1 should cover dst 0,0-1,1 etc via trunc mapping srcX = dx*2/4
-	// Our implementation centers radar inside HUD rect for letterbox case, but for square scaling hudW 4 surf 2 -> dstRadarW 2? Actually hudW 4 surf 2 letterbox? hud 4x4 vs surf 2x2 both square, so hud is scale 2x, should scale.
-	// Check some pixels
-	if c.indexed[0] != 1 {
-		t.Fatalf("scaled DrawMinimap top-left want 1 got %d", c.indexed[0])
-	}
-	// Due to scaling logic, dst 1,0 should also be 1 (nearest)
-	if c.indexed[1] != 1 {
-		t.Fatalf("scaled nearest want 1 at 1,0 got %d", c.indexed[1])
-	}
-	if c.indexed[2] != 2 {
-		t.Fatalf("scaled nearest want 2 at 2,0 got %d", c.indexed[2])
-	}
-}
-
-func TestMinimapDrawMinimapViewportRectOnePixel(t *testing.T) {
-	c, _ := New(Options{Width: 20, Height: 20, Headless: true})
-	surf := &render.RadarSurface{W: 10, H: 10, Pitch: 12, Bits: make([]byte, 100)}
-	for i := range surf.Bits {
-		surf.Bits[i] = 5
-	}
-	hudRect := hud.Rect{X1: 0, Y1: 0, X2: 9, Y2: 9}
-	viewportRect := hud.Rect{X1: 2, Y1: 2, X2: 7, Y2: 7} // 6x6 inclusive, 1-pixel outline
-	pal := byte(99)
-	c.DrawMinimap(surf, hudRect, viewportRect, pal)
-	// Check outline drawn, interior not overwritten (still 5)
-	// Top edge y=2 x 2..7 should be pal
-	for x := 2; x <= 7; x++ {
-		if got := c.indexed[2*20+x]; got != pal {
-			t.Fatalf("viewport top edge at %d,2 want %d got %d", x, pal, got)
-		}
-		if got := c.indexed[7*20+x]; got != pal {
-			t.Fatalf("viewport bottom edge at %d,7 want %d got %d", x, pal, got)
-		}
-	}
-	for y := 2; y <= 7; y++ {
-		if got := c.indexed[y*20+2]; got != pal {
-			t.Fatalf("viewport left edge at 2,%d want %d got %d", y, pal, got)
-		}
-		if got := c.indexed[y*20+7]; got != pal {
-			t.Fatalf("viewport right edge at 7,%d want %d got %d", y, pal, got)
-		}
-	}
-	// Interior 3,3-6,6 should remain radar 5, not filled
-	if got := c.indexed[3*20+3]; got != 5 {
-		t.Fatalf("viewport interior should not be filled, at 3,3 want 5 got %d", got)
-	}
-	if got := c.indexed[4*20+4]; got != 5 {
-		t.Fatalf("viewport interior should not be filled at 4,4 want 5 got %d", got)
-	}
-}
-
-func TestMinimapHandleMinimapInputInsideAndDrag(t *testing.T) { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+func TestMinimapHandleMinimapInputInsideAndDrag(t *testing.T) { // [07 §10] two-branch lens
 	playW, playH := int32(608), int32(352)
 	m := camera.LayoutMinimap(640, 480)
 	hudRect := hud.Rect{X1: 0, Y1: 0, X2: 126, Y2: 126}
@@ -120,9 +23,10 @@ func TestMinimapHandleMinimapInputInsideAndDrag(t *testing.T) { // TODO(question
 	if !ok {
 		t.Fatalf("HandleMinimapInput inside should be consumed")
 	}
-	// After inside click, camera should be centered around world corresponding to mouse, clamped [07 §10] C3
+	// After inside click, camera origin is the world point corresponding to the
+	// mouse, then clamped [03 §3.11].
 	wx, wz := m.RadarToWorld(mouseX, mouseY, playW, playH)
-	wantX := wx - cam.ViewW/2 // but cam ViewW after call is changed? Use original ViewW 64
+	wantX := wx
 	// Need to recompute expected with clampAxis order [07 §10]
 	// clampAxis: maximum = mapSize - viewSize; if camera<0->0 else if >maximum->maximum
 	maxX := playW - 64
@@ -132,8 +36,7 @@ func TestMinimapHandleMinimapInputInsideAndDrag(t *testing.T) { // TODO(question
 		wantX = maxX
 	}
 	maxZ := playH - 64
-	// wz - ViewH/2
-	wantZ := wz - 32
+	wantZ := wz
 	if wantZ < 0 {
 		wantZ = 0
 	} else if wantZ > maxZ {
@@ -204,6 +107,120 @@ func TestMinimapHandleMinimapInputClampOrder(t *testing.T) { // [07 §10] C3 cla
 		// Could be 0 if intermediate? Let's just check that it clamped to maximum, not 0
 		// The inside branch computes wx~100, newCam~0 (100-100), which is 0, not -100. So this case not triggering drag.
 		// Use drag branch to test positive clamp to negative max: cam 0 + mouse 126 => 126, > -100 => -100
+	}
+}
+
+func TestMinimapDisplayDrawClickRelationship(t *testing.T) {
+	playW, playH := int32(608), int32(352)
+	layout := camera.LayoutMinimap(playW, playH)
+	dst := hud.Rect{X1: 200, Y1: 100, X2: 325, Y2: 225}
+	canvasX, canvasY := layout.PadX+layout.W/2, layout.PadY+layout.H/2
+	displayX, displayY, ok := layout.CanvasToDisplay(canvasX, canvasY, dst.X1, dst.Y1, dst.X2-dst.X1+1, dst.Y2-dst.Y1+1)
+	if !ok {
+		t.Fatal("canonical canvas point did not project to display")
+	}
+	clickX, clickY, ok := layout.DisplayToCanvas(displayX, displayY, dst.X1, dst.Y1, dst.X2-dst.X1+1, dst.Y2-dst.Y1+1)
+	if !ok || !layout.HitTest(clickX, clickY) {
+		t.Fatalf("draw/click transform left canonical radar rectangle: %d,%d", clickX, clickY)
+	}
+	cam := &camera.Camera{ViewW: 64, ViewH: 64, MapW: playW, MapH: playH}
+	if !HandleMinimapInput(cam, layout, dst, playW, playH, displayX, displayY, true, nil) {
+		t.Fatal("canonical minimap click was not consumed")
+	}
+	wantX, wantZ := layout.ToWorldPlay(clickX, clickY, playW, playH)
+	cam.Clamp()
+	if cam.X != wantX || cam.Z != wantZ {
+		t.Fatalf("click camera mismatch: got %d,%d want %d,%d", cam.X, cam.Z, wantX, wantZ)
+	}
+}
+
+func TestDrawMinimapLayoutUsesLetterboxAndMarker(t *testing.T) {
+	playW, playH := int32(608), int32(352)
+	layout := camera.LayoutMinimap(playW, playH)
+	dst := hud.Rect{X1: 10, Y1: 20, X2: 135, Y2: 145}
+	c := &Client{width: 160, height: 170, indexed: make([]uint8, 160*170)}
+	surf := &render.RadarSurface{W: 1, H: 1, Pitch: 4, Bits: []byte{7}}
+	markerX, markerY := layout.PadX+layout.W/2, layout.PadY+layout.H/2
+	c.DrawMinimapLayout(surf, dst, layout, 2, markerX, markerY, 9)
+	dx, dy, ok := layout.CanvasToDisplay(markerX, markerY, dst.X1, dst.Y1, 126, 126)
+	if !ok || c.indexed[int(dy)*c.width+int(dx)] != 9 {
+		t.Fatalf("marker did not land in canonical display transform at %d,%d", dx, dy)
+	}
+	// Letterbox bars are untouched by the picture blit, while the interior is
+	// populated from the same authored surface [07 §10].
+	barX, barY := dst.X1, dst.Y1
+	if layout.PadX == 0 {
+		barX++
+	} else {
+		barX += layout.PadX / 2
+	}
+	if layout.PadY > 0 && c.indexed[int(barY)*c.width+int(barX)] != 0 {
+		t.Fatalf("letterbox bar was written at %d,%d", barX, barY)
+	}
+}
+
+func TestDrawMinimapLayoutClipsEveryMarkerArmToFittedRect(t *testing.T) {
+	tests := []struct {
+		name    string
+		playW   int32
+		playH   int32
+		topLeft bool
+	}{
+		// Wide maps have vertical letterbox bars. At the top-left fitted pixel,
+		// only the crossing and inward arms may be written.
+		{name: "wide top-left", playW: 640, playH: 480, topLeft: true},
+		{name: "wide bottom-right", playW: 640, playH: 480},
+		// Tall maps exercise the corresponding horizontal bars.
+		{name: "tall top-left", playW: 480, playH: 640, topLeft: true},
+		{name: "tall bottom-right", playW: 480, playH: 640},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			layout := camera.LayoutMinimap(tc.playW, tc.playH)
+			// Place the center at each fitted edge, not at a canvas edge. This
+			// catches a marker that clips to the 126-pixel canvas but not radar.
+			centerX, centerY := layout.Right(), layout.Bottom()
+			if tc.topLeft {
+				centerX, centerY = layout.PadX, layout.PadY
+			}
+			c := &Client{width: 126, height: 126, indexed: make([]uint8, 126*126)}
+			surf := &render.RadarSurface{W: 1, H: 1, Pitch: 4, Bits: []byte{7}}
+			c.DrawMinimapLayout(surf, hud.Rect{X1: 0, Y1: 0, X2: 125, Y2: 125}, layout, 2, centerX, centerY, 9)
+			for y := int32(0); y < 126; y++ {
+				for x := int32(0); x < 126; x++ {
+					got := c.indexed[int(y)*126+int(x)]
+					if got != 9 {
+						continue
+					}
+					canvasX, canvasY, ok := layout.DisplayToCanvas(x, y, 0, 0, 126, 126)
+					if !ok || !layout.HitTest(canvasX, canvasY) {
+						t.Fatalf("marker pixel at display %d,%d mapped outside fitted rect to %d,%d", x, y, canvasX, canvasY)
+					}
+				}
+			}
+			found := false
+			for _, v := range c.indexed {
+				if v == 9 {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatal("fitted marker crossing was not drawn")
+			}
+		})
+	}
+}
+
+func TestDrawMinimapLayoutMarkerModeOffDoesNotDraw(t *testing.T) {
+	layout := camera.LayoutMinimap(640, 480)
+	c := &Client{width: 126, height: 126, indexed: make([]uint8, 126*126)}
+	surf := &render.RadarSurface{W: 1, H: 1, Pitch: 4, Bits: []byte{7}}
+	c.DrawMinimapLayout(surf, hud.Rect{X1: 0, Y1: 0, X2: 125, Y2: 125}, layout, 0, layout.PadX+layout.W/2, layout.PadY+layout.H/2, 9)
+	for _, v := range c.indexed {
+		if v == 9 {
+			t.Fatal("marker mode 0 drew viewport marker")
+		}
 	}
 }
 

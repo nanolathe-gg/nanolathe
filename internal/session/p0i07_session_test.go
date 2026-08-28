@@ -119,7 +119,7 @@ func TestP0I07_SessionIsVisible(t *testing.T) {
 		t.Fatalf("enemy after moving inside LOS should be visible")
 	}
 	// Cloaked enemy should be rejected even inside LOS.
-	u1.Flags |= 0x04
+	u1.IsCloaked = true
 	// Need to ensure sensor status does not have decloak.
 	s.visStatus[int(u1.Handle)] = 0
 	if s.IsUnitVisible(0, u1) {
@@ -130,8 +130,16 @@ func TestP0I07_SessionIsVisible(t *testing.T) {
 	if !s.IsUnitVisible(0, u1) {
 		t.Fatalf("decloaked enemy should be visible")
 	}
+	// Authored stealth is a gameplay visibility predicate input, just like the
+	// runtime cloak state; it is not inferred from presentation flags.
+	u1.Def.Stealth = true
+	s.visStatus[int(u1.Handle)] = 0
+	if s.IsUnitVisible(0, u1) {
+		t.Fatalf("stealth enemy should be rejected even inside LOS")
+	}
+	u1.Def.Stealth = false
 	// Underwater enemy without exempt should be rejected.
-	u1.Flags &^= 0x04
+	u1.IsCloaked = false
 	s.visStatus[int(u1.Handle)] = 0
 	terrain.SeaLevel = 20
 	u1.Y = numeric.Fixed(10 * 65536) // below sea 20

@@ -232,9 +232,10 @@ func DrawTextWithShadow(frame []uint8, width, height int, fnt *formats.FNT, text
 }
 
 // DebugInfo carries the values shown in the debug overlay [PLAN_04A C8].
-// All fields are presentation values; the caller fetches tick from the
-// committed frame, camera from internal/camera, and RNG draws from
-// internal/sim/rng.Global.*.Draws().
+// All fields are presentation values: the tick from the committed frame, the
+// camera origin from internal/camera, and the RNG draw counters the session
+// publishes with the frame (the client never reads the streams themselves,
+// DET-01).
 type DebugInfo struct {
 	Tick     uint32 // authoritative global tick at publish time (frame.Frame.Tick)
 	CamX     int32  // camera origin X in map pixels [07 §10]

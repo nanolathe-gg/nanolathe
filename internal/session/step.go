@@ -10,68 +10,36 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // stepAuthoritativePhases runs one complete authoritative tick for focused
-// same-package tests and callers that already own the tick number. Step keeps
-// the canonical sequence visible at its call site; this helper is deliberately
-// only a phase-call wrapper, not a second implementation of any phase.
+// same-package tests and callers that already own the tick number. Step calls
+// this single path so there is no second implementation [DET-02][01 §4.4].
 func (s *Session) stepAuthoritativePhases(tick uint32) {
 	if s == nil {
 		return
 	}
 	// The phase order below is the authoritative retail sequence [01 §4.4].
 	// Keep these calls in this order: their pool visibility, side effects, and RNG
-	// draw order are observable.
-	_ = s.SimRNG()
-	_ = s.CrtRNG()
-	rng.Global.Sim = s.SimRNG()
-	rng.Global.Crt = s.CrtRNG()
-
-	// 1. network/input boundary (single-player drains due human commands).
-	s.applyHumanCommands(tick)
-
-	// 2. deterministic unit-slot sweep: unit update, weapons/COB, orders,
-	// construction, movement, and slot-end death handling.
-	s.stepUnitPhase(tick)
-
-	// 3. projectiles: captured-span integration, collision, and detonation.
-	s.stepProjectilePhase(tick)
-
-	// 4. effects and feature motion.
-	s.stepEffectPhase(tick)
-
-	// 5. player orders/economy work and the phase-5 path boundary.
-	s.stepPlayerPhase(tick)
-
-	// 6. feature lifecycle and reclaim/death processing.
-	s.stepFeatureLifecyclePhase(tick)
-
-	// 7. sequence/effect-strip cursors. TODO(question): strip advancement is
-	// presentation-owned in nanolathe [03 §1]; no sim state advances here.
-
-	// 8/9. wind change, wind field, then meteor scheduling.
-	s.stepWindAndMeteorPhase(tick)
-
-	// 10. camera/scroll update. TODO(question): nanolathe's camera is
-	// presentation-owned; no sim-side scroll target or shake state exists yet
-	// [01 §4.4].
-
-	// 11. ten object-list sweeps. TODO(question): the object family is not yet
-	// identified [01 §4.4]; nothing registers lists yet.
-
-	// 12. every-eight-sub-tick cadence flip. TODO(question): no consumer is
-	// wired in nanolathe; the flip drives nothing yet.
-
-	// Visibility/LOS and sensor refresh remain at this seam because their exact
-	// relationship to the twelve phases is not established [03 §3.2][03 §3.4].
-	// TODO(question): establish its placement relative to phase 12 and sharing.
-	s.stepVisibilityPhase(tick)
+	// draw order are observable. Each phase carries a status: implemented,
+	// proven no-op for this state, or research-blocked with the marker naming
+	// what is unknown. The global tick is already incremented before phase 1
+	// via BeginSubTick [01 §4.4].
+	s.phaseNetwork(tick)          // 1  implemented (single-player command drain)
+	s.phaseUnits(tick)            // 2  implemented
+	s.phaseProjectiles(tick)      // 3  implemented
+	s.phaseEffects(tick)          // 4  implemented
+	s.phaseOrders(tick)           // 5  implemented (path scheduler, per-player work, visibility stamps [R-CORE-01 §4.4.1])
+	s.phaseFeatureLifecycle(tick) // 6  implemented
+	s.phaseSequences(tick)        // 7  proven no-op for this state (sequence cursors are presentation-owned [03 §1])
+	s.phaseWind(tick)             // 8  implemented — complete scheduled redraw [01 §7.3] DET-03
+	s.phaseMeteorShower(tick)     // 9  implemented — meteor shower [R-CORE-01 §4.4.1]
+	s.phaseCameraShake(tick)      // 10 implemented — shake driver [R-CORE-01 §4.4.1] DET-04
+	s.phaseObjectSweeps(tick)     // 11 research-blocked TODO(R-CORE-01 §4.4.1) — family identified, not wired
+	s.phaseCadenceFlip(tick)      // 12 research-blocked TODO(question) — flip mechanism unknown
 
 	// Sharing is the transport tail after phase 12 [01 §4.4].
 	s.stepSharingPhase(tick)
@@ -79,15 +47,124 @@ func (s *Session) stepAuthoritativePhases(tick uint32) {
 	// Post-loop cleanup and configured skirmish result evaluation.
 	s.stepCleanupAndResultPhase(tick)
 
-	// Synchronize the session streams back to the process-visible handles, then
-	// publish exactly one committed frame for this completed sub-tick [I4][I6].
-	if rng.Global.Sim != nil {
-		*rng.Global.Sim = s.rngSim
-	}
-	if rng.Global.Crt != nil {
-		*rng.Global.Crt = s.rngCrt
-	}
 	s.publishSnapshot(tick)
+}
+
+// Phase registry — one named method per phase 1..12 called in §4.4 order
+// [01 §4.4] DET-02. There is exactly one call site per phase and one
+// implementation per phase; legacy wrappers delegate to these methods.
+
+func (s *Session) phaseNetwork(tick uint32) {
+	s.applyHumanCommands(tick)
+	s.recordPhase("phase1-network", tick)
+}
+
+func (s *Session) phaseUnits(tick uint32) {
+	s.stepUnitPhase(tick)
+	s.recordPhase("phase2-units", tick)
+}
+
+func (s *Session) phaseProjectiles(tick uint32) {
+	s.stepProjectilePhase(tick)
+	s.recordPhase("phase3-projectiles", tick)
+}
+
+func (s *Session) phaseEffects(tick uint32) {
+	s.stepEffectPhase(tick)
+	s.recordPhase("phase4-effects", tick)
+}
+
+// phaseOrders is phase 5 [01 §4.4][R-CORE-01 §4.4.1]: the path scheduler runs
+// first, then per player 0..9 ascending the per-player orders/work, then that
+// player's unit slice is swept stamping visibility coverage per in-game unit
+// (dirty-checked) — the visibility publication seam lives INSIDE phase 5
+// [R-CORE-01 §4.4.1] DET-06. Sensor work (radar/sonar/jam/cloak deadlines)
+// runs adjacent to the stamp sweep; its exact seam is not settled by the
+// finding — TODO(question) below.
+func (s *Session) phaseOrders(tick uint32) {
+	s.stepPlayerPhase(tick)
+	s.recordPhase("phase5-orders", tick)
+}
+
+func (s *Session) phaseFeatureLifecycle(tick uint32) {
+	s.stepFeatureLifecyclePhase(tick)
+	s.recordPhase("phase6-feature", tick)
+}
+
+// phaseSequences is phase 7 [01 §4.4] — sequence and effect-strip advancement:
+// the global animation-sequence cursor list (frame counter, remaining
+// duration, loop flag per cursor; each cursor advances with the same step used
+// per-effect in phase 4); it is not a line-of-sight or occupancy scan. Proven
+// no-op for this state: nanolathe's sequence cursors advance in the
+// presentation layer [03 §1], so no sim state advances here. That
+// presentation-owned note stands.
+func (s *Session) phaseSequences(tick uint32) {
+	s.recordPhase("phase7-sequences", tick)
+}
+
+// phaseWind is phase 8 [01 §4.4][01 §7.3] — the COMPLETE scheduled wind redraw
+// DET-03: when due (strict gate), one CRT interval draw, then sim strength,
+// then sim heading only when strength is nonzero, then vectors, scalar, and
+// change flag. Battle entry zeroes the deadline and consumes no draws; the
+// first chain fires here at tick 1 [R-CORE-02].
+func (s *Session) phaseWind(tick uint32) {
+	if s.Wind != nil {
+		s.Wind.Jitter(tick, s.CrtRNG(), s.SimRNG())
+	}
+	s.recordPhase("phase8-wind", tick)
+}
+
+// phaseMeteorShower is phase 9 [01 §4.4][R-CORE-01 §4.4.1] — the meteor-shower
+// strike scheduler (the old "9b" meteor work and the earlier "wind-field"
+// label both resolve to this phase). Four CRT scheduling draws on every due
+// evaluation even when disabled, then per hit a radius and an angle draw;
+// zero sim draws [06 §6.5].
+func (s *Session) phaseMeteorShower(tick uint32) {
+	if !s.Meteor.Initialized {
+		s.initMeteor()
+	}
+	s.tickMeteor(tick)
+	s.recordPhase("phase9-meteor", tick)
+}
+
+// phaseCameraShake is phase 10 [01 §4.4][R-CORE-01 §4.4.1] — camera/scroll
+// position update plus the authoritative shake driver DET-04. The scroll step
+// toward the presentation camera target stays presentation-owned; the shake
+// driver advances here with exactly two CRT draws per active tick and
+// publishes the offset on the committed frame. Requests arrive during this
+// tick from the impact dispatcher via the session's shake state.
+func (s *Session) phaseCameraShake(tick uint32) {
+	s.tickShake(tick)
+	s.recordPhase("phase10-shake", tick)
+}
+
+// phaseObjectSweeps is phase 11 [01 §4.4][R-CORE-01 §4.4.1] — the ten
+// effect-strip update sweeps. The family is IDENTIFIED as the ten effect
+// strips of the rendering contract (doc 03 "Strip storage and lifecycle"):
+// per strip ascending and per object in insertion order, a removal verdict is
+// evaluated BEFORE the update virtual — positive destroys (destructor with
+// argument 1) and removes with stable left compaction, zero runs the update
+// virtual and keeps the object; empty strips touch no globals; no RNG.
+// Research-blocked: nanolathe has no strip storage — the session's effect
+// publication service (render.EffectService, publicationState.effects) is a
+// fixed-capacity presentation pool of admitted event views, not the
+// vtable-backed strip family, so the sweep cannot be force-fit onto it.
+// TODO(R-CORE-01 §4.4.1): implement the ten-strip table (allocated at battle
+// entry, producers append by literal strip index, oldest-first eviction above
+// 400) and wire this sweep to it.
+func (s *Session) phaseObjectSweeps(tick uint32) {
+	s.recordPhase("phase11-objects", tick)
+}
+
+// phaseCadenceFlip is phase 12 [01 §4.4] — an every-eight-sub-tick cadence
+// flip. Research-blocked: the exact flip mechanism (which cadence gate it
+// drives and how the counter wraps) is not established; no consumer is wired
+// in nanolathe. This is an explicit research-blocked registration point — the
+// flip is NOT invented here.
+// TODO(question): what does the every-eight-sub-tick cadence gate drive, and
+// does the counter reset or wrap? A traced flip site would settle it.
+func (s *Session) phaseCadenceFlip(tick uint32) {
+	s.recordPhase("phase12-cadence", tick)
 }
 
 // stepUnitPhase is phase 2 of the authoritative tick [01 §4.4].
@@ -103,6 +180,8 @@ func (s *Session) stepUnitPhase(tick uint32) {
 	// Each active unit visited exactly once under researched rule; new/dead units follow same-tick visibility [01 §4.4] R-P0-04
 	if s.Units != nil {
 		ordersPump := &orders.Pump{World: s.Units}
+		// DET-01: inject session RNG for order jitter draws [04 §3.3][I4].
+		orders.SetSimulationRNG(s.SimRNG())
 		s.Units.VisitActiveSlots(func(v units.SlotVisit) {
 			h := v.Handle
 			u := v.Unit
@@ -341,20 +420,26 @@ func (s *Session) stepEffectPhase(tick uint32) {
 }
 
 // stepPlayerPhase is phase 5 of the authoritative tick [01 §4.4][05
-// "Authoritative settlement order"].
+// "Authoritative settlement order"][R-CORE-01 §4.4.1].
+// DET-06: the path scheduler runs FIRST, then per player 0..9 ascending the
+// per-player orders/work followed by that player's visibility stamp sweep
+// ([R-CORE-01 §4.4.1] "Visibility publication seam" — the publication lives
+// INSIDE phase 5; the earlier post-phase-12 pass is removed). Sensor work
+// runs adjacent to the sweeps; see stepSensorPhase for the open seam question.
 func (s *Session) stepPlayerPhase(tick uint32) {
-	// 5 per-player orders, path, economy, and occupancy work [01 §4.4] — outer loop players 0..9 ascending; the AI coordinator tick (30-tick cadence, deadline-gated subtasks) runs before the settlement deadline compare and the nine-step settlement pass [05 "Authoritative settlement order"] [INVARIANTS I1].
-	// Due AI player work at researched deadline relationship (beforeDeadline) + economy request/accept/settlement via economy.TickPlayer per player
-	// No map-defined player order [ON-09].
-	s.tickPlayers(tick)
-	// Path requests are serviced once, at the phase-5 path boundary. Requests
-	// submitted by the live unit sweep therefore publish routes for the next
-	// unit sweep, while an already published route is consumed exactly once.
+	// Path scheduler first [R-CORE-01 §4.4.1]. Requests submitted by the live
+	// unit sweep are serviced here at the phase-5 path boundary; an already
+	// published route is consumed exactly once.
 	if s.Movement != nil && s.Movement.Scheduler != nil {
 		s.Movement.Scheduler.Tick(tick)
 	} else if s.Path != nil {
 		s.Path.Tick(tick)
 	}
+	// Per player 0..9 ascending: orders/work, then that player's stamp sweep
+	// [R-CORE-01 §4.4.1]. No map-defined player order [ON-09] (I1).
+	s.tickPlayers(tick)
+	// Sensor deadlines adjacent to the stamp sweep (seam TODO(question) there).
+	s.stepSensorPhase(tick)
 }
 
 // stepFeatureLifecyclePhase is phase 6 of the authoritative tick [01 §4.4].
@@ -365,120 +450,13 @@ func (s *Session) stepFeatureLifecyclePhase(tick uint32) {
 	}
 }
 
-// stepWindAndMeteorPhase runs phases 8 and 9, preserving their separate RNG
-// draws and the meteor scheduler's position after projectile integration [01
-// §4.4][06 §6.5].
+// stepWindAndMeteorPhase is retained for legacy tests that call it directly.
+// It delegates to the registry's phase 8 (wind) and phase 9 (meteor shower)
+// [01 §4.4][R-CORE-01 §4.4.1] DET-03; it is a wrapper, not a second
+// implementation.
 func (s *Session) stepWindAndMeteorPhase(tick uint32) {
-	// 8/9 wind change and wind-field update [01 §4.4] — phase 8 draws the CRT interval and phase 9 the Sim strength/heading (order is behavior [I4]); projectiles, effects and features in earlier phases therefore read the previous tick's wind, as retail's phase order dictates. An earlier 'prepass at tick top' reading is superseded by the established order.
-	if s.Wind != nil {
-		// [01 §7.3] split: phase 8 draws CRT interval, phase 9 draws Sim strength/heading; order is behavior [INVARIANTS I4][RS-P0-018] per-session isolated
-		s.Wind.Jitter(tick, s.CrtRNG())
-		_ = s.Wind.Field(tick, s.SimRNG())
-	}
-	// Meteor scheduler initialization lazy: merge OTA meteor params with METEOR.TDF defaults [02 "Map files"] [08 "Meteor showers"] [06 §6.5].
-	// Done once before first scheduling evaluation so scheduling draws start deterministically after wind.
-	if !s.Meteor.Initialized {
-		s.initMeteor()
-	}
-
-	// 9b Meteor scheduler after the wind phases so scheduling draws start deterministically after wind, and after the projectile phase so spawns move next tick [08 "Meteor showers"] [06 §6.5]. Cadence is interval+duration ticks per storm and per-hit delay trunc(30/density) [02 Meteor scheduler]; draws are CRT six per meteor (four scheduling even when disabled + two lateral) [06 §6.5] I4 with zero sim draws.
-	// Cadence is interval+duration ticks per storm and per-hit delay trunc(30/density) [02 Meteor scheduler]; draws are CRT six per meteor (four scheduling even when disabled + two lateral) [06 §6.5] I4 with zero sim draws.
-	s.tickMeteor(tick)
-}
-
-// stepVisibilityPhase refreshes LOS and the multi-player sensor state at the
-// established seam after phase 12 [03 §3.2][03 §3.4].
-func (s *Session) stepVisibilityPhase(tick uint32) {
-	// Visibility/LOS/radar deadline work and publication is retained at this
-	// seam because its exact relationship to the twelve runtime phases is not
-	// established by the cited visibility contract [03 §3.2][03 §3.4].
-	// TODO(question): establish the retail visibility placement relative to the
-	// phase-12 cadence flip and sharing tail; the pass consumes no RNG here.
-	if s.Vis != nil && s.Units != nil {
-		// Visibility refresh throttled [03 §3.2] C6 — iterate deterministic
-		for _, u := range s.Units.IterSliced() {
-			if u == nil || !u.Alive {
-				continue
-			}
-			hb := heightByteAt(u, seaLevelFor(s))
-			cx, cz := observerTile(u, hb)
-			r := radiusFor(u)
-			s.Vis.Refresh(visibility.ObserverID(u.Handle), visibility.Observer{Owner: visibility.PlayerID(u.Owner), CX: cx, CZ: cz, HeightByte: hb, Radius: r})
-		}
-		// Sensor phase only when more than one player active [03 §3.4] P0-11
-		active := s.activePlayerCount()
-		if active > 1 {
-			if s.visStatus == nil {
-				s.visStatus = make(map[int]uint32)
-			}
-			if s.visDecloak == nil {
-				s.visDecloak = make(map[int]uint32)
-			}
-			type holder struct {
-				statusPtr *uint32
-				deadPtr   *uint32
-				handle    int
-			}
-			var holders []holder
-			var sensorUnits []visibility.SensorUnit
-			for _, u := range s.Units.IterSliced() {
-				if u == nil || !u.Alive {
-					continue
-				}
-				h := int(u.Handle)
-				stVal := s.visStatus[h]
-				dlVal := s.visDecloak[h]
-				sp := new(uint32)
-				*sp = stVal
-				dp := new(uint32)
-				*dp = dlVal
-				holders = append(holders, holder{statusPtr: sp, deadPtr: dp, handle: h})
-				hidden := (u.Flags & 0x04) != 0
-				if !hidden && u.Def != nil && u.Def.InitCloaked {
-					hidden = true
-				}
-				var rd, sd, rj, sj, mc int32
-				if u.Def != nil {
-					rd = u.Def.RadarDistance
-					sd = u.Def.SonarDistance
-					rj = u.Def.RadarDistanceJam
-					sj = u.Def.SonarDistanceJam
-					mc = u.Def.MinCloakDistance
-				}
-				sensorUnits = append(sensorUnits, visibility.SensorUnit{
-					Owner:            visibility.PlayerID(u.Owner),
-					Status:           sp,
-					X:                u.X,
-					Z:                u.Z,
-					Y:                u.Y,
-					Alive:            true,
-					Hidden:           hidden,
-					RadarDistance:    rd,
-					SonarDistance:    sd,
-					RadarJam:         rj,
-					SonarJam:         sj,
-					MinCloakDistance: mc,
-					DecloakDeadline:  dp,
-				})
-			}
-			allied := func(a, b visibility.PlayerID) bool {
-				if a == b {
-					return true
-				}
-				if s.Skirmish.NumPlayers > 0 {
-					if int(a) < 10 && int(b) < 10 {
-						return s.Skirmish.Players[a].AllyGroup == s.Skirmish.Players[b].AllyGroup
-					}
-				}
-				return false
-			}
-			s.Vis.SensorTick(tick, active, allied, sensorUnits)
-			for _, h := range holders {
-				s.visStatus[h.handle] = *h.statusPtr
-				s.visDecloak[h.handle] = *h.deadPtr
-			}
-		}
-	}
+	s.phaseWind(tick)
+	s.phaseMeteorShower(tick)
 }
 
 // stepSharingPhase is the transport tail after phase 12 [01 §4.4].
@@ -617,17 +595,21 @@ func (s *Session) initMeteor() {
 	s.Meteor.TargetZ = 0
 }
 
-// tickMeteor implements the shower scheduler per [08 "Meteor showers"] [02 Meteor scheduler] [06 §6.5].
-// It runs after wind jitter and after projectile phase so spawns move next tick [08].
-// Scheduling draws four CRT values every evaluation even when disabled (targetZ,X and origin offsets) [06 §6.5] I4;
-// each active hit consumes two more for lateral radius/angle for six per meteor, zero sim draws [06 §6.5].
-// Storms recur every interval+duration ticks with per-hit delay trunc(30/density), first hit on activation tick [02].
+// tickMeteor implements the phase-9 shower scheduler per [R-CORE-01 §4.4.1]
+// [08 "Meteor showers"] [02 Meteor scheduler] [06 §6.5].
+// DET-03 audit: the four scheduling draws are consumed ONLY on due
+// evaluations — the earlier code drew them every sub-tick and, when the storm
+// was disabled, never advanced the deadline, so "due" was every tick. The
+// corrected body arms the strike window on every due evaluation (even when
+// disabled, so the deadline advances) and spends the per-hit radius/angle
+// draws only for actual spawns [R-CORE-01 §4.4.1][06 §6.5].
+// Arming: strikeEnd = tick + durationTicks (authored seconds → ticks at load),
+// nextStrike = strikeEnd + intervalTicks, per-hit spacing trunc(30/density);
+// the spacing is also the initial next-strike written at battle entry.
+// The next-strike comparison is non-strict (due when tick >= nextStrike).
+// Storms run after the projectile phase so spawns move next tick [06 §6.5].
 func (s *Session) tickMeteor(tick uint32) {
 	if s == nil {
-		return
-	}
-	crt := s.CrtRNG()
-	if crt == nil {
 		return
 	}
 	if !s.Meteor.Initialized {
@@ -637,27 +619,28 @@ func (s *Session) tickMeteor(tick uint32) {
 		}
 	}
 	if s.World == nil {
+		// No map-independent geometry source: leave state and stream untouched.
 		return
 	}
-	mapW, mapH := s.World.CellW, s.World.CellH
-	// Four scheduling-side draws consumed on every evaluation even when disabled [06 §6.5] I4.
-	sampledTX, sampledTZ, sampledOX, sampledOZ := combat.MeteorSchedule(crt, mapW, mapH)
-	if !s.Meteor.Enabled || s.Meteor.Weapon == nil {
+	crt := s.CrtRNG()
+	if crt == nil {
 		return
 	}
 	if !s.Meteor.Active {
+		// Non-strict next-strike comparison [R-CORE-01 §4.4.1].
 		if tick < s.Meteor.NextStrike {
 			return
 		}
-		s.Meteor.TargetX = sampledTX
-		s.Meteor.TargetZ = sampledTZ
-		s.Meteor.OriginX = sampledOX
-		s.Meteor.OriginZ = sampledOZ
+		// Due evaluation: four scheduling draws, consumed even when the storm
+		// is disabled [06 §6.5][R-CORE-01 §4.4.1]. Target = one draw scaled by
+		// map depth then one by map width; origin = target plus a depth-axis
+		// offset (draw*10)/0x8000−15 and a width-axis offset (draw*30)/0x8000−15.
+		mapW, mapH := s.World.CellW, s.World.CellH
+		s.Meteor.TargetX, s.Meteor.TargetZ, s.Meteor.OriginX, s.Meteor.OriginZ = combat.MeteorSchedule(crt, mapW, mapH)
 		s.Meteor.Active = true
-		s.Meteor.StrikeEnds = tick + uint32(s.Meteor.DurationTicks)
-		// Next storm at interval+duration per [02]; when duration zero, still interval.
-		s.Meteor.NextStrike = s.Meteor.StrikeEnds + uint32(s.Meteor.IntervalTicks)
-		s.Meteor.NextHit = tick
+		s.Meteor.StrikeEnds = tick + uint32(s.Meteor.DurationTicks)                // trunc(duration*30) at load
+		s.Meteor.NextStrike = s.Meteor.StrikeEnds + uint32(s.Meteor.IntervalTicks) // trunc(interval*30) at load
+		s.Meteor.NextHit = tick                                                    // first hit on the opening tick
 	}
 	if tick > s.Meteor.StrikeEnds {
 		s.Meteor.Active = false
@@ -666,15 +649,21 @@ func (s *Session) tickMeteor(tick uint32) {
 	if tick < s.Meteor.NextHit {
 		return
 	}
+	// Per-hit spacing trunc(30/density); a zero spacing attempts a spawn on
+	// every storm tick (density 31+) so keep a one-tick floor for the timer.
 	if s.Meteor.PerHitDelay > 0 {
 		s.Meteor.NextHit = tick + uint32(s.Meteor.PerHitDelay)
 	} else {
 		s.Meteor.NextHit = tick + 1
 	}
+	// Spawn gate: a disabled storm (no weapon) spends no per-hit draws —
+	// "six draws per METEOR" counts only meteors actually created [06 §6.5].
 	if s.Combat != nil && s.Meteor.Weapon != nil {
-		// Spawn uses stored storm target/origin plus two lateral CRT draws inside SpawnMeteor [06 §6.5].
-		// Pool-full drops silently after advancing next hit, no retry [06 §6.5].
-		// Meteor enters at 1350 wu altitude, 90-tick flight, fixed -15 vertical speed [06 §6.5].
+		// Spawn uses the stored storm target/origin plus two lateral CRT draws
+		// (radius then angle) inside SpawnMeteor [06 §6.5]. Pool-full drops
+		// silently after the hit timer advanced; no retry [06 §6.5]. Meteor
+		// enters at 1350 wu altitude, −15 wu/tick vertical, horizontal
+		// trunc(((target−origin)<<20)/90) per axis.
 		_, _ = combat.SpawnMeteor(s.Combat, crt, tick, s.Meteor.Weapon, s.Meteor.TargetX, s.Meteor.TargetZ, s.Meteor.OriginX, s.Meteor.OriginZ, s.Meteor.Radius)
 	}
 }
@@ -710,6 +699,10 @@ func (s *Session) tickPlayers(tick uint32) {
 			}
 		}
 		s.Econ.TickPlayer(player, tick, s.Units, before)
+		// Per-player visibility stamp sweep, after that player's orders/work
+		// [R-CORE-01 §4.4.1] DET-06: dirty-checked, per in-game unit, slots
+		// ascending within the player's slice.
+		stampPlayerSlice(s, player)
 	}
 }
 
@@ -943,69 +936,7 @@ func (s *Session) Step(scaledNow int32) {
 		}
 		// BeginSubTick increments GlobalTick before phase 1 [01 §4.4] C6.
 		tick := s.Clock.BeginSubTick()
-		// The phase order below is the authoritative retail sequence [01 §4.4].
-		// Keep these calls in this order: their pool visibility, side effects, and RNG
-		// draw order are observable.
-		_ = s.SimRNG()
-		_ = s.CrtRNG()
-		rng.Global.Sim = s.SimRNG()
-		rng.Global.Crt = s.CrtRNG()
-
-		// 1. network/input boundary (single-player drains due human commands).
-		s.applyHumanCommands(tick)
-
-		// 2. deterministic unit-slot sweep: unit update, weapons/COB, orders,
-		// construction, movement, and slot-end death handling.
-		s.stepUnitPhase(tick)
-
-		// 3. projectiles: captured-span integration, collision, and detonation.
-		s.stepProjectilePhase(tick)
-
-		// 4. effects and feature motion.
-		s.stepEffectPhase(tick)
-
-		// 5. player orders/economy work and the phase-5 path boundary.
-		s.stepPlayerPhase(tick)
-
-		// 6. feature lifecycle and reclaim/death processing.
-		s.stepFeatureLifecyclePhase(tick)
-
-		// 7. sequence/effect-strip cursors. TODO(question): strip advancement is
-		// presentation-owned in nanolathe [03 §1]; no sim state advances here.
-
-		// 8/9. wind change, wind field, then meteor scheduling.
-		s.stepWindAndMeteorPhase(tick)
-
-		// 10. camera/scroll update. TODO(question): nanolathe's camera is
-		// presentation-owned; no sim-side scroll target or shake state exists yet
-		// [01 §4.4].
-
-		// 11. ten object-list sweeps. TODO(question): the object family is not yet
-		// identified [01 §4.4]; nothing registers lists yet.
-
-		// 12. every-eight-sub-tick cadence flip. TODO(question): no consumer is
-		// wired in nanolathe; the flip drives nothing yet.
-
-		// Visibility/LOS and sensor refresh remain at this seam because their exact
-		// relationship to the twelve phases is not established [03 §3.2][03 §3.4].
-		// TODO(question): establish its placement relative to phase 12 and sharing.
-		s.stepVisibilityPhase(tick)
-
-		// Sharing is the transport tail after phase 12 [01 §4.4].
-		s.stepSharingPhase(tick)
-
-		// Post-loop cleanup and configured skirmish result evaluation.
-		s.stepCleanupAndResultPhase(tick)
-
-		// Synchronize the session streams back to the process-visible handles, then
-		// publish exactly one committed frame for this completed sub-tick [I4][I6].
-		if rng.Global.Sim != nil {
-			*rng.Global.Sim = s.rngSim
-		}
-		if rng.Global.Crt != nil {
-			*rng.Global.Crt = s.rngCrt
-		}
-		s.publishSnapshot(tick)
+		s.stepAuthoritativePhases(tick)
 		if s.State != StateBattle {
 			break // latch armed->ending transitioned to postbattle same tick [P1-01 §2.2]
 		}

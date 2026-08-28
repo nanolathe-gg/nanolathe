@@ -16,40 +16,15 @@ type MinimapHUD struct {
 	BlinkCountdown int16  // countdown 7..0 [03 §3.6]
 }
 
-// NewMinimapHUD creates a HUD minimap state.
-//
-// Anchors may be zero value → fallback is used [PLAN_12][07 §6].
-// Fallback is the inclusive HUD rect for the 126 canvas (0,0,126,126 inclusive fallback per spec) [07 §10][03 §3.6].
-// When anchors is non-zero the fallback still wins if non-zero, because the 30 mandatory anchors
-// do not name a minimap anchor; search for first non-empty anchor only when fallback is zero.
+// NewMinimapHUD creates a HUD minimap state. The minimap rail anchor is not
+// one of the 30 SIDEDATA anchors, so callers must supply an authored rect from
+// the UI surface. An empty fallback remains empty until that route is traced;
+// no synthetic canvas-sized rectangle is installed [07 §6][07 §10].
 func NewMinimapHUD(anchors Anchors, fallback Rect) *MinimapHUD {
-	// Default fallback per spec: 0,0,126,126 inclusive [07 §10][03 §3.6] 126 long side.
-	defaultFallback := Rect{X1: 0, Y1: 0, X2: 126, Y2: 126}
-	if fallback == (Rect{}) {
-		fallback = defaultFallback
-	}
-	var r Rect
-	if anchors == (Anchors{}) {
-		r = fallback
-	} else {
-		// Anchors non-zero but no dedicated minimap anchor; prefer explicit fallback.
-		if fallback != (Rect{}) {
-			r = fallback
-		} else {
-			for _, a := range anchors {
-				if a != (Rect{}) {
-					r = a
-					break
-				}
-			}
-			if r == (Rect{}) {
-				r = defaultFallback
-			}
-		}
-	}
-	if r == (Rect{}) {
-		r = defaultFallback
-	}
+	_ = anchors
+	// TODO(question): identify the authored rail minimap anchor in the GUI
+	// surface; the 30 side anchors contain no minimap record [07 §6].
+	r := fallback
 	return &MinimapHUD{
 		Rect:           r,
 		DirtyBlink:     0,
@@ -112,9 +87,24 @@ func (h *MinimapHUD) ViewportRect(cam *camera.Camera, m camera.Minimap, playW, p
 	if top > bottom {
 		top, bottom = bottom, top
 	}
-	r := Rect{X1: left, Y1: top, X2: right, Y2: bottom}
-	// Clip to HUD rect inclusive [07 §10][03 §3.6].
+	// The projection is canvas-local. Convert both endpoints through the
+	// destination rectangle before clipping; the HUD rect is display-space and
+	// may have a nonzero origin or a negotiated scale [07 §10][03 §3.6].
 	hl, ht, hr, hb := h.Rect.Ordered()
+	dw, dh := hr-hl+1, hb-ht+1
+	dx0, dy0, ok0 := m.CanvasToDisplay(left, top, hl, ht, dw, dh)
+	dx1, dy1, ok1 := m.CanvasToDisplay(right, bottom, hl, ht, dw, dh)
+	if !ok0 || !ok1 {
+		return h.Rect
+	}
+	r := Rect{X1: dx0, Y1: dy0, X2: dx1, Y2: dy1}
+	if r.X1 > r.X2 {
+		r.X1, r.X2 = r.X2, r.X1
+	}
+	if r.Y1 > r.Y2 {
+		r.Y1, r.Y2 = r.Y2, r.Y1
+	}
+	// Clip to HUD rect inclusive [07 §10][03 §3.6].
 	if r.X1 < hl {
 		r.X1 = hl
 	}
@@ -139,14 +129,11 @@ func (h *MinimapHUD) ViewportRect(cam *camera.Camera, m camera.Minimap, playW, p
 }
 
 // PlaySizeForMinimap returns PlayRight = Wpix-32, PlayBottom = Hpix-128 in map pixels [03 §3.4].
-// Wpix = CellW*16, Hpix = CellH*16. Uses Terrain.PlayRight/PlayBottom when valid, else computes.
+// Wpix = CellW*16, Hpix = CellH*16. The map loader must have populated
+// PlayRight/PlayBottom; absent authored extents are not reconstructed here.
 func PlaySizeForMinimap(t *world.Terrain) (playW, playH int32) {
 	if t == nil {
 		return 0, 0
 	}
-	if t.PlayRight != 0 || t.PlayBottom != 0 {
-		return t.PlayRight, t.PlayBottom
-	}
-	// Fallback compute from CellW/H [03 §3.4][03 §3.6].
-	return t.CellW*16 - 32, t.CellH*16 - 128 // [03 §3.4] PlayRight=Wpix-32, PlayBottom=Hpix-128
+	return t.PlayRight, t.PlayBottom
 }

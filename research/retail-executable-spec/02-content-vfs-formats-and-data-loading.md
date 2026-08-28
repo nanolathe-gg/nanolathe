@@ -772,6 +772,13 @@ default to 2:
 `cancapture`, `candgun`, `kamikaze`, `norestrict`, `showplayername`,
 `commander`, `cantbetransported`.
 
+**Definition-flag mapping correction (Established).** The unit parser reads
+the `onoffable` integer and packs its boolean value into bit 2 (`0x04`) of the
+definition flags word. This bit is not an authored unit `noradar` field and is
+not derived from runtime cloak or hidden state. The unit parser has no
+`noradar` accessor; `noradar` is a weapon-record key. The radar-circle use of
+this definition bit is specified in [03 §3.9].
+
 `wacky` is parsed by the catalog loader into bit 16 of the same packed
 definition flag word that carries `norestrict` (bit 15). No reader of that
 bit was found anywhere in the reviewed executable corpus: the key is parsed,

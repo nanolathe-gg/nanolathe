@@ -298,7 +298,10 @@ func TestRS06_FloatAudit(t *testing.T) {
 	}
 }
 
-// TestRS06_LegacyProductionGuard ensures Session.Step does not call retired kernel graph [RS-06].
+// TestRS06_LegacyProductionGuard ensures Session.Step does not call retired
+// kernel graph [RS-06] and that the tick runs through the single
+// stepAuthoritativePhases registry [DET-02] — Step must not inline a second
+// phase sequence.
 func TestRS06_LegacyProductionGuard(t *testing.T) {
 	root := findRepoRoot(t)
 	b, err := os.ReadFile(root + "/internal/session/step.go")
@@ -320,8 +323,15 @@ func TestRS06_LegacyProductionGuard(t *testing.T) {
 			t.Fatalf("legacy production tick graph called in Session.Step: %q [RS-06]", pat)
 		}
 	}
-	if !strings.Contains(snippet, "stepUnitPhase") {
-		t.Fatalf("Step must contain the direct retail phase sequence [RS-06]")
+	// DET-02: Step delegates to the one authoritative phase sequence; the
+	// sequence itself (including stepUnitPhase via phaseUnits) lives only in
+	// stepAuthoritativePhases.
+	if !strings.Contains(snippet, "s.stepAuthoritativePhases(tick)") {
+		t.Fatalf("Step must delegate to stepAuthoritativePhases [RS-06][DET-02]")
+	}
+	registry := content[:idx]
+	if !strings.Contains(registry, "func (s *Session) stepAuthoritativePhases") || !strings.Contains(registry, "s.phaseUnits(tick)") {
+		t.Fatalf("stepAuthoritativePhases must be the single phase registry containing the retail sequence [RS-06][DET-02]")
 	}
 }
 

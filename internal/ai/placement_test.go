@@ -15,7 +15,7 @@ import (
 func TestOriginTowardCenterStepVector(t *testing.T) {
 	// C8: search origin moves toward strategic center using stored radius with fixed-point scaling [P0-03].
 	// Test direct helper stepTowardCenter with known values.
-	m := &Manager{}
+	m := &Manager{RNG: testSim}
 	m.Strategic.CenterX = numeric.FixedFromInt(100)
 	m.Strategic.CenterZ = numeric.FixedFromInt(0)
 	m.OriginX = numeric.FixedFromInt(0)
@@ -34,7 +34,7 @@ func TestOriginTowardCenterStepVector(t *testing.T) {
 	}
 	// Test Place with radius 0: radius grows to 160 before step, so origin should move 160 toward center (or to center if distance <160)
 	// With center 100, origin 0, radius 0 => after increment radius=160, distance 100 <160 => origin becomes center (100)
-	m2 := &Manager{}
+	m2 := &Manager{RNG: testSim}
 	m2.Strategic.CenterX = numeric.FixedFromInt(5)
 	m2.Strategic.CenterZ = numeric.FixedFromInt(0)
 	m2.OriginX = numeric.FixedFromInt(0)
@@ -59,7 +59,7 @@ func TestOriginTowardCenterStepVector(t *testing.T) {
 	}
 	// Test with large distance and radius 0: center 100, origin 0, radius 0 => after increment 160, distance 100 <160 => origin becomes center (100)
 	// This verifies fixed-point scaling with cap.
-	m3 := &Manager{}
+	m3 := &Manager{RNG: testSim}
 	m3.Strategic.CenterX = numeric.FixedFromInt(100)
 	m3.Strategic.CenterZ = numeric.FixedFromInt(0)
 	m3.OriginX = numeric.FixedFromInt(0)
@@ -81,7 +81,7 @@ func TestOriginTowardCenterStepVector(t *testing.T) {
 	// Use non-nil terrain to test cap; create 32x32 terrain, radius should grow to cap after many failures
 	// For this test, we just verify that Place with nil terrain still resets radius on success (already checked)
 	// And that stepTowardCenter with zero radius and same origin/center does not move
-	m4 := &Manager{}
+	m4 := &Manager{RNG: testSim}
 	m4.Strategic.CenterX = numeric.FixedFromInt(100)
 	m4.Strategic.CenterZ = numeric.FixedFromInt(100)
 	m4.OriginX = numeric.FixedFromInt(10)
@@ -140,8 +140,8 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 		}
 	}
 	_ = drawA
-	rng.SeedGlobal(seedForA, 0)
-	mA := &Manager{
+	seedTestSim(seedForA)
+	mA := &Manager{RNG: testSim,
 		Catalog:      catalog,
 		SurfaceMetal: 0, // 0 < draw => A (since draw >0)
 	}
@@ -152,9 +152,9 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 	mA.Strategic.Radius = 0
 	// Need terrain for helper A/B to be relevant; use nil terrain so helper B would succeed but A fails.
 	// With SurfaceMetal 0 < draw, it picks A, which fails and does NOT fall through, so Place should fail
-	before := rng.Global.Sim.Draws()
+	before := testSimDraws()
 	_, _, ok := Place(mA, "armmex", nil)
-	after := rng.Global.Sim.Draws()
+	after := testSimDraws()
 	if ok {
 		t.Fatalf("extractor picking A should fail (no patchVec) and not fall through, got success")
 	}
@@ -163,8 +163,8 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 	}
 	// Test extractor branch picks B when SurfaceMetal >= RNG and succeeds via B (nil terrain => success)
 	// Use SurfaceMetal 255 to ensure always picks B (since max draw 254 <255)
-	rng.SeedGlobal(12345, 0)
-	mB := &Manager{
+	seedTestSim(12345)
+	mB := &Manager{RNG: testSim,
 		Catalog:      catalog,
 		SurfaceMetal: 255,
 	}
@@ -173,9 +173,9 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 	mB.OriginX = numeric.FixedFromInt(0)
 	mB.OriginZ = numeric.FixedFromInt(0)
 	mB.Strategic.Radius = 0
-	beforeB := rng.Global.Sim.Draws()
+	beforeB := testSimDraws()
 	x, z, ok := Place(mB, "armmex", nil)
-	afterB := rng.Global.Sim.Draws()
+	afterB := testSimDraws()
 	if !ok {
 		t.Fatalf("extractor picking B should succeed via helper B (nil terrain), got failure")
 	}
@@ -187,15 +187,15 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 		// So placement at origin (0,0) is expected
 	}
 	// Non-extractor should not draw 255, but helper B with nil terrain succeeds without extra draws
-	rng.SeedGlobal(999, 0)
-	m2 := &Manager{
+	seedTestSim(999)
+	m2 := &Manager{RNG: testSim,
 		Catalog: catalog,
 	}
 	m2.Strategic.CenterX = 0
 	m2.OriginX = 0
-	before2 := rng.Global.Sim.Draws()
+	before2 := testSimDraws()
 	_, _, ok2 := Place(m2, "armsolar", nil)
-	after2 := rng.Global.Sim.Draws()
+	after2 := testSimDraws()
 	if !ok2 {
 		t.Fatalf("non-extractor Place should succeed")
 	}
@@ -203,11 +203,11 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 		t.Fatalf("non-extractor should not consume RNG(255) when terrain nil, got %d->%d", before2, after2)
 	}
 	// Also test unknown def (no catalog entry) -> not extractor, no draw
-	rng.SeedGlobal(42, 0)
-	m3 := &Manager{Catalog: catalog}
-	before3 := rng.Global.Sim.Draws()
+	seedTestSim(42)
+	m3 := &Manager{RNG: testSim, Catalog: catalog}
+	before3 := testSimDraws()
 	Place(m3, "unknownunit", nil)
-	if rng.Global.Sim.Draws() != before3 {
+	if testSimDraws() != before3 {
 		t.Fatalf("unknown def should be treated as non-extractor, no draw")
 	}
 	// Test exact < boundary: SurfaceMetal = draw => should pick B (since < is strict)
@@ -223,8 +223,8 @@ func TestExtractorBranchDrawCountAndFallthrough(t *testing.T) {
 		}
 	}
 	if found {
-		rng.SeedGlobal(seedForEq, 0)
-		mEq := &Manager{Catalog: catalog, SurfaceMetal: 50}
+		seedTestSim(seedForEq)
+		mEq := &Manager{RNG: testSim, Catalog: catalog, SurfaceMetal: 50}
 		mEq.Strategic.CenterX = 0
 		mEq.OriginX = 0
 		mEq.Strategic.Radius = 0
@@ -243,7 +243,7 @@ func TestRadiusResetOnSuccess(t *testing.T) {
 			"armsolar": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armsolar"}, UnitName: "armsolar", ExtractsMetal: 0, FootprintX: 2, FootprintZ: 2, YardMap: "oooo"},
 		},
 	}
-	m := &Manager{Catalog: catalog}
+	m := &Manager{RNG: testSim, Catalog: catalog}
 	m.Strategic.Radius = numeric.FixedFromInt(5)
 	m.Strategic.CenterX = numeric.FixedFromInt(10)
 	m.OriginX = numeric.FixedFromInt(0)
@@ -269,7 +269,7 @@ func TestRadiusResetOnSuccess(t *testing.T) {
 			"geothermalplant": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "geothermalplant"}, UnitName: "geothermalplant", ExtractsMetal: 0, FootprintX: 2, FootprintZ: 2, YardMap: "GGGG"},
 		},
 	}
-	mFail := &Manager{Catalog: catalog2, Terrain: ter}
+	mFail := &Manager{RNG: testSim, Catalog: catalog2, Terrain: ter}
 	mFail.Strategic.Radius = numeric.FixedFromInt(1)
 	mFail.Strategic.CenterX = numeric.FixedFromInt(0)
 	mFail.OriginX = numeric.FixedFromInt(0)
@@ -311,7 +311,7 @@ func TestQueueBuildIssuedViaOrdinaryPath(t *testing.T) {
 	called := false
 	var calledDef string
 	var captured BuildRequest
-	m := &Manager{
+	m := &Manager{RNG: testSim,
 		Catalog: catalog,
 		Factory: factory,
 		QueueBuildTyped: func(req BuildRequest) error {
@@ -351,7 +351,7 @@ func TestQueueBuildIssuedViaOrdinaryPath(t *testing.T) {
 	w2 := units.New(10, nil)
 	h2, _ := w2.Create(factoryDef, 0, 0, 0, 0)
 	factory2 := w2.Unit(h2)
-	m2 := &Manager{
+	m2 := &Manager{RNG: testSim,
 		Catalog: catalog,
 		Factory: factory2,
 		QueueBuildTyped: func(req BuildRequest) error {
@@ -389,7 +389,7 @@ func TestPlacementResultEqualsQueuedSite(t *testing.T) {
 		ter.Plot[i].SetFeature(world.PlotFeatureNone)
 	}
 	// Seed terrain metal via ApplySchema not needed for this test; open yard already allows.
-	m := &Manager{Catalog: catalog, Factory: factory, Terrain: ter}
+	m := &Manager{RNG: testSim, Catalog: catalog, Factory: factory, Terrain: ter}
 	m.Strategic.CenterX = world.CellToWorld(8)
 	m.Strategic.CenterZ = world.CellToWorld(8)
 	m.OriginX = world.CellToWorld(8)
@@ -405,7 +405,7 @@ func TestPlacementResultEqualsQueuedSite(t *testing.T) {
 		return construction.QueueMobileBuild(builderUnit, req.UnitKey, req.X, req.Z, req.Count, catalog)
 	}
 	m.Strategic.Catalog = catalog
-	rng.SeedGlobal(123, 0)
+	seedTestSim(123)
 	res := PlaceWithResult(m, "armsolar", ter)
 	if !res.Valid {
 		t.Fatalf("PlaceWithResult failed for open terrain: helper %v reason %v", res.Helper, res.Reason)
@@ -441,17 +441,17 @@ func TestThirtyTrialRNGLedger(t *testing.T) {
 	for i := range ter.Plot {
 		ter.Plot[i].SetFeature(world.PlotFeatureNone)
 	}
-	m := &Manager{Catalog: catalog, Terrain: ter}
+	m := &Manager{RNG: testSim, Catalog: catalog, Terrain: ter}
 	m.Strategic.CenterX = numeric.FixedFromInt(0)
 	m.Strategic.CenterZ = numeric.FixedFromInt(0)
 	m.OriginX = numeric.FixedFromInt(0)
 	m.OriginZ = numeric.FixedFromInt(0)
 	m.Strategic.Radius = 0
 	m.Strategic.Catalog = catalog
-	rng.SeedGlobal(777, 0)
-	before := rng.Global.Sim.Draws()
+	seedTestSim(777)
+	before := testSimDraws()
 	res := PlaceWithResult(m, "geothermalplant", ter)
-	after := rng.Global.Sim.Draws()
+	after := testSimDraws()
 	if res.Valid {
 		t.Fatalf("geothermal on empty terrain should fail, got valid with helper %v", res.Helper)
 	}
@@ -480,16 +480,16 @@ func TestThirtyTrialRNGLedger(t *testing.T) {
 	}
 	// Make terrain fully blocked for extractor as well via geothermal G yard but we need ordinary blocking: use same G yard for extractor.
 	catalogEx.Units["armmex"].YardMap = "GGGG"
-	m2 := &Manager{Catalog: catalogEx, Terrain: ter, SurfaceMetal: 255}
+	m2 := &Manager{RNG: testSim, Catalog: catalogEx, Terrain: ter, SurfaceMetal: 255}
 	m2.Strategic.CenterX = 0
 	m2.OriginX = 0
 	m2.Strategic.Radius = 0
 	m2.Strategic.Catalog = catalogEx
 	// Force helper B branch via SurfaceMetal 255 (<255 never for A, so picks B)
-	rng.SeedGlobal(777, 0)
-	before2 := rng.Global.Sim.Draws()
+	seedTestSim(777)
+	before2 := testSimDraws()
 	res2 := PlaceWithResult(m2, "armmex", ter)
-	after2 := rng.Global.Sim.Draws()
+	after2 := testSimDraws()
 	if res2.Valid {
 		t.Fatalf("extractor geothermal should also fail")
 	}
@@ -511,25 +511,25 @@ func TestRepeatedFailureAdvancesRNGAndRadius(t *testing.T) {
 	for i := range ter.Plot {
 		ter.Plot[i].SetFeature(world.PlotFeatureNone)
 	}
-	m := &Manager{Catalog: catalog, Terrain: ter}
+	m := &Manager{RNG: testSim, Catalog: catalog, Terrain: ter}
 	m.Strategic.CenterX = 0
 	m.OriginX = 0
 	m.Strategic.Radius = 0
 	m.Strategic.Catalog = catalog
-	rng.SeedGlobal(42, 0)
+	seedTestSim(42)
 	// First failure
 	res1 := PlaceWithResult(m, "geothermalplant", ter)
 	if res1.Valid {
 		t.Fatalf("first should fail")
 	}
-	drawsAfter1 := rng.Global.Sim.Draws()
+	drawsAfter1 := testSimDraws()
 	radiusAfter1 := m.Strategic.Radius
 	// Second failure should advance draws and keep radius at cap (not reset)
 	res2 := PlaceWithResult(m, "geothermalplant", ter)
 	if res2.Valid {
 		t.Fatalf("second should fail")
 	}
-	drawsAfter2 := rng.Global.Sim.Draws()
+	drawsAfter2 := testSimDraws()
 	radiusAfter2 := m.Strategic.Radius
 	if drawsAfter2 <= drawsAfter1 {
 		t.Fatalf("RNG should advance on repeated failure, %d <= %d", drawsAfter2, drawsAfter1)
@@ -567,13 +567,13 @@ func TestSurfaceMetalBranchBoundaries(t *testing.T) {
 			break
 		}
 	}
-	rng.SeedGlobal(seedForA, 0)
-	mA := &Manager{Catalog: catalog, SurfaceMetal: 0}
+	seedTestSim(seedForA)
+	mA := &Manager{RNG: testSim, Catalog: catalog, SurfaceMetal: 0}
 	mA.Strategic.Radius = 0
 	mA.Strategic.Catalog = catalog
-	beforeA := rng.Global.Sim.Draws()
+	beforeA := testSimDraws()
 	resA := PlaceWithResult(mA, "armmex", nil)
-	afterA := rng.Global.Sim.Draws()
+	afterA := testSimDraws()
 	if resA.Valid {
 		t.Fatalf("helper A with no patch data should be invalid")
 	}
@@ -587,13 +587,13 @@ func TestSurfaceMetalBranchBoundaries(t *testing.T) {
 		t.Fatalf("helper A should consume exactly 1 selector draw, got %d", afterA-beforeA)
 	}
 	// Helper B case: SurfaceMetal 255 >= max draw 254 => always B, succeeds with HelperB, 1 draw + 0 for nil terrain.
-	rng.SeedGlobal(12345, 0)
-	mB := &Manager{Catalog: catalog, SurfaceMetal: 255}
+	seedTestSim(12345)
+	mB := &Manager{RNG: testSim, Catalog: catalog, SurfaceMetal: 255}
 	mB.Strategic.Radius = 0
 	mB.Strategic.Catalog = catalog
-	beforeB := rng.Global.Sim.Draws()
+	beforeB := testSimDraws()
 	resB := PlaceWithResult(mB, "armmex", nil)
-	afterB := rng.Global.Sim.Draws()
+	afterB := testSimDraws()
 	if !resB.Valid {
 		t.Fatalf("helper B should succeed with nil terrain, got invalid %v", resB.Reason)
 	}
@@ -617,8 +617,8 @@ func TestSurfaceMetalBranchBoundaries(t *testing.T) {
 	if !found {
 		t.Fatalf("could not find seed for draw 50")
 	}
-	rng.SeedGlobal(seedEq, 0)
-	mEq := &Manager{Catalog: catalog, SurfaceMetal: 50}
+	seedTestSim(seedEq)
+	mEq := &Manager{RNG: testSim, Catalog: catalog, SurfaceMetal: 50}
 	mEq.Strategic.Radius = 0
 	mEq.Strategic.Catalog = catalog
 	resEq := PlaceWithResult(mEq, "armmex", nil)
@@ -626,18 +626,18 @@ func TestSurfaceMetalBranchBoundaries(t *testing.T) {
 		t.Fatalf("equality SurfaceMetal==draw should pick HelperB, got valid %v helper %v", resEq.Valid, resEq.Helper)
 	}
 	// Non-extractor should never draw selector, always B, 0 draws with nil terrain.
-	rng.SeedGlobal(999, 0)
+	seedTestSim(999)
 	catalog2 := &content.Catalog{
 		Units: map[string]*content.UnitDef{
 			"armsolar": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armsolar"}, UnitName: "armsolar", ExtractsMetal: 0, FootprintX: 2, FootprintZ: 2, YardMap: "oooo"},
 		},
 	}
-	mC := &Manager{Catalog: catalog2, SurfaceMetal: 0}
+	mC := &Manager{RNG: testSim, Catalog: catalog2, SurfaceMetal: 0}
 	mC.Strategic.Radius = 0
 	mC.Strategic.Catalog = catalog2
-	beforeC := rng.Global.Sim.Draws()
+	beforeC := testSimDraws()
 	resC := PlaceWithResult(mC, "armsolar", nil)
-	afterC := rng.Global.Sim.Draws()
+	afterC := testSimDraws()
 	if !resC.Valid || resC.Helper != HelperB {
 		t.Fatalf("non-extractor should use HelperB")
 	}
@@ -673,7 +673,7 @@ func TestExtractorAndOrdinaryBuildingOnMultipleMaps(t *testing.T) {
 			ter.Plot[i][7] = uint8(mm.surfaceMetal)
 		}
 		for _, defKey := range []string{"armmex", "armsolar"} {
-			m := &Manager{Catalog: catalog, Terrain: ter, SurfaceMetal: mm.surfaceMetal}
+			m := &Manager{RNG: testSim, Catalog: catalog, Terrain: ter, SurfaceMetal: mm.surfaceMetal}
 			m.Strategic.CenterX = world.CellToWorld(mm.w / 2)
 			m.Strategic.CenterZ = world.CellToWorld(mm.h / 2)
 			m.OriginX = world.CellToWorld(mm.w / 2)
@@ -681,7 +681,7 @@ func TestExtractorAndOrdinaryBuildingOnMultipleMaps(t *testing.T) {
 			m.Strategic.Radius = 0
 			m.Strategic.Catalog = catalog
 			// Use deterministic seed per map/def
-			rng.SeedGlobal(uint32(mm.w*100+mm.surfaceMetal), 0)
+			seedTestSim(uint32(mm.w*100 + mm.surfaceMetal))
 			factoryDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armvp"}, UnitName: "armvp", FootprintX: 4, FootprintZ: 4, Builder: true, CanMove: true}
 			w := units.New(10, nil)
 			h, _ := w.Create(factoryDef, 0, 0, 0, 0)

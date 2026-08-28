@@ -78,7 +78,7 @@ func ChooseCursor(latch input.Latch, sel CursorSelection, h CursorHover) int {
 	// Mobile-build placement is decided by site validity, not by the per-unit
 	// table; the ghost overlay uses cursorred/cursorgrn alongside it [07 §8].
 	if h.Placing || latch == input.LatchMobileBuild {
-		return render.CursorForBuildSite(h.PlacementValid)
+		return cursorForBuildSite(h.PlacementValid)
 	}
 	live := make([]*units.Unit, 0, len(sel.Units))
 	for _, u := range sel.Units {
@@ -101,6 +101,16 @@ func ChooseCursor(latch input.Latch, sel CursorSelection, h CursorHover) int {
 		}
 	}
 	return best
+}
+
+// cursorForBuildSite selects the authored placement shape. Shape choice is a
+// HUD decision; the renderer only resolves the resulting index to GAF art
+// [07 §8].
+func cursorForBuildSite(valid bool) int {
+	if valid {
+		return render.CursorFindSite
+	}
+	return render.CursorTooFar
 }
 
 // isInspectable is the own-unit predicate shared by the empty-selection branch

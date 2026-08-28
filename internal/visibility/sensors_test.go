@@ -30,7 +30,7 @@ func TestSensorTickRequiresTwoPlayers(t *testing.T) {
 	surf := &recordingSurfaces{}
 	s.SetSurfaces(surf)
 	var status uint32
-	units := []SensorUnit{{Owner: 0, Status: &status, Alive: true, RadarDistance: 100}}
+	units := []SensorUnit{{Owner: 0, Status: &status, Alive: true, Active: true, RadarDistance: 100}}
 
 	s.SensorTick(0, 1, nil, units)
 	if surf.wipes != 0 {
@@ -51,7 +51,7 @@ func TestSensorCirclesNeverTouchTheWordMask(t *testing.T) {
 
 	var status uint32
 	units := []SensorUnit{{
-		Owner: 1, Status: &status, Alive: true,
+		Owner: 1, Status: &status, Alive: true, Active: true,
 		X: tileWorld(10), Z: tileWorld(10),
 		RadarDistance: 200, SonarDistance: 500, RadarJam: 80, SonarJam: 90,
 	}}
@@ -71,6 +71,39 @@ func TestSensorCirclesNeverTouchTheWordMask(t *testing.T) {
 	}
 	if len(surf.radarJam) != 1 || len(surf.sonarJam) != 1 {
 		t.Fatalf("jam circles: radar %d sonar %d, want 1 each", len(surf.radarJam), len(surf.sonarJam))
+	}
+}
+
+func TestSensorActiveGateAndCircleSnapshot(t *testing.T) {
+	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
+	surf := &recordingSurfaces{}
+	s.SetSurfaces(surf)
+	var inactiveStatus, activeStatus uint32
+	units := []SensorUnit{
+		{ID: 1, Owner: 1, Status: &inactiveStatus, Alive: true, Active: false, Hidden: true, RadarDistance: 200, RadarJam: 10},
+		{ID: 2, Owner: 1, Status: &activeStatus, Alive: true, Active: true, Hidden: true, RadarDistance: 300, SonarJam: 20},
+	}
+	s.SensorTick(4, 2, nil, units)
+	if len(surf.sensor) != 1 || surf.sensor[0][2] != 300 || len(surf.radarJam) != 0 || len(surf.sonarJam) != 1 {
+		t.Fatalf("active callback gate: outer=%v radarJam=%v sonarJam=%v", surf.sensor, surf.radarJam, surf.sonarJam)
+	}
+	circles := s.SensorCircles()
+	if len(circles) != 2 || circles[0].Radius != 300 || circles[1].Kind != 2 {
+		t.Fatalf("circle snapshot = %+v, want outer then sonar jammer", circles)
+	}
+	circles[0].Radius = 1
+	if got := s.SensorCircles()[0].Radius; got != 300 {
+		t.Fatalf("circle snapshot was not copied: got %d", got)
+	}
+}
+
+func TestSensorSeenBitClearsAtFrameStart(t *testing.T) {
+	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
+	var status uint32 = SeenBit
+	units := []SensorUnit{{ID: 1, Owner: 1, Status: &status, Alive: true, X: tileWorld(10), Z: tileWorld(10)}}
+	s.SensorTick(1, 2, nil, units)
+	if status&SeenBit != 0 {
+		t.Fatal("unseen unit retained stale per-frame SeenBit")
 	}
 }
 

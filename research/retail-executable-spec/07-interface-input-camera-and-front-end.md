@@ -1117,6 +1117,13 @@ share drawing primitives, but must retain the side-data anchor contract.
 All invoked retail anchors and their tuple order are established above; slide/modal
 combinations and per-side fallback for optional presentation remain incomplete.
 
+**Battle-rail minimap destination is closed (Established).** The battle composer
+copies the FINAL radar surface to the origin of its fixed 126×126 logical canvas.
+The aspect-dependent `originX/originY` values belong to the picture's internal
+letterbox and are not an additional screen placement. Consequently the canonical
+destination rectangle is inclusive `(0,0)..(125,125)`; drawing and input both
+apply the same letterbox inside that canvas [07 §6][07 §10].
+
 ## 7. Fonts, text, palette, and localization use
 
 ### Established fact
@@ -1888,14 +1895,24 @@ division and centers the shorter dimension:
 or `padY` accordingly. The rectangle is inclusive
 `right=padX+radarWidth-1, bottom=padY+radarHeight-1`. The direct radar branch
 converts
-`worldX=(mouseX-padX)*mapWidth/radarWidth`,
-`worldZ=(mouseY-padY)*mapHeight/radarHeight`,
-`cameraX=worldX-viewWidth/2`, `cameraZ=worldZ-viewHeight/2` and then follows the
-standard movement/clamp path. An alternate drag/current-camera branch exists
+`worldX=(mouseX-padX)*PlayRight/radarWidth`,
+`worldZ=(mouseY-padY)*PlayBottom/radarHeight`,
+then uses those world coordinates directly as the camera coordinates and
+follows the standard movement/clamp path; no half-viewport recenter is applied.
+**Correction:** the earlier §10 wording used `mapWidth`/`mapHeight` as the
+scale numerators; the executable uses the play-area pixel extents
+`PlayRight`/`PlayBottom`, matching [03 §3.11].
+An alternate drag/current-camera branch exists
 when the direct predicate fails or a battle-mode bit is set; its boundary
 vectors are not reduced to a standalone truth table. No zoom/rotation mutation
 occurs in the reviewed edge-scroll, direct-radar, clamp, or save/load paths.
 Minimap rendering and visibility masks are separate concepts.
+
+**Correction (Established; [03 §3.11]).** The previous formula in this section
+used raw map dimensions and a half-viewport recenter. That was a stale reading
+of the direct branch. The clean-room reduction and implementation contract use
+playable `PlayRight/PlayBottom` extents and direct-origin camera writes; only
+the alternate drag branch applies a stored-camera delta.
 
 ### Supported inference
 
@@ -1913,10 +1930,10 @@ radar/visibility update cadence are established above (minimap generation:
 indicator is two one-pixel lines in map entry 15, §6). What remains open is
 the behavior of the camera clamp in unusual domains — maps whose view size
 exceeds the map size on an axis, where the ordered clamp form is the only
-established behavior — and per-contact color rules beyond the dedicated
-palette entries (blip = owning player's palette byte; circles entry 10; jam 12;
-rings 15; dot 14; contacts per tick, MAPPED per dirty, blink every 8 host
-frames; start-position markers remain doc 03's item).
+established behavior — and the unresolved mapping of the three sensor callback
+tables to the radar versus jammer palette entries. Unit, commander, feature,
+and projectile art sources and their direct `PALETTE.PAL` indexing are closed
+in [03 §3.9]; start-position markers remain doc 03's item.
 
 ## 11. Running display, pause, chat, options, and outcomes
 
@@ -2208,10 +2225,12 @@ minimum-ping write-back are established above.
   the derived bit 2); unusual-domain camera bounds (view exceeding map on an
   axis) remain open; terrain-height projection and dirty-field semantics are
   established.
-* Minimap/radar colors are established (blip = owning player's palette byte;
-  circles entry 10; jam 12; rings 15; dot 14; contacts per tick, MAPPED per
-  dirty, blink every 8 host frames); start-position markers remain doc 03's
-  item.
+* Minimap/radar colors and art sources are established (regular unit blips use
+  an owning-player frame selector into `radlogohigh`, commander markers use
+  frame 0 of `nuclogo`, and feature contacts use the same selector into
+  `h2oboom2`; selected GAF bytes are active `PALETTE.PAL` indices; circles
+  entry 10; jam 12; rings 15; dot 14; contacts per tick, MAPPED per dirty,
+  blink every 8 host frames); start-position markers remain doc 03's item.
 * Running-display refresh cadence and hover ownership are closed: the pointer
   update (hover, cursor shape, placement validity) runs once per host frame as
   the battle frame handler, and the 30-entry fixed-stride scrollback ring and

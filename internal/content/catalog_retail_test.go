@@ -4,6 +4,7 @@ package content
 
 import (
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -145,38 +146,75 @@ func TestCatalogHashStable(t *testing.T) {
 	}
 }
 
-// TestWeaponIDCollisionMergesToReferencedName locks the measured stock
-// behavior behind the ID merge: ID 36 is shared by EARTHQUAKE
-// (gamedata/weapons.tdf) and cormine2 (weapons/cormine2_weapon.tdf). The
-// weapons/ file parses after gamedata so CORMINE2 survives — units reference
-// it — and WeaponByID(36) returns that one record. The separate EARTHQUAKE of
-// weapons/earthquake.tdf carries ID 227 and is unaffected.
-func TestWeaponIDCollisionMergesToReferencedName(t *testing.T) {
+// TestWeaponStockFamilyMatchesRCONTENT02 locks the settled weapon-family
+// facts on the reference install [02 §5 R-CONTENT-02]: the family is exactly
+// Weapons/*.tdf and gamedata/weapons.tdf is inert. The parsed family's
+// authored IDs are all unique, so any same-ID diagnostic means we are reading
+// a file retail never reads (gamedata/weapons.tdf carries 33 sections whose
+// authored IDs overlap the family's). ID 36 is [cormine2]
+// (weapons/cormine2_weapon.tdf) alone; [earthquake] in the parsed family is
+// weapons/earthquake.tdf at ID 227; record 0 is the inactive sentinel, stock
+// [noweapon]; a link that names no record references record 0, inactive.
+func TestWeaponStockFamilyMatchesRCONTENT02(t *testing.T) {
 	cat := compiledRetailCatalog(t)
-	w, ok := cat.Weapons["cormine2"]
-	if !ok {
-		t.Fatal("cormine2 missing after ID 36 merge")
+	// gamedata/weapons.tdf contributes nothing: the stock family has no
+	// same-ID collision at all [02 §5 R-CONTENT-02].
+	if dups := cat.WeaponDuplicates(); len(dups) != 0 {
+		t.Fatalf("collision diagnostics on the stock family: %v", dups)
 	}
-	if w.ID != 36 {
-		t.Fatalf("cormine2 ID = %d, want 36", w.ID)
+	// ID 36 is [cormine2] alone, from weapons/cormine2_weapon.tdf.
+	w36, ok := cat.WeaponByID(36)
+	if !ok || w36.CanonicalKey != "cormine2" {
+		t.Fatalf("ID 36 = (%v, %v), want cormine2", w36, ok)
 	}
-	byID, ok := cat.WeaponByID(36)
-	if !ok || byID != w {
-		t.Fatalf("WeaponByID(36) mismatch: got %v", byID)
+	if !strings.EqualFold(w36.Provenance.LogicalPath, "weapons/cormine2_weapon.tdf") {
+		t.Fatalf("cormine2 provenance = %q, want weapons/cormine2_weapon.tdf", w36.Provenance.LogicalPath)
 	}
 	// Exactly one record carries ID 36.
-	for k, def := range cat.Weapons {
-		if def.ID == 36 && k != "cormine2" {
+	keys := make([]string, 0, len(cat.Weapons))
+	for k := range cat.Weapons {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if def := cat.Weapons[k]; def.ID == 36 && k != "cormine2" {
 			t.Fatalf("second ID-36 record under %q", k)
 		}
 	}
-	// The unrelated EARTHQUAKE (ID 227, weapons/earthquake.tdf) survives under its own name.
-	other, ok := cat.Weapons["earthquake"]
-	if !ok || other.ID != 227 {
-		t.Fatalf("ID-227 earthquake missing or wrong id (%v)", other)
+	// [earthquake] in the parsed family is weapons/earthquake.tdf at ID 227 —
+	// not the inert gamedata copy, which authors ID 36.
+	eq, ok := cat.WeaponByName("earthquake")
+	if !ok || eq.ID != 227 {
+		t.Fatalf("earthquake = (%v, %v), want the ID-227 record", eq, ok)
 	}
+	if !strings.EqualFold(eq.Provenance.LogicalPath, "weapons/earthquake.tdf") {
+		t.Fatalf("earthquake provenance = %q, want weapons/earthquake.tdf", eq.Provenance.LogicalPath)
+	}
+	// Record 0 is the inactive sentinel, stock [noweapon].
+	w0, ok := cat.WeaponByID(0)
+	if !ok || w0.CanonicalKey != "noweapon" {
+		t.Fatalf("record 0 = (%v, %v), want noweapon", w0, ok)
+	}
+	// Runtime name resolution: case-insensitive first match from slot 0
+	// upward [02 §5 R-CONTENT-02].
+	if w, ok := cat.WeaponByName("CORMINE2"); !ok || w != w36 {
+		t.Fatalf("WeaponByName(CORMINE2) = (%v, %v), want the cormine2 record", w, ok)
+	}
+	// A link that names no record references record 0 — inactive, not an
+	// error. Stock FBIs name placeholder explosions (medium_unitex and friends)
+	// that exist in no parsed weapon file; they are the sentinel case.
+	def, active := cat.WeaponLink("medium_unitex")
+	if active || def != w0 {
+		t.Fatalf("WeaponLink(medium_unitex) = (%v, %v), want the record-0 sentinel, inactive", def, active)
+	}
+	// A resolvable link is active and returns the first-match record.
+	if def, active = cat.WeaponLink("cormine2"); !active || def != w36 {
+		t.Fatalf("WeaponLink(cormine2) = (%v, %v), want active cormine2", def, active)
+	}
+	// Unit weapon links compile against the surviving records through the
+	// first-match scan.
 	if u, ok := cat.Unit("cormine2"); ok && u.ExplodeAsDef == nil {
-		t.Fatal("cormine2.fbi explodeas no longer resolves after the merge")
+		t.Fatal("cormine2.fbi explodeas no longer resolves")
 	}
 }
 

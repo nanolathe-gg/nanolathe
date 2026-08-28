@@ -34,8 +34,8 @@ const (
 	modeMenuMap
 	modeMenuSkirmish
 	// modeLoading is the retail loading screen. It owns no .GUI file: retail
-	// closes the frontend window, forces 640x480, and paints the screen from
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// closes the frontend window, forces 640x480, and paints the authored
+	// loading background while the loader thread works [07 §4].
 	modeLoading
 	modeBattle
 )
@@ -51,11 +51,20 @@ type retailPanelAssets struct {
 	window     *gui.Window
 	background *formats.PCX
 	art        *formats.GAF
+	// unavailable records an unresolved authored GUI at the construction seam.
+	// The caller keeps this value explicit and never treats it as a valid empty
+	// panel [07 §5].
+	unavailable error
 }
 
 // menuAssets is the mounted retail frontend resource set. All menu pixels,
 // widgets and text font come from the same files TotalA.exe selects.
 type menuAssets struct {
+	// err is retained on the compatibility-shaped loader below so existing
+	// asset-inspection tests can still inspect a partially built value. The
+	// frontend constructor always checks it before installing a panel [07 §5
+	// "Frontend asset failure boundaries"].
+	err             error
 	common          *formats.GAF
 	logos           *formats.GAF
 	font            *formats.FNT
@@ -149,6 +158,12 @@ func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	shell.missionDifficultyValue = session.SkirmishDefaultDifficulty
 	shell.scrollSpeed = settings.DefaultScrollSpeed // [02 "Settings"] [07 §10]
 	shell.assets = loadMenuAssets(cs)
+	if shell.assets == nil {
+		return nil, fmt.Errorf("nanolathe: retail frontend assets: construction returned no asset set")
+	}
+	if shell.assets.err != nil {
+		return nil, shell.assets.err
+	}
 	if shell.assets != nil {
 		shell.font = shell.assets.font
 	}
@@ -169,7 +184,7 @@ func runGameShell(opts Options, cs *contentSet) error {
 	}
 	// The persisted frontend preferences are read once here, before the first
 	// panel is drawn, the way retail reads its registry block during startup
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// [07 §4].
 	shell.attachSettings()
 	maps := shell.maps
 
@@ -215,18 +230,103 @@ func runGameShell(opts Options, cs *contentSet) error {
 func loadMenuAssets(cs *contentSet) *menuAssets {
 	a := &menuAssets{panel: make(map[shellMode]*retailPanelAssets)}
 	if cs == nil || cs.fs == nil {
+		a.err = fmt.Errorf("nanolathe: retail frontend assets: missing VFS: logical path <install>, providers searched [], expected mounted retail content")
 		return a
 	}
+	// PALETTE.PAL (or its authored PCX fallback inside palette.Load) and COMIX
+	// are installed before any frontend window. A missing or malformed input is
+	// a construction error; there is no authored replacement [03 §4.3][07 §5].
+	p, err := palette.Load(cs.fs)
+	if err != nil {
+		a.err = retailFrontendAssetError(cs, "retail frontend palette", "palettes/PALETTE.PAL", "the shared retail palette tables", err)
+		return a
+	}
+	a.pal = p
+	f, err := formats.LoadFNTFile(cs.fs, "fonts/comix.fnt")
+	if err != nil {
+		a.err = retailFrontendAssetError(cs, "retail frontend font", "fonts/comix.fnt", "the authored COMIX FNT", err)
+		return a
+	}
+	a.font = f
+
+	// These windows and their bitmap backgrounds are the implemented
+	// single-player frontend. The bitmap path is established fatal; the GUI
+	// opener's caller-level outcome for a missing or malformed window remains
+	// unknown, so loadRetailPanelStrict records that panel as explicitly
+	// unavailable instead of treating it as a valid empty layout [07 §5
+	// "Frontend asset failure boundaries"].
+	panels := []struct {
+		mode     shellMode
+		guiName  string
+		pcxName  string
+		gafName  string
+		expected string
+	}{
+		{modeMenuMain, "guis/mainmenu.gui", "bitmaps/frontendx.pcx", "anims/mainmenu.gaf", "MAINMENU authored GUI and background"},
+		{modeMenuSingle, "guis/single.gui", "bitmaps/singlebg.pcx", "anims/single.gaf", "SINGLE authored GUI and background"},
+		{modeMenuMission, "guis/newgame.gui", "bitmaps/newcampaign4x.pcx", "anims/newgame.gaf", "NEWGAME authored GUI and background"},
+		{modeMenuMap, "guis/selmap.gui", "bitmaps/dselectmap2.pcx", "", "SELMAP authored GUI and background"},
+		{modeMenuSkirmish, "guis/skirmish.gui", "bitmaps/skirmsetup4x.pcx", "anims/skirmish.gaf", "SKIRMISH authored GUI and background"},
+	}
+	for _, spec := range panels {
+		panel, loadErr := loadRetailPanelStrict(cs, spec.guiName, spec.pcxName, spec.gafName, spec.expected)
+		if loadErr != nil {
+			// The common GUI opener does not establish the process-level outcome
+			// for a missing/malformed GUI. Keep that panel explicitly unavailable;
+			// never retain a partially loaded panel or synthesize a replacement
+			// window [07 §5 "Frontend asset failure boundaries"].
+			if panel != nil && panel.unavailable != nil {
+				a.panel[spec.mode] = panel
+				continue
+			}
+			a.err = loadErr
+			return a
+		}
+		a.panel[spec.mode] = panel
+	}
+	message, err := loadRetailPanelStrict(cs, "guis/msgbox.gui", "", "", "MSGBOX authored GUI")
+	if err != nil {
+		if message != nil && message.unavailable != nil {
+			a.message = message
+		} else {
+			a.err = err
+			return a
+		}
+	}
+	a.message = message
+
+	// Loading and both NEWGAME background variants are selected by later
+	// callbacks, but they all enter through the same fatal bitmap loader when
+	// selected. Preload them so no reachable callback can land on a nil PCX.
+	for _, spec := range []struct {
+		logical string
+		dst     **formats.PCX
+		expect  string
+	}{
+		{"bitmaps/loadgame2bg.pcx", &a.loading, "the authored loading background"},
+		{"bitmaps/newcampaign4.pcx", &a.missionCampaign, "the authored campaign background"},
+		{"bitmaps/newcampaign4x.pcx", &a.missionSmall, "the authored compressed campaign background"},
+		{"bitmaps/playanygame4.pcx", &a.missionAny, "the authored Play Any background"},
+	} {
+		pcx, loadErr := formats.LoadPCXFile(cs.fs, spec.logical)
+		if loadErr != nil {
+			a.err = retailFrontendAssetError(cs, "retail frontend bitmap", spec.logical, spec.expect, loadErr)
+			return a
+		}
+		*spec.dst = pcx
+	}
+
+	// GUI-attached roots and HATTFONT slots are separately optional in retail:
+	// a missing root leaves its handle empty and controls continue through the
+	// authored support/fallback lookup [07 §5]. They are intentionally loaded
+	// without converting a null handle into a fabricated panel or widget.
 	if g, err := formats.LoadGAFFile(cs.fs, "anims/commongui.gaf"); err == nil {
 		a.common = g
 	}
 	if g, err := formats.LoadGAFFile(cs.fs, "textures/logos.gaf"); err == nil {
 		a.logos = g
 	}
-	if f, err := formats.LoadFNTFile(cs.fs, "fonts/comix.fnt"); err == nil {
-		a.font = f
-	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// The frontend installs hattfont12 as primary GAF font slot 0 and
 	// hattfont11 as secondary slot 1. Generic frontend controls prefer the
 	// primary GAF font over the active COMIX FNT [07 §4].
 	if f, err := formats.LoadGAFFile(cs.fs, "anims/hattfont12.gaf"); err == nil {
@@ -235,51 +335,41 @@ func loadMenuAssets(cs *contentSet) *menuAssets {
 	if f, err := formats.LoadGAFFile(cs.fs, "anims/hattfont11.gaf"); err == nil {
 		a.gafFontSmall = f
 	}
-	if p, err := palette.Load(cs.fs); err == nil {
-		a.pal = p
-	}
-	a.panel[modeMenuMain] = loadRetailPanel(cs, "guis/mainmenu.gui", "bitmaps/frontendx.pcx", "anims/mainmenu.gaf")
-	a.panel[modeMenuSingle] = loadRetailPanel(cs, "guis/single.gui", "bitmaps/singlebg.pcx", "anims/single.gaf")
-	a.panel[modeMenuMission] = loadRetailPanel(cs, "guis/newgame.gui", "bitmaps/newcampaign4x.pcx", "anims/newgame.gaf")
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	/* panels loaded above */
+	// SELMAP.GUI's background is DSELECTMAP2. Its screen opener hands that
+	// logical bitmap to the shared cache, which stores it on the open window.
 	// The file is 640x480 but its panel art occupies only the top-left
 	// 494x420, matching the window's own 494x420 record at (84,12), so it is
 	// drawn at the window origin and clipped to the window [07 §4].
-	// bitmaps/selectgame2x.pcx belongs to the multiplayer SELGAME.GUI lobby
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	a.panel[modeMenuMap] = loadRetailPanel(cs, "guis/selmap.gui", "bitmaps/dselectmap2.pcx", "")
-	a.panel[modeMenuSkirmish] = loadRetailPanel(cs, "guis/skirmish.gui", "bitmaps/skirmsetup4x.pcx", "anims/skirmish.gaf")
-	a.message = loadRetailPanel(cs, "guis/msgbox.gui", "", "")
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// open, so it becomes the global background the loading screen repaints
-	// from [07 §4].
-	if p, err := formats.LoadPCXFile(cs.fs, "bitmaps/loadgame2bg.pcx"); err == nil {
-		a.loading = p
-	}
-	if p, err := formats.LoadPCXFile(cs.fs, "bitmaps/newcampaign4.pcx"); err == nil {
-		a.missionCampaign = p
-	}
-	if p, err := formats.LoadPCXFile(cs.fs, "bitmaps/newcampaign4x.pcx"); err == nil {
-		a.missionSmall = p
-	}
-	if p, err := formats.LoadPCXFile(cs.fs, "bitmaps/playanygame4.pcx"); err == nil {
-		a.missionAny = p
-	}
+	// bitmaps/selectgame2x.pcx belongs to the multiplayer SELGAME.GUI lobby,
+	// which is out of scope, and is not loaded here.
 	return a
 }
 
 func loadRetailPanel(cs *contentSet, guiName, pcxName, gafName string) *retailPanelAssets {
+	p, _ := loadRetailPanelStrict(cs, guiName, pcxName, gafName, "authored frontend panel")
+	return p
+}
+
+func loadRetailPanelStrict(cs *contentSet, guiName, pcxName, gafName, expected string) (*retailPanelAssets, error) {
 	if cs == nil || cs.fs == nil {
-		return nil
+		return nil, fmt.Errorf("nanolathe: retail frontend panel: logical path %s, providers searched [], expected %s", guiName, expected)
 	}
 	p := &retailPanelAssets{}
-	if w, err := gui.Load(cs.fs, guiName); err == nil {
+	if w, err := gui.Load(cs.fs, guiName); err != nil {
+		// Missing/malformed GUI outcome is not established by the retail caller.
+		// TODO(question): settle the retail process-level outcome for this
+		// missing/malformed GUI with an executable trace. Preserve an explicit
+		// unavailable panel, never a partial one.
+		p.unavailable = retailFrontendAssetError(cs, "retail frontend GUI unavailable", guiName, expected, err)
+		return p, p.unavailable
+	} else {
 		p.window = w
 	}
 	if pcxName != "" {
-		if bg, err := formats.LoadPCXFile(cs.fs, pcxName); err == nil {
+		if bg, err := formats.LoadPCXFile(cs.fs, pcxName); err != nil {
+			return nil, retailFrontendAssetError(cs, "retail frontend bitmap", pcxName, expected, err)
+		} else {
 			p.background = bg
 		}
 	}
@@ -288,7 +378,19 @@ func loadRetailPanel(cs *contentSet, guiName, pcxName, gafName string) *retailPa
 			p.art = g
 		}
 	}
-	return p
+	return p, nil
+}
+
+func retailFrontendAssetError(cs *contentSet, what, logical, expected string, cause error) error {
+	providers := []string(nil)
+	if cs != nil && cs.fs != nil {
+		providers = providerNames(cs.fs)
+	}
+	base := &missingProductError{what: what, logical: logical, providers: providers, expected: expected}
+	if cause == nil {
+		return base
+	}
+	return fmt.Errorf("%w: %v", base, cause)
 }
 
 func (g *gameShell) openMenu(mode shellMode) {
@@ -306,8 +408,8 @@ func (g *gameShell) openMenu(mode shellMode) {
 	if g.assets != nil {
 		if mode == modeMenuMission {
 			// NEWGAME.GUI is reused for both New Campaign and Play Any Game.
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// Any branch, so restore/apply that runtime mutation before the
+			// The Play Any branch changes these authored list rectangles, so
+			// restore/apply that runtime mutation before the
 			// panel state takes its frame.
 			g.applyRetailMissionLayout()
 		}
@@ -352,11 +454,11 @@ func reportRetailMessageError(err error) {
 
 // panelWindowNeedsUnder reports whether opening mode pushes a panel window
 // onto the chain rather than replacing the screen. The test is the retail one:
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// and height, positioned at the window origin, and copies the screen into it
-// before anything is painted. A window smaller than the display therefore
-// never erases what is under it, and retail keeps a SAVE UNDER copy so it can
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// The window initializer gives every window a drawing surface of exactly its
+// own width and height, positioned at the window origin, and copies the screen
+// into it before anything is painted. A window smaller than the display
+// therefore never erases what is under it, and retail keeps a SAVE UNDER copy
+// so it can put those pixels back on close. SELMAP.GUI (84,12,494,420)
 // is the single-player case; the four frontend screens are all authored at
 // (0,0,640,480) and cover everything [07 §4].
 func (g *gameShell) panelWindowNeedsUnder(mode shellMode) bool {
@@ -424,7 +526,10 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 	}
 	g.cam.Pan(0, 0)
 	centerOnCommanderForSession(sess, g.cam, winW, winH)
-	pal := loadPalette(g.cs)
+	pal, err := loadPaletteStrict(g.cs)
+	if err != nil {
+		return err
+	}
 	battleHUD, err := loadRetailBattleHUD(g.cs.fs, sess, cat, pal)
 	if err != nil {
 		return err
@@ -450,43 +555,11 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 			}
 		}
 	}
-	g.battle.retryFunc = func(cl *client.Client) {
+	g.battle.retryFunc = func(cl *client.Client) error {
 		if g == nil || g.battle == nil {
-			return
+			return fmt.Errorf("retry has no active battle")
 		}
-		// RS-05 retry: recreate clean session from same SkirmishConfig via state graph 7→2→5 [08]
-		cfg := g.battle.sess.Skirmish
-		cat2 := g.battle.sess.Catalog
-		if cat2 == nil {
-			cat2 = cat
-		}
-		newSess, err := session.NewSkirmishWithFS(g.cs.fs, cat2, cfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "nanolathe: retry failed: %v\n", err)
-			return
-		}
-		// Replace battle session with clean one [RS-05] no duplicate callbacks
-		g.battle.sess = newSess
-		g.battle.cat = newSess.Catalog
-		g.battle.resultDismissed = false
-		g.battle.resultButtons = nil
-		centerOnCommanderForSession(newSess, g.cam, winW, winH)
-		if cl != nil {
-			cl.SetSnapshot(newSess.Snapshot)
-			cl.SetTerrain(newSess.World)
-			cl.SetCamera(g.cam)
-		}
-		newSess.State = session.StateBattle
-		// Rebind HUD for new side
-		if pal2 := loadPalette(g.cs); pal2 != nil {
-			if hud2, err2 := loadRetailBattleHUD(g.cs.fs, newSess, newSess.Catalog, pal2); err2 == nil {
-				g.battle.hud = hud2
-				if cl != nil {
-					cl.SetFNT(hud2.console)
-					cl.Overlay = func(c *client.Client) { hud2.draw(c, g.battle) }
-				}
-			}
-		}
+		return g.battle.doRetry(cl)
 	}
 	g.battle.continueFunc = func(cl *client.Client) {
 		if g == nil || g.battle == nil || g.battle.sess == nil {
@@ -656,20 +729,20 @@ func enumerateSkirmishMaps(fs *vfs.FS) ([]string, error) {
 			continue
 		}
 		seen[key] = true
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// The map loader stores the OTA file stem with the case the archive
 		// records, not a folded copy: the localized-string lookup is only
 		// consulted when it returns something different from the stem.
 		names = append(names, base)
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// The map loader hands the packed name list to the retail string sorter
+	// ("SORTED LIST1") before installing it in MAPNAMES. That is a bubble sort whose
 	// comparison is _stricmp, so the authored MAPNAMES order is ascending and
 	// case-insensitive, not archive order [07 §4].
 	sort.SliceStable(names, func(i, j int) bool { return retailStricmp(names[i], names[j]) < 0 })
 	return names, nil
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// retailStricmp is the comparison the retail string sorter uses. The helper folds
 // only the ASCII range A-Z and compares the folded bytes, so it is neither
 // locale-aware nor Unicode-aware; map names outside ASCII order by raw byte.
 func retailStricmp(a, b string) int {

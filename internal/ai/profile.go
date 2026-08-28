@@ -409,8 +409,8 @@ func NewManager(player uint8, fs vfs.FSOps, profileName string, r *rng.Simulatio
 		Catalog:      catalog,
 		SurfaceMetal: surfaceMetal,
 		IsAlliance:   isAlliance,
+		RNG:          r,
 	}
-	_ = r // per-manager RNG removed per RS-02; draws use rng.Global.Sim [I4][08]
 	m.Strategic.Catalog = catalog
 	// Milestone ProfileLoaded observed at construction tick 0 [P0-07].
 	m.recordMilestone(MilestoneProfileLoaded, 0)

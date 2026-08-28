@@ -6,10 +6,13 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -210,21 +213,25 @@ func (s *Session) publishSnapshot(tick uint32) {
 			if inst == nil || inst.Def == nil {
 				continue
 			}
+			featureOwner, featureOwnerKnown := featureOwnerSelector(inst)
 			fv := frame.FeatureView{
-				CX:        int32(inst.CX),
-				CZ:        int32(inst.CZ),
-				X:         inst.X,
-				Y:         inst.Y,
-				Z:         inst.Z,
-				DefName:   inst.Def.CanonicalKey,
-				Model:     inst.Def.Object,
-				Health:    inst.Health,
-				MaxHealth: inst.MaxHealth,
-				IsBurning: inst.IsBurning,
-				IsSinking: inst.IsSinking,
-				BurnTicks: inst.BurnTicks,
-				FootX:     int8(inst.FootprintX),
-				FootZ:     int8(inst.FootprintZ),
+				Owner:      featureOwner,
+				OwnerKnown: featureOwnerKnown,
+				CX:         int32(inst.CX),
+				CZ:         int32(inst.CZ),
+				X:          inst.X,
+				Y:          inst.Y,
+				Z:          inst.Z,
+				DefName:    inst.Def.CanonicalKey,
+				Model:      inst.Def.Object,
+				Health:     inst.Health,
+				MaxHealth:  inst.MaxHealth,
+				Status:     uint32(inst.Status),
+				IsBurning:  inst.IsBurning,
+				IsSinking:  inst.IsSinking,
+				BurnTicks:  inst.BurnTicks,
+				FootX:      int8(inst.FootprintX),
+				FootZ:      int8(inst.FootprintZ),
 
 				Filename:    inst.Def.Filename,
 				SeqName:     inst.Def.SeqName,
@@ -254,8 +261,11 @@ func (s *Session) publishSnapshot(tick uint32) {
 				continue
 			}
 			p := s.Combat.Records[i]
+			owner, ownerKnown := projectileOwnerFromRecord(s, p.Shooter, p.ShooterSide)
 			pv := frame.ProjectileView{
 				Handle:         h,
+				Owner:          owner,
+				OwnerKnown:     ownerKnown,
 				X:              p.Pos.X,
 				Y:              p.Pos.Y,
 				Z:              p.Pos.Z,
@@ -300,6 +310,133 @@ func (s *Session) publishSnapshot(tick uint32) {
 			}
 			published.Projectiles = append(published.Projectiles, pv)
 		}
+	}
+	// Radar contacts and callback circles are copied only after all
+	// authoritative pools have been traversed. Presentation therefore receives
+	// one coherent tick-end view and never needs to bind callbacks or inspect
+	// mutable session services [03 §3.4][03 §3.9].
+	published.Radar.Contacts = published.Radar.Contacts[:0]
+	published.Radar.Circles = published.Radar.Circles[:0]
+	// The minimap mode is session state supplied by the authoritative composer
+	// input seam. Preserve its exact value; presentation must not manufacture a
+	// viewport marker mode at the frame boundary [03 §3.12][I6].
+	published.Radar.MarkerMode = s.RadarMarkerMode
+	var sensorInputs []visibility.SensorInput
+	var sensorCircles []visibility.SensorCircle
+	if s.Vis != nil {
+		sensorInputs = s.Vis.SensorInputs()
+		sensorCircles = s.Vis.SensorCircles()
+	}
+	if s.Units != nil {
+		sensorIndex := 0
+		for _, u := range s.Units.Iter() {
+			if u == nil || !u.Alive {
+				continue
+			}
+			status := uint32(0)
+			active := u.Activated
+			onOffable := false
+			if s.visStatus != nil {
+				status = s.visStatus[int(u.Handle)]
+			}
+			hidden := u.IsCloaked
+			stealth := false
+			if u.Def != nil {
+				stealth = u.Def.Stealth
+				hidden = hidden || u.Def.Stealth || u.Def.InitCloaked
+				onOffable = u.Def.OnOffable
+			}
+			if si := radarSensorInput(sensorInputs, uint16(u.Handle), sensorIndex); si != nil {
+				// ID-bearing inputs are the authoritative Step seam. A zero-ID
+				// positional fallback is retained for older producers, but its zero
+				// fields are placeholders and must not erase state derived from the
+				// live unit/catalog record.
+				if si.ID != 0 {
+					status = si.Status
+					hidden = si.Hidden
+					stealth = si.Stealth
+					active = si.Active
+					onOffable = si.OnOffable
+				}
+			}
+			sensorIndex++
+			selected := u.Owner == s.LocalOwner && u.Flags&0x10 != 0
+			// The contact status word carries the selected/range-status bit used by
+			// the later circle branch. Keep it distinct from visibility bits, which
+			// are supplied by the sensor pass [03 §3.9].
+			status &^= 0x10
+			if selected {
+				status |= 0x10
+			}
+			contact := frame.RadarContactView{
+				Kind: frame.RadarContactUnit, Handle: u.Handle, Owner: u.Owner,
+				X: u.X, Y: u.Y, Z: u.Z, Status: status,
+				Hidden: hidden, Stealth: stealth, Active: active,
+				OnOffable: onOffable,
+				Selected:  selected,
+				Seen:      status&visibility.SeenBit != 0,
+				Friendly:  status&visibility.FriendlyMask != 0,
+				Visible:   u.Owner == s.LocalOwner || status&visibility.SeenBit != 0,
+			}
+			if u.Def != nil {
+				contact.Commander = u.Def.Commander
+				contact.Graphic = u.Def.ObjectName
+				// Contact-side range circles are the selected/range-status
+				// branch. It runs before the activation/onoffable gate; inactive
+				// on/off units therefore publish no range distances, while units
+				// without that capability remain eligible [03 §3.9].
+				contact.RangeStatus = status&0x10 != 0 && (active || !onOffable)
+				if contact.RangeStatus {
+					contact.RadarDistance = u.Def.RadarDistance
+					contact.SonarDistance = u.Def.SonarDistance
+					contact.RadarJam = u.Def.RadarDistanceJam
+					contact.SonarJam = u.Def.SonarDistanceJam
+				}
+				// No compiled unit field or instance byte currently exposes the
+				// authored no-radar/blink-suppress inputs. Keep their neutral
+				// values until that source is traced; the frame still carries the
+				// established status/hidden/friendly gates [03 §3.9].
+				for slot := 0; slot < units.NumSlots; slot++ {
+					ws := u.SlotAt(slot)
+					if ws == nil || ws.Weapon == nil {
+						continue
+					}
+					contact.Rings = append(contact.Rings, frame.RadarRingView{
+						// The compiled unit flag sequence places CanGuard at bit
+						// 29, the ring-loop enable [02 "Unit record"][03 §3.9].
+						Enabled:   u.Def.CanGuard,
+						Dashed:    ws.Weapon.Interceptor,
+						Range:     ws.Weapon.Range,
+						Intercept: ws.Weapon.Interceptor,
+					})
+				}
+			}
+			published.Radar.Contacts = append(published.Radar.Contacts, contact)
+		}
+	}
+	// Cleanup follows the visibility pass in the committed-tick order. Keep a
+	// callback only when its source unit survived that boundary; source identity
+	// makes this deterministic and prevents stale circles from freed slots.
+	for _, c := range sensorCircles {
+		if c.SourceID == 0 || !radarHasLiveUnit(published.Radar.Contacts, c.SourceID) {
+			continue
+		}
+		published.Radar.Circles = append(published.Radar.Circles, frame.RadarCircleView{SourceID: c.SourceID, U: c.U, V: c.V, Radius: c.Radius, Kind: c.Kind})
+	}
+	for _, p := range published.Projectiles {
+		owner := p.Owner
+		published.Radar.Contacts = append(published.Radar.Contacts, frame.RadarContactView{
+			Kind: frame.RadarContactProjectile, Handle: p.Handle, Owner: owner, OwnerKnown: p.OwnerKnown, X: p.X, Y: p.Y, Z: p.Z,
+			Graphic: p.Graphic, AssetID: p.AssetID, Status: p.Flags,
+			Visible: radarPointVisible(s, owner, p.OwnerKnown, p.X, p.Y, p.Z),
+		})
+	}
+	for _, f := range published.Features {
+		published.Radar.Contacts = append(published.Radar.Contacts, frame.RadarContactView{
+			Kind: frame.RadarContactFeature, Owner: f.Owner, OwnerKnown: f.OwnerKnown, X: f.X, Y: f.Y, Z: f.Z,
+			Graphic: f.Model, AssetID: f.Filename, Status: f.Status,
+			Visible: radarFeatureVisible(s, f),
+		})
 	}
 	if s.Build != nil && s.Units != nil {
 		// BuilderLinks is the construction service's authoritative product→builder
@@ -353,6 +490,15 @@ func (s *Session) publishSnapshot(tick uint32) {
 	} else {
 		published.Economy = published.Economy[:0]
 	}
+	// Shake offset produced at phase 10 [03 §5.6][01 §4.4] DET-04.
+	published.ShakeOffsetX = s.shakeOffsetX
+	published.ShakeOffsetY = s.shakeOffsetY
+	published.ShakeActive = s.shakeActive
+	published.ShakeDuration = s.shakeDuration
+	published.ShakeRemaining = s.shakeRemaining
+	published.ShakeAmpX = s.shakeAmpX
+	published.ShakeAmpY = s.shakeAmpY
+
 	// RS-05: publish the authoritative result once through the committed frame
 	// [08 "Evaluation"][P1-01]. A pending result keeps its metadata while the
 	// latch countdown is exposed for presentation; no second result side-channel
@@ -387,6 +533,101 @@ func (s *Session) publishSnapshot(tick uint32) {
 	if s.publication != nil && s.publication.events != nil {
 		s.publication.events.Reset()
 	}
+}
+
+func radarHasLiveUnit(contacts []frame.RadarContactView, id uint16) bool {
+	for _, c := range contacts {
+		if c.Kind == frame.RadarContactUnit && uint16(c.Handle) == id {
+			return true
+		}
+	}
+	return false
+}
+
+// featureOwnerSelector reads the plot placer nibble. Selector 10 identifies a
+// map-authored feature; corpse/runtime placement stamps the owner slot
+// [03 §3.3][03 §5.1.5].
+func featureOwnerSelector(inst *features.Instance) (uint8, bool) {
+	if inst == nil || inst.Terrain == nil {
+		return combat.NeutralSide, false
+	}
+	if cell := inst.Terrain.PlotAt(int32(inst.CX), int32(inst.CZ)); cell != nil {
+		selector := cell.PlacerNibble()
+		if selector == 0 {
+			// Map loading stamps selector 10, while the current runtime feature
+			// placement seam leaves zero without an owning-player source. Keep
+			// that ambiguity unknown so local player zero cannot receive an
+			// accidental owner bypass [03 §3.3][03 §3.9].
+			return combat.NeutralSide, false
+		}
+		return selector, true
+	}
+	return combat.NeutralSide, false
+}
+
+func projectileOwnerFromRecord(s *Session, shooter pool.Handle, side uint8) (uint8, bool) {
+	if s != nil && s.Units != nil && shooter != 0 {
+		if u := s.Units.Unit(shooter); u != nil {
+			return u.Owner, true
+		}
+	}
+	// Shooterless records carry NeutralSide. A zero side on an unresolved
+	// fixture must not accidentally bypass local-player-zero LOS [06 §6.1][06 §6.5].
+	if side != 0 {
+		return side, true
+	}
+	return combat.NeutralSide, false
+}
+
+func radarPointVisible(s *Session, owner uint8, ownerKnown bool, x, y, z numeric.Fixed) bool {
+	if s == nil {
+		return false
+	}
+	if ownerKnown && owner < 10 && owner == s.LocalOwner {
+		return true
+	}
+	return s.Vis != nil && s.Vis.VisiblePoint(visibility.PlayerID(s.LocalOwner), x, y, z)
+}
+
+func radarFeatureVisible(s *Session, f frame.FeatureView) bool {
+	if s == nil {
+		return false
+	}
+	if f.OwnerKnown && f.Owner < 10 && f.Owner == s.LocalOwner {
+		return true
+	}
+	if s.Vis == nil {
+		return false
+	}
+	owner := visibility.PlayerID(f.Owner)
+	// VisibleExtents takes a player owner for its bypass check. Selector 10 is
+	// explicitly non-player, so substitute a valid non-local identity solely to
+	// run the two-corner LOS samples.
+	if !f.OwnerKnown || f.Owner >= 10 {
+		owner = visibility.PlayerID((s.LocalOwner + 1) % 10)
+	}
+	return s.Vis.VisibleExtents(visibility.PlayerID(s.LocalOwner), visibility.Box{
+		Owner: owner,
+		MinX:  world.CellToWorld(f.CX),
+		MinZ:  world.CellToWorld(f.CZ),
+		MaxX:  world.CellToWorld(f.CX + int32(f.FootX)),
+		MaxZ:  world.CellToWorld(f.CZ + int32(f.FootZ)),
+		Y:     f.Y,
+	})
+}
+
+func radarSensorInput(inputs []visibility.SensorInput, id uint16, index int) *visibility.SensorInput {
+	for i := range inputs {
+		if id != 0 && inputs[i].ID == id {
+			return &inputs[i]
+		}
+	}
+	// Older producers do not provide the optional ID. SensorTick preserves
+	// indexed live-unit order, so the ordinal is an immutable fallback.
+	if index >= 0 && index < len(inputs) && inputs[index].ID == 0 {
+		return &inputs[index]
+	}
+	return nil
 }
 
 // publishVisibilityView copies the local player's visibility masks into the

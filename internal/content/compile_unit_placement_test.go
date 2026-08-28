@@ -2,6 +2,21 @@ package content
 
 import "testing"
 
+func TestUnitOnOffableCompilesDefinitionFlag(t *testing.T) {
+	def := compileUnitSection(mustParseTDF(t, `[UNITINFO]
+{
+ UnitName=ARMSTEALTH;
+ OnOffable=1;
+}
+`).Root.Sections()[0], "units/armstealth.fbi", "", Provenance{})
+	if !def.OnOffable {
+		t.Fatal("authored OnOffable definition flag was not compiled")
+	}
+	if _, ok := def.Unknown["OnOffable"]; ok {
+		t.Fatal("typed OnOffable definition flag retained as Unknown")
+	}
+}
+
 func TestUnitPlacementProfileAuthoredAndDefaults(t *testing.T) {
 	authored := compileUnitSection(mustParseTDF(t, `[UNITINFO]
 {

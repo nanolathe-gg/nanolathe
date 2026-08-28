@@ -230,8 +230,12 @@ func TestSkirmishDefaults(t *testing.T) {
 }
 
 func TestSkirmishWindSinglePath(t *testing.T) {
-	// C17 single battle-entry wind initializer per [01 §7.3]; no second draw path.
-	// Draw counts identical whether entered via skirmish or mission.
+	// Single battle-entry wind initializer per [01 §7.3]; [R-CORE-02]
+	// supersedes the draw-count reading: battle entry consumes NO wind draws
+	// (briefing speed/direction are front-end display state) and zeroes the
+	// deadline, identically via skirmish and mission. The skirmish slot
+	// shuffle draws from the SESSION CRT, never from rng.Global [DET-01], so
+	// the process-global stream must not move at all.
 	otaText := "[GlobalHeader]\n{\nminwindspeed=15;\nmaxwindspeed=35;\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n}\n}\n[Schema 0]\n{\nType=Easy;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\n}\n}\n}\n}\n"
 	// Use separate FS instances to avoid catalog contamination
 	fsMission := fsFromMapSkirmish(t, map[string]string{"maps/wind.ota": otaText})
@@ -243,60 +247,50 @@ func TestSkirmishWindSinglePath(t *testing.T) {
 		Units: map[string]*content.UnitDef{"armcom": {UnitName: "armcom", MaxDamage: 100}},
 	}
 	seed := uint32(0x1234)
-	// Mission path draws (fixture)
+	// Mission path: no battle-entry wind draws.
 	rng.SeedGlobal(99, seed)
 	before := rng.Global.Crt.Draws()
 	sM, err := NewMissionForTest(fsMission, cat, "wind.ota", 0)
 	if err != nil {
 		t.Fatalf("NewMissionForTest: %v", err)
 	}
-	afterMission := rng.Global.Crt.Draws()
-	missionDraws := afterMission - before
-	if missionDraws != 3 {
-		t.Fatalf("mission wind should consume exactly 3 CRT draws [01 §7.3] C17 got %d", missionDraws)
+	missionDraws := rng.Global.Crt.Draws() - before
+	if missionDraws != 0 {
+		t.Fatalf("mission battle entry consumed %d global CRT draws, want 0 [R-CORE-02][DET-01]", missionDraws)
 	}
-	// Skirmish path draws from same seed: wind 3 plus shuffle gate/shuffle [P0-04]
+	// Skirmish path: the shuffle draws the session CRT; the global stream is
+	// untouched and wind still draws nothing.
 	rng.SeedGlobal(99, seed)
 	before2 := rng.Global.Crt.Draws()
 	cfg := SkirmishConfig{MapName: "wind", NumPlayers: 2}
-	// Ensure skirmish map uses same OTA wind bounds 15/35
 	sS, err := NewSkirmishForTest(fsSkirmish, cat, cfg)
 	if err != nil {
 		t.Fatalf("NewSkirmishWithFS: %v", err)
 	}
-	afterSkirmish := rng.Global.Crt.Draws()
-	skirmishDraws := afterSkirmish - before2
-	// Campaign has no shuffle, skirmish has gate (+1 when n<3) and maybe shuffle [P0-04].
-	// With n=2 seed 0x1234, gate consumes 1 and may consume shuffle (+1).
-	// Strict ==3 would be wrong; lower bound >=3 reflects wind 3 plus optional gate/shuffle.
-	if skirmishDraws < 3 {
-		t.Fatalf("skirmish wind should consume at least 3 CRT draws [01 §7.3] C17 got %d", skirmishDraws)
+	skirmishDraws := rng.Global.Crt.Draws() - before2
+	if skirmishDraws != 0 {
+		t.Fatalf("skirmish battle entry consumed %d global CRT draws, want 0 [R-CORE-02][DET-01]", skirmishDraws)
 	}
-	// Wind values must still be identical because wind draws happen before shuffle [P0-05][01 §7.3]
-	if skirmishDraws == missionDraws {
-		// No shuffle case – already identical
-	}
-	// Values should also be identical when bounds identical (15/35) and same tick/seed
+	// Both entries zero the deadline and start wind at the zero value; the
+	// first chain runs in sub-tick 1 [R-CORE-02].
 	if sM.Wind == nil || sS.Wind == nil {
 		t.Fatalf("wind holders nil")
 	}
-	if sM.Wind.Strength != sS.Wind.Strength || sM.Wind.Heading != sS.Wind.Heading || sM.Wind.NextChange != sS.Wind.NextChange {
-		t.Fatalf("wind values via skirmish vs mission must be identical when bounds same C17: mission %+v skirmish %+v", sM.Wind, sS.Wind)
+	if sM.Wind.NextChange != 0 || sS.Wind.NextChange != 0 {
+		t.Fatalf("battle entry must zero the wind deadline: mission %d skirmish %d [R-CORE-02]", sM.Wind.NextChange, sS.Wind.NextChange)
 	}
-	// Also verify that InitBattleWind never touches Sim stream per C17 is covered in wind_test;
-	// here we ensure sim draws remain zero prior to field phase.
-	_ = rng.NewSimulation(123)
-	_ = rng.NewCRT(456)
-	// Ensure no second draw path: calling NewSkirmish again with same seed gives same result (deterministic)
-	rng.SeedGlobal(99, seed)
+	if sM.Wind.Strength != 0 || sS.Wind.Strength != 0 {
+		t.Fatalf("battle entry must not draw wind values: mission %d skirmish %d [R-CORE-02]", sM.Wind.Strength, sS.Wind.Strength)
+	}
+	// Determinism: two skirmish constructions with the same seeds produce the
+	// identical session-stream state and wind state.
 	sS2, err := NewSkirmishForTest(fsFromMapSkirmish(t, map[string]string{"maps/wind.ota": otaText}), cat, cfg)
 	if err != nil {
 		t.Fatalf("second skirmish: %v", err)
 	}
-	if sS.Wind.Strength != sS2.Wind.Strength || sS.Wind.Heading != sS2.Wind.Heading {
-		t.Fatalf("second skirmish same seed must give same wind")
+	if sS.Wind.NextChange != sS2.Wind.NextChange || sS.CrtRNG().Draws() != sS2.CrtRNG().Draws() {
+		t.Fatalf("second skirmish same seeds must give identical wind/session-stream state")
 	}
-	_ = sS
 	_ = sM
 	_ = fsMission
 	_ = fsSkirmish

@@ -33,21 +33,20 @@ func TestMinimapHUDHitTestInclusive(t *testing.T) { // TODO(question): Historica
 	}
 }
 
-func TestMinimapHUDNewFallback(t *testing.T) {
-	// Zero anchors → fallback [07 §10][03 §3.6]
+func TestMinimapHUDRequiresAuthoredRect(t *testing.T) {
 	h := NewMinimapHUD(Anchors{}, Rect{X1: 0, Y1: 0, X2: 126, Y2: 126})
 	if h.Rect != (Rect{X1: 0, Y1: 0, X2: 126, Y2: 126}) {
-		t.Fatalf("NewMinimapHUD zero anchors fallback want 0,0,126,126 got %+v", h.Rect)
+		t.Fatalf("explicit authored rect was not retained: %+v", h.Rect)
 	}
 	if h.BlinkCountdown != 7 {
 		t.Fatalf("BlinkCountdown want 7 got %d [03 §3.6]", h.BlinkCountdown)
 	}
-	// Non-zero anchors with fallback zero → fallback default
+	// The 30 side anchors do not contain a minimap record.
 	var a Anchors
 	a[0] = Rect{X1: 10, Y1: 10, X2: 20, Y2: 20}
 	h2 := NewMinimapHUD(a, Rect{})
-	if h2.Rect == (Rect{}) {
-		t.Fatalf("NewMinimapHUD should not return empty rect")
+	if h2.Rect != (Rect{}) {
+		t.Fatalf("unresolved rail anchor must remain empty: %+v", h2.Rect)
 	}
 }
 
@@ -130,7 +129,21 @@ func TestMinimapHUDViewportRect(t *testing.T) { // inclusive and clipped to HUD 
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// ViewportRect itself is presentation-only; palette index not stored here, but ensure rect is 1-pixel
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// We keep placeholder; test ensures rect is inclusive 1-pixel outline will be drawn via client.DrawMinimap.
+	// The caller supplies the palette and draws the one-pixel outline.
+}
+
+func TestMinimapHUDViewportRectUsesDisplayDestination(t *testing.T) {
+	// A real presentation destination is not necessarily the 126-pixel canvas:
+	// this catches returning canvas coordinates when the HUD is offset and scaled.
+	h := NewMinimapHUD(Anchors{}, Rect{X1: 200, Y1: 100, X2: 451, Y2: 351})
+	playW, playH := int32(608), int32(352)
+	m := camera.LayoutMinimap(640, 480)
+	cam := &camera.Camera{X: 64, Z: 32, ViewW: 64, ViewH: 64}
+	r := h.ViewportRect(cam, m, playW, playH)
+	want := Rect{X1: 226, Y1: 148, X2: 252, Y2: 182}
+	if r != want {
+		t.Fatalf("ViewportRect display conversion want %+v got %+v", want, r)
+	}
 }
 
 func TestMinimapHUDDirtyBlink(t *testing.T) {
@@ -155,13 +168,10 @@ func TestPlaySizeForMinimap(t *testing.T) { // TODO(question): Historical analys
 	if w != ter.PlayRight || h != ter.PlayBottom {
 		t.Fatalf("PlaySizeForMinimap want %d,%d got %d,%d", ter.PlayRight, ter.PlayBottom, w, h)
 	}
-	// Fallback compute when Play fields zero
+	// Missing map extents are not reconstructed from raw dimensions.
 	ter2 := &world.Terrain{CellW: 32, CellH: 32}
 	w2, h2 := PlaySizeForMinimap(ter2)
-	if w2 != 32*16-32 || h2 != 32*16-128 {
-		t.Fatalf("PlaySizeForMinimap fallback compute want %d,%d got %d,%d", 32*16-32, 32*16-128, w2, h2)
-	}
-	if w2 != camera.PlayRight(32*16) || h2 != camera.PlayBottom(32*16) {
-		t.Fatalf("PlaySizeForMinimap should match camera.PlayRight/Bottom [03 §3.4]")
+	if w2 != 0 || h2 != 0 {
+		t.Fatalf("PlaySizeForMinimap missing extents want 0,0 got %d,%d", w2, h2)
 	}
 }

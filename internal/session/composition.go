@@ -20,7 +20,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -324,23 +323,12 @@ func ensureCOBForAll(s *Session, fs vfs.FSOps) error {
 	return nil
 }
 
-// requireGlobalRNGStreams enforces the process setup contract at strict
-// session boundaries. Retail seeds both streams before battle entry; a
-// missing stream must be reported rather than replaced with a seed-zero
-// stream [01 §7.1][01 §7.2].
-func requireGlobalRNGStreams() error {
-	if rng.Global.Sim == nil {
-		return fmt.Errorf("session: missing global simulation RNG stream [01 §7.1]")
-	}
-	if rng.Global.Crt == nil {
-		return fmt.Errorf("session: missing global CRT RNG stream [01 §7.2]")
-	}
-	return nil
-}
-
 // createAndBindServices creates every required authoritative service and binds
 // cross-service ports explicitly. It is the single topology site used by both
 // skirmish and campaign. [08 "Placement and battle entry"] [04 §7.2]
+// DET-01: the session owns both RNG streams for its lifetime; services receive
+// s.SimRNG()/s.CrtRNG() directly. There is no process-global stream gate left
+// to check — battle bootstrap seeds explicitly via SeedSessionRNG [R-CORE-02].
 func createAndBindServices(s *Session) error {
 	if s == nil {
 		return fmt.Errorf("session: nil session")
@@ -353,9 +341,6 @@ func createAndBindServices(s *Session) error {
 	}
 	if s.Units == nil {
 		return fmt.Errorf("session: missing Units for service wiring [01 §6.1]")
-	}
-	if err := requireGlobalRNGStreams(); err != nil {
-		return err
 	}
 	if s.Wind == nil {
 		return fmt.Errorf("session: missing Wind for service wiring [01 §7.3]")
@@ -391,10 +376,10 @@ func createAndBindServices(s *Session) error {
 		}
 		return u.CloakCost() // [05 "Cloak debit"] stationary vs moving [P1-I04]
 	}
-	// Features [05] with terrain, sim, crt, wind
+	// Features [05] with terrain, sim, crt, wind — DET-01 injected from session.
 	if s.Features == nil {
-		sim := rng.Global.Sim
-		crt := rng.Global.Crt
+		sim := s.SimRNG()
+		crt := s.CrtRNG()
 		s.Features = features.NewService(s.World, sim, crt, s.Wind)
 		s.Features.PopulateFromTerrain()
 	} else if s.Features.Terrain != s.World {
@@ -420,11 +405,9 @@ func createAndBindServices(s *Session) error {
 		}
 	}
 	s.Vis.SetLocal(visibility.PlayerID(localPlayerForSession(s)))
-	// Sensor backing surfaces are presentation-only (minimap) and never author the LOS word mask [03 §3.4] C11.
-	if s.sensorSurfaces == nil {
-		s.sensorSurfaces = &sensorSurfacesImpl{}
-	}
-	s.Vis.SetSurfaces(s.sensorSurfaces)
+	// Sensor callbacks remain an internal visibility snapshot. Presentation
+	// consumes Frame.Radar after commit and does not bind a mutable surface sink
+	// to the authoritative session [03 §3.4][I6].
 	if s.visStatus == nil {
 		s.visStatus = make(map[int]uint32)
 	}
@@ -510,7 +493,12 @@ func createAndBindServices(s *Session) error {
 		}
 		switch ev.Kind {
 		case combat.EventShake:
-			s.publication.events.EmitShake(pe)
+			// DET-04: the shake request routes to the session's authoritative
+			// phase-10 state — NOT through the presentation event stream. The
+			// impact dispatcher stays the request source [R-CORE-01 §4.4.1]
+			// [06 §13.2]; phase 10 draws the CRT jitter and publishes the
+			// offset on the committed frame.
+			s.RequestShake(ev.Magnitude, ev.Duration)
 		case combat.EventHitSound, combat.EventWaterSound:
 			if ev.Sound != "" {
 				_, _, _ = s.EmitWeaponHit(ev.Sound, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, ev.Kind == combat.EventWaterSound)
@@ -670,31 +658,6 @@ func (s *Session) RecalcLocalOwner() {
 // laser tower outranges a peewee at equal sightdistance.
 func heightByteFor(u *units.Unit) uint8 {
 	return heightByteAt(u, 0)
-}
-
-// sensorSurfacesImpl is the presentation-only sensor backing surfaces [03 §3.4] C11 P0-11.
-// It is wiped each tick while the LOS word mask persists; radar/sonar/jammer never author the LOS mask.
-type sensorSurfacesImpl struct {
-	wipes    int
-	sensor   [][3]int32
-	radarJam [][3]int32
-	sonarJam [][3]int32
-}
-
-func (r *sensorSurfacesImpl) Wipe() {
-	r.wipes++
-	r.sensor = r.sensor[:0]
-	r.radarJam = r.radarJam[:0]
-	r.sonarJam = r.sonarJam[:0]
-}
-func (r *sensorSurfacesImpl) Sensor(u, v, radius int32) {
-	r.sensor = append(r.sensor, [3]int32{u, v, radius})
-}
-func (r *sensorSurfacesImpl) RadarJam(u, v, radius int32) {
-	r.radarJam = append(r.radarJam, [3]int32{u, v, radius})
-}
-func (r *sensorSurfacesImpl) SonarJam(u, v, radius int32) {
-	r.sonarJam = append(r.sonarJam, [3]int32{u, v, radius})
 }
 
 // ensureMovementForAll ensures per-unit movement state for every live unit.

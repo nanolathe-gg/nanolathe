@@ -1,7 +1,5 @@
 package gui
 
-import "github.com/nanolathe/nanolathe/internal/input"
-
 // Kind is the stored control-type byte [02 §6 "Interface panel files (.gui)"] [07 §4].
 // Retail gadgets have 347-byte record identity [07 §4][02 §6 "Control-kind mapping"]; Go uses named fields per I13.
 type Kind uint8
@@ -151,22 +149,6 @@ func (w *Window) PlacedRect(index int) Rect {
 		r.Y += w.OriginY
 	}
 	return r
-}
-
-// Event is a GUI input event for dispatch. WU-12-2 will expand runtime families 1,2,3,4,5,6,12,13 [07 §4].
-// We keep a minimal compatibility shape now so load.go compiles and tests can drive HitTest.
-// TODO(question): latch 0xB (TELEPORT) and 0xE (MOBILEBUILD) can be armed by paths other than the button chain [07 §9]; only button path wired here.
-type Event struct {
-	X, Y  int32
-	Key   input.Token
-	Mouse input.MouseRecord
-	// TODO(question): OEM key aliases 0xBA..0xC0 and 0xDB..0xDE not established [07 §2]
-}
-
-// Result is the outcome of dispatch [07 §3].
-type Result struct {
-	Handled bool
-	Index   int // gadget index that handled event, -1 if none
 }
 
 // ArtSources returns the art resolution order for a gadget: own entry, side GAF, fallback [07 §4].

@@ -124,14 +124,14 @@ func (s *Service) sim() *rng.Simulation {
 	if s.Sim != nil {
 		return s.Sim
 	}
-	return rng.Global.Sim
+	return nil // DET-01: no global fallback; injected via Service.Sim
 }
 
 func (s *Service) crt() *rng.CRT {
 	if s.Crt != nil {
 		return s.Crt
 	}
-	return rng.Global.Crt
+	return nil // DET-01: no global fallback
 }
 
 // Tick advances the feature phase one tick [06 §13.1] [05 "Feature burning"].

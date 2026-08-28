@@ -6,14 +6,13 @@ package cleanroom
 // line that still has to be rewritten as clean-room prose, with its
 // address-level trail moved to /tmp/ta-decompile/notes/.
 //
-// Total at baseline: 1408 occurrences across 116 files.
+// Total at baseline: 1334 occurrences across 111 files.
 //
 // A file absent from this map must have zero occurrences. Counts may only
 // go down, and going down requires updating this file in the same change.
 var Baseline = map[string]int{
 	"cmd/nanolathe/allies_test.go":                  1,
 	"cmd/nanolathe/battle_controller.go":            1,
-	"cmd/nanolathe/frontend.go":                     18,
 	"cmd/nanolathe/loading.go":                      16,
 	"cmd/nanolathe/loading_test.go":                 1,
 	"cmd/nanolathe/retail_font.go":                  17,
@@ -34,10 +33,6 @@ var Baseline = map[string]int{
 	"internal/ai/strategic_test.go":                 3,
 	"internal/audio/player.go":                      1,
 	"internal/audio/positional.go":                  1,
-	"internal/camera/camera.go":                     2,
-	"internal/camera/minimap.go":                    29,
-	"internal/camera/minimap_test.go":               16,
-	"internal/client/minimap_draw_test.go":          2,
 	"internal/client/unitdraw.go":                   9,
 	"internal/clock/clock.go":                       11,
 	"internal/cob/ports.go":                         8,
@@ -57,14 +52,14 @@ var Baseline = map[string]int{
 	"internal/construction/capture.go":              22,
 	"internal/construction/factory_test.go":         1,
 	"internal/construction/gap_p014_p015_test.go":   2,
-	"internal/construction/resurrection.go":         28,
+	"internal/construction/resurrection.go":         24,
 	"internal/construction/reverse.go":              6,
 	"internal/construction/rs10_test.go":            1,
 	"internal/content/ai_profile.go":                1,
 	"internal/content/catalog.go":                   6,
 	"internal/content/compile_feature.go":           4,
 	"internal/content/compile_map.go":               1,
-	"internal/content/compile_movement.go":          35,
+	"internal/content/compile_movement.go":          32,
 	"internal/content/compile_unit.go":              11,
 	"internal/content/movement_sc5_test.go":         17,
 	"internal/content/ovr.go":                       16,

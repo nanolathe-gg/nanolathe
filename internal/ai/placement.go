@@ -38,11 +38,11 @@ func (m *Manager) getStrategic() *Strategic                  { return &m.Strateg
 func (m *Manager) getOrigin() (numeric.Fixed, numeric.Fixed) { return m.OriginX, m.OriginZ }
 func (m *Manager) setOrigin(x, z numeric.Fixed)              { m.OriginX, m.OriginZ = x, z }
 func (m *Manager) getRNG() *rng.Simulation {
-	// Per-session isolated RNG when set [RS-06][I4], else single global simulation stream per RS-02 [08].
+	// Per-session isolated RNG when set [RS-06][I4] DET-01; no global fallback.
 	if m != nil && m.RNG != nil {
 		return m.RNG
 	}
-	return rng.Global.Sim
+	return nil
 }
 func (m *Manager) getSurfaceMetal() int32 {
 	if m == nil {

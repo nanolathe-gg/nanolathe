@@ -37,18 +37,28 @@ type MovementClass struct {
 // [P1-03]: FootPrint* default 0, depths/slopes preserve prior (BSS 0 on first),
 // Bad* default half of just-read Max via SHR AL,1.
 //
-// Then three clamps run unconditionally per binary trace (no authored gate)
-// [P1-03][02 "Movement class record"]:
+// Then three clamps run unconditionally in retail — unsigned byte comparisons,
+// strictly <, with no authored gate on any of them [02 §5 R-CONTENT-01]:
 //
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+//	1 if maxwaterslope < maxslope => maxslope = maxwaterslope
 //	2 if maxslope < badslope => badslope = maxslope
 //	3 if maxwaterslope < badwaterslope => badwaterslope = maxwaterslope
 //
-// All comparisons are unsigned byte CMP/JB, strictly < not <= [P1-03].
-// BSS zero would destroy land MaxSlope (12 of 15 retail classes omit
-// maxwaterslope) — stock hypothesis is profile template 255 before parse
-// [P1-03]. Writer NEGATIVE-BOUNDED absent in 848/3901 scan [P1-03].
-// Nanolathe keeps gated divergence with A10 comment until writer proven [P1-03][SPEC_CONFLICTS SC5].
+// Initialization is settled [02 §5 R-CONTENT-01]: the class pool is
+// zero-filled before any parse and nothing but the CLASS loop ever writes it,
+// so each record starts with a null name and all eight fields zero. There is
+// no reset between classes: each CLASS%d slot parses at most once per compile
+// and the "prior value" defaults read the record's OWN prior bytes — a later
+// class that omits maxwaterslope holds its own zero, not the previous class's
+// value and not a shared template. Because the integer accessor cannot
+// distinguish an absent key from an authored zero [02 §4], a key-presence gate
+// is not expressible with the accessor retail reads these fields through.
+// Retail's unconditional clamps therefore compile every class that omits
+// maxwaterslope to maxslope = 0; Nanolathe gates clamps 1 and 3 on key
+// presence as the install-compatible divergence [SPEC_CONFLICTS SC5] — kept
+// because the consumer-side classifier's treatment of that MaxSlope = 0 is a
+// runtime-trace question, not because initialization is unknown [02 §5
+// R-CONTENT-01].
 //
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -71,40 +81,39 @@ func compileMovementSection(section *formats.Section, className string, prov Pro
 	badWaterSlopeDefault := maxWaterSlope / 2
 	badWaterSlope := section.IntValue("badwaterslope", badWaterSlopeDefault) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 
-	// TODO(question): what is a movement profile's initial maxwaterslope
-	// before the CLASS section is read? Hypothesis is template 255 [P1-03].
+	// Initialization is settled [02 §5 R-CONTENT-01]: the pool is zero-filled,
+	// nothing writes it before the CLASS loop, and there is no template write
+	// before the first parse — the earlier "profile template 255" hypothesis
+	// is falsified. The defaults below therefore read the record's own prior
+	// bytes, which are zero on first parse (and that record's previous-parse
+	// value on the battle-entry re-parse, bit-identical for stock content).
 	//
-	// [02 "Movement class record"] runs three clamps unconditionally per binary
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// default, clamp 1 would set maxslope=0 for every class that omits
-	// maxwaterslope — 12 of 15 retail classes, taking kbotsf2, kbotss2, tankbh3
-	// etc with it, making land impassable — contradicting stock play. Stock
-	// ship data only authors MaxWaterSlope=255 for TANKHOVER3/4 [P1-03]; the
-	// other thirteen omit it yet remain land-passable, so template must carry
-	// large MaxWaterSlope (≈255) before parsing so absent preserves 255 and
-	// clamps are identity [P1-03]. Writer NEGATIVE-BOUNDED absent in 848/3901
-	// scan [P1-03].
-	//
-	// The presence branch below is a gated divergence per SPEC_CONFLICTS SC5 and
-	// A10, not a reading of the spec: it reproduces stock slopes with no
-	// template. If profile is pre-initialized with 255, all three clamps run
-	// unconditionally and produce retail's behaviour with no branch — that is
-	// the shape to aim for once initial value is known [P1-03].
+	// The presence branch below is a gated divergence per SPEC_CONFLICTS SC5,
+	// not a reading of the spec: it reproduces stock slopes with no template.
+	// The divergence exists because the consumer-side classifier's behavior at
+	// MaxSlope = 0 — the value retail's unconditional clamps produce for every
+	// class that omits maxwaterslope — is unresolved pending a runtime trace
+	// of the compiled pool or of a unit definition's slope copy [02 §5
+	// R-CONTENT-01]. If that trace settles the classifier, all three clamps
+	// run unconditionally and produce retail's behaviour with no branch —
+	// that is the shape to aim for.
 	//
 	// The string accessor distinguishes absent key from authored zero; the
-	// integer accessor cannot [02 §4][P1-03].
+	// integer accessor cannot [02 §4]. Key-presence gating is not expressible
+	// with the accessor retail reads these fields through [02 §5 R-CONTENT-01].
 	_, maxWaterSlopePresent := section.StringValue("maxwaterslope", "")
 
-	// Three clamps in order [02 "Movement class record"][P1-03], gated per SC5 A10.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// we gate clamps 1 and 3 on authored until template writer proven.
-	if maxWaterSlopePresent && maxWaterSlope < maxSlope { // clamp 1: MaxWaterSlope<MaxSlope→MaxSlope=MaxWaterSlope [P1-03] unsigned byte
+	// Three clamps in order; unconditional in retail, clamps 1 and 3 gated
+	// here on key presence as the install-compatible divergence
+	// [SPEC_CONFLICTS SC5] [02 §5 R-CONTENT-01]. Comparisons are unsigned,
+	// strictly <.
+	if maxWaterSlopePresent && maxWaterSlope < maxSlope { // clamp 1: MaxWaterSlope<MaxSlope→MaxSlope=MaxWaterSlope
 		maxSlope = maxWaterSlope
 	}
-	if maxSlope < badSlope { // clamp 2: MaxSlope<BadSlope→BadSlope [P1-03] unconditional in retail, also here
+	if maxSlope < badSlope { // clamp 2: MaxSlope<BadSlope→BadSlope; unconditional in retail, also here
 		badSlope = maxSlope
 	}
-	if maxWaterSlopePresent && maxWaterSlope < badWaterSlope { // clamp 3: MaxWaterSlope<BadWaterSlope→BadWaterSlope [P1-03]
+	if maxWaterSlopePresent && maxWaterSlope < badWaterSlope { // clamp 3: MaxWaterSlope<BadWaterSlope→BadWaterSlope
 		badWaterSlope = maxWaterSlope
 	}
 

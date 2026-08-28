@@ -168,13 +168,20 @@ func TestRS02_RNGDrawLedgerMatchesHandAuthoredSequence(t *testing.T) {
 	mgr.Deadlines[ai.TaskResource] = 100
 	// Resource task draws RNG(5) only for makesmetal units in its vector [P0-02 §3.3]; populate it.
 	mgr.GroupResource = []pool.Handle{h}
-	before := rng.Global.Sim.Draws()
+	// DET-01: the manager draws from the INJECTED session stream; the
+	// process-global stream is never consulted. Bind a local stream and count
+	// from it.
+	sim := rng.NewSimulation(12345)
+	mgr.RNG = &sim
+	before := sim.Draws()
 	mgr.Tick(100, w, &econ)
-	after := rng.Global.Sim.Draws()
-	draws := after - before
+	draws := sim.Draws() - before
 	// Expected: strategic refresh (30) + Other900 (900) + Other150 (150) + Resource (5) = 4 draws
 	if draws != 4 {
 		t.Fatalf("hand-authored sequence should consume 4 draws (30,900,150,5), got %d", draws)
+	}
+	if rng.Global.Sim != nil && rng.Global.Sim.Draws() != 0 {
+		t.Fatalf("global stream advanced %d draws; managers must draw only from the injected stream [DET-01]", rng.Global.Sim.Draws())
 	}
 }
 

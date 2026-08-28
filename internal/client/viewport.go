@@ -113,6 +113,19 @@ func (v ViewportTransform) WorldToBeam(x, y, z numeric.Fixed) Point {
 	return Point{X: sx, Y: sy}
 }
 
+// WorldToSurface projects into the indexed battle surface whose origin is the
+// upper-left of the logical framebuffer. It is the shared coordinate used by
+// committed-frame picking, selection geometry, and world overlays.
+func (v ViewportTransform) WorldToSurface(x, y, z numeric.Fixed) Point {
+	p := v.WorldToBeam(x, y, z)
+	return Point{X: p.X - v.BeamOrigin.X, Y: p.Y - v.BeamOrigin.Y}
+}
+
+// SurfaceToBeam converts an indexed-surface point back to projection space.
+func (v ViewportTransform) SurfaceToBeam(p Point) Point {
+	return Point{X: p.X + v.BeamOrigin.X, Y: p.Y + v.BeamOrigin.Y}
+}
+
 // BeamToViewport rebases a beam point to shell-relative battle viewport
 // coordinates. It does not clamp or change the point.
 func (v ViewportTransform) BeamToViewport(p Point) Point {

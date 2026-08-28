@@ -28,7 +28,15 @@ func (s *testSelector) GetCandidateSource() func(*units.Unit) []string { return 
 func (s *testSelector) GetCatalog() *content.Catalog                   { return s.catalog }
 func (s *testSelector) GetMissionGateFlag() int32                      { return s.gateFlag }
 func (s *testSelector) GetGateCandidates() map[string]struct{}         { return s.gateCandidates }
-func (s *testSelector) GetRNG() *rng.Simulation                        { return s.rng }
+func (s *testSelector) GetRNG() *rng.Simulation {
+	// DET-01: tests seed the global streams; return the CURRENT stream so
+	// reseeds between sub-cases are observed, exactly like an injected
+	// session stream would be.
+	if s.rng != nil {
+		return s.rng
+	}
+	return rng.Global.Sim
+}
 
 func testBuilder(defKey string) *units.Unit {
 	def := &content.UnitDef{

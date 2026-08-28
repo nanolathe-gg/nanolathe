@@ -179,11 +179,38 @@ type Session struct {
 	rngCrt         rng.CRT
 	rngInitialized bool
 
+	// Shake driver owned by authoritative phase 10 [R-CORE-01 §4.4.1] DET-04.
+	// All CRT draws for shake are consumed here; the client only applies the
+	// published offset on the committed frame.
+	shakeActive    bool
+	shakeDuration  int32
+	shakeRemaining int32
+	shakeAmpX      int32
+	shakeAmpY      int32
+	shakeOffsetX   int32
+	shakeOffsetY   int32
+
+	// Visibility stamp dirty-check keys per unit handle [R-CORE-01 §4.4.1]
+	// DET-06: last-published stamp cell and sight range. Keyed access only,
+	// never ranged (I1).
+	visStamps map[int]visStamp
+
+	// Phase trace for DET-02 verification [01 §4.4].
+	phaseTrace        []string
+	phaseTraceEnabled bool
+	phaseDrawTrace    []PhaseDrawDelta
+
 	// Visibility sensor state [03 §3.4] P0-11: per-unit status bits (0x100 seen, 0x300 friendly, 0x1000 decloak)
-	// and decloak deadlines tick+90, plus presentation-only jammer/radar surfaces.
-	visStatus      map[int]uint32
-	visDecloak     map[int]uint32
-	sensorSurfaces *sensorSurfacesImpl
+	// and decloak deadlines tick+90. Radar callback results are retained by
+	// visibility.Service and published through Frame.Radar.
+	visStatus  map[int]uint32
+	visDecloak map[int]uint32
+
+	// RadarMarkerMode is the composer-owned minimap mode byte. Its writer is
+	// not represented by the current simulation/session inputs; callers that
+	// have that authoritative mode may provide it here. Zero remains the
+	// explicit mode-off value until that source is wired [03 §3.12].
+	RadarMarkerMode uint8
 
 	// Audio is a reference to the concrete internal/audio owner. Queue/cache/
 	// controller state and presentation draining live in that package; Session
@@ -202,59 +229,61 @@ type Session struct {
 	nextHumanSequence uint64
 }
 
-// SimRNG returns the per-session simulation RNG [INVARIANTS I4][RS-P0-018].
+// PhaseDrawDelta records per-phase RNG consumption for the phase trace test [01 §4.4][01 §7.1][01 §7.2].
+type PhaseDrawDelta struct {
+	Phase    string
+	Tick     uint32
+	SimDelta uint64
+	CrtDelta uint64
+}
+
+// SimRNG returns the per-session simulation RNG [01 §7.1][INVARIANTS I4][RS-P0-018].
 // It is isolated per Session so two interleaved sessions do not cross-contaminate draws [RS-06].
+// DET-01: single authority — the session owns the battle's Park–Miller state
+// for its lifetime; there is no copy from rng.Global, no sync back, and no
+// reseed anywhere but here. Battle bootstrap seeds both streams fresh via
+// SeedSessionRNG (retail: sim from the QPC sum XOR constant, forced odd; CRT
+// from the time-of-day helper — so every draw before battle entry is wiped
+// from the streams' state [R-CORE-02]). The seed-1 default below exists only
+// for bare fixture sessions; production constructors seed explicitly.
 func (s *Session) SimRNG() *rng.Simulation {
 	if s == nil {
-		return rng.Global.Sim
+		return nil
 	}
 	if !s.rngInitialized {
-		if rng.Global.Sim != nil {
-			s.rngSim = *rng.Global.Sim
-		} else {
-			s.rngSim = rng.NewSimulation(1)
-		}
-		if rng.Global.Crt != nil {
-			s.rngCrt = *rng.Global.Crt
-		} else {
-			s.rngCrt = rng.NewCRT(1)
-		}
+		s.rngSim = rng.NewSimulation(1)
+		s.rngCrt = rng.NewCRT(1)
 		s.rngInitialized = true
 	}
 	return &s.rngSim
 }
 
-// CrtRNG returns the per-session CRT RNG [INVARIANTS I4][RS-P0-018].
+// CrtRNG returns the per-session CRT RNG [01 §7.2][INVARIANTS I4][RS-P0-018].
+// DET-01: single authority — per-session CRT state; no lazy global copy.
 func (s *Session) CrtRNG() *rng.CRT {
 	if s == nil {
-		return rng.Global.Crt
+		return nil
 	}
 	if !s.rngInitialized {
-		if rng.Global.Sim != nil {
-			s.rngSim = *rng.Global.Sim
-		} else {
-			s.rngSim = rng.NewSimulation(1)
-		}
-		if rng.Global.Crt != nil {
-			s.rngCrt = *rng.Global.Crt
-		} else {
-			s.rngCrt = rng.NewCRT(1)
-		}
+		s.rngSim = rng.NewSimulation(1)
+		s.rngCrt = rng.NewCRT(1)
 		s.rngInitialized = true
 	}
 	return &s.rngCrt
 }
 
-// SeedSessionRNG seeds the per-session RNGs from the given seeds [I4][RS-06].
-// It also seeds the process-global for backward compatibility with code that still reads rng.Global.
+// SeedSessionRNG seeds both per-session streams fresh, wiping every draw made
+// before it — the Nanolathe form of retail's reseed-wipes-history property at
+// battle entry [R-CORE-02]. DET-01: explicit seeding only — it does not touch
+// rng.Global. The session is the sole authority for its lifetime; rng.Global
+// remains for process bootstrap (cmd) only.
 func (s *Session) SeedSessionRNG(simSeed, crtSeed uint32) {
 	if s == nil {
 		return
 	}
-	rng.SeedGlobal(simSeed, crtSeed)
 	s.rngSim = rng.NewSimulation(simSeed)
 	s.rngCrt = rng.NewCRT(crtSeed)
-	// Preserve draw counters at zero for fresh session [01 §7.1][01 §7.2].
+	// Fresh draw census for the battle [R-CORE-02].
 	s.rngInitialized = true
 	// Bind AI managers to this session's RNG for isolation [RS-06][I4].
 	for _, mgr := range s.AI {
@@ -264,18 +293,142 @@ func (s *Session) SeedSessionRNG(simSeed, crtSeed uint32) {
 	}
 }
 
-// SyncGlobalRNG syncs the process-global RNG to this session's state for code that still reads rng.Global [RS-06][I4].
-// Call before any legacy global draw to keep global in sync with session-local.
-func (s *Session) SyncGlobalRNG() {
-	if s == nil || !s.rngInitialized {
+// EnablePhaseTrace enables ordered phase recording for the next sub-ticks [01 §4.4].
+func (s *Session) EnablePhaseTrace() {
+	if s != nil {
+		s.phaseTraceEnabled = true
+		s.phaseTrace = s.phaseTrace[:0]
+		s.phaseDrawTrace = s.phaseDrawTrace[:0]
+	}
+}
+
+// PhaseTrace returns the ordered phase list recorded since EnablePhaseTrace.
+func (s *Session) PhaseTrace() []string {
+	if s == nil {
+		return nil
+	}
+	out := make([]string, len(s.phaseTrace))
+	copy(out, s.phaseTrace)
+	return out
+}
+
+// PhaseDrawDeltas returns per-phase RNG deltas.
+func (s *Session) PhaseDrawDeltas() []PhaseDrawDelta {
+	if s == nil {
+		return nil
+	}
+	out := make([]PhaseDrawDelta, len(s.phaseDrawTrace))
+	copy(out, s.phaseDrawTrace)
+	return out
+}
+
+func (s *Session) recordPhase(name string, tick uint32) {
+	if s == nil || !s.phaseTraceEnabled {
 		return
 	}
-	if rng.Global.Sim != nil {
-		*rng.Global.Sim = s.rngSim
+	s.phaseTrace = append(s.phaseTrace, name)
+	// Record draw deltas relative to last entry? For now, record current draws and compute delta in test.
+	// We store current totals; test computes delta via difference.
+	var simD, crtD uint64
+	if s.rngInitialized {
+		simD = s.rngSim.Draws()
+		crtD = s.rngCrt.Draws()
 	}
-	if rng.Global.Crt != nil {
-		*rng.Global.Crt = s.rngCrt
+	s.phaseDrawTrace = append(s.phaseDrawTrace, PhaseDrawDelta{Phase: name, Tick: tick, SimDelta: simD, CrtDelta: crtD})
+}
+
+// RequestShake requests screen shake from the authoritative impact dispatcher
+// [R-CORE-01 §4.4.1] DET-04: one amplitude value applied to BOTH axes and one
+// duration taken from the impacting weapon's definition. The earlier
+// distinct-axes request form had no retail source and is removed.
+//
+// An options bit can make requests return untouched; which authored setting
+// drives that bit has no established nanolathe mapping, so requests are
+// always admitted for now.
+// TODO(question): map the shake options bit (request gate) to a nanolathe
+// setting; until traced, the gate defaults to enabled.
+func (s *Session) RequestShake(magnitude, duration int32) {
+	if s == nil {
+		return
 	}
+	// If no shake is active the two amplitude accumulators are cleared
+	// [R-CORE-01 §4.4.1].
+	if !s.shakeActive {
+		s.shakeAmpX = 0
+		s.shakeAmpY = 0
+	}
+	// New duration = trunc((requested + current) / 2), signed truncation
+	// toward zero [R-CORE-01 §4.4.1][01 §8]; remaining is set to it; the
+	// amplitude accumulates; the active flag is set when the duration is
+	// positive. There is no queue, maximum, or distance falloff.
+	s.shakeDuration = (s.shakeDuration + duration) / 2
+	s.shakeRemaining = s.shakeDuration
+	s.shakeAmpX += magnitude
+	s.shakeAmpY += magnitude
+	s.shakeActive = s.shakeDuration > 0
+}
+
+// ShakeOffset returns the cumulative camera jitter offset produced by phase 10
+// [R-CORE-01 §4.4.1].
+func (s *Session) ShakeOffset() (int32, int32) {
+	if s == nil {
+		return 0, 0
+	}
+	return s.shakeOffsetX, s.shakeOffsetY
+}
+
+// ShakeState returns the full shake driver state for frame publication
+// [R-CORE-01 §4.4.1].
+func (s *Session) ShakeState() (active bool, duration, remaining, ampX, ampY, offX, offY int32) {
+	if s == nil {
+		return false, 0, 0, 0, 0, 0, 0
+	}
+	return s.shakeActive, s.shakeDuration, s.shakeRemaining, s.shakeAmpX, s.shakeAmpY, s.shakeOffsetX, s.shakeOffsetY
+}
+
+// tickShake advances the authoritative shake driver once per sub-tick at
+// phase 10 [R-CORE-01 §4.4.1] DET-04. Each sub-tick with an active shake and
+// a positive counter consumes EXACTLY TWO CRT draws (one per axis) and steps:
+//
+//	sx = amplitudeX * remaining / duration      (signed, truncating)
+//	offsetX = rand() * sx / 0x8000 − sx / 2     (SIGNED truncating division —
+//	                                            not a shift; the difference
+//	                                            matters for odd negative sums)
+//
+// so the envelope decays linearly with the remaining counter. The tick after
+// the counter reaches zero clears the active flag and consumes NO draws. The
+// jitter is a permanent random walk accumulated into the published offset;
+// the final view clamp that holds it inside the map runs at presentation when
+// the offset is applied. The simulation stream is never touched (I4).
+func (s *Session) tickShake(tick uint32) {
+	_ = tick
+	if s == nil || !s.shakeActive {
+		return
+	}
+	// Expiry: the tick after the counter reaches zero clears the flag with no
+	// draws [R-CORE-01 §4.4.1].
+	if s.shakeRemaining <= 0 || s.shakeDuration == 0 {
+		s.shakeActive = false
+		return
+	}
+	crt := s.CrtRNG()
+	if crt == nil {
+		return
+	}
+	// sx = amplitudeX * remaining / duration (signed, truncating).
+	sx := s.shakeAmpX * s.shakeRemaining / s.shakeDuration
+	sy := s.shakeAmpY * s.shakeRemaining / s.shakeDuration
+	// Exactly two CRT draws per active tick [R-CORE-01 §4.4.1] (I4).
+	rx := int64(crt.Rand()) // 0..0x7FFF [01 §7.2]
+	ry := int64(crt.Rand())
+	// offsetX = rand()*sx/0x8000 − sx/2, both divisions SIGNED and truncating
+	// toward zero [R-CORE-01 §4.4.1][01 §8] — Go's int64/int32 `/` is idiv,
+	// not a shift.
+	dx := int32(rx*int64(sx)/0x8000 - int64(sx)/2)
+	dy := int32(ry*int64(sy)/0x8000 - int64(sy)/2)
+	s.shakeOffsetX += dx
+	s.shakeOffsetY += dy
+	s.shakeRemaining--
 }
 
 // ValidateComposition checks that every required authoritative service and
@@ -423,9 +576,12 @@ func (s *Session) IsUnitVisible(viewer int, target *units.Unit) bool {
 	if s.visStatus != nil {
 		status = s.visStatus[tid]
 	}
-	hidden := (target.Flags & 0x04) != 0
-	if !hidden && target.Def != nil && target.Def.InitCloaked {
-		hidden = true
+	hidden := target.IsCloaked
+	if target.Def != nil {
+		// Authored stealth and init-cloak are gameplay predicate inputs. The
+		// selection/presentation bits in Unit.Flags are unrelated and must not
+		// stand in for cloak state [03 §3.2].
+		hidden = hidden || target.Def.Stealth || target.Def.InitCloaked
 	}
 	// Underwater exemption is stored as FriendlyMask 0x200 via sensor phase; we include it if present.
 	t := visibility.Target{

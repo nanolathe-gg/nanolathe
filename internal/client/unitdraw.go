@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
@@ -260,7 +261,7 @@ func (c *Client) drawUnitOriented(v frame.UnitView, sx, sy int32) {
 		}
 	}
 	// Selection brackets.
-	if v.Flags&SelectionFlag != 0 {
+	if v.Flags&hud.SelectionFlag != 0 {
 		for _, cornerSet := range []pt{pts[0], pts[1], pts[2], pts[3]} {
 			for d := -3; d <= 3; d++ {
 				for _, off := range [2]pt{{d, 0}, {0, d}} {
@@ -273,7 +274,7 @@ func (c *Client) drawUnitOriented(v frame.UnitView, sx, sy int32) {
 		}
 	}
 	// Health bar under the footprint when damaged or selected.
-	if v.MaxHealth > 0 && (v.Health != v.MaxHealth || v.Flags&SelectionFlag != 0) {
+	if v.MaxHealth > 0 && (v.Health != v.MaxHealth || v.Flags&hud.SelectionFlag != 0) {
 		bw := halfW * 2
 		if bw < 12 {
 			bw = 12

@@ -49,9 +49,9 @@ func PickSnapshotUnit(f *frame.Frame, sx, sy int32, cam *camera.Camera, viewer u
 		if v.Slot == 0 || !SnapshotVisible(f, v, viewer) {
 			continue
 		}
-		px, py := cam.WorldToScreen(v.X, v.Y, v.Z)
-		dx := int64(px-camera.OriginX) - int64(sx)
-		dy := int64(py-camera.OriginY) - int64(sy)
+		p := NewViewportTransform(cam, nil, 0, 0).WorldToSurface(v.X, v.Y, v.Z)
+		dx := int64(p.X) - int64(sx)
+		dy := int64(p.Y) - int64(sy)
 		d := dx*dx + dy*dy
 		if d <= radiusSq && (d < bestDist || (d == bestDist && (best == 0 || v.Slot < best))) {
 			bestDist, best, bestView = d, v.Slot, v
@@ -63,7 +63,7 @@ func PickSnapshotUnit(f *frame.Frame, sx, sy int32, cam *camera.Camera, viewer u
 // SnapshotUnitHandlesInRect returns visible handles in stable frame order.
 // It does not mutate the frame or any authoritative selection flags.
 func SnapshotUnitHandlesInRect(f *frame.Frame, cam *camera.Camera, rect Rect, viewer uint8) []pool.Handle {
-	if f == nil || cam == nil || rect.IsEmpty() {
+	if f == nil || cam == nil || rectEmpty(rect) {
 		return nil
 	}
 	out := make([]pool.Handle, 0)
@@ -72,8 +72,8 @@ func SnapshotUnitHandlesInRect(f *frame.Frame, cam *camera.Camera, rect Rect, vi
 		if v.Slot == 0 || !SnapshotVisible(f, v, viewer) {
 			continue
 		}
-		px, py := cam.WorldToScreen(v.X, v.Y, v.Z)
-		if rect.Contains(px-camera.OriginX, py-camera.OriginY) {
+		p := NewViewportTransform(cam, nil, 0, 0).WorldToSurface(v.X, v.Y, v.Z)
+		if rect.Contains(p.X, p.Y) {
 			out = append(out, v.Slot)
 		}
 	}

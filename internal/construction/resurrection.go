@@ -40,19 +40,17 @@ func FeatureNameToDefName(featureName string) string {
 	return featureName
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// ResurrectionJitter performs the single resurrection placement jitter draw
+// [P0-15]: one simulation-stream draw bounded by the feature's spread byte
+// (feature catalog spread field) [I4] DET-01.
 func ResurrectionJitter(sim *rng.Simulation, spreadByte uint8) int {
-	if sim == nil {
-		sim = rng.Global.Sim
-	}
 	if sim == nil {
 		return 0
 	}
 	if spreadByte == 0 {
 		return 0
 	}
-	return int(sim.Uint32n(uint32(spreadByte))) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	return int(sim.Uint32n(uint32(spreadByte))) // 0..spread-1
 }
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -103,9 +101,6 @@ func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, de
 				}
 			}
 		}
-	}
-	if sim == nil {
-		sim = rng.Global.Sim
 	}
 	_ = ResurrectionJitter(sim, spread)
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.

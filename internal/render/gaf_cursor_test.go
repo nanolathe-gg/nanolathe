@@ -130,31 +130,37 @@ func TestBuildSiteCursorChoice(t *testing.T) {
 		{false, 3, "cursortoofar", 17, "cursorred"},
 	}
 	for _, tc := range tests {
-		if got := CursorForBuildSite(tc.valid); got != tc.want {
-			t.Fatalf("CursorForBuildSite valid=%v got %d want %d [07 §8]", tc.valid, got, tc.want)
+		build := CursorTooFar
+		ghost := CursorRed
+		if tc.valid {
+			build = CursorFindSite
+			ghost = CursorGrn
 		}
-		if name := CursorName(CursorForBuildSite(tc.valid)); name != tc.wantName {
+		if build != tc.want {
+			t.Fatalf("build cursor valid=%v got %d want %d [07 §8]", tc.valid, build, tc.want)
+		}
+		if name := CursorName(build); name != tc.wantName {
 			t.Fatalf("build cursor name valid=%v got %q want %q", tc.valid, name, tc.wantName)
 		}
-		if got := CursorForGhost(tc.valid); got != tc.ghostWant {
-			t.Fatalf("CursorForGhost valid=%v got %d want %d [07 §8]", tc.valid, got, tc.ghostWant)
+		if ghost != tc.ghostWant {
+			t.Fatalf("ghost cursor valid=%v got %d want %d [07 §8]", tc.valid, ghost, tc.ghostWant)
 		}
-		if name := CursorName(CursorForGhost(tc.valid)); name != tc.ghostName {
+		if name := CursorName(ghost); name != tc.ghostName {
 			t.Fatalf("ghost cursor name valid=%v got %q want %q", tc.valid, name, tc.ghostName)
 		}
 		// Ensure both resolve to valid indices
-		if !IsValidCursorIndex(CursorForBuildSite(tc.valid)) {
+		if !IsValidCursorIndex(build) {
 			t.Fatalf("build cursor invalid")
 		}
-		if !IsValidCursorIndex(CursorForGhost(tc.valid)) {
+		if !IsValidCursorIndex(ghost) {
 			t.Fatalf("ghost cursor invalid")
 		}
 	}
 	// Matrix: ensure findsite vs too far are distinct and ghost red vs grn distinct
-	if CursorForBuildSite(true) == CursorForBuildSite(false) {
+	if CursorFindSite == CursorTooFar {
 		t.Fatalf("build site cursors should differ")
 	}
-	if CursorForGhost(true) == CursorForGhost(false) {
+	if CursorGrn == CursorRed {
 		t.Fatalf("ghost cursors should differ")
 	}
 }
@@ -439,7 +445,7 @@ func TestGafCursorAssetGuarded(t *testing.T) {
 		t.Logf("many cursor entries missing (%d/21), install may be minimal", missing)
 	}
 	// Spot check build-site cursors are present
-	for _, idx := range []int{CursorForBuildSite(true), CursorForBuildSite(false), CursorForGhost(true), CursorForGhost(false)} {
+	for _, idx := range []int{CursorFindSite, CursorTooFar, CursorGrn, CursorRed} {
 		name := CursorName(idx)
 		if _, ok := gaf.Find(name); !ok {
 			t.Logf("expected build/ghost cursor %q (idx %d) not in GAF", name, idx)

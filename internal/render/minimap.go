@@ -62,8 +62,6 @@ func minimapFloorDiv(a, b int64) int64 {
 // baked == nil or len==0 uses 2× supersampled tile sampling and ALP 2×2→1 blending [03 §3.7][fmt tnt][fmt pal].
 // When baked != nil, it is rescaled through the established picture path [03 §3.7].
 // The ALP table is mandatory: there is no nearest-neighbor compatibility path.
-// Baked source dimensions other than the established 2× temporary are
-// suppressed until the non-integral source sampling is traced [03 §3.7].
 // TODO(question): letterbox bar fill is outside the exact w×h picture surface
 // and remains unresolved [03 §3.7].
 func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, baked []byte, bakedW, bakedH int, tables *palette.Tables) *RadarSurface {
@@ -77,10 +75,10 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 
 	// Baked path: rescale through the established picture path [03 §3.7].
 	if baked != nil && len(baked) > 0 {
-		if bakedW <= 0 || bakedH <= 0 || bakedW != 2*w || bakedH != 2*h || bakedW > len(baked)/bakedH {
+		if bakedW <= 0 || bakedH <= 0 || bakedW > len(baked)/bakedH {
 			return nil
 		}
-		downsampleALP(bits, w, baked, bakedW, tables)
+		resizeALP(bits, w, h, baked, bakedW, bakedH, tables)
 		return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
 	}
 
@@ -150,22 +148,33 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 	}
 
 	// Two-level row-first ALP blend [03 §3.7].
-	downsampleALP(bits, w, temp, tw, tables)
+	resizeALP(bits, w, h, temp, tw, th, tables)
 
 	return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
 }
 
-// downsampleALP applies the established row-first two-stage palette blend.
-// Both intermediate values are palette indices, so the second lookup uses the
-// same authored table [03 §3.7][fmt pal].
-func downsampleALP(dst []byte, dstW int, src []byte, srcPitch int, tables *palette.Tables) {
-	dstH := len(dst) / dstW
+// resizeALP applies the established arbitrary-source/destination ALP path.
+// Each destination sample maps to a source cell by truncating the ratio. The
+// adjacent source sample is blended in each axis, then those row blends are
+// blended once more; every intermediate remains a palette index [03 §3.7].
+func resizeALP(dst []byte, dstW, dstH int, src []byte, srcW, srcH int, tables *palette.Tables) {
+	if dstW <= 0 || dstH <= 0 || srcW <= 0 || srcH <= 0 || len(dst) < dstW*dstH || len(src) < srcW*srcH {
+		return
+	}
 	for y := 0; y < dstH; y++ {
 		for x := 0; x < dstW; x++ {
-			p00 := src[(y*2)*srcPitch+(x*2)]
-			p01 := src[(y*2)*srcPitch+(x*2+1)]
-			p10 := src[(y*2+1)*srcPitch+(x*2)]
-			p11 := src[(y*2+1)*srcPitch+(x*2+1)]
+			sx, sy := x*srcW/dstW, y*srcH/dstH
+			sx1, sy1 := sx+1, sy+1
+			if sx1 >= srcW {
+				sx1 = srcW - 1
+			}
+			if sy1 >= srcH {
+				sy1 = srcH - 1
+			}
+			p00 := src[sy*srcW+sx]
+			p01 := src[sy*srcW+sx1]
+			p10 := src[sy1*srcW+sx]
+			p11 := src[sy1*srcW+sx1]
 			top := tables.Alpha[int(p00)*256+int(p01)]
 			bottom := tables.Alpha[int(p10)*256+int(p11)]
 			dst[y*dstW+x] = tables.Alpha[int(top)*256+int(bottom)]

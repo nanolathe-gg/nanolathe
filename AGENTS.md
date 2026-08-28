@@ -260,9 +260,11 @@ is the one unrecoverable failure mode.
 vfs        — overlay of loose dirs + HPI-family archives (HAPI, cipher, SQSH)
 formats    — lossless parsers (TDF blanking comment offsets, GAF/TNT/3DO reloc)
 content    — compiled catalogs (units/weapons/features/movement/side/sound/maps) with defaults+conversions
-clock, rng, pool, kernel — 30 Hz tick, budget clamp 0..5, phase graph, fixed pools (slot 0=null)
-world (terrain, features, occupancy) → visibility → units+orders+cob → movement → economy → combat → ai → snapshot
-client     — Ebitengine window loop presents a software framebuffer, interpolates Previous→Current at render fraction, palette/SHD lookup, fog presentation separate from LOS mask
+clock, rng, pool — 30 Hz tick, budget clamp 0..5, phase graph, fixed pools (slot 0=null)
+session    — authoritative sub-tick: the twelve-phase order, one owner per RNG stream, publication boundary
+frame      — committed tick-end copies; presentation samples the committed tick with no interpolation [03 §2.4][I6]
+world (terrain, features, occupancy) → visibility → units+orders+cob → movement → economy → combat → ai
+client     — Ebitengine window loop presents a software framebuffer from the committed frame, palette/SHD lookup, fog presentation separate from LOS mask
 ```
 
 ## Workflow

@@ -71,7 +71,7 @@ func TestP0I07_TruthTable(t *testing.T) {
 	s2.SetSurfaces(surf)
 	var st uint32
 	s2.SensorTick(0, 2, nil, []SensorUnit{{
-		Owner: 1, Status: &st, Alive: true,
+		Owner: 1, Status: &st, Alive: true, Active: true,
 		X: tileWorld(10), Z: tileWorld(10),
 		RadarDistance: 0, SonarDistance: 0, RadarJam: 200,
 	}})
@@ -184,7 +184,7 @@ func TestP0I07_SensorGate(t *testing.T) {
 	surf := &recordingSurfaces{}
 	s.SetSurfaces(surf)
 	var st uint32
-	u := []SensorUnit{{Owner: 0, Status: &st, Alive: true, RadarDistance: 100, X: tileWorld(5), Z: tileWorld(5)}}
+	u := []SensorUnit{{Owner: 0, Status: &st, Alive: true, Active: true, RadarDistance: 100, X: tileWorld(5), Z: tileWorld(5)}}
 	s.SensorTick(0, 1, nil, u)
 	if surf.wipes != 0 {
 		t.Fatalf("sensor should not run with 1 player")
