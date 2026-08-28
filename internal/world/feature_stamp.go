@@ -4,8 +4,11 @@ import "fmt"
 
 // StampFeatureRect writes one feature footprint through the same low-level
 // rectangle writer used by map bootstrap. The caller owns instance flags,
-// collision policy, and any anchor payload; this method only writes feature
-// sentinels and fringe-to-anchor deltas [03 §2.2][03 §5.1.2].
+// collision policy, static-revision policy, and any anchor payload; this
+// method only writes feature sentinels and fringe-to-anchor deltas
+// [03 §2.2][03 §5.1.2]. Runtime feature services bump the static revision at
+// their semantic lifecycle boundary, keeping bootstrap and replacement writes
+// from adding low-level duplicate bumps.
 //
 // The rectangle is half-open, with the anchor at (anchorX, anchorZ). A
 // footprint is rejected when it is not wholly inside the plot or when one of

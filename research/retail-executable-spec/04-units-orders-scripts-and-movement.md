@@ -1228,6 +1228,80 @@ completion contract. Keep the unresolved release, collision, blocked-lane,
 aircraft handoff, rotated-authored-transform, and multi-product questions as
 `TODO(question)` until executable or authored-data evidence closes them.
 
+### OTA-FAC-01B targeted release-boundary pass [R-FAC-01B] (2026-08-28)
+
+This is a correction and second pass over [R-FAC-01]. The earlier statement
+that no stock COB transform census was available is superseded for the
+authored exit-piece inputs only. A clean-room census of the original
+`totala1.hpi` COB and 3DO assets establishes the following `QueryBuildInfo`
+output-local-0 results and piece names. The callback indices were decoded
+independently from each stock COB's `QueryBuildInfo` sequence (literal N is
+popped into output local 0); they were not supplied by pairing the model
+files. The translations are authored 3DO local coordinates before model-loader
+half-turn normalization, not runtime world offsets ([fmt cob], [fmt 3do]).
+Exact signed 16.16 numerators are retained below, with rounded decimals only
+as a reading aid:
+
+| factory | output local 0 | authored piece | local translation (signed 16.16; decimal) |
+| --- | ---: | --- | --- |
+| ARMLAB | 1 | `pad` | (32768, 26214, 229375); (0.5000, 0.4000, 3.5000) |
+| CORLAB | 1 | `pad` | (0, 3276, 942080); (0.0000, 0.0500, 14.3750) |
+| ARMVP | 1 | `pad` | (0, 32768, 655360); (0.0000, 0.5000, 10.0000) |
+| CORVP | 2 | `pad` | (0, 27456, -1015603); (0.0000, 0.4189, -15.4969) |
+| ARMAAP | 1 | `pad` | (68155, 15285, -1092098); (1.0400, 0.2332, -16.6641) |
+| CORAAP | 1 | `pad` | (0, 77561, -1638400); (0.0000, 1.1835, -25.0000) |
+| ARMSY | 6 | `slip` | (0, -573440, 0); (0.0000, -8.7500, 0.0000) |
+| CORSY | 0 | `base` | (0, 0, 0); (0.0000, 0.0000, 0.0000) |
+
+The five target boundaries now have these statuses:
+
+1. **Target derivation and rally handoff — split Established/Unknown.** The
+   output piece index and its authored hierarchy-composed transform are now
+   Established inputs to the state-2 target formula in [04 §6.3]. For these
+   eight selected pieces, the parent is the root `base` with zero translation,
+   so the hierarchy-composed authored origin equals the listed piece-local
+   translation; that equality is not a generic descendant rule. The engine
+   still allocates at that resolved position, validates a separately snapped
+   footprint anchor, and publishes a product-side `GetBuilt` node. `GetBuilt`
+   waits for completion, then copies queued move/patrol rallies or falls back
+   to `Park` ([04 §3.8]). Within the reviewed factory-handler call chain, no
+   factory-owned post-completion egress order, clearance segment, or additional
+   rally handoff was found; whether another movement path supplies one is
+   **Unknown**.
+2. **Producer/product collision exemption — Unknown after allocation.** The
+   pre-allocation validator cannot see a product and receives no producer /
+   product pair. The reviewed call path has no dedicated post-allocation
+   exemption. A static call-chain capture that follows the first product move
+   through occupancy and collision admission, or a retail trace with an exit
+   deliberately overlapping its producer, is required to close this item.
+3. **Blocked release and queue/build gating — split Established/Unknown.**
+   Primary-queue front blocking, positive count gating, and the 15-tick blocked
+   pre-allocation retry versus the 300-tick allocator retry are Established.
+   No post-completion release lane was recovered in the reviewed factory
+   handler call chain, so indefinite blocking of that hypothetical lane and
+   any force-release policy remain **Unknown**.
+   Same-pass coalesced products are serialized by the queue, but delayed
+   occupancy publication does not establish a no-stacking guarantee.
+4. **Aircraft takeoff — generic Established, factory ordering Unknown.** The
+   generic VTOL mover starts its velocity-limited climb when its first flight
+   point/follow goal is installed ([04 §10.1]). The reviewed factory-handler
+   call chain shows no factory-specific takeoff state before `GetBuilt`; whether
+   takeoff precedes rally handoff for an aircraft product is **Unknown**.
+5. **Rotated transform and no-stacking — split Established/Unknown.** The
+   stock authored piece index, name, and local translation are Established by
+   the asset census above. The exact runtime arithmetic that applies a
+   rotated factory heading to those hierarchy translations, and a same-pass
+   no-stacking guarantee, remain **Unknown**. The 3DO format contains
+   hierarchy translations but no authored heading field ([fmt 3do]); a
+   heading-matrix capture or retail rotated-factory trace would settle the
+   remaining arithmetic.
+
+`TODO(question)`: capture a retail run with a blocked exit, a completed ground
+product, and a completed aircraft product while recording the first movement,
+occupancy, and rally events. This is the evidence needed to distinguish a
+hidden release lane from ordinary `GetBuilt`/VTOL handling; do not implement
+one from the unresolved inference.
+
 `TODO(T25)`: the upstream producers of production-node wake mask 8
 (Construction stopped) remain unlocated — the handler semantics are closed in
 section 3.3 and above, and a bounded census of every writer of the record
@@ -2560,10 +2634,15 @@ exactly the geometric center. The blocked-exit retry (exactly 15 ticks,
 silent) and allocator-failure retry (exactly 300 ticks) do not change this
 ownership (sections 3.8, 4.7).
 
-`TODO(question)`: whether each stock factory's authored QueryBuildInfo exit
-transform equals the geometric center implied by its footprint, or carries
-intentional center offsets — the allocator preserves the transform either way;
-only data/COB analysis can settle it.
+The stock callback piece indices, names, and authored local translations are
+now recorded in [R-FAC-01B].
+
+`TODO(question)`: whether the runtime's rotated heading transform applies
+those hierarchy translations with any additional factory-specific arithmetic,
+or whether a stock exit transform coincides with the footprint's geometric
+center after normalization. The allocator preserves the resolved transform
+either way; a heading-matrix capture or retail rotated-factory trace can settle
+the remaining runtime question.
 
 ### 6.4 Placement footprint legality [R-P0-08]
 
@@ -2972,6 +3051,74 @@ occupant-age gate — units that committed within the last 30 ticks do not block
 while older occupants block cells they occupy that are re-stamped afterwards. The rest of
 this paragraph (commit validator reads the cell's mobile-occupancy count; mobile units are
 hard blockers at the movement commit stage) is unchanged.
+
+### OTA-MOV-02A dynamic-blocker boundary [R-MOV-02A] (2026-08-28)
+
+This targeted pass audits the exact collision and replan boundary requested by
+Phase C. It corrects no positive behavior in [R-DOC04-D]; it makes the
+negative evidence and the separation between path service and final movement
+commit explicit. All negative findings below are bounded to the recovered
+movement sweep, mover fan-in, ground commit, footprint validator, path-request
+initializer/scheduler/expansion, and ground-order completion call chains.
+
+**Final commit — Established.** A cross-cell ground proposal is validated
+against the current destination footprint. Any nonzero mobile occupant other
+than the requester rejects the proposal; the bounded predicate has no branch
+for stationary versus moving occupants, owner allegiance, order priority,
+heading, velocity, or projected destination. Thus a stationary friendly, a
+moving friendly, and an enemy are all hard blockers at this commit boundary
+when the same occupancy predicate applies. A same-cell proposal takes the
+fast path and does not revalidate occupancy.
+
+**Sweep ownership and encounter outcomes — Established.** The live sweep is
+deterministic by player slot and then unit pool slot. A successful unit clears
+its old footprint and stamps its new one before the next unit is visited, so a
+later unit can reuse a cell vacated by an earlier unit. A head-on swap where
+each unit proposes the other's currently occupied cell leaves both blocked:
+neither can clear first. For a same-destination group, the first unit that
+successfully commits claims the cell and a later unit sees that occupancy in
+the same sweep. Perpendicular crossing uses the same sequential rule. No
+mass, unit-priority, order-priority, or allegiance-based yield owner was
+recovered.
+
+**Blocked response and retries — Established within the commit chain.** A
+rejected proposal does not push, reverse, sidestep, rotate for clearance,
+submit a new path request, or enter a wait queue. It leaves occupancy
+unchanged, caps speed at half the movement definition's maximum, recomputes
+velocity along the current heading, and clamps the requester's position inside
+its old footprint. No blocked-tick counter, collision retry delay, or random
+draw is present; the mover encounters the same commit boundary on its next
+ordinary tick. The path service's 100-pop budget and later-tick resume are not
+collision retries. The ground order remains active until its ordinary goal
+satisfied-bit handshake; a blocked mover does not complete merely by stopping.
+The separate last-record route-release rearm wait (`30 + RNG(30)`) belongs to
+order/path status handling, not to a mobile collision.
+
+**Search versus commit — Established, with a bounded distinction.** A path
+request's initializer revises the shared movement-class layer and re-stamps
+recently committed mobile footprints. The occupant-age gate can make an older
+occupant block a re-stamped search cell while a recent occupant remains
+nonblocking there; existing heap entries are rechecked lazily when expanded.
+The scheduler and A* expansion themselves read no mobile-unit identity or
+velocity and do not project a blocker's destination. The blanket SC22 wording
+that search “checks only terrain/features” and that “mobile occupancy is
+ignored at search time” is overbroad for the retail contract: it describes a
+Nanolathe implementation decision and omits the request-initialization
+revision channel established in [R-DOC04-B]. The corrected rule is that
+mobile occupancy is not a permanent map-load A* wall, but a request may
+temporarily observe re-stamped older occupants through the age gate and lazy
+per-node recheck. The final occupancy validator remains authoritative and may
+reject a route that was legal during search. A path no-route status and its
+order-layer response are distinct from a successful route later blocked at
+commit.
+
+**Yield/replan/priority — Unknown outside the bound.** No outer caller in the
+reviewed set adds a dynamic yield, retarget, sidestep, reverse, or automatic
+replan policy. This is a bounded negative, not proof that an unrecovered UI,
+network, or other movement caller cannot do so. Closing that residual requires
+a retail trace recording both units' slots/owners, proposed and committed
+cells, headings, speeds, route revisions, and order status through stationary,
+moving, head-on, crossing, and same-destination encounters.
 
 ### 8.3 Final-order arrival and the satisfied-bit handshake [R-P0-01]
 
@@ -3530,12 +3677,14 @@ Function identities that a later re-derivation corrected — in particular the m
   (factory-product publication windows are established in section 3.8
   [R-P0-09]); slot-relative reuse and order-created units beyond the factory
   path remain open.
-- **OTA-FAC-01 [R-FAC-01]:** no separate post-completion factory egress
-  order, producer/product collision exemption, blocked-release policy, or
-  aircraft takeoff-before-rally transition was recovered. Generic VTOL
-  takeoff, QueryBuildInfo target derivation, primary-queue gating, and the
-  pre-allocation retry split are established; the stock rotated-transform and
-  multiple-product no-stacking questions remain Unknown.
+- **OTA-FAC-01 / OTA-FAC-01B [R-FAC-01][R-FAC-01B]:** no separate
+  post-completion factory egress order, producer/product collision exemption,
+  blocked-release policy, or aircraft takeoff-before-rally transition was
+  recovered. Generic VTOL takeoff, QueryBuildInfo target derivation,
+  primary-queue gating, and the pre-allocation retry split are established.
+  The stock exit-piece indices, names, and authored 3DO local translations
+  are now established by the asset census; exact rotated runtime arithmetic
+  and multiple-product no-stacking remain Unknown.
 - Complete player category, side, ally, autonomy, and strategic-AI semantics.
 
 ### Orders and queues
@@ -3661,12 +3810,15 @@ Function identities that a later re-derivation corrected — in particular the m
 
 ### Ground movement
 
-- Collision behavior for simultaneous multi-unit contacts beyond the established
-  sequential sweep commit and row-major footprint scan, including interactions
-  with features, buildings, and map boundaries; the per-unit validator and the
-  same-cell fast path are established.
-- Any hidden pushing, separation, or repath behavior outside the bounded mover
-  call graph.
+- **OTA-MOV-02A [R-MOV-02A]:** stationary versus moving mobile blockers,
+  head-on and same-destination outcomes, sequential sweep ownership, the
+  final-commit half-speed/clamp response, absence of collision retry counters,
+  and the occupant-age/request-revision interaction are established within
+  their stated call-chain bounds. Any outer yield owner, retarget, sidestep,
+  reverse, wait-queue, or automatic replan outside that bound remains Unknown
+  and requires the focused retail encounter trace specified in [R-MOV-02A].
+- Collision behavior beyond that bounded multi-unit commit path, including
+  untraced feature/building/map-boundary interactions, remains open.
 
 ### Hover and VTOL
 

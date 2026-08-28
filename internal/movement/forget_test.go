@@ -24,7 +24,6 @@ func TestForgetUnitLeavesNoPerHandleState(t *testing.T) {
 	s.profiles[h] = Profile{}
 	s.prevMoveTier[h] = 3
 	s.prevSFXBand[h] = 2
-	s.avoidNext[h] = 11
 	s.pathFailures[h] = PathFailure{}
 	s.activeOrders[h] = &activeMove{}
 	s.arrivalHandles[h] = &arrivalHandle{}
@@ -43,7 +42,6 @@ func TestForgetUnitLeavesNoPerHandleState(t *testing.T) {
 		"profiles":       mapHas(s.profiles, h),
 		"prevMoveTier":   mapHas(s.prevMoveTier, h),
 		"prevSFXBand":    mapHas(s.prevSFXBand, h),
-		"avoidNext":      mapHas(s.avoidNext, h),
 		"pathFailures":   mapHas(s.pathFailures, h),
 		"activeOrders":   mapHas(s.activeOrders, h),
 		"arrivalHandles": mapHas(s.arrivalHandles, h),

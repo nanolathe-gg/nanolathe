@@ -112,6 +112,7 @@ type Client struct {
 	fogCache           *visibility.FogCache
 	fogOps             []presentationrender.FogOp
 	selectionChrome    []selectionChrome
+	selectionDrag      SelectionDrag
 
 	// Feature GAF presentation — sprite class [02 "Feature record"] [03 §5.1.1].
 	// Loaded lazily from anims/<filename>.gaf via modelFS; cache is presentation-only (I6).

@@ -96,6 +96,16 @@ type Service struct {
 	// (or a zero result) means no length is known and the instance burns until
 	// something else clears it. Shipped finite lifetimes forced non-looping 46-282 visits [P1-10][P1-15].
 	BurnAnimationTicks func(*content.FeatureDef) int32
+
+	// pendingBurnReplacement is a bounded hand-off for burn.go's established
+	// clear-then-spawn sequence. It is consumed and cleared by the next spawn
+	// (including every failure path), so a failed successor cannot suppress a
+	// later unrelated blocking placement [05 "Feature burning"].
+	pendingBurnReplacement *burnReplacement
+}
+
+type burnReplacement struct {
+	cx, cz int
 }
 
 // NewService creates a service bound to terrain.
@@ -285,6 +295,7 @@ func (s *Service) replaceFeatureAt(cx, cz int, successor *content.FeatureDef) {
 	if s.Terrain == nil {
 		return
 	}
+	s.abandonPendingBurnReplacement()
 	// Locate current instance to derive footprint for clearing.
 	idx := cz*int(s.Terrain.CellW) + cx
 	var def *content.FeatureDef
@@ -299,10 +310,19 @@ func (s *Service) replaceFeatureAt(cx, cz int, successor *content.FeatureDef) {
 			}
 		}
 	}
-	// Clear footprint derived from def or single cell.
-	s.clearFootprint(cx, cz, def)
+	// Clear and successor placement are one logical static mutation. Avoid a
+	// clear-side bump and advance once after both definitions are known.
+	s.clearFootprintNoRevision(cx, cz, def)
+	placed := false
 	if successor != nil {
-		s.spawnFeatureAt(cx, cz, successor)
+		placed = s.spawnFeatureAt(cx, cz, successor) != nil
+	}
+	// If the old blocking footprint was removed, the transition changes the
+	// static layer even when a successor is absent or cannot be stamped. A
+	// successful blocking successor bumps in spawnFeatureAt, so this remains
+	// one bump for the whole replacement [05 "Removal and successor replacement"].
+	if def != nil && def.Blocking && (!placed || successor == nil || !successor.Blocking) {
+		s.Terrain.BumpStaticObstacleRevision()
 	}
 }
 
@@ -310,6 +330,36 @@ func (s *Service) replaceFeatureAt(cx, cz int, successor *content.FeatureDef) {
 // returning cells to the free sentinel [05 "Removal and successor replacement"].
 // Sentinel for free cells is 0xFFFF [GAP T14][02 "Terrain file"].
 func (s *Service) clearFootprint(cx, cz int, def *content.FeatureDef) {
+	s.abandonPendingBurnReplacement()
+	s.clearFootprintNoRevision(cx, cz, def)
+	if s == nil || s.Terrain == nil {
+		return
+	}
+	// Burning invokes clearFootprint followed by a direct successor spawn in
+	// burn.go. Defer a blocking-successor transition to that spawn so the
+	// actual result (success or failure) decides the single revision bump.
+	if def != nil && def.Blocking && def.FeatureBurntDef != nil && def.FeatureBurntDef.Blocking {
+		s.pendingBurnReplacement = &burnReplacement{cx: cx, cz: cz}
+		return
+	}
+	if def != nil && def.Blocking {
+		s.Terrain.BumpStaticObstacleRevision()
+	}
+}
+
+func (s *Service) abandonPendingBurnReplacement() {
+	if s == nil || s.pendingBurnReplacement == nil {
+		return
+	}
+	s.pendingBurnReplacement = nil
+	if s.Terrain != nil {
+		s.Terrain.BumpStaticObstacleRevision()
+	}
+}
+
+// clearFootprintNoRevision is used by replacement transitions that coalesce
+// removal and successor placement into one static revision.
+func (s *Service) clearFootprintNoRevision(cx, cz int, def *content.FeatureDef) {
 	if s.Terrain == nil {
 		return
 	}
@@ -364,6 +414,18 @@ func (s *Service) clearFootprint(cx, cz int, def *content.FeatureDef) {
 // Pools 0x100 catalog / 0x800 anim slots / WH*0xD grid silent fail, successors 0xFFFF [P1-10][P1-15].
 // Malformed/custom: zero/negative footprints are normalized to 1x1, nil canonical keys handled, and unknown successors are sentinel 0xFFFF [P1-I05][02 "Feature record"].
 func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance {
+	if s == nil {
+		return nil
+	}
+	pending := s.pendingBurnReplacement
+	s.pendingBurnReplacement = nil
+	matchesPending := pending != nil && pending.cx == cx && pending.cz == cz
+	placed := false
+	defer func() {
+		if s.Terrain != nil && pending != nil && (!matchesPending || !placed) {
+			s.Terrain.BumpStaticObstacleRevision()
+		}
+	}()
 	if s.Terrain == nil || def == nil {
 		return nil
 	}
@@ -427,6 +489,12 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 	// validated rectangle cannot be stamped [03 §5.1.2].
 	if err := s.Terrain.StampFeatureRect(int32(cx), int32(cz), featIdx, footX, footZ); err != nil {
 		return nil
+	}
+	placed = true
+	if def.Blocking {
+		s.Terrain.BumpStaticObstacleRevision()
+	} else if matchesPending {
+		s.Terrain.BumpStaticObstacleRevision()
 	}
 	s.Terrain.Plot[idx].SetFlagByte(0)
 	// Create instance.

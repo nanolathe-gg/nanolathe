@@ -1219,8 +1219,8 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	s.logMessage("Starting construction")
 
 	// Register builder link on product [05 C18].
-	// Builder/product links are cleared on completion. The death/capture
-	// teardown performs no builder-link walk, so links leak there [P0-14].
+	// The local builder link is retained for the product's GetBuilt lookup;
+	// retail cleanup beyond that bounded handoff remains unresolved [R-FAC-01C].
 	s.SetBuilderLink(productHandle, factory.Handle)
 	if s.getBuiltLinks == nil {
 		s.getBuiltLinks = make(map[pool.Handle]pool.Handle)
@@ -2104,8 +2104,10 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	}
 	// StopBuilding precedes the completion helper [P0-14]: the engine lowers the
 	// StartBuilding bit before the helper runs.
-	// Builder/product links are cleared on completion. The death/capture
-	// teardown performs no builder-link walk, so links leak there [P0-14].
+	// TODO(question): [R-FAC-01C] completion is not established as a separate
+	// factory-release state. Do not add an egress target, producer/product
+	// collision exemption, no-stacking gate, or aircraft takeoff ordering here;
+	// the retail boundary requires a first-movement/occupancy trace.
 	// Note: product LOS after settlement phase5, targetable already phase3, GetBuilt same/next tick by slot [P0-14].
 	// Trigger BuildUnitType only on local 30-tick deadline [P0-14].
 	// Interrupt masks 2/8 bodies known, producers TODO(T25) [P0-14].
@@ -2266,9 +2268,10 @@ func firstWorkNode(prim []*orders.Node) *orders.Node {
 }
 
 // resolveGetBuilt enforces the get-built node's self-drop on a completed
-// product [05 C18][05 "Rally inheritance"]: rally inheritance itself runs at
-// allocation time in the success epilogue; while the product is still under
-// construction the node waits per the researched retry gates.
+// product [05 C18][05 "Rally inheritance"]: after the product reaches zero
+// remaining, rally inheritance or the no-rally Park fallback runs here; while
+// the product is still under construction the node waits per the researched
+// retry gates.
 func (s *Service) resolveGetBuilt(product *units.Unit, tick uint32) {
 	if s == nil || product == nil {
 		return
@@ -2308,6 +2311,11 @@ func (s *Service) resolveGetBuilt(product *units.Unit, tick uint32) {
 		}
 		return
 	}
+	// TODO(question): [R-FAC-01C] this is the unresolved completion/rally-or-Park
+	// boundary. The bounded chain establishes direct allocation plus GetBuilt,
+	// but not a later release target/state, producer-product exemption,
+	// no-stacking rule, or aircraft takeoff-before-rally ordering. Preserve the
+	// current ordinary rally/Park handoff until retail evidence closes it.
 	builderHandle, ok := s.getBuiltLinks[product.Handle]
 	if !ok || builderHandle == 0 || s.World == nil {
 		// A restored product may not have an in-memory builder link. The retail

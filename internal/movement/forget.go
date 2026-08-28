@@ -41,7 +41,6 @@ func (s *System) ForgetUnit(h pool.Handle) {
 	delete(s.profiles, h)
 	delete(s.prevMoveTier, h)
 	delete(s.prevSFXBand, h)
-	delete(s.avoidNext, h)
 	delete(s.tickCarried, h)
 	delete(s.pathFailures, h)
 	delete(s.activeOrders, h)

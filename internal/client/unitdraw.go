@@ -115,14 +115,17 @@ func (c *Client) fillIndexedRect(x, y, w, h int, idx uint8) {
 
 // frameIndexedRect draws a one-pixel outline, clipped.
 func (c *Client) frameIndexedRect(x, y, w, h int, idx uint8) {
-	c.fillIndexedRect(x, y, w, 1, idx)
-	c.fillIndexedRect(x, y+h-1, w, 1, idx)
-	c.fillIndexedRect(x, y, 1, h, idx)
-	c.fillIndexedRect(x+w-1, y, 1, h, idx)
+	if c == nil {
+		return
+	}
+	drawIndexedFrameInclusive(c.indexed, c.width, c.height,
+		Rect{MinX: int32(x), MinY: int32(y), MaxX: int32(x + w - 1), MaxY: int32(y + h - 1)},
+		idx, Rect{MinX: 0, MinY: 0, MaxX: int32(c.width) - 1, MaxY: int32(c.height) - 1})
 }
 
 // drawUnitOriented renders one interpolated unit as an oriented footprint
-// rectangle rotated by its heading, with health bar and selection brackets.
+// rectangle rotated by its heading, with its health bar. The generic
+// per-unit selection bracket is not a retail presentation pass [R-SEL-02A].
 // Heading rotates about the projected center; the long axis follows heading
 // (north at 0) matching TA's top-down presentation.
 func (c *Client) drawUnitOriented(v frame.UnitView, sx, sy int32) {
@@ -255,19 +258,6 @@ func (c *Client) drawUnitOriented(v frame.UnitView, sx, sy int32) {
 				py := a.y + (b.y-a.y)*s/steps
 				if px >= 0 && px < W && py >= 0 && py < HMax {
 					c.indexed[py*W+px] = unitStyle.HealthGreen
-				}
-			}
-		}
-	}
-	// Selection brackets.
-	if v.Flags&hud.SelectionFlag != 0 {
-		for _, cornerSet := range []pt{pts[0], pts[1], pts[2], pts[3]} {
-			for d := -3; d <= 3; d++ {
-				for _, off := range [2]pt{{d, 0}, {0, d}} {
-					px, py := cornerSet.x+off.x, cornerSet.y+off.y
-					if px >= 0 && px < W && py >= 0 && py < HMax {
-						c.indexed[py*W+px] = unitStyle.SelectWhite
-					}
 				}
 			}
 		}

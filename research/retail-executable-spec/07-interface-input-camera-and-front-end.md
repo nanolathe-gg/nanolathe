@@ -1321,6 +1321,174 @@ Queued orders and path previews use separate cursor/indicator artwork. The
 cursor validity state is therefore a presentation of command legality, not
 just a pointer shape.
 
+#### R-SEL-02A — selection overlay and picking evidence
+
+**Established (direct-static).** The authored 3DO selection primitive is not
+the retail selection wireframe. Model loading moves a declared selection
+primitive to primitive zero, and the model draw walk skips that slot. No
+selection primitive read occurs in the bulk drag selector or in the traced
+hover path. This corrects the earlier plan-facing assumption that one
+authored plate could be reused by every selection consumer.
+
+The four consumers have the following established split:
+
+* The wireframe visible during box selection is the composer's two solid
+  one-pixel rectangular frames, not a 3DO polygon. Their outer/inner palette
+  entries and fog ordering are specified in [03 §2.4.1] and [03 §1].
+* Overlap/drag selection projects each eligible unit's origin point and tests
+  that point against the normalized rectangle. It does not project a piece,
+  selection primitive, or model extent. Both rectangle boundaries are
+  inclusive, and all eligible units at the same point are admitted in the
+  stable unit-pool walk order.
+* Point click uses the hover id computed before the click. The hover search
+  admits visible eligible units from the sensor-built hot-unit list, projects
+  each unit's transformed hierarchy bounds as a four-corner screen polygon,
+  and retains the smallest score with a strict `<` comparison. Equal scores
+  therefore retain the earlier list member (the lower stable pool position).
+* Cursor targeting consumes that same hover/visibility result for its
+  target-dependent cursor branches; no authored selection primitive is read.
+
+The established drag boundary rule is therefore `min <= coordinate <= max`
+after independent endpoint sorting. The exact inclusion convention for a
+point lying on an edge of the projected four-corner hover polygon is not
+visible in the current static corpus; it must not be borrowed from the drag
+rectangle rule.
+
+**Established layer order and clipping.** World terrain, features, units,
+projectiles, and effects are composed first; the world fog/LOS overlay is
+then applied; the selection rectangle follows fog; and HUD/interface gadgets
+are composed later. The selection solid-frame writer consumes the inclusive
+clip rectangle copied into the active surface descriptor from presentation
+state. Its projected rectangle coordinates carry the separate beam-space
+`+128/+32` offsets; those offsets are not the clip rectangle's left/top
+values. The later HUD rail can overwrite pixels in its own interface pass.
+No separate plate clipping rule exists because no plate is drawn.
+
+**Viewport-coordinate correction.** The earlier `(0,32,W-1,H-33)` wording
+in this section and the `(128,32,W-1,H-33)` wording in [03 §4.1] describe
+different coordinate records, not one universal selection clip. The static
+call chain establishes that selection consumes the runtime surface-descriptor
+clip, but does not establish its left value for every visible/hidden-panel
+state. That selection-left value is therefore **Unknown** until a focused
+mode/panel capture records the descriptor at the selection draw. Neither
+earlier tuple may be used as a universal canonical value.
+
+**Established palette/remap.** The rectangular outline's outer color is
+logical map entry 4 in ordinary box-selection mode, entry 6 for the armed
+build/wake variant, and entry 15 outside that mode; its inner frame is entry
+0. Each is looked up once through the logical-to-physical palette map before
+the solid indexed writer. The outline is neither fog-remapped nor blended;
+raw GAF image bytes and this semantic map path must not be conflated.
+
+**Unknown.** The static evidence does not show a per-selected-unit plate
+pass, an extra primary-selection wireframe/chrome rule, or an authored plate
+used for cursor targeting. Whether the UI adds primary-only information in a
+separate HUD page is outside this wireframe path. A focused capture with two
+selected units, a single/primary selection, overlapping hover hulls, and
+pointer samples exactly on each hull edge would settle those remaining
+questions.
+
+#### R-SEL-02B2 — hover hull arithmetic and publication boundary
+
+**Established (direct-static).** The hover finder is a separate point-pick
+pass from the drag selector. In the viewport it walks the sensor-produced
+`HOT UNITS` list, which is populated by an ascending unit-pool walk and retains
+that order. The list contains units only; feature contacts are not candidates
+in this pass. A non-empty unit definition/model reference is required before
+the hull helper is called. The candidate must also pass the shared visible and
+eligible-unit gates described in §9: the active state, an exact zero order
+guard, no disqualifying state reference, and the established parent-state gate.
+The visibility source is mode-selected: the local player's bit in the shared
+word coverage, or a nonzero byte in the selected per-viewer coverage grid.
+These gates run before the score reduction, so a hidden, inactive, or
+ineligible unit cannot win merely by having a nearer hull.
+
+**Established (direct-static).** For an admitted viewport candidate, retail
+asks the unit's model/piece-hierarchy bounding-box helper for its model-space
+box, builds four extrema-derived corner records, and sends each through the
+same hierarchy transform used by the unit's current orientation. The helper
+does not read the authored 3DO selection primitive or the footprint cells.
+For each transformed corner `(x,y,z)`, the screen coordinates are:
+
+```text
+screenX = int16((x + unitX - cameraX) >> 16) + 128
+screenY = int16((z + unitZ - cameraZ) >> 16)
+         - (int16((y + unitY) >> 16) >> 1) + 32
+```
+
+The narrowing occurs before the half-height shift and before the view-origin
+addition. The unit's committed position supplies `unitX/unitY/unitZ`, and its
+three committed orientation accumulators supply the hierarchy transform;
+camera X/Z are the current presentation camera values. This is the exact
+projection used by the four-point hover path and is distinct from the
+origin-only drag projection in §9.
+
+**Unknown (direct-static boundary).** The surviving static record identifies
+the box helper and the four-corner loop, but does not name the helper's six
+independent extrema or expose the final component mapping that constructs the
+four corner records. Consequently the exact corner order and whether each
+corner uses the helper's minimum or maximum on each model axis cannot be
+reproduced from the committed research corpus. The helper's model-space box
+provenance is also not established as either a bind-pose box or a runtime
+piece-state box. A production replacement must not substitute `FootprintX/Z`,
+the authored selection face, or a bind-pose box until that mapping is traced.
+
+**Established (direct-static).** The four projected corners are passed to a
+four-point polygon hit helper. The helper's return value is the sole viewport
+hull admission test. The static corpus does not expose whether a point exactly
+on an edge is inside or outside (nor its integer cross-product/rounding
+convention). The inclusive rule documented for drag rectangles therefore does
+not apply to hover hulls. Exact click/cursor edge parity remains blocked until
+an edge probe or the helper body establishes that convention.
+
+**Established (direct-static).** Among candidates whose polygon admits the
+pointer, the hover reduction computes the following fixed-point score, using
+the model-height and horizontal-span terms in the order shown by the retail
+helper:
+
+```text
+score = ((((modelHeight * 32768) >> 16) + zSpan) * xSpan) >> 16
+```
+
+`modelHeight` is the compiled model total-height term, while `xSpan` and
+`zSpan` are the compiled horizontal box spans. Their exact authored-field
+provenance is separate from this reduction and remains subject to the bounds
+helper gap above. The two `>> 16` steps are fixed-point narrowing steps, not
+floating-point rounding. The winner is replaced only when `score < bestScore`.
+Equal scores retain the earlier `HOT UNITS` member, hence the lower stable pool
+position. The minimap branch uses `HOT RADAR UNITS` instead and admits a
+contact only when planar squared distance is strictly less than four; it also
+retains the first member on an equal distance.
+
+**Established (direct-static).** The click path consumes the hover id already
+computed by the pointer update; it does not recompute the hull. Cursor target
+shapes consume that same hover/visibility result. Thus cursor and click agree
+for every admitted interior point, while the unresolved polygon edge rule is a
+shared unresolved boundary rather than two independent policies.
+
+**Presentation publication gap (supported inference from [03 §2.4] and
+[03 §2.5]).** The committed `frame.UnitView` currently publishes the unit
+pose (`X/Y/Z` and heading/pitch/bank), model name and definition id, flags,
+footprint, and per-piece rotation/translation/hidden state. The compiled model
+contains authored hierarchy vertices and parent links, and the renderer can
+derive a bind-pose `ModelBounds`. The frame does not publish the sensor-built
+`HOT UNITS` membership/order, the helper's six runtime hull extrema, or the
+helper's exact definition-term names. It also does not publish the complete
+authoritative eligibility fields as a typed pick record. The current
+presentation picker therefore cannot reproduce this hover contract without
+guessing a bounds source, reading live simulation state, or treating the frame
+slice as the hot list. [03 §2.4] forbids the latter class of live read at the
+presentation boundary [03 §2.4–§2.5][07 R-SEL-02A].
+
+The safe implementation boundary is consequently a future committed-frame
+pick record containing, at minimum, hot-list membership/order, the resolved
+four-corner hull inputs (or the six extrema plus their documented mapping),
+visibility/eligibility admission, and the three score terms. Until those
+fields or an equivalently traced pure helper are published, replacing the
+current 16-pixel picker is not established. `TODO(question)`: trace the box
+helper and four-point polygon helper, then publish their exact inputs at the
+frame boundary; an edge probe must settle inclusive/exclusive behavior.
+
 ### Supported inference
 
 Picking should return a typed hit result with ownership/visibility metadata,
@@ -1329,16 +1497,20 @@ cell, minimap, or GUI control consumes the action.
 
 ### Unknown
 
-Picking hulls and object priority are closed: the hull is the unit's
-transformed piece-hierarchy bounding box projected as a four-corner quad with
-the half-height shear and a polygon hit test, and the pick walks the
-sensor-built hot-unit lists (units only — features win nowhere in the pick;
-the reclaim-family paths resolve features on demand at the point). The
-visibility gate is the word-grid bit `1 << (localPlayer & 0x1F)` versus the
+The hull's existence, its four-point projection stage, and unit-only hot-list
+scope are established in [R-SEL-02B2]. The exact polygon edge convention and
+the bounds-helper component mapping are not. In particular, the earlier
+wording that called the complete picking hull closed was too broad: it closed
+the high-level shape but did not establish the arithmetic needed for a
+pixel-for-pixel replacement. Feature-vs-unit priority remains closed only in
+the narrow sense that features are absent from this unit hover list; reclaim
+families resolve features separately at the pointer.
+
+The visibility gate is the word-grid bit `1 << (localPlayer & 0x1F)` versus the
 per-viewer byte grid selected by a visibility-mode bit. Cursor handle slot 0
-identity (the unused/overflow slot) is the only remaining item. The
-named-entry index table, the hotspot convention, the four-step shape chooser
-with its lowest-index-wins reduction, the per-latch shape table, the
+identity (the unused/overflow slot) is the only remaining cursor-table item.
+The named-entry index table, the hotspot convention, the four-step shape
+chooser with its lowest-index-wins reduction, the per-latch shape table, the
 cursor-to-ground resolver, and the build-site validity/ghost cursor selection
 are established above. The world overlays' palette entries are no longer open:
 they are GUI semantic indices resolved through the GUIPAL-to-display map
@@ -2298,13 +2470,15 @@ minimum-ping write-back are established above.
   handle slot 0 identity (latch-value table, cursor index table, build-site
   validity cursors, and the queue-overlay color pairs 3/10 and 1/9 are
   established; the overlay color-map entries are closed in [R-P0-11 §3]).
-* Picking hull geometry and fog gates are closed: the hull is the unit's
-  transformed bounding box projected as a four-corner quad with the half-height
-  shear, hit-tested as a polygon; the pick walks the sensor-built hot-unit
-  lists (units only, so units win over features by construction); the
-  visibility gate is the word-grid bit `1 << (localPlayer & 0x1F)` versus the
-  per-viewer byte grid. What remains is the per-viewer byte grid's writer
-  semantics on the visibility side (doc 03's surface).
+* Picking is closed only through the high-level admission shape and score:
+  the hover path walks the sensor-built unit list, projects a transformed
+  hierarchy box as four points, uses a polygon helper, and applies the
+  strict-score reduction [R-SEL-02B2]. The exact bounds-helper component
+  mapping, polygon arithmetic, and edge inclusion remain **Unknown**; the
+  current 16-pixel presentation picker cannot replace this path without a
+  committed hull record or a traced pure helper. The visibility gate is the
+  word-grid bit `1 << (localPlayer & 0x1F)` versus the per-viewer byte grid;
+  the byte-grid writer semantics remain owned by doc 03.
 * Selection overlap pick order — drag endpoints sorted independently, inclusive
   `min <= x <= max` tested per axis, stable pool sweep with strict `<` distance
   tie-break favoring lower slot [P1-14] — and fog word bit versus byte

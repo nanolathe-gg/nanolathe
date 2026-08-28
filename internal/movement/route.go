@@ -28,6 +28,9 @@ type Route struct {
 	Active bool
 	Dirty  bool
 	Status path.Status // last publish status [04 §7.2] 0 success, 0x100 already, 0x200 rejected
+	// StaticRevision is Nanolathe runtime metadata. It is not part of the
+	// retail route save encoding [04 §7.3].
+	StaticRevision uint64
 }
 
 // Publish publishes a waypoint list per [04 §7.3] C14.
@@ -38,6 +41,13 @@ type Route struct {
 //     array — stale bytes stay physically present. Queries gate on the active
 //     bit, so an implementation may invalidate without zeroing.
 func (r *Route) Publish(points []Point) { // [04 §7.3] C14
+	r.PublishAtRevision(points, 0)
+}
+
+// PublishAtRevision publishes a route and records the static-obstacle
+// revision that produced it. Zero publication retains stale route bytes and
+// metadata, matching the retail inactive-route behavior [04 §7.3].
+func (r *Route) PublishAtRevision(points []Point, revision uint64) { // [04 §7.3]
 	if r == nil {
 		return
 	}
@@ -54,6 +64,14 @@ func (r *Route) Publish(points []Point) { // [04 §7.3] C14
 	copy(r.Points[:], points)
 	r.Active = true
 	r.Dirty = true
+	r.StaticRevision = revision
+}
+
+// NeedsStaticReplan reports whether an active route was produced against an
+// older static obstacle revision. Mobile occupancy is intentionally absent
+// from this check [04 §8.2][docs/SPEC_CONFLICTS SC22].
+func (r *Route) NeedsStaticReplan(current uint64) bool {
+	return r != nil && r.Active && r.Count > 0 && r.StaticRevision != current
 }
 
 // Prune implements waypoint pruning [04 §7.3] C15.

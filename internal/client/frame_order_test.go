@@ -198,7 +198,7 @@ func TestCommittedFrameFogGateAndInterfacePrecedence(t *testing.T) {
 	}
 }
 
-func TestSelectionChromeFollowsFog(t *testing.T) {
+func TestSelectionChromeKeepsFogWhenNoUnitBracketIsEmitted(t *testing.T) {
 	// Match the committed-frame fixture's cell-center camera so the fog cell
 	// covers pixel (0,0) after the retail-origin rebase [03 §3.3].
 	c := &Client{width: 4, height: 4, indexed: make([]uint8, 16), pal: &palette.Tables{}, cam: &camera.Camera{X: 16, Z: 16, ViewW: 4, ViewH: 4, MapW: 16, MapH: 16}}
@@ -210,8 +210,25 @@ func TestSelectionChromeFollowsFog(t *testing.T) {
 	}
 	c.selectionChrome = []selectionChrome{{view: frame.UnitView{Flags: hud.SelectionFlag, FootX: 1, FootZ: 1}, screenX: 8, screenY: 8}}
 	c.drawSelectionStage()
-	if c.indexed[0] == 123 {
-		t.Fatal("selection chrome did not overwrite fog at its established later slot")
+	if c.indexed[0] != 123 {
+		t.Fatalf("selection stage emitted an unsupported unit bracket over fog: got %d", c.indexed[0])
+	}
+}
+
+func TestSelectedFullHealthKeepsHealthBarWithoutUnitBracket(t *testing.T) {
+	c := &Client{width: 64, height: 64, indexed: make([]uint8, 64*64)}
+	for i := range c.indexed {
+		c.indexed[i] = 77
+	}
+	c.selectionChrome = []selectionChrome{{view: frame.UnitView{
+		Flags: hud.SelectionFlag, FootX: 1, FootZ: 1, Health: 100, MaxHealth: 100,
+	}, screenX: 32, screenY: 32}}
+	c.drawSelectionStage()
+	if got := c.indexed[24*64+24]; got != 77 {
+		t.Fatalf("full-health selected unit emitted footprint bracket %d, want untouched 77", got)
+	}
+	if got := c.indexed[42*64+24]; got != c.paletteIndex(10) {
+		t.Fatalf("selected full-health unit health bar = %d, want logical entry 10 (%d)", got, c.paletteIndex(10))
 	}
 }
 

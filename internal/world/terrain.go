@@ -56,6 +56,12 @@ type Terrain struct {
 	// load failure — retail maps outlive their feature sets.
 	FeatureDefs []*content.FeatureDef
 
+	// staticObstacleRevision is the monotonic Nanolathe revision for blocking
+	// feature mutations. No established completed-structure writer is wired in
+	// this unit; that boundary remains TODO(question). It is runtime metadata
+	// only; retail route save bytes do not contain it [04 §7.3].
+	staticObstacleRevision uint64
+
 	// PlayableWpix/Hpix are raw Wpix/Hpix; PlayRight/Bottom are Wpix-32/Hpix-128 [P1-15] used by camera clamp.
 
 	// metalSeeded records whether ApplySchema has run. SampleMetal refuses to
@@ -63,6 +69,27 @@ type Terrain struct {
 	// which is indistinguishable from a genuinely metal-free map and silently
 	// makes every extractor's yield wrong [05 "Terrain metal extraction"].
 	metalSeeded bool
+}
+
+// StaticObstacleRevision returns the shared movement-facing revision for
+// blocking feature changes that persist in routing. Mobile occupancy and the
+// unresolved completed-structure writer are separate/unknown channels and do
+// not change this value [04 §8.2][docs/SPEC_CONFLICTS SC22].
+func (t *Terrain) StaticObstacleRevision() uint64 {
+	if t == nil {
+		return 0
+	}
+	return t.staticObstacleRevision
+}
+
+// BumpStaticObstacleRevision advances the shared static revision. Saturating
+// at the maximum keeps the value monotonic even if an artificial test drives
+// the counter to its boundary; ordinary battles cannot reach that boundary.
+func (t *Terrain) BumpStaticObstacleRevision() {
+	if t == nil || t.staticObstacleRevision == ^uint64(0) {
+		return
+	}
+	t.staticObstacleRevision++
 }
 
 // FeatureDefAt resolves a plot cell's feature field to a catalog definition.

@@ -592,6 +592,66 @@ N = per-vertex smooth normal:
    GAF table — except exactly-10-frame entries, which are the LOGOS team
    textures: never animated, frame selected by owner player at draw time.
 
+#### R-SEL-02A — selection geometry, palette, and composition boundary
+
+**Established (direct-static).** The authored 3DO selection primitive is
+swapped to primitive zero during model loading and the ordinary model-face
+walk starts at primitive one whenever such a primitive exists. It therefore
+does not contribute a model pixel, a model paint key, or a model hit shape.
+This corrects the earlier selection-plan assumption that the authored plate
+was the retail selection wireframe. The same exclusion is used by completed
+and under-construction model paths; a construction image does not re-admit
+primitive zero.
+
+The visible selection rectangle is a separate composer overlay. While the
+box-selection/wake predicate is true, the composer projects its two recorded
+world endpoints with the ordinary integer projection, sorts X and Y
+independently, and draws an outer and an inner one-pixel frame. Both frames
+use inclusive endpoints: a frame covering `[left,right] × [top,bottom]`
+writes its edge pixels through `right` and `bottom`, and the inner frame is
+formed by incrementing left/top and decrementing right/bottom. A degenerate
+inset where a minimum exceeds a maximum writes no inner frame. The solid
+frame writer is clipped against the active inclusive world-surface clip.
+
+The palette argument is already a physical indexed-pixel value. The outer
+frame selects logical map entry 4, or entry 6 when the armed build/wake flag
+is set; outside that box-selection mode it selects entry 15. The inner frame
+always selects entry 0. Each logical entry is resolved once through the
+runtime logical-to-physical map before the solid writer; there is no ALP,
+LHT, or SHD operation and no per-pixel blend. This is the complete palette
+contract for the observed selection outline; no authored-plate wireframe
+palette exists in the traced renderer.
+
+Fog is composed after the world strips, units, projectiles, and effects, and
+before this selection overlay. Thus world pixels are subject to the fog/LOS
+presentation, while the selection outline is not. The selection solid-frame
+writer consumes the inclusive clip rectangle copied into the active surface
+descriptor from presentation state. Its rectangle coordinates, however, are
+formed in the beam/projection space with the separate `+128/+32` projection
+offsets. These are distinct coordinate records: the projection offsets must
+not be substituted for the clip rectangle's left/top values. The HUD rail is
+composed later and may cover overlapping outline pixels. A separate
+authored-plate clip policy cannot be claimed because the plate is not drawn.
+
+**Viewport-coordinate correction.** Earlier descriptions in this document
+and in the interface document conflated the transition-time battle viewport
+record with the beam-space projection origin. The static call chain proves
+which record the selection writer consumes, but not the record's left edge
+for every panel/mode state (the corpus contains both a visible-panel
+`(128,32,W-1,H-33)` description and a transition/input `(0,32,W-1,H-33)`
+description). Therefore the selection clip's left value outside a captured
+state is **Unknown**; a mode/panel capture of the descriptor at the selection
+call would settle it. Neither prior tuple is a universal canonical value.
+
+**Unknown.** The static trace does not establish a per-selected-unit plate
+pass, an additional primary-selection treatment, or any use of the authored
+selection polygon by cursor targeting. It also does not establish the exact
+edge convention of the projected four-corner hover hull's polygon test
+beyond the separate drag rectangle's inclusive rule. A focused retail
+capture with two selected units, one primary/single selection, and points on
+each projected hull edge would settle those remaining presentation and
+boundary questions.
+
 ### OTA-RND-02A — model-path shading and stock reachability [R-RND-02A]
 
 The earlier shorthand that treated mobile units as unshaded, or treated

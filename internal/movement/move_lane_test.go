@@ -4,8 +4,6 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -66,50 +64,6 @@ func TestMoveLaneFinalCompletionRemainsUnknown(t *testing.T) {
 	// route pruning is tested in route_test.go in its own integer point domain.
 	if (&System{}).finalGoalReached(nil, true) {
 		t.Fatal("route-prune tolerance must not imply order completion")
-	}
-}
-
-func TestMoveLaneBlockPriorityReplanCadence(t *testing.T) {
-	terrain := &world.Terrain{CellW: 8, CellH: 8, Plot: make([]world.PlotCell, 64)}
-	for i := range terrain.Plot {
-		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
-		terrain.Plot[i].SetHeight(10)
-		terrain.Plot[i].SetMinHeight(10)
-		terrain.Plot[i].SetMaxHeight(10)
-	}
-	sys := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxSlope: 255}, NewOccupancyGrid())
-	w := units.NewSliced(10, nil)
-	def := &content.UnitDef{UnitName: "kbot", FootprintX: 1, FootprintZ: 1, MaxVelocity: 65536}
-	hLow, _ := w.Create(def, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
-	hHigh, _ := w.Create(def, 0, world.CellToWorld(2), 0, world.CellToWorld(2))
-	sys.BindWorld(w)
-	sys.EnsureUnit(w.Unit(hLow))
-	sys.EnsureUnit(w.Unit(hHigh))
-	id := orders.Lookup("Move_Ground")
-	q := orders.QueueForUnit(w.Unit(hHigh))
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(6), GoalZ: world.CellToWorld(6)})
-	startX, startZ := w.Unit(hHigh).X, w.Unit(hHigh).Z
-	sys.replanDynamicBlock(w.Unit(hHigh), 10, int(hLow))
-	if !sys.Scheduler.HasRequest(hHigh) {
-		t.Fatal("higher slot did not submit a replan")
-	}
-	sys.replanDynamicBlock(w.Unit(hHigh), 10, int(hLow))
-	if sys.avoidNext[hHigh] != 11 {
-		t.Fatalf("replan cadence changed on same tick: next %d", sys.avoidNext[hHigh])
-	}
-	// Lower slot wins priority and never displaces either unit.
-	sys.replanDynamicBlock(w.Unit(hLow), 10, int(hHigh))
-	if sys.Scheduler.HasRequest(hLow) {
-		t.Fatal("lower priority winner unexpectedly replanned")
-	}
-	if w.Unit(hHigh).X != startX || w.Unit(hHigh).Z != startZ {
-		t.Fatal("replan displaced the yielding unit")
-	}
-	if got, ok := sys.Grid.OccupantAt(Cell{X: 1, Z: 1}); !ok || got != int(hLow) {
-		t.Fatal("lower unit occupancy was not retained")
-	}
-	if got, ok := sys.Grid.OccupantAt(Cell{X: 2, Z: 2}); !ok || got != int(hHigh) {
-		t.Fatal("higher unit occupancy was not retained")
 	}
 }
 

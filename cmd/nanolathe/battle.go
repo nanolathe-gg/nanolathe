@@ -224,6 +224,10 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b == nil || cl == nil {
 		return
 	}
+	// The client composes the drag frame after world/fog and before the HUD;
+	// this deferred bridge mirrors the input-owned gesture after every early
+	// return as well as the normal controller path [03 §1][R-SEL-02A].
+	defer b.syncSelectionDrag(cl)
 	in := cl.Input()
 	// Advance the canonical panel state during the host-frame update. Drawing
 	// must remain a pure read of this state so hit testing and raster placement
@@ -378,6 +382,27 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		b.battleState().Input.PrevMouseX = mouse.X
 		b.battleState().Input.PrevMouseY = mouse.Y
 	}
+}
+
+func (b *battleSession) syncSelectionDrag(cl *client.Client) {
+	if cl == nil || b == nil || b.battleState() == nil {
+		if cl != nil {
+			cl.SetSelectionDrag(client.SelectionDrag{})
+		}
+		return
+	}
+	state := b.battleState()
+	in := state.Input
+	cl.SetSelectionDrag(client.SelectionDrag{
+		Active:       in.DragActive,
+		StartX:       in.DragStartX,
+		StartY:       in.DragStartY,
+		EndX:         in.DragEndX,
+		EndY:         in.DragEndY,
+		BoxMode:      in.DragActive,
+		BuildWake:    in.Latch == input.LatchMobileBuild,
+		VisiblePanel: state.PanelOffset == ui.PanelVisible,
+	})
 }
 
 // applyCommittedShake transfers the cumulative phase-10 displacement from the

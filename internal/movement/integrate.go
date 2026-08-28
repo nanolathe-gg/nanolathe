@@ -66,7 +66,6 @@ type System struct {
 	sessions     []*path.Session         // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
 	prevMoveTier map[pool.Handle]int     // cached mover tier per unit for MoveRate edge emission [04 §5.2][GAP T15] C18
 	prevSFXBand  map[pool.Handle]int     // cached setSFXoccupy band per unit for edge emission [04 §5.2][GAP T15] C17 C18
-	avoidNext    map[pool.Handle]uint32  // named deterministic land-avoidance cadence
 
 	// world is the units world bound via BindWorld (or via Tick for legacy path).
 	// StepUnit needs it to fetch the *units.Unit for a handle without passing
@@ -236,7 +235,6 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 		profileNames:   make(map[pool.Handle]string),
 		prevMoveTier:   make(map[pool.Handle]int),
 		prevSFXBand:    make(map[pool.Handle]int),
-		avoidNext:      make(map[pool.Handle]uint32),
 		pathFailures:   make(map[pool.Handle]PathFailure),
 		activeOrders:   make(map[pool.Handle]*activeMove),
 		arrivalHandles: make(map[pool.Handle]*arrivalHandle),
@@ -836,6 +834,13 @@ func (s *System) submitMoveForOrder(u *units.Unit, head *orders.Node, start, goa
 	s.Scheduler.Submit(req)
 }
 
+func (s *System) staticObstacleRevision() uint64 {
+	if s == nil || s.Terrain == nil {
+		return 0
+	}
+	return s.Terrain.StaticObstacleRevision()
+}
+
 // ActivateMove binds one path request to the current primary order head and
 // submits it exactly once.  The queue head is the authority: a repeated call
 // for the same node is a no-op, while a new node cancels the old request and
@@ -881,9 +886,10 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	return true
 }
 
-// ReplanMove replaces the pending path for the currently active order after a
-// dynamic blocker.  It retains the order identity, so the resulting
-// publication is still attached only to that head.
+// ReplanMove replaces the pending path for the currently active order. It
+// retains the order identity, so the resulting publication is still attached
+// only to that head. Collision handling does not call this surface: the
+// collision commit remains the final authority [04 §8.2][R-MOV-02A].
 func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	if s == nil || u == nil || head == nil || s.Scheduler == nil {
 		return false
@@ -903,10 +909,9 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	token := s.nextActivation
 	s.activeOrders[u.Handle].token = token
 	start := path.Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
-	// Path search is aimed at the goal handle, so a replan after a dynamic
-	// block re-paths to the same point the mover was already steering at —
-	// for a build order that is the selected perimeter candidate, not the
-	// site centre [04 §8.3][04 §7.4].
+	// Path search is aimed at the goal handle, so a refresh re-paths to the
+	// same point the mover was already steering at — for a build order that is
+	// the selected perimeter candidate, not the site centre [04 §8.3][04 §7.4].
 	goalX, goalZ, _ := s.moveGoalFor(u.Handle, head)
 	goal := path.Cell{X: world.WorldToCell(goalX), Z: world.WorldToCell(goalZ)}
 	s.submitMoveForOrder(u, head, start, goal, token)
@@ -989,36 +994,6 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 		head.DynamicGate = 0
 		head.Deadline = -1
 	}
-}
-
-// replanDynamicBlock applies the explicit land-skirmish avoidance policy from
-// the overnight plan: stable lower pool slots have priority; a higher slot
-// yields and submits a route from its current anchor to the original order
-// goal. The one-tick cadence is a named Nanolathe policy because retail retry
-// timing is not established [R-P1-10]. No reverse, push, crush, or teleport.
-func (s *System) replanDynamicBlock(u *units.Unit, tick uint32, blockerID int) {
-	if s == nil || u == nil || blockerID < 0 || int(u.Handle) <= blockerID || s.Scheduler == nil {
-		return
-	}
-	if s.avoidNext == nil {
-		s.avoidNext = make(map[pool.Handle]uint32)
-	}
-	if next := s.avoidNext[u.Handle]; tick < next {
-		return
-	}
-	s.avoidNext[u.Handle] = tick + 1 // deterministic local policy cadence
-	q := orders.QueueForUnit(u)
-	if q == nil || q.LenPrimary() == 0 {
-		return
-	}
-	head := q.Primary()[0]
-	if head == nil || (head.GoalX == 0 && head.GoalZ == 0) {
-		return
-	}
-	// Preserve the active order identity across a dynamic replan.  Calling the
-	// raw SubmitMove surface here would let a stale publication attach after a
-	// head replacement [04 §7.3].
-	s.ReplanMove(u, head)
 }
 
 // searchFunc is the injected SearchFunc bound to path.Search with profile passability
@@ -1155,15 +1130,23 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 	for i, p := range points {
 		mPoints[i] = Point{X: p.X, Z: p.Z}
 	}
-	route.Publish(mPoints)
+	revision := s.staticObstacleRevision()
+	if s.world != nil {
+		if u := s.world.Unit(r.Unit); u != nil && u.Def != nil && u.Def.CanFly {
+			revision = 0 // aircraft do not consume the ground static layer
+		}
+	}
+	route.PublishAtRevision(mPoints, revision)
 	// Overnight land policy: Kbots may use aggressive legality-only line of
 	// sight smoothing; vehicles retain conservative forward-only waypoints until
 	// authored turning/braking feasibility is fully recovered [plan §3.1].
 	// The complete footprint predicate is used for every ray cell, so a shortcut
 	// cannot cut a diagonal corner. Exact bad-slope speed/cost remains TODO.
 	if s.world != nil {
-		if u := s.world.Unit(r.Unit); u != nil && u.Def != nil {
-			smoothLandRoute(route, u.Def, s.ProfileFor(r.Unit), s.Terrain)
+		if u := s.world.Unit(r.Unit); u != nil && u.Def != nil && !u.Def.CanFly {
+			reg := s.ensureLayerRegistry()
+			layer := reg.For(s.classKeyFor(r.Unit), s.ProfileFor(r.Unit))
+			smoothLandRouteWithLayer(route, u.Def, s.ProfileFor(r.Unit), layer)
 		}
 	}
 	route.Status = status
@@ -1190,6 +1173,17 @@ func smoothLandRoute(route *Route, def *content.UnitDef, profile Profile, terrai
 			return true
 		}
 		return profile.IsPassableFootprint(terrain, p.X-int32(profile.FootPrintX)/2, p.Z-int32(profile.FootPrintZ)/2)
+	})
+}
+
+// smoothLandRouteWithLayer uses the same stamped static source as A* so a
+// legality shortcut cannot cross a cell rejected by search [04 §7.2][04 §7.5].
+func smoothLandRouteWithLayer(route *Route, def *content.UnitDef, profile Profile, layer *ClassLayer) {
+	if route == nil || !aggressiveLandSmoothing(def) || layer == nil {
+		return
+	}
+	route.Smooth(func(p Point) bool {
+		return layer.Value(p.X-int32(profile.FootPrintX)/2, p.Z-int32(profile.FootPrintZ)/2) != LayerBlocked
 	})
 }
 
@@ -1429,6 +1423,18 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	}
 	route := s.Routes[handle]
 	hadRoute := route != nil && route.Active && route.Count > 0
+	if hadRoute && (u.Def == nil || !u.Def.CanFly) && route.NeedsStaticReplan(s.staticObstacleRevision()) {
+		// A static mutation invalidates the published route before its next
+		// waypoint is consumed. Replanning retains the order identity; with no
+		// bound order the route remains inactive and the caller can resubmit it.
+		route.Active = false
+		route.Dirty = true
+		if head != nil {
+			s.ReplanMove(u, head)
+		}
+		d := s.distToGoal(u)
+		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
+	}
 	_ = s.resolveProfile(u) // retained for profile revision side-effects if any; outer profile not needed for pitch path [M2]
 	var directGoal bool
 	var directX, directZ numeric.Fixed
@@ -1677,11 +1683,6 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			s.noteOccupancyCommit(handle, tick)
 		}
 		coll.BlockerID = blockerID
-		if blocked && blockerID >= 0 {
-			// Lower slot wins the deterministic priority; higher slot yields
-			// and requests a fresh route from its current anchor.
-			s.replanDynamicBlock(u, tick, blockerID)
-		}
 		u.X = numeric.Fixed(int64(coll.X))
 		u.Z = numeric.Fixed(int64(coll.Z))
 		if s.Terrain != nil {

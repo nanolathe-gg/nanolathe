@@ -1258,6 +1258,166 @@ upstream producers of interrupt masks 2 and 8 sit in the UI and network command
 layers and remain unidentified. Their effects must be preserved behind those
 masks without inventing a producer.
 
+### OTA-FAC-01B targeted release-boundary pass [R-FAC-01B] (2026-08-28)
+
+This second pass corrects the evidence boundary in [R-FAC-01]. The earlier
+audit's statement that no stock COB transform census was available is
+superseded for the authored exit-piece inputs only. A clean-room census of the
+original `totala1.hpi` COB and 3DO assets establishes these synchronous
+`QueryBuildInfo` results. The listed translations are authored 3DO local
+coordinates before model-loader half-turn normalization, not runtime world
+positions ([fmt cob], [fmt 3do]). The callback indices were decoded
+independently from each stock COB's `QueryBuildInfo` sequence (literal N is
+popped into output local 0); they were not supplied by pairing the model
+files. Exact signed 16.16 numerators are retained below, with rounded
+decimals only as a reading aid:
+
+| factory | output local 0 | authored piece | local translation (signed 16.16; decimal) |
+| --- | ---: | --- | --- |
+| ARMLAB | 1 | `pad` | (32768, 26214, 229375); (0.5000, 0.4000, 3.5000) |
+| CORLAB | 1 | `pad` | (0, 3276, 942080); (0.0000, 0.0500, 14.3750) |
+| ARMVP | 1 | `pad` | (0, 32768, 655360); (0.0000, 0.5000, 10.0000) |
+| CORVP | 2 | `pad` | (0, 27456, -1015603); (0.0000, 0.4189, -15.4969) |
+| ARMAAP | 1 | `pad` | (68155, 15285, -1092098); (1.0400, 0.2332, -16.6641) |
+| CORAAP | 1 | `pad` | (0, 77561, -1638400); (0.0000, 1.1835, -25.0000) |
+| ARMSY | 6 | `slip` | (0, -573440, 0); (0.0000, -8.7500, 0.0000) |
+| CORSY | 0 | `base` | (0, 0, 0); (0.0000, 0.0000, 0.0000) |
+
+The targeted boundaries therefore have the following status:
+
+- **Target and rally handoff — split Established/Unknown.** State 2 uses the
+  output piece's hierarchy-composed transform for the product position and a
+  separately snapped footprint anchor for validation. For these eight selected
+  pieces, the parent is the root `base` with zero translation, so the
+  hierarchy-composed authored origin equals the listed piece-local
+  translation; that equality is not a generic descendant rule. The product receives `GetBuilt` on its
+  primary queue; after completion it copies queued move/patrol rallies or
+  falls back to `Park` ([05 "Factory production lifecycle"]). Within the
+  reviewed factory-handler call chain, no separate factory-owned egress order
+  or clearance segment was recovered. Whether an unobserved movement-layer
+  path adds one is **Unknown**.
+- **Producer/product collision — Unknown after allocation.** The validator
+  runs before a product exists and receives no producer/product pair. No
+  post-allocation exemption was found. Closing this requires a retail trace
+  of an overlapping exit or a complete static call chain through the first
+  product movement and occupancy admission.
+- **Blocked release and queue/build gating — split Established/Unknown.**
+  Primary-queue front blocking, positive count gating, script-owned stance,
+  and the 15-tick blocked versus 300-tick allocator retries are Established.
+  Since no post-completion release lane was recovered in the reviewed
+  factory-handler call chain, its indefinite-block behavior and any
+  force-release policy are **Unknown**. Queue serialization plus delayed
+  occupancy publication does not prove same-pass no-stacking.
+- **Aircraft takeoff — generic Established, factory ordering Unknown.** The
+  ordinary VTOL path begins its velocity-limited climb when a first flight
+  point/follow goal is installed. The reviewed factory-handler call chain
+  contains no factory-specific takeoff state before `GetBuilt`; whether takeoff
+  precedes rally handoff for a product remains **Unknown** ([04 §10.1]).
+- **Rotated transform and no-stacking — split Established/Unknown.** The
+  stock piece indices, names, and authored local translations above are
+  Established data. The exact runtime heading arithmetic for those hierarchy
+  translations, and a same-pass no-stacking guarantee, remain **Unknown**.
+  The 3DO format has hierarchy translations but no authored heading field;
+  a rotated-factory trace or a static heading-matrix capture is needed.
+
+`TODO(question)`: record a retail run with a blocked exit, a completed ground
+product, and a completed aircraft product, including first movement,
+occupancy, and rally events. This is the evidence needed to distinguish a
+hidden release lane from ordinary `GetBuilt`/VTOL handling. Do not promote an
+unresolved interpretation into the construction contract.
+
+### OTA-FAC-01C factory-release call-chain continuation [R-FAC-01C] (2026-08-28)
+
+This continuation traces the factory handler through its placement validator,
+allocator, primary-queue pump, and product-side `GetBuilt` handler. It narrows
+the release boundary without claiming a retail runtime result that the static
+call chain cannot show. The earlier wording that treated the state-2 snapped
+coordinate as a factory movement goal is corrected here: it is a validation
+anchor only.
+
+**Ground target and order representation — split Established/Unknown.** The
+factory's state-2 sequence is: synchronously run `QueryBuildInfo` with output
+cell 0 seeded to `-1`; resolve the selected hierarchy piece with the factory
+origin into a signed 16.16 world position; derive a separate footprint anchor
+with the half-extent formula from [04 §6.3]; validate that rectangle; and,
+only on success, allocate the product at the resolved world position. The
+validator is an area check, not a path request: this sequence emits no
+move-to-exit goal, path search, repath, push, or factory-owned release node.
+The product receives an ordinary `GetBuilt` node on its own primary queue.
+Thus the mandatory ground release target is **not established as a second
+target**; the established factory-side target is the direct allocation point.
+Whether an unobserved movement-layer consumer adds a product-side clearance
+step after allocation remains **Unknown** and requires a retail trace or a
+complete first-movement call-chain capture. Do not implement an egress offset
+or hidden release order from the footprint anchor.
+
+**Query result and producer identity lifetime — split Established/Unknown.**
+The `QueryBuildInfo` result is consumed only to select the hierarchy piece and
+form the allocation position; a failed query leaves the seeded sentinel. The
+subsequent handling of that invalid sentinel is not evidence for a separately
+authored release offset. The factory production node holds
+the allocated product through construction and clears that product pointer on
+normal completion before the counted node is restarted or freed. The product
+also receives a producer link before `GetBuilt` is inserted. `GetBuilt` reads
+that link while it waits for completion and while it copies the producer's
+queued rally records. No explicit unlink of the product-side producer link was
+found in the bounded factory/GetBuilt chain; its lifetime after that handler,
+and cleanup when either unit is destroyed or captured, are **Unknown**. The
+death/capture path must not be treated as a transfer mechanism.
+
+**Rally and no-rally timing — Established.** `GetBuilt` first waits until the
+product's remaining fraction is zero. It then walks the producer's primary
+queue and appends the producer's queued move/patrol records to the product in
+queue order, preserving patrol identity. If none is found, it appends a normal
+`Park` order at that point. `Park` is therefore not issued at allocation and is
+not evidence of a release segment. The product-side order can dispatch in the
+same unit sweep only when the product's stable slot is still to be visited;
+otherwise it waits for the next sweep ([04 §3.8]).
+
+**Next-product gate and blocked behavior — split Established/Unknown.**
+Factory production records are primary-queue nodes, and an unsatisfied wake
+mask on the primary front blocks later primary nodes ([04 §3.3]). A successful
+completion decrements the counted record and returns the pump to state 0 in
+the same pass; when the count remains positive, the next product can enter
+state 2 without a release-clearance wait. Each candidate is independently
+validated before allocation. A blocked footprint retries silently after
+exactly 15 ticks, with no product allocated; allocator exhaustion is a
+separate exactly-300-tick retry with its diagnostic. No post-allocation
+release retry or force-release state appears in this chain. Consequently an
+indefinitely blocked product-side release, producer/product collision
+exemption, and no-stacking guarantee for same-pass counted products are
+**Unknown**. The validator's pre-allocation null self identity cannot establish
+an exemption for a product that does not yet exist ([04 §6.4]).
+
+**Rotated factories — split Established/Unknown.** The footprint arithmetic is
+Established: for each axis, the snapped cell is
+`(p - (f << 19) + (1 << 19)) >> 20` using a signed arithmetic shift, while the
+product remains at the independently resolved QueryBuildInfo world position
+([04 §6.3]). The factory handler adds no separate heading, yard-map, model
+extent, or fixed-cell offset. The exact runtime heading transform applied to
+the authored hierarchy translation, including any half-turn normalization,
+remains **Unknown**; the stock piece census in [R-FAC-01B] supplies authored
+local values, not a rotated runtime trace.
+
+**Aircraft boundary — generic Established, factory ordering Unknown.** The
+ordinary VTOL movement family begins its velocity-limited climb when its first
+flight point/follow goal is installed ([04 §10.1]). The factory sequence itself
+does not issue that goal or enter a factory-specific takeoff state before
+`GetBuilt`; the exact point at which an aircraft product takes off relative to
+inherited rally remains **Unknown**. A representative aircraft completion
+trace must record allocation, `GetBuilt`, first VTOL goal, vertical movement,
+and rally dispatch to close this boundary.
+
+**Implementation boundary.** The established implementation inputs are the
+seeded synchronous query, hierarchy-composed 16.16 allocation position,
+independent footprint-anchor validation, factory primary-queue front gate,
+15/300-tick pre-allocation retries, counted same-pass restart, producer link,
+and post-completion `GetBuilt` rally-or-`Park` sequencing. OTA-FAC-02 is
+blocked for any explicit release state, producer/product exemption, or
+aircraft release step until the Unknown items above are closed by a retail
+runtime trace or a complete static chain through first movement and occupancy.
+This is a research boundary, not permission to infer a fixed egress target.
+
 ### OTA-FAC-01 bounded factory-release audit [R-FAC-01] (2026-08-28)
 
 This audit separates the factory production contract from the still-unclosed
@@ -2392,13 +2552,17 @@ contract:
   before the completion transition; GetBuilt same-tick iff the product slot
   sorts after the builder; trigger polling on the local player's
   deadline-due settlement; AI completed-counts at the next 30-tick refresh.
-- **OTA-FAC-01 [R-FAC-01]:** the post-completion release target/order form,
-  producer/product collision exemption, indefinitely blocked release policy,
-  aircraft takeoff-before-rally handoff, rotated stock-authored exit
-  transforms, and a no-stacking guarantee for same-pass coalesced products
-  remain Unknown. The factory-side target derivation, primary-queue gate,
-  pre-allocation 15/300-tick retries, completion link clearing, and GetBuilt
-  rally sequencing are established in the bounded audit above.
+- **OTA-FAC-01 / OTA-FAC-01B / OTA-FAC-01C [R-FAC-01][R-FAC-01B][R-FAC-01C]:**
+  the bounded call-chain continuation establishes that state-2 placement is
+  direct allocation, not a movement/release goal; the post-completion
+  release target/order form, producer/product collision exemption,
+  indefinitely blocked release policy, aircraft takeoff-before-rally handoff,
+  exact rotated runtime transform arithmetic, and a no-stacking guarantee for
+  same-pass coalesced products remain Unknown. The factory-side target
+  derivation, stock exit-piece indices/names/authored local translations,
+  primary-queue gate, pre-allocation 15/300-tick retries, completion link
+  clearing, and GetBuilt rally sequencing are established in the bounded
+  audits above.
 - Name the semantic meaning of the game-ended flag bits and of the two
   mission-end predicates behind the confirmation delay. The bit patterns are
   established (arm at 4; latch bit 0x04 always plus 0x40 and/or 0x10/0x20 per

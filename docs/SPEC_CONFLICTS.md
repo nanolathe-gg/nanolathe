@@ -614,21 +614,64 @@ BMcode-zero gate was right all along.
 
 ## SC22 — Static-layer path search and Nanolathe dynamic-block / retry policy [OW-3-O]
 
-**Spec** `[04 §8.2]` (static and mobile collision): mobile units are **not** A* walls; path search runs on the static layer (terrain + static features + yard/building occupancy) and arbitrates at commit `[04 §8.2]`; supported inference adds "mobile units are hard blockers at the movement commit stage even though they are not inserted into the static A* layer." `[04 §7.4]` dynamic blockers bump a profile revision, heap entries are not purged eagerly, passability is rechecked lazily at expansion (a previously open node can become blocked without rebuilding the heap).
+**Spec** `[04 §8.2]` (static and mobile collision): mobile units are not
+permanent A* walls in the map-load layer; path search uses the static terrain,
+feature, and yard/building layers, while a request-initialization revision may
+temporarily re-stamp recent mobile footprints and apply the occupant-age gate
+described in `[04 §6.1 R-DOC04-B]`. Final mobile contention is arbitrated at
+commit `[04 §8.2]`; mobile units are hard blockers there even though their
+projected motion is not inserted into the expansion heap.
 
 **Observed:** `internal/movement/integrate.go:searchFunc` previously checked `OccupancyGrid.OccupantAt` for every neighbor and rejected occupied cells, turning transient traffic into static obstacles and feeding an invented retry/removal policy (needless rejected routes around movers, then path-failure retry count). `OccupancyGrid.Revision/Bump` (`internal/movement/collision.go:Revision/Bump/BumpRevision`) had no explicit consumer beyond diagnostics; search already rechecks `isPassable` lazily at expansion, so an explicit revision guard is unnecessary, but `Stamp`/`Clear` correctly bumped `rev` per `[04 §7.4]` C18 and tests locked the bump. `landPathFailureRetryInterval = 30` and `landPathFailureMaxRetries = 1` (`integrate.go:127-128`) and the `rec.Retries >= 1` hard-coded check in `internal/session/loop.go:1149` are Nanolathe retry policy where retail's dynamic-blocker retry cadence/count remain unresolved `[R-P1-10]`.
 
-**Decision:** Align search with the static layer: `searchFunc.isPassable` now checks only `Profile.IsPassableFootprint` (terrain + feature/slope/water per `[04 §6.1]`) and **no longer** checks `OccupancyGrid` occupancy — mobile occupancy is ignored at search time `[04 §8.2]`. Mover-vs-mover contention is resolved only at commit via the footprint validator row-major scan `[04 §8.2]` C25, the `MaxVelocity/2` cap + fixed-trig recompute + `±0x7FFFF` clamp without restamp `[04 §8.2]` C24 (existing `ApplyBlocked` stays), and the synchronous clear/commit/stamp pipeline `[04 §8.2]` C22. Building/yard occupancy remains via terrain profile and construction terrain stamps (static); transient mobile occupancy is ignored at search time. `OccupancyGrid.Revision/Bump` is **retained**; its lazy-revalidation consumer is the search expansion's per-node `isPassable` recheck `[04 §7.4]` (no eager purge, no explicit revision comparison needed). `Stamp`/`Clear`/`Block`/`Unblock` continue to bump `rev` for diagnostics and future profile versioning.
+**Correction history [R-MOV-02A]:** The previous Decision said that mobile
+occupancy was "ignored at search time" without qualification. That sentence
+correctly described the direct `searchFunc.isPassable` predicate, but was
+overbroad as a retail contract because it omitted the request-initialization
+revision pass. It is superseded by the bounded rule below; the `[04 §8.2]`
+commit behavior is unchanged.
 
-Deliberate Nanolathe policy divergences retained with `I9`/`I11` hygiene (one-behavior, unknowns stay unknown):
+**Decision:** Keep `searchFunc.isPassable` free of a direct
+`OccupancyGrid` lookup, but bind it to the request's movement-class layer.
+At request initialization, that layer's watermark is armed as
+`max(currentTick, 30) − 30`, recently committed mobile footprints are
+re-stamped, and the occupant-age gate allows recent occupants while making an
+older occupant block its re-stamped cells. Existing heap entries are not
+eagerly purged; expansion
+rechecks passability lazily when each entry is opened. Thus the search layer is
+static at map load but can have this bounded, temporary mobile revision
+interaction. The scheduler and expansion do not receive blocker identity,
+velocity, or projected destination, and no collision-triggered replan is
+established. Mover-vs-mover contention remains authoritative at commit via the
+row-major footprint validator `[04 §8.2]`, the half-speed/clamp response, and
+the synchronous clear/commit/stamp sequence. `OccupancyGrid.Revision/Bump` is
+retained for its separate diagnostic/revision role; it must not be conflated
+with the class-layer watermark and request-init restamp. Building/yard
+occupancy remains part of the static/profile inputs.
 
-* `replanDynamicBlock` (`integrate.go:replanDynamicBlock` — deterministic 1-tick cadence `avoidNext = tick+1`, lower pool slot wins, higher slot replans from current anchor to the order goal via `ReplanMove` preserving active-order identity) — explicit Nanolathe avoidance because retail has no recovered automatic repath/priority/wait-queue in the bounded mover graph `[04 §8.2]` negative-bounded. No pushing/slide/yield.
+The former collision-triggered Nanolathe avoidance policy has been removed in
+`[R-MOV-02B]`: there is no lower-slot priority, `avoidNext` cadence, or
+`ReplanMove` submission after a rejected mobile commit. The bounded final
+commit response is therefore the sole implemented collision response; outer
+yield/replan and ordinary open-group liveness remain **Unknown** as stated in
+`[R-MOV-02A]`.
 
-* `landPathFailureRetryInterval = 30`, `landPathFailureMaxRetries = 1` (`integrate.go`) plus `internal/session/loop.go:1149` `if rec.Retries >= 1` — explicit Nanolathe failed-path recovery where retail's retry cadence/count remain unresolved `[R-P1-10]`. The hard-coded `>=1` in `loop.go` is session-owned, so per `OW-3-O` ownership it is **not** changed here; it mirrors the movement-owned constant and is documented as policy, not spec. If the hunk were movement-owned it would reference `landPathFailureMaxRetries`; as session-owned it is reported and left intact.
+One separate policy divergence is retained with `I9`/`I11` hygiene:
 
-This is an `I9`/`I11` divergence: bounded retry and priority replans that reject or reroute where retail would have accepted only to keep determinism and avoid unbounded growth; no retail constant is invented.
+* `landPathFailureRetryInterval = 30`, `landPathFailureMaxRetries = 1`
+  (`integrate.go`) plus `internal/session/loop.go:1149` `if rec.Retries >= 1` —
+  explicit Nanolathe failed-path recovery where retail's retry cadence/count
+  remain unresolved `[R-P1-10]`. The hard-coded `>=1` in `loop.go` is
+  session-owned, so per `OW-3-O` ownership it is **not** changed here; it
+  mirrors the movement-owned constant and is documented as policy, not spec.
+  If the hunk were movement-owned it would reference
+  `landPathFailureMaxRetries`; as session-owned it is reported and left
+  intact.
 
-**Falsifies:** the previous mobile-as-wall search behavior; the previous assumption that `Revision` had no consumer (its consumer is lazy recheck).
+**Falsifies:** the previous mobile-as-wall search behavior and the blanket
+claim that mobile occupancy is always ignored at search time. It does not
+turn mobile occupancy into a permanent static wall, and it does not establish
+that the separate `OccupancyGrid.Revision` counter has an expansion consumer.
 
 ---
 

@@ -70,7 +70,8 @@ type ClassLayer struct {
 	// first request revision arms it; the map-load stamp therefore never
 	// blocks on occupants — the static layer is terrain and features only
 	// [04 §6.1 R-DOC04-B].
-	watermark uint32
+	watermark      uint32
+	staticRevision uint64 // terrain static-obstacle revision last stamped [04 §7.3]
 
 	// commits records each unit's last occupancy-commit tick, the unit
 	// record's occupancy-commit field [04 §6.1 R-DOC04-B]. Lookup-only [I1];
@@ -93,6 +94,9 @@ func NewClassLayer(p Profile, t *world.Terrain, grid *OccupancyGrid) *ClassLayer
 		cells:   make([]uint32, int(t.CellW)*int((t.CellH+15)>>4)),
 		stride:  (t.CellW + 1) >> 1,
 		commits: make(map[pool.Handle]uint32),
+	}
+	if t != nil {
+		l.staticRevision = t.StaticObstacleRevision()
 	}
 	l.owner = make([]uint16, int(l.stride)*int(((t.CellH+1)>>1)+2))
 	l.stampAll()
@@ -198,7 +202,34 @@ func (l *ClassLayer) Value(x, z int32) uint8 {
 	if l == nil || x < 0 || z < 0 || x >= l.W || z >= l.H {
 		return LayerBlocked
 	}
+	l.syncStaticRevision()
 	return uint8((l.cells[(z>>4)*l.W+x] >> (uint(z&15) * 2)) & 3)
+}
+
+// StaticRevision returns the terrain revision represented by this layer.
+func (l *ClassLayer) StaticRevision() uint64 {
+	if l == nil {
+		return 0
+	}
+	l.syncStaticRevision()
+	return l.staticRevision
+}
+
+// syncStaticRevision refreshes terrain/profile-derived layer cells after a
+// blocking feature mutation. Owner/building bits are a separate overlay and
+// are deliberately preserved; the completed-structure writer is unresolved
+// in this unit [04 §6.1][04 §8.2].
+func (l *ClassLayer) syncStaticRevision() {
+	if l == nil || l.Terrain == nil {
+		return
+	}
+	revision := l.Terrain.StaticObstacleRevision()
+	if revision == l.staticRevision {
+		return
+	}
+	l.stampAll()
+	l.Contagion()
+	l.staticRevision = revision
 }
 
 // RestampRect re-runs the per-cell classifier over the rectangle and rewrites

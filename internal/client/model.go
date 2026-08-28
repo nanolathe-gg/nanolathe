@@ -1196,9 +1196,10 @@ func blitTexturedTriToDest(dest []byte, mask []bool, w, h int, t *screenTri, fra
 	}
 }
 
-// drawUnitChrome overlays selection brackets and the health bar for a
-// model-drawn unit. Geometry follows the footprint box [04 §6.2]; the model
-// itself may extend above it.
+// drawUnitChrome overlays the selected/damaged health bar for a model-drawn
+// unit. Retail does not emit a generic per-unit footprint bracket in this
+// post-fog stage [R-SEL-02A]. Geometry follows the footprint box [04 §6.2];
+// the model itself may extend above it.
 func (c *Client) drawUnitChrome(v frame.UnitView, sx, sy int32) {
 	fx, fz := int(v.FootX), int(v.FootZ)
 	if fx <= 0 {
@@ -1215,22 +1216,6 @@ func (c *Client) drawUnitChrome(v frame.UnitView, sx, sy int32) {
 	}
 	if halfH < 4 {
 		halfH = 4
-	}
-	if v.Flags&hud.SelectionFlag != 0 {
-		corners := [4][2]int32{
-			{sx - halfW, sy - halfH}, {sx + halfW, sy - halfH},
-			{sx + halfW, sy + halfH}, {sx - halfW, sy + halfH},
-		}
-		for _, cnr := range corners {
-			for d := int32(-3); d <= 3; d++ {
-				for _, off := range [2][2]int32{{d, 0}, {0, d}} {
-					px, py := cnr[0]+off[0], cnr[1]+off[1]
-					if px >= 0 && px < int32(c.width) && py >= 0 && py < int32(c.height) {
-						c.indexed[py*int32(c.width)+px] = unitStyle.SelectWhite
-					}
-				}
-			}
-		}
 	}
 	if v.MaxHealth > 0 && (v.Health != v.MaxHealth || v.Flags&hud.SelectionFlag != 0) {
 		bw := halfW * 2

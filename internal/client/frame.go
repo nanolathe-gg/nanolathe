@@ -333,8 +333,10 @@ func (c *Client) drawFog(cur *frame.Frame) {
 }
 
 // drawSelectionStage emits unit selection and health chrome after fog. The
-// body stage only records model positions, so these pixels remain visible
+// body stage only records model positions, so health pixels remain visible
 // above the fog overlay as required by the frame contract [03 §1][03 §3.3].
+// Retail does not emit a generic per-unit footprint bracket here; the
+// separate drag frame is the only selection rectangle [R-SEL-02A].
 func (c *Client) drawSelectionStage() {
 	if c == nil {
 		return
@@ -342,6 +344,7 @@ func (c *Client) drawSelectionStage() {
 	for _, item := range c.selectionChrome {
 		c.drawUnitChrome(item.view, item.screenX, item.screenY)
 	}
+	c.drawSelectionDrag()
 }
 
 // convertIndexedToRGBA converts the indexed framebuffer to RGBA at present

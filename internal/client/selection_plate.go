@@ -1,8 +1,10 @@
 package client
 
-// Authored selection-plate projection for presentation, input, and wireframe
-// consumers [03 §2.4][03 §2.5][07 §8][07 §9]. This file computes geometry only;
-// it does not mutate selection membership or authoritative state (I6).
+// Authored selection-plate projection is a diagnostic geometry API only
+// [03 §2.4][03 §2.5][07 §8][07 §9]. Retail excludes the authored primitive from
+// body, wireframe, click, drag, and cursor consumers [R-SEL-02A]. This file
+// computes geometry only; it does not mutate selection membership or
+// authoritative state (I6).
 
 import (
 	"github.com/nanolathe/nanolathe/internal/camera"
@@ -21,8 +23,9 @@ type SelectionPlateEdge struct {
 	To   int
 }
 
-// SelectionPlateGeometry is the shared projected representation for one
-// authored selection primitive. Visible and Selectable are caller-supplied
+// SelectionPlateGeometry is the projected diagnostic representation for one
+// authored selection primitive. It is not a retail selection consumer.
+// Visible and Selectable are caller-supplied
 // committed-frame gates, further restricted when the declaring piece (or an
 // ancestor) is hidden. Invalid/fallback results carry no fabricated geometry
 // or radius [03 §2.4.1][07 §8][07 §9].
@@ -46,7 +49,7 @@ type SelectionPlateGeometry struct {
 }
 
 // BuildSelectionPlateGeometry projects every valid authored selection
-// primitive from one committed unit pose. It deliberately calls the same
+// primitive from one committed unit pose for diagnostics. It deliberately calls the same
 // BuildUnitDraw hierarchy/root-angle path used by body rendering, then applies
 // the same camera projection to the resulting world vertices [03 §2.4]
 // [03 §2.5][03 §5.2]. The returned slice is stable in model piece order.
