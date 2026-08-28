@@ -168,6 +168,20 @@ install-compatible divergence. See `research/formats/tdf.md` (MOVEINFO caveat),
 `[02 §5 "Movement class record"]`, `[04 §6.1]`, and the raw-corpus note
 `moveinfo-maxslope-paradox.md`.
 
+**Resolved (2026-08-27, `[04 §6.1 R-DOC04-A]`):** the 2026-08-26 update above
+is superseded — its writer census missed a startup initializer registered in
+the CRT function-pointer table, which pre-fills all 32 class records through
+the pool base plus a small offset before any parse: `MaxSlope` = `BadSlope` =
+`MaxWaterSlope` = `BadWaterSlope` = 255, `MaxWaterDepth` = 10000,
+`MinWaterDepth` = −10000. Omitted keys therefore carry the TEMPLATE values
+(not zero, not the previous class's values), the unconditional clamps are
+identity for them, and stock compiles to the authored slope limits. There is
+no paradox and no key-presence gate: retail is template pre-fill plus
+unconditional clamps, exactly the shape the original "Decision" aimed for.
+SC5 is closed: delete the gated-clamp divergence and initialize the profile
+from the template. The consumer contract (per-cell 2-bit layer stamping,
+A* blocking only on layer 0) is in `[04 §6.1 R-DOC04-B]`.
+
 **Falsifies:** nothing yet. It defers PLAN_02 C6's "then apply the three clamps
 in order" until the profile's initial value is known.
 

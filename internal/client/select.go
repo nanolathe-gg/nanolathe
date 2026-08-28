@@ -37,11 +37,7 @@
 package client
 
 import (
-	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/hud"
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/internal/visibility"
 )
 
 // View-pane origin offsets for presentation conversion [07 §9][03 §2.5].
@@ -104,62 +100,4 @@ func DragRectFromFixed(wx0, wz0, wx1, wz1 int64, camX, camZ int32) Rect { // [07
 	bx := FixedToPresentation(wx1, camX, ViewOriginX)
 	by := FixedToPresentation(wz1, camZ, ViewOriginY)
 	return NormalizeRect(ax, ay, bx, by)
-}
-
-// PickUnit is the ONE picking routine that respects fog, unit overlap, and
-// command validity [07 §9][03 §3.2] C8 [P0-I14].
-//
-// It returns the nearest unit within pickRadius pixels (16 pixel radius
-// [07 §9] overlap tolerance) whose screen projection is within the radius and
-// whose fog state is visible to localPlayer via visibility.Service.IsVisible
-// [03 §3.2] C8. A missing visibility service fails closed for foreign units;
-// local-owner units retain the visibility owner bypass. On equal distance the lower pool slot wins
-// deterministically (strict <) and iteration is stable ascending slot order
-// (I1) [07 §9]. Callers that also need feature picking should test unit result
-// first and fall back to feature probing only when no unit hit, preserving
-// unit>feature priority [P0-I14].
-//
-// Validity is checked via the orders.Resolve gate at the call site; this
-// helper handles only fog, overlap, and deterministic iteration.
-func PickUnit(sx, sy int32, cam *camera.Camera, unitsWorld *units.World, vis *visibility.Service, localPlayer visibility.PlayerID) (pool.Handle, *units.Unit) { // [07 §9][03 §3.2][P0-I14]
-	if cam == nil || unitsWorld == nil {
-		return 0, nil
-	}
-	const pickRadiusSq = 16 * 16 // 16 pixel radius [07 §9] overlap tolerance
-	bestHandle := pool.Handle(0)
-	var bestUnit *units.Unit
-	bestDist2 := int64(1 << 30)
-	for _, u := range unitsWorld.Iter() { // stable ascending slot order (I1) [07 §9]
-		if u == nil || !u.Alive {
-			continue
-		}
-		owner := visibility.PlayerID(u.Owner)
-		if owner != localPlayer {
-			if vis == nil {
-				continue // foreign units are absent when visibility is unavailable
-			}
-			t := visibility.Target{
-				Owner:  owner,
-				X:      u.X,
-				Y:      u.Y,
-				Z:      u.Z,
-				Hidden: u.Flags&0x4 != 0, // cloaked bit placeholder TODO(question) [03 §3.2]
-				Status: u.Flags,
-			}
-			if !vis.IsVisible(localPlayer, t) {
-				continue // fogged: treated as absent for picking [03 §3.2] C8 [P0-I14]
-			}
-		}
-		sxU0, syU0 := cam.WorldToScreen(u.X, u.Y, u.Z)       // beam [03 §2.5]
-		sxU, syU := sxU0-camera.OriginX, syU0-camera.OriginY // shell [PLAN_04A C1]
-		dx := int64(sxU) - int64(sx)
-		dy := int64(syU) - int64(sy)
-		dist2 := dx*dx + dy*dy
-		if dist2 <= pickRadiusSq && dist2 < bestDist2 { // strict < so lower slot wins on tie [07 §9]
-			bestDist2 = dist2
-			bestHandle = u.Handle
-			bestUnit = u
-		}
-	}
-	return bestHandle, bestUnit
 }

@@ -56,27 +56,27 @@ func TestGameSpeedKeysClampAndMessage(t *testing.T) {
 	b.sess.Clock.Active = 10
 	b.sess.Clock.GlobalTick = 200
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
-	in.Kbd.InjectKey(input.KeyEqual, true)
+	in.Kbd.SetKey(input.KeyEqual, true)
 	b.handleInput(in, nil)
 	if b.sess.Clock.Requested != 11 {
 		t.Fatalf("handleInput Equal should increase speed to 11 got %d", b.sess.Clock.Requested)
 	}
-	in.Kbd.ClearEdges()
-	in.Kbd.InjectKey(input.KeyEqual, false)
-	in.Kbd.InjectKey(input.KeyMinus, true)
+	in.Kbd.ResetEdges()
+	in.Kbd.SetKey(input.KeyEqual, false)
+	in.Kbd.SetKey(input.KeyMinus, true)
 	b.handleInput(in, nil)
 	if b.sess.Clock.Requested != 10 {
 		t.Fatalf("handleInput Minus should decrease to 10 got %d", b.sess.Clock.Requested)
 	}
-	in.Kbd.ClearEdges()
+	in.Kbd.ResetEdges()
 	// Numpad variants
-	in.Kbd.InjectKey(input.KeyNumpadAdd, true)
+	in.Kbd.SetKey(input.KeyNumpadAdd, true)
 	b.handleInput(in, nil)
 	if b.sess.Clock.Requested != 11 {
 		t.Fatalf("NumpadAdd should increase to 11 got %d", b.sess.Clock.Requested)
 	}
-	in.Kbd.ClearEdges()
-	in.Kbd.InjectKey(input.KeyNumpadSubtract, true)
+	in.Kbd.ResetEdges()
+	in.Kbd.SetKey(input.KeyNumpadSubtract, true)
 	b.handleInput(in, nil)
 	if b.sess.Clock.Requested != 10 {
 		t.Fatalf("NumpadSubtract should decrease to 10 got %d", b.sess.Clock.Requested)
@@ -106,7 +106,7 @@ func TestPauseToggleWithMessage(t *testing.T) {
 	// Via handleInput
 	b.sess.Clock.Paused = false
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
-	in.Kbd.InjectKey(input.KeyPause, true)
+	in.Kbd.SetKey(input.KeyPause, true)
 	b.handleInput(in, nil)
 	if !b.sess.Clock.Paused {
 		t.Fatalf("handleInput Pause should toggle")
@@ -126,7 +126,7 @@ func TestESCMenuTokenPath(t *testing.T) {
 	cl.SetCamera(b.cam)
 	// Simulate viewerStep ESC handling
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
-	in.Kbd.InjectKey(input.KeyEscape, true)
+	in.Kbd.SetKey(input.KeyEscape, true)
 	// viewerStep logic: if latch normal and buildDef empty, ESC opens menu
 	if b.battleState().Input.Latch == input.LatchNormal && b.battleState().Input.BuildDef == "" {
 		b.openBattleMenu()
@@ -142,7 +142,7 @@ func TestESCMenuTokenPath(t *testing.T) {
 		// handleBattleMenuInput with ESC when options should close
 		// We already injected Escape, but need to call again with fresh edge
 		in2 := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
-		in2.Kbd.InjectKey(input.KeyEscape, true)
+		in2.Kbd.SetKey(input.KeyEscape, true)
 		b.handleBattleMenuInput(in2, cl)
 		if b.battleState().Modal() != ui.BattleModalClosed {
 			t.Fatalf("ESC in menu should close, got %v", b.battleState().Modal())
@@ -152,7 +152,7 @@ func TestESCMenuTokenPath(t *testing.T) {
 	b.battleState().Input.Latch = input.LatchMove
 	b.battleState().Input.BuildDef = ""
 	in3 := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
-	in3.Kbd.InjectKey(input.KeyEscape, true)
+	in3.Kbd.SetKey(input.KeyEscape, true)
 	b.handleInput(in3, nil)
 	if b.battleState().Input.Latch != input.LatchNormal {
 		t.Fatalf("ESC should disarm latch, got %v", b.battleState().Input.Latch)
@@ -162,7 +162,7 @@ func TestESCMenuTokenPath(t *testing.T) {
 	}
 	// Now second ESC after disarm should open menu
 	in4 := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
-	in4.Kbd.InjectKey(input.KeyEscape, true)
+	in4.Kbd.SetKey(input.KeyEscape, true)
 	// viewerStep would open
 	if b.battleState().Input.Latch == input.LatchNormal && b.battleState().Input.BuildDef == "" {
 		b.openBattleMenu()

@@ -684,12 +684,22 @@ func publishVisibilityView(vis *visibility.Service, local uint8, out *frame.Visi
 	}
 	w, h := vis.GridDimensions()
 	word := vis.WordMask()
-	current := vis.ByteGrid(visibility.PlayerID(local))
-	if w <= 0 || h <= 0 || len(word) != int(w*h) || len(current) != int(w*h) {
+	if w <= 0 || h <= 0 || len(word) != int(w*h) {
 		return
 	}
-	out.Visible = copyBytesInto(out.Visible, current)
+	// CoverageBytes records the actual mode-selected source. When current
+	// coverage is disabled, the byte grids are initialization fill only and
+	// must not be published as if they admitted foreign objects [03 §3.1–§3.2].
+	byteCoverage := vis.Mode()&visibility.ModeCurrentEnabled != 0
+	out.Visible = out.Visible[:0]
+	if byteCoverage {
+		current := vis.ByteGrid(visibility.PlayerID(local))
+		if len(current) != int(w*h) {
+			return
+		}
+		out.Visible = copyBytesInto(out.Visible, current)
+	}
 	out.WordVisible = copyWordsInto(out.WordVisible, word)
 	out.W, out.H = w, h
-	out.CoverageBytes, out.Valid = true, true
+	out.CoverageBytes, out.Valid = byteCoverage, true
 }

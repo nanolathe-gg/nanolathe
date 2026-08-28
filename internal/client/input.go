@@ -2,211 +2,51 @@ package client
 
 import (
 	"github.com/hajimehoshi/ebiten/v2"
-
 	"github.com/nanolathe/nanolathe/internal/input"
 )
 
-// MouseState is the per-frame mouse snapshot. X/Y are window coordinates;
-// edge flags (Pressed) hold for exactly one update, Held persists while down.
-type MouseState struct {
-	X, Y float32
+// Input types are defined by internal/input; aliases keep the client edge
+// source-compatible while ensuring UI and command code share one state model.
+type MouseState = input.MouseState
+type KeyboardState = input.KeyboardState
+type InputState = input.State
 
-	ScrollX, ScrollY float32
-	scrolled         bool
+func newInputState() *input.State { return input.NewState() }
 
-	edges    [4]bool // just-pressed this update, indexed by MouseButton
-	released [4]bool // just-released this update, indexed by MouseButton
-	buttons  [4]bool // currently down
-	moved    bool
-}
-
-// Pressed reports a button that went down this update.
-func (m *MouseState) Pressed(b input.MouseButton) bool { return m.edges[b] }
-
-// Released reports a button that went up this update.
-func (m *MouseState) Released(b input.MouseButton) bool { return m.released[b] }
-
-// Held reports a button currently down.
-func (m *MouseState) Held(b input.MouseButton) bool { return m.buttons[b] }
-
-// Scrolled reports wheel motion this update.
-func (m *MouseState) Scrolled() bool { return m.scrolled }
-
-// Moved reports cursor motion this update.
-func (m *MouseState) Moved() bool { return m.moved }
-
-// SetPosition places the pointer directly. The windowed path never calls this
-// — pollEbiten owns the position there — but headless composition (screenshots,
-// probes) has no window system to read the pointer from [07 §8].
-func (m *MouseState) SetPosition(x, y float32) {
-	m.moved = m.X != x || m.Y != y
-	m.X, m.Y = x, y
-}
-
-// ButtonState returns 1 while a button is down, 0 otherwise.
-func (m *MouseState) ButtonState(b input.MouseButton) int {
-	if m.buttons[b] {
-		return 1
+// pollInput is the only production device-polling path. Ebitengine remains at
+// this edge; downstream code receives the platform-neutral input.State [I6].
+func pollInput(in *input.State) {
+	if in == nil || in.Mouse == nil || in.Kbd == nil {
+		return
 	}
-	return 0
-}
-
-// KeyboardState is the per-frame keyboard snapshot with retail-style queries:
-// KeyDown is the this-update press edge, KeyHeld the continuous state.
-type KeyboardState struct {
-	edges [input.KeyCount]bool
-	held  [input.KeyCount]bool
-}
-
-// HasShift reports either shift key held, for additive selection.
-func (k *KeyboardState) HasShift() bool {
-	return k.held[input.KeyShift]
-}
-
-// KeyDown reports a key that went down this update.
-func (k *KeyboardState) KeyDown(key input.Key) bool { return k.edges[key] }
-
-// KeyHeld reports a key currently down.
-func (k *KeyboardState) KeyHeld(key input.Key) bool { return k.held[key] }
-
-// InputState bundles the keyboard and mouse snapshots refreshed at the start
-// of every update, before the Step callback runs.
-type InputState struct {
-	Mouse *MouseState
-	Kbd   *KeyboardState
-}
-
-func newInputState() *InputState {
-	return &InputState{Mouse: &MouseState{}, Kbd: &KeyboardState{}}
-}
-
-// pollEbiten refreshes the snapshot from Ebitengine. Edge flags reset here so
-// they describe exactly the frame about to be stepped and drawn.
-func (in *InputState) pollEbiten() {
-	m := in.Mouse
-	k := in.Kbd
-	m.edges = [4]bool{}
-	m.released = [4]bool{}
-	m.scrolled = false
-	m.moved = false
-	k.edges = [input.KeyCount]bool{}
-
+	m, k := in.Mouse, in.Kbd
+	m.ResetEdges()
+	k.ResetEdges()
 	cx, cy := ebiten.CursorPosition()
-	if float32(cx) != m.X || float32(cy) != m.Y {
-		m.moved = true
-	}
-	m.X = float32(cx)
-	m.Y = float32(cy)
-	// Fix middle-button polling [F-P0-003][F-P1-008]: previous table mapped
-	// MouseButtonNone to Middle and skipped Middle entirely. Correct mapping
-	// polls Left/Middle/Right via stable array indexed by MouseButton.
-	mappings := []struct {
+	m.SetPosition(float32(cx), float32(cy))
+	for _, mp := range []struct {
 		btn input.MouseButton
 		eb  ebiten.MouseButton
 	}{
 		{input.MouseButtonLeft, ebiten.MouseButtonLeft},
 		{input.MouseButtonMiddle, ebiten.MouseButtonMiddle},
 		{input.MouseButtonRight, ebiten.MouseButtonRight},
-	}
-	for _, mp := range mappings {
-		b := int(mp.btn)
-		down := ebiten.IsMouseButtonPressed(mp.eb)
-		m.edges[b] = down && !m.buttons[b]
-		m.released[b] = !down && m.buttons[b]
-		m.buttons[b] = down
+	} {
+		m.SetButton(mp.btn, ebiten.IsMouseButtonPressed(mp.eb))
 	}
 	wx, wy := ebiten.Wheel()
-	if wx != 0 || wy != 0 {
-		m.scrolled = true
-		m.ScrollX = float32(wx)
-		m.ScrollY = float32(wy)
-	} else {
-		m.ScrollX = 0
-		m.ScrollY = 0
-	}
+	m.SetWheel(float32(wx), float32(wy))
 	for key := input.Key(1); key < input.KeyCount; key++ {
+		down := false
 		if key == input.KeyShift {
-			// Retail VK_SHIFT covers both left and right shift [07 §2][C-5].
-			down := ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
-			k.edges[key] = down && !k.held[key]
-			k.held[key] = down
-			continue
+			down = ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
+		} else if ek, ok := ebitenKey(key); ok {
+			down = ebiten.IsKeyPressed(ek)
 		}
-		if ek, ok := ebitenKey(key); ok {
-			down := ebiten.IsKeyPressed(ek)
-			k.edges[key] = down && !k.held[key]
-			k.held[key] = down
-		}
+		k.SetKey(key, down)
 	}
 }
 
-// --- Headless test injection helpers (presentation-only, never touch sim) ---
-
-// InjectMouseButton sets the held state for a button and synthesizes the
-// corresponding edge flags for the next handleInput tick. Used by headless
-// tests to simulate presses without an Ebitengine window [07 §8].
-func (m *MouseState) InjectMouseButton(btn input.MouseButton, down bool) {
-	if m == nil || btn >= input.MouseButton(4) {
-		return
-	}
-	b := int(btn)
-	prev := m.buttons[b]
-	m.edges[b] = down && !prev
-	m.released[b] = !down && prev
-	m.buttons[b] = down
-}
-
-// InjectMouseMove moves the cursor to x,y and marks moved [07 §8].
-func (m *MouseState) InjectMouseMove(x, y float32) {
-	if m == nil {
-		return
-	}
-	m.moved = m.X != x || m.Y != y
-	m.X, m.Y = x, y
-}
-
-// InjectWheel injects wheel deltas for the next tick. The canonical UI layer
-// consumes this sample for an authored list only; battle camera code does not
-// interpret wheel input [07 §2][07 §10].
-func (m *MouseState) InjectWheel(dx, dy float32) {
-	if m == nil {
-		return
-	}
-	m.scrolled = dx != 0 || dy != 0
-	m.ScrollX = dx
-	m.ScrollY = dy
-}
-
-// InjectKey sets a key's held/edge state for the next tick.
-func (k *KeyboardState) InjectKey(key input.Key, down bool) {
-	if k == nil || key >= input.KeyCount {
-		return
-	}
-	prev := k.held[key]
-	k.edges[key] = down && !prev
-	k.held[key] = down
-}
-
-// ClearEdges resets per-frame edge flags without touching held state. Useful
-// between injected ticks in headless tests.
-func (m *MouseState) ClearEdges() {
-	if m == nil {
-		return
-	}
-	m.edges = [4]bool{}
-	m.released = [4]bool{}
-	m.scrolled = false
-	m.moved = false
-	m.ScrollX, m.ScrollY = 0, 0
-}
-func (k *KeyboardState) ClearEdges() {
-	if k == nil {
-		return
-	}
-	k.edges = [input.KeyCount]bool{}
-}
-
-// ebitenKey maps the platform-neutral vocabulary onto Ebitengine keys.
 func ebitenKey(k input.Key) (ebiten.Key, bool) {
 	switch k {
 	case input.KeyA:

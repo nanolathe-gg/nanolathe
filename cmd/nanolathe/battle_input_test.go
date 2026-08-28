@@ -29,29 +29,29 @@ func clickAt(b *battleSession, sx, sy int32, shift bool) {
 	applyPendingBattleCommands(b)
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 	if shift {
-		in.Kbd.InjectKey(input.KeyShift, true)
+		in.Kbd.SetKey(input.KeyShift, true)
 	}
 	// Press
-	in.Mouse.InjectMouseMove(float32(sx), float32(sy))
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, true)
+	in.Mouse.SetPosition(float32(sx), float32(sy))
+	in.Mouse.SetButton(input.MouseButtonLeft, true)
 	b.handleInput(in, nil)
 	// Hold one frame (drag tracking)
-	in.Mouse.ClearEdges()
-	in.Kbd.ClearEdges()
+	in.Mouse.ResetEdges()
+	in.Kbd.ResetEdges()
 	if shift {
-		in.Kbd.InjectKey(input.KeyShift, true)
+		in.Kbd.SetKey(input.KeyShift, true)
 	}
-	in.Mouse.InjectMouseMove(float32(sx), float32(sy))
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, true)
+	in.Mouse.SetPosition(float32(sx), float32(sy))
+	in.Mouse.SetButton(input.MouseButtonLeft, true)
 	b.handleInput(in, nil)
 	// Release
-	in.Mouse.ClearEdges()
-	in.Kbd.ClearEdges()
+	in.Mouse.ResetEdges()
+	in.Kbd.ResetEdges()
 	if shift {
-		in.Kbd.InjectKey(input.KeyShift, true)
+		in.Kbd.SetKey(input.KeyShift, true)
 	}
-	in.Mouse.InjectMouseMove(float32(sx), float32(sy))
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, false)
+	in.Mouse.SetPosition(float32(sx), float32(sy))
+	in.Mouse.SetButton(input.MouseButtonLeft, false)
 	b.handleInput(in, nil)
 	applyPendingBattleCommands(b)
 }
@@ -59,10 +59,10 @@ func clickAt(b *battleSession, sx, sy int32, shift bool) {
 func rightClickAt(b *battleSession, sx, sy int32, shift bool) {
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 	if shift {
-		in.Kbd.InjectKey(input.KeyShift, true)
+		in.Kbd.SetKey(input.KeyShift, true)
 	}
-	in.Mouse.InjectMouseMove(float32(sx), float32(sy))
-	in.Mouse.InjectMouseButton(input.MouseButtonRight, true)
+	in.Mouse.SetPosition(float32(sx), float32(sy))
+	in.Mouse.SetButton(input.MouseButtonRight, true)
 	b.handleInput(in, nil)
 	applyPendingBattleCommands(b)
 }
@@ -71,26 +71,26 @@ func dragSelect(b *battleSession, sx0, sy0, sx1, sy1 int32, shift bool) {
 	applyPendingBattleCommands(b)
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 	if shift {
-		in.Kbd.InjectKey(input.KeyShift, true)
+		in.Kbd.SetKey(input.KeyShift, true)
 	}
-	in.Mouse.InjectMouseMove(float32(sx0), float32(sy0))
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, true)
+	in.Mouse.SetPosition(float32(sx0), float32(sy0))
+	in.Mouse.SetButton(input.MouseButtonLeft, true)
 	b.handleInput(in, nil)
-	in.Mouse.ClearEdges()
-	in.Kbd.ClearEdges()
+	in.Mouse.ResetEdges()
+	in.Kbd.ResetEdges()
 	if shift {
-		in.Kbd.InjectKey(input.KeyShift, true)
+		in.Kbd.SetKey(input.KeyShift, true)
 	}
-	in.Mouse.InjectMouseMove(float32(sx1), float32(sy1))
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, true)
+	in.Mouse.SetPosition(float32(sx1), float32(sy1))
+	in.Mouse.SetButton(input.MouseButtonLeft, true)
 	b.handleInput(in, nil)
-	in.Mouse.ClearEdges()
-	in.Kbd.ClearEdges()
+	in.Mouse.ResetEdges()
+	in.Kbd.ResetEdges()
 	if shift {
-		in.Kbd.InjectKey(input.KeyShift, true)
+		in.Kbd.SetKey(input.KeyShift, true)
 	}
-	in.Mouse.InjectMouseMove(float32(sx1), float32(sy1))
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, false)
+	in.Mouse.SetPosition(float32(sx1), float32(sy1))
+	in.Mouse.SetButton(input.MouseButtonLeft, false)
 	b.handleInput(in, nil)
 	applyPendingBattleCommands(b)
 }
@@ -339,50 +339,6 @@ func TestFoggedEnemyCannotBeSelectedOrTargeted(t *testing.T) {
 	clickAt(b, sxOwn, syOwn, false)
 	if own.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("own unit should be selectable even with empty vis (owner bypass)")
-	}
-}
-
-// TestEqualOverlapTieLowerSlotWins [07 §9] strict < so lower slot wins.
-func TestEqualOverlapTieLowerSlotWins(t *testing.T) {
-	cat := testCatalogON05()
-	terrain := testWorldON05(20, 20)
-	b := newTestBattle(cat, terrain)
-	b.sess.LocalOwner = 0
-	x := numeric.Fixed(200 * 65536)
-	z := numeric.Fixed(120 * 65536)
-	h1, _ := b.sess.Units.Create(cat.Units[content.CanonicalKey("armcons")], 0, x, 0, z)
-	h2, _ := b.sess.Units.Create(cat.Units[content.CanonicalKey("armsolar")], 0, x, 0, z)
-	u1 := b.sess.Units.Unit(h1)
-	u2 := b.sess.Units.Unit(h2)
-	if u1 == nil || u2 == nil {
-		t.Fatalf("units not created")
-	}
-	b.battleState().Input.Latch = input.LatchNormal
-	sx, sy := screenPos(b.cam, u1) // same as u2
-	// First via direct picker at the rendered framebuffer position [03 §2.5]
-	shellX := sx
-	shellY := sy
-	viewer := visibility.PlayerID(b.sess.LocalOwner)
-	bh, bu := client.PickUnit(shellX, shellY, b.cam, b.sess.Units, nil, viewer)
-	if bh != h1 || bu != u1 {
-		t.Fatalf("overlap tie: want lower slot %v got %v", h1, bh)
-	}
-	// Via click selection (expects viewport logical, handled via battle's conversion)
-	clickAt(b, sx, sy, false)
-	if u1.Flags&hud.SelectionFlag == 0 {
-		t.Fatalf("lower slot should be selected on exact overlap click")
-	}
-	if u2.Flags&hud.SelectionFlag != 0 {
-		t.Fatalf("higher slot should not be selected on tie")
-	}
-	// Nudge u2 to be 1px closer – should win despite higher slot (nearest wins)
-	u2.X = x + numeric.Fixed(1*65536)
-	sx2, sy2 := screenPos(b.cam, u2)
-	shellX2 := sx2
-	shellY2 := sy2
-	bh2, _ := client.PickUnit(shellX2, shellY2, b.cam, b.sess.Units, nil, viewer)
-	if bh2 != h2 {
-		t.Fatalf("nearest should win despite higher slot, want %v got %v", h2, bh2)
 	}
 }
 

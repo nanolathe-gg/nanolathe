@@ -8,10 +8,10 @@ import (
 
 func TestMiddleButtonPollingFixed(t *testing.T) {
 	m := &MouseState{}
-	// Simulate middle press via Inject helper (which uses correct mapping)
-	m.InjectMouseButton(input.MouseButtonMiddle, true)
+	// Construct the canonical platform-neutral state at the input boundary.
+	m.SetButton(input.MouseButtonMiddle, true)
 	if !m.Held(input.MouseButtonMiddle) {
-		t.Fatalf("middle Held should be true after Inject")
+		t.Fatalf("middle Held should be true after SetButton")
 	}
 	if !m.Pressed(input.MouseButtonMiddle) {
 		t.Fatalf("middle Pressed should be true on edge")
@@ -20,44 +20,44 @@ func TestMiddleButtonPollingFixed(t *testing.T) {
 	if m.Held(input.MouseButtonLeft) {
 		t.Fatalf("left should not be held when middle is")
 	}
-	m.ClearEdges()
-	m.InjectMouseButton(input.MouseButtonMiddle, true)
+	m.ResetEdges()
+	m.SetButton(input.MouseButtonMiddle, true)
 	if m.Pressed(input.MouseButtonMiddle) {
 		t.Fatalf("holding should not generate new Pressed edge")
 	}
-	m.InjectMouseButton(input.MouseButtonMiddle, false)
+	m.SetButton(input.MouseButtonMiddle, false)
 	if !m.Released(input.MouseButtonMiddle) {
 		t.Fatalf("middle release should be reported")
 	}
 }
 
-func TestHeadlessInjectionHelpers(t *testing.T) {
+func TestCanonicalInputState(t *testing.T) {
 	m := &MouseState{X: 10, Y: 10}
-	m.InjectMouseMove(20, 30)
+	m.SetPosition(20, 30)
 	if !m.Moved() {
 		t.Fatalf("move should be reported")
 	}
 	if m.X != 20 || m.Y != 30 {
 		t.Fatalf("pos wrong %f %f", m.X, m.Y)
 	}
-	m.ClearEdges()
+	m.ResetEdges()
 	if m.Moved() {
 		t.Fatalf("cleared should not report moved")
 	}
-	m.InjectWheel(0, 1)
+	m.SetWheel(0, 1)
 	if !m.Scrolled() || m.ScrollY != 1 {
-		t.Fatalf("wheel inject failed")
+		t.Fatalf("wheel state failed")
 	}
 	ks := &KeyboardState{}
-	ks.InjectKey(input.KeyW, true)
+	ks.SetKey(input.KeyW, true)
 	if !ks.KeyHeld(input.KeyW) {
 		t.Fatalf("W held")
 	}
 	if !ks.KeyDown(input.KeyW) {
 		t.Fatalf("W down edge")
 	}
-	ks.ClearEdges()
-	ks.InjectKey(input.KeyW, true)
+	ks.ResetEdges()
+	ks.SetKey(input.KeyW, true)
 	if ks.KeyDown(input.KeyW) {
 		t.Fatalf("held should not be down again")
 	}

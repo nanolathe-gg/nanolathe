@@ -71,53 +71,51 @@ func (c *Client) DrawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layo
 	}
 }
 
-// HandleMinimapInput applies the direct-origin lens. Screen input
-// is first converted to the same local 126-pixel canvas used for drawing;
+// CameraIntent is a presentation-only camera target. The client computes the
+// target from the minimap lens, while the battle composition owner applies it
+// to the canonical camera [07 §10][I6].
+type CameraIntent struct {
+	X, Z int32
+}
+
+// MinimapCameraIntent computes the direct-origin lens target. Screen input is
+// first converted to the same local 126-pixel canvas used for drawing;
 // letterbox padding is removed before world scaling. The alternate drag path
-// remains unresolved and is deliberately isolated behind dragActive.
-func HandleMinimapInput(cam *camera.Camera, layout camera.Minimap, dst hud.Rect, playW, playH int32, mouseX, mouseY int32, isInside bool, dragActive *bool) bool {
-	if cam == nil {
-		return false
-	}
+// uses the established viewport-delta form. No camera state is mutated here.
+func MinimapCameraIntent(currentX, currentZ int32, layout camera.Minimap, dst, viewport hud.Rect, playW, playH int32, mouseX, mouseY int32, isInside, dragActive bool) (CameraIntent, bool) {
 	dl, dt, dr, db := dst.Ordered()
 	dw, dh := dr-dl+1, db-dt+1
 	if dw <= 0 || dh <= 0 {
-		return false
+		return CameraIntent{}, false
 	}
-	drag := dragActive != nil && *dragActive
+	drag := dragActive
 	canvasX, canvasY, _ := layout.DisplayToCanvas(mouseX, mouseY, dl, dt, dw, dh)
 	if isInside && !layout.HitTest(canvasX, canvasY) {
 		isInside = false
 	}
 	if !isInside && !drag {
-		return false
+		return CameraIntent{}, false
 	}
 	if isInside && !drag {
 		// The lens writes the projected world point directly as the camera
-		// origin. Camera.Clamp owns the subsequent playable-extent clamp [03 §3.11].
-		cam.X, cam.Z = layout.ToWorldPlay(canvasX, canvasY, playW, playH)
-		cam.Clamp()
-		return true
+		// origin. The canonical camera owner applies its clamp [03 §3.11].
+		x, z := layout.ToWorldPlay(canvasX, canvasY, playW, playH)
+		return CameraIntent{X: x, Z: z}, true
 	}
 	// TODO(question): the retail alternate minimap drag/current-camera branch
 	// boundary and clamp vectors are not fully reduced. Preserve the established
 	// viewport-delta shape until a trace settles its exact gate.
+	vl, vt, vr, vb := viewport.Ordered()
 	clampedX, clampedY := mouseX, mouseY
-	if clampedX < dl {
-		clampedX = dl
-	} else if clampedX > dr {
-		clampedX = dr
+	if clampedX < vl {
+		clampedX = vl
+	} else if clampedX > vr {
+		clampedX = vr
 	}
-	if clampedY < dt {
-		clampedY = dt
-	} else if clampedY > db {
-		clampedY = db
+	if clampedY < vt {
+		clampedY = vt
+	} else if clampedY > vb {
+		clampedY = vb
 	}
-	cam.X += clampedX - dl
-	cam.Z += clampedY - dt
-	cam.Clamp()
-	if dragActive != nil {
-		*dragActive = true
-	}
-	return true
+	return CameraIntent{X: currentX + clampedX - vl, Z: currentZ + clampedY - vt}, true
 }

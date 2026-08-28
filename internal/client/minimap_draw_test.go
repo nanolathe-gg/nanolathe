@@ -9,7 +9,21 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-func TestMinimapHandleMinimapInputInsideAndDrag(t *testing.T) { // [07 §10] two-branch lens
+func applyMinimapIntentForTest(cam *camera.Camera, layout camera.Minimap, dst hud.Rect, playW, playH, mouseX, mouseY int32, inside bool, drag *bool) bool {
+	if cam == nil {
+		return false
+	}
+	viewport := hud.Rect{X1: camera.OriginX, Y1: camera.OriginY, X2: camera.OriginX + cam.ViewW - 1, Y2: camera.OriginY + cam.ViewH - 1}
+	dragging := drag != nil && *drag
+	intent, ok := MinimapCameraIntent(cam.X, cam.Z, layout, dst, viewport, playW, playH, mouseX, mouseY, inside, dragging)
+	if ok {
+		cam.X, cam.Z = intent.X, intent.Z
+		cam.Clamp()
+	}
+	return ok
+}
+
+func TestMinimapCameraIntentInsideAndDrag(t *testing.T) { // [07 §10] two-branch lens
 	playW, playH := int32(608), int32(352)
 	m := camera.LayoutMinimap(640, 480)
 	hudRect := hud.Rect{X1: 0, Y1: 0, X2: 126, Y2: 126}
@@ -19,9 +33,9 @@ func TestMinimapHandleMinimapInputInsideAndDrag(t *testing.T) { // [07 §10] two
 	var drag bool
 	mouseX := int32(60)
 	mouseY := int32(60)
-	ok := HandleMinimapInput(cam, m, hudRect, playW, playH, mouseX, mouseY, isInside, &drag)
+	ok := applyMinimapIntentForTest(cam, m, hudRect, playW, playH, mouseX, mouseY, isInside, &drag)
 	if !ok {
-		t.Fatalf("HandleMinimapInput inside should be consumed")
+		t.Fatalf("applyMinimapIntentForTest inside should be consumed")
 	}
 	// After inside click, camera origin is the world point corresponding to the
 	// mouse, then clamped [03 §3.11].
@@ -45,19 +59,20 @@ func TestMinimapHandleMinimapInputInsideAndDrag(t *testing.T) { // [07 §10] two
 	if cam.X != wantX || cam.Z != wantZ {
 		t.Fatalf("inside lens camera want %d,%d got %d,%d wx,wz %d,%d", wantX, wantZ, cam.X, cam.Z, wx, wz)
 	}
-	// Drag branch: outside-or-drag-latch => cam + (mouse - vpOrigin) clamp [07 §10]
+	// Drag branch: outside-or-drag-latch => cam + (mouse - viewport origin)
+	// clamp [07 §10]. The viewport origin is (128,32), so this pointer is
+	// clamped to that origin and the camera target remains its direct origin.
 	cam2 := &camera.Camera{X: 10, Z: 20, ViewW: 64, ViewH: 64, MapW: playW, MapH: playH}
 	drag = true // latch set
 	isInside = false
 	mouseX = 20
 	mouseY = 30
-	ok = HandleMinimapInput(cam2, m, hudRect, playW, playH, mouseX, mouseY, isInside, &drag)
+	ok = applyMinimapIntentForTest(cam2, m, hudRect, playW, playH, mouseX, mouseY, isInside, &drag)
 	if !ok {
 		t.Fatalf("drag latch should be consumed even when outside")
 	}
-	// cam + (mouse - vpOrigin) where vpOrigin hl,ht =0,0 => cam 10+20, 20+30
-	wantX2 := int32(10 + 20)
-	wantZ2 := int32(20 + 30)
+	wantX2 := int32(10)
+	wantZ2 := int32(20)
 	// clamp per [07 §10] C3
 	if wantX2 < 0 {
 		wantX2 = 0
@@ -75,7 +90,7 @@ func TestMinimapHandleMinimapInputInsideAndDrag(t *testing.T) { // [07 §10] two
 	// Outside without drag should not be consumed
 	cam3 := &camera.Camera{X: 0, Z: 0, ViewW: 64, ViewH: 64, MapW: playW, MapH: playH}
 	drag = false
-	ok = HandleMinimapInput(cam3, m, hudRect, playW, playH, 5, 5, false, &drag)
+	ok = applyMinimapIntentForTest(cam3, m, hudRect, playW, playH, 5, 5, false, &drag)
 	if ok {
 		t.Fatalf("outside without drag should not be consumed")
 	}
@@ -84,14 +99,14 @@ func TestMinimapHandleMinimapInputInsideAndDrag(t *testing.T) { // [07 §10] two
 	}
 }
 
-func TestMinimapHandleMinimapInputClampOrder(t *testing.T) { // [07 §10] C3 clampAxis order
+func TestMinimapCameraIntentClampOrder(t *testing.T) { // [07 §10] C3 clampAxis order
 	playW, playH := int32(100), int32(100)
 	m := camera.Minimap{W: 126, H: 126, PadX: 0, PadY: 0}
 	hudRect := hud.Rect{X1: 0, Y1: 0, X2: 126, Y2: 126}
 	// view larger than map -> maximum = map - view negative, clampAxis order ensures negative camera ->0 before maximum check
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: 200, ViewH: 200, MapW: playW, MapH: playH}
 	// inside click at 0,0 => wx 0 => newCam = -100 => clamp to 0 per order
-	ok := HandleMinimapInput(cam, m, hudRect, playW, playH, 0, 0, true, nil)
+	ok := applyMinimapIntentForTest(cam, m, hudRect, playW, playH, 0, 0, true, nil)
 	if !ok {
 		t.Fatalf("inside should be consumed")
 	}
@@ -100,13 +115,14 @@ func TestMinimapHandleMinimapInputClampOrder(t *testing.T) { // [07 §10] C3 cla
 	}
 	// Click far edge with large view: newCam positive but > maximum (negative maximum) -> clamp to maximum negative
 	cam2 := &camera.Camera{X: 0, Z: 0, ViewW: 200, ViewH: 200, MapW: playW, MapH: playH}
-	HandleMinimapInput(cam2, m, hudRect, playW, playH, 126, 126, true, nil)
+	dragClamp := true
+	if !applyMinimapIntentForTest(cam2, m, hudRect, playW, playH, 126, 126, false, &dragClamp) {
+		t.Fatalf("drag clamp case should be consumed")
+	}
 	// maximum = 100-200 = -100, camera computed maybe > -100? For click at 126 -> wx ~100, newCam = 0? Let's just ensure clamp doesn't panic and stays within 0..maximum logic: if camera positive > maximum negative, it should clamp to maximum (-100) per clampAxis? But first check camera<0 ->0, else if >maximum. Since maximum negative, a positive camera (e.g., 50) is > maximum (-100), so it clamps to -100. That's the ordered form.
 	// Our impl does that.
 	if cam2.X != -100 || cam2.Z != -100 {
-		// Could be 0 if intermediate? Let's just check that it clamped to maximum, not 0
-		// The inside branch computes wx~100, newCam~0 (100-100), which is 0, not -100. So this case not triggering drag.
-		// Use drag branch to test positive clamp to negative max: cam 0 + mouse 126 => 126, > -100 => -100
+		t.Fatalf("positive target must clamp to negative maximum: got %d,%d want -100,-100", cam2.X, cam2.Z)
 	}
 }
 
@@ -124,7 +140,7 @@ func TestMinimapDisplayDrawClickRelationship(t *testing.T) {
 		t.Fatalf("draw/click transform left canonical radar rectangle: %d,%d", clickX, clickY)
 	}
 	cam := &camera.Camera{ViewW: 64, ViewH: 64, MapW: playW, MapH: playH}
-	if !HandleMinimapInput(cam, layout, dst, playW, playH, displayX, displayY, true, nil) {
+	if !applyMinimapIntentForTest(cam, layout, dst, playW, playH, displayX, displayY, true, nil) {
 		t.Fatal("canonical minimap click was not consumed")
 	}
 	wantX, wantZ := layout.ToWorldPlay(clickX, clickY, playW, playH)

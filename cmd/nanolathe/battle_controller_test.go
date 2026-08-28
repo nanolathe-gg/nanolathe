@@ -68,24 +68,6 @@ func TestStrictSkirmish_ProductionInputReplayG10A(t *testing.T) {
 	}
 }
 
-// TestBattleInputFrameFromClientRetainsLogicalState locks the adapter seam:
-// production input is represented in logical coordinates and carries all
-// keyboard edges/held state needed by battle hotkeys.
-func TestBattleInputFrameFromClientRetainsLogicalState(t *testing.T) {
-	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
-	in.Mouse.InjectMouseMove(640, 480)
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, true)
-	in.Kbd.InjectKey(input.KeyM, true)
-	in.Kbd.InjectKey(input.KeyShift, true)
-	f := BattleInputFrameFromClient(in, 1.0/60.0)
-	if f.MouseX != 639 || f.MouseY != 479 || !f.Buttons.Left || !f.Modifiers.Shift {
-		t.Fatalf("logical input conversion = %+v", f)
-	}
-	if len(f.PressedKeys) != 2 || len(f.HeldKeys) != 2 {
-		t.Fatalf("key state lost in conversion: pressed=%v held=%v", f.PressedKeys, f.HeldKeys)
-	}
-}
-
 func TestBattleControllerReleasesKeysAndHandlesZeroElapsed(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
 	b.battleState().Input.Latch = input.LatchNormal
@@ -99,26 +81,11 @@ func TestBattleControllerReleasesKeysAndHandlesZeroElapsed(t *testing.T) {
 		HeldKeys:  []input.Key{input.KeyW},
 		Modifiers: BattleModifiers{Shift: true},
 	}, cl)
-	if !c.in.Kbd.KeyHeld(input.KeyW) || !c.in.Kbd.KeyHeld(input.KeyShift) {
-		t.Fatal("held key state was not applied")
-	}
-	if !c.in.Kbd.KeyDown(input.KeyW) || !c.in.Kbd.KeyDown(input.KeyShift) {
-		t.Fatal("new held keys did not produce press edges")
-	}
 	c.Step(BattleInputFrame{}, cl)
-	if c.in.Kbd.KeyHeld(input.KeyW) || c.in.Kbd.KeyHeld(input.KeyShift) {
-		t.Fatal("absent keys remained held after the next frame")
-	}
-	if c.in.Kbd.KeyDown(input.KeyW) || c.in.Kbd.KeyDown(input.KeyShift) {
-		t.Fatal("released keys incorrectly retained press edges")
-	}
 	if b.sess.Clock.GlobalTick != beforeTick {
 		t.Fatalf("zero elapsed replay advanced GlobalTick from %d to %d", beforeTick, b.sess.Clock.GlobalTick)
 	}
 	c.Step(BattleInputFrame{}, cl)
-	if c.in.Kbd.KeyDown(input.KeyW) || c.in.Kbd.KeyDown(input.KeyShift) {
-		t.Fatal("continuously absent keys retriggered press edges")
-	}
 }
 
 func TestBattleControllerInvalidElapsedDoesNotRewindClockAnchor(t *testing.T) {

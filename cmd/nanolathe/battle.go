@@ -5,13 +5,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/hajimehoshi/ebiten/v2"
-
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
@@ -225,16 +222,32 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// Escape must not hand the same frame's remaining mouse/key edges to the
 	// battle controller [07 §2][07 §3].
 	modalAtFrameStart := state.Modal() != ui.BattleModalClosed
-	if in != nil && in.Kbd != nil && in.Kbd.KeyDown(input.KeyTab) {
-		switch state.Modal() {
-		case ui.BattleModalClosed:
-			b.openBattleMenu()
-		case ui.BattleModalOptions:
+	keyDown := func(key input.Key) bool {
+		return in != nil && in.Kbd != nil && in.Kbd.KeyDown(key)
+	}
+	if modalAtFrameStart {
+		// Tab is the authored root-modal toggle. Handle it before the modal
+		// dispatcher so the same edge cannot also activate a newly closed/opened
+		// window. Escape remains owned by the modal handler (which applies its
+		// back transition), but the whole frame is consumed either way.
+		if keyDown(input.KeyTab) && state.Modal() == ui.BattleModalOptions {
 			b.closeBattleMenu()
+		} else {
+			b.handleBattleMenuInput(in, cl)
 		}
+		if b.ended {
+			return
+		}
+		cl.Cursors().SetIndex(render.CursorNormal)
+		return
 	}
 	// ESC-menu token path [07 §2]: ESC reuses Tab menu machinery; also disarms latch as today [07 §9].
-	if in != nil && in.Kbd != nil && in.Kbd.KeyDown(input.KeyEscape) && state.Modal() == ui.BattleModalClosed {
+	if keyDown(input.KeyTab) {
+		b.openBattleMenu()
+		cl.Cursors().SetIndex(render.CursorNormal)
+		return
+	}
+	if keyDown(input.KeyEscape) {
 		if b.battleState().Input.Latch == input.LatchNormal && b.battleState().Input.BuildDef == "" {
 			b.openBattleMenu()
 		} else {
@@ -243,14 +256,16 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			b.battleState().Input.HUDCaptured = false
 			b.battleState().Input.DragActive = false
 		}
+		cl.Cursors().SetIndex(render.CursorNormal)
+		return
 	}
-	if modalAtFrameStart || state.Modal() != ui.BattleModalClosed {
+	if state.Modal() != ui.BattleModalClosed {
 		b.handleBattleMenuInput(in, cl)
 	} else {
 		if b.controller == nil {
 			b.controller = NewBattleController(b)
 		}
-		b.controller.Step(BattleInputFrameFromClient(in, delta), cl)
+		b.controller.Step(input.SampleFromState(in, delta), cl)
 		b.applyCommittedShake()
 	}
 	if b.ended {
@@ -278,7 +293,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			rawDelta = 16
 		}
 		scrollSetting := b.scrollSetting()
-		focused := ebiten.IsFocused() || (cl != nil && cl.IsHeadless())
+		focused := cl.IsFocused()
 		w, h := cl.Size()
 		wi, hi := int32(w), int32(h)
 		mx, my := int32(mouse.X), int32(mouse.Y)
@@ -404,7 +419,7 @@ func (b *battleSession) isOnRadar(x, y int32) bool {
 // Order buttons enqueue session-owned commands directly [R-P0-03]; build products are
 // data-driven from cat.BuildMenus; input-capture latch prevents HUD presses
 // from leaking into world drag [F-P0-003][F-P1-008].
-func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
+func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	kbd := in.Kbd
 	mouse := in.Mouse
 	mx, my := int32(mouse.X), int32(mouse.Y)
@@ -425,7 +440,12 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 			if !ok {
 				return
 			}
-			client.HandleMinimapInput(b.cam, m, dst, b.sess.World.PlayRight, b.sess.World.PlayBottom, mx, my, b.isOnRadar(mx, my), nil)
+			view := hud.Rect{X1: camera.OriginX, Y1: camera.OriginY, X2: camera.OriginX + b.cam.ViewW - 1, Y2: camera.OriginY + b.cam.ViewH - 1}
+			intent, consumed := client.MinimapCameraIntent(b.cam.X, b.cam.Z, m, dst, view, b.sess.World.PlayRight, b.sess.World.PlayBottom, mx, my, b.isOnRadar(mx, my), false)
+			if consumed {
+				b.cam.X, b.cam.Z = intent.X, intent.Z
+				b.cam.Clamp()
+			}
 			return
 		}
 		// While over minimap, suppress world drag/selection [07 §10] minimap interaction region.
@@ -659,8 +679,8 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		w, h := rect.MaxX-rect.MinX, rect.MaxY-rect.MinY
 		if w < 3 && h < 3 {
 			// Small click precedence [07 §8][07 §9][RS-P0-003]: armed latch dispatches on left-click; idle latch left-click selects or issues contextual order; right-click never issues an order [04 §3.4][07 §9].
-			// Uses ONE canonical picker client.PickUnit so fog, 16px radius, strict < tie (lower slot wins),
-			// unit>feature priority and viewer are identical for selection and targeting [07 §9][03 §3.2][P0-I14].
+			// Uses the immutable committed-frame picker so fog, radius, strict tie,
+			// and viewer rules are shared by selection and targeting [07 §9][03 §3.2].
 			if b.battleState().Input.Latch != input.LatchNormal {
 				code := hud.LatchToCode(b.battleState().Input.Latch)
 				if code != 0 {
@@ -773,36 +793,6 @@ func (b *battleSession) selectedCommandUnits() []*units.Unit {
 		}
 	}
 	return out
-}
-
-// selectedUnits returns all selected LocalOwner units in stable ascending order [I1][07 §9].
-func (b *battleSession) selectedUnits() []*units.Unit {
-	owner := uint8(0)
-	if b.sess != nil {
-		owner = b.sess.LocalOwner
-	}
-	var out []*units.Unit
-	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == owner && u.Flags&hud.SelectionFlag != 0 {
-			out = append(out, u)
-		}
-	}
-	return out
-}
-
-// selectedBuilder returns the first player builder unit under selection.
-func (b *battleSession) selectedBuilder() *units.Unit {
-	if b.sess == nil || b.sess.Units == nil {
-		return nil
-	}
-	owner := b.sess.LocalOwner
-	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == owner && u.Flags&hud.SelectionFlag != 0 &&
-			u.Def != nil && u.Def.Builder {
-			return u
-		}
-	}
-	return nil
 }
 
 // catalogDefID returns the stable compiled catalog identity used by the HUD
@@ -1217,89 +1207,80 @@ func loadFNT(cs *contentSet) *formats.FNT {
 // under cell wins), and command validity via orders.Resolve gate [04 §3.5][07 §9][03 §3.2] C8 [P0-I03][P0-I14].
 // Feature picking sets ResolvePos.HasFeature when a feature footprint covers the
 // clicked cell and is visible; unit picking is tried first [07 §8][07 §9][P0-I14].
-// It delegates unit picking to client.PickUnit so there is one canonical routine [P0-I14].
 func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *orders.ResolvePos) {
 	wx, wy, wz := b.cursorWorld(sx, sy)
 	pos := &orders.ResolvePos{X: wx, Y: wy, Z: wz}
-	if b.sess == nil || b.sess.Units == nil || b.cam == nil {
+	if b.sess == nil || b.cam == nil {
 		return 0, nil, pos
 	}
-	// ONE picking routine via client.PickUnit [P0-I14][07 §9][03 §3.2] C8.
-	// PickUnit uses the framebuffer coordinates produced by the world renderer.
-	// The battle input pointer already uses that coordinate space [03 §2.5].
-	shellX, shellY := sx, sy
-	viewer := visibility.PlayerID(b.sess.LocalOwner)
-	if bh, bu := client.PickUnit(shellX, shellY, b.cam, b.sess.Units, b.sess.Vis, viewer); bh != 0 && bu != nil {
-		return bh, bu, pos
+	// Presentation picking reads only the immutable committed frame. The
+	// returned unit is a short-lived copy for cursor semantics, never a live
+	// world pointer [07 §8][07 §9][I6].
+	if f, ok := b.currentSnapshot(); ok {
+		if bh, view, hit := client.PickSnapshotUnit(f, sx, sy, b.cam, b.sess.LocalOwner); hit {
+			copy := &units.Unit{Handle: bh, Owner: view.Owner, X: view.X, Y: view.Y, Z: view.Z, Flags: view.Flags, Health: view.Health, MaxHealth: view.MaxHealth, Alive: true}
+			if b.cat != nil && view.DefName != "" {
+				copy.Def, _ = b.cat.Unit(view.DefName)
+			}
+			return bh, copy, pos
+		}
 	}
-	// Feature picking: when no unit hit, test feature footprint at clicked cell [07 §8][P0-I14].
-	// Respect fog via IsVisible for feature extents; preserve unit>feature overlap priority (unit already won).
-	if b.sess.World != nil {
+	// Feature picking also consumes only the committed frame. Features are
+	// admitted by their published visibility cell and footprint metadata [I6].
+	if f, ok := b.currentSnapshot(); ok {
 		cx := world.WorldToCell(wx)
 		cz := world.WorldToCell(wz)
-		if featIdx, ok := world.ResolveFeature(b.sess.World.Plot, int(b.sess.World.CellW), int(b.sess.World.CellH), int(cx), int(cz)); ok {
-			if def, ok2 := b.sess.World.FeatureDefAt(featIdx); ok2 && def != nil {
-				visible := true
-				if b.sess.Vis != nil {
-					// Use VisiblePoint for feature centre; feature visibility is terrain-independent [03 §3.2].
-					// When mode disables current, VisiblePoint reads wordMask at local bit; still gate as fog.
-					viewer := visibility.PlayerID(b.sess.LocalOwner)
-					visible = b.sess.Vis.VisiblePoint(viewer, wx, pos.Y, wz)
-					// For footprint features, also test extents box [03 §3.2] VisibleExtents.
-					if !visible {
-						footX := def.FootprintX
-						footZ := def.FootprintZ
-						if footX <= 0 {
-							footX = 1
-						}
-						if footZ <= 0 {
-							footZ = 1
-						}
-						minX := wx
-						minZ := wz
-						maxX := wx + numeric.Fixed(int64(footX)*65536)
-						maxZ := wz + numeric.Fixed(int64(footZ)*65536)
-						bx := visibility.Box{MinX: minX, MinZ: minZ, MaxX: maxX, MaxZ: maxZ, Y: pos.Y}
-						visible = b.sess.Vis.VisibleExtents(viewer, bx)
-					}
-				}
-				if visible {
-					pos.HasFeature = true
-					// Reclaimable is not a corpse identity: trees, rocks and deposits
-					// may all be reclaimable. Resolve the feature's compiled identity
-					// against authored unit Corpse links [05 "Feature reclaim"].
-					pos.IsWreck = b.isCorpseFeature(def)
-					pos.FeatureResurrectable = pos.IsWreck && def.Reclaimable
-				}
+		for _, fv := range f.Features {
+			footX, footZ := int32(fv.FootX), int32(fv.FootZ)
+			if footX <= 0 {
+				footX = 1
 			}
-		} else if b.sess.Features != nil {
-			// Consult the feature service for instances not represented in the
-			// terrain's compact feature table.
-			if inst := b.sess.Features.InstanceAt(int(cx), int(cz)); inst != nil && inst.Def != nil {
-				visible := true
-				if b.sess.Vis != nil {
-					viewer := visibility.PlayerID(b.sess.LocalOwner)
-					visible = b.sess.Vis.VisiblePoint(viewer, wx, pos.Y, wz)
-				}
-				if visible {
-					pos.HasFeature = true
-					pos.IsWreck = b.isCorpseFeature(inst.Def)
-					pos.FeatureResurrectable = pos.IsWreck && inst.Def.Reclaimable
-				}
+			if footZ <= 0 {
+				footZ = 1
 			}
+			if cx < fv.CX || cx >= fv.CX+footX || cz < fv.CZ || cz >= fv.CZ+footZ {
+				continue
+			}
+			if !snapshotFeatureVisible(f, fv, b.sess.LocalOwner) {
+				continue
+			}
+			pos.HasFeature = true
+			pos.IsWreck = b.isCorpseName(fv.DefName)
+			pos.FeatureResurrectable = pos.IsWreck && fv.Reclaimable
+			break
 		}
 	}
 	return 0, nil, pos
 }
 
-// isCorpseFeature applies the recovered resurrection identity rule: truncate
-// the feature name at its first underscore, then resolve that unit key in the
-// compiled catalog. Reclaimable alone is not a wreck identity [05 "Resurrection"].
-func (b *battleSession) isCorpseFeature(def *content.FeatureDef) bool {
-	if b == nil || b.cat == nil || def == nil {
+func snapshotFeatureVisible(f *frame.Frame, v frame.FeatureView, viewer uint8) bool {
+	if v.OwnerKnown && v.Owner == viewer {
+		return true
+	}
+	if f == nil {
 		return false
 	}
-	key := content.CanonicalKey(def.CanonicalKey)
+	footX, footZ := int32(v.FootX), int32(v.FootZ)
+	if footX <= 0 {
+		footX = 1
+	}
+	if footZ <= 0 {
+		footZ = 1
+	}
+	// Feature LOS uses the committed two-corner footprint form. CX/CZ are
+	// 16-pixel attribute cells; visibility tiles are 32 pixels, and the shared
+	// projected-point helper performs that conversion plus Y shear [03 §3.2].
+	minX, minZ := world.CellToWorld(v.CX), world.CellToWorld(v.CZ)
+	maxX, maxZ := world.CellToWorld(v.CX+footX), world.CellToWorld(v.CZ+footZ)
+	return client.SnapshotPointVisible(f.Visibility, minX, v.Y, minZ, viewer) ||
+		client.SnapshotPointVisible(f.Visibility, maxX, v.Y, maxZ, viewer)
+}
+
+func (b *battleSession) isCorpseName(name string) bool {
+	if b == nil || b.cat == nil {
+		return false
+	}
+	key := content.CanonicalKey(name)
 	if i := strings.IndexByte(key, '_'); i >= 0 {
 		key = key[:i]
 	}
@@ -1308,6 +1289,15 @@ func (b *battleSession) isCorpseFeature(def *content.FeatureDef) bool {
 	}
 	_, ok := b.cat.Unit(key)
 	return ok
+}
+
+// isCorpseFeature remains a definition-only helper for authored feature
+// checks. Picking itself never calls the live feature service [07 §8][I6].
+func (b *battleSession) isCorpseFeature(def *content.FeatureDef) bool {
+	if def == nil {
+		return false
+	}
+	return b.isCorpseName(def.CanonicalKey)
 }
 
 // orderSelected resolves code at the clicked world position and submits one
@@ -1352,15 +1342,24 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 		hover.Feature = b.hoverFeature(mx, my)
 	}
 	sel := hud.CursorSelection{Viewer: b.sess.LocalOwner, Hostile: b.hostile}
-	for _, u := range b.sess.Units.Iter() {
-		if u != nil && u.Alive && u.Owner == b.sess.LocalOwner && u.Flags&hud.SelectionFlag != 0 {
-			sel.Units = append(sel.Units, u)
+	if f, ok := b.currentSnapshot(); ok {
+		for _, handle := range f.Selection.Handles {
+			for i := range f.Units {
+				v := f.Units[i]
+				if v.Slot == handle && v.Owner == b.sess.LocalOwner {
+					sel.Units = append(sel.Units, b.snapshotUnitCopy(v))
+					break
+				}
+			}
 		}
 	}
-	if b.sess.Econ != nil {
-		local := b.sess.LocalOwner
-		sel.Metal = b.sess.Econ.Players[local].Stock[economy.Metal]
-		sel.Energy = b.sess.Econ.Players[local].Stock[economy.Energy]
+	if f, ok := b.currentSnapshot(); ok {
+		for _, ev := range f.Economy {
+			if ev.Player == b.sess.LocalOwner {
+				sel.Metal, sel.Energy = ev.Metal, ev.Energy
+				break
+			}
+		}
 	}
 	cursors.SetIndex(hud.ChooseCursor(b.battleState().Input.Latch, sel, hover))
 }
@@ -1382,15 +1381,37 @@ func (b *battleSession) overWorld(x, y int32) bool {
 // hoverFeature returns the definition of the feature occupying the cell under
 // the pointer, or nil [07 §8][05 "Feature instance and terrain cell"].
 func (b *battleSession) hoverFeature(sx, sy int32) *content.FeatureDef {
-	if b.sess.Features == nil || b.cam == nil {
+	if b.cam == nil {
 		return nil
 	}
 	wx, _, wz := b.cursorWorld(sx, sy)
-	inst := b.sess.Features.InstanceAt(int(world.WorldToCell(wx)), int(world.WorldToCell(wz)))
-	if inst == nil {
+	cx, cz := world.WorldToCell(wx), world.WorldToCell(wz)
+	f, ok := b.currentSnapshot()
+	if !ok {
 		return nil
 	}
-	return inst.Def
+	for _, v := range f.Features {
+		footX, footZ := int32(v.FootX), int32(v.FootZ)
+		if footX <= 0 {
+			footX = 1
+		}
+		if footZ <= 0 {
+			footZ = 1
+		}
+		if cx < v.CX || cx >= v.CX+footX || cz < v.CZ || cz >= v.CZ+footZ || !snapshotFeatureVisible(f, v, b.sess.LocalOwner) {
+			continue
+		}
+		return &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: v.DefName}, FootprintX: int32(v.FootX), FootprintZ: int32(v.FootZ), Height: v.Height, Reclaimable: v.Reclaimable, Geothermal: v.Geothermal, Blocking: v.Blocking}
+	}
+	return nil
+}
+
+func (b *battleSession) snapshotUnitCopy(v frame.UnitView) *units.Unit {
+	u := &units.Unit{Handle: v.Slot, Owner: v.Owner, X: v.X, Y: v.Y, Z: v.Z, Flags: v.Flags, Health: v.Health, MaxHealth: v.MaxHealth, Alive: true}
+	if b != nil && b.cat != nil && v.DefName != "" {
+		u.Def, _ = b.cat.Unit(v.DefName)
+	}
+	return u
 }
 
 // hostile routes the cursor's side test through the acting unit's own

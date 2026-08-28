@@ -3,6 +3,7 @@ package session
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -227,6 +228,35 @@ func TestSnapshotVisibilityOwnsMasksAcrossBeginWrite(t *testing.T) {
 	}
 	if committed.Visibility.WordVisible[0] != committedWord {
 		t.Fatalf("write/reset mutated prior committed visibility: got %x want %x", committed.Visibility.WordVisible[0], committedWord)
+	}
+}
+
+func TestSnapshotPublicationUsesWordCoverageWhenBytesDisabled(t *testing.T) {
+	terrain := &world.Terrain{CellW: 64, CellH: 64}
+	vis := visibility.New(terrain, visibility.ModeHistoryEnabled)
+	unitsPool := units.New(4, nil)
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "foreign"}, MaxDamage: 1}
+	if _, err := unitsPool.Create(def, 1, 0, 0, 0); err != nil {
+		t.Fatalf("create foreign unit: %v", err)
+	}
+	s := &Session{Snapshot: frame.NewBuffer(), Units: unitsPool, Vis: vis, LocalOwner: 0}
+	s.publishSnapshot(1)
+	got := s.Snapshot.Current()
+	if got == nil || got.Visibility.CoverageBytes {
+		t.Fatalf("coverage mode = %#v, want word-grid mode", got)
+	}
+	if len(got.Visibility.Visible) != 0 {
+		t.Fatalf("disabled byte coverage published %d byte cells", len(got.Visibility.Visible))
+	}
+	if len(got.Visibility.WordVisible) == 0 || len(got.Units) != 1 {
+		t.Fatalf("publication missing word mask or unit: visibility=%#v units=%d", got.Visibility, len(got.Units))
+	}
+	if client.SnapshotVisible(got, got.Units[0], 0) {
+		t.Fatal("foreign unit bypassed disabled byte coverage through permissive fill")
+	}
+	foreignFeature := frame.FeatureView{Owner: 1, OwnerKnown: true, CX: 0, CZ: 0, FootX: 1, FootZ: 1, Y: 0}
+	if radarFeatureVisible(s, foreignFeature) {
+		t.Fatal("foreign feature bypassed disabled byte coverage through permissive fill")
 	}
 }
 

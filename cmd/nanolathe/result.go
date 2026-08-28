@@ -102,7 +102,7 @@ func resultActionForControl(name string) string {
 // handleResultInput routes release-inside gestures through the same authored
 // Panel state used by the frontend. It does not own a second result-specific
 // pressed/button state [07 §3][07 §11].
-func (h *retailBattleHUD) handleResultInput(in *client.InputState) string {
+func (h *retailBattleHUD) handleResultInput(in *input.State) string {
 	if h == nil || h.resultPanel == nil || in == nil || in.Mouse == nil {
 		return ""
 	}

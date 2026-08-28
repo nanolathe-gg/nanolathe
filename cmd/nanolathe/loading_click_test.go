@@ -55,11 +55,11 @@ func TestSkirmishStartLeavesForLoadingScreen(t *testing.T) {
 		t.Fatalf("client: %v", err)
 	}
 	mouse := cl.Input().Mouse
-	mouse.InjectMouseMove(float32(rect.X+rect.W/2), float32(rect.Y+rect.H/2))
-	mouse.InjectMouseButton(input.MouseButtonLeft, true)
+	mouse.SetPosition(float32(rect.X+rect.W/2), float32(rect.Y+rect.H/2))
+	mouse.SetButton(input.MouseButtonLeft, true)
 	shell.menuInput(cl)
-	mouse.ClearEdges()
-	mouse.InjectMouseButton(input.MouseButtonLeft, false)
+	mouse.ResetEdges()
+	mouse.SetButton(input.MouseButtonLeft, false)
 
 	// Before the fix this panicked here, one statement past the callback.
 	shell.menuInput(cl)

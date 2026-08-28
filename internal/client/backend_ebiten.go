@@ -17,7 +17,7 @@ type ebitenApp struct {
 // input pacing for menus and camera, and the session converts to sim ticks via
 // its own accumulator (wall-clock time never enters the sim, I6).
 func (a *ebitenApp) Update() error {
-	a.c.in.pollEbiten()
+	pollInput(&a.c.in)
 	dt := 1.0 / float64(ebiten.TPS())
 	a.c.runtime += dt
 	if a.c.opts.Step != nil {

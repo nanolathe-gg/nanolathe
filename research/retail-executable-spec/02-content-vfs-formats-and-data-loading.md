@@ -1096,6 +1096,20 @@ Three clamps then run **unconditionally on every class**, in order:
 
 #### R-CONTENT-01 — Movement-profile template initialization (closed)
 
+**SUPERSEDED 2026-08-27 by `[04 §6.1 R-DOC04-A]`.** Everything between this
+note and the "Consequence" note at the section tail — the falsification of
+the template hypothesis, the "all eight fields zero" initial values, and the
+zero-prior reading of the preserved defaults — was derived from a writer
+census that missed a startup initializer registered in the CRT
+function-pointer table, which pre-fills all 32 records (through the pool base
+plus a small offset) with `MaxSlope` = `BadSlope` = `MaxWaterSlope` =
+`BadWaterSlope` = 255, `MaxWaterDepth` = 10000, `MinWaterDepth` = −10000
+before the first parse. The corrected, authoritative contract — startup
+template pre-fill, no reset between classes, unconditional clamps, and the
+consumer-side layer classifier — is `[04 §6.1 R-DOC04-A]` and `[R-DOC04-B]`
+in document 04. The text below is retained unmodified for the audit trail;
+read it as history, not contract.
+
 **Correction.** The previous text carried a standing `TODO(question)` whose
 working escape hatch was a profile template pre-filling each record (with
 `MaxWaterSlope ≈ 255`) before the first class parses, so that an absent
@@ -1147,7 +1161,23 @@ no range clamp on the authored value itself.
 | `badslope` default | — | 8-bit | `(maxslope just read & 0xFF) >> 1` — logical shift, 0..127 |
 | `badwaterslope` default | — | 8-bit | `(maxwaterslope just read & 0xFF) >> 1` |
 
-**Consequence and remaining paradox — Unknown.** The arithmetic is forced:
+**Consequence and remaining paradox — RESOLVED (superseded by
+`[04 §6.1 R-DOC04-A]`, 2026-08-27).** The paragraph below this note was
+wrong: its writer census missed a startup initializer registered in the CRT
+function-pointer table that pre-fills all 32 class records (through the pool
+base plus a small offset) with `MaxSlope` = `BadSlope` = `MaxWaterSlope` =
+`BadWaterSlope` = 255, `MaxWaterDepth` = 10000, `MinWaterDepth` = −10000
+before any parse. The "all eight fields zero" initialization claim and the
+"zero-filled pool" correction earlier in this section are therefore
+superseded: omitted keys carry the TEMPLATE values, the unconditional clamps
+are identity for them, every stock class compiles to its authored slope
+limits, and there is no paradox. The prior text is retained below for the
+audit trail; the authoritative statement — template pre-fill, unconditional
+clamps, the per-cell layer classifier, and A* blocking only on layer 0 — is
+`[04 §6.1 R-DOC04-A]`/`[R-DOC04-B]`. Nanolathe's SC5 gated clamps are
+closed out: delete them and initialize from the template.
+
+**Superseded reading (2026-08-27, earlier the same day).** The arithmetic is forced:
 every class that omits `MaxWaterSlope` computes `MaxSlope = 0` after the
 unconditional first clamp, and the stock catalog's thirteen omitting classes
 (only `TANKDH3` and the two hover classes author `MaxWaterSlope`) compile to

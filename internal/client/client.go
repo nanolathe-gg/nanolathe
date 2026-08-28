@@ -22,6 +22,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -219,6 +220,12 @@ func (c *Client) Size() (int, int) { return c.width, c.height }
 // IsHeadless reports whether the client was created headless [PLAN_04A] C11.
 func (c *Client) IsHeadless() bool { return c != nil && c.opts.Headless }
 
+// IsFocused reports the platform window focus at the client edge. Battle
+// camera predicates consume this value without importing Ebitengine [07 §10].
+func (c *Client) IsFocused() bool {
+	return c != nil && (c.opts.Headless || ebiten.IsFocused())
+}
+
 // Buffer exposes the presentation snapshot source (diagnostics publish into
 // it directly; the session path owns it in normal play).
 func (c *Client) Buffer() *frame.Buffer { return c.buffer }
@@ -301,7 +308,7 @@ func (c *Client) ComposeFrame() *image.RGBA {
 
 // Input exposes the per-frame input snapshot for the windowed paths. Edge
 // flags are valid for exactly one Update; held state persists while down.
-func (c *Client) Input() *InputState { return &c.in }
+func (c *Client) Input() *input.State { return &c.in }
 
 // featureGAFFor loads anims/<filename>.gaf lazily and returns the GAF.
 // Filename is the TDF `filename` stem (e.g. "trees") without extension [02 "Feature record"].

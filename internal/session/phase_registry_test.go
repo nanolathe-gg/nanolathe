@@ -237,3 +237,51 @@ func TestVisibilityStampsInsidePhase5(t *testing.T) {
 		t.Fatalf("published tick = %d (%v), want 1", tick, ok)
 	}
 }
+
+// TestSensorPassInsideLocalPlayerIteration locks the [R-SENSOR-01] seam: the
+// sensor/deadline pass executes inside phase 5's per-player pass, in the LOCAL
+// viewing player's iteration, after that player's stamp sweep. The local
+// viewer here is player 1 — not the lowest index — so the sensor final pass
+// (which samples the local player's coverage grids) can admit the seen marker
+// for an enemy cell only if the pass ran after player 1's stamp sweep in the
+// same tick: the moved observer's fresh coverage does not exist in those grids
+// until player 1's iteration re-stamps it. The matching requirement "before
+// every higher-indexed player's stamps" has no state observable in nanolathe
+// (the sensor pass reads only the local player's grids) and is structural: the
+// call sits in the local player's loop body after stampPlayerSlice.
+func TestSensorPassInsideLocalPlayerIteration(t *testing.T) {
+	s := paritySpineFixture(t, true)
+	s.LocalOwner = 1
+	s.Vis.SetLocal(visibility.PlayerID(1)) // mirrors composition's local-viewer binding
+	def := s.Catalog.Units[content.CanonicalKey("armcom")]
+	cell := func(n int32) numeric.Fixed { return numeric.Fixed(int64(n) << 16) }
+
+	// Local viewer's observer (player 1) and an enemy unit (player 0) far
+	// outside its initial coverage. Pixels stay inside the fixture's 32-unit
+	// coverage grid (64 cells → 32 grid columns).
+	observer, err := s.Units.Create(def, 1, cell(96), 0, cell(96))
+	if err != nil {
+		t.Fatalf("create local observer: %v", err)
+	}
+	enemy, err := s.Units.Create(def, 0, cell(896), 0, cell(384))
+	if err != nil {
+		t.Fatalf("create enemy: %v", err)
+	}
+
+	publishVisibilityForAll(s)
+	if s.Vis.VisiblePoint(visibility.PlayerID(1), cell(896), 0, cell(384)) {
+		t.Fatal("precondition: enemy cell covered before the observer moves")
+	}
+
+	// Move the local observer next to the enemy (as phase-2 movement would):
+	// its stamp cell becomes (26,12), so the enemy's grid point (28,12) falls
+	// inside the 5x5 sight shape — but only after player 1's stamp sweep
+	// re-stamps it.
+	s.Units.Unit(observer).X = cell(832)
+	s.Units.Unit(observer).Z = cell(384)
+	s.stepAuthoritativePhases(1)
+
+	if got := s.visStatus[int(enemy)]; got&visibility.SeenBit == 0 {
+		t.Fatalf("enemy SeenBit = %#x after the step, want set: the sensor pass must run after the local player's stamp sweep within the same tick [R-SENSOR-01]", got)
+	}
+}

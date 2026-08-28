@@ -1680,7 +1680,7 @@ func (g *gameShell) clickRetailScrollbar(index int, gad gui.Gadget, r gui.Rect, 
 	}
 }
 
-func (g *gameShell) updateRetailScrollbarDrag(mouse *client.MouseState) {
+func (g *gameShell) updateRetailScrollbarDrag(mouse *input.MouseState) {
 	p := g.activePanel()
 	if p == nil || mouse == nil || !p.ScrollDragging() {
 		return
@@ -1891,7 +1891,7 @@ func (g *gameShell) modalInput(cl *client.Client) {
 	}
 }
 
-func quickKeyDown(kbd *client.KeyboardState, quick byte) bool {
+func quickKeyDown(kbd *input.KeyboardState, quick byte) bool {
 	if kbd == nil {
 		return false
 	}

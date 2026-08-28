@@ -143,3 +143,23 @@ func TestScheduledRedrawCadence(t *testing.T) {
 		t.Fatalf("sim draws = %d, want %d (2 per change)", sim.Draws(), 2*changes)
 	}
 }
+
+// TestWindVectorAxes locks the axis assignment closed by [R-WIND-01] (verified
+// against two independent consumer families: smoke drift and the fire-spread
+// probe): the FIRST word is the X term −2·speed·sin(heading) and the SECOND
+// word is the Z term −2·speed·cos(heading). Table semantics [04 §5.1]: entry k
+// = 8192·sin(2πk/512), cosine reads the same table a quarter turn ahead, so
+// heading 0 reads sin 0 / cos 8192 and a quarter-circle heading (16384 of
+// 65536) reads sin 8192 / cos 0. MulRound's add-half form is exact on these
+// products, so heading 0 must give X = 0, Z = −2·speed.
+func TestWindVectorAxes(t *testing.T) {
+	if x, z := windVectors(500, 0); x != 0 || z != -1000 {
+		t.Fatalf("heading 0: vectors = (%d, %d), want X = 0 (sin) and Z = -2*speed (cos) [R-WIND-01]", x, z)
+	}
+	if x, z := windVectors(500, 16384); x != -1000 || z != 0 {
+		t.Fatalf("quarter-circle heading: vectors = (%d, %d), want X = -2*speed (sin peak) and Z = 0 (cos zero) [R-WIND-01]", x, z)
+	}
+	if x, z := windVectors(0, 12345); x != 0 || z != 0 {
+		t.Fatalf("zero strength: vectors = (%d, %d), want zeroed", x, z)
+	}
+}

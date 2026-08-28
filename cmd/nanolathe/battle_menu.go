@@ -67,7 +67,7 @@ func (b *battleSession) menuWindow() *gui.Window {
 
 // handleBattleMenuInput owns all input while a retail modal is open. Buttons
 // activate once on release-inside the same authored gadget [07 §3].
-func (b *battleSession) handleBattleMenuInput(in *client.InputState, cl *client.Client) {
+func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client) {
 	state := b.battleState()
 	if b == nil || state == nil || in == nil || in.Kbd == nil || in.Mouse == nil || state.Modal() == ui.BattleModalClosed {
 		return

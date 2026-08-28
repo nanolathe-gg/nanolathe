@@ -78,9 +78,8 @@ func (s *Session) phaseEffects(tick uint32) {
 // first, then per player 0..9 ascending the per-player orders/work, then that
 // player's unit slice is swept stamping visibility coverage per in-game unit
 // (dirty-checked) — the visibility publication seam lives INSIDE phase 5
-// [R-CORE-01 §4.4.1] DET-06. Sensor work (radar/sonar/jam/cloak deadlines)
-// runs adjacent to the stamp sweep; its exact seam is not settled by the
-// finding — TODO(question) below.
+// [R-CORE-01 §4.4.1] DET-06. The sensor/deadline pass runs inside the LOCAL
+// viewing player's iteration, after that player's stamp sweep [R-SENSOR-01].
 func (s *Session) phaseOrders(tick uint32) {
 	s.stepPlayerPhase(tick)
 	s.recordPhase("phase5-orders", tick)
@@ -424,8 +423,10 @@ func (s *Session) stepEffectPhase(tick uint32) {
 // DET-06: the path scheduler runs FIRST, then per player 0..9 ascending the
 // per-player orders/work followed by that player's visibility stamp sweep
 // ([R-CORE-01 §4.4.1] "Visibility publication seam" — the publication lives
-// INSIDE phase 5; the earlier post-phase-12 pass is removed). Sensor work
-// runs adjacent to the sweeps; see stepSensorPhase for the open seam question.
+// INSIDE phase 5; the earlier post-phase-12 pass is removed). The sensor
+// deadline pass runs inside the LOCAL viewing player's iteration, after that
+// player's stamp sweep [R-SENSOR-01] — see tickPlayers; it is not a separate
+// post-loop pass.
 func (s *Session) stepPlayerPhase(tick uint32) {
 	// Path scheduler first [R-CORE-01 §4.4.1]. Requests submitted by the live
 	// unit sweep are serviced here at the phase-5 path boundary; an already
@@ -436,10 +437,10 @@ func (s *Session) stepPlayerPhase(tick uint32) {
 		s.Path.Tick(tick)
 	}
 	// Per player 0..9 ascending: orders/work, then that player's stamp sweep
-	// [R-CORE-01 §4.4.1]. No map-defined player order [ON-09] (I1).
+	// [R-CORE-01 §4.4.1]. No map-defined player order [ON-09] (I1). The
+	// sensor/deadline pass runs inside the local viewing player's iteration
+	// [R-SENSOR-01].
 	s.tickPlayers(tick)
-	// Sensor deadlines adjacent to the stamp sweep (seam TODO(question) there).
-	s.stepSensorPhase(tick)
 }
 
 // stepFeatureLifecyclePhase is phase 6 of the authoritative tick [01 §4.4].
@@ -680,6 +681,19 @@ func (s *Session) tickMeteor(tick uint32) {
 // AI-facing data and rooted planner"]. This is the only per-player settlement
 // loop in the package; a second one with a different hook position would be a
 // second settlement order.
+//
+// The sensor/deadline pass executes inside the LOCAL viewing player's
+// iteration, after that player's stamp sweep [R-SENSOR-01]: because the loop
+// walks players ascending, it runs after the local player's visibility stamps
+// but before every higher-indexed player's stamps within the same tick.
+// Residual delta from [R-SENSOR-01]'s exact retail ordering: nanolathe's
+// 30-tick victory/defeat polling runs in the per-player before-hook (before
+// that player's work) rather than after the stamp sweep, and the per-tick
+// minimap contacts pass and mapped-minimap rebuild are presentation-side and
+// have no sim counterpart here. No economy after-hook is required — the
+// position after stampPlayerSlice is session-owned loop body. The pass runs
+// once per tick keyed to the local viewing slot; SensorTick owns the
+// player-count gate.
 func (s *Session) tickPlayers(tick uint32) {
 	if s == nil || s.Econ == nil {
 		return
@@ -703,6 +717,12 @@ func (s *Session) tickPlayers(tick uint32) {
 		// [R-CORE-01 §4.4.1] DET-06: dirty-checked, per in-game unit, slots
 		// ascending within the player's slice.
 		stampPlayerSlice(s, player)
+		// [R-SENSOR-01]: sensor/deadline work in the LOCAL viewing player's
+		// iteration only, immediately after that player's stamp sweep (called
+		// unconditionally; SensorTick owns the player-count gate).
+		if player == int(s.LocalOwner) {
+			s.stepSensorPhase(tick)
+		}
 	}
 }
 

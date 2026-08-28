@@ -222,13 +222,13 @@ func TestWASDUnbound(t *testing.T) {
 	buf := &frame.Buffer{}
 	cl, _ := client.New(client.Options{Buffer: buf, Width: 640, Height: 480, Headless: true, Step: func(delta float64) {}})
 	cl.SetCamera(b.cam)
-	cl.Input().Mouse.InjectMouseMove(320, 240) // center to avoid edge scroll
+	cl.Input().Mouse.SetPosition(320, 240) // center to avoid edge scroll
 	origX, origZ := b.cam.X, b.cam.Z
 	// Inject W held
-	cl.Input().Kbd.InjectKey(input.KeyW, true)
-	cl.Input().Kbd.InjectKey(input.KeyA, true)
-	cl.Input().Kbd.InjectKey(input.KeyS, true)
-	cl.Input().Kbd.InjectKey(input.KeyD, true)
+	cl.Input().Kbd.SetKey(input.KeyW, true)
+	cl.Input().Kbd.SetKey(input.KeyA, true)
+	cl.Input().Kbd.SetKey(input.KeyS, true)
+	cl.Input().Kbd.SetKey(input.KeyD, true)
 	// Call viewerStep with delta 16ms
 	b.viewerStep(0.016, cl)
 	if b.cam.X != origX || b.cam.Z != origZ {
@@ -239,8 +239,8 @@ func TestWASDUnbound(t *testing.T) {
 	cl2.SetCamera(b.cam)
 	b.cam.X = 500
 	b.cam.Z = 500
-	cl2.Input().Mouse.InjectMouseMove(320, 240)
-	cl2.Input().Kbd.InjectKey(input.KeyUp, true)
+	cl2.Input().Mouse.SetPosition(320, 240)
+	cl2.Input().Kbd.SetKey(input.KeyUp, true)
 	b.viewerStep(0.016, cl2)
 	if b.cam.Z == 500 {
 		t.Fatalf("arrow up should move camera")
@@ -251,7 +251,7 @@ func TestWASDUnbound(t *testing.T) {
 	// Edge scroll still works: place mouse near edge
 	cl3, _ := client.New(client.Options{Buffer: buf, Width: 640, Height: 480, Headless: true, Step: func(delta float64) {}})
 	cl3.SetCamera(b.cam)
-	cl3.Input().Mouse.InjectMouseMove(0, 240) // left edge exact [07 §10] x==0
+	cl3.Input().Mouse.SetPosition(0, 240) // left edge exact [07 §10] x==0
 	b.viewerStep(0.016, cl3)
 	if b.cam.X == 500 {
 		t.Fatalf("edge scroll should move left")

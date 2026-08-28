@@ -54,3 +54,33 @@ func TestSnapshotVisibilityRejectsInvalidViewerAndMasks(t *testing.T) {
 		t.Fatal("masked foreign unit was visible")
 	}
 }
+
+func TestSnapshotVisibilityForeignCloakAndDecloak(t *testing.T) {
+	f := &frame.Frame{Visibility: frame.VisibilityView{Valid: true, W: 1, H: 1, CoverageBytes: true, Visible: []uint8{1}}}
+	cloaked := frame.UnitView{Slot: 1, Owner: 1, Flags: 0x4, X: 0, Z: 0}
+	if SnapshotVisible(f, cloaked, 0) {
+		t.Fatal("foreign cloaked unit bypassed the committed visibility gate")
+	}
+	decloaked := cloaked
+	decloaked.Flags |= 0x1000
+	if !SnapshotVisible(f, decloaked, 0) {
+		t.Fatal("foreign decloaked unit was rejected despite published visible coverage")
+	}
+}
+
+func TestSnapshotVisibilityUsesShearAndWordFallback(t *testing.T) {
+	// X/Z are 16.16 world coordinates. The 32-pixel tile is selected after
+	// narrowing to map pixels and applying the half-height shear: (32,64,32)
+	// projects to tile (1,1), index 3 in this 2x2 word grid [03 §3.2].
+	vis := frame.VisibilityView{
+		Valid:       true,
+		W:           2,
+		H:           2,
+		WordVisible: []uint16{0, 0, 0, 1 << 0},
+	}
+	f := &frame.Frame{Visibility: vis}
+	u := frame.UnitView{Slot: 1, Owner: 1, X: numeric.Fixed(32 << 16), Y: numeric.Fixed(32 << 16), Z: numeric.Fixed(64 << 16)}
+	if !SnapshotVisible(f, u, 0) {
+		t.Fatal("word-grid fallback did not apply sheared 32-pixel projection")
+	}
+}

@@ -39,22 +39,22 @@ func TestOW1G_FogUnexploredUnit(t *testing.T) {
 }
 
 func TestOW1G_VisibilityAdmission_OwnAlwaysEnemySuppressed(t *testing.T) {
-	// Visibility grid 4x4, only cell (2,2) visible (index 10). Fog 4x4 for tile equivalence.
+	// Visibility grid 4x4, only 32-pixel tile (1,1) visible (index 5). Unit
+	// coordinates are authored in 16-pixel cells and must map through the
+	// committed 32-pixel visibility grid.
 	vis := frame.VisibilityView{W: 4, H: 4, Valid: true, CoverageBytes: true, Visible: make([]uint8, 16)}
-	vis.Visible[10] = 1 // cell (2,2)
+	vis.Visible[5] = 1 // tile (1,1)
 	fog := frame.FogView{W: 4, H: 4, Valid: true, Ch0: make([]uint8, 16), Ch1: make([]uint8, 16)}
 	f := &frame.Frame{Visibility: vis, Fog: fog, Selection: frame.SelectionView{LocalPlayer: 0}}
 	f.Visibility.Visible = vis.Visible
 
-	// Enemy at cell (0,0) -> Visible[0]==0 -> not visible -> suppressed.
+	// Enemy at tile (0,0) -> Visible[0]==0 -> not visible -> suppressed.
 	enemyHidden := frame.UnitView{Slot: 1, Owner: 1, X: world.CellToWorld(0), Z: world.CellToWorld(0)}
 	if unitVisibleForFrame(f, enemyHidden, 0) {
 		t.Fatalf("enemy at invisible tile should be suppressed")
 	}
-	// Enemy at cell (2,2) -> Visible[10]==1 -> visible (SnapshotVisible uses cell directly [I9]).
+	// Enemy at cells (2,2), which map to tile (1,1), is visible.
 	enemyVisible := frame.UnitView{Slot: 2, Owner: 1, X: world.CellToWorld(2), Z: world.CellToWorld(2)}
-	// WorldToTile for cell 2 => tile 1, so X=2 cells => tile 1.
-	// cell 2 => tile 1, cell 2 => tile1 -> index 3.
 	if !unitVisibleForFrame(f, enemyVisible, 0) {
 		t.Fatalf("enemy at visible tile should be admitted, got %#v vis=%v", enemyVisible, vis.Visible)
 	}

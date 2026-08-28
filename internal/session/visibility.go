@@ -160,13 +160,14 @@ func stampPlayerSlice(s *Session, player int) {
 }
 
 // stepSensorPhase runs the multi-player sensor state (radar/sonar/jam/cloak
-// deadlines, SensorTick) adjacent to the phase-5 stamp sweep, preserving its
-// established behavior [03 §3.4] P0-11.
-// TODO(question): [R-CORE-01 §4.4.1] settles the visibility STAMP seam (inside
-// phase 5, per player) but does not settle where the sensor deadlines run
-// relative to the per-player stamp sweeps or the phase order. Kept adjacent to
-// the sweep, once per tick after all players, exactly as before the move; a
-// traced sensor seam would re-home this block.
+// deadlines, SensorTick) once per tick [03 §3.4] P0-11. [R-SENSOR-01] closes
+// the DET-06 seam question: this is not a tick phase of its own — it executes
+// inside phase 5's per-player pass, in the LOCAL viewing player's iteration,
+// after that player's stamp sweep (and, in retail, after the per-tick minimap
+// contacts pass and 30-tick victory/defeat block, immediately before the
+// mapped-minimap rebuild; nanolathe's residual deltas are recorded at
+// tickPlayers). Callers: tickPlayers calls it unconditionally — SensorTick
+// owns the player-count gate and clears SeenBit when that gate skips.
 func (s *Session) stepSensorPhase(tick uint32) {
 	if s.Vis == nil || s.Units == nil {
 		return

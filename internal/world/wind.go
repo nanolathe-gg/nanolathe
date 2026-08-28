@@ -188,12 +188,22 @@ func windInterval(crt *rng.CRT) uint32 {
 // windVectors recomputes the world X/Z wind vectors from strength and heading
 // using the shared simulation trig table [04 §5.1]. The direction vector pair
 // is −2 × the fixed-point trig of the heading with the speed as the magnitude
-// [01 §4.4].
+// [01 §4.4]. [R-WIND-01] closes the axis question (it had carried a
+// TODO(question) here): the FIRST word is the X term −2·speed·sin(heading) and
+// the SECOND word is the Z term −2·speed·cos(heading) — one shared 512-entry
+// sine table (entry k = 8192·sin(2πk/512)) serves both axes, the cosine
+// reading the same table a quarter turn (128 entries) ahead, and the product
+// rounds to nearest (half-up) before the −2 amplitude is stored. Verified in
+// two independent consumer families: the strip-5/9 smoke drift applies the
+// first word to world X and the second to world Z, and the feature fire-spread
+// probe accumulates them into its X- and Z-cell coordinates.
 //
-// TODO(question): the cos→X / sin→Z axis assignment below is not attested in
-// research — only the −2 amplitude factor is established. Nothing reads
-// DirX/DirZ yet; the first consumer (particle drift is presentation-side
-// [05 "Wind generation"]) must settle the axis before depending on it.
+// Axis-swap provenance: nothing consumed these vectors in a direction-
+// sensitive way while the old cos→X / sin→Z assignment stood. The only
+// readers — phase-3 ballistic/dropped drift [06 §6.4] and the feature
+// fire-spread probe [03 §5.1.2] — predate the finding, and both of their tests
+// author DirX/DirZ directly rather than through windVectors, so the swap
+// changes which table feeds each axis for those consumers but no test outcome.
 func windVectors(strength int32, heading uint16) (int32, int32) {
 	if strength == 0 {
 		return 0, 0
@@ -201,5 +211,6 @@ func windVectors(strength int32, heading uint16) (int32, int32) {
 	a := numeric.Angle(heading)
 	amp := int32(-2 * strength)
 	// MulRound is (a*b + 4096) >> 13: round to nearest before truncation [04 §5.1].
-	return numeric.MulRound(amp, numeric.Cos(a)), numeric.MulRound(amp, numeric.Sin(a))
+	// [R-WIND-01]: sin feeds X, cos feeds Z.
+	return numeric.MulRound(amp, numeric.Sin(a)), numeric.MulRound(amp, numeric.Cos(a))
 }

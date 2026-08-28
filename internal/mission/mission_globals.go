@@ -52,38 +52,40 @@ type CensusEntry struct {
 // typed slots plus an extended string region, a global game-type integer, and
 // the save blob's GameTime region [P1-02 §1]. Each row lists key, key-string
 // vocabulary slot, singleton slot label, accessor type, default, clamp/domain,
-// consumer, and authoritative vs presentation vs inert. Fatal vs degrade for
-// optional media is in §2.2 [P1-02 §2.2].
+// consumer, and authoritative vs presentation vs inert. Defaults are the
+// accessor defaults of the map-global key table [02 map-global keys]; world
+// consumption applies its own terrain-side fallbacks [03 §2.2]. Fatal vs
+// degrade for optional media is in §2.2 [P1-02 §2.2].
 var MissionGlobalCensus = []CensusEntry{
 	// Authoritative — change simulation setup [P1-02 §2.1].
-	{Key: "numplayers", VA: "", Offset: "presentation string slot", Type: "int", Default: "2", Clamp: "2..10 raw stored then validated via StartPos [P1-02 §4]", Consumer: "presentation only — schema selection uses lobby occupancy, no numeric consumer [08 mission globals]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "HumanMetal", VA: "", Offset: "", Type: "float", Default: "1000", Clamp: "none (float)", Consumer: "spawn-credit pass seeds each side's starting resource stores", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "HumanEnergy", VA: "", Offset: "", Type: "float", Default: "1000", Clamp: "none", Consumer: "spawn-credit pass, as HumanMetal", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "ComputerMetal", VA: "", Offset: "", Type: "float", Default: "1000", Clamp: "none", Consumer: "spawn-credit pass (computer side)", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "ComputerEnergy", VA: "", Offset: "", Type: "float", Default: "1000", Clamp: "none", Consumer: "spawn-credit pass (computer side)", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "numplayers", VA: "", Offset: "presentation string slot", Type: "string", Default: "empty", Clamp: "80-byte string slot; recommended counts, comma list [fmt ota]", Consumer: "presentation only — schema selection uses lobby occupancy, no numeric consumer [08 mission globals]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "HumanMetal", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "—", Consumer: "spawn-credit pass seeds each side's starting resource stores [02 map-global keys]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "HumanEnergy", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "—", Consumer: "spawn-credit pass, as HumanMetal [02 map-global keys]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "ComputerMetal", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "—", Consumer: "spawn-credit pass (computer side) [02 map-global keys]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "ComputerEnergy", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "—", Consumer: "spawn-credit pass (computer side) [02 map-global keys]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "SurfaceMetal", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "0..255 → byte trunc at cell+7", Consumer: "uniform per-cell metal-byte seeding; extractor helper draws once with bound 255 and compares against this value [03][08 placement helpers]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "maxunits", VA: "", Offset: "unit-limit word", Type: "int", Default: "250", Clamp: "0..250 then allocator per-def limit", Consumer: "save Summary key; unit allocator enforces per-definition limits [08 mission globals]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "maxunits", VA: "", Offset: "unit-limit word", Type: "int", Default: "200", Clamp: "—", Consumer: "read into the active unit-limit word used during play; the save Summary persists the low 16 bits [02 unit limit][08 Summary]. The 250 figure is the totala.ini [Preferences] UnitLimit profile default — a different mechanism [02 §5 R-CONTENT-03]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "UseOnlyUnits", VA: "", Offset: "path", Type: "string", Default: "empty", Clamp: "—", Consumer: "resolves into the campaign useonly area [08 restriction-flag disposition]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "aiprofile", VA: "", Offset: "", Type: "string", Default: "\"default\" fallback", Clamp: "100-char fallback", Consumer: "loads ai\\<profile>.txt with fallback to ai\\default.txt, feeding strategic weights [08 planner]", Class: GlobalAuthoritative, Fatal: FatalKindDegrade},
-	{Key: "minwindspeed", VA: "", Offset: "", Type: "int", Default: "100 canonical fallback", Clamp: "—", Consumer: "briefing wind draw rand()%(max-min+1)+min on the CRT stream [08 wind draws]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "maxwindspeed", VA: "", Offset: "", Type: "int", Default: "2000", Clamp: "—", Consumer: "briefing wind draw; wind-generator scalar [03]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "gravity", VA: "", Offset: "", Type: "int", Default: "0x1FDB (8155) canonical fallback", Clamp: "—", Consumer: "vertical drift and projectile gravity [03]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "tidalstrength", VA: "", Offset: "", Type: "float", Default: "0.5 sentinel -1.0", Clamp: "—", Consumer: "tidalGenerator economy", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "aiprofile", VA: "", Offset: "", Type: "string", Default: "empty", Clamp: "—", Consumer: "resource slot loads ai\\<profile>.txt with fallback to ai\\default.txt, feeding strategic weights [08 planner]", Class: GlobalAuthoritative, Fatal: FatalKindDegrade},
+	{Key: "minwindspeed", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "authored nonnegative value overrides the terrain value for canonical maps only [03 §2.2]", Consumer: "briefing wind draw rand()%(max-min+1)+min on the CRT stream [08 wind draws]; canonical TNT hard-codes 100 when the key is absent [03 §2.2]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "maxwindspeed", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "authored nonnegative value overrides the terrain value for canonical maps only [03 §2.2]", Consumer: "briefing wind draw; wind-generator scalar [03]; canonical TNT hard-codes 2000 when the key is absent [03 §2.2]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "gravity", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "authored nonnegative value overrides the terrain value for canonical maps only [03 §2.2]", Consumer: "vertical drift and projectile gravity [03]; the 0x1FDB (8155) constant is the world-init fallback when neither TNT nor OTA supplies gravity [03 §2.2]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "tidalstrength", VA: "", Offset: "", Type: "float", Default: "0.0", Clamp: "—", Consumer: "tidalGenerator economy; world consumption falls back to 0.5 when the key is absent [03 §2.2]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "lavaworld", VA: "", Offset: "", Type: "int", Default: "0 bool", Clamp: "nonzero→lava", Consumer: "world-init lava flood sweep; lava splash effects [03]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "nosealeveltrigger", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "—", Consumer: "water test gate", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "waterdoesdamage", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "—", Consumer: "acid-water flag", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "waterdamage", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "amount", Consumer: "water damage tick", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "killmul", VA: "", Offset: "", Type: "float", Default: "1.0 TODO(question) 0 vs 1.0", Clamp: "—", Consumer: "score: int(kills*killmul)", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "timemul", VA: "", Offset: "", Type: "float", Default: "1.0 TODO(question)", Clamp: "—", Consumer: "score: int(ticks/1800*timemul)", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "mapping", VA: "", Offset: "mapping LOS mode", Type: "int", Default: "1 via registry", Clamp: "1 default per registry", Consumer: "MapFlags bit 0 selects full vs byte-grid LOS mode [P1-02 §2.1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "lineofsight", VA: "SingleLineOfSight", Offset: "LOS mode", Type: "int", Default: "1", Clamp: "—", Consumer: "visibility word vs ray [P1-02 §2.1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "killmul", VA: "", Offset: "", Type: "float", Default: "0.0", Clamp: "—", Consumer: "score: int(kills*killmul) [02 map-global keys][08 mission globals]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "timemul", VA: "", Offset: "", Type: "float", Default: "0.0", Clamp: "retail campaign maps may author the signed sentinel -1 [fmt ota]", Consumer: "score: int(ticks/1800*timemul) [02 map-global keys][08 mission globals]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "mapping", VA: "", Offset: "mapping LOS mode", Type: "int", Default: "0", Clamp: "—", Consumer: "MapFlags bit 0 selects full vs byte-grid LOS mode; campaign-mode LOS defaults merged at battle entry [08 mission globals] [P1-02 §2.1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "lineofsight", VA: "SingleLineOfSight", Offset: "LOS mode", Type: "int", Default: "0", Clamp: "—", Consumer: "visibility word vs ray [P1-02 §2.1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "LOSType", VA: "SingleLOSType", Offset: "LOS type enum", Type: "int", Default: "—", Clamp: "sprite vs ray", Consumer: "anims/vismasks.gaf vs ray", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "commanderDeath", VA: "SingleCommanderDeath", Offset: "commanderDeath", Type: "int", Default: "1 registry default", Clamp: "—", Consumer: "lobby-value rule for the skirmish defeat gate and respawn path; no mission-level key, no injected trigger [08 mission globals]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "MeteorWeapon", VA: "", Offset: "meteor storm record", Type: "string", Default: "empty→disable", Clamp: "empty predicate", Consumer: "meteor scheduler + gamedata\\METEOR.TDF [Default] merge [P1-02 §2.1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "MeteorRadius", VA: "", Offset: "meteor storm record", Type: "int", Default: "from METEOR.TDF [Default]", Clamp: "—", Consumer: "meteor scheduler", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "MeteorDensity", VA: "", Offset: "meteor storm record", Type: "float", Default: "from METEOR.TDF", Clamp: "—", Consumer: "meteor scheduler", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "MeteorDuration", VA: "", Offset: "meteor storm record", Type: "int", Default: "from METEOR.TDF", Clamp: "—", Consumer: "meteor scheduler", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "MeteorInterval", VA: "", Offset: "meteor storm record", Type: "int", Default: "from METEOR.TDF", Clamp: "—", Consumer: "meteor scheduler", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "MeteorWeapon", VA: "", Offset: "meteor storm record", Type: "string", Default: "empty (decode)", Clamp: "empty predicate", Consumer: "meteor scheduler + gamedata\\METEOR.TDF [Default] merge at storm resolution — only an empty weapon disables; zero parameters substitute the [Default] values [02 meteor merge][06 §6.5] [P1-02 §2.1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "MeteorRadius", VA: "", Offset: "meteor storm record", Type: "int", Default: "0 (decode)", Clamp: "—", Consumer: "meteor scheduler; zero substitutes the METEOR.TDF [Default] radius at storm resolution [02 meteor merge][06 §6.5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "MeteorDensity", VA: "", Offset: "meteor storm record", Type: "float", Default: "0.0 (decode)", Clamp: "—", Consumer: "meteor scheduler; zero substitutes the METEOR.TDF [Default] density at storm resolution [02 meteor merge][06 §6.5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "MeteorDuration", VA: "", Offset: "meteor storm record", Type: "float", Default: "0.0 (decode)", Clamp: "—", Consumer: "meteor scheduler; zero substitutes the METEOR.TDF [Default] duration at storm resolution [02 meteor merge][06 §6.5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "MeteorInterval", VA: "", Offset: "meteor storm record", Type: "float", Default: "0.0 (decode)", Clamp: "—", Consumer: "meteor scheduler; zero substitutes the METEOR.TDF [Default] interval at storm resolution [02 meteor merge][06 §6.5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	// Presentation — briefing/panorama only [P1-02 §2.1].
 	{Key: "Planet", VA: "", Offset: "fixed-size string slot", Type: "string", Default: "empty 15-value enum Green…Crystal", Clamp: "enum via the planet-table triple", Consumer: "planet selects parallel brief/pan/rotate tables [P0-05]", Class: GlobalPresentation, Fatal: FatalKindDegrade},
 	{Key: "brief", VA: "", Offset: "briefing text", Type: "string", Default: "empty", Clamp: "—", Consumer: "briefing text from camps\\briefs", Class: GlobalPresentation, Fatal: FatalKindDegrade},
@@ -91,14 +93,14 @@ var MissionGlobalCensus = []CensusEntry{
 	{Key: "missionhint", VA: "", Offset: "hint", Type: "string", Default: "empty", Clamp: "—", Consumer: "camps\\hints WAV [P1-02 §2.1]", Class: GlobalPresentation, Fatal: FatalKindDegrade},
 	{Key: "glamour", VA: "", Offset: "glamour", Type: "string", Default: "empty", Clamp: "—", Consumer: "panorama/glam art", Class: GlobalPresentation, Fatal: FatalKindDegrade},
 	{Key: "glamoursound", VA: "", Offset: "glamourSound", Type: "string", Default: "empty", Clamp: "—", Consumer: "audio alias", Class: GlobalPresentation, Fatal: FatalKindDegrade},
-	{Key: "missiondescription", VA: "", Offset: "fixed-size string slot", Type: "string", Default: "\"No description available\" fallback", Clamp: "menu description", Consumer: "menu description", Class: GlobalPresentation, Fatal: FatalKindDegrade},
+	{Key: "missiondescription", VA: "", Offset: "fixed-size string slot", Type: "string", Default: "\"No description available\" fallback", Clamp: "menu description", Consumer: "menu description [02 map-global keys]", Class: GlobalPresentation, Fatal: FatalKindDegrade},
 	// Inert — parsed but no tick reader [P1-02 §2.1] bounded negative.
 	{Key: "memory", VA: "", Offset: "fixed-size string slot", Type: "string", Default: "empty", Clamp: "menu-only, no tick read", Consumer: "menu display only [P1-02 §2.1]", Class: GlobalInert, Fatal: FatalKindNotFatal},
 	{Key: "nomovie", VA: "", Offset: "bool", Type: "int", Default: "0", Clamp: "suppresses briefing movie", Consumer: "presentation only [P1-02 §2.1]", Class: GlobalInert, Fatal: FatalKindNotFatal},
 	// Timers/display — sibling deadlines [P1-02 §2.1] TODO(question) consumers.
-	{Key: "UpdateTime", VA: "save key UpdateTime", Offset: "per-player Players-box slot [08 save]", Type: "int32 tick", Default: "seed globalTick at battle init", Clamp: "absolute tick, advanced by 30 when due", Consumer: "economy settlement deadline vs the global tick [05 settlement]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "WinLoseTime", VA: "save key WinLoseTime", Offset: "per-player Players-box slot", Type: "int32", Default: "seed globalTick", Clamp: "—", Consumer: "persisted verbatim; no other reader (closed) [08 save]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "DisplayTimer", VA: "save key DisplayTimer", Offset: "per-player Players-box slot", Type: "int32", Default: "seed globalTick", Clamp: "—", Consumer: "HUD resource-rate refresh deadline [08 save]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "UpdateTime", VA: "save key UpdateTime", Offset: "per-player Players-box slot [08 save]", Type: "int32 tick", Default: "0 (decode); battle init seeds the current tick [08 player records]", Clamp: "absolute tick, advanced by 30 when due", Consumer: "economy settlement deadline vs the global tick [05 settlement]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "WinLoseTime", VA: "save key WinLoseTime", Offset: "per-player Players-box slot", Type: "int32", Default: "0 (decode); battle init seeds the current tick [08 player records]", Clamp: "—", Consumer: "persisted verbatim; no other reader (closed) [08 save]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "DisplayTimer", VA: "save key DisplayTimer", Offset: "per-player Players-box slot", Type: "int32", Default: "0 (decode); battle init seeds the current tick [08 player records]", Clamp: "—", Consumer: "HUD resource-rate refresh deadline [08 save]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "GlobalTick", VA: "save Players/GameTime box key", Offset: "scheduler-block globalTick word [08 save]", Type: "int32", Default: "persisted blob", Clamp: "tick executor inc", Consumer: "globalTick before phase1 [P0-09]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "EndCountdown", VA: "runtime countdown, not a save key", Offset: "countdown + end-latch word", Type: "i16/byte", Default: "armed at four, decremented on the ~30-tick cadence; latch written at end", Clamp: "not persisted", Consumer: "settlement gate + front-end latch", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 }
@@ -165,115 +167,103 @@ func IsInert(key string) bool {
 
 // MissionGlobals is the decoded authoritative mission-global block for battle
 // setup [P1-02 §2.1]. Presentation/inert fields are retained for menu but not
-// simulation.
+// simulation. Field defaults are the accessor defaults of the map-global key
+// table [02 map-global keys]; terrain-side fallbacks (canonical TNT hard-codes,
+// the 0x1FDB gravity and 0.5 tidal constants) apply at world consumption, not
+// here [03 §2.2].
 type MissionGlobals struct {
-	NumPlayers         int32   // numplayers int 2 default [P1-02 §2.1]
-	HumanMetal         float64 // starting human metal, default 1000 [P1-02 §2.1]
-	HumanEnergy        float64 // starting human energy, default 1000 [P1-02 §2.1]
-	ComputerMetal      float64 // starting computer metal, default 1000 [P1-02 §2.1]
-	ComputerEnergy     float64 // starting computer energy, default 1000 [P1-02 §2.1]
+	NumPlayers         string  // numplayers string slot, empty; presentation only [02 map-global keys][08 mission globals]
+	HumanMetal         int32   // starting human metal, integer accessor, default 0 [02 map-global keys]
+	HumanEnergy        int32   // starting human energy, integer accessor, default 0 [02 map-global keys]
+	ComputerMetal      int32   // starting computer metal, integer accessor, default 0 [02 map-global keys]
+	ComputerEnergy     int32   // starting computer energy, integer accessor, default 0 [02 map-global keys]
 	SurfaceMetal       int32   // surface metal seeding, default 0; per-cell metal byte [P1-02 §2.1][P1-15]
-	MaxUnits           int32   // maxunits 250 clamp [P1-02 §2.1] vs per-def limit
+	MaxUnits           int32   // maxunits default 200 into the active unit-limit word [02 map-global keys][02 unit limit]
 	UseOnlyUnitsPath   string  // UseOnlyUnits → camps\useonly [P1-02 §2.1]
-	AIProfile          string  // aiprofile fallback "default" [P1-02 §2.1]
+	AIProfile          string  // aiprofile, empty; ai\default.txt fallback happens at profile load [02 map-global keys][08 planner]
 	Planet             string  // planet enum string, 15 values Green…Crystal [P1-02 §2.1]
 	Brief              string  // briefing text, presentation [P1-02 §2.1]
 	Narration          string  // presentation [P1-02 §2.1]
 	MissionHint        string  // presentation [P1-02 §2.1]
 	Glamour            string  // presentation [P1-02 §2.1]
 	GlamourSound       string  // presentation [P1-02 §2.1]
-	MinWind            int32   // minimum wind, canonical 100 [P1-02 §2.1]
-	MaxWind            int32   // maximum wind, canonical 2000 [P1-02 §2.1]
-	Gravity            int32   // gravity, fallback 0x1FDB (8155) [P1-02 §2.1]
-	TidalStrength      float64 // tidal strength, default 0.5, read sentinel -1.0 [P1-02 §2.1]
+	MinWind            int32   // minwindspeed accessor default 0; canonical TNT hard-codes 100 [02 map-global keys][03 §2.2]
+	MaxWind            int32   // maxwindspeed accessor default 0; canonical TNT hard-codes 2000 [02 map-global keys][03 §2.2]
+	Gravity            int32   // gravity accessor default 0; 0x1FDB is the world-init fallback [02 map-global keys][03 §2.2]
+	TidalStrength      float64 // tidalstrength accessor default 0.0; 0.5 is the world-init fallback [02 map-global keys][03 §2.2]
 	LavaWorld          int32   // lavaworld flag [P1-02 §2.1]
 	NoSeaLevelTrigger  int32   // no-sea-level trigger [P1-02 §2.1]
 	WaterDoesDamage    int32   // acid-water flag [P1-02 §2.1]
 	WaterDamage        int32   // water damage amount [P1-02 §2.1]
-	KillMul            float64 // score kill multiplier, TODO(question) 0 vs 1.0 default [P1-02 §8]
-	TimeMul            float64 // score time multiplier, TODO(question) default [P1-02 §8]
+	KillMul            float64 // score kill multiplier, default 0.0 [02 map-global keys][08 mission globals]
+	TimeMul            float64 // score time multiplier, default 0.0 [02 map-global keys][08 mission globals]
 	Memory             string  // memory requirement, inert [P1-02 §2.1]
 	NoMovie            int32   // nomovie inert [P1-02 §2.1]
-	MissionDescription string  // menu description, fallback "No description available" [P1-02 §2.1]
-	Mapping            int32   // mapping LOS mode [P1-02 §2.1]
-	LineOfSight        int32   // lineofsight [P1-02 §2.1]
-	LOSType            int32   // LOSType enum [P1-02 §2.1]
-	CommanderDeath     int32   // commanderDeath TODO(question) [P1-02 §8]
+	MissionDescription string  // menu description, fallback "No description available" [02 map-global keys]
+	Mapping            int32   // mapping LOS mode, default 0 [02 map-global keys]
+	LineOfSight        int32   // lineofsight, default 0 [02 map-global keys]
+	LOSType            int32   // LOSType enum, default 0; see TODO(question) at the decode site
 	MeteorWeapon       string  // MeteorWeapon empty disables [P1-02 §2.1]
-	MeteorRadius       int32   // MeteorRadius [P1-02 §2.1]
-	MeteorDensity      float64
-	MeteorDuration     float64
-	MeteorInterval     float64
-	UpdateTime         int32 // economy settlement deadline, per-player save slot [08] TODO(question)
-	WinLoseTime        int32 // save WinLoseTime slot TODO(question)
-	DisplayTimer       int32 // HUD resource-rate refresh deadline [08 save]
+	MeteorRadius       int32   // MeteorRadius, default 0 [02 map-global keys]
+	MeteorDensity      float64 // MeteorDensity, default 0.0 [02 map-global keys]
+	MeteorDuration     float64 // MeteorDuration, default 0.0 [02 map-global keys]
+	MeteorInterval     float64 // MeteorInterval, default 0.0 [02 map-global keys]
+	UpdateTime         int32   // economy settlement deadline, per-player save slot, default 0 [08 player records]
+	WinLoseTime        int32   // save WinLoseTime slot, default 0 [08 player records]
+	DisplayTimer       int32   // HUD resource-rate refresh deadline, default 0 [08 player records]
 }
 
 // DecodeMissionGlobals decodes mission-global keys from GlobalHeader via typed
-// accessors [02 §4] [P1-02 §2.1]. Defaults are per census [P1-02 §4].
+// accessors [02 map-global keys] [P1-02 §2.1]. Absent keys decode to the
+// accessor defaults of the map-global key table; the terrain-side fallbacks
+// (canonical TNT wind 100/2000 and gravity 0, the 0x1FDB gravity and 0.5 tidal
+// constants when neither source supplies) are world-consumption concerns [03 §2.2].
 func DecodeMissionGlobals(global *formats.Section) *MissionGlobals {
 	if global == nil {
-		return &MissionGlobals{
-			MinWind: 100, MaxWind: 2000, Gravity: 0x1FDB,
-			TidalStrength: 0.5, KillMul: 1.0, TimeMul: 1.0,
-			AIProfile: "default", MaxUnits: 250,
-			MissionDescription: "No description available",
-		}
+		// A missing GlobalHeader is fatal upstream [02 mission-file diagnostics];
+		// this nil path mirrors decoding an empty section: accessor defaults only.
+		return DecodeMissionGlobals(&formats.Section{Name: "GlobalHeader"})
 	}
 	mg := &MissionGlobals{}
-	mg.NumPlayers = global.IntValue("numplayers", 2)      // 2 [P1-02 §2.1]
-	mg.HumanMetal = global.FloatValue("HumanMetal", 1000) // 1000 stock [P1-02 §2.1]
-	mg.HumanEnergy = global.FloatValue("HumanEnergy", 1000)
-	mg.ComputerMetal = global.FloatValue("ComputerMetal", 1000)
-	mg.ComputerEnergy = global.FloatValue("ComputerEnergy", 1000)
-	mg.SurfaceMetal = global.IntValue("SurfaceMetal", 0) // 0 [P1-02 §2.1] → byte cell+7
-	mg.MaxUnits = global.IntValue("maxunits", 250)       // 250 before clamp [P1-02 §2.1]
-	mg.UseOnlyUnitsPath = DecodeUseOnlyUnits(global)     // path building [P1-02 §2.1] C8
-	v, _ := global.StringValue("aiprofile", "default")   // fallback "default" [P1-02 §2.1]
-	if strings.TrimSpace(v) == "" {
-		v = "default"
-	}
-	mg.AIProfile = v
-	mg.Planet, _ = global.StringValue("Planet", "") // 15-enum Green…Crystal [P1-02 §2.1]
+	mg.NumPlayers, _ = global.StringValue("numplayers", "") // string slot, presentation only [02 map-global keys][08 mission globals]
+	// Starting resources use the integer accessor, default 0 [02 map-global keys].
+	mg.HumanMetal = global.IntValue("HumanMetal", 0)
+	mg.HumanEnergy = global.IntValue("HumanEnergy", 0)
+	mg.ComputerMetal = global.IntValue("ComputerMetal", 0)
+	mg.ComputerEnergy = global.IntValue("ComputerEnergy", 0)
+	mg.SurfaceMetal = global.IntValue("SurfaceMetal", 0)  // 0 [02 map-global keys] → byte cell+7
+	mg.MaxUnits = global.IntValue("maxunits", 200)        // 200 [02 map-global keys]; 250 is the totala.ini UnitLimit profile default, a different mechanism [02 §5 R-CONTENT-03]
+	mg.UseOnlyUnitsPath = DecodeUseOnlyUnits(global)      // path building [P1-02 §2.1] C8
+	mg.AIProfile, _ = global.StringValue("aiprofile", "") // empty default; ai\default.txt fallback happens at profile load [02 map-global keys][08 planner]
+	mg.Planet, _ = global.StringValue("Planet", "")       // 15-enum Green…Crystal [P1-02 §2.1]
 	mg.Brief, _ = global.StringValue("brief", "")
 	mg.Narration, _ = global.StringValue("narration", "")
 	mg.MissionHint, _ = global.StringValue("missionhint", "")
 	mg.Glamour, _ = global.StringValue("glamour", "")
 	mg.GlamourSound, _ = global.StringValue("glamoursound", "")
-	mg.MinWind = global.IntValue("minwindspeed", 100)  // canonical 100 [P1-02 §2.1]
-	mg.MaxWind = global.IntValue("maxwindspeed", 2000) // 2000 [P1-02 §2.1]
-	// Gravity fallback 0x1FDB when neither OTA nor TNT supplies [P1-02 §8]
-	mg.Gravity = global.IntValue("gravity", 0x1FDB)
-	// TidalStrength default 0.5 sentinel -1.0 at read [P1-02 §2.1][P1-02 §4]
-	if _, ok := global.RawValue("tidalstrength"); ok {
-		mg.TidalStrength = global.FloatValue("tidalstrength", 0.5)
-	} else {
-		mg.TidalStrength = 0.5 // 0x3F000000 default when not authored
-	}
-	mg.LavaWorld = global.IntValue("lavaworld", 0) // bool [P1-02 §2.1]
+	mg.MinWind = global.IntValue("minwindspeed", 0)          // 0 [02 map-global keys]; canonical TNT hard-codes 100 [03 §2.2]
+	mg.MaxWind = global.IntValue("maxwindspeed", 0)          // 0 [02 map-global keys]; canonical TNT hard-codes 2000 [03 §2.2]
+	mg.Gravity = global.IntValue("gravity", 0)               // 0 [02 map-global keys]; 0x1FDB fallback when neither TNT nor OTA supplies [03 §2.2]
+	mg.TidalStrength = global.FloatValue("tidalstrength", 0) // 0.0 [02 map-global keys]; 0.5 fallback at world consumption [03 §2.2]
+	mg.LavaWorld = global.IntValue("lavaworld", 0)           // bool [P1-02 §2.1]
 	mg.NoSeaLevelTrigger = global.IntValue("nosealeveltrigger", 0)
 	mg.WaterDoesDamage = global.IntValue("waterdoesdamage", 0)
 	mg.WaterDamage = global.IntValue("waterdamage", 0)
-	// killmul/timemul default TODO(question) 0 vs 1.0 [P1-02 §8]; use 1.0 for non-zero score.
-	if _, ok := global.RawValue("killmul"); ok {
-		mg.KillMul = global.FloatValue("killmul", 1.0)
-	} else {
-		mg.KillMul = 1.0 // TODO(question) [P1-02 §8]
-	}
-	if _, ok := global.RawValue("timemul"); ok {
-		mg.TimeMul = global.FloatValue("timemul", 1.0)
-	} else {
-		mg.TimeMul = 1.0 // TODO(question)
-	}
+	mg.KillMul = global.FloatValue("killmul", 0) // 0.0 [02 map-global keys][08 mission globals]
+	mg.TimeMul = global.FloatValue("timemul", 0) // 0.0 [02 map-global keys][08 mission globals]
 	mg.Memory, _ = global.StringValue("memory", "")
-	mg.NoMovie = global.IntValue("nomovie", 0)                                                      // inert [P1-02 §2.1]
-	mg.MissionDescription, _ = global.StringValue("missiondescription", "No description available") // fallback [P1-02 §2.1]
+	mg.NoMovie = global.IntValue("nomovie", 0) // inert [P1-02 §2.1]
+	mg.MissionDescription, _ = global.StringValue("missiondescription", "No description available")
 	if strings.TrimSpace(mg.MissionDescription) == "" {
-		mg.MissionDescription = "No description available" // canonical substitute [P1-02 §2.1]
+		// TODO(question): retail's behavior for an authored-empty description is
+		// not stated by research — the map-global table gives the literal only as
+		// the missing-key default [02 map-global keys]. What would settle it: the
+		// menu description consumer's empty-string handling in doc 07.
+		mg.MissionDescription = "No description available"
 	}
-	mg.Mapping = global.IntValue("mapping", 1) // 1 default per registry [P1-02 §2.1]
-	mg.LineOfSight = global.IntValue("lineofsight", 1)
-	mg.LOSType, _ = func() (int32, bool) { // SingleLOSType/MultiLOSType enum
+	mg.Mapping = global.IntValue("mapping", 0)         // 0 [02 map-global keys]; lobby/registry LOS defaults are a separate mechanism [08 mission globals]
+	mg.LineOfSight = global.IntValue("lineofsight", 0) // 0 [02 map-global keys]
+	mg.LOSType, _ = func() (int32, bool) {             // SingleLOSType/MultiLOSType enum
 		if _, ok := global.RawValue("SingleLOSType"); ok {
 			return global.IntValue("SingleLOSType", 0), true
 		}
@@ -282,20 +272,21 @@ func DecodeMissionGlobals(global *formats.Section) *MissionGlobals {
 		}
 		return 0, false
 	}()
-	mg.CommanderDeath = global.IntValue("SingleCommanderDeath", 1) // TODO(question) trigger mapping [P1-02 §8]
-	if _, ok := global.RawValue("SingleCommanderDeath"); !ok {
-		if v, ok := global.RawValue("commanderDeath"); ok && strings.TrimSpace(v) != "" {
-			mg.CommanderDeath = global.IntValue("commanderDeath", 1)
-		}
-	}
-	mg.MeteorWeapon, _ = global.StringValue("MeteorWeapon", "") // empty disables [P1-02 §2.1]
-	mg.MeteorRadius = global.IntValue("MeteorRadius", 0)
+	// TODO(question): the map-global key table has no LOSType row, and only the
+	// save Summary carries LineOfSightType [08 Summary]; whether the OTA global
+	// section is ever probed for SingleLOSType/LOSType is unestablished. Default
+	// 0 kept as placeholder. What would settle it: a key-string census of the
+	// map-load path for the Single* vocabulary.
+	// No commanderDeath decode: there is no mission-level key — the rule is a
+	// lobby value, and no defeat trigger is injected for it [08 mission globals].
+	mg.MeteorWeapon, _ = global.StringValue("MeteorWeapon", "") // empty disables [02 meteor merge]
+	mg.MeteorRadius = global.IntValue("MeteorRadius", 0)        // 0 [02 map-global keys]; METEOR.TDF substitution happens at storm resolution [02 meteor merge][06 §6.5]
 	mg.MeteorDensity = global.FloatValue("MeteorDensity", 0)
 	mg.MeteorDuration = global.FloatValue("MeteorDuration", 0)
 	mg.MeteorInterval = global.FloatValue("MeteorInterval", 0)
-	mg.UpdateTime = global.IntValue("UpdateTime", 0)     // per-player save slot TODO(question)
-	mg.WinLoseTime = global.IntValue("WinLoseTime", 0)   // save WinLoseTime slot
-	mg.DisplayTimer = global.IntValue("DisplayTimer", 0) // save DisplayTimer slot
+	mg.UpdateTime = global.IntValue("UpdateTime", 0)     // i32 0 [08 player records]; battle init seeds the current tick
+	mg.WinLoseTime = global.IntValue("WinLoseTime", 0)   // i32 0 [08 player records]
+	mg.DisplayTimer = global.IntValue("DisplayTimer", 0) // i32 0 [08 player records]
 	return mg
 }
 

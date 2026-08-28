@@ -409,11 +409,12 @@ func grantResourcesStrict(s *Session, m *mission.Mission) error {
 	// [08 "Placement and battle entry"] via economy.CreditSpawn per C9. No
 	// Mirror, Accepted or Carry bucket is touched. Amounts are the authored
 	// HumanMetal/HumanEnergy vs ComputerMetal/ComputerEnergy from the OTA
-	// GlobalHeader per [P1-02 §2.1] (defaults 1000). Using CreditSpawn preserves I2's float32 stock identity.
+	// GlobalHeader per [P1-02 §2.1] (authored; decode default 0 per [02 map-global keys]).
+	// Using CreditSpawn preserves I2's float32 stock identity.
 	if m == nil || m.OTA == nil || m.OTA.Global == nil {
 		return fmt.Errorf("session: mission has no GlobalHeader for starting resources [08 \"Placement and battle entry\"]")
 	}
-	mg := mission.DecodeMissionGlobals(m.OTA.Global) // [P1-02 §2.1] defaults 1000
+	mg := mission.DecodeMissionGlobals(m.OTA.Global) // [P1-02 §2.1]; decode defaults per [02 map-global keys]
 	for p := 0; p < 10; p++ {
 		if !s.Econ.Players[p].Exists {
 			continue

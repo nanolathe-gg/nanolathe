@@ -1,8 +1,7 @@
 // Platform-neutral key and mouse-button vocabulary.
 //
-// These mirror the retail virtual-key codes' *roles* (movement, modifiers,
-// arrows) without binding presentation to any one window system. Translation
-// into the retail Token byte vocabulary lives in translate.go [07 §2].
+// These mirror the retail virtual-key roles (movement, modifiers, arrows)
+// without binding presentation to any one window system [07 §2].
 package input
 
 // Key identifies a keyboard key for the windowed client paths.

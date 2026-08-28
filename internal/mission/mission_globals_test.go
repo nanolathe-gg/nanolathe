@@ -69,38 +69,95 @@ func TestMissionGlobalCensus(t *testing.T) {
 			t.Fatalf("entry with empty key")
 		}
 	}
+	// Census narration must agree with the researched accessor defaults
+	// [02 map-global keys][02 §5 R-CONTENT-03][08 mission globals].
+	censusDefault := func(key string) *CensusEntry {
+		for i := range MissionGlobalCensus {
+			if strings.EqualFold(MissionGlobalCensus[i].Key, key) {
+				return &MissionGlobalCensus[i]
+			}
+		}
+		return nil
+	}
+	if e := censusDefault("maxunits"); e == nil || e.Default != "200" {
+		t.Fatalf("maxunits census default 200 [02 map-global keys] got %+v", e)
+	}
+	if e := censusDefault("HumanMetal"); e == nil || e.Type != "int" || e.Default != "0" {
+		t.Fatalf("HumanMetal census int/0 [02 map-global keys] got %+v", e)
+	}
+	if e := censusDefault("killmul"); e == nil || e.Default != "0.0" {
+		t.Fatalf("killmul census default 0.0 [02 map-global keys][08 mission globals] got %+v", e)
+	}
+	if e := censusDefault("numplayers"); e == nil || e.Type != "string" || e.Default != "empty" {
+		t.Fatalf("numplayers census string/empty [02 map-global keys][08 mission globals] got %+v", e)
+	}
+	if e := censusDefault("gravity"); e == nil || e.Default != "0" {
+		t.Fatalf("gravity census default 0 [02 map-global keys] got %+v", e)
+	}
 }
 
-// TestMissionGlobalsDefaults locks defaults and clamps [P1-02 §4].
+// TestMissionGlobalsDefaults locks the accessor defaults of the map-global key
+// table [02 map-global keys]. The canonical-TNT hard-codes (wind 100/2000,
+// gravity 0) and the world-init fallbacks (gravity 0x1FDB, tidal 0.5) are
+// terrain-consumption concerns [03 §2.2], and the totala.ini UnitLimit 250 is
+// a different mechanism from OTA maxunits [02 §5 R-CONTENT-03] — none of them
+// belong in this decode.
 func TestMissionGlobalsDefaults(t *testing.T) {
 	sec := mustParseGlobalsTDF(t, `[GlobalHeader]
 {
 }
 `)
 	mg := DecodeMissionGlobals(sec)
-	if mg.MinWind != 100 || mg.MaxWind != 2000 {
-		t.Fatalf("wind defaults 100/2000 canonical [P1-02 §2.1] got %d/%d", mg.MinWind, mg.MaxWind)
+	if mg.MinWind != 0 || mg.MaxWind != 0 {
+		t.Fatalf("wind accessor defaults 0/0 [02 map-global keys]; canonical TNT hard-codes 100/2000 at world consumption [03 §2.2] got %d/%d", mg.MinWind, mg.MaxWind)
 	}
-	if mg.Gravity != 0x1FDB {
-		t.Fatalf("gravity fallback 0x1FDB [P1-02 §2.1] got %d", mg.Gravity)
+	if mg.Gravity != 0 {
+		t.Fatalf("gravity accessor default 0 [02 map-global keys]; 0x1FDB is the world-init fallback when neither source supplies [03 §2.2] got %d", mg.Gravity)
 	}
-	if mg.TidalStrength != 0.5 {
-		t.Fatalf("tidal 0.5 default [P1-02 §2.1] got %f", mg.TidalStrength)
+	if mg.TidalStrength != 0 {
+		t.Fatalf("tidalstrength accessor default 0.0 [02 map-global keys]; 0.5 is the world-init fallback [03 §2.2] got %f", mg.TidalStrength)
 	}
-	if mg.SurfaceMetal != 0 {
-		t.Fatalf("SurfaceMetal 0 default [P1-02 §2.1]")
+	if mg.HumanMetal != 0 || mg.HumanEnergy != 0 || mg.ComputerMetal != 0 || mg.ComputerEnergy != 0 {
+		t.Fatalf("starting resources integer accessor default 0 [02 map-global keys] got %d/%d/%d/%d", mg.HumanMetal, mg.HumanEnergy, mg.ComputerMetal, mg.ComputerEnergy)
 	}
-	if mg.KillMul != 1.0 || mg.TimeMul != 1.0 {
-		t.Fatalf("killmul/timemul 1.0 default TODO(question) [P1-02 §8] got %f/%f", mg.KillMul, mg.TimeMul)
+	if mg.KillMul != 0.0 || mg.TimeMul != 0.0 {
+		t.Fatalf("killmul/timemul 0.0 default [02 map-global keys][08 mission globals] got %f/%f", mg.KillMul, mg.TimeMul)
+	}
+	if mg.MaxUnits != 200 {
+		t.Fatalf("maxunits 200 [02 map-global keys]; 250 is the totala.ini [Preferences] UnitLimit profile default, a different mechanism [02 §5 R-CONTENT-03] got %d", mg.MaxUnits)
+	}
+	if mg.NumPlayers != "" {
+		t.Fatalf("numplayers is a string slot, empty default [02 map-global keys][08 mission globals] got %q", mg.NumPlayers)
+	}
+	if mg.AIProfile != "" {
+		t.Fatalf("aiprofile empty default [02 map-global keys]; ai\\default.txt fallback happens at profile load [08 planner] got %q", mg.AIProfile)
+	}
+	if mg.Mapping != 0 || mg.LineOfSight != 0 {
+		t.Fatalf("mapping/lineofsight accessor defaults 0 [02 map-global keys] got %d/%d", mg.Mapping, mg.LineOfSight)
 	}
 	if mg.MissionDescription != "No description available" {
-		t.Fatalf("missiondescription fallback [P1-02 §2.1] got %q", mg.MissionDescription)
+		t.Fatalf("missiondescription fallback [02 map-global keys] got %q", mg.MissionDescription)
 	}
-	if mg.AIProfile != "default" {
-		t.Fatalf("aiprofile default [P1-02 §2.1] got %q", mg.AIProfile)
+	if mg.MeteorWeapon != "" || mg.MeteorRadius != 0 || mg.MeteorDensity != 0 || mg.MeteorDuration != 0 || mg.MeteorInterval != 0 {
+		t.Fatalf("meteor decode defaults empty/0/0.0 [02 map-global keys]; METEOR.TDF substitution happens at storm resolution [02 meteor merge] got %q/%d/%f/%f/%f", mg.MeteorWeapon, mg.MeteorRadius, mg.MeteorDensity, mg.MeteorDuration, mg.MeteorInterval)
 	}
-	if mg.MaxUnits != 250 {
-		t.Fatalf("maxunits 250 [P1-02 §2.1] got %d", mg.MaxUnits)
+	if mg.UpdateTime != 0 || mg.WinLoseTime != 0 || mg.DisplayTimer != 0 {
+		t.Fatalf("sibling timers i32 default 0 [08 player records] got %d/%d/%d", mg.UpdateTime, mg.WinLoseTime, mg.DisplayTimer)
+	}
+}
+
+// TestMissionGlobalsNilSection: a missing GlobalHeader is fatal upstream [02
+// mission-file diagnostics]; the nil path mirrors decoding an empty section.
+func TestMissionGlobalsNilSection(t *testing.T) {
+	mg := DecodeMissionGlobals(nil)
+	if mg == nil {
+		t.Fatal("nil section should yield accessor defaults, not nil")
+	}
+	if mg.MaxUnits != 200 || mg.KillMul != 0 || mg.HumanMetal != 0 {
+		t.Fatal("nil section defaults must equal the empty-section decode [02 map-global keys]")
+	}
+	if mg.MissionDescription != "No description available" {
+		t.Fatalf("missiondescription fallback [02 map-global keys] got %q", mg.MissionDescription)
 	}
 }
 
@@ -108,6 +165,7 @@ func TestMissionGlobalsDefaults(t *testing.T) {
 func TestMissionGlobalsAuthoritativeDecoding(t *testing.T) {
 	sec := mustParseGlobalsTDF(t, `[GlobalHeader]
 {
+    numplayers=2, 4;
     HumanMetal=1500;
     HumanEnergy=2000;
     ComputerMetal=1200;
@@ -132,8 +190,17 @@ func TestMissionGlobalsAuthoritativeDecoding(t *testing.T) {
 }
 `)
 	mg := DecodeMissionGlobals(sec)
+	if mg.NumPlayers != "2, 4" {
+		t.Fatalf("numplayers is the authored string [02 map-global keys][fmt ota] got %q", mg.NumPlayers)
+	}
 	if mg.HumanMetal != 1500 || mg.HumanEnergy != 2000 {
-		t.Fatalf("human resources decode [P1-02 §2.1] got %f/%f", mg.HumanMetal, mg.HumanEnergy)
+		t.Fatalf("human resources decode [P1-02 §2.1] got %d/%d", mg.HumanMetal, mg.HumanEnergy)
+	}
+	if mg.ComputerMetal != 1200 || mg.ComputerEnergy != 1800 {
+		t.Fatalf("computer resources decode [02 map-global keys] got %d/%d", mg.ComputerMetal, mg.ComputerEnergy)
+	}
+	if mg.MaxUnits != 100 {
+		t.Fatalf("maxunits authored override [02 map-global keys] got %d", mg.MaxUnits)
 	}
 	if mg.SurfaceMetal != 5 {
 		t.Fatalf("SurfaceMetal 5 [P1-02 §2.1]")
@@ -155,6 +222,12 @@ func TestMissionGlobalsAuthoritativeDecoding(t *testing.T) {
 	}
 	if mg.KillMul != 2.0 || mg.TimeMul != 0.5 {
 		t.Fatalf("score multipliers [P1-02 §2.1]")
+	}
+	if mg.MinWind != 50 || mg.MaxWind != 500 || mg.Gravity != 900 {
+		t.Fatalf("authored wind/gravity override the decode defaults [02 map-global keys] got %d/%d/%d", mg.MinWind, mg.MaxWind, mg.Gravity)
+	}
+	if mg.TidalStrength != 1.5 {
+		t.Fatalf("authored tidal override [02 map-global keys] got %f", mg.TidalStrength)
 	}
 	if mg.UseOnlyUnitsPath != "camps/useonly/Ac02.tdf" {
 		t.Fatalf("UseOnlyUnits routing camps\\useonly [P1-02 §2.1] got %q", mg.UseOnlyUnitsPath)

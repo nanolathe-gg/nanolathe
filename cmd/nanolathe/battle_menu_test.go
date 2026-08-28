@@ -103,10 +103,10 @@ func TestBattleMenuTabCloseConsumesClosingFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := cl.Input()
-	in.Kbd.InjectKey(input.KeyTab, true)
-	in.Kbd.InjectKey(input.KeyM, true)
-	in.Mouse.InjectMouseMove(200, 200)
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, true)
+	in.Kbd.SetKey(input.KeyTab, true)
+	in.Kbd.SetKey(input.KeyM, true)
+	in.Mouse.SetPosition(200, 200)
+	in.Mouse.SetButton(input.MouseButtonLeft, true)
 
 	// The frame starts modal, so Tab closes ARMOPT but the simultaneous M and
 	// mouse edges must not arm an order or enqueue a world action [07 §2][07 §3].
