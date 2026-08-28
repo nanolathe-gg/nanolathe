@@ -78,15 +78,7 @@ const (
 //	  path unwired rather than forcing it [04 §7.4] UNKNOWN frequency.
 //
 // All other orders => PointGoal(radius 0) [04 §7.2] C8.
-func (s *System) GoalForOrder(goalCell path.Cell, n *orders.Node) path.Goal {
-	return s.goalForOrder(goalCell, n)
-}
-
 func (s *System) goalForOrder(goalCell path.Cell, n *orders.Node) path.Goal {
-	return s.goalForOrderInternal(goalCell, n)
-}
-
-func (s *System) goalForOrderInternal(goalCell path.Cell, n *orders.Node) path.Goal {
 	if n == nil {
 		return path.PointGoal(goalCell, 0)
 	}

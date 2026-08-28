@@ -26,9 +26,6 @@ func isHostile(actor, target *units.Unit) bool {
 	if fn := getHostility(actor); fn != nil {
 		return fn(actor, target)
 	}
-	if legacyHostility != nil {
-		return legacyHostility(actor, target)
-	}
 	if actor == nil || target == nil {
 		return false
 	}
@@ -38,20 +35,14 @@ func isHostile(actor, target *units.Unit) bool {
 	return actor.Owner != target.Owner
 }
 
-// Legacy setters retained for test compatibility but now operate per-queue when possible [P0-I16].
-// Prefer setting QueueForUnit(actor).Hostility directly or via Service.
-// These legacy setters set a fallback on a hidden default queue used only when actor's queue has no Hostility.
-var legacyHostility func(*units.Unit, *units.Unit) bool
+// Target lookup remains a package fallback because transport resolution uses it
+// when a carrier has no per-queue lookup [04 §3.5][04 §10.2].
 var legacyLookup func(pool.Handle) *units.Unit
-
-// SetHostilityFunc overrides hostility testing for fixtures [04 §3.4] TODO(question) [P0-I16 legacy].
-func SetHostilityFunc(fn func(*units.Unit, *units.Unit) bool) { legacyHostility = fn }
 
 // BindTargetLookup installs the target lookup used by chase and guard ward resolution [04 §3.5] [P0-I16 legacy].
 func BindTargetLookup(fn func(pool.Handle) *units.Unit) { legacyLookup = fn }
 
-func getLegacyHostility() func(*units.Unit, *units.Unit) bool { return legacyHostility }
-func getLegacyLookup() func(pool.Handle) *units.Unit          { return legacyLookup }
+func getLegacyLookup() func(pool.Handle) *units.Unit { return legacyLookup }
 
 // Capability gates map to definition flags [04 §2.2]/[04 §2.4] with TODO(T25) opaque handling.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.

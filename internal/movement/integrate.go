@@ -4,13 +4,9 @@
 // surfaces for gate-2 and later phases. It bridges units.World, orders queues, the path.Scheduler,
 // and the ground/flight integrators.
 //
-// Public API per PLAN_07:
-//
-//	func Integrate(u *units.Unit, w *world.Terrain, tick uint32)
-//	func IntegrateFlight(u *units.Unit, w *world.Terrain)
-//
-// Both are provided as thin wrappers that delegate to the System's per-unit state.
-// The System type is the composition root that the kernel's movement window calls each tick.
+// The System type is the composition root that the kernel's movement window
+// calls each tick. Flight integration remains available through the explicit
+// per-unit helper below.
 //
 // Wiring contract [task]:
 //   - Per selected unit issuing Move_Ground: submit path.Request via Scheduler (PointGoal at click cell, radius 0).
@@ -1715,94 +1711,6 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// EmptyRoute reports route absence at entry: with no route the mover still
 	// steers straight at the order goal, so the flag and movement are orthogonal.
 	return StepResult{Handle: handle, DistToGoal: d2, HasRoute: hasRouteAfter, EmptyRoute: !hadRoute, Moved: moved, Blocked: blocked, Arrived: arrived}
-}
-
-// Tick runs the per-unit integration glue for all alive units in w.
-// It is kept for compatibility and documented non-authoritative so the future
-// central loop (units.World sweep that calls BeginTick+loop(StepUnit)+EndTick)
-// replaces it. The implementation is BeginTick + deterministic slot-asc loop of
-// StepUnit + EndTick, preserving the same integration path Tick uses today [task].
-// Mobile occupancy is committed synchronously in sweep order; clear-then-stamp
-// finishes before next slot; vacated cell reusable same tick [04 §8.2] C22.
-func (s *System) Tick(tick uint32, w *units.World) {
-	if s == nil || w == nil {
-		return
-	}
-	// Bind world for per-unit calls.
-	s.world = w
-	s.BeginTick(tick) // shared per-tick indexing built once [task]
-	// Deterministic snapshot of handles: player 0..9 asc then slot asc [I1].
-	// Iterate over snapshot so vacancy reuse same tick is visible via Grid but
-	// iteration order is stable.
-	units := w.IterSliced()
-	for _, u := range units {
-		if u == nil || !u.Alive {
-			continue
-		}
-		// StepUnit advances ONLY that unit through the same integration path [task]
-		_ = s.StepUnit(u.Handle, tick)
-	}
-	s.EndTick(tick) // cargo slaving + pad repair + clear per-tick state
-}
-
-// Integrate is the ground integrator wrapper required by PLAN_07 Public API.
-// It delegates to the per-unit SteerState when a System has been bound to the unit
-// via EnsureUnit, otherwise it no-ops. The world terrain is used for pitch/height.
-func Integrate(u *units.Unit, w *world.Terrain, tick uint32) {
-	_ = tick
-	if u == nil || w == nil {
-		return
-	}
-	// This wrapper is for external callers that don't hold a System. It creates a
-	// transient SteerState from the unit's def and terrain, steps once toward the
-	// order's goal if any, and writes back. It is not the scheduler-driven path;
-	// the System.Tick path is preferred for gate2.
-	q := orders.QueueForUnit(u)
-	if q == nil || q.LenPrimary() == 0 {
-		return
-	}
-	head := q.Primary()[0]
-	if head == nil {
-		return
-	}
-	goalX := head.GoalX
-	goalZ := head.GoalZ
-	dx := int64(goalX) - int64(u.X)
-	dz := int64(goalZ) - int64(u.Z)
-	if dx == 0 && dz == 0 {
-		return
-	}
-	desired := headingFromDelta(dx, dz)
-	steer := &SteerState{
-		X:            int32(u.X.Raw()),
-		Z:            int32(u.Z.Raw()),
-		Heading:      0,
-		MaxVelocity:  int32(u.Def.MaxVelocity),
-		TurnRate:     int32(u.Def.TurnRate),
-		HeightWord:   int16(u.Y.Raw() >> 16),
-		SeaLevel:     w.SeaLevel,
-		PitchScale:   int32(u.Def.PitchScale),
-		BankScale:    int32(u.Def.BankScale),
-		Acceleration: int32(u.Def.Acceleration),
-		BrakeRate:    int32(u.Def.BrakeRate),
-	}
-	var f uint32
-	if u.Def.CanHover {
-		f |= 0x1000
-	}
-	if u.Def.Floater {
-		f |= 0x80000
-	}
-	steer.DefFlags = f
-	steer.UpdateHeading(desired)
-	steer.UpdatePitch(steer.PendingHeading) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	cap := steer.SpeedCapFromPitch()        // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Transient wrapper: no history, treat as hasWaypoint true with large dist for accel [M3]
-	steer.UpdateSpeedWithBraking(cap, true, 1<<30, false) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	steer.Integrate()
-	u.X = numeric.Fixed(int64(steer.X))
-	u.Z = numeric.Fixed(int64(steer.Z))
-	u.Y = w.HeightAt(u.X, u.Z)
 }
 
 // IntegrateFlight is the can-fly branch wrapper [04 §10.1] C26–C30.

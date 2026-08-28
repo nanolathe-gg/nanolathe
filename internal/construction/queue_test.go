@@ -23,8 +23,8 @@ func TestCoalesceTailOnly(t *testing.T) {
 	}
 	// Ensure clean.
 	// Identical product at tail merges [C20][05 "Queue insertion"].
-	if err := QueueBuild(f, "armflash", 2); err != nil {
-		t.Fatalf("QueueBuild A 2: %v", err)
+	if err := QueueFactoryBuild(f, "armflash", 2, nil); err != nil {
+		t.Fatalf("QueueFactoryBuild A 2: %v", err)
 	}
 	if q.LenPrimary() != 1 {
 		t.Fatalf("after first A len %d want 1", q.LenPrimary())
@@ -33,8 +33,8 @@ func TestCoalesceTailOnly(t *testing.T) {
 	if n.Param2 != 2 {
 		t.Fatalf("first A Param2 %d want 2", n.Param2)
 	}
-	if err := QueueBuild(f, "armflash", 3); err != nil {
-		t.Fatalf("QueueBuild A again: %v", err)
+	if err := QueueFactoryBuild(f, "armflash", 3, nil); err != nil {
+		t.Fatalf("QueueFactoryBuild A again: %v", err)
 	}
 	if q.LenPrimary() != 1 {
 		t.Fatalf("identical tail should merge len %d want 1", q.LenPrimary())
@@ -43,15 +43,15 @@ func TestCoalesceTailOnly(t *testing.T) {
 		t.Fatalf("coalesced count %d want 5", got)
 	}
 	// Distinct product never merged [C20].
-	if err := QueueBuild(f, "armflea", 1); err != nil {
-		t.Fatalf("QueueBuild distinct: %v", err)
+	if err := QueueFactoryBuild(f, "armflea", 1, nil); err != nil {
+		t.Fatalf("QueueFactoryBuild distinct: %v", err)
 	}
 	if q.LenPrimary() != 2 {
 		t.Fatalf("distinct product should not coalesce len %d want 2", q.LenPrimary())
 	}
 	// Identical product separated from tail never merged [C20][04 §3.3].
-	if err := QueueBuild(f, "armflash", 1); err != nil {
-		t.Fatalf("QueueBuild separated identical: %v", err)
+	if err := QueueFactoryBuild(f, "armflash", 1, nil); err != nil {
+		t.Fatalf("QueueFactoryBuild separated identical: %v", err)
 	}
 	if q.LenPrimary() != 3 {
 		t.Fatalf("separated identical should not coalesce len %d want 3", q.LenPrimary())
@@ -96,10 +96,10 @@ func TestCoalesceTailOnly(t *testing.T) {
 	// Case-insensitive: canonical key lowercases [02 §5]
 	q2Factory := &units.Unit{Handle: 2, Owner: 0}
 	_ = orders.QueueForUnit(q2Factory) // ensure queue
-	if err := QueueBuild(q2Factory, "ArmFlash", 1); err != nil {
+	if err := QueueFactoryBuild(q2Factory, "ArmFlash", 1, nil); err != nil {
 		t.Fatalf("case variant build: %v", err)
 	}
-	if err := QueueBuild(q2Factory, "armflash", 2); err != nil {
+	if err := QueueFactoryBuild(q2Factory, "armflash", 2, nil); err != nil {
 		t.Fatalf("case variant coalesce: %v", err)
 	}
 	q2 := orders.QueueForUnit(q2Factory)
@@ -113,10 +113,10 @@ func TestCancelTailMostTombstone(t *testing.T) {
 	f2 := &units.Unit{Handle: 3, Owner: 0}
 	q := orders.QueueForUnit(f2)
 	// Build queue: A, B where A is head active, B is tail non-head.
-	if err := QueueBuild(f2, "armflash", 1); err != nil {
+	if err := QueueFactoryBuild(f2, "armflash", 1, nil); err != nil {
 		t.Fatalf("build A: %v", err)
 	}
-	if err := QueueBuild(f2, "armflea", 1); err != nil {
+	if err := QueueFactoryBuild(f2, "armflea", 1, nil); err != nil {
 		t.Fatalf("build B: %v", err)
 	}
 	if q.LenPrimary() != 2 {
@@ -144,7 +144,7 @@ func TestCancelTailMostTombstone(t *testing.T) {
 	// Count decrement case: enqueue count 5, cancel one should decrement Param2 not remove node
 	f3 := &units.Unit{Handle: 4, Owner: 0}
 	q3 := orders.QueueForUnit(f3)
-	if err := QueueBuild(f3, "armflash", 5); err != nil {
+	if err := QueueFactoryBuild(f3, "armflash", 5, nil); err != nil {
 		t.Fatalf("build count5: %v", err)
 	}
 	if q3.Primary()[0].Param2 != 5 {
@@ -205,10 +205,10 @@ func TestVerbatimExhaustionMessage(t *testing.T) {
 
 func TestNoQueueReservation(t *testing.T) {
 	// C23: per-def limits enforced ONLY at nanoframe allocation — no queue reservation [P0-I16].
-	// QueueBuild must succeed even when Service.LimitChecker says exhausted.
+	// QueueFactoryBuild must succeed even when Service.LimitChecker says exhausted.
 	f := &units.Unit{Handle: 5, Owner: 0}
-	if err := QueueBuild(f, "armflash", 1); err != nil {
-		t.Fatalf("QueueBuild should not enforce limit [C23], got %v", err)
+	if err := QueueFactoryBuild(f, "armflash", 1, nil); err != nil {
+		t.Fatalf("QueueFactoryBuild should not enforce limit [C23], got %v", err)
 	}
 	q := orders.QueueForUnit(f)
 	if q.LenPrimary() != 1 {
@@ -237,6 +237,6 @@ func TestNoSecondQueueType(t *testing.T) {
 	// Architectural assertion: construction does not define its own queue type;
 	// all factory products live on orders.Node primary segment via orders.Queue [C15].
 	// This is asserted by the absence of a local queue struct and by using orders.QueueForUnit
-	// in QueueBuild/CancelTailMost. If a local queue type appears, this comment fails review.
-	t.Log("no second queue type: QueueBuild/CancelTailMost use orders.Queue and orders.Node only [C15]")
+	// in QueueFactoryBuild/CancelTailMost. If a local queue type appears, this comment fails review.
+	t.Log("no second queue type: QueueFactoryBuild/CancelTailMost use orders.Queue and orders.Node only [C15]")
 }

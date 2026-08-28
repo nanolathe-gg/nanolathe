@@ -92,7 +92,10 @@ func TestMuzzleWorldPosComposesMappedRotatedHierarchy(t *testing.T) {
 	binding := &cob.Binding{VM: vm, Model: mdl, PieceMap: []int{1, 0}}
 	u := &units.Unit{X: numeric.FixedFromInt(100), Y: numeric.FixedFromInt(7), Z: numeric.FixedFromInt(-20), Script: vm, ScriptState: &units.ScriptState{VM: vm, Binding: binding}}
 
-	got := muzzleWorldPos(u, 0)
+	got, ok := muzzleWorldPosResolved(u, 0)
+	if !ok {
+		t.Fatal("strict binding did not resolve muzzle piece")
+	}
 	states := make([]model.PieceState, len(mdl.Pieces))
 	states[1] = vm.Pieces[0]
 	states[0] = vm.Pieces[1]

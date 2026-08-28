@@ -96,10 +96,9 @@ type Player struct {
 type Service struct {
 	Players          [10]Player
 	unitBuckets      []UnitEconomy
-	OnSettle         func(p int, tick uint32) // notification-only diagnostic seam fired at settlement entry (WU-08-2/08-3 merge); production wiring leaves it nil [05 "Authoritative settlement order"] C7
-	ReferencePlayer  int                      // reference/local player for ShareTick dispatcher [05 "Allied resource and sensor sharing"] C12
-	SensorShareCalls int                      // diagnostic: sensor sharing invocations at tick%450==0 [05]
-	EconomySelector  *int                     // global selector at 0x37EEE for negative energyUse refund discount [P1-06] 0=>-0.5 1=>-0.7
+	ReferencePlayer  int  // reference/local player for ShareTick dispatcher [05 "Allied resource and sensor sharing"] C12
+	SensorShareCalls int  // diagnostic: sensor sharing invocations at tick%450==0 [05]
+	EconomySelector  *int // global selector at 0x37EEE for negative energyUse refund discount [P1-06] 0=>-0.5 1=>-0.7
 
 	// CloakCost reports a unit's per-pass cloak upkeep, or zero when the unit
 	// is not cloaked [05 "Cloak debit"] C13. It is a seam rather than a field

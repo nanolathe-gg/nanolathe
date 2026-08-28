@@ -410,7 +410,7 @@ func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 	// Tick movement + sync carried
 	for tick := uint32(1); tick < 250; tick++ {
 		sys.Scheduler.Tick(tick)
-		sys.Tick(tick, w)
+		runMovementTick(sys, tick, w)
 		// Check carried slave: cargo should equal carrier position after slave
 		c := w.Unit(ch)
 		tUnit := w.Unit(th)
@@ -427,7 +427,7 @@ func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 	// Let altitude settle after horizontal arrival [04 §10.1] vertical clamp yLimit speed/4
 	for tick := uint32(250); tick < 300; tick++ {
 		sys.Scheduler.Tick(tick)
-		sys.Tick(tick, w)
+		runMovementTick(sys, tick, w)
 	}
 	// Validate final carrier near target
 	ct := w.Unit(th)
@@ -569,7 +569,7 @@ func TestVerticalSlice_GunshipTakeoffMoveLand(t *testing.T) {
 	// Tick flight to pad vicinity; flight integrator should climb to cruisealt and move horizontally [04 §10.1]
 	for tick := uint32(1); tick < 250; tick++ {
 		sys.Scheduler.Tick(tick)
-		sys.Tick(tick, w)
+		runMovementTick(sys, tick, w)
 		gun := w.Unit(gh)
 		dx := int64(gun.X) - int64(targetX)
 		dz := int64(gun.Z) - int64(targetZ)
@@ -580,7 +580,7 @@ func TestVerticalSlice_GunshipTakeoffMoveLand(t *testing.T) {
 	// Extra settle for vertical [04 §10.1] yLimit speed/4
 	for tick := uint32(250); tick < 300; tick++ {
 		sys.Scheduler.Tick(tick)
-		sys.Tick(tick, w)
+		runMovementTick(sys, tick, w)
 	}
 	gun := w.Unit(gh)
 	dx := int64(gun.X) - int64(targetX)
@@ -634,7 +634,7 @@ func TestVerticalSlice_GunshipTakeoffMoveLand(t *testing.T) {
 	pad2.Z = pad.Z
 	// Tick repair
 	for i := 0; i < 10; i++ {
-		sys.Tick(uint32(100+i), w)
+		runMovementTick(sys, uint32(100+i), w)
 	}
 	if gun.Health <= 100 {
 		t.Fatalf("air repair should heal on pad [04 §10.2] pad heals, got %d", gun.Health)
@@ -755,7 +755,7 @@ func TestDeterminism_TransportSlice(t *testing.T) {
 		q.Push(id, orders.Node{GoalX: targetX, GoalZ: targetZ})
 		for tick := uint32(1); tick < 10; tick++ {
 			sys.Scheduler.Tick(tick)
-			sys.Tick(tick, w)
+			runMovementTick(sys, tick, w)
 		}
 		u := w.Unit(handles[0])
 		c := w.Unit(handles[1])

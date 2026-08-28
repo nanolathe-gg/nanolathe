@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -23,6 +24,25 @@ func progWithAim(code []uint32, scriptName string, pc int) *cob.Program {
 		Pieces:      []string{"base"},
 		Statics:     0,
 		ScriptsByID: byID,
+	}
+}
+
+func attachTestCOB(u *units.Unit, vm *cob.VM) {
+	if u == nil {
+		return
+	}
+	u.Script = vm
+	if vm == nil {
+		u.ScriptState = nil
+		return
+	}
+	binding := &cob.Binding{
+		VM: vm, Callbacks: cob.NewCallbackBridge(vm),
+		Model: &model.Model{Root: 0, Pieces: []model.Piece{{Parent: -1}}}, PieceMap: []int{0},
+	}
+	u.ScriptState = &units.ScriptState{VM: vm, Binding: binding}
+	for i := range u.Slots {
+		u.Slots[i].MuzzlePiece = 0
 	}
 }
 
@@ -77,7 +97,7 @@ func TestON04_AimReturnsZero_NoProjectile_LatchPreserved(t *testing.T) {
 	}
 	prog := progWithAim(code, "AimPrimary", 0)
 	vm := cob.NewVM(prog)
-	shooter.SetScript(vm)
+	attachTestCOB(shooter, vm)
 	weapon := weaponTurret(1)
 	shooter.InstallWeapon(0, weapon)
 	slot := shooter.SlotAt(0)
@@ -85,12 +105,10 @@ func TestON04_AimReturnsZero_NoProjectile_LatchPreserved(t *testing.T) {
 	slot.Flags |= 0x02
 	slot.Reload = 0
 	var svc Service
-	var traces []TraceEvent
-	svc.Trace = func(ev TraceEvent) { traces = append(traces, ev) }
 	// Need catalog
 	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w1": weapon}}
 	cat.RebuildWeaponIndex()
-	svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
+	sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
 	if svc.Count() != 0 {
 		t.Fatalf("aim 0 should not create projectile, count %d", svc.Count())
 	}
@@ -100,18 +118,10 @@ func TestON04_AimReturnsZero_NoProjectile_LatchPreserved(t *testing.T) {
 	if slot.Aim.Ready {
 		t.Fatalf("Ready should stay false on zero return [06 §3.3]")
 	}
-	// Check trace contains aim_return_zero
-	found := false
-	for _, ev := range traces {
-		if ev.Event == "aim_return_zero" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("trace missing aim_return_zero, traces %v", traces)
+	if !sum.ReturnSeen || sum.ReturnValue != 0 {
+		t.Fatalf("want explicit zero Aim return, got %+v", sum)
 	}
 	// Second tick: should still not fire, still blocked, no new dispatch
-	traces = nil
 	svc.StepWeaponsForUnit(shooter, 2, w, nil, terrain, nil, cat, nil, nil)
 	if svc.Count() != 0 {
 		t.Fatalf("second tick with zero return should still not fire")
@@ -126,7 +136,7 @@ func TestON04_AimReturnsNonzero_Fires(t *testing.T) {
 	}
 	prog := progWithAim(code, "AimPrimary", 0)
 	vm := cob.NewVM(prog)
-	shooter.SetScript(vm)
+	attachTestCOB(shooter, vm)
 	weapon := weaponTurret(2)
 	shooter.InstallWeapon(0, weapon)
 	slot := shooter.SlotAt(0)
@@ -134,31 +144,17 @@ func TestON04_AimReturnsNonzero_Fires(t *testing.T) {
 	slot.Flags |= 0x02
 	slot.Reload = 0
 	var svc Service
-	var traces []TraceEvent
-	svc.Trace = func(ev TraceEvent) { traces = append(traces, ev) }
 	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w1": weapon}}
 	cat.RebuildWeaponIndex()
-	svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
+	sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
 	if svc.Count() != 1 {
-		t.Fatalf("aim 1 should create projectile when gates pass, count %d traces %v", svc.Count(), traces)
+		t.Fatalf("aim 1 should create projectile when gates pass, count %d", svc.Count())
 	}
 	if slot.Aim.IssueBit || slot.Aim.Ready {
 		t.Fatalf("after successful fire latch and ready should be cleared [06 §3.3], IssueBit %v Ready %v", slot.Aim.IssueBit, slot.Aim.Ready)
 	}
-	foundDispatch, foundReturn, foundFire := false, false, false
-	for _, ev := range traces {
-		if ev.Event == "aim_dispatch" {
-			foundDispatch = true
-		}
-		if ev.Event == "aim_return_nonzero" {
-			foundReturn = true
-		}
-		if ev.Event == "fire" {
-			foundFire = true
-		}
-	}
-	if !foundDispatch || !foundReturn || !foundFire {
-		t.Fatalf("traces missing dispatch/return/fire: %v", traces)
+	if !sum.Dispatched || !sum.ReturnSeen || sum.ReturnValue == 0 || sum.Fired == 0 {
+		t.Fatalf("missing dispatch/return/fire summary: %+v", sum)
 	}
 }
 
@@ -173,40 +169,31 @@ func TestON04_AimSleeping_NoFireBeforeWake(t *testing.T) {
 	}
 	prog := progWithAim(code, "AimPrimary", 0)
 	vm := cob.NewVM(prog)
-	shooter.SetScript(vm)
+	attachTestCOB(shooter, vm)
 	weapon := weaponTurret(3)
 	shooter.InstallWeapon(0, weapon)
 	slot := shooter.SlotAt(0)
 	slot.Target = units.Target{Kind: units.TargetUnit, Unit: target.Handle}
 	slot.Flags |= 0x02
 	var svc Service
-	var traces []TraceEvent
-	svc.Trace = func(ev TraceEvent) { traces = append(traces, ev) }
 	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w1": weapon}}
 	cat.RebuildWeaponIndex()
 	// Tick 1: dispatch, drain makes sleeping, no fire
-	svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
+	sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
 	if svc.Count() != 0 {
 		t.Fatalf("sleeping aim should not fire tick1")
 	}
-	foundSleep := false
-	for _, ev := range traces {
-		if ev.Event == "aim_sleeping" {
-			foundSleep = true
-		}
-	}
-	if !foundSleep {
-		t.Fatalf("expected aim_sleeping trace tick1 %v", traces)
+	if !sum.Dispatched || !sum.Drained {
+		t.Fatalf("expected sleeping Aim dispatch and drain, got %+v", sum)
 	}
 	// Simulate intervening VM drains (units.Tick would do Drain(1) each tick)
 	// Do 3 drains to wake
 	for i := 0; i < 3; i++ {
 		vm.Drain(1)
 	}
-	traces = nil
 	svc.StepWeaponsForUnit(shooter, 2, w, nil, terrain, nil, cat, nil, nil)
 	if svc.Count() != 1 {
-		t.Fatalf("after wake should fire, count %d traces %v", svc.Count(), traces)
+		t.Fatalf("after wake should fire, count %d", svc.Count())
 	}
 }
 
@@ -218,7 +205,7 @@ func TestON04_SameTickReturn_FiresSameVisit(t *testing.T) {
 	}
 	prog := progWithAim(code, "AimPrimary", 0)
 	vm := cob.NewVM(prog)
-	shooter.SetScript(vm)
+	attachTestCOB(shooter, vm)
 	weapon := weaponTurret(4)
 	shooter.InstallWeapon(0, weapon)
 	slot := shooter.SlotAt(0)
@@ -238,29 +225,18 @@ func TestON04_NoScript_CannotAuthorizeAim(t *testing.T) {
 	w, terrain, shooter, target := newTestWorldAndUnits(t)
 	// No VM bound (nil)
 	// Ensure shooter has no script
-	shooter.SetScript(nil)
+	attachTestCOB(shooter, nil)
 	weapon := weaponTurret(5)
 	shooter.InstallWeapon(0, weapon)
 	slot := shooter.SlotAt(0)
 	slot.Target = units.Target{Kind: units.TargetUnit, Unit: target.Handle}
 	slot.Flags |= 0x02
 	var svc Service
-	var traces []TraceEvent
-	svc.Trace = func(ev TraceEvent) { traces = append(traces, ev) }
 	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w1": weapon}}
 	cat.RebuildWeaponIndex()
 	svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
 	if svc.Count() != 0 {
-		t.Fatalf("no-script turret must not authorize fire [04 §5.3], count %d traces %v", svc.Count(), traces)
-	}
-	found := false
-	for _, ev := range traces {
-		if ev.Event == "aim_no_script" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("missing aim_no_script trace %v", traces)
+		t.Fatalf("no-script turret must not authorize fire [04 §5.3], count %d", svc.Count())
 	}
 }
 
@@ -276,46 +252,34 @@ func TestON04_ScriptWithoutAimPrimary_Blocked(t *testing.T) {
 		ScriptsByID: []int{0},
 	}
 	vm := cob.NewVM(prog)
-	shooter.SetScript(vm)
+	attachTestCOB(shooter, vm)
 	weapon := weaponTurret(6)
 	shooter.InstallWeapon(0, weapon)
 	slot := shooter.SlotAt(0)
 	slot.Target = units.Target{Kind: units.TargetUnit, Unit: target.Handle}
 	slot.Flags |= 0x02
 	var svc Service
-	var traces []TraceEvent
-	svc.Trace = func(ev TraceEvent) { traces = append(traces, ev) }
 	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w1": weapon}}
 	cat.RebuildWeaponIndex()
 	svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
 	if svc.Count() != 0 {
 		t.Fatalf("script without AimPrimary turret should be blocked, count %d", svc.Count())
 	}
-	found := false
-	for _, ev := range traces {
-		if ev.Event == "aim_function_absent" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("missing aim_function_absent trace %v", traces)
-	}
 	// Non-turret should still fire even with absent Aim (since no gating)
 	weapon2 := weaponNonTurret(7)
 	shooter.SlotAt(0).Weapon = weapon2
 	shooter.SlotAt(0).Aim = cob.AimSlot{}
 	shooter.SlotAt(0).Flags |= 0x02
-	traces = nil
-	svc2 := Service{Trace: func(ev TraceEvent) { traces = append(traces, ev) }}
+	svc2 := Service{}
 	// Need new VM still without AimPrimary
 	vm2 := cob.NewVM(prog)
-	shooter.SetScript(vm2)
+	attachTestCOB(shooter, vm2)
 	cat2 := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w2": weapon2}}
 	cat2.RebuildWeaponIndex()
 	svc2.StepWeaponsForUnit(shooter, 2, w, nil, terrain, nil, cat2, nil, nil)
 	// For non-turret, Aim not required, so should fire even though Aim absent
 	if svc2.Count() != 1 {
-		t.Fatalf("non-turret with absent Aim should fire (no gating), count %d traces %v", svc2.Count(), traces)
+		t.Fatalf("non-turret with absent Aim should fire (no gating), count %d", svc2.Count())
 	}
 }
 
@@ -361,39 +325,57 @@ func TestON04_DuplicateIDsDiagnosed(t *testing.T) {
 }
 
 func TestON04_TwoSeededRuns_Identical(t *testing.T) {
-	// Two runs with same seed produce identical projectile/callback traces ON-04 (I4)
-	run := func(seed uint32) ([]TraceEvent, int) {
+	// Two runs with same seed produce identical event and RNG-sensitive projectile
+	// state ON-04 (I4), not merely the same allocation count.
+	type seededRun struct {
+		events      []Event
+		projectiles []Projectile
+	}
+	run := func(seed uint32) seededRun {
 		r := rng.NewSimulation(seed)
 		w, terrain, shooter, target := newTestWorldAndUnits(&testing.T{})
-		_ = terrain
-		// Use non-turret weapon to avoid Aim gating, with spray to test RNG determinism
-		weapon := &content.WeaponDef{ID: 1, Range: 1000 * 65536, SprayAngle: 10, Burst: 0, LineOfSight: true}
+		// Use non-turret weapon to avoid Aim gating, with spread and start events
+		// so both RNG-sensitive state and event order are observed.
+		weapon := &content.WeaponDef{
+			ID: 1, Range: 1000 * 65536, WeaponVelocity: int32(numeric.FixedFromInt(4)),
+			SprayAngle: 10, Burst: 0, LineOfSight: true, SoundStart: "seeded-start", StartSmoke: true,
+		}
 		shooter.InstallWeapon(0, weapon)
 		slot := shooter.SlotAt(0)
 		slot.Target = units.Target{Kind: units.TargetUnit, Unit: target.Handle}
 		slot.Flags |= 0x02
-		// No VM, so no Aim
 		var svc Service
-		var traces []TraceEvent
-		svc.Trace = func(ev TraceEvent) { traces = append(traces, ev) }
+		var events []Event
+		svc.Events = func(ev Event) { events = append(events, ev) }
 		cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w": weapon}}
 		cat.RebuildWeaponIndex()
-		ww := w
-		_ = ww
-		svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, &r, nil)
-		return traces, svc.Count()
+		sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, &r, nil)
+		if sum.Fired != 1 {
+			t.Fatalf("seeded run fired %d shots, want 1", sum.Fired)
+		}
+		projectiles := make([]Projectile, svc.Count())
+		copy(projectiles, svc.Records[:svc.Count()])
+		return seededRun{events: events, projectiles: projectiles}
 	}
-	tr1, cnt1 := run(42)
-	tr2, cnt2 := run(42)
-	if cnt1 != cnt2 {
-		t.Fatalf("counts differ %d vs %d", cnt1, cnt2)
+	first, second := run(42), run(42)
+	if len(first.events) != len(second.events) {
+		t.Fatalf("event counts differ %d vs %d", len(first.events), len(second.events))
 	}
-	if len(tr1) != len(tr2) {
-		t.Fatalf("trace len differ %d vs %d", len(tr1), len(tr2))
+	for i := range first.events {
+		if first.events[i] != second.events[i] {
+			t.Fatalf("event %d differs: first=%+v second=%+v", i, first.events[i], second.events[i])
+		}
 	}
-	for i := range tr1 {
-		if tr1[i].Event != tr2[i].Event || tr1[i].Slot != tr2[i].Slot {
-			t.Fatalf("trace diff at %d %v vs %v", i, tr1[i], tr2[i])
+	if len(first.projectiles) != len(second.projectiles) {
+		t.Fatalf("projectile counts differ %d vs %d", len(first.projectiles), len(second.projectiles))
+	}
+	for i := range first.projectiles {
+		p, q := first.projectiles[i], second.projectiles[i]
+		if p.Velocity != q.Velocity || p.Yaw != q.Yaw || p.Pitch != q.Pitch || p.Speed != q.Speed {
+			t.Fatalf("RNG-sensitive projectile %d differs: first velocity=%+v yaw=%d pitch=%d speed=%d; second velocity=%+v yaw=%d pitch=%d speed=%d", i, p.Velocity, p.Yaw, p.Pitch, p.Speed, q.Velocity, q.Yaw, q.Pitch, q.Speed)
+		}
+		if p != q {
+			t.Fatalf("projectile %d state differs: first=%+v second=%+v", i, p, q)
 		}
 	}
 }
@@ -434,19 +416,15 @@ func TestON04_BallisticSentinel_SuppressesAim(t *testing.T) {
 	code := []uint32{0x10021001, 1, 0x10065000}
 	prog := progWithAim(code, "AimPrimary", 0)
 	vm := cob.NewVM(prog)
-	shooter.SetScript(vm)
+	attachTestCOB(shooter, vm)
 	var svc Service
-	var traces []TraceEvent
-	svc.Trace = func(ev TraceEvent) { traces = append(traces, ev) }
 	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w": weapon}}
 	cat.RebuildWeaponIndex()
-	svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
+	sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
 	// Should not have dispatched Aim (no aim_dispatch trace) because velocity 0 triggers goto admission before Aim?
 	// In our stepSlot, we check weapon.Ballistic && vel==0 goto admission before Aim dispatch, so no Aim dispatch.
-	for _, ev := range traces {
-		if ev.Event == "aim_dispatch" {
-			t.Fatalf("ballistic sentinel should suppress Aim dispatch, got dispatch")
-		}
+	if sum.Dispatched {
+		t.Fatalf("ballistic sentinel should suppress Aim dispatch, got %+v", sum)
 	}
 	_ = pool.Handle(0)
 }

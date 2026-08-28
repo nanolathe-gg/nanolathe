@@ -14,18 +14,10 @@ import (
 	"github.com/nanolathe/nanolathe/internal/path"
 )
 
-// Point is a signed integer waypoint coordinate in the route lattice.
-//
-// Alias decision: per PLAN_07/WU-07-6, internal/path has not yet published a
-// canonical Point/Cell type (another agent owns path/types.go concurrently).
-// To avoid coupling we define Point inside movement and note that path's type,
-// when it lands, may be unified via alias (type Cell = Point) without layout
-// change. The conversion from cell to signed world coordinates uses the
-// request's half-footprint bias [04 §7.1][04 §7.3] C13.
-type Point struct {
-	X int32
-	Z int32
-}
+// Point is the canonical published route coordinate from internal/path.
+// The conversion from cell to signed world coordinates uses the request's
+// half-footprint bias [04 §7.1][04 §7.3] C13.
+type Point = path.Point
 
 // Route holds up to 20 waypoints plus active/dirty bits [04 §7.3] C14–C16.
 // Points are packed 4-byte X/Z pairs in the publisher; the save form uses

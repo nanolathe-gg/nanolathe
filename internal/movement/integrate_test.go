@@ -11,6 +11,21 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
+// runMovementTick exercises the production per-unit tick boundary directly.
+// Tests intentionally use the same deterministic world sweep as the session
+// loop rather than a compatibility wrapper.
+func runMovementTick(s *System, tick uint32, w *units.World) {
+	s.BindWorld(w)
+	s.BeginTick(tick)
+	for _, u := range w.IterSliced() {
+		if u == nil || !u.Alive {
+			continue
+		}
+		s.StepUnit(u.Handle, tick)
+	}
+	s.EndTick(tick)
+}
+
 // syntheticTerrainForIntegrate creates a flat 10x10 terrain for integration tests.
 func syntheticTerrainForIntegrate() *world.Terrain {
 	t := &world.Terrain{
@@ -87,7 +102,7 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 	for tick := uint32(2); tick < 200; tick++ {
 		// Scheduler may already be empty, but tick anyway
 		system.Scheduler.Tick(tick)
-		system.Tick(tick, w)
+		runMovementTick(system, tick, w)
 		// Check if route became inactive (arrived)
 		if r := system.Routes[h]; r != nil && !r.Active {
 			break
@@ -153,7 +168,7 @@ func TestIntegrateDeterminism(t *testing.T) {
 		system.Scheduler.Tick(1)
 		for tick := uint32(2); tick < 20; tick++ {
 			system.Scheduler.Tick(tick)
-			system.Tick(tick, w)
+			runMovementTick(system, tick, w)
 		}
 		return int64(u.X), int64(u.Z)
 	}

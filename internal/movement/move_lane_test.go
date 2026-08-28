@@ -128,13 +128,13 @@ func TestMoveLaneSmoothingPolicyAndFootprintLegality(t *testing.T) {
 	kbot := &content.UnitDef{MovementClass: "KBOTSS2"}
 	vehicle := &content.UnitDef{MovementClass: "TANKSH2"}
 	rK := &Route{}
-	rK.Publish([]Point{{0, 0}, {1, 0}, {2, 1}})
+	rK.Publish([]Point{{X: 0, Z: 0}, {X: 1, Z: 0}, {X: 2, Z: 1}})
 	smoothLandRoute(rK, kbot, profile, terrain)
 	if rK.Count != 3 {
 		t.Fatalf("Kbot shortcut cut blocked footprint corner; count=%d", rK.Count)
 	}
 	rV := &Route{}
-	rV.Publish([]Point{{0, 0}, {1, 0}, {2, 0}})
+	rV.Publish([]Point{{X: 0, Z: 0}, {X: 1, Z: 0}, {X: 2, Z: 0}})
 	smoothLandRoute(rV, vehicle, profile, terrain)
 	if rV.Count != 3 {
 		t.Fatalf("vehicle route was smoothed despite conservative policy; count=%d", rV.Count)
@@ -148,7 +148,7 @@ func TestMoveLaneSmoothingPolicyAndFootprintLegality(t *testing.T) {
 		flatTerrain.Plot[i].SetMaxHeight(10)
 	}
 	flatK := &Route{}
-	flatK.Publish([]Point{{0, 0}, {1, 0}, {2, 1}})
+	flatK.Publish([]Point{{X: 0, Z: 0}, {X: 1, Z: 0}, {X: 2, Z: 1}})
 	smoothLandRoute(flatK, kbot, flatProfile, flatTerrain)
 	if flatK.Count != 2 {
 		t.Fatalf("legal Kbot route did not smooth; count=%d", flatK.Count)

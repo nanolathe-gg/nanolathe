@@ -702,6 +702,3 @@ func (b *Bank) Dump() string {
 	}
 	return out.String()
 }
-
-// OpenFile is an alias for Open to provide Bank open/enumerate/account-read seams.
-func OpenFile(path string) (*Bank, error) { return Open(path) }

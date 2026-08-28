@@ -55,11 +55,15 @@ func mkUnit(handle pool.Handle, owner uint8, side string, health, max int32, ali
 	return u
 }
 
-func TestResolveFullTable(t *testing.T) {
-	// P0-I16: per-queue hostility
-	SetHostilityFunc(nil)
-	defer SetHostilityFunc(nil)
+func setTestHostility(u *units.Unit, fn func(*units.Unit, *units.Unit) bool) {
+	QueueForUnit(u).Hostility = fn
+}
 
+func setTestLookup(u *units.Unit, fn func(pool.Handle) *units.Unit) {
+	QueueForUnit(u).Lookup = fn
+}
+
+func TestResolveFullTable(t *testing.T) {
 	actor := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 		d.CanMove = true
 		d.CanAttack = true
@@ -87,10 +91,10 @@ func TestResolveFullTable(t *testing.T) {
 		d.CanMove = true
 		d.Side = "CORE"
 	}))
-	SetHostilityFunc(func(a, b *units.Unit) bool { return a.Def.Side != b.Def.Side })
+	setTestHostility(actor, func(a, b *units.Unit) bool { return a.Def.Side != b.Def.Side })
 	assertResolve(1, hostileTarget, nil, "Attack_Chase")
 	friendlyDamaged := mkUnit(3, 0, "ARM", 50, 100, true, 0, mkDef(nil))
-	SetHostilityFunc(func(a, b *units.Unit) bool { return false })
+	setTestHostility(actor, func(a, b *units.Unit) bool { return false })
 	assertResolve(1, friendlyDamaged, nil, "RepairUnit")
 	transportable := mkUnit(4, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 		d.CantBeTransported = false
@@ -100,7 +104,7 @@ func TestResolveFullTable(t *testing.T) {
 		d.CanAttack = false
 		d.Builder = false
 	}))
-	SetHostilityFunc(func(a, b *units.Unit) bool { return true })
+	setTestHostility(actorNoAttack, func(a, b *units.Unit) bool { return true })
 	id := Resolve(1, actorNoAttack, transportable, nil)
 	if got := DescriptorFor(id).Name; got != "Ground_Pickup" {
 		t.Fatalf("code1 transportable want Ground_Pickup got %q", got)
@@ -112,7 +116,7 @@ func TestResolveFullTable(t *testing.T) {
 		d.CanResurrect = true
 	}))
 	posWreck := &ResolvePos{HasFeature: true, IsWreck: true, FeatureResurrectable: true}
-	SetHostilityFunc(nil)
+	setTestHostility(actorCanResurrect, nil)
 	id = Resolve(1, actorCanResurrect, nil, posWreck)
 	if got := DescriptorFor(id).Name; got != "Resurrect" {
 		t.Fatalf("code1 feature wreck resurrect want Resurrect got %q", got)
@@ -128,7 +132,6 @@ func TestResolveFullTable(t *testing.T) {
 		d.CanAttack = false
 		d.Builder = false
 	}))
-	SetHostilityFunc(nil)
 	id = Resolve(1, actorMove, nil, nil)
 	if got := DescriptorFor(id).Name; got != "Move_Ground" {
 		t.Fatalf("code1 otherwise move want Move_Ground got %q", got)
@@ -153,8 +156,6 @@ func TestResolveFullTable(t *testing.T) {
 		d.CanDGun = true
 		d.Builder = true
 	}))
-	SetHostilityFunc(nil)
-
 	actorNoMove := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanMove = false }))
 	assertRejectForActor := func(code int, a *units.Unit, tgt *units.Unit) {
 		if id := Resolve(code, a, tgt, nil); id != 0 {
@@ -167,17 +168,17 @@ func TestResolveFullTable(t *testing.T) {
 	if got := DescriptorFor(id).Name; got != "QMove" {
 		t.Fatalf("code2 dead want QMove got %q", got)
 	}
-	SetHostilityFunc(func(a, b *units.Unit) bool { return true })
 	actorCapture := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 		d.CanMove = true
 		d.CanCapture = true
 		d.CanReclamate = false
 	}))
+	setTestHostility(actorCapture, func(a, b *units.Unit) bool { return true })
 	id = Resolve(2, actorCapture, hostileTarget, nil)
 	if got := DescriptorFor(id).Name; got != "Capture" {
 		t.Fatalf("code2 hostile capture want Capture got %q", got)
 	}
-	SetHostilityFunc(func(a, b *units.Unit) bool { return false })
+	setTestHostility(actor, func(a, b *units.Unit) bool { return false })
 	friendlyUnfinished := mkUnit(7, 0, "ARM", 100, 100, true, 0.5, mkDef(nil))
 	id = Resolve(2, actor, friendlyUnfinished, nil)
 	if got := DescriptorFor(id).Name; got != "HelpBuild" {
@@ -188,7 +189,7 @@ func TestResolveFullTable(t *testing.T) {
 	if got := DescriptorFor(id).Name; got != "VTOL_Landing" {
 		t.Fatalf("code2 pad want VTOL_Landing got %q", got)
 	}
-	SetHostilityFunc(func(a, b *units.Unit) bool { return false })
+	setTestHostility(actor, func(a, b *units.Unit) bool { return false })
 	carriableUnfinishedFalse := mkUnit(9, 1, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CantBeTransported = false; d.IsAirBase = false }))
 	id = Resolve(2, actor, carriableUnfinishedFalse, nil)
 	if got := DescriptorFor(id).Name; got != "Ground_Pickup" {
@@ -211,8 +212,6 @@ func TestResolveFullTable(t *testing.T) {
 	if got := DescriptorFor(id).Name; got != "VTOL_Move" {
 		t.Fatalf("code2 vtol move want VTOL_Move got %q", got)
 	}
-	SetHostilityFunc(nil)
-
 	actorNoAttack = mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanAttack = false }))
 	assertRejectForActor(3, actorNoAttack, hostileTarget)
 	actorKamikaze := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
@@ -315,7 +314,7 @@ func TestResolveFullTable(t *testing.T) {
 		t.Fatalf("code7 no guard should reject")
 	}
 	friendly := mkUnit(20, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.Side = "ARM" }))
-	SetHostilityFunc(func(a, b *units.Unit) bool { return false })
+	setTestHostility(actor, func(a, b *units.Unit) bool { return false })
 	id = Resolve(7, actor, friendly, nil)
 	if got := DescriptorFor(id).Name; got != "Follow_Ground" {
 		t.Fatalf("code7 follow ground want Follow_Ground got %q", got)
@@ -325,11 +324,11 @@ func TestResolveFullTable(t *testing.T) {
 	if got := DescriptorFor(id).Name; got != "VTOL_Follow" {
 		t.Fatalf("code7 vtol follow want VTOL_Follow got %q", got)
 	}
-	SetHostilityFunc(func(a, b *units.Unit) bool { return true })
+	setTestHostility(actor, func(a, b *units.Unit) bool { return true })
 	if id := Resolve(7, actor, friendly, nil); id != 0 {
 		t.Fatalf("code7 hostile should reject")
 	}
-	SetHostilityFunc(nil)
+	setTestHostility(actor, nil)
 
 	actorNonBuilder := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.Builder = false }))
 	if id := Resolve(8, actorNonBuilder, friendlyDamaged, nil); id != 0 {
@@ -426,11 +425,11 @@ func TestResolveFullTable(t *testing.T) {
 	if id := Resolve(13, actorNoCapture, hostileTarget, nil); id != 0 {
 		t.Fatalf("code13 no capture should reject")
 	}
-	SetHostilityFunc(func(a, b *units.Unit) bool { return false })
+	setTestHostility(actor, func(a, b *units.Unit) bool { return false })
 	if id := Resolve(13, actor, hostileTarget, nil); id != 0 {
 		t.Fatalf("code13 friendly should reject")
 	}
-	SetHostilityFunc(func(a, b *units.Unit) bool { return true })
+	setTestHostility(actor, func(a, b *units.Unit) bool { return true })
 	friendlySameOwner := mkUnit(24, 0, "CORE", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.Side = "CORE" }))
 	friendlySameOwner.Owner = 0
 	if id := Resolve(13, actor, friendlySameOwner, nil); id != 0 {
@@ -441,7 +440,7 @@ func TestResolveFullTable(t *testing.T) {
 	if got := DescriptorFor(id).Name; got != "Capture" {
 		t.Fatalf("code13 capture want Capture got %q", got)
 	}
-	SetHostilityFunc(nil)
+	setTestHostility(actor, nil)
 
 	actorNonBuilder2 := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.Builder = false }))
 	if id := Resolve(14, actorNonBuilder2, nil, nil); id != 0 {
@@ -479,13 +478,13 @@ func TestAttackChaseOrbit(t *testing.T) {
 	actor.Z = numeric.Fixed(0)
 	targetUnit := mkUnit(2, 1, "CORE", 100, 100, true, 0, mkDef(nil))
 	targetUnit.Y = numeric.Fixed(0)
-	BindTargetLookup(func(h pool.Handle) *units.Unit {
+	setTestLookup(actor, func(h pool.Handle) *units.Unit {
 		if h == 99 {
 			return targetUnit
 		}
 		return nil
 	})
-	defer BindTargetLookup(nil)
+	defer setTestLookup(actor, nil)
 
 	n := &Node{
 		ID:          Lookup("Attack_Chase"),
@@ -589,15 +588,15 @@ func TestGuardAssistOrdering(t *testing.T) {
 	// Ward has build order for (d): push HelpBuild onto ward
 	wardQ := QueueForUnit(ward)
 	wardQ.Push(Lookup("HelpBuild"), Node{Target: 99, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z})
-	BindTargetLookup(func(h pool.Handle) *units.Unit {
+	setTestLookup(actor, func(h pool.Handle) *units.Unit {
 		if h == 20 {
 			return ward
 		}
 		return nil
 	})
-	defer BindTargetLookup(nil)
-	SetHostilityFunc(func(a, b *units.Unit) bool { return false })
-	defer SetHostilityFunc(nil)
+	defer setTestLookup(actor, nil)
+	setTestHostility(actor, func(a, b *units.Unit) bool { return false })
+	defer setTestHostility(actor, nil)
 
 	n := &Node{
 		ID:     Lookup("Follow_Ground"),
@@ -685,6 +684,12 @@ func TestGuardAssistOrdering(t *testing.T) {
 	}))
 	actorZero.Handle = 0
 	BindQueue(actorZero, &Queue{})
+	setTestLookup(actorZero, func(h pool.Handle) *units.Unit {
+		if h == 20 {
+			return ward
+		}
+		return nil
+	})
 	// ward still 20, unfinished/damaged so (a) and (c) would be true, but Handle 0 should skip them
 	n2 := &Node{ID: Lookup("Follow_Ground"), Target: 20, Param1: 30, Owner: 0}
 	n2.GoalX = numeric.Fixed(0)
@@ -709,8 +714,8 @@ func TestGuardHandlerMissingWard(t *testing.T) {
 	if code != Code(5) {
 		t.Fatalf("missing ward should abandon code 5 got %d", code)
 	}
-	BindTargetLookup(func(h pool.Handle) *units.Unit { return nil })
-	defer BindTargetLookup(nil)
+	setTestLookup(actor, func(h pool.Handle) *units.Unit { return nil })
+	defer setTestLookup(actor, nil)
 	n.Target = 99
 	code = guardHandler(actor, n, 0)
 	if code != Code(5) {

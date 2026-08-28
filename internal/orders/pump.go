@@ -226,43 +226,6 @@ func (p *Pump) PumpUnit(handle pool.Handle, tick uint32) PumpResult {
 	return PumpResult{Handle: handle, Found: true, HadQueue: had, PrimaryLen: prim, SecondaryLen: sec, Diagnostics: append([]string(nil), diags...)}
 }
 
-// PumpAll is the legacy global sweep over all units in stable player 0..9, slot asc order [I1][04 §3.3].
-// Deprecated: use Pump.PumpUnit per handle for deterministic unit-local processing.
-// This wrapper remains for compatibility and tests but is non-authoritative for new session code (ON-02).
-func (p *Pump) PumpAll(tick uint32) {
-	if p == nil || p.World == nil {
-		return
-	}
-	// Deterministic iteration player 0..9, slots asc [I1][01 §6.2].
-	if p.World.IsSliced() {
-		for player := 0; player < 10; player++ {
-			start, end, ok := p.World.SliceForPlayer(player)
-			if !ok {
-				continue
-			}
-			for slot := start; slot <= end; slot++ {
-				h := pool.Handle(slot)
-				u := p.World.Unit(h)
-				if u == nil || !u.Alive || int(u.Owner) != player {
-					continue
-				}
-				if q := QueueForUnit(u); q != nil {
-					q.Pump(u, tick)
-				}
-			}
-		}
-		return
-	}
-	for _, u := range p.World.Iter() {
-		if u == nil || !u.Alive {
-			continue
-		}
-		if q := QueueForUnit(u); q != nil {
-			q.Pump(u, tick)
-		}
-	}
-}
-
 func isSecondary(id ID) bool {
 	return DescriptorFor(id).StaticGate&0x40000 != 0 // [04 §3.1] rear-segment selection flag
 }

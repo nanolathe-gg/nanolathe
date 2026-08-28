@@ -46,7 +46,7 @@ func TestRS08_ThreeAimSlotsOneDrain(t *testing.T) {
 		ScriptsByID: []int{0, 3, 6},
 	}
 	vm := cob.NewVM(prog)
-	shooter.SetScript(vm)
+	attachTestCOB(shooter, vm)
 	for i := 0; i < 3; i++ {
 		wdef := weaponTurret(int32(10 + i))
 		wdef.Range = 1000 * 65536
@@ -95,7 +95,7 @@ func TestRS08_AimReturnSemantics(t *testing.T) {
 	code0 := []uint32{0x10021001, 0, 0x10065000}
 	prog0 := progWithAim(code0, "AimPrimary", 0)
 	vm0 := cob.NewVM(prog0)
-	shooter.SetScript(vm0)
+	attachTestCOB(shooter, vm0)
 	wdef0 := weaponTurret(20)
 	shooter.InstallWeapon(0, wdef0)
 	shooter.SlotAt(0).Target = units.Target{Kind: units.TargetUnit, Unit: target.Handle}
@@ -117,7 +117,7 @@ func TestRS08_AimReturnSemantics(t *testing.T) {
 	code1 := []uint32{0x10021001, 1, 0x10065000}
 	prog1 := progWithAim(code1, "AimPrimary", 0)
 	vm1 := cob.NewVM(prog1)
-	shooter.SetScript(vm1)
+	attachTestCOB(shooter, vm1)
 	shooter.SlotAt(0).Reload = 0
 	cat.Weapons["w0"] = wdef0
 	svc2 := Service{}
@@ -134,7 +134,7 @@ func TestRS08_AimReturnSemantics(t *testing.T) {
 		ScriptsByID: []int{0},
 	}
 	vmMiss := cob.NewVM(progMissing)
-	shooter.SetScript(vmMiss)
+	attachTestCOB(shooter, vmMiss)
 	shooter.SlotAt(0).Aim = cob.AimSlot{}
 	shooter.SlotAt(0).Flags |= 0x02
 	shooter.SlotAt(0).Reload = 0
@@ -150,7 +150,7 @@ func TestRS08_AimReturnSemantics(t *testing.T) {
 		vmFull.Threads[i].Status = cob.ThreadSleeping
 		vmFull.Threads[i].Sleep = 100
 	}
-	shooter.SetScript(vmFull)
+	attachTestCOB(shooter, vmFull)
 	shooter.SlotAt(0).Aim = cob.AimSlot{}
 	shooter.SlotAt(0).Flags |= 0x02
 	shooter.SlotAt(0).Reload = 0
@@ -164,7 +164,7 @@ func TestRS08_AimReturnSemantics(t *testing.T) {
 	codeSleep := []uint32{0x10021001, 100, 0x10013000, 0x10021001, 0, 0x10065000} // sleep then return 0
 	progSleep := progWithAim(codeSleep, "AimPrimary", 0)
 	vmSleep := cob.NewVM(progSleep)
-	shooter2.SetScript(vmSleep)
+	attachTestCOB(shooter2, vmSleep)
 	wdefSleep := weaponTurret(21)
 	shooter2.InstallWeapon(0, wdefSleep)
 	shooter2.SlotAt(0).Target = units.Target{Kind: units.TargetUnit, Unit: target2.Handle}
@@ -351,6 +351,7 @@ func TestRS08_NaturalFireImpactDeath(t *testing.T) {
 	shooter := w.Unit(shooterH)
 	shooter.Y = numeric.FixedFromInt(int64(10))
 	target.Y = numeric.FixedFromInt(int64(10))
+	attachTestCOB(shooter, cob.NewVM(&cob.Program{Pieces: []string{"base"}}))
 	// Weapon with high damage, direct, non-turret for simplicity (no Aim)
 	wdef := &content.WeaponDef{ID: 500, Range: 1000, WeaponVelocity: 200 * 65536 / 30, ReloadTime: 0, DamageDefault: 100, LineOfSight: true, Turret: false}
 	shooter.InstallWeapon(0, wdef)
@@ -453,10 +454,17 @@ func TestRS08_MissingScriptNoVMNeverFiresAgain(t *testing.T) {
 	cat.RebuildWeaponIndex()
 	var svc Service
 	// No VM
-	shooter.SetScript(nil)
+	attachTestCOB(shooter, nil)
 	sum1 := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
-	// Our no-VM path currently grants ready and fires (approximation) -> but spec says missing script should never authorize? For RS-08 we want missing script (no VM) to be considered ungated? Actually prompt says missing script/no-VM semantics and restored pending Aim remain correct (never authorize fire when script missing or thread exhausted).
-	// For no VM, should it fire? Our current code does fire (ungated). That's approximation for fixtures. For missing Aim function, it blocks.
+	if sum1.Fired != 0 || svc.Count() != 0 {
+		t.Fatalf("missing script must not authorize a shot [06 §3.3], summary=%+v count=%d", sum1, svc.Count())
+	}
+	if shooter.SlotAt(0).Aim.Ready {
+		t.Fatalf("missing script must not leave Aim ready [06 §3.3], aim=%+v", shooter.SlotAt(0).Aim)
+	}
+	if sum1.Dispatched || sum1.ReturnSeen {
+		t.Fatalf("missing script must not dispatch or consume an Aim return [06 §3.3], summary=%+v", sum1)
+	}
 	// Let's test missing function case which should block
 	vm := cob.NewVM(&cob.Program{
 		Code:        []uint32{0x10065000},
@@ -465,7 +473,7 @@ func TestRS08_MissingScriptNoVMNeverFiresAgain(t *testing.T) {
 		Statics:     0,
 		ScriptsByID: []int{0},
 	})
-	shooter.SetScript(vm)
+	attachTestCOB(shooter, vm)
 	shooter.SlotAt(0).Aim = cob.AimSlot{}
 	shooter.SlotAt(0).Flags |= 0x02
 	svc2 := Service{}
@@ -478,5 +486,4 @@ func TestRS08_MissingScriptNoVMNeverFiresAgain(t *testing.T) {
 	if sum3.Fired != 0 {
 		t.Fatalf("missing Aim should remain blocked second visit")
 	}
-	_ = sum1
 }

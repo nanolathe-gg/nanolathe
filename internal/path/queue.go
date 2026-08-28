@@ -19,24 +19,6 @@ const (
 	replenishInterval = 150 // [04 §7.3] C11 global scheduler counter replenishes every 150 ticks
 )
 
-// P0-I16: globalBase was a package mutable var that caused session contamination.
-// It is removed. Per-scheduler base (Scheduler.SetBase) is now the sole source.
-// Global SetBase/GetBase are retained as deprecated wrappers that operate on a
-// hidden legacy var for test compatibility but are not used in the authoritative
-// path (effectiveBase now returns DefaultBase when per-scheduler base not set).
-var legacyGlobalBase int32 = DefaultBase
-
-// SetBase sets the global heuristic base scale [04 §7.2] [P0-I16 deprecated, no longer authoritative].
-// New code should use (*Scheduler).SetBase per-session. This wrapper retains test compatibility.
-func SetBase(b int32) {
-	legacyGlobalBase = b
-}
-
-// GetBase returns the global heuristic base [P0-I16 deprecated].
-func GetBase() int32 {
-	return legacyGlobalBase
-}
-
 // Request is a pathfinding request [plan Public API].
 type Request struct {
 	Unit   pool.Handle
@@ -88,7 +70,7 @@ func NewScheduler(search SearchFunc, publish PublishFunc) *Scheduler {
 }
 
 // SetBase sets the heuristic base for this scheduler [04 §7.2].
-// If not set, the global base (SetBase) is used.
+// If not set, the established default base is used.
 func (s *Scheduler) SetBase(b int32) {
 	s.base = b
 	s.baseSet = true

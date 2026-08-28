@@ -218,10 +218,6 @@ func (b *Binding) ComposePiece(cobPiece int, heading, pitch, bank uint16) ([3]nu
 	return model.Compose(b.Model, states, modelPiece).Origin, true
 }
 
-// Bind is an alias for BindStrict for production callers that prefer a short
-// package operation name.
-func Bind(fs vfs.FSOps, req BindingRequest) (*Binding, error) { return BindStrict(fs, req) }
-
 // SetSimulationRNG binds a session-owned stream to the production VM and all
 // COB random opcodes. It does not mutate any global RNG [01 §7.1] I4.
 func (b *Binding) SetSimulationRNG(sim *rng.Simulation) {

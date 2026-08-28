@@ -664,17 +664,11 @@ func (t *Terrain) classifyCell(cx, cz int32) (featureClass, *content.FeatureDef)
 	return featureVoid, nil
 }
 
-// ValidatePlacement is the legacy cell/yard adapter to CheckPlacement. New
-// preview, commit, AI, and factory code should construct a typed
-// PlacementQuery directly; this adapter retains the established call shape.
+// ValidatePlacement validates a cell/yard footprint through the canonical
+// placement predicate. It remains as the public cell-coordinate entry point
+// used by legacy test fixtures and callers outside the production graph; all
+// production placement paths construct PlacementQuery directly.
 func (t *Terrain) ValidatePlacement(cx, cz int32, yard []YardCell, footX, footZ int, self uint16) error {
-	return t.ValidatePlacementWithMode(cx, cz, yard, footX, footZ, self, 0)
-}
-
-// ValidatePlacementWithMode is the mode-discriminated validator [P1-15].
-// mode==2 is the factory exit pad search fallback where OOB returns pass (1) instead of blocked (0) [P1-15].
-// Generic mode (0) returns blocked for OOB. Yard and geothermal rules are identical in both modes.
-func (t *Terrain) ValidatePlacementWithMode(cx, cz int32, yard []YardCell, footX, footZ int, self uint16, mode int) error {
 	if t == nil {
 		return fmt.Errorf("world: nil terrain")
 	}
@@ -685,9 +679,6 @@ func (t *Terrain) ValidatePlacementWithMode(cx, cz int32, yard []YardCell, footX
 	rect, err := NewFootprintRect(NewFootprintAnchor(cx, cz), extent)
 	if err != nil {
 		return err
-	}
-	if mode == 2 && (cx < 0 || cz < 0 || rect.MaxX() > t.CellW || rect.MaxZ() > t.CellH) {
-		return nil // established factory fallback compatibility [P1-15]
 	}
 	_, err = t.CheckPlacement(PlacementQuery{Rect: rect, Yard: yard, Self: self})
 	return err

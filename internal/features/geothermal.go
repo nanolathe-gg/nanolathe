@@ -13,17 +13,6 @@ func IsGeothermal(def *content.FeatureDef) bool {
 	return def.Geothermal
 }
 
-// ValidateGeothermalForPlacement checks the geothermal validator path without modifying terrain [05 "Geothermal requirement"] [P1-10][P1-15].
-// It is the read-only at-least-one check via yard byte 0x8f and catalog flag; it never clears the vent.
-// Vent persistence: the footprint validator is read-only on the terrain feature grid — it never clears a vent feature.
-// A geothermal vent therefore persists beneath a completed plant in the terrain grid; destroying the plant leaves the vent in place with no restore step needed [05 "Geothermal requirement"] [P1-10].
-func ValidateGeothermalForPlacement(t *world.Terrain, cx, cz int32, yard []world.YardCell, footX, footZ int) error {
-	if t == nil {
-		return nil // no terrain => no geothermal check
-	}
-	return t.ValidatePlacement(cx, cz, yard, footX, footZ, 0)
-}
-
 // VentPersistsAfterBuildingRemoval is the persistence invariant: after a building that required geothermal is removed,
 // the vent's Plot feature remains at its anchor cell with the geothermal flag still set [05 "Geothermal requirement"] [P1-10].
 // This helper asserts that invariant for tests without mutating state.

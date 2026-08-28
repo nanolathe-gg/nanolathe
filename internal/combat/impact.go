@@ -9,81 +9,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// PresentationSink is the impact presentation ordering sink [06 §13.2] C27.
-// Simulation never renders; it dispatches ordered events to this sink and
-// routes damage last [GAP T21] [06 §13.2] C27.
-type PresentationSink interface {
-	Shake(magnitude, duration int32)             // (1) camera shake [06 §13.2]
-	PlayHitSound(sound string)                   // (2) hit vs water distinction — direct forces hit even underwater [06 §13.2]
-	PlayWaterSound(sound string)                 // (2) water variant for terrain-only water impacts [06 §13.2]
-	EmitEndSmoke(pos Vec3)                       // (3) end smoke when flagged — land-branch-only, REPLACES explosion GAF [06 §13.2]
-	EmitExplosion(gaf, art string, isWater bool) // (4) land-or-water explosion GAF holder [06 §13.2]
-}
-
-// DispatchPresentation emits impact presentation in fixed order
-// shake → hit/water sound → end smoke → land/water GAF → damage last
-// [06 §13.2] C27 [GAP T21].
-//
-// hasDirectTarget forces hit sound even underwater [06 §13.2] C27.
-// isWaterTerrain indicates the impact cell is water-classified and there is
-// no direct unit argument for the water-sound branch [06 §13.2].
-// End smoke is land-branch-only and replaces explosion GAF [06 §13.2] C27.
-// Damage routing is always last and is NOT emitted via this sink; caller
-// must invoke damage after this function returns [06 §13.2] C27.
-func DispatchPresentation(w *content.WeaponDef, hasDirectTarget bool, isWaterTerrain bool, pos Vec3, sink PresentationSink) {
-	if w == nil || sink == nil {
-		return
-	}
-	// (1) camera shake [06 §13.2]
-	if w.ShakeMagnitude != 0 || w.ShakeDuration != 0 {
-		sink.Shake(w.ShakeMagnitude, w.ShakeDuration) // [06 §13.2] (1) shake
-	}
-	// (2) impact-sound selection [06 §13.2]
-	// Hit sound for land and direct-target impacts versus water sound for
-	// terrain-only water impacts, EXCEPT direct target FORCES hit even underwater [06 §13.2].
-	if hasDirectTarget {
-		if w.SoundHit != "" {
-			sink.PlayHitSound(w.SoundHit) // [06 §13.2] direct forces hit
-		}
-	} else {
-		if isWaterTerrain {
-			if w.SoundWater != "" {
-				sink.PlayWaterSound(w.SoundWater) // [06 §13.2] terrain-only water impact
-			} else if w.SoundHit != "" {
-				// Fallback? Research says water sound for terrain-only water, hit otherwise.
-				// Keep hit as fallback for missing water sound? No establishment — skip.
-			}
-		} else {
-			if w.SoundHit != "" {
-				sink.PlayHitSound(w.SoundHit) // [06 §13.2] land
-			}
-		}
-	}
-	// (3) end smoke when flagged [06 §13.2] — land-branch-only, REPLACES explosion GAF
-	hasEndSmoke := w.EndSmoke
-	if hasEndSmoke && !isWaterTerrain {
-		sink.EmitEndSmoke(pos) // [06 §13.2] (3) end smoke land-branch-only, replaces GAF
-		return                 // GAF suppressed when end smoke emitted [06 §13.2]
-	}
-	if hasEndSmoke && isWaterTerrain && !hasDirectTarget {
-		// Water-branch deaths ignore end smoke entirely [06 §13.2]
-		// Do not emit end smoke; fall through to water GAF.
-	}
-	// (4) land-or-water explosion GAF holder [06 §13.2]
-	if isWaterTerrain && !hasDirectTarget {
-		// Water-branch explosion [06 §13.2]
-		if w.WaterExplosionGaf != "" || w.WaterExplosionArt != "" {
-			sink.EmitExplosion(w.WaterExplosionGaf, w.WaterExplosionArt, true) // [06 §13.2] water GAF
-		}
-	} else {
-		// Land or direct-target branch [06 §13.2]
-		if w.ExplosionGaf != "" || w.ExplosionArt != "" {
-			sink.EmitExplosion(w.ExplosionGaf, w.ExplosionArt, false) // [06 §13.2] land GAF
-		}
-	}
-	// (5) damage routing LAST [06 §13.2] [GAP T21] — caller handles
-}
-
 // NoExplodeRetirement reports whether the projectile should retire after impact
 // considering the noexplode flag [06 §13.2] C28.
 //
@@ -151,7 +76,7 @@ func FeatureCacheSuppressed(cache *[2]int32, cellX, cellZ int32) bool {
 	}
 	cache[0] = cellX // new cell updates cache [06 §8.1]
 	cache[1] = cellZ
-	return false
+	return false // not seen — process; dedup before radius test [06 §9.3]
 }
 
 // StampOrder is player 0..9 → pool 0x118 vacated reusable same tick [P1-07 §2.1].
@@ -521,7 +446,3 @@ func HitByWeaponArgs(dir uint8) (int32, int32) {
 	c := numeric.MulRound(numeric.Cos(ang), 400)
 	return s, c
 }
-
-// Ensure imports are used.
-var _ = math.Sqrt
-var _ = numeric.FixedOne

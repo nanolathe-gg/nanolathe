@@ -25,6 +25,36 @@ func (r *recordSink) EmitExplosion(gaf, art string, isWater bool) {
 	}
 }
 
+// runImpactPresentation exercises the production impact path directly. The
+// old test-only presentation interface is intentionally gone; this collector
+// keeps the assertions focused on the ordered combat events [06 §13.2].
+func runImpactPresentation(w *content.WeaponDef, directTarget, water bool) *recordSink {
+	sink := &recordSink{}
+	var svc Service
+	svc.Events = func(ev Event) {
+		switch ev.Kind {
+		case EventShake:
+			sink.Shake(ev.Magnitude, ev.Duration)
+		case EventHitSound:
+			sink.PlayHitSound(ev.Sound)
+		case EventWaterSound:
+			sink.PlayWaterSound(ev.Sound)
+		case EventEndSmoke:
+			sink.EmitEndSmoke(ev.Position)
+		case EventExplosion:
+			sink.EmitExplosion(ev.Graphic, "", false)
+		case EventWaterExplosion:
+			sink.EmitExplosion(ev.Graphic, "", true)
+		}
+	}
+	p := &Projectile{Pos: Vec3{}}
+	if directTarget {
+		p.TargetUnit = 1
+	}
+	handleProjectileImpact(&svc, 1, p, w, nil, nil, nil, nil, nil, 0, Vec3{}, nil, water)
+	return sink
+}
+
 func TestImpactPresentationOrdering(t *testing.T) {
 	// C27: presentation ordering shake → hit/water sound → explosion gaf/art → damage last [06 §13.2] C27 [GAP T21]
 	w := &content.WeaponDef{
@@ -38,20 +68,17 @@ func TestImpactPresentationOrdering(t *testing.T) {
 		WaterExplosionArt: "wexploart",
 	}
 	// Land direct-target case: should be shake, hit, then land GAF, no water GAF
-	sink := &recordSink{}
-	DispatchPresentation(w, true, false, Vec3{}, sink)
+	sink := runImpactPresentation(w, true, false)
 	if len(sink.events) != 3 || sink.events[0] != "shake" || sink.events[1] != "hit:hitsound" || sink.events[2] != "landgaf:explo.gaf" {
 		t.Fatalf("land direct ordering wrong [06 §13.2] C27: got %v", sink.events)
 	}
 	// Direct target forces hit even underwater [06 §13.2] C27
-	sink = &recordSink{}
-	DispatchPresentation(w, true, true, Vec3{}, sink)
+	sink = runImpactPresentation(w, true, true)
 	if len(sink.events) == 0 || sink.events[1] != "hit:hitsound" {
 		t.Fatalf("direct target must force hit even underwater [06 §13.2] C27: got %v", sink.events)
 	}
 	// Terrain-only water impact uses water sound and water GAF [06 §13.2] C27
-	sink = &recordSink{}
-	DispatchPresentation(w, false, true, Vec3{}, sink)
+	sink = runImpactPresentation(w, false, true)
 	if len(sink.events) < 2 || sink.events[1] != "water:watersound" {
 		t.Fatalf("terrain-only water should use water sound [06 §13.2] C27: got %v", sink.events)
 	}
@@ -65,8 +92,7 @@ func TestImpactPresentationOrdering(t *testing.T) {
 		ExplosionGaf:   "explo.gaf",
 		EndSmoke:       true,
 	}
-	sink = &recordSink{}
-	DispatchPresentation(w2, false, false, Vec3{}, sink)
+	sink = runImpactPresentation(w2, false, false)
 	foundEnd := false
 	foundGaf := false
 	for _, e := range sink.events {
@@ -89,8 +115,7 @@ func TestImpactPresentationOrdering(t *testing.T) {
 		WaterExplosionGaf: "w.gaf",
 		EndSmoke:          true,
 	}
-	sink = &recordSink{}
-	DispatchPresentation(w3, false, true, Vec3{}, sink)
+	sink = runImpactPresentation(w3, false, true)
 	for _, e := range sink.events {
 		if e == "endsmoke" {
 			t.Fatalf("water branch should ignore end smoke [06 §13.2] C27: got %v", sink.events)
@@ -106,8 +131,7 @@ func TestImpactPresentationOrdering(t *testing.T) {
 		t.Fatalf("water GAF should emit when end smoke ignored on water [06 §13.2] C27: got %v", sink.events)
 	}
 	// Order: shake before sound, sound before GAF
-	sink = &recordSink{}
-	DispatchPresentation(w, false, false, Vec3{}, sink)
+	sink = runImpactPresentation(w, false, false)
 	idxShake, idxHit, idxGaf := -1, -1, -1
 	for i, e := range sink.events {
 		switch e {
@@ -160,9 +184,8 @@ func TestFeatureCacheThenTerrainLadder(t *testing.T) {
 	}
 }
 
-func TestAreaDedupAndImpulse(t *testing.T) {
-	// C26 dedup memories are deduplication not caps and no impulse [06 §9.3] [06 §9.4] C26
-	impact := Vec3{X: numeric.Fixed(0), Z: numeric.Fixed(0)}
+func TestAreaDedup(t *testing.T) {
+	// C26 dedup memories are deduplication, not caps [06 §9.3].
 	w := &content.WeaponDef{AreaOfEffect: 40, EdgeEffectiveness: 0}
 	radius := BlastRadius(w.AreaOfEffect) // 20
 	var d UnitDedup
@@ -180,18 +203,9 @@ func TestAreaDedupAndImpulse(t *testing.T) {
 	if d.SeenUnit(pool.Handle(21)) != false {
 		t.Fatalf("after full, new candidate should still be processed again [06 §9.3] C26")
 	}
-	// Feature dedup: distance checked before dedup [06 §9.3] — out-of-radius first sighting can consume entry
+	// Feature distance is checked before dedup [06 §9.3].
 	var fd FeatureDedup
 	_ = fd
-	// Simulate unit out-of-radius first sighting consuming entry
-	// SeenUnit before radius test consumes entry; we already tested that dedup before radius
-	// Feature distance before dedup: ensure caller checks distance then dedup
-	// Here we just assert ApplyImpulse is empty
-	before := impact
-	ApplyImpulse()
-	if impact != before {
-		t.Fatalf("impulse should be no-op [06 §9.4] C26")
-	}
 	_ = radius
 	_ = world.CellToWorld
 	_ = numeric.FixedOne

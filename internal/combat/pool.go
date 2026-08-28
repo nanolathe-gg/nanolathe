@@ -1,7 +1,6 @@
 package combat
 
 import (
-	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -101,17 +100,6 @@ type Projectile struct {
 	OldMarker int16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 }
 
-// TraceEvent is an ordered debug trace event ON-04 [06 §3.3].
-// Disabled by default (nil Trace), nil-safe, consumes no RNG and alters no state.
-type TraceEvent struct {
-	Tick        uint32
-	Unit        pool.Handle
-	Slot        int
-	WeaponID    int32
-	Event       string // e.g., "aim_dispatch", "aim_function_absent", "aim_no_script", "aim_pool_exhausted", "aim_return_zero", "aim_return_nonzero", "aim_sleeping", "fire"
-	ReturnValue *int32 // optional for return events
-}
-
 // EventKind identifies authoritative combat-to-event records.
 // Values are intentionally local to combat; the session adapter translates
 // them to frame.EventKind without allowing the renderer into simulation
@@ -168,13 +156,8 @@ type Service struct {
 	Slots   pool.Projectiles               // sole count/dead authority (I5) [06 §5.1]
 	Records [ProjectileCapacity]Projectile // named records parallel to Slots
 
-	Trace       func(TraceEvent)          // optional ordered debug-trace sink ON-04, nil-safe, no RNG/state
-	Events      func(Event)               // optional ordered combat event sink; nil-safe
-	pendingAims map[pendingKey]pendingAim // Aim dispatch tracking ON-04 [06 §3.3]
-	// bridges retains one typed callback bridge per unit so deferred Aim/Fire/
-	// RockUnit callbacks share the unit VM and the single normal drain window
-	// [04 §4.2][04 §5.3]. It is session-local state, never a package global.
-	bridges       map[pool.Handle]*cob.CallbackBridge
+	Events        func(Event)               // optional ordered combat event sink; nil-safe
+	pendingAims   map[pendingKey]pendingAim // Aim dispatch tracking ON-04 [06 §3.3]
 	deathNotified map[pool.Handle]*units.Unit
 
 	// Visibility is the per-session LOS predicate [03 §3.2] C8 [RS-P0-018].

@@ -263,24 +263,15 @@ func TestSchedulerHeapExhaustionEmptyPublication(t *testing.T) {
 	}
 }
 
-func TestSchedulerGlobalBaseAndSetBase(t *testing.T) {
-	// P0-I16: per-scheduler base is authoritative; global base retained only for legacy compatibility.
-	old := GetBase()
-	defer SetBase(old)
-	SetBase(12345)
-	if GetBase() != 12345 {
-		t.Fatalf("global GetBase want 12345 got %d", GetBase())
-	}
+func TestSchedulerDefaultAndSetBase(t *testing.T) {
 	s := NewScheduler(nil, nil)
-	// Without explicit base, scheduler uses DefaultBase, not legacy global [P0-I16].
 	if s.ScaleFor(0) != DefaultBase*6 {
-		t.Fatalf("scheduler should use DefaultBase when not set [P0-I16], got %d want %d", s.ScaleFor(0), DefaultBase*6)
+		t.Fatalf("scheduler should use DefaultBase when not set, got %d want %d", s.ScaleFor(0), DefaultBase*6)
 	}
 	s.SetBase(1000)
 	if s.ScaleFor(0) != 6000 {
 		t.Fatalf("scheduler SetBase should override, got %d", s.ScaleFor(0))
 	}
-	SetBase(DefaultBase)
 }
 
 func TestSchedulerHeapExhaustionViaEmptyHeap(t *testing.T) {

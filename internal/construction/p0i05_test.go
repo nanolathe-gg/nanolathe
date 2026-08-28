@@ -187,8 +187,9 @@ func TestP0I05_TwoBuildersSlotOrder(t *testing.T) {
 		head.Phase = uint8(State3)
 		head.Target = prod.Handle
 	}
-	// PumpAll in slot order: lowest slot first
-	svc.PumpAll(0)
+	// StepUnit in slot order: lowest slot first
+	svc.StepUnit(TickContext{Tick: 0}, b1.Handle)
+	svc.StepUnit(TickContext{Tick: 0}, b2.Handle)
 	// After one tick, product should have been advanced twice (two workers) with lowest-slot first
 	// Worker quantum =1, buildTime=3 => each step delta 0.333
 	// First builder: 1.0 -> 0.666 (hg 4), second: 0.666 -> 0.333 (hg 3) total 0.333
@@ -208,13 +209,14 @@ func TestP0I05_TwoBuildersSlotOrder(t *testing.T) {
 		q := orders.QueueForUnit(b)
 		q.Primary()[0].Phase = uint8(State3)
 	}
-	svc.PumpAll(1)
+	svc.StepUnit(TickContext{Tick: 1}, b1.Handle)
+	svc.StepUnit(TickContext{Tick: 1}, b2.Handle)
 	// Lowest slot (b1) should have brought remaining to 0 first, b2 should see 0 and not further change, and b1's node should have decremented count
 	if prod.Remaining != 0 {
 		t.Fatalf("completion not reached")
 	}
 	// Verify that at least one builder's queue decremented (lowest slot wins the final step)
-	// Both builders share product; after PumpAll, the product is completed and one builder's node should be State4 or removed
+	// Both builders share product; after the ordered StepUnit calls, the product is completed and one builder's node should be State4 or removed
 	// We just ensure product completed and no panic.
 }
 

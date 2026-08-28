@@ -16,45 +16,16 @@ import (
 // capabilities are deliberately not inferred from UnitDef fields: SC21 leaves
 // those producer/capability gates unresolved, and retail-valid scripts may
 // omit optional callbacks. Callers with an observed consumer should supply
-// exact names or alternative groups through BindCOBWithRequirements.
+// exact names or alternative groups through cob.BindStrict.
 func RequiredCOBEntryPoints(_ *content.UnitDef) []string { return []string{"Create"} }
 
-func appendUniqueEntry(entries []string, names ...string) []string {
-	for _, name := range names {
-		found := false
-		for _, prior := range entries {
-			if prior == name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			entries = append(entries, name)
-		}
-	}
-	return entries
-}
-
-// BindCOB strictly binds a compiled unit script to its loaded model and
-// initializes its VM. The returned VM has completed the one mode-I Create
-// start before this function returns [04 §4.1][04 §5.1]. A nil model or any
-// missing/malformed asset is an error.
-func BindCOB(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model) (*cob.Binding, error) {
-	return BindCOBWithPorts(fs, def, mdl, nil, nil)
-}
-
-// BindCOBWithPorts is the composition seam for a production VM that must see
-// the session-owned simulation stream and presentation sink during its one
-// mode-I Create callback. It retains the same strict model/piece checks as
-// BindCOB; the extra ports are supplied before Create starts.
+// BindCOBWithPorts is retained for the session composition test seam, whose
+// caller has no owning Unit instance. New production bindings use
+// BindCOBWithPortsAndVisibilityForUnit so instance-owned ports are installed
+// before the mode-I Create callback. This seam retains the same strict
+// model/piece checks; the extra ports are supplied before Create starts.
 func BindCOBWithPorts(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink) (*cob.Binding, error) {
-	return BindCOBWithPortsAndVisibility(fs, def, mdl, sim, sink, nil)
-}
-
-// BindCOBWithPortsAndVisibility is the full production seam. The visibility
-// predicate is installed before Create so emit-sfx cannot bypass gameplay LOS.
-func BindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink, visible func(piece int, sfxType int32) bool) (*cob.Binding, error) {
-	return bindCOBWithPortsAndVisibility(fs, def, mdl, sim, sink, visible, nil)
+	return bindCOBWithPortsAndVisibility(fs, def, mdl, sim, sink, nil, nil)
 }
 
 // BindCOBWithPortsAndVisibilityForUnit is the production binding seam for a
@@ -158,31 +129,6 @@ func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 		req.PortFuncs = unitPortHandlers(nil, u)
 	}
 	return cob.BindStrict(fs, req)
-}
-
-// BindCOBWithEntries is the strict binding seam for callers that know a
-// narrower callback set (for example a focused construction or model test).
-// Create remains mandatory even when entries omits it, because production
-// initialization must execute Create exactly once in mode I [04 §5.1].
-func BindCOBWithEntries(fs vfs.FSOps, unitName string, mdl *model.Model, entries []string) (*cob.Binding, error) {
-	return BindCOBWithRequirements(fs, unitName, mdl, entries, nil)
-}
-
-// BindCOBWithRequirements is the capability-specific strict binding seam.
-// Every exact name is mandatory. Each alternative group is satisfied when at
-// least one entry exists; for example, []string{"AimFromPrimary",
-// "QueryPrimary"} represents the established AimFrom→Query fallback [04
-// §5.3]. No capability is guessed from a unit's BMCode, CanMove, or name.
-func BindCOBWithRequirements(fs vfs.FSOps, unitName string, mdl *model.Model, entries []string, alternatives [][]string) (*cob.Binding, error) {
-	if mdl == nil {
-		return nil, &cob.BindingError{Diagnostics: []cob.BindingDiagnostic{{Code: cob.BindingMissingModel, Expected: "loaded 3DO model", Detail: "nil model"}}}
-	}
-	modelPieces := make([]string, len(mdl.Pieces))
-	for i := range mdl.Pieces {
-		modelPieces[i] = mdl.Pieces[i].Name
-	}
-	entries = appendUniqueEntry(append([]string(nil), entries...), "Create")
-	return cob.BindStrict(fs, cob.BindingRequest{UnitName: unitName, Model: mdl, ModelPieces: modelPieces, RequiredScripts: entries, RequiredScriptGroups: alternatives})
 }
 
 // AttachCOBBinding attaches only a fully initialized strict production

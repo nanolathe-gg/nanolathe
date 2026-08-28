@@ -257,23 +257,27 @@ func TestPreGameSpawnOutsideLedger(t *testing.T) {
 		svc.Players[i].StatusHalfwordAt144 = 1
 		svc.Players[i].EndGameCountdown = -1
 	}
+	svc.Players[0].Mirror[Metal].Production = 2
+	svc.Players[1].Mirror[Metal].Production = 3
 	svc.SeedDeadlines(0)
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	w := units.New(10, nil)
-	calls := 0
-	svc.OnSettle = func(p int, tick uint32) { calls++ }
 	svc.Tick(0, w)
-	if calls != 2 {
-		t.Fatalf("pre-game one pass should settle active players, got %d", calls)
+	if svc.Players[0].UpdateTime != 30 || svc.Players[1].UpdateTime != 30 {
+		t.Fatalf("pre-game one pass should settle active players and advance deadlines")
 	}
+	if svc.Players[0].Mirror[Metal].Production != 0 || svc.Players[1].Mirror[Metal].Production != 0 || svc.Players[0].PassProduced[Metal] != 2 || svc.Players[1].PassProduced[Metal] != 3 {
+		t.Fatalf("pre-game one pass must consume/archive each player's production")
+	}
+	producedBeforeSpawn := svc.Players[0].TotalProduced[Metal]
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	CreditSpawn(&svc.Players[0], Metal, 1000)
 	if svc.Players[0].Stock[Metal] != 1000 {
 		t.Fatalf("spawn credit outside ledger")
 	}
 	// Waste not incremented via spawn
-	if svc.Players[0].TotalProduced[Metal] != 0 {
-		t.Fatalf("spawn should not affect TotalProduced")
+	if svc.Players[0].TotalProduced[Metal] != producedBeforeSpawn {
+		t.Fatalf("spawn should not affect TotalProduced: before=%v after=%v", producedBeforeSpawn, svc.Players[0].TotalProduced[Metal])
 	}
 	// Single ADD 30 catch-up: deadline advanced exactly 30 before settlement, not loop
 	svc2 := Service{}
@@ -284,14 +288,13 @@ func TestPreGameSpawnOutsideLedger(t *testing.T) {
 	svc2.Players[0].UpdateTime = 0
 	svc2.Players[0].Helper1Deadline = 1 << 31
 	svc2.Players[0].Helper2Deadline = 1 << 31
-	c2 := 0
-	svc2.OnSettle = func(p int, tick uint32) { c2++ }
+	svc2.Players[0].Mirror[Metal].Production = 4
 	// Tick 100 with deadline 0 => 100 behind, should settle once per tick, not loop to catch all at once
 	svc2.TickPlayer(0, 100, w, nil)
-	if c2 != 1 {
-		t.Fatalf("single ADD 30 catch-up: tick100 should settle once, got %d", c2)
-	}
 	if svc2.Players[0].UpdateTime != 30 {
 		t.Fatalf("deadline should be 30 after one catch-up, got %d", svc2.Players[0].UpdateTime)
+	}
+	if svc2.Players[0].Mirror[Metal].Production != 0 || svc2.Players[0].PassProduced[Metal] != 4 {
+		t.Fatalf("single ADD 30 catch-up must execute one concrete settlement pass")
 	}
 }

@@ -1153,13 +1153,6 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	node.Phase = uint8(State3)
 }
 
-// OnRefresh hook for interface refresh [05 C18][05 C21][05 C22].
-func (s *Service) OnRefreshHook(u *units.Unit) {
-	if s != nil && s.OnRefresh != nil {
-		s.OnRefresh(u)
-	}
-}
-
 // startBuilding/stopBuilding are edge helpers. The bridge owns callback mode
 // and argument shape; construction only changes the cached edge bit [04 §5.3].
 func (s *Service) startBuilding(u *units.Unit) {
@@ -2047,53 +2040,6 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 		} else {
 			node.Phase = uint8(State0)
 			node.Target = 0
-		}
-	}
-}
-
-// PumpAll pumps all factories in stable order 0..9 players, slots asc 0x118 [P0-14].
-// Same-tick health/remaining visible immediate to later builders → lowest-slot wins [P0-14].
-// Fix: iterate slots by handle asc without snapshot — product allocated mid-sweep at slot after
-// builder is visible same tick. Snapshot via World.Iter() at player-loop start breaks lowest-slot wins.
-// Iterate per-player slices directly when sliced, else per-player scan of handles [P0-16][P0-14].
-// Non-authoritative compatibility wrapper (ON-02): new code should use StepUnit per handle.
-func (s *Service) PumpAll(tick uint32) {
-	if s == nil || s.World == nil {
-		return
-	}
-	if s.World.IsSliced() {
-		for player := 0; player < 10; player++ {
-			start, end, ok := s.World.SliceForPlayer(player)
-			if !ok {
-				continue
-			}
-			for slot := start; slot <= end; slot++ {
-				u := s.World.Unit(pool.Handle(slot))
-				if u == nil || !u.Alive || int(u.Owner) != player {
-					continue
-				}
-				s.Pump(u, tick)
-			}
-		}
-		return
-	}
-	cap := s.World.Capacity()
-	if cap <= 0 {
-		cap = s.World.TotalRecords() - 1
-		if cap <= 0 {
-			cap = len(s.World.Iter()) + 10
-			if cap < 1 {
-				cap = 500
-			}
-		}
-	}
-	for player := 0; player < 10; player++ {
-		for slot := 1; slot <= cap; slot++ {
-			u := s.World.Unit(pool.Handle(slot))
-			if u == nil || !u.Alive || int(u.Owner) != player {
-				continue
-			}
-			s.Pump(u, tick)
 		}
 	}
 }

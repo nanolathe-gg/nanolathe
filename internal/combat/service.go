@@ -16,15 +16,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// emitTrace emits a debug trace event if sink is non-nil ON-04 [06 §3.3].
-// Disabled by default, nil-safe, consumes no RNG and alters no state.
-func (s *Service) emitTrace(ev TraceEvent) {
-	if s == nil || s.Trace == nil {
-		return
-	}
-	s.Trace(ev)
-}
-
 func (s *Service) emitEvent(ev Event) {
 	if s != nil && s.Events != nil {
 		s.Events(ev)
@@ -112,32 +103,20 @@ func aimNameForSlot(slotIdx int) string {
 	}
 }
 
-// callbackBridgeForUnit returns the unit's strict production bridge, or a
-// session-local bridge for an explicitly synthetic test VM. Production never
-// calls raw VM.Start for researched weapon callbacks [04 §4.2][04 §5.3].
+// callbackBridgeForUnit returns the callback bridge attached by strict unit
+// composition. A playable unit always has this binding; an unattached unit
+// cannot run weapon callbacks [04 §4.1][04 §5.3].
 func (s *Service) callbackBridgeForUnit(u *units.Unit) *cob.CallbackBridge {
-	if s == nil || u == nil {
+	if u == nil {
 		return nil
 	}
 	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
 		return binding.Callbacks
 	}
-	vm := u.GetScript()
-	if vm == nil {
-		return nil
-	}
-	if s.bridges == nil {
-		s.bridges = make(map[pool.Handle]*cob.CallbackBridge)
-	}
-	if bridge := s.bridges[u.Handle]; bridge != nil && bridge.VM == vm {
-		return bridge
-	}
-	bridge := cob.NewCallbackBridge(vm)
-	s.bridges[u.Handle] = bridge
-	return bridge
+	return nil
 }
 
-// UnitStepSummary reports what one StepWeaponsForUnit visit did [ON-09 trace contract].
+// UnitStepSummary reports the per-unit Aim handshake and firing result.
 // Stable integer/fixed-point state only; it observes behavior, consumes no RNG,
 // and alters no simulation decisions.
 type UnitStepSummary struct {
@@ -151,9 +130,10 @@ type UnitStepSummary struct {
 }
 
 // StepWeaponsForUnit runs the per-unit weapon pipeline for one unit visit ON-04 [06 §3.3][06 §4][04 §5.3][GAP T15].
-// It is the authoritative per-unit step; TickWeapons is a compatibility wrapper that loops over units in
-// deterministic order (players 0..9 asc, pool slot asc) and calls this per unit [06 §1.2] C1 (I1).
-// Dependencies match TickWeapons: world, vis, terrain, econ, catalog, simRNG, crtRNG.
+// It is the authoritative per-unit step; the session owns the deterministic
+// pool-order loop and invokes this method directly [06 §1.2] C1 (I1).
+// Dependencies are the session's world, visibility, terrain, economy, catalog,
+// simulation RNG, and CRT RNG services.
 // RS-08: exactly one VM drain per unit visit at the normal window [04 §4.2][04 §4.6][GAP T15 C17] (I7):
 // queue all TargetCleared/Aim callbacks in slot order 0..2, drain once delta 1 (eight threads then one piece pass),
 // collect actual explicit Aim returns, then apply post-drain fire permissions in slot order without second drain.
@@ -264,8 +244,8 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		}
 		muzzlePos, muzzleOK := muzzleWorldPosResolved(u, slot.MuzzlePiece)
 		if !muzzleOK {
-			// A strict production binding must resolve the queried COB piece
-			// through its model map; only synthetic/legacy seams use root fallback.
+			// A strict production binding resolves nonnegative queried pieces
+			// through its model map; a negative query selects the unit-origin path.
 			continue
 		}
 		dx := tgtPos.X.Sub(muzzlePos.X)
@@ -315,12 +295,10 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			if !slot.Aim.IssueBit {
 				weaponID := weapon.ID
 				if bridge == nil {
-					s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_no_script"})
 					slot.Aim.IssueBit = true
 				} else {
 					key := pendingKey{Unit: u.Handle, Slot: idx}
 					if _, present := bridge.VM.ScriptPC(aimNameForSlot(idx)); !present {
-						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_function_absent"})
 					}
 					result := bridge.Aim(cob.WeaponSlot(idx), desiredYaw, desiredPitch, func(ret cob.CallbackReturn) {
 						if s.pendingAims != nil {
@@ -330,9 +308,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 						sum.ReturnValue = ret.Value
 						if ret.Explicit && ret.Value != 0 {
 							slot.Aim.Ready = true
-							s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_return_nonzero", ReturnValue: &ret.Value})
-						} else {
-							s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_return_zero", ReturnValue: &ret.Value})
 						}
 					})
 					slot.Aim.IssueBit = true
@@ -342,14 +317,12 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 							s.pendingAims = make(map[pendingKey]pendingAim)
 						}
 						s.pendingAims[key] = pendingAim{ThreadIdx: result.Thread, DispatchedTick: tick}
-						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_dispatch"})
 						if !sum.Dispatched {
 							sum.Dispatched = true
 							sum.DispatchSlot = idx
 							sum.DispatchWeaponID = weaponID
 						}
 					} else {
-						s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weaponID, Event: "aim_pool_exhausted"})
 					}
 				}
 			}
@@ -379,7 +352,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		needLatch, needResult := pre.needLatch, pre.needResult
 		key := pendingKey{Unit: u.Handle, Slot: idx}
 		if _, ok := s.pendingAims[key]; ok {
-			s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_sleeping"})
 			continue
 		} else {
 			if needResult && slot.Aim.IssueBit && !slot.Aim.Ready {
@@ -403,7 +375,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 				if s.pendingAims != nil {
 					delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
 				}
-				s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_cleared_infeasible"})
 			}
 			continue
 		}
@@ -431,7 +402,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			if s.pendingAims != nil {
 				delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
 			}
-			s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "aim_cleared_after_fire"})
 		}
 		if !weapon.Stockpile {
 			stored := ComputeStoredReload(u.Health, u.MaxHealth, u.Kills, weapon.ReloadTime)
@@ -451,7 +421,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			}
 		}
 		sum.Fired++
-		s.emitTrace(TraceEvent{Tick: tick, Unit: u.Handle, Slot: idx, WeaponID: weapon.ID, Event: "fire"})
 	}
 	return sum
 }
@@ -486,7 +455,6 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 				if u == nil || !u.Alive || u.Dying {
 					continue
 				}
-				// Stunned handling duplicated in StepWeaponsForUnit; wrapper pre-filters as well for determinism.
 				if u.Stunned && tick >= u.ParalyzeExpire {
 					u.Stunned = false
 					u.ParalyzeExpire = 0
@@ -513,28 +481,11 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 			buckets[u.Owner] = append(buckets[u.Owner], u)
 		}
 		for player := 0; player < 10; player++ {
-			b := buckets[player]
-			for _, u := range b {
+			for _, u := range buckets[player] {
 				s.StepWeaponsForUnit(u, tick, w, vis, terrain, econ, catalog, simRNG, crtRNG)
 			}
 		}
 	}
-}
-
-func dispatchAim(u *units.Unit, slotIdx int, slot *units.Slot) bool {
-	if u == nil || slot == nil {
-		return false
-	}
-	vm := u.GetScript()
-	if vm == nil {
-		return true
-	}
-	// Legacy helper retained for the slot-level fixture API; even this path
-	// uses the typed bridge rather than raw VM.Start [04 §5.3]. The owning
-	// Service path retains the bridge so completion receivers survive the tick.
-	bridge := cob.NewCallbackBridge(vm)
-	result := bridge.Aim(cob.WeaponSlot(slotIdx), slot.DesiredYaw, slot.DesiredPitch, nil)
-	return result.Started
 }
 
 func acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service, catalogs ...*content.Catalog) (pool.Handle, bool) {
@@ -703,6 +654,11 @@ func muzzleWorldPosResolved(u *units.Unit, piece int32) (Vec3, bool) {
 	if u == nil {
 		return Vec3{}, false
 	}
+	// A negative query result selects the ordinary unit-origin muzzle path;
+	// only a nonnegative piece requires the strict COB/model composition [06 §4.1].
+	if piece < 0 {
+		return Vec3{X: u.X, Y: u.Y, Z: u.Z}, true
+	}
 	if binding := u.COBBinding(); binding != nil {
 		origin, ok := binding.ComposePiece(int(piece), u.Move.Heading, u.Move.Pitch, u.Move.Bank)
 		if !ok {
@@ -710,20 +666,7 @@ func muzzleWorldPosResolved(u *units.Unit, piece int32) (Vec3, bool) {
 		}
 		return Vec3{X: u.X.Add(origin[0]), Y: u.Y.Add(origin[1]), Z: u.Z.Add(origin[2])}, true
 	}
-	vm := u.GetScript()
-	if vm != nil && piece >= 0 && int(piece) < len(vm.Pieces) {
-		tr := vm.Pieces[piece].Trans
-		return Vec3{X: u.X.Add(tr[0]), Y: u.Y.Add(tr[1]), Z: u.Z.Add(tr[2])}, true
-	}
-	return Vec3{X: u.X, Y: u.Y, Z: u.Z}, true
-}
-
-// muzzleWorldPos preserves the root fallback used by synthetic fixtures while
-// production callers use muzzleWorldPosResolved to reject an invalid strict
-// binding rather than authorizing a shot from an invented origin.
-func muzzleWorldPos(u *units.Unit, piece int32) Vec3 {
-	pos, _ := muzzleWorldPosResolved(u, piece)
-	return pos
+	return Vec3{}, false
 }
 
 func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terrain *world.Terrain, simRNG *rng.Simulation, svc *Service, w *units.World) bool {
@@ -1106,57 +1049,43 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 		return
 	}
 	hasDirectTarget := p.TargetUnit != 0
-	sink := &combatPresentationSink{service: s, tick: tick, source: p.Shooter, position: p.Pos}
-	DispatchPresentation(weapon, hasDirectTarget, isWaterTerrain, p.Pos, sink)
+	// Impact presentation is part of the concrete projectile path. Keep the
+	// researched order visible here: shake, impact sound, end smoke or
+	// explosion, then the impact event and authoritative damage [06 §13.2].
+	if weapon.ShakeMagnitude != 0 || weapon.ShakeDuration != 0 {
+		s.emitEvent(Event{Kind: EventShake, Tick: tick, Source: p.Shooter, Position: p.Pos, Magnitude: weapon.ShakeMagnitude, Duration: weapon.ShakeDuration})
+	}
+	if hasDirectTarget || !isWaterTerrain {
+		if weapon.SoundHit != "" {
+			s.emitEvent(Event{Kind: EventHitSound, Tick: tick, Source: p.Shooter, Position: p.Pos, Sound: weapon.SoundHit})
+		}
+	} else if weapon.SoundWater != "" {
+		s.emitEvent(Event{Kind: EventWaterSound, Tick: tick, Source: p.Shooter, Position: p.Pos, Sound: weapon.SoundWater})
+	}
+	if weapon.EndSmoke && !isWaterTerrain {
+		s.emitEvent(Event{Kind: EventEndSmoke, Tick: tick, Source: p.Shooter, Position: p.Pos})
+	} else {
+		graphic := weapon.ExplosionGaf
+		isWaterExplosion := isWaterTerrain && !hasDirectTarget
+		if isWaterExplosion {
+			graphic = weapon.WaterExplosionGaf
+			if graphic == "" {
+				graphic = weapon.WaterExplosionArt
+			}
+		} else if graphic == "" {
+			graphic = weapon.ExplosionArt
+		}
+		if graphic != "" {
+			kind := EventExplosion
+			if isWaterExplosion {
+				kind = EventWaterExplosion
+			}
+			s.emitEvent(Event{Kind: kind, Tick: tick, Source: p.Shooter, Position: p.Pos, Graphic: graphic})
+		}
+	}
 	s.emitEvent(Event{Kind: EventProjectileImpact, Tick: tick, Source: p.Shooter, Target: p.TargetUnit, Position: p.Pos})
 	applyProjectileDamage(s, p, weapon, w, terrain, featSvc, econ, catalog, tick, simRNG, hasDirectTarget, isWaterTerrain, h)
 	_ = wind
-}
-
-type combatPresentationSink struct {
-	service  *Service
-	tick     uint32
-	source   pool.Handle
-	position Vec3
-}
-
-func (n *combatPresentationSink) Shake(magnitude, duration int32) {
-	if n == nil {
-		return
-	}
-	n.service.emitEvent(Event{Kind: EventShake, Tick: n.tick, Source: n.source, Position: n.position, Magnitude: magnitude, Duration: duration})
-}
-func (n *combatPresentationSink) PlayHitSound(sound string) {
-	if n == nil {
-		return
-	}
-	n.service.emitEvent(Event{Kind: EventHitSound, Tick: n.tick, Source: n.source, Position: n.position, Sound: sound})
-}
-func (n *combatPresentationSink) PlayWaterSound(sound string) {
-	if n == nil {
-		return
-	}
-	n.service.emitEvent(Event{Kind: EventWaterSound, Tick: n.tick, Source: n.source, Position: n.position, Sound: sound})
-}
-func (n *combatPresentationSink) EmitEndSmoke(pos Vec3) {
-	if n == nil {
-		return
-	}
-	n.service.emitEvent(Event{Kind: EventEndSmoke, Tick: n.tick, Source: n.source, Position: pos})
-}
-func (n *combatPresentationSink) EmitExplosion(gaf, art string, isWater bool) {
-	if n == nil {
-		return
-	}
-	graphic := gaf
-	if graphic == "" {
-		graphic = art
-	}
-	kind := EventExplosion
-	if isWater {
-		kind = EventWaterExplosion
-	}
-	n.service.emitEvent(Event{Kind: kind, Tick: n.tick, Source: n.source, Position: n.position, Graphic: graphic})
 }
 
 func applyProjectileDamage(service *Service, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, econ *economy.Service, catalog *content.Catalog, tick uint32, simRNG *rng.Simulation, hasDirectTarget bool, isWaterTerrain bool, handle pool.Handle) {

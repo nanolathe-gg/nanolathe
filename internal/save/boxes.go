@@ -22,31 +22,6 @@ import (
 // File naming and write policy (C14) [08 "File naming and write policy"].
 // ---------------------------------------------------------------------------
 
-// NormalizeSavePath reproduces retail .SAV normalization: strip the last dot
-// and everything after it from the assembled path (not path-component aware),
-// then append .SAV [08 "File naming and write policy"]. Wrapper around
-// bank.go's NormalizeSAV for the C14 contract; the logic lives in bank.go.
-func NormalizeSavePath(p string) string { return NormalizeSAV(p) }
-
-// WriteBankFile implements the retail write policy: open directly for
-// truncate-write (an existing file truncates at successful open); after open,
-// every write and close result is ignored and the caller sees success
-// [08 "File naming and write policy"]. It normalizes the path first and
-// returns nil on post-open success even if close fails; only open failure
-// returns an error. The caller ignores the result per retail (C14 returns 1).
-func WriteBankFile(path string, data []byte) error {
-	// C14: .SAV normalization strips after last dot [08 "File naming and write policy"].
-	norm := NormalizeSAV(path)
-	// C14: truncate-open directly; post-open errors ignored returning success.
-	return WriteFile(norm, data)
-}
-
-// OpenBankFile opens a save after .SAV normalization. It is the load-side
-// counterpart to WriteBankFile's normalization (C14).
-func OpenBankFile(path string) (*Bank, error) {
-	return Open(NormalizeSAV(path))
-}
-
 // ---------------------------------------------------------------------------
 // Summary account [08 "Save-file organization"] [08 "Summary"].
 // ---------------------------------------------------------------------------

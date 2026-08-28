@@ -280,7 +280,6 @@ func TestNoImpulse(t *testing.T) {
 	impact := Vec3{X: numericFromInt(0), Z: numericFromInt(0), Y: numericFromInt(0)}
 	w := &content.WeaponDef{AreaOfEffect: 40, EdgeEffectiveness: 0}
 	radius := BlastRadius(w.AreaOfEffect) // 20
-	// Capture pos before
 	before := u.Pos
 	visited := 0
 	ApplyAreaDamage(impact, w, 1, 0, 0, radius, 10, 10, func(cx, cz int32) [2]pool.Handle {
@@ -295,7 +294,6 @@ func TestNoImpulse(t *testing.T) {
 		return UnitForArea{}, false
 	}, false, func(victim pool.Handle, falloff float32, distance int32) {
 		visited++
-		// Ensure no impulse modifies position
 		if u.Pos != before {
 			t.Fatalf("impulse modified position [06 §9.4] C26")
 		}
@@ -303,7 +301,6 @@ func TestNoImpulse(t *testing.T) {
 	if visited == 0 {
 		t.Fatalf("area enumeration missed unit [06 §9.3] C26")
 	}
-	// ApplyImpulse should be no-op
 	ApplyImpulse()
 	if u.Pos != before {
 		t.Fatalf("ApplyImpulse is not empty [06 §9.4] C26")

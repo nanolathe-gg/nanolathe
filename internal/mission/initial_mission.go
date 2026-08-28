@@ -11,33 +11,18 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// P0-I16: Authoritative hooks moved onto service/session. The previous package
-// vars UnitTypeExistsHook and IsBuildingTypeHook are removed. Catalog lookup via
-// injected catalog is now the sole production path; tests should provide a catalog
-// with or without the queried type instead of setting a global hook. For legacy
-// compatibility a per-call Hooks struct can be supplied via RunInitialMissionsWithHooks.
-
-// Hooks carries per-session overrides for InitialMission interpretation [P0-I16].
-// When nil, catalog lookup is used. Tests may supply hooks to simulate unknown types.
-type Hooks struct {
-	UnitTypeExists func(name string) bool
-	IsBuildingType func(name string) bool
-}
-
-// RunInitialMissions interprets InitialMission strings once after all mission
-// units exist, for mission type 1 and BetweenMissions restores only.
-// It registers with no tick dispatcher; from the next tick the ordinary pump
-// consumes queued orders [04 §3.6] C9.
+// RunInitialMissionsWithCatalog interprets InitialMission strings once after
+// all mission units exist, for mission type 1 and BetweenMissions restores
+// only. It registers with no tick dispatcher; from the next tick the ordinary
+// pump consumes queued orders [04 §3.6] C9. Unit existence and building-vs-
+// mobile classification are resolved exclusively through cat, matching the
+// catalog-backed runtime path [04 §3.6].
 // TODO(question): InitialMission does not create extractors itself, but units placed
 // via session reconstructUnits / save restore World.Create bypass SpotMetal sampling
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// verify coverage for any direct World.Create outside session.
-func RunInitialMissions(m *Mission, w *units.World) {
-	RunInitialMissionsWithCatalog(m, w, nil)
-}
-
-// RunInitialMissionsWithHooks is RunInitialMissions with catalog and per-session hooks [P0-I16].
-func RunInitialMissionsWithHooks(m *Mission, w *units.World, cat *content.Catalog, hooks *Hooks) {
+// unless the session hook samples Σ(cell+1)*extractsMetal once into the unit's
+// extraction state [P1-10][P1-15]; verify coverage for any direct World.Create
+// outside session.
+func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Catalog) {
 	if m == nil || w == nil {
 		return
 	}
@@ -128,7 +113,6 @@ func RunInitialMissionsWithHooks(m *Mission, w *units.World, cat *content.Catalo
 			attachMap:     attachMap,
 			mission:       m,
 			catalog:       cat,
-			hooks:         hooks,
 			placementIdx:  idx,
 		}
 		tokens := tokenizeScript(script)
@@ -159,12 +143,6 @@ func RunInitialMissionsWithHooks(m *Mission, w *units.World, cat *content.Catalo
 	}
 }
 
-// RunInitialMissionsWithCatalog is RunInitialMissions with the content
-// catalog backing type-existence and building-vs-mobile lookups [04 §3.6].
-func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Catalog) {
-	RunInitialMissionsWithHooks(m, w, cat, nil)
-}
-
 // interpCtx holds per-unit interpreter state.
 type interpCtx struct {
 	unit          *units.Unit
@@ -174,8 +152,7 @@ type interpCtx struct {
 	unitNameMap   map[string]int
 	attachMap     map[int]int
 	mission       *Mission
-	catalog       *content.Catalog // production existence/building lookups [04 §3.6]; may be nil in fixtures with hooks
-	hooks         *Hooks           // per-session overrides [P0-I16]
+	catalog       *content.Catalog // production existence/building lookups [04 §3.6]
 	queued        int
 	suppressTail  bool
 	placementIdx  int
@@ -308,8 +285,8 @@ func timeToTicks(secs float64) int32 {
 // identity across catalog changes and save/load, so it is what the node
 // carries, with the index kept beside it for the index-keyed fallback.
 //
-// The index is zero when no catalog is bound (fixtures drive existence through
-// hooks instead); BuildDefKey still resolves in that case.
+// The index is zero when no catalog is bound; BuildDefKey still carries the
+// canonical identity, but no authored type can pass the catalog lookup.
 func productIdentity(cat *content.Catalog, defKey string) (string, uint32) {
 	ck := content.CanonicalKey(defKey)
 	if cat == nil {
@@ -320,9 +297,6 @@ func productIdentity(cat *content.Catalog, defKey string) (string, uint32) {
 }
 
 func typeExists(ctx *interpCtx, name string) bool {
-	if ctx != nil && ctx.hooks != nil && ctx.hooks.UnitTypeExists != nil {
-		return ctx.hooks.UnitTypeExists(name)
-	}
 	if strings.TrimSpace(name) == "" {
 		return false
 	}
@@ -332,15 +306,13 @@ func typeExists(ctx *interpCtx, name string) bool {
 		_, ok := ctx.catalog.Unit(content.CanonicalKey(name))
 		return ok
 	}
-	// No catalog and no hook: unknown. Retail would consult its catalog, so
-	// defaulting to true queued bogus orders for unknown types.
+	// No catalog means no type can be resolved. Production always supplies the
+	// immutable catalog; this keeps malformed fixture setup from queuing bogus
+	// orders.
 	return false
 }
 
 func isBuildingType(ctx *interpCtx, name string) bool {
-	if ctx != nil && ctx.hooks != nil && ctx.hooks.IsBuildingType != nil {
-		return ctx.hooks.IsBuildingType(name)
-	}
 	// `b` builds BuildingBuild when the found catalog entry's unit-name field
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	// TODO(question): the phase-2 compiler falls back UnitName to the base

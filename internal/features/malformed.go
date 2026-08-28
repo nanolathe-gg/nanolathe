@@ -54,19 +54,3 @@ func NormalizeDef(def *content.FeatureDef) *content.FeatureDef {
 	}
 	return &cp
 }
-
-// HandleUnknownTypeName handles a save's unknown feature type name during bulk load [P1-13 §2.7] [P1-I05].
-// Unknown names arise from custom/malformed saves or version skew; we synthesize a placeholder definition with 1x1 footprint and minimal damage
-// so the load does not panic and allocation-failure policy (0x100/0x800) still applies via spawnFeatureAt silent fail [P1-10][P1-15].
-func HandleUnknownTypeName(name string) *content.FeatureDef {
-	if name == "" {
-		name = "unknown"
-	}
-	ck := content.CanonicalKey(name)
-	return &content.FeatureDef{
-		DefinitionHeader: content.DefinitionHeader{CanonicalKey: ck},
-		FootprintX:       1,
-		FootprintZ:       1,
-		Damage:           10,
-	}
-}

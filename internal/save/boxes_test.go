@@ -283,19 +283,19 @@ func TestPlayerSlotRoundTrip(t *testing.T) {
 	}
 }
 
-// TestNormalizeSAVAndWritePolicy locks C14 .SAV normalization and truncate-open policy [08 "File naming and write policy"].
-func TestNormalizeSAVAndWritePolicy(t *testing.T) {
-	if got := NormalizeSavePath("savegame/foo.bar.baz"); got != "savegame/foo.bar.SAV" {
-		t.Fatalf("NormalizeSavePath foo.bar.baz = %q want savegame/foo.bar.SAV", got)
+// TestNormalizeSAV locks C14 .SAV normalization [08 "File naming and write policy"].
+func TestNormalizeSAV(t *testing.T) {
+	if got := NormalizeSAV("savegame/foo.bar.baz"); got != "savegame/foo.bar.SAV" {
+		t.Fatalf("NormalizeSAV foo.bar.baz = %q want savegame/foo.bar.SAV", got)
 	}
-	if got := NormalizeSavePath("savegame\\my.save.test"); got != "savegame\\my.save.SAV" {
-		t.Fatalf("NormalizeSavePath my.save.test = %q want savegame\\my.save.SAV", got)
+	if got := NormalizeSAV("savegame\\my.save.test"); got != "savegame\\my.save.SAV" {
+		t.Fatalf("NormalizeSAV my.save.test = %q want savegame\\my.save.SAV", got)
 	}
 	// Dot in directory should be stripped too (not path-component aware) [08 "File naming and write policy"].
-	if got := NormalizeSavePath("my.dir/save"); got != "my.SAV" {
+	if got := NormalizeSAV("my.dir/save"); got != "my.SAV" {
 		t.Fatalf("dot in dir should be stripped, got %q want my.SAV", got)
 	}
-	if got := NormalizeSavePath("nosuffix"); got != "nosuffix.SAV" {
+	if got := NormalizeSAV("nosuffix"); got != "nosuffix.SAV" {
 		t.Fatalf("nosuffix = %q want nosuffix.SAV", got)
 	}
 }

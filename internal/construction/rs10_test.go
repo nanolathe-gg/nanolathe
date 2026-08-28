@@ -223,7 +223,9 @@ func TestRS10_MultiBuilderLowestSlot(t *testing.T) {
 		q.Primary()[0].Phase = uint8(State3)
 		q.Primary()[0].Target = prod.Handle
 	}
-	svc.PumpAll(0)
+	for _, b := range []*units.Unit{b1, b2} {
+		svc.StepUnit(TickContext{Tick: 0}, b.Handle)
+	}
 	if prod.Remaining == 1.0 {
 		t.Fatalf("multi-builder did not advance")
 	}
@@ -234,7 +236,9 @@ func TestRS10_MultiBuilderLowestSlot(t *testing.T) {
 		q := orders.QueueForUnit(b)
 		q.Primary()[0].Phase = uint8(State3)
 	}
-	svc.PumpAll(1)
+	for _, b := range []*units.Unit{b1, b2} {
+		svc.StepUnit(TickContext{Tick: 1}, b.Handle)
+	}
 	if prod.Remaining != 0 {
 		t.Fatalf("completion not reached %v", prod.Remaining)
 	}

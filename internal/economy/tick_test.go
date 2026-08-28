@@ -34,38 +34,37 @@ func TestSettlementCadence(t *testing.T) {
 	// For this test we set helper deadlines to 0 so they run at tick 0, but we care about settlement.
 	svc.Players[0].Helper1Deadline = 0
 	svc.Players[0].Helper2Deadline = 0
-	var settleCalls []uint32
-	svc.OnSettle = func(p int, tick uint32) {
-		settleCalls = append(settleCalls, tick)
-	}
+	svc.Players[0].Mirror[Metal].Production = 1
+	svc.Players[0].StorageBonusEnabled = true
+	svc.Players[0].StorageBonus[Metal] = 1000
 	w := units.New(10, nil)
 	// Tick 0 should settle (deadline 0 <=0) and advance to 30
 	svc.TickPlayer(0, 0, w, nil)
-	if len(settleCalls) != 1 || settleCalls[0] != 0 {
-		t.Fatalf("C2: at tick 0 deadline 0 should settle once, got %v", settleCalls)
-	}
 	if svc.Players[0].UpdateTime != 30 {
 		t.Fatalf("C2: after tick 0 deadline should be 30, got %d", svc.Players[0].UpdateTime)
 	}
+	if svc.Players[0].Mirror[Metal].Production != 0 || svc.Players[0].PassProduced[Metal] != 1 {
+		t.Fatalf("C2: due pass must consume/archive production, live=%v pass=%v", svc.Players[0].Mirror[Metal].Production, svc.Players[0].PassProduced[Metal])
+	}
 	// Ticks 1..29 should not settle
-	settleCalls = nil
+	svc.Players[0].Mirror[Metal].Production = 2
 	for tick := uint32(1); tick < 30; tick++ {
 		svc.TickPlayer(0, tick, w, nil)
-		if len(settleCalls) != 0 {
-			t.Fatalf("C2: tick %d should not settle, got %v", tick, settleCalls)
-		}
 		if svc.Players[0].UpdateTime != 30 {
 			t.Fatalf("C2: deadline should remain 30 at tick %d, got %d", tick, svc.Players[0].UpdateTime)
 		}
+		if svc.Players[0].Mirror[Metal].Production != 2 {
+			t.Fatalf("C2: future deadline must leave live production pending at tick %d", tick)
+		}
 	}
 	// Tick 30 should settle again and advance to 60
-	settleCalls = nil
+	svc.Players[0].Stock[Metal] = 1
 	svc.TickPlayer(0, 30, w, nil)
-	if len(settleCalls) != 1 {
-		t.Fatalf("C2: tick 30 should settle")
-	}
 	if svc.Players[0].UpdateTime != 60 {
 		t.Fatalf("C2: after tick 30 deadline should be 60, got %d", svc.Players[0].UpdateTime)
+	}
+	if svc.Players[0].Mirror[Metal].Production != 0 || svc.Players[0].PassProduced[Metal] != 2 || svc.Players[0].Stock[Metal] != 3 {
+		t.Fatalf("C2: second due pass did not settle live production, stock=%v live=%v pass=%v", svc.Players[0].Stock[Metal], svc.Players[0].Mirror[Metal].Production, svc.Players[0].PassProduced[Metal])
 	}
 }
 
@@ -79,31 +78,29 @@ func TestCatchUpEdge(t *testing.T) {
 	svc.Players[0].Helper1Deadline = 1<<32 - 1 // far future to avoid helper noise? Set to tick to make helper due each time? Keep helpers aligned to not affect settlement counts.
 	svc.Players[0].Helper2Deadline = 1<<32 - 1
 	// Override helpers to not increment? But fine.
-	var settles int
-	svc.OnSettle = func(p int, tk uint32) { settles++ }
 	w := units.New(10, nil)
 	// Simulate ticks 200.. until caught up
 	expectedDeadlines := []uint32{130, 160, 190, 220}
 	for i, wantDeadline := range expectedDeadlines {
-		settles = 0
+		svc.Players[0].Mirror[Metal].Production = float32(i + 1)
 		curTick := tick + uint32(i)
 		svc.TickPlayer(0, curTick, w, nil)
-		if settles != 1 {
-			t.Fatalf("C2 catch-up: tick %d deadline 100 behind should settle once per tick, got %d settles at iteration %d", curTick, settles, i)
-		}
 		if svc.Players[0].UpdateTime != wantDeadline {
 			t.Fatalf("C2 catch-up: after tick %d deadline want %d got %d", curTick, wantDeadline, svc.Players[0].UpdateTime)
+		}
+		if svc.Players[0].Mirror[Metal].Production != 0 || svc.Players[0].PassProduced[Metal] != float32(i+1) {
+			t.Fatalf("C2 catch-up: due pass at tick %d did not consume/archive production", curTick)
 		}
 	}
 	// Next tick after catch-up: deadline 220 at tick 204? 220 >204 should not settle? Wait we advanced tick linearly, but deadline after 4 ticks is 220, which is > tick 203? Let's continue ticks until deadline exceeds tick.
 	// At tick 204, deadline 220 >204 so should NOT settle until tick 220.
-	settles = 0
+	svc.Players[0].Mirror[Metal].Production = 9
 	svc.TickPlayer(0, 204, w, nil)
-	if settles != 0 {
-		t.Fatalf("C2 catch-up: tick 204 deadline 220 should not settle")
-	}
 	if svc.Players[0].UpdateTime != 220 {
 		t.Fatalf("deadline should stay 220 at tick 204, got %d", svc.Players[0].UpdateTime)
+	}
+	if svc.Players[0].Mirror[Metal].Production != 9 {
+		t.Fatalf("C2 catch-up: future deadline must leave production pending")
 	}
 }
 
@@ -115,31 +112,29 @@ func TestCatchUp100TicksBehind(t *testing.T) {
 	var curTick uint32 = 100
 	svc.Players[0].Helper1Deadline = curTick + 1000 // prevent helper interference with settlement counts? Actually helpers at future won't run
 	svc.Players[0].Helper2Deadline = curTick + 1000
-	settles := 0
-	svc.OnSettle = func(p int, tk uint32) { settles++ }
 	w := units.New(10, nil)
 	// Deadline 0 at tick 100 is 100 behind, should settle once per tick until caught up (single add per tick, not loop).
 	// Ticks 100,101,102,103 should settle (deadlines 0->30->60->90->120), tick 104 should NOT settle as deadline 120 >104.
 	for i := 0; i < 4; i++ {
-		settles = 0
+		svc.Players[0].Mirror[Metal].Production = float32(i + 1)
 		tk := curTick + uint32(i)
 		wantDeadline := svc.Players[0].UpdateTime
 		svc.TickPlayer(0, tk, w, nil)
-		if settles != 1 {
-			t.Fatalf("100 behind: tick %d should settle once, got %d", tk, settles)
-		}
 		if svc.Players[0].UpdateTime != wantDeadline+30 {
 			t.Fatalf("deadline should advance exactly 30: was %d now %d", wantDeadline, svc.Players[0].UpdateTime)
 		}
+		if svc.Players[0].Mirror[Metal].Production != 0 || svc.Players[0].PassProduced[Metal] != float32(i+1) {
+			t.Fatalf("100 behind: due pass at tick %d did not consume/archive production", tk)
+		}
 	}
 	// Next tick 104 deadline 120 >104 should not settle, single add ensures catch-up per tick.
-	settles = 0
+	svc.Players[0].Mirror[Metal].Production = 9
 	svc.TickPlayer(0, curTick+4, w, nil)
-	if settles != 0 {
-		t.Fatalf("tick %d deadline 120 should NOT settle", curTick+4)
-	}
 	if svc.Players[0].UpdateTime != 120 {
 		t.Fatalf("deadline should stay 120 at tick 104, got %d", svc.Players[0].UpdateTime)
+	}
+	if svc.Players[0].Mirror[Metal].Production != 9 {
+		t.Fatalf("future deadline must leave production pending")
 	}
 }
 
@@ -148,51 +143,48 @@ func TestUnsignedComparisonWrap(t *testing.T) {
 	var svc Service
 	activePlayer(&svc.Players[0])
 	w := units.New(10, nil)
-	var settles int
-	svc.OnSettle = func(p int, tk uint32) { settles++ }
 	// Case A: deadline near max, tick small (0): deadline > tick unsigned => not due => no settle, deadline frozen.
+	svc.Players[0].Mirror[Metal].Production = 3
 	svc.Players[0].UpdateTime = 0xFFFFFFF0 // 4294967280
 	svc.Players[0].Helper1Deadline = 0xFFFFFFFF
 	svc.Players[0].Helper2Deadline = 0xFFFFFFFF
-	settles = 0
 	svc.TickPlayer(0, 5, w, nil)
-	if settles != 0 {
-		t.Fatalf("unsigned wrap A: deadline 0xFFFFFFF0 > tick 5 should NOT settle (unsigned), got settle")
-	}
 	if svc.Players[0].UpdateTime != 0xFFFFFFF0 {
 		t.Fatalf("unsigned wrap A: deadline should stay 0xFFFFFFF0, got %08x", svc.Players[0].UpdateTime)
 	}
+	if svc.Players[0].Mirror[Metal].Production != 3 {
+		t.Fatalf("unsigned wrap A: future deadline must leave production pending")
+	}
 	// Case B: deadline small, tick near max: deadline (5) not > tick (0xFFFFFFFE) => due => settle and advance.
 	svc.Players[0].UpdateTime = 5
-	settles = 0
+	svc.Players[0].Mirror[Metal].Production = 4
 	svc.TickPlayer(0, 0xFFFFFFFE, w, nil) // 4294967294
-	if settles != 1 {
-		t.Fatalf("unsigned wrap B: deadline 5 <= tick 0xFFFFFFFE unsigned => should settle, got %d", settles)
-	}
-	if svc.Players[0].UpdateTime != 35 { // 5+30
+	if svc.Players[0].UpdateTime != 35 {  // 5+30
 		t.Fatalf("wrap B: deadline should be 35, got %d", svc.Players[0].UpdateTime)
+	}
+	if svc.Players[0].Mirror[Metal].Production != 0 || svc.Players[0].PassProduced[Metal] != 4 {
+		t.Fatalf("unsigned wrap B: due pass must consume/archive production")
 	}
 	// Case C: deadline = 0xFFFFFFFF, tick =0 => deadline > tick true => not due
 	svc.Players[0].UpdateTime = 0xFFFFFFFF
-	settles = 0
+	svc.Players[0].Mirror[Metal].Production = 5
 	svc.TickPlayer(0, 0, w, nil)
-	if settles != 0 {
-		t.Fatalf("wrap C: deadline 0xFFFFFFFF >0 should not settle")
+	if svc.Players[0].Mirror[Metal].Production != 5 {
+		t.Fatalf("unsigned wrap C: future deadline must leave production pending")
 	}
 	// Case D: deadline =0, tick=0xFFFFFFFF => deadline <= tick => due (wrap single add)
 	svc.Players[0].UpdateTime = 0
-	settles = 0
+	svc.Players[0].Mirror[Metal].Production = 6
 	svc.TickPlayer(0, 0xFFFFFFFF, w, nil)
-	if settles != 1 {
-		t.Fatalf("wrap D: deadline 0 <= 0xFFFFFFFF should settle")
-	}
 	if svc.Players[0].UpdateTime != 30 {
 		t.Fatalf("wrap D deadline advance to 30, got %d", svc.Players[0].UpdateTime)
+	}
+	if svc.Players[0].Mirror[Metal].Production != 0 || svc.Players[0].PassProduced[Metal] != 6 {
+		t.Fatalf("unsigned wrap D: due pass must consume/archive production")
 	}
 	// Ensure helpers also use unsigned; not critical but check helper wrap similarly
 	svc.Players[0].Helper1Deadline = 0xFFFFFFF0
 	svc.Players[0].Helper1Calls = 0
-	settles = 0
 	// Tick with helper deadline future: should not run helper
 	svc.Players[0].UpdateTime = 0xFFFFFFF0 // set deadline future again to avoid settlement interference
 	svc.TickPlayer(0, 5, w, nil)
@@ -211,13 +203,9 @@ func TestSkippedSlotNothingAdvances(t *testing.T) {
 	svc.Players[0].Helper1Deadline = 100
 	svc.Players[0].Helper2Deadline = 100
 	svc.Players[0].ControllerState = 1
-	var settles int
-	svc.OnSettle = func(p int, tk uint32) { settles++ }
+	svc.Players[0].Mirror[Metal].Production = 3
 	var beforeCalled bool
 	svc.TickPlayer(0, 200, w, func() { beforeCalled = true })
-	if settles != 0 {
-		t.Fatalf("skipped slot should not settle")
-	}
 	if beforeCalled {
 		t.Fatalf("skipped slot beforeDeadline should not be called")
 	}
@@ -230,6 +218,9 @@ func TestSkippedSlotNothingAdvances(t *testing.T) {
 	if svc.Players[0].WeaponRefreshCalls != 0 {
 		t.Fatalf("skipped slot weapon refresh should not run")
 	}
+	if svc.Players[0].Mirror[Metal].Production != 3 {
+		t.Fatalf("skipped slot must leave production pending")
+	}
 	// Also test observer skip freezes deadline
 	svc.Players[1].Exists = true
 	svc.Players[1].ControllerState = 1
@@ -237,18 +228,20 @@ func TestSkippedSlotNothingAdvances(t *testing.T) {
 	svc.Players[1].UpdateTime = 50
 	svc.Players[1].Helper1Deadline = 50
 	svc.Players[1].Helper2Deadline = 50
-	settles = 0
+	svc.Players[1].Mirror[Metal].Production = 4
 	beforeCalled = false
 	svc.TickPlayer(1, 100, w, func() { beforeCalled = true })
-	if settles != 0 || beforeCalled || svc.Players[1].UpdateTime != 50 {
-		t.Fatalf("observer skipped should freeze all, got settles %d before %v deadline %d", settles, beforeCalled, svc.Players[1].UpdateTime)
+	if beforeCalled || svc.Players[1].UpdateTime != 50 {
+		t.Fatalf("observer skipped should freeze all, got before %v deadline %d", beforeCalled, svc.Players[1].UpdateTime)
+	}
+	if svc.Players[1].Mirror[Metal].Production != 4 {
+		t.Fatalf("observer skipped must leave production pending")
 	}
 	// Active state skip (state 0 not in {1,2,3})
 	svc.Players[2].Exists = true
 	svc.Players[2].ControllerState = 0
 	svc.Players[2].UpdateTime = 70
 	svc.Players[2].Helper1Deadline = 70
-	settles = 0
 	svc.TickPlayer(2, 100, w, nil)
 	if svc.Players[2].UpdateTime != 70 {
 		t.Fatalf("inactive state should freeze deadline")
@@ -304,18 +297,14 @@ func TestGateChainIndependentlyBlocks(t *testing.T) {
 			var svc Service
 			p := &svc.Players[0]
 			tc.mutate(p)
+			p.Mirror[Metal].Production = 4
 			// Ensure deadline due
 			p.UpdateTime = 100
 			p.Helper1Deadline = 200 // far future to avoid extra helper increments affecting test clarity
 			p.Helper2Deadline = 200
 			p.WeaponRefreshCalls = 0
-			var settles int
-			svc.OnSettle = func(int, uint32) { settles++ }
 			var beforeCalls int
 			svc.TickPlayer(0, 100, w, func() { beforeCalls++ })
-			if settles != 0 {
-				t.Fatalf("%s: should block settlement, got settle", tc.name)
-			}
 			if p.UpdateTime != 130 {
 				t.Fatalf("%s: gate block should still advance deadline by 30 (100->130), got %d", tc.name, p.UpdateTime)
 			}
@@ -328,6 +317,9 @@ func TestGateChainIndependentlyBlocks(t *testing.T) {
 			if p.WeaponRefreshCalls != 1 {
 				t.Fatalf("%s: weapon refresh should have run despite gate block, got %d", tc.name, p.WeaponRefreshCalls)
 			}
+			if p.Mirror[Metal].Production != 4 {
+				t.Fatalf("%s: blocked gate must leave production pending", tc.name)
+			}
 		})
 	}
 	// Also verify that observer/status etc when early skipped does NOT advance deadline — already tested in skipped test
@@ -339,14 +331,13 @@ func TestGateChainIndependentlyBlocks(t *testing.T) {
 		p.UpdateTime = 100
 		p.Helper1Deadline = 200
 		p.Helper2Deadline = 200
-		var settles int
-		svc.OnSettle = func(int, uint32) { settles++ }
+		p.Mirror[Metal].Production = 4
 		svc.TickPlayer(0, 100, w, nil)
-		if settles != 1 {
-			t.Fatalf("all gates pass should settle")
-		}
 		if p.UpdateTime != 130 {
 			t.Fatalf("deadline advance 100->130")
+		}
+		if p.Mirror[Metal].Production != 0 || p.PassProduced[Metal] != 4 {
+			t.Fatalf("all gates pass must consume/archive production")
 		}
 	})
 	// Verify isObserver gate also blocks at gate level but early skip already would have frozen deadline,
@@ -365,26 +356,28 @@ func TestBeforeDeadlineOrdering(t *testing.T) {
 	svc.Players[0].Helper1Deadline = 100
 	svc.Players[0].Helper2Deadline = 100
 	svc.Players[0].WeaponRefreshCalls = 0
-	var order []string
-	svc.OnSettle = func(p int, tick uint32) { order = append(order, "settle") }
+	svc.Players[0].Mirror[Metal].Production = 5
 	// Capture helper calls at beforeDeadline time
 	var helper1AtBefore, helper2AtBefore, weaponAtBefore int
+	var productionAtBefore float32
 	svc.TickPlayer(0, 100, w, func() {
-		order = append(order, "beforeDeadline")
 		helper1AtBefore = svc.Players[0].Helper1Calls
 		helper2AtBefore = svc.Players[0].Helper2Calls
 		weaponAtBefore = svc.Players[0].WeaponRefreshCalls
+		productionAtBefore = svc.Players[0].Mirror[Metal].Production
 		// helpers should have already incremented
 	})
-	// Check ordering: helpers before beforeDeadline, beforeDeadline before settle
-	if len(order) != 2 || order[0] != "beforeDeadline" || order[1] != "settle" {
-		t.Fatalf("ordering: beforeDeadline should be after helpers and before settle, got %v", order)
-	}
+	// The callback observed all helper effects, and the deadline advanced only
+	// after the callback returned, which locks the phase ordering without a
+	// notification hook.
 	if helper1AtBefore != 1 || helper2AtBefore != 1 {
 		t.Fatalf("helpers should have run before beforeDeadline: h1=%d h2=%d", helper1AtBefore, helper2AtBefore)
 	}
 	if weaponAtBefore != 1 {
 		t.Fatalf("weapon refresh should have run before beforeDeadline")
+	}
+	if productionAtBefore != 5 || svc.Players[0].Mirror[Metal].Production != 0 || svc.Players[0].PassProduced[Metal] != 5 {
+		t.Fatalf("beforeDeadline must precede settlement: callback production=%v live=%v pass=%v", productionAtBefore, svc.Players[0].Mirror[Metal].Production, svc.Players[0].PassProduced[Metal])
 	}
 	// Verify beforeDeadline not called when early skipped
 	var svc2 Service
@@ -401,18 +394,18 @@ func TestBeforeDeadlineOrdering(t *testing.T) {
 	svc3.Players[0].UpdateTime = 200 // future, not due at tick 100
 	svc3.Players[0].Helper1Deadline = 100
 	svc3.Players[0].Helper2Deadline = 100
-	var settle3 int
-	svc3.OnSettle = func(int, uint32) { settle3++ }
+	svc3.Players[0].Mirror[Metal].Production = 6
 	called = false
-	svc3.TickPlayer(0, 100, w, func() { called = true })
+	var pendingAtBefore float32
+	svc3.TickPlayer(0, 100, w, func() { called = true; pendingAtBefore = svc3.Players[0].Mirror[Metal].Production })
 	if !called {
 		t.Fatalf("beforeDeadline should be called even when deadline not due (helpers before compare)")
 	}
-	if settle3 != 0 {
-		t.Fatalf("should not settle when deadline future")
-	}
 	if svc3.Players[0].UpdateTime != 200 {
 		t.Fatalf("deadline future should stay 200, got %d", svc3.Players[0].UpdateTime)
+	}
+	if pendingAtBefore != 6 || svc3.Players[0].Mirror[Metal].Production != 6 {
+		t.Fatalf("future deadline must not settle production, callback=%v live=%v", pendingAtBefore, svc3.Players[0].Mirror[Metal].Production)
 	}
 	// Helpers should have run even when deadline future
 	if svc3.Players[0].Helper1Calls != 1 {
@@ -482,16 +475,19 @@ func TestSeedingSemantics(t *testing.T) {
 	var svc2 Service
 	activePlayer(&svc2.Players[0])
 	activePlayer(&svc2.Players[1])
+	svc2.Players[0].Mirror[Metal] = Bucket{Production: 2, Requested: 1, Carry: 4}
+	svc2.Players[1].Mirror[Metal] = Bucket{Production: 3, Requested: 2, Carry: 5}
 	svc2.SeedDeadlines(10)
 	w := units.New(10, nil)
-	var calls []int
-	svc2.OnSettle = func(p int, tick uint32) { calls = append(calls, p) }
 	svc2.Tick(10, w) // full pass at tick 10: deadlines 10 -> 40 and settle
-	if len(calls) != 2 {
-		t.Fatalf("initial pass after seeding should settle active players, got %v", calls)
-	}
 	if svc2.Players[0].UpdateTime != 40 || svc2.Players[1].UpdateTime != 40 {
 		t.Fatalf("after initial pass deadlines should be 40 (10+30), got %d %d", svc2.Players[0].UpdateTime, svc2.Players[1].UpdateTime)
+	}
+	for i, want := range []float32{2, 3} {
+		p := &svc2.Players[i]
+		if p.Mirror[Metal].Production != 0 || p.Mirror[Metal].Requested != 0 || p.PassProduced[Metal] != want || p.PassConsumed[Metal] != want-1 || p.Mirror[Metal].Carry == 0 {
+			t.Fatalf("initial seeded pass player %d did not consume/archive production and preserve debt: mirror=%+v pass=(%v,%v)", i, p.Mirror[Metal], p.PassProduced[Metal], p.PassConsumed[Metal])
+		}
 	}
 	// Spawn credits outside ledger
 	CreditSpawn(&svc2.Players[0], Metal, 1000)
@@ -649,30 +645,17 @@ func TestTickLoopsPlayersAscending(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		activePlayer(&svc.Players[i])
 		svc.Players[i].UpdateTime = 0
+		svc.Players[i].Mirror[Metal].Production = float32(i + 1)
 	}
 	w := units.New(10, nil)
-	var order []int
-	svc.OnSettle = func(p int, tick uint32) { order = append(order, p) }
 	svc.Tick(0, w)
 	for i := 0; i < 10; i++ {
-		if order[i] != i {
-			t.Fatalf("Tick order should be 0..9 ascending, got %v", order)
+		if svc.Players[i].UpdateTime != 30 {
+			t.Fatalf("Tick should visit active players 0..9, player %d deadline=%d", i, svc.Players[i].UpdateTime)
 		}
-	}
-}
-
-// TestSettleHookDefaultNoop verifies Settle without hook is no-op and doesn't panic.
-func TestSettleHookDefaultNoop(t *testing.T) {
-	var svc Service
-	activePlayer(&svc.Players[0])
-	svc.Players[0].UpdateTime = 0
-	svc.OnSettle = nil
-	w := units.New(10, nil)
-	// Should not panic
-	svc.TickPlayer(0, 0, w, nil)
-	// Deadline should have advanced even with no-op settle
-	if svc.Players[0].UpdateTime != 30 {
-		t.Fatalf("deadline advance without settle hook")
+		if svc.Players[i].Mirror[Metal].Production != 0 || svc.Players[i].PassProduced[Metal] != float32(i+1) {
+			t.Fatalf("Tick must settle player %d in the ascending player pass", i)
+		}
 	}
 }
 
@@ -682,16 +665,15 @@ func TestTickWithNilWorld(t *testing.T) {
 	activePlayer(&svc.Players[0])
 	svc.Players[0].UpdateTime = 0
 	svc.Players[0].Stock[Metal] = 50
-	var settles int
-	svc.OnSettle = func(int, uint32) { settles++ }
+	svc.Players[0].Mirror[Metal] = Bucket{Production: 7, Requested: 3, Carry: 2}
 	svc.TickPlayer(0, 0, nil, nil)
-	if settles != 1 {
-		t.Fatalf("nil world should still settle")
-	}
 	if svc.Players[0].WeaponRefreshCalls != 1 {
 		t.Fatalf("weapon refresh should run even with nil world")
 	}
-	if svc.Players[0].Stock[Metal] != 50 {
-		t.Fatalf("nil world sweep must not touch stock")
+	if svc.Players[0].Stock[Metal] != 55 {
+		t.Fatalf("nil world settlement should apply production and debt, stock=%v want 55", svc.Players[0].Stock[Metal])
+	}
+	if svc.Players[0].Mirror[Metal].Production != 0 || svc.Players[0].Mirror[Metal].Requested != 0 || svc.Players[0].Mirror[Metal].Carry != 0 || svc.Players[0].PassProduced[Metal] != 7 || svc.Players[0].PassConsumed[Metal] != 3 {
+		t.Fatalf("nil world settlement must consume/archive pending ledger state: mirror=%+v pass=(%v,%v)", svc.Players[0].Mirror[Metal], svc.Players[0].PassProduced[Metal], svc.Players[0].PassConsumed[Metal])
 	}
 }

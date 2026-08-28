@@ -20,7 +20,7 @@ func TestRX03_Summary_AimReturnOne_Fires(t *testing.T) {
 	}
 	prog := progWithAim(code, "AimPrimary", 0)
 	vm := cob.NewVM(prog)
-	shooter.SetScript(vm)
+	attachTestCOB(shooter, vm)
 	weapon := weaponTurret(7)
 	shooter.InstallWeapon(0, weapon)
 	slot := shooter.SlotAt(0)
@@ -52,7 +52,7 @@ func TestRX03_Summary_AimReturnZero_NoFire(t *testing.T) {
 	}
 	prog := progWithAim(code, "AimPrimary", 0)
 	vm := cob.NewVM(prog)
-	shooter.SetScript(vm)
+	attachTestCOB(shooter, vm)
 	weapon := weaponTurret(8)
 	shooter.InstallWeapon(0, weapon)
 	slot := shooter.SlotAt(0)
@@ -81,7 +81,7 @@ func TestRX03_Summary_AimSleeping_PendingNotReturned(t *testing.T) {
 	}
 	prog := progWithAim(code, "AimPrimary", 0)
 	vm := cob.NewVM(prog)
-	shooter.SetScript(vm)
+	attachTestCOB(shooter, vm)
 	weapon := weaponTurret(9)
 	shooter.InstallWeapon(0, weapon)
 	slot := shooter.SlotAt(0)
@@ -104,7 +104,7 @@ func TestRX03_Summary_WeaponlessScripted_NotDrainedByCombat(t *testing.T) {
 	code := []uint32{0x10065000} // immediate return
 	prog := progWithAim(code, "Create", 0)
 	vm := cob.NewVM(prog)
-	u.SetScript(vm)
+	attachTestCOB(u, vm)
 	var svc Service
 	sum := svc.StepWeaponsForUnit(u, 1, w, nil, nil, nil, nil, nil, nil)
 	if sum.Dispatched || sum.ReturnSeen || sum.Drained || sum.Fired != 0 {

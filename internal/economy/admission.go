@@ -180,9 +180,6 @@ func (s *Service) Settle(p int, tick uint32, w *units.World) {
 	if s == nil || p < 0 || p >= len(s.Players) {
 		return
 	}
-	if s.OnSettle != nil {
-		s.OnSettle(p, tick)
-	}
 	s.Players[p].aiAggregatesPrepared = false
 	// 1. Capacity is rebuilt from scratch each pass [05 "Storage capacity"] C14.
 	RebuildCapacity(s, w)

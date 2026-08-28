@@ -526,9 +526,9 @@ func TestStepUnitDeterminism(t *testing.T) {
 	}
 }
 
-// TestStepUnitTickWrapperParity ensures Tick wrapper (BeginTick+loop+EndTick) matches direct per-unit loop [task].
-func TestStepUnitTickWrapperParity(t *testing.T) {
-	// Run via Tick
+// TestStepUnitTickWrapperParity ensures the production per-unit loop matches a direct single-unit step.
+func TestStepUnitLoopParity(t *testing.T) {
+	// Run via the deterministic world sweep.
 	runTick := func() (int64, int64) {
 		terrain := syntheticTerrainFlat()
 		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
@@ -548,7 +548,7 @@ func TestStepUnitTickWrapperParity(t *testing.T) {
 		system.Scheduler.Tick(1)
 		for tick := uint32(2); tick < 15; tick++ {
 			system.Scheduler.Tick(tick)
-			system.Tick(tick, w) // wrapper
+			runMovementTick(system, tick, w)
 		}
 		return int64(w.Unit(h).X), int64(w.Unit(h).Z)
 	}

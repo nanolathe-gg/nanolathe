@@ -38,6 +38,13 @@ func featureDef(name string, metal, energy, damage int32) *content.FeatureDef {
 	}
 }
 
+// tickFeature runs the two explicit feature phase owners in retail order:
+// reproduction/motion first, then burning and sinking lifecycle.
+func tickFeature(s *Service, tick uint32) {
+	s.TickMotion(tick)
+	s.TickLifecycle(tick)
+}
+
 func TestReproduceCursorDescentWrapSkipNeverScanTop(t *testing.T) {
 	w, h := 3, 3
 	total := w * h
@@ -61,7 +68,7 @@ func TestReproduceCursorDescentWrapSkipNeverScanTop(t *testing.T) {
 	}
 	visited := []int{}
 	for i := 0; i < 20; i++ {
-		svc.Tick(uint32(i))
+		tickFeature(svc, uint32(i))
 		visited = append(visited, svc.LastReproIdx)
 	}
 	for _, v := range visited {
@@ -93,7 +100,7 @@ func TestReproduceDrawCountAtZero(t *testing.T) {
 	svc.spawnFeatureAt(1, 0, def)
 	svc.SetCursor(2)
 	before := svc.sim().Draws()
-	svc.Tick(0)
+	tickFeature(svc, 0)
 	after := svc.sim().Draws()
 	if after-before != 1 {
 		t.Fatalf("reproduce=0 eligible visit should consume exactly 1 sim draw [06 §13.1] I4, got %d", after-before)
@@ -106,14 +113,14 @@ func TestReproduceDrawCountAtZero(t *testing.T) {
 	// Next tick visits idx 0 which has no feature (empty) -> no draw
 	before = svc.sim().Draws()
 	// cursor currently 1, next tick visits 0 (empty)
-	svc.Tick(1)
+	tickFeature(svc, 1)
 	after = svc.sim().Draws()
 	if after != before {
 		t.Fatalf("ineligible empty cell should not draw, draws %d -> %d", before, after)
 	}
 	// Next tick visits -1 skip (wrap to 3) -> no draw
 	before = after
-	svc.Tick(2) // visits skip cell 3 (top)
+	tickFeature(svc, 2) // visits skip cell 3 (top)
 	after = svc.sim().Draws()
 	if after != before {
 		t.Fatalf("wrap-skip cell should not draw, draws %d -> %d", before, after)
@@ -147,7 +154,7 @@ func TestReproduceRollPassPlacementOffsets(t *testing.T) {
 	inBounds := expX >= 0 && expX < w && expZ >= 0 && expZ < h
 	// Count draws before
 	drawsBefore := beforeSim.Draws()
-	svc.Tick(10)
+	tickFeature(svc, 10)
 	drawsAfter := svc.sim().Draws()
 	if drawsAfter-drawsBefore != 3 {
 		t.Fatalf("passing roll should consume 3 draws (roll+dx+dz) [06 §13.1], got %d", drawsAfter-drawsBefore)
@@ -402,7 +409,7 @@ func TestBurningDamageCoupling(t *testing.T) {
 	// Record sim draws before
 	beforeDraws := svc.sim().Draws()
 	beforeBurnWeapons := len(svc.BurnWeaponsEmitted)
-	svc.Tick(0) // tick 0 => smoke true, burn countdown 1->0 fires event
+	tickFeature(svc, 0) // tick 0 => smoke true, burn countdown 1->0 fires event
 	afterDraws := svc.sim().Draws()
 	// Fire event should have drawn at least 1 for spread candidate (100% chance) + 1 for countdown earlier? Actually countdown was preset, so fire event draws 1 for candidate
 	// Our burnTick decrements countdown and fires, drawing 1 for candidate.
@@ -440,10 +447,10 @@ func TestBurningDamageCoupling(t *testing.T) {
 	// Check that smoke jitter uses CRT not sim: second tick smoke false vs true should not affect sim draws differently except for burn logic
 	simDrawsBefore := svc.sim().Draws()
 	crtDrawsBefore := svc.crt().Draws()
-	svc.Tick(1) // smoke false (tick 1 %3 !=0)
+	tickFeature(svc, 1) // smoke false (tick 1 %3 !=0)
 	simDrawsAfter1 := svc.sim().Draws()
 	crtDrawsAfter1 := svc.crt().Draws()
-	svc.Tick(3) // smoke true (3%3==0)
+	tickFeature(svc, 3) // smoke true (3%3==0)
 	simDrawsAfter2 := svc.sim().Draws()
 	crtDrawsAfter2 := svc.crt().Draws()
 	// CRT should have advanced more on smoke true ticks
@@ -552,11 +559,11 @@ func TestBurningSmokeOnlyGated(t *testing.T) {
 	inst.BurnCountdown = 10 // not zero, so no spread event this tick
 	inst.BurnDuration = 100
 	// Tick 0 smoke true, Tick 1 smoke false: both should advance BurnTicks and decrement countdown
-	svc.Tick(0) // smoke true
+	tickFeature(svc, 0) // smoke true
 	if inst.BurnTicks != 1 || inst.BurnCountdown != 9 {
 		t.Fatalf("burn tick 0 failed, ticks %d countdown %d", inst.BurnTicks, inst.BurnCountdown)
 	}
-	svc.Tick(1) // smoke false, but still should advance
+	tickFeature(svc, 1) // smoke false, but still should advance
 	if inst.BurnTicks != 2 || inst.BurnCountdown != 8 {
 		t.Fatalf("burn tick 1 (smoke gated only) should still advance animation and countdown every tick [05 \"Feature burning\"], got ticks %d countdown %d", inst.BurnTicks, inst.BurnCountdown)
 	}
@@ -584,7 +591,7 @@ func TestWindEmbersZeroWindNoDraws(t *testing.T) {
 	instZero.BurnDuration = 100
 	// Place no candidates to avoid spread draws, just test wind embers zero wind collapses to no draws [05 "Feature burning"]
 	before := svcZero.sim().Draws()
-	svcZero.Tick(0) // fires burn event, wind embers with zero wind should not draw
+	tickFeature(svcZero, 0) // fires burn event, wind embers with zero wind should not draw
 	after := svcZero.sim().Draws()
 	// Should have drawn only for neighbourhood spread if any candidates survived? But we have no candidates, so only possible draws are from spread (none) and wind (zero => none) and burn weapon (none)
 	// So draws should be 0 for this tick? Actually countdown decrement itself doesn't draw except for spread. The fire event with zero wind and no candidates draws 0.

@@ -134,14 +134,6 @@ func (s *Service) crt() *rng.CRT {
 	return nil // DET-01: no global fallback
 }
 
-// Tick advances the feature phase one tick [06 §13.1] [05 "Feature burning"].
-// Order: reproduction walker (top of phase) [06 §13.1], then burning, then sinking.
-func (s *Service) Tick(tick uint32) {
-	s.reproduceTick()
-	s.burnTick(tick)
-	s.sinkTick()
-}
-
 // TickMotion advances only the prepass/reproduction walker which belongs in
 // phase 4 (effects/feature motion) [01 §4.4][06 §13.1]. Lifecycle (burning and
 // sinking) belongs in phase 6. Splitting keeps reproduction ordering before
