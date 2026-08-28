@@ -8,14 +8,18 @@ type ResultAction uint8
 const (
 	ResultActionNone ResultAction = iota
 	ResultActionContinue
+	ResultActionMainMenu
 )
 
-// ResultActionForControl accepts only the authored control whose continuation
-// behavior is established. Unknown controls remain inert rather than gaining
-// guessed aliases or synthetic routes.
+// ResultActionForControl accepts only authored ENDMSN route controls. Unknown
+// controls remain inert rather than gaining guessed aliases or synthetic routes
+// [07 §11].
 func ResultActionForControl(name string) ResultAction {
-	if Key(name) == "start" {
+	switch Key(name) {
+	case "start":
 		return ResultActionContinue
+	case "mainmenu":
+		return ResultActionMainMenu
 	}
 	return ResultActionNone
 }

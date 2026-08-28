@@ -46,7 +46,7 @@ func syntheticTerrainFlat() *world.Terrain {
 // goal so the builder can approach before a route publishes.
 func TestStepUnitMobileBuildStopsOnMoveArrived(t *testing.T) {
 	terrain := syntheticTerrainFlat()
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 	w := units.New(10, nil)
@@ -103,7 +103,7 @@ func TestStepUnitMobileBuildStopsOnMoveArrived(t *testing.T) {
 // prune <=25.
 func TestStepUnitGroundArrival(t *testing.T) {
 	terrain := syntheticTerrainFlat()
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 	w := units.New(10, nil)
@@ -190,7 +190,7 @@ func TestStepUnitGroundArrival(t *testing.T) {
 // TestStepUnitEmptyRouteDoesNotArrive locks that empty/failed route does not count as arrived [task].
 func TestStepUnitEmptyRouteDoesNotArrive(t *testing.T) {
 	terrain := syntheticTerrainFlat()
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 	w := units.New(10, nil)
@@ -271,7 +271,7 @@ func TestStepUnitEmptyRouteDoesNotArrive(t *testing.T) {
 func TestStepUnitOrderIndependence(t *testing.T) {
 	run := func(orderAB bool) (int64, int64, int64, int64) {
 		terrain := syntheticTerrainFlat()
-		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30}
+		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30}
 		grid := NewOccupancyGrid()
 		system := NewSystem(terrain, profile, grid)
 		w := units.New(10, nil)
@@ -318,7 +318,7 @@ func TestStepUnitOrderIndependence(t *testing.T) {
 	// This proves occupancy beyond trivial non-interference is enforced [04 §8.2] C22
 	runContending := func(orderAB bool) (int64, int64, int64, int64) {
 		terrain := syntheticTerrainFlat()
-		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}
+		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 		grid := NewOccupancyGrid()
 		system := NewSystem(terrain, profile, grid)
 		w := units.New(10, nil)
@@ -370,7 +370,7 @@ func TestStepUnitOrderIndependence(t *testing.T) {
 // TestStepUnitStoppedStaysStopped proves stopped unit stays stopped under its own visit [task].
 func TestStepUnitStoppedStaysStopped(t *testing.T) {
 	terrain := syntheticTerrainFlat()
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 	w := units.New(10, nil)
@@ -403,7 +403,7 @@ func TestStepUnitStoppedStaysStopped(t *testing.T) {
 // TestStepUnitAircraftAndTransportRegression keeps one aircraft + one transport green [task][04 §10.1][04 §10.2].
 func TestStepUnitAircraftAndTransportRegression(t *testing.T) {
 	terrain := syntheticTerrainFlat()
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, MaxWaterSlope: 30}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, MaxWaterSlope: 30}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 	w := units.New(10, nil)
@@ -488,7 +488,7 @@ func TestStepUnitDeterminism(t *testing.T) {
 	run := func(seed int64) (int64, int64) {
 		_ = seed // no RNG used in movement, but seed param documents determinism
 		terrain := syntheticTerrainFlat()
-		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}
+		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 		grid := NewOccupancyGrid()
 		system := NewSystem(terrain, profile, grid)
 		w := units.New(10, nil)
@@ -531,7 +531,7 @@ func TestStepUnitTickWrapperParity(t *testing.T) {
 	// Run via Tick
 	runTick := func() (int64, int64) {
 		terrain := syntheticTerrainFlat()
-		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}
+		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 		grid := NewOccupancyGrid()
 		system := NewSystem(terrain, profile, grid)
 		w := units.New(10, nil)
@@ -554,7 +554,7 @@ func TestStepUnitTickWrapperParity(t *testing.T) {
 	}
 	runStep := func() (int64, int64) {
 		terrain := syntheticTerrainFlat()
-		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}
+		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 		grid := NewOccupancyGrid()
 		system := NewSystem(terrain, profile, grid)
 		w := units.New(10, nil)
@@ -587,7 +587,7 @@ func TestStepUnitTickWrapperParity(t *testing.T) {
 // TestStepUnitPublishedRouteNoDuplicate ensures published routes consumed without duplicate submission [task].
 func TestStepUnitPublishedRouteNoDuplicate(t *testing.T) {
 	terrain := syntheticTerrainFlat()
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 	w := units.New(10, nil)
@@ -657,7 +657,7 @@ func TestThresholdFormulaVectors(t *testing.T) {
 // at the exact-cell threshold 0 that ground moves bind.
 func TestArrivalInclusiveBoundary(t *testing.T) {
 	terrain := syntheticTerrainFlat()
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 	w := units.New(10, nil)
@@ -732,7 +732,7 @@ func TestArrivalInclusiveBoundary(t *testing.T) {
 // TestArrivalIsPlanarNoYHeading verifies y/heading do not affect arrival [R-P0-01].
 func TestArrivalIsPlanarNoYHeading(t *testing.T) {
 	terrain := syntheticTerrainFlat()
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 	w := units.New(10, nil)

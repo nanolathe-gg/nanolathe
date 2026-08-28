@@ -6,6 +6,7 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/session"
@@ -93,8 +94,11 @@ func configureResultPanel(fs vfs.FSOps, sess *session.Session, panel *ui.Panel) 
 // UI result model. The command layer receives a semantic action but keeps the
 // battle transition string used by the existing dispatch path [07 §11].
 func resultActionForControl(name string) string {
-	if ui.ResultActionForControl(name) == ui.ResultActionContinue {
+	switch ui.ResultActionForControl(name) {
+	case ui.ResultActionContinue:
 		return "result_continue"
+	case ui.ResultActionMainMenu:
+		return "result_main"
 	}
 	return ""
 }
@@ -120,11 +124,29 @@ func (h *retailBattleHUD) handleResultInput(in *input.State) string {
 	return resultActionForControl(action.Gadget)
 }
 
+// editorFocused reports the authored type-3 focus owner available to the
+// battle HUD. Battle side/modal windows have no runtime ui.Panel focus owner
+// or text-input dispatcher; the shared authored result panel is the only
+// battle-owned panel that can carry such focus. Returning false here is
+// therefore an evidence-backed absence, not a second focus model [07 §4][07
+// §6].
+func (h *retailBattleHUD) editorFocused() bool {
+	if h == nil || h.resultPanel == nil || h.resultPanel.Window == nil {
+		return false
+	}
+	index := h.resultPanel.Focused()
+	if index < 0 || index >= len(h.resultPanel.Window.Gadgets) {
+		return false
+	}
+	gadget := h.resultPanel.Window.Gadgets[index]
+	return gadget.Kind == gui.KindTextBox && gadget.Active != 0 && gadget.GrayedOut == 0 && h.resultPanel.ActiveOf(gadget.Name)
+}
+
 // drawStatusMessage draws transient game-speed and pause messages [07 §11][07 §2].
 // It remains separate from result presentation; status text is produced by the
 // established battle-speed/pause path and is not an endgame label.
-func (b *battleSession) drawStatusMessage(c *client.Client) {
-	if b == nil || c == nil || !b.statusVisible() || b.hud == nil || b.hud.console == nil {
+func (b *battleSession) drawStatusMessage(c *client.Client, presented *frame.Frame) {
+	if b == nil || c == nil || !b.statusVisible(presented) || b.hud == nil || b.hud.console == nil {
 		return
 	}
 	// BattleState is the canonical owner of transient status text. The legacy

@@ -7,7 +7,7 @@ import (
 )
 
 func TestBattleStateModalChainAndReleaseCapture(t *testing.T) {
-	s := NewBattleState()
+	s := NewBattleState(0x04)
 	if got := s.Modal(); got != BattleModalClosed {
 		t.Fatalf("initial modal=%d, want closed", got)
 	}
@@ -51,8 +51,155 @@ func TestBattleStateScheduleIntentValues(t *testing.T) {
 	}
 }
 
+func TestBattleStatePanelStartsFromEnteringModeByte(t *testing.T) {
+	if production := NewProductionBattleState(); production.PanelOffset != PanelVisible || production.PanelTarget != PanelVisible {
+		t.Fatalf("production entry mode starts offset=%d target=%d, want visible", production.PanelOffset, production.PanelTarget)
+	}
+	tests := []struct {
+		mode byte
+		want int8
+	}{
+		{mode: 0x00, want: PanelParked},
+		{mode: 0x04, want: PanelVisible},
+		{mode: 0xff, want: PanelVisible},
+		{mode: 0xfb, want: PanelParked},
+	}
+	for _, tc := range tests {
+		s := NewBattleState(tc.mode)
+		if s.PanelOffset != tc.want || s.PanelTarget != tc.want {
+			t.Errorf("mode %#02x starts offset=%d target=%d, want %d", tc.mode, s.PanelOffset, s.PanelTarget, tc.want)
+		}
+	}
+}
+
+func TestBattleStateOwnsPanelSlideAndUsesOneOffset(t *testing.T) {
+	s := NewBattleState(0x04)
+	if s.PanelOffset != PanelVisible || s.PanelTarget != PanelVisible {
+		t.Fatalf("initial panel state offset=%d target=%d", s.PanelOffset, s.PanelTarget)
+	}
+	var cues []string
+	s.SetPanelCue(func(name string) { cues = append(cues, name) })
+	s.PanelOffset = PanelParked
+	s.AdvancePanel(100, false, false)
+	if s.PanelTarget != PanelVisible || s.PanelOffset != -21 {
+		t.Fatalf("panel advance offset=%d target=%d, want -21/0", s.PanelOffset, s.PanelTarget)
+	}
+	if len(cues) != 1 || cues[0] != "Panel" {
+		t.Fatalf("panel leaving cue=%v, want [Panel]", cues)
+	}
+	// An early host timestamp is ignored, including the offset itself.
+	before := s.PanelOffset
+	s.AdvancePanel(105, true, false)
+	if s.PanelOffset != before || s.PanelTarget != PanelParked {
+		t.Fatalf("early panel step offset=%d target=%d, want unchanged/%d", s.PanelOffset, s.PanelTarget, PanelParked)
+	}
+}
+
+func TestBattleStatePanelConvergesInBothDirections(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       byte
+		spaceHeld  bool
+		wantTarget int8
+	}{
+		{name: "parked to visible", mode: 0x00, wantTarget: PanelVisible},
+		{name: "visible to parked", mode: 0x04, spaceHeld: true, wantTarget: PanelParked},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewBattleState(tc.mode)
+			start := s.PanelOffset
+			previous := s.PanelOffset
+			now := uint32(15)
+			for i := 0; i < 100 && s.PanelOffset != tc.wantTarget; i++ {
+				s.AdvancePanel(now, tc.spaceHeld, false)
+				if s.PanelOffset == previous && s.PanelOffset != tc.wantTarget {
+					t.Fatalf("stalled at %d before target %d", s.PanelOffset, tc.wantTarget)
+				}
+				if tc.wantTarget > start && s.PanelOffset < previous {
+					t.Fatalf("moved away from visible target: %d -> %d", previous, s.PanelOffset)
+				}
+				if tc.wantTarget < start && s.PanelOffset > previous {
+					t.Fatalf("moved away from parked target: %d -> %d", previous, s.PanelOffset)
+				}
+				previous = s.PanelOffset
+				now += PanelThrottleMs
+			}
+			if s.PanelOffset != tc.wantTarget {
+				t.Fatalf("did not converge: offset=%d target=%d", s.PanelOffset, tc.wantTarget)
+			}
+		})
+	}
+}
+
+func TestBattleStatePanelMinimumTailAndThrottle(t *testing.T) {
+	s := NewBattleState(0x04)
+	s.PanelOffset = -1
+	s.PanelTarget = PanelVisible
+	s.PanelLastThrottle = 1000
+	s.AdvancePanel(1010, false, false)
+	if s.PanelOffset != -1 || s.PanelLastThrottle != 1000 {
+		t.Fatalf("early panel step changed offset=%d throttle=%d", s.PanelOffset, s.PanelLastThrottle)
+	}
+	s.AdvancePanel(1015, false, false)
+	if s.PanelOffset != PanelVisible || s.PanelLastThrottle != 1015 {
+		t.Fatalf("minimum positive tail offset=%d throttle=%d, want 0/1015", s.PanelOffset, s.PanelLastThrottle)
+	}
+
+	s.PanelOffset = -30
+	s.PanelTarget = PanelParked
+	s.PanelLastThrottle = 2000
+	s.AdvancePanel(2015, true, false)
+	if s.PanelOffset != PanelParked {
+		t.Fatalf("minimum negative tail offset=%d, want %d", s.PanelOffset, PanelParked)
+	}
+}
+
+func TestBattleStatePanelCueSequence(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mode      byte
+		spaceHeld bool
+	}{
+		{name: "parked to visible", mode: 0x00},
+		{name: "visible to parked", mode: 0x04, spaceHeld: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var cues []string
+			s := NewBattleState(tc.mode)
+			s.SetPanelCue(func(cue string) { cues = append(cues, cue) })
+			now := uint32(15)
+			for i := 0; i < 100 && len(cues) < 2; i++ {
+				s.AdvancePanel(now, tc.spaceHeld, false)
+				now += PanelThrottleMs
+			}
+			if len(cues) != 2 || cues[0] != "Panel" || cues[1] != "Options" {
+				t.Fatalf("cue sequence=%v, want [Panel Options]", cues)
+			}
+		})
+	}
+}
+
+func TestBattleStatePanelSpaceEditorPolarity(t *testing.T) {
+	for _, tc := range []struct {
+		spaceHeld, editorFocused bool
+		want                     int8
+	}{
+		{want: PanelVisible},
+		{editorFocused: true, want: PanelVisible},
+		{spaceHeld: true, want: PanelParked},
+		{spaceHeld: true, editorFocused: true, want: PanelVisible},
+	} {
+		s := NewBattleState(0x04)
+		s.SetPanelTarget(tc.spaceHeld, tc.editorFocused)
+		if s.PanelTarget != tc.want {
+			t.Errorf("held=%t editor=%t target=%d, want %d", tc.spaceHeld, tc.editorFocused, s.PanelTarget, tc.want)
+		}
+	}
+}
+
 func TestBattleStateOwnsInputAndPlacementState(t *testing.T) {
-	s := NewBattleState()
+	s := NewBattleState(0x04)
 	if s.Input.Latch != input.LatchNormal || s.Input.BuildDef != "" {
 		t.Fatalf("initial input state=%+v", s.Input)
 	}

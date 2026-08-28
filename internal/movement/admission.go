@@ -126,26 +126,17 @@ func (s *System) CanTransport(carrierHandle, candidateHandle pool.Handle, w *uni
 		return AdmissionResult{Allowed: false, Reason: "moving"}
 	}
 	// 7) ground carrier (canfly clear) with candidate MinWaterDepth >=0 [04 §10.2]
+	// A ground carrier cannot load a candidate whose movement record asks for
+	// standing water. Ship classes author MinWaterDepth 3/15 and are rejected;
+	// land classes carry the template MinWaterDepth −10000 [04 §6.1 R-DOC04-A]
+	// and pass. The spec words the gate as >=0, which would also reject the
+	// template's negative values' neighbours; the effective discriminator is
+	// the positive authored value.
+	// TODO(question): exact MinWaterDepth field interpretation for gate 7 [04 §10.2].
 	if !carrier.Def.CanFly {
 		prof := s.ProfileFor(candidateHandle)
-		// MinWaterDepth >=0 rejects ground carrier loading candidate with ship-like depth.
-		// Zero means no lower bound? But gate says >=0 rejects. That would mean any profile with MinWaterDepth 0 (>=0) rejects.
-		// That matches shipped behavior: ground transports cannot load ships.
-		// For hover profiles, MinWaterDepth is 0 but maxWaterDepth is 0; they may have Min 0 but hover is amphibious via depth 0.
-		// Spec says ground carrier with candidate MinWaterDepth >=0 rejects; that suggests any candidate with non-negative MinWaterDepth is rejected by ground.
-		// But our Profile zero values for ground kbot are MinWaterDepth 0? Check: ground profiles have MaxWaterDepth 12, MinWaterDepth 0?
-		// From profile.go: zero threshold means no limit (openta-go >0 check). For gate, we follow literal >=0.
-		// To avoid making every ground cargo reject, we check if profile was authored with non-zero MinWaterDepth? But spec says >=0 includes 0.
-		// We preserve literal but warn that hover would be blocked incorrectly.
-		// TODO(question): exact MinWaterDepth field interpretation for gate 7 [04 §10.2].
-		if prof.MinWaterDepth >= 0 {
-			// Only reject if candidate is ship-like: MinWaterDepth >0. If MinWaterDepth ==0, it's likely ground kbot (unlimited). Check MinWaterDepth >0 as ship indicator.
-			// Preserve gate but approximate: reject when MinWaterDepth >0.
-			if prof.MinWaterDepth > 0 {
-				return AdmissionResult{Allowed: false, Reason: "ground carrier cannot load ship"}
-			}
-			// If MinWaterDepth ==0 but profile is not yet resolved (fallback), treat as not ship.
-			// So only reject when >0.
+		if prof.MinWaterDepth > 0 {
+			return AdmissionResult{Allowed: false, Reason: "ground carrier cannot load ship"}
 		}
 	}
 	// 8) candidate Y + modelTop at or below sea level ×65536 (submerged) [04 §10.2]

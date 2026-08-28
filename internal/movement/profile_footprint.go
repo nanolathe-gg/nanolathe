@@ -45,8 +45,12 @@ func (p Profile) footprintRange(t *world.Terrain, ax, az int32) (minLow, maxHigh
 }
 
 // ClassifyFootprint applies terrain and feature legality to the complete
-// footprint. Feature checks remain row-major/immediate; aggregate gates run
-// after the scan [04 §8.2] C25, [R-P0-08].
+// footprint. Feature checks remain row-major/immediate; the depth and slope
+// gates then run over the aggregate height span (min of mins, max of maxes)
+// with the classifier semantics of [04 §6.1 R-DOC04-B]. Nanolathe classifies
+// whole footprints on demand instead of stamping a per-class 2-bit layer grid
+// at map load; the per-comparison semantics match the recovered classifier,
+// and only the blocked verdict rejects.
 func (p Profile) ClassifyFootprint(t *world.Terrain, ax, az int32) CellClass {
 	fx, fz := p.footprintSize()
 	if t == nil || ax < 0 || az < 0 || ax+fx > t.CellW || az+fz > t.CellH {
@@ -64,38 +68,40 @@ func (p Profile) ClassifyFootprint(t *world.Terrain, ax, az int32) CellClass {
 		return ClassBlocked
 	}
 	sea := int32(t.SeaLevel)
-	// Inclusive water-depth boundaries: only strict < and > reject
-	// [R-P0-08 mobile terrain validator].
-	if p.MaxWaterDepth > 0 && minLow < sea-p.MaxWaterDepth {
+	// Depth gates, signed 32-bit on the record's depth fields: blocked iff
+	// hmin < SeaLevel − MaxWaterDepth or hmax > SeaLevel − MinWaterDepth;
+	// a depth exactly at the limit passes [04 §6.1 R-DOC04-B steps 3-4].
+	// The depths are record values, not presence flags: the startup template
+	// supplies ±10000 wherever a class omits the key, so an unlimited
+	// direction never fires [04 §6.1 R-DOC04-A].
+	if minLow < sea-p.MaxWaterDepth {
 		return ClassBlocked
 	}
-	if p.MinWaterDepth > 0 && maxHigh > sea-p.MinWaterDepth {
+	if maxHigh > sea-p.MinWaterDepth {
 		return ClassBlocked
 	}
+	// slope = hmax − hmin over the footprint (min of mins, max of maxes).
 	slope := maxHigh - minLow
-	if slope < 0 {
-		slope = 0
-	}
-	var maxSlope, badSlope uint8
-	if sea <= minLow {
+	// Medium split: land iff hmin >= SeaLevel, which selects the land or
+	// water slope pair [04 §6.1 R-DOC04-B step 5].
+	maxSlope, badSlope := p.MaxWaterSlope, p.BadWaterSlope
+	if minLow >= sea {
 		maxSlope, badSlope = p.MaxSlope, p.BadSlope
-	} else {
-		maxSlope, badSlope = p.MaxWaterSlope, p.BadWaterSlope
-		if maxSlope == 0 && badSlope == 0 {
-			// Omitted maxwaterslope template initialization remains unresolved;
-			// retain the install-compatible fallback [docs/SPEC_CONFLICTS SC5].
-			maxSlope, badSlope = p.MaxSlope, p.BadSlope
-		}
 	}
-	if maxSlope != 0 && slope > int32(maxSlope) {
+	// Slope tier, unsigned byte comparisons in the documented chain order
+	// [04 §6.1 R-DOC04-B step 6]: slope <= Bad is clear, slope > Max is
+	// blocked, anything between is steep. Equality with the bad threshold is
+	// clear; equality with the max threshold is steep, not blocked. Only the
+	// blocked verdict rejects a footprint.
+	if slope <= int32(badSlope) {
+		return ClassClear
+	}
+	if slope > int32(maxSlope) {
 		return ClassBlocked
 	}
-	if badSlope != 0 && slope > int32(badSlope) {
-		// Exact HOT cost and forward-speed factor remain unknown [R-P1-11].
-		// Preserve the soft terrain state without inventing a multiplier.
-		return ClassSteep
-	}
-	return ClassClear
+	// Exact HOT cost and forward-speed factor remain unknown [R-P1-11].
+	// Preserve the soft terrain state without inventing a multiplier.
+	return ClassSteep
 }
 
 // IsPassableFootprint is the path/commit predicate for a footprint anchor.

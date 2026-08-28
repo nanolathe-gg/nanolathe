@@ -58,6 +58,9 @@ func TestResultActionUsesAuthoredStartOnly(t *testing.T) {
 	if ResultActionForControl("START") != ResultActionContinue {
 		t.Fatal("authored Start did not emit continue")
 	}
+	if ResultActionForControl("MainMenu") != ResultActionMainMenu {
+		t.Fatal("authored MainMenu did not emit the main-menu route")
+	}
 	if ResultActionForControl("Continue") != ResultActionNone {
 		t.Fatal("unestablished result alias became active")
 	}

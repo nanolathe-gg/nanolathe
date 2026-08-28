@@ -63,6 +63,28 @@ func TestResultPanelActivatesOnlyEstablishedRoute(t *testing.T) {
 	}
 }
 
+func TestBattleHUDEditorFocusUsesAuthoredType3Owner(t *testing.T) {
+	window := &gui.Window{Gadgets: []gui.Gadget{
+		{Name: "GADGET0"},
+		{Name: "CHAT", Kind: gui.KindTextBox, Active: 1},
+		{Name: "DISABLED", Kind: gui.KindTextBox, Active: 0},
+	}}
+	panel := ui.NewPanel(window)
+	h := &retailBattleHUD{resultPanel: panel}
+	panel.SetFocus(1)
+	if !h.editorFocused() {
+		t.Fatal("focused authored type-3 gadget was not reported")
+	}
+	panel.SetFocus(2)
+	if h.editorFocused() {
+		t.Fatal("inactive authored type-3 gadget was reported as focused")
+	}
+	panel.SetFocus(0)
+	if h.editorFocused() {
+		t.Fatal("non-editor gadget was reported as focused")
+	}
+}
+
 func TestResultAssetsRemainOptionalWhenUnavailable(t *testing.T) {
 	fs := vfs.New()
 	if got := loadGUIOptional(fs, "guis/endmsn.gui", "test ENDMSN"); got != nil {

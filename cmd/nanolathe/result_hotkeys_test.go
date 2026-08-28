@@ -83,7 +83,7 @@ func TestGameSpeedKeysClampAndMessage(t *testing.T) {
 	}
 }
 
-func TestPauseToggleWithMessage(t *testing.T) {
+func TestPauseToggleUsesAuthoredOverlay(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
@@ -93,15 +93,15 @@ func TestPauseToggleWithMessage(t *testing.T) {
 	if !b.sess.Clock.Paused {
 		t.Fatalf("pause toggle should set Paused true")
 	}
-	if b.battleState().Input.StatusMessage != "Game Paused" {
-		t.Fatalf("pause message want 'Game Paused' got %q", b.battleState().Input.StatusMessage)
+	if b.battleState().Input.StatusMessage != "" {
+		t.Fatalf("pause must not invent a status string, got %q", b.battleState().Input.StatusMessage)
 	}
 	b.togglePause()
 	if b.sess.Clock.Paused {
 		t.Fatalf("second toggle should clear Paused")
 	}
-	if b.battleState().Input.StatusMessage != "Game Resumed" {
-		t.Fatalf("resume message want 'Game Resumed' got %q", b.battleState().Input.StatusMessage)
+	if b.battleState().Input.StatusMessage != "" {
+		t.Fatalf("resume must not invent a status string, got %q", b.battleState().Input.StatusMessage)
 	}
 	// Via handleInput
 	b.sess.Clock.Paused = false

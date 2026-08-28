@@ -66,7 +66,7 @@ func TestLocomotionPitchSustainsCapOnGentleSlope(t *testing.T) {
 	}
 	// Create gentle slope: height 10 at start, 11 at goal (1px diff over ~7 cells => ~0.14 per cell)
 	// But CoarseHeightAt will still see 1px diff at waypoint; old would pin, new should not.
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
 	w := units.New(10, nil)
@@ -178,7 +178,7 @@ func TestLocomotionAccelBrakeRamp(t *testing.T) {
 		terrain.Plot[i].SetMinHeight(10)
 		terrain.Plot[i].SetMaxHeight(10)
 	}
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
 	w := units.New(10, nil)

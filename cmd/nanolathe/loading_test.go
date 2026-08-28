@@ -44,7 +44,7 @@ func TestLoadingStageMapping(t *testing.T) {
 }
 
 // TestRetailLoadBarGeometry locks the authored row geometry against the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// authored by the loading-screen contract [07 "The loading screen"].
 func TestRetailLoadBarGeometry(t *testing.T) {
 	wantY := []int{0x87, 0xb1, 0xda, 0x106, 0x130, 0x15b}
 	wantLabel := []string{"Textures", "Terrain", "Units", "Animation", "3D Data", "Explosions"}

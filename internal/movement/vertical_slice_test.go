@@ -221,10 +221,10 @@ func TestTransportAirHoverNaval(t *testing.T) {
 	terWater := syntheticWaterTer(32, 32, 10)
 	// Profiles: kbot2x2 (ground), tankhover3 (hover amphibious), boat4x4 (ship), uboat (sub)
 	// Use NewProfile via content.MovementClass
-	kbotMC := &content.MovementClass{FootprintX: 2, FootprintZ: 2, MaxWaterDepth: 12, MinWaterDepth: 0, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
-	hoverMC := &content.MovementClass{FootprintX: 3, FootprintZ: 3, MaxWaterDepth: 0, MinWaterDepth: 0, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
-	shipMC := &content.MovementClass{FootprintX: 4, FootprintZ: 4, MaxWaterDepth: 0, MinWaterDepth: 3, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
-	subMC := &content.MovementClass{FootprintX: 3, FootprintZ: 3, MaxWaterDepth: 0, MinWaterDepth: 15, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
+	kbotMC := &content.MovementClass{FootprintX: 2, FootprintZ: 2, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
+	hoverMC := &content.MovementClass{FootprintX: 3, FootprintZ: 3, MaxWaterDepth: 10000, MinWaterDepth: -10000, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
+	shipMC := &content.MovementClass{FootprintX: 4, FootprintZ: 4, MaxWaterDepth: 10000, MinWaterDepth: 3, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
+	subMC := &content.MovementClass{FootprintX: 3, FootprintZ: 3, MaxWaterDepth: 10000, MinWaterDepth: 15, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
 
 	classes := map[string]*content.MovementClass{
 		content.CanonicalKey("kbot2x2"):    kbotMC,
@@ -232,7 +232,7 @@ func TestTransportAirHoverNaval(t *testing.T) {
 		content.CanonicalKey("BOAT4x4"):    shipMC,
 		content.CanonicalKey("UBOAT3x3"):   subMC,
 	}
-	fallback := Profile{FootPrintX: 1, FootPrintZ: 1, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127, MaxWaterDepth: 12}
+	fallback := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127}
 
 	// Ground passability: kbot on land clear, on water blocked when depth > MaxWaterDepth
 	if !NewProfile(kbotMC).IsPassable(terFlat, 1, 1) {
@@ -280,7 +280,7 @@ func TestTransportAirHoverNaval(t *testing.T) {
 		t.Fatalf("amphibious via hover profile should be amphibious [04 §9.1]")
 	}
 	// Air units: canfly bypasses ground checks; fallback permissive passes everywhere (MaxSlope 255 etc)
-	fallback2 := Profile{FootPrintX: 1, FootPrintZ: 1, MaxSlope: 255, BadSlope: 127, MaxWaterSlope: 255, BadWaterSlope: 127}
+	fallback2 := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 10000, MinWaterDepth: -10000, MaxSlope: 255, BadSlope: 127, MaxWaterSlope: 255, BadWaterSlope: 127}
 	if !fallback2.IsPassable(terFlat, 1, 1) || !fallback2.IsPassable(deepWater, 20, 10) {
 		t.Fatalf("air fallback should be passable everywhere (Supported inference can-fly bypass) [04 §10.1]")
 	}
@@ -352,9 +352,9 @@ func defCargoForTest() *units.Unit {
 func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 	ter := syntheticFlat(32, 32)
 	grid := NewOccupancyGrid()
-	fallback := Profile{FootPrintX: 2, FootPrintZ: 2, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127}
+	fallback := Profile{FootPrintX: 2, FootPrintZ: 2, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127}
 	sys := NewSystem(ter, fallback, grid)
-	mc := &content.MovementClass{FootprintX: 2, FootprintZ: 2, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127}
+	mc := &content.MovementClass{FootprintX: 2, FootprintZ: 2, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127}
 	sys.SetClasses(map[string]*content.MovementClass{content.CanonicalKey("kbot2x2"): mc})
 	w := units.New(100, nil)
 	transDef := defForTransport("arm_atlas")
@@ -511,7 +511,7 @@ func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 func TestVerticalSlice_GunshipTakeoffMoveLand(t *testing.T) {
 	ter := syntheticFlat(32, 32)
 	grid := NewOccupancyGrid()
-	fallback := Profile{FootPrintX: 1, FootPrintZ: 1, MaxSlope: 255, BadSlope: 127, MaxWaterSlope: 255, BadWaterSlope: 127}
+	fallback := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 10000, MinWaterDepth: -10000, MaxSlope: 255, BadSlope: 127, MaxWaterSlope: 255, BadWaterSlope: 127}
 	sys := NewSystem(ter, fallback, grid)
 	w := units.New(100, nil)
 	gunDef := defForGunship("arm_brawler")
@@ -652,22 +652,26 @@ func TestProfileMediums(t *testing.T) {
 	// Land cell (west), water cell (east) [fmt tnt]
 	landC := int32(2)
 	waterC := int32(12)
-	// Ground kbot profile
-	kbot := Profile{FootPrintX: 2, FootPrintZ: 2, MaxWaterDepth: 12, MinWaterDepth: 0, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
+	// Ground kbot profile; minwaterdepth omitted carries the template −10000
+	// and maxwaterslope the template-side 255 pair [04 §6.1 R-DOC04-A].
+	kbot := Profile{FootPrintX: 2, FootPrintZ: 2, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
 	if !kbot.IsPassableGround(ter, landC, 5) {
 		t.Fatalf("kbot ground land")
 	}
 	// Water depth 5 <=12 so kbot still passable shallow; deep would be blocked earlier test
 	// Ship profile requires Min 3 depth (shallow water) [04 §6.1]
-	ship := Profile{FootPrintX: 4, FootPrintZ: 4, MinWaterDepth: 3, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
+	// Ship profile requires Min 3 depth (shallow water) [04 §6.1]; maxwaterdepth
+	// omitted carries the template 10000 [04 §6.1 R-DOC04-A].
+	ship := Profile{FootPrintX: 4, FootPrintZ: 4, MinWaterDepth: 3, MaxWaterDepth: 10000, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
 	if ship.IsPassableShip(ter, landC, 5) {
 		t.Fatalf("ship should be blocked on land [04 §6.1]")
 	}
 	if !ship.IsPassableShip(ter, waterC, 5) {
 		t.Fatalf("ship water passable")
 	}
-	// Hover passes both via CanTraverse
-	hover := Profile{FootPrintX: 3, FootPrintZ: 3, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
+	// Hover passes both via CanTraverse; unauthored depths carry the template
+	// ±10000 [04 §6.1 R-DOC04-A].
+	hover := Profile{FootPrintX: 3, FootPrintZ: 3, MaxWaterDepth: 10000, MinWaterDepth: -10000, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
 	if !hover.CanTraverse(ter, landC, 5, MediumGround) || !hover.CanTraverse(ter, waterC, 5, MediumHover) {
 		t.Fatalf("hover both")
 	}
@@ -684,10 +688,11 @@ func TestProfileMediums(t *testing.T) {
 func TestSchedulerForNaval(t *testing.T) {
 	ter := syntheticWaterTer(32, 32, 10)
 	grid := NewOccupancyGrid()
-	// Ship profile with water requirement
-	shipProf := Profile{FootPrintX: 2, FootPrintZ: 2, MinWaterDepth: 3, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
+	// Ship profile with water requirement; maxwaterdepth omitted carries the
+	// template 10000 [04 §6.1 R-DOC04-A].
+	shipProf := Profile{FootPrintX: 2, FootPrintZ: 2, MinWaterDepth: 3, MaxWaterDepth: 10000, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
 	sys := NewSystem(ter, shipProf, grid)
-	mc := &content.MovementClass{FootprintX: 2, FootprintZ: 2, MinWaterDepth: 3, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
+	mc := &content.MovementClass{FootprintX: 2, FootprintZ: 2, MinWaterDepth: 3, MaxWaterDepth: 10000, MaxSlope: 12, BadSlope: 6, MaxWaterSlope: 255, BadWaterSlope: 127}
 	sys.SetClasses(map[string]*content.MovementClass{content.CanonicalKey("BOAT4x4"): mc})
 	w := units.New(20, nil)
 	shipDef := defForShip("arm_ship")
@@ -724,7 +729,7 @@ func TestDeterminism_TransportSlice(t *testing.T) {
 	run := func() (int64, int64, int64) {
 		ter := syntheticFlat(16, 16)
 		grid := NewOccupancyGrid()
-		fallback := Profile{FootPrintX: 1, FootPrintZ: 1, MaxSlope: 255, BadSlope: 127, MaxWaterSlope: 255, BadWaterSlope: 127}
+		fallback := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 10000, MinWaterDepth: -10000, MaxSlope: 255, BadSlope: 127, MaxWaterSlope: 255, BadWaterSlope: 127}
 		sys := NewSystem(ter, fallback, grid)
 		w := units.New(20, nil)
 		// Create two transports with cargos interleaved player/slot order

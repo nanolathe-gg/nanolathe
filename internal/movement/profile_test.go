@@ -107,7 +107,9 @@ func TestLandCellPassable(t *testing.T) {
 			setHeight(ter, x, z, 20) // [fmt tnt] height byte 20 [04 §6.1] land
 		}
 	}
-	ground := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 15, BadSlope: 7}
+	// Synthetic ground record: maxwaterdepth authored 12; minwaterdepth
+	// omitted, so the record carries the template −10000 [04 §6.1 R-DOC04-A].
+	ground := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 15, BadSlope: 7}
 	if !ground.IsPassable(ter, 1, 1) {
 		t.Fatalf("land cell should be passable for ground")
 	}
@@ -147,7 +149,9 @@ func TestShipBandAcceptance(t *testing.T) {
 			setHeight(ter, x, z, 10) // depth 30
 		}
 	}
-	ship := Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: 15, MaxWaterDepth: 0, MaxSlope: 12}
+	// Ship record: minwaterdepth authored 15; maxwaterdepth omitted, template
+	// 10000 (no depth ceiling) [04 §6.1 R-DOC04-A].
+	ship := Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: 15, MaxWaterDepth: 10000, MaxSlope: 12}
 	if !ship.IsPassable(ter, 1, 1) {
 		t.Fatalf("deep water depth 30 should be passable for ship min 15")
 	}
@@ -183,7 +187,7 @@ func TestSlopeRejectionAtBadSlopeBoundary(t *testing.T) {
 			setHeight(ter, x, z, 0)
 		}
 	}
-	hover := Profile{FootPrintX: 1, FootPrintZ: 1, MaxSlope: 12, BadSlope: 12, MaxWaterSlope: 255, BadWaterSlope: 255}
+	hover := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 10000, MinWaterDepth: -10000, MaxSlope: 12, BadSlope: 12, MaxWaterSlope: 255, BadWaterSlope: 255}
 	// Flat: slope 0 => clear
 	if hover.Classify(ter, 1, 1) != ClassClear {
 		t.Fatalf("flat should be clear")
@@ -204,7 +208,7 @@ func TestSlopeRejectionAtBadSlopeBoundary(t *testing.T) {
 	// Reset neighbor to 12, check ground profile with Bad 7 Max 15 distinction:
 	// slope 8 => steep but passable [04 §6.1].
 	setHeight(ter, 2, 1, 8)
-	ground := Profile{FootPrintX: 1, FootPrintZ: 1, MaxSlope: 15, BadSlope: 7}
+	ground := Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxSlope: 15, BadSlope: 7}
 	if !ground.IsPassable(ter, 1, 1) {
 		t.Fatalf("slope 8 with Bad 7 Max 15 should still be passable (steep)")
 	}
@@ -231,8 +235,8 @@ func TestHoverBandBehavior(t *testing.T) {
 			setHeight(ter, x, z, 35)
 		}
 	}
-	hover := Profile{FootPrintX: 1, FootPrintZ: 1, MaxSlope: 12, BadSlope: 12, MaxWaterSlope: 255, BadWaterSlope: 255}
-	ground := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 12, BadSlope: 12}
+	hover := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 10000, MinWaterDepth: -10000, MaxSlope: 12, BadSlope: 12, MaxWaterSlope: 255, BadWaterSlope: 255}
+	ground := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 12, BadSlope: 12}
 	if !hover.IsPassableHover(ter, 1, 1) {
 		t.Fatalf("hover should pass land cell")
 	}
@@ -252,8 +256,9 @@ func TestHoverBandBehavior(t *testing.T) {
 	if ground.IsPassable(ter, 1, 1) {
 		t.Fatalf("ground should fail deep water depth 25 > max 12 [04 §6.1]")
 	}
-	// Ship band on same deep water should pass (Min 15)
-	ship := Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: 15, MaxSlope: 12}
+	// Ship band on same deep water should pass (Min 15); maxwaterdepth
+	// omitted carries the template 10000 [04 §6.1 R-DOC04-A].
+	ship := Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: 15, MaxWaterDepth: 10000, MaxSlope: 12}
 	if !ship.IsPassableShip(ter, 1, 1) {
 		t.Fatalf("ship should pass deep water")
 	}
@@ -283,7 +288,7 @@ func TestHoverBandBehavior(t *testing.T) {
 			setHeight(footTer, x, z, 10)
 		}
 	}
-	hov2 := Profile{FootPrintX: 2, FootPrintZ: 2, MaxSlope: 12, BadSlope: 12, MaxWaterSlope: 255, BadWaterSlope: 255}
+	hov2 := Profile{FootPrintX: 2, FootPrintZ: 2, MaxWaterDepth: 10000, MinWaterDepth: -10000, MaxSlope: 12, BadSlope: 12, MaxWaterSlope: 255, BadWaterSlope: 255}
 	if !hov2.CanOccupy(footTer, 1, 1) {
 		t.Fatalf("2x2 footprint over flat land should be occupiable for hover")
 	}
@@ -328,8 +333,10 @@ func TestRealMapOptional(t *testing.T) {
 	if loadErr != nil || ter == nil {
 		t.Skip("no retail map could be loaded: " + filepath.Join(root, "maps"))
 	}
-	// Ground profile similar to KBOTSS2: MaxWaterDepth 12, MaxSlope 32 [research/formats/tdf.md].
-	ground := Profile{FootPrintX: 2, FootPrintZ: 2, MaxWaterDepth: 12, MaxSlope: 32, BadSlope: 16}
+	// Ground profile similar to KBOTSS2: MaxWaterDepth 12, MaxSlope 32
+	// [research/formats/tdf.md]; minwaterdepth omitted carries the template
+	// −10000 [04 §6.1 R-DOC04-A].
+	ground := Profile{FootPrintX: 2, FootPrintZ: 2, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 32, BadSlope: 16}
 	// Scan for at least one passable land and one impassable deep water if sea >0
 	foundPass := false
 	foundBlock := false
@@ -350,4 +357,57 @@ func TestRealMapOptional(t *testing.T) {
 	// Not asserting foundBlock strictly, as a tiny dry map might be fully passable,
 	// but most maps have void edges.
 	t.Logf("real map walk: CellW=%d CellH=%d SeaLevel=%d foundPass=%v foundBlock=%v", ter.CellW, ter.CellH, ter.SeaLevel, foundPass, foundBlock)
+}
+
+// TestClassifierBoundaries locks the recovered comparison strictness of the
+// per-cell classifier at the exact thresholds [04 §6.1 R-DOC04-B]: equality
+// with the bad threshold is clear, equality with the max threshold is steep
+// (not blocked), and a depth exactly at SeaLevel − MaxWaterDepth passes.
+func TestClassifierBoundaries(t *testing.T) {
+	// KBOTSS2-shaped record [research/formats/tdf.md][04 §6.1 R-DOC04-A]:
+	// maxslope 32, badslope 16, maxwaterdepth 12, template minwaterdepth.
+	p := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 32, BadSlope: 16}
+
+	// Land at sea 100; the east corner raises the anchor cell's derived span.
+	ter := syntheticTerrain(4, 4, 100)
+	for z := int32(0); z < 4; z++ {
+		for x := int32(0); x < 4; x++ {
+			setHeight(ter, x, z, 100)
+		}
+	}
+	// slope = hmax − hmin = 116 − 100 = 16 == BadSlope → clear.
+	setHeight(ter, 2, 1, 116)
+	if p.Classify(ter, 1, 1) != ClassClear {
+		t.Fatalf("slope == BadSlope must classify clear, got %d", p.Classify(ter, 1, 1))
+	}
+	// slope = 132 − 100 = 32 == MaxSlope → steep, NOT blocked.
+	setHeight(ter, 2, 1, 132)
+	if p.Classify(ter, 1, 1) != ClassSteep {
+		t.Fatalf("slope == MaxSlope must classify steep (not blocked), got %d", p.Classify(ter, 1, 1))
+	}
+	// slope = 133 − 100 = 33 > MaxSlope → blocked.
+	setHeight(ter, 2, 1, 133)
+	if p.Classify(ter, 1, 1) != ClassBlocked {
+		t.Fatalf("slope > MaxSlope must classify blocked, got %d", p.Classify(ter, 1, 1))
+	}
+
+	// Deep gate: blocked iff hmin < SeaLevel − MaxWaterDepth; the exact limit
+	// passes. Sea 100, MaxWaterDepth 12 → limit 88.
+	water := syntheticTerrain(4, 4, 100)
+	for z := int32(0); z < 4; z++ {
+		for x := int32(0); x < 4; x++ {
+			setHeight(water, x, z, 88)
+		}
+	}
+	if !p.IsPassable(water, 1, 1) {
+		t.Fatalf("depth exactly SeaLevel − MaxWaterDepth (88) must pass")
+	}
+	for z := int32(0); z < 4; z++ {
+		for x := int32(0); x < 4; x++ {
+			setHeight(water, x, z, 87)
+		}
+	}
+	if p.IsPassable(water, 1, 1) {
+		t.Fatalf("depth one below SeaLevel − MaxWaterDepth (87) must block")
+	}
 }

@@ -75,7 +75,13 @@ func TestConstructorsDoNotRequireGlobalRNG(t *testing.T) {
 
 func minimalCatalogForStrict() *content.Catalog {
 	mv := map[string]*content.MovementClass{
-		"testmove": {FootprintX: 1, FootprintZ: 1, MaxSlope: 10, MaxWaterDepth: 10},
+		// Hand-authored compiled record, template-initialized per the compiler
+		// contract [04 §6.1 R-DOC04-A]: unauthored fields carry the startup
+		// template (minwaterdepth -10000, maxwaterslope 255) and bad slopes
+		// chain to half the Max just read (10>>1, 255>>1). A zero-valued
+		// record is a real record whose zero minwaterdepth blocks every cell
+		// above sea level [02 §5 "Movement class record"].
+		"testmove": {FootprintX: 1, FootprintZ: 1, MaxWaterDepth: 10, MinWaterDepth: -10000, MaxSlope: 10, BadSlope: 5, MaxWaterSlope: 255, BadWaterSlope: 127},
 	}
 	mv["testmove"].CanonicalKey = content.CanonicalKey("testmove")
 	cat := &content.Catalog{

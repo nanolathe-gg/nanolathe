@@ -60,7 +60,6 @@ type retailBattleHUD struct {
 	resultDefeatFrame  *formats.GAFFrame // [07 §11] authored endmsn.gaf defeat copy
 	resultPanel        *ui.Panel         // shared authored gesture state [07 §3]
 
-	panel *hud.Panel
 	fs    vfs.FSOps
 	pages map[string]*formats.GAF
 	// pageChecked is separate from the GUI cache: a probe may establish that a
@@ -317,7 +316,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		optionsGAF: optionsGAF, optionsWin: optionsWin, exitWin: exitWin, confirmWin: confirmWin,
 		modalFont: modalFont, pausedFrame: pausedFrame, victoryFrame: victoryFrame, defeatFrame: defeatFrame,
 		resultWin: resultWin, resultGAF: resultGAF, resultVictoryFrame: resultVictoryFrame, resultDefeatFrame: resultDefeatFrame, resultPanel: resultPanel,
-		panel: hud.NewPanel(0x04, 640, 480, nil), fs: fs,
+		fs:         fs,
 		pages:      make(map[string]*formats.GAF),
 		windows:    make(map[string]*gui.Window),
 		pageCounts: make(map[string]int),
@@ -509,9 +508,8 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	blitBattlePanel(c, h.panelTop, 129, 0)
 	blitBattlePanel(c, h.panelBottom, 129, 480-32)
 	offset := 0
-	if h.panel != nil {
-		h.panel.AdvanceNow(c.Input().Kbd.KeyHeld(input.KeySpace), false)
-		offset = int(h.panel.Offset)
+	if b != nil {
+		offset = int(b.battleState().PanelOffset)
 	}
 	blitBattlePanel(c, h.panelSide, 0, offset)
 
@@ -528,7 +526,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	}
 	h.drawBattleMenu(c, b)
 	if b != nil {
-		b.drawStatusMessage(c)
+		b.drawStatusMessage(c, cur)
 	}
 	var result frame.ResultView
 	if cur != nil {
@@ -706,7 +704,8 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 			contact.RingRange = ring.Range
 		}
 		contacts = append(contacts, contact)
-		for _, ring := range published.Rings[1:] {
+		for i := 1; i < len(published.Rings); i++ {
+			ring := published.Rings[i]
 			ringContact := render.MinimapContact{
 				WorldX: contact.WorldX, WorldZ: contact.WorldZ, WorldY: contact.WorldY,
 				Owner: contact.Owner, Status: contact.Status, Stealth: contact.Stealth,
@@ -720,7 +719,10 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 			}
 		}
 	}
-	playW, playH := b.sess.World.PlayRight, b.sess.World.PlayBottom
+	playW, playH, ok := b.sess.PlayArea()
+	if !ok {
+		return nil
+	}
 	regularIndex, commanderIndex := 0, 0
 	returnFinal := h.radar.RebuildFinal(layout, playW, playH, contacts, func(dst *render.RadarSurface, x, y int, p byte, commander bool) {
 		if commander {
@@ -763,7 +765,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 }
 
 func (h *retailBattleHUD) drawMinimap(c *client.Client, b *battleSession, cur *frame.Frame) {
-	if h == nil || c == nil || b == nil || b.sess == nil || b.sess.World == nil || b.cam == nil || cur == nil {
+	if h == nil || c == nil || b == nil || b.sess == nil || b.cam == nil || cur == nil {
 		return
 	}
 	layout, dst, ok := b.minimapLayout()
@@ -776,7 +778,11 @@ func (h *retailBattleHUD) drawMinimap(c *client.Client, b *battleSession, cur *f
 	}
 	viewW, viewH := b.cam.EffectiveView()
 	centerX, centerZ := b.cam.X+viewW/2, b.cam.Z+viewH/2
-	markerX, markerY := render.RadarProjection(centerX, centerZ, 0, b.sess.World.PlayRight, b.sess.World.PlayBottom, layout)
+	playW, playH, ok := b.sess.PlayArea()
+	if !ok {
+		return
+	}
+	markerX, markerY := render.RadarProjection(centerX, centerZ, 0, playW, playH, layout)
 	// Drawing and input receive the same layout and destination rectangle.
 	c.DrawMinimapLayout(surf, dst, layout, cur.Radar.MarkerMode, markerX+layout.PadX, markerY+layout.PadY, h.paletteIndex(15))
 }
@@ -1255,8 +1261,8 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 		}
 	}
 	offset := int32(0)
-	if h.panel != nil {
-		offset = int32(h.panel.Offset)
+	if b != nil {
+		offset = int32(b.battleState().PanelOffset)
 	}
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
@@ -1385,8 +1391,8 @@ func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
 		return false
 	}
 	offset := int32(0)
-	if h.panel != nil {
-		offset = int32(h.panel.Offset)
+	if b != nil {
+		offset = int32(b.battleState().PanelOffset)
 	}
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
@@ -1418,8 +1424,8 @@ func (h *retailBattleHUD) buttonAt(b *battleSession, x, y int32) int {
 		return -1
 	}
 	offset := int32(0)
-	if h.panel != nil {
-		offset = int32(h.panel.Offset)
+	if b != nil {
+		offset = int32(b.battleState().PanelOffset)
 	}
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {

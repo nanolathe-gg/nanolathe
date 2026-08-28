@@ -9,10 +9,9 @@ import (
 )
 
 // attachSettings loads the persisted frontend preferences and applies them to
-// the shell, then enables writing them back. Retail does the read once during
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// process and rewritten whole.
+// the shell, then enables writing them back. The frontend reads preferences
+// once during startup and rewrites the whole block when a screen commits a
+// change [02 §3].
 //
 // It is called only from the windowed entry point. newGameShell stays free of
 // filesystem state so the screenshot path and the tests compose the same
@@ -72,8 +71,8 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	// not later re-derive it from scratch.
 	g.retailControllersSet = true
 	if !g.hasLiveController() {
-		// Every row open would leave Start permanently refused. Fall back to
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Without a live controller every row would leave Start refused. Fall
+		// back to the default controller setup in that case.
 		g.retailControllersSet = false
 		g.ensureRetailSkirmishControllers()
 	}

@@ -427,7 +427,12 @@ func createAndBindServices(s *Session) error {
 	// Movement [04 §8] with occupancy grid and compiled classes
 	if s.Movement == nil {
 		grid := movement.NewOccupancyGrid()
-		fallback := movement.Profile{FootPrintX: 1, FootPrintZ: 1}
+		// Retail backs the scratch record for an unresolvable movement class
+		// with the startup template — slopes 255, depths ±10000, i.e.
+		// unauthored means unlimited [02 §5 "Movement class record"][04 §6.1
+		// R-DOC04-A]. A zeroed record would be a real record whose zero
+		// thresholds block every slope and depth band.
+		fallback := movement.Template()
 		s.Movement = movement.NewSystem(s.World, fallback, grid)
 	}
 	if s.Movement.Terrain != s.World {

@@ -14,7 +14,7 @@ func (b *battleSession) battleState() *ui.BattleState {
 		return nil
 	}
 	if b.battleUI == nil {
-		b.battleUI = ui.NewBattleState()
+		b.battleUI = ui.NewProductionBattleState()
 	}
 	return b.battleUI
 }

@@ -33,7 +33,7 @@ func syntheticTerrainForIntegrate() *world.Terrain {
 // published route respects the ≤20 / ≤13 caps [04 §7.3] C14–C16.
 func TestSchedulerRouteSteerArrival(t *testing.T) {
 	terrain := syntheticTerrainForIntegrate()
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 
@@ -135,7 +135,7 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 func TestIntegrateDeterminism(t *testing.T) {
 	run := func() (int64, int64) {
 		terrain := syntheticTerrainForIntegrate()
-		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25}
+		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25}
 		grid := NewOccupancyGrid()
 		system := NewSystem(terrain, profile, grid)
 		w := units.New(10, nil)
@@ -215,7 +215,7 @@ func syntheticLargeTerrainForBudget() *world.Terrain {
 // A big synthetic request stays active across ticks and never publishes a partial prefix.
 func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 	terrain := syntheticLargeTerrainForBudget()
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
 
@@ -336,7 +336,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 
 func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
 	terrain := syntheticTerrainForIntegrate()
-	system := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}, NewOccupancyGrid())
+	system := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}, NewOccupancyGrid())
 	w := units.New(10, nil)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, MaxDamage: 100}
 	h, _ := w.Create(def, 0, world.CellToWorld(0), 0, world.CellToWorld(0))

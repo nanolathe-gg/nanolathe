@@ -25,7 +25,7 @@ func terrainForGoals() *world.Terrain {
 // TestGoalFamiliesWiring verifies OW-3-P wiring [04 §7.2][04 §7.4][04 §3.5][M-4].
 func TestGoalFamiliesWiring(t *testing.T) {
 	terrain := terrainForGoals()
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
 	w := units.New(10, nil)
@@ -122,7 +122,7 @@ func TestGoalFamiliesWiring(t *testing.T) {
 
 func TestActivateMoveWiresAnnulus(t *testing.T) {
 	terrain := terrainForGoals()
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxSlope: 50}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
 	w := units.New(10, nil)

@@ -284,6 +284,18 @@ func TestW03_ParityBaseline(t *testing.T) {
 
 	// Golden values: captured at main 1ed9416 + these test-only files (see
 	// file comment). NOT a correctness claim.
+	//
+	// 2026-08-27, intentional-change note (parity/move-profiles correction
+	// round): compiled movement profiles are now startup-template initialized
+	// and the SC5 gated water-slope divergence is deleted — depth and slope
+	// thresholds are record values, with the template's 255 slopes / ±10000
+	// depths supplying "unauthored means unlimited" [04 §6.1 R-DOC04-A][02 §5
+	// "Movement class record"]. The session-side scratch fallback and the
+	// test fixtures' hand-authored class record were moved to the template in
+	// the same round. All golden values were re-verified UNCHANGED against a
+	// fresh run: on this flat fixture the gates whose constants differ never
+	// fire, so the observable trace is bit-identical and the baseline is
+	// preserved, not re-captured.
 	want := baselineCapture{
 		InitialSummary: "f21d06b3a6f0d96d",
 		FinalSimState:  0x56e7f6d5,

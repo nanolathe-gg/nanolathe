@@ -1604,6 +1604,16 @@ parameters substitute rather than disable, and the enable step is reached on
 both the authored and substituted paths. A map authoring nonzero parameters
 with no weapon key is disabled with its parameters discarded.
 
+**Contradiction (recorded 2026-08-27, open):** document 06 §6.5 states the
+per-field reading — each zero parameter substitutes ITS corresponding
+default — while this section states the all-or-nothing reading above. The
+two disagree whenever a map authors only SOME parameters as zero. Nanolathe
+currently implements the per-field ([06 §6.5]) reading
+(`combat.EffectiveMeteor*`). Decider: one probe — a mission authoring, say,
+radius nonzero and density zero, then trace which values reach the spawned
+storm. Until probed, treat the substitution granularity as
+`TODO(question)`; nothing else in either contract depends on it.
+
 Stock content authors `[Default]` as weapon `Meteor`, radius 300, density 2,
 duration 5, interval 60. If that record itself carries an empty weapon name
 or a zero density/duration/interval, the loader raises the exact diagnostic

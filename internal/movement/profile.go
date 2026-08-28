@@ -9,17 +9,17 @@ import (
 )
 
 // Profile is the compiled movement profile used for terrain classification
-// [02 "Movement class record"][04 §6.1].
+// [02 §5 "Movement class record"][04 §6.1 R-DOC04-A].
 //
 // FootPrintX/Z are the authored footprint dimensions in cells, stored as
-// 16-bit [02 "Movement class record"] 1-2. MaxWaterDepth/MinWaterDepth are the
-// water-depth thresholds in height units (0-255) [02 "Movement class record"]
-// 3-4. MaxSlope/BadSlope are land slope thresholds stored as bytes
-// [02 "Movement class record"] 5-6, MaxWaterSlope/BadWaterSlope are the water
-// slope thresholds stored as bytes [02 "Movement class record"] 7-8.
-// Bad defaults are half the corresponding Max just read, and the three clamps
-// run in order [02 "Movement class record"] — the gate on maxwaterslope
-// presence is per [docs/SPEC_CONFLICTS SC5].
+// 16-bit [02 §5 "Movement class record"] 1-2. MaxWaterDepth/MinWaterDepth are
+// the signed water-depth thresholds [02 §5] 3-4. MaxSlope/BadSlope are land
+// slope thresholds stored as bytes [02 §5] 5-6, MaxWaterSlope/BadWaterSlope
+// are the water slope thresholds stored as bytes [02 §5] 7-8. Bad defaults
+// are half the corresponding Max just read, and the three clamps run
+// unconditionally in order [02 §5][04 §6.1 R-DOC04-A]: the startup template
+// pre-fills every record with 255 slopes and ±10000 depths before any parse,
+// so an omitted key carries the template value.
 type Profile struct {
 	FootPrintX, FootPrintZ       int16
 	MaxWaterDepth, MinWaterDepth int32
@@ -27,14 +27,34 @@ type Profile struct {
 	MaxWaterSlope, BadWaterSlope uint8
 }
 
+// Template returns the startup class template as a Profile [04 §6.1
+// R-DOC04-A]: 255 slopes, depth limits ±10000. These are the values every
+// class record holds before any parse, and the same values back the scratch
+// profile retail uses when an FBI movementclass name does not resolve
+// [02 §5 "Movement class record"] — unauthored means unlimited. Callers that
+// must fabricate a permissive fallback record (units with no movement class)
+// should start from this, not from the zero value: a zeroed record is a real
+// record whose zero thresholds block every slope.
+func Template() Profile {
+	return Profile{
+		MaxWaterDepth: 10000,
+		MinWaterDepth: -10000,
+		MaxSlope:      255,
+		BadSlope:      255,
+		MaxWaterSlope: 255,
+		BadWaterSlope: 255,
+	}
+}
+
 // NewProfile adapts a compiled content.MovementClass into a Profile
-// [02 "Movement class record"][docs/SPEC_CONFLICTS SC5].
+// [02 §5 "Movement class record"][04 §6.1 R-DOC04-A].
 //
-// The phase-2 compiler already applied the chained defaults (badslope =
-// maxslope/2, badwaterslope = maxwaterslope/2) and the three ordered clamps
-// gated on maxwaterslope presence [02 "Movement class record"][docs/SPEC_CONFLICTS SC5];
-// this constructor does not relitigate that contract and copies the stored
-// values verbatim, clamping only to the Profile's narrower integer widths.
+// The phase-2 compiler already initialized the record from the startup
+// template, applied the chained defaults (badslope = (maxslope just read & 0xFF)
+// >> 1, likewise badwaterslope) and the three ordered clamps [02 §5][04 §6.1
+// R-DOC04-A]; this constructor does not relitigate that contract and copies
+// the stored values verbatim, clamping only to the Profile's narrower integer
+// widths.
 func NewProfile(c *content.MovementClass) Profile {
 	if c == nil {
 		return Profile{}

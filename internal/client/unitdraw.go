@@ -70,9 +70,8 @@ func (c *Client) paletteIndex(logical byte) uint8 {
 	return c.pal.Logical[logical]
 }
 
-// retailHealthColor returns the exact three-tier health color selection used
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// positive-health fraction toward zero [07 §6].
+// retailHealthColor returns the three-tier health color selection. Integer
+// max/3 thresholds select logical entries 10, 14, or 12 [07 §6].
 func (c *Client) retailHealthColor(health, max int32) uint8 {
 	third := max / 3
 	if health > third*2 {
@@ -389,10 +388,10 @@ func (c *Client) UIBlitClipped(f *formats.GAFFrame, x, y, clipX, clipY, clipW, c
 
 // UIBlitLit stamps a GAF frame with every opaque pixel remapped through one
 // row of the PALETTE.LHT brightening table. This is retail's shaded glyph
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// for a non-negative level; the loading screen draws a stage's label through
-// it so the label flashes as the stage completes. Level 0 is UIBlit
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// blitter, which indexes the same PALETTE.LHT table as the light-level
+// remapper for a non-negative level; the loading screen draws a stage's label
+// through it so the label flashes as the stage completes. Level 0 is UIBlit
+// [03 §4.3.1]. Presentation only [I6].
 func (c *Client) UIBlitLit(f *formats.GAFFrame, x, y int, pal *palette.Tables, level int) {
 	if f == nil {
 		return
@@ -420,8 +419,8 @@ func (c *Client) UIBlitLit(f *formats.GAFFrame, x, y int, pal *palette.Tables, l
 	}
 }
 
-// UIBlitAnchor reproduces retail's raw GAF rasterizer: x and y are the raw
-// call-site coordinates and the frame's authored offsets are subtracted before
+// UIBlitAnchor applies the GAF frame-anchor placement: x and y are caller
+// coordinates and the frame's authored offsets are subtracted before
 // pixels are written. Battle-shell callers pass the desired pixel origin plus
 // XOffset/YOffset, so those two operations cancel [fmt gaf][07 §6]. Frontend
 // .GUI controls deliberately use UIBlit instead: their rectangles are the
@@ -436,8 +435,8 @@ func (c *Client) UIBlitAnchor(f *formats.GAFFrame, x, y int) {
 // UIBlitFrameScaled stretches a decoded GAF frame across a destination
 // rectangle, honoring GAF transparency and clipping to the framebuffer.
 //
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// quad whose destination spans (x, y)..(x+w-1, y+h-1) and whose source spans
+// This is the retail surface-gadget path. It builds a four-corner quad whose
+// destination spans (x, y)..(x+w-1, y+h-1) and whose source spans
 // (0, 0)..(frameW-1, frameH-1), then hands both to the texture-mapped blitter,
 // so the frame is resampled onto the authored gadget rectangle rather than
 // stamped at its own size [07 §4]. Presentation only [I6].
@@ -495,9 +494,9 @@ func (c *Client) UIBlitPCX(p *formats.PCX, x, y int) {
 }
 
 // UIBlitPCXClipped draws an opaque indexed bitmap confined to a destination
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// its own WxH drawing surface positioned at the window origin and copies the
-// window's background bitmap into that surface at (0,0), so a bitmap larger
+// rectangle. This is the retail window fill: every window gets its own WxH
+// drawing surface positioned at the window origin, and the background bitmap
+// is copied into that surface at (0,0), so a bitmap larger
 // than the window shows only the part the window rectangle admits. The
 // full-screen frontend screens are authored at (0,0,640,480) and are
 // unaffected; SELMAP.GUI is the case that needs the clip, because
@@ -526,11 +525,11 @@ func (c *Client) UIBlitPCXClipped(p *formats.PCX, x, y, clipX, clipY, clipW, cli
 }
 
 // UILightRect remaps every pixel in a rectangle through one row of the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// non-negative level: the level selects an LHT row directly and the operator
+// PALETTE.LHT brightening table. For a non-negative level, the level selects
+// an LHT row directly and the operator
 // rewrites the destination in place, so it lifts whatever is already there
 // instead of painting a color. The GUI uses it for the selected list row
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [03 §4.3.1]. Presentation only [I6].
 func (c *Client) UILightRect(pal *palette.Tables, x, y, w, h, level int) {
 	if pal == nil || w <= 0 || h <= 0 {
 		return

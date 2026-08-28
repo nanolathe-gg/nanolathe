@@ -24,8 +24,8 @@ func TestRetailGAFTextMetrics(t *testing.T) {
 	if got := retailGAFTextWidth(font, "A B\x00B"); got != 20 {
 		t.Fatalf("width %d, want 20", got)
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// the FNT newline terminator [07 §4].
+	// The GAF path skips control bytes instead of applying the FNT newline
+	// terminator [07 §4].
 	if got := retailGAFTextWidth(font, "A\nB"); got != 13 {
 		t.Fatalf("control-byte width %d, want 13", got)
 	}
@@ -85,8 +85,8 @@ func TestRetailMainMenuUsesPrimaryGAFGlyphPixels(t *testing.T) {
 	if frame == nil {
 		t.Fatal("hattfont12 S frame missing")
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Font loading subtracts I.Height from each frame YOffset, then glyph
+	// placement subtracts that normalized offset from the pen [07 §4].
 	x -= int(frame.XOffset)
 	y := penY - (int(frame.YOffset) - retailGAFBaselineHeight(shell.retailGAFTextFont()))
 	if y != penY+1 {

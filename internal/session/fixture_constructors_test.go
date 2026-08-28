@@ -150,7 +150,10 @@ func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficul
 	grantResourcesDirect(s, m)
 	if s.World != nil && s.Movement == nil {
 		grid := movement.NewOccupancyGrid()
-		fallback := movement.Profile{FootPrintX: 1, FootPrintZ: 1}
+		// Same fallback as production composition: the startup template
+		// [02 §5 "Movement class record"][04 §6.1 R-DOC04-A], not the
+		// fabricated zero profile this fixture previously copied.
+		fallback := movement.Template()
 		s.Movement = movement.NewSystem(s.World, fallback, grid)
 		if cat != nil {
 			s.Movement.SetClasses(cat.Movement)
@@ -511,7 +514,8 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		}
 	}
 	if s.World != nil && s.Movement == nil {
-		s.Movement = movement.NewSystem(s.World, movement.Profile{FootPrintX: 1, FootPrintZ: 1}, movement.NewOccupancyGrid())
+		// Production fallback: startup template [02 §5][04 §6.1 R-DOC04-A].
+		s.Movement = movement.NewSystem(s.World, movement.Template(), movement.NewOccupancyGrid())
 		if cat != nil {
 			s.Movement.SetClasses(cat.Movement)
 		}

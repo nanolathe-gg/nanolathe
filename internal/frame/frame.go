@@ -77,6 +77,9 @@ type UnitView struct {
 	FootX, FootZ         int8
 	Pieces               []PieceView
 	IsBuilding           bool
+	// Activated is the committed on/off state used by UI command dispatch.
+	// Presentation must not rehydrate a selected unit from the live pool [I6].
+	Activated bool
 }
 
 // ProjectileView is the committed copy of one projectile draw record

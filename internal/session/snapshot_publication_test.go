@@ -48,6 +48,26 @@ func TestRadarStepPublishesAuthoritativeSensorIdentity(t *testing.T) {
 	}
 }
 
+func TestPublishSnapshotCarriesCommittedUnitActivation(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "switchable"}, MaxDamage: 1, OnOffable: true}
+	w := units.New(2, nil)
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create unit: %v", err)
+	}
+	w.Unit(h).Activated = true
+	s := &Session{Snapshot: frame.NewBuffer(), Units: w, LocalOwner: 0}
+	s.publishSnapshot(1)
+	cur := s.Snapshot.Current()
+	if cur == nil || len(cur.Units) != 1 || !cur.Units[0].Activated {
+		t.Fatalf("published activation = %#v, want one active committed unit", cur)
+	}
+	w.Unit(h).Activated = false
+	if !cur.Units[0].Activated {
+		t.Fatal("mutating live activation changed the committed frame")
+	}
+}
+
 func TestRadarStepClearsSeenWithSingleActivePlayer(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "seen"}, MaxDamage: 1}
 	w := units.New(4, nil)

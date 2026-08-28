@@ -17,7 +17,7 @@ import (
 func TestStaticLayerIgnoresTransientMover(t *testing.T) {
 	terrain := syntheticTerrainForIntegrate()
 	// Flat terrain ensures IsPassableFootprint is true everywhere for ground profile.
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
 	w := units.New(100, nil)
@@ -117,7 +117,7 @@ func TestStaticLayerIgnoresTransientMover(t *testing.T) {
 func TestStaticLayerDeterministicFixture(t *testing.T) {
 	run := func() []Point {
 		terrain := syntheticTerrainForIntegrate()
-		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
+		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 		grid := NewOccupancyGrid()
 		sys := NewSystem(terrain, profile, grid)
 		w := units.New(100, nil)
@@ -158,7 +158,7 @@ func TestStaticLayerDeterministicFixture(t *testing.T) {
 // commit-stage still sees it via OccupancyGrid and ApplyBlocked would cap speed [04 §8.2] C24.
 func TestStaticLayerCommitStillBlocks(t *testing.T) {
 	terrain := syntheticTerrainForIntegrate()
-	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MaxSlope: 255}
+	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 255}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
 	w := units.New(100, nil)

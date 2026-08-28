@@ -153,12 +153,15 @@ func TestSearchPassabilityFollowsTheRequestingUnit(t *testing.T) {
 
 	sys := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1}, NewOccupancyGrid())
 	sys.SetClasses(map[string]*content.MovementClass{
-		// A ground class that can wade at most 1 deep. Note a MaxWaterDepth of
-		// zero means NO limit [02 "Movement class record"], so a tank that must
-		// stay dry authors a small positive depth, not zero.
-		"tank1": {FootprintX: 1, FootprintZ: 1, MaxSlope: 255, BadSlope: 255, MaxWaterDepth: 1},
-		// A ship class that needs at least 5 of water under it.
-		"boat4": {FootprintX: 1, FootprintZ: 1, MaxSlope: 255, BadSlope: 255, MinWaterDepth: 5},
+		// A ground class that can wade at most 1 deep. Unauthored keys carry
+		// the startup template, so a class that must never fire the shallow
+		// gate leaves minwaterdepth out (template −10000) and authors a small
+		// positive maxwaterdepth [02 §5 "Movement class record"][04 §6.1
+		// R-DOC04-A].
+		"tank1": {FootprintX: 1, FootprintZ: 1, MaxSlope: 255, BadSlope: 255, MaxWaterDepth: 1, MinWaterDepth: -10000},
+		// A ship class that needs at least 5 of water under it; maxwaterdepth
+		// omitted carries the template 10000 (no depth ceiling).
+		"boat4": {FootprintX: 1, FootprintZ: 1, MaxSlope: 255, BadSlope: 255, MinWaterDepth: 5, MaxWaterDepth: 10000},
 	})
 	scout := newTestUnit(t, "ARMFLEA", "TANK1", 1, 1)
 	ship := newTestUnit(t, "ARMTSHIP", "BOAT4", 1, 1)

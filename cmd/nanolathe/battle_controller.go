@@ -61,8 +61,8 @@ func (c *BattleController) Step(frame BattleInputFrame, cl *client.Client) {
 		scaled = 1 << 30
 	}
 	c.battle.sess.Step(int32(scaled))
-	// Animated model textures tick with the simulation frame count
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Registered model-texture players advance once for each simulation tick
+	// [03 §4.4].
 	if ran := c.battle.sess.Clock.GlobalTick - beforeTick; ran > 0 && cl != nil {
 		cl.TickTextureAnimators(int(ran))
 		if cursors := cl.Cursors(); cursors != nil {

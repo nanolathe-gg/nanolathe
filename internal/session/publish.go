@@ -17,6 +17,71 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
+// CursorToWorld resolves the presentation cursor through the authoritative
+// terrain resolver without exposing the mutable terrain service to UI code.
+// The query is read-only and does not cross the human-command mutation path
+// [07 §8][I6].
+func (s *Session) CursorToWorld(x, z int32) (numeric.Fixed, numeric.Fixed, numeric.Fixed, bool) {
+	if s == nil || s.World == nil {
+		return 0, 0, 0, false
+	}
+	wx, wy, wz := s.World.CursorToWorld(x, z)
+	return wx, wy, wz, true
+}
+
+// PlayArea returns the authored playable extents through the session query
+// boundary. Presentation callers use it for minimap geometry without reaching
+// into the mutable terrain object [03 §3.4][07 §10][I6].
+func (s *Session) PlayArea() (int32, int32, bool) {
+	if s == nil || s.World == nil || s.World.PlayRight <= 0 || s.World.PlayBottom <= 0 {
+		return 0, 0, false
+	}
+	return s.World.PlayRight, s.World.PlayBottom, true
+}
+
+// PreviewPlacement is the authoritative read-only placement boundary used by
+// the battle ghost. It reuses the same typed footprint, yard, occupancy, and
+// terrain validator as construction. On rejection it still returns the site
+// height derived by the same footprint scan so the ghost has no second rule
+// set for its drawn height [04 §6.2][07 §9][I6].
+func (s *Session) PreviewPlacement(cx, cz int32, def *content.UnitDef, footX, footZ int32, self pool.Handle) (world.PlacementResult, error) {
+	if s == nil || s.World == nil {
+		return world.PlacementResult{}, fmt.Errorf("session: placement world unavailable")
+	}
+	if def == nil {
+		return world.PlacementResult{}, fmt.Errorf("session: placement definition unavailable")
+	}
+	extent, err := world.NewFootprintExtent(footX, footZ)
+	if err != nil {
+		return world.PlacementResult{}, err
+	}
+	rect, err := world.NewFootprintRect(world.NewFootprintAnchor(cx, cz), extent)
+	if err != nil {
+		return world.PlacementResult{}, err
+	}
+	rules, err := world.PlacementRulesForUnit(s.Catalog, def)
+	if err != nil {
+		return world.PlacementResult{}, err
+	}
+	var yard []world.YardCell
+	if !def.BMCode {
+		yard, err = world.ParseYardMap(def.YardMap, int(footX), int(footZ))
+		if err != nil {
+			return world.PlacementResult{}, err
+		}
+	}
+	if s.Build != nil {
+		if _, blocked := s.Build.StructureBlocks(self, rect); blocked {
+			return world.PlacementResult{Rect: rect, SiteHeight: s.World.SiteHeight(cx, cz, yard, int(footX), int(footZ), def.Waterline)}, fmt.Errorf("session: footprint overlaps a completed structure")
+		}
+	}
+	result, err := s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: uint16(self), Mobile: def.BMCode})
+	if err != nil {
+		result = world.PlacementResult{Rect: rect, SiteHeight: s.World.SiteHeight(cx, cz, yard, int(footX), int(footZ), def.Waterline)}
+	}
+	return result, err
+}
+
 // publishSnapshot publishes one immutable frame after every completed sub-tick [PLAN_03 C15].
 func (s *Session) publishSnapshot(tick uint32) {
 	if s.Snapshot == nil {
@@ -53,6 +118,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				Heading:        u.Move.Heading,
 				Pitch:          u.Move.Pitch,
 				Bank:           u.Move.Bank,
+				Activated:      u.Activated,
 			}
 			if s.Movement != nil {
 				if st := s.Movement.Steers[u.Handle]; st != nil {

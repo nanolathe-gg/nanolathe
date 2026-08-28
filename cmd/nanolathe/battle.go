@@ -52,11 +52,6 @@ type battleSession struct {
 	guiWin    *gui.Window
 	guiOK     bool
 
-	// battleMode is the established runtime mode flag consumed by the digit
-	// gate [07 §9]. The production composition currently has no separate
-	// publisher for this byte, so the composition value remains zero until
-	// that producer is wired (TODO(question): identify the mode-byte writer).
-	battleMode byte
 	controller *BattleController
 
 	// AppliedShake records only the last committed camera offset consumed by
@@ -103,7 +98,8 @@ func runBattleView(opts Options, cs *contentSet) error {
 	cam.Pan(0, 0)
 	centerOnCommanderForSession(sess, cam, winW, winH)
 
-	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs, battleUI: ui.NewBattleState()}
+	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs}
+	b.battleUI = ui.NewProductionBattleState()
 	b.returnToMenu = func(cl *client.Client) {
 		// The battle view has no menu shell callback; mark it ended and exit.
 		b.ended = true
@@ -119,6 +115,13 @@ func runBattleView(opts Options, cs *contentSet) error {
 	if err != nil {
 		return err
 	}
+	// Rail detent cues are emitted by canonical UI state; this callback only
+	// adapts the authored cue to the session audio sink [07 §6][I6].
+	b.battleUI.SetPanelCue(func(name string) {
+		if sess.Audio != nil {
+			_ = sess.Audio.PlayUICue(name)
+		}
+	})
 	cl, err := client.New(client.Options{
 		Buffer:   sess.Snapshot,
 		Width:    winW,
@@ -202,6 +205,12 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		return
 	}
 	in := cl.Input()
+	// Advance the canonical panel state during the host-frame update. Drawing
+	// must remain a pure read of this state so hit testing and raster placement
+	// use the same offset [07 §6][I6].
+	spaceHeld := in != nil && in.Kbd != nil && in.Kbd.KeyHeld(input.KeySpace)
+	editorFocused := b.hud != nil && b.hud.editorFocused()
+	b.battleState().AdvancePanelNow(spaceHeld, editorFocused)
 	// End-mission presentation takes ownership of the frame once the
 	// authoritative result is latched. The authored result panel owns any
 	// release-inside gesture; no battle hotkey or world command leaks through
@@ -376,11 +385,11 @@ func (b *battleSession) applyCommittedShake() {
 // and PlayBottom are authored by map loading; the rail destination is the
 // battle composer's fixed 126-pixel canvas origin [07 §6][07 §10].
 func (b *battleSession) minimapLayout() (camera.Minimap, hud.Rect, bool) {
-	if b == nil || b.sess == nil || b.sess.World == nil || b.hud == nil {
+	if b == nil || b.sess == nil || b.hud == nil {
 		return camera.Minimap{}, hud.Rect{}, false
 	}
-	playW, playH := b.sess.World.PlayRight, b.sess.World.PlayBottom
-	if playW <= 0 || playH <= 0 {
+	playW, playH, ok := b.sess.PlayArea()
+	if !ok {
 		return camera.Minimap{}, hud.Rect{}, false
 	}
 	dst, ok := b.hud.minimapRect()
@@ -441,7 +450,11 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 				return
 			}
 			view := hud.Rect{X1: camera.OriginX, Y1: camera.OriginY, X2: camera.OriginX + b.cam.ViewW - 1, Y2: camera.OriginY + b.cam.ViewH - 1}
-			intent, consumed := client.MinimapCameraIntent(b.cam.X, b.cam.Z, m, dst, view, b.sess.World.PlayRight, b.sess.World.PlayBottom, mx, my, b.isOnRadar(mx, my), false)
+			playW, playH, ok := b.sess.PlayArea()
+			if !ok {
+				return
+			}
+			intent, consumed := client.MinimapCameraIntent(b.cam.X, b.cam.Z, m, dst, view, playW, playH, mx, my, b.isOnRadar(mx, my), false)
 			if consumed {
 				b.cam.X, b.cam.Z = intent.X, intent.Z
 				b.cam.Clamp()
@@ -752,7 +765,12 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 }
 
 func (b *battleSession) routeDigit(digit int, altHeld, shiftHeld bool) {
-	if hud.RoutesToPage(b.battleMode, altHeld) {
+	// The source of the digit-routing mode bit is not established in the
+	// current battle composition; preserve its existing zero-bit route behind
+	// an explicit TODO rather than conflating it with the panel-entry value
+	// [07 §9] C10.
+	const unresolvedDigitMode byte = 0
+	if hud.RoutesToPage(unresolvedDigitMode, altHeld) {
 		b.switchBuildPage(digit)
 		return
 	}
@@ -778,18 +796,20 @@ func (b *battleSession) hasSelection() bool {
 // Live selection flags are presentation state; command application owns all
 // authoritative selection and queue mutation [01 §4.4][07 §9].
 func (b *battleSession) selectedCommandUnits() []*units.Unit {
-	if b == nil || b.sess == nil || b.sess.Units == nil {
+	if b == nil || b.sess == nil {
 		return nil
 	}
 	f, ok := b.currentSnapshot()
 	if !ok {
 		return nil
 	}
+	// The committed frame is the complete selection source. Do not dereference
+	// the live pool here: command construction happens from immutable facts and
+	// every mutation remains a typed Session command [I6].
 	out := make([]*units.Unit, 0, len(f.Selection.Handles))
 	for _, h := range f.Selection.Handles {
-		u := b.sess.Units.Unit(h)
-		if u != nil && u.Alive && u.Owner == b.sess.LocalOwner {
-			out = append(out, u)
+		if v, found := snapshotUnitByHandle(f, h); found && v.Owner == f.Selection.LocalPlayer {
+			out = append(out, b.snapshotUnitCopy(v))
 		}
 	}
 	return out
@@ -940,10 +960,13 @@ func (b *battleSession) cursorWorld(sx, sy int32) (wx, wy, wz numeric.Fixed) {
 	// The renderer stores world points at beam position minus OriginX/Y. Restore
 	// those fixed offsets for the camera inverse [03 §2.5].
 	fx, fz := b.cam.ScreenToWorld(clampedX+camera.OriginX, clampedY+camera.OriginY)
-	if b.sess == nil || b.sess.World == nil {
+	if b.sess == nil {
 		return fx, 0, fz
 	}
-	return b.sess.World.CursorToWorld(int32(fx>>16), int32(fz>>16))
+	if wx, wy, wz, ok := b.sess.CursorToWorld(int32(fx>>16), int32(fz>>16)); ok {
+		return wx, wy, wz
+	}
+	return fx, 0, fz
 }
 
 // armPlacement enters build-placement mode for a product [07 §9]. Retail arms
@@ -995,17 +1018,12 @@ func (b *battleSession) updatePlacement(mx, my int32) {
 	}
 	result, err := b.checkProductPlacement(b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ, def, footX, footZ, self)
 	b.battleState().Input.BuildOK = err == nil
-	waterline := int32(0)
-	if def != nil {
-		waterline = def.Waterline
-	}
 	if err == nil {
 		b.battleState().Input.BuildSiteH = result.SiteHeight
 	} else {
-		// Keep an informative ghost height while illegal; legality itself is
-		// decided only by the canonical query above.
-		yard, _ := world.ParseYardMap(b.yardMapFor(), int(footX), int(footZ))
-		b.battleState().Input.BuildSiteH = b.sess.World.SiteHeight(b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ, yard, int(footX), int(footZ), waterline)
+		// PreviewPlacement returns the same derived height on rejection; retaining
+		// this value avoids a presentation-side terrain read or fallback rule.
+		b.battleState().Input.BuildSiteH = result.SiteHeight
 	}
 }
 
@@ -1014,39 +1032,10 @@ func (b *battleSession) updatePlacement(mx, my int32) {
 // the product's compiled footprint, matching construction exactly [R-P0-08]
 // [07 §9].
 func (b *battleSession) checkProductPlacement(cx, cz int32, def *content.UnitDef, footX, footZ int32, self uint16) (world.PlacementResult, error) {
-	if b == nil || b.sess == nil || b.sess.World == nil {
+	if b == nil || b.sess == nil {
 		return world.PlacementResult{}, fmt.Errorf("battle: placement world unavailable")
 	}
-	if def == nil {
-		return world.PlacementResult{}, fmt.Errorf("battle: placement definition unavailable")
-	}
-	extent, err := world.NewFootprintExtent(footX, footZ)
-	if err != nil {
-		return world.PlacementResult{}, err
-	}
-	rect, err := world.NewFootprintRect(world.NewFootprintAnchor(cx, cz), extent)
-	if err != nil {
-		return world.PlacementResult{}, err
-	}
-	rules, err := world.PlacementRulesForUnit(b.cat, def)
-	if err != nil {
-		return world.PlacementResult{}, err
-	}
-	var yard []world.YardCell
-	if !def.BMCode {
-		yard, err = world.ParseYardMap(def.YardMap, int(footX), int(footZ))
-		if err != nil {
-			return world.PlacementResult{}, err
-		}
-	}
-	// Completed buildings live in the construction service's structures
-	// registry once their frame occupancy stamps are released; the ghost must
-	// reject overlap with them exactly like the sim validator [04 §6.2][05].
-	selfHandle := pool.Handle(self)
-	if _, blocked := b.sess.Build.StructureBlocks(selfHandle, rect); blocked {
-		return world.PlacementResult{}, fmt.Errorf("battle: footprint overlaps a completed structure")
-	}
-	return b.sess.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: self, Mobile: def.BMCode})
+	return b.sess.PreviewPlacement(cx, cz, def, footX, footZ, pool.Handle(self))
 }
 
 // placementRect returns the armed site's footprint as a screen rectangle
@@ -1407,7 +1396,7 @@ func (b *battleSession) hoverFeature(sx, sy int32) *content.FeatureDef {
 }
 
 func (b *battleSession) snapshotUnitCopy(v frame.UnitView) *units.Unit {
-	u := &units.Unit{Handle: v.Slot, Owner: v.Owner, X: v.X, Y: v.Y, Z: v.Z, Flags: v.Flags, Health: v.Health, MaxHealth: v.MaxHealth, Alive: true}
+	u := &units.Unit{Handle: v.Slot, Owner: v.Owner, X: v.X, Y: v.Y, Z: v.Z, Flags: v.Flags, Health: v.Health, MaxHealth: v.MaxHealth, Activated: v.Activated, Alive: true}
 	if b != nil && b.cat != nil && v.DefName != "" {
 		u.Def, _ = b.cat.Unit(v.DefName)
 	}
@@ -1427,60 +1416,26 @@ func (b *battleSession) hostile(actor, target *units.Unit) bool {
 }
 
 // isResultVisible reports whether the authoritative result overlay should be shown [RS-05][08][P1-01].
-// It is presentation-only and reads the snapshot view plus the session's latch state (I6).
+// It is presentation-only and reads only the committed result view (I6).
 // The overlay is visible when the terminal result is latched (Ended) and has not been dismissed.
 func (b *battleSession) isResultVisible() bool {
-	if b == nil || b.sess == nil || b.battleState().Input.ResultDismissed {
+	if b == nil || b.battleState().Input.ResultDismissed {
 		return false
 	}
-	if b.sess.GetResult().Ended {
-		return true
-	}
-	if b.sess.Snapshot != nil {
-		if cur := b.sess.Snapshot.Current(); cur != nil && cur.Result.Ended {
-			return true
-		}
-	}
-	if b.sess.State == session.StatePostBattle {
-		return true
-	}
-	return false
+	cur, ok := b.currentSnapshot()
+	return ok && cur.Result.Ended
 }
 
 // resultView returns the current authoritative result view for overlay [RS-05].
 func (b *battleSession) resultView() frame.ResultView {
-	if b == nil || b.sess == nil {
+	if b == nil {
 		return frame.ResultView{}
 	}
-	if b.sess.Snapshot != nil {
-		if cur := b.sess.Snapshot.Current(); cur != nil && cur.Result.Ended {
-			return cur.Result
-		}
+	cur, ok := b.currentSnapshot()
+	if !ok || !cur.Result.Ended {
+		return frame.ResultView{}
 	}
-	r := b.sess.GetResult()
-	if r.Ended {
-		view := frame.ResultView{
-			Ended:      r.Ended,
-			Kind:       r.Kind,
-			WinnerTeam: r.WinnerTeam,
-			Reason:     r.Reason,
-			Tick:       r.Tick,
-			ArmedTick:  r.ArmedTick,
-			Countdown:  r.Countdown,
-			Draw:       r.Draw,
-		}
-		if len(r.Winners) > 0 {
-			view.Winners = append([]int(nil), r.Winners...)
-		}
-		if len(r.Losers) > 0 {
-			view.Losers = append([]int(nil), r.Losers...)
-		}
-		if len(r.Scores) > 0 {
-			view.Scores = append([]frame.ResultScore(nil), r.Scores...)
-		}
-		return view
-	}
-	return frame.ResultView{}
+	return cur.Result
 }
 
 // doResultAction executes the result overlay button action through the state graph [RS-05][08 "Session states"].
@@ -1512,19 +1467,10 @@ func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 			// Campaign Continue: on victory load next MISSION slot+1 [07 §11][08 "Progression"]; on defeat stay at menu [P1-01 §7.5].
 			// Continue the campaign directly when no continue callback is installed.
 			if b.sess.Mission != nil && b.sess.Mission.Type == mission.TypeCampaign {
-				isWin := false
-				if b.sess.CampaignSlot >= 0 && b.sess.CampaignSlot < len(b.sess.Progress.WL) && b.sess.Progress.WL[b.sess.CampaignSlot] == 'W' {
-					isWin = true
-				} else if b.sess.Latch.IsWin() {
-					isWin = true
-				} else if b.sess.VictoryDone && !b.sess.DefeatDone {
-					isWin = true
-				} else if r := b.sess.GetResult(); r.Ended && r.Kind == "victory" {
-					isWin = true
-				}
-				if !isWin && b.sess.Mission.CampaignIndex >= 0 && b.sess.Mission.CampaignIndex < len(b.sess.Progress.WL) && b.sess.Progress.WL[b.sess.Mission.CampaignIndex] == 'W' {
-					isWin = true
-				}
+				// The result kind is read from the same committed frame that gated
+				// this input route. Do not consult live result/latch/state fallbacks
+				// after presentation has taken ownership of that frame [03 §2.4][I6].
+				isWin := b.resultView().Kind == "victory"
 				if isWin {
 					campaignPath := b.sess.Mission.CampaignPath
 					curIdx := b.sess.Mission.CampaignIndex
@@ -1560,9 +1506,7 @@ func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 					}
 					// Campaign complete or provenance missing: return to main.
 					// TODO(question): retail end-of-campaign briefing/report/credits sequence not established [07 §11]; treat as menu return.
-					if b.sess.State == session.StatePostBattle {
-						_ = b.sess.ContinueCampaign()
-					}
+					_ = b.sess.ContinueCampaign()
 					b.shell.openMenu(modeMenuMain)
 				} else {
 					// TODO(question): losing Continue behavior beyond the authored route is not established; return to main [07 §11].
@@ -1585,21 +1529,28 @@ func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 
 // setStatusMessage stores a transient on-screen message [07 §11][07 §2] presentation-only (I6).
 func (b *battleSession) setStatusMessage(msg string) {
-	if b == nil || b.sess == nil || b.sess.Clock == nil {
+	if b == nil {
 		return
 	}
+	cur, ok := b.currentSnapshot()
 	b.battleState().Input.StatusMessage = msg
-	// Display for 90 ticks (~3 seconds at 30 Hz) [07 §11] animation cadence; TODO(question): exact duration not established
-	b.battleState().Input.StatusUntil = b.sess.Clock.GlobalTick + 90
+	if !ok {
+		// Keep the semantic message latched for a later publication, but never
+		// make it visible or assign a lifetime from the live clock [I6].
+		b.battleState().Input.StatusUntil = 0
+		return
+	}
+	// Display for 90 committed ticks (~3 seconds at 30 Hz). The exact duration
+	// remains an implementation boundary, but its lifetime uses frame ticks.
+	b.battleState().Input.StatusUntil = cur.Tick + 90
 }
 
 // statusVisible reports whether the transient message should be drawn [07 §11].
-func (b *battleSession) statusVisible() bool {
-	if b == nil || b.sess == nil || b.sess.Clock == nil || b.battleState().Input.StatusMessage == "" {
+func (b *battleSession) statusVisible(cur *frame.Frame) bool {
+	if b == nil || cur == nil || b.battleState().Input.StatusMessage == "" {
 		return false
 	}
-	// Show until expiry; if clock hasn't ticked yet, still show
-	return b.sess.Clock.GlobalTick <= b.battleState().Input.StatusUntil
+	return cur.Tick <= b.battleState().Input.StatusUntil
 }
 
 // adjustGameSpeed emits a concrete UI scheduling intent; Session performs the
@@ -1630,7 +1581,9 @@ func (b *battleSession) setGameSpeed(delta int) {
 	b.setStatusMessage(msg)
 }
 
-// togglePause flips the pause bit and emits retail message [07 §11] igpaused overlay is the established indicator; TODO(question): exact on-screen pause string not recovered, using "Game Paused"/"Game Resumed" as placeholder behind TODO.
+// togglePause flips the pause bit. Retail's established pause presentation is
+// the authored igpaused title; the exact localized status strings are unknown,
+// so this path intentionally emits no invented text [07 §11].
 func (b *battleSession) togglePause() {
 	if b == nil || b.sess == nil {
 		return
@@ -1640,11 +1593,4 @@ func (b *battleSession) togglePause() {
 		paused = !b.sess.Clock.Paused
 	}
 	b.applyBattleSchedule(ui.PauseIntent(paused))
-	var msg string
-	if paused {
-		msg = "Game Paused" // TODO(question): retail pause localized message not established beyond igpaused GAF [07 §11]; verify with decompile
-	} else {
-		msg = "Game Resumed"
-	}
-	b.setStatusMessage(msg)
 }

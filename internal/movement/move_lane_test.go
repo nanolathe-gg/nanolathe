@@ -51,7 +51,7 @@ func TestMoveLaneFootprintAggregate(t *testing.T) {
 	terrain.Plot[0].SetMaxHeight(0)
 	terrain.Plot[1].SetMinHeight(20)
 	terrain.Plot[1].SetMaxHeight(20)
-	p := Profile{FootPrintX: 2, FootPrintZ: 1, MaxSlope: 20, BadSlope: 10}
+	p := Profile{FootPrintX: 2, FootPrintZ: 1, MinWaterDepth: -10000, MaxSlope: 20, BadSlope: 10}
 	if got := p.ClassifyFootprint(terrain, 0, 0); got != ClassSteep {
 		t.Fatalf("aggregate slope equality/soft tier got %v want steep", got)
 	}
@@ -77,7 +77,7 @@ func TestMoveLaneBlockPriorityReplanCadence(t *testing.T) {
 		terrain.Plot[i].SetMinHeight(10)
 		terrain.Plot[i].SetMaxHeight(10)
 	}
-	sys := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1, MaxSlope: 255}, NewOccupancyGrid())
+	sys := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxSlope: 255}, NewOccupancyGrid())
 	w := units.New(10, nil)
 	def := &content.UnitDef{UnitName: "kbot", FootprintX: 1, FootprintZ: 1, MaxVelocity: 65536}
 	hLow, _ := w.Create(def, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
@@ -124,7 +124,7 @@ func TestMoveLaneSmoothingPolicyAndFootprintLegality(t *testing.T) {
 	// A blocking cell lies on the diagonal shortcut. A 2x2 footprint must
 	// reject the ray rather than cut the corner [R-P0-08].
 	terrain.Plot[1+1*5].SetFeature(world.PlotFeatureVoid)
-	profile := Profile{FootPrintX: 2, FootPrintZ: 2, MaxSlope: 255}
+	profile := Profile{FootPrintX: 2, FootPrintZ: 2, MinWaterDepth: -10000, MaxSlope: 255}
 	kbot := &content.UnitDef{MovementClass: "KBOTSS2"}
 	vehicle := &content.UnitDef{MovementClass: "TANKSH2"}
 	rK := &Route{}
@@ -139,7 +139,7 @@ func TestMoveLaneSmoothingPolicyAndFootprintLegality(t *testing.T) {
 	if rV.Count != 3 {
 		t.Fatalf("vehicle route was smoothed despite conservative policy; count=%d", rV.Count)
 	}
-	flatProfile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxSlope: 255}
+	flatProfile := Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxSlope: 255}
 	flatTerrain := &world.Terrain{CellW: 5, CellH: 5, Plot: make([]world.PlotCell, 25)}
 	for i := range flatTerrain.Plot {
 		flatTerrain.Plot[i].SetFeature(world.PlotFeatureNone)

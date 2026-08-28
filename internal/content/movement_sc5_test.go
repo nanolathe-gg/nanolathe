@@ -2,12 +2,13 @@ package content
 
 import "testing"
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func TestMovementSC5Census(t *testing.T) {
-	// Verify that all 8 keys are read in order and that defaults chain.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TestMovementSC5Resolution locks the SC5 closure: the three clamps run
+// unconditionally and every compiled profile is initialized from the startup
+// template [04 §6.1 R-DOC04-A], with the eight keys read in parse order
+// [02 §5 "Movement class record"].
+func TestMovementSC5Resolution(t *testing.T) {
+	// Eight keys in parse order; badslope/badwaterslope default to half of the
+	// Max value just read [02 §5 "Movement class record"].
 	sec := mustParseTDF(t, `[CLASS_TEST]
 {
     Name=TestClass;
@@ -21,30 +22,27 @@ func TestMovementSC5Census(t *testing.T) {
 `).Root.Sections()[0]
 	mc := compileMovementSection(sec, "TestClass", Provenance{})
 	if mc.FootprintX != 3 || mc.FootprintZ != 4 {
-		t.Fatalf("FootPrint census [analysis omitted]/78 [P1-03] got %d/%d want 3/4", mc.FootprintX, mc.FootprintZ)
+		t.Fatalf("footprint got %d/%d want 3/4", mc.FootprintX, mc.FootprintZ)
 	}
 	if mc.MaxWaterDepth != 10 || mc.MinWaterDepth != 5 {
-		t.Fatalf("depth census [analysis omitted]/58 [P1-03] got %d/%d want 10/5", mc.MaxWaterDepth, mc.MinWaterDepth)
+		t.Fatalf("depths got %d/%d want 10/5", mc.MaxWaterDepth, mc.MinWaterDepth)
 	}
 	if mc.MaxSlope != 32 {
-		t.Fatalf("MaxSlope [analysis omitted] [P1-03] got %d want 32", mc.MaxSlope)
+		t.Fatalf("MaxSlope got %d want 32", mc.MaxSlope)
 	}
 	if mc.BadSlope != 16 {
-		t.Fatalf("BadSlope [analysis omitted] default Max>>1 [P1-03] got %d want 16", mc.BadSlope)
+		t.Fatalf("BadSlope default Max>>1 got %d want 16", mc.BadSlope)
 	}
 	if mc.MaxWaterSlope != 255 {
-		t.Fatalf("MaxWaterSlope [analysis omitted] [P1-03] got %d want 255", mc.MaxWaterSlope)
+		t.Fatalf("MaxWaterSlope got %d want 255", mc.MaxWaterSlope)
 	}
 	if mc.BadWaterSlope != 127 {
-		t.Fatalf("BadWaterSlope [analysis omitted] default MaxWater>>1 [P1-03] got %d want 127", mc.BadWaterSlope)
+		t.Fatalf("BadWaterSlope default MaxWater>>1 got %d want 127", mc.BadWaterSlope)
 	}
-	// Verify three clamps in order [P1-03]:
-	// 1 MaxWaterSlope<MaxSlope→MaxSlope=MaxWaterSlope
-	// 2 MaxSlope<BadSlope→BadSlope
-	// 3 MaxWaterSlope<BadWaterSlope→BadWaterSlope
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Nanolathe gates 1 and 3 on authored per SPEC_CONFLICTS SC5 A10.
-	// Test gated case: absent MaxWaterSlope leaves MaxSlope 32, not zero.
+
+	// Unconditional clamps: an absent maxwaterslope parses to the template
+	// 255, so clamp 1 is the identity and the authored MaxSlope survives —
+	// the resolution of the old SC5 gated divergence [04 §6.1 R-DOC04-A].
 	sec2 := mustParseTDF(t, `[CLASS_KBOT]
 {
     Name=kbotsf2;
@@ -55,12 +53,16 @@ func TestMovementSC5Census(t *testing.T) {
 `).Root.Sections()[0]
 	mc2 := compileMovementSection(sec2, "kbotsf2", Provenance{})
 	if mc2.MaxSlope != 32 {
-		t.Fatalf("SC5 gated divergence A10: absent maxwaterslope should preserve MaxSlope 32 [P1-03][SPEC_CONFLICTS SC5] got %d", mc2.MaxSlope)
+		t.Fatalf("absent maxwaterslope must carry the template 255 and leave MaxSlope authored [04 §6.1 R-DOC04-A], got %d", mc2.MaxSlope)
 	}
 	if mc2.BadSlope != 16 {
-		t.Fatalf("BadSlope half of MaxSlope [P1-03] got %d want 16", mc2.BadSlope)
+		t.Fatalf("BadSlope half of MaxSlope got %d want 16", mc2.BadSlope)
 	}
-	// Authored MaxWaterSlope=20 below MaxSlope 32 → clamp 1 fires.
+	if mc2.MaxWaterSlope != 255 || mc2.BadWaterSlope != 127 {
+		t.Fatalf("water slopes got %d/%d want template 255/127", mc2.MaxWaterSlope, mc2.BadWaterSlope)
+	}
+
+	// Authored MaxWaterSlope=20 below MaxSlope 32 → clamp 1 fires (unconditional).
 	sec3 := mustParseTDF(t, `[CLASS_SHIP]
 {
     Name=ship;
@@ -70,16 +72,23 @@ func TestMovementSC5Census(t *testing.T) {
 `).Root.Sections()[0]
 	mc3 := compileMovementSection(sec3, "ship", Provenance{})
 	if mc3.MaxSlope != 20 {
-		t.Fatalf("clamp 1 MaxWaterSlope<MaxSlope [P1-03] got %d want 20", mc3.MaxSlope)
+		t.Fatalf("clamp 1 MaxWaterSlope<MaxSlope got %d want 20", mc3.MaxSlope)
 	}
-	// Verify footprint half-extents 1<<20 scale at FBI materialization [P1-03]:
-	// halfNeg = FootPrint * -0x100000 /2, halfPos = FootPrint<<0x14 /2, fullSpan = halfPos-halfNeg.
-	// For FootPrint 2: halfNeg = 2*-1048576/2 = -1048576, halfPos = 2<<20/2 = 1048576, span 2097152.
-	if mc.FootprintX != 3 {
-		t.Fatalf("footprint half-extents scale 1<<20 [P1-03]")
+
+	// Template depths: an omitted maxwaterdepth carries 10000 and an omitted
+	// minwaterdepth carries −10000, so stock boats rely on both template
+	// depths [04 §6.1 R-DOC04-A].
+	sec4 := mustParseTDF(t, `[CLASS_BOAT]
+{
+    Name=boatd3;
+    MinWaterDepth=15;
+}
+`).Root.Sections()[0]
+	mc4 := compileMovementSection(sec4, "boatd3", Provenance{})
+	if mc4.MaxWaterDepth != 10000 {
+		t.Fatalf("maxwaterdepth got %d want template 10000", mc4.MaxWaterDepth)
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// and water-depth vs slope via SeaLevel<=bMin branch swapping MaxSlope/MaxWaterSlope,
-	// passability < not <= [P1-03] are documented in world/terrain and movement profile
-	// comments; this test locks the compile-time contract that feeds them.
+	if mc4.MinWaterDepth != 15 {
+		t.Fatalf("minwaterdepth got %d want authored 15", mc4.MinWaterDepth)
+	}
 }

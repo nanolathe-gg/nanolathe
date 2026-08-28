@@ -1,6 +1,22 @@
 package ui
 
-import "github.com/nanolathe/nanolathe/internal/input"
+import (
+	"time"
+
+	"github.com/nanolathe/nanolathe/internal/input"
+)
+
+// Panel detents and throttle are authored battle-rail values [07 §6].  The
+// timing is presentation-only; it never enters the simulation clock [I6].
+const (
+	// BattleEntryMode is the established production battle-composition mode
+	// value. Its 0x04 bit starts the command panel visible [07 §6] C13; it is
+	// not the unrelated digit-routing mode bit.
+	BattleEntryMode byte   = 0x04
+	PanelParked     int8   = -31
+	PanelVisible    int8   = 0
+	PanelThrottleMs uint32 = 15
+)
 
 // BattleModal is the authored in-battle modal window currently at the top of
 // the modal chain. The chain is ARMOPT -> EXITMENU -> YESORNO [07 "Tab
@@ -91,11 +107,104 @@ type BattleState struct {
 	// render and update it without introducing another state bridge. No mutable
 	// simulation state is reachable through this value [I6].
 	Input BattleInputState
+
+	// PanelOffset, PanelTarget, and PanelLastThrottle are the sole owner of the
+	// battle rail slide. Draw and hit testing read PanelOffset; only the input /
+	// host-frame update advances it [07 §6][I6].
+	PanelOffset       int8
+	PanelTarget       int8
+	PanelLastThrottle uint32
+	panelCue          func(string)
 }
 
-// NewBattleState returns a closed modal state with no captured press.
-func NewBattleState() *BattleState {
-	return &BattleState{modal: BattleModalClosed, pressed: -1, Input: BattleInputState{Latch: input.LatchNormal}}
+// NewBattleState returns a closed modal state with no captured press. The
+// entering session mode byte is the sole source for the initial rail detent:
+// bit 0x04 means visible, while a clear bit means parked [07 §6] C13.
+func NewBattleState(modeByte byte) *BattleState {
+	offset := PanelParked
+	if modeByte&0x04 != 0 {
+		offset = PanelVisible
+	}
+	return &BattleState{modal: BattleModalClosed, pressed: -1, Input: BattleInputState{Latch: input.LatchNormal}, PanelOffset: offset, PanelTarget: offset}
+}
+
+// NewProductionBattleState applies the established battle-entry composition
+// value. Keeping this in ui makes every production construction path use the
+// same canonical initialization while tests can still exercise both mode
+// polarities through NewBattleState [07 §6] C13.
+func NewProductionBattleState() *BattleState {
+	return NewBattleState(BattleEntryMode)
+}
+
+// SetPanelCue installs the optional authored cue sink. UI owns when a detent
+// transition occurs; the composition root owns how the cue is played.
+func (s *BattleState) SetPanelCue(cue func(string)) {
+	if s != nil {
+		s.panelCue = cue
+	}
+}
+
+// SetPanelTarget applies the retail Space/editor polarity [07 §6] C14.
+func (s *BattleState) SetPanelTarget(spaceHeld, editorFocused bool) {
+	if s == nil {
+		return
+	}
+	if spaceHeld && !editorFocused {
+		s.PanelTarget = PanelParked
+	} else {
+		s.PanelTarget = PanelVisible
+	}
+}
+
+// AdvancePanel advances one slide step at an explicit wall-clock timestamp.
+// Early timestamps are ignored; accepted steps ease by remaining/3 with a
+// one-pixel minimum, and detent transitions emit the established cues [07 §6].
+func (s *BattleState) AdvancePanel(now uint32, spaceHeld, editorFocused bool) {
+	if s == nil {
+		return
+	}
+	s.SetPanelTarget(spaceHeld, editorFocused)
+	if now-s.PanelLastThrottle < PanelThrottleMs {
+		return
+	}
+	s.PanelLastThrottle = now
+	if s.PanelOffset == s.PanelTarget {
+		return
+	}
+	if (s.PanelOffset == PanelParked && s.PanelTarget == PanelVisible) || (s.PanelOffset == PanelVisible && s.PanelTarget == PanelParked) {
+		if s.panelCue != nil {
+			s.panelCue("Panel")
+		}
+	}
+	remaining := int(s.PanelTarget) - int(s.PanelOffset)
+	step := remaining / 3
+	if step == 0 {
+		if remaining > 0 {
+			step = 1
+		} else {
+			step = -1
+		}
+	}
+	next := int(s.PanelOffset) + step
+	if remaining > 0 && next > int(s.PanelTarget) {
+		next = int(s.PanelTarget)
+	}
+	if remaining < 0 && next < int(s.PanelTarget) {
+		next = int(s.PanelTarget)
+	}
+	previous := s.PanelOffset
+	s.PanelOffset = int8(next)
+	if s.PanelOffset != previous && (s.PanelOffset == PanelVisible || s.PanelOffset == PanelParked) && s.panelCue != nil {
+		s.panelCue("Options")
+	}
+}
+
+// AdvancePanelNow is the wall-clock host-frame entry point [07 §6][I6].
+func (s *BattleState) AdvancePanelNow(spaceHeld, editorFocused bool) {
+	if s == nil {
+		return
+	}
+	s.AdvancePanel(uint32(time.Now().UnixMilli()&0xffffffff), spaceHeld, editorFocused)
 }
 
 // Latch returns the currently armed semantic order. A nil state is idle.

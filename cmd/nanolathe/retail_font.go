@@ -6,10 +6,9 @@ import (
 	"github.com/nanolathe/nanolathe/internal/palette"
 )
 
-// retailGAFTextFont returns the primary frontend GAF font installed by
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// fallback [07 §4].
+// retailGAFTextFont returns the primary frontend GAF-font slot. Frontend text
+// prefers this slot and uses the active FNT only when the slot is null
+// [07 §4].
 func (g *gameShell) retailGAFTextFont() *formats.GAFEntry {
 	if g == nil || g.assets == nil || g.assets.gafFont == nil || len(g.assets.gafFont.Entries) == 0 {
 		return nil
@@ -21,8 +20,8 @@ func (g *gameShell) hasRetailTextFont() bool {
 	return g.retailGAFTextFont() != nil || (g != nil && g.font != nil)
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// frame, while every other byte directly indexes the font GAF frame table.
+// retailGAFGlyph maps bytes at or above space directly to the font GAF frame
+// table; control bytes have no frame [07 §4].
 func retailGAFGlyph(font *formats.GAFEntry, code byte) *formats.GAFFrame {
 	if font == nil || code < 0x20 || int(code) >= len(font.Frames) {
 		return nil
@@ -30,9 +29,8 @@ func retailGAFGlyph(font *formats.GAFEntry, code byte) *formats.GAFFrame {
 	return font.Frames[int(code)].Frame
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Frame width is the complete advance. Space advances through its frame but
-// is deliberately not blitted by the drawer [07 §4].
+// retailGAFTextWidth sums each glyph frame's complete width. Space advances
+// through its frame but is not blitted [07 §4].
 func retailGAFTextWidth(font *formats.GAFEntry, text string) int {
 	width := 0
 	for i := 0; i < len(text); i++ {
@@ -46,8 +44,8 @@ func retailGAFTextWidth(font *formats.GAFEntry, text string) int {
 	return width
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// primary GAF font uses the capital-I frame height plus two pixels [07 §4].
+// retailGAFTextHeight is the widget layout metric: the primary GAF font uses
+// the capital-I frame height plus two pixels [07 §4].
 func retailGAFTextHeight(font *formats.GAFEntry) int {
 	if frame := retailGAFGlyph(font, 'I'); frame != nil {
 		return int(frame.Height) + 2
@@ -55,9 +53,9 @@ func retailGAFTextHeight(font *formats.GAFEntry) int {
 	return 0
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// normalized offset from the supplied pen Y [07 §4].
+// retailGAFBaselineHeight is the capital-I height subtracted from every
+// loaded GAF-font frame's runtime YOffset. The glyph blitter then subtracts
+// that normalized offset from the supplied pen Y [07 §4].
 func retailGAFBaselineHeight(font *formats.GAFEntry) int {
 	if frame := retailGAFGlyph(font, 'I'); frame != nil {
 		return int(frame.Height)
@@ -84,17 +82,17 @@ func (g *gameShell) retailTextHeight() int {
 	return 11
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// glyph face and outline colors, are copied directly as PALETTE.PAL indices.
+// drawRetailGAFText copies opaque GAF glyph pixels, including face and outline
+// colors, directly as PALETTE.PAL indices.
 // No GUI semantic-color remap or FNT tint is applied. maxWidth < 0 means no
 // width limit; otherwise the next glyph must fit in the remaining width.
 func drawRetailGAFText(c *client.Client, font *formats.GAFEntry, text string, x, y, maxWidth int) {
 	drawRetailGAFTextLit(c, font, text, x, y, maxWidth, nil, 0)
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// draws the same opaque glyphs into the window's private surface, which clips
-// glyph bearings and text that extends beyond the authored window [07 §4].
+// drawRetailGAFTextClipped draws the same opaque glyphs into the modal
+// window's private surface, clipping glyph bearings and text beyond the
+// authored window [07 §4].
 func drawRetailGAFTextClipped(c *client.Client, font *formats.GAFEntry, text string, x, y, maxWidth, clipX, clipY, clipW, clipH int) {
 	if c == nil || font == nil {
 		return
@@ -128,11 +126,9 @@ func drawRetailGAFTextClipped(c *client.Client, font *formats.GAFEntry, text str
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// shade level: zero routes each glyph to the ordinary frame blitter
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// the glyph through PALETTE.LHT. Only the loading screen's stage labels pass a
-// non-zero level [07 §4].
+// drawRetailGAFTextLit draws each glyph normally at shade level zero; a
+// non-zero level remaps it through PALETTE.LHT. Only loading-screen stage
+// labels pass a non-zero level [07 §4][03 §4.3.1].
 func drawRetailGAFTextLit(c *client.Client, font *formats.GAFEntry, text string, x, y, maxWidth int, pal *palette.Tables, shade int) {
 	if c == nil || font == nil {
 		return
@@ -153,9 +149,10 @@ func drawRetailGAFTextLit(c *client.Client, font *formats.GAFEntry, text string,
 			return
 		}
 		if code != 0x20 {
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// Font loading normalizes each frame's YOffset by the capital-I
+			// height. Glyph placement subtracts that normalized value and the
+			// frame XOffset from the text pen; ordinary GUI art uses a different
+			// placement contract [07 §4].
 			c.UIBlitLit(frame,
 				x-int(frame.XOffset),
 				y-(int(frame.YOffset)-baselineHeight),
