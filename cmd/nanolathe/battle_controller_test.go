@@ -6,11 +6,29 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
+
+type scriptedMillisSource struct {
+	samples []uint32
+	index   int
+}
+
+func (s *scriptedMillisSource) Millis32() uint32 {
+	if s == nil || len(s.samples) == 0 {
+		return 0
+	}
+	if s.index >= len(s.samples) {
+		return s.samples[len(s.samples)-1]
+	}
+	v := s.samples[s.index]
+	s.index++
+	return v
+}
 
 func replayBattleFrame(c *BattleController, cl *client.Client, f BattleInputFrame) *image.RGBA {
 	c.Step(f, cl)
@@ -92,7 +110,7 @@ func TestBattleControllerInvalidElapsedDoesNotRewindClockAnchor(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
 	b.battleState().Input.Latch = input.LatchNormal
 	b.sess.State = session.StateBattle
-	c := NewBattleController(b)
+	c := NewBattleController(b, &scriptedMillisSource{samples: []uint32{1000, 1000, 1000, 1000}})
 	first := BattleInputFrame{Elapsed: 1}
 	c.Step(first, nil)
 	anchor := b.sess.Clock.ScaledAnchor
@@ -104,5 +122,20 @@ func TestBattleControllerInvalidElapsedDoesNotRewindClockAnchor(t *testing.T) {
 		if got := b.sess.Clock.ScaledAnchor; got != anchor {
 			t.Fatalf("invalid elapsed %v rewound scaled anchor from %d to %d", elapsed, anchor, got)
 		}
+	}
+}
+
+func TestBattleControllerUsesMillisSourceNotElapsed(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	b.sess.State = session.StateBattle
+	source := &scriptedMillisSource{samples: []uint32{0, 1000}}
+	c := NewBattleController(b, source)
+	c.Step(BattleInputFrame{Elapsed: 1000}, nil)
+	if got := b.sess.Clock.ScaledAnchor; got != clock.ScaledNow(0) {
+		t.Fatalf("first source sample anchor = %d, want %d", got, clock.ScaledNow(0))
+	}
+	c.Step(BattleInputFrame{Elapsed: 0}, nil)
+	if got := b.sess.Clock.ScaledAnchor; got != clock.ScaledNow(1000) {
+		t.Fatalf("second source sample anchor = %d, want %d", got, clock.ScaledNow(1000))
 	}
 }

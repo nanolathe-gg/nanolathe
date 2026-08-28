@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -120,6 +121,62 @@ func TestManagerGatesAndPerSlotDeadlines(t *testing.T) {
 	}
 	if m.Deadlines[TaskRally] < tick+30 || m.Deadlines[TaskRally] > tick+179 {
 		t.Fatalf("rally deadline=%d outside tick+30+RNG(150)", m.Deadlines[TaskRally])
+	}
+}
+
+func TestResourceProbeKeepsIdleFactoryQueueNil(t *testing.T) {
+	def := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "idle-factory"},
+		UnitName:         "idle-factory",
+		MaxDamage:        100,
+		Builder:          true,
+	}
+	cat := &content.Catalog{
+		Units: map[string]*content.UnitDef{def.CanonicalKey: def},
+		BuildMenus: map[string]*content.BuildMenuPage{
+			def.CanonicalKey: {Buttons: []string{"idle-factory"}},
+		},
+	}
+	w := units.NewSliced(2, cat)
+	h, err := w.Create(def, 1, world.CellToWorld(1), 0, world.CellToWorld(1))
+	if err != nil {
+		t.Fatalf("create AI-owned idle factory: %v", err)
+	}
+	u := w.Unit(h)
+	if u == nil || u.Orders != nil {
+		t.Fatal("fixture factory unexpectedly has an order queue")
+	}
+	econ := runtimeEconomy(1, 2)
+	m := &Manager{Player: 1, Catalog: cat, GroupResource: []pool.Handle{h}}
+	for tick := uint32(1); tick <= 5; tick++ {
+		m.doResource(tick, w, econ)
+		if u.Orders != nil {
+			t.Fatalf("AI read/probe materialized an idle queue on tick %d", tick)
+		}
+	}
+}
+
+func TestRegroupMoveBindsQueueBeforeSubmission(t *testing.T) {
+	def := &content.UnitDef{UnitName: "ai-mover", MaxDamage: 100, CanMove: true}
+	w := units.NewSliced(4, nil)
+	hOwn, err := w.Create(def, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
+	if err != nil {
+		t.Fatalf("create regroup unit: %v", err)
+	}
+	hPeer, err := w.Create(def, 0, world.CellToWorld(5), 0, world.CellToWorld(5))
+	if err != nil {
+		t.Fatalf("create regroup peer: %v", err)
+	}
+	sim := rng.NewSimulation(77)
+	binding := &orders.QueueBinding{SimRNG: &sim}
+	m := &Manager{Player: 0, OrderBinding: binding, GroupRegroupA: []pool.Handle{hOwn}, GroupWaveA: []pool.Handle{hPeer}}
+	m.doRegroup(1, w, nil, TaskWaveA)
+	q := orders.QueueOfUnit(w.Unit(hOwn))
+	if q == nil || q.LenPrimary() != 1 {
+		t.Fatal("AI regroup did not submit its move order")
+	}
+	if q.Binding() != binding || q.Binding().SimRNG != &sim {
+		t.Fatal("AI regroup queue lost its owning session binding")
 	}
 }
 

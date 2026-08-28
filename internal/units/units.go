@@ -338,6 +338,21 @@ type World struct {
 // at smaller fixture sizes by passing a small maxDefs.
 func NewSliced(maxDefs int, cat *content.Catalog) *World {
 	p := pool.NewUnitsSliced(maxDefs)
+	return newSlicedWorld(p, cat)
+}
+
+// NewSlicedWithOrder creates a production unit world with the battle-entry
+// player permutation already computed by session setup. Invalid permutations
+// are rejected before any pool state is allocated [R-P0-16-A].
+func NewSlicedWithOrder(maxDefs int, cat *content.Catalog, order pool.PlayerPermutation) (*World, error) {
+	p, err := pool.NewUnitsSlicedWithOrder(maxDefs, order)
+	if err != nil {
+		return nil, err
+	}
+	return newSlicedWorld(p, cat), nil
+}
+
+func newSlicedWorld(p *pool.Units, cat *content.Catalog) *World {
 	total := p.TotalRecords()
 	if total < 1 {
 		total = 1

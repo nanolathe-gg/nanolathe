@@ -338,7 +338,7 @@ var debtMarkerTotals = map[string]int{
 	"fallback":       185,
 	"guess":          7,
 	"plausible":      1,
-	"todo(question)": 350, // +1 statics-init site (cob12), +2 units-identity (identity encoding, scriptless crash policy)
+	"todo(question)": 346, // -2 pool, -2 skirmish, +1 campaign-key seam, and -1 mission seed-source residual since the prior baseline
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -492,7 +492,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/path/goals.go":                   4,
 		"internal/path/queue.go":                   6,
 		"internal/path/search.go":                  6,
-		"internal/pool/pool.go":                    3,
+		"internal/pool/pool.go":                    1,
 		"internal/save/bank.go":                    3,
 		"internal/session/commands.go":             1,
 		"internal/session/composition.go":          1,
@@ -501,7 +501,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/session/result.go":               5,
 		"internal/session/retail_load.go":          1,
 		"internal/session/session.go":              3,
-		"internal/session/skirmish.go":             8,
+		"internal/session/skirmish.go":             6,
 		"internal/session/state.go":                1,
 		"internal/session/step.go":                 4,
 		"internal/session/strips.go":               15,

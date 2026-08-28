@@ -8,9 +8,33 @@ import (
 	"os"
 	"time"
 
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/version"
 )
+
+// BattleSeeds is the explicit pair selected at a battle boundary. The
+// composition layer owns selection; the session receives the pair before it
+// performs any setup work [01 §7.1][01 §7.2][R-CORE-02].
+type BattleSeeds struct {
+	Simulation int32
+	CRT        uint32
+}
+
+// BattleSeedSource selects one fresh pair for each battle entry. Front-end
+// presentation has no access to either session stream [01 §7.3].
+type BattleSeedSource interface {
+	NextBattleSeeds() BattleSeeds
+}
+
+type optionBattleSeedSource struct{ opts Options }
+
+func (s optionBattleSeedSource) NextBattleSeeds() BattleSeeds {
+	sim, crt := seedsFor(s.opts)
+	return BattleSeeds{Simulation: int32(sim), CRT: crt}
+}
+
+func newBattleSeedSource(opts Options) BattleSeedSource {
+	return optionBattleSeedSource{opts: opts}
+}
 
 // mainOptions parses command-line options without exiting so the Darwin entry
 // point can decide whether it must hand the process main thread to AppKit.
@@ -36,9 +60,9 @@ func runOptions(opts Options, out, errOut *os.File) int {
 
 // seedsFor resolves the two stream seeds.
 //
-// Retail seeds them separately: the simulation stream at battle entry from
-// QueryPerformanceCounter, the CRT stream at process start from the time
-// source at effectively one-second resolution [01 §2.1], [01 §7.1], [01 §7.2].
+// Retail seeds them separately at battle entry: the simulation stream from
+// QueryPerformanceCounter and the CRT stream from the time source at
+// effectively one-second resolution [01 §7.1], [01 §7.2].
 // We mirror that split so an unseeded run does not accidentally couple them.
 //
 // --seed fixes both, which is the only host-level handle a reproducible run
@@ -59,13 +83,6 @@ func run(opts Options, out *os.File) error {
 		return err
 	}
 	defer content.Close()
-
-	// Seed both streams before any subsystem can draw (PLAN_03 C10). rng.Global
-	// is nil until this runs, so a missed seeding is a crash, not a run that
-	// looks deterministic and reproduces nothing (I4).
-	simSeed, crtSeed := seedsFor(opts)
-	rng.SeedGlobal(simSeed, crtSeed)
-	fmt.Fprintf(out, "seed: sim=%d crt=%d\n", simSeed, crtSeed)
 
 	// All runtime entry points compose the retail game shell. The shell opens
 	// the authored menus, or enters the battle directly when --map is supplied.

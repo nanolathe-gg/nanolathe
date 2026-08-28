@@ -142,6 +142,25 @@ read by the allocator — it does not bound allocation (bounded-negative,
 "exact maximum unit count is not resolved" reading is superseded by this
 derivation [R-P0-16].
 
+### 2.3a Player-slice order at battle entry [R-P0-16-A]
+
+**Established fact:** The pool initializer first forms a ten-element list in
+logical player-slot order `0..9`, then assigns contiguous definition-count
+sized slices to that list's resulting order. The comparator is mode-gated: in
+mission mode `3`, it orders records by their unsigned 32-bit
+`PlayerSortKey` in strict ascending order; in every other mission mode it
+orders by the original logical player slot. Equal mode-3 keys retain the
+original slot order. This is the complete comparator and gate; it runs once
+before pool construction and is never re-applied during a running battle.
+
+The element at sorted position `i` receives the slice
+`1 + i·catalogDefCount` through `(i+1)·catalogDefCount`, while the logical
+player named by that element owns the range. Slot zero remains the null
+sentinel. A valid order is therefore a total permutation of `0..9`; malformed
+or duplicate values are rejected before allocation. The exact provenance and
+semantic name of `PlayerSortKey` are not needed by the comparator contract and
+remain outside this section's scope. [R-P0-16]
+
 ### 2.4 Unit flags and state transitions
 
 **Established fact:** Runtime flags cover alive, dying, being built,

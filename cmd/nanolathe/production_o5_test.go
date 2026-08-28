@@ -18,13 +18,12 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// TestProductionInputShiftQueueReplayO5 is the O5 phase gate. It uses the
-// same typed battle/session command boundary as the Ebitengine controller;
-// fixture construction happens only before the replay starts. No queue,
-// selection, or snapshot slice is written by the test after command admission.
-// The synthetic definitions are authored fixture data, not retail assumptions.
-func TestProductionInputShiftQueueReplayO5(t *testing.T) {
-	cat, builderDef, targetDef, productKey := o5QueueCatalog()
+// TestBattleCommandsPublishQueueAndShiftOverlay locks the typed command
+// boundary and the immutable queue presentation contract [07 §9][I6]. The
+// fixture is authored test data; no retail bytes or alternate content source
+// is required.
+func TestBattleCommandsPublishQueueAndShiftOverlay(t *testing.T) {
+	cat, builderDef, targetDef, productKey := queueFixtureCatalog()
 	world := testWorldON05(32, 32)
 	unitsWorld := units.NewSliced(32, cat)
 	// Keep all authored points inside the logical 640x480 viewport after the
@@ -55,50 +54,47 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 	}
 
 	// Establish the first immutable frame, then select through the typed
-	// production command path. The fixture unit handles are known from the
-	// allocator's initial setup, never injected after replay commands begin.
-	o5Advance(t, s)
+	// command path. The fixture unit handles are known from the allocator's
+	// initial setup, never injected after command admission begins.
+	advanceQueueFixture(t, s)
 	controller := NewBattleController(b)
-	sx, sy := o5ScreenPos(b.cam, builderHandle, unitsWorld)
+	sx, sy := queueScreenPos(b.cam, builderHandle, unitsWorld)
 	controller.Step(BattleInputFrame{MouseX: sx, MouseY: sy, Buttons: BattleMouseButtons{Left: true}, Elapsed: 1.0 / 30.0}, nil)
 	controller.Step(BattleInputFrame{MouseX: sx, MouseY: sy, Elapsed: 1.0 / 30.0}, nil)
 	f, ok := b.currentSnapshot()
 	if !ok || f.Selection.Primary != builderHandle || f.CommandPage.Builder != builderHandle {
 		t.Fatalf("selection/page not published through authoritative boundary: ok=%v selection=%+v page=%+v", ok, f.Selection, f.CommandPage)
 	}
-	if !ok || f.Selection.Primary != builderHandle || f.CommandPage.Builder != builderHandle {
-		t.Fatalf("selection/page not published through authoritative boundary: ok=%v selection=%+v page=%+v", ok, f.Selection, f.CommandPage)
-	}
 
 	// Build, move, and attack are admitted in that order through the same
 	// typed command boundary as the Ebitengine adapter. The test does not
-	// depend on a synthetic panel or mutate queue state directly.
+	// depend on a panel or mutate queue state directly.
 	if err := b.DispatchMobileBuild(productKey, numeric.Fixed(240<<16), 0, numeric.Fixed(80<<16), false); err != nil {
 		t.Fatalf("typed mobile build admission failed: %v", err)
 	}
-	o5Advance(t, s)
+	advanceQueueFixture(t, s)
 
 	moveX, moveY := o5ScreenWorld(b.cam, numeric.Fixed(280<<16), 0, numeric.Fixed(80<<16))
 	controller.Step(BattleInputFrame{PressedKeys: []input.Key{input.KeyM}, HeldKeys: []input.Key{input.KeyM}, Modifiers: BattleModifiers{Shift: true}, Elapsed: 1.0 / 30.0}, nil)
 	controller.Step(BattleInputFrame{HeldKeys: []input.Key{input.KeyShift}, Modifiers: BattleModifiers{Shift: true}, Elapsed: 1.0 / 30.0}, nil)
-	o5Click(t, controller, moveX, moveY, BattleModifiers{Shift: true})
+	queueClick(t, controller, moveX, moveY, BattleModifiers{Shift: true})
 
-	attackX, attackY := o5ScreenPos(b.cam, targetHandle, unitsWorld)
+	attackX, attackY := queueScreenPos(b.cam, targetHandle, unitsWorld)
 	controller.Step(BattleInputFrame{PressedKeys: []input.Key{input.KeyA}, HeldKeys: []input.Key{input.KeyA, input.KeyShift}, Modifiers: BattleModifiers{Shift: true}, Elapsed: 1.0 / 30.0}, nil)
 	controller.Step(BattleInputFrame{HeldKeys: []input.Key{input.KeyShift}, Modifiers: BattleModifiers{Shift: true}, Elapsed: 1.0 / 30.0}, nil)
-	o5Click(t, controller, attackX, attackY, BattleModifiers{Shift: true})
+	queueClick(t, controller, attackX, attackY, BattleModifiers{Shift: true})
 
 	// Stockpile uses the production N command and the same held-Shift input,
 	// exercising the independent secondary chain without fabricating a node.
 	controller.Step(BattleInputFrame{PressedKeys: []input.Key{input.KeyN}, HeldKeys: []input.Key{input.KeyN, input.KeyShift}, Modifiers: BattleModifiers{Shift: true}, Elapsed: 1.0 / 30.0}, nil)
 	controller.Step(BattleInputFrame{HeldKeys: []input.Key{input.KeyShift}, Modifiers: BattleModifiers{Shift: true}, Elapsed: 1.0 / 30.0}, nil)
-	o5Advance(t, s)
+	advanceQueueFixture(t, s)
 
 	f, ok = b.currentSnapshot()
 	if !ok {
-		t.Fatal("no immutable frame after O5 command replay")
+		t.Fatal("no immutable frame after command replay")
 	}
-	queue, ok := o5Queue(f, builderHandle)
+	queue, ok := queueForUnit(f, builderHandle)
 	if !ok {
 		t.Fatalf("builder queue absent from immutable frame: %+v", f.OrderQueues)
 	}
@@ -134,7 +130,7 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 		left, top := int32(o.GoalX>>16), int32(o.GoalZ>>16)
 		return hud.QueueRect{Left: left, Top: top, Right: left + int32(o.FootX)*16, Bottom: top + int32(o.FootZ)*16}, true
 	}
-	beforeHash := o5AuthoritativeHash(t, f)
+	beforeHash := authoritativeFrameHash(t, f)
 	held := hud.QueueOverlay(f, hud.QueueOverlayOptions{
 		Tick:        f.Tick,
 		ShiftHeld:   true,
@@ -171,12 +167,12 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 	if released := hud.QueueOverlay(f, hud.QueueOverlayOptions{Tick: f.Tick, LocalOwner: f.Selection.LocalPlayer, Project: project, BuildRect: buildRect}); released != nil {
 		t.Fatalf("released Shift returned overlay instructions: %+v", released)
 	}
-	if afterHash := o5AuthoritativeHash(t, f); beforeHash != afterHash {
+	if afterHash := authoritativeFrameHash(t, f); beforeHash != afterHash {
 		t.Fatalf("presentation-only Shift inspection changed authoritative state hash: before=%x after=%x", beforeHash, afterHash)
 	}
 }
 
-func o5QueueCatalog() (*content.Catalog, *content.UnitDef, *content.UnitDef, string) {
+func queueFixtureCatalog() (*content.Catalog, *content.UnitDef, *content.UnitDef, string) {
 	weapon := &content.WeaponDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "stockpile"}, ID: 1, Stockpile: true, ReloadTime: 60}
 	builder := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "builder"}, UnitName: "builder", Builder: true, CanMove: true, CanAttack: true, FootprintX: 2, FootprintZ: 2, MaxDamage: 100, Weapon1Def: weapon}
 	product := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "product"}, UnitName: "product", FootprintX: 3, FootprintZ: 2, YardMap: "oooooo", MaxDamage: 100}
@@ -189,15 +185,15 @@ func o5QueueCatalog() (*content.Catalog, *content.UnitDef, *content.UnitDef, str
 	return cat, builder, target, product.CanonicalKey
 }
 
-func o5Advance(t *testing.T, s *session.Session) {
+func advanceQueueFixture(t *testing.T, s *session.Session) {
 	t.Helper()
 	if s == nil || s.Clock == nil {
-		t.Fatal("O5 replay has no clock")
+		t.Fatal("queue fixture has no clock")
 	}
 	s.Step(s.Clock.ScaledAnchor + 1)
 }
 
-func o5ScreenPos(cam *camera.Camera, handle pool.Handle, unitsWorld *units.World) (int32, int32) {
+func queueScreenPos(cam *camera.Camera, handle pool.Handle, unitsWorld *units.World) (int32, int32) {
 	u := unitsWorld.Unit(handle)
 	if u == nil {
 		return 0, 0
@@ -206,6 +202,8 @@ func o5ScreenPos(cam *camera.Camera, handle pool.Handle, unitsWorld *units.World
 	return x - camera.OriginX, y - camera.OriginY
 }
 
+// o5ScreenWorld is shared by the focused placement tests; it is a plain
+// camera projection helper, not a second command path.
 func o5ScreenWorld(cam *camera.Camera, x, y, z numeric.Fixed) (int32, int32) {
 	if cam == nil {
 		return 0, 0
@@ -214,7 +212,7 @@ func o5ScreenWorld(cam *camera.Camera, x, y, z numeric.Fixed) (int32, int32) {
 	return sx - camera.OriginX, sy - camera.OriginY
 }
 
-func o5Click(t *testing.T, controller *BattleController, x, y int32, modifiers BattleModifiers) {
+func queueClick(t *testing.T, controller *BattleController, x, y int32, modifiers BattleModifiers) {
 	t.Helper()
 	if controller == nil {
 		t.Fatal("nil battle controller")
@@ -223,7 +221,7 @@ func o5Click(t *testing.T, controller *BattleController, x, y int32, modifiers B
 	controller.Step(BattleInputFrame{MouseX: x, MouseY: y, Modifiers: modifiers, Elapsed: 1.0 / 30.0}, nil)
 }
 
-func o5Queue(f *frame.Frame, unit pool.Handle) (frame.OrderQueueView, bool) {
+func queueForUnit(f *frame.Frame, unit pool.Handle) (frame.OrderQueueView, bool) {
 	if f == nil {
 		return frame.OrderQueueView{}, false
 	}
@@ -235,7 +233,7 @@ func o5Queue(f *frame.Frame, unit pool.Handle) (frame.OrderQueueView, bool) {
 	return frame.OrderQueueView{}, false
 }
 
-func o5AuthoritativeHash(t *testing.T, frame *frame.Frame) [32]byte {
+func authoritativeFrameHash(t *testing.T, frame *frame.Frame) [32]byte {
 	t.Helper()
 	state, err := json.Marshal(frame)
 	if err != nil {

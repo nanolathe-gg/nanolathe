@@ -21,18 +21,6 @@ func (s *Session) stepAuthoritativePhases(tick uint32) {
 	if s == nil {
 		return
 	}
-	// QueueForUnit lazily creates a queue for units allocated by mission,
-	// factory, transport, or reconstruction paths. Reapply the complete
-	// session binding at the tick boundary so those queues cannot enter an
-	// authoritative phase with package-global service inputs [04 §3.3][06
-	// §11.1][I4].
-	if s.Build != nil && s.Build.OrderBinding != nil && s.Units != nil {
-		for _, u := range s.Units.Iter() {
-			if u != nil {
-				orders.BindQueueBinding(u, s.Build.OrderBinding)
-			}
-		}
-	}
 	// The phase order below is the authoritative retail sequence [01 §4.4].
 	// Keep these calls in this order: their pool visibility, side effects, and RNG
 	// draw order are observable. Each phase carries a status: implemented,
@@ -213,13 +201,14 @@ func (s *Session) stepUnitPhase(tick uint32) {
 				}
 			}
 
-			// order resolve/pump per unit (PumpUnit) [04 §3.3]
+			// order resolve/pump per unit (PumpUnit) [04 §3.3]. A unit with no
+			// order queue has no pump work; do not materialize an empty queue merely
+			// because the unit was visited. Producers bind queues when they create
+			// them, while existing queues are bound immediately before this first use.
 			if ordersPump != nil {
-				// PumpUnit lazily materializes a queue for units that have not
-				// received an order yet. Bind that queue before the first dispatch
-				// so resolver hooks, stockpile admission, and jitter all use this
-				// session's concrete context [04 §3.3][04 §3.5][06 §11.1].
-				s.bindOrderQueue(u)
+				if orders.QueueOfUnit(u) != nil {
+					s.bindExistingOrderQueue(u)
+				}
 				ordersPump.PumpUnit(h, tick)
 			}
 			// Pumping can advance the primary head in this same visit.  Reconcile
@@ -228,8 +217,11 @@ func (s *Session) stepUnitPhase(tick uint32) {
 			// already run for this tick; the replacement is therefore serviced on
 			// its next normal scheduler turn, without a second scheduler call.
 			if s.Movement != nil {
-				qActive := orders.QueueForUnit(u)
-				active := qActive.Head()
+				qActive := orders.QueueOfUnit(u)
+				var active *orders.Node
+				if qActive != nil {
+					active = qActive.Head()
+				}
 				if active != nil {
 					activeName := orders.DescriptorFor(active.ID).Name
 					activeMove := activeName == "Move_Ground" || activeName == "VTOL_Move" || activeName == "QMove" || activeName == "Patrol" || activeName == "QPatrol" || activeName == "VTOL_Patrol" || activeName == "RepairPatrol" || activeName == "VTOL_RepairPatrol"
@@ -282,7 +274,12 @@ func (s *Session) stepUnitPhase(tick uint32) {
 				}
 			}
 			// construction/worker action per unit (StepUnit) [05 "Factory production lifecycle"]
-			if s.Build != nil {
+			// Construction work is order-driven: [04 §3.5] places its operation
+			// records on the unit's queue. StepUnit's queue-less branch otherwise
+			// only called its lazy queue accessor and returned an empty result, so
+			// skipping that call preserves construction cadence while avoiding an
+			// observable empty allocation for units with no construction order.
+			if s.Build != nil && orders.QueueOfUnit(u) != nil {
 				ctx := construction.TickContext{Tick: tick, World: s.Units, Economy: s.Econ, Terrain: s.World, Catalog: s.Catalog}
 				wres := s.Build.StepUnit(ctx, h)
 				if wres.Completed {
@@ -303,7 +300,7 @@ func (s *Session) stepUnitPhase(tick uint32) {
 				// localSteeringThreshold remain separate and never complete the order.
 				if s.Movement.HasPathFailure(h) {
 					if rec, ok := s.Movement.PathFailureRecord(h); ok {
-						if qFail := orders.QueueForUnit(u); qFail != nil && qFail.LenPrimary() > 0 {
+						if qFail := orders.QueueOfUnit(u); qFail != nil && qFail.LenPrimary() > 0 {
 							headFail := qFail.Head()
 							if headFail != nil {
 								nameFail := orders.DescriptorFor(headFail.ID).Name

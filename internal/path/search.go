@@ -10,9 +10,9 @@ package path
 // fan centered on the parent travel direction [04 §7.1] C2.
 // Diagonal steps check ONLY the destination cell [04 §7.1] C3.
 // Costs: cardinal 16, diagonal 22 [04 §7.2] C4; turn penalties
-// 0,40,60,80,100,80,60,40 by directional difference [04 §7.2] C4; initial
-// penalty 30 while heap holds at most one entry [04 §7.2] C4; short-run
-// penalty 75 when parent chain straight run <5 and parent exists [04 §7.2] C4.
+// 0,40,60,80,100,80,60,40 by directional difference [04 §7.2] C4; an
+// unconditional neighbor penalty of 30 [04 §7.2] C4; short-run penalty 75
+// when parent chain straight run <5 and parent exists [04 §7.2] C4.
 // Heuristic scaling hScaled = (h*scale)>>16 with signed 64-bit product and
 // arithmetic shift, no float [04 §7.2] C6. h evaluated once per allocated node
 // [04 §7.2] C7, relaxation adjusts f by g delta alone [04 §7.2] C7.
@@ -32,7 +32,7 @@ package path
 const (
 	CardinalCost      int32 = 16 // [04 §7.2] cardinal 16 (corrected)
 	DiagonalCost      int32 = 22 // [04 §7.2] diagonal 22 (corrected)
-	InitialPenalty    int32 = 30 // [04 §7.2] fixed initial penalty while heap <=1
+	InitialPenalty    int32 = 30 // [04 §7.2] unconditional neighbor penalty
 	ShortRunPenalty   int32 = 75 // [04 §7.2] short-run penalty when straight run <5
 	ShortRunThreshold       = 5  // [04 §7.2] threshold for short-run check
 )
@@ -506,10 +506,9 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			}
 			step := StepCost(dir)
 			turn := TurnPenalty(node.Dir, dir)
-			initial := int32(0)
-			if heap.Len() <= 1 {
-				initial = InitialPenalty
-			}
+			// [04 §7.2] C4: every live neighbor expansion adds the fixed
+			// penalty. It does not depend on the current heap population.
+			initial := InitialPenalty
 			short := int32(0)
 			if node.Parent != invalidNodeID {
 				if straightRunLen(ns, id) < ShortRunThreshold {

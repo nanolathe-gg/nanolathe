@@ -68,6 +68,10 @@ type Manager struct {
 	// P0-07: typed build request replacing lossy callback [P0-07] ON-06 F-P0-004.
 	// Session binds this to construction queue; default nil → error diagnostic.
 	QueueBuildTyped func(BuildRequest) error // typed mobile/factory build [P0-07]
+	// OrderBinding is the session-owned context for AI order producers that
+	// submit ordinary orders directly. It is nil for unbound fixtures, where
+	// those producers retain their existing queue behavior [04 §3.3][06 §11.1].
+	OrderBinding *orders.QueueBinding
 
 	// P0-07: alliance awareness [P0-07] ON-06. Nil means same-owner-only (default) [08].
 	IsAlliance func(a, b uint8) bool // alliance test injected at construction; default same-owner-only [P0-07]
@@ -625,7 +629,7 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 		}
 		// A factory with anything already on its primary queue is skipped, so
 		// products are queued one at a time as the queue drains.
-		if q := orders.QueueForUnit(u); q == nil || len(q.Primary()) > 0 {
+		if q := orders.QueueOfUnit(u); q == nil || len(q.Primary()) > 0 {
 			continue
 		}
 		cand, ok := Select(m, u, econ)
@@ -825,6 +829,9 @@ func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, 
 		q := orders.QueueForUnit(u)
 		if q == nil {
 			continue
+		}
+		if m.OrderBinding != nil {
+			q.SetBinding(m.OrderBinding)
 		}
 		q.PurgeUnprotected()
 		q.DropLeadingAutoOps()

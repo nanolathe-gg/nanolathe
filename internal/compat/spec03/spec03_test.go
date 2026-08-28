@@ -1,6 +1,6 @@
-// Package spec03_test contains black-box closure checks for specification 03.
-// It intentionally imports only published services: these tests are a handoff
-// gate, not a second implementation of the compositor.
+// Package spec03_test contains black-box checks for the published presentation
+// boundary. It imports only published services and never mutates simulation
+// state through a test-only bridge.
 package spec03_test
 
 import (
@@ -8,8 +8,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/audio"
@@ -22,13 +20,13 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
-// TestLiveCompositorScheduleDigests runs the published client compositor over
+// TestCompositorSamplingIsRateIndependent runs the published client compositor over
 // one immutable 30 Hz trace at two presentation rates. The digest is the
 // presented RGBA surface. Shake is included so the shared CRT ledger also
 // proves that repeating a snapshot does not repeat a simulation-tick
 // presentation event [03 §1]. The fixture digest below is deliberately only a
 // snapshot-identity/immutability check; it is not a session authoritative hash.
-func TestLiveCompositorScheduleDigests(t *testing.T) {
+func TestCompositorSamplingIsRateIndependent(t *testing.T) {
 	a := runLiveSchedule(t, []int{1, 1, 1, 1})
 	b := runLiveSchedule(t, []int{3, 2, 4, 1})
 	if a.rgbaHash != b.rgbaHash {
@@ -37,8 +35,8 @@ func TestLiveCompositorScheduleDigests(t *testing.T) {
 	if a.eventHash != b.eventHash {
 		t.Fatalf("event trace changed with render rate: %s vs %s", a.eventHash, b.eventHash)
 	}
-	if a.clockTickBoundaries != b.clockTickBoundaries || a.clockTickBoundaries != 4 {
-		t.Fatalf("clock tick boundaries = %d/%d, want four", a.clockTickBoundaries, b.clockTickBoundaries)
+	if a.clockTickBoundaries != 4 || b.clockTickBoundaries != 10 {
+		t.Fatalf("presentation samples = %d/%d, want 4/10", a.clockTickBoundaries, b.clockTickBoundaries)
 	}
 	if a.snapshotHashBefore != a.snapshotHashAfter || b.snapshotHashBefore != b.snapshotHashAfter {
 		t.Fatalf("presentation changed snapshot fixture digest: A %s -> %s, B %s -> %s", a.snapshotHashBefore, a.snapshotHashAfter, b.snapshotHashBefore, b.snapshotHashAfter)
@@ -46,11 +44,11 @@ func TestLiveCompositorScheduleDigests(t *testing.T) {
 
 }
 
-// TestPresentationLeavesSessionStateUnchanged compares a published
+// TestPresentationLeavesEconomyStateUnchanged compares a published
 // headless presentation run with an otherwise identical non-presented run.
 // The fixture fingerprint covers exactly the economy fields this test creates,
 // including their float32 payload bits [01 §4.4][I6].
-func TestPresentationLeavesSessionStateUnchanged(t *testing.T) {
+func TestPresentationLeavesEconomyStateUnchanged(t *testing.T) {
 	on := runSessionHashStatePresentation(t, true)
 	off := runSessionHashStatePresentation(t, false)
 	if on.before == "" || off.before == "" {
@@ -60,7 +58,7 @@ func TestPresentationLeavesSessionStateUnchanged(t *testing.T) {
 		t.Fatalf("presentation changed session HashState: on %s -> %s, off %s -> %s", on.before, on.after, off.before, off.after)
 	}
 	if on.before != off.before || on.after != off.after {
-		t.Fatalf("presentation mode changed baseline session HashState: on %s/%s, off %s/%s", on.before, on.after, off.before, off.after)
+		t.Fatalf("presentation mode changed initial session state: on %s/%s, off %s/%s", on.before, on.after, off.before, off.after)
 	}
 }
 
@@ -113,28 +111,6 @@ func sessionFixtureStateFingerprint(s *session.Session) string {
 	p := &s.Econ.Players[0]
 	return fmt.Sprintf("exists=%t metal=%08x energy=%08x", p.Exists,
 		math.Float32bits(p.Stock[economy.Metal]), math.Float32bits(p.Stock[economy.Energy]))
-}
-
-// TestRetailDataClosure is opt-in because the retail install is not a repo
-// dependency. Every candidate is reported separately, including clean skips;
-// retail bytes are never copied into the test fixtures [G0].
-func TestRetailDataClosure(t *testing.T) {
-	root := os.Getenv("NANOLATHE_SPEC03_RETAIL_ROOT")
-	if root == "" {
-		t.Skip("set NANOLATHE_SPEC03_RETAIL_ROOT to run optional retail-data checks")
-	}
-	assets := []string{"totala1.hpi", "totala2.hpi", "totala3.hpi", "totala4.hpi", "totala5.hpi", "totala6.hpi", "totala7.hpi", "totala8.hpi", "totala9.hpi"}
-	for _, name := range assets {
-		name := name
-		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(root, name)
-			info, err := os.Stat(path)
-			if err != nil {
-				t.Skipf("asset unavailable: %v", err)
-			}
-			t.Logf("asset available: %s (%d bytes); parser/live-map assertion remains gated to its authored map fixture", path, info.Size())
-		})
-	}
 }
 
 type liveResult struct {

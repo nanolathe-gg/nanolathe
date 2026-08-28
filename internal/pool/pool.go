@@ -4,17 +4,80 @@
 // contract [01 §6.1], [01 §6.2].
 package pool
 
+import (
+	"fmt"
+)
+
 // Handle is a pool slot index. Slot 0 is the null sentinel and is never
 // allocated. There are no generation bits; a stale handle that has been freed
 // and reused aliases the new occupant [04 §2.3], [06 §5.1], [01 §6.1], [P0-16].
 type Handle uint16
 
 const (
+	// PlayerCount is the fixed number of player slots in a battle [04 §2.1].
+	PlayerCount = 10
+
 	// ProjectileCapacity is the fixed retail capacity per [01 §6.1] and
 	// [06 §5.1]: exactly 300 records of 107 bytes. Allocation appends at the
 	// tail and never fills holes until compaction [01 §6.1].
 	ProjectileCapacity = 300
 )
+
+// PlayerPermutation lists the logical player slots in the order used for
+// assigning unit-pool slices. The element at index i owns slice i; every value
+// from 0 through 9 must occur exactly once [04 §2.1][R-P0-16-A].
+type PlayerPermutation [PlayerCount]uint8
+
+// IdentityPlayerPermutation is the non-mode-3 order. It is also the stable
+// starting order for the mode-3 insertion sort [R-P0-16-A].
+func IdentityPlayerPermutation() PlayerPermutation {
+	var order PlayerPermutation
+	for i := range order {
+		order[i] = uint8(i)
+	}
+	return order
+}
+
+// ValidatePlayerPermutation rejects anything other than a total permutation
+// of the ten logical player slots. Validation runs before pool allocation so a
+// malformed battle entry cannot leave a partially initialized pool.
+func ValidatePlayerPermutation(order PlayerPermutation) error {
+	var seen [PlayerCount]bool
+	for _, player := range order {
+		if player >= PlayerCount {
+			return fmt.Errorf("pool: player permutation value %d out of range", player)
+		}
+		if seen[player] {
+			return fmt.Errorf("pool: player permutation repeats %d", player)
+		}
+		seen[player] = true
+	}
+	return nil
+}
+
+// PlayerPermutationForMode computes the pool slice order at battle entry.
+// Retail compares the fixed player-record order by the record's 32-bit sort
+// key only in mission mode 3; all other modes use the original slot order.
+// Equal keys retain slot order because the insertion loop moves an element
+// only when its key is strictly less than the preceding key [R-P0-16-A].
+func PlayerPermutationForMode(mode int, sortKeys [PlayerCount]uint32) PlayerPermutation {
+	order := IdentityPlayerPermutation()
+	if mode != 3 {
+		return order
+	}
+	// Keep this fixed-size insertion sort explicit: retail's comparison is an
+	// unsigned strict-less test, and equal keys therefore remain stable.
+	for i := 1; i < len(order); i++ {
+		player := order[i]
+		j := i
+		for j > 0 && sortKeys[player] < sortKeys[order[j-1]] {
+			order[j] = order[j-1]
+			j--
+		}
+		order[j] = player
+	}
+	return order
+}
 
 // CapacityForDefs returns the total record count including slot 0 for a
 // catalog with maxDefs definitions: maxDefs*10+1 [P0-16] [01 §6.1].
@@ -64,18 +127,37 @@ type Units struct {
 // slot 0 is the null sentinel.
 func NewUnitsSliced(maxDefs int) *Units {
 	u := &Units{}
-	u.InitSliced(maxDefs)
+	_ = u.InitSlicedWithOrder(maxDefs, IdentityPlayerPermutation())
 	return u
+}
+
+// NewUnitsSlicedWithOrder creates a sliced unit pool after validating the
+// battle-entry player permutation [R-P0-16-A].
+func NewUnitsSlicedWithOrder(maxDefs int, order PlayerPermutation) (*Units, error) {
+	u := &Units{}
+	if err := u.InitSlicedWithOrder(maxDefs, order); err != nil {
+		return nil, err
+	}
+	return u, nil
 }
 
 // InitSliced configures a retail-sliced pool for maxDefs definitions.
 // It allocates total = maxDefs*10+1 records (including slot 0). Per-player
 // slices hold maxDefs each; allocation scans for the lowest free slot per
-// slice with immediate reuse [P0-16 §3.2]. Slicing uses identity sorted
-// order 0..9; the exact retail sorted-order comparator with its
-// missionType==3 gate is TODO(question) but does not affect per-slice
-// isolation [P0-16 §3.1].
+// slice with immediate reuse [P0-16 §3.2]. This identity wrapper uses
+// identity order; production battle entry calls InitSlicedWithOrder after
+// applying the retail mode comparator [R-P0-16-A].
 func (p *Units) InitSliced(maxDefs int) {
+	_ = p.InitSlicedWithOrder(maxDefs, IdentityPlayerPermutation())
+}
+
+// InitSlicedWithOrder configures a retail-sliced pool using the already
+// computed battle-entry player order. It validates before changing receiver
+// state, and never sorts or remaps slices after initialization [R-P0-16-A].
+func (p *Units) InitSlicedWithOrder(maxDefs int, order PlayerPermutation) error {
+	if err := ValidatePlayerPermutation(order); err != nil {
+		return err
+	}
 	if maxDefs < 0 {
 		maxDefs = 0
 	}
@@ -92,11 +174,10 @@ func (p *Units) InitSliced(maxDefs int) {
 	p.maxDefs = maxDefs
 	p.sliced = maxDefs > 0
 	if p.sliced {
-		// Identity sorted order; TODO(question) exact retail insertion-sort
-		// comparator over the sorted player table with missionType==3 gate.
-		for player := 0; player < 10; player++ {
-			start := maxDefs*player + 1
-			end := maxDefs * (player + 1)
+		for sortedIdx, playerValue := range order {
+			player := int(playerValue)
+			start := maxDefs*sortedIdx + 1
+			end := maxDefs * (sortedIdx + 1)
 			// start 1..maxDefs for player 0, etc.; covers 10*maxDefs usable
 			if maxDefs == 0 {
 				start = 0
@@ -109,6 +190,7 @@ func (p *Units) InitSliced(maxDefs int) {
 			p.slices[i] = struct{ start, end int }{0, -1}
 		}
 	}
+	return nil
 }
 
 // IsSliced reports whether the pool was initialized with per-player slices

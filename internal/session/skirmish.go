@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -100,10 +101,6 @@ type SkirmishConfig struct {
 	// from the time-of-day helper, both AT BATTLE ENTRY, wiping every
 	// pre-battle draw. Nanolathe takes explicit seeds instead; the bootstrap
 	// seeds both streams fresh with these before any battle setup draw.
-	// TODO(question): cmd has no seed source wired yet; while both fields are
-	// zero the bootstrap uses the documented deterministic placeholder (1,1)
-	// so runs stay reproducible. Wire a wall-clock/QPC-analog source in cmd to
-	// match retail's seed instants.
 	RNGSimSeed uint32
 	RNGCrtSeed uint32
 
@@ -378,12 +375,8 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	// DET-01 [R-CORE-02]: battle bootstrap seeds both streams fresh BEFORE any
 	// battle setup draw (skirmish slot shuffle, commander placement), wiping
 	// every pre-battle draw from the streams' state. The session is the sole
-	// RNG authority from here on; rng.Global is not consulted.
-	if cfg.RNGSimSeed == 0 && cfg.RNGCrtSeed == 0 {
-		// TODO(question): see SkirmishConfig.RNGSimSeed — deterministic
-		// placeholder until cmd wires a seed source.
-		cfg.RNGSimSeed, cfg.RNGCrtSeed = 1, 1
-	}
+	// RNG authority from here on; production composition supplies this explicit
+	// pair, and no package-global stream or implicit seed source is consulted.
 	if fs == nil {
 		return nil, fmt.Errorf("session: nil filesystem for skirmish battle [02 §5]")
 	}
@@ -403,8 +396,11 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		return nil, err
 	}
 	report.Report(FamilyTerrain, 100)
-	// 4. create retail sliced unit pool [P0-16]
-	unitsWorld, err := newSlicedWorldWithCOB(cat, fs)
+	// 4. create retail sliced unit pool [P0-16]. Skirmish is mission mode 2,
+	// whose retail comparator path retains the fixed player-slot order. Keep
+	// the key seam explicit for mode-3 battle reconstruction [R-P0-16-A].
+	var playerSortKeys [pool.PlayerCount]uint32
+	unitsWorld, err := newBattleSlicedWorldWithCOB(cat, fs, int(m.Type), playerSortKeys)
 	if err != nil {
 		return nil, err
 	}

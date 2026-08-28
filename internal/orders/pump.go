@@ -256,10 +256,12 @@ type PumpResult struct {
 	Diagnostics  []string    // queue diagnostics captured during pump
 }
 
-// PumpUnit advances only the named unit's queue/work state [04 §3.3][05 "Queue pumping and result codes"] (ON-02).
+// PumpUnit advances only the named unit's existing queue/work state [04 §3.3][05 "Queue pumping and result codes"] (ON-02).
 // It preserves the primary head-blocking restart-from-head and secondary skip-not-due contracts:
 // primary restarts from the head after each dispatch, secondary scans front-to-back skipping not-due.
-// Only the named unit's queue advances; other builders are untouched.
+// Only the named unit's queue advances; other builders are untouched. An absent
+// queue remains absent: allocation belongs to the command/order producer, not
+// to the per-tick unit visit [04 §3.3][04 §3.5].
 func (p *Pump) PumpUnit(handle pool.Handle, tick uint32) PumpResult {
 	if p == nil || p.World == nil {
 		return PumpResult{Handle: handle, Err: fmt.Errorf("orders: nil pump or world")}
@@ -268,7 +270,7 @@ func (p *Pump) PumpUnit(handle pool.Handle, tick uint32) PumpResult {
 	if u == nil {
 		return PumpResult{Handle: handle, Found: false, Err: fmt.Errorf("orders: unit %d not found or dead", handle)}
 	}
-	q := QueueForUnit(u)
+	q := QueueOfUnit(u)
 	if q == nil {
 		return PumpResult{Handle: handle, Found: true, HadQueue: false, PrimaryLen: 0, SecondaryLen: 0}
 	}

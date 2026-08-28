@@ -1,9 +1,10 @@
 package main
 
 import (
-	"math"
+	"time"
 
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/input"
 )
 
@@ -26,21 +27,57 @@ type BattleModifiers = input.Modifiers
 // copied by the controller before use; callers may reuse their frame storage.
 type BattleInputFrame = input.Sample
 
+// monotonicMillisSource adapts Go's monotonic process clock to the wrapping
+// 32-bit millisecond contract. time.Since uses the monotonic component of the
+// captured start value when one is available, and the uint32 conversion is
+// intentionally allowed to wrap [01 §4.1][01 §4.2].
+type monotonicMillisSource struct {
+	start time.Time
+}
+
+var monotonicHostStart = time.Now()
+
+func newMonotonicMillisSource() *monotonicMillisSource {
+	return &monotonicMillisSource{start: monotonicHostStart}
+}
+
+func (s *monotonicMillisSource) Millis32() uint32 {
+	if s == nil {
+		return 0
+	}
+	return uint32(time.Since(s.start) / time.Millisecond)
+}
+
 // BattleController is the single production/replay input seam. It owns only
 // presentation input state and timing; authoritative mutation remains in the
 // existing battleSession.handleInput and Session.Step calls.
 type BattleController struct {
 	battle *battleSession
+	millis clock.MillisSource
 }
 
-func NewBattleController(b *battleSession) *BattleController {
-	return &BattleController{battle: b}
+// NewBattleController constructs the production controller. An optional
+// source is provided for deterministic replays and tests; omitted sources use
+// the monotonic host clock. The variadic form preserves the existing call site
+// while keeping source injection at the composition boundary.
+func NewBattleController(b *battleSession, sources ...clock.MillisSource) *BattleController {
+	var source clock.MillisSource
+	if len(sources) > 0 {
+		source = sources[0]
+	}
+	if source == nil && b != nil {
+		source = b.millisSource
+	}
+	if source == nil {
+		source = newMonotonicMillisSource()
+	}
+	return &BattleController{battle: b, millis: source}
 }
 
 // Step feeds one logical input frame through the production battle decision
-// path and advances the existing presentation-to-simulation budget. A zero
-// elapsed frame is useful for command-only replays and does not tick the
-// simulation.
+// path and advances the existing presentation-to-simulation budget. Elapsed
+// remains part of the input value for presentation callers, but is not a
+// timing authority; every budget sample comes from Millis32 [01 §4.1].
 func (c *BattleController) Step(frame BattleInputFrame, cl *client.Client) {
 	if c == nil || c.battle == nil {
 		return
@@ -50,17 +87,11 @@ func (c *BattleController) Step(frame BattleInputFrame, cl *client.Client) {
 		return
 	}
 	beforeTick := c.battle.sess.Clock.GlobalTick
-	if frame.Elapsed >= 0 && !math.IsNaN(frame.Elapsed) && !math.IsInf(frame.Elapsed, 0) {
-		c.battle.msAccum += frame.Elapsed * 1000
+	scaled := int32(0)
+	if c.millis != nil {
+		scaled = clock.ScaledNow(c.millis.Millis32())
 	}
-	// Invalid presentation samples do not alter the accumulator, but still
-	// reuse its current scaled sample. Passing zero here would move the
-	// scheduler anchor backwards after a prior valid frame [01 §4.2].
-	scaled := int64(c.battle.msAccum * 30 / 1000)
-	if scaled > 1<<30 {
-		scaled = 1 << 30
-	}
-	c.battle.sess.Step(int32(scaled))
+	c.battle.sess.Step(scaled)
 	// Registered model-texture players advance once for each simulation tick
 	// [03 §4.4].
 	if ran := c.battle.sess.Clock.GlobalTick - beforeTick; ran > 0 && cl != nil {

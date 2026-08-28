@@ -32,12 +32,17 @@ and prior gates named in `PHASES.md`.
 
 ## Current boundary
 
-The repository has one Ebitengine presentation path and a headless authoritative
-session. The session publishes bounded unit/order, projectile, effect, economy,
-construction, HUD, and fog state in one committed frame; presentation reads
-that frame and never writes simulation state. Windowed checks require working
-display services and a local retail asset root; headless checks remain useful
-for deterministic behavior and data loading but do not exercise the window.
+The runtime has one Ebitengine window path. `internal/session` owns the
+authoritative tick and publishes bounded unit/order, projectile, effect,
+economy, construction, HUD, and fog state directly into the committed
+`internal/frame.Buffer`; `internal/client` reads that current committed frame
+and never writes simulation state. Presentation samples the committed tick as
+published: there is no interpolation between ticks [03 §2.4] [I6].
+
+Save support is the retail HAPIBANK account format. Campaign-continuation
+metadata is exposed, while in-battle restoration returns an explicit
+unsupported result until the remaining retail account bodies are implemented;
+there is no Nanolathe-authored continuation format.
 
 Exact-retail gaps remain explicit as `TODO(T23)`, `TODO(T25)`, or
 `TODO(question)` at their implementation site and under the relevant research

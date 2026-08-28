@@ -3,6 +3,7 @@ package session
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -10,6 +11,27 @@ import (
 )
 
 var _ = content.CanonicalKey // ensure content import used
+
+func TestSeedSessionRNGBattleEntryResetAndIsolation(t *testing.T) {
+	s := &Session{Clock: &clock.State{GlobalTick: 23}}
+	// Simulate presentation/setup-adjacent draws before the explicit boundary.
+	s.SimRNG().Uint32n(17)
+	s.CrtRNG().Rand()
+	if s.SimRNG().Draws() == 0 || s.CrtRNG().Draws() == 0 {
+		t.Fatal("pre-entry draws were not recorded")
+	}
+
+	s.SeedSessionRNG(41, 73)
+	if s.Clock.GlobalTick != 0 {
+		t.Fatalf("battle entry tick = %d, want zero", s.Clock.GlobalTick)
+	}
+	if s.RNGSimSeed != 41 || s.RNGCrtSeed != 73 {
+		t.Fatalf("recorded seeds = %d/%d, want 41/73", s.RNGSimSeed, s.RNGCrtSeed)
+	}
+	if s.SimRNG().Draws() != 0 || s.CrtRNG().Draws() != 0 {
+		t.Fatalf("reseed retained pre-entry draws: sim=%d crt=%d", s.SimRNG().Draws(), s.CrtRNG().Draws())
+	}
+}
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func TestStorageBonusFloorAndEnable(t *testing.T) {

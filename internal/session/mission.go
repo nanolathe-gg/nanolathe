@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -38,6 +39,13 @@ func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficult
 // driven from either entry point. A nil observer makes this exactly
 // NewMissionWithFS.
 func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int, report content.Progress) (*Session, error) {
+	return NewMissionWithProgressSeeds(fs, cat, path, difficulty, 0, 0, report)
+}
+
+// NewMissionWithProgressSeeds is the explicit battle-entry constructor used by
+// the composition layer. The pair is installed before wind, placement, COB,
+// or AI setup can draw from either stream [01 §7.1][01 §7.2][R-CORE-02].
+func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int, simSeed, crtSeed uint32, report content.Progress) (*Session, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, fmt.Errorf("session: empty mission path")
@@ -80,7 +88,14 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 		return nil, err
 	}
 	report.Report(FamilyTerrain, 100)
-	unitsWorld, err := newSlicedWorldWithCOB(cat, fs)
+	// Campaign setup currently exposes no player-record sort-key field. Keep
+	// the explicit ten-key seam so mode-3 construction cannot silently derive
+	// a value from unrelated authored fields.
+	// TODO(question): surface the unsigned 32-bit player-record sort key from
+	// the campaign/save player table before any TypeSaved battle reaches this
+	// constructor; the mode-3 pool order depends on that field [R-P0-16-A].
+	var playerSortKeys [pool.PlayerCount]uint32
+	unitsWorld, err := newBattleSlicedWorldWithCOB(cat, fs, int(m.Type), playerSortKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -114,11 +129,9 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 	// DET-01 [R-CORE-02]: battle bootstrap seeds both streams fresh before any
 	// battle setup draw; battle-entry wind zeroes the deadline with NO draws
 	// and the meteor initial next-strike is written (no draws) [R-CORE-01
-	// §4.4.1].
-	// TODO(question): mission setup has no seed source yet (see
-	// SkirmishConfig.RNGSimSeed); the deterministic placeholder (1,1) keeps
-	// runs reproducible until cmd wires one.
-	s.SeedSessionRNG(1, 1)
+	// §4.4.1]. Production passes the explicit pair selected at this boundary;
+	// the zero values here are the direct constructor's explicit zero-seed input.
+	s.SeedSessionRNG(simSeed, crtSeed)
 	s.InitBattleWindForSession()
 	s.initMeteor()
 	s.InitAudio(fs)

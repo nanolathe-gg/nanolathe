@@ -8,27 +8,41 @@ package clock
 
 import (
 	"encoding/binary"
+	"errors"
 	"math"
 )
 
+// ErrMalformedBox reports a scheduler image that cannot represent the defined
+// scheduler state. Checked loading validates into a temporary state first, so
+// callers never observe a partially applied image [08 "Scheduler and random
+// state in saves"].
+var ErrMalformedBox = errors.New("clock: malformed scheduler box")
+
+// MillisSource is the platform-neutral boundary for the wrapping host
+// millisecond counter. Presentation or platform code supplies the source;
+// the simulation only consumes the scaled integer returned by ScaledNow
+// [01 §4.1][01 §4.2].
+type MillisSource interface {
+	Millis32() uint32
+}
+
 // State holds the scheduler block that the budget mutates.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // Only the fields required by PLAN_03 are exported; pending, slew and flags
 // round-trip through SaveBox/LoadBox to preserve the 28-byte contract (C14).
 type State struct {
-	ScaledAnchor int32   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Delta        int32   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Carry        float32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GlobalTick   uint32  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Requested    int32   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Active       int32   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Paused       bool    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	ScaledAnchor int32   // last scaledNow [01 §4.2]
+	Delta        int32   // last scaled delta [01 §4.2]
+	Carry        float32 // fractional carry, float32 per [01 §4.2] (I2 allowlist)
+	GlobalTick   uint32  // authoritative global tick, incremented before phase 1 [01 §4.4]
+	Requested    int32   // requested speed 1..20 [01 §4.3]
+	Active       int32   // active speed 1..20 [01 §4.3]
+	Paused       bool    // pause gate, bit 0 of scheduler flags [01 §4.3]
 
 	// Internal scheduler state that round-trips through the 28-byte save box
 	// but is not part of the PLAN_03 public struct literal.
-	pending int32  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	slew    int16  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	flags   uint16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	pending int32  // clamped ticks to run 0..5
+	slew    int16  // speed-slew hysteresis counter [01 §4.3]
+	flags   uint16 // scheduler flags bits 0..15 (bit0 pause, bit1 lag, bit2 pending-speed)
 }
 
 func clampSpeed(v int32) int32 {
@@ -65,21 +79,19 @@ func lagThrottleFactor(lag uint32) float64 {
 	return f
 }
 
-// updateFlags recomputes low flag bits from current state and preserves
-// upper bits from the stored flags. Bit 0 pause, bit 1 lag throttle, bit 2
-// pending-speed mismatch [08 "Scheduler and random state in saves"].
+// updateFlags recomputes the locally-owned pause and pending-speed bits while
+// preserving the lag bit and all other flags. Lag is owned by the multiplayer
+// dispatcher, so the clock must not erase a valid serialized value it does not
+// model [08 "Scheduler and random state in saves"].
 func (s *State) updateFlags() {
-	preserved := s.flags &^ uint16(0x07)
+	preserved := s.flags &^ uint16(0x05)
 	var f uint16
 	if s.Paused {
 		f |= 1
 	}
-	// Lag throttle flag (bit 1) — no network presently, so lag=0 => flag 0.
-	// Keep the branch so the expression is not lost for T24.
-	var lag uint32 = 0 // TODO(T24): replace with real oldest remote progress lag
-	if lag >= 900 {
-		f |= 2
-	}
+	// Bit 1 is the lag-throttle flag. It is not clock-owned while network
+	// progress is supplied by the multiplayer dispatcher; preserve it.
+	f |= s.flags & 2
 	if clampSpeed(s.Requested) != clampSpeed(s.Active) {
 		f |= 4
 	}
@@ -109,10 +121,11 @@ func (s *State) applyHysteresis(trunc int32) {
 			s.slew--
 		}
 		if s.slew < -100 { // >100 normal observations [01 §4.3]
+			// Normal observations only raise active speed toward the request.
+			// The retail branch is intentionally not symmetric: an active
+			// value above the request is left alone [01 §4.3].
 			if s.Active < s.Requested {
 				s.Active++
-			} else if s.Active > s.Requested {
-				s.Active--
 			}
 			if s.Active < 1 {
 				s.Active = 1
@@ -234,25 +247,65 @@ func (s *State) SaveBox() [28]byte {
 	return b
 }
 
-// LoadBox restores the scheduler block from a 28-byte box [08 "Scheduler and random state in saves"].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// If the on-disk box is larger, the caller must truncate; if shorter, the budget
-// restores nothing — we require exactly 28 bytes (caller validates).
+// LoadBox restores a valid scheduler block from a 28-byte box [08
+// "Scheduler and random state in saves"]. Invalid values are rejected without
+// mutation; callers that need the error should use LoadBoxChecked. The fixed
+// array preserves the existing API and makes short input impossible here.
 func (s *State) LoadBox(b [28]byte) {
-	s.ScaledAnchor = int32(binary.LittleEndian.Uint32(b[0:4]))
-	s.pending = int32(binary.LittleEndian.Uint32(b[4:8]))
-	s.Delta = int32(binary.LittleEndian.Uint32(b[8:12]))
-	s.Carry = math.Float32frombits(binary.LittleEndian.Uint32(b[12:16]))
-	s.GlobalTick = binary.LittleEndian.Uint32(b[16:20])
-	s.Requested = int32(int16(binary.LittleEndian.Uint16(b[20:22])))
-	s.Active = int32(int16(binary.LittleEndian.Uint16(b[22:24])))
-	s.slew = int16(binary.LittleEndian.Uint16(b[24:26]))
-	s.flags = binary.LittleEndian.Uint16(b[26:28])
-	s.Paused = s.flags&1 != 0
+	_ = s.LoadBoxChecked(b)
+}
 
-	// Clamp speeds after load [01 §4.3] C3.
-	s.Requested = clampSpeed(s.Requested)
-	s.Active = clampSpeed(s.Active)
+// LoadBoxChecked validates and restores a scheduler block transactionally.
+// Valid fields are copied bit-for-bit, including the float32 carry and opaque
+// scheduler flag bits. The save reader owns any larger-box prefix handling;
+// this API accepts exactly the defined 28-byte value [08 "Scheduler and random
+// state in saves"].
+func (s *State) LoadBoxChecked(b [28]byte) error {
+	decoded, err := decodeBox(b)
+	if err != nil {
+		return err
+	}
+	*s = decoded
+	return nil
+}
+
+// LoadBoxBytes is the slice form of LoadBoxChecked. It accepts the defined
+// 28-byte prefix from an oversized save box and rejects short input [08
+// "Scheduler and random state in saves"].
+func (s *State) LoadBoxBytes(data []byte) error {
+	if len(data) < 28 {
+		return ErrMalformedBox
+	}
+	var box [28]byte
+	copy(box[:], data[:28])
+	return s.LoadBoxChecked(box)
+}
+
+func decodeBox(b [28]byte) (State, error) {
+	decoded := State{
+		ScaledAnchor: int32(binary.LittleEndian.Uint32(b[0:4])),
+		pending:      int32(binary.LittleEndian.Uint32(b[4:8])),
+		Delta:        int32(binary.LittleEndian.Uint32(b[8:12])),
+		Carry:        math.Float32frombits(binary.LittleEndian.Uint32(b[12:16])),
+		GlobalTick:   binary.LittleEndian.Uint32(b[16:20]),
+		Requested:    int32(int16(binary.LittleEndian.Uint16(b[20:22]))),
+		Active:       int32(int16(binary.LittleEndian.Uint16(b[22:24]))),
+		slew:         int16(binary.LittleEndian.Uint16(b[24:26])),
+		flags:        binary.LittleEndian.Uint16(b[26:28]),
+	}
+	// The pending count is the already-clamped work for the next pump. Speed
+	// values are the common setter's inclusive 1..20 range. Carry is the
+	// remainder after truncation, necessarily in [-1, 1) for a valid sample;
+	// NaN and infinity cannot be such a remainder [01 §4.2][01 §4.3].
+	if decoded.pending < 0 || decoded.pending > 5 ||
+		decoded.Requested < 1 || decoded.Requested > 20 ||
+		decoded.Active < 1 || decoded.Active > 20 ||
+		math.IsNaN(float64(decoded.Carry)) || math.IsInf(float64(decoded.Carry), 0) ||
+		decoded.Carry <= -1 || decoded.Carry >= 1 {
+		return State{}, ErrMalformedBox
+	}
+	decoded.Paused = decoded.flags&1 != 0
+	return decoded, nil
 }
 
 // BeginSubTick increments the global simulation tick and returns its new
@@ -261,7 +314,7 @@ func (s *State) LoadBox(b [28]byte) {
 // [01 §4.4]: "each sub-tick increments the global tick before any phase runs"
 // (C6). The kernel calls this once per sub-tick, before phase 1; nothing else
 // may advance the counter. Keeping it here rather than in the kernel means the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// value SaveBox persists is the same value the phases observed
 // [08 "Scheduler and random state in saves"] (C14).
 func (s *State) BeginSubTick() uint32 {
 	s.GlobalTick++
@@ -273,46 +326,4 @@ func (s *State) BeginSubTick() uint32 {
 // conversion stays in one place and no other package invents its own.
 func ScaledNow(tickCount uint32) int32 {
 	return int32((uint64(tickCount) * 30) / 1000)
-}
-
-// FrameClock converts a renderer's per-frame elapsed time into the integer
-// scaled timebase the budget anchors against [01 §4.2]:
-//
-//	scaledNow = floor(GetTickCountMilliseconds * 30 / 1000)
-//
-// Retail samples GetTickCount, an integer millisecond counter, directly. A
-// Ebitengine hands us a float seconds delta instead, so the milliseconds are
-// accumulated here and only their integer scaled value is handed to the
-// budget. The fractional millisecond is retained rather than dropped, so a
-// 60 Hz frame (16.666 ms) does not lose two thirds of a millisecond per frame.
-//
-// This is NOT a second timebase. It replaces the OS millisecond counter, not
-// the budget: the runnable tick count, the fractional carry, pause, speed and
-// the zero-to-five clamp all still come from State.AdvanceSP/AdvanceMP, which
-// is the sole authority [01 §4.2] [01 §4.3].
-type FrameClock struct {
-	millis float64
-}
-
-// Scaled advances the frame clock by deltaSeconds and returns the scaledNow to
-// pass to AdvanceSP or AdvanceMP.
-//
-// A negative or NaN delta advances nothing; retail's own wrap handling lives
-// in the budget, which reads a negative delta and clamps the count to zero.
-func (f *FrameClock) Scaled(deltaSeconds float64) int32 {
-	if f == nil {
-		return 0
-	}
-	if deltaSeconds > 0 && !math.IsInf(deltaSeconds, 0) && !math.IsNaN(deltaSeconds) {
-		f.millis += deltaSeconds * 1000.0
-	}
-	return int32(math.Floor(f.millis * 30.0 / 1000.0))
-}
-
-// Millis reports the accumulated wall-clock milliseconds, for diagnostics.
-func (f *FrameClock) Millis() float64 {
-	if f == nil {
-		return 0
-	}
-	return f.millis
 }

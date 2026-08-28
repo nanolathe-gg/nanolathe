@@ -12,10 +12,10 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// paritySpineFixture builds a minimal deterministic session with both RNG
+// visibilityFixture builds a minimal deterministic session with both RNG
 // streams seeded, wind bounds retained, and (when withVis) a visibility
 // service. Authored after the meteor fixture; no retail bytes.
-func paritySpineFixture(t *testing.T, withVis bool) *Session {
+func visibilityFixture(t *testing.T, withVis bool) *Session {
 	t.Helper()
 	terrain := &world.Terrain{CellW: 64, CellH: 64, Plot: make([]world.PlotCell, 64*64)}
 	for i := range terrain.Plot {
@@ -56,14 +56,13 @@ func paritySpineFixture(t *testing.T, withVis bool) *Session {
 	return s
 }
 
-// TestPhaseRegistryOrderAndDrawDeltas locks the DET-02 registry: one tick
-// runs exactly the twelve named phases in [01 §4.4] order, and the per-phase
-// RNG ledger shows the corrected draw placement — phase 8 consumes the wind
-// chain (1 CRT interval + 2 sim at tick 1 for nonzero bounds) and every other
-// phase consumes nothing in this fixture (phase 9's meteor scheduler is
-// nil-world blocked before any draws) [R-CORE-01 §4.4.1][R-CORE-02].
-func TestPhaseRegistryOrderAndDrawDeltas(t *testing.T) {
-	s := paritySpineFixture(t, false)
+// TestRetailTickSequenceAndRandomDrawPlacement locks the established retail
+// tick order and the locations of the wind and meteor random draws
+// [01 §4.4][R-CORE-01 §4.4.1][R-CORE-02]. The labels are the observable
+// sequence recorded by the session's optional diagnostic ledger; this test
+// does not mirror or drive the sequence a second time.
+func TestRetailTickSequenceAndRandomDrawPlacement(t *testing.T) {
+	s := visibilityFixture(t, false)
 	s.EnablePhaseTrace()
 	s.stepAuthoritativePhases(1)
 
@@ -74,56 +73,75 @@ func TestPhaseRegistryOrderAndDrawDeltas(t *testing.T) {
 	}
 	got := s.PhaseTrace()
 	if len(got) != len(want) {
-		t.Fatalf("phase trace = %v, want %v", got, want)
+		t.Fatalf("retail tick sequence = %v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("phase %d = %q, want %q [01 §4.4]", i+1, got[i], want[i])
+			t.Fatalf("tick step %d = %q, want %q [01 §4.4]", i+1, got[i], want[i])
 		}
 	}
 
-	// Deltas are cumulative totals; consecutive differences give per-phase
-	// consumption.
-	// Tick 1: deadline zeroed at entry, so the full wind chain fires; the
-	// meteor scheduler (weapon absent in this fixture) is due at tick 1
-	// (next-strike 0, non-strict) and consumes its four scheduling draws even
-	// though the storm is disabled [06 §6.5][R-CORE-01 §4.4.1].
-	assertPhaseDelta := func(tick uint32, phase string, wantCrt, wantSim uint64) {
+	// Draw deltas are cumulative totals; consecutive differences identify the
+	// draws consumed by each named step. At tick 1 the zero deadline runs the
+	// full wind chain. The meteor scheduler is due at tick 1 and consumes its
+	// four scheduling draws even though this fixture has no storm weapon
+	// [06 §6.5][R-CORE-01 §4.4.1].
+	assertDrawDelta := func(tick uint32, step string, wantCRT, wantSim uint64) {
 		t.Helper()
 		deltas := s.PhaseDrawDeltas()
-		prevSim, prevCrt := uint64(0), uint64(0)
+		prevSim, prevCRT := uint64(0), uint64(0)
 		for _, d := range deltas {
 			simDelta := d.SimDelta - prevSim
-			crtDelta := d.CrtDelta - prevCrt
-			prevSim, prevCrt = d.SimDelta, d.CrtDelta
-			if d.Phase == phase {
-				if crtDelta != wantCrt || simDelta != wantSim {
-					t.Fatalf("tick %d %s = %d CRT + %d sim, want %d + %d", tick, phase, crtDelta, simDelta, wantCrt, wantSim)
+			crtDelta := d.CrtDelta - prevCRT
+			prevSim, prevCRT = d.SimDelta, d.CrtDelta
+			if d.Phase == step {
+				if crtDelta != wantCRT || simDelta != wantSim {
+					t.Fatalf("tick %d %s = %d CRT + %d sim, want %d + %d", tick, step, crtDelta, simDelta, wantCRT, wantSim)
 				}
 				return
 			}
 		}
-		t.Fatalf("tick %d: phase %s not in trace", tick, phase)
+		t.Fatalf("tick %d: %s missing from recorded sequence", tick, step)
 	}
-	assertPhaseDelta(1, "phase8-wind", 1, 2)
-	assertPhaseDelta(1, "phase9-meteor", 4, 0)
+	assertDrawDelta(1, "phase8-wind", 1, 2)
+	assertDrawDelta(1, "phase9-meteor", 4, 0)
 
-	// Tick 2: wind not due (strict gate); the armed-then-expired meteor
-	// window deactivates without draws.
+	// Wind is not due on the next tick (strict deadline), and the disabled
+	// meteor scheduler's expired window does not draw again.
 	s.EnablePhaseTrace()
 	s.stepAuthoritativePhases(2)
-	assertPhaseDelta(2, "phase8-wind", 0, 0)
-	assertPhaseDelta(2, "phase9-meteor", 0, 0)
+	assertDrawDelta(2, "phase8-wind", 0, 0)
+	assertDrawDelta(2, "phase9-meteor", 0, 0)
 }
 
-// TestRenderCadenceInvariance locks deliverable (i): the committed frame and
+func TestIdleUnitKeepsOrdersNilAcrossTicks(t *testing.T) {
+	s := visibilityFixture(t, false)
+	def := s.Catalog.Units[content.CanonicalKey("armcom")]
+	h, err := s.Units.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create idle unit: %v", err)
+	}
+	u := s.Units.Unit(h)
+	if u == nil {
+		t.Fatal("created idle unit is missing")
+	}
+	for tick := uint32(1); tick <= 5; tick++ {
+		s.stepAuthoritativePhases(tick)
+		if u.Orders != nil {
+			t.Fatalf("idle unit acquired an order queue on tick %d", tick)
+		}
+	}
+}
+
+// TestCommittedFrameSamplingDoesNotAffectSimulation locks the retail
+// presentation boundary: the committed frame and
 // both RNG streams are identical whether the presentation path samples the
 // committed frame zero, one, or two times per tick (the headless client never
 // samples; a windowed one samples per rendered frame). Sampling consumes no
 // RNG [I6][R-CORE-02] — a render cadence change cannot perturb the
 // simulation. (The committed frame itself is published exactly once per
 // sub-tick; re-publishing the same tick is a frame-buffer contract error.)
-func TestRenderCadenceInvariance(t *testing.T) {
+func TestCommittedFrameSamplingDoesNotAffectSimulation(t *testing.T) {
 	type result struct {
 		simState  uint32
 		simDraws  uint64
@@ -135,7 +153,7 @@ func TestRenderCadenceInvariance(t *testing.T) {
 	}
 	run := func(t *testing.T, samplesPerTick int) result {
 		t.Helper()
-		s := paritySpineFixture(t, false)
+		s := visibilityFixture(t, false)
 		for tick := uint32(1); tick <= 24; tick++ {
 			s.stepAuthoritativePhases(tick)
 			for i := 0; i < samplesPerTick; i++ {
@@ -173,13 +191,13 @@ func TestRenderCadenceInvariance(t *testing.T) {
 	}
 }
 
-// TestVisibilityStampsInsidePhase5 locks DET-06 [R-CORE-01 §4.4.1]: a unit
-// moved before a sub-tick is re-stamped by THAT tick's phase 5 (the dirty
-// check detects the changed stamp cell), an unchanged unit's stamp key is
+// TestMovedUnitRefreshesVisibilitySameTick locks [R-CORE-01 §4.4.1]: a unit
+// moved before a sub-tick is re-stamped by that tick's visibility publication
+// (the dirty check detects the changed stamp cell), an unchanged unit's stamp key is
 // untouched, and coverage is queryable right after the same committed tick —
-// there is no post-phase-12 visibility pass anymore.
-func TestVisibilityStampsInsidePhase5(t *testing.T) {
-	s := paritySpineFixture(t, true)
+// and there is no second visibility publication after the tick's regular work.
+func TestMovedUnitRefreshesVisibilitySameTick(t *testing.T) {
+	s := visibilityFixture(t, true)
 	def := s.Catalog.Units[content.CanonicalKey("armcom")]
 	cell := func(n int32) numeric.Fixed { return numeric.Fixed(int64(n) << 16) }
 
@@ -205,8 +223,8 @@ func TestVisibilityStampsInsidePhase5(t *testing.T) {
 		t.Fatalf("mover stamp not published at entry: %+v", stamp0)
 	}
 
-	// Move the mover (as phase 2 movement would) and step ONE tick. The dirty
-	// check must re-stamp it in that same tick's phase 5.
+	// Move the mover before one tick. The dirty check must re-stamp it during
+	// that same tick's visibility publication.
 	mover.X = cell(208)
 	s.stepAuthoritativePhases(1)
 
@@ -231,26 +249,19 @@ func TestVisibilityStampsInsidePhase5(t *testing.T) {
 		t.Fatal("mover's new cell not covered in the same tick's publication")
 	}
 
-	// The step published exactly one committed frame; the registry carries no
-	// post-12 visibility call (see TestPhaseRegistryOrderAndDrawDeltas).
+	// The step publishes exactly one committed frame.
 	if tick, ok := s.Snapshot.PublishedTick(); !ok || tick != 1 {
 		t.Fatalf("published tick = %d (%v), want 1", tick, ok)
 	}
 }
 
-// TestSensorPassInsideLocalPlayerIteration locks the [R-SENSOR-01] seam: the
-// sensor/deadline pass executes inside phase 5's per-player pass, in the LOCAL
-// viewing player's iteration, after that player's stamp sweep. The local
-// viewer here is player 1 — not the lowest index — so the sensor final pass
-// (which samples the local player's coverage grids) can admit the seen marker
-// for an enemy cell only if the pass ran after player 1's stamp sweep in the
-// same tick: the moved observer's fresh coverage does not exist in those grids
-// until player 1's iteration re-stamps it. The matching requirement "before
-// every higher-indexed player's stamps" has no state observable in nanolathe
-// (the sensor pass reads only the local player's grids) and is structural: the
-// call sits in the local player's loop body after stampPlayerSlice.
-func TestSensorPassInsideLocalPlayerIteration(t *testing.T) {
-	s := paritySpineFixture(t, true)
+// TestSensorPassUsesFreshLocalCoverage locks the [R-SENSOR-01] seam: the
+// sensor/deadline pass runs for the local viewing player after that player's
+// fresh coverage is stamped. The local viewer here is player 1 — not the
+// lowest index — so the moved observer's coverage can admit a seen marker for
+// an enemy cell in the same tick.
+func TestSensorPassUsesFreshLocalCoverage(t *testing.T) {
+	s := visibilityFixture(t, true)
 	s.LocalOwner = 1
 	s.Vis.SetLocal(visibility.PlayerID(1)) // mirrors composition's local-viewer binding
 	def := s.Catalog.Units[content.CanonicalKey("armcom")]
@@ -273,7 +284,7 @@ func TestSensorPassInsideLocalPlayerIteration(t *testing.T) {
 		t.Fatal("precondition: enemy cell covered before the observer moves")
 	}
 
-	// Move the local observer next to the enemy (as phase-2 movement would):
+	// Move the local observer next to the enemy before the tick:
 	// its stamp cell becomes (26,12), so the enemy's grid point (28,12) falls
 	// inside the 5x5 sight shape — but only after player 1's stamp sweep
 	// re-stamps it.

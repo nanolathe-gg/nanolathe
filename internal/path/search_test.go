@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-// TestStepCosts locks [04 §7.2] C4 constants: cardinal 16, diagonal 22, turn table, initial 30, short-run 75.
+// TestStepCosts locks [04 §7.2] C4 constants: cardinal 16, diagonal 22, turn table, neighbor 30, short-run 75.
 func TestStepCosts(t *testing.T) {
 	if CardinalCost != 16 {
 		t.Fatalf("CardinalCost want 16 got %d [04 §7.2] C4", CardinalCost)
@@ -82,10 +82,9 @@ func TestStepCosts(t *testing.T) {
 	if got := TurnPenalty(DirNone, DirN); got != 0 {
 		t.Fatalf("Turn None->N want 0 got %d", got)
 	}
-	// initial penalty while heap <=1
-	// Simulate cost addition: for first expansion heap empty => should add 30
-	// later expansion heap >1 => 0
-	// We test via Search logic indirectly in end-to-end
+	// The fixed neighbor penalty is unconditional; TestInitialPenaltyEveryNeighborExpansion
+	// below checks this through live expansions with both a populated and
+	// initially empty open heap [04 §7.2] C4.
 
 	// short-run: parent chain straight run <5
 	// Build store chain: start -> A(N) -> B(N) -> C(N) -> D(N) -> E(N) (run 5)
@@ -119,6 +118,79 @@ func TestStepCosts(t *testing.T) {
 	}
 	if straightRunLen(ns, e) < ShortRunThreshold {
 		t.Fatalf("e run 5 should NOT be short")
+	}
+}
+
+// TestInitialPenaltyEveryNeighborExpansion locks the superseding [04 §7.2]
+// C4 correction: every live neighbor expansion adds 30, regardless of how
+// many entries remain on the open heap. The second expansion is the
+// regression case; its heap is already populated, where the old heap-size
+// condition omitted the penalty.
+func TestInitialPenaltyEveryNeighborExpansion(t *testing.T) {
+	cfg := SearchConfig{
+		Start:      Cell{0, 0},
+		Goal:       &mutableGoal{h: 100},
+		IsPassable: func(Cell) bool { return true },
+		Scale:      65536,
+	}
+	sess := NewSession(cfg)
+	if !sess.Seeded() {
+		t.Fatal("search should seed for the live-expansion fixture")
+	}
+	if _, _, done := sess.Resume(1); done {
+		t.Fatal("first expansion should leave the search active")
+	}
+
+	// The start's nine-entry fan contains all eight neighbors plus a
+	// duplicate. Every unique node must include step cost + 30.
+	first := []struct {
+		cell Cell
+		dir  uint8
+	}{
+		{Cell{0, 1}, DirS},
+		{Cell{1, 1}, DirSE},
+		{Cell{1, 0}, DirE},
+		{Cell{1, -1}, DirNE},
+		{Cell{0, -1}, DirN},
+		{Cell{-1, -1}, DirNW},
+		{Cell{-1, 0}, DirW},
+		{Cell{-1, 1}, DirSW},
+	}
+	for _, tc := range first {
+		id, ok := sess.ns.Find(tc.cell)
+		if !ok {
+			t.Fatalf("first expansion did not allocate %v", tc.cell)
+		}
+		want := StepCost(tc.dir) + InitialPenalty
+		if got := sess.ns.Get(id).G; got != want {
+			t.Errorf("first expansion %v G want %d (including neighbor penalty) got %d [04 §7.2] C4", tc.cell, want, got)
+		}
+	}
+
+	// The lowest-f first node is (0,1), whose directed fan adds these three
+	// new cells. Its parent run is one, so the existing short-run term is
+	// included alongside the unconditional neighbor penalty.
+	if _, _, done := sess.Resume(1); done {
+		t.Fatal("second expansion should leave the search active")
+	}
+	second := []struct {
+		cell Cell
+		dir  uint8
+	}{
+		{Cell{-1, 2}, DirSW},
+		{Cell{0, 2}, DirS},
+		{Cell{1, 2}, DirSE},
+	}
+	parentG := int32(46) // start south: cardinal 16 + unconditional 30
+	for _, tc := range second {
+		id, ok := sess.ns.Find(tc.cell)
+		if !ok {
+			t.Fatalf("second expansion did not allocate %v", tc.cell)
+		}
+		want := parentG + StepCost(tc.dir) + TurnPenalty(DirS, tc.dir) + InitialPenalty + ShortRunPenalty
+		if got := sess.ns.Get(id).G; got != want {
+			t.Errorf("second expansion %v G want %d (including neighbor penalty) got %d [04 §7.2] C4", tc.cell, want, got)
+		}
 	}
 }
 

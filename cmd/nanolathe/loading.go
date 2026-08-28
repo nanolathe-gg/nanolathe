@@ -183,6 +183,9 @@ func (g *gameShell) startBattleLoad(mapName string) {
 	// engine opens SKIRMISH.GUI on the rows this battle was started with.
 	g.saveSettings()
 	cfg := g.skirmishConfigForStart(mapName)
+	seeds := newBattleSeedSource(g.opts).NextBattleSeeds()
+	cfg.RNGSimSeed = uint32(seeds.Simulation)
+	cfg.RNGCrtSeed = seeds.CRT
 	g.beginLoad(mapName, modeMenuSkirmish, func(state *loadingState) (*session.Session, error) {
 		return session.NewSkirmishWithProgress(g.cs.fs, nil, cfg, state.report)
 	})
@@ -202,9 +205,10 @@ func (g *gameShell) startMissionLoad() {
 	}
 	path := fmt.Sprintf("%s:MISSION%d", c.Path, c.Missions[g.missionIdx].Index)
 	difficulty := g.missionDifficulty()
+	seeds := newBattleSeedSource(g.opts).NextBattleSeeds()
 	g.saveSettings()
 	g.beginLoad("", modeMenuMission, func(state *loadingState) (*session.Session, error) {
-		return session.NewMissionWithProgress(g.cs.fs, nil, path, difficulty, state.report)
+		return session.NewMissionWithProgressSeeds(g.cs.fs, nil, path, difficulty, uint32(seeds.Simulation), seeds.CRT, state.report)
 	})
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
@@ -39,7 +40,7 @@ type battleSession struct {
 	fs    vfs.FSOps
 	shell *gameShell
 
-	msAccum float64 // renderer delta → scaled-now for Session.Step
+	millisSource clock.MillisSource // host millisecond source for Session.Step [01 §4.1]
 
 	battleUI         *ui.BattleState
 	returnToMenu     func(*client.Client)
@@ -97,7 +98,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 	cam.Pan(0, 0)
 	centerOnCommanderForSession(sess, cam, winW, winH)
 
-	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs}
+	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs, millisSource: newMonotonicMillisSource()}
 	b.battleUI = ui.NewProductionBattleState()
 	b.returnToMenu = func(cl *client.Client) {
 		// The battle view has no menu shell callback; mark it ended and exit.
@@ -163,22 +164,43 @@ func runBattleView(opts Options, cs *contentSet) error {
 // It uses the canonical DirectSkirmishConfig normalization [08 "Skirmish configuration"] [GAP T14].
 func newBattleSession(opts Options, cs *contentSet) (*session.Session, *content.Catalog, error) {
 	cfg := session.DirectSkirmishConfig(opts.Map)
-	return newBattleSessionWithConfig(opts, cs, cfg)
+	return newBattleSessionWithConfigAndSource(opts, cs, cfg, newBattleSeedSource(opts))
 }
 
 // newBattleSessionWithConfig is the windowed composition path used by the
 // skirmish lobby. The menu's per-slot and round settings reach the canonical
 // session constructor [08 "Skirmish configuration"].
 func newBattleSessionWithConfig(opts Options, cs *contentSet, cfg session.SkirmishConfig) (*session.Session, *content.Catalog, error) {
+	return newBattleSessionWithConfigAndSource(opts, cs, cfg, newBattleSeedSource(opts))
+}
+
+// newBattleSessionWithConfigAndSource is the injectable composition seam for
+// battle entry. The selected pair is copied into the session configuration
+// before NewSkirmishWithFS performs any setup-owned draw [R-CORE-02].
+func newBattleSessionWithConfigAndSource(opts Options, cs *contentSet, cfg session.SkirmishConfig, source BattleSeedSource) (*session.Session, *content.Catalog, error) {
 	if cfg.MapName == "" {
 		cfg.MapName = opts.Map
 	}
 	cfg.ApplyDefaults()
+	cfg = configWithBattleSeeds(cfg, source)
 	sess, err := session.NewSkirmishWithFS(cs.fs, nil, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 	return sess, sess.Catalog, nil
+}
+
+// configWithBattleSeeds is the composition boundary for skirmish setup. It
+// asks the source exactly once and copies that pair into the config consumed
+// by the session constructor [R-CORE-02].
+func configWithBattleSeeds(cfg session.SkirmishConfig, source BattleSeedSource) session.SkirmishConfig {
+	if source == nil {
+		return cfg
+	}
+	seeds := source.NextBattleSeeds()
+	cfg.RNGSimSeed = uint32(seeds.Simulation)
+	cfg.RNGCrtSeed = seeds.CRT
+	return cfg
 }
 
 // centerOnCommanderForSession pans to the Session.LocalOwner commander [08 "Skirmish configuration"].
@@ -1507,8 +1529,9 @@ func (b *battleSession) continueFromResult(view frame.ResultView, cl *client.Cli
 			if nextIdx, hasNext, err := mission.NextCampaignMission(b.fs, campaignPath, curIdx); err == nil && hasNext {
 				nextPath := fmt.Sprintf("%s:MISSION%d", campaignPath, nextIdx)
 				prevProgress := b.sess.Progress
+				seeds := newBattleSeedSource(b.shell.opts).NextBattleSeeds()
 				b.shell.beginLoad("", modeMenuMission, func(state *loadingState) (*session.Session, error) {
-					sess2, err := session.NewMissionWithProgress(b.fs, nil, nextPath, difficulty, state.report)
+					sess2, err := session.NewMissionWithProgressSeeds(b.fs, nil, nextPath, difficulty, uint32(seeds.Simulation), seeds.CRT, state.report)
 					if err != nil {
 						return nil, err
 					}

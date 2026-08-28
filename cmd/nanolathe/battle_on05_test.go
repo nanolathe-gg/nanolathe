@@ -16,7 +16,8 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// synthetic catalog for ON-05 tests (data-driven, no hardcoded retail names beyond synthetic)
+// Shared authored fixture catalog for battle-input tests. The definitions are
+// deliberately local test data, not a second content source.
 func testCatalogON05() *content.Catalog {
 	b1 := &content.UnitDef{UnitName: "armcons", Builder: true, CanMove: true, FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100}
 	b1.CanonicalKey = content.CanonicalKey(b1.UnitName)
@@ -108,7 +109,7 @@ func placeUnit(b *battleSession, name string, x, z numeric.Fixed) *units.Unit {
 	return u
 }
 
-func TestReclaimClickResolvesFeature(t *testing.T) {
+func TestFeatureClickResolvesReclaimOrder(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(10, 10)
 	// Place feature at cell 9,5 so it lies inside the visible framebuffer
@@ -120,7 +121,6 @@ func TestReclaimClickResolvesFeature(t *testing.T) {
 	idx := 5*int(terrain.CellW) + 9
 	terrain.Plot[idx][8] = 0
 	terrain.Plot[idx][9] = 0 // index 0
-	// Debug check
 	if f := terrain.Plot[idx].Feature(); f != 0 {
 		t.Fatalf("plot feature not set, got %d", f)
 	}
@@ -166,8 +166,8 @@ func TestReclaimClickResolvesFeature(t *testing.T) {
 	}
 }
 
-// Test 8: middle drag changes camera only [F-P1-008]
-func TestMiddleDragChangesCameraOnly(t *testing.T) {
+// Middle-button dragging changes only the presentation camera [07 §10].
+func TestMiddleDragLeavesWorldUnchanged(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(100, 100)
 	b := newTestBattle(cat, terrain)
@@ -186,8 +186,8 @@ func TestMiddleDragChangesCameraOnly(t *testing.T) {
 	}
 }
 
-// Test 9: wheel changes presentation projection only [F-P1-008]
-func TestWheelChangesPresentationOnly(t *testing.T) {
+// Wheel zoom changes only presentation projection [07 §10].
+func TestWheelZoomLeavesWorldUnchanged(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
@@ -211,8 +211,9 @@ func TestWheelChangesPresentationOnly(t *testing.T) {
 	}
 }
 
-// Test 10: W/A/S/D unbound [F-P1-008]
-func TestWASDUnbound(t *testing.T) {
+// The battle camera ignores WASD while retaining the authored arrow-key and
+// edge-scroll controls [07 §10].
+func TestBattleCameraIgnoresWASD(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(100, 100)
 	b := newTestBattle(cat, terrain)
@@ -258,8 +259,8 @@ func TestWASDUnbound(t *testing.T) {
 	}
 }
 
-// Additional: order button latch via hud
-func TestOrderButtonLatch(t *testing.T) {
+// HUD order buttons arm the corresponding command latch [07 §9].
+func TestHUDOrderButtonsArmLatches(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
@@ -282,5 +283,3 @@ func TestOrderButtonLatch(t *testing.T) {
 		t.Fatalf("stop should set Normal")
 	}
 }
-
-// Ensure buildDef retained after mobile product click, and factory queues directly

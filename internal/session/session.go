@@ -184,6 +184,11 @@ type Session struct {
 	rngSim         rng.Simulation
 	rngCrt         rng.CRT
 	rngInitialized bool
+	// RNGSimSeed and RNGCrtSeed record the exact pair selected at battle entry.
+	// They are metadata, not additional random state; the streams themselves
+	// remain the session-owned values above [R-CORE-02].
+	RNGSimSeed uint32
+	RNGCrtSeed uint32
 
 	// Shake driver owned by authoritative phase 10 [R-CORE-01 §4.4.1] DET-04.
 	// All CRT draws for shake are consumed here; the client only applies the
@@ -250,15 +255,16 @@ type PhaseDrawDelta struct {
 // reseed anywhere but here. Battle bootstrap seeds both streams fresh via
 // SeedSessionRNG (retail: sim from the QPC sum XOR constant, forced odd; CRT
 // from the time-of-day helper — so every draw before battle entry is wiped
-// from the streams' state [R-CORE-02]). The seed-1 default below exists only
-// for bare fixture sessions; production constructors seed explicitly.
+// from the streams' state [R-CORE-02]). The zero-value initialization below
+// exists only for bare fixture sessions; production constructors seed
+// explicitly.
 func (s *Session) SimRNG() *rng.Simulation {
 	if s == nil {
 		return nil
 	}
 	if !s.rngInitialized {
-		s.rngSim = rng.NewSimulation(1)
-		s.rngCrt = rng.NewCRT(1)
+		s.rngSim = rng.NewSimulation(0)
+		s.rngCrt = rng.NewCRT(0)
 		s.rngInitialized = true
 	}
 	return &s.rngSim
@@ -271,8 +277,8 @@ func (s *Session) CrtRNG() *rng.CRT {
 		return nil
 	}
 	if !s.rngInitialized {
-		s.rngSim = rng.NewSimulation(1)
-		s.rngCrt = rng.NewCRT(1)
+		s.rngSim = rng.NewSimulation(0)
+		s.rngCrt = rng.NewCRT(0)
 		s.rngInitialized = true
 	}
 	return &s.rngCrt
@@ -281,14 +287,21 @@ func (s *Session) CrtRNG() *rng.CRT {
 // SeedSessionRNG seeds both per-session streams fresh, wiping every draw made
 // before it — the Nanolathe form of retail's reseed-wipes-history property at
 // battle entry [R-CORE-02]. DET-01: explicit seeding only — it does not touch
-// rng.Global. The session is the sole authority for its lifetime; rng.Global
-// remains for process bootstrap (cmd) only.
+// rng.Global. The session is the sole authority for its lifetime; the
+// composition layer selects the pair and passes it here.
 func (s *Session) SeedSessionRNG(simSeed, crtSeed uint32) {
 	if s == nil {
 		return
 	}
+	// Every battle entry starts at tick zero before setup-owned draws. This is
+	// also used by save re-entry, whose RNG state is never restored [R-CORE-02].
+	if s.Clock != nil {
+		s.Clock.GlobalTick = 0
+	}
 	s.rngSim = rng.NewSimulation(simSeed)
 	s.rngCrt = rng.NewCRT(crtSeed)
+	s.RNGSimSeed = simSeed
+	s.RNGCrtSeed = crtSeed
 	// Fresh draw census for the battle [R-CORE-02].
 	s.rngInitialized = true
 	// Bind AI managers to this session's RNG for isolation [RS-06][I4].

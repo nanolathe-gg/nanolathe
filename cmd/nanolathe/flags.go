@@ -14,7 +14,7 @@ import (
 type Options struct {
 	Root string // retail install root
 	Map  string // map name without extension, e.g. "ashap plateau"
-	Seed int64  // simulation RNG seed; <0 = derive from the clock
+	Seed int64  // battle RNG seed for both streams; <0 = derive pair from clock
 }
 
 // ErrHelp reports that usage was requested and printed.
@@ -37,7 +37,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.SetOutput(out)
 	set.StringVar(&opts.Root, "root", defaultRoot(), "retail install root (or $NANOLATHE_TA_ROOT)")
 	set.StringVar(&opts.Map, "map", "", "map name without extension, e.g. \"ashap plateau\"")
-	set.Int64Var(&opts.Seed, "seed", -1, "simulation RNG seed; negative derives one from the clock")
+	set.Int64Var(&opts.Seed, "seed", -1, "battle RNG seed for both streams; negative derives a pair from the clock")
 	set.Usage = func() {
 		fmt.Fprintf(out, "nanolathe — a reimplementation of the Total Annihilation engine\n\n")
 		fmt.Fprintf(out, "usage: nanolathe [flags]\n\nflags:\n")

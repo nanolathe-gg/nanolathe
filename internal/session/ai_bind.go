@@ -17,6 +17,12 @@ func bindAIQueue(mgr *ai.Manager, s *Session) {
 	if mgr == nil || s == nil {
 		return
 	}
+	if s.Build != nil {
+		// Ordinary AI move/order producers use the same concrete context as the
+		// typed construction sink. The field is assigned before the manager can
+		// dispatch in phase 5 [04 §3.3][06 §11.1].
+		mgr.OrderBinding = s.Build.OrderBinding
+	}
 	mgr.QueueBuildTyped = func(req ai.BuildRequest) error {
 		if s.Units == nil || s.Catalog == nil {
 			return fmt.Errorf("ai build: session units/catalog unavailable")

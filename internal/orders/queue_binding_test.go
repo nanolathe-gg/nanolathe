@@ -100,3 +100,26 @@ func TestUnboundQueueCannotAdvanceStockpile(t *testing.T) {
 		t.Fatalf("unbound queue bypassed missing economy admission: progress=%d count=%d", n.Param3, n.Param2)
 	}
 }
+
+func TestPumpUnitDoesNotMaterializeAbsentQueue(t *testing.T) {
+	w := units.NewSliced(4, nil)
+	def := &content.UnitDef{UnitName: "idle", MaxDamage: 1}
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create unit: %v", err)
+	}
+	u := w.Unit(h)
+	if u == nil {
+		t.Fatal("created unit is missing")
+	}
+	if u.Orders != nil {
+		t.Fatal("fixture unexpectedly started with an order queue")
+	}
+	res := (&Pump{World: w}).PumpUnit(h, 1)
+	if res.Err != nil {
+		t.Fatalf("pump idle unit: %v", res.Err)
+	}
+	if u.Orders != nil {
+		t.Fatal("pumping an idle unit materialized an empty queue")
+	}
+}

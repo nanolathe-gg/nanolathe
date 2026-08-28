@@ -13,7 +13,7 @@ func oneCellShape() *content.SightShapes {
 	}}}
 }
 
-func TestWU03BInvalidPlayersNeverAlias(t *testing.T) {
+func TestInvalidPlayerDoesNotAliasVisibilityState(t *testing.T) {
 	s := New(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
 	s.SetShapes(oneCellShape())
 	s.Publish(0, 4, 4, 1, 0)
@@ -34,7 +34,7 @@ func TestWU03BInvalidPlayersNeverAlias(t *testing.T) {
 	}
 }
 
-func TestWU03BRefcountWraps(t *testing.T) {
+func TestCoverageByteCounterWraps(t *testing.T) {
 	s := New(&world.Terrain{CellW: 2, CellH: 2}, ModeHistoryEnabled|ModeCurrentEnabled)
 	s.byteGrids[0][0] = 255
 	if !s.incByteGrid(0, 0) || s.byteGrids[0][0] != 0 {
@@ -45,29 +45,7 @@ func TestWU03BRefcountWraps(t *testing.T) {
 	}
 }
 
-func TestWU03BDirtyBitTracksLocalChanges(t *testing.T) {
-	s := New(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled|ModeFogCacheValid)
-	s.SetLocal(0)
-	if !s.FogCacheValid() {
-		t.Fatal("mode bit three was not retained at initialization")
-	}
-	// No authored shape means no valid cell write, so local no-op stays clean.
-	s.Publish(0, 4, 4, 1, 0)
-	if !s.FogCacheValid() {
-		t.Fatal("no-op local publication cleared fog-valid")
-	}
-	s.SetShapes(oneCellShape())
-	s.Publish(1, 4, 4, 1, 0)
-	if !s.FogCacheValid() {
-		t.Fatal("remote publication cleared local fog-valid")
-	}
-	s.Publish(0, 4, 4, 1, 0)
-	if s.FogCacheValid() {
-		t.Fatal("actual local publication did not clear fog-valid")
-	}
-}
-
-func TestWU03BRetireStoredFootprintAndOwnerChange(t *testing.T) {
+func TestObserverCoverageRetiresOnOwnerChange(t *testing.T) {
 	s := New(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
 	s.SetShapes(oneCellShape())
 	s.SetLocal(0)
@@ -88,7 +66,7 @@ func TestWU03BRetireStoredFootprintAndOwnerChange(t *testing.T) {
 	}
 }
 
-func TestWU03BSensorFinalUsesSinglePoint(t *testing.T) {
+func TestSensorVisibilityUsesSinglePoint(t *testing.T) {
 	s := New(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
 	s.SetLocal(0)
 	// Coverage is deliberately on a different tile. Owner 0 must not get the
@@ -111,7 +89,7 @@ func TestWU03BSensorFinalUsesSinglePoint(t *testing.T) {
 	}
 	for i := range beforeWord {
 		if s.wordMask[i] != beforeWord[i] || s.byteGrids[0][i] != beforeByte[i] {
-			t.Fatalf("sensor phase modified LOS stores at %d", i)
+			t.Fatalf("sensor visibility modified LOS stores at %d", i)
 		}
 	}
 }

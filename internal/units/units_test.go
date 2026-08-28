@@ -9,6 +9,29 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
+func TestNonIdentityPlayerOrderAssignsWorldSlices(t *testing.T) {
+	order := pool.PlayerPermutation{2, 0, 1, 3, 4, 5, 6, 7, 8, 9}
+	world, err := NewSlicedWithOrder(2, nil, order)
+	if err != nil {
+		t.Fatalf("NewSlicedWithOrder: %v", err)
+	}
+	def := &content.UnitDef{UnitName: "ARMCOM", MaxDamage: 100}
+	h2, err := world.Create(def, 2, 0, 0, 0)
+	if err != nil || h2 != 1 {
+		t.Fatalf("player 2 allocation = %d,%v; want 1,nil", h2, err)
+	}
+	h0, err := world.Create(def, 0, 0, 0, 0)
+	if err != nil || h0 != 3 {
+		t.Fatalf("player 0 allocation = %d,%v; want 3,nil", h0, err)
+	}
+	if got := world.Unit(h2).Owner; got != 2 {
+		t.Fatalf("slot 1 owner = %d, want 2", got)
+	}
+	if got := world.Unit(h0).Owner; got != 0 {
+		t.Fatalf("slot 3 owner = %d, want 0", got)
+	}
+}
+
 func TestUnitPoolLowestFreeAndImmediateReuse(t *testing.T) {
 	world := NewSliced(4, nil)
 	def := &content.UnitDef{}

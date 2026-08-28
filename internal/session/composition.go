@@ -388,10 +388,25 @@ func newSlicedWorld(cat *content.Catalog) (*units.World, error) {
 
 // newSlicedWorldWithCOB creates the sliced pool and installs the COB loader [04 §4.1][P1-I01].
 func newSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps) (*units.World, error) {
+	return newBattleSlicedWorldWithCOB(cat, fs, 0, [pool.PlayerCount]uint32{})
+}
+
+// newBattleSlicedWorldWithCOB computes the complete player order once at
+// battle entry and injects it into the sliced pool. The sort-key array is an
+// explicit seam for the mode-3 player records; mode 0 is the identity wrapper
+// used by fixture-only construction [R-P0-16-A].
+func newBattleSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps, mode int, sortKeys [pool.PlayerCount]uint32) (*units.World, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("session: missing filesystem for COB binding [04 §4.1]")
 	}
-	w, err := newSlicedWorld(cat)
+	if cat == nil {
+		return nil, fmt.Errorf("session: nil catalog for unit pool")
+	}
+	if len(cat.Units) <= 0 {
+		return nil, fmt.Errorf("session: catalog has no unit definitions [02 §5]")
+	}
+	order := pool.PlayerPermutationForMode(mode, sortKeys)
+	w, err := units.NewSlicedWithOrder(len(cat.Units), cat, order)
 	if err != nil {
 		return nil, err
 	}
@@ -467,6 +482,19 @@ func (s *Session) bindOrderQueue(u *units.Unit) {
 	orders.BindQueueBinding(u, s.Build.OrderBinding)
 }
 
+// bindExistingOrderQueue transfers the session-owned binding only when a
+// producer has already installed a concrete queue. It deliberately never
+// calls QueueForUnit: a unit visit must not allocate an empty queue [04 §3.3]
+// [04 §3.5][06 §11.1].
+func (s *Session) bindExistingOrderQueue(u *units.Unit) {
+	if s == nil || u == nil || s.Build == nil || s.Build.OrderBinding == nil {
+		return
+	}
+	if q := orders.QueueOfUnit(u); q != nil {
+		q.SetBinding(s.Build.OrderBinding)
+	}
+}
+
 // bindExistingOrderQueues transfers the one session-owned binding to queues
 // that were created lazily during placement or InitialMission. It deliberately
 // does not call QueueForUnit: absent queues stay absent until an order producer
@@ -531,19 +559,13 @@ func createAndBindServices(s *Session) error {
 	if s.Econ == nil {
 		s.Econ = &economy.Service{}
 	}
-	// Every queue receives this one session-owned binding. It carries the
-	// economy admission service, target lookup, hostility predicate, and
-	// simulation RNG together so lazy queues can be rebound before the next
-	// authoritative phase and replacements can copy one value [04 §3.3][04
-	// §3.4][06 §11.1][I4].
+	// Every newly-created queue receives this one session-owned binding. It
+	// carries the economy admission service, target lookup, hostility predicate,
+	// and simulation RNG together so producer seams can bind before dispatch and
+	// replacements can copy one value [04 §3.3][04 §3.4][06 §11.1][I4].
 	queueBinding := s.newOrderBinding()
 	if s.Build != nil && s.Build.OrderBinding != nil {
 		queueBinding = s.Build.OrderBinding
-	}
-	for _, u := range s.Units.Iter() {
-		if u != nil {
-			orders.BindQueueBinding(u, queueBinding)
-		}
 	}
 	// Bind authoritative wind and terrain to the one ledger per [05] [P1-I04].
 	// All other producers must go through bucket Production/Requested/Accepted;

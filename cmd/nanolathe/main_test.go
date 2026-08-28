@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nanolathe/nanolathe/internal/session"
 )
 
 // findRetailRoot returns a usable retail install path for integration tests.
@@ -73,6 +75,39 @@ func TestSeedOverride(t *testing.T) {
 	}
 	if sim, crt = seedsFor(Options{Seed: -1}); sim == 0 || crt == 0 {
 		t.Fatalf("clock-derived seeds produced zero: sim %d crt %d", sim, crt)
+	}
+}
+
+type scriptedBattleSeedSource struct {
+	pairs []BattleSeeds
+	n     int
+}
+
+func (s *scriptedBattleSeedSource) NextBattleSeeds() BattleSeeds {
+	pair := s.pairs[s.n]
+	s.n++
+	return pair
+}
+
+func TestBattleSeedSourceCopiesOneExplicitPairIntoSkirmishConfig(t *testing.T) {
+	source := &scriptedBattleSeedSource{pairs: []BattleSeeds{{Simulation: 17, CRT: 29}}}
+	cfg := configWithBattleSeeds(session.SkirmishConfig{RNGSimSeed: 101, RNGCrtSeed: 103}, source)
+	if cfg.RNGSimSeed != 17 || cfg.RNGCrtSeed != 29 {
+		t.Fatalf("config seeds = %d/%d, want 17/29", cfg.RNGSimSeed, cfg.RNGCrtSeed)
+	}
+	if source.n != 1 {
+		t.Fatalf("source calls = %d, want exactly one", source.n)
+	}
+}
+
+func TestDeterministicBattleSeedSourceSelectsBothStreams(t *testing.T) {
+	first := newBattleSeedSource(Options{Seed: 0x1234}).NextBattleSeeds()
+	second := newBattleSeedSource(Options{Seed: 0x1234}).NextBattleSeeds()
+	if first != second {
+		t.Fatalf("same --seed selected different pairs: %#v vs %#v", first, second)
+	}
+	if first.Simulation != 0x1234 || first.CRT != 0x1234 {
+		t.Fatalf("pair = %#v, want both streams set to 0x1234", first)
 	}
 }
 

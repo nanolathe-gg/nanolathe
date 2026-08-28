@@ -6,6 +6,71 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
+func TestP016_PlayerPermutationComparatorAndModeGate(t *testing.T) {
+	var keys [PlayerCount]uint32
+	for i := range keys {
+		keys[i] = uint32(100 + i)
+	}
+	keys[0], keys[1], keys[2] = 20, 5, 10
+	got := PlayerPermutationForMode(3, keys)
+	want := PlayerPermutation{1, 2, 0, 3, 4, 5, 6, 7, 8, 9}
+	if got != want {
+		t.Fatalf("mode-3 player order = %v, want %v", got, want)
+	}
+	// The comparator is gated by mission mode: non-mode-3 setup retains the
+	// fixed player-record order, regardless of sort-key contents [R-P0-16-A].
+	if got := PlayerPermutationForMode(2, keys); got != IdentityPlayerPermutation() {
+		t.Fatalf("mode-2 player order = %v, want identity", got)
+	}
+	// Equal keys preserve the fixed slot tie order used by the retail
+	// insertion-sort input. A non-strict comparison would move player 1 ahead
+	// of player 0, so assert the complete identity result [R-P0-16-A].
+	keys[0], keys[1] = 7, 7
+	if got := PlayerPermutationForMode(3, keys); got != IdentityPlayerPermutation() {
+		t.Fatalf("equal-key order = %v, want identity slot order", got)
+	}
+}
+
+func TestP016_NonIdentitySlicesAndPermutationValidation(t *testing.T) {
+	order := PlayerPermutation{2, 0, 1, 3, 4, 5, 6, 7, 8, 9}
+	p, err := NewUnitsSlicedWithOrder(2, order)
+	if err != nil {
+		t.Fatalf("NewUnitsSlicedWithOrder: %v", err)
+	}
+	if start, end, ok := p.SliceForPlayer(2); !ok || start != 1 || end != 2 {
+		t.Fatalf("player 2 slice = %d..%d,%v; want 1..2,true", start, end, ok)
+	}
+	if start, end, ok := p.SliceForPlayer(0); !ok || start != 3 || end != 4 {
+		t.Fatalf("player 0 slice = %d..%d,%v; want 3..4,true", start, end, ok)
+	}
+	if start, end, ok := p.SliceForPlayer(1); !ok || start != 5 || end != 6 {
+		t.Fatalf("player 1 slice = %d..%d,%v; want 5..6,true", start, end, ok)
+	}
+	if h, ok := p.AllocForPlayerWithDef(0, 1, false, 0); !ok || h != 3 {
+		t.Fatalf("player 0 allocation = %d,%v; want 3,true", h, ok)
+	}
+	if _, ok := p.AllocForcedWithDef(0, 1, 1, false, 0); ok {
+		t.Fatal("cross-slice forced allocation succeeded")
+	}
+
+	invalid := PlayerPermutation{0, 0, 1, 2, 3, 4, 5, 6, 7, 8}
+	if err := ValidatePlayerPermutation(invalid); err == nil {
+		t.Fatal("duplicate permutation accepted")
+	}
+	invalid[1] = 10
+	if err := ValidatePlayerPermutation(invalid); err == nil {
+		t.Fatal("out-of-range permutation accepted")
+	}
+	beforeStart, beforeEnd, _ := p.SliceForPlayer(0)
+	if err := p.InitSlicedWithOrder(2, invalid); err == nil {
+		t.Fatal("invalid reinitialization accepted")
+	}
+	afterStart, afterEnd, _ := p.SliceForPlayer(0)
+	if beforeStart != afterStart || beforeEnd != afterEnd || !p.Alive(3) {
+		t.Fatalf("invalid initialization mutated pool: before %d..%d after %d..%d alive=%v", beforeStart, beforeEnd, afterStart, afterEnd, p.Alive(3))
+	}
+}
+
 // TestProjectileAppendDeadCompaction locks the [01 §6.1]/[06 §5.1] projectile
 // lifecycle: allocation appends at the active-span tail and never fills holes;
 // retirement flags without decrementing the count; a full span of dead records

@@ -6,7 +6,7 @@ package cleanroom
 // line that still has to be rewritten as clean-room prose, with its
 // address-level trail moved to /tmp/ta-decompile/notes/.
 //
-// Total at baseline: 695 occurrences across 86 files.
+// Total at baseline: 668 occurrences across 84 files.
 //
 // A file absent from this map must have zero occurrences. Counts may only
 // go down, and going down requires updating this file in the same change.
@@ -17,7 +17,6 @@ var Baseline = map[string]int{
 	"internal/ai/o6_score_test.go":                  5,
 	"internal/audio/player.go":                      1,
 	"internal/audio/positional.go":                  1,
-	"internal/clock/clock.go":                       11,
 	"internal/cob/ports.go":                         8,
 	"internal/cob/ports_test.go":                    3,
 	"internal/cob/vm.go":                            98,
