@@ -142,12 +142,6 @@ func (a *Service) Emit(frame uint32, slot Slot, unit pool.Handle, text string) b
 	return a.Queue.InsertAt(frame, slot, unit, text)
 }
 
-// Drain resolves at most one queued cue and advances music once for a
-// rendered frame. The simulation never calls this method [03 §8.3–§8.4] [I6].
-func (a *Service) Drain(frame uint32) {
-	a.DrainEvents(frame, 0, nil)
-}
-
 // DrainEvents resolves queued cues and committed positional events at the
 // presentation edge. A committed tick is consumed once; repeated rendered
 // frames must not replay its events [03 §8.3] [I6].

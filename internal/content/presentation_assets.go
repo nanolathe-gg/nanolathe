@@ -204,11 +204,6 @@ func BuildPresentationAssets(fs vfs.FSOps, defs ...*Catalog) (Assets, error) {
 	return c.Assets(), nil
 }
 
-// CompilePresentationAssets is an alias named after the content compiler.
-func CompilePresentationAssets(fs vfs.FSOps, defs ...*Catalog) (Assets, error) {
-	return BuildPresentationAssets(fs, defs...)
-}
-
 type loadedGAF struct {
 	path string
 	gaf  *formats.GAF

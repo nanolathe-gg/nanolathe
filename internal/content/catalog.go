@@ -829,9 +829,6 @@ func (c *Catalog) WeaponByID(id int32) (*WeaponDef, bool) {
 	return found, ok
 }
 
-// StableWeaponByID is an alias for WeaponByID that explicitly documents stable index usage [02 "Weapon record"].
-func (c *Catalog) StableWeaponByID(id int32) (*WeaponDef, bool) { return c.WeaponByID(id) }
-
 // WeaponDuplicates returns duplicate ID diagnostics (sorted by ID, winner last).
 // The slice is a copy; mutations do not affect the catalog.
 func (c *Catalog) WeaponDuplicates() []WeaponDuplicate {

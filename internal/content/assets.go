@@ -116,9 +116,6 @@ func NewAssets(spec ...AssetCatalog) *AssetCatalogService {
 	return &AssetCatalogService{data: cloneAssetCatalog(src)}
 }
 
-// NewAssetCatalog is a descriptive alias for NewAssets.
-func NewAssetCatalog(spec AssetCatalog) Assets { return NewAssets(spec) }
-
 func (c *AssetCatalogService) Feature(id AssetID) (FeatureAsset, bool) {
 	if c == nil {
 		return FeatureAsset{}, false

@@ -37,6 +37,7 @@ Allowed floating point, exhaustively:
 | Wind scalar published to consumers (clamped to 1.0) | `float32` | `[01 §7.3]` |
 | Clock budget product `delta × speed + carry` | `float64` product, `float32` carry | `[01 §4.2]` |
 | Ballistic discriminant, `acos`, `sqrt` | `float64` | `[06 §3.3]` |
+| Area-damage range `sqrt` (radial falloff distance, truncated toward zero to `int32`) | `float64` transient, never stored | `[06 §9.3]` |
 | Flight brake integration temporaries (`hypot`, `h`, `b`, ratio) | `float64`, narrowed at the named fixed-point stores | `[04 §10.1]` |
 | AI resource-score expressions (`energyRaw`, `metalRaw`) | `float32` temporaries and inputs; `TODO(question)` on exact x87 spills | `[08 "Established AI-facing data and rooted planner"]` |
 | Per-unit order-guard float (eligibility exact compare `== 0.0`; nonzero while an order is processed) | `float32` | `[07 §8]`, `[07 §9]` |

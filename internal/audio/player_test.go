@@ -140,7 +140,6 @@ func TestBackendPlayAliasHeadless(t *testing.T) {
 }
 
 func TestQueueArbitrationIntactAfterBackend(t *testing.T) {
-	ResetCooldowns()
 	q := NewQueue()
 	cat := categoryFixture()
 	q.Register(1, cat, "U", true)

@@ -46,7 +46,7 @@ func TestServiceInitBindsLaterFSWithoutReplacingStateOrPlayback(t *testing.T) {
 	if sample, err := s.Registry.Load(id); err != nil || sample == nil {
 		t.Fatalf("later filesystem was not bound: sample=%v err=%v", sample, err)
 	}
-	s.Drain(30)
+	s.DrainEvents(30, 0, nil)
 	if calls != 1 {
 		t.Fatalf("Drain reconfigured playback callback: calls=%d", calls)
 	}

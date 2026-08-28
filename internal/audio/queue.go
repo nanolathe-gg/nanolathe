@@ -104,11 +104,6 @@ var slotTable = [24]slotInfo{
 	23: {"canceldestruct", "Self destruct terminated", 10, 0},
 }
 
-// ResetCooldowns is retained for source compatibility. Cooldowns are owned by
-// each Queue, so constructing a new Queue is the reset operation.
-func ResetCooldowns() {
-}
-
 // SlotStatic returns the static table entry for a slot [03 §8.3].
 func SlotStatic(s Slot) (key, speech string, priority int8, cooldown uint32, ok bool) {
 	if int(s) < 0 || int(s) >= len(slotTable) {
@@ -116,11 +111,6 @@ func SlotStatic(s Slot) (key, speech string, priority int8, cooldown uint32, ok 
 	}
 	e := slotTable[s]
 	return e.Key, e.Speech, e.Priority, e.Cooldown, true
-}
-
-// NextAllowed returns the mutable next-allowed frame for a slot.
-func NextAllowed(s Slot) uint32 {
-	return 0
 }
 
 // NewQueue creates a queue with permissive defaults [03 §8.3].

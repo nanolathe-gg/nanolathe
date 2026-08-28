@@ -500,6 +500,168 @@ set. Because the tombstone test compares against the front anchor regardless
 of which segment the removed record lived in, `BuildWeapon`/`SelfDestruct`
 removals are effectively always tombstoned and never emit that notification.
 
+### Closed — handler retry and pre-reject mapping [R-ORDER-02 §1] (2026-08-27)
+
+This closure answers the open orders question that the per-handler
+empty/stale/blocked/budget-delayed code mapping "remains inference": the
+satisfied-bit producers, the pump visit rules, and every handler that carries
+a retry budget have now been traced directly, on top of the handler state
+machines already established in sections 8.3 and 10.2–10.3.
+
+**Established — pre-reject exists only at issue time.** An order can be
+rejected before entering a queue only by the command resolution and insertion
+path of section 3.4 (capability gates, the empty-name reject sentinel, and
+the non-queued purge). Neither pump nor any handler re-tests the descriptor's
+capability gates afterwards: once admitted, a record leaves the queue only by
+completion (code 5), a removal code (5/8, 9 on a non-last record, the
+secondary pump's 6/7/9, or the above-9 expiry delegate), or cancel-all (7).
+There is no later validity re-check that pre-empts a queued order; a stale
+target or unreachable goal is handled by waiting, re-arming, or completing —
+never by silent rejection.
+
+**Established — the re-queue engines are exactly four.** A handler that does
+not finish its order re-queues work through one of:
+
+1. **Wait (code 3):** the pump sets the lowest gate bit and the deadline
+   `tick + 30 + random below 15`; the handler runs again on expiry and
+   re-tests. Unbounded — no wait counter exists in the pump.
+2. **Re-arm (code 9 on the last record):** the pump sets the completion flag,
+   resets the phase to zero, and sets the deadline `tick + 30 + random below
+   30` (range 30 to 59). The next visit re-runs phase 0, which rebinds the
+   movement goal or marker: the payload installers release the previous
+   payload and wipe the record's satisfied bits 0x20 through 0x200 on every
+   install, so a re-arm restarts with a clean satisfied word and a FRESH path
+   request. This is the engine's only reset-and-retry loop, and it is
+   unbounded (one random draw per cycle).
+3. **Blocked-head stall:** a record whose armed gate is unsatisfied halts the
+   walk with no deadline and no counter — the stall lasts exactly as long as
+   no outside writer (movement, path service, or wake bit) raises a gate bit.
+4. **Rotate (code 6):** re-queue at the tail — the patrol waypoint cycle and
+   the 60-tick delayed tail-rotate of the queued-move family.
+
+**Established — the secondary pump never delivers satisfied bits.** A
+rear-segment record is dispatched only when its gate mask is empty or its
+deadline has arrived (the deadline compare is unsigned, so the -1 sentinel
+reads as not-due); the pump clears the gate and invokes the handler with an
+EMPTY satisfied set. There is no expiry bit, no satisfied-word read, and no
+capability-word consumption. Rear-segment orders (the stockpile and
+self-destruct pair) therefore run purely on their own deadlines, and
+movement or wake bits can never drive them.
+
+**Established — handler-level rejections.** Cancel-all (7) is produced by
+handler pre-checks: the ground move handler while the unit is attached to a
+carrier, the air move handler when the unit is dead or cannot fly, both move
+handlers when the record's phase byte is outside the machine (a corrupt phase
+cancels the whole queue), the ground patrol handler when the unit is dead,
+and the attack/guard machines documented in section 3.5 (disengaged stance,
+orbit-substate overrun, out-of-range phase). Abandon (8) is produced by the
+attack-chase leash/disengage family and by the mobile-build give-up below.
+The traced rejection sites are these; the closure of ORD-04 does not depend
+on the set being exhaustive, because the pump maps both codes to queue
+effects (7 cancel-all, 8 plain removal) regardless of which handler emits
+them.
+
+**Established — the complete census of bounded retry behavior.** Exactly
+five families carry a retry counter or budget; every other handler retries
+unboundedly or waits on outside bits:
+
+| Family | Budget | Arithmetic |
+|---|---|---|
+| `MobileBuild`, `VTOL_MobileBuild` | blocked-area give-up | a per-record counter (the record's progress field, zeroed by the handler's setup path): each blocked attempt notifies "Waiting for target area to clear", increments the counter, waits EXACTLY 30 ticks (no random draw), and continues while the counter is at most 10; the first blocked visit with the counter above 10 notifies "Target area was blocked" and returns 8 (remove). Eleven 30-tick waits, then give-up. |
+| `Wait` | timeout drain | the scan variant subtracts `150 + random below 30` per failed scan until the budget is exhausted (section 3.8) |
+| `BuildingBuild` | fixed retries | blocked exit retries in exactly 15 ticks; allocator failure in exactly 300 (section 3.8) |
+| `BuildWeapon` | fixed waits | the stockpile machine's fixed 5/10/300-tick waits |
+| VTOL landing | pad retry | the `0` / `30 + random below 15` retry protocol (section 10.2) |
+
+**Established — the path-outcome mapping for the movement families.** The
+movement layer raises satisfied bits through the record's movement-goal
+payload: arrival raises 0x20, a route released before arrival raises 0x40,
+and a goal-handle detach or rebind raises 0x80. The path request itself
+reports route-found/no-route by raising 0x100/0x200 into the record's
+satisfied word — but the move and patrol handlers arm the gate mask 0xE0
+(bits 0x20/0x40/0x80) only, so the path-status bits are raised and then
+MASKED OUT: they can never satisfy a movement record, and a route that has
+not been turned into arrival-or-release motion satisfies nothing.
+
+| Outcome | `Move_Ground` | `Patrol` | `VTOL_Move` | `VTOL_Patrol` |
+|---|---|---|---|---|
+| empty route / budget-delayed (nothing published yet) | blocked-head stall at gate 0xE0 — no timer, no draw; self-heals when the route publishes | same stall at the armed gate | same stall | same stall |
+| stale (route released before arrival, 0x40, or handle detach/rebind, 0x80) | phase 1 → code 9: last record re-arms (phase 0 REBINDS the goal handle and re-issues the path request; wait 30–59; unbounded loop); non-last records are removed | phase 2 → code 6 (rotate to tail, phase reset to 1 — the waypoint cycle absorbs the release) | the raised bit satisfies the 0xE0 gate, so the machine advances a phase per satisfied visit; the fresh marker re-issues the approach each phase-0/1 visit | same phase-per-visit advance; the orbit re-arms its marker each cycle |
+| blocked at destination (mover blocked flag) | no satisfied bit and no handler involvement — the mover caps speed and clamps (section 8.2) while the route keeps its remaining points; the order keeps waiting | same | same | same |
+| arrival (0x20) | code 5, complete, with the move-complete notification | code 6 rotate to the next patrol point | phase 2 completes unconditionally on the first satisfied visit after the last re-arm | code 6 rotate; with no next point, an in-handler wait `tick + 30 + random below 30` (return 4) |
+
+The movement families therefore have NO per-handler retry counters and no
+pre-reject: an unreachable or budget-starved goal stalls or loops forever,
+consuming one random draw per re-arm cycle, until the player cancels or the
+goal becomes reachable. **Unknown:** whether the route-release event fires
+for a route that was NEVER published (a goal the search cannot reach at all).
+If it fires, the unreachable case is the 30–59-tick rebind loop; if not, it
+is a silent indefinite stall with no draw. Settling it requires enumerating
+the movement wrapper's per-tick states that invoke the release callback —
+the wrapper state machine itself is the one untraced piece.
+
+### Closed — cleanup callbacks: tombstone, TargetCleared, StopBuilding [R-ORDER-02 §2] (2026-08-27)
+
+**Established — tombstone mechanics.** The tombstone bit is set at removal
+time on every freed record EXCEPT one that is the primary segment's front
+head at that moment; the comparison is always against the front segment's
+anchor regardless of which segment the record occupies (all removal paths —
+both pumps, the above-9 delegate, the insertion purge, the leading-auto drop,
+and cancel-by-negative — share this shape). Consequences: the front record of
+the primary queue is never tombstoned; every rear-segment record (only
+`BuildWeapon` and `SelfDestruct` live there) is ALWAYS tombstoned when freed,
+because it can never be the primary front head. The bit gates exactly one
+cleanup step — the weapon-target clear below; the cancel notification and
+the StopBuilding emission run regardless of it. The completion flag the pump
+sets on code 9 is write-only state as far as the bounded constant census
+reaches: no pump, cleanup, or traced handler body tests it, and the remaining
+constant's sites belong to other subsystems' state.
+
+**Established — cleanup order, refined.** The earlier text's "state-block
+byte" is refined: the cancel-notification guard is the record's DYNAMIC GATE
+mask — the same field the pump consumes — still holding bit 1 (value 2) at
+removal; a record removed while waiting on that bit delivers the
+cancel-current notification through its own handler. The presentation-payload
+release also clears the owner unit's displayed-payload latch when that latch
+points at the record's payload, before releasing the payload itself.
+
+**Established — the TargetCleared contract.** The weapon-target-clear helper
+invoked for a non-tombstoned record walks the three weapon slots in order.
+Per slot, the notification fires only when BOTH: the slot's control byte has
+bit 1 set (slot assigned) and bit 4 clear — bit 4 is then set — AND the
+slot's target words are not already empty (16-bit target word non-zero, or
+the 16-bit companion word not at its empty sentinel of -32768); the words are
+then reset to 0 and -32768 and the engine arranges the owner's COB function
+named `TargetCleared` with the seven arguments `(0, 0, 1, slotIndex, 0, 0,
+0)`. The event is script-only — no network event accompanies it — and the
+arrange is a no-op when the unit's script defines no such function. Two
+sibling entry points serve mid-life clears by handlers: one with the mirror
+guard (fires only while bit 4 is set, then clears bit 4), and one
+unconditional. The pump itself uses the unconditional form when a dispatched
+record's satisfied combination carries the 0x10000 bit (three unconditional
+slot clears); **Unknown:** which handler arms that gate bit and what raises
+the bit into the satisfied word.
+
+**Established — the StopBuilding emission contract.** The
+StopBuilding-pending flag has exactly one writer: the StartBuilding emitter,
+which resolves the function named `StartBuilding` in the owning unit's COB
+script, arranges it with the seven arguments `(0, 0, 1, value16, 0, 0, 0)`
+where `value16` is the low 16 bits of the issuing record's identity
+(Supported inference for the value's meaning — read directly off the
+emitter, no retail script consumer traced), emits the matching network
+event, and sets the flag on that record. Its nine call sites are exactly the
+nanolathe/assist handlers: `MobileBuild`, `VTOL_MobileBuild`, `HelpBuild`,
+`VTOL_HelpBuild`, `Capture` (two sites), `Reclaim`, `Resurrect`, and
+`RepairUnit`. Cleanup emits the counterpart on EVERY removal path (all pump
+codes, the insertion purge, cancel-by-negative, the expiry delegate): resolve
+`StopBuilding` by name in the owner's script, arrange it with seven zero
+arguments, emit its network event, and clear the flag. The emission is NOT
+tombstone-gated. Interaction with the pump tables: a code-9 LAST-record
+re-arm keeps the record, so its `StartBuilding` keeps running with no
+`StopBuilding`; every actual removal (primary 5/8/9-non-last/7/above-9,
+secondary 5/8/9/6/7, purge and cancel paths) emits it for a flagged record
+before the tombstone-gated TargetCleared step runs.
+
 ### 3.4 Command resolution
 
 **Established fact:** Player and network commands do not name descriptors
@@ -2696,9 +2858,18 @@ Function identities that a later re-derivation corrected — in particular the m
   inference (produced by the weapon-slot engagement-distance helper); the
   patrol radii are closed in section 8.3.
 - Order behavior when a path is empty, stale, blocked, or budget-delayed:
-  the path-service statuses 0x100/0x200 and the handler-level re-arm
-  reactions are established in sections 7.2 and 8.3; the movement-layer
-  consumption of a released route remains in the integrators.
+  closed in [R-ORDER-02 §1] (2026-08-27) — the per-family result-code
+  mapping, the masked-out path-status bits, and the bounded-retry census are
+  established there. Remaining: whether the route-release event fires for a
+  route that was never published (unreachable goal as rebind loop versus
+  silent stall), which needs the movement wrapper's per-tick release-callback
+  states.
+- Consumers of the `StartBuilding` script event's fourth argument (the low
+  16 bits of the issuing record's identity, per [R-ORDER-02 §2]) — no retail
+  script consumer traced; the semantic name of the weapon-slot control byte's
+  bit 4 (set by the cleanup-variant clear, cleared by the mid-life variant);
+  and the producer pair behind the pump's satisfied-bit-0x10000 weapon-slot
+  clear (which handler arms that gate bit, what raises the bit).
 - Exact construction/economy carry and worktime-under-one-tick behavior
   (document 05); completion ordering and the completion/activation/rally
   callbacks are established in section 3.8 [R-P0-09].

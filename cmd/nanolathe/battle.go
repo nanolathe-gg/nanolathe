@@ -44,7 +44,6 @@ type battleSession struct {
 	battleUI         *ui.BattleState
 	returnToMenu     func(*client.Client)
 	returnToSkirmish func(*client.Client)
-	continueFunc     func(*client.Client)
 	ended            bool
 
 	anchors   hud.Anchors
@@ -1461,70 +1460,83 @@ func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 		}
 		b.battleState().Input.ResultDismissed = true
 	case "result_continue":
-		if b.continueFunc != nil {
-			b.continueFunc(cl)
-		} else if b.shell != nil && b.sess != nil {
-			// Campaign Continue: on victory load next MISSION slot+1 [07 §11][08 "Progression"]; on defeat stay at menu [P1-01 §7.5].
-			// Continue the campaign directly when no continue callback is installed.
-			if b.sess.Mission != nil && b.sess.Mission.Type == mission.TypeCampaign {
-				// The result kind is read from the same committed frame that gated
-				// this input route. Do not consult live result/latch/state fallbacks
-				// after presentation has taken ownership of that frame [03 §2.4][I6].
-				isWin := b.resultView().Kind == "victory"
-				if isWin {
-					campaignPath := b.sess.Mission.CampaignPath
-					curIdx := b.sess.Mission.CampaignIndex
-					if curIdx < 0 {
-						curIdx = b.sess.CampaignSlot
-					}
-					difficulty := b.sess.Mission.Difficulty
-					if difficulty < 0 && b.shell != nil {
-						difficulty = b.shell.missionDifficulty()
-					}
-					// Ensure WL written before advancing [P1-01 §2.3].
-					_ = b.sess.ContinueCampaign()
-					if campaignPath != "" && curIdx >= 0 {
-						if nextIdx, hasNext, err := mission.NextCampaignMission(b.fs, campaignPath, curIdx); err == nil && hasNext {
-							nextPath := fmt.Sprintf("%s:MISSION%d", campaignPath, nextIdx)
-							prevProgress := b.sess.Progress
-							prevSlot := curIdx
-							b.shell.beginLoad("", modeMenuMission, func(state *loadingState) (*session.Session, error) {
-								sess2, err := session.NewMissionWithProgress(b.fs, nil, nextPath, difficulty, state.report)
-								if err != nil {
-									return nil, err
-								}
-								sess2.Progress = prevProgress
-								if prevSlot >= 0 && prevSlot < len(sess2.Progress.WL) && sess2.Progress.WL[prevSlot] == 0 {
-									sess2.Progress.WL[prevSlot] = 'W'
-								}
-								sess2.CampaignSlot = nextIdx
-								return sess2, nil
-							})
-							b.battleState().Input.ResultDismissed = true
-							return
-						}
-					}
-					// Campaign complete or provenance missing: return to main.
-					// TODO(question): retail end-of-campaign briefing/report/credits sequence not established [07 §11]; treat as menu return.
-					_ = b.sess.ContinueCampaign()
-					b.shell.openMenu(modeMenuMain)
-				} else {
-					// TODO(question): losing Continue behavior beyond the authored route is not established; return to main [07 §11].
-					_ = b.sess.ContinueCampaign()
-					b.shell.openMenu(modeMenuMain)
-				}
-			} else {
-				if b.sess.ContinueCampaign() {
-					b.shell.openMenu(modeMenuMain)
-				} else {
-					b.shell.openMenu(modeMenuMain)
-				}
-			}
-		} else if b.returnToMenu != nil {
-			b.returnToMenu(cl)
+		// The result action is admitted only from the authored ENDMSN panel, but
+		// capture the immutable frame value again at the action boundary so no
+		// live session result can replace it [03 §2.4][07 §11][I6].
+		view := b.resultView()
+		if !view.Ended {
+			return
 		}
+		b.continueFromResult(view, cl)
 		b.battleState().Input.ResultDismissed = true
 	}
+}
+
+// continueFromResult performs the authored Start transition from one committed
+// result value. Campaign provenance, slot, difficulty, and progress are
+// session metadata used to select/load the established next mission; they do
+// not participate in deciding whether this result is a victory [07 §11][08
+// "Progression"].
+func (b *battleSession) continueFromResult(view frame.ResultView, cl *client.Client) {
+	if b == nil || !view.Ended {
+		return
+	}
+	if b.shell == nil || b.sess == nil {
+		if b.returnToMenu != nil {
+			b.returnToMenu(cl)
+		}
+		return
+	}
+
+	if b.sess.Mission != nil && b.sess.Mission.Type == mission.TypeCampaign && resultContinuesCampaign(view) {
+		campaignPath := b.sess.Mission.CampaignPath
+		curIdx := b.sess.Mission.CampaignIndex
+		if curIdx < 0 {
+			curIdx = b.sess.CampaignSlot
+		}
+		difficulty := b.sess.Mission.Difficulty
+		if difficulty < 0 {
+			difficulty = b.shell.missionDifficulty()
+		}
+
+		if campaignPath != "" && curIdx >= 0 {
+			// The post-battle state transition precedes successor discovery and
+			// loading, preserving the established campaign continuation order
+			// [07 §11][08 "Progression"].
+			_ = b.sess.ContinueCampaign()
+			if nextIdx, hasNext, err := mission.NextCampaignMission(b.fs, campaignPath, curIdx); err == nil && hasNext {
+				nextPath := fmt.Sprintf("%s:MISSION%d", campaignPath, nextIdx)
+				prevProgress := b.sess.Progress
+				b.shell.beginLoad("", modeMenuMission, func(state *loadingState) (*session.Session, error) {
+					sess2, err := session.NewMissionWithProgress(b.fs, nil, nextPath, difficulty, state.report)
+					if err != nil {
+						return nil, err
+					}
+					sess2.Progress = prevProgress
+					sess2.CampaignSlot = nextIdx
+					return sess2, nil
+				})
+				return
+			}
+		}
+		// End-of-campaign reporting/credits are not established; use the
+		// authored main-menu route when no successor can be loaded [07 §11].
+	}
+
+	// Defeat, draw, unknown outcomes, non-campaign battles, and campaigns
+	// without a discovered successor have no established retry route [07 §11].
+	// ContinueCampaign only performs the already-authored post-battle state
+	// transition; it is never consulted to classify the committed result.
+	_ = b.sess.ContinueCampaign()
+	if b.returnToMenu != nil {
+		b.returnToMenu(cl)
+	} else {
+		b.shell.openMenu(modeMenuMain)
+	}
+}
+
+func resultContinuesCampaign(view frame.ResultView) bool {
+	return view.Ended && !view.Draw && strings.EqualFold(view.Kind, "victory")
 }
 
 // setStatusMessage stores a transient on-screen message [07 §11][07 §2] presentation-only (I6).

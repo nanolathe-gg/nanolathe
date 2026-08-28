@@ -84,7 +84,6 @@ func TestCategoryIdentity(t *testing.T) {
 }
 
 func TestInsertCooldownDrop(t *testing.T) {
-	ResetCooldowns()
 	q := NewQueue()
 	cat := categoryFixture()
 	h := pool.Handle(1)
@@ -118,7 +117,6 @@ func TestInsertCooldownDrop(t *testing.T) {
 }
 
 func TestInsertDuplicateDrop(t *testing.T) {
-	ResetCooldowns()
 	q := NewQueue()
 	cat := categoryFixture()
 	q.Register(1, cat, "U", true)
@@ -135,7 +133,6 @@ func TestInsertDuplicateDrop(t *testing.T) {
 }
 
 func TestInsertOrdering(t *testing.T) {
-	ResetCooldowns()
 	q := NewQueue()
 	_ = categoryFixture()
 	// Deactivate pri4, Activate pri4, Build pri4 -> equal priorities FIFO
@@ -162,7 +159,6 @@ func TestInsertOrdering(t *testing.T) {
 	}
 	// Equal priority FIFO: insert deactivate, activate, build all pri4 in that order
 	q2 := NewQueue()
-	ResetCooldowns()
 	if !q2.InsertAt(0, 4, 1, "") {
 		t.Fatal("deactivate")
 	}
@@ -178,7 +174,6 @@ func TestInsertOrdering(t *testing.T) {
 }
 
 func TestAudioInsertOrdering(t *testing.T) {
-	ResetCooldowns()
 	q := NewQueue()
 	cat := categoryFixture()
 	q.Register(1, cat, "Peewee", true)
@@ -195,7 +190,6 @@ func TestAudioInsertOrdering(t *testing.T) {
 }
 
 func TestFullQueueSilentEviction(t *testing.T) {
-	ResetCooldowns()
 	q := NewQueue()
 	cat := categoryFixture()
 	q.Register(1, cat, "Peewee", true)
@@ -253,7 +247,6 @@ func TestFullQueueSilentEviction(t *testing.T) {
 }
 
 func TestAudioOneVoicePer30(t *testing.T) {
-	ResetCooldowns()
 	q := NewQueue()
 	cat := categoryFixture()
 	q.Register(1, cat, "Peewee", true)
@@ -367,7 +360,6 @@ func TestNoSimImport(t *testing.T) {
 }
 
 func TestResolveVariantCRT(t *testing.T) {
-	ResetCooldowns()
 	cat := categoryFixture()
 	// Ensure variant draw uses CRT not Sim by checking determinism
 	q1 := NewQueue()
@@ -380,11 +372,9 @@ func TestResolveVariantCRT(t *testing.T) {
 	q1.OnPlay(func(a string, s Slot, u pool.Handle) { p1 = append(p1, a) })
 	q2.OnPlay(func(a string, s Slot, u pool.Handle) { p2 = append(p2, a) })
 	for i := 0; i < 5; i++ {
-		ResetCooldowns()
 		q1.InsertAt(uint32(i*100), 1, 1, "")
 		q1.Drain(uint32(i*100 + 30))
 	}
-	ResetCooldowns()
 	for i := 0; i < 5; i++ {
 		q2.InsertAt(uint32(i*100), 1, 1, "")
 		q2.Drain(uint32(i*100 + 30))
@@ -404,7 +394,6 @@ func TestResolveVariantCRT(t *testing.T) {
 	q3.Configure(0, 0, true, true) // threshold 0 blocks all (10-0=10 < priority false for max 10)
 	// This will make audible gate fail, so drains silent but still draws
 	for i := 0; i < 10; i++ {
-		ResetCooldowns()
 		q3.InsertAt(uint32(i*10), 1, 1, "")
 		q3.Drain(uint32(i*10 + 30))
 	}
@@ -415,7 +404,6 @@ func TestResolveVariantCRT(t *testing.T) {
 }
 
 func TestDrainEmptyNoOp(t *testing.T) {
-	ResetCooldowns()
 	q := NewQueue()
 	q.Drain(100) // should not panic
 	if q.Count != 0 || q.BaseTime != 0 {
@@ -424,7 +412,6 @@ func TestDrainEmptyNoOp(t *testing.T) {
 }
 
 func TestInsertUsesDescendingPriority(t *testing.T) {
-	ResetCooldowns()
 	q := NewQueue()
 	// Insert low priority first
 	if !q.InsertAt(0, 11, 1, "") {
@@ -439,7 +426,6 @@ func TestInsertUsesDescendingPriority(t *testing.T) {
 }
 
 func TestQueueCountAndBaseTime(t *testing.T) {
-	ResetCooldowns()
 	q := &Queue{}
 	if q.Count != 0 {
 		t.Fatal("new queue count not 0")
@@ -451,7 +437,6 @@ func TestQueueCountAndBaseTime(t *testing.T) {
 }
 
 func TestInsertTextOverride(t *testing.T) {
-	ResetCooldowns()
 	q := NewQueue()
 	cat := categoryFixture()
 	q.Register(1, cat, "Hero", true)
@@ -468,7 +453,6 @@ func TestInsertTextOverride(t *testing.T) {
 }
 
 func TestCrowdGate(t *testing.T) {
-	ResetCooldowns()
 	q := NewQueue()
 	cat := categoryFixture()
 	q.Register(1, cat, "Peewee", true)

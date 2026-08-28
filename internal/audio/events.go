@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/pool"
 )
 
 // Slot constants mirror the static table [03 §8.3] C15.
@@ -86,27 +85,4 @@ func AliasForSlot(cat *Category, slot Slot, crt uint32) (string, string, bool) {
 		cap = row.Captions[idx]
 	}
 	return alias, cap, true
-}
-
-// ResolverForContent builds a queue resolver that maps a unit handle to its
-// sound category via the catalog's Sounds map and the unit world's
-// SoundCategory field. It is presentation-only and must not touch Sim RNG [I4][I6].
-// The caller supplies a handle lookup and a catalog; the returned closure is
-// suitable for Queue.SetResolver [03 §8.3] C17.
-func ResolverForContent(getUnit func(pool.Handle) (soundCategory string, name string, alive bool), catalog *content.Catalog) func(pool.Handle) (*Category, string, bool) {
-	return func(h pool.Handle) (*Category, string, bool) {
-		if getUnit == nil || catalog == nil {
-			return nil, "", false
-		}
-		scat, name, alive := getUnit(h)
-		ck := content.CanonicalKey(scat)
-		if ck == "" {
-			return nil, name, alive
-		}
-		sc, ok := catalog.Sounds[ck]
-		if !ok || sc == nil {
-			return nil, name, alive
-		}
-		return CategoryFromContent(sc), name, alive
-	}
 }

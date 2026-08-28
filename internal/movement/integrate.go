@@ -66,6 +66,7 @@ type System struct {
 	Collisions   map[pool.Handle]*CollisionState
 	Flights      map[pool.Handle]*FlightState
 	profiles     map[pool.Handle]Profile // per-unit resolved movement profile [04 §6.1]
+	profileNames map[pool.Handle]string  // per-unit canonical class key the profile resolved from [04 §6.1]; lookup-only [I1]
 	sessions     []*path.Session         // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
 	prevMoveTier map[pool.Handle]int     // cached mover tier per unit for MoveRate edge emission [04 §5.2][GAP T15] C18
 	prevSFXBand  map[pool.Handle]int     // cached setSFXoccupy band per unit for edge emission [04 §5.2][GAP T15] C17 C18
@@ -76,6 +77,15 @@ type System struct {
 	// the world on every per-unit call, so the caller can invoke StepUnit
 	// inside its own slot visit [04 §1.1] sweep order.
 	world *units.World
+
+	// layerRegistry is the per-class stamped passability layer registry
+	// [04 §6.1 R-DOC04-B]. It is constructed from the terrain, the occupancy
+	// grid, the bound unit world and this System's own committed-anchor
+	// adapter, and is created at first use rather than in NewSystem because
+	// the request revision pass needs the unit world [04 §6.1 R-DOC04-B],
+	// which production binds via BindWorld before the first search or
+	// occupancy commit.
+	layerRegistry *ClassLayers
 
 	// per-tick shared indexing built deterministically ONCE in BeginTick [04 §8.2] C22.
 	// StepUnit consumes it; EndTick clears it.
@@ -227,6 +237,7 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 		Collisions:     make(map[pool.Handle]*CollisionState),
 		Flights:        make(map[pool.Handle]*FlightState),
 		profiles:       make(map[pool.Handle]Profile),
+		profileNames:   make(map[pool.Handle]string),
 		prevMoveTier:   make(map[pool.Handle]int),
 		prevSFXBand:    make(map[pool.Handle]int),
 		avoidNext:      make(map[pool.Handle]uint32),
@@ -262,6 +273,34 @@ func (s *System) BindWorld(w *units.World) {
 		return
 	}
 	s.world = w
+	// The layer registry must capture the bound unit world for the request
+	// revision pass [04 §6.1 R-DOC04-B]; production binds the world in the
+	// unit-sweep phase before the first search or occupancy commit. The lazy
+	// ensureLayerRegistry covers the Tick entry point, which binds the world
+	// itself without a BindWorld call.
+	if s.layerRegistry == nil {
+		s.layerRegistry = s.newLayerRegistry()
+	}
+}
+
+// newLayerRegistry constructs the per-class layer registry over the terrain,
+// the occupancy grid, the bound unit world and this System's committed-anchor
+// adapter [04 §6.1 R-DOC04-B].
+func (s *System) newLayerRegistry() *ClassLayers {
+	return NewClassLayers(s.Terrain, s.Grid, s.world, s)
+}
+
+// ensureLayerRegistry returns the layer registry, creating it at first use
+// for wiring sites reached without a BindWorld call (System.Tick binds the
+// world itself).
+func (s *System) ensureLayerRegistry() *ClassLayers {
+	if s == nil {
+		return nil
+	}
+	if s.layerRegistry == nil {
+		s.layerRegistry = s.newLayerRegistry()
+	}
+	return s.layerRegistry
 }
 
 // World returns the bound units world, if any.
@@ -415,9 +454,11 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 			return true
 		}
 		// Still signal the bit even when hadRoute false so pump can complete
-		// a direct-walk goal without a published route [R-P0-01] TODO(question):
-		// whether direct arrival without a route should complete is Unknown for
-		// compact controller class; keep bit set but diagnostic false.
+		// a direct-walk goal without a published route [R-P0-01]. Whether a
+		// direct arrival without a route should complete is Unknown for the
+		// compact controller class — the open questions are consolidated in
+		// the block directly below this function. Keep bit set but
+		// diagnostic false.
 		return false
 	}
 	return false
@@ -426,7 +467,9 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 // TODO(question): How does the compact ground controller class (0x1c alloc, vt 0x4fd488,
 // selected for owner type byte 3) signal ground-order arrival, given its vt+8 hook is a
 // plain ret? And what advances the VTOL_MOVE handler phase 1→2? Both remain
-// unrecovered; do not guess them. [R-P0-01]
+// unrecovered; do not guess them. [R-P0-01] Related: whether a direct arrival
+// without a published route should complete the order — the bit is kept set
+// with the diagnostic false in finalGoalReached above.
 
 // resolveProfile derives a unit's movement profile from its definition's
 // movement class [02 "Unit record"] [04 §6.1].
@@ -459,6 +502,57 @@ func (s *System) noteUnresolved(name string) {
 		}
 	}
 	s.Unresolved = append(s.Unresolved, name)
+}
+
+// classKeyOf returns the compiled class-table key a unit's movement profile
+// resolves from, or "" when the definition names no class or an unresolved
+// one — both carry the shared scratch profile [04 §6.1 R-DOC04-A]. It
+// mirrors resolveProfile's resolution so the layer registry keys a unit's
+// layer by the same canonical class name the profile came from [04 §6.1
+// R-DOC04-B: all requests of one class share one record and layer].
+func (s *System) classKeyOf(u *units.Unit) string {
+	if s == nil || u == nil || u.Def == nil {
+		return ""
+	}
+	name := u.Def.MovementClass
+	if strings.TrimSpace(name) == "" {
+		return ""
+	}
+	key := content.CanonicalKey(name)
+	if s.Classes[key] == nil {
+		return ""
+	}
+	return key
+}
+
+// classKeyFor returns the recorded class key of a handle; "" for a unit
+// without an initialized surface, which shares the single scratch-profile
+// layer keyed by the empty name.
+func (s *System) classKeyFor(h pool.Handle) string {
+	if s == nil || s.profileNames == nil {
+		return ""
+	}
+	return s.profileNames[h]
+}
+
+// noteOccupancyCommit records a unit's occupancy-commit tick on every
+// allocated class layer [04 §6.1 R-DOC04-B]. The commit tick is one field of
+// the unit record, read by every class's per-cell classifier and request
+// revision pass; the frozen registry represents it as a per-layer map, so the
+// tick is noted on each. Names() is the deterministic allocation-order slice,
+// never a map range [I1]. A layer allocated later misses pre-allocation
+// ticks; the unit's next commit refreshes it.
+func (s *System) noteOccupancyCommit(h pool.Handle, tick uint32) {
+	if s == nil || h == 0 {
+		return
+	}
+	reg := s.ensureLayerRegistry()
+	if reg == nil {
+		return
+	}
+	for _, name := range reg.Names() {
+		reg.For(name, Profile{}).NoteCommit(h, tick)
+	}
 }
 
 // ProfileFor returns the profile resolved for a unit handle. A handle with no
@@ -585,6 +679,7 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	// bias, footprint and occupancy decision for it reads this one [04 §6.1].
 	profile := s.resolveProfile(u)
 	s.profiles[h] = profile
+	s.profileNames[h] = s.classKeyOf(u)
 	// SteerState [M2][M3] with pitch accumulator and accel/brake plumbing
 	steer := &SteerState{
 		X:              int32(u.X.Raw()),
@@ -667,6 +762,11 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	coll.CachedMode = 1
 	s.Collisions[h] = coll
 	if s.Grid != nil {
+		// The creation-time stamp writes no occupancy-commit tick: commit
+		// ticks are noted at the movement commit site (StepUnit) [04 §6.1
+		// R-DOC04-B]. Whether retail also writes the unit record's
+		// commit-tick field at the creation-time stamp is untraced and is
+		// recorded with the write-site questions at that commit site.
 		s.Grid.Stamp(anchor, footX, footZ, coll.ID)
 	}
 	// Init move mode to parked [04 §9.1] 1 stopped/parked; TakeOff/Sumbit will set 2 active
@@ -952,15 +1052,6 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) ([]path.Poi
 		// one profile across the world paths a ship, a hover and a Krogoth as
 		// the same 1x1 ground scout [04 §6.1] [04 §7.1].
 		profile := s.ProfileFor(r.Unit)
-		// [04 §8.2] mobile units are NOT A* walls; pathing runs on the static layer (terrain + static features + yard/building occupancy) with arbitration at commit (MaxVelocity/2 cap + clamped nudge) [04 §8.2] C23 C24. Mobile occupancy is therefore not a search wall; mover-vs-mover contention is resolved at commit time via the OccupancyGrid validator and replanDynamicBlock policy (see SC22).
-		isPassable := func(c path.Cell) bool {
-			if s.Terrain != nil {
-				if !profile.IsPassableFootprint(s.Terrain, c.X, c.Z) {
-					return false
-				}
-			}
-			return true
-		}
 		bias := path.Point{X: int32(profile.FootPrintX / 2), Z: int32(profile.FootPrintZ / 2)}
 		var hasBounds bool
 		var bounds path.Rect
@@ -968,14 +1059,62 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) ([]path.Poi
 			hasBounds = true
 			bounds = path.Rect{Min: path.Cell{X: 0, Z: 0}, Max: path.Cell{X: s.Terrain.CellW - 1, Z: s.Terrain.CellH - 1}}
 		}
-		cfg := path.SearchConfig{
-			Start:      r.Start,
-			Goal:       r.Goal,
-			IsPassable: isPassable,
-			Scale:      scale,
-			Bias:       bias,
-			HasBounds:  hasBounds,
-			Bounds:     bounds,
+		var cfg path.SearchConfig
+		if s.Terrain != nil {
+			// The requesting unit's class layer is the search passability
+			// source [04 §6.1 R-DOC04-B]: one record and one stamped layer
+			// per movement class, shared by reference by every request of
+			// the class. This is the SC22 static layer — terrain and static
+			// features per the class stamp; mobile occupancy is not an A*
+			// wall, and the only dynamic channel into the layer is the
+			// occupant-age gate fed by the request revision pass
+			// [docs/SPEC_CONFLICTS SC22][04 §8.2].
+			//
+			// PassableValue binds the packed terrain stamp, not the full
+			// Passable consumer: the owner/building-mask write sites are
+			// Supported inference with no located retail writer (the
+			// unwired-write-site questions are recorded at the
+			// occupancy-commit site in StepUnit), and Passable's bit-miss
+			// value 2 short-circuits the terrain value, so consulting an
+			// unwired mask would bypass terrain blocking entirely. With the
+			// terrain binding the bit-miss value 2 never occurs in
+			// production — matching the pre-layer terrain-only search
+			// [04 §6.1 R-DOC04-B].
+			//
+			// The per-request revision pass runs at request init before any
+			// expansion [04 §6.1 R-DOC04-B][04 §7.3]; path.Session.init
+			// invokes cfg.Revise first.
+			reg := s.ensureLayerRegistry()
+			cls := s.classKeyFor(r.Unit)
+			layer := reg.For(cls, profile)
+			requester := r.Unit
+			revTick := s.tick
+			cfg = path.SearchConfig{
+				Start:     r.Start,
+				Goal:      r.Goal,
+				Scale:     scale,
+				Bias:      bias,
+				HasBounds: hasBounds,
+				Bounds:    bounds,
+				PassableValue: func(c path.Cell) uint8 {
+					return layer.Value(c.X, c.Z)
+				},
+				Revise: func() {
+					reg.ReviseFor(cls, profile, requester, revTick)
+				},
+			}
+		} else {
+			// No terrain: nothing to classify; every cell passes except the
+			// bounds check (HasBounds is false above) [04 §7.1] C10.
+			cfg = path.SearchConfig{
+				Start:      r.Start,
+				Goal:       r.Goal,
+				Scale:      scale,
+				Bias:       bias,
+				HasBounds:  hasBounds,
+				Bounds:     bounds,
+				IsPassable: func(path.Cell) bool { return true },
+			}
 		}
 		sess = path.NewSession(cfg)
 		s.sessions[idx] = sess
@@ -1521,8 +1660,26 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			anchor := QuantizedAnchor(coll.X+coll.VX, coll.Z+coll.VZ, bx, bz)
 			return moverProfile.IsPassableFootprint(s.Terrain, anchor.X, anchor.Z)
 		}
-		_, isBlocked := coll.CommitOne(s.Grid, coll.Mode, perCell, aggregate) // [04 §8.2] C23 C24: sync clear-then-stamp before next slot
+		fastPath, isBlocked := coll.CommitOne(s.Grid, coll.Mode, perCell, aggregate) // [04 §8.2] C23 C24: sync clear-then-stamp before next slot
 		blocked = isBlocked
+		// Occupancy was committed (clear/commit/stamp, [04 §8.2] C22): record
+		// the unit's occupancy-commit tick so the request revision pass of
+		// [04 §6.1 R-DOC04-B] sees it. The same-cell fast path commits the
+		// transform without restamping occupancy [04 §8.2] C23, so it writes
+		// no commit tick.
+		// TODO(question): the occupancy-commit WRITE SITES are only partially
+		// established. (a) The owner/building-mask writers (ClassLayer
+		// SetOwnerRect/ClearOwnerRect) are Supported inference with no located
+		// retail writer; a traced building-commit writer would settle where
+		// retail sets and clears the requester's mask bits. (b) Whether the
+		// creation-time occupancy stamp (EnsureUnit) also writes the unit
+		// record's commit-tick field is untraced. Until the mask writers are
+		// wired the mask stays all-zero and the search binds the terrain stamp
+		// only (see searchFunc), so the bit-miss value 2 never occurs in
+		// production — matching the pre-layer terrain-only search.
+		if !isBlocked && !fastPath {
+			s.noteOccupancyCommit(handle, tick)
+		}
 		coll.BlockerID = blockerID
 		if blocked && blockerID >= 0 {
 			// Lower slot wins the deterministic priority; higher slot yields

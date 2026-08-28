@@ -193,11 +193,6 @@ func CompileCategories(units map[string]*UnitDef) (*CategoryRegistry, error) {
 	return r, nil
 }
 
-// LinkUnitCategories is the descriptive alias used by catalog integration.
-func LinkUnitCategories(units map[string]*UnitDef) (*CategoryRegistry, error) {
-	return CompileCategories(units)
-}
-
 func (r *CategoryRegistry) ensure(name string) int {
 	ck := CanonicalKey(name)
 	if i, ok := r.byName[ck]; ok {
