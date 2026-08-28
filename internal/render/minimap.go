@@ -283,14 +283,6 @@ type MinimapContact struct {
 // absent and therefore leaves FINAL untouched. [03 §3.9]
 type MinimapContactBlitter func(dst *RadarSurface, x, y int, palette byte, commander bool)
 
-// RebuildFinalExact wipes FINAL from MAPPED and applies the established
-// contacts/circles order. Missing authored blit data leaves the destination
-// untouched; callers own the unresolved start-marker and no-radar decisions.
-// [03 §3.9][03 §3.12]
-func RebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int32, contacts []MinimapContact, blink BlinkState, blit MinimapContactBlitter, radarColor, jammerColor, ringColor byte) *RadarSurface {
-	return rebuildFinalExact(mapped, m, playW, playH, contacts, nil, blink, blit, radarColor, jammerColor, ringColor)
-}
-
 func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int32, contacts []MinimapContact, sensors []MinimapCircle, blink BlinkState, blit MinimapContactBlitter, radarColor, jammerColor, ringColor byte) *RadarSurface {
 	if mapped == nil || mapped.W <= 0 || mapped.H <= 0 || len(mapped.Bits) < mapped.W*mapped.H {
 		return nil
@@ -502,23 +494,4 @@ func drawDashedCircle(s *RadarSurface, cx, cy, r int, color byte, phase bool) {
 		x1, y1 := circlePoint(cx, cy, r, i+1)
 		line(s, x0, y0, x1, y1, color)
 	}
-}
-
-// DrawViewportMarker paints the composer-time five-pixel cross. The caller
-// supplies the camera centre in map pixels; the constants are the retained
-// viewport-origin offsets, not a rectangle size. [03 §3.12]
-func DrawViewportMarker(dst *RadarSurface, mode byte, cameraCenterX, cameraCenterY, cameraCenterZ, camX, camZ int32, color byte) {
-	if dst == nil || mode != 2 {
-		return
-	}
-	cx := cameraCenterX - camX
-	cy := cameraCenterZ - (cameraCenterY >> 1) - camZ
-	// The two retained line calls share only the crossing pixel in the
-	// executable's clipped marker primitive; its observable footprint is the
-	// five pixels at the centre and cardinal ±2 offsets. [03 §3.12]
-	dst.Set(int(cx+128), int(cy+32), color)
-	dst.Set(int(cx+126), int(cy+32), color)
-	dst.Set(int(cx+130), int(cy+32), color)
-	dst.Set(int(cx+128), int(cy+30), color)
-	dst.Set(int(cx+128), int(cy+34), color)
 }

@@ -9,8 +9,9 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// TestP0I10_LoadingCannotTick ensures newly constructed session cannot tick while loading [08 "Session states"] P0-I10.
-func TestP0I10_LoadingCannotTick(t *testing.T) {
+// TestLoadingCompletesBeforeBattleTick ensures a loading session does not
+// advance simulation time until the battle dispatch [08 "Session states"].
+func TestLoadingCompletesBeforeBattleTick(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
 		Snapshot: &frame.Buffer{},
@@ -19,10 +20,10 @@ func TestP0I10_LoadingCannotTick(t *testing.T) {
 	}
 	s.RegisterAll()
 	before := s.Clock.GlobalTick
-	// scaledNow 10 would give up to 5 ticks in battle, but must give 0 while loading [P0-I10].
+	// A loading dispatch consumes no battle ticks.
 	s.Step(10)
 	if s.Clock.GlobalTick != before {
-		t.Fatalf("newly constructed session cannot tick while loading [P0-I10][08 \"Session states\"]: ticks %d->%d", before, s.Clock.GlobalTick)
+		t.Fatalf("loading dispatch advanced ticks [08 \"Session states\"]: %d->%d", before, s.Clock.GlobalTick)
 	}
 	// Loading handler should have scheduled battle for next dispatch (C2).
 	if s.State != StateBattle || !s.IsPendingBattle() {
@@ -38,8 +39,9 @@ func TestP0I10_LoadingCannotTick(t *testing.T) {
 	}
 }
 
-// TestP0I10_VictoryReachesPostBattleExactlyOnce ensures victory latch transitions 6->7 exactly once [08][P1-01].
-func TestP0I10_VictoryReachesPostBattleExactlyOnce(t *testing.T) {
+// TestVictoryReachesPostBattleExactlyOnce ensures the victory latch enters
+// post-battle once [08][P1-01].
+func TestVictoryReachesPostBattleExactlyOnce(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
 		Snapshot: &frame.Buffer{},
@@ -74,7 +76,7 @@ func TestP0I10_VictoryReachesPostBattleExactlyOnce(t *testing.T) {
 	}
 	// Second attempt to transition 7->7 or 6->7 again must not happen.
 	if s.TransitionTo(StatePostBattle) {
-		t.Fatalf("victory must reach postbattle exactly once [P0-I10]: second transition should fail")
+		t.Fatalf("victory must reach postbattle exactly once: second transition should fail")
 	}
 	// Latch should stay ending, not re-arm.
 	beforeBits := s.Latch.Bits
@@ -95,8 +97,9 @@ func TestP0I10_VictoryReachesPostBattleExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestP0I10_RetryReloadsSameMission ensures retry reloads same mission via state 5 directly [P1-01 §7.5].
-func TestP0I10_RetryReloadsSameMission(t *testing.T) {
+// TestRetryReloadsSameMission ensures retry keeps the mission and returns to
+// loading [P1-01 §7.5].
+func TestRetryReloadsSameMission(t *testing.T) {
 	m := &mission.Mission{Type: mission.TypeCampaign}
 	// Use a minimal mission with one feature/unit not needed for state check.
 	s := &Session{
@@ -117,7 +120,7 @@ func TestP0I10_RetryReloadsSameMission(t *testing.T) {
 		t.Fatalf("progress should be W before retry")
 	}
 	// Clear WL to test that retry does NOT rewrite beyond current slot? Retry should keep same mission and not overwrite W/L beyond slot?
-	// For gate, we check that retry keeps same Mission object and ends in Loading.
+	// Retry keeps the same mission object and returns to loading.
 	if !s.Retry() {
 		t.Fatalf("Retry should succeed from postbattle [P1-01 §7.5]")
 	}
@@ -133,8 +136,9 @@ func TestP0I10_RetryReloadsSameMission(t *testing.T) {
 	}
 }
 
-// TestP0I10_ContinueWritesProgress ensures continue writes progress and selects next mission [P1-01 §7.5].
-func TestP0I10_ContinueWritesProgress(t *testing.T) {
+// TestContinueWritesProgress ensures continue records the result and returns
+// to the router [P1-01 §7.5].
+func TestContinueWritesProgress(t *testing.T) {
 	m := &mission.Mission{Type: mission.TypeCampaign}
 	s := &Session{
 		Clock:        &clock.State{Requested: 10, Active: 10},
@@ -154,24 +158,24 @@ func TestP0I10_ContinueWritesProgress(t *testing.T) {
 	if !s.Latch.IsEnding() || !s.Latch.IsWin() {
 		t.Fatalf("latch should be win ending before continue")
 	}
-	// Ensure progress not yet written (simulate fresh postbattle before handler's write)
-	s.Progress = BankProgress{}
+	// The terminal latch writes the result before CONTINUE is selected.
+	s.Progress.ApplyCampaignResult(s.CampaignSlot, true)
 	if !s.ContinueCampaign() {
 		t.Fatalf("Continue should succeed from postbattle [P1-01 §7.5]")
 	}
-	if s.Progress.WL[0] != 'W' {
-		t.Fatalf("continue must write progress W/L [P1-01 §2.3]: got %d", s.Progress.WL[0])
+	if s.Progress.WL[s.CampaignSlot] != 'W' {
+		t.Fatalf("continue must preserve terminal progress [P1-01 §2.3]: got %d", s.Progress.WL[s.CampaignSlot])
 	}
 	if s.State != StateRouter {
 		t.Fatalf("continue must transition 7->2 [08] C1: got %v", s.State)
 	}
 }
 
-// TestP0I10_TeardownReturnsToRouter keeps the authoritative lifecycle edge
+// TestTeardownReturnsToRouter keeps the authoritative lifecycle edge
 // covered without giving the session ownership of platform resources. The
 // window, display, sound, archive, semaphore, and registry owners are all at
 // the command/platform edge [01 §2.3].
-func TestP0I10_TeardownReturnsToRouter(t *testing.T) {
+func TestTeardownReturnsToRouter(t *testing.T) {
 	for _, state := range []State{StateTeardownA, StateTeardownB} {
 		s := &Session{State: state}
 		s.RegisterAll()
@@ -182,8 +186,9 @@ func TestP0I10_TeardownReturnsToRouter(t *testing.T) {
 	}
 }
 
-// TestP0I10_AbortTransitionsThroughRouter ensures abort 6->2 does not leave battle ticking [P0-I10].
-func TestP0I10_AbortTransitionsThroughRouter(t *testing.T) {
+// TestAbortTransitionsThroughRouter ensures abort does not leave battle
+// ticking behind the result overlay [08].
+func TestAbortTransitionsThroughRouter(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
 		Snapshot: &frame.Buffer{},
@@ -203,7 +208,7 @@ func TestP0I10_AbortTransitionsThroughRouter(t *testing.T) {
 	// Step should not tick after abort
 	s.Step(10)
 	if s.Clock.GlobalTick != before {
-		t.Fatalf("abort must not leave battle ticking behind overlay [P0-I10]: ticks %d->%d", before, s.Clock.GlobalTick)
+		t.Fatalf("abort must not leave battle ticking behind overlay: ticks %d->%d", before, s.Clock.GlobalTick)
 	}
 	// Victory abort from postbattle also 7->2
 	s.State = StatePostBattle

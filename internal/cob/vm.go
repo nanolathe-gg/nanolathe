@@ -97,6 +97,12 @@ type VM struct {
 	lastReturnValue [8]int32 // last explicit return value per thread [04 §5.3] ON-04
 	lastReturnValid [8]bool  // true if lastReturnValue holds an explicit return not yet consumed ON-04
 
+	// tickDenom is latched once at VM construction from the engine's fixed
+	// 30-tick configuration and is immutable afterwards; it is not re-derived
+	// per tick from wall-clock or game-speed budget [04 §4.6]. All four
+	// speed/deceleration divides and the sleep conversion read it.
+	tickDenom int32
+
 	DrainCalls int // count of Drain invocations for RS-08 one-drain invariant [04 §4.2][GAP T15]
 }
 
@@ -205,6 +211,16 @@ func NewVM(prog *Program) *VM {
 
 // SetProgram binds prog to v, reallocating piece and static storage.
 // Callers that construct VM as a literal may call this after.
+//
+// Construction contract [R-COB-01 §1]: the bind clears only each thread's
+// status word and the instance's active-thread count (derived here from the
+// status words) and latches the tick denominator once. Nothing else in the
+// eight thread records is initialized — PC, depth, timer, signal mask, wait
+// words and the ten window words of an unallocated slot keep whatever the
+// instance's memory held (Go's zero values on a fresh instance; a previous
+// tenant's bytes on a reused one). Every field that matters is re-seeded at
+// thread allocation or thread start, so construction-time state is
+// unobservable except through the window words.
 func (v *VM) SetProgram(prog *Program) {
 	v.prog = prog
 	if prog == nil {
@@ -214,9 +230,16 @@ func (v *VM) SetProgram(prog *Program) {
 		v.pieceFlags = nil
 		return
 	}
-	v.statics = make([]int32, prog.Statics) // zero-initialized [fmt cob] [04 §4.2]
-	v.Pieces = make([]model.PieceState, len(prog.Pieces))
-	v.anims = make([]pieceAnim, len(prog.Pieces))
+	// Script statics: retail's bind performs NO zeroing pass over the statics
+	// array — the initial content is whatever the tagged allocator handed out
+	// [R-COB-01 §1]. TODO(question): that allocator-provided initial content
+	// is untraced (a recycled block can carry a previous tenant's values);
+	// shipped scripts write statics before reading them, so stock content is
+	// insensitive. Zeroing here is Nanolathe's I11 determinism divergence, not
+	// retail behavior — do not cite it as retail.
+	v.statics = make([]int32, prog.Statics)
+	v.Pieces = make([]model.PieceState, len(prog.Pieces)) // zero-filled by the bind [R-COB-01 §1]
+	v.anims = make([]pieceAnim, len(prog.Pieces))         // piece animation words all zero [R-COB-01 §1]
 	v.pieceFlags = make([]uint8, len(prog.Pieces))
 	// Defaults: bit 1 (cache) and bit 2 (shade) set, bit 0 (draw) clear for
 	// now; retail sets bit 0 per-geometry at creation [04 §4.3] "allocation is
@@ -226,17 +249,19 @@ func (v *VM) SetProgram(prog *Program) {
 	// [04 §4.3]; 0x06 would leave all pieces hidden until Create shows them,
 	// which makes early snapshots fallback to squares. Retail's first present
 	// after Create has shown, so start visible to avoid the all-hidden window.
+	// The geometry-driven fill walk itself belongs to the unit-creation binding
+	// (internal/units owns the model link) [R-COB-01 §1].
 	for i := range v.pieceFlags {
 		v.pieceFlags[i] = 0x07 // [04 §4.3] visible
 	}
+	// Construction clears only the status words; every other thread field
+	// keeps its prior content [R-COB-01 §1].
 	for i := range v.Threads {
-		v.Threads[i] = Thread{
-			Status:     ThreadIdle,
-			WaitPiece:  -1,
-			WaitAxis:   -1,
-			WaitThread: -1,
-		}
+		v.Threads[i].Status = ThreadIdle
 	}
+	// Latch the tick denominator once from the fixed 30-tick configuration
+	// [04 §4.6]; immutable after construction.
+	v.tickDenom = 30
 	v.lastStarted = -1
 	v.lastQueryThread = -1
 	for i := range v.lastReturnValid {
@@ -369,7 +394,15 @@ func (v *VM) IsThreadAlive(threadIdx int) bool {
 // It allocates the lowest clear thread slot [01 §6.1] C13; if no slot or the
 // script id is not a valid entry, it returns false without consuming args
 // from any caller stack (here args are kept by the caller) [04 §4.3] C14.
-// Engine-started threads start with mask 0 [fmt cob].
+//
+// Argument-area contract [R-COB-01 §1]: with at least one argument this is
+// the argument-carrying starter — it always writes FOUR physical cells
+// (window words 0..3) and only then sets the logical top to arity−1. The
+// traced engine producers pass explicit zeros beyond the arity, so cells
+// arity..3 receive zeros here; window words above word 3 stay untouched stale
+// slot memory. With no arguments this is the zero-argument name-form start:
+// no window word is written and every window word stays stale.
+// Engine-started threads start with mask 1 [R-P0-10].
 func (v *VM) Start(script int, args []int32) bool {
 	if v.prog == nil {
 		return false
@@ -402,18 +435,26 @@ func (v *VM) Start(script int, args []int32) bool {
 	t.WaitPiece = -1
 	t.WaitAxis = -1
 	t.Sleep = 0
+	// Logical top −1 (SP 0): window words keep the slot's stale content until
+	// the starter writes them [R-COB-01 §1].
 	t.SP = 0
-	// Engine starters write four words with garbage beyond argc and set depth
-	// to argc-1 [04 §4.3]; we copy args in order, padding with 0 for missing
-	// slots, and set SP = len(args) clamped to 10, which yields the same local
-	// addressing after the script's alloc-local prologue [04 §4.3].
-	n := len(args)
-	if n > 10 {
-		n = 10
-	}
-	t.SP = n
-	for i := 0; i < n; i++ {
-		t.Stack[i] = args[i]
+	if n := len(args); n > 0 {
+		// Four unconditional physical writes, producer filler zeros beyond the
+		// arity [R-COB-01 §1]. Engine producers pass at most four arguments;
+		// a longer slice (fixtures only) copies the surplus as before.
+		for i := 0; i < 4 && i < n; i++ {
+			t.Stack[i] = args[i]
+		}
+		for i := n; i < 4; i++ {
+			t.Stack[i] = 0 // traced producers' zero fillers [R-COB-01 §1]
+		}
+		for i := 4; i < n && i < 10; i++ {
+			t.Stack[i] = args[i]
+		}
+		t.SP = n
+		if t.SP > 10 {
+			t.SP = 10
+		}
 	}
 	v.lastStarted = idx            // ON-04 Aim dispatch records thread relationship [06 §3.3]
 	v.lastReturnValid[idx] = false // clear stale return for this slot ON-04
@@ -936,8 +977,8 @@ func (v *VM) runThread(idx int) {
 			anim := &v.anims[piece].axes[axis]
 			anim.moveTarget = target
 			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			perTick := int32(int64(speed) / 30)             // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			cur := int64(v.Pieces[piece].Trans[axis].Raw()) // [03 §2.4] C21 via GetPos
+			perTick := int32(int64(speed) / int64(v.tickDenom)) // latched denominator [04 §4.6]; trunc toward zero per I3.
+			cur := int64(v.Pieces[piece].Trans[axis].Raw())     // [03 §2.4] C21 via GetPos
 			if cur > int64(target) {
 				perTick = -perTick // flip sign toward target [04 §4.6] [DEC-033] §5.1
 			}
@@ -964,8 +1005,8 @@ func (v *VM) runThread(idx int) {
 			anim.turnTarget = tgt // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			anim.spinAccel = 0    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			perTick := int32(int64(speed) / 30)      // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			curAng := v.Pieces[piece].GetAngle(axis) // [03 §2.4] C21 via GetAng
+			perTick := int32(int64(speed) / int64(v.tickDenom)) // latched denominator [04 §4.6]; trunc toward zero per I3.
+			curAng := v.Pieces[piece].GetAngle(axis)            // [03 §2.4] C21 via GetAng
 			// Raw difference as signed 32 of uint16 values (0..65535) before wrap; abs>0x8000 strict flips sign [04 §4.6] [DEC-033] §5.2 (jg 0x8000).
 			delta := int64(tgt) - int64(curAng) // -65535..65535, not int16-wrapped; >0x8000 triggers shortest-arc flip
 			if delta == 0 {
@@ -1000,8 +1041,8 @@ func (v *VM) runThread(idx int) {
 			}
 			anim := &v.anims[piece].axes[axis]
 			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			perTickSpeed := int32(int64(speed) / 30) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			perTickAccel := int32(int64(accel) / 30)
+			perTickSpeed := int32(int64(speed) / int64(v.tickDenom)) // trunc toward zero [04 §4.6], latched denominator
+			perTickAccel := int32(int64(accel) / int64(v.tickDenom))
 			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			anim.spinTarget = perTickSpeed // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			anim.spinAccel = perTickAccel  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -1028,9 +1069,9 @@ func (v *VM) runThread(idx int) {
 			}
 			anim := &v.anims[piece].axes[axis]
 			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			anim.spinTarget = 0                    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			perTickDecel := int32(int64(dec) / 30) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			anim.spinAccel = -perTickDecel         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			anim.spinTarget = 0                                    // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			perTickDecel := int32(int64(dec) / int64(v.tickDenom)) // trunc toward zero, latched denominator [04 §4.6]
+			anim.spinAccel = -perTickDecel                         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if anim.spinAccel == 0 {
 				// Sub-tick deceleration becomes immediate stop [04 §4.6] [DEC-033] §5.4; |decel|<30 => 0
 				anim.spinSpeed = 0 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -1101,17 +1142,17 @@ func (v *VM) runThread(idx int) {
 			t.stackPop()
 			t.stackPop()
 			t.PC += 2
-		case 0x1000a000: // dont-shadow [04 §4.3]
+		case 0x1000a000: // dont-shadow [04 §4.3][R-COB-01 §1]
 			if t.PC+1 >= len(v.prog.Code) {
 				v.killThread(idx)
 				return
 			}
-			piece := int(v.prog.Code[t.PC+1])
-			if piece < 0 || piece >= len(v.pieceFlags) {
-				v.killThread(idx)
-				return
-			}
-			v.pieceFlags[piece] &^= 0x08 // use bit 3 for shadow [04 §4.3]
+			// The disable-shadow opcode binds an EMPTY adapter on units: it
+			// has no effect and there is no script-visible per-piece shadow
+			// state anywhere on the unit side [R-COB-01 §1]. Shadow rendering
+			// is a renderer concern (document 03); no initial shadow
+			// derivation exists to reproduce. The piece operand is consumed
+			// and the interpreter moves on.
 			t.PC += 2
 		case 0x1000b000: // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			if t.PC+2 >= len(v.prog.Code) {
@@ -1232,8 +1273,12 @@ func (v *VM) runThread(idx int) {
 			return
 		case 0x10013000: // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			dur, _ := t.stackPop() // milliseconds [fmt cob]
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			ticks := int32((int64(dur) * 30) / 1000) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// Convert trunc(denom * ms / 1000) with the latched denominator
+			// (30 from the fixed 30-tick configuration) [04 §4.6]; trunc toward
+			// zero [01 §8] I3, denominator positive, no remainder carry; 33ms→0
+			// ticks, 34ms→1 tick [04 §4.6]. Sleep multiplies, it never divides
+			// by the denominator [04 §4.6].
+			ticks := int32((int64(dur) * int64(v.tickDenom)) / 1000)
 			t.Sleep = ticks
 			t.Status = ThreadSleeping
 			t.PC += 1
@@ -1581,26 +1626,23 @@ func (v *VM) runThread(idx int) {
 				val, _ := t.stackPop()
 				args[i] = val
 			}
-			// Copy into new thread in reverse with last popped highest [04 §4.3]
-			// Spec: "last popped landing highest" — we implement reverse copy
-			// where args[0] (first pushed, last popped) lands highest. Our args
-			// slice was built in order args[0]=first pushed? Actually we popped
-			// in reverse, filling args[argc-1] first as top, so args[0] is first
-			// pushed. To land last popped highest, we need newStack[high]=args[0].
-			// So we reverse again when copying.
+			// Copy into new thread: last popped lands highest (window word
+			// argc−1), and the child starts at an EMPTY logical depth (SP 0)
+			// with the arguments physically in window words 0..argc−1 — the
+			// engine starter's depth=arity−1 shape is deliberately not used
+			// here [04 §4.3][R-COB-01 §1]. The compiled alloc-local prologue
+			// raises the depth over the placed words, so local addressing is
+			// identical for both start forms [04 §4.3].
 			nt := &v.Threads[newIdx]
 			nt.Status = ThreadRunning
 			nt.PC = targetPC
-			nt.SignalMask = t.SignalMask // inherited [fmt cob]
+			nt.SignalMask = t.SignalMask // inherited [04 §4.3]
 			nt.WaitThread = -1
 			nt.WaitPiece = -1
 			nt.WaitAxis = -1
 			nt.Sleep = 0
-			nt.SP = argc
-			if argc > 10 {
-				nt.SP = 10
-			}
-			for i := 0; i < nt.SP; i++ {
+			nt.SP = 0 // empty logical depth [04 §4.3]
+			for i := 0; i < argc && i < 10; i++ {
 				// Reverse: last popped highest => args[0] -> high index
 				nt.Stack[i] = args[argc-1-i]
 			}
@@ -1646,11 +1688,8 @@ func (v *VM) runThread(idx int) {
 			nt.WaitPiece = -1
 			nt.WaitAxis = -1
 			nt.Sleep = 0
-			nt.SP = argc
-			if nt.SP > 10 {
-				nt.SP = 10
-			}
-			for i := 0; i < nt.SP; i++ {
+			nt.SP = 0 // empty logical depth; args sit in window words 0..argc−1 [04 §4.3]
+			for i := 0; i < argc && i < 10; i++ {
 				nt.Stack[i] = args[argc-1-i]
 			}
 			// Block caller [04 §4.2]
@@ -1743,16 +1782,28 @@ func (v *VM) runThread(idx int) {
 				v.killThread(idx)
 				return
 			}
-			t.stackPop() // flags [04 §4.3] [04 §4.5]
-			// Random draws authoritative [04 §4.5]: three 3000, 40, 10 dead, 40
-			v.simRandN(3000)
-			v.simRandN(3000)
-			v.simRandN(3000)
-			v.simRandN(40)
-			dead := v.simRandN(10)
-			_ = dead // overwritten dead [04 §4.5]
-			v.simRandN(40)
-			// Bitmap branch spawns effects per bit ascending, plus physical debris if not bitmap-only; here no presentation effect.
+			flags, _ := t.stackPop() // flags [04 §4.3] [04 §4.5]
+			// Random-draw census [R-COB-01 §2]: the six authoritative draws exist
+			// ONLY when the flags word does not request bitmap-only (flag 0x20,
+			// the authored BITMAPONLY value [fmt cob] "Explosion type flags");
+			// bitmap-only consumes zero draws from either stream. The physical
+			// branch makes six draws in fixed order bounded 3000, 3000, 3000, 40,
+			// 10, 40 — the fifth (bound 10) is dead, its stored result overwritten
+			// by the sixth — and the dead draw is still made [04 §4.5][R-COB-01 §2].
+			// No opcode execution may touch the CRT stream [R-COB-01 §2].
+			if flags&0x20 == 0 {
+				v.simRandN(3000)
+				v.simRandN(3000)
+				v.simRandN(3000)
+				v.simRandN(40)
+				dead := v.simRandN(10)
+				_ = dead // overwritten dead [04 §4.5][R-COB-01 §2]
+				v.simRandN(40)
+			}
+			// Bitmap branch spawns one presentation effect per set bitmap flag in
+			// ascending bit order; it consumes no draws and runs even when
+			// bitmap-only suppressed the physical branch [04 §4.5]. Presentation
+			// debris is not wired in this package (no sink owns explosion art).
 			t.PC += 2
 		case 0x10082000: // engine write [04 §4.3]
 			// The shipped compiler emits the identifier first and the value

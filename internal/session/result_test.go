@@ -59,9 +59,9 @@ func TestResult_TwoPlayerHostileCommanderDeath(t *testing.T) {
 	// Both human, hostile via per-owner fallback (5 sentinel)
 	cfg.Players[0].Controller = 0
 	cfg.Players[1].Controller = 0
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest: %v", err)
 	}
 	s.RegisterAll()
 	// Ensure state battle for EvaluateResult latching transition
@@ -144,9 +144,9 @@ func TestResult_ThreePlayerFFA(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		cfg.Players[i].Controller = 0
 	}
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest: %v", err)
 	}
 	s.State = StateBattle
 	s.RegisterAll()
@@ -195,9 +195,9 @@ func TestResult_AlliedPairVsEnemy(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		cfg.Players[i].Controller = 0
 	}
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest: %v", err)
 	}
 	s.State = StateBattle
 	s.RegisterAll()
@@ -234,9 +234,9 @@ func TestResult_LocalDefeat(t *testing.T) {
 	cfg.ApplyDefaults()
 	cfg.Players[0].Controller = 0
 	cfg.Players[1].Controller = 0
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest: %v", err)
 	}
 	s.State = StateBattle
 	s.RegisterAll()
@@ -272,9 +272,9 @@ func TestResult_MutualDestructionDraw(t *testing.T) {
 	fs := fsWithMap(t, "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=10;\nZPos=10;\n}\n}\n}\n}\n")
 	cfg := SkirmishConfig{MapName: "test", NumPlayers: 2}
 	cfg.ApplyDefaults()
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest: %v", err)
 	}
 	s.State = StateBattle
 	s.RegisterAll()
@@ -310,9 +310,9 @@ func TestResult_ResultViewExposesEnded(t *testing.T) {
 	fs := fsWithMap(t, "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=10;\nZPos=10;\n}\n}\n}\n}\n")
 	cfg := SkirmishConfig{MapName: "test", NumPlayers: 2}
 	cfg.ApplyDefaults()
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest: %v", err)
 	}
 	s.State = StateBattle
 	s.RegisterAll()
@@ -376,9 +376,9 @@ func newLobbyEndRuleSession(t *testing.T, commanderDeath int, addEnemyUnit bool)
 	cfg.CommanderDeath = commanderDeath
 	cfg.Players[0].Controller = 0
 	cfg.Players[1].Controller = 0
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest: %v", err)
 	}
 	s.State = StateBattle
 	s.RegisterAll()

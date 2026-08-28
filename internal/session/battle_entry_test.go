@@ -114,9 +114,9 @@ func TestSkirmishStorageBonusPreservesOpeningStock(t *testing.T) {
 	cfg.Players[0].Energy = 1000
 	cfg.Players[1].Metal = 1000
 	cfg.Players[1].Energy = 1000
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest: %v", err)
 	}
 	// Verify bonus installed per OX P1: enable flag true and bonus = max(1000,200)=1000 for both
 	for i := 0; i < 2; i++ {
@@ -180,9 +180,9 @@ func TestSkirmishBonusFloor200(t *testing.T) {
 	cfg.Players[0].Energy = 10
 	cfg.Players[1].Metal = 199
 	cfg.Players[1].Energy = 1
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest low: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest low: %v", err)
 	}
 	if s.Econ.Players[0].StorageBonus[economy.Metal] != 200 || s.Econ.Players[0].StorageBonus[economy.Energy] != 200 {
 		t.Fatalf("p0 floor 50/10 want 200/200 got %v/%v", s.Econ.Players[0].StorageBonus[economy.Metal], s.Econ.Players[0].StorageBonus[economy.Energy])

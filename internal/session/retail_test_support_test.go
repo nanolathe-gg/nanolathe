@@ -3,11 +3,8 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
-	"os/exec"
-	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -16,59 +13,14 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
-	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// StrictGateEvidence is the per-gate evidence record [ON-10 §12].
-type StrictGateEvidence struct {
-	Commit          string            `json:"commit"`
-	ContentManifest string            `json:"content_manifest"`
-	Map             string            `json:"map"`
-	Seed            uint32            `json:"seed"`
-	CrtSeed         uint32            `json:"crt_seed"`
-	Players         []map[string]any  `json:"players"`
-	MaxTick         int               `json:"max_tick"`
-	Milestones      map[string]uint32 `json:"milestones"`
-	Winner          int               `json:"winner"`
-	Reason          string            `json:"reason"`
-	FinalTick       uint32            `json:"final_tick"`
-	FinalStateHash  string            `json:"final_state_hash"`
-	Fallbacks       []string          `json:"fallbacks"`
-	Warnings        []string          `json:"warnings"`
-}
-
-// StrictFailureRecord is the detailed failure diagnostic [ON-10 §12].
-type StrictFailureRecord struct {
-	LastCompleted   string              `json:"last_completed_milestone"`
-	CurrentTick     uint32              `json:"current_tick"`
-	Seed            uint32              `json:"seed"`
-	CrtSeed         uint32              `json:"crt_seed"`
-	Handles         []string            `json:"handles,omitempty"`
-	DefKeys         []string            `json:"definition_keys,omitempty"`
-	QueueHead       string              `json:"queue_head,omitempty"`
-	PathStatus      string              `json:"path_status,omitempty"`
-	AimState        string              `json:"aim_state,omitempty"`
-	ResourceStocks  string              `json:"resource_stocks,omitempty"`
-	ProjectileCount int                 `json:"projectile_count"`
-	AITask          string              `json:"ai_task,omitempty"`
-	AIDeadline      uint32              `json:"ai_deadline,omitempty"`
-	ResultLatch     string              `json:"result_latch,omitempty"`
-	Evidence        *StrictGateEvidence `json:"evidence,omitempty"`
-}
-
-func strictCommit() string {
-	cmd := exec.Command("git", "rev-parse", "HEAD")
-	out, err := cmd.Output()
-	if err != nil {
-		return "unknown"
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// HashState returns deterministic state hash for session (units + projectiles).
+// HashState returns a compact deterministic digest for the authoritative
+// session state used by replay-isolation tests. It deliberately walks the
+// engine's ordered slices rather than serializing test metadata.
 func HashState(s *Session) string {
 	if s == nil {
 		return ""
@@ -112,7 +64,7 @@ func HashState(s *Session) string {
 			// The strategic score consumes the four settled aggregates, not the
 			// mirror-only pass counters. Hash raw float32 payloads so every
 			// authoritative bit (including signed zero/NaN payloads) is covered
-			// deterministically in player then resource order [R-P0-05].
+			// deterministically in player then resource order [01 §4.4].
 			fmt.Fprintf(h, "A%d:%08x:%08x:%08x:%08x|", i,
 				math.Float32bits(p.AIProduction[economy.Metal]),
 				math.Float32bits(p.AIProduction[economy.Energy]),
@@ -122,7 +74,7 @@ func HashState(s *Session) string {
 	}
 	// Manager tactical vectors affect future AI admissions and task choices;
 	// include their exact recovered slot order in the authoritative hash
-	// [R-P0-04]. Handle sequence is meaningful because vector insertion uses
+	// [08 "AI group vectors"]. Handle sequence is meaningful because vector insertion uses
 	// pool order and wave merge uses replace-with-last removal.
 	for player, m := range s.AI {
 		if m == nil {
@@ -141,37 +93,6 @@ func HashState(s *Session) string {
 			}
 			fmt.Fprint(h, "];")
 		}
-	}
-	sum := h.Sum(nil)
-	return hex.EncodeToString(sum[:8])
-}
-
-// FormatEvidence returns JSON indented evidence for logging.
-func FormatEvidence(ev StrictGateEvidence) string {
-	b, _ := json.MarshalIndent(ev, "", "  ")
-	return string(b)
-}
-
-// FormatFailure returns JSON indented failure record.
-func FormatFailure(fr StrictFailureRecord) string {
-	b, _ := json.MarshalIndent(fr, "", "  ")
-	return string(b)
-}
-
-func strictCatalogHash(cat *content.Catalog) string {
-	if cat == nil {
-		return "nil"
-	}
-	if cat.Hash != "" {
-		return cat.Hash
-	}
-	if cat.Manifest != "" {
-		return cat.Manifest
-	}
-	h := sha256.New()
-	for _, k := range cat.SortedUnitKeys() {
-		h.Write([]byte(k))
-		h.Write([]byte{0})
 	}
 	sum := h.Sum(nil)
 	return hex.EncodeToString(sum[:8])
@@ -237,7 +158,8 @@ func strictEconomyForTest() *economy.Service {
 	return &economy.Service{}
 }
 
-// strictNewSessionWithUnits builds a strict session for N units distributed across players 0,1.
+// strictNewSessionWithUnits builds a deterministic session fixture for N units
+// distributed across players 0 and 1.
 func strictNewSessionWithUnits(t *testing.T, nUnits int, simSeed, crtSeed uint32) *Session {
 	t.Helper()
 	cat := strictMinimalCatalog()
@@ -262,6 +184,7 @@ func strictNewSessionWithUnits(t *testing.T, nUnits int, simSeed, crtSeed uint32
 		p.EndGameCountdown = -1
 	}
 	s.Econ.SeedDeadlines(0)
+	s.SeedSessionRNG(simSeed, crtSeed)
 	s.InitBattleWindForSession()
 	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
@@ -279,101 +202,5 @@ func strictNewSessionWithUnits(t *testing.T, nUnits int, simSeed, crtSeed uint32
 	}
 	ensureMovementForAll(s)
 	publishVisibilityForAll(s)
-	_ = simSeed
 	return s
 }
-
-func strictQueueHeadString(handle pool.Handle, s *Session) string {
-	if s == nil || s.Units == nil {
-		return "nil"
-	}
-	u := s.Units.Unit(handle)
-	if u == nil {
-		return "no unit"
-	}
-	q := orders.QueueForUnit(u)
-	if q == nil {
-		return "no queue"
-	}
-	if q.LenPrimary() == 0 {
-		if h := q.Head(); h == nil {
-			return "empty"
-		} else {
-			return fmt.Sprintf("head %s Goal%d %d", orders.DescriptorFor(h.ID).Name, int64(h.GoalX.Raw()), int64(h.GoalZ.Raw()))
-		}
-	}
-	head := q.Primary()[0]
-	if head == nil {
-		return "nil head"
-	}
-	return fmt.Sprintf("head %s Goal(%d,%d) State%d Deadline%d P1:%d P2:%d", orders.DescriptorFor(head.ID).Name, int64(head.GoalX.Raw()), int64(head.GoalZ.Raw()), head.MoveState, head.Deadline, head.Param1, head.Param2)
-}
-
-func strictPathStatus(handle pool.Handle, s *Session) string {
-	if s == nil || s.Movement == nil {
-		return "no movement"
-	}
-	if s.Movement.Scheduler != nil && s.Movement.Scheduler.HasRequest(handle) {
-		return "request pending"
-	}
-	route := s.Movement.Routes[handle]
-	if route == nil {
-		return "no route"
-	}
-	if !route.Active {
-		return fmt.Sprintf("inactive count=%d", route.Count)
-	}
-	return fmt.Sprintf("active count=%d points %v", route.Count, route.Points[:route.Count])
-}
-
-func strictAimState(handle pool.Handle, s *Session) string {
-	if s == nil || s.Units == nil {
-		return "no session"
-	}
-	u := s.Units.Unit(handle)
-	if u == nil {
-		return "no unit"
-	}
-	for idx := 0; idx < 3; idx++ {
-		sl := u.SlotAt(idx)
-		if sl == nil || !sl.IsPopulated() {
-			continue
-		}
-		return fmt.Sprintf("slot%d weapon=%v reload=%d flags=0x%x aimReady=%v issue=%v target=%v", idx, sl.Weapon != nil, sl.Reload, sl.Flags, sl.Aim.Ready, sl.Aim.IssueBit, sl.Target)
-	}
-	return "no weapon"
-}
-
-func strictResourceStocks(player int, s *Session) string {
-	if s == nil || s.Econ == nil || player < 0 || player >= 10 {
-		return "no econ"
-	}
-	p := &s.Econ.Players[player]
-	// Show stocks and carry from first builder bucket if exists
-	var carryM, carryE, acceptedM, acceptedE float32
-	if s.Units != nil {
-		for _, u := range s.Units.IterSliced() {
-			if u != nil && int(u.Owner) == player && u.Def != nil && u.Def.Builder {
-				if b := s.Econ.UnitBuckets(u.Handle); b != nil {
-					carryM = (*b)[economy.Metal].Carry
-					carryE = (*b)[economy.Energy].Carry
-					acceptedM = (*b)[economy.Metal].Accepted
-					acceptedE = (*b)[economy.Energy].Accepted
-				}
-				break
-			}
-		}
-	}
-	return fmt.Sprintf("player%d metal=%.1f energy=%.1f capM=%.1f capE=%.1f carryM=%.3f carryE=%.3f acceptedM=%.1f acceptedE=%.1f", player, p.Stock[economy.Metal], p.Stock[economy.Energy], p.Capacity[economy.Metal], p.Capacity[economy.Energy], carryM, carryE, acceptedM, acceptedE)
-}
-
-func strictResultLatch(s *Session) string {
-	if s == nil {
-		return "no session"
-	}
-	res := s.GetResult()
-	return fmt.Sprintf("ended=%v draw=%v winner=%d reason=%s tick=%d armed=%d latchCountdown=%d bits=0x%x state=%v", res.Ended, res.Draw, res.WinnerTeam, res.Reason, res.Tick, res.ArmedTick, s.Latch.Countdown, s.Latch.Bits, s.State)
-}
-
-var _ = strictCommit
-var _ = HashState

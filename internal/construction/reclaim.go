@@ -117,6 +117,15 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 	}
 	if node.Param1 == 0 {
 		node.Param1 = uint32(UnitReclaimPulse(builder, target))
+		// The Reclaim handler's StartBuilding emission sits on the setup visit
+		// that establishes the pulse — one of the nine nanolathe/assist sites
+		// [R-ORDER-02 §2]. The order-record emitter arranges the name-form
+		// StartBuilding and sets the record's StopBuilding-pending flag, so
+		// cleanup emits the counterpart on every removal path. Per-activation
+		// placement follows the flag's one-counterpart-per-record purpose; the
+		// per-visit frequency residual is an Unknown in [04 "Missing and
+		// unknown"].
+		orders.EmitStartBuilding(builder, node)
 	}
 	// The order's second accumulator is cadence, not a resource fraction. A
 	// valid in-range visit advances it by two; a pulse is applied only after it

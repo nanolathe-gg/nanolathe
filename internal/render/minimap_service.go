@@ -67,27 +67,12 @@ func cloneRadarSurface(src *RadarSurface) *RadarSurface {
 }
 
 func (s *MinimapService) Picture() *RadarSurface { return cloneRadarSurface(s.picture) }
-func (s *MinimapService) Mapped() *RadarSurface  { return cloneRadarSurface(s.mapped) }
 func (s *MinimapService) Final() *RadarSurface   { return cloneRadarSurface(s.final) }
-func (s *MinimapService) Dirty() uint8 {
-	if s == nil {
-		return 0
-	}
-	return s.dirty
-}
 func (s *MinimapService) Blink() BlinkState {
 	if s == nil {
 		return BlinkState{}
 	}
 	return s.blink
-}
-
-// MarkPlacement invalidates mapped and final surfaces after a placement or
-// other world-picture change. Picture itself remains cached. [03 §3.6]
-func (s *MinimapService) MarkPlacement() {
-	if s != nil {
-		s.dirty |= MinimapDirtyMapped | MinimapDirtyFinal
-	}
 }
 
 // RebuildMapped consumes LOS stores only when mapped is dirty. It does not
@@ -166,21 +151,5 @@ func (s *MinimapService) Tick() {
 	s.dirty |= MinimapDirtyFinal
 	if old != s.blink.Phase {
 		s.dirty |= MinimapDirtyBlink
-	}
-}
-
-// Restore marks all derived surfaces for synchronous regeneration. Picture
-// remains cached; MAPPED and FINAL are rebuilt before the restored frame is
-// consumed. [03 §3.6]
-func (s *MinimapService) Restore() {
-	if s != nil {
-		s.dirty |= MinimapDirtyMapped | MinimapDirtyFinal
-	}
-}
-
-// ClearBlinkDirty acknowledges the blink schedule after FINAL has been drawn.
-func (s *MinimapService) ClearBlinkDirty() {
-	if s != nil {
-		s.dirty &^= MinimapDirtyBlink
 	}
 }

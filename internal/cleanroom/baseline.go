@@ -6,7 +6,7 @@ package cleanroom
 // line that still has to be rewritten as clean-room prose, with its
 // address-level trail moved to /tmp/ta-decompile/notes/.
 //
-// Total at baseline: 731 occurrences across 87 files.
+// Total at baseline: 695 occurrences across 86 files.
 //
 // A file absent from this map must have zero occurrences. Counts may only
 // go down, and going down requires updating this file in the same change.
@@ -20,7 +20,7 @@ var Baseline = map[string]int{
 	"internal/clock/clock.go":                       11,
 	"internal/cob/ports.go":                         8,
 	"internal/cob/ports_test.go":                    3,
-	"internal/cob/vm.go":                            104,
+	"internal/cob/vm.go":                            98,
 	"internal/combat/aim.go":                        1,
 	"internal/combat/damage.go":                     7,
 	"internal/combat/death.go":                      2,
@@ -43,7 +43,6 @@ var Baseline = map[string]int{
 	"internal/content/compile_feature.go":           4,
 	"internal/content/compile_map.go":               1,
 	"internal/content/compile_unit.go":              11,
-	"internal/content/ovr.go":                       16,
 	"internal/content/sound_sc7_test.go":            2,
 	"internal/economy/admission.go":                 1,
 	"internal/economy/gap_p106_test.go":             7,
@@ -80,7 +79,6 @@ var Baseline = map[string]int{
 	"internal/session/economy.go":                   4,
 	"internal/session/los_emitter_test.go":          4,
 	"internal/session/skirmish.go":                  2,
-	"internal/session/strict_g2_move_test.go":       2,
 	"internal/settings/settings.go":                 10,
 	"internal/settings/settings_test.go":            1,
 	"internal/triggers/eval.go":                     10,

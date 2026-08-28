@@ -536,6 +536,90 @@ or the post-loop tail: the phase-5 sweep is the final publisher, and phases
 6 and later read the same-tick updated coverage for every player already
 processed (ascending order).
 
+#### R-CORE-03 closure — phase 12 radar blink cadence [R-CORE-03][CRD-008]
+
+This addendum supersedes the earlier one-line phase-12 description. That
+description correctly identified an every-eight-sub-tick cadence flip, but did
+not identify its state, reset, consumers, persistence, or publication order.
+
+**State and ownership (Established).** Phase 12 owns two pieces of radar
+presentation state. `radarBlinkCountdown` is a signed 16-bit countdown, whose
+normal values are 7 through 0. `radarBlinkPhase` is bit 0 of a 16-bit radar
+dirty/status word; the other bits in that word are independent mapped/final
+surface and camera-dirty flags and are not part of this cadence contract. The
+state is presentation-owned radar state, not authoritative world, economy, or
+gameplay state. Its mutation is nevertheless scheduled by the authoritative
+tick executor, so catch-up stepping advances it in the same deterministic
+sub-tick order as the rest of the phase graph. It consumes no RNG draw.
+
+**Reset and exact predicate (Established).** Radar surface setup at battle
+entry sets `radarBlinkCountdown` to exactly 7 and clears `radarBlinkPhase` to
+0, preserving unrelated status bits. This setup is also part of the battle
+entry path used while loading a saved session. Therefore the state immediately
+after battle initialization, before global tick 1, is countdown 7 and phase 0.
+For every runnable sub-tick, after the global tick has been incremented and
+after phases 1 through 11, phase 12 applies this exact predicate:
+
+1. If `radarBlinkCountdown > 0` (strictly), subtract one and leave the phase
+   bit unchanged.
+2. Otherwise, set the countdown to exactly 7 and toggle only bit 0 of the
+   radar status word.
+
+The countdown is therefore a seven-to-zero countdown, followed by a reload
+and phase toggle on the next phase-12 invocation. The predicate is on this
+owned countdown, not on `globalTick % 8`; the global tick labels the boundary
+but does not replace the countdown. The ordinary reset cycle never reaches a
+negative value.
+
+**Producer and consumer census (Established, bounded to the recovered retail
+image).** The battle-entry radar setup is the producer that initializes the
+countdown and phase bit. Phase 12 is the only recurring producer: it decrements
+the countdown or reloads it and toggles bit 0. Other writers of the same status
+word update unrelated dirty bits and do not participate in the blink cadence.
+The minimap contact renderer consumes the phase bit for regular unit blips:
+when a contact's per-unit blink-suppression byte is nonzero, the contact is
+drawn only when the phase bit is set (a zero suppression byte draws it in both
+phases). The dashed interceptor-ring renderer also consumes the bit as the
+dash-parity seed. No simulation, economy, order, visibility-mask, or RNG path
+reads this bit. No other bit-0 reader or writer was found in the recovered
+image; that negative census does not claim coverage of unrecovered code.
+
+**Save/load treatment (Established).** The phase-12 countdown and blink bit
+are absent from the bounded save-writer census. The save may carry radar image
+and Mapping data, but those products do not serialize this transient cadence
+state. Loading re-enters battle-entry orchestration, which resets the state to
+countdown 7 and phase 0; the loader does not resume the pre-save cadence from a
+saved countdown or phase bit. This is separate from the scheduler's saved
+global tick and from the radar surface rebuild/dirty handling described in doc
+03.
+
+**Ordering and publication (Established).** Phase 12 runs once per runnable
+sub-tick after the phase-11 strip sweep. The per-sub-tick transport/resource
+sharing and packet flush run after phase 12. Nanolathe cleanup/result handling
+and snapshot publication follow that sharing block, so a committed snapshot
+observes the post-phase-12 blink bit. The three outer barriers, deadline-ring
+slide, and missile/interceptor pending-list compaction run only after all
+runnable sub-ticks and cannot interpose a pre-flip publication. The host-frame
+renderer samples the committed presentation state; it does not own or advance
+the cadence.
+
+**Boundary probes (Established).** “Before” and “after” below refer to the
+phase-12 invocation for the displayed global tick. Tick 0 is the post-battle-
+entry state and has no phase-12 invocation yet.
+
+| Global tick | Countdown before | Phase before | Countdown after | Phase after |
+|---:|---:|---:|---:|---:|
+| 0 (battle entry) | — | — | 7 | 0 |
+| 1 | 7 | 0 | 6 | 0 |
+| 7 | 1 | 0 | 0 | 0 |
+| 8 | 0 | 0 | 7 | 1 |
+| 9 | 7 | 1 | 6 | 1 |
+| 15 | 1 | 1 | 0 | 1 |
+| 16 | 0 | 1 | 7 | 0 |
+
+The vectors make the strict comparison and the reset-before-toggle ordering
+observable: ticks 8 and 16 toggle, while ticks 7 and 15 only reach zero.
+
 ## 5. Threads, TLS, locks, and synchronization
 
 ### 5.1 Threads

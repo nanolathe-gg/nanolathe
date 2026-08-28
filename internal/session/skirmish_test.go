@@ -134,13 +134,13 @@ func TestSkirmishDefaults(t *testing.T) {
 	fs := fsFromMapSkirmish(t, map[string]string{"maps/dummy.ota": otaMinimal})
 	for _, bad := range []int{1, 11} {
 		cfg := SkirmishConfig{MapName: "dummy", NumPlayers: bad}
-		if _, err := NewSkirmishForTest(fs, nil, cfg); err != nil {
+		if _, err := NewSyntheticSkirmishForTest(fs, nil, cfg); err != nil {
 			t.Fatalf("NewSkirmish NumPlayers %d should not error after P0-05 no-op (got %v)", bad, err)
 		}
 	}
 	for _, good := range []int{2, 10} {
 		cfg := SkirmishConfig{MapName: "dummy", NumPlayers: good}
-		if _, err := NewSkirmishForTest(fs, nil, cfg); err != nil {
+		if _, err := NewSyntheticSkirmishForTest(fs, nil, cfg); err != nil {
 			t.Fatalf("NewSkirmish NumPlayers %d should not error: %v", good, err)
 		}
 	}
@@ -213,7 +213,7 @@ func TestSkirmishDefaults(t *testing.T) {
 	}
 	// Validate computer slots via session economy mapping (fixture)
 	fs2 := fsFromMapSkirmish(t, map[string]string{"maps/dummy.ota": otaMinimal})
-	s, err := NewSkirmishForTest(fs2, &content.Catalog{Units: map[string]*content.UnitDef{"armcom": {UnitName: "armcom", MaxDamage: 100}}, Maps: map[string]*content.MapHeader{}, Sides: []*content.SideDef{{Name: "ARM", Commander: "armcom"}, {Name: "CORE", Commander: "corcom"}}}, cfg2)
+	s, err := NewSyntheticSkirmishForTest(fs2, &content.Catalog{Units: map[string]*content.UnitDef{"armcom": {UnitName: "armcom", MaxDamage: 100}}, Maps: map[string]*content.MapHeader{}, Sides: []*content.SideDef{{Name: "ARM", Commander: "armcom"}, {Name: "CORE", Commander: "corcom"}}}, cfg2)
 	if err != nil {
 		t.Fatalf("NewSkirmish computer slots: %v", err)
 	}
@@ -250,9 +250,9 @@ func TestSkirmishWindSinglePath(t *testing.T) {
 	// Mission path: no battle-entry wind draws.
 	rng.SeedGlobal(99, seed)
 	before := rng.Global.Crt.Draws()
-	sM, err := NewMissionForTest(fsMission, cat, "wind.ota", 0)
+	sM, err := NewSyntheticMissionForTest(fsMission, cat, "wind.ota", 0)
 	if err != nil {
-		t.Fatalf("NewMissionForTest: %v", err)
+		t.Fatalf("NewSyntheticMissionForTest: %v", err)
 	}
 	missionDraws := rng.Global.Crt.Draws() - before
 	if missionDraws != 0 {
@@ -263,7 +263,7 @@ func TestSkirmishWindSinglePath(t *testing.T) {
 	rng.SeedGlobal(99, seed)
 	before2 := rng.Global.Crt.Draws()
 	cfg := SkirmishConfig{MapName: "wind", NumPlayers: 2}
-	sS, err := NewSkirmishForTest(fsSkirmish, cat, cfg)
+	sS, err := NewSyntheticSkirmishForTest(fsSkirmish, cat, cfg)
 	if err != nil {
 		t.Fatalf("NewSkirmishWithFS: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestSkirmishWindSinglePath(t *testing.T) {
 	}
 	// Determinism: two skirmish constructions with the same seeds produce the
 	// identical session-stream state and wind state.
-	sS2, err := NewSkirmishForTest(fsFromMapSkirmish(t, map[string]string{"maps/wind.ota": otaText}), cat, cfg)
+	sS2, err := NewSyntheticSkirmishForTest(fsFromMapSkirmish(t, map[string]string{"maps/wind.ota": otaText}), cat, cfg)
 	if err != nil {
 		t.Fatalf("second skirmish: %v", err)
 	}

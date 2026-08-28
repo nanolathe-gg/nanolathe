@@ -62,10 +62,10 @@ type EffectService struct {
 	resolver     TimingResolver
 }
 
-// NewEffectService returns an adapter. max <= 0 uses the fixed pool capacity;
-// a smaller value is retained only as a presentation admission bound for
-// existing fixture callers.
-func NewEffectService(max int) *EffectService {
+// newEffectService creates the presentation admission adapter. max <= 0 uses
+// the fixed pool capacity; a smaller value is retained only as a presentation
+// admission bound for existing callers.
+func newEffectService(max int) *EffectService {
 	if max <= 0 {
 		max = EffectCapacity
 	}
@@ -75,7 +75,7 @@ func NewEffectService(max int) *EffectService {
 // NewEffectServiceWithPool binds the non-advancing presentation adapter to
 // the canonical fixed pool owned by composition.
 func NewEffectServiceWithPool(max int, owner EffectPool) *EffectService {
-	s := NewEffectService(max)
+	s := newEffectService(max)
 	s.owner = owner
 	return s
 }

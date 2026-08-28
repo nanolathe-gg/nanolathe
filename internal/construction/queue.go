@@ -21,9 +21,11 @@ import (
 //
 // Payload encoding on orders.Node fields per [04 §3.2] build family meanings [P0-I05]:
 //   BuildDefKey = canonical defKey (stable string for save/load remapping, replaces FNV-1a N04)
+//   Owner     = owning unit (the producing factory or builder) [04 §3.2]; record
+//   cleanup resolves its StopBuilding counterpart through it [R-ORDER-02 §2]
 //   Param1 = stable catalog index (1-based, 0 sentinel) via Catalog.UnitDefIndex, never FNV hash [P0-I05][02 §5]
 //   Param2 = remaining build count [05 "Build request and factory queue behavior"]
-//   Param3 = orientation for mobile builds [05], unused for factory
+//   Param3 = blocked-area retry counter for mobile builds [04 §3.2]
 //   GoalX/Z = site world anchor for mobile builds [P0-I05]; factory ignores Goal (exit spot via QueryBuildInfo)
 //   ID     = BuildingBuild for factory [04 §3.1][GAP T3], MobileBuild/VTOL_MobileBuild for mobile [04 §3.1]
 // Primary segment only; no second queue type exists.
@@ -139,21 +141,22 @@ func QueueFactoryBuild(factory *units.Unit, defKey string, count int, cat *conte
 		tail := prim[len(prim)-1]
 		if tail.ID == bid && tail.Param1 == pid && tail.BuildDefKey == ck {
 			// Tail-only coalesce [05 "Queue insertion"].
-			q.CoalesceTail(bid, orders.Node{Param1: pid, Param2: uint32(count), BuildDefKey: ck})
+			q.CoalesceTail(bid, orders.Node{Owner: factory.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck})
 			// CoalesceTail compares Param1 only; ensure BuildDefKey also matches by re-checking last tail after?
 			// Since fallback indices are unique per ck, Param1 equality already implies same product.
 			return nil
 		}
 	} else {
-		q.CoalesceTail(bid, orders.Node{Param1: pid, Param2: uint32(count), BuildDefKey: ck})
+		q.CoalesceTail(bid, orders.Node{Owner: factory.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck})
 		return nil
 	}
-	q.Push(bid, orders.Node{Param1: pid, Param2: uint32(count), BuildDefKey: ck})
+	q.Push(bid, orders.Node{Owner: factory.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck})
 	return nil
 }
 
 // QueueMobileBuild enqueues a mobile build order with site anchor on builder's PRIMARY queue [P0-I05].
-// Mobile payload: catalog index in Param1, count in Param2, site world anchor in GoalX/Z, orientation in Param3,
+// Mobile payload: catalog index in Param1, count in Param2, site world anchor in GoalX/Z,
+// blocked-area retry counter (zeroed) in Param3 [04 §3.2][R-ORDER-02 §1],
 // BuildDefKey canonical, builder relation is Owner [05][P0-I05].
 // Uses MobileBuild or VTOL_MobileBuild descriptor, distinct from factory's BuildingBuild [P0-I05].
 func QueueMobileBuild(builder *units.Unit, defKey string, siteX, siteZ numeric.Fixed, count int, cat *content.Catalog) error {
@@ -182,16 +185,16 @@ func QueueMobileBuild(builder *units.Unit, defKey string, siteX, siteZ numeric.F
 	if len(prim) > 0 {
 		tail := prim[len(prim)-1]
 		if tail.ID == bid && tail.Param1 == pid && tail.BuildDefKey == ck && tail.GoalX == siteX && tail.GoalZ == siteZ {
-			q.CoalesceTail(bid, orders.Node{Param1: pid, Param2: uint32(count), BuildDefKey: ck, GoalX: siteX, GoalZ: siteZ})
+			q.CoalesceTail(bid, orders.Node{Owner: builder.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck, GoalX: siteX, GoalZ: siteZ})
 			return nil
 		}
 	} else {
 		// Empty: use CoalesceTail path for uniform FlagActive handling, but need to set Goal after
 		// since CoalesceTail creates node with Goal. Push with Goal directly instead.
-		q.Push(bid, orders.Node{Param1: pid, Param2: uint32(count), BuildDefKey: ck, GoalX: siteX, GoalZ: siteZ})
+		q.Push(bid, orders.Node{Owner: builder.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck, GoalX: siteX, GoalZ: siteZ})
 		return nil
 	}
-	q.Push(bid, orders.Node{Param1: pid, Param2: uint32(count), BuildDefKey: ck, GoalX: siteX, GoalZ: siteZ})
+	q.Push(bid, orders.Node{Owner: builder.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck, GoalX: siteX, GoalZ: siteZ})
 	return nil
 }
 

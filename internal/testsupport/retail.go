@@ -4,6 +4,7 @@ package testsupport
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,7 +31,7 @@ func RetailRoot(t *testing.T) string {
 		t.Skipf("retail assets not present at %s", root)
 	}
 	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) == ".hpi" {
+		if !entry.IsDir() && strings.EqualFold(filepath.Ext(entry.Name()), ".hpi") {
 			return root
 		}
 	}

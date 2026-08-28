@@ -87,6 +87,12 @@ type Service struct {
 	// for headless simulation and never feeds back into authoritative state
 	// [R-P0-06][EVENT-01].
 	Presentation interface{ EmitNanolathe(frame.Event) bool }
+	// StatusText is the consumer-supplied status-line sink for verbatim
+	// order-handler notifications [R-ORDER-02 §1]. Retail prints these strings
+	// to the player's status surface; the session/HUD layer supplies the
+	// callback and owns the surface. nil means no subscriber and the text is
+	// dropped. It never feeds back into authoritative state.
+	StatusText func(text string)
 	// ModelForUnit resolves the current model used by QueryNanoPiece. The
 	// factory hook remains the compatibility name for factory/model fixtures.
 	ModelForUnit func(unit *units.Unit) *model.Model
@@ -374,6 +380,16 @@ func (s *Service) Messages() []string { return append([]string(nil), s.messages.
 func (s *Service) ClearMessages() { s.messages = nil }
 
 func (s *Service) logMessage(msg string) { s.messages = append(s.messages, msg) }
+
+// notifyStatus surfaces a verbatim order-handler notification through the
+// consumer-supplied status sink [R-ORDER-02 §1]. Unlike logMessage it is not
+// a construction-lifecycle diagnostic; it is the retail status text.
+func (s *Service) notifyStatus(text string) {
+	if s == nil || s.StatusText == nil || text == "" {
+		return
+	}
+	s.StatusText(text)
+}
 
 // LastKill returns the most recent kind-9 termination packet [05 C21].
 func (s *Service) LastKill() KillInfo { return s.lastKill }
@@ -1170,6 +1186,11 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 
 // startBuilding/stopBuilding are edge helpers. The bridge owns callback mode
 // and argument shape; construction only changes the cached edge bit [04 §5.3].
+// startBuilding issues the slot-form heading variant, which per the corrected
+// section is a construction-command producer that starts the slot and emits
+// its network event WITHOUT touching the order record's StopBuilding-pending
+// flag — exactly one writer of that flag exists, the order-record emitter
+// orders.EmitStartBuilding [R-ORDER-02 §2].
 func (s *Service) startBuilding(u *units.Unit) {
 	if u == nil || u.Flags&FlagStartBuilding != 0 {
 		return
@@ -1540,6 +1561,9 @@ func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint
 		node.Phase = uint8(State2)
 		node.DynamicGate = 0
 		node.Deadline = -1
+		// The handler's setup path zeroes the blocked-area retry counter on
+		// every (re)arm [04 §3.2][R-ORDER-02 §1].
+		node.Param3 = 0
 		return
 	}
 	// State 0 clears presentation payload [05].
@@ -1589,6 +1613,9 @@ func (s *Service) handleState1(factory *units.Unit, node *orders.Node, tick uint
 		node.Phase = uint8(State2)
 		node.DynamicGate = 0
 		node.Deadline = -1
+		// The handler's setup path zeroes the blocked-area retry counter on
+		// every (re)arm [04 §3.2][R-ORDER-02 §1].
+		node.Param3 = 0
 		return
 	}
 	// Asset-free tests may explicitly opt into the old synthetic convenience.
@@ -1761,6 +1788,18 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 // Mobile payload carries site in Node.GoalX/Z (world coords) via QueueMobileBuild [P0-I05].
 // Validation uses the product's yard at the snapped site, not the factory exit spot.
 func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tick uint32) {
+	// Armed waits are visit boundaries: while the record's deadline is in the
+	// future the handler is not visited, and on arrival the wait is consumed
+	// (the pump's deadline rule — deadline arrived clears it and re-dispatches
+	// — [04 §3.3]). The blocked-area budget depends on this spacing: its waits
+	// are EXACTLY 30 ticks [R-ORDER-02 §1].
+	if node.Deadline >= 0 {
+		if tick < uint32(node.Deadline) {
+			return
+		}
+		node.DynamicGate = 0
+		node.Deadline = -1
+	}
 	// Walk-to-site for mobile builders [04 §3.4][05][R-P0-06].
 	// A MOBILE builder ordered to build at a site out of nano range first walks
 	// toward the site until within nanolathe range, then enters state 2.
@@ -1839,8 +1878,20 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 	}
 	result, err := s.validatePlacement(builder.Handle, rect, def, yard, false)
 	if err != nil {
-		node.DynamicGate = WakeBit1 | WakeBit2
-		node.Deadline = int32(tick + 15)
+		// [R-ORDER-02 §1] Blocked-area budget, replacing the factory-style
+		// silent 15-tick retry: each blocked visit notifies "Waiting for
+		// target area to clear", increments the record's third parameter
+		// ([04 §3.2] assigns it to the retry counter), and waits EXACTLY 30
+		// ticks with no random draw while the counter is at most 10; the
+		// first blocked visit with the counter above 10 notifies "Target
+		// area was blocked" and abandons the order (code 8, remove).
+		text, code := orders.MobileBuildBlockedVisit(node, tick)
+		s.notifyStatus(text)
+		if code != 2 {
+			// Abandon goes through the queue's canonical removal so cleanup
+			// (StopBuilding counterpart included) runs [04 §3.3][R-ORDER-02 §2].
+			s.removeHead(builder, node)
+		}
 		return
 	}
 	siteY := builder.Y
@@ -1885,16 +1936,23 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 		pq := orders.BindQueueBinding(product, s.OrderBinding)
 		pq.Push(getBuiltID, orders.Node{Param2: 0})
 	}
-	// Turn the builder to face the build site before raising StartBuilding.
-	// Retail computes the bearing from the builder to the site and passes it to
-	// the slot-form StartBuilding so the script's aim/turn plays before the
-	// beam [04 §5.3][cob A-7]. We set the unit heading to the site bearing and
-	// pass the same value through startBuilding. TODO(question): whether retail
-	// also rotates the unit heading or leaves it to the script's turn is not
-	// traced; the slot-form arg is the established producer heading [cob A-7].
+	// Turn the builder to face the build site before construction begins.
+	// Retail computes the bearing from the builder to the site [04 §5.3]; the
+	// exact consumer of that bearing is the open question recorded below, so
+	// the rotation is retained as the builder's approach posture and nothing
+	// more.
+	// TODO(question): whether retail rotates the unit heading itself or leaves
+	// the turn to the script is not traced.
 	heading := movement.HeadingFromDelta(int64(node.GoalX)-int64(builder.X), int64(node.GoalZ)-int64(builder.Z))
 	builder.Move.Heading = heading
-	s.startBuilding(builder)
+	// The MobileBuild/VTOL_MobileBuild handler's StartBuilding emission is the
+	// order-record emitter, one of the nine nanolathe/assist sites [R-ORDER-02
+	// §2]: it arranges the name-form StartBuilding and sets the record's
+	// StopBuilding-pending flag so cleanup emits the counterpart on every
+	// removal path. The slot-form heading variant is the construction-command
+	// producer, is not among the nine call sites, and writes no flag
+	// (corrected [04 §5.3]) — so it is not used here.
+	orders.EmitStartBuilding(builder, node)
 	if s != nil && s.OnRefresh != nil {
 		s.OnRefresh(builder)
 	}

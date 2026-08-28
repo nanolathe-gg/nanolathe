@@ -49,9 +49,9 @@ func scopeTestRNGStreams() func() {
 	}
 }
 
-// createAndBindServicesForTest supplies the process dependencies that ordinary
-// same-package tests used to receive from composition fallbacks. Existing test
-// seeds and wind are preserved; absent values use deterministic test streams.
+// createAndBindServicesForTest supplies deterministic process dependencies to
+// the hand-authored fixtures. Existing test seeds and wind are preserved;
+// absent values use deterministic test streams.
 func createAndBindServicesForTest(t *testing.T, s *Session) error {
 	if t != nil {
 		t.Helper()
@@ -68,10 +68,10 @@ func createAndBindServicesForTest(t *testing.T, s *Session) error {
 	return createAndBindServices(s)
 }
 
-// NewMissionForTest is a fixture-only constructor. It retains lenient loading
-// behavior for same-package tests without placing that behavior in shipping
-// session construction.
-func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int) (*Session, error) {
+// NewSyntheticMissionForTest is a test-only fixture constructor. It accepts
+// deliberately incomplete authored test inputs; production composition uses
+// NewMissionWithFS and never reaches this file.
+func NewSyntheticMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int) (*Session, error) {
 	restoreRNG := scopeTestRNGStreams()
 	defer restoreRNG()
 	path = strings.TrimSpace(path)
@@ -150,11 +150,7 @@ func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficul
 	grantResourcesDirect(s, m)
 	if s.World != nil && s.Movement == nil {
 		grid := movement.NewOccupancyGrid()
-		// Same fallback as production composition: the startup template
-		// [02 §5 "Movement class record"][04 §6.1 R-DOC04-A], not the
-		// fabricated zero profile this fixture previously copied.
-		fallback := movement.Template()
-		s.Movement = movement.NewSystem(s.World, fallback, grid)
+		s.Movement = movement.NewSystem(s.World, movement.Template(), grid)
 		if cat != nil {
 			s.Movement.SetClasses(cat.Movement)
 		}
@@ -220,11 +216,10 @@ func reconstructUnitsFixture(s *Session, m *mission.Mission) error {
 	return nil
 }
 
-// NewSkirmishForTest is the fixture constructor. It retains the previous
-// lenient fallback (empty catalog, missing TNT tolerated, invented commander)
-// so existing deterministic fixtures continue to run. Production must use
-// NewSkirmishWithFS.
-func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (*Session, error) {
+// NewSyntheticSkirmishForTest is a test-only fixture constructor. It accepts
+// deliberately incomplete authored test inputs; production composition uses
+// NewSkirmishWithFS and never reaches this file.
+func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (*Session, error) {
 	restoreRNG := scopeTestRNGStreams()
 	defer restoreRNG()
 	if err := cfg.Normalize(); err != nil {
@@ -236,23 +231,14 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 	if fs == nil {
 		fs = vfs.New()
 	}
-	if cat == nil && fs != nil {
+	if cat == nil {
 		if compiled, err := content.Compile(fs); err == nil {
 			cat = compiled
 		} else {
 			cat = &content.Catalog{
-				Units:    map[string]*content.UnitDef{},
-				Features: map[string]*content.FeatureDef{},
-				Maps:     map[string]*content.MapHeader{},
-				Sides:    []*content.SideDef{},
+				Units: map[string]*content.UnitDef{}, Features: map[string]*content.FeatureDef{},
+				Maps: map[string]*content.MapHeader{}, Sides: []*content.SideDef{},
 			}
-		}
-	}
-	if cat == nil {
-		cat = &content.Catalog{
-			Units:    map[string]*content.UnitDef{},
-			Features: map[string]*content.FeatureDef{},
-			Maps:     map[string]*content.MapHeader{},
 		}
 	}
 	m, err := mission.LoadWithType(fs, mission.TypeSkirmish, cfg.MapName, 0, cfg.NumPlayers, nil)
@@ -262,8 +248,6 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 	var terrain *world.Terrain
 	if t, err := world.Load(fs, cat, cfg.MapName); err == nil {
 		terrain = t
-		// Fixtures may supply an incomplete catalog/map pair. Use the explicit
-		// zero-metal schema only after the authored schema lookup fails.
 		if cat.Maps != nil && len(cat.Maps) > 0 {
 			if err := applySchemaStrict(terrain, cat, m); err != nil {
 				_ = terrain.ApplySchema(nil, 0)
@@ -272,23 +256,19 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 			_ = terrain.ApplySchema(nil, 0)
 		}
 	}
-	// Fixture uses sliced when possible, otherwise fallback to unsliced 600 for tiny catalogs
+	// Synthetic fixtures use a sliced world even when authored model assets are
+	// absent. Real sessions never call this test-only constructor.
 	var unitsWorld *units.World
 	if len(cat.Units) > 0 {
 		if w, err := newSlicedWorldWithCOB(cat, fs); err == nil {
 			unitsWorld = w
 		} else {
 			unitsWorld = units.NewSliced(600, cat)
-			if fs != nil {
-				unitsWorld.SetCOBSource(fs, globalCobLoader)
-			}
+			unitsWorld.SetCOBSource(fs, globalCobLoader)
 		}
 	} else {
 		unitsWorld = units.NewSliced(600, cat)
 	}
-	// This constructor intentionally uses synthetic unit scripts. Keep the
-	// production COB source unset so fixture allocations do not enter strict
-	// authored-model binding.
 	unitsWorld.SetCOBSource(nil, nil)
 	localOwner := LocalOwnerForConfig(cfg)
 	enemyOwner := 0
@@ -514,11 +494,8 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		}
 	}
 	if s.World != nil && s.Movement == nil {
-		// Production fallback: startup template [02 §5][04 §6.1 R-DOC04-A].
 		s.Movement = movement.NewSystem(s.World, movement.Template(), movement.NewOccupancyGrid())
-		if cat != nil {
-			s.Movement.SetClasses(cat.Movement)
-		}
+		s.Movement.SetClasses(cat.Movement)
 		for _, u := range s.Units.Iter() {
 			s.Movement.EnsureUnit(u)
 		}

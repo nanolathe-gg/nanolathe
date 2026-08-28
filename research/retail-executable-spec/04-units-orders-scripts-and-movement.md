@@ -3170,6 +3170,14 @@ Function identities that a later re-derivation corrected — in particular the m
   bit 4 (set by the cleanup-variant clear, cleared by the mid-life variant);
   and the producer pair behind the pump's satisfied-bit-0x10000 weapon-slot
   clear (which handler arms that gate bit, what raises the bit).
+- Emission frequency of the nine nanolathe/assist StartBuilding sites
+  ([R-ORDER-02 §2]): the tracer pins the call sites to the handlers but not
+  their reachability per visit. Nanolathe places the emission once per record
+  activation (the MobileBuild success path; the Reclaim setup visit), reading
+  the flag's one-counterpart-per-record cleanup contract as once per
+  activation; whether retail re-arranges the emitter on later work visits is
+  untraced. Settling it requires the per-visit control flow of one handler
+  (Reclaim is the cheapest: a cadence machine with visits every two ticks).
 - Exact construction/economy carry and worktime-under-one-tick behavior
   (document 05); completion ordering and the completion/activation/rally
   callbacks are established in section 3.8 [R-P0-09].

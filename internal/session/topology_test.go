@@ -27,9 +27,9 @@ func TestTopologyOneVsOneExactCounts(t *testing.T) {
 		"maps/test.ota":  "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=100;\nZPos=100;\n}\n}\n}\n}\n",
 		"ai/default.txt": "plan any\nweight FALLBACK 0.5\n",
 	})
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest direct 1v1: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest direct 1v1: %v", err)
 	}
 	// Exactly two live economy slots.
 	live := 0
@@ -118,7 +118,7 @@ func TestTopologyHumanSlot3RemainsLocal(t *testing.T) {
 		"maps/test.ota":  "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=10;\nZPos=10;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=20;\nZPos=20;\n}\n[special2]\n{\nspecialwhat=StartPos3;\nXPos=30;\nZPos=30;\n}\n[special3]\n{\nspecialwhat=StartPos4;\nXPos=40;\nZPos=40;\n}\n}\n}\n}\n",
 		"ai/default.txt": "plan any\nweight FALLBACK 0.5\n",
 	})
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
 		t.Fatalf("NewSkirmish slot3: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestTopologyAlliedHumansHostileAI(t *testing.T) {
 		"maps/test.ota":  "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=10;\nZPos=10;\n}\n[special2]\n{\nspecialwhat=StartPos3;\nXPos=20;\nZPos=20;\n}\n}\n}\n}\n",
 		"ai/default.txt": "plan any\nweight FALLBACK 0.5\n",
 	})
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
 		t.Fatalf("NewSkirmish allied: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestTopologyInactiveRowsCannotAffectResult(t *testing.T) {
 	if cfg.Players[2].AllyGroup != 0 || cfg.Players[2].Metal != 0 {
 		t.Fatalf("inactive row not cleared after normalize: %+v", cfg.Players[2])
 	}
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
 		t.Fatalf("NewSkirmish after poison clear: %v", err)
 	}

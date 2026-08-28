@@ -8,8 +8,9 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// TestP0I03_SingleSchedulerAlias verifies there is one canonical scheduler [P0-I03][04 §7.3].
-func TestP0I03_SingleSchedulerAlias(t *testing.T) {
+// TestSessionUsesOnePathScheduler verifies that path requests have one
+// canonical scheduler [04 §7.3].
+func TestSessionUsesOnePathScheduler(t *testing.T) {
 	// Minimal synthetic catalog and terrain for composition helper
 	cat := &content.Catalog{
 		Units:    map[string]*content.UnitDef{"armflea": {UnitName: "armflea", MaxDamage: 100, FootprintX: 1, FootprintZ: 1, MaxVelocity: 65536, TurnRate: 100}},
@@ -47,7 +48,7 @@ func TestP0I03_SingleSchedulerAlias(t *testing.T) {
 		t.Fatalf("scheduler nil")
 	}
 	if err := s.ValidateComposition(); err != nil {
-		// Validate checks alias equality, so this also verifies single scheduler before first tick [P0-I03].
+		// Validation checks alias equality before the first tick.
 		t.Fatalf("validate: %v", err)
 	}
 }

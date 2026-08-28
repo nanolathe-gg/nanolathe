@@ -192,6 +192,10 @@ func (b *CallbackBridge) Immediate(name string, args []int32, receiver CallbackR
 // seeds. Missing entries/full pools leave values untouched. A sleeping/waiting
 // callback returns partial values and remains active, while an explicit return
 // reports Completed=true; no interpolation or receiver is involved [04 §4.2].
+// The query forces the allocated slot's completion receiver to none [R-COB-01
+// §1]: any stale pending receiver registered against the reused slot is
+// dropped, so a blocked query that later resumes can never revise the values
+// the host already copied back.
 func (b *CallbackBridge) Query(name string, seeds [4]int32) CallbackResult {
 	result := CallbackResult{Name: name, Mode: ModeQuery, Thread: -1, Values: seeds}
 	if b == nil || b.VM == nil {
@@ -205,6 +209,10 @@ func (b *CallbackBridge) Query(name string, seeds [4]int32) CallbackResult {
 	started, completed := b.VM.CallQuery(pc, values[:])
 	result.Started, result.Completed = started, completed
 	result.Values = values
+	if started && b.VM.lastQueryThread >= 0 && b.VM.lastQueryThread < len(b.pending) {
+		// Receiver forced none for the synchronous query [R-COB-01 §1].
+		b.pending[b.VM.lastQueryThread] = pendingCallback{}
+	}
 	return result
 }
 
@@ -322,8 +330,75 @@ func (b *CallbackBridge) HitByWeapon(dir uint8) CallbackResult {
 func (b *CallbackBridge) TakeDamage(percent int32) CallbackResult {
 	return b.Deferred("TakeDamage", []int32{percent}, nil)
 }
+
+// Killed is the network-death-replay Killed start [R-COB-02 §1]: mode D with
+// the wake flag (immediate), one argument carrying the signed packet severity
+// byte, fillers zero, no receiver. The immediate start performs the all-slot
+// delta-0 barrier plus one piece pass inline, so a deferred callback queued
+// earlier on the same VM also runs at this flush point [R-COB-02 §2].
 func (b *CallbackBridge) Killed(severity int32) CallbackResult {
-	return b.Deferred("Killed", []int32{severity}, nil)
+	return b.Immediate("Killed", []int32{severity}, nil)
+}
+
+// KilledLocal is the local authoritative death query [R-COB-02 §1]: mode Q,
+// four cells, cell 0 seeded with the computed severity input
+// (KilledSeverity), copy-back to the caller. The variant cell (window word 1)
+// is not pre-initialized by retail — the host cell holds allocator garbage
+// and a script that assigns it has that value copied back [04 §5.1]. The
+// serialized stack-history content an unassigned variant cell carries is an
+// Unknown recorded in the research Missing list; Nanolathe seeds a
+// deterministic zero host cell, and the death producer applies the
+// remaining-work-fraction override after any query. Cause overrides (7 → 0/1
+// without a query; 4/5/9 or positive health → 0/0 without a query) are the
+// death producer's decision and bypass this method entirely [R-COB-02 §1].
+func (b *CallbackBridge) KilledLocal(severityIn int32) CallbackResult {
+	return b.Query("Killed", [4]int32{severityIn, 0, 0, 0})
+}
+
+// SetDirection is the general unit-update direction callback [R-COB-02 §1]:
+// mode D, one argument carrying the zero-extended 16-bit direction word
+// [04 §5.3], producer filler cells zero, no receiver.
+func (b *CallbackBridge) SetDirection(dir uint16) CallbackResult {
+	return b.Deferred("SetDirection", []int32{SetDirectionArg(dir)}, nil)
+}
+
+// SetSpeed is the general unit-update speed callback [R-COB-02 §1]: mode D,
+// one argument carrying the signed global speed value shifted left by four
+// [04 §5.3], issued immediately after SetDirection, no receiver.
+func (b *CallbackBridge) SetSpeed(speed int32) CallbackResult {
+	return b.Deferred("SetSpeed", []int32{SetSpeedGeneral(speed)}, nil)
+}
+
+// SetSpeedFootprint is the footprint-path SetSpeed callback [R-COB-02 §1]:
+// mode D, one argument carrying the unsigned 16-bit footprint sum [04 §5.3];
+// the sum's semantic unit is not established [04 §5.3] (see the helper's
+// TODO), the conversion is the caller's.
+func (b *CallbackBridge) SetSpeedFootprint(sum int32) CallbackResult {
+	return b.Deferred("SetSpeed", []int32{SetSpeedFootprint(sum)}, nil)
+}
+
+// SetMaxReloadTime reports the maximum authored reload over the three weapon
+// slots converted to milliseconds [R-COB-02 §1]: mode D, one argument
+// trunc(maxReload·1000/30) [04 §5.3]. The caller scans the slots; this method
+// is issued after Create so it lands outside Create's own immediate drain
+// [04 §5.3] — the deferred thread first runs in the visit's normal drain.
+func (b *CallbackBridge) SetMaxReloadTime(maxReloadTicks int32) CallbackResult {
+	return b.Deferred("SetMaxReloadTime", []int32{MaxReloadMillis(maxReloadTicks)}, nil)
+}
+
+// QueryTransport is the transport attachment query [R-COB-02 §1]: mode Q with
+// cell 0 seeded −1 and the remaining outputs null (seeded 0, excluded from
+// copy-back); a missing script leaves −1, which the consumer resolves to the
+// root piece.
+func (b *CallbackBridge) QueryTransport() CallbackResult {
+	return b.Query("QueryTransport", QueryTransportSeed())
+}
+
+// QueryLandingPad is the air landing selection query [R-COB-02 §1]: mode Q
+// with all four outputs seeded −1; the first candidate piece 0..3 to pass
+// validity wins and all −1 keeps the order alive for retry.
+func (b *CallbackBridge) QueryLandingPad() CallbackResult {
+	return b.Query("QueryLandingPad", QueryLandingPadSeed())
 }
 
 func weaponCallbackName(slot WeaponSlot, prefix string) (string, bool) {

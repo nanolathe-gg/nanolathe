@@ -22,7 +22,7 @@ func minimalWorld() *world.Terrain {
 	return ter
 }
 
-func TestP0I13_KillUnitTypeOnlyOnDeath(t *testing.T) {
+func TestKillUnitTypeOnlyOnDeath(t *testing.T) {
 	// KillUnitType should not advance from poll alone, only on death notification.
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, Features: map[string]*content.FeatureDef{}}
 	w := units.NewSliced(16, cat)
@@ -54,7 +54,7 @@ func TestP0I13_KillUnitTypeOnlyOnDeath(t *testing.T) {
 	}
 }
 
-func TestP0I13_CaptureUnitTypeOnlyOnTransfer(t *testing.T) {
+func TestCaptureUnitTypeOnlyOnTransfer(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	w := units.NewSliced(16, cat)
 	def := &content.UnitDef{UnitName: "CORLAB", MaxDamage: 100}
@@ -76,7 +76,7 @@ func TestP0I13_CaptureUnitTypeOnlyOnTransfer(t *testing.T) {
 	}
 }
 
-func TestP0I13_BuildUnitTypePoll(t *testing.T) {
+func TestBuildUnitTypePoll(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	w := units.NewSliced(16, cat)
 	def := &content.UnitDef{UnitName: "ARMSY", MaxDamage: 100}
@@ -98,7 +98,7 @@ func TestP0I13_BuildUnitTypePoll(t *testing.T) {
 	}
 }
 
-func TestP0I13_SimultaneousVictoryDefeatResolvesVictory(t *testing.T) {
+func TestSimultaneousVictoryDefeatResolvesVictory(t *testing.T) {
 	w := units.NewSliced(16, nil)
 	ctx := triggers.PollContext{Tick: 0, World: w, LocalOwner: 0, EnemyOwner: 1}
 	vic := []*triggers.Trigger{triggers.New(triggers.KindDestroyAllUnits, "")} // always true on poll
@@ -112,7 +112,7 @@ func TestP0I13_SimultaneousVictoryDefeatResolvesVictory(t *testing.T) {
 	}
 }
 
-func TestP0I13_LatchTimingEconomyFreezeNotImmediate(t *testing.T) {
+func TestLatchTimingEconomyFreezeNotImmediate(t *testing.T) {
 	// Latch should arm to 4 without immediate ending, and settlement should be frozen via Countdown>=0
 	// but IsEnding false until 5 deadline ticks later (150 ticks).
 	latch := NewEndLatch()
@@ -164,7 +164,7 @@ func TestP0I13_LatchTimingEconomyFreezeNotImmediate(t *testing.T) {
 	}
 }
 
-func TestP0I13_SaveLoadPreservesCountdown(t *testing.T) {
+func TestSaveLoadPreservesCountdown(t *testing.T) {
 	latch := NewEndLatch()
 	latch.AdvanceWin(true) // arm to 4
 	// Simulate one decrement

@@ -329,7 +329,7 @@ func TestTopologySameForBothConstructors(t *testing.T) {
 	cfgSk.Players[1].Controller = SkirmishControllerComputer
 	cfgSk.Players[0].AllyGroup = 1
 	cfgSk.Players[1].AllyGroup = 2
-	sSkirmish, err := NewSkirmishForTest(fs1, cat, cfgSk)
+	sSkirmish, err := NewSyntheticSkirmishForTest(fs1, cat, cfgSk)
 	if err != nil {
 		t.Fatalf("skirmish ForTest: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestTopologySameForBothConstructors(t *testing.T) {
 		_ = createAndBindServicesForTest(t, sSkirmish)
 		publishVisibilityForAll(sSkirmish)
 	}
-	sMission, err := NewMissionForTest(fs2, cat, "test.ota", 0)
+	sMission, err := NewSyntheticMissionForTest(fs2, cat, "test.ota", 0)
 	if err != nil {
 		t.Fatalf("mission ForTest: %v", err)
 	}
@@ -398,11 +398,11 @@ func TestTwoSessionsCoexist(t *testing.T) {
 	cat := minimalCatalogForStrict()
 	fs1 := fsWithMap(t, "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=10;\nZPos=10;\n}\n}\n}\n}\n")
 	fs2 := fsWithMap(t, "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=5;\nZPos=5;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=15;\nZPos=15;\n}\n}\n}\n}\n")
-	s1, err := NewSkirmishForTest(fs1, cat, SkirmishConfig{MapName: "test", NumPlayers: 2})
+	s1, err := NewSyntheticSkirmishForTest(fs1, cat, SkirmishConfig{MapName: "test", NumPlayers: 2})
 	if err != nil {
 		t.Fatalf("s1: %v", err)
 	}
-	s2, err := NewSkirmishForTest(fs2, cat, SkirmishConfig{MapName: "test", NumPlayers: 2})
+	s2, err := NewSyntheticSkirmishForTest(fs2, cat, SkirmishConfig{MapName: "test", NumPlayers: 2})
 	if err != nil {
 		t.Fatalf("s2: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestTwoSessionsCoexist(t *testing.T) {
 	}
 	// Interleaved ticks should match standalone
 	rng.SeedGlobal(123, 456)
-	s1a, _ := NewSkirmishForTest(fs1, cat, SkirmishConfig{MapName: "test", NumPlayers: 2})
+	s1a, _ := NewSyntheticSkirmishForTest(fs1, cat, SkirmishConfig{MapName: "test", NumPlayers: 2})
 	if s1a.World == nil {
 		s1a.World = minimalTerrain()
 		_ = createAndBindServicesForTest(t, s1a)
@@ -427,8 +427,8 @@ func TestTwoSessionsCoexist(t *testing.T) {
 	// Ensure sliced pool already tested; just check Used counts stay same
 	usedA := s1a.Units.Used()
 	rng.SeedGlobal(123, 456)
-	s1b, _ := NewSkirmishForTest(fs1, cat, SkirmishConfig{MapName: "test", NumPlayers: 2})
-	s2b, _ := NewSkirmishForTest(fs2, cat, SkirmishConfig{MapName: "test", NumPlayers: 2})
+	s1b, _ := NewSyntheticSkirmishForTest(fs1, cat, SkirmishConfig{MapName: "test", NumPlayers: 2})
+	s2b, _ := NewSyntheticSkirmishForTest(fs2, cat, SkirmishConfig{MapName: "test", NumPlayers: 2})
 	if s1b.World == nil {
 		s1b.World = minimalTerrain()
 		_ = createAndBindServicesForTest(t, s1b)

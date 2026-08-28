@@ -78,8 +78,15 @@ func TestRS10_MobileBuildLegalSite(t *testing.T) {
 	}
 }
 
-// TestRS10_MobileBuildIllegalSite verifies illegal site triggers silent blocked retry [RS-10][05 C17].
-func TestRS10_MobileBuildIllegalSite(t *testing.T) {
+// TestRS10_MobileBuildBlockedAreaBudget verifies the mobile-build blocked-area
+// budget at the construction layer [RS-10][R-ORDER-02 §1]: each blocked visit
+// notifies "Waiting for target area to clear" through the status sink,
+// increments the record's third parameter ([04 §3.2] assigns it to the retry
+// counter), and waits EXACTLY 30 ticks with no random draw while the counter
+// is at most 10; the first blocked visit with the counter above 10 notifies
+// "Target area was blocked" and abandons the order. Eleven 30-tick waits,
+// then give-up on visit twelve.
+func TestRS10_MobileBuildBlockedAreaBudget(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	builderDef := &content.UnitDef{UnitName: "armck", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", Builder: true, MaxDamage: 100, WorkerTime: 30, CanMove: true}
 	builderDef.CanonicalKey = content.CanonicalKey("armck")
@@ -92,22 +99,19 @@ func TestRS10_MobileBuildIllegalSite(t *testing.T) {
 	for i := range terrain.Plot {
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 	}
-	// Block cell (5,5) by occupancy
-	terrain.Plot[5*10+5].SetOccupantA(1)
-	// Also block via feature for yard bit 5
-	terrain.Plot[5*10+5].SetFeature(0) // real feature index 0 is blocking when yard bit 5 set? But our yard "oooo" bits 1-2 reject any occupant 0x2f, so occupantA triggers block.
+	// Block cell (5,5) with a FOREIGN occupant (handle 9, distinct from the
+	// builder): the yard bits 1-2 reject any occupant other than the placing
+	// self identity [04 §6.4].
+	terrain.Plot[5*10+5].SetOccupantA(9)
 
 	w := units.NewSliced(10, cat)
 	hb, _ := w.Create(builderDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	builder := w.Unit(hb)
 	builder.Def = builderDef
 
-	siteX := world.CellToWorld(5)
-	siteZ := world.CellToWorld(5)
-	// Site snaps with foot 2 => cell 4,4? Actually site 5,5 with foot 2 => snap 4,4 : need site that snaps to blocked 5,5?
-	// Choose site 6,6 -> snap 5,5
-	siteX = world.CellToWorld(6)
-	siteZ = world.CellToWorld(6)
+	// Site 6,6 snaps with foot 2 to the blocked cell 5,5.
+	siteX := world.CellToWorld(6)
+	siteZ := world.CellToWorld(6)
 	if err := QueueMobileBuild(builder, "armllt", siteX, siteZ, 1, cat); err != nil {
 		t.Fatalf("QueueMobileBuild: %v", err)
 	}
@@ -116,23 +120,64 @@ func TestRS10_MobileBuildIllegalSite(t *testing.T) {
 	node.Phase = uint8(State2)
 	svc := NewService(terrain, cat, w, &economy.Service{})
 	svc.AllowSyntheticPlacement = true
-	tick := uint32(100)
-	svc.Pump(builder, tick)
+	var sinkTexts []string
+	svc.StatusText = func(text string) { sinkTexts = append(sinkTexts, text) }
+
+	// Visit 1 at tick 100: notify, counter 0→1, wait exactly 30 ticks.
+	svc.Pump(builder, 100)
 	if node.Target != 0 {
-		t.Fatalf("illegal site should not allocate, got target %d", node.Target)
+		t.Fatalf("blocked site allocated, got target %d", node.Target)
 	}
-	if node.Deadline != int32(tick+15) {
-		t.Fatalf("blocked illegal site should retry in 15, got deadline %d want %d", node.Deadline, tick+15)
+	if node.Param3 != 1 {
+		t.Fatalf("visit 1 counter %d, want 1", node.Param3)
 	}
-	if node.DynamicGate != WakeBit1|WakeBit2 {
-		t.Fatalf("blocked wake bits want %d got %d", WakeBit1|WakeBit2, node.DynamicGate)
+	if node.Deadline != int32(130) {
+		t.Fatalf("visit 1 deadline %d, want exactly 130 (fixed 30-tick wait)", node.Deadline)
 	}
+	if node.DynamicGate != 1 {
+		t.Fatalf("visit 1 gate %d, want the budget's lowest gate bit 1", node.DynamicGate)
+	}
+	if len(sinkTexts) != 1 || sinkTexts[0] != orders.MobileBuildWaitingText {
+		t.Fatalf("visit 1 sink %v, want [%q]", sinkTexts, orders.MobileBuildWaitingText)
+	}
+	// The strings surface through the sink, not the construction diagnostics log.
 	if len(svc.Messages()) != 0 {
-		t.Fatalf("illegal site blocked should be silent, got %v", svc.Messages())
+		t.Fatalf("blocked visits must not log diagnostics, got %v", svc.Messages())
 	}
-	// No builder link yet
+	// No visit inside a wait: the handler is not re-entered before the deadline.
+	for tick := uint32(101); tick < 130; tick++ {
+		svc.Pump(builder, tick)
+	}
+	if node.Param3 != 1 || node.Deadline != int32(130) || len(sinkTexts) != 1 {
+		t.Fatalf("wait was not honored: counter %d deadline %d sink %d", node.Param3, node.Deadline, len(sinkTexts))
+	}
+	// Visits 2..11 at the exact 30-tick cadence, each waiting again.
+	for visit := 2; visit <= 11; visit++ {
+		tick := uint32(100 + (visit-1)*30)
+		svc.Pump(builder, tick)
+		if node.Param3 != uint32(visit) {
+			t.Fatalf("visit %d counter %d", visit, node.Param3)
+		}
+		if node.Deadline != int32(tick+30) {
+			t.Fatalf("visit %d deadline %d, want %d", visit, node.Deadline, tick+30)
+		}
+		if len(sinkTexts) != visit || sinkTexts[len(sinkTexts)-1] != orders.MobileBuildWaitingText {
+			t.Fatalf("visit %d sink %v", visit, sinkTexts)
+		}
+	}
 	if len(svc.BuilderLinks()) != 0 {
 		t.Fatalf("no builder link should exist for blocked site")
+	}
+	// Visit 12 (tick 430): the counter is 11, above 10 — give up.
+	svc.Pump(builder, 100+11*30)
+	if q.LenPrimary() != 0 {
+		t.Fatalf("give-up must abandon the order, %d records remain", q.LenPrimary())
+	}
+	if len(sinkTexts) != 12 || sinkTexts[11] != orders.MobileBuildBlockedText {
+		t.Fatalf("visit 12 sink %v, want the give-up text last", sinkTexts)
+	}
+	if len(svc.Messages()) != 0 {
+		t.Fatalf("give-up must not log diagnostics, got %v", svc.Messages())
 	}
 }
 

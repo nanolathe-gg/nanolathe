@@ -329,12 +329,16 @@ var debtMarkerTokens = []string{
 var debtMarkerTotals = map[string]int{
 	// Reconciled branch census: prior branch totals (49,19,186,7,1,353)
 	// and main totals (40,17,187,8,1,347) both resolve to the merged source below.
-	"legacy":         40,
+	// units-identity round (CNT-05/UNIT-04/UNIT-05): units.go dropped one
+	// "legacy" (empty-fallback wording removed) and added two brief-mandated
+	// TODO(question) markers (definition-identity mapping, scriptless
+	// crash-policy residual).
+	"legacy":         39,
 	"compatibility":  17,
 	"fallback":       185,
 	"guess":          7,
 	"plausible":      1,
-	"todo(question)": 347,
+	"todo(question)": 350, // +1 statics-init site (cob12), +2 units-identity (identity encoding, scriptless crash policy)
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -350,7 +354,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/orders/resolve.go":          1,
 		"internal/session/scheduling.go":      1,
 		"internal/session/step.go":            1,
-		"internal/units/units.go":             2,
+		"internal/units/units.go":             1,
 		"internal/world/coords.go":            4,
 		"internal/world/placement.go":         4,
 		"internal/world/plot.go":              1,
@@ -445,7 +449,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/ai/strategic.go":                 6,
 		"internal/cob/load.go":                     2,
 		"internal/cob/ports.go":                    14,
-		"internal/cob/vm.go":                       7,
+		"internal/cob/vm.go":                       8, // +1: statics-init TODO(question) at SetProgram [R-COB-01 §1]
 		"internal/combat/death.go":                 6,
 		"internal/combat/fire.go":                  3,
 		"internal/combat/impact.go":                1,
@@ -506,7 +510,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/sim/rng/rng.go":                  1,
 		"internal/units/pipeline.go":               1,
 		"internal/units/types.go":                  1,
-		"internal/units/units.go":                  5,
+		"internal/units/units.go":                  7,
 		"internal/visibility/fog.go":               1,
 		"internal/world/feature_stamp.go":          1,
 		"internal/world/placement.go":              4,

@@ -7,7 +7,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
-func TestOW1E_EffectsFromEventsOnePerVisual(t *testing.T) {
+func TestCommittedEffectsPreserveOrderedVisualEvents(t *testing.T) {
 	c := frame.NewEventBuffer(frame.Limits{})
 	if !c.EmitNanolathe(frame.Event{Tick: 4, Source: 2, Target: 3, Piece: 6, EffectID: 6, Lifetime: 1, X: numeric.Fixed(11 << 16), TargetX: numeric.Fixed(21 << 16)}) {
 		t.Fatal("admit nanolathe")
@@ -31,7 +31,7 @@ func TestOW1E_EffectsFromEventsOnePerVisual(t *testing.T) {
 	if len(cur.Effects) != 2 {
 		t.Fatalf("effects %d want 2 (shake excluded) got %+v", len(cur.Effects), cur.Effects)
 	}
-	// Nano must preserve selector 6, piece, endpoints.
+	// Nanolathe preserves selector 6, piece, and endpoints [03 §5.5].
 	nano := cur.Effects[0]
 	if nano.EffectID != 6 || nano.Piece != 6 || nano.Kind != "nanolathe" {
 		t.Fatalf("nano effect %+v", nano)
@@ -62,7 +62,7 @@ func TestOW1E_EffectsFromEventsOnePerVisual(t *testing.T) {
 	}
 }
 
-func TestOW1E_EffectsNeverInventArtwork(t *testing.T) {
+func TestCommittedEffectsPreserveMissingArtwork(t *testing.T) {
 	c := frame.NewEventBuffer(frame.Limits{})
 	if !c.EmitExplosion(frame.Event{Tick: 1, Graphic: ""}) {
 		t.Fatal("admit")
@@ -79,9 +79,9 @@ func TestOW1E_EffectsNeverInventArtwork(t *testing.T) {
 	}
 }
 
-func TestOW1E_NanoReclaimReversedEndpointPreserved(t *testing.T) {
-	// Reclaim emits target->builder direction; we preserve whatever the
-	// producer supplied as X/TargetX without reinterpreting [R-P0-06].
+func TestCommittedNanolatheEffectsPreserveProducerEndpoints(t *testing.T) {
+	// Reclaim supplies the target-to-builder direction; publication preserves
+	// the producer's X/TargetX values without reinterpretation [03 §5.5].
 	c := frame.NewEventBuffer(frame.Limits{})
 	if !c.EmitNanolathe(frame.Event{Tick: 2, Source: 3, Target: 9, X: numeric.Fixed(30 << 16), TargetX: numeric.Fixed(10 << 16), EffectID: 6, Mode: 2}) {
 		t.Fatal("admit reclaim nano")

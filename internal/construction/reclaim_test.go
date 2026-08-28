@@ -44,7 +44,9 @@ func reclaimFixture(t *testing.T, targetHealth int32, buildDistance int32) (*Ser
 		t.Fatal("ReclaimUnit descriptor missing")
 	}
 	q := orders.QueueForUnit(builder)
-	q.Push(id, orders.Node{Target: target.Handle, DynamicGate: 0, Deadline: -1})
+	// Production reclaim records carry the owning unit [04 §3.2]; the fixture
+	// mirrors the resolver-created record so cleanup resolves the builder.
+	q.Push(id, orders.Node{Owner: builder.Handle, Target: target.Handle, DynamicGate: 0, Deadline: -1})
 	node := q.Head()
 	node.DynamicGate = 0
 	return NewService(nil, cat, w, &economy.Service{}), builder, target, node
@@ -125,7 +127,10 @@ func TestUnitReclaimCadenceAndFatalRefundCleanup(t *testing.T) {
 	}
 	// Eight admitted visits are required: 2,4,...,16 exceeds the 14 gate.
 	reclaimVisits(s, builder, node, 0, 2, 4, 6, 8, 10, 12, 14)
-	if !target.Dying || target.Health != 0 {
+	// Signed overkill: the fatal pulse's signed health remainder survives
+	// until severity and death callbacks finish — no clamp at zero
+	// [04 §5.1] Killed severity contract (UNIT-05).
+	if !target.Dying || target.Health >= 0 {
 		t.Fatalf("fatal reclaim did not latch target: dying=%v health=%d", target.Dying, target.Health)
 	}
 	if deaths != 1 || extras != 1 {

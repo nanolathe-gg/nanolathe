@@ -313,17 +313,20 @@ type World struct {
 	// no consumer. It fires exactly once per ownership transfer.
 	OnCapture CaptureHook
 
-	defMap    map[*content.UnitDef]uint16 // def -> occupancy identity for per-def scan [P0-16]
+	defMap    map[*content.UnitDef]uint16 // def -> occupancy identity for per-def scan [P0-16][CNT-05]
 	nextDefID uint16
+	// claimedDefIDs mirrors every identity handed out, for the fixture
+	// counter's collision check without a map range (I1).
+	claimedDefIDs []uint16
 	// per-player live counters mirror the retail live count, which decrements on free [P0-16 §3.4]
 	liveCounters [10]int
 
 	// COB loader for per-unit VM creation [04 §4.1][P1-I01].
 	cobFS     vfs.FSOps
 	cobLoader *cob.CachedLoader
-	// cobBinder supersedes the legacy empty fallback when installed by session
-	// composition. It is also used for units created by construction and save
-	// reconstruction, so every production unit follows one path.
+	// cobBinder supersedes the definition/loader program path when installed
+	// by session composition. It is also used for units created by construction
+	// and save reconstruction, so every production unit follows one path.
 	cobBinder COBBinder
 }
 
@@ -384,7 +387,23 @@ func (w *World) SetCOBBinder(binder COBBinder) {
 // HasCOBBinder reports whether strict composition owns future allocations.
 func (w *World) HasCOBBinder() bool { return w != nil && w.cobBinder != nil }
 
-// attachCOB loads the unit's Program and binds a VM with Create started [04 §4.1][P1-I01].
+// attachCOB binds the definition's program to a per-unit VM and runs Create
+// once in mode I [04 §4.1][P1-I01].
+//
+// UNIT-04 missing/empty COB policy [R-COB-01 §1]: when the definition's
+// program is null (missing or unreadable script, or an empty program), unit
+// creation takes the explicit scriptless branch — no VM instance is
+// allocated, the render-piece table is still built from the model in its
+// program-less form (the model-binding half lives in the composition-owned
+// strict binder), and no Create is started. Retail neither rejects the unit
+// nor substitutes a program, and no diagnostic is emitted here. The
+// definition-stored program (content's definition load) is preferred; the
+// loader lookup remains for fixture definitions content never compiled.
+// TODO(question): the crash-policy residual — a scriptless unit whose
+// producer path runs (the general unit update's SetDirection/SetSpeed site
+// has no null test in the traced window) would dereference null in retail;
+// the settling probe is a synthetic scriptless definition with a forced
+// mover-active tick [R-COB-01 §1] (UNIT-04 residual).
 func (w *World) attachCOB(u *Unit) error {
 	if w == nil || u == nil || u.Def == nil {
 		return nil
@@ -395,38 +414,28 @@ func (w *World) attachCOB(u *Unit) error {
 	if w.cobBinder != nil {
 		return w.cobBinder(u)
 	}
-	var prog *cob.Program
-	var found bool
-	if w.cobLoader != nil && w.cobFS != nil {
-		// Try via loader (cached, case-insensitive) [04 §4.1]
+	prog := u.Def.Script
+	if prog == nil && w.cobLoader != nil && w.cobFS != nil {
+		// Fixture path: resolve via the loader (cached, case-insensitive) [04 §4.1].
 		if p, ok, _ := w.cobLoader.Load(w.cobFS, u.Def.UnitName); ok && p != nil {
 			prog = p
-			found = true
 		} else if p, ok, _ := w.cobLoader.Load(w.cobFS, u.Def.CanonicalKey); ok && p != nil {
 			prog = p
-			found = true
 		}
 	}
-	if !found {
-		// Empty fallback program: zero statics, zero pieces, no scripts [04 §4.2][P1-I01].
-		// Keep drain path consistent; Create is no-op.
-		prog = &cob.Program{
-			Code:        []uint32{},
-			Scripts:     map[string]int{},
-			Pieces:      []string{},
-			Statics:     0,
-			ScriptsByID: []int{},
-		}
+	if prog == nil || len(prog.Code) == 0 {
+		// Null program: scriptless creation — no VM, no Create, no diagnostic,
+		// no substitute [R-COB-01 §1] (UNIT-04). The unit stays fully live;
+		// its pieces render and animate never.
+		return nil
 	}
 	vm := cob.NewVM(prog)
 	bindUnitPortHandlers(vm, u)
 	u.SetScript(vm)
 	// Run Create immediately with wake flag (delta 0 barrier) so hide/show etc. are visible before first snapshot [04 §4.1][GAP T15].
-	if prog != nil {
-		if _, ok := prog.Scripts["Create"]; ok {
-			_ = vm.StartByName("Create", nil)
-			vm.Drain(0) // immediate wake-flag drain [GAP T15] C17
-		}
+	if _, ok := prog.Scripts["Create"]; ok {
+		_ = vm.StartByName("Create", nil)
+		vm.Drain(0) // immediate wake-flag drain [GAP T15] C17
 	}
 	return nil
 }
@@ -465,37 +474,100 @@ func (w *World) SlotIndex(h pool.Handle) uint16 {
 	return w.pool.SlotIndex(h)
 }
 
-// defIDForDef returns the uint16 occupancy identity for the definition,
-// allocating a new ID on first encounter. 0 is never returned (0 means free).
-// Identity mapping is stable for the lifetime of the world; retail derives
-// the identity from the definition's catalog position [P0-16 §3.2]. Zero RNG
-// draws.
-func (w *World) defIDForDef(def *content.UnitDef) uint16 {
+// defIDForDef resolves the definition's pool occupancy identity [CNT-05]
+// [P0-16 §3.2] and reports whether creation may proceed. The identity is the
+// definition's stable 1-based catalog index (UnitDefID, where 0 stays the
+// free sentinel), stored directly from the immutable catalog — never handed
+// out in first-use order. Production worlds always carry the finalized
+// catalog, and a definition that is not the catalog's own record is rejected
+// with an error and no allocation.
+//
+// TODO(question): the research establishes that the pool slices and the
+// per-def limit gate both derive from the definition catalog's size/position
+// [P0-16 §3.2][01 §6.1], but not the exact encoding retail stores in the
+// unit record's definition-identity field (a 0-based catalog ordinal, this
+// 1-based index, or another form). Nanolathe stores the 1-based catalog
+// index, which lands the catalog position in the pool's "0 = free" uint16
+// identity space. Re-derive by tracing the per-def limit scan's comparison
+// operand and the allocator's identity write in the retail pool.
+//
+// Fixture worlds built with a nil catalog have no catalog position to store;
+// a definition carrying a stamped UnitDefID stores it, and a synthetic
+// definition falls back to a first-use counter scoped to that fixture world.
+// The fallback is test scaffolding, not retail behavior. Zero RNG draws.
+func (w *World) defIDForDef(def *content.UnitDef) (uint16, error) {
 	if def == nil {
-		return 0
+		return 0, fmt.Errorf("units: nil def")
 	}
 	if w.defMap == nil {
 		w.defMap = make(map[*content.UnitDef]uint16)
 		w.nextDefID = 1
 	}
 	if id, ok := w.defMap[def]; ok {
-		return id
+		return id, nil
 	}
-	id := w.nextDefID
-	if id == 0 {
-		id = 1
-		w.nextDefID = 2
+	if w.catalog != nil && w.catalog.Finalized() {
+		// Finalized-catalog gate [CNT-05][P0-16 §3.2]: the world's catalog is
+		// the immutable compiled catalog (session's pool constructor requires
+		// one), so a definition that is not the catalog's own record has no
+		// catalog position to store and is rejected with no allocation.
+		// Catalogs that were never finalized (hand-built fixtures, Hash
+		// unstamped) carry no finalized identity to check against.
+		idx, member := w.catalog.UnitIndexOf(def)
+		if !member {
+			return 0, fmt.Errorf("units: definition %q is not from the world's finalized catalog", def.UnitName)
+		}
+		if id, ok := w.catalogID(idx); ok {
+			w.defMap[def] = id
+			w.claimedDefIDs = append(w.claimedDefIDs, id)
+			return id, nil
+		}
+	} else if id, ok := w.catalogID(def.UnitDefID); ok {
+		w.defMap[def] = id
+		w.claimedDefIDs = append(w.claimedDefIDs, id)
+		return id, nil
 	}
-	// Reserve 0 for free sentinel; skip 0 if wrap.
-	if id == 0 {
-		id++
+	// Fixture fallback: first-use counter for a definition with no catalog
+	// position. Skip identities already claimed by stamped definitions so
+	// per-def counting never conflates two definitions. Claimed identities
+	// live in a slice scanned linearly: Create runs inside the simulation,
+	// and I1 bans map iteration on sim-visible paths.
+	for w.nextDefID <= 0xFFFF {
+		id := w.nextDefID
+		if id == 0 {
+			id = 1
+		}
+		w.nextDefID = id + 1
+		if !w.defIDClaimed(id) {
+			w.defMap[def] = id
+			w.claimedDefIDs = append(w.claimedDefIDs, id)
+			return id, nil
+		}
 	}
-	w.defMap[def] = id
-	w.nextDefID++
-	if w.nextDefID == 0 {
-		w.nextDefID = 1
+	return 0, fmt.Errorf("units: fixture definition identities exhausted")
+}
+
+// catalogID narrows a catalog index into the pool's uint16 identity space,
+// keeping 0 reserved as the free sentinel [P0-16 §3.1]. The compiled catalog
+// caps definitions at 511 ([R-P0-03] 512-bit category domain), so the
+// narrowing is unreachable for compiled content; a synthetic definition with
+// an out-of-range stamp is treated as unstamped.
+func (w *World) catalogID(idx uint32) (uint16, bool) {
+	if idx == 0 || idx > 0xFFFF {
+		return 0, false
 	}
-	return id
+	return uint16(idx), true
+}
+
+// defIDClaimed reports whether any definition already holds the identity.
+// Scanned over the claimed-identity slice, not the defMap (I1).
+func (w *World) defIDClaimed(id uint16) bool {
+	for _, used := range w.claimedDefIDs {
+		if used == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Create allocates through the canonical per-player allocator: lowest-free
@@ -514,7 +586,12 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 	if player < 0 || player >= 10 {
 		return 0, fmt.Errorf("units: player %d out of range", player)
 	}
-	defID := w.defIDForDef(def)
+	defID, err := w.defIDForDef(def)
+	if err != nil {
+		// CNT-05: a definition that is not the finalized catalog's own record
+		// is rejected with no allocation [P0-16 §3.2].
+		return 0, err
+	}
 	limitEnabled := def.LimitEnabled
 	limit := def.Limit
 	// Normalize: if limit == -1, treat as unlimited regardless of enabled bit
@@ -609,7 +686,12 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 	if player < 0 || player >= 10 {
 		return 0, fmt.Errorf("units: player %d out of range", player)
 	}
-	defID := w.defIDForDef(def)
+	defID, err := w.defIDForDef(def)
+	if err != nil {
+		// CNT-05: same finalized-catalog gate as the canonical allocator
+		// [P0-16 §3.2]; save reconstruction must not seat a foreign definition.
+		return 0, err
+	}
 	limitEnabled := def.LimitEnabled
 	limit := def.Limit
 	if limit == -1 {
@@ -746,6 +828,15 @@ func (w *World) FreeImmediate(h pool.Handle) {
 // reused the damage aliases the new occupant silently [P0-16 §6][06 "Damage
 // identity"]. No generation tag anywhere (bounded 3901) [P0-16 §2.2].
 // Returns false if validation fails (slot 0 or dead/free). Zero RNG draws.
+//
+// UNIT-05 signed overkill: the subtraction result is stored SIGNED — no
+// clamp at zero. The local Killed severity contract consumes the signed
+// health, severity = ((−health·100)/maxHealth + priorSample)/2 [04 §5.1], so
+// an overkill intermediate must survive until severity and the death
+// callbacks are finished. Death marking still triggers on a non-positive
+// result at the caller's Destroy (combat damage application, the reclaim
+// pulse, or the slot-end death latch), and the signed value is retained
+// through FinalizeDeath and Cleanup. Zero RNG draws.
 func (w *World) ApplyDamage(target pool.Handle, dmg int32) bool {
 	if w == nil || w.pool == nil || target == 0 {
 		return false
@@ -758,11 +849,6 @@ func (w *World) ApplyDamage(target pool.Handle, dmg int32) bool {
 		return false
 	}
 	u.Health -= dmg
-	if u.Health <= 0 {
-		// Mark dying but do not free immediately; caller may FreeImmediate
-		// separately. Stale alias after free will hit next occupant.
-		u.Health = 0
-	}
 	return true
 }
 

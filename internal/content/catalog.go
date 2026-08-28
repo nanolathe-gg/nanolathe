@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -227,6 +228,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	report.Report(FamilyBuildMenus, 100)
 	sortedModels, modelIndex := buildModelCatalog(units)
 	fillModelTops(fs, units)
+	fillUnitScripts(fs, units)
 	report.Report(FamilyModels, 100)
 
 	// Manifest: vfs.ManifestHash() for identity [PLAN 02].
@@ -428,6 +430,42 @@ func (c *Catalog) UnitDefIndex(key string) (uint32, bool) {
 		}
 	}
 	return 0, false
+}
+
+// Finalized reports whether this catalog was produced by Compile: the catalog
+// hash is stamped once there, and only there [02 §5] C12. Hand-built fixture
+// catalogs carry no hash. Consumers use it to tell a finalized catalog —
+// whose definition identities are authoritative — from a fixture catalog
+// that carries no finalized identity.
+func (c *Catalog) Finalized() bool {
+	return c != nil && c.Hash != "" && len(c.Units) > 0
+}
+
+// UnitIndexOf returns a unit definition's stable catalog index and whether
+// that definition is this catalog's own record for its canonical key
+// [CNT-05][02 §5][R-P0-03]. It is the definition-identity accessor mirroring
+// ModelIndex above: the index is the 1-based UnitDefID stamped once at
+// category-link time (0 remains the null sentinel), so identity is derived
+// from the immutable catalog position, never from use order. The pointer
+// comparison rejects a same-key impostor that did not come from this catalog.
+// The key falls back to the canonical UnitName for definitions whose header
+// key was never stamped (hand-built fixture catalogs).
+func (c *Catalog) UnitIndexOf(def *UnitDef) (uint32, bool) {
+	if c == nil || def == nil || len(c.Units) == 0 {
+		return 0, false
+	}
+	ck := def.CanonicalKey
+	if ck == "" {
+		ck = CanonicalKey(def.UnitName)
+	}
+	if ck == "" {
+		return 0, false
+	}
+	own, ok := c.Units[ck]
+	if !ok || own != def {
+		return 0, false
+	}
+	return def.UnitDefID, true
 }
 
 // UnitDefByIndex returns the unit definition for a catalog index [02 §5][05].
@@ -1131,5 +1169,35 @@ func fillModelTops(fs vfs.FSOps, units map[string]*UnitDef) {
 			tops[name] = top
 		}
 		u.ModelTop = top
+	}
+}
+
+// fillUnitScripts resolves each unit definition's compiled COB program at
+// definition load, exactly as retail's loader builds the script path from the
+// unit name and stores the program pointer on the definition [R-COB-01 §1]
+// (UNIT-04). A missing, unreadable, or otherwise unloadable script file leaves
+// the definition's program null and the definition accepted: no diagnostic,
+// no substitution, no fallback program — the same silent-existence-gate the
+// loader applies to the FBI half of the same record. An empty program (no
+// code words) is stored as the null program too: it is the scriptless form
+// unit creation consumes [R-COB-01 §1].
+//
+// Load failures are deliberately swallowed here; the skirmish preflight owns
+// malformed-COB diagnostics as a separate layer. Iteration order does not
+// affect results: each definition resolves its own program independently (I1).
+func fillUnitScripts(fs vfs.FSOps, units map[string]*UnitDef) {
+	if fs == nil || len(units) == 0 {
+		return
+	}
+	for _, u := range units {
+		if u == nil {
+			continue
+		}
+		prog, found, _ := cob.LoadFromFS(fs, u.UnitName)
+		if !found || prog == nil || len(prog.Code) == 0 {
+			u.Script = nil // null program: definition accepted [R-COB-01 §1]
+			continue
+		}
+		u.Script = prog
 	}
 }

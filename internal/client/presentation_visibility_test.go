@@ -11,7 +11,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-func TestProjectileVisibilityUsesPublishedLocalCoverageAndShear(t *testing.T) {
+func TestProjectileVisibilityUsesCommittedCoverageAndShear(t *testing.T) {
 	mask := make([]uint8, 4)
 	mask[3] = 1 // u=1,row=1
 	vis := frame.VisibilityView{W: 2, H: 2, Visible: mask, Valid: true}
@@ -29,7 +29,7 @@ func TestProjectileVisibilityUsesPublishedLocalCoverageAndShear(t *testing.T) {
 	}
 }
 
-func TestProjectileVisibleRejectsMalformedGridAndReservedPlayer(t *testing.T) {
+func TestProjectileVisibilityRejectsMalformedCoverageAndViewer(t *testing.T) {
 	p := frame.ProjectileView{X: numeric.Fixed(32 << 16), Z: numeric.Fixed(48 << 16)}
 	if ProjectileVisible(frame.VisibilityView{
 		W: 2, H: 2, Visible: []uint8{0, 0, 0, 1, 1}, Valid: true,

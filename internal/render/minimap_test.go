@@ -333,7 +333,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 			dst.Set(x+1, y, color)
 		}
 	}
-	final := RebuildFinalExact(mapped, m, playW, playH, contacts, blink, blit, 0xA0, 0xB0, 0xC0)
+	final := rebuildFinalExact(mapped, m, playW, playH, contacts, nil, blink, blit, 0xA0, 0xB0, 0xC0)
 	if final == nil {
 		t.Fatalf("final nil")
 	}
@@ -350,7 +350,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 		{WorldX: 20, WorldZ: 20, WorldY: 0, Palette: 10, IsCommander: false},
 		{WorldX: 20, WorldZ: 20, WorldY: 0, Palette: 30, IsCommander: true},
 	}
-	final2 := RebuildFinalExact(mapped, m, playW, playH, contacts2, blink, blit, 0xA0, 0xB0, 0xC0)
+	final2 := rebuildFinalExact(mapped, m, playW, playH, contacts2, nil, blink, blit, 0xA0, 0xB0, 0xC0)
 	rx2, ry2 := RadarProjection(20, 20, 0, playW, playH, m)
 	if v, _ := final2.At(int(rx2), int(ry2)); v != 30 {
 		t.Fatalf("commander should overwrite blip at same pixel, got %d want 30", v)
@@ -363,7 +363,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 	contacts3 := []MinimapContact{
 		{WorldX: 50, WorldZ: 50, WorldY: 0, Palette: 10, RawDistRadar: 20}, // outer radius ~ 10*20/100=2
 	}
-	final3 := RebuildFinalExact(mapped, m, playW, playH, contacts3, blink, blit, 0xA0, 0xB0, 0xC0)
+	final3 := rebuildFinalExact(mapped, m, playW, playH, contacts3, nil, blink, blit, 0xA0, 0xB0, 0xC0)
 	// circle radius 2 should overwrite blip at offset: blip at rx,ry, circle outline at rx+2,ry should be circle color (0xA0 placeholder)
 	rx3, ry3 := RadarProjection(50, 50, 0, playW, playH, m)
 	r := RadarRadius(20, m.W, playW)
@@ -397,7 +397,7 @@ func TestMinimapNoRadarCircleGate(t *testing.T) {
 	// An unstealthed no-radar unit still emits its blip, but suppresses sensor
 	// circles [03 §3.9].
 	mapped := &RadarSurface{W: 10, H: 10, Bits: make([]byte, 100)}
-	final := RebuildFinalExact(mapped, m, playW, playH, []MinimapContact{contact}, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	final := rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{contact}, nil, BlinkState{Phase: 1}, blit, 7, 8, 9)
 	if got, _ := final.At(int(centerX), int(centerY)); got != 9 {
 		t.Fatalf("no-radar must not suppress blip: got %d want 9", got)
 	}
@@ -407,7 +407,7 @@ func TestMinimapNoRadarCircleGate(t *testing.T) {
 
 	// Stealth overrides no-radar for sensor circles [03 §3.9].
 	contact.Stealth = true
-	final = RebuildFinalExact(mapped, m, playW, playH, []MinimapContact{contact}, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	final = rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{contact}, nil, BlinkState{Phase: 1}, blit, 7, 8, 9)
 	if got, _ := final.At(int(outerX), int(centerY)); got != 7 {
 		t.Fatalf("stealthed no-radar must retain circle: got %d want 7", got)
 	}
@@ -424,13 +424,13 @@ func TestMinimapBlinkGate(t *testing.T) {
 		dst.Set(x, y, color)
 	}
 	blinkOff := BlinkState{Countdown: 7, Phase: 0}
-	finalOff := RebuildFinalExact(mapped, m, 100, 100, contacts, blinkOff, blit, 0xA0, 0xB0, 0xC0)
+	finalOff := rebuildFinalExact(mapped, m, 100, 100, contacts, nil, blinkOff, blit, 0xA0, 0xB0, 0xC0)
 	rx, ry := RadarProjection(10, 10, 0, 100, 100, m)
 	if v, _ := finalOff.At(int(rx), int(ry)); v != 5 {
 		t.Fatalf("stealth hidden when blink==0, got %d want mapped 5 [03 §3.9]", v)
 	}
 	blinkOn := BlinkState{Countdown: 7, Phase: 1}
-	finalOn := RebuildFinalExact(mapped, m, 100, 100, contacts, blinkOn, blit, 0xA0, 0xB0, 0xC0)
+	finalOn := rebuildFinalExact(mapped, m, 100, 100, contacts, nil, blinkOn, blit, 0xA0, 0xB0, 0xC0)
 	if v, _ := finalOn.At(int(rx), int(ry)); v != 9 {
 		t.Fatalf("stealth visible when blink==1, got %d want 9", v)
 	}

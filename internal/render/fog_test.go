@@ -92,11 +92,11 @@ func TestFogHardEdges32(t *testing.T) {
 	if x0c != 145 {
 		t.Fatalf("negative camera residue: got %d want 145", x0c)
 	}
-	// Verify floorDiv-based viewport range includes signed residues correctly via BuildFogOps
+	// Verify floorDiv-based viewport range includes signed residues correctly via BuildFogOpsInto.
 	// Use a cache 8x8 and cam at -1 with dither off, ensure ops are deterministic inclusive
 }
 
-// TestFogScreenRectViewportClipping verifies BuildFogOps viewport culling and row-major deterministic iteration [I1][03 §3.3].
+// TestFogScreenRectViewportClipping verifies BuildFogOpsInto viewport culling and row-major deterministic iteration [I1][03 §3.3].
 func TestFogScreenRectViewportClipping(t *testing.T) {
 	cache := testFogCache(t, 8, 8)
 	// Set fog across grid for visibility: ch0=15 on every cell => solid dark everywhere [03 §3.3]
@@ -110,7 +110,7 @@ func TestFogScreenRectViewportClipping(t *testing.T) {
 	// Instead set cam X=128 to bring grid0 to 0: cam=128 => grid0 x0=0-128+128=0
 	cam.X = 128
 	cam.Z = 32
-	ops := BuildFogOps(cache, cam, cam.ViewW, cam.ViewH, 8, 8, nil, false)
+	ops := BuildFogOpsInto(nil, cache, cam, cam.ViewW, cam.ViewH, 8, 8, nil, false)
 	if len(ops) == 0 {
 		t.Fatalf("expected fog ops for viewport covering grid")
 	}
@@ -156,9 +156,9 @@ func TestFogScreenRectViewportClipping(t *testing.T) {
 		}
 	}
 	// Determinism: second run identical [I1]
-	ops2 := BuildFogOps(cache, cam, cam.ViewW, cam.ViewH, 8, 8, nil, false)
+	ops2 := BuildFogOpsInto(nil, cache, cam, cam.ViewW, cam.ViewH, 8, 8, nil, false)
 	if !reflect.DeepEqual(ops, ops2) {
-		t.Fatalf("BuildFogOps not deterministic")
+		t.Fatalf("BuildFogOpsInto not deterministic")
 	}
 	// Never mutates cache: capture channels before and after
 	for y := int32(0); y < 8; y++ {
@@ -176,7 +176,7 @@ func TestFogScreenRectViewportClipping(t *testing.T) {
 func TestFogChannelSemantics(t *testing.T) {
 	// 3x3 grid; the semantics under test target centre cell (1,1), which has
 	// all four neighbours in-map so its nibble can reach any value 0..15.
-	// Cache values are already producer-computed nibbles. BuildFogOps is only
+	// Cache values are already producer-computed nibbles. BuildFogOpsInto is only
 	// the canonical cache-to-blit translator; edge propagation belongs to the
 	// viewport cache builder [03 §3.3].
 	cache := testFogCache(t, 3, 3)
@@ -222,14 +222,14 @@ func TestFogChannelSemantics(t *testing.T) {
 
 	// Visible: no ops [03 §3.3]
 	setTiles(none, none)
-	ops := cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, false))
+	ops := cell11(BuildFogOpsInto(nil, cache, cam, 0, 0, 3, 3, tables, false))
 	if len(ops) != 0 {
 		t.Fatalf("visible 1,1 should produce no ops, got %d", len(ops))
 	}
 
 	// ch0==15 short-circuit: only one SolidDark, no GAF even if ch1 fogged [03 §3.3]
 	setTiles(all, all)
-	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, false))
+	ops = cell11(BuildFogOpsInto(nil, cache, cam, 0, 0, 3, 3, tables, false))
 	if len(ops) != 1 || ops[0].Kind != FogKindSolidDark {
 		t.Fatalf("ch0==15 short-circuit want 1 SolidDark got %+v", ops)
 	}
@@ -242,7 +242,7 @@ func TestFogChannelSemantics(t *testing.T) {
 
 	// ch1==15 gray remap, ch0=0 => one GrayRemap [03 §3.3]
 	setTiles(none, all)
-	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, false))
+	ops = cell11(BuildFogOpsInto(nil, cache, cam, 0, 0, 3, 3, tables, false))
 	if len(ops) != 1 || ops[0].Kind != FogKindGrayRemap {
 		t.Fatalf("ch1==15 want GrayRemap got %+v", ops)
 	}
@@ -255,7 +255,7 @@ func TestFogChannelSemantics(t *testing.T) {
 	setTiles(none, all)
 	cam.X = 0
 	cam.Z = 0 // parity 0, dither on => Patterned
-	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, true))
+	ops = cell11(BuildFogOpsInto(nil, cache, cam, 0, 0, 3, 3, tables, true))
 	if len(ops) != 1 || ops[0].Kind != FogKindPatterned {
 		t.Fatalf("dither on: want Patterned got %+v", ops[0])
 	}
@@ -263,7 +263,7 @@ func TestFogChannelSemantics(t *testing.T) {
 		t.Fatalf("dither on should be patterned")
 	}
 	cam.X = 1 // parity 1, dither on => still Patterned (parity is phase only)
-	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, true))
+	ops = cell11(BuildFogOpsInto(nil, cache, cam, 0, 0, 3, 3, tables, true))
 	if len(ops) != 1 || ops[0].Kind != FogKindPatterned {
 		t.Fatalf("dither on parity 1 want Patterned got %+v", ops[0])
 	}
@@ -273,7 +273,7 @@ func TestFogChannelSemantics(t *testing.T) {
 	// ch1 1..14 GAF then ch0 1..14 GAF: channel one BEFORE channel zero [03 §3.3]
 	// c0=7 (tiles S? no: self+east+north), c1=5 (self+north).
 	setTiles([2][2]bool{{true, true}, {true, false}}, [2][2]bool{{true, false}, {true, false}})
-	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, false))
+	ops = cell11(BuildFogOpsInto(nil, cache, cam, 0, 0, 3, 3, tables, false))
 	if len(ops) != 2 {
 		t.Fatalf("both channels GAF want 2 ops got %d %+v", len(ops), ops)
 	}
@@ -294,7 +294,7 @@ func TestFogChannelSemantics(t *testing.T) {
 
 	// ch1==0 c0==3 => single GAF ch0 (self+east tiles unexplored)
 	setTiles([2][2]bool{{true, true}, {false, false}}, none)
-	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, false))
+	ops = cell11(BuildFogOpsInto(nil, cache, cam, 0, 0, 3, 3, tables, false))
 	if len(ops) != 1 || ops[0].Kind != FogKindGAFCh0 {
 		t.Fatalf("single ch0 GAF want 1 GAFCh0 got %+v", ops)
 	}
@@ -304,7 +304,7 @@ func TestFogChannelSemantics(t *testing.T) {
 
 	// ch1==9 c0==0 => single GAF ch1 (self+NW tiles fogged)
 	setTiles(none, [2][2]bool{{true, false}, {false, true}})
-	ops = cell11(BuildFogOps(cache, cam, 0, 0, 3, 3, tables, false))
+	ops = cell11(BuildFogOpsInto(nil, cache, cam, 0, 0, 3, 3, tables, false))
 	if len(ops) != 1 || ops[0].Kind != FogKindGAFCh1 {
 		t.Fatalf("single ch1 GAF want 1 GAFCh1 got %+v", ops)
 	}
@@ -337,7 +337,7 @@ func TestFogPaletteDarkening(t *testing.T) {
 	tables.Base[0] = [4]byte{99, 99, 99, 0} // should not be used when logical remapped
 
 	var ops []FogOp
-	for _, op := range BuildFogOps(cache, cam, 0, 0, 1, 1, tables, false) {
+	for _, op := range BuildFogOpsInto(nil, cache, cam, 0, 0, 1, 1, tables, false) {
 		if op.GridX == 0 && op.GridY == 0 {
 			ops = append(ops, op)
 		}
@@ -357,7 +357,7 @@ func TestFogPaletteDarkening(t *testing.T) {
 	if rn != 0 || gn != 0 || bn != 0 || an != 255 {
 		t.Fatalf("nil tables dark want 0,0,0,255 got %d,%d,%d,%d", rn, gn, bn, an)
 	}
-	opsNil := BuildFogOps(cache, cam, 0, 0, 1, 1, nil, false)
+	opsNil := BuildFogOpsInto(nil, cache, cam, 0, 0, 1, 1, nil, false)
 	for _, op := range opsNil {
 		if op.GridX == 0 && op.GridY == 0 && (op.R != 0 || op.G != 0 || op.B != 0) {
 			t.Fatalf("nil tables op should be 0,0,0")
@@ -377,7 +377,7 @@ func TestFogBorderFixups(t *testing.T) {
 	// window; it must not synthesize a second map-sized producer [03 §3.3].
 	cache := testFogCache(t, 2, 2)
 	cache.SetChannel(0, 0, 1, 0)
-	ops := BuildFogOps(cache, nil, 0, 0, 2, 2, nil, false)
+	ops := BuildFogOpsInto(nil, cache, nil, 0, 0, 2, 2, nil, false)
 	if len(ops) != 1 || ops[0].GridX != 0 || ops[0].GridY != 0 || ops[0].Channel0 != 1 {
 		t.Fatalf("cache translator must preserve the authored cell, got %+v", ops)
 	}
@@ -407,7 +407,7 @@ func testFogBorderFixupsLegacy(t *testing.T) {
 	// Nil camera enumerates the full grid plus the one-cell void ring.
 	cache := testFogCache(t, 4, 4)
 	cache.SetChannel(1, 0, 1, 0)
-	byCell := build(BuildFogOps(cache, nil, 0, 0, 4, 4, nil, false))
+	byCell := build(BuildFogOpsInto(nil, cache, nil, 0, 0, 4, 4, nil, false))
 	// Void cell west of the tile: seed bit8 (tile (1,0) is its SE source),
 	// top fixup adds bit2 => 10.
 	op, ok := byCell[[2]int32{0, -1}]
@@ -434,7 +434,7 @@ func testFogBorderFixupsLegacy(t *testing.T) {
 	for x := int32(0); x < 4; x++ {
 		cache.SetChannel(x, 0, 1, 0)
 	}
-	byCell = build(BuildFogOps(cache, nil, 0, 0, 4, 4, nil, false))
+	byCell = build(BuildFogOpsInto(nil, cache, nil, 0, 0, 4, 4, nil, false))
 	for x := int32(0); x < 4; x++ {
 		op, ok := byCell[[2]int32{x, -1}]
 		if !ok || op.Channel0 != 15 || op.Kind != FogKindSolidDark {
@@ -471,7 +471,7 @@ func testFogBorderFixupsLegacy(t *testing.T) {
 	for x := int32(0); x < 4; x++ {
 		cache.SetChannel(x, 3, 1, 0)
 	}
-	byCell = build(BuildFogOps(cache, nil, 0, 0, 4, 4, nil, false))
+	byCell = build(BuildFogOpsInto(nil, cache, nil, 0, 0, 4, 4, nil, false))
 	op, ok = byCell[[2]int32{0, 3}]
 	if !ok || op.Channel0 != 15 || op.Kind != FogKindSolidDark {
 		t.Fatalf("bottom edge cell (0,3) want ch0=15 SolidDark, got %+v (ok=%v)", op, ok)
@@ -516,7 +516,7 @@ func TestFogDeterminism(t *testing.T) {
 	}
 
 	run := func() []FogOp {
-		return BuildFogOps(cache, cam, cam.ViewW, cam.ViewH, 4, 4, tables, true)
+		return BuildFogOpsInto(nil, cache, cam, cam.ViewW, cam.ViewH, 4, 4, tables, true)
 	}
 	a := run()
 	b := run()
@@ -524,14 +524,14 @@ func TestFogDeterminism(t *testing.T) {
 		t.Fatalf("determinism failed: first %v second %v", a, b)
 	}
 	// Determinism also holds without dither
-	aNoDither := BuildFogOps(cache, cam, cam.ViewW, cam.ViewH, 4, 4, tables, false)
-	bNoDither := BuildFogOps(cache, cam, cam.ViewW, cam.ViewH, 4, 4, tables, false)
+	aNoDither := BuildFogOpsInto(nil, cache, cam, cam.ViewW, cam.ViewH, 4, 4, tables, false)
+	bNoDither := BuildFogOpsInto(nil, cache, cam, cam.ViewW, cam.ViewH, 4, 4, tables, false)
 	if !reflect.DeepEqual(aNoDither, bNoDither) {
 		t.Fatalf("determinism no-dither failed")
 	}
 }
 
-// TestFogNeverMutatesVisibility verifies BuildFogOps never writes word mask or cache (I6).
+// TestFogNeverMutatesVisibility verifies BuildFogOpsInto never writes word mask or cache (I6).
 func TestFogNeverMutatesVisibility(t *testing.T) {
 	terr := &world.Terrain{CellW: 6, CellH: 6} // grid 3x3
 	svc := visibility.New(terr, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
@@ -553,8 +553,8 @@ func TestFogNeverMutatesVisibility(t *testing.T) {
 
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: 96, MapH: 96}
 	tables := &palette.Tables{}
-	_ = BuildFogOps(cache, cam, cam.ViewW, cam.ViewH, 3, 3, tables, false)
-	_ = BuildFogOps(cache, cam, cam.ViewW, cam.ViewH, 3, 3, tables, true)
+	_ = BuildFogOpsInto(nil, cache, cam, cam.ViewW, cam.ViewH, 3, 3, tables, false)
+	_ = BuildFogOpsInto(nil, cache, cam, cam.ViewW, cam.ViewH, 3, 3, tables, true)
 	for y := int32(0); y < 3; y++ {
 		for x := int32(0); x < 3; x++ {
 			c0, c1 := cache.Channel(x, y)
@@ -600,11 +600,11 @@ func TestFogVariantSelection(t *testing.T) {
 // TestFogEmptyCacheAndNil ensures nil/empty cases don't panic and are deterministic (I6).
 func TestFogEmptyCacheAndNil(t *testing.T) {
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: 128, MapH: 128}
-	ops := BuildFogOps(nil, cam, cam.ViewW, cam.ViewH, 4, 4, nil, false)
+	ops := BuildFogOpsInto(nil, nil, cam, cam.ViewW, cam.ViewH, 4, 4, nil, false)
 	if ops != nil && len(ops) != 0 {
 		t.Fatalf("nil cache should yield nil/empty")
 	}
-	ops = BuildFogOps(testFogCache(t, 2, 2), nil, 0, 0, 2, 2, nil, false)
+	ops = BuildFogOpsInto(nil, testFogCache(t, 2, 2), nil, 0, 0, 2, 2, nil, false)
 	// with nil cam, full grid enumeration
 	if len(ops) != 0 {
 		// cache initially all 0,0 visible => no ops

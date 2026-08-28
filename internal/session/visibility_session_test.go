@@ -10,8 +10,9 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// TestP0I07_VisibilityModeRespectsSkirmishConfig verifies ModeHistory/Current/TerrainRay from SkirmishConfig [08 "Skirmish configuration"][03 §3.1] C2.
-func TestP0I07_VisibilityModeRespectsSkirmishConfig(t *testing.T) {
+// TestVisibilityModeRespectsSkirmishConfig verifies ModeHistory/Current/TerrainRay
+// from SkirmishConfig [08 "Skirmish configuration"][03 §3.1].
+func TestVisibilityModeRespectsSkirmishConfig(t *testing.T) {
 	cat := minimalCatalogForStrict()
 	terrain := minimalTerrain()
 	m := syntheticMission()
@@ -61,8 +62,9 @@ func TestP0I07_VisibilityModeRespectsSkirmishConfig(t *testing.T) {
 	}
 }
 
-// TestP0I07_SessionIsVisible covers owner bypass, LOS, and sensor-independent gating [03 §3.2] C8.
-func TestP0I07_SessionIsVisible(t *testing.T) {
+// TestSessionVisibility covers owner bypass, LOS, and sensor-independent
+// visibility predicates [03 §3.2].
+func TestSessionVisibility(t *testing.T) {
 	cat := minimalCatalogForStrict()
 	terrain := &world.Terrain{CellW: 64, CellH: 64, SeaLevel: 0}
 	terrain.Plot = make([]world.PlotCell, 64*64)
@@ -186,8 +188,8 @@ func TestP0I07_SessionIsVisible(t *testing.T) {
 	_ = h1
 }
 
-// TestP0I07_FogSnapshot verifies fog cache is copied to snapshot each tick [03 §3.3] C13.
-func TestP0I07_FogSnapshot(t *testing.T) {
+// TestFogSnapshot verifies fog cache publication at each committed tick [03 §3.3].
+func TestFogSnapshot(t *testing.T) {
 	cat := minimalCatalogForStrict()
 	terrain := minimalTerrain()
 	m := syntheticMission()
@@ -202,7 +204,7 @@ func TestP0I07_FogSnapshot(t *testing.T) {
 		t.Fatalf("bind: %v", err)
 	}
 	s.RegisterAll()
-	s.State = StateBattle // P0-I10: ticks only in battle
+	s.State = StateBattle // authoritative ticks run only in battle
 	// Initially fog valid after RebuildFog in create? It starts invalid then rebuilt lazily. After publish, invalid.
 	// Run one subtick via Step.
 	s.Clock.ScaledAnchor = 0
@@ -223,8 +225,9 @@ func TestP0I07_FogSnapshot(t *testing.T) {
 	// Second tick with 0 delta still publishes fog (valid remains).
 }
 
-// TestP0I07_MovementRefreshViaTick verifies coverage updates at retail threshold (cell/2) [03 §3.2] C6.
-func TestP0I07_MovementRefreshViaTick(t *testing.T) {
+// TestMovementRefreshViaTick verifies coverage updates at the retail cell/2
+// threshold [03 §3.2].
+func TestMovementRefreshViaTick(t *testing.T) {
 	cat := minimalCatalogForStrict()
 	terrain := &world.Terrain{CellW: 64, CellH: 64}
 	terrain.Plot = make([]world.PlotCell, 64*64)
@@ -283,8 +286,8 @@ func TestP0I07_MovementRefreshViaTick(t *testing.T) {
 	}
 }
 
-// TestP0I07_SaveLoadRebuild ensures save/load restores mapping and republishes [03 §3.3] C10.
-func TestP0I07_SaveLoadRebuild(t *testing.T) {
+// TestSaveLoadRebuild ensures save/load restores mapping and republishes [03 §3.3].
+func TestSaveLoadRebuild(t *testing.T) {
 	cat := minimalCatalogForStrict()
 	terrain := minimalTerrain()
 	m := syntheticMission()

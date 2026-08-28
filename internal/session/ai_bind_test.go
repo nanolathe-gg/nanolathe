@@ -24,9 +24,9 @@ func TestRX01_ProductionSessionsBindAIQueue(t *testing.T) {
 	cfg.ApplyDefaults()
 	cfg.Players[0].Controller = 0 // human
 	cfg.Players[1].Controller = 1 // computer
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest: %v", err)
 	}
 	// Fixture OTA carries no TNT section; complete composition like the
 	// topology test does before validating.
@@ -80,9 +80,9 @@ func TestRX01_BoundCallbackQueuesMobileBuildAtCoordinates(t *testing.T) {
 	cfg.ApplyDefaults()
 	cfg.Players[0].Controller = 0
 	cfg.Players[1].Controller = 1
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest: %v", err)
 	}
 	var builder *units.Unit
 	for _, u := range s.Units.IterSliced() {

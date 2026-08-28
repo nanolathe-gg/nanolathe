@@ -25,26 +25,19 @@ The repository keeps each kind of guidance in one place:
   reference. Format documents own byte layout; the executable specification
   owns runtime behavior.
 
-`docs/PLAN_*.md` files are active implementation contracts and gate checklists,
-not a progress log. An unchecked box means the gate still needs current
-verification; it does not by itself prove that the underlying code is absent.
-Do not dispatch a later unit until the dependencies and prior gates named in
-`PHASES.md` are green.
+`docs/PLAN_*.md` files are active implementation contracts and gate checklists.
+An unchecked box identifies a verification requirement; it does not by itself
+prove that the underlying code is absent. Dispatch follows the dependencies
+and prior gates named in `PHASES.md`.
 
 ## Current boundary
 
 The repository has one Ebitengine presentation path and a headless authoritative
-session. Immutable snapshots publish bounded unit/order, projectile, effect,
-economy, construction, HUD, and fog state to presentation consumers. Focused
-deterministic and asset-gated integration fixtures cover substantial
-single-player composition, but the terminal acceptance target is still a
-complete asset-backed human-versus-AI match through the windowed client.
-
-That windowed/runtime gate has not been established on the current macOS host:
-tests that initialize Ebitengine can stall in macOS display services. A compile,
-focused headless test, or skipped asset gate is not evidence that the terminal
-windowed gate passed. Run it on a host with working display services and a
-local retail asset root before reporting release acceptance.
+session. The session publishes bounded unit/order, projectile, effect, economy,
+construction, HUD, and fog state in one committed frame; presentation reads
+that frame and never writes simulation state. Windowed checks require working
+display services and a local retail asset root; headless checks remain useful
+for deterministic behavior and data loading but do not exercise the window.
 
 Exact-retail gaps remain explicit as `TODO(T23)`, `TODO(T25)`, or
 `TODO(question)` at their implementation site and under the relevant research

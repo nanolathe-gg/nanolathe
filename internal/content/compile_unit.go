@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -192,6 +193,17 @@ type UnitDef struct {
 	Weapon3Def        *WeaponDef // resolved weapon3
 	ExplodeAsDef      *WeaponDef // resolved explodeas
 	SelfDestructAsDef *WeaponDef // resolved selfdestructas
+
+	// Script is the compiled COB program resolved at definition load from
+	// scripts/<unitname>.cob [R-COB-01 §1] (UNIT-04). A missing, unreadable,
+	// or otherwise unloadable script file stores the null program (nil) and
+	// the definition is accepted — no diagnostic, no substitution, no
+	// fallback program. Unit creation takes the explicit scriptless branch
+	// for a null program: no VM instance, render table still built from the
+	// model, no Create started [R-COB-01 §1]. Deliberately absent from
+	// writeUnitCanonical: the hash is the FBI record's identity, and this
+	// value comes from a different asset with its own provenance.
+	Script *cob.Program
 
 	// Unknown retains inert parsed keys so a later phase can consume without re-parsing [02 §5] C14.
 	// Keys are OriginalKey preserved case; e.g., wacky, noautofire, ovradjust, steeringmode, TEDClass etc have no behavior.

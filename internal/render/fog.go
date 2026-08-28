@@ -327,35 +327,6 @@ func cellOpsInto(ops []FogOp, gx, gy int32, c0, c1 uint8, cam *camera.Camera, ta
 	return ops
 }
 
-// BuildFogOps constructs the deterministic, hard-edged fog overlay for the
-// viewport defined by cam view size and grid dimensions [03 §3.3] (I6) (I1).
-//
-// It reads the published FogCache only via Channel (I6) and never mutates it.
-// Iteration is row-major (y outer, x inner) for determinism [I1]. Each cell's
-// rectangle is hard 32x32 aligned including signed residues [03 §3.3]. Palette
-// darkening uses the logical→physical lookup at present time [03 §4.3] C7.
-//
-// gridW, gridH are the visibility grid dimensions (W = CellW/2, H = CellH/2
-// [03 §3.1]); when zero they are derived from cam.MapW/MapH when available.
-// When cam is nil the full grid plus its one-cell void ring is enumerated
-// row-major without viewport culling. dither selects the options-storage
-// dither bit for patterned fills [03 §3.3].
-//
-// The enumerated window extends one cell past the viewport intersection on
-// every side (the retail cache border [03 §3.3]) and is NOT clamped to the
-// map: cells beyond the map are part of the retail cache. Their values are
-// recomputed in a presentation-only working buffer exactly as the retail
-// producer builds its window [03 §3.3]: in-map fogged/unexplored
-// tiles OR 1,2,4,8 into the cell and its NW neighbours (void cells receive the
-// bits that cross the map boundary), then the four border fixups run in
-// retail order — top/left propagate fog into the void row/column adjacent to
-// the map, bottom/right thicken the last in-map row/column toward the edge
-// [03 §3.3]. South/east void cells stay zero
-// (retail draws nothing there); the terrain blit leaves out-of-map black.
-func BuildFogOps(cache *visibility.FogCache, cam *camera.Camera, viewW, viewH int32, gridW, gridH int32, tables *palette.Tables, dither bool) []FogOp {
-	return BuildFogOpsInto(nil, cache, cam, viewW, viewH, gridW, gridH, tables, dither)
-}
-
 // BuildFogOpsInto is the reusable-scratch variant for the live client frame
 // path. It preserves row-major operation order while avoiding an operation
 // slice allocation after warmup [03 §3.3][I1].

@@ -16,9 +16,9 @@ func TestResult_StateTransitionAndNoTick(t *testing.T) {
 	fs := fsWithMap(t, "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=10;\nZPos=10;\n}\n}\n}\n}\n")
 	cfg := SkirmishConfig{MapName: "test", NumPlayers: 2}
 	cfg.ApplyDefaults()
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest: %v", err)
 	}
 	s.RegisterAll()
 	s.State = StateBattle
@@ -83,9 +83,9 @@ func TestResult_RetryResetsAuthoritativeState(t *testing.T) {
 	fs := fsWithMap(t, "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=10;\nZPos=10;\n}\n}\n}\n}\n")
 	cfg := SkirmishConfig{MapName: "test", NumPlayers: 2}
 	cfg.ApplyDefaults()
-	s, err := NewSkirmishForTest(fs, cat, cfg)
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishForTest: %v", err)
+		t.Fatalf("NewSyntheticSkirmishForTest: %v", err)
 	}
 	s.RegisterAll()
 	s.State = StateBattle
@@ -101,10 +101,10 @@ func TestResult_RetryResetsAuthoritativeState(t *testing.T) {
 		t.Fatalf("first match did not reach terminal result")
 	}
 	// Retry via clean session recreation (simulates shell retry) [RS-05]
-	// Use NewSkirmishForTest to ensure clean terrain without VFS TNT dependency
-	s2, err := NewSkirmishForTest(fs, cat, cfg)
+	// Use NewSyntheticSkirmishForTest to ensure clean terrain without VFS TNT dependency
+	s2, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	if err != nil {
-		t.Fatalf("retry NewSkirmishForTest: %v", err)
+		t.Fatalf("retry NewSyntheticSkirmishForTest: %v", err)
 	}
 	s2.RegisterAll()
 	s2.State = StateBattle
@@ -120,7 +120,7 @@ func TestResult_RetryResetsAuthoritativeState(t *testing.T) {
 		t.Fatalf("second match did not reach terminal result")
 	}
 	// Also test Session.Retry on same object resets cleanly
-	s3, _ := NewSkirmishForTest(fs, cat, cfg)
+	s3, _ := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	s3.RegisterAll()
 	s3.State = StatePostBattle
 	s3.Latch.Countdown = -1
@@ -149,7 +149,7 @@ func TestResult_SimultaneousFinalCommanders(t *testing.T) {
 	fs := fsWithMap(t, "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=10;\nZPos=10;\n}\n}\n}\n}\n")
 	cfg := SkirmishConfig{MapName: "test", NumPlayers: 2}
 	cfg.ApplyDefaults()
-	s, _ := NewSkirmishForTest(fs, cat, cfg)
+	s, _ := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	s.RegisterAll()
 	s.State = StateBattle
 	// Kill both simultaneously before evaluation
@@ -179,7 +179,7 @@ func TestResult_LocalWinLossViaSnapshot(t *testing.T) {
 	cfg := SkirmishConfig{MapName: "test", NumPlayers: 2}
 	cfg.ApplyDefaults()
 	// Local win: kill enemy
-	s, _ := NewSkirmishForTest(fs, cat, cfg)
+	s, _ := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	s.RegisterAll()
 	s.State = StateBattle
 	s.LocalOwner = 0
@@ -205,7 +205,7 @@ func TestResult_LocalWinLossViaSnapshot(t *testing.T) {
 		t.Fatalf("countdown after latch want -1 got %d", s.Latch.Countdown)
 	}
 	// Local loss: kill local
-	s2, _ := NewSkirmishForTest(fs, cat, cfg)
+	s2, _ := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	s2.RegisterAll()
 	s2.State = StateBattle
 	s2.LocalOwner = 0
