@@ -11,6 +11,15 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
+type sessionAudioOutputSpy struct {
+	plays int
+}
+
+func (s *sessionAudioOutputSpy) PlaySample(*audio.Sample, float64, float64) error {
+	s.plays++
+	return nil
+}
+
 func TestCommittedAudioSurvivesAudienceChangeBeforeDrain(t *testing.T) {
 	s := &Session{
 		Audio:       audio.NewService(nil),
@@ -28,12 +37,12 @@ func TestCommittedAudioSurvivesAudienceChangeBeforeDrain(t *testing.T) {
 		t.Fatal("audible event was not admitted")
 	}
 	s.Vis.ByteGrid(0)[0] = 0
-	old := audio.GlobalBackend()
-	b := audio.NewBackend(true)
-	audio.SetGlobalBackend(b)
-	t.Cleanup(func() { audio.SetGlobalBackend(old) })
+	old := audio.GlobalOutput()
+	spy := &sessionAudioOutputSpy{}
+	audio.SetGlobalOutput(spy)
+	t.Cleanup(func() { audio.SetGlobalOutput(old) })
 	s.Audio.DrainEvents(30, 7, s.publication.events.SnapshotEvents())
-	if b.PlayCount() != 1 {
-		t.Fatalf("admitted event was suppressed after audience changed: plays=%d", b.PlayCount())
+	if spy.plays != 1 {
+		t.Fatalf("admitted event was suppressed after audience changed: plays=%d", spy.plays)
 	}
 }

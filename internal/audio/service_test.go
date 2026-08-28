@@ -54,23 +54,23 @@ func TestServiceInitBindsLaterFSWithoutReplacingStateOrPlayback(t *testing.T) {
 
 func TestServiceDrainEventsDefersPositionalPlaybackUntilPresentation(t *testing.T) {
 	s := NewService(testAudioFS(t, "shot"))
-	old := GlobalBackend()
-	b := NewBackend(true)
-	SetGlobalBackend(b)
-	t.Cleanup(func() { SetGlobalBackend(old) })
+	old := GlobalOutput()
+	spy := &outputSpy{}
+	SetGlobalOutput(spy)
+	t.Cleanup(func() { SetGlobalOutput(old) })
 	if _, err := s.Load("shot"); err != nil {
 		t.Fatalf("fixture positional sample load failed: %v", err)
 	}
 	ev := []frame.EventView{{Kind: frame.EventKindAudio, AudioPositional: true, AudioAudible: true, Sound: "shot"}}
-	if b.PlayCount() != 0 {
+	if len(spy.plays) != 0 {
 		t.Fatal("authoritative event fixture played before drain")
 	}
 	s.DrainEvents(30, 7, ev)
-	if b.PlayCount() != 1 {
-		t.Fatalf("presentation drain play count=%d want 1", b.PlayCount())
+	if len(spy.plays) != 1 {
+		t.Fatalf("presentation drain play count=%d want 1", len(spy.plays))
 	}
 	s.DrainEvents(31, 7, ev)
-	if b.PlayCount() != 1 {
-		t.Fatalf("committed event replayed on second rendered frame: %d", b.PlayCount())
+	if len(spy.plays) != 1 {
+		t.Fatalf("committed event replayed on second rendered frame: %d", len(spy.plays))
 	}
 }

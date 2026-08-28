@@ -14,7 +14,7 @@ import (
 func TestProjectileVisibilityUsesCommittedCoverageAndShear(t *testing.T) {
 	mask := make([]uint8, 4)
 	mask[3] = 1 // u=1,row=1
-	vis := frame.VisibilityView{W: 2, H: 2, Visible: mask, Valid: true}
+	vis := frame.VisibilityView{W: 2, H: 2, Visible: mask, CoverageBytes: true, Valid: true}
 	if !ProjectileVisible(vis, frame.ProjectileView{X: numeric.Fixed(32 << 16), Z: numeric.Fixed(48 << 16)}, 0, 0) {
 		t.Fatal("projectile in published coverage cell was rejected")
 	}

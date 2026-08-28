@@ -38,8 +38,12 @@ func TestMinimapCameraIntentInsideAndDrag(t *testing.T) { // [07 §10] two-branc
 		t.Fatalf("applyMinimapIntentForTest inside should be consumed")
 	}
 	// After inside click, camera origin is the world point corresponding to the
-	// mouse, then clamped [03 §3.11].
-	wx, wz := m.RadarToWorld(mouseX, mouseY, playW, playH)
+	// display point's converted canvas coordinate, then clamped [03 §3.11].
+	canvasX, canvasY, ok := m.DisplayToCanvas(mouseX, mouseY, hudRect.X1, hudRect.Y1, hudRect.X2-hudRect.X1+1, hudRect.Y2-hudRect.Y1+1)
+	if !ok {
+		t.Fatal("inside lens display point did not convert to canvas")
+	}
+	wx, wz := m.ToWorldPlay(canvasX, canvasY, playW, playH)
 	wantX := wx
 	// Need to recompute expected with clampAxis order [07 §10]
 	// clampAxis: maximum = mapSize - viewSize; if camera<0->0 else if >maximum->maximum
@@ -103,15 +107,17 @@ func TestMinimapCameraIntentClampOrder(t *testing.T) { // [07 §10] C3 clampAxis
 	playW, playH := int32(100), int32(100)
 	m := camera.Minimap{W: 126, H: 126, PadX: 0, PadY: 0}
 	hudRect := hud.Rect{X1: 0, Y1: 0, X2: 126, Y2: 126}
-	// view larger than map -> maximum = map - view negative, clampAxis order ensures negative camera ->0 before maximum check
+	// view larger than map -> maximum = map - view negative; the established
+	// ordered clamp returns the negative maximum for a nonnegative target.
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: 200, ViewH: 200, MapW: playW, MapH: playH}
-	// inside click at 0,0 => wx 0 => newCam = -100 => clamp to 0 per order
+	// inside click at 0,0 => wx 0; the ordered clamp sees target 0 above the
+	// negative maximum and returns that maximum.
 	ok := applyMinimapIntentForTest(cam, m, hudRect, playW, playH, 0, 0, true, nil)
 	if !ok {
 		t.Fatalf("inside should be consumed")
 	}
-	if cam.X != 0 || cam.Z != 0 {
-		t.Fatalf("clamp order negative-maximum: camera 0,0 want 0,0 got %d,%d", cam.X, cam.Z)
+	if cam.X != -100 || cam.Z != -100 {
+		t.Fatalf("clamp order negative-maximum: camera -100,-100 want -100,-100 got %d,%d", cam.X, cam.Z)
 	}
 	// Click far edge with large view: newCam positive but > maximum (negative maximum) -> clamp to maximum negative
 	cam2 := &camera.Camera{X: 0, Z: 0, ViewW: 200, ViewH: 200, MapW: playW, MapH: playH}

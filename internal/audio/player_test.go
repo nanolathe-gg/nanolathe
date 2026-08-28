@@ -7,28 +7,16 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 )
 
-func TestBackendHeadlessNeverCreatesContext(t *testing.T) {
-	b := NewBackend(true)
-	if !b.IsHeadless() {
-		t.Fatal("headless backend should report headless")
-	}
-	// Play should be no-op but record alias without creating device
-	s := &Sample{Alias: "test", SampleRate: 11025, Channels: 1, BitsPerSample: 8, Data: []byte{128, 129, 127}}
-	if err := b.PlaySample(s, 1.0, 0); err != nil {
-		t.Fatalf("headless PlaySample error %v", err)
-	}
-	if b.PlayCount() != 1 {
-		t.Fatalf("headless play count %d want 1", b.PlayCount())
+func TestBackendUsesLazyRealOutput(t *testing.T) {
+	b := NewBackend()
+	if b == nil || b.SampleRate() != 44100 {
+		t.Fatalf("backend sample rate = %v, want 44100", b)
 	}
 	if b.ctx != nil {
-		t.Fatal("headless backend must not create audio context")
+		t.Fatal("backend should create its device lazily")
 	}
-	// Global backend guard
-	old := GlobalBackend()
-	SetGlobalBackend(NewBackend(true))
-	defer SetGlobalBackend(old)
-	if GlobalBackend() == nil || !GlobalBackend().IsHeadless() {
-		t.Fatal("global headless backend not installed")
+	if !b.Capabilities().Device || !b.Capabilities().Stereo {
+		t.Fatal("real backend should advertise device and stereo output")
 	}
 }
 
@@ -108,48 +96,15 @@ func TestConvertSampleStereo16(t *testing.T) {
 	}
 }
 
-func TestBackendPlayAliasHeadless(t *testing.T) {
-	cache := NewCache(nil)
-	// put a synthetic sample
-	raw := []byte{128, 128, 128, 128}
-	_, err := cache.Put("testalias", raw)
-	if err != nil {
-		t.Fatalf("put %v", err)
-	}
-	s, ok := cache.Get("testalias")
-	if !ok || s == nil {
-		t.Fatal("sample not cached")
-	}
-	b := NewBackend(true)
-	old := GlobalBackend()
-	SetGlobalBackend(b)
-	defer SetGlobalBackend(old)
-	if err := b.PlayAlias("testalias", cache, 1.0, 0); err != nil {
-		t.Fatalf("play alias headless %v", err)
-	}
-	if b.PlayCount() != 1 {
-		t.Fatalf("count %d want 1", b.PlayCount())
-	}
-	// missing alias should still record but degrade silently
-	if err := b.PlayAlias("missing", cache, 1.0, 0); err != nil {
-		t.Fatalf("missing alias should not error")
-	}
-	if b.PlayCount() != 2 {
-		t.Fatalf("missing alias count %d want 2", b.PlayCount())
-	}
-}
-
 func TestQueueArbitrationIntactAfterBackend(t *testing.T) {
 	q := NewQueue()
 	cat := categoryFixture()
 	q.Register(1, cat, "U", true)
-	// Install headless backend and verify queue still orders descending
-	b := NewBackend(true)
-	SetGlobalBackend(b)
-	defer SetGlobalBackend(nil)
+	// Install an output observer and verify queue still orders descending.
 	q.OnPlay(func(alias string, slot Slot, unit pool.Handle) {
-		// also play via backend for UI cues
-		_ = b.PlayAlias(alias, nil, 1.0, 0)
+		_ = alias
+		_ = slot
+		_ = unit
 	})
 	_ = cat
 	// Insert low priority then high, verify order

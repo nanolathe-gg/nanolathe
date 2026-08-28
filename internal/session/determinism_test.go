@@ -280,7 +280,7 @@ func TestRS06_FloatAudit(t *testing.T) {
 // TestRS06_LegacyProductionGuard ensures Session.Step does not call retired
 // kernel graph [RS-06] and that the tick runs through the single
 // stepAuthoritativePhases registry [DET-02] — Step must not inline a second
-// phase sequence.
+// phase sequence or absorb the sharing/result sub-tick boundary.
 func TestRS06_LegacyProductionGuard(t *testing.T) {
 	root := findRepoRoot(t)
 	b, err := os.ReadFile(root + "/internal/session/step.go")
@@ -302,15 +302,26 @@ func TestRS06_LegacyProductionGuard(t *testing.T) {
 			t.Fatalf("legacy production tick graph called in Session.Step: %q [RS-06]", pat)
 		}
 	}
-	// DET-02: Step delegates to the one authoritative phase sequence; the
+	// DET-02: Step delegates to the one complete sub-tick boundary; the phase
 	// sequence itself (including stepUnitPhase via phaseUnits) lives only in
 	// stepAuthoritativePhases.
-	if !strings.Contains(snippet, "s.stepAuthoritativePhases(tick)") {
-		t.Fatalf("Step must delegate to stepAuthoritativePhases [RS-06][DET-02]")
+	if !strings.Contains(snippet, "s.stepOneSubTick(tick)") {
+		t.Fatalf("Step must delegate to stepOneSubTick [RS-06][DET-02]")
 	}
 	registry := content[:idx]
 	if !strings.Contains(registry, "func (s *Session) stepAuthoritativePhases") || !strings.Contains(registry, "s.phaseUnits(tick)") {
 		t.Fatalf("stepAuthoritativePhases must be the single phase registry containing the retail sequence [RS-06][DET-02]")
+	}
+	registryStart := strings.Index(registry, "func (s *Session) stepAuthoritativePhases")
+	registryEnd := strings.Index(registry[registryStart:], "// stepOneSubTick")
+	if registryEnd < 0 {
+		t.Fatalf("stepAuthoritativePhases boundary missing stepOneSubTick marker [DET-02]")
+	}
+	phaseRegistry := registry[registryStart : registryStart+registryEnd]
+	for _, forbidden := range []string{"stepSharingPhase", "stepResultPhase", "publishSnapshot"} {
+		if strings.Contains(phaseRegistry, forbidden) {
+			t.Fatalf("phase registry must not own %s [01 §4.4][DET-02]", forbidden)
+		}
 	}
 }
 

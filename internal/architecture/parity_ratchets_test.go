@@ -333,18 +333,17 @@ var debtMarkerTotals = map[string]int{
 	// "legacy" (empty-fallback wording removed) and added two brief-mandated
 	// TODO(question) markers (definition-identity mapping, scriptless
 	// crash-policy residual).
-	"legacy":         39,
-	"compatibility":  17,
-	"fallback":       185,
+	"legacy":         37,
+	"compatibility":  16,
+	"fallback":       182,
 	"guess":          7,
 	"plausible":      1,
-	"todo(question)": 346, // -2 pool, -2 skirmish, +1 campaign-key seam, and -1 mission seed-source residual since the prior baseline
+	"todo(question)": 351, // +4 step seams and +1 post-loop owner seam since the prior baseline
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
 	"legacy": {
 		"internal/cob/vm.go":                  4,
-		"internal/construction/factory.go":    2,
 		"internal/construction/queue.go":      1,
 		"internal/mission/initial_mission.go": 1,
 		"internal/mission/load.go":            3,
@@ -363,7 +362,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 	"compatibility": {
 		"internal/cob/vm.go":                  1,
 		"internal/combat/service.go":          1,
-		"internal/construction/factory.go":    4,
+		"internal/construction/factory.go":    3,
 		"internal/construction/queue.go":      1,
 		"internal/mission/initial_mission.go": 1,
 		"internal/movement/admission.go":      1,
@@ -388,7 +387,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/combat/service.go":             4,
 		"internal/combat/target.go":              9,
 		"internal/construction/approach.go":      1,
-		"internal/construction/factory.go":       10,
+		"internal/construction/factory.go":       7,
 		"internal/construction/queue.go":         10,
 		"internal/economy/ledger.go":             1,
 		"internal/features/reproduce.go":         1,
@@ -498,12 +497,13 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/session/composition.go":          1,
 		"internal/session/mission.go":              3,
 		"internal/session/progression.go":          4,
+		"internal/session/post_loop.go":            1,
 		"internal/session/result.go":               5,
 		"internal/session/retail_load.go":          1,
 		"internal/session/session.go":              3,
 		"internal/session/skirmish.go":             6,
 		"internal/session/state.go":                1,
-		"internal/session/step.go":                 4,
+		"internal/session/step.go":                 8,
 		"internal/session/strips.go":               15,
 		"internal/sim/numeric/numeric.go":          1,
 		"internal/sim/numeric/trig.go":             1,

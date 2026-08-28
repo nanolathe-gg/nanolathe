@@ -1870,6 +1870,108 @@ pre-baked radar image is unavailable, the engine builds a temporary higher-
 resolution image, rescales it, and composites it into the minimap region.
 The input path reads the minimap/edge region and updates camera state.
 
+#### CRD-006 camera cadence seam — two retail writers [R-CRD-006 §1]
+
+**Established fact — input scrolling and phase-10 following are distinct.**
+The host-frame input path described above writes the signed 32-bit camera
+origin directly. Its state is a current map-pixel origin (`cameraX` and
+`cameraZ`), a persistent unsigned byte scroll setting, and the signed
+host-frame raw-delta value used to calculate one movement magnitude. For each
+matching direction, the magnitude is `scrollSetting * rawDelta`, made
+non-negative and capped at `128`; a zero magnitude performs no movement. The
+direction tests run in the order Left, Right, Up, Down, so opposing held
+directions can write the same origin sequentially. The input writer marks the
+camera/view state dirty and wakes the normal clamp/refresh path. This is a
+host-frame presentation/input cadence; it is not a phase-10 keyboard-target
+step. [07 §10]
+
+Phase 10 writes that same current origin from a separate follow-camera helper.
+It does not read the held-arrow or pointer-edge predicates and does not use
+the scroll setting or host raw delta. Its semantic target selection priority
+is: an active in-flight camera move (whose remaining count is consumed when
+selected), then the followed projectile, then the valid tracked object. An
+invalid tracked object clears tracking; with no selected target, phase 10 does
+not recompute or step a follow target. The selected target is converted to a
+desired camera origin by subtracting half the viewport span (and applying the
+ground object's half-height shear on the vertical axis), then the desired
+origin is clamped to the map's normal camera range before stepping. [01 §4.4]
+
+The phase-10 follow state is therefore two signed 32-bit map-pixel origins
+(`currentX/currentZ` and `desiredX/desiredZ`), plus a signed 16-bit remaining
+count for an in-flight camera move and a three-component 16.16 fixed-point
+anchor for that move. Followed-projectile and tracked-object selections are
+nullable object references; map dimensions and viewport spans are signed
+integer extents. These are semantic types: an implementation may represent
+the references as stable handles, but must preserve null and validity
+behavior. [01 §4.4]
+
+The phase-10 current-to-desired step is exact. For each axis let
+`d = desired - current`: if `|d| > 320`, add `sign(d) * 320`; otherwise add
+`trunc(d / 2)` with signed integer truncation toward zero. Thus `d = ±320`
+uses a half-step of `±160`, `d = ±321` uses `±320`, and `d = ±1` stalls one
+pixel short. A nonzero step marks the camera/view state dirty. The phase-10
+order is target selection (including in-flight-count consumption), desired
+origin calculation and clamp, current-origin step, shake consumption, then
+the final current-origin clamp and view invalidation. [01 §4.4][03 §5.6]
+
+Shake is applied after the follow step, in place to the current origin. It
+never changes the desired follow target. Its integer state is duration,
+remaining count, signed X/Y amplitudes, and an active flag. A request updates
+duration to `trunc((requestedDuration + currentDuration) / 2)`, resets
+remaining to that duration, accumulates the amplitudes, and is active only
+when duration is positive. While the active counter is positive, each axis
+first computes `s = trunc(amplitude * remaining / duration)`, then consumes
+one CRT value as `trunc(rand * s / 0x8000) - trunc(s / 2)`; the two axis draws
+occur before remaining is decremented. An invocation entering with no positive
+counter only clears the inactive state and performs no draws. The final camera
+clamp therefore also clamps a shaken origin. [01 §4.4.1]
+
+This distinction corrects a tempting but unsupported reading of the CRD-006
+handoff: retail evidence does not establish a keyboard/edge “target” that is
+advanced by phase 10. The handoff's sample-once/hold-through-the-next-pump
+requirement is a valid Nanolathe determinism seam, but it is a supported
+implementation choice rather than a retail contract. If used, the seam must
+keep host-frame sampling, phase-10 intent application, follow-target
+stepping, and shake as named stages; it must not be documented as retail's
+input algorithm. Retail's host-frame writer remains one direct movement pass
+per host-frame invocation, while retail's follow/shake writer runs once per
+runnable simulation sub-tick. [01 §4.4]
+
+**Established fact — cadence probes.** The following probes separate the two
+writers and are suitable for an implementation test harness. “Host pass” is a
+single invocation of the input writer; “phase pass” is one phase-10 callback.
+
+| Probe | Host-frame input writer | Phase-10 follow/shake writer |
+|---|---|---|
+| 0 phase passes | A host pass may still apply one direct delta if the outer frame ran; no phase-10 movement or CRT draws occur. | No target step and no shake consumption. |
+| 1 phase pass | The same one host pass is not multiplied by the phase count. | One follow step, then one shake consumption/draw pair when active. |
+| 5 phase passes | One host pass still applies one direct delta, with Left→Right→Up→Down ordering. | Five independent follow steps and five shake consumption/draw pairs when the counter remains active. |
+| Held direction | `scrollSetting * rawDelta`, capped at 128, is recalculated only when the host writer is invoked. | No retail held-arrow read occurs. A deterministic Nanolathe seam may hold the sampled intent for the next pump and apply it once per phase pass; this is explicitly non-retail behavior. |
+
+For the follow step, test `d = 0, ±1, ±2, ±319, ±320, ±321` and verify
+respectively `0, 0, ±1, ±159, ±160, ±320` movement, with the sign preserved.
+For input, test raw delta zero, a product below the cap, exactly the cap, and
+above the cap; test both opposing pairs and verify the sequential order rather
+than collapsing them into a single vector. For shake, test an active counter
+of one (two draws, then zero) and the following invocation (no draws). These
+tests assert arithmetic and ordering without depending on executable layout.
+
+**Established fact — save ownership.** The `Camera` save account owns only
+`X Position` and `Z Position`. Loading restores the camera origin in the
+fixed account order after `Players` and before `Features`, then reapplies the
+normal per-axis clamp. The persistent scroll setting is settings state, not a
+`Camera` account entry. The save census does not show a serialized phase-10
+desired target, in-flight camera-move countdown, or active shake counter;
+whether any such transient state is reconstructed from another account is
+not established and must not be inferred from the origin entries. [08
+"Account inventory"][08 "Established fact — fix-up and partial-load order"]
+
+**Supported inference — modern presentation controls.** Middle-button drag
+may add a presentation-only origin/target adjustment and zoom/graphical
+transforms remain presentation-owned. These controls must not mutate
+authoritative simulation state or either RNG stream. No retail phase-10
+keyboard-target contract or retail middle-drag save contract is established.
+
 **Minimap generation is closed.** The internal canvas is 126 pixels on the long
 side with the aspect-preserving letterbox arithmetic below; the generated
 picture is produced at twice that size and downsampled (2x supersample) when no
@@ -1934,6 +2036,15 @@ established behavior — and the unresolved mapping of the three sensor callback
 tables to the radar versus jammer palette entries. Unit, commander, feature,
 and projectile art sources and their direct `PALETTE.PAL` indexing are closed
 in [03 §3.9]; start-position markers remain doc 03's item.
+
+The exact interleaving when a host-frame input pass and one or more phase-10
+passes occur during the same outer frame remains **Unknown**; the two writers'
+individual ordering is established, but their caller-level scheduling is not.
+It is also **Unknown** whether any transient follow-target or shake state is
+reconstructed from a non-Camera save account. The handoff's deterministic
+held-intent seam is documented above, but whether a compatibility mode should
+expose it alongside retail's direct host-frame input cadence is an
+implementation decision, not a further retail finding.
 
 ## 11. Running display, pause, chat, options, and outcomes
 

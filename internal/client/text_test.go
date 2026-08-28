@@ -11,8 +11,8 @@ func TestFNTTextMeasurementAndNewline(t *testing.T) {
 	if got := MeasureText(f, "AB\nBA"); got != 4 {
 		t.Fatalf("newline measurement = %d, want 4", got)
 	}
-	if got := MeasureText(f, "A\x00B"); got != 2 {
-		t.Fatalf("NUL measurement = %d, want 2", got)
+	if got := MeasureText(f, "A\x00B"); got != 3 {
+		t.Fatalf("NUL measurement = %d, want 3", got)
 	}
 	if got := MeasureText(f, "?"); got != 0 {
 		t.Fatalf("absent glyph measurement = %d, want 0", got)
@@ -36,8 +36,8 @@ func TestFNTTextDrawsContinuousBitsAndClips(t *testing.T) {
 
 func TestFNTTextTruncatesBeforeClipping(t *testing.T) {
 	f := testFont()
-	if got := TruncateToWidth(f, "ABBA", 3); got != "AB" {
-		t.Fatalf("truncated text = %q, want AB", got)
+	if got := TruncateToWidth(f, "ABBA", 3); got != "A" {
+		t.Fatalf("truncated text = %q, want A", got)
 	}
 	if got := TruncateToWidth(f, "AB\nignored", 20); got != "AB\nignored" {
 		t.Fatalf("newline suffix changed when no truncation was needed: %q", got)

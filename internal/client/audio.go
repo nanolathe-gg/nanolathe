@@ -53,10 +53,10 @@ func (c *Client) ensureAudioBackend() {
 	if c == nil {
 		return
 	}
-	if audio.GlobalBackend() != nil {
+	if audio.GlobalOutput() != nil {
 		return
 	}
-	b := audio.NewBackend(false)
+	b := audio.NewBackend()
 	audio.SetGlobalBackend(b)
 }
 

@@ -111,6 +111,7 @@ type Session struct {
 	Snapshot *frame.Buffer
 
 	publication *publicationState // staged events and admitted effects at the committed-frame boundary [01 §4.4][03 §1]
+	postLoop    *postLoopState    // once-per-pump executor tail; owned by the session goroutine [01 §4.4]
 
 	// strips is the ten effect-strip object family swept at phase 11. It is
 	// allocated at battle entry (createAndBindServices) and destroyed with

@@ -156,6 +156,7 @@ func TestCommittedFrameSamplingDoesNotAffectSimulation(t *testing.T) {
 		s := visibilityFixture(t, false)
 		for tick := uint32(1); tick <= 24; tick++ {
 			s.stepAuthoritativePhases(tick)
+			s.publishSnapshot(tick)
 			for i := 0; i < samplesPerTick; i++ {
 				// Presentation sampling the committed frame: read-only.
 				f := s.Snapshot.Current()
@@ -227,6 +228,7 @@ func TestMovedUnitRefreshesVisibilitySameTick(t *testing.T) {
 	// that same tick's visibility publication.
 	mover.X = cell(208)
 	s.stepAuthoritativePhases(1)
+	s.publishSnapshot(1)
 
 	newStamp, seen := s.visStamps[int(h0)]
 	if !seen {

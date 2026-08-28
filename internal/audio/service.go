@@ -96,8 +96,8 @@ func (a *Service) installPlayback() {
 		if err != nil || sample == nil {
 			return
 		}
-		if backend := GlobalBackend(); backend != nil {
-			_ = backend.PlaySample(sample, 1.0, 0)
+		if output := GlobalOutput(); output != nil {
+			_ = output.PlaySample(sample, 1.0, 0)
 		}
 	})
 	a.Queue.OnSpeech(func(string) {})
@@ -236,8 +236,8 @@ func (a *Service) playAdmittedPositional(alias string, pos [3]numeric.Fixed) (Pa
 		volume = Attenuate(pos, v)
 	}
 	sample, _ := a.Load(alias)
-	if backend := GlobalBackend(); backend != nil && sample != nil {
-		_ = backend.PlaySample(sample, VolumeFromAttenuation(volume), PanFloat(pan, v))
+	if output := GlobalOutput(); output != nil && sample != nil {
+		_ = output.PlaySample(sample, VolumeFromAttenuation(volume), PanFloat(pan, v))
 	}
 	return pan, volume, true
 }
@@ -251,8 +251,8 @@ func (a *Service) PlayUICue(alias string) bool {
 	if err != nil || sample == nil {
 		return false
 	}
-	if backend := GlobalBackend(); backend != nil {
-		_ = backend.PlaySample(sample, 1.0, 0)
+	if output := GlobalOutput(); output != nil {
+		_ = output.PlaySample(sample, 1.0, 0)
 	}
 	return true
 }
@@ -303,8 +303,8 @@ func (a *Service) PlayBriefing(glamourSound, brief, narration, missionHint strin
 	alias := BriefingAlias(glamourSound, brief, narration, missionHint)
 	if alias != "" {
 		if sample, err := a.Load(alias); err == nil && sample != nil {
-			if backend := GlobalBackend(); backend != nil {
-				_ = backend.PlaySample(sample, 1.0, 0)
+			if output := GlobalOutput(); output != nil {
+				_ = output.PlaySample(sample, 1.0, 0)
 			}
 			return true
 		}

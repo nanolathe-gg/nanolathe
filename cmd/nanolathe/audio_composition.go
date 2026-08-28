@@ -42,8 +42,10 @@ func detachBattleAudio(cl *client.Client, sess *session.Session) {
 	if cl == nil {
 		return
 	}
-	if be := audio.GlobalBackend(); be != nil {
-		be.Close()
-		audio.SetGlobalBackend(nil)
+	if output := audio.GlobalOutput(); output != nil {
+		if be, ok := output.(*audio.Backend); ok {
+			be.Close()
+		}
+		audio.SetGlobalOutput(nil)
 	}
 }

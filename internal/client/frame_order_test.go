@@ -18,6 +18,15 @@ type frameOrderUIStage struct {
 	value byte
 }
 
+type frameAudioOutputSpy struct {
+	volumes []float64
+}
+
+func (s *frameAudioOutputSpy) PlaySample(_ *audio.Sample, volume, _ float64) error {
+	s.volumes = append(s.volumes, volume)
+	return nil
+}
+
 func (s frameOrderUIStage) DrawUI(c *Client, _ UIFrame) {
 	if s.seen != nil {
 		*s.seen = c.indexed[0]
@@ -43,12 +52,12 @@ func TestFrameRefreshesAudioViewportBeforeDrain(t *testing.T) {
 	service.Registry.SetCache(service.Cache)
 	c.SetAudioService(service)
 	c.SetCamera(&camera.Camera{X: 32, Z: 48, ViewW: 64, ViewH: 64, MapW: 256, MapH: 256})
-	old := audio.GlobalBackend()
-	b := audio.NewBackend(true)
-	audio.SetGlobalBackend(b)
-	t.Cleanup(func() { audio.SetGlobalBackend(old) })
+	old := audio.GlobalOutput()
+	spy := &frameAudioOutputSpy{}
+	audio.SetGlobalOutput(spy)
+	t.Cleanup(func() { audio.SetGlobalOutput(old) })
 	c.Frame()
-	volumes := b.PlayedVolumes()
+	volumes := spy.volumes
 	if len(volumes) != 1 {
 		t.Fatalf("played volumes=%v, want one positional playback", volumes)
 	}

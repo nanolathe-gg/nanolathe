@@ -14,9 +14,10 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// stepAuthoritativePhases runs one complete authoritative tick for focused
-// same-package tests and callers that already own the tick number. Step calls
-// this single path so there is no second implementation [DET-02][01 §4.4].
+// stepAuthoritativePhases runs only the twelve authoritative phase calls for
+// callers that already own the tick number. Sharing and result handling are
+// explicit in stepOneSubTick below, while publication remains a separate
+// boundary after every completed sub-tick [DET-02][01 §4.4][I6].
 func (s *Session) stepAuthoritativePhases(tick uint32) {
 	if s == nil {
 		return
@@ -40,13 +41,26 @@ func (s *Session) stepAuthoritativePhases(tick uint32) {
 	s.phaseObjectSweeps(tick)     // 11 implemented — ten effect-strip sweeps [R-CORE-01 §4.4.1][R-STRIP-01]
 	s.phaseCadenceFlip(tick)      // 12 research-blocked TODO(question) — flip mechanism unknown
 
+	// The registry ends at phase 12. Per-sub-tick work follows in
+	// stepOneSubTick so the phase graph cannot accidentally absorb outer work.
+	// [01 §4.4]
+}
+
+// stepOneSubTick runs one complete authoritative sub-tick: phases 1..12,
+// sharing/flush, and per-sub-tick result handling. Publication is owned by
+// Session.Step immediately after this boundary [01 §4.4][03 §2.4][I6].
+func (s *Session) stepOneSubTick(tick uint32) {
+	if s == nil {
+		return
+	}
+	s.stepAuthoritativePhases(tick)
+
 	// Sharing is the transport tail after phase 12 [01 §4.4].
 	s.stepSharingPhase(tick)
 
-	// Post-loop cleanup and configured skirmish result evaluation.
-	s.stepCleanupAndResultPhase(tick)
-
-	s.publishSnapshot(tick)
+	// Result/mission evaluation remains a per-subtick session hook. It is not
+	// part of the once-per-pump executor tail [01 §4.4].
+	s.stepResultPhase(tick)
 }
 
 // Phase registry — one named method per phase 1..12 called in §4.4 order
@@ -428,35 +442,15 @@ func (s *Session) stepSharingPhase(tick uint32) {
 	}
 }
 
-// stepCleanupAndResultPhase runs post-loop cleanup and result evaluation.
-func (s *Session) stepCleanupAndResultPhase(tick uint32) {
-	// Post-loop executor tail [01 §4.4] — barriers, deadline-ring slide and
-	// missile/interceptor compaction are retail post-loop structures; nanolathe's
-	// deterministic commit and RNG synchronization live here.
-	if s.Units != nil {
-		// RS-08: projectile damage after slot visit marks Dying after that visit [01 §4.4][GAP T15];
-		// retain for feature/visibility/trigger same tick but clear movement occupancy before next tick and before frame.
-		if s.Movement != nil {
-			for _, u := range s.Units.IterSliced() {
-				if u == nil || !u.Dying {
-					continue
-				}
-				h := u.Handle
-				s.Movement.ForgetUnit(h)
-				if s.Movement.Scheduler == nil && s.Path != nil {
-					s.Path.Cancel(h)
-				}
-			}
-		}
-		s.Units.Cleanup()
-	}
-	// Barrier no-op [01 §4.4] TODO(T23) keep as registration point
+// stepResultPhase runs configured skirmish result evaluation once per
+// completed authoritative sub-tick. Gameplay unit retirement is intentionally
+// absent here: phase-2 slot visitation owns that decision [01 §4.4].
+func (s *Session) stepResultPhase(tick uint32) {
 	// TODO(question): the fast no-human countdown site is multiplayer-only in
 	// retail, but this single-player Session has no established multiplayer
 	// mission-type mapping. Keep it out of all current mission types until the
 	// session dispatcher and its authoritative gate are identified [08
 	// "Evaluation"].
-	// Result evaluation observes authoritative death finalization (hook EvaluateResult after ledger cleanup) [ON-09]
 	// Configured lobby skirmish alliance-aware result. EvaluateResult selects
 	// commander-only or all-live-unit survival from the lobby rule [08
 	// "Skirmish configuration"].
@@ -914,9 +908,24 @@ func (s *Session) Step(scaledNow int32) {
 		}
 		// BeginSubTick increments GlobalTick before phase 1 [01 §4.4] C6.
 		tick := s.Clock.BeginSubTick()
-		s.stepAuthoritativePhases(tick)
+		s.stepOneSubTick(tick)
+		// Publication is outside the phase registry and follows sharing/result
+		// work for every completed sub-tick [01 §4.4][03 §2.4][I6].
+		s.publishSnapshot(tick)
+		s.recordPublication(tick)
 		if s.State != StateBattle {
 			break // latch armed->ending transitioned to postbattle same tick [P1-01 §2.2]
 		}
+	}
+	if ticks > 0 {
+		// The executor tail is once per pump after runnable sub-ticks; it cannot
+		// interpose between a phase-12 result and that tick's publication
+		// [01 §4.4].
+		s.runRetailPostLoopTail(s.Clock.GlobalTick)
+	} else {
+		// TODO(question): the retail executor's outer tail on a zero-runnable
+		// pump is not established by [01 §4.4]. Preserve the zero-tick
+		// non-mutation contract until a trace settles whether network-only tail
+		// service occurs in that case.
 	}
 }

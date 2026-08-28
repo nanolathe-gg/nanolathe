@@ -11,11 +11,9 @@ import (
 
 // Backend is the PCM output over ebiten/v2/audio [03 §8.3] [03 §8.2].
 // It owns the audio context and a small player pool, consumes decoded Samples,
-// and applies volume/pan from the positional math. All device construction is
-// guarded behind the windowed-backend flag so headless never constructs an
-// audio context (presentation-only, I5, I6).
+// and applies volume/pan from the positional math. Device construction remains
+// lazy until the first admitted sample reaches the presentation edge.
 type Backend struct {
-	headless   bool
 	sampleRate int
 	master     bool
 	effects    float64
@@ -23,26 +21,20 @@ type Backend struct {
 	ctx        *audio.Context
 	players    []*audio.Player
 	next       int
-	played     []string // for tests, aliases played in order
-	volumes    []float64
-	pans       []float64
 }
 
-// NewBackend creates a backend. When headless is true the backend never
-// constructs an audio context and all Play calls are no-ops that still record
-// the alias for tests. Presentation never writes sim state [I6].
-func NewBackend(headless bool) *Backend {
-	return NewBackendWithRate(headless, 44100)
+// NewBackend creates the lazy real presentation backend [03 §8.2].
+func NewBackend() *Backend {
+	return NewBackendWithRate(44100)
 }
 
 // NewBackendWithRate creates a backend with explicit sample rate [03 §8.2] C20.
 // Rate 0 defaults to 44100.
-func NewBackendWithRate(headless bool, rate int) *Backend {
+func NewBackendWithRate(rate int) *Backend {
 	if rate <= 0 {
 		rate = 44100
 	}
 	return &Backend{
-		headless:   headless,
 		sampleRate: rate,
 		master:     true,
 		effects:    1,
@@ -50,7 +42,7 @@ func NewBackendWithRate(headless bool, rate int) *Backend {
 }
 
 // BackendCapabilities describes the platform-neutral audio surface exposed to
-// presentation. A headless backend has no device and is never stereo-capable.
+// presentation. The device is created lazily by PlaySample.
 type BackendCapabilities struct {
 	Device bool
 	Stereo bool
@@ -60,11 +52,11 @@ func (b *Backend) Capabilities() BackendCapabilities {
 	if b == nil {
 		return BackendCapabilities{}
 	}
-	return BackendCapabilities{Device: !b.headless, Stereo: !b.headless}
+	return BackendCapabilities{Device: true, Stereo: true}
 }
 
 func (b *Backend) StereoCapable() bool {
-	return b != nil && !b.headless
+	return b != nil
 }
 
 func (b *Backend) SetMasterEnabled(enabled bool) {
@@ -90,79 +82,12 @@ func (b *Backend) CanPlay() bool {
 	return b != nil && b.master && b.effects > 0
 }
 
-// IsHeadless reports whether this backend is headless and will never create a device [I6].
-func (b *Backend) IsHeadless() bool {
-	if b == nil {
-		return true
-	}
-	return b.headless
-}
-
 // SampleRate returns the backend sample rate.
 func (b *Backend) SampleRate() int {
 	if b == nil || b.sampleRate == 0 {
 		return 44100
 	}
 	return b.sampleRate
-}
-
-// PlayCount returns the number of Play calls (including headless no-ops) for tests.
-func (b *Backend) PlayCount() int {
-	if b == nil {
-		return 0
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.played)
-}
-
-// PlayedAliases returns a copy of played aliases in order for tests.
-func (b *Backend) PlayedAliases() []string {
-	if b == nil {
-		return nil
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	out := make([]string, len(b.played))
-	copy(out, b.played)
-	return out
-}
-
-// PlayedPans returns the recorded presentation pan values in playback order.
-// It is a device-independent observation hook for presentation tests.
-func (b *Backend) PlayedPans() []float64 {
-	if b == nil {
-		return nil
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	out := make([]float64, len(b.pans))
-	copy(out, b.pans)
-	return out
-}
-
-// PlayedVolumes returns recorded presentation volume values in playback order.
-func (b *Backend) PlayedVolumes() []float64 {
-	if b == nil {
-		return nil
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	out := make([]float64, len(b.volumes))
-	copy(out, b.volumes)
-	return out
-}
-
-// Reset clears the recorded play history (tests).
-func (b *Backend) Reset() {
-	if b == nil {
-		return
-	}
-	b.mu.Lock()
-	b.played = nil
-	b.volumes = nil
-	b.pans = nil
-	b.mu.Unlock()
 }
 
 // VolumeFromCentibel converts the DirectSound centibel volumes [03 §8.3]
@@ -213,13 +138,12 @@ func PanFloat(p Pan, v Viewport) float64 {
 }
 
 func (b *Backend) ensureContext() {
-	if b == nil || b.headless {
+	if b == nil {
 		return
 	}
 	if b.ctx != nil {
 		return
 	}
-	// Guard behind windowed backend: headless never constructs [I6][I5].
 	// Reuse existing singleton if already created (ebiten allows at most one).
 	if cur := audio.CurrentContext(); cur != nil {
 		b.ctx = cur
@@ -240,7 +164,6 @@ func (b *Backend) ensureContext() {
 
 // PlaySample plays a decoded Sample with volume 0..1 and pan -1..1 [03 §8.2] [03 §8.3].
 // Volume is linear 0..1 (from VolumeFromCentibel), pan -1 left, 1 right.
-// Headless backends record the alias but create no device [I6].
 func (b *Backend) PlaySample(s *Sample, volume float64, pan float64) error {
 	if b == nil || s == nil {
 		return nil
@@ -249,15 +172,6 @@ func (b *Backend) PlaySample(s *Sample, volume float64, pan float64) error {
 		return nil
 	}
 	volume *= b.effects
-	alias := s.Alias
-	b.mu.Lock()
-	b.played = append(b.played, alias)
-	b.volumes = append(b.volumes, volume)
-	b.pans = append(b.pans, pan)
-	b.mu.Unlock()
-	if b.headless {
-		return nil
-	}
 	b.ensureContext()
 	if b.ctx == nil {
 		return nil
@@ -307,22 +221,11 @@ func (b *Backend) PlayAlias(alias string, cache *SampleCache, volume float64, pa
 		return nil
 	}
 	if cache == nil {
-		// No cache: record alias but cannot resolve bytes; still count as play attempt.
-		b.mu.Lock()
-		b.played = append(b.played, alias)
-		b.volumes = append(b.volumes, volume)
-		b.pans = append(b.pans, pan)
-		b.mu.Unlock()
 		return nil
 	}
 	s, err := cache.Load(alias)
 	if err != nil || s == nil {
-		// Degrade silently [P1-02 §2.2]; still record for tests.
-		b.mu.Lock()
-		b.played = append(b.played, alias)
-		b.volumes = append(b.volumes, volume)
-		b.pans = append(b.pans, pan)
-		b.mu.Unlock()
+		// Degrade silently [P1-02 §2.2].
 		return nil
 	}
 	return b.PlaySample(s, volume, pan)
@@ -500,24 +403,42 @@ func convertSample(s *Sample, volume float64, pan float64, dstRate int) []byte {
 	return out
 }
 
-// globalBackend is the windowed singleton used by presentation to play sounds
-// without threading a Backend through every call site [I6]. Headless never sets it.
+// Output is the narrow presentation playback boundary. Production installs a
+// Backend; tests can observe admitted requests with a local fake without
+// constructing a device.
+type Output interface {
+	PlaySample(*Sample, float64, float64) error
+}
+
+// globalOutput is the presentation singleton used by the audio service [I6].
 var (
-	globalMu      sync.Mutex
-	globalBackend *Backend
+	globalMu     sync.Mutex
+	globalOutput Output
 )
 
-// SetGlobalBackend installs the windowed backend for presentation playback [I6].
-// Headless must pass nil or a headless backend; presentation-only.
-func SetGlobalBackend(b *Backend) {
+// SetGlobalOutput installs the presentation playback boundary [I6].
+func SetGlobalOutput(o Output) {
 	globalMu.Lock()
-	globalBackend = b
+	globalOutput = o
 	globalMu.Unlock()
 }
 
-// GlobalBackend returns the installed windowed backend, or nil if headless [I6].
+// GlobalOutput returns the installed presentation playback boundary [I6].
+func GlobalOutput() Output {
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	return globalOutput
+}
+
+// SetGlobalBackend installs the concrete backend used by production clients.
+func SetGlobalBackend(b *Backend) {
+	SetGlobalOutput(b)
+}
+
+// GlobalBackend returns the installed concrete backend, if production owns it.
 func GlobalBackend() *Backend {
 	globalMu.Lock()
 	defer globalMu.Unlock()
-	return globalBackend
+	b, _ := globalOutput.(*Backend)
+	return b
 }
