@@ -123,11 +123,10 @@ func runBattleView(opts Options, cs *contentSet) error {
 		}
 	})
 	cl, err := client.New(client.Options{
-		Buffer:   sess.Snapshot,
-		Width:    winW,
-		Height:   winH,
-		Title:    "Nanolathe — " + opts.Map,
-		Headless: false,
+		Buffer: sess.Snapshot,
+		Width:  winW,
+		Height: winH,
+		Title:  "Nanolathe — " + opts.Map,
 		Step: func(delta float64) {
 			b.viewerStep(delta, clPtr)
 		},

@@ -34,6 +34,7 @@ func TestWalkToSite(t *testing.T) {
 	w := units.NewSliced(20, cat)
 	hb, _ := w.Create(builderDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	builder := w.Unit(hb)
+	bindConstructionFixture(builder, trivialModel(1, nil), false)
 	builder.Def = builderDef
 	builder.X = numeric.Fixed(0)
 	builder.Z = numeric.Fixed(0)
@@ -54,7 +55,6 @@ func TestWalkToSite(t *testing.T) {
 	sys.EnsureUnit(builder)
 	svc := NewService(terrain, cat, w, nil)
 	svc.Movement = sys
-	svc.AllowSyntheticPlacement = true
 
 	for tick := uint32(0); tick < 500; tick++ {
 		svc.Pump(builder, tick)

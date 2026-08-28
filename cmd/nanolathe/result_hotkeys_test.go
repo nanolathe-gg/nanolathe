@@ -184,7 +184,7 @@ func TestESCMenuTokenPath(t *testing.T) {
 	b.battleState().Input.Latch = input.LatchNormal
 	b.battleState().Input.BuildDef = ""
 	// ESC when latch normal and not placing should open menu [07 §2]
-	cl, _ := client.New(client.Options{Headless: true, Buffer: b.sess.Snapshot, Width: 640, Height: 480})
+	cl, _ := client.New(client.Options{Buffer: b.sess.Snapshot, Width: 640, Height: 480})
 	cl.SetCamera(b.cam)
 	// Simulate viewerStep ESC handling
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}

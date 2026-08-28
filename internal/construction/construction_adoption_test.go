@@ -66,7 +66,6 @@ func TestMobileBuildEmitsStartBuildingThroughOrders(t *testing.T) {
 	node := orders.QueueForUnit(builder).Primary()[0]
 	node.Phase = uint8(State2)
 	svc := NewService(terrain, cat, w, &economy.Service{})
-	svc.AllowSyntheticPlacement = true
 	svc.Pump(builder, 0)
 	if node.Target == 0 {
 		t.Fatalf("legal site did not allocate")

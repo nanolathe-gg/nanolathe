@@ -8,7 +8,7 @@ import (
 )
 
 func TestPlayPositionalRequiresVisibilityPredicate(t *testing.T) {
-	_, err := New(Options{Width: 64, Height: 64, Headless: true})
+	_, err := New(Options{Width: 64, Height: 64})
 	if err != nil {
 		t.Fatal(err)
 	}

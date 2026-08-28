@@ -21,7 +21,7 @@ func TestProbeArmcomTriangles(t *testing.T) {
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Fatal(err)
 	}
-	c, err := New(Options{Width: 640, Height: 480, Headless: true})
+	c, err := New(Options{Width: 640, Height: 480})
 	if err != nil {
 		t.Fatal(err)
 	}

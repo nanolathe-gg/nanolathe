@@ -33,7 +33,8 @@ func TestSeedSessionRNGBattleEntryResetAndIsolation(t *testing.T) {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TestStorageBonusFloorAndEnable locks the storage-bonus floor and enable
+// behavior [05 "Storage capacity"] [OX P1].
 func TestStorageBonusFloorAndEnable(t *testing.T) {
 	var p economy.Player
 	if p.StorageBonusEnabled {
@@ -41,7 +42,7 @@ func TestStorageBonusFloorAndEnable(t *testing.T) {
 	}
 	p.InstallStorageBonus(100, 50)
 	if !p.StorageBonusEnabled {
-		t.Fatal("InstallStorageBonus should set enable flag [layout omitted] bit0")
+		t.Fatal("InstallStorageBonus should set the storage-bonus enable flag")
 	}
 	if p.StorageBonus[economy.Metal] != 200 {
 		t.Fatalf("metal floor 100 ->200 got %v", p.StorageBonus[economy.Metal])
@@ -62,7 +63,8 @@ func TestStorageBonusFloorAndEnable(t *testing.T) {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TestRebuildCapacityBonusInclusive locks the bonus-inclusive capacity rebuild
+// [05 "Storage capacity"].
 func TestRebuildCapacityBonusInclusive(t *testing.T) {
 	var svc economy.Service
 	w := units.NewSliced(10, nil)
@@ -144,7 +146,7 @@ func TestSkirmishStorageBonusPreservesOpeningStock(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		p := s.Econ.Players[i]
 		if !p.StorageBonusEnabled {
-			t.Fatalf("player %d bonus flag not enabled [layout omitted] bit0", i)
+			t.Fatalf("player %d bonus enable flag not set", i)
 		}
 		if p.StorageBonus[economy.Metal] != 1000 || p.StorageBonus[economy.Energy] != 1000 {
 			t.Fatalf("player %d bonus want 1000/1000 got %v/%v", i, p.StorageBonus[economy.Metal], p.StorageBonus[economy.Energy])
@@ -187,7 +189,8 @@ func TestSkirmishStorageBonusPreservesOpeningStock(t *testing.T) {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TestSkirmishBonusFloor200 verifies the 200-unit storage-bonus floor for low
+// starting values [05 "Storage capacity"].
 func TestSkirmishBonusFloor200(t *testing.T) {
 	rng.SeedGlobal(21, 22)
 	cat := minimalCatalogForStrict()

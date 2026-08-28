@@ -54,68 +54,69 @@ func (s *SightShapes) Shape(i int) *SightShape {
 	return &s.Shapes[i]
 }
 
-// sightShapeCandidates are the shipped visibility-mask resources, in the order
-// they are tried [03 §3.2].
+// sightShapeCandidates retains the resource-candidate ordering used by the
+// content catalog. Retail binds only the plural file; the singular
+// anims/vismask.gaf file is a distinct cursor set and is not a sight table
+// [03 §3.2].
 //
-// The reference install ships both and they decode identically — ten circular
-// frames, 11x11 through 29x29, with matching opaque-pixel counts; vismasks.gaf
-// stores them raw and vismask.gaf RLE-compressed. The old note here (that
-// vismasks.gaf held solid squares) was an artifact of decoding raw frames
-// without their color key [fmt gaf, frame header +8]: index 9 is the
-// transparent background, so ignoring it filled every shape to its bounding
-// box and gave every unit a square sight footprint. Retail binds `0x1485B`,
-// whose handle name is the plural spelling, so that stays first.
+// The table is the `vismask` entry in the plural file. Its ten authored frames
+// provide the shape count and geometry; there is no synthesized replacement
+// [03 §3.2][fmt gaf].
 var sightShapeCandidates = []string{
 	"anims/vismasks.gaf",
-	"anims/vismask.gaf",
 }
 
 // CompileSightShapes compiles the visibility-mask GAF into the shape table
 // [03 §3.2].
 //
-// A missing resource is not fatal: fixtures without an anims/ directory
-// compile to an empty table, and phase 5 falls back to publishing nothing
-// rather than inventing a shape.
+// The plural file and its `vismask` entry are required inputs to this compiler.
+// A missing or malformed resource is reported with its logical path and VFS
+// provenance; the singular-file cursor set is never a fallback [03 §3.2].
 func CompileSightShapes(fs vfs.FSOps) (*SightShapes, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("content: nil VFS")
 	}
 	out := &SightShapes{}
 	out.CanonicalKey = CanonicalKey("vismask")
-	for _, name := range sightShapeCandidates {
-		g, err := formats.LoadGAFFile(fs, name)
-		if err != nil || g == nil || len(g.Entries) == 0 {
-			continue
+	name := sightShapeCandidates[0]
+	g, err := formats.LoadGAFFile(fs, name)
+	if err != nil {
+		return nil, requiredContentError(fs, name, "the retail visibility-mask GAF entry vismask", err)
+	}
+	if g == nil {
+		return nil, requiredContentError(fs, name, "the retail visibility-mask GAF entry vismask", fmt.Errorf("GAF decoder returned nil"))
+	}
+	if info, statErr := fs.Stat(name); statErr == nil {
+		out.Provenance = ProvenanceFrom(info)
+	}
+	entry, ok := g.Find("vismask")
+	if !ok || entry == nil {
+		return nil, requiredContentError(fs, name, "the retail visibility-mask GAF entry vismask", fmt.Errorf("GAF entry %q not found", "vismask"))
+	}
+	if len(entry.Frames) != 10 {
+		return nil, requiredContentError(fs, name, "the retail visibility-mask GAF entry vismask with ten frames", fmt.Errorf("GAF entry has %d frames", len(entry.Frames)))
+	}
+	out.Shapes = make([]SightShape, 0, len(entry.Frames))
+	for i, ref := range entry.Frames {
+		fr := ref.Frame
+		if fr == nil || fr.Width == 0 || fr.Height == 0 {
+			return nil, requiredContentError(fs, name, "the retail visibility-mask GAF entry vismask with valid frames", fmt.Errorf("GAF frame %d has zero dimensions", i))
 		}
-		if info, statErr := fs.Stat(name); statErr == nil {
-			out.Provenance = ProvenanceFrom(info)
+		shape := SightShape{
+			W:       int32(fr.Width),
+			H:       int32(fr.Height),
+			AnchorX: int32(fr.XOffset),
+			AnchorY: int32(fr.YOffset),
+			Opaque:  make([]bool, int(fr.Width)*int(fr.Height)),
 		}
-		entry := g.Entries[0]
-		out.Shapes = make([]SightShape, 0, len(entry.Frames))
-		for _, ref := range entry.Frames {
-			fr := ref.Frame
-			if fr == nil || fr.Width == 0 || fr.Height == 0 {
-				continue
+		for pixel := range shape.Opaque {
+			// Transparent is parallel to Pixels and already accounts for
+			// the frame's transparent palette index [fmt gaf].
+			if pixel < len(fr.Transparent) {
+				shape.Opaque[pixel] = !fr.Transparent[pixel]
 			}
-			shape := SightShape{
-				W:       int32(fr.Width),
-				H:       int32(fr.Height),
-				AnchorX: int32(fr.XOffset),
-				AnchorY: int32(fr.YOffset),
-				Opaque:  make([]bool, int(fr.Width)*int(fr.Height)),
-			}
-			for i := range shape.Opaque {
-				// Transparent is parallel to Pixels and already accounts for
-				// the frame's transparent palette index [fmt gaf].
-				if i < len(fr.Transparent) {
-					shape.Opaque[i] = !fr.Transparent[i]
-				}
-			}
-			out.Shapes = append(out.Shapes, shape)
 		}
-		if len(out.Shapes) > 0 {
-			return out, nil
-		}
+		out.Shapes = append(out.Shapes, shape)
 	}
 	return out, nil
 }

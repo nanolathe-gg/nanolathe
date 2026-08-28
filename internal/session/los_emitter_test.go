@@ -7,9 +7,9 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// emitter = clamp(worldY_high + def[0x170], 0, 255) with worldY first clamped
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TestObserverEmitterHeight locks the LOS observer derivation [03 §3.2]:
+// emitter = clamp(worldY_high + modelTop, 0, 255), with worldY first clamped
+// up to SeaLevel+1, and the coverage tile taken as
 // tileX = worldX >> 5, tileZ = (worldZ - emitter/2) >> 5.
 //
 // The model-top addend is load-bearing: with the emitter at ground level the
@@ -29,7 +29,7 @@ func TestObserverEmitterHeight(t *testing.T) {
 	if got := heightByteAt(u, 200); got != 240 {
 		t.Fatalf("sea-clamped emitter = %d, want 201+39 = 240", got)
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// The byte saturates rather than wrapping [03 §3.2].
 	tall := &units.Unit{Def: &content.UnitDef{ModelTop: 200}}
 	tall.Y = 100 << 16
 	if got := heightByteAt(tall, 0); got != 255 {
@@ -44,7 +44,7 @@ func TestObserverEmitterHeight(t *testing.T) {
 		t.Fatalf("tileZ = %d, want (1264-62)>>5 = %d", cz, want)
 	}
 	// A unit with no def sights from its own world Y, which the sea clamp
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// still lifts to SeaLevel+1 [03 §3.2].
 	bare := &units.Unit{}
 	bare.Z = 64 << 16
 	if got := heightByteAt(bare, 0); got != 1 {

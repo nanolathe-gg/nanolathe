@@ -44,10 +44,6 @@ type Options struct {
 	// it, so it is not invented per frame. Zero means 640×480.
 	Width, Height int
 	Title         string
-
-	// Headless skips window creation entirely (C11). Nothing above becomes
-	// reachable from --headless; RunGame returns immediately.
-	Headless bool
 }
 
 // Client is the software framebuffer, palette, camera, and snapshot reader. It
@@ -144,7 +140,7 @@ type Client struct {
 
 // New creates a client. It allocates the indexed framebuffer at the negotiated
 // logical size and prepares fallback palette tables. Window creation happens
-// in RunGame; in headless mode no window is ever created.
+// only in RunGame.
 func New(opts Options) (*Client, error) {
 	w := opts.Width
 	h := opts.Height
@@ -217,13 +213,10 @@ func (c *Client) SetSnapshot(b *frame.Buffer) {
 // Size returns the negotiated logical framebuffer size.
 func (c *Client) Size() (int, int) { return c.width, c.height }
 
-// IsHeadless reports whether the client was created headless [PLAN_04A] C11.
-func (c *Client) IsHeadless() bool { return c != nil && c.opts.Headless }
-
 // IsFocused reports the platform window focus at the client edge. Battle
 // camera predicates consume this value without importing Ebitengine [07 §10].
 func (c *Client) IsFocused() bool {
-	return c != nil && (c.opts.Headless || ebiten.IsFocused())
+	return c != nil && ebiten.IsFocused()
 }
 
 // Buffer exposes the presentation snapshot source (diagnostics publish into
@@ -231,7 +224,6 @@ func (c *Client) IsFocused() bool {
 func (c *Client) Buffer() *frame.Buffer { return c.buffer }
 
 // RequestExit asks the window backend to terminate after the current update.
-// Headless callers can inspect the request without creating a window.
 func (c *Client) RequestExit() { c.exitRequested = true }
 
 // ExitRequested reports whether RequestExit has been called.
@@ -294,8 +286,8 @@ func (c *Client) ensureFogGAF() {
 }
 
 // ComposeFrame reads the published buffer and composes one current frame,
-// and returns it as an RGBA image. It works headless — presentation never
-// requires a window (I6) — and is the basis of the --shot diagnostic path.
+// returning it as an RGBA image without entering the window loop (I6). It is
+// the basis of the --shot diagnostic path.
 func (c *Client) ComposeFrame() *image.RGBA {
 	cur := c.buffer.Current()
 	c.composeIndexed(cur, cur != nil)

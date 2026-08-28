@@ -221,7 +221,7 @@ func TestBattleCameraIgnoresWASD(t *testing.T) {
 	b.cam.Z = 500
 	// Place minimal client for viewerStep
 	buf := &frame.Buffer{}
-	cl, _ := client.New(client.Options{Buffer: buf, Width: 640, Height: 480, Headless: true, Step: func(delta float64) {}})
+	cl, _ := client.New(client.Options{Buffer: buf, Width: 640, Height: 480, Step: func(delta float64) {}})
 	cl.SetCamera(b.cam)
 	cl.Input().Mouse.SetPosition(320, 240) // center to avoid edge scroll
 	origX, origZ := b.cam.X, b.cam.Z
@@ -236,7 +236,7 @@ func TestBattleCameraIgnoresWASD(t *testing.T) {
 		t.Fatalf("WASD should not move camera, got %d,%d want %d,%d", b.cam.X, b.cam.Z, origX, origZ)
 	}
 	// Arrow keys should still move
-	cl2, _ := client.New(client.Options{Buffer: buf, Width: 640, Height: 480, Headless: true, Step: func(delta float64) {}})
+	cl2, _ := client.New(client.Options{Buffer: buf, Width: 640, Height: 480, Step: func(delta float64) {}})
 	cl2.SetCamera(b.cam)
 	b.cam.X = 500
 	b.cam.Z = 500
@@ -250,7 +250,7 @@ func TestBattleCameraIgnoresWASD(t *testing.T) {
 	b.cam.X = 500
 	b.cam.Z = 500
 	// Edge scroll still works: place mouse near edge
-	cl3, _ := client.New(client.Options{Buffer: buf, Width: 640, Height: 480, Headless: true, Step: func(delta float64) {}})
+	cl3, _ := client.New(client.Options{Buffer: buf, Width: 640, Height: 480, Step: func(delta float64) {}})
 	cl3.SetCamera(b.cam)
 	cl3.Input().Mouse.SetPosition(0, 240) // left edge exact [07 §10] x==0
 	b.viewerStep(0.016, cl3)

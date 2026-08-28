@@ -1745,6 +1745,83 @@ the wall-clock delta path that subtracts the scaled delta via the multi-frame
 countdown stepper. Multi-frame model texture entries receive per-instance
 playback cursors so separately created model instances need not share phase.
 
+#### CRD-005 closure — phase-7 model-texture sequence traversal [R-CRD-005 §1]
+
+The phase-7 owner is the session's global registry of **model-texture playback
+players**. A registered item is the per-instance cursor associated with an
+animated texture on one cloned model primitive: its semantic state is current
+frame, remaining authored duration, loop/hold flag, and a non-owning pointer to
+the shared GAF entry. It is not the shared GAF entry, a feature cursor, a fixed
+effect cursor, a projectile cursor, or a UI cursor. A model texture with fewer
+than two frames is static. A ten-frame `LOGOS` entry is the team-colour family:
+its frame is selected at draw time and it is not registered for phase 7. Other
+multi-frame model textures get one independent registered player per model
+instance [R-CRD-005 §1]. **Established.**
+
+The registry is advanced exactly once at phase 7 of every runnable simulation
+sub-tick, after phase 6 feature work and before phase 8 wind work [01 §4.4].
+Phase 7 performs no visibility test, pixel write, wall-clock conversion, or
+authoritative RNG draw. It advances only cursor metadata; the presentation
+layer resolves the selected frame later. **Established.**
+
+At the beginning of one phase-7 invocation, the walker captures the current
+registry count `N`. It then visits exactly the entries at indices `N-1` through
+`0`, in descending index order, once each. The captured count is not reread
+inside the loop. Therefore a registration that becomes visible after the count
+is captured cannot participate until the next phase-7 invocation, while the
+already captured entries retain their order. This is a count snapshot, not map
+iteration and not a work queue. **Established.**
+
+Each visited player uses the simulation-tick step, not the cursor driver's
+scaled-delta step. If its sequence is absent it is inactive and unchanged. With
+remaining duration at least two, the step subtracts one and keeps the current
+frame. With remaining duration below two (the strict predicate `remaining < 2`),
+it advances the frame, wraps to frame zero when looping is enabled, or clears
+the sequence reference when a non-looping sequence has ended; a selected frame
+reloads its authored duration. The next frame is consequently observable on
+the presentation following that simulation tick. A one-frame entry is never a
+phase-7 player. **Established.**
+
+The phase-7 walker itself neither registers nor unregisters a player. The
+recovered registration path appends a qualifying model-instance player to the
+global pointer registry. A bounded census found no retail removal/compaction
+operation for that registry during model or unit teardown, so the exact
+lifetime of a registry slot after its owning model is destroyed is **Unknown**.
+The clean-room contract must not turn the older supported inference that dead
+entries are ignored into a fact: no dangling-pointer, tombstone, compaction, or
+survivor-reordering behavior is established. Until a teardown trace settles
+this, an implementation may only preserve the established phase-7 rule by
+deferring registry mutation across an invocation and by skipping an explicitly
+inactive player; it must not claim retail removal semantics. **Unknown; TODO
+(CRD-005): trace the complete model-instance teardown and registry ownership
+path, or run a retail create/destroy probe that distinguishes compaction from
+inactive retained slots.**
+
+The phase-7 consumer census is consequently narrow. Model-texture players are
+the only global registry consumers. Feature-definition and feature-instance
+normal/shadow cursors are stepped by phase 6; fixed effect cursors are stepped
+by their phase-4 effect records; projectile visual cursors are stepped by the
+projectile phase; and interface/cursor sequences use the scaled wall-clock
+delta path. They share cursor arithmetic but do not share the phase-7 registry
+or its ordering. **Established within the recovered caller census.**
+
+The following probes are the minimum edge coverage for a phase-7 implementation
+without importing presentation details:
+
+| Probe | Required observation |
+|---|---|
+| Empty registry | No callback, frame change, or RNG draw. |
+| One player at countdown 2 | The first invocation decrements to 1; the next invocation sees `remaining < 2`, advances, and reloads. |
+| Looping final frame | A below-two countdown selects frame zero and loads its duration. |
+| Non-looping final frame | A below-two countdown clears the sequence; later invocations do not advance it. |
+| Two players | The newer entry is visited before the older entry (descending index order). |
+| Append after count capture | The appended player is not visited in that invocation and is first eligible on the next one. |
+| Removal/termination during traversal | Preserve survivor order and do not infer whether retail compacts or retains the slot; this remains the teardown unknown above. |
+| Five one-tick pumps versus one five-tick pump | Equal positions only when the registered population is unchanged; a player created between sub-ticks starts at its first eligible phase-7 boundary, not retroactively. |
+
+These probes also separate the phase-7 strict countdown predicate from the
+wall-clock cursor path's signed-delta and multi-frame loop. **Established.**
+
 ## 5. World render passes and object presentation
 
 ### 5.1 Terrain and features
@@ -2998,6 +3075,13 @@ and unknown" without a resolution plan.
   that no hidden animated-water surface writer exists.
 - Cursor hotspot metadata, subframe lifetime, animation speed for families not
    shown to use the authored countdown cursor, and sequence-flag naming.
+   Phase-7 model-texture traversal owner, phase placement, descending captured-
+   count order, strict countdown predicate, and the separation from feature,
+   effect, projectile, and wall-clock cursor families are established by
+   [R-CRD-005 §1]. The registry's teardown behavior remains unknown: the
+   recovered census does not establish whether a destroyed model player is
+   cleared, retained as an inactive slot, or removed with compaction; this is
+   the explicit CRD-005 TODO above, not permission to guess a removal policy.
    Effect-strip owner registration, per-family lifetime, and terminal-frame
    behavior are closed by [R-STRIP-01 §1–§3] (per-strip producers, container
    lifecycles, expiry rules, and CRT draw costs); the residuals left open are

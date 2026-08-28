@@ -50,7 +50,7 @@ func TestSkirmishStartLeavesForLoadingScreen(t *testing.T) {
 	}
 	rect := panel.Window.PlacedRect(idx)
 
-	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 640, Height: 480, Headless: true})
+	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 640, Height: 480})
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}

@@ -65,7 +65,7 @@ func TestCommittedFrameShakeDoesNotMutateClientCamera(t *testing.T) {
 	if err := buf.Publish(1); err != nil {
 		t.Fatal(err)
 	}
-	c, err := New(Options{Buffer: buf, Width: 8, Height: 8, Headless: true})
+	c, err := New(Options{Buffer: buf, Width: 8, Height: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestCommittedFrameFogGateAndInterfacePrecedence(t *testing.T) {
 	if err := buf.Publish(1); err != nil {
 		t.Fatal(err)
 	}
-	c, err := New(Options{Buffer: buf, Width: 4, Height: 4, Headless: true})
+	c, err := New(Options{Buffer: buf, Width: 4, Height: 4})
 	if err != nil {
 		t.Fatal(err)
 	}

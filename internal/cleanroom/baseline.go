@@ -6,7 +6,7 @@ package cleanroom
 // line that still has to be rewritten as clean-room prose, with its
 // address-level trail moved to /tmp/ta-decompile/notes/.
 //
-// Total at baseline: 668 occurrences across 84 files.
+// Total at baseline: 636 occurrences across 77 files.
 //
 // A file absent from this map must have zero occurrences. Counts may only
 // go down, and going down requires updating this file in the same change.
@@ -69,23 +69,16 @@ var Baseline = map[string]int{
 	"internal/orders/selectable.go":                 1,
 	"internal/orders/zbuildweapon.go":               6,
 	"internal/path/queue.go":                        1,
-	"internal/pool/pool_test.go":                    4,
 	"internal/render/minimap_test.go":               2,
 	"internal/render/model_test.go":                 1,
 	"internal/save/bank_test.go":                    1,
 	"internal/save/retail_corpus_test.go":           1,
-	"internal/session/battle_entry_test.go":         6,
-	"internal/session/economy.go":                   4,
-	"internal/session/los_emitter_test.go":          4,
 	"internal/session/skirmish.go":                  2,
 	"internal/settings/settings.go":                 10,
 	"internal/settings/settings_test.go":            1,
 	"internal/triggers/eval.go":                     10,
 	"internal/triggers/triggers.go":                 2,
-	"internal/units/status_lifecycle_test.go":       1,
 	"internal/units/sweep.go":                       4,
-	"internal/units/types.go":                       11,
-	"internal/units/units_test.go":                  2,
 	"internal/visibility/fog.go":                    1,
 	"internal/visibility/grids.go":                  1,
 	"internal/visibility/sensors_test.go":           1,

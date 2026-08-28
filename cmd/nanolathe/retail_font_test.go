@@ -58,7 +58,7 @@ func TestRetailMainMenuUsesPrimaryGAFGlyphPixels(t *testing.T) {
 	if shell.retailGAFTextFont() == nil {
 		t.Fatal("primary anims/hattfont12.gaf slot was not loaded")
 	}
-	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 640, Height: 480, Headless: true})
+	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 640, Height: 480})
 	if err != nil {
 		t.Fatal(err)
 	}

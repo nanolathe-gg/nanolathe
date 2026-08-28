@@ -123,17 +123,6 @@ func headNodeForTest(u *units.Unit) *orders.Node {
 	return q.Primary()[0]
 }
 
-// pinSyntheticExit overrides the fixture-only offset bookkeeping so the
-// synthetic exit spot resolves exactly at the factory origin: the snapped
-// rectangle overlaps the producing factory's own footprint, which is where
-// stock doors sit.
-func pinSyntheticExit(svc *Service, h pool.Handle) {
-	if svc.syntheticOffsets == nil {
-		svc.syntheticOffsets = make(map[pool.Handle]int)
-	}
-	svc.syntheticOffsets[h] = -3 // 6 + n*(-2) collapses to 0 extra cells
-}
-
 // TestFactoryExitValidatesInsideOwnCompletedYard locks the observed deadlock
 // fix: after a factory completes, its frame occupancy stamps are released and
 // the finished building registers in the structures registry, so its first
@@ -150,10 +139,6 @@ func TestFactoryExitValidatesInsideOwnCompletedYard(t *testing.T) {
 
 	terrain := exitTerrain(24, 24)
 	svc, w := exitService(t, terrain, cat)
-	svc.AllowSyntheticPlacement = true
-	// Fixture-only: without a bound script the yard-door handshake cannot run;
-	// the explicit seam substitutes for INBUILDSTANCE [R-P0-10].
-	svc.AllowSyntheticFactoryStance = true
 	// Deep stocks so the two-resource admission never starves the fixture.
 	for i := range svc.Economy.Players {
 		svc.Economy.Players[i].Stock[0] = 1e9
@@ -189,10 +174,10 @@ func TestFactoryExitValidatesInsideOwnCompletedYard(t *testing.T) {
 		t.Fatal("a structure must never block against itself")
 	}
 
-	// The completed lab now produces a mobile unit whose exit rect lies inside
-	// its own registered footprint — the exact stock sequence that deadlocked.
-	pinSyntheticExit(svc, labH)
+	// The completed lab now produces a mobile unit from its authored exit
+	// transform while its own footprint remains registered in the building mask.
 	labU := w.Unit(labH)
+	bindConstructionFixture(labU, trivialModel(1, nil), true)
 	if err := QueueFactoryBuild(labU, "exitmob", 1, cat); err != nil {
 		t.Fatalf("QueueFactoryBuild: %v", err)
 	}
@@ -227,10 +212,6 @@ func TestForeignOccupantStillBlocksExitSilently(t *testing.T) {
 	cat := exitCatalog(lab, mob)
 	terrain := exitTerrain(24, 24)
 	svc, w := exitService(t, terrain, cat)
-	svc.AllowSyntheticPlacement = true
-	// Fixture-only: without a bound script the yard-door handshake cannot run;
-	// the explicit seam substitutes for INBUILDSTANCE [R-P0-10].
-	svc.AllowSyntheticFactoryStance = true
 	// Deep stocks so the two-resource admission never starves the fixture.
 	for i := range svc.Economy.Players {
 		svc.Economy.Players[i].Stock[0] = 1e9
@@ -241,6 +222,7 @@ func TestForeignOccupantStillBlocksExitSilently(t *testing.T) {
 
 	hf, _ := w.Create(lab, 0, world.CellToWorld(8), 0, world.CellToWorld(8))
 	factory := w.Unit(hf)
+	bindConstructionFixture(factory, trivialModel(1, nil), true)
 
 	if err := QueueFactoryBuild(factory, "exitmob", 1, cat); err != nil {
 		t.Fatalf("QueueFactoryBuild: %v", err)
@@ -256,7 +238,7 @@ func TestForeignOccupantStillBlocksExitSilently(t *testing.T) {
 	if head.Phase < uint8(State1) {
 		t.Fatalf("state after pump = %d, want >=1", head.Phase)
 	}
-	factory.InBuildStance = true // synthetic script handshake fixture [R-P0-10]
+	factory.InBuildStance = true // authored yard-door state for this fixture
 	blockedSeen := false
 	for i := 0; i < 5; i++ {
 		svc.Pump(factory, uint32(101+i*15))

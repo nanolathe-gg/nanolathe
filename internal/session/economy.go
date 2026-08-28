@@ -5,10 +5,9 @@ import (
 )
 
 // InitShareThresholds initializes per-player sharing thresholds from rebuilt
-// capacity once at battle setup per [05 "Allied resource and sensor sharing"]
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// automatic sharing (60-tick) and resource-bar colouring; they are not aliases.
+// capacity once at battle setup. Thresholds are distinct from capacity and are
+// read by automatic sharing and resource-bar colouring; they are not aliases
+// [05 "Allied resource and sensor sharing"].
 func (s *Session) InitShareThresholds() {
 	if s == nil || s.Econ == nil || s.Units == nil {
 		return

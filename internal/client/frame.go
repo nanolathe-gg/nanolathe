@@ -118,17 +118,6 @@ func (c *Client) Frame() {
 	if c == nil {
 		return
 	}
-	if c.opts.Headless {
-		// Headless: no window, no display (C11). Still read the snapshot to
-		// sample the committed frame even when not
-		// drawing, but do not mutate it.
-		_ = c.buffer.Current()
-		// Audio drain still runs headless? No, Headless skips window creation
-		// entirely [PLAN_04A C11]; but TickAudio is presentation-only and can be
-		// called manually by headless diagnostics. Do not auto-drain here to
-		// keep headless simulation hash stable [I4][I6].
-		return
-	}
 	// Audio: drain queue once per rendered frame outside simulation [03 §8.3] C18.
 	// Presentation-only; uses CRT stream [03 §8.3] C19 [I4]; never touches Sim RNG.
 	cur := c.buffer.Current()

@@ -133,7 +133,6 @@ func TestStepUnit_MobileSiteSurvives(t *testing.T) {
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 	}
 	svc := NewService(terrain, cat, w, &economy.Service{})
-	svc.AllowSyntheticPlacement = true
 	// Force state2
 	node.Phase = uint8(State2)
 	ctx := TickContext{Tick: 0, World: w, Economy: svc.Economy, Terrain: terrain, Catalog: cat}
@@ -167,6 +166,7 @@ func TestStepUnit_MobileSiteSurvives(t *testing.T) {
 	hf, _ := w2.Create(facDef, 0, world.CellToWorld(5), 0, world.CellToWorld(5))
 	factory := w2.Unit(hf)
 	factory.Def = facDef
+	bindConstructionFixture(factory, trivialModel(1, nil), true)
 	if err := QueueFactoryBuild(factory, "armllt", 1, cat2); err != nil {
 		t.Fatalf("QueueFactoryBuild %v", err)
 	}
@@ -174,7 +174,6 @@ func TestStepUnit_MobileSiteSurvives(t *testing.T) {
 	nf := qf.Primary()[0]
 	nf.Phase = uint8(State2)
 	svc2 := NewService(terrain, cat2, w2, &economy.Service{})
-	svc2.AllowSyntheticPlacement = true
 	res2 := svc2.StepUnit(TickContext{Tick: 0, World: w2, Economy: svc2.Economy, Terrain: terrain, Catalog: cat2}, hf)
 	if res2.Err != nil {
 		t.Fatalf("factory StepUnit err %v", res2.Err)
@@ -233,8 +232,7 @@ func TestStepUnit_DistinctDescriptors(t *testing.T) {
 	}
 	q2 := orders.QueueForUnit(factory)
 	q2.Push(mobileID, orders.Node{BuildDefKey: "armllt", Param1: 1, Param2: 1, Phase: uint8(State0), GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(5)})
-	svc2 := NewService(nil, cat, w2, &economy.Service{})
-	svc2.AllowSyntheticPlacement = true
+	svc2 := NewService(exitTerrain(12, 12), cat, w2, &economy.Service{})
 	res2 := svc2.StepUnit(TickContext{Tick: 0, World: w2, Economy: svc2.Economy, Catalog: cat}, hf)
 	if res2.Err == nil {
 		t.Fatalf("factory + mobile descriptor should error")
@@ -388,11 +386,11 @@ func TestStepUnit_CancelBeforeAndAfterNanoframe(t *testing.T) {
 	}
 	// Now test cancel after nanoframe: create product, queue state3, then cancel
 	w2 := units.NewSliced(20, cat)
-	hf2, _ := w2.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
+	hf2, _ := w2.Create(facDef, 0, world.CellToWorld(5), numeric.Fixed(0), world.CellToWorld(5))
 	factory2 := w2.Unit(hf2)
 	factory2.Def = facDef
-	svc2 := NewService(nil, cat, w2, &economy.Service{})
-	svc2.AllowSyntheticPlacement = true
+	bindConstructionFixture(factory2, trivialModel(1, nil), true)
+	svc2 := NewService(exitTerrain(12, 12), cat, w2, &economy.Service{})
 	q2 := orders.QueueForUnit(factory2)
 	q2.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State2)})
 	head2 := q2.Primary()[0]

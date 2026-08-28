@@ -150,7 +150,7 @@ func TestP016_SliceFullVsGlobalSpare_SlicedWorld(t *testing.T) {
 }
 
 func TestP016_MaxUnitsLogicalIgnored(t *testing.T) {
-	// P0-16 §7.4: mission logical maxunits (0x37EEC) does NOT gate allocator.
+	// P0-16 §7.4: the mission logical maxunits value does NOT gate the allocator.
 	// We prove by allocating 2 units even though a logical limit of 1 would
 	// forbid it. The allocator only cares about physical cap and per-def slice.
 	world := NewSliced(5, nil)
@@ -212,7 +212,7 @@ func TestP016_StaleDamageAliasSlot5(t *testing.T) {
 		t.Fatalf("want victim at 5 defA, got %v", v)
 	}
 	v.Health = 100
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Free the victim immediately while retaining its stored slot index.
 	world.FreeImmediate(victimH)
 	if world.Unit(victimH) != nil {
 		t.Fatal("victim should be free")

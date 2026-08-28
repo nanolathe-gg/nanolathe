@@ -36,14 +36,9 @@ func (c *Client) SetAudioService(a *audio.Service) {
 	c.ensureAudioBackend()
 }
 
-// SetAudioBackend installs the PCM backend directly [03 §8.3] [I6]. Headless
-// never installs a device; windowed callers pass a non-headless backend.
+// SetAudioBackend installs the PCM backend directly [03 §8.3] [I6].
 func (c *Client) SetAudioBackend(b *audio.Backend) {
 	if c == nil {
-		return
-	}
-	if b != nil && !b.IsHeadless() && c.opts.Headless {
-		// Headless client must never hold a windowed backend [I5][I6].
 		return
 	}
 	audio.SetGlobalBackend(b)
@@ -55,14 +50,12 @@ func (c *Client) AudioBackend() *audio.Backend {
 }
 
 func (c *Client) ensureAudioBackend() {
-	if c == nil || c.opts.Headless {
+	if c == nil {
 		return
 	}
 	if audio.GlobalBackend() != nil {
 		return
 	}
-	// Guard ALL device construction behind windowed backend detection [I5][I6].
-	// Headless never constructs an audio context; hashes stay byte-identical.
 	b := audio.NewBackend(false)
 	audio.SetGlobalBackend(b)
 }
@@ -91,9 +84,8 @@ func (c *Client) AudioViewport() audio.Viewport {
 // resolves within the window still print speech but play no sound; full-queue
 // eviction resolves the last entry silently before inserting [03 §8.3] C16.
 // It also ticks the music controller via the MCI poll [03 §8.4].
-// When a windowed backend is present the queue's OnPlay variant draw [03 §8.3]
-// C17 is played via PCM with volume/pan from the positional math [03 §8.3];
-// headless never constructs a device [I5][I6].
+// The queue's OnPlay variant draw [03 §8.3] C17 is played via PCM with
+// volume/pan from the positional math [03 §8.3].
 func (c *Client) TickAudio() {
 	if c == nil {
 		return
@@ -134,7 +126,7 @@ func (c *Client) UpdateAudioViewportFromCamera() {
 	v := audio.Viewport{
 		Left:   c.cam.X,
 		Top:    c.cam.Z,
-		Width:  int32(c.width / 16), // approximate tiles; precise value not critical for headless fallback
+		Width:  int32(c.width / 16), // approximate tiles; precise value is not critical for the fallback
 		Height: int32(c.height / 16),
 		MapW:   mapW,
 		MapH:   mapH,

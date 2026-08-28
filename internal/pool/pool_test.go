@@ -150,8 +150,8 @@ func TestProjectileAppendDeadCompaction(t *testing.T) {
 	}
 }
 
-// TestP016_CapacityFormula validates the physical cap = maxDefs*10+1 of
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TestP016_CapacityFormula validates the physical cap = maxDefs*10+1
+// [P0-16 §3.1] [01 §6.1]. Stock capacity is roughly 2000–5000, not 500.
 func TestP016_CapacityFormula(t *testing.T) {
 	if got := CapacityForDefs(200); got != 2001 {
 		t.Fatalf("CapacityForDefs(200)=%d want 2001", got)
@@ -195,10 +195,10 @@ func TestP016_CapacityFormula(t *testing.T) {
 	}
 }
 
-// TestP016_PerDefLimitViaPool exercises the per-def limit gate
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// [P0-16 §3.2]: limit 2 should allow 2 of same defId then fail, other def
-// should still succeed, zero RNG draws.
+// TestP016_PerDefLimitViaPool exercises the per-definition limit gate and
+// slice scan [P0-16 §3.2]: limit 2 should allow 2 of the same definition then
+// fail, another definition should still succeed, and allocation takes no RNG
+// draws.
 func TestP016_PerDefLimitViaPool(t *testing.T) {
 	p := NewUnitsSliced(5) // 5 per player, usable 50 total
 	const defA uint16 = 42
@@ -256,8 +256,8 @@ func TestP016_SliceFullVsGlobalSpare(t *testing.T) {
 	}
 }
 
-// TestP016_ForcedSlotOOB covers reconstructor forcedSlot verification:
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// TestP016_ForcedSlotOOB covers reconstructor forced-slot verification:
+// the candidate must lie in the player's slice and be free [P0-16 §3.3].
 func TestP016_ForcedSlotOOB(t *testing.T) {
 	p := NewUnitsSliced(5) // player0 1..5, player1 6..10
 	// Valid forced slot within slice and free should succeed
@@ -295,8 +295,8 @@ func TestP016_ForcedSlotOOB(t *testing.T) {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// [P0-16 §3.4]: slotIndex equals handle and survives Free.
+// TestP016_SlotIndexRetained verifies that the stored slot index survives
+// Free [P0-16 §3.4].
 // TestSlicedPoolOneAllocationPath locks the retail unit-pool allocation
 // contract on the sliced pool [P0-16 §3.1][P0-16 §3.2][01 §6.1]: slot 0 is
 // the null sentinel and is never allocated; allocation scans the owning

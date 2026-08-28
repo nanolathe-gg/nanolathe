@@ -52,6 +52,7 @@ func approachFixture(t *testing.T, siteCellX, siteCellZ int32) (*Service, *units
 	}
 	builder := w.Unit(hb)
 	builder.Def = builderDef
+	bindConstructionFixture(builder, trivialModel(1, nil), false)
 
 	siteX, siteZ := world.CellToWorld(siteCellX), world.CellToWorld(siteCellZ)
 	if err := QueueMobileBuild(builder, "corlab", siteX, siteZ, 1, cat); err != nil {
@@ -67,7 +68,6 @@ func approachFixture(t *testing.T, siteCellX, siteCellZ int32) (*Service, *units
 
 	svc := NewService(terrain, cat, w, nil)
 	svc.Movement = sys
-	svc.AllowSyntheticPlacement = true
 	return svc, builder, node
 }
 

@@ -73,7 +73,6 @@ func TestP0I05_SiteAuthoritative(t *testing.T) {
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 	}
 	svc := NewService(terrain, cat, w, &economy.Service{})
-	svc.AllowSyntheticPlacement = true
 	// Directly pump mobile builder state2 -> allocation at site
 	// Ensure builder's queue head is mobile build at state2
 	node.Phase = uint8(State2)

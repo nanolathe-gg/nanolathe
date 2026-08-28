@@ -48,13 +48,13 @@ type TargetKind uint8
 
 const (
 	TargetNone   TargetKind = iota // no target
-	TargetUnit                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	TargetGround                   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	TargetUnit                     // unit latch sentinel [06 §1.2]
+	TargetGround                   // ground point, not a unit latch [06 §1.2]
 )
 
 // Target is the decoded slot target [06 §1.2] (I13).
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// for unit latch, otherwise ground X/Z words <<16 [06 §1.2] P0-10.
+// A signed sentinel selects a unit latch; otherwise the target carries ground
+// X/Z words converted to 16.16 fixed point [06 §1.2] [P0-10].
 type Target struct {
 	Kind TargetKind
 	Unit pool.Handle   // valid when Kind==TargetUnit
@@ -66,14 +66,14 @@ type Target struct {
 // This is the units-owned slot record; combat.Slot is the combat-owned
 // definition that will be wired via side table or conversion later [06 §1.2].
 // Kept local to avoid the units→combat→economy→units import cycle.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Fields mirror the retail weapon-slot semantics [06 §1.2] [P0-10].
 type Slot struct {
-	Weapon       *content.WeaponDef // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Reload       int32              // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Flags        uint8              // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	DesiredYaw   uint16             // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	DesiredPitch uint16             // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Ammo         int32              // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Weapon       *content.WeaponDef // resolved weapon definition [06 §1.2] [P0-10]
+	Reload       int32              // signed reload countdown [06 §1.2] [P0-10]
+	Flags        uint8              // 0x02 armed, 0x01 Aim-latch, 0x10 tracking [06 §1.2] [P0-10]
+	DesiredYaw   uint16             // commanded yaw [06 §1.2] [P0-10]
+	DesiredPitch uint16             // commanded pitch [06 §1.2] [P0-10]
+	Ammo         int32              // remaining stockpile [06 §1.2] [P0-10]
 	MuzzlePiece  int32              // muzzle piece queried synchronously [06 §4.1] C3
 
 	// Aim is the asynchronous Aim handshake [GAP T15] C16 [06 §3.3] [04 §5.3].

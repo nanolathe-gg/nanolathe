@@ -13,6 +13,33 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// requiredContentError keeps required-resource failures actionable at the
+// content boundary. Concrete VFS overlays expose Sources; focused fixtures
+// expose only Stat, so both paths are supported without widening FSOps
+// [AGENTS.md diagnostics].
+func requiredContentError(fs vfs.FSOps, logical, expected string, cause error) error {
+	providers := make([]string, 0, 2)
+	if sourceLister, ok := fs.(interface{ Sources(string) []vfs.EntryInfo }); ok {
+		for _, info := range sourceLister.Sources(logical) {
+			id := info.Source.ProviderID()
+			if id == "" {
+				id = "unknown"
+			}
+			providers = append(providers, id)
+		}
+	}
+	if len(providers) == 0 {
+		if info, err := fs.Stat(logical); err == nil {
+			id := info.Source.ProviderID()
+			if id == "" {
+				id = "unknown"
+			}
+			providers = append(providers, id)
+		}
+	}
+	return fmt.Errorf("nanolathe: required authored resource: logical path %s, providers searched [%s], expected %s: %w", logical, strings.Join(providers, ", "), expected, cause)
+}
+
 // WeaponDuplicate records sections that shared one weapon record slot, for
 // diagnostics [02 §5 R-CONTENT-02]. Keys are in discovery order; Winner is
 // the last key — the later section's name, which owns the slot after a

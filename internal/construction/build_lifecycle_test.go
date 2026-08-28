@@ -173,10 +173,10 @@ func TestFactoryReservationReleaseAndCompletedRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	factory := w.Unit(h)
+	bindConstructionFixture(factory, trivialModel(1, nil), true)
 	q := orders.QueueForUnit(factory)
 	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 1, Phase: uint8(State2)})
 	svc := NewService(terrain, cat, w, &economy.Service{})
-	svc.AllowSyntheticPlacement = true
 	svc.Pump(factory, 0)
 	node := q.Primary()[0]
 	if node.Target == 0 {
@@ -276,11 +276,11 @@ func TestAcceptedWorkEmitsNanoAndStallDoesNot(t *testing.T) {
 	factory := w.Unit(h)
 	ph, _ := w.Create(prodDef, 0, 0, 0, 0)
 	product := w.Unit(ph)
+	bindConstructionFixture(factory, trivialModel(1, nil), false)
 	product.Remaining, product.MaxHealth = 0.5, 100
 	q := orders.QueueForUnit(factory)
 	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 1, Phase: uint8(State3), Target: ph})
 	svc := NewService(nil, cat, w, nil)
-	svc.AllowSyntheticPlacement = true
 	svc.ModelForUnit = func(*units.Unit) *model.Model { return trivialModel(1, nil) }
 	collector := frame.NewEventBuffer(frame.Limits{})
 	svc.Presentation = collector
@@ -309,8 +309,7 @@ func TestAllocatorNanoframeInitializationAndInvalidRollback(t *testing.T) {
 	cat.Units[def.CanonicalKey] = def
 	factory := &units.Unit{Handle: 1, Owner: 0}
 	rect, _ := world.NewFootprintRect(world.NewFootprintAnchor(0, 0), mustExtent(1, 1))
-	svc := NewService(nil, cat, nil, nil)
-	svc.AllowSyntheticPlacement = true
+	svc := NewService(exitTerrain(2, 2), cat, nil, nil)
 	svc.Allocator = func(uint8, *content.UnitDef, numeric.Fixed, numeric.Fixed, numeric.Fixed) (*units.Unit, error) {
 		return &units.Unit{Handle: 9}, nil
 	}

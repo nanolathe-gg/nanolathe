@@ -188,7 +188,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	}
 
 	if shot := os.Getenv("NANOLATHE_HUD_SHOT"); shot != "" {
-		cl, err := client.New(client.Options{Buffer: sess.Snapshot, Width: winW, Height: winH, Headless: true})
+		cl, err := client.New(client.Options{Buffer: sess.Snapshot, Width: winW, Height: winH})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -279,7 +279,7 @@ func TestRetailNoSelectionUsesSideGeneralWindow(t *testing.T) {
 		case "confirm-main":
 			b.battleState().ShowConfirmation(true)
 		}
-		cl, err := client.New(client.Options{Buffer: sess.Snapshot, Width: winW, Height: winH, Headless: true})
+		cl, err := client.New(client.Options{Buffer: sess.Snapshot, Width: winW, Height: winH})
 		if err != nil {
 			t.Fatal(err)
 		}

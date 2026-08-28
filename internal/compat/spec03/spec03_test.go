@@ -79,7 +79,7 @@ func runSessionHashStatePresentation(t *testing.T, present bool) sessionHashStat
 	*w = *f
 	_ = buf.Publish(f.Tick)
 
-	c, err := client.New(client.Options{Buffer: buf, Width: 80, Height: 48, Headless: true})
+	c, err := client.New(client.Options{Buffer: buf, Width: 80, Height: 48})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ type liveResult struct {
 func runLiveSchedule(t *testing.T, renders []int) liveResult {
 	t.Helper()
 	buf := &frame.Buffer{}
-	c, err := client.New(client.Options{Buffer: buf, Width: 80, Height: 48, Headless: true})
+	c, err := client.New(client.Options{Buffer: buf, Width: 80, Height: 48})
 	if err != nil {
 		t.Fatal(err)
 	}

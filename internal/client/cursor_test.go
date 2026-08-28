@@ -92,7 +92,7 @@ func TestCursorHotspotBlit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCursors: %v", err)
 	}
-	c, err := New(Options{Width: 64, Height: 64, Headless: true})
+	c, err := New(Options{Width: 64, Height: 64})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

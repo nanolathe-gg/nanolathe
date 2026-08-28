@@ -1721,6 +1721,169 @@ names. Build queue records use encoded unit/request names and payload fields.
 The exact persistence of every script thread local, operand stack, wait state,
 signal mask, and callback is not yet closed.
 
+#### R-SAVE-UNIT-01 — Unit base record and fixed-slot reconstruction
+
+This addendum closes the part of the unit save contract needed to stage a
+deterministic fixed-slot restore. It supersedes only the preceding statement
+that a unit record stores “enough” state; it does not close the order, script,
+accessory, mobile, or feature boxes. The positions below are offsets within a
+save-file unit box, not executable layout. The record uses little-endian
+integers and has two accepted lengths: 184 bytes (`0xB8`) and the distinct
+182-byte compatibility form (`0xB6`). [Established; [01 §6.1], [04 §2.3]]
+
+**Writer/reader symmetry.** The writer emits the fields in the fixed order
+below. The reader selects the same numbered box, accepts only one of the two
+lengths, and decodes the `0xB8` fields before running the later fix-up passes.
+The field's runtime name is included only where the current evidence closes
+it; an opaque word must remain opaque in a staged image rather than being
+assigned a plausible `Unit` field.
+
+| Save bytes | Wire form | Meaning and restore disposition |
+|---|---|---|
+| `0x00..0x1F` | 32-byte NUL-padded text | Unit definition name. It is the definition lookup key. [Established] |
+| `0x20` | `u8` | Source owner/player byte. It is part of the base identity and must be validated against the player slice used for the forced allocation. [Established for the wire field; exact malformed-value policy is Unknown] |
+| `0x21..0x22` | `u16` | Stable unit ID and forced pool slot. Zero is the null sentinel; a live unit may not use slot zero. [Established] |
+| `0x23..0x26` | `u32` | Count of order/build records associated with this unit. The records themselves are restored by the later order pass. [Established] |
+| `0x27..0x2A` | `u32` | Runtime boolean word. Its authoritative semantic name is Unknown; preserve it without converting it to `Alive`, `Dying`, or a command flag. |
+| `0x2B..0x2E`, `0x2F..0x32`, `0x33..0x36` | `u32` each | Three fixed-point position words, in the writer's X/Z/Y order. They are copied as raw fixed-point values; no terrain resampling is part of base restore. [Supported inference for the exact slot assignment; a synthetic save probe should verify it] |
+| `0x37..0x3A`, `0x3B..0x3C` | `u32`, `u16` | Two orientation payload words. They must be preserved before movement/script fix-up. The complete heading/pitch/bank axis assignment is Unknown. |
+| `0x3D..0x3E`, `0x3F..0x40` | `u16` each | Two distinct short runtime words. One is the signed 16-bit health state in the runtime census, but the current reader evidence does not safely identify which save position carries it. The other is a separate short. Keep both raw until a health-only save/load probe closes the assignment; do not guess. [Unknown semantic mapping] |
+| `0x41..0x88` | 3 × 24-byte embedded records | Three weapon-slot payloads. The writer preserves the full-width and low-width components, zero-extends the byte component, and retains only the low five bits of the final byte. Exact mapping to all current weapon-slot fields is not closed; retain the raw records and let the weapon/subtype pass interpret them. [Established wire symmetry; Unknown complete semantic mapping] |
+| `0x89..0x8A`, `0x8B..0x8C` | `u16` each | Stable IDs for two optional cross-unit references; zero means absent. These are resolved recursively before attachment is committed. [Established] |
+| `0x8D` | `u8` | Reference-associated byte, or `0xFF` when the first reference is absent. Its complete semantic name is Unknown; preserve the sentinel. |
+| `0x8E` | `u8` | Low byte of another runtime state word. Semantic name is Unknown. |
+| `0x8F..0x92` | `u32` | Stored extractor/site-yield word used by the unit's placement/economy state. Preserve verbatim; recomputing it from the map would change save behavior. [Established for persisted word; exact public field mapping is implementation-dependent] |
+| `0x93..0x9E` | 3 × `u32` | Cached cell/footprint words used by placement and occupancy. They are derived-looking but are written and read as part of the base record; preserve them until occupancy fix-up. Their exact packing is Unknown. |
+| `0x9F..0xA6` | 2 × `u32` | Two persisted runtime counters/deadline words. Their complete semantic names are Unknown; do not map them to kills, experience, or a timer without a field-isolation probe. |
+| `0xA7..0xAA` | raw `f32` | Construction remaining fraction. It is the saved construction state and follows the retail fraction convention (completed is zero, an unfinished unit is positive up to the authored range). [Established] |
+| `0xAB..0xAD`, `0xB0..0xB1` | five `u8` values | Persisted runtime bytes whose individual semantics are Unknown. Preserve exactly. |
+| `0xAE..0xAF` | `u16` | Capability/pending-mask word. Only the established low-width behavior may be interpreted; preserve the full short for later command/construction fix-up. [Established wire field; complete bit map remains partial] |
+| `0xB2..0xB3` | `u16` | Callback/edge state word used by activation/building completion behavior. It is restored before callback and construction fix-up. [Established] |
+| `0xB4..0xB7` | `u32` packed word | Packed status and callback-related state, including known lifecycle/status bits. Some high bits are not initialized by the writer and can carry stale values; preserve the word, but mask only bits whose semantics are established by the consuming pass. Exact `Alive` versus `Dying` bit assignment is Unknown. [Established wire preservation; partial semantic mapping] |
+
+The table is deliberately asymmetric in one important respect: positions,
+construction remaining, references, and the fixed-slot identity are safe
+inputs to a minimal staged unit, while the unresolved short words, status
+bits, weapon-slot subfields, cached cells, counters, and bytes are not. A
+loader must not manufacture `Alive=true`, `Dying=false`, health, orientation
+axes, or a kill/experience value merely because a definition and stable ID
+were found. [Established policy from the Unknown entries above]
+
+**Identity and minimal base restore.** The loader first validates the Units
+account version (`0x11`) and count. For each enumerated box, a `0xB8` stable ID
+of zero is a null record; a nonzero ID is looked up by scanning the numbered
+boxes for that ID, not by treating the enumeration index as the slot. The
+definition name must resolve in the loaded catalog. The canonical allocator
+then receives the saved owner/player identity and the saved stable ID as a
+forced slot. It rejects slot zero, an occupied slot, a slot outside the
+owner's battle-entry slice, and a definition-limit violation. Slot slices
+come from the one battle-entry player permutation and are not recomputed from
+save enumeration order. [Established; [01 §6.1], [01 §6.1 player-slice order],
+[04 §2.3]]
+
+The first base-restore write set is therefore: definition identity, owner,
+stable slot, the three raw fixed-point position words, both orientation
+payloads, construction remaining, the complete opaque state/weapon payload,
+and reference placeholders. The restored object is not published as a fully
+usable unit until reference, accessory/mobile, order, script, registration,
+derived occupancy, and visibility steps have completed. A missing definition,
+failed forced allocation, duplicate stable ID, or absent referenced box is a
+failed staged image rather than an invitation to allocate a replacement slot.
+The retail reader can skip a failed reconstruction; the transactional loader
+planned by CRD-009 must report the failure before commit so that a failed image
+cannot partially replace the live session. The latter is an implementation
+boundary, not a claim that retail itself was transactional. [Retail behavior
+Established; transactional consequence Supported inference]
+
+**References and later-owned state.** The two stable-ID fields at `0x89` and
+`0x8B` are logical references, never native pointers. Resolution is recursive
+and depth-first: resolve a referenced ID, then attach it to the already staged
+parent. Consequently, numbered-box order does not determine allocation order.
+A missing ID, duplicate ID, or cycle is malformed for a transactional image;
+retail's bounded early-active guard can leave a partial result on a cycle and
+must not be copied as successful commit behavior. [Established retail
+resolution; Supported inference for rejecting cycles during pre-commit]
+
+The following state is intentionally restored by later passes rather than by
+the base record alone:
+
+- the count at `0x23` drives numbered order boxes (`u%04xm%04x`) and their
+  subtype records; these rebuild order nodes, targets, links, and build queues;
+- the three weapon-slot payloads are completed by the weapon/subtype path;
+- per-unit accessory and mobile boxes restore attachment and mobile-builder
+  state;
+- sequential script boxes restore the COB snapshot, stack, pieces, waits,
+  signals, and callbacks; script persistence remains only partially closed;
+- registration and derived occupancy run after raw state and references;
+  visibility is published last, before the first authoritative tick.
+
+This order prevents an order or script reference from observing an unallocated
+unit and prevents the first tick from observing footprints that were derived
+from stale map state. [Established fix-up order; [08 “Unit and script
+records”], [04 §2.3]]
+
+**Validation and compatibility-length rules.** A valid unit image requires
+Units version `0x11`, a nonpositive unit count to produce no units, exact
+`0xB8` records for reconstructable units, nonzero unique stable IDs, a
+definition name present in the catalog, an owner in the configured player
+domain, and a forced slot inside the owner's canonical slice. The loader must
+also reject occupied slots, per-definition limits, unresolved references, and
+any exact-length mismatch before commit. No additional coordinate or health
+range is invented here; map geometry, signed health, and status-bit validation
+belong to their owning passes once their wire mapping is closed.
+
+`0xB6` is not a truncated `0xB8` and is not a legacy unit record. Retail
+accepts it only as a compatibility/null-dispatch form: the stable ID is
+cleared and no unit is restored. A transactional reader must retain that
+distinction: accept the form as “no unit,” never pad it to `0xB8`, and reject
+all other lengths. [Established]
+
+**Deterministic staging and commit order.** A future loader should use this
+order, with no live-session mutation before validation completes:
+
+1. Validate bank/account version, unit count, numbered-box lengths, definition
+   names, stable-ID uniqueness, owner/slice membership, and all reference IDs;
+2. stage every `0xB8` base record by stable ID and reserve its forced pool slot;
+3. recursively resolve the two reference fields depth-first and stage cargo or
+   attachment relationships;
+4. restore accessory/mobile state and the embedded weapon-slot payloads;
+5. restore numbered order/subtype records and link their logical targets;
+6. restore script snapshots, piece state, stacks, waits, signals, and
+   callbacks in the script reader's established internal order;
+7. run registration and derived occupancy/placement fix-up;
+8. publish visibility and atomically commit the staged image.
+
+The exact point at which a particular script subcomponent is installed is
+still bounded by the script reader; its known ordering constraint is that
+piece state is installed before the stack is made live. [Established]
+
+**Implementation probes and residual Unknowns.** The following small probes
+are sufficient to close the fields an implementation must otherwise keep
+opaque:
+
+- write one unit while varying only X, Y, Z, orientation, construction
+  remaining, and health; read each candidate short and orientation word back
+  independently to identify the signed health slot and orientation axes;
+- compare a live unit and a dying-but-not-yet-cleaned unit to map the lifecycle
+  bits in the packed status word, then compare a completed and unfinished unit
+  for the build/edge words;
+- use IDs whose numbered records are reversed, then use absent, duplicate, and
+  cyclic references, to verify ID-based depth-first resolution and the
+  transactional rejection boundary;
+- vary one weapon slot, cached footprint cell, counter, and callback edge at a
+  time; retain unknown words byte-exactly until each consumer is identified;
+- feed exact `0xB6`, `0xB8`, short, and long boxes under version `0x11`, plus
+  version `0x10`, to assert the compatibility/null and whole-account gates.
+
+The remaining Unknowns are the exact health-slot assignment between
+`0x3D..0x3E` and `0x3F..0x40`, orientation-axis names, `Alive`/`Dying` bit
+assignment, the boolean at `0x27`, the complete weapon-slot schema, cached
+cell packing, counter/deadline meanings, the individual byte meanings, the
+full capability mask, and the packed high status bits. These are not safe to
+infer from width or adjacency. An implementation depending on any of them
+must carry the raw bytes through the staged image and settle the mapping with
+the corresponding field-isolation probe. [Unknown]
+
 ### Feature records
 
 Features are partitioned into normal, animated, and 3D records. Loading maps

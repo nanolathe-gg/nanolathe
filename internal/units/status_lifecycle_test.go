@@ -91,7 +91,7 @@ func TestClassifierEligibilityStatusLifecycle(t *testing.T) {
 	}
 
 	// The death notification observes the still-live record. The bit is cleared
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// by the finalizer, matching the documented teardown ordering [04 §2.3].
 	var observedAtDeath uint32
 	world.OnDeath = func(_ pool.Handle, _ DeathCause, dead *Unit) {
 		observedAtDeath = dead.Flags

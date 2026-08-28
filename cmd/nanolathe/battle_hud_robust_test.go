@@ -156,7 +156,7 @@ func TestMissingOptionalStillEntersBattle(t *testing.T) {
 			t.Fatalf("core HUD missing after hiding optional %v", hide)
 		}
 		// Verify we can compose a first frame with this HUD (even without optional).
-		cl, err := client.New(client.Options{Buffer: sess.Snapshot, Width: 640, Height: 480, Headless: true})
+		cl, err := client.New(client.Options{Buffer: sess.Snapshot, Width: 640, Height: 480})
 		if err != nil {
 			t.Fatalf("client: %v", err)
 		}

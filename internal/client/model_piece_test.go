@@ -66,10 +66,10 @@ func syntheticModel(pieces []pieceInfo, tris []syntheticTri, root int) *unitMode
 	return &unitModel{compiled: m, pieceByName: byName}
 }
 
-// newTestClient creates a 640x480 headless client with camera at origin.
+// newTestClient creates a 640x480 client with camera at origin.
 func newTestClient(t *testing.T) *Client {
 	t.Helper()
-	c, err := New(Options{Width: 640, Height: 480, Headless: true})
+	c, err := New(Options{Width: 640, Height: 480})
 	if err != nil {
 		t.Fatalf("New client: %v", err)
 	}

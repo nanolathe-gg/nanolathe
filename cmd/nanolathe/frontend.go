@@ -216,12 +216,11 @@ func runGameShell(opts Options, cs *contentSet) error {
 	buf := &frame.Buffer{}
 	var cl *client.Client
 	cl, err = client.New(client.Options{
-		Buffer:   buf,
-		Width:    winW,
-		Height:   winH,
-		Title:    "Nanolathe",
-		Headless: false,
-		Step:     func(delta float64) { shell.step(delta, cl) },
+		Buffer: buf,
+		Width:  winW,
+		Height: winH,
+		Title:  "Nanolathe",
+		Step:   func(delta float64) { shell.step(delta, cl) },
 	})
 	if err != nil {
 		return fmt.Errorf("nanolathe: client: %w", err)

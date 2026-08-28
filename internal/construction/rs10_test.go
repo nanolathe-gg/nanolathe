@@ -50,7 +50,6 @@ func TestRS10_MobileBuildLegalSite(t *testing.T) {
 	// Advance to nanoframe allocation: state2 with exact site
 	node.Phase = uint8(State2)
 	svc := NewService(terrain, cat, w, &economy.Service{})
-	svc.AllowSyntheticPlacement = true
 	svc.Pump(builder, 0)
 	if node.Target == 0 {
 		t.Fatalf("legal site allocation failed")
@@ -119,7 +118,6 @@ func TestRS10_MobileBuildBlockedAreaBudget(t *testing.T) {
 	node := q.Primary()[0]
 	node.Phase = uint8(State2)
 	svc := NewService(terrain, cat, w, &economy.Service{})
-	svc.AllowSyntheticPlacement = true
 	var sinkTexts []string
 	svc.StatusText = func(text string) { sinkTexts = append(sinkTexts, text) }
 
@@ -308,6 +306,7 @@ func TestRS10_FactoryBlockedRetryAndLimit(t *testing.T) {
 	h, _ := w.Create(facDef, 0, world.CellToWorld(5), 0, world.CellToWorld(5))
 	factory := w.Unit(h)
 	factory.Def = facDef
+	bindConstructionFixture(factory, trivialModel(1, nil), true)
 	q := orders.QueueForUnit(factory)
 	bid := orders.Lookup("BuildingBuild")
 	if bid == 0 {
@@ -317,7 +316,6 @@ func TestRS10_FactoryBlockedRetryAndLimit(t *testing.T) {
 	head := q.Primary()[0]
 	head.Phase = uint8(State2)
 	svc := NewService(terrain, cat, w, &economy.Service{})
-	svc.AllowSyntheticPlacement = true
 	svc.Pump(factory, 10)
 	if head.Deadline != int32(25) {
 		t.Fatalf("blocked retry deadline want 25 got %d", head.Deadline)

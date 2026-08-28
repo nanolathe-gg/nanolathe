@@ -70,20 +70,16 @@ func parseLOSLine(value string) []int32 {
 // sections sorted by numeric suffix (I1) so downstream can clamp into the parsed
 // range [03 §3.2] C2. Phases 5 consumes this compiled form and does not re-parse (I8).
 //
-// If the file is absent (minimal fixture without gamedata/), an empty table set
-// is returned without error so TestCatalogHashStable on fixtures without LOS still
-// passes; Validate does not consider LOS fatal [SPEC_CONFLICTS SC2].
+// The authored LOS table is required by the terrain-ray visibility path. A
+// missing or malformed file is therefore returned as a provenance-rich content
+// error; fixtures must provide an authored table [03 §3.2][PLAN_05 C2].
 func CompileLOSTables(fs vfs.FSOps) (*LOSTables, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("content: nil VFS")
 	}
 	data, err := fs.ReadFileLimit("gamedata/los.tdf", 1<<20)
 	if err != nil {
-		// Missing is not fatal for fixtures; retail always has it so whole-install
-		// compile with a real FS will succeed, but synthetic tests without it must not fail.
-		lt := &LOSTables{}
-		lt.CanonicalKey = CanonicalKey("los")
-		return lt, nil
+		return nil, requiredContentError(fs, "gamedata/los.tdf", "retail LOS.TDF terrain-ray tables", err)
 	}
 	prov := Provenance{}
 	if info, statErr := fs.Stat("gamedata/los.tdf"); statErr == nil {
@@ -91,7 +87,7 @@ func CompileLOSTables(fs vfs.FSOps) (*LOSTables, error) {
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, fmt.Errorf("content: gamedata/los.tdf: %w", err)
+		return nil, requiredContentError(fs, "gamedata/los.tdf", "retail LOS.TDF terrain-ray tables", err)
 	}
 	var numTables int32
 	if sec := doc.Root.Section("TABLEINFO"); sec != nil {
@@ -193,7 +189,9 @@ func CompileLOSTables(fs vfs.FSOps) (*LOSTables, error) {
 // (floatings) [research/formats/tdf.md METEOR.TDF]. Values retain source
 // precision and are not re-parsed by combat [PLAN_02 C15] (I8).
 //
-// Missing file yields zero defaults without error for the same fixture reason as LOS.
+// Missing file or [Default] section leaves zero defaults without error. This is
+// the established retail early-return behavior, not a synthetic fixture
+// fallback [02 §6][06 §6.5].
 func CompileMeteor(fs vfs.FSOps) (*MeteorDefaults, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("content: nil VFS")

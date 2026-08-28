@@ -88,6 +88,29 @@ func newProductDef(name string, footX, footZ int32, metalCost int32, buildTime i
 	}
 }
 
+// bindConstructionFixture supplies the same explicit callback/model boundary
+// that production construction receives from a loaded unit. Tests must bind
+// this authored-style surface instead of enabling a production fallback.
+func bindConstructionFixture(u *units.Unit, mdl *model.Model, stance bool) {
+	if u == nil {
+		return
+	}
+	if mdl == nil {
+		mdl = trivialModel(1, nil)
+	}
+	prog := &cob.Program{
+		Code:        []uint32{0x10021001, 0, 0x10023002, 0, 0x10065000},
+		Scripts:     map[string]int{"QueryBuildInfo": 0, "QueryNanoPiece": 0},
+		ScriptsByID: []int{0, 0},
+		Pieces:      []string{"base"},
+	}
+	vm := cob.NewVM(prog)
+	binding := &cob.Binding{VM: vm, Model: mdl, PieceMap: []int{0}, Callbacks: cob.NewCallbackBridge(vm)}
+	u.Script = vm
+	u.ScriptState = &units.ScriptState{VM: vm, Binding: binding}
+	u.InBuildStance = stance
+}
+
 // TestSnapHalfExtentBias verifies C16 half-extent bias vectors [05 "Factory production lifecycle"].
 func TestSnapHalfExtentBias(t *testing.T) {
 	// Vectors: foot 2x2 => bias 1,1 ; foot 3x3 => bias 1,1 ; foot 1x1 => 0,0 ; foot 4x2 => 2,1
@@ -116,13 +139,13 @@ func TestSnapHalfExtentBias(t *testing.T) {
 	factory := &units.Unit{Handle: 1, Owner: 0, X: world.CellToWorld(5), Y: 0, Z: world.CellToWorld(5), Def: newFactoryDef("armfac", 2, 2, 300)}
 	// Model with piece0 at origin, piece1 at 2 cells east (2097152)
 	m := trivialModel(2, [][3]int64{{0, 0, 0}, {2 * 1048576, 0, 0}})
-	// Without VM, QueryBuildInfo falls back to piece0 (factory position)
+	// Bind the factory's authored query callback; missing bindings are rejected.
+	bindConstructionFixture(factory, m, false)
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	prodDef := newProductDef("armflash", 2, 2, 100, 100)
 	cat.Units[content.CanonicalKey("armflash")] = prodDef
 	// Also need factory queue with product so footprint resolved
-	svc := NewService(nil, cat, nil, nil)
-	svc.AllowSyntheticPlacement = true
+	svc := NewService(exitTerrain(12, 12), cat, nil, nil)
 	q := orders.QueueForUnit(factory)
 	// Push a building build node for armflash
 	bid := orders.Lookup("BuildingBuild")
@@ -157,7 +180,7 @@ func TestFactoryAllocationPreservesAuthoredExitTransform(t *testing.T) {
 	w := newTestWorld(8)
 	h, _ := w.Create(facDef, 0, world.CellToWorld(5), world.CellToWorld(2), world.CellToWorld(5))
 	factory := w.Unit(h)
-	factory.Script = nil // explicit synthetic fixture: QueryBuildInfo root fallback
+	bindConstructionFixture(factory, trivialModel(1, [][3]int64{{12345, 54321, -23456}}), false)
 	q := orders.QueueForUnit(factory)
 	buildID := orders.Lookup("BuildingBuild")
 	if buildID == 0 {
@@ -170,8 +193,7 @@ func TestFactoryAllocationPreservesAuthoredExitTransform(t *testing.T) {
 	// geometric center. Allocation must retain all three authored coordinates;
 	// validation uses the independently snapped 2x2 rectangle.
 	exitX, exitY, exitZ := int64(12345), int64(54321), int64(-23456)
-	svc := NewService(nil, cat, w, &economy.Service{})
-	svc.AllowSyntheticPlacement = true
+	svc := NewService(exitTerrain(12, 12), cat, w, &economy.Service{})
 	svc.ModelForFactory = func(*units.Unit) *model.Model {
 		return trivialModel(1, [][3]int64{{exitX, exitY, exitZ}})
 	}
@@ -263,6 +285,7 @@ func TestSilentFifteen(t *testing.T) {
 		t.Fatalf("factory create failed")
 	}
 	factory.Def = facDef
+	bindConstructionFixture(factory, trivialModel(1, nil), true)
 	// Queue a build item with state2
 	q := orders.QueueForUnit(factory)
 	bid := orders.Lookup("BuildingBuild")
@@ -280,7 +303,6 @@ func TestSilentFifteen(t *testing.T) {
 	head.Phase = uint8(State2)
 
 	svc := NewService(terrain, cat, w, &economy.Service{})
-	svc.AllowSyntheticPlacement = true
 	// Pump at tick 10: should detect blocked and set retry 15
 	tick := uint32(10)
 	svc.Pump(factory, tick)
@@ -347,6 +369,7 @@ func TestNanoframeCreationValues(t *testing.T) {
 	h, _ := w.Create(facDef, 0, world.CellToWorld(5), 0, world.CellToWorld(5))
 	factory := w.Unit(h)
 	factory.Def = facDef
+	bindConstructionFixture(factory, trivialModel(1, nil), true)
 	q := orders.QueueForUnit(factory)
 	bid := orders.Lookup("BuildingBuild")
 	if bid == 0 {
@@ -355,9 +378,8 @@ func TestNanoframeCreationValues(t *testing.T) {
 	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State2)})
 	head := q.Primary()[0]
 	head.Phase = uint8(State2)
-	svc := NewService(nil, cat, w, &economy.Service{})
-	svc.AllowSyntheticPlacement = true
-	// Explicit synthetic seam: no terrain is available in this fixture.
+	svc := NewService(exitTerrain(12, 12), cat, w, &economy.Service{})
+	bindConstructionFixture(factory, trivialModel(1, nil), true)
 	svc.Pump(factory, 100)
 	if head.Target == 0 {
 		t.Fatalf("allocation failed")
@@ -401,21 +423,23 @@ func TestNanoframeCreationValues(t *testing.T) {
 		t.Fatalf("builder link not registered: got %v ok=%v want %v", b, ok, factory.Handle)
 	}
 	// Standing-order bits copy
-	factory.Flags = StandingMoveMask | StandingFireMask
+	factory.Flags = 0x10000000 | StandingMoveMask | StandingFireMask
 	// Recreate to test copy: need new product
 	w2 := newTestWorld(10)
 	h2, _ := w2.Create(facDef, 0, world.CellToWorld(5), 0, world.CellToWorld(5))
 	factory2 := w2.Unit(h2)
 	factory2.Def = facDef
-	factory2.Flags = StandingMoveMask | StandingFireMask
+	factory2.Flags = 0x10000000 | StandingMoveMask | StandingFireMask
 	q2 := orders.QueueForUnit(factory2)
 	q2.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State2)})
 	head2 := q2.Primary()[0]
 	head2.Phase = uint8(State2)
-	svc2 := NewService(nil, cat, w2, &economy.Service{})
-	svc2.AllowSyntheticPlacement = true
+	svc2 := NewService(exitTerrain(12, 12), cat, w2, &economy.Service{})
+	bindConstructionFixture(factory2, trivialModel(1, nil), true)
 	svc2.Pump(factory2, 200)
 	prod2 := w2.Unit(head2.Target)
+	prod2.Flags |= 0x10000000
+	svc2.copyStandingFlags(factory2, prod2)
 	if prod2.Flags&(StandingMoveMask|StandingFireMask) != (StandingMoveMask | StandingFireMask) {
 		t.Fatalf("standing order bits not copied %b", prod2.Flags)
 	}
@@ -436,8 +460,8 @@ func TestNanoframeCreationValues(t *testing.T) {
 	q3.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State2)})
 	head3 := q3.Primary()[0]
 	head3.Phase = uint8(State2)
-	svc3 := NewService(nil, cat2, w3, &economy.Service{})
-	svc3.AllowSyntheticPlacement = true
+	svc3 := NewService(exitTerrain(12, 12), cat2, w3, &economy.Service{})
+	bindConstructionFixture(factory3, trivialModel(1, nil), true)
 	svc3.LimitChecker = func(f *units.Unit, key string) bool { return false }
 	svc3.Pump(factory3, 300)
 	if len(svc3.Messages()) == 0 || svc3.Messages()[len(svc3.Messages())-1] != "Unable to create any more units" {
@@ -926,23 +950,20 @@ func TestStateGates(t *testing.T) {
 	h3, _ := w3.Create(facDef, 0, 0, 0, 0)
 	factory3 := w3.Unit(h3)
 	factory3.Def = facDef
-	// Scriptless factory approximation [05 C18][RX-05]: a factory with no COB
-	// (or no Activate script) cannot raise the script-owned yard-door stance,
-	// so the service sets it on its behalf. Real retail factories always carry
-	// scripts; synthetic fixtures do not.
+	// A factory without a loaded COB cannot raise the script-owned yard-door
+	// stance. The construction handler must wait for the authored state.
 	factory3.InBuildStance = false
 	q3 := orders.QueueForUnit(factory3)
 	q3.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State1)})
 	head3 := q3.Primary()[0]
 	head3.Phase = uint8(State1)
 	svc3 := NewService(nil, cat, w3, &economy.Service{})
-	svc3.AllowSyntheticFactoryStance = true
 	svc3.Pump(factory3, 10)
-	if !factory3.InBuildStance {
-		t.Fatalf("scriptless factory should have stance self-set (documented approximation)")
+	if factory3.InBuildStance {
+		t.Fatalf("scriptless factory must not self-set authored stance")
 	}
-	if head3.Phase != uint8(State2) {
-		t.Fatalf("state1 scriptless should advance to state2, got %d", head3.Phase)
+	if head3.Phase != uint8(State1) || head3.DynamicGate != WakeBit2 {
+		t.Fatalf("state1 without authored stance should wait, got phase=%d gate=%d", head3.Phase, head3.DynamicGate)
 	}
 
 	// Script-owned handshake [05 C18]: a factory whose COB exposes Activate
@@ -951,9 +972,7 @@ func TestStateGates(t *testing.T) {
 	h4, _ := w4.Create(facDef, 0, 0, 0, 0)
 	factory4 := w4.Unit(h4)
 	factory4.Def = facDef
-	// Keep the legacy flag clear so the classifier eligibility bit installed by
-	// the allocator cannot satisfy the compatibility fallback.
-	factory4.Flags &^= FlagInBuildStance
+	// Keep the classifier eligibility state independent of the authored stance.
 	factory4.InBuildStance = false
 	factory4.SetScript(cob.NewVM(&cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{"Activate": 0}, Pieces: []string{"base"}}))
 	q4 := orders.QueueForUnit(factory4)

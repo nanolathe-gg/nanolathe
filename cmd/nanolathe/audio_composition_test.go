@@ -35,10 +35,9 @@ func TestAttachBattleAudio_CueReachesBackend(t *testing.T) {
 	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
 
 	cl, err := client.New(client.Options{
-		Buffer:   b.sess.Snapshot,
-		Width:    640,
-		Height:   480,
-		Headless: true,
+		Buffer: b.sess.Snapshot,
+		Width:  640,
+		Height: 480,
 	})
 	if err != nil {
 		t.Fatalf("client.New: %v", err)
@@ -98,7 +97,7 @@ func TestDetachBattleAudio_ReleasesDevice(t *testing.T) {
 	audio.SetGlobalBackend(audio.NewBackend(true))
 
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
-	cl, err := client.New(client.Options{Buffer: b.sess.Snapshot, Width: 640, Height: 480, Headless: true})
+	cl, err := client.New(client.Options{Buffer: b.sess.Snapshot, Width: 640, Height: 480})
 	if err != nil {
 		t.Fatalf("client.New: %v", err)
 	}

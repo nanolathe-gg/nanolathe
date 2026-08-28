@@ -118,7 +118,7 @@ func TestResultOverlayHonorsCanonicalDismissalState(t *testing.T) {
 		Width: 1, Height: 1, Pixels: []byte{7}, Transparent: []bool{false},
 	}}
 	b := &battleSession{}
-	c, err := client.New(client.Options{Buffer: buf, Width: 8, Height: 8, Headless: true})
+	c, err := client.New(client.Options{Buffer: buf, Width: 8, Height: 8})
 	if err != nil {
 		t.Fatal(err)
 	}

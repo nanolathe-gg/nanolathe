@@ -49,24 +49,19 @@ func (a *ebitenApp) Layout(outsideWidth, outsideHeight int) (int, int) {
 }
 
 // applyCursorMode hides the window system's pointer whenever a software cursor
-// is installed, so the drawn cursor is the only one visible [07 §8]. Headless
-// runs never touch the window system.
+// is installed, so the drawn cursor is the only one visible [07 §8].
 func (c *Client) applyCursorMode() {
-	if c == nil || c.opts.Headless || c.cursors == nil {
+	if c == nil || c.cursors == nil {
 		return
 	}
 	ebiten.SetCursorMode(ebiten.CursorModeHidden)
 }
 
 // RunGame starts the windowed main loop and blocks until the window closes.
-// In headless mode it returns immediately without creating a window (C11).
 // It must be called from main after option parsing.
 func RunGame(c *Client) error {
 	if c == nil {
 		return fmt.Errorf("nanolathe: run window: logical path %s, providers searched [], expected client with installed retail software cursor", CursorGAFPath)
-	}
-	if c.opts.Headless {
-		return nil
 	}
 	if c.cursors == nil {
 		return fmt.Errorf("nanolathe: run window: logical path %s, providers searched [], expected installed retail software cursor", CursorGAFPath)

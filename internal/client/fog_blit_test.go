@@ -14,7 +14,7 @@ import (
 // every source pixel equal to the frame's ColorKey (9 in every retail frame) and
 // the fog clouds themselves are index 0 [fmt gaf][R-RR16-A §3].
 func TestBlitFogGAFFrameOffsets(t *testing.T) {
-	c, err := New(Options{Width: 64, Height: 64, Headless: true})
+	c, err := New(Options{Width: 64, Height: 64})
 	if err != nil {
 		t.Fatalf("New client: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestBlitFogGAFModes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c, err := New(Options{Width: 64, Height: 64, Headless: true})
+			c, err := New(Options{Width: 64, Height: 64})
 			if err != nil {
 				t.Fatalf("New client: %v", err)
 			}
@@ -111,7 +111,7 @@ func TestBlitFogGAFModes(t *testing.T) {
 // palette.Tables.Gray [03 §3.3][03 §4.3.3], not a
 // solid fill [03 §3.3].
 func TestFogGrayRemapKind(t *testing.T) {
-	c, err := New(Options{Width: 64, Height: 64, Headless: true})
+	c, err := New(Options{Width: 64, Height: 64})
 	if err != nil {
 		t.Fatalf("New client: %v", err)
 	}

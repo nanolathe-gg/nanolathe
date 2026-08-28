@@ -66,7 +66,7 @@ func TestBattleMenuPauseTruthSurvivesStaleCommittedFrame(t *testing.T) {
 
 func TestBattleMenuExitGameConfirmationRequestsTermination(t *testing.T) {
 	b := &battleSession{sess: &session.Session{Clock: &clock.State{}}}
-	cl, err := client.New(client.Options{Headless: true})
+	cl, err := client.New(client.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,10 +108,9 @@ func TestBattleMenuTabCloseConsumesClosingFrame(t *testing.T) {
 		t.Fatal("test setup did not open options modal")
 	}
 	cl, err := client.New(client.Options{
-		Buffer:   b.sess.Snapshot,
-		Width:    640,
-		Height:   480,
-		Headless: true,
+		Buffer: b.sess.Snapshot,
+		Width:  640,
+		Height: 480,
 	})
 	if err != nil {
 		t.Fatal(err)

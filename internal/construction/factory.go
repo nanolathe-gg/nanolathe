@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
@@ -48,10 +47,6 @@ const (
 
 // Flags on units.Unit.Flags for COB edges [04 §4.4] [05].
 const (
-	// FlagInBuildStance is retained for old fixture compatibility. The
-	// authoritative INBUILDSTANCE state is units.Unit.InBuildStance; bit 0x20
-	// overlaps the modern classifier status and is only a legacy fallback.
-	FlagInBuildStance uint32 = 1 << 5
 	FlagActivated     uint32 = 1 << 0     // activate edge placeholder [05 "Factory production lifecycle"] TODO(question): exact bit not located
 	FlagCompleted     uint32 = 0x00002000 // completion marker in the instance flag word [R-P0-09]
 	FlagInitCloak     uint32 = 0x00004000 // init-cloak posture in the instance flag word [R-P0-09]
@@ -109,26 +104,13 @@ type Service struct {
 	// LimitChecker is the per-def limit hook for allocation [P0-I16][05 C23].
 	// Was package var LimitChecker; now per-Service to avoid shared mutable.
 	LimitChecker func(factory *units.Unit, defKey string) bool
-	// AllowSyntheticPlacement is an explicit test seam for services that have
-	// no terrain world. Production placement must leave it false so a missing
-	// terrain dependency is an error rather than a permissive success.
-	AllowSyntheticPlacement bool
-	// syntheticOffsets tracks per-factory exit offsets for synthetic fixtures to avoid self-occupancy deadlock
-	// where successive products would otherwise spawn at the same spot as the previous product.
-	syntheticOffsets map[pool.Handle]int
-	// AllowSyntheticFactoryStance is a fixture-only seam for tests that do not
-	// bind a COB. Production state 1 is a pure level test of INBUILDSTANCE;
-	// it must not manufacture the stance or use the classifier Flags bit
-	// [R-P0-10].
-	AllowSyntheticFactoryStance bool
-
 	// Movement is the optional walk driver for mobile builders. When set, a
 	// MOBILE builder ordered to build at a site out of nano range first walks
 	// toward the site until within nanolathe range via the normal
 	// Move_Ground machinery, then enters state 2 [04 §3.4][05][R-P0-06].
 	// Factory-class builders (CanMove==false && CanFly==false) are their own
-	// yard and are unaffected. The field is nil in synthetic unit-tests so
-	// they retain the legacy immediate-placement behavior.
+	// yard and are unaffected. When no movement driver is bound, callers must
+	// already be within nanolathe range.
 	Movement *movement.System
 
 	// Per-session state. None of this may live in a package-level var: it is
@@ -227,7 +209,7 @@ func (s *Service) isWithinNanoRange(builder *units.Unit, siteX, siteZ numeric.Fi
 		return true
 	}
 	if builder.Def.BuildDistance == 0 {
-		return true // synthetic or unlimited; preserve fixture behavior
+		return true // unlimited reach
 	}
 	if s == nil || s.Movement == nil {
 		return true // no walk driver bound in this context; skip range gate for unit tests
@@ -341,7 +323,6 @@ func NewService(terrain *world.Terrain, catalog *content.Catalog, w *units.World
 	s.builderLinks = make(map[pool.Handle]pool.Handle)
 	s.placements = make(map[pool.Handle]world.FootprintRect)
 	s.getBuiltLinks = make(map[pool.Handle]pool.Handle)
-	s.syntheticOffsets = make(map[pool.Handle]int)
 	s.structures = make(map[pool.Handle]world.FootprintRect)
 	s.buildProductIndex()
 	return s
@@ -459,9 +440,6 @@ func (s *Service) recordPlacement(product pool.Handle, rect world.FootprintRect)
 // would settle whether a non-occupancy cell is stamped at all.
 func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, rect world.FootprintRect) error {
 	if s == nil || s.Terrain == nil {
-		if s != nil && s.AllowSyntheticPlacement {
-			return nil
-		}
 		return fmt.Errorf("construction: placement terrain unavailable")
 	}
 	if product == 0 || uint64(product) > uint64(^uint16(0)>>1) {
@@ -738,14 +716,11 @@ func (s *Service) QueryBuildWorldPosition(factory *units.Unit, m *model.Model) (
 	if factory == nil || m == nil {
 		return world.ModelWorldPosition{}, false
 	}
-	// QueryBuildInfo is a synchronous mode-Q callback. Production must use the
-	// strict binding bridge; root-piece fallback is available only through the
-	// explicit synthetic fixture seam [R-P0-09][04 §5.3].
+	// QueryBuildInfo is a synchronous mode-Q callback. Production uses the
+	// strict binding bridge [R-P0-09][04 §5.3].
 	pieceIdx := int32(-1)
 	if binding := factory.COBBinding(); binding != nil && binding.Callbacks != nil {
 		pieceIdx = binding.Callbacks.QueryBuildInfo().QueryValue()
-	} else if s != nil && s.AllowSyntheticPlacement && syntheticUnitVM(factory) {
-		pieceIdx = 0 // explicit synthetic fixture only; retail fallback is unknown
 	} else {
 		return world.ModelWorldPosition{}, false
 	}
@@ -770,9 +745,7 @@ func (s *Service) QueryBuildWorldPosition(factory *units.Unit, m *model.Model) (
 			return world.ModelWorldPosition{}, false
 		}
 	} else {
-		// Explicit synthetic fixture path only.
-		states := make([]model.PieceState, len(m.Pieces))
-		pos = model.Compose(m, states, int(modelPiece)).Position()
+		return world.ModelWorldPosition{}, false
 	}
 	worldX := factory.X.Add(pos[0])
 	worldY := factory.Y.Add(pos[1])
@@ -847,15 +820,12 @@ func (s *Service) QueryNanoPiece(builder *units.Unit) (int32, world.ModelWorldPo
 		}
 	}
 	if mdl == nil {
-		if s != nil && s.AllowSyntheticPlacement && syntheticUnitVM(builder) {
-			return 0, world.NewModelWorldPosition(builder.X, builder.Y, builder.Z), true
-		}
 		return 0, world.ModelWorldPosition{}, false
 	}
 	piece := int32(0)
 	if binding := builder.COBBinding(); binding != nil && binding.Callbacks != nil {
 		piece = binding.Callbacks.QueryNanoPiece().QueryValue()
-	} else if !(s != nil && s.AllowSyntheticPlacement && syntheticUnitVM(builder)) {
+	} else {
 		return 0, world.ModelWorldPosition{}, false
 	}
 	modelPiece := piece
@@ -873,8 +843,7 @@ func (s *Service) QueryNanoPiece(builder *units.Unit) (int32, world.ModelWorldPo
 			return piece, world.ModelWorldPosition{}, false
 		}
 	} else {
-		states := make([]model.PieceState, len(mdl.Pieces))
-		pos = model.Compose(mdl, states, int(modelPiece)).Position()
+		return piece, world.ModelWorldPosition{}, false
 	}
 	return piece, world.NewModelWorldPosition(builder.X.Add(pos[0]), builder.Y.Add(pos[1]), builder.Z.Add(pos[2])), true
 }
@@ -931,27 +900,6 @@ func (s *Service) productDef(pid uint32) *content.UnitDef {
 	return def
 }
 
-// getVMProgram extracts *cob.Program from *cob.VM via exported accessor [04 §4.1] I13 (ON-02).
-// Replaces the former reflect/unsafe seam with VM.Program().
-func getVMProgram(vm *cob.VM) *cob.Program {
-	if vm == nil {
-		return nil
-	}
-	return vm.Program()
-}
-
-func syntheticUnitVM(u *units.Unit) bool {
-	if u == nil || u.COBBinding() != nil {
-		return false
-	}
-	vm := u.GetScript()
-	if vm == nil {
-		return true
-	}
-	p := vm.Program()
-	return p != nil && len(p.Scripts) == 0 && len(p.Pieces) == 0
-}
-
 // ---------------------------------------------------------------------------
 // Helpers for footprint yard and validation [05 C17] [04 §6.2].
 // ---------------------------------------------------------------------------
@@ -988,11 +936,6 @@ func placementRules(s *Service, def *content.UnitDef) (world.PlacementRules, err
 	if s != nil {
 		rules, err = world.PlacementRulesForUnit(s.Catalog, def)
 	}
-	if err != nil && s != nil && s.AllowSyntheticPlacement && def != nil && def.BMCode {
-		// Explicit synthetic seam: occupancy/features still run, while the
-		// absent authored profile leaves aggregate terrain gates unresolved.
-		return world.PlacementRules{Waterline: def.Waterline}, nil
-	}
 	if err != nil {
 		return world.PlacementRules{}, fmt.Errorf("construction: %w", err)
 	}
@@ -1010,9 +953,6 @@ func placementRules(s *Service, def *content.UnitDef) (world.PlacementRules, err
 // frame stamps cannot let structures stack.
 func (s *Service) validatePlacement(self pool.Handle, rect world.FootprintRect, def *content.UnitDef, yard []world.YardCell, skipAggregates bool) (world.PlacementResult, error) {
 	if s == nil || s.Terrain == nil {
-		if s != nil && s.AllowSyntheticPlacement {
-			return world.PlacementResult{Rect: rect}, nil
-		}
 		return world.PlacementResult{}, fmt.Errorf("construction: placement terrain unavailable")
 	}
 	if _, blocked := s.StructureBlocks(self, rect); blocked {
@@ -1131,7 +1071,6 @@ func initializeNanoframe(prod *units.Unit, def *content.UnitDef) {
 	prod.Health = 0
 	prod.MaxHealth = int32(def.MaxDamage)
 	prod.InBuildStance = false
-	prod.Flags &^= FlagInBuildStance
 	prod.Alive = true
 }
 
@@ -1247,15 +1186,6 @@ func copyStandingFlags(builder, product *units.Unit) {
 }
 
 func (s *Service) copyStandingFlags(builder, product *units.Unit) {
-	if s != nil && s.AllowSyntheticPlacement {
-		// Synthetic fixtures predate the recovered class-word fields. Keep their
-		// explicit seam useful without weakening the production guard.
-		if builder != nil && product != nil {
-			product.Flags = (product.Flags &^ (StandingMoveMask | StandingFireMask)) |
-				(builder.Flags & (StandingMoveMask | StandingFireMask))
-		}
-		return
-	}
 	copyStandingFlags(builder, product)
 }
 
@@ -1618,17 +1548,6 @@ func (s *Service) handleState1(factory *units.Unit, node *orders.Node, tick uint
 		node.Param3 = 0
 		return
 	}
-	// Asset-free tests may explicitly opt into the old synthetic convenience.
-	// No production path may infer a port write from a missing script [R-P0-10].
-	if s != nil && s.AllowSyntheticFactoryStance {
-		if factory.Script == nil {
-			factory.InBuildStance = true
-		} else if prog := getVMProgram(factory.Script); prog == nil {
-			factory.InBuildStance = true
-		} else if _, ok := prog.Scripts["Activate"]; !ok {
-			factory.InBuildStance = true
-		}
-	}
 	// State 1 is deliberately a level test with no timeout [05][R-P0-10].
 	if factory.InBuildStance {
 		node.Phase = uint8(State2)
@@ -1665,9 +1584,12 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	if s.ModelForFactory != nil {
 		m = s.ModelForFactory(factory)
 	}
-	// A missing current model is a production composition failure. Only the
-	// explicit synthetic seam may use the factory origin as a fixture transform
-	// [R-P0-09].
+	if m == nil {
+		if binding := factory.COBBinding(); binding != nil {
+			m = binding.Model
+		}
+	}
+	// A missing current model is a production composition failure [R-P0-09].
 	def := s.getProductDefForNode(node)
 	footX, footZ := 1, 1
 	if def != nil {
@@ -1688,14 +1610,6 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	var ok bool
 	if m != nil {
 		modelPosition, ok = s.QueryBuildWorldPosition(factory, m)
-	} else if syntheticUnitVM(factory) {
-		offsetCells := 0
-		if s.syntheticOffsets != nil && factory.Handle != 1 {
-			// First product offset 6 cells south to clear the factory footprint; subsequent products offset further to avoid stacking.
-			offsetCells = 6 + s.syntheticOffsets[factory.Handle]*2
-		}
-		// South offset to avoid overlapping the factory's own footprint and to stay within bounds for east-edge factories.
-		modelPosition, ok = world.NewModelWorldPosition(factory.X, factory.Y, factory.Z.Add(numeric.Fixed(offsetCells*(1<<20)))), true
 	} else {
 		ok = false
 	}
@@ -1776,9 +1690,6 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		node.Deadline = int32(tick + 300)
 		// Stay in state2.
 		return
-	}
-	if s.syntheticOffsets != nil {
-		s.syntheticOffsets[factory.Handle]++
 	}
 	// Success epilogue [05 C18].
 	s.successEpilogue(factory, node, product, cell)
@@ -2463,10 +2374,4 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 		State:       afterState,
 		Diagnostics: append([]string(nil), s.messages...),
 	}
-}
-
-// getVMProgramReflect remains as thin wrapper over exported accessor (ON-02).
-// Historical reflect/unsafe implementation removed; now delegates to VM.Program().
-func getVMProgramReflect(vm *cob.VM) *cob.Program {
-	return getVMProgram(vm)
 }

@@ -24,7 +24,7 @@ func TestIndexedPixelsUseSharedPaletteDirectly(t *testing.T) {
 		tables.Logical[i] = byte(i)
 	}
 
-	c, err := New(Options{Width: 2, Height: 1, Headless: true})
+	c, err := New(Options{Width: 2, Height: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
