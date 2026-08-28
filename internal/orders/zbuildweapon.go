@@ -24,14 +24,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// SetStockpileEconomy is deprecated: per-queue StockpileEconomy is the authoritative bridge [RS-P0-018][INVARIANTS I1].
-// It is retained as a no-op for test compatibility. Session composition now sets StockpileEconomy on each Queue directly [RS-P0-018].
-func SetStockpileEconomy(s *economy.Service) { _ = s }
-
-// setSecondaryTick is deprecated: per-queue SecondaryTick is the authoritative tick [RS-P0-018].
-// It is retained as a no-op for test compatibility; pumpSecondary now sets Queue.SecondaryTick directly.
-func setSecondaryTick(t uint32) { _ = t }
-
 // secondaryTick returns the per-queue tick for the handler's unit [RS-P0-018].
 // It reads Queue.SecondaryTick when available, else 0 (fixtures without pump).
 func secondaryTick(u *units.Unit) uint32 {
@@ -110,12 +102,22 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 	// requested amounts so the two-stage settlement retains fractional carry
 	// across cancels [05][06 §11.1][P1-09 §4]. Per-queue economy only [RS-P0-018][INVARIANTS I1].
 	admit := func(e, m float32) bool {
-		var buckets *[2]economy.Bucket
-		if q := QueueForUnit(u); q != nil && q.StockpileEconomy != nil {
-			buckets = q.StockpileEconomy.UnitBuckets(u.Handle)
+		q := QueueForUnit(u)
+		if q == nil {
+			return false
 		}
+		binding := q.Binding()
+		if binding == nil || binding.StockpileEconomy == nil {
+			// Stockpile work is admitted only through the owning session's
+			// economy ledger. An unbound queue cannot make progress: silently
+			// treating it as an accepted request bypasses two-resource carry
+			// admission and changes the retail queue lifecycle [05 "Two-stage
+			// settlement algorithm"][06 §11.1].
+			return false
+		}
+		buckets := binding.StockpileEconomy.UnitBuckets(u.Handle)
 		if buckets == nil {
-			return true
+			return false
 		}
 		// Snapshot carries before admission to decide accepted vs rejected.
 		energyCarry := (*buckets)[economy.Energy].Carry

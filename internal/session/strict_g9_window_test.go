@@ -26,8 +26,7 @@ func TestStrictSkirmish_WindowedHumanUsability(t *testing.T) {
 		s.Econ.Players[i].StatusHalfwordAt144 = 1
 	}
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(crtSeed)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
 	s.State = StateBattle

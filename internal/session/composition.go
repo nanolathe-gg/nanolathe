@@ -342,6 +342,65 @@ func ensureCOBForAll(s *Session, fs vfs.FSOps) error {
 	return nil
 }
 
+func (s *Session) newOrderBinding() *orders.QueueBinding {
+	if s == nil {
+		return nil
+	}
+	return &orders.QueueBinding{
+		StockpileEconomy: s.Econ,
+		Lookup: func(h pool.Handle) *units.Unit {
+			if s.Units == nil {
+				return nil
+			}
+			return s.Units.Unit(h)
+		},
+		Hostility: func(actor, target *units.Unit) bool {
+			if actor == nil || target == nil {
+				return false
+			}
+			if actor.Def != nil && target.Def != nil && actor.Def.Side != "" && target.Def.Side != "" {
+				return actor.Def.Side != target.Def.Side
+			}
+			return actor.Owner != target.Owner
+		},
+		SimRNG: s.SimRNG(),
+	}
+}
+
+// bindOrderQueue installs the session-owned order context immediately after a
+// constructor allocates a unit. The construction service retains the same
+// binding for later product queues and queue replacement.
+func (s *Session) bindOrderQueue(u *units.Unit) {
+	if s == nil || u == nil {
+		return
+	}
+	if s.Build == nil {
+		s.Build = construction.NewService(s.World, s.Catalog, s.Units, s.Econ)
+	}
+	if s.Build.OrderBinding == nil {
+		s.Build.OrderBinding = s.newOrderBinding()
+	}
+	orders.BindQueueBinding(u, s.Build.OrderBinding)
+}
+
+// bindExistingOrderQueues transfers the one session-owned binding to queues
+// that were created lazily during placement or InitialMission. It deliberately
+// does not call QueueForUnit: absent queues stay absent until an order producer
+// asks for one [04 §3.3][04 §3.5].
+func (s *Session) bindExistingOrderQueues() {
+	if s == nil || s.Units == nil || s.Build == nil || s.Build.OrderBinding == nil {
+		return
+	}
+	for _, u := range s.Units.Iter() {
+		if u == nil {
+			continue
+		}
+		if q, ok := u.Orders.(*orders.Queue); ok && q != nil {
+			q.SetBinding(s.Build.OrderBinding)
+		}
+	}
+}
+
 // createAndBindServices creates every required authoritative service and binds
 // cross-service ports explicitly. It is the single topology site used by both
 // skirmish and campaign. [08 "Placement and battle entry"] [04 §7.2]
@@ -387,6 +446,20 @@ func createAndBindServices(s *Session) error {
 	}
 	if s.Econ == nil {
 		s.Econ = &economy.Service{}
+	}
+	// Every queue receives this one session-owned binding. It carries the
+	// economy admission service, target lookup, hostility predicate, and
+	// simulation RNG together so lazy queues can be rebound before the next
+	// authoritative phase and replacements can copy one value [04 §3.3][04
+	// §3.4][06 §11.1][I4].
+	queueBinding := s.newOrderBinding()
+	if s.Build != nil && s.Build.OrderBinding != nil {
+		queueBinding = s.Build.OrderBinding
+	}
+	for _, u := range s.Units.Iter() {
+		if u != nil {
+			orders.BindQueueBinding(u, queueBinding)
+		}
 	}
 	// Bind authoritative wind and terrain to the one ledger per [05] [P1-I04].
 	// All other producers must go through bucket Production/Requested/Accepted;
@@ -472,6 +545,7 @@ func createAndBindServices(s *Session) error {
 	if s.Build == nil {
 		s.Build = construction.NewService(s.World, s.Catalog, s.Units, s.Econ)
 	}
+	s.Build.OrderBinding = queueBinding
 	// Construction queries the immutable model retained by each strict COB
 	// binding. This keeps factory exit placement and mobile QueryNanoPiece on
 	// the authored model identity, including future products.
@@ -566,21 +640,6 @@ func createAndBindServices(s *Session) error {
 			// a separate authored corpse event, when emitted, is presentation-only.
 			if ev.Kind == combat.EventCorpse {
 				s.publication.events.EmitCorpse(pe)
-			}
-		}
-	}
-	// Wire BuildWeapon stockpile admission to the authoritative economy
-	// service so per-visit truncated cumulative costs are admitted via
-	// economy.UnitBuckets and carry is retained across cancels [06 §11.1]
-	// [P1-09 §4][P1-09 §5] I16.
-	orders.SetStockpileEconomy(s.Econ)
-	if s.Units != nil && s.Econ != nil {
-		for _, u := range s.Units.Iter() {
-			if u == nil {
-				continue
-			}
-			if q := orders.QueueForUnit(u); q != nil {
-				q.StockpileEconomy = s.Econ
 			}
 		}
 	}
@@ -683,11 +742,10 @@ func (s *Session) RecalcLocalOwner() {
 // It is the world Y high word (map pixel height) truncated to byte; negative clamps to 0.
 // heightByteFor forms the LOS observer's emitter height byte [03 §3.2].
 //
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// where worldY has already been clamped to `(SeaLevel+1)<<16` by the caller at
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Retail builds it as `clamp(worldY_high + modelTopHigh, 0, 255)`,
+// where worldY has already been clamped to `(SeaLevel+1)<<16` by the caller
+// and modelTopHigh is the model's top extent in whole world units
+// [03 §3.2].
 //
 // The addend is what makes the terrain-ray raster work at all: the horizon test
 // admits a step only when its slope STRICTLY exceeds the retained horizon, so
@@ -717,7 +775,7 @@ var (
 )
 
 // seaLevelFor is the map's sea-level byte, which the LOS writer clamps the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// observer's world Y up to before forming the height byte [03 §3.2].
 func seaLevelFor(s *Session) uint8 {
 	if s == nil || s.World == nil {
 		return 0

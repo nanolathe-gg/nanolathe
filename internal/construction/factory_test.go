@@ -9,7 +9,9 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -487,6 +489,25 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	// Directly call rallyInheritance to test ordering
 	hp, _ := w.Create(prodDef, 0, world.CellToWorld(10), 0, world.CellToWorld(10))
 	prod := w.Unit(hp)
+	target := &units.Unit{Handle: 900}
+	hostile := &units.Unit{Handle: 901}
+	sim := rng.NewSimulation(77)
+	orderBinding := &orders.QueueBinding{
+		StockpileEconomy: svc.Economy,
+		Lookup: func(h pool.Handle) *units.Unit {
+			switch h {
+			case target.Handle:
+				return target
+			case hostile.Handle:
+				return hostile
+			default:
+				return nil
+			}
+		},
+		Hostility: func(_, b *units.Unit) bool { return b == hostile },
+		SimRNG:    &sim,
+	}
+	svc.OrderBinding = orderBinding
 	// Ensure product queue empty
 	pqBefore := orders.QueueForUnit(prod).LenPrimary()
 	if pqBefore != 0 {
@@ -494,6 +515,32 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	}
 	svc.rallyInheritance(factory, prod)
 	pq := orders.QueueForUnit(prod)
+	if pq.Binding() != orderBinding {
+		t.Fatal("factory-created product queue lost its owning order binding")
+	}
+	// Exercise the inherited context through its consumers: target lookup and
+	// hostility gate command resolution, while the stockpile handler uses the
+	// inherited economy ledger and simulation stream.
+	prod.Def.CanGuard = true
+	if got := pq.Binding().Lookup(target.Handle); got != target {
+		t.Fatalf("inherited target lookup returned %p, want %p", got, target)
+	}
+	if got := orders.Resolve(7, prod, target, nil); got != orders.Lookup("Follow_Ground") {
+		t.Fatalf("friendly inherited target should resolve follow, got %v", got)
+	}
+	if got := orders.Resolve(7, prod, hostile, nil); got != 0 {
+		t.Fatalf("hostile inherited target should be rejected, got %v", got)
+	}
+	// Put the inherited move node through its wait path to prove the queue's
+	// simulation stream is the one used by dispatch jitter.
+	rngNode := *pq.Primary()[0]
+	rngNode.Phase = 1
+	rngQueue := orders.NewQueueWith([]*orders.Node{&rngNode}, nil)
+	rngQueue.SetBinding(orderBinding)
+	rngQueue.Pump(prod, 0)
+	if sim.Draws() == 0 {
+		t.Fatal("inherited simulation RNG was not consumed by queue pump")
+	}
 	primProd := pq.Primary()
 	// Should have 3 inherited nodes in queue-traversal order: Move, Patrol, Move
 	// The active marker moves to each inserted node [04 §3.3][05 "Queue
@@ -516,6 +563,14 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	// Traversal is FIFO because the marker moves to the inserted node.
 	if primProd[0].GoalX != world.CellToWorld(1) || primProd[1].GoalX != world.CellToWorld(2) || primProd[2].GoalX != world.CellToWorld(3) {
 		t.Fatalf("rally position copy failed: got %v %v %v want 1,2,3", primProd[0].GoalX.Raw(), primProd[1].GoalX.Raw(), primProd[2].GoalX.Raw())
+	}
+	prod.Slots[0].Weapon = &content.WeaponDef{Stockpile: true, ReloadTime: 30}
+	bwID := orders.Lookup("BuildWeapon")
+	pq.PushSecondary(bwID, orders.Node{Param1: 0, Param2: 1})
+	pq.SetPrimary(nil) // isolate secondary admission after the inherited dispatch check
+	(&orders.Pump{World: w}).PumpUnit(prod.Handle, 0)
+	if got := pq.Secondary()[0].Param3; got != 5 {
+		t.Fatalf("inherited economy admission did not advance stockpile, progress=%d", got)
 	}
 	// Test none => parks
 	w2 := newTestWorld(20)

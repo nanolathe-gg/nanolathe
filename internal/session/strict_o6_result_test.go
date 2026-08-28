@@ -131,8 +131,7 @@ func runO6NaturalResult(t *testing.T, simSeed, crtSeed uint32) o6ResultRun {
 	s.Econ.Players[0].Allies[0] = true
 	s.Econ.Players[1].Allies[1] = true
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(crtSeed)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	var hTarget pool.Handle
 	var targetDeathHookCount int
 	s.Units.OnDeathExtra = func(h pool.Handle, _ units.DeathCause, _ *units.Unit) {

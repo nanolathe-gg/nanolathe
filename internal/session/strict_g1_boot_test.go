@@ -48,8 +48,7 @@ func TestStrictSkirmish_BootCatalogMapCommanders(t *testing.T) {
 			p.EndGameCountdown = -1
 		}
 		s.Econ.SeedDeadlines(0)
-		var crt rng.CRT = rng.NewCRT(42)
-		s.InitWindForSession(&crt, 0)
+		s.InitBattleWindForSession()
 		if err := createAndBindServicesForTest(t, s); err != nil {
 			t.Fatalf("G1 synthetic: createAndBindServices: %v", err)
 		}

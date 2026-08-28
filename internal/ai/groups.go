@@ -5,7 +5,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // The following status bits are the exact writes made by the classifier
@@ -24,11 +23,10 @@ const (
 	classifierOutputSet   uint32 = 0x00200000
 )
 
-// isCombatUnit reports the conservative combat classification used by the
-// observed-state milestone recorder. It is deliberately not used by the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// group writer"].
+// isCombatUnit reports the conservative combat classification used by
+// tactical grouping and order selection. It is deliberately not used by the
+// manager task-group writer, which uses runtime status bits and the established
+// definition predicates [R-P0-04 §3].
 func isCombatUnit(def *content.UnitDef) bool {
 	if def == nil {
 		return false
@@ -78,47 +76,9 @@ func containsHandle(list []pool.Handle, h pool.Handle) bool {
 	return false
 }
 
-// cleanGroup removes dead, non-owned, or incomplete handles in place.
-func cleanGroup(list []pool.Handle, w *units.World, player uint8) []pool.Handle {
-	if w == nil {
-		return list[:0]
-	}
-	n := 0
-	for _, h := range list {
-		u := w.Unit(h)
-		if u == nil || !u.Alive || u.Owner != player || u.Remaining != 0 {
-			continue
-		}
-		list[n] = h
-		n++
-	}
-	return list[:n]
-}
-
-// updateGroups applies the established lifecycle cleanup pass to manager
-// tactical vectors. Classification is intentionally separate: retail calls
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// pass therefore cannot discover a unit merely because a task callback ran
-// [R-P0-04].
-func (m *Manager) updateGroups(w *units.World) {
-	if m == nil || w == nil {
-		return
-	}
-	m.GroupResource = cleanGroup(m.GroupResource, w, m.Player)
-	// Clean existing groups.
-	m.GroupWaveA = cleanGroup(m.GroupWaveA, w, m.Player)
-	m.GroupRegroupA = cleanGroup(m.GroupRegroupA, w, m.Player)
-	m.GroupConstruction = cleanGroup(m.GroupConstruction, w, m.Player)
-	m.GroupNull = cleanGroup(m.GroupNull, w, m.Player)
-	m.GroupWaveB = cleanGroup(m.GroupWaveB, w, m.Player)
-	m.GroupRegroupB = cleanGroup(m.GroupRegroupB, w, m.Player)
-	m.GroupExplore = cleanGroup(m.GroupExplore, w, m.Player)
-	m.GroupRally = cleanGroup(m.GroupRally, w, m.Player)
-}
-
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// classifyGroups is the recovered classifier producer. It scans this manager's
 // owner slice in pool order. A unit must carry runtime bit 0x20 and have no
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// current group (Group==0). The direct group writer then appends it to the selected record
 // and stores that record number back in Group. The two high runtime bits and
 // the definition predicates retain their opaque retail names; their exact
 // tests are established even where the semantic names are not [R-P0-04].
@@ -136,7 +96,7 @@ func (m *Manager) classifyGroups(w *units.World) {
 		// The status-byte/word writes precede the group-zero gate in the retail
 		// sweep. They are observable on already-grouped units as well as on
 		// newly classified units, so do not move them inside the assignment
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// branches. The source field is the authored capture flag.
 		if u.Def != nil && u.Def.CanCapture {
 			u.Flags = (u.Flags &^ classifierOutputB) | classifierOutputA
 		} else {
@@ -176,7 +136,7 @@ func (m *Manager) classifyGroups(w *units.World) {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// writeGroup is the direct manager-group writer. It first
 // removes the unit from its old manager record by replacing the removed slot
 // with the last element, then appends to the destination and finally stores
 // the new group value. A newGroup of -1 is represented by Group==0 because
@@ -186,6 +146,9 @@ func (m *Manager) classifyGroups(w *units.World) {
 // There is no gameplay cap and no RNG in this writer [R-P0-04].
 func (m *Manager) writeGroup(u *units.Unit, newGroup int8) {
 	if m == nil || u == nil {
+		return
+	}
+	if newGroup > 9 {
 		return
 	}
 	m.removeGroupMember(u.Group, u.Handle)
@@ -198,14 +161,11 @@ func (m *Manager) writeGroup(u *units.Unit, newGroup int8) {
 		u.Group = 0
 		return
 	}
-	if group > 9 {
-		return
-	}
 	m.insertGroupMember(u.Handle, group)
 	u.Group = group
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// removeGroupMember is the source-removal half of the direct writer. Retail uses
 // replace-with-last, not stable compaction; preserving that order matters to
 // subsequent farthest-member ties and save bytes [R-P0-04].
 func (m *Manager) removeGroupMember(group uint8, h pool.Handle) bool {
@@ -260,7 +220,7 @@ func (m *Manager) groupVector(group uint8) *[]pool.Handle {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// insertGroupMember is the append half of the direct writer. It has no member cap and
 // does not draw RNG; Go's append supplies the growable vector semantics.
 func (m *Manager) insertGroupMember(h pool.Handle, group uint8) {
 	if m == nil || group < 1 || group > 9 {
@@ -269,136 +229,6 @@ func (m *Manager) insertGroupMember(h pool.Handle, group uint8) {
 	if list := m.groupVector(group); list != nil {
 		*list = append(*list, h)
 	}
-}
-
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// The vector transfer itself is performed by mergeWaveGroups; this helper
-// keeps the named instance field coherent for subsequent classifier gates and
-// control-group/save consumers.
-func (m *Manager) stampGroupValues(w *units.World, handles []pool.Handle, group uint8) {
-	if m == nil || w == nil || group == 0 || group > 9 {
-		return
-	}
-	for _, h := range handles {
-		if u := w.Unit(h); u != nil {
-			u.Group = group
-		}
-	}
-}
-
-// mergeWaveGroups is the producer for the manager's wave vectors. It transfers
-// members between a wave record and its PAIRED REGROUP record — never between
-// the two waves — and it never discovers units from World.
-//
-// The first step is the bootstrap: when the wave record is empty and the peer
-// regroup record is not, the peer's FIRST member moves into the wave. That is
-// the only step that lets a wave start from nothing, and it moves exactly one
-// member per call, so a wave fills from its regroup peer over successive
-// 300-tick task runs rather than all at once [08 "Wave merge"].
-//
-// This function previously returned early on an empty current group, which —
-// combined with the wave↔wave peering in doWave — made the wave records
-// unreachable: the classifier assigns only resource, construction, explore,
-// regroup A, regroup B and null, so no wave could ever acquire a first member
-// and the computer player never issued an attack order.
-//
-// The distance arithmetic is in retail's signed integer world-coordinate
-// domain (unit fixed-point positions truncated toward zero before squaring),
-// not in authoritative 16.16 coordinates [08 "Wave merge"; R-P0-04 "Located
-// producers and transfer order"].
-func mergeWaveGroups(current, peer []pool.Handle, w *units.World, threshold int32) ([]pool.Handle, []pool.Handle) {
-	if w == nil {
-		return current, peer
-	}
-	if len(current) == 0 {
-		// Bootstrap: an empty wave takes the peer regroup record's first
-		// member, in vector order, and nothing else this call [08 "Wave
-		// merge" step 2].
-		if len(peer) == 0 {
-			return current, peer
-		}
-		// The transfer goes through the same direct group writer as every
-		// other move, so the peer loses its first member by replace-with-last,
-		// not by a front shift: peer[0] takes the value of the last element
-		// and the vector shrinks by one [08 "The direct manager-group writer"].
-		first := peer[0]
-		last := len(peer) - 1
-		peer[0] = peer[last]
-		peer = peer[:last]
-		current = append(current, first)
-	}
-	centroidX, centroidZ, ok := retailGroupCentroid(current, w)
-	if !ok {
-		return current, peer
-	}
-	for len(current) > 1 {
-		count := int64(len(current))
-		limit := int64(threshold) * count
-		farthest := -1
-		var farthestDistance int64
-		for i, h := range current {
-			u := w.Unit(h)
-			if u == nil || !u.Alive {
-				continue
-			}
-			distance := retailDistanceSquared(u, centroidX, centroidZ)
-			// Strictly retain the first member on ties: the vector order is
-			// the retail deterministic tie-break.
-			if farthest < 0 || distance > farthestDistance {
-				farthest = i
-				farthestDistance = distance
-			}
-		}
-		if farthest < 0 || farthestDistance < limit {
-			break
-		}
-		// Same direct group writer: remove by replace-with-last, then append
-		// to the destination [08 "The direct manager-group writer"].
-		peer = append(peer, current[farthest])
-		last := len(current) - 1
-		current[farthest] = current[last]
-		current = current[:last]
-		centroidX, centroidZ, ok = retailGroupCentroid(current, w)
-		if !ok {
-			break
-		}
-	}
-
-	// Recompute the current-group limit after outlier transfers. Members are
-	// collected in peer-vector order and transferred in that same order.
-	if len(current) == 0 {
-		return current, peer
-	}
-	centroidX, centroidZ, ok = retailGroupCentroid(current, w)
-	if !ok {
-		return current, peer
-	}
-	limit := int64(threshold) * int64(len(current))
-	collected := make([]pool.Handle, 0, len(peer))
-	for _, h := range peer {
-		u := w.Unit(h)
-		if u != nil && u.Alive && retailDistanceSquared(u, centroidX, centroidZ) < limit {
-			collected = append(collected, h)
-		}
-	}
-	if len(collected) == 0 {
-		return current, peer
-	}
-	for _, h := range collected {
-		for i, candidate := range peer {
-			if candidate != h {
-				continue
-			}
-			// Replace-with-last, as the direct group writer does
-			// [08 "The direct manager-group writer"].
-			last := len(peer) - 1
-			peer[i] = peer[last]
-			peer = peer[:last]
-			break
-		}
-		current = append(current, h)
-	}
-	return current, peer
 }
 
 func retailGroupCentroid(handles []pool.Handle, w *units.World) (int32, int32, bool) {
@@ -447,58 +277,10 @@ func (m *Manager) isInAnyGroup(h pool.Handle) bool {
 	return containsHandle(m.GroupResource, h) || containsHandle(m.GroupWaveA, h) || containsHandle(m.GroupRegroupA, h) || containsHandle(m.GroupConstruction, h) || containsHandle(m.GroupNull, h) || containsHandle(m.GroupWaveB, h) || containsHandle(m.GroupRegroupB, h) || containsHandle(m.GroupExplore, h) || containsHandle(m.GroupRally, h)
 }
 
-// findEnemyTarget deterministically selects an enemy unit nearest strategic center.
-// If no enemy units, returns nil. Deterministic tie-break by handle ascending [I1].
-// Alliance-aware: skips allied owners via IsAlliance func [P0-07] ON-06.
-func (m *Manager) findEnemyTarget(w *units.World) *units.Unit {
-	if w == nil || m == nil {
-		return nil
-	}
-	var best *units.Unit
-	var bestDist2 int64 = 1 << 62
-	for _, u := range w.IterSliced() {
-		if u == nil || !u.Alive || u.Remaining != 0 {
-			continue
-		}
-		if m.isAllied(u.Owner) {
-			continue
-		}
-		if u.Def == nil {
-			continue
-		}
-		dx := int64(u.X) - int64(m.Strategic.CenterX)
-		dz := int64(u.Z) - int64(m.Strategic.CenterZ)
-		d2 := dx*dx + dz*dz
-		if best == nil || d2 < bestDist2 || (d2 == bestDist2 && u.Handle < best.Handle) {
-			best = u
-			bestDist2 = d2
-		}
-	}
-	return best
-}
-
-// enemyCentroid returns a target position for attack: enemy unit if found, else map center or strategic center.
-// Deterministic, no RNG.
-func (m *Manager) enemyCentroid(w *units.World) (numeric.Fixed, numeric.Fixed) {
-	if t := m.findEnemyTarget(w); t != nil {
-		return t.X, t.Z
-	}
-	if m.Terrain != nil {
-		cx := world.CellToWorld(m.Terrain.CellW / 2)
-		cz := world.CellToWorld(m.Terrain.CellH / 2)
-		// Offset per player to ensure distinct but deterministic attack points for different managers
-		// Use player*16 cells offset to avoid exact overlap while staying in bounds
-		off := numeric.Fixed(int32(m.Player)*16*65536) % (numeric.Fixed(m.Terrain.CellW*16*65536) / 4)
-		// Keep within half quadrant
-		return cx + off, cz + off
-	}
-	return m.Strategic.CenterX, m.Strategic.CenterZ
-}
-
 // groupCentroid computes centroid of group handles; returns false if empty.
 func groupCentroid(handles []pool.Handle, w *units.World) (numeric.Fixed, numeric.Fixed, bool) {
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// and shifts the result back to 16.16; it does not average the low 16
+	// The centroid reads stored signed pixel coordinates, averages with integer
+	// division, and shifts the result back to 16.16; it does not average the low 16
 	// fractional bits of the authoritative position [R-P0-04 "Located
 	// producers and transfer order"; 08 "Strategy manager and its task graph"].
 	// Keep regroup's centroid in the same domain as wave merge.

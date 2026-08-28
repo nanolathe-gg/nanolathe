@@ -89,9 +89,8 @@ func TestPumpWedgeIsNotRescued(t *testing.T) {
 		t.Skip("-short: wedge subprocess test skipped")
 	}
 	if os.Getenv("NANOLATHE_PUMP_WEDGE_CHILD") == "1" {
-		rng.SeedGlobal(2, 0)
-		SetSimulationRNG(rng.Global.Sim)
-		q := &Queue{}
+		sim := rng.NewSimulation(2)
+		q := &Queue{binding: &QueueBinding{SimRNG: &sim}}
 		u := &units.Unit{Handle: 1, Pending: 0}
 		id := Lookup("Move_Ground")
 		if id == 0 {

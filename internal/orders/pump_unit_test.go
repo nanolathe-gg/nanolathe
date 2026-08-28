@@ -20,6 +20,8 @@ func TestPumpUnit_Isolation(t *testing.T) {
 	uB := w.Unit(hB)
 	qA := QueueForUnit(uA)
 	qB := QueueForUnit(uB)
+	qA.SetBinding(&QueueBinding{SimRNG: rng.Global.Sim})
+	qB.SetBinding(&QueueBinding{SimRNG: rng.Global.Sim})
 	moveID := Lookup("Move_Ground")
 	if moveID == 0 {
 		t.Fatalf("Move_Ground not found")

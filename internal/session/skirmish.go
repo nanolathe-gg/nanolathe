@@ -581,9 +581,15 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		if !p.IsComputer() {
 			continue
 		}
-		mgr := &ai.Manager{Player: uint8(i), Profile: sharedProf}
+		// Bind before battle ticks can reach the phase-2 death hook; the
+		// construction itself consumes no random values [08 "Strategy manager
+		// and its task graph"].
+		mgr := &ai.Manager{Player: uint8(i), Profile: sharedProf, RNG: s.SimRNG()}
 		mgr.Terrain = s.World
 		mgr.Catalog = s.Catalog
+		if !mgr.Strategic.InitializeRandomState(s.SimRNG()) {
+			return nil, fmt.Errorf("session: AI strategic state initialization failed for player %d", i)
+		}
 		bindAIQueue(mgr, s)
 		s.AI[i] = mgr
 	}
@@ -737,6 +743,10 @@ func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission) err
 	if err := skirmishReconstructUnits(s, cfg, m); err != nil {
 		return err
 	}
+	// Reconstructed units may carry lazily-created order queues. Apply the
+	// already-composed session binding before any subsequent battle-entry work
+	// can dispatch or resolve those queues [04 §3.3][04 §3.5][06 §11.1].
+	s.bindExistingOrderQueues()
 	// Initialize COB before any scripted orders (mirrors mission path) [04 §4.1]
 	if err := requireCOBForSession(s); err != nil {
 		return err

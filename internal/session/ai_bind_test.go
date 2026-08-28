@@ -56,9 +56,6 @@ func TestRX01_ProductionSessionsBindAIQueue(t *testing.T) {
 	if mgr.QueueBuildTyped == nil {
 		t.Fatalf("production session left QueueBuildTyped unbound — AI could never build [F-P0-004]")
 	}
-	if mgr.MissedQueueCallbacks() != 0 {
-		t.Fatalf("fresh manager already missed callbacks: %d", mgr.MissedQueueCallbacks())
-	}
 	if err := s.ValidateComposition(); err != nil {
 		t.Fatalf("composition with bound AI must validate: %v", err)
 	}

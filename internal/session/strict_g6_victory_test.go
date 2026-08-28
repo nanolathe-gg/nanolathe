@@ -31,8 +31,7 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 			s.Econ.Players[i].EndGameCountdown = -1
 		}
 		s.Econ.SeedDeadlines(0)
-		var crt rng.CRT = rng.NewCRT(crtSeed)
-		s.InitWindForSession(&crt, 0)
+		s.InitBattleWindForSession()
 		_ = createAndBindServicesForTest(t, s)
 		s.RegisterAll()
 		s.State = StateBattle
@@ -147,8 +146,7 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 			}
 		}
 		s.Econ.SeedDeadlines(0)
-		var crt rng.CRT = rng.NewCRT(crtSeed)
-		s.InitWindForSession(&crt, 0)
+		s.InitBattleWindForSession()
 		_ = createAndBindServicesForTest(t, s)
 		s.RegisterAll()
 		s.State = StateBattle
@@ -196,8 +194,7 @@ func TestStrictSkirmish_AllianceAwareVictory(t *testing.T) {
 			}
 		}
 		s2.Econ.SeedDeadlines(0)
-		var crt2 rng.CRT = rng.NewCRT(crtSeed)
-		s2.InitWindForSession(&crt2, 0)
+		s2.InitBattleWindForSession()
 		_ = createAndBindServicesForTest(t, s2)
 		s2.RegisterAll()
 		s2.State = StateBattle

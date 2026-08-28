@@ -31,6 +31,90 @@ type AIPlan struct {
 	Limits  map[string]int32 // CanonicalKey(type) -> limit, default -1
 }
 
+// AIWeightDirective retains an authored ai_weight multiplier until the AI
+// profile boundary. The retail reader narrows the running product to float32
+// before truncating it to the stored integer, so converting this factor to a
+// percentage here would lose authored precision [08 "Established AI-facing
+// data and rooted planner"].
+type AIWeightDirective struct {
+	Type   string
+	Factor float32
+}
+
+// AIWeightPlan contains the directives authored in a unit's ai_weight field.
+// Weights is a slice because repeated directives apply in source order;
+// Limits remain a map because a limit is an assignment rather than an
+// arithmetic fold [08 "Established AI-facing data and rooted planner"].
+type AIWeightPlan struct {
+	Weights []AIWeightDirective
+	Limits  map[string]int32
+}
+
+// ParseAIWeight parses the directive text stored in a unit definition's
+// ai_weight field. Unlike a profile file, this field contains directives
+// directly (the shipped form is `weight <type> <factor>`), so there is no plan
+// gate. The directive vocabulary and limit assignment follow the profile
+// grammar; weight multiplication is deferred to the active profile boundary
+// so the authored factor remains intact at the established float32 narrowing
+// point [08 "Computer-controlled players"] [08 "Established AI-facing data and rooted planner"].
+// A malformed or unknown line is ignored, matching ParseAIProfile's tolerant
+// plain-text reader.
+func ParseAIWeight(data []byte) *AIWeightPlan {
+	plan := &AIWeightPlan{
+		Limits: make(map[string]int32),
+	}
+	for _, rawLine := range strings.Split(string(data), "\n") {
+		line := strings.TrimRight(rawLine, "\r")
+		if idx := strings.Index(line, "//"); idx >= 0 {
+			line = line[:idx]
+		}
+		line = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line), ";"))
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 3 {
+			continue
+		}
+		switch strings.ToLower(parts[0]) {
+		case "weight":
+			factor, ok := parseAIWeightFactor(parts[2])
+			if !ok {
+				continue
+			}
+			ck := CanonicalKey(parts[1])
+			if ck == "" {
+				continue
+			}
+			// Keep the source multiplier intact. The active profile value is
+			// supplied later, and each directive is narrowed and clamped there.
+			plan.Weights = append(plan.Weights, AIWeightDirective{
+				Type:   ck,
+				Factor: float32(factor),
+			})
+		case "limit":
+			ck := CanonicalKey(parts[1])
+			if ck == "" {
+				continue
+			}
+			plan.Limits[ck] = formats.ParseTDFInteger(parts[2])
+		}
+	}
+	return plan
+}
+
+func parseAIWeightFactor(value string) (float64, bool) {
+	factor, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err == nil {
+		return factor, true
+	}
+	factor = parseAIFloat(value)
+	if factor == 0 && !isZeroFloatString(value) {
+		return 0, false
+	}
+	return factor, true
+}
+
 // planNames is the vocabulary for the plan gate [08 "Computer-controlled players"] [PLAN 11 C4].
 var aiPlanNames = map[string]struct{}{
 	"any":    {},
@@ -182,17 +266,9 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			// strconv.ParseFloat on trailing junk and hex forms. Stock
 			// profiles author plain decimals so both agree today; revisit if
 			// a mod profile ever disagrees.
-			factor, err := strconv.ParseFloat(strings.TrimSpace(factorStr), 64)
-			if err != nil {
-				// Try retail's forgiving float parser for cases like ".1"
-				factor = parseAIFloat(factorStr)
-				if factor == 0 && factorStr != "0" && factorStr != "0.0" && factorStr != ".0" {
-					// If still zero and string not zero, treat as parse failure.
-					// Keep zero for explicit 0 values.
-					if strings.TrimSpace(factorStr) != "0" && !isZeroFloatString(factorStr) {
-						continue
-					}
-				}
+			factor, ok := parseAIWeightFactor(factorStr)
+			if !ok {
+				continue
 			}
 			pl := profile.Plans[currentPlan]
 			if pl == nil {

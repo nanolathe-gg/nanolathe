@@ -150,7 +150,14 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 			if perr != nil {
 				return nil, perr
 			}
-			mgr := &ai.Manager{Player: uint8(i), Profile: prof, Terrain: s.World, Catalog: s.Catalog}
+			// Bind the session stream at construction. Phase 2 can finalize a
+			// computer unit before phase 5 dispatches its manager, and unit-loss
+			// throttling must therefore use this stream from the first tick [08
+			// "Strategy manager and its task graph"].
+			mgr := &ai.Manager{Player: uint8(i), Profile: prof, Terrain: s.World, Catalog: s.Catalog, RNG: s.SimRNG()}
+			if !mgr.Strategic.InitializeRandomState(s.SimRNG()) {
+				return nil, fmt.Errorf("session: AI strategic state initialization failed for player %d", i)
+			}
 			bindAIQueue(mgr, s)
 			s.AI[i] = mgr
 		}
@@ -273,6 +280,11 @@ func BattleEntry(s *Session, m *mission.Mission) error {
 	// TODO(question): this interpreter's exact position in the retail loading
 	// pass is inferred from vtable layout ([GAP T10] residual).
 	mission.RunInitialMissionsWithCatalog(m, s.Units, s.Catalog)
+	// InitialMission lazily creates order queues after service composition. Bind
+	// every queue that it actually created before any later load step can pump
+	// or resolve it; this is the same concrete context retained by construction
+	// for product queues and queue replacement [04 §3.3][04 §3.5][06 §11.1].
+	s.bindExistingOrderQueues()
 	// Wire cargo/transport from i-verb immediate attach [04 §3.6] P0-04.
 	wireMissionCargo(s, m)
 	if err := grantResourcesStrict(s, m); err != nil {

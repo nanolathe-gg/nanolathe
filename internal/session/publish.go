@@ -181,7 +181,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 					}
 				}
 			}
-			if q := orders.QueueForUnit(u); q != nil && (q.LenPrimary() > 0 || q.LenSecondary() > 0) {
+			if q := orders.QueueOfUnit(u); q != nil && (q.LenPrimary() > 0 || q.LenSecondary() > 0) {
 				activeHead := q.Head()
 				queue := orders.SnapshotQueueOf(q, u.Handle, func(n *orders.Node) []orders.SnapshotRoutePoint {
 					// A route is authoritative only for the node that activated it;
@@ -718,51 +718,6 @@ func radarSensorInput(inputs []visibility.SensorInput, id uint16, index int) *vi
 // publishVisibilityView copies the local player's visibility masks into the
 // immutable presentation frame. Radar has no authoritative mask source in the
 // visibility service.
-func snapshotOrderQueueView(src orders.SnapshotQueue, cat *content.Catalog) frame.OrderQueueView {
-	return frame.OrderQueueView{
-		Unit:               src.Unit,
-		Primary:            snapshotOrderViews(src.Primary, cat),
-		Secondary:          snapshotOrderViews(src.Secondary, cat),
-		PrimaryTruncated:   src.PrimaryTruncated,
-		SecondaryTruncated: src.SecondaryTruncated,
-	}
-}
-
-func snapshotOrderViews(src []orders.SnapshotNode, cat *content.Catalog) []frame.OrderView {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make([]frame.OrderView, len(src))
-	for i, n := range src {
-		var footX, footZ int8
-		if cat != nil && n.BuildProduct != "" {
-			if def, ok := cat.Unit(n.BuildProduct); ok && def != nil {
-				footX, footZ = int8(def.FootprintX), int8(def.FootprintZ)
-			}
-		}
-		dst[i] = frame.OrderView{
-			Unit: n.Owner, Target: n.Target,
-			GoalX: n.GoalX, GoalY: n.GoalY, GoalZ: n.GoalZ,
-			Kind: n.Kind, StateLabel: n.State, MoveState: n.MoveState,
-			List: n.List, Index: n.Index, DescriptorID: n.DescriptorID,
-			Phase: n.Phase, CreationTick: n.CreationTick, Flags: n.Flags,
-			DynamicGate: n.DynamicGate, Deadline: n.Deadline,
-			Satisfied: n.Satisfied, PathStatus: n.PathStatus,
-			Param1: n.Param1, Param2: n.Param2, Param3: n.Param3,
-			BuildProduct: n.BuildProduct, BuildCount: n.BuildCount,
-			FootX: footX, FootZ: footZ,
-			RouteTruncated: n.RouteTruncated,
-		}
-		if len(n.Route) > 0 {
-			dst[i].Route = make([]frame.RoutePoint, len(n.Route))
-			for j, p := range n.Route {
-				dst[i].Route[j] = frame.RoutePoint{X: p.X, Y: p.Y, Z: p.Z, Flags: p.Flags}
-			}
-		}
-	}
-	return dst
-}
-
 func publishVisibilityView(vis *visibility.Service, local uint8, out *frame.VisibilityView) {
 	if vis == nil || out == nil || local >= 10 {
 		return

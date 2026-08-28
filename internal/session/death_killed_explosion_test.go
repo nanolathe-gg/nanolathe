@@ -60,8 +60,7 @@ func TestDeathKilledCorpseDepth(t *testing.T) {
 		p.StatusHalfwordAt144 = 1
 	}
 	s.Econ.SeedDeadlines(0)
-	var crt = rng.NewCRT(99)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
@@ -151,8 +150,7 @@ func TestDeathExplosionDamagesNeighbor(t *testing.T) {
 		p.StatusHalfwordAt144 = 1
 	}
 	s.Econ.SeedDeadlines(0)
-	var crt = rng.NewCRT(123)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
@@ -233,8 +231,7 @@ func TestKilledDedupAcrossHandleReuse(t *testing.T) {
 		p.StatusHalfwordAt144 = 1
 	}
 	s.Econ.SeedDeadlines(0)
-	var crt = rng.NewCRT(7)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}

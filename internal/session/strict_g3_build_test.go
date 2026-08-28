@@ -55,8 +55,7 @@ func TestStrictSkirmish_MobileBuildStarvesResumesCompletes(t *testing.T) {
 	s.Econ.Players[0].Capacity[economy.Metal] = 10000
 	s.Econ.Players[0].Capacity[economy.Energy] = 10000
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(crtSeed)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("G3 bind: %v", err)
 	}

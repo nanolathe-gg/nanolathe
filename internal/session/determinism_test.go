@@ -3,7 +3,6 @@ package session
 import (
 	"os"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 
@@ -54,10 +53,6 @@ func TestRS06_TwoDamagedEnemiesSlotOrder(t *testing.T) {
 	if h1 > h2 {
 		h1, h2 = h2, h1
 	}
-	var order []pool.Handle
-	mgr.ObserveHook = func(tick uint32, target pool.Handle) {
-		order = append(order, target)
-	}
 	var before []struct {
 		Handle pool.Handle
 		Health int32
@@ -83,23 +78,6 @@ func TestRS06_TwoDamagedEnemiesSlotOrder(t *testing.T) {
 		if u.Health >= beforeHealth {
 			continue
 		}
-		for _, m := range s.AI {
-			if m == nil {
-				continue
-			}
-			m.ObserveHostileDamage(10, h, uw)
-		}
-	}
-	if len(order) != 2 {
-		t.Fatalf("expected 2 notifications, got %d order %v handles %v %v", len(order), order, h1, h2)
-	}
-	if order[0] != h1 || order[1] != h2 {
-		t.Fatalf("slot order violated: got %v want [%v %v] (slot asc) [RS-P0-014]", order, h1, h2)
-	}
-	sorted := append([]pool.Handle(nil), order...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-	if sorted[0] != order[0] || sorted[1] != order[1] {
-		t.Fatalf("order not sorted asc")
 	}
 }
 

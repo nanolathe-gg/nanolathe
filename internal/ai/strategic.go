@@ -9,59 +9,94 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// refreshInterval is the strategic-state refresh period in ticks [08 "Established AI-facing data and rooted planner"].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// refreshInterval is the strategic-state refresh period in ticks [08
+// "Established AI-facing data and rooted planner"].
 const refreshInterval uint32 = 30
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Retail stores i8[ntypes][3] in the 0x10D strategic state [strategic-ai.md §4].
+// ClassVector holds the three signed class coefficients per type [08
+// "Established AI-facing data and rooted planner"].
 type ClassVector struct {
-	C0 int8 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	C1 int8 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	C2 int8 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	C0 int8 // otherMix coefficient
+	C1 int8 // metalMix coefficient
+	C2 int8 // energyMix coefficient
 }
 
-// Strategic is the 0x10D-byte retail strategic state [08 "Established AI-facing data and rooted planner"] per I13.
-// Go uses named fields; offsets noted per field. It is embedded in Manager [PLAN_11 Public API].
+// Strategic is the fixed-size retail strategic state [08
+// "Established AI-facing data and rooted planner"] per I13.
+// Go uses named fields and embeds this state in Manager [PLAN_11 Public API].
 type Strategic struct {
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	CenterX numeric.Fixed // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	CenterZ numeric.Fixed // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Strategic center, recomputed every refresh. Nanolathe stores X and Z in
+	// the authoritative 16.16 fixed-point representation [08; I2].
+	CenterX numeric.Fixed
+	CenterZ numeric.Fixed
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Radius numeric.Fixed // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Placement search radius used to move the origin toward the strategic
+	// center [08 "Established AI-facing data and rooted planner"].
+	Radius numeric.Fixed
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	LastRefreshTick uint32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Refresh gate state: a refresh is due when at least 30 ticks elapsed [08].
+	LastRefreshTick uint32
 
-	// LastClassRecomputeTick records the tick of the last gated class-vector recompute.
-	// Updated only when RNG(30)==0 at a refresh; used to assert cadence without inventing varying coefficients.
-	LastClassRecomputeTick uint32
+	// Per-type completed counts, keyed by canonical definition name [08].
+	Counts map[string]int32
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Counts map[string]int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Per-type refreshed class vectors [08].
+	ClassVectors map[string]ClassVector
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	ClassVectors map[string]ClassVector // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Initialization-only per-type vector [P0-01]. It is never overwritten by
+	// refresh recomputation [08].
+	InitVectors map[string]int8
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	InitVectors map[string]int8 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Per-type single coefficient recomputed alongside the class triple [P0-01].
+	SingleVectors map[string]int8
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Stores the first coefficient (weapon-budget + cost path) clamped to [-100,100].
-	SingleVectors map[string]int8 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Catalog is the content catalog for definition lookups [P0-I16].
+	Catalog *content.Catalog
 
-	// Catalog is the content catalog for def lookups [P0-I16]. Was package var AICatalog.
-	Catalog *content.Catalog // [P0-I16] per-session, not package global
+	// setupDraws stores the eight construction-time random words consumed by
+	// the strategic state. Their semantic use is not fully recovered; keeping
+	// the words in named state preserves the stream position without inventing
+	// a geometry formula [08 "RNG sites for AI planning"].
+	setupDraws      [8]uint32
+	setupDrawsReady bool
+	negRegionW      uint32
+	negRegionH      uint32
+	posRegionW      uint32
+	posRegionH      uint32
+}
+
+// InitializeRandomState consumes the strategic-constructor draws once. The
+// first pair seeds the negative-slope region dimensions and the second pair
+// seeds the positive-slope dimensions; those derived dimensions are the
+// bounds of the following draws. A missing RNG is a setup failure [08].
+func (s *Strategic) InitializeRandomState(r *rng.Simulation) bool {
+	if s == nil || s.setupDrawsReady || r == nil {
+		return false
+	}
+	// Constructor order and derived bounds are load-bearing: draw 10 derives
+	// width 11..20; draw 3 derives height 11..13; draw 20 derives width 14..33;
+	// draw 3 derives height 14..16 [08 RNG inventory].
+	s.setupDraws[0] = r.Uint32n(10)
+	s.negRegionW = 11 + s.setupDraws[0]
+	s.setupDraws[1] = r.Uint32n(3)
+	s.negRegionH = 11 + s.setupDraws[1]
+	s.setupDraws[2] = r.Uint32n(s.negRegionW)
+	s.setupDraws[3] = r.Uint32n(s.negRegionH)
+	s.setupDraws[4] = r.Uint32n(20)
+	s.posRegionW = 14 + s.setupDraws[4]
+	s.setupDraws[5] = r.Uint32n(3)
+	s.posRegionH = 14 + s.setupDraws[5]
+	s.setupDraws[6] = r.Uint32n(s.posRegionW)
+	s.setupDraws[7] = r.Uint32n(s.posRegionH)
+	s.setupDrawsReady = true
+	return true
 }
 
 // Init initializes per-type state once at battle setup [08 "Established AI-facing data and rooted planner"].
-// It clears completed counts to zero and recomputes class vectors for the supplied types plus once at init.
+// It clears completed counts to zero and computes the class vectors once for
+// the supplied types at construction.
 // The type list should be CanonicalKey values of the catalog's unit types; sorting ensures determinism (I1).
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// The constructor sequence is described in [08; P0-01].
 func (s *Strategic) Init(types []string) {
 	if s == nil {
 		return
@@ -99,17 +134,17 @@ func (s *Strategic) Init(types []string) {
 			s.SingleVectors[ck] = 0
 		}
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Write the initialization-only vector [P0-01].
 	s.InitClassVectors()
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Compute the refresh-written vectors once at construction; later writes are
+	// gated by the refresh draw [P0-01].
 	s.recomputeClassVectors()
-	// Init recompute does not set LastClassRecomputeTick; only gated recompute updates it, so cadence can be observed.
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// InitClassVectors writes the initialization-only vector [P0-01]. The
+// unresolved category test is deliberately not substituted; an authored build
+// menu contributes 20.
+// The category flag has no recovered FBI key or semantic name. It is
 // intentionally left as an explicit unknown; BMCode is not a substitute
 // [P0-01 §2.2] [R-P0-05] [I9].
 // Build-option list non-empty is checked only via the compiled catalog's
@@ -138,14 +173,14 @@ func (s *Strategic) InitClassVectors() {
 	}
 	sort.Strings(keys)
 	for _, ck := range keys {
-		def := s.lookupDef(ck)
 		c := int32(0)
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): the authored/runtime field that populates the category
+		// flag
 		// is unresolved. Do not substitute BMCode or another similarly named
 		// FBI flag; until the field is mapped, this initialization addend is
 		// intentionally absent [P0-01 §2.2] [R-P0-05] [I9].
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		hasBuild := s.hasBuildOptions(ck, def)
+		// A non-empty authored build menu contributes 20 [P0-01].
+		hasBuild := s.hasBuildOptions(ck)
 		if hasBuild {
 			c += 20
 		}
@@ -166,12 +201,6 @@ func (s *Strategic) InitClassVectors() {
 	}
 }
 
-// Tick is an alias for MaybeRefresh for Manager embedding [PLAN_11 Public API].
-// Manager.Tick delegates to Strategic.Tick per C11.
-func (s *Strategic) Tick(tick uint32, r *rng.Simulation, player uint8, w *units.World) bool {
-	return s.MaybeRefresh(tick, r, player, w)
-}
-
 // MaybeRefresh refreshes strategic state if 30 ticks have elapsed since LastRefreshTick [08 "Established AI-facing data and rooted planner"].
 // Per-type completed counts and strategic center are recomputed at each refresh;
 // per-type class vectors are recomputed ONLY when RNG(30)==0 at a refresh, plus once at init — never otherwise (I4).
@@ -181,19 +210,22 @@ func (s *Strategic) MaybeRefresh(tick uint32, r *rng.Simulation, player uint8, w
 	if s == nil {
 		return false
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Refresh performs an authoritative random gate. Without the session-owned
+	// stream, leave counts, center, and refresh tick untouched [I4].
+	if r == nil {
+		return false
+	}
+	// Gate: tick >= LastRefreshTick+30, expressed as unsigned subtraction so tick
+	// wrap follows the simulation clock [08].
 	if tick-s.LastRefreshTick < refreshInterval {
 		return false
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Counts and strategic center are rebuilt at every due refresh [08].
 	s.refreshCountsAndCenter(player, w)
 	s.LastRefreshTick = tick
 	// Class vectors gated on single RNG(30)==0 draw [08 ...] (I4). Bound census: 30 here (C9).
-	if r != nil {
-		if r.Uint32n(refreshInterval) == 0 { // [08 "Established AI-facing data and rooted planner"] RNG(30) gate (I4)
-			s.recomputeClassVectors()
-			s.LastClassRecomputeTick = tick
-		}
+	if r.Uint32n(refreshInterval) == 0 { // [08 "Established AI-facing data and rooted planner"] RNG(30) gate (I4)
+		s.recomputeClassVectors()
 	}
 	return true
 }
@@ -292,43 +324,33 @@ func (s *Strategic) lookupDef(ck string) *content.UnitDef {
 	return nil
 }
 
-// lookupDefGlobal is a helper for contexts without a Strategic receiver; retained for compatibility
-// but prefers the Strategic catalog when available. Avoid package global AICatalog [P0-I16].
-func lookupDef(ck string) *content.UnitDef {
-	return (&Strategic{}).lookupDef(ck)
-}
-
-// hasBuildOptions reports whether def has a non-empty build-option list at
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// hasBuildOptions reports whether the compiled catalog has a non-empty
+// authored build-option list for ck. The compiled build-menu catalog is the only authoritative
 // adapter. A Builder flag without a resolved list is not a substitute for the
 // runtime count [R-P0-05] [I9].
-func (s *Strategic) hasBuildOptions(ck string, def *content.UnitDef) bool {
+func (s *Strategic) hasBuildOptions(ck string) bool {
 	if s != nil && s.Catalog != nil && s.Catalog.BuildMenus != nil {
 		if page, ok := s.Catalog.BuildMenus[ck]; ok && page != nil && len(page.Buttons) > 0 {
 			return true
 		}
 	}
-	_ = def
 	return false
 }
 
-func hasBuildOptions(ck string, def *content.UnitDef) bool {
-	return (&Strategic{}).hasBuildOptions(ck, def)
-}
-
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// classify is an unresolved helper. Its signed result is compared
 // against zero by the class routine, but the helper's definition inputs and
 // semantic name were not recovered. Do not proxy it with CanMove,
 // MaxVelocity, or standing-order flags [P0-01 §2.2] [R-P0-05] [I9].
 func classify(def *content.UnitDef) float32 {
 	_ = def
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): recover the exact classification inputs and
 	// signed result. Zero is the documented neutral placeholder; callers
 	// therefore do not invent either side of the <0 comparison.
 	return 0.0
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// ftol truncates toward zero as required by the retail conversion contract
+// [01 §8; P0-01 §4; I3].
 // Narrow to float32 at CALL boundaries is done by caller passing float32.
 func ftol(v float32) int32 {
 	return int32(v)
@@ -345,9 +367,10 @@ func clamp100(v int32) int32 {
 	return v
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// recomputeClassVectors recomputes per-type class vectors [08
+// "Established AI-facing data and rooted planner"]. Retail arithmetic uses
+// the constants and narrowing boundaries recorded in [P0-01 §4]: zero,
+// -0.01, -0.002, 30, -0.0025, 5, 100, and -0.02.
 // Every float→int via __ftol trunc toward zero with narrow to float32 at each CALL (FSTP) [P0-01 §4].
 // Clamps to [-100,100] before i8 store. Zero RNG inside routine [P0-01 §5].
 // TODO(T23): x87 control-word beyond default narrow points is TODO(T23) only if word differs [P0-01 §8].
@@ -362,7 +385,8 @@ func (s *Strategic) recomputeClassVectors() {
 	if len(s.ClassVectors) == 0 && len(s.SingleVectors) == 0 && len(s.Counts) == 0 {
 		return
 	}
-	// Collect keys from ClassVectors and Counts to cover all types. Loop ascending type index [P0-01 §3] stride 0x249.
+	// Collect keys from the initialized vectors and counts, then process them in
+	// ascending canonical order [P0-01 §3; I1].
 	keysSet := make(map[string]struct{})
 	for k := range s.ClassVectors {
 		keysSet[k] = struct{}{}
@@ -394,20 +418,20 @@ func (s *Strategic) recomputeClassVectors() {
 		if v, ok := s.Counts[ck]; ok {
 			count = v
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// First coefficient (single vector) [P0-01 §3].
 		acc0 := int32(1)
-		if def != nil && def.ExtractsMetal != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.ExtractsMetal != 0 { // exact float zero test [P0-01 §2.2]
 			acc0 = 11
 		}
-		if def != nil && def.MakesMetal != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.MakesMetal != 0 { // [P0-01 §2.2; R-P0-05]
 			acc0 += 10
 		}
 		fval := classify(def)
 		if fval < 0 {
 			acc0 += 10
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Apply the cost terms with float32 narrowing at each conversion [P0-01
+		// §3–§4; R-P0-05].
 		costMetal := float32(0)
 		costEnergy := float32(0)
 		if def != nil {
@@ -421,7 +445,7 @@ func (s *Strategic) recomputeClassVectors() {
 
 		// weapon budget
 		wBase := int32(1)
-		if def != nil && def.CanAttack { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.CanAttack { // [P0-01 §2.2; R-P0-05]
 			wBase = 11
 		}
 		wSum := wBase
@@ -433,7 +457,7 @@ func (s *Strategic) recomputeClassVectors() {
 					// resolves to — not a weapon [02 §5 R-CONTENT-02].
 					continue
 				}
-				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				// TODO(question): the runtime weapon-slot active bit is
 				// not represented by the immutable weapon definition. A resolved
 				// weapon link is the only available slot identity here; do not
 				// infer activity from unrelated unit flags [R-P0-05].
@@ -445,7 +469,7 @@ func (s *Strategic) recomputeClassVectors() {
 				// reads"].
 				dmg := int32(wp.DamageDefault)
 				rnge := int32(wp.Range)
-				wSum = wSum + dmg/0x28 + 5 + rnge/100
+				wSum = wSum + dmg/40 + 5 + rnge/100
 			}
 		}
 		wSum = clamp100(wSum) // also clamp to 100 via intermediate steps [P0-01 §3]
@@ -453,12 +477,12 @@ func (s *Strategic) recomputeClassVectors() {
 		acc0Final = clamp100(acc0Final)
 		s.SingleVectors[ck] = int8(acc0Final)
 
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Other-mix coefficient [P0-01 §3].
 		acc1 := int32(0)
-		if def != nil && def.CanAttack { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.CanAttack { // [P0-01 §2.2; R-P0-05]
 			acc1 = 21
 		}
-		if def != nil && def.Builder && count < 3 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.Builder && count < 3 { // [P0-01 §2.2; R-P0-05]
 			acc1 += 30
 		}
 		if fval < 0 {
@@ -467,19 +491,19 @@ func (s *Strategic) recomputeClassVectors() {
 		if def != nil && def.ExtractsMetal != 0 {
 			acc1 += 50
 		}
-		if def != nil && def.MakesMetal != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.MakesMetal != 0 { // [P0-01 §2.2; R-P0-05]
 			acc1 += 25
 		}
-		if def != nil && def.CanFly { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.CanFly { // [P0-01 §2.2; R-P0-05]
 			acc1 += 40
 		}
-		if def != nil && def.SonarDistance != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.SonarDistance != 0 { // [P0-01 §2.2; R-P0-05]
 			acc1 += 15
 		}
-		if def != nil && def.RadarDistance != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.RadarDistance != 0 { // [P0-01 §2.2; R-P0-05]
 			acc1 += 5
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): the unresolved energy-make sentinel path [P0-01 §3].
 		tmp := acc1
 		val := tmp // ftol via FILD
 		if count == 0 {
@@ -487,28 +511,28 @@ func (s *Strategic) recomputeClassVectors() {
 		} else if count == 1 {
 			val = val * 2
 		}
-		if def != nil && def.MaxSlope >= 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.MaxSlope >= 0 { // [P0-01 §2.2; R-P0-05]
 			val = val * 3
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): the unresolved half-capacity comparison may add half of
+		// the single coefficient [P0-01 §3]. The state writer/meaning is
 		// stock state leaves this global comparison false [R-P0-05].
 		// Zero-izing branches
-		if def != nil && def.CanLoad { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.CanLoad { // [P0-01 §2.2; R-P0-05]
 			val = 0
 		}
-		if def != nil && def.IsFeature { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		if def != nil && def.IsFeature { // [P0-01 §2.2; R-P0-05]
 			val = 0
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// TODO(question): the wind-generator/global-wind comparison
+		// includes unresolved strategic state. Stock state keeps this
 		// branch false, so no proxy field is consulted [R-P0-05].
 		val = clamp100(val) // clamp to 100 max, negative kept [P0-01 §3]
 		// store to C0
 		cv := s.ClassVectors[ck]
 		cv.C0 = int8(val)
 
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Energy-mix coefficient [P0-01 §3].
 		fE := costEnergy * float32(-0.0025) // FC9C8
 		g := fval * float32(5.0)            // FC9CC
 		diff := fE - g
@@ -522,14 +546,14 @@ func (s *Strategic) recomputeClassVectors() {
 		val2 = clamp100(val2)
 		cv.C2 = int8(val2)
 
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Metal-mix coefficient [P0-01 §3].
 		baseVal := int32(0)
 		if def != nil && def.ExtractsMetal != 0 {
 			baseVal = 100
 		}
 		metalAdj := int32(0)
-		if def != nil && def.MakesMetal != 0 { // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			metalAdj = -25 // -0x19 via NEG SBB [P0-01 §3]
+		if def != nil && def.MakesMetal != 0 { // [P0-01 §2.2; R-P0-05]
+			metalAdj = -25 // [P0-01 §3]
 		}
 		adjf := costMetal*float32(-0.02) + float32(metalAdj) // FC9D4
 		sumf := float32(baseVal) + adjf

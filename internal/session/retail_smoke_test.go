@@ -56,7 +56,14 @@ type retailSmokeReport struct {
 	ResultReason     string             `json:"result_reason"`
 	ResultDraw       bool               `json:"result_draw"`
 	ResultArmedTick  uint32             `json:"result_armed_tick"`
-	Milestones       map[string]uint32  `json:"milestones"`
+	AIOrderObserved  bool               `json:"ai_order_observed"`
+	AIFactoryReady   bool               `json:"ai_factory_ready"`
+	AIFactoryQueued  bool               `json:"ai_factory_queued"`
+	AICombatReady    bool               `json:"ai_combat_ready"`
+	AIEconomySettled bool               `json:"ai_economy_settled"`
+	AIProjectileSeen bool               `json:"ai_projectile_seen"`
+	AIDeathSeen      bool               `json:"ai_death_seen"`
+	AIPostbattleSeen bool               `json:"ai_postbattle_seen"`
 	StateHash        string             `json:"state_hash"`
 	DeterminismMatch bool               `json:"determinism_match"`
 	SecondStateHash  string             `json:"second_state_hash"`
@@ -635,17 +642,24 @@ func TestRetailSmoke(t *testing.T) {
 	const maxTick = 12000
 
 	type runResult struct {
-		stateHash   string
-		finalTick   uint32
-		result      Result
-		milestones  map[string]uint32
-		frameHashes map[string]string
-		fallbacks   []string
-		warnings    []string
-		poolCounts  map[string]int
-		resources   map[string]float32
-		soakTicks   int
-		diagnostics string
+		stateHash        string
+		finalTick        uint32
+		result           Result
+		aiOrderObserved  bool
+		aiFactoryReady   bool
+		aiFactoryQueued  bool
+		aiCombatReady    bool
+		aiEconomySettled bool
+		aiProjectileSeen bool
+		aiDeathSeen      bool
+		aiPostbattleSeen bool
+		frameHashes      map[string]string
+		fallbacks        []string
+		warnings         []string
+		poolCounts       map[string]int
+		resources        map[string]float32
+		soakTicks        int
+		diagnostics      string
 	}
 
 	runOnce := func(seedSim, seedCrt uint32) *runResult {
@@ -699,7 +713,8 @@ func TestRetailSmoke(t *testing.T) {
 			}
 		}
 		// ON-11: boost AI to prefer factory and combat unit for demonstration.
-		// Retail AI naturally builds economy first (extractors) but for smoke we ensure it reaches FactoryCompleted within maxTick.
+		// Retail AI naturally builds economy first; this fixture seeds the
+		// strategic vectors so the smoke run reaches a factory within maxTick.
 		// This is test-only vector override, not production.
 		for _, mgr := range sess.AI {
 			if mgr == nil {
@@ -745,10 +760,11 @@ func TestRetailSmoke(t *testing.T) {
 			}
 			t.Logf("mgr %d vectors corlab %v armlab %v armham %v", mgr.Player, mgr.Strategic.ClassVectors[content.CanonicalKey("corlab")], mgr.Strategic.ClassVectors[content.CanonicalKey("armlab")], mgr.Strategic.ClassVectors[content.CanonicalKey("armham")])
 			mgr.Strategic.LastRefreshTick = 100000
-			mgr.Strategic.LastClassRecomputeTick = 100000
 		}
-		// Manual factory queue for AI to ensure FactoryCompleted (test-only assist, still counts as AI milestone via observeMilestones)
+		// Seed a concrete factory order so the scenario exercises construction
+		// and later checks the resulting world state.
 		var aiCmdUnit *units.Unit
+		factoryOrderQueued := false
 		for _, u := range sess.Units.IterSliced() {
 			if u != nil && u.Alive && int(u.Owner) == 1 && u.Def != nil && u.Def.Commander {
 				aiCmdUnit = u
@@ -789,6 +805,7 @@ func TestRetailSmoke(t *testing.T) {
 					}
 				}
 			}
+			factoryOrderQueued = queued
 			if !queued {
 				t.Logf("manual factory queue failed to find site for %s near AI commander", factoryKey)
 			}
@@ -893,7 +910,8 @@ func TestRetailSmoke(t *testing.T) {
 		seenProjectile := false
 		seenDeath := false
 		seenPostbattle := false
-		var milestones map[string]uint32
+		aiOrderObserved := false
+		aiEconomySettled := false
 		// capture human placement armed as after first tick where commanders stable
 		captureFrame("human_placement_armed")
 
@@ -939,122 +957,36 @@ func TestRetailSmoke(t *testing.T) {
 					t.Logf(" tick %d stock p0 %.1f/%.1f p1 %.1f/%.1f cap p1 %.1f/%.1f", tick, sess.Econ.Players[0].Stock[0], sess.Econ.Players[0].Stock[1], sess.Econ.Players[1].Stock[0], sess.Econ.Players[1].Stock[1], sess.Econ.Players[1].Capacity[0], sess.Econ.Players[1].Capacity[1])
 				}
 			}
-			// check milestones for AI
+			// Record semantic progress directly from authoritative world, order,
+			// and economy state. This keeps the smoke report independent of AI
+			// diagnostics that are not part of the manager state.
 			if sess.AI[1] != nil {
-				mgr := sess.AI[1] // RS-02 player-indexed
-				ms := mgr.Milestones()
-				milestones = ms
-				if !seenNanoframe {
-					if _, ok := ms["NanoframeObserved"]; ok {
+				for _, u := range sess.Units.IterSliced() {
+					if u == nil || !u.Alive || u.Owner != 1 || u.Def == nil {
+						continue
+					}
+					if u.Remaining > 0 && !seenNanoframe {
 						seenNanoframe = true
 						captureFrame("ai_nanoframe")
 						t.Logf("checkpoint ai_nanoframe at tick %d", tick)
 					}
-				}
-				if !seenFactory {
-					if _, ok := ms["FactoryCompleted"]; ok {
+					if u.Remaining == 0 && strings.EqualFold(u.Def.UnitName, sel.FactoryCORE) && !seenFactory {
 						seenFactory = true
 						captureFrame("ai_factory_complete")
 						t.Logf("checkpoint ai_factory_complete at tick %d", tick)
-						// Directly create combat unit near human commander for quick combat (bypass factory exit-spot blocking)
-						var humanCmd *units.Unit
-						for _, uu := range sess.Units.IterSliced() {
-							if uu != nil && uu.Alive && int(uu.Owner) == 0 && uu.Def != nil && uu.Def.Commander {
-								humanCmd = uu
-								break
-							}
-						}
-						if humanCmd != nil {
-							def, _ := cat.Unit(sel.CombatCORE)
-							created := false
-							for dx := 10; dx < 40 && !created; dx += 5 {
-								x := humanCmd.X + numeric.Fixed(int32(dx*16*65536))
-								z := humanCmd.Z + numeric.Fixed(int32(5*16*65536))
-								y := sess.World.HeightAt(x, z)
-								if y.Raw() == -1 {
-									y = 0
-								}
-								h, err := sess.Units.Create(def, 1, x, y, z)
-								if err == nil {
-									if uu := sess.Units.Unit(h); uu != nil {
-										sess.Movement.EnsureUnit(uu)
-									}
-									t.Logf("directly created combat %s near human at %d %d handle %d", sel.CombatCORE, int64(x.Raw()), int64(z.Raw()), h)
-									created = true
-								}
-							}
-							if !created {
-								// Fallback near factory
-								for _, u := range sess.Units.IterSliced() {
-									if u != nil && u.Alive && u.Owner == 1 && u.Def != nil && strings.EqualFold(u.Def.UnitName, sel.FactoryCORE) && u.Remaining == 0 {
-										def2, _ := cat.Unit(sel.CombatCORE)
-										for dx := 5; dx < 40 && !created; dx += 5 {
-											x := u.X + numeric.Fixed(int32(dx*16*65536))
-											z := u.Z
-											y := sess.World.HeightAt(x, z)
-											if y.Raw() == -1 {
-												y = 0
-											}
-											h, err := sess.Units.Create(def2, 1, x, y, z)
-											if err == nil {
-												if uu := sess.Units.Unit(h); uu != nil {
-													sess.Movement.EnsureUnit(uu)
-												}
-												t.Logf("directly created combat %s near factory at %d %d handle %d", sel.CombatCORE, int64(x.Raw()), int64(z.Raw()), h)
-												created = true
-											}
-										}
-										break
-									}
-								}
-							}
-							if !created {
-								for _, u := range sess.Units.IterSliced() {
-									if u != nil && u.Alive && u.Owner == 1 && u.Def != nil && strings.EqualFold(u.Def.UnitName, sel.FactoryCORE) && u.Remaining == 0 {
-										if err := construction.QueueFactoryBuild(u, sel.CombatCORE, 1, cat); err == nil {
-											t.Logf("queued combat %s from factory %d at tick %d (fallback)", sel.CombatCORE, u.Handle, tick)
-										} else {
-											t.Logf("queue factory combat failed %v at tick %d", err, tick)
-										}
-										break
-									}
-								}
-							}
-						}
 					}
-				}
-				if !seenCombat {
-					if _, ok := ms["CombatUnitCompleted"]; ok {
+					if u.Remaining == 0 && strings.EqualFold(u.Def.UnitName, sel.CombatCORE) && !seenCombat {
 						seenCombat = true
 						captureFrame("first_combat_unit")
 						t.Logf("checkpoint first_combat_unit at tick %d", tick)
-						// Issue attack order from combat units toward human commander
-						var humanCmd *units.Unit
-						for _, u := range sess.Units.IterSliced() {
-							if u != nil && u.Alive && int(u.Owner) == 0 && u.Def != nil && u.Def.Commander {
-								humanCmd = u
-								break
-							}
-						}
-						if humanCmd != nil {
-							for _, u := range sess.Units.IterSliced() {
-								if u != nil && u.Alive && u.Owner == 1 && u.Def != nil && strings.EqualFold(u.Def.UnitName, sel.CombatCORE) && u.Remaining == 0 {
-									q := orders.QueueForUnit(u)
-									if q != nil {
-										id := orders.Lookup("Attack_Chase")
-										if id == 0 {
-											id = orders.Lookup("Move_Ground")
-										}
-										if id != 0 {
-											node := orders.NewNodeForOrder(id, humanCmd.Handle, humanCmd.X, humanCmd.Y, humanCmd.Z, tick, u.Handle, false)
-											q.Push(id, node)
-											t.Logf("issued attack from %d to human commander %d at tick %d", u.Handle, humanCmd.Handle, tick)
-										}
-									}
-								}
-							}
-						}
 					}
+					if q := orders.QueueForUnit(u); q != nil && q.LenPrimary() > 0 {
+						aiOrderObserved = true
+					}
+				}
+				if sess.Econ != nil && sess.Econ.Players[1].Exists && tick > 0 &&
+					sess.Econ.Players[1].Capacity[economy.Metal] > 0 && sess.Econ.Players[1].Capacity[economy.Energy] > 0 {
+					aiEconomySettled = true
 				}
 			}
 			if !seenProjectile && sess.Combat != nil && sess.Combat.Count() > 0 {
@@ -1188,22 +1120,29 @@ func TestRetailSmoke(t *testing.T) {
 		}
 		stateHash := HashState(sess)
 		return &runResult{
-			stateHash:   stateHash,
-			finalTick:   finalTick,
-			result:      result,
-			milestones:  milestones,
-			frameHashes: frameHashes,
-			fallbacks:   fallbacks,
-			warnings:    warnings,
-			poolCounts:  poolCounts,
-			resources:   resources,
+			stateHash:        stateHash,
+			finalTick:        finalTick,
+			result:           result,
+			aiOrderObserved:  aiOrderObserved,
+			aiFactoryReady:   seenFactory,
+			aiFactoryQueued:  factoryOrderQueued,
+			aiCombatReady:    seenCombat,
+			aiEconomySettled: aiEconomySettled,
+			aiProjectileSeen: seenProjectile,
+			aiDeathSeen:      seenDeath,
+			aiPostbattleSeen: seenPostbattle,
+			frameHashes:      frameHashes,
+			fallbacks:        fallbacks,
+			warnings:         warnings,
+			poolCounts:       poolCounts,
+			resources:        resources,
 		}
 	}
 
 	// First run
 	res1 := runOnce(simSeed, crtSeed)
 	t.Logf("first run finalTick %d result ended %v winner %d reason %s draw %v", res1.finalTick, res1.result.Ended, res1.result.WinnerTeam, res1.result.Reason, res1.result.Draw)
-	t.Logf("milestones %v", res1.milestones)
+	t.Logf("AI state order=%v factory=%v queued=%v combat=%v economy=%v projectile=%v death=%v postbattle=%v", res1.aiOrderObserved, res1.aiFactoryReady, res1.aiFactoryQueued, res1.aiCombatReady, res1.aiEconomySettled, res1.aiProjectileSeen, res1.aiDeathSeen, res1.aiPostbattleSeen)
 	t.Logf("stateHash %s", res1.stateHash)
 	t.Logf("frameHashes %v", res1.frameHashes)
 	t.Logf("fallbacks %v warnings %v", res1.fallbacks, res1.warnings)
@@ -1239,36 +1178,21 @@ func TestRetailSmoke(t *testing.T) {
 		t.Logf("no fallback for mandatory assets — diagnostics emitted once per unit check passed")
 	}
 
-	// 2. AI completes at least to FactoryComplete, ideally to HostileDamage — log stage reached
-	aiStage := "none"
-	if res1.milestones != nil {
-		if _, ok := res1.milestones["FactoryCompleted"]; ok {
-			aiStage = "FactoryCompleted"
-		}
-		if _, ok := res1.milestones["CombatUnitCompleted"]; ok {
-			aiStage = "CombatUnitCompleted"
-		}
-		if _, ok := res1.milestones["HostileDamageObserved"]; ok {
-			aiStage = "HostileDamageObserved"
-		}
-		if _, ok := res1.milestones["AttackMoveIssued"]; ok && aiStage != "HostileDamageObserved" {
-			aiStage = "AttackMoveIssued"
-		}
-	}
-	t.Logf("AI stage reached: %s milestones %v", aiStage, res1.milestones)
-	if _, ok := res1.milestones["FactoryCompleted"]; !ok {
-		t.Fatalf("AI did not reach FactoryCompleted [ON-11] milestones %v", res1.milestones)
+	// 2. AI progress is established by concrete state: a completed factory,
+	// its construction order, and a settled economy capacity.
+	if !res1.aiFactoryReady || !res1.aiFactoryQueued || !res1.aiOrderObserved || !res1.aiEconomySettled {
+		t.Fatalf("AI did not establish factory/order/economy state [ON-11]: factory=%v queued=%v order=%v economy=%v", res1.aiFactoryReady, res1.aiFactoryQueued, res1.aiOrderObserved, res1.aiEconomySettled)
 	}
 
 	// 3. Real combat and terminal result occur (or log max-tick if not yet due to AI remaining heuristic)
 	if res1.result.Ended {
 		t.Logf("terminal result reached at tick %d winner %d reason %s draw %v armed %d", res1.result.Tick, res1.result.WinnerTeam, res1.result.Reason, res1.result.Draw, res1.result.ArmedTick)
 	} else {
-		t.Logf("max-tick %d reached without terminal result (AI remaining heuristic) [ON-11] allowed, finalTick %d milestones %v", maxTick, res1.finalTick, res1.milestones)
+		t.Logf("max-tick %d reached without terminal result (AI remaining heuristic) [ON-11] allowed, finalTick %d", maxTick, res1.finalTick)
 		// For ON-11 gate, we would ideally require result, but allow max-tick if AI heuristic not yet
 		// To satisfy "Real combat and terminal result occur (or log max-tick if not yet due to AI remaining heuristic)"
 		// we log and continue, but ensure at least combat happened: check projectile or hostile damage
-		if _, ok := res1.milestones["HostileDamageObserved"]; !ok {
+		if !res1.aiProjectileSeen {
 			// check if any projectile ever
 			if res1.poolCounts["projectiles"] == 0 {
 				t.Logf("no HostileDamage but projectile check: check if first_projectile frame hash exists %v", res1.frameHashes["first_projectile"])
@@ -1305,7 +1229,14 @@ func TestRetailSmoke(t *testing.T) {
 		ResultReason:     res1.result.Reason,
 		ResultDraw:       res1.result.Draw,
 		ResultArmedTick:  res1.result.ArmedTick,
-		Milestones:       res1.milestones,
+		AIOrderObserved:  res1.aiOrderObserved,
+		AIFactoryReady:   res1.aiFactoryReady,
+		AIFactoryQueued:  res1.aiFactoryQueued,
+		AICombatReady:    res1.aiCombatReady,
+		AIEconomySettled: res1.aiEconomySettled,
+		AIProjectileSeen: res1.aiProjectileSeen,
+		AIDeathSeen:      res1.aiDeathSeen,
+		AIPostbattleSeen: res1.aiPostbattleSeen,
 		StateHash:        res1.stateHash,
 		DeterminismMatch: determinismMatch,
 		SecondStateHash:  res2.stateHash,

@@ -10,12 +10,26 @@ import (
 
 func TestMain(m *testing.M) {
 	rng.SeedGlobal(12345, 0)
-	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 	os.Exit(m.Run())
 }
 
 func newTestUnit() *units.Unit {
 	return &units.Unit{Handle: 1, Pending: 0}
+}
+
+func TestQueueOfUnitDoesNotAllocate(t *testing.T) {
+	u := newTestUnit()
+	if got := QueueOfUnit(u); got != nil {
+		t.Fatalf("queue lookup on unbound unit = %p, want nil", got)
+	}
+	if u.Orders != nil {
+		t.Fatal("read-only queue lookup mutated unbound unit")
+	}
+	q := &Queue{}
+	BindQueue(u, q)
+	if got := QueueOfUnit(u); got != q {
+		t.Fatalf("queue lookup = %p, want bound queue %p", got, q)
+	}
 }
 
 func setHandler(id ID, fn func(u *units.Unit, n *Node, satisfied uint32) Code) func() {
@@ -48,8 +62,7 @@ func TestPumpResultCodes(t *testing.T) {
 	}
 	t.Run("code0", func(t *testing.T) {
 		rng.SeedGlobal(1, 0)
-		SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		calls := 0
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
@@ -76,8 +89,7 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code1", func(t *testing.T) {
 		rng.SeedGlobal(2, 0)
-		SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		calls := 0
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
@@ -100,8 +112,7 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code2", func(t *testing.T) {
 		rng.SeedGlobal(3, 0)
-		SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		calls := 0
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
@@ -124,8 +135,7 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code3", func(t *testing.T) {
 		rng.SeedGlobal(42, 0)
-		SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(3) })
 		defer restore()
@@ -145,8 +155,7 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code4", func(t *testing.T) {
 		rng.SeedGlobal(4, 0)
-		SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		calls := 0
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
@@ -168,7 +177,7 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code5", func(t *testing.T) {
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(5) })
 		defer restore()
@@ -180,7 +189,7 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code6 primary", func(t *testing.T) {
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
 			if n.Param1 == 1 {
@@ -201,7 +210,7 @@ func TestPumpResultCodes(t *testing.T) {
 		// That would cause second node's handler to be called and return 2, then same head (now 2) re-evaluated and return 2 again infinite
 		// So we need handler for Param1==2 to return 3 on second invocation
 		// Use separate restore for second case
-		q2 := &Queue{}
+		q2 := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		calls2 := map[uint32]int{}
 		restore2 := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
 			c := calls2[n.Param1]
@@ -228,7 +237,7 @@ func TestPumpResultCodes(t *testing.T) {
 		_ = q
 	})
 	t.Run("code6 secondary", func(t *testing.T) {
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code { return Code(6) })
 		defer restore()
@@ -241,7 +250,7 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code7 cancel all", func(t *testing.T) {
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(7) })
 		defer restore()
@@ -255,7 +264,7 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code7 secondary", func(t *testing.T) {
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code { return Code(7) })
 		defer restore()
@@ -271,7 +280,7 @@ func TestPumpResultCodes(t *testing.T) {
 		// To test secondary 7, we need primary to be empty or not blocked
 		// So use primary with handler that returns 5 to remove itself
 		table[int(moveID)].Handler = func(u *units.Unit, n *Node, s uint32) Code { return Code(5) }
-		q2 := &Queue{}
+		q2 := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		q2.PushSecondary(buildID, Node{})
 		q2.PushSecondary(buildID, Node{})
 		clearGates(q2)
@@ -282,7 +291,7 @@ func TestPumpResultCodes(t *testing.T) {
 		_ = q
 	})
 	t.Run("code8", func(t *testing.T) {
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(8) })
 		defer restore()
@@ -295,8 +304,7 @@ func TestPumpResultCodes(t *testing.T) {
 	})
 	t.Run("code9 last rearm", func(t *testing.T) {
 		rng.SeedGlobal(99, 0)
-		SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(9) })
 		defer restore()
@@ -315,7 +323,7 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code9 not last", func(t *testing.T) {
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(9) })
 		defer restore()
@@ -331,10 +339,10 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code >9", func(t *testing.T) {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// single-node unlink+cleanup+free, no RNG, not cancel-all [P0-08].
+		// Handler result >9 delegates to the single-record expiry helper:
+		// unlink+cleanup+free, no RNG, not cancel-all [P0-08].
 		// Whole-queue cancel is exclusively code 7 [P0-08] A09.
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(12) })
 		defer restore()
@@ -360,7 +368,7 @@ func TestPumpResultCodes(t *testing.T) {
 		}
 	})
 	t.Run("code >9 single vs code7 cancel-all", func(t *testing.T) {
-		q := &Queue{}
+		q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 		u := newTestUnit()
 		restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(7) })
 		defer restore()
@@ -379,7 +387,7 @@ func TestPumpResultCodes(t *testing.T) {
 }
 
 func TestPumpBlockedHeadStalls(t *testing.T) {
-	q := &Queue{}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
 	patrolID := Lookup("Patrol")
@@ -420,8 +428,7 @@ func TestPumpBlockedHeadStalls(t *testing.T) {
 
 func TestDeadline(t *testing.T) {
 	rng.SeedGlobal(1, 0)
-	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
-	q := &Queue{}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
 	q.Push(moveID, Node{DynamicGate: 1, Satisfied: 0, Deadline: int32(20), StaticGate: 1})
@@ -459,7 +466,7 @@ func TestDeadline(t *testing.T) {
 }
 
 func TestCoalesceTail(t *testing.T) {
-	q := &Queue{}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	buildID := Lookup("MobileBuild")
 	if buildID == 0 {
 		t.Fatalf("lookup")
@@ -486,7 +493,7 @@ func TestCoalesceTail(t *testing.T) {
 }
 
 func TestCancelTailMostTombstone(t *testing.T) {
-	q := &Queue{}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	q.Push(Lookup("Move_Ground"), Node{Param1: 7, Param2: 1})
 	q.Push(Lookup("Patrol"), Node{Param1: 7, Param2: 1})
 	clearGates(q)
@@ -501,7 +508,7 @@ func TestCancelTailMostTombstone(t *testing.T) {
 	if tailPtr.Flags&FlagTombstone == 0 {
 		t.Fatalf("tombstone not set on non-head cancel")
 	}
-	q2 := &Queue{}
+	q2 := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	buildID := Lookup("BuildWeapon")
 	q2.PushSecondary(buildID, Node{Param1: 1})
 	clearGates(q2)
@@ -523,7 +530,7 @@ func TestCancelTailMostTombstone(t *testing.T) {
 }
 
 func TestPushAfterActive(t *testing.T) {
-	q := &Queue{}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	moveID := Lookup("Move_Ground")
 	q.Push(moveID, Node{Param1: 1})
 	clearGates(q)
@@ -550,7 +557,7 @@ func TestPushAfterActive(t *testing.T) {
 }
 
 func TestPushSecondaryAutoInherit(t *testing.T) {
-	q := &Queue{}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	buildID := Lookup("BuildWeapon")
 	q.PushSecondary(buildID, Node{Flags: FlagAutoOp})
 	if q.secondary[0].Flags&FlagAutoOp == 0 {
@@ -564,10 +571,9 @@ func TestPushSecondaryAutoInherit(t *testing.T) {
 
 func TestSecondarySkipsNotDue(t *testing.T) {
 	rng.SeedGlobal(7, 0)
-	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 	u := newTestUnit()
 	buildID := Lookup("BuildWeapon")
-	q2 := &Queue{}
+	q2 := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	q2.secondary = []*Node{
 		{ID: buildID, DynamicGate: 1, Deadline: int32(100), Flags: 0},
 		{ID: buildID, DynamicGate: 0, Deadline: -1, Flags: 0},
@@ -586,8 +592,7 @@ func TestSecondarySkipsNotDue(t *testing.T) {
 
 func TestCascadeUntilWaiting(t *testing.T) {
 	rng.SeedGlobal(10, 0)
-	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
-	q := &Queue{}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
 	calls := 0
@@ -618,7 +623,7 @@ func TestCascadeUntilWaiting(t *testing.T) {
 }
 
 func TestBlockedFrontSkipsSecondary(t *testing.T) {
-	q := &Queue{}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
 	buildID := Lookup("BuildWeapon")
@@ -646,7 +651,7 @@ func TestBlockedFrontSkipsSecondary(t *testing.T) {
 }
 
 func TestCode7CleansSecondary(t *testing.T) {
-	q := &Queue{}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
 	buildID := Lookup("BuildWeapon")
@@ -667,13 +672,13 @@ func TestCode7CleansSecondary(t *testing.T) {
 }
 
 func TestPurgeUnprotected(t *testing.T) {
-	q := &Queue{}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	moveID := Lookup("Move_Ground")
 	q.Push(moveID, Node{Param1: 1, Flags: FlagPurgeSurvivor})
 	q.Push(moveID, Node{Param1: 2, Flags: 0})
 	q.Push(moveID, Node{Param1: 3, Flags: FlagPurgeSurvivor})
 	// q currently: [1 protected active, 2 unprotected, 3 protected] with insertion after active ordering may be [1,3,2]? Let's build directly
-	q2 := &Queue{}
+	q2 := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	q2.primary = []*Node{
 		{ID: moveID, Param1: 1, Flags: FlagPurgeSurvivor | FlagActive},
 		{ID: moveID, Param1: 2, Flags: 0},
@@ -691,7 +696,7 @@ func TestPurgeUnprotected(t *testing.T) {
 }
 
 func TestDropLeadingAutoOps(t *testing.T) {
-	q := &Queue{}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	moveID := Lookup("Move_Ground")
 	buildID := Lookup("BuildWeapon")
 	q.primary = []*Node{
@@ -717,7 +722,7 @@ func TestDropLeadingAutoOps(t *testing.T) {
 		t.Fatalf("drop leading secondary auto")
 	}
 	// auto behind normal must survive
-	q2 := &Queue{}
+	q2 := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	q2.primary = []*Node{
 		{ID: moveID, Param1: 1, Flags: 0},
 		{ID: moveID, Param1: 2, Flags: FlagAutoOp},
@@ -750,12 +755,11 @@ func TestNilHandlerDiagnostic(t *testing.T) {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// SC8: code 3 is 30+RNG15, code 9-last is 30+RNG30 distinct arms [R-P0-01].
 func TestSC8_RNG15_30_44(t *testing.T) {
 	moveID := Lookup("Move_Ground")
 	rng.SeedGlobal(1, 0)
-	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
-	q := &Queue{}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	u := newTestUnit()
 	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(3) })
 	defer restore()
@@ -771,8 +775,7 @@ func TestSC8_RNG15_30_44(t *testing.T) {
 	}
 	// code 9 last re-arms with RNG30 bound [R-P0-01] PUSH 0x1E
 	rng.SeedGlobal(99, 0)
-	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
-	q2 := &Queue{}
+	q2 := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	u2 := newTestUnit()
 	restore2 := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(9) })
 	defer restore2()
@@ -902,12 +905,11 @@ func TestQueueModifiers_SegmentMapping(t *testing.T) {
 // empties. Eligibility reads it via an exact == 0.0 compare.
 func TestOrderGuardFloat(t *testing.T) {
 	rng.SeedGlobal(7, 0)
-	SetSimulationRNG(rng.Global.Sim) // DET-01: pump draws the injected stream
 	moveID := Lookup("Move_Ground")
 	if moveID == 0 {
 		t.Fatalf("lookup Move_Ground")
 	}
-	q := &Queue{}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	u := newTestUnit()
 	if u.OrderGuard != 0 {
 		t.Fatalf("fresh unit guard = %v, want 0", u.OrderGuard)

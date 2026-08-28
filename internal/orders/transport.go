@@ -41,13 +41,10 @@ func lookupTarget(carrier *units.Unit, target pool.Handle) *units.Unit {
 	if carrier == nil || target == 0 {
 		return nil
 	}
-	if q := QueueForUnit(carrier); q != nil && q.Lookup != nil {
-		if u := q.Lookup(target); u != nil {
-			return u
+	if q := QueueForUnit(carrier); q != nil {
+		if binding := q.Binding(); binding != nil && binding.Lookup != nil {
+			return binding.Lookup(target)
 		}
-	}
-	if legacyLookup != nil {
-		return legacyLookup(target)
 	}
 	return nil
 }
@@ -388,12 +385,9 @@ func unloadHandler(carrier *units.Unit, n *Node, satisfied uint32) Code {
 						// Rebuild queue preserving hooks
 						if len(newPrim) != len(prim) {
 							sec := cargoQ.Secondary()
-							newQ := &Queue{Hostility: cargoQ.Hostility, Lookup: cargoQ.Lookup, StockpileEconomy: cargoQ.StockpileEconomy, SecondaryTick: cargoQ.SecondaryTick}
-							setQueuePrimary(newQ, newPrim)
-							setQueueSecondary(newQ, sec)
-							// Clear old queue and copy
-							// Instead of BindQueue which replaces, we modify in place via SetPrimary
+							// Clear old queue in place so its owner binding and diagnostics survive.
 							cargoQ.SetPrimary(newPrim)
+							cargoQ.SetSecondary(sec)
 						}
 					}
 				}

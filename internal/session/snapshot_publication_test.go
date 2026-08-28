@@ -68,6 +68,24 @@ func TestPublishSnapshotCarriesCommittedUnitActivation(t *testing.T) {
 	}
 }
 
+func TestPublishSnapshotDoesNotAllocateMissingOrderQueue(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "no-orders"}, MaxDamage: 1}
+	w := units.New(2, nil)
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create unit: %v", err)
+	}
+	u := w.Unit(h)
+	if u == nil || u.Orders != nil {
+		t.Fatalf("fixture queue = %v, want absent", u)
+	}
+	s := &Session{Snapshot: frame.NewBuffer(), Units: w, LocalOwner: 0}
+	s.publishSnapshot(1)
+	if u.Orders != nil {
+		t.Fatalf("publication allocated order queue %T", u.Orders)
+	}
+}
+
 func TestPublishSnapshotCarriesRadarOwnerPalettes(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "radar-palette"}, MaxDamage: 1}
 	w := units.New(4, nil)
@@ -535,7 +553,8 @@ func TestSnapshotQueuePublishesBuildFootprint(t *testing.T) {
 		GoalZ:       numeric.Fixed(24 << 16),
 		BuildDefKey: product.CanonicalKey,
 	}}, nil)
-	view := snapshotOrderQueueView(orders.SnapshotQueueOf(queue, owner, nil), cat)
+	views := appendOrderQueueView(nil, orders.SnapshotQueueOf(queue, owner, nil), cat)
+	view := views[0]
 	if len(view.Primary) != 1 {
 		t.Fatalf("published queue length = %d, want 1", len(view.Primary))
 	}

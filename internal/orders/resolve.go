@@ -15,8 +15,10 @@ import (
 
 func getHostility(actor *units.Unit) func(*units.Unit, *units.Unit) bool {
 	if actor != nil {
-		if q := QueueForUnit(actor); q != nil && q.Hostility != nil {
-			return q.Hostility
+		if q := QueueForUnit(actor); q != nil {
+			if binding := q.Binding(); binding != nil && binding.Hostility != nil {
+				return binding.Hostility
+			}
 		}
 	}
 	return nil
@@ -34,15 +36,6 @@ func isHostile(actor, target *units.Unit) bool {
 	}
 	return actor.Owner != target.Owner
 }
-
-// Target lookup remains a package fallback because transport resolution uses it
-// when a carrier has no per-queue lookup [04 §3.5][04 §10.2].
-var legacyLookup func(pool.Handle) *units.Unit
-
-// BindTargetLookup installs the target lookup used by chase and guard ward resolution [04 §3.5] [P0-I16 legacy].
-func BindTargetLookup(fn func(pool.Handle) *units.Unit) { legacyLookup = fn }
-
-func getLegacyLookup() func(pool.Handle) *units.Unit { return legacyLookup }
 
 // Capability gates map to definition flags [04 §2.2]/[04 §2.4] with TODO(T25) opaque handling.
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
@@ -561,13 +554,11 @@ func attackChaseHandler(u *units.Unit, n *Node, satisfied uint32) Code {
 		var tgt *units.Unit
 		// P0-I16: per-queue lookup, not package global
 		if u != nil {
-			if q := QueueForUnit(u); q != nil && q.Lookup != nil {
-				tgt = q.Lookup(n.Target)
-			} else if fn := getLegacyLookup(); fn != nil {
-				tgt = fn(n.Target)
+			if q := QueueForUnit(u); q != nil {
+				if binding := q.Binding(); binding != nil && binding.Lookup != nil {
+					tgt = binding.Lookup(n.Target)
+				}
 			}
-		} else if fn := getLegacyLookup(); fn != nil {
-			tgt = fn(n.Target)
 		}
 		sub := n.Param2
 		switch sub {
@@ -632,15 +623,13 @@ func getLookupForWard(n *Node, u *units.Unit) *units.Unit {
 		return nil
 	}
 	if u != nil {
-		if q := QueueForUnit(u); q != nil && q.Lookup != nil {
-			if tgt := q.Lookup(n.Target); tgt != nil {
-				return tgt
+		if q := QueueForUnit(u); q != nil {
+			if binding := q.Binding(); binding != nil && binding.Lookup != nil {
+				if tgt := binding.Lookup(n.Target); tgt != nil {
+					return tgt
+				}
 			}
 		}
-	}
-	// Fallback to ward's own queue if actor's queue not set? try target's queue not needed
-	if fn := getLegacyLookup(); fn != nil {
-		return fn(n.Target)
 	}
 	return nil
 }
@@ -648,10 +637,6 @@ func getLookupForWard(n *Node, u *units.Unit) *units.Unit {
 func guardWard(n *Node) *units.Unit {
 	if n.Target == 0 {
 		return nil
-	}
-	// Legacy path without unit context; try legacy lookup
-	if fn := getLegacyLookup(); fn != nil {
-		return fn(n.Target)
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -41,27 +42,86 @@ func isValidDifficulty(d Difficulty) bool {
 // The underlying per-plan tables are retained for per-difficulty lookup (needed
 // because a single ai/*.txt file carries easy/medium/hard sections and the
 // global difficulty selects among them [08 "Established AI-facing data and rooted planner"]).
-//
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// semantic reader — do not wire it. Current content.UnitDef does not yet
-// surface ai_weight/ai_limit as typed fields (they land in Unknown), so this
-// file deliberately does not read them. See TODO(question) below.
 type Profile struct {
 	Plan   Difficulty       // gate: any / easy / medium / hard [PLAN 11 C4]
 	Weight map[string]int32 // clamped [0,100]; default 100 [PLAN 11 C4]
 	Limit  map[string]int32 // default -1 = unlimited [PLAN 11 C4]
 
 	name       string
-	raw        string
 	allWeights map[Difficulty]map[string]int32
 	allLimits  map[Difficulty]map[string]int32
+
+	// appliedCatalog prevents applying immutable authored unit directives more
+	// than once when a manager is rebound to the same catalog.
+	appliedCatalog *content.Catalog
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// reader [08 "Established AI-facing data and rooted planner"] [PLAN 11 C10]
-// and must remain unwired.
+// ApplyUnitDefinitions folds each definition's authored ai_weight directives
+// into the active profile tables used by selection. Each weight directive is
+// applied in source order as int32(float32(current)*factor), then clamped to
+// [0,100]; embedded limit directives are registered in the active per-type
+// limit table. Their precedence relative to profile-file limit directives is
+// unresolved: TODO(question): trace the combined profile/unit load path to
+// establish which source wins. ai_limit is intentionally not read: research
+// bounds it as having no semantic runtime reader [08 "Established AI-facing
+// data and rooted planner"].
+func (p *Profile) ApplyUnitDefinitions(catalog *content.Catalog) {
+	if p == nil || catalog == nil || p.appliedCatalog == catalog {
+		return
+	}
+	p.appliedCatalog = catalog
+	keys := make([]string, 0, len(catalog.Units))
+	for key := range catalog.Units {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	if p.Weight == nil {
+		p.Weight = make(map[string]int32)
+	}
+	if p.Limit == nil {
+		p.Limit = make(map[string]int32)
+	}
+	for _, unitKey := range keys {
+		applyUnitWeight(catalog.Units[unitKey], p.Weight, p.Limit)
+	}
+}
+
+func applyUnitWeight(def *content.UnitDef, weights, limits map[string]int32) {
+	if def == nil || def.AIWeight == "" {
+		return
+	}
+	directives := content.ParseAIWeight([]byte(def.AIWeight))
+	for _, directive := range directives.Weights {
+		if weights == nil {
+			continue
+		}
+		current := int32(100)
+		if prior, ok := weights[directive.Type]; ok {
+			current = prior
+		}
+		// Retail narrows the running product to float32 before __ftol-style
+		// truncation; do not clamp or quantize the authored factor first [08
+		// "Established AI-facing data and rooted planner"].
+		updated := int32(float32(current) * directive.Factor)
+		if updated < 0 {
+			updated = 0
+		} else if updated > 100 {
+			updated = 100
+		}
+		weights[directive.Type] = updated
+	}
+	limitKeys := make([]string, 0, len(directives.Limits))
+	for key := range directives.Limits {
+		limitKeys = append(limitKeys, key)
+	}
+	sort.Strings(limitKeys)
+	for _, key := range limitKeys {
+		if limits != nil {
+			limits[key] = directives.Limits[key]
+		}
+	}
+}
 
 // CanonicalKey folds a type name the way the catalog does [02 §5] [08 "Established AI-facing data and rooted planner"].
 func canonicalKey(name string) string {
@@ -123,7 +183,7 @@ func (p *Profile) LimitForDifficulty(d Difficulty, typeName string) int32 {
 }
 
 // HasWeight reports whether typeName was explicitly marked for the active plan
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// (i.e., present in Weight) [08 "Established AI-facing data and rooted planner"].
 func (p *Profile) HasWeight(typeName string) bool {
 	if p == nil || p.Weight == nil {
 		return false
@@ -133,7 +193,7 @@ func (p *Profile) HasWeight(typeName string) bool {
 }
 
 // HasLimit reports whether typeName was explicitly marked for the active plan
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// (i.e., present in Limit) [08 "Established AI-facing data and rooted planner"].
 func (p *Profile) HasLimit(typeName string) bool {
 	if p == nil || p.Limit == nil {
 		return false
@@ -221,13 +281,7 @@ func LoadProfile(fs vfs.FSOps, name string) (*Profile, error) {
 	usedName := clean
 	usedPath := primary
 	if err != nil {
-		if !isNotFound(err) {
-			// For any error other than not-found, still try fallback only if primary != fallback
-			if strings.EqualFold(primary, fallback) {
-				return nil, fmt.Errorf("ai: %s: %w", primary, err)
-			}
-		}
-		if strings.EqualFold(primary, fallback) {
+		if !isNotFound(err) || strings.EqualFold(primary, fallback) {
 			return nil, fmt.Errorf("ai: %s: %w", primary, err)
 		}
 		data2, err2 := fs.ReadFileLimit(fallback, 1<<20)
@@ -255,7 +309,6 @@ func LoadProfile(fs vfs.FSOps, name string) (*Profile, error) {
 
 	prof := &Profile{
 		name:       usedName,
-		raw:        string(data),
 		allWeights: make(map[Difficulty]map[string]int32),
 		allLimits:  make(map[Difficulty]map[string]int32),
 	}
@@ -377,15 +430,14 @@ func isNotFound(err error) bool {
 		return false
 	}
 	// vfs.ErrNotFound is the canonical not-found sentinel.
-	// Use errors.Is via string fallback to avoid import cycle if not available,
-	// but we can check directly.
-	return strings.Contains(err.Error(), "file not found") || strings.Contains(err.Error(), "not found")
+	return errors.Is(err, vfs.ErrNotFound)
 }
 
 // NewManager constructs a per-player AI manager with explicit profile-load error handling [P0-07] ON-06 F-P0-007.
 // It loads ai/<profileName>.txt via LoadProfile (fallback ai/default.txt) and returns error if missing,
-// never silently producing a passive manager with nil Profile. The returned manager has ProfileLoaded milestone set at tick 0.
-// Caller must bind QueueBuildTyped before ticks; RNG ownership is via r param (nil allowed but disables manager-local draws with deterministic fallback).
+// never silently producing a passive manager with nil Profile. The returned manager
+// is ready for session binding of its build queue and simulation stream.
+// Caller must bind QueueBuildTyped and a simulation RNG before ticks.
 // isAlliance is the alliance test injected at construction; nil means same-owner-only [P0-07].
 func NewManager(player uint8, fs vfs.FSOps, profileName string, r *rng.Simulation, catalog *content.Catalog, surfaceMetal int32, isAlliance func(a, b uint8) bool) (*Manager, error) {
 	if fs == nil {
@@ -411,8 +463,7 @@ func NewManager(player uint8, fs vfs.FSOps, profileName string, r *rng.Simulatio
 		IsAlliance:   isAlliance,
 		RNG:          r,
 	}
+	prof.ApplyUnitDefinitions(catalog)
 	m.Strategic.Catalog = catalog
-	// Milestone ProfileLoaded observed at construction tick 0 [P0-07].
-	m.recordMilestone(MilestoneProfileLoaded, 0)
 	return m, nil
 }

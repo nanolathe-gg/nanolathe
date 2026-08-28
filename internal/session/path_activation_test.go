@@ -30,8 +30,7 @@ func TestPathActivationPreflightsGoalBeforeSubmission(t *testing.T) {
 	s.Econ.Players[0].ControllerState = 1
 	s.Econ.Players[0].StatusHalfwordAt144 = 1
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(200)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind services: %v", err)
 	}

@@ -63,7 +63,7 @@ func createAndBindServicesForTest(t *testing.T, s *Session) error {
 		defer restore()
 	}
 	if s != nil && s.Wind == nil {
-		s.InitWindForSession(rng.Global.Crt, 0)
+		s.InitBattleWindForSession()
 	}
 	return createAndBindServices(s)
 }
@@ -122,7 +122,7 @@ func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficul
 	if err := s.SelectForGametype(GametypeCampaign); err != nil {
 		return nil, err
 	}
-	s.InitWindForSession(rng.Global.Crt, 0)
+	s.InitBattleWindForSession()
 	s.InitAudio(fs)
 	if s.Econ == nil {
 		s.Econ = &economy.Service{}
@@ -384,7 +384,7 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		return nil, fmt.Errorf("session: skirmish requires at least one hostile alliance [08 \"Skirmish configuration\"]")
 	}
 	s.Econ.SeedDeadlines(0)
-	s.InitWindForSession(rng.Global.Crt, 0)
+	s.InitBattleWindForSession()
 	s.InitAudio(fs)
 	// Create the services needed by the fixture without entering the authored
 	// COB composition boundary.

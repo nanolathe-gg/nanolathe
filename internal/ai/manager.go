@@ -2,7 +2,6 @@ package ai
 
 import (
 	"sort"
-	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
@@ -14,40 +13,24 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// TaskKind identifies the manager virtual tasks [08 "Established AI-facing data and rooted planner"] [PLAN_11 C3][P0-02].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// This enum preserves pre-P0 names for test compatibility and adds wave/regroup tasks per P0-02.
-// Ordering is by creation for compatibility; virtual sweep is still ascending TaskKind (I1) which is stable.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// construction/positioning into separate kinds for clarity, preserving deadlines +30/+90 identical
-// per slot. The combined slots share the same deadline and handler (TaskConstruction/TaskPositioning
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// while keeping distinct observability. See docs/SPEC_CONFLICTS.md (no retail conflict) and [P0-02].
-// TODO(T25): AI transport geometry (attachment, naval, air) remains blocked [PLAN_11 Explicit unknowns][P0-02].
+// TaskKind identifies one of the manager's ten fixed task slots. The order is
+// load-bearing: resource/activity, wave A, regroup A, construction/positioning,
+// the inert null task, wave B, regroup B, explore/gather, rally, and the final
+// intentionally empty slot [08 "Strategy manager and its task graph"] [R-P0-04 §2].
 type TaskKind int
 
 const (
-	TaskConstruction TaskKind = iota // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	TaskPositioning                  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	TaskResource                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	TaskActivity                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	TaskOther900                     // explore/gather at +30+RNG(900) [P0-02]
-	TaskOther150                     // rally at +30+RNG(150) [P0-02]
-	TaskWaveA                        // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	TaskWaveB                        // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	TaskRegroupA                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	TaskRegroupB                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	TaskEmpty                        // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	TaskNullSub                      // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	TaskResource TaskKind = iota
+	TaskWaveA
+	TaskRegroupA
+	TaskConstruction
+	TaskNull
+	TaskWaveB
+	TaskRegroupB
+	TaskExplore
+	TaskRally
+	TaskEmptySlot
 	TaskKindCount
-)
-
-// Aliases for P0-02 naming (explore/rally) to keep new code readable.
-const (
-	TaskExplore = TaskOther900
-	TaskRally   = TaskOther150
 )
 
 // Wave thresholds and limits [P0-02 §1.3][P0-02 §3.4].
@@ -66,7 +49,7 @@ const (
 // identification is supported inference from the shared entry address [08 "Established AI-facing data and rooted planner"] [05 "Authoritative settlement order"] [PLAN_11 C11].
 type Manager struct {
 	Player    uint8     // 0..9, 10 is sentinel never dispatched [08][PLAN_11 C1]
-	Strategic Strategic // 0x10D-byte retail identity, named fields per I13 [08][PLAN_11 C2]
+	Strategic Strategic // fixed-size retail strategic state, named fields per I13 [08][PLAN_11 C2]
 	Deadlines [TaskKindCount]uint32
 	Profile   *Profile
 
@@ -74,67 +57,59 @@ type Manager struct {
 	// wiring state so ai.Place can stay func(m *Manager, ...) per PLAN_11 API).
 	OriginX      numeric.Fixed // placement search origin, steps toward strategic center [PLAN_11 C8]
 	OriginZ      numeric.Fixed
-	SurfaceMetal int32            // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	SurfaceMetal int32            // mission SurfaceMetal, clamped 0..255 [08]
 	Catalog      *content.Catalog // defKey resolution for the extractor gate [PLAN_11 C8]
 	Factory      *units.Unit      // builder receiving construction requests [PLAN_11 C12] [P0-07]
 	Terrain      *world.Terrain   // placement validation terrain; nil skips yard validation, success resets radius [PLAN_11 C8]
-
-	// P0-I16: authoritative hooks moved from package globals onto the owning
-	// service. These affect future behavior and therefore are session-owned
-	// (serializable via service fields, not package var). Immutable tables remain
-	// package-level.
-	CandidateSource func(builder *units.Unit) []string                        // was package var CandidateSource [P0-I16]
-	MissionGateFlag int32                                                     // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GateCandidates  map[string]struct{}                                       // was package var Gate241Candidates [P0-I16]
-	QueueBuild      func(factory *units.Unit, defKey string, count int) error // was package var queueBuild [P0-I16] DEPRECATED: use QueueBuildTyped [P0-07]
+	// MissionGateFlag is the authored mission-mode input to selection's
+	// definition gate [R-P0-05 §3].
+	MissionGateFlag int32
 
 	// P0-07: typed build request replacing lossy callback [P0-07] ON-06 F-P0-004.
 	// Session binds this to construction queue; default nil → error diagnostic.
 	QueueBuildTyped func(BuildRequest) error // typed mobile/factory build [P0-07]
 
-	// missedQueueCallbacks counts typed build requests dropped because the
-	// session never bound QueueBuildTyped [RX-01][F-P0-004]. Diagnostic only;
-	// read via MissedQueueCallbacks. Production sessions bind at manager
-	// creation and ValidateComposition rejects unbound managers, so nonzero
-	// here means a fixture constructed an AI without the production binder.
-	missedQueueCallbacks uint32
-
 	// P0-07: alliance awareness [P0-07] ON-06. Nil means same-owner-only (default) [08].
 	IsAlliance func(a, b uint8) bool // alliance test injected at construction; default same-owner-only [P0-07]
 
 	// Manager task vectors for tactical coordination. The retail manager owns
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// vector order. Resource/construction/null are retained even though their
+	// nine vector records; the classifier and direct group writer fill some of
+	// them from the live unit pool [R-P0-04 §3]. Each slice holds pool handles
+	// in deterministic vector order. Resource/construction/null are retained even though their
 	// current task handlers do not consume the vectors, so the writer's
 	// destination is not silently collapsed into another task.
-	GroupResource     []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GroupWaveA        []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GroupRegroupA     []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GroupConstruction []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GroupNull         []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GroupWaveB        []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GroupRegroupB     []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GroupExplore      []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	GroupRally        []pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	GroupResource     []pool.Handle // classifier destination 1
+	GroupWaveA        []pool.Handle // classifier never emits 2
+	GroupRegroupA     []pool.Handle // classifier destination 3
+	GroupConstruction []pool.Handle // classifier destination 4
+	GroupNull         []pool.Handle // classifier destination 5
+	GroupWaveB        []pool.Handle // classifier never emits 6
+	GroupRegroupB     []pool.Handle // classifier destination 7
+	GroupExplore      []pool.Handle // classifier destination 8
+	GroupRally        []pool.Handle // classifier never emits 9
 
-	entryCount         uint32 // eligible manager entries for classification cadence [08][PLAN_11 C3]
-	classificationRuns int
-	taskRuns           [TaskKindCount]int
+	// countdown is the authoritative classification cadence. It starts lazily
+	// at thirty for zero-value fixture managers, matching construction state.
+	countdown uint8
+	// unitLossDeadline is written by RecordUnitLoss and gates the corresponding
+	// construction retry path when that definition-level gate is present [08].
+	unitLossDeadline uint32
 
-	// P0-07 milestones and last tick [P0-07] ON-06.
-	milestones map[string]uint32 // stage→tick, set only from observed production state [P0-07]
-	lastTick   uint32            // last Tick tick, used by Place to record PlacementSelected with tick [P0-07]
+	// Rally task state is part of the task's mutable random walk. The score
+	// source and formation effects remain unresolved and are intentionally not
+	// synthesized here [08 "RNG sites for AI planning"].
+	rallyTargetX   numeric.Fixed
+	rallyTargetY   numeric.Fixed
+	rallyTargetZ   numeric.Fixed
+	rallyDriftX    numeric.Fixed
+	rallyDriftY    numeric.Fixed
+	rallyDriftZ    numeric.Fixed
+	rallyScore     uint32 // last accepted score; produced by unresolved score helper
+	rallyNextScore uint32 // candidate score; produced by unresolved score helper
 
-	// RS-02 test hook: if non-nil, called at Tick entry for order verification (not persisted).
-	TestHook func(tick uint32, player uint8)
-
-	// RS-06: per-session isolated RNG [I4][RS-P0-018]. Nil => rng.Global.Sim (single global stream per I4, but per-session isolated when set).
+	// RS-06: per-session isolated RNG [I4][RS-P0-018]. A nil stream is an
+	// unbound setup and must not fall back to process-global randomness.
 	RNG *rng.Simulation `json:"-"`
-
-	// RS-06: hook for ObserveHostileDamage order verification [RS-P0-014].
-	ObserveHook func(tick uint32, target pool.Handle) `json:"-"`
 }
 
 // GetPlayer satisfies Selector [PLAN_11 WU-11-4] — Manager.Player 0..9.
@@ -161,14 +136,6 @@ func (m *Manager) GetStrategic() *Strategic {
 	return &m.Strategic
 }
 
-// GetCandidateSource satisfies the extended Selector for P0-I16 [P0-I16].
-func (m *Manager) GetCandidateSource() func(builder *units.Unit) []string {
-	if m == nil {
-		return nil
-	}
-	return m.CandidateSource
-}
-
 // GetCatalog satisfies the extended Selector for P0-I16.
 func (m *Manager) GetCatalog() *content.Catalog {
 	if m == nil {
@@ -177,7 +144,8 @@ func (m *Manager) GetCatalog() *content.Catalog {
 	return m.Catalog
 }
 
-// GetMissionGateFlag satisfies the extended Selector for P0-I16.
+// GetMissionGateFlag supplies selection's authored mission-mode gate
+// [R-P0-05 §3].
 func (m *Manager) GetMissionGateFlag() int32 {
 	if m == nil {
 		return 0
@@ -185,30 +153,11 @@ func (m *Manager) GetMissionGateFlag() int32 {
 	return m.MissionGateFlag
 }
 
-// GetGateCandidates satisfies the extended Selector for P0-I16.
-func (m *Manager) GetGateCandidates() map[string]struct{} {
-	if m == nil {
-		return nil
-	}
-	return m.GateCandidates
-}
-
 // GetRNG satisfies Selector RNG extension — returns per-manager RNG when set for session isolation [RS-06][I4] DET-01.
 // Production requires injected RNG; nil means no draw (no global fallback).
 func (m *Manager) GetRNG() *rng.Simulation {
 	if m != nil && m.RNG != nil {
 		return m.RNG
-	}
-	return nil
-}
-
-// GetQueueBuild returns the ordinary build path for P0-I16.
-func (m *Manager) GetQueueBuild() func(factory *units.Unit, defKey string, count int) error {
-	if m == nil {
-		return nil
-	}
-	if m.QueueBuild != nil {
-		return m.QueueBuild
 	}
 	return nil
 }
@@ -222,28 +171,30 @@ func (m *Manager) SetCatalog(cat *content.Catalog) {
 	m.Strategic.Catalog = cat
 }
 
-// EntryCount returns the number of eligible manager entries seen [08][PLAN_11 C3].
-func (m *Manager) EntryCount() uint32 {
+// RecordUnitLoss writes the unit-loss retry deadline. The draw is consumed
+// only with a bound simulation stream; an unbound manager leaves its state
+// unchanged, which is the fail-closed setup behavior [08 RNG inventory].
+func (m *Manager) RecordUnitLoss(tick uint32) {
+	if m == nil {
+		return
+	}
+	r := m.simRNG()
+	if r == nil {
+		return
+	}
+	m.unitLossDeadline = tick + 30 + r.Uint32n(300)
+}
+
+// NotifyUnitLoss is the lifecycle-facing spelling used by session callers.
+func (m *Manager) NotifyUnitLoss(tick uint32) { m.RecordUnitLoss(tick) }
+
+// UnitLossDeadline exposes the current retry deadline for session wiring and
+// deterministic tests without making diagnostic counters part of Manager.
+func (m *Manager) UnitLossDeadline() uint32 {
 	if m == nil {
 		return 0
 	}
-	return m.entryCount
-}
-
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func (m *Manager) ClassificationRuns() int {
-	if m == nil {
-		return 0
-	}
-	return m.classificationRuns
-}
-
-// TaskRuns returns how many times the given TaskKind has been executed (due dispatch count).
-func (m *Manager) TaskRuns(k TaskKind) int {
-	if m == nil || k < 0 || k >= TaskKindCount {
-		return 0
-	}
-	return m.taskRuns[k]
+	return m.unitLossDeadline
 }
 
 // EnsureStrategicInitialized lazily initializes class maps from catalog for each manager [P0-I12].
@@ -262,32 +213,59 @@ func (m *Manager) EnsureStrategicInitialized() {
 	if cat == nil || cat.Units == nil || len(cat.Units) == 0 {
 		return
 	}
-	// If already initialized with varied vectors, skip.
-	if len(m.Strategic.ClassVectors) > 0 {
-		// Check if any vector is non-zero; if all zero, reinit (fallback case)
-		hasVaried := false
-		for _, v := range m.Strategic.ClassVectors {
-			if v.C0 != 0 || v.C1 != 0 || v.C2 != 0 {
-				hasVaried = true
-				break
-			}
-		}
-		if hasVaried && len(m.Strategic.ClassVectors) == len(cat.Units) {
-			return
-		}
-		if hasVaried && len(m.Strategic.ClassVectors) >= len(cat.Units)/2 {
-			// Assume sufficiently initialized
-			return
-		}
-	}
 	types := make([]string, 0, len(cat.Units))
 	for k := range cat.Units {
 		types = append(types, k)
 	}
 	sort.Strings(types)
+	if strategicMapsComplete(&m.Strategic, types) {
+		return
+	}
+	// Rebuild all per-type maps through the established initializer. Preserve
+	// any concrete class-vector values supplied by a caller for keys that are
+	// still in the authored catalog; missing and extra keys are never accepted
+	// by approximation [08 "Strategic state construction and refresh"].
+	provided := make(map[string]ClassVector, len(m.Strategic.ClassVectors))
+	for k, v := range m.Strategic.ClassVectors {
+		provided[k] = v
+	}
+	m.Strategic.Counts = nil
+	m.Strategic.ClassVectors = nil
+	m.Strategic.InitVectors = nil
+	m.Strategic.SingleVectors = nil
 	m.Strategic.Catalog = cat
 	m.Catalog = cat
 	m.Strategic.Init(types)
+	for k, v := range provided {
+		if _, ok := m.Strategic.ClassVectors[k]; ok {
+			m.Strategic.ClassVectors[k] = v
+		}
+	}
+}
+
+// strategicMapsComplete accepts only a complete initialization for the exact
+// catalog key set. Partial or extra entries are rebuilt through Strategic.Init;
+// a size-based approximation would make task selection depend on fixture or
+// load order rather than the authored catalog [08 "Strategic state construction and refresh"].
+func strategicMapsComplete(s *Strategic, types []string) bool {
+	if s == nil || len(s.Counts) != len(types) || len(s.ClassVectors) != len(types) || len(s.InitVectors) != len(types) || len(s.SingleVectors) != len(types) {
+		return false
+	}
+	for _, k := range types {
+		if _, ok := s.Counts[k]; !ok {
+			return false
+		}
+		if _, ok := s.ClassVectors[k]; !ok {
+			return false
+		}
+		if _, ok := s.InitVectors[k]; !ok {
+			return false
+		}
+		if _, ok := s.SingleVectors[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // simRNG returns the per-session isolated RNG when set [RS-06][I4] DET-01.
@@ -295,67 +273,6 @@ func (m *Manager) EnsureStrategicInitialized() {
 func (m *Manager) simRNG() *rng.Simulation {
 	if m != nil && m.RNG != nil {
 		return m.RNG
-	}
-	return nil
-}
-
-// findBuilder returns a valid builder for the manager's player [P0-I12].
-// It scans in deterministic sliced order (player asc, slot asc) [I1] and returns the
-// first completed builder that has a non-empty build menu via the manager's catalog.
-// This replaces the previous first-owned-unit logic which could return a non-builder.
-func (m *Manager) findBuilder(w *units.World) *units.Unit {
-	if m == nil || w == nil {
-		return nil
-	}
-	for _, u := range w.IterSliced() {
-		if u == nil || !u.Alive {
-			continue
-		}
-		if u.Owner != m.Player {
-			continue
-		}
-		if u.Remaining != 0 {
-			continue
-		}
-		if u.Def == nil {
-			continue
-		}
-		if !u.Def.Builder {
-			continue
-		}
-		// Must have build options via catalog's BuildMenus or at least Builder flag with candidate source.
-		// Prefer check via manager's catalog; fallback to Builder true if no catalog.
-		if m.Catalog != nil && m.Catalog.BuildMenus != nil {
-			ck := canonicalKey(u.Def.UnitName)
-			if ck == "" {
-				ck = canonicalKey(u.Def.CanonicalKey)
-			}
-			if page, ok := m.Catalog.BuildMenus[ck]; ok && page != nil && len(page.Buttons) > 0 {
-				return u
-			}
-			if ck2 := canonicalKey(u.Def.CanonicalKey); ck2 != ck {
-				if page, ok := m.Catalog.BuildMenus[ck2]; ok && page != nil && len(page.Buttons) > 0 {
-					return u
-				}
-			}
-			// Also check candidate source if set
-			if m.CandidateSource != nil {
-				cands := m.CandidateSource(u)
-				if len(cands) > 0 {
-					return u
-				}
-			}
-			continue
-		}
-		if m.Strategic.Catalog != nil && m.Strategic.Catalog.BuildMenus != nil {
-			ck := canonicalKey(u.Def.UnitName)
-			if page, ok := m.Strategic.Catalog.BuildMenus[ck]; ok && page != nil && len(page.Buttons) > 0 {
-				return u
-			}
-			continue
-		}
-		// No catalog: any builder qualifies
-		return u
 	}
 	return nil
 }
@@ -380,22 +297,20 @@ func (m *Manager) hasBuildOptionsForDef(def *content.UnitDef) bool {
 			}
 		}
 	}
-	if m.CandidateSource != nil {
-		// We can't test without a unit instance; assume builder flag indicates options
-	}
-	return def.Builder
+	return false
 }
 
 // isOuterEligible reports whether the outer per-tick gate passes [08 "Established AI-facing data and rooted planner"] [PLAN_11 C1].
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Retail iterates ten players 0..9, and for controller ∈ {1,2,3} and index !=10
+// calls through the player's manager pointer.
 // The Player==10 check is literal retail guard [08]; it never fires for 0..9 but is kept for fidelity.
 // TODO(question): semantic names of controller values 1,2,3 unknown; literal set preserved [05 "Authoritative settlement order"].
 func isOuterEligible(player uint8, ctrl uint8, hasCtrl bool) bool {
 	if player == 10 { // [08] player index !=10 [PLAN_11 C1]
 		return false
 	}
-	if !hasCtrl { // no economy context — treat as eligible for isolated tests
-		return true
+	if !hasCtrl { // the external controller field is required by the gate
+		return false
 	}
 	return ctrl == 1 || ctrl == 2 || ctrl == 3 // [08] controller {1,2,3} [PLAN_11 C1]
 }
@@ -406,60 +321,53 @@ func isOuterEligible(player uint8, ctrl uint8, hasCtrl bool) bool {
 // and advances nothing [05 "Authoritative settlement order"] [08 "Established AI-facing data and rooted planner"].
 // That the AI dispatch is specifically one of that step's auxiliary helpers is supported inference from the shared entry address [08] [PLAN_11 C11].
 func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
-	if m == nil {
+	if m == nil || econ == nil || int(m.Player) >= len(econ.Players) {
 		return
 	}
-	if m.TestHook != nil {
-		m.TestHook(tick, m.Player)
+	if m.Player == 10 { // [08] index !=10 [PLAN_11 C1]
+		return
 	}
-	m.lastTick = tick
+	ctrl := econ.Players[m.Player].ControllerState // [08]
+	if ctrl != 1 && ctrl != 2 && ctrl != 3 {       // outer gate [08][PLAN_11 C1]
+		return
+	}
 	// P0-I16: sync catalog between Manager and Strategic if one is set via direct field assignment
 	if m.Catalog != nil && m.Strategic.Catalog == nil {
 		m.Strategic.Catalog = m.Catalog
 	} else if m.Strategic.Catalog != nil && m.Catalog == nil {
 		m.Catalog = m.Strategic.Catalog
 	}
-	// P0-I12: lazily initialize class maps from catalog if not yet done, ensuring vectors not zero.
-	m.EnsureStrategicInitialized()
-	// P0-I12: refresh strategic center/counts every 30 ticks via MaybeRefresh [08][P0-01] using Simulation RNG bound 30 [I4][RS-06 per-session isolated].
-	if m.Catalog != nil || m.Strategic.Catalog != nil {
-		m.Strategic.MaybeRefresh(tick, m.simRNG(), m.Player, w)
-	}
-	// R-P0-04: clean manager task vectors before the separate 30-entry
-	// classifier admission pass. Ordinary unit creation/completion does not
-	// itself append to these vectors; established writer paths do so through
-	// group assignment, load, control-group, and wave-transfer operations.
-	m.updateGroups(w)
-	// P0-07: observe milestones from production state [P0-07] ON-06.
-	m.observeMilestones(tick, w)
-	if m.Player == 10 { // [08] index !=10 [PLAN_11 C1]
-		return
-	}
-	var ctrl uint8
-	var hasCtrl bool
-	if econ != nil && int(m.Player) < len(econ.Players) {
-		ctrl = econ.Players[m.Player].ControllerState // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		hasCtrl = true
-		if ctrl != 1 && ctrl != 2 && ctrl != 3 { // outer gate [08][PLAN_11 C1]
-			return
-		}
-	}
 	// Eligible entry — count for classification cadence [08] "classifications run every 30 eligible manager entries" [PLAN_11 C3]
-	m.entryCount++
-	if m.entryCount%30 == 0 { // [08] every 30 eligible entries [PLAN_11 C3]
+	if m.countdown == 0 {
+		m.countdown = 30
+	}
+	m.countdown--
+	if m.countdown == 0 { // [08] every 30 eligible entries [PLAN_11 C3]
 		m.runClassifications(tick, w, econ)
 	}
 	// Inner gate: due virtual tasks execute only when manager player controller ==2 [08] [PLAN_11 C1]
-	if hasCtrl && ctrl != 2 { // [08] controller==2 [PLAN_11 C1]
-		return
+	if ctrl == 2 {
+		// Class vectors are initialized before the first task can select a
+		// candidate, but their periodic refresh is deliberately below task
+		// dispatch. Selection therefore observes the prior refresh for this tick
+		// [R-P0-05 §1, §6].
+		m.EnsureStrategicInitialized()
+		m.runDueTasks(tick, w, econ)
 	}
-	m.runDueTasks(tick, w, econ)
+	// Strategic refresh follows manager dispatch and precedes economy
+	// settlement, which invokes this method as its before-deadline callback
+	// [R-P0-05 §6]. Controller values 1 and 3 still participate in the outer
+	// eligible cadence, but do not execute virtual tasks.
+	if m.Catalog != nil || m.Strategic.Catalog != nil {
+		m.Strategic.MaybeRefresh(tick, m.simRNG(), m.Player, w)
+	}
+	// No diagnostic scan is part of the authoritative manager tick. Semantic
+	// state is observed by the owning world/economy services.
 }
 
 func (m *Manager) runClassifications(tick uint32, w *units.World, econ *economy.Service) {
-	m.classificationRuns++
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// The classifier is a live-unit sweep, not a strategic score refresh. It runs
+	// before the ten task callbacks and calls the direct group writer for units whose stored
 	// group value is zero. Keep the cadence counter and call shape here so the
 	// writer remains on the established manager entry path [R-P0-04].
 	_, _ = tick, econ
@@ -471,21 +379,16 @@ func (m *Manager) runClassifications(tick uint32, w *units.World, econ *economy.
 // Tasks are swept in ascending manager offset order (I1) via TaskKind order which mirrors slot order [P0-02 §1.3].
 func (m *Manager) runDueTasks(tick uint32, w *units.World, econ *economy.Service) {
 	for k := TaskKind(0); k < TaskKindCount; k++ {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// We still model it as TaskEmpty with vtable nullsub RET that does nothing; it is due when deadline <=tick but we skip work.
-		// For determinism we still count TaskRuns for empty? No, empty should not increment. So skip if k==TaskEmpty and deadline==0?
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		if k == TaskEmpty {
+		// The tenth slot is an empty task pointer. It is never invoked and its
+		// deadline remains zero [R-P0-04 §2].
+		if k == TaskEmptySlot {
 			continue
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// We model it as no-op but increment taskRuns every tick for observability; deadline remains 0.
-		if k == TaskNullSub {
+		// The null task is a real slot with no body and no rescheduling.
+		if k == TaskNull {
 			if m.Deadlines[k] > tick {
 				continue
 			}
-			m.taskRuns[k]++ // fires every tick when inner gate passes (deadline 0) [P0-02] [PLAN_11 C3]
 			// deadline stays 0 per P0-02 table
 			continue
 		}
@@ -493,11 +396,10 @@ func (m *Manager) runDueTasks(tick uint32, w *units.World, econ *economy.Service
 		if deadline > tick { // [08] separate deadlines [PLAN_11 C3]; 0 <= any tick so initial zero is due
 			continue
 		}
-		m.taskRuns[k]++
 		switch k {
-		case TaskConstruction, TaskPositioning:
+		case TaskConstruction:
 			m.doConstruction(tick, w, econ)
-		case TaskResource, TaskActivity:
+		case TaskResource:
 			m.doResource(tick, w, econ)
 		case TaskWaveA:
 			m.doWave(tick, w, econ, waveAThreshold, waveMin, waveMax)
@@ -507,9 +409,15 @@ func (m *Manager) runDueTasks(tick uint32, w *units.World, econ *economy.Service
 			m.doRegroup(tick, w, econ, TaskWaveA)
 		case TaskRegroupB:
 			m.doRegroup(tick, w, econ, TaskWaveB)
-		case TaskOther900:
+		case TaskExplore:
+			if m.simRNG() == nil {
+				continue
+			}
 			m.doExplore(tick, w, econ)
-		case TaskOther150:
+		case TaskRally:
+			if m.simRNG() == nil {
+				continue
+			}
 			m.doRally(tick, w, econ)
 		}
 		m.Deadlines[k] = m.nextDeadline(k, tick)
@@ -518,27 +426,29 @@ func (m *Manager) runDueTasks(tick uint32, w *units.World, econ *economy.Service
 
 func (m *Manager) nextDeadline(k TaskKind, tick uint32) uint32 {
 	switch k {
-	case TaskConstruction, TaskPositioning:
+	case TaskConstruction:
 		return tick + 90 // [08] construction/positioning at currentTick+90 [P0-02]
-	case TaskResource, TaskActivity:
+	case TaskResource:
 		return tick + 30 // [08] resource/queue at +30 [P0-02]
 	case TaskWaveA, TaskWaveB:
 		return tick + 300 // [P0-02] attack waves at +300
 	case TaskRegroupA, TaskRegroupB:
 		return tick + 150 // [P0-02] regroup at +150
-	case TaskOther900:
-		var r uint32
-		if s := m.simRNG(); s != nil {
-			r = s.Uint32n(900) // [08] bound 900 (I4) [P0-02][PLAN_11 C9] per-session isolated [RS-06]
+	case TaskExplore:
+		s := m.simRNG()
+		if s == nil {
+			return m.Deadlines[k]
 		}
+		r := s.Uint32n(900)  // [08] bound 900 (I4) [P0-02] per-session isolated [RS-06]
 		return tick + 30 + r // [08] tick+30+RNG(900) [P0-02]
-	case TaskOther150:
-		var r uint32
-		if s := m.simRNG(); s != nil {
-			r = s.Uint32n(150) // [08] bound 150 (I4) [P0-02] per-session isolated [RS-06]
+	case TaskRally:
+		s := m.simRNG()
+		if s == nil {
+			return m.Deadlines[k]
 		}
+		r := s.Uint32n(150)  // [08] bound 150 (I4) [P0-02] per-session isolated [RS-06]
 		return tick + 30 + r // [08] tick+30+RNG(150) [P0-02]
-	case TaskEmpty, TaskNullSub:
+	case TaskEmptySlot, TaskNull:
 		return 0 // stays 0 [P0-02]
 	default:
 		return tick + 30
@@ -550,9 +460,15 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 	if w == nil || econ == nil {
 		return
 	}
+	// Unit loss arms a manager throttle deadline. Construction retries are
+	// deferred until that absolute unsigned deadline is due; zero means the
+	// manager has not been throttled [08 RNG inventory].
+	if m.unitLossDeadline != 0 && m.unitLossDeadline > tick {
+		return
+	}
 	// Find best builder+candidate in this task's assigned construction vector
 	// [P0-02]. The retail task does not rediscover builders from the world when
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// its vector is empty; the classifier and ordinary group writers are the
 	// admissions to this input.
 	var bestBuilder *units.Unit
 	var bestCand Candidate
@@ -595,40 +511,26 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 	// Buildings (non-mobile targets) always require site placement even if builder is factory-like, preserving yard validation [04 §6.2][P0-03].
 	// Issues orders ONLY through typed queue and descriptor registry [PLAN_11 C12] [08].
 	// No privileged mutation. Chain Select → Place → QueueBuildTyped [PLAN_11 C8+C12] [P0-07].
-	// Factory vs mobile determined by building-class (yard-bearing) vs mobile [R-P0-08][07 §9][SC21].
-	// Retail BMCode 0 (structure with yard) vs 1 (mobile) correlates with yard presence; yard is the
-	// direct placement discriminator (building needs site, mobile does not). Use yard as primary,
-	// falling back to CanMove/MaxVelocity for synthetic fixtures that omit yard but are mobile.
-	isFactoryBuilder := builder.Def != nil && builder.Def.Builder && (strings.TrimSpace(builder.Def.YardMap) != "" || !builder.Def.CanMove)
+	// The allocator's runtime building-class bit is the authored bmcode
+	// discriminator. It is set for buildings (bmcode zero), independently of
+	// yard text, movement flags, or velocity [08 "Classifier eligibility,
+	// destinations, and order"; 05 "Factory production lifecycle"].
+	isFactoryBuilder := builder.Def != nil && builder.Def.Builder && builder.Flags&classifierBuilding != 0
 	isTargetMobile := false
-	if m.Catalog != nil {
-		if def, ok := m.Catalog.Unit(cand.DefKey); ok && def != nil {
-			// Target is mobile if it is not a builder and can move; builders with yard are factories/buildings even if CanMove true (retail labs have CanMove true).
-			if !def.Builder && (def.BMCode || def.CanMove || def.MaxVelocity > 0) {
-				isTargetMobile = true
-			} else if strings.TrimSpace(def.YardMap) == "" && (def.BMCode || def.CanMove || def.MaxVelocity > 0) {
-				isTargetMobile = true
-			} else {
-				isTargetMobile = false
-			}
-		}
-	} else if m.Strategic.Catalog != nil {
-		if def, ok := m.Strategic.Catalog.Unit(cand.DefKey); ok && def != nil {
-			if !def.Builder && (def.BMCode || def.CanMove || def.MaxVelocity > 0) {
-				isTargetMobile = true
-			} else if strings.TrimSpace(def.YardMap) == "" && (def.BMCode || def.CanMove || def.MaxVelocity > 0) {
-				isTargetMobile = true
-			} else {
-				isTargetMobile = false
-			}
+	cat := m.Catalog
+	if cat == nil {
+		cat = m.Strategic.Catalog
+	}
+	if cat != nil {
+		if def, ok := cat.Unit(cand.DefKey); ok && def != nil {
+			isTargetMobile = def.BMCode
 		}
 	}
 	if isFactoryBuilder && isTargetMobile {
 		// Factory production: direct typed queue without placement [P0-07] FactoryQueue.
 		if m.QueueBuildTyped == nil {
-			// Diagnostic: session has not bound typed queue [P0-07] F-P0-004.
-			// Counted, not silent: observable via MissedQueueCallbacks.
-			m.missedQueueCallbacks++
+			// Production composition binds this ordinary order sink. An unbound
+			// fixture has no supported submission path, so this task is a no-op.
 			return
 		}
 		req := BuildRequest{
@@ -640,9 +542,6 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 		if err := m.QueueBuildTyped(req); err != nil {
 			return
 		}
-		m.recordMilestone(MilestoneBuildRequestAccepted, tick)
-		// Factory product queued will also be observed via world scan; also record now for testability.
-		m.recordMilestone(MilestoneFactoryProductQueued, tick)
 		return
 	}
 	// Mobile site construction via placement [P0-07] MobileSite.
@@ -653,16 +552,15 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 	if !ok {
 		return
 	}
-	// Place already issued typed MobileSite request and recorded PlacementSelected/BuildRequestAccepted internally.
-	// Ensure milestones are observed via world scan as well.
+	// Placement has already issued the typed MobileSite request. The world and
+	// construction services own the resulting state transition.
 	_ = x
 	_ = z
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// doResource implements the eco/queue task at tick plus thirty. It consumes
+// only the resource/activity group populated by established writer paths
+// [08 "Eco toggle and group-vector population"].
 func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service) {
 	if w == nil || econ == nil {
 		return
@@ -672,12 +570,11 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 	}
 	metalStock := econ.Players[m.Player].Stock[economy.Metal]
 	energyStock := econ.Players[m.Player].Stock[economy.Energy]
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Manager dispatch reads the settled economy aggregates, not the
 	// per-pass reporting counters [R-P0-05].
 	netEnergy := econ.Players[m.Player].AIProduction[economy.Energy] - econ.Players[m.Player].AIConsumption[economy.Energy]
 	// The eco task scans its assigned resource/activity vector, not the whole
 	// owner slice [08][R-P0-04].
-	m.updateGroups(w)
 	for _, h := range m.GroupResource {
 		u := w.Unit(h)
 		if u == nil || !u.Alive || u.Owner != m.Player {
@@ -689,28 +586,25 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 		if u.Remaining != 0 {
 			continue
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// [P0-02 §3.3] [R-P0-05].
+		// The authored makes-metal byte selects the activation branch
+		// [08 "Eco toggle and group-vector population"].
 		if u.Def.MakesMetal != 0 {
 			// Branch 2*metal > energy ?
 			enable := false
 			if 2*metalStock > energyStock && netEnergy >= 1 {
 				// Draw RNG(5) only when branch taken [P0-02 §5] per-session isolated [RS-06][I4].
-				var draw uint32
-				if s := m.simRNG(); s != nil {
-					draw = s.Uint32n(5)
+				s := m.simRNG()
+				if s == nil {
+					// The production session always binds the simulation stream;
+					// without it there is no supported activation decision.
+					continue
 				}
-				if draw != 0 {
-					enable = true
-				} else {
-					// When RNG unavailable, default to non-zero (enable) to keep determinism; production always seeded.
-					enable = m.simRNG() == nil
-				}
+				enable = s.Uint32n(5) != 0
 			} else {
 				enable = false
 			}
-			// Ordinary toggle via the unit activation state. Retail's
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// Ordinary toggle via the unit activation state. The retail
+			// activation path changes the operational bit; the
 			// units adapter owns that mutable state and economy reads it through
 			// EconomyActive [05 "Unit instance economy state"] [P0-02].
 			u.SetActivated(enable)
@@ -739,7 +633,7 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 			continue
 		}
 		if m.QueueBuildTyped == nil {
-			m.missedQueueCallbacks++
+			// No supported order sink is available in an unbound fixture.
 			continue
 		}
 		req := BuildRequest{
@@ -751,62 +645,7 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 		if err := m.QueueBuildTyped(req); err != nil {
 			continue
 		}
-		m.recordMilestone(MilestoneBuildRequestAccepted, tick)
-		m.recordMilestone(MilestoneFactoryProductQueued, tick)
 	}
-}
-
-// tryRepair issues a repair order from a builder to the most damaged owned unit.
-// Uses ordinary order emission via orders.QueueForUnit [P0-I12][08].
-func (m *Manager) tryRepair(tick uint32, w *units.World) {
-	if w == nil {
-		return
-	}
-	builder := m.findBuilder(w)
-	if builder == nil {
-		return
-	}
-	// Don't repair if builder already has queued work
-	qb := orders.QueueForUnit(builder)
-	if qb != nil && qb.LenPrimary() > 0 {
-		return
-	}
-	var damaged *units.Unit
-	for _, u := range w.IterSliced() {
-		if u == nil || !u.Alive || u.Owner != m.Player || u.Remaining != 0 {
-			continue
-		}
-		if u.Health >= u.MaxHealth {
-			continue
-		}
-		if u.Health <= 0 {
-			continue
-		}
-		if u.Def != nil && u.Def.Builder {
-			continue
-		}
-		if damaged == nil || u.Health < damaged.Health || (u.Health == damaged.Health && u.Handle < damaged.Handle) {
-			damaged = u
-		}
-	}
-	if damaged == nil {
-		return
-	}
-	id := orders.Lookup("RepairUnit")
-	if id == 0 {
-		id = orders.Lookup("RepairUnitNoMove")
-	}
-	if id == 0 {
-		return
-	}
-	node := orders.NewNodeForOrder(id, damaged.Handle, damaged.X, damaged.Y, damaged.Z, tick, builder.Handle, false)
-	q := orders.QueueForUnit(builder)
-	if q == nil {
-		return
-	}
-	q.PurgeUnprotected()
-	q.DropLeadingAutoOps()
-	q.Push(id, node)
 }
 
 // doWave implements the attack wave A/B task at +300 [08 "Wave merge"][P0-02].
@@ -828,33 +667,20 @@ func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, thr
 	if w == nil {
 		return
 	}
-	m.updateGroups(w)
-	var group, peer []pool.Handle
+	var group []pool.Handle
 	var groupID, peerID uint8
 	if threshold == waveAThreshold {
 		group, groupID = m.GroupWaveA, 2
-		peer, peerID = m.GroupRegroupA, 3
+		peerID = 3
 	} else {
 		group, groupID = m.GroupWaveB, 6
-		peer, peerID = m.GroupRegroupB, 7
+		peerID = 7
 	}
-	group = cleanGroup(group, w, m.Player)
-	peer = cleanGroup(peer, w, m.Player)
-	group, peer = mergeWaveGroups(group, peer, w, threshold)
-	// Update stored groups after clean, then mirror the unit group fields for
-	// the members the transfer helper moved. The vector order is already the
-	// exact swap-delete/append result produced by mergeWaveGroups.
+	m.mergeWaveGroupRecords(groupID, peerID, w, threshold)
 	if threshold == waveAThreshold {
-		m.GroupWaveA = group
-		m.GroupRegroupA = peer
+		group = m.GroupWaveA
 	} else {
-		m.GroupWaveB = group
-		m.GroupRegroupB = peer
-	}
-	m.stampGroupValues(w, group, groupID)
-	m.stampGroupValues(w, peer, peerID)
-	if len(group) > 0 {
-		m.recordMilestone(MilestoneGroupAssigned, tick)
+		group = m.GroupWaveB
 	}
 	if len(group) < min {
 		return
@@ -862,82 +688,123 @@ func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, thr
 	if len(group) > max {
 		group = group[:max]
 	}
-	// Find enemy target deterministically; if none, use map centroid.
-	target := m.findEnemyTarget(w)
-	var tx, tz numeric.Fixed
-	var tid pool.Handle
-	if target != nil {
-		tx, tz = target.X, target.Z
-		tid = target.Handle
-	} else {
-		tx, tz = m.enemyCentroid(w)
+	// The target-selection and formation sink for a populated wave are not
+	// established by the recovered manager contract. Keep the merge lifecycle
+	// authoritative and leave the unresolved sink explicit rather than choosing
+	// a guessed enemy or map fallback [R-P0-04 §5].
+	// TODO(question): recover the target-selection/formation call and its order
+	// descriptor before issuing attack orders from a wave.
+}
+
+// mergeWaveGroupRecords applies the recovered wave merge through the direct
+// writer. Every transfer therefore performs source swap-delete, destination
+// append, and the unit Group update as one operation [R-P0-04 §3, §5].
+func (m *Manager) mergeWaveGroupRecords(groupID, peerID uint8, w *units.World, threshold int32) {
+	if m == nil || w == nil {
+		return
 	}
-	// Issue ordinary attack/move orders to each unit in group via orders queue [08][P0-02].
-	issued := 0
-	for _, h := range group {
+	current := m.groupVector(groupID)
+	peer := m.groupVector(peerID)
+	if current == nil || peer == nil {
+		return
+	}
+	if len(*current) == 0 {
+		if len(*peer) == 0 {
+			return
+		}
+		if u := w.Unit((*peer)[0]); u != nil {
+			m.transferGroupMember(u, peerID, groupID)
+		}
+	}
+	cx, cz, ok := retailGroupCentroid(*current, w)
+	if !ok {
+		return
+	}
+	for len(*current) > 1 {
+		limit := int64(threshold) * int64(len(*current))
+		farthest := -1
+		var farthestDistance int64
+		for i, h := range *current {
+			u := w.Unit(h)
+			if u == nil || !u.Alive {
+				continue
+			}
+			distance := retailDistanceSquared(u, cx, cz)
+			if farthest < 0 || distance > farthestDistance {
+				farthest, farthestDistance = i, distance
+			}
+		}
+		if farthest < 0 || farthestDistance < limit {
+			break
+		}
+		if u := w.Unit((*current)[farthest]); u != nil {
+			m.transferGroupMember(u, groupID, peerID)
+		}
+		cx, cz, ok = retailGroupCentroid(*current, w)
+		if !ok {
+			return
+		}
+	}
+	if len(*current) == 0 {
+		return
+	}
+	cx, cz, ok = retailGroupCentroid(*current, w)
+	if !ok {
+		return
+	}
+	limit := int64(threshold) * int64(len(*current))
+	collected := make([]pool.Handle, 0, len(*peer))
+	for _, h := range *peer {
 		u := w.Unit(h)
-		if u == nil || !u.Alive || u.Remaining != 0 {
-			continue
+		if u != nil && u.Alive && retailDistanceSquared(u, cx, cz) < limit {
+			collected = append(collected, h)
 		}
-		var id orders.ID
-		if tid != 0 {
-			id = orders.Lookup("Attack_Chase")
-			if id == 0 {
-				id = orders.Lookup("Attack_NoMove")
-			}
-		}
-		if id == 0 {
-			if u.Def != nil && u.Def.CanFly {
-				id = orders.Lookup("VTOL_Move")
-			} else {
-				id = orders.Lookup("Move_Ground")
-			}
-		}
-		if id == 0 {
-			continue
-		}
-		node := orders.NewNodeForOrder(id, tid, tx, 0, tz, tick, u.Handle, false)
-		q := orders.QueueForUnit(u)
-		if q == nil {
-			continue
-		}
-		// Ordinary path: purge unprotected and push (queued false) [04 §3.3][P0-I03]
-		q.PurgeUnprotected()
-		q.DropLeadingAutoOps()
-		q.Push(id, node)
-		issued++
 	}
-	if issued > 0 {
-		m.recordMilestone(MilestoneAttackMoveIssued, tick)
+	for _, h := range collected {
+		if u := w.Unit(h); u != nil {
+			m.transferGroupMember(u, peerID, groupID)
+		}
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// transferGroupMember performs one group transfer through the direct writer.
+// Its source vector and Unit.Group are established together by the admitting
+// writer; the transfer then swap-deletes, appends, and updates Unit.Group as a
+// single operation [R-P0-04 §3].
+func (m *Manager) transferGroupMember(u *units.Unit, from, to uint8) {
+	if m == nil || u == nil {
+		return
+	}
+	if u.Group != from {
+		return
+	}
+	m.writeGroup(u, int8(to))
+}
+
+// doRegroup implements the regroup task at tick plus 150, paired with its wave
+// record [08 "Strategy manager and its task graph"].
 // It moves own group toward peer centroid via ordinary move orders [P0-02][P0-I12].
 func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, peer TaskKind) {
 	_, _, _ = tick, econ, peer
 	if w == nil {
 		return
 	}
-	m.updateGroups(w)
 	var ownGroup []pool.Handle
 	var peerGroup []pool.Handle
 	if peer == TaskWaveA {
 		ownGroup = m.GroupRegroupA
-		peerGroup = m.GroupWaveB
+		peerGroup = m.GroupWaveA
 	} else {
 		ownGroup = m.GroupRegroupB
-		peerGroup = m.GroupWaveA
+		peerGroup = m.GroupWaveB
 	}
-	ownGroup = cleanGroup(ownGroup, w, m.Player)
-	peerGroup = cleanGroup(peerGroup, w, m.Player)
 	if len(ownGroup) == 0 || len(peerGroup) == 0 {
 		return
 	}
 	// Peer centroid
 	cx, cz, ok := groupCentroid(peerGroup, w)
 	if !ok {
-		cx, cz = m.enemyCentroid(w)
+		return
 	}
 	issued := 0
 	for _, h := range ownGroup {
@@ -964,12 +831,11 @@ func (m *Manager) doRegroup(tick uint32, w *units.World, econ *economy.Service, 
 		q.Push(id, node)
 		issued++
 	}
-	if issued > 0 {
-		m.recordMilestone(MilestoneAttackMoveIssued, tick)
-	}
+	_ = issued
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// doExplore implements the explore/gather task at tick plus 30 plus RNG(900)
+// [08 "Strategy manager and its task graph"].
 // The explore vector is populated by the recovered classifier (category 8),
 // load, control-group, or wave-transfer writers. An empty vector remains a
 // normal no-op; no world scan is permitted here [P0-02][R-P0-04].
@@ -978,92 +844,94 @@ func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) 
 	if w == nil {
 		return
 	}
-	m.updateGroups(w)
-	group := cleanGroup(m.GroupExplore, w, m.Player)
-	m.GroupExplore = group
+	r := m.simRNG()
+	if r == nil {
+		return
+	}
+	group := m.GroupExplore
 	if len(group) == 0 {
 		return
 	}
-	tx, tz := m.enemyCentroid(w)
-	issued := 0
-	for _, h := range group {
-		u := w.Unit(h)
-		if u == nil || !u.Alive || u.Remaining != 0 {
-			continue
+	// The body consumes its branch draws even though the target/formation sink
+	// is not yet recovered. Keeping this ledger here prevents an unresolved
+	// order effect from shifting later authoritative consumers [08 RNG inventory].
+	if len(group) < 5 {
+		trials := r.Uint32n(2)
+		// The branch always submits one baseline attempt and adds the bounded
+		// binary choice, for two or three iterations total [08 RNG inventory].
+		for i := uint32(0); i <= trials+1; i++ {
+			if m.Terrain != nil {
+				if width := uint32(m.Terrain.CellW / 8); width >= 2 {
+					r.Uint32n(width)
+				}
+				if height := uint32(m.Terrain.CellH / 8); height >= 2 {
+					r.Uint32n(height)
+				}
+			}
 		}
-		var id orders.ID
-		if u.Def != nil && u.Def.CanFly {
-			id = orders.Lookup("VTOL_Move")
-		} else {
-			id = orders.Lookup("Move_Ground")
-		}
-		if id == 0 {
-			continue
-		}
-		node := orders.NewNodeForOrder(id, 0, tx, 0, tz, tick, u.Handle, false)
-		q := orders.QueueForUnit(u)
-		if q == nil {
-			continue
-		}
-		q.PurgeUnprotected()
-		q.DropLeadingAutoOps()
-		q.Push(id, node)
-		issued++
+		return
 	}
-	if issued > 0 {
-		m.recordMilestone(MilestoneAttackMoveIssued, tick)
+	// Large groups use the edge-target branch: two binary choices, map-width
+	// and map-height samples, then the final binary choice [08 RNG inventory].
+	r.Uint32n(2)
+	r.Uint32n(2)
+	if m.Terrain != nil {
+		if width := uint32(m.Terrain.CellW); width >= 2 {
+			r.Uint32n(width)
+		}
+		if height := uint32(m.Terrain.CellH); height >= 2 {
+			r.Uint32n(height)
+		}
 	}
+	r.Uint32n(2)
+	// TODO(question): recover the target coordinate conversion and ordinary
+	// formation order before mutating a unit queue for this task.
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// doRally implements the random-walk rally task at tick plus 30 plus RNG(150)
+// [08 "Strategy manager and its task graph"].
 // An empty rally vector remains a normal no-op. Category 9 is not emitted by
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// the classifier and must arrive through a separate established writer
+// [R-P0-04].
 func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 	_, _, _ = tick, w, econ
 	if w == nil {
 		return
 	}
-	m.updateGroups(w)
-	group := cleanGroup(m.GroupRally, w, m.Player)
-	m.GroupRally = group
+	r := m.simRNG()
+	if r == nil {
+		return
+	}
+	group := m.GroupRally
 	if len(group) == 0 {
 		return
 	}
-	tx, tz := m.enemyCentroid(w)
-	issued := 0
-	for _, h := range group {
-		u := w.Unit(h)
-		if u == nil || !u.Alive || u.Remaining != 0 {
-			continue
-		}
-		var id orders.ID
-		if u.Def != nil && u.Def.CanFly {
-			id = orders.Lookup("VTOL_Move")
-		} else {
-			id = orders.Lookup("Move_Ground")
-		}
-		if id == 0 {
-			continue
-		}
-		node := orders.NewNodeForOrder(id, 0, tx, 0, tz, tick, u.Handle, false)
-		q := orders.QueueForUnit(u)
-		if q == nil {
-			continue
-		}
-		q.PurgeUnprotected()
-		q.DropLeadingAutoOps()
-		q.Push(id, node)
-		issued++
+	if r.Uint32n(10) == 0 {
+		// The drift seed has two independent 16-bit random components. Their
+		// conversion into the task's fixed-point target remains unresolved, but
+		// both draws are authoritative even while that effect is deferred.
+		r.Uint32n(65536)
+		r.Uint32n(65536)
 	}
-	if issued > 0 {
-		m.recordMilestone(MilestoneAttackMoveIssued, tick)
-	}
+	// The score helper's visibility inputs and target sink are unresolved, but
+	// its two score-valued random comparisons are established. Keep their
+	// order and bounds in the task state; zero bounds consume no draw under the
+	// simulation helper's contract [08 RNG inventory].
+	current := r.Uint32n(m.rallyScore)
+	next := r.Uint32n(m.rallyNextScore)
+	_ = current
+	_ = next
+	// TODO(question): recover the visibility guard, score helper, and ordinary
+	// formation/order sink that populate the candidate score and target.
 }
 
 // Dispatch iterates the ten players per-tick entry [08 "Established AI-facing data and rooted planner"] [PLAN_11 C1][P0-02].
 // Outer gate controller ∈ {1,2,3} and index !=10 dispatches through manager pointer; inner gate controller==2 is enforced inside Manager.Tick [08][PLAN_11 C1].
 // Both gates required. Stable ordering player 0..9 ascending (I1), no map iteration.
 func Dispatch(tick uint32, econ *economy.Service, managers [10]*Manager, w *units.World) {
+	if econ == nil {
+		return
+	}
 	for i := 0; i < 10; i++ { // [08] iterates ten players [PLAN_11 C1] (I1)
 		if i == 10 { // [08] player index !=10 [PLAN_11 C1]
 			continue
@@ -1072,11 +940,12 @@ func Dispatch(tick uint32, econ *economy.Service, managers [10]*Manager, w *unit
 		if m == nil {
 			continue
 		}
-		if econ != nil {
-			ctrl := econ.Players[i].ControllerState  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			if ctrl != 1 && ctrl != 2 && ctrl != 3 { // outer gate [08][PLAN_11 C1]
-				continue
-			}
+		if i >= len(econ.Players) {
+			continue
+		}
+		ctrl := econ.Players[i].ControllerState  // [08]
+		if ctrl != 1 && ctrl != 2 && ctrl != 3 { // outer gate [08][PLAN_11 C1]
+			continue
 		}
 		m.Tick(tick, w, econ)
 	}
@@ -1085,6 +954,9 @@ func Dispatch(tick uint32, econ *economy.Service, managers [10]*Manager, w *unit
 // DispatchSlice is a helper for variable-length slices used by session coordinator wiring [PLAN_11 C11][PLAN_03 Phase 5].
 // It iterates in ascending player order (I1) and preserves both gates [08][PLAN_11 C1].
 func DispatchSlice(tick uint32, econ *economy.Service, managers []*Manager, w *units.World) {
+	if econ == nil {
+		return
+	}
 	for i, m := range managers {
 		if i == 10 { // [08] !=10 [PLAN_11 C1]
 			continue
@@ -1092,11 +964,12 @@ func DispatchSlice(tick uint32, econ *economy.Service, managers []*Manager, w *u
 		if m == nil {
 			continue
 		}
-		if econ != nil && i < len(econ.Players) {
-			ctrl := econ.Players[i].ControllerState
-			if ctrl != 1 && ctrl != 2 && ctrl != 3 {
-				continue
-			}
+		if i >= len(econ.Players) {
+			continue
+		}
+		ctrl := econ.Players[i].ControllerState
+		if ctrl != 1 && ctrl != 2 && ctrl != 3 {
+			continue
 		}
 		m.Tick(tick, w, econ)
 	}

@@ -94,6 +94,67 @@ type Queue struct {
 	// SecondaryTick is the per-queue tick for BuildWeapon handler deadlines [06 §11.1][RS-P0-018].
 	// Was package-global currentSecondaryTick; now per-queue for session isolation [INVARIANTS I1].
 	SecondaryTick uint32 `json:"-"`
+
+	binding *QueueBinding
+}
+
+// QueueBinding is the concrete session-owned context every authoritative
+// queue carries. Keeping these inputs together makes queue replacement and
+// reconstruction an explicit value transfer instead of a collection of
+// package-level fallbacks [04 §3.3][04 §3.4][06 §11.1].
+type QueueBinding struct {
+	StockpileEconomy interface {
+		UnitBuckets(pool.Handle) *[2]economy.Bucket
+	}
+	Lookup    func(pool.Handle) *units.Unit
+	Hostility func(actor *units.Unit, target *units.Unit) bool
+	SimRNG    *rng.Simulation
+}
+
+// SetBinding installs all per-queue authoritative inputs as one value.
+func (q *Queue) SetBinding(b *QueueBinding) {
+	if q == nil {
+		return
+	}
+	q.binding = b
+	if b == nil {
+		q.StockpileEconomy = nil
+		q.Lookup = nil
+		q.Hostility = nil
+		return
+	}
+	q.StockpileEconomy = b.StockpileEconomy
+	q.Lookup = b.Lookup
+	q.Hostility = b.Hostility
+}
+
+// Binding returns this queue's concrete binding. Value fixtures that predate
+// QueueBinding are read from their legacy fields without caching, so a test
+// that installs a hook after an earlier lookup still observes that hook.
+func (q *Queue) Binding() *QueueBinding {
+	if q == nil {
+		return nil
+	}
+	if q.binding != nil {
+		return q.binding
+	}
+	if q.StockpileEconomy == nil && q.Lookup == nil && q.Hostility == nil {
+		return nil
+	}
+	return &QueueBinding{StockpileEconomy: q.StockpileEconomy, Lookup: q.Lookup, Hostility: q.Hostility}
+}
+
+// BindQueueBinding ensures a lazily-created queue receives its owner's session
+// context before any order can be pumped or resolved.
+func BindQueueBinding(u *units.Unit, b *QueueBinding) *Queue {
+	if u == nil {
+		return nil
+	}
+	q := QueueForUnit(u)
+	if b != nil {
+		q.SetBinding(b)
+	}
+	return q
 }
 
 // [P2-03][P1-I09] Queue storage is dynamic, matching retail's heap-linked list
@@ -230,26 +291,27 @@ func isSecondary(id ID) bool {
 	return DescriptorFor(id).StaticGate&0x40000 != 0 // [04 §3.1] rear-segment selection flag
 }
 
-// DET-01: session-owned RNG injection — no rng.Global fallback.
-var injectedSim *rng.Simulation
-
-// SetSimulationRNG binds the session-owned simulation stream for order jitter draws [01 §7.1][I4].
-func SetSimulationRNG(sim *rng.Simulation) { injectedSim = sim }
-
-func simForJitter() *rng.Simulation { return injectedSim }
-
-func randBelow15() uint32 {
-	if simForJitter() == nil {
-		panic("orders: simulation RNG not injected [DET-01]")
+func (q *Queue) simForJitter() *rng.Simulation {
+	if q != nil {
+		if binding := q.Binding(); binding != nil {
+			return binding.SimRNG
+		}
 	}
-	return simForJitter().Uint32n(15) // gameplay jitter uses simulation stream [I4][04 §3.3]
+	return nil
 }
 
-func randBelow30() uint32 {
-	if simForJitter() == nil {
+func (q *Queue) randBelow15() uint32 {
+	if q.simForJitter() == nil {
 		panic("orders: simulation RNG not injected [DET-01]")
 	}
-	return simForJitter().Uint32n(30) // [R-P0-01] code 9's last re-arm draws RNG(30), a distinct draw site from code 3's RNG(15)
+	return q.simForJitter().Uint32n(15) // gameplay jitter uses simulation stream [I4][04 §3.3]
+}
+
+func (q *Queue) randBelow30() uint32 {
+	if q.simForJitter() == nil {
+		panic("orders: simulation RNG not injected [DET-01]")
+	}
+	return q.simForJitter().Uint32n(30) // [R-P0-01] code 9's last re-arm draws RNG(30), a distinct draw site from code 3's RNG(15)
 }
 
 // moveGroundHandler implements the Move_Ground-family handler [R-P0-01].
@@ -662,7 +724,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			name := DescriptorFor(n.ID).Name
 			if name == "Move_Ground" || name == "VTOL_Move" || name == "QMove" || name == "Patrol" || name == "QPatrol" || name == "VTOL_Patrol" || name == "RepairPatrol" || name == "VTOL_RepairPatrol" {
 				n.DynamicGate = 1
-				n.Deadline = int32(tick + 30 + randBelow15()) // [04 §3.3][I4]
+				n.Deadline = int32(tick + 30 + q.randBelow15()) // [04 §3.3][I4]
 				n.MoveState = MoveEnRoute
 				return
 			}
@@ -694,8 +756,8 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 	case 2, 4:
 		// [04 §3.3] continue walking unchanged
 	case 3:
-		n.DynamicGate = 1                             // [04 §3.3] lowest gate bit
-		n.Deadline = int32(tick + 30 + randBelow15()) // [04 §3.3][I4] wait 30..44; the only arm drawing RNG(15)
+		n.DynamicGate = 1                               // [04 §3.3] lowest gate bit
+		n.Deadline = int32(tick + 30 + q.randBelow15()) // [04 §3.3][I4] wait 30..44; the only arm drawing RNG(15)
 		return false
 	case 5, 8:
 		cleanupNode(n) // [05 "Queue subtraction"]
@@ -716,7 +778,7 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 			// 30..59 — the distinct RNG(30) arm, not code 3's RNG(15).
 			n.Phase = 0
 			n.DynamicGate = 1
-			n.Deadline = int32(tick + 30 + randBelow30())
+			n.Deadline = int32(tick + 30 + q.randBelow30())
 			return false
 		}
 		cleanupNode(n) // [04 §3.3] otherwise unlink and free
@@ -766,7 +828,6 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 		// Publish tick for BuildWeapon stockpile handler's retry deadlines
 		// [06 §11.1] C29 (5/10/300) without changing Handler signature [RS-P0-018].
 		q.SecondaryTick = tick
-		setSecondaryTick(tick)
 		handler := DescriptorFor(n.ID).Handler
 		if handler == nil {
 			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for secondary %s", DescriptorFor(n.ID).Name))
@@ -802,8 +863,8 @@ func (q *Queue) applySecondaryResultCode(n *Node, code Code, tick uint32) (advan
 	case 2, 4:
 		return 1, true // [04 §3.3] continue unchanged
 	case 3:
-		n.DynamicGate = 1                             // [04 §3.3] lowest gate bit
-		n.Deadline = int32(tick + 30 + randBelow15()) // [04 §3.3][I4] wait 30..44; the only arm drawing RNG(15)
+		n.DynamicGate = 1                               // [04 §3.3] lowest gate bit
+		n.Deadline = int32(tick + 30 + q.randBelow15()) // [04 §3.3][I4] wait 30..44; the only arm drawing RNG(15)
 		return 1, true
 	case 5, 8:
 		q.removeSecondaryRecord(n) // [04 §3.3] C8 plain unlink+free, walk continues
@@ -879,6 +940,17 @@ func QueueForUnit(u *units.Unit) *Queue {
 	}
 	q := &Queue{}
 	u.Orders = q
+	return q
+}
+
+// QueueOfUnit returns the unit's existing order queue without creating one.
+// Read-only paths such as frame publication must use this lookup so observing
+// a unit cannot mutate its authoritative order state [03 §1][04 §3.3].
+func QueueOfUnit(u *units.Unit) *Queue {
+	if u == nil {
+		return nil
+	}
+	q, _ := u.Orders.(*Queue)
 	return q
 }
 

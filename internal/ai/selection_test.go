@@ -2,6 +2,7 @@ package ai
 
 import (
 	"math"
+	"reflect"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -11,23 +12,19 @@ import (
 )
 
 type testSelector struct {
-	player          uint8
-	profile         *Profile
-	strategic       *Strategic
-	catalog         *content.Catalog
-	candidateSource func(*units.Unit) []string
-	gateFlag        int32
-	gateCandidates  map[string]struct{}
-	rng             *rng.Simulation
+	player      uint8
+	profile     *Profile
+	strategic   *Strategic
+	catalog     *content.Catalog
+	rng         *rng.Simulation
+	missionMode int32
 }
 
-func (s *testSelector) GetPlayer() uint8                               { return s.player }
-func (s *testSelector) GetProfile() *Profile                           { return s.profile }
-func (s *testSelector) GetStrategic() *Strategic                       { return s.strategic }
-func (s *testSelector) GetCandidateSource() func(*units.Unit) []string { return s.candidateSource }
-func (s *testSelector) GetCatalog() *content.Catalog                   { return s.catalog }
-func (s *testSelector) GetMissionGateFlag() int32                      { return s.gateFlag }
-func (s *testSelector) GetGateCandidates() map[string]struct{}         { return s.gateCandidates }
+func (s *testSelector) GetPlayer() uint8             { return s.player }
+func (s *testSelector) GetProfile() *Profile         { return s.profile }
+func (s *testSelector) GetStrategic() *Strategic     { return s.strategic }
+func (s *testSelector) GetCatalog() *content.Catalog { return s.catalog }
+func (s *testSelector) GetMissionGateFlag() int32    { return s.missionMode }
 func (s *testSelector) GetRNG() *rng.Simulation {
 	// DET-01: tests seed the global streams; return the CURRENT stream so
 	// reseeds between sub-cases are observed, exactly like an injected
@@ -172,7 +169,8 @@ func TestReservoirSingleDraw(t *testing.T) {
 	// Need score 1: choose mix that yields total 100*? Let's craft inputs that give oMix 100, metal0 energy0 => total 100*100=10000 *1 /10000=1? Actually C0 100 * other 100 =10000 *1/10000=1
 	// inputs starved with 245 gave mix metal100 energy100 other0 -> total 0 => not.
 	// Use calm inputs: other75 metal25 energy0 => total C0*75=7500 *1/10000=0 -> not 1.
-	// We can directly set CandidateSource to guarantee score? Simpler: test total==1 via weight tuning: if we pick cv {C0:0,C1:1,C2:0} and mix metal 100 => total 100 *1/10000=0 not 1.
+	// Test total==1 via weight tuning: with C0=100 and an all-other mix,
+	// 100*100*1/10000 yields one.
 	// To get 1, need total*weight ==10000. Choose cv {C0:100} other100 =>10000*1/10000=1.
 	// So need mix other100.
 	// Achieve other100 requires metalMix 0 energyMix 0 => metalRaw 0 energyRaw 0.
@@ -207,6 +205,10 @@ func TestReservoirSingleDraw(t *testing.T) {
 func TestGates(t *testing.T) {
 	builder := testBuilder("armcom")
 	baseStrat := &Strategic{Counts: map[string]int32{}, ClassVectors: map[string]ClassVector{"armfav": {C0: 40, C1: 30, C2: 30}, "corfav": {C0: 40, C1: 30, C2: 30}}}
+	baseStrat.Catalog = &content.Catalog{Units: map[string]*content.UnitDef{
+		content.CanonicalKey("armfav"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armfav")}, UnitName: "armfav", Downloadable: true},
+		content.CanonicalKey("corfav"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("corfav")}, UnitName: "corfav", Downloadable: false},
+	}}
 	baseProfile := &Profile{
 		Weight: map[string]int32{"armfav": 100, "corfav": 100},
 		Limit:  map[string]int32{},
@@ -275,22 +277,52 @@ func TestGates(t *testing.T) {
 		t.Fatalf("self gate: should reject own definition")
 	}
 
-	// Opaque 241 bit5 gate TODO(T25) [PLAN 11 C5] [P0-I16: per-selector]
-	sel.gateFlag = 1
-	sel.gateCandidates = map[string]struct{}{"corfav": {}}
-	rng.SeedGlobal(1, 0)
-	if _, ok := SelectWithCandidates(sel, builder, econOK, []string{"corfav"}); ok {
-		t.Fatalf("241 gate: should reject when flag 1 and bit set [P0-I16]")
+	// Mission mode 1 rejects a candidate carrying the authored downloadable
+	// status bit (bit 5 in the compiled definition status word) [R-P0-05 §3].
+	sel.missionMode = 1
+	if _, ok := SelectWithCandidates(sel, builder, econOK, []string{"armfav"}); ok {
+		t.Fatalf("mission mode 1 should reject downloadable candidate")
 	}
-	// Flag 0 => passes
-	sel.gateFlag = 0
-	sel.gateCandidates = nil
+	// The same mode admits a candidate without the status bit.
 	rng.SeedGlobal(1, 0)
 	if _, ok := SelectWithCandidates(sel, builder, econOK, []string{"corfav"}); !ok {
-		t.Fatalf("241 gate: flag 0 should pass [P0-I16]")
+		t.Fatalf("mission mode 1 should admit candidate without downloadable bit")
 	}
-	sel.gateFlag = 0
-	sel.gateCandidates = nil
+	// Mode zero does not apply the definition-status gate.
+	sel.missionMode = 0
+	rng.SeedGlobal(1, 0)
+	if _, ok := SelectWithCandidates(sel, builder, econOK, []string{"armfav"}); !ok {
+		t.Fatalf("mission mode 0 should admit downloadable candidate")
+	}
+}
+
+func TestSelectionRequiresConcreteProfileAndVectors(t *testing.T) {
+	builder := testBuilder("armcom")
+	econ := testEcon(1, 800, 1000, 400, 500, 0, 0, 0, 0)
+	strat := &Strategic{ClassVectors: map[string]ClassVector{"armfav": {C0: 40, C1: 30, C2: 30}}}
+	sel := &testSelector{player: 1, strategic: strat, rng: rng.Global.Sim}
+	if _, ok := SelectWithCandidates(sel, builder, econ, []string{"armfav"}); ok {
+		t.Fatalf("selection must reject an absent loaded profile")
+	}
+	sel.profile = &Profile{Weight: map[string]int32{"armfav": 100}, Limit: map[string]int32{}}
+	sel.strategic = &Strategic{}
+	if _, ok := SelectWithCandidates(sel, builder, econ, []string{"armfav"}); ok {
+		t.Fatalf("selection must reject uninitialized class vectors")
+	}
+}
+
+func TestSelectPreservesAuthoredBuildMenuOrder(t *testing.T) {
+	builder := testBuilder("armcom")
+	sel := &testSelector{
+		catalog: &content.Catalog{BuildMenus: map[string]*content.BuildMenuPage{
+			content.CanonicalKey("armcom"): {Buttons: []string{"corfav", "armfav"}},
+		}},
+	}
+	got := buildOptionsForBuilder(sel, builder)
+	want := []string{"corfav", "armfav"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("authored build-menu order got %v want %v", got, want)
+	}
 }
 
 // TestFloat32Narrowing locks that energyRaw/metalRaw are evaluated in float32 with truncation, not float64 narrowing [PLAN 11 C6] [INVARIANTS I2].

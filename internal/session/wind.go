@@ -2,7 +2,6 @@ package session
 
 import (
 	"github.com/nanolathe/nanolathe/internal/mission"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -37,16 +36,6 @@ func (s *Session) InitBattleWindForSession() {
 		return
 	}
 	s.Wind = InitBattleWind(s.Mission.WindBounds)
-}
-
-// InitWindForSession is the legacy two-argument form of
-// InitBattleWindForSession. Both arguments are ignored: battle entry consumes
-// no wind draws and zeroes the deadline [R-CORE-02], so there is nothing for
-// a stream or a tick value to do here. Deprecated: call
-// InitBattleWindForSession(). AUDIT(parity-spine): retained only so existing
-// fixture call sites compile; shrink-only.
-func (s *Session) InitWindForSession(_ *rng.CRT, _ uint32) {
-	s.InitBattleWindForSession()
 }
 
 // Later wind arithmetic [01 §7.3] [GAP T13] is intentionally absent here.

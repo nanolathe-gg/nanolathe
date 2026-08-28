@@ -19,7 +19,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -129,10 +128,7 @@ func HashState(s *Session) string {
 		if m == nil {
 			continue
 		}
-		// The cumulative eligible-entry count selects the next classifier
-		// boundary; cover it independently from tactical membership vectors so
-		// identical groups with different future cadence cannot alias [08 C3].
-		fmt.Fprintf(h, "C%d:%d|G%d:", player, m.EntryCount(), player)
+		fmt.Fprintf(h, "G%d:", player)
 		groups := [][]pool.Handle{
 			m.GroupResource, m.GroupWaveA, m.GroupRegroupA,
 			m.GroupConstruction, m.GroupNull, m.GroupWaveB,
@@ -266,8 +262,7 @@ func strictNewSessionWithUnits(t *testing.T, nUnits int, simSeed, crtSeed uint32
 		p.EndGameCountdown = -1
 	}
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(crtSeed)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
 	s.State = StateBattle

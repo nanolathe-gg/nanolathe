@@ -7,15 +7,36 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
+
+func TestBindExistingOrderQueuesKeepsLazyQueuesLazy(t *testing.T) {
+	w := units.New(4, nil)
+	def := &content.UnitDef{UnitName: "queue-binding", MaxDamage: 1}
+	h1, _ := w.Create(def, 0, 0, 0, 0)
+	h2, _ := w.Create(def, 0, 0, 0, 0)
+	u1, u2 := w.Unit(h1), w.Unit(h2)
+	q := orders.QueueForUnit(u1)
+	sim := rng.NewSimulation(31)
+	binding := &orders.QueueBinding{SimRNG: &sim}
+	s := &Session{Units: w, Build: &construction.Service{OrderBinding: binding}}
+	s.bindExistingOrderQueues()
+	if q.Binding() != binding {
+		t.Fatal("existing queue did not receive the concrete session binding")
+	}
+	if u2.Orders != nil {
+		t.Fatal("binding pass created a queue for a unit that had none")
+	}
+}
 
 // TestSeedSessionRNGWipesPreBattleDrawsAndLeavesGlobalAlone locks the DET-01
 // seeding contract [R-CORE-02]: seeding both session streams fresh wipes
@@ -203,8 +224,7 @@ func TestValidateCompositionSuccess(t *testing.T) {
 	s.Econ.Players[1].ControllerState = 2
 	s.Econ.Players[1].StatusHalfwordAt144 = 1
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(0)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("createAndBindServices: %v", err)
 	}
@@ -226,8 +246,7 @@ func TestCreateAndBindServicesChainsDeathObserver(t *testing.T) {
 	s.Econ.Players[0].Exists = true
 	s.Econ.Players[0].ControllerState = 1
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(0)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	var primary, priorExtra int
 	w.OnDeath = func(pool.Handle, units.DeathCause, *units.Unit) { primary++ }
 	w.OnDeathExtra = func(pool.Handle, units.DeathCause, *units.Unit) { priorExtra++ }
@@ -265,8 +284,7 @@ func TestValidateCompositionMissing(t *testing.T) {
 		s.Econ.Players[0].ControllerState = 1
 		s.Econ.Players[0].StatusHalfwordAt144 = 1
 		s.Econ.SeedDeadlines(0)
-		var crt rng.CRT = rng.NewCRT(0)
-		s.InitWindForSession(&crt, 0)
+		s.InitBattleWindForSession()
 		_ = createAndBindServicesForTest(t, s)
 		return s
 	}
@@ -445,8 +463,7 @@ func TestCompositionGate(t *testing.T) {
 	s.Econ.Players[1].ControllerState = 2
 	s.Econ.Players[1].StatusHalfwordAt144 = 1
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(1)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("bind: %v", err)
 	}

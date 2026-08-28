@@ -27,10 +27,7 @@ const probeTick uint32 = 1000
 // exactly this case's draws [I4][DET-01].
 func injectTestSim(t *testing.T) *rng.Simulation {
 	t.Helper()
-	prev := simForJitter()
 	sim := rng.SimulationFromState(0x2A5F17)
-	SetSimulationRNG(&sim)
-	t.Cleanup(func() { SetSimulationRNG(prev) })
 	return &sim
 }
 
@@ -92,7 +89,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 	t.Run("primary", func(t *testing.T) {
 		t.Run("code0 resets phase and continues", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := &Queue{}, newTestUnit()
+			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code {
 				n.Phase = 4
@@ -114,7 +111,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code1 advances phase and continues", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := &Queue{}, newTestUnit()
+			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code { return 1 }) // [04 §3.3] advance the phase by one
 			q.Push(moveID, Node{Phase: 7, Param1: 1})
@@ -133,7 +130,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code2 continues unchanged and consumes satisfied bits", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := &Queue{}, newTestUnit()
+			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code { return 2 }) // [04 §3.3] continue walking unchanged
 			q.Push(moveID, Node{Phase: 7, Param1: 1})
@@ -158,7 +155,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code3 draws RNG(15), gate bit, deadline tick+30+draw", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := &Queue{}, newTestUnit()
+			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code { return 3 }) // [04 §3.3] wait 30..44, only this arm draws below 15
 			q.Push(moveID, Node{Phase: 7, Param1: 1})
@@ -185,7 +182,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code4 continues unchanged", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := &Queue{}, newTestUnit()
+			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code { return 4 }) // [04 §3.3] continue walking unchanged
 			q.Push(moveID, Node{Phase: 7, Param1: 1})
@@ -204,7 +201,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code5 unlinks and frees the head, continues", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := &Queue{}, newTestUnit()
+			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code {
 				if n.Param1 == 1 {
@@ -234,7 +231,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code6 moves head to segment tail and continues", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := &Queue{}, newTestUnit()
+			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code {
 				if n.Param1 == 1 {
@@ -263,7 +260,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code7 frees every record on both segments and returns", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := &Queue{}, newTestUnit()
+			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code { return 7 }) // [04 §3.3] cancel-all, exclusively primary code 7
 			q.Push(moveID, Node{Param1: 1})
@@ -285,7 +282,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code8 unlinks and frees the head, continues", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := &Queue{}, newTestUnit()
+			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code {
 				if n.Param1 == 1 {
@@ -312,7 +309,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code9 last record re-arms with RNG(30), phase reset", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := &Queue{}, newTestUnit()
+			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code { return 9 }) // [04 §3.3][R-P0-01] wait 30..59, only the primary last-record arm draws
 			q.Push(moveID, Node{Phase: 5, Param1: 1})
@@ -345,7 +342,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code9 non-last unlinks and frees", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := &Queue{}, newTestUnit()
+			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code {
 				if n.Param1 == 1 {
@@ -372,7 +369,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code above 9 expires the single record and returns", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := &Queue{}, newTestUnit()
+			q, u := &Queue{binding: &QueueBinding{SimRNG: sim}}, newTestUnit()
 			p := newProbe()
 			p.install(t, moveID, func(n *Node) Code { return 12 }) // [04 §3.3] expiry helper and return, no draw, no cancel-all
 			q.Push(moveID, Node{Param1: 1})
@@ -404,8 +401,8 @@ func TestPumpResultCodeTables(t *testing.T) {
 		// Secondary walk: front-to-back, skipping records that are not due
 		// [04 §3.3] C8; primary is kept empty so the front-blocker rule never
 		// suppresses the segment under test.
-		newQ := func(nodes ...*Node) (*Queue, *units.Unit) {
-			q := &Queue{}
+		newQ := func(sim *rng.Simulation, nodes ...*Node) (*Queue, *units.Unit) {
+			q := &Queue{binding: &QueueBinding{SimRNG: sim}}
 			q.secondary = nodes
 			return q, newTestUnit()
 		}
@@ -418,7 +415,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 
 		t.Run("code0 resets phase and advances", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := newQ(secNode(buildID, 1, 4))
+			q, u := newQ(sim, secNode(buildID, 1, 4))
 			p := newProbe()
 			p.install(t, buildID, func(n *Node) Code { return 0 }) // [04 §3.3] reset the phase to zero
 			before := sim.Draws()
@@ -435,7 +432,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code1 advances phase", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := newQ(secNode(buildID, 1, 7))
+			q, u := newQ(sim, secNode(buildID, 1, 7))
 			p := newProbe()
 			p.install(t, buildID, func(n *Node) Code { return 1 }) // [04 §3.3] advance the phase by one
 			before := sim.Draws()
@@ -449,7 +446,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code2 continues to next record", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := newQ(secNode(buildID, 1, 7), secNode(buildID, 2, 3))
+			q, u := newQ(sim, secNode(buildID, 1, 7), secNode(buildID, 2, 3))
 			p := newProbe()
 			p.install(t, buildID, func(n *Node) Code { return 2 }) // [04 §3.3] continue walking unchanged
 			before := sim.Draws()
@@ -469,7 +466,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code3 draws RNG(15), gate bit, deadline, then next record", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := newQ(secNode(buildID, 1, 0), notDue(buildID, 2))
+			q, u := newQ(sim, secNode(buildID, 1, 0), notDue(buildID, 2))
 			p := newProbe()
 			p.install(t, buildID, func(n *Node) Code { return 3 }) // [04 §3.3] wait 30..44; the only drawing arm
 			want := expectedDraw(sim, 15)
@@ -501,7 +498,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code4 continues to next record", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := newQ(secNode(buildID, 1, 7), secNode(buildID, 2, 3))
+			q, u := newQ(sim, secNode(buildID, 1, 7), secNode(buildID, 2, 3))
 			p := newProbe()
 			p.install(t, buildID, func(n *Node) Code { return 4 }) // [04 §3.3] continue walking unchanged
 			before := sim.Draws()
@@ -515,7 +512,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code5 unlinks and frees, continues", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := newQ(secNode(buildID, 1, 0), secNode(buildID, 2, 0))
+			q, u := newQ(sim, secNode(buildID, 1, 0), secNode(buildID, 2, 0))
 			p := newProbe()
 			p.install(t, buildID, func(n *Node) Code {
 				if n.Param1 == 1 {
@@ -538,7 +535,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code6 removes the single record and returns", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := newQ(secNode(buildID, 1, 0), secNode(buildID, 2, 0))
+			q, u := newQ(sim, secNode(buildID, 1, 0), secNode(buildID, 2, 0))
 			p := newProbe()
 			p.install(t, buildID, func(n *Node) Code { return 6 }) // [04 §3.3] C8 remove the single record and return, no tail yield
 			a := q.secondary[0]
@@ -559,7 +556,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code7 removes the single record and returns without cancel-all", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := newQ(secNode(buildID, 1, 0), secNode(buildID, 2, 0))
+			q, u := newQ(sim, secNode(buildID, 1, 0), secNode(buildID, 2, 0))
 			p := newProbe()
 			p.install(t, buildID, func(n *Node) Code { return 7 }) // [04 §3.3] C8 remove the single record and return, no cancel-all
 			a := q.secondary[0]
@@ -580,7 +577,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code8 unlinks and frees, continues", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := newQ(secNode(buildID, 1, 0), secNode(buildID, 2, 0))
+			q, u := newQ(sim, secNode(buildID, 1, 0), secNode(buildID, 2, 0))
 			p := newProbe()
 			p.install(t, buildID, func(n *Node) Code {
 				if n.Param1 == 1 {
@@ -603,7 +600,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code9 last record is a plain removal with no re-arm and no draw", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := newQ(secNode(buildID, 1, 5))
+			q, u := newQ(sim, secNode(buildID, 1, 5))
 			p := newProbe()
 			p.install(t, buildID, func(n *Node) Code { return 9 }) // [04 §3.3] C8 plain unlink+free regardless of last position
 			a := q.secondary[0]
@@ -624,7 +621,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code9 non-last unlinks and frees, continues", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := newQ(secNode(buildID, 1, 0), secNode(buildID, 2, 0))
+			q, u := newQ(sim, secNode(buildID, 1, 0), secNode(buildID, 2, 0))
 			p := newProbe()
 			p.install(t, buildID, func(n *Node) Code {
 				if n.Param1 == 1 {
@@ -651,7 +648,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 		})
 		t.Run("code above 9 expires the single record as a plain removal, continues", func(t *testing.T) {
 			sim := injectTestSim(t)
-			q, u := newQ(secNode(buildID, 1, 0), secNode(buildID, 2, 0))
+			q, u := newQ(sim, secNode(buildID, 1, 0), secNode(buildID, 2, 0))
 			p := newProbe()
 			p.install(t, buildID, func(n *Node) Code {
 				if n.Param1 == 1 {

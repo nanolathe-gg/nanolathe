@@ -25,6 +25,10 @@ func bindAIQueue(mgr *ai.Manager, s *Session) {
 		if builder == nil || !builder.Alive {
 			return fmt.Errorf("ai build: builder handle %d not alive", req.Builder)
 		}
+		// AI may issue its first build before this unit has ever needed a
+		// queue. Bind the lazy queue through the session-owned context before
+		// construction performs admission [04 §3.3][05][06 §11.1].
+		s.bindOrderQueue(builder)
 		switch req.Kind {
 		case ai.BuildKindMobileSite:
 			return construction.QueueMobileBuild(builder, req.UnitKey, req.X, req.Z, req.Count, s.Catalog)

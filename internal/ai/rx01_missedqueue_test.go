@@ -5,15 +5,10 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
-
-// RX-01: an unbound QueueBuildTyped must be observable, never silent
-// [F-P0-004]. Both the mobile-site placement path and the factory-queue path
-// count their dropped requests in MissedQueueCallbacks.
 
 func rx01Terrain() *world.Terrain {
 	attrs := make([]formats.TNTAttribute, 16*16)
@@ -23,94 +18,42 @@ func rx01Terrain() *world.Terrain {
 	return &world.Terrain{CellW: 16, CellH: 16, Plot: world.ExpandPlot(attrs, 16, 16), Version: world.VersionCanonical}
 }
 
-func rx01Econ() *economy.Service {
-	var econ economy.Service
-	econ.Players[0].Exists = true
-	econ.Players[0].ControllerState = 2
-	econ.Players[0].StatusHalfwordAt144 = 1
-	econ.Players[0].Stock[economy.Energy] = 800
-	econ.Players[0].Stock[economy.Metal] = 400
-	econ.Players[0].Capacity[economy.Energy] = 1000
-	econ.Players[0].Capacity[economy.Metal] = 500
-	econ.Players[0].AIProduction[economy.Energy] = 300
-	econ.Players[0].AIProduction[economy.Metal] = 10
-	return &econ
-}
-
-func TestRX01_MissedCallbacks_MobileSitePath(t *testing.T) {
-	cat := &content.Catalog{
-		Units: map[string]*content.UnitDef{
-			content.CanonicalKey("armcom"):   {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armcom")}, UnitName: "armcom", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", Builder: true, CanMove: true, MaxDamage: 100},
-			content.CanonicalKey("armsolar"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armsolar")}, UnitName: "armsolar", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100},
-		},
-		BuildMenus: map[string]*content.BuildMenuPage{
-			content.CanonicalKey("armcom"): {Builder: "armcom", Buttons: []string{"armsolar"}},
-		},
-	}
-	prof := &Profile{Weight: map[string]int32{content.CanonicalKey("armsolar"): 100}, Limit: map[string]int32{}}
-	rng.SeedGlobal(7, 0)
+func TestUnboundMobileSitePathReportsMissingQueue(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{
+		content.CanonicalKey("armcom"):   {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armcom")}, UnitName: "armcom", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", Builder: true, CanMove: true, MaxDamage: 100},
+		content.CanonicalKey("armsolar"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armsolar")}, UnitName: "armsolar", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100},
+	}}
 	w := units.New(16, cat)
-	h, _ := w.Create(cat.Units[content.CanonicalKey("armcom")], 0, world.CellToWorld(2), 0, world.CellToWorld(2))
+	h, err := w.Create(cat.Units[content.CanonicalKey("armcom")], 0, world.CellToWorld(2), 0, world.CellToWorld(2))
+	if err != nil {
+		t.Fatal(err)
+	}
 	b := w.Unit(h)
 	b.Remaining = 0
-	mgr := &Manager{
-		Player: 0, Profile: prof, Catalog: cat,
-		Strategic:    Strategic{CenterX: world.CellToWorld(8), CenterZ: world.CellToWorld(8), Counts: map[string]int32{}, ClassVectors: map[string]ClassVector{content.CanonicalKey("armsolar"): {C0: 40}}},
-		OriginX:      world.CellToWorld(2),
-		OriginZ:      world.CellToWorld(2),
-		SurfaceMetal: 0,
-		Factory:      b,
-		Terrain:      rx01Terrain(),
-	}
-	seedAIGroup(mgr, b, 4)
-	mgr.Strategic.Catalog = cat
-	econ := rx01Econ()
-	for k := TaskKind(0); k < TaskKindCount; k++ {
-		mgr.Deadlines[k] = 0
-	}
-	for tick := uint32(0); tick < 100; tick++ {
-		mgr.Tick(tick, w, econ)
-	}
-	if mgr.MissedQueueCallbacks() == 0 {
-		t.Fatalf("mobile-site request dropped without binder was not counted [F-P0-004]")
+	sim := rng.NewSimulation(7)
+	mgr := &Manager{Player: 0, Catalog: cat, Factory: b, Terrain: rx01Terrain(), RNG: &sim}
+	res := PlaceWithResult(mgr, "armsolar", mgr.Terrain)
+	if res.Valid || res.Reason != ReasonMissingQueue {
+		t.Fatalf("unbound mobile placement = valid=%v reason=%v, want missing typed queue", res.Valid, res.Reason)
 	}
 }
 
-func TestRX01_MissedCallbacks_FactoryQueuePath(t *testing.T) {
-	cat := &content.Catalog{
-		Units: map[string]*content.UnitDef{
-			content.CanonicalKey("armfactory"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armfactory")}, UnitName: "armfactory", FootprintX: 4, FootprintZ: 4, YardMap: "oooo oooo oooo oooo", Builder: true, CanMove: false, MaxDamage: 100},
-			content.CanonicalKey("armflea"):    {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflea")}, UnitName: "armflea", FootprintX: 1, FootprintZ: 1, CanMove: true, MaxVelocity: 30, MaxDamage: 50},
-		},
-		BuildMenus: map[string]*content.BuildMenuPage{
-			content.CanonicalKey("armfactory"): {Builder: "armfactory", Buttons: []string{"armflea"}},
-		},
-	}
-	prof := &Profile{Weight: map[string]int32{content.CanonicalKey("armflea"): 100}, Limit: map[string]int32{}}
-	rng.SeedGlobal(9, 0)
+func TestUnboundFactoryQueuePathReportsMissingQueue(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{
+		content.CanonicalKey("armfactory"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armfactory")}, UnitName: "armfactory", FootprintX: 4, FootprintZ: 4, YardMap: "oooo oooo oooo oooo", Builder: true, CanMove: false, MaxDamage: 100},
+		content.CanonicalKey("armflea"):    {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflea")}, UnitName: "armflea", FootprintX: 1, FootprintZ: 1, BMCode: true, CanMove: true, MaxVelocity: 30, MaxDamage: 50},
+	}}
 	w := units.New(16, cat)
-	h, _ := w.Create(cat.Units[content.CanonicalKey("armfactory")], 0, world.CellToWorld(2), 0, world.CellToWorld(2))
+	h, err := w.Create(cat.Units[content.CanonicalKey("armfactory")], 0, world.CellToWorld(2), 0, world.CellToWorld(2))
+	if err != nil {
+		t.Fatal(err)
+	}
 	f := w.Unit(h)
 	f.Remaining = 0
-	mgr := &Manager{
-		Player: 0, Profile: prof, Catalog: cat,
-		Strategic:    Strategic{CenterX: world.CellToWorld(8), CenterZ: world.CellToWorld(8), Counts: map[string]int32{}, ClassVectors: map[string]ClassVector{content.CanonicalKey("armflea"): {C0: 40}}},
-		OriginX:      world.CellToWorld(2),
-		OriginZ:      world.CellToWorld(2),
-		SurfaceMetal: 0,
-		Factory:      f,
-		Terrain:      rx01Terrain(),
-	}
-	seedAIGroup(mgr, f, 4)
-	mgr.Strategic.Catalog = cat
-	econ := rx01Econ()
-	for k := TaskKind(0); k < TaskKindCount; k++ {
-		mgr.Deadlines[k] = 0
-	}
-	for tick := uint32(0); tick < 100; tick++ {
-		mgr.Tick(tick, w, econ)
-	}
-	if mgr.MissedQueueCallbacks() == 0 {
-		t.Fatalf("factory-queue request dropped without binder was not counted [F-P0-004]")
+	sim := rng.NewSimulation(9)
+	mgr := &Manager{Player: 0, Catalog: cat, Factory: f, Terrain: rx01Terrain(), RNG: &sim}
+	res := PlaceWithResult(mgr, "armflea", mgr.Terrain)
+	if res.Valid || res.Reason != ReasonMissingQueue {
+		t.Fatalf("unbound factory placement = valid=%v reason=%v, want missing typed queue", res.Valid, res.Reason)
 	}
 }

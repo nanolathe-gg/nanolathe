@@ -164,6 +164,9 @@ func TestHumanBuildMetadataIsStampedAtInputBoundary(t *testing.T) {
 	if qm == nil || qm.LenPrimary() == 0 {
 		t.Fatalf("no build node for %d", hb)
 	}
+	if s.Build == nil || qm.Binding() != s.Build.OrderBinding {
+		t.Fatal("queued mobile build did not retain the session queue binding")
+	}
 	nm := qm.Head()
 	if nm.Owner != hb || nm.CreationTick != 42 || nm.GoalY != 7<<16 || nm.Flags&orders.FlagPurgeSurvivor == 0 {
 		t.Fatalf("mobile build metadata for %d: owner=%d tick=%d goalY=%d flags=%x", hb, nm.Owner, nm.CreationTick, nm.GoalY, nm.Flags)
@@ -178,6 +181,21 @@ func TestHumanBuildMetadataIsStampedAtInputBoundary(t *testing.T) {
 	}
 	if nf.Flags&orders.FlagPurgeSurvivor != 0 {
 		t.Fatalf("factory counted node should be no-purge even when Queued true, got flags %x [R-P0-11]", nf.Flags)
+	}
+}
+
+func TestHumanCancelWithoutQueueBindsLazyQueue(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	def := &content.UnitDef{UnitName: "builder", Builder: true, CanMove: true, MaxDamage: 10}
+	def.CanonicalKey = "builder"
+	cat.Units[def.CanonicalKey] = def
+	w := units.New(4, cat)
+	h, _ := w.Create(def, 0, 0, 0, 0)
+	s := &Session{Units: w, Catalog: cat, LocalOwner: 0}
+	s.applyHumanCommand(HumanCommand{Kind: HumanCancelProduction, CancelProduction: HumanCancelProductionCommand{Unit: h}}, 1)
+	q := orders.QueueForUnit(w.Unit(h))
+	if s.Build == nil || q.Binding() == nil || q.Binding() != s.Build.OrderBinding {
+		t.Fatal("cancel-without-queue created an unbound queue")
 	}
 }
 
@@ -314,5 +332,36 @@ func TestHumanBuildPageRejectsMixedAndMultiBuilderSelection(t *testing.T) {
 	frame = s.Snapshot.Current()
 	if frame == nil || frame.CommandPage.Builder != 0 {
 		t.Fatalf("multi-builder selection published builder page: %+v", frame.CommandPage)
+	}
+}
+
+// TestHumanGroupDoesNotWriteAIUnits locks the ownership boundary between the
+// local input path and AI tactical groups. A skirmish's LocalOwner is selected
+// from a human lobby row; the command path then filters that owner before
+// copying HUD group state back to live units [07 §9][08 "Skirmish configuration"].
+func TestHumanGroupDoesNotWriteAIUnits(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	def := &content.UnitDef{UnitName: "scout", MaxDamage: 10}
+	def.CanonicalKey = "scout"
+	cat.Units[def.CanonicalKey] = def
+	w := units.New(4, cat)
+	human, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aiUnit, err := w.Create(def, 1, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Unit(human).Flags |= 0x10
+	w.Unit(aiUnit).Flags |= 0x10
+	w.Unit(aiUnit).Group = 4
+	s := &Session{Units: w, Catalog: cat, LocalOwner: 0}
+	s.applyHumanCommand(HumanCommand{Kind: HumanGroupAssign, Group: HumanGroupCommand{Group: 2}}, 1)
+	if got := w.Unit(human).Group; got != 2 {
+		t.Fatalf("human group=%d, want 2", got)
+	}
+	if got := w.Unit(aiUnit).Group; got != 4 {
+		t.Fatalf("AI group=%d, want unchanged 4", got)
 	}
 }

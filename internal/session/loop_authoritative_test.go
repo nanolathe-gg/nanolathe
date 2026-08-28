@@ -55,8 +55,7 @@ func newLoopTestSession(t *testing.T, nUnits int) *Session {
 		p.EndGameCountdown = -1
 	}
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(42)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	if err := createAndBindServicesForTest(t, s); err != nil {
 		t.Fatalf("createAndBindServices: %v", err)
 	}
@@ -116,8 +115,7 @@ func TestLoop_SlotCreationSameTickVisibility(t *testing.T) {
 		p.EndGameCountdown = -1
 	}
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(1)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
 	s.State = StateBattle
@@ -254,8 +252,7 @@ func TestLoop_DeathFinalizeBeforeLaterSlot(t *testing.T) {
 		p.EndGameCountdown = -1
 	}
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(1)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	_ = createAndBindServicesForTest(t, s)
 	// Create 3 units in order: hA (player0), hB (player0), hC (player1) — ascending slots player0 slice first, then player1
 	def := cat.Units["armcom"]
@@ -346,8 +343,7 @@ func TestLoop_MoveArrival(t *testing.T) {
 		p.EndGameCountdown = -1
 	}
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(1)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
 	s.State = StateBattle
@@ -432,8 +428,7 @@ func TestLoop_BuildProgress(t *testing.T) {
 		p.Capacity[economy.Energy] = 1000
 	}
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(1)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
 	s.State = StateBattle
@@ -521,8 +516,7 @@ func TestLoop_AimReturnControlsProjectile(t *testing.T) {
 		p.EndGameCountdown = -1
 	}
 	s.Econ.SeedDeadlines(0)
-	var crt rng.CRT = rng.NewCRT(1)
-	s.InitWindForSession(&crt, 0)
+	s.InitBattleWindForSession()
 	_ = createAndBindServicesForTest(t, s)
 	s.RegisterAll()
 	s.State = StateBattle

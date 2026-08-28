@@ -9,7 +9,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
-	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -21,6 +20,18 @@ import (
 func (s *Session) stepAuthoritativePhases(tick uint32) {
 	if s == nil {
 		return
+	}
+	// QueueForUnit lazily creates a queue for units allocated by mission,
+	// factory, transport, or reconstruction paths. Reapply the complete
+	// session binding at the tick boundary so those queues cannot enter an
+	// authoritative phase with package-global service inputs [04 §3.3][06
+	// §11.1][I4].
+	if s.Build != nil && s.Build.OrderBinding != nil && s.Units != nil {
+		for _, u := range s.Units.Iter() {
+			if u != nil {
+				orders.BindQueueBinding(u, s.Build.OrderBinding)
+			}
+		}
 	}
 	// The phase order below is the authoritative retail sequence [01 §4.4].
 	// Keep these calls in this order: their pool visibility, side effects, and RNG
@@ -179,8 +190,6 @@ func (s *Session) stepUnitPhase(tick uint32) {
 	// Each active unit visited exactly once under researched rule; new/dead units follow same-tick visibility [01 §4.4] R-P0-04
 	if s.Units != nil {
 		ordersPump := &orders.Pump{World: s.Units}
-		// DET-01: inject session RNG for order jitter draws [04 §3.3][I4].
-		orders.SetSimulationRNG(s.SimRNG())
 		s.Units.VisitActiveSlots(func(v units.SlotVisit) {
 			h := v.Handle
 			u := v.Unit
@@ -206,6 +215,11 @@ func (s *Session) stepUnitPhase(tick uint32) {
 
 			// order resolve/pump per unit (PumpUnit) [04 §3.3]
 			if ordersPump != nil {
+				// PumpUnit lazily materializes a queue for units that have not
+				// received an order yet. Bind that queue before the first dispatch
+				// so resolver hooks, stockpile admission, and jitter all use this
+				// session's concrete context [04 §3.3][04 §3.5][06 §11.1].
+				s.bindOrderQueue(u)
 				ordersPump.PumpUnit(h, tick)
 			}
 			// Pumping can advance the primary head in this same visit.  Reconcile
@@ -229,8 +243,8 @@ func (s *Session) stepUnitPhase(tick uint32) {
 					} else if activeMove {
 						if active.Target != 0 {
 							var target *units.Unit
-							if qActive.Lookup != nil {
-								target = qActive.Lookup(active.Target)
+							if binding := qActive.Binding(); binding != nil && binding.Lookup != nil {
+								target = binding.Lookup(active.Target)
 							}
 							if target == nil && s.Units != nil {
 								target = s.Units.Unit(active.Target)
@@ -349,53 +363,9 @@ func (s *Session) stepProjectilePhase(tick uint32) {
 	// 3 projectile integration and collision + pool compactor [01 §4.4][06 §5][06 §11.2]
 	// Interceptor guidance pre-step before motion [06 §11.2]
 	s.interceptorGuidanceTick()
-	// Snapshot hostile health before impact for AI milestone [P0-07] HostileDamageObserved
-	// Deterministic slot-ordered snapshot [INVARIANTS I1][RS-P0-014]: use slice in slot-ascending order, not map[Handle]int32 with random range iteration.
-	var beforeHealth []struct {
-		Handle pool.Handle
-		Health int32
-	}
-	if s.Combat != nil && s.Units != nil {
-		beforeHealth = make([]struct {
-			Handle pool.Handle
-			Health int32
-		}, 0, s.Units.Used())
-		// Collect in deterministic slot-ascending order via IterSliced (player 0..9 then slot asc) [INVARIANTS I1][01 §6.1].
-		// This replaces the previous map[Handle]int32 which used random map iteration to notify AI [RS-P0-014].
-		for _, u := range s.Units.IterSliced() {
-			if u == nil {
-				continue
-			}
-			beforeHealth = append(beforeHealth, struct {
-				Handle pool.Handle
-				Health int32
-			}{Handle: u.Handle, Health: u.Health})
-		}
-	}
 	if s.Combat != nil {
 		// [06 §6.4] plumb world wind vectors into ballistic/dropped drift
 		s.Combat.TickProjectiles(tick, s.Units, s.World, s.Wind, s.Features, s.Vis, s.Econ, s.Catalog, s.SimRNG(), s.CrtRNG())
-		// Notify AI of hostile damage via normal combat [P0-07] HostileDamageObserved in deterministic slot order [RS-P0-014][INVARIANTS I1].
-		if len(beforeHealth) > 0 {
-			for _, snap := range beforeHealth {
-				h := snap.Handle
-				before := snap.Health
-				u := s.Units.Unit(h)
-				if u == nil {
-					continue
-				}
-				if u.Health >= before {
-					continue
-				}
-				// Health decreased: damage occurred
-				for _, mgr := range s.AI {
-					if mgr == nil {
-						continue
-					}
-					mgr.ObserveHostileDamage(tick, h, s.Units)
-				}
-			}
-		}
 	}
 	s.interceptorDetonationTick()
 }
@@ -449,15 +419,6 @@ func (s *Session) stepFeatureLifecyclePhase(tick uint32) {
 	if s.Features != nil {
 		s.Features.TickLifecycle(tick)
 	}
-}
-
-// stepWindAndMeteorPhase is retained for legacy tests that call it directly.
-// It delegates to the registry's phase 8 (wind) and phase 9 (meteor shower)
-// [01 §4.4][R-CORE-01 §4.4.1] DET-03; it is a wrapper, not a second
-// implementation.
-func (s *Session) stepWindAndMeteorPhase(tick uint32) {
-	s.phaseWind(tick)
-	s.phaseMeteorShower(tick)
 }
 
 // stepSharingPhase is the transport tail after phase 12 [01 §4.4].

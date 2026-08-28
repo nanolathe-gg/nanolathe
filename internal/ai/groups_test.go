@@ -10,7 +10,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-func TestUpdateGroupsDoesNotDiscoverUnits(t *testing.T) {
+func TestGroupsRequireAnEstablishedWriter(t *testing.T) {
 	def := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflash")},
 		UnitName:         "armflash",
@@ -32,19 +32,12 @@ func TestUpdateGroupsDoesNotDiscoverUnits(t *testing.T) {
 	}
 
 	m := &Manager{Player: 0}
-	m.updateGroups(w)
 	if got := m.groupMemberCount(); got != 0 {
-		t.Fatalf("ordinary unit creation populated tactical vectors through cleanup: %d members", got)
-	}
-	// Cleanup is separate from the recovered 30-entry classifier. A second
-	// cleanup must not synthesize a member or apply a combat-capability fallback.
-	m.updateGroups(w)
-	if got := m.groupMemberCount(); got != 0 {
-		t.Fatalf("repeated refresh populated tactical vectors: %d members", got)
+		t.Fatalf("ordinary unit creation populated tactical vectors: %d members", got)
 	}
 }
 
-func TestClassifyGroupsMatches00408830Destinations(t *testing.T) {
+func TestClassifierDestinations(t *testing.T) {
 	defs := []*content.UnitDef{
 		{UnitName: "maker", MakesMetal: 1},
 		{UnitName: "builder", Builder: true},
@@ -82,7 +75,7 @@ func TestClassifyGroupsMatches00408830Destinations(t *testing.T) {
 
 	m := &Manager{Player: 0}
 	m.classifyGroups(w)
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// classifier also normalizes the three observed status masks before the
 	// group-zero gate. A non-capturer takes the B arm; the capture arm is
 	// checked below on a separately grouped unit.
 	if got := w.Unit(resource).Flags; got&classifierOutputA != 0 || got&classifierOutputB == 0 || got&classifierOutputMask != 0 || got&classifierOutputSet == 0 {
@@ -157,57 +150,23 @@ func seedAIGroup(m *Manager, u *units.Unit, group uint8) {
 	m.writeGroup(u, int8(group))
 }
 
-func TestUpdateGroupsCleansExistingVectorsInStableOrder(t *testing.T) {
-	def := &content.UnitDef{
-		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflash")},
-		UnitName:         "armflash",
-		CanMove:          true,
-		CanAttack:        true,
-		MaxVelocity:      100,
-		MaxDamage:        100,
+// mergeWaveGroupRecordsFixture exercises the production transfer path. Tests
+// seed the manager vectors explicitly, then invoke the same direct writer used
+// by the wave task so Unit.Group and vector order are checked together.
+func mergeWaveGroupRecordsFixture(current, peer []pool.Handle, w *units.World, threshold int32) ([]pool.Handle, []pool.Handle) {
+	m := &Manager{GroupWaveA: append([]pool.Handle(nil), current...), GroupRegroupA: append([]pool.Handle(nil), peer...)}
+	for _, h := range current {
+		if u := w.Unit(h); u != nil {
+			u.Group = 2
+		}
 	}
-	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
-	w := units.New(16, cat)
-	valid, err := w.Create(def, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
-	if err != nil {
-		t.Fatal(err)
+	for _, h := range peer {
+		if u := w.Unit(h); u != nil {
+			u.Group = 3
+		}
 	}
-	dead, err := w.Create(def, 0, world.CellToWorld(2), 0, world.CellToWorld(1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	foreign, err := w.Create(def, 1, world.CellToWorld(3), 0, world.CellToWorld(1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	incomplete, err := w.Create(def, 0, world.CellToWorld(4), 0, world.CellToWorld(1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	w.Unit(valid).Remaining = 0
-	w.Unit(dead).Alive = false
-	w.Unit(incomplete).Remaining = 0.5
-
-	m := &Manager{
-		Player: 0,
-		GroupWaveA: []pool.Handle{
-			valid,
-			dead,
-			foreign,
-			incomplete,
-			pool.Handle(0xffff),
-		},
-		// Seed another vector to prove every manager vector uses the same
-		// ownership/completion cleanup rather than only wave A.
-		GroupExplore: []pool.Handle{valid, foreign},
-	}
-	m.updateGroups(w)
-	if len(m.GroupWaveA) != 1 || m.GroupWaveA[0] != valid {
-		t.Fatalf("wave cleanup = %v, want stable [valid=%d]", m.GroupWaveA, valid)
-	}
-	if len(m.GroupExplore) != 1 || m.GroupExplore[0] != valid {
-		t.Fatalf("explore cleanup = %v, want stable [valid=%d]", m.GroupExplore, valid)
-	}
+	m.mergeWaveGroupRecords(2, 3, w, threshold)
+	return m.GroupWaveA, m.GroupRegroupA
 }
 
 func TestMergeWaveGroupsTransfersOnlyEstablishedMembers(t *testing.T) {
@@ -236,7 +195,7 @@ func TestMergeWaveGroupsTransfersOnlyEstablishedMembers(t *testing.T) {
 	anchor := create(0, 0)
 	anchor2 := create(0, 0)
 	outlier := create(500, 0)
-	current, peer := mergeWaveGroups([]pool.Handle{anchor, anchor2, outlier}, nil, w, waveAThreshold)
+	current, peer := mergeWaveGroupRecordsFixture([]pool.Handle{anchor, anchor2, outlier}, nil, w, waveAThreshold)
 	if len(current) != 2 || current[0] != anchor || current[1] != anchor2 {
 		t.Fatalf("outlier merge current=%v, want [%d %d]", current, anchor, anchor2)
 	}
@@ -248,7 +207,7 @@ func TestMergeWaveGroupsTransfersOnlyEstablishedMembers(t *testing.T) {
 	// axis has distance² == threshold and must not move. A closer member does.
 	close := create(10, 0)
 	boundary := create(100, 100)
-	current, peer = mergeWaveGroups([]pool.Handle{anchor}, []pool.Handle{boundary, close}, w, waveAThreshold)
+	current, peer = mergeWaveGroupRecordsFixture([]pool.Handle{anchor}, []pool.Handle{boundary, close}, w, waveAThreshold)
 	if len(current) != 2 || current[1] != close {
 		t.Fatalf("peer collection current=%v, want [%d %d]", current, anchor, close)
 	}
@@ -274,7 +233,7 @@ func TestGroupCentroidUsesStoredPixelDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// The recovered centroid helper reads signed high words, then performs
 	// integer division. Fractional fixed-point state must not leak into the
 	// regroup target [R-P0-04; 03 §2.1; I3].
 	w.Unit(first).X = numeric.Fixed(-98304) // -1.5 pixels → high word -2
@@ -328,7 +287,7 @@ func TestMergeWaveGroupsBootstrapsFromEmptyWave(t *testing.T) {
 
 	// An empty wave and an empty peer stay empty: the merge discovers nothing
 	// from the world.
-	current, peer := mergeWaveGroups(nil, nil, w, waveAThreshold)
+	current, peer := mergeWaveGroupRecordsFixture(nil, nil, w, waveAThreshold)
 	if len(current) != 0 || len(peer) != 0 {
 		t.Fatalf("merge with two empty vectors produced current=%v peer=%v; it must not discover units", current, peer)
 	}
@@ -340,7 +299,7 @@ func TestMergeWaveGroupsBootstrapsFromEmptyWave(t *testing.T) {
 	// order is the observable proof of both the transfer order and the
 	// swap-delete: a front shift would have produced [a b c d] instead.
 	a, b, c, d := create(0, 0), create(0, 0), create(0, 0), create(0, 0)
-	current, peer = mergeWaveGroups(nil, []pool.Handle{a, b, c, d}, w, waveAThreshold)
+	current, peer = mergeWaveGroupRecordsFixture(nil, []pool.Handle{a, b, c, d}, w, waveAThreshold)
 	if len(peer) != 0 {
 		t.Fatalf("peer after colocated merge = %v, want empty", peer)
 	}
@@ -353,7 +312,7 @@ func TestMergeWaveGroupsBootstrapsFromEmptyWave(t *testing.T) {
 	// With a distant peer the absorb step collects nothing, so the bootstrap
 	// alone is visible: exactly one member crosses per call.
 	far1, far2 := create(4000, 0), create(9000, 0)
-	current, peer = mergeWaveGroups(nil, []pool.Handle{far1, far2}, w, waveAThreshold)
+	current, peer = mergeWaveGroupRecordsFixture(nil, []pool.Handle{far1, far2}, w, waveAThreshold)
 	if len(current) != 1 || current[0] != far1 {
 		t.Fatalf("distant bootstrap current=%v, want exactly [%d]", current, far1)
 	}
@@ -382,7 +341,7 @@ func TestMergeWaveGroupsKeepsLastMember(t *testing.T) {
 	}
 	w.Unit(h).Remaining = 0
 
-	current, peer := mergeWaveGroups([]pool.Handle{h}, nil, w, waveAThreshold)
+	current, peer := mergeWaveGroupRecordsFixture([]pool.Handle{h}, nil, w, waveAThreshold)
 	if len(current) != 1 || current[0] != h {
 		t.Fatalf("single-member wave = %v, want it retained [%d]", current, h)
 	}
@@ -414,6 +373,8 @@ func TestDoWavePairsWithRegroupNotTheOtherWave(t *testing.T) {
 		return h
 	}
 	ra, rb := mk(), mk()
+	w.Unit(ra).Group = 3
+	w.Unit(rb).Group = 7
 
 	m := &Manager{Player: 0}
 	m.GroupRegroupA = []pool.Handle{ra}

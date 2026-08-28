@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"sort"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -54,14 +53,16 @@ func TestClassRecomputeCadence(t *testing.T) {
 	types := []string{"armfav", "corfav", "armship"}
 	s := &Strategic{}
 	s.Init(types)
+	expected := &Strategic{}
+	expected.Init(types)
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// The authored category flag is unresolved and must not be guessed from
 	// BMCode. Only authored build-list membership contributes in this fixture
 	// [P0-01 §2.2] [R-P0-05].
 	for _, ck := range types {
 		canon := content.CanonicalKey(ck)
 		if v := s.InitVectors[canon]; v != 0 {
-			t.Fatalf("init single %s = %d want 0 with unresolved [layout omitted] and no build list [P0-01]", ck, v)
+			t.Fatalf("init single %s = %d want 0 with unresolved category flag and no build list [P0-01]", ck, v)
 		}
 		// Class vectors after init should be within [-100,100] and deterministic, not placeholder constant.
 		cv := s.ClassVectors[canon]
@@ -71,9 +72,6 @@ func TestClassRecomputeCadence(t *testing.T) {
 		if sv := s.SingleVectors[canon]; sv < -100 || sv > 100 {
 			t.Fatalf("init single91 %s = %d out of clamp", ck, sv)
 		}
-	}
-	if s.LastClassRecomputeTick != 0 {
-		t.Fatalf("LastClassRecomputeTick after init %d want 0 (only gated recompute updates it)", s.LastClassRecomputeTick)
 	}
 	r := rng.NewSimulation(12345)
 	var tick uint32 = 30
@@ -85,15 +83,14 @@ func TestClassRecomputeCadence(t *testing.T) {
 			t.Fatalf("peek RNG(30) out of range %d", peekVal)
 		}
 		beforeDraws := r.Draws()
-		beforeTick := s.LastClassRecomputeTick
-		// Snapshot vectors before refresh to detect change only when RNG==0
-		beforeCV := make(map[string]ClassVector)
-		for k, v := range s.ClassVectors {
-			beforeCV[k] = v
-		}
-		beforeSingle := make(map[string]int8)
-		for k, v := range s.SingleVectors {
-			beforeSingle[k] = v
+		// Make the gated write observable without retaining a diagnostic tick in
+		// authoritative state. A nonzero gate preserves these sentinels; zero
+		// replaces them with the established recomputed vectors.
+		const sentinel int8 = 99
+		for _, ck := range types {
+			canon := content.CanonicalKey(ck)
+			s.ClassVectors[canon] = ClassVector{C0: sentinel, C1: sentinel, C2: sentinel}
+			s.SingleVectors[canon] = sentinel
 		}
 		if !s.MaybeRefresh(tick, &r, 0, nil) {
 			t.Fatalf("tick %d should be due", tick)
@@ -111,23 +108,17 @@ func TestClassRecomputeCadence(t *testing.T) {
 			}
 		}
 		if peekVal == 0 {
-			if s.LastClassRecomputeTick != tick {
-				t.Fatalf("tick %d: RNG(30)==0 expected LastClassRecomputeTick %d, got %d", tick, tick, s.LastClassRecomputeTick)
-			}
-			// Vectors may have changed (if defs varied) but should still be within clamp; we don't assert change for nil defs
-		} else {
-			if s.LastClassRecomputeTick != beforeTick {
-				t.Fatalf("tick %d: RNG(30)==%d expected LastClassRecomputeTick unchanged %d, got %d", tick, peekVal, beforeTick, s.LastClassRecomputeTick)
-			}
-			// When RNG !=0, vectors must be unchanged (no recompute)
-			for k, v := range beforeCV {
-				if s.ClassVectors[k] != v {
-					t.Fatalf("tick %d: RNG!=0 vectors should not change, %s before %+v after %+v", tick, k, v, s.ClassVectors[k])
+			for _, ck := range types {
+				canon := content.CanonicalKey(ck)
+				if s.ClassVectors[canon] != expected.ClassVectors[canon] || s.SingleVectors[canon] != expected.SingleVectors[canon] {
+					t.Fatalf("tick %d: RNG(30)==0 did not publish recomputed vectors for %s", tick, ck)
 				}
 			}
-			for k, v := range beforeSingle {
-				if s.SingleVectors[k] != v {
-					t.Fatalf("tick %d: RNG!=0 single should not change", tick)
+		} else {
+			for _, ck := range types {
+				canon := content.CanonicalKey(ck)
+				if s.ClassVectors[canon] != (ClassVector{C0: sentinel, C1: sentinel, C2: sentinel}) || s.SingleVectors[canon] != sentinel {
+					t.Fatalf("tick %d: RNG(30)=%d changed vectors without the recompute gate", tick, peekVal)
 				}
 			}
 		}
@@ -137,22 +128,21 @@ func TestClassRecomputeCadence(t *testing.T) {
 	r2 := rng.NewSimulation(999)
 	s2.MaybeRefresh(30, &r2, 0, nil)
 	drawsAfterFirst := r2.Draws()
-	tsAfterFirst := s2.LastClassRecomputeTick
+	beforeVectors := make(map[string]ClassVector, len(s2.ClassVectors))
+	for k, v := range s2.ClassVectors {
+		beforeVectors[k] = v
+	}
 	if s2.MaybeRefresh(31, &r2, 0, nil) {
 		t.Fatalf("tick 31 not due should return false")
 	}
 	if r2.Draws() != drawsAfterFirst {
 		t.Fatalf("non-due tick should not consume RNG, draws %d want %d", r2.Draws(), drawsAfterFirst)
 	}
-	if s2.LastClassRecomputeTick != tsAfterFirst {
-		t.Fatalf("non-due tick timestamp should not change, got %d want %d", s2.LastClassRecomputeTick, tsAfterFirst)
+	for k, v := range beforeVectors {
+		if s2.ClassVectors[k] != v {
+			t.Fatalf("non-due tick changed vector %s", k)
+		}
 	}
-	keys := make([]string, 0, len(s2.ClassVectors))
-	for k := range s2.ClassVectors {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	_ = keys
 }
 
 func TestClassVectors_RetailVectors(t *testing.T) {
@@ -176,7 +166,7 @@ func TestClassVectors_RetailVectors(t *testing.T) {
 	s := &Strategic{Catalog: cat}
 	s.Init(types)
 	// Check InitVectors: only authored build-list membership is established;
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// the opaque category flag does not use BMCode as a proxy [R-P0-05].
 	if v := s.InitVectors[content.CanonicalKey("armlab")]; v != 20 {
 		t.Fatalf("armlab init %d want 20 (build list only) [P0-01]", v)
 	}

@@ -39,6 +39,11 @@ type UnitDef struct {
 	BadTargetCategoryWSEC string // wsec_badTargetCategory string 100 default none [02 "Unit record"]
 	BadTargetCategoryWSPE string // wspe_badTargetCategory string 100 default none [02 "Unit record"]
 	NoChaseCategory       string // noChaseCategory string 100 default none [02 "Unit record"]
+	AIWeight              string // ai_weight string 64, default empty; parsed by the AI profile grammar [02 "Unit record"][08 "Established AI-facing data and rooted planner"]
+	// ai_limit remains in Unknown because research found no semantic reader for
+	// this definition field. Embedded limit directives in ai_weight are instead
+	// registered by the AI profile application boundary [08 "Established
+	// AI-facing data and rooted planner"].
 	// Linked category masks. These are value sets indexed by candidate unit
 	// definition ID; downstream code need not re-tokenize authored strings
 	// [R-P0-03; 06 §3.1].
@@ -225,7 +230,7 @@ func (u *UnitDef) UnknownKeysSorted() []string {
 // knownUnitKeys is the set of lower-cased keys that have a typed reader [02 "Unit record"].
 // Anything not in this set is retained in Unknown (C14). Keys are foldName lowercased.
 var knownUnitKeys = map[string]struct{}{
-	"unitname": {}, "name": {}, "description": {}, "side": {}, "objectname": {}, "category": {}, "soundcategory": {}, "corpse": {}, "movementclass": {}, "weapon1": {}, "weapon2": {}, "weapon3": {}, "explodeas": {}, "selfdestructas": {}, "yardmap": {}, "defaultmissiontype": {}, "wpri_badtargetcategory": {}, "wsec_badtargetcategory": {}, "wspe_badtargetcategory": {}, "nochasecategory": {},
+	"unitname": {}, "name": {}, "description": {}, "side": {}, "objectname": {}, "category": {}, "soundcategory": {}, "corpse": {}, "movementclass": {}, "weapon1": {}, "weapon2": {}, "weapon3": {}, "explodeas": {}, "selfdestructas": {}, "yardmap": {}, "defaultmissiontype": {}, "wpri_badtargetcategory": {}, "wsec_badtargetcategory": {}, "wspe_badtargetcategory": {}, "nochasecategory": {}, "ai_weight": {},
 	"buildcostenergy": {}, "buildcostmetal": {}, "energymake": {}, "energyuse": {}, "metalmake": {}, "extractsmetal": {}, "windgenerator": {}, "tidalgenerator": {}, "energystorage": {}, "metalstorage": {}, "makesmetal": {}, "buildtime": {}, "workertime": {}, "healtime": {}, "cloakcost": {}, "cloakcostmoving": {}, "unitlimit": {}, "maxthisunit": {}, "limit": {},
 	"maxvelocity": {}, "brakerate": {}, "acceleration": {}, "bankscale": {}, "pitchscale": {}, "damagemodifier": {}, "moverate1": {}, "moverate2": {}, "turnrate": {}, "waterline": {}, "minwaterdepth": {}, "maxwaterdepth": {}, "maxslope": {}, "cruisealt": {}, "transportsize": {}, "transportcapacity": {}, "buildangle": {}, "builddistance": {}, "sortbias": {}, "maneuverleashlength": {}, "attackrunlength": {}, "kamikazedistance": {}, "footprintx": {}, "footprintz": {},
 	"maxdamage": {}, "sightdistance": {}, "radardistance": {}, "sonardistance": {}, "radardistancejam": {}, "sonardistancejam": {}, "mincloakdistance": {},
@@ -261,6 +266,7 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	wsec, _ := section.StringValue("wsec_badtargetcategory", "none")
 	wspe, _ := section.StringValue("wspe_badtargetcategory", "none")
 	noChase, _ := section.StringValue("nochasecategory", "none")
+	aiWeight, _ := section.StringValue("ai_weight", "")
 
 	// Economy — integer/floating accessors [02 "Unit record"].
 	buildCostEnergy := section.IntValue("buildcostenergy", 0)
@@ -459,6 +465,7 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 		BadTargetCategoryWSEC:        wsec,
 		BadTargetCategoryWSPE:        wspe,
 		NoChaseCategory:              noChase,
+		AIWeight:                     aiWeight,
 		BuildCostEnergy:              buildCostEnergy,
 		BuildCostMetal:               buildCostMetal,
 		EnergyMake:                   energyMake,
@@ -575,6 +582,7 @@ func writeUnitCanonical(u *UnitDef) []byte {
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|", u.MovementClass, u.Weapon1, u.Weapon2, u.Weapon3, u.ExplodeAs, u.SelfDestructAs, u.YardMap)
 	fmt.Fprintf(&b, "%d|%d|%d|", u.MinWaterDepth, u.MaxWaterDepth, u.MaxSlope)
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|", u.DefaultMissionType, u.BadTargetCategoryWPRI, u.BadTargetCategoryWSEC, u.BadTargetCategoryWSPE, u.NoChaseCategory)
+	fmt.Fprintf(&b, "%s|", u.AIWeight)
 	fmt.Fprintf(&b, "%d|%d|%.10f|%.10f|%.10f|%.10f|", u.BuildCostEnergy, u.BuildCostMetal, u.EnergyMake, u.EnergyUse, u.MetalMake, u.ExtractsMetal)
 	fmt.Fprintf(&b, "%.10f|%.10f|%.10f|%.10f|%d|%d|%d|%d|%d|%d|", u.WindGenerator, u.TidalGenerator, u.EnergyStorage, u.MetalStorage, u.MakesMetal, u.BuildTime, u.WorkerTime, u.HealTime, u.CloakCost, u.CloakCostMoving)
 	fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|", u.MaxVelocity, u.BrakeRate, u.Acceleration, u.BankScale, u.PitchScale, u.DamageModifier, u.MoveRate1, u.MoveRate2, u.TurnRate, u.Waterline)

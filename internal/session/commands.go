@@ -401,6 +401,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		}
 		for _, h := range handles {
 			if u := s.humanUnit(h); u != nil {
+				s.bindOrderQueue(u)
 				if q := orders.QueueForUnit(u); q != nil {
 					q.PurgeUnprotected()
 					q.DropLeadingAutoOps()
@@ -421,6 +422,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if id == 0 {
 			return
 		}
+		s.bindOrderQueue(u)
 		if q := orders.QueueForUnit(u); q != nil {
 			if !c.Activation.Queued {
 				q.PurgeUnprotected()
@@ -433,6 +435,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if u == nil || s.Catalog == nil {
 			return
 		}
+		s.bindOrderQueue(u)
 		if !c.MobileBuild.Queued {
 			if q := orders.QueueForUnit(u); q != nil {
 				q.PurgeUnprotected()
@@ -447,6 +450,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if u == nil || s.Catalog == nil {
 			return
 		}
+		s.bindOrderQueue(u)
 		count := c.FactoryBuild.Count
 		if count == 0 {
 			count = 1
@@ -467,6 +471,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if u == nil {
 			return
 		}
+		s.bindOrderQueue(u)
 		q := orders.QueueForUnit(u)
 		if q == nil || q.LenPrimary() == 0 {
 			return
@@ -500,6 +505,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if slot < 0 {
 			return
 		}
+		s.bindOrderQueue(u)
 		n := orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, c.Stockpile.Queued)
 		n.Param1, n.Param2 = uint32(slot), 1
 		if q := orders.QueueForUnit(u); q != nil {
@@ -525,6 +531,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			if u == nil {
 				continue
 			}
+			s.bindOrderQueue(u)
 			id := orders.Resolve(c.Order.Code, u, target, &c.Order.Position)
 			if id == 0 {
 				continue

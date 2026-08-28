@@ -7,107 +7,16 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
-
-// placementManager is the minimal interface Place actually needs. It mirrors the
-// fields of Manager so tests can use a fake without importing the full manager
-// lifecycle. Production code passes *Manager which satisfies this interface via
-// the methods below. This is the symmetrical minimal-interface approach noted in
-// the work unit brief: selection.go will define an analogous interface for
-// Select; placement defines its own here.
-type placementManager interface {
-	getStrategic() *Strategic
-	getOrigin() (numeric.Fixed, numeric.Fixed)
-	setOrigin(numeric.Fixed, numeric.Fixed)
-	getRNG() *rng.Simulation
-	getSurfaceMetal() int32
-	isExtractor(defKey string) bool
-	getFactory() *units.Unit
-	getQueueBuildTyped() func(BuildRequest) error
-	getLastTick() uint32
-	recordMilestone(stage string, tick uint32)
-	getTerrain() *world.Terrain
-}
-
-// Implement placementManager for *Manager.
-
-func (m *Manager) getStrategic() *Strategic                  { return &m.Strategic }
-func (m *Manager) getOrigin() (numeric.Fixed, numeric.Fixed) { return m.OriginX, m.OriginZ }
-func (m *Manager) setOrigin(x, z numeric.Fixed)              { m.OriginX, m.OriginZ = x, z }
-func (m *Manager) getRNG() *rng.Simulation {
-	// Per-session isolated RNG when set [RS-06][I4] DET-01; no global fallback.
-	if m != nil && m.RNG != nil {
-		return m.RNG
-	}
-	return nil
-}
-func (m *Manager) getSurfaceMetal() int32 {
-	if m == nil {
-		return 0
-	}
-	v := m.SurfaceMetal
-	if v < 0 {
-		return 0
-	}
-	if v > 255 {
-		return 255
-	}
-	return v
-}
-func (m *Manager) isExtractor(defKey string) bool {
-	if m == nil || m.Catalog == nil {
-		return false
-	}
-	ck := canonicalKey(defKey)
-	if ck == "" {
-		return false
-	}
-	def, ok := m.Catalog.Unit(ck)
-	if !ok || def == nil {
-		return false
-	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Exact float compare to 0.0 via !=0.0 [P0-03 §7.5] DIRECT.
-	return def.ExtractsMetal != 0
-}
-func (m *Manager) getFactory() *units.Unit {
-	if m == nil {
-		return nil
-	}
-	return m.Factory
-}
-
-func (m *Manager) getQueueBuildTyped() func(BuildRequest) error {
-	if m != nil && m.QueueBuildTyped != nil {
-		return m.QueueBuildTyped
-	}
-	return nil
-}
-
-func (m *Manager) getLastTick() uint32 {
-	if m == nil {
-		return 0
-	}
-	return m.lastTick
-}
-
-func (m *Manager) getTerrain() *world.Terrain {
-	if m == nil {
-		return nil
-	}
-	return m.Terrain
-}
 
 // HelperKind identifies which placement helper produced the result [P0-03].
 type HelperKind int
 
 const (
 	HelperNone HelperKind = iota
-	HelperA               // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	HelperB               // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	HelperA               // exhaustive patch helper [P0-03]
+	HelperB               // statistical scatter helper [P0-03]
 )
 
 // ReasonCode records why a placement attempt succeeded or failed [P0-03][RS-11].
@@ -118,13 +27,21 @@ const (
 	ReasonNone ReasonCode = iota
 	ReasonSuccess
 	ReasonNoPatchData        // helper A unavailable: no established metal patch vector [P0-03 §6][RS-11]
-	ReasonBlocked            // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	ReasonMetalScoreExceeded // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	ReasonBlocked            // yard/occupancy rejected by the canonical world validator [P0-03]
+	ReasonMetalScoreExceeded // score > SurfaceMetal*footX*footZ*2 [P0-03 §3.3]
 	ReasonOutOfBounds
 	ReasonTooManyTrials // 30 trials exhausted [P0-03 §3.3]
 	ReasonInvalidFootprint
 	ReasonNilManager
 	ReasonEmptyDef
+	ReasonMissingCatalog
+	ReasonMissingTerrain
+	ReasonMissingDefinition
+	ReasonMissingRNG
+	ReasonMissingBuilder
+	ReasonMissingQueue
+	ReasonQueueFailed
+	ReasonUnknownGeometry
 )
 
 // PlacementResult is the exact, typed placement result [RS-11][P0-03].
@@ -150,18 +67,31 @@ type PlacementResult struct {
 	Proof        error // nil when Valid, otherwise validation error
 }
 
+func placementFailure(helper HelperKind, reason ReasonCode, detail string) PlacementResult {
+	return PlacementResult{Valid: false, Helper: helper, Reason: reason, Proof: fmt.Errorf("ai placement: %s", detail)}
+}
+
+// placementWorldCoordinate converts a validated footprint anchor to the
+// mobile unit's model coordinate. Validation uses the north-west anchor, while
+// the order carries the footprint midpoint [04 §6.2–§6.4].
+func placementWorldCoordinate(outputCell, footprint int32) numeric.Fixed {
+	return numeric.Fixed((int64(footprint) + 2*int64(outputCell)) * (worldUnitsPerCell / 2))
+}
+
 // worldUnitsPerCell is 16*65536 = 1<<20 [03 §2.1].
 const worldUnitsPerCell = 1 << 20 // 1048576
 
 // stepTowardCenter moves the search origin toward the strategic center using the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// stored search radius [08 "Established AI-facing data and rooted planner"] [PLAN_11 C8][P0-03].
 //
 // Retail "moves the search origin toward the strategic center using the stored
-// radius" via FILD distance → FSQRT → fixed <<16 scaling with __allmul/__alldiv (16.16 fixed) [P0-03 §3.1] DIRECT.
+// radius" via a square-root distance followed by fixed-point scaling [P0-03 §3.1].
 // This implements the same arithmetic with int64 Fixed math and a math.Sqrt transient for sqrt.
-// The scaling uses 64-bit multiply/divide equivalent to __allmul/__alldiv with SAR 0x10 [P0-03 §4].
+// The scaling uses 64-bit multiply/divide with truncation toward zero [P0-03 §4].
 // Distance zero or distance <= radius => origin becomes center, else origin advances radius units along delta.
-// TODO(question): exact retail uses x87 FILD/FSQRT/__ftol with 16.16; this uses float64 sqrt transient which is bitwise identical for tested range but not proven for all Fixed values. Use integer sqrt if probe shows divergence [P0-03].
+// TODO(question): the exact square-root temporary precision is not established
+// for every representable Fixed value; use an integer square root if a probe
+// demonstrates a divergence [P0-03].
 func stepTowardCenter(originX, originZ, centerX, centerZ, radius numeric.Fixed) (numeric.Fixed, numeric.Fixed) {
 	dx := int64(centerX) - int64(originX)
 	dz := int64(centerZ) - int64(originZ)
@@ -181,30 +111,32 @@ func stepTowardCenter(originX, originZ, centerX, centerZ, radius numeric.Fixed) 
 	if distF == 0 {
 		return originX, originZ
 	}
-	dist := int64(distF) // truncate toward zero like __ftol [I3]
+	dist := int64(distF) // truncate toward zero [I3]
 	if dist <= rRaw {
 		return centerX, centerZ
 	}
-	// Normalized step: origin + delta * radius / dist via 64-bit multiply then divide (truncate toward zero) [P0-03 §4] __allmul/__alldiv.
+	// Normalized step: origin + delta * radius / dist via 64-bit multiply then divide (truncate toward zero) [P0-03 §4].
 	// Use int64 to avoid overflow of dx*rRaw (both 32-bit Fixed, product 64-bit).
 	stepX := dx * rRaw / dist
 	stepZ := dz * rRaw / dist
 	return numeric.Fixed(int64(originX) + stepX), numeric.Fixed(int64(originZ) + stepZ)
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// extractorHelperA is the exhaustive extractor placement helper [P0-03].
 // It searches the precomputed metal patch vector within (radius<<2)², filters by distance, sorts by distance,
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// validates each candidate with the canonical placement and score checks, and
+// stops when next distance exceeds best+160 slack.
 // Failed A does NOT fall through to B [P0-03 §3.1] DIRECT.
 // Zero RNG draws [P0-03 §5] NEGATIVE-BOUNDED.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// unavailable result without fallback to water per RS-11 [P0-03 §6].
-func extractorHelperA(m placementManager, defKey string, surfaceMetal int32, terrain *world.Terrain) PlacementResult {
+// The precomputed metal-patch vector is not yet populated from the terrain in
+// this lane; expose explicit unavailable result per RS-11 [P0-03 §6].
+func extractorHelperA(m *Manager, defKey string, surfaceMetal int32, terrain *world.Terrain) PlacementResult {
 	_ = defKey
 	_ = surfaceMetal
 	_ = terrain
 	// No established metal patch vector in this build [P0-03 §6][RS-11].
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// TODO(question): wire the precomputed patch vector when terrain metal scan
+	// is established; until then explicit unavailable.
 	return PlacementResult{
 		Valid:  false,
 		Helper: HelperA,
@@ -213,298 +145,111 @@ func extractorHelperA(m placementManager, defKey string, surfaceMetal int32, ter
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// It attempts up to 30 trials around origin, each trial drawing up to 4 values (radius, 0x10000 angle, region offsets) [P0-03 §5],
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Fixed-point write ((foot+out*2)*0x80000) is performed on success [P0-03 §3.1].
-// Returns typed PlacementResult with exact world/cell site, footprint, score, helper identity and proof [RS-11].
-func extractorHelperB(m placementManager, defKey string, surfaceMetal int32, terrain *world.Terrain) PlacementResult {
-	// Retrieve footprint/yard for validation.
-	var footX, footZ int
+// extractorHelperB is the statistical scatter helper [P0-03].
+// Its concrete dependencies and placement profile are resolved before the
+// candidate source is consulted. The patch-vector/scatter candidate geometry
+// remains Unknown, so this helper fails explicitly without consuming trial
+// RNG or fabricating a map-wide target [RS-11].
+func extractorHelperB(m *Manager, defKey string, surfaceMetal int32, terrain *world.Terrain) PlacementResult {
+	if m == nil {
+		return placementFailure(HelperB, ReasonNilManager, "manager unavailable")
+	}
+	if m.Catalog == nil {
+		return placementFailure(HelperB, ReasonMissingCatalog, "unit catalog unavailable")
+	}
+	def, ok := m.Catalog.Unit(canonicalKey(defKey))
+	if !ok || def == nil {
+		return placementFailure(HelperB, ReasonMissingDefinition, fmt.Sprintf("unit definition %q unavailable", defKey))
+	}
+	if (def.FootprintX <= 0 || def.FootprintZ <= 0) && strings.TrimSpace(def.MovementClass) == "" {
+		return placementFailure(HelperB, ReasonInvalidFootprint, fmt.Sprintf("unit %q has invalid authored footprint %dx%d", defKey, def.FootprintX, def.FootprintZ))
+	}
+	if def.FootprintX <= 0 || def.FootprintZ <= 0 {
+		mc, ok := m.Catalog.Movement[content.CanonicalKey(def.MovementClass)]
+		if !ok || mc == nil || mc.FootprintX <= 0 || mc.FootprintZ <= 0 {
+			return placementFailure(HelperB, ReasonInvalidFootprint, fmt.Sprintf("unit %q has no compiled footprint", defKey))
+		}
+	}
+	footX32, footZ32 := world.FootprintForUnit(m.Catalog, def)
+	if footX32 <= 0 || footZ32 <= 0 {
+		return placementFailure(HelperB, ReasonInvalidFootprint, fmt.Sprintf("unit %q has invalid footprint %dx%d", defKey, footX32, footZ32))
+	}
+	footX, footZ := int(footX32), int(footZ32)
 	var yard []world.YardCell
-	var hasDef bool
-	if mgr, ok := m.(*Manager); ok && mgr != nil && mgr.Catalog != nil {
-		ck := canonicalKey(defKey)
-		if def, ok2 := mgr.Catalog.Unit(ck); ok2 && def != nil {
-			footX = int(def.FootprintX)
-			footZ = int(def.FootprintZ)
-			hasDef = true
-			if ym, err := world.ParseYardMap(def.YardMap, footX, footZ); err == nil {
-				yard = ym
-			} else if footX > 0 && footZ > 0 && strings.TrimSpace(def.YardMap) == "" {
-				yard = nil
-			} else {
-				// Parse failed but YardMap non-empty (e.g., synthetic "oooo" for 4x4): treat as nil (all open) per old permissive fallback [RS-11].
-				// This allows test fixtures with short yard strings to still validate as open.
-				yard = nil
-			}
+	if !def.BMCode {
+		if strings.TrimSpace(def.YardMap) == "" {
+			return placementFailure(HelperB, ReasonMissingDefinition, fmt.Sprintf("unit %q has no placement yard", defKey))
+		}
+		var err error
+		yard, err = world.ParseYardMap(def.YardMap, footX, footZ)
+		if err != nil {
+			return placementFailure(HelperB, ReasonMissingDefinition, fmt.Sprintf("unit %q yard: %v", defKey, err))
 		}
 	}
-	if !hasDef || footX <= 0 || footZ <= 0 {
-		// No footprint to validate; treat as success at origin to allow AI to build in tests without catalog [RS-11 test helper].
-		// This is permissive fallback for missing def; production always has def.
-		ox, oz := m.getOrigin()
-		return PlacementResult{
-			Valid:    true,
-			Helper:   HelperB,
-			Reason:   ReasonSuccess,
-			WorldX:   ox,
-			WorldZ:   oz,
-			CellX:    world.WorldToCell(ox),
-			CellZ:    world.WorldToCell(oz),
-			FootX:    footX,
-			FootZ:    footZ,
-			Score:    0,
-			Limit:    int32(surfaceMetal) * int32(footX) * int32(footZ) * 2,
-			Attempts: 0,
-			Proof:    nil,
-		}
+	if terrain == nil {
+		return placementFailure(HelperB, ReasonMissingTerrain, "terrain unavailable")
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	if m.RNG == nil {
+		return placementFailure(HelperB, ReasonMissingRNG, "simulation RNG unavailable")
+	}
+	rules, errRules := world.PlacementRulesForUnit(m.Catalog, def)
+	if errRules != nil {
+		return placementFailure(HelperB, ReasonMissingDefinition, fmt.Sprintf("unit %q placement profile: %v", defKey, errRules))
+	}
+	// The canonical yard and placement profile are resolved before the unknown
+	// candidate source is consulted; no candidate can be validated until that
+	// source is recovered [04 §6.2–§6.4][05 "Construction placement"].
+	_ = yard
+	_ = rules
+	// Limit SurfaceMetal*footX*footZ*2 [P0-03 §2.2][P0-03 §3.3]
 	limit := int32(surfaceMetal) * int32(footX) * int32(footZ) * 2
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-
-	// Resolve terrain: prefer passed-in terrain, else manager's terrain
-	var ter *world.Terrain
-	if terrain != nil {
-		ter = terrain
-	} else if mgr, ok := m.(*Manager); ok && mgr != nil {
-		ter = mgr.getTerrain()
-	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// Early exit without RNG if no terrain to validate: treat as success at origin without drawing [P0-03] to keep simple tests deterministic.
-	if ter == nil {
-		ox, oz := m.getOrigin()
-		return PlacementResult{
-			Valid:    true,
-			Helper:   HelperB,
-			Reason:   ReasonSuccess,
-			WorldX:   ox,
-			WorldZ:   oz,
-			CellX:    world.WorldToCell(ox),
-			CellZ:    world.WorldToCell(oz),
-			FootX:    footX,
-			FootZ:    footZ,
-			Score:    0,
-			Limit:    limit,
-			Attempts: 0,
-			Proof:    nil,
-		}
-	}
-	strat := m.getStrategic()
-	var radiusVal int32
-	if strat != nil {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// Convert Fixed world units to cells via /worldUnitsPerCell (1 cell =16*65536) [03 §2.1].
-		rv := int64(strat.Radius) / worldUnitsPerCell
-		if rv < 0 {
-			rv = -rv
-		}
-		radiusVal = int32(rv)
-		if radiusVal < 2 {
-			radiusVal = 2
-		}
-	} else {
-		radiusVal = 2
-	}
-	rngStream := m.getRNG()
-	// Determine region bounds for scatter; use terrain dimensions if available.
-	regionW := ter.CellW
-	regionH := ter.CellH
-	if regionW < 2 {
-		regionW = 32
-	}
-	if regionH < 2 {
-		regionH = 32
-	}
-	originX, originZ := m.getOrigin()
-	var trialReasons []ReasonCode
-	// Up to 30 trials [P0-03 §3.3] (0x1E)
-	for attempt := 0; attempt < 30; attempt++ {
-		// 4 RNG draws per trial: radius, 0x10000 angle, region offsets [P0-03 §5]
-		// Deterministic: if stream is nil (test-only, production always seeded per I4), use 0 without advancing.
-		var rOffX, rOffZ uint32
-		if rngStream != nil {
-			_ = rngStream.Uint32n(uint32(radiusVal))
-			_ = rngStream.Uint32n(0x10000)
-			offXBoundTmp := regionW - int32(footX)
-			if offXBoundTmp < 2 {
-				offXBoundTmp = 2
-			}
-			offZBoundTmp := regionH - int32(footZ)
-			if offZBoundTmp < 2 {
-				offZBoundTmp = 2
-			}
-			rOffX = rngStream.Uint32n(uint32(offXBoundTmp))
-			rOffZ = rngStream.Uint32n(uint32(offZBoundTmp))
-		} else {
-			rOffX = 0
-			rOffZ = 0
-		}
-		offXBound := regionW - int32(footX)
-		if offXBound < 2 {
-			offXBound = 2
-		}
-		offZBound := regionH - int32(footZ)
-		if offZBound < 2 {
-			offZBound = 2
-		}
-		// Compute candidate cell near origin with quantized offset.
-		// Simplified: origin cell plus random region offset, quantized to region granularity.
-		ocx := world.WorldToCell(originX)
-		ocz := world.WorldToCell(originZ)
-		cx := ocx + int32(rOffX) - offXBound/2
-		cz := ocz + int32(rOffZ) - offZBound/2
-		// Clamp to terrain bounds
-		if cx < 0 {
-			cx = 0
-		}
-		if cz < 0 {
-			cz = 0
-		}
-		if cx+int32(footX) > ter.CellW {
-			cx = ter.CellW - int32(footX)
-		}
-		if cz+int32(footZ) > ter.CellH {
-			cz = ter.CellH - int32(footZ)
-		}
-		if cx < 0 || cz < 0 {
-			trialReasons = append(trialReasons, ReasonOutOfBounds)
-			continue
-		}
-		worldXRaw := world.CellToWorld(cx)
-		worldZRaw := world.CellToWorld(cz)
-		worldX := worldXRaw
-		worldZ := worldZRaw
-		// Validate via canonical placement legality CheckPlacement with proper profile [R-P0-08][07 §9].
-		// AI preview must use the same rules as construction's placementRules so a preview-legal site is not
-		// silently refused in-sim (C-8). Use the compiled movement/FBI profile and the snapped rectangle
-		// so the validated anchor matches what construction's SnapFootprintAnchor will derive from the same Goal.
-		// Compute placement rules for this def (mirrors construction.placementRules) [04 §6.1][02 "Movement class record"].
-		var rules world.PlacementRules
-		var isMobile bool
-		var defForRules *content.UnitDef
-		if mgrReal, ok := m.(*Manager); ok && mgrReal != nil && mgrReal.Catalog != nil {
-			if d, ok2 := mgrReal.Catalog.Unit(canonicalKey(defKey)); ok2 && d != nil {
-				defForRules = d
-			}
-		}
-		if defForRules != nil {
-			rules.Waterline = defForRules.Waterline
-			if defForRules.MovementClass != "" {
-				if mc, ok := m.(*Manager).Catalog.Movement[content.CanonicalKey(defForRules.MovementClass)]; ok && mc != nil {
-					rules.MaxSlope = mc.MaxSlope
-					rules.MaxWaterSlope = mc.MaxWaterSlope
-					rules.MaxWaterDepth = mc.MaxWaterDepth
-					rules.MinWaterDepth = mc.MinWaterDepth
-					rules.ProfileResolved = true
-				}
-			} else if !defForRules.BMCode {
-				rules.MaxSlope = defForRules.MaxSlope
-				rules.MaxWaterDepth = defForRules.MaxWaterDepth
-				rules.MinWaterDepth = defForRules.MinWaterDepth
-				rules.ProfileResolved = true
-			}
-			// Determine mobile vs building for CheckPlacement: building has yard, mobile is yard-empty and move-capable.
-			if yard != nil {
-				isMobile = false
-			} else {
-				// Yard empty (or parse failed) => mobile inline footprint if move-capable, else treat as building without yard (should not happen for retail buildings).
-				if defForRules.BMCode || defForRules.CanMove || defForRules.MaxVelocity > 0 {
-					isMobile = true
-					// For mobile, re-derive MaxSlope/MaxWaterSlope from MC if available for slope selection [04 §6.1].
-					if defForRules.MovementClass != "" {
-						if mc, ok := m.(*Manager).Catalog.Movement[content.CanonicalKey(defForRules.MovementClass)]; ok && mc != nil {
-							rules.MaxSlope = mc.MaxSlope
-							rules.MaxWaterSlope = mc.MaxWaterSlope
-							rules.MaxWaterDepth = mc.MaxWaterDepth
-							rules.MinWaterDepth = mc.MinWaterDepth
-							rules.ProfileResolved = true
-						}
-					}
-				} else {
-					isMobile = false
-				}
-			}
-		} else {
-			// No def: treat as building without profile (permissive fallback for synthetic tests without catalog) [RS-11].
-			rules.ProfileResolved = false
-			isMobile = yard == nil
-		}
-		// Snap the Goal to the footprint anchor exactly as construction's handleMobileState2 does [07 §9].
-		// This ensures the validated rectangle is the same one construction will check from the same Goal.
-		extentSnap, errExt := world.NewFootprintExtent(int32(footX), int32(footZ))
-		if errExt != nil {
-			trialReasons = append(trialReasons, ReasonInvalidFootprint)
-			continue
-		}
-		anchorSnap, errSnap := world.SnapFootprintAnchor(worldX, worldZ, extentSnap)
-		if errSnap != nil {
-			trialReasons = append(trialReasons, ReasonOutOfBounds)
-			continue
-		}
-		rectSnap, errRect := world.NewFootprintRect(anchorSnap, extentSnap)
-		if errRect != nil {
-			trialReasons = append(trialReasons, ReasonOutOfBounds)
-			continue
-		}
-		_, errCheck := ter.CheckPlacement(world.PlacementQuery{Rect: rectSnap, Yard: yard, Rules: rules, Mobile: isMobile})
-		if errCheck != nil {
-			trialReasons = append(trialReasons, ReasonBlocked)
-			continue
-		}
-		_ = limit
-		// Success: return the original Goal world coords; construction's handleMobileState2 will snap the same Goal to the same anchor.
-		return PlacementResult{
-			Valid:        true,
-			Helper:       HelperB,
-			Reason:       ReasonSuccess,
-			WorldX:       worldX,
-			WorldZ:       worldZ,
-			CellX:        anchorSnap.CellX(),
-			CellZ:        anchorSnap.CellZ(),
-			FootX:        footX,
-			FootZ:        footZ,
-			Score:        0,
-			Limit:        limit,
-			Attempts:     attempt + 1,
-			TrialReasons: append([]ReasonCode(nil), trialReasons...),
-			Proof:        nil,
-		}
-	}
-	// Exhausted 30 trials [P0-03 §3.3]
+	// TODO(question): patch-vector/scatter candidate geometry is Unknown. The
+	// recovered contract does not establish how the scatter helper's patch
+	// vector, radius/angle draws, and map-region records become a candidate
+	// cell. Static evidence or data-driven retail probes that recover those
+	// records and the conversion would settle this question. Do not substitute
+	// a map center, offset, clamp, or other candidate source here.
 	return PlacementResult{
-		Valid:        false,
-		Helper:       HelperB,
-		Reason:       ReasonTooManyTrials,
-		FootX:        footX,
-		FootZ:        footZ,
-		Limit:        limit,
-		Attempts:     30,
-		TrialReasons: trialReasons,
-		Proof:        fmt.Errorf("helper B: 30 trials exhausted [P0-03 §3.3]"),
+		Valid:  false,
+		Helper: HelperB,
+		Reason: ReasonUnknownGeometry,
+		FootX:  footX,
+		FootZ:  footZ,
+		Limit:  limit,
+		Proof:  fmt.Errorf("helper B: patch-vector/scatter candidate geometry is Unknown [TODO(question)]"),
 	}
+}
+
+func placementMetalScore(terrain *world.Terrain, rect world.FootprintRect) (int64, error) {
+	if terrain == nil {
+		return 0, fmt.Errorf("terrain unavailable")
+	}
+	var score int64
+	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
+		for x := rect.MinX(); x < rect.MaxX(); x++ {
+			cell := terrain.PlotAt(x, z)
+			if cell == nil {
+				return 0, fmt.Errorf("terrain cell %d,%d unavailable", x, z)
+			}
+			score += int64(cell.Metal())
+		}
+	}
+	return score, nil
 }
 
 // queueExactResult queues the exact validated site through the ordinary mobile build producer [P0-07][RS-11].
 // It is the only path that mutates the order queue; no privileged write occurs.
-func queueExactResult(m placementManager, defKey string, res PlacementResult) bool {
+func queueExactResult(m *Manager, defKey string, res PlacementResult) error {
 	if !res.Valid {
-		return false
+		return fmt.Errorf("placement result is invalid")
 	}
-	m.recordMilestone(MilestonePlacementSelected, m.getLastTick())
-	fac := m.getFactory()
+	fac := m.Factory
 	if fac == nil {
-		// No builder bound; still success for placement, no queue to issue [PLAN_11 C12].
-		return true
+		return fmt.Errorf("builder unavailable")
 	}
-	cb := m.getQueueBuildTyped()
+	cb := m.QueueBuildTyped
 	if cb == nil {
-		// Session has not bound typed queue — counted diagnostic, placement still succeeds [P0-07] F-P0-004.
-		if mgr, ok := m.(*Manager); ok {
-			mgr.missedQueueCallbacks++
-		}
-		return true
+		return fmt.Errorf("typed build queue unavailable")
 	}
 	req := BuildRequest{
 		Builder: fac.Handle,
@@ -515,11 +260,9 @@ func queueExactResult(m placementManager, defKey string, res PlacementResult) bo
 		Kind:    BuildKindMobileSite,
 	}
 	if err := cb(req); err != nil {
-		// Queue error diagnostic but placement remains success [P0-07].
-		return true
+		return fmt.Errorf("typed build queue: %w", err)
 	}
-	m.recordMilestone(MilestoneBuildRequestAccepted, m.getLastTick())
-	return true
+	return nil
 }
 
 // PlaceWithResult is the exact, typed placement entry [RS-11][P0-03].
@@ -535,30 +278,38 @@ func PlaceWithResult(m *Manager, defKey string, w *world.Terrain) PlacementResul
 	if defKey == "" {
 		return PlacementResult{Valid: false, Helper: HelperNone, Reason: ReasonEmptyDef, Proof: fmt.Errorf("empty defKey")}
 	}
+	if m.Catalog == nil {
+		return placementFailure(HelperNone, ReasonMissingCatalog, "unit catalog unavailable")
+	}
+	if def, ok := m.Catalog.Unit(canonicalKey(defKey)); !ok || def == nil {
+		return placementFailure(HelperNone, ReasonMissingDefinition, fmt.Sprintf("unit definition %q unavailable", defKey))
+	}
+	if m.RNG == nil {
+		return placementFailure(HelperNone, ReasonMissingRNG, "simulation RNG unavailable")
+	}
+	if m.Factory == nil {
+		return placementFailure(HelperNone, ReasonMissingBuilder, "mobile build builder unavailable")
+	}
+	if m.QueueBuildTyped == nil {
+		return placementFailure(HelperNone, ReasonMissingQueue, "typed build queue unavailable")
+	}
 	// Resolve terrain for this call: prefer passed-in w, else manager's terrain
 	terrain := w
 	if terrain == nil {
-		terrain = m.getTerrain()
+		terrain = m.Terrain
+	}
+	if terrain == nil {
+		return placementFailure(HelperNone, ReasonMissingTerrain, "terrain unavailable")
 	}
 
 	// Grow radius before origin step, capped by max(mapW,mapH) [P0-03 §3.1].
 	// Radius is Fixed world units (1 cell =16*65536 = worldUnitsPerCell) [03 §2.1]; +160 cells → 160*worldUnitsPerCell per failure, cap at maxCells*worldUnitsPerCell [P0-03 §3.1].
 	var capWorld numeric.Fixed
-	if terrain != nil {
-		maxCells := terrain.CellW
-		if terrain.CellH > maxCells {
-			maxCells = terrain.CellH
-		}
-		capWorld = numeric.Fixed(int64(maxCells) * worldUnitsPerCell)
-	} else if m.Terrain != nil {
-		maxCells := m.Terrain.CellW
-		if m.Terrain.CellH > maxCells {
-			maxCells = m.Terrain.CellH
-		}
-		capWorld = numeric.Fixed(int64(maxCells) * worldUnitsPerCell)
-	} else {
-		capWorld = numeric.Fixed(1 << 30) // large default
+	maxCells := terrain.CellW
+	if terrain.CellH > maxCells {
+		maxCells = terrain.CellH
 	}
+	capWorld = numeric.Fixed(int64(maxCells) * worldUnitsPerCell)
 	if m.Strategic.Radius < capWorld {
 		inc := numeric.Fixed(int64(160) * worldUnitsPerCell) // +160 cells per failure [P0-03]
 		newRad := m.Strategic.Radius + inc
@@ -569,32 +320,38 @@ func PlaceWithResult(m *Manager, defKey string, w *world.Terrain) PlacementResul
 	}
 
 	// Move search origin toward strategic center using stored radius [PLAN_11 C8][P0-03].
-	originX, originZ := m.getOrigin()
+	originX, originZ := m.OriginX, m.OriginZ
 	centerX := m.Strategic.CenterX
 	centerZ := m.Strategic.CenterZ
 	radius := m.Strategic.Radius
 	newOriginX, newOriginZ := stepTowardCenter(originX, originZ, centerX, centerZ, radius)
-	m.setOrigin(newOriginX, newOriginZ)
+	m.OriginX, m.OriginZ = newOriginX, newOriginZ
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	if m.isExtractor(defKey) {
-		rngStream := m.getRNG()
-		if rngStream == nil {
-			return PlacementResult{Valid: false, Helper: HelperNone, Reason: ReasonTooManyTrials, Proof: fmt.Errorf("nil RNG")}
-		}
+	// Extractor branch: candidates with a non-zero extracts-metal value [08][P0-03].
+	if def, ok := m.Catalog.Unit(canonicalKey(defKey)); ok && def.ExtractsMetal != 0 {
+		rngStream := m.RNG
 		// Exactly one RNG(255) draw for selector when extractor [P0-03 §5] (I4) single global stream RS-02.
 		draw := rngStream.Uint32n(255) // bound 255 is the extractor branch census [PLAN_11 C9][P0-03]
-		sm := m.getSurfaceMetal()      // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// Strict less-than: SurfaceMetal < RNG(255) picks A else B [P0-03 §3.1] DIRECT via CMP/JGE.
+		sm := m.SurfaceMetal           // mission surface metal is an unsigned byte in the runtime schema [08]
+		if sm < 0 {
+			sm = 0
+		}
+		if sm > 255 {
+			sm = 255
+		}
+		// Strict less-than: SurfaceMetal < RNG(255) picks A else B [P0-03 §3.1].
 		if sm < int32(draw) {
-			// Helper A exhaustive, zero RNG [P0-03 §5] — expose explicit unavailable without fallback [RS-11]
+			// Helper A is exhaustive and consumes no further RNG [P0-03 §5].
 			res := extractorHelperA(m, defKey, sm, terrain)
 			if res.Valid {
 				// Success: queue exact site and reset radius [P0-03 §3.1]
-				queueExactResult(m, defKey, res)
-				if s := m.getStrategic(); s != nil {
-					s.Radius = 0
+				if err := queueExactResult(m, defKey, res); err != nil {
+					res.Valid = false
+					res.Reason = ReasonQueueFailed
+					res.Proof = err
+					return res
 				}
+				m.Strategic.Radius = 0
 				return res
 			}
 			// Failed A does NOT fall through to B [P0-03 §3.1] DIRECT.
@@ -603,34 +360,48 @@ func PlaceWithResult(m *Manager, defKey string, w *world.Terrain) PlacementResul
 		// Selector chose B
 		res := extractorHelperB(m, defKey, sm, terrain)
 		if res.Valid {
-			queueExactResult(m, defKey, res)
-			if s := m.getStrategic(); s != nil {
-				s.Radius = 0
+			if err := queueExactResult(m, defKey, res); err != nil {
+				res.Valid = false
+				res.Reason = ReasonQueueFailed
+				res.Proof = err
+				return res
 			}
+			m.Strategic.Radius = 0
 		}
 		return res
 	}
 
 	// Non-extractor: directly helper B with no selector draw [P0-03 §3.1]
-	res := extractorHelperB(m, defKey, m.getSurfaceMetal(), terrain)
+	sm := m.SurfaceMetal
+	if sm < 0 {
+		sm = 0
+	}
+	if sm > 255 {
+		sm = 255
+	}
+	res := extractorHelperB(m, defKey, sm, terrain)
 	if res.Valid {
-		queueExactResult(m, defKey, res)
-		if s := m.getStrategic(); s != nil {
-			s.Radius = 0
+		if err := queueExactResult(m, defKey, res); err != nil {
+			res.Valid = false
+			res.Reason = ReasonQueueFailed
+			res.Proof = err
+			return res
 		}
+		m.Strategic.Radius = 0
 	}
 	return res
 }
 
 // Place moves the search origin toward the strategic center using the stored
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// search radius, handles the extractor branch with one RNG(255) draw against
 // mission SurfaceMetal, does not fall through on failed A, validates via yard
 // helpers, writes fixed-point placement, resets radius, and issues the build
 // command through the typed queue [08 "Established AI-facing data and rooted planner"]
 // [PLAN_11 C8, C9, C12][P0-03][P0-07].
 //
-// C9 bound census: this file uses RNG(255) for the selector; helper B uses additional bounds radius, 0x10000, region offsets
-// which are part of the same I4 stream but documented as helper B's per-trial draws [P0-03 §5].
+// C9 bound census: this file uses RNG(255) for the extractor selector. Helper
+// B's trial draws are not made until its unresolved candidate geometry is
+// recovered [P0-03 §5].
 // Typed path preserves X/Z via BuildRequest with MobileSite [P0-07] F-P0-004.
 // Exact site from PlacementResult is queued bit-for-bit [RS-11].
 func Place(m *Manager, defKey string, w *world.Terrain) (numeric.Fixed, numeric.Fixed, bool) {

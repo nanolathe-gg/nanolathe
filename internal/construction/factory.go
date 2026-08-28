@@ -74,6 +74,9 @@ type Service struct {
 	Catalog *content.Catalog
 	World   *units.World
 	Economy *economy.Service
+	// OrderBinding is the owning session context copied to every product and
+	// reconstructed/replaced queue [04 §3.3][06 §11.1].
+	OrderBinding *orders.QueueBinding
 	// Allocator hook for tests; if nil, uses World.Create.
 	Allocator func(owner uint8, def *content.UnitDef, x, y, z numeric.Fixed) (*units.Unit, error)
 	// ModelForFactory hook for QueryBuildInfo when m param is nil; tests may set.
@@ -141,6 +144,18 @@ type Service struct {
 	// distinct layers; movement models the latter via OccupancyGrid stamps).
 	// save persistence TODO(question), same gap as placements.
 	structures map[pool.Handle]world.FootprintRect
+}
+
+// queueForUnit is the construction-owned queue admission point. Factory
+// lifecycle code can be reached by both human and AI producers, so any lazy
+// queue it creates must receive the same session binding as product queues
+// and replacements [04 §3.3][04 §3.5][06 §11.1].
+func (s *Service) queueForUnit(u *units.Unit) *orders.Queue {
+	q := orders.QueueForUnit(u)
+	if q != nil && s != nil && s.OrderBinding != nil {
+		q.SetBinding(s.OrderBinding)
+	}
+	return q
 }
 
 // TickContext carries per-tick shared services for unit-local stepping (ON-02).
@@ -760,7 +775,7 @@ func (s *Service) QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cel
 
 	// 4. Load product definition and snap using packed footprint extents each biased by half extent [05 C16][P0-I05].
 	footX, footZ := 1, 1 // default 1x1 when the product is unknown
-	if q := orders.QueueForUnit(factory); q != nil && q.LenPrimary() > 0 {
+	if q := s.queueForUnit(factory); q != nil && q.LenPrimary() > 0 {
 		head := q.Primary()[0]
 		var def *content.UnitDef
 		if head.BuildDefKey != "" && s.Catalog != nil {
@@ -1133,7 +1148,7 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	// Resolve get-built op + insert GetBuilt node onto product's primary queue (queued mode, zero count) [05 C18].
 	getBuiltID := orders.Lookup("GetBuilt")
 	if getBuiltID != 0 {
-		pq := orders.QueueForUnit(product)
+		pq := orders.BindQueueBinding(product, s.OrderBinding)
 		// Queued mode, zero count per [05 C18]: Param2 zero count special? Queue treats 0 as 1? But we pass 0 and CoalesceTail will treat 0 as 1? However plan says zero count. We pass Node with Param2 0.
 		pq.Push(getBuiltID, orders.Node{Param2: 0})
 		// Ensure product's queue head is GetBuilt with active marker.
@@ -1233,12 +1248,12 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit) {
 	if factory == nil || product == nil {
 		return
 	}
-	fq := orders.QueueForUnit(factory)
+	fq := s.queueForUnit(factory)
 	if fq == nil {
 		// No queue => park
 		parkID := orders.Lookup("Park")
 		if parkID != 0 {
-			pq := orders.QueueForUnit(product)
+			pq := orders.BindQueueBinding(product, s.OrderBinding)
 			pq.Push(parkID, orders.Node{})
 		}
 		return
@@ -1253,7 +1268,7 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit) {
 	// Copy standing-order bits under documented gates [05 "Rally inheritance"] — same as success epilogue but additional gate for experience.
 	// TODO(question): experience word copies only for computer-owned builders [05 "Rally inheritance"].
 	inherited := 0
-	pq := orders.QueueForUnit(product)
+	pq := orders.BindQueueBinding(product, s.OrderBinding)
 	// Collect rally nodes in traversal order first, then tail-append to preserve order [05 C19].
 	// Tail-appending (rather than pq.Push) also leaves an existing GetBuilt
 	// head and its active marker untouched.
@@ -1308,12 +1323,9 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit) {
 		sec := pq.Secondary()
 		// Preserve queue-owned dispatch/economy hooks when replacing the primary
 		// segment; rebuilding a queue must not silently detach its services.
-		newQ := &orders.Queue{
-			Hostility:        pq.Hostility,
-			Lookup:           pq.Lookup,
-			StockpileEconomy: pq.StockpileEconomy,
-			SecondaryTick:    pq.SecondaryTick,
-		}
+		newQ := orders.NewQueueWith(nil, nil)
+		newQ.SetBinding(pq.Binding())
+		newQ.SecondaryTick = pq.SecondaryTick
 		setQueuePrimary(newQ, newPrim)
 		setQueueSecondary(newQ, sec)
 		orders.BindQueue(product, newQ)
@@ -1465,7 +1477,7 @@ func (s *Service) applyCompletionPosture(product *units.Unit) {
 // currently nil because the tombstone-gated cleanup step is a stub, so the
 // pre-existing marking is preserved rather than changed on inference.
 func (s *Service) removeHead(factory *units.Unit, node *orders.Node) {
-	q := orders.QueueForUnit(factory)
+	q := s.queueForUnit(factory)
 	if q == nil {
 		return
 	}
@@ -1545,7 +1557,7 @@ func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint
 		// cancel path also keeps the queue's service bindings, which the
 		// previous rebind-a-fresh-queue implementation silently dropped
 		// [04 §3.3][05 "Queue subtraction"].
-		if q := orders.QueueForUnit(factory); q != nil {
+		if q := s.queueForUnit(factory); q != nil {
 			q.CancelAll()
 		}
 		return
@@ -1870,7 +1882,7 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 	s.copyStandingFlags(builder, product)
 	getBuiltID := orders.Lookup("GetBuilt")
 	if getBuiltID != 0 {
-		pq := orders.QueueForUnit(product)
+		pq := orders.BindQueueBinding(product, s.OrderBinding)
 		pq.Push(getBuiltID, orders.Node{Param2: 0})
 	}
 	// Turn the builder to face the build site before raising StartBuilding.
@@ -1900,9 +1912,11 @@ func (s *Service) handleState3(factory *units.Unit, node *orders.Node, tick uint
 	}
 	if product == nil {
 		// Node that has lost its product falls through to result 7 — losing product cancels ALL factory orders [05].
-		q := orders.QueueForUnit(factory)
+		q := s.queueForUnit(factory)
 		if q != nil {
-			newQ := &orders.Queue{}
+			newQ := orders.NewQueueWith(nil, nil)
+			newQ.SetBinding(q.Binding())
+			newQ.SecondaryTick = q.SecondaryTick
 			orders.BindQueue(factory, newQ)
 		}
 		return
@@ -2067,7 +2081,7 @@ func (s *Service) Pump(factory *units.Unit, tick uint32) {
 		return
 	}
 
-	q := orders.QueueForUnit(factory)
+	q := s.queueForUnit(factory)
 	if q == nil || q.LenPrimary() == 0 {
 		return
 	}
@@ -2163,7 +2177,7 @@ func (s *Service) resolveGetBuilt(product *units.Unit, tick uint32) {
 	if s == nil || product == nil {
 		return
 	}
-	q := orders.QueueForUnit(product)
+	q := s.queueForUnit(product)
 	if q == nil || q.LenPrimary() == 0 {
 		return
 	}
@@ -2213,7 +2227,7 @@ func (s *Service) resolveGetBuilt(product *units.Unit, tick uint32) {
 	delete(s.getBuiltLinks, product.Handle)
 	// rallyInheritance may have rebound the product queue. Reacquire it before
 	// dropping GetBuilt so the watcher cannot survive on the new primary list.
-	if current := orders.QueueForUnit(product); current != nil {
+	if current := s.queueForUnit(product); current != nil {
 		current.RemoveHead() // GetBuilt drops itself [05 "Rally inheritance"]
 	}
 }
@@ -2243,7 +2257,7 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 	if builder == nil {
 		return WorkResult{Builder: handle, Err: fmt.Errorf("construction: builder %d not found or dead", handle)}
 	}
-	q := orders.QueueForUnit(builder)
+	q := s.queueForUnit(builder)
 	if q == nil || q.LenPrimary() == 0 {
 		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0, Diagnostics: append([]string(nil), s.messages...)}
 	}
@@ -2315,7 +2329,7 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 	s.World, s.Economy, s.Terrain, s.Catalog = oldWorld, oldEcon, oldTerrain, oldCat
 	s.OnRefresh = oldRefresh
 	// After state.
-	newQ := orders.QueueForUnit(builder)
+	newQ := s.queueForUnit(builder)
 	var afterTarget pool.Handle
 	var afterKey string
 	var afterState State

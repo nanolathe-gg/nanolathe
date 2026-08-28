@@ -813,6 +813,14 @@ func (s *Session) RegisterAll() {
 		localOwner := s.LocalOwner
 		enemyOwner := s.EnemyOwner
 		s.Units.OnDeath = func(h pool.Handle, cause units.DeathCause, u *units.Unit) {
+			// A computer player's unit loss arms that manager's retry throttle at
+			// the authoritative death boundary. The manager owns the draw and
+			// fails closed if setup did not bind a session stream [08].
+			if s.Clock != nil && u != nil && int(u.Owner) < len(s.AI) {
+				if mgr := s.AI[u.Owner]; mgr != nil {
+					mgr.RecordUnitLoss(s.Clock.GlobalTick)
+				}
+			}
 			if s.Vis != nil && u != nil {
 				unpublishOne(s, u)
 			}
