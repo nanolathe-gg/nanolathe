@@ -476,6 +476,21 @@ func blitBattlePanel(c *client.Client, f *formats.GAFFrame, x, y int) {
 	c.UIBlitAnchor(f, x+int(f.XOffset), y+int(f.YOffset))
 }
 
+// pauseOverlayVisible synchronizes the UI state from a committed frame only
+// before any UI-issued scheduling transition. Once a pause intent is applied,
+// the canonical UI truth drives the overlay immediately even if pausing leaves
+// the committed tick unchanged [01 §4.3][07 §11][I6].
+func pauseOverlayVisible(b *battleSession, committed *frame.Frame) bool {
+	if b == nil {
+		return false
+	}
+	state := b.battleState()
+	if committed != nil {
+		state.SyncCommittedPause(committed.Paused)
+	}
+	return state.Paused()
+}
+
 func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented client.UIFrame) {
 	if h == nil || c == nil {
 		return
@@ -486,6 +501,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// mutating any authoritative data [I6][07 §9][R-P0-11 §4].
 	cur := presented.Committed
 	frameOK := cur != nil
+	paused := pauseOverlayVisible(b, cur)
 	// World-space overlays come first, while the composed world is still the
 	// whole surface: retail draws the build ghost and the order-queue overlay
 	// into the battle view and only then blits the GUI frames over them, so a
@@ -521,7 +537,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 		h.drawTopStatusValues(c, cur)
 	}
 	h.drawSidePage(c, b, offset, cur)
-	if ok && cur != nil && cur.Paused {
+	if paused {
 		h.drawPausedTitle(c)
 	}
 	h.drawBattleMenu(c, b)
@@ -614,20 +630,11 @@ func radarProjectileDot(c frame.RadarContactView) bool {
 	return c.Kind == frame.RadarContactProjectile && c.Status&(1<<29|1<<30|0x40) == 0
 }
 
-func (h *retailBattleHUD) radarOwnerFrameIndex(b *battleSession, contact frame.RadarContactView, frameCount int) int {
-	if frameCount <= 0 {
+func (h *retailBattleHUD) radarOwnerFrameIndex(contact frame.RadarContactView, frameCount int) int {
+	if frameCount <= 0 || !contact.PaletteKnown || int(contact.Palette) >= frameCount {
 		return -1
 	}
-	if int(contact.Palette) < frameCount && contact.Palette != 0 {
-		return int(contact.Palette)
-	}
-	if b != nil && b.sess != nil && int(contact.Owner) < len(b.sess.Skirmish.Players) {
-		color := b.sess.Skirmish.Players[contact.Owner].Color
-		if color >= 0 && color < frameCount {
-			return color
-		}
-	}
-	return 0
+	return int(contact.Palette)
 }
 
 // rebuildRadar consumes only the committed frame's radar payload. In
@@ -692,7 +699,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 			MinimapMode: 1,
 		}
 		if radarContactAdmitted(contact, blink) {
-			regularArt = append(regularArt, radarGAFFrame(h.radarBlipGAF, h.radarOwnerFrameIndex(b, published, radarGAFFrameCount(h.radarBlipGAF))))
+			regularArt = append(regularArt, radarGAFFrame(h.radarBlipGAF, h.radarOwnerFrameIndex(published, radarGAFFrameCount(h.radarBlipGAF))))
 			if contact.IsCommander {
 				commanderArt = append(commanderArt, radarGAFFrame(h.radarCommanderGAF, 0))
 			}
@@ -757,7 +764,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 			continue
 		}
 		if published.Kind == frame.RadarContactFeature || published.Kind == frame.RadarContactProjectile {
-			index := h.radarOwnerFrameIndex(b, published, radarGAFFrameCount(h.radarFeatureGAF))
+			index := h.radarOwnerFrameIndex(published, radarGAFFrameCount(h.radarFeatureGAF))
 			blitRadarGAF(final, rx, ry, radarGAFFrame(h.radarFeatureGAF, index))
 		}
 	}

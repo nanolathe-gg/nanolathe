@@ -88,7 +88,16 @@ func TestPauseToggleUsesAuthoredOverlay(t *testing.T) {
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
 	b.sess.Clock = &clock.State{Requested: 10, Active: 10, Paused: false}
+	b.sess.Snapshot = frame.NewBuffer()
 	b.sess.Clock.GlobalTick = 50
+	committed := b.sess.Snapshot.BeginWrite()
+	committed.Paused = false
+	if err := b.sess.Snapshot.Publish(50); err != nil {
+		t.Fatalf("publish running frame: %v", err)
+	}
+	// The committed frame is the input source. Make live state disagree before
+	// each toggle so a live Clock.Paused read would choose the wrong intent.
+	b.sess.Clock.Paused = true
 	b.togglePause()
 	if !b.sess.Clock.Paused {
 		t.Fatalf("pause toggle should set Paused true")
@@ -96,6 +105,12 @@ func TestPauseToggleUsesAuthoredOverlay(t *testing.T) {
 	if b.battleState().Input.StatusMessage != "" {
 		t.Fatalf("pause must not invent a status string, got %q", b.battleState().Input.StatusMessage)
 	}
+	committed = b.sess.Snapshot.BeginWrite()
+	committed.Paused = true
+	if err := b.sess.Snapshot.Publish(51); err != nil {
+		t.Fatalf("publish paused frame: %v", err)
+	}
+	b.sess.Clock.Paused = false
 	b.togglePause()
 	if b.sess.Clock.Paused {
 		t.Fatalf("second toggle should clear Paused")
@@ -104,12 +119,59 @@ func TestPauseToggleUsesAuthoredOverlay(t *testing.T) {
 		t.Fatalf("resume must not invent a status string, got %q", b.battleState().Input.StatusMessage)
 	}
 	// Via handleInput
-	b.sess.Clock.Paused = false
+	committed = b.sess.Snapshot.BeginWrite()
+	committed.Paused = false
+	if err := b.sess.Snapshot.Publish(52); err != nil {
+		t.Fatalf("publish running frame for input: %v", err)
+	}
+	b.sess.Clock.Paused = true
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 	in.Kbd.SetKey(input.KeyPause, true)
 	b.handleInput(in, nil)
 	if !b.sess.Clock.Paused {
 		t.Fatalf("handleInput Pause should toggle")
+	}
+}
+
+func TestPauseToggleUsesCanonicalTruthWithoutNewSnapshot(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	b.sess.Clock = &clock.State{Requested: 10, Active: 10}
+	b.sess.Snapshot = frame.NewBuffer()
+	committed := b.sess.Snapshot.BeginWrite()
+	committed.Paused = false
+	if err := b.sess.Snapshot.Publish(1); err != nil {
+		t.Fatalf("publish running frame: %v", err)
+	}
+	b.togglePause()
+	if !b.battleState().Paused() || !b.sess.Clock.Paused {
+		t.Fatal("pause toggle did not update canonical and session pause state")
+	}
+	// Paused simulation emits no new frame. The second toggle must use the UI
+	// truth rather than the stale running committed frame.
+	b.togglePause()
+	if b.battleState().Paused() || b.sess.Clock.Paused {
+		t.Fatal("pause toggle inverted from stale committed frame")
+	}
+}
+
+func TestPauseOverlayUsesCanonicalTruthBeforeNextPublication(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	b.sess.Clock = &clock.State{Requested: 10, Active: 10}
+	b.sess.Snapshot = frame.NewBuffer()
+	committed := b.sess.Snapshot.BeginWrite()
+	committed.Paused = false
+	if err := b.sess.Snapshot.Publish(1); err != nil {
+		t.Fatalf("publish running frame: %v", err)
+	}
+	b.togglePause()
+	if !pauseOverlayVisible(b, b.sess.Snapshot.Current()) {
+		t.Fatal("paused overlay did not appear immediately from canonical UI truth")
+	}
+	// Current remains the running frame because the paused scheduler runs no
+	// tick. A second intent still hides the overlay synchronously.
+	b.togglePause()
+	if pauseOverlayVisible(b, b.sess.Snapshot.Current()) {
+		t.Fatal("paused overlay remained after synchronous unpause")
 	}
 }
 

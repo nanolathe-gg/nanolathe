@@ -51,6 +51,27 @@ func TestBattleStateScheduleIntentValues(t *testing.T) {
 	}
 }
 
+func TestBattleStatePauseTruthIsSynchronousAndIgnoresStaleFrames(t *testing.T) {
+	s := NewProductionBattleState()
+	if s.Paused() {
+		t.Fatal("production battle state starts paused")
+	}
+	s.SyncCommittedPause(true)
+	if !s.Paused() {
+		t.Fatal("first committed paused frame was not adopted")
+	}
+	s.SetPauseTruth(false)
+	if s.Paused() {
+		t.Fatal("scheduling boundary did not record unpause truth")
+	}
+	// A stale paused tick must not invert the synchronous UI state after a
+	// schedule transition, including while zero simulation ticks publish.
+	s.SyncCommittedPause(true)
+	if s.Paused() {
+		t.Fatal("stale committed pause overwrote synchronous unpause truth")
+	}
+}
+
 func TestBattleStatePanelStartsFromEnteringModeByte(t *testing.T) {
 	if production := NewProductionBattleState(); production.PanelOffset != PanelVisible || production.PanelTarget != PanelVisible {
 		t.Fatalf("production entry mode starts offset=%d target=%d, want visible", production.PanelOffset, production.PanelTarget)

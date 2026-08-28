@@ -46,11 +46,12 @@ func (p Profile) footprintRange(t *world.Terrain, ax, az int32) (minLow, maxHigh
 
 // ClassifyFootprint applies terrain and feature legality to the complete
 // footprint. Feature checks remain row-major/immediate; the depth and slope
-// gates then run over the aggregate height span (min of mins, max of maxes)
-// with the classifier semantics of [04 §6.1 R-DOC04-B]. Nanolathe classifies
-// whole footprints on demand instead of stamping a per-class 2-bit layer grid
-// at map load; the per-comparison semantics match the recovered classifier,
-// and only the blocked verdict rejects.
+// gates then run over the aggregate height span (min of mins, max of maxes).
+//
+// This is the aggregate footprint VALIDATOR of the commit stage [04 §8.2]:
+// path search uses the pre-stamped per-class 2-bit layer (layer.go, per-cell
+// classifier chain of [04 §6.1 R-DOC04-B]), while movement commit checks the
+// current rectangle here [04 §8.2]. Only the blocked verdict rejects.
 func (p Profile) ClassifyFootprint(t *world.Terrain, ax, az int32) CellClass {
 	fx, fz := p.footprintSize()
 	if t == nil || ax < 0 || az < 0 || ax+fx > t.CellW || az+fz > t.CellH {

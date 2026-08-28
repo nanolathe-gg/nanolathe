@@ -317,6 +317,16 @@ groups observed: 0, 1, 2, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, and 19 (groups 3
 through 18 are unused by the templates). Class parameter values observed: 0x00, 0x02, 0x03,
 0x08, 0x10, 0x12, 0x13, 0x18 (the class parameter stays opaque `TODO(question)` [P0-07]).
 
+Per-record resolution of those family names (same 2026-08-27 audit dump): the attack family
+is the eight orders `Attack_NoMove`, `Attack_Chase`, `Attack_Kamikaze`, `AttackSpecial`,
+`AirStrike`, `AirToAir`, `AirToGround`, and `AirToGroundHover` — `AttackUType` carries no
+helper despite its name. `VTOL_Landing` carries the acknowledgement helper with the unload
+family. `RepairUnitNoMove` carries the acknowledgement helper **without** path markers while
+`RepairUnit` carries path markers. The path-marker side includes the queued variants `QMove`
+and `QPatrol` with the move and patrol families, and the point order `Reclaim` alongside
+`ReclaimUnit`. Identity census: 29 none, 19 acknowledgement, 17 acknowledgement plus path
+markers, 2 build-footprint.
+
 **Retained-opaque static gate-mask bits — Established census, no located reader.** The union
 of the 68 static masks is bits 1-11, 16, 17, 18, 19, 20, and 24. Beyond the named bits above
 (9, 10, 18, 20 static; 14 and 21 exist only at runtime and appear in no static mask), the

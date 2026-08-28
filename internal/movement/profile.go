@@ -62,6 +62,9 @@ func NewProfile(c *content.MovementClass) Profile {
 	// Footprint is authored as integer, stored as 16-bit [02 "Movement class record"].
 	fx := clampInt16(c.FootprintX)
 	fz := clampInt16(c.FootprintZ)
+	// Water depths are signed 16-bit record fields [02 §5] 3-4; the store
+	// truncates and every classifier comparison reads them sign-extended
+	// [04 §6.1 R-DOC04-B], so narrow by the record's word width.
 	// Slopes are stored as bytes [02 "Movement class record"] 5,7.
 	ms := clampUint8(c.MaxSlope)
 	bs := clampUint8(c.BadSlope)
@@ -70,14 +73,18 @@ func NewProfile(c *content.MovementClass) Profile {
 	return Profile{
 		FootPrintX:    fx,
 		FootPrintZ:    fz,
-		MaxWaterDepth: c.MaxWaterDepth,
-		MinWaterDepth: c.MinWaterDepth,
+		MaxWaterDepth: narrowInt16(c.MaxWaterDepth),
+		MinWaterDepth: narrowInt16(c.MinWaterDepth),
 		MaxSlope:      ms,
 		BadSlope:      bs,
 		MaxWaterSlope: mws,
 		BadWaterSlope: bws,
 	}
 }
+
+// narrowInt16 stores v through the record's signed 16-bit field width and
+// reads it back sign-extended [02 §5] 3-4 [04 §6.1 R-DOC04-B].
+func narrowInt16(v int32) int32 { return int32(int16(v)) }
 
 func clampInt16(v int32) int16 {
 	if v < -32768 {

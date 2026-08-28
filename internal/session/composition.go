@@ -99,10 +99,14 @@ func loadAuthoredModel(fs vfs.FSOps, objectName string) (*model.Model, vfs.Prove
 
 // cobPresentationSink admits only already-resolved COB events. It supplies
 // the originating unit identity while the collector assigns sequence/order.
+// The session reference backs the strip producers this sink fronts
+// [R-STRIP-01 §1]; it is authoritative sim state appended at the producer,
+// independent of the presentation emission below.
 type cobPresentationSink struct {
 	publication *publicationState
 	clock       *clock.State
 	source      pool.Handle
+	session     *Session
 	pieceMap    []int
 }
 
@@ -147,9 +151,24 @@ func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
 		e.PaletteRow = 6
 		e.NanolatheGeometryKnown = true
 		s.publication.events.EmitNanolathe(e)
+		// Strip-6 producer [R-STRIP-01 §1 strip 6]: nano records append to
+		// strip 6 of the ten-strip family, one emitter per accepted
+		// submission [03 §5.5][05 "Established — the record constructor and
+		// allocator epilogue"]. The emitter is authoritative sim state; its
+		// first five particles spawn here (thirty CRT draws at the producer)
+		// and the rest advance in phase 11 [03 §5.5].
+		if s.session != nil {
+			s.session.appendStripNanoEmitter(
+				[3]numeric.Fixed{e.X, e.Y, e.Z},
+				[3]numeric.Fixed{e.TargetX, e.TargetY, e.TargetZ})
+		}
 	case cob.PresentationMuzzle:
 		s.publication.events.EmitMuzzleFlash(e)
 	case cob.PresentationSmoke:
+		// TODO(R-STRIP-01 §1): retail's COB emit-sfx local variants are a
+		// strip-9 smoke producer gated by a weapon/definition flag this
+		// event payload does not carry. Left unwired rather than invented;
+		// a PresentationEvent that carries the gating flag would settle it.
 		s.publication.events.EmitSmokeStart(e)
 	case cob.PresentationTrail:
 		s.publication.events.EmitProjectileTrail(e)
@@ -166,7 +185,7 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 	if err != nil {
 		return fmt.Errorf("unit %q model %s: %w", u.Def.UnitName, prov.ProviderID(), err)
 	}
-	sink := &cobPresentationSink{publication: s.publication, clock: s.Clock, source: u.Handle}
+	sink := &cobPresentationSink{publication: s.publication, clock: s.Clock, source: u.Handle, session: s}
 	visible := func(_ int, _ int32) bool {
 		// This is the established unit-level gameplay visibility gate used by
 		// combat acquisition; it never mutates authoritative state [03 §3.2].
@@ -353,6 +372,10 @@ func createAndBindServices(s *Session) error {
 	// publication boundary [01 §4.4][03 §1]. The helper is idempotent so an
 	// existing staged event window or effect pool survives re-binding.
 	s.ensurePublicationState()
+	// The ten effect strips are allocated at battle entry; a re-entry (retry)
+	// replaces the table, destroying every object of the previous battle
+	// [R-CORE-01 §4.4.1]. Producers may append from here on.
+	s.strips = newStripTable()
 	// Worlds with an authored source use one binder before battle entry so
 	// scenario, construction, and forced-slot creation resolve the same model
 	// and script path [04 §4.1].
@@ -503,6 +526,17 @@ func createAndBindServices(s *Session) error {
 			// impact dispatcher stays the request source [R-CORE-01 §4.4.1]
 			// [06 §13.2]; phase 10 draws the CRT jitter and publishes the
 			// offset on the committed frame.
+			//
+			// This callback is also the session edge of retail's impact
+			// dispatcher, whose strip producers are researched but unwired:
+			// TODO(R-STRIP-01 §1): the impact-effect switch case appends a
+			// strip-2 sprinkle object (three CRT jitter draws per spawn) and
+			// the dispatcher's weapon-flag-gated branch appends a strip-9
+			// smoke object. combat.Event carries neither the weapon
+			// smoke flag nor the impact-effect category, so the researched
+			// producer predicates cannot be evaluated here; the events are
+			// left unwired rather than invented. An event payload carrying
+			// the gating weapon fields would settle it.
 			s.RequestShake(ev.Magnitude, ev.Duration)
 		case combat.EventHitSound, combat.EventWaterSound:
 			if ev.Sound != "" {

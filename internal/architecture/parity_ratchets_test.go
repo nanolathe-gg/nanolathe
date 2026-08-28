@@ -213,6 +213,7 @@ var float64ExemptFiles = map[string]string{
 	"internal/sim/numeric/trig.go": "I2 simulation trig-table construction, float64 transient [04 §5.1]",
 	"internal/save/boxes.go":       "I2/I13 save float boxes: the game-time save box and account doubles are byte-layout contracts",
 	"internal/save/bank.go":        "I13 HAPIBANK account record doubles are a byte-layout contract",
+	"internal/session/strips.go":   "I2 nanolathe particle travel distance (sqrt, truncated to the tick count), float64 temporary never stored [03 §5.5]",
 }
 
 // float64Baseline records float64 occurrences per remaining (non-exempt)
@@ -331,7 +332,7 @@ var debtMarkerTotals = map[string]int{
 	"fallback":       211,
 	"guess":          8,
 	"plausible":      1,
-	"todo(question)": 341,
+	"todo(question)": 354,
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -489,6 +490,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/movement/goals.go":               16,
 		"internal/movement/integrate.go":           5,
 		"internal/movement/landing.go":             1,
+		"internal/movement/layer.go":               2,
 		"internal/movement/movegoal.go":            1,
 		"internal/movement/profile.go":             3,
 		"internal/movement/route.go":               3,
@@ -499,7 +501,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/orders/transport.go":             25,
 		"internal/path/goals.go":                   4,
 		"internal/path/queue.go":                   6,
-		"internal/path/search.go":                  5,
+		"internal/path/search.go":                  6,
 		"internal/pool/pool.go":                    3,
 		"internal/save/bank.go":                    3,
 		"internal/session/commands.go":             1,
@@ -511,6 +513,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/session/skirmish.go":             8,
 		"internal/session/state.go":                1,
 		"internal/session/step.go":                 4,
+		"internal/session/strips.go":               10,
 		"internal/sim/numeric/numeric.go":          1,
 		"internal/sim/numeric/trig.go":             1,
 		"internal/sim/rng/rng.go":                  1,

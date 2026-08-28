@@ -150,9 +150,21 @@ func TestRadarProjectileAndFeatureStatusArtGate(t *testing.T) {
 
 func TestRadarPublishedPaletteSelectsAuthoredFrame(t *testing.T) {
 	h := &retailBattleHUD{}
-	c := frame.RadarContactView{Owner: 1, Palette: 2}
-	if got := h.radarOwnerFrameIndex(nil, c, 4); got != 2 {
+	c := frame.RadarContactView{Owner: 1, Palette: 2, PaletteKnown: true}
+	if got := h.radarOwnerFrameIndex(c, 4); got != 2 {
 		t.Fatalf("published palette selected frame %d, want 2", got)
+	}
+	ownerZero := frame.RadarContactView{Owner: 0, Palette: 0, PaletteKnown: true}
+	if got := h.radarOwnerFrameIndex(ownerZero, 4); got != 0 {
+		t.Fatalf("known owner-zero palette selected frame %d, want 0", got)
+	}
+	unknown := frame.RadarContactView{Owner: 1, Palette: 2}
+	if got := h.radarOwnerFrameIndex(unknown, 4); got != -1 {
+		t.Fatalf("unknown palette selected frame %d, want suppressed", got)
+	}
+	neutral := frame.RadarContactView{Owner: 10, PaletteKnown: false}
+	if got := h.radarOwnerFrameIndex(neutral, 4); got != -1 {
+		t.Fatalf("neutral palette selected frame %d, want suppressed", got)
 	}
 }
 
@@ -182,11 +194,11 @@ func TestRebuildRadarPublishedContactPixelsAndSelectedRange(t *testing.T) {
 		Radar: frame.RadarView{Contacts: []frame.RadarContactView{
 			// Selected, active, non-toggle unit: its published authored range
 			// produces a radar-colored circle and its authored blip pixel.
-			{Kind: frame.RadarContactUnit, Owner: local, X: numeric.Fixed(32 << 16), Z: numeric.Fixed(63 << 16), Status: 0x10, RangeStatus: true, Active: true, RadarDistance: 8, Palette: 0, Visible: true},
+			{Kind: frame.RadarContactUnit, Owner: local, X: numeric.Fixed(32 << 16), Z: numeric.Fixed(63 << 16), Status: 0x10, RangeStatus: true, Active: true, RadarDistance: 8, Palette: 0, PaletteKnown: true, Visible: true},
 			// Unselected unit retains only its blip; the selected-range circle
 			// must not appear at x=88.
-			{Kind: frame.RadarContactUnit, Owner: local, X: numeric.Fixed(80 << 16), Z: numeric.Fixed(63 << 16), Visible: true, Palette: 0},
-			{Kind: frame.RadarContactFeature, Owner: local, X: numeric.Fixed(96 << 16), Z: numeric.Fixed(63 << 16), Visible: true, Palette: 1},
+			{Kind: frame.RadarContactUnit, Owner: local, X: numeric.Fixed(80 << 16), Z: numeric.Fixed(63 << 16), Visible: true, Palette: 0, PaletteKnown: true},
+			{Kind: frame.RadarContactFeature, Owner: local, X: numeric.Fixed(96 << 16), Z: numeric.Fixed(63 << 16), Visible: true, Palette: 1, PaletteKnown: true},
 			{Kind: frame.RadarContactProjectile, Owner: local, X: numeric.Fixed(112 << 16), Z: numeric.Fixed(63 << 16), Visible: true},
 		}},
 	}

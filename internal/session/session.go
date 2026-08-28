@@ -111,6 +111,12 @@ type Session struct {
 	Snapshot *frame.Buffer
 
 	publication *publicationState // staged events and admitted effects at the committed-frame boundary [01 §4.4][03 §1]
+
+	// strips is the ten effect-strip object family swept at phase 11. It is
+	// allocated at battle entry (createAndBindServices) and destroyed with
+	// every object at battle exit [R-CORE-01 §4.4.1]; producers append by
+	// literal strip index [R-STRIP-01 §1].
+	strips *stripTable
 	// CampaignSlot is the mission list slot for progress W/L [P1-01 §2.3] [P0-05].
 	CampaignSlot int
 
@@ -618,9 +624,12 @@ func handleTeardownB(s *Session) {
 // teardown preserves the state-machine callback without owning platform
 // resources. Window, display, sound, archive, semaphore, and registry cleanup
 // belong to their concrete command/platform owners [01 §2.3]. Simulation pools
-// remain owned by their respective services.
+// remain owned by their respective services. The strip table is destroyed with
+// every object at battle exit [R-CORE-01 §4.4.1]; a fresh battle entry
+// allocates a new one.
 func (s *Session) teardown(variant int) {
 	_ = variant
+	s.strips.release()
 }
 
 // handleRouter implements state 2 front-end/session router, selects 3|4|5 [08 "Session states"].

@@ -41,12 +41,26 @@ func TestPlaceBattleModalCentersOverRetailPlayfield(t *testing.T) {
 func TestBattleMenuPauseAndResume(t *testing.T) {
 	b := &battleSession{sess: &session.Session{Clock: &clock.State{}}}
 	b.openBattleMenu()
-	if b.battleState().Modal() != ui.BattleModalOptions || !b.sess.Clock.Paused {
-		t.Fatalf("open menu = state %d paused %v; want options and paused", b.battleState().Modal(), b.sess.Clock.Paused)
+	if b.battleState().Modal() != ui.BattleModalOptions || !b.sess.Clock.Paused || !b.battleState().Paused() {
+		t.Fatalf("open menu = state %d clock paused %v ui paused %v; want options and paused", b.battleState().Modal(), b.sess.Clock.Paused, b.battleState().Paused())
 	}
 	b.closeBattleMenu()
-	if b.battleState().Modal() != ui.BattleModalClosed || b.sess.Clock.Paused {
-		t.Fatalf("close menu = state %d paused %v; want closed and running", b.battleState().Modal(), b.sess.Clock.Paused)
+	if b.battleState().Modal() != ui.BattleModalClosed || b.sess.Clock.Paused || b.battleState().Paused() {
+		t.Fatalf("close menu = state %d clock paused %v ui paused %v; want closed and running", b.battleState().Modal(), b.sess.Clock.Paused, b.battleState().Paused())
+	}
+}
+
+func TestBattleMenuPauseTruthSurvivesStaleCommittedFrame(t *testing.T) {
+	b := &battleSession{sess: &session.Session{Clock: &clock.State{}}}
+	b.openBattleMenu()
+	// No tick is published while paused; closing the menu must still use the
+	// canonical UI truth and synchronously resume the session.
+	if !b.battleState().Paused() || !b.sess.Clock.Paused {
+		t.Fatal("opening options did not synchronously pause")
+	}
+	b.closeBattleMenu()
+	if b.battleState().Paused() || b.sess.Clock.Paused {
+		t.Fatal("closing options did not synchronously unpause")
 	}
 }
 

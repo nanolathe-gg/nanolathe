@@ -68,6 +68,52 @@ func TestPublishSnapshotCarriesCommittedUnitActivation(t *testing.T) {
 	}
 }
 
+func TestPublishSnapshotCarriesRadarOwnerPalettes(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "radar-palette"}, MaxDamage: 1}
+	w := units.New(4, nil)
+	if _, err := w.Create(def, 0, 0, 0, 0); err != nil {
+		t.Fatalf("create owner-zero unit: %v", err)
+	}
+	if _, err := w.Create(def, 1, numeric.Fixed(1<<16), 0, 0); err != nil {
+		t.Fatalf("create other-owner unit: %v", err)
+	}
+	s := &Session{
+		Snapshot: frame.NewBuffer(), Units: w, LocalOwner: 0,
+		Skirmish: SkirmishConfig{NumPlayers: 2},
+	}
+	s.Skirmish.Players[0].Color = 0
+	s.Skirmish.Players[1].Color = 7
+	s.publishSnapshot(1)
+	cur := s.Snapshot.Current()
+	if cur == nil || len(cur.Radar.Contacts) != 2 {
+		t.Fatalf("radar contacts = %#v, want two unit contacts", cur)
+	}
+	zero, other := cur.Radar.Contacts[0], cur.Radar.Contacts[1]
+	if zero.Owner != 0 || !zero.OwnerKnown || !zero.PaletteKnown || zero.Palette != 0 {
+		t.Fatalf("owner-zero radar palette = %+v, want known frame 0", zero)
+	}
+	if other.Owner != 1 || !other.OwnerKnown || !other.PaletteKnown || other.Palette != 7 {
+		t.Fatalf("other-owner radar palette = %+v, want known frame 7", other)
+	}
+	// Publication owns the palette selector; changing the live player record
+	// after publication must not alter the committed contact.
+	s.Skirmish.Players[1].Color = 3
+	if cur.Radar.Contacts[1].Palette != 7 {
+		t.Fatal("mutating live player color changed committed radar palette")
+	}
+
+	// Neutral/unknown contacts have no player-record selector and therefore no
+	// owner art. The helper is the same path used by projectile/feature contacts.
+	neutral, known := radarOwnerPalette(s, 10, true)
+	if known || neutral != 0 {
+		t.Fatalf("neutral radar palette = (%d, %t), want unknown zero", neutral, known)
+	}
+	unknown, known := radarOwnerPalette(s, 1, false)
+	if known || unknown != 0 {
+		t.Fatalf("unknown radar palette = (%d, %t), want unknown zero", unknown, known)
+	}
+}
+
 func TestRadarStepClearsSeenWithSingleActivePlayer(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "seen"}, MaxDamage: 1}
 	w := units.New(4, nil)

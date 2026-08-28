@@ -427,6 +427,8 @@ func (s *Session) publishSnapshot(tick uint32) {
 			}
 			sensorIndex++
 			selected := u.Owner == s.LocalOwner && u.Flags&0x10 != 0
+			ownerKnown := u.Owner < 10
+			palette, paletteKnown := radarOwnerPalette(s, u.Owner, ownerKnown)
 			// The contact status word carries the selected/range-status bit used by
 			// the later circle branch. Keep it distinct from visibility bits, which
 			// are supplied by the sensor pass [03 §3.9].
@@ -435,7 +437,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				status |= 0x10
 			}
 			contact := frame.RadarContactView{
-				Kind: frame.RadarContactUnit, Handle: u.Handle, Owner: u.Owner,
+				Kind: frame.RadarContactUnit, Handle: u.Handle, Owner: u.Owner, OwnerKnown: ownerKnown,
 				X: u.X, Y: u.Y, Z: u.Z, Status: status,
 				Hidden: hidden, Stealth: stealth, Active: active,
 				OnOffable: onOffable,
@@ -443,6 +445,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				Seen:      status&visibility.SeenBit != 0,
 				Friendly:  status&visibility.FriendlyMask != 0,
 				Visible:   u.Owner == s.LocalOwner || status&visibility.SeenBit != 0,
+				Palette:   palette, PaletteKnown: paletteKnown,
 			}
 			if u.Def != nil {
 				contact.Commander = u.Def.Commander
@@ -491,15 +494,17 @@ func (s *Session) publishSnapshot(tick uint32) {
 	}
 	for _, p := range published.Projectiles {
 		owner := p.Owner
+		palette, paletteKnown := radarOwnerPalette(s, owner, p.OwnerKnown)
 		published.Radar.Contacts = append(published.Radar.Contacts, frame.RadarContactView{
-			Kind: frame.RadarContactProjectile, Handle: p.Handle, Owner: owner, OwnerKnown: p.OwnerKnown, X: p.X, Y: p.Y, Z: p.Z,
+			Kind: frame.RadarContactProjectile, Handle: p.Handle, Owner: owner, OwnerKnown: p.OwnerKnown, Palette: palette, PaletteKnown: paletteKnown, X: p.X, Y: p.Y, Z: p.Z,
 			Graphic: p.Graphic, AssetID: p.AssetID, Status: p.Flags,
 			Visible: radarPointVisible(s, owner, p.OwnerKnown, p.X, p.Y, p.Z),
 		})
 	}
 	for _, f := range published.Features {
+		palette, paletteKnown := radarOwnerPalette(s, f.Owner, f.OwnerKnown)
 		published.Radar.Contacts = append(published.Radar.Contacts, frame.RadarContactView{
-			Kind: frame.RadarContactFeature, Owner: f.Owner, OwnerKnown: f.OwnerKnown, X: f.X, Y: f.Y, Z: f.Z,
+			Kind: frame.RadarContactFeature, Owner: f.Owner, OwnerKnown: f.OwnerKnown, Palette: palette, PaletteKnown: paletteKnown, X: f.X, Y: f.Y, Z: f.Z,
 			Graphic: f.Model, AssetID: f.Filename, Status: f.Status,
 			Visible: radarFeatureVisible(s, f),
 		})
@@ -599,6 +604,20 @@ func (s *Session) publishSnapshot(tick uint32) {
 	if s.publication != nil && s.publication.events != nil {
 		s.publication.events.Reset()
 	}
+}
+
+// radarOwnerPalette resolves the player-record color used as the authored
+// radar/feature frame selector. Neutral selectors and unresolved owners have
+// no player color and therefore publish no owner art [03 §3.9].
+func radarOwnerPalette(s *Session, owner uint8, ownerKnown bool) (uint8, bool) {
+	if s == nil || !ownerKnown || owner >= 10 {
+		return 0, false
+	}
+	color := s.Skirmish.Players[owner].Color
+	if color < 0 || color > 255 {
+		return 0, false
+	}
+	return uint8(color), true
 }
 
 func radarHasLiveUnit(contacts []frame.RadarContactView, id uint16) bool {

@@ -1588,9 +1588,5 @@ func (b *battleSession) togglePause() {
 	if b == nil || b.sess == nil {
 		return
 	}
-	paused := true
-	if b.sess.Clock != nil {
-		paused = !b.sess.Clock.Paused
-	}
-	b.applyBattleSchedule(ui.PauseIntent(paused))
+	b.applyBattleSchedule(ui.PauseIntent(!b.battleState().Paused()))
 }

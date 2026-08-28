@@ -143,6 +143,20 @@ func isPassableWithBounds(c Cell, isPassable func(Cell) bool, hasBounds bool, bo
 	return isPassable(c)
 }
 
+// passable is the session's unified passability test. With the class-layer
+// value form set, only the value 0 blocks — steep (1), owner-mask miss (2)
+// and clear (3) all expand [04 §6.1 R-DOC04-B]; OOB remains impassable
+// [04 §7.1] C10. Otherwise the boolean injected form applies.
+func (s *Session) passable(c Cell) bool {
+	if s.cfg.PassableValue != nil {
+		if s.cfg.HasBounds && !InBounds(c, s.cfg.Bounds) {
+			return false
+		}
+		return s.cfg.PassableValue(c) != 0
+	}
+	return isPassableWithBounds(c, s.cfg.IsPassable, s.cfg.HasBounds, s.cfg.Bounds)
+}
+
 // startFanDir is the parent travel direction assumed for the search start,
 // which has no parent. TODO(question): [04 §7.1] and the decompile
 // (notes/movement/06_path_search.md §5, fanWidth init 4 → 9 attempts) give
@@ -245,6 +259,20 @@ type SearchConfig struct {
 	Bias       Point           // half-footprint bias added to cell coords for published waypoints [04 §7.1] C1
 	HasBounds  bool            // whether Bounds is valid for OOB checks
 	Bounds     Rect            // inclusive lattice bounds; OOB = impassable [04 §7.1] C10
+
+	// PassableValue is the stamped class-layer value form of the passability
+	// test [04 §6.1 R-DOC04-B]: 0 blocked, 1 steep, 2 owner/building-mask
+	// miss, 3 clear. EVERY consumer — the A* expansion and all greedy-ray
+	// probes — treats the result as passable iff it is nonzero: only 0
+	// hard-blocks [04 §6.1 R-DOC04-B]. When set it takes precedence over
+	// IsPassable; OOB remains impassable [04 §7.1] C10.
+	PassableValue func(Cell) uint8
+
+	// Revise runs the bound class record's request revision pass before any
+	// expansion [04 §6.1 R-DOC04-B][04 §7.3]: the request init revises the
+	// record and its shared layer before enumerating or expanding. Nil is a
+	// no-op.
+	Revise func()
 }
 
 // SearchResult is the outcome of Search [04 §7.2] C10, [04 §7.3] C13.
@@ -295,10 +323,19 @@ func NewSession(cfg SearchConfig) *Session {
 	return s
 }
 
-// init performs the pre-seed phases: enumeration, early exits, ray walk, and heap seeding [04 §7.2] C9 C10.
+// init performs the pre-seed phases: request revision, enumeration, early
+// exits, ray walk, and heap seeding [04 §7.2] C9 C10.
 func (s *Session) init() {
 	cfg := s.cfg
 	scale := s.scale
+	// Request init revises the bound class record and its shared layer
+	// BEFORE any expansion [04 §6.1 R-DOC04-B][04 §7.3].
+	// TODO(question): the trail places the revise call inside request init
+	// ahead of expansion, but not its order relative to the early exits;
+	// it runs first here.
+	if cfg.Revise != nil {
+		cfg.Revise()
+	}
 	if cfg.Goal == nil {
 		s.done = true
 		s.resultStatus = StatusRejected
@@ -350,7 +387,7 @@ func (s *Session) init() {
 	hasTolerance := false
 	var notified Status
 	if hasNearest {
-		best, connects, hasBest := rayWalk(cfg.Start, nearestGoal, cfg.IsPassable, cfg.HasBounds, cfg.Bounds, cfg.Goal, scale)
+		best, connects, hasBest := rayWalk(cfg.Start, nearestGoal, s.passable, cfg.HasBounds, cfg.Bounds, cfg.Goal, scale)
 		if hasBest {
 			tolerance = best
 			hasTolerance = true
@@ -464,7 +501,7 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 		neighCells, neighDirs := NeighborsForDir(node.Cell, node.Dir, isFirst)
 		for idx, nCell := range neighCells {
 			dir := neighDirs[idx]
-			if !isPassableWithBounds(nCell, cfg.IsPassable, cfg.HasBounds, cfg.Bounds) {
+			if !s.passable(nCell) {
 				continue
 			}
 			step := StepCost(dir)

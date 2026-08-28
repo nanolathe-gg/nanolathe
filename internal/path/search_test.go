@@ -758,3 +758,108 @@ func TestResumableWriteOnceSlots(t *testing.T) {
 		t.Fatalf("write-once resume vs one-shot mismatch")
 	}
 }
+
+// TestValuePassabilityOnlyZeroBlocks locks the class-layer consumption rule
+// [04 §6.1 R-DOC04-B]: with the value-form passability, every consumer — the
+// A* expansion and the greedy-ray probes — treats the result as passable iff
+// it is nonzero; only the terrain value 0 hard-blocks. The start is fully
+// enclosed by the value under test, so success requires traversing it.
+func TestValuePassabilityOnlyZeroBlocks(t *testing.T) {
+	run := func(ring uint8) SearchResult {
+		vals := func(c Cell) uint8 {
+			if c.X >= 4 && c.X <= 6 && c.Z >= 4 && c.Z <= 6 && !(c.X == 5 && c.Z == 5) {
+				return ring
+			}
+			return 3
+		}
+		cfg := SearchConfig{
+			Start:         Cell{X: 5, Z: 5},
+			Goal:          PointGoal(Cell{X: 20, Z: 20}, 0),
+			Scale:         65536,
+			HasBounds:     true,
+			Bounds:        Rect{Min: Cell{X: 0, Z: 0}, Max: Cell{X: 23, Z: 23}},
+			PassableValue: vals,
+		}
+		return Search(cfg)
+	}
+	for _, ring := range []uint8{1, 2, 3} {
+		res := run(ring)
+		if res.Status != 0 || len(res.Points) == 0 {
+			t.Fatalf("ring value %d must not block: status %d points %d [04 §6.1 R-DOC04-B]", ring, res.Status, len(res.Points))
+		}
+	}
+	if res := run(0); res.Status != StatusRejected {
+		t.Fatalf("enclosure of 0 must yield no route, status %d [04 §6.1 R-DOC04-B]", res.Status)
+	}
+}
+
+// TestReviseRunsBeforeExpansion locks the request-init ordering [04 §6.1
+// R-DOC04-B][04 §7.3]: the class-layer revision pass runs at request init
+// before any expansion, exactly once per session initialization — including
+// on the start-satisfies early exit, which happens after the revise call.
+func TestReviseRunsBeforeExpansion(t *testing.T) {
+	// Values are blocked until Revise arms them; if the revision pass did not
+	// run before expansion, the search must fail.
+	armed := false
+	reviseRuns := 0
+	vals := func(c Cell) uint8 {
+		if !armed {
+			return 0
+		}
+		return 3
+	}
+	cfg := SearchConfig{
+		Start:         Cell{X: 2, Z: 2},
+		Goal:          PointGoal(Cell{X: 9, Z: 2}, 0),
+		Scale:         65536,
+		PassableValue: vals,
+		Revise: func() {
+			reviseRuns++
+			armed = true
+		},
+	}
+	res := Search(cfg)
+	if reviseRuns != 1 {
+		t.Fatalf("revise must run exactly once per request init, got %d [04 §6.1 R-DOC04-B]", reviseRuns)
+	}
+	if res.Status != 0 || len(res.Points) == 0 {
+		t.Fatalf("search must see post-revise passability: status %d", res.Status)
+	}
+	// The early exit also runs after the revise call.
+	reviseRuns = 0
+	armed = false
+	cfg2 := cfg
+	cfg2.Goal = PointGoal(Cell{X: 2, Z: 2}, 0) // start satisfies
+	_ = Search(cfg2)
+	if reviseRuns != 1 {
+		t.Fatalf("revise must run even on the start-satisfied early exit, got %d", reviseRuns)
+	}
+}
+
+// TestRayWalkValueSemantics locks the greedy-ray probe against the value
+// form [04 §6.1 R-DOC04-B]: owner/building-mask miss (2) and steep (1) cells
+// are traversable to the ray; only 0 stops it.
+func TestRayWalkValueSemantics(t *testing.T) {
+	goal := PointGoal(Cell{X: 9, Z: 5}, 0)
+	walk := func(mid func(Cell) uint8) (bool, bool) {
+		vals := func(c Cell) uint8 {
+			if c.X >= 3 && c.X <= 6 {
+				return mid(c)
+			}
+			return 3
+		}
+		_, connects, hasBest := rayWalk(Cell{X: 0, Z: 5}, Cell{X: 9, Z: 5}, func(c Cell) bool {
+			return vals(c) != 0
+		}, false, Rect{}, goal, 65536)
+		return connects, hasBest
+	}
+	if connects, _ := walk(func(Cell) uint8 { return 2 }); !connects {
+		t.Fatalf("ray must traverse owner-mask miss (2) cells [04 §6.1 R-DOC04-B]")
+	}
+	if connects, _ := walk(func(Cell) uint8 { return 1 }); !connects {
+		t.Fatalf("ray must traverse steep (1) cells [04 §6.1 R-DOC04-B]")
+	}
+	if connects, _ := walk(func(Cell) uint8 { return 0 }); connects {
+		t.Fatalf("ray must stop on blocked (0) cells [04 §6.1 R-DOC04-B]")
+	}
+}

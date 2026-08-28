@@ -38,7 +38,7 @@ func (s *Session) stepAuthoritativePhases(tick uint32) {
 	s.phaseWind(tick)             // 8  implemented — complete scheduled redraw [01 §7.3] DET-03
 	s.phaseMeteorShower(tick)     // 9  implemented — meteor shower [R-CORE-01 §4.4.1]
 	s.phaseCameraShake(tick)      // 10 implemented — shake driver [R-CORE-01 §4.4.1] DET-04
-	s.phaseObjectSweeps(tick)     // 11 research-blocked TODO(R-CORE-01 §4.4.1) — family identified, not wired
+	s.phaseObjectSweeps(tick)     // 11 implemented — ten effect-strip sweeps [R-CORE-01 §4.4.1][R-STRIP-01]
 	s.phaseCadenceFlip(tick)      // 12 research-blocked TODO(question) — flip mechanism unknown
 
 	// Sharing is the transport tail after phase 12 [01 §4.4].
@@ -138,20 +138,20 @@ func (s *Session) phaseCameraShake(tick uint32) {
 }
 
 // phaseObjectSweeps is phase 11 [01 §4.4][R-CORE-01 §4.4.1] — the ten
-// effect-strip update sweeps. The family is IDENTIFIED as the ten effect
-// strips of the rendering contract (doc 03 "Strip storage and lifecycle"):
-// per strip ascending and per object in insertion order, a removal verdict is
-// evaluated BEFORE the update virtual — positive destroys (destructor with
-// argument 1) and removes with stable left compaction, zero runs the update
-// virtual and keeps the object; empty strips touch no globals; no RNG.
-// Research-blocked: nanolathe has no strip storage — the session's effect
-// publication service (render.EffectService, publicationState.effects) is a
-// fixed-capacity presentation pool of admitted event views, not the
-// vtable-backed strip family, so the sweep cannot be force-fit onto it.
-// TODO(R-CORE-01 §4.4.1): implement the ten-strip table (allocated at battle
-// entry, producers append by literal strip index, oldest-first eviction above
-// 400) and wire this sweep to it.
+// effect-strip update sweeps over the strip table allocated at battle entry
+// (see strips.go). Per strip ascending and per object in insertion order, a
+// removal verdict is evaluated BEFORE the update virtual — a positive verdict
+// destroys (destructor with argument 1) and removes the object with stable
+// left compaction, a zero verdict runs the update work and keeps the object;
+// a terminal condition created during an update is noticed only on the next
+// invocation. Empty strips touch no globals and the dispatcher consumes no
+// random draws; object-internal draws all come from the CRT presentation
+// stream [R-STRIP-01 §2][R-STRIP-01 §3]. The simulation Park–Miller stream is
+// never touched by phase 11.
 func (s *Session) phaseObjectSweeps(tick uint32) {
+	if s.strips != nil && s.strips.anyObjects() {
+		s.strips.sweep(tick, s)
+	}
 	s.recordPhase("phase11-objects", tick)
 }
 

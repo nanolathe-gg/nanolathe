@@ -102,6 +102,13 @@ type BattleState struct {
 	modal        BattleModal
 	pressed      int
 	pressedModal BattleModal
+	// paused is the UI's synchronous pause truth. It is initialized to the
+	// running production state and updated only by the scheduling boundary;
+	// committed frames may synchronize it until that first UI-issued pause
+	// transition, because a paused session can publish no newer tick [01 §4.3]
+	// [07 §11].
+	paused              bool
+	pauseScheduleIssued bool
 
 	// Input is intentionally public as a plain value so the cmd adapter can
 	// render and update it without introducing another state bridge. No mutable
@@ -125,7 +132,7 @@ func NewBattleState(modeByte byte) *BattleState {
 	if modeByte&0x04 != 0 {
 		offset = PanelVisible
 	}
-	return &BattleState{modal: BattleModalClosed, pressed: -1, Input: BattleInputState{Latch: input.LatchNormal}, PanelOffset: offset, PanelTarget: offset}
+	return &BattleState{modal: BattleModalClosed, pressed: -1, paused: false, Input: BattleInputState{Latch: input.LatchNormal}, PanelOffset: offset, PanelTarget: offset}
 }
 
 // NewProductionBattleState applies the established battle-entry composition
@@ -434,6 +441,34 @@ func (s *BattleState) ClearModalPress() {
 	}
 	s.pressed = -1
 	s.pressedModal = BattleModalClosed
+}
+
+// Paused reports the canonical UI pause truth. It is intentionally separate
+// from the last committed frame: pausing may stop simulation before another
+// tick-end publication can carry the new state [01 §4.3][I6].
+func (s *BattleState) Paused() bool {
+	return s != nil && s.paused
+}
+
+// SetPauseTruth records the actual result returned by Session.SetPaused at the
+// scheduling boundary. Once UI has issued a pause transition, later committed
+// frames cannot overwrite this synchronous truth with a stale tick [I6].
+func (s *BattleState) SetPauseTruth(paused bool) {
+	if s == nil {
+		return
+	}
+	s.paused = paused
+	s.pauseScheduleIssued = true
+}
+
+// SyncCommittedPause adopts the first/current committed pause value only
+// before a UI-issued scheduling transition. This keeps initial presentation
+// aligned while preserving immediate pause/unpause transitions [I6].
+func (s *BattleState) SyncCommittedPause(paused bool) {
+	if s == nil || s.pauseScheduleIssued {
+		return
+	}
+	s.paused = paused
 }
 
 // PauseIntent creates the concrete pause value used by modal entry/exit and

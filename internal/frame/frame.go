@@ -361,7 +361,12 @@ type RadarContactView struct {
 	Seen          bool
 	Friendly      bool
 	Commander     bool
+	// Palette is the owner-player frame selector for authored radar/feature
+	// art. PaletteKnown distinguishes a published selector of zero from an
+	// unresolved owner or neutral contact; presentation must not recover an
+	// unknown selector from live session state [03 §3.9][I6].
 	Palette       uint8
+	PaletteKnown  bool
 	Visible       bool
 	RadarDistance int32
 	SonarDistance int32
@@ -502,7 +507,11 @@ type FogView struct {
 // after Publish succeeds the writer must treat the frame as immutable until
 // the next permitted BeginWrite reuse.
 type Frame struct {
-	Tick        uint32
+	Tick uint32
+	// Paused is the scheduler state captured at this completed tick-end
+	// publication. A pause transition can take effect synchronously without
+	// another completed tick; UI keeps its own canonical truth for that interval
+	// [01 §4.3][07 §11].
 	Paused      bool
 	Units       []UnitView
 	Projectiles []ProjectileView
