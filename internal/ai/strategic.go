@@ -428,7 +428,9 @@ func (s *Strategic) recomputeClassVectors() {
 		if def != nil {
 			weapons := []*content.WeaponDef{def.Weapon1Def, def.Weapon2Def, def.Weapon3Def}
 			for _, wp := range weapons {
-				if wp == nil {
+				if content.IsWeaponInactive(wp) {
+					// nil, or the record-0 inactive sentinel a missed link
+					// resolves to — not a weapon [02 §5 R-CONTENT-02].
 					continue
 				}
 				// TODO(question): Historical analysis omitted; independently worded behavior is needed.

@@ -136,7 +136,7 @@ func TestClickCommanderSelectsExactlyOne(t *testing.T) {
 	// pass uses framebuffer coordinates, so points under the side rail are not
 	// valid click fixtures.
 	cmdr := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
-	b.latch = input.LatchNormal
+	b.battleState().Input.Latch = input.LatchNormal
 	sx, sy := screenPos(cam, cmdr)
 	clickAt(b, sx, sy, false)
 	count := 0
@@ -161,7 +161,7 @@ func TestClickCommanderSelectsExactlyOne(t *testing.T) {
 func TestClickAtRenderedCommanderPosition(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
 	b.sess.LocalOwner = 0
-	b.latch = input.LatchNormal
+	b.battleState().Input.Latch = input.LatchNormal
 	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
 	beamX, beamY := b.cam.WorldToScreen(commander.X, commander.Y, commander.Z)
 	sx, sy := beamX-camera.OriginX, beamY-camera.OriginY
@@ -178,7 +178,7 @@ func TestClickAtRenderedCommanderPosition(t *testing.T) {
 func TestClickAtRenderedCommanderPositionUsesSnapshotPicker(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
 	b.sess.LocalOwner = 0
-	b.latch = input.LatchNormal
+	b.battleState().Input.Latch = input.LatchNormal
 	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
 	w := b.sess.Snapshot.BeginWrite()
 	*w = frame.Frame{
@@ -210,7 +210,7 @@ func TestEmptyClickClearsShiftToggles(t *testing.T) {
 	b.sess.LocalOwner = 0
 	a := placeUnit(b, "armcons", numeric.Fixed(180*65536), numeric.Fixed(100*65536))
 	c := placeUnit(b, "armsolar", numeric.Fixed(320*65536), numeric.Fixed(220*65536))
-	b.latch = input.LatchNormal
+	b.battleState().Input.Latch = input.LatchNormal
 	// Click A selects A
 	sxA, syA := screenPos(b.cam, a)
 	clickAt(b, sxA, syA, false)
@@ -310,14 +310,14 @@ func TestFoggedEnemyCannotBeSelectedOrTargeted(t *testing.T) {
 	b.sess.Vis = &visibility.Service{} // empty
 	enemy := placeUnit(b, "armsolar", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
 	enemy.Owner = 1
-	b.latch = input.LatchNormal
+	b.battleState().Input.Latch = input.LatchNormal
 	sx, sy := screenPos(b.cam, enemy)
 	clickAt(b, sx, sy, false)
 	if enemy.Flags&hud.SelectionFlag != 0 {
 		t.Fatalf("fogged enemy should not be selectable")
 	}
 	// Targeting: armed attack latch should not acquire fogged unit handle
-	b.latch = input.LatchAttack
+	b.battleState().Input.Latch = input.LatchAttack
 	// Use orderSelected path via armed click
 	h, u, _ := b.pickTarget(sx, sy)
 	if h != 0 || u != nil {
@@ -335,7 +335,7 @@ func TestFoggedEnemyCannotBeSelectedOrTargeted(t *testing.T) {
 	own := placeUnit(b, "armsolar", numeric.Fixed(300*65536), numeric.Fixed(200*65536))
 	own.Owner = 0
 	sxOwn, syOwn := screenPos(b.cam, own)
-	b.latch = input.LatchNormal
+	b.battleState().Input.Latch = input.LatchNormal
 	clickAt(b, sxOwn, syOwn, false)
 	if own.Flags&hud.SelectionFlag == 0 {
 		t.Fatalf("own unit should be selectable even with empty vis (owner bypass)")
@@ -357,7 +357,7 @@ func TestEqualOverlapTieLowerSlotWins(t *testing.T) {
 	if u1 == nil || u2 == nil {
 		t.Fatalf("units not created")
 	}
-	b.latch = input.LatchNormal
+	b.battleState().Input.Latch = input.LatchNormal
 	sx, sy := screenPos(b.cam, u1) // same as u2
 	// First via direct picker at the rendered framebuffer position [03 §2.5]
 	shellX := sx
@@ -491,7 +491,7 @@ func TestCanonicalPayloadIdentical(t *testing.T) {
 	u := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
 	replaceSelectionForTest(t, b, u)
 	// Hotkey latch Move then dispatch
-	b.latch = input.LatchMove
+	b.battleState().Input.Latch = input.LatchMove
 	b.orderSelected(2, 200, 200, false)
 	applyPendingBattleCommands(b)
 	q := orders.QueueForUnit(u)

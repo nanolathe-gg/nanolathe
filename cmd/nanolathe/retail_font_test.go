@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe/nanolathe/internal/ui"
 )
 
 func syntheticRetailGAFFont() *formats.GAFEntry {
@@ -52,7 +53,7 @@ func TestRetailMainMenuUsesPrimaryGAFGlyphPixels(t *testing.T) {
 	defer cs.Close()
 
 	assets := loadMenuAssets(cs)
-	shell := &gameShell{cs: cs, assets: assets, mode: modeMenuMain, font: assets.font}
+	shell := &gameShell{cs: cs, assets: assets, frontend: ui.NewFrontend(modeMenuMain), font: assets.font}
 	shell.openMenu(modeMenuMain)
 	if shell.retailGAFTextFont() == nil {
 		t.Fatal("primary anims/hattfont12.gaf slot was not loaded")
@@ -62,12 +63,12 @@ func TestRetailMainMenuUsesPrimaryGAFGlyphPixels(t *testing.T) {
 		t.Fatal(err)
 	}
 	cl.SetPalette(assets.pal)
-	cl.Overlay = func(c *client.Client) { shell.draw(c) }
+	cl.SetUIStage(gameShellUIStage{shell: shell})
 	image := cl.ComposeFrame()
 
 	var single gui.Gadget
 	found := false
-	for _, gadget := range shell.panels.Top().Window.Gadgets {
+	for _, gadget := range shell.frontend.Panels.Top().Window.Gadgets {
 		if gadget.Name == "SINGLE" {
 			single, found = gadget, true
 			break

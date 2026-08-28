@@ -336,7 +336,7 @@ func canCarry(def *content.UnitDef, t *units.Unit) bool {
 // dropsBombs reports a unit whose primary weapon is authored `dropped`, the
 // gate that selects the airstrike shape over cursorattack [07 §8].
 func dropsBombs(def *content.UnitDef) bool {
-	return def.Weapon1Def != nil && def.Weapon1Def.Dropped
+	return !content.IsWeaponInactive(def.Weapon1Def) && def.Weapon1Def.Dropped
 }
 
 // affordable reports that the viewer's stocks cover the command-fire weapon's
@@ -353,9 +353,15 @@ func affordable(def *content.UnitDef, sel CursorSelection) bool {
 // commandFireWeapon picks the slot the BLAST latch fires [02 "Weapon record"].
 func commandFireWeapon(def *content.UnitDef) *content.WeaponDef {
 	for _, w := range [3]*content.WeaponDef{def.Weapon1Def, def.Weapon2Def, def.Weapon3Def} {
-		if w != nil && w.CommandFire {
+		if !content.IsWeaponInactive(w) && w.CommandFire {
 			return w
 		}
+	}
+	if content.IsWeaponInactive(def.Weapon1Def) {
+		// The sentinel a missed link fills is not a command-fire weapon, so
+		// the caller sees no weapon rather than a zero-cost one [02 §5
+		// R-CONTENT-02].
+		return nil
 	}
 	return def.Weapon1Def
 }

@@ -81,7 +81,7 @@ func (b *worldBuckets) ordered() []worldDrawable {
 // drawCommittedFrame is the sole production frame ordering. It reads one
 // immutable frame and writes the indexed surface; cursor conversion happens
 // outside this sequence [03 §1][I6].
-func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool, mode int) {
+func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	if c == nil || len(c.indexed) != c.width*c.height {
 		return
 	}
@@ -95,11 +95,6 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool, mode int) {
 	for i := range c.indexed {
 		c.indexed[i] = 0
 	}
-	// Consume the committed tick's shake before any camera-dependent draw so
-	// terrain, world, fog, selection, and cursor share one camera. The event's
-	// authored request remains the post-projectile presentation event [03 §5.6].
-	c.consumeShake(cur)
-
 	// Terrain/static preparation, radar preparation, and viewport clipping are
 	// unconditional. Radar and clip have no concrete frame input yet.
 	c.drawTerrainPrep()
@@ -115,25 +110,19 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool, mode int) {
 	c.drawWorldPass(cur, ok)
 	// TODO(T23): strip slot 5 has no published live producer.
 
-	if mode != 0 {
-		// TODO(T23): strip slot 6 has no published live producer.
-		c.drawProjectiles(cur)
-		c.drawEffects(cur)
-		// The shake request was consumed before projection so this same frame has
-		// one camera for projectile and subsequent presentation passes [03 §5.6].
-		// TODO(T23): strip slot 7 and auxiliary traversal have no published live
-		// producer; retain the established position without inventing a route.
-		// Auxiliary unit traversal has no published auxiliary draw records yet;
-		// leave this established slot empty rather than inventing a route [03 §1].
-	}
+	// TODO(T23): strip slot 6 has no published live producer.
+	c.drawProjectiles(cur)
+	c.drawEffects(cur)
+	// TODO(T23): strip slot 7 and auxiliary traversal have no published live
+	// producer; retain the established position without inventing a route.
+	// Auxiliary unit traversal has no published auxiliary draw records yet;
+	// leave this established slot empty rather than inventing a route [03 §1].
 	// Strip slot 8 is unconditional; no published producer exists [03 §1].
 
 	// Key overlays and labels have no concrete authored client route yet. Strip
-	// 9 remains mode-gated; unknown producers remain unresolved [03 §1][I9].
-	if mode != 0 {
-		// TODO(T23): strip slot 9 has no published live producer.
-		c.drawFog(cur)
-	}
+	// 9 remains an explicit empty position; unknown producers remain unresolved [03 §1][I9].
+	// TODO(T23): strip slot 9 has no published live producer.
+	c.drawFog(cur)
 	c.drawSelectionStage()
 	c.drawInterface(cur)
 }

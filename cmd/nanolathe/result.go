@@ -1,203 +1,135 @@
 package main
 
 import (
-	"fmt"
+	"strings"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/ui"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// drawResultOverlay renders the retail victory/defeat overlay [07 §11][RS-05][08][P1-01]
-// using authored igtitles GAF frames via the same intgaf/gui machinery as HUD panels [07 §6][07 §11].
-// It replaces the custom text chrome with the retail art while keeping scores where retail shows them.
-// Kills/Losses remain behind the snapshot view field with TODO(question) where retail establishes counters [P1-01 §2.3].
-func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession) {
-	if h == nil || c == nil || b == nil || !b.isResultVisible() {
+// drawResultOverlay composes the authored ENDMSN window and the established
+// outcome title art. Layout, controls, labels, and background art all come
+// from the retail GUI/GAF records; there is intentionally no generated panel,
+// dim layer, text, or button geometry here [07 §11][08 "Session end and reporting"].
+func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession, view frame.ResultView) {
+	if h == nil || c == nil || b == nil || !view.Ended || b.battleState().Input.ResultDismissed {
 		return
 	}
-	view := b.resultView()
-	// Dim the scene — retail copies last frame beneath; we fill with palette 1 [07 §11] "Copy of last game frame"
-	c.UIFillRect(0, 0, 640, 480, 1)
-	// Centered message-box-style surface [07 §11] "Copy of last game frame" / "Click to continue."
-	bx, by, bw, bh := 80, 80, 480, 320
-	c.UIFillRect(bx, by, bw, bh, 8)
-	c.UIFillRect(bx, by, bw, 2, 15)
-	c.UIFillRect(bx, by+bh-2, bw, 2, 15)
-	c.UIFillRect(bx, by, 2, bh, 15)
-	c.UIFillRect(bx+bw-2, by, 2, bh, 15)
-
-	// Header strings [07 §11] - last game frame copy indication
-	if h.console != nil {
-		hdr := "Copy of last game frame"
-		tx := bx + (bw-client.MeasureText(h.console, hdr))/2
-		c.UIText(h.console, hdr, tx, by+6, 7)
+	if h.resultWin != nil {
+		h.drawGUIWindow(c, h.resultWin, h.resultGAF, "")
 	}
 
-	// Title frame from igtitles: igvictory or igdefeat [07 §11], gated by
-	// mode-word bits 5/6 and pause bit. Draw has no established title handle.
-	title := "VICTORY"
-	if view.Draw {
-		title = "DRAW"
-	} else if view.Kind == "defeat" {
-		title = "DEFEAT"
-	} else if view.Kind == "victory" {
-		title = "VICTORY"
-	} else if view.WinnerTeam != b.sess.TeamForOwner(int(b.sess.LocalOwner)) && view.WinnerTeam != -1 {
-		title = "DEFEAT"
+	// ENDMSN's outcome copies are authored with center-anchor offsets. Missing
+	// optional art remains a diagnostic from HUD loading and does not acquire a
+	// synthetic text substitute [07 §11][fmt gaf].
+	title := h.resultTitleFrame(view)
+	if title == nil {
+		return
 	}
-	var titleFrame = h.victoryFrame
-	if title == "DEFEAT" {
-		titleFrame = h.defeatFrame
-	} else if title == "DRAW" {
-		titleFrame = nil
-	}
-	if titleFrame != nil {
-		x := (640 - int(titleFrame.Width)) / 2
-		y := by + 18
-		c.UIBlit(titleFrame, x, y)
-	}
+	w, height := c.Size()
+	c.UIBlitAnchor(title, w/2, height/2)
+}
 
-	yBase := by + 50
-	if titleFrame != nil {
-		yBase = by + 18 + int(titleFrame.Height) + 18
+// resultTitleFrame selects only the two authored terminal outcomes. Draw and
+// any result kind not established by the retail result contract have no title;
+// in particular, they must not inherit the victory art by default [07 §11].
+func (h *retailBattleHUD) resultTitleFrame(view frame.ResultView) *formats.GAFFrame {
+	if h == nil || view.Draw {
+		return nil
 	}
-
-	// End-mission statistics screen per [07 §11]/P1-01: 58-byte-style stat rows up to ten players.
-	// Populate rows ONLY from data sim already publishes; anything retail-establishes-but-we-don't-track is TODO(question) placeholder [07 §11].
-	h.drawResultStatistics(c, b, view, bx, yBase, bw, bh-(yBase-by))
-
-	// Footer "Click to continue." after delay gate [07 §11]; we show immediately (delay not established)
-	if h.console != nil {
-		footer := "Click to continue."
-		tx := bx + (bw-client.MeasureText(h.console, footer))/2
-		c.UIText(h.console, footer, tx, by+bh-14, 7)
-	}
-
-	// Buttons [RS-05] 6→7→2 graph
-	b.ensureResultButtons()
-	for _, btn := range b.resultButtons {
-		c.UIFillRect(int(btn.X), int(btn.Y), panelButtonW, panelButtonH, 4)
-		c.UIFillRect(int(btn.X), int(btn.Y), panelButtonW, 2, 15)
-		c.UIFillRect(int(btn.X), int(btn.Y+panelButtonH-2), panelButtonW, 2, 15)
-		c.UIFillRect(int(btn.X), int(btn.Y), 2, panelButtonH, 15)
-		c.UIFillRect(int(btn.X+panelButtonW-2), int(btn.Y), 2, panelButtonH, 15)
-		if h.console != nil {
-			tx := int(btn.X) + (panelButtonW-client.MeasureText(h.console, btn.Name))/2
-			ty := int(btn.Y) + 6
-			c.UIText(h.console, btn.Name, tx, ty, 15)
-		}
+	switch strings.ToLower(view.Kind) {
+	case "victory":
+		return h.resultVictoryFrame
+	case "defeat":
+		return h.resultDefeatFrame
+	default:
+		return nil
 	}
 }
 
-// maxResultPlayers is the player-slot count the session publishes economy and
-// resource views for [05 "Player slot"].
-const maxResultPlayers = 10
-
-// drawResultStatistics renders per-player statistics rows [07 §11] P1-01.
-// Categories: Kills, Losses, EProduced, MProduced, EWasted, MWasted, Score gated per player by enable-byte table.
-// Retail animates seven categories one at a time behind +10-tick gate substate 0→6 with EndGameStatBar/EndGameScore cues; we render all rows statically as TODO(question): animation cadence not wired.
-// Data sources: ResultView.Scores for Kills/Losses/Score (kills/losses currently 0 placeholder TODO(question) [P1-01 §2.3]); snapshot Economy/Resources for E/M Produced/Consumed/Wasted where available.
-func (h *retailBattleHUD) drawResultStatistics(c *client.Client, b *battleSession, view frame.ResultView, bx, y, bw, bh int) {
-	if h == nil || c == nil || b == nil || h.console == nil {
-		return
+// resultStartAvailable mirrors the retail ENDMSN initializer's outcome choice:
+// Start is enabled only when a campaign has a discovered next mission. A
+// missing provenance or discovery error leaves the result non-continuable; it
+// does not invent a replacement route [07 §11][08 "Progression"].
+func resultStartAvailable(fs vfs.FSOps, sess *session.Session) bool {
+	if fs == nil || sess == nil || sess.Mission == nil || sess.Mission.Type != mission.TypeCampaign {
+		return false
 	}
-	// Per-player lookup indexed by slot. Invariant: presentation traverses
-	// player slots 0..9 ascending and never ranges a map, so the rendered row
-	// order is the same on every run [INVARIANTS I1][P1-019].
-	var curEconomy [maxResultPlayers]frame.EconomyView
-	var haveEconomy [maxResultPlayers]bool
-	var curResources [maxResultPlayers]frame.EconomyView
-	var haveResources [maxResultPlayers]bool
-	economyCount := 0
-	collect := func(f *frame.Frame) {
-		for _, e := range f.Economy {
-			if int(e.Player) < maxResultPlayers && !haveEconomy[e.Player] {
-				curEconomy[e.Player] = e
-				haveEconomy[e.Player] = true
-				economyCount++
-			}
-		}
-		for _, r := range f.Economy {
-			if int(r.Player) < maxResultPlayers {
-				curResources[r.Player] = r
-				haveResources[r.Player] = true
-			}
-		}
+	path := sess.Mission.CampaignPath
+	index := sess.Mission.CampaignIndex
+	if path == "" {
+		return false
 	}
-	if cur := c.Buffer().Current(); cur != nil {
-		collect(cur)
-	} else if b.sess != nil && b.sess.Snapshot != nil {
-		if cur2 := b.sess.Snapshot.Current(); cur2 != nil {
-			collect(cur2)
-		}
+	if index < 0 {
+		index = sess.CampaignSlot
 	}
-	// Enable-byte gating: retail uses enable-byte table per player; we gate on Scores existence or Economy existence [07 §11]
-	yPos := y
-	lineH := 12
-	// Header for statistics
-	if yPos+lineH < y+bh-30 {
-		c.UIText(h.console, "Statistics: Kills Losses EProd MProd EWaste MWaste Score", bx+10, yPos, 10)
-		yPos += lineH
+	if index < 0 {
+		return false
 	}
-	for _, sc := range view.Scores {
-		if yPos+lineH > y+bh-30 {
-			break
-		}
-		// EProduced/MProduced from economy if present else placeholder
-		eProd := 0
-		mProd := 0
-		eWaste := 0
-		mWaste := 0
-		// TODO(question): retail establishes EProduced/MProduced/EWasted/MWasted counters [07 §11] but sim does not yet track them authoritatively; we map EnergyProduced/MetalProduced and use 0 placeholders for waste until ledger wired [P1-01 §2.3] [05 "Player slot"].
-		if slot := sc.Player; slot >= 0 && slot < maxResultPlayers {
-			if ev := curEconomy[slot]; haveEconomy[slot] {
-				eProd = int(ev.EnergyProduced)
-				mProd = int(ev.MetalProduced)
-				// EWasted/MWasted not tracked; use placeholder 0 with TODO(question): wasted counters not established in sim [07 §11]
-				_ = ev.EnergyConsumed
-				_ = ev.MetalConsumed
-			} else if rv := curResources[slot]; haveResources[slot] {
-				eProd = int(rv.EnergyProduced)
-				mProd = int(rv.MetalProduced)
-			}
-		}
-		// Kills/Losses currently hardcoded 0 behind snapshot view field [P1-01 §2.3] TODO(question): wire ledger kill counter
-		line := fmt.Sprintf("P%d T%d K:%d L:%d E:%d M:%d EW:%d MW:%d S:%d %s", sc.Player, sc.Team, sc.Kills, sc.Losses, eProd, mProd, eWaste, mWaste, sc.Score, sc.Kind)
-		c.UIText(h.console, line, bx+10, yPos, 7)
-		yPos += lineH
-	}
-	// If no scores but still have economy, show economy-only rows gated by
-	// enable byte, in ascending slot order [P1-019].
-	if len(view.Scores) == 0 && economyCount > 0 {
-		for pid := 0; pid < maxResultPlayers; pid++ {
-			if !haveEconomy[pid] {
-				continue
-			}
-			if yPos+lineH > y+bh-30 {
-				break
-			}
-			ev := curEconomy[pid]
-			line := fmt.Sprintf("P%d EProd:%d MProd:%d EWaste:0 MWaste:0", pid, int(ev.EnergyProduced), int(ev.MetalProduced))
-			c.UIText(h.console, line, bx+10, yPos, 7)
-			yPos += lineH
-		}
-	}
+	_, hasNext, err := mission.NextCampaignMission(fs, path, index)
+	return err == nil && hasNext
 }
 
-// drawStatusMessage draws transient game-speed and pause messages [07 §11][07 §2] presentation-only (I6).
+// configureResultPanel applies the established ENDMSN outcome activation.
+// Retail files carry these controls inactive and the end-mission initializer
+// enables the single route selected by campaign progression; unrelated
+// controls remain inactive rather than being force-enabled [07 §11].
+func configureResultPanel(fs vfs.FSOps, sess *session.Session, panel *ui.Panel) {
+	if panel == nil {
+		return
+	}
+	start := resultStartAvailable(fs, sess)
+	panel.SetActive("Start", start)
+	panel.SetActive("MainMenu", !start)
+}
+
+// resultActionForControl is a compatibility-shaped adapter for the canonical
+// UI result model. The command layer receives a semantic action but keeps the
+// battle transition string used by the existing dispatch path [07 §11].
+func resultActionForControl(name string) string {
+	if ui.ResultActionForControl(name) == ui.ResultActionContinue {
+		return "result_continue"
+	}
+	return ""
+}
+
+// handleResultInput routes release-inside gestures through the same authored
+// Panel state used by the frontend. It does not own a second result-specific
+// pressed/button state [07 §3][07 §11].
+func (h *retailBattleHUD) handleResultInput(in *client.InputState) string {
+	if h == nil || h.resultPanel == nil || in == nil || in.Mouse == nil {
+		return ""
+	}
+	mx, my := int32(in.Mouse.X), int32(in.Mouse.Y)
+	if in.Mouse.Pressed(input.MouseButtonLeft) {
+		h.resultPanel.Press(mx, my)
+	}
+	if !in.Mouse.Released(input.MouseButtonLeft) {
+		return ""
+	}
+	action := h.resultPanel.ReleaseAction(mx, my)
+	if action.Kind != ui.ActionActivate {
+		return ""
+	}
+	return resultActionForControl(action.Gadget)
+}
+
+// drawStatusMessage draws transient game-speed and pause messages [07 §11][07 §2].
+// It remains separate from result presentation; status text is produced by the
+// established battle-speed/pause path and is not an endgame label.
 func (b *battleSession) drawStatusMessage(c *client.Client) {
-	if b == nil || c == nil || !b.statusVisible() {
+	if b == nil || c == nil || !b.statusVisible() || b.hud == nil || b.hud.console == nil {
 		return
 	}
-	// Draw at top center below resource bars; use console font via HUD palette
-	var fnt = b.hud.console
-	if fnt == nil {
-		return
-	}
-	// Centered
-	txt := b.statusMessage
-	w := client.MeasureText(fnt, txt)
-	x := (640 - w) / 2
-	y := 30 // below top strip
-	c.UIText(fnt, txt, x, y, 15)
+	// BattleState is the canonical owner of transient status text. The legacy
+	// battleSession mirror is intentionally not read here [07 §11].
+	txt := b.battleState().Input.StatusMessage
+	w := client.MeasureText(b.hud.console, txt)
+	c.UIText(b.hud.console, txt, (640-w)/2, 30, 15)
 }

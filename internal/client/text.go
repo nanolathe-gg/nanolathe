@@ -1,4 +1,4 @@
-// Package client — FNT text rendering for the debug overlay.
+// Package client — FNT text rendering for authored UI surfaces.
 //
 // Retail contracts implemented here [02 §7][03 §7.1][07 §7][GAP T22] C8:
 //
@@ -36,8 +36,6 @@
 package client
 
 import (
-	"fmt"
-
 	"github.com/nanolathe/nanolathe/formats"
 )
 
@@ -229,86 +227,4 @@ func DrawTextWithShadow(frame []uint8, width, height int, fnt *formats.FNT, text
 		DrawText(frame, width, height, fnt, text, x+1, y+1, maxWidth, shadowColor)
 	}
 	DrawText(frame, width, height, fnt, text, x, y, maxWidth, color)
-}
-
-// DebugInfo carries the values shown in the debug overlay [PLAN_04A C8].
-// All fields are presentation values: the tick from the committed frame, the
-// camera origin from internal/camera, and the RNG draw counters the session
-// publishes with the frame (the client never reads the streams themselves,
-// DET-01).
-type DebugInfo struct {
-	Tick     uint32 // authoritative global tick at publish time (frame.Frame.Tick)
-	CamX     int32  // camera origin X in map pixels [07 §10]
-	CamZ     int32  // camera origin Z in map pixels [07 §10]
-	SimDraws uint64 // simulation RNG draws (Park-Miller) [01 §7.1]
-	CrtDraws uint64 // CRT RNG draws (*214013+2531011) [01 §7.2]
-}
-
-// DrawDebugOverlay draws the Gate-1 debug overlay showing tick, camera,
-// and RNG draw counts [PLAN_04A WU-04A-7] C8.
-//
-// It draws up to four lines at the top-left of the indexed framebuffer:
-//
-//	tick <n>
-//	cam <x>,<z>
-//	sim <n>  crt <n>
-//
-// The font's baseline descender is honored [02 §7]. Each line is truncated to
-// the framebuffer width before clipping [07 §7][GAP T22]. Clipping keeps the
-// overlay inside the framebuffer. Caller chooses color (and optional shadow).
-//
-// No simulation state is written; this is presentation-only (I6, C10).
-func DrawDebugOverlay(frame []uint8, width, height int, fnt *formats.FNT, info DebugInfo, color byte) { // [PLAN_04A C8]
-	DrawDebugOverlayWithShadow(frame, width, height, fnt, info, color, 0, false)
-}
-
-// DrawDebugOverlayWithShadow is DrawDebugOverlay with an optional drop shadow
-// [07 §7]. When withShadow is true the shadow is drawn at +1,+1 with
-// shadowColor before each foreground line.
-func DrawDebugOverlayWithShadow(frame []uint8, width, height int, fnt *formats.FNT, info DebugInfo, color, shadowColor byte, withShadow bool) {
-	if len(frame) < width*height || fnt == nil || width <= 0 || height <= 0 {
-		return
-	}
-	// Format lines with standard library; formatting is presentation-only (I6).
-	lines := [4]string{
-		fmt.Sprintf("tick %d", info.Tick),
-		fmt.Sprintf("cam %d,%d", info.CamX, info.CamZ),
-		fmt.Sprintf("sim %d  crt %d", info.SimDraws, info.CrtDraws),
-		// Fourth line reserved for future (e.g., map size / view size) — keep
-		// empty for now so line count is stable.
-		"",
-	}
-	// Baseline for the first line. Use a small padding from the top-left.
-	// y is the baseline; top = y - descender [02 §7]. Choose y so top >= 1.
-	desc := baselineDescender(fnt)
-	// FNT Height includes the cell; baseline is descender pixels above the
-	// bottom of the cell. Place the first baseline at desc+2 so the first row
-	// of glyphs sits at y=2.
-	x0 := 2
-	y0 := desc + 2
-	if y0 < 2 {
-		y0 = 2
-	}
-	lineH := int(fnt.Height) + 1
-	if lineH < 1 {
-		lineH = 12
-	}
-	maxW := width - x0 - 1
-	if maxW < 0 {
-		maxW = 0
-	}
-	for i, line := range lines {
-		if line == "" {
-			continue
-		}
-		y := y0 + i*lineH
-		if y-desc < 0 || y-desc >= height {
-			// Still truncate before clip test [07 §7]; DrawText will clip per pixel.
-		}
-		if withShadow {
-			DrawTextWithShadow(frame, width, height, fnt, line, x0, y, maxW, color, shadowColor)
-		} else {
-			DrawText(frame, width, height, fnt, line, x0, y, maxW, color)
-		}
-	}
 }

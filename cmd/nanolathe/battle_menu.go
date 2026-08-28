@@ -36,8 +36,8 @@ func (b *battleSession) openBattleMenu() {
 		return
 	}
 	b.applyBattleSchedule(b.battleState().OpenOptions())
-	b.dragActive = false
-	b.hudCaptured = false
+	b.battleState().Input.DragActive = false
+	b.battleState().Input.HUDCaptured = false
 }
 
 func (b *battleSession) closeBattleMenu() {

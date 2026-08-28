@@ -27,8 +27,8 @@ type retailScrollbarGeometry struct {
 	arrowEnd   int
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// ensureRetailSkirmishControllers mirrors the state that the retail implementation and
+// the retail implementation hand to SKIRMISH.GUI when the per-player controller values are
 // absent: all rows are open, then row zero is made the human player. The
 // numeric values are kept separate from session.SkirmishConfig because the
 // retail GUI distinguishes an open row (0) from a human (1), while the
@@ -42,7 +42,7 @@ func (g *gameShell) ensureRetailSkirmishControllers() {
 	}
 	if g.setup.NumPlayers > 0 {
 		g.retailControllers[0] = 1
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// the retail implementation installs ally group 2 when it has to create the first
 		// human row from an otherwise empty controller array.
 		g.setup.Players[0].AllyGroup = 2
 	}
@@ -119,7 +119,7 @@ func (g *gameShell) panelAssets() *retailPanelAssets {
 	if g == nil || g.assets == nil {
 		return nil
 	}
-	return g.assets.panel[g.mode]
+	return g.assets.panel[g.frontend.Mode]
 }
 
 func (g *gameShell) panelBackground() *formats.PCX {
@@ -127,7 +127,7 @@ func (g *gameShell) panelBackground() *formats.PCX {
 	if p == nil {
 		return nil
 	}
-	if g.mode != modeMenuMission || g.assets == nil {
+	if g.frontend.Mode != modeMenuMission || g.assets == nil {
 		return p.background
 	}
 	if g.missionAny {
@@ -140,7 +140,7 @@ func (g *gameShell) panelBackground() *formats.PCX {
 }
 
 // applyRetailMissionLayout is the small but visible runtime mutation in
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// the retail implementation. The same NEWGAME.GUI window is used for New Campaign and Play
 // Any Game; Play Any compresses the campaign and mission list controls rather
 // than loading a custom panel. These are local GUI coordinates (the panel's
 // header is at the origin in this retail resource).
@@ -177,7 +177,7 @@ func (g *gameShell) refreshRetailPanel() {
 	if p == nil {
 		return
 	}
-	switch g.mode {
+	switch g.frontend.Mode {
 	case modeMenuMission:
 		g.refreshMissionPanel()
 	case modeMenuMap:
@@ -187,7 +187,7 @@ func (g *gameShell) refreshRetailPanel() {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// resolveRetailButtonGeometry is the stateful part of the retail implementation that is
 // easy to miss when treating a .GUI rectangle as final layout. Retail picks
 // the closest stock/owned GAF frame and then stores that frame's dimensions
 // back into the runtime gadget record. Hit testing and text centering must see
@@ -225,10 +225,10 @@ func (g *gameShell) refreshMissionPanel() {
 			g.campaigns = campaigns
 		}
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// the retail implementation rebuilds the campaign-name array from camps/*.tdf and
 	// retains only records whose HEADER campaignside matches the selected
 	// side, plus the literal ALL. When the retail campaign count is <=2,
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// the retail implementation hides the list and the retail implementation selects the authored
 	// "Arm Campaign"/"Core Campaign" filename directly instead.
 	showCampaign := g.missionAny || len(g.campaigns) > 2
 	g.campaignOptions = g.retailCampaignOptions(showCampaign)
@@ -266,7 +266,7 @@ func (g *gameShell) refreshMissionPanel() {
 	g.setListItems("Missions", missions, g.missionIdx)
 
 	// NEWGAME's setup routine enables the lists according to the same
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// campaign-count/Play-Any branch as the retail implementation.
 	p.SetActive("Campaign", showCampaign)
 	p.SetActive("CampaignKnob", showCampaign)
 	p.SetActive("Missions", g.missionAny)
@@ -336,9 +336,9 @@ func (g *gameShell) refreshMapPanel() {
 	if g.mapIdx >= len(g.maps) && len(g.maps) != 0 {
 		g.mapIdx = len(g.maps) - 1
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// The MAPNAMES items are the OTA file stems the retail implementation collected, in the
+	// order the retail implementation sorted them. Retail opens no map file to build the
+	// list — only the selected map's data is read, by the retail implementation — so this
 	// must not touch mapDataFor per row.
 	items := make([]string, len(g.maps))
 	copy(items, g.mapLabels)
@@ -354,7 +354,7 @@ func (g *gameShell) refreshMapPanel() {
 		return
 	}
 	if d := g.mapDataFor(g.maps[g.mapIdx]); d != nil {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// the retail implementation puts the OTA missiondescription in DESCRIPTION
 		// verbatim — the authored string already carries the "16 X 17 " size
 		// prefix — and formats OTA memory, the localized "Players" label, and
 		// OTA numplayers through "%s  %s: %s" into SIZE. Both pairs of spaces
@@ -378,7 +378,7 @@ func (g *gameShell) refreshSkirmishPanel() {
 		return
 	}
 	g.ensureRetailSkirmishControllers()
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// the retail implementation writes the selected map's list entry — the OTA file stem —
 	// into the MapName gadget. It does not reopen the map to read a title.
 	p.SetText("MapName", g.setup.MapName)
 	if g.setup.Location == 0 {
@@ -414,7 +414,7 @@ func (g *gameShell) refreshSkirmishPanel() {
 	}
 	p.SetStatus("Difficulty", clampMenuStage(g.setup.Difficulty, 3))
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Player%d/Side%d/etc. are appended at runtime by the retail implementation. They are
 	// not present in SKIRMISH.GUI on disk, but are still retail gadgets with
 	// fixed coordinates and stock GAF art, so refresh their authored records.
 	for i := 0; i < session.SkirmishMaxPlayers; i++ {
@@ -423,7 +423,7 @@ func (g *gameShell) refreshSkirmishPanel() {
 		prefix := strconv.Itoa(i)
 		controller := g.retailControllers[i]
 		p.SetActive("Player"+prefix, rowActive)
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// the retail implementation hides every dependent control for an open row. The
 		// Player%d button remains the hit target that turns it into a
 		// computer row.
 		configured := rowActive && controller != 0
@@ -443,7 +443,7 @@ func (g *gameShell) refreshSkirmishPanel() {
 			}
 			p.SetText("Metal"+prefix, strconv.Itoa(player.Metal))
 			p.SetText("Energy"+prefix, strconv.Itoa(player.Energy))
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// Controller is text written by the retail implementation; the skirmname art
 			// retains its ordinary/hover frame state.
 			p.SetStatus("Player"+prefix, 0)
 			p.SetStatus("Side"+prefix, player.Side)
@@ -462,7 +462,7 @@ func (g *gameShell) refreshSkirmishPanel() {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// retailAllyIconFrame is the retail implementation, which runs after every change to a row
 // and rewrites each Allies%d surface's frame index. For one row it counts the
 // configured rows — controller not Open — whose alliance number equals that
 // row's, then picks the TEAMICONSx frame: none gives 10, exactly one gives
@@ -507,23 +507,13 @@ func (g *gameShell) updateHoverHelp(x, y int32) {
 	p.SetText("HELPTEXT", help)
 }
 
-// installSkirmishDynamicGadgets is the direct frontend equivalent of
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// row spacing and stock GAF names below are taken from that runtime builder,
-// not from a Nanolathe layout.
+// installSkirmishDynamicGadgets supplies authored lobby row values to the
+// canonical UI runtime builder. The builder owns gadget construction and
+// geometry; this composition root retains only skirmish configuration.
 func (g *gameShell) installSkirmishDynamicGadgets() {
 	if g.assets == nil || g.assets.panel[modeMenuSkirmish] == nil || g.assets.panel[modeMenuSkirmish].window == nil {
 		return
 	}
-	w := g.assets.panel[modeMenuSkirmish].window
-	base := make([]gui.Gadget, 0, len(w.Gadgets)+session.SkirmishMaxPlayers*6)
-	for _, gad := range w.Gadgets {
-		if gad.SourceName == retailDynamicSkirmishSource {
-			continue
-		}
-		base = append(base, gad)
-	}
-	w.Gadgets = base
 	n := g.setup.NumPlayers
 	if n < 1 {
 		n = 1
@@ -531,66 +521,11 @@ func (g *gameShell) installSkirmishDynamicGadgets() {
 	if n > session.SkirmishMaxPlayers {
 		n = session.SkirmishMaxPlayers
 	}
-	step := 200 / n
-	rowY := (180-(n-1)*step)/2 + 79
-	for i := 0; i < n; i++ {
-		suffix := strconv.Itoa(i)
-		player := g.setup.Players[i]
-		side := retailDynamicButton("Side"+suffix, 163, rowY, 45, 20, "SIDEx", player.Side)
-		// The runtime builder writes Stages=2 into the Side record. For a
-		// staged GAF control the retail renderer uses the entry's penultimate
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		side.Stages = 2
-		w.Gadgets = append(w.Gadgets,
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// skirmname frame is the ordinary/hover button state, not the
-			// Open/Player/Computer text state.
-			retailDynamicButton("Player"+suffix, 45, rowY, 112, 20, "skirmname", 0),
-			side,
-			retailDynamicSurface("Color"+suffix, 214, rowY, 20, 20, "32xlogos", player.Color),
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-			// row's computed symbol; the alliance number is never the
-			// frame index.
-			retailDynamicSurface("Allies"+suffix, 241, rowY, 40, 20, "TEAMICONSx", 10),
-			retailDynamicButton("Metal"+suffix, 286, rowY, 45, 20, "skirmmet", 0),
-			retailDynamicButton("Energy"+suffix, 337, rowY, 45, 20, "skirmmet", 0),
-		)
-		rowY += step
+	slots := make([]ui.SkirmishSlot, n)
+	for i := range slots {
+		slots[i] = ui.SkirmishSlot{Side: g.setup.Players[i].Side, Color: g.setup.Players[i].Color}
 	}
-}
-
-const retailDynamicSkirmishSource = "RETAIL_DYNAMIC_SKIRMISH"
-
-func retailDynamicButton(name string, x, y, w, h int, art string, status int) gui.Gadget {
-	attribs := uint32(2)
-	if art == "skirmmet" {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		attribs |= 0x10000
-	}
-	return gui.Gadget{
-		Kind:       gui.KindButton,
-		Name:       name,
-		Rect:       gui.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)},
-		Attribs:    attribs,
-		Active:     1,
-		Status:     int16(status),
-		Art:        art,
-		SourceName: retailDynamicSkirmishSource,
-	}
-}
-
-func retailDynamicSurface(name string, x, y, w, h int, art string, status int) gui.Gadget {
-	return gui.Gadget{
-		Kind:       gui.KindSurface,
-		Name:       name,
-		Rect:       gui.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)},
-		Active:     1,
-		Status:     int16(status),
-		Art:        art,
-		SourceName: retailDynamicSkirmishSource,
-	}
+	ui.InstallSkirmishDynamicGadgets(g.assets.panel[modeMenuSkirmish].window, slots)
 }
 
 func clampMenuStage(value, stages int) int {
@@ -737,19 +672,19 @@ func (g *gameShell) drawRetailPanel(c *client.Client) {
 	if p == nil || p.Window == nil || g.assets == nil {
 		return
 	}
-	if g.mode == modeMenuSkirmish {
+	if g.frontend.Mode == modeMenuSkirmish {
 		g.updateHoverHelp(int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y))
 	}
 	// Back to front along the window chain. Modal entries are presented by
 	// drawRetailModal after all saved-under screens; every entry is authored.
-	entries := g.panels.Entries()
+	entries := g.frontend.Panels.Entries()
 	for i, entry := range entries {
 		if entry.Modal || entry.Panel == nil || entry.Panel.Window == nil {
 			continue
 		}
 		mode := g.panelMode(entry.Panel)
-		if i == len(entries)-1 && g.panels.Modal() == nil {
-			mode = g.mode
+		if i == len(entries)-1 && g.frontend.Panels.Modal() == nil {
+			mode = g.frontend.Mode
 		}
 		g.drawRetailWindow(c, mode, entry.Panel)
 	}
@@ -763,7 +698,7 @@ func (g *gameShell) panelMode(panel *ui.Panel) shellMode {
 			}
 		}
 	}
-	return g.mode
+	return g.frontend.Mode
 }
 
 // drawRetailWindow composes one window of the chain. mode selects the resource
@@ -773,19 +708,19 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 	if p == nil || p.Window == nil {
 		return
 	}
-	savedMode := g.mode
-	g.mode = mode
-	defer func() { g.mode = savedMode }()
+	savedMode := g.frontend.Mode
+	g.frontend.SetMode(mode)
+	defer func() { g.frontend.SetMode(savedMode) }()
 
 	if bg := g.panelBackground(); bg != nil {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// the retail implementation copies the window's background bitmap into the window's
 		// own surface at (0,0), and that surface is the window rectangle. The
 		// bitmap therefore lands at the window origin and anything past the
 		// rectangle is not part of the window [07 §4].
 		r := p.Window.Rect
 		c.UIBlitPCXClipped(bg, int(r.X), int(r.Y), int(r.X), int(r.Y), int(r.W), int(r.H))
 	} else {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// the retail implementation fills a background-less window by tiling its art over
 		// the window rectangle; the stock fallback entry is BackTile.
 		g.drawPanelTile(c, p.Window.Rect)
 	}
@@ -819,7 +754,7 @@ func (g *gameShell) drawRetailModal(c *client.Client) {
 	if g == nil || g.assets == nil {
 		return
 	}
-	m := g.panels.Modal()
+	m := g.frontend.Panels.Modal()
 	if m == nil || m.Window == nil {
 		return
 	}
@@ -867,7 +802,7 @@ func (g *gameShell) showRetailMessage(message string) error {
 		// open a blank modal or invent a widget [07 §3].
 		return g.retailMessageError(logical, "an authored MSGBOX text or label control with active state")
 	}
-	g.panels.PushModal(m)
+	g.frontend.Panels.PushModal(m)
 	return nil
 }
 
@@ -935,7 +870,7 @@ func (g *gameShell) drawRetailButton(c *client.Client, p *ui.Panel, gad gui.Gadg
 // button merely because the pointer is over it; the armed frame is visible
 // only while the left button is held inside the gadget [07 §3]. The
 // executable's renderer uses frame 1 for an ordinary two-state entry and
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// the penultimate frame for an entry with Stages set [the retail trace].
 func (g *gameShell) gadgetButtonArt(gad gui.Gadget, status int, pressed bool) *formats.GAFFrame {
 	art := g.gadgetArt(gad, status)
 	if art == nil || !pressed {
@@ -977,8 +912,9 @@ func (g *gameShell) retailButtonFrame(gad gui.Gadget, status int, pressed bool) 
 		return nil
 	}
 	// Retail staged controls keep Status at zero in the ordinary button record;
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// the selected label is the final authored frame before the pressed state.
+	// Press uses the common
+	// final active frame (entry-count minus two), as the retail implementation does.
 	if gad.Stages > 0 {
 		name := fmt.Sprintf("stagebuttn%d", gad.Stages)
 		if e, ok := g.assets.common.Find(name); ok && len(e.Frames) != 0 {
@@ -1053,7 +989,7 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, gad gui.G
 	width := g.retailTextWidth(text)
 	pressed := retailButtonPressed(c, r)
 	x := int(r.X)
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// the retail implementation tests the left-aligned attribute before the right/center
 	// attributes. These are the actual authored GUI conventions: bit 0 uses a
 	// three-pixel inset, bit 2 centers, and bit 4 right-aligns with a
 	// three-pixel inset. A held button adds the one-pixel armed offset.
@@ -1080,11 +1016,11 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, gad gui.G
 		width, _ := c.Size()
 		maxWidth = width - x
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// the retail implementation measures the gadget against two lines of the active font
 	// before it picks a renderer: it compares the rectangle's inclusive height
 	// (y1-y0) with twice the capital-I frame height plus two, and sends the
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// taller case to the wrapping renderer the retail implementation and everything else to
+	// the single-line the retail implementation. SELMAP.GUI authors DESCRIPTION 235x31 for
 	// the wrapped case and SIZE 235x18 for the single-line one [07 §4].
 	lineStep := g.retailTextHeight()
 	if int(r.H)-1 > 2*lineStep {
@@ -1102,7 +1038,7 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, gad gui.G
 }
 
 // retailWrapLines breaks a label at spaces so it fits maxWidth, keeping each
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// line verbatim. the retail implementation wraps the authored string in place rather than
 // re-joining words, so the double space the OTA missiondescription carries
 // after the map size survives into the drawn line.
 func retailWrapLines(text string, measure func(string) int, maxWidth int) []string {
@@ -1142,7 +1078,7 @@ func retailWrapLines(text string, measure func(string) int, maxWidth int) []stri
 	return lines
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// retailTextPenY mirrors the retail implementation. The inclusive gadget bottom makes the
 // centering span H-1, and staged controls add one to the pen coordinate. The
 // pressed state changes the selected art frame but does not move the text pen.
 func retailTextPenY(gad gui.Gadget, r gui.Rect, textHeight int) int {
@@ -1190,12 +1126,12 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, gad gui.Gadget
 		if idx >= len(items) {
 			break
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// the retail implementation reserves the first two pixels of a listbox before
 		// calculating rows. The same origin is used by its text renderer.
 		y := int(r.Y) + 2 + row*itemHeight
 		color := g.guiColor(byte(gad.ColorF & 0xff))
 		g.drawRetailString(c, items[idx], int(r.X)+4, y, int(r.W)-4, color)
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// The highlight runs after the row's text, as the retail implementation does: the
 		// operator remaps whatever is already in the rectangle, so the glyphs
 		// are lifted along with the listbox interior.
 		if idx == selected {
@@ -1204,7 +1140,7 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, gad gui.Gadget
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// retailVisibleListRows is the row count used by the retail implementation: two pixels of
 // the authored list rectangle are reserved before dividing by itemheight.
 func retailVisibleListRows(r gui.Rect, itemHeight int) int {
 	if itemHeight <= 0 {
@@ -1263,12 +1199,12 @@ func (g *gameShell) drawListBox(c *client.Client, r gui.Rect) {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// drawListSelection is the retail highlight. the retail implementation does not stamp art
+// over the selected row: it hands the row rectangle to the retail implementation at level
 // +30, and a non-negative level there indexes the 32-row PALETTE.LHT
 // brightening table, so the row's own pixels are remapped one row at a time.
 // That is what makes the selected entry read as a lit bar over the listbox
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// interior rather than a painted block [the retail trace][03 §4.3.1].
 func (g *gameShell) drawListSelection(c *client.Client, r gui.Rect, y, h int) {
 	if g == nil || g.assets == nil || g.assets.pal == nil {
 		return
@@ -1276,7 +1212,7 @@ func (g *gameShell) drawListSelection(c *client.Client, r gui.Rect, y, h int) {
 	c.UILightRect(g.assets.pal, int(r.X), y, int(r.W), h, retailListSelectionLevel)
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// retailListSelectionLevel is the literal the retail implementation pushes for a selected
 // list row, focused or not.
 const retailListSelectionLevel = 30
 
@@ -1433,12 +1369,12 @@ func drawRetailScrollbarTrack(c *client.Client, first, middle, last *formats.GAF
 	blitRetailFrame(c, last, cross0, end)
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// retailScrollbarKnobSize is the authored knob length used by the scrollbar.
 // It divides the associated list's visible row count by its item count, scales
 // that by the scrollbar's own length less three pixels, rounds, and clamps the
 // result up to ten. SLIDERS carries the knob as a one-pixel cap, a repeatable
 // three-pixel middle and a one-pixel cap, so the length is a computed run and
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// never the sum of those frames [the retail trace].
 func retailScrollbarKnobSize(visible, total, barLength int) int {
 	const minimum = 10
 	if total <= 0 || visible <= 0 || barLength <= 3 {
@@ -1595,7 +1531,7 @@ func (g *gameShell) retailScrollbarGeometry(gad gui.Gadget, r gui.Rect) (retailS
 	return geometry, true
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// the retail implementation raises a list's authored item height to at least one pixel
 // beyond the active font height. This is the default used by the authored
 // campaign and map lists when itemheight is zero.
 func retailListItemHeight(gad gui.Gadget, fontHeight int) int {
@@ -1626,12 +1562,12 @@ func retailListAssocItemHeightPanel(g *gameShell, p *ui.Panel, assoc int32) int 
 func (g *gameShell) drawRetailSurface(c *client.Client, p *ui.Panel, gad gui.Gadget, r gui.Rect) {
 	if strings.EqualFold(gad.Name, "MAPPIC") && len(g.maps) != 0 && g.mapIdx >= 0 && g.mapIdx < len(g.maps) {
 		if d := g.mapDataFor(g.maps[g.mapIdx]); d != nil && d.tnt != nil {
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// the retail implementation writes the selected RADARPIC into the authored
 			// MAPPIC canvas using the map's aspect, leaving the surrounding
 			// canvas intact. The TNT minimap is the same indexed source for
 			// this frontend path; preserve that retail letterbox instead of
 			// stretching rectangular maps into the 125×125 square.
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+			// The source passed to the retail implementation is RADARPIC. Its aspect is
 			// the minimap raster, not the terrain cell dimensions in TNT's
 			// header.
 			previewW, previewH := int(d.tnt.MinimapWidth), int(d.tnt.MinimapHeight)
@@ -1656,11 +1592,11 @@ func (g *gameShell) drawRetailSurface(c *client.Client, p *ui.Panel, gad gui.Gad
 		}
 		return
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// the retail implementation is the retail surface renderer, and it is not the ordinary
 	// gadget-art blit. An RLE frame (Compressed != 0) is stamped at the gadget
 	// origin; a raw frame is texture-mapped across the whole gadget rectangle.
 	// SKIRMISH's Color%d surface is the visible case: textures/logos.gaf holds
-	// raw 32x32 frames that retail resamples into the authored 20x20 record,
+	// authored 32x32 frames that retail resamples into the authored 20x20 record,
 	// while anims/skirmish.gaf's RLE ally icons are stamped 1:1 [07 §4].
 	if p == nil {
 		return
@@ -1734,7 +1670,7 @@ func (g *gameShell) clickRetailScrollbar(index int, gad gui.Gadget, r gui.Rect, 
 		thumbPos += l.Top() * geometry.travel / geometry.maxTop
 	}
 	if coordinate < thumbPos || coordinate >= thumbPos+geometry.thumbLen {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// the retail implementation starts capture only when the click is in the
 		// calculated knob rectangle; clicking the track beside it does not
 		// invent page-step behavior.
 		return
@@ -1774,7 +1710,7 @@ func (g *gameShell) menuInput(cl *client.Client) {
 	if cl == nil || cl.Input() == nil {
 		return
 	}
-	if g.panels.Modal() != nil {
+	if g.frontend.Panels.Modal() != nil {
 		g.modalInput(cl)
 		return
 	}
@@ -1860,7 +1796,7 @@ noRetailArrowRepeat:
 	}
 	if rightPressed {
 		p.SetRightPressed(-1)
-		if g.mode == modeMenuSkirmish {
+		if g.frontend.Mode == modeMenuSkirmish {
 			x, y := int32(mouse.X), int32(mouse.Y)
 			if idx := p.HitTest(x, y); idx >= 0 {
 				if gad, ok := g.currentGadget(idx); ok {
@@ -1875,7 +1811,7 @@ noRetailArrowRepeat:
 	if rightReleased {
 		pending := p.RightPressedIndex()
 		p.SetRightPressed(-1)
-		if g.mode == modeMenuSkirmish && pending >= 0 {
+		if g.frontend.Mode == modeMenuSkirmish && pending >= 0 {
 			x, y := int32(mouse.X), int32(mouse.Y)
 			if idx := p.HitTest(x, y); idx == pending {
 				if gad, ok := g.currentGadget(idx); ok {
@@ -1936,7 +1872,7 @@ noRetailArrowRepeat:
 }
 
 func (g *gameShell) modalInput(cl *client.Client) {
-	m := g.panels.Modal()
+	m := g.frontend.Panels.Modal()
 	if g == nil || m == nil || m.Window == nil || cl == nil || cl.Input() == nil {
 		return
 	}
@@ -1947,11 +1883,11 @@ func (g *gameShell) modalInput(cl *client.Client) {
 	if in.Mouse.Released(input.MouseButtonLeft) {
 		action := m.ReleaseAction(int32(in.Mouse.X), int32(in.Mouse.Y))
 		if action.Kind == ui.ActionActivate && strings.EqualFold(action.Gadget, "OK") {
-			g.panels.CloseModal()
+			g.frontend.Panels.CloseModal()
 		}
 	}
 	if in.Kbd.KeyDown(input.KeyEscape) || in.Kbd.KeyDown(input.KeyEnter) || in.Kbd.KeyDown(input.KeySpace) {
-		g.panels.CloseModal()
+		g.frontend.Panels.CloseModal()
 	}
 }
 
@@ -1977,7 +1913,7 @@ func (g *gameShell) adjustFocusedList(up bool) {
 		return
 	}
 	var name string
-	switch g.mode {
+	switch g.frontend.Mode {
 	case modeMenuMap:
 		name = "MAPNAMES"
 	case modeMenuMission:
@@ -2064,14 +2000,14 @@ func (g *gameShell) clickList(gad gui.Gadget, r gui.Rect, x, y int32) {
 
 func (g *gameShell) commitListSelection(name string, index int) {
 	switch {
-	case g.mode == modeMenuMap && strings.EqualFold(name, "MAPNAMES"):
+	case g.frontend.Mode == modeMenuMap && strings.EqualFold(name, "MAPNAMES"):
 		g.mapIdx = index
 		g.refreshRetailPanel()
-	case g.mode == modeMenuMission && strings.EqualFold(name, "Campaign"):
+	case g.frontend.Mode == modeMenuMission && strings.EqualFold(name, "Campaign"):
 		g.campaignIdx = index
 		g.missionIdx = 0
 		g.refreshRetailPanel()
-	case g.mode == modeMenuMission && strings.EqualFold(name, "Missions"):
+	case g.frontend.Mode == modeMenuMission && strings.EqualFold(name, "Missions"):
 		g.missionIdx = index
 		g.refreshRetailPanel()
 	}
@@ -2079,7 +2015,7 @@ func (g *gameShell) commitListSelection(name string, index int) {
 
 func (g *gameShell) activateEscape() {
 	p := g.activePanel()
-	if g.mode == modeMenuMain {
+	if g.frontend.Mode == modeMenuMain {
 		return
 	}
 	if p != nil && p.Window != nil && p.Window.Header.EscDefault != "" &&
@@ -2110,11 +2046,13 @@ func (g *gameShell) hasActiveGadget(name string) bool {
 
 func (g *gameShell) activateGadget(name string) {
 	key := menuKey(name)
-	switch g.mode {
+	if target, ok := g.frontend.Navigate(name); ok {
+		g.openMenu(target)
+		return
+	}
+	switch g.frontend.Mode {
 	case modeMenuMain:
 		switch key {
-		case "single":
-			g.openMenu(modeMenuSingle)
 		case "exit":
 			// Retail MAINMENU's EXIT callback enters frontend state 8 and
 			// closes the process; it does not open the unrelated YESORNO
@@ -2130,15 +2068,9 @@ func (g *gameShell) activateGadget(name string) {
 			g.openMissionMenu(false)
 		case "anymsn":
 			g.openMissionMenu(true)
-		case "skirmish":
-			g.openMenu(modeMenuSkirmish)
-		case "prevmenu":
-			g.openMenu(modeMenuMain)
 		}
 	case modeMenuMission:
 		switch key {
-		case "prevmenu":
-			g.openMenu(modeMenuSingle)
 		case "start":
 			// The campaign Start leaves for the same loading screen the
 			// skirmish Start does [07 §4].
@@ -2189,7 +2121,7 @@ func (g *gameShell) activateSkirmishGadget(name string) {
 			reportRetailMessageError(g.showRetailMessage(message))
 			return
 		}
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// the retail implementation's Start leaves the frontend for the loading screen,
 		// which is what actually builds the session [07 §4].
 		g.startBattleLoad(g.setup.MapName)
 		return
@@ -2247,7 +2179,7 @@ func (g *gameShell) activateDynamicSkirmishGadget(key string) {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// nextRetailPlayerColor follows the retail implementation, including its unusual fallback:
 // the first candidate is checked only against other live rows, but once that
 // candidate conflicts, the fallback scans every configured row, including
 // open rows, from logo zero upward.
@@ -2281,7 +2213,7 @@ func (g *gameShell) nextRetailPlayerColor(slot, delta int) int {
 		return candidate
 	}
 
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// the retail implementation restarts at zero and tests all row color fields, without
 	// filtering on controller state. If every stock logo is present it stores
 	// -1, which is also what the frontend resolves back into the GUI art.
 	for candidate = 0; candidate < logoCount; candidate++ {
@@ -2299,7 +2231,7 @@ func (g *gameShell) nextRetailPlayerColor(slot, delta int) int {
 	return -1
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// cycleRetailController is the retail implementation's exact 0→2→(0|1) controller
 // transition. A row with value 0 is Open, 1 is Player, and 2 is Computer.
 func (g *gameShell) cycleRetailController(slot int) {
 	if slot < 0 || slot >= session.SkirmishMaxPlayers {
@@ -2361,7 +2293,7 @@ func (g *gameShell) openMissionMenu(any bool) {
 	g.openMenu(modeMenuMission)
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// retailSkirmishStartError is the exact the retail implementation validation order and
 // wording. The caller shows the result through MSGBOX.GUI, just as retail
 // does, and starts a session only after every gate passes.
 func (g *gameShell) retailSkirmishStartError() string {
@@ -2403,7 +2335,7 @@ func (g *gameShell) retailSkirmishStartError() string {
 	return ""
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// retailAllPlayersSameAlliedGroup mirrors the retail implementation. Allied group 5 is
 // treated as the sentinel/unassigned group: if every live row is in group 5
 // (or there are no live rows), retail does not report the same-group error.
 // Once a non-5 live group is found, open rows are ignored and every other

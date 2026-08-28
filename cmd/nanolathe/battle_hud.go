@@ -38,22 +38,27 @@ type retailBattleHUD struct {
 	guiFont *formats.FNT
 	pal     *palette.Tables
 
-	panelTop     *formats.GAFFrame
-	panelSide    *formats.GAFFrame
-	panelBottom  *formats.GAFFrame
-	intGAF       *formats.GAF
-	common       *formats.GAF
-	oldMain      *formats.GAF
-	share        *formats.GAF
-	logos        *formats.GAF
-	optionsGAF   *formats.GAF
-	optionsWin   *gui.Window
-	exitWin      *gui.Window
-	confirmWin   *gui.Window
-	modalFont    *formats.GAFEntry
-	pausedFrame  *formats.GAFFrame
-	victoryFrame *formats.GAFFrame // [07 §11] igvictory from anims/igtitles.gaf via intgaf/gui machinery
-	defeatFrame  *formats.GAFFrame // [07 §11] igdefeat from anims/igtitles.gaf
+	panelTop           *formats.GAFFrame
+	panelSide          *formats.GAFFrame
+	panelBottom        *formats.GAFFrame
+	intGAF             *formats.GAF
+	common             *formats.GAF
+	oldMain            *formats.GAF
+	share              *formats.GAF
+	logos              *formats.GAF
+	optionsGAF         *formats.GAF
+	optionsWin         *gui.Window
+	exitWin            *gui.Window
+	confirmWin         *gui.Window
+	modalFont          *formats.GAFEntry
+	pausedFrame        *formats.GAFFrame
+	victoryFrame       *formats.GAFFrame // [07 §11] igvictory from anims/igtitles.gaf via intgaf/gui machinery
+	defeatFrame        *formats.GAFFrame // [07 §11] igdefeat from anims/igtitles.gaf
+	resultWin          *gui.Window       // [07 §11] authored ENDMSN.GUI result surface
+	resultGAF          *formats.GAF      // [07 §11] authored endmsn.gaf outcome controls
+	resultVictoryFrame *formats.GAFFrame // [07 §11] authored endmsn.gaf victory copy
+	resultDefeatFrame  *formats.GAFFrame // [07 §11] authored endmsn.gaf defeat copy
+	resultPanel        *ui.Panel         // shared authored gesture state [07 §3]
 
 	panel *hud.Panel
 	fs    vfs.FSOps
@@ -272,6 +277,30 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	} else {
 		hudAssetWarning(fs, titlesPath, "igtitles.gaf [07 §11]", ferr)
 	}
+	// End-mission presentation is a separate authored frontend family. Keep
+	// both records optional at battle entry: the title and result surface may be
+	// absent from a development mount, but neither case permits a generated
+	// replacement layout [07 §11][08 "Session end and reporting"].
+	resultWin := loadGUIOptional(fs, "guis/endmsn.gui", "endmsn.gui [07 §11]")
+	resultGAF := loadGAFOptional(fs, "anims/endmsn.gaf", "endmsn.gaf [07 §11]")
+	var resultVictoryFrame, resultDefeatFrame *formats.GAFFrame
+	if resultGAF != nil {
+		if entry, ok := resultGAF.Find("victory"); ok && len(entry.Frames) != 0 {
+			resultVictoryFrame = entry.Frames[0].Frame
+		} else {
+			hudAssetWarning(fs, "anims/endmsn.gaf", "endmsn.gaf missing victory copy [07 §11]", fmt.Errorf("missing authored entry"))
+		}
+		if entry, ok := resultGAF.Find("defeat"); ok && len(entry.Frames) != 0 {
+			resultDefeatFrame = entry.Frames[0].Frame
+		} else {
+			hudAssetWarning(fs, "anims/endmsn.gaf", "endmsn.gaf missing defeat copy [07 §11]", fmt.Errorf("missing authored entry"))
+		}
+	}
+	var resultPanel *ui.Panel
+	if resultWin != nil {
+		resultPanel = ui.NewPanel(resultWin)
+		configureResultPanel(fs, sess, resultPanel)
+	}
 	// EXITMENU and YESORNO are opened with the executable's 0x1000 placement
 	// flag. The modal initializer replaces their authored origins with sentinels,
 	// then centers them in the 512-pixel playfield to the right of the rail.
@@ -287,6 +316,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
 		optionsGAF: optionsGAF, optionsWin: optionsWin, exitWin: exitWin, confirmWin: confirmWin,
 		modalFont: modalFont, pausedFrame: pausedFrame, victoryFrame: victoryFrame, defeatFrame: defeatFrame,
+		resultWin: resultWin, resultGAF: resultGAF, resultVictoryFrame: resultVictoryFrame, resultDefeatFrame: resultDefeatFrame, resultPanel: resultPanel,
 		panel: hud.NewPanel(0x04, 640, 480, nil), fs: fs,
 		pages:      make(map[string]*formats.GAF),
 		windows:    make(map[string]*gui.Window),
@@ -447,7 +477,7 @@ func blitBattlePanel(c *client.Client, f *formats.GAFFrame, x, y int) {
 	c.UIBlitAnchor(f, x+int(f.XOffset), y+int(f.YOffset))
 }
 
-func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
+func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented client.UIFrame) {
 	if h == nil || c == nil {
 		return
 	}
@@ -455,12 +485,8 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 	// queue walker is deliberately fed only published state; Shift is the live
 	// presentation gate and releasing it returns without constructing or
 	// mutating any authoritative data [I6][07 §9][R-P0-11 §4].
-	var cur *frame.Frame
-	frameOK := false
-	if buf := c.Buffer(); buf != nil {
-		cur = buf.Current()
-		frameOK = cur != nil
-	}
+	cur := presented.Committed
+	frameOK := cur != nil
 	// World-space overlays come first, while the composed world is still the
 	// whole surface: retail draws the build ghost and the order-queue overlay
 	// into the battle view and only then blits the GUI frames over them, so a
@@ -472,10 +498,10 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 			// Selection.Primary is the authoritative focus handle published with
 			// the frame. A separate hover field is not yet established at this
 			// seam, so do not consult the live unit pool or pointer picker.
-			drawQueueOverlay(c, cur, cur.Tick, b.shiftHeld, cur.Selection.LocalPlayer, cur.Selection.Primary)
+			drawQueueOverlay(c, cur, cur.Tick, b.battleState().Input.ShiftHeld, cur.Selection.LocalPlayer, cur.Selection.Primary)
 		}
 	}
-	h.drawMinimap(c, b)
+	h.drawMinimap(c, b, cur)
 
 	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. The two horizontal
 	// frames are static at the authored 129-pixel rail boundary; only the side
@@ -490,10 +516,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 	blitBattlePanel(c, h.panelSide, 0, offset)
 
 	ok := false
-	if buf := c.Buffer(); buf != nil {
-		cur = buf.Current()
-		ok = cur != nil
-	}
+	ok = cur != nil
 	if ok && cur != nil {
 		h.drawResources(c, cur)
 		h.drawSelectedUnit(c, cur)
@@ -507,7 +530,11 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession) {
 	if b != nil {
 		b.drawStatusMessage(c)
 	}
-	h.drawResultOverlay(c, b)
+	var result frame.ResultView
+	if cur != nil {
+		result = cur.Result
+	}
+	h.drawResultOverlay(c, b, result)
 }
 
 // minimapRect returns the battle composer's fixed radar canvas rectangle.
@@ -735,15 +762,14 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 	return final
 }
 
-func (h *retailBattleHUD) drawMinimap(c *client.Client, b *battleSession) {
-	if h == nil || c == nil || b == nil || b.sess == nil || b.sess.World == nil || b.cam == nil || c.Buffer() == nil {
+func (h *retailBattleHUD) drawMinimap(c *client.Client, b *battleSession, cur *frame.Frame) {
+	if h == nil || c == nil || b == nil || b.sess == nil || b.sess.World == nil || b.cam == nil || cur == nil {
 		return
 	}
 	layout, dst, ok := b.minimapLayout()
 	if !ok {
 		return
 	}
-	cur := c.Buffer().Current()
 	surf := h.rebuildRadar(b, cur, layout)
 	if surf == nil {
 		return
@@ -793,7 +819,11 @@ func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, pa
 	clip := window.Rect
 	h.drawWindowBackground(c, window, page)
 	for i, gad := range window.Gadgets {
-		if i == 0 || gad.Active == 0 || gad.Kind == gui.KindFont || gad.Kind == gui.KindPanel {
+		active := gad.Active != 0
+		if window == h.resultWin && h.resultPanel != nil {
+			active = h.resultPanel.ActiveOf(gad.Name)
+		}
+		if i == 0 || !active || gad.Kind == gui.KindFont || gad.Kind == gui.KindPanel {
 			continue
 		}
 		r := h.modalGadgetRect(window, i, page)
@@ -1311,7 +1341,7 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 				// Retail branches on the product's BMcode, not on the builder
 				// [07 §9]. Product BMcode determines queue versus placement.
 				if !hud.ProductArmsPlacement(prodDef) {
-					_ = b.DispatchFactoryBuildDelta(prodKey, factoryBuildDelta(b.shiftHeld, rightClick))
+					_ = b.DispatchFactoryBuildDelta(prodKey, factoryBuildDelta(b.battleState().Input.ShiftHeld, rightClick))
 					return true
 				}
 				if rightClick {

@@ -130,16 +130,16 @@ func TestBuildPageUsesCompiledCatalogDefinitionIdentity(t *testing.T) {
 
 func TestPlacementCancellationClearsAllPendingState(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
-	b.buildDef = "armsolar"
-	b.buildFootX, b.buildFootZ = 2, 2
-	b.buildOK = true
-	b.buildMX, b.buildMY = 100, 110
-	b.buildCellX, b.buildCellZ = 4, 5
-	b.buildSiteH = 7
-	b.buildSticky = true
-	b.latch = input.LatchMobileBuild
+	b.battleState().Input.BuildDef = "armsolar"
+	b.battleState().Input.BuildFootX, b.battleState().Input.BuildFootZ = 2, 2
+	b.battleState().Input.BuildOK = true
+	b.battleState().Input.BuildMX, b.battleState().Input.BuildMY = 100, 110
+	b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ = 4, 5
+	b.battleState().Input.BuildSiteH = 7
+	b.battleState().Input.BuildSticky = true
+	b.battleState().Input.Latch = input.LatchMobileBuild
 	b.CancelPlacement()
-	if b.buildDef != "" || b.buildFootX != 0 || b.buildFootZ != 0 || b.buildOK || b.buildMX != 0 || b.buildMY != 0 || b.buildCellX != 0 || b.buildCellZ != 0 || b.buildSiteH != 0 || b.buildSticky || b.latch != input.LatchNormal {
-		t.Fatalf("placement cancellation left state: def=%q foot=%d,%d ok=%t mouse=%d,%d cell=%d,%d h=%d sticky=%t latch=%v", b.buildDef, b.buildFootX, b.buildFootZ, b.buildOK, b.buildMX, b.buildMY, b.buildCellX, b.buildCellZ, b.buildSiteH, b.buildSticky, b.latch)
+	if b.battleState().Input.BuildDef != "" || b.battleState().Input.BuildFootX != 0 || b.battleState().Input.BuildFootZ != 0 || b.battleState().Input.BuildOK || b.battleState().Input.BuildMX != 0 || b.battleState().Input.BuildMY != 0 || b.battleState().Input.BuildCellX != 0 || b.battleState().Input.BuildCellZ != 0 || b.battleState().Input.BuildSiteH != 0 || b.battleState().Input.BuildSticky || b.battleState().Input.Latch != input.LatchNormal {
+		t.Fatalf("placement cancellation left state: def=%q foot=%d,%d ok=%t mouse=%d,%d cell=%d,%d h=%d sticky=%t latch=%v", b.battleState().Input.BuildDef, b.battleState().Input.BuildFootX, b.battleState().Input.BuildFootZ, b.battleState().Input.BuildOK, b.battleState().Input.BuildMX, b.battleState().Input.BuildMY, b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ, b.battleState().Input.BuildSiteH, b.battleState().Input.BuildSticky, b.battleState().Input.Latch)
 	}
 }

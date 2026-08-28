@@ -912,8 +912,14 @@ func TestOrderGuardFloat(t *testing.T) {
 	if u.OrderGuard != 0 {
 		t.Fatalf("fresh unit guard = %v, want 0", u.OrderGuard)
 	}
-	// Queue a Move_Ground with a handler that never completes it (code 2).
-	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code { return Code(2) })
+	// Queue a Move_Ground with a handler that parks the record on an
+	// unsatisfied gate: the record stays queued (mid-order) and the walk
+	// stops on the blocked head [04 §3.3] step 3 — no iteration cap exists
+	// to rescue a continue-code loop (ORD-02).
+	restore := setHandler(moveID, func(u *units.Unit, n *Node, s uint32) Code {
+		n.DynamicGate = 0x400
+		return Code(2)
+	})
 	defer restore()
 	q.primary = append(q.primary, &Node{ID: moveID, DynamicGate: 0, Deadline: -1})
 	q.Pump(u, 0)

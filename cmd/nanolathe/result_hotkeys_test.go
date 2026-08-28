@@ -38,8 +38,8 @@ func TestGameSpeedKeysClampAndMessage(t *testing.T) {
 	if b.sess.Clock.Requested != 11 {
 		t.Fatalf("speed increase want 11 got %d", b.sess.Clock.Requested)
 	}
-	if b.statusMessage != "Game Speed  +1" {
-		t.Fatalf("speed message want 'Game Speed  +1' got %q", b.statusMessage)
+	if b.battleState().Input.StatusMessage != "Game Speed  +1" {
+		t.Fatalf("speed message want 'Game Speed  +1' got %q", b.battleState().Input.StatusMessage)
 	}
 	// 10 -> Normal
 	b.sess.Clock.Requested = 11
@@ -48,8 +48,8 @@ func TestGameSpeedKeysClampAndMessage(t *testing.T) {
 	if b.sess.Clock.Requested != 10 {
 		t.Fatalf("speed decrease to 10 want 10 got %d", b.sess.Clock.Requested)
 	}
-	if b.statusMessage != "Game Speed Normal" {
-		t.Fatalf("speed normal message want 'Game Speed Normal' got %q", b.statusMessage)
+	if b.battleState().Input.StatusMessage != "Game Speed Normal" {
+		t.Fatalf("speed normal message want 'Game Speed Normal' got %q", b.battleState().Input.StatusMessage)
 	}
 	// Via handleInput: test that +/- keys are wired [07 §2]
 	b.sess.Clock.Requested = 10
@@ -93,15 +93,15 @@ func TestPauseToggleWithMessage(t *testing.T) {
 	if !b.sess.Clock.Paused {
 		t.Fatalf("pause toggle should set Paused true")
 	}
-	if b.statusMessage != "Game Paused" {
-		t.Fatalf("pause message want 'Game Paused' got %q", b.statusMessage)
+	if b.battleState().Input.StatusMessage != "Game Paused" {
+		t.Fatalf("pause message want 'Game Paused' got %q", b.battleState().Input.StatusMessage)
 	}
 	b.togglePause()
 	if b.sess.Clock.Paused {
 		t.Fatalf("second toggle should clear Paused")
 	}
-	if b.statusMessage != "Game Resumed" {
-		t.Fatalf("resume message want 'Game Resumed' got %q", b.statusMessage)
+	if b.battleState().Input.StatusMessage != "Game Resumed" {
+		t.Fatalf("resume message want 'Game Resumed' got %q", b.battleState().Input.StatusMessage)
 	}
 	// Via handleInput
 	b.sess.Clock.Paused = false
@@ -119,8 +119,8 @@ func TestESCMenuTokenPath(t *testing.T) {
 	b := newTestBattle(cat, terrain)
 	b.sess.Clock = &clock.State{Requested: 10, Active: 10}
 	b.sess.Snapshot = &frame.Buffer{}
-	b.latch = input.LatchNormal
-	b.buildDef = ""
+	b.battleState().Input.Latch = input.LatchNormal
+	b.battleState().Input.BuildDef = ""
 	// ESC when latch normal and not placing should open menu [07 §2]
 	cl, _ := client.New(client.Options{Headless: true, Buffer: b.sess.Snapshot, Width: 640, Height: 480})
 	cl.SetCamera(b.cam)
@@ -128,7 +128,7 @@ func TestESCMenuTokenPath(t *testing.T) {
 	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 	in.Kbd.InjectKey(input.KeyEscape, true)
 	// viewerStep logic: if latch normal and buildDef empty, ESC opens menu
-	if b.latch == input.LatchNormal && b.buildDef == "" {
+	if b.battleState().Input.Latch == input.LatchNormal && b.battleState().Input.BuildDef == "" {
 		b.openBattleMenu()
 	}
 	if b.battleState().Modal() != ui.BattleModalOptions {
@@ -149,13 +149,13 @@ func TestESCMenuTokenPath(t *testing.T) {
 		}
 	}
 	// ESC when latch armed should disarm, not open menu [07 §9]
-	b.latch = input.LatchMove
-	b.buildDef = ""
+	b.battleState().Input.Latch = input.LatchMove
+	b.battleState().Input.BuildDef = ""
 	in3 := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 	in3.Kbd.InjectKey(input.KeyEscape, true)
 	b.handleInput(in3, nil)
-	if b.latch != input.LatchNormal {
-		t.Fatalf("ESC should disarm latch, got %v", b.latch)
+	if b.battleState().Input.Latch != input.LatchNormal {
+		t.Fatalf("ESC should disarm latch, got %v", b.battleState().Input.Latch)
 	}
 	if b.battleState().Modal() != ui.BattleModalClosed {
 		t.Fatalf("ESC disarm should not open menu when latch was armed")
@@ -164,78 +164,10 @@ func TestESCMenuTokenPath(t *testing.T) {
 	in4 := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
 	in4.Kbd.InjectKey(input.KeyEscape, true)
 	// viewerStep would open
-	if b.latch == input.LatchNormal && b.buildDef == "" {
+	if b.battleState().Input.Latch == input.LatchNormal && b.battleState().Input.BuildDef == "" {
 		b.openBattleMenu()
 	}
 	if b.battleState().Modal() != ui.BattleModalOptions {
 		t.Fatalf("second ESC after disarm should open menu")
 	}
-}
-
-func TestResultOverlayUsesIGTitlesFrames(t *testing.T) {
-	// Verify that result overlay prefers igvictory/igdefeat frames when available [07 §11]
-	// This is asset-gated: if igtitles.gaf is not present, no title substitute is drawn.
-	cat := testCatalogON05()
-	terrain := testWorldON05(20, 20)
-	b := newTestBattle(cat, terrain)
-	b.sess.Clock = &clock.State{Requested: 10, Active: 10}
-	b.sess.Snapshot = &frame.Buffer{}
-	// Create a minimal HUD with no frames (degradable path)
-	hud := &retailBattleHUD{console: nil, victoryFrame: nil, defeatFrame: nil, pausedFrame: nil}
-	// Should not panic when frames nil
-	cl, _ := client.New(client.Options{Headless: true, Buffer: b.sess.Snapshot, Width: 640, Height: 480})
-	// Simulate result visible with nil frames; the overlay must remain safe and
-	// must not substitute text for the missing authored title.
-	w := b.sess.Snapshot.BeginWrite()
-	w.Result = frame.ResultView{Ended: true, Kind: "victory", WinnerTeam: 0}
-	_ = b.sess.Snapshot.Publish(1)
-	if !b.isResultVisible() {
-		t.Fatalf("result should be visible")
-	}
-	// Should not panic
-	hud.drawResultOverlay(cl, b)
-	// Now test with frames (synthetic)
-	// Create dummy frames
-	dummyVictory := &struct{ Width, Height uint16 }{Width: 100, Height: 30}
-	_ = dummyVictory
-	// Verify that hardcoded 0 scores are behind snapshot view field with TODO
-	// Scores are 0 placeholders [P1-01 §2.3] TODO(question)
-	view := b.resultView()
-	if len(view.Scores) != 0 {
-		// Scores slice may be empty for this synthetic; but if present, kills should be 0 placeholder
-		for _, sc := range view.Scores {
-			if sc.Kills != 0 || sc.Losses != 0 {
-				t.Fatalf("kills/losses should be 0 placeholder TODO(question) [P1-01 §2.3], got %v", sc)
-			}
-		}
-	}
-	// End-mission statistics: ensure drawResultStatistics does not panic with empty data
-	hud.drawResultStatistics(cl, b, view, 80, 100, 480, 200)
-}
-
-func TestResultStatisticsFromSimData(t *testing.T) {
-	cat := testCatalogON05()
-	terrain := testWorldON05(20, 20)
-	b := newTestBattle(cat, terrain)
-	b.sess.Clock = &clock.State{Requested: 10, Active: 10}
-	b.sess.Snapshot = &frame.Buffer{}
-	// Publish a frame with economy data [07 §11] P1-01
-	f := &frame.Frame{
-		Tick: 100,
-		Economy: []frame.EconomyView{
-			{Player: 0, MetalProduced: 123, EnergyProduced: 456, MetalConsumed: 50, EnergyConsumed: 60},
-		},
-	}
-	w := b.sess.Snapshot.BeginWrite()
-	*w = *f
-	_ = b.sess.Snapshot.Publish(f.Tick)
-	view := frame.ResultView{
-		Ended: true, Kind: "victory", WinnerTeam: 0,
-		Scores: []frame.ResultScore{{Player: 0, Team: 1, Kills: 0, Losses: 0, Score: 100, Kind: "win"}},
-	}
-	hud := &retailBattleHUD{console: nil}
-	cl, _ := client.New(client.Options{Headless: true, Buffer: b.sess.Snapshot, Width: 640, Height: 480})
-	// Should populate rows ONLY from sim data; E/M produced from economy, waste is placeholder 0 [07 §11] TODO(question)
-	hud.drawResultStatistics(cl, b, view, 80, 100, 480, 200)
-	// No panic = pass; verify that placeholder waste is 0
 }

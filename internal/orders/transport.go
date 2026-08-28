@@ -17,6 +17,7 @@
 package orders
 
 import (
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -55,18 +56,20 @@ func lookupTarget(carrier *units.Unit, target pool.Handle) *units.Unit {
 // First enabled weapon slot's range scanned via weapon-slot enabled flag;
 // shipped unarmed fallback is weapon record 0 (NOWEAPON, Range 16) [04 §10.2].
 // TODO(question): exact weapon-slot enabled flag not represented in content.UnitDef;
-// using first non-nil Weapon1Def/2Def/3Def as proxy [02 "Unit record"][06 §1.2].
+// using first active Weapon1Def/2Def/3Def as proxy [02 "Unit record"][06 §1.2];
+// the record-0 inactive sentinel a missed link resolves to is not a weapon
+// [02 §5 R-CONTENT-02].
 func boardingRange(carrier *units.Unit) int32 {
 	if carrier == nil || carrier.Def == nil {
 		return 16
 	}
-	if carrier.Def.Weapon1Def != nil {
+	if !content.IsWeaponInactive(carrier.Def.Weapon1Def) {
 		return carrier.Def.Weapon1Def.Range
 	}
-	if carrier.Def.Weapon2Def != nil {
+	if !content.IsWeaponInactive(carrier.Def.Weapon2Def) {
 		return carrier.Def.Weapon2Def.Range
 	}
-	if carrier.Def.Weapon3Def != nil {
+	if !content.IsWeaponInactive(carrier.Def.Weapon3Def) {
 		return carrier.Def.Weapon3Def.Range
 	}
 	// Fallback via installed slots (units.Slot.Weapon) when Def.Weapon*Def not wired.

@@ -122,7 +122,10 @@ func ShouldDispatchReplayKilled(packetSeverity int8) bool {
 // SelectDeathExplosionWeapon selects the death-explosion weapon per [06 §12.1][02 "Unit record"].
 // The handler selects one of the unit's two resolved death-weapon definitions:
 // cause 3 (self-destruct) prefers SelfDestructAsDef, otherwise ExplodeAsDef.
-// This is the DoExplosion weapon trigger [06 §12.1] C22–C25.
+// A link holding the record-0 inactive sentinel (ID 0, stock [noweapon]) is
+// not a weapon [02 §5 R-CONTENT-02]: inactive links fall through like nil, and
+// an all-inactive selection returns nil — the death path then dispatches no
+// explosion. This is the DoExplosion weapon trigger [06 §12.1] C22–C25.
 func SelectDeathExplosionWeapon(def *content.UnitDef, cause Cause) *content.WeaponDef {
 	if def == nil {
 		return nil // [02 "Unit record"] no def => no weapon
@@ -130,12 +133,18 @@ func SelectDeathExplosionWeapon(def *content.UnitDef, cause Cause) *content.Weap
 	// [06 §12.1] C22-C25: death-explosion weapon trigger (DoExplosion) of the
 	// unit's deathExplosion weapon. Cause 3 uses SelfDestructAs, others use ExplodeAs.
 	if cause == CauseSelfDestruct {
-		if def.SelfDestructAsDef != nil {
+		if !content.IsWeaponInactive(def.SelfDestructAsDef) {
 			return def.SelfDestructAsDef // [02 "Unit record"] selfdestructas
 		}
-		return def.ExplodeAsDef // fallback [02 "Unit record"]
+		if !content.IsWeaponInactive(def.ExplodeAsDef) {
+			return def.ExplodeAsDef // fallback [02 "Unit record"]
+		}
+		return nil // both links inactive [02 §5 R-CONTENT-02]
 	}
-	return def.ExplodeAsDef // [02 "Unit record"] explodeas [06 §12.1] DoExplosion
+	if !content.IsWeaponInactive(def.ExplodeAsDef) {
+		return def.ExplodeAsDef // [02 "Unit record"] explodeas [06 §12.1] DoExplosion
+	}
+	return nil // link inactive or unresolved [02 §5 R-CONTENT-02]
 }
 
 // KilledVariantFromVM performs the synchronous 4-cell Killed query deterministically [04 §5.1] C23 C25.

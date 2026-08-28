@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -142,45 +141,12 @@ func (b *battleSession) CancelPlacement() {
 }
 
 func (b *battleSession) IsPlacementArmed() bool {
-	return b != nil && b.buildDef != ""
+	return b != nil && b.battleState().Input.BuildDef != ""
 }
 
 func (b *battleSession) PlacementProduct() string {
 	if b == nil {
 		return ""
 	}
-	return b.buildDef
-}
-
-func latchCode(latch input.Latch) int {
-	switch latch {
-	case input.LatchNormal:
-		return 1
-	case input.LatchMove:
-		return 2
-	case input.LatchAttack:
-		return 3
-	case input.LatchBlast:
-		return 4
-	case input.LatchUnload:
-		return 5
-	case input.LatchPickup:
-		return 6
-	case input.LatchFollow:
-		return 7
-	case input.LatchRepair:
-		return 8
-	case input.LatchPatrol:
-		return 9
-	case input.LatchTeleport:
-		return 11
-	case input.LatchReclaim:
-		return 12
-	case input.LatchCapture:
-		return 13
-	case input.LatchMobileBuild:
-		return 14
-	default:
-		return 0
-	}
+	return b.battleState().Input.BuildDef
 }

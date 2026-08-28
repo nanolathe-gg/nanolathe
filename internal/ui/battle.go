@@ -1,5 +1,7 @@
 package ui
 
+import "github.com/nanolathe/nanolathe/internal/input"
+
 // BattleModal is the authored in-battle modal window currently at the top of
 // the modal chain. The chain is ARMOPT -> EXITMENU -> YESORNO [07 "Tab
 // options menu and manual exit"].
@@ -33,19 +35,129 @@ type BattleScheduleIntent struct {
 	SpeedDelta int
 }
 
-// BattleState owns the mutable authored modal state that is not simulation
-// state. The order latch and build-placement values remain in the battle
-// command composition for this unit because their world/HUD owner is shared
-// with the existing command dispatcher [07 §3][07 §9].
+// BattleInputState is the single owner of mutable battle presentation/input
+// state. It contains no simulation handles or services: the command adapter
+// reads this value, turns gestures into semantic session commands, and leaves
+// application to Session.EnqueueHumanCommand [01 §4.4][07 §3][07 §9].
+//
+// Keeping the gesture latches together is important. A HUD press, placement
+// press, or world drag owns the complete button gesture; separate owners can
+// otherwise observe the same release and issue two actions.
+type BattleInputState struct {
+	Latch input.Latch
+
+	DragActive       bool
+	DragStartX       int32
+	DragStartY       int32
+	DragEndX         int32
+	DragEndY         int32
+	HUDCaptured      bool
+	HUDPressX        int32
+	HUDPressY        int32
+	PlaceCaptured    bool
+	ShiftHeld        bool
+	ShiftLatchSticky bool
+	PointerX         int32
+	PointerY         int32
+	PrevMouseX       float32
+	PrevMouseY       float32
+
+	BuildDef    string
+	BuildFootX  int32
+	BuildFootZ  int32
+	BuildOK     bool
+	BuildMX     int32
+	BuildMY     int32
+	BuildCellX  int32
+	BuildCellZ  int32
+	BuildSiteH  int32
+	BuildSticky bool
+
+	StatusMessage   string
+	StatusUntil     uint32
+	ResultDismissed bool
+}
+
+// BattleState owns all mutable authored battle-interface state that is not
+// simulation state: modal windows, latches, gestures, placement, status, and
+// result dismissal. The command composition layer only adapts this state to
+// Session.EnqueueHumanCommand [07 §3][07 §9].
 type BattleState struct {
 	modal        BattleModal
 	pressed      int
 	pressedModal BattleModal
+
+	// Input is intentionally public as a plain value so the cmd adapter can
+	// render and update it without introducing another state bridge. No mutable
+	// simulation state is reachable through this value [I6].
+	Input BattleInputState
 }
 
 // NewBattleState returns a closed modal state with no captured press.
 func NewBattleState() *BattleState {
-	return &BattleState{modal: BattleModalClosed, pressed: -1}
+	return &BattleState{modal: BattleModalClosed, pressed: -1, Input: BattleInputState{Latch: input.LatchNormal}}
+}
+
+// Latch returns the currently armed semantic order. A nil state is idle.
+func (s *BattleState) Latch() input.Latch {
+	if s == nil || !s.Input.Latch.IsValid() {
+		return input.LatchNormal
+	}
+	return s.Input.Latch
+}
+
+// SetLatch changes the semantic order latch. Invalid values are rejected so a
+// malformed button name cannot leak an arbitrary dispatcher index into the
+// command adapter [07 §9].
+func (s *BattleState) SetLatch(l input.Latch) bool {
+	if s == nil || !l.IsValid() {
+		return false
+	}
+	s.Input.Latch = l
+	return true
+}
+
+// ResetInteraction clears in-flight gesture state and returns the order latch
+// to idle. Placement data is cleared too, matching the retail cancel path
+// [07 §9].
+func (s *BattleState) ResetInteraction() {
+	if s == nil {
+		return
+	}
+	// Reinitialize the complete presentation/input value so no stale pointer,
+	// modifier, status, result, or gesture bit survives a modal/result reset.
+	s.Input = BattleInputState{Latch: input.LatchNormal}
+}
+
+// ArmPlacement records the authored product and footprint for the mobile
+// build ghost. The caller supplies compiled content values; UI never invents
+// a product or validates simulation placement [07 §9].
+func (s *BattleState) ArmPlacement(product string, footX, footZ int32) {
+	if s == nil {
+		return
+	}
+	s.Input.BuildDef = product
+	s.Input.BuildFootX, s.Input.BuildFootZ = footX, footZ
+	s.Input.BuildOK = false
+	s.Input.BuildSticky = false
+	s.Input.Latch = input.LatchMobileBuild
+}
+
+// ClearPlacement disarms the mobile-build ghost and clears its derived site.
+func (s *BattleState) ClearPlacement() {
+	if s == nil {
+		return
+	}
+	s.Input.BuildDef = ""
+	s.Input.BuildFootX, s.Input.BuildFootZ = 0, 0
+	s.Input.BuildOK = false
+	s.Input.BuildMX, s.Input.BuildMY = 0, 0
+	s.Input.BuildCellX, s.Input.BuildCellZ = 0, 0
+	s.Input.BuildSiteH = 0
+	s.Input.BuildSticky = false
+	if s.Input.Latch == input.LatchMobileBuild {
+		s.Input.Latch = input.LatchNormal
+	}
 }
 
 // Modal reports the top authored modal window.

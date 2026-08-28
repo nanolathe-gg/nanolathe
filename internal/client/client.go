@@ -1,7 +1,7 @@
 // Package client is the window and frame loop.
 //
-// Presentation is the one deliberate divergence from retail's draw path, which
-// samples committed state with no interpolation [03 §2.4]. The sim never reads
+// Presentation samples committed state with no interpolation, matching
+// retail's draw path [03 §2.4]. The sim never reads
 // wall-clock time, input state, camera, or renderer state (I6). Client owns the
 // update boundary but never advances a clock or mutates sim state itself; the
 // injected Step callback owns those effects (PLAN_03 C15/C16, PLAN_04A C9).
@@ -44,12 +44,6 @@ type Options struct {
 	Width, Height int
 	Title         string
 
-	// DebugOverlay is an explicit developer diagnostic switch. Retail battle
-	// frames do not contain the Nanolathe tick/camera text or verification bar;
-	// keep those diagnostics opt-in so attaching a font never changes the
-	// retail surface [03 §7.1] C8.
-	DebugOverlay bool
-
 	// Headless skips window creation entirely (C11). Nothing above becomes
 	// reachable from --headless; RunGame returns immediately.
 	Headless bool
@@ -65,10 +59,7 @@ type Client struct {
 	// Ebitengine loop as closing the window. It is presentation state only.
 	exitRequested bool
 
-	// Overlay draws battle-view chrome after world units. Presentation only
-	// [I6]. Debug text is separately opt-in through Options.DebugOverlay.
-	Overlay func(c *Client)
-	buffer  *frame.Buffer
+	buffer *frame.Buffer
 
 	width, height int
 	indexed       []uint8
@@ -99,8 +90,9 @@ type Client struct {
 	// cannot share animation phase or orientation caches [03 §1][I6].
 	modelPresentation map[modelTextureKey]*modelTextureCursor
 	modelOrientation  map[uint64]*presentationrender.OrientationCache
-	// DET-04: shake state is authoritative phase 10; the client only applies
-	// the published offset from the committed frame and never draws CRT here.
+	// DET-04: shake state is authoritative phase 10. The owning battle
+	// presentation updates its camera from the committed offset; this renderer
+	// never keeps a second shake/camera accumulator.
 	// DET-01: crt is a PRIVATE presentation copy (struct value copied at bind
 	// time), never the session's authoritative stream. It feeds only the
 	// presentation-side segmented-projectile pass, whose draws are
@@ -109,18 +101,16 @@ type Client struct {
 	// Nanolathe isolates the copy so render cadence cannot desync the sim.
 	// Next wave: move segment resolution to sim-published values and drop this
 	// field. Shrink-only.
-	crt              *rng.CRT
-	crtBound         bool
-	frameTick        uint32 // committed tick of the frame being composed
-	lastShakeOffsetX int32
-	lastShakeOffsetY int32
-	nano             presentationrender.NanoField // live nanolathe particle records [03 §5.5]
-	lastNanoTick     uint32
-	nanoDepth        []uint8 // per-pixel nanoframe height/depth key [03 §5.2]
-	worldBuckets     worldBuckets
-	fogCache         *visibility.FogCache
-	fogOps           []presentationrender.FogOp
-	selectionChrome  []selectionChrome
+	crt             *rng.CRT
+	crtBound        bool
+	frameTick       uint32                       // committed tick of the frame being composed
+	nano            presentationrender.NanoField // live nanolathe particle records [03 §5.5]
+	lastNanoTick    uint32
+	nanoDepth       []uint8 // per-pixel nanoframe height/depth key [03 §5.2]
+	worldBuckets    worldBuckets
+	fogCache        *visibility.FogCache
+	fogOps          []presentationrender.FogOp
+	selectionChrome []selectionChrome
 
 	// Feature GAF presentation — sprite class [02 "Feature record"] [03 §5.1.1].
 	// Loaded lazily from anims/<filename>.gaf via modelFS; cache is presentation-only (I6).
@@ -139,6 +129,10 @@ type Client struct {
 
 	// Software cursor, drawn last over the composed surface [07 §8].
 	cursors *Cursors
+
+	// uiStage is the sole UI adapter. World ordering stays in drawCommittedFrame;
+	// cmd-owned authored surfaces run once at its final interface slot [03 §1].
+	uiStage UIStage
 
 	in InputState
 
@@ -208,7 +202,7 @@ func (c *Client) SetPalette(p *palette.Tables) {
 	}
 }
 
-// SetFNT sets the debug font [03 §7.1] C8.
+// SetFNT installs the shared software font used by typed UI stages [03 §7.1].
 func (c *Client) SetFNT(fnt *formats.FNT) { c.fnt = fnt }
 
 // SetSnapshot repoints presentation at another published buffer — used when

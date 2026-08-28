@@ -276,6 +276,64 @@ enqueue; 0x40000 marks a record that belongs in the rear queue segment;
 branch; and 0x200000 marks a valid cached target position, written by the
 goal-resolution helper. The remaining observed bits have no located consumer.
 
+**Audit note — descriptor table verified from the static templates [R-DOC04-C]
+(2026-08-27).** All four static template batches were located and every field of every
+static descriptor was read byte-exactly; the table above was re-verified against that dump
+with **zero differences across all 67 named descriptors in all four verified columns**
+(state label, class parameter, acknowledgement group, static gate mask), and the sorted
+identity was recomputed from a case-sensitive byte sort of the 68 canonical names
+(the empty name at index 0, then the table's order exactly). The field layout is
+confirmed as, in offset order within the 25-byte record: **state label pointer, handler,
+presentation helper, class parameter (32-bit), acknowledgement group (one byte), static gate
+mask, canonical name pointer** — the doc's field list above is complete but was not
+previously ordered.
+
+Batch insertion order (as compiled into the image, 23 + 22 + 22 named records):
+
+- Batch 1: `Stop`, `Attack_NoMove`, `Activate`, `Deactivate`, `Cloak_On`, `Cloak_Off`,
+  `Standing_MoveOrder`, `Standing_FireOrder`, `BuildingBuild`, `BuildWeapon`,
+  `SelfDestruct`, `SelfDestructFG`, `Paralyze`, `GetBuilt`, `BeCarried`, `MakeSelectable`,
+  `Wait`, `WaitForAttack`, `AttackUType`, `Guard_NoMove`, `SelfRepair`, `QMove`, `QPatrol`.
+- Batch 2: `Standby`, `Standby_Mine`, `Move_Ground`, `Follow_Ground`, `Suppress`,
+  `Attack_Chase`, `Attack_Kamikaze`, `AttackSpecial`, `Park`, `Patrol`, `Ground_Pickup`,
+  `Ground_Unload`, `Teleport`, `MobileBuild`, `HelpBuild`, `RepairPatrol`, `RepairUnit`,
+  `Capture`, `Resurrect`, `Reclaim`, `ReclaimUnit`, `RepairUnitNoMove`.
+- Batch 3: `VTOL_Standby`, `VTOL_Move`, `VTOL_Landing`, `VTOL_Pickup`, `VTOL_Unload`,
+  `VTOL_Follow`, `VTOL_Patrol`, `AirStrike`, `AirToAir`, `AirToGround`,
+  `AirToGroundHover`, `VTOL_MobileBuild`, `VTOL_HelpBuild`, `VTOL_RepairPatrol`,
+  `VTOL_RepairUnit`, `VTOL_Reclaim`, `VTOL_ReclaimUnit`, `VTOL_Evade`, `VTOL_SeekAttack`,
+  `VTOL_SeekGuard`, `VTOL_GetRepaired`, `VTOL_LandIfCan`.
+- Batch 4: the empty canonical name — no static image of this record exists in the read-only
+  data (a zero-filled 25-byte template is indistinguishable from padding); that it is
+  appended at registration rather than compiled in is **Supported inference**. The batch
+  sizes 23/22/22/1 are unchanged.
+
+The presentation-helper field takes exactly four identities across the 68: none; goal
+resolve with acknowledgement text and rings (the attack, suppress, capture, pickup, unload,
+teleport, and help-build families); the same plus moving path markers (the move, patrol,
+repair-patrol, follow, repair-unit, reclaim-unit, and resurrect families); and a
+build-footprint marker, carried by `MobileBuild` and `VTOL_MobileBuild` only. Acknowledgement
+groups observed: 0, 1, 2, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, and 19 (groups 3, 10, and 16
+through 18 are unused by the templates). Class parameter values observed: 0x00, 0x02, 0x03,
+0x08, 0x10, 0x12, 0x13, 0x18 (the class parameter stays opaque `TODO(question)` [P0-07]).
+
+**Retained-opaque static gate-mask bits — Established census, no located reader.** The union
+of the 68 static masks is bits 1-11, 16, 17, 18, 19, 20, and 24. Beyond the named bits above
+(9, 10, 18, 20 static; 14 and 21 exist only at runtime and appear in no static mask), the
+following static bits have no located consumer and must be stored opaque, not interpreted:
+bit 1 (0x2 — `Move_Ground`, `Patrol`, `RepairPatrol`, `VTOL_Move`, `VTOL_Patrol`,
+`VTOL_RepairPatrol`); bit 2 (0x4 — `MakeSelectable`, `Wait`, `AttackUType`,
+`WaitForAttack`, `GetBuilt`, `BeCarried`, `Paralyze`, `SelfRepair`, `BuildingBuild`);
+bit 3 (0x8 — the build family: `BuildingBuild`, `HelpBuild`, `MobileBuild`, `VTOL_HelpBuild`,
+`VTOL_MobileBuild`); bit 4 (0x10 — `Suppress`, `Patrol`, `RepairPatrol`, `VTOL_Patrol`,
+`VTOL_RepairPatrol`); bit 5 (0x20 — the cloak/standing family, `Guard_NoMove`, `Paralyze`,
+`BeCarried`, `GetBuilt`); bit 6 (0x40 — the cloak/standing family, `BuildWeapon`,
+`SelfDestruct`); bit 7 (0x80 — `Attack_NoMove`, `Attack_Chase`, `AttackSpecial`); bit 8
+(0x100 — the cloak/standing family, `BuildingBuild`, `BuildWeapon`, `MobileBuild`,
+`VTOL_MobileBuild`); bit 11 (0x800 — `Reclaim`); bit 16 (0x10000 — the cloak/standing
+family, `BuildWeapon`); bit 17 (0x20000 — `Standby`, `Standby_Mine`); bit 19 (0x80000 —
+`BuildWeapon` only, alongside its bit 18); bit 24 (0x1000000 — `Standby_Mine` only).
+
 ### 3.2 Order record
 
 **Established fact:** An order instance is an 86-byte record holding: the
@@ -1554,26 +1612,44 @@ publication happen after settlement (section 3.8).
 
 ### 6.1 Terrain classification
 
-**Established fact:** Movement profiles are movement class records compiled from `CLASS` sections. Each class reads eight keys in parse order — `FootPrintX`, `FootPrintZ`, `MaxWaterDepth`, `MinWaterDepth`, `MaxSlope`, `BadSlope`, `MaxWaterSlope`, `BadWaterSlope` — where `FootPrintX/Z` default 0, depth and slope fields default to the class's prior value (preserved), and `BadSlope`/`BadWaterSlope` default to half (`>>1`) of the `MaxSlope`/`MaxWaterSlope` value just read. Three unsigned-byte clamps then run unconditionally on every class: MaxWaterSlope caps MaxSlope, the resulting MaxSlope caps BadSlope, and MaxWaterSlope caps BadWaterSlope.
+**Established fact:** Movement profiles are movement class records compiled from `CLASS` sections. Each class reads eight keys in parse order — `FootPrintX`, `FootPrintZ`, `MaxWaterDepth`, `MinWaterDepth`, `MaxSlope`, `BadSlope`, `MaxWaterSlope`, `BadWaterSlope` — where `FootPrintX/Z` default 0, depth and slope fields default to the class's prior value (preserved; the prior value is the startup template's — see [R-DOC04-A] below), and `BadSlope`/`BadWaterSlope` default to half (`>>1`) of the `MaxSlope`/`MaxWaterSlope` value just read. Three unsigned-byte clamps then run unconditionally on every class: MaxWaterSlope caps MaxSlope, the resulting MaxSlope caps BadSlope, and MaxWaterSlope caps BadWaterSlope.
 
-**Closed — template-writer question (2026-08-26):** the MOVEINFO loader was
-re-exported in full and contains NO template pre-fill: the `[CLASS_n]`
-sections parse in order into a fixed zero-initialized record array and the
-"preserved prior" defaults are the record's own values, which start at zero.
-The earlier reading — "the stock movement template must carry a large
-`MaxWaterSlope` (255) before parsing so an omitted key preserves 255 and the
-clamps are identity; `TODO(question)` for the template writer" — is
-superseded: there is no template writer. The executable-proven consequence
-is that the FIRST class omitting `MaxWaterSlope` receives 0 and its
-`MaxSlope` is clamped to 0, so the shipped MOVEINFO file must order a
-MaxWaterSlope-authoring class (stock census: `TANKHOVER3/4` author 255)
-before the classes that omit it, letting the self-carry propagate 255. The
-shipped file's exact class ordering is a data census not yet recorded
-(archive extraction was not completed this session). Nanolathe's gated
-clamps remain an install-compatible divergence under that ordering; matching
-retail exactly means unconditional clamps with self-carry defaults. The same
-wording in document 02 section 5 must be corrected together (lane 02
-coordination).
+**Closed — the startup pool template and the MaxSlope=0 paradox [R-DOC04-A] (2026-08-27).**
+The prior reading — "the pool has no template writer: it is loader-zero-filled, the first class
+omitting `MaxWaterSlope` receives 0, its `MaxSlope` clamps to 0, and the shipped file must
+order a MaxWaterSlope-authoring class first so the self-carry propagates 255" — is
+**superseded**. That reading was correct that the loader performs no fill and that each
+record's prior bytes are its OWN (there is no cross-class propagation: each `CLASS_n` index
+owns one record slot), but wrong that the prior is zero. A one-time startup initializer
+registered in the executable's startup function table fills all 32 records BEFORE the first
+parse, and the bounded writer census that falsified it anchored its scan on the pool base
+while the initializer writes through a base-plus-displacement anchor — the census window, not
+the executable, missed it.
+
+**Established [R-DOC04-A]:** before any parse, every record holds: null name, `FootPrintX/Z`
+0, `MaxWaterDepth` 10000, `MinWaterDepth` −10000, and **`MaxSlope` = `BadSlope` =
+`MaxWaterSlope` = `BadWaterSlope` = 255**; the record tail (map dimensions, layer pointer,
+revision watermark) is zero. The identical values back the per-unit scratch profile used when
+an FBI `movementclass` name does not resolve (document 02 §5) — unauthored means unlimited.
+
+**Consequence — Established:** an omitted key carries the TEMPLATE value, not zero. Every
+stock class that omits `MaxWaterSlope` compiles to `MaxWaterSlope` 255, so the unconditional
+first clamp is the identity and **compiled `MaxSlope` equals the authored value** (stock:
+KBOTSS2 32, KBOTSF2 11, TANKDS2 32, TANKDH3 15, TANKSH3/TANKSH2 15, TANKBH3 15,
+TANKHOVER3/4 12). The `MaxSlope = 0` paradox is dissolved: no stock class compiles to a zero
+slope limit. Likewise every land class that omits `MinWaterDepth` carries −10000 (the
+shallow-depth gate can never fire) and every class that omits `MaxWaterDepth` carries 10000
+(boats: no depth ceiling); stock boats rely on both template depths. **Nanolathe's SC5
+gated-clamp divergence (docs/SPEC_CONFLICTS.md SC5) is removable**: retail is reproduced
+exactly by the startup template pre-fill plus the unconditional clamps, with no gate on key
+presence. Document 02's R-CONTENT-01 consequence paragraph and SC5's decision note need the
+same correction (content owners; this document's §6.1 text is the reference form).
+
+**Closed — template-writer question (2026-08-26, superseded by [R-DOC04-A] 2026-08-27):**
+that note's reading — no template writer, BSS-zero priors, stock file ordering as the escape,
+gated clamps retained — is superseded by [R-DOC04-A] above. Its loader-side findings (no fill
+in the MOVEINFO loader itself; per-record self-carry defaults; unconditional clamps) remain
+established and are unchanged.
 
 **Established fact:** The map terrain grid uses fixed-size attribute cells. The plot expansion derives per-cell MinHeight and MaxHeight as the minimum and maximum of up to four height bytes (cell, east, south, southeast, with edge guards) — slope is computed from these derived values, not a single sample. Height queries use bilinear interpolation of the four corner heights with low-four-bit fractions and signed-bias correction.
 
@@ -1589,7 +1665,70 @@ The path reader adds a fourth state for building occupancy. The steep and clear 
 
 **Established fact:** Water legality is folded into profile thresholds by comparing terrain against sea level. There is no independently proven water-cost table in the path expansion.
 
-**Established fact:** A packed two-bit terrain layer is stamped for profile rectangles. Dynamic placement/removal causes rectangle restamping and revision updates. Building occupancy is an overlay tested separately from the packed terrain value.
+**Established fact:** A packed two-bit terrain layer is stamped per movement class, not per
+unit: at map load every named class record is extended with the map dimensions, a heap layer
+of `ceil(height/16) × width` dwords, and the class's classifier is run over every attribute
+cell. Packing is 2 bits per cell: the dword at index `(z>>4)·width + x` holds cells
+`z & ~15 .. z | 15` of column `x`, cell `z` in shift `(z & 15)·2`. Dynamic placement/removal
+causes rectangle restamping and revision updates. Building occupancy is an overlay tested
+separately from the packed terrain value.
+
+**Established — the per-cell passability classifier [R-DOC04-B] (2026-08-27).** One
+comparison chain produces the 2-bit value, and it is the contract both for the map-load stamp
+(single-cell form) and for rectangle restamps (footprint form over the same record fields).
+Per attribute cell, in order, all comparisons on the derived 2×2 heights `hmin`/`hmax` (the
+per-cell derived minimum/maximum of §6.1's plot expansion):
+
+1. Feature gate: a resolved blocking feature on the cell blocks (the feature word's blocking
+   flag); a stale feature identity blocks; void cells block; no feature passes.
+2. Occupant-age gate: a cell's mobile occupant whose last occupancy-commit tick predates the
+   class record's revision watermark blocks. The watermark is zero until a request revision
+   arms it (the request revision pass below), so the MAP-LOAD stamp never blocks on
+   occupants — the static layer is terrain and features only.
+3. Deep gate (signed 32-bit): blocked iff `hmin < SeaLevel − MaxWaterDepth`, both depths
+   taken as sign-extended 16-bit record fields.
+4. Shallow gate (signed 32-bit): blocked iff `hmax > SeaLevel − MinWaterDepth`.
+5. Medium split (unsigned byte): land iff `hmin >= SeaLevel`.
+6. Slope tier (unsigned byte, `slope = hmax − hmin`): `slope <= BadSlope` (land) or
+   `slope <= BadWaterSlope` (water) → **3 clear**; `slope > MaxSlope` (land) or
+   `slope > MaxWaterSlope` (water) → **0 blocked**; otherwise → **1 steep**. Equality with
+   the bad threshold is clear; equality with the max threshold is steep, not blocked.
+
+Values are 0 blocked, 1 steep, 3 clear; value 2 never occurs in a stamped layer. After the
+per-cell stamp, a two-direction contagion pass demotes any clear (3) cell that borders a
+non-clear cell to 1 — the layer marks passable cells edging an obstruction as the steep tier.
+
+With the stock compiled classes of [R-DOC04-A] this yields the expected medium behavior:
+land classes block water deeper than their authored `MaxWaterDepth` (KBOTSS2 12, TANKDS2 100)
+and are never depth-blocked on land (template `MinWaterDepth` −10000 puts the shallow ceiling
+above any terrain); boats carry the template `MaxWaterDepth` 10000 (no deep gate) and block
+unless the whole footprint is submerged past authored `MinWaterDepth` (BOATD3/BOATD6 15,
+BOATS4/5/6 3); spiders (`MaxSlope` 255) climb any slope.
+
+**Established — path-search consumption [R-DOC04-B] (2026-08-27).** A path request binds its
+unit's movement-class record by reference (through the unit's mover), so all requests of one
+class share that record, its stamped layer, and its revision watermark. The search's
+passability test returns: out-of-bounds → 0; the requester's bit
+absent in the coarse owner/building-mask word (one 16-bit word per 2×2-cell block, bit per
+player slot) → 2; otherwise the packed terrain value. EVERY consumer of the test — the A\*
+expansion and all greedy-ray probes — treats the result as passable iff it is nonzero:
+**only the terrain value 0 hard-blocks**; steep (1), owner-mask miss (2), and clear (3) all
+expand. The owner/building-mask word therefore does not hard-block the A\*; hard building
+blocking for movement happens at the movement commit validator (§8.2).
+
+**Established — the request revision pass [R-DOC04-B] (2026-08-27).** Before expanding, the
+request init revises the bound class record and its shared layer: the class record's revision
+watermark is set to `max(tick, 30) − 30` (the first revision arms it; later revisions advance
+it in 30-tick steps), every unit carrying the building-class/alive state bit (bit 28) whose
+last occupancy-commit tick falls in the previous watermark window has its footprint rectangle
+re-stamped into the layer, and the requesting unit's own commit tick is refreshed. Because
+the record and layer are shared by all requests of the class, one request's revision is
+observed by the next. Combined with the classifier's occupant-age gate (step 2 above), the
+effect is: units that committed occupancy within the last 30 ticks do not block the layer
+(their footprints are re-stamped and pass the gate), while a mobile occupant whose commit
+tick predates the watermark blocks any cell it occupies that is re-stamped afterwards. This
+is the dynamic-blocker channel of §7.4 ("passability is rechecked lazily") — existing heap
+entries are re-tested against the revised layer on expansion.
 
 ### 6.2 Footprints and yard maps
 
@@ -1831,7 +1970,7 @@ suggested. Heap tie-breaks therefore depend on: the reverse direction being
 expanded twice (first and last) in the first fan, the strict-less heap
 comparison, and the equal-g no-reparent rule of section 7.2.
 
-**Established fact:** Diagonal movement is endpoint-only: only the destination cell's stamped terrain and building mask are tested, not both cardinal corner cells. A footprint is not swept during expansion because the profile stamp already marked cells that would intersect static blockers.
+**Established fact:** Diagonal movement is endpoint-only: only the destination cell's stamped terrain and building mask are tested, not both cardinal corner cells. A footprint is not swept during expansion because the profile stamp already marked cells that would intersect static blockers. The test's exact encoding and its only-blocking value are in [R-DOC04-B]: only the stamped terrain value 0 blocks; the owner/building-mask miss value is traversable to the expansion.
 
 **Closed — duplicate suppression ordering (2026-08-26):** a neighbour that is
 already open is re-visited, the new cost is computed FIRST, and the parent/
@@ -1939,7 +2078,7 @@ queue-order completion [R-P0-01] (section 8.3).
 
 **Established fact:** Requests are full-or-empty. A route is published only after a goal is reached and reconstructed. Budget exhaustion leaves the heap and request active for later ticks; it does not publish the best partial prefix. Heap exhaustion publishes an empty route.
 
-**Established fact:** Search allocation initializes the request, clears visitation state, enumerates goals, picks the nearest goal for heuristic setup, validates the start, and can perform a direct ray shortcut. Invalid starts and unreachable goals report failure through order-layer status and receive an empty route.
+**Established fact:** Search allocation initializes the request, clears visitation state, enumerates goals, picks the nearest goal for heuristic setup, validates the start, and can perform a direct ray shortcut. Invalid starts and unreachable goals report failure through order-layer status and receive an empty route. Request init also runs the class-layer revision pass of [R-DOC04-B] (§6.1) before any expansion.
 
 **Established fact:** Route reconstruction walks predecessor directions
 backward from the goal cell, storing the packed cell into a 64-entry ring at
@@ -2052,7 +2191,18 @@ applies terrain height, gravity and lean, and the fixed-point position commit.
 
 **Established fact (negative-bounded):** No mass-weighted pushing, impulse-based movement resolver, axis-slide resolver, automatic repath timeout, or yielding/wait-queue was recovered within the bounded mover call graph. Absence is contract: a blocked mover only receives the half-speed clamp and dirty clamp above; it does not push, slide, or wait.
 
-**Established fact:** Mobile units are hard blockers at the movement commit stage even though they are not inserted into the static A* layer: the commit validator reads the cell's mobile-occupancy count, and the three-function search bound (request setup, scheduler, expansion) contains no reference to the mobile pool — mobile occupancy is never part of path search, directly or via a revision. Feature/building and owner-mask details remain separate predicates. *(Upgraded from Supported inference — both sides are direct.)*
+**Correction — mobile occupancy and path search [R-DOC04-D] (2026-08-27).** The earlier
+sentence "mobile occupancy is never part of path search, directly or via a revision" is
+**superseded**; its bounded claim was scanned over the request setup, scheduler, and
+expansion bodies alone and missed that the request-setup's init calls the request revision
+pass (documented in [R-DOC04-B]), which walks the unit pool and re-stamps recently-committed
+footprints into the class layer. The corrected contract: the SCHEDULER and EXPANSION
+functions contain no mobile-pool reference (that bounded observation stands for those two
+bodies); the mobile channel into search is the request-init revision plus the classifier's
+occupant-age gate — units that committed within the last 30 ticks do not block the layer,
+while older occupants block cells they occupy that are re-stamped afterwards. The rest of
+this paragraph (commit validator reads the cell's mobile-occupancy count; mobile units are
+hard blockers at the movement commit stage) is unchanged.
 
 ### 8.3 Final-order arrival and the satisfied-bit handshake [R-P0-01]
 
@@ -2522,7 +2672,10 @@ Function identities that a later re-derivation corrected — in particular the m
   family (the 68-descriptor handler set itself is closed — every handler
   identity is recovered from the descriptor table, 2026-08-26).
 - Consumers for the descriptor class parameter and for the unnamed gate-mask
-  bits.
+  bits — the retained-opaque static bits are enumerated with their carrying
+  orders in the [R-DOC04-C] audit note (§3.1): bits 1-8, 11, 16, 17, 19, and
+  24; bits 14 and 21 exist only at runtime (enqueue inheritance and cached
+  target position) and appear in no static mask.
 - Where the interface and network layers replace or cancel the front order,
   which the queue pump itself never does; the mask-2 cancel notification
   itself is delivered by the node cleanup path (section 3.3, 2026-08-26).
@@ -2579,6 +2732,14 @@ Function identities that a later re-derivation corrected — in particular the m
   neighbour cost is step cost plus turn penalty plus the fixed 30 plus the
   short-run 75 only — bounded-negative, 2026-08-26).
 - Full static feature/yard/owner-mask interaction.
+- `TODO(question)` — the blocker channel for BUILDING footprints in the
+  per-class passability layer: building occupancy changes restamp the layers
+  ([R-DOC04-B]), but neither classifier form tests any building-state byte,
+  and the owner/building-mask miss value (2) is traversable to the search
+  expansion, so whether (and how) a building hard-blocks a path request
+  before the movement-commit validator rejects it is unresolved. The
+  expansion/commit split of §8.2 is the observed behavior; the layer's role
+  in it is the open half.
 - Exact out-of-bounds goal handling for every order type.
 - Heap OOM policy and integer overflow behavior; route caps are established
   (20 published points, 64-point reconstruction ring, 3 saved waypoints).

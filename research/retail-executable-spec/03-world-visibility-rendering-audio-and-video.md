@@ -63,38 +63,121 @@ terminal condition created during an update is noticed only on the next
 invocation. Producers append at the end; when the pre-insert count exceeds
 400 the oldest object is destroyed first, so steady state holds at most 401
 records per strip and same-strip order among survivors equals insertion
-order.
+order. Both dispatchers are now identified (2026-08-27, [R-STRIP-01]): the
+update dispatcher is the per-tick sweep of document 01 §4.4 phase 11, and the
+draw dispatcher is the frame composer itself, which walks each strip in the
+staged order of this section and invokes each object's draw entry with the
+framebuffer descriptor; the object's draw entry forwards the call to each of
+its sub-records together with the camera origin, which is how sub-records
+acquire their screen positions ([R-STRIP-01 §2]).
 
-**Strip producer census (promotion 2026-08-25).** A bounded census over the
-decompiled corpus (1,326 files, 355,769 lines of disassembly) searched for
-producers that pass the strip index as a literal immediate argument to the
-append invocation, establishing: strips 2, 4, 6, 7, 9 have literal-index producers —
-2 shockwave, 4 crater/decal, 6 beam/muzzle/nanolathe (all seventeen call sites of
-the two strip-6 producer families pass a literal 6 — the earlier reading of
-"sites computing the low word `0x0006`" was a misreading of position-struct stack
-writes for the strip argument, retracted 2026-08-26, direct-static), 7
-lightning/flame, 9 smoke/splash (twelve sites) — and strips 0, 1, 3, 5, 8 have no
-literal-index producer in the bounded set (bounded-negative, re-verified over the
-current 355,769-line corpus: no `push 0/3/5` precedes any producer call, and the
-`push 1`/`push 8` immediates that do appear are secondary parameters of the
-strip-7/2 producers, not strip indices). The early producers for
-strips 0, 1, 3, 5, 8 remain `TODO(T23)` pending the vtable inventory. This
-upgrades the strip-owner mapping from supported inference to direct-static for
-the literal set (now including every strip-6 site) and bounded-negative for the
-absent set.
+**Strip producer census (closed 2026-08-27, [R-STRIP-01 §1]).** An earlier
+bounded census (promoted 2026-08-25, re-verified 2026-08-26) searched a
+decompile corpus for a `push` immediately preceding a producer call and
+concluded: literal-index producers for strips 2, 4, 6, 7, and 9 (2 shockwave,
+4 crater/decal with "seventeen" strip-6 sites, 7 lightning/flame, 9
+smoke/splash twelve sites) and no producer for strips 0, 1, 3, 5, 8. That
+census is superseded. Its method was wrong: the retail producers take the
+strip index as the low word of a stack argument that is pushed FIRST (often
+many bytes ahead of the call, as the first argument rather than the last), so
+the `push`-adjacent-to-`call` pattern missed real sites (strip 5) and its
+"crater/decal literal 4" finding has no producer anywhere in the image. A
+complete image-wide census — every reader of the strip-table root word, every
+append invocation, and every call site of all twelve producer functions —
+replaces it; the producer table and per-strip events are [R-STRIP-01 §1]
+below. The strip-2 and strip-9 site counts of the old census were confirmed
+(4 and 12); strip 6 has sixteen literal sites in the reference graph (the old
+"seventeen" was not reproduced); strip 7 has three.
 
-| Strip | Established producer evidence | Status |
+#### R-STRIP-01 §1 — producer census and per-strip events
+
+Every strip object enters its strip through one of twelve producer functions,
+each of which allocates from one shared fixed pool (exhaustion silently drops
+the object; a root flag byte disables all strip allocation when set), runs the
+family's init virtual, evicts the oldest object when the pre-insert count
+exceeds 400, and appends at the vector end. The strip index is a literal
+argument at every call site. The complete strip → producer/event map:
+
+| Strip | Producer events (Established, direct-static) | Sites |
 |---|---|---|
-| 0 | none found in bounded set | Bounded-negative (no literal), `TODO(T23)` for early producers |
-| 1 | none found | Bounded-negative, `TODO(T23)` |
-| 2 | shockwave, literal index 2 | Established (direct-static) |
-| 3 | none found | Bounded-negative, `TODO(T23)` for early candidate |
-| 4 | crater/decal, literal index 4 | Established |
-| 5 | none found | Bounded-negative, `TODO(T23)` |
-| 6 | beam/muzzle/nanolathe, literal index 6 (all sites) | Established (direct-static) |
-| 7 | lightning/flame, literal index 7 | Established |
-| 8 | none found (unconditional outside render-mode gate) | Bounded-negative, `TODO(T23)` |
-| 9 | smoke/splash, literal index 9 (12 sites) | Established |
+| 0 | none — no producer exists anywhere in the image | always empty |
+| 1 | none | always empty |
+| 2 | weapon impact-effect switch: one jittered smoke puff (three CRT draws of `rand×7/0x8000 − 3` per axis) per spawn, spawned every 16 or 8 ticks for the object's life; palette colors `0x61`/`0x67` | 4 |
+| 3 | none | always empty |
+| 4 | none — the retired "crater/decal literal 4" is retracted (see §3.7) | always empty |
+| 5 | flame-weapon area scan (1 site): for every other unit inside the attacker's definition-relative box, a 30-tick flame-stream object that lays one animated segment every 10 ticks with a random start frame, plus an ignition callback; burning-feature smoke (1 site, phase 6 of doc 01 §4.4): one wind-drifted smoke puff every 3rd tick with two CRT jitter draws at the call site | 2 |
+| 6 | construction/reclaim nanolathe emitters: a source point and a target box, five particles per spawn tick over a two-tick spawn window (six CRT draws per particle) | 16 |
+| 7 | flame-stream trail (2 sites): one animated flame segment per tick over a 6–7 tick flight from source to target; smoke sprinkle variant (1 site): the strip-2 family with 8-tick spacing and a 7-tick life | 3 |
+| 8 | none (the composer still draws the strip, unconditionally) | always empty |
+| 9 | impact smoke: the authoritative impact dispatcher under a weapon-definition flag (1), the projectile phase's trail-window and impact branches (2), the land/water/lava impact effect variants under a second weapon flag (3), the impact-effect switch case (1), the COB emit-sfx local variants (2), the fixed-effect-pool append side effect when the effect lands above sea level (1), and the sinking-wreck path's long-lived (900-tick) smoke column (2) | 12 |
+
+The old census's strip-2 count (4 sites) and strip-9 count (12 sites) are
+confirmed; strip 6's count is sixteen sites in the reference graph, one short
+of the old census's seventeen (the extra site was not reproduced and is not
+assumed to exist).
+
+#### R-STRIP-01 §2 — object families, update work, and terminal state
+
+Every strip object is a pooled container record holding a dynamic vector of
+fixed-stride sub-records (particles or segments). The per-tick update dispatcher
+of document 01 §4.4 phase 11 evaluates, per object in insertion order, a
+removal verdict virtual BEFORE the update virtual; the update advances each
+sub-record's position by its velocity, advances its animation state, removes
+expired sub-records (each carries its own expiry tick) with stable in-place
+compaction, and may spawn new sub-records through a spawn gate (next-spawn tick
+compared against both the object's window end and the global tick). The removal
+verdict is "the internal list is empty" (the container object dies once its
+last particle/segment expires; one family additionally requires its window to
+have passed). One family's sub-records also expire early when the terrain
+height beneath them falls below sea level — its marks die on water. The draw
+entry invoked by the composer's per-strip walk forwards each sub-record to a
+per-sub-record draw that applies the ordinary projection with the half-height
+shear, gates on the local player's mode-selected coverage at the projected
+tile, and blits either a GAF frame or a two-by-two filled rectangle (fill
+colors: the nano ramp `0xa1..0xa7`; the impact-sprinkle palette colors `0x61`
+and `0x67`). Asset bindings: the flame families blit the flame-stream GAF
+entry; the smoke family blits one of two smoke GAF entries selected by an init
+flag. Sub-record strides are 52 bytes (flame segments of strip 5), 48 bytes
+(nano particles of strip 6), 60 bytes (strip 7 trail segments), 68 bytes
+(strips 2/7 sprinkle puffs), and 32 bytes (strips 5/9 smoke puffs); container
+records are 68, 76, 68, 72, and 56 bytes respectively. The nano particle
+carries the unexplained word set to `0x100` at spawn noted in §5.5.
+
+#### R-STRIP-01 §3 — random draws inside the sweep (CRT stream)
+
+The phase-11 sweep consumes no draws at the dispatcher level, but its objects
+do, all from the CRT presentation stream — this quantifies doc 01 §7.2's
+"object-internal" census row for phase 11: the nano emitters spend thirty
+draws per spawning record per spawn tick (five particles × six coordinate
+draws); the smoke puffs spend one draw per spawned puff (start frame) plus one
+draw per animation-frame advance (the next frame's delay, drawn as half to
+full of the authored delay); the flame-stream segments spend one draw per
+segment (random start frame); the impact sprinkle spends three draws per spawn
+(per-axis jitter); the strip-7 trail spends none. The composer-time draw
+entries consume no draws. All of this randomness is presentation-stream only;
+the simulation Park–Miller stream is never touched by phase 11.
+
+#### R-WIND-01 — the wind direction vector: which table feeds which axis
+
+Document 01 §7.3 (phase 8) records that the wind direction pair is computed as
+−2 × the fixed-point trig of the heading, scaled by the speed; the producer
+side is doc 01's territory. This section names the axes from the consumer
+side (Established, direct-static, 2026-08-27): the first word of the pair is
+the **X** term and the second word is the **Z** term. The first word is −2 ×
+speed × **sin**(heading), the second word is −2 × speed × **cos**(heading),
+where the trigonometry is one shared 512-entry sine table of signed 16-bit
+entries whose entry *k* is 8192·sin(2π·k/512); the cosine is the same table
+read a quarter turn (128 entries) ahead. Both helpers round the product to
+the nearest whole world unit (half-up bias), and the phase-8 producer stores
+each result multiplied by −2. Verified in two independent consumer families:
+the strip-5/9 smoke drift applies the first word to the world-X velocity term
+and the second to the world-Z term, and the feature fire-spread probe
+accumulates the first word into its X-cell coordinate and the second into its
+Z-cell coordinate while walking plot cells X-major. A reimplementation should
+therefore publish `windX = −2·round(speed·sin(h))` and
+`windZ = −2·round(speed·cos(h))`; the smoke family multiplies the published
+words by a further 8 per tick and the fire probe by 2 per probe step, both
+factors belonging to those contracts' own scales.
 
 **Fixed effect pool.** Effects are not strip objects: a separate fixed pool
 holds up to 300 fixed-size effect records, and appends at or above the cap
@@ -894,6 +977,27 @@ circle-callback gate; it belongs to the separate visibility and decloak paths.
 The selected-unit circle presentation has an additional definition test
 documented in §3.9.
 
+**Sensor phase placement in the tick (Established, 2026-08-27,
+[R-SENSOR-01]; closes the DET-06 seam question).** The sensor phase is not a
+phase of its own and does not run at composer time: it executes inside the
+per-player pass of document 01 §4.4 phase 5, in the LOCAL viewing player's
+iteration, after that player's order dispatch, per-player work, LOS stamp
+sweep, per-tick minimap contacts pass, and 30-tick victory/defeat block — and
+immediately before the mapped-minimap surface rebuild, which runs in the same
+iteration behind its dirty bit. The phase is gated on the player count being
+greater than one. Because the per-player pass walks players in ascending
+order, the sensor/deadline work runs AFTER the local player's visibility
+stamps but BEFORE every higher-indexed player's stamps within the same tick.
+Its unit walks (friendly-contact status, sensor-circle emission, jam circles,
+the minimum-cloak proximity scan writing `tick + 90` deadlines and the
+decloak status bit, and the final seen-marker pass) cover the whole unit pool
+in that one placement, once per tick — Nanolathe should schedule the
+sensor/deadline work as a single per-tick pass keyed to the local viewing
+slot, positioned after the local player's stamp sweep, not as a separate
+tick phase and not adjacent to the composer. Residual: the writer that
+clears the per-unit seen marker (status bit `0x100`) between passes was not
+located; the set site is the final pass above.
+
 ### 3.5 LOS observer height, coverage tile, and the terrain height word [R-P0-18-A] [R-P0-18-B]
 
 Status: every finding below is **Established** (direct static evidence). This
@@ -1148,10 +1252,16 @@ for y in 0 .. 2*RadarH-1, x in 0 .. 2*RadarW-1:
 ```
 
 The tile map and tile-set pixels never mutate after load (bounded-negative: no
-writer outside the map loader). Crater decals go through the strip-4 path only;
-a placement invalidates the mapped surface through the shared dirty bit rather
-than per decal. Picture bytes are PALETTE.PAL indices — no LHT brightening or
-SHD shading — resolved to RGB only at presentation.
+writer outside the map loader). **Correction (2026-08-27):** the next sentence
+previously read "Crater decals go through the strip-4 path only". That clause
+is retracted — the complete producer census [R-STRIP-01 §1] finds no writer
+for strip 4 anywhere in the image, so no crater decal can be a strip-4 strip
+object. How ground scorch marks are actually authored (a direct map/tile edit
+versus another store) is therefore unknown again: `TODO(question)` — trace the
+crater writer; the placement-invalidates-the-mapped-surface behavior that
+followed the clause is unaffected and stands. Picture bytes are PALETTE.PAL
+indices — no LHT brightening or SHD shading — resolved to RGB only at
+presentation.
 
 **Downsample: two-level ALP blend, row-first.** The 2×2 downsample uses the
 palette's 256×256 ALP table (64 KiB: an ordered pair of palette indices maps to
@@ -2120,6 +2230,11 @@ work step contributes **ten particles over two ticks**; continuous construction
 therefore holds two live records and ten new particles per tick. Per tick the
 record's update advances each particle, drops the ones whose expiry tick has
 passed, and the record itself is destroyed once its particle list empties.
+(2026-08-27 cross-confirmation [R-STRIP-01 §2]: the spray record is the
+strip-6 container object of the strip lifecycle — the emitter is a pooled
+strip object whose update advances, expires, and refills its internal
+particle list, and the emitters evict under the common 401-record rule. Every
+number above was re-verified against that path, including the `0x100` word.)
 
 Each particle draws at its world position through the ordinary projection,
 gated by the local player's coverage at its own projected tile — the same
@@ -2175,15 +2290,31 @@ if not active: return
 if remaining <= 0: active = false; return
 sx = amplitudeX * remaining / duration      (signed, truncating)
 sy = amplitudeY * remaining / duration
-cameraX += rand() * sx / 0x8000 - (abs(sx) >> 1)
-cameraY += rand() * sy / 0x8000 - (abs(sy) >> 1)
+cameraX += rand() * sx / 0x8000 - (sx / 2)     (sx / 2: signed, truncating)
+cameraY += rand() * sy / 0x8000 - (sy / 2)     (sy / 2: signed, truncating)
 remaining -= 1
 ```
+
+**Correction (2026-08-27).** The two jitter lines previously read
+`- (abs(sx) >> 1)` and `- (abs(sy) >> 1)`. That magnitude form is wrong: the
+binary forms the half term with the compiler's signed truncating-halving idiom
+(add the sign mask, then arithmetic-shift right by one), which is `sx / 2`
+rounding toward zero. The two readings differ exactly when the amplitude term
+is negative and odd — `abs(sx) >> 1` floors while `sx / 2` truncates, an
+off-by-one on the negative side. Established (re-verified by direct
+instruction read, 2026-08-27, confirming the 2026-08-27 R-CORE-01 packet's
+finding). Consequence 1's "-abs(s)/2" phrase below must be read as "-s/2":
+for odd negative displacement terms the noise band is asymmetric by one unit;
+all other claims in this section were re-verified in the same read and stand
+(request blending, exactly two CRT draws per active tick and none on the
+expiry tick, the linear-decay envelope, the in-place permanent camera
+mutation, and the clamp + follow-glide damping).
 
 Three consequences matter:
 
 1. The envelope is a **linear decay with uniform white noise**, not a sinusoid
-   and not an exponential. The `-abs(s)/2` term centres each axis.
+   and not an exponential. The `-s/2` term (signed truncating, see the
+   correction above) centres each axis.
 2. The two draws come from the **CRT presentation random stream, not the
    simulation stream**. Shake costs exactly two presentation draws per active
    tick and never touches lockstep state.
@@ -2658,10 +2789,16 @@ and unknown" without a resolution plan.
 - The frame composer’s ten-strip numeric order with render-mode gates,
   removal-before-update strip lifecycle, oldest-first eviction past 400
   records (steady bound 401), and the separate 300-record effect pool with
-  same-invocation compaction are established. Strip 6's producer set is
-  fully direct-static (all seventeen call sites of its two families pass the
-  literal 6); strips 0, 1, 3, 5, 8 remain bounded-negative with `TODO(T23)`
-  for the early producers.
+  same-invocation compaction are established. The producer census is closed
+  for every strip ([R-STRIP-01 §1]): only strips 2, 5, 6, 7, and 9 ever
+  receive objects; strips 0, 1, 3, 4, and 8 have no producer anywhere in the
+  image and are always empty (the retired census's "crater/decal literal 4"
+  was a misreading — see §3.7). The strip objects are pooled container
+  records over internal fixed-stride particle/segment lists
+  ([R-STRIP-01 §2]), and the phase-11 sweep's object-internal CRT draws are
+  enumerated in [R-STRIP-01 §3]. The wind direction pair's axis assignment is
+  closed ([R-WIND-01]): first word = −2·speed·sin(heading) on X, second word
+  = −2·speed·cos(heading) on Z.
 - The LOS terrain-height word contract is established end to end: built once
   per map load from raw plot heights with the weighted shear aggregation
   (low = max, high = min, blend by thirds, sea clamp, per-column carry),
@@ -2716,7 +2853,9 @@ and unknown" without a resolution plan.
 ### Confidence limits
 
 - SHD row selection and the semantic naming of individual strips remain medium
-  (the numeric strip order and the strip-6/2/4/7/9 producers are established).
+  (the numeric strip order and the complete producer census are established,
+  [R-STRIP-01 §1]; the names used there come from each family's asset
+  bindings, not from any engine-side label).
   GAF frame-duration interpretation for the
   simulation-tick and wall-clock countdown cursors is established (section 4.4);
   sequence-flag naming and families not shown to use that cursor remain medium.
@@ -2791,9 +2930,14 @@ and unknown" without a resolution plan.
    (three callback tables onto separate surfaces wiped each tick, never the LOS
    word mask) — separation is closed, and the arbitration among the three
    tables is partially closed (sequential last-writer-wins per pixel on the
-   presentation surface; per-table palette mapping remains inference). Still
-   open: the full stealth/init-cloak spawn state walk (the init-cloaked spawn
-   writer is bounded-negative only — one candidate site, not closed),
+   presentation surface; per-table palette mapping remains inference). The
+   sensor phase's placement in the tick is closed ([R-SENSOR-01]): it runs
+   inside the per-player pass after the local viewing player's stamp sweep and
+   30-tick cadence block, once per tick, gated on player count > 1. Still
+   open: the writer that clears the per-unit seen marker (status bit `0x100`)
+   between sensor passes, the full stealth/init-cloak spawn state walk (the
+   init-cloaked spawn
+    writer is bounded-negative only — one candidate site, not closed),
    gameplay radar-versus-sonar contact rules beyond the presentation circles
    (owned by document 06, including the secondary candidate list's authored
    flag name), and whether any unresolved identity path shares visibility
@@ -2813,11 +2957,15 @@ and unknown" without a resolution plan.
 - Complete pass table is closed: ten fixed-order strips inside the single frame
   composer with Y-bucket insertion and no depth test, exact numeric order,
   render-mode gates, removal-before-update lifecycle, the 401 steady eviction
-  bound, and the 300-record effect pool (section 1). Strip producers: literal
-  direct-static for strips 2, 4, 6 (all sites), 7, 9; still open are semantic
-  strip names, every effect-strip owner/flush point beyond the reviewed
-  producer family, and the early producers for strips 0, 1, 3, 5, 8
-  (`TODO(T23)`, bounded-negative).
+  bound, and the 300-record effect pool (section 1). Strip producers are
+  closed for every strip ([R-STRIP-01 §1], superseding the 2026-08-25/26
+  census): strips 2, 5, 6, 7, 9 have enumerated producers and per-site
+  gameplay events; strips 0, 1, 3, 4, 8 have no producer anywhere in the
+  image and are always empty. Still open: the weapon-class dispatch selector
+  that reaches the strip-5 flame scan (owned by document 06), the identity of
+  the root flag byte that disables all strip allocation when set, semantic
+  strip naming beyond the GAF/asset bindings of [R-STRIP-01 §2], and the
+  ground-scar/crater authoring mechanism (§3.7 `TODO(question)`).
 - SHD/LHT row/index formula is now established for model `SHD` (`dont-shade→15`, `row=trunc(dot*5)&0x1F`, gouraud `rowStep=(rowR-rowL)/width`) and halo `LHT` (disc precompute verified: per-pixel CRT draw, `q = trunc((R+sqrt(1.33·dx²+dy²))·32)`, byte `0x6F−q` / ring `0x6E` / transparent `0xFF` on the `(0x20−q) mod 256` compare, level `31−q`); remaining open is ALP usage by any non-LOS UI/fade path — bounded-negative over the renderer cluster (ALP loads only in the minimap picture downsample).
 - Model lighting normals (`normalize(cross(b-a,b-c))` over first three indexes, degenerate `(0,1,0)`, per-vertex `avg/cnt` no renormalize) and texture coordinate policy (corner-index affine 16.16 through the edge-table scanline mapper and per-pixel `SHD` sampler, no stored UVs, flat direct-fill only, clamp/nearest/no perspective) and flat-color quads-only are now established (direct-static); remaining open is exact team/logo per-player dimension deltas and pitch/bank naming.
 - Shadow presentation is established (option bits, per-unit `noshadow`,
@@ -2830,8 +2978,11 @@ and unknown" without a resolution plan.
 - Water wake rectangle interpolation, underwater tint, splash timing, and proof
   that no hidden animated-water surface writer exists.
 - Cursor hotspot metadata, subframe lifetime, animation speed for families not
-  shown to use the authored countdown cursor, sequence-flag naming, and complete
-  effect-strip owner registration, lifetime, and terminal-frame behavior.
+   shown to use the authored countdown cursor, and sequence-flag naming.
+   Effect-strip owner registration, per-family lifetime, and terminal-frame
+   behavior are closed by [R-STRIP-01 §1–§3] (per-strip producers, container
+   lifecycles, expiry rules, and CRT draw costs); the residuals left open are
+   listed under the Renderer bullet above.
 - FNT baseline, glyph advance/kerning, two-byte header fields, clipping edge,
   and any shell path that uses GDI text directly.
 - Input repeat/focus/activation rules, key-token translation, cursor capture,

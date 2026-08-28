@@ -159,38 +159,13 @@ func (c *Client) composeIndexed(cur *frame.Frame, ok bool) {
 		return
 	}
 	c.selectionChrome = c.selectionChrome[:0]
-	mode := 0
-	if c.cam != nil {
-		mode = 1
-	}
-	c.drawCommittedFrame(cur, ok, mode)
+	c.drawCommittedFrame(cur, ok)
 }
 
 type selectionChrome struct {
 	view    frame.UnitView
 	screenX int32
 	screenY int32
-}
-
-// consumeShake applies the authoritative shake offset published at phase 10
-// [03 §5.6][01 §4.4] DET-04. The session advances the shake driver with CRT draws;
-// presentation only applies the published cumulative offset, never consuming CRT.
-func (c *Client) consumeShake(cur *frame.Frame) {
-	if c == nil || cur == nil || c.cam == nil {
-		return
-	}
-	// Delta from last applied offset — session's offset is cumulative permanent
-	// random walk, so we add only the new delta and clamp [03 §5.6].
-	dx := cur.ShakeOffsetX - c.lastShakeOffsetX
-	dy := cur.ShakeOffsetY - c.lastShakeOffsetY
-	if dx == 0 && dy == 0 {
-		return
-	}
-	c.cam.X += dx
-	c.cam.Z += dy
-	c.cam.Clamp()
-	c.lastShakeOffsetX = cur.ShakeOffsetX
-	c.lastShakeOffsetY = cur.ShakeOffsetY
 }
 
 func (c *Client) drawTerrainPrep() {
@@ -208,19 +183,8 @@ func (c *Client) drawInterface(cur *frame.Frame) {
 	if c == nil || len(c.indexed) != c.width*c.height {
 		return
 	}
-	if c.Overlay != nil {
-		c.Overlay(c)
-	}
-	if c.opts.DebugOverlay && c.fnt != nil {
-		var tick uint32
-		var camX, camZ int32
-		if cur != nil {
-			tick = cur.Tick
-		}
-		if c.cam != nil {
-			camX, camZ = c.cam.X, c.cam.Z
-		}
-		DrawDebugOverlayWithShadow(c.indexed, c.width, c.height, c.fnt, DebugInfo{Tick: tick, CamX: camX, CamZ: camZ}, 255, 0, true)
+	if c.uiStage != nil {
+		c.uiStage.DrawUI(c, UIFrame{Committed: cur})
 	}
 }
 

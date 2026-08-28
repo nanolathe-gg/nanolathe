@@ -69,7 +69,9 @@ func initialStatusFlags(def *content.UnitDef) uint32 {
 	if !def.BMCode {
 		flags |= BuildingClassStatus
 	}
-	if def.Weapon1Def != nil || def.Weapon2Def != nil || def.Weapon3Def != nil {
+	// Armed means at least one active weapon link; the record-0 inactive
+	// sentinel a missed link resolves to is not a weapon [02 §5 R-CONTENT-02].
+	if !content.IsWeaponInactive(def.Weapon1Def) || !content.IsWeaponInactive(def.Weapon2Def) || !content.IsWeaponInactive(def.Weapon3Def) {
 		flags |= ArmedStatus
 	}
 	return flags
@@ -642,15 +644,18 @@ func installWeapons(u *Unit, def *content.UnitDef) {
 	for i := 0; i < NumSlots; i++ {
 		u.Slots[i].MuzzlePiece = -1 // [04 §5.3] [06 §4.1] C3
 	}
-	if def.Weapon1Def != nil {
+	// Only active links populate a slot [06 §1.2] P0-10: the record-0
+	// inactive sentinel a missed link resolves to is not a weapon [02 §5
+	// R-CONTENT-02], so it must not arm the slot.
+	if !content.IsWeaponInactive(def.Weapon1Def) {
 		u.Slots[0].Weapon = def.Weapon1Def
 		u.Slots[0].Flags |= 0x02 // armed/hasTarget when populated [06 §1.2] P0-10
 	}
-	if def.Weapon2Def != nil {
+	if !content.IsWeaponInactive(def.Weapon2Def) {
 		u.Slots[1].Weapon = def.Weapon2Def
 		u.Slots[1].Flags |= 0x02
 	}
-	if def.Weapon3Def != nil {
+	if !content.IsWeaponInactive(def.Weapon3Def) {
 		u.Slots[2].Weapon = def.Weapon3Def
 		u.Slots[2].Flags |= 0x02
 	}

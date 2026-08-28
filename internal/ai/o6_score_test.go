@@ -49,8 +49,10 @@ func TestClassVectorUsesRuntimeDefinitionFields(t *testing.T) {
 	def.MaxSlope = 0
 	// Weapon slot reads: damage word (DAMAGE/default) /40 plus range word
 	// (range) /100 plus 5; reloadtime must not enter this sum [08 "Class
-	// routine weapon reads"]. 400/40 = 10, 600/100 = 6.
-	def.Weapon1Def = &content.WeaponDef{DamageDefault: 400, Range: 600, ReloadTime: 999}
+	// routine weapon reads"]. 400/40 = 10, 600/100 = 6. The ID is non-zero:
+	// ID 0 is the record-0 inactive sentinel and would be skipped [02 §5
+	// R-CONTENT-02].
+	def.Weapon1Def = &content.WeaponDef{ID: 1, DamageDefault: 400, Range: 600, ReloadTime: 999}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
 	s := &Strategic{Catalog: cat, Counts: map[string]int32{def.CanonicalKey: 0}, ClassVectors: map[string]ClassVector{def.CanonicalKey: {}}, SingleVectors: map[string]int8{def.CanonicalKey: 0}}
 	s.recomputeClassVectors()

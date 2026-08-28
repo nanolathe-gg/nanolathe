@@ -211,8 +211,10 @@ func TestClassVectors_RetailVectors(t *testing.T) {
 	if cvEx.C1 == cvSolar.C1 && cvEx.C0 == cvSolar.C0 && cvEx.C2 == cvSolar.C2 {
 		t.Fatalf("extractor vs non-extractor vectors should differ")
 	}
-	// Check clamping: weapon damage max should clamp to 100
-	weap := &content.WeaponDef{DamageDefault: 65535, ReloadTime: 10000}
+	// Check clamping: weapon damage max should clamp to 100. The ID is
+	// non-zero: ID 0 is the record-0 inactive sentinel and would be skipped
+	// [02 §5 R-CONTENT-02].
+	weap := &content.WeaponDef{ID: 1, DamageDefault: 65535, ReloadTime: 10000}
 	cat.Units[content.CanonicalKey("armhlt")] = &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armhlt")},
 		UnitName:         "armhlt", BuildCostMetal: 100, BuildCostEnergy: 100, ExtractsMetal: 0, Builder: false, CanMove: false,

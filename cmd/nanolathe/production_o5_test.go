@@ -49,10 +49,9 @@ func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 		Snapshot:   &frame.Buffer{},
 	}
 	b := &battleSession{
-		sess:  s,
-		cat:   cat,
-		cam:   &camera.Camera{ViewW: 640, ViewH: 480, MapW: 512, MapH: 512},
-		latch: input.LatchNormal,
+		sess: s,
+		cat:  cat,
+		cam:  &camera.Camera{ViewW: 640, ViewH: 480, MapW: 512, MapH: 512},
 	}
 
 	// Establish the first immutable frame, then select through the typed

@@ -2021,16 +2021,26 @@ Game-speed changes are clamped to the retail range and displayed as localized
 messages. In multiplayer, speed changes are represented as networked semantic
 commands rather than purely local UI changes.
 
-**End-mission layout and statistics cadence are closed.** The end-mission
-screen is built as a message-box-style surface: the last game frame is copied
-beneath the literal header strings `"Copy of last game frame"` and `"Click to
-continue."` (the latter drawn after a delay gate). Statistics rows are
-formatted per player (58-byte rows, up to ten players) with the label strings
-`Kills`, `Losses`, `EProduced`, `MProduced`, `EWasted`, `MWasted`, `Score`,
-gated per player by an enable-byte table. Statistics animate seven categories
-one at a time behind a +10-tick gate, advancing the category substate `0→6`
-(Kills, Losses, EProduced, MProduced, EWasted, MWasted, Score) with the
-`EndGameStatBar` cue per category and `EndGameScore` for score.
+**Correction: authored end-mission resources supersede the earlier
+message-box description.** The earlier wording about a generated message box,
+literal header strings, and a literal `Continue` callback was not an authored
+ENDMSN contract; it came from the synthetic presentation and is not a basis
+for implementation. Retail supplies `guis/endmsn.gui` and `anims/endmsn.gaf`.
+The GUI's named controls include `Start`, `LoadGame`, `SaveGame`, `MainMenu`,
+and `Difficulty`; the result action is attached to the authored `Start`
+control, not a control named `Continue`. The GAF contains `outcdivider`,
+`victory`, and `defeat` entries. `victory` and `defeat` are direct outcome
+copies rather than gadget references: the renderer blits the selected frame
+using its authored anchor offsets at the negotiated surface center [fmt gaf].
+
+The file's end-mission controls are initially inactive in the retail asset.
+The end-mission initializer chooses the outcome resource from campaign
+progression and activates the established route: `Start` when a campaign has a
+discovered next mission, or `MainMenu` when there is no next mission. Other
+controls remain inactive until their activation and callback contracts are
+recovered. Missing GUI/GAF resources are a degradable unsupported result, not
+a reason to generate a centered rectangle, button set, title text, or fallback
+labels [08 "Progression"]. Exact statistics presentation remains Unknown.
 
 ### Supported inference
 

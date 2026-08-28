@@ -372,3 +372,49 @@ func TestCause7WithRemainingFraction(t *testing.T) {
 		t.Fatalf("cause7 should still have DoCorpse even with remaining non-zero")
 	}
 }
+
+// TestDeathExplosionSkipsInactiveSentinelLink locks the death-explosion
+// selection against the record-0 inactive sentinel [02 §5 R-CONTENT-02]: a
+// missed death link (explodeas/selfdestructas) resolves to the [noweapon]
+// record, which is inactive by its zero slot number and must not be selected
+// as a death explosion. Retail produces no explosion at all for an unresolved
+// or absent death weapon — there is no third default candidate [06 §12.2] —
+// so an all-inactive selection returns nil and the death path dispatches
+// nothing. Active (non-zero-ID) links are unchanged.
+func TestDeathExplosionSkipsInactiveSentinelLink(t *testing.T) {
+	// The sentinel link exactly as LinkUnitWeapons fills it for a missed name
+	// [02 §5 R-CONTENT-02]: non-nil, ID 0.
+	sentinel := &content.WeaponDef{ID: 0}
+	sentinel.CanonicalKey = "noweapon"
+	active := &content.WeaponDef{ID: 7, Range: 600}
+	active.CanonicalKey = "bigbertha"
+
+	// Ordinary death with a missed explodeas: no [noweapon] explosion.
+	def := &content.UnitDef{ExplodeAsDef: sentinel}
+	if w := SelectDeathExplosionWeapon(def, CauseOrdinary); w != nil {
+		t.Fatalf("missed explodeas selected %v (ID %d), want no death-explosion weapon [02 §5 R-CONTENT-02]", w, w.ID)
+	}
+
+	// Self-destruct with a missed selfdestructas falls through to an active
+	// explodeas; an inactive selfdestructas is not selected either.
+	def = &content.UnitDef{SelfDestructAsDef: sentinel, ExplodeAsDef: active}
+	if w := SelectDeathExplosionWeapon(def, CauseSelfDestruct); w != active {
+		t.Fatalf("sentinel selfdestructas did not fall through to active explodeas, got %v", w)
+	}
+
+	// Self-destruct with both death links inactive: no explosion.
+	def = &content.UnitDef{SelfDestructAsDef: sentinel, ExplodeAsDef: sentinel}
+	if w := SelectDeathExplosionWeapon(def, CauseSelfDestruct); w != nil {
+		t.Fatalf("all-inactive death links selected %v (ID %d), want nil [02 §5 R-CONTENT-02][06 §12.2]", w, w.ID)
+	}
+
+	// Active links behave exactly as before.
+	def = &content.UnitDef{SelfDestructAsDef: active, ExplodeAsDef: sentinel}
+	if w := SelectDeathExplosionWeapon(def, CauseSelfDestruct); w != active {
+		t.Fatalf("active selfdestructas changed behavior, got %v want %v", w, active)
+	}
+	def = &content.UnitDef{ExplodeAsDef: active}
+	if w := SelectDeathExplosionWeapon(def, CauseOrdinary); w != active {
+		t.Fatalf("active explodeas changed behavior, got %v want %v", w, active)
+	}
+}

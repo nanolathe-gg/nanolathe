@@ -6,6 +6,7 @@
 package movement
 
 import (
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -185,18 +186,20 @@ func BoardingRange(u *units.Unit) int32 {
 		}
 		if u.Def != nil {
 			var wDef *struct{ Range int32 }
-			// Try def's direct weapon link if slots not yet wired
+			// Try def's direct weapon link if slots not yet wired. Only active links
+			// count; the record-0 inactive sentinel a missed link resolves to is
+			// not a weapon [02 §5 R-CONTENT-02].
 			switch i {
 			case 0:
-				if u.Def.Weapon1Def != nil {
+				if !content.IsWeaponInactive(u.Def.Weapon1Def) {
 					return u.Def.Weapon1Def.Range
 				}
 			case 1:
-				if u.Def.Weapon2Def != nil {
+				if !content.IsWeaponInactive(u.Def.Weapon2Def) {
 					return u.Def.Weapon2Def.Range
 				}
 			case 2:
-				if u.Def.Weapon3Def != nil {
+				if !content.IsWeaponInactive(u.Def.Weapon3Def) {
 					return u.Def.Weapon3Def.Range
 				}
 			}

@@ -8,7 +8,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
@@ -42,10 +41,9 @@ func placeClickFixture(t *testing.T, cellW, cellH int32) (*battleSession, *sessi
 		Snapshot:   &frame.Buffer{},
 	}
 	b := &battleSession{
-		sess:  s,
-		cat:   cat,
-		cam:   &camera.Camera{ViewW: 640, ViewH: 480, MapW: cellW * 16, MapH: cellH * 16},
-		latch: input.LatchNormal,
+		sess: s,
+		cat:  cat,
+		cam:  &camera.Camera{ViewW: 640, ViewH: 480, MapW: cellW * 16, MapH: cellH * 16},
 	}
 	return b, s, builder
 }
@@ -98,10 +96,10 @@ func TestHeldPlacementClickQueuesOnlyTheBuildOrder(t *testing.T) {
 
 			sx, sy := o5ScreenWorld(b.cam, numeric.Fixed(240<<16), 0, numeric.Fixed(240<<16))
 			c.Step(BattleInputFrame{MouseX: sx, MouseY: sy, Elapsed: 1.0 / 30.0}, nil)
-			if !b.buildOK {
+			if !b.battleState().Input.BuildOK {
 				t.Fatalf("fixture site %d,%d is not a legal placement", sx, sy)
 			}
-			expectedY := numeric.Fixed(int64(b.buildSiteH) << 16)
+			expectedY := numeric.Fixed(int64(b.battleState().Input.BuildSiteH) << 16)
 			heldClick(c, sx, sy, held)
 			s.Step(s.Clock.ScaledAnchor + 1)
 
@@ -152,8 +150,8 @@ func TestHeldRefusedPlacementClickQueuesNothing(t *testing.T) {
 	b.armPlacement(prodDef)
 	sx, sy := int32(600), int32(430)
 	c.Step(BattleInputFrame{MouseX: sx, MouseY: sy, Elapsed: 1.0 / 30.0}, nil)
-	if b.buildOK {
-		t.Fatalf("site past the map corner (cell %d,%d) validated as legal", b.buildCellX, b.buildCellZ)
+	if b.battleState().Input.BuildOK {
+		t.Fatalf("site past the map corner (cell %d,%d) validated as legal", b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ)
 	}
 	heldClick(c, sx, sy, 6)
 	s.Step(s.Clock.ScaledAnchor + 1)
@@ -161,8 +159,8 @@ func TestHeldRefusedPlacementClickQueuesNothing(t *testing.T) {
 	if q := orders.QueueForUnit(s.Units.Unit(builder)); q != nil && q.LenPrimary() != 0 {
 		t.Fatalf("refused placement queued %s", orders.DescriptorFor(q.Head().ID).Name)
 	}
-	if b.buildDef != prodDef.CanonicalKey {
-		t.Fatalf("refused placement disarmed: buildDef=%q", b.buildDef)
+	if b.battleState().Input.BuildDef != prodDef.CanonicalKey {
+		t.Fatalf("refused placement disarmed: buildDef=%q", b.battleState().Input.BuildDef)
 	}
 }
 
@@ -191,7 +189,7 @@ func TestHeldRejectedPlacementClickQueuesNothing(t *testing.T) {
 	b.armPlacement(prodDef)
 	sx, sy := o5ScreenWorld(b.cam, numeric.Fixed(240<<16), 0, numeric.Fixed(240<<16))
 	c.Step(BattleInputFrame{MouseX: sx, MouseY: sy, Elapsed: 1.0 / 30.0}, nil)
-	if !b.buildOK {
+	if !b.battleState().Input.BuildOK {
 		t.Fatalf("fixture site %d,%d is not a legal placement", sx, sy)
 	}
 	heldClick(c, sx, sy, 6)

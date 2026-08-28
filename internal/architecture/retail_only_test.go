@@ -96,7 +96,7 @@ func scanAuthoritativeFiles(t *testing.T, root string, visit fileVisitor) []stri
 	var violations []string
 	for _, relativeDir := range authoritativeDirs {
 		dir := filepath.Join(root, filepath.FromSlash(relativeDir))
-		err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		err := guardWalkDir(dir, func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}

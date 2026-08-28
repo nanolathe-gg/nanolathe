@@ -13,6 +13,18 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
+type frameOrderUIStage struct {
+	seen  *byte
+	value byte
+}
+
+func (s frameOrderUIStage) DrawUI(c *Client, _ UIFrame) {
+	if s.seen != nil {
+		*s.seen = c.indexed[0]
+	}
+	c.indexed[0] = s.value
+}
+
 func TestFrameRefreshesAudioViewportBeforeDrain(t *testing.T) {
 	buf := frame.NewBuffer()
 	w := buf.BeginWrite()
@@ -42,6 +54,26 @@ func TestFrameRefreshesAudioViewportBeforeDrain(t *testing.T) {
 	}
 	if volumes[0] != audio.VolumeFromAttenuation(audio.VolInView) {
 		t.Fatalf("audio drained before camera viewport refresh: volume=%v want in-view %v", volumes[0], audio.VolumeFromAttenuation(audio.VolInView))
+	}
+}
+
+func TestCommittedFrameShakeDoesNotMutateClientCamera(t *testing.T) {
+	buf := frame.NewBuffer()
+	w := buf.BeginWrite()
+	w.ShakeOffsetX = 9
+	w.ShakeOffsetY = -4
+	if err := buf.Publish(1); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(Options{Buffer: buf, Width: 8, Height: 8, Headless: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cam := &camera.Camera{X: 12, Z: 20, ViewW: 8, ViewH: 8, MapW: 64, MapH: 64}
+	c.SetCamera(cam)
+	c.ComposeFrame()
+	if cam.X != 12 || cam.Z != 20 {
+		t.Fatalf("frame repaint mutated camera to (%d,%d); shake belongs to battle camera owner", cam.X, cam.Z)
 	}
 }
 
@@ -142,11 +174,8 @@ func TestCommittedFrameFogGateAndInterfacePrecedence(t *testing.T) {
 	c.pal = &palette.Tables{}
 	c.pal.Gray[0] = 123
 	seenByInterface := byte(0)
-	c.Overlay = func(c *Client) {
-		seenByInterface = c.indexed[0]
-		c.indexed[0] = 77
-	}
-	c.drawCommittedFrame(write, true, 1)
+	c.SetUIStage(frameOrderUIStage{seen: &seenByInterface, value: 77})
+	c.drawCommittedFrame(write, true)
 	if seenByInterface != 123 {
 		t.Fatalf("interface observed %d, want fog remap 123 before interface", seenByInterface)
 	}
@@ -154,9 +183,9 @@ func TestCommittedFrameFogGateAndInterfacePrecedence(t *testing.T) {
 		t.Fatalf("interface pixel = %d, want 77 after fog/selection [03 §1]", got)
 	}
 	seenByInterface = 0
-	c.drawCommittedFrame(write, true, 0)
-	if seenByInterface != 0 {
-		t.Fatalf("mode 0 interface observed fog pixel %d", seenByInterface)
+	c.drawCommittedFrame(write, true)
+	if seenByInterface != 123 {
+		t.Fatalf("interface did not observe fog pixel on every committed frame: %d", seenByInterface)
 	}
 }
 

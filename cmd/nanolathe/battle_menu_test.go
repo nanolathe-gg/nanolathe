@@ -114,8 +114,8 @@ func TestBattleMenuTabCloseConsumesClosingFrame(t *testing.T) {
 	if b.battleState().Modal() != ui.BattleModalClosed {
 		t.Fatalf("Tab did not close options modal: %d", b.battleState().Modal())
 	}
-	if b.latch != input.LatchNormal {
-		t.Fatalf("closing modal frame leaked M hotkey and armed latch %d", b.latch)
+	if b.battleState().Input.Latch != input.LatchNormal {
+		t.Fatalf("closing modal frame leaked M hotkey and armed latch %d", b.battleState().Input.Latch)
 	}
 	if got := b.sess.PendingHumanCommands(); len(got) != 0 {
 		t.Fatalf("closing modal frame leaked %d human commands", len(got))

@@ -62,7 +62,7 @@ func TestPresentationPackagesDoNotImportRNG(t *testing.T) {
 		if _, err := os.Stat(abs); err != nil {
 			continue // package not present in this worktree
 		}
-		err := filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
+		err := guardWalkDir(abs, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -111,14 +111,13 @@ func TestPresentationPackagesDoNotImportRNG(t *testing.T) {
 func TestGlobalReferencesAllowedOnlyInSessionAndRNG(t *testing.T) {
 	root := repositoryRoot(t)
 	var violations []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err := guardWalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			if strings.HasSuffix(path, ".git") || strings.Contains(path, ".claude") {
-				return filepath.SkipDir
-			}
+			// Directory policy (nested worktrees, testdata, VCS metadata)
+			// lives in guardWalkDir; nothing to decide here.
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -178,14 +177,13 @@ var constructionAllowlist = map[string]string{
 func TestOnlySessionAndRNGMayConstruct(t *testing.T) {
 	root := repositoryRoot(t)
 	var violations []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err := guardWalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			if strings.HasSuffix(path, ".git") || strings.Contains(path, ".claude") {
-				return filepath.SkipDir
-			}
+			// Directory policy (nested worktrees, testdata, VCS metadata)
+			// lives in guardWalkDir; nothing to decide here.
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {

@@ -265,20 +265,20 @@ func TestOrderButtonLatch(t *testing.T) {
 	b := newTestBattle(cat, terrain)
 	// Simulate HUD order button handling via handleHudOrderButton
 	b.handleHudOrderButton("attack")
-	if b.latch != input.LatchAttack {
-		t.Fatalf("attack button should arm Attack latch, got %v", b.latch)
+	if b.battleState().Input.Latch != input.LatchAttack {
+		t.Fatalf("attack button should arm Attack latch, got %v", b.battleState().Input.Latch)
 	}
 	b.handleHudOrderButton("repair")
-	if b.latch != input.LatchRepair {
+	if b.battleState().Input.Latch != input.LatchRepair {
 		t.Fatalf("repair latch failed")
 	}
 	b.handleHudOrderButton("reclaim")
-	if b.latch != input.LatchReclaim {
+	if b.battleState().Input.Latch != input.LatchReclaim {
 		t.Fatalf("reclaim latch")
 	}
 	b.handleHudOrderButton("stop")
 	// stop is LatchNormal immediate
-	if b.latch != input.LatchNormal {
+	if b.battleState().Input.Latch != input.LatchNormal {
 		t.Fatalf("stop should set Normal")
 	}
 }

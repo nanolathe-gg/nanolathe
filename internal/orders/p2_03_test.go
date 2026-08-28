@@ -1,6 +1,10 @@
 package orders
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -72,26 +76,46 @@ func TestQueueOverflowCap_Secondary(t *testing.T) {
 	}
 }
 
-func TestQueueIterationLimitDefense(t *testing.T) {
-	rng.SeedGlobal(2, 0)
-	q := &Queue{}
-	u := &units.Unit{Handle: 1, Pending: 0}
-	id := Lookup("Move_Ground")
-	if id == 0 {
-		t.Fatal("lookup")
+// TestPumpWedgeIsNotRescued locks ORD-02: there is NO pump iteration guard.
+// Retail has none [04 §3.3][P2-03], and a handler looping through the
+// continue codes (2/4) wedges the walk forever — reproducing that wedge is
+// the contract, because a defensive cap would alter queue state, RNG use,
+// and later updates. The wedging case therefore runs in a SUBPROCESS (this
+// test binary re-exec'd with -test.run and a short -test.timeout) so the
+// suite waits seconds, not forever; the child only exits cleanly if some cap
+// rescued the walk, which is a failure. Skipped in -short mode.
+func TestPumpWedgeIsNotRescued(t *testing.T) {
+	if testing.Short() {
+		t.Skip("-short: wedge subprocess test skipped")
 	}
-	// Handler that always returns 0 (restart) to force infinite cascade without blocking
-	restore := setHandler(id, func(u *units.Unit, n *Node, s uint32) Code { return Code(0) })
-	defer restore()
-	q.Push(id, Node{})
-	clearGates(q)
-	q.Pump(u, 10)
-	if len(q.Diagnostics()) == 0 {
-		t.Fatalf("expected iteration limit diagnostic")
+	if os.Getenv("NANOLATHE_PUMP_WEDGE_CHILD") == "1" {
+		rng.SeedGlobal(2, 0)
+		SetSimulationRNG(rng.Global.Sim)
+		q := &Queue{}
+		u := &units.Unit{Handle: 1, Pending: 0}
+		id := Lookup("Move_Ground")
+		if id == 0 {
+			t.Fatal("lookup")
+		}
+		// Handler that always returns 2 (continue) forces an endless cascade
+		// over the same head [04 §3.3] — retail wedges here, so must we.
+		restore := setHandler(id, func(u *units.Unit, n *Node, s uint32) Code { return Code(2) })
+		defer restore()
+		q.Push(id, Node{})
+		clearGates(q)
+		q.Pump(u, 10)
+		// Only reachable if a cap rescued the walk.
+		fmt.Println("wedge pump returned; engine rescued a tight loop")
+		os.Exit(0)
 	}
-	// Ensure still bounded length and not hung
-	if len(q.primary) != 1 {
-		t.Fatalf("queue length after limit = %d, want 1", len(q.primary))
+	cmd := exec.Command(os.Args[0], "-test.run=^TestPumpWedgeIsNotRescued$", "-test.timeout=5s")
+	cmd.Env = append(os.Environ(), "NANOLATHE_PUMP_WEDGE_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("wedge child exited cleanly — a pump cap rescued the tight loop (ORD-02 violated). output:\n%s", out)
+	}
+	if !strings.Contains(string(out), "test timed out") {
+		t.Fatalf("wedge child failed for an unexpected reason (want still running at -test.timeout):\n%s", out)
 	}
 }
 

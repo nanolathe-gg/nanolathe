@@ -70,7 +70,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
 	}
 	centerOnCommanderForSession(sess, cam, winW, winH)
-	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal}
+	b := &battleSession{sess: sess, cat: cat, cam: cam}
 	pal := loadPalette(cs)
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
 	if err != nil {
@@ -179,8 +179,8 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	if !b.hud.sameButton(b, clickX, clickY, clickX, clickY) || !b.hud.consumeClick(b, clickX, clickY) {
 		t.Fatalf("authored product %q did not activate on release-inside", clicked)
 	}
-	if b.buildDef != content.CanonicalKey(clicked) || b.latch != input.LatchMobileBuild {
-		t.Fatalf("product %q armed buildDef=%q latch=%d; want %q MOBILEBUILD", clicked, b.buildDef, b.latch, content.CanonicalKey(clicked))
+	if b.battleState().Input.BuildDef != content.CanonicalKey(clicked) || b.battleState().Input.Latch != input.LatchMobileBuild {
+		t.Fatalf("product %q armed buildDef=%q latch=%d; want %q MOBILEBUILD", clicked, b.battleState().Input.BuildDef, b.battleState().Input.Latch, content.CanonicalKey(clicked))
 	}
 
 	if shot := os.Getenv("NANOLATHE_HUD_SHOT"); shot != "" {
@@ -193,7 +193,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 		cl.SetPalette(pal)
 		cl.SetFNT(b.hud.console)
 		cl.SetModelFS(cs.fs)
-		cl.Overlay = func(c *client.Client) { b.hud.draw(c, b) }
+		cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
 		file, err := os.Create(shot)
 		if err != nil {
 			t.Fatal(err)
@@ -246,7 +246,7 @@ func TestRetailNoSelectionUsesSideGeneralWindow(t *testing.T) {
 		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
 	}
 	centerOnCommanderForSession(sess, cam, winW, winH)
-	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal}
+	b := &battleSession{sess: sess, cat: cat, cam: cam}
 	pal := loadPalette(cs)
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
 	if err != nil {
@@ -284,7 +284,7 @@ func TestRetailNoSelectionUsesSideGeneralWindow(t *testing.T) {
 		cl.SetPalette(pal)
 		cl.SetFNT(b.hud.console)
 		cl.SetModelFS(cs.fs)
-		cl.Overlay = func(c *client.Client) { b.hud.draw(c, b) }
+		cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
 		file, err := os.Create(shot)
 		if err != nil {
 			t.Fatal(err)

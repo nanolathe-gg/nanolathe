@@ -1,136 +1,134 @@
 package main
 
 import (
+	"image/color"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
-	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/ui"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// TestWindowResultDisplaysAndDismisses verifies that the window controller shows the
-// result overlay when the authoritative result is latched and dismisses it via
-// input replay without leaving hidden ticks [RS-05].
-func TestWindowResultDisplaysAndDismisses(t *testing.T) {
-	cat := testCatalogON05()
-	// Mark two units as commanders for victory detection
-	for _, u := range cat.Units {
-		u.Commander = true
+type resultOverlayStage struct {
+	hud    *retailBattleHUD
+	battle *battleSession
+}
+
+func (s resultOverlayStage) DrawUI(c *client.Client, presented client.UIFrame) {
+	if presented.Committed != nil {
+		s.hud.drawResultOverlay(c, s.battle, presented.Committed.Result)
 	}
-	terrain := testWorldON05(20, 20)
-	b := newTestBattle(cat, terrain)
-	// Prepare a session that has a terminal result via real commander kill
-	sess := b.sess
-	sess.Skirmish = session.SkirmishConfig{MapName: "test", NumPlayers: 2, CommanderDeath: 1}
-	sess.Skirmish.Players[0].AllyGroup = 1
-	sess.Skirmish.Players[1].AllyGroup = 2
-	sess.LocalOwner = 0
-	sess.EnemyOwner = 1
-	sess.State = session.StateBattle
-	// Create two commanders
-	defA, _ := cat.Unit("armcons")
-	defB, _ := cat.Unit("armsolar")
-	// Ensure they are commanders
-	defA.Commander = true
-	defB.Commander = true
-	hA, _ := sess.Units.Create(defA, 0, 0, 0, 0)
-	hB, _ := sess.Units.Create(defB, 1, 0, 0, 0)
-	_ = hA
-	_ = hB
-	// Kill enemy commander to arm result
-	sess.Units.Destroy(hB, 1)
-	// Step until latch (needs ~150 ticks)
-	for tick := 1; tick < 300; tick++ {
-		sess.Step(int32(tick))
-		if sess.GetResult().Ended {
-			break
-		}
+}
+
+func TestResultTitleFrameUsesExplicitAuthoredOutcome(t *testing.T) {
+	h := &retailBattleHUD{
+		resultVictoryFrame: &formats.GAFFrame{},
+		resultDefeatFrame:  &formats.GAFFrame{},
 	}
-	if !sess.GetResult().Ended {
-		t.Fatalf("should have latched")
+	if got := h.resultTitleFrame(frame.ResultView{Kind: "victory"}); got != h.resultVictoryFrame {
+		t.Fatal("victory did not select authored victory title")
+	}
+	if got := h.resultTitleFrame(frame.ResultView{Kind: "defeat"}); got != h.resultDefeatFrame {
+		t.Fatal("defeat did not select authored defeat title")
+	}
+	if got := h.resultTitleFrame(frame.ResultView{Draw: true, Kind: "victory"}); got != nil {
+		t.Fatal("draw selected a terminal title")
+	}
+	if got := h.resultTitleFrame(frame.ResultView{Kind: "unknown", WinnerTeam: -1}); got != nil {
+		t.Fatal("unknown result selected a terminal title")
+	}
+}
+
+func TestResultPanelActivatesOnlyEstablishedRoute(t *testing.T) {
+	window := &gui.Window{Gadgets: []gui.Gadget{
+		{Name: "GADGET0"},
+		{Name: "Start"},
+		{Name: "MainMenu"},
+		{Name: "LoadGame"},
+	}}
+	panel := ui.NewPanel(window)
+	configureResultPanel(nil, nil, panel)
+	if panel.ActiveOf("Start") {
+		t.Fatal("Start activated without campaign-next provenance")
+	}
+	if !panel.ActiveOf("MainMenu") {
+		t.Fatal("MainMenu not activated for terminal route")
+	}
+	if panel.ActiveOf("LoadGame") {
+		t.Fatal("untraced result control was force-enabled")
+	}
+}
+
+func TestResultAssetsRemainOptionalWhenUnavailable(t *testing.T) {
+	fs := vfs.New()
+	if got := loadGUIOptional(fs, "guis/endmsn.gui", "test ENDMSN"); got != nil {
+		t.Fatal("missing ENDMSN GUI unexpectedly loaded")
+	}
+	if got := loadGAFOptional(fs, "anims/endmsn.gaf", "test endmsn"); got != nil {
+		t.Fatal("missing endmsn GAF unexpectedly loaded")
+	}
+}
+
+func TestResultVisibilityUsesAuthoritativeLatch(t *testing.T) {
+	b := &battleSession{sess: &session.Session{}}
+	if b.isResultVisible() {
+		t.Fatal("unlatched result must not be visible")
+	}
+	// This test is intentionally limited to the committed result seam; the
+	// session package owns construction of a terminal result.
+}
+
+func TestResultOverlayHonorsCanonicalDismissalState(t *testing.T) {
+	buf := frame.NewBuffer()
+	w := buf.BeginWrite()
+	w.Result = frame.ResultView{Ended: true, Kind: "victory"}
+	if err := buf.Publish(1); err != nil {
+		t.Fatal(err)
+	}
+	h := &retailBattleHUD{resultVictoryFrame: &formats.GAFFrame{
+		Width: 1, Height: 1, Pixels: []byte{7}, Transparent: []bool{false},
+	}}
+	b := &battleSession{}
+	c, err := client.New(client.Options{Buffer: buf, Width: 8, Height: 8, Headless: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetUIStage(resultOverlayStage{hud: h, battle: b})
+	img := c.ComposeFrame()
+	if got := img.RGBAAt(4, 4); got != (color.RGBA{R: 7, G: 7, B: 7, A: 255}) {
+		t.Fatalf("visible terminal result pixel = %#v, want authored title pixel", got)
 	}
 
-	if !b.isResultVisible() {
-		t.Fatalf("result overlay should be visible when snapshot Ended [RS-05]")
+	b.battleState().Input.ResultDismissed = true
+	img = c.ComposeFrame()
+	if got := img.RGBAAt(4, 4); got != (color.RGBA{A: 255}) {
+		t.Fatalf("dismissed terminal result pixel = %#v, stale ENDMSN/title art still rendered", got)
 	}
-	// Ensure overlay does not tick: capture GlobalTick before and after viewerStep with result visible
-	prevTick := sess.Clock.GlobalTick
-	// Create headless client for input replay
-	buf := sess.Snapshot
-	cl, _ := client.New(client.Options{Buffer: buf, Width: 640, Height: 480, Headless: true, Step: func(delta float64) {}})
-	cl.SetCamera(b.cam)
-	// Simulate click on Main Menu button (should dismiss to main)
-	b.ensureResultButtons()
-	var mainBtn panelButton
-	for _, btn := range b.resultButtons {
-		if btn.Kind == "result_main" {
-			mainBtn = btn
-			break
+}
+
+func TestResultControlRequiresAuthoredStart(t *testing.T) {
+	if got := resultActionForControl("START"); got != "result_continue" {
+		t.Fatalf("authored Start action = %q", got)
+	}
+	for _, name := range []string{"Continue", "Retry", "Main Menu", "Skirmish Setup", "synthetic"} {
+		if got := resultActionForControl(name); got != "" {
+			t.Fatalf("unsupported result control %q mapped to %q", name, got)
 		}
 	}
-	if mainBtn.Name == "" {
-		t.Fatalf("main button not found")
-	}
-	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
-	in.Mouse.InjectMouseMove(float32(mainBtn.X+10), float32(mainBtn.Y+5))
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, false) // need press then release
-	// Press
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, true)
-	b.handleResultInput(in, cl)
-	in.Mouse.ClearEdges()
-	// Release inside
-	in.Mouse.InjectMouseMove(float32(mainBtn.X+10), float32(mainBtn.Y+5))
-	in.Mouse.InjectMouseButton(input.MouseButtonLeft, false)
+}
+
+func TestResultMainMenuActionKeepsSemanticTransition(t *testing.T) {
 	called := false
-	b.returnToMenu = func(c *client.Client) { called = true }
-	b.handleResultInput(in, cl)
+	b := &battleSession{returnToMenu: func(*client.Client) { called = true }}
+	b.doResultAction("result_main", nil)
 	if !called {
-		t.Fatalf("main menu button via input replay should trigger returnToMenu [RS-05]")
+		t.Fatal("result main-menu action did not invoke semantic callback")
 	}
-	if !b.resultDismissed {
-		t.Fatalf("overlay should be dismissed after main")
-	}
-	// Verify no hidden tick while overlay was visible
-	if sess.Clock.GlobalTick != prevTick {
-		t.Fatalf("hidden tick while overlay: %d -> %d [RS-05]", prevTick, sess.Clock.GlobalTick)
-	}
-	// Test retry path: reset and ensure clean terminal state [RS-05]
-	// Create a fresh session for retry (simulates shell recreating clean session)
-	cat2 := testCatalogON05()
-	for _, u := range cat2.Units {
-		u.Commander = true
-	}
-	terrain2 := testWorldON05(20, 20)
-	b2 := newTestBattle(cat2, terrain2)
-	b2.sess.Skirmish = session.SkirmishConfig{MapName: "test", NumPlayers: 2, CommanderDeath: 1}
-	b2.sess.Skirmish.Players[0].AllyGroup = 1
-	b2.sess.Skirmish.Players[1].AllyGroup = 2
-	b2.sess.LocalOwner = 0
-	b2.sess.EnemyOwner = 1
-	b2.sess.State = session.StateBattle
-	defA2, _ := cat2.Unit("armcons")
-	defB2, _ := cat2.Unit("armsolar")
-	defA2.Commander = true
-	defB2.Commander = true
-	hA2, _ := b2.sess.Units.Create(defA2, 0, 0, 0, 0)
-	hB2, _ := b2.sess.Units.Create(defB2, 1, 0, 0, 0)
-	_ = hA2
-	b2.sess.Units.Destroy(hB2, 1)
-	for tick := 1; tick < 300; tick++ {
-		b2.sess.Step(int32(tick))
-		if b2.sess.GetResult().Ended {
-			break
-		}
-	}
-	if !b2.sess.GetResult().Ended {
-		t.Fatalf("retry battle should reach terminal result")
-	}
-	// Further steps should not advance the terminal result.
-	terminalTick := b2.sess.GetResult().Tick
-	for tick := 300; tick < 310; tick++ {
-		b2.sess.Step(int32(tick))
-	}
-	if got := b2.sess.GetResult().Tick; got != terminalTick {
-		t.Fatalf("terminal result changed after retry battle: %d -> %d", terminalTick, got)
+	if !b.battleState().Input.ResultDismissed {
+		t.Fatal("result main-menu action did not consume the result state")
 	}
 }

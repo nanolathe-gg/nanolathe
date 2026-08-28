@@ -42,64 +42,13 @@ type battleSession struct {
 	fs    vfs.FSOps
 	shell *gameShell
 
-	latch      input.Latch
-	dragActive bool
-	dragStartX int32
-	dragStartY int32
-	dragEndX   int32
-	dragEndY   int32
-
-	// Input-capture latch [F-P1-008][07 §3]: a press that begins on HUD chrome
-	// never starts/completes world drag selection even if released over world.
-	hudCaptured bool
-	hudPressX   int32
-	hudPressY   int32
-	prevMouseX  float32
-	prevMouseY  float32
-
-	// Build placement: non-empty while an armed product awaits a click.
-	buildDef   string
-	buildFootX int32
-	buildFootZ int32
-	buildOK    bool
-	buildMX    int32
-	buildMY    int32
-	// Site resolved by the last updatePlacement: the north-west footprint cell
-	// and the ground height retail draws the ghost and stores the order at
-	// [07 §9]. buildSticky is retail's placement-valid-pending bit, set by a
-	// shift-click so the mode survives until shift is released.
-	buildCellX  int32
-	buildCellZ  int32
-	buildSiteH  int32
-	buildSticky bool
-	// placeCaptured is the placement half of the input-capture latch above: a
-	// left press the placement path consumed owns that button until it is
-	// released, so the rest of a held click cannot also run a world path
-	// [07 §9 "Mouse-button assignment is closed"].
-	placeCaptured bool
-	// shiftHeld mirrors the last polled Shift state so the overlay can gate the
-	// order-queue markers on it the way retail's battle draw does [07 §9].
-	// pointerX/Y mirror the last polled pointer so the overlay can gate on the
-	// live region rather than on the site the ghost was last moved to.
-	shiftHeld        bool
-	shiftLatchSticky bool
-	pointerX         int32
-	pointerY         int32
-
 	msAccum float64 // renderer delta → scaled-now for Session.Step
-
-	// Status message for game-speed and pause feedback [07 §11][07 §2]; presentation-only transient overlay (I6).
-	statusMessage string
-	statusUntil   uint32 // GlobalTick expiry
 
 	battleUI         *ui.BattleState
 	returnToMenu     func(*client.Client)
 	returnToSkirmish func(*client.Client)
-	retryFunc        func(*client.Client) error
 	continueFunc     func(*client.Client)
 	ended            bool
-	resultDismissed  bool
-	resultButtons    []panelButton // buttons for result overlay [RS-05]
 
 	anchors   hud.Anchors
 	anchorsOK bool
@@ -112,6 +61,13 @@ type battleSession struct {
 	// that producer is wired (TODO(question): identify the mode-byte writer).
 	battleMode byte
 	controller *BattleController
+
+	// AppliedShake records only the last committed camera offset consumed by
+	// this battle owner. The client renderer remains a pure frame reader; the
+	// battle camera applies the authoritative phase-10 random walk once after
+	// Session.Step, before the following draw [03 §5.6][I6].
+	appliedShakeX int32
+	appliedShakeY int32
 }
 
 // factoryBuildDelta applies the retail signed button count: left click adds
@@ -126,17 +82,6 @@ func factoryBuildDelta(shiftHeld, rightClick bool) int {
 	}
 	return count
 }
-
-type panelButton struct {
-	Name string
-	X, Y int32
-	Kind string // "build" | "cancel" | "onoff" | "stockpile"
-}
-
-const (
-	panelButtonW = 96
-	panelButtonH = 20
-)
 
 var clPtr *client.Client
 
@@ -161,8 +106,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 	cam.Pan(0, 0)
 	centerOnCommanderForSession(sess, cam, winW, winH)
 
-	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs, latch: input.LatchNormal, battleUI: ui.NewBattleState()}
-	b.retryFunc = func(cl *client.Client) error { return b.doRetry(cl) }
+	b := &battleSession{sess: sess, cat: cat, cam: cam, fs: cs.fs, battleUI: ui.NewBattleState()}
 	b.returnToMenu = func(cl *client.Client) {
 		// The battle view has no menu shell callback; mark it ended and exit.
 		b.ended = true
@@ -206,7 +150,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 		return cerr
 	}
 	cl.SetCursors(cursors)
-	cl.Overlay = func(c *client.Client) { b.hud.draw(c, b) }
+	cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
 	// Join the session's audio queue/cache/music to the client's device and
 	// per-frame drain [03 §8.2][03 §8.3][03 §8.4]. Without this the client
 	// drains a queue it was never given and no cue reaches playback.
@@ -261,13 +205,18 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		return
 	}
 	in := cl.Input()
-	// RS-05: result overlay takes precedence over menu and world input [08][P1-01] and
-	// must not leave hidden ticks running [RS-P0-012].
+	// End-mission presentation takes ownership of the frame once the
+	// authoritative result is latched. The authored result panel owns any
+	// release-inside gesture; no battle hotkey or world command leaks through
+	// [07 §3][07 §11].
 	if b.isResultVisible() {
-		b.handleResultInput(in, cl)
-		// Do not advance simulation while result overlay is visible; Step would early-return
-		// due to StatePostBattle anyway, but we skip it entirely to keep the countdown frozen
-		// and to prevent the automatic 7→2 transition until the user chooses an action.
+		if b.hud != nil {
+			if action := b.hud.handleResultInput(in); action != "" {
+				b.doResultAction(action, cl)
+			}
+		}
+		// StatePostBattle already suppresses simulation, but skip the controller
+		// entirely so a result frame cannot advance or submit a world command.
 		cl.Cursors().SetIndex(render.CursorNormal)
 		return
 	}
@@ -286,13 +235,13 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	}
 	// ESC-menu token path [07 §2]: ESC reuses Tab menu machinery; also disarms latch as today [07 §9].
 	if in != nil && in.Kbd != nil && in.Kbd.KeyDown(input.KeyEscape) && state.Modal() == ui.BattleModalClosed {
-		if b.latch == input.LatchNormal && b.buildDef == "" {
+		if b.battleState().Input.Latch == input.LatchNormal && b.battleState().Input.BuildDef == "" {
 			b.openBattleMenu()
 		} else {
 			b.disarmPlacement()
-			b.latch = input.LatchNormal
-			b.hudCaptured = false
-			b.dragActive = false
+			b.battleState().Input.Latch = input.LatchNormal
+			b.battleState().Input.HUDCaptured = false
+			b.battleState().Input.DragActive = false
 		}
 	}
 	if modalAtFrameStart || state.Modal() != ui.BattleModalClosed {
@@ -302,6 +251,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			b.controller = NewBattleController(b)
 		}
 		b.controller.Step(BattleInputFrameFromClient(in, delta), cl)
+		b.applyCommittedShake()
 	}
 	if b.ended {
 		return
@@ -372,8 +322,8 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		}
 		// Middle-drag camera pan [F-P1-008]: presentation-only, uses mouse delta / scale.
 		if mouse.Held(input.MouseButtonMiddle) && mouse.Moved() {
-			dx := int32(mouse.X - b.prevMouseX)
-			dy := int32(mouse.Y - b.prevMouseY)
+			dx := int32(mouse.X - b.battleState().Input.PrevMouseX)
+			dy := int32(mouse.Y - b.battleState().Input.PrevMouseY)
 			if dx != 0 || dy != 0 {
 				b.cam.Drag(dx, dy)
 			}
@@ -381,9 +331,30 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// Wheel belongs to the active GUI list under the pointer. It is not a
 		// battle-camera control [07 §2][07 §10]. The UI boundary consumes it
 		// before this camera pass.
-		b.prevMouseX = mouse.X
-		b.prevMouseY = mouse.Y
+		b.battleState().Input.PrevMouseX = mouse.X
+		b.battleState().Input.PrevMouseY = mouse.Y
 	}
+}
+
+// applyCommittedShake transfers the cumulative phase-10 displacement from the
+// current committed frame to the one camera used by input and rendering. It
+// lives with battle camera ownership rather than Client so repainting the same
+// frame cannot mutate camera state or consume another random value [03 §5.6].
+func (b *battleSession) applyCommittedShake() {
+	if b == nil || b.cam == nil || b.sess == nil || b.sess.Snapshot == nil {
+		return
+	}
+	cur := b.sess.Snapshot.Current()
+	if cur == nil {
+		return
+	}
+	dx := cur.ShakeOffsetX - b.appliedShakeX
+	dy := cur.ShakeOffsetY - b.appliedShakeY
+	if dx != 0 || dy != 0 {
+		b.cam.Pan(dx, dy)
+	}
+	b.appliedShakeX = cur.ShakeOffsetX
+	b.appliedShakeY = cur.ShakeOffsetY
 }
 
 // minimapLayout is the sole production adapter for radar geometry. PlayRight
@@ -437,13 +408,13 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	kbd := in.Kbd
 	mouse := in.Mouse
 	mx, my := int32(mouse.X), int32(mouse.Y)
-	b.shiftHeld = kbd.HasShift()
-	b.pointerX, b.pointerY = mx, my
+	b.battleState().Input.ShiftHeld = kbd.HasShift()
+	b.battleState().Input.PointerX, b.battleState().Input.PointerY = mx, my
 	// Any latch held by Shift retires on the live Shift-up, regardless of
 	// order family [R-P0-11].
-	if !b.shiftHeld && b.shiftLatchSticky {
-		b.latch = input.LatchNormal
-		b.shiftLatchSticky = false
+	if !b.battleState().Input.ShiftHeld && b.battleState().Input.ShiftLatchSticky {
+		b.battleState().Input.Latch = input.LatchNormal
+		b.battleState().Input.ShiftLatchSticky = false
 	}
 
 	// Minimap click-to-jump [C-6][07 §10] uses the same layout adapter as draw.
@@ -466,28 +437,28 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	// Latch arming via hotkeys — retail latch byte IS dispatcher switch key [GAP T22][07 §9] C11.
 	// Preserve authored button order and pagination for build menu [02 "Build-menu catalog keys"].
 	if kbd.KeyDown(input.KeyM) {
-		b.latch = input.LatchMove
+		b.battleState().Input.Latch = input.LatchMove
 	}
 	if kbd.KeyDown(input.KeyA) {
-		b.latch = input.LatchAttack
+		b.battleState().Input.Latch = input.LatchAttack
 	}
 	if kbd.KeyDown(input.KeyP) {
-		b.latch = input.LatchPatrol
+		b.battleState().Input.Latch = input.LatchPatrol
 	}
 	if kbd.KeyDown(input.KeyR) {
-		b.latch = input.LatchRepair
+		b.battleState().Input.Latch = input.LatchRepair
 	}
 	if kbd.KeyDown(input.KeyE) {
-		b.latch = input.LatchReclaim
+		b.battleState().Input.Latch = input.LatchReclaim
 	}
 	if kbd.KeyDown(input.KeyC) {
-		b.latch = input.LatchCapture
+		b.battleState().Input.Latch = input.LatchCapture
 	}
 	if kbd.KeyDown(input.KeyG) {
-		b.latch = input.LatchFollow
+		b.battleState().Input.Latch = input.LatchFollow
 	}
 	if kbd.KeyDown(input.KeyD) {
-		b.latch = input.LatchBlast
+		b.battleState().Input.Latch = input.LatchBlast
 	}
 	if kbd.KeyDown(input.KeyX) {
 		b.cancelSelectedProduction()
@@ -551,10 +522,10 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	}
 	if kbd.KeyDown(input.KeyEscape) {
 		b.disarmPlacement()
-		b.latch = input.LatchNormal
-		b.shiftLatchSticky = false
-		b.hudCaptured = false
-		b.dragActive = false
+		b.battleState().Input.Latch = input.LatchNormal
+		b.battleState().Input.ShiftLatchSticky = false
+		b.battleState().Input.HUDCaptured = false
+		b.battleState().Input.DragActive = false
 		return
 	}
 	// Right button is deselect/cancel only: every world order fires on left [07 §9][04 §3.4].
@@ -564,16 +535,16 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 		if b.hud != nil && b.hud.hitTestFor(b, mx, my) && b.hud.consumeRightClick(b, mx, my) {
 			return
 		}
-		if b.buildDef != "" {
+		if b.battleState().Input.BuildDef != "" {
 			// Cancel armed placement before affecting selection [R-P0-03][F-P0-003][07 §9].
 			b.disarmPlacement()
-			b.hudCaptured = false
+			b.battleState().Input.HUDCaptured = false
 			return
 		}
-		if b.latch != input.LatchNormal {
+		if b.battleState().Input.Latch != input.LatchNormal {
 			// Cancel armed order latch to idle [07 §9][07 §8][07 §9].
-			b.latch = input.LatchNormal
-			b.shiftLatchSticky = false
+			b.battleState().Input.Latch = input.LatchNormal
+			b.battleState().Input.ShiftLatchSticky = false
 			return
 		}
 		if b.hasSelection() {
@@ -596,24 +567,24 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 			overHUD = true
 		}
 		if overHUD {
-			b.hudCaptured = true
-			b.hudPressX = mx
-			b.hudPressY = my
-			b.dragActive = false
+			b.battleState().Input.HUDCaptured = true
+			b.battleState().Input.HUDPressX = mx
+			b.battleState().Input.HUDPressY = my
+			b.battleState().Input.DragActive = false
 		}
 	}
-	if b.hudCaptured && mouse.Released(input.MouseButtonLeft) {
+	if b.battleState().Input.HUDCaptured && mouse.Released(input.MouseButtonLeft) {
 		// Retail buttons arm while held and activate once on release-inside.
 		// Requiring the same authored gadget at both endpoints prevents a drag
 		// across the rail from activating a different control [07 §3][07 §4].
-		b.hudCaptured = false
-		b.dragActive = false
-		if b.hud != nil && b.hud.sameButton(b, b.hudPressX, b.hudPressY, mx, my) && b.hud.consumeClick(b, mx, my) {
+		b.battleState().Input.HUDCaptured = false
+		b.battleState().Input.DragActive = false
+		if b.hud != nil && b.hud.sameButton(b, b.battleState().Input.HUDPressX, b.battleState().Input.HUDPressY, mx, my) && b.hud.consumeClick(b, mx, my) {
 			return
 		}
 		return
 	}
-	if b.hudCaptured {
+	if b.battleState().Input.HUDCaptured {
 		return
 	}
 
@@ -623,11 +594,11 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	// disarms, the remaining held frames of an ordinary human click used to
 	// fall through to drag selection, and its release issued a contextual Move
 	// that purged the build order the same click had just queued.
-	if b.placeCaptured {
+	if b.battleState().Input.PlaceCaptured {
 		if !mouse.Held(input.MouseButtonLeft) {
-			b.placeCaptured = false
+			b.battleState().Input.PlaceCaptured = false
 		}
-		if b.buildDef != "" {
+		if b.battleState().Input.BuildDef != "" {
 			b.updatePlacement(mx, my)
 		}
 		return
@@ -642,16 +613,16 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 	// idle latch as soon as shift is released, whether or not another click
 	// arrives. Arming from a build button does not set the bit, so a first
 	// placement without shift still gets its click.
-	if b.buildSticky && !kbd.HasShift() {
+	if b.battleState().Input.BuildSticky && !kbd.HasShift() {
 		b.disarmPlacement()
 	}
-	if b.buildDef != "" {
+	if b.battleState().Input.BuildDef != "" {
 		b.updatePlacement(mx, my)
 		if mouse.Pressed(input.MouseButtonLeft) {
 			// The press belongs to placement whatever it decides below —
 			// placed, refused, or rejected by the command boundary.
-			b.placeCaptured = true
-			if !b.buildOK {
+			b.battleState().Input.PlaceCaptured = true
+			if !b.battleState().Input.BuildOK {
 				// An illegal site queues nothing and stays armed; the player
 				// hears the refusal and can move the ghost [07 §9].
 				b.playUICue(cl, "notoktobuild")
@@ -666,7 +637,7 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 			}
 			b.playUICue(cl, "oktobuild")
 			if queued {
-				b.buildSticky = true
+				b.battleState().Input.BuildSticky = true
 			} else {
 				b.disarmPlacement()
 			}
@@ -676,31 +647,31 @@ func (b *battleSession) handleInput(in *client.InputState, cl *client.Client) {
 
 	leftHeld := mouse.Held(input.MouseButtonLeft)
 	additive := kbd.HasShift()
-	if leftHeld && !b.dragActive {
-		b.dragActive = true
-		b.dragStartX, b.dragStartY = mx, my
-		b.dragEndX, b.dragEndY = mx, my
-	} else if leftHeld && b.dragActive {
-		b.dragEndX, b.dragEndY = mx, my
-	} else if !leftHeld && b.dragActive {
-		b.dragActive = false
-		rect := client.NormalizeRect(b.dragStartX, b.dragStartY, b.dragEndX, b.dragEndY)
+	if leftHeld && !b.battleState().Input.DragActive {
+		b.battleState().Input.DragActive = true
+		b.battleState().Input.DragStartX, b.battleState().Input.DragStartY = mx, my
+		b.battleState().Input.DragEndX, b.battleState().Input.DragEndY = mx, my
+	} else if leftHeld && b.battleState().Input.DragActive {
+		b.battleState().Input.DragEndX, b.battleState().Input.DragEndY = mx, my
+	} else if !leftHeld && b.battleState().Input.DragActive {
+		b.battleState().Input.DragActive = false
+		rect := client.NormalizeRect(b.battleState().Input.DragStartX, b.battleState().Input.DragStartY, b.battleState().Input.DragEndX, b.battleState().Input.DragEndY)
 		w, h := rect.MaxX-rect.MinX, rect.MaxY-rect.MinY
 		if w < 3 && h < 3 {
 			// Small click precedence [07 §8][07 §9][RS-P0-003]: armed latch dispatches on left-click; idle latch left-click selects or issues contextual order; right-click never issues an order [04 §3.4][07 §9].
 			// Uses ONE canonical picker client.PickUnit so fog, 16px radius, strict < tie (lower slot wins),
 			// unit>feature priority and viewer are identical for selection and targeting [07 §9][03 §3.2][P0-I14].
-			if b.latch != input.LatchNormal {
-				code := hud.LatchToCode(b.latch)
+			if b.battleState().Input.Latch != input.LatchNormal {
+				code := hud.LatchToCode(b.battleState().Input.Latch)
 				if code != 0 {
 					b.orderSelected(code, mx, my, additive)
 				}
 				// Return latch to Normal after dispatch unless shift-queuing keeps it [07 §9][P0-I14].
 				if additive {
-					b.shiftLatchSticky = true
+					b.battleState().Input.ShiftLatchSticky = true
 				} else {
-					b.latch = input.LatchNormal
-					b.shiftLatchSticky = false
+					b.battleState().Input.Latch = input.LatchNormal
+					b.battleState().Input.ShiftLatchSticky = false
 				}
 			} else {
 				// Idle latch left-click: every world command is left-click; right-click is deselect/cancel only [07 §9][04 §3.4].
@@ -887,11 +858,11 @@ func (b *battleSession) handleHudOrderButton(name string) {
 	// code 1 at the map origin before the Stop descriptor [04 §3.4][07 §9].
 	if latch == input.LatchNormal && containsStop(name) {
 		_ = b.dispatchStopCommand()
-		b.latch = input.LatchNormal
+		b.battleState().Input.Latch = input.LatchNormal
 		return
 	}
 	if latch.IsValid() {
-		b.latch = latch
+		b.battleState().Input.Latch = latch
 	}
 }
 
@@ -992,11 +963,9 @@ func (b *battleSession) armPlacement(def *content.UnitDef) {
 	if def == nil {
 		return
 	}
-	b.buildDef = def.CanonicalKey
-	b.buildFootX, b.buildFootZ = footprintCellsForCatalog(b.cat, def)
-	b.buildOK = false
-	b.buildSticky = false
-	b.latch = input.LatchMobileBuild
+	footX, footZ := footprintCellsForCatalog(b.cat, def)
+	b.battleState().ArmPlacement(def.CanonicalKey, footX, footZ)
+	b.battleState().Input.Latch = input.LatchMobileBuild
 }
 
 // disarmPlacement returns the battle screen to the idle latch after a placement
@@ -1005,16 +974,7 @@ func (b *battleSession) disarmPlacement() {
 	if b == nil {
 		return
 	}
-	b.buildDef = ""
-	b.buildFootX, b.buildFootZ = 0, 0
-	b.buildOK = false
-	b.buildMX, b.buildMY = 0, 0
-	b.buildCellX, b.buildCellZ = 0, 0
-	b.buildSiteH = 0
-	b.buildSticky = false
-	if b.latch == input.LatchMobileBuild {
-		b.latch = input.LatchNormal
-	}
+	b.battleState().ClearPlacement()
 }
 
 // playUICue plays a non-positional interface sound by its authored alias
@@ -1031,31 +991,31 @@ func (b *battleSession) playUICue(cl *client.Client, alias string) {
 // updatePlacement tracks the ghost under the cursor and validates it against
 // the world [04 §6.2][PLAN_08 C17].
 func (b *battleSession) updatePlacement(mx, my int32) {
-	b.buildMX, b.buildMY = mx, my
+	b.battleState().Input.BuildMX, b.battleState().Input.BuildMY = mx, my
 	wx, _, wz := b.cursorWorld(mx, my)
-	b.buildCellX, b.buildCellZ = world.PlacementAnchor(wx, wz, b.buildFootX, b.buildFootZ)
+	b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ = world.PlacementAnchor(wx, wz, b.battleState().Input.BuildFootX, b.battleState().Input.BuildFootZ)
 	self := uint16(0)
 	if frame, ok := b.currentSnapshot(); ok {
 		self = uint16(frame.CommandPage.Builder)
 	}
-	footX, footZ := b.buildFootX, b.buildFootZ
+	footX, footZ := b.battleState().Input.BuildFootX, b.battleState().Input.BuildFootZ
 	var def *content.UnitDef
 	if b.cat != nil {
-		def, _ = b.cat.Unit(b.buildDef)
+		def, _ = b.cat.Unit(b.battleState().Input.BuildDef)
 	}
-	result, err := b.checkProductPlacement(b.buildCellX, b.buildCellZ, def, footX, footZ, self)
-	b.buildOK = err == nil
+	result, err := b.checkProductPlacement(b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ, def, footX, footZ, self)
+	b.battleState().Input.BuildOK = err == nil
 	waterline := int32(0)
 	if def != nil {
 		waterline = def.Waterline
 	}
 	if err == nil {
-		b.buildSiteH = result.SiteHeight
+		b.battleState().Input.BuildSiteH = result.SiteHeight
 	} else {
 		// Keep an informative ghost height while illegal; legality itself is
 		// decided only by the canonical query above.
 		yard, _ := world.ParseYardMap(b.yardMapFor(), int(footX), int(footZ))
-		b.buildSiteH = b.sess.World.SiteHeight(b.buildCellX, b.buildCellZ, yard, int(footX), int(footZ), waterline)
+		b.battleState().Input.BuildSiteH = b.sess.World.SiteHeight(b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ, yard, int(footX), int(footZ), waterline)
 	}
 }
 
@@ -1104,11 +1064,11 @@ func (b *battleSession) checkProductPlacement(cx, cz int32, def *content.UnitDef
 // half-height shear, using the site height for both, so the ghost lies flat on
 // the ground the building will stand on rather than following the cursor.
 func (b *battleSession) placementRect() (left, top, right, bottom int32) {
-	l := b.buildCellX * 16
-	t := b.buildCellZ * 16
-	r := l + b.buildFootX*16
-	btm := t + b.buildFootZ*16
-	return b.siteRectToScreen(l, t, r, btm, b.buildSiteH)
+	l := b.battleState().Input.BuildCellX * 16
+	t := b.battleState().Input.BuildCellZ * 16
+	r := l + b.battleState().Input.BuildFootX*16
+	btm := t + b.battleState().Input.BuildFootZ*16
+	return b.siteRectToScreen(l, t, r, btm, b.battleState().Input.BuildSiteH)
 }
 
 // siteRectToScreen projects a map-pixel footprint rectangle standing at height
@@ -1127,7 +1087,7 @@ func (b *battleSession) siteRectToScreen(l, t, r, btm, h int32) (left, top, righ
 
 // yardMapFor returns the placed definition's yard text when known.
 func (b *battleSession) yardMapFor() string {
-	def, found := b.cat.Unit(b.buildDef)
+	def, found := b.cat.Unit(b.battleState().Input.BuildDef)
 	if !found || def == nil {
 		return ""
 	}
@@ -1150,10 +1110,10 @@ func (b *battleSession) commitBuild(queued bool) bool {
 	if !found || b.sess == nil || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
 		return false
 	}
-	if b.cat != nil && !hud.ValidateBuildProduct(b.cat, v.DefName, b.buildDef) {
+	if b.cat != nil && !hud.ValidateBuildProduct(b.cat, v.DefName, b.battleState().Input.BuildDef) {
 		return false // GUI may not invent products absent from authored list [R-P0-03]
 	}
-	if !b.buildOK {
+	if !b.battleState().Input.BuildOK {
 		return false // illegal placement queues nothing [R-P0-03]
 	}
 	// The order carries the footprint's center and the site height, not the raw
@@ -1161,12 +1121,12 @@ func (b *battleSession) commitBuild(queued bool) bool {
 	// drawn on and stores `((foot + 2*cell) << 19)` per axis with the validator's
 	// site height as Y [07 §9]. Sending the cursor point instead would put the
 	// building half a footprint off the box the player aimed with.
-	wx, wz := world.PlacementCenter(b.buildCellX, b.buildCellZ, b.buildFootX, b.buildFootZ)
+	wx, wz := world.PlacementCenter(b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ, b.battleState().Input.BuildFootX, b.battleState().Input.BuildFootZ)
 	// Queue the typed command; the session applies it at the authoritative input
 	// phase [01 §4.4][07 §9].
-	wy := numeric.Fixed(int64(b.buildSiteH) << 16)
-	if err := b.DispatchMobileBuild(b.buildDef, wx, wy, wz, queued); err != nil {
-		fmt.Fprintf(os.Stderr, "nanolathe: build %s: %v\n", b.buildDef, err)
+	wy := numeric.Fixed(int64(b.battleState().Input.BuildSiteH) << 16)
+	if err := b.DispatchMobileBuild(b.battleState().Input.BuildDef, wx, wy, wz, queued); err != nil {
+		fmt.Fprintf(os.Stderr, "nanolathe: build %s: %v\n", b.battleState().Input.BuildDef, err)
 		return false
 	}
 	return true
@@ -1184,15 +1144,15 @@ func (b *battleSession) commitBuild(queued bool) bool {
 // Retail suppresses the ghost whenever the pointer leaves the world viewport,
 // so it never appears over the side panel or the minimap.
 func (b *battleSession) drawBuildGhost(c *client.Client) {
-	if b.buildDef == "" || b.cam == nil {
+	if b.battleState().Input.BuildDef == "" || b.cam == nil {
 		return
 	}
-	if !b.overWorld(b.pointerX, b.pointerY) {
+	if !b.overWorld(b.battleState().Input.PointerX, b.battleState().Input.PointerY) {
 		return
 	}
 	l, t, r, btm := b.placementRect()
 	col := c.GUIColor(hud.GhostColorIllegal)
-	if b.buildOK {
+	if b.battleState().Input.BuildOK {
 		col = c.GUIColor(hud.GhostColorLegal)
 	}
 	c.UIFrameRect(int(l), int(t), int(r-l), int(btm-t), col)
@@ -1359,47 +1319,17 @@ func (b *battleSession) orderSelected(code int, sx, sy int32, queued bool) {
 	if pos == nil {
 		return
 	}
-	latch, ok := latchForOrderCode(code)
-	if !ok {
+	// The HUD latch table is the single semantic mapping between an armed
+	// order and the session order code. Validate the caller's code by running
+	// it through that table; do not maintain a second switch here [07 §9].
+	latch := input.Latch(code)
+	if hud.LatchToCode(latch) != code {
 		return
 	}
 	_ = b.DispatchOrderCommand(session.HumanOrderCommand{
-		Code: latchCode(latch), Target: targetHandle,
+		Code: code, Target: targetHandle,
 		Position: *pos, Queued: queued,
 	})
-}
-
-func latchForOrderCode(code int) (input.Latch, bool) {
-	switch code {
-	case 1:
-		return input.LatchNormal, true
-	case 2:
-		return input.LatchMove, true
-	case 3:
-		return input.LatchAttack, true
-	case 4:
-		return input.LatchBlast, true
-	case 5:
-		return input.LatchUnload, true
-	case 6:
-		return input.LatchPickup, true
-	case 7:
-		return input.LatchFollow, true
-	case 8:
-		return input.LatchRepair, true
-	case 9:
-		return input.LatchPatrol, true
-	case 11:
-		return input.LatchTeleport, true
-	case 12:
-		return input.LatchReclaim, true
-	case 13:
-		return input.LatchCapture, true
-	case 14:
-		return input.LatchMobileBuild, true
-	default:
-		return input.LatchNormal, false
-	}
 }
 
 // updateCursor resolves the software-cursor shape for this frame [07 §8].
@@ -1414,8 +1344,8 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 	mx, my := int32(mouse.X), int32(mouse.Y)
 	hover := hud.CursorHover{
 		OverWorld:      b.overWorld(mx, my),
-		Placing:        b.buildDef != "",
-		PlacementValid: b.buildOK,
+		Placing:        b.battleState().Input.BuildDef != "",
+		PlacementValid: b.battleState().Input.BuildOK,
 	}
 	if hover.OverWorld && !hover.Placing {
 		_, hover.Target, _ = b.pickTarget(mx, my)
@@ -1432,7 +1362,7 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 		sel.Metal = b.sess.Econ.Players[local].Stock[economy.Metal]
 		sel.Energy = b.sess.Econ.Players[local].Stock[economy.Energy]
 	}
-	cursors.SetIndex(hud.ChooseCursor(b.latch, sel, hover))
+	cursors.SetIndex(hud.ChooseCursor(b.battleState().Input.Latch, sel, hover))
 }
 
 // overWorld reports whether a pointer position lies in the world viewport
@@ -1479,7 +1409,7 @@ func (b *battleSession) hostile(actor, target *units.Unit) bool {
 // It is presentation-only and reads the snapshot view plus the session's latch state (I6).
 // The overlay is visible when the terminal result is latched (Ended) and has not been dismissed.
 func (b *battleSession) isResultVisible() bool {
-	if b == nil || b.sess == nil || b.resultDismissed {
+	if b == nil || b.sess == nil || b.battleState().Input.ResultDismissed {
 		return false
 	}
 	if b.sess.GetResult().Ended {
@@ -1532,94 +1462,12 @@ func (b *battleSession) resultView() frame.ResultView {
 	return frame.ResultView{}
 }
 
-// ensureResultButtons builds the result overlay button set [RS-05][07 §8].
-func (b *battleSession) ensureResultButtons() {
-	if b == nil {
-		return
-	}
-	if len(b.resultButtons) != 0 {
-		return
-	}
-	// Determine campaign vs skirmish via Mission type
-	isCampaign := b.sess != nil && b.sess.Mission != nil && b.sess.Mission.Type == 1 // TypeCampaign
-	// Centered overlay: 640x480, box 400x200 at (120,140), buttons at y=300
-	y := int32(300)
-	if isCampaign {
-		b.resultButtons = []panelButton{
-			{Name: "Retry", X: 140, Y: y, Kind: "result_retry"},
-			{Name: "Continue", X: 270, Y: y, Kind: "result_continue"},
-			{Name: "Main Menu", X: 400, Y: y, Kind: "result_main"},
-		}
-	} else {
-		b.resultButtons = []panelButton{
-			{Name: "Retry", X: 140, Y: y, Kind: "result_retry"},
-			{Name: "Skirmish Setup", X: 270, Y: y, Kind: "result_skirmish"},
-			{Name: "Main Menu", X: 400, Y: y, Kind: "result_main"},
-		}
-	}
-}
-
-// handleResultInput owns all input while the result overlay is visible [RS-05][07 §3].
-// Buttons activate once on release-inside the same authored gadget.
-func (b *battleSession) handleResultInput(in *client.InputState, cl *client.Client) {
-	if b == nil || in == nil {
-		return
-	}
-	b.ensureResultButtons()
-	mx, my := int32(0), int32(0)
-	if in.Mouse != nil {
-		mx, my = int32(in.Mouse.X), int32(in.Mouse.Y)
-	}
-	// Keyboard shortcuts: R retry, S skirmish, M main, C continue, Esc main
-	if in.Kbd != nil {
-		if in.Kbd.KeyDown(input.KeyR) {
-			b.doResultAction("result_retry", cl)
-			return
-		}
-		if in.Kbd.KeyDown(input.KeyM) || in.Kbd.KeyDown(input.KeyEscape) {
-			b.doResultAction("result_main", cl)
-			return
-		}
-		if in.Kbd.KeyDown(input.KeyC) {
-			b.doResultAction("result_continue", cl)
-			return
-		}
-		// S for skirmish (not conflicting with other)
-		if in.Kbd.KeyDown(input.KeyS) {
-			b.doResultAction("result_skirmish", cl)
-			return
-		}
-	}
-	if in.Mouse != nil && in.Mouse.Released(input.MouseButtonLeft) {
-		for _, btn := range b.resultButtons {
-			if mx >= btn.X && mx < btn.X+panelButtonW && my >= btn.Y && my < btn.Y+panelButtonH {
-				b.doResultAction(btn.Kind, cl)
-				return
-			}
-		}
-	}
-}
-
 // doResultAction executes the result overlay button action through the state graph [RS-05][08 "Session states"].
 func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 	if b == nil {
 		return
 	}
 	switch kind {
-	case "result_retry":
-		if b.retryFunc != nil {
-			if err := b.retryFunc(cl); err != nil {
-				fmt.Fprintf(os.Stderr, "nanolathe: retry failed: %v\n", err)
-				return
-			}
-			b.resultDismissed = false
-			b.resultButtons = nil
-			return
-		}
-		// Recreate the session directly when no retry callback is installed.
-		if err := b.doRetry(cl); err != nil {
-			fmt.Fprintf(os.Stderr, "nanolathe: retry failed: %v\n", err)
-		}
 	case "result_skirmish":
 		if b.returnToSkirmish != nil {
 			b.returnToSkirmish(cl)
@@ -1628,14 +1476,14 @@ func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 		} else if b.returnToMenu != nil {
 			b.returnToMenu(cl)
 		}
-		b.resultDismissed = true
+		b.battleState().Input.ResultDismissed = true
 	case "result_main":
 		if b.returnToMenu != nil {
 			b.returnToMenu(cl)
 		} else if b.shell != nil {
 			b.shell.openMenu(modeMenuMain)
 		}
-		b.resultDismissed = true
+		b.battleState().Input.ResultDismissed = true
 	case "result_continue":
 		if b.continueFunc != nil {
 			b.continueFunc(cl)
@@ -1685,7 +1533,7 @@ func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 								sess2.CampaignSlot = nextIdx
 								return sess2, nil
 							})
-							b.resultDismissed = true
+							b.battleState().Input.ResultDismissed = true
 							return
 						}
 					}
@@ -1696,7 +1544,7 @@ func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 					}
 					b.shell.openMenu(modeMenuMain)
 				} else {
-					// TODO(question): losing Continue vs Retry distinction not established; current behavior returns to main, Retry handles same-mission reload [P1-01 §7.5].
+					// TODO(question): losing Continue behavior beyond the authored route is not established; return to main [07 §11].
 					_ = b.sess.ContinueCampaign()
 					b.shell.openMenu(modeMenuMain)
 				}
@@ -1710,57 +1558,8 @@ func (b *battleSession) doResultAction(kind string, cl *client.Client) {
 		} else if b.returnToMenu != nil {
 			b.returnToMenu(cl)
 		}
-		b.resultDismissed = true
+		b.battleState().Input.ResultDismissed = true
 	}
-}
-
-// doRetry recreates a clean session for retry without duplicate callbacks [RS-05] RS-P0-012.
-func (b *battleSession) doRetry(cl *client.Client) error {
-	if b == nil || b.sess == nil || b.fs == nil {
-		return fmt.Errorf("retry requires an existing session and mounted content")
-	}
-	cfg := b.sess.Skirmish
-	cat := b.cat
-	if cat == nil {
-		cat = b.sess.Catalog
-	}
-	newSess, err := session.NewSkirmishWithFS(b.fs, cat, cfg)
-	if err != nil {
-		return err
-	}
-	// Build every replacement presentation dependency before changing the live
-	// battle. A failed palette/HUD load leaves the terminal session, HUD, and
-	// result overlay coherent for another retry attempt [RS-05].
-	newPal, err := palette.Load(b.fs)
-	if err != nil {
-		return hudAssetError(b.fs, "palettes/PALETTE.PAL", "retry palette", err)
-	}
-	newHUD, err := loadRetailBattleHUD(b.fs, newSess, newSess.Catalog, newPal)
-	if err != nil {
-		return err
-	}
-	centerOnCommanderForSession(newSess, b.cam, 640, 480)
-
-	// Commit only after all constructors above succeeded.
-	b.sess = newSess
-	b.cat = newSess.Catalog
-	b.hud = newHUD
-	b.resultDismissed = false
-	b.resultButtons = nil
-	if b.shell != nil {
-		b.shell.battle = b
-	}
-	if cl != nil {
-		cl.SetSnapshot(newSess.Snapshot)
-		cl.SetTerrain(newSess.World)
-		cl.SetCamera(b.cam)
-		cl.SetPalette(newPal)
-		cl.SetFNT(newHUD.console)
-		cl.Overlay = func(c *client.Client) { newHUD.draw(c, b) }
-	}
-	// Ensure battle state only after the replacement has been committed.
-	newSess.State = session.StateBattle
-	return nil
 }
 
 // setStatusMessage stores a transient on-screen message [07 §11][07 §2] presentation-only (I6).
@@ -1768,18 +1567,18 @@ func (b *battleSession) setStatusMessage(msg string) {
 	if b == nil || b.sess == nil || b.sess.Clock == nil {
 		return
 	}
-	b.statusMessage = msg
+	b.battleState().Input.StatusMessage = msg
 	// Display for 90 ticks (~3 seconds at 30 Hz) [07 §11] animation cadence; TODO(question): exact duration not established
-	b.statusUntil = b.sess.Clock.GlobalTick + 90
+	b.battleState().Input.StatusUntil = b.sess.Clock.GlobalTick + 90
 }
 
 // statusVisible reports whether the transient message should be drawn [07 §11].
 func (b *battleSession) statusVisible() bool {
-	if b == nil || b.sess == nil || b.sess.Clock == nil || b.statusMessage == "" {
+	if b == nil || b.sess == nil || b.sess.Clock == nil || b.battleState().Input.StatusMessage == "" {
 		return false
 	}
 	// Show until expiry; if clock hasn't ticked yet, still show
-	return b.sess.Clock.GlobalTick <= b.statusUntil
+	return b.sess.Clock.GlobalTick <= b.battleState().Input.StatusUntil
 }
 
 // adjustGameSpeed emits a concrete UI scheduling intent; Session performs the

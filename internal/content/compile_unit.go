@@ -177,7 +177,12 @@ type UnitDef struct {
 	SelfDestructCountdownPresent bool   // whether authored
 
 	// Weapon link resolution (resolved after compile per C1 [02 §5]).
-	Weapon1Def        *WeaponDef // resolved weapon1 or nil if empty/missing
+	// A name that matches no weapon record resolves to the record-0 inactive
+	// sentinel [02 §5 R-CONTENT-02] — stock [noweapon], ID 0 — and is nil
+	// only when the name is empty or the family carries no record 0. The
+	// sentinel is inactive by its zero slot number: consumers test ID == 0,
+	// also when a name resolves to record 0 directly.
+	Weapon1Def        *WeaponDef // resolved weapon1; nil when empty/unresolved without a record 0
 	Weapon2Def        *WeaponDef // resolved weapon2
 	Weapon3Def        *WeaponDef // resolved weapon3
 	ExplodeAsDef      *WeaponDef // resolved explodeas
@@ -701,8 +706,24 @@ func CompileUnitsSorted(fs vfs.FSOps) ([]*UnitDef, error) {
 
 // LinkUnitWeapons resolves weapon1..3 (and explodeas/selfdestructas) after all weapons compile
 // so enumeration order cannot leak into identity [02 §5] C1.
-// It uses CanonicalKey for lookup [02 §5] and leaves the Def nil when the name is empty or missing.
-// The weapons map is keyed by CanonicalKey(section name) as produced by CompileWeapons.
+//
+// Resolution follows the recovered runtime name resolution [02 §5 R-CONTENT-02]:
+// a case-insensitive comparison against each record's catalog name, first match
+// wins — the compiled map serves that directly, holding exactly one record per
+// surviving catalog name. A name that matches no record does not abort and is
+// not left unresolved: the link slot is filled with a reference to record 0 —
+// the inactive sentinel, stock [noweapon] (ID 0) — whenever the weapon family
+// carries one. Only a family without any record 0 leaves the nil inactive
+// marker, and that case stays explicit here rather than silent. The sentinel
+// is inactive by its zero slot number; consumers gate weapon links on
+// content.IsWeaponInactive, also when a name resolves to record 0 directly
+// [02 §5 R-CONTENT-02].
+//
+// An empty name stays unresolved (nil).
+// TODO(question): does the FBI compiler even run the record scan for an
+// absent/empty weapon key? Research does not establish it; if it does, an
+// empty name would first match whichever record still holds an empty
+// catalog name.
 func LinkUnitWeapons(units map[string]*UnitDef, weapons map[string]*WeaponDef) {
 	if units == nil || weapons == nil {
 		return
@@ -713,32 +734,26 @@ func LinkUnitWeapons(units map[string]*UnitDef, weapons map[string]*WeaponDef) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	// The miss policy lives in one place, Catalog.WeaponLink [02 §5
+	// R-CONTENT-02]; a read-only view over the map is enough — the method
+	// derives its slot-order scan and the record-0 lookup from Weapons alone.
+	view := &Catalog{Weapons: weapons}
 	for _, k := range keys {
 		u := units[k]
 		if u.Weapon1 != "" {
-			if w, ok := weapons[CanonicalKey(u.Weapon1)]; ok {
-				u.Weapon1Def = w
-			}
+			u.Weapon1Def, _ = view.WeaponLink(u.Weapon1)
 		}
 		if u.Weapon2 != "" {
-			if w, ok := weapons[CanonicalKey(u.Weapon2)]; ok {
-				u.Weapon2Def = w
-			}
+			u.Weapon2Def, _ = view.WeaponLink(u.Weapon2)
 		}
 		if u.Weapon3 != "" {
-			if w, ok := weapons[CanonicalKey(u.Weapon3)]; ok {
-				u.Weapon3Def = w
-			}
+			u.Weapon3Def, _ = view.WeaponLink(u.Weapon3)
 		}
 		if u.ExplodeAs != "" {
-			if w, ok := weapons[CanonicalKey(u.ExplodeAs)]; ok {
-				u.ExplodeAsDef = w
-			}
+			u.ExplodeAsDef, _ = view.WeaponLink(u.ExplodeAs)
 		}
 		if u.SelfDestructAs != "" {
-			if w, ok := weapons[CanonicalKey(u.SelfDestructAs)]; ok {
-				u.SelfDestructAsDef = w
-			}
+			u.SelfDestructAsDef, _ = view.WeaponLink(u.SelfDestructAs)
 		}
 	}
 }

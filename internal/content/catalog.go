@@ -553,31 +553,11 @@ func (c *Catalog) Clone() *Catalog {
 		sort.Strings(keys)
 		for _, k := range keys {
 			u := out.Units[k]
-			if strings.TrimSpace(u.Weapon1) != "" {
-				if w, ok := out.Weapons[CanonicalKey(u.Weapon1)]; ok {
-					u.Weapon1Def = w
-				}
-			}
-			if strings.TrimSpace(u.Weapon2) != "" {
-				if w, ok := out.Weapons[CanonicalKey(u.Weapon2)]; ok {
-					u.Weapon2Def = w
-				}
-			}
-			if strings.TrimSpace(u.Weapon3) != "" {
-				if w, ok := out.Weapons[CanonicalKey(u.Weapon3)]; ok {
-					u.Weapon3Def = w
-				}
-			}
-			if strings.TrimSpace(u.ExplodeAs) != "" {
-				if w, ok := out.Weapons[CanonicalKey(u.ExplodeAs)]; ok {
-					u.ExplodeAsDef = w
-				}
-			}
-			if strings.TrimSpace(u.SelfDestructAs) != "" {
-				if w, ok := out.Weapons[CanonicalKey(u.SelfDestructAs)]; ok {
-					u.SelfDestructAsDef = w
-				}
-			}
+			out.rewireWeaponLink(u.Weapon1, &u.Weapon1Def)
+			out.rewireWeaponLink(u.Weapon2, &u.Weapon2Def)
+			out.rewireWeaponLink(u.Weapon3, &u.Weapon3Def)
+			out.rewireWeaponLink(u.ExplodeAs, &u.ExplodeAsDef)
+			out.rewireWeaponLink(u.SelfDestructAs, &u.SelfDestructAsDef)
 		}
 	}
 	// Features deep copy without successors then rewire
@@ -793,10 +773,9 @@ func (c *Catalog) WeaponByName(name string) (*WeaponDef, bool) {
 // false whenever the link points there. When the catalog holds no record 0, a
 // miss returns a nil def with active false — the explicit inactive marker.
 //
-// LinkUnitWeapons (compile_unit.go) currently leaves a missed link's Def nil;
-// nil plays the inactive marker in that representation. Consumers that need
-// the record a link references — the sentinel record on a miss — resolve
-// through this method [02 §5 R-CONTENT-02].
+// LinkUnitWeapons (compile_unit.go) stores this resolution on the unit's
+// link defs: a missed link holds the record-0 def when the family carries
+// one, else nil [02 §5 R-CONTENT-02].
 func (c *Catalog) WeaponLink(name string) (def *WeaponDef, active bool) {
 	if w, ok := c.WeaponByName(name); ok {
 		return w, w.ID != 0
@@ -806,6 +785,16 @@ func (c *Catalog) WeaponLink(name string) (def *WeaponDef, active bool) {
 		return w, false
 	}
 	return nil, false
+}
+
+// IsWeaponInactive is the one inactive rule for a resolved weapon link [02 §5
+// R-CONTENT-02]: the link is inactive when it is nil (no record 0 in the
+// family) OR points at the record occupying slot 0 — ID 0, stock [noweapon],
+// recognized by its zero slot-number byte, never by name. WeaponLink fills
+// missed links with that record, so every consumer that used to treat
+// non-nil as active must gate on this predicate instead.
+func IsWeaponInactive(def *WeaponDef) bool {
+	return def == nil || def.ID == 0
 }
 
 // WeaponByID selects the record occupying the given slot (I1) [02 "Weapon
@@ -878,6 +867,26 @@ func (c *Catalog) RebuildWeaponIndex() {
 		return
 	}
 	c.weaponByID, c.weaponDuplicates = buildWeaponIndex(c.Weapons, nil)
+}
+
+// rewireWeaponLink rewires one cloned unit weapon link onto the cloned weapon
+// table, re-deriving WeaponLink's resolution and miss policy [02 §5
+// R-CONTENT-02]: a name hit points at the cloned record; a miss fills the
+// slot with the clone's own record-0 inactive sentinel (ID 0) when the family
+// carries one, else leaves the explicit nil inactive marker — so a cloned
+// catalog preserves sentinel links instead of dropping them to nil. An empty
+// name leaves the slot nil, as at compile.
+func (c *Catalog) rewireWeaponLink(name string, slot **WeaponDef) {
+	if strings.TrimSpace(name) == "" {
+		return
+	}
+	if w, ok := c.Weapons[CanonicalKey(name)]; ok {
+		*slot = w
+		return
+	}
+	if w0, ok := c.WeaponByID(0); ok {
+		*slot = w0 // record-0 inactive sentinel [02 §5 R-CONTENT-02]
+	}
 }
 
 // cloneUnit deep copies a UnitDef without weapon link pointers (rewired in Clone).

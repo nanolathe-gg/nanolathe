@@ -21,7 +21,9 @@ func TestChooseCursorHoverTable(t *testing.T) {
 	soldier := &content.UnitDef{UnitName: "ARMPW", CanMove: true, CanAttack: true,
 		CanPatrol: true, CanGuard: true}
 	bomber := &content.UnitDef{UnitName: "ARMTHUND", CanMove: true, CanAttack: true, CanFly: true,
-		Weapon1Def: &content.WeaponDef{Dropped: true}}
+		// The ID is non-zero: ID 0 is the record-0 inactive sentinel and would
+		// not count as a weapon [02 §5 R-CONTENT-02].
+		Weapon1Def: &content.WeaponDef{ID: 1, Dropped: true}}
 	turret := &content.UnitDef{UnitName: "ARMLLT", CanAttack: true}
 	wreck := &content.FeatureDef{Reclaimable: true}
 	rock := &content.FeatureDef{}
@@ -114,9 +116,12 @@ func TestChooseCursorLowestIndexWins(t *testing.T) {
 // TestCommandFireAffordability locks the BLAST shape gate [07 §8]: command fire
 // shows cursortoofar when the stocks do not cover energypershot/metalpershot.
 func TestCommandFireAffordability(t *testing.T) {
-	dgun := &content.WeaponDef{CommandFire: true, EnergyPerShot: 500, MetalPerShot: 0}
+	// Non-zero IDs: ID 0 is the record-0 inactive sentinel and would not
+	// count as a weapon [02 §5 R-CONTENT-02].
+	dgun := &content.WeaponDef{ID: 2, CommandFire: true, EnergyPerShot: 500, MetalPerShot: 0}
+
 	com := &content.UnitDef{UnitName: "ARMCOM", CanMove: true, CanAttack: true, CanDGun: true,
-		Weapon1Def: &content.WeaponDef{}, Weapon2Def: dgun}
+		Weapon1Def: &content.WeaponDef{ID: 1}, Weapon2Def: dgun}
 	h := CursorHover{OverWorld: true}
 
 	rich := CursorSelection{Viewer: 0, Units: []*units.Unit{unit(0, com)}, Energy: 900}

@@ -439,7 +439,9 @@ func resolveAttack(actor *units.Unit, target *units.Unit) string {
 		if target.Def != nil && target.Def.CanHover {
 			return "AirToGroundHover"
 		}
-		if actor.Def.Weapon1Def != nil && actor.Def.Weapon1Def.ToAirWeapon {
+		// A sentinel primary (a missed link) is inactive, not an air-attack
+		// weapon [02 §5 R-CONTENT-02].
+		if !content.IsWeaponInactive(actor.Def.Weapon1Def) && actor.Def.Weapon1Def.ToAirWeapon {
 			return "AirToAir"
 		}
 		if target.Def != nil && target.Def.IsAirBase {

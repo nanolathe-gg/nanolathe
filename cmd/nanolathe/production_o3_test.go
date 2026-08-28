@@ -121,7 +121,7 @@ func runO3ProductionReplay(t *testing.T, root string) o3Run {
 	cam.X = int32(commander.X>>16) - 320
 	cam.Z = int32(commander.Z>>16) - 240
 	cam.Pan(0, 0)
-	b := &battleSession{sess: s, cat: cat, cam: cam, latch: input.LatchNormal}
+	b := &battleSession{sess: s, cat: cat, cam: cam}
 	controller := NewBattleController(b)
 
 	// Selection itself is exercised through the controller and snapshot command
@@ -565,10 +565,10 @@ func o3FindProductionSite(t *testing.T, b *battleSession, def *content.UnitDef, 
 					continue
 				}
 				b.updatePlacement(sx, sy)
-				if !b.buildOK {
+				if !b.battleState().Input.BuildOK {
 					continue
 				}
-				if mex && !o3FootprintHasMetal(b, b.buildCellX, b.buildCellZ, fx, fz) {
+				if mex && !o3FootprintHasMetal(b, b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ, fx, fz) {
 					continue
 				}
 				return sx, sy, true

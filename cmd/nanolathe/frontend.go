@@ -13,7 +13,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
-	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/render"
@@ -25,19 +24,19 @@ import (
 
 // shellMode is the retail frontend state. The menu screens deliberately map
 // one-to-one to the retail GUI files; there is no Nanolathe-owned layout.
-type shellMode uint8
+type shellMode = ui.Mode
 
 const (
-	modeMenuMain shellMode = iota
-	modeMenuSingle
-	modeMenuMission
-	modeMenuMap
-	modeMenuSkirmish
+	modeMenuMain     shellMode = ui.ModeMain
+	modeMenuSingle   shellMode = ui.ModeSingle
+	modeMenuMission  shellMode = ui.ModeMission
+	modeMenuMap      shellMode = ui.ModeMap
+	modeMenuSkirmish shellMode = ui.ModeSkirmish
 	// modeLoading is the retail loading screen. It owns no .GUI file: retail
 	// closes the frontend window, forces 640x480, and paints the authored
 	// loading background while the loader thread works [07 §4].
-	modeLoading
-	modeBattle
+	modeLoading shellMode = ui.ModeLoading
+	modeBattle  shellMode = ui.ModeBattle
 )
 
 // retailScreenW and retailScreenH are the frontend display the .GUI files are
@@ -86,7 +85,6 @@ type gameShell struct {
 	opts Options
 	cs   *contentSet
 
-	mode   shellMode
 	assets *menuAssets
 	font   *formats.FNT
 
@@ -129,18 +127,43 @@ type gameShell struct {
 	// loadingReturn is the screen a failed load falls back to.
 	loadingReturn shellMode
 
-	// panels owns the active authored window, its save-under predecessor, modal
+	// frontend owns mode, active authored window, save-under predecessor, modal
 	// message, focus/press latches, and list thumb capture [07 §3][07 §4].
-	panels ui.PanelStack
+	frontend *ui.Frontend
 
 	cam    *camera.Camera
 	battle *battleSession
 }
 
+// gameShellUIStage adapts the canonical frontend state to the client's single
+// typed UI slot. It does not participate in world ordering; the client invokes
+// it only after the committed frame has completed its world passes [03 §1].
+type gameShellUIStage struct{ shell *gameShell }
+
+func (s gameShellUIStage) DrawUI(c *client.Client, presented client.UIFrame) {
+	if s.shell != nil {
+		s.shell.draw(c, presented)
+	}
+}
+
+// battleHUDUIStage is the one battle-surface adapter. The HUD consumes the
+// committed frame supplied by the client rather than acquiring another frame
+// from the session [I6].
+type battleHUDUIStage struct {
+	hud    *retailBattleHUD
+	battle *battleSession
+}
+
+func (s battleHUDUIStage) DrawUI(c *client.Client, presented client.UIFrame) {
+	if s.hud != nil {
+		s.hud.draw(c, s.battle, presented)
+	}
+}
+
 // newGameShell builds the frontend state: the skirmish map list, the retail
 // resource set, and the opening panel used by the windowed entry.
 func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
-	shell := &gameShell{opts: opts, cs: cs, mode: modeMenuMain}
+	shell := &gameShell{opts: opts, cs: cs, frontend: ui.NewFrontend(modeMenuMain)}
 	maps, err := enumerateSkirmishMaps(cs.fs)
 	if err != nil {
 		return nil, err
@@ -222,7 +245,7 @@ func runGameShell(opts Options, cs *contentSet) error {
 		return cerr
 	}
 	cl.SetCursors(cursors)
-	cl.Overlay = func(c *client.Client) { shell.draw(c) }
+	cl.SetUIStage(gameShellUIStage{shell: shell})
 	fmt.Fprintf(os.Stderr, "nanolathe: retail frontend: %d skirmish maps\n", len(maps))
 	return client.RunGame(cl)
 }
@@ -394,7 +417,13 @@ func retailFrontendAssetError(cs *contentSet, what, logical, expected string, ca
 }
 
 func (g *gameShell) openMenu(mode shellMode) {
-	oldPanel, oldMode := g.activePanel(), g.mode
+	if g == nil {
+		return
+	}
+	if g.frontend == nil {
+		g.frontend = ui.NewFrontend(mode)
+	}
+	oldPanel, oldMode := g.activePanel(), g.frontend.Mode
 	if oldPanel != nil {
 		// Clear a gesture before replacing the active window. This used to sit
 		// after panel=nil and was unreachable, allowing a held press to leak
@@ -402,8 +431,6 @@ func (g *gameShell) openMenu(mode shellMode) {
 		oldPanel.ResetPress()
 		oldPanel.CancelScrollDrag()
 	}
-	g.mode = mode
-	g.panels.CloseModal()
 	var panel *ui.Panel
 	if g.assets != nil {
 		if mode == modeMenuMission {
@@ -425,25 +452,17 @@ func (g *gameShell) openMenu(mode shellMode) {
 			}
 		}
 	}
-	if panel == nil {
-		g.panels.Replace(nil)
-	} else if oldPanel != nil && mode != oldMode && g.panelWindowNeedsUnder(mode) {
-		g.panels.Push(panel)
-	} else {
-		g.panels.Replace(panel)
-	}
+	saveUnder := oldPanel != nil && mode != oldMode && g.panelWindowNeedsUnder(mode)
+	g.frontend.Open(mode, panel, saveUnder)
 	g.refreshRetailPanel()
 	g.resolveRetailButtonGeometry()
 }
 
 func (g *gameShell) activePanel() *ui.Panel {
-	if g == nil {
+	if g == nil || g.frontend == nil {
 		return nil
 	}
-	if modal := g.panels.Modal(); modal != nil {
-		return g.panels.Under()
-	}
-	return g.panels.Top()
+	return g.frontend.ActivePanel()
 }
 
 func reportRetailMessageError(err error) {
@@ -474,7 +493,7 @@ func (g *gameShell) panelWindowNeedsUnder(mode shellMode) bool {
 }
 
 func (g *gameShell) step(delta float64, cl *client.Client) {
-	switch g.mode {
+	switch g.frontend.Mode {
 	case modeBattle:
 		if g.battle != nil {
 			g.battle.viewerStep(delta, cl)
@@ -534,7 +553,7 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 	if err != nil {
 		return err
 	}
-	g.battle = &battleSession{sess: sess, cat: cat, cam: g.cam, hud: battleHUD, fs: g.cs.fs, shell: g, latch: input.LatchNormal}
+	g.battle = &battleSession{sess: sess, cat: cat, cam: g.cam, hud: battleHUD, fs: g.cs.fs, shell: g}
 	g.battle.returnToMenu = g.returnFromBattle
 	g.battle.returnToSkirmish = func(cl *client.Client) {
 		if g != nil {
@@ -551,15 +570,9 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 				if g.assets != nil {
 					cl.SetFNT(g.assets.font)
 				}
-				cl.Overlay = func(c *client.Client) { g.draw(c) }
+				cl.SetUIStage(gameShellUIStage{shell: g})
 			}
 		}
-	}
-	g.battle.retryFunc = func(cl *client.Client) error {
-		if g == nil || g.battle == nil {
-			return fmt.Errorf("retry has no active battle")
-		}
-		return g.battle.doRetry(cl)
 	}
 	g.battle.continueFunc = func(cl *client.Client) {
 		if g == nil || g.battle == nil || g.battle.sess == nil {
@@ -637,15 +650,15 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 				})
 				return
 			}
-			// Losing path: retail Continue after defeat not established as auto-retry [07 §11]; keep menu return.
-			// TODO(question): losing Continue vs Retry distinction not established; current behavior returns to main, Retry button handles same-mission reload [P1-01 §7.5].
+			// Losing path: retail Continue after defeat is not established as an auto-retry [07 §11]; keep menu return.
+			// The authored ENDMSN surface has no Retry control, so no result-level retry route is exposed here.
 			_ = s.ContinueCampaign()
 			g.returnFromBattle(cl)
 			return
 		}
 		g.returnFromBattle(cl)
 	}
-	g.mode = modeBattle
+	g.frontend.SetMode(modeBattle)
 	if clPtr != nil {
 		clPtr.SetSnapshot(sess.Snapshot)
 		clPtr.SetTerrain(terrain)
@@ -654,7 +667,7 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 			clPtr.SetPalette(pal)
 		}
 		clPtr.SetFNT(battleHUD.console)
-		clPtr.Overlay = func(c *client.Client) { battleHUD.draw(c, g.battle) }
+		clPtr.SetUIStage(battleHUDUIStage{hud: battleHUD, battle: g.battle})
 		// The menu morphs its own client into the battle rather than building a
 		// new one, so it must make the same session joins the direct battle
 		// entry makes. Without this the client has no presentation CRT, and
@@ -695,7 +708,7 @@ func (g *gameShell) returnFromBattle(cl *client.Client) {
 		}
 		cl.SetFNT(g.assets.font)
 	}
-	cl.Overlay = func(c *client.Client) { g.draw(c) }
+	cl.SetUIStage(gameShellUIStage{shell: g})
 }
 
 // enumerateSkirmishMaps is the retail map census: only OTA files with a
@@ -771,15 +784,14 @@ func retailFold(c byte) byte {
 	return c
 }
 
-func (g *gameShell) draw(c *client.Client) {
-	if g.mode == modeLoading {
+func (g *gameShell) draw(c *client.Client, _ client.UIFrame) {
+	if g.frontend.Mode == modeLoading {
 		g.drawLoadingScreen(c)
 		return
 	}
-	if g.mode == modeBattle {
-		if g.battle != nil && g.battle.hud != nil {
-			g.battle.hud.draw(c, g.battle)
-		}
+	if g.frontend.Mode == modeBattle {
+		// Battle UI is installed as the client's typed stage at the hand-off.
+		// Keeping this adapter out of the shell prevents two renderer owners.
 		return
 	}
 	g.drawRetailPanel(c)

@@ -23,7 +23,7 @@ func replayBattleFrame(c *BattleController, cl *client.Client, f BattleInputFram
 // state is written by the test itself [07 §8][07 §9].
 func TestStrictSkirmish_ProductionInputReplayG10A(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
-	b.latch = input.LatchNormal
+	b.battleState().Input.Latch = input.LatchNormal
 	commander := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
 	applyPendingBattleCommands(b)
 	cl, err := client.New(client.Options{
@@ -88,7 +88,7 @@ func TestBattleInputFrameFromClientRetainsLogicalState(t *testing.T) {
 
 func TestBattleControllerReleasesKeysAndHandlesZeroElapsed(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
-	b.latch = input.LatchNormal
+	b.battleState().Input.Latch = input.LatchNormal
 	cl, err := client.New(client.Options{Buffer: b.sess.Snapshot, Width: 640, Height: 480, Headless: true})
 	if err != nil {
 		t.Fatalf("client.New: %v", err)
@@ -123,7 +123,7 @@ func TestBattleControllerReleasesKeysAndHandlesZeroElapsed(t *testing.T) {
 
 func TestBattleControllerInvalidElapsedDoesNotRewindClockAnchor(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
-	b.latch = input.LatchNormal
+	b.battleState().Input.Latch = input.LatchNormal
 	b.sess.State = session.StateBattle
 	c := NewBattleController(b)
 	first := BattleInputFrame{Elapsed: 1}

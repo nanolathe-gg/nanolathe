@@ -38,7 +38,7 @@ func TestSkirmishStartLeavesForLoadingScreen(t *testing.T) {
 	shell.openMenu(modeMenuSkirmish)
 
 	idx := -1
-	panel := shell.panels.Top()
+	panel := shell.frontend.Panels.Top()
 	for i, gad := range panel.Window.Gadgets {
 		if gui.Name16Equal(gad.Name, "Start") {
 			idx = i
@@ -64,13 +64,13 @@ func TestSkirmishStartLeavesForLoadingScreen(t *testing.T) {
 	// Before the fix this panicked here, one statement past the callback.
 	shell.menuInput(cl)
 
-	if shell.mode != modeLoading {
-		if modal := shell.panels.Modal(); modal != nil {
+	if shell.frontend.Mode != modeLoading {
+		if modal := shell.frontend.Panels.Modal(); modal != nil {
 			t.Fatalf("Start was refused: %q", modal.Message())
 		}
-		t.Fatalf("mode after Start = %v, want the loading screen", shell.mode)
+		t.Fatalf("mode after Start = %v, want the loading screen", shell.frontend.Mode)
 	}
-	if shell.panels.Top() != nil {
+	if shell.frontend.Panels.Top() != nil {
 		t.Error("the loading screen owns no .GUI panel")
 	}
 	if shell.loading == nil {

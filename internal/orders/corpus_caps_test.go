@@ -36,8 +36,9 @@ func retailFSOrders(t *testing.T) *vfs.FS {
 
 // TestCorpusQueueCaps_Retail measures the stock corpus to prove the
 // previous 64/32 caps were inside stock-reachable behavior and that the
-// new dynamic OOM guard is outside it. It also proves the pump iteration
-// cap 200 is outside stock.
+// dynamic OOM guard is outside it. There is deliberately no pump iteration
+// cap to measure against any more (ORD-02): retail has none [04 §3.3], so
+// stock cannot hit one that does not exist.
 //
 // Corpus: 278 units, 275 maps, 198 weapons, 1644 features, 175 campaign
 // missions (13 campaigns) per retail install at ~/TotalAnnihilation
@@ -51,10 +52,10 @@ func retailFSOrders(t *testing.T) *vfs.FS {
 //     would require 105 nodes; capped run truncated to 64)
 //   - max secondary queue: 1 (bw 2)
 //   - max total per unit: 64 capped, 105+ uncapped
-//   - pump iterations per tick for those queues: <105 <200
 //
 // Therefore the old 64 cap was hit in stock and replaced with dynamic
-// slice growth + OOM guard 10000 >>105; 200 remains outside stock.
+// slice growth + OOM guard 10000 >>105. There is no pump iteration cap:
+// ORD-02 removed it; retail reproduces tight-loop wedges [04 §3.3].
 //
 // This test locks the measurement: if stock content grows beyond the
 // guard, the test will fail and the guard must be revisited.
@@ -182,7 +183,7 @@ func TestCorpusQueueCaps_Retail(t *testing.T) {
 
 	t.Logf("max raw tokens per InitialMission (TDF scan upper bound): %d in %s", maxRawTokens, maxRawInfo)
 	t.Logf("max bw tokens per InitialMission: %d in %s", maxBW, maxBWInfo)
-	t.Logf("OOMGuardQueue=%d MaxPumpIterations=%d", OOMGuardQueue, MaxPumpIterations)
+	t.Logf("OOMGuardQueue=%d (no pump iteration cap exists: wedges are reproduced, not rescued [04 §3.3])", OOMGuardQueue)
 
 	// The old caps were 64/32. Corpus proves 64 was inside stock:
 	// Silent Slayers carry1 has 105 raw tokens and after uncapped interpretation
@@ -193,14 +194,10 @@ func TestCorpusQueueCaps_Retail(t *testing.T) {
 	}
 	// For the dynamic queue, the max primary that would be queued is at
 	// least maxRawTokens (upper bound) but secondary bw is at most maxBW.
-	// We estimate pump iterations as raw tokens (worst case each token is one
-	// handler that returns 0/1/2 loops). So estimate = maxRawTokens.
 	maxPrimaryEstimated := maxRawTokens
 	maxSecondaryEstimated := maxBW
-	maxPumpIterationsEstimated := maxPrimaryEstimated // worst case
 	t.Logf("estimated maxPrimary (upper bound raw): %d", maxPrimaryEstimated)
 	t.Logf("estimated maxSecondary (bw): %d", maxSecondaryEstimated)
-	t.Logf("estimated max pump iterations: %d", maxPumpIterationsEstimated)
 
 	// New guards must be outside corpus.
 	if maxPrimaryEstimated >= OOMGuardQueue {
@@ -212,13 +209,9 @@ func TestCorpusQueueCaps_Retail(t *testing.T) {
 	if maxSecondaryEstimated >= 32 {
 		t.Logf("maxSecondary %d would have hit old secondary cap 32", maxSecondaryEstimated)
 	}
-	// Pump iterations guard
-	if maxPumpIterationsEstimated >= MaxPumpIterations {
-		t.Fatalf("estimated pump iterations %d hits cap %d: stock would hit pump guard", maxPumpIterationsEstimated, MaxPumpIterations)
-	}
-	if maxPumpIterationsEstimated > 150 {
-		t.Logf("pump estimate %d close to 200 guard, consider raising", maxPumpIterationsEstimated)
-	}
+	// No pump-iteration assertion: the cap was removed (ORD-02). Retail has
+	// no located guard [04 §3.3][P2-03]; a mid-walk cap alters queue state,
+	// RNG use, and later updates, so stock reachability of it is moot.
 
 	// Finally, assert the well-known stock counts for the reference install
 	// are stable (from meas_main.go 2026-08-25). If these change due to content

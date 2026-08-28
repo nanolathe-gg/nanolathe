@@ -53,7 +53,7 @@ func isCombatUnit(def *content.UnitDef) bool {
 	if def.CanAttack || def.CanGuard || def.CanPatrol {
 		return true
 	}
-	if def.Weapon1Def != nil || def.Weapon2Def != nil || def.Weapon3Def != nil {
+	if !content.IsWeaponInactive(def.Weapon1Def) || !content.IsWeaponInactive(def.Weapon2Def) || !content.IsWeaponInactive(def.Weapon3Def) {
 		return true
 	}
 	// Fallback: mobile units with BMCode false? Keep conservative.

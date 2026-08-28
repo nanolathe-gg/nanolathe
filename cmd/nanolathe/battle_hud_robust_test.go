@@ -165,7 +165,7 @@ func TestMissingOptionalStillEntersBattle(t *testing.T) {
 		cl.SetFNT(hud.console)
 		cl.SetModelFS(cs.fs)
 		b := &battleSession{sess: sess, cat: sess.Catalog, cam: nil, hud: hud}
-		cl.Overlay = func(c *client.Client) { hud.draw(c, b) }
+		cl.SetUIStage(battleHUDUIStage{hud: hud, battle: b})
 		// Advance one tick and compose — should not panic.
 		sess.Step(1)
 		func() {

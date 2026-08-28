@@ -6,7 +6,7 @@ package cleanroom
 // line that still has to be rewritten as clean-room prose, with its
 // address-level trail moved to /tmp/ta-decompile/notes/.
 //
-// Total at baseline: 1334 occurrences across 111 files.
+// Total at baseline: 1142 occurrences across 109 files.
 //
 // A file absent from this map must have zero occurrences. Counts may only
 // go down, and going down requires updating this file in the same change.
@@ -17,7 +17,6 @@ var Baseline = map[string]int{
 	"cmd/nanolathe/loading_test.go":                 1,
 	"cmd/nanolathe/retail_font.go":                  17,
 	"cmd/nanolathe/retail_font_test.go":             3,
-	"cmd/nanolathe/retail_menu.go":                  57,
 	"cmd/nanolathe/selmap_test.go":                  3,
 	"cmd/nanolathe/settings.go":                     3,
 	"formats/gaf_colorkey_test.go":                  2,
@@ -76,7 +75,6 @@ var Baseline = map[string]int{
 	"internal/hud/selection_test.go":                2,
 	"internal/mission/catalog.go":                   1,
 	"internal/mission/initial_mission.go":           6,
-	"internal/mission/mission_globals.go":           135,
 	"internal/mission/placement.go":                 18,
 	"internal/mission/sparse_test.go":               1,
 	"internal/movement/collision.go":                13,

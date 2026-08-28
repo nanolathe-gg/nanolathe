@@ -740,3 +740,27 @@ func TestResolveHandlerRegistration(t *testing.T) {
 		t.Fatalf("Guard_NoMove handler not registered")
 	}
 }
+
+// TestResolveAttackSkipsInactiveSentinelWeapon locks the air-attack-variant
+// gate against the record-0 inactive sentinel [02 §5 R-CONTENT-02]: a flyer
+// whose primary link resolved to the [noweapon] record is not an air-attack
+// platform, so the variant falls through to AirToGround even though the link
+// is non-nil. An active ToAirWeapon link is unchanged.
+func TestResolveAttackSkipsInactiveSentinelWeapon(t *testing.T) {
+	sentinel := &content.WeaponDef{ID: 0, ToAirWeapon: true}
+	sentinel.CanonicalKey = "noweapon"
+	active := &content.WeaponDef{ID: 3, ToAirWeapon: true}
+	active.CanonicalKey = "armthunder"
+	flyer := mkDef(func(d *content.UnitDef) { d.CanFly = true; d.Builder = false })
+	target := mkUnit(2, 1, "CORE", 100, 0, true, 0, mkDef(nil))
+
+	flyer.Weapon1Def = sentinel
+	if got := resolveAttack(mkUnit(1, 0, "ARM", 100, 0, true, 0, flyer), target); got != "AirToGround" {
+		t.Fatalf("sentinel weapon1 gave %q, want AirToGround [02 §5 R-CONTENT-02]", got)
+	}
+
+	flyer.Weapon1Def = active
+	if got := resolveAttack(mkUnit(1, 0, "ARM", 100, 0, true, 0, flyer), target); got != "AirToAir" {
+		t.Fatalf("active ToAirWeapon changed behavior: got %q, want AirToAir", got)
+	}
+}

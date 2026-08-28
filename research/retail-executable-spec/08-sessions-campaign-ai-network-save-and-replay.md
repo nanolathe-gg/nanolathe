@@ -1882,22 +1882,28 @@ localization systems.
 
 The closed prefix of the post-battle order: the latch bits drive the session
 router into the results/postgame state, whose handler drains the network at
-entry, then (multiplayer) copies the last game frame and shows a message box,
-stops the music, runs a ten-unit timed display, performs the campaign CD
-check, writes campaign progress and shows the end-of-mission screen (outcome
-art, the full mission list ordered by W/L marks with the next unplayed
-mission selected, difficulty refresh), plays the outro movie, and finally
-shows the score/statistics screen with per-player stat bars (kills, losses,
-energy and metal produced and wasted, score) before returning to the
-front-end router. The score values come from the score helper's display
-array, which multiplies kills by the kill multiplier and elapsed ticks over
-1800 by the time multiplier with truncation and a zero clamp. Resign and
-host-loss latch ended-without-win directly (the end-game dialog callbacks and
-the peer-loss path, respectively) and can override an armed victory, while
-ordinary victory/defeat run through the shared four-count countdown. The
-exact tick at which simulation stops is the session's switch out of the live
-battle state; the residual is only the precise presentation sequencing of the
-overlay transitions inside the front-end router.
+entry, then (multiplayer) copies the last game frame, stops the music, runs a
+ten-unit timed display, performs the campaign CD check, writes campaign
+progress and enters the authored end-mission screen (outcome art, the full
+mission list ordered by W/L marks with the next unplayed mission selected,
+difficulty refresh), plays the outro movie, and finally shows the
+score/statistics screen with per-player stat bars (kills, losses, energy and
+metal produced and wasted, score) before returning to the front-end router.
+The score values come from the score helper's display array, which multiplies
+kills by the kill multiplier and elapsed ticks over 1800 by the time multiplier
+with truncation and a zero clamp. Resign and host-loss latch ended-without-win
+directly (the end-game dialog callbacks and the peer-loss path, respectively)
+and can override an armed victory, while ordinary victory/defeat run through
+the shared four-count countdown. The exact tick at which simulation stops is
+the session's switch out of the live battle state; the residual is only the
+precise presentation sequencing of the overlay transitions inside the
+front-end router.
+
+**Correction: the post-battle message-box wording is superseded.** The
+results surface is the authored `ENDMSN.GUI`/`endmsn.gaf` family. Its outcome
+copy is selected from the authored `victory` or `defeat` frame and its
+available route is the authored `Start` control when campaign progression has
+a next mission, otherwise `MainMenu` [07 §11] [08 "Progression"].
 
 ## Required implementation invariants
 
@@ -2018,4 +2024,4 @@ The following work remains before this category is a complete retail design:
 - Bounded replay searches are extended to dynamically built file names, debug modes, and media/capture paths: the whole-image sweep finds only movie capture (`MOVIE%03i` pattern) and screenshot vocabulary; no replay file name, extension, or vocabulary exists. The replay absence bound now covers these paths.
 - If a replay path is found, derive its framing, initial snapshot, command
   timing, random state, seek behavior, version checks, and UI.
-- Session-end ordering: the post-battle prefix is closed (network drain at entry, multiplayer frame copy and message box, music stop, ten-unit timed display, campaign CD check, campaign-progress write and end-of-mission screen, outro movie, score/statistics screen with per-player stat bars, front-end return); the residual is only the precise presentation sequencing of the overlay transitions inside the front-end router.
+- Session-end ordering: the post-battle prefix is closed (network drain at entry, multiplayer frame copy, music stop, ten-unit timed display, campaign CD check, campaign-progress write and authored end-mission screen, outro movie, score/statistics screen with per-player stat bars, front-end return); the residual is only the precise presentation sequencing of the overlay transitions inside the front-end router.

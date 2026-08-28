@@ -1,34 +1,14 @@
 package main
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/vfs"
 )
-
-func TestResultRetryFailureKeepsOverlayState(t *testing.T) {
-	b := &battleSession{
-		resultDismissed: false,
-		resultButtons:   []panelButton{{Kind: "result_retry"}},
-		retryFunc: func(*client.Client) error {
-			return errors.New("authored retry resources unavailable")
-		},
-	}
-
-	b.doResultAction("result_retry", nil)
-	if b.resultDismissed {
-		t.Fatal("failed retry dismissed the result overlay")
-	}
-	if len(b.resultButtons) != 1 || b.resultButtons[0].Kind != "result_retry" {
-		t.Fatalf("failed retry replaced result buttons: %+v", b.resultButtons)
-	}
-}
 
 func TestBuilderPageProbeDoesNotPoisonRequiredLoad(t *testing.T) {
 	root := t.TempDir()

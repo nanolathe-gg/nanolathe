@@ -103,26 +103,20 @@ type Queue struct {
 // 105 raw tokens (Silent Slayers carry1: g ms1,g ms2,m...w...) and would
 // require >64 primary nodes uncapped; the capped run truncated to 64.
 // The secondary max in corpus is 1, but 32 is an arbitrary divergence.
-// Retail has no located cap, so Nanolathe now uses dynamic slice growth
-// (unbounded) and preserves an OOM guard only at a very large threshold
-// far outside stock (see OOMGuardQueue). Pump cycle defense is separate.
+// Retail has no located cap, so Nanolathe uses dynamic slice growth with an
+// OOM guard only at a very large threshold far outside stock (OOMGuardQueue
+// below, applied at content admission in Push/PushSecondary/CoalesceTail).
+//
+// There is deliberately NO pump-iteration cap and NO queue-code guard that
+// changes behavior mid-walk (ORD-02): retail can wedge on a tight
+// script/order loop, and a defensive cap would alter queue state, RNG use,
+// and later updates — reproducing the wedge is the contract [04 §3.3][I11].
+// Memory safety belongs at admission, not in the running queue.
 // Corpus: TestCorpusQueueCaps_Retail (internal/orders/corpus_caps_test.go)
-// measures maxPrimary 105+ uncapped, maxSecondary 1, maxPumpIterations
-// <200, proving the OOM guard is outside stock.
+// measures maxPrimary 105+ uncapped and maxSecondary 1.
 // TODO(T23): exact allocator zero-fill byte count for order nodes (retail
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // used a different memset length but observable effect is zeroed.
-const (
-	MaxPrimaryQueue   = 64  // deprecated: previous cap, now dynamic; retained for test compat [P1-I09]
-	MaxSecondaryQueue = 32  // deprecated: previous cap, now dynamic; retained for test compat [P1-I09]
-	MaxPumpIterations = 200 // [P2-03] cycle defense: handler loops via 0/1/2 without blocking; corpus <200 so retained
-)
-
-// OOMGuardQueue is the current very-large OOM guard far outside stock-reachable
-// behavior. It is the only remaining deliberate I11 divergence: bounds check that
-// rejects data retail would have accepted only to avoid unbounded growth on hostile
-// input. The value is chosen to be >> corpus max (~105 primary) and >> any
-// reasonable player shift-queue (hundreds) while still bounding memory.
 const OOMGuardQueue = 10000
 
 func (q *Queue) LenPrimary() int {
@@ -664,21 +658,11 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 	if q == nil || u == nil {
 		return
 	}
-	// [P2-03][P1-I09] iteration guard: defend against malformed handler that loops
-	// forever via 0/1/2 without ever blocking. Retail has no located guard
-	// (NEGATIVE-BOUNDED). Fallback breaks after MaxPumpIterations with diagnostic.
-	// Corpus: max primary queue after InitialMission is 105 (> old 64 cap) but
-	// still <<200, so 200 remains outside stock-reachable; retained with
-	// corpus proof in TestCorpusQueueCaps_Retail (max measured <200).
-	iter := 0
+	// No iteration cap here (ORD-02): a handler looping through the continue
+	// codes wedges exactly as retail's does [04 §3.3][I11].
 	// TODO(question) idle default-op creation when primary empty [05 "Queue pumping and result codes"] step 1: owner player-state settling byte, definition default-idle-op field
 	for len(q.primary) > 0 {
-		iter++
-		if iter > MaxPumpIterations {
-			q.recordDiagnostic("orders: primary pump iteration limit hit, breaking")
-			return
-		}
-		n := q.primary[0] // head-driven [05]
+		n := q.primary[0] // head-driven; the walk restarts here after every dispatch [04 §3.3]
 		if n.Deadline != -1 && tick >= uint32(n.Deadline) {
 			n.Deadline = -1
 			n.Satisfied |= 1 // [04 §3.3]
@@ -723,62 +707,71 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			return
 		}
 		code := handler(u, n, satisfied)
-		switch code {
-		case 0:
-			n.Phase = 0 // [04 §3.3]
-			continue
-		case 1:
-			n.Phase++ // [04 §3.3]
-			continue
-		case 2, 4:
-			continue // [04 §3.3] re-evaluate same head
-		case 3:
-			n.DynamicGate = 1                             // [04 §3.3]
-			n.Deadline = int32(tick + 30 + randBelow15()) // [04 §3.3][I4]
+		if !q.applyPrimaryResultCode(n, code, tick) {
 			return
-		case 5, 8:
-			cleanupNode(n) // [05 "Queue subtraction"]
-			q.primary = q.primary[1:]
-			q.ensureSingleActive() // mark moves to the successor [04 §3.3]
-			continue
-		case 6:
-			head := q.primary[0]
-			q.primary = q.primary[1:]
-			head.Flags &^= FlagActive
-			q.primary = append(q.primary, head) // move to tail [04 §3.3]
-			q.ensureSingleActive()              // exactly one marker remains
-			continue
-		case 7:
-			q.cancelAll()
-			return
-		case 9:
-			n.Flags |= FlagRetryMark // [05] retry mark TODO(question) value
-			if len(q.primary) == 1 {
-				n.Phase = 0
-				n.DynamicGate = 1
-				n.Deadline = int32(tick + 30 + randBelow30()) // [R-P0-01] 30+RNG(30), a distinct draw site from code 3's RNG(15)
-				return
-			}
-			cleanupNode(n)
-			q.primary = q.primary[1:]
-			q.ensureSingleActive() // mark moves to the successor [04 §3.3]
-			continue
-		default:
-			if code > 9 {
-				// Result code >9 delegates to the expiry helper:
-				// single-node unlink+cleanup+free, no RNG, no tail, not
-				// cancel-all [P0-08][04 §3.3]. Whole-queue cancel is
-				// exclusively code 7 [P0-08] A09.
-				//
-				// Primary head is not tombstoned; secondary always is
-				// (BuildWeapon always tombstoned) [P0-07].
-				cleanupNode(n)
-				q.primary = q.primary[1:]
-				q.ensureSingleActive()
-				return
-			}
 		}
 	}
+}
+
+// applyPrimaryResultCode is the PRIMARY result-code table [04 §3.3] C7: it
+// maps the handler's return code to queue effects for the head record n.
+// Deliberately distinct from applySecondaryResultCode — the segments share
+// the code values but not the effects, and re-merging them reintroduces the
+// ORD-03 mismatches (secondary code 9 would re-arm, secondary 6/7 would
+// tail-yield or cancel-all). Primary specifics here: code 6 rotates to the
+// segment tail, code 7 is the exclusive whole-queue cancel, code 9's
+// last-record arm re-arms with RNG(30) [R-P0-01].
+// Returns false when the walk stops for this pump.
+func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
+	switch code {
+	case 0:
+		n.Phase = 0 // [04 §3.3]
+	case 1:
+		n.Phase++ // [04 §3.3]
+	case 2, 4:
+		// [04 §3.3] continue walking unchanged
+	case 3:
+		n.DynamicGate = 1                             // [04 §3.3] lowest gate bit
+		n.Deadline = int32(tick + 30 + randBelow15()) // [04 §3.3][I4] wait 30..44; the only arm drawing RNG(15)
+		return false
+	case 5, 8:
+		cleanupNode(n) // [05 "Queue subtraction"]
+		q.primary = q.primary[1:]
+		q.ensureSingleActive() // mark moves to the successor [04 §3.3]
+	case 6:
+		q.primary = q.primary[1:]
+		n.Flags &^= FlagActive
+		q.primary = append(q.primary, n) // move to segment tail and continue [04 §3.3]
+		q.ensureSingleActive()           // exactly one marker remains
+	case 7:
+		q.cancelAll() // [04 §3.3] free every record on both segments and return; whole-queue cancel is exclusively primary code 7
+		return false
+	case 9:
+		n.Flags |= FlagRetryMark // [05] completion flag; TODO(question) actual bit not located [04 §3.3] code 9
+		if len(q.primary) == 1 {
+			// [R-P0-01][04 §3.3] last record re-arms: phase reset, wait
+			// 30..59 — the distinct RNG(30) arm, not code 3's RNG(15).
+			n.Phase = 0
+			n.DynamicGate = 1
+			n.Deadline = int32(tick + 30 + randBelow30())
+			return false
+		}
+		cleanupNode(n) // [04 §3.3] otherwise unlink and free
+		q.primary = q.primary[1:]
+		q.ensureSingleActive() // mark moves to the successor [04 §3.3]
+	default:
+		if code > 9 {
+			// [04 §3.3] above 9: single-node expiry helper — unlink, clean,
+			// free, and return; no draw, no whole-queue cancel [P0-08].
+			// Whole-queue cancel is exclusively code 7 [P0-08] A09.
+			cleanupNode(n)
+			q.primary = q.primary[1:]
+			q.ensureSingleActive()
+			return false
+		}
+		return false
+	}
+	return true
 }
 
 func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
@@ -817,52 +810,78 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 			return
 		}
 		code := handler(u, n, satisfied)
-		switch code {
-		case 0:
-			n.Phase = 0
-			idx++
-		case 1:
-			n.Phase++
-			idx++
-		case 2, 4:
-			idx++
-		case 3:
-			n.DynamicGate = 1
-			n.Deadline = int32(tick + 30 + randBelow15())
-			idx++
-		case 5, 8:
-			n.Flags |= FlagTombstone
-			cleanupNode(n)
-			copy(q.secondary[idx:], q.secondary[idx+1:])
+		advance, walking := q.applySecondaryResultCode(n, code, tick)
+		if !walking {
+			return // codes 6 and 7: remove the single record and return [04 §3.3] C8
+		}
+		idx += advance
+	}
+}
+
+// applySecondaryResultCode is the SECONDARY result-code table [04 §3.3] C8.
+// Deliberately distinct from applyPrimaryResultCode (ORD-03): codes 6 and 7
+// remove the single record and return — no tail-yield, no cancel-all — while
+// codes 5, 8, 9 and above 9 are plain unlink-and-free removals that continue
+// the front-to-back walk. Secondary code 9 sets the completion flag and then
+// plainly unlinks and frees with NO re-arm and NO draw, regardless of whether
+// the record is last or first [04 §3.3] "Audit note — completion-wait
+// ranges"; the above-9 expiry delegate never draws either.
+// Returns the index advance (0 when the record was removed) and whether the
+// walk continues.
+func (q *Queue) applySecondaryResultCode(n *Node, code Code, tick uint32) (advance int, walking bool) {
+	switch code {
+	case 0:
+		n.Phase = 0 // [04 §3.3]
+		return 1, true
+	case 1:
+		n.Phase++ // [04 §3.3]
+		return 1, true
+	case 2, 4:
+		return 1, true // [04 §3.3] continue unchanged
+	case 3:
+		n.DynamicGate = 1                             // [04 §3.3] lowest gate bit
+		n.Deadline = int32(tick + 30 + randBelow15()) // [04 §3.3][I4] wait 30..44; the only arm drawing RNG(15)
+		return 1, true
+	case 5, 8:
+		q.removeSecondaryRecord(n) // [04 §3.3] C8 plain unlink+free, walk continues
+		return 0, true
+	case 6:
+		q.removeSecondaryRecord(n) // [04 §3.3] C8 remove the single record and return; no tail-yield
+		return 0, false
+	case 7:
+		q.removeSecondaryRecord(n) // [04 §3.3] C8 remove the single record and return; no cancel-all
+		return 0, false
+	case 9:
+		n.Flags |= FlagRetryMark // [05] completion flag; TODO(question) actual bit not located [04 §3.3] code 9
+		// [04 §3.3] plain unlink+free — no re-arm, no draw, regardless of
+		// last/first position (the primary-only last-record re-arm [R-P0-01]
+		// does not apply to the secondary pump).
+		q.removeSecondaryRecord(n)
+		return 0, true
+	default:
+		if code > 9 {
+			// [04 §3.3] C8 expiry delegate: plain unlink+free, no draw, and
+			// the walk continues like the other plain removals.
+			q.removeSecondaryRecord(n)
+			return 0, true
+		}
+		return 0, false
+	}
+}
+
+// removeSecondaryRecord unlinks and frees one secondary record [04 §3.3]
+// [05 "Queue subtraction"]: the record is always tombstoned because the
+// tombstone test compares against the front anchor regardless of segment, so
+// BuildWeapon/SelfDestruct removals never emit the weapon-target-clear
+// notification.
+func (q *Queue) removeSecondaryRecord(n *Node) {
+	n.Flags |= FlagTombstone
+	cleanupNode(n)
+	for i, m := range q.secondary {
+		if m == n {
+			copy(q.secondary[i:], q.secondary[i+1:])
 			q.secondary = q.secondary[:len(q.secondary)-1]
-		case 6, 7:
-			n.Flags |= FlagTombstone
-			cleanupNode(n)
-			copy(q.secondary[idx:], q.secondary[idx+1:])
-			q.secondary = q.secondary[:len(q.secondary)-1]
-			return // [05][GAP T3] single remove and return
-		case 9:
-			n.Flags |= FlagRetryMark
-			if idx == len(q.secondary)-1 {
-				n.Phase = 0
-				n.DynamicGate = 1
-				n.Deadline = int32(tick + 30 + randBelow30()) // [R-P0-01] secondary mirrors primary 30+RNG(30)
-				idx++
-			} else {
-				n.Flags |= FlagTombstone
-				cleanupNode(n)
-				copy(q.secondary[idx:], q.secondary[idx+1:])
-				q.secondary = q.secondary[:len(q.secondary)-1]
-			}
-		default:
-			if code > 9 {
-				n.Flags |= FlagTombstone
-				cleanupNode(n)
-				copy(q.secondary[idx:], q.secondary[idx+1:])
-				q.secondary = q.secondary[:len(q.secondary)-1]
-				return
-			}
-			idx++
+			return
 		}
 	}
 }

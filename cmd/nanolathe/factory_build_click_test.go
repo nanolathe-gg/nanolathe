@@ -102,7 +102,7 @@ func TestRetailFactoryProductClickQueuesAndBuilds(t *testing.T) {
 		ViewW: winW, ViewH: winH,
 		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
 	}
-	b := &battleSession{sess: sess, cat: cat, cam: cam, latch: input.LatchNormal}
+	b := &battleSession{sess: sess, cat: cat, cam: cam}
 	pal := loadPalette(cs)
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
 	if err != nil {
@@ -149,8 +149,8 @@ func TestRetailFactoryProductClickQueuesAndBuilds(t *testing.T) {
 	if !b.hud.consumeClick(b, clickX, clickY) {
 		t.Fatal("product click not consumed by HUD")
 	}
-	if b.buildDef != "" {
-		t.Fatalf("factory product click must not arm placement, got buildDef %q", b.buildDef)
+	if b.battleState().Input.BuildDef != "" {
+		t.Fatalf("factory product click must not arm placement, got buildDef %q", b.battleState().Input.BuildDef)
 	}
 	sess.Step(61)
 	q := orders.QueueForUnit(lab)
