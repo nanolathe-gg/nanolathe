@@ -12,9 +12,11 @@ import "github.com/nanolathe/nanolathe/internal/content"
 type TexturePlayer struct {
 	frames      []content.AssetID
 	durations   []uint32
+	loop        bool
 	index       int
 	remaining   uint32
 	initialized bool
+	active      bool
 }
 
 // NewTexturePlayer copies one authored sequence into an independent cursor.
@@ -22,10 +24,12 @@ func NewTexturePlayer(sequence content.AssetSequence) *TexturePlayer {
 	p := &TexturePlayer{
 		frames:    append([]content.AssetID(nil), sequence.Frames...),
 		durations: append([]uint32(nil), sequence.Durations...),
+		loop:      sequence.Loop,
 	}
 	if len(p.frames) != 0 {
 		p.remaining = p.duration(0)
 		p.initialized = true
+		p.active = true
 	}
 	return p
 }
@@ -44,7 +48,7 @@ func (p *TexturePlayer) duration(index int) uint32 {
 // Frame returns the current immutable asset identity. A missing sequence is a
 // normal unresolved-art result.
 func (p *TexturePlayer) Frame() (content.AssetID, bool) {
-	if p == nil || p.index < 0 || p.index >= len(p.frames) {
+	if p == nil || !p.active || p.index < 0 || p.index >= len(p.frames) {
 		return "", false
 	}
 	return p.frames[p.index], true
@@ -54,7 +58,7 @@ func (p *TexturePlayer) Frame() (content.AssetID, bool) {
 // presentation frame rendering: callers invoke it only when Clock.NewSimTick
 // is true, never once per draw pass [03 §4.4].
 func (p *TexturePlayer) Step() {
-	if p == nil || len(p.frames) <= 1 || !p.initialized {
+	if p == nil || !p.active || len(p.frames) <= 1 || !p.initialized {
 		return
 	}
 	if p.remaining > 1 {
@@ -63,6 +67,10 @@ func (p *TexturePlayer) Step() {
 	}
 	p.index++
 	if p.index >= len(p.frames) {
+		if !p.loop {
+			p.active = false
+			return
+		}
 		p.index = 0
 	}
 	p.remaining = p.duration(p.index)
@@ -84,6 +92,7 @@ func (p *TexturePlayer) Reset() {
 	}
 	p.index = 0
 	p.initialized = len(p.frames) != 0
+	p.active = p.initialized
 	if p.initialized {
 		p.remaining = p.duration(0)
 	}

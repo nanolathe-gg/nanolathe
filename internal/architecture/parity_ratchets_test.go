@@ -335,10 +335,10 @@ var debtMarkerTotals = map[string]int{
 	// crash-policy residual).
 	"legacy":         37,
 	"compatibility":  16,
-	"fallback":       182,
+	"fallback":       189,
 	"guess":          7,
 	"plausible":      1,
-	"todo(question)": 351, // +4 step seams and +1 post-loop owner seam since the prior baseline
+	"todo(question)": 353, // main's step.go tighten (-3) plus five combat/damage.go water-damage placeholders
 }
 
 var debtMarkerFileCounts = map[string]map[string]int{
@@ -379,8 +379,9 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/cob/binding.go":                1,
 		"internal/cob/bridge.go":                 2,
 		"internal/cob/load.go":                   1,
+		"internal/cob/snapshot.go":               1,
 		"internal/cob/ports.go":                  2,
-		"internal/cob/vm.go":                     11,
+		"internal/cob/vm.go":                     14,
 		"internal/combat/death.go":               1,
 		"internal/combat/meteor.go":              7,
 		"internal/combat/motion.go":              1,
@@ -422,7 +423,8 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/session/skirmish.go":           1,
 		"internal/session/step.go":               2,
 		"internal/session/stockpile.go":          1,
-		"internal/units/units.go":                3,
+		"internal/units/units.go":                5,
+		"internal/units/cob_binding.go":          1,
 		"internal/world/placement.go":            1,
 		"internal/world/terrain.go":              5,
 	},
@@ -450,6 +452,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/cob/ports.go":                    14,
 		"internal/cob/vm.go":                       8, // +1: statics-init TODO(question) at SetProgram [R-COB-01 §1]
 		"internal/combat/death.go":                 6,
+		"internal/combat/damage.go":                5,
 		"internal/combat/fire.go":                  3,
 		"internal/combat/impact.go":                1,
 		"internal/combat/meteor.go":                2,
@@ -503,7 +506,7 @@ var debtMarkerFileCounts = map[string]map[string]int{
 		"internal/session/session.go":              3,
 		"internal/session/skirmish.go":             6,
 		"internal/session/state.go":                1,
-		"internal/session/step.go":                 8,
+		"internal/session/step.go":                 5,
 		"internal/session/strips.go":               15,
 		"internal/sim/numeric/numeric.go":          1,
 		"internal/sim/numeric/trig.go":             1,

@@ -84,8 +84,10 @@ type Client struct {
 	models   map[string]*unitModel
 	texIndex map[string]texRef
 	// Model presentation state is owned by this client so independent windows
-	// cannot share animation phase or orientation caches [03 §1][I6].
+	// cannot share animation phase or orientation caches [03 §1][I6]. The map
+	// is a lookup cache; modelPlayers is the deterministic phase-7 registry.
 	modelPresentation map[modelTextureKey]*modelTextureCursor
+	modelPlayers      []phase7Stepper
 	modelOrientation  map[uint64]*presentationrender.OrientationCache
 	// DET-04: shake state is authoritative phase 10. The owning battle
 	// presentation updates its camera from the committed offset; this renderer
@@ -164,6 +166,7 @@ func New(opts Options) (*Client, error) {
 		models:            map[string]*unitModel{},
 		texIndex:          map[string]texRef{},
 		modelPresentation: map[modelTextureKey]*modelTextureCursor{},
+		modelPlayers:      nil,
 		modelOrientation:  map[uint64]*presentationrender.OrientationCache{},
 		featureGAFs:       map[string]*formats.GAF{},
 		featureFrames:     map[string]*formats.GAFFrame{},
@@ -229,11 +232,34 @@ func (c *Client) RequestExit() { c.exitRequested = true }
 // ExitRequested reports whether RequestExit has been called.
 func (c *Client) ExitRequested() bool { return c.exitRequested }
 
+// StepCursorScaledDelta advances the software cursor from the positive
+// scaled wall-clock delta used by the presentation adapter. Cursor playback
+// is not tied to runnable simulation ticks; the underlying cursor consumes a
+// signed 16-bit delta, so large elapsed intervals are split without changing
+// the resulting countdown [03 §4.4][R-CRD-005 §1].
+func (c *Client) StepCursorScaledDelta(delta int32) {
+	if c == nil || c.cursors == nil || delta <= 0 {
+		return
+	}
+	for delta > 0 {
+		step := delta
+		if step > 32767 {
+			step = 32767
+		}
+		c.cursors.play.StepDelta(int16(-step))
+		delta -= step
+		if !c.cursors.play.IsActive() {
+			return
+		}
+	}
+}
+
 // SetModelFS installs the VFS for lazy 3DO/texture loads and builds the
 // texture-name index. Presentation state only.
 func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.modelFS = fs
 	c.modelPresentation = map[modelTextureKey]*modelTextureCursor{}
+	c.modelPlayers = nil
 	c.modelOrientation = map[uint64]*presentationrender.OrientationCache{}
 	c.models = map[string]*unitModel{}
 	c.texIndex = map[string]texRef{}

@@ -8,7 +8,7 @@ import (
 
 func TestTexturePlayersAreIndependentAndTickBound(t *testing.T) {
 	seq := content.AssetSequence{
-		Frames: []content.AssetID{"a", "b"}, Durations: []uint32{2, 1},
+		Frames: []content.AssetID{"a", "b"}, Durations: []uint32{2, 1}, Loop: true,
 	}
 	a := NewTexturePlayer(seq)
 	b := NewTexturePlayer(seq)
@@ -29,6 +29,43 @@ func TestTexturePlayersAreIndependentAndTickBound(t *testing.T) {
 	}
 	if got, _ := b.Frame(); got != "a" {
 		t.Fatalf("independent instance frame %q", got)
+	}
+}
+
+func TestTexturePlayerLoopAndHold(t *testing.T) {
+	loop := NewTexturePlayer(content.AssetSequence{
+		Frames: []content.AssetID{"a", "b"}, Durations: []uint32{1, 1}, Loop: true,
+	})
+	loop.Step()
+	loop.Step()
+	if got, ok := loop.Frame(); !ok || got != "a" {
+		t.Fatalf("loop wrapped to %q, active=%v", got, ok)
+	}
+
+	hold := NewTexturePlayer(content.AssetSequence{
+		Frames: []content.AssetID{"a", "b"}, Durations: []uint32{1, 1}, Loop: false,
+	})
+	hold.Step()
+	if got, ok := hold.Frame(); !ok || got != "b" {
+		t.Fatalf("non-loop selected final frame %q, active=%v", got, ok)
+	}
+	hold.Step()
+	if _, ok := hold.Frame(); ok {
+		t.Fatal("non-loop player remained active after final frame")
+	}
+}
+
+func TestTexturePlayerStrictCountdown(t *testing.T) {
+	p := NewTexturePlayer(content.AssetSequence{
+		Frames: []content.AssetID{"a", "b"}, Durations: []uint32{2, 3}, Loop: true,
+	})
+	p.Step()
+	if got, _ := p.Frame(); got != "a" {
+		t.Fatalf("countdown 2 advanced early to %q", got)
+	}
+	p.Step()
+	if got, _ := p.Frame(); got != "b" {
+		t.Fatalf("countdown 1 did not advance to %q", got)
 	}
 }
 func TestShadeRowForNormalUsesUnnormalizedAverage(t *testing.T) {

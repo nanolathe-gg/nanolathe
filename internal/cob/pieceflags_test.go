@@ -109,17 +109,14 @@ func TestPieceFlagOpcodePolarity(t *testing.T) {
 			// Prepare: piece 0 to isolate bit
 			var prepare uint8
 			if tc.set {
-				prepare = 0x06 &^ tc.mask // clear target bit, keep others
-				// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+				// Defaults are drawable+cached+shaded (0x07) only for a
+				// geometry piece; a bare attachment piece defaults 0x06
+				// (draw flag clear). To isolate the bit under test, start
+				// from the bare-piece default 0x06 and clear the target
+				// bit, so the set-opcode must be the only writer.
 				prepare = 0x06 &^ tc.mask
-				if tc.mask == 0x01 {
-					prepare = 0x06 // show expects 0x06 -> 0x07
-				}
 			} else {
-				prepare = 0x07 | tc.mask // ensure bit set before clear; 0x07 has all bits
-				if tc.mask == 0x01 {
-					prepare = 0x07
-				}
+				prepare = 0x07 // geometry default has all three bits set
 			}
 			// Set piece 0 to prepare, piece1 to stable sentinel
 			vm.pieceFlags[0] = prepare

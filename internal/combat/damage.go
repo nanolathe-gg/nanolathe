@@ -7,6 +7,9 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // Packet is the nine-byte damage packet [06 §9.1].
@@ -357,4 +360,148 @@ func HealthPercentWithFault(health, maxHealth int32) int32 {
 		v = 100
 	}
 	return int32(v)
+}
+
+// Water damage per [04 §9.2] established block ("canhover is bit 12" through
+// veteran reduction) and [06 §9.1][06 §12.1] cause 11.
+//
+// The retail contract [04 §9.2]:
+// - evaluated per unit before movement, once per tick when globalTick%30==0,
+// - only when owning player's class is 1 or 2 and both mission fields
+//   waterdoesdamage and waterdamage are nonzero,
+// - and only when unit's signed integer height is at or below sea-level byte
+//   and canhover is clear (bit 12). floater/amphibious are NOT additional immunity.
+// - qualifying units receive amount = mission.waterdamage as damage type 0xB
+//   (KindNoReaction, 11) with null attacker through standard damage funnel;
+//   blast falloff with stored distance zero => multiplier 1.0 for non-AOE water
+//   damage, type 0xB emits neither HitByWeapon nor TakeDamage and never enters
+//   feature-class effect block. Lethal 0xB sets normal death-pending.
+// - funnel arithmetic [06 §9.2] C20: definition-scaled armor reduction gated on
+//   bit 1 of victim's instance armor byte (mask 0x02) with strictly-below-30000
+//   amount guard, then veteran tier factor ((25 - tier)*amount*4)/100 with
+//   tier = min(kills/5,5) — veteran victim REDUCED water damage — and each
+//   credited kill increments killer's counter (none for water damage, attacker null) [04 §9.2][06 §12.1].
+//
+// This file owns the arithmetic and eligibility predicates; the sweep
+// TickWaterDamage is the deterministic per-tick applicator (I1).
+
+// IsWaterDamageTick reports whether global tick is a water-damage tick [04 §9.2].
+func IsWaterDamageTick(tick uint32) bool {
+	return tick%30 == 0 // [04 §9.2] once per tick when globalTick % 30 == 0
+}
+
+// IsInWaterForDamage reports whether Y is at or below sea-level byte [04 §9.2].
+// Signed integer height versus sea-level byte. Uses trunc towards zero via Fixed.Int() [01 §8] (I3).
+// TODO(question): signed integer height conversion uses trunc toward zero vs floor unresolved; using trunc via Int() as the __ftol path [01 §8]. Which integer width retail uses (high word of 16.16) matches trunc for positive heights and differs for negative fractions; not observable on stock maps with non-negative sea-level byte.
+func IsInWaterForDamage(y numeric.Fixed, seaLevel uint8) bool {
+	return int32(y.Int()) <= int32(seaLevel) // [04 §9.2] signed integer height at or below sea-level byte
+}
+
+// IsWaterDamageEligible reports per-unit eligibility ignoring global tick and
+// mission gates, per [04 §9.2] canhover exclusion and Y <= seaLevel.
+// Read-only on units/world state (I6).
+func IsWaterDamageEligible(u *units.Unit, terrain *world.Terrain) bool {
+	if u == nil || !u.Alive || u.Dying {
+		return false
+	}
+	if u.Def != nil && u.Def.CanHover {
+		return false // [04 §9.2] canhover is bit 12 excludes from water damage
+	}
+	// floater and amphibious are NOT additional immunity [04 §9.2]
+	if terrain == nil {
+		// TODO(question): sea-level source when terrain unavailable. Placeholder: treat as not in water when terrain nil, so caller must supply terrain for water test. Deterministic, no map range.
+		return false
+	}
+	return IsInWaterForDamage(u.Y, terrain.SeaLevel) // [04 §9.2] signed integer height at or below sea-level byte
+}
+
+// ComputeWaterDamageScaledAmount computes the scaled water-damage amount for
+// victim per [04 §9.2][06 §9.2] C20.
+// It is ComputeScaledAmount with falloff 1.0 (non-AOE multiplier [04 §9.2]),
+// attacker 0 (null), and non-heal path so armor/veteran (defender) reductions apply.
+// isArmored is victim's armor state (instance armor byte mask 0x02 or definition ArmoredState [06 §9.2] step 5); damageModifier is def.DamageModifier 16.16; defenderKills is victim's credited-kill counter.
+func ComputeWaterDamageScaledAmount(baseDamage int32, defenderKills int32, isArmored bool, damageModifier int32) uint16 {
+	return ComputeScaledAmount(baseDamage, float32(1), 0, defenderKills, isArmored, damageModifier, false, false, false) // [04 §9.2] multiplier 1.0 for non-AOE, [06 §9.2] steps 5-6 defender vet reduction
+}
+
+// WaterDamagePacketForTest builds the would-be water-damage packet for inspection per [04 §9.2][06 §9.1].
+// It is kind 0xB (KindNoReaction, 11) with null attacker (0) and the scaled amount from ComputeWaterDamageScaledAmount [04 §9.2][06 §9.1].
+func WaterDamagePacketForTest(victim pool.Handle, baseDamage int32, defenderKills int32, isArmored bool, damageModifier int32) Packet {
+	amt := ComputeWaterDamageScaledAmount(baseDamage, defenderKills, isArmored, damageModifier) // [04 §9.2][06 §9.2]
+	return Packet{
+		Victim:    uint16(victim), // 0=null sentinel not used here [06 §9.1]
+		Attacker:  0,              // null attacker [04 §9.2][06 §12.1] cause 11 attacker null
+		Amount:    amt,            // modulo amount [06 §9.2] step 7
+		Direction: 0,              // no direction for water damage [04 §9.2] (blast distance zero)
+		Kind:      KindNoReaction, // type 0xB [04 §9.2][06 §9.1] == 11 skip-reaction [06 §9.1]
+	}
+}
+
+// TickWaterDamage applies retail water damage for one global tick [04 §9.2][06 §12.1] cause 11.
+// It is the authoritative per-tick water-damage sweep evaluated per unit before movement [04 §9.2].
+// Deterministic iteration: players 0..9 ascending, slots ascending within each player's slice (I1) [01 §4.4][04 §9.2].
+// No map range, no float64 outside I2 allowlist, no time.Now, no per-entity RNG (I1,I2,I4).
+// Returns the number of units damaged this tick.
+// getPlayerClass is an optional accessor for the owning player's class byte [07 §?.?][04 §9.2] 0x00 empty,0x01 human host,0x02 human join,0x03 computer/AI.
+// If nil, the player-class gate is skipped with a TODO placeholder (assume eligible). When provided, only classes 1 or 2 are eligible [04 §9.2].
+// TODO(question): player class accessor not wired to a concrete store; placeholder skips gate when nil for testability. Wire to the authoritative player slot class byte (economy/session store) and remove TODO when the accessor is settled.
+func TickWaterDamage(tick uint32, w *units.World, terrain *world.Terrain, waterDoesDamage, waterDamage int32, getPlayerClass func(owner uint8) uint8) int {
+	if !IsWaterDamageTick(tick) { // [04 §9.2] cadence
+		return 0
+	}
+	if waterDoesDamage == 0 || waterDamage == 0 { // [04 §9.2] both mission fields nonzero
+		return 0
+	}
+	if w == nil {
+		return 0
+	}
+	// Sea-level byte from terrain header [03 §2.2] C9, used via IsInWaterForDamage [04 §9.2].
+	// If terrain nil, no unit can be determined in-water, so no damage (see IsWaterDamageEligible TODO).
+	applied := 0
+	// Deterministic traversal: players 0..9 ascending, slots ascending (I1) [01 §4.4][04 §9.2].
+	// Use VisitActiveSlots which already enforces that order [01 §4.4].
+	w.VisitActiveSlots(func(v units.SlotVisit) {
+		u := v.Unit
+		if u == nil {
+			return
+		}
+		// Player class gate [04 §9.2] — only when owning player's class is 1 or 2.
+		// TODO(question): owning player's class source unresolved; placeholder gates only when accessor supplied. Until wired, nil accessor means assume eligible (no invent, but testable). Replace with authoritative slot-class byte when located.
+		if getPlayerClass != nil {
+			class := getPlayerClass(u.Owner)
+			if class != 1 && class != 2 {
+				return // [04 §9.2] player class 1 or 2 only
+			}
+		}
+		if !IsWaterDamageEligible(u, terrain) { // [04 §9.2] canhover exclusion and Y <= seaLevel
+			return
+		}
+		// Funnel arithmetic per [04 §9.2][06 §9.2] C20 via ComputeScaledAmount with falloff 1.0 [04 §9.2] non-AOE multiplier.
+		isArmored := false
+		damageMod := int32(65536) // 1.0 [02 "Unit record"] default
+		if u.Def != nil {
+			// TODO(question): armor gate is bit 1 of victim's instance armor byte (mask 0x02) [04 §9.2][06 §9.2] step5. Which instance field that is remains open (definition ArmoredState vs unit Armored port 20). Using definition ArmoredState as placeholder to keep damage path single and consistent with projectile path which also reads Def.ArmoredState. Instance byte remains TODO.
+			isArmored = u.Def.ArmoredState
+			damageMod = u.Def.DamageModifier
+			if u.Armored {
+				isArmored = true // also consider instance port 20 [04 §4.4] if set
+			}
+		} else if u.Armored {
+			isArmored = true
+		}
+		scaled := ComputeWaterDamageScaledAmount(waterDamage, u.Kills, isArmored, damageMod) // [04 §9.2][06 §9.2] veteran victim REDUCED
+		// Apply through standard damage funnel without callbacks [04 §9.2] type 0xB skips HitByWeapon/TakeDamage and feature effects.
+		// Use 16-bit modular subtraction per [06 §9.1] ApplyDamage, then death latch via world.Destroy for lethal [04 §9.2][06 §12.1] cause 11 normal death-pending.
+		// No packet construction needed for health path, but kind is 11 for citation.
+		_ = KindNoReaction                         // 0xB [04 §9.2][06 §9.1]
+		newHealth := ApplyDamage(u.Health, scaled) // [06 §9.1] exact 16-bit modular subtraction
+		u.Health = newHealth
+		if newHealth <= 0 {
+			// Lethal 0xB sets normal death-pending state [04 §9.2][06 §12.1] — same latch as ordinary, no callbacks.
+			// Use the generic DeathKilled cause for units layer (cause 11 maps to that latch in combat death.go CauseWaterDamage).
+			w.Destroy(u.Handle, units.DeathKilled) // [04 §2.4] marks Dying, firing OnDeath exactly once; slot freed at FinalizeDeath
+		}
+		applied++
+	})
+	return applied
 }

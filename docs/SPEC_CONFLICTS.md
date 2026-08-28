@@ -442,6 +442,15 @@ they are replaced by dynamic storage per `P1-I09`.
 
 ## SC18 — Allocator zero-fill byte count and COB malformed-save policy are narrow open items [P1-I09]
 
+**Correction audit (current boundary):** An earlier revision of this section
+described a Nanolathe-specific `StateV1` save codec and directed callers to
+keep its fatal-on-truncation policy. That codec has been removed. The active
+save boundary is retail HAPIBANK account parsing: campaign continuation exposes
+Summary metadata, while in-battle restoration returns an explicit unsupported
+result `[08 "Save-file organization"]` `[GAP T9]`. The StateV1 wording below is
+retained only as historical audit evidence and is not an implementation
+instruction; do not reintroduce that codec.
+
 **Spec** `[01 §6.1]`/`[GAP T13]` note the allocator's backing implementation,
 arena boundaries and zero-fill policy remain `TODO(T23)`; `[04 §4.1]`/`[GAP
 T15]` note COB loader allocation and the exact failure behavior of allocation
@@ -450,26 +459,25 @@ allocator where a clean implementation should terminate the affected script
 deterministically. `[08 "Save-file organization"]` documents the
 non-transactional partial-load policy.
 
-**Observed:** `internal/orders/pump.go`, `internal/combat/pool.go`,
-`internal/units/units.go` and `internal/save/bulk.go` zero-initialize Go
-structs (Go zero value). Retail's exact `memset` byte count for the 86-byte
-order node, 300×107-byte projectile records, 280-byte unit records etc. is
-not traced, but observable effect is zeroed. For COB saves,
-`internal/save/boxes.go` `UnmarshalStateV1` returns an error on truncated
-COB blobs (fatal for that StateV1), while retail bulk COB boxes
-(`0x528`+`stack*4`+`pieces*0x6C`) would be handled by the bulk loader's
-partial-load skips per `[08]` (missing account created empty, each
-subsystem's defaults govern). The two policies are therefore different
-abstractions: Nanolathe StateV1 is versioned and fatal on truncation,
-retail bulk is partial-load skip.
+**Historical observation (superseded):** `internal/orders/pump.go`,
+`internal/combat/pool.go`, `internal/units/units.go` and
+`internal/save/bulk.go` zero-initialize Go structs (Go zero value). Retail's
+exact `memset` byte count for the 86-byte order node, 300×107-byte projectile
+records, 280-byte unit records etc. is not traced, but observable effect is
+zeroed. An earlier implementation's `internal/save/boxes.go`
+`UnmarshalStateV1` rejected truncated COB blobs, while retail bulk COB boxes
+(`0x528`+`stack*4`+`pieces*0x6C`) were handled by the bulk loader's partial-load
+skips per `[08]` (missing account created empty, each subsystem's defaults
+govern). This records the evidence that led to the removed StateV1 abstraction;
+the current save package has no such codec.
 
-**Decision:** keep Go zero-initialization with `TODO(T23)` at the allocation
-site (`internal/orders/pump.go` newNode, `internal/combat/pool.go`
-Reserve, `internal/units/units.go` Create) citing the open byte count.
-For COB saves, keep StateV1 fatal-on-truncation with
-`TODO(question)` naming the fatal-versus-skip question, and keep bulk save
-partial-load skip with diagnostic as documented in `internal/save/bulk.go`.
-No stock corpus hits either guard: `formats/coverage_test.go`
+**Decision (current):** keep Go zero-initialization with `TODO(T23)` at the
+allocation site (`internal/orders/pump.go` newNode, `internal/combat/pool.go`
+Reserve, `internal/units/units.go` Create) citing the open byte count. Save
+callers use the retail account parser and the explicit unsupported in-battle
+restoration result; no StateV1 fatal-on-truncation policy or alternate
+continuation format remains. No stock corpus hits either historical guard:
+`formats/coverage_test.go`
 `TestFormatCoverage` parses all stock files without hitting TDF/Gaf/Pcx/Wav
 fault guards, and `TestCorpusQueueCaps_Retail` shows no queue guard hit
 after the fix. Revisit only with executable evidence that retail's exact

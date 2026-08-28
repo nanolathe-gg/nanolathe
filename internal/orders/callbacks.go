@@ -56,6 +56,8 @@ func arrangeDeferred(bridge *cob.CallbackBridge, name string, args []int32) {
 // COB function TargetCleared arranged with (0, 0, 1, slotIndex, 0, 0, 0).
 // The event is script-only: no network event accompanies it, and the arrange
 // is a no-op when the unit's script defines no TargetCleared function.
+// The starter's parameter map writes the pushed cells into window words 0..3
+// in order, so the slot index is the FIRST script argument [R-UNIT-06 §4].
 func clearWeaponBuildTargets(u *units.Unit) {
 	if u == nil {
 		return
@@ -74,13 +76,16 @@ func clearWeaponBuildTargets(u *units.Unit) {
 			continue // target words already empty: reset and signal are skipped
 		}
 		s.Target = units.Target{Kind: units.TargetNone}
-		arrangeDeferred(bridge, "TargetCleared", []int32{0, 0, 1, int32(slot), 0, 0, 0})
+		arrangeDeferred(bridge, "TargetCleared", []int32{int32(slot)})
 	}
 }
 
 // emitStopBuilding is the cleanup-side StopBuilding emission [R-ORDER-02 §2]:
-// resolve StopBuilding by name in the owner's script, arrange it with seven
-// zero arguments, and clear the record's pending flag. It runs on EVERY
+// resolve StopBuilding by name in the owner's script and arrange it with an
+// empty argument vector (retail pushes arity 0 with four zero cells; the
+// window words above the logical top then read zero in retail versus stale
+// here — unobservable unless a stock body reads above-top arguments, which
+// the [R-UNIT-06 §4] census pattern argues against), and clear the record's pending flag. It runs on EVERY
 // removal path and is NOT tombstone-gated; it always precedes the
 // tombstone-gated TargetCleared step. A code-9 last-record re-arm keeps the
 // record, so cleanup never runs for it and a running StartBuilding keeps
@@ -91,7 +96,7 @@ func emitStopBuilding(u *units.Unit, n *Node) {
 	if n == nil || n.Flags&FlagStopBuildingPending == 0 {
 		return
 	}
-	arrangeDeferred(callbackBridgeFor(u), "StopBuilding", []int32{0, 0, 0, 0, 0, 0, 0})
+	arrangeDeferred(callbackBridgeFor(u), "StopBuilding", nil)
 	n.Flags &^= FlagStopBuildingPending
 }
 
@@ -100,21 +105,23 @@ func emitStopBuilding(u *units.Unit, n *Node) {
 // nanolathe/assist handlers: MobileBuild, VTOL_MobileBuild, HelpBuild,
 // VTOL_HelpBuild, Capture (two sites), Reclaim, Resurrect, and RepairUnit.
 // It resolves the function named StartBuilding in the owning unit's COB
-// script, arranges it with the seven arguments (0, 0, 1, value16, 0, 0, 0),
-// and sets the pending flag on the issuing record so cleanup emits the
-// StopBuilding counterpart on every removal path.
+// script and arranges it at arity 1 with the record-form payload as the
+// FIRST script argument, window words 1..3 zero-filled [R-UNIT-06 §4]:
+// retail pushes the low 16 bits of the issuing record's identity there, and
+// stock scripts (49 of 133 StartBuilding bodies) consume it as a
+// build-heading angle in the 65536 domain.
 //
-// The fourth argument carries the low 16 bits of the issuing record's
-// identity in retail. Retail order records are heap objects, so that value is
-// an allocation artifact; no retail script consumer of it is traced, and a
-// Go record has no stable numeric identity to read it from. Deterministic
-// simulation state forbids deriving it from a pointer [INVARIANTS I1], so the
-// argument is passed as zero.
-// TODO(T25): settle the fourth argument's consumer-side identity.
+// Retail's value is the low half of a heap order-record pointer — an
+// allocation artifact with no semantic meaning beyond arbitrary-but-stable
+// per-record variety [R-UNIT-06 §4]. Deriving it from a pointer is forbidden
+// [INVARIANTS I1], so Nanolathe substitutes the record's CreationTick &
+// 0xffff: deterministic, stable per record, and filling the same
+// arbitrary-but-stable angle role. This is a recorded divergence
+// (docs/PLAN_06_UNITS_ORDERS_COB.md, Divergences).
 func EmitStartBuilding(u *units.Unit, n *Node) {
 	if u == nil || n == nil {
 		return
 	}
-	arrangeDeferred(callbackBridgeFor(u), "StartBuilding", []int32{0, 0, 1, 0, 0, 0, 0})
+	arrangeDeferred(callbackBridgeFor(u), "StartBuilding", []int32{int32(n.CreationTick & 0xffff)})
 	n.Flags |= FlagStopBuildingPending
 }

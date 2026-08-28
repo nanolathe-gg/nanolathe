@@ -62,6 +62,14 @@ type publicationState struct {
 	effects *render.EffectService
 }
 
+// Phase7Service is the narrow presentation-owned callback at the phase-7
+// boundary. The session invokes it once per runnable sub-tick; the callback
+// advances only model-texture metadata and never returns authoritative state
+// [01 §4.4][R-CRD-005 §1][I6].
+type Phase7Service interface {
+	StepPhase7()
+}
+
 func newPublicationState(events *frame.EventBuffer) *publicationState {
 	if events == nil {
 		events = frame.NewEventBuffer(frame.Limits{})
@@ -112,6 +120,13 @@ type Session struct {
 
 	publication *publicationState // staged events and admitted effects at the committed-frame boundary [01 §4.4][03 §1]
 	postLoop    *postLoopState    // once-per-pump executor tail; owned by the session goroutine [01 §4.4]
+	phase7      Phase7Service     // presentation-owned model-texture cadence [R-CRD-005 §1][I6]
+
+	// Radar blink is presentation-owned state whose mutation is scheduled by
+	// phase 12. It is deliberately absent from snapshots and save state
+	// [R-CORE-03][CRD-008].
+	radarBlinkCountdown int16
+	radarBlinkPhase     uint16
 
 	// strips is the ten effect-strip object family swept at phase 11. It is
 	// allocated at battle entry (createAndBindServices) and destroyed with
@@ -239,6 +254,37 @@ type Session struct {
 	// input boundary a total order independent of producer timing; commands
 	// with one due tick are applied in this order [01 §4.4].
 	nextHumanSequence uint64
+}
+
+// resetRadarBlink initializes the transient radar cadence at battle entry.
+// The phase is kept as a bit so later presentation publication can consume a
+// stable semantic value without exposing the countdown [R-CORE-03][CRD-008].
+func (s *Session) resetRadarBlink() {
+	if s == nil {
+		return
+	}
+	s.radarBlinkCountdown = 7
+	s.radarBlinkPhase = 0
+}
+
+// RadarBlinkPhase returns the transient phase-12 bit for presentation
+// publication. It is read-only and does not expose the countdown
+// [R-CORE-03][CRD-008].
+func (s *Session) RadarBlinkPhase() uint8 {
+	if s == nil {
+		return 0
+	}
+	return uint8(s.radarBlinkPhase & 1)
+}
+
+// SetPhase7Service installs the presentation-owned phase-7 callback. The
+// composition root may replace it when the active client changes; nil clears
+// the callback. Session simulation state never reads or stores presentation
+// pixels [R-CRD-005 §1][I6].
+func (s *Session) SetPhase7Service(service Phase7Service) {
+	if s != nil {
+		s.phase7 = service
+	}
 }
 
 // PhaseDrawDelta records per-phase RNG consumption for the phase trace test [01 §4.4][01 §7.1][01 §7.2].

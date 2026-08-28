@@ -75,10 +75,25 @@ type modelTextureCursor struct {
 	frames []*formats.GAFFrame
 }
 
+// phase7Stepper keeps the registry traversal independent of a concrete
+// cursor. It is private because the session seam exposes only Client; the
+// interface also makes the count-snapshot mutation rule directly testable.
+type phase7Stepper interface {
+	stepPhase7()
+}
+
+func (p *modelTextureCursor) stepPhase7() {
+	if p != nil && p.player != nil {
+		p.player.Step()
+	}
+}
+
 type modelTextureKey struct {
-	kind uint8
-	id   uint64
-	tex  string
+	kind      uint8
+	id        uint64
+	tex       string
+	piece     int
+	primitive int
 }
 
 const (
@@ -139,11 +154,25 @@ func (c *Client) modelCursor(key modelTextureKey, ref texRef) *modelTextureCurso
 		frames: frames,
 	}
 	c.modelPresentation[key] = p
+	// Only unit model instances belong to phase 7. Feature and projectile
+	// sequences are advanced by their owning presentation paths
+	// [R-CRD-005 §1]. Registration is append-only here; retail teardown
+	// ownership is unknown, so do not invent removal or compaction.
+	if key.kind == modelCursorUnit {
+		c.modelPlayers = append(c.modelPlayers, p)
+	}
 	return p
 }
 
 func (c *Client) modelAnimatedFrame(ref texRef, kind uint8, id uint64) *formats.GAFFrame {
-	p := c.modelCursor(modelTextureKey{kind: kind, id: id, tex: ref.key}, ref)
+	return c.modelAnimatedFrameAt(ref, kind, id, 0, 0)
+}
+
+// modelAnimatedFrameAt resolves the cursor for one concrete model primitive.
+// A repeated texture on two primitives still represents two cloned playback
+// players under the retail model-instance contract [R-CRD-005 §1].
+func (c *Client) modelAnimatedFrameAt(ref texRef, kind uint8, id uint64, piece, primitive int) *formats.GAFFrame {
+	p := c.modelCursor(modelTextureKey{kind: kind, id: id, tex: ref.key, piece: piece, primitive: primitive}, ref)
 	if p == nil {
 		return ref.frame
 	}
@@ -208,19 +237,19 @@ func (k texKind) String() string {
 	return "static"
 }
 
-// TickTextureAnimators advances the texture-animation clock by n simulation
-// frames. Presentation-only state (I6): animated model textures tick with the
-// simulation frame rate, driven here from the session owner. Divergence
-// (documented): retail runs one player per 3DO instance so instances drift
-// apart; Nanolathe phases all instances from one clock until snapshots carry
-// spawn ticks.
-func (c *Client) TickTextureAnimators(n int) {
-	if c == nil || n <= 0 {
+// StepPhase7 advances the registered unit model-texture players once at the
+// phase-7 boundary. The entry count is captured before traversal and entries
+// are visited from newest to oldest; an append during traversal waits for the
+// next invocation [R-CRD-005 §1]. Presentation metadata only is touched and
+// no RNG stream is consulted [I4][I6].
+func (c *Client) StepPhase7() {
+	if c == nil {
 		return
 	}
-	for i := 0; i < n; i++ {
-		for _, p := range c.modelPresentation {
-			p.player.Advance(true)
+	n := len(c.modelPlayers)
+	for i := n - 1; i >= 0; i-- {
+		if p := c.modelPlayers[i]; p != nil {
+			p.stepPhase7()
 		}
 	}
 }
@@ -435,7 +464,7 @@ func (c *Client) collectDrawTris(draw *presentationrender.UnitDraw, owner uint8,
 						// sequence rather than sharing cursor zero.
 						continue
 					}
-					texFrame = c.modelAnimatedFrame(ref, kind, id)
+					texFrame = c.modelAnimatedFrameAt(ref, kind, id, pi, pri)
 				case texTeam:
 					if ref.entry == nil {
 						continue

@@ -543,6 +543,10 @@ func createAndBindServices(s *Session) error {
 	// publication boundary [01 §4.4][03 §1]. The helper is idempotent so an
 	// existing staged event window or effect pool survives re-binding.
 	s.ensurePublicationState()
+	// Radar surface cadence is transient and rebuilt at every battle entry,
+	// including save/load re-entry; it is not restored from save data
+	// [R-CORE-03][CRD-008].
+	s.resetRadarBlink()
 	// The ten effect strips are allocated at battle entry; a re-entry (retry)
 	// replaces the table, destroying every object of the previous battle
 	// [R-CORE-01 §4.4.1]. Producers may append from here on.

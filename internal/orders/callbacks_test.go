@@ -6,7 +6,7 @@ package orders
 // code-9 last-record re-arm; the TargetCleared walk enforces the slot guard
 // (control byte bit 1 set, bit 4 clear — bit 4 then set) plus the
 // not-already-empty target test and arranges the script event with the
-// seven arguments (0, 0, 1, slotIndex, 0, 0, 0), script-only with no network
+// first argument cell (slotIndex, fillers 0), script-only with no network
 // event; the cancel-notification mask 2 is delivered through the record's own
 // handler when its dynamic gate still holds bit 1 (value 2) at removal; the
 // code-9 completion flag stays write-only.
@@ -26,11 +26,16 @@ import (
 func cbProgram(names ...string) *cob.Program {
 	scripts := make(map[string]int, len(names))
 	byID := make([]int, 0, len(names))
-	for i, name := range names {
-		scripts[name] = i
-		byID = append(byID, i)
+	// Every arranged script shares one keep-alive body: push 0, sleep 0. The
+	// sleep-0 one-tick minimum leaves the thread sleeping across the test's
+	// inspection window, so zero-arity arrangements (StopBuilding) stay
+	// observable in the thread table after a pump-driven drain.
+	code := []uint32{0, 0x10021001, 0, 0x10013000, 0}
+	for _, name := range names {
+		scripts[name] = 1
+		byID = append(byID, 1)
 	}
-	return &cob.Program{Code: make([]uint32, len(names)+1), Scripts: scripts, Pieces: []string{"base"}, ScriptsByID: byID}
+	return &cob.Program{Code: code, Scripts: scripts, Pieces: []string{"base"}, ScriptsByID: byID}
 }
 
 // cbUnit attaches a synthetic production binding (VM + callback bridge) to a
@@ -45,12 +50,12 @@ func cbUnit(prog *cob.Program) (*units.Unit, *cob.VM) {
 
 // startedArgs collects the arranged argument lists of all threads started on
 // the VM, in thread (allocation) order. Each entry is the thread's argument
-// window Stack[0:SP].
+// window Stack[0:SP] — empty for arity-0 arrangements like StopBuilding.
 func startedArgs(vm *cob.VM) [][]int32 {
 	out := make([][]int32, 0, 8)
 	for i := range vm.Threads {
 		t := &vm.Threads[i]
-		if t.Status == cob.ThreadIdle || t.SP <= 0 {
+		if t.Status == cob.ThreadIdle {
 			continue
 		}
 		args := make([]int32, t.SP)
@@ -91,7 +96,7 @@ func TestTargetClearedWalkGuardBitsAndArgs(t *testing.T) {
 	if len(args) != 2 {
 		t.Fatalf("TargetCleared arrangements %d, want 2 (slots 0 and 1 only)", len(args))
 	}
-	want := [][]int32{{0, 0, 1, 0, 0, 0, 0}, {0, 0, 1, 1, 0, 0, 0}}
+	want := [][]int32{{0}, {1}}
 	for i, w := range want {
 		if !argsEqual(args[i], w) {
 			t.Fatalf("arrangement %d args %v, want %v", i, args[i], w)
@@ -140,7 +145,7 @@ func TestTargetClearedWalkAlreadyEmptyAndMissingScript(t *testing.T) {
 func stopBuildingCount(args [][]int32) int {
 	n := 0
 	for _, a := range args {
-		if len(a) == 7 && a[0] == 0 && a[1] == 0 && a[2] == 0 && a[3] == 0 {
+		if len(a) == 0 { // arity 0 [R-UNIT-06 §4]
 			n++
 		}
 	}
@@ -150,7 +155,7 @@ func stopBuildingCount(args [][]int32) int {
 func targetClearedCount(args [][]int32) int {
 	n := 0
 	for _, a := range args {
-		if len(a) == 7 && a[2] == 1 {
+		if len(a) == 1 { // slot index as the first argument [R-UNIT-06 §4]
 			n++
 		}
 	}
@@ -204,7 +209,7 @@ func TestStopBuildingEmittedOnPrimaryPumpRemovals(t *testing.T) {
 		if stopBuildingCount(args) != 1 || targetClearedCount(args) != 1 {
 			t.Fatalf("arrangements %v: want one StopBuilding and one TargetCleared", args)
 		}
-		if !argsEqual(args[0], []int32{0, 0, 0, 0, 0, 0, 0}) || !argsEqual(args[1], []int32{0, 0, 1, 0, 0, 0, 0}) {
+		if !argsEqual(args[0], []int32{}) || !argsEqual(args[1], []int32{0}) {
 			t.Fatalf("emission order %v, want StopBuilding before TargetCleared", args)
 		}
 		if node.Flags&FlagStopBuildingPending != 0 {
@@ -354,13 +359,13 @@ func TestStopBuildingEmittedOnSecondaryAndCancelRemovals(t *testing.T) {
 }
 
 func TestEmitStartBuildingSetsPendingFlagAndArgs(t *testing.T) {
-	t.Run("arranges (0,0,1,value16,0,0,0) and sets the record flag", func(t *testing.T) {
+	t.Run("arranges (creationTick&0xffff) as the first argument and sets the record flag", func(t *testing.T) {
 		u, vm := cbUnit(cbProgram("StartBuilding"))
-		n := &Node{ID: Lookup("MobileBuild"), Owner: u.Handle, Deadline: -1}
+		n := &Node{ID: Lookup("MobileBuild"), Owner: u.Handle, Deadline: -1, CreationTick: 0x12345678}
 		EmitStartBuilding(u, n)
 		args := startedArgs(vm)
-		if len(args) != 1 || !argsEqual(args[0], []int32{0, 0, 1, 0, 0, 0, 0}) {
-			t.Fatalf("StartBuilding arrange %v, want [0 0 1 0 0 0 0]", args)
+		if len(args) != 1 || !argsEqual(args[0], []int32{0x5678}) {
+			t.Fatalf("StartBuilding arrange %v, want [0x5678]", args)
 		}
 		if n.Flags&FlagStopBuildingPending == 0 {
 			t.Fatalf("emitter must set the record's pending flag")

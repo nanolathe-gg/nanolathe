@@ -103,7 +103,8 @@ Which stream: gameplay normally uses the simulation stream; meteor geometry
 wind's briefing strength/direction plus next-change interval `[01 §7.3]` use the
 CRT stream. Later wind strength and 16-bit heading use the simulation stream.
 
-**Check.** `rng.Global.Draws()` is stable across two identical headless runs.
+**Check.** Identical seeded session setups have stable simulation and CRT draw
+counts; the runtime exposes no separate headless execution path.
 
 ## I5 — Pools, not handles
 
@@ -132,8 +133,9 @@ presentation `[06 §5.2]`.
 **Rule.** Sim never reads wall-clock time, input state, camera, or renderer
 state. Presentation never writes sim state. The only channel is the committed
 frame, published once after every completed sub-tick and sampled at the
-current committed tick by the renderer. There is no previous-frame
-interpolation or render `alpha`.
+current committed tick by the renderer. The active runtime has one Ebitengine
+window path; there is no alternate headless entry, previous-frame
+interpolation, or render `alpha`.
 
 **Why.** The previous wording incorrectly documented interpolation as a
 deliberate divergence. Retail's draw path samples the accumulators exactly as
@@ -142,11 +144,11 @@ committed at the current tick; no interpolation between updates exists
 simulation continues to publish only after the complete phase sequence
 `[01 §4.4]`.
 
-**Check.** `grep -rn "time.Now\|time.Since" internal/{clock,kernel,units,orders,cob,movement,path,economy,construction,features,combat,visibility,ai,mission,triggers}` returns nothing. `internal/client` imports sim packages; no sim package imports `internal/client`. The production frame path has no `Lerp`, `alpha`, or previous-frame read.
+**Check.** `grep -rn "time.Now\|time.Since" internal/{clock,units,orders,cob,movement,path,economy,construction,features,combat,visibility,ai,mission,triggers}` returns nothing. `internal/client` imports sim packages; no sim package imports `internal/client`. The production frame path has no `Lerp`, `alpha`, or previous-frame read.
 
 ## I7 — Tick phase order
 
-**Rule.** The kernel runs the twelve phases of `[01 §4.4]` in order, incrementing
+**Rule.** The session runs the twelve phases of `[01 §4.4]` in order, incrementing
 the global tick before phase 1 of each sub-tick. Subsystems register into a
 named phase; nothing runs outside one.
 
@@ -230,10 +232,12 @@ type Unit struct {
 
 The exceptions — where byte layout *is* the contract, because bytes cross a
 boundary — are: file formats in `formats/`, the 13-byte plot cell (`[03 §2.2]`),
-the 28-byte game-time save box, `HAPIBANK` headers and account records, the
-versioned Nanolathe `StateV1` save codec, the 9-byte damage packet's wire form
-if it is ever serialized, and route save
-records. Everything else is a Go struct.
+the 28-byte game-time save box, HAPIBANK headers and account records, the
+9-byte damage packet's wire form if it is ever serialized, and route save
+records. The active save boundary is retail account parsing: campaign
+continuation exposes account metadata, while in-battle restoration is an
+explicit unsupported result. There is no alternate Nanolathe save codec.
+Everything else is a Go struct.
 
 **Why.** Pool capacities (300 projectiles, 8 COB threads, 86-byte order nodes)
 are behavioral limits and must be honored exactly; the byte *sizes* are how the

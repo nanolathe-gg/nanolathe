@@ -35,12 +35,12 @@ func (s *Session) stepAuthoritativePhases(tick uint32) {
 	s.phaseEffects(tick)          // 4  implemented
 	s.phaseOrders(tick)           // 5  implemented (path scheduler, per-player work, visibility stamps [R-CORE-01 §4.4.1])
 	s.phaseFeatureLifecycle(tick) // 6  implemented
-	s.phaseSequences(tick)        // 7  proven no-op for this state (sequence cursors are presentation-owned [03 §1])
+	s.phaseSequences(tick)        // 7  model-texture playback metadata [R-CRD-005 §1]
 	s.phaseWind(tick)             // 8  implemented — complete scheduled redraw [01 §7.3] DET-03
 	s.phaseMeteorShower(tick)     // 9  implemented — meteor shower [R-CORE-01 §4.4.1]
 	s.phaseCameraShake(tick)      // 10 implemented — shake driver [R-CORE-01 §4.4.1] DET-04
 	s.phaseObjectSweeps(tick)     // 11 implemented — ten effect-strip sweeps [R-CORE-01 §4.4.1][R-STRIP-01]
-	s.phaseCadenceFlip(tick)      // 12 research-blocked TODO(question) — flip mechanism unknown
+	s.phaseCadenceFlip(tick)      // 12 radar blink cadence [R-CORE-03][CRD-008]
 
 	// The registry ends at phase 12. Per-sub-tick work follows in
 	// stepOneSubTick so the phase graph cannot accidentally absorb outer work.
@@ -104,14 +104,14 @@ func (s *Session) phaseFeatureLifecycle(tick uint32) {
 	s.recordPhase("phase6-feature", tick)
 }
 
-// phaseSequences is phase 7 [01 §4.4] — sequence and effect-strip advancement:
-// the global animation-sequence cursor list (frame counter, remaining
-// duration, loop flag per cursor; each cursor advances with the same step used
-// per-effect in phase 4); it is not a line-of-sight or occupancy scan. Proven
-// no-op for this state: nanolathe's sequence cursors advance in the
-// presentation layer [03 §1], so no sim state advances here. That
-// presentation-owned note stands.
+// phaseSequences is phase 7 [01 §4.4]. The session owns only this narrow
+// cadence seam; the client owns the registered model-texture cursors and
+// advances their presentation metadata. Feature, projectile, effect, and UI
+// cursor families use their own established paths [R-CRD-005 §1][I6].
 func (s *Session) phaseSequences(tick uint32) {
+	if s.phase7 != nil {
+		s.phase7.StepPhase7()
+	}
 	s.recordPhase("phase7-sequences", tick)
 }
 
@@ -169,14 +169,18 @@ func (s *Session) phaseObjectSweeps(tick uint32) {
 	s.recordPhase("phase11-objects", tick)
 }
 
-// phaseCadenceFlip is phase 12 [01 §4.4] — an every-eight-sub-tick cadence
-// flip. Research-blocked: the exact flip mechanism (which cadence gate it
-// drives and how the counter wraps) is not established; no consumer is wired
-// in nanolathe. This is an explicit research-blocked registration point — the
-// flip is NOT invented here.
-// TODO(question): what does the every-eight-sub-tick cadence gate drive, and
-// does the counter reset or wrap? A traced flip site would settle it.
+// phaseCadenceFlip is phase 12 [01 §4.4]. The countdown is initialized at
+// battle entry and is intentionally independent of the global tick label.
+// A positive countdown decrements; zero reloads to seven and toggles only the
+// phase bit. This state is transient presentation cadence and consumes no RNG
+// [R-CORE-03][CRD-008].
 func (s *Session) phaseCadenceFlip(tick uint32) {
+	if s.radarBlinkCountdown > 0 {
+		s.radarBlinkCountdown--
+	} else {
+		s.radarBlinkCountdown = 7
+		s.radarBlinkPhase ^= 1
+	}
 	s.recordPhase("phase12-cadence", tick)
 }
 

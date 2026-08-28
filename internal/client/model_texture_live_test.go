@@ -1,9 +1,11 @@
 package client
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 )
 
@@ -21,7 +23,7 @@ func TestModelTexturePlayersAreInstanceLocal(t *testing.T) {
 	if got := c.modelAnimatedFrame(ref, 0, 11); got != entry.Frames[0].Frame {
 		t.Fatal("second instance did not start at authored first frame")
 	}
-	c.TickTextureAnimators(1)
+	c.StepPhase7()
 	if got := c.modelAnimatedFrame(ref, 0, 10); got != entry.Frames[1].Frame {
 		t.Fatal("first instance did not advance on simulation tick")
 	}
@@ -54,5 +56,79 @@ func TestTextureResolutionUsesSideBeforeFallback(t *testing.T) {
 	got, ok := resolveTextureRef(side, fallback, "PANEL")
 	if !ok || got.key != "side|panel" {
 		t.Fatalf("side texture did not win: %+v %v", got, ok)
+	}
+}
+
+func TestCursorScaledDeltaIsIndependentOfSimulationTicks(t *testing.T) {
+	entry := &formats.GAFEntry{FrameCount: 2, Frames: []formats.GAFFrameRef{
+		{Value: 5, Frame: &formats.GAFFrame{Pixels: []byte{1}}},
+		{Value: 5, Frame: &formats.GAFFrame{Pixels: []byte{2}}},
+	}}
+	cs := &Cursors{}
+	cs.play.Bind(entry, 0, true)
+	c := &Client{cursors: cs}
+	c.StepCursorScaledDelta(0)
+	if cs.play.Idx != 0 || cs.play.Countdown != 5 {
+		t.Fatalf("zero scaled delta changed cursor: index=%d countdown=%d", cs.play.Idx, cs.play.Countdown)
+	}
+	c.StepCursorScaledDelta(1)
+	if cs.play.Idx != 0 || cs.play.Countdown != 4 {
+		t.Fatalf("one scaled unit: index=%d countdown=%d", cs.play.Idx, cs.play.Countdown)
+	}
+	c.StepCursorScaledDelta(3)
+	if cs.play.Idx != 1 {
+		t.Fatalf("scaled wall-clock delta did not advance cursor: index=%d", cs.play.Idx)
+	}
+}
+
+type phase7RegistrySpy struct {
+	name  string
+	order *[]string
+	add   func()
+}
+
+func (p *phase7RegistrySpy) stepPhase7() {
+	*p.order = append(*p.order, p.name)
+	if p.add != nil {
+		p.add()
+		p.add = nil
+	}
+}
+
+func TestPhase7RegistryUsesDescendingSnapshotOrder(t *testing.T) {
+	var order []string
+	c := &Client{}
+	older := &phase7RegistrySpy{name: "older", order: &order}
+	newer := &phase7RegistrySpy{name: "newer", order: &order}
+	appended := &phase7RegistrySpy{name: "appended", order: &order}
+	newer.add = func() { c.modelPlayers = append(c.modelPlayers, appended) }
+	c.modelPlayers = []phase7Stepper{older, newer}
+
+	c.StepPhase7()
+	if got, want := strings.Join(order, ","), "newer,older"; got != want {
+		t.Fatalf("first phase-7 order = %q, want %q", got, want)
+	}
+	order = nil
+	c.StepPhase7()
+	if got, want := strings.Join(order, ","), "appended,newer,older"; got != want {
+		t.Fatalf("second phase-7 order = %q, want %q", got, want)
+	}
+}
+
+func TestModelTexturePlayersArePerPrimitive(t *testing.T) {
+	c := &Client{}
+	entry := &formats.GAFEntry{Frames: []formats.GAFFrameRef{
+		{Value: 2, Frame: &formats.GAFFrame{Pixels: []byte{1}}},
+		{Value: 2, Frame: &formats.GAFFrame{Pixels: []byte{2}}},
+	}}
+	ref := texRef{kind: texAnimated, key: "textures/default.gaf|animated", entry: entry}
+	first := c.modelCursor(modelTextureKey{kind: modelCursorUnit, id: 7, tex: ref.key, piece: 0, primitive: 0}, ref)
+	second := c.modelCursor(modelTextureKey{kind: modelCursorUnit, id: 7, tex: ref.key, piece: 0, primitive: 1}, ref)
+	if first == second || len(c.modelPlayers) != 2 {
+		t.Fatalf("same texture primitives shared playback: first=%p second=%p players=%d", first, second, len(c.modelPlayers))
+	}
+	first.player.Step()
+	if got, _ := second.player.Frame(); got != content.AssetID(ref.key+"#0") {
+		t.Fatalf("second primitive followed first cursor: %q", got)
 	}
 }

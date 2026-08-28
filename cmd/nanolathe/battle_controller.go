@@ -52,8 +52,10 @@ func (s *monotonicMillisSource) Millis32() uint32 {
 // presentation input state and timing; authoritative mutation remains in the
 // existing battleSession.handleInput and Session.Step calls.
 type BattleController struct {
-	battle *battleSession
-	millis clock.MillisSource
+	battle            *battleSession
+	millis            clock.MillisSource
+	cursorScaled      int32
+	cursorScaledValid bool
 }
 
 // NewBattleController constructs the production controller. An optional
@@ -86,18 +88,27 @@ func (c *BattleController) Step(frame BattleInputFrame, cl *client.Client) {
 	if c.battle.ended || c.battle.sess == nil || c.battle.sess.Clock == nil {
 		return
 	}
-	beforeTick := c.battle.sess.Clock.GlobalTick
+	// The composition root binds, or clears, the presentation-owned phase-7
+	// seam before the next runnable sub-tick. The session invokes it at the
+	// exact boundary, including every sub-tick in a catch-up batch
+	// [01 §4.4][R-CRD-005 §1].
+	c.battle.sess.SetPhase7Service(cl)
 	scaled := int32(0)
 	if c.millis != nil {
 		scaled = clock.ScaledNow(c.millis.Millis32())
 	}
-	c.battle.sess.Step(scaled)
-	// Registered model-texture players advance once for each simulation tick
-	// [03 §4.4].
-	if ran := c.battle.sess.Clock.GlobalTick - beforeTick; ran > 0 && cl != nil {
-		cl.TickTextureAnimators(int(ran))
-		if cursors := cl.Cursors(); cursors != nil {
-			cursors.Step(int(ran))
+	if cl != nil {
+		if c.cursorScaledValid {
+			delta := scaled - c.cursorScaled
+			if delta > 0 {
+				cl.StepCursorScaledDelta(delta)
+			}
+		} else {
+			c.cursorScaledValid = true
 		}
+		c.cursorScaled = scaled
+	} else {
+		c.cursorScaledValid = false
 	}
+	c.battle.sess.Step(scaled)
 }

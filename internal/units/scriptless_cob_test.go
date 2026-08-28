@@ -78,6 +78,10 @@ func compileFixtureCatalog(t *testing.T) *content.Catalog {
 	write("units/armless.fbi", strings.ReplaceAll(fbi, "%s", "armless"))
 	write("units/armnone.fbi", strings.ReplaceAll(fbi, "%s", "armnone"))
 	write("gamedata/moveinfo.tdf", "[MOVER]\n{\n}\n")
+	// content.Compile requires authored sight/LOS resources (retail semantic
+	// coverage); author the minimal one-table form the compiler accepts.
+	write("gamedata/los.tdf", "[TABLEINFO]\n{\nnumtables=1;\n}\n[TABLE1]\n{\nnumlines=1;\nline1=1,0,1;\n}\n")
+	write("anims/vismasks.gaf", string(testVismaskGAF()))
 	var b strings.Builder
 	b.WriteString("[SIDE0]\n{\nname=ARM;\ncommander=armtest;\nfont=fnt00x.fnt;\n")
 	for _, a := range sideAnchorFixtures {
@@ -196,4 +200,37 @@ func TestLoaderMissIsScriptlessNotSubstituted(t *testing.T) {
 	if u.GetScript() != nil {
 		t.Fatal("missing script produced a substitute VM; policy stores none [R-COB-01 §1]")
 	}
+}
+
+// testVismaskGAF authors the minimal plural visibility-mask GAF the sight
+// compiler requires: one decoy-free entry set with a "vismask" entry of ten
+// 1x1 frames. Byte layout mirrors the authored fixture builder in the
+// content package's tests (GAF v1.0: 12-byte header, entry table, 40-byte
+// entry definitions, 8-byte frame references, 24-byte frame headers).
+func testVismaskGAF() []byte {
+	const entryTableOffset = 12
+	const entrySize = 40
+	const frameRefSize = 8
+	const frameSize = 24
+	const frames = 10
+	entryOffset := entryTableOffset + 4
+	frameDataOffset := entryOffset + entrySize + frames*frameRefSize + frames*frameSize
+	out := make([]byte, frameDataOffset+frames)
+	binary.LittleEndian.PutUint32(out[4:], 1) // one entry
+	binary.LittleEndian.PutUint32(out[entryTableOffset:], uint32(entryOffset))
+	binary.LittleEndian.PutUint16(out[entryOffset:], frames)
+	copy(out[entryOffset+8:], "vismask")
+	for i := 0; i < frames; i++ {
+		ref := entryOffset + entrySize + i*frameRefSize
+		frame := entryOffset + entrySize + frames*frameRefSize + i*frameSize
+		binary.LittleEndian.PutUint32(out[ref:], uint32(frame))
+		binary.LittleEndian.PutUint16(out[frame:], 1)   // width
+		binary.LittleEndian.PutUint16(out[frame+2:], 1) // height
+		binary.LittleEndian.PutUint16(out[frame+4:], 3) // compressed
+		binary.LittleEndian.PutUint16(out[frame+6:], 0xfffe)
+		out[frame+8] = 9 // palette index
+		binary.LittleEndian.PutUint32(out[frame+16:], uint32(frameDataOffset+i))
+		out[frameDataOffset+i] = 7 // one compressed run
+	}
+	return out
 }

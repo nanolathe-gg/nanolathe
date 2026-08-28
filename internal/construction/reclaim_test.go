@@ -133,8 +133,9 @@ func TestUnitReclaimCadenceAndFatalRefundCleanup(t *testing.T) {
 	if !target.Dying || target.Health >= 0 {
 		t.Fatalf("fatal reclaim did not latch target: dying=%v health=%d", target.Dying, target.Health)
 	}
-	if deaths != 1 || extras != 1 {
-		t.Fatalf("death observers counts primary=%d extra=%d want 1/1", deaths, extras)
+	// Death hooks are deferred until slot-end finalization [04 "unit sweep"].
+	if deaths != 0 || extras != 0 {
+		t.Fatalf("death observers ran before finalization primary=%d extra=%d want 0/0", deaths, extras)
 	}
 	if got := s.Economy.UnitBuckets(builder.Handle); got == nil || (*got)[economy.Metal].Production != 75 {
 		t.Fatalf("metal refund=%v want 75", got)
