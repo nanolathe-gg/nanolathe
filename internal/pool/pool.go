@@ -14,18 +14,6 @@ const (
 	// [06 §5.1]: exactly 300 records of 107 bytes. Allocation appends at the
 	// tail and never fills holes until compaction [01 §6.1].
 	ProjectileCapacity = 300
-
-	// unitsDefaultCapacity is the fallback capacity used when a Units pool is
-	// used without an explicit Init. The retail physical cap is
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// [P0-16] [01 §6.1] — stock ~2000-5001, not the 500 folklore. This
-	// placeholder remains configurable via Init / NewUnits and InitSliced;
-	// it is not a retail constant.
-	unitsDefaultCapacity = 500
-
-	// UnitRecordSize is the retail unit record stride 0x118=280 bytes
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	UnitRecordSize = 0x118
 )
 
 // CapacityForDefs returns the total record count including slot 0 for a
@@ -47,73 +35,46 @@ func UsableCapacityForDefs(maxDefs int) int {
 	return maxDefs * 10
 }
 
-// Units is the fixed pool of 280-byte unit records [01 §6.1] [P0-16].
-// Allocation scans for the lowest free slot with slot 0 reserved as null
-// [04 §2.3], [01 §6.1]. Freed slots are immediately reusable with no
-// generation tag; stale handles alias the new occupant [P0-16] [06 §5.1].
-// When sliced, the pool is partitioned per-player as maxDefs slots each via
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// constrained to the owning player's slice [P0-16 §3.2].
+// Units is the fixed pool of unit records [01 §6.1] [P0-16]. The pool is
+// always sliced per player: capacity is the game value derived from the
+// definition count (maxDefs*10+1 records), each player owning maxDefs slots
+// via the sorted player order [P0-16 §3.1]. Allocation scans the owning
+// player's slice for the lowest free slot with slot 0 reserved as null
+// [04 §2.3], [01 §6.1], and reuses it immediately [P0-16 §3.2]. Freed slots
+// carry no generation tag; stale handles alias the new occupant [P0-16]
+// [06 §5.1]. Forced-slot verification (save reconstruction) is constrained
+// to the owning player's slice [P0-16 §3.3].
 // [P2-03] Allocator failure: nil return, zero-fill new record, zero RNG draws.
 // Retail zero-fill byte count remains TODO(question) — Nanolathe zeroes logical
 // fields (alive/defID cleared, slotIndex retained) and treats the remainder as
-// zeroed to avoid stale leak; divergence noted at Alloc* sites.
+// zeroed to avoid stale leak; divergence noted at the allocators.
 type Units struct {
 	alive     []bool   // index 0 is sentinel, never allocated; len = totalRecords
-	defID     []uint16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	slotIndex []uint16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	defID     []uint16 // occupancy identity per slot, 0 = free [P0-16 §2.1]
+	slotIndex []uint16 // slot number stamped at init, retained stale after free [P0-16 §3.4]
 	maxDefs   int
 	slices    [10]struct{ start, end int } // inclusive per-player bounds [P0-16 §3.1]
 	sliced    bool
 }
 
-// NewUnits creates a Units pool with the given usable capacity.
-// Capacity is the number of usable slots; slot 0 remains null [04 §2.3].
-// This is the legacy unsliced constructor; for retail slicing use
-// NewUnitsSliced [P0-16].
-func NewUnits(capacity int) *Units {
-	u := &Units{}
-	u.Init(capacity)
-	return u
-}
-
 // NewUnitsSliced creates a sliced retail pool for maxDefs catalog
-// definitions: total records = maxDefs*10+1 at 0x14357, per-player slices
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// definitions: total records = maxDefs*10+1, per-player slices of maxDefs
+// each via sorted player order [P0-16 §3.1] [01 §6.1]. This is the only
+// production shape: retail's unit pool is always sliced per player, and
+// slot 0 is the null sentinel.
 func NewUnitsSliced(maxDefs int) *Units {
 	u := &Units{}
 	u.InitSliced(maxDefs)
 	return u
 }
 
-// Init configures the pool capacity as a legacy unsliced pool.
-// If capacity <= 0 the pool becomes empty and Alloc always fails.
-// Slot 0 is reserved as null. Slicing is disabled.
-func (p *Units) Init(capacity int) {
-	if capacity < 0 {
-		capacity = 0
-	}
-	total := capacity + 1 // include slot 0
-	p.alive = make([]bool, total)
-	p.defID = make([]uint16, total)
-	p.slotIndex = make([]uint16, total)
-	for i := 0; i < total; i++ {
-		p.slotIndex[i] = uint16(i) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	}
-	p.maxDefs = 0
-	p.sliced = false
-	for i := range p.slices {
-		p.slices[i] = struct{ start, end int }{0, -1}
-	}
-}
-
 // InitSliced configures a retail-sliced pool for maxDefs definitions.
-// It allocates total = maxDefs*10+1 records (including slot 0) of 0x118
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// [P0-16 §3.2]. Slicing uses identity sorted order 0..9; the exact
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question) but does not affect per-slice isolation [P0-16 §3.1].
+// It allocates total = maxDefs*10+1 records (including slot 0). Per-player
+// slices hold maxDefs each; allocation scans for the lowest free slot per
+// slice with immediate reuse [P0-16 §3.2]. Slicing uses identity sorted
+// order 0..9; the exact retail sorted-order comparator with its
+// missionType==3 gate is TODO(question) but does not affect per-slice
+// isolation [P0-16 §3.1].
 func (p *Units) InitSliced(maxDefs int) {
 	if maxDefs < 0 {
 		maxDefs = 0
@@ -126,13 +87,13 @@ func (p *Units) InitSliced(maxDefs int) {
 	p.defID = make([]uint16, total)
 	p.slotIndex = make([]uint16, total)
 	for i := 0; i < total; i++ {
-		p.slotIndex[i] = uint16(i) // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		p.slotIndex[i] = uint16(i) // slot index stamped at init, retained after free [P0-16 §3.4]
 	}
 	p.maxDefs = maxDefs
 	p.sliced = maxDefs > 0
 	if p.sliced {
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-		// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+		// Identity sorted order; TODO(question) exact retail insertion-sort
+		// comparator over the sorted player table with missionType==3 gate.
 		for player := 0; player < 10; player++ {
 			start := maxDefs*player + 1
 			end := maxDefs * (player + 1)
@@ -147,59 +108,6 @@ func (p *Units) InitSliced(maxDefs int) {
 		for i := range p.slices {
 			p.slices[i] = struct{ start, end int }{0, -1}
 		}
-	}
-}
-
-// InitSlicedWithOrder configures a sliced pool with an explicit sorted
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// [P0-16 §3.1]. Order must be a permutation of 0..9; nil/empty means identity.
-// This is used for tests needing exact slice ownership proof.
-func (p *Units) InitSlicedWithOrder(maxDefs int, order []int) {
-	if order == nil || len(order) != 10 {
-		p.InitSliced(maxDefs)
-		return
-	}
-	// Validate permutation 0..9
-	seen := make(map[int]bool, 10)
-	for _, v := range order {
-		if v < 0 || v >= 10 || seen[v] {
-			p.InitSliced(maxDefs)
-			return
-		}
-		seen[v] = true
-	}
-	total := CapacityForDefs(maxDefs)
-	if total < 1 {
-		total = 1
-	}
-	p.alive = make([]bool, total)
-	p.defID = make([]uint16, total)
-	p.slotIndex = make([]uint16, total)
-	for i := 0; i < total; i++ {
-		p.slotIndex[i] = uint16(i)
-	}
-	p.maxDefs = maxDefs
-	p.sliced = maxDefs > 0
-	if p.sliced {
-		for sortedIdx, player := range order {
-			start := maxDefs*sortedIdx + 1
-			end := maxDefs * (sortedIdx + 1)
-			p.slices[player] = struct{ start, end int }{start: start, end: end}
-		}
-	} else {
-		for i := range p.slices {
-			p.slices[i] = struct{ start, end int }{0, -1}
-		}
-	}
-}
-
-// ensureInit lazily initializes a zero-value Units so that a simple
-// var u Units; u.Alloc() sequence does not panic and provides a usable
-// placeholder. The retail maximum is not a fixed constant [01 §6.1] [P0-16],
-// so this default is configurable via Init / InitSliced.
-func (p *Units) ensureInit() {
-	if p.alive == nil {
-		p.Init(unitsDefaultCapacity)
 	}
 }
 
@@ -232,9 +140,9 @@ func (p *Units) SliceForPlayer(player int) (int, int, bool) {
 	return s.start, s.end, true
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// It is stamped at pool init and retained after free (stale) [P0-16 §3.4];
-// slot 0 and OOB return 0.
+// SlotIndex returns the slot number stamped at init for the handle
+// [P0-16 §3.4]. It is stamped at pool init and retained after free (stale)
+// [P0-16 §3.4]; slot 0 and OOB return 0.
 func (p *Units) SlotIndex(h Handle) uint16 {
 	if p == nil || p.slotIndex == nil {
 		return 0
@@ -246,7 +154,7 @@ func (p *Units) SlotIndex(h Handle) uint16 {
 	return p.slotIndex[idx]
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// DefID returns the occupancy definition identity for the slot. 0 means free
 // [P0-16 §2.1].
 func (p *Units) DefID(h Handle) uint16 {
 	if p == nil || p.defID == nil {
@@ -259,57 +167,21 @@ func (p *Units) DefID(h Handle) uint16 {
 	return p.defID[idx]
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// [P0-16 §3.2]. It does not change alive; callers should keep them consistent.
-func (p *Units) SetDefID(h Handle, id uint16) {
-	if p == nil || p.defID == nil {
-		return
-	}
-	idx := int(h)
-	if idx <= 0 || idx >= len(p.defID) {
-		return
-	}
-	p.defID[idx] = id
-}
-
-// Alloc returns the lowest free handle in the global pool, or 0,false if
-// exhausted. It scans ascending from 1, matching retail's lowest-free-first
-// order [01 §6.1], [04 §2.3]. For sliced pools this is a legacy helper that
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// owning player's slice [P0-16 §3.2] — callers with a player should use
-// AllocForPlayer / AllocForPlayerWithDef. Zero RNG draws [P0-16 §5].
-func (p *Units) Alloc() (Handle, bool) {
-	if p == nil {
+// AllocForPlayerWithDef is the canonical per-player allocator [P0-16 §3.2]:
+// the sole allocation site for every creation path [01 §6.1]. If
+// limitEnabled and limit != -1, it first counts occupants in the player's
+// slice with the given definition identity and fails when limit <= cnt
+// [P0-16 §2.1]. Otherwise it scans the owning player's slice for the lowest
+// free slot (definition identity clear, alive flag clear) and marks it
+// occupied with that identity; freed slots are reused immediately [P0-16
+// §3.2]. A slice-full failure is reported even when other players have free
+// slots [P0-16 §7.3]. The caller always supplies a real definition identity —
+// retail's allocator never allocates without one, and identity 0 is the free
+// sentinel, so a zero identity fails without allocating. Slot 0 is never
+// returned. Zero RNG draws [P0-16 §5].
+func (p *Units) AllocForPlayerWithDef(player int, defID uint16, limitEnabled bool, limit int32) (Handle, bool) {
+	if p == nil || defID == 0 {
 		return 0, false
-	}
-	p.ensureInit()
-	// For sliced pools, legacy Alloc scans entire range for test compatibility;
-	// retail per-player isolation is via AllocForPlayer.
-	for i := 1; i < len(p.alive); i++ {
-		if !p.alive[i] && p.defID[i] == 0 {
-			p.alive[i] = true
-			// defID sentinel: mark occupied with 1 if caller didn't specify.
-			// Preserve existing defID if already set (should be 0 here).
-			if p.defID[i] == 0 {
-				p.defID[i] = 1 // generic occupied sentinel when def unknown
-			}
-			return Handle(i), true
-		}
-	}
-	return 0, false
-}
-
-// AllocForPlayer returns the lowest free handle within the player's slice
-// [P0-16 §3.2] with zero RNG draws [P0-16 §5]. It validates the player range
-// and per-slice isolation: a slice-full failure is reported even when other
-// players have free slots [P0-16 §7.3]. Slot 0 is never returned.
-func (p *Units) AllocForPlayer(player int) (Handle, bool) {
-	if p == nil {
-		return 0, false
-	}
-	p.ensureInit()
-	if !p.sliced {
-		return p.Alloc()
 	}
 	if player < 0 || player >= 10 {
 		return 0, false
@@ -318,51 +190,8 @@ func (p *Units) AllocForPlayer(player int) (Handle, bool) {
 	if s.start <= 0 || s.end < s.start {
 		return 0, false
 	}
-	for i := s.start; i <= s.end && i < len(p.alive); i++ {
-		if !p.alive[i] && p.defID[i] == 0 {
-			p.alive[i] = true
-			if p.defID[i] == 0 {
-				p.defID[i] = 1
-			}
-			return Handle(i), true
-		}
-	}
-	return 0, false
-}
-
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// limit gate plus lowest-free scan [P0-16 §3.2]. If defID !=0 and
-// limitEnabled and limit != -1, it counts occupants in the player's slice
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// with defID. Zero RNG draws [P0-16 §5]. The player is truncated via &0xFF
-// in retail; here 0..9 is required.
-func (p *Units) AllocForPlayerWithDef(player int, defID uint16, limitEnabled bool, limit int32) (Handle, bool) {
-	if p == nil {
-		return 0, false
-	}
-	p.ensureInit()
-	if !p.sliced {
-		// Legacy global path with limit counted globally
-		if defID != 0 && limitEnabled && limit != -1 {
-			cnt := 0
-			for i := 1; i < len(p.defID); i++ {
-				if p.defID[i] == defID {
-					cnt++
-				}
-			}
-			if int32(cnt) >= limit {
-				return 0, false
-			}
-		}
-		return p.AllocWithDefID(defID)
-	}
-	if player < 0 || player >= 10 {
-		return 0, false
-	}
-	s := p.slices[player]
 	// Per-def limit gate [P0-16 §3.2]
-	if defID != 0 && limitEnabled && limit != -1 {
+	if limitEnabled && limit != -1 {
 		cnt := 0
 		for i := s.start; i <= s.end && i < len(p.defID); i++ {
 			if p.defID[i] == defID {
@@ -376,117 +205,22 @@ func (p *Units) AllocForPlayerWithDef(player int, defID uint16, limitEnabled boo
 	for i := s.start; i <= s.end && i < len(p.alive); i++ {
 		if !p.alive[i] && p.defID[i] == 0 {
 			p.alive[i] = true
-			if defID != 0 {
-				p.defID[i] = defID
-			} else {
-				p.defID[i] = 1
-			}
+			p.defID[i] = defID
 			return Handle(i), true
 		}
 	}
 	return 0, false
 }
 
-// AllocWithDefID is a legacy global helper that allocates the lowest free
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-func (p *Units) AllocWithDefID(defID uint16) (Handle, bool) {
-	if p == nil {
-		return 0, false
-	}
-	p.ensureInit()
-	for i := 1; i < len(p.alive); i++ {
-		if !p.alive[i] && p.defID[i] == 0 {
-			p.alive[i] = true
-			if defID != 0 {
-				p.defID[i] = defID
-			} else {
-				p.defID[i] = 1
-			}
-			return Handle(i), true
-		}
-	}
-	return 0, false
-}
-
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// returns NULL [P0-16 §3.2]. It does not check per-def limit; use
-// AllocForcedWithDef for the limit-checked variant. Zero RNG draws.
-func (p *Units) AllocForced(player int, forced Handle) (Handle, bool) {
-	if p == nil || forced == 0 {
-		return 0, false
-	}
-	p.ensureInit()
-	if !p.sliced {
-		idx := int(forced)
-		if idx <= 0 || idx >= len(p.alive) {
-			return 0, false
-		}
-		if p.alive[idx] || p.defID[idx] != 0 {
-			return 0, false
-		}
-		p.alive[idx] = true
-		if p.defID[idx] == 0 {
-			p.defID[idx] = 1
-		}
-		return forced, true
-	}
-	if player < 0 || player >= 10 {
-		return 0, false
-	}
-	s := p.slices[player]
-	idx := int(forced)
-	if idx < s.start || idx > s.end {
-		return 0, false
-	}
-	if idx <= 0 || idx >= len(p.alive) {
-		return 0, false
-	}
-	if p.alive[idx] || p.defID[idx] != 0 {
-		return 0, false
-	}
-	p.alive[idx] = true
-	if p.defID[idx] == 0 {
-		p.defID[idx] = 1
-	}
-	return forced, true
-}
-
-// AllocForcedWithDef implements forcedSlot with per-def limit re-check as
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// allocation. Zero RNG draws.
+// AllocForcedWithDef implements the save/reconstructor forced-slot path:
+// the candidate slot is validated against the owning player's slice bounds
+// and free occupancy, the per-def limit is re-checked, and only then is the
+// slot allocated [P0-16 §3.2][P0-16 §3.3]. Out-of-slice, occupied, or
+// limit-exceeded candidates return failure with no allocation. Zero RNG
+// draws.
 func (p *Units) AllocForcedWithDef(player int, defID uint16, forced Handle, limitEnabled bool, limit int32) (Handle, bool) {
-	if p == nil || forced == 0 {
+	if p == nil || defID == 0 || forced == 0 {
 		return 0, false
-	}
-	p.ensureInit()
-	if !p.sliced {
-		idx := int(forced)
-		if idx <= 0 || idx >= len(p.alive) {
-			return 0, false
-		}
-		if p.alive[idx] || p.defID[idx] != 0 {
-			return 0, false
-		}
-		if defID != 0 && limitEnabled && limit != -1 {
-			cnt := 0
-			for i := 1; i < len(p.defID); i++ {
-				if p.defID[i] == defID {
-					cnt++
-				}
-			}
-			if int32(cnt) >= limit {
-				return 0, false
-			}
-		}
-		p.alive[idx] = true
-		if defID != 0 {
-			p.defID[idx] = defID
-		} else {
-			p.defID[idx] = 1
-		}
-		return forced, true
 	}
 	if player < 0 || player >= 10 {
 		return 0, false
@@ -502,7 +236,7 @@ func (p *Units) AllocForcedWithDef(player int, defID uint16, forced Handle, limi
 	if p.alive[idx] || p.defID[idx] != 0 {
 		return 0, false
 	}
-	if defID != 0 && limitEnabled && limit != -1 {
+	if limitEnabled && limit != -1 {
 		cnt := 0
 		for i := s.start; i <= s.end && i < len(p.defID); i++ {
 			if p.defID[i] == defID {
@@ -514,20 +248,17 @@ func (p *Units) AllocForcedWithDef(player int, defID uint16, forced Handle, limi
 		}
 	}
 	p.alive[idx] = true
-	if defID != 0 {
-		p.defID[idx] = defID
-	} else {
-		p.defID[idx] = 1
-	}
+	p.defID[idx] = defID
 	return forced, true
 }
 
 // Free releases the slot identified by h. Slot 0 is ignored and out-of-range
 // handles are ignored. Freed slots are immediately reusable [01 §6.1]
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// [P0-16 §3.4]. Retail's free clears the occupancy identity, the alive mask,
+// the per-unit heaps, order queues, attachments, and the per-player live
+// counter; here the pool-level equivalents are cleared (occupancy identity
+// and alive flag) and the slot number is RETAINED stale for save/reconstructor
+// forced-slot identity [P0-16 §3.4]. Zero RNG draws.
 func (p *Units) Free(h Handle) {
 	if p == nil || p.alive == nil {
 		return
@@ -543,7 +274,7 @@ func (p *Units) Free(h Handle) {
 }
 
 // Alive reports whether h names a currently live unit. Slot 0 is always dead.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// Validation is only slot nonzero and alive-flag set [P0-16 §3.2][P0-16 §6];
 // there is no generation, no >cap check beyond slice, so stale reuse aliases
 // silently [P0-16 §6].
 func (p *Units) Alive(h Handle) bool {
@@ -556,19 +287,6 @@ func (p *Units) Alive(h Handle) bool {
 	}
 	// DefID zero also means free, but alive bool is authoritative for pool.
 	return p.alive[idx] && p.defID[idx] != 0
-}
-
-// IsAliveRaw reports the raw alive flag without defID gating, for tests that
-// need to distinguish occupancy sentinel from alive.
-func (p *Units) IsAliveRaw(h Handle) bool {
-	if p == nil || p.alive == nil {
-		return false
-	}
-	idx := int(h)
-	if idx <= 0 || idx >= len(p.alive) {
-		return false
-	}
-	return p.alive[idx]
 }
 
 // Capacity returns the number of usable slots (excluding the null sentinel).
@@ -599,34 +317,6 @@ func (p *Units) TotalRecords() int {
 		return 0
 	}
 	return len(p.alive)
-}
-
-// CountInSlice counts occupants with matching defID in the player's slice;
-// defID 0 counts all occupants. Zero RNG.
-func (p *Units) CountInSlice(player int, defID uint16) int {
-	if p == nil || p.defID == nil {
-		return 0
-	}
-	if !p.sliced {
-		cnt := 0
-		for i := 1; i < len(p.defID); i++ {
-			if p.defID[i] != 0 && (defID == 0 || p.defID[i] == defID) {
-				cnt++
-			}
-		}
-		return cnt
-	}
-	if player < 0 || player >= 10 {
-		return 0
-	}
-	s := p.slices[player]
-	cnt := 0
-	for i := s.start; i <= s.end && i < len(p.defID); i++ {
-		if p.defID[i] != 0 && (defID == 0 || p.defID[i] == defID) {
-			cnt++
-		}
-	}
-	return cnt
 }
 
 // CobThreads models the per-unit COB VM thread mask. Each live unit has eight

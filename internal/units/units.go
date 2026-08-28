@@ -22,10 +22,9 @@ const (
 )
 
 // ClassifierEligibleStatus is the runtime unit-status bit consumed by the
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// and is cleared by death finalization [R-P0-04 "Runtime eligibility bit
-// lifecycle"].
+// retail manager classifier. It is initialized by the common allocator
+// initializer, rather than copied from UnitDef/FBI data, and is cleared by
+// death finalization [R-P0-04 "Runtime eligibility bit lifecycle"].
 const ClassifierEligibleStatus uint32 = 0x00000020
 
 // BuildingClassStatus and ArmedStatus are the two remaining high bits of the
@@ -90,11 +89,11 @@ type GuardLatches struct {
 }
 
 // Unit is a live unit instance [04 §2.3] C1.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// [P0-16] [01 §6.1]; Nanolathe uses named Go fields in a slot-indexed array
-// parallel to pool.Units and does not reproduce packed bytes (I13).
+// Retail unit records have a 280-byte identity [P0-16] [01 §6.1]; Nanolathe
+// uses named Go fields in a slot-indexed array parallel to pool.Units and
+// does not reproduce packed bytes (I13).
 type Unit struct {
-	Handle    pool.Handle // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Handle    pool.Handle // slot index, 0 null [01 §6.1] [P0-16 §2.1]; slot number retained stale after free [P0-16 §3.4]
 	Def       *content.UnitDef
 	Owner     uint8 // 0..9 [04 §2]
 	X, Y, Z   numeric.Fixed
@@ -116,11 +115,11 @@ type Unit struct {
 	// The six engine-write port markers occupy the instance stance byte's
 	// low six bits [R-P0-10]. They remain named fields so production code does
 	// not confuse the classifier bit in Flags with COB state.
-	InBuildStance bool         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Busy          bool         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	YardOpen      bool         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	BuggerOff     bool         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Armored       bool         // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	InBuildStance bool         // engine-write port 5 [R-P0-10]
+	Busy          bool         // engine-write port 6 [R-P0-10]
+	YardOpen      bool         // engine-write port 18 [R-P0-10]
+	BuggerOff     bool         // engine-write port 19 [R-P0-10]
+	Armored       bool         // engine-write port 20 [R-P0-10]
 	Group         uint8        // one stored control-group value 0..9 [07 §9]
 	Pending       uint32       // capability/pending word for gate intersection [04 §3.3] C6
 	Orders        any          // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
@@ -136,7 +135,7 @@ type Unit struct {
 	Attachment    AttachmentState // carrier/cargo linkage [04 §4.4] attach-unit
 	CallbackQueue CallbackQueue   // engine→COB callback queues/readiness [GAP T15]
 	// SpotMetal is the extractor yield sampled once at placement: Σ(cellMetal+1)*extractsMetal [05 "Terrain metal extraction"] C14 [P1-10][P1-15].
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Stored on the instance once at creation via SampleMetal, never resampled even if terrain metal changes.
 	SpotMetal float32 // [P1-10] once Σ(byte+1)*extractsMetal, [P1-15] uniform char write
 	// OrderGuard is the per-unit order-guard float of the shared eligibility
 	// predicate [07 §8/§9]: zero at unit creation and at order completion,
@@ -147,17 +146,17 @@ type Unit struct {
 	// unattested — only the 0/nonzero distinction is established TODO(question).
 	OrderGuard float32
 	// TODO(question): direct World.Create bypasses extractor sampling; session reconstructUnits and
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// construction.allocateNanoframe sample via Terrain.SampleMetal once at placement [P1-10][P1-15],
 	// but save-restore forced-slot and any other direct Create caller must also sample via the same hook
 	// or via Terrain.ApplySchema post-load; verify universal coverage.
 	// Economy state bound to the one ledger per [05] — activation/on-off, cloak, storage, extraction, wind/tidal, makers [P1-I04].
 	Activated bool  // operational/activated bit for on/offable units [05 "Unit instance economy state"] [P1-I04]; true when the unit is turned on; for non-OnOffable units always true when complete
 	IsCloaked bool  // whether cloak upkeep is due this pass [05 "Cloak debit"] [P1-I04]
-	Kills     int32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Kills     int32 // kill count for capture timer [P0-15]
 	// Paralyze state per [06 §10] paralyzer status effects [P0-I04].
 	ParalyzeExpire uint32 // absolute tick when stun ends; 0 means not paralyzed [06 §10]
 	Stunned        bool   // TODO(question): GAI slow vs binary stun remains open [06 §10]
-	PriorSample    uint8  // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	PriorSample    uint8  // previous 30-tick-window health sample for death severity [04 §5.1]
 	// Placement linkage for P0-04/P0-06 sparse created[] semantics [P0-04][P0-06].
 	// Retail maintains created[placementIdx] sparse array and scans it in
 	// placement order 0..count-1 skipping NULL gaps for Ident→Unitname first-
@@ -168,7 +167,7 @@ type Unit struct {
 	PlacementUnitName string
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// MakeSelectable applies retail's make-selectable order: clear the transient status bit
 // 0x8000, then set the classifier/selection eligibility bit 0x20. The order
 // operates on the runtime status word (Flags here); it does not synthesize
 // COB INBUILDSTANCE, which is kept in InBuildStance.
@@ -288,13 +287,13 @@ type COBBinder func(*Unit) error
 
 // World is the unit world [PLAN_06 Public API].
 // Pool is slot-indexed parallel to world state; iteration is players 0..9
-// then slots ascending [01 §6.2] C2 [P0-16]. Allocation is per-player sliced
-// when created via NewSliced: physical cap = maxDefs*10+1 of 0x118 bytes at
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// then slots ascending [01 §6.2] C2 [P0-16]. The pool is the retail sliced
+// shape via NewSliced: physical cap = maxDefs*10+1, sliced per-player maxDefs
+// each [P0-16 §3.1]; the canonical allocator is the sole allocation site,
+// scanning the owning player's slice for the lowest free slot with immediate
+// reuse [P0-16 §3.2] [01 §6.1]; per-def limits are enforced per slice
+// [P0-16 §3.2]; forcedSlot reconstruction verifies slice bounds and
+// occupancy [P0-16 §3.3].
 type World struct {
 	units   []*Unit
 	pool    *pool.Units
@@ -314,9 +313,9 @@ type World struct {
 	// no consumer. It fires exactly once per ownership transfer.
 	OnCapture CaptureHook
 
-	defMap    map[*content.UnitDef]uint16 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	defMap    map[*content.UnitDef]uint16 // def -> occupancy identity for per-def scan [P0-16]
 	nextDefID uint16
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// per-player live counters mirror the retail live count, which decrements on free [P0-16 §3.4]
 	liveCounters [10]int
 
 	// COB loader for per-unit VM creation [04 §4.1][P1-I01].
@@ -328,25 +327,12 @@ type World struct {
 	cobBinder COBBinder
 }
 
-// New creates a World with given usable capacity (number of usable slots).
-// This is the legacy unsliced constructor [04 §2.3]; for retail slicing use
-// NewSliced with maxDefs [P0-16].
-func New(capacity int, cat *content.Catalog) *World {
-	p := pool.NewUnits(capacity)
-	w := &World{
-		pool:      p,
-		catalog:   cat,
-		units:     make([]*Unit, capacity+1), // index 0 null sentinel [01 §6.1] C1
-		defMap:    make(map[*content.UnitDef]uint16),
-		nextDefID: 1,
-	}
-	return w
-}
-
-// NewSliced creates a sliced retail pool for maxDefs catalog definitions
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// sliced per-player maxDefs each [P0-16 §3.1]. Stock ~2000-5001, not 500
-// folklore [P0-16]. Slot 0 null, immediate reuse, no generation tags.
+// NewSliced creates the unit world over a retail sliced pool for maxDefs
+// catalog definitions: physical cap = maxDefs*10+1 records, sliced per-player
+// maxDefs each [P0-16 §3.1]. Stock ~2000-5001 [P0-16]. Slot 0 null,
+// lowest-free allocation with immediate reuse, no generation tags [01 §6.1].
+// This is the only production world constructor; tests build the same slices
+// at smaller fixture sizes by passing a small maxDefs.
 func NewSliced(maxDefs int, cat *content.Catalog) *World {
 	p := pool.NewUnitsSliced(maxDefs)
 	total := p.TotalRecords()
@@ -445,7 +431,8 @@ func (w *World) attachCOB(u *Unit) error {
 	return nil
 }
 
-// IsSliced reports whether the world uses per-player slicing [P0-16 §3.1].
+// IsSliced reports whether the world's pool uses per-player slices; true for
+// every production world [P0-16 §3.1].
 func (w *World) IsSliced() bool {
 	if w == nil || w.pool == nil {
 		return false
@@ -453,7 +440,7 @@ func (w *World) IsSliced() bool {
 	return w.pool.IsSliced()
 }
 
-// MaxDefs returns the catalog maxDefs used for slicing, or 0 if unsliced [P0-16 §3.1].
+// MaxDefs returns the catalog maxDefs used for slicing [P0-16 §3.1].
 func (w *World) MaxDefs() int {
 	if w == nil || w.pool == nil {
 		return 0
@@ -469,7 +456,8 @@ func (w *World) SliceForPlayer(player int) (int, int, bool) {
 	return w.pool.SliceForPlayer(player)
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// SlotIndex returns the slot number stamped at init and retained stale after
+// free for the handle [P0-16 §3.4].
 func (w *World) SlotIndex(h pool.Handle) uint16 {
 	if w == nil || w.pool == nil {
 		return 0
@@ -477,10 +465,11 @@ func (w *World) SlotIndex(h pool.Handle) uint16 {
 	return w.pool.SlotIndex(h)
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// a new ID on first encounter. 0 is never returned (0 means free). DefID
-// mapping is stable for the lifetime of the world; retail uses def array index
-// via 0x1439B+defId*0x249 [P0-16 §3.2]. Zero RNG draws.
+// defIDForDef returns the uint16 occupancy identity for the definition,
+// allocating a new ID on first encounter. 0 is never returned (0 means free).
+// Identity mapping is stable for the lifetime of the world; retail derives
+// the identity from the definition's catalog position [P0-16 §3.2]. Zero RNG
+// draws.
 func (w *World) defIDForDef(def *content.UnitDef) uint16 {
 	if def == nil {
 		return 0
@@ -509,10 +498,11 @@ func (w *World) defIDForDef(def *content.UnitDef) uint16 {
 	return id
 }
 
-// Create allocates the lowest-free slot with slot 0 null, no generation tags,
-// immediate reuse [01 §6.1] C1 [P0-16]. For sliced pools the allocation is
-// per-player slice with per-def limit check [P0-16 §3.2]; a slice-full failure
-// is reported even when global spare exists [P0-16 §7.3]. Zero RNG draws.
+// Create allocates through the canonical per-player allocator: lowest-free
+// slot in the owning player's slice with slot 0 null, no generation tags,
+// immediate reuse [01 §6.1] C1 [P0-16 §3.2]. A slice-full failure is
+// reported even when other players have free slots [P0-16 §7.3]. Zero RNG
+// draws.
 func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed) (pool.Handle, error) {
 	if w == nil || w.pool == nil {
 		return 0, fmt.Errorf("units: nil world")
@@ -520,89 +510,27 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 	if def == nil {
 		return 0, fmt.Errorf("units: nil def")
 	}
-	// Sliced path [P0-16 §3.2]
-	if w.pool.IsSliced() {
-		player := int(owner)
-		if player < 0 || player >= 10 {
-			return 0, fmt.Errorf("units: player %d out of range", player)
-		}
-		defID := w.defIDForDef(def)
-		limitEnabled := def.LimitEnabled
-		limit := def.Limit
-		// Normalize: if limit == -1, treat as unlimited regardless of enabled bit
-		if limit == -1 {
-			limitEnabled = false
-		}
-		h, ok := w.pool.AllocForPlayerWithDef(player, defID, limitEnabled, limit)
-		if !ok {
-			// Distinguish per-def limit vs slice-full vs forced OOB; all return NULL in retail
-			return 0, fmt.Errorf("units: pool exhausted")
-		}
-		idx := int(h)
-		if idx >= len(w.units) {
-			newUnits := make([]*Unit, idx+1)
-			copy(newUnits, w.units)
-			w.units = newUnits
-		}
-		u := &Unit{
-			Handle:       h,
-			Def:          def,
-			Owner:        owner,
-			X:            x,
-			Y:            y,
-			Z:            z,
-			Alive:        true,
-			Flags:        initialStatusFlags(def),
-			Remaining:    0,
-			MaxHealth:    int32(def.MaxDamage),
-			Health:       int32(def.MaxDamage),
-			PlacementIdx: -1,
-		}
-		installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions into Slots [P0-I04]
-		u.InitEconomyState()   // [P1-I04] on/off, cloak, activation from definition
-		w.units[idx] = u
-		if err := w.attachCOB(u); err != nil {
-			w.units[idx] = nil
-			w.pool.Free(h)
-			return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
-		} // per-unit VM with statics/pieces, Create run [04 §4.1][P1-I01]
-		if player >= 0 && player < 10 {
-			w.liveCounters[player]++
-		}
-		if w.OnCreate != nil {
-			w.OnCreate(h, u)
-		}
-		return h, nil
+	player := int(owner)
+	if player < 0 || player >= 10 {
+		return 0, fmt.Errorf("units: player %d out of range", player)
 	}
-	// Legacy unsliced path
-	h, ok := w.pool.Alloc()
+	defID := w.defIDForDef(def)
+	limitEnabled := def.LimitEnabled
+	limit := def.Limit
+	// Normalize: if limit == -1, treat as unlimited regardless of enabled bit
+	if limit == -1 {
+		limitEnabled = false
+	}
+	h, ok := w.pool.AllocForPlayerWithDef(player, defID, limitEnabled, limit)
 	if !ok {
+		// Distinguish per-def limit vs slice-full vs forced OOB; all return NULL in retail
 		return 0, fmt.Errorf("units: pool exhausted")
-	}
-	// For unsliced pools also enforce per-def limit if enabled (global count)
-	if def.LimitEnabled && def.Limit != -1 {
-		cnt := 0
-		for i := 1; i < len(w.units); i++ {
-			if w.units[i] != nil && w.units[i].Alive && w.units[i].Def == def {
-				cnt++
-			}
-		}
-		if int32(cnt) >= def.Limit {
-			// Roll back allocation without RNG draw
-			w.pool.Free(h)
-			return 0, fmt.Errorf("units: per-def limit %d reached", def.Limit)
-		}
 	}
 	idx := int(h)
 	if idx >= len(w.units) {
 		newUnits := make([]*Unit, idx+1)
 		copy(newUnits, w.units)
 		w.units = newUnits
-	}
-	// Stamp defID sentinel for unsliced occupancy tracking
-	if w.pool != nil {
-		defID := w.defIDForDef(def)
-		w.pool.SetDefID(h, defID)
 	}
 	u := &Unit{
 		Handle:       h,
@@ -618,14 +546,15 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 		Health:       int32(def.MaxDamage),
 		PlacementIdx: -1,
 	}
-	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
-	u.InitEconomyState()   // [P1-I04]
+	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions into Slots [P0-I04]
+	u.InitEconomyState()   // [P1-I04] on/off, cloak, activation from definition
 	w.units[idx] = u
 	if err := w.attachCOB(u); err != nil {
 		w.units[idx] = nil
 		w.pool.Free(h)
 		return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
-	} // [P1-I01] VM per-unit
+	} // per-unit VM with statics/pieces, Create run [04 §4.1][P1-I01]
+	w.liveCounters[player]++
 	if w.OnCreate != nil {
 		w.OnCreate(h, u)
 	}
@@ -662,9 +591,10 @@ func installWeapons(u *Unit, def *content.UnitDef) {
 }
 
 // CreateWithForcedSlot allocates a unit at the exact forcedSlot for save
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Zero RNG draws. Returns error on limit/slice-full/forced-OOB/occupied.
+// reconstruction: the candidate is verified against the owning player's
+// slice bounds and free occupancy, and the per-def limit is re-checked
+// [P0-16 §3.3]. Zero RNG draws. Returns error on limit/slice-full/forced-OOB/
+// occupied.
 func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, forced pool.Handle) (pool.Handle, error) {
 	if w == nil || w.pool == nil {
 		return 0, fmt.Errorf("units: nil world")
@@ -676,58 +606,18 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		return 0, fmt.Errorf("units: forced slot 0 is null")
 	}
 	player := int(owner)
-	if w.pool.IsSliced() {
-		if player < 0 || player >= 10 {
-			return 0, fmt.Errorf("units: player %d out of range", player)
-		}
-		defID := w.defIDForDef(def)
-		limitEnabled := def.LimitEnabled
-		limit := def.Limit
-		if limit == -1 {
-			limitEnabled = false
-		}
-		h, ok := w.pool.AllocForcedWithDef(player, defID, forced, limitEnabled, limit)
-		if !ok {
-			return 0, fmt.Errorf("units: forced slot %d rejected (OOB/occupied/limit)", forced)
-		}
-		idx := int(h)
-		if idx >= len(w.units) {
-			newUnits := make([]*Unit, idx+1)
-			copy(newUnits, w.units)
-			w.units = newUnits
-		}
-		u := &Unit{
-			Handle:       h,
-			Def:          def,
-			Owner:        owner,
-			X:            x,
-			Y:            y,
-			Z:            z,
-			Alive:        true,
-			Flags:        initialStatusFlags(def),
-			Remaining:    0,
-			MaxHealth:    int32(def.MaxDamage),
-			Health:       int32(def.MaxDamage),
-			PlacementIdx: -1,
-		}
-		installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
-		u.InitEconomyState()   // [P1-I04]
-		w.units[idx] = u
-		if err := w.attachCOB(u); err != nil {
-			w.units[idx] = nil
-			w.pool.Free(h)
-			return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
-		} // [P1-I01] VM per-unit for forced slot
-		w.liveCounters[player]++
-		if w.OnCreate != nil {
-			w.OnCreate(h, u)
-		}
-		return h, nil
+	if player < 0 || player >= 10 {
+		return 0, fmt.Errorf("units: player %d out of range", player)
 	}
-	// Unsliced forced path: verify slot free and not OOB via pool
-	h, ok := w.pool.AllocForced(player, forced)
+	defID := w.defIDForDef(def)
+	limitEnabled := def.LimitEnabled
+	limit := def.Limit
+	if limit == -1 {
+		limitEnabled = false
+	}
+	h, ok := w.pool.AllocForcedWithDef(player, defID, forced, limitEnabled, limit)
 	if !ok {
-		return 0, fmt.Errorf("units: forced slot %d rejected", forced)
+		return 0, fmt.Errorf("units: forced slot %d rejected (OOB/occupied/limit)", forced)
 	}
 	idx := int(h)
 	if idx >= len(w.units) {
@@ -735,7 +625,6 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		copy(newUnits, w.units)
 		w.units = newUnits
 	}
-	w.pool.SetDefID(h, w.defIDForDef(def))
 	u := &Unit{
 		Handle:       h,
 		Def:          def,
@@ -757,7 +646,8 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		w.units[idx] = nil
 		w.pool.Free(h)
 		return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
-	} // [P1-I01] VM per-unit for forced unsliced
+	} // [P1-I01] VM per-unit for forced slot
+	w.liveCounters[player]++
 	if w.OnCreate != nil {
 		w.OnCreate(h, u)
 	}
@@ -782,7 +672,7 @@ func (w *World) NotifyCapture(h pool.Handle, oldOwner, newOwner uint8) {
 }
 
 // Destroy marks death; the slot stays alive and visible until post-tick
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// cleanup [04 §2.3][04 §2.4] C2. This is the deferred death path.
 // It fires OnDeath exactly once via an internal fired flag that FinalizeDeath
 // also respects, so hook and free are deduplicated across the two paths
 // [01 §4.4][04 "unit sweep"].
@@ -812,12 +702,12 @@ func (w *World) Destroy(h pool.Handle, cause DeathCause) {
 	}
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// reusable the same tick if the slice is still ahead in the 0..9 asc scan
-// [P0-16 §6.3]. Zero RNG draws.
+// FreeImmediate performs the retail finalization free immediately within the
+// same tick: it clears the occupancy identity and alive mask, releases the
+// per-unit heaps, order queues and attachments, and decrements the per-player
+// live counter, while retaining the slot number stale [P0-16 §3.4]. The slot
+// becomes lowest-free reusable the same tick if the slice is still ahead in
+// the 0..9 ascending scan [P0-16 §6.3]. Zero RNG draws.
 func (w *World) FreeImmediate(h pool.Handle) {
 	if w == nil || w.pool == nil || h == 0 {
 		return
@@ -850,9 +740,9 @@ func (w *World) FreeImmediate(h pool.Handle) {
 	// itself is the catalog index not a generation.
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// validation: u16 slot targeting validates only slot!=0 && alive
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// ApplyDamage implements the damage packet 0x0B handler's stale validation:
+// a 16-bit slot target validates only slot nonzero and alive, then subtracts
+// health; if the slot was freed and
 // reused the damage aliases the new occupant silently [P0-16 §6][06 "Damage
 // identity"]. No generation tag anywhere (bounded 3901) [P0-16 §2.2].
 // Returns false if validation fails (slot 0 or dead/free). Zero RNG draws.
@@ -878,8 +768,8 @@ func (w *World) ApplyDamage(target pool.Handle, dmg int32) bool {
 
 // Cleanup frees death-marked slots now that tick is done, matching retail
 // deferral [04 §2.4]. Call after Tick sweep. For sliced pools this clears
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// Zero RNG draws.
+// occupancy identity and alive and decrements per-player counters while
+// retaining the slot number stale. Zero RNG draws.
 func (w *World) Cleanup() {
 	if w == nil || w.pool == nil {
 		return
@@ -944,67 +834,12 @@ func (w *World) TotalRecords() int {
 	return w.pool.TotalRecords()
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// LiveCountForPlayer returns the per-player live counter [P0-16 §3.4].
 func (w *World) LiveCountForPlayer(player int) int {
 	if w == nil || player < 0 || player >= 10 {
 		return 0
 	}
 	return w.liveCounters[player]
-}
-
-// Tick sweeps players ascending then slots ascending [01 §6.2] C2.
-// Alive state and death mark separate; death clears alive during post-tick cleanup [04 §2.4] C2.
-// Construction Remaining is owned exclusively by construction.Service and is never
-// mutated here [05 "Construction target state"] [05 "Construction arithmetic"].
-// Per-unit pipeline per [04 §1.1][GAP T15] C17 (I7): pre-update → water damage →
-// weapon-slot update (Aim can block) → normal COB drain delta 1 → deferred
-// build/order → preserved movement → slot-end death handling. Tick never frees
-// slots; Cleanup handles that in phase 10 [04 §2.4] C2.
-//
-// Deprecated: Tick is a legacy package-wide sweep retained only for
-// compatibility. It is non-authoritative. New code should use the explicit
-// traversal API: VisitActiveSlots with StepPreUpdate at the front and
-// FinalizeDeath at slot-end, running weapon/COB/orders/movement between
-// those two boundaries [01 §4.4][04 "unit sweep"].
-func (w *World) Tick(tick uint32) {
-	if w == nil || w.units == nil {
-		return
-	}
-	// Players 0..9 ascending, slots ascending [01 §6.2] [PLAN_06 C2] [P0-16 §3.1]
-	// For sliced pools, per-player slices are scanned; for unsliced, global scan
-	// with player filter. No map iteration; deterministic (I1).
-	if w.pool != nil && w.pool.IsSliced() {
-		for player := 0; player < 10; player++ {
-			start, end, ok := w.pool.SliceForPlayer(player)
-			if !ok {
-				continue
-			}
-			for slot := start; slot <= end && slot < len(w.units); slot++ {
-				u := w.units[slot]
-				if u == nil || !u.Alive {
-					continue
-				}
-				if int(u.Owner) != player {
-					continue
-				}
-				// Real per-unit pipeline; does not mutate Remaining [05 "Construction target state"].
-				w.tickUnit(u, tick) // [04 §1.1][GAP T15] C17
-			}
-		}
-		return
-	}
-	for player := 0; player < 10; player++ {
-		for slot := 1; slot < len(w.units); slot++ {
-			u := w.units[slot]
-			if u == nil || !u.Alive {
-				continue
-			}
-			if int(u.Owner) != player {
-				continue
-			}
-			w.tickUnit(u, tick) // [04 §1.1][GAP T15] C17; no Remaining mutation
-		}
-	}
 }
 
 // Iter returns units in deterministic order for tests (pool asc).
@@ -1021,7 +856,7 @@ func (w *World) Iter() []*Unit {
 	return out
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+// DefIDForHandle returns the retail occupancy identity for the unit occupying handle [P0-16] (I13).
 // Zero means free sentinel or not yet assigned. It looks up the per-definition ID via defMap.
 func (w *World) DefIDForHandle(h pool.Handle) uint16 {
 	if w == nil || h == 0 {
@@ -1045,14 +880,10 @@ func (w *World) DefIDForHandle(h pool.Handle) uint16 {
 }
 
 // IterSliced returns units in sliced deterministic order: players 0..9 asc,
-// slots asc within each slice [P0-16 §3.1]. For unsliced pools it falls back
-// to Iter.
+// slots asc within each slice [P0-16 §3.1].
 func (w *World) IterSliced() []*Unit {
 	if w == nil {
 		return nil
-	}
-	if w.pool == nil || !w.pool.IsSliced() {
-		return w.Iter()
 	}
 	var out []*Unit
 	for player := 0; player < 10; player++ {

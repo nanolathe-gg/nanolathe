@@ -12,7 +12,7 @@ import (
 
 func triggerWorld(t *testing.T) *units.World {
 	t.Helper()
-	return units.New(16, nil)
+	return units.NewSliced(16, nil)
 }
 
 // spawn adds a live unit at integer world coordinates.

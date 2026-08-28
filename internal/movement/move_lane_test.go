@@ -78,7 +78,7 @@ func TestMoveLaneBlockPriorityReplanCadence(t *testing.T) {
 		terrain.Plot[i].SetMaxHeight(10)
 	}
 	sys := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxSlope: 255}, NewOccupancyGrid())
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "kbot", FootprintX: 1, FootprintZ: 1, MaxVelocity: 65536}
 	hLow, _ := w.Create(def, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
 	hHigh, _ := w.Create(def, 0, world.CellToWorld(2), 0, world.CellToWorld(2))

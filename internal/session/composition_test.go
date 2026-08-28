@@ -20,7 +20,7 @@ import (
 )
 
 func TestBindExistingOrderQueuesKeepsLazyQueuesLazy(t *testing.T) {
-	w := units.New(4, nil)
+	w := units.NewSliced(4, nil)
 	def := &content.UnitDef{UnitName: "queue-binding", MaxDamage: 1}
 	h1, _ := w.Create(def, 0, 0, 0, 0)
 	h2, _ := w.Create(def, 0, 0, 0, 0)

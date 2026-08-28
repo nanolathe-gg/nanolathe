@@ -20,7 +20,7 @@ func TestGroupsRequireAnEstablishedWriter(t *testing.T) {
 		MaxDamage:        100,
 	}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
-	w := units.New(16, cat)
+	w := units.NewSliced(16, cat)
 	for i := 0; i < 12; i++ {
 		h, err := w.Create(def, 0, world.CellToWorld(int32(i+1)), 0, world.CellToWorld(1))
 		if err != nil {
@@ -51,7 +51,7 @@ func TestClassifierDestinations(t *testing.T) {
 		def.CanonicalKey = content.CanonicalKey(def.UnitName)
 		cat.Units[def.CanonicalKey] = def
 	}
-	w := units.New(32, cat)
+	w := units.NewSliced(32, cat)
 	makeUnit := func(def *content.UnitDef, flags uint32) pool.Handle {
 		h, err := w.Create(def, 0, 0, 0, 0)
 		if err != nil {
@@ -179,7 +179,7 @@ func TestMergeWaveGroupsTransfersOnlyEstablishedMembers(t *testing.T) {
 		MaxDamage:        100,
 	}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
-	w := units.New(16, cat)
+	w := units.NewSliced(16, cat)
 	create := func(x, z int32) pool.Handle {
 		h, err := w.Create(def, 0, numeric.Fixed(x)*numeric.Fixed(1<<16), 0, numeric.Fixed(z)*numeric.Fixed(1<<16))
 		if err != nil {
@@ -224,7 +224,7 @@ func TestGroupCentroidUsesStoredPixelDomain(t *testing.T) {
 		MaxVelocity:      100,
 	}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
-	w := units.New(4, cat)
+	w := units.NewSliced(4, cat)
 	first, err := w.Create(def, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -275,7 +275,7 @@ func TestMergeWaveGroupsBootstrapsFromEmptyWave(t *testing.T) {
 		MaxDamage:        100,
 	}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
-	w := units.New(16, cat)
+	w := units.NewSliced(16, cat)
 	create := func(x, z int32) pool.Handle {
 		h, err := w.Create(def, 0, numeric.Fixed(x)*numeric.Fixed(1<<16), 0, numeric.Fixed(z)*numeric.Fixed(1<<16))
 		if err != nil {
@@ -334,7 +334,7 @@ func TestMergeWaveGroupsKeepsLastMember(t *testing.T) {
 		MaxDamage:        100,
 	}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
-	w := units.New(16, cat)
+	w := units.NewSliced(16, cat)
 	h, err := w.Create(def, 0, numeric.Fixed(9000)*numeric.Fixed(1<<16), 0, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -363,7 +363,7 @@ func TestDoWavePairsWithRegroupNotTheOtherWave(t *testing.T) {
 		MaxDamage:        100,
 	}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
-	w := units.New(16, cat)
+	w := units.NewSliced(16, cat)
 	mk := func() pool.Handle {
 		h, err := w.Create(def, 0, numeric.Fixed(64)*numeric.Fixed(1<<16), 0, numeric.Fixed(64)*numeric.Fixed(1<<16))
 		if err != nil {

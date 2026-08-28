@@ -50,7 +50,7 @@ func initialMissionCatalog(includeUnknown bool) *content.Catalog {
 var testInitialCatalog = initialMissionCatalog(false)
 
 func newWorldWithUnits(defs []*content.UnitDef, idents []string, unitNames []string) (*units.World, []*units.Unit) {
-	w := units.New(20, nil)
+	w := units.NewSliced(20, nil)
 	var us []*units.Unit
 	for i, def := range defs {
 		h, err := w.Create(def, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
@@ -135,7 +135,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	// Create three units to test inter-unit verbs g,i,wa.
 	// Test m
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -158,7 +158,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	}
 	// a numeric
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -175,7 +175,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	}
 	// a by-type
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -188,7 +188,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 			t.Fatalf("a by-type should NOT suppress MakeSelectable")
 		}
 		// unknown type should queue nothing -> still postlude? No queued orders, so no MakeSelectable.
-		w2 := units.New(5, nil)
+		w2 := units.NewSliced(5, nil)
 		h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u2 := w2.Unit(h2)
 		u2.Flags |= 1 << 5
@@ -203,7 +203,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	}
 	// b building vs mobile
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -221,7 +221,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 			t.Fatalf("b coordinates wrong")
 		}
 		// mobile type ARMCK
-		w2 := units.New(5, nil)
+		w2 := units.NewSliced(5, nil)
 		h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u2 := w2.Unit(h2)
 		u2.Flags |= 1 << 5
@@ -233,7 +233,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	}
 	// bw
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -254,7 +254,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	}
 	// d
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -270,7 +270,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	// g
 	{
 		// need two units
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		hA, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		hB, _ := w1.Create(testDef("ARMCK"), 0, 0, 0, 0)
 		uA := w1.Unit(hA)
@@ -294,7 +294,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 			t.Fatalf("g target wrong: got %v want %v", n.Target, hB)
 		}
 		// unresolved g should queue nothing
-		w2 := units.New(5, nil)
+		w2 := units.NewSliced(5, nil)
 		hA2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		uA2 := w2.Unit(hA2)
 		uA2.Flags |= 1 << 5
@@ -308,7 +308,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	}
 	// i
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		hA, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		hB, _ := w1.Create(testDef("ARMCK"), 0, 0, 0, 0)
 		uA := w1.Unit(hA)
@@ -332,7 +332,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	}
 	// o
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags = 0
@@ -348,7 +348,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	}
 	// p
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -373,7 +373,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	}
 	// s
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -397,7 +397,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	}
 	// u
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -416,7 +416,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	}
 	// w
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -435,7 +435,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	}
 	// wa
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		hA, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		hB, _ := w1.Create(testDef("ARMCK"), 0, 0, 0, 0)
 		uA := w1.Unit(hA)
@@ -453,7 +453,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 			t.Fatalf("wa target wrong: got %v want %v", n.Target, hB)
 		}
 		// wa unresolved fallback to self
-		w2 := units.New(5, nil)
+		w2 := units.NewSliced(5, nil)
 		hA2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		uA2 := w2.Unit(hA2)
 		uA2.Flags |= 1 << 5
@@ -471,7 +471,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 
 func TestUppercaseWQuirk(t *testing.T) {
 	// C11: uppercase-led W… token enters BUILD block, never plain Wait.
-	w1 := units.New(5, nil)
+	w1 := units.NewSliced(5, nil)
 	h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u := w1.Unit(h)
 	u.Flags |= 1 << 5
@@ -484,7 +484,7 @@ func TestUppercaseWQuirk(t *testing.T) {
 		t.Fatalf("uppercase W should never be Wait")
 	}
 	// Lowercase w should be Wait.
-	w2 := units.New(5, nil)
+	w2 := units.NewSliced(5, nil)
 	h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u2 := w2.Unit(h2)
 	u2.Flags |= 1 << 5
@@ -494,7 +494,7 @@ func TestUppercaseWQuirk(t *testing.T) {
 		t.Fatalf("lowercase w should be Wait")
 	}
 	// Wa lowercase should be WaitForAttack
-	w3 := units.New(5, nil)
+	w3 := units.NewSliced(5, nil)
 	h3, _ := w3.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u3 := w3.Unit(h3)
 	u3.Flags |= 1 << 5
@@ -504,7 +504,7 @@ func TestUppercaseWQuirk(t *testing.T) {
 		t.Fatalf("lowercase wa should be WaitForAttack")
 	}
 	// Uppercase Wa should NOT be WaitForAttack (it goes to BUILD)
-	w4 := units.New(5, nil)
+	w4 := units.NewSliced(5, nil)
 	h4, _ := w4.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u4 := w4.Unit(h4)
 	u4.Flags |= 1 << 5
@@ -514,7 +514,7 @@ func TestUppercaseWQuirk(t *testing.T) {
 		t.Fatalf("uppercase Wa should not be WaitForAttack per C11")
 	}
 	// Uppercase Ww should be BuildWeapon via quirk
-	w5 := units.New(5, nil)
+	w5 := units.NewSliced(5, nil)
 	h5, _ := w5.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u5 := w5.Unit(h5)
 	u5.Flags |= 1 << 5
@@ -524,7 +524,7 @@ func TestUppercaseWQuirk(t *testing.T) {
 		t.Fatalf("uppercase Ww should be BuildWeapon via C11")
 	}
 	// Lowercase bw also BuildWeapon but via normal path
-	w6 := units.New(5, nil)
+	w6 := units.NewSliced(5, nil)
 	h6, _ := w6.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u6 := w6.Unit(h6)
 	u6.Flags |= 1 << 5
@@ -539,7 +539,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	// C12 postlude: ≥1 order queued ⇒ bit5 clears; unless numeric a/p/d/s appeared, final MakeSelectable queues.
 	// m does NOT suppress => should have tail
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -554,7 +554,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	}
 	// numeric a suppresses
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -569,7 +569,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	}
 	// by-type a does NOT suppress
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -581,7 +581,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	}
 	// p suppresses
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -593,7 +593,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	}
 	// d suppresses
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -605,7 +605,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	}
 	// s suppresses but s itself is MakeSelectable, so exactly one.
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -624,7 +624,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	}
 	// no queued orders => no bit5 clear and no tail
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -639,7 +639,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	}
 	// multiple verbs with one suppressing => still suppress tail
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -667,7 +667,7 @@ func TestSilentMalformed(t *testing.T) {
 	// Unknown letters/digits/punctuation ignored, scanning resumes past comma [C13].
 	// Failed lookups no-op (wa fallback).
 	// Malformed numbers still queue with 0.
-	w1 := units.New(5, nil)
+	w1 := units.NewSliced(5, nil)
 	h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u := w1.Unit(h)
 	u.Flags |= 1 << 5
@@ -686,7 +686,7 @@ func TestSilentMalformed(t *testing.T) {
 		// So total 3.
 	}
 	// malformed numbers: move with bad numbers should still queue with 0.
-	w2 := units.New(5, nil)
+	w2 := units.NewSliced(5, nil)
 	h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u2 := w2.Unit(h2)
 	u2.Flags |= 1 << 5
@@ -700,7 +700,7 @@ func TestSilentMalformed(t *testing.T) {
 		t.Fatalf("malformed numbers should result in 0, got %d,%d", n.GoalX, n.GoalZ)
 	}
 	// wa fallback to self when unresolved
-	w3 := units.New(5, nil)
+	w3 := units.NewSliced(5, nil)
 	h3, _ := w3.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u3 := w3.Unit(h3)
 	u3.Flags |= 1 << 5
@@ -711,7 +711,7 @@ func TestSilentMalformed(t *testing.T) {
 		t.Fatalf("wa unresolved fallback to self failed")
 	}
 	// g unresolved should queue nothing -> no postlude if no other orders? Actually g unresolved queues nothing, so queued==0 -> no tail and bit5 not cleared.
-	w4 := units.New(5, nil)
+	w4 := units.NewSliced(5, nil)
 	h4, _ := w4.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u4 := w4.Unit(h4)
 	u4.Flags |= 1 << 5
@@ -730,7 +730,7 @@ func TestClamp255(t *testing.T) {
 	// Generate a script with no commas, length 300, with a valid verb at start.
 	long := strings.Repeat("a", 300) // no comma, all 'a's but first is 'a' verb? Actually token would be "aaa...". First char 'a', rest is payload but no comma -> one token length 300.
 	// Our clamp should truncate to 255 and not panic.
-	w1 := units.New(5, nil)
+	w1 := units.NewSliced(5, nil)
 	h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u := w1.Unit(h)
 	u.Flags |= 1 << 5
@@ -745,7 +745,7 @@ func TestClamp255(t *testing.T) {
 	// Token with comma-free long run inside script that has comma delimiter should clamp per-token.
 	// Example: script "m 1,2, " + long without comma? Hard to test.
 	// At least ensure no panic for long script.
-	w2 := units.New(5, nil)
+	w2 := units.NewSliced(5, nil)
 	h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u2 := w2.Unit(h2)
 	m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: long}}}
@@ -809,7 +809,7 @@ func TestCoordinatesAndTimesVectors(t *testing.T) {
 		},
 	}
 	for i, tc := range cases {
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags = 0
@@ -825,7 +825,7 @@ func TestCoordinatesAndTimesVectors(t *testing.T) {
 	}
 	// Additional negative time trunc toward zero: w -1.5 should be -45 ticks truncated toward zero => -45.
 	{
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags |= 1 << 5
@@ -840,7 +840,7 @@ func TestCoordinatesAndTimesVectors(t *testing.T) {
 
 func TestNonCampaignNoOp(t *testing.T) {
 	// C9: only type 1 and BetweenMissions restores run. Type 2 should be no-op.
-	w1 := units.New(5, nil)
+	w1 := units.NewSliced(5, nil)
 	h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u := w1.Unit(h)
 	u.Flags |= 1 << 5
@@ -867,7 +867,7 @@ func TestMissionOFlagBits(t *testing.T) {
 		{5, 9, (1 << 18) | (1 << 20)}, // &3 masks
 	}
 	for _, c := range cases {
-		w1 := units.New(5, nil)
+		w1 := units.NewSliced(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		u := w1.Unit(h)
 		u.Flags = 0
@@ -892,7 +892,7 @@ func TestMissionOFlagBits(t *testing.T) {
 // [04 §3.2]. Both the build verb and attack-by-type must carry the canonical
 // key.
 func TestInitialBuildCarriesResolvableProductIdentity(t *testing.T) {
-	w := units.New(5, nil)
+	w := units.NewSliced(5, nil)
 	h, _ := w.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u := w.Unit(h)
 	u.Flags |= 1 << 5
@@ -906,7 +906,7 @@ func TestInitialBuildCarriesResolvableProductIdentity(t *testing.T) {
 		t.Fatalf("build node product identity: got BuildDefKey %q want %q", n.BuildDefKey, want)
 	}
 
-	w2 := units.New(5, nil)
+	w2 := units.NewSliced(5, nil)
 	h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	u2 := w2.Unit(h2)
 	u2.Flags |= 1 << 5

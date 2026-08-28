@@ -27,7 +27,7 @@ func reclaimFixture(t *testing.T, targetHealth int32, buildDistance int32) (*Ser
 		MaxDamage:      100,
 	}
 	cat := catWithDefs(builderDef, targetDef)
-	w := units.New(16, cat)
+	w := units.NewSliced(16, cat)
 	bh, err := w.Create(builderDef, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)

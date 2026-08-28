@@ -102,19 +102,38 @@ argument at every call site. The complete strip → producer/event map:
 |---|---|---|
 | 0 | none — no producer exists anywhere in the image | always empty |
 | 1 | none | always empty |
-| 2 | weapon impact-effect switch: one jittered smoke puff (three CRT draws of `rand×7/0x8000 − 3` per axis) per spawn, spawned every 16 or 8 ticks for the object's life; palette colors `0x61`/`0x67` | 4 |
+| 2 | COB emit-sfx vector types 2–5 (the "impact-effect switch" — see the re-verification note below): one jittered smoke puff (three CRT draws of `rand×7/0x8000 − 3` per axis) per spawn, spawn interval 1 tick with the per-site spacing parameter (16 or 8) scaling puff lifetime; palette colors `0x61`/`0x67` | 4 |
 | 3 | none | always empty |
 | 4 | none — the retired "crater/decal literal 4" is retracted (see §3.7) | always empty |
 | 5 | flame-weapon area scan (1 site): for every other unit inside the attacker's definition-relative box, a 30-tick flame-stream object that lays one animated segment every 10 ticks with a random start frame, plus an ignition callback; burning-feature smoke (1 site, phase 6 of doc 01 §4.4): one wind-drifted smoke puff every 3rd tick with two CRT jitter draws at the call site | 2 |
 | 6 | construction/reclaim nanolathe emitters: a source point and a target box, five particles per spawn tick over a two-tick spawn window (six CRT draws per particle) | 16 |
 | 7 | flame-stream trail (2 sites): one animated flame segment per tick over a 6–7 tick flight from source to target; smoke sprinkle variant (1 site): the strip-2 family with 8-tick spacing and a 7-tick life | 3 |
 | 8 | none (the composer still draws the strip, unconditionally) | always empty |
-| 9 | impact smoke: the authoritative impact dispatcher under a weapon-definition flag (1), the projectile phase's trail-window and impact branches (2), the land/water/lava impact effect variants under a second weapon flag (3), the impact-effect switch case (1), the COB emit-sfx local variants (2), the fixed-effect-pool append side effect when the effect lands above sea level (1), and the sinking-wreck path's long-lived (900-tick) smoke column (2) | 12 |
+| 9 | impact smoke: the authoritative impact dispatcher under a weapon-definition flag (1), the projectile phase's trail-window and impact branches (2), the land/water/lava impact effect variants under a second weapon flag (3), the emit-sfx smoke point cases — white `0x101` and black `0x102`, two sites (see the re-verification note below), the fixed-effect-pool append side effect when the effect lands above sea level (1), and the sinking-wreck path's long-lived (900-tick) smoke column (1) | 12 |
 
 The old census's strip-2 count (4 sites) and strip-9 count (12 sites) are
 confirmed; strip 6's count is sixteen sites in the reference graph, one short
 of the old census's seventeen (the extra site was not reproduced and is not
 assumed to exist).
+
+**Re-verification — the "impact-effect switch" is the COB emit-sfx type
+dispatch (2026-08-28, direct-static).** The strip-2 producer named above as
+the "weapon impact-effect switch" is the COB `emit-sfx` opcode's type-byte
+dispatch, not the impact dispatcher: vector types 2–5 run the strip-2/7
+sprinkle family (types 2/3 source→target, 4/5 with the endpoints swapped;
+the swapped pair needs the piece's second effect vertex, whose derivation is
+`TODO(question)`), type `0x101` is a white smoke point and `0x102` a black
+smoke point (both strip 9), and type `0x103` is the strip-7 water-line
+sub-bubble sprinkle. The earlier partition counted the black smoke point
+under the sinking-wreck path, which contributes one site, not two; the
+strip-9 total of 12 is unchanged.
+
+Two sprinkle-family mechanics the original row compressed: the 16-or-8 value
+is the per-site **spacing** parameter, which scales puff lifetime (puffs live
+`spacing×6` ticks); the spawn interval itself is 1 tick, and a sprinkle
+container holds two puffs (one at construction, one at the single gate fire —
+the object's window closes one tick after creation). The smoke family's
+animation delay defaults to 7 when a producer passes zero.
 
 #### R-STRIP-01 §2 — object families, update work, and terminal state
 

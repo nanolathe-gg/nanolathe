@@ -14,7 +14,7 @@ func TestP0I10_LoadingCannotTick(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
 		Snapshot: &frame.Buffer{},
-		Units:    units.New(10, nil),
+		Units:    units.NewSliced(10, nil),
 		State:    StateLoading,
 	}
 	s.RegisterAll()
@@ -43,7 +43,7 @@ func TestP0I10_VictoryReachesPostBattleExactlyOnce(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
 		Snapshot: &frame.Buffer{},
-		Units:    units.New(10, nil),
+		Units:    units.NewSliced(10, nil),
 		State:    StateBattle,
 		Mission:  &mission.Mission{Type: mission.TypeCampaign},
 		Latch:    NewEndLatch(),
@@ -187,7 +187,7 @@ func TestP0I10_AbortTransitionsThroughRouter(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
 		Snapshot: &frame.Buffer{},
-		Units:    units.New(10, nil),
+		Units:    units.NewSliced(10, nil),
 		State:    StateBattle,
 	}
 	s.RegisterAll()

@@ -270,11 +270,12 @@ func TestStripEmptyTableSweepTouchesNothing(t *testing.T) {
 }
 
 // TestStripProducerCensusKeepsWriterlessStripsEmpty: the complete producer
-// census gives strips 0/1/3/4/8 no writer anywhere [R-STRIP-01 §1], and the
-// in-session producer set today writes only strip 6 (nano submissions) plus
-// the smoke scaffolding for strips 5/9. Strips 2 and 7 have retail producers
-// but none wired in-session. Nothing may invent events for the writerless
-// strips.
+// census gives strips 0/1/3/4/8 no writer anywhere [R-STRIP-01 §1]. The full
+// production producer set — strip-6 nano submissions, the strips-5/9 smoke
+// sites (impact, weapon-fire start, burning-feature, sinking-wreck
+// profiles), and the strips-2/7 sprinkle producers (the emit-sfx thrust and
+// sub-bubble cases) — must leave those five strips empty. Nothing may invent
+// events for the writerless strips.
 func TestStripProducerCensusKeepsWriterlessStripsEmpty(t *testing.T) {
 	s, _ := newStripTestSession(16, 16)
 	s.Clock.GlobalTick = 10
@@ -284,8 +285,12 @@ func TestStripProducerCensusKeepsWriterlessStripsEmpty(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		s.appendStripNanoEmitter(point, farPoint)
 	}
-	s.appendStripSmokePuffer(9, point, 900, 0) // sinking-wreck smoke column profile
-	s.appendStripSmokePuffer(5, point, 30, 0)  // burning-feature smoke profile
+	s.appendStripSmokePuffer(9, point, 900, smokeDefaultFrameDelay) // sinking-wreck smoke column profile
+	s.appendStripSmokePuffer(5, point, 30, smokeDefaultFrameDelay)  // burning-feature smoke profile
+	s.appendStripSmokePuffer(9, point, 0, smokeDefaultFrameDelay)   // impact / weapon-fire smoke profile
+	s.appendStripSprinkle(2, point, 16, 1)                          // emit-sfx thrust pair (type 2)
+	s.appendStripSprinkle(2, point, 8, 1)                           // emit-sfx thrust pair (type 3)
+	s.appendStripSprinkle(7, point, 8, 0)                           // emit-sfx sub-bubbles (0x103)
 
 	for tick := uint32(10); tick <= 15; tick++ {
 		s.phaseObjectSweeps(tick)
@@ -296,13 +301,10 @@ func TestStripProducerCensusKeepsWriterlessStripsEmpty(t *testing.T) {
 			t.Fatalf("strip %d holds %d objects; the census gives it no producer [R-STRIP-01 §1]", strip, n)
 		}
 	}
-	for _, strip := range []int{2, 7} {
-		if n := len(s.strips.strips[strip]); n != 0 {
-			t.Fatalf("strip %d holds %d objects; its producers are not wired in-session", strip, n)
+	for _, strip := range []int{2, 5, 6, 7, 9} {
+		if n := len(s.strips.strips[strip]); n == 0 {
+			t.Fatalf("strip %d received no objects from the wired producer set", strip)
 		}
-	}
-	if len(s.strips.strips[6]) == 0 {
-		t.Fatal("strip 6 received no nano emitters")
 	}
 }
 
@@ -310,7 +312,9 @@ func TestStripProducerCensusKeepsWriterlessStripsEmpty(t *testing.T) {
 // behavior: one CRT draw per spawned puff (start frame), one draw per
 // animation-frame advance with the next delay drawn as half to full of the
 // authored delay [R-STRIP-01 §3], and the published wind words applied ×8 to
-// the X and Z terms each tick [R-WIND-01].
+// the X and Z terms each tick [R-WIND-01]. The container is assembled
+// directly so the gate, animation, and drift mechanics are pinned
+// independently of any producer site's parameters.
 func TestSmokeFamilySweepDrawsAndWindow(t *testing.T) {
 	s, crt := newStripTestSession(17, 17)
 	ref := rng.NewCRT(17)
@@ -318,23 +322,21 @@ func TestSmokeFamilySweepDrawsAndWindow(t *testing.T) {
 
 	s.Clock.GlobalTick = 50
 	pos := [3]numeric.Fixed{numeric.FixedFromInt(100), numeric.FixedFromInt(0), numeric.FixedFromInt(200)}
-	s.appendStripSmokePuffer(9, pos, 60, 8)
-	o := &s.strips.strips[9][0]
-	o.nextSpawn = 50
-	o.windowEnd = 50 // one spawn: the gate dies once nextSpawn (53) passes the window
-	o.spawnInterval = 3
+	o := stripObject{family: stripFamilySmoke, src: pos, frameDelayParam: 8, windowEnd: 50, nextSpawn: 50, spawnInterval: 3}
+	s.strips.append(9, o)
 
 	draws0 := crt.Draws()
 	s.phaseObjectSweeps(50)
 	if got := crt.Draws() - draws0; got != 1 {
 		t.Fatalf("smoke spawn spent %d draws, want 1 (start frame)", got)
 	}
-	p := o.particles[len(o.particles)-1]
+	live := &s.strips.strips[9][0]
+	p := live.particles[len(live.particles)-1]
 	if p.frame != startFrame {
 		t.Fatal("start-frame draw diverged from the reference stream")
 	}
-	if o.particles[0].x != pos[0] || o.particles[0].z != pos[2] {
-		t.Fatalf("puff drifted without wind: (%d,%d)", o.particles[0].x.Int(), o.particles[0].z.Int())
+	if live.particles[0].x != pos[0] || live.particles[0].z != pos[2] {
+		t.Fatalf("puff drifted without wind: (%d,%d)", live.particles[0].x.Int(), live.particles[0].z.Int())
 	}
 
 	// Wind drift: ×8 per tick on the published words [R-WIND-01]; the spawn
@@ -349,7 +351,7 @@ func TestSmokeFamilySweepDrawsAndWindow(t *testing.T) {
 	if got := crt.Draws() - draws1; got != 1 {
 		t.Fatalf("animation advance spent %d draws, want 1", got)
 	}
-	p = o.particles[len(o.particles)-1]
+	p = live.particles[len(live.particles)-1]
 	advance := ref.Rand()
 	wantDelay := 4 + int32(int64(advance)*int64(4)/0x8000)
 	if p.frameDelay != wantDelay || p.frame != startFrame+1 {
@@ -358,6 +360,112 @@ func TestSmokeFamilySweepDrawsAndWindow(t *testing.T) {
 	}
 	if wantX, wantZ := int64(100)+3*8*8, int64(200)+(-2)*8*8; p.x.Int() != wantX || p.z.Int() != wantZ {
 		t.Fatalf("wind drift (%d,%d), want (%d,%d)", p.x.Int(), p.z.Int(), wantX, wantZ)
+	}
+}
+
+// TestSmokeProducerSpawnsFirstPuff locks the producer-side contract shared by
+// every wired smoke site [R-STRIP-01 §1 strips 5/9][R-STRIP-01 §2][R-STRIP-01
+// §3]: the family's constructor spawns its first puff immediately, spending
+// exactly one CRT draw (the start frame), and carries the site's animation
+// delay into the puff.
+func TestSmokeProducerSpawnsFirstPuff(t *testing.T) {
+	s, crt := newStripTestSession(21, 21)
+	ref := rng.NewCRT(21)
+	wantFrame := ref.Rand()
+
+	s.Clock.GlobalTick = 9
+	pos := [3]numeric.Fixed{numeric.FixedFromInt(5), numeric.FixedFromInt(0), numeric.FixedFromInt(6)}
+	draws0 := crt.Draws()
+	s.appendStripSmokePuffer(9, pos, 0, smokeDefaultFrameDelay)
+	if got := crt.Draws() - draws0; got != 1 {
+		t.Fatalf("producer spent %d draws, want 1 (start frame)", got)
+	}
+
+	strip := s.strips.strips[9]
+	if len(strip) != 1 || len(strip[0].particles) != 1 {
+		t.Fatalf("producer left %d containers / %d puffs, want 1/1", len(strip), len(strip[0].particles))
+	}
+	p := strip[0].particles[0]
+	if p.frame != wantFrame {
+		t.Fatal("start-frame draw diverged from the reference stream")
+	}
+	if p.x != pos[0] || p.z != pos[2] {
+		t.Fatal("first puff did not spawn at the site's position")
+	}
+	// The site's window is not established: no armed gate, no tick deadline.
+	if strip[0].nextSpawn != 0 || p.expiry != 0 {
+		t.Fatalf("gate/deadline = %d/%d, want unarmed and undated", strip[0].nextSpawn, p.expiry)
+	}
+}
+
+// TestSprinkleProducerTwoPuffsAndLifetime locks the strips-2/7 sprinkle
+// producer [R-STRIP-01 §1 strips 2/7][R-STRIP-01 §2][R-STRIP-01 §3]: three
+// CRT draws at the producer (per-axis jitter), a second three-draw spawn from
+// the phase-11 gate on the next tick and then no more (the spawn window
+// closes one tick after creation), each puff living spacing×6 ticks, and the
+// palette entry selected by the producer's init flag.
+func TestSprinkleProducerTwoPuffsAndLifetime(t *testing.T) {
+	s, crt := newStripTestSession(22, 22)
+	ref := rng.NewCRT(22)
+	j0 := [3]int64{
+		int64(ref.Rand())*7/0x8000 - 3,
+		int64(ref.Rand())*7/0x8000 - 3,
+		int64(ref.Rand())*7/0x8000 - 3,
+	}
+
+	s.Clock.GlobalTick = 40
+	pos := [3]numeric.Fixed{numeric.FixedFromInt(10), numeric.FixedFromInt(20), numeric.FixedFromInt(30)}
+	draws0 := crt.Draws()
+	s.appendStripSprinkle(2, pos, 16, 1)
+	if got := crt.Draws() - draws0; got != 3 {
+		t.Fatalf("producer spent %d draws, want 3 (per-axis jitter)", got)
+	}
+
+	o := &s.strips.strips[2][0]
+	if o.family != stripFamilySprinkle || o.windowEnd != 41 || o.nextSpawn != 41 || o.spawnInterval != 1 {
+		t.Fatalf("window/gate = %d/%d/%d, want 41/41/1 (window closes one tick after creation)",
+			o.windowEnd, o.nextSpawn, o.spawnInterval)
+	}
+	if len(o.particles) != 1 {
+		t.Fatalf("%d puffs after the producer, want 1", len(o.particles))
+	}
+	p := o.particles[0]
+	if p.color != 0x61 {
+		t.Fatalf("colorSel=1 puff color %#x, want 0x61", p.color)
+	}
+	if p.x.Int() != 10+j0[0] || p.y.Int() != 20+j0[1] || p.z.Int() != 30+j0[2] {
+		t.Fatalf("jittered spawn (%d,%d,%d), want (%d,%d,%d)",
+			p.x.Int(), p.y.Int(), p.z.Int(), 10+j0[0], 20+j0[1], 30+j0[2])
+	}
+	if p.expiry != 40+16*6 {
+		t.Fatalf("puff expiry %d, want %d (spacing×6 lifetime)", p.expiry, 40+16*6)
+	}
+
+	// The creation tick's sweep must not fire the gate; the next tick's
+	// spawns the second puff (three more draws) and advances past the closed
+	// window so no third spawn ever fires.
+	draws1 := crt.Draws()
+	s.phaseObjectSweeps(40)
+	if got := crt.Draws() - draws1; got != 0 {
+		t.Fatalf("creation-tick sweep spent %d draws, want 0", got)
+	}
+	s.phaseObjectSweeps(41)
+	if got := crt.Draws() - draws1; got != 3 {
+		t.Fatalf("gate spawn spent %d draws, want 3", got)
+	}
+	if len(o.particles) != 2 {
+		t.Fatalf("%d puffs after the gate, want 2", len(o.particles))
+	}
+	s.phaseObjectSweeps(42)
+	if got := crt.Draws() - draws1; got != 3 {
+		t.Fatalf("closed-window sweep spent %d draws, want 3 (no third spawn)", got)
+	}
+
+	// colorSel zero selects the other palette entry (the strip-7 variant's
+	// selection).
+	s.appendStripSprinkle(7, pos, 8, 0)
+	if p := s.strips.strips[7][0].particles[0]; p.color != 0x67 {
+		t.Fatalf("colorSel=0 puff color %#x, want 0x67", p.color)
 	}
 }
 

@@ -55,7 +55,7 @@ func trivialModel(pieceCount int, translations [][3]int64) *model.Model {
 
 func newTestWorld(cap int) *units.World {
 	cat := &content.Catalog{}
-	return units.New(cap, cat)
+	return units.NewSliced(cap, cat)
 }
 
 func newFactoryDef(name string, footX, footZ int32, workerTime int32) *content.UnitDef {

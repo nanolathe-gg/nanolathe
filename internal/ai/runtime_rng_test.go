@@ -74,7 +74,7 @@ func TestStrategicRefreshNilRNGDoesNotMutate(t *testing.T) {
 
 func TestExploreAndRallyBodyDraws(t *testing.T) {
 	terrain := &world.Terrain{CellW: 32, CellH: 24}
-	w := units.New(1, nil)
+	w := units.NewSliced(1, nil)
 
 	// The small-group branch runs one baseline attempt plus its binary choice,
 	// sampling width/8 and height/8 for each attempt.

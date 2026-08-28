@@ -36,7 +36,7 @@ func TestRS10_HumanAndAIOrdinaryCommands(t *testing.T) {
 	for i := range terrain.Plot {
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 	}
-	w := units.New(20, cat)
+	w := units.NewSliced(20, cat)
 	econ := &economy.Service{}
 	svc := construction.NewService(terrain, cat, w, econ)
 

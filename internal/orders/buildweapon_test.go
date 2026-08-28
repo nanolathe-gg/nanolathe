@@ -18,7 +18,7 @@ func weaponDefForBuild(stockpile bool, reload int32) *content.WeaponDef {
 
 func TestBuildWeaponStockpileQueue(t *testing.T) {
 	// Unit with stockpile weapon at slot 0.
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "armsilo", MaxDamage: 100}
 	// Install stockpile weapon via direct slot.
 	h, err := w.Create(def, 0, 0, 0, 0)
@@ -104,7 +104,7 @@ func TestBuildWeaponStockpileQueue(t *testing.T) {
 }
 
 func TestBuildWeaponBlockedAt199(t *testing.T) {
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "armsilo", MaxDamage: 100}
 	h, _ := w.Create(def, 0, 0, 0, 0)
 	u := w.Unit(h)
@@ -130,7 +130,7 @@ func TestBuildWeaponBlockedAt199(t *testing.T) {
 }
 
 func TestBuildWeaponCoalesceAndUI(t *testing.T) {
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "armsilo", MaxDamage: 100}
 	h, _ := w.Create(def, 0, 0, 0, 0)
 	u := w.Unit(h)

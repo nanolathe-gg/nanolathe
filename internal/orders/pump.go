@@ -20,8 +20,11 @@ const (
 	FlagAutoOp uint32 = 1 << iota // existence established [04 §3.3][05 "Queue subtraction"]; numeric values not established
 	FlagPurgeSurvivor
 	FlagTombstone
-	FlagRetryMark           // TODO(question) actual bit not located [04 §3.3] code 9
-	FlagStopBuildingPending // TODO(question) StopBuilding pending flag lands with WU-06-7 [05 "Queue subtraction"]
+	FlagRetryMark // [04 §3.3][R-ORDER-02 §2] code-9 completion flag; write-only state — no pump, cleanup, or handler may read it
+	// FlagStopBuildingPending marks a record whose StartBuilding emitter ran
+	// (EmitStartBuilding, the flag's only writer [R-ORDER-02 §2]); cleanup
+	// emits the StopBuilding counterpart on every removal path.
+	FlagStopBuildingPending
 )
 
 const (
@@ -48,7 +51,7 @@ type Node struct {
 	CachedY      int16
 	Param1       uint32 // three general parameters [04 §3.2]
 	Param2       uint32
-	Param3       uint32
+	Param3       uint32 // build progress; for a mobile build the blocked-area retry counter [04 §3.2][R-ORDER-02 §1]
 	StaticGate   uint32 // copy of descriptor static gate [04 §3.2]
 	CreationTick uint32 // creation-tick snapshot [04 §3.2]
 	Satisfied    uint32 // accumulated satisfied-gate bits [04 §3.2]
@@ -64,7 +67,8 @@ type Node struct {
 	// Catalog.UnitDefIndex. Using string+index avoids FNV-1a collisions (N04)
 	// and provides the established name→index table at load [P0-I05].
 	// Factory product: BuildDefKey+Param1(index)+Param2(count)+Phase progress [05].
-	// Mobile build: BuildDefKey+Param1(index)+GoalX/Z site + Param3 orientation [05].
+	// Mobile build: BuildDefKey+Param1(index)+GoalX/Z site; Param3 is the
+	// blocked-area retry counter [04 §3.2][R-ORDER-02 §1].
 	// Assist/repair/reclaim/capture/resurrection: Target + operation-specific progress in Param2/3 [05].
 	BuildDefKey string // canonical unit key for build products [P0-I05][02 §5]
 }
@@ -438,25 +442,63 @@ func (q *Queue) cancelAll() {
 		if i != 0 {
 			n.Flags |= FlagTombstone
 		}
-		cleanupNode(n)
+		q.cleanupNode(n)
 	}
 	for _, n := range q.secondary {
 		n.Flags |= FlagTombstone
-		cleanupNode(n)
+		q.cleanupNode(n)
 	}
 	q.primary = nil
 	q.secondary = nil // via the pair-removal helper [05]
 }
 
-func cleanupNode(n *Node) {
-	// [05 "Queue subtraction"] strict order:
-	// 1 restore interface identity – nop
-	// 2 invoke handler with cancel-notification mask when wake byte requests it – TODO(question) requesting bit not established
-	// 3 emit StopBuilding + network event when stop-building-pending flag is set – TODO(question) lands with WU-06-7
-	// 4 release presentation payload – nil today
-	// 5 ONLY when not tombstoned, clear weapon build targets + TargetCleared – TODO(question) lands with WU-06-7
+// ownerUnit resolves a record's owning unit through the queue's binding
+// lookup. It returns nil when no lookup is installed (bare fixtures), which
+// leaves every callback arrange a no-op.
+func (q *Queue) ownerUnit(n *Node) *units.Unit {
+	if q == nil || n == nil || n.Owner == 0 {
+		return nil
+	}
+	binding := q.Binding()
+	if binding == nil || binding.Lookup == nil {
+		return nil
+	}
+	return binding.Lookup(n.Owner)
+}
+
+// cleanupNode runs the strict record-removal cleanup order [R-ORDER-02 §2]:
+//
+//  1. restore the record identity — records are named Go fields (I13),
+//     nothing to restore;
+//  2. when the record's dynamic gate mask — the same field the pump consumes
+//     — still holds bit 1 (value 2) at removal, invoke the operation handler
+//     with that cancel-notification mask: a record removed while waiting on
+//     that bit delivers the cancel-current notification through its own
+//     handler. The return code is ignored; the record is already being freed.
+//     This step runs regardless of the tombstone;
+//  3. emit the StopBuilding counterpart when the record carries the pending
+//     flag — on every removal path and NOT tombstone-gated;
+//  4. release the presentation payload — records carry none today, and the
+//     owner's displayed-payload latch has no record payload to point at;
+//  5. ONLY for a non-tombstoned record, run the weapon-target-clear helper
+//     (TargetCleared). The tombstone is set at removal time on every freed
+//     record except the primary segment's front head at that moment; the
+//     comparison is always against the front anchor regardless of which
+//     segment the record occupied, so rear-segment records are always
+//     tombstoned and never emit it.
+func (q *Queue) cleanupNode(n *Node) {
+	if n == nil {
+		return
+	}
+	u := q.ownerUnit(n)
+	if n.DynamicGate&2 != 0 { // cancel-notification guard: dynamic gate bit 1 (value 2) [R-ORDER-02 §2]
+		if h := DescriptorFor(n.ID).Handler; u != nil && h != nil {
+			_ = h(u, n, 2)
+		}
+	}
+	emitStopBuilding(u, n)
 	if n.Flags&FlagTombstone == 0 {
-		// TargetCleared stub
+		clearWeaponBuildTargets(u)
 	}
 }
 
@@ -477,7 +519,7 @@ func (q *Queue) PurgeUnprotected() {
 				if !isHead {
 					n.Flags |= FlagTombstone
 				}
-				cleanupNode(n)
+				q.cleanupNode(n)
 			}
 		}
 	}
@@ -497,13 +539,13 @@ func (q *Queue) DropLeadingAutoOps() {
 	// [05 "Queue insertion"] issuing any primary order drops leading auto/default-op nodes – leading RUN at front of each segment
 	for len(q.primary) > 0 && q.primary[0].Flags&FlagAutoOp != 0 {
 		n := q.primary[0]
-		cleanupNode(n) // head not tombstoned
+		q.cleanupNode(n) // head not tombstoned
 		q.primary = q.primary[1:]
 	}
 	for len(q.secondary) > 0 && q.secondary[0].Flags&FlagAutoOp != 0 {
 		n := q.secondary[0]
 		n.Flags |= FlagTombstone // secondary always tombstoned [04 §3.3]
-		cleanupNode(n)
+		q.cleanupNode(n)
 		q.secondary = q.secondary[1:]
 	}
 	if len(q.primary) > 0 {
@@ -624,7 +666,7 @@ func (q *Queue) CancelTailMost(match func(Node) bool) bool {
 			if !isHead {
 				n.Flags |= FlagTombstone // [04 §3.3]
 			}
-			cleanupNode(n) // [05 "Queue subtraction"]
+			q.cleanupNode(n) // [05 "Queue subtraction"]
 			copy(q.primary[i:], q.primary[i+1:])
 			q.primary = q.primary[:len(q.primary)-1]
 			q.ensureSingleActive() // mark moves to the successor [04 §3.3]
@@ -639,7 +681,7 @@ func (q *Queue) CancelTailMost(match func(Node) bool) bool {
 				return true
 			}
 			n.Flags |= FlagTombstone // secondary always effectively tombstoned [04 §3.3]
-			cleanupNode(n)
+			q.cleanupNode(n)
 			copy(q.secondary[i:], q.secondary[i+1:])
 			q.secondary = q.secondary[:len(q.secondary)-1]
 			return true
@@ -760,7 +802,7 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 		n.Deadline = int32(tick + 30 + q.randBelow15()) // [04 §3.3][I4] wait 30..44; the only arm drawing RNG(15)
 		return false
 	case 5, 8:
-		cleanupNode(n) // [05 "Queue subtraction"]
+		q.cleanupNode(n) // [05 "Queue subtraction"]
 		q.primary = q.primary[1:]
 		q.ensureSingleActive() // mark moves to the successor [04 §3.3]
 	case 6:
@@ -772,7 +814,7 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 		q.cancelAll() // [04 §3.3] free every record on both segments and return; whole-queue cancel is exclusively primary code 7
 		return false
 	case 9:
-		n.Flags |= FlagRetryMark // [05] completion flag; TODO(question) actual bit not located [04 §3.3] code 9
+		n.Flags |= FlagRetryMark // [04 §3.3][R-ORDER-02 §2] completion flag; write-only — no reader may be invented
 		if len(q.primary) == 1 {
 			// [R-P0-01][04 §3.3] last record re-arms: phase reset, wait
 			// 30..59 — the distinct RNG(30) arm, not code 3's RNG(15).
@@ -781,7 +823,7 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 			n.Deadline = int32(tick + 30 + q.randBelow30())
 			return false
 		}
-		cleanupNode(n) // [04 §3.3] otherwise unlink and free
+		q.cleanupNode(n) // [04 §3.3] otherwise unlink and free
 		q.primary = q.primary[1:]
 		q.ensureSingleActive() // mark moves to the successor [04 §3.3]
 	default:
@@ -789,7 +831,7 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 			// [04 §3.3] above 9: single-node expiry helper — unlink, clean,
 			// free, and return; no draw, no whole-queue cancel [P0-08].
 			// Whole-queue cancel is exclusively code 7 [P0-08] A09.
-			cleanupNode(n)
+			q.cleanupNode(n)
 			q.primary = q.primary[1:]
 			q.ensureSingleActive()
 			return false
@@ -812,19 +854,24 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 		if n.Deadline == -1 && n.DynamicGate != 0 && DescriptorFor(n.ID).Name == "BuildWeapon" {
 			n.DynamicGate = 0
 		}
-		deadlineArrived := n.Deadline != -1 && tick >= uint32(n.Deadline)
-		shouldDispatch := n.DynamicGate == 0 || deadlineArrived // [05] literal
+		// [R-ORDER-02 §1] A rear-segment record is dispatched only when its
+		// gate mask is empty or its deadline has arrived; the deadline compare
+		// is unsigned, so the -1 sentinel (0xffffffff) reads as not-due.
+		deadlineArrived := uint32(n.Deadline) <= tick
+		shouldDispatch := n.DynamicGate == 0 || deadlineArrived
 		if !shouldDispatch {
 			idx++
 			continue
 		}
 		if deadlineArrived {
-			n.Deadline = -1 // clear, do not set retry bit per literal
+			n.Deadline = -1 // clear; no expiry bit is set — an arrived deadline satisfies nothing here
 		}
-		satisfied := (n.Satisfied | u.Pending) & n.DynamicGate // zero when mask 0
-		n.Satisfied &^= satisfied
-		u.Pending &^= satisfied
 		n.DynamicGate = 0
+		// [R-ORDER-02 §1] The secondary pump never delivers satisfied bits:
+		// the handler is invoked with an EMPTY satisfied set — no expiry bit,
+		// no satisfied-word read, and no capability-word consumption. Rear
+		// records run purely on their own deadlines; movement or wake bits can
+		// never drive them.
 		// Publish tick for BuildWeapon stockpile handler's retry deadlines
 		// [06 §11.1] C29 (5/10/300) without changing Handler signature [RS-P0-018].
 		q.SecondaryTick = tick
@@ -833,7 +880,7 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for secondary %s", DescriptorFor(n.ID).Name))
 			return
 		}
-		code := handler(u, n, satisfied)
+		code := handler(u, n, 0)
 		advance, walking := q.applySecondaryResultCode(n, code, tick)
 		if !walking {
 			return // codes 6 and 7: remove the single record and return [04 §3.3] C8
@@ -876,7 +923,7 @@ func (q *Queue) applySecondaryResultCode(n *Node, code Code, tick uint32) (advan
 		q.removeSecondaryRecord(n) // [04 §3.3] C8 remove the single record and return; no cancel-all
 		return 0, false
 	case 9:
-		n.Flags |= FlagRetryMark // [05] completion flag; TODO(question) actual bit not located [04 §3.3] code 9
+		n.Flags |= FlagRetryMark // [04 §3.3][R-ORDER-02 §2] completion flag; write-only — no reader may be invented
 		// [04 §3.3] plain unlink+free — no re-arm, no draw, regardless of
 		// last/first position (the primary-only last-record re-arm [R-P0-01]
 		// does not apply to the secondary pump).
@@ -900,7 +947,7 @@ func (q *Queue) applySecondaryResultCode(n *Node, code Code, tick uint32) (advan
 // notification.
 func (q *Queue) removeSecondaryRecord(n *Node) {
 	n.Flags |= FlagTombstone
-	cleanupNode(n)
+	q.cleanupNode(n)
 	for i, m := range q.secondary {
 		if m == n {
 			copy(q.secondary[i:], q.secondary[i+1:])
@@ -910,12 +957,62 @@ func (q *Queue) removeSecondaryRecord(n *Node) {
 	}
 }
 
+// Mobile-build blocked-area retry budget [R-ORDER-02 §1]. The record's third
+// parameter is the blocked-area retry counter [04 §3.2] (the record's
+// progress field, reused; the handler's setup path zeroes it, so a fresh or
+// re-armed record starts the budget at zero). On a blocked approach visit the
+// mobile-build handler notifies "Waiting for target area to clear",
+// increments the counter, and waits EXACTLY 30 ticks — a fixed wait with no
+// random draw — while the counter is at most 10; the first blocked visit
+// whose counter is already above 10 notifies "Target area was blocked" and
+// abandons (code 8, remove). Eleven 30-tick waits, then give-up on visit
+// twelve.
+const (
+	// MobileBuildBlockedWaitTicks is the fixed blocked-visit wait; the traced
+	// arm draws no random value, unlike the pump's code-3 wait.
+	MobileBuildBlockedWaitTicks uint32 = 30 // [R-ORDER-02 §1]
+	// MobileBuildBlockedGiveUpAbove is the counter value above which the next
+	// blocked visit gives up: waits happen while the counter is at most 10.
+	MobileBuildBlockedGiveUpAbove uint32 = 10 // [R-ORDER-02 §1]
+)
+
+// Retail notifies these strings verbatim as the blocked-area status text
+// [R-ORDER-02 §1].
+const (
+	MobileBuildWaitingText = "Waiting for target area to clear"
+	MobileBuildBlockedText = "Target area was blocked"
+)
+
+// MobileBuildBlockedVisit is one blocked-visit step of the mobile-build
+// budget for the record n at tick. It returns the verbatim status text to
+// notify and the pump result code the caller returns: code 2 (continue) with
+// the wait armed — lowest gate bit plus deadline tick+30 exactly, the pump's
+// blocked-head stall re-dispatching on deadline arrival — or code 8
+// (abandon/remove) once the counter has passed its budget. The counter lives
+// in n.Param3 [04 §3.2]; the caller notifies the returned text through its
+// own status surface. A nil record gives up without touching anything.
+func MobileBuildBlockedVisit(n *Node, tick uint32) (statusText string, code Code) {
+	if n == nil {
+		return MobileBuildBlockedText, 8
+	}
+	if n.Param3 > MobileBuildBlockedGiveUpAbove {
+		return MobileBuildBlockedText, 8
+	}
+	n.Param3++
+	// Arm the exact 30-tick wait: lowest gate bit stalls the head, and the
+	// pump's deadline expiry sets that bit as satisfied on arrival [04 §3.3].
+	// The wait draws no random value [R-ORDER-02 §1].
+	n.DynamicGate = 1
+	n.Deadline = int32(tick + MobileBuildBlockedWaitTicks)
+	return MobileBuildWaitingText, 2
+}
+
 func (q *Queue) RemoveHead() *Node {
 	if q == nil || len(q.primary) == 0 {
 		return nil
 	}
 	n := q.primary[0]
-	cleanupNode(n)
+	q.cleanupNode(n)
 	q.primary = q.primary[1:]
 	q.ensureSingleActive()
 	if n != nil {
@@ -1004,7 +1101,7 @@ func (q *Queue) RemovePrimaryNode(node *Node, tombstone bool) *Node {
 			removed.Flags |= FlagTombstone
 		}
 		removed.Flags &^= FlagActive
-		cleanupNode(removed)
+		q.cleanupNode(removed)
 	}
 	q.primary = append(q.primary[:idx], q.primary[idx+1:]...)
 	q.ensureSingleActive()

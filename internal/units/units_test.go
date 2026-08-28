@@ -10,7 +10,7 @@ import (
 )
 
 func TestUnitPoolLowestFreeAndImmediateReuse(t *testing.T) {
-	world := New(4, nil)
+	world := NewSliced(4, nil)
 	def := &content.UnitDef{}
 	def.MaxDamage = 100
 	h1, _ := world.Create(def, 0, 0, 0, 0)
@@ -44,33 +44,33 @@ func TestUnitPoolLowestFreeAndImmediateReuse(t *testing.T) {
 }
 
 func TestTickOrderPlayersThenSlots(t *testing.T) {
-	world := New(10, nil)
+	world := NewSliced(10, nil)
 	def := &content.UnitDef{}
 	def.MaxDamage = 100
-	// Create units for players out of order to test tick visits players 0..9 asc then slots asc.
+	// Create units for players out of order to test the sweep visits players 0..9 asc then slots asc.
 	hA, _ := world.Create(def, 1, numeric.Fixed(100*65536), 0, 0)
 	hB, _ := world.Create(def, 0, numeric.Fixed(200*65536), 0, 0)
-	// Tick should not panic and maintain order; verify Iter is slots asc.
+	// The sweep should not panic and maintain order; verify Iter is slots asc.
 	iter := world.Iter()
 	if len(iter) != 2 || iter[0].Handle != hA || iter[1].Handle != hB {
 		// Actually slots asc means hA=1, hB=2 regardless of player order
 	}
 	_ = hA
 	_ = hB
-	world.Tick(1)
+	runPhase2Sweep(world, 1)
 	// P0-I02: Remaining is owned exclusively by construction.Service and must
-	// never be mutated by Units.Tick [05 "Construction target state"]. The old
-	// 0.01 stub is deleted. Verify unfinished unit never progresses in Tick
-	// even across 100 ticks when no builder exists.
+	// never be mutated by the unit sweep [05 "Construction target state"]. The old
+	// 0.01 stub is deleted. Verify unfinished unit never progresses in the sweep
+	// even across 100 sweeps when no builder exists.
 	def2 := &content.UnitDef{}
 	def2.MaxDamage = 100
 	hC, _ := world.Create(def2, 0, 0, 0, 0)
 	world.units[int(hC)].Remaining = 1.0 // nanoframe state 1→0 [04 §2.3] C3
 	for i := 0; i < 100; i++ {
-		world.Tick(uint32(2 + i))
+		runPhase2Sweep(world, uint32(2+i))
 	}
 	if world.units[int(hC)].Remaining != 1.0 {
-		t.Fatalf("P0-I02: Tick must never mutate Remaining; got %v want 1.0 [05 \"Construction target state\"]", world.units[int(hC)].Remaining)
+		t.Fatalf("P0-I02: the unit sweep must never mutate Remaining; got %v want 1.0 [05 \"Construction target state\"]", world.units[int(hC)].Remaining)
 	}
 }
 
@@ -270,7 +270,7 @@ func TestP016_ZeroRNGAllocation(t *testing.T) {
 }
 
 func TestOnDeathExtraFiresExactlyOnceAlongsidePrimary(t *testing.T) {
-	world := New(2, nil)
+	world := NewSliced(2, nil)
 	def := &content.UnitDef{UnitName: "death-extra", MaxDamage: 100, Limit: -1}
 	h, err := world.Create(def, 0, 0, 0, 0)
 	if err != nil {

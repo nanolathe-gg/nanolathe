@@ -24,15 +24,15 @@ func TestP0I02_UnfinishedNeverProgresses(t *testing.T) {
 	u.Remaining = 1.0
 	u.Health = 0
 	for i := 0; i < 100; i++ {
-		world.Tick(uint32(10 + i))
+		runPhase2Sweep(world, uint32(10+i))
 		if got := u.Remaining; got != 1.0 {
-			t.Fatalf("tick %d: Remaining %v want 1.0 – Tick must not mutate Remaining [05 \"Construction target state\"]", i, got)
+			t.Fatalf("tick %d: Remaining %v want 1.0 – the sweep must not mutate Remaining [05 \"Construction target state\"]", i, got)
 		}
 	}
 	// Completed unit also must not be mutated by Tick (construction owns, not Tick).
 	u2, _ := world.Create(def, 3, 0, 0, 0)
 	world.Unit(u2).Remaining = 0.5 // mid-construction
-	world.Tick(200)
+	runPhase2Sweep(world, 200)
 	if got := world.Unit(u2).Remaining; got != 0.5 {
 		t.Fatalf("mid-construction Remaining %v want 0.5", got)
 	}
@@ -40,7 +40,7 @@ func TestP0I02_UnfinishedNeverProgresses(t *testing.T) {
 	// construction.Service, not in Tick. Tick alone must not progress it either.
 	u3, _ := world.Create(def, 3, 0, 0, 0)
 	world.Unit(u3).Remaining = 0.25
-	world.Tick(201)
+	runPhase2Sweep(world, 201)
 	if got := world.Unit(u3).Remaining; got != 0.25 {
 		t.Fatalf("completed/builder stall Remaining %v want 0.25", got)
 	}
@@ -50,15 +50,15 @@ func TestP0I02_UnfinishedNeverProgresses(t *testing.T) {
 // get invented progress or spurious callbacks. The old Remaining -=0.01 path
 // is deleted; Tick must not synthesize completion ticks [05].
 func TestP0I02_CompletedNoInventedProgress(t *testing.T) {
-	world := New(10, nil)
+	world := NewSliced(10, nil)
 	def := &content.UnitDef{MaxDamage: 100}
 	h, _ := world.Create(def, 0, 0, 0, 0)
 	u := world.Unit(h)
 	u.Remaining = 0 // completed [04 §2.3] C3 1→0 done
 	u.Health = 100
 	beforeHealth := u.Health
-	world.Tick(1)
-	world.Tick(2)
+	runPhase2Sweep(world, 1)
+	runPhase2Sweep(world, 2)
 	if u.Health != beforeHealth {
 		t.Fatalf("completed unit health changed %d -> %d", beforeHealth, u.Health)
 	}
@@ -81,7 +81,7 @@ func TestP0I02_CompletedNoInventedProgress(t *testing.T) {
 // CanFire. This stub uses the units-local Slot which carries cob.AimSlot
 // without importing combat (cycle via combat→economy→units) [06 §1.2] P0-10.
 func TestP0I02_AimBlocksFiring(t *testing.T) {
-	world := New(4, nil)
+	world := NewSliced(4, nil)
 	def := &content.UnitDef{MaxDamage: 100, Limit: -1}
 	// Weapon def minimal for IsPopulated true.
 	wdef := &content.WeaponDef{}
@@ -115,13 +115,13 @@ func TestP0I02_AimBlocksFiring(t *testing.T) {
 	if !slot.CanFire() {
 		t.Fatalf("nonzero Aim return must grant Ready and unblock [GAP T15] C16")
 	}
-	// weaponSlotUpdate must respect same gate: Tick's weapon update decrements
-	// reload but preserves Aim blocking without invoking spawner.
+	// weaponSlotUpdate must respect same gate: the sweep's weapon update
+	// decrements reload but preserves Aim blocking without invoking spawner.
 	slot.Aim = cob.AimSlot{}
 	slot.Aim.StartAim()
 	slot.Reload = 2
-	// Tick will decrement reload to 1 but remain blocked by Aim.
-	world.Tick(10)
+	// The sweep will decrement reload to 1 but remain blocked by Aim.
+	runPhase2Sweep(world, 10)
 	if slot.Reload != 1 {
 		t.Fatalf("reload after Tick got %d want 1", slot.Reload)
 	}
@@ -130,7 +130,7 @@ func TestP0I02_AimBlocksFiring(t *testing.T) {
 	}
 	// After Ready, next tick decrements to 0 and becomes fireable.
 	slot.Aim.CompleteAim(99)
-	world.Tick(11)
+	runPhase2Sweep(world, 11)
 	if slot.Reload != 0 {
 		t.Fatalf("reload after second Tick got %d want 0", slot.Reload)
 	}
@@ -144,13 +144,13 @@ func TestP0I02_AimBlocksFiring(t *testing.T) {
 // ScriptState and that Tick drains the VM without crashing when no VM is bound.
 // When a VM exists, Drain(1) advances piece animation [04 §4.6][GAP T15].
 func TestP0I02_COBPieceTransforms(t *testing.T) {
-	world := New(4, nil)
+	world := NewSliced(4, nil)
 	def := &content.UnitDef{MaxDamage: 100}
 	h, _ := world.Create(def, 0, 0, 0, 0)
 	u := world.Unit(h)
 
 	// Placeholder path: no VM bound must not crash.
-	world.Tick(1) // should be no-op for COB
+	runPhase2Sweep(world, 1) // should be no-op for COB
 
 	// Now bind a real VM with one piece and a program that moves the piece.
 	prog := &cob.Program{
@@ -181,9 +181,9 @@ func TestP0I02_COBPieceTransforms(t *testing.T) {
 	// Directly set Pieces translation to prove persistence; then Tick's
 	// cobDrain with delta 1 must not clobber it when no anim is active.
 	vm.Pieces[0].SetTrans(0, 100) // set X trans via PieceState helper [03 §2.4] C21
-	world.Tick(2)                 // Tick drains VM with delta 1 [04 §4.2][04 §4.6]
+	runPhase2Sweep(world, 2)      // the sweep drains the VM with delta 1 [04 §4.2][04 §4.6]
 	if got := vm.Pieces[0].GetTrans(0).Raw(); got != 100 {
-		t.Fatalf("piece Trans after Tick got %d want 100 – drain must not synthesize or clear [04 §4.6]", got)
+		t.Fatalf("piece Trans after sweep got %d want 100 – drain must not synthesize or clear [04 §4.6]", got)
 	}
 	// Verify VM still alive and snapshot would see this transform.
 	// The snapshot phase copies Unit.ScriptState.Pieces() into immutable frame
@@ -225,46 +225,55 @@ func TestP0I02_IterationOrder(t *testing.T) {
 	if got[4].Handle != h9 {
 		t.Fatalf("p9 order wrong got %v want %v", got[4].Handle, h9)
 	}
-	// Also prove Tick visits same order by checking that Tick does not panic and
-	// that a per-tick side effect would be ordered. Use health decrement as probe
-	// wired via slotEndDeathHandling? Instead verify deterministic no-RNG and
-	// that Tick preserves order by calling twice and getting same IterSliced.
-	world.Tick(1)
+	// Also prove the sweep visits the same order: running it preserves the
+	// deterministic IterSliced ordering (no map iteration defines order, I1).
+	runPhase2Sweep(world, 1)
 	got2 := world.IterSliced()
 	for i := range got {
 		if got[i].Handle != got2[i].Handle {
-			t.Fatalf("Tick changed order at %d: %v vs %v [01 §6.2] C2", i, got[i].Handle, got2[i].Handle)
+			t.Fatalf("sweep changed order at %d: %v vs %v [01 §6.2] C2", i, got[i].Handle, got2[i].Handle)
 		}
 	}
 	// Unused handles to keep worktree deterministic.
 	_ = pool.Handle(0)
 }
 
-// TestP0I02_TickDoesNotFreeSlots proves Tick never frees slots directly;
-// Cleanup does [04 §2.4] C2. A unit with Health 0 is marked Dying at slot-end
-// but stays resolvable until Cleanup (phase 10) [04 §2.4].
-func TestP0I02_TickDoesNotFreeSlots(t *testing.T) {
-	world := New(4, nil)
+// TestP0I02_SlotEndDeathFinalization locks the phase-2 slot-end contract
+// [01 §4.4][04 §2.4]: a unit whose health is exhausted at its own visit is
+// finalized at slot end (FinalizeDeath frees the slot in-visit, mirroring the
+// session's phase 2), while a death marked AFTER the unit's visit — the
+// projectile-phase damage shape (RS-08) — stays resolvable until the
+// post-loop Cleanup.
+func TestP0I02_SlotEndDeathFinalization(t *testing.T) {
+	world := NewSliced(4, nil)
 	def := &content.UnitDef{MaxDamage: 100}
 	h, _ := world.Create(def, 0, 0, 0, 0)
 	u := world.Unit(h)
 	u.Health = 0 // lethal but not yet Dying
-	world.Tick(1)
 	if u.Alive != true {
-		t.Fatalf("Tick must not clear Alive; Cleanup does [04 §2.4] C2")
+		t.Fatalf("created unit must be alive")
 	}
-	if !u.Dying {
-		t.Fatalf("Health 0 should latch Dying at slot-end [04 §2.4] C2")
+	// Slot-end death handling in the authoritative sweep latches Dying and
+	// finalizes at slot end exactly like the session's phase 2 [01 §4.4].
+	runPhase2Sweep(world, 1)
+	if world.Unit(h) != nil {
+		t.Fatalf("health-0 unit must be finalized at slot end by the sweep [01 §4.4][04 §2.4]")
 	}
-	if world.Unit(h) == nil {
-		t.Fatalf("Dying unit must stay resolvable until Cleanup [04 §2.4] C2")
+	if world.Used() != 0 {
+		t.Fatalf("Used %d want 0 after slot-end finalization", world.Used())
+	}
+	// A death marked after the visit stays alive until Cleanup [04 §2.4] C2.
+	h2, _ := world.Create(def, 0, 0, 0, 0)
+	world.Destroy(h2, DeathKilled)
+	if world.Unit(h2) == nil {
+		t.Fatalf("death marked after the visit must stay resolvable until Cleanup [04 §2.4] C2")
 	}
 	if world.Used() != 1 {
 		t.Fatalf("Used %d want 1 before Cleanup", world.Used())
 	}
 	world.Cleanup()
-	if world.Unit(h) != nil {
-		t.Fatalf("After Cleanup Dying unit must be free [04 §2.4] C2")
+	if world.Unit(h2) != nil {
+		t.Fatalf("After Cleanup the post-visit death must be free [04 §2.4] C2")
 	}
 	if world.Used() != 0 {
 		t.Fatalf("Used %d want 0 after Cleanup", world.Used())
@@ -274,7 +283,7 @@ func TestP0I02_TickDoesNotFreeSlots(t *testing.T) {
 // TestP0I02_ReloadDecrement proves weapon reload countdown decrements each tick
 // before target resolve [06 §1.2][06 §4.1] P0-10 without firing.
 func TestP0I02_ReloadDecrement(t *testing.T) {
-	world := New(4, nil)
+	world := NewSliced(4, nil)
 	def := &content.UnitDef{MaxDamage: 100}
 	wdef := &content.WeaponDef{}
 	h, _ := world.Create(def, 0, 0, 0, 0)
@@ -282,20 +291,20 @@ func TestP0I02_ReloadDecrement(t *testing.T) {
 	u.InstallWeapon(1, wdef)
 	slot := u.SlotAt(1)
 	slot.Reload = 3
-	world.Tick(1)
+	runPhase2Sweep(world, 1)
 	if slot.Reload != 2 {
 		t.Fatalf("reload after 1 tick %d want 2 [06 §1.2][06 §4.1]", slot.Reload)
 	}
-	world.Tick(2)
+	runPhase2Sweep(world, 2)
 	if slot.Reload != 1 {
 		t.Fatalf("reload after 2 ticks %d want 1", slot.Reload)
 	}
-	world.Tick(3)
+	runPhase2Sweep(world, 3)
 	if slot.Reload != 0 {
 		t.Fatalf("reload after 3 ticks %d want 0", slot.Reload)
 	}
 	// Further ticks keep at 0, no underflow.
-	world.Tick(4)
+	runPhase2Sweep(world, 4)
 	if slot.Reload != 0 {
 		t.Fatalf("reload after 4 ticks %d want 0", slot.Reload)
 	}

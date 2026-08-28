@@ -17,7 +17,7 @@ import (
 
 func settleTestWorld(t *testing.T, n int) (*units.World, []pool.Handle) {
 	t.Helper()
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	hs := make([]pool.Handle, 0, n)
 	for i := 0; i < n; i++ {
 		def := &content.UnitDef{}

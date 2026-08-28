@@ -209,58 +209,78 @@ func QueryTransportSeed() [4]int32 { return [4]int32{-1, 0, 0, 0} } // [GAP T15]
 func QueryLandingPadSeed() [4]int32 { return [4]int32{-1, -1, -1, -1} } // [GAP T15] C15
 
 // ---------------------------------------------------------------------------
-// C16 — aim-ready handshake [GAP T15]
+// C16 — aim-ready handshake [GAP T15] [04 §5.3] [06 §3.3]
 // ---------------------------------------------------------------------------
-
-// AimSlot tracks the aim-ready handshake for one weapon slot [GAP T15] C16
-// [04 §5.3][P1-11] §2.5. The producer clears the aim state to 0, stores
-// commanded angles, starts Aim* with the issue bit, and the completion
-// receiver grants aim-ready ONLY on a nonzero script return via completion
-// callback that writes weapon ready bit (offset TODO(question) [P1-11]).
-// Absent script, exhausted pool (delivery 0), or zero return leave that
-// weapon permanently unable to fire [GAP T15] C16 [P1-11].
-// TODO(question): exact weapon ready bit offset in unit record remains
-// unassigned [P1-11] §2.5; TODO(question): Killed variant cell unassigned and
-// persistence [P1-11] §2.7.
+//
+// CONTRACT — do not soften. Aim-ready is granted ONLY by a nonzero completed
+// Aim* result. The producer clears the slot's aim state to 0, stores the
+// commanded heading/pitch, and starts Aim* deferred with the slot's
+// completion receiver; immediately after the start it sets the issue bit,
+// which gates re-issue but authorizes nothing. The receiver is then invoked
+// with the delivered cell:
+//
+//   - explicit script return: the popped return value;
+//   - failed start (script name absent, invalid identity, all eight thread
+//     slots occupied): 0, delivered through the same receiver;
+//   - signal termination or abnormal termination: no invocation at all.
+//
+// A zero delivery has no effect — it neither grants nor revokes — while any
+// nonzero delivery marks the weapon aim-ready. There is no timeout: a weapon
+// whose Aim* never completes nonzero stays unable to fire until the producer
+// clears the aim state and re-issues [04 §5.3] [06 §3.3].
+//
+// KNOWN TEMPTING BUG: "helpfully" treating a missing Aim* script, a nil VM,
+// or pool exhaustion as success. That inverts the established zero/nonzero
+// grant — every script-less unit becomes an always-ready turret and the
+// completion handshake stops being observable. Retail delivers 0 on exactly
+// those paths; a missing Aim* must stay never-ready. Regression tests:
+// internal/cob/aimready_test.go.
 type AimSlot struct {
-	IssueBit bool // weapon-slot issue bit; start sets, TargetCleared or fail can clear [04 §5.3]
-	Ready    bool // granted only on nonzero Aim* return [GAP T15] C16 [P1-11] via completion callback TODO(question) offset
+	IssueBit bool // weapon flags byte bit 0: set immediately after an Aim* start, AND-cleared on target-acquisition failure, gates re-issue [04 §5.3]
+	Ready    bool // the aim-state word: granted only by a nonzero delivered cell [04 §5.3] [06 §3.3]
 }
 
-// StartAim arms the issue bit for an Aim* start. The caller cleared aim state
-// beforehand and stored heading/pitch [04 §5.3]. Both start forms precede the
-// network event {u16 unitID, u16 slot, u8 arity=2, heading, pitch} behind a
-// global option bit and set the issue bit [04 §5.3].
+// StartAim arms the issue bit for an Aim* start [04 §5.3]. The caller performs
+// the producer's preceding steps first: clear the aim state to 0 and store the
+// commanded heading/pitch. Both start forms then set the issue bit; the issue
+// bit alone authorizes nothing [04 §5.3] [06 §3.3].
 func (s *AimSlot) StartAim() {
 	s.IssueBit = true
-	// Ready stays false until completion receiver runs [GAP T15] C16.
+	// Ready is untouched here: the producer cleared it before this start, and
+	// only CompleteAim can grant it [04 §5.3].
 }
 
-// CompleteAim is the Aim* completion receiver [04 §5.3] [GAP T15] C16.
-// It is invoked ONLY on an explicit script return, passing the popped return
-// value; signal termination and abnormal termination never invoke it [04 §5.3].
-// A zero delivery has no effect, while any NONZERO delivery marks the weapon
-// aim-ready [GAP T15] C16. Returns whether aim-ready is now true.
+// CompleteAim is the aim-ready grant site: the completion receiver consuming
+// the delivered cell [04 §5.3] [06 §3.3]. An explicit script return delivers
+// its value; a failed start delivers 0 through this same receiver; signal and
+// abnormal termination never invoke it. Zero has no effect — it neither
+// grants nor revokes — while any nonzero delivery marks the weapon aim-ready.
+// The grant is a one-way latch until the producer clears the aim state before
+// the next Aim* start. Do not soften the zero/nonzero rule, and never treat a
+// missing Aim* as success — see the C16 block contract above. Returns the
+// current aim-ready state.
 func (s *AimSlot) CompleteAim(returnValue int32) bool {
 	if returnValue != 0 {
 		s.Ready = true
 	}
-	// else no effect [GAP T15] C16: absent/exhausted (delivery 0) or authored
-	// zero leave weapon permanently unable to fire.
+	// Zero: no effect [04 §5.3] [06 §3.3] — no grant, no revoke.
 	return s.Ready
 }
 
-// CanFire reports whether this slot may fire. Issue alone authorizes nothing;
-// the fire path additionally consults a per-weapon permission function behind
-// the issue bit [04 §5.3] [GAP T15] C16. Here we model the aim-ready gate only;
-// the permission function is TODO(question) in the combat package.
+// CanFire reports whether this slot holds a nonzero Aim result. The issue bit
+// alone authorizes nothing; the fire path additionally applies the per-family
+// readiness rules behind it — turret: latch and result; vertical-launch:
+// result; line-of-sight/self-propelled and dropped: neither [06 §3.3]. This
+// method models the result half only.
 func (s *AimSlot) CanFire() bool { return s.Ready }
 
-// AimDeliveryZero is the delivery value used when the Aim* starter fails due
-// to absent name or thread-pool exhaustion: it delivers 0 [GAP T15] C16 [04 §4.3].
-// The caller must NOT mark aim-ready; the thread pool exhaust path retains
-// arguments and does NOT invoke the completion receiver.
-const AimDeliveryZero int32 = 0 // [GAP T15] C16
+// AimDeliveryZero is the cell a failed Aim* start delivers to the completion
+// receiver: script name absent, invalid identity, or all eight thread slots
+// occupied each deliver 0 through the same receiver, leaving aim-ready clear
+// [04 §5.3] [04 §4.3] [06 §3.3]. The starter itself retains its arguments;
+// the zero delivery is the receiver-bearing adapter's response to the failed
+// start.
+const AimDeliveryZero int32 = 0 // [04 §5.3] [06 §3.3]
 
 // ---------------------------------------------------------------------------
 // C17 — same-tick windows scaffolding [GAP T15] (I7)

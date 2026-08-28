@@ -43,7 +43,7 @@ func TestStorageBonusFloorAndEnable(t *testing.T) {
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 func TestRebuildCapacityBonusInclusive(t *testing.T) {
 	var svc economy.Service
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{}
 	def.MaxDamage = 100
 	def.EnergyStorage = 0
@@ -76,7 +76,7 @@ func TestRebuildCapacityBonusInclusive(t *testing.T) {
 	def2.MaxDamage = 100
 	def2.MetalStorage = 500
 	def2.EnergyStorage = 250
-	w2 := units.New(10, nil)
+	w2 := units.NewSliced(10, nil)
 	h2, _ := w2.Create(def2, 0, 0, 0, 0)
 	if u := w2.Unit(h2); u != nil {
 		u.Remaining = 0

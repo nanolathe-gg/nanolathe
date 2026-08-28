@@ -32,7 +32,7 @@ func TestMakerStall(t *testing.T) {
 		t.Fatalf("maker not stalled should be 1")
 	}
 	// Integration with PerUnitProductionFills
-	w := units.New(10, &content.Catalog{})
+	w := units.NewSliced(10, &content.Catalog{})
 	svc := &Service{}
 	svc.Players[0].Exists = true
 	svc.Players[0].ControllerState = 1
@@ -261,7 +261,7 @@ func TestPreGameSpawnOutsideLedger(t *testing.T) {
 	svc.Players[1].Mirror[Metal].Production = 3
 	svc.SeedDeadlines(0)
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	svc.Tick(0, w)
 	if svc.Players[0].UpdateTime != 30 || svc.Players[1].UpdateTime != 30 {
 		t.Fatalf("pre-game one pass should settle active players and advance deadlines")

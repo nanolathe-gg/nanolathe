@@ -37,7 +37,7 @@ func TestSettlementCadence(t *testing.T) {
 	svc.Players[0].Mirror[Metal].Production = 1
 	svc.Players[0].StorageBonusEnabled = true
 	svc.Players[0].StorageBonus[Metal] = 1000
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	// Tick 0 should settle (deadline 0 <=0) and advance to 30
 	svc.TickPlayer(0, 0, w, nil)
 	if svc.Players[0].UpdateTime != 30 {
@@ -78,7 +78,7 @@ func TestCatchUpEdge(t *testing.T) {
 	svc.Players[0].Helper1Deadline = 1<<32 - 1 // far future to avoid helper noise? Set to tick to make helper due each time? Keep helpers aligned to not affect settlement counts.
 	svc.Players[0].Helper2Deadline = 1<<32 - 1
 	// Override helpers to not increment? But fine.
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	// Simulate ticks 200.. until caught up
 	expectedDeadlines := []uint32{130, 160, 190, 220}
 	for i, wantDeadline := range expectedDeadlines {
@@ -112,7 +112,7 @@ func TestCatchUp100TicksBehind(t *testing.T) {
 	var curTick uint32 = 100
 	svc.Players[0].Helper1Deadline = curTick + 1000 // prevent helper interference with settlement counts? Actually helpers at future won't run
 	svc.Players[0].Helper2Deadline = curTick + 1000
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	// Deadline 0 at tick 100 is 100 behind, should settle once per tick until caught up (single add per tick, not loop).
 	// Ticks 100,101,102,103 should settle (deadlines 0->30->60->90->120), tick 104 should NOT settle as deadline 120 >104.
 	for i := 0; i < 4; i++ {
@@ -142,7 +142,7 @@ func TestCatchUp100TicksBehind(t *testing.T) {
 func TestUnsignedComparisonWrap(t *testing.T) {
 	var svc Service
 	activePlayer(&svc.Players[0])
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	// Case A: deadline near max, tick small (0): deadline > tick unsigned => not due => no settle, deadline frozen.
 	svc.Players[0].Mirror[Metal].Production = 3
 	svc.Players[0].UpdateTime = 0xFFFFFFF0 // 4294967280
@@ -196,7 +196,7 @@ func TestUnsignedComparisonWrap(t *testing.T) {
 // TestSkippedSlotNothingAdvances verifies C3: while skipped, nothing advances including deadline.
 func TestSkippedSlotNothingAdvances(t *testing.T) {
 	var svc Service
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	// Player 0 inactive (Exists false) with deadline 100
 	svc.Players[0].Exists = false
 	svc.Players[0].UpdateTime = 100
@@ -250,7 +250,7 @@ func TestSkippedSlotNothingAdvances(t *testing.T) {
 
 // TestGateChainIndependentlyBlocks verifies C4 each condition independently blocks settlement but deadline still advances when gate blocks.
 func TestGateChainIndependentlyBlocks(t *testing.T) {
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	cases := []struct {
 		name   string
 		mutate func(*Player)
@@ -350,7 +350,7 @@ func TestGateChainIndependentlyBlocks(t *testing.T) {
 func TestBeforeDeadlineOrdering(t *testing.T) {
 	var svc Service
 	activePlayer(&svc.Players[0])
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	// Set helper deadlines to be due at tick 100 so helpers will run at 100
 	svc.Players[0].UpdateTime = 100
 	svc.Players[0].Helper1Deadline = 100
@@ -422,7 +422,7 @@ func TestPerTickHelpersNeverTouchStock(t *testing.T) {
 	svc.Players[0].UpdateTime = 1000 // far future so settlement never runs
 	svc.Players[0].Helper1Deadline = 0
 	svc.Players[0].Helper2Deadline = 0
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{}
 	def.MaxDamage = 100
 	_, _ = w.Create(def, 0, 0, 0, 0)
@@ -478,7 +478,7 @@ func TestSeedingSemantics(t *testing.T) {
 	svc2.Players[0].Mirror[Metal] = Bucket{Production: 2, Requested: 1, Carry: 4}
 	svc2.Players[1].Mirror[Metal] = Bucket{Production: 3, Requested: 2, Carry: 5}
 	svc2.SeedDeadlines(10)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	svc2.Tick(10, w) // full pass at tick 10: deadlines 10 -> 40 and settle
 	if svc2.Players[0].UpdateTime != 40 || svc2.Players[1].UpdateTime != 40 {
 		t.Fatalf("after initial pass deadlines should be 40 (10+30), got %d %d", svc2.Players[0].UpdateTime, svc2.Players[1].UpdateTime)
@@ -647,7 +647,7 @@ func TestTickLoopsPlayersAscending(t *testing.T) {
 		svc.Players[i].UpdateTime = 0
 		svc.Players[i].Mirror[Metal].Production = float32(i + 1)
 	}
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	svc.Tick(0, w)
 	for i := 0; i < 10; i++ {
 		if svc.Players[i].UpdateTime != 30 {

@@ -65,20 +65,20 @@ func TestForcedSlotBoundsCheckVsRetailNoCheck(t *testing.T) {
 	// For pool, forcedSlot OOB vs occupied diverges: Nanolathe bounds-checks
 	p := NewUnitsSliced(3) // slices 1..3, 4..6, ...
 	// OOB: slot 10 is player 3, not player 0
-	if _, ok := p.AllocForced(0, Handle(10)); ok {
+	if _, ok := p.AllocForcedWithDef(0, 1, Handle(10), false, 0); ok {
 		t.Fatalf("forced OOB should fail [P0-16] bounds-check divergence documented")
 	}
 	// Occupied should fail
-	h, _ := p.AllocForPlayer(0)
-	if _, ok := p.AllocForced(0, h); ok {
+	h, _ := p.AllocForPlayerWithDef(0, 1, false, 0)
+	if _, ok := p.AllocForcedWithDef(0, 1, h, false, 0); ok {
 		t.Fatalf("forced occupied should fail")
 	}
 	// Correct forced within slice and free succeeds
 	p2 := NewUnitsSliced(5)
 	// allocate slot 2 then free, then forced realloc same slot
-	h2, _ := p2.AllocForPlayer(0)
+	h2, _ := p2.AllocForPlayerWithDef(0, 1, false, 0)
 	p2.Free(h2)
-	if h3, ok := p2.AllocForced(0, h2); !ok || h3 != h2 {
+	if h3, ok := p2.AllocForcedWithDef(0, 1, h2, false, 0); !ok || h3 != h2 {
 		t.Fatalf("forced free slot should succeed, got %v %d", ok, h3)
 	}
 }

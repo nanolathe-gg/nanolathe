@@ -1579,6 +1579,147 @@ being nonzero. The player alias is therefore the local player's team bit, not
 the placing player's; section 6.4's bit-0 row is updated accordingly, and the
 branch must still not be equated with the presentation fog surface.
 
+### Closed — VM initialization and engine-call frames [R-COB-01 §1] (2026-08-28)
+
+**Established — VM instance construction.** Constructing a unit's VM clears
+only each thread's status word and the instance's active-thread counter, and
+latches the tick denominator once from the engine's tick-rate global. Nothing
+else in the eight thread records is initialized: program counter, depth, timer,
+signal mask, receiver word and the ten window words of an unallocated slot
+hold whatever the instance's memory held. Every field that matters is (re)seeded
+at thread allocation or thread start, so the construction-time state is
+unobservable except through the window words described below.
+
+**Established — program bind and statics.** Binding a compiled program to the
+VM allocates the per-piece animation array and the script statics array from
+the engine's tagged allocator (the retail pool tags are `Object States` and
+`Static Varibles`, quoted verbatim). The piece-animation array is zero-filled
+by the bind — every piece starts with all animation words zero. The script
+statics array is **not** initialized by the bind: no zeroing pass runs over it.
+**Unknown:** the initial content the allocator itself provides (a recycled
+block may carry a previous tenant's values) — a bounded trace of the tagged
+allocator found no zeroing on either its cache or fresh paths, but the
+allocator is shared engine infrastructure and not fully traced. Shipped
+scripts write statics before reading them, so the observable behavior of stock
+content is insensitive to this gap. Nanolathe should zero statics at bind and
+record that as an I11-style determinism divergence, not as retail behavior.
+
+**Established — thread allocation.** Allocating a thread validates the script
+identity against the program's script count (a negative or out-of-range index
+is the same allocation failure as a full pool), takes the lowest slot whose
+status is idle, and seeds: status running, program counter at the script's
+entry word, logical stack top −1, no completion receiver, signal mask 1,
+active count incremented. The ten window words are not cleared.
+
+**Established — the engine-call argument area and garbage propagation.**
+The argument-carrying starter always writes **four physical cells** (window
+words 0..3) from its caller's four arguments and only then sets the logical
+top to `arity−1`. Consequences:
+
+- For an arity below four, window words `arity..3` hold the caller's filler
+  values, not memory garbage. Every traced producer passes explicit zeros in
+  those filler cells (bounded census of the producer call sites: `Killed`,
+  `SetDirection`, `SetSpeed`, `setSFXoccupy`, the `Aim*` family, `RockUnit`,
+  `HitByWeapon`, `TakeDamage`, `TargetCleared`). A script whose declared
+  locals alias those cells therefore reads zeros from an engine start.
+- Window words above word 3 are untouched stale slot memory for every engine
+  start, and ALL window words are stale for the zero-argument starts
+  (`Create`, `Activate`/`Deactivate`, the `StartBuilding`/`StopBuilding` edge
+  forms, `Fire*`, `StartMoving`/`StopMoving`/`MoveRate*`). A script that reads
+  a local it never assigned receives the previous tenant's bytes of that
+  thread slot (or the instance allocation's raw content). This is the retail
+  garbage-propagation contract: bounded and producer-determined for words 0..3,
+  genuinely indeterminate above them.
+
+**Established — blocked synchronous-query lifecycle.** The synchronous
+four-cell query forces the thread's receiver to none, writes each non-null
+input cell into the next window word (null cells are seeded with a literal
+zero and excluded from copy-back), forces the logical top to 3, runs the
+interpreter on that one slot with delta 0 — no other slot and no piece pass —
+and then copies window words 0..3 back to the non-null output cells. The
+thread is **not** freed or reset after copy-back: a script that slept, waited
+for a piece, or blocked on a call stays allocated in its yielded state and may
+resume in a later normal or wake drain, but it has no receiver and cannot
+revise the values the host already copied. A query whose name does not resolve
+or whose pool is full returns failure with the outputs untouched.
+
+**Established — full-pool and failure edges (reconfirmed).** `start-script`
+with no free slot or a bad script id does not pop its arguments and continues;
+`call-script` under the same conditions retains its arguments, records the
+wait-slot sentinel −1, and blocks anyway — wedged until a matching signal
+kills it. The name-form starters resolve names by a linear, case-sensitive,
+first-match scan of the program's name table and fail silently on miss or full
+pool (the argument-carrying form invoking a supplied receiver with 0). These
+reconfirm section 4.3; no new edge was found.
+
+**Established — unknown addressing modes and divide (reconfirmed with
+mechanism).** Push with an addressing mode other than constant/local/static
+pushes the interpreter's uninitialized scratch (indeterminate per execution);
+pop with a mode other than local/static pops nothing and advances. The divide
+opcode is an unguarded signed divide: a zero divisor or the minimum-integer
+overflow case raises the processor divide fault and terminates the process.
+
+**Established — initial piece draw/shade state and the shadow closure.** The
+load-time fill walk (section 4.3's polarity paragraph) is confirmed at the
+adapter level: per piece it sets the cache bit unconditionally, sets the draw
+bit only when the model object has at least three vertices (explicitly
+clearing it otherwise), and sets the shade bit unconditionally; the show/hide,
+cache and shade adapter pairs write exactly those three bits of the render
+piece record's flags word. The **disable-shadow opcode binds an empty adapter
+on units** — it has no effect and there is no script-visible per-piece shadow
+state anywhere on the unit side. Shadow rendering is a renderer concern
+(document 03); no initial shadow derivation exists to reproduce. The unit
+adapter's legacy two-argument effect binding is likewise an empty stub, as
+already recorded in section 4.3.
+
+**Closed — UNIT-04, missing or empty COB program.** The definition loader
+builds the script path from the unit name, and a missing or unreadable script
+file makes the loader store a **null program pointer** and continue — no
+diagnostic, no substitution, and the definition is accepted (the FBI step of
+the same loader is likewise existence-gated with a silent skip; document 02
+owns that half). At unit creation a null program takes an explicit scriptless
+branch: **no VM instance is allocated** (the unit's VM reference stays null),
+the render-piece table is still built from the model in its program-less form,
+and no `Create` is started. Retail therefore neither rejects the unit nor
+crashes at creation nor substitutes a program — it creates a scriptless unit
+whose pieces render and animate never. **Unknown (the crash-policy residual):**
+engine callback producers load the unit's VM reference and call the starters
+directly; the general unit update's `SetDirection`/`SetSpeed` site has no null
+test in the traced window, so a scriptless unit reaching that block (its
+definition float gate above zero and the global mover-active flag set) would
+dereference null in retail. Stock content never exercises this — every shipped
+definition has a script — so whether retail faults there, and what a robust
+implementation should do instead, is `TODO(question)`; the settling probe is a
+synthetic scriptless definition with a forced mover-active tick.
+
+### Closed — VM random-draw census [R-COB-01 §2] (2026-08-28)
+
+**Established — exactly two dispatched opcodes consume draws, both from the
+global simulation stream.** Document 01 owns the streams; this census covers
+opcode execution only (engine-side producers such as the order pump's wait
+draws, the low-power manager's re-arm draw, automatic target acquisition, and
+projectile spray are outside it and carry their own draw order).
+
+| Opcode | Draws | Stream | Bound and order |
+|---|---|---|---|
+| `0x10041000` random | 0 or 1 | simulation | one draw bounded by `high − low + 1`; **a bound below 2 consumes no draw** and the result is the low value unchanged — `random(x, x)` is draw-free |
+| `0x10071000` explode | 0 or 6 | simulation | six draws in fixed order bounded 3000, 3000, 3000, 40, 10, 40 — the fifth (bound 10) is dead, its stored result overwritten by the sixth; **zero draws when the flags word requests bitmap-only** |
+
+The explode order reconfirms section 4.5 and pins the stream and the
+bitmap-only suppression. The random opcode's zero-bound short-circuit is new:
+the simulation stream's bounded sampler returns zero without advancing its
+seed whenever the bound is below 2, so a script looping over `random(x, x)`
+consumes no stream state.
+
+**Established — no other consumer inside opcode execution.** A bounded census
+of the entire unit-adapter surface the opcodes can reach — every engine-port
+read and write arm including the activation edge machine, attach and detach,
+the one-argument effect dispatcher, the piece position/angle getters and
+setters, and the piece-flag adapters — found no call into either random stream.
+The CRT stream is never touched from opcode execution. Re-entrant callbacks
+fired by a port write (the activation edge family) are deferred starts that
+allocate without interpreting, so they consume nothing either.
+
 ## 5. Engine-to-COB callbacks
 
 ### 5.1 Lifecycle and damage callbacks
@@ -1691,9 +1832,23 @@ and sets the weapon flags byte bit 0 (the issue bit). <!-- source orchestration-
 **Established fact:** `StartBuilding` has an argument-less edge form, issued
 on the cached building-bit rising edge (mode D, 0 cells), and a slot-form heading variant that
 resolves the name to a weapon slot through the shared name-lookup helper and starts THAT slot directly via the argument-carrying slot-form adapter (mode D, receiver null) with one
-argument `heading & 0xffff` (the low 16 bits of the producer heading), plus its network event and setting the
-production record's StopBuilding-pending flag `0x400000` consumed by cleanup (section
-3.3). Four weapon-target routines call the `StartBuilding` name lookup while clearing targets but discard the result and are not producers. <!-- source orchestration-research-cob-callbacks.md -->
+argument `heading & 0xffff` (the low 16 bits of the producer heading), plus its network event.
+Four weapon-target routines call the `StartBuilding` name lookup while clearing targets but discard the result and are not producers.
+
+**Correction — the slot-form heading variant does not write the
+StopBuilding-pending flag (2026-08-28, superseding this section's earlier
+text and [R-COB-02 §1]'s initial reading).** This section previously said the
+slot-form heading variant also sets the production record's
+StopBuilding-pending flag `0x400000`. The direct immediate-operand census of
+[R-ORDER-02 §2] finds exactly one writer of that flag on order records — the
+order-record emission helper with its nine handler call sites (MobileBuild,
+HelpBuild, Capture ×2, Reclaim, Resurrect, RepairUnit, VTOL_MobileBuild,
+VTOL_HelpBuild), which arranges the name-form arguments
+`(0, 0, 1, recordPointer & 0xffff, 0, 0)` — and no other writer anywhere in
+the code sections. The construction-command slot-form heading variant is not
+among those call sites; it starts the slot and emits its network event
+without touching the flag. Cleanup's flag consumption contract is unchanged
+(section 3.3). <!-- source orchestration-research-cob-callbacks.md -->
 
 **Established fact:** Engine-issued value callbacks convert exactly:
 `SetDirection` (issued by the general unit update, guarded on a definition float `>0.0` and a nonzero
@@ -1779,6 +1934,151 @@ movement integration is observed by the next pump visit, not the current one
 (section 8.3); and a product published during the sweep is visible to the
 projectile phase and to later same-sweep builders, while occupancy and LOS
 publication happen after settlement (section 3.8).
+
+### Closed — vertical-slice callback and port mappings [R-COB-02 §1] (2026-08-28)
+
+**Established — issue shapes.** Every callback below was re-traced at its
+producer this round; mode letters are section 4.2's. "Immediate" means the
+starter's wake flag was set: the allocation is followed inline by an
+all-eight-slot delta-0 interpreter pass plus one piece pass. "Deferred" means
+allocation only; the thread first runs in the visit's normal drain, or in the
+all-slot drain of any later immediate start on the same VM.
+
+| Callback | Producer site | Mode / wake | Argument cells (cell 0 first) | Receiver | Return consumption |
+|---|---|---|---|---|---|
+| `Create` | unit creation, after the program bind and render-piece table | D + **wake 1** (immediate) | none (zero-argument start; window stale) | none | ignored |
+| `SetMaxReloadTime` | unit creation, issued after `Create` so it lands outside Create's own drain | D | 1: `trunc(maxReload · 1000 / 30)` over the three slots | none | ignored |
+| `Activate` / `Deactivate` | activation edge machine (engine writers and the port-1 write) | D (deferred) | none | none | ignored; the engine notification codes 3/4 follow each |
+| `StartBuilding` (edge form) | building-bit rising edge of the same machine | D (deferred) | none | none | ignored |
+| `StopBuilding` (edge form) | building-bit falling edge | D (deferred) | none | none | ignored |
+| `StartBuilding` (heading form) | production start on a weapon-capable unit | D (deferred), direct slot start | 1: `heading & 0xffff` | none | ignored |
+| `QueryBuildInfo` | factory production state 2, placement time | Q (synchronous) | 1 output: cell 0 **seeded −1** by the caller (cells 1..3 null → seeded 0, no copy-back) | none | cell 0 consumed as the exit piece index → world build position; failure leaves the seed untouched |
+| `SetDirection` | general unit update (definition float gate > 0 and global mover-active) | D (deferred) | 1: the global direction value, zero-extended 16-bit; fillers 0 | none | ignored |
+| `SetSpeed` | general unit update, immediately after `SetDirection` | D (deferred) | 1: the signed global speed value × 16; fillers 0 | none | ignored |
+| `StartMoving` | movement integration, tier 0 → nonzero, issued FIRST | D + **wake 1** (immediate) | none | none | ignored |
+| `StopMoving` | movement integration, tier nonzero → 0 | D + **wake 1** (immediate) | none | none | ignored |
+| `MoveRate1`/`MoveRate2`/`MoveRate3` | movement integration, tier change (nonzero→nonzero emits only these) | D + **wake 1** (immediate), one per change | none | none | ignored |
+| `setSFXoccupy` | movement integration, after the rate classifier, on band change only | D + **wake 1** (immediate) | 1: occupancy band 0..4; fillers 0 | none | ignored |
+| `AimPrimary`/`AimSecondary`/`AimTertiary` | weapon update (ballistic/turret solver or fixed-forward branch) | D (deferred) | 2: `heading & 0xffff`, `pitch & 0xffff` (fixed-forward issues `(0, 0)`); fillers 0; a solver pitch of the −0x8000 sentinel suppresses the start | **the weapon slot's completion-receiver word** | the only grant path — see below |
+| `FirePrimary`/`FireSecondary`/`FireTertiary` | weapon spawner after successful root allocation and the start sound | D (deferred) | none (zero-argument start) | none | ignored |
+| `RockUnit` | same spawner, immediately after the matching `Fire*` | D (deferred) | 2: `−cos(rel) · 800`, `−sin(rel) · 800` with `rel` = commanded barrel heading − unit heading through the shared 512-entry table, round-to-nearest; fillers 0 | none | ignored |
+| `HitByWeapon` | normal-kind damage packet, after health subtraction | D (deferred) | 2: `cos(dir) · 400`, `sin(dir) · 400`, `dir` = packet direction byte shifted into the 65536 domain; fillers 0 | none | ignored |
+| `TakeDamage` | same packet path, started independently after `HitByWeapon` | D (deferred) | 1: post-hit health percentage `clamp(health·100/maxHealth, 0, 100)`, unsigned division; fillers 0 | none | ignored |
+| `Killed` (local authoritative) | slot-end death handling, before the death packet is built | Q (synchronous, 4 cells) | outputs severity and variant; cause 7 → severity 0 variant 1 without a query; causes 4/5/9 or positive health → severity 0 variant 0 without a query; otherwise cell 1 (variant) is NOT pre-initialized | none | severity and variant consumed into the death packet; a nonzero remaining-work fraction forces variant 0 after any query |
+| `Killed` (network death replay) | unit finalization, only when the packet severity byte is positive | D + **wake 1** (immediate) | 1: the signed packet severity byte; fillers 0 | none | ignored |
+| `TargetCleared` | weapon update, when a stored commanded target is actually cleared | D (deferred) | 1: the zero-based weapon slot; fillers 0 | none | ignored; each clearing site resolves the `StartBuilding` name and discards the result |
+| `QueryTransport` | transport attachment | Q (synchronous) | 1 output: cell 0 **seeded −1**, others null | none | cell 0 = attachment piece; −1 survives as the root-piece fallback |
+| `QueryLandingPad` | air landing selection | Q (synchronous) | 4 outputs, **all seeded −1** | none | first candidate piece 0..3 to pass validity/availability is accepted; all −1 keeps the order alive for retry |
+| `QueryNanoPiece` | nanolathe emission setup (pipeline owned by document 03) | Q (synchronous) | 1 output: cell 0 seeded 0 | none | cell 0 = the nano origin piece, transformed to a world point |
+| `QueryPrimary`/`QuerySecondary`/`QueryTertiary`, `AimFrom*`, `SweetSpot` | weapon aiming/fire point resolution | Q (synchronous) | 1 output: cell 0 seeded 0 (`AimFrom*` seeded −1 with fallback to `Query*` at 0) | none | cell 0 = muzzle/aim piece |
+
+**Established — the slice's port usage.** All twenty engine ports are
+tabulated in section 4.4 and their write arms in section 4.7; the vertical
+slice exercises: reads — port 4 (health percent), port 17 (build percent
+left), port 18 (yard open); writes — port 1 (activation, through the edge
+machine), port 5 (in-build stance), port 6 (busy), port 18 (yard open,
+admission-gated), port 19 (bugger off), port 20 (armored). The compiled
+write form pushes the identifier first and the value second.
+
+**Established — the Aim-ready grant rule, confirmed, with the producer census.
+** Aim-ready is granted **only** by a nonzero value delivered through the
+completion receiver: the interpreter's return opcode pops the script's return
+cell and, when the thread's receiver word is non-null, invokes the receiver's
+closure with that cell — zero has no effect, any nonzero value marks the
+weapon aim-ready. Every other event on the path delivers zero or nothing:
+name absence and pool exhaustion invoke the receiver with 0 through the
+starter's failure path; signal termination and the invalid-opcode kill never
+invoke a receiver; the fixed-forward `(0, 0)` branch and the type-0x10 network
+emission are start producers, not grant producers; the issue bit is written by
+the producer (set after the start, cleared on target-acquisition failure) and
+gates re-issue, not readiness. A bounded census found **no additional
+producer** of the grant: no other writer of the aim-ready state exists in the
+traced weapon-update and starter paths. One auxiliary helper exists that scans
+the eight threads and clears a receiver word matching a supplied pointer, but
+it has **no located caller** in a bounded relative-call census of the code
+sections — recorded as an orphan; it does not grant anything. The identity of
+the closure target behind the receiver word remains `TODO(question)` R-1
+(section 5.3); the grant rule itself no longer depends on it.
+
+### Closed — same-tick callback integration trace spec [R-COB-02 §2] (2026-08-28)
+
+**Established — composed order of one unit visit.** The unit sweep visits
+players in ascending slot order and, within a player, units in ascending slot
+order (immediate reuse of freed slots applies). A unit whose alive bit is set
+is visited even when its death latch is already set — the latch suppresses
+nothing until the visit's final step. One visit executes, in order:
+
+1. **General unit update.** May run the activation edge machine (deferred
+   `Activate`/`Deactivate`/`StartBuilding`/`StopBuilding`) and, behind the
+   definition-float and global mover-active gates, queue deferred
+   `SetDirection` then `SetSpeed`.
+2. **Weapon update**, slots 0..2 ascending. Reload decrement; target
+   resolution may emit deferred `TargetCleared`; automatic acquisition may
+   run; aim issue clears the slot's aim-state word, stores the commanded
+   heading/pitch, starts deferred `Aim*` with the slot receiver, then sets
+   the issue bit and emits the aim network event; the fire decision reaches
+   the spawner, which allocates the root projectile, plays the start sound,
+   queues deferred `Fire*` then `RockUnit`, runs the smoke gate, and then
+   applies reload, ammunition, and resource debit.
+3. **Normal COB drain, delta 1.** If any thread is active: the interpreter
+   runs all eight slots in ascending slot order, then one piece-interpolation
+   pass runs. **Every deferred callback queued in steps 1–2 executes here**,
+   ordered by thread slot (allocation order), not by queueing order.
+4. **Orders and build work.** The primary pump (head-blocking,
+   restart-from-head) then the secondary pump (front-to-back, skipping
+   not-due records). Handlers may queue further deferred callbacks — those
+   wait for the next visit's normal drain unless a later immediate start
+   flushes them (see barriers). Construction completion can create a unit,
+   whose `Create` drain runs inline at the creation site.
+5. **Movement integration.** The rate classifier computes the category
+   (0 overrides: inhibit bit, attached carrier, or both magnitude words zero;
+   else 1 up to the lower definition threshold inclusive, 2 up to the upper
+   threshold inclusive, 3 above; cached, unchanged emits nothing). On change:
+   into category 0 from nonzero issues `StopMoving`; into a nonzero category
+   from 0 issues `StartMoving` FIRST and then the matching `MoveRateN`; other
+   nonzero-to-nonzero changes issue only `MoveRateN` — all immediate starts.
+   The medium classifier then runs and emits `setSFXoccupy` (immediate) on a
+   band change only; its cache write is the step's last effect.
+6. **Slot-end death handling.** If the death latch is set: the synchronous
+   local `Killed` query runs (severity/variant, with the cause bypasses of
+   section 5.1), then finalization — bookkeeping, score, the corpse
+   placement, cargo detachment, the deferred-start `Killed` for network
+   replay (immediate drain inline), and the free that makes the slot
+   immediately reusable.
+
+**Established — barriers and flush points.**
+
+- The **normal drain** (step 3) is the barrier that executes everything
+  deferred queued in steps 1–2.
+- Every **immediate (wake) start** — `Create`, `SetMaxReloadTime` at creation,
+  `StartMoving`/`StopMoving`/`MoveRateN`, `setSFXoccupy`, the network-replay
+  `Killed` — performs an all-eight-slot delta-0 interpreter pass plus one
+  piece pass inside the caller's context before returning. Any deferred
+  callback queued earlier on that VM and not yet executed therefore runs at
+  that flush point; this is the only way a step-4 deferral can run in the
+  same visit.
+- A **synchronous query** runs its single slot inline with delta 0 — no other
+  slot, no piece pass — and copies its cells back immediately; a query that
+  yields leaves its thread allocated (section 4.2, [R-COB-01 §1]).
+- **Piece interpolation** runs exactly once per normal drain and once per
+  immediate drain (delta 0), never around queries.
+- **Cross-visit windows:** callbacks queued by the post-unit projectile phase
+  (`HitByWeapon`/`TakeDamage` from impacts) land on the **next** visit's
+  normal drain; the same-tick exception is damage applied during event
+  ingress before the unit phase. An arrival bit raised during movement
+  integration is observed by the next pump visit, not the current one
+  (section 8.3).
+
+**Fixture notes for a trace test.** A deterministic fixture needs: (a) the
+per-visit step order above with one unit per step boundary; (b) two callbacks
+of different modes queued in one step to observe the slot-order (not
+queue-order) execution in step 3; (c) a deferred callback queued in step 4
+plus a category change in step 5 to observe the wake-flush pulling it into
+the same visit; (d) a `sleep 0` thread observing the one-tick minimum across
+a normal drain; (e) a latched unit that still fires in steps 2–5 of its death
+visit and frees at step 6; (f) draw accounting: any `random` opcode with an
+equal low/high consumes nothing, and a bitmap-only `explode` consumes nothing,
+against the census in [R-COB-01 §2].
 
 ## 6. Terrain and movement prerequisites
 
@@ -2879,15 +3179,29 @@ Function identities that a later re-derivation corrected — in particular the m
 - Reserved opcode `0x10063000`: behavior when a synthetic or corrupted script
   emits it (count exceeding the window depth reads stale window words —
   undefined behavior, not a kill).
-- Stack overflow, allocation failure, and corrupted-save fault policy; the
+- Allocation failure and corrupted-save fault policy — where retail would
+  abort through its allocator's abort path remains `TODO(question)`; the
   invalid-piece-index half is closed (no bounds check in the interpreter;
   out-of-range index is out-of-bounds access, not a kill — the kill path is
-  unknown-opcode and thread-return only, 2026-08-26).
+  unknown-opcode and thread-return only, 2026-08-26) and the stack-overflow
+  half is closed (push and pop have no depth guard either — overflow writes
+  past the ten-word window, undefined behavior, not a kill; Nanolathe
+  bounds-checks as its sanctioned divergence, 2026-08-28 [R-COB-01 §1]).
 - The `Aim*` ready-writer closure: the receiver protocol and the write it
   performs are closed in section 5.3 (return-opcode invocation of the
   receiver with the script's returned cell); the identity of the closure
   target (the dword at the receiver word) remains `TODO(question)` R-1,
-  coordinated with document 06 section 3.4.
+  coordinated with document 06 section 3.4; a receiver-clearing helper that
+  scans the eight threads has no located caller (bounded relative-call
+  census, 2026-08-28 [R-COB-02 §1]) and grants nothing.
+- Script statics are not initialized by the program bind (piece animation
+  state is zero-filled, statics are not — [R-COB-01 §1]); the initial content
+  the tagged allocator itself provides is Unknown, insensitive for stock
+  content because shipped scripts write before read.
+- The crash policy for a scriptless unit (null compiled program) whose update
+  path runs: one traced producer site lacks a null-VM guard, so retail would
+  fault there; stock content never exercises it — `TODO(question)`, settle
+  with a synthetic scriptless definition ([R-COB-01 §1], UNIT-04).
 - The script-touched marker consumer, the busy-bit semantic NAME (the
   transport-admission half is closed: no busy-bit test in the nine gates),
   the engine-driven cloak-family bit name, the packed position-half axis

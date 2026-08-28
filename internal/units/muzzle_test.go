@@ -17,7 +17,7 @@ func TestOW0D_MuzzlePieceDefaultIsNegativeOne(t *testing.T) {
 		Weapon2Def: nil,
 		Weapon3Def: &content.WeaponDef{ID: 3},
 	}
-	w := New(10, nil)
+	w := NewSliced(10, nil)
 	// Use installWeapons directly via Create path (which calls installWeapons)
 	h, err := w.Create(def, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	if err != nil {

@@ -88,8 +88,13 @@ func NewFactoryBuildNode(cat *content.Catalog, defKey string, count uint32, tick
 
 // NewMobileBuildNode constructs a mobile build node with site anchor payload [05 "Construction arithmetic"][P0-I05].
 // Mobile build payload: definition catalog index in Param1, site world anchor in GoalX/Z,
-// orientation in Param3, builder relation is Owner, count in Param2 [05][P0-I05].
-// ID is MobileBuild or VTOL_MobileBuild chosen by caller [04 §3.1].
+// builder relation is Owner, remaining count in Param2 [05][P0-I05].
+// Param3 is the blocked-area retry counter [04 §3.2][R-ORDER-02 §1] and starts
+// zeroed; the handler's setup path zeroes it on every (re)arm. ID is
+// MobileBuild or VTOL_MobileBuild chosen by caller [04 §3.1].
+// The orientation argument has no established home in the order record —
+// [04 §3.2] assigns the third parameter to the retry counter — so it is
+// accepted for signature stability and not stored.
 func NewMobileBuildNode(cat *content.Catalog, defKey string, siteX, siteZ numeric.Fixed, orientation uint16, count uint32, tick uint32, owner pool.Handle, queued bool) Node {
 	ck := content.CanonicalKey(defKey)
 	idx, _ := catalogIndex(cat, ck)
@@ -99,11 +104,11 @@ func NewMobileBuildNode(cat *content.Catalog, defKey string, siteX, siteZ numeri
 	n.BuildDefKey = ck
 	n.Param1 = idx
 	n.Param2 = count
-	n.Param3 = uint32(orientation)
 	return n
 }
 
 // NewMobileBuildNodeWithID constructs a mobile build node with explicit descriptor ID [P0-I05].
+// Param3 is the blocked-area retry counter [04 §3.2][R-ORDER-02 §1]; see NewMobileBuildNode.
 func NewMobileBuildNodeWithID(id ID, cat *content.Catalog, defKey string, siteX, siteZ numeric.Fixed, orientation uint16, count uint32, tick uint32, owner pool.Handle, queued bool) Node {
 	ck := content.CanonicalKey(defKey)
 	idx, _ := catalogIndex(cat, ck)
@@ -111,7 +116,6 @@ func NewMobileBuildNodeWithID(id ID, cat *content.Catalog, defKey string, siteX,
 	n.BuildDefKey = ck
 	n.Param1 = idx
 	n.Param2 = count
-	n.Param3 = uint32(orientation)
 	return n
 }
 

@@ -140,7 +140,7 @@ func TestCompositionBinderFutureAllocationIsStrictAndPreCreate(t *testing.T) {
 	good := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testunit"}, UnitName: "testunit", ObjectName: "fixture", MaxDamage: 10, Limit: -1}
 	cat.Units[good.CanonicalKey] = good
 	s := &Session{rngSim: rng.NewSimulation(77), rngCrt: rng.NewCRT(9), rngInitialized: true, publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}))}
-	w := units.New(2, cat)
+	w := units.NewSliced(2, cat)
 	w.SetCOBSource(fs, globalCobLoader)
 	w.SetCOBBinder(func(u *units.Unit) error { return s.bindUnitCOB(fs, u) })
 	var createCalls int

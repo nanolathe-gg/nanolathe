@@ -26,7 +26,7 @@ import (
 func TestProductionInputShiftQueueReplayO5(t *testing.T) {
 	cat, builderDef, targetDef, productKey := o5QueueCatalog()
 	world := testWorldON05(32, 32)
-	unitsWorld := units.New(32, cat)
+	unitsWorld := units.NewSliced(32, cat)
 	// Keep all authored points inside the logical 640x480 viewport after the
 	// camera's presentation origin is removed; negative screen coordinates are
 	// clamped by BattleController and would not exercise production picking.

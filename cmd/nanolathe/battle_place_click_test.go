@@ -22,7 +22,7 @@ func placeClickFixture(t *testing.T, cellW, cellH int32) (*battleSession, *sessi
 	t.Helper()
 	cat := testCatalogON05()
 	terrain := testWorldON05(cellW, cellH)
-	uw := units.New(32, cat)
+	uw := units.NewSliced(32, cat)
 	builderDef, ok := cat.Unit("armcons")
 	if !ok {
 		t.Fatal("fixture builder missing")

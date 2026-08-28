@@ -49,7 +49,7 @@ func TestStepUnitMobileBuildStopsOnMoveArrived(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "corcom", MaxVelocity: 3 * 65536, TurnRate: 800, SightDistance: 120}
 	def.MaxDamage = 100
 	def.FootprintX = 1
@@ -106,7 +106,7 @@ func TestStepUnitGroundArrival(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, TurnRate: 800, SightDistance: 120}
 	def.MaxDamage = 100
 	def.FootprintX = 1
@@ -193,7 +193,7 @@ func TestStepUnitEmptyRouteDoesNotArrive(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 	def.MaxDamage = 100
 	def.FootprintX = 1
@@ -240,7 +240,7 @@ func TestStepUnitEmptyRouteDoesNotArrive(t *testing.T) {
 	profile2 := profile
 	grid2 := NewOccupancyGrid()
 	system2 := NewSystem(terrain2, profile2, grid2)
-	w2 := units.New(10, nil)
+	w2 := units.NewSliced(10, nil)
 	h2, _ := w2.Create(def, 0, world.CellToWorld(0), numeric.Fixed(0), world.CellToWorld(0))
 	u2 := w2.Unit(h2)
 	system2.BindWorld(w2)
@@ -274,7 +274,7 @@ func TestStepUnitOrderIndependence(t *testing.T) {
 		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30}
 		grid := NewOccupancyGrid()
 		system := NewSystem(terrain, profile, grid)
-		w := units.New(10, nil)
+		w := units.NewSliced(10, nil)
 		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 		def.MaxDamage = 100
 		def.FootprintX = 1
@@ -321,7 +321,7 @@ func TestStepUnitOrderIndependence(t *testing.T) {
 		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 		grid := NewOccupancyGrid()
 		system := NewSystem(terrain, profile, grid)
-		w := units.New(10, nil)
+		w := units.NewSliced(10, nil)
 		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 1 * 65536, TurnRate: 1000}
 		def.MaxDamage = 100
 		def.FootprintX = 1
@@ -373,7 +373,7 @@ func TestStepUnitStoppedStaysStopped(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 	def.MaxDamage = 100
 	h, _ := w.Create(def, 0, world.CellToWorld(5), terrain.HeightAt(world.CellToWorld(5), world.CellToWorld(5)), world.CellToWorld(5))
@@ -406,7 +406,7 @@ func TestStepUnitAircraftAndTransportRegression(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, MaxWaterSlope: 30}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	// Aircraft
 	airDef := &content.UnitDef{UnitName: "armfig", MaxVelocity: 3 * 65536, Acceleration: 1 * 65536, BrakeRate: 1 * 65536, TurnRate: 400, CruiseAlt: 80}
 	airDef.MaxDamage = 100
@@ -491,7 +491,7 @@ func TestStepUnitDeterminism(t *testing.T) {
 		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 		grid := NewOccupancyGrid()
 		system := NewSystem(terrain, profile, grid)
-		w := units.New(10, nil)
+		w := units.NewSliced(10, nil)
 		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 		def.MaxDamage = 100
 		def.FootprintX = 1
@@ -534,7 +534,7 @@ func TestStepUnitLoopParity(t *testing.T) {
 		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 		grid := NewOccupancyGrid()
 		system := NewSystem(terrain, profile, grid)
-		w := units.New(10, nil)
+		w := units.NewSliced(10, nil)
 		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 		def.MaxDamage = 100
 		h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(0), world.CellToWorld(0))
@@ -557,7 +557,7 @@ func TestStepUnitLoopParity(t *testing.T) {
 		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 		grid := NewOccupancyGrid()
 		system := NewSystem(terrain, profile, grid)
-		w := units.New(10, nil)
+		w := units.NewSliced(10, nil)
 		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 		def.MaxDamage = 100
 		h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(0), world.CellToWorld(0))
@@ -590,7 +590,7 @@ func TestStepUnitPublishedRouteNoDuplicate(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 	def.MaxDamage = 100
 	h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(0), world.CellToWorld(0))
@@ -660,7 +660,7 @@ func TestArrivalInclusiveBoundary(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, SightDistance: 28}
 	// Ground move binds radiusParam 4 → threshSq 0: only the exact goal cell
 	// satisfies the inclusive predicate [R-P0-01 corrected].
@@ -692,7 +692,7 @@ func TestArrivalInclusiveBoundary(t *testing.T) {
 		t.Fatalf("exact-cell threshold: two cells short must not report Arrived")
 	}
 	// Same-cell case: goal at the unit's own cell 5 → dx=0 → 0 <= 0 arrives inclusive.
-	w1 := units.New(10, nil)
+	w1 := units.NewSliced(10, nil)
 	system1 := NewSystem(terrain, profile, NewOccupancyGrid())
 	def1 := &content.UnitDef{UnitName: "armflea1", MaxVelocity: 2 * 65536, TurnRate: 500, SightDistance: 28, MaxDamage: 100, FootprintX: 1, FootprintZ: 1}
 	h1, _ := w1.Create(def1, 0, world.CellToWorld(5), numeric.Fixed(0), world.CellToWorld(1))
@@ -710,7 +710,7 @@ func TestArrivalInclusiveBoundary(t *testing.T) {
 		t.Fatalf("exact-cell inclusive: dx=0 threshSq=0 should OR 0x20")
 	}
 	// One-cell case: goal at 6,1 → dx=1 → 1 > 0 not arrived.
-	w2 := units.New(10, nil)
+	w2 := units.NewSliced(10, nil)
 	system2 := NewSystem(terrain, profile, NewOccupancyGrid())
 	def2 := &content.UnitDef{UnitName: "armflea2", MaxVelocity: 2 * 65536, TurnRate: 500, SightDistance: 28, MaxDamage: 100, FootprintX: 1, FootprintZ: 1}
 	h2, _ := w2.Create(def2, 0, world.CellToWorld(5), numeric.Fixed(0), world.CellToWorld(1))
@@ -735,7 +735,7 @@ func TestArrivalIsPlanarNoYHeading(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, SightDistance: 120, MaxDamage: 100, FootprintX: 1, FootprintZ: 1}
 	h, _ := w.Create(def, 0, world.CellToWorld(0), numeric.Fixed(100*65536), world.CellToWorld(0))
 	u := w.Unit(h)

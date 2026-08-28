@@ -806,12 +806,16 @@ func (c *combatFireEvents) StartSmoke(h pool.Handle) {
 }
 
 // EventStartSound and EventStartSmoke are weapon-start presentation events emitted
-// before/after Fire callbacks [06 §4.1] C2 [06 §13.2]. Defined here to keep the
+// before/after Fire callbacks [06 §4.1] C2 [06 §13.2]. EventTrailSmoke is the
+// projectile phase's trail-style puff (the trail-deadline branch and the
+// non-burn-blow timer-expiry puff — the same E-family smoke at the projectile
+// position [06 §13.2][R-STRIP-01 §1 strip 9]). Defined here to keep the
 // service file as the sole owner of the start-event wiring; pool.go owns the
 // impact ordering sink [06 §13.2] C27.
 const (
 	EventStartSound EventKind = 10 // [06 §4.1] C2 [06 §13.2]
 	EventStartSmoke EventKind = 11 // [06 §4.1] C2 [06 §13.2]
+	EventTrailSmoke EventKind = 12 // [06 §13.2][R-STRIP-01 §1 strip 9]
 )
 
 func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Terrain, windState *world.Wind, featSvc *features.Service, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) {
@@ -907,6 +911,16 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 			res = AdvanceRetire
 		}
 		if res == AdvanceRetire {
+			// Timer expiry without burn-blow emits exactly ONE trail-style
+			// puff and then retires silently — no sound, no shake, no
+			// explosion art, no damage; burn-blow expiry routes into the
+			// full central impact instead [06 §13.2][R-STRIP-01 §1 strip 9,
+			// the projectile phase's impact branch]. Only the expiry
+			// retirement puffs: steering-failure and nil-record retires
+			// never reach their expiry deadline.
+			if !weapon.BurnBlow && tick >= p.ExpiryTick {
+				s.emitEvent(Event{Kind: EventTrailSmoke, Tick: tick, Source: p.Shooter, Target: h, Position: p.Pos})
+			}
 			s.MarkDead(h)
 			continue
 		}
@@ -953,6 +967,17 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 			if NoExplodeRetirement(weapon.NoExplode, true, isOffMap, false) {
 				s.MarkDead(h)
 			}
+		}
+		// Trail puffs: the smoke-trail flag plus smoke delay, ALIVE records
+		// only, never burst parents, past the next-trail deadline. The
+		// deadline update is ADDITIVE — the smoke delay is added — so a
+		// zero delay emits on every eligible tick after the first
+		// [06 §13.2][R-STRIP-01 §1 strip 9, the projectile phase's
+		// trail-window branch]. A visit that just impacted marked the
+		// record dead, which skips the puff.
+		if weapon.SmokeTrail && p.BurstRemaining == 0 && !s.Slots.IsDead(h) && tick >= p.SmokeDeadline {
+			s.emitEvent(Event{Kind: EventTrailSmoke, Tick: tick, Source: p.Shooter, Target: h, Position: p.Pos})
+			p.SmokeDeadline += uint32(weapon.SmokeDelay)
 		}
 		_ = directTarget
 		_ = hitFeature
@@ -1080,7 +1105,10 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 			if isWaterExplosion {
 				kind = EventWaterExplosion
 			}
-			s.emitEvent(Event{Kind: kind, Tick: tick, Source: p.Shooter, Position: p.Pos, Graphic: graphic})
+			// Smoke carries the weapon's start-smoke flag: the land/water
+			// impact effect variants each append a strip-9 smoke object
+			// under that second weapon flag [R-STRIP-01 §1 strip 9].
+			s.emitEvent(Event{Kind: kind, Tick: tick, Source: p.Shooter, Position: p.Pos, Graphic: graphic, Smoke: weapon.StartSmoke})
 		}
 	}
 	s.emitEvent(Event{Kind: EventProjectileImpact, Tick: tick, Source: p.Shooter, Target: p.TargetUnit, Position: p.Pos})

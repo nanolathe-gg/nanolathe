@@ -154,6 +154,11 @@ type stripObject struct {
 	src, dst             [3]numeric.Fixed
 	srcExtent, dstExtent [3]numeric.Fixed
 
+	// colorSel is the sprinkle family's init flag [R-STRIP-01 §1 strips
+	// 2/7]: the spawn selects between the palette pair 0x61/0x67 by it —
+	// nonzero selects 0x61, zero selects 0x67.
+	colorSel uint8
+
 	// particleLife is the producer-supplied sub-record lifetime in ticks
 	// for families whose per-site constant is not established (sprinkle,
 	// smoke, flame).
@@ -454,19 +459,29 @@ func (o *stripObject) spawnOnce(tick uint32, crt *rng.CRT) {
 	case stripFamilySprinkle:
 		// One jittered puff per spawn; exactly three CRT draws of
 		// rand×7/0x8000 − 3 per axis [R-STRIP-01 §1 strip 2][R-STRIP-01
-		// §3]. The palette pair is 0x61/0x67.
-		// TODO(question): which of the two sprinkle palette colors a spawn
-		// takes, and the sprinkle puff's per-tick velocity law — both are
-		// untraced; the placeholder keeps velocity at zero and the color
-		// unset until traced.
+		// §3]. The palette pair is 0x61/0x67, selected by the producer's
+		// init flag: nonzero selects 0x61, zero selects 0x67 [R-STRIP-01
+		// §1 strips 2/7]. TODO(question): the drawn byte's offset inside
+		// the sprinkle sub-record — the pair-plus-selection reading is
+		// supported inference, not yet a committed field map.
+		color := uint8(0x67)
+		if o.colorSel != 0 {
+			color = 0x61
+		}
 		p := stripParticle{
-			x: o.src[0].Add(numeric.FixedFromInt(crtJitter7(crt))),
-			y: o.src[1].Add(numeric.FixedFromInt(crtJitter7(crt))),
-			z: o.src[2].Add(numeric.FixedFromInt(crtJitter7(crt))),
+			x:     o.src[0].Add(numeric.FixedFromInt(crtJitter7(crt))),
+			y:     o.src[1].Add(numeric.FixedFromInt(crtJitter7(crt))),
+			z:     o.src[2].Add(numeric.FixedFromInt(crtJitter7(crt))),
+			color: color,
 		}
 		if o.particleLife > 0 {
 			p.expiry = tick + uint32(o.particleLife)
 		}
+		// TODO(question): the sprinkle puff's per-tick velocity — retail's
+		// sub-record advances by a vector derived from the producer's two
+		// points (the piece origin and its second effect vertex); the
+		// second vertex's derivation is untraced, so the placeholder keeps
+		// velocity at zero.
 		o.particles = append(o.particles, p)
 	case stripFamilyFlame:
 		// One animated segment per spawn; exactly one CRT draw for the
@@ -591,11 +606,25 @@ func (s *Session) appendStripNanoEmitter(srcPoint, dstPoint [3]numeric.Fixed) {
 }
 
 // appendStripSmokePuffer creates a strips-5/9 smoke-puff container. It backs
-// the researched smoke sites (impact smoke, burning-feature smoke, the
-// sinking-wreck 900-tick smoke column [R-STRIP-01 §1 strips 5/9]); no
-// in-session producer is wired yet — see the producer TODOs in
-// composition.go. life <= 0 means the site's lifetime is not established and
-// the container never passes its window.
+// the researched smoke sites (impact smoke, the weapon-fire start smoke, the
+// burning-feature smoke, the sinking-wreck 900-tick smoke column [R-STRIP-01
+// §1 strips 5/9]). The family's constructor spawns its first puff immediately
+// [R-STRIP-01 §2], spending exactly one CRT draw (the start frame)
+// [R-STRIP-01 §3]; the phase-11 gate fires further spawns only when the
+// caller arms nextSpawn. life <= 0 means the site's window is not established
+// and the container never passes its window.
+// TODO(question): the per-site container windows and the smoke variant
+// selection (the family blits one of two smoke GAF entries by an init flag
+// [R-STRIP-01 §2]) for the impact/start-fire smoke sites — the init
+// arguments live in stack residue at those sites; a frame-layout trace would
+// settle them. The sinking-wreck column's parameters are established
+// (15-tick interval, 900-tick window) but its trigger — the wreck-sinking
+// start — is outside the strip-producer unit's file ownership.
+// TODO(question): the smoke puff's animation-driven expiry (the family's
+// sub-records die when their frame cursor reaches the bound GAF entry's
+// frame count) — the frame count is presentation asset data the sim side
+// does not carry, so a container whose puff carries no tick deadline
+// persists until the 401-record eviction bound [R-STRIP-01 §2].
 func (s *Session) appendStripSmokePuffer(strip int, pos [3]numeric.Fixed, life, frameDelay int32) {
 	if s == nil || s.strips == nil {
 		return
@@ -613,7 +642,53 @@ func (s *Session) appendStripSmokePuffer(strip int, pos [3]numeric.Fixed, life, 
 		o.windowEnd = tick + uint32(life)
 	}
 	// The window participates in this family's removal verdict
-	// [R-STRIP-01 §2]; spawn pacing for the wired sites is untraced, so no
-	// gate is armed here.
+	// [R-STRIP-01 §2]; spawn pacing beyond the constructor's immediate
+	// first puff is armed only by callers with an established interval.
+	if crt := s.CrtRNG(); crt != nil {
+		o.spawnOnce(tick, crt)
+	}
+	s.strips.append(strip, o)
+}
+
+// smokeDefaultFrameDelay is the smoke family's animation frame delay when a
+// site passes zero: the family constructor defaults the authored delay to 7.
+// Each animation-frame advance consumes one CRT draw [R-STRIP-01 §3].
+// TODO(question): promote the constructor's default-delay value into the
+// committed family contract — it is read off the family constructor directly
+// and is not yet stated in the research doc.
+const smokeDefaultFrameDelay = 7
+
+// appendStripSprinkle creates a strips-2/7 smoke-sprinkle container
+// [R-STRIP-01 §1 strips 2/7]. Retail's constructor closes the spawn window
+// one tick after creation and spawns the first puff immediately, so each
+// container holds two puffs: one at the producer and one from the phase-11
+// gate on the next tick, after which the closed window stops the gate. Each
+// puff lives spacing×6 ticks (16-tick spacing → 96, 8-tick → 48). The
+// producer spends exactly three CRT draws per spawn (per-axis jitter)
+// [R-STRIP-01 §3]. colorSel selects the palette entry: nonzero → 0x61, zero
+// → 0x67 [R-STRIP-01 §1 strips 2/7].
+func (s *Session) appendStripSprinkle(strip int, pos [3]numeric.Fixed, spacing int32, colorSel uint8) {
+	if s == nil || s.strips == nil {
+		return
+	}
+	tick := uint32(0)
+	if s.Clock != nil {
+		tick = s.Clock.GlobalTick
+	}
+	o := stripObject{
+		family:        stripFamilySprinkle,
+		windowEnd:     tick + 1,
+		nextSpawn:     tick + 1,
+		spawnInterval: 1,
+		particleLife:  spacing * 6,
+		colorSel:      colorSel,
+		src:           pos,
+		// dst stays at the spawn point: the container's second point (the
+		// piece's second effect vertex) is untraced — see the spawn
+		// TODO(question) on the sprinkle family above.
+	}
+	if crt := s.CrtRNG(); crt != nil {
+		o.spawnOnce(tick, crt)
+	}
 	s.strips.append(strip, o)
 }

@@ -108,8 +108,8 @@ func TestP016_CapacityFormula(t *testing.T) {
 	if p.SlotIndex(0) != 0 || p.SlotIndex(1) != 1 {
 		t.Fatalf("slotIndex retain")
 	}
-	// Slot 0 null sentinel: Alloc should never return 0
-	if h, ok := p.AllocForPlayer(0); !ok || h == 0 {
+	// Slot 0 null sentinel: allocation should never return 0
+	if h, ok := p.AllocForPlayerWithDef(0, 1, false, 0); !ok || h == 0 {
 		t.Fatalf("alloc for player 0 failed %d %v", h, ok)
 	}
 	if p.SlotIndex(1) != 1 {
@@ -175,15 +175,15 @@ func TestP016_SliceFullVsGlobalSpare(t *testing.T) {
 	p := NewUnitsSliced(3) // 3 per player, player0 has 1..3
 	// Fill player0 completely
 	for i := 0; i < 3; i++ {
-		if _, ok := p.AllocForPlayer(0); !ok {
+		if _, ok := p.AllocForPlayerWithDef(0, 1, false, 0); !ok {
 			t.Fatalf("fill %d", i)
 		}
 	}
-	if _, ok := p.AllocForPlayer(0); ok {
+	if _, ok := p.AllocForPlayerWithDef(0, 1, false, 0); ok {
 		t.Fatal("slice full should fail for player 0")
 	}
 	// Other player still has spare
-	if _, ok := p.AllocForPlayer(1); !ok {
+	if _, ok := p.AllocForPlayerWithDef(1, 1, false, 0); !ok {
 		t.Fatal("player1 should still have spare despite p0 full")
 	}
 	if got := p.Used(); got != 4 {
@@ -196,23 +196,23 @@ func TestP016_SliceFullVsGlobalSpare(t *testing.T) {
 func TestP016_ForcedSlotOOB(t *testing.T) {
 	p := NewUnitsSliced(5) // player0 1..5, player1 6..10
 	// Valid forced slot within slice and free should succeed
-	if _, ok := p.AllocForced(0, 3); !ok {
+	if _, ok := p.AllocForcedWithDef(0, 7, 3, false, 0); !ok {
 		t.Fatal("forced 3 in p0 should succeed")
 	}
 	// Same slot now occupied should fail
-	if _, ok := p.AllocForced(0, 3); ok {
+	if _, ok := p.AllocForcedWithDef(0, 7, 3, false, 0); ok {
 		t.Fatal("occupied forced should fail")
 	}
 	// OOB: slot belonging to player1 used with player0 should fail
-	if _, ok := p.AllocForced(0, 6); ok {
+	if _, ok := p.AllocForcedWithDef(0, 7, 6, false, 0); ok {
 		t.Fatal("OOB forced 6 for p0 should fail")
 	}
 	// Slot 0 sentinel never allocated
-	if _, ok := p.AllocForced(0, 0); ok {
+	if _, ok := p.AllocForcedWithDef(0, 7, 0, false, 0); ok {
 		t.Fatal("forced 0 should fail")
 	}
 	// Far OOB beyond total records
-	if _, ok := p.AllocForced(0, 9999); ok {
+	if _, ok := p.AllocForcedWithDef(0, 7, 9999, false, 0); ok {
 		t.Fatal("far OOB should fail")
 	}
 	// Forced with per-def limit: should also respect limit
@@ -232,9 +232,79 @@ func TestP016_ForcedSlotOOB(t *testing.T) {
 
 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
 // [P0-16 §3.4]: slotIndex equals handle and survives Free.
+// TestSlicedPoolOneAllocationPath locks the retail unit-pool allocation
+// contract on the sliced pool [P0-16 §3.1][P0-16 §3.2][01 §6.1]: slot 0 is
+// the null sentinel and is never allocated; allocation scans the owning
+// player's slice for the lowest free slot and reuses freed slots
+// immediately; per-player slices are isolated (a slice-full failure even
+// when other players hold spare slots [P0-16 §7.3]); and allocation always
+// carries the caller's definition identity — no default identity is handed
+// out at allocation [01 §6.1].
+func TestSlicedPoolOneAllocationPath(t *testing.T) {
+	p := NewUnitsSliced(3) // player0 slots 1..3, player1 4..6
+
+	// Slot 0 is the null sentinel and is never allocated [P0-16 §3.1].
+	if h, ok := p.AllocForcedWithDef(0, 7, 0, false, 0); ok || h != 0 {
+		t.Fatalf("forced slot 0 allocated: handle %d ok %v", h, ok)
+	}
+	if p.Alive(0) {
+		t.Fatal("slot 0 must be the null sentinel")
+	}
+
+	// Lowest-free allocation fills 1,2,3 in order.
+	first := Handle(0)
+	for want := Handle(1); want <= 3; want++ {
+		h, ok := p.AllocForPlayerWithDef(0, 7, false, 0)
+		if !ok || h != want {
+			t.Fatalf("alloc %d: got %d ok %v, want lowest-free %d", want, h, ok, want)
+		}
+		if first == 0 {
+			first = h
+		}
+	}
+	// Slice full: further allocation for player 0 fails even though player 1
+	// has spare slots [P0-16 §7.3].
+	if h, ok := p.AllocForPlayerWithDef(0, 7, false, 0); ok {
+		t.Fatalf("slice-full allocation succeeded: handle %d", h)
+	}
+	if h, ok := p.AllocForPlayerWithDef(1, 7, false, 0); !ok || h != 4 {
+		t.Fatalf("player 1 spare slot: got %d ok %v, want 4", h, ok)
+	}
+
+	// Immediate reuse: freeing 2 makes it the next lowest-free slot again
+	// [P0-16 §3.2].
+	p.Free(2)
+	h, ok := p.AllocForPlayerWithDef(0, 9, false, 0)
+	if !ok || h != 2 {
+		t.Fatalf("immediate reuse: got %d ok %v, want 2", h, ok)
+	}
+	// The reused slot carries the new allocation's definition identity, and
+	// the stale handle 2 aliases the new occupant with no generation tag
+	// [P0-16 §6].
+	if id := p.DefID(2); id != 9 {
+		t.Fatalf("reused slot identity %d, want 9", id)
+	}
+
+	// No default definition identity: a zero identity fails without
+	// allocating [01 §6.1] — retail's canonical allocator always carries a
+	// real definition identity.
+	before := p.Used()
+	if h, ok := p.AllocForPlayerWithDef(0, 0, false, 0); ok || h != 0 {
+		t.Fatalf("zero definition identity allocated: handle %d ok %v", h, ok)
+	}
+	if p.Used() != before {
+		t.Fatalf("failed allocation changed used count %d -> %d", before, p.Used())
+	}
+
+	// Stale handle from before the free/reuse cycle aliases the new occupant.
+	if !p.Alive(first) {
+		t.Fatal("lowest slot should still be alive")
+	}
+}
+
 func TestP016_SlotIndexRetained(t *testing.T) {
 	p := NewUnitsSliced(5)
-	h, _ := p.AllocForPlayer(0)
+	h, _ := p.AllocForPlayerWithDef(0, 1, false, 0)
 	if h != 1 {
 		t.Fatalf("want 1 got %d", h)
 	}
@@ -261,18 +331,18 @@ func TestP016_SlotIndexRetained(t *testing.T) {
 func TestP016_FreeAndReallocateLowestFree(t *testing.T) {
 	p := NewUnitsSliced(5) // p0 1..5
 	// Allocate 1,2,3
-	h1, _ := p.AllocForPlayer(0) // 1
-	h2, _ := p.AllocForPlayer(0) // 2
-	_, _ = p.AllocForPlayer(0)   // 3
-	p.Free(h2)                   // free 2
+	h1, _ := p.AllocForPlayerWithDef(0, 1, false, 0) // 1
+	h2, _ := p.AllocForPlayerWithDef(0, 1, false, 0) // 2
+	_, _ = p.AllocForPlayerWithDef(0, 1, false, 0)   // 3
+	p.Free(h2)                                       // free 2
 	// Next alloc should reuse lowest free = 2, not 4
-	h, _ := p.AllocForPlayer(0)
+	h, _ := p.AllocForPlayerWithDef(0, 1, false, 0)
 	if h != h2 {
 		t.Fatalf("reuse wanted %d got %d", h2, h)
 	}
 	// Free 1 as well; next should be 1 (lowest)
 	p.Free(h1)
-	h, _ = p.AllocForPlayer(0)
+	h, _ = p.AllocForPlayerWithDef(0, 1, false, 0)
 	if h != h1 {
 		t.Fatalf("reuse 1 wanted %d got %d", h1, h)
 	}
@@ -293,12 +363,12 @@ func TestP016_ZeroRNGDraws(t *testing.T) {
 	beforeCRT := rng.Global.Crt.Draws()
 	p := NewUnitsSliced(10)
 	for i := 0; i < 5; i++ {
-		p.AllocForPlayer(0)
+		p.AllocForPlayerWithDef(0, 1, false, 0)
 	}
 	p.AllocForPlayerWithDef(0, 42, true, 2)
 	p.AllocForPlayerWithDef(0, 42, true, 2)
 	p.AllocForPlayerWithDef(0, 42, true, 2) // fail
-	p.AllocForced(0, 9)
+	p.AllocForcedWithDef(0, 42, 9, false, 0)
 	p.Free(1)
 	if got := rng.Global.Sim.Draws(); got != beforeSim {
 		t.Fatalf("sim draws moved %d -> %d", beforeSim, got)
@@ -316,13 +386,14 @@ func TestP016_SameTickReuseVisibility(t *testing.T) {
 	// Simulate tick scan order player 0..9 asc, slots asc.
 	// Allocate victim at slot 2 then frees; factory at “later slot” allocates
 	// same tick and should reuse same handle if freed before its turn.
-	h1, _ := p.AllocForPlayer(0) // 1
-	h2, _ := p.AllocForPlayer(0) // 2 victim
-	h3, _ := p.AllocForPlayer(0) // 3 factory actor
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	h1, _ := p.AllocForPlayerWithDef(0, 1, false, 0) // 1
+	h2, _ := p.AllocForPlayerWithDef(0, 1, false, 0) // 2 victim
+	h3, _ := p.AllocForPlayerWithDef(0, 1, false, 0) // 3 factory actor
+	// Free victim (slot 2) at slot-end before visiting factory's later slot
+	// [P0-16 §6.3].
 	p.Free(h2)
 	// Next allocation for same player should reuse 2 (lowest free)
-	h, _ := p.AllocForPlayer(0)
+	h, _ := p.AllocForPlayerWithDef(0, 1, false, 0)
 	if h != h2 {
 		t.Fatalf("same-tick reuse expected %d got %d", h2, h)
 	}

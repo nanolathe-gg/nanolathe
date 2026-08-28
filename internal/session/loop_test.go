@@ -18,7 +18,7 @@ func TestPublishAfterEachSubTick(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 0},
 		Snapshot: &frame.Buffer{},
-		Units:    units.New(10, nil),
+		Units:    units.NewSliced(10, nil),
 	}
 	s.RegisterAll()
 	s.State = StateBattle // P0-I10: Step ticks only in battle
@@ -142,7 +142,7 @@ func TestAICallbackInsideTickPlayer(t *testing.T) {
 	s := &Session{
 		Clock:    &clock.State{Requested: 10, Active: 10},
 		Econ:     econ,
-		Units:    units.New(10, nil),
+		Units:    units.NewSliced(10, nil),
 		AI:       [10]*ai.Manager{0: mgr},
 		Snapshot: &frame.Buffer{},
 	}
@@ -240,7 +240,7 @@ func TestAICallbackInsideTickPlayer(t *testing.T) {
 	s2 := &Session{
 		Clock: &clock.State{Requested: 10, Active: 10},
 		Econ:  econ2,
-		Units: units.New(10, nil),
+		Units: units.NewSliced(10, nil),
 		AI:    [10]*ai.Manager{1: mgr2}, // index 1 is player 1 per RS-02
 		World: &world.Terrain{CellW: 10, CellH: 10},
 	}
@@ -283,7 +283,7 @@ func TestCoordinatorIteratesPlayersAscending(t *testing.T) {
 	s := &Session{
 		Clock: &clock.State{Requested: 10, Active: 10},
 		Econ:  econ,
-		Units: units.New(10, nil),
+		Units: units.NewSliced(10, nil),
 		AI:    managers,
 	}
 	s.RegisterAll()

@@ -120,6 +120,86 @@ func (s *cobPresentationSink) SetCOBPieceMap(pieceMap []int) {
 	s.pieceMap = append(s.pieceMap[:0], pieceMap...)
 }
 
+// pieceWorldPos resolves the world position of one COB piece of the sink's
+// source unit — the same unit-origin-plus-composed-piece path the weapon
+// muzzle uses [06 §4.1]. The emit-sfx producers spawn at the piece's world
+// position [R-STRIP-01 §1 strips 2/7/9][04 §4.4]. Unresolvable pieces
+// (dangling unit, unresolved binding) report false and the caller drops the
+// strip append rather than inventing a position [I9].
+func (s *cobPresentationSink) pieceWorldPos(cobPiece int) ([3]numeric.Fixed, bool) {
+	var zero [3]numeric.Fixed
+	if s == nil || s.session == nil || s.session.Units == nil {
+		return zero, false
+	}
+	u := s.session.Units.Unit(s.source)
+	if u == nil || u.COBBinding() == nil {
+		return zero, false
+	}
+	origin, ok := u.COBBinding().ComposePiece(cobPiece, u.Move.Heading, u.Move.Pitch, u.Move.Bank)
+	if !ok {
+		return zero, false
+	}
+	return [3]numeric.Fixed{u.X.Add(origin[0]), u.Y.Add(origin[1]), u.Z.Add(origin[2])}, true
+}
+
+// emitSFXStripProducers is the session edge of retail's emit-sfx type switch
+// [R-STRIP-01 §1 strips 2/7/9][04 §4.4]. The switch dispatches on the
+// emit-sfx type word: vector types 0–5 are piece-direction effects (0/1 the
+// wake pair → strip-7 flame-stream trail; 2/3 the thrust pair → strip-2
+// sprinkle at 16- then 8-tick puff spacing; 4/5 the same pair with the two
+// piece points swapped), and the point types use the piece world position
+// (0x101 white smoke and 0x102 black smoke → strip-9 smoke; 0x103 spawns at
+// the water line and lands a strip-7 sprinkle). Every case is gated on local
+// visibility upstream of this sink, exactly as retail gates the whole switch
+// [04 §4.4]; the appended strip objects are authoritative sim state swept in
+// phase 11 [R-STRIP-01 §2].
+//
+// TODO(question): the piece's second effect vertex — the direction-vertex
+// point that vector types pass beside the piece origin. Its derivation from
+// the piece's model geometry is untraced, so the wake pair (0/1, whose trail
+// flies from the origin to that vertex) and the swapped thrust pair (4/5,
+// which spawns at the vertex) are left unwired rather than given an invented
+// target; a trace of the piece record's second vertex would settle both.
+func (s *cobPresentationSink) emitSFXStripProducers(ev cob.PresentationEvent) {
+	if s == nil || s.session == nil || s.session.strips == nil {
+		return
+	}
+	pos, ok := s.pieceWorldPos(ev.Piece)
+	if !ok {
+		return
+	}
+	switch ev.SFXType {
+	case 0x101, 0x102:
+		// White and black smoke point types: the emit-sfx switch's strip-9
+		// smoke sites [R-STRIP-01 §1 strip 9]. Each appends one smoke
+		// container whose constructor spawns its first puff immediately;
+		// the site's container window and GAF variant selection are
+		// unestablished (see appendStripSmokePuffer's TODO).
+		s.session.appendStripSmokePuffer(9, pos, 0, smokeDefaultFrameDelay)
+	case 0x103:
+		// Sub-bubbles: the spawn height is forced to the water line and the
+		// sprinkle variant lands on strip 7 with 8-tick spacing [04 §4.4]
+		// [R-STRIP-01 §1 strip 7].
+		if s.session.World != nil {
+			pos[1] = s.session.World.SeaLevelWorld()
+		}
+		s.session.appendStripSprinkle(7, pos, 8, 0)
+	case 2, 3:
+		// The thrust pair: strip-2 sprinkle, 16-tick spacing for type 2 and
+		// 8-tick for type 3 [R-STRIP-01 §1 strip 2].
+		spacing := int32(16)
+		if ev.SFXType == 3 {
+			spacing = 8
+		}
+		s.session.appendStripSprinkle(2, pos, spacing, 1)
+	case 0, 1, 4, 5:
+		// Unwired pending the second effect vertex (see the TODO above):
+		// 0/1 lay a strip-7 trail from the piece origin to the vertex, and
+		// 4/5 spawn the strip-2 sprinkle at the swapped point
+		// [R-STRIP-01 §1 strips 2/7].
+	}
+}
+
 func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
 	if s == nil || s.publication == nil || s.publication.events == nil {
 		return
@@ -144,6 +224,11 @@ func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
 	switch ev.Kind {
 	case cob.PresentationSFX:
 		s.publication.events.EmitCOBSFX(e)
+		// The emit-sfx type switch is a strip producer family: its vector
+		// and point cases append strip-2/7/9 objects [R-STRIP-01 §1 strips
+		// 2/7/9][04 §4.4]. Authoritative sim state appended at the
+		// producer; the presentation emission above is separate [I6].
+		s.emitSFXStripProducers(ev)
 	case cob.PresentationNano:
 		// Script-emitted nano events are beam-family strip-6 effects with the
 		// same geometry gate as construction/reclaim work [03 §5.5][R-P0-06 §5].
@@ -165,10 +250,9 @@ func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
 	case cob.PresentationMuzzle:
 		s.publication.events.EmitMuzzleFlash(e)
 	case cob.PresentationSmoke:
-		// TODO(R-STRIP-01 §1): retail's COB emit-sfx local variants are a
-		// strip-9 smoke producer gated by a weapon/definition flag this
-		// event payload does not carry. Left unwired rather than invented;
-		// a PresentationEvent that carries the gating flag would settle it.
+		// The COB emit-sfx smoke point types (0x101 white / 0x102 black)
+		// are strip-9 producers reached through the PresentationSFX switch
+		// above, not through this Smoke kind [R-STRIP-01 §1 strip 9].
 		s.publication.events.EmitSmokeStart(e)
 	case cob.PresentationTrail:
 		s.publication.events.EmitProjectileTrail(e)
@@ -600,17 +684,6 @@ func createAndBindServices(s *Session) error {
 			// impact dispatcher stays the request source [R-CORE-01 §4.4.1]
 			// [06 §13.2]; phase 10 draws the CRT jitter and publishes the
 			// offset on the committed frame.
-			//
-			// This callback is also the session edge of retail's impact
-			// dispatcher, whose strip producers are researched but unwired:
-			// TODO(R-STRIP-01 §1): the impact-effect switch case appends a
-			// strip-2 sprinkle object (three CRT jitter draws per spawn) and
-			// the dispatcher's weapon-flag-gated branch appends a strip-9
-			// smoke object. combat.Event carries neither the weapon
-			// smoke flag nor the impact-effect category, so the researched
-			// producer predicates cannot be evaluated here; the events are
-			// left unwired rather than invented. An event payload carrying
-			// the gating weapon fields would settle it.
 			s.RequestShake(ev.Magnitude, ev.Duration)
 		case combat.EventHitSound, combat.EventWaterSound:
 			if ev.Sound != "" {
@@ -627,12 +700,42 @@ func createAndBindServices(s *Session) error {
 			// no authoritative state is read or mutated at this boundary.
 			pe.EffectID = uint32(ev.Target)
 			s.publication.events.EmitSmokeStart(pe)
+			// Strip-9 smoke [R-STRIP-01 §1 strip 9, the weapon-fire smoke
+			// sites the census lists as the emit-sfx family's local
+			// variants]: the start puff emits from the successful root
+			// creation path [06 §13.2], and the census places a strip-9
+			// smoke producer behind each of its two variant flags.
+			s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, 0, smokeDefaultFrameDelay)
 		case combat.EventEndSmoke:
+			// Strip-9 smoke [R-STRIP-01 §1 strip 9, the authoritative
+			// impact dispatcher under a weapon-definition flag]: the end
+			// puff is land-branch-only in the central impact and replaces
+			// the explosion art [06 §13.2]; the dispatcher's smoke producer
+			// sits on that same weapon-flag branch.
+			s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, 0, smokeDefaultFrameDelay)
 			s.publication.events.EmitSmokeEnd(pe)
-		case combat.EventExplosion:
-			s.publication.events.EmitExplosion(pe)
-		case combat.EventWaterExplosion:
-			s.publication.events.EmitWaterImpact(pe)
+		case combat.EventTrailSmoke:
+			// Strip-9 smoke [R-STRIP-01 §1 strip 9, the projectile phase's
+			// trail-window and expiry branches]: trail puffs and the
+			// non-burn-blow expiry puff are the same trail-style smoke at
+			// the projectile's position [06 §13.2].
+			pe.EffectID = uint32(ev.Target)
+			s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, 0, smokeDefaultFrameDelay)
+			s.publication.events.EmitSmokeStart(pe)
+		case combat.EventExplosion, combat.EventWaterExplosion:
+			// Strip-9 smoke [R-STRIP-01 §1 strip 9, the land/water/lava
+			// impact effect variants under a second weapon flag]: the
+			// explosion GAF variant functions each carry a strip-9 smoke
+			// producer gated on the weapon's start-smoke flag, which the
+			// event carries as Smoke.
+			if ev.Smoke {
+				s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, 0, smokeDefaultFrameDelay)
+			}
+			if ev.Kind == combat.EventExplosion {
+				s.publication.events.EmitExplosion(pe)
+			} else {
+				s.publication.events.EmitWaterImpact(pe)
+			}
 		case combat.EventProjectileImpact:
 			s.publication.events.EmitImpact(pe)
 		case combat.EventUnitKilled, combat.EventCorpse:
@@ -643,6 +746,21 @@ func createAndBindServices(s *Session) error {
 			}
 		}
 	}
+	// Still-unwired strip producer rows [R-STRIP-01 §1], left for the units
+	// that own their trigger sites rather than invented here:
+	//   - strip 5, the flame-weapon area scan: the weapon-class dispatch
+	//     that walks the attacker's definition-relative box and appends one
+	//     30-tick flame-stream object per unit inside it lives in the
+	//     combat death/ignition dispatch, outside this unit's ownership.
+	//   - strip 5, the burning-feature smoke: the feature phase's burning
+	//     tick owns the site, but reaching the session's strip table from
+	//     internal/features needs a producer port on its Service, which is
+	//     outside this unit's file ownership (TODO at the burn site).
+	//   - strip 9, the sinking-wreck 900-tick smoke column: the producer
+	//     parameters are established (15-tick interval, 900-tick window,
+	//     appendStripSmokePuffer ready) but the trigger — the wreck-sinking
+	//     start in the features sinking path — is likewise outside this
+	//     unit's ownership.
 	// Ensure Clock and Snapshot are available (AI is fixed [10] per RS-02).
 	if s.Clock == nil {
 		s.Clock = &clock.State{Requested: 10, Active: 10}

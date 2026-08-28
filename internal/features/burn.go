@@ -31,6 +31,19 @@ func (s *Service) burnTick(tick uint32) {
 		if smoke {
 			// Emit smoke particle at footprint centre jittered by presentation
 			// stream, not simulation stream [05 "Feature burning"].
+			//
+			// This is also the burning-feature strip-5 smoke producer
+			// [R-STRIP-01 §1 strip 5]: one wind-drifted smoke puff every 3rd
+			// tick, with exactly two CRT jitter draws at the call site — the
+			// draws below are those two, and the puff would append a strip-5
+			// smoke container via the session's appendStripSmokePuffer.
+			// TODO(question): the two draws' jitter law and the puff's spawn
+			// offset are untraced. The append itself is blocked on file
+			// ownership, not research: features has no session-side port to
+			// the strip table, and adding one means a new field on
+			// features.Service (outside the strip-producer unit's ownership).
+			// The session-side helper (Session.appendStripSmokePuffer(5, …))
+			// is ready for that port.
 			if crt := s.crt(); crt != nil {
 				_ = crt.Rand()
 				_ = crt.Rand()

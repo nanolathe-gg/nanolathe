@@ -125,7 +125,7 @@ func TestManagerGatesAndPerSlotDeadlines(t *testing.T) {
 
 func TestClassificationCadencePublishesGroups(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "builder"}, UnitName: "builder", Builder: true}
-	w := units.New(2, &content.Catalog{Units: map[string]*content.UnitDef{"builder": def}})
+	w := units.NewSliced(2, &content.Catalog{Units: map[string]*content.UnitDef{"builder": def}})
 	h, err := w.Create(def, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func TestClassificationCadencePublishesGroups(t *testing.T) {
 func TestDispatchPrecedesStrategicRefresh(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout"}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"scout": def}}
-	w := units.New(1, cat)
+	w := units.NewSliced(1, cat)
 	terrain := &world.Terrain{CellW: 32, CellH: 24}
 	r := rng.NewSimulation(41)
 	m := &Manager{Player: 0, Catalog: cat, RNG: &r, Terrain: terrain, GroupExplore: []pool.Handle{1}}

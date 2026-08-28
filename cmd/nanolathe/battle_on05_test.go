@@ -76,7 +76,7 @@ func testWorldON05(w, h int32) *world.Terrain {
 
 func newTestBattle(cat *content.Catalog, terrain *world.Terrain) *battleSession {
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: terrain.CellW * 16, MapH: terrain.CellH * 16}
-	uw := units.New(64, cat)
+	uw := units.NewSliced(64, cat)
 	sess := &session.Session{
 		World:    terrain,
 		Units:    uw,

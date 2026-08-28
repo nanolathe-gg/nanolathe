@@ -23,7 +23,7 @@ func TestP0I05_SiteAuthoritative(t *testing.T) {
 	prodDef.CanonicalKey = content.CanonicalKey("armllt")
 	cat.Units[content.CanonicalKey("armllt")] = prodDef
 
-	w := units.New(10, cat)
+	w := units.NewSliced(10, cat)
 	hb, _ := w.Create(builderDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	builder := w.Unit(hb)
 	builder.Def = builderDef
@@ -105,7 +105,7 @@ func TestP0I05_ResourceStalls(t *testing.T) {
 	prodDef.CanonicalKey = content.CanonicalKey("armflash")
 	cat.Units[content.CanonicalKey("armfac")] = facDef
 	cat.Units[content.CanonicalKey("armflash")] = prodDef
-	w := units.New(10, cat)
+	w := units.NewSliced(10, cat)
 	hf, _ := w.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory := w.Unit(hf)
 	factory.Def = facDef
@@ -238,7 +238,7 @@ func TestP0I05_NoHashCollision(t *testing.T) {
 		t.Fatalf("catalog indices collide: %d %d %d", idxFlash, idxFlea, idxStump)
 	}
 	// Ensure BuildDefKey is stored and not just hash: create nodes via QueueFactoryBuild
-	w := units.New(10, cat)
+	w := units.NewSliced(10, cat)
 	hb, _ := w.Create(cat.Units[content.CanonicalKey("armflash")], 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	builder := w.Unit(hb)
 	builder.Def = cat.Units[content.CanonicalKey("armflash")]
@@ -266,7 +266,7 @@ func TestP0I05_DistinctHandlers(t *testing.T) {
 	factoryDef.CanonicalKey = content.CanonicalKey("armfac")
 	cat.Units[content.CanonicalKey("armck")] = builderDef
 	cat.Units[content.CanonicalKey("armfac")] = factoryDef
-	w := units.New(10, cat)
+	w := units.NewSliced(10, cat)
 	hb, _ := w.Create(builderDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	builder := w.Unit(hb)
 	builder.Def = builderDef

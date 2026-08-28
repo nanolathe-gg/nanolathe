@@ -20,7 +20,7 @@ func TestStaticLayerIgnoresTransientMover(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
-	w := units.New(100, nil)
+	w := units.NewSliced(100, nil)
 	sys.BindWorld(w)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: true, CanMove: true}
 	def2 := &content.UnitDef{UnitName: "armflea2", MaxVelocity: 2 * 65536, TurnRate: 500, FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: true, CanMove: true}
@@ -120,7 +120,7 @@ func TestStaticLayerDeterministicFixture(t *testing.T) {
 		profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 		grid := NewOccupancyGrid()
 		sys := NewSystem(terrain, profile, grid)
-		w := units.New(100, nil)
+		w := units.NewSliced(100, nil)
 		sys.BindWorld(w)
 		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: true, CanMove: true}
 		moverX := world.CellToWorld(5)
@@ -161,7 +161,7 @@ func TestStaticLayerCommitStillBlocks(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 255}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
-	w := units.New(100, nil)
+	w := units.NewSliced(100, nil)
 	sys.BindWorld(w)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 65536, TurnRate: 500, FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: true, CanMove: true}
 	// Mover at (2,0)

@@ -23,7 +23,7 @@ func TestRS10_MobileBuildLegalSite(t *testing.T) {
 	cat.Units[content.CanonicalKey("armck")] = builderDef
 	cat.Units[content.CanonicalKey("armllt")] = prodDef
 
-	w := units.New(20, cat)
+	w := units.NewSliced(20, cat)
 	hb, _ := w.Create(builderDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	builder := w.Unit(hb)
 	builder.Def = builderDef
@@ -97,7 +97,7 @@ func TestRS10_MobileBuildIllegalSite(t *testing.T) {
 	// Also block via feature for yard bit 5
 	terrain.Plot[5*10+5].SetFeature(0) // real feature index 0 is blocking when yard bit 5 set? But our yard "oooo" bits 1-2 reject any occupant 0x2f, so occupantA triggers block.
 
-	w := units.New(10, cat)
+	w := units.NewSliced(10, cat)
 	hb, _ := w.Create(builderDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	builder := w.Unit(hb)
 	builder.Def = builderDef
@@ -146,7 +146,7 @@ func TestRS10_StarveResume(t *testing.T) {
 	flashDef := cat.Units[content.CanonicalKey("armflash")]
 	flashDef.BuildCostMetal = 100
 	flashDef.BuildCostEnergy = 100
-	w := units.New(20, cat)
+	w := units.NewSliced(20, cat)
 	hf, _ := w.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory := w.Unit(hf)
 	factory.Def = facDef
@@ -259,7 +259,7 @@ func TestRS10_FactoryBlockedRetryAndLimit(t *testing.T) {
 	prodDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armflash"}, UnitName: "armflash", FootprintX: 2, FootprintZ: 2, YardMap: "oo\noo", MaxDamage: 200, BuildTime: 100, BuildCostMetal: 100}
 	cat.Units[content.CanonicalKey("armfac")] = facDef
 	cat.Units[content.CanonicalKey("armflash")] = prodDef
-	w := units.New(20, cat)
+	w := units.NewSliced(20, cat)
 	h, _ := w.Create(facDef, 0, world.CellToWorld(5), 0, world.CellToWorld(5))
 	factory := w.Unit(h)
 	factory.Def = facDef
@@ -311,7 +311,7 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 	prodDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armflash"}, UnitName: "armflash", FootprintX: 2, FootprintZ: 2, YardMap: "o", MaxDamage: 100, BuildTime: 100, BuildCostMetal: 200}
 	cat.Units[content.CanonicalKey("armfac")] = facDef
 	cat.Units[content.CanonicalKey("armflash")] = prodDef
-	w := units.New(10, cat)
+	w := units.NewSliced(10, cat)
 	econ := &economy.Service{}
 	h, _ := w.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory := w.Unit(h)
@@ -364,7 +364,7 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 		t.Fatalf("cancel should not decrement count, got %d", head.Param2)
 	}
 	// Stop interrupt: should decrement once and survive, state0
-	w2 := units.New(10, cat)
+	w2 := units.NewSliced(10, cat)
 	h2, _ := w2.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory2 := w2.Unit(h2)
 	factory2.Def = facDef
@@ -396,7 +396,7 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 		t.Fatalf("stop message missing")
 	}
 	// Death/capture link behavior: leaked on death (no walk) [P0-14], cleared on completion
-	w3 := units.New(10, cat)
+	w3 := units.NewSliced(10, cat)
 	h3, _ := w3.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory3 := w3.Unit(h3)
 	factory3.Def = facDef
@@ -411,7 +411,7 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 		t.Fatalf("builder link should leak on death/capture (no walk)")
 	}
 	// Completion clears
-	w4 := units.New(10, cat)
+	w4 := units.NewSliced(10, cat)
 	h4, _ := w4.Create(facDef, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
 	factory4 := w4.Unit(h4)
 	factory4.Def = facDef

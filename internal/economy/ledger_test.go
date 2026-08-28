@@ -132,7 +132,7 @@ func TestCloakSequentialDebitTruncation(t *testing.T) {
 	// Sequential order: earlier slots consume live stock before later slots are tested.
 	var svc Service
 	svc.Players[0].Stock[Energy] = 10
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{}
 	def.MaxDamage = 100
 	h1, _ := w.Create(def, 0, 0, 0, 0)
@@ -183,7 +183,7 @@ func TestCloakSequentialDebitTruncation(t *testing.T) {
 // TestRebuildCapacity locks C14: storage capacity rebuilt each pass from eligible completed units.
 func TestRebuildCapacity(t *testing.T) {
 	var svc Service
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	defA := &content.UnitDef{}
 	defA.MaxDamage = 100
 	defA.EnergyStorage = 500
@@ -229,7 +229,7 @@ func TestRebuildCapacity(t *testing.T) {
 
 // TestStableSlotOrderVisitation locks C6: units visited in slot ascending order.
 func TestStableSlotOrderVisitation(t *testing.T) {
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{}
 	def.MaxDamage = 100
 	// Create units for player 0 in reverse creation order? But pool always lowest-free, so order is insertion order.

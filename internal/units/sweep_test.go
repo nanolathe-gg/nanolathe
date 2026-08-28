@@ -62,7 +62,7 @@ func TestVisitActiveSlotsAscending(t *testing.T) {
 // does not use map iteration for ordering. It verifies determinism across two
 // worlds built with same creation order; map iteration would randomize.
 func TestVisitActiveSlotsNoMapIteration(t *testing.T) {
-	world := New(20, nil)
+	world := NewSliced(20, nil)
 	def := &content.UnitDef{MaxDamage: 100}
 	var handles []pool.Handle
 	for i := 0; i < 10; i++ {
@@ -216,7 +216,7 @@ func TestAllocationDuringTraversal(t *testing.T) {
 // TestFinalizeDeathExactlyOnce verifies death hooks and pool free happen exactly
 // once via FinalizeDeath; second call no-op [01 §4.4].
 func TestFinalizeDeathExactlyOnce(t *testing.T) {
-	world := New(10, nil)
+	world := NewSliced(10, nil)
 	def := &content.UnitDef{MaxDamage: 100}
 	h, _ := world.Create(def, 0, 0, 0, 0)
 	hookCount := 0
@@ -284,7 +284,7 @@ func TestFinalizeDeathExactlyOnce(t *testing.T) {
 // TestDeadUnitNotStepped verifies dead unit cannot be stepped by later stages
 // after finalization [04 "unit sweep"].
 func TestDeadUnitNotStepped(t *testing.T) {
-	world := New(10, nil)
+	world := NewSliced(10, nil)
 	def := &content.UnitDef{MaxDamage: 100}
 	h, _ := world.Create(def, 0, 0, 0, 0)
 	// Mark dying and finalize

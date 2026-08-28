@@ -131,6 +131,11 @@ type Event struct {
 	Graphic   string
 	Magnitude int32
 	Duration  int32
+
+	// Smoke carries the weapon's start-smoke flag on the explosion events:
+	// the land/water/lava impact effect variants each append a strip-9
+	// smoke object under that second weapon flag [R-STRIP-01 §1 strip 9].
+	Smoke bool
 }
 
 // pendingKey identifies a per-unit weapon slot pending Aim ON-04 [06 §3.3].

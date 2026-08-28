@@ -77,41 +77,16 @@ func (w *World) VisitActiveSlots(fn func(SlotVisit)) {
 		return
 	}
 	// Deterministic, no map iteration (I1).
-	if w.pool.IsSliced() {
-		for player := 0; player < 10; player++ {
-			start, end, ok := w.pool.SliceForPlayer(player)
-			if !ok {
+	for player := 0; player < 10; player++ {
+		start, end, ok := w.pool.SliceForPlayer(player)
+		if !ok {
+			continue
+		}
+		for slot := start; slot <= end; slot++ {
+			if slot < 0 || slot >= len(w.units) {
 				continue
 			}
-			for slot := start; slot <= end; slot++ {
-				if slot < 0 || slot >= len(w.units) {
-					continue
-				}
-				// Live check at visit moment preserves same-tick free visibility [01 §4.4].
-				if !w.pool.Alive(pool.Handle(slot)) {
-					continue
-				}
-				u := w.units[slot]
-				if u == nil || !u.Alive {
-					continue
-				}
-				if int(u.Owner) != player {
-					continue
-				}
-				fn(SlotVisit{Handle: pool.Handle(slot), Unit: u, Slot: uint16(slot)})
-			}
-		}
-		return
-	}
-	// Unsliced path: players 0..9 outer, slots ascending inner with owner filter
-	// [01 §6.2] (I1). Each slot visited at most once per traversal when owner
-	// matches outer player.
-	capTotal := w.pool.TotalRecords()
-	if capTotal <= 0 || capTotal > len(w.units) {
-		capTotal = len(w.units)
-	}
-	for player := 0; player < 10; player++ {
-		for slot := 1; slot < capTotal; slot++ {
+			// Live check at visit moment preserves same-tick free visibility [01 §4.4].
 			if !w.pool.Alive(pool.Handle(slot)) {
 				continue
 			}

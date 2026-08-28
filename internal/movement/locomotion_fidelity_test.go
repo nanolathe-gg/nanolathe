@@ -69,7 +69,7 @@ func TestLocomotionPitchSustainsCapOnGentleSlope(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "armcom", MaxVelocity: maxV, TurnRate: 500, Acceleration: 9830, BrakeRate: 19660}
 	def.MaxDamage = 100
 	def.FootprintX = 1
@@ -181,7 +181,7 @@ func TestLocomotionAccelBrakeRamp(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, TurnRate: 800, Acceleration: 1 * 65536, BrakeRate: 2 * 65536}
 	def.MaxDamage = 100
 	def.FootprintX = 1

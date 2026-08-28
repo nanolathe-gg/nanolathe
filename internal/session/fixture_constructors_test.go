@@ -168,7 +168,7 @@ func NewMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficul
 
 func reconstructUnitsFixture(s *Session, m *mission.Mission) error {
 	if s.Units == nil {
-		s.Units = units.New(600, s.Catalog)
+		s.Units = units.NewSliced(600, s.Catalog)
 	}
 	for idx, up := range m.Units {
 		def, ok := s.Catalog.Unit(up.UnitName)
@@ -278,13 +278,13 @@ func NewSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) 
 		if w, err := newSlicedWorldWithCOB(cat, fs); err == nil {
 			unitsWorld = w
 		} else {
-			unitsWorld = units.New(600, cat)
+			unitsWorld = units.NewSliced(600, cat)
 			if fs != nil {
 				unitsWorld.SetCOBSource(fs, globalCobLoader)
 			}
 		}
 	} else {
-		unitsWorld = units.New(600, cat)
+		unitsWorld = units.NewSliced(600, cat)
 	}
 	// This constructor intentionally uses synthetic unit scripts. Keep the
 	// production COB source unset so fixture allocations do not enter strict

@@ -105,7 +105,7 @@ func hashTransportState(carrier, cargo *units.Unit) uint64 {
 
 func runTransportScenario(seed uint32) (uint64, int, []string) {
 	rng.SeedGlobal(seed, 0)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	carrier := mkTransportCarrier(1, 0, true)
 	cargo := mkCargo(2, 0)
 	// Place cargo slightly offset but within boarding range (16) [04 §10.2]

@@ -73,7 +73,7 @@ func TestResurrectionDelay_Sole03(t *testing.T) {
 
 // TestFeatureBeforeAlive locks feature removal BEFORE unit alive [P0-15].
 func TestFeatureBeforeAlive(t *testing.T) {
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	cat := content.Catalog{Units: map[string]*content.UnitDef{}}
 	def := &content.UnitDef{UnitName: "armck", BuildTime: 3000, BuildCostMetal: 100, BuildCostEnergy: 100, MaxDamage: 750}
 	def.CanonicalKey = content.CanonicalKey("armck")
@@ -168,7 +168,7 @@ func TestReverseMetalOnly(t *testing.T) {
 
 // TestPerDefLimit_Sentinel locks -1 unlimited vs limited [P0-15][P0-16].
 func TestPerDefLimit_Sentinel(t *testing.T) {
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	defUnlim := &content.UnitDef{UnitName: "armck", UnitLimit: -1}
 	defLim1 := &content.UnitDef{UnitName: "armck", UnitLimit: 1}
 	if !CheckPerDefLimit(w, 0, defUnlim) {
@@ -222,7 +222,7 @@ func TestWorkClampAndHealthDiff(t *testing.T) {
 
 // TestFactoryLinksClearedOnCompletionLeakedOnDeath locks builder/product links [P0-14].
 func TestFactoryLinksClearedOnCompletionLeakedOnDeath(t *testing.T) {
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	cat := content.Catalog{Units: map[string]*content.UnitDef{}}
 	facDef := &content.UnitDef{UnitName: "armfac", BuildTime: 100, WorkerTime: 30, MaxDamage: 100, YardMap: "o", Builder: true}
 	facDef.CanonicalKey = content.CanonicalKey("armfac")

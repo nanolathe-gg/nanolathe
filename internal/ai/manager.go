@@ -154,7 +154,7 @@ func (m *Manager) GetMissionGateFlag() int32 {
 }
 
 // GetRNG satisfies Selector RNG extension — returns per-manager RNG when set for session isolation [RS-06][I4] DET-01.
-// Production requires injected RNG; nil means no draw (no global fallback).
+// Production requires injected RNG; nil means no draw (no alternate RNG is selected).
 func (m *Manager) GetRNG() *rng.Simulation {
 	if m != nil && m.RNG != nil {
 		return m.RNG
@@ -691,7 +691,7 @@ func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, thr
 	// The target-selection and formation sink for a populated wave are not
 	// established by the recovered manager contract. Keep the merge lifecycle
 	// authoritative and leave the unresolved sink explicit rather than choosing
-	// a guessed enemy or map fallback [R-P0-04 §5].
+	// no enemy or map-derived target is selected [R-P0-04 §5].
 	// TODO(question): recover the target-selection/formation call and its order
 	// descriptor before issuing attack orders from a wave.
 }

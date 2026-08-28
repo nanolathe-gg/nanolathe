@@ -935,3 +935,186 @@ func TestOrderGuardFloat(t *testing.T) {
 		t.Fatalf("guard after completion = %v, want 0", u.OrderGuard)
 	}
 }
+
+// TestMobileBuildBlockedAreaBudget locks the blocked-area retry budget of the
+// MobileBuild/VTOL_MobileBuild handlers [R-ORDER-02 §1]: each blocked visit
+// notifies "Waiting for target area to clear", increments the record's third
+// parameter, and waits EXACTLY 30 ticks with no random draw while the counter
+// is at most 10; the first blocked visit with the counter already above 10
+// notifies "Target area was blocked" and returns 8 (remove). Eleven 30-tick
+// waits, then give-up on visit twelve.
+func TestMobileBuildBlockedAreaBudget(t *testing.T) {
+	buildID := Lookup("MobileBuild")
+	if buildID == 0 {
+		t.Fatalf("lookup MobileBuild")
+	}
+	sim := injectTestSim(t)
+	q := &Queue{binding: &QueueBinding{SimRNG: sim}}
+	u := newTestUnit()
+
+	// The handler body is the traced blocked-visit protocol: the construction
+	// side calls MobileBuildBlockedVisit with its current tick and returns the
+	// code. The test drives the same call through a pumped MobileBuild record,
+	// one pump per tick across twelve 30-tick waits' worth of time.
+	type visit struct {
+		tick    uint32
+		text    string
+		code    Code
+		counter uint32 // the record's third parameter after the visit's step
+	}
+	var visits []visit
+	visitTick := uint32(0)
+	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code {
+		text, code := MobileBuildBlockedVisit(n, visitTick)
+		visits = append(visits, visit{tick: visitTick, text: text, code: code, counter: n.Param3})
+		if code == 2 && n.Deadline != int32(visitTick+MobileBuildBlockedWaitTicks) {
+			t.Fatalf("visit at %d armed deadline %d, want exactly tick+30", visitTick, n.Deadline)
+		}
+		return code
+	})
+	defer restore()
+
+	q.Push(buildID, Node{Param1: 7})
+	const startTick = uint32(1000)
+	drawsBefore := sim.Draws()
+	// One pump per tick over visits 1..12: waits dispatch again exactly 30
+	// ticks later (deadline expiry satisfies the lowest gate bit [04 §3.3]),
+	// so the pump must never dispatch between the 30-tick multiples.
+	for tick := startTick; tick <= startTick+11*MobileBuildBlockedWaitTicks+1; tick++ {
+		visitTick = tick
+		q.Pump(u, tick)
+	}
+	if d := sim.Draws() - drawsBefore; d != 0 {
+		t.Fatalf("budget drew %d random values, want 0 (fixed 30-tick waits)", d)
+	}
+	if len(visits) != 12 {
+		t.Fatalf("blocked visits %d, want 11 waiting visits + give-up on visit 12", len(visits))
+	}
+	for i, v := range visits {
+		wantTick := startTick + uint32(i)*MobileBuildBlockedWaitTicks
+		if v.tick != wantTick {
+			t.Fatalf("visit %d at tick %d, want %d (exact 30-tick cadence)", i+1, v.tick, wantTick)
+		}
+		if i < 11 {
+			if v.text != MobileBuildWaitingText || v.code != 2 {
+				t.Fatalf("visit %d: text %q code %d, want %q and 2", i+1, v.text, v.code, MobileBuildWaitingText)
+			}
+			if v.counter != uint32(i+1) {
+				t.Fatalf("visit %d counter %d, want %d", i+1, v.counter, i+1)
+			}
+		}
+	}
+	last := visits[11]
+	if last.text != MobileBuildBlockedText || last.code != 8 {
+		t.Fatalf("visit 12: text %q code %d, want %q and 8 (abandon/remove)", last.text, last.code, MobileBuildBlockedText)
+	}
+	if last.counter != 11 {
+		t.Fatalf("visit 12 counter %d, want 11 (give-up fires when the counter is already above 10)", last.counter)
+	}
+	if len(q.primary) != 0 {
+		t.Fatalf("record kept after the give-up, want removed")
+	}
+}
+
+// TestMobileBuildBlockedBudgetBoundary pins the counter arithmetic at the
+// boundary and the nil-record behavior [R-ORDER-02 §1].
+func TestMobileBuildBlockedBudgetBoundary(t *testing.T) {
+	n := &Node{ID: Lookup("MobileBuild")}
+	for i := 0; i < 11; i++ {
+		text, code := MobileBuildBlockedVisit(n, 500)
+		if text != MobileBuildWaitingText || code != 2 {
+			t.Fatalf("counter %d: text %q code %d, want waiting/2", n.Param3, text, code)
+		}
+	}
+	if n.Param3 != 11 {
+		t.Fatalf("counter %d, want 11 after eleven blocked visits", n.Param3)
+	}
+	kept := n.Param3
+	text, code := MobileBuildBlockedVisit(n, 530)
+	if text != MobileBuildBlockedText || code != 8 {
+		t.Fatalf("counter above budget: text %q code %d, want blocked/8", text, code)
+	}
+	// The give-up itself touches nothing: the counter stays, and the deadline
+	// is whatever the caller left (in a pumped record the pump has already
+	// cleared the arrived deadline).
+	if n.Param3 != kept {
+		t.Fatalf("give-up must not touch the record beyond the armed wait")
+	}
+	if text, code := MobileBuildBlockedVisit(nil, 0); code != 8 {
+		t.Fatalf("nil record: text %q code %d, want give-up", text, code)
+	}
+}
+
+// TestSecondaryPumpDeliversEmptySatisfiedSet locks [R-ORDER-02 §1]: a
+// rear-segment record is dispatched on an empty gate or a due deadline
+// (unsigned compare; the -1 sentinel reads not-due) and the handler receives
+// an EMPTY satisfied set — no expiry bit, no satisfied-word read, no
+// capability-word consumption.
+func TestSecondaryPumpDeliversEmptySatisfiedSet(t *testing.T) {
+	buildID := Lookup("BuildWeapon")
+	if buildID == 0 {
+		t.Fatalf("lookup BuildWeapon")
+	}
+	sim := injectTestSim(t)
+	u := newTestUnit()
+	u.Pending = 0x2 // capability word holds bits: the secondary dispatch must not consume them
+	var got []uint32
+	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32) Code {
+		got = append(got, s)
+		return 2
+	})
+	defer restore()
+
+	// Due deadline with a nonzero gate and both satisfied sources primed:
+	// dispatch still delivers an empty set.
+	due := secNode(buildID, 1, 0)
+	due.DynamicGate = 1
+	due.Deadline = int32(probeTick)
+	due.Satisfied = 0x1
+	q := &Queue{binding: &QueueBinding{SimRNG: sim}, secondary: []*Node{due}}
+	q.Pump(u, probeTick)
+	if len(got) != 1 || got[0] != 0 {
+		t.Fatalf("secondary dispatch delivered satisfied %v, want exactly [0]", got)
+	}
+	if u.Pending != 0x2 {
+		t.Fatalf("capability word consumed to %x, want untouched", u.Pending)
+	}
+	if due.Satisfied != 0x1 {
+		t.Fatalf("record satisfied word read/cleared to %x, want untouched", due.Satisfied)
+	}
+	if due.Deadline != -1 || due.DynamicGate != 0 {
+		t.Fatalf("deadline %d gate %x, want deadline cleared and gate cleared", due.Deadline, due.DynamicGate)
+	}
+
+	// The -1 sentinel reads not-due under the unsigned compare. SelfDestruct
+	// avoids the fresh-BuildWeapon ready normalization [06 §11.1] C29.
+	got = nil
+	selfID := Lookup("SelfDestruct")
+	if selfID == 0 {
+		t.Fatalf("lookup SelfDestruct")
+	}
+	restoreSelf := setHandler(selfID, func(u *units.Unit, n *Node, s uint32) Code {
+		got = append(got, s)
+		return 2
+	})
+	defer restoreSelf()
+	idle := secNode(selfID, 2, 0)
+	idle.DynamicGate = 1
+	idle.Deadline = -1
+	q.secondary = []*Node{idle}
+	q.Pump(u, probeTick)
+	if len(got) != 0 {
+		t.Fatalf("-1 sentinel dispatched with satisfied %v, want not-due", got)
+	}
+
+	// Empty gate dispatches immediately, also with an empty set.
+	got = nil
+	ready := secNode(buildID, 3, 0)
+	ready.DynamicGate = 0
+	ready.Deadline = -1
+	q.secondary = []*Node{ready}
+	q.Pump(u, probeTick)
+	if len(got) != 1 || got[0] != 0 {
+		t.Fatalf("empty-gate dispatch satisfied %v, want [0]", got)
+	}
+}

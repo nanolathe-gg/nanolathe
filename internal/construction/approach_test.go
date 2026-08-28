@@ -45,7 +45,7 @@ func approachFixture(t *testing.T, siteCellX, siteCellZ int32) (*Service, *units
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 	}
 
-	w := units.New(20, cat)
+	w := units.NewSliced(20, cat)
 	hb, err := w.Create(builderDef, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("create builder: %v", err)

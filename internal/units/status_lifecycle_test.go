@@ -57,7 +57,7 @@ func TestCOBInstancePorts(t *testing.T) {
 }
 
 func TestClassifierEligibilityStatusLifecycle(t *testing.T) {
-	world := New(4, nil)
+	world := NewSliced(4, nil)
 	def := &content.UnitDef{UnitName: "status-lifecycle", MaxDamage: 100, Limit: -1}
 
 	var observedAtCreate uint32

@@ -63,7 +63,7 @@ func TestGetBuiltRetryStates(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	def := newProductDef("armflash", 1, 1, 1, 100)
 	cat.Units[def.CanonicalKey] = def
-	w := units.New(8, cat)
+	w := units.NewSliced(8, cat)
 	h, _ := w.Create(def, 0, 0, 0, 0)
 	product := w.Unit(h)
 	q := orders.QueueForUnit(product)
@@ -93,7 +93,7 @@ func TestGetBuiltCompletionRebindsAndConsumesWatcher(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	def := newProductDef("armflash", 1, 1, 1, 100)
 	cat.Units[def.CanonicalKey] = def
-	w := units.New(8, cat)
+	w := units.NewSliced(8, cat)
 	fh, _ := w.Create(def, 0, 0, 0, 0)
 	ph, _ := w.Create(def, 0, 0, 0, 0)
 	factory, product := w.Unit(fh), w.Unit(ph)
@@ -167,7 +167,7 @@ func TestFactoryReservationReleaseAndCompletedRetention(t *testing.T) {
 	prodDef := newProductDef("armflash", 2, 2, 100, 100)
 	cat.Units[facDef.CanonicalKey] = facDef
 	cat.Units[prodDef.CanonicalKey] = prodDef
-	w := units.New(12, cat)
+	w := units.NewSliced(12, cat)
 	h, err := w.Create(facDef, 0, world.CellToWorld(5), 0, world.CellToWorld(5))
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +271,7 @@ func TestAcceptedWorkEmitsNanoAndStallDoesNot(t *testing.T) {
 	prodDef := newProductDef("armflash", 1, 1, 100, 100)
 	cat.Units[facDef.CanonicalKey] = facDef
 	cat.Units[prodDef.CanonicalKey] = prodDef
-	w := units.New(12, cat)
+	w := units.NewSliced(12, cat)
 	h, _ := w.Create(facDef, 0, 0, 0, 0)
 	factory := w.Unit(h)
 	ph, _ := w.Create(prodDef, 0, 0, 0, 0)
@@ -352,7 +352,7 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	prodDef.InitCloaked = true
 	cat.Units[facDef.CanonicalKey] = facDef
 	cat.Units[prodDef.CanonicalKey] = prodDef
-	w := units.New(8, cat)
+	w := units.NewSliced(8, cat)
 	fh, _ := w.Create(facDef, 0, 0, 0, 0)
 	ph, _ := w.Create(prodDef, 0, 0, 0, 0)
 	factory, product := w.Unit(fh), w.Unit(ph)

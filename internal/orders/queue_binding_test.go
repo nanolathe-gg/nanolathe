@@ -11,7 +11,7 @@ import (
 
 func TestQueueBindingKeepsSessionInputsInterleaved(t *testing.T) {
 	def := &content.UnitDef{UnitName: "binding-test", MaxDamage: 1}
-	w := units.New(4, nil)
+	w := units.NewSliced(4, nil)
 	h1, _ := w.Create(def, 0, 0, 0, 0)
 	h2, _ := w.Create(def, 1, 0, 0, 0)
 	u1, u2 := w.Unit(h1), w.Unit(h2)
@@ -69,7 +69,7 @@ func TestQueueBindingKeepsSessionInputsInterleaved(t *testing.T) {
 }
 
 func TestBoundQueueCannotAdmitStockpileWithoutEconomy(t *testing.T) {
-	w := units.New(4, nil)
+	w := units.NewSliced(4, nil)
 	def := &content.UnitDef{UnitName: "armsilo", MaxDamage: 1}
 	h, _ := w.Create(def, 0, 0, 0, 0)
 	u := w.Unit(h)
@@ -86,7 +86,7 @@ func TestBoundQueueCannotAdmitStockpileWithoutEconomy(t *testing.T) {
 }
 
 func TestUnboundQueueCannotAdvanceStockpile(t *testing.T) {
-	w := units.New(4, nil)
+	w := units.NewSliced(4, nil)
 	def := &content.UnitDef{UnitName: "armsilo", MaxDamage: 1}
 	h, _ := w.Create(def, 0, 0, 0, 0)
 	u := w.Unit(h)

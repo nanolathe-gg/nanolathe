@@ -28,7 +28,7 @@ func TestGoalFamiliesWiring(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	sys.BindWorld(w)
 
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, SightDistance: 128}
@@ -125,7 +125,7 @@ func TestActivateMoveWiresAnnulus(t *testing.T) {
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxSlope: 50}
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, profile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	sys.BindWorld(w)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500}
 	def.MaxDamage = 100

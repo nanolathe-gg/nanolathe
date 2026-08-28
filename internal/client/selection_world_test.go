@@ -12,7 +12,7 @@ import (
 
 func TestSelectionPickWorld(t *testing.T) {
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: 1000, MapH: 1000}
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	def := &content.UnitDef{UnitName: "u"}
 	def.MaxDamage = 100
 	// Place three units at X=0,10,20 pixels world (Fixed 16.16). Y=0.

@@ -30,7 +30,7 @@ func TestSearchFuncConfigBindsClassLayer(t *testing.T) {
 	terrain := syntheticTerrainForIntegrate()
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, wiringProfile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	sys.BindWorld(w)
 	h, err := w.Create(wiringDef(), 0, world.CellToWorld(2), terrain.HeightAt(world.CellToWorld(2), world.CellToWorld(2)), world.CellToWorld(2))
 	if err != nil {
@@ -92,7 +92,7 @@ func TestSystemSearchConsultsLayer(t *testing.T) {
 	terrain := syntheticTerrainForIntegrate()
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, wiringProfile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	sys.BindWorld(w)
 	h, err := w.Create(wiringDef(), 0, world.CellToWorld(2), terrain.HeightAt(world.CellToWorld(2), world.CellToWorld(2)), world.CellToWorld(2))
 	if err != nil {
@@ -146,7 +146,7 @@ func TestOccupancyCommitNotesRevisionLayers(t *testing.T) {
 	terrain := syntheticTerrainFlat()
 	grid := NewOccupancyGrid()
 	sys := NewSystem(terrain, wiringProfile, grid)
-	w := units.New(10, nil)
+	w := units.NewSliced(10, nil)
 	sys.BindWorld(w)
 	h, err := w.Create(wiringDef(), 0, world.CellToWorld(2), terrain.HeightAt(world.CellToWorld(2), world.CellToWorld(2)), world.CellToWorld(2))
 	if err != nil {

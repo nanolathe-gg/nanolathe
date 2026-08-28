@@ -12,7 +12,7 @@ import (
 func TestPumpUnit_Isolation(t *testing.T) {
 	rng.SeedGlobal(100, 0)
 	cat := &content.Catalog{}
-	w := units.New(20, cat)
+	w := units.NewSliced(20, cat)
 	def := &content.UnitDef{UnitName: "armflea", CanMove: true, MaxDamage: 100}
 	hA, _ := w.Create(def, 0, 0, 0, 0)
 	hB, _ := w.Create(def, 0, 0, 0, 0)
@@ -88,7 +88,7 @@ func TestPumpUnit_Isolation(t *testing.T) {
 func TestPumpUnit_HeadBlockingPreserved(t *testing.T) {
 	rng.SeedGlobal(101, 0)
 	cat := &content.Catalog{}
-	w := units.New(20, cat)
+	w := units.NewSliced(20, cat)
 	def := &content.UnitDef{UnitName: "test", CanMove: true, MaxDamage: 100}
 	h, _ := w.Create(def, 0, 0, 0, 0)
 	u := w.Unit(h)
@@ -120,7 +120,7 @@ func TestPumpUnit_HeadBlockingPreserved(t *testing.T) {
 func TestPumpUnit_SecondarySkipNotDue(t *testing.T) {
 	rng.SeedGlobal(102, 0)
 	cat := &content.Catalog{}
-	w := units.New(20, cat)
+	w := units.NewSliced(20, cat)
 	def := &content.UnitDef{UnitName: "test", CanMove: true, MaxDamage: 100}
 	h, _ := w.Create(def, 0, 0, 0, 0)
 	u := w.Unit(h)

@@ -81,13 +81,13 @@ type Player struct {
 	Helper1Calls         int // diagnostic: helper1 invocations, never touches stock [05]
 	Helper2Calls         int // diagnostic: helper2 invocations, never touches stock [05]
 	WeaponRefreshCalls   int // diagnostic: weapon/position refresh sweep, never touches stock [05]
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// int semantics truncated toward zero per I3 (FILD exact for 200..tens of thousands) [I3].
-	StorageBonusEnabled  bool       // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	StorageBonus         [2]float32 // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	// Storage bonus per [05 "Storage capacity"] [OX P1]: an enable flag plus a
+	// per-resource bonus holding max(starting stock, 200). When set, the bonus
+	// is added to the player's storage capacity during the ledger's capacity
+	// sum. The fields keep float32 with integer values truncated toward zero
+	// per I3, matching the retail int->float stores.
+	StorageBonusEnabled  bool       // bonus applied to capacity when set [05 "Storage capacity"] [OX P1]
+	StorageBonus         [2]float32 // [Metal]=max(startMetal,200), [Energy]=max(startEnergy,200) [05 "Storage capacity"] [OX P1]
 	aiAggregatesPrepared bool       // composed settlement populated AI fields before post-commit [R-P0-05]
 }
 
@@ -188,22 +188,21 @@ func AddRequested(b *Bucket, amount float32) {
 	b.Requested += amount
 }
 
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// In Go the bonus is kept as float32 with int value; FILD is exact for 200..tens of thousands.
+// InstallStorageBonus installs the retail storage bonus [05 "Storage capacity"]
+// [OX P1]: sets the enable flag and stores max(value, 200) for each resource as
+// the bonus. In Go the bonus is kept as float32 with integer value; the retail
+// int->float store is exact for this range and truncates toward zero per I3.
 func (p *Player) InstallStorageBonus(startMetal, startEnergy int) {
 	if p == nil {
 		return
 	}
-	p.StorageBonusEnabled = true // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	p.StorageBonusEnabled = true
 	if startMetal < 200 {
-		startMetal = 200 // max(value,0xC8) at 0x496E98/0x496EA8 [02_ledger_exact.md §4.1]
+		startMetal = 200
 	}
 	if startEnergy < 200 {
 		startEnergy = 200
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 	p.StorageBonus[Metal] = float32(int32(startMetal))
 	p.StorageBonus[Energy] = float32(int32(startEnergy))
 }
@@ -235,12 +234,11 @@ func RebuildCapacity(s *Service, w *units.World) {
 		s.Players[owner].Capacity[Energy] += float32(u.Def.EnergyStorage)
 		s.Players[owner].Capacity[Metal] += float32(u.Def.MetalStorage)
 	}
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	// In Go we add float bonus with int semantics via truncation per I3.
+	// Optional player bonuses per [05 "Storage capacity"] [OX P1]: when the
+	// bonus flag is set, the stored bonus is added to the capacity sum after
+	// the unit-storage total, with integer semantics via truncation per I3.
 	for i := range s.Players {
 		if s.Players[i].StorageBonusEnabled {
-			// TODO(question): Historical analysis omitted; independently worded behavior is needed.
 			s.Players[i].Capacity[Metal] += s.Players[i].StorageBonus[Metal]
 			s.Players[i].Capacity[Energy] += s.Players[i].StorageBonus[Energy]
 		}

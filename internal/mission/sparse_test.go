@@ -23,7 +23,7 @@ func TestSparseVsDenseDivergence(t *testing.T) {
 			"armck":  {UnitName: "armck", MaxDamage: 100},
 		},
 	}
-	w := units.New(2, cat) // capacity 2, third alloc fails
+	w := units.NewSliced(2, cat) // capacity 2, third alloc fails
 	// Create two units directly to fill pool, then try third via RunInitialMissions path?
 	// Simpler: create placements 3 where second will fail due to pool exhausted.
 	// We'll use reconstruct via session? Use direct world creation to simulate sparse.
@@ -70,11 +70,11 @@ func TestSparseVsDenseDivergence(t *testing.T) {
 	// Force failure of middle: we already have middle present, last missing. Need
 	// case where middle missing and last present to show divergence.
 	// Reset and make middle fail.
-	w2 := units.New(2, cat)
+	w2 := units.NewSliced(2, cat)
 	// Fill pool with dummy to force middle failure: allocate 0 succeeds, then
 	// artificially exhaust before 1, then free one slot and allocate 2?
 	// Simpler: capacity 1, 2 placements: first succeeds, second fails.
-	w2 = units.New(1, cat)
+	w2 = units.NewSliced(1, cat)
 	placements2 := []UnitPlacement{
 		{UnitName: "armcom", Ident: "a", InitialMission: "g c"},
 		{UnitName: "armck", Ident: "b", InitialMission: ""},
@@ -99,7 +99,7 @@ func TestSparseVsDenseDivergence(t *testing.T) {
 		}
 	}
 	// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	w3 := units.New(10, cat)
+	w3 := units.NewSliced(10, cat)
 	placements3 := []UnitPlacement{
 		{UnitName: "armcom", Ident: "alpha", InitialMission: "g gamma"},
 		{UnitName: "unknown_type", Ident: "beta", InitialMission: ""}, // fails type check -> sparse NULL
