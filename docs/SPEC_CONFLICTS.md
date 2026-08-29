@@ -19,9 +19,8 @@ status line never changes an entry's Decision; where a closure implies work in
 the code, the status names that action. There are no SC11–SC13 entries; the
 numbering has always skipped them.
 
-Two open entries gate real work: **SC7** (the sound-variant gather rule is an
-install-compatible divergence, not a finding) and **SC16** (the `0x20`
-active-state bit has no implementable counterpart). **SC5** is closed but its
+One open entry gates real work: **SC16** (the `0x20` active-state bit has no
+implementable counterpart). **SC7** closed 2026-08-29 (`[02 R-SND-01 §1]`). **SC5** is closed but its
 divergence is still in the code.
 
 ---
@@ -242,7 +241,7 @@ unknowns already asked for both readings to be exposed.
 
 ## SC7 — Sound variants are gathered even when the bare event key is absent
 
-**Status:** open — decider: static trace of the sound-category variant gather loop (RWU-02-2). The spec letter is known to be unimplementable against stock `sound.tdf`, but the executable has not been re-read, so the decision below is an install-compatible divergence rather than a finding.
+**Status:** closed by `[02 R-SND-01 §1]` (2026-08-29) — the executable's sound-category loader reads the bare key, discards the result, and unconditionally gathers `K1, K2, …` until the first absent index. The spec's bare-gate sentence was a mis-reading of the loop and has been corrected in `[02 "Sound category record"]`. The compiler's "gather regardless of the bare key" behaviour is retail, not a divergence; the compile site's `TODO(question)` is removed and cites `[02 R-SND-01 §1]`. Contracts the site honours: the bare variant (if present) is index 0 and numbered variants follow; numbering is contiguous from 1; `<key>text` supplies each caption; a present-but-empty value counts as a variant.
 
 **Spec** `[02 "Sound category record"]`: "An event key that is absent for the
 bare form contributes no variants at all, because the bare read is what gates

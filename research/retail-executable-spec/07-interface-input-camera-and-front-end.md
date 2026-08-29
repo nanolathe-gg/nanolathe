@@ -2266,10 +2266,16 @@ total glyph advance exceeds it, the string is copied through a bounded copy
 into a 300-byte buffer and trailing bytes are removed until the measured
 advance fits — this happens before any clipping test occurs.
 
-**Drop-shadow switch is closed.** The shadow argument passed to the glyph
-rasterizer is a presentation-context field consulted on every call, stored
-beside the foreground/background color pair in that context; it is not baked
-into font data.
+**There is no drop-shadow switch (corrected 2026-08-29).** This paragraph
+previously said the glyph rasterizer's extra argument was a "shadow"
+presentation-context field. It is the **skip colour** — the palette index
+the rasterizer treats as transparent, set once to 254 at front-end
+initialisation — and font data carries no shadow either. Every shadow or
+outline seen in retail is a caller composition: the label painter draws the
+string twice with the shadow pass at `(+1, +3)`; the report prompt draws a
+four-way outline. Arithmetic, truncation and clip rules are in
+[03 R-FONT-01 §3–§4]; the GAF-font pen, wrapper and button pen in
+[03 R-FONT-01 §6].
 
 The active font is selected by the presentation context. Front-end text uses
 preloaded/common or GUI-selected FNT assets; battle text can use side fonts
@@ -2297,13 +2303,13 @@ Open items only; the decider follows each. Truncate-before-clip and the
 presentation-context drop-shadow switch are established above.
 
 - Full text wrapping and line-breaking policy · static trace.
-- Drop-colour defaults · static trace.
 - Code-page behavior for extended bytes · static trace. Marked `TODO(T23)`.
 - Font fallback order beyond the closed missing-HATTFONT-to-active-FNT path
   · asset census.
 - Translation-table missing-key rules · static trace.
-- Malformed HATTFONT handling, and the button text-pen arithmetic · §5 ·
-  static trace. Marked `TODO(question)`.
+- Malformed HATTFONT (no `I` frame) handling · §5 · undefined by
+  construction in retail ([03 R-FONT-01 §6]); asset census decides whether
+  it ever occurs. (Button text-pen arithmetic closed in [03 R-FONT-01 §6].)
 
 
 ## 8. Software cursor and world picking
@@ -4127,13 +4133,13 @@ section rather than deleted.
   `TODO(T23)`.
 - Chat commit-versus-cancel semantics on every send route, including whether
   the terminator is included · §11 · static trace.
-- Full FNT text wrapping and line-breaking, drop-colour defaults,
-  translation-table missing-key rules, and the complete translation lookup
-  fallback · §7 · static trace.
+- Translation-table missing-key rules and the complete translation lookup
+  fallback · §7 · static trace. (FNT drawing has no wrapper — truncate then
+  clip; the GAF-font wrapper is closed: [03 R-FONT-01 §3, §6].)
 - Language-specific font fallback order beyond the closed
   missing-HATTFONT-to-active-FNT path · §7 · asset census.
-- Malformed HATTFONT handling and the button text-pen arithmetic · §5 ·
-  static trace. Marked `TODO(question)`.
+- Malformed HATTFONT (no `I` frame) handling · §5 · undefined in retail
+  ([03 R-FONT-01 §6]); asset census.
 
 ### Widgets and screens
 

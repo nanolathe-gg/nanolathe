@@ -2466,7 +2466,7 @@ written by three producers:
 | Session mode | Writer | Value |
 |---|---|---|
 | Campaign / mission | OTA loader, `GlobalHeader` | `maxunits`, default `200` when absent |
-| Skirmish | lobby entry copies the lobby value | registry `UnitLimit`, default `250`, clamped to `[20, 500]` (values above 500 become 500, below 20 become 20) |
+| Skirmish | lobby entry copies the lobby value | `totala.ini [Preferences]` `UnitLimit` (not a registry value; [01 R-PLAT-01 §3], [02 §3]), default `250`, clamped to `[20, 500]` (values above 500 become 500, below 20 become 20) |
 | Multiplayer | lobby entry copies the lobby value, then overrides it from the host's option record | the host's synchronized unit-limit word |
 
 The registry read and the clamp happen once at lobby entry; [08 "Skirmish

@@ -541,13 +541,18 @@ save/plot dump. The `0xFFFB` value has no writer at all.
 | 10–11 anchor offsets | the fringe resolver; at anchors the live slot / damage accumulator `[R-FEAT-01 §3]` |
 | 12 flags | bit 0 instance present; bit 1 building-occupied, set by the building stamp for every yard cell whose yardmap byte has bit 0 and cleared by the unstamp; bit 2 never-seen; bits 3–6 placer nibble — the save `PlayerFeatures` blob packs two cells' nibbles per byte as `(odd.flags >> 3 & 0xF) \| ((even.flags & 0xF8) << 1)` |
 
-**Unknown — the last column and last row's derived bytes.** The min/max
-recompute (§3) never writes column `Width-1` or row `Height-1`, and the
-loader never initializes bytes 5 and 6, so those cells' derived bytes hold
-whatever the tracked-heap allocator left there. The sector-grid sweep and the
-lava flood read them. Whether the allocator zero-fills is not traced.
-Decider: static trace of the heap allocator's fill path. Nanolathe should
-treat them as zero and mark the choice `TODO(question)`.
+**Closed (2026-08-29) — the last column and last row's derived bytes are
+heap garbage in retail.** The min/max recompute (§3) never writes column
+`Width-1` or row `Height-1`, and the loader's own initialisation loop writes
+only bytes 0–3 (zero), byte 7 (the per-map value), bytes 8–9 (`0xFFFF`) and
+clears bits 0–1 of byte 12; bytes 4–6, 10–11 and bits 2–7 of byte 12 keep
+whatever the allocator left, and the allocator **does not zero-fill** (the
+labelled wrapper discards its label and calls the C runtime allocator with no
+fill; [01 R-PLAT-01 §5]). So the sector-grid sweep and the lava flood read
+undefined bytes for that column and row in retail. Nanolathe's zero
+initialisation is a documented divergence, not a contract; the
+`TODO(question)` at the plot loader may cite this paragraph instead of
+asking. (Previous text: "whether the allocator zero-fills is not traced".)
 
 ### Closed — the void strips, exactly, and the row-above rule [R-TERR-01 §2] (2026-08-29)
 
@@ -4996,8 +5001,11 @@ both expressions rather than one shared cell index.
 
 **Pass A — grounded units, interleaved with tall features (between strips 4
 and 5).** For each window row in order, each bucketed unit whose mover mode
-is grounded: (i) when the unit's wake status bit is set and the typed-command
-word's wake bit permits, the water-wake rectangle pass of §5.7 runs; (ii)
+is grounded: (i) when the unit's **selected** bit is set and the diagnostic
+bit permits (set unconditionally at settings load), the selected-unit
+footprint quad of [R-WATER-01 §1] is drawn — there is no water-wake
+rectangle; this step previously said "wake status bit … water-wake rectangle
+pass of §5.7" (corrected 2026-08-29); (ii)
 when the unit has a model draw record, the per-unit present runs. Then that
 row's deferred tall features ([R-RAST-01 §6]).
 
@@ -5428,10 +5436,14 @@ ticks at spacing 16, 48 at 8). Update: `pos += step`; `phase = (phase + 1) mod
 spacing`; when it wraps `colour += dir`, then `colour > 0x67 → 0x61` and
 `colour < 0x61 → 0x67` — the emit-sfx puffs climb the seven-entry ramp
 `0x61..0x67` one step per `spacing` ticks and wrap to its bottom, the
-sub-bubble puff descends it and wraps to its top. Expiry: removed when `tick >
-expiry` **or** the bilinear terrain height under the puff ([R-TERR-01 §4]; −1
-off-map) is strictly below the sea-level byte — the marks die over water and
-off-map, the "one family" of [R-STRIP-01 §2]. Draw: the coverage gate, then a
+sub-bubble puff descends it and wraps to its top. Expiry (corrected 2026-08-29 by
+[R-WATER-01 §1]; this sentence previously read "removed when the height is
+strictly below sea level — the marks die over water and off-map", which had
+the branch sense backwards): the puff **survives** only while `tick ≤ expiry`
+**and** the bilinear terrain height under it ([R-TERR-01 §4]; −1 off-map) is
+strictly below the sea-level byte; it is removed the tick it reaches land
+(height `≥ seaLevel`) or expires — off-map (−1) counts as water. This is what
+makes the family a *wake*: it lives on water and dies on the shore. Draw: the coverage gate, then a
 two-by-two rectangle (the inclusive filler of [R-P0-19-P]) written with the
 raw palette index `colour` — like the nano ramp, this byte is **not** passed
 through the logical-to-physical remap that beam and lightning colours use.
@@ -5848,6 +5860,91 @@ build short line segments. Mover bounds produce wake rectangles, which are
 filled with a palette tint and suppressed when the relevant fog/visibility gate
 is active. Wakes are not a water surface simulation.
 
+### Closed — there is no wake rectangle: wakes are the script-emitted strip-2 sprinkles, and the rectangle was the selection frame [R-WATER-01 §1] (2026-08-29)
+
+Status: **Established** (direct static trace of the composer's post-fog
+rectangle, of the per-unit overlay the composer keys on the status word, of
+the sprinkle container and puff, and of the emit-sfx dispatch; the survival
+branch was read at the instruction level).
+
+**Correction (2026-08-29).** The paragraph above previously said "Mover
+bounds produce wake rectangles, which are filled with a palette tint and
+suppressed when the relevant fog/visibility gate is active", and §5.2 Pass A
+step (i) still says "when the unit's wake status bit is set and the
+typed-command word's wake bit permits, the water-wake rectangle pass of §5.7
+runs". Both readings came from two earlier trails that labelled the
+composer's post-fog rectangle pair a "wake rect". That pair is the
+**box-selection outline of §2.4.1**: its two world endpoints are the drag
+corners, its gate is the drag-active bit of the selection mode word, its
+outer colour is logical entry 4 (6 when the armed-build bit is set) and its
+inner colour entry 0. Nothing about it reads a mover, a medium, a wake state,
+or the sea level. The per-unit status bit the composer tests in Pass A and
+Pass B is the **selected** bit — the same bit `Ctrl+A` select-all sets
+([07 R-CAM-01 §2]) — and the pass it enables is the selected-unit footprint
+quad below, not a wake. Document 04 reconciled the two documents on 2026-08-26 by
+assuming both mechanisms existed ([04 §9.2] "Reconciliation with document
+03"); the mover-bound rectangle half of that split does not exist and should
+be withdrawn there.
+
+**What a wake is.** A wake is the *impact sprinkle* family of [R-FX-01 §3]:
+`emit-sfx` types 2–5 from the unit's COB script ([04 R-COB-03 §6]), spawned
+from the emitting piece's vertex 0 toward its vertex 1 (types 4/5 reverse the
+two), on strip 2 — which the composer draws in stage 2 (§1), i.e. **under
+every feature and unit**. The engine has no wake renderer of its own, no
+per-mover cadence, and no medium test at spawn: whether a hovercraft or ship
+shows a wake is entirely the script's decision (shipped hover scripts gate on
+the medium bands of [04 §9.2]). The container, puff, jitter, half-unit step,
+seven-entry colour ramp `0x61..0x67`, `spacing · 6` lifetime and 2×2 raw-index
+rectangle are [R-FX-01 §3]'s arithmetic and are not restated here.
+
+**Correction to [R-FX-01 §3] — the survival test is inverted there.** That
+section says a puff is "removed when `tick > expiry` **or** the bilinear
+terrain height under the puff … is strictly below the sea-level byte — the
+marks die over water and off-map". The instruction-level read is the
+opposite: the puff **survives** exactly while `tick ≤ expiry` **and**
+`height(pos) < seaLevel` (strict; the bilinear query of [R-TERR-01 §4], which
+returns −1 off-map). Both exits — `tick > expiry` and `height ≥ seaLevel` —
+return the "erase" verdict; only the fall-through returns "keep". So the
+marks live only over water (and off-map, where −1 is below any sea level)
+and die on the tick they drift onto land at or above the water plane. The
+earlier text read the verdict's sense backwards; the caller erases on a
+non-zero verdict. A clone that keeps the inverted rule draws wakes on land
+and never on water.
+
+**The selected-unit footprint quad (the pass §5.2 mislabels).** For every
+bucketed unit whose selected bit is set, in the same Pass A / Pass B slot and
+before the model present, the composer draws a four-line quad:
+
+1. Bounds: the definition's model, **root piece only** (the recursive walk is
+   invoked with recursion off), min and max per axis over the root piece's
+   vertices plus the root piece offset, both accumulators **initialised to
+   0** so the model origin is always inside the box; a piece with fewer than
+   three vertices contributes nothing (so single-vertex `wake` pieces never
+   widen it). Call the results `A` (min) and `B` (max).
+2. Corners, in model space, all on the plane `y = A.y`:
+   `(A.x, A.y, A.z)`, `(B.x, A.y, A.z)`, `(B.x, A.y, B.z)`, `(A.x, A.y, B.z)`.
+3. Each corner is rotated by the unit's orientation triple (the ordinary
+   piece rotation of [R-RAST-01 §2]), then projected with the world-object
+   projection: `sx = hi16(rx + ux − camX·65536) + 128`,
+   `sy = hi16((uz − camZ·65536) − rz) − (hi16(ry + uy) >> 1) + 32` (`u` = unit
+   position, `r` = rotated corner; the rotated Z is subtracted, the 3DO
+   handedness flip of [R-RAST-01 §2]).
+4. Four one-pixel Bresenham lines corner→corner→…→corner, colour = the
+   physical byte the logical-to-physical map holds for **logical entry 10**
+   (resolved once, the same map beams use).
+5. Gate: a bit of the diagnostic-overlay byte that the settings reader sets
+   **unconditionally** at start-up (bits 2 and 3 of that byte are always set
+   after settings load; bit 1 mirrors a registry value) — so the quad is
+   always on in retail; nothing clears it.
+
+This quad is drawn under the model (it precedes the present in the same
+slot) and is not clipped by fog (Pass A/B run before the fog composite).
+Document 07 owns selection semantics; this section owns only the drawing.
+
+**Construction segments.** The "short line segments" of the paragraph above
+are the nanolathe emitter of [R-P0-19-P] (strip 6); nothing else in the
+construction path draws lines.
+
 ## 6. Water, lava, and media-dependent impacts
 
 Strict retail presentation has no independently allocated animated water mesh.
@@ -5864,6 +5961,131 @@ separate definition flags from the visual media choice.
 The absence of a water mesh is high-confidence within the current bounded
 rendering invocation census, not proof that every un-decompiled helper lacks one.
 
+### Closed — water and lava, exactly: what exists, what does not, and the blue table [R-WATER-01 §2] (2026-08-29)
+
+Status: **Established** unless marked; each negative is a reader census over
+the complete decompile export (the binder's holders, the mission fields, and
+the runtime map-global words), not a bounded sample.
+
+**1. There are no animated water or lava tiles.** The tile blitter reads no
+tick, no frame counter and no phase; a cell's tile index is read once from
+the TNT map data and blitted as authored ([R-TERR-01 §1]). The TNT header's
+"TileAnims" count and pointer are the **feature records** ([fmt tnt]); no
+tile-animation structure exists in the format or the loader. There is no
+terrain palette cycling ([§4.3]: the only palette-install-time work is the
+gray and blue tables). Water and lava motion in retail is entirely tile art
+plus the effects below. **Established (bounded negative over the tile
+blitter, the map loader and the palette install; no candidate remains).**
+
+**2. Underwater presentation is a key-plane clip, not a tint pass.** The
+complete contract is [R-REN-03A §8] with the ownership rule of
+[R-RAST-01 §4]. The pieces that section leaves implicit:
+
+- The per-pixel value it compares is the **height key** of the model raster:
+  each vertex carries `key = hi16(modelY) + 50` (`+ 75` more when the
+  definition authors `Digger`), interpolated per span into the image's key
+  plane by the polygon raster ([R-RAST-01 §1]; in the shadow-doubled path the
+  vertex Y is halved first).
+- The threshold is `t + 50 [+ 75]` with `t = seaLevel − hi16(unitY)`
+  (arithmetic shift, so a unit a fraction below an integer height rounds
+  down); the waterline pass runs only when `t > 0`.
+- Both helpers compare **inclusively**: a pixel is erased or recoloured when
+  `key ≤ threshold`, i.e. when its model height is at or below the water
+  plane. The recolour helper additionally skips pixels already equal to the
+  image's transparent index; the erase helper sets them to that index.
+- Order: waterline (erase or blue) first, then the Digger erase at `key ≤
+  125`, then the body blit. The shadow silhouettes get the erase only
+  ([R-RAST-01 §4] branches 1–2).
+
+Features (3DO wrecks) take the blue path always ([R-RAST-01 §6]).
+
+**3. The blue table — provenance closed (was an Unknown in §4.3.3 /
+[fmt pal]).** The 256-byte blue table is allocated beside the gray table when
+the palette window's blue-table feature bit is set, and is **built from
+`PALETTE.PAL`** by the same nearest-colour search the gray table uses
+(§4.3.3), at session initialisation, once:
+
+- For each palette index `i` with RGB `(r, g, b)`: target colour
+  `(r >> 1, g >> 1, (b >> 1) + 50)`. (The builder guards the blue channel
+  with `(b >> 1) + 60 < 256 else 255`; for `b ≤ 255` the guard is always
+  true, so the `255` arm is unreachable and the target is exactly as
+  written.)
+- Candidate scan: the palette's indices are first permuted by a **selection
+  sort ascending on `r + g + b`** with a strict `<` compare (for `i` in
+  `0..255`, for `j > i`: if `sum[j] < sum[i]` swap both the sum and the index
+  — an unstable but fully deterministic order; reproduce the loop, not a
+  library sort). The scan walks that permutation, skipping entries whose sum
+  is below `S − 40` and **stopping** at the first whose sum exceeds `S + 40`
+  (`S` = the target's `r + g + b`), keeping the strictly smaller squared RGB
+  distance `dr² + dg² + db²` (first wins ties). The result is the palette
+  index at the best position of the permutation.
+- If no candidate fell inside the window, the position used is the scan's
+  exit position (the first entry past the window, or 0 after a complete
+  walk) — the same fallback quirk as the gray table.
+- `blueTable[i]` = that index. The table is read by exactly one consumer,
+  the submerged-hull recolour of item 2. A second 256-byte copy-in routine
+  for the same slot exists in the image with **no callers** (dead).
+
+Whether the feature bit that enables allocation can ever be clear in a
+retail session was not traced (**Unknown**; decider: trace the palette
+window's flag-word initialiser). Every observed path that reaches the
+recolour helper has the table allocated; a clone should allocate it
+unconditionally.
+
+**4. Splashes: who makes one.** The image binds two water-entry sprites,
+`h2oboom2` and `lavasplash` ([R-FX-01 §1]). Their **complete** reader census:
+
+| Producer | When | Art | Gate |
+|---|---|---|---|
+| debris pool tick and debris draw ([04 R-COB-04 §2]) | a fragment's Y falls to or below `seaLevel << 16` while the terrain under it is below sea level | `lavasplash` when the mission's `lavaworld` is non-zero, else `h2oboom2`, as a fixed-pool sprite at the fragment position | the fragment's splash flag, **and** mission `nosealeveltrigger == 0` (the "opaque liquid mode" flag of [06 §8.2]) |
+| projectile water crossing | [06 §7.3] — the weapon's own `waterexplosiongaf`/`lavaexplosiongaf` pair ([06 R-WFX-01 §3]), never these two sprites | — | — |
+
+Nothing else reads either sprite. In particular:
+
+- **Units entering or leaving water make no engine splash** and play no
+  engine sound; a script may `emit-sfx` whatever it likes. **Established
+  (reader census).**
+- **A unit dying over water makes no splash**: the death finaliser stamps
+  the corpse with the sinking velocity of [05 "Feature sinking and water
+  interaction"] and **suppresses** the 900-tick smoke column that a land
+  death emits ([R-LAYER §3]); the two container producers an earlier trail
+  labelled "water splash" are that smoke column, and both of its call sites
+  fire only above sea level.
+- Timing: the debris splash is spawned in the tick the fragment crosses the
+  plane (the check is on the post-integration position), and the fragment is
+  retired in the same tick; there is no delay and no timer.
+
+**5. Lava: the complete `lavaworld` reader census.** The mission's
+`lavaworld` integer is read by exactly five sites: (i) the OTA parser; (ii)
+the weapon-definition loader, which fills the single water-or-lava art holder
+from the lava pair instead of the water pair ([06 R-WFX-01 §3]); (iii) the
+debris splash art choice above; (iv) the load-time **lava flood** of
+[R-TERR-01 §2] (every cell whose height byte is `≤ seaLevel` and whose
+feature slot is empty or fringe becomes void); (v) the commander-respawn
+candidate rejection of [08 R-SKIR-01 §3] (`height ≤ seaLevel` rejects). There
+is **no lava damage rule**: the only medium damage in the engine is the
+water-damage packet of [04 §9.2], driven by the mission's `waterdoesdamage`
+and `waterdamage` and by `height ≤ seaLevel`, which a lava map authors like
+any water map. Nothing tints, animates or recolours lava. **Established
+(reader census).**
+
+**6. Wind and tide have no presentation consumers.** The runtime wind range
+and tidal word written once at map load ([R-TERR-01 §6]) are read by exactly
+four sites: the wind jitter of [05 R-PROD-01 §3] and the tidal settlement of
+[05 R-PROD-01 §4] (the two generators' income), and the AI's per-player work
+and classifier ([05 R-PROD-01 §1]). The smoke drift of [06 R-WFX-01 §5] reads
+the jitter's *current* wind vector, not the range. The mission fields
+themselves (`minwindspeed`, `maxwindspeed`, `tidalstrength`) are also read by
+the front-end map-description screen (`Wind Speed` text; documents 07 and 08) and by
+nothing else. There is no weather system: no rain, snow, cloud, lightning or
+storm producer exists in the image; the meteor shower is a mission-scripted
+projectile schedule owned by [08 "Meteor showers"]. **Established (reader
+census).**
+
+**7. `TRACKTYPE` / `TRACKMODE`** are the CD-audio track fields of
+[R-AUD-01 §4]; they have nothing to do with vehicle tracks or wakes. Not
+re-traced here.
+
 ## 7. Fonts, text, GUI, and input-owned presentation
 
 ### 7.1 FNT software glyphs
@@ -5871,13 +6093,321 @@ rendering invocation census, not proof that every un-decompiled helper lacks one
 The FNT path loads a bitmap font, measures strings, clips/truncates to a width,
 and rasterizes glyph rows directly into the indexed framebuffer. Glyph bits are
 1-bit, most-significant-bit first; set bits write the current text color. Newline
-is byte value 10. The active font and primary/secondary/shadow color state are
-software-renderer state.
+is byte value 10. The active font, the foreground/background colour pair and
+the transparent-colour sentinel are software-renderer state.
 
-The renderer therefore does not require GDI `TextOut` for gameplay text. GDI
-remains present for window/palette presentation and may be used by shell dialogs;
-the current evidence does not prove every UI label avoids GDI. Two-byte glyph
-header/layout details and baseline/kerning behavior are medium-confidence.
+**Correction (2026-08-29, RWU-03-5).** The previous text called the third
+colour field "shadow color state" and said the header/layout details and
+baseline/kerning behaviour were medium-confidence. The third field is the
+*skip* colour: a palette index that the glyph rasterizer refuses to write
+(§4 below). There is no shadow flag anywhere in the text primitives; every
+shadow or outline seen in retail is a caller drawing the string more than
+once at pixel offsets. The header, baseline, advance and clipping questions
+are closed below with direct-static evidence; there is no kerning.
+
+The renderer does not use GDI `TextOut` for gameplay text. GDI remains
+present for window/palette presentation; whether any shell dialog draws text
+through GDI is still open (see the Unknown list at the end of §7.1).
+
+### Closed — the FNT record as the executable reads it [R-FONT-01 §1] (2026-08-29)
+
+**Established, direct-static.** An FNT file is loaded as raw bytes through the
+ordinary VFS file loader and used in place; no parse or conversion step
+exists. Every text primitive reads the same four single bytes at the head of
+the record, followed by the offset table:
+
+| byte | meaning as read | retail values (25 unique `.fnt`) |
+|---|---|---|
+| 0 | glyph height in rows; every glyph of the font has this many rows | 9–17 |
+| 1 | never read by any routine | always 0 |
+| 2 | **vertical offset**, a *signed* byte: glyph rows are placed starting at `penY − offset` | 1, 2 or 3 |
+| 3 | **first character code**: the offset table is indexed by `code − first` | always 0 |
+
+The table at byte 4 holds one little-endian 16-bit entry per code from
+`first` upward; an entry of 0 means "no glyph". Nothing bounds the table on
+the high side — the routines index `(code − first) & 0xFFFF` for any byte
+`≥ first` — so a font whose first code is 0 must carry 256 entries, which is
+what every retail font does. A glyph record is one byte of **advance**
+followed by `advance × height` bits packed MSB-first with no row padding
+(`[fmt fnt]` owns the layout; the format doc's old "u16 height / u16 unknown"
+header is corrected there). There is no per-glyph height, no bearing, no
+baseline table and no kerning table: the pen moves by exactly the advance
+byte and the only vertical datum is header byte 2.
+
+### Closed — the width measurer [R-FONT-01 §2] (2026-08-29)
+
+**Established, direct-static.** `width(font, s)` walks `s` until a NUL or a
+byte 10 (newline) and sums the advance byte of each glyph that exists:
+
+```
+w = 0
+for each byte c of s, stopping at 0 or 10:
+    if c >= first and table[c - first] != 0:
+        w += advance(c)
+return w
+```
+
+Bytes below `first` and bytes with a zero table entry contribute nothing and
+do not stop the walk. A null font or a null string measures 0. The same loop
+is inlined verbatim in the drawer, the centred-text helper and the outlined
+text helper; there is no cache. Newline terminates measurement, so a
+multi-line string measures its first line only.
+
+### Closed — the string drawer: truncate, then whole-rectangle clip [R-FONT-01 §3] (2026-08-29)
+
+**Established, direct-static.** `draw(dst, s, x, y, maxW)` runs in this order:
+
+1. **Measure** `w = width(activeFont, s)` as in §2.
+2. **Truncate.** When `maxW != −1` **and** `maxW < w` (strict — a string
+   exactly `maxW` wide is kept whole), the string is copied through a
+   bounded copy of at most 299 bytes into a 300-byte stack buffer, and then
+   trailing bytes are removed one at a time — each removal followed by a
+   full re-measure — while `maxW < w` still holds. The loop also stops when
+   the buffer is empty. Nothing is appended (no ellipsis), and the caller's
+   string is not modified. A string longer than 299 bytes is cut to 299
+   before the width loop begins. Doc 07 §7 already states truncate-before-clip;
+   the arithmetic is as here.
+3. **Form the rectangle** `[x, y, x + w, y + height]`, where `height` is
+   header byte 0 of the active font and `w` is the (possibly truncated)
+   width. Note that the rectangle uses `x + w` and `y + height` — one past
+   the last column and row — and ignores header byte 2 entirely.
+4. **Clip test.** The destination's clip rectangle `[L, T, R, B]` (inclusive
+   last column and row, [R-RAST-01 §1]) is copied and the text rectangle is
+   accepted only when it lies **wholly** inside it, every comparison
+   inclusive: `L ≤ x ≤ R`, `L ≤ x + w ≤ R`, `T ≤ y ≤ B`, `T ≤ y + height ≤ B`.
+   Any failure drops the whole string; there is no partial clipping and no
+   per-glyph or per-pixel clipping anywhere in the FNT path.
+5. **Rasterize** (§4) with the active font, the context foreground,
+   background and skip colours, unclipped.
+
+**Edge behaviour that follows (Established).** Because the rectangle's right
+and bottom are exclusive coordinates tested against inclusive bounds, text
+whose last column would land exactly on the clip's last column is rejected —
+one column of slack is required on the right and one row at the bottom.
+Because the rectangle ignores the vertical offset, a font with offset `k`
+draws its top `k` rows *above* `y`, outside the tested rectangle; a string
+with `y == T` therefore writes `k` rows above the clip top. The retail
+offsets are 1–3, so the overrun is at most three rows.
+
+**Null destination (Established).** A null destination pointer makes the
+drawer lock the default presentation surface, draw through the same test
+against that surface's clip rectangle, and unlock; if no surface can be
+locked nothing is drawn.
+
+### Closed — the glyph rasterizer, the skip colour, and how shadows are made [R-FONT-01 §4] (2026-08-29)
+
+**Pen and row placement (Established, direct-static).** The rasterizer takes
+the surface base and stride, the font, the string, `(x, y)`, and three colour
+bytes `fg`, `bg`, `skip`. The first destination byte is
+`base + (y − offset) × stride + x` with `offset` the signed header byte 2;
+the string is walked with the same NUL/newline stop and the same
+`first`/table lookup as §2. For each present glyph it reads `advance × height`
+bits, one glyph row per surface row, most-significant bit first within each
+source byte and with the bit stream continuing across rows without padding.
+A set bit selects `fg`, a clear bit selects `bg`; the selected colour is
+written **unless it equals `skip`**, in which case the destination byte is
+left alone. After each row the destination advances by `stride − advance`;
+after the last row the pen advances by `advance` and the next glyph starts
+at the same top row. Absent glyphs neither advance nor draw.
+
+**Colour state (Established).** The three bytes live in the display
+context beside the active font. The setter for the pair treats `−1` as
+"keep"; the skip colour has its own setter and getter. The context
+constructor does not initialise any of the three (they start at whatever
+the allocation held — zero in practice). Frontend initialisation installs
+**skip = 254** once, and every observed caller sets the pair by reading the
+skip colour and passing it as the background, so retail text is drawn with
+`bg == skip`: clear bits write nothing and the glyph is transparent. The
+value 254 is the sentinel doc 07 §7 calls the "transparent palette sentinel";
+it is a plain palette index, and a foreground of 254 would also be invisible.
+
+**Correction to doc 07 §7's "drop-shadow switch" (cross-doc).** The ninth
+argument of the rasterizer is this skip colour, not a shadow toggle; the
+field it is read from is the skip colour, not a shadow flag. Doc 07 owns that
+paragraph; the change is listed as a cross-doc need.
+
+**Shadows and outlines (Established).** They are caller compositions of the
+plain drawer:
+
+* The GUI label painter ([R-FONT-01 §6]) with the label's shadow attribute
+  bit draws the string first in the window's colour-table entry 0 at
+  `(penX + 1, penY + 3)`, then in the label's foreground at `(penX, penY)`.
+* The end-of-battle report's `Click to continue` prompt uses the outlined
+  helper: `penX = trunc((surfaceWidth − w) / 2)` (arithmetic shift, so a
+  negative difference rounds toward −∞), then the string is drawn four times
+  in the outline colour at `(penX − 1, y)`, `(penX + 1, y)`, `(penX, y − 1)`,
+  `(penX, y + 1)`, then once in the fill colour at `(penX, y)`; each pass
+  sets the background to the current skip colour so only set bits write. The
+  outline colour is the active palette's entry for logical index 0 and the
+  fill colour that for index 15, both through the logical-to-physical map
+  ([03 §4]). A plain centred helper with the same `penX` and one pass exists
+  but has no callers.
+
+### Closed — which fonts are loaded, by whom, and which routine draws which family [R-FONT-01 §5] (2026-08-29)
+
+**Startup preloads (Established, direct-static).** Before the shell opens,
+`fonts/COMIX` and `fonts/SMLFONT` are loaded into two global slots. A null
+load result of either raises the fatal modal (message box, then process exit)
+with the composed path as the message — there is no fallback font. Both are
+freed together at shutdown. The GUI window record is then given `fonts` as
+its font directory, `COMIX` as its window FNT, the two GAF fonts
+`anims/hattfont12.gaf` (slot 0) and `anims/hattfont11.gaf` (slot 1) through
+the GAF-font loader (§6; a missing GAF font is a null slot, not fatal), skip
+colour 254, and finally `COMIX` is made the active FNT.
+
+**Font selection sites (Established).** The active-FNT setter ignores a null
+handle. Its callers, by the handle they pass:
+
+| handle | who selects it | what it draws |
+|---|---|---|
+| the window FNT (`COMIX`) | 21 sites: every GUI screen painter restores it after a per-gadget font, the shell entry, the report/end-mission screens | shell text drawn through the FNT fallback of the GAF-font path (§6) and the label/button painters when the label names no font gadget |
+| a per-gadget FNT | the GUI label, button, list and text-region painters (12 sites) | a label whose `fontnumber` selects the N-th **font gadget** (gadget type 7) of the same window; that gadget's FNT is loaded at GUI parse from the window's font directory plus the gadget's `filename` through the same raw file loader (missing file → null handle → the setter ignores it and the previously active font stays) |
+| the local player's **side font** (`font=` of `sidedata.tdf`, [02 §6], one handle per side record) | the battle frame composer (twice) and the unit-panel painter | every HUD number and string drawn with the FNT drawer in battle — resource counters, `FRATE`, the unit-panel readout, the group digit of [R-FX-01 §6] |
+| `SMLFONT` | the minimap overlay pass inside the frame composer (two sites) | the single-character marker `G` it stamps on flagged minimap entries; the flag's meaning belongs to §3.9 |
+| `COMIX` directly | the main-menu screen and the front-end state machine; in battle, the frame composer's diagnostic overlay, the unit-state and unit-builder probes, the unit panel's debug readout, and the status footer | `FRATE`, `Release`, `MODE`, `Game Time` and the profile labels; the probe dumps; the footer, which then draws through the GAF-font path of §6 |
+
+**Which routine draws which family (Established).** Battle HUD text goes
+through the FNT drawer directly with the side font, except the diagnostic
+overlay and probes above (`COMIX`) and the status footer (GAF-font path with
+`COMIX` as its fallback). Shell text goes through
+the GAF-font trio of §6, which prefers the window's GAF font and falls back
+to the active FNT only when that slot is null; the label and button painters
+use the FNT drawer directly only for a label that names a font gadget. The
+build-card count label switches the window's GAF font to slot 1
+(`hattfont11`) for its duration and restores slot 0 afterwards; so do the
+list, button (when the button's small-font attribute bit `0x8000` is set)
+and label painters. GDI text is not used by any of these paths.
+
+### Closed — the GAF-font pen: measure, metric, draw, wrap, and the gadget painters [R-FONT-01 §6] (2026-08-29)
+
+Doc 07 §4 already records the GAF-font loader's baseline rule (the capital-I
+frame's height is subtracted from every frame's Y offset once at load) and
+the blitter placement `penX − XOffset, penY − normalizedYOffset`. This section
+records the pen arithmetic that was left open there.
+
+**Measure (Established, direct-static).** With a GAF font in the window's
+current slot, `gafWidth(s)` sums, for every byte of `s` until NUL (newline
+does **not** stop it), the width of the frame at index `byte`, adding nothing
+for a byte whose frame index is out of range. With a null slot it is
+`width(activeFont, s)` of §2.
+
+**Line metric (Established).** `metric = height(frame['I']) + 2` with a GAF
+font, else header byte 0 of the active FNT. This is the "capital-I height
+plus two" of doc 07 §5, now verified.
+
+**Draw (Established).** `gafDraw(dst, s, x, y, maxW, mode)`; with a null
+slot it calls the FNT drawer with `maxW = −1` (the caller's width limit is
+**dropped** on the fallback path). Otherwise, for each byte `b` until NUL:
+
+```
+if b < 0x20: skip (no advance, no draw)          -- control bytes, incl. 10 and 13
+f = frame[b]; if none: skip (no advance)
+if maxW != -1 and width(f) > maxW: stop           -- strict: a glyph exactly maxW wide still draws
+if b != 0x20: blit f at (x, y) with mode
+if maxW != -1: maxW -= width(f)
+x += width(f)
+```
+
+The space frame advances but is never blitted. `mode == 0` selects the plain
+frame blitter (opaque bytes copied, no remap — doc 07 §4's "GAF-font bytes
+are copied directly"). A non-zero `mode` selects the keyed blitter, which
+for a compressed frame remaps every source byte through row `mode` of the
+32-row light table ([R-P0-19-N], [R-FX-01 §4]) — the table the
+light-level remapper of doc 07 §4 uses — so `mode` is a light-table row
+index, not a palette index. The GUI label painter passes the label's
+authored foreground field as `mode`; the button painter always passes 0.
+The keyed blitter's uncompressed-frame path receives the same byte and
+table; whether it applies the same row is Unknown (below).
+
+**Word wrap (Established, direct-static).** `gafWrap(dst, s, x, y, maxW,
+maxH, mode)` returns the pen Y after the last line. It splits on the space
+byte and on byte 13 (carriage return; byte 10 is a control byte the drawer
+skips), fits greedily, and modifies the string in place only transiently:
+
+```
+start = 0; lastBreak = 0; i = 0; L = strlen(s)
+loop:
+  advance i to the next ' ' or '\r' at or after i, or to L
+  w = gafWidth(s[start .. i))                     -- the whole candidate line
+  if maxW < w:                                     -- strict; a line exactly maxW wide fits
+      line = s[start .. lastBreak); i = lastBreak  -- back up to the previous break
+  elif s[i] == '\r' or i == L:
+      line = s[start .. i)
+  else:
+      lastBreak = i; i += 1; continue              -- keep accumulating words
+  gafDraw(dst, line, x, y, maxW, mode)
+  y += 2 + metric; maxH -= 2 + metric
+  if s[i] == NUL: return y
+  start = lastBreak = i + 1                         -- skip the break byte
+  if maxH < 1: return y
+```
+
+Consequences: the line pitch is `metric + 2` (fourteen pixels for
+`hattfont12`); a first word wider than `maxW` produces an empty line, and
+the walk then resumes one byte later, so an over-long first word loses its
+leading bytes one per line until the remainder fits; a line that fits
+exactly is not broken; `maxH` is checked only after a line is drawn, so at
+least one line is always drawn.
+
+**Label painter (Established).** For a label gadget with rectangle
+`(gx, gy, w, h)` (the panel itself has `gx = gy = 0`), `right = gx + w − 1`,
+`bottom = gy + h − 1`, `tw` the text width by the active family:
+
+* an authored `x` of `−1` is replaced once by `trunc((panelWidth − tw) / 2)`;
+* attribute bit 4 (right): `penX = gx + w − tw`; else bit 2 (centre):
+  `penX = gx + trunc(w / 2) − trunc(tw / 2)` (two separate truncations); else
+  `penX = gx`; `penY = gy` in every case;
+* with a font gadget selected (FNT path): optional shadow as in §4, then the
+  FNT drawer at `(penX, penY)` with `maxW = −1`;
+* otherwise (GAF path): when `2 × metric < h − 1` the wrapper is used with
+  `maxW = w`, `maxH = h`; else the single-line drawer with `maxW = w`.
+
+**Button painter (Established; verifies doc 07 §5).** With `s = 1` when the
+gadget's `stages` field is non-zero, else 0:
+
+* `penY = gy + trunc((h − 1 − metric) / 2) + s` (C division, truncation
+  toward zero);
+* left attribute (bit 1): `penX = gx + 3 + s`; else right (bit 4):
+  `penX = max(gx, right − 3 − tw)`; else centred:
+  `penX = gx + trunc((right − tw − gx) / 2) + s + 1`; in every case
+  `maxW = w` and `mode = 0`;
+* the build-attribute variant (bit 0x20, when neither left nor right nor
+  centre is set) keeps the centred `penX` and uses `penY = bottom − 4 −
+  metric + s`, then draws a second string after the first in the window's
+  colour-table entry 10; doc 07 (HUD build cards, [R-HUD-03]) owns what that
+  second string is.
+
+The pressed/held state never moves the pen — only `stages` does — which is
+what doc 07 §5 states.
+
+**Build-card count (Established).** The count label switches to slot 1 and
+draws the decimal count at `(gx + trunc(w/2) − trunc(tw/2), gy + trunc(h/2)
+− trunc(metric/2))` with no width limit.
+
+### Code page and character mapping [R-FONT-01 §7] (2026-08-29)
+
+**Established.** Both families map a string byte to a glyph by its raw
+value: the FNT path by `byte − first` into the offset table, the GAF path by
+`byte` as a frame index. No text primitive translates bytes, folds case, or
+consults a code page; bytes 128–255 draw whatever glyph the font carries at
+that position (the retail 222/223-glyph fonts carry Windows-1252 shapes
+there, [fmt fnt]). Whether any string *producer* translates before drawing
+is a doc 07 question (its translation-table path) and is listed there.
+
+### Unknown — §7.1, open items only
+
+- Whether any shell dialog draws text through GDI rather than the FNT/GAF
+  paths · decider: import-table and reference census of `TextOut`/`DrawText`
+  callers.
+- The keyed GAF blitter's uncompressed-frame path: whether the `mode` byte
+  selects the same light-table row as the compressed path, or is used as a
+  colour key · decider: static trace of the raw keyed writer (it is a
+  hand-written span routine; [R-P0-19-P] owns its compressed sibling).
+- Malformed `hattfont` (no frame at the `I` index): the loader subtracts an
+  uninitialised stack value from every frame's Y offset, so the outcome is
+  undefined by construction; whether a stock or third-party asset ever
+  triggers it · decider: asset census over installed GAF fonts. Doc 07 §5
+  and §7 carry the matching `TODO(question)`.
 
 ### 7.2 GUI and HUD
 
@@ -6980,11 +7510,6 @@ by the sharper question it turned into.
   sensor circles use · §3.9, §3.10 · static trace of the root-state writer.
   (Where they are drawn is closed: the contacts pass, `[R-TERR-01]`'s §3.10
   restatement.)
-- Whether the tracked-heap allocator zero-fills plot memory, which decides
-  the derived maximum/minimum bytes of the last column and last row that the
-  recompute never writes but the sector-grid sweep and lava flood read · §2.2
-  `[R-TERR-01 §1]` · static trace of the allocator's fill path. Marked
-  `TODO(question)`.
 - Legacy terrain header slot 12 and attribute bytes 1, 3, 4, 5, 7: no reader
   in the loader · §2.2 `[R-TERR-01 §1]` · static trace over the unrecovered
   regions; inert until one is found.
@@ -7036,10 +7561,6 @@ by the sharper question it turned into.
 - The name and authored source of the display-mode byte that forces every
   unit body through the tinted blitter (cleared by the film/HUD-hide key
   family) · [R-RAST-01 §7] · static trace of its writers (doc 07 owns the key).
-- Provenance of the retail blue tint table — built from `PALETTE.PAL` like the
-  gray table, or loaded from outside `palettes/` · §4.3.3, `[fmt pal]` ·
-  static trace. Marked `TODO(question)` in `[fmt pal]`, the only marker in a
-  format doc.
 - Aircraft altitude versus ground projection in the shadow pass · §5.3,
   [R-REN-03D] · static trace.
 - Water-flag bit semantics, the exact darken row identity within `SHD`, and
@@ -7047,9 +7568,10 @@ by the sharper question it turned into.
   static trace. Marked `TODO(question)`.
 - The identical-model six-variant shading matrix predicted by [R-RND-02A] has
   not been run · §5 · manual retail observation.
-- Water wake rectangle interpolation, underwater tint, splash timing, and
-  proof that no hidden animated-water surface writer exists · §5 · static
-  trace.
+- Whether the palette window's blue-table feature bit can be clear in a retail
+  session (the table's allocation gate; its build and its one consumer are
+  closed in [R-WATER-01 §2]) · §6 · static trace of the window's flag-word
+  initialiser.
 - The mouse-event buffer and the "loaded surface wrapper" named beside the
   cursor save-under surfaces · [R-FX-01 §7] · static trace of their
   allocation sites (doc 07 owns the event buffer).
@@ -7063,9 +7585,16 @@ by the sharper question it turned into.
 - The follow-camera assignment writer, and the retail tracking command or
   producer behind it · §5.6.1 · static trace over a whole-image reference
   census, or manual retail observation. Marked `TODO(CRD-006)` at two sites.
-- FNT baseline, glyph advance and kerning, the two-byte header fields, the
-  clipping edge, and any shell path that uses GDI text directly · §7 · static
-  trace.
+- Any shell path that uses GDI text directly · §7.1 [R-FONT-01] · import
+  and reference census of `TextOut`/`DrawText` callers. (The FNT baseline,
+  advance, header bytes and clipping edge are closed by [R-FONT-01 §1–§4];
+  there is no kerning.)
+- The keyed GAF blitter's uncompressed-frame path — whether the `mode` byte
+  selects a light-table row as the compressed path does · §7.1
+  [R-FONT-01 §6] · static trace of the raw keyed writer.
+- Malformed `hattfont` with no frame at the `I` index (undefined by
+  construction) — whether any installed asset triggers it · §7.1
+  [R-FONT-01 §6] · asset census over GAF fonts.
 - Input repeat, focus and activation rules, key-token translation, cursor
   capture, gadget hit-testing, and complete HUD/minimap palette composition
   · doc 07 · static trace.

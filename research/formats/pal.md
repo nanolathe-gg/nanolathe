@@ -24,9 +24,11 @@ The renderer holds five table slots, not four: the three above plus two
 256-entry tables that are **not** shipped as `palettes/` files — a gray table
 built at palette-install time from `PALETTE.PAL` (see
 `research/retail-executable-spec/03` §4.3.3) and a blue table read only by the
-submerged-hull tint (`[R-REN-03A §8]`). `TODO(question): the provenance of the
-retail blue table — whether it is built from PALETTE.PAL like the gray table
-or loaded from somewhere outside palettes/.`
+submerged-hull tint (`[R-REN-03A §8]`). The blue table is built from
+`PALETTE.PAL` at session init: for each entry the target `(r>>1, g>>1,
+(b>>1)+50)` is resolved to the nearest palette colour through the gray
+table's sum-sorted search ([03 R-WATER-01 §2]); nothing outside `palettes/`
+is read.
 
 ## Reference
 

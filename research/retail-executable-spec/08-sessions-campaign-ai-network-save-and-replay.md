@@ -1048,7 +1048,7 @@ Then:
   restoration dispatcher** ([R-SAVE-02 §11]) runs instead of the spawner:
   `Summary.maxunits` → lobby unit-limit copy (note: the pool was sized in
   §3 from the copy as it stood *before* this restore — a loaded save's
-  pool uses the current registry `UnitLimit`, and the restored value only
+  pool uses the current `totala.ini [Preferences]` `UnitLimit` ([01 R-PLAT-01 §3]), and the restored value only
   reaches the next battle; §10); then `Players`, `Camera`, `Features`,
   `Metal`, `PlayerFeatures`, `Mapping`, `Units`, `Meteor`, trigger records,
   in that order; the *restored* flag is set; skip to §8;

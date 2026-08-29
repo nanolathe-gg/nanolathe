@@ -122,18 +122,11 @@ func gatherVariants(section *formats.Section, base string) ([]string, []string) 
 		}
 		return variants, captions
 	}
-	// Bare K absent — gather numbered K1, K2… anyway.
-	//
-	// SPEC_CONFLICTS SC7: [02 "Sound category record"] states the bare read
-	// gates the numbered loop ("an event key that is absent for the bare form
-	// contributes no variants at all"), but stock sound.tdf authors
-	// select1(120), ok1(76), cant1(76) and arrived1(63) with NO bare forms.
-	// Following the spec letter would mute selection/move/cant voices for
-	// every unit on real data, so the executable evidently reads these slots
-	// differently than the spec's summary describes.
-	// TODO(question): how does the executable actually gate numbered sound
-	// variants — is the bare read a variant itself when present, or just an
-	// alternate spelling of slot 1?
+	// Bare K absent — gather numbered K1, K2… anyway. Retail's loader reads
+	// the bare key, discards the result, and unconditionally gathers K1, K2, …
+	// until the first absent index; the bare value (when present) is variant 0
+	// and <key>text supplies each caption [02 R-SND-01 §1]. SPEC_CONFLICTS SC7
+	// is closed: this is retail behaviour, not a divergence.
 	for i := 1; ; i++ {
 		key := fmt.Sprintf("%s%d", base, i)
 		if val, ok := section.StringValue(key, ""); ok {

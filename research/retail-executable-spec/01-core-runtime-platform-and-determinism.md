@@ -19,8 +19,10 @@ runtime conventions of its era. The runtime contract naturally divides into:
 1. process singleton, startup, window creation, message dispatch, and orderly
    shutdown;
 2. a wall-clock budget that decides how many fixed simulation steps run;
-3. one authoritative simulation thread, with a conditional diagnostic helper
-   thread that is disabled in normal startup, and thread-local C-runtime state;
+3. one authoritative simulation thread, a short-lived loading thread that runs
+   battle entry, a cursor-redraw thread, a conditional diagnostic helper
+   thread that is disabled in normal startup, and thread-local C-runtime state
+   (§5.1 [R-PLAT-01 §4]);
 4. fixed pools and linked queues whose immediate reuse and iteration order are
    part of deterministic behavior;
 5. two random streams and a process-wide x87 floating-point environment;
@@ -141,9 +143,9 @@ mode work:
 - A queued message, or a mode that is not waiting on multiplayer work, enters a
   blocking `GetMessageA`/`TranslateMessage`/`DispatchMessage` sequence. Quit
   messages terminate this loop.
-- When there is no immediately queued message and the windowed/network
-  condition holds (display-mode flag set or networked session), the pump runs
-  its housekeeping helper and then, when at least 99 milliseconds
+- When there is no immediately queued message and the window is active or the
+  session is networked, the pump runs its housekeeping helper and then, when
+  at least 99 milliseconds
   have elapsed since the previous one, exactly one media-keepalive call that
   walks the audio/media channel arrays (eight then thirty-two object slots,
   invoking each live object's keepalive virtual and clearing dead slots; the
@@ -161,6 +163,15 @@ mode work:
 - Audio/CD status is polled from this same application activity. Media playback
   is not proven to have a general-purpose audio worker owned by the game.
 
+**Correction (2026-08-29, RWU-01-2).** The previous bullet said the busy
+path runs when "the windowed/network condition holds (display-mode flag set
+or networked session)". The word the pump tests is not a display-mode flag:
+it is the **window activation word** that the window procedure writes on
+`WM_ACTIVATE` (low word of `wParam` nonzero → 1, else 0). The busy path runs
+while the window is active or the session is networked; an inactive
+single-player window blocks in `GetMessageA` and neither the budget nor the
+housekeeping runs. The full pump is [R-PLAT-01 §1] below.
+
 Lobby, synchronization, and commander-placement barriers may call `Sleep(50)`
 while waiting. This sleep is a wait policy for a barrier, not the simulation
 clock. The same distinction applies to any modal or cinematic message loop.
@@ -171,6 +182,92 @@ and worker termination are not all traced to a single finalizer. A clean
 implementation should make each resource’s ownership explicit and preserve
 the observed failure paths rather than assuming process termination is the
 only cleanup.
+
+### Closed — the application pump, activation gating, and the battle host pump [R-PLAT-01 §1] (2026-08-29)
+
+Established by RWU-01-2 from a direct read of the process entry, the window
+procedure, the pump housekeeping helper and the battle host pump.
+
+**Startup order, exactly (Established; refines §2.1).** Diagnostic init with
+argument 8 (filter and FPU setup on, helper thread off — §9 [R-PLAT-01 §8]);
+install the allocation-failure hook ([R-PLAT-01 §5]); the singleton semaphore
+test; CRT `srand` from the time-of-day helper (this seeds the **main
+thread's** CRT block — the only seed that block ever receives, see
+[R-PLAT-01 §4]); command-line parse (a parse failure returns exit code 1 —
+[R-PLAT-01 §2]); display defaults 640×480 and the display flags word (see
+below); window creation (failure returns 0); the 30-unit timebase; mounts;
+language resolution; translation table; audio device; settings; the AudioCD
+shell swap; then the pump. On exit: when the display flags mark a cursor
+thread, stop it and release its surfaces; restore the AudioCD value; tear
+down the display.
+
+**The display flags word.** Startup sets bit 0 of the display flags word to
+the complement of the display mode chosen by `-D`/`-Df` (bit 0 = `~mode & 1`,
+so the default mode 3 and the `-D` mode 3 both clear it and `-Df` mode 2 sets
+it) and ORs in the constant `0x3F2` (bits 1, 4, 5, 6, 7, 8, 9). Bit 9 is
+copied by the window creator into the "cursor thread" bit of the display
+object, so the cursor thread is **always** created in retail ([R-PLAT-01 §4]).
+
+**Pump iteration (Established).** Each iteration:
+
+1. *Focus-driven audio suspend/resume.* If the activation word is 0 and the
+   audio object exists: save the CD play lists to the registry, remember the
+   current volume, suspend the device, and set a "suspended" latch. If the
+   activation word is nonzero, the audio device pointer is null, and the
+   latch is set: re-create the device, re-register the completion callback,
+   re-apply the two audio preference bits, restore the remembered volume,
+   re-read the CD lists, clear the latch. Focus loss therefore silences and
+   releases the audio device; focus gain rebuilds it.
+2. `PeekMessageA` (no remove). If a message is queued, **or** the activation
+   word is 0 and the session is not networked, fall into the blocking
+   `GetMessageA`/`TranslateMessage`/`DispatchMessageA` (a `WM_QUIT` return
+   ends the pump).
+3. Otherwise run the housekeeping helper (next paragraph), then if
+   `GetTickCount() − lastKeepalive > 99` (signed) run the media keepalive
+   walk once and stamp.
+
+**Housekeeping helper (Established; the input side is doc 07's).** In order:
+peek the key ring head — the developer-console token when the developer bit is
+set pops it and restores the display; the F2 token when the ESC-menu bit is
+set pops it, closes the menu, clears the bit and, unless the session kind is
+multiplayer, clears the pause bit; the screenshot token pops it, creates the
+`screenshots` directory beside the install, captures, and **resets the
+scaled-time anchor to the current scaled clock** (the reset §4.3 records) —
+these three peeks are [07 R-CAM-01 §1]'s "input ordering"; pop one button
+record (or copy the motion slot — [R-PLAT-01 §6]); run the sound service;
+copy the record into the canonical pointer record; then call the current
+mode's frame function unless the display object's "presenting" bit is set.
+
+**Battle host pump (Established; the mode frame function while in battle).**
+
+1. Profile bookkeeping: the nine phase counters are summed into a total (at
+   least 1), copied to the display copy, zeroed, and the frame stamp taken —
+   diagnostics only.
+2. *Single player* (session kind 1 or 2): if the ESC-menu bit is set, skip
+   straight to step 5 — the budget is not evaluated, no tick runs, no host
+   frame is drawn, so the scaled-time anchor stalls exactly as it does under
+   pause and the menu's closing produces the same one capped burst (§4.3).
+   Otherwise, if the pause bit is clear, evaluate the budget (§4.2); then if
+   the pending count is nonzero, run the sub-ticks (§4.4).
+3. *Multiplayer* (kind 3): evaluate the budget every iteration; with a zero
+   pending count while paused, drain the network and, when the control-stamp
+   deadline has passed, send the one-byte control keepalive and advance the
+   stamp by 60 scaled units; with a nonzero pending count run the sub-ticks in
+   networked mode, then the three empty barrier calls.
+4. If the ESC-menu bit is clear: the host frame (input, dispatch, and the
+   interface — [07 R-CAM-01 §1]), then the presentation update.
+5. Drag/selection state bits, the HUD composer, and movie capture: while a
+   movie series is armed and its next-frame deadline is at or below the
+   scaled clock, capture one frame, advance the deadline by
+   `30 / framesPerSecond` scaled units, and reset the scaled-time anchor
+   ([07 R-CAM-01 §8]).
+
+**Budget re-read (Established, confirms §4.2 and §4.3 unchanged).** The lag
+scan qualifies a remote slot when its record exists, its control byte is 3, a
+progress word is nonzero, and its frame word is below the global tick; the
+minimum frame word gives `lag = tick − min`. The pending-speed bit is set when
+the active speed is below the requested one. Nothing in the re-read changes
+the arithmetic already recorded.
 
 ## 3. Configuration, installation, and compatibility runtime
 
@@ -183,17 +280,24 @@ that the helper *creates* the key path even on a read, and that a missing value
 is written back with its default at startup.
 
 The executable also refers to an INI path ending in `totala.ini` and uses
-`GetPrivateProfileIntA`, but the INI imports are confined to the diagnostics
-helpers — no INI read exists on the startup, front-end, or battle
-configuration path (bounded by the WinMain body, the front-end router, and
-the settings loader). The registry settings loader runs at front-end entry
+`GetPrivateProfileIntA`. **Correction (2026-08-29, RWU-01-2):** the previous
+text said the INI imports were "confined to the diagnostics helpers — no INI
+read exists on the startup, front-end, or battle configuration path". That
+was wrong: the integer-profile accessor (`<module directory>\totala.ini`,
+section `[Preferences]`) has exactly two callers, both on the startup path —
+the settings loader reads `UnitLimit` (default 250, clamped to 20..500; doc
+02 R-CONTENT-03 owns it) and the sound initializer reads `NoDirectSound` and
+`UseWindowsSound` ([R-PLAT-01 §2]). The earlier bounded search stopped at the
+WinMain body and missed the accessor's callers. The registry settings loader runs at front-end entry
 with default-and-write-back for every value; the command-line parser runs in
 WinMain before display initialization and sets its own switch bits and scalar
 slots. Precedence for the overlapping scalars is therefore defaults, then
-registry, then command line; the exact interaction of the two scalar command-
-line slots with the registry values is not individually mapped
-(`TODO(question)`). Language precedence is command line, then registry, then
-English fallback.
+registry, then command line. The scalar command-line slots have **no**
+registry twins: `-T` (peer timeout) and `-E` (an unread value) write
+engine-block words that no registry value writes, and `-P` writes the packet
+pacing block ([R-PLAT-01 §2]); the earlier `TODO(question)` on their
+interaction is closed by that census. Language precedence is command line,
+then registry, then English fallback.
 
 Startup temporarily mutates a machine AudioCD registry shell value, then
 restores the prior value. This is a compatibility side effect, not a game
@@ -204,6 +308,72 @@ the main-loop call chain plus the configuration string vocabulary. The behavior 
 high confidence for key names, registry API family, and the narrowed
 defaults < registry < command-line precedence; medium only for the two
 unmapped scalar command-line slots.
+
+### Closed — the command-line census and the profile-file reads [R-PLAT-01 §2] (2026-08-29)
+
+Established by RWU-01-2 from the game's parser, the debug library's option
+scanner, and every reader of each written slot (bounded to the recovered
+image).
+
+**Tokenizer.** The command line is split on space and tab. Before parsing,
+the peer timeout word is preset to 30, the `-E` word to 0, and the
+"restricted-config" flag to 0. A token not beginning with `-` or `/` is copied
+to the language slot (the last such token wins). A token the debug library
+recognises (prefix match, case-insensitive, against its nineteen switches —
+below) is skipped by the game parser. Otherwise the second character selects
+the switch (case-insensitive). Any other letter is ignored.
+
+| Switch | Value form | Effect (Established) | Reader |
+|---|---|---|---|
+| `-B<word>` / `-B <word>` | word | `lock` sets bit 0 of the lobby-option word. Every other recognised word — `deathends`, `deathplays`, `deathmatch`, `fixedloc`, `mapping`, `circlos`, `truelos`, `permlos`, `cheating`, `watching` — is compared and **writes nothing** on either outcome | the ALLIES/SHARE gadget enable and the lobby record toggle read bit 0 |
+| `-C<file>` | name | online library present and its version above 2 → load the named online configuration into the online record (0x150 bytes); then sets the restricted-config flag | `1.zrb` list load is skipped when the flag is set |
+| `-D` / `-Df` | — | display mode 3, or 2 when the third character is `f`/`F` | startup only: bit 0 of the display flags word (`~mode & 1`) |
+| `-E<n>` | integer | `atoi`; a leading `-` yields −1; outside 0..100 → 0 | **none** in the recovered image (retained-and-inert) |
+| `-F` | — | sets the fixed-drive flag | the CD-drive scan uses a fixed drive letter instead of enumerating |
+| `-H[<name>]` | name or next token (unless it starts with `-`) | host flag ← 1; name copied (at most 63 bytes) | lobby/host front-end screens |
+| `-L` | — | clears one word | **none** (inert) |
+| `-N<k>[:<name>]` | integer, optional name | `k` = `atoi`; when `k == 1` and a `:` follows, the name is stored; `k` in 1..4 stored as the network kind; then the restricted-config flag | as `-C` |
+| `-P<n>` | integer | packet pacing: `n < 0` disables; `n == 0` → interval 200 ms; else `n` clamped to 2..30 and interval `1000 / n` ms; eleven slots hold `(interval × 30 + 999) / 1000` scaled units | network transport (out of scope) |
+| `-R` | rest of line | registers the application with DirectPlay (`dsetup.dll`) using the title, the executable path and the fixed GUID; on failure beeps and shows `DirectPlay registration failed.`; **the parser then returns 0 and the process exits with code 1** on both outcomes | — |
+| `-S` | — | "no DirectSound" flag | sound init |
+| `-T<n>` | integer | `atoi`; outside 30..300 → 30; stored as the peer timeout in seconds | the peer scanner drops a peer when `timeout × 30` scaled units have elapsed since its last packet (unsigned compare) |
+| `-W` | — | "Windows sound" flag and the "no DirectSound" flag | sound init |
+
+**Sound backend selection.** The sound initializer ORs the `-S`/`-W` flags
+with the profile-file booleans `NoDirectSound` and `UseWindowsSound`
+(`totala.ini` `[Preferences]`, default 0). The Windows-sound flag selects the
+waveform probe path; otherwise DirectSound is initialised, and failure raises
+the modal `Error:  Sound system initialization failed.` (two spaces, as
+authored; doc 03 owns the audio contract).
+
+**Debug-library switches (Established).** The diagnostics library scans
+`GetCommandLineA()` itself, matching a switch only when it is followed by
+whitespace, `=`, or the end of the line; booleans take an enable string and a
+disable string, values take `=<decimal>` or `=0x<hex>`. The nineteen
+recognised switches and their defaults:
+
+| Switch | Default | What it does |
+|---|---|---|
+| `-memfussy` / `-memnofussy` / `-memfrontalign` | off | tracked `VirtualAlloc` allocator ([R-PLAT-01 §5]) |
+| `-memset=<v>` / `-memnoset` | off; pattern `0xDEADBEEF` | fill every allocation with the pattern |
+| `-gonzo` | on | affects only the tracked allocator's bookkeeping |
+| `-fpufussy` / `-fpunofussy` | **off** | see below |
+| `-enableimagehlp` / `-disableimagehlp` | **on** | symbolised stack walk in the crash report ([R-PLAT-01 §8]) |
+| `-enableimagehlplines` / `-disableimagehlplines`, `-dprinton` / `-dprintoff` / `-dprintfile`, `-saveresources` | — | listed in the switch table; no reader in the recovered image |
+| `-memorystatus`, `-performancestatus` | off | read only inside the helper-thread body, which normal startup never creates |
+| `-debughelper[=n]` | off | `LoadLibrary("DebugHelper.dll")` and call its `DebugFunc1(n)`; failures print a diagnostic |
+
+**`-fpufussy`, exactly (correction to §8).** The FPU setup helper **always
+runs** from the diagnostic initializer (its gate bit is clear in the normal
+argument). It calls the C-runtime control-word setter with the *invalid* and
+*zero-divide* exception-mask bits: with the switch off (default) it sets both
+mask bits (`set(0x18, mask 0x18)` in the runtime's abstract encoding — both
+exceptions stay masked, which is the C-runtime default, so the control word is
+unchanged); with the switch on it clears both (`set(0, mask 0x18)`), so
+invalid operations and divisions by zero trap. The earlier §8 sentence
+"`-fpufussy`/`-fpunofussy` can change whether the setup helper runs" was
+wrong: the switch changes the helper's *argument*, not whether it runs.
+Precision and rounding are never touched; [R-DET-01 §3] stands.
 
 ### 3.2 Virtual filesystem boundary
 
@@ -309,9 +479,10 @@ packets are handled by the peer dispatcher; the receive case for the
 pause/speed packet is established: a sub-type byte of zero updates the pause
 bit from the value byte, any other sub-type applies the speed through the
 common setter with the rebroadcast flag cleared — recipients apply without
-rebroadcasting. The send-side byte layout of the pause packet remains a
-network-framing residual (`TODO(question)`), while the speed packet send is
-the common setter's own broadcast of `{type, sub-type, speed}`.
+rebroadcasting. The send-side layout of the pause packet is
+`{0x19, 0, newPauseBit}` and the speed packet is the common setter's own
+broadcast of `{0x19, 1, speed}` — both in [R-PLAT-01 §3] below (the earlier
+`TODO(question)` on the pause send is closed).
 
 Pause asymmetry between the dispatch paths is established. The dispatcher
 branches on the session's network flag:
@@ -332,6 +503,40 @@ branches on the session's network flag:
 Movie capture and the screenshot hotkey both reset the scaled-time anchor to
 the current scaled clock after performing their capture, so capture cadences
 do not accumulate as elapsed gameplay time.
+
+### Closed — pause-send framing and the speed clamp [R-PLAT-01 §3] (2026-08-29)
+
+**The pause toggle (Established).** The pause token (`0xF8`, the Pause key —
+[07 §2]) reaches the battle hotkey dispatcher, which:
+
+1. toggles bit 0 of the scheduler's pause/lag/pending word (the pause bit,
+   offset `0x1A` of the saved block in §7.3 "Scheduler persistence") — the
+   local state changes **before** any send;
+2. builds a three-byte packet `{0x19, 0, pauseBit}` — type `0x19`, sub-kind
+   0, then the **new** value of the bit (0 or 1);
+3. hands it to the broadcast helper with the local player's id (the first
+   slot whose record exists and whose control byte is 1 or 2; −1 when none).
+
+**The broadcast helper (Established).** It looks the sender up; the sender
+must be live with control byte 1 or 2 and a clear "dropped" byte, else it
+returns 0. Then: **if the session is not networked it returns 1 without
+sending anything** — the single-player pause is purely the local bit flip.
+Networked, it sends through the transport (one send when the transport is in
+broadcast mode; otherwise once per distinct remote peer id over the
+control-byte-3 slots).
+
+**The receive side** ([01 §4.3], established earlier): sub-kind 0 copies the
+value byte into the pause bit; any other sub-kind passes the value to the
+common speed setter with the rebroadcast flag clear.
+
+**The speed clamp and sub-kind 1 (Established; owned by [07 R-CAM-01 §3]).**
+The common setter clamps the request to `1..20` with signed compares (`> 20 →
+20`, then `< 1 → 1`), writes both the requested and active 16-bit words, and
+— when its send flag is set — emits `{0x19, 1, speed}` through the same
+broadcast helper, so it too is a no-op in single player. The hotkeys compute
+`target ± 1` and pass the send flag; a request of 21 or 0 is therefore
+clamped, not refused (the hotkey's own refusal at 20 / 1 is the dispatcher's
+pre-test, [07 R-CAM-01 §2]).
 
 ### 4.4 Tick phase order
 
@@ -638,8 +843,71 @@ four-byte `rand` state in the historical Microsoft layout (seed established at
 startup from local/system time and time-zone conversion at one-second
 resolution, and reseeded at battle entry from the same helper; §7.2). Each
 thread obtains the block lazily with `TlsGetValue`; missing
-state is allocated, initialized, and installed with `TlsSetValue`. No gameplay
-worker pool is established by the current call census.
+state is allocated, initialized, and installed with `TlsSetValue`. There is no
+worker *pool*, but the earlier sentence "no gameplay worker is established"
+was incomplete: the thread census below finds a loading thread that runs the
+whole battle-entry orchestrator and a cursor-redraw thread that always exists
+([R-PLAT-01 §4]).
+
+### Closed — the thread census: the loading thread and the cursor thread [R-PLAT-01 §4] (2026-08-29)
+
+Established by RWU-01-2 from every caller of the engine's thread starter and
+of the C-runtime `_beginthread` beneath it.
+
+**The thread starter.** `_beginthread(fn, stackSize, arg)`: the runtime
+`calloc`s a fresh 116-byte per-thread block (so its `rand` state starts at
+**1**, the runtime's documented initial seed, until something seeds it),
+creates the thread suspended and resumes it. Three call sites exist in the
+recovered image; one (a second cursor-thread starter) has no caller.
+
+**1. The loading thread (Established).** The front-end state machine's
+loading state starts a thread (default stack) whose body is a structured-
+exception frame around the **battle-entry orchestrator** — the orchestrator's
+only caller. Failure to create it raises the fatal modal
+`Unable to start the loading thread!` ([08 R-ENTRY-01 §1] owns the state
+machine). Consequences:
+
+- The orchestrator's CRT `srand` writes the **loading thread's** TLS block —
+  a block that did not exist before the thread started. The **main thread's**
+  CRT block is seeded exactly once, at process startup, and is never reseeded.
+  Every CRT draw the tick makes (wind interval, meteor scheduler, victory
+  timer, camera shake, strips, sound variants, the elimination line) runs on
+  the main thread — the battle host pump is the main thread's mode frame
+  function — and therefore **continues the front-end's stream**, including
+  every menu, briefing and sound-variant draw made since process start. The
+  worker's draws (the skirmish slot shuffle, the explosion-frame builder) come
+  from the freshly seeded thread block and die with the thread. This corrects
+  [R-CORE-02] and [R-DET-01 §4]; the per-thread consumer census is
+  [R-PLAT-01 §7] and doc 08's statement of the same fact is
+  [08 R-ENTRY-01 §2].
+- The simulation stream is a process global, so its battle-entry seed is
+  thread-independent; nothing above changes §7.1.
+- The main thread keeps pumping messages while the loading thread runs; the
+  loading state's frame function waits for the orchestrator's completion flag
+  ([08 R-ENTRY-01 §1]). No gameplay phase runs on the loading thread.
+
+**2. The cursor thread (Established).** The window creator copies bit 9 of
+the display flags word into the display object's cursor-thread bit; startup
+always sets bit 9 ([R-PLAT-01 §1]), so retail always creates this thread
+(stack 0x8000 bytes, `THREAD_PRIORITY_HIGHEST`) together with the twenty-record
+button ring and three save-under surfaces of 0x640 bytes. Its loop: acquire
+the display lock (exchange the owner marker with the four-byte value
+"MOUS", event wait on contention), redraw the cursor when the "cursor
+dirty/visible" word is set (a `GetCursorPos` read and blit), release, then
+sleep until 33 ms after the iteration started (minimum 1 ms) — a
+presentation-only 30 Hz cursor updater. Shutdown sets its stop word and polls
+up to 21 × 100 ms for the thread to acknowledge before freeing the surfaces
+and the ring. It touches no game state and draws no random numbers.
+
+**3. The diagnostic helper thread** — never created in normal startup (§5.1);
+its body sets `THREAD_PRIORITY_ABOVE_NORMAL` while it opens the
+`-memorystatus` / `-performancestatus` dialogs (each only when its switch is
+present), restores the previous priority, then runs a `GetMessage` loop with
+a dialog filter.
+
+**Bounded negative.** No other `CreateThread`/`_beginthread` caller exists in
+the recovered game code; the remaining creators are library (Smacker, the
+runtime).
 
 ### 5.2 Locking
 
@@ -660,9 +928,14 @@ the only presentation serialization.
 ## 6. Allocation, pools, object lifetime, and queues
 
 The behavior is pool-oriented rather than garbage-collected. Allocation helpers
-tag blocks with human-readable subsystem labels, zero or initialize them, and
-sometimes grow a vector by reallocation. Immediate slot reuse and linear scan
-order are observable and therefore deterministic.
+take human-readable subsystem labels, and callers initialize the blocks they
+receive; the allocator itself **does not** zero or pattern-fill by default
+(**correction**, 2026-08-29: the previous sentence said the helpers "tag
+blocks … zero or initialize them" — the label is dropped before the
+allocation and no fill happens unless the `-memset` diagnostic switch is
+present; [R-PLAT-01 §5]). Vectors are sometimes grown by reallocation.
+Immediate slot reuse and linear scan order are observable and therefore
+deterministic.
 
 ### 6.1 Established fixed pools
 
@@ -737,8 +1010,82 @@ The direct evidence establishes graceful failure for a failed HPI or media
 resource, a failed optional GAF lookup, and a failed projectile reservation.
 Projectile allocation failure emits no corresponding start sound/COB/fire
 event. Network buffer exhaustion can produce a fatal receive/allocation path;
-the exact user-facing action is not uniform. General heap failure, vector growth
-failure, and archive decompression failure are not exhaustively traced.
+the exact user-facing action is not uniform. General heap failure is closed in
+[R-PLAT-01 §5] (the allocation-failure hook: `ErrorLog.txt` line, modal, and
+process termination); vector growth failure and archive decompression failure
+are not exhaustively traced.
+
+### Closed — the tagged allocator, its fill policy, and its failure path [R-PLAT-01 §5] (2026-08-29)
+
+Established by RWU-01-2 from the two allocation wrappers, the shared body,
+the C-runtime `malloc` beneath it, and the allocation-failure hook.
+
+**One allocator.** The labelled wrapper (`alloc(label, size)`) and the plain
+wrapper (`alloc(size)`) both reach the same body; the label is **discarded**
+before the body runs (it is not stored in or beside the block). The body:
+
+1. enters a process-wide critical section (lazily initialised);
+2. when `-memfussy` is present, takes the tracked path: page-aligned
+   `VirtualAlloc` (commit granularity 0x1000, read/write), front or back
+   alignment, a fill pattern, and a record in a tracking table — diagnostics
+   only, never the retail default;
+3. otherwise calls the C-runtime `malloc`: the request is rounded up to a
+   multiple of 16; requests at or below the runtime's small-block threshold go
+   to the runtime's small-block heap under its own lock, larger ones to
+   `HeapAlloc(crtHeap, 0, size)` — **no zero flag**, and the small-block heap
+   does not clear either. (The earlier tail item "the allocator itself is
+   established as `HeapCreate`/`HeapAlloc` wrappers with tagged blocks" was
+   half right: the runtime heap is the backing store for large requests, but
+   the tag never reaches it.)
+4. on success updates two byte/count statistics; on a null result calls the
+   allocation-failure hook (if installed) and retries while the hook remains
+   installed — in retail the hook never returns (below), so the retry loop is
+   unreachable;
+5. when `-memset` is present, fills the block with the `-memset=` value
+   (default pattern `0xDEADBEEF`); **by default the block's contents are
+   whatever the heap held**.
+
+`free` mirrors it: tracked blocks go to the tracking table, others to the
+runtime `free` after the statistics update. The runtime `calloc` (which does
+zero) has no game caller — its users are the runtime and the Smacker library.
+
+**Verdicts requested by other documents.** Doc 03's plot-memory question
+(`PLOT_MEMORY`, 13 bytes per cell; [03 R-TERR-01]) and doc 04's script-state
+pools (`Object States`, `Static Varibles`; [04 R-COB-04]) all go through the
+labelled wrapper, so **the allocator does not zero them**. The plot loader's
+own initialisation loop writes, per 13-byte cell: bytes 0–3 to zero, byte 7
+to the loaded per-map value, the two-byte field at offset 8 to `0xFFFF` (the
+"no feature" sentinel), and clears bits 0–1 of the flags byte at offset 12.
+Bytes 4, 5, 6, 10 and 11, and bits 2–7 of byte 12, keep whatever the heap
+held until a later writer sets them — so doc 03's "bytes 5 and 6 of the last
+column and row" are **undefined heap contents in retail**, not zero. Doc 03
+owns what that means for its sector-grid sweep and lava flood.
+
+**The allocation-failure hook (Established).** Installed by the process entry
+before the singleton test. On a null allocation it appends
+`Out of memory!\r\nYour hard disk may be full\r\n` to `ErrorLog.txt` beside
+the module ([R-PLAT-01 §8] owns the file), shows the same text in a modal
+titled `Total Annihilation` (`MB_ICONHAND | MB_SYSTEMMODAL | MB_SETFOREGROUND`,
+flags `0x41010`), raises `SIGABRT`, and — should the signal return — calls
+`exit(3)`. Heap exhaustion therefore always terminates the process; no
+fallback path exists.
+
+### Closed — input queue capacities and overflow [R-PLAT-01 §6] (2026-08-29)
+
+Established by RWU-01-2; the record formats and the producer-side refusal are
+[07 §2]'s, restated here only for the capacities and the consumer side.
+
+| Queue | Capacity | Producer full | Consumer empty |
+|---|---|---|---|
+| Key-token ring | 30 slots (installed at window creation), one reserved → 29 pending | refused, both indices unchanged | pop returns token 0 ("no input"); peek likewise |
+| Button-record ring | 20 records of 24 bytes (installed with the cursor thread) | refused, both indices unchanged | pop copies the motion slot instead and returns 0 |
+
+Both rings are drained by the main thread's housekeeping helper once per pump
+iteration ([R-PLAT-01 §1]); the window procedure produces on the same thread
+inside `DispatchMessageA`, so there is no cross-thread producer — the cursor
+thread only reads the pointer position. Neither ring is saved. Overflow of the
+**simulation** queue families (order chains, path requests, the network
+window) is each owning document's contract and is unchanged by this closure.
 
 ## 7. Deterministic random streams
 
@@ -788,9 +1135,17 @@ helper: the seed helper has exactly two call sites in the recovered image,
 process startup and the battle-entry orchestrator. The battle-entry seed
 writes the calling thread's block — the main thread whose state every
 gameplay draw reads — so battle entry references and replaces the same
-stream state; no copy of "process CRT state" is taken, and with the normal
-startup creating no helper thread the main thread's block is the only
-battle-relevant CRT stream. The stream supplies the meteor-shower draws, the
+stream state; no copy of "process CRT state" is taken. **Correction
+(2026-08-29, RWU-01-2):** the preceding sentence and the next one previously
+said the battle-entry seed writes "the calling thread's block — the main
+thread whose state every gameplay draw reads". The calling thread is the
+**loading thread** ([R-PLAT-01 §4]): battle entry runs on a thread the loading
+state creates, so its `srand` seeds that thread's fresh block and the main
+thread's block — the one every tick-side draw reads — keeps the state it has
+carried since process startup. The two-call-site fact stands; the "same
+stream" conclusion was wrong because the earlier trace did not notice the
+thread boundary between the front-end state machine and the orchestrator.
+The stream supplies the meteor-shower draws, the
 wind-change interval jitter, and UI/media variants, and is also consumed by
 the camera-shake driver inside the tick (two draws per shake step while a
 shake is active); it is not the simulation Park–Miller stream. The wind tick
@@ -867,21 +1222,27 @@ constant, forced odd), and the CRT stream is reseeded from the time-of-day
 helper (local time with time-zone and daylight handling, one-second
 resolution). The CRT seed helper has exactly two call sites — process startup
 and battle entry — and the simulation seed setter exactly one (battle entry).
-Both writes land in the calling (main) thread's state: the CRT write replaces
-the same TLS block every gameplay draw reads; nothing is copied. Because both
-seeds are taken fresh at battle entry, **every draw made before battle entry
-is wiped from the streams' state** — pre-battle consumption cannot influence
-battle determinism (only the seed instants can).
+The simulation seed lands in the process global. **Correction (2026-08-29,
+RWU-01-2):** this paragraph previously continued "both writes land in the
+calling (main) thread's state … every draw made before battle entry is wiped
+from the streams' state — pre-battle consumption cannot influence battle
+determinism". That is true of the simulation stream only. The CRT `srand` at
+battle entry writes the **loading thread's** TLS block ([R-PLAT-01 §4],
+[08 R-ENTRY-01 §2]); the main thread's CRT state is seeded once at process
+start and every tick-side CRT draw continues it, so front-end CRT consumption
+**does** shift the battle's wind-interval, meteor and victory-timer draws.
+Only the worker-side draws (skirmish shuffle, explosion frames) start from the
+battle-entry seed.
 
 **Chronological draw census (process start through early battle ticks):**
 
 | When | Stream | Draws | Consumer |
 |---|---|---|---|
-| Process startup | CRT | 0 (seed only) | TLS stream state ← time-of-day helper |
-| Menu/front-end screens | CRT | unbounded (variant paths) | UI/media random variants; not censused exhaustively |
+| Process startup | CRT (main thread) | 0 (seed only) | main-thread TLS state ← time-of-day helper — the only seed that block ever receives |
+| Menu/front-end screens | CRT (main thread) | unbounded (variant paths) | UI/media random variants; not censused exhaustively; **these draws carry into the battle** (correction 2026-08-29, [R-PLAT-01 §4]) |
 | Briefing-screen entry | CRT | 2 | wind display: speed `% (max−min+1) + min`, then direction `& 0x3F` — front-end display globals, no battle-side reader |
-| Battle entry | both | 0 (reseeds only) | simulation ← QPC sum; CRT ← time-of-day; global tick ← 0 |
-| Battle entry, skirmish setup | CRT | count−1 (Fisher-Yates swap draws), plus one 50/50 gate draw when fewer than three qualifying players | player-slot assignment shuffle (skirmish start positions; skipped entirely when a saved game is being loaded) |
+| Battle entry (loading thread) | both | 0 (reseeds only) | simulation ← QPC sum; **loading-thread** CRT ← time-of-day; global tick ← 0 |
+| Battle entry, skirmish setup | CRT (loading thread) | count−1 (Fisher-Yates swap draws), plus one 50/50 gate draw when fewer than three qualifying players | player-slot assignment shuffle (skirmish start positions; skipped entirely when a saved game is being loaded); consumed from the worker's block, which dies with the thread |
 | Battle entry, networked setup | sim | 2 per placed commander (one per axis of the start point) | commander start placement |
 | Battle entry, campaign/mission setup | sim | For each successful common allocation: buildangle-bounded heading invocation (bound <2 returns zero without advancing), then one full-domain initialization draw; per-definition-limit/pool refusal returns before both draws (0) | common unit initializer; a successful mission allocation then has its initialized heading overwritten by the authored placement angle |
 | Battle entry, wind initialization | — | 0 | the wind-change routine is called with a zeroed deadline while the global tick is still zero; the strict gate does not fire |
@@ -890,14 +1251,17 @@ battle determinism (only the seed instants can).
 | Sub-tick with an active shake | CRT | 2 | phase 10 camera shake |
 | Sub-tick with non-empty strips | object-internal | none at the dispatcher level | phase 11 strip sweep |
 
-Front-end draws between startup and battle entry are real CRT consumption
-but carry no battle consequence because battle entry reseeds both streams;
-they matter only for reproducing front-end behavior itself (for example the
-briefing wind display).
+Front-end draws between startup and battle entry are real CRT consumption on
+the main thread's block, which battle entry does **not** reseed; they advance
+the state the tick-side CRT consumers (wind interval, meteor, victory timer)
+will read (correction 2026-08-29 — the earlier text said they "carry no
+battle consequence because battle entry reseeds both streams";
+[R-PLAT-01 §4], [R-PLAT-01 §7]).
 
 **Save/load (Established; wording corrected).** Loading re-enters the
-battle-entry orchestrator, so both streams are reseeded unconditionally
-**before** the saved state is read: the earlier wording "reseeded from
+battle-entry orchestrator, so the simulation stream and the loading thread's
+CRT block are reseeded unconditionally **before** the saved state is read
+(the main thread's CRT block is not; [R-PLAT-01 §4]): the earlier wording "reseeded from
 `QueryPerformanceCounter` and `time(NULL)`" named the mechanism imprecisely —
 the CRT source is the same time-of-day helper as at startup, not the C
 library `time()` directly, and the reseed is a consequence of load re-running
@@ -979,10 +1343,10 @@ phase-2 pump; a handler that returns before the draw consumes nothing.
 
 | When | Stream | Draws | Consumer and anchor |
 |---|---|---|---|
-| Process startup | CRT | 391,606 (lane 06's count; this census confirms one draw per generated pixel, `trunc((crt()·10)/32768)`, over three strips, and did not recount) | procedural explosion frames [06 R-WFX-01 §6]. Wiped by the battle-entry reseed. |
-| Front end | CRT | unbounded | main-menu spark shimmer (`crt() mod 640` and companions), briefing wind display (2), sound variants, CD track choice — see [R-DET-01 §5] |
-| Battle entry | both | reseed only | [R-CORE-02] |
-| Battle entry, skirmish | CRT | `count − 1` swap draws, plus one 50/50 gate when fewer than three qualifying players | slot shuffle [08 R-SKIR-01 §2] |
+| Battle entry, world rebuild (loading thread) | CRT (loading thread) | 391,606 (lane 06's count; this census confirms one draw per generated pixel, `trunc((crt()·10)/32768)`, over three strips, and did not recount) | procedural explosion frames [06 R-WFX-01 §6]. Correction 2026-08-29: this row said "Process startup … wiped by the battle-entry reseed"; the builder's only caller is the orchestrator on the loading thread, whose block is discarded with the thread ([R-PLAT-01 §4]) |
+| Front end | CRT (main thread) | unbounded | main-menu spark shimmer (`crt() mod 640` and companions), briefing wind display (2), sound variants, CD track choice — see [R-DET-01 §5]. **Not wiped**: the main-thread block is never reseeded ([R-PLAT-01 §4]) |
+| Battle entry | sim; loading-thread CRT | reseed only | [R-CORE-02] |
+| Battle entry, skirmish | CRT (loading thread) | `count − 1` swap draws, plus one 50/50 gate when fewer than three qualifying players | slot shuffle [08 R-SKIR-01 §2] |
 | Battle entry, networked | sim | 2 per placed commander: `sim(mapWidth − 160)`, `sim(mapDepth − 160)` (world units; the result is offset by 80) | commander placement [R-CORE-02] |
 | Every unit allocation (mission spawn, factory completion, builder completion, AI, respawn) | sim | `sim(buildangle)` then `sim(65536)` — the first is skipped without advancing when `buildangle < 2` | common unit initializer [04 §2] |
 | AI player setup | sim | eight, in order: `sim(10)`, `sim(3)`, then two draws bounded by the two region widths just formed from those results, then `sim(20)`, `sim(3)`, then two draws bounded by the second pair of widths | strategic-state constructor [08 R-AI-01] |
@@ -1051,11 +1415,41 @@ functions; the ones not already placed in the tick table above are:
 
 **Established — the statement of what is sim-visible.** The CRT stream is
 per-thread state seeded from wall-clock time; nothing in the save box
-restores it ([R-CORE-02]). Its only authoritative consumers are the three
+restores it ([R-CORE-02]), and the block the tick reads is the main thread's,
+seeded at process start and advanced by every front-end draw since
+([R-PLAT-01 §4], [R-PLAT-01 §7]). Its only authoritative consumers are the three
 named in §7.5. Everything else it feeds is presentation, front end, audio,
 or a message-string choice. Nanolathe therefore needs a CRT-compatible
 stream only for those three consumers' *positions in the tick*, not for the
 front end.
+
+### Closed — which thread's CRT block each consumer reads [R-PLAT-01 §7] (2026-08-29)
+
+Established by RWU-01-2 by walking each of the 29 CRT-draw callers of §7.6
+up to its thread root.
+
+| Thread | Consumers | Seed history of the block they read |
+|---|---|---|
+| Main thread (pump → mode frame function → battle host pump → tick, host frame, composer) | camera shake, feature fire effects, meteor scheduler, victory-timer arm, wind interval, the eleven strip families, the sound-variant picker, the elimination-line pickers (skirmish `mod 3`, multiplayer `& 7`), fire-effect spawn, lightning renderer, minimap preparation, the spark shimmer, briefing wind display, CD track choice | seeded **once** at process startup from the time-of-day helper; never reseeded; advanced by every front-end and battle draw in program order |
+| Loading thread (battle-entry orchestrator) | the skirmish slot shuffle and its gate draw; the explosion-frame builder (391,606) | fresh block (`rand` state 1 at thread start) seeded by the orchestrator's `srand` from the time-of-day helper; discarded with the thread |
+| Cursor thread, helper thread | none | — |
+
+**Consequence for Nanolathe.** A CRT-compatible stream for the three
+authoritative consumers of §7.5 must be seeded once at process start and
+advanced by every main-thread front-end draw to match retail bit-for-bit;
+since that history is wall-clock-seeded and unbounded, exact retail parity of
+wind timing, meteor strikes and the victory-timer instant is unattainable in
+any case, and the useful contract is the *position* of each draw in the tick,
+as §7.6 already concluded. The worker-side draws need a separate stream
+seeded at battle entry.
+
+**Item (b) verified — the elimination announcement.** The skirmish
+elimination line is chosen by `crt() mod 3` inside a helper reached from the
+unit-death handler (phase 2, slot-end death handling) when the victim's owner
+has no live units left; the helper formats `"%s %s"` from the translated line
+and posts a class-4 status message with the player's colour byte. It is a
+main-thread CRT draw inside the tick, as [R-DET-01 §4] and [08 R-CAMP-01 §9]
+state; nothing to correct.
 
 ### 7.7 Closed — lane draw claims re-checked against the census [R-DET-01 §6] (2026-08-29)
 
@@ -1094,9 +1488,11 @@ Contradicted — reported to the owning lanes, not edited here:
 
 The executable uses x87 arithmetic; no SSE simulation path is established.
 The default control word is the Microsoft/CRT 53-bit precision, round-to-nearest,
-masked-exception environment. Optional `-fpufussy`/`-fpunofussy` diagnostics can
-change whether the setup helper runs, but normal startup does not intentionally
-change the default control word.
+masked-exception environment. The FPU setup helper always runs at startup;
+with `-fpufussy` absent it re-masks the invalid and zero-divide exceptions
+(no change from the runtime default), with it present it unmasks them
+(**correction**, 2026-08-29: the earlier sentence said the switches "change
+whether the setup helper runs"; they change its argument — [R-PLAT-01 §2]).
 
 Authoritative code mixes integer/fixed-point, 32-bit float, and 64-bit double:
 
@@ -1282,6 +1678,97 @@ failure, movie setup/open/pixel-format failure, and archive/resource failure.
 The exact distinction between recoverable fallback and fatal termination is
 subsystem-specific.
 
+### Closed — the exception filter, `ErrorLog.txt`, and out-of-memory [R-PLAT-01 §8] (2026-08-29)
+
+Established by RWU-01-2 from the diagnostic initializer, the filter body, the
+symbol helper and the allocation-failure hook. **Correction:** the tail
+previously listed "exception-filter reporting and the minidump/debug-helper
+protocol, which engage only behind the enable switches" as unknown-and-
+optional. The filter is installed on the normal path (the initializer's
+argument 8 leaves the filter bit clear) and the symbolised stack walk is
+**enabled by default** (`-disableimagehlp` turns it off); only
+`DebugHelper.dll` is switch-gated. No minidump is written — `MiniDumpWriteDump`
+is not imported.
+
+**The filter (Established).** `SetUnhandledExceptionFilter` installs a
+trampoline to the report writer. The writer:
+
+1. takes a re-entry guard (a second fault inside the writer returns at once);
+2. runs the stack walker: when the imagehlp option is on it lazily loads
+   `IMAGEHLP.DLL` and resolves `SymSetOptions`, `SymInitialize`,
+   `SymCleanup`, `StackWalk`, `SymFunctionTableAccess`, `SymGetModuleBase`,
+   `SymGetSymFromAddr`, `SymGetLineFromAddr` and `UnDecorateSymbolName`; the
+   symbol search path is the executable's directory plus the `windir`
+   environment value; a missing DLL or export degrades to an unsymbolised
+   frame list;
+3. opens `ErrorLog.txt` in the module's directory (`CreateFileA`,
+   `GENERIC_WRITE`, `OPEN_ALWAYS`, then seek to end — the file accumulates
+   across crashes);
+4. maps the exception code through a 24-entry name table (the standard NT
+   status names; anything else is `Unknown exception type`) and writes the
+   header lines immediately — `%s caused an %s in\n` and
+   `module %s at %04x:%08lx.\n` — so a fault during the rest of the report
+   still leaves the module and address on disk;
+5. formats into a buffer: `Exception handler called in %s. ` (the application
+   name), the symbolised faulting line when available, the access-violation
+   extras when the code is `0xC0000005` with two parameters (read/write
+   attempt and the address, plus a read-only-page probe), the eight general
+   registers as `Registers:` and four lines, `Bytes at CS:EIP:` followed by
+   sixteen `%02x` bytes, the walker's frame text, the debug registers
+   `Dr0`–`Dr7`, `ContextFlags`, and the x87 control/status/tag words;
+6. normalises line endings to CR-LF, writes the whole buffer, closes the file,
+   calls `SymCleanup`, and **returns `EXCEPTION_CONTINUE_SEARCH` (0)** — the
+   process then dies through the operating system's default handler; the
+   filter never resumes, never shows its own dialog, and never restores the
+   display mode.
+
+**Out of memory (Established).** The allocation-failure hook of
+[R-PLAT-01 §5]: `Out of memory!\r\nYour hard disk may be full\r\n` appended to
+the same `ErrorLog.txt`, a system-modal message box titled
+`Total Annihilation`, `SIGABRT`, then `exit(3)`.
+
+**Other writers of `ErrorLog.txt`.** An assertion writer (message plus a
+blank line, then a breakpoint) exists but has **no caller** in the recovered
+image. The generic fatal modal (message box then exit code 1 — [08 R-ENTRY-01
+§1]) does not write the file.
+
+### Closed — the developer console: `DebugBreak`, `debugdat` scripts, and the `~` key [R-PLAT-01 §9] (2026-08-29)
+
+Established by RWU-01-2; the console vocabulary itself is [07 R-CAM-01 §6]
+and the developer bit's writers are [07 R-CAM-01 §9] (the registry `Games`
+value at settings load, and the five-word `Now` phrase).
+
+**`DebugBreak [1|2|3]`** — requires the developer bit **and** film mode:
+
+- `1`: allocate 32 MiB (`0x2000000` bytes) through the plain wrapper in an
+  endless loop; `2`: the same through the labelled wrapper with the tag
+  `FORCE OUT OF MEMORY` — both end in the allocation-failure hook of
+  [R-PLAT-01 §5] (log line, modal, abort);
+- `3`: a **deliberate integer divide by zero** (the constant 1 divided by
+  `1 >> 1`), which raises the integer-divide exception and exercises the
+  filter of [R-PLAT-01 §8]; the `exit` call that follows it in the code is
+  unreachable;
+- any other argument (or none): when the display is full-screen, restore the
+  desktop mode and sleep 500 ms, then `DebugBreak()`.
+
+**Script fallback of the `+` command (Established).** When a `+<word>`
+command matches no built-in and no unit-definition wildcard (the default
+handler's spawn path, [07 R-CAM-01 §6]), the handler opens
+`debugdat\<word>.txt` through the VFS (binary read), loads it whole (an
+allocation tagged with the file's base name), and runs the text through the
+line runner: each line up to `\n` — **including a final unterminated line**
+— is tokenised and dispatched through the same `+` dispatcher with every
+handler mask enabled, so a script can invoke handlers the console masks out;
+the developer's spawn pointer words are saved before and restored after the
+run. Whether the tokeniser strips a trailing `\r` from CR-LF files is
+**Unknown** (decider: read of the line tokeniser). No `debugdat` directory
+ships with the retail install, so the path is inert in stock configurations.
+
+**The `~` key.** With the developer bit set, the housekeeping helper pops the
+`0x7E` token before the dispatcher sees it and restores the desktop display
+mode ([R-PLAT-01 §1]); without the bit the token reaches the battle dispatcher
+as one of the "label every unit" toggles ([07 R-CAM-01 §2]).
+
 ## 10. Established facts, supported inference, and unresolved boundaries
 
 ### Established facts
@@ -1299,9 +1786,21 @@ subsystem-specific.
   remainder (no burst). Movie capture and the screenshot hotkey reset the
   scaled-time anchor.
 - The phase order and global-tick increment position listed above.
-- Main-thread simulation; conditional diagnostic helper thread exists but normal
-  startup disables it; TLS CRT state seeded at process startup and Park–Miller
-  state seeded at battle entry.
+- Main-thread simulation; a loading thread runs battle entry and a cursor
+  thread always exists, both presentation/setup-only; the conditional
+  diagnostic helper thread is disabled by normal startup. The main thread's
+  CRT block is seeded once at process startup and never reseeded; battle
+  entry seeds the Park–Miller global and the loading thread's own CRT block
+  ([R-PLAT-01 §4], §7).
+- The pause packet is `{0x19, 0, newPauseBit}` sent after the local flip, the
+  speed packet `{0x19, 1, speed}` from the 1..20 clamp; both are no-ops in
+  single player ([R-PLAT-01 §3]).
+- The allocator drops its label and never zero-fills by default; heap
+  exhaustion logs to `ErrorLog.txt`, shows a system-modal box, and terminates
+  ([R-PLAT-01 §5], §8). The crash filter writes `ErrorLog.txt` on the normal
+  path and returns continue-search ([R-PLAT-01 §8]).
+- Input rings: 30 key slots (29 usable), 20 button records; producer refusal
+  when full, "nothing" on empty ([R-PLAT-01 §6]).
 - Fixed unit/projectile/feature/COB/construction pools and documented queue
   capacities/order where the ledger is explicit.
 - One global Park–Miller stream, one CRT TLS stream, x87 53-bit default, and
@@ -1382,6 +1881,24 @@ subsystem-specific.
   established, as is the WndProc dispatch list above.
 - Earlier revisions stated normal startup creates a watchdog thread; the thread
   implementation is conditional and disabled in the normal path.
+- [R-CORE-02] and [R-DET-01 §4] said battle entry reseeds "the main thread's"
+  CRT block and that pre-battle CRT draws are wiped. Battle entry runs on the
+  loading thread, so its `srand` seeds that thread's block; the main thread's
+  block — the one every tick-side draw reads — is seeded once at process start
+  and carries every front-end draw into the battle ([R-PLAT-01 §4], §7;
+  [08 R-ENTRY-01 §2]).
+- §2.3 called the pump's busy-path gate a "display-mode flag"; it is the
+  `WM_ACTIVATE` activation word ([R-PLAT-01 §1]).
+- §3.1 said no INI read exists on the startup path; the `UnitLimit`,
+  `NoDirectSound` and `UseWindowsSound` reads are on it ([R-PLAT-01 §2]).
+- §6 said allocation helpers zero or initialise blocks and the tail called the
+  allocator a tagged `HeapAlloc` wrapper; the label is dropped and nothing is
+  filled by default ([R-PLAT-01 §5]).
+- §8 said `-fpufussy` changes whether the FPU setup runs; it changes the mask
+  argument ([R-PLAT-01 §2]).
+- The tail said the crash filter engages only behind enable switches; it is
+  installed on the normal path with symbolised walking on by default
+  ([R-PLAT-01 §8]).
 - Earlier revisions listed scheduler persistence as unknown; the 28-byte
   `Players/GameTime` block is now established as saved, while RNG persistence
   remains absent and replay coverage remains separate (the post-loop deadline
@@ -1419,9 +1936,19 @@ document.
 - Meaning of the window style and ex-style bits outside the established
   `0x90080000` / `0x00040000` / `CS_DBLCLKS` values and the client-area
   adjustment · §2.2 · static trace.
-- Shutdown ordering after an exceptional failure, and whether the singleton
-  semaphore is released on that path; the second-instance path is established
-  (returns `-1`, no handoff, no activation) · §2.3 · static trace.
+- Shutdown ordering after an exceptional failure: the crash filter returns
+  continue-search without releasing anything ([R-PLAT-01 §8]), so the
+  singleton semaphore, display mode and audio device are left to the operating
+  system's process teardown; whether the semaphore's kernel object outlives a
+  crashed process long enough to block an immediate relaunch is an OS
+  question, not an executable one · §2.3 · manual test on the reference
+  install.
+- The cursor thread's redraw internals (what the 33 ms redraw blits, and the
+  three save-under surfaces' roles) — presentation only · §5.1 [R-PLAT-01 §4],
+  doc 07 · static trace.
+- The purpose of the ten `-B` words that the parser compares and never acts on
+  (`deathends` … `watching`) — dead options in retail; recorded once, no
+  implementation impact · §3.1 [R-PLAT-01 §2] · none needed.
 - TLS destructor and `DeleteCriticalSection` callsites: the thread and lock
   census is bounded by the recovered function window, and these sites fall
   outside it · §5.1, §5.2 · static trace over the unrecovered regions.
@@ -1432,9 +1959,6 @@ document.
 
 ### Clock, network, and determinism
 
-- Send-side byte layout of the pause packet (the receive side and the speed
-  send are established) · §4.3 · static trace. Marked `TODO(question)` at the
-  site.
 - Record owner of the 30-entry post-loop deadline ring; the receive-frame-
   window reading is a supported inference · §4.4 · static trace. Marked
   `TODO(question)` at the site.
@@ -1473,18 +1997,20 @@ document.
 
 ### Memory and queues
 
-- Arena boundaries beyond the fixed-pool initializers; the allocator itself is
-  established as `HeapCreate`/`HeapAlloc` wrappers with tagged blocks · §6.1 ·
-  static trace.
+- The runtime's small-block threshold value (the size at or below which the
+  C-runtime `malloc` serves from its small-block heap rather than
+  `HeapAlloc`); it changes nothing observable because neither path fills
+  · §6 [R-PLAT-01 §5] · read of the runtime's one-time threshold writer.
 - Failure side effects of the specialized projectile allocators other than the
   meteor spawner, whose placement and silent-drop behavior are established
   · §6.3 · static trace.
 - Per-strip ownership registration for effect strips outside the nanolathe,
   beam, and smoke families, and the mission-object, path-debt, and audio-node
   layouts · §6.1, doc 03 · static trace.
-- Queue overflow and linked-list cycle defense, and whether same-tick inserts
-  are drained immediately or deferred, per queue family · §6.2, §6.3 · static
-  trace.
+- Overflow and linked-list cycle defence of the **simulation** queue families
+  (order chains, path requests, the network window), and whether same-tick
+  inserts are drained immediately or deferred, per family; the two input rings
+  are closed ([R-PLAT-01 §6]) · §6.2, §6.3, docs 04 and 08 · static trace.
 - Remaining save box-level field maps; order/task nodes, feature records,
   stockpile state, meteor globals, and player economy stock are already
   established as serialized · §7.3 "Scheduler persistence", doc 08 · static
@@ -1492,9 +2018,6 @@ document.
 
 ### Configuration and I/O
 
-- How the two scalar command-line slots interact with their registry twins;
-  the precedence order (defaults, then registry, then command line) is
-  established · §3.1 · static trace. Marked `TODO(question)` at the site.
 - Same-archive duplicate-name resolution beyond what document 02 establishes,
   and archive enumeration order within one wildcard group (host
   `FindFirstFileA` order, not sorted) · §3.2, doc 02 · asset census against the
@@ -1507,10 +2030,15 @@ document.
 - Which remaining failures select a fallback and which terminate the process;
   the established set is singleton failure (silent `-1`), display-init failure
   ("Environment Initialization Failed!" then cleanup), graded file-mapping
-  codes 1/2/3, heap null-or-quit, and silent input-queue drop · §9 · static
-  trace.
-- Exception-filter reporting and the minidump/debug-helper protocol, which
-  engage only behind the enable switches · §9 · static trace.
+  codes 1/2/3, heap exhaustion (log, modal, abort — [R-PLAT-01 §5]), the
+  `-R` registration path (exit code 1 on both outcomes — [R-PLAT-01 §2]),
+  loading-thread creation failure (modal, exit code 1), and silent
+  input-queue drop · §9 · static trace.
+- The `DebugHelper.dll` protocol beyond `DebugFunc1(n)` (no such library ships;
+  its interface is defined by a file that does not exist in retail) · §9
+  [R-PLAT-01 §2] · none possible from the executable.
+- Whether the `+`-script line tokeniser strips a trailing `\r`
+  · §9 [R-PLAT-01 §9] · static read of the tokeniser.
 - How the integrity-breach UI maps to disconnect state, and the parse of the
   front-end `.zrb` list files, which lies in unrecovered code · §9 · static
   trace over the unrecovered regions.

@@ -18,14 +18,16 @@ rendering glyphs (they produce correct letterforms).
 
 ```
 +------------------------------+ 0x00
-| u16 height   (pixel rows)    |
-| u16 unknown  (= 1)           |
+| u8  height   (pixel rows)    |
+| u8  unused   (= 0)           |
+| i8  y_offset (1..3 in retail)|  glyph rows start at penY - y_offset
+| u8  first_code (= 0)         |  offset table is indexed by code - first_code
 +------------------------------+ 0x04
-| u16 glyph_offset[256]        |  file offset per character code; 0 = none
-+------------------------------+ 0x204
+| u16 glyph_offset[256 - first]|  file offset per character code; 0 = none
++------------------------------+ 0x204 (when first_code = 0)
 | glyph records:               |
-|   u8 width                   |
-|   ceil(width*height/8) bytes |  1bpp bitmap, row-major, MSB first
+|   u8 advance                 |
+|   ceil(advance*height/8) B   |  1bpp bitmap, row-major, MSB first
 +------------------------------+
 ```
 
@@ -35,21 +37,32 @@ rendering glyphs (they produce correct letterforms).
 
 | Offset | Size | Type | Description |
 | ---: | ---: | --- | --- |
-| 0x00 | 2 | u16 | glyph height in pixels (all glyphs share it) |
-| 0x02 | 2 | u16 | small value 1–3 across the 24 retail fonts, loosely correlating with font size (height ≤ 12 → mostly 1; height 13–17 → 2 or 3). It is **not** bits-per-pixel — glyph record sizes prove all fonts are 1bpp. Possibly descender rows or line spacing; unconfirmed. |
-| 0x04 | 512 | u16[256] | absolute file offset of each character's glyph record, indexed by byte value; `0` = character not present |
+| 0x00 | 1 | u8 | glyph height in pixels (all glyphs share it) |
+| 0x01 | 1 | u8 | never read by the retail executable; 0 in every retail font |
+| 0x02 | 1 | i8 | **vertical offset**: the executable places the glyph's first row at `penY − y_offset` (it reads the byte as signed). 1–3 across the retail fonts (height ≤ 12 → mostly 1; height 13–17 → 2 or 3) |
+| 0x03 | 1 | u8 | **first character code**: the offset table is indexed by `code − first_code`; 0 in every retail font |
+| 0x04 | 2 × (256 − first_code) | u16[] | absolute file offset of each character's glyph record, indexed by `code − first_code`; `0` = character not present. The executable applies no upper bound to the index, so a font must carry an entry for every code from `first_code` to 255 |
+
+**Correction (2026-08-29, RWU-03-5).** The header was previously described
+as `u16 height` at 0x00 and `u16 unknown (= 1)` at 0x02 with an unconfirmed
+purpose. That reading was wrong because the executable reads four *single*
+bytes: the height is byte 0 alone, byte 1 is never read, byte 2 is the
+signed vertical offset the rasterizer subtracts from the pen Y, and byte 3
+is the first character code that biases the offset table. The old u16 values
+happened to match because bytes 1 and 3 are zero in every retail font. See
+[03 §7.1] (`R-FONT-01 §1`, `§4`) for the rasterizer contract.
 
 Since offsets are u16, an FNT file cannot exceed 64 KiB. Retail fonts are a
-few KiB (`SMLFONT.FNT` is 2704 bytes, height 11, 222 glyphs present
-covering 0x20 through the Windows-1252 high range; most retail fonts carry
-only the 94 printable ASCII glyphs).
+few KiB (`SMLFONT.FNT` is 2713 bytes in the installed `totala1.hpi`, height
+11, offset 1, 223 glyphs present covering 0x20 through the Windows-1252 high
+range; most retail fonts carry only the 94 printable ASCII glyphs).
 
 ### Glyph record
 
 | Offset | Size | Description |
 | ---: | ---: | --- |
-| +0 | 1 | u8 glyph width in pixels (advance width; includes spacing) |
-| +1 | ceil(width × height / 8) | bitmap: `width × height` bits, row-major top-to-bottom, left-to-right, most-significant bit first, packed continuously across rows (rows are **not** byte-aligned) |
+| +0 | 1 | u8 glyph advance in pixels — the pen moves by exactly this amount and the bitmap is exactly this wide; there is no separate bearing or spacing |
+| +1 | ceil(advance × height / 8) | bitmap: `advance × height` bits, row-major top-to-bottom, left-to-right, most-significant bit first, packed continuously across rows (rows are **not** byte-aligned) |
 
 Real example — from `fonts/SMLFONT.FNT` (`totala1.hpi`), header
 `0B 00 01 00` (height 11), the offset table entry for `A` (code 65) is
@@ -72,17 +85,19 @@ decode to:
 
 The space glyph (code 32, offset 524) is width 7 with an all-zero bitmap —
 spacing is encoded as ordinary blank glyphs; there is no separate metrics
-table, kerning, or baseline data.
+table, kerning, or baseline data beyond the header's vertical offset.
 
 ## Unknowns and caveats
 
-- Header u16 at 0x02 (1–3) has unknown purpose; see the header table.
-- Rendering details (inter-character spacing beyond the glyph width, line
-  spacing, color selection, drop shadows seen in-game) are GUI-engine
-  behavior, not stored in the font.
+- Byte 0x01 is never read; its authored meaning, if any, is unknown (it is
+  0 in every retail font). Decider: a font-authoring tool of the period.
+- Rendering (no inter-character spacing beyond the advance, no line
+  spacing in the FNT path, colour selection, the caller-drawn shadows seen
+  in-game) is engine behaviour, specified in [03 §7.1] (`R-FONT-01`), not
+  stored in the font.
 - Interpretation of codes ≥ 0x80 follows Windows-1252 in retail data
   (matching the localized strings in TDF files), but the font itself just
-  maps byte values.
+  maps byte values and the engine applies no code page.
 
 ## Sources
 

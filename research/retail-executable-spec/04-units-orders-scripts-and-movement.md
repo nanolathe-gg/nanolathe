@@ -8146,18 +8146,16 @@ increments the killer's credited-kill counter.
 renderer to reproduce the callback contract; wake effects and medium bands in
 shipped content are script-authored behavior gated on the bands above.
 
-**Reconciliation with document 03 (2026-08-26):** document 03 section 5.7
-describes engine-side "wake rectangles" produced from mover bounds and filled
-with a palette tint under a fog gate. The two claims are reconciled as
-complementary presentation layers, not competitors: the script-emitted
-`emit-sfx` wake effects (types 2 through 5, spawned by shipped hover scripts
-via the band classifier) are the authoritative medium-band behavior this
-document owns, while the mover-bound rectangles of document 03 are a
-presentation-side artifact keyed on mover bounds and bands with no
-authoritative simulation role. Neither document asserts the other's mechanism
-in its own section; this paragraph records the agreed split (ships/sea
-rectangles live in document 03, hover wake effects live here). Document 03
-section 11's open "wake rectangle interpolation" item remains open there.
+**Reconciliation with document 03 (2026-08-26; withdrawn 2026-08-29):**
+this paragraph previously reconciled the script-emitted `emit-sfx` wake
+effects with "engine-side wake rectangles produced from mover bounds" that
+document 03 §5.7 described. [03 R-WATER-01 §1] has since established that
+no such rectangle exists — the pass in question draws the selected unit's
+footprint quad and reads neither mover bounds nor sea level. The
+script-emitted `emit-sfx` wake effects (types 2 through 5, spawned by the
+shipped hover scripts via the band classifier) are therefore the **only** wake
+mechanism, and this document owns it in full; document 03 owns their
+drawing and survival ([03 R-FX-01 §3], [03 R-WATER-01 §1]).
 
 **Unknown:** Complete wake and SFX-piece mapping for every band transition
 (the script-emitted wake effects are established as spawner-driven in
