@@ -6763,8 +6763,8 @@ keys. The correction is quoted in full there.
 
 **Superseded (2026-08-29) by [R-AUD-01 §1]** — the paragraph below is
 retained for the audit trail; DS3D buffers *are* used (positions, min/max
-distance) whenever Sound Mode is `3D`, and the `0x82` descriptor belongs to a
-dead streaming path.
+distance) whenever Sound Mode is `3D`, and the `0x82` descriptor belongs to
+the streaming path (called dead there; live per [R-AUD-02 §1]).
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
@@ -7181,7 +7181,7 @@ and the mode is chosen by the *caller*, never by an authored field:
 |---|---|---|
 | 0 | alias registration (§8.3 "Alias registration"), i.e. every `sound.tdf`/`allsound` alias and every weapon/feature sound | decodes and creates one **static** secondary buffer; returns a 16-byte sample record `{buffer, 0, 0, 0}` (tagged `Digital Audio Sample`) whose four slots hold up to four instances of the same buffer |
 | 1 | the unit voice-cue resolver (§8.3 step 3) and the sound-options `TEST` button | decodes into a fresh static buffer and plays it **immediately** through the mixer, holding it in one of **8 transient slots** until it finishes; if all 8 transient slots are occupied the cue is dropped (returns 0). The loader runs the reaper first (below), so a slot whose buffer has stopped is freed before the test |
-| 2 | nobody — the two wrappers that request it have no callers | a streaming buffer (flags static + volume, size `rate · channels · bytesPerSample · 2`, half-buffer refill with silence fill) — **dead code** |
+| 2 | nobody — the two wrappers that request it have no callers | a streaming buffer (flags static + volume, size `rate · channels · bytesPerSample · 2`, half-buffer refill with silence fill) — **dead code** — *corrected 2026-08-29 by [R-AUD-02 §1]: live; it is the mission narration and glamour-sound path, entered through a timer callback* |
 
 So every alias-registered sound is a preloaded static buffer, while every
 **unit voice line is re-read from the VFS and decoded on each play** (mode 1,
@@ -7255,7 +7255,8 @@ non-CD sound goes through one routine. In order:
 transient samples and the 32 voice slots, freeing/clearing every entry whose
 buffer reports *not playing* (or whose status query fails). There is no
 per-tick reaper; voice slots are otherwise reclaimed only by the steal of
-step 2. **Stop-all** (`MODE` set to `Off`, movie start, battle exit) stops
+step 2 (*corrected 2026-08-29 by [R-AUD-02 §2]: the application pump reaps
+every ≥99 ms of wall clock*). **Stop-all** (`MODE` set to `Off`, movie start, battle exit) stops
 every voice slot's buffer and clears the table.
 
 **Established fact — what each producer passes.** Volumes are DirectSound
@@ -7631,6 +7632,146 @@ cooldowns (§8.3), the 8-entry voice queue, the mixer's `MixingBuffers`
 voice limit (steal oldest), the four-instances-per-sample cap (steal
 furthest-along), the 8 transient slots for voice lines (drop), and the
 single exclusive loop. Nothing counts cues per tick.
+
+### Closed — the streamed narration path: mode 2 is live, its delay timer, half-buffer refill, and stop [R-AUD-02 §1] (2026-08-29)
+
+Everything here is presentation-only and runs on the application pump; no
+simulation phase reads any of it [03 §1].
+
+**Correction (Established).** [R-AUD-01 §1] said of the WAV loader's mode 2
+"nobody — the two wrappers that request it have no callers … a streaming
+buffer … **dead code**", and §8.1's superseding note said "the `0x82`
+descriptor belongs to a dead streaming path". That was a call-graph census,
+and the path is entered through a **timer callback** — a code pointer, not a
+call — which the census does not see. Mode 2 is the path every mission
+narration and end-of-mission glamour sound takes. The one wrapper that
+takes a caller-supplied volume without the timer has no reference of any
+kind in the image and stays dead (bounded negative over call edges, data
+references and code-pointer dwords).
+
+**Established fact — who streams.** Exactly two sounds are streamed, both
+through one gate that returns without playing when the no-DirectSound flag
+is set (so under `NoDirectSound` or `UseWindowsSound` there is **no**
+narration and no glamour sound — the `PlaySound` backend of [R-AUD-01 §1]
+is never offered them):
+
+| Producer | Path | When |
+|---|---|---|
+| briefing screen open, and the briefing text loader (`MSNBRIEF.GUI`, [08 R-CAMP-01 §2]) | mission resource slot 3 (`narration`) | unless the session is in the live-battle state |
+| results sequence state 6 ([08 R-CAMP-01 §6]) | mission resource slot 8 (`glamoursound`) | once per results pass (a latch) |
+
+Both pass **delay 60** and **volume 0**. The delay is in the scaled
+presentation-tick units of the timer table (`GetTickCount × rate / 1000`,
+[07 R-CAM-01 §1]) — two seconds at the default rate — and the volume is the
+DirectSound attenuation (`0` = full scale), *not* the −585 of ordinary cues.
+[08 R-CAMP-01 §2] reads the 60 as "started at volume 60"; the 60 is the
+delay and the volume is full — a cross-document correction for doc 08.
+
+**Established fact — start.** `StartStream(path, volume, delay)` copies the
+path into a single global path buffer, stores the volume in a global, arms a
+timer-table slot with period `delay` whose callback is the stream opener,
+and records the slot on the device (the device field the constructor
+initialises to −1, [R-AUD-01 §1]). It does **not** cancel a timer already
+armed: a second start inside the delay overwrites the recorded slot and the
+path buffer, the first timer fires at its own deadline, its callback
+cancels the *recorded* (second) slot, and opens the stream with the
+buffer's *current* (second) path. Net effect: one stream, the later path,
+the earlier deadline. When the timer fires the callback cancels the slot
+(timer slots otherwise repeat) and runs the WAV loader of §8.2 in mode 2
+with the global path and volume; the container rules (DIGI, RIFF, raw) are
+exactly §8.2's, so a streamed file may be any of the three kinds.
+
+**Established fact — the stream buffer.** The opener first cancels any
+pending timer and tears down an existing stream (stop, release, close its
+file). With `bps = trunc(bits / 8)` (signed truncating division) it creates
+one DirectSound secondary buffer `{size 0x14, flags = STATIC | CTRLVOLUME
+(0x82), bytes = channels · rate · bps · 2, format PCM(channels, rate, bits,
+blockAlign = channels · bps, avgBytes = rate · channels · bps, cbSize 18)}`
+— two halves of one second each. It stores the bit depth, the fill offset
+(0), an end marker (−1), and the open file handle (positioned at the
+payload start by the loader); fills the first half (below); `SetVolume
+(volume)`; `Play(0, 0, LOOPING)`. Any failing call tears the stream down
+and yields silence; nothing is retried. The buffer loops, but the poll
+(below) stops it before the loop matters.
+
+**Established fact — refill.** `Refill()` locks `half` bytes at the fill
+offset (a failing lock tears down). While the end marker is −1:
+`n = min(half, fileSize − filePos)` bytes are read from the file; if
+`n < half` the end marker is set to `fillOffset + n` and the rest of the
+half is filled with silence — `0x80` bytes for 8-bit, `0` for 16-bit, and
+**unfilled** (stale bytes) for any other bit depth. Once the end marker is
+set every later refill fills its whole half with silence. Unlock; the fill
+offset toggles between 0 and `half`.
+
+**Established fact — poll and stop.** The application pump's media
+keepalive ([01 R-PLAT-01 §1]; the reaper of [R-AUD-02 §2]) polls the stream
+when one exists, at most once per 99 ms of wall clock. The poll reads the
+DirectSound **write** cursor `w` (not the play cursor) and, with `next` the
+fill offset:
+
+* end marker −1: `next == 0` → refill when `half ≤ w`; `next == half` →
+  refill when `w < half` — i.e. a half is rewritten once the write cursor
+  has moved into the other half;
+* end marker `e ≥ 0`: `next == 0` → **stop** unless (`half ≤ e` or
+  `w < half`); `next == half` → **stop** unless (`e < half` or `half ≤ w`);
+  otherwise apply the refill test above. So the stream stops once the write
+  cursor has left the half that holds the end of the audio — the silent
+  tail already queued behind it is at most one half-buffer (one second) and
+  never a wrap onto the loop.
+
+`StopStream` (the `Start`/`PrevMenu` buttons, `SHUTUP` at stage 0, a key or
+click on the glamour screen, and the results-sequence exit) cancels a
+pending timer, stops and releases the buffer, and closes the file; a stop
+with nothing pending is a no-op. `SHUTUP` is a toggle: its stage after the
+click is tested — `0` stops, any other stage starts the narration again
+(with the same 60-unit delay), which refines [08 R-CAMP-01 §2]'s "`SHUTUP`
+stops it".
+
+**Edges (Established).** A missing or undecodable narration file: the
+loader returns without creating a buffer, the timer has already been
+cancelled, and nothing plays — no diagnostic. A stream started while the
+transient/voice slots are busy is unaffected: it uses none of the 32 voice
+slots or 8 transient slots and is never stolen ([R-AUD-01 §1]). Nothing
+sets the stream buffer's own volume after the start (bounded negative: the
+only `SetVolume` on it is the opener's).
+
+**Draws and timing.** No random draws. The 60-unit delay and the ≥99 ms
+poll are wall-clock; nothing here is visible to the simulation or the
+save file.
+
+### Closed — the reaper runs from the pump; and what the audio-init cluster also swept in [R-AUD-02 §2] (2026-08-29)
+
+**Correction (Established).** [R-AUD-01 §1] said "There is no per-tick
+reaper; voice slots are otherwise reclaimed only by the steal of step 2."
+The reaper (walk the 8 transient samples and the 32 voice slots, freeing or
+clearing every entry whose buffer reports *not playing* or whose status
+query fails, then poll the stream) is also called by the application pump
+on every busy iteration in which at least 99 ms of wall clock have passed
+since the previous call — the "media keepalive" walk that [01 R-PLAT-01 §1]
+records with its slot counts (eight, then thirty-two) and its ≥99 ms gate,
+whose "keepalive virtual" is `IDirectSoundBuffer::GetStatus`. So a voice
+slot is reclaimed within ~100 ms of its buffer finishing, and the mixer's
+steal ([R-AUD-01 §1] step 2) only ever evicts voices that are still
+playing. The consequence for Nanolathe: the *active voice* count that the
+`MixingBuffers` limit compares against is the count of buffers still
+playing (to within 100 ms), not the count of voices ever started. The
+reaper still also runs before every transient (mode 1) load, as stated.
+
+**Ledger note (Established, bounded to the cluster).** The "audio subsystem
+init" cluster was grown from the audio start routine by call-graph breadth
+and swept in the session-init neighbours that share its caller: the
+`sidedata.tdf` loader and its anchor-rectangle reader ([02 §6 "SIDE and
+battle interface data"]), the `PALETTE.PAL` install and the derived-table
+load-or-build routines ([03 §4.3]), the front-end context's path prefixes,
+common GUI GAF and font install ([07 "Frontend asset failure boundaries"]),
+the order-descriptor registrar and its sort ([04 §2.4]), the AI profile
+directives ([08 R-AI-01 §12]), the developer `AI` chat command
+([07 R-CAM-01 §6]), the network record and packet-handler stubs
+([08 R-OOS-01 §1]), and the window-close callback with its rejection
+messages ([07 R-FE-02 §1]). None of them touches audio state; each is cited
+to its owner in the ledger. Two audio facts they settled: the constant
+helper that makes `UseWindowsSound` force the no-DirectSound flag simply
+returns 1 ([R-AUD-01 §1]); and the reaper cadence above.
 
 ## 9. Smacker cinematics and movie capture
 

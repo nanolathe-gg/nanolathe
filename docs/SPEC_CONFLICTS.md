@@ -754,6 +754,31 @@ observation is the decider; do not automate the executable.
 against a plausible-looking default. Status (2026-08-29): open — candidate
 awaiting a `gravity = 0` map census (RWU-02-4 owns the map-key census).
 
+## SC24 — Retail never compiles loose `units\*.FBI` or parses loose `weapons\*.tdf`
+
+**Spec:** [02 R-CAT-01 §4] (Established, static trace): the unit catalog
+loader's gate drops every FBI that does not come from an archive — silently,
+with the definition's archive bit cleared — and never parses a loose
+`weapons\*.tdf`; the switch that would enable loose files is a constant `1`
+in the shipped image with no writer. The community "units must be packed"
+rule is the executable's own.
+
+**Observation:** Nanolathe's `CompileUnits` compiles every `units/*.fbi` the
+VFS enumerates regardless of provider (`internal/content/compile_unit.go`),
+and every `testdata/` fixture and probe under `probes/` relies on loose
+authored FBIs being compiled.
+
+**Decision:** keep the divergence, documented here: loose definitions are
+accepted. It is a superset of retail (a stock install has no loose FBIs, so
+behaviour on retail content is identical) and it is what makes authored
+fixtures and probes loadable without packing. Nothing in the simulation
+reads the archive bit. Status (2026-08-29): open — closes if a mod-loading
+contract ever requires the retail gate, in which case the gate belongs in the
+catalog loader keyed on the entry's provider kind, with fixtures packed.
+
+**Contract changed:** none; records why `CompileUnits` is more permissive
+than [02 R-CAT-01 §4].
+
 ## How to add to this file
 
 One section per conflict: what the spec says, what was observed and how, the

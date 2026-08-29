@@ -370,6 +370,93 @@ Every one of the 30 installed root archives must pass the safe reader; synthetic
 out-of-range offsets, cycles, integer overflow, short metadata, oversized chunks,
 and unterminated names must fail without memory-unsafe access.
 
+### Closed — wildcard matching, the union enumerator's record and order, and how "first backing wins" is enforced [R-CAT-01 §1] (2026-08-29)
+
+**Established fact — the wildcard matcher.** Enumeration patterns are
+matched by one routine used for loose and archive entries alike. Both the
+name and the pattern are compared character by character after folding each
+to upper case. `?` matches exactly one character; `*` matches any run,
+including an empty one; every other pattern character must equal the name
+character. The matcher keeps a set of live pattern positions (a
+non-deterministic walk: at a `*` it both stays and advances); the set holds
+at most **100** positions and an alternative that would be the 101st is
+dropped — inert for any stock pattern. A name matches when, after its last
+character, some live position is at the end of the pattern or at a trailing
+`*`. A pattern whose basename is exactly `*.*` is replaced by `*` before
+matching, so `*.*` matches names without a dot (the host `FindFirstFile`
+semantics are reproduced for archives).
+
+**Established fact — the enumerator.** An enumeration handle carries the
+directory part of the request (everything up to the last backslash), the
+basename pattern, a *current provider* index (−1 = the host file system,
+0.. = the archives in mount order), a *current entry* index inside an
+archive directory, and a *continue* flag. Each step yields one record in the
+C-runtime `_finddata_t` shape: attributes, three times (zero for archive
+entries), size, and the name (260 bytes). For an archive entry the
+attributes are `read-only` for a file, with the size from its file record,
+and `read-only | subdirectory` with size 0 for a directory; host entries
+carry what the host reported (attribute bit 4 = subdirectory). Order:
+
+1. with provider −1, the host `FindFirstFile`/`FindNextFile` sequence (host
+   order, not sorted — §2);
+2. when the host sequence ends and the continue flag is set, archive 0, 1,
+   …: in each, the request's directory is located by the same
+   backslash-split, last-entry-wins walk as "Lookup" (an archive that lacks
+   the directory, or where a component is not a subdirectory, is skipped),
+   and its entries are visited **from index 0 upward** (the opposite of the
+   lookup's backward scan), yielding every entry whose name matches the
+   pattern **and whose flag bit 1 is clear**;
+3. an exhausted archive advances to the next; the enumeration ends after
+   the last archive, or after the single provider it was started on when
+   the continue flag is clear.
+
+Callers skip the names `.` and `..` themselves. Closing a handle releases
+the host find handle when one is open and frees the record.
+
+**Established fact — shadow marking (the "first backing wins" mechanism).**
+After every mount pass, and before any enumeration, the executable clears
+flag bit 1 on every entry of every mounted archive (recursively) and then
+walks the whole union from the root with the continue flag set. For every
+**file** record the walk yields from provider *P* (host = −1), it looks the
+same relative path up in every archive **after** *P* in mount order and sets
+bit 1 on the file entry it finds there (a directory entry of that name is
+left alone). Every **directory** record yielded — from any provider, since
+directories are never marked — is recursed as a new walk of *that
+provider's* subtree, so every provider's subtree is visited and the marking
+is applied at every depth. The result is that a file path is enumerable from
+exactly one provider: the host copy hides every archive copy, and an archive
+copy hides the same path in every later archive. This is the deduplication
+§2 describes; it is a property of the enumerate path only — the *open* path
+never consults bit 1 and simply tries the host, then the archives in order.
+The marking walk uses the same enumerator, so it is subject to the same host
+ordering; the result does not depend on that order.
+
+**Established fact — mount-list housekeeping** (completing §2's
+prose). *Mounting one archive*: the candidate's full path is resolved with
+`GetFullPathNameA`, compared case-insensitively against the stored full
+path of every mounted provider, and rejected on a match; otherwise the
+provider is opened and validated (the three checks of §2) and appended to
+the provider array, which is reallocated by one slot per mount. *The
+validation pass*: for every provider whose handle is closed, the file is
+reopened read-only; on failure the provider record and its directory blob
+are freed and the array is compacted **preserving order**; on success the
+file is closed again and the handle left closed. *Working directory*: the
+mount orchestrator begins by resetting the process working directory to the
+executable's directory (§1 step 3, repeated on every pass), so a lobby or
+save transition cannot leave loose-file resolution pointing elsewhere.
+
+**Established fact — the two list collectors built on the enumerator.** The
+flat collector used for `units\*.FBI`, `weapons\*.tdf`, `download\*.TDF`
+and the map/campaign lists walks one enumeration with the continue flag set
+and appends each yielded **name** to a string vector. The recursive
+collector used for the feature
+TDF catalog enumerates `<dir>\*`, skips `.` and `..`, recurses into every
+directory record with the walk restricted to the provider it came from
+(continue flag clear) — the same per-provider recursion as the shadow walk,
+so every provider's subtree is visited — and appends `<dir>\<name>` for
+every file whose name passes the caller's wildcard filter. Both yield
+already-deduplicated paths because the shadow bits have been applied.
+
 ### Supported inference
 
 The provider identity should be part of a content manifest. A logical path
@@ -617,6 +704,30 @@ default 0, the same profile accessor the unit limit uses (`R-CONTENT-03`
 above); the image contains no registry read of either name. Their effect is
 `[03 R-AUD-01 §1]`.
 
+### Closed — the registry primitive's access masks, and the image-output directory default [R-CAT-01 §2] (2026-08-29)
+
+**Established fact — the shared helper.** Every registry access opens the
+three levels `Software` → `Cavedog Entertainment` → `<subkey>` under the
+current-user hive with the *create-key* call, so a missing path is created
+on the way down even for a read. The access mask is
+`STANDARD_RIGHTS_WRITE | KEY_SET_VALUE | KEY_CREATE_SUB_KEY` for a write and
+that mask plus `KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS | KEY_NOTIFY` (i.e.
+`KEY_READ`) for a read. A read that fails with `ERROR_MORE_DATA` (the
+caller's buffer is too small) reports **success**, with the buffer left as
+the API filled it; every other failure reports failure. Handles are closed
+in reverse order. The typed wrappers (integer, string, binary) sit on this
+one helper.
+
+**Correction (Established) — `Image Output Directory`.** The scalar table
+above lists `Image Output Directory` among the values whose default is
+"empty". The loader's default is not empty: when the value is absent it
+builds `user_images\<name>` where `<name>` is the Windows account name
+returned by `GetUserNameA` (256-byte buffer), or the literal `user_images`
+again when that call fails or returns an empty name — so the fallback path
+is `user_images\user_images`. The row's "empty" applies to the three 17-byte
+strings only. This default is installed in memory; whether the settings
+saver writes it back is not re-audited by this unit.
+
 ### Supported inference
 
 All user-visible runtime messages should pass through the translation map
@@ -745,6 +856,20 @@ provider, duplicate history, parsed value, and the caller default used. This
 is necessary to distinguish missing, empty, valid, malformed, defaulted, and
 derived values even though retail runtime structures often collapse those
 states.
+
+### Closed — key, value and section-name trimming [R-CAT-01 §3] (2026-08-29)
+
+**Established fact.** The parser hands every section name (the text between
+`[` and `]`), every key (the text before `=`) and every value (the text
+between `=` and `;`) through one trimming step before storing it: leading
+characters in the set space, tab, carriage return, line feed are skipped,
+and the same set is stripped from the end. A span that is entirely blank
+stores the **empty string** (it is interned, not null, so a present-but-empty
+key is distinguishable from an absent one as §4 states). Nothing else is
+normalised: interior whitespace, quotes and case are stored as authored.
+The comparison that later finds a key or section is the case-insensitive
+one; the trimming is what makes `name = Foo ;` and `name=Foo;` the same
+authored value.
 
 ### Supported inference
 
@@ -958,7 +1083,13 @@ live per-type limit array is populated only by the ai/ profile parser's
 Build menus are assembled from catalog data, not side data. Per-unit numbered
 pages derive from `CANBUILD %s` sections and numbered `canbuild%d` keys,
 enumerated from 1 upward; a gap yields a missing page rather than terminating
-the loop. The executable's key vocabulary also names `MENU`, `UNITMENU`,
+the loop. **Correction (2026-08-29, RWU-02-5, `[R-CAT-01 §5]`).** The
+previous sentence is imprecise on two points: the per-builder lists live in
+**`gamedata\sidedata.tdf`** as a top-level `[CANBUILD]` section whose child
+sections are named by unit name (`CANBUILD %s` is the *allocation tag*, not a
+section name), and the numbered `canbuild<n>` keys are read from 1 upward
+**until the first absent key**, so a gap ends the list rather than yielding a
+missing entry. The executable's key vocabulary also names `MENU`, `UNITMENU`,
 `DOWNLOADMENU`, and `BUTTON` sections consumed while assembling build and
 order menus; the download tier additionally keys off the unit `downloadable`
 flag (enforcement rule above). Wiring of those sections beyond this presence
@@ -976,11 +1107,227 @@ does not abort; each reference family has its own failure outcome:
 | Movement class (`movementclass`) | the unit compiler falls back to a scratch record — 255 slopes, depth limits ±10000 — parsed from the unit's own FBI keys (see "Movement class record"); a null profile otherwise | no (degraded) | direct |
 | Model (`objectname`) | **fatal**: the model loader's null result is passed to the fatal channel with the path `objects3d\<objectname>.3DO` as the whole message (`[R-MALF-01 §5]`; the same holds for a weapon `model` and a feature `object`). **Correction (2026-08-29, RWU-02-3):** this row previously read "the model cache slot stays empty; rendering degrades (no model) — no (degraded) — supported inference"; the compile path never tolerates a missing model. | yes | direct |
 | Side (`side`) | the build-pick filter compares the authored string; a mismatch rejects the pick — an empty side mismatches every acting side | no, but affects AI builds | direct |
-| Sound category (`soundcategory`) | the category index falls back to a muted placeholder; playback is skipped | no (muted) | supported inference |
+| Sound category (`soundcategory`) | **absent key → category index 0** (the first section of `sound.tdf`); **present but matching no category name → the decimal conversion of the authored text** (0 for non-numeric text, so again the first category; an authored number selects that ordinal directly, unbounded). **Correction (2026-08-29, RWU-02-5, `[R-CAT-01 §5]`):** this row previously read "the category index falls back to a muted placeholder; playback is skipped — no (muted) — supported inference"; there is no placeholder record: the index is 0 or the parsed number. | no | direct |
 
 The feature-record equivalent is different: a feature name found in no parsed
 feature node raises the fatal diagnostic `Record "%s" missing from feature
 files` (§5 above).
+
+### Closed — unit catalog discovery: enumeration, the sentinel record, the per-file reads, and the three drop gates [R-CAT-01 §4] (2026-08-29)
+
+This is the first of the two stages §5 opens with, as the executable runs
+it. The second stage is `[R-CAT-01 §5]`. Everything is **Established** by
+direct trace unless marked.
+
+**Weapon trees.** The loader first enumerates `weapons\*.tdf` through the
+union enumerator (`[R-CAT-01 §1]`) and parses every file into its **own**
+tree. A file is kept only when the parse produced a tree **and** the file was
+read from an archive (see the gates below); otherwise its slot is skipped.
+These trees exist only for the checksum step below and are released at the
+end of this stage — they are not the weapon catalog of R-CONTENT-02.
+
+**Enumeration and the record table.** `units\*.FBI` is enumerated the same
+way. The catalog count becomes *files + 1*, and a table of that many
+585-byte definition records is allocated and zero-filled. **Record 0 is a
+sentinel**: its unit name is `None`, its "compatible" flag (bit 23 of the
+first definition-flags word) is set, and it is never parsed. The catalog
+therefore always has at least one record, and unit index 0 means "no unit"
+everywhere else in the executable.
+
+**Per file, in enumeration order** (record *i* for file *i − 1*; the
+record's index word is provisionally *i*):
+
+1. Open the file through the VFS; a file that fails to open leaves its record
+   zeroed — flag bit 23 clear — and the loop continues.
+2. Read the whole file and compute the content checksum of §6 over its bytes
+   into the record's **file checksum** word.
+3. Open `units\<file name>.OVR` as a bank filtered on the tag
+   `TA Unit Override`; if it opens and holds an account `Compatability`, the
+   integer item named by the decimal spelling of that checksum replaces the
+   word (§6 "Content checksum").
+4. Parse the bytes with the generic parser (the diagnostic file label is
+   `<NO FILE>`) and select `[UNITINFO]`. **A file without a `UNITINFO`
+   section aborts the whole stage**: the loader returns failure at once, and
+   because its caller ignores that result, every file after it in
+   enumeration order stays an unparsed (bit-23-clear) record that the
+   compiler of `[R-CAT-01 §5]` silently compacts out. No box is raised.
+5. Read, in this order: `name` (language-prefixed, 32 bytes) into the
+   record head; `unitname` (32); `side` (30); `ai_weight` (64); `ai_limit`
+   (64); `objectname` (32) — when absent, `unitname` is copied into it;
+   `buildcostenergy` and `buildcostmetal` (integer, stored as floating);
+   `norestrict` → bit 15 and `wacky` → bit 16 of the second flags word.
+6. **Weapon checksum fold.** For each of `weapon1`, `weapon2`, `weapon3`,
+   `explodeas`, `selfdestructas` read with the raw accessor: when the key is
+   present and non-empty, the weapon trees are scanned in enumeration order
+   for the first tree holding a top-level section of that name (first-match
+   child lookup from the root, case-insensitive), and that section's stored
+   section checksum (the word the parser stamps on every section, `[R-MAP-01
+   §3]`) is XORed into the record's **weapon checksum** word. A name found in
+   no tree contributes 0. The two checksum words (file, weapon) are separate
+   fields; which lobby/network identity consumes which is document 08's.
+7. `Version` and `Copyright` gates exactly as `[R-MALF-01 §5]`.
+8. **The loose-file gate (Established).** The record is also dropped, and
+   the "incompatible units" box suppressed, when the FBI was **not** read
+   from an archive and the executable is an installed (hard-disk) build — a
+   constant that is 1 in this image — or when the CD-content-drive flag is
+   set (unreachable in this build, since the installed constant short-circuits
+   the CD path). **Consequence: loose `units\*.FBI` files are enumerated,
+   parsed, and then always dropped silently; loose `weapons\*.tdf` files are
+   never parsed into the checksum trees.** Retail unit content must come from
+   a mounted archive. The community rule that units "must be packed" is thus
+   the executable's rule, not a packaging convention.
+9. One four-byte field of the record is set to −1 (its reader is not traced
+   by this unit), and the file, bank and tree are released.
+
+**After the loop.** The weapon trees are released. Then records are
+compacted from the end: for *i* from *count − 1* down to 1, a record whose
+bit 23 is clear is removed by **moving the current last kept record into its
+slot** (its index word rewritten to *i*) and decrementing the count — order
+is not preserved here, which is why `[R-CAT-01 §5]` sorts. If any record was
+dropped and the suppress flag is clear, the translated `Incompatible units
+found.  They will be ignored.  Please download the latest version of the
+game.` is shown through the non-fatal `Error` box.
+
+### Closed — the catalog compiler: order of work, name sort and unit indices, build-menu pages, scripts, and the side `CANBUILD` lists [R-CAT-01 §5] (2026-08-29)
+
+The compiler runs once at startup after `[R-CAT-01 §4]` and again at every
+battle entry (§8). **Established** throughout unless marked.
+
+**Order of work.**
+
+1. `gamedata\moveinfo.tdf` (fatal `Can't load MOVEINFO.TDF` when absent),
+   then `CLASS0`..`CLASS31` as "Movement class record" states; the class
+   name is the section's `name` key (100-byte buffer) interned into the
+   record head.
+2. A composition memory cache is created and sized from the display size
+   and the map; its arithmetic is document 03's (`[03 R-REN-03A]`).
+3. **Compaction** of the record table: a stable remove of every record from
+   index 1 upward whose bit 23 is clear (this is the pass that removes the
+   records `[R-CAT-01 §4]` left unparsed); the count is rewritten.
+4. **Sort.** Records 1 .. count−1 are sorted by `unitname` with the
+   case-insensitive comparison; record 0 (`None`) stays first. The sort is
+   the C++ library's unstable sort (insertion sort below 17 elements,
+   median-of-three partitioning above it), so two records with the same
+   `unitname` land in an order that depends on the algorithm's partition
+   choices, not on file order — stock content has no such pair. Every record
+   then receives its **unit index** = its position in this order (0 for the
+   sentinel). The unit index is the value the save file, the network
+   messages and every "unit type" field carry, and the by-name lookup used
+   by the side `CANBUILD` lists and by the mission/save loaders is a
+   **binary search over this sorted table**, so the order is a contract, not
+   an implementation detail. A word holding the bit length of the count
+   (the number of halvings until zero) is stored beside it.
+5. A model-pointer table of *count* entries is allocated. Then for each
+   record *i* ≥ 1, in index order:
+   * the load-progress byte the front end displays is set to
+     `i × 100 / count` (integer division);
+   * if `units\<unitname>.FBI` has a non-zero size the unit-record compiler
+     of §5 ("Unit record") re-parses it into the record;
+   * `objects3d\<objectname>.3DO` is loaded whole, relocated, **mirrored**,
+     and texture-bound (`[R-CAT-01 §7]`; a null load is fatal with the path);
+     `objectname` is taken through a 32-byte copy, so at most 31 characters
+     reach the path;
+   * the height word of `[R-CAT-01 §7]` is computed;
+   * **build-menu pages**: with `<n>` = `unitname` with any extension
+     stripped, `guis\<n>0.GUI` existing (non-zero size) sets bit 31 of the
+     first flags word; then `guis\<n>1.GUI`, `guis\<n>2.GUI`, … are probed
+     until the first missing one. The record's page-count byte becomes the
+     index of that first missing page when at least one numbered page
+     existed (so page 0 is counted whether or not it exists), else 1 when
+     page 0 exists, else 0;
+   * `scripts\<unitname>.COB` is loaded through the script loader
+     (`[04 R-COB-01 §1]`; null on absence).
+6. `gamedata\sidedata.tdf` is loaded (fatal `Can't load GAMEDATA.TDF` —
+   the misnamed box of `[R-MALF-01 §5]`). For every record *i* ≥ 1 the
+   build-list count and pointer are zeroed; then, for records with the
+   `builder` bit (bit 6 of the first flags word) only: the top-level section
+   `CANBUILD` is selected, then its child section named by `unitname`; when
+   both exist, `canbuild1`, `canbuild2`, … are read as 32-byte strings until
+   the first absent key and each name is resolved through the by-name binary
+   search — a name that is no unit yields index 0 and is **skipped**, not
+   stored. The resolved 16-bit indices are collected in a **60-byte scratch
+   buffer that is never bounded**: a builder authoring more than 30
+   resolvable entries writes past it (*accept-with-garbage*). Every builder
+   then receives its own 60-byte copy of the scratch buffer (allocation tag
+   `CANBUILD <unitname>`) and the count of entries stored; entries beyond
+   the count are stale bytes from earlier builders (the scratch is never
+   cleared) and are not consumed. A builder with no `CANBUILD` child keeps
+   count 0 but still receives the 60-byte copy.
+7. The progress byte is set to 100 and the catalog-ready flag to 1.
+
+**`soundcategory` resolution (correction of the cross-reference table
+above).** The unit-record compiler reads `soundcategory` (100 bytes). Absent
+→ index 0. Present → linear scan of the loaded category records (352-byte
+stride) with the case-insensitive comparison; the first match's ordinal is
+stored; **no match → the C-runtime decimal conversion of the authored text**
+is stored as the index, unbounded — `soundcategory=7;` selects the eighth
+category, and any non-numeric unknown name selects category 0. There is no
+muted placeholder.
+
+**`YardMap` compilation (Established; complements `[05 R-ECO-01]`).** For a
+unit whose `bmcode` is 0 (a structure), a `FootprintX × FootprintZ` byte map
+is allocated (tag `BUILDING YARD`, **not cleared**) and filled row-major
+from the `YardMap` text with this character table: `.` → 0, `C` → 0x35,
+`G` → 0x8F, `O` → 0x2B, `Y` → 0x31, `c` → 0x2D, `f` → 0x6F, `o` → 0x2F,
+`w` → 0x37, `y` → 0x29. Any other character (space, tab, newline, or an
+unlisted letter) is **skipped without consuming a cell**, and the cursor
+advances past it unconditionally — even onto and past the terminator. After
+a listed character the cursor advances only while the next byte is not the
+terminator, so a `YardMap` that ends in a listed character and is shorter
+than the footprint **replays its last character** into every remaining
+cell; a `YardMap` that ends in an unlisted character (a trailing space, say)
+runs the cursor past the terminator and fills the remaining cells from the
+bytes that follow it in the 1,024-byte read buffer (*accept-with-garbage*);
+an empty `YardMap` is the terminator case at once. For a mobile unit
+(`bmcode` ≠ 0) the map pointer is null. The meaning of the cell values is
+document 05's.
+
+**Two derived fields the key table does not show.** The record's
+`maxvelocity ÷ (MaxSlope + 1)` quotient — computed in 64 bits as
+`(maxvelocity << 16) / ((MaxSlope + 1) << 16)`, truncating toward zero, so
+the result is the 16.16 velocity divided by the class's `MaxSlope` byte plus
+one and is still 16.16 — is stored beside the velocity;
+and when the cloak-capable bit (`cloakcost > 0`) is set and
+`mincloakdistance` compiled to 0, the compiler stores **80** in its place.
+`selfdestructcountdown`: absent → 5 in the 3-bit field (bits 20–22 of the
+second flags word); present → its decimal value masked to 3 bits.
+
+### Closed — the download-menu compile and the per-builder list extension [R-CAT-01 §8] (2026-08-29)
+
+Runs at battle entry after the catalog compiler (`[08 R-ENTRY-01 §3]`).
+**Established** throughout.
+
+1. `download\*.TDF` is enumerated through the union enumerator; one
+   189-byte menu record per file is allocated (tag `DOWNLOADMENU`, **not
+   cleared**). Each file is parsed and its top-level sections visited by
+   index; the record's count word is rewritten to the running section count
+   after each section, and each section fills one 37-byte item: `UNITMENU`
+   (32-byte string) is resolved to a unit index by a **linear**
+   case-insensitive scan of the catalog from index 0 (so `None` can match),
+   then `MENU` (integer → byte), `BUTTON` (integer → byte) and `UNITNAME`
+   (32-byte string) are stored. A section whose `UNITMENU` is absent or
+   names no unit leaves its item's bytes as the allocator returned them
+   (*accept-with-garbage*: a stale unit index there can match a real unit
+   in the passes below).
+2. For every definition, its build-menu **page-count byte** (`[R-CAT-01
+   §5]` step 5) is raised to the largest `MENU` byte of every item, in every
+   menu record, whose resolved `UNITMENU` index equals the definition; it
+   is never lowered.
+3. Downloadable enforcement: for every definition, for every menu record,
+   **only the first item's** `UNITNAME` is compared (case-insensitively)
+   with the definition's `unitname`; on a match with the definition's
+   `downloadable` bit clear, the text `Hey!  Somebody forgot to set
+   downloadable=1 for %s` is formatted into a stack buffer — **and not
+   displayed by this site** — and the bit is set. No sort or re-finalize
+   happens here; §5's "re-sorts and re-finalizes" belongs, if anywhere, to
+   the other push site (tail item).
+4. For every definition that holds a `CANBUILD` list pointer (every
+   builder, `[R-CAT-01 §5]` step 6), every item in every menu record whose
+   `UNITMENU` index equals the definition has its `UNITNAME` resolved by the
+   by-name binary search and, when it resolves and the list count is
+   **at most 30**, appended and the count incremented. The list block is
+   60 bytes (30 entries), so the 31st append writes two bytes past the block
+   (*accept-with-garbage*).
 
 ### Weapon record
 
@@ -1421,6 +1768,24 @@ playback; the cache and mixer are separate from the byte-level sample decoder.
 Alias-cache eviction is bounded-negative (no eviction site found in the
 census) `TODO(question)`; sample precedence follows the VFS mount order
 established in §2.
+
+### Closed — the alias catalog file and its per-section read [R-CAT-01 §6] (2026-08-29)
+
+**Established fact.** The alias catalog is `gamedata\allsound.tdf`, built
+through the ordinary path builder and parsed with the generic TDF parser. The
+loader first zeroes the alias count, so a re-run starts from an empty table.
+A missing or unreadable file yields no tree, registers nothing and raises no
+diagnostic. On success every top-level section is visited **by index in file
+order**; for each section the alias name is the section name copied with a
+32-byte bounded copy (no terminator is forced, so a name of 32 or more
+characters is not terminated inside the buffer — stock names are far
+shorter), and the sample path is the
+section's `sound` key read with the bounded string accessor into a 256-byte
+buffer. A section without a `sound` key registers nothing; a section whose
+`sound` is present but empty registers an alias with an empty path. Each
+surviving pair is handed to the alias registrar (the dedup and the 255-entry
+cap above). After the last section the sound-category loader
+(`[R-SND-01 §1]`) runs, and only then is the alias tree released.
 
 ### Sound category record
 
@@ -3196,6 +3561,36 @@ Model references are resolved from unit and feature model names. The
 primitive's colour, texture-name, and flag interpretation at draw time belongs
 to document 03.
 
+### Closed — the unit model's height word and the catalog-time texture bind [R-CAT-01 §7] (2026-08-29)
+
+**Established fact — height word.** After a unit's model is loaded,
+relocated and mirrored (in that order — mirroring runs before the height is
+measured), the catalog compiler computes one 32-bit **height** for the
+definition: the maximum, over every object in the hierarchy, of
+`vertexY + objectY`, where `objectY` is the object's own second-coordinate
+translation plus the accumulated translations of its ancestors. The walk
+starts at the root with an accumulated translation of 0, visits an object's
+vertices, then recurses into its child chain with the object's translation
+added, then continues along the sibling chain at the same level. Vertices are
+signed 32-bit and the maximum starts at 0, so a model whose every vertex sits
+below the origin reports height 0, never a negative. The value is stored as
+the definition's **upper Y bound**; the lower Y bound is zeroed just before,
+so the definition's Y extent (upper − lower) is the same number. The X and Z
+bounds of the same bounding record come from the footprint, not the model:
+`±(FootprintX << 20) / 2` and `±(FootprintZ << 20) / 2` in 16.16, with the
+extents `maxX − minX`, `maxZ − minZ` and a "radius" word
+`(extentX + extentZ) / 3` (integer division) written by the unit-record
+compiler. Consumers (selection box, picking, the composition image key) are
+documents 03 and 07 and are not enumerated here.
+
+**Established fact — texture bind.** Immediately after the height, every
+primitive of the model that carries a texture name is bound as
+`[03 §2.4]` item 4 states; one precision worth recording here: the
+**ten-frame team-texture test is applied only to entries found in the
+fallback (common) texture set**, never to entries found in the side texture
+sets, and the per-instance animation player list receives every multi-frame
+binding except those ten-frame entries.
+
 ### Compiled script archive (COB)
 
 A compiled script file is read whole into one allocation and relocated in
@@ -3878,3 +4273,18 @@ finding they recited remains in the body sections that own it.
 * Whether any reader tests unit capability bit 9 (the derived copy of
   `canreclamate`) separately from bit 10 · §5 `[R-KEYS-01 §1]` · bit-9
   reader census.
+* Reader of the four-byte definition field the catalog loader sets to −1
+  after the Version/Copyright gate (`[R-CAT-01 §4]` step 9) · §5 · reader
+  census on that field (naming only; no load-path behaviour depends on it).
+* The map-size factor in the composition memory-cache size (`trunc(W × H ×
+  2 × 1.3)` scaled by a factor chosen from the map's height in 1,024-unit
+  cells against a threshold of 16) · §5 `[R-CAT-01 §5]` step 2, owner
+  `[03 R-REN-03A]` · static trace of the two float constants the compiler
+  selects between.
+* Whether the settings saver writes the `Image Output Directory` default
+  (`user_images\<account name>`) back to the registry · §3 `[R-CAT-01 §2]`
+  · static trace of the saver's value list.
+* Which of the two push sites of `Hey!  Somebody forgot to set
+  downloadable=1 for %s` ever displays the text: the download-menu compiler
+  of `[R-CAT-01 §8]` only formats it into a stack buffer · §5 · static trace
+  of the downloader-region site.

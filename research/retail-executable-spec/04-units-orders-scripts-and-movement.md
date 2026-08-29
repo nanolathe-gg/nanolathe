@@ -416,10 +416,12 @@ Batch insertion order (as compiled into the image, 23 + 22 + 22 named records):
   `AirToGroundHover`, `VTOL_MobileBuild`, `VTOL_HelpBuild`, `VTOL_RepairPatrol`,
   `VTOL_RepairUnit`, `VTOL_Reclaim`, `VTOL_ReclaimUnit`, `VTOL_Evade`, `VTOL_SeekAttack`,
   `VTOL_SeekGuard`, `VTOL_GetRepaired`, `VTOL_LandIfCan`.
-- Batch 4: the empty canonical name — no static image of this record exists in the read-only
-  data (a zero-filled 25-byte template is indistinguishable from padding); that it is
-  appended at registration rather than compiled in is **Supported inference**. The batch
-  sizes 23/22/22/1 are unchanged.
+- Batch 4: the empty canonical name. *Corrected 2026-08-29 ([03 R-AUD-02],
+  registrar row of its trail):* this bullet previously said "no static image of this
+  record exists in the read-only data … appended at registration is Supported
+  inference". A static record **does** exist in read-only data — label `Ready`, ack
+  group 15, mask 0, empty canonical name — and the registrar inserts it; Established.
+  The batch sizes 23/22/22/1 are unchanged.
 
 The presentation-helper field takes exactly four identities across the 68: none; goal
 resolve with acknowledgement text and rings (the attack, suppress, capture, pickup, unload,

@@ -103,6 +103,77 @@ singleton, title/class, default size, CWD, window-before-mount order, CRT seed
 before command-line, and timebase after window creation; medium for the exact
 ordering of all media initialization and registry restoration.
 
+### Closed — process static initialisation and the engine block [R-PLAT-02 §1] (2026-08-29)
+
+Established by RWU-01-3 from the C-runtime initializer table, the game
+constructors it names, and the engine-block allocator called by the process
+entry.
+
+**Static initialisers (Established).** Before the process entry runs, the C
+runtime walks a seventeen-entry table of game constructors in table order.
+Every constructor ends by registering its matching destructor with `atexit`,
+so these globals are torn down by the runtime at process exit, in reverse
+registration order, after the pump has returned and after the game-state and
+display teardown of [R-PLAT-02 §2]. The thirteen constructors owned by this
+document (the other four are a network buffer object, a runtime red-black tree
+helper, and a surface-setup record — lanes 08, 07 and 03) do the following,
+in table order:
+
+1. construct the fixed effect pool's static object (its tick is doc 04
+   `R-COB-04 §4/§5`);
+2. construct an empty vector for the map/resource identity list of the lobby
+   screen (doc 07);
+3. construct the **order descriptor table** as an empty vector — the four
+   template batches of [04 §3.1] append to it at initialisation;
+4. fill the 32-record movement-class scratch table with the template priors:
+   maximum water depth 10000, minimum water depth −10000, all four slope
+   bytes 255, every other field zero ([02 R-CONTENT-01] owns the record);
+5. and 6. allocate two identical network receive objects, each a 28,000-byte
+   buffer plus three 2,800-byte buffers (out of scope, [08 R-OOS-01]);
+7. set bit 0 of a C-runtime option word (its only reader is the runtime);
+8. allocate a pool of 1,000 records of 76 bytes for the effects family (doc
+   03);
+9. construct an empty vector for the vismask shape list of the LOS raster
+   ([03 R-VIS-01 §2]);
+10. construct an empty vector of the movement class and model catalog
+    ([02 R-P0-03]);
+11. construct a zeroed three-word movement-class record (doc 02);
+12. zero the developer console's two spawn pointer words ([R-PLAT-01 §9]);
+13. construct an empty vector consumed by the `+` command handlers
+    ([07 R-CAM-01 §6]).
+
+Five of these are the same "empty vector" constructor: three zero words
+(begin, end, capacity) and a tag byte that is written from an **uninitialised
+register** — the tag has no reader in the recovered image (bounded negative),
+so nothing observable depends on it.
+
+**The engine block (Established).** The process entry allocates the engine
+block after installing the allocation-failure hook and before the singleton
+test:
+
+```
+skew      = (GetTickCount() mod 1000) × 7          ; 0 … 6993 bytes
+size      = skew + 0x3924D
+allocation = alloc(size), zero-filled by the caller  ; the allocator does not fill [R-PLAT-01 §5]
+engineBase = allocation + skew
+```
+
+The block therefore floats at a wall-clock-dependent offset inside a
+correspondingly larger allocation; the raw allocation pointer is not stored
+anywhere, so the skew has no behavioural effect beyond the placement. The
+entry then stores the build-stamp strings `Jul 30 1998` and `11:16:36` in the
+block, runs the per-player network-record initialiser over the eleven player
+records (out of scope), and zeroes ten catalog count/pointer words. A null
+allocation would leave a null engine base, but the hook never returns, so the
+path is unreachable. Nothing in the recovered image frees the block.
+
+**Two housekeeping registrations at entry (Established).** Guarded by a once
+bit, the entry registers an **empty** `atexit` handler (a no-op; it exists so
+the registration happens exactly once). The entry itself runs inside the
+runtime's structured-exception frame (the wrapper that calls the game's
+`WinMain`); that frame is the C runtime's own — the game's crash reporting is
+the unhandled-exception filter of [R-PLAT-01 §8].
+
 ### 2.2 Window and display creation
 
 The window setup uses `GlobalMemoryStatus` and `SystemParametersInfoA` before
@@ -148,9 +219,10 @@ mode work:
   at least 99 milliseconds
   have elapsed since the previous one, exactly one media-keepalive call that
   walks the audio/media channel arrays (eight then thirty-two object slots,
-  invoking each live object's keepalive virtual and clearing dead slots; the
-  "keepalive" reading of that virtual is an inference — the walk itself, its
-  slot counts, and its ≥99 ms gate are established). That
+  invoking each live object's keepalive virtual and clearing dead slots).
+  *Established 2026-08-29 by [03 R-AUD-02 §2]:* this walk is the audio reaper
+  (eight transient + thirty-two voice slots, then the narration-stream poll);
+  the earlier "keepalive reading is an inference" caveat is withdrawn. That
   ≥99 ms gate drives only this keepalive. The network/game dispatcher itself
   runs every busy iteration; it tail-dispatches the session callback, which
   evaluates the fixed wall-clock budget each time. The loop does not use a
@@ -199,7 +271,9 @@ below); window creation (failure returns 0); the 30-unit timebase; mounts;
 language resolution; translation table; audio device; settings; the AudioCD
 shell swap; then the pump. On exit: when the display flags mark a cursor
 thread, stop it and release its surfaces; restore the AudioCD value; tear
-down the display.
+down the display. (**Correction, 2026-08-29, RWU-01-3:** the flag tested on
+exit is the quit-requested bit, not the cursor-thread mark, and the branch
+also runs the whole game-state teardown — [R-PLAT-02 §2].)
 
 **The display flags word.** Startup sets bit 0 of the display flags word to
 the complement of the display mode chosen by `-D`/`-Df` (bit 0 = `~mode & 1`,
@@ -236,7 +310,9 @@ scaled-time anchor to the current scaled clock** (the reset §4.3 records) —
 these three peeks are [07 R-CAM-01 §1]'s "input ordering"; pop one button
 record (or copy the motion slot — [R-PLAT-01 §6]); run the sound service;
 copy the record into the canonical pointer record; then call the current
-mode's frame function unless the display object's "presenting" bit is set.
+mode's frame function unless the display object's "presenting" bit is set
+(**correction, 2026-08-29, RWU-01-3:** the bit is the *quit-requested* bit —
+[R-PLAT-02 §2]; it is set only by the quit-request routine).
 
 **Battle host pump (Established; the mode frame function while in battle).**
 
@@ -268,6 +344,151 @@ progress word is nonzero, and its frame word is below the global tick; the
 minimum frame word gives `lag = tick − min`. The pending-speed bit is set when
 the active speed is below the requested one. Nothing in the re-read changes
 the arithmetic already recorded.
+
+### Closed — the quit request, the exit path, and the shutdown sequence [R-PLAT-02 §2] (2026-08-29)
+
+Established by RWU-01-3 from the quit-request routine, the window creator,
+the exit tail of the process entry, the game-state teardown and the display
+teardown.
+
+**Correction to [R-PLAT-01 §1] — which bit the pump and the exit test.** The
+housekeeping paragraph said the helper calls the mode frame function "unless
+the display object's 'presenting' bit is set", and the startup paragraph said
+"On exit: when the display flags mark a cursor thread, stop it and release
+its surfaces". Both read the same bit of the display object's flags word, and
+it is neither a presenting bit nor the cursor-thread mark: it is the
+**quit-requested bit**, written by exactly one routine (below). The
+cursor-thread mark is the *adjacent lower* bit, which the window creator
+copies from bit 9 of the display-flags configuration word ([R-PLAT-01 §4]
+is otherwise unchanged: the thread is always created). The window creator
+also clears the quit-requested bit, so it starts clear in every run.
+
+**The quit request (Established).** Every process quit goes through one
+routine (the front end's `EXIT` [07 R-FE-01 §3] through the router, the
+front-end lobby-launch failure path, the battle teardown's exit step
+[07 R-FE-02 §3], and the out-of-scope DirectPlay session path all reach
+it). It:
+
+1. sets the quit-requested bit;
+2. when the display's full-screen bit is set, restores the desktop display
+   mode (the surface-release routine with argument 0);
+3. when a message was supplied, shows it in a modal box parented to the game
+   window and titled with the application title;
+4. posts `WM_DESTROY` to the game window.
+
+From step 1 on, the housekeeping helper no longer calls the mode frame
+function, so no host frame, budget evaluation or sub-tick runs while the
+posted message drains; the window procedure's `WM_DESTROY` handling calls
+`PostQuitMessage(0)` and the pump ends on the resulting `WM_QUIT`.
+
+**The exit tail (Established).** After the pump returns:
+
+1. **Only when the quit-requested bit is set:** stop the cursor thread
+   ([R-PLAT-01 §4]) and run the game-state teardown below. A window
+   destroyed without a quit request (an external close) skips both and leaves
+   every game object to process teardown.
+2. Restore the `AudioCD` shell registry value saved at startup and write the
+   application's `cdshell` registry value.
+3. Run the display teardown below.
+4. Return the `WM_QUIT` message's `wParam` as the process exit code.
+
+**Game-state teardown, in order (Established; the internals are each owning
+document's).**
+
+1. Read every CD play list back from the audio object into the `CDLISTS`
+   array and write it to the registry ([03 R-AUD-01 §4]).
+2. Flush the bitmap cache: for each of its ten entries that holds a surface,
+   release the surface, free the data, null the entry, and null any reference
+   to it held by the current-background word or by the open window's
+   background pointer (doc 07 owns the cache).
+3. Free the interface object's two side buffers and its record buffer.
+4. Free the common GAF, the side fonts and the two preloaded fonts
+   ([03 R-FONT-01 §5]).
+5. Tear down the sound catalog: for every sound category, the 24 pairs of
+   per-category buffers whose count is positive; the category array; then
+   every loaded sample — released through DirectSound, or plain-freed when
+   the Windows-sound flag is set ([03 R-AUD-01 §1]); then the remaining
+   audio and effect teardown routines of doc 03.
+6. Free the `OFFSCREEN` surface, clear the renderer's target, and run the
+   DirectDraw surface-restore routine ([03 §4.1], [03 §4.2]).
+7. Empty the order descriptor table by resetting its end pointer to its base
+   (the storage is not freed; [04 §3.1]).
+8. Free the setup record ([08 R-ENTRY-01 §2]).
+9. Unlock and free the unit-definition table and zero its count ([02 §3]).
+10. Close the network object: free the send buffer; when the session is
+    networked, flush packet pacing, close the transport unless the online
+    score-reporting callback is installed, and clear the networked bit (all
+    but the free are out of scope, [08 R-OOS-01]).
+11. Destroy the mission/session record ([07 R-FE-02 §3]) and free the
+    front-end map list.
+
+**Display teardown, in order (Established).** Stop the cursor thread (a
+second, idempotent call); free every font object in the display's font list —
+close its file handle, free its data, free the record — then the list; free
+the lookup tables the display flags say were allocated ([R-PLAT-02 §3] — in
+retail all five); release the four DirectDraw surfaces and then the
+DirectDraw object through their COM `Release` entries; delete the memory DC,
+the DIB section and the logical palette; restore `SystemParametersInfoA`
+action `0x5D` with the value saved at window creation (§2.2).
+
+### Closed — window-creation residue: defaults, the lookup tables, the recorded directory, the custom-message callback [R-PLAT-02 §3] (2026-08-29)
+
+Established by RWU-01-3 from the display-defaults routine, the window
+creator and its helpers, and the callback setter.
+
+**Display defaults (Established; refines [R-PLAT-01 §1]).** Before the entry
+computes the display-flags configuration word it calls the defaults routine,
+which clears bits 0–9 of that word (so the `0x3F2` OR of [R-PLAT-01 §1]
+starts from a clean low half), sets width 640 and height 480, the client
+rectangle `(0, 0)–(639, 479)`, and a floating scale word of exactly 1.0.
+
+**What the window creator allocates (Established).** Besides the class,
+window, key ring and cursor thread already recorded: the total physical
+memory from `GlobalMemoryStatus`; a `GetTickCount` stamp; the display
+object's flags word rebuilt as *bit 0 set, bits 2–9 copied from bits 1–8 of
+the configuration word, bit 10 from configuration bit 9* (the cursor-thread
+mark), bit 11 (quit-requested) clear; the **motion slot** initialised by
+copying six dwords from a three-dword zero record — its last three fields
+(scaled tick, message, double-click) therefore start as uninitialised stack
+contents until the first `WM_MOUSEMOVE` ([07 §2]); the current directory of
+the current drive, recorded as a 256-byte string in the display object (its
+only reader is the out-of-scope network path); and the lookup tables, each
+allocated through the labelled wrapper only when its flag bit is set — in
+retail every bit is set:
+
+| Table label | Size (bytes) | Content owner |
+|---|---|---|
+| `SHADE_TABLE` | 0x2000 | [03 §4.3] |
+| `ALPHA_TABLE` | 0x10000 | [03 §4.3] |
+| `GRAY_TABLE` | 0x100 | [03 §4.3] |
+| two further tables (allocators are doc 03's rows) | — | [03 §4.3] |
+
+None is filled by the allocator ([R-PLAT-01 §5]); doc 03 owns the fill.
+The failure path — class registration, window creation or output
+initialisation failing — releases the DirectDraw surfaces and object, deletes
+the DC and GDI objects, shows the modal `Error:  Environment Initialization
+Failed!` (two spaces, as authored) titled with the application title,
+destroys the window and returns 0, which the entry returns as the exit code.
+
+**The custom message and its callback (Established).** The window procedure
+routes the custom message `0x3B9` (§2.2) to a callback pointer held in the
+display object. The pointer's only writer is a one-line setter whose only
+caller is the audio device re-creation of [R-PLAT-01 §1] step 1 — the
+DirectSound completion callback ([03 R-AUD-01 §1]). Nothing else uses the
+message.
+
+**The `-C` exception frame (Established; refines [R-PLAT-01 §2]).** The
+online-configuration load of the `-C` switch runs under the parser's own
+structured-exception frame. A fault inside the online library's loader is
+caught by that frame's handler, which sets the restricted-config flag and
+resumes the parser at the next token — a failing `online.dll` therefore
+cannot crash startup.
+
+**A frame-counter word that is never written (Established, bounded).** The
+developer probe overlays read a display-object word through an accessor and
+display it as the frame counter. Its only setter has no caller in the
+recovered image, and the display object is static zero-initialised data, so
+the overlays show a constant 0 in retail.
 
 ## 3. Configuration, installation, and compatibility runtime
 
@@ -418,6 +639,42 @@ is to seed the simulation random stream. `GetTickCount` is the wall-clock input
 to the budget and is also used for profiling. The 30-Hz interpretation is
 confirmed by the timebase initialization, the one-second cadence constants, and
 multiple tick modulo/capture paths.
+
+### Closed — the scaled-clock timer table [R-PLAT-02 §4] (2026-08-29)
+
+Established by RWU-01-3 from the timebase installer, the timer service in
+the housekeeping helper, and the registration and removal routines' callers.
+
+**Shape.** Ten slots of four words: callback, argument, period, remaining.
+A slot is armed when its period is non-negative; the timebase installer
+(the `30` of §4.1) clears the table and the last-service stamp.
+
+**Service (Established).** Once per busy pump iteration, inside the
+housekeeping helper of [R-PLAT-01 §1] — after the sound service and before
+the mode frame function — the service computes
+
+```
+elapsed     = scaledNow − lastService          ; scaledNow as §4.1, GetTickCount × 30 / 1000
+lastService = scaledNow'                        ; a second GetTickCount read
+for each armed slot:
+    remaining −= elapsed
+    if remaining < 1:                           ; i.e. ≤ 0, signed
+        callback(argument)
+        remaining = period
+```
+
+so a period-`p` timer fires once every `p` scaled units at the granularity
+of the pump (a late pump fires it once, not repeatedly — the deficit is not
+carried), and a one-shot timer is one that removes itself from its callback.
+The two `GetTickCount` reads can differ by a millisecond; the difference is
+lost, not accumulated. The service runs only on the busy path, so timers
+stall while an inactive single-player window blocks in `GetMessageA`.
+
+**Registrants (Established, bounded to the recovered image).** The only
+callers of the registration routine are the CD-audio fade timers of
+[03 R-AUD-01 §4] (the repeating period-2 fade step and the one-shot period-120
+pause), and the removal routine's callers are all in the same audio module.
+No simulation state is touched by the table or by any registrant.
 
 ### 4.2 Budget algorithm
 
@@ -622,7 +879,9 @@ slide (head advances when the head record's deadline has passed; the ring
 sits beside the network receive queue and is most plausibly the receive-frame
 window — supported inference, `TODO(question)` for the record owner), then
 the missile/interceptor pending-list compaction (expired records invoke their
-expiry callback and are removed in place). The projectile-pool compactor does
+expiry callback and are removed in place) — **corrected 2026-08-29:** the list
+is the temporary-sight ("eyeball") observer list, 36-byte records, empty in
+single player ([R-PLAT-02 §5]). The projectile-pool compactor does
 **not** run here; it runs at the projectile-phase tail (phase 3) and from the
 unit-owner projectile purge (see §6.1).
 
@@ -827,6 +1086,81 @@ entry state and has no phase-12 invocation yet.
 The vectors make the strict comparison and the reset-before-toggle ordering
 observable: ticks 8 and 16 toggle, while ticks 7 and 15 only reach zero.
 
+### Closed — the post-loop list is the temporary-sight list; the stub census; the control byte; the start barrier [R-PLAT-02 §5] (2026-08-29)
+
+Established by RWU-01-3 from the sub-tick executor's tail, the list's
+allocator, its single producer and its expiry pass, the empty routines the
+executor and the pump call, the control-byte sender, and the start-barrier
+routine's sole gate.
+
+**Correction — the post-loop compaction is not a missile/interceptor list.**
+§4.4 said the tail runs "the missile/interceptor pending-list compaction
+(expired records invoke their expiry callback and are removed in place)",
+§6.2 called it "the missile/interceptor pending list (24-byte-stride records
+with deadline fields)", and §10 repeated the label. The family label was an
+inference from the records' deadline field; the stride was a hexadecimal
+`0x24` read as decimal. Direct reads of the allocator, the producer and the
+expiry callback settle it:
+
+- The block is allocated at battle entry under the label `EYEBALL_MEMORY`
+  as **20 records of 36 bytes** (720 bytes) and freed at battle exit; the
+  count starts at 0.
+- Each record is a **self-contained LOS observer** of [03 R-VIS-01 §2]: the
+  owning player record, a pointer to the record's own inline coverage-tile
+  pair, the sight distance as a signed 16-bit value, the height byte, a
+  pointer to the record's own inline coverage byte, the world X, Y (raised to
+  `(SeaLevel + 1) << 16` when lower) and Z, and an **expiry tick**. It is a
+  temporary sight source that is not a unit — an "eyeball".
+- The expiry callback is the throttled LOS refresh of [03 R-VIS-01 §2]
+  itself, invoked with the record; what the refresh publishes or removes for
+  an expiring record is doc 03's contract.
+- **The only producer is the handler of a received network packet** in the
+  packet dispatcher: it appends when LOS mode bit 1 is set and the count is
+  below 20 (silently dropped at 20). No single-player code path appends, and
+  the single-player pump never drains packets ([08 R-OOS-01 §1]), so **in
+  single player the list is always empty and the post-loop pass is a no-op**
+  (Established, bounded to the recovered image).
+
+The pass itself, for completeness (Established): for every record whose
+expiry is **strictly below** the global tick (unsigned), call the refresh
+with the record; then, if any expired, find the first expired record and
+copy every later record whose expiry is at or above the tick down over it
+(re-pointing the record's two self-pointers), and set the count to the
+survivors. The "any expired" flag is an uninitialised local when nothing
+expired, so the compaction may run with nothing to remove; it then changes
+nothing.
+
+**The stub census (Established).** These routines exist in the recovered
+image, are called on the paths named, and do nothing:
+
+| Caller | Stubs |
+|---|---|
+| process entry, after the audio device | one empty routine |
+| process entry, before the timebase | one routine returning 0 |
+| sub-tick executor, after the loop | the "three empty barrier functions" of §4.4 — three empty routines, before the deadline-ring slide |
+| battle host pump, networked branch (§4.3 / [R-PLAT-01 §1] step 3) | three routines returning 1, then the start barrier, then three empty routines |
+| display teardown, first call | one empty routine |
+
+None reads or writes any word; a re-implementation omits them.
+
+**The control keepalive byte (Established; the value [R-PLAT-01 §1] left
+unnamed).** The one-byte control packet is **type 6**. The sender writes the
+byte into the engine's send buffer and, with a zero target, hands it to the
+broadcast helper (which returns without sending in single player —
+[R-PLAT-01 §3]); with a nonzero target, to the direct helper for that peer.
+Besides the paused zero-budget path, the loading state's frame sends it once
+per frame to every local player while the loading thread runs and then
+drains the receive path; both are no-ops off the network.
+
+**The start barrier is multiplayer-only (Established).** Bit 2 of the pump's
+state word, which gates the start-position assignment/synchronisation routine
+in both the pump and the loading state's frame, is set at exactly one site:
+the battle-entry orchestrator, only when the session kind is 3 (network).
+The routine — which shuffles start slots with CRT draws on the main thread
+and exchanges packets — therefore never runs in campaign or skirmish and is
+out of scope ([08 R-OOS-01]); its main-thread CRT draws do not enter the
+single-player stream census of [R-PLAT-01 §7].
+
 ## 5. Threads, TLS, locks, and synchronization
 
 ### 5.1 Threads
@@ -991,7 +1325,10 @@ later occupant after reuse.
   list (24-byte-stride records with deadline fields), invoking each expired
   record's expiry callback and removing it in place — this is the "deferred
   compaction" of earlier notes, distinct from the projectile-pool compactor
-  of §6.1.
+  of §6.1. **Correction (2026-08-29, RWU-01-3):** the records are 36 bytes
+  (the earlier "24" read a hexadecimal stride as decimal) and the list is
+  the temporary-sight observer list of [R-PLAT-02 §5], not a missile or
+  interceptor structure; its only producer is a received network packet.
 - Delayed status events use deadlines of `globalTick + 30 + random(300 or
   900)`, with the choice depending on the event family.
 - Audio arbitration uses an eight-slot channel ring, described in document 03.
@@ -1772,6 +2109,76 @@ ships with the retail install, so the path is inert in stock configurations.
 mode ([R-PLAT-01 §1]); without the bit the token reaches the battle dispatcher
 as one of the "label every unit" toggles ([07 R-CAM-01 §2]).
 
+### Closed — the directive tokeniser and the screenshot writer [R-PLAT-02 §6] (2026-08-29)
+
+Established by RWU-01-3 from the tokeniser, its argument-substitution and
+reset helpers, the line runner, the screenshot routine and the PCX encoder.
+
+**The directive tokeniser (Established; closes the `\r` Unknown of
+[R-PLAT-01 §9]).** One tokeniser serves the developer console's `+`
+commands ([07 R-CAM-01 §6]), the `debugdat` script runner ([R-PLAT-01 §9])
+and the AI profile parser ([08 R-AI-01 §12]). Given a text span (or a
+NUL-terminated string when no end is given):
+
+1. reset the argument count to 0;
+2. skip characters for which the C-runtime `isspace` is true — space, tab,
+   **carriage return**, line feed, vertical tab and form feed — so a trailing
+   `\r` of a CR-LF line is whitespace and never reaches a token: **the
+   tokeniser strips it**;
+3. stop at the end of the span or at `#` (comment to end of line);
+4. record the argument's start when fewer than **20** arguments are
+   registered (a 21st and later argument is copied into the text buffer but
+   not registered — the count stays 20);
+5. copy characters until whitespace, `#`, the end, or the **126-byte** text
+   buffer is exhausted, then NUL-terminate; the next argument continues
+   after the terminator.
+
+**`%N` substitution (Established; RWU-08-8's row).** After tokenising, an
+argument whose first character is `%` and whose remainder converts (`atoi`)
+to an index `N` with `0 ≤ N < callerArgumentCount` is replaced by the
+caller's argument `N` (a pointer copy into the callee's argument list); any
+other `%` argument is left as written. The `debugdat` line runner applies it
+with the invoking command's arguments, so a script line `+spawn %1` receives
+the console command's first argument.
+
+**The line runner (Established; refines [R-PLAT-01 §9]).** It splits on
+`\n` only; the line passed to the tokeniser excludes the `\n`; a final
+unterminated line is processed; the result is the OR of every line's
+dispatcher result.
+
+**The screenshot writer (Established; used by the `0xD6` hotkey of
+[R-PLAT-01 §1] and the movie series of [07 R-CAM-01 §8]).** The routine
+takes a directory and a name prefix (the hotkey passes the screenshot
+directory and `FRAM`; the movie series its `MOVIE%03i` directory):
+
+1. If the display's *frame-presented* word is clear (it is set by the
+   present routine and cleared by the surface-restore routine), return 0
+   without writing — nothing has been composed to capture.
+2. Enumerate `<dir><sep><prefix>*.pcx` (`<sep>` is `\` when the directory
+   is non-empty, otherwise empty); for every match convert the characters
+   after the prefix with `atoi` and keep the maximum; the new file is
+   `<dir><sep><prefix>%04i.pcx` with `maximum + 1` (so the first capture is
+   `…0001.pcx`).
+3. Convert the display's 256-entry palette (four bytes per entry) to 768
+   RGB bytes, then encode the frame-buffer record (width, height, pixels)
+   as PCX and write it through the VFS handle layer's loose-file open
+   (mode `a+b`) and write helper — the helper refuses archive-backed handles
+   and returns −1, which fails the size check below.
+4. Any write whose byte count differs from the request closes the file and
+   returns 0 (a partial file is left on disk); success returns 1.
+
+**The PCX encoder (Established; the reader is [fmt pcx]).** Header of 128
+bytes: manufacturer 10, version 5, encoding 1, 8 bits per pixel, `xmin 0`,
+`ymin 0`, `xmax = width − 1`, `ymax = height − 1`, both DPI words 0, the
+48-byte EGA palette field = the **first 48 bytes of the converted
+palette**, reserved 0, planes 1, bytes per line = `width`, palette-info 0,
+the rest zero. Each scanline is run-length encoded left to right: a run of
+`n` equal bytes is emitted as chunks of at most 63 — each chunk `0xC0 | len`
+followed by the value; a single byte below `0xC0` is emitted literally; a
+single byte at or above `0xC0` (both top bits set) is emitted as a run of one
+(`0xC1`, value). No row padding is emitted. After the last row: the
+byte `0x0C` and the 768-byte palette.
+
 ## 10. Established facts, supported inference, and unresolved boundaries
 
 ### Established facts
@@ -1820,6 +2227,20 @@ as one of the "label every unit" toggles ([07 R-CAM-01 §2]).
   semantics.
 - 28-byte `Players/GameTime` scheduler block is saved/restored with the field
   layout above; RNG state is not saved and is reseeded on load.
+- Seventeen static initialisers run before the entry; the engine block
+  floats at a wall-clock skew of `(GetTickCount mod 1000) × 7` bytes; one
+  quit-request routine sets the quit bit and posts `WM_DESTROY`; the
+  game-state teardown runs only on a requested quit ([R-PLAT-02 §1], §2).
+- A ten-slot scaled-clock timer table is serviced once per busy pump
+  iteration; only the CD-audio fades register in it ([R-PLAT-02 §4]).
+- The post-loop deadline list is the 20 × 36-byte temporary-sight list,
+  fed only by a network packet, so empty in single player; the control
+  keepalive byte is type 6; the start barrier is network-only
+  ([R-PLAT-02 §5]).
+- The directive tokeniser splits on C `isspace` (so CR-LF is safe), keeps
+  20 arguments in 126 bytes, and substitutes `%N`; screenshots are
+  `<prefix>%04i.pcx` with the highest existing number plus one, RLE-encoded
+  with 63-byte runs ([R-PLAT-02 §6]).
 
 ### Supported inference
 
@@ -1870,7 +2291,9 @@ as one of the "label every unit" toggles ([07 R-CAM-01 §2]).
   unit-owner projectile purge), not in the post-loop tail; the post-loop
   compactor is the missile/interceptor pending list, and the post-loop "timer
   dispatch" is a 30-entry deadline-ring slide beside the network receive
-  queue (owner inferred).
+  queue (owner inferred). The "missile/interceptor" label of that post-loop
+  compactor is itself retracted: the list is the temporary-sight observer
+  list, 36-byte records, network-fed only ([R-PLAT-02 §5]).
 - The keyboard speed range is the full 1..20, not 2..19.
 - The multiplayer sharing block runs at the tail of every sub-tick (inside
   the loop), not after it.
@@ -1902,6 +2325,10 @@ as one of the "label every unit" toggles ([07 R-CAM-01 §2]).
 - The tail said the crash filter engages only behind enable switches; it is
   installed on the normal path with symbolised walking on by default
   ([R-PLAT-01 §8]).
+- [R-PLAT-01 §1] called the bit that gates the mode frame function a
+  "presenting" bit and the bit tested on exit the cursor-thread mark; both
+  are the quit-requested bit, and the exit branch runs the full game-state
+  teardown ([R-PLAT-02 §2]).
 - Earlier revisions listed scheduler persistence as unknown; the 28-byte
   `Players/GameTime` block is now established as saved, while RNG persistence
   remains absent and replay coverage remains separate (the post-loop deadline
@@ -1946,6 +2373,13 @@ document.
   crashed process long enough to block an immediate relaunch is an OS
   question, not an executable one · §2.3 · manual test on the reference
   install.
+- What the throttled LOS refresh publishes or removes when the post-loop
+  pass hands it an **expiring** temporary-sight record, and which packet
+  produces those records (network-only; the single-player list is empty)
+  · §4.4 [R-PLAT-02 §5], doc 03 [R-VIS-01 §2], doc 08 · static trace.
+- Whether a writer of the display object's frame-presented word exists
+  beyond the two found (present sets it, surface restore clears it) · §2.2
+  [R-PLAT-02 §6] · static trace over the unrecovered regions.
 - The cursor thread's redraw internals (what the 33 ms redraw blits, and the
   three save-under surfaces' roles) — presentation only · §5.1 [R-PLAT-01 §4],
   doc 07 · static trace.
@@ -2040,8 +2474,6 @@ document.
 - The `DebugHelper.dll` protocol beyond `DebugFunc1(n)` (no such library ships;
   its interface is defined by a file that does not exist in retail) · §9
   [R-PLAT-01 §2] · none possible from the executable.
-- Whether the `+`-script line tokeniser strips a trailing `\r`
-  · §9 [R-PLAT-01 §9] · static read of the tokeniser.
 - How the integrity-breach UI maps to disconnect state, and the parse of the
   front-end `.zrb` list files, which lies in unrecovered code · §9 · static
   trace over the unrecovered regions.

@@ -553,8 +553,12 @@ front end runs (no simulation is ticking).
 loader reads slot 2 (`camps\briefs\<brief>.TXT`) into a scrolling text
 region (`TextRegion`, `MOREBAR` pages it); the `SOLARSYSTEM` and `TextRegion`
 gadgets are given font index `localSide + 1`. Slot 3 (narration) is started
-at volume 60 unless the session is in the live-battle state; `SHUTUP` stops
-it (visible while it plays). The `Start` control runs the campaign-CD check
+with a 60-scaled-tick (two-second) **delay** at full DirectSound volume
+unless the session is in the live-battle state (corrected 2026-08-29 per
+[03 R-AUD-02 §1]: this sentence previously read "at volume 60" — the 60 is
+the timer period, the volume argument is 0 = full scale); `SHUTUP` is a
+toggle — stage 0 stops the stream, any other stage restarts it (visible while
+it plays). The `Start` control runs the campaign-CD check
 (§5) and, when it passes, re-mounts the archive set, stops the narration
 and routes the front end into battle entry; on
 failure it shows the campaign-CD message box and stays. `PrevMenu` stops the
@@ -4286,7 +4290,9 @@ A wrong magic, wrong version, or wrong expected tag closes the file, frees the
 pool if allocated, and returns zero. The payload after the header is either
 read as is or decompressed with the same decompressor the archive reader uses;
 a decompression failure emits a `HapiBank::OpenBank::Decompression...` /
-`LoadAccount::Decompression...` diagnostic but parsing continues.
+`LoadAccount::Decompression...` diagnostic through the **fatal** channel
+(system-modal box, then exit code 1 — [02 R-MALF-01 §11]; corrected
+2026-08-29, this sentence previously said "but parsing continues").
 
 **Accounts.** The payload is a sequence of *accounts*. Each nonempty account
 begins with a 32-byte header; empty accounts are not emitted and the body may
