@@ -134,6 +134,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				v.Model = u.Def.ObjectName
 				v.FootX = int8(u.Def.FootprintX)
 				v.FootZ = int8(u.Def.FootprintZ)
+				v.BMCode = u.Def.BMCode // model-shading class gate [R-RND-02A]
 				if id := s.Units.DefIDForHandle(u.Handle); id != 0 {
 					v.DefID = id
 				}

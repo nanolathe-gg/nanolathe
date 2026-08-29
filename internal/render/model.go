@@ -176,8 +176,8 @@ type PrimitiveDraw struct {
 	IsColored     int32
 	VertexIndices []uint16           // in load-fixed order [03 §2.4] C20
 	WorldVerts    [][3]numeric.Fixed // world-space vertices for this primitive [03 §5.2] C13 position only at final placement [03 §2.4] C24
-	ShadeRow      int                // placeholder mid row [03 §4.3] TODO(question)
-	ShadeRows     []int              // one SHD row per primitive corner [03 §2.4.1]
+	ShadeRow      int                // first corner's SHD row, or NoShadeRow [R-RND-02A]
+	ShadeRows     []int              // one SHD row per corner; nil on the unshaded path [R-RND-02A]
 }
 
 // DefaultModelLight is the shipped model light direction [03 §2.4.1].
@@ -236,7 +236,7 @@ type UnitDraw struct {
 // worldPos is the committed world position [03 §2.4] C12; piece math itself does not include it [03 §5.2][03 §2.4] C24.
 // tables supplies the palette/SHD lookup at present time [03 §4.3] C10; pass nil for headless ordering tests.
 func BuildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed, dirty bool) []PieceDraw { // [03 §2.4] C21 [03 §5.2] C13
-	out, _ := buildPieceDraws(m, states, worldPos, dirty)
+	out, _ := buildPieceDraws(m, states, worldPos, dirty, true)
 	return out
 }
 
@@ -244,7 +244,7 @@ func BuildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 // the returned transform slice directly, avoiding a second per-piece copy;
 // BuildPieceDraws remains the narrow compatibility wrapper for callers that
 // only need draw records [03 §2.4] C21.
-func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed, dirty bool) ([]PieceDraw, []model.Transform) { // [03 §2.4] C21 [03 §5.2] C13
+func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed, dirty, shaded bool) ([]PieceDraw, []model.Transform) { // [03 §2.4] C21 [03 §5.2] C13
 	if m == nil {
 		return nil, nil
 	}
@@ -277,44 +277,48 @@ func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 				local[2].Add(worldPos[2]),
 			}
 		}
-		// Build smooth normals from the pristine transformed piece geometry.
-		// The average is intentionally left unnormalized (see ShadeRowForNormal).
-		normals := make([][3]float64, len(piece.Vertices))
-		normalCount := make([]int, len(piece.Vertices))
-		for primitiveIndex, pr := range piece.Primitives {
-			if piece.Selection && primitiveIndex == 0 {
-				continue // selection plate is not part of model lighting [03 §2.4.1]
-			}
-			if len(pr.VertexIndices) < 3 {
-				continue
-			}
-			a, b, c := pr.VertexIndices[0], pr.VertexIndices[1], pr.VertexIndices[2]
-			if int(a) >= len(worldVerts) || int(b) >= len(worldVerts) || int(c) >= len(worldVerts) {
-				continue
-			}
-			n := faceNormal(worldVerts[a], worldVerts[b], worldVerts[c])
-			for _, vi := range pr.VertexIndices {
-				if int(vi) >= len(normals) {
+		var rows []int
+		if shaded {
+			// The shaded renderer builds smooth normals from transformed piece
+			// geometry. The average remains unnormalized [03 §2.4.1]. The
+			// unshaded renderer does not read the per-piece shade bit [R-RND-02A].
+			normals := make([][3]float64, len(piece.Vertices))
+			normalCount := make([]int, len(piece.Vertices))
+			for primitiveIndex, pr := range piece.Primitives {
+				if piece.Selection && primitiveIndex == 0 {
+					continue // selection plate is not part of model lighting [03 §2.4.1]
+				}
+				if len(pr.VertexIndices) < 3 {
 					continue
 				}
-				normals[vi][0] += n[0]
-				normals[vi][1] += n[1]
-				normals[vi][2] += n[2]
-				normalCount[vi]++
+				a, b, c := pr.VertexIndices[0], pr.VertexIndices[1], pr.VertexIndices[2]
+				if int(a) >= len(worldVerts) || int(b) >= len(worldVerts) || int(c) >= len(worldVerts) {
+					continue
+				}
+				n := faceNormal(worldVerts[a], worldVerts[b], worldVerts[c])
+				for _, vi := range pr.VertexIndices {
+					if int(vi) >= len(normals) {
+						continue
+					}
+					normals[vi][0] += n[0]
+					normals[vi][1] += n[1]
+					normals[vi][2] += n[2]
+					normalCount[vi]++
+				}
 			}
-		}
-		rows := make([]int, len(normals))
-		for vi := range normals {
-			if normalCount[vi] == 0 {
-				rows[vi] = 15
-				continue
+			rows = make([]int, len(normals))
+			for vi := range normals {
+				if normalCount[vi] == 0 {
+					rows[vi] = SHDIdentityRow
+					continue
+				}
+				avg := normals[vi]
+				count := float64(normalCount[vi])
+				avg[0] /= count
+				avg[1] /= count
+				avg[2] /= count
+				rows[vi] = ShadeRowForNormal(avg, DefaultModelLight, i < len(states) && states[i].DontShade)
 			}
-			avg := normals[vi]
-			count := float64(normalCount[vi])
-			avg[0] /= count
-			avg[1] /= count
-			avg[2] /= count
-			rows[vi] = ShadeRowForNormal(avg, DefaultModelLight, i < len(states) && states[i].DontShade)
 		}
 		// Primitives in load-fixed order [03 §2.4] C20 [GAP 02-A6] — never resort here
 		prims := make([]PrimitiveDraw, len(piece.Primitives))
@@ -338,17 +342,20 @@ func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 				IsColored:     pr.IsColored,
 				VertexIndices: idxCopy,
 				WorldVerts:    worldPrimVerts,
-				ShadeRow:      ModelShadeMidRow,
-				ShadeRows:     make([]int, len(pr.VertexIndices)),
+				ShadeRow:      NoShadeRow,
 			}
-			for k, vi := range pr.VertexIndices {
-				if k >= len(pd.ShadeRows) || int(vi) >= len(rows) {
-					continue
+			if shaded {
+				pd.ShadeRow = ModelShadeMidRow
+				pd.ShadeRows = make([]int, len(pr.VertexIndices))
+				for k, vi := range pr.VertexIndices {
+					if int(vi) >= len(rows) {
+						continue
+					}
+					pd.ShadeRows[k] = rows[vi]
 				}
-				pd.ShadeRows[k] = rows[vi]
-			}
-			if len(pr.VertexIndices) > 0 && int(pr.VertexIndices[0]) < len(rows) {
-				pd.ShadeRow = rows[pr.VertexIndices[0]]
+				if len(pr.VertexIndices) > 0 && int(pr.VertexIndices[0]) < len(rows) {
+					pd.ShadeRow = rows[pr.VertexIndices[0]]
+				}
 			}
 			prims[pi] = pd
 		}
@@ -427,7 +434,10 @@ func BuildUnitDraw(m *model.Model, base []model.PieceState, heading, pitch, bank
 	// TODO(question): OrientationCache is presentation bookkeeping only; the
 	// published draw result is not retained across frames, so every draw still
 	// composes from pristine model data despite the cache threshold [03 §5.2].
-	pieces, transforms := buildPieceDraws(m, states, worldPos, needsRebuild) // [03 §2.4] C20
+	// BMcode=0 selects the shaded piece renderer only while the global
+	// display option is enabled; all other units take the no-SHD path
+	// [R-RND-02A].
+	pieces, transforms := buildPieceDraws(m, states, worldPos, needsRebuild, !current.BMCode && Shading) // [03 §2.4] C20
 	return &UnitDraw{
 		Model:        m,
 		PieceStates:  states,
@@ -445,7 +455,7 @@ func BuildUnitDrawSimple(m *model.Model, base []model.PieceState, heading, pitch
 		return nil
 	}
 	states := BuildUnitPieceStates(m, base, heading, pitch, bank)
-	pieces, transforms := buildPieceDraws(m, states, worldPos, false)
+	pieces, transforms := buildPieceDraws(m, states, worldPos, false, true)
 	return &UnitDraw{
 		Model:       m,
 		PieceStates: states,
@@ -461,7 +471,7 @@ func BuildProjectileDraw(m *model.Model, base []model.PieceState, yaw, pitch uin
 		return nil
 	}
 	states := BuildProjectilePieceStates(m, base, yaw, pitch) // [03 §5.2] each with -32768 offset
-	pieces, transforms := buildPieceDraws(m, states, worldPos, false)
+	pieces, transforms := buildPieceDraws(m, states, worldPos, false, true)
 	return &UnitDraw{
 		Model:       m,
 		PieceStates: states,
@@ -572,9 +582,10 @@ func ShadeRGBA(tables *palette.Tables, idx byte, row int) (r, g, b, a uint8) { /
 }
 
 // PrimitiveRGBA resolves a primitive's color to RGBA, selecting shading per type [03 §4.3] C10.
-// Flat-colored primitives and laser lines bypass SHD; textured primitives go through SHD [03 §4.3].
+// Flat-colored primitives and unshaded textured primitives bypass SHD. Shaded
+// textured primitives resolve through their emitted row [R-RND-02A][03 §4.3].
 func PrimitiveRGBA(tables *palette.Tables, prim PrimitiveDraw) (r, g, b, a uint8) { // [03 §4.3] C10
-	if prim.TextureName == "" || (prim.IsColored == 1 && prim.ColorIndex < 256) {
+	if prim.TextureName == "" || (prim.IsColored == 1 && prim.ColorIndex < 256) || prim.ShadeRow == NoShadeRow {
 		// Flat-colored bypasses SHD [03 §4.3]
 		return PaletteRGBA(tables, byte(prim.ColorIndex&0xFF))
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
@@ -70,11 +71,70 @@ func TestCollectDrawTrisUsesPrimitiveCornerShadeRows(t *testing.T) {
 	if len(tris) != 2 {
 		t.Fatalf("triangle count = %d, want 2", len(tris))
 	}
+	if !tris[0].useSHD || !tris[1].useSHD {
+		t.Fatal("shaded primitive lost its SHD dispatch")
+	}
 	if got, want := tris[0].row, [3]float64{3, 7, 11}; got != want {
 		t.Fatalf("first corner rows = %v, want %v", got, want)
 	}
 	if got, want := tris[1].row, [3]float64{3, 11, 19}; got != want {
 		t.Fatalf("second corner rows = %v, want %v", got, want)
+	}
+}
+
+func TestCollectDrawTrisCarriesNoShadeRowToRaster(t *testing.T) {
+	c := testModelTextureClient()
+	pr := presentationrender.PrimitiveDraw{
+		TextureName: "tex", ShadeRow: presentationrender.NoShadeRow,
+		VertexIndices: []uint16{0, 1, 2, 3},
+	}
+	vertices := [][3]numeric.Fixed{
+		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0),
+		fixedVertex(1, 0, 1), fixedVertex(0, 0, 1),
+	}
+	tris := c.collectDrawTris(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
+	if len(tris) != 2 {
+		t.Fatalf("triangle count = %d, want 2", len(tris))
+	}
+	for i := range tris {
+		if tris[i].useSHD {
+			t.Fatalf("unshaded triangle %d retained SHD dispatch", i)
+		}
+		if tris[i].row != [3]float64{} {
+			t.Fatalf("unshaded triangle %d emitted corner rows %v", i, tris[i].row)
+		}
+	}
+}
+
+func TestTexturedRasterBypassesSHDOnlyForNoShadeRow(t *testing.T) {
+	const source, remapped = uint8(7), uint8(41)
+	texture := &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{source}, Transparent: []bool{false}}
+	pal := &palette.Tables{}
+	pal.Shade[presentationrender.SHDIdentityRow][source] = remapped
+
+	for _, nanoframe := range []bool{false, true} {
+		for _, shaded := range []bool{false, true} {
+			c := &Client{width: 8, height: 8, indexed: make([]uint8, 64), pal: pal}
+			tri := screenTri{
+				x: [3]int32{0, 6, 0}, y: [3]int32{0, 0, 6},
+				row: [3]float64{presentationrender.SHDIdentityRow, presentationrender.SHDIdentityRow, presentationrender.SHDIdentityRow},
+				key: [3]float64{70, 70, 70}, useSHD: shaded,
+			}
+			target := newModelTarget(c.width, c.height)
+			if nanoframe {
+				c.blitTexturedTriNanoframeTarget(target, &tri, texture, presentationRevealKeep())
+			} else {
+				c.blitTexturedTriTarget(target, &tri, texture)
+			}
+			target.commit(c.indexed)
+			want := source
+			if shaded {
+				want = remapped
+			}
+			if got := c.indexed[1*c.width+1]; got != want {
+				t.Fatalf("nanoframe=%t shaded=%t pixel=%d want %d", nanoframe, shaded, got, want)
+			}
+		}
 	}
 }
 

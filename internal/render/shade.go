@@ -9,6 +9,11 @@
 
 package render
 
+// Shading is the presentation-level model-shading display option. Retail's
+// restore-defaults path enables it [R-RND-02A].
+// TODO(question): where retail loads the Shading display option from at startup; the Options restore-defaults path is the only traced writer.
+var Shading = true
+
 // SHDRowCount is the number of SHD rows [03 §4.3] (fmt pal).
 const SHDRowCount = 32 // [03 §4.3] 32×256
 
@@ -20,6 +25,12 @@ const SHDMidRow = 16 // [03 §4.3][rr-09 addendum] fallback; real row in client/
 // SHDIdentityRow is the measured near-identity row (row 15) where 232/256 entries self-map [03 §4.3].
 // Kept for reference; the placeholder in use is SHDMidRow=16.
 const SHDIdentityRow = 15 // [03 §4.3]
+
+// NoShadeRow marks a textured primitive emitted by the unshaded piece
+// renderer. It bypasses PALETTE.SHD rather than approximating that path with
+// row 15, which is not an identity mapping for every palette index [R-RND-02A]
+// [fmt pal "SHD"].
+const NoShadeRow = -1
 
 // SelectShadeRow returns the SHD row for model lighting.
 // Real per-vertex selection is row=__ftol(dot*5)&31 [rr-09 addendum] via internal/client/model.go;

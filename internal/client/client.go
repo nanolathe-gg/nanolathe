@@ -113,6 +113,11 @@ type Client struct {
 	fogOps             []presentationrender.FogOp
 	selectionChrome    []selectionChrome
 	selectionDrag      SelectionDrag
+	// rendererTraceSink is nil for the normal presentation path. When enabled,
+	// model composition emits value-only candidate evidence after the complete
+	// subject pixel is resolved [03 §2.4.1][03 §5.2][I6].
+	rendererTraceSink   RendererTraceSink
+	rendererTraceFilter RendererTraceFilter
 
 	// Feature GAF presentation — sprite class [02 "Feature record"] [03 §5.1.1].
 	// Loaded lazily from anims/<filename>.gaf via modelFS; cache is presentation-only (I6).
@@ -317,17 +322,64 @@ func (c *Client) ensureFogGAF() {
 	}
 }
 
-// ComposeFrame reads the published buffer and composes one current frame,
-// returning it as an RGBA image without entering the window loop (I6). It is
-// the basis of the --shot diagnostic path.
-func (c *Client) ComposeFrame() *image.RGBA {
+// ComposedFrameSnapshot is caller-owned evidence copied from one invocation of
+// the normal committed-frame composer. Indexed and RGBA describe the same
+// completed surface, including the software cursor. It records no writer
+// provenance; the renderer trace owns its narrower subject-composition scope.
+//
+// Committed distinguishes the deterministic pre-publication surface from a
+// publication whose valid tick is zero. The returned slices never alias the
+// client's reusable presentation planes [03 §1][03 §2.4][I6].
+type ComposedFrameSnapshot struct {
+	Width, Height int
+	Committed     bool
+	Tick          uint32
+	Indexed       []uint8
+	RGBA          []byte
+}
+
+// composeCurrentFrame runs the same one-pass committed-frame composition used
+// by ComposeFrame and returns the sampled publication only long enough for a
+// caller to copy its tick identity. It never exposes that frame beyond the
+// documented Buffer.Current reader lifetime [03 §2.4][I6].
+func (c *Client) composeCurrentFrame() *frame.Frame {
 	cur := c.buffer.Current()
 	c.composeIndexed(cur, cur != nil)
 	c.drawCursor() // cursor last, over the composed surface [07 §8]
 	c.convertIndexedToRGBA()
+	return cur
+}
+
+// ComposeFrame reads the published buffer and composes one current frame,
+// returning it as an RGBA image without entering the window loop (I6). It is
+// the basis of the --shot diagnostic path.
+func (c *Client) ComposeFrame() *image.RGBA {
+	c.composeCurrentFrame()
 	img := image.NewRGBA(image.Rect(0, 0, c.width, c.height))
 	copy(img.Pix, c.rgba)
 	return img
+}
+
+// ComposeFrameSnapshot composes exactly once through the same committed-frame
+// path as ComposeFrame, then copies both indexed and RGBA planes. This is a
+// diagnostic boundary for deterministic parity capture, not another renderer
+// or a claim about the final pixel writer [03 §1][03 §2.4][I6].
+func (c *Client) ComposeFrameSnapshot() ComposedFrameSnapshot {
+	if c == nil {
+		return ComposedFrameSnapshot{}
+	}
+	cur := c.composeCurrentFrame()
+	snapshot := ComposedFrameSnapshot{
+		Width:     c.width,
+		Height:    c.height,
+		Committed: cur != nil,
+		Indexed:   append([]uint8(nil), c.indexed...),
+		RGBA:      append([]byte(nil), c.rgba...),
+	}
+	if cur != nil {
+		snapshot.Tick = cur.Tick
+	}
+	return snapshot
 }
 
 // Input exposes the per-frame input snapshot for the windowed paths. Edge

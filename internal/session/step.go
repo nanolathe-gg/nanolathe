@@ -54,6 +54,7 @@ func (s *Session) stepOneSubTick(tick uint32) {
 	if s == nil {
 		return
 	}
+	s.setParityTraceTick(tick)
 	s.stepAuthoritativePhases(tick)
 
 	// Sharing is the transport tail after phase 12 [01 §4.4].

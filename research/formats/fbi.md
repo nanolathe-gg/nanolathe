@@ -140,12 +140,21 @@ what it doesn't know.
 | `BuildTime` | Total build effort (divided by the builder's `WorkerTime` rate) |
 | `FootprintX`, `FootprintZ` | Occupied size in 16-pixel grid cells |
 | `YardMap` | Per-cell footprint map (see below) |
-| `BuildAngle` | Total random yaw span around the requested build facing, in the native 65,536-units-per-turn heading domain; the exact sampling formula remains provisional |
+| `BuildAngle` | Authored integer read as a low-16-bit unsigned bound by the unit initializer; heading arithmetic and lifecycle are defined in [04 §2.3b] |
 | `MaxDamage` | Hit points |
 | `DamageModifier` | Scale applied to incoming damage while the unit's script has put it in the armored state (COB `ARMORED`). See the note below. |
 | `HealTime` | Self-heal interval (commanders) |
 | `ActivateWhenBuilt` | Unit starts activated |
 | `norestrict` | Excluded from the multiplayer unit-restriction list |
+
+**Correction (2026-08-28).** The previous entry described `BuildAngle` as a
+random yaw span around the requested build facing and left its sampling
+formula provisional. That implied a caller-facing-centered placement adjustment
+and was incomplete: the field is the unsigned bound consumed by the common
+unit-initialization sampler. The runtime heading arithmetic and lifecycle belong
+to [04 §2.3b], while this format entry records only the field's authored type
+and interpretation. `Ovradjust` remains **Unknown**; no overlap, heading, or
+geometry behavior is assigned to it.
 
 #### YardMap
 

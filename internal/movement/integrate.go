@@ -55,17 +55,23 @@ type System struct {
 	// the table did not have, for load diagnostics. Order is first-seen.
 	Unresolved []string
 
-	Grid         *OccupancyGrid
-	Scheduler    *path.Scheduler
-	Routes       map[pool.Handle]*Route
-	Steers       map[pool.Handle]*SteerState
-	Collisions   map[pool.Handle]*CollisionState
-	Flights      map[pool.Handle]*FlightState
-	profiles     map[pool.Handle]Profile // per-unit resolved movement profile [04 §6.1]
-	profileNames map[pool.Handle]string  // per-unit canonical class key the profile resolved from [04 §6.1]; lookup-only [I1]
-	sessions     []*path.Session         // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
-	prevMoveTier map[pool.Handle]int     // cached mover tier per unit for MoveRate edge emission [04 §5.2][GAP T15] C18
-	prevSFXBand  map[pool.Handle]int     // cached setSFXoccupy band per unit for edge emission [04 §5.2][GAP T15] C17 C18
+	Grid       *OccupancyGrid
+	Scheduler  *path.Scheduler
+	Routes     map[pool.Handle]*Route
+	Steers     map[pool.Handle]*SteerState
+	Collisions map[pool.Handle]*CollisionState
+	// collisionHistory is allocated only for an opted-in parity capture. It is
+	// appended after the complete movement sweep, never during diagnostic reads.
+	collisionHistory        []collisionHistoryEntry
+	collisionTraceEnabled   bool
+	collisionHistoryLimit   int
+	collisionHistoryDropped bool
+	Flights                 map[pool.Handle]*FlightState
+	profiles                map[pool.Handle]Profile // per-unit resolved movement profile [04 §6.1]
+	profileNames            map[pool.Handle]string  // per-unit canonical class key the profile resolved from [04 §6.1]; lookup-only [I1]
+	sessions                []*path.Session         // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
+	prevMoveTier            map[pool.Handle]int     // cached mover tier per unit for MoveRate edge emission [04 §5.2][GAP T15] C18
+	prevSFXBand             map[pool.Handle]int     // cached setSFXoccupy band per unit for edge emission [04 §5.2][GAP T15] C17 C18
 
 	// world is the units world bound via BindWorld (or via Tick for legacy path).
 	// StepUnit needs it to fetch the *units.Unit for a handle without passing
@@ -1354,6 +1360,7 @@ func (s *System) EndTick(tick uint32) {
 			}
 		}
 	}
+	s.recordCollisionHistory(tick)
 	s.tickCarried = nil
 	s.tickStarted = false
 }

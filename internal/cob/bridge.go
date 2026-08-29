@@ -76,6 +76,22 @@ type CallbackReturn struct {
 	Explicit bool
 }
 
+// LifecycleEvent identifies one actual callback boundary. It is emitted only
+// when a sink is installed; the normal bridge has no trace allocation or
+// callback side effect [04 §4.2].
+type LifecycleEvent struct {
+	Tick   uint32
+	Source uint16
+	Name   string
+	Mode   CallbackMode
+	Thread int
+	Phase  string // start, enqueue, dequeue, finish, finish-abnormal
+}
+
+// LifecycleSink observes callback boundaries in their actual execution order.
+// A sink must not call back into the bridge or VM.
+type LifecycleSink func(LifecycleEvent)
+
 // CallbackReceiver is the standardized completion receiver for D/I bridge
 // operations. Receivers are called synchronously by Bridge.Drain after the VM
 // has observed an explicit return, in ascending thread-slot order [04 §4.2].
@@ -111,8 +127,12 @@ const (
 type CallbackBridge struct {
 	VM *VM
 
-	createInvoked bool
-	pending       [8]pendingCallback
+	createInvoked    bool
+	pending          [8]pendingCallback
+	lifecyclePending [8]pendingCallback
+	lifecycle        LifecycleSink
+	lifecycleTick    uint32
+	lifecycleSrc     uint16
 }
 
 type pendingCallback struct {
@@ -126,16 +146,53 @@ type pendingCallback struct {
 // explicit failed production binding; operations report Started=false.
 func NewCallbackBridge(vm *VM) *CallbackBridge { return &CallbackBridge{VM: vm} }
 
+// SetLifecycleSink enables opt-in VM callback observations.
+func (b *CallbackBridge) SetLifecycleSink(sink LifecycleSink) {
+	if b != nil {
+		b.lifecycle = sink
+	}
+}
+
+// SetLifecycleContext sets the selected source and authoritative tick attached
+// to subsequent events. It does not affect VM execution.
+func (b *CallbackBridge) SetLifecycleContext(tick uint32, source uint16) {
+	if b != nil {
+		b.lifecycleTick, b.lifecycleSrc = tick, source
+	}
+}
+
+func (b *CallbackBridge) lifecycleEvent(name string, mode CallbackMode, thread int, phase string) {
+	if b != nil && b.lifecycle != nil {
+		b.lifecycle(LifecycleEvent{Tick: b.lifecycleTick, Source: b.lifecycleSrc, Name: name, Mode: mode, Thread: thread, Phase: phase})
+	}
+}
+
 // Create invokes Create exactly once in mode I. A second call is rejected and
 // does not schedule another callback [04 §5.1].
 func (b *CallbackBridge) Create() CallbackResult {
 	if b == nil || b.VM == nil || b.createInvoked {
+		if b != nil && b.VM == nil {
+			b.lifecycleEvent("Create", ModeImmediate, -1, "start-failed")
+		}
 		return CallbackResult{Name: "Create", Mode: ModeImmediate, Thread: -1}
 	}
 	b.createInvoked = true
-	ok := StartModeI(b.VM, "Create", nil)
-	b.collectReturns()
+	ok := b.VM.StartByName("Create", nil)
 	thread := b.VM.LastStartedThread()
+	if !ok {
+		// A failed named start is an observed lifecycle boundary too; retaining
+		// it makes missing scripts and exhausted slots distinguishable from a
+		// callback that was never attempted [04 §4.2].
+		b.lifecycleEvent("Create", ModeImmediate, -1, "start-failed")
+	}
+	if ok && thread >= 0 && thread < len(b.lifecyclePending) {
+		b.lifecycleEvent("Create", ModeImmediate, thread, "start")
+		b.lifecyclePending[thread] = pendingCallback{active: true, name: "Create", mode: ModeImmediate}
+	}
+	if ok {
+		b.VM.Drain(0)
+	}
+	b.collectReturns()
 	completed := ok && (thread < 0 || !b.VM.IsThreadAlive(thread))
 	return CallbackResult{Name: "Create", Mode: ModeImmediate, Started: ok, Completed: completed, Thread: thread}
 }
@@ -159,12 +216,14 @@ func (b *CallbackBridge) Drain(delta int) {
 func (b *CallbackBridge) Deferred(name string, args []int32, receiver CallbackReceiver) CallbackResult {
 	result := CallbackResult{Name: name, Mode: ModeDeferred, Thread: -1}
 	if b == nil || b.VM == nil {
+		b.lifecycleEvent(name, ModeDeferred, -1, "start-failed")
 		if receiver != nil {
 			receiver(CallbackReturn{Name: name, Mode: ModeDeferred, Thread: -1, Value: 0})
 		}
 		return result
 	}
 	if !b.VM.StartByName(name, args) {
+		b.lifecycleEvent(name, ModeDeferred, -1, "start-failed")
 		if receiver != nil {
 			receiver(CallbackReturn{Name: name, Mode: ModeDeferred, Thread: -1, Value: 0})
 		}
@@ -172,6 +231,10 @@ func (b *CallbackBridge) Deferred(name string, args []int32, receiver CallbackRe
 	}
 	thread := b.VM.LastStartedThread()
 	result.Started, result.Thread = true, thread
+	b.lifecycleEvent(name, ModeDeferred, thread, "start")
+	if thread >= 0 && thread < len(b.lifecyclePending) {
+		b.lifecyclePending[thread] = pendingCallback{active: true, name: name, mode: ModeDeferred}
+	}
 	if receiver != nil && thread >= 0 && thread < len(b.pending) {
 		b.pending[thread] = pendingCallback{active: true, name: name, mode: ModeDeferred, receiver: receiver}
 	}
@@ -184,6 +247,7 @@ func (b *CallbackBridge) Deferred(name string, args []int32, receiver CallbackRe
 func (b *CallbackBridge) Immediate(name string, args []int32, receiver CallbackReceiver) CallbackResult {
 	result := CallbackResult{Name: name, Mode: ModeImmediate, Thread: -1}
 	if b == nil || b.VM == nil {
+		b.lifecycleEvent(name, ModeImmediate, -1, "start-failed")
 		if receiver != nil {
 			receiver(CallbackReturn{Name: name, Mode: ModeImmediate, Thread: -1, Value: 0})
 		}
@@ -192,6 +256,7 @@ func (b *CallbackBridge) Immediate(name string, args []int32, receiver CallbackR
 	// Start first so the receiver can be associated with the allocated slot
 	// before the mode-I barrier drains it.
 	if !b.VM.StartByName(name, args) {
+		b.lifecycleEvent(name, ModeImmediate, -1, "start-failed")
 		if receiver != nil {
 			receiver(CallbackReturn{Name: name, Mode: ModeImmediate, Thread: -1, Value: 0})
 		}
@@ -199,6 +264,10 @@ func (b *CallbackBridge) Immediate(name string, args []int32, receiver CallbackR
 	}
 	thread := b.VM.LastStartedThread()
 	result.Started, result.Thread = true, thread
+	b.lifecycleEvent(name, ModeImmediate, thread, "start")
+	if thread >= 0 && thread < len(b.lifecyclePending) {
+		b.lifecyclePending[thread] = pendingCallback{active: true, name: name, mode: ModeImmediate}
+	}
 	if receiver != nil && thread >= 0 && thread < len(b.pending) {
 		b.pending[thread] = pendingCallback{active: true, name: name, mode: ModeImmediate, receiver: receiver}
 	}
@@ -432,6 +501,19 @@ func weaponCallbackName(slot WeaponSlot, prefix string) (string, bool) {
 func (b *CallbackBridge) collectReturns() {
 	if b == nil || b.VM == nil {
 		return
+	}
+	for i := 0; i < len(b.lifecyclePending); i++ {
+		p := &b.lifecyclePending[i]
+		if !p.active {
+			continue
+		}
+		if b.VM.HasReturn(i) {
+			b.lifecycleEvent(p.name, p.mode, i, "finish")
+			*p = pendingCallback{}
+		} else if !b.VM.IsThreadAlive(i) {
+			b.lifecycleEvent(p.name, p.mode, i, "finish-abnormal")
+			*p = pendingCallback{}
+		}
 	}
 	for i := 0; i < len(b.pending); i++ {
 		p := &b.pending[i]

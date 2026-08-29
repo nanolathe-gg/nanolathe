@@ -58,6 +58,108 @@ type Scheduler struct {
 
 	lastReplenish uint32
 	haveLast      bool
+	traceEnabled  bool
+	traces        []Trace
+	traceLimit    int
+	traceDropped  bool
+}
+
+// Trace is an opt-in copy of a request's scheduler boundary. Points are
+// copied when the search returns, so reading it cannot observe or mutate the
+// searcher's working storage [04 §7.3].
+type Trace struct {
+	Request RequestTrace
+	Goal    GoalTrace
+	Points  []Point
+	Status  Status
+	Done    bool
+	Tick    uint32
+}
+
+// RequestTrace is a value-only request copy. The Goal interface is replaced by
+// GoalTrace so pointer identity or an implementation's private fields cannot
+// enter a deterministic report or hash.
+type RequestTrace struct {
+	Unit       pool.Handle
+	Player     uint8
+	Start      Cell
+	Goal       GoalTrace
+	Activation uint64
+}
+
+// GoalTrace is the value-only description of the goal parameters used by a
+// request. Keeping it typed avoids hashing interface or pointer identity.
+type GoalTrace struct {
+	Kind    uint8
+	Unknown bool
+	Center  Cell
+	A, B    int32
+	Rect    Rect
+	Cells   []Cell
+}
+
+// SchedulerTraceState exposes timing/quanta gates as values for deterministic
+// diagnostics. It never exposes the mutable queue backing arrays.
+type SchedulerTraceState struct {
+	Base          int32
+	BaseSet       bool
+	LastReplenish uint32
+	HaveLast      bool
+	Scales        [10]int32
+	Pending       [10]int
+	Requests      []RequestTrace
+}
+
+func (s *Scheduler) TraceState() SchedulerTraceState {
+	var out SchedulerTraceState
+	if s == nil {
+		return out
+	}
+	out.Base, out.BaseSet, out.LastReplenish, out.HaveLast, out.Scales = s.base, s.baseSet, s.lastReplenish, s.haveLast, s.scales
+	for player := 0; player < 10; player++ {
+		out.Pending[player] = len(s.queues[player])
+		for _, request := range s.queues[player] {
+			out.Requests = append(out.Requests, RequestTrace{Unit: request.Unit, Player: request.Player, Start: request.Start, Goal: DescribeGoal(request.Goal), Activation: request.Activation})
+		}
+	}
+	return out
+}
+
+// DefaultTraceLimit bounds opt-in diagnostic retention. It is a report
+// resource limit, not simulation behavior; callers may choose a smaller limit.
+const DefaultTraceLimit = 4096
+
+// DescribeGoal returns the value-only parameters of a built-in goal.
+func DescribeGoal(goal Goal) GoalTrace {
+	switch g := goal.(type) {
+	case *pointGoal:
+		if g == nil {
+			return GoalTrace{Unknown: true}
+		}
+		return GoalTrace{Kind: 1, Center: g.center, A: g.radius}
+	case *annulusGoal:
+		if g == nil {
+			return GoalTrace{Unknown: true}
+		}
+		return GoalTrace{Kind: 2, Center: g.center, A: g.inner, B: g.outer}
+	case *rectGoal:
+		if g == nil {
+			return GoalTrace{Unknown: true}
+		}
+		return GoalTrace{Kind: 3, Rect: g.rect}
+	case *savedGoal:
+		if g == nil {
+			return GoalTrace{Unknown: true}
+		}
+		return GoalTrace{Kind: 4, Cells: append([]Cell(nil), g.cells...)}
+	default:
+		// Unknown external Goal implementations are retained as an explicit
+		// residual; no pointer formatting or guessed parameters enter a
+		// diagnostic hash.
+		// TODO(question): external Goal parameter encoding is not owned by path;
+		// the typed residual remains Unknown until its owner supplies an adapter.
+		return GoalTrace{Unknown: true}
+	}
 }
 
 // NewScheduler creates a Scheduler with the given search and publish callbacks.
@@ -85,6 +187,60 @@ func (s *Scheduler) SetSearch(fn SearchFunc) {
 func (s *Scheduler) SetPublish(fn PublishFunc) {
 	s.publish = fn
 }
+
+// EnableTrace enables deterministic request/result diagnostics. The default
+// scheduler has no trace storage and therefore does not allocate or change
+// dispatch behavior [04 §7.3][I6].
+func (s *Scheduler) EnableTrace() {
+	if s == nil {
+		return
+	}
+	s.traceEnabled = true
+	if s.traceLimit <= 0 {
+		s.traceLimit = DefaultTraceLimit
+	}
+	if s.traces == nil {
+		s.traces = make([]Trace, 0, minTraceCapacity(s.traceLimit))
+	}
+}
+
+func minTraceCapacity(limit int) int {
+	if limit < 8 {
+		return limit
+	}
+	return 8
+}
+
+// SetTraceLimit bounds future scheduler trace records. Existing records are
+// retained up to the new limit and the oldest records are discarded first.
+func (s *Scheduler) SetTraceLimit(limit int) {
+	if s == nil {
+		return
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	s.traceLimit = limit
+	for len(s.traces) > limit {
+		s.traces = s.traces[1:]
+	}
+}
+
+// ResetTrace clears diagnostic request/result records without touching queues,
+// search state, or dispatch counters.
+func (s *Scheduler) ResetTrace() {
+	if s == nil {
+		return
+	}
+	s.traces = s.traces[:0]
+	s.traceDropped = false
+}
+
+// TraceDropped reports whether the retention limit discarded a record.
+func (s *Scheduler) TraceDropped() bool { return s != nil && s.traceDropped }
+
+// TraceEnabled reports whether request/result capture is active.
+func (s *Scheduler) TraceEnabled() bool { return s != nil && s.traceEnabled }
 
 // ScaleFor reports the current per-player scale quantum [04 §7.2][04 §7.3].
 func (s *Scheduler) ScaleFor(player uint8) int32 {
@@ -241,6 +397,9 @@ func (s *Scheduler) Tick(tick uint32) {
 		for idx < len(s.queues[player]) {
 			req := s.queues[player][idx]
 			points, status, done := s.search(req, scale, popsPerRequest)
+			if s.traceEnabled {
+				s.recordTrace(Trace{Request: RequestTrace{Unit: req.Unit, Player: req.Player, Start: req.Start, Goal: DescribeGoal(req.Goal), Activation: req.Activation}, Goal: DescribeGoal(req.Goal), Points: append([]Point(nil), points...), Status: status, Done: done, Tick: tick})
+			}
 			if !done {
 				idx++
 				continue
@@ -252,6 +411,49 @@ func (s *Scheduler) Tick(tick uint32) {
 			s.queues[player] = s.queues[player][:len(s.queues[player])-1]
 		}
 	}
+}
+
+func (s *Scheduler) recordTrace(next Trace) {
+	for i := range s.traces {
+		if s.traces[i].Request.Unit == next.Request.Unit {
+			s.traces[i] = next
+			return
+		}
+	}
+	if s.traceLimit <= 0 || len(s.traces) >= s.traceLimit {
+		s.traceDropped = true
+		return
+	}
+	s.traces = append(s.traces, next)
+}
+
+// TraceFor returns copied pending and most recent request/result state. It
+// scans the already ordered player queues and trace slice; reads never mutate
+// scheduler state or advance a search [04 §7.3][I1].
+func (s *Scheduler) TraceFor(unit pool.Handle) (pending *Request, result *Trace) {
+	if s == nil || !s.traceEnabled {
+		return nil, nil
+	}
+	for player := 0; player < 10; player++ {
+		for i := range s.queues[player] {
+			if s.queues[player][i].Unit == unit {
+				copy := s.queues[player][i]
+				pending = &copy
+				break
+			}
+		}
+	}
+	for i := range s.traces {
+		if s.traces[i].Request.Unit != unit {
+			continue
+		}
+		copy := s.traces[i]
+		copy.Points = append([]Point(nil), copy.Points...)
+		copy.Goal.Cells = append([]Cell(nil), copy.Goal.Cells...)
+		result = &copy
+		break
+	}
+	return pending, result
 }
 
 // AllRequests returns a deterministic snapshot of all pending requests [04 §7.3][P0-I11][I1].

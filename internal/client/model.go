@@ -350,16 +350,23 @@ func (c *Client) expandModel(name string) *unitModel {
 }
 
 type screenTri struct {
-	x, y  [3]int32
-	u, v  [3]float64
-	row   [3]float64 // interpolated SHD row, per corner [03 §2.4.1]
-	key   [3]float64 // interpolated nanoframe height key, per corner [03 §5.2]
-	color uint8
-	frame *formats.GAFFrame
-	entry *formats.GAFEntry
-	team  bool
-	order int
-	depth int32 // mean screen y for painter order
+	x, y       [3]int32
+	u, v       [3]float64
+	row        [3]float64 // interpolated SHD row, per corner [03 §2.4.1]
+	key        [3]float64 // interpolated nanoframe height key, per corner [03 §5.2]
+	color      uint8
+	frame      *formats.GAFFrame
+	entry      *formats.GAFEntry
+	team       bool
+	useSHD     bool // textured texels pass through PALETTE.SHD [R-RND-02A]
+	order      int
+	candidate  uint32
+	piece      int
+	primitive  int
+	texture    string
+	frameIndex int
+	frameState RendererValueState
+	depth      int32 // mean screen y for painter order
 }
 
 // modelTarget is the per-unit indexed composition image. Its color, height,
@@ -371,6 +378,9 @@ type modelTarget struct {
 	covered                []bool
 	width, heightPx        int
 	minX, minY, maxX, maxY int32
+	trace                  *rendererTrace
+	winner                 []int
+	tick                   uint32
 }
 
 func newModelTarget(width, height int) *modelTarget {
@@ -378,6 +388,7 @@ func newModelTarget(width, height int) *modelTarget {
 	return &modelTarget{
 		color: make([]uint8, n), height: make([]uint8, n), covered: make([]bool, n),
 		width: width, heightPx: height, maxX: int32(width - 1), maxY: int32(height - 1),
+		winner: nil,
 	}
 }
 
@@ -421,6 +432,15 @@ func (c *Client) reusableModelTarget(tris []screenTri) *modelTarget {
 	t := &modelTarget{
 		color: c.modelTargetColor, height: c.modelTargetHeight, covered: c.modelTargetCovered,
 		width: c.width, heightPx: c.height, minX: 1, minY: 1, maxX: 0, maxY: 0,
+		tick: c.frameTick,
+	}
+	if c.rendererTraceSink != nil {
+		t.trace = newRendererTrace(n)
+		t.winner = t.trace.winner
+		t.trace.unit = 0
+		t.trace.tick = c.frameTick
+		t.trace.width = c.width
+		t.trace.height = c.height
 	}
 	if len(tris) == 0 {
 		return t
@@ -446,6 +466,9 @@ func (c *Client) reusableModelTarget(tris []screenTri) *modelTarget {
 		for px := t.minX; px <= t.maxX; px++ {
 			i := row + int(px)
 			t.height[i], t.color[i], t.covered[i] = 0, 0, false
+			if t.winner != nil {
+				t.winner[i] = -1
+			}
 		}
 	}
 	return t
@@ -630,6 +653,21 @@ func (c *Client) collectDrawTris(draw *presentationrender.UnitDraw, owner uint8,
 				indices := [3]int{int(pr.VertexIndices[0]), int(pr.VertexIndices[k]), int(pr.VertexIndices[k+1])}
 				var tri screenTri
 				tri.color, tri.frame, tri.order = color, texFrame, pri
+				tri.useSHD = pr.ShadeRow != presentationrender.NoShadeRow
+				tri.candidate, tri.piece, tri.primitive, tri.texture = uint32(len(tris)), pi, pri, pr.TextureName
+				if texFrame != nil && c.rendererTraceSink != nil {
+					tri.frameState = RendererValueAvailable
+					if ref.kind == texStatic {
+						tri.frameIndex = 0
+					} else if ref.entry != nil {
+						for fi := range ref.entry.Frames {
+							if ref.entry.Frames[fi].Frame == texFrame {
+								tri.frameIndex = fi
+								break
+							}
+						}
+					}
+				}
 				for corner, vi := range indices {
 					v := piece.WorldVertices[vi]
 					sx, sy := c.cam.WorldToScreen(v[0], v[1], v[2])
@@ -639,11 +677,13 @@ func (c *Client) collectDrawTris(draw *presentationrender.UnitDraw, owner uint8,
 					// whole-world-unit Y. A right shift would floor negative values;
 					// retail narrowing truncates toward zero [I3][03 §5.2].
 					tri.key[corner] = float64(modelHeightKey(v[1].Sub(draw.WorldPos[1])))
-					primitiveCorner := [3]int{0, k, k + 1}[corner]
-					if primitiveCorner < len(pr.ShadeRows) {
-						tri.row[corner] = float64(pr.ShadeRows[primitiveCorner])
-					} else {
-						tri.row[corner] = 15
+					if tri.useSHD {
+						primitiveCorner := [3]int{0, k, k + 1}[corner]
+						if primitiveCorner < len(pr.ShadeRows) {
+							tri.row[corner] = float64(pr.ShadeRows[primitiveCorner])
+						} else {
+							tri.row[corner] = 15
+						}
 					}
 				}
 				tri.depth /= 3
@@ -673,21 +713,28 @@ func (c *Client) drawModel(draw *presentationrender.UnitDraw, owner uint8, id ui
 	// Completed and unfinished models both use this target; nanoframe reveal
 	// only adds a recolour/read step after ordinary admission [03 §5.2].
 	target := c.reusableModelTarget(tris)
+	if target.trace != nil {
+		target.trace.unit = id
+	}
 	for i := range tris {
 		switch {
 		case reveal != nil && tris[i].frame != nil:
-			c.blitTexturedTriNanoframeTarget(target, &tris[i], tris[i].frame, *reveal)
+			c.blitTexturedTriNanoframeTarget(target, &tris[i], tris[i].frame, *reveal, id)
 		case reveal != nil:
-			c.fillTriNanoframeTarget(target, &tris[i], tris[i].color, *reveal)
+			c.fillTriNanoframeTarget(target, &tris[i], tris[i].color, *reveal, id)
 		case tris[i].frame != nil:
-			c.blitTexturedTriTarget(target, &tris[i], tris[i].frame)
+			c.blitTexturedTriTarget(target, &tris[i], tris[i].frame, id)
 		default:
-			c.fillTriTarget(target, &tris[i], tris[i].color)
+			c.fillTriTarget(target, &tris[i], tris[i].color, id)
 		}
 	}
 	target.commit(c.indexed)
 	if reveal != nil {
-		c.drawModelOutline(draw, outline)
+		c.drawModelOutline(draw, outline, target.trace)
+	}
+	if target.trace != nil {
+		target.trace.resolve(target, c.indexed, c.width, c.height)
+		target.trace.emit(c.rendererTraceSink, c.rendererTraceFilter)
 	}
 	return len(tris) != 0
 }
@@ -695,7 +742,7 @@ func (c *Client) drawModel(draw *presentationrender.UnitDraw, owner uint8, id ui
 // drawModelOutline overdraws every primitive of every visible piece as a
 // closed polyline. The selection plate is the one primitive the outline pass
 // skips, exactly as the raster pass does [03 §5.2][03 §2.4.1].
-func (c *Client) drawModelOutline(draw *presentationrender.UnitDraw, color uint8) {
+func (c *Client) drawModelOutline(draw *presentationrender.UnitDraw, color uint8, trace *rendererTrace) {
 	if c == nil || c.cam == nil || draw == nil || draw.Model == nil {
 		return
 	}
@@ -722,6 +769,9 @@ func (c *Client) drawModelOutline(draw *presentationrender.UnitDraw, color uint8
 				sx, sy = sx-camera.OriginX, sy-camera.OriginY
 				if k > 0 && !c.segmentOffscreen(px, py, sx, sy) {
 					c.drawIndexedLine(px, py, sx, sy, color)
+					if trace != nil {
+						traceOutlineLine(trace, px, py, sx, sy, color, pi, pri)
+					}
 				}
 				px, py = sx, sy
 			}
@@ -873,7 +923,8 @@ func nanoframeVerdict(rev presentationrender.NanoframeReveal, key uint8, compose
 	}
 }
 
-func (c *Client) fillTriNanoframeTarget(target *modelTarget, t *screenTri, color uint8, rev presentationrender.NanoframeReveal) {
+func (c *Client) fillTriNanoframeTarget(target *modelTarget, t *screenTri, color uint8, rev presentationrender.NanoframeReveal, ids ...uint64) {
+	id := rendererID(ids)
 	minX, minY, maxX, maxY := c.triBounds(t)
 	d := baryDenom(t)
 	if d == 0 {
@@ -888,19 +939,30 @@ func (c *Client) fillTriNanoframeTarget(target *modelTarget, t *screenTri, color
 			}
 			key := scanlineHeightKey(t, px, py)
 			idx := int(row + px)
+			event := -1
+			if target.trace != nil {
+				event = target.traceCandidate(rendererCandidate(t, target.tick, id, px, py, key, target.height[idx], color, 0, rendererTexture(t, 0, 0, 0, RendererValueUnavailable, false)))
+			}
 			if !target.admit(idx, key) {
+				target.traceRejected(event, RendererReasonHeightRejected, "height")
 				continue
 			}
+			target.traceAdmitted(idx, event)
 			if b, ok := nanoframeVerdict(rev, key, color); ok {
+				if event >= 0 {
+					target.trace.events[event].CandidateIndex = b
+				}
 				target.write(idx, b, true)
 			} else {
+				target.traceRejected(event, RendererReasonNanoframeErase, "nanoframe-erase")
 				target.write(idx, 0, false)
 			}
 		}
 	}
 }
 
-func (c *Client) blitTexturedTriNanoframeTarget(target *modelTarget, t *screenTri, frame *formats.GAFFrame, rev presentationrender.NanoframeReveal) {
+func (c *Client) blitTexturedTriNanoframeTarget(target *modelTarget, t *screenTri, frame *formats.GAFFrame, rev presentationrender.NanoframeReveal, ids ...uint64) {
+	id := rendererID(ids)
 	minX, minY, maxX, maxY := c.triBounds(t)
 	d := baryDenom(t)
 	if d == 0 {
@@ -914,21 +976,42 @@ func (c *Client) blitTexturedTriNanoframeTarget(target *modelTarget, t *screenTr
 			if l0 < 0 || l1 < 0 || l2 < 0 {
 				continue
 			}
-			b, ok := frame.At(texelAt(t, l0, l1, l2, w, h))
-			if !ok {
-				continue
-			}
+			tx, ty := texelAt(t, l0, l1, l2, w, h)
+			b, ok := frame.At(tx, ty)
 			key := scanlineHeightKey(t, px, py)
 			idx := int(row + px)
-			if !target.admit(idx, key) {
+			sourceState := RendererValueUnavailable
+			if tx >= 0 && ty >= 0 && tx < w && ty < h && ty*w+tx < len(frame.Pixels) {
+				sourceState = RendererValueAvailable
+				b = frame.Pixels[ty*w+tx]
+			}
+			event := -1
+			if target.trace != nil {
+				shade := presentationrender.NoShadeRow
+				if t.useSHD {
+					shade = shadeRowAt(t, l0, l1, l2)
+				}
+				event = target.traceCandidate(rendererCandidate(t, target.tick, id, px, py, key, target.height[idx], b, shade, rendererTexture(t, tx, ty, b, sourceState, !ok)))
+			}
+			if !ok {
+				target.traceRejected(event, RendererReasonTransparentTexel, "transparent-texel")
 				continue
 			}
-			if c.pal != nil {
+			if !target.admit(idx, key) {
+				target.traceRejected(event, RendererReasonHeightRejected, "height")
+				continue
+			}
+			target.traceAdmitted(idx, event)
+			if c.pal != nil && t.useSHD {
 				b = c.pal.Shade[shadeRowAt(t, l0, l1, l2)][b]
 			}
 			if b, ok := nanoframeVerdict(rev, key, b); ok {
+				if event >= 0 {
+					target.trace.events[event].CandidateIndex = b
+				}
 				target.write(idx, b, true)
 			} else {
+				target.traceRejected(event, RendererReasonNanoframeErase, "nanoframe-erase")
 				target.write(idx, 0, false)
 			}
 		}
@@ -965,20 +1048,32 @@ func shadeRowAt(t *screenTri, l0, l1, l2 float64) int {
 	return ri
 }
 
-func (c *Client) fillTriTarget(target *modelTarget, t *screenTri, color uint8) {
+func (c *Client) fillTriTarget(target *modelTarget, t *screenTri, color uint8, ids ...uint64) {
+	id := rendererID(ids)
 	minX, minY, maxX, maxY := c.triBounds(t)
 	for py := minY; py <= maxY; py++ {
 		row := py * int32(c.width)
 		for px := minX; px <= maxX; px++ {
 			idx := int(row + px)
-			if pointInTri(t, px, py) && target.admit(idx, scanlineHeightKey(t, px, py)) {
-				target.write(idx, color, true)
+			if pointInTri(t, px, py) {
+				key := scanlineHeightKey(t, px, py)
+				event := -1
+				if target.trace != nil {
+					event = target.traceCandidate(rendererCandidate(t, target.tick, id, px, py, key, target.height[idx], color, 0, rendererTexture(t, 0, 0, 0, RendererValueUnavailable, false)))
+				}
+				if target.admit(idx, key) {
+					target.traceAdmitted(idx, event)
+					target.write(idx, color, true)
+				} else if event >= 0 {
+					target.traceRejected(event, RendererReasonHeightRejected, "height")
+				}
 			}
 		}
 	}
 }
 
-func (c *Client) blitTexturedTriTarget(target *modelTarget, t *screenTri, frame *formats.GAFFrame) {
+func (c *Client) blitTexturedTriTarget(target *modelTarget, t *screenTri, frame *formats.GAFFrame, ids ...uint64) {
+	id := rendererID(ids)
 	minX, minY, maxX, maxY := c.triBounds(t)
 	d := baryDenom(t)
 	if d == 0 {
@@ -992,16 +1087,37 @@ func (c *Client) blitTexturedTriTarget(target *modelTarget, t *screenTri, frame 
 			if l0 < 0 || l1 < 0 || l2 < 0 {
 				continue
 			}
-			b, ok := frame.At(texelAt(t, l0, l1, l2, w, h))
-			if !ok {
-				continue
-			}
+			tx, ty := texelAt(t, l0, l1, l2, w, h)
+			b, ok := frame.At(tx, ty)
+			key := scanlineHeightKey(t, px, py)
 			idx := int(row + px)
-			if !target.admit(idx, scanlineHeightKey(t, px, py)) {
+			sourceState := RendererValueUnavailable
+			if tx >= 0 && ty >= 0 && tx < w && ty < h && ty*w+tx < len(frame.Pixels) {
+				sourceState = RendererValueAvailable
+				b = frame.Pixels[ty*w+tx]
+			}
+			shade := presentationrender.NoShadeRow
+			if t.useSHD {
+				shade = shadeRowAt(t, l0, l1, l2)
+			}
+			event := -1
+			if target.trace != nil {
+				event = target.traceCandidate(rendererCandidate(t, target.tick, id, px, py, key, target.height[idx], b, shade, rendererTexture(t, tx, ty, b, sourceState, !ok)))
+			}
+			if !ok {
+				target.traceRejected(event, RendererReasonTransparentTexel, "transparent-texel")
 				continue
 			}
-			if c.pal != nil {
-				b = c.pal.Shade[shadeRowAt(t, l0, l1, l2)][b]
+			if !target.admit(idx, key) {
+				target.traceRejected(event, RendererReasonHeightRejected, "height")
+				continue
+			}
+			target.traceAdmitted(idx, event)
+			if c.pal != nil && t.useSHD {
+				b = c.pal.Shade[shade][b]
+			}
+			if event >= 0 {
+				target.trace.events[event].CandidateIndex = b
 			}
 			target.write(idx, b, true)
 		}
@@ -1184,7 +1300,7 @@ func blitTexturedTriToDest(dest []byte, mask []bool, w, h int, t *screenTri, fra
 			} else if ri > 31 {
 				ri = 31
 			}
-			if pal != nil {
+			if pal != nil && t.useSHD {
 				b = pal.Shade[ri][b]
 			}
 			idx := row + px

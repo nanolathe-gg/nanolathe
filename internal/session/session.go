@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -121,6 +122,14 @@ type Session struct {
 	publication *publicationState // staged events and admitted effects at the committed-frame boundary [01 §4.4][03 §1]
 	postLoop    *postLoopState    // once-per-pump executor tail; owned by the session goroutine [01 §4.4]
 	phase7      Phase7Service     // presentation-owned model-texture cadence [R-CRD-005 §1][I6]
+	// P28 parity tracing is nil/no-op until explicitly enabled. Selection is a
+	// sorted handle list, not a map, so it cannot affect simulation iteration.
+	parityTraceEnabled bool
+	paritySelection    []pool.Handle
+	parityCallbacks    []cob.LifecycleEvent
+	parityTraceTick    uint32
+	parityTraceLimit   int
+	parityTraceDropped bool
 
 	// Radar blink is presentation-owned state whose mutation is scheduled by
 	// phase 12. It is deliberately absent from snapshots and save state

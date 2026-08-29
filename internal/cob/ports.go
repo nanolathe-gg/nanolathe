@@ -364,7 +364,36 @@ type QueuedCallback struct {
 // phase 9, movement phase 7/9) call EnqueueDeferred/EnqueueImmediate with
 // explicit TODO markers where they arrive.
 type DeferredQueue struct {
-	Pending []QueuedCallback
+	Pending       []QueuedCallback
+	lifecycle     LifecycleSink
+	lifecycleTick uint32
+	lifecycleSrc  uint16
+}
+
+// SetLifecycleSink enables opt-in queue-boundary observations. A nil sink is
+// the production default and keeps queue operations allocation-free.
+func (q *DeferredQueue) SetLifecycleSink(sink LifecycleSink) {
+	if q != nil {
+		q.lifecycle = sink
+	}
+}
+
+// SetLifecycleContext supplies the authoritative source/tick labels for later
+// queue events without changing callback dispatch.
+func (q *DeferredQueue) SetLifecycleContext(tick uint32, source uint16) {
+	if q != nil {
+		q.lifecycleTick, q.lifecycleSrc = tick, source
+	}
+}
+
+func (q *DeferredQueue) lifecycleEvent(cb QueuedCallback, phase string) {
+	if q != nil && q.lifecycle != nil {
+		mode := ModeImmediate
+		if cb.Deferred {
+			mode = ModeDeferred
+		}
+		q.lifecycle(LifecycleEvent{Tick: q.lifecycleTick, Source: q.lifecycleSrc, Name: cb.Script, Mode: mode, Thread: -1, Phase: phase})
+	}
 }
 
 // EnqueueDeferred queues a callback that will run during the next normal drain
@@ -377,6 +406,7 @@ type DeferredQueue struct {
 func (q *DeferredQueue) EnqueueDeferred(cb QueuedCallback) {
 	cb.Deferred = true
 	q.Pending = append(q.Pending, cb)
+	q.lifecycleEvent(cb, "enqueue")
 }
 
 // EnqueueImmediate records an immediate wake-flag callback such as MoveRateN or
@@ -391,6 +421,7 @@ func (q *DeferredQueue) EnqueueDeferred(cb QueuedCallback) {
 func (q *DeferredQueue) EnqueueImmediate(cb QueuedCallback) {
 	cb.Deferred = false
 	q.Pending = append(q.Pending, cb)
+	q.lifecycleEvent(cb, "enqueue")
 }
 
 // DrainNormal simulates the normal COB drain window [04 §4.6] [GAP T15] C17: it
@@ -412,6 +443,7 @@ func (q *DeferredQueue) DrainNormal(startVM func(cb QueuedCallback) bool) {
 		// Attempt to start; if VM pool exhausted, the starter can fail separately
 		// per [04 §4.3] C14 — deferred HitByWeapon/TakeDamage starters fail
 		// independently [04 §5.1] C26. We keep the VM result but do not requeue.
+		q.lifecycleEvent(cb, "dequeue")
 		if startVM != nil {
 			startVM(cb)
 		}

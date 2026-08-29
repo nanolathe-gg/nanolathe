@@ -76,6 +76,7 @@ type UnitView struct {
 	Model                string
 	FootX, FootZ         int8
 	Pieces               []PieceView
+	BMCode               bool // authored model-shading class gate [R-RND-02A]
 	IsBuilding           bool
 	// Activated is the committed on/off state used by UI command dispatch.
 	// Presentation must not rehydrate a selected unit from the live pool [I6].
