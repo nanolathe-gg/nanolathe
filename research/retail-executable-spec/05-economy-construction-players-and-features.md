@@ -1271,12 +1271,15 @@ factory dies or is captured before completion, the links are not walked and the
 nodes leak with the dead header — established: the death finalizer's bounded
 census shows no queue walk, and capture drops the queues (the ownership
 replacement starts with empty queues), so queued products are lost on both
-paths rather than transferred or reclaimed. Completion lowers the StopBuilding
-edge before running the completion transition, not after. Health and remaining
-fraction written by the shared work helper are visible immediately to later
-builders visited in the same unit sweep, so the lowest-slot builder among
-multiple contributors wins the final step; a later builder seeing zero
-remaining simply returns without further work.
+paths rather than transferred or reclaimed. At zero remaining, the work
+helper first synchronously invokes the product completion transition, which
+can raise the product's deferred `Activate` edge. Factory completion then
+lowers the `StopBuilding` edge; state 4 performs the idempotent second product
+completion invocation and its count/presentation bookkeeping. Health and
+remaining fraction written by the shared work helper are visible
+immediately to later builders visited in the same unit sweep, so the
+lowest-slot builder among multiple contributors wins the final step; a later
+builder seeing zero remaining simply returns without further work.
 
 **Established fact — same-tick visibility.** A product's health and remaining
 fraction, lowered by the builder that completes it, are therefore authoritative
@@ -1456,6 +1459,91 @@ blocked for any explicit release state, producer/product exemption, or
 aircraft release step until the Unknown items above are closed by a retail
 runtime trace or a complete static chain through first movement and occupancy.
 This is a research boundary, not permission to infer a fixed egress target.
+
+### P28-FAC-01R — final increment through factory idle/close [R-FAC-01R] (2026-08-28)
+
+This section closes the engine-side transition order and the stock factory
+COB callback choreography after the final admitted construction step. It does
+not close a hypothetical product egress lane. Evidence is the five-state
+factory handler, the primary-pump result protocol, the shared edge machine,
+the fixed phase order in [01 §4.4], and a clean-room census of the stock lab
+COBs. No retail runtime trace was available; script animation durations are
+therefore stated only where the authored COB supplies them.
+
+**Established — transition table.** Let `T` be the global tick in which the
+factory work state accepts the final resource-admitted increment and stores
+`remaining = 0`. “Deferred” means the callback thread is allocated at the
+edge and normally first executes in that unit's next normal COB drain; it is
+not a factory-node deadline.
+
+| Tick/order point | Factory state and mutation | Callback/order consequence |
+| --- | --- | --- |
+| `T`, state 3 | The shared work helper stores zero remaining and the corresponding difference-of-truncations health gain. Because the new remaining value is zero, the helper synchronously invokes the product completion transition before returning success; that transition can raise the product's deferred `Activate` edge. The factory handler returns advance and the primary pump enters state 4 in the same pass. | The product transition is synchronous engine work, not a deferred factory callback. Any product `Activate` script thread is allocated at this point and runs according to the product's own later normal drain/slot ordering. |
+| `T`, state 4, first | Lower the factory building edge. The edge machine writes the new byte before starting callbacks. | Allocate deferred factory `StopBuilding`; the callback is not interpreted yet. |
+| `T`, state 4, next | Run the factory completion transition again (its edge effects are suppressed when already set), clear the construction presentation payload, decrement the production node count once, refresh the builder interface, and return result 0. | The first completion transition from the work helper owns the product's zero/complete state and possible `Activate`; state 4's repeated transition does not create a second unchanged activation edge. |
+| `T`, same primary-pump pass | Restart the node at state 0. | If count `> 0`, the engine raises activation (normally an unchanged edge), advances through the already-set stance gate, and can allocate the next product in state 2 during this same pass. If count `<= 0`, it lowers activation, allocates deferred `Deactivate`, and returns the node-drop result. |
+| `T`, queued-next path | A successful state-2 allocation links the product, copies standing-order fields, inserts product-side `GetBuilt`, raises the next building edge, and advances to work. | The next `StartBuilding` callback is deferred. A blocked exit remains pre-allocation and retries silently after 15 ticks; no product-side release state is entered. |
+| `T`, empty path | The production node is unlinked/freed after state 0. | `StopBuilding` was allocated before `Deactivate`; both are normally run in that order in the next normal drain. |
+| `T+1` normal drain (ordinary path) | The factory's script slots are drained in ascending allocation order, then piece interpolation runs. | `StopBuilding` stops the authored pad spin and returns. It performs no door operation, piece wait, or sleep. On an empty path, `Deactivate` then signals the state-transition mask, sets its own mask, and enters its authored 5000 ms sleep. On a queued-next path, the deferred `StartBuilding` then starts the authored pad spin and returns; no `Deactivate` edge occurred. |
+| after the `Deactivate` sleep | The VM converts 5000 ms to a 150-tick timer. After the normal sleep wake, `Deactivate` starts `RequestState(1)`. | The callback itself has no engine close timer beyond this script sleep. |
+| `RequestState(1)` / `Stop` | `Stop` writes `INBUILDSTANCE = 0`, calls `CloseYard`, then runs the selected COB's authored deactivation animation and caches its pieces. | `CloseYard` writes `YARD_OPEN = 0`, polls the level, and clears `BUGGER_OFF` on success. If the gated write is still not effective, it sets `BUGGER_OFF`, sleeps 1500 ms (45 VM timer ticks), and retries. |
+| close-animation returns | The selected COB's deactivation script returns after its own authored moves/turns/sleeps. | There is no engine-side GUI timer or factory-node state left to close the yard. The exact final pose and duration are COB data. |
+
+The stock `ARMLAB` callback census gives a concrete authored close duration
+after `Stop` begins: its deactivation script uses sleeps of 998 ms, 1008 ms,
+and 48 ms, converted by the VM to 29, 30, and 1 timer ticks. These three
+waits are separated by authored piece moves/turns; they are not replaceable
+by one aggregate timer. The 5000 ms `Deactivate` delay precedes this
+animation. `CORLAB` has different activation/deactivation timings, so the
+ARM values must not be generalized to a shared factory template. A gated
+`CloseYard` retry can add one or more 1500 ms waits, so a universal wall-clock
+close duration is not established. Other factory COBs own their animation
+constants and must be read as data.
+
+Both successful `OpenYard` and successful `CloseYard` branches clear the
+`BUGGER_OFF` port before returning; the port is asserted only around a denied
+yard transition's retry loop.
+
+**Established — product movement is a separate boundary.** `GetBuilt` is on
+the product's primary queue, not on the factory's close path. Once product
+remaining is zero, it copies queued move/patrol rally records from the
+producer or inserts `Park`, then removes itself. It can dispatch in the same
+unit sweep only when the product's stable slot is still ahead of the
+factory's slot; otherwise it waits for the next tick. Any first movement,
+VTOL takeoff, occupancy admission, or producer/product collision behavior is
+therefore separate from the door callbacks above and remains subject to the
+release-boundary Unknowns in [R-FAC-01].
+
+**Established — cancellation boundaries.** Interrupt masks are tested before
+the state machine on a production-node visit. Cancel-current therefore wins
+over a state-3 final increment only if its wake bit is admitted before that
+visit's work handler begins: it refunds the established amount, runs the
+completion helper on the frame, sends the cause-9 kill, lowers activation and
+building together (deferred `Deactivate` and `StopBuilding` in edge order),
+and drops the node without decrementing its count. A work step already
+accepted is not interrupted mid-helper; the normal state-4 sequence above
+then owns completion. Construction-stopped instead decrements the node count
+once, refreshes the interface, and restarts state 0; if that reaches an empty
+count, the same-pass state-0 drop performs the activation fall. A node that
+has already completed and been freed cannot be cancelled through that
+production record. Queue removal through the ordinary cleanup path may emit
+the pending `StopBuilding` callback, but it does not establish a product
+egress or collision exemption.
+
+**Residual Unknowns (P28-FAC-01R).** The exact result when `YARD_OPEN` remains
+blocked, the number of `CloseYard` retries under each occupancy condition,
+and any runtime observation that would couple product release to producer
+clearance are not established by the static evidence. The same is true of
+producer/product collision exemptions, no-stacking, and aircraft
+takeoff-before-rally ordering. These release/egress behaviors must remain
+`TODO(question)` at any implementation site; do not convert the authored
+`BUGGER_OFF` retry into a generic movement or collision rule. The narrower
+idle-closure implementation is not blocked: it may implement
+`StopBuilding`/`Deactivate`, the 150-tick delay, `RequestState(1)`,
+`Stop`/`CloseYard`, and the selected COB's authored animation. Only the
+release/egress behavior remains blocked pending a retail trace that records
+allocation, first movement, occupancy admission, and the factory callback
+timeline together.
 
 ### OTA-FAC-01 bounded factory-release audit [R-FAC-01] (2026-08-28)
 
@@ -1675,18 +1763,21 @@ construction state, occupancy, sensors, economic eligibility, order state,
 and relevant script callbacks. Some presentation changes, such as replacing
 the nanoframe reveal with the complete model, are consumed by the renderer.
 The helper clamps the new remaining value between zero and one, so no fraction
-escapes that range. Completion of a factory product lowers StopBuilding before
-the transition helper runs, as noted above.
+escapes that range. For a factory product, the helper synchronously runs the
+product completion transition (including any possible product Activate edge)
+when it stores zero; the factory state-4 handler then lowers StopBuilding and
+performs the idempotent second transition before its count/presentation
+bookkeeping.
 
 The exact order of every completion side effect beyond that is closed by the
-construction-completion corpus analysis [R-P0-14 §3]: StopBuilding is lowered
-before the transition helper runs; occupancy and line-of-sight stamping happen
-after settlement in the same tick; AI completed-counts refresh at the next
-30-tick strategic refresh (up to 30 ticks of lag); and trigger polling that
-checks completed-unit counts runs only for the local player when that
-player's settlement deadline is due. The remaining-fraction transition and
-health arithmetic are established; the completion side-effect ordering beyond
-those steps is closed as cited.
+construction-completion corpus analysis [R-P0-14 §3]: the helper's product
+transition precedes the factory StopBuilding edge, while occupancy and
+line-of-sight stamping happen after settlement in the same tick; AI
+completed-counts refresh at the next 30-tick strategic refresh (up to 30 ticks
+of lag); and trigger polling that checks completed-unit counts runs only for
+the local player when that player's settlement deadline is due. The
+remaining-fraction transition and health arithmetic are established; the
+completion side-effect ordering beyond those steps is closed as cited.
 
 ### Stockpile production
 
@@ -2590,21 +2681,27 @@ contract:
   themselves are established.
 - The same-tick order between work handler, economy admission, settlement,
   occupancy, and presentation is closed in [R-P0-14 §3]: phase-2 unit sweep →
-  projectiles → phase-5 settlement → occupancy/LOS stamping; StopBuilding
-  before the completion transition; GetBuilt same-tick iff the product slot
-  sorts after the builder; trigger polling on the local player's
-  deadline-due settlement; AI completed-counts at the next 30-tick refresh.
-- **OTA-FAC-01 / OTA-FAC-01B / OTA-FAC-01C [R-FAC-01][R-FAC-01B][R-FAC-01C]:**
-  the bounded call-chain continuation establishes that state-2 placement is
-  direct allocation, not a movement/release goal; the post-completion
-  release target/order form, producer/product collision exemption,
-  indefinitely blocked release policy, aircraft takeoff-before-rally handoff,
-  exact rotated runtime transform arithmetic, and a no-stacking guarantee for
-  same-pass coalesced products remain Unknown. The factory-side target
-  derivation, stock exit-piece indices/names/authored local translations,
-  primary-queue gate, pre-allocation 15/300-tick retries, completion link
-  clearing, and GetBuilt rally sequencing are established in the bounded
-  audits above.
+  projectiles → phase-5 settlement → occupancy/LOS stamping; the work helper's
+  product completion transition and possible Activate precede factory
+  StopBuilding, followed by state 4's idempotent second transition and
+  bookkeeping; GetBuilt same-tick iff the product slot sorts after the builder;
+  trigger polling on the local player's deadline-due settlement; AI
+  completed-counts at the next 30-tick refresh.
+- **OTA-FAC-01 / OTA-FAC-01B / OTA-FAC-01C / P28-FAC-01R
+  [R-FAC-01][R-FAC-01B][R-FAC-01C][R-FAC-01R]:** the bounded call-chain
+  continuation establishes that state-2 placement is direct allocation, not a
+  movement/release goal. The final-increment order and stock callback timeline
+  are also closed: StopBuilding is deferred before the same-pass count test;
+  an empty count then defers Deactivate, whose stock script waits 5000 ms
+  before RequestState(1) drives Stop/CloseYard and the selected COB's authored
+  close animation. The post-completion release target/order form,
+  producer/product collision exemption, indefinitely blocked release policy,
+  aircraft takeoff-before-rally handoff, exact rotated runtime transform
+  arithmetic, and a no-stacking guarantee for same-pass coalesced products
+  remain Unknown. The factory-side target derivation, stock exit-piece
+  indices/names/authored local translations, primary-queue gate,
+  pre-allocation 15/300-tick retries, completion link clearing, and GetBuilt
+  rally sequencing are established in the bounded audits above.
 - Name the semantic meaning of the game-ended flag bits and of the two
   mission-end predicates behind the confirmation delay. The bit patterns are
   established (arm at 4; latch bit 0x04 always plus 0x40 and/or 0x10/0x20 per

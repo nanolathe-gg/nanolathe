@@ -595,6 +595,78 @@ N = per-vertex smooth normal:
    GAF table — except exactly-10-frame entries, which are the LOGOS team
    textures: never animated, frame selected by owner player at draw time.
 
+#### R-REN-02R — red/purple fringe provenance
+
+**Established (asset census, 2026-08-28).** The representative ARMSOLAR and
+ARMLAB 3DOs reference ordinary indexed GAF model textures. The inspected
+entries are uncompressed, use color key `9`, and contain authored red/maroon
+or purple palette indices as ordinary texels:
+
+| Model examples | Representative referenced texture entries (non-exhaustive) | Asset evidence |
+| --- | --- | --- |
+| ARMSOLAR base and dish pieces | `stone2`, `CorSol1a`, `metal3a`–`metal3d`, `Arm01b`–`Arm01d`, `32XGouraud` | `stone2` is 64×64 with no key texels and includes red/maroon source indices 19, 21, 22, 23, and 27; `CorSol1a` is 32×64 with no key texels and includes purple source indices 154–159 and 221. |
+| ARMLAB base and child pieces | `ArmV3a`–`ArmV3d`, `noise6b`–`noise6d`, `Energy1`, `Energy4`, `ArmPlat02`, `ArmPlat02c`, `32XGouraud` | The entries are likewise indexed model textures; red/purple indices occur in `noise6*` and `Energy4` rather than in one special fringe resource. |
+
+These are source-texture indices, before any model `SHD` lookup. The broad
+presence of such values inside opaque texture interiors, and their recurrence
+in unrelated model textures, establishes authored colored texels as a
+possible provenance. It does **not** identify any screenshot pixel or prove a
+generic fringe rule. The two observed color-key texels in `Arm01b` are on its
+top edge; that bounded example is insufficient to generalize a color-key edge
+effect. Texture selection, indexed sampling, and the shaded/unshaded `SHD`
+boundary remain the contracts in [03 §2.4.1] and [03 §4.3].
+
+**Established (bounded renderer behavior).** The model face mapper consumes a
+source GAF index, skips structural key pixels, and either writes that index
+directly or applies the selected `SHD` row; it has no established generic
+anti-alias, outline, RGB blend, or random/dither fringe writer. The separate
+model-shadow path may use its own stencil and dither, but its participation in
+an individual body pixel must be proven by a winner trace. Painter ordering
+means a later admitted writer can replace an earlier indexed pixel; this is
+not evidence that the replacing writer is a fringe pass.
+
+The candidate causes are consequently classified as follows:
+
+- **Authored texture fringe — Supported inference only.** It is viable when a
+  winner trace reaches one of the colored source texels, but no screenshot
+  pixel has been tied to one.
+- **Palette or `SHD` lookup — Established as a mapping stage; the actual row
+  and output index are Unknown** for the representative pixels.
+- **Polygon edge/span inclusion and equal-height tie — Unknown.** The asset
+  census cannot distinguish an edge sample from an interior sample or identify
+  the winning face.
+- **Team mapping — Unknown.** The exactly-10-frame `32XGouraud` team-texture
+  rule is established, but these screenshots do not establish that it wrote
+  the fringe pixels.
+- **Shadow or dither — Unknown for the pixels.** A separate model-shadow
+  family exists, yet no winner trace shows it replacing either model body.
+- **Outline or anti-alias writer — no generic writer is established.** This is
+  not permission to add one.
+- **Color-key edge — rejected as a broad explanation by the opaque examples;
+  still Unknown for any particular edge pixel.**
+- **Framebuffer compositing — painter overwrite is Established, but the
+  exact winning writer is Unknown.**
+
+**Supported inference.** If a captured fringe pixel can be tied to one of the
+opaque source texels above, its red or purple appearance is most plausibly
+authored texture content after the normal palette/`SHD` mapping. The recurrence
+of those colors across ordinary textures argues against a model-wide red or
+purple outline, but does not establish the final pixel writer.
+
+**Unknown (P28-REN-02R residual).** The available reference screenshots and
+asset census do not provide a synchronized retail source-face/UV/texel and
+pixel-winner trace. Therefore the following remain unknown for each
+representative solar-collector and KBot-lab fringe pixel: final destination
+palette index and neighboring indices; source face, texture coordinate, and
+texel; shade row; height/tie winner; shadow state; whether the sample is inside
+the polygon span, on an included edge, or outside it; and dependence on
+facing, team, camera, or background. The exact retail writer, cross-model
+rule, edge-table inclusion rule, team mapping, shadow/dither contribution, and
+framebuffer-compositing cause are likewise unknown. No implementation of
+fringe pixels, anti-aliasing, or an arbitrary outline is justified. P28-REN-02I
+is blocked until a deterministic capture records those inputs and the winning
+writer.
+
 #### R-SEL-02A — selection geometry, palette, and composition boundary
 
 **Established (direct-static).** The authored 3DO selection primitive is
@@ -3638,6 +3710,7 @@ and unknown" without a resolution plan.
    ground-scar/crater authoring mechanism (§3.7 `TODO(question)`).
 - SHD/LHT row/index formula is now established for model `SHD` (`dont-shade→15`, `row=trunc(dot*5)&0x1F`, gouraud `rowStep=(rowR-rowL)/width`) and halo `LHT` (disc precompute verified: per-pixel CRT draw, `q = trunc((R+sqrt(1.33·dx²+dy²))·32)`, byte `0x6F−q` / ring `0x6E` / transparent `0xFF` on the `(0x20−q) mod 256` compare, level `31−q`); remaining open is ALP usage by any non-LOS UI/fade path — bounded-negative over the renderer cluster (ALP loads only in the minimap picture downsample).
 - Model lighting normals (`normalize(cross(b-a,b-c))` over first three indexes, degenerate `(0,1,0)`, per-vertex `avg/cnt` no renormalize) and texture coordinate policy (corner-index affine 16.16 through the edge-table scanline mapper and per-pixel `SHD` sampler, no stored UVs, flat direct-fill only, clamp/nearest/no perspective) and flat-color quads-only are now established (direct-static); remaining open is exact team/logo per-player dimension deltas and pitch/bank naming.
+- P28-REN-02R establishes that representative ARMSOLAR/ARMLAB GAF textures contain authored red/maroon and purple texels, including opaque interiors, and that the bounded model path has no established generic fringe, anti-alias, outline, RGB-blend, or random/dither writer. It does not map any screenshot pixel to a source face/UV/texel or winning writer: final palette indices, neighbouring pixels, shade row, height/tie, edge/span inclusion, shadow state, team/camera/background dependence, and the exact retail writer remain **Unknown**. P28-REN-02I is blocked; do not implement a fringe or outline without a deterministic winner trace.
 - OTA-RND-02A closes the reported mobile/building shading conflict, and
   closes it the other way round from the first attempt ([R-RND-02A]): the
   piece-draw dispatcher chooses between a shaded and an unshaded piece
