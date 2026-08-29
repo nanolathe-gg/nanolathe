@@ -312,28 +312,39 @@ The numeric IDs are **authoritative**: Cavedog's own `scripts/EXPTYPE.H`
 ships inside `totala1.hpi` and defines them (the comments below are
 Cavedog's):
 
-| ID | Name | Access | Notes |
-| ---: | --- | --- | --- |
-| 1 | `ACTIVATION` | set/get | on/off state |
-| 2 | `STANDINGMOVEORDERS` | set/get | |
-| 3 | `STANDINGFIREORDERS` | set/get | |
-| 4 | `HEALTH` | get | 0–100 % |
-| 5 | `INBUILDSTANCE` | set/get | builder ready to nanolathe |
-| 6 | `BUSY` | set/get | "used by misc. special case missions like transport ships" |
-| 7 | `PIECE_XZ` | get | packed x,z of a piece (argument = piece) |
-| 8 | `PIECE_Y` | get | |
-| 9 | `UNIT_XZ` | get | packed x,z of a unit (argument = unit ID) |
-| 10 | `UNIT_Y` | get | |
-| 11 | `UNIT_HEIGHT` | get | |
-| 12 | `XZ_ATAN` | get | atan of packed x,z coords |
-| 13 | `XZ_HYPOT` | get | hypot of packed x,z coords |
-| 14 | `ATAN` | get | ordinary two-parameter atan |
-| 15 | `HYPOT` | get | ordinary two-parameter hypot |
-| 16 | `GROUND_HEIGHT` | get | argument = packed x,z |
-| 17 | `BUILD_PERCENT_LEFT` | get | "0 = unit is built and ready, 1-100 = how much is left to build" |
-| 18 | `YARD_OPEN` | set/get | "change which plots we occupy when building opens and closes" |
-| 19 | `BUGGER_OFF` | set/get | "ask other units to clear the area" |
-| 20 | `ARMORED` | set/get | |
+The **Access** column below is Cavedog's authored intent, taken from the header.
+The **Engine** column is what the retail engine actually binds — the header's
+`set/get` is not always both, and where the two disagree the behavior document
+wins ([04 §4.4], closures under [R-COB-03 §1–§6]). Each port's read
+expression, write effect, units, default and edges are stated there; no port
+behavior is described in this file.
+
+| ID | Name | Access | Engine | Notes |
+| ---: | --- | --- | --- | --- |
+| 1 | `ACTIVATION` | set/get | read + write · [04 §4.4], [R-COB-03 §4] | on/off state |
+| 2 | `STANDINGMOVEORDERS` | set/get | read only; a write binds no arm · [R-COB-03 §3] | |
+| 3 | `STANDINGFIREORDERS` | set/get | read only; a write binds no arm · [R-COB-03 §3] | |
+| 4 | `HEALTH` | get | read only · [R-COB-03 §2] | 0–100 % |
+| 5 | `INBUILDSTANCE` | set/get | read + write · [04 §4.7] | builder ready to nanolathe |
+| 6 | `BUSY` | set/get | read + write · [04 §4.7] | "used by misc. special case missions like transport ships" |
+| 7 | `PIECE_XZ` | get | read only · [R-COB-03 §2], packing [R-COB-03 §3] | packed x,z of a piece (argument = piece) |
+| 8 | `PIECE_Y` | get | read only · [R-COB-03 §2] | |
+| 9 | `UNIT_XZ` | get | read only · [R-COB-03 §2], packing [R-COB-03 §3] | packed x,z of a unit (argument = unit ID) |
+| 10 | `UNIT_Y` | get | read only · [R-COB-03 §2] | |
+| 11 | `UNIT_HEIGHT` | get | read only; the argument selects the unit · [04 §4.4] | |
+| 12 | `XZ_ATAN` | get | read only · [R-COB-03 §2] | atan of packed x,z coords |
+| 13 | `XZ_HYPOT` | get | read only · [R-COB-03 §2] | hypot of packed x,z coords |
+| 14 | `ATAN` | get | read only · [R-COB-03 §2] | ordinary two-parameter atan |
+| 15 | `HYPOT` | get | read only · [R-COB-03 §2] | ordinary two-parameter hypot |
+| 16 | `GROUND_HEIGHT` | get | read only · [R-COB-03 §2] | argument = packed x,z |
+| 17 | `BUILD_PERCENT_LEFT` | get | read only · [R-COB-03 §2] | "0 = unit is built and ready, 1-100 = how much is left to build" |
+| 18 | `YARD_OPEN` | set/get | read + gated write · [04 §4.7], [R-COB-03 §4] | "change which plots we occupy when building opens and closes" |
+| 19 | `BUGGER_OFF` | set/get | read + write · [04 §4.7] | "ask other units to clear the area" |
+| 20 | `ARMORED` | set/get | read + write · [04 §4.7], [R-COB-03 §4] | |
+
+Twenty is the whole set: the engine's port switch has no arm above 20, so any
+further port name reads zero — see [R-COB-03 §1], which lists the names this
+affects.
 
 OpenTA's typed host ABI represents packed X,Z values as
 `(x << 16) | (z & 0xffff)`, with both components interpreted as signed

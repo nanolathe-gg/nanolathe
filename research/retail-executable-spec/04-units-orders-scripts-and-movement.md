@@ -1675,58 +1675,94 @@ document this as policy rather than silently repairing it.
 ### 4.4 Engine ports
 
 Both value-reading opcodes route into one switch over an identifier from 1 to
-20; an identifier outside that range reads zero. The value-writing opcode
-routes into a parallel switch over the same identifiers, and an identifier with
-no write arm only sets the unit's script-touched marker. Every write arm sets
-that marker in addition to its own effect. The two remaining read opcodes are
-transport queries and are not part of this table.
+20; an identifier outside that range reads zero. **The set is exactly twenty
+wide and complete** — the switch is a dense jump table with twenty entries and
+no arm above 20, so every port name a later engine or a community header adds
+(`MY_ID`, `MIN_ID`, `MAX_ID`, `UNIT_TEAM`, `UNIT_ALLIED`,
+`UNIT_BUILD_PERCENT_LEFT`, `VETERAN_LEVEL`, `CURRENT_SPEED`, `IN_WATER`,
+`SMOKEUNIT`, …) reads zero in retail rather than doing anything
+[R-COB-03 §1]. The value-writing opcode routes into a parallel switch over the
+same identifiers, and an identifier with no write arm only sets the unit's
+script-touched marker. Every write arm sets that marker in addition to its own
+effect, and so does the fall-through for every unbound identifier. The two
+remaining read opcodes are transport queries and are not part of this table.
 
-| Id | Name | Read | Write |
+All reads take the script's **own** unit except ports 9, 10 and 11, which take
+a unit identifier in the first argument; ports 7 and 8 take a piece index
+there, ports 12, 13 and 16 a packed coordinate pair, and ports 14 and 15 two
+independent values. Every other port ignores all four argument slots. Values
+below are as pushed back on the script stack.
+
+| Id | Name | Read — exact expression, units, default | Write |
 |---:|---|---|---|
-| 1 | activation | the unit's activation bit | drives the **activation edge machine**, which fires the Activate and Deactivate callbacks re-entrantly |
-| 2 | standing move orders | a **two-bit** field, values 0 to 3 | ignored |
-| 3 | standing fire orders | a two-bit field, values 0 to 3 | ignored |
-| 4 | health | current health times 100 divided by the definition's maximum damage, as an unsigned division, giving 0 to 100 | ignored |
-| 5 | in build stance | a flag bit | sets the bit from the low bit of the value |
-| 6 | busy | a flag bit | sets the bit from the low bit of the value |
-| 7 | piece position XZ | the piece's world transform packed with Z in the high half and X in the low half | — |
-| 8 | piece position Y | the piece's world transform Y | — |
-| 9 | unit position XZ | another unit's packed X and Z, selected by identifier through the unit table, gated on that unit being alive; identifier zero or a dead unit reads zero | — |
-| 10 | unit position Y | the same unit's Y, same gates | — |
+| 1 | activation | the activation bit of the first state byte, 0 or 1. Zero at unit creation | drives the **activation edge machine**, which fires the Activate and Deactivate callbacks re-entrantly |
+| 2 | standing move orders | bits 18–19 of the unit state word, a **two-bit** field, values 0 to 3. Seeded at creation from the definition's `standingmoveorder` (`[fmt fbi]`, default **2**) | ignored |
+| 3 | standing fire orders | bits 20–21 of the same word, a **two-bit** field, values 0 to 3. Seeded at creation from `standingfireorder` (`[fmt fbi]`, default **2**) | ignored |
+| 4 | health | `(uint32)((int16)health * 100) / (uint32)maxdamage`, an **unsigned** 32-bit division of a signed product, giving 0 to 100. `health` is seeded to `(uint16)maxdamage` for a unit created complete and to 0 for a nanoframe. A definition without `maxdamage` divides by zero — see the edge note below | ignored |
+| 5 | in build stance | bit 0 of the second state byte, 0 or 1. Zero at creation | sets the bit from the low bit of the value |
+| 6 | busy | bit 1 of the second state byte, 0 or 1. Zero at creation | sets the bit from the low bit of the value |
+| 7 | piece position XZ | the piece's world position packed as `(X & 0xffff0000) + (Z >> 16)` — **X in the high half, Z in the low half**, both in whole world units, the low half sign-extended and *added* (see [R-COB-03 §3]). An out-of-range piece index, or a unit with no render table, contributes a zero offset, so the port returns the unit's own packed position | — |
+| 8 | piece position Y | the piece's world Y as a raw 16.16 value, not shifted; same zero-offset fallback | — |
+| 9 | unit position XZ | the named unit's position packed the same way as port 7. The identifier is masked to 16 bits and indexes the unit pool with **no upper-bound check**; a zero identifier, or a slot whose alive bit is clear, reads zero | — |
+| 10 | unit position Y | the same unit's Y as a raw 16.16 value, same gates | — |
 | 11 | unit height | the definition height of the unit selected by the identifier, via the same unit-table lookup and alive gate as ports 9 and 10; identifier zero — including the zero-filled argument slot of a bare `get` — reads zero. **Audit note:** this corrects the earlier "own definition's height value" wording [R-P0-10] | — |
-| 12 | relative bearing | unpacks the argument into two signed 16.16 halves, takes the arc tangent, then **subtracts the unit's own heading**, truncated to 16 bits | — |
-| 13 | distance | the hypotenuse of the unpacked halves, truncated | — |
-| 14 | arc tangent | the arc tangent of the two arguments, low 16 bits | — |
-| 15 | hypotenuse | the hypotenuse of the two arguments, truncated | — |
-| 16 | ground height | the world height query at the packed coordinates, shifted into 16.16 | — |
-| 17 | build percent left | from the remaining-build fraction *f*: zero when *f* is exactly zero, otherwise `1 - trunc(f * -99.0)` | ignored |
-| 18 | yard open | a flag bit | runs the yard-occupancy update |
-| 19 | bugger off | a plain flag bit, not a queued request | sets the bit from the low bit of the value |
-| 20 | armored | a flag bit | drives the armor edge event |
+| 12 | relative bearing | unpacks the argument (see [R-COB-03 §3]), takes `atan2(X, Z)` scaled to the 65,536-per-circle domain under round-to-nearest, **subtracts the unit's own heading** as a 16-bit signed subtraction, and masks to 16 bits | — |
+| 13 | distance | `trunc(hypot(X, Z))` over the unpacked 16.16 halves — a 16.16 result, truncated toward zero | — |
+| 14 | arc tangent | `atan2(arg1, arg2)` in the same scaled domain, masked to 16 bits with no heading subtraction | — |
+| 15 | hypotenuse | `trunc(hypot(arg1, arg2))` with both arguments taken as signed 32-bit and no unpacking | — |
+| 16 | ground height | the shared terrain height query at the unpacked X and Z, **shifted left 16** into 16.16. The query returns −1 off-map, so an off-map read is `−0x10000` (−1.0), not zero | — |
+| 17 | build percent left | from the remaining-build fraction *f*: zero when *f* compares exactly equal to `0.0f`, otherwise `1 - trunc(f * -99.0f)`. *f* is `1.0f` for a fresh nanoframe (reads 100) and `0` once complete (reads 0) | ignored |
+| 18 | yard open | bit 2 of the second state byte, 0 or 1. Zero at creation | a gated admission — see §4.7 |
+| 19 | bugger off | bit 3 of the second state byte, 0 or 1, a plain flag, not a queued request. Zero at creation | sets the bit from the low bit of the value |
+| 20 | armored | bit 1 of the first state byte, 0 or 1. Zero at creation | drives the armor edge event |
 
 The two angle ports are the **only** place in the port arithmetic that rounds
 rather than truncates: the arc tangent is scaled by 65,536 divided by two pi
-and converted under round-to-nearest. Everything else truncates.
+(10430.37835047) and stored under the x87 round-to-nearest-even mode.
+Everything else truncates toward zero.
+
+**Edges.** Port 4's divisor is the definition's `maxdamage` taken as a full
+32-bit value, and the division is unguarded: a definition that omits the key
+(parsed default 0) makes the port a processor divide fault, the same retail
+outcome class as §4.6's zero tick denominator. Ports 9, 10 and 11 mask the
+identifier to 16 bits and scale it by the record stride with no comparison
+against the pool capacity (§2.3), so an identifier past the end of the pool is
+an out-of-bounds read in retail, admitted or rejected by whatever the alive bit
+reads at that address — undefined behavior, not a defined zero. Ports 7 and 8
+*do* bounds-check the piece index, unlike the piece-motion opcode family
+(§4.6).
 
 The transport queries are: one that pops a unit identifier, walks the unit's
-own cargo list, and pushes one or zero; and one that pushes the first cargo
-identifier or zero. Neither appears in shipped content.
+own cargo list, and pushes one or zero; and one that takes no argument and
+pushes **the identifier of the unit carrying this unit**, or zero when it is
+not being carried. **Audit note:** the second was previously described as
+pushing "the first cargo identifier"; it reads the carrier back-pointer, not
+the cargo list head [R-COB-03 §5]. Neither appears in shipped content.
 
 **Attach** resolves the cargo identifier through the unit table with the alive
 gate, requires the candidate's carrier field to be empty or already this unit,
 and then binds it to the named piece. **Drop** requires the candidate's carrier
 to be this unit, asks the placement service for permission, and then unbinds
-it using the reserved "no piece" index.
+it using the reserved "no piece" index. Both commit through the same relink
+step, which is driven by an event record rather than applied inline
+[R-COB-03 §5].
 
 **The one-argument effect opcode is presentation only.** It is gated on the
 local player being able to see the unit, touches no simulation state, and
-dispatches on the effect type. Vector types 0 through 5 are piece-direction
-effects: 0 and 1 form the wake pair, 2 and 3 a thrust-class pair, and 4 and 5
-repeat that pair with the direction and position arguments swapped. Point
-types use the piece world position: `0x101` spawns white smoke, `0x102` black
-smoke, and `0x103` sub-bubbles with the spawn height forced to the water-line
-height. Every other type — vector types from 6 upward, `0x100` itself, and
-everything from `0x104` up — falls through with no case and is ignored.
+dispatches on the effect type. Vector types 0 through 5 build **two** world
+points from the piece's first two transformed vertices; point types build one
+from the piece's cached world offset. Types 0 and 1 go to one effect family
+differing only in a selector value; 2 and 3 go to a second family differing
+only in a magnitude; 4 and 5 repeat 2 and 3 with the two points exchanged.
+Point types use the piece world position: `0x101` spawns white smoke, `0x102`
+black smoke, and `0x103` a third family whose second point is the first with
+its height forced to the map sea level. Every other type — vector types from 6
+upward, `0x100` itself, and everything from `0x104` up — falls through with no
+case and is ignored. **Audit note:** the earlier grouping ("0 and 1 form the
+wake pair, 2 and 3 a thrust-class pair") named the wrong pair for each family:
+by `SFXTYPE.H` (`[fmt cob]`) 0 and 1 are the VTOL/thrust pair and 2 and 3 are
+the wake pair, which is also the order the dispatch groups them in
+[R-COB-03 §6].
 
 ### 4.5 The explode opcode
 
@@ -1972,10 +2008,12 @@ scripts that write it; the admission half is closed: the nine-gate transport
 admission predicate performs no busy-bit test (bounded census of the
 admission predicate) [P1-05]. `TODO(question)` — the name of the engine-driven
 cloak-family bit (bit 2 of the first state byte) and its writers outside the
-edge machine (naming-only; the edge behavior is established). `TODO(question)`
-— the axis naming of the packed position
-halves: whether the word section 4.4 calls Z is Z (as asserted there) or X (as
-an external host convention states) needs one controlled probe. `TODO(question)`
+edge machine (naming-only; the edge behavior is established).
+**Closed (2026-08-28):** the axis naming of the packed position halves — the
+question asked whether the word section 4.4 called Z was Z or X, and section
+4.4's answer was inverted. The high half is X and the low half is Z, settled by
+a static trace, not by the probe the question asked for; see [R-COB-03 §3]. The
+`TODO(question)` and its probe are withdrawn. `TODO(question)`
 — the exact yard-character class matrix inside the yard-open admission gate
 defers to the TNT yard-map format document rather than re-deriving byte masks.
 `TODO(question)` — whether mission or third-party content depends on a bare
@@ -1992,6 +2030,284 @@ footprint-overlay global mode, the overlay character map's byte at the cell
 being nonzero. The player alias is therefore the local player's team bit, not
 the placing player's; section 6.4's bit-0 row is updated accordingly, and the
 branch must still not be equated with the presentation fog surface.
+
+### Closed — the engine port set, exactly [R-COB-03 §1] (2026-08-28)
+
+**Established — the port set is closed at twenty.** The read switch subtracts
+one from the identifier, rejects anything above nineteen unsigned, and jumps
+through a dense twenty-entry table; the rejection arm returns zero. There is no
+sparse tail, no second switch, and no arm reachable only from another opcode.
+Identifiers 0 and 21 and up therefore read **zero**, and a *write* to them does
+nothing but set the script-touched marker (§4.7 above). Any port vocabulary
+beyond `[fmt cob]`'s twenty — `MY_ID`, `MIN_ID`, `MAX_ID`, `UNIT_TEAM`,
+`UNIT_ALLIED`, `UNIT_BUILD_PERCENT_LEFT`, `VETERAN_LEVEL`, `CURRENT_SPEED`,
+`IN_WATER`, `SMOKEUNIT` — does not exist in this executable; a script naming
+one reads zero. `SHATTER` and `EXPLODE_ON_HIT` are not ports at all: they are
+bits of the `explode` opcode's flags word (§4.5).
+
+**Established — the five read slots and the two write slots.** The
+zero-argument read opcode pops the identifier and calls the port reader with
+four zero argument slots. The five-argument read opcode pops the four arguments
+top-down and then the identifier, and passes them to the same reader in
+authored order: identifier, then argument one through four. The write opcode
+pops the value first and the identifier second and passes identifier-then-value
+— the order §4.7's audit note fixed, now confirmed at the interpreter site as
+well as at the compiler.
+
+**Established — two further read opcodes exist that `[fmt cob]` does not
+list.** Beside the two value-reading opcodes, the interpreter binds a
+one-argument opcode that routes to the cargo-membership query and a
+zero-argument opcode that routes to the carrier-identity query (both described
+in §4.4). They are ordinary stack opcodes: the first pops one value and pushes
+one, the second pops nothing and pushes one. Neither is emitted by shipped
+content, which is why the format document's opcode table has no row for them.
+The gap is a format-document item, reported to lane 02.
+
+### Closed — port read arithmetic [R-COB-03 §2] (2026-08-28)
+
+Every expression below is the whole of what the arm computes; §4.4's table
+carries the same arithmetic in row form and this section states the widths and
+the order of operations.
+
+* **Flag ports (1, 5, 6, 18, 19, 20).** Each is a single byte load, a shift and
+  a mask to one bit, pushed as 0 or 1. Ports 1 and 20 read bits 0 and 1 of the
+  first state byte; ports 5, 6, 18 and 19 read bits 0, 1, 2 and 3 of the second.
+  Unit creation zeroes the first state byte outright and clears the low nibble
+  of the second, so **all six default to 0** before any script or engine writer
+  runs.
+* **Port 4 (health).** The health field is loaded **sign-extended from 16 bits**
+  and multiplied by 100 as a signed 32-bit product; that product is then used as
+  the *unsigned* dividend of a 32-bit divide by the definition's `maxdamage`,
+  with the high dividend word cleared. For health in `[0, maxdamage]` the
+  quotient is 0..100. The port itself clamps nothing: because the signed product
+  is reinterpreted as an unsigned dividend, a negative health value would give a
+  very large quotient rather than a negative one. Whether the field is ever
+  observably negative when a script reads it is a damage-ordering question for
+  document 06, not a property of this port.
+* **Ports 7 and 8 (piece position).** The piece world position is recomputed on
+  every read: the piece's authored offset plus its animation offset, then the
+  chain of parents applied in turn, with the unit's own three angle words folded
+  in at the root, and the third component negated on the way out. The result is
+  added to the unit's world position. If the unit has no render table, or the
+  piece index is outside the piece count, the offset is the zero vector and the
+  port returns the unit's own position — the index **is** checked here, unlike
+  the piece-motion opcodes (§4.6).
+* **Ports 9, 10, 11 (another unit).** The identifier is tested as a 16-bit value
+  for zero, then masked to 16 bits and multiplied by the pool record stride and
+  added to the pool base. There is no comparison against the pool capacity. The
+  resulting record is accepted only if its alive bit is set; otherwise the port
+  returns zero.
+* **Ports 12–15 (trig).** The angle helper converts both arguments to extended
+  precision, takes `atan2(first, second)`, multiplies by the double constant
+  65,536 / 2π = 10430.37835047, and stores under **round-to-nearest-even** — the
+  only rounding in the port set. Port 12 then subtracts the unit's heading word
+  as a 16-bit subtraction and masks to 16 bits; port 14 masks to 16 bits with no
+  subtraction. The distance helper is the C-runtime `hypot` on the two arguments
+  converted to double, truncated toward zero by the shared float-to-integer
+  conversion. Port 13 feeds it the unpacked halves (so its result is 16.16);
+  port 15 feeds it the raw arguments unchanged.
+* **Port 16 (ground height).** The unpacked halves are written into a
+  three-word position record — X first, Z third, the middle word left
+  untouched — and handed to the shared terrain height query, whose integer
+  result is shifted left 16. The query is bilinear over the terrain cell array
+  with 16-world-unit cells, and returns **−1** when either cell index or its
+  successor is outside the map, so an off-map read of this port is `−0x10000`.
+  The query's own arithmetic belongs to document 03 and is reported to lane 03
+  as a finding.
+* **Port 17 (build percent left).** The remaining-build fraction is compared to
+  the single-precision constant `0.0f`; on exact equality the port pushes 0.
+  Otherwise it is multiplied by the single-precision constant `-99.0f`,
+  truncated toward zero by the shared conversion, and subtracted from 1. A
+  fresh nanoframe holds `1.0f` and reads 100; a unit created complete holds an
+  all-zero word and reads 0.
+
+### Closed — packed coordinate halves and the standing-order fields [R-COB-03 §3] (2026-08-28)
+
+**Established — the high half is X, the low half is Z. This reverses §4.4's
+previous text**, which read "packed with Z in the high half and X in the low
+half". Three independent traces agree and the earlier reading has no support:
+
+1. The ground-height port writes the **high** half into the first word of the
+   position record and the **low** half into the third. The height query
+   multiplies the *third* coordinate by the terrain row stride and adds the
+   first, so the first is the within-row index — that is X.
+2. The piece-position helper fills its output triple from the unit's three
+   consecutive position words in memory order, and the Y port returns the middle
+   one. The first is therefore X and the third Z, and the packing port takes the
+   **first** for the high half.
+3. The unit-position port packs the same two words in the same roles.
+
+This is also the convention `[fmt cob]` records from the external host ABI, so
+the format document needs no change; §4.4 does, and is corrected above. The
+`TODO(question)` asking for a controlled probe of this is withdrawn.
+
+**Established — the pack is an addition, not a bitwise OR.** The port computes
+`(X & 0xffff0000) + (Z >> 16)` with an **arithmetic** shift, so a negative Z
+borrows one from the X half. Every consumer undoes exactly that: it takes
+`X' = packed & 0xffff0000`, `Z' = packed << 16`, and then, **when `Z'` is
+negative, adds `0x10000` back to `X'`**. Both halves come out as 16.16 values
+whose fractional parts are zero. An implementation that packs with an OR and
+unpacks with a plain shift agrees with retail for non-negative Z and disagrees
+by one whole world unit of X for negative Z — which is every position west or
+north of the map origin under retail's signed coordinates. All three consumers
+(relative bearing, distance, ground height) share the correction; nothing else
+unpacks.
+
+**Established — standing orders are two-bit fields, and the three-bit field
+named in the string triage is a different word.** The order handlers for the
+two standing-order commands each mask the incoming order value to **two bits**
+and deposit it into the unit state word: move orders at bits 18–19, fire orders
+at bits 20–21. Ports 2 and 3 read those same two-bit fields. Unit creation
+seeds both from one packed definition byte — bits 0–1 for move, bits 2–3 for
+fire — which the FBI reader fills from `standingmoveorder` and
+`standingfireorder`, **each with a parsed default of 2**. The fire-order handler
+additionally clears the three weapon slots' target state when the new value is
+0 or 1.
+
+The three-bit field reported by the RWU-00-4 string triage is real but belongs
+to the **interface** stance-panel handler, which cycles a 3-bit field at bit 0
+(move) and a 3-bit field at bit 12 (fire) of a sixteen-bit engine-root word
+before transmitting the command. Because the command handler masks to two bits,
+only values 0..2 are ever observable at the port, and value 3 is representable
+but unreachable from the panel. There is no contradiction between doc 04's
+"two-bit field" and the triage's "three-bit field": they are two different
+words on two sides of the command. The stance *semantics* — which value is
+hold-fire, return-fire, fire-at-will, and hold-position, maneuver, roam — belong
+to §3.4/§3.5 and are RWU-04-6's, not settled here.
+
+### Closed — the write arms, their defaults, and the marker [R-COB-03 §4] (2026-08-28)
+
+**Established — six arms and one unconditional side effect.** The write switch
+binds identifiers 1, 5, 6, 18, 19 and 20, exactly as §4.7 states. The
+script-touched marker bit is set on **every** path — each of the six arms, and
+the fall-through every unbound identifier takes — so a write of an
+unimplemented port is observable only through that marker (whose consumer
+remains unlocated, §4.7).
+
+**Established — the bit writes.** Ports 5, 6 and 19 write bits 0, 1 and 3 of
+the second state byte from the **low bit** of the value, leaving the rest of
+the byte untouched; a value of 2 therefore clears the bit. Ports 1 and 20 do
+not write a bit directly — they call the shared edge machine with mask 1 and
+mask 2 respectively, so the write goes through the diff-then-fire sequence
+§4.7 describes and can raise callbacks re-entrantly.
+
+**Established — port 18 is admission-gated and writes nothing when denied.**
+The yard write first calls the yard-occupancy admission predicate with the
+value. On a zero verdict it returns having written nothing at all — the yard
+bit keeps its old level, no occupancy is recomputed, and only the marker (set
+by the switch before the arm ran) changes. On a non-zero verdict it commits bit
+2 of the second state byte from the low bit of the value, sets the
+occupancy-dirty bit of the state word, recomputes occupancy and refreshes the
+footprint words. This is exactly the level that `OpenYard`/`CloseYard` poll and
+retry against (§4.7's stock choreography).
+
+**Established — creation defaults.** Unit initialization clears the first state
+byte and the low nibble of the second, so ports 1, 5, 6, 18, 19 and 20 all read
+0 on a newly created unit, before the activation edge machine or any script
+runs. It also seeds health and the remaining-build fraction on a branch: a unit
+created complete gets health equal to the low sixteen bits of `maxdamage` and a
+zero remaining fraction (port 4 reads 100, port 17 reads 0); a nanoframe gets
+zero health and a remaining fraction of `1.0f` (port 4 reads 0, port 17 reads
+100). The script-touched marker starts clear.
+
+### Closed — transport reads, attach and drop [R-COB-03 §5] (2026-08-28)
+
+**Established — the cargo linkage.** A unit holds a carrier back-pointer, a
+first-cargo pointer and a next-cargo link, so cargo forms a singly linked list
+hanging off the carrier with new cargo pushed at the head.
+
+**Established — the two queries.** The one-argument query walks this unit's own
+cargo list comparing each entry's sixteen-bit identifier against the popped
+value and pushes 1 on the first match, 0 if the list is empty or exhausted. The
+zero-argument query follows this unit's **carrier back-pointer** and pushes
+that unit's identifier, or 0 when the unit is not being carried. §4.4's
+previous "pushes the first cargo identifier" is corrected above.
+
+**Established — attach and drop share one commit.** The attach adapter resolves
+the cargo identifier through the unit table with the same zero-test and alive
+gate as ports 9–11, requires the cargo's carrier field to be empty or already
+this unit, and calls the shared commit with (cargo, this, piece, third value).
+The drop adapter resolves the identifier the same way, requires the cargo's
+carrier to be **this** unit, asks the placement service for permission for the
+cargo at its current position, and only on approval calls the same commit with
+a null carrier, the reserved "no piece" index and a third value of 1.
+
+**Established — the commit's own gates and its event.** The shared commit
+re-checks: the cargo is alive and not marked with the second lifetime bit; the
+cargo is not itself carrying anything; and the carrier, when non-null, is alive,
+is not the cargo, and is not itself being carried. Only then does it build a
+seven-byte event — a kind byte, the cargo identifier, the carrier identifier,
+the piece byte and the third value byte — submit it on the event channel and
+apply it. The apply step unlinks the cargo from its previous carrier (or from
+the world list), stores the piece byte on the cargo, relinks at the new
+carrier's list head, and sets a state bit **iff the piece byte is the reserved
+"no piece" value** — which is the engine-side meaning of `[fmt cob]`'s
+`attach-unit … to 0-1` idiom: cargo that rides the carrier without following a
+piece.
+
+**Established — the third `attach-unit` value is consumed.** The apply step
+writes the value's **low two bits** into a two-bit field of a record the cargo
+unit points at. `[fmt cob]` recorded this value as "always 0 in retail content,
+effect unknown"; it is not inert. **Unknown:** what that two-bit field means —
+naming only, since every shipped call site passes 0 and therefore clears it.
+Decider: static trace of the pointed-to record's other readers. Marked
+`TODO(question)`.
+
+### Closed — the effect opcode, engine side [R-COB-03 §6] (2026-08-28)
+
+**Established — the gate.** The effect opcode's first act is the shared
+per-player unit-visibility predicate, indexed by the session's **viewing-player**
+byte — a slot distinct from the commanding-player byte the order paths use,
+though both are seeded from session data at battle entry. When it fails the
+opcode returns having done nothing — no allocation, no draw, no state change.
+It is therefore not simulation-visible and is correctly outside the
+deterministic contract, but it is also **not** unconditional: a script that
+relies on it for timing gets nothing on a client that cannot see the unit.
+
+**Established — the geometry.** Before reading anything the opcode refreshes
+the unit's cached render transform. That refresh is itself cached with a
+tolerance: it re-runs only when any of the unit's three angle words differs
+from the cached copy by more than 7 in the 65,536-per-circle domain, so effect
+origins can lag the unit's true orientation by up to that much. (The position
+ports do not use this cache; they recompute exactly.)
+
+*Vector types* (the effect type's point-based bit clear) read the piece's
+**transformed vertex list** and take vertices zero and one. Each becomes a world
+point as the unit position plus the vertex, with the third component
+**subtracted** rather than added — the same model-Z-versus-world-Z inversion the
+piece transform applies. Two points are produced.
+
+*Point types* (the bit set) read the piece's cached world offset triple from the
+render entry and produce a single point the same way, third component
+subtracted.
+
+**Established — the dispatch.** Types below the point-based bit plus two are
+handled first: white smoke is the one point-type in that range, and everything
+else falls into a six-way switch over 0..5. Types 0 and 1 call one effect
+constructor with the two points, a fixed leading value, a selector that is the
+only difference between them, and a trailing byte. Types 2 and 3 call a second
+constructor with the two points, a magnitude that is the only difference
+between them, and a fixed selector. Types 4 and 5 call that same second
+constructor with the **two points exchanged** and the same two magnitudes. Black
+smoke and the sub-bubble type are handled after the range test; the sub-bubble
+type first overwrites the second point with the first point's X and Z and a
+height taken from the map's sea-level byte shifted into 16.16, then calls a
+third constructor. Everything else — vector types from 6 up, the bare
+point-based value itself, and anything above the sub-bubble type — matches no
+case and is ignored.
+
+**Audit note.** §4.4 previously grouped these as "0 and 1 form the wake pair, 2
+and 3 a thrust-class pair". That is the wrong assignment in both directions:
+`SFXTYPE.H` (`[fmt cob]`) names 0 and 1 VTOL and thrust and 2 and 3 the wake
+pair, and the dispatch groups them the same way — 0/1 share one constructor,
+2/3 share another, 4/5 are 2/3 reversed. The pairing structure the old sentence
+described was right; the names attached to each pair were swapped.
+
+**Unknown — the effect families themselves.** Which visual each of the three
+constructors produces, what the selector and magnitude values mean, and the
+lifetime of the pooled effect records are presentation questions and belong to
+document 03. Decider: static trace by lane 03 (RWU-03-4). Reported, not owned
+here.
 
 ### Closed — VM initialization and engine-call frames [R-COB-01 §1] (2026-08-28)
 
@@ -4816,9 +5132,10 @@ replacement bullet is needed because the ground path has no vertical term.
 - Name of the engine-driven cloak-family bit (bit 2 of the first state byte)
   and its writers outside the edge machine · §4.7 · static trace, naming only.
   Marked `TODO(question)`.
-- Axis naming of the packed position halves — whether the word §4.4 calls Z is
-  Z or X · §4.7 · manual retail observation (packed position-half COB probe).
-  Marked `TODO(question)`.
+- Meaning of the two-bit field the `attach-unit` third value writes on a record
+  the cargo unit points at · §4.7 [R-COB-03 §5] · static trace, naming only.
+  Every shipped call site passes 0, so the field is always cleared. Marked
+  `TODO(question)`.
 - Yard-character class matrix inside the yard-open admission gate · §4.7,
   `[fmt tnt]` · static trace. Marked `TODO(question)`.
 - Whether mission or third-party content depends on a bare `get UNIT_HEIGHT`
