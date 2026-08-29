@@ -5578,9 +5578,10 @@ frame = the slot's colour byte; the slot name is drawn beside it in the small
 font; then seven bar gadgets are created at `x` = 112 `Kills%d`, 186
 `Losses%d`, 260 `EProduced%d`, 334 `MProduced%d`, 408 `EWasted%d`, 482
 `MWasted%d`, 556 `Score%d`, each carrying the row's value, the column maximum,
-and a per-gadget float `max(1.0, value × 0.06666667)` (`value / 15`; its use
-is the bar renderer's fill increment — Supported inference, doc 07's bar
-gadget would settle it). The bar reveal group word is reset to 0.
+and a per-gadget float `max(1.0, value × 0.06666667)` (`value / 15`; it is
+the kind-13 gadget's per-tick **animation step** — `current += ftol(step)` on
+each scaled-timer tick until the target is reached — not a fill fraction;
+Established, [07 R-HUD-03 §11]). The bar reveal group word is reset to 0.
 
 **Bar reveal** (results state 7). Once the panel is idle, all `Kills%d`,
 `Losses%d`, `EProduced%d`, `MProduced%d`, `EWasted%d`, `MWasted%d` and
@@ -5790,9 +5791,6 @@ finding. The recitals are deleted here only; the body sections and the
 - The meaning of the per-slot auxiliary word that admits a slot to the score
   display and statistics rows even when its controller test fails ·
   [R-CAMP-01 §7] · static trace of the word's writers.
-- Whether the per-gadget `value / 15` float of the score bars is the bar
-  renderer's fill increment · [R-CAMP-01 §7] · static trace of the bar gadget
-  draw (doc 07).
 - Transport-selection policy beyond generic move orders, and any distinct
   naval or air placement geometry · "Placement root and search helpers"
   [P0-04] · static trace.

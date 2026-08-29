@@ -97,14 +97,14 @@ are never shared across pieces.
 
 | Offset | Type | Name | Description |
 | ---: | --- | --- | --- |
-| +0x00 | u32 | ColorIndex | Palette index used when `IsColored` explicitly selects a flat-colored face. When a texture is present this field frequently contains values far outside 0–255 (leftover editor data); only canonical `IsColored == 1` plus an in-range index overrides a resolved texture. |
-| +0x04 | i32 | NumberOfVertexIndexes | Vertex count = primitive type: 1 point, 2 line, 3 triangle, 4 quad. Across all 761 retail models: 94% quads, 4% triangles, 315 lines, zero points, and n-gons of 5–16 vertices (≈950 total) which should be fan-triangulated. |
+| +0x00 | u32 | ColorIndex | Authored palette-index field. In the retail corpus untextured primitives keep it in range, while 868 textured primitives carry values above 255 consistent with editor residue. Runtime use is owned by [03 §2.4.1] and [R-RAST-01 §1]. |
+| +0x04 | i32 | NumberOfVertexIndexes | Number of entries in the referenced index array. Across all 761 retail models: 94% are 4, 4% are 3, there are 315 values of 2, no values of 1, and about 950 values from 5 through 16. This distribution is a stored-asset fact, not triangulation advice; retail dispatch is owned by [03 §2.4.1]. |
 | +0x08 | i32 | Always_0 | Zero in observed unit models |
 | +0x0C | i32 | OffsetToVertexIndexArray | → `NumberOfVertexIndexes` × u16, each an index into **this piece's** vertex array |
 | +0x10 | i32 | OffsetToTextureName | → NUL-terminated texture name (a GAF entry name, no extension); `0` = no texture |
 | +0x14 | i32 | Unknown_1 | Editor-only fields per the original note. **Not usually zero:** 631 of the 761 retail models contain at least one primitive with nonzero values here. Ignore; never validate as zero. |
 | +0x18 | i32 | Unknown_2 | ditto |
-| +0x1C | i32 | IsColored | Face is *clear* (invisible/transparent) when it has no texture **and** `IsColored == 0`. Untextured with nonzero `IsColored` = flat-colored via `ColorIndex`. With a resolved texture, canonical value `1` and an in-range index explicitly select the flat color; other nonzero values occur as editor garbage and do not suppress the texture. |
+| +0x1C | i32 | IsColored | Authored flag field. In the 608-model base corpus, bit 0 is set on all 6,598 primitives without a texture name and clear on all 43,845 primitives with one; noncanonical full-word values also occur as editor residue. Runtime interpretation is owned by [03 §2.4.1]. |
 
 Real example — a textured quad from `armflash.3do`'s base piece
 (primitive record at 0x346):
@@ -149,17 +149,13 @@ piece drawn as the unit's selection rectangle/footprint. A survey of all
 
 The community 3DO note describes the field as a *file offset* to the
 primitive record, but **no retail model uses the offset form** — every
-positive value is a plain index. (OpenTA's parser accepts a valid aligned
-offset first for compatibility with the historical description, then a
-bounded index; retail data only ever exercises the index path.) For `0`,
-OpenTA treats it as index 0 only when the first primitive actually looks
-like a plate (a flat 4-vertex quad on unique vertices).
+positive value is a plain index. Value `0` is ambiguous in the general file
+format between index zero and no selection. The unit-model census below
+settles how shipped unit assets author it; accepting the historical offset
+form is an implementation compatibility policy, not retail-format evidence.
 
-At draw time the selection primitive is **not rendered as a model face**: the
-retail unit rasterizer starts its primitive loop at index 1 for any piece
-declaring a selection primitive (after the load-time swap places the plate at
-index 0), and unit picking is a 2D bounding-box test, not a mesh raycast. The
-plate's remaining live use is identification bookkeeping.
+The engine's load-time normalization and draw/picking treatment of this field
+are runtime behavior and live in [03 §2.4] and [03 §2.4.1].
 
 #### Retail unit-model census
 
@@ -186,10 +182,10 @@ nonzero X/Z extent. Small coordinate asymmetries occur, so collision users
 should derive conservative X/Z bounds rather than require a mathematically
 perfect axis-aligned rectangle.
 
-For retail unit simulation, selection value `0` is therefore not ambiguous:
-it designates primitive 0. The two `-1` cases require an explicit geometric
-fallback to primitive 0 if base-plate bounds are desired. Third-party or
-non-unit models still require the general missing/ambiguous policy.
+In shipped unit assets, selection value `0` consistently designates primitive
+0. The two `-1` cases still carry base-plate geometry at primitive 0. Whether a
+runtime derives bounds from that otherwise-undesignated geometry is behavior
+or implementation policy, not a stored-format rule.
 
 The selection primitive is a quad lying in the ground plane. Historical
 notes commonly describe it as untextured/invisible, but the retail unit
@@ -201,118 +197,36 @@ terrain alignment.
 ### Texturing
 
 Texture names refer to entries in the GAF files under `textures/`
-([gaf.md](gaf.md)). There are no UV coordinates or stored `u/v` fields. A
-quad maps by corner-index affine 16.16: index order `0→(0,0)`, `1→(1,0)`,
-`2→(1,1)`, `3→(0,1)`, with fixed-point interpolation along edges and then
-across each scanline. Flat-color drawing accepts only quads; textured polygons
-with 5–16 vertices remain affine n-edge polygons rather than pre-triangulated
-fans. Bounding extents control clipping and scanline iteration, not texture
-coordinates. Sampling is nearest-neighbor, clamped to the last texel, with no
-perspective divide; transparent texels also skip shade lookup. Which corner is
-"top-left" was established by authoring tools per face by rotating the index
-order; renderers replicating classic visuals map as above.
-Faces are single-sided; the retail winding convention is counter-clockwise
-when viewed from outside — measured, see "Unknowns and caveats" (inverted
-faces were a common authoring bug, fixed in tools by "Invert Face").
-
-Team color comes from complete player-specific frames in `LOGOS.GAF`: frame
-*n* is the source texture for player *n*. Select that frame before applying
-the face's `PALETTE.SHD` lookup, then resolve the shaded index through the
-shared palette. Do not approximate this by palette-remapping frame 0; the
-frames contain entry-specific pixel and sometimes dimension differences. See
-[gaf.md](gaf.md).
+([gaf.md](gaf.md)). There are no UV coordinates or stored `u/v` fields, no
+stored normals, and no stored material record beyond the primitive fields
+above. Authored winding is discussed under "Unknowns and caveats" because it
+is an asset property. UV assignment, culling, texture sampling, team-frame
+selection, shading, and span filling are runtime contracts owned by
+[03 §2.4.1] and [R-RAST-01 §1–§5].
 
 ### Runtime texture resolution and face dispatch (retail rasterizer)
 
-At load the engine resolves every primitive's texture name against the side's
-texture GAF set (`armbldg`/`armcamo`/`armvehic`/`armships` for Arm, `cor*` for
-Core), then a fallback set, case-insensitively:
+This heading is retained only as correction history. Earlier versions of this
+format document gave competing runtime rules: fan-triangulation advice,
+textured polygons of arbitrary arity, and flat-color quads only. Those claims
+were wrong because they transposed the two raster branches. The current retail
+contract is [03 §2.4.1] and [R-RAST-01 §1–§3]; this format document records
+only the stored fields and stock distributions above.
 
-- **Miss** → the primitive is rewritten to a flat color `0xd1` (209) and takes
-  the flat-quad path below — a gray placeholder, not an invisible face.
-- **1 frame** → static texture.
-- **2+ frames** → animated texture: a per-instance animation player is
-  created and ticked once per simulation frame; per-frame delays come from the
-  GAF frame table. Instances tick independently (two labs built at different
-  ticks drift).
-- **Exactly 10 frames** → team texture: excluded from animation; the frame is
-  selected by owner player at draw time. This is the definitive
-  team-texture discriminator.
-
-At draw time the rasterizer dispatches per primitive on its flag bits:
-
-- **Flat-colored primitives** (`IsColored` bit 0 set) render through the
-  generic edge-table polygon filler **at any vertex count** — lines,
-  triangles, quads and n-gons alike.
-- **Textured primitives** (`IsColored` bit 0 clear) render **only when the
-  vertex count is exactly 4**. The quad mapper is hard-wired to four corners
-  and the dispatcher tests the count before it binds any texture, so a
-  textured triangle or n-gon draws nothing.
-- A **textured** quad (authored `IsColored` bit 0 clear, exactly four
-  vertices) whose team bit is set draws `LOGOS` frame `[colourIndex]`, where
-  the index is the owning player's colour byte `0..9`; an out-of-range index
-  (e.g. the unassigned `0xFF`) selects no frame and draws nothing. Flat
-  primitives never consult the team bits. (Corrected 2026-08-29 against
-  [03 R-RAST-01 §3]; the earlier bullet said a *flat* quad fills through the
-  LOGOS frame with a per-player *shade byte* — wrong branch and wrong byte.)
-
-**Correction (2026-08-28).** The two bullets above previously said the
-opposite — textured at any vertex count, flat quads only. The arities were
-transposed. The stock corpus settles it without ambiguity: across all 608 base
-`objects3d` models and 50,443 primitives, `IsColored` bit 0 is set on exactly
-the 6,598 primitives that carry no texture name and clear on exactly the
-43,845 that do, and **every one of those 43,845 textured primitives is a
-quad**, while the flat ones occur at vertex counts 2, 3, 4, 5, 6, 7, 8, 10,
-12, 13 and 16. The old reading would have discarded 3,312 authored flat
-non-quads (2,402 of them triangles) and kept a textured-n-gon path no stock
-asset reaches. Behavior is owned by
-`research/retail-executable-spec/03` `[R-REN-03A §5]`; this note exists so a
-parser author reading only the format doc is not misled about which field
-gates which path. Authored `IsColored` bit 1 is never set anywhere in the
-stock corpus — the loader writes it, to mark a texture that must be resolved
-per draw (animated entries and the LOGOS team textures).
+**Established (retail asset census).** Across all 608 base `objects3d` models
+and 50,443 primitives, every one of the 43,845 primitives carrying a texture
+name has four indexes. The 6,598 primitives without a texture name occur at
+index counts 2, 3, 4, 5, 6, 7, 8, 10, 12, 13 and 16. Authored `IsColored` bit
+1 is not set anywhere in that corpus. These facts establish stock reachability,
+not runtime dispatch.
 
 ### Face shading (SHD rows)
 
-Shading is not applied to every model. Retail runs its shaded piece renderer
-only for a unit whose FBI authors `BMcode=0` (the structure class) and only
-while the `Shading` display option is on; every other unit is drawn by a
-second piece renderer that maps the same textured faces with no
-`PALETTE.SHD` step and never reads the per-piece `dont-shade` bit. So the
-rest of this section describes how a structure is lit, and mobile units show
-no orientation-dependent shading in retail at all. See
-`research/retail-executable-spec/03` `[R-RND-02A]`.
-
-On that path, textured faces shade through `PALETTE.SHD` (32 rows × 256
-entries) with the row selected per vertex:
-
-```
-row = trunc( dot(N, L) * 5.0 ) mod 32
-L default = (-0.8, 1.0, 0.25)   (user-settable light; shipped default)
-N = per-vertex smooth normal:
-    face normal = normalize(cross(v[b]-v[a], v[b]-v[c]))
-      over the polygon's first three vertex indexes;
-    degenerate faces (any two equal indexes) use (0, 1, 0);
-    vertex normal = average of the normals of all faces touching it
-```
-
-Rows are palette remaps, not brightness ramps: row 15 is identity, row 0 maps
-most entries toward black, row 31 saturates, and intermediate rows shift hue
-differently per entry — this is what gives TA structures their per-face color
-variation. COB's `dont-shade` opcode pins a piece to row 15, which stock
-factory scripts use to exempt doors, pads, nano beams and landing plates
-while the rest of the structure stays shaded.
-
-**Flat faces shade too, on the shaded path.** This corrects the previous
-sentence "flat-colored quads never route through SHD (confirmed by a
-two-normal 3DO probe: flat colors do not vary with orientation)". The probe
-measurement stands but was generalised past its case. There are two flat span
-writers, one per renderer: the unshaded renderer's stores the color byte raw,
-the shaded renderer's stores `SHD[row*256 + color]` using the same
-Gouraud-interpolated row the textured path uses. A flat face therefore does
-not vary with orientation on a `BMcode=1` unit, or with `Shading` off — which
-is what the probe saw — and does vary on a `BMcode=0` structure with `Shading`
-on. See `[R-REN-03A §5]`.
+3DO stores neither normals nor light values. Runtime normal construction,
+renderer selection, `PALETTE.SHD` lookup, and the `dont-shade` effect are owned
+by [03 §2.4.1], [R-RND-02A], and [R-RAST-01 §5]. The earlier format text
+generalized one probe into a universal flat-face rule; that interpretation is
+withdrawn in favor of the numbered runtime contract.
 
 ### Piece naming conventions
 
@@ -361,33 +275,26 @@ no untextured primitive does.
   normal against 90 inward, across 608 models — 600 models to 2. So the
   authored order is counter-clockwise seen from outside, and the 90 are the
   "Invert Face" authoring bug the modeling notes describe. This document
-  previously stated the opposite, and three separate renderers inherited the
-  error, so the measurement is kept executable rather than in prose alone:
-  `TestRetailModelWindingIsOutward` in `internal/render` re-runs it against
-  a local install and skips when none is present.
+  previously stated the opposite; the retail asset census above is the
+  correction and establishes authored winding only. Runtime culling is owned
+  by [R-RAST-01 §1].
 - **Model facing is −Z, not +Z.** The TA Design Guide under "Sources"
   describes the modeling convention as +Z-forward, but retail data disagrees:
   muzzle locators (`flare*`) sit at negative Z from the barrel they are
   mounted on 135 times against 13. Engine heading 0 travels toward +Z and
-  increases toward +X (pinned by `movement.TestHeadingUsesTAWorldConvention`),
+  increases toward +X ([04 R-MOV-01 §2]),
   so convert source Z with `z = -z` before piece rotations/translations and
   then apply the engine heading directly. An added half turn makes the nose
   face the right direction only by rotating unconverted data; an asymmetric
   commander comparison shows that this leaves source X visibly mirrored. The
   reflection reverses polygon winding, so submission must swap the final two
   triangle indices. Apply the same source-Z conversion to piece translations
-  and simulation query/muzzle points. Trailing `-Z` in screen helpers is the `Z - Y/2` shear (`NEG; SAR 0x10; SAR 1; SUB` transient) not a second conversion; load-time `−X,−Z` remains sole persistent sign fixup (`H_A` established, `H_C` rejected per rr-06_addendum, direct-static via register-vs-store and `SUB` vs `ADD`).
-- Canonical `IsColored == 1` plus `ColorIndex < 256` takes precedence over a
-  resolved texture name. The controlled asymmetric Oracle carries both fields
-  and retail draws its synthetic index-56 box face instead of `colorsmd`.
-  A second controlled face pair uses one explicit index on two different
-  normals: retail keeps both at the same resolved palette color, rather than
-  applying the textured-face `PALETTE.SHD` rows. Preserve flat colors after
-  player/team resolution; directional SHD lookup belongs to textured pixels.
-  Stock models also contain malformed noncanonical `IsColored` values and
-  out-of-range color indexes beside valid textures; treat those as editor
-  garbage and keep the texture. If no texture exists, any nonzero flag with an
-  in-range index retains the historical flat-color behavior.
+  and simulation query/muzzle points. The persistent import transform and the
+  separate screen shear are specified in [03 §2.4] and [R-RAST-01 §2].
+- Stock models contain noncanonical `IsColored` values and out-of-range
+  `ColorIndex` values beside texture names. A lossless parser must preserve
+  both raw fields; their runtime precedence and shading behavior are owned by
+  [03 §2.4.1] and [R-RAST-01 §1–§5].
 - Fixed-point scale: the 16.16 interpretation matches all stock data, but no
   vendor document states it. Note that BOS/COB linear script values use a
   different scale (1 BOS unit = 2.5 model units; see [cob.md](cob.md)).
@@ -403,6 +310,5 @@ no untextured primitive does.
   disagrees with retail data — see "Unknowns and caveats"):
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/3dodesc.htm>
 - Verified against `objects3d/bomb1.3do` and `objects3d/armflash.3do` from
-  `totala1.hpi`, a structural survey of all 761 retail models (base game,
-  rev31, Core Contingency, Battle Tactics), and OpenTA's parser
-  (`formats/three_do.go`).
+  `totala1.hpi` and a structural survey of all 761 retail models (base game,
+  rev31, Core Contingency, Battle Tactics).

@@ -17,14 +17,16 @@ The corrected notes and root-correction ledger take precedence over earlier note
 **Established fact:** The authoritative simulation advances at 30 logical ticks per second. The frame dispatcher converts wall-clock time to a bounded number of logical ticks, with fractional carry. A frame can run at most five simulation ticks. Pausing produces no logical ticks. On single-player resume the stalled wall-clock anchor can yield one capped burst of up to five ticks; the excess integer time is dropped. The multiplayer budget keeps sampling time while paused and does not have that resume burst.
 
 **Established fact:** The tick body is ordered and increments the global tick
-before any phase runs [P0-09]. The twelve-phase tree (canonical order in
-document 01 section 4.4) is, in plain order: network dispatch, per-unit sweep,
-projectile, feature and fire, visibility, trigger poll, sharing, economy
-settlement, wind and meteor, ten-vtable barrier, and presentation, with
-wind and meteor and the per-player settlement coordinator (AI before deadline)
-grouped as separate phases in that tree. The exact presentation barriers are
-outside this document. The unit and projectile boundaries are authoritative
-because they determine same-tick visibility and callback order.
+before any phase runs [P0-09]. [01 §4.4] owns the global twelve-phase
+order and the post-phase-12 sub-tick tail; this document does not restate them.
+It owns phase 2's deterministic unit sweep and per-unit micro-order because
+those boundaries determine same-tick unit visibility and callback order.
+
+**Correction (2026-08-29).** The previous summary grouped visibility, trigger
+polling, sharing, economy settlement, and presentation as separate global
+phases. That contradicted the established dispatcher graph in [01 §4.4], so
+the duplicate global summary was removed and only phase 2's owned ordering is
+retained below.
 
 **Established fact:** The unit sweep is deterministic: player slots are visited
 in numeric order 0 through 9, and units are visited in ascending pool order with
@@ -59,7 +61,7 @@ processed during event ingress (before the unit phase) can queue theirs in time 
 pass. The four direct piece-pass call sites are the immediate branches of the zero-argument name-form adapter, the slot-based zero-argument helper, and the argument-carrying slot-form adapter (section 4.2), plus the ordinary per-tick drain; there is no direct piece-pass call from the general unit update (negative-bounded). Capture is synchronous before trigger polling, build-complete product
 publication (GetBuilt) occurs before trigger polling but victory needs the next
 30-tick poll, and kill notification goes through the central death handler
-[P0-09]. <!-- source orchestration-research-cob-callbacks.md -->
+[P0-09].
 
 **Established fact:** The projectile phase captures its active-span count at
 entry. A zero-burst weapon projectile spawned during the preceding unit sweep
@@ -129,12 +131,10 @@ after cleanup without a generation counter.
 
 **Established fact:** Unit allocation scans for the lowest available slot, while slot zero is reserved as a null sentinel. There is no verified generation number. References represented by slot or pool identity can alias a later unit after reuse. Projectile and order references must follow the retail validation rules rather than assuming generational safety.
 
-**Established fact (retail path, future parity only):** Save reconstruction preserves
+**Established fact:** Save reconstruction preserves
 unit slot identity and repairs cross-unit references after the units are
 reconstructed. A failed unit allocation can cause the saved record to be
-skipped. Nanolathe's active boundary is narrower: in-battle restoration is an
-explicitly unsupported result, so this reconstruction behavior does not
-authorize a live restore implementation ([PLAN_14 C10]; [INVARIANTS I13]).
+skipped.
 
 **Established fact — pool capacity [P0-16]:** The physical pool capacity is
 `(u16)catalogDefCount · 10 + 1` records of 0x118 bytes, allocated at battle
@@ -222,16 +222,13 @@ additional build-order heading adjustment. A mobile builder's heading toward
 the selected build goal is produced by ordinary movement steering, not by
 `buildangle`.
 
-**Retail save-reconstruction finding (future parity only).** Save
+**Retail save-reconstruction finding.** Save
 reconstruction also invokes the allocator (including the forced-slot path),
 consuming the initialization draws, and then restores the saved unit heading.
 Thus a saved heading is authoritative and is not recomputed from `buildangle`;
 a restored unit's RNG position still includes the allocator's draw sequence. A
 failed limit/slot allocation returns before common initialization and consumes
-no angle draw. Nanolathe currently returns an explicit unsupported result for
-in-battle restoration, so this preserves the required future draw ordering but
-does not authorize implementing a live restore path ([PLAN_14 C10];
-[INVARIANTS I13]).
+no angle draw.
 
 No slope/ground-alignment, construction-completion, renderer-only, or
 `ovradjust` heading writer was found in the bounded census. Placement and
@@ -3034,12 +3031,17 @@ field's value. The unit keeps moving, firing and building throughout — the
 record blocks nothing on the front segment (rear-segment `SelfDestruct`) or
 only its own segment (`SelfDestructFG`).
 
-### Closed — `showplayername` is inert [R-SPEC-01 §14] (2026-08-29)
+### Closed — `showplayername` has one reader: the HUD footer name line [R-SPEC-01 §14] (2026-08-29; corrected 2026-08-29)
 
-**Established — reader census: none.** Word B bit 17 has no reader in the
-image: the unit-information panel prints the definition's description line
-regardless, and no name substitution exists. The key is a content annotation
-only.
+**Correction.** This section previously said "reader census: none — the key
+is a content annotation only". That was wrong: the census had bounded itself
+to the unit-information panel. The battle footer's name line is a reader: in
+session kind 3 (multiplayer) a hovered unit whose definition has word B bit 17
+(`showplayername`) or bit 18 (`commander`) set shows the **owning player's
+lobby name** instead of the definition name; in every other session kind, and
+for every other unit, the definition name is shown. The arithmetic and the
+priority rules are in [07 R-HUD-03 §2]. The `UNITINFOx` panel still never
+substitutes the name. Established (direct static trace of the footer writer).
 
 ### Closed — `canhover`, `amphibious`, `floater`: readers not previously censused [R-SPEC-01 §15] (2026-08-29)
 
@@ -3085,15 +3087,15 @@ read it.
 
 **Established fact:** The unit phase drains each unit's eight script threads. The interpreter runs before per-piece interpolation in that unit's script drain. A move or turn issued by a script therefore affects the same tick's interpolation; a wait that becomes satisfied during interpolation is observed by the next drain.
 
-**Established fact:** The engine reaches scripts through four adapter roots: the zero-argument name-form start, the argument-carrying name-form start, the argument-carrying slot-form start, and the name-form synchronous four-cell query (direct-static: the name-form roots resolve through the shared name-lookup helper and the slot-form roots through the shared slot-lookup helper). The zero-argument name-form start is a name-based zero-argument start (15 direct call sites); the argument-carrying name-form start is name-based, taking up to four arguments, resolving the name, then forwarding to the argument-carrying slot-form start (21 direct call sites); the argument-carrying slot-form start is slot-based, writing four physical cells then setting the logical top to `arity−1` (5 direct call sites: four producers outside the adapter roots plus the argument-carrying name-form forwarding); and the name-form synchronous query forwards to the query interpreter (14 direct call sites). A bounded call census over the code sections counts 55 direct calls to those four roots; one is the internal argument-carrying name-form→slot-form forwarding, so 54 are producer call sites outside the four roots. The adjacent slot-based zero-argument helper has no direct caller in the bounded census (negative-bounded). The fixed-name producer census yields 40 distinct case-sensitive callback names; the packet path `0x0E` (section 5.3) can additionally start an authored slot by index and is not limited to those 40 names. <!-- source orchestration-research-cob-callbacks.md -->
+**Established fact:** The engine reaches scripts through four adapter roots: the zero-argument name-form start, the argument-carrying name-form start, the argument-carrying slot-form start, and the name-form synchronous four-cell query (direct-static: the name-form roots resolve through the shared name-lookup helper and the slot-form roots through the shared slot-lookup helper). The zero-argument name-form start is a name-based zero-argument start (15 direct call sites); the argument-carrying name-form start is name-based, taking up to four arguments, resolving the name, then forwarding to the argument-carrying slot-form start (21 direct call sites); the argument-carrying slot-form start is slot-based, writing four physical cells then setting the logical top to `arity−1` (5 direct call sites: four producers outside the adapter roots plus the argument-carrying name-form forwarding); and the name-form synchronous query forwards to the query interpreter (14 direct call sites). A bounded call census over the code sections counts 55 direct calls to those four roots; one is the internal argument-carrying name-form→slot-form forwarding, so 54 are producer call sites outside the four roots. The adjacent slot-based zero-argument helper has no direct caller in the bounded census (negative-bounded). The fixed-name producer census yields 40 distinct case-sensitive callback names; the packet path `0x0E` (section 5.3) can additionally start an authored slot by index and is not limited to those 40 names.
 
-**Established fact:** Each VM has eight thread slots of `0xA4` bytes. Allocation takes the first inactive slot in ascending order. A new root thread begins runnable at the selected function entry with logical stack top `−1`, no completion receiver, and signal mask `1`; child script starts inherit their parent's current mask. There is no name-level or producer-level duplicate suppression in the adapters — repeated successful starts occupy independent slots, and any repeat suppression lives in the producers' own state caches. Invalid identity (name lookup `−1` or slot out of range) and a full eight-slot pool are the same allocation failure to the adapters: the zero-argument name-form start and the slot-based zero-argument helper return false without notifying a supplied receiver, while the argument-carrying slot-form start and the argument-carrying name-form start return false and, if a receiver is supplied, invoke it with `0`. `HitByWeapon` and `TakeDamage` are independent argument-carrying name-form starts and can fail separately; `Aim*` failures also deliver `0` via that path and therefore leave aim-ready clear (section 5.3). <!-- source orchestration-research-cob-callbacks.md -->
+**Established fact:** Each VM has eight thread slots of `0xA4` bytes. Allocation takes the first inactive slot in ascending order. A new root thread begins runnable at the selected function entry with logical stack top `−1`, no completion receiver, and signal mask `1`; child script starts inherit their parent's current mask. There is no name-level or producer-level duplicate suppression in the adapters — repeated successful starts occupy independent slots, and any repeat suppression lives in the producers' own state caches. Invalid identity (name lookup `−1` or slot out of range) and a full eight-slot pool are the same allocation failure to the adapters: the zero-argument name-form start and the slot-based zero-argument helper return false without notifying a supplied receiver, while the argument-carrying slot-form start and the argument-carrying name-form start return false and, if a receiver is supplied, invoke it with `0`. `HitByWeapon` and `TakeDamage` are independent argument-carrying name-form starts and can fail separately; `Aim*` failures also deliver `0` via that path and therefore leave aim-ready clear (section 5.3).
 
-**Established fact:** Entry modes are D, I, and Q. D (deferred) allocates and initializes a thread then returns without interpreting it. I (immediate) after allocation interprets all eight slots once with delta `0` in slot order, then runs one piece pass with delta `0` — a VM-wide drain, not a drain of only the new callback. Q (synchronous query) interprets only the newly allocated slot with delta `0`, snapshots up to four cells, and returns; it does not scan the other seven slots and does not run a piece pass. The zero-argument name-form start takes zero logical arguments; the argument-carrying slot-form start always writes four physical values to cells `0..3` then sets logical top to `arity−1`; the synchronous query roots treat null cell pointers as seeded zero and excluded from copy-back, while non-null cells are logically exposed. A Q callback is not guaranteed to have returned when the host snapshots it: if it sleeps, waits for move/turn, or waits for another script, the one-slot interpretation stops and the host copies the current four cells immediately; the blocked thread remains active and may resume in a later VM-wide or normal drain, but it has no completion receiver that can revise the already returned host values, so callers must pre-initialize outputs and handle partial results. <!-- source orchestration-research-cob-callbacks.md -->
+**Established fact:** Entry modes are D, I, and Q. D (deferred) allocates and initializes a thread then returns without interpreting it. I (immediate) after allocation interprets all eight slots once with delta `0` in slot order, then runs one piece pass with delta `0` — a VM-wide drain, not a drain of only the new callback. Q (synchronous query) interprets only the newly allocated slot with delta `0`, snapshots up to four cells, and returns; it does not scan the other seven slots and does not run a piece pass. The zero-argument name-form start takes zero logical arguments; the argument-carrying slot-form start always writes four physical values to cells `0..3` then sets logical top to `arity−1`; the synchronous query roots treat null cell pointers as seeded zero and excluded from copy-back, while non-null cells are logically exposed. A Q callback is not guaranteed to have returned when the host snapshots it: if it sleeps, waits for move/turn, or waits for another script, the one-slot interpretation stops and the host copies the current four cells immediately; the blocked thread remains active and may resume in a later VM-wide or normal drain, but it has no completion receiver that can revise the already returned host values, so callers must pre-initialize outputs and handle partial results.
 
 **Established fact:** Thread states include idle, running, waiting for turn, waiting for move, sleeping, and waiting for a called script. Signal masks can terminate or suppress matching threads. Calls block the caller until the callee returns.
 
-**Established fact:** `SET_SIGNAL_MASK` (`0x10068000`) replaces the current thread's mask with the popped value. Engine-created root threads begin with mask `1`. `SIGNAL` (`0x10067000`) pops a mask and scans all eight slots; every active thread whose mask intersects it is released, including the signalling thread itself, each decrementing the active count and waking every thread waiting for that slot. Signal termination never invokes a completion receiver; if the signalling thread is among the victims its interpretation stops. An explicit script `return` (`0x10065000`) pops the top value, delivers it to the thread's completion receiver when one is set, releases the slot, and wakes threads waiting for that slot. An invalid-opcode kill clears status and decrements active count but does not invoke a receiver. <!-- source orchestration-research-cob-callbacks.md -->
+**Established fact:** `SET_SIGNAL_MASK` (`0x10068000`) replaces the current thread's mask with the popped value. Engine-created root threads begin with mask `1`. `SIGNAL` (`0x10067000`) pops a mask and scans all eight slots; every active thread whose mask intersects it is released, including the signalling thread itself, each decrementing the active count and waking every thread waiting for that slot. Signal termination never invokes a completion receiver; if the signalling thread is among the victims its interpretation stops. An explicit script `return` (`0x10065000`) pops the top value, delivers it to the thread's completion receiver when one is set, releases the slot, and wakes threads waiting for that slot. An invalid-opcode kill clears status and decrements active count but does not invoke a receiver.
 
 **Established fact:** Synchronous query helpers execute script logic without an ordinary tick delta and do not advance piece interpolation. Asynchronous callbacks allocate one of the eight thread slots and return if no slot is available. Section 4.3 gives the exact failure edge for every starter, including the two cases where arguments are left on the caller's stack.
 
@@ -4437,7 +4439,7 @@ Callbacks are issued at the state transition that caused them, not deferred to
 the renderer. Mobile/hover lethal, healing, and paralyzer paths do not all use
 the normal HitByWeapon/TakeDamage pair; document 06 owns those gates.
 
-**Established fact:** Lifecycle modes are fixed: `Create` (only when the definition has compiled COB, and VM/script/piece state is attached first) is I (immediate: all eight slots delta 0 plus one piece pass, one start per unit init); `Activate`/`Deactivate`/`StartBuilding` (the building-bit edge helper)/`StopBuilding` are D (deferred) gated on cached-bit rising/falling edges with producer-side suppression of unchanged state; `QueryBuildInfo` (the placement-time call) is Q (one-slot snapshot, no piece pass) with cell 0 starting at `−1` (cells 1..3 at `0`) consumed as piece index transformed to a world build position and network-emitted; the slot-form `StartBuilding` variant is D via direct slot start (see 5.3). <!-- source orchestration-research-cob-callbacks.md -->
+**Established fact:** Lifecycle modes are fixed: `Create` (only when the definition has compiled COB, and VM/script/piece state is attached first) is I (immediate: all eight slots delta 0 plus one piece pass, one start per unit init); `Activate`/`Deactivate`/`StartBuilding` (the building-bit edge helper)/`StopBuilding` are D (deferred) gated on cached-bit rising/falling edges with producer-side suppression of unchanged state; `QueryBuildInfo` (the placement-time call) is Q (one-slot snapshot, no piece pass) with cell 0 starting at `−1` (cells 1..3 at `0`) consumed as piece index transformed to a world build position and network-emitted; the slot-form `StartBuilding` variant is D via direct slot start (see 5.3).
 
 **Established fact:** `TargetCleared` carries the zero-based weapon slot (0–2)
 and is emitted only when a stored target is actually cleared: the slot's
@@ -4464,7 +4466,7 @@ deferred (mode D, arity 2, receiver null) with two arguments `(cos(dir)·400, si
 is the packet direction byte shifted left by eight into the 65536-domain (`dir = byte << 8`), resolved through the shared 512-entry sine table with round-to-nearest (same helpers as `RockUnit` but positive signs, radius 400), and
 `TakeDamage` starts independently immediately after (mode D, arity 1, receiver null) with one argument, the
 post-hit health percentage `clamp(health·100/maxHealth, 0, 100)` (health signed 16-bit, maxHealth the definition's maximum-damage field, an unsigned division of the product with explicit `<0→0`, `>100→100` clamps) computed as
-an unsigned division of the product. Either starter can fail separately (invalid name or full pool). Heal (`0`) and paralyze (`2`) and non-normal kinds skip this pair entirely (the paralyze kind builds a paralyze order instead); lethal damage against a movement-category-1/2 victim sets the death latch (OR `0x4000` into the unit's death-latch word) and returns without any callbacks. <!-- source orchestration-research-cob-callbacks.md -->
+an unsigned division of the product. Either starter can fail separately (invalid name or full pool). Heal (`0`) and paralyze (`2`) and non-normal kinds skip this pair entirely (the paralyze kind builds a paralyze order instead); lethal damage against a movement-category-1/2 victim sets the death latch (OR `0x4000` into the unit's death-latch word) and returns without any callbacks.
 
 **Established fact:** Local authoritative death runs a synchronous four-cell
 `Killed` query with outputs severity and variant before the death packet is
@@ -4569,15 +4571,15 @@ nonzero category from 0 issues `StartMoving` FIRST (I) and then the matching
 `MoveRateN` (I); other nonzero-to-nonzero changes issue only `MoveRateN` (I). All are
 immediate wake-flag starts via the zero-argument name-form adapter (wake 1), so the `StartMoving` drain — all eight slots at
 delta 0 plus one piece pass — forms a barrier between it and the `MoveRateN`
-that follows; the cache update (the two-bit category shifted left by two into its field) is the final write. <!-- source orchestration-research-cob-callbacks.md -->
+that follows; the cache update (the two-bit category shifted left by two into its field) is the final write.
 
-**Established fact:** `setSFXoccupy` is a five-value classifier (run after the rate classifier inside the movement integration, mode I, arity 1, spelling exact with lower-case `s`). Occupancy is `0` when the current movement mode (the low two bits of the movement-mode word) is not `1` or `2`. In those modes the classifier compares signed Y (the signed high word of the unit's 16.16 Y), the map water level (`wt`), the definition's waterline byte (`wl`) and the definition's model-bottom signed word (`mb`), yielding `4` if `wy > wt`; otherwise starting from the cached band it can yield `1` when `wy - wt > -5`, `2` when `wl + wy == wt`, and `3` when `mb + wy < wt`, with later tests overriding earlier ones (`1→2→3`). The value is cached and emitted via the argument-carrying name-form adapter only on change (cell 0 = band `0..4`). <!-- source orchestration-research-cob-callbacks.md -->
+**Established fact:** `setSFXoccupy` is a five-value classifier (run after the rate classifier inside the movement integration, mode I, arity 1, spelling exact with lower-case `s`). Occupancy is `0` when the current movement mode (the low two bits of the movement-mode word) is not `1` or `2`. In those modes the classifier compares signed Y (the signed high word of the unit's 16.16 Y), the map water level (`wt`), the definition's waterline byte (`wl`) and the definition's model-bottom signed word (`mb`), yielding `4` if `wy > wt`; otherwise starting from the cached band it can yield `1` when `wy - wt > -5`, `2` when `wl + wy == wt`, and `3` when `mb + wy < wt`, with later tests overriding earlier ones (`1→2→3`). The value is cached and emitted via the argument-carrying name-form adapter only on change (cell 0 = band `0..4`).
 
 **Supported inference:** Wake effects and medium bands are script-authored behavior. The engine does not need a separate hard-coded wake renderer to reproduce the callback contract.
 
 ### 5.3 Weapon and query callbacks
 
-**Established fact:** The engine invokes `QueryPrimary`/`QuerySecondary`/`QueryTertiary` (Q, cell 0 = `0`), `AimFromPrimary`/`AimFromSecondary`/`AimFromTertiary` (Q, cell 0 = `−1`; if still `−1` the engine falls back to the matching `Query*` with default `0`), `SweetSpot` (Q, cell 0 = `0` transformed through the selected piece — but **run on the *target* unit's script, not the shooter's; see [R-CB-01 §3] correction 3**), and `QueryNanoPiece` (Q, cell 0 = `0` → world nano origin) synchronously (mode Q, cells 1..3 null → seeded 0 and excluded from copy-back). `AimPrimary`/`AimSecondary`/`AimTertiary` are asynchronous (D) with heading/pitch arguments. Successful normal, ballistic, and vertical-launch weapon spawners invoke `FirePrimary/Secondary/Tertiary` (D, 0 cells via the zero-argument name-form adapter) and `RockUnit` (D, 2 cells via the argument-carrying name-form adapter); the dropped-family inline allocator does not. Burst clones do not rerun the root Fire/Rock callbacks. A Q script that sleeps/waits leaves the host holding the partial cell-0 value (section 4.2) — the blocked thread lingers with no receiver that can revise it. <!-- source orchestration-research-cob-callbacks.md -->
+**Established fact:** The engine invokes `QueryPrimary`/`QuerySecondary`/`QueryTertiary` (Q, cell 0 = `0`), `AimFromPrimary`/`AimFromSecondary`/`AimFromTertiary` (Q, cell 0 = `−1`; if still `−1` the engine falls back to the matching `Query*` with default `0`), `SweetSpot` (Q, cell 0 = `0` transformed through the selected piece — but **run on the *target* unit's script, not the shooter's; see [R-CB-01 §3] correction 3**), and `QueryNanoPiece` (Q, cell 0 = `0` → world nano origin) synchronously (mode Q, cells 1..3 null → seeded 0 and excluded from copy-back). `AimPrimary`/`AimSecondary`/`AimTertiary` are asynchronous (D) with heading/pitch arguments. Successful normal, ballistic, and vertical-launch weapon spawners invoke `FirePrimary/Secondary/Tertiary` (D, 0 cells via the zero-argument name-form adapter) and `RockUnit` (D, 2 cells via the argument-carrying name-form adapter); the dropped-family inline allocator does not. Burst clones do not rerun the root Fire/Rock callbacks. A Q script that sleeps/waits leaves the host holding the partial cell-0 value (section 4.2) — the blocked thread lingers with no receiver that can revise it.
 
 **Established fact:** `AimPrimary`/`AimSecondary`/`AimTertiary` carry unsigned
 16-bit heading then unsigned 16-bit pitch (arity 2, issued by the weapon update). Two issue forms exist,
@@ -4590,7 +4592,7 @@ the Aim start entirely**, otherwise the start carries `heading & 0xffff` then
 the slot's aim issue bit is clear; it starts with `(0, 0)`, the fixed-forward
 heading. After either start the engine emits a network event packet type `0x10`
 `{u16 unitId, u16 slot, u8 arity=2, heading, pitch}` behind the aim event's global option bit (mask `1`)
-and sets the weapon flags byte bit 0 (the issue bit). <!-- source orchestration-research-cob-callbacks.md -->
+and sets the weapon flags byte bit 0 (the issue bit).
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
@@ -4620,7 +4622,7 @@ VTOL_HelpBuild), which arranges the name-form arguments
 the code sections. The construction-command slot-form heading variant is not
 among those call sites; it starts the slot and emits its network event
 without touching the flag. Cleanup's flag consumption contract is unchanged
-(section 3.3). <!-- source orchestration-research-cob-callbacks.md -->
+(section 3.3).
 
 ### Closed — the StartBuilding argument vector and the stock-script census [R-UNIT-06 §4] (2026-08-28)
 
@@ -4701,7 +4703,7 @@ established; and `SetMaxReloadTime` (issued after `Create` so it lands outside
 Create's own immediate drain), scans all three weapon slots for the maximum
 authored reload field and reports `trunc(maxReload · 1000 / 30)` (multiply, then signed divide by 30 truncating toward zero) — reload ticks
 converted to milliseconds. None of these adapters deduplicates; suppression
-can only live in the producers. <!-- source orchestration-research-cob-callbacks.md -->
+can only live in the producers.
 
 **Established fact:** Query seeds are exact: the synchronous four-output
 `QueryTransport` (mode Q) pre-seeds output cell 0 to `-1` (remaining outputs passed null, seeded 0 by the query interpreter and excluded from copy-back), so a missing script leaves `-1`, the
@@ -4709,9 +4711,9 @@ root-piece fallback, which is later consumed as the attachment piece index.
 Every air-transport selection site seeds all four `QueryLandingPad` outputs
 to `-1`, tests candidate pieces in cell order `0..3` against validity/availability,
 accepts the first pass, and keeps `-1` otherwise; some paths query the
-carrier first, then the transported unit. <!-- source orchestration-research-cob-callbacks.md -->
+carrier first, then the transported unit.
 
-**Established fact:** The aim-ready handshake: the producer clears the slot's aim-state word to `0`, stores heading/pitch in the slot's commanded heading and commanded pitch words, and starts `Aim*` deferred (mode D) with the embedded completion receiver (the slot's completion-receiver word); immediately after it sets the weapon flags byte bit 0 (the issue bit) and emits the type `0x10` network packet (see above). The issue bit clears when target acquisition fails (an AND-clearing of the flags byte bit 0) and gates re-issue (a new `Aim*` starts only while bit 0 is clear). The argument-carrying slot-form adapter stores the receiver in the thread's receiver slot; on pool exhaustion or invalid identity it invokes the non-null receiver's closure with value `0`, while an explicit script `return` (`0x10065000`) pops the top value and invokes the receiver's closure with that value — the receiver object is re-read at return time. Signal termination (`0x10067000`) and abnormal termination (invalid opcode kill) never invoke a receiver. A zero delivery has no effect while any NONZERO delivery marks the weapon aim-ready — so name absence, thread-pool exhaustion (both deliver `0` via the argument-carrying slot-form adapter), or an authored zero return each leave the weapon unable to fire. The fire path entered with the issue bit set additionally consults a per-weapon permission function referenced by the weapon-slot record before firing; the issue bit alone authorizes nothing. <!-- source orchestration-research-cob-callbacks.md -->
+**Established fact:** The aim-ready handshake: the producer clears the slot's aim-state word to `0`, stores heading/pitch in the slot's commanded heading and commanded pitch words, and starts `Aim*` deferred (mode D) with the embedded completion receiver (the slot's completion-receiver word); immediately after it sets the weapon flags byte bit 0 (the issue bit) and emits the type `0x10` network packet (see above). The issue bit clears when target acquisition fails (an AND-clearing of the flags byte bit 0) and gates re-issue (a new `Aim*` starts only while bit 0 is clear). The argument-carrying slot-form adapter stores the receiver in the thread's receiver slot; on pool exhaustion or invalid identity it invokes the non-null receiver's closure with value `0`, while an explicit script `return` (`0x10065000`) pops the top value and invokes the receiver's closure with that value — the receiver object is re-read at return time. Signal termination (`0x10067000`) and abnormal termination (invalid opcode kill) never invoke a receiver. A zero delivery has no effect while any NONZERO delivery marks the weapon aim-ready — so name absence, thread-pool exhaustion (both deliver `0` via the argument-carrying slot-form adapter), or an authored zero return each leave the weapon unable to fire. The fire path entered with the issue bit set additionally consults a per-weapon permission function referenced by the weapon-slot record before firing; the issue bit alone authorizes nothing.
 
 **Established fact:** The run-script network dispatch (incoming packet case
 `0xE`) resolves the `u16` unit identifier at packet offset +1 through the unit
@@ -4747,7 +4749,6 @@ section 3.4 carries the same residual and can drop it.** Behavior when all eight
 slots are occupied is established in section 4.3 and differs by starter
 (deferred `Aim*`/`HitByWeapon`/`TakeDamage` deliver `0` through the receiver
 path; `Create` via the zero-argument name-form adapter has no receiver).
-<!-- source orchestration-research-cob-callbacks.md -->
 
 ### 5.4 Same-tick callback windows [GAP T15]
 

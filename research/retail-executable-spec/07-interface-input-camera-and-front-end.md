@@ -1513,7 +1513,9 @@ logical-to-physical map. Production/consumption values are latched every 30
 simulation ticks — the master composer holds a per-resource-record next-due
 tick and re-samples the four rate values only when it is due, advancing the
 due tick by 30 — while the current-over-capacity bars and the current numbers
-remain a live presentation of committed stock, drawn every frame. An earlier
+remain a live presentation of committed stock, drawn every frame *(corrected
+in [R-HUD-03 §4]: the eased display value of [05 R-ECO-01 §6], repainted only
+when the strip's snapshot changes)*. An earlier
 corpus reading that tied the step-30 pair to the scrollback ring concerned
 different state (the chat/status ring indices) and does not contradict the
 composer's own 30-tick sample latch.
@@ -1712,6 +1714,9 @@ P28-HUD-02I remains blocked on the named residuals: state priority, anchor
 pairing, replacement versus supplement, no-target clearing, footer damage
 source/rounding/visibility, unit make/use provenance and format, and build-card
 `NAME`/`DESCRIPTION` clipping or wrapping.
+*(Superseded 2026-08-29: every one of those residuals is closed in
+[R-HUD-03 §§1–3] below; the candidate-preserving API above is no longer the
+contract.)*
 
 **Executable probes and evidence.** A focused capture can close the remaining
 contract without relying on visual plausibility:
@@ -1764,6 +1769,464 @@ are the drag-selection rectangle's outer color-map entries chosen by that same
 latch bit while the armed latch is MOBILEBUILD (outer entry 6 when the bit is
 set, 4 when clear, else entry 15; inner entry 0), not a viewport thickness.
 
+### Closed — the ordinary footer: sources, priority, redraw and clearing [R-HUD-03 §1] (2026-08-29)
+
+**Correction (2026-08-29, RWU-07-2).** [R-HUD-02R] above says "the ordinary
+footer's state multiplexer and field writers are not located in the surviving
+static corpus" and that the `Unit State Probe` diagnostic path is a separate
+overlay. The footer writer *is* located: it is the routine the master
+composer calls immediately after the top resource strip and before the
+minimap, once per host frame. The earlier pass read only the routine's
+leading branch — the developer overlay that prints `PFSTATE`, `DELTATIME`,
+`GAMETIME`, `PACKETS` and friends when both low bits of the developer flag
+word are set — and stopped there; the ordinary footer is the remainder of the
+same routine. Everything in R-HUD-02R's Unknown table is closed below; its
+candidate-preserving API shape is superseded by the fixed priority in this
+section and P28-HUD-02I is unblocked.
+
+**Established — the three sources and their fixed priority.** The footer
+reads exactly three inputs, in this order, and the first that applies wins
+outright (replacement, never supplement):
+
+1. **Hovered gadget** — the battle window tree's hovered-gadget index
+   (`-1` when none). The gadget-tree pointer pass sets it, for button and
+   text-entry gadgets, to the index of the gadget whose authored rectangle
+   contains the pointer; it is reset to `-1` when the battle window tree is
+   built and whenever a window closes. When it is not `-1` the footer shows
+   the **build card** ([R-HUD-03 §3]) — or nothing, if the gadget is not a
+   product button.
+2. **Hovered world unit** — the pointer record's unit word. The battle
+   pointer handler rewrites it every host frame **only while the pointer is
+   inside the view rectangle with no drag-selection rectangle armed, or over
+   the minimap**: in the view it is the HOT UNITS winner of [R-REV-01]; over
+   the minimap it is the unit whose minimap dot lies within squared pixel
+   distance `< 4` of the pointer, nearest first, else `0`. While the pointer
+   is anywhere else (the side rail, the top or bottom strip) the word keeps
+   its previous value, so a unit hovered on the way to the panel stays in
+   the footer until a product button takes over or the pointer re-enters the
+   view. A nonzero word selects the **unit readout** ([R-HUD-03 §2]).
+3. **Hovered feature** — the pointer classification's feature word
+   (`0xFFFF` when none), the feature occupying the ground cell under the
+   pointer's lens position [03 §3.11], recomputed every frame wherever the
+   pointer is. A present feature selects the **feature readout**
+   ([R-HUD-03 §3]).
+
+With none present the footer draws nothing but its backdrop. **The footer
+never reads the selection**: neither the primary selected unit nor the group
+is a footer source, which closes R-HUD-02R's "selected primary" and "selected
+group" rows as *not footer states*.
+
+**Established — redraw and clearing.** The routine builds a fifteen-word
+snapshot every frame — the current order caption pointer, the hovered unit id
+and its health word, its kill count, three per-weapon reload words (below),
+its four archived rate values, the secondary unit id and health
+([R-HUD-03 §2]), the hovered feature id, the hovered gadget index, the panel
+slide offset and the strip-art pointer — and compares it with the copy kept
+from the last draw. Nothing is drawn when they are equal. When they differ
+the copy is replaced and the whole bottom strip is repainted: first the
+side's `PANELBOT` entry is stamped from `x = 129` rightward, each stamp
+advancing by its frame width until `x` reaches the screen width, at
+`y = height − 32` (plus the frame's own GAF offsets, the [07 §6] blitter
+contract), which erases the previous text; then the winning source draws.
+So "no target clears" is true by construction — the backdrop stamp is the
+clear — and a change of hovered unit, of that unit's health or kills, of the
+order caption, or of a build-card hover redraws the strip in the same host
+frame. The three reload words are, per weapon slot 1..3, `-1` unless the
+slot's weapon definition has a reload time of at least 31 ticks and the
+slot's flag bit 1 is set, in which case the slot's own countdown word; they
+enter the snapshot (forcing a repaint each time a qualifying weapon's
+countdown changes) but **nothing draws them** — the `RELOAD1`..`RELOAD3`
+anchors are loaded and never read ([R-HUD-03 §5]).
+
+**Established — placement rules shared by every footer draw.** Every footer
+anchor's `y1`/`y2` is offset by `dy = screenHeight − baseheight`, where
+`baseheight` is the `[GENERAL]` integer of `sidedata.tdf`, default 480
+[02 §6]; `x` is never shifted. Text uses the side's `font` face (the console
+face of §6) and, unless a rule below says otherwise, the **raw palette index
+83** as its foreground — not a `dcb[]` entry — with the window's current
+background. Text is drawn with no maximum width (the FNT truncate-before-clip
+step of [07 §7] is bypassed; only the destination clip applies), so no footer
+field wraps, ellipsises or truncates. "Centred at anchor A" below means
+`x = A.x1 − trunc(textWidth / 2)`, `y = A.y1 + dy`, where `textWidth` is the
+glyph-advance sum of the string in the side font (signed division, truncating
+toward zero).
+
+**Established — the panel-slide gate.** The side-rail slide of §6 (the Space
+key contract) runs only when the session kind is 2 or 3 (skirmish or
+multiplayer in doc 08's vocabulary); in a campaign mission (kind 1) the
+composer skips the slide step and the strip stays parked.
+
+### Closed — the unit readout: name, damage bar, logo, rates, kills, caption and the secondary field [R-HUD-03 §2] (2026-08-29)
+
+**Established — admission.** The hovered unit must be alive (its definition
+index word nonzero). Then the viewing player's direct-visibility predicate
+[03 §3.2] is queried with the viewing player's record: when it returns false
+the footer draws the localized caption `Unidentified object`, centred at
+`UNITNAME`, and **nothing else** ([03 R-VIS-01 §4] owns the predicate; own
+units always pass it).
+
+**Established — the name (`UNITNAME`).** The string is the owning
+**player's name** (the 30-byte lobby name in the player record) when the
+session kind is 3 (multiplayer, doc 08) **and** the definition's word B has
+bit 17 (`showplayername`) or bit 18 (`commander`) set; otherwise it is the
+definition record's leading name field — the FBI `name` after the
+language-prefixed accessor of [02 §6], stored at load — drawn **verbatim**,
+without a second localization lookup. Centred at `UNITNAME`, colour 83.
+*Cross-doc:* this is a reader of `showplayername`; doc 04's [R-SPEC-01 §14]
+"reader census: none" is wrong for that key and should be corrected by lane
+04 — the census missed this routine for the same reason R-HUD-02R did.
+
+**Established — the damage bar (`DAMAGEBAR`).** Drawn when the unit's owner
+slot equals the viewing slot **or** the definition lacks `hidedamage`
+([04 R-SPEC-01 §6]; allies see no bar either). With `hp = clamp(health16,
+0, maxdamage)` and `w = x2 − x1`:
+
+```
+fill  := x1 + (w × hp) / maxdamage           // signed idiv, truncating
+[x1 .. fill] × [y1+dy .. y2+dy]  filled with dcb[10]
+if fill ≠ x2:  [fill+1 .. x2] × [y1+dy .. y2+dy]  filled with dcb[4]
+```
+
+Both fills are the inclusive rectangle filler of [R-P0-19-P], so a dead-level
+`hp = 0` still paints a one-pixel column of `dcb[10]` at `x1`; there is no
+threshold colouring here (that is the world bar's rule, [03 R-FX-01 §6]).
+
+**Established — the owner's logo (`LOGO2`).** After the bar, unconditionally
+for an identified unit, the owner's logo is blitted at `LOGO2` (`y + dy`): the
+frame of the `logos` GAF indexed by the owner's lobby colour index, at the
+frame's full size (the same primitive draws the viewing player's logo at
+`LOGO` in the top strip, [R-HUD-03 §4]).
+
+**Established — the four rate fields, own units only.** The rest of the
+readout is drawn only when the unit's owner slot equals the viewing slot or
+the F11 developer overlay is on ([R-CAM-01 §2]). The four values are the
+unit's economy sub-record **archived** slots of [05 R-ECO-01 §5] — the
+production and requested totals of the most recent settlement pass, copied
+there by the apply-back and re-written every pass (30 ticks); no other
+cadence, no smoothing, and not the definition constants. Each is clamped
+below at zero before formatting (`max(v, 0.0)`, the compare is
+"less-or-equal → use 0"):
+
+| Anchor | Value | Format | Colour |
+|---|---|---|---|
+| `UNITMETALMAKE` | archived metal production | `+%.1f` | `dcb[10]` |
+| `UNITENERGYMAKE` | archived energy production | `+%.0f` | `dcb[10]` |
+| `UNITMETALUSE` | archived metal requested | `-%.1f` | `dcb[12]` |
+| `UNITENERGYUSE` | archived energy requested | `-%.0f` | `dcb[12]` |
+
+Each is drawn at its anchor's `(x1, y1 + dy)`, left-aligned, in that order.
+`%.Nf` is the C runtime's round-half-even conversion of the double the single
+was widened to. The sign characters are literal, so an idle unit shows
+`+0.0`, `+0`, `-0.0`, `-0`.
+
+**Established — the kills line.** When the unit's status bit 31 is set (the
+*armed* bit — the definition resolved at least one weapon, [04 §3]) and its
+credited-kill counter is nonzero: `"%d %s"` with the localized word `kill`
+when the count is exactly 1 and `kills` otherwise; when the count exceeds 4
+the form is `"%d %s - %s"` with the localized `Veteran` appended. Drawn at
+`(DAMAGEBAR.x1, DAMAGEBAR.y2 + 2 + dy)` in `dcb[15]`. Only the single word
+`Veteran` exists; the experience tiers of [04] are not shown.
+
+**Established — the order caption (`MISSIONTEXT`).** The current order's
+caption is the localized caption column of the order-kind table
+([R-ORD-01 §1]) for the unit's current order kind, or the table's row-0
+caption when the unit has no current order; centred at `MISSIONTEXT`,
+colour 83. It is drawn only inside the own-or-overlay block, so an enemy's
+order is never shown.
+
+**Established — the secondary field (`UNITNAME2` / `DAMAGEBAR2`).** Two
+mutually exclusive uses, decided after the caption:
+
+* **Stockpile.** If the unit's stockpile percentage ([06 §11.1]:
+  `progress × 100 / reloadtime` of the first stockpiling weapon, `0` when
+  none) is nonzero **and** the unit is own: the localized word `Weapon` is
+  centred at `UNITNAME2` in colour 83 and `DAMAGEBAR2` receives the bar of
+  the `DAMAGEBAR` rule with `hp := clamp(percent, 0, 100)` and
+  `maxdamage := 100`.
+* **Order target.** Otherwise (percentage `0`), when the hovered unit is own
+  (the target lookup runs only for own units) and its current order carries a
+  target unit id whose unit is alive and passes the visibility predicate: the
+  target definition's leading name field is centred at `UNITNAME2` (verbatim;
+  no player-name substitution), and `DAMAGEBAR2` receives the target's bar
+  under the same own-or-not-`hidedamage` test.
+* Neither: `UNITNAME2`/`DAMAGEBAR2` stay blank (the backdrop stamp).
+
+This closes the "which pair is primary" question: `UNITNAME`/`DAMAGEBAR` are
+always the hovered unit; the `2` pair is its stockpile or its order target.
+
+### Closed — feature and build-card readouts: `NAME` and `DESCRIPTION` [R-HUD-03 §3] (2026-08-29)
+
+**Established — feature hover.** With no hovered unit and a hovered feature,
+and the feature definition's `nodisplayinfo` bit clear (or the F11 overlay
+on): the text is the localized `description` field of the feature definition
+(the 20-byte field, [fmt tdf]), or under the overlay the feature's internal
+name. When the definition's `indestructible` bit is clear the line is
+`"%s %s%s"` with the second argument `" M:%d"` when the authored `metal` is
+nonzero (else empty) and the third `" E:%d"` when `energy` is nonzero (else
+empty), both values truncated toward zero from the stored singles; an
+indestructible feature shows the name alone. Drawn at `(NAME.x1, NAME.y1 +
+dy)`, colour 83, left-aligned, no width limit.
+
+**Established — build card.** With a hovered gadget: the gadget's 16-byte
+authored name is looked up (binary search, case-insensitive) in the
+definition summary table; a miss draws nothing. A hit whose name is not
+`CORBUILD` (case-insensitive) draws `"%s  M:%d E:%d"` — two spaces; the
+definition's display name, then `buildcostmetal` and `buildcostenergy`
+truncated toward zero — at `(NAME.x1, NAME.y1 + dy)`, and the definition's
+`description` field verbatim at `(DESCRIPTION.x1, DESCRIPTION.y1 + dy)`,
+both colour 83, both without a maximum width. No wrapping, ellipsis or second
+line exists: `NAME` and `DESCRIPTION` are single-line, left-aligned, and clip
+only at the destination surface. The `CORBUILD` exclusion is a literal name
+test with no other reader (Unknown why; decider: asset census for a gadget
+of that name).
+
+### Closed — the top strip: redraw condition, bar arithmetic, share marker and alignment [R-HUD-03 §4] (2026-08-29)
+
+**Correction (2026-08-29, RWU-07-2).** §6 above says the current-over-capacity
+bars and the current numbers "remain a live presentation of committed stock,
+drawn every frame". They are neither: the displayed stock is the eased
+display value of [05 R-ECO-01 §6] (an eighth of the integer gap per host
+frame, minimum step one, clamped to capacity), and the strip is repainted only
+when its snapshot changes.
+
+**Established — redraw condition.** The composer keeps a 33-byte snapshot —
+the viewing slot byte, then eight singles: displayed energy, latched energy
+produced, latched energy requested, displayed metal, latched metal produced,
+latched metal requested, energy capacity, metal capacity — and repaints the
+strip only when the freshly computed snapshot differs from the stored one.
+The displayed-stock easing and the 30-tick rate latch of [05 R-ECO-01 §6]
+run before the compare, so the strip repaints whenever the eased value moves
+(every frame while stock is changing) and otherwise stays.
+
+**Established — the repaint.** The side's `PANELTOP` entry is stamped once
+at `(129, 0)`; the strip is then extended rightward with the side's
+`PANELBOT` entry, each stamp advancing by its frame width, until `x` reaches
+the screen width. The viewing player's logo (the `logos` GAF frame at the
+player's lobby colour index) is drawn at `LOGO`. Then, energy first and metal
+second, with `S` the displayed stock, `C` the capacity and the bar's
+`w = x2 − x1`:
+
+```
+if C > 0:
+    fill := ftol( x1 + w × S / C )                     // single-precision product/quotient
+    [x1 .. fill] × [y1 .. y2]  filled with the side's energycolor / metalcolor (raw index)
+    if 0 < shareThreshold < liveStock:
+        m := ftol( x1 + w × shareThreshold / C )
+        [m .. m+2] × [y1 .. y2]  filled with dcb[12]
+"%d" ftol(S)                 at (NUM.x1, NUM.y1)           colour dcb[15]
+"0"                          at (ZERO.x1, ZERO.y1)         (ENERGY0 / METAL0)
+"%d" ftol(C)                 at (MAX.x1 − textWidth, MAX.y1)   (ENERGYMAX / METALMAX; right-aligned to x1)
+produced / consumed          at PRODUCED / CONSUMED (x1, y1)  dcb[10] / dcb[12], formats per §6
+```
+
+`shareThreshold` is the player's `SetShareEnergy`/`SetShareMetal` value
+([05 R-SHARE-01]); the two-pixel marker is drawn only while the threshold is
+strictly positive and strictly below the **live** stock (not the displayed
+one). The capacity number is the only right-aligned text on the strip:
+retail's `ENERGYMAX`/`METALMAX` anchors are authored at the bar's right end
+and the number ends there.
+
+### Closed — side-anchor consumer census [R-HUD-03 §5] (2026-08-29)
+
+**Established.** The side record's HUD anchors have exactly two readers, the
+top-strip painter ([R-HUD-03 §4]) and the footer ([R-HUD-03 §§1–3]); no
+other routine addresses the anchor block. Per anchor:
+
+| Anchor | Consumer | Use |
+|---|---|---|
+| `LOGO` | top strip | viewing player's logo frame |
+| `ENERGYBAR` `METALBAR` | top strip | fill + share marker |
+| `ENERGYNUM` `METALNUM` | top strip | displayed stock, `%d` |
+| `ENERGY0` `METAL0` | top strip | literal `0` |
+| `ENERGYMAX` `METALMAX` | top strip | capacity, right-aligned to `x1` |
+| `ENERGYPRODUCED` … `METALCONSUMED` | top strip | latched rates (§6) |
+| `LOGO2` | footer | hovered unit's owner logo |
+| `UNITNAME` `DAMAGEBAR` | footer | hovered unit (or `Unidentified object`) |
+| `UNITMETALMAKE` `UNITMETALUSE` `UNITENERGYMAKE` `UNITENERGYUSE` | footer | archived rates, own units |
+| `MISSIONTEXT` | footer | current order caption |
+| `UNITNAME2` `DAMAGEBAR2` | footer | stockpile or order target |
+| `NAME` `DESCRIPTION` | footer | feature text / build card |
+| `TOTALUNITS` `TOTALTIME` | **none** | loaded, never read — the running display uses fixed offsets on the slide strip (§6) |
+| `RELOAD1`..`RELOAD3` | **none** | loaded, never read (the reload words only feed the repaint snapshot) |
+
+Only `x1`/`y1` of the text anchors are read; `x2`/`y2` matter only for the
+bar anchors. There is no slide/modal anchor combination and no per-side
+fallback: a missing anchor is the loader's diagnostic (§6), never a borrowed
+rectangle.
+
+### Closed — build pages: name composition, the `DL` template, `NEXT`/`PREV`, and command-button state [R-HUD-03 §6] (2026-08-29)
+
+**Established — page window names and the page cycle.** The page state of a
+builder is its status word's paged bit (22) and page field (bits 23–25, §9).
+Page 0 — the paged bit clear — is the **orders** state: the command-window
+switch opens `"%sGEN.GUI"` (the side's `nameprefix`) unless the definition's
+word A bit 31 is set. That bit is written at definition load by probing
+`guis/<internal name>0.GUI` for existence (name format `"%s0"`); no stock
+unit ships such a file, so in stock content it is never set. For a page
+`N ≥ 1` (or page 0 with bit 31) the switch composes `"%s%d.GUI"` from the
+definition's internal name and the page number — `ARMCOM1.GUI` is page 1 —
+and, if that window is not already open for the same unit, asks the page
+opener to open it. The opener requires the builder to be complete (remaining
+construction fraction exactly `0.0`), resolves `guis/<name>` through the VFS,
+and when the file is **absent** opens the window `"%sDL"` with the side's
+`nameprefix` instead (`ARMDL` / `CORDL`), the download-page template whose
+`IGPATCH` product slots the generated-page assembly of §9 then patches with
+every build-menu entry whose builder matches and whose authored `PAGE` byte
+minus one equals the page number. The definition's page-count byte is the
+maximum authored page plus one, so valid pages are `0 .. count−1`.
+
+The page-cycle keys and buttons ([R-CAM-01 §2]) move as follows, every
+change setting battle-interface dirty bit `0x10` and playing `nextbuildmenu`:
+
+| Input | From page 0 | From page `p ≥ 1` |
+|---|---|---|
+| `.` key (next, keyboard) | page 1 | `p+1`, or page 0 when `p == count−1` |
+| `,` key (previous, keyboard) | page `count−1` | `p−1`, or page 0 when `p == 1` |
+| `NEXT` button | page 1 | `p+1`, or page 1 when `p == count−1` (never page 0) |
+| `PREV` button | page `count−1` | `p−1`, or page `count−1` when `p == 1` |
+| digit `d` ([R-CAM-01 §2]) | page `d−1` when `d−1 < count`, else nothing | same |
+
+The gadgets `"%sPREV"` and `"%sNEXT"` (prefix-named, `ARMPREV`/`ARMNEXT`)
+are hidden (`active := 0`) after a page opens when the page-count byte is
+below 2. `ONOFF` on a page shows the builder's on/off bit as its stage when
+the builder is a building (status bit 29). On a page above 0, every gadget
+with attribute bit `0x04` (a product slot) is greyed when its name does not
+resolve to a definition. Queue counts on product buttons are [R-P0-11 §2].
+
+**Established — command-button stage and grey state.** After a page opens,
+the command buttons are set from the selection-aggregate words the switch
+computed (§9's "enabled/disabled/mixed" aggregate), by name:
+
+| Gadget | Stage | Greyed when |
+|---|---|---|
+| `BUILD` | builder's page-shown bit (status bit 22) | no builder, or page count 0 |
+| `ORDERS` | inverse of that bit | same |
+| `CLOAK` | aggregate cloak pair (bits 3–4 of the second aggregate word) `>> 3` | pair == 3 (mixed) |
+| `ONOFF` | aggregate on/off pair (bits 5–6) `>> 5` | pair == 3 |
+| `MOVEORD` | aggregate move-stance field (bits 0–2) | field == 4 (mixed) [R-STANCE-01 §1] |
+| `FIREORD` | aggregate fire-stance field (bits 12–14 of the first word) `>> 12` | field == 4 |
+| `MOVE` `STOP` `ATTACK` `DEFEND` `PATROL` `RECLAIM` `CAPTURE` `REPAIR` | — | the selection's capability bit for that command is clear |
+| `LOAD` / `UNLOAD` / `BLAST` | — | transport bit clear: `LOAD` hidden, `UNLOAD` greyed, `BLAST` greyed unless the blast bit; transport bit set: `BLAST` hidden |
+
+A stage write goes to the gadget's stage word; greying sets bit 0 of the
+gadget's flag word and marks the tree dirty. The button painter then chooses
+the GAF frame: not greyed → `status + stage` (the authored `status` starting
+frame, [fmt gui]) while the mouse is up, the pressed frame while it is held;
+greyed → `status + min(stage + 2, frames − 1)` (or `frames − 1` when the
+gadget's attribute bit `0x100` is set) and the rectangle is darkened by 20
+palette steps afterwards. So a stance button's art is authored as
+`status + stage` for the live frames and `status + stage + 2` for the greyed
+frames; the painter never reads the label for a staged button.
+
+### Closed — the `damagebars` option is the "label every unit" bit [R-HUD-03 §7] (2026-08-29)
+
+**Established.** The registry value `damagebars` ([03 R-FX-01 §6]) and the
+"label every unit" bit of [R-CAM-01 §2] are the same bit — bit 0 of the
+interface-flags word — toggled by the `!` `#` `*` `` ` `` `~` key tokens and
+written back immediately. Doc 07 names it `damagebars` from here on; the
+composer's consumer (own units get a world health bar; grouped units their
+digit) is [03 R-FX-01 §6].
+
+### Closed — the unit information screen `UNITINFOx.GUI` [R-HUD-03 §8] (2026-08-29)
+
+**Established — trigger and subject.** F1 ([R-CAM-01 §2]) opens the screen
+when the options window is not open. The subject is the hovered gadget's
+product when the hovered-gadget index is not `-1` (resolved by the same name
+lookup as the build card, [R-HUD-03 §3]); otherwise the hovered world unit,
+if alive and passing the visibility predicate; otherwise nothing opens.
+
+**Established — content.** The screen's `HOTR` gadget receives the picture
+`unitpics/<internal name>.PCX` and a click callback; the `NAME` gadget's text
+is the definition's display name (a 128-byte limit argument). Eight label gadgets are appended
+at fixed positions (x, y): `Cost` (130, 32), `Energy` (140, 47), `Metal`
+(140, 62), `Build Time` (140, 77), `Statistics` (130, 92), `Max Velocity`
+(140, 107), `Acceleration` (140, 122), `Turn Rate` (140, 137) — every label
+localized. The value column at `x = 240` is the property list, a run of
+NUL-separated strings at the same rows (a `"\n"` string occupies the two
+header rows): `%d` of `buildcostenergy` (truncated), `%d` of
+`buildcostmetal`, `%d` of `buildtime`, then for a **building** (`bmcode`
+0) three localized `N/A`, and for a mobile unit:
+
+```
+tps      := 30                                  // the runtime's ticks-per-second word
+velocity := f32(maxvelocity16.16 × 2^-16) × tps × 0.4          "%.1f m/s"
+accel    := f32(acceleration16.16 × 2^-16) × tps × 0.4         "%.2f m/s/s"
+turn     := turnrate16 × tps × 0.0054931640625                 "%.0f deg/s"
+```
+
+`0.4` and `0.0054931640625` (= `360 / 65536`) are literal double constants;
+the first two products narrow to single after the `2^-16` scale and are then
+widened; the unit words `m/s`, `m/s/s`, `deg/s` are localized. The `0.4`
+factor is retail's world-unit-to-metre convention for this screen only; no
+other reader uses it.
+
+### Closed — `SHARE.GUI`'s `METAL#` / `ENERGY#` [R-HUD-03 §9] (2026-08-29)
+
+**Established.** `METAL` and `ENERGY` are gadget-kind-4 sliders
+(`attribs=1`, horizontal), not text fields. On open each slider's range word
+is set to `ftol(live stock)` of that resource (metal from the metal stock,
+energy from the energy stock), its knob to position 0, and its change
+callback installed; the slider helper places the knob at
+`ceil(min(value, range) × (travel − 1) / range)` and reads it back as
+`ftol(knob / (travel − 1) × range)` — with `travel = width − height` of the
+authored gadget (the knob is a square of the gadget height) and a travel
+below 2 reading back as 0. `METAL#` and `ENERGY#` are
+label gadgets whose text is `"%d"` of that read-back value, written on open
+(so both start at `0`) and again by each slider's change callback. The
+confirm handler reads the same two read-back values ([05 R-SHARE-01 §5]).
+*Cross-doc:* [05 R-SHARE-01 §5]'s "two text fields … parsed by the
+string-to-integer helper" is wrong on the control kind — the 64-bit result it
+saw is the slider read-back's `ftol`; the amount semantics it states
+(truncate, clamp to live stock, zero is a no-op) are unaffected.
+
+### Closed — `MOREBAR` / `MORE...` text-region paging [R-HUD-03 §10] (2026-08-29)
+
+**Established.** The shared paging routine serves every screen with a
+`TextRegion` gadget and a `MOREBAR` button (briefings, the end-of-mission
+text and the front-end help pages). Lines per page is
+`regionHeight / (fontHeight + 2)` (signed, truncating; `fontHeight` from the
+current font). The routine keeps a page counter and the text pointer; a
+`MOREBAR` click advances the counter and re-lays the region; opening a screen
+resets it so the first call lands on page 0. It scans the text for the
+`(page+1) × linesPerPage`-th newline: found → the `MOREBAR` caption is the
+localized `MORE...`; not found on page > 0 → the caption is the localized
+`BACK TO START` and the next click wraps to page 0; not found on page 0 →
+the caption is empty. The page's lines are then emitted as one label gadget
+per line at `(regionX + 5, regionY + (fontHeight+2)/2 + i × (fontHeight+2))`,
+using the side's four-entry text-colour table: plain text is entry 0 and a
+run bracketed as `&G…&`, `&Y…&` or `&R…&` is drawn in entry 1, 2 or 3 (any
+other letter after `&` also reads as entry 3); the caption colour is entry 1. A line ends at `\n`; `0xFF` or NUL ends the
+text. There is no thumb: `MOREBAR` is a plain button, and the "thumb
+arithmetic" item of the plan does not exist.
+
+### Closed — the score-bar gadget (kind 13) and its `value / 15` step [R-HUD-03 §11] (2026-08-29)
+
+**Established.** The end-of-mission score rows ([08 R-CAMP-01 §7]) create
+kind-13 gadgets carrying: `current := 0`, `target := value`,
+`max := column maximum`, `step := max(1.0, value × 0.06666667)` (single),
+`interval := 1`, `animating := 1`, `showNumber := 1`. The gadget-tree
+service pass steps every kind-13 gadget whose `animating` flag is set and
+whose `current < target`: when the scaled timer ([R-CAM-01 §10]; 30 units
+per second) has passed the gadget's next-due stamp, `current += ftol(step)`,
+clamped to `target` (clearing `animating` when it lands), and the next-due
+stamp becomes `timer + interval`. The painter draws the bevelled frame, insets
+by 2, fills the inner rectangle with the gadget's background colour, then
+`[x .. x + ftol(current / max scaled to the inner width)]` with the gadget's
+foreground colour, and when `showNumber` is set centres `current` as decimal text in the
+rectangle. So a bar fills in about fifteen 1/30-second steps whatever its
+value (one step per tick for values below 15). This closes doc 08's "whether
+the per-gadget `value / 15` float is the bar renderer's fill increment"
+(cross-doc: doc 08 to cite) — it is the animation step, not a fill fraction.
+
+### Closed — selection-count and group displays [R-HUD-03 §12] (2026-08-29)
+
+**Established — there is no selection-count readout.** Nothing in the battle
+composer, the footer or the gadget painters prints the number of selected
+units. The only count on screen is `Total Units: %d (Max %d)` on the slide
+strip (§6), which is the player's live unit count against its limit, not the
+selection. Group membership is shown only as the `'0' + group` digit under
+own units ([03 R-FX-01 §6]) and, on the footer, not at all.
+
 ### Supported inference
 
 Battle chrome should be data-driven from side-data, while semantic values and
@@ -1782,15 +2245,11 @@ apply the same letterbox inside that canvas [07 §6][07 §10].
 Open items only; the decider follows each. All invoked retail anchors and their
 tuple order are established above.
 
-- Slide and modal anchor combinations, and per-side fallback for optional
-  presentation · static trace.
-- The ordinary footer's source priority, replacement-versus-supplement rule,
-  field pairing, and no-target clearing; also damage-bar source, rounding and
-  visibility, unit make/use source and formatting, and build
-  `NAME`/`DESCRIPTION` clipping or wrapping · [R-HUD-02R] · static trace. The
-  diagnostic `Unit State Probe` strings are not evidence for any of these.
-- Consumers of the HUD side anchors other than the resource anchors closed in
-  §6 · static trace.
+- The reader, if any, of the `CORBUILD` gadget-name exclusion in the build
+  card ([R-HUD-03 §3]) · asset census for a gadget of that name.
+- Whether any stock or third-party content authors a `<unit>0.GUI` page (the
+  authored-page bit of [R-HUD-03 §6] is never set by stock content) · asset
+  census.
 
 
 ## 7. Fonts, text, palette, and localization use
@@ -3699,14 +4158,10 @@ section rather than deleted.
 - Battle HUD optional-asset fallback beyond the closed `intgaf` panel entries,
   side fonts, authored GUI page, page GAF, support GAF, and common-button
   resolution · §6 · static trace.
-- Consumers of the HUD side anchors other than the resource anchors closed in
-  §6, and slide/modal anchor combinations with per-side fallback · §6 ·
-  static trace.
-- Ordinary footer source priority, replacement-versus-supplement rule, field
-  pairing and no-target clearing; damage-bar source, rounding and visibility;
-  unit make/use source and formatting; and build `NAME`/`DESCRIPTION` clipping
-  or wrapping · §6 [R-HUD-02R] · static trace. The diagnostic `Unit State
-  Probe` strings are not evidence for any of these.
+- The `CORBUILD` gadget-name exclusion in the build card · §6 [R-HUD-03 §3] ·
+  asset census.
+- Whether any content authors a `<unit>0.GUI` page for the authored-page bit ·
+  §6 [R-HUD-03 §6] · asset census.
 
 ### Picking, selection, and orders
 
@@ -3732,9 +4187,8 @@ section rather than deleted.
 - Whether any transient follow-target or shake state is reconstructed from a
   non-`Camera` save account · §10, doc 08 · static trace.
 - Start-position markers · doc 03 · static trace.
-- Outcome transition timing, and the per-value endgame bar-fill animation
-  mechanism, which may ride the type-13 timed/range gadget path · §11 ·
-  static trace.
+- Outcome transition timing · §11 · static trace. (The endgame bar-fill
+  animation is closed in §6 [R-HUD-03 §11].)
 - Campaign continuation timing · §5, doc 08 · static trace.
 - Role separation of shared player-word bit `0x20` between READY display and
   map-control authority; both consumers are proven and the semantics are not

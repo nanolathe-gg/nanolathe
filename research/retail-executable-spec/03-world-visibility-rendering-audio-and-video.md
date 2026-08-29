@@ -1405,41 +1405,37 @@ below the model origin: the buried half of a pop-up defence. **Established
 (asset census):** `Digger=1` on three stock units, `ARMAMB`, `CORTOAST` and
 `CORVIPE`.
 
-**The model shadow is a silhouette copy, not a stencil.** The full shadow
-contract — the separate shadow projection, the flat index-0 fill, the `ALP`
-tinted blit, and the cached RLE sprite — is [R-REN-03D]; this paragraph states
-the correction it grew out of. It **corrects**
-[03 §5.3], which said "model shadows build a doubled stencil image and compose
-it over the ground with a per-pixel depth compare … and darken through an
-`SHD` row (near-black row); the dither variant seeds a checker stencil with
-the `0x01010101` pattern and a screen parity term". Every element of that
-sentence belongs to something else. The "doubled stencil" is the anti-alias
-supersample of §6, which is a body pass, not a shadow pass — its option bit is
-`Anti_Alias` because it *is* anti-aliasing. The `0x01010101` fill is the
-composition image's background prefill of §1 — the colour plane is filled with
-the transparent index `1`, four bytes at a time. The per-pixel depth compare is
-the §2 key test, which every body span writer performs. And the `SHD` row is
-the shaded renderer's ordinary face shading.
+**Model shadows use three branches.** The complete Established contract is
+[R-REN-03D], with the branch census closed in [R-RAST-01 §4]. After the common
+master-shadow and `noshadow` tests, retail selects exactly one branch:
 
-What actually happens is simpler. The shadow pass copies the unit's **own
-finished composition image** — both planes — into the staging buffer, then
-flattens its colour plane: every pixel that is not the transparent index
-becomes palette index **0**. That silhouette is blitted through the tinted
-blitter, before the body, at
+1. A **Digger** copies the finished body image, flattens each non-transparent
+   pixel to palette index 0, erases the part at or below key `50 + 75`, and
+   sends the result through the tinted blitter. This branch additionally
+   requires vehicle shadows and rejects `canhover` and `floater`.
+2. An ordinary **mobile** subject uses the same copy-and-flatten silhouette.
+   When it is partly submerged, it erases pixels at or below
+   `seaLevel - hi16(unitY) + 50` before the tinted blit. It has the same
+   vehicle-shadow, `canhover`, and `floater` gate as the Digger branch.
+3. A **structure** that is not a Digger re-rasterizes the model with the
+   dedicated ground-shadow projection, punches the body silhouette out of the
+   result, run-length-encodes it, and caches that shadow image. It does not test
+   the vehicle-shadow, `canhover`, or `floater` gates. Its extra predicate is
+   `definitionOrdinal == 0 && hi16(unitY) < seaLevel`; identifying ordinal 0
+   exclusively with the feature pseudo-unit is the Supported inference stated
+   in [R-REN-03D §1].
 
-```
-shadowX = trunc(worldX - camX) + 133
-shadowY = trunc(worldZ - camZ) - (groundHeightUnderUnit >> 1) + 32
-```
+All three branches place the shadow five pixels right of the body, shear it by
+the terrain height under the subject, and blend palette index 0 through `ALP`.
+The tinted blitter produces no visible shadow when `Shading` is disabled. None
+of the branches uses a stencil, dither, or `SHD` row.
 
-against the body's own `+128` / `+32`. The shadow is therefore offset **five
-pixels to the right** of the body and sheared by the terrain height under the
-unit rather than by the unit's own height — which is what makes a shadow slide
-across a slope. There is no second rasterization, no stencil, no dither and no
-`SHD` row in this path. Structures whose definition authors `noshadow`, and
-units authoring `canhover` or `floater`, take no model shadow at all; ships
-take a separate cached shadow image instead, gated on the unit being above
-sea level.
+**Correction.** This section previously described every model shadow as a
+copy of the finished body silhouette and asserted that no second
+rasterization existed. That was complete only for the Digger and mobile
+branches; the structure branch performs the separate rasterization described
+above. It also incorrectly applied the mobile `canhover`/`floater` gate to
+structures and attributed the cached branch to ships.
 
 **Table roster correction.** [03 §4.3] lists `ALP`, `LHT` and `SHD`. The
 renderer installs **five** tables, and two consumers documented elsewhere were
@@ -1458,7 +1454,7 @@ by the anti-alias downscale, three times per output pixel.
 
 ```
 per unit, once its cached image is valid:
-  1. shadow    silhouette copy of the cached image, flattened to index 0,
+  1. shadow    the Digger, mobile, or structure branch above,
                tinted-blitted at (x+133, z - ground/2 + 32)
   2. staging   union box of the unit and its attached children; cached image
                copied in, both planes
@@ -1485,40 +1481,50 @@ construction change):
 #### R-REN-03D — model shadows: projection, fill, tinting, and cache
 
 [R-REN-03A §8] corrected [03 §5.3]'s "doubled stencil with an `SHD` darken and
-a dither checker" and described the shadow as a flattened silhouette copy of
-the unit's own composition image. That is right for one of the two shadow
-paths and **incomplete for the other**: a second path re-rasterizes the model
-through a dedicated shadow projection and caches the result. This section is
-the whole contract. Everything is **Established (direct-static)** unless a
-paragraph says otherwise.
+a dither checker" but then described every shadow as a flattened silhouette
+copy. That was incomplete: the Digger and ordinary-mobile branches use that
+silhouette path, while the structure branch re-rasterizes the model through a
+dedicated shadow projection and caches the result. This section is the whole
+contract. Everything is **Established (direct-static)** unless a paragraph
+says otherwise.
 
 ##### 1. The gate
 
-**Correction (2026-08-29).** The list below is the gate for the *mobile*
-and *Digger* branches only. The structure branch tests the master bit and
-`noshadow` alone — not the vehicle-shadow bit, `canhover` or `floater` — and
-carries a sea-level test that only ever bites on 3DO wrecks; see
-[R-RAST-01 §4].
+A subject reaches model-shadow work only when the options word's master shadow
+bit is set and its definition does not author `noshadow`. Retail then selects
+exactly one branch:
 
-A subject casts a model shadow when all of these hold:
+1. **Digger:** requires the vehicle-shadow bit and rejects `canhover` and
+   `floater`; copies and flattens the finished body silhouette, then erases
+   pixels whose key is at or below `50 + 75` so the buried half casts no
+   shadow.
+2. **Mobile:** selected when the structure-class bit is clear; has the same
+   vehicle-shadow, `canhover`, and `floater` gate; copies and flattens the body
+   silhouette, then, when `t = seaLevel - hi16(unitY) > 0`, erases pixels at
+   or below `t + 50` so only the above-water hull casts a shadow.
+3. **Structure:** selected when the structure-class bit is set and Digger is
+   clear; uses the dedicated rerasterization of §2 and the punched RLE cache of
+   §5. It does not test vehicle shadows, `canhover`, or `floater`. It is skipped
+   when the definition ordinal is 0 and `hi16(unitY) < seaLevel`; ordinal 0 is
+   the feature pseudo-unit, so this suppresses the shadow of a 3DO wreck below
+   sea level. The conclusion that ordinal 0 is reserved is a **Supported
+   inference** from the loader walk; a live-type writer to ordinal 0 would
+   settle it.
 
-- the options word's master shadow bit is set, **and**
-- the vehicle-shadow bit is set, **and**
-- the **`Shading`** bit is set — not because shadows are shaded, but because
-  the translucent blitter of §4 returns immediately without it, and that
-  blitter is the only thing that puts a model shadow on screen. Turning
-  shading off removes model shadows outright, and
-- the definition authors none of `noshadow`, `canhover`, `floater`.
+All branches end at the tinted blitter of §4. The blitter itself returns
+without drawing when **`Shading`** is disabled, so that option is an effective
+visibility gate rather than a branch-selection predicate.
 
 The bulk INI shadow key writes one value into the feature-shadow bit and then
 fans it down to the vehicle and master bits, so a player toggling shadows moves
 all three together; the per-category keys move only their own bit.
 
-##### 2. The shadow rasterization
+##### 2. The structure-shadow rasterization
 
-The shadow is **a second rasterization of the model**, not a reuse of the body
-image. Its projection has no half-height shear at all — the shadow lies flat on
-the ground — and instead shears each vertex by a quarter of its own height:
+The structure shadow is **a second rasterization of the model**, not a reuse of
+the body image. Its projection has no half-height shear at all — the shadow
+lies flat on the ground — and instead shears each vertex by a quarter of its
+own height:
 
 ```
 q  = trunc(vertexY) >> 2                 (arithmetic shift; floors)
@@ -1577,12 +1583,11 @@ pixel snapped to the nearest palette entry halfway to black. No `SHD` row, no
 stencil, no dither, no per-category darkness.
 
 The whole blitter early-returns unless the `Shading` option bit is set, which
-is where §1's third condition comes from.
+is the effective visibility gate stated in §1.
 
-##### 5. The cached shadow sprite, and what remains open
+##### 5. The structure shadow's cached sprite
 
-The path described in §2–§4 is taken directly for one class of subject. For the
-other, retail additionally:
+After the structure rasterization of §2, retail additionally:
 
 1. composites the **body** image into the finished shadow image, writing the
    shadow image's *transparent* index wherever the body is opaque — punching
@@ -1600,18 +1605,17 @@ drawing the shadow without the punch-out. The two offsets cancel: the hole
 lands exactly at the body's own screen position. Implement the punch-out.
 See [R-RAST-01 §4].
 
-##### 6. Correction to [R-REN-03A §8]
+##### 6. The silhouette branches and correction to [R-REN-03A §8]
 
-That section said the shadow pass "copies the unit's own finished composition
-image — both planes — into the staging buffer, then flattens its colour plane:
-every pixel that is not the transparent index becomes palette index 0". That
-copy-and-flatten is real, and it is what one of the two paths does; it is not
-the whole story, because the other path re-rasterizes through the §2 projection
-before flattening is even relevant (its faces are filled with index 0 to begin
-with). Both end at the same §4 blitter with the same §3 placement, so §8's
-description of the *result* stands — a black silhouette blended over the
-ground, five pixels right, sheared by terrain height. What was wrong was the
-implication that no separate shadow geometry exists.
+The Digger and ordinary-mobile branches copy the unit's own finished
+composition image — both planes — and flatten every non-transparent colour
+pixel to palette index 0. Their branch-specific key-plane erasures are stated
+in §1. The structure branch instead re-rasterizes through §2 and fills its
+faces with index 0 directly. All three end at the same §4 blitter with the same
+§3 placement: a black silhouette blended over the ground, five pixels right
+and sheared by terrain height. The earlier section was therefore correct about
+the result and the two silhouette branches, but wrong to imply that no separate
+shadow geometry exists.
 
 #### R-REN-02R — red/purple fringe provenance
 
@@ -1638,10 +1642,10 @@ boundary remain the contracts in [03 §2.4.1] and [03 §4.3].
 source GAF index, skips structural key pixels, and either writes that index
 directly or applies the selected `SHD` row; it has no established generic
 anti-alias, outline, RGB blend, or random/dither fringe writer. The separate
-model-shadow path may use its own stencil and dither, but its participation in
-an individual body pixel must be proven by a winner trace. Painter ordering
-means a later admitted writer can replace an earlier indexed pixel; this is
-not evidence that the replacing writer is a fringe pass.
+model-shadow path is the three-branch `ALP` contract of [R-REN-03D] and uses
+neither a stencil nor dither; it does not write the model's body pixels.
+Painter ordering means a later admitted writer can replace an earlier indexed
+pixel; this is not evidence that the replacing writer is a fringe pass.
 
 The candidate causes are consequently classified as follows:
 
@@ -1656,8 +1660,8 @@ The candidate causes are consequently classified as follows:
 - **Team mapping — Unknown.** The exactly-10-frame `32XGouraud` team-texture
   rule is established, but these screenshots do not establish that it wrote
   the fringe pixels.
-- **Shadow or dither — Unknown for the pixels.** A separate model-shadow
-  family exists, yet no winner trace shows it replacing either model body.
+- **Shadow or dither — rejected.** Model shadows are drawn before the body and
+  do not write body pixels; no model-shadow branch uses dither.
 - **Outline or anti-alias writer — no generic writer is established.** This is
   not permission to add one.
 - **Color-key edge — rejected as a broad explanation by the opaque examples;
@@ -2965,9 +2969,9 @@ skipped; no observed intermediate opacity is applied at the LOS edge.
 
 The edge is aligned to 32-pixel visibility tiles. GAF transparency is binary
 RLE skip/opaque copy, not a fog blend. No observed LOS path indexes the 256 by
-256 ALP blend table. The SHD table and dither option affect shadow/lighting
-passes, not a soft fog edge. DitheredFog is therefore not permission to add
-checkerboard fog to the LOS mask.
+256 ALP blend table. The `SHD` table belongs to model lighting, while model
+shadows use `ALP` and no dither. `DitheredFog` is therefore not permission to
+add checkerboard fog to the LOS mask.
 
 Unexplored map borders/voids can remain black where no valid tile blit reaches
 the backbuffer. The clean-room evidence is medium for the exact distinction
@@ -3798,11 +3802,6 @@ the table is "torn down and rebuilt behind the mode word's cache-dirty bit
 plot-data changes — is the event that invalidates it".) A reimplementation must
 build the word once at map load and keep it stale for the battle.
 
-Regression fixtures locking this contract: `internal/session/los_emitter_test.go`;
-`internal/world/terrain_test.go` (`TestLOSHeightAggregates`, locking the
-polarity rather than the old inference); the three horizon-rule tests in
-`internal/visibility/raster_test.go`.
-
 ### 3.6 Minimap surfaces and lifecycle
 
 Retail holds four indexed surfaces for the minimap rather than one framebuffer region:
@@ -4149,6 +4148,30 @@ only `(mouseX − letterboxOriginX) · PlayRight / RadarW` and
 there is no `−viewSize/2` term and no mapWidth/mapHeight scale. The drag branch
 alone adds the clamped viewport delta to the stored camera. Document 07's
 recenter formula is the corresponding stale reading and is corrected there.
+
+**Correction (Established; 2026-08-29, from [07 R-CAM-01 §11]).** The two
+paragraphs above are right about the **pointer's world position** and wrong
+about the **camera**. The previous text said "the lens branch writes the
+projected world point directly as the new camera origin: `cameraX = (mouse −
+rect origin) · PlayRight / RadarW` …" and "there is no `−viewSize/2` term".
+That conversion is the pointer classification of step 1 of the host frame
+(it feeds orders and hover, [07 R-CAM-01 §1]); the trace that produced the
+sentence read it as the camera writer. The camera jump performed while the
+minimap latch is held is
+
+```
+cameraX = (ptrX − padX) · PlayRight  / RadarW − trunc(viewWidth  / 2)
+cameraZ = (ptrY − padY) · PlayBottom / RadarH − trunc(viewHeight / 2)
+```
+
+(signed truncating divisions, half-viewport terms signed), so the clicked
+point becomes the view **centre**; and the "drag branch" formula above
+(`stored camera + (clamped mouse − viewport origin)`) is likewise the
+pointer's world position for a click outside the minimap, not a camera
+write. The Ctrl+right drag-scroll of the world view moves the camera by
+`(trunc(Δ / 4) + trunc(prev / 16)) · 16` per axis. [07 R-CAM-01 §11] is the
+owning statement; this section keeps only the radar↔world scale, which is
+right.
 
 ### 3.12 Viewport marker (composer-time)
 
@@ -5014,7 +5037,7 @@ passes, the present, or the fillers ([R-RAST-01 §1]).
 ### 5.3 Projected shadows and feature shadows
 
 Options distinguish master shadows, feature shadows, vehicle shadows, and a
-dithered-fog/shadow option. Unit definitions provide a `noshadow`-like control
+separate dithered-fog option. Unit definitions provide a `noshadow`-like control
 and shadow-capability flags. The shadow GAF entry is used for feature/sprite
 shadows; model shadows are projected through a separate ground pass.
 
@@ -5024,42 +5047,45 @@ order): the feature pass runs between strips 0–2 and strips 3–4, followed by
 second interleaved pass over screen-Y bucket rows mixing soft units and
 deferred tall/shadow features, painter-ordered by projected Y; per feature the
 shadow blit precedes the normal blit at the same anchor (section 5.1.3).
-SHD palette rows and optional dither participate in the shadow/light
-pass. **Shadow presentation is now established** (this replaces the stale
+Model shadows do not use `SHD`, a stencil, or dither; their final blend uses
+`ALP`. **Shadow presentation is now established** (this replaces the stale
 "Projection coefficients, exact shadow footprint clipping, and whether all
 shadow categories share one stencil are not established"):
 
 - **Option bits.** One options word (engine root state) carries six visual
-  bits: bit 1 Anti_Alias (which also gates the model-shadow stencil doubling),
+  bits: bit 1 Anti_Alias (the structure-body supersample, not a shadow pass),
   bit 2 Shadows master, bit 3 VehicleShadows (unit model shadows), bit 4
   FeatureShadows (feature/sprite shadows — read directly by the feature
   shadow gate), bit 5 Shading (enables the tinted shadow blitter), bit 6
-  DitheredFog (shadow dither parity). The bulk INI key writes bit 4 then fans
-  out bit 4→bit 3→bit 2 so one toggle makes all three shadow bits equal;
+  DitheredFog (not read by the model-shadow branches). The bulk INI key writes
+  bit 4 then fans out bit 4→bit 3→bit 2 so one toggle makes all three shadow bits equal;
   the per-category keys set only their own bit, so feature and vehicle
   shadows toggle independently.
-- **Per-unit suppression.** The FBI `noshadow` key writes a per-type flag bit;
-  the model-shadow stencil additionally requires a runtime instance status
-  bit. Ships and structures authored with `noshadow` therefore suppress the
-  stencil even with the global bits set; aircraft are not exempt — no altitude
-  test exists in the shadow path (bounded-negative), so air units cast model
-  shadows when vehicle shadows are enabled.
-- **Projection.** Model shadows use the same orthographic projection as
-  bodies: `screenX = worldX − camX`, `screenY = worldZ − (worldY >> 1) − camZ`
-  with the viewport constants folded in — the height dependence enters as a
-  palette-index term, base 0x32 (50) on land, 0x32 + 0x4B = 0x7D (125) on
-  water, plus half the world Y. Feature sprite shadows sample the terrain
-  height under the anchor: the four plot height bytes (current cell, its
+- **Model-shadow branch and suppression gates.** After the master bit and
+  `noshadow` gate, Diggers and ordinary mobile subjects use the flattened-body
+  silhouette path and additionally require vehicle shadows and reject
+  `canhover` and `floater`. Structures use the dedicated rerasterized and
+  RLE-cached path without those mobile gates. The exact three-branch contract,
+  including the Digger, waterline and ordinal-0 wreck erasures, is
+  [R-REN-03D §1].
+- **Projection.** The Digger and mobile branches reuse body-image geometry;
+  the structure branch rasterizes through the quarter-height ground-shadow
+  projection of [R-REN-03D §2]. All three are placed at
+  `screenX = trunc(worldX - camX) + 133` and
+  `screenY = trunc(worldZ - camZ) - (terrainHeight >> 1) + 32`, five pixels
+  right of the body and sheared by ground height. Feature sprite shadows
+  sample the terrain height under the anchor: the four plot height bytes (current cell, its
   +X neighbour, the anchor cell, the anchor's +X neighbour) are averaged with
   `>> 3` (the sum of four bytes divided by 8 — the half-height shear at
   map-pixel scale) and subtracted into the screen Y.
-- **Two raster families.** (A) GAF sprite shadows (features) blit the shadow
+- **Shadow raster families.** (A) GAF sprite shadows (features) blit the shadow
   frame through the opaque or the tinted blitter (the tinted path selected by
   the definition's translucent flag and gated on the Shading bit), clipped by
-  an inclusive-rect intersect. (B) Model shadows copy the unit's own finished
-  composition image, flatten every non-background pixel of it to palette index
-  `0`, and blit that silhouette through the tinted blitter before the body —
-  see [R-REN-03A §8].
+  an inclusive-rect intersect. (B) Digger and mobile model shadows flatten the
+  finished body silhouette to palette index 0. (C) Structure model shadows
+  rerasterize every face directly at index 0, punch out the body, and cache the
+  result as RLE. Both model families blit through `ALP` before the body; see
+  [R-REN-03D].
 
   **Correction.** This bullet previously said model shadows "build a doubled
   stencil image and compose it over the ground with a per-pixel depth compare
@@ -5073,18 +5099,14 @@ shadow categories share one stencil are not established"):
   depth compare is the body key test every span writer performs
   ([R-REN-03A §2]); and the `SHD` darken belongs to the submerged-hull tint,
   which in fact reads a separate 256-entry `BLUE TABLE`, not `SHD`
-  ([R-REN-03A §8]). `ALP` *is* used in this cluster — by the anti-alias
-  downscale, three lookups per output pixel.
+  ([R-REN-03A §8]). `ALP` *is* used both by the anti-alias downscale (three
+  lookups per output pixel) and by the final model-shadow blitter.
 - **Order.** Per bucket row the shadow is drawn before the body for both the
   soft and hard unit traversals, and per feature the shadow GAF precedes the
   body GAF; all shadow work sits between the terrain tiles and the units/
   features, and the fog overlay (after all strips) covers shadows like all
   world drawing. The feature-memory marker makes a tall feature's shadow
   persist independent of current line of sight.
-- `TODO(question)` residuals retained: the exact water-flag bit semantics
-  (the 0x4B offset's source definition bit), the exact darken row identity
-  within SHD, the interplay between the dither option and the shading gate,
-  and aircraft altitude versus ground-projection distortion.
 
 #### 5.3.1 Feature shadow selection and blit order
 
@@ -5892,6 +5914,17 @@ initialization failed."; the `UseWindowsSound` key sets the no-DirectSound flag
 as well, so every cue thereafter plays through the Windows sound API. CD audio
 initialization is always attempted independently of the sound-system result,
 including after a failed waveOut initialization.
+**Superseded (2026-08-29) by [R-AUD-01 §1]:** the tested failure is
+`DSERR_NODRIVER`, there is no waveOut playback backend (path 2 above is
+silence, WinMM being volume-only), the message box text is
+`Error:  Sound system initialization failed.`, and `NoDirectSound`/
+`UseWindowsSound` are `totala.ini` `[Preferences]` integers, not registry
+keys. The correction is quoted in full there.
+
+**Superseded (2026-08-29) by [R-AUD-01 §1]** — the paragraph below is
+retained for the audit trail; DS3D buffers *are* used (positions, min/max
+distance) whenever Sound Mode is `3D`, and the `0x82` descriptor belongs to a
+dead streaming path.
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
@@ -5928,6 +5961,10 @@ mode 2 streams (returning a sentinel handle rather than a real buffer). The
 three dispatch sites and the fail-to-silence rule are established; which
 aliases use which mode is a bounded-negative gap (no per-alias mode field was
 found at registration) — keep `TODO(question): per-alias mode selection`.
+**Superseded (2026-08-29) by [R-AUD-01 §1]:** mode 0 is the static DirectSound
+buffer every registered alias gets, mode 1 is load-and-play for unit voice
+lines and the options preview, and mode 2 is dead; the mode is chosen by the
+caller, so the per-alias question is closed.
 
 **Caching.** Samples are cached at the alias level: one decoded PCM blob per
 alias, retained for the life of the session, with no eviction beyond the alias
@@ -6022,8 +6059,9 @@ priority.
 
 When the second reentry flag (the honk/sing flag) is set, the alias is
 replaced by a fixed cue: `sing` unless `(frame / 30) & 7 == 0`, then `honk`.
-The writer of that flag is not located in the bounded corpus — **Unknown**, low
-impact (`TODO(T23): locate the honk/sing flag writer`).
+The writer is the `Sing` interface option [07 R-CAM-01 §7] (closed 2026-08-29,
+[R-AUD-01 §3]; the earlier text here read "not located in the bounded corpus —
+**Unknown** … `TODO(T23)`").
 
 **Drain**, once per rendered frame and outside the simulation: if the queue is
 empty do nothing; if the current frame is within 30 frames of the base time,
@@ -6125,7 +6163,11 @@ dy = viewTop + ((viewH/2) << 4) + (pixelY >> 1) − pixelZ
 
 (the 16.16 position is narrowed to its signed pixel component first), stores
 (dx, 0, dy) as a stereo mixer offset — not a 3D position — and updates the
-mixer reference center to `((mapW + mapH) / 2) << 4`. Attenuation is **binary,
+mixer reference center to `((mapW + mapH) / 2) << 4`. **Superseded
+(2026-08-29) by [R-AUD-01 §1]:** the vector is a DS3D position, the two
+floats are the DS3D minimum/maximum distances, and the "stereo capability"
+is the Sound Mode `3D` flag; the two-level attenuation below holds only in
+`Mono` mode. Attenuation is **binary,
 never a curve**: in-view sources play at −585 in the DirectSound
 centibel-style volume encoding, off-screen sources at −1585 — exactly the same
 two levels, with the viewport border inclusive (on the border is in-view).
@@ -6197,6 +6239,13 @@ exactly five modes:
 Mode 4's "shuffle" is therefore a category-filtered forward scan, not a general
 shuffle; a history ring of recent tracks is used to deduplicate shuffle picks
 (writer details not fully traced).
+**Superseded (2026-08-29) by [R-AUD-01 §4]:** the modes are the `TRACKMODE`
+choices `Play All|Random|Repeat|Custom` (1..4) with 0 = idle, the "category"
+is the per-track `TRACKTYPE` (`Building|Battle|Victory|Defeat|Unused`), the
+"history ring" is the per-disc category list persisted as registry
+`CDLISTS`, the "playhead offset" is the data-track offset, and the scan
+picks the `(rand & 15) + 1`-th match; the corrected tick is written out
+there.
 
 The play primitive deduplicates a request for the track already playing,
 applies the CD volume, and issues `play cdaudio from %i` — appending ` to %i`
@@ -6224,8 +6273,524 @@ any transition the CD volume is re-applied and status is set to playing.
 
 The missing-CD failure chain above (window-enumeration retry, then give up;
 time-format failure stops and closes; track-count failure idles the tick) and
-the `MM_MCINOTIFY` handler registration are now established; only history
-persistence across saves remains unknown.
+the `MM_MCINOTIFY` handler registration are now established. History
+persistence is closed by [R-AUD-01 §4] (`CDLISTS`); the volume-restore
+sentence above is corrected in [R-AUD-01 §2].
+
+### Closed — the sound device: bring-up, sample buffers, the 32-voice mixer, and the 3-D model [R-AUD-01 §1] (2026-08-29)
+
+Everything in this section is presentation-only: no field it describes is read
+by a simulation phase [03 §1].
+
+**Established fact — bring-up order and the two INI switches.** The audio
+start routine runs once at session start, after the sound device object has
+been constructed and *before* the registry settings are loaded (the
+construction samples the system mixer levels; see [R-AUD-01 §2]). It reads two
+integers from the `[Preferences]` section of `totala.ini` in the executable's
+directory (`GetPrivateProfileInt`, default 0 — these are **not** registry
+values): `NoDirectSound` (nonzero → the no-DirectSound flag) and
+`UseWindowsSound` (nonzero → the Windows-sound flag, which also sets the
+no-DirectSound flag). With DirectSound allowed it then:
+
+1. `DirectSoundCreate` on the default device; failure → step 4.
+2. `SetCooperativeLevel(hwnd, DSSCL_PRIORITY)`; failure → step 4.
+3. Creates the primary buffer (descriptor flags = primary-buffer only) and
+   sets its format to PCM **11,025 Hz, 16-bit, stereo** (block align
+   `((bits + 7) >> 3) · channels`, average bytes `rate · blockAlign`); failure
+   → step 4. Success records the rate, bits, and channel count on the device
+   and returns success.
+4. Failure path: if the failing `HRESULT` is **`DSERR_NODRIVER`** the
+   device's *no driver* flag is set; the device is torn down; then the caller
+   tests that flag — set → the no-DirectSound flag is set silently (the game
+   runs without sound effects); clear → the message box
+   `Error:  Sound system initialization failed.` (two spaces after the colon,
+   verbatim) is shown and the flags are left as they were.
+
+CD initialization ([R-AUD-01 §4]) then runs regardless of the outcome, and the
+eight-entry voice queue of §8.3 is allocated (count 0, base time 0, window
+30, and a second constant 150 that nothing reads — bounded negative, closes
+the `TODO(T23)` on the "unused 150-frame queue field": it is initialised and
+never consumed).
+
+**Correction (Established).** §8.1 said "a device-allocated failure
+(`DSERR_ALLOCATED`) disables the DirectSound path and selects the waveOut
+backend; a waveOut initialization failure shows the message box". Both
+halves were wrong. The tested code is `DSERR_NODRIVER` (device absent), not
+`DSERR_ALLOCATED`; and there is **no waveOut playback backend at all** — the
+executable imports no `waveOutOpen`/`waveOutWrite`. WinMM is used only for
+volume (`waveOutGetVolume`/`waveOutSetVolume`, `auxGetVolume`/`auxSetVolume`)
+and for MCI. The three backends of §8.1 are therefore: DirectSound; the
+Win32 `PlaySound` path when `UseWindowsSound` is set; and **silence** (every
+play gate tests the no-DirectSound flag and returns without playing).
+
+**Established fact — the device record's defaults.** The constructor sets:
+3-D flag off; DS3D minimum distance `1.0`; DS3D maximum distance `1.0e20`
+(float); **voice limit 8**; active-voice count 0; play sequence counter 1;
+thirty-two voice slots (buffer pointer, sequence number, loop flag) cleared;
+eight transient-sample slots cleared. It then counts the waveOut devices,
+finds the first auxiliary device whose capability technology is CD audio
+(index kept; −1 if none), and samples the current waveOut volume (first
+device that answers, low 16 bits) and the CD-aux volume (low 16 bits), each
+−1 when unavailable.
+
+**Established fact — sample loading modes (closes `TODO(question): per-alias
+mode selection`).** The WAV loader of §8.2 is entered in one of three modes,
+and the mode is chosen by the *caller*, never by an authored field:
+
+| Mode | Caller | What it does |
+|---|---|---|
+| 0 | alias registration (§8.3 "Alias registration"), i.e. every `sound.tdf`/`allsound` alias and every weapon/feature sound | decodes and creates one **static** secondary buffer; returns a 16-byte sample record `{buffer, 0, 0, 0}` (tagged `Digital Audio Sample`) whose four slots hold up to four instances of the same buffer |
+| 1 | the unit voice-cue resolver (§8.3 step 3) and the sound-options `TEST` button | decodes into a fresh static buffer and plays it **immediately** through the mixer, holding it in one of **8 transient slots** until it finishes; if all 8 transient slots are occupied the cue is dropped (returns 0). The loader runs the reaper first (below), so a slot whose buffer has stopped is freed before the test |
+| 2 | nobody — the two wrappers that request it have no callers | a streaming buffer (flags static + volume, size `rate · channels · bytesPerSample · 2`, half-buffer refill with silence fill) — **dead code** |
+
+So every alias-registered sound is a preloaded static buffer, while every
+**unit voice line is re-read from the VFS and decoded on each play** (mode 1,
+under `sounds\` with the canonical candidate tries) — the alias cache of
+§8.2 is never consulted for voices. Under `UseWindowsSound`, mode 0 instead
+loads the file image into memory and mode 1 hands the file path to
+`PlaySound`.
+
+**Established fact — the static buffer descriptor.** For mode 0/1 the
+descriptor is `{size 0x14, flags = STATIC | CTRL3D | CTRLVOLUME (0x92),
+bytes = decoded payload size, reserved 0, format}` with format PCM tag 1,
+the decoded channels/rate/bits, block align `((bits + 7) >> 3) · channels`,
+average bytes `rate · blockAlign`, `cbSize` 18. The buffer is locked for its
+whole length, the payload is read straight from the (already positioned)
+file into it, and unlocked; a short read or any failing call releases the
+buffer and yields a null sample (silence). The FPU control word is forced to
+a fixed precision around `CreateSoundBuffer` (a DirectSound-era library
+precaution; no arithmetic depends on it).
+
+**Correction (Established).** §8.1 said "the observed secondary-buffer
+creation descriptor is `{size 0x14, flags 0x82, bytes}` … a software-located
+static buffer (no 3D caps) … freed and recreated per sample load (no
+pooling)", and §8.2 "mode 0 builds an in-memory PCM blob (the PlaySound path),
+mode 1 preloads a sound buffer, mode 2 streams". The `0x82` descriptor is the
+*streaming* buffer of the dead mode 2. Real samples are `0x92` (with
+`CTRL3D`), live for the session, and are **duplicated** on demand (below),
+not recreated.
+
+**Established fact — the voice mixer (`Play(sample, volume, pan)`).** Every
+non-CD sound goes through one routine. In order:
+
+1. **Exclusive loop check.** If the *loop* flag is raised for this call (only
+   the by-name cue path of [R-AUD-01 §5] raises it) and any of the 32 voice
+   slots holds a voice whose loop flag is set, return 0 — a second looping
+   cue never starts while one is playing.
+2. **Voice-limit steal.** While `activeVoices ≥ voiceLimit` (the
+   `MixingBuffers` setting, default 8, [R-AUD-01 §2]): pick the first slot
+   whose voice is non-null and *not* loop-flagged, then the slot with the
+   **smallest sequence number** among such slots (oldest start), `Stop` it,
+   clear the slot, decrement the count. Loop-flagged voices are never
+   stolen. (Edge: if every slot is loop-flagged the search runs off the end
+   of the table — unreachable, since step 1 admits at most one loop voice.)
+3. Null sample → return 0.
+4. **Instance choice** over the sample's four slots: a slot that holds a
+   buffer whose `GetStatus` reports *not playing* is reused as is; otherwise
+   its play cursor is read and the instance with the **largest play cursor**
+   (strictly greater wins; ties keep the earlier slot) is remembered; a null
+   slot is remembered as `lastNull`. If no idle instance was found: when
+   `lastNull > 0`, `DuplicateSoundBuffer(slot 0)` into `slot lastNull`
+   (failure → return 0); when all four are busy, the remembered
+   furthest-along instance is **restarted** (`SetCurrentPosition(0)`). So a
+   sample plays at most **four** times simultaneously and the fifth request
+   steals the one closest to finishing.
+5. **3-D setup.** `QueryInterface(IID_IDirectSound3DBuffer)` on the chosen
+   instance (every real sample has `CTRL3D`, so this succeeds; it is skipped
+   silently if not). If the device's 3-D flag is set **and** a pan vector
+   was passed: `SetPosition(pan.x, pan.y, pan.z)` as floats, `SetMinDistance
+   (device.minDist)`, `SetMaxDistance(device.maxDist)`, `SetMode(NORMAL)`;
+   otherwise `SetMode(DISABLE)`. The interface is released. **No listener
+   is ever configured** — the `IDirectSound3DListener` IID exists in the
+   image with no reference — so the listener sits at the DirectSound default
+   (origin, facing +Z, up +Y, distance factor 1, rolloff factor 1, Doppler
+   1; bounded negative over the whole image).
+6. `SetCurrentPosition(0)`; `SetVolume(volume)`; `Play(0, 0, looping = loop
+   flag)`. Any failure returns 0.
+7. Register the instance in the first empty voice slot with
+   `sequence = ++counter` and the loop flag; `activeVoices++`. If the 32 slots
+   are all taken the voice still plays but is untracked (return 1).
+
+**Reaper.** Before a transient load (mode 1) the device walks the 8
+transient samples and the 32 voice slots, freeing/clearing every entry whose
+buffer reports *not playing* (or whose status query fails). There is no
+per-tick reaper; voice slots are otherwise reclaimed only by the steal of
+step 2. **Stop-all** (`MODE` set to `Off`, movie start, battle exit) stops
+every voice slot's buffer and clears the table.
+
+**Established fact — what each producer passes.** Volumes are DirectSound
+attenuations in hundredths of a decibel:
+
+| Producer | Volume | Pan | Loop |
+|---|---|---|---|
+| by-id / by-name cue (HUD clicks, front end, `Options`, campaign cues) | −585 | none | only through the loop wrapper ([R-AUD-01 §5]) |
+| unit voice line (mode 1) | −585 | none | no |
+| options `TEST` preview (`sounds\explode.wav`, mode 1) | −585 | none | no |
+| positional world cue, 3-D flag **set** | −585 | `(dx, 0, dy)` below | no |
+| positional world cue, 3-D flag clear, source inside the inclusive viewport rectangle | −585 | none | no |
+| positional world cue, 3-D flag clear, source outside | −1585 | none | no |
+
+**Established fact — the 3-D placement.** With the 3-D flag set (Sound Mode
+`3D`, [R-AUD-01 §2]) the positional helper of §8.3 computes, in **pixels**
+(the position's signed 16-bit pixel components, the view extents in 16-pixel
+units, signed truncating `/2`):
+
+```
+dx = px − viewLeft − trunc(viewW / 2) · 16
+dy = viewTop + trunc(viewH / 2) · 16 + (py >> 1) − pz
+```
+
+stores the vector `(dx, 0, dy)`, and sets the device distances to
+`minDist = trunc((viewH + viewW) / 2) · 16` and `maxDist = (mapW + mapH) · 16`
+(map size in 16-pixel cells) before calling the mixer at −585. Because the
+listener is at the origin facing +Z, `dx` pans left/right and `dy` is
+"forward": a source at the viewport centre is centred and at full level; a
+source farther than `minDist` from the centre attenuates per DirectSound's
+default inverse-distance rolloff (−6 dB per doubling of distance beyond
+`minDist`, rolloff factor 1, held constant beyond `maxDist`). That curve is
+the library's documented default, not engine arithmetic; Nanolathe may
+implement it directly.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+
+**Established fact — the `PlaySound` backend.** With `UseWindowsSound`, a
+by-id cue plays its in-memory image with `SND_ASYNC | SND_MEMORY` (plus
+`SND_LOOP` for the loop path, which also remembers the image so the drain
+of §8.3 can re-issue it with `SND_NOSTOP`); positional cues lose their
+position and gates (they route to the by-id path); voice lines and the
+`TEST` preview play by file name; stop-all purges the current sound. Only
+one `PlaySound` can be audible at a time — a library property.
+
+**Timing.** All of this runs on the presentation side of the host frame
+[07 R-CAM-01 §1]: cue producers call the mixer synchronously from wherever
+they run (weapon fire and impact inside the sub-tick, voice lines from the
+drain), and nothing is deferred except through the §8.3 voice queue.
+
+### Closed — the audio preferences: registry names, bit map, and consumers [R-AUD-01 §2] (2026-08-29)
+
+**Established fact — the packed sound-flags byte** (the second packed word of
+[02 §3]), each value read from `Software\Cavedog Entertainment\Total
+Annihilation` at session start with the listed default when absent:
+
+| Bits | Registry value | Default | Written by | Read by |
+|---|---|---|---|---|
+| 0–2 | `Sound Mode` | 1 | settings load; `MODE` gadget of the sound options (`Off|Mono|3D` = 0|1|2); `RESTORE` (1) | every play gate (`≠ 0` required, §8.3); value `2` sets the device 3-D flag, any other value clears it ([R-AUD-01 §1]) |
+| 3 | `RestoreVolume` | 0 | settings load only (no gadget in the traced screens) | settings load and save (below) |
+| 4 | `ackfx` | 1 | settings load; `RESTORE`/`UNDO` | **nothing** — bounded negative over the complete decompiled corpus |
+| 5 | `buildfx` | 1 | same | **nothing** — bounded negative, as above |
+| 6 | `speechfx` | 1 | settings load; the `SPEECH` gadget writes `bit6 = (gauge ≠ 0)` | the voice-cue resolver's **audible** gate only (§8.3 step 3): with the bit clear no unit voice line plays; captions are unaffected |
+
+So `ackfx` and `buildfx` are persisted and displayed but gate no sound in
+this executable. Nanolathe carries them as inert settings.
+
+**Established fact — the other audio settings.**
+
+| Registry value | Default | Store | Consumers |
+|---|---|---|---|
+| `fxvol` | 27 | effects gauge, slider range 0..63 (`FXVOL`, 64 stops) | every play gate (`≠ 0`); applied as `waveOutSetVolume(dev, (v << 10) · 0x10001)` on **every** waveOut device, clamped to `0..0xFFFF` per channel — i.e. the *system* wave mixer, not per-buffer attenuation |
+| `musicvol` | 32 | music gauge (`MUSICVOL`) | `auxSetVolume(cdAux, (v << 10) · 0x10001)` and the CD object's base volume ([R-AUD-01 §4]) |
+| `MixingBuffers` | 8 | device voice limit | the mixer's steal loop ([R-AUD-01 §1]) |
+| `musicmode` | 1 (bit 0) | CD enable | `NOTRAK` gadget (`Off|On`); the CD play primitive and the MUSIC screen enables ([R-AUD-01 §4]) |
+| `cdmode` | 4 | CD play mode 1..4 | `TRACKMODE` gadget (`Play All|Random|Repeat|Custom` = stage + 1); the CD tick ([R-AUD-01 §4]) |
+| `WaveOutVolume`, `CDAudioVolume` | — | raw mixer levels | only when `RestoreVolume` bit 3 is set: applied at load, captured at save |
+
+Both gauges scale by `<< 10`: `27 << 10 = 27,648` and `32 << 10 = 32,768` of
+65,535. The `SPEECH` gauge (`Off|Medium|Full`) stores `gauge × 5` as the
+audio crowding threshold of §8.3, so the gate `10 − threshold < priority`
+admits nothing at `Off`, priorities ≥ 6 at `Medium`, and everything at
+`Full`. `RESTORE` on the sound screen sets `fxvol` 27, bits 4–6, Sound Mode
+1 (3-D off), threshold 10; `UNDO` restores the entry snapshot. Changing
+`MODE` to `Off` stops every voice; changing it to `Mono` while not in a
+battle re-issues the front-end `BGM` loop ([R-AUD-01 §5]). The `TEST`
+button plays `sounds\explode.wav` (mode 1, −585, no pan) under the ordinary
+gates.
+
+**Established fact — `RestoreVolume` and the two restore points.** The
+device constructor samples the system waveOut and CD-aux levels **before**
+the registry is read. At session shutdown those sampled levels are written
+back unconditionally (the CD level only when no fade is in progress) — the
+game leaves the mixer as it found it. `RestoreVolume` governs something
+else: with bit 3 set, `WaveOutVolume`/`CDAudioVolume` are read at load and
+pushed to the devices, and at save the *current* device levels are written
+to those two values — persisting the player's mixer levels across sessions.
+With the bit clear the two values are neither read nor written.
+
+**Correction (Established).** §8.4 said "restoration is flagged on
+shutdown". Shutdown restoration is unconditional; the flag gates the
+registry round-trip above.
+
+### Closed — the unit voice pick and its gates [R-AUD-01 §3] (2026-08-29)
+
+§8.3 already states the queue, the variant draw, and the crowding gates.
+The closures here complete the producer side.
+
+**Established fact — producer gate.** A unit voice request (any of the 82
+sites, slot 1..23) is enqueued only when the unit's owner is the **local
+viewing player**, the unit's chat-enable status bit is set, and a second
+status bit (the "silenced" bit, the same `0x4000` family §8.3 mentions for
+the `ok` sites) is clear. The caption passed is the caller's override or the
+slot's default caption run through the localisation table. Selection
+(`select`) is slot 1: cooldown 0, priority 10 — it always passes the
+crowding gate and is limited only by the 30-frame window and the
+duplicate-slot rule (a second `select` while one is queued is dropped).
+
+**Established fact — the draw.** The variant index is one CRT draw per
+resolve, silent or audible (§8.3). The producer draws nothing; the audible
+play reloads the WAV (mode 1, [R-AUD-01 §1]) and may be dropped when the 8
+transient slots are all busy, in which case the cooldown is **still**
+re-armed (the re-arm follows the gate, not the play result).
+
+**Closed — the honk/sing flag.** The writer is the `Sing` interface option
+[07 R-CAM-01 §7]; the `TODO(T23): locate the honk/sing flag writer` of §8.3
+is closed. While it is set the audible alias is `sing`, or `honk` when
+`(frame / 30) & 7 == 0` (frame = the global tick counter, truncating
+division).
+
+**Established fact — no per-tick throttle.** Beyond the 30-frame voice
+window and the mixer's voice limit ([R-AUD-01 §1]) there is no per-tick cap
+on cues: a weapon salvo of *n* shots issues *n* positional plays in the same
+sub-tick, and the mixer steals the oldest non-looping voices to fit them.
+
+### Closed — CD audio: modes, categories, disc identity, transitions, and the MUSIC screen [R-AUD-01 §4] (2026-08-29)
+
+This section replaces the mode table and the "history ring" and "playhead
+offset" sentences of §8.4; the open/probe and failure chain there stand.
+
+**Established fact — the CD object.** Fields, with their sources: *play
+mode* (`cdmode`, 1..4, and 0 = idle); *audio track count* (below);
+*requested track* (Repeat mode); *current/next track*; *status* 0 stopped /
+1 playing / 2 paused; *disc serial*; *category byte per track index 0..99*,
+initialised to `(i mod 4) + 1`; *desired category*; *enabled* (`musicmode`
+bit 0); *data-track offset*; *fade step*; *base volume*. Categories are
+0..4 and the MUSIC screen labels them `Building | Battle | Victory | Defeat
+| Unused` (`TRACKTYPE` gadget text; a static table of the same five slots
+holds the names `NOTRAK`, `NORMTRAK`, `RANDTRAK`, `REPTTRAK`, `SPECTRAK`,
+which nothing reads — bounded negative — and which closes the
+`NORMTRAK…SPECTRAK` question of the lane 03 question list as an unreferenced
+vocabulary).
+
+**Established fact — track count and the data track.** On open and on every
+media-arrival notification: the first drive whose type is CD-ROM (scanning
+`A:`..`Z:`) is asked for its **volume serial number** (`GetVolumeInformation`),
+stored as the disc identity; `status cdaudio number of tracks` is parsed as
+a decimal; then `set cdaudio time format tmsf` and `status cdaudio type
+track 1` — if the reply is exactly `audio` the data-track offset is 0,
+otherwise (any other reply, or a failed query) the offset is 1 and the
+count is decremented (floored at 0). So `count` is the number of **audio**
+tracks and logical track *t* is physical track `t + offset`. A nonzero
+count sets the next track to 1; a zero count makes the tick idle (no disc,
+no audio tracks, or no MCI).
+
+**Established fact — the per-disc category list (`CDLISTS`).** A 20-entry
+ring, keyed by the disc serial, persists the category bytes: registry
+binary value `CDLISTS` (2,720 bytes = 20 × 136; entry = 32 unused bytes,
+serial, 100 category bytes), read at session init (zeroed when absent) and
+written on disc eject and at shutdown. On (re)identification: a serial hit
+moves its entry to the front and copies its list into the object (`count`
+bytes into tracks 1..count); a miss builds a **default list** of seven
+`Battle` (1) bytes followed by zeros (`Building`), inserts it at the front
+with the serial, and applies it to the object **only** when the audio count
+is exactly 16 and track 1 is not `audio` (the retail disc's shape: one data
+track and sixteen audio tracks) — any other unknown disc keeps the object's
+current list (the `(i mod 4) + 1` cycle at first run, or the previous
+disc's). `TRACKTYPE` edits write the object's list; the ring is refreshed
+from the object at eject/shutdown.
+
+**Established fact — the MUSIC screen (`MUSIC.GUI` / `MUSICRT.GUI`).**
+Gadgets and effects: `NOTRAK` (`Off|On`) toggles `musicmode` and calls
+enable/disable (disable = stop and reset); `TRACKMODE` (`Play All|Random|
+Repeat|Custom`) sets `cdmode = stage + 1` and applies it — `Repeat` copies
+the selected track into *requested*, `Custom` shows `TRACKTYPE` for the
+selected track; `TRACKTYPE` writes the selected track's category; `TRACKNUM`
+shows the selected track as `%d`, or `NO DISC` when the selection is 0, and
+is disabled when `musicmode` is off (a typed number re-syncs the selection
+to the object's current track); `CDPLAY` plays the selected track; `CDNEXT`
+/ `CDPREV` step the selection with wrap over `1..count` and, when playing,
+switch immediately (else only move *next*); `CDSTOP` stops/resets and
+re-selects track 1; `MUSICVOL` is the gauge above; `RESTORE` sets
+`musicvol` 32, `cdmode` 4, and turns `musicmode` on (running the tick if it
+was off); `UNDO` restores the entry snapshot (volume, list, mode, enable,
+requested). `TRACKTYPE` is active only when `musicmode` is on and the mode
+is `Custom`; the transport buttons and `TRACKMODE` are disabled when
+`musicmode` is off. Closing the screen runs the tick when in battle,
+otherwise stops and resets. This closes the "CD-player control vocabulary"
+and "`NO DISC`" questions.
+
+**Established fact — the play primitive `PlayTrack(t)`.** Disabled → report
+success and do nothing. `t = 0` → run the tick instead. Poll `status
+cdaudio mode`; if the reply is `playing` and `t` is the current track →
+success (dedupe). Otherwise `next = t`, `physical = t + offset`, apply the
+base volume (fade-aware, below), `set cdaudio time format tmsf` (failure →
+false), then `play cdaudio from <physical>` + (` to <physical + 1>` only
+when `physical < count`) + ` notify`, sent with the engine window as the
+notify target, then `set cdaudio time format milliseconds`; return whether
+the play command succeeded. Consequence: the last audio track (and, on a
+disc with a data track, the second-to-last) plays with no end bound —
+through to the end of the disc.
+
+**Correction (Established).** §8.4 said the play command appends ` to %i`
+"when a stored playhead offset keeps the end track below the track count"
+and that "a history ring of recent tracks is used to deduplicate shuffle
+picks (writer details not fully traced)". The offset is the data-track
+offset above and the bound is `physical + 1`; the ring is the per-disc
+category list — it never influences a pick.
+
+**Established fact — the tick** (once per host frame from the front-end and
+battle pumps; MCI completion notifications also run it):
+
+1. `count == 0` → return.
+2. `desired == 4` (`Unused`) → `stop cdaudio`, `next = 1` (or 0 when no
+   tracks), status 0, fade cleared, timers cancelled; return. **Category 4
+   means silence** — it is what every front-end screen requests
+   ([R-AUD-01 §5]).
+3. status 2 (paused) → return.
+4. `desired ∈ {2, 3}` (`Victory`/`Defeat`) always takes the category branch
+   (step 6) regardless of play mode; nothing in the executable requests
+   them (bounded negative over all callers) — the two labels are inert.
+5. Otherwise by play mode:
+   * `0` idle: if status ≠ 0, set it 0; if the drive still reports
+     `playing`, stop and reset.
+   * `1` Play All: not `playing` → `next = next < 1 ? 1 : next + 1`;
+     `PlayTrack(next)`; **then** if `next > count`, `next = 1` — the wrap
+     is applied after the play, so the frame after the last track issues a
+     play of `count + 1` (which the primitive sends as
+     `play cdaudio from count+1+offset` with no end bound — an out-of-range
+     track the MCI device refuses; the failure leaves status 1 and the next
+     poll re-triggers with `next = 1`).
+   * `2` Random: not `playing` → `PlayTrack(rand mod count + 1)`.
+   * `3` Repeat: not `playing` **or** `next ≠ requested` → `requested = 1`
+     when it was 0; `PlayTrack(requested)`.
+   * `4` Custom → step 6.
+6. Category branch: `u = rand & 15` (drawn **before** the poll, so the draw
+   happens every tick in this branch even while a matching track plays).
+   If `playing` and `category[next] == desired` → step 7. Else scan forward
+   from `next` for up to `(u + 1) · count` steps, wrapping `count → 1`; the
+   `(u + 1)`-th track whose category equals `desired` is played (a uniform
+   pick among the matching tracks when the scan is long enough — the
+   `(u+1)·count` budget guarantees it whenever at least one matches);
+   none → stop and reset (status 0, `next = 1`), skip step 7.
+7. Tail: re-apply the base volume through the fade-aware setter; status = 1.
+
+The "not `playing`" test is the exact string compare of the `status cdaudio
+mode` reply against `playing`; a failed query counts as not playing. The CRT
+draws (`rand mod count + 1`, `rand & 15`) are on the presentation stream
+and interleave with the variant picks of §8.3 ([R-AUD-01 §6]).
+
+**Established fact — changing the desired category (`SetDesired(n)`).** If
+unchanged, nothing. Else the current *next* is remembered per outgoing
+category (a five-entry table; nothing reads it — bounded negative),
+`desired = n`, and:
+
+* if the play mode is `Custom` or `n ∈ {2, 3}`: the fade volume is set to
+  the base volume; if the outgoing category was 4 (silence) the fade timers
+  are cancelled, the base volume re-applied, and the tick run at once (the
+  new music starts immediately); else if a fade is already running, both
+  timers are cancelled and the tick runs at once; else a **fade-out**
+  starts: `step = −trunc(base / 18)` and a repeating timer at period 2 (in
+  the scaled-tick units of the timer table [07 R-CAM-01 §1]) subtracts the
+  step each firing, applying the reduced level to the CD aux volume; when
+  the level reaches ≤ 0 the timer stops, the level is set to 0, and either
+  the tick runs (new category ≠ 0) or — for `Building` — a one-shot timer of
+  period 120 delays the tick (a pause between battle and calm music);
+* otherwise (modes `Play All`/`Random`/`Repeat` and `n ∈ {0, 1, 4}`) only
+  the desired value changes and the next tick acts on it.
+
+While a fade is running, base-volume sets from the gauges are ignored (the
+setter's from-fade flag), so a slider drag during a fade does not fight the
+fade.
+
+**Established fact — pause/resume and notifications.** The in-battle options
+menu (`ARMOPT.GUI`) pauses the CD on open and resumes on close. Pause:
+`pause cdaudio`, status 2. Resume (only when enabled and status ≠ 0):
+`status cdaudio current track` → *t*; the command is `play cdaudio` +
+(when `t < count`: ` from ` + the reply of `status cdaudio position` + ` to `
++ the reply of `status cdaudio position track %i`) + ` notify`; status 1.
+The notify window receives `MM_MCINOTIFY` (successful completion, while
+status is 1 → poll; not `playing` → tick) and `WM_DEVICECHANGE` (any → stop
+and reset; media arrival → recount tracks and re-run the disc
+identification, which reloads the category list and restarts per the tick).
+The application loop also handles eject/insert around the CD object: on
+eject the desired category is saved and the device closed; on insert it is
+reopened, enable/mode re-applied, the saved category restored, and the
+identification run.
+
+**Established fact — without a CD.** No CD-ROM drive → no serial (0) and
+the count query fails → count 0 → the tick idles forever; `open cdaudio`
+failing twice disables the object (`enabled` is never consulted, the `*obj`
+open flag is 0 and every entry point returns). The MUSIC screen then shows
+`NO DISC` and `musicmode` toggles have no audible effect. No message is
+shown.
+
+### Closed — music selection: the battle intensity chooser and the front-end loop [R-AUD-01 §5] (2026-08-29)
+
+**Established fact — who requests which category.** Exhaustive caller census
+of `SetDesired`:
+
+| Site | Category |
+|---|---|
+| session init | 0 (`Building`) |
+| battle start (the battle-entry routine, before the first frame) | 0 |
+| the battle intensity chooser (below) | 0 or 1 |
+| main menu build, every front-end return, battle exit / results | 4 (`Unused` = silence) |
+| disc re-insert | the category saved at eject |
+
+Nothing requests 2 or 3; `Victory`/`Defeat` tracks are never chosen.
+
+**Established fact — the intensity chooser** (host frame, wall-clock, in
+battle only, skipped once the battle-over latch is set unless the exit bit
+is also set):
+
+* Two counters feed a 30-bucket ring: **+1** per damage event whose victim
+  is owned by the local player (the damage intake path), **+5** per unit
+  death of a local-player unit. The ring is zeroed at battle start.
+* Every time the scaled clock [07 R-CAM-01 §1] has advanced by more than 30
+  units (≈ one second) since the last evaluation: `evals++`; when
+  `evals > 10`, compute `sum30` over all 30 buckets and `sum5` over the 5
+  most recent (walking backwards from the current bucket); then
+  * if `desired == 0` and (`sum30 > 50` or `sum5 > 30`) and the local
+    player's unit count `> 30` → want `1` (`Battle`);
+  * else if `desired == 1` and `sum30 < 10` and `sum5 == 0` and
+    `evals > 60` → want `0` (`Building`);
+  * else keep the last want.
+  A changed want calls `SetDesired(want)` (which fades, [R-AUD-01 §4]) and
+  resets `evals`. Finally the bucket index advances (mod 30), the new
+  current bucket is cleared, and the clock stamp is taken.
+
+All comparisons are signed and strict as written. So battle music needs a
+force of more than 30 units *and* either 50 damage/death points over the
+last 30 seconds or 30 within the last 5; calm music returns after at least
+60 quiet evaluations (≈ a minute) with no local damage at all in the last 5
+seconds. The counters are presentation-side and never reach the simulation.
+
+**Established fact — the front-end loop (`BGM`).** Building the main menu
+plays the alias `BGM` (stock `allsound.tdf`: `drone2`) through the **loop
+wrapper** — the mixer's exclusive looping voice of [R-AUD-01 §1] (or
+`PlaySound` with `SND_LOOP`) — and then requests CD category 4, which stops
+the CD (with a fade if a category branch was active). The loop is never
+stolen; it ends only at stop-all (battle entry via the movie/loading path,
+battle exit, or `MODE` → `Off`) and is re-issued when the sound `MODE`
+lands on `Mono` outside a battle (the exclusive check makes the re-issue a
+no-op while it still plays). There is no "intense" switch in the front end
+and no menu-versus-battle CD category: the front end is CD-silent.
+
+### Closed — random draws and the throttle summary [R-AUD-01 §6] (2026-08-29)
+
+**Established fact.** Every audio draw is on the **CRT** stream
+(`x' = x × 214013 + 2531011`, bits 16..30): the variant pick of §8.3 (one per
+resolve), CD `Random` mode (`rand mod count + 1`, once per tick that finds
+the drive not playing), and the CD category branch (`rand & 15`, **once per
+tick** while that branch is active, even when nothing changes). No audio
+path draws from the simulation stream; the only sim-stream draw §8.3 names
+(self-destruct delay) is not audio. Nanolathe's audio must not touch the
+Park-Miller stream, and its CRT consumption is presentation-only — the
+interleaving of CD and variant draws is not reproducible against retail
+(it depends on wall-clock frame count) and is not a determinism concern.
+
+**Throttles, complete list:** the 30-frame voice window (§8.3), the per-slot
+cooldowns (§8.3), the 8-entry voice queue, the mixer's `MixingBuffers`
+voice limit (steal oldest), the four-instances-per-sample cap (steal
+furthest-along), the 8 transient slots for voice lines (drop), and the
+single exclusive loop. Nothing counts cues per tick.
 
 ## 9. Smacker cinematics and movie capture
 
@@ -6305,19 +6870,19 @@ and unknown" without a resolution plan.
   Fringe-anchor partition is placement order (sequential rectangle stamps,
   last-stamp-wins; orphaned raw fringe vanishes), replacing the retired
   row-major heuristic.
-- Shadow presentation is established: option-bit gates, per-unit `noshadow`,
-  orthographic projection with the 0x32/0x7D palette base and four-byte
-  terrain average, the GAF-sprite and model-stencil families (per-pixel depth
-  compare, SHD darken, 0x01010101 dither), inclusive-rect clipping, and
-  shadow-before-body order. The minimap viewport marker is a five-pixel cross
-  of two 1-pixel Bresenham lines at +128/+32 from the sheared camera centre
-  in the ring palette index.
+- Shadow presentation is established: GAF feature shadows plus the Digger,
+  ordinary-mobile silhouette, and structure-rerasterization model branches;
+  their option and `noshadow` gates; the model branches' index-0 `ALP` blend,
+  five-pixel offset, terrain-height shear, and shadow-before-body order. Model
+  shadows use no stencil, dither, or `SHD` row. The minimap viewport marker is
+  a five-pixel cross of two 1-pixel Bresenham lines at +128/+32 from the
+  sheared camera centre in the ring palette index.
 - Piece transforms compose as ordered in-place rotate-then-translate passes in
   Z, X, Y chronological order using floating-point trigonometry, with
   bank/heading/pitch injected into the root piece’s Z/Y/X slots; there is no
   matrix stack and no interpolation.
-- Fog sprite/model culling is hard and binary; ALP is not used by the observed
-  LOS edge, and DitheredFog belongs to shadow work.
+- Fog sprite/model culling is hard and binary; `ALP` is not used by the
+  observed LOS edge, and `DitheredFog` is not a model-shadow input.
 - Beam geometry is one or two one-pixel Bresenham lines with fixed orthographic
   projection; collision damage is at the beam head.
 - Water/lava impacts select per-weapon GAF and sound media; no independent
@@ -6524,21 +7089,14 @@ by the sharper question it turned into.
 
 ### Audio and music
 
-- DirectSound secondary-buffer flags, buffer reuse, device-loss recovery, and
-  exact PCM conversion for every legacy WAV variant · §8.2 · static trace.
-- Which aliases use which WAV allocation mode; bounded-negative (no per-alias
-  mode field at registration) · §8.2 · static trace. Marked
-  `TODO(question): per-alias mode selection`.
-- The unused 150-frame queue field, and the writer of the honk/sing flag
-  · §8.2, §8.3 · static trace. Marked `TODO(T23)`.
-- Remaining secondary-buffer field meanings and the non-DirectSound wrapper
-  arithmetic; the pan arithmetic and the two-level in-view (`-585`) versus
-  off-screen (`-1585`) attenuation are established · §8.3 · static trace.
-- CD random/shuffle history persistence, pause/resume races, and volume
-  restoration on shutdown · §8.4 · static trace.
+- The speech-*text* threshold writer among the sound-options gadgets (the
+  audio threshold's writer is established) · §8.3, [R-AUD-01 §2] · static
+  trace of the `SOUNDSRT` handler (RWU-07-1 owns the screen).
 - Whether dynamically or externally reached callers outside the bounded
   direct-invocation census can drive the 18-byte sound broadcast packet in
   game · §8.3 · static trace over the unrecovered regions.
+- Exact PCM conversion for every legacy WAV variant beyond the DIGI and raw
+  rules of §8.2 · §8.2 · asset census of the non-RIFF files.
 
 ### Video and capture
 

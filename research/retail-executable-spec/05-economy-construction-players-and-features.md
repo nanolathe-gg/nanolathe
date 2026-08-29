@@ -2324,9 +2324,13 @@ target must exist, have control byte `1`, `2` or `3`, have an assigned slot
 index, not carry the rule word's defeated bit, and not be eliminated. **There
 is no alliance test** — a player may share with an enemy.
 
-**Established — amounts.** Each text field is parsed by the shared
-string-to-integer helper (64-bit integer result), truncated to a 32-bit
-integer and converted to single precision; fractions cannot be entered. The
+**Established — amounts.** *(Corrected 2026-08-29: `METAL`/`ENERGY` are
+gadget-kind-4 **sliders**, not text fields, and the 64-bit integer this
+paragraph attributed to a string-to-integer parse is the slider read-back's
+`ftol` — [07 R-HUD-03 §9] gives the knob/range arithmetic; the amount
+semantics below are unchanged.)* Each slider's read-back value is truncated to
+a 32-bit integer and converted to single precision; fractions cannot be
+entered. The
 metal helper is called first, then the energy helper, both with the local
 slot as source, the resolved target, and the debit flag set — so each amount
 is clamped to the local live stock ([R-SHARE-01 §2]). Zero fields are no-ops.
@@ -5849,10 +5853,6 @@ are the residue.
   retail observation with an authored extreme-cost probe. Exceptional-value
   behavior, signed zero, the truncation sites, and the float-versus-double
   widths are closed by [R-ECO-01 §1] and [R-ECO-01 §5].
-- Whether the SHARE screen's string-to-integer parser accepts a leading sign:
-  the transfer helpers do not guard a negative amount (the source gains, the
-  destination loses) · [R-SHARE-01 §2] · static trace of the shared parser's
-  sign handling, or manual retail observation with `-100` typed into the field.
 - Name of the order handler whose jump-table fragment reports
   `Unable to create any more units` with result 8 and no wait; inferred to be
   `VTOL_MobileBuild` from its address span and body · [R-SHARE-01 §8] · static

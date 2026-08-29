@@ -2,11 +2,11 @@
 
 This directory is a standalone, self-contained reference for every file format
 used by Total Annihilation (Cavedog Entertainment, 1997) and its expansions.
-It exists so that OpenTA development does not depend on external web pages,
+It exists so that Nanolathe development does not depend on external web pages,
 which have a habit of disappearing. Everything here has been cross-checked
 against real retail game data (the `totala*.hpi`, `*.ccx`, and `rev31.gp3`
-archives) and against OpenTA's own parsers in `formats/`, `vfs/`, and
-`internal/content/`.
+archives). Nanolathe's parsers are conformance consumers of this reference,
+not evidence for retail behavior.
 
 Each document follows the same structure:
 
@@ -103,9 +103,9 @@ weapons/        TDF weapon definitions
 The byte-level information here originates from community reverse-engineering
 documents written 1998–2003 (the "TA Design Guide" at
 `units.tauniverse.com/tutorials/tadesign/` and the format notes it links),
-verified and extended by OpenTA's own clean-room parsers and by direct
-inspection of retail data. Every document lists its sources as original web
-URLs; those sites may disappear (the Wayback Machine at `web.archive.org`
+verified and extended by direct inspection of retail data and, where stated,
+bounded static analysis of the retail executable. Every document lists its
+sources as original web URLs; those sites may disappear (the Wayback Machine at `web.archive.org`
 holds captures), which is exactly why these documents are written to stand
 alone — nothing in them requires the originals. Hex dumps labelled with an
 archive path are real bytes from the retail game files.

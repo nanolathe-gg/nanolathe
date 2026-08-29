@@ -423,7 +423,9 @@ populated on first run.
 | `fxvol` | 27 |
 | `musicvol` | 32 |
 | `cdmode` | 4 |
-| `MixingBuffers`, `CDAudioVolume`, `WaveOutVolume`, `Sound Mode` | read; no scalar default installed |
+| `MixingBuffers` | 8 (`[R-SND-01 §2]`; this row read "no scalar default installed" until 2026-08-29) |
+| `Sound Mode` | 1, held in bits 0–2 of the sound flags byte (`[R-SND-01 §2]`; formerly listed here as having no default) |
+| `CDAudioVolume`, `WaveOutVolume` | read only when `RestoreVolume` is set; no default installed |
 | `SingleCommanderDeath`, `SingleMapping`, `SingleLineOfSight`, `SingleLOSType` | 1 |
 | `MultiCommanderDeath`, `MultiMapping`, `MultiLineOfSight`, `MultiLOSType` | 1 |
 | `screenchat` | 1 |
@@ -438,6 +440,8 @@ vehicle shadows, feature shadows, and shading **on**; dithered fog, damage
 bars, alt-switching, clock display, and volume restoration **off**;
 acknowledgement effects, build effects, and speech effects **on**; music mode
 **on**.
+The sound word's bit map, its consumers, and which of these values the
+loader actually writes back are in `[R-SND-01 §2]` below.
 
 **Skirmish settings**, under the skirmish subkey: `SkirmishMap`,
 `SkirmishLocation`, `SkirmishDifficulty`, `SkirmishLOSType`,
@@ -542,6 +546,64 @@ The unit catalog reads its display name and description through this accessor,
 so localized unit names and descriptions authored in the unit record **are**
 honored. This corrects an earlier reading that localization was handled only by
 the translation table.
+
+### Closed — the audio preference values: names, defaults, bit map, write-back, and what is not registry [R-SND-01 §2] (2026-08-29)
+
+This section records the registry-side facts handed over from
+`[03 R-AUD-01 §2]` and re-verified against the settings loader and saver;
+the consumers are doc 03's and are only cited here.
+
+**Established fact — the packed sound flags byte.** The second packed
+option word this section calls the "sound option word" is one byte, loaded
+from these DWORD values (`value & 1` for each flag bit, `value & 7` for the
+mode field):
+
+| Bits | Value name | Absent → | Consumer |
+|---|---|---|---|
+| 0–2 | `Sound Mode` | `1` (`Mono`); and the device's 3-D flag is cleared | every play gate requires the field non-zero; value `2` (`3D`) sets the device 3-D flag, any other value clears it `[03 R-AUD-01 §1]`, `[03 R-AUD-01 §2]` |
+| 3 | `RestoreVolume` | `0` | gates the `WaveOutVolume` / `CDAudioVolume` round-trip below |
+| 4 | `ackfx` | `1` | none — persisted and displayed, gates nothing `[03 R-AUD-01 §2]` |
+| 5 | `buildfx` | `1` | none — as above |
+| 6 | `speechfx` | `1` | the unit voice line's audible gate `[03 R-AUD-01 §3]` |
+
+**Established fact — the remaining audio values.** `MixingBuffers` (absent
+→ **8**) is handed straight to the sound device as its voice limit
+`[03 R-AUD-01 §1]`; `musicmode` (absent → bit 0 set) is the CD enable;
+`cdmode` (absent → **4**) is the CD play mode `Play All|Random|Repeat|Custom`
+= 1..4 `[03 R-AUD-01 §4]`; `fxvol` (absent → 27) and `musicvol` (absent →
+32) are the two gauges. `WaveOutVolume` and `CDAudioVolume` are read **only
+when bit 3 is set**, and then pushed to the system wave mixer and the CD
+auxiliary device respectively; when bit 3 is clear they are neither read
+nor defaulted.
+
+**Established fact — `CDLISTS`.** A binary value under the same key,
+**2,720 bytes** (20 entries × 136: 32 unused bytes, a 4-byte disc serial,
+100 category bytes). It is read once at session initialisation, immediately
+after the scalar settings above (absent → the in-memory ring is zeroed), and
+written back on the disc-change path and at shutdown. What the ring means
+and how a disc is matched is `[03 R-AUD-01 §4]`.
+
+**Correction (Established) — write-back.** "Established fact" above says
+that when a setting is absent the loader "installs the default below and
+immediately writes it back". For the audio values that is true of **`Sound
+Mode` only**. `MixingBuffers`, `RestoreVolume`, `musicmode`, `cdmode`,
+`ackfx`, `buildfx`, `speechfx`, `fxvol` and `musicvol` install their
+defaults in memory without a write; they reach the registry only through
+the settings saver, which writes every audio value unconditionally
+(`WaveOutVolume`/`CDAudioVolume` only when bit 3 is set, from the *current*
+device levels). The write-back-on-absence behaviour is per value: a bounded
+census of the loader finds exactly thirty names written back, and none of
+the audio names except `Sound Mode` is among them. The other twenty-nine
+are display, LOS/mapping, skirmish-scalar and interface values whose
+individual rows are not re-audited here (RWU-02-x owners; the census is in
+the raw trail).
+
+**Established fact (bounded negative) — not registry.** `NoDirectSound` and
+`UseWindowsSound` are **not** registry values. They are integers read from
+the `[Preferences]` section of `<executable directory>\totala.ini` with
+default 0, the same profile accessor the unit limit uses (`R-CONTENT-03`
+above); the image contains no registry read of either name. Their effect is
+`[03 R-AUD-01 §1]`.
 
 ### Supported inference
 
@@ -1379,21 +1441,84 @@ A category record is 352 bytes: a name of up to 64 bytes, then 24 event rows of
 twelve bytes indexed by slot, each holding a variant count and two parallel
 arrays of 64-byte strings.
 
-**Variant gathering.** For each event key `K`, the loader reads `K` first, then
-`K1`, `K2`, `K3`, and so on, stopping at the first index whose key is absent.
-Every successful read appends to two parallel growable arrays of 64-byte
-strings held by that event: the sound alias, and a caption read from the
-companion key `<that key>text` (empty when absent). A category's event
-therefore holds an ordered list of variants and their captions, plus the count.
+**Variant gathering.** For each of the 23 event keys `K`, the loader reads
+`K` first, then `K1`, `K2`, `K3`, and so on, stopping at the first numbered
+index whose key is absent. Every successful read appends to two parallel
+growable arrays of 64-byte strings held by that event: the sound alias, and
+a caption read from the companion key `<that key>text` (empty when absent).
+A category's event therefore holds an ordered list of variants and their
+captions, plus the count. The bare read and the numbered loop are
+**independent**: a missing bare key contributes nothing and the numbered
+loop still runs from index 1 [R-SND-01 §1].
 
-An event key that is absent for the bare form contributes no variants at all,
-because the bare read is what gates the numbered loop. **Correction (SC7):**
-this gating is wrong — the numbered loop runs regardless of whether the bare
-key is present. The stock corpus ships no bare forms at all for the core cues
-(120 `select1`, 76 `ok1`, 76 `cant1`, 63 `arrived1`), and retail still counts
-one variant for each via the numbered path; a strict bare-gate would mute them.
-See `[03 §8.3]` for the full sound-category contract and
-`docs/SPEC_CONFLICTS.md` SC7.
+**Correction (SC7, 2026-08-29, `[R-SND-01 §1]`).** Until 2026-08-29 this
+section said "an event key that is absent for the bare form contributes no
+variants at all, because the bare read is what gates the numbered loop",
+and carried an untraced install-compatibility note that the gate must be
+wrong because stock `sound.tdf` authors `select1`, `ok1`, `cant1` and
+`arrived1` with no bare form. The executable has now been re-read: the
+loader discards the result of the bare read and unconditionally starts the
+numbered loop at 1. The earlier sentence was a mis-reading of the loop
+structure — the only tested result is that of each numbered read. The
+install observation is thereby explained, not merely tolerated.
+
+### Closed — the sound-category loader: file, record, bare and numbered keys, captions [R-SND-01 §1] (2026-08-29)
+
+Everything here is the content layer; the reader side (queue, draw, gates)
+is `[03 §8.3]` and `[03 R-AUD-01 §3]`.
+
+**Established fact — catalog open.** The loader zeroes the category count
+and record pointer, builds the path `gamedata\sound.tdf` through the usual
+path builder, and parses it with the generic TDF parser. If the parse fails
+(file absent or unreadable) both stay zero: there are **no** categories and
+no diagnostic is raised here. On success the count is the number of
+top-level sections, one 352-byte record per section is allocated (tagged
+`Sound Categories`) and zero-filled, and each section is visited **by
+index** in file order — so a category's index is its ordinal position in
+`sound.tdf`, and that ordinal is what a unit's `soundcategory` name resolves
+to.
+
+**Established fact — the record.** Per section: the section name is copied
+into the 64-byte name field, at most **63** characters. The 24 twelve-byte
+rows follow (row 0 is never written); row *k* for slot *k* holds
+`{count, aliases, captions}` where the two pointers address growable arrays
+of 64-byte strings (tag `Say Choice Array`, reallocated to
+`(count + 1) × 64` bytes on every append).
+
+**Established fact — the per-key read.** One helper reads one authored key
+into a slot row. It looks the key up in the current section with the
+bounded string accessor (64-byte buffer, so an alias is at most 63
+characters); an **absent** key returns failure and appends nothing. A
+present key — including one whose value is empty — succeeds: the alias is
+appended, then the caption key is formed as the key name followed by
+`text` (`select1` → `select1text`) and read the same way, empty when
+absent; both arrays grow by one and the count increments.
+
+**Established fact — the gather order.** For each slot in table order
+(`select` … `canceldestruct`):
+
+1. read the bare key `K` — the helper's result is **not tested**;
+2. set `n = 1`; read `K<n>` (formatted `%s%i`, decimal, no padding);
+3. while that read succeeded, `n = n + 1` and read `K<n>`;
+4. stop at the first absent `K<n>`.
+
+Consequences, all direct: a category authoring `select1`, `select2` and no
+`select` has two variants; one authoring `select` and `select1` has two
+variants with the bare one first; `select1` and `select3` without `select2`
+yields one variant; `select1=;` (present, empty) yields one variant whose
+alias is the empty string (the resolver's audible path then plays nothing,
+`[03 §8.3]` step 3 — "the codec performs no empty-path check").
+
+**Established fact — how the reader indexes the record** (cross-check of
+`[03 §8.3]`, no new contract): the voice-cue resolver reaches the record by
+the unit definition's stored category index times 352, then row `slot`,
+and draws `idx = trunc(rand15 × count ÷ 32768)` over the *whole* variant
+list; the record carries no memory of which entries came from the bare key
+and which from numbered keys.
+
+**Corpus note.** The stock catalog's `select1`/`ok1`/`cant1`/`arrived1`
+with no bare forms (SC7's observation) is therefore exactly what the loader
+expects; no compatibility divergence is needed.
 
 ### R-P0-03 — Category token registry and membership-bitset compilation
 
@@ -2060,7 +2185,7 @@ lobby, or a trace of every block copy into the session globals.
 | `count1` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
 | `count0` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]`, `[04 R-SPEC-01 §13]` | Established (cited) |
 | `canceldestruct` | string (variant list) · 64 bytes per variant | no variant | `[03 §8.3]`, `[04 R-ORD-01 §1]` | Established (cited) |
-| `<event><n>, <event>text, <event><n>text` | string (numbered variants and captions) · 64 bytes each | empty caption | `[03 §8.3]`, `[02 §5]` (variant gathering) | Established |
+| `<event><n>, <event>text, <event><n>text` | string (numbered variants and captions) · 64 bytes each (63 characters) | empty caption | `[02 R-SND-01 §1]` (gather order: bare, then `1..n` contiguous, bare never gates), `[03 §8.3]` | Established |
 
 **registry preference (`Total Annihilation` key)**
 
@@ -2078,11 +2203,12 @@ lobby, or a trace of every block copy into the session globals.
 | `SingleLOSType` | DWORD · 32-bit | 1 | `[03 §3.1]` | Established (cited) |
 | `screenchat` | DWORD · 32-bit | 1 | unknown: no doc cites the reader — decider: reader census on the stored global (doc 07) | Unknown |
 | `damagebars` | DWORD · 32-bit | bit clear (0) | `[03 R-FX-01 §6]` | Established (cited) |
-| `Sound Mode` | DWORD · 32-bit | bit set (1) | `[02 §3]` (packed sound word bits 0–2); mixer reader open — decider: static trace (doc 03 §8) | Supported inference |
-| `MixingBuffers` | DWORD · 32-bit | no default installed | unknown: no doc cites the reader — decider: static trace of the mixer initialisation (doc 03 §8) | Unknown |
-| `RestoreVolume` | DWORD · 32-bit | bit clear (0) | `[02 §3]` (gates the wave-out/CD volume restore) | Established |
-| `WaveOutVolume` | DWORD · 32-bit | no default installed | `[02 §3]` (restored only when `RestoreVolume` is set) | Established |
-| `CDAudioVolume` | DWORD · 32-bit | no default installed | `[02 §3]` (restored only when `RestoreVolume` is set) | Established |
+| `Sound Mode` | DWORD · 32-bit, low 3 bits kept | 1 (`Mono`) | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §1]`, `[03 R-AUD-01 §2]` (play gate; `2` = 3-D) | Established (cited) |
+| `MixingBuffers` | DWORD · 32-bit | 8 | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §1]` (mixer voice limit) | Established (cited) |
+| `RestoreVolume` | DWORD · 32-bit, bit 0 kept | bit clear (0) | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §2]` (gates the `WaveOutVolume`/`CDAudioVolume` round-trip) | Established (cited) |
+| `WaveOutVolume` | DWORD · 32-bit | no default installed | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §2]` (read/written only when `RestoreVolume` is set) | Established (cited) |
+| `CDAudioVolume` | DWORD · 32-bit | no default installed | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §2]` (read/written only when `RestoreVolume` is set) | Established (cited) |
+| `CDLISTS` | binary · 2,720 bytes | zeroed | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §4]` (per-disc CD category ring) | Established (cited) |
 | `Anti-Alias` | DWORD · 32-bit | bit set (1) | `[03 R-REN-03A]` (structure anti-aliasing gate) | Supported inference |
 | `Shadows` | DWORD · 32-bit | bit set (1) | `[03 §5.3]` | Supported inference |
 | `FeatureShadows` | DWORD · 32-bit | bit set (1) | `[03 §5.3]` | Supported inference |
@@ -2102,13 +2228,13 @@ lobby, or a trace of every block copy into the session globals.
 | `gamespeed` | DWORD · 32-bit | 10 | unknown: no doc cites the reader — decider: static trace of the tick-rate setter (doc 01 §2) | Unknown |
 | `unitchat` | DWORD · 32-bit | 10 | unknown: no doc cites the reader — decider: static trace of the unit speech scheduler (doc 03 §8.3) | Unknown |
 | `unitchattext` | DWORD · 32-bit | 5 | unknown: no doc cites the reader — decider: static trace of the caption presenter (doc 03 §8.3) | Unknown |
-| `musicmode` | DWORD · 32-bit | bit set (1) | `[03 §8.4]` (music mode) | Supported inference |
-| `cdmode` | DWORD · 32-bit | 4 | `[03 §8.4]` (CD audio mode) | Supported inference |
-| `ackfx` | DWORD · 32-bit | bit set (1) | `[03 §8.3]` (acknowledgement cue gate) | Supported inference |
-| `buildfx` | DWORD · 32-bit | bit set (1) | `[03 §8.3]` (build cue gate) | Supported inference |
-| `speechfx` | DWORD · 32-bit | bit set (1) | `[03 §8.3]` (speech cue gate) | Supported inference |
-| `fxvol` | DWORD · 32-bit | 27 | `[03 §8.1]` (effects volume) | Supported inference |
-| `musicvol` | DWORD · 32-bit | 32 | `[03 §8.4]` (music volume) | Supported inference |
+| `musicmode` | DWORD · 32-bit, bit 0 kept | bit set (1) | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §4]` (CD enable) | Established (cited) |
+| `cdmode` | DWORD · low byte stored | 4 (`Custom`) | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §4]` (CD play mode 1..4) | Established (cited) |
+| `ackfx` | DWORD · 32-bit, bit 0 kept | bit set (1) | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §2]` — persisted, gates nothing (bounded negative) | Established (cited) |
+| `buildfx` | DWORD · 32-bit, bit 0 kept | bit set (1) | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §2]` — persisted, gates nothing (bounded negative) | Established (cited) |
+| `speechfx` | DWORD · 32-bit, bit 0 kept | bit set (1) | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §3]` (unit voice audible gate) | Established (cited) |
+| `fxvol` | DWORD · 32-bit | 27 | `[03 R-AUD-01 §2]` (play gate ≠ 0; system wave mixer level `v << 10`) | Established (cited) |
+| `musicvol` | DWORD · 32-bit | 32 | `[03 R-AUD-01 §2]`, `[03 R-AUD-01 §4]` (CD auxiliary level `v << 10`) | Established (cited) |
 | `clock` | DWORD · 32-bit | bit clear (0) | `[02 §3]` (option-word bit 6, clock display) | Established |
 | `NumSkirmishPlayers` | DWORD · 32-bit | 4 | `[07 §5]`, `[08 R-SKIR-01 §1]`, `[08 "Skirmish configuration"]` | Established (cited) |
 | `MultiCommanderDeath` | DWORD · 32-bit | 1 | `[08 R-SKIR-01 §4]` (multiplayer option word, by analogy with the skirmish loader) | Supported inference |

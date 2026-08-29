@@ -891,31 +891,70 @@ starts at 0 and the selected piece is transformed into a target world offset
 before target-point geometry is solved. The target path must not substitute the
 shooter's muzzle piece for this query. (§3.3 owns the target-point geometry.)
 
-#### Per-attempt ordering and piece transform — Established [R-P0-07]
+#### Per-slot and aim-time pipeline — Established [R-P0-07]
 
-**Established fact:** The recovered weapon path runs the following stages in
-order:
+The unit sweep visits the three armed slots in ascending order. Each visit
+decrements a nonzero reload timer, resolves or retains the target and computes
+the target point (including `SweetSpot` on the target where required), abandons
+a slot with no installed executor, and then performs the executor's aim-time
+work. Only after that work does a zero reload timer admit the visit to the
+fire-time pipeline below.
 
-```text
-resolve/retain target
-  -> compute target point (SweetSpot where required)
-  -> compute AimFrom[k], then Query[k] only when AimFrom returned -1
-  -> transform the selected piece through current COB state and the model hierarchy
-  -> solve heading/pitch and physical range/medium admission
-  -> start Aim[k] when the weapon family requires it
-  -> reserve the root projectile
-  -> start sound
-  -> start Fire[k]
-  -> start RockUnit
-  -> start smoke/trail presentation
-```
+Aim-time work is executor-specific:
 
-The muzzle query is synchronous before root projectile initialization, and the
-selected piece identity is stored on the root projectile so a later burst
-attempt can refresh its world position from the live piece. Allocation failure
-does not retroactively call Fire or RockUnit. The physical admission stage is
-the squared-planar-range and medium gate of §3.3; it is not a visibility or
-terrain-hill test.
+- **Turret:** when the Aim-request latch is clear, synchronously runs the
+  `AimFrom[k]`/`Query[k]` fallback, transforms that piece to world space,
+  solves heading and pitch, and dispatches the deferred `Aim[k]` callback.
+  This visit only requests Aim; its result can arrive later through the slot
+  receiver.
+- **Vertical launch:** when its latch and stockpile-ammunition gates pass,
+  dispatches `Aim[k](0, 0)`. It performs no muzzle query and solves no angles
+  at aim time.
+- **Line-of-sight/self-propelled and dropped:** perform no Aim dispatch and do
+  not read or write an Aim latch at this stage.
+
+#### Reload-zero fire-time pipeline — Established [R-P0-07]
+
+When reload is zero, the outer slot path first applies the physical
+range/medium admission of §3.3 and then, for a non-stockpile weapon, the
+energy/metal precheck of §4.2. Only an admitted attempt that passes its
+applicable resource or ammunition gate enters its executor:
+
+- **Turret:** requires both the Aim-request latch and a nonzero Aim result,
+  re-solves current geometry and applies the angular-drift gate. It then runs
+  the synchronous `AimFrom[k]`/`Query[k]` muzzle fallback, transforms the
+  selected piece, converts yaw from relative to absolute, applies the
+  accuracy spread, and calls the ordinary creator for `lineofsight` or
+  `selfprop`, the ballistic creator for `ballistic`, or no creator otherwise.
+- **Vertical launch:** requires a nonzero Aim result but does not test the Aim
+  latch. It runs and transforms the muzzle fallback, writes absolute yaw and
+  pitch, performs the interceptor rescan when authored, and calls the
+  vertical-launch creator.
+- **Line-of-sight/self-propelled:** uses neither Aim field. It runs and
+  transforms the muzzle fallback, writes absolute yaw and pitch, applies its
+  drift gate against the unit's own heading and pitch, and calls the ordinary
+  creator. It applies no accuracy spread.
+- **Dropped:** has no Aim or drift gate. It runs and transforms the muzzle
+  fallback and then performs its inline allocation and initialization.
+
+The selected muzzle piece is stored on a successful root projectile so a
+later burst attempt can refresh its world position from the live piece.
+Executor failure leaves costs, reload, ammunition and firing-status mutation
+undone; §4.4 states the family-specific work that remains observable after a
+full-pool failure.
+
+#### Successful creator initialization and callback pipeline — Established [R-P0-07]
+
+The ordinary, ballistic and vertical-launch creators reserve the root
+projectile before initialization. A successful reservation then runs the
+common initializer, whose last action emits the start sound, followed by the
+matching deferred `Fire[k]` callback, `RockUnit`, and start-smoke work in that
+order. A full pool returns before all of those actions. The dropped executor is
+the exception: its muzzle query already ran before its inline reservation, and
+even on success it emits neither `Fire[k]` nor `RockUnit` nor start smoke.
+Burst clones repeat none of the successful-root callback pipeline. Reload,
+ammunition, firing status and applicable resource debits are committed only
+after the executor reports success (§4.2).
 
 **Established fact:** The piece transform uses the current COB piece state and
 the loaded model hierarchy, then adds the unit world position. The loaded 3DO
@@ -977,10 +1016,6 @@ synchronous query against the target's VM with cell 0 seeded to zero and
 transforms the returned piece through the target's model to a world offset.
 The paragraph above ("SweetSpot is a separate synchronous query…") stands; this
 names whose script answers it.
-
-Regression fixtures: the query path is locked by the [R-P0-07]-citing tests
-around the weapon-slot query/fallback in `internal/combat/service.go` and the
-mode-Q/mode-D dispatcher in `internal/cob/bridge.go`.
 
 ## 4. Firing callbacks, costs, reload, and bursts
 
@@ -3956,7 +3991,7 @@ per-pixel draw `r` giving the fuzzy edge. Table 0: 12 frames, sides 64, 60,
 15 frames, sides 200 down in steps of 11 (200 … 46). Every frame's hold word
 is 2, so table 0 plays for 24 ticks and tables 1/2 for 30; every table's loop
 byte is 0. The draw counts are 23,456, 107,335 and 260,815 CRT draws
-respectively — 391,606 at startup (doc 01's stream census; §6). A 22×22
+respectively — 391,606 **per battle**, drawn on the loading worker thread's own CRT state during the world rebuild ([08 R-ENTRY-01 §2]; corrected 2026-08-29 — the earlier text said "at startup", and those draws never touch the main thread's CRT stream; doc 01's stream census, §6). A 22×22
 displacement ("lens") frame is built beside them for render type 2 (§4); it
 consumes no draws.
 
@@ -4087,7 +4122,7 @@ presentation path touches the simulation Park–Miller stream:
 
 | Site | Draws |
 |---|---|
-| calculated explosion frames, once at startup | 391,606 (tables 0/1/2: 23,456 / 107,335 / 260,815) |
+| calculated explosion frames, once per battle on the loading worker's CRT state ([08 R-ENTRY-01 §2]; was "once at startup") | 391,606 (tables 0/1/2: 23,456 / 107,335 / 260,815) |
 | lightning (render type 7), per record per **frame** | `6 · trunc(dist/5)` |
 | smoke puff, per particle | 1 at spawn, 1 per frame advance |
 | camera shake, per sub-tick while active | 2 (`[01 R-CORE-01]`) |

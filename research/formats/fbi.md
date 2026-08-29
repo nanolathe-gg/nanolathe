@@ -75,6 +75,11 @@ These occur in the shipped FBIs and have no matching string anywhere in the
 executable, so nothing can consume them. Preserve them when round-tripping; do
 not give them behavior.
 
+**Correction (2026-08-29).** An earlier version placed the language-prefixed
+`Name` and `Description` keys in this table. That placement was wrong: the
+language-prefixed accessor reads and honors them, as recorded in the Identity
+table below.
+
 | Key | Retail units authoring it | Notes |
 | --- | ---: | --- |
 | `TEDClass` | 278 | Map-editor classification, as the name says. |
@@ -85,7 +90,6 @@ not give them behavior.
 | `Ovradjust` | 173 | — |
 | `SteeringMode` | 152 | No engine steering distinction is selected by it. |
 | `BadTargetCategory` (unprefixed) | 99 | Only `wpri_`, `wsec_` and `wspe_` prefixed spellings are read. `NoChaseCategory` *is* read unprefixed. |
-| `GermanName`, `FrenchName`, `ItalianName`, `SpanishName` and the four matching `*Description` keys | 276–277 | **Read, via the language-prefixed accessor.** The unit catalog reads `name`/`description` through an accessor that tries `<language><key>` first and falls back to the plain key, so authored per-language names ARE honored. **Correction (2026-08-26):** an earlier reading in this document called these keys inert ("Localization comes from `gamedata/Translate.tdf`, not the FBI") — that is wrong; the translation table and the language-prefixed FBI keys are two separate mechanisms, and both are live. The translation table covers runtime messages; the prefixed keys cover authored unit names/descriptions. |
 | `Scale` | 28 | — |
 | `AltFromSeaLevel` | 8 | `CruiseAlt` is the only altitude key read. |
 | `TransportMaxUnits`, `TransMaxUnits` | 3, 1 | `TransportCapacity` and `TransportSize` are the read pair. |
@@ -347,10 +351,9 @@ removes its shading entirely. See
   at `0.33333`, Annihilator and Doomsday at `0.5`, both targeting facilities
   at `0.7`, Viper at `0.125`), self-heal is already expressed by `HealTime`,
   and the clean-room specification separately calls for a script-controlled
-  armored damage modifier with no authored source. OpenTA therefore applies
-  it as the armored-state damage scale, falling back to the historic half for
-  content that omits it. This is the best available reading, not a primary
-  source: no shipped file documents the key.
+  armored damage modifier with no authored source. This is the best available
+  reading, not a primary source: no shipped file documents the key. Runtime
+  fallback and damage behavior belong to the numbered behavior specification.
 - The `Copyright` requirement is community lore; not re-verified.
 - No key names the COB script — the `UnitName` → `scripts/<name>.cob`
   convention is engine behavior.
@@ -368,4 +371,3 @@ removes its shading entirely. See
   `TotalA.exe` (GOG build, MD5 `8e74a1dffa1f5988624c52048f5b20cd`). It reports
   the presence or absence of literal key strings only, which is a fact about
   the data segment rather than about any code.
-- OpenTA parser: `internal/content/compiler.go`.

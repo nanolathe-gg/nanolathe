@@ -209,16 +209,15 @@ unmapped scalar command-line slots.
 
 The content layer maintains an ordered provider array. A loose host-file open
 is attempted first. If it fails, providers are searched linearly and the first
-matching provider supplies the file. Startup mounts, in append order: the
-revision package `rev<name>.GP3` with keep-open flag 1; every `*.CCX` with flag
-1; every `*.UFO` with flag 0; up to ten successfully mounted local `*.HPI` with
-flag 0 (the eleventh successful local HPI is not mounted); then `*.hpi` on each
-enumerated `DRIVE_CDROM` with flag 0. The module directory is made the initial
-current directory before this work. The keep-open flag does not affect search
-precedence; it controls whether the archive handle remains open after validation
-(flag 1 keeps open, flag 0 closes and lazily reopens on next open). A separate
-validation pass temporarily reopens closed providers to test availability and
-prunes failures, closing successful validation opens again.
+matching provider supplies the file. The module directory is made the initial
+current directory before mounting. Document 02 §2 owns the complete mount
+order, per-invocation local-HPI budget, duplicate suppression, keep-open
+semantics, and validation pass.
+
+**Correction (2026-08-29).** The previous summary said startup mounted at most
+ten successful local HPI files and rejected the eleventh globally. That was
+wrong: the ten-entry budget applies to newly mounted local HPIs in one mount
+invocation, and the mount driver invokes that path repeatedly; see [02 §2].
 
 HPI loading validates the HAPI header/footer, decodes the rolling-XOR directory,
 and supports stored and compressed blocks through a bounded 64-KiB decompression
@@ -960,13 +959,6 @@ unit's committed height a function of elapsed real time.
 `GetTickCount()` here · §7.4, `[04 §9.1]` · static trace. Whether the two-unit
 perturbation can carry a hovering unit's height across one of the three
 thresholds that read it is document 04's open item ([04 §9.1] tail).
-
-**Consequence for Nanolathe.** `docs/INVARIANTS.md` forbids `time.Now()` in sim
-packages, so this contract cannot be reproduced literally. Reproducing the bob
-from the tick counter instead is a divergence and must be recorded as one by
-whoever implements hover presentation; leaving the bob out entirely is the
-other option. Either way the choice belongs in `docs/SPEC_CONFLICTS.md`
-(orchestrator-owned), not in an unmarked implementation decision.
 
 ### 7.5 Closed — the per-phase random draw table [R-DET-01 §4] (2026-08-29)
 
