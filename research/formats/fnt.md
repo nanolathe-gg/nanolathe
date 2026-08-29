@@ -91,6 +91,11 @@ table, kerning, or baseline data beyond the header's vertical offset.
 
 - Byte 0x01 is never read; its authored meaning, if any, is unknown (it is
   0 in every retail font). Decider: a font-authoring tool of the period.
+- **No validation at all (2026-08-29, RWU-02-3).** The file is read whole
+  and used in place; a missing or zero-length font is fatal (path as the
+  message) for the two startup fonts and every side font; a truncated font's
+  offsets point past the block and the rasterizer reads what follows
+  (`[02 R-MALF-01 §9]`, `[03 R-FONT-01 §1]`).
 - Rendering (no inter-character spacing beyond the advance, no line
   spacing in the FNT path, colour selection, the caller-drawn shadows seen
   in-game) is engine behaviour, specified in [03 §7.1] (`R-FONT-01`), not

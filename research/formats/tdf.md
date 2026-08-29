@@ -464,13 +464,45 @@ Units not listed are grayed out in build menus during that mission.
 - `ai/*.txt` — AI profiles referenced by OTA `aiprofile=`; plain text,
   not TDF.
 
+## How the engine parses it, and what a malformed file does (2026-08-29, RWU-02-3)
+
+Owned by `[02 §4]` and `[02 R-MALF-01 §4]`; the byte-level facts:
+
+- Comments are blanked to spaces first, length preserved: `//` to the end of
+  the line (newline kept), `/* … */` inclusive, an unterminated `/*` to the
+  end of the text.
+- The parser then walks the text: `[` needs a `]` somewhere after it and,
+  after whitespace, a `{`; `}` closes the section (a `}` at the top level
+  **ends the parse** and the rest of the file is ignored); anything else
+  starts a `key = value ;` field whose `=` and `;` are found by scanning
+  forward to the end of the text.
+- Every failure — `Data field - '=' not found`, `Data field - ';' not
+  found`, `Sub-record - closing ']' not found`, `Sub-record - opening '{'
+  not found`, `End of file - nextblock not zero` (end of text inside an
+  open section) — is shown as `Parse error in .TDF File! <diagnostic> -
+  name = '<section>' from file <path>` in a system-modal box and the
+  process exits with code 1. There is no recovery and no partial tree.
+- A missing file, or one of zero length, is the only recoverable failure:
+  the loader returns no tree and typed reads return their defaults.
+- Numeric text: the integer accessor wraps modulo 2³² (no overflow test);
+  the fixed-point accessor stores `0x80000000` for any magnitude of 32,768
+  authored units or more; the floating accessor is the C-runtime decimal
+  conversion.
+
 ## Unknowns and caveats
 
 - No formal grammar exists; the rules above are inferred from the retail
   corpus. Retail files may terminate a nested section as `};`; readers should
-  treat that semicolon as part of the section terminator. Unobserved edge
-  cases (duplicate keys, `;` in values, comments opened inside values) have no
-  defined behavior.
+  treat that semicolon as part of the section terminator. **Correction
+  (2026-08-29, RWU-02-3).** This bullet previously ended "Unobserved edge
+  cases (duplicate keys, `;` in values, comments opened inside values) have
+  no defined behavior." They are defined by the executable: duplicate
+  sections are all retained (first-match accessor), an identical key
+  spelling replaces the value (last wins), a case-variant key coexists as a
+  second entry, comments are blanked to spaces before parsing wherever they
+  appear (so a `//` inside a value blanks the rest of the line, and a value
+  containing `;` ends at its first `;`); and a syntax error is **fatal** —
+  see "How the engine parses it" below and `[02 R-MALF-01 §4]`.
 - Several weapon/feature fields have community-guessed semantics
   (`randomdecay` direction, `thick`); guesses are marked in the tables. Note
   that `gamedata/WEAPONS.TDF`'s own commentary settles several keys the

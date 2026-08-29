@@ -54,7 +54,7 @@ base            @ 0x0000  36 verts, 20 prims
 
 | Offset | Type | Name | Description |
 | ---: | --- | --- | --- |
-| 0x00 | i32 | VersionSignature | Always `1`. Treat as a required signature. |
+| 0x00 | i32 | VersionSignature | Always `1` in retail data. **The executable never reads it** (`[02 R-MALF-01 §8]`); a reader may still require it, knowing that retail would accept any value. |
 | 0x04 | i32 | NumberOfVertexes | Vertex count for this piece (may be 0) |
 | 0x08 | i32 | NumberOfPrimitives | Primitive count for this piece (may be 0) |
 | 0x0C | i32 | OffsetToSelectionPrimitive | Root piece only: reference to the primitive drawn as the ground/selection plate. `-1` = none. Child and sibling pieces always store `-1` (stock data also uses `0` as a no-selection value on non-roots). See "Selection primitive" below. |
@@ -260,6 +260,17 @@ names, and `SweetSpot`/`SMOKEPIECE` defaults target `base`.
 Version signature is 1 and object-level `Always_0` is 0 in every file.
 868 textured primitives carry `ColorIndex` values above 255 (garbage);
 no untextured primitive does.
+
+## How the engine loads it (2026-08-29, RWU-02-3)
+
+The file is read whole (missing or zero-length → **fatal**, the box shows
+the path, wherever a unit, weapon or feature names a model); the name and
+auxiliary offsets are biased when nonzero, the vertex and primitive array
+offsets always, the sibling and child offsets when nonzero with recursion
+and no cycle check, and each primitive's three offsets; nothing is bounded,
+so a truncated model faults during relocation. A texture name that no
+texture GAF holds turns the primitive into flat colour index 209
+(`[03 §2.4]`). Full outcome table: `[02 R-MALF-01 §2]`.
 
 ## Unknowns and caveats
 

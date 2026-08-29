@@ -34,7 +34,7 @@ byte offsets.
 
 | Offset | Name | Description |
 | ---: | --- | --- |
-| 0x00 | VersionSignature | `4` for TA. (Kingdoms uses other versions; not covered here.) |
+| 0x00 | VersionSignature | `4` for TA. (Kingdoms uses other versions; not covered here.) **The executable never reads it** (`[02 R-MALF-01 §8]`). |
 | 0x04 | NumberOfScripts | Count of script entry points (functions) |
 | 0x08 | NumberOfPieces | Count of piece names |
 | 0x0C | CodeLength | Length of the code section **in u32 words** (historically labelled "Unknown_0" — it is the code word count) |
@@ -471,6 +471,13 @@ A full decode of every COB in the retail archives (835 scripts across
   [04 §4.6]. This file retains only the opcode and authored-duration encoding.
 - The header word at 0x28 (first-script-name pointer) has no known runtime
   purpose.
+- **Loader edges (2026-08-29, RWU-02-3).** The file is read whole; a
+  missing or zero-length script is a null script pointer and the first unit
+  created from the definition crashes (`[04 R-COB-04 §8]`). The five table
+  pointers and the entries of the script-name, piece-name and trailing
+  tables are biased by their declared counts with no bound, so a truncated
+  file faults at load or at first execution. Full outcome table:
+  `[02 R-MALF-01 §2]`.
 - **Embedded comments (community `Cobbler` compiler only).** Scriptor's
   decompiler special-cases a code word `0x6C697542` ("cobbler crap" in its
   own source, `#define COBBLER_CRAP`) as a marker for 45 inline words of

@@ -42,7 +42,7 @@ Header fields TA cares about (full header is 128 bytes):
 | 0x0C | 4 | u16×2 | DPI (ignored) |
 | 0x10 | 48 | | 16-color EGA palette (ignored) |
 | 0x41 | 1 | u8 | planes, `1` |
-| 0x42 | 2 | u16 | bytes per scanline (may exceed width; pad ignored) |
+| 0x42 | 2 | u16 | bytes per scanline (may exceed width). **Never read by the executable**, which decodes exactly `width` pixels per row (`[02 R-MALF-01 §9]`). |
 | 0x44 | 2 | u16 | palette info (ignored) |
 
 RLE decoding per scanline: read a byte; if the top two bits are set
@@ -51,7 +51,8 @@ pixel value; otherwise it is a literal pixel. Decode `bytes_per_line`
 bytes per scanline, then crop to the image width.
 
 Trailer: the byte at `filesize − 769` must be `0x0C`, followed by 256 × 3
-bytes of RGB (8-bit channels) — the image's own palette. Unit pictures are
+bytes of RGB (8-bit channels) — the image's own palette. The executable
+reads the last 768 bytes **without checking the marker**. Unit pictures are
 *not* forced to the shared game palette; the engine loads the embedded one
 (art was nevertheless usually authored with TA-safe colors).
 
@@ -70,11 +71,28 @@ with the 256-color palette following.
   or logo-sized.
 - Filenames match unit short names; lookup is case-insensitive.
 
+## How the engine decodes it (2026-08-29, RWU-02-3)
+
+Owned by `[02 §7]` and `[02 R-MALF-01 §9]`. Checks: the 128-byte header
+must read completely, byte 0 must be `0x0A` and byte 1 must be `5`; nothing
+else (encoding, depth, planes, stride, marker) is examined; failure returns
+0 to the caller with no message. Dimensions are `xmax − xmin + 1` by
+`ymax − ymin + 1` from the 16-bit extents and are allocated as read. Rows
+are decoded as `width` pixels: a byte with both top bits set is a run of
+`byte & 0x3F` copies of the next byte, clamped so a row never overflows;
+any other byte is one literal pixel. A truncated file is not detected —
+the one-byte read returns nothing and the previous byte is reused as every
+further command and value (a stale `0xC0` never advances and hangs the
+loader). A file shorter than 768 bytes seeks to a negative palette offset;
+the seek fails and the palette bytes are read from the current position.
+
 ## Unknowns and caveats
 
-- Whether the engine honors `bytes_per_line` padding or assumes
-  width == stride for its own art is untested; retail files have
-  width == stride.
+- **Closed (2026-08-29, RWU-02-3).** Previously: "Whether the engine honors
+  `bytes_per_line` padding or assumes width == stride for its own art is
+  untested". It never reads the field: each row is decoded as exactly
+  `width` pixels, so a padded file shears (each row starts in the previous
+  row's padding) without any error.
 - Some retail PCX palettes disagree with `PALETTE.PAL`; the F1 screen
   displays them with their own palette (community observation).
 

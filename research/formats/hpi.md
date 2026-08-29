@@ -228,9 +228,16 @@ it; the output must be exactly `decompressed_size` bytes.
 
 ### Trailing copyright
 
-Retail archives end with an unencrypted, unreferenced plaintext string, e.g.
-`Copyright 1997 Cavedog Entertainment`. Nothing points to it; readers can
-ignore any bytes past the last referenced extent.
+Retail archives end with an unencrypted plaintext string, e.g.
+`Copyright 1997 Cavedog Entertainment`. Nothing in the directory points to
+it, but **the executable requires it**: the mount validator reads the last
+36 bytes and compares them with `Copyright 0000 Cavedog Entertainment` after
+overwriting the four bytes at the year position with `0000` — any four bytes
+pass, anything else in the string fails the mount
+(`[02 R-MALF-01 §3]`). **Correction (2026-08-29, RWU-02-3).** This paragraph
+previously said "Nothing points to it; readers can ignore any bytes past the
+last referenced extent"; a writer may ignore it, a reader that wants to
+accept what retail accepts must reject archives without it.
 
 ## Retail corpus notes
 
@@ -260,11 +267,49 @@ directory order. Nothing in the format requires this layout — pointers are
 free — but tools that hand-walk archives may assume the directory
 immediately follows the header.
 
+## How the engine validates it (2026-08-29, RWU-02-3)
+
+Behaviour is owned by `[02 §2]` and `[02 R-MALF-01 §3]`; this list is the
+byte-level checklist a reader needs to accept exactly what retail accepts.
+
+- **Mount-time checks, exactly three:** bytes 0–3 equal `HAPI`; bytes 4–7
+  equal `00 00 01 00`; the 36 trailing bytes equal the copyright template
+  with the year wildcarded. Any failure: the archive is not mounted, no
+  message. The three reads ignore their return counts, so a file shorter
+  than 36 bytes is compared against uninitialised bytes (in practice
+  rejected).
+- **Nothing else is checked at mount.** `directory_size` is allocated and
+  read as-is (short read accepted; a value below 20 skips the decipher
+  loop, a value with the sign bit set fails allocation); the root offset
+  and every directory/entry offset are biased by the block address and
+  written back, recursively, with no bound and no cycle detection — an
+  offset outside the block is a write fault, a directory loop is a stack
+  overflow. The entry count is used as a signed loop bound (≤ 0 → no
+  entries).
+- **Read-time checks:** a stored record clamps the request to what remains
+  and returns the underlying read count (short reads pass through). For a
+  compressed record the chunk table is read at open (count ignored); per
+  chunk the stored length must read back exactly, else the read returns
+  all-ones with no message; then the `SQSH` header is checked in this
+  order: marker (`SQUASHERR_BADHEADER`), method byte `> 3`
+  (`SQUASHERR_BADUNPACKTYPE` — 0 and 3 pass and later fail as
+  `BADUNPACKSIZE`), byte-sum checksum over `compressed` payload bytes
+  (`SQUASHERR_BADCHECKSUM`), decode, produced length ≠ `decompressed`
+  (`SQUASHERR_BADUNPACKSIZE`). Any nonzero code is fatal (process exit).
+- **No output bound:** the LZ77 decoder stops only at a match with position
+  0 and the zlib decoder is given `decompressed` as its output room; both
+  write into a 65,536-byte chunk buffer, so `decompressed > 65536` corrupts
+  the heap before the size check runs. A safe reader must bound output at
+  65,536 per chunk.
+
 ## Unknowns and caveats
 
 - The SQSH header byte at +4 (`0x02`) has no confirmed meaning.
-- Saved-game (`BANK`) containers use additional/different encryption that has
-  not been decoded here.
+- Saved-game (`HAPIBANK`) containers are a different container with their
+  own header; the layout and the account/item grammar are in
+  `[08 R-SAVE-02]`, the failure edges in `[02 R-MALF-01 §11]`.
+  (Previously: "use additional/different encryption that has not been
+  decoded here" — superseded by doc 08.)
 - Duplicate-path precedence between two archives of the same extension tier
   is not defined by the retail engine (community observation). OpenTA defines
   its own deterministic rule (case-insensitive lexical archive filename

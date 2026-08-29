@@ -45,7 +45,7 @@ All offsets are absolute file offsets. All integers little-endian.
 | Offset | Size | Type | Name | Description |
 | ---: | ---: | --- | --- | --- |
 | 0x00 | 4 | u32 | version | `0x00010100` in 945 of 950 retail GAFs. The exceptions are `anims/TERRAIN.GAF` and `anims/VISMASKS.GAF` (engine-internal mask data), which store `0` here but keep the same container structure — readers that hard-require the version will reject them. |
-| 0x04 | 4 | u32 | entry_count | number of entries |
+| 0x04 | 4 | u32 | entry_count | number of entries. **The executable reads the low 16 bits as a signed value** (`[02 R-MALF-01 §6]`): a count with bit 15 set loads no entries. |
 | 0x08 | 4 | u32 | unknown | `0` in all retail files |
 
 Immediately followed by `entry_count` × u32 absolute offsets, one per entry.
@@ -101,7 +101,7 @@ but readers must not assume pixel extents are uniquely owned.
 | +6 | 2 | i16 | y_offset | |
 | +8 | 1 | u8 | color_key | `9` in **all 48,519 retail frames**. On the raw path it is the transparent palette index: the frame draw passes this byte to the blitter, which skips every matching source pixel. The RLE path carries transparency in skip runs and does not consume this key. Historically mislabelled "palette index" and long listed as unknown. |
 | +9 | 1 | u8 | compressed | `0` = raw pixels, `1` = per-row RLE (only these two values occur in retail data) |
-| +10 | 2 | u16 | subframe_count | if nonzero, this frame is composed of subframes (see below). Composition is common: roughly half of retail frames are composed. |
+| +10 | 2 | u16 | subframe_count | if nonzero, this frame is composed of subframes (see below). Composition is common: roughly half of retail frames are composed. **The executable reads only the low byte** (loader and compositor alike), so the effective count is `subframe_count & 0xFF`; on a *subframe* header a nonzero **high byte** (offset +11) makes the compositor draw that subframe through the light-table-remapped blit path, which draws only when the destination window has its remap flag set (`[02 R-MALF-01 §6]`). Retail data: maximum count 12, high byte always 0 (census of all 958 GAFs, 123,294 frames). **Correction (2026-08-29, RWU-02-3):** the row previously described the field as a plain u16 count. |
 | +12 | 4 | u32 | unknown2 | `0` in all retail frames |
 | +16 | 4 | u32 | data_offset | → pixel data, or subframe pointer table when `subframe_count > 0` |
 | +20 | 4 | u32 | unknown3 | Historically called "timing" — specifically, the 1998–2001 `GAFBuilder` tool names this exact offset `FPS` and exposes it as a user-editable, save-round-tripped field — but ~27% of retail frames carry nonzero garbage here (in `ARMALAB.GAF`: mostly 0, one frame `480`, one `7025344`). Ignore; the plausible timing value lives in the frame *reference* record instead. |
@@ -161,7 +161,13 @@ Real example — first row of the 80×40 `Credits` frame in
 
 If a row's commands would exceed `width` pixels, or the payload runs out
 early, the file is malformed. After producing `width` pixels the payload
-must be fully consumed.
+must be fully consumed. What the executable does with such a row
+(`[02 R-MALF-01 §6]`): a run that would overshoot is clamped to the
+remaining width (excess discarded); a payload that runs out is **not
+detected** — decoding continues into the following bytes (the next row's
+count and payload) until `width` pixels exist, and the next row still
+starts at `row + 2 + payload_count`; a payload count of 0 leaves the row
+untouched (transparent).
 
 ### Composed frames (`subframe_count > 0`)
 
@@ -173,6 +179,18 @@ order onto a `width × height` canvas: each subframe is placed at
 (clipped to the canvas), later subframes overwriting earlier ones where
 opaque. Subframes can themselves be composed; cycles are malformed. Canvas
 pixels never covered by an opaque subframe pixel are transparent.
+
+## How the engine loads it (2026-08-29, RWU-02-3)
+
+`[02 §6]` and `[02 R-MALF-01 §6]` own the behaviour. Byte-level facts: the
+file is read whole (a missing or zero-length file is null — fatal with the
+path for the effects/anims cache, silent for a feature `filename`); the
+version word at 0 is **never read**; the loader biases every entry offset,
+frame-header offset, frame data offset, subframe pointer and subframe data
+offset by the block address and **writes them back**, with no bound — a
+truncated or corrupt GAF faults during load. Entry lookup by name is a
+linear case-insensitive scan, first match wins; a name that is absent is a
+null sequence with no message.
 
 ## Unknowns and caveats
 

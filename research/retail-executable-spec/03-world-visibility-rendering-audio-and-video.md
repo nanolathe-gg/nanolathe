@@ -7629,6 +7629,12 @@ by the sharper question it turned into.
 
 ### Video and capture
 
+The single-player contract stops at the movie sequencer's observable
+behaviour — five `.zrb` cinematics, play-once, missing file skipped,
+library-driven cadence, skip on any character key or Alt+F4, the three
+verbatim failure texts — recorded in [08 R-OOS-01 §4]; everything below the
+library's ordinal calls is out of scope.
+
 - Smacker ordinal/API mapping, supported pixel formats, palette transfer,
   frame timing, dropped-frame handling, and audio synchronization · §9 ·
   static trace.

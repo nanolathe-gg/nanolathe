@@ -78,7 +78,7 @@ out-of-range value as "unset".
 | --- | --- |
 | `totalgadgets` | Declared element count; has no observed effect |
 | `panel` | Background art: GAF entry name via the same lookup rule as `name`. Empty when the screen uses a PCX background. |
-| `crdefault` | Button triggered by Return (name); exact behavior unconfirmed |
+| `crdefault` | Button triggered by Return (name). **Correction (2026-08-29):** this row said "exact behavior unconfirmed"; the executable's window-open routine resolves the name by a forward scan and, when the key is empty, binds Return to the first button whose name begins `OK` or `NEXT` (case-insensitive prefix), and likewise an empty `escdefault` to the first button beginning `PREV` or `Cancel` — see the executable spec [07 R-FE-01 §12] |
 | `escdefault` | Button triggered by Escape (name) |
 | `defaultfocus` | Gadget name that starts focused |
 | `[VERSION] { major=; minor=; revision=; }` | Required in all 368 retail GUIs, but **optional in the parser**: the executable's panel-header loader seeks the subsection and skips it silently when absent, leaving the three byte fields zero (see the executable spec doc 02 §6). Values are arbitrary in retail files. |
@@ -165,6 +165,17 @@ fields.
 - Every unit's first command page carries the same command gadgets whether
   or not the unit can use them; availability is enforced by game logic, not
   by the GUI data.
+- **Loader edges (2026-08-29, RWU-02-3, `[02 R-MALF-01 §5]`).** The panel
+  loader walks the top-level sections **by index in file order** — the
+  `GADGET<n>` names are not consulted — and `totalgadgets` is read and then
+  overwritten with the number of sections minus one (inert as authored).
+  `[COMMON]` is read only when present (an absent one leaves the gadget's
+  common fields unwritten); kinds 0–8 and 10 read their extra keys, any
+  other `id` reads only `[COMMON]`; a text box's `maxchars` is capped at
+  128. Gadget records are 347 bytes in a fixed 69,463-byte window record
+  with no count check (about 199 gadgets fit; more overrun the record). A
+  syntax error is fatal like any TDF; a missing panel file returns failure
+  to the screen.
 
 ## Retail corpus notes
 
@@ -180,8 +191,8 @@ dominate (4,421 of 5,840 gadgets).
 
 - The complete per-menu hard-coded event-name tables are engine-internal;
   the only way to enumerate them is inspection of the stock GUI files.
-- `crdefault`, `texturenumber`, `commonattribs`, `thick`, `help` have no
-  confirmed behavior. `colorf`/`colorb` are confirmed semantic GUI palette
+- `texturenumber`, `commonattribs`, `thick`, `help` have no confirmed
+  behavior (`crdefault` was on this list until 2026-08-29; closed above). `colorf`/`colorb` are confirmed semantic GUI palette
   fields, but their per-gadget defaults and every primitive consumer remain
   context-dependent.
 - Exact numeric semantics of `attribs` beyond the scrollbar values are

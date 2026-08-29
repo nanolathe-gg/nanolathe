@@ -124,13 +124,13 @@ what it doesn't know.
 | --- | --- |
 | `UnitName` | Short name; canonical ID and filename stem. Case-insensitive. |
 | `UnitNumber` | Numeric unit ID, documented as needing to be unique. The engine has no string for this key, so it is not how units are identified at runtime; the recording analyzer still uses the authored value as a candidate join for 0x09 unit type IDs and preserves duplicates or gaps as ambiguity. |
-| `Version` | Always `1` |
+| `Version` | Always `1` in retail files. **Read by the catalog loader** (floating accessor, default 0): `major = trunc(v)`, `minor = trunc((v − major) × 10)`; the unit is kept when `major < 3`, or `major = 3` and `minor ≤ 1` (the executable's own version is 3.1); otherwise it is compacted out of the catalog and the non-fatal `Error` box `Incompatible units found.  They will be ignored.  Please download the latest version of the game.` is shown once (`[02 R-MALF-01 §5]`). |
 | `Side` | `ARM` or `CORE` |
 | `Objectname` | 3DO model name in `objects3d/` (no extension) |
 | `Designation` | Free-form designation string. Cosmetic, and the engine cannot read it. |
 | `Name` | Display name |
 | `Description` | Selection/tooltip description |
-| `Copyright` | Retail files require the exact Cavedog copyright string (lore: units failed to load without it) |
+| `Copyright` | **Read by the catalog loader** (string accessor, 128 bytes): after the four characters at the year position are overwritten with `0000` the value must equal `Copyright 0000 Humongous Entertainment. All rights reserved.` byte for byte; a unit that fails is dropped from the catalog **silently** (and the same flag suppresses the `Incompatible units` box for that pass). The lore that units without the line fail to load is established, with the mechanism (`[02 R-MALF-01 §5]`). |
 | `GermanName`, `FrenchDescription`, `SpanishName`, `ItalianDescription`, `JapaneseName`, `PigLatinName`, … | Localized `Name`/`Description` variants — the pattern is the language name directly followed by `Name` or `Description`. **The engine honors them** via the language-prefixed accessor (see the correction above). |
 | `TEDClass` | Editor classification: `TANK`, `KBOT`, `PLANT`, `VTOL`, `WATER`, `SPECIAL`, `FORT`, `METAL`, `ENERGY`, `COMMANDER`, `CNSTR` … The engine cannot read it, so it drives the map editor only, never AI or gameplay. |
 | `Category` | Space-separated tag list (e.g. `ARM TANK LEVEL1 WEAPON NOTAIR NOTSUB`). Tags are matched by the per-slot `wpri_`/`wsec_`/`wspe_BadTargetCategory`, by `NoChaseCategory`, and by AI text files; tags need no central declaration. |
@@ -354,7 +354,10 @@ removes its shading entirely. See
   armored damage modifier with no authored source. This is the best available
   reading, not a primary source: no shipped file documents the key. Runtime
   fallback and damage behavior belong to the numbered behavior specification.
-- The `Copyright` requirement is community lore; not re-verified.
+- **Correction (2026-08-29, RWU-02-3).** This bullet previously read "The
+  `Copyright` requirement is community lore; not re-verified." It is now
+  verified by static trace: see the `Version` and `Copyright` rows above and
+  `[02 R-MALF-01 §5]`.
 - No key names the COB script — the `UnitName` → `scripts/<name>.cob`
   convention is engine behavior.
 

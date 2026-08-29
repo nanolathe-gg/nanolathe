@@ -573,11 +573,14 @@ the callbacks.
 The single-player new-game panel is `NEWGAME.GUI` (gadgets `PrevMenu`,
 `Start`, `Campaign`, `CampaignKnob`, `MissionsKnob`, `Missions`, `Side0`,
 `Side1`, `SIDENAME`, `Difficulty`, `Arm`, `Core`, `TEXT`; asset census). The
-front-end router opens it in two modes selected by one argument: **new
-campaign** (0) from the single-player menu's `NewCamp` control, and
-**any mission** (1) from that menu's `AnyMsn` control or from the results
-screen's `Missions`/`Start` route (§7). Both entries run the campaign-CD check
-first (§5).
+front-end router opens it in two modes selected by one argument.
+*Correction ([07 R-FE-01 §3], 2026-08-29):* this paragraph previously said
+mode **0** (new campaign) came "from the single-player menu's `NewCamp`
+control". Both `NewCamp` and `AnyMsn` pass mode **1** (any mission — the
+play-any layout with both lists); the mode-0 campaign-only layout is reached
+only from a shell phase that this executable never enters. The results
+screen's `Missions`/`Start` route (§7) also passes mode 1. All entries run
+the campaign-CD check first (§5).
 
 *Background and knobs.* Mode 0 counts `camps\*.TDF`: more than two files
 loads background `newcampaign4`; two or fewer loads `newcampaign4x` and sets
@@ -927,6 +930,11 @@ else:
    the chat commit callback ([07 §5 Chat]), which ORs a routing bit into
    the message's target mask when the flag is set — it is a chat-routing
    flag, not a simulation authority. Campaign leaves it clear.
+   *Correction (2026-08-29, [R-OOS-01 §2]): the reader is right but the
+   destination is wrong — the OR goes into the `+` command dispatcher's
+   route word (bit 2 = the cheat table), not the message's recipient mask.
+   The word is the cheat-enable gate: skirmish 1, campaign 0, multiplayer
+   the host's `Cheat Codes` bit.*
 5. **The save gate, first visit.** If a save bank is open and its `Summary`
    account lacks `BetweenMissions` (the in-battle marker, "Timing is fixed"
    above): for each of the ten slots the `Player%i` account (`i` = slot
@@ -2353,6 +2361,15 @@ AI. It repeatedly:
 Human, computer, open, and blocked slot states have different editing and
 readiness rules. The exact semantic name of every numeric state and every host
 privilege bit remains incomplete.
+
+**Out of scope (2026-08-29, RWU-08-6).** The whole battleroom — 67 functions
+in the ledger's `LOUNGE2.GUI` cluster plus the provider/connection screens —
+is outside Nanolathe's single-player scope; nothing in it is reached from the
+campaign or skirmish paths ([R-OOS-01 §3]). The only battleroom-authored
+values the single-player session reads are the lobby word's `Cheat Codes` bit
+(via its entry-time copy, [R-OOS-01 §2]) and the watching bit (loading-state
+table, [R-OOS-01 §2]); the skirmish screen writes the setup record instead
+([R-SKIR-01 §1]). The bullets above stay as a description, not a contract.
 
 ## Computer-controlled players
 
@@ -3924,11 +3941,14 @@ inferred).
 The executable also contains a code-checksum routine that returns zero
 unconditionally in retail 3.1, leaving its guarded "Code segment checksum
 error found when switching FE states." diagnostic branch dead. Self-checks run
-only when switching front-end states, never per tick. Residual: a separate
-orchestrator referencing numbered `.zrb` files remains untraced, including its
-guard relationship to the checksum path; the producer algorithm of packet
-`0x27`'s twelve opaque trailing bytes is unresolved; the exact three-byte
-throttle-acknowledgement format in the `0x28` receiver is not fully recovered.
+only when switching front-end states, never per tick. Residual: the producer
+algorithm of packet `0x27`'s twelve opaque trailing bytes is unresolved; the
+exact three-byte throttle-acknowledgement format in the `0x28` receiver is
+not fully recovered. (The earlier residual "a separate orchestrator
+referencing numbered `.zrb` files remains untraced, including its guard
+relationship to the checksum path" is withdrawn: the `.zrb` files are the
+five Smacker cinematics and their sequencer is the front-end movie player,
+[R-OOS-01 §4]; it has no relationship to the checksum path.)
 
 The four-accumulator checksum primitive and the map/terrain checksum state are
 established, but their on-wire exchange, cadence, and mismatch handling remain
@@ -3962,6 +3982,217 @@ gameplay events even if both remove effective player control.
 No complete live reconnection or late-join state-transfer protocol has been
 found. The behavior for a transient DirectPlay loss versus a permanent peer
 departure remains incomplete.
+
+### Closed — the single-player boundary [R-OOS-01 §1] — packets the local path still constructs (2026-08-29)
+
+Established by RWU-08-6 from a full read of the two send helpers, the
+receiver's entry, every constructor that hands a packet to a send helper (42
+call sites) and the gate at each site. Nanolathe implements neither
+DirectPlay nor the lobby; this block states exactly where the single-player
+(kind 1 campaign, kind 2 skirmish) contract stops. §1 packets, §2 lobby
+record, §3 the out-of-scope subsystems, §4 video, §5 corrections. The raw
+trail is kept out of the repo.
+
+**The two send helpers (Established).** Every packet the engine emits goes
+through one of two helpers. The *broadcast helper* first validates the
+sender (its slot must be live, its controller 1 or 2, its dropped byte
+clear; otherwise it returns 0 without sending). Then, **when the session is
+not networked, it returns 1 without sending anything** ([01 R-PLAT-01 §3]).
+The *direct helper* (one peer) applies the same sender test plus a target
+test (the target must be a remote, controller-3, undropped slot) and the
+networked test together, and **returns 0 when the session is not
+networked**. The "networked" bit is set at exactly one site — after the
+DirectPlay lobby-launch check succeeds in the front-end router — and is
+never set by the campaign, skirmish or load paths. No single-player caller
+inspects either helper's return value except the four script-run senders,
+which pass it up to interface callers that ignore it.
+
+**The receiver (Established).** The packet receiver returns 0 before
+touching any state when the session is not networked. Its single-player call
+sites — every later frame of the loading state, every frame of the
+end-of-battle report screen, the map-select refresh — are therefore no-ops;
+the tick executor calls it only on the multiplayer branch of the battle pump
+([01 §4.3]). Consequently no packet built in single player is ever
+*received*: the local effect of every packet below is the caller's own
+mutation, made before or after the (non-)send, never the handler's.
+
+**Packets constructed in kinds 1 and 2.** Type, declared length ("Declared
+packet types"), the single-player site, the gate at the site, and the local
+effect:
+
+| Type | Len | Constructed by | Gate at the site | Local effect (already applied by the caller) |
+|---:|---:|---|---|---|
+| `0x05` | 65 | chat commit: the `<%s%s%s> %s` line copied into a 64-byte text field | recipient mode 0, or a line beginning `+`, uses the broadcast helper; mode 3 the direct helper per marked slot; else the direct helper to one slot | the same line is then posted to the local message ring ([07 R-CAM-01 §2]) in every kind; the `+` dispatch has already run (§2) |
+| `0x06` | 1 | the keepalive request | loading state, every later frame, once per live human/computer slot (every kind); the battle pump's 60-unit keepalive is multiplayer-only | none |
+| `0x09` | 23 | unit allocator | none | the unit is already allocated ([05 R-SHARE-01 §8]) |
+| `0x0a` | 7 | occupancy/placement change (28 callers: order handlers, the death handler, the two placement helpers) | none | the caller applies the identical record locally right after the send |
+| `0x0c` | 11 | unit death | owner controller 1 or 2 | the death handler runs on the same record immediately after ([06 §12.1]) |
+| `0x0d` | 36 | the seven projectile spawn sites ([06 R-WPN-03 §1/§2]) | none | projectile already created |
+| `0x0e` | 14 | impact dispatch, two records per pair ([06 §9.3]) | none | impact already applied |
+| `0x0f` | 6 | tree burn (sub-case `0xfe`, when its third argument is 0) and feature damage (sub-case from the feature's byte, when above `0xfc`) | none | feature already ignited/damaged ([05 R-FEAT-01 §8/§9]) |
+| `0x10` | 22 | the four script-run senders (`StartBuilding`, `BeginTransport`, `AimPrimary…`, and the generic form) | none | at the traced site (`StartBuilding`, interface dispatch) the script has already been invoked locally through the COB entry before the sender is called ([04 R-COB-01]); the other sites were not re-read for ordering |
+| `0x11` | 4 | unit state transition | owner controller 1 or 2 | transition already applied |
+| `0x12` | 5 | build link | none | link already made |
+| `0x13` | 18 | the two sound-cue emitters ([03 R-AUD-01 §1]) | audio device open, channel mask non-zero, not muted | the sound is then started locally |
+| `0x19` | 3 | pause `{0x19, 0, bit}` and speed `{0x19, 1, speed}` | none | pause bit / speed words already written ([01 R-PLAT-01 §3]) |
+
+**Never constructed in kinds 1 and 2 (Established, gate named).** `0x0b`
+damage — built only when the victim's owner is a controller-3 (remote) slot;
+`0x14` ownership transfer — only when the new owner is controller 3; the
+`0x0f` sub-case `0xff` — kind 3 only; `0x1e`/`0x2a` loading progress — kind 3
+only; `0x20`/`0x24` lobby-record bulk and its reply — the sender tests the
+networked bit; the `0x2c` bit-stream — its one caller tests the networked bit;
+`0x02`/`0x26` probe and roster, `0x08`, `0x17` — reachable only from the
+network pre-load state (state 3, installed from the lobby screens) and the
+lobby screens; `0x1b` slot drop — built by the drop routine, whose callers are
+the `Reject <player>` confirmation, the lobby map viewer and the
+`TIMEOUT.GUI` screen; `0x28` — the scanner thread, started only on the
+networked path; the one-byte peer-ready poll — the kind-3 barrier. Kinds 1
+and 2 never hold a controller-3 slot: entry writes controllers 1 and 2 only
+([R-SKIR-01 §2], [R-ENTRY-01 §2]); a Gametype-2 save restored through the
+`Player%i` accounts is the one path that could — see "Multiplayer saves".
+
+**Implementation consequence.** A clean-room single-player engine needs no
+packet framing at all: every local mutation is made directly by the caller.
+The table exists so that the *ordering* retail imposes (chat posted after
+the `+` dispatch; the death handler after the death record is built; the
+sound started after its record) can be preserved where a doc cites it, and
+so that the pause/speed contract of [01 R-PLAT-01 §3] is read as a pure
+local bit flip.
+
+### Closed — the single-player boundary [R-OOS-01 §2] — the lobby record and `Cheat Codes` (2026-08-29)
+
+**Fields of the per-slot lobby record the single-player session reads
+(Established).**
+
+1. **Loading state, first frame, every kind:** the *watching* table is
+   filled from lobby-word bit 6 of every live slot's record beside the
+   participation table ([R-ENTRY-01 §1]). Writers of that bit in the
+   recovered set are the wire copy of packet `0x20` and the battleroom only,
+   so in kinds 1 and 2 the table is all-zero (Supported inference — the
+   table's readers were not traced; decider: static trace of the table's
+   readers).
+2. **Battle-entry tail, every kind** ([R-ENTRY-01 §8]): the local slot's
+   record has its low option nibble and two version bytes rewritten and its
+   four option words and unit-limit word read back into the setup summary.
+3. **Kind 2 unit limit** comes from the configured-limit global, not from a
+   lobby record ([R-SKIR-01 §6]).
+4. The record's *started* bit is only ever cleared by local code; its setter
+   is the wire copy. Every reader of it (the state-3 router, the host-slot
+   finder used by `TABMENU` in kind 3 and by `RESTRICT2`, the feature-damage
+   sender's host lookup, peer removal) therefore sees 0 in kinds 1 and 2
+   (Supported inference: bounded writer census).
+
+**`Cheat Codes` — closed.** The lobby word's bit 13 has exactly one writer:
+the battleroom's cheat toggle (the gadget state `2` sets it, any other
+non-zero state clears it — [R-SKIR-01 §11] names the overlay that displays
+it). It has one consumer outside presentation: **battle entry** copies it
+into a process word — kind 1 writes 0, kind 2 writes 1, kind 3 writes the
+host's bit — and that word has exactly one reader, the chat commit callback,
+which ORs **route bit 2 into the `+` dispatcher's route word** when the word
+is non-zero. Route bit 2 is what the mask-2 (cheat) command table matches
+([07 R-CAM-01 §6]). So: **in skirmish every mask-2 command dispatches; in
+campaign none does** (unless the developer bit supplies route `7`); in
+multiplayer they dispatch iff the host allowed `Cheat Codes`. The `+`
+dispatcher itself and the tokenizer never read the lobby word; the local
+path consults the lobby *bit* only through this entry-time copy. The
+doc 07 tail's "how the multiplayer receive path applies the lobby bit before
+re-dispatching a received `+` line" stays open and out of scope.
+
+**Correction to [R-ENTRY-01 §2].** That section said the word was "a
+chat-routing flag, not a simulation authority" whose reader "ORs a routing
+bit into the message's target mask". The reader was right, the destination
+wrong: the OR goes into the command dispatcher's *route* word, not the
+message's recipient mask (the recipient mode is forced to *everyone* only
+afterwards, and only when the dispatched entry's mask had bit 2 —
+[07 R-CAM-01 §6]). The word is the **cheat-enable gate**. The tail item
+"Which chat targets the routing bit … selects" is closed by this.
+
+### Closed — the single-player boundary [R-OOS-01 §3] — subsystems entirely out of scope (2026-08-29)
+
+The coverage ledger (raw corpus) tags a function OOS only when every caller,
+transitively, is lobby, DirectPlay, network or video code; a fixpoint over
+the whole call graph was run this unit and each pre-existing tag sampled.
+After this unit the OOS set is 247 functions:
+
+| Subsystem (ledger cluster) | Functions | What it is |
+|---|---:|---|
+| network packet drain | 113 | the receiver switch, custom-envelope encode/decode/compression, per-peer queues, the scanner thread, the `0x20`/`0x24` lobby-record broadcasters, the DirectPlay wrapper and its `DPERR_*` text table |
+| `LOUNGE2.GUI` (battleroom) | 67 | the heartbeat of "Lobby behavior", its row/ready/host/edit logic, the cheat/watching/fixed-location toggles |
+| front-end state machine (lobby part) | 16 | DirectPlay lobby connect, session enumeration, the `DPLAY CONNECTION` registry block, the network pre-load state |
+| `MODEM.GUI`, `SELPROV.GUI`, `NEWMULTI.GUI`, `SERIAL.GUI`, `TCP.GUI` | 13 + 12 + 6 + 4 + 3 | provider selection and connection screens |
+| `VIEWMAP.GUI`, `SELMAP` lobby handler, `TIMEOUT.GUI`, `RESTRICT2.GUI` | 5 + 1 + 1 + 1 | the lobby map viewer, the lobby's map-select handler, the peer time-out dialog, the restriction editor's row sorter ([R-SKIR-01 §10]) |
+| startup and shell pump | 3 | the `-N`/`-H` lobby-launch command-line handlers ([01 R-PLAT-01 §2]) |
+| battle host pump, unclustered | 1 + 1 | the DirectPlay guaranteed-flag setter; one accessor |
+
+Nine functions previously tagged OOS were on single-player paths and are
+retagged (the broadcast helper; the slot↔id lookups; the host lookup before
+the feature-damage packet; one script-run sender; the mover record
+constructor and destructor; the per-unit account constructor; the
+battle-entry lobby refresh) — their contracts live in the sections the
+ledger now cites. The *sections* of this document that are out of scope in
+their entirety are "Peer transport state", "DirectPlay transport", "Packet
+framing and dispatch" beyond the length/mask table §1 relies on, "Send pacing
+and batching", "Receive buffering", "Ping and adaptive timing", "Lockstep
+advancement" beyond the single-player scheduler facts it restates from doc
+01, "Synchronization and integrity checks", "Disconnect, resign, and peer
+loss", "Multiplayer saves" and "Lobby behavior"; their tail items are kept
+for exhaustiveness only.
+
+### Closed — the single-player boundary [R-OOS-01 §4] — the video boundary (2026-08-29)
+
+**What the single-player path plays (Established).** Five cinematics,
+`1.zrb` … `5.zrb`, resolved through the movie path joiner of
+[R-CAMP-01 §5], are played by the front-end router: at start-up, when the
+display is full-screen, `1.zrb` then `2.zrb` when the `PlayMovie` registry
+word is non-zero (miss → 1; the word is then written 0, so this runs once per
+install), else `1.zrb` alone unless the restricted-config flag of
+[01 R-PLAT-01 §2] (the `-N` switch) is set; the ending states of
+[R-CAMP-01 §6] play `3.zrb` or `4.zrb` followed by `5.zrb`; a further shell
+state plays `5.zrb` alone. The "`.zrb` orchestrator" that "Economy and
+integrity checks" listed as untraced is this sequencer; it has no relation
+to the checksum path (correction below).
+
+**What the sequencer does around the library (Established).** For one
+file: stop all sounds; join the path; **a missing file is skipped
+silently**; lock, clear and unlock the display; hide the cursor; then
+exactly one open → play → close pass (the repeat word that would loop it is
+written only by a dead debug routine); then the input queue is drained and
+the display cleared again. The open step reports, fatally through the modal
+of [R-ENTRY-01 §1], `Could not open movie file, please check filename in INI.` when
+the library cannot open the file, `Could not setup Direct Draw to play
+movie.` when no surface can be created, and the message box
+`Smacker Error` / `Unsupported pixel format.` when the display is neither
+8-bit indexed nor one of four 16-bit layouts (565, 555, a 565 variant with a
+6-bit green mask, and 655 — [03 §9]). Sound is enabled for the movie iff the
+display's full-screen flag is set.
+
+**What the frame loop observes back (Established).** It is a
+`PeekMessage` pump: with no message pending it asks the library whether the
+next frame is due and, when it is, steps one frame — only while the window
+has focus; frame cadence is therefore the library's (the file's frame rate),
+never the engine's 30 Hz clock, and the engine reads nothing but "due" and
+"palette changed". Playback ends when the frame index reaches the frame
+count − 1, or on **any character key** (`WM_CHAR`), or on Alt+F4
+(`WM_SYSKEYDOWN` with F4, which also posts the quit message). Nothing about
+the codec, frame buffers, audio mixing or ordinals is part of the contract;
+Nanolathe may substitute any decoder that honours "play once, skip on any
+character key, resume the shell".
+
+### Closed — the single-player boundary [R-OOS-01 §5] — corrections (2026-08-29)
+
+1. **[R-ENTRY-01 §2]** — the word written per kind at battle entry is the
+   cheat-enable gate of the `+` dispatcher, not a message-target routing
+   flag (§2 above).
+2. **"Economy and integrity checks"** said "a separate orchestrator
+   referencing numbered `.zrb` files remains untraced, including its guard
+   relationship to the checksum path". It is the movie sequencer (§4) and
+   has no guard relationship to any checksum; the residual is deleted there.
+3. **Doc 07 [R-CAM-01 §6]** — "the single-player path consults no cheat gate
+   — every mask-1 and mask-2 command below is live in skirmish and campaign"
+   is wrong for campaign: mask-2 commands are gated off in kind 1 (§2).
+   Doc 07 is corrected by its owner; this document records the finding.
+
 
 ## Save-file organization
 
@@ -5812,8 +6043,9 @@ finding. The recitals are deleted here only; the body sections and the
   campaign or skirmish battle (entry writes them only for multiplayer) ·
   [R-ENTRY-01 §3], [R-ENTRY-01 §9] · static trace of the speed words'
   writers (options screen / registry).
-- Which chat targets the routing bit set from the "local-authority" flag
-  selects · [R-ENTRY-01 §2] · static trace of the chat target mask (doc 07).
+- The readers of the loading state's *watching* table, and therefore
+  whether an all-zero table has any single-player effect · [R-OOS-01 §2]
+  · static trace of the table's readers.
 - Whether the first pump's budget is five ticks in practice ·
   [R-ENTRY-01 §9] · manual retail observation of the game-time counter at
   the first battle frame.
@@ -5852,7 +6084,11 @@ finding. The recitals are deleted here only; the body sections and the
 ### Networking
 
 Nanolathe does not implement multiplayer, so every bullet in this group is
-recorded to keep the specification exhaustive rather than to gate work.
+recorded to keep the specification exhaustive rather than to gate work. The
+boundary — which packets the single-player path still constructs, which
+lobby fields it reads, which subsystems are out of scope in full, and the
+video contract — is [R-OOS-01 §1]–[R-OOS-01 §4]; nothing below is needed by
+a single-player implementation.
 
 - Lobby slot-state values, host privilege, ready flag, blocked state, edit
   permission, and start condition · "Lobby behavior" · static trace.
@@ -5887,7 +6123,7 @@ recorded to keep the specification exhaustive rather than to gate work.
   observer, pause, speed, sharing, and game termination · "Lockstep advancement" ·
   static trace.
 - Map, resource, economy, and other hash contents, cadence, payloads, and
-  mismatch handling; the `.zrb` orchestrator; packet `0x27`'s
+  mismatch handling; packet `0x27`'s
   trailing-integrity-data producer algorithm; and the throttle-acknowledgement
   format in the participant-state receiver · "Synchronization and integrity checks" · static trace.
 - Reconnect, late join, spectator join, and temporary transport-loss behavior,

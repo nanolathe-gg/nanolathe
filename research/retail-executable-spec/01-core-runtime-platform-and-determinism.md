@@ -523,7 +523,10 @@ returns 0. Then: **if the session is not networked it returns 1 without
 sending anything** — the single-player pause is purely the local bit flip.
 Networked, it sends through the transport (one send when the transport is in
 broadcast mode; otherwise once per distinct remote peer id over the
-control-byte-3 slots).
+control-byte-3 slots). The single-player boundary for every other packet the
+local path still builds — and the direct helper's return of 0 when not
+networked — is [08 R-OOS-01 §1]; the `-N` restricted-config flag also
+suppresses the start-up cinematic ([08 R-OOS-01 §4]).
 
 **The receive side** ([01 §4.3], established earlier): sub-kind 0 copies the
 value byte into the pause bit; any other sub-kind passes the value to the

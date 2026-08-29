@@ -40,10 +40,29 @@ Real example — `sounds/BUTTON12.WAV` from `totala1.hpi`:
 
 PCM, 1 channel, 11025 Hz, 8-bit → a 471-sample button click.
 
+## How the engine reads it (2026-08-29, RWU-02-3)
+
+Owned by `[02 §7]` and `[02 R-MALF-01 §10]`. Detection reads four bytes at
+0: `DIGI` with `HSHD` at 8 and `SDAT` at 32 → legacy; else `RIFF` with
+`WAVE` at 8 → RIFF; else raw. Legacy: the 32-bit rate at byte 22 (11,000
+→ 11,025), the sample is bytes 40 … end of file (`size − 40`; the `SDAT`
+size field is not read), 8-bit mono. RIFF: chunks are walked from 12 with
+stride `size + 8` and **no odd padding**; the walk stops when the next
+offset reaches `RIFF size + 8`; the first `fmt ` must be ≥ 16 bytes and
+only channels (+2), rate (+4) and bits (+14) are read; the first `data`
+must have a size above 0; the declared `data` size must then read back in
+full or the sample is null. Raw: the whole file, header included, as 8-bit
+mono 11,025 Hz. A null sample is silent (the alias plays nothing, no
+message).
+
 ## Unknowns and caveats
 
-- Whether the retail engine accepts formats beyond the table above
-  (compressed codecs, other rates) is untested.
+- **Closed (2026-08-29, RWU-02-3).** Previously: "Whether the retail engine
+  accepts formats beyond the table above (compressed codecs, other rates) is
+  untested". The engine never reads the format tag: any `fmt ` chunk is
+  taken as PCM of its declared channel count, rate and bit depth, so a
+  compressed file is played as noise rather than rejected; any rate is
+  accepted as authored. See "How the engine reads it".
 - Volume/attenuation and 3D positioning are engine behavior, not stored in
   the files.
 

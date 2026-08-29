@@ -17,6 +17,11 @@ OpenTA uses `.tad` recordings as *observational evidence* for
 classic-engine behavior (see `RECORDER.md`). They are never an
 authoritative state format; that remains `openta.replay`.
 
+**Not a retail input.** The retail executable neither reads nor writes
+`.tad` files; the malformed-input matrix of `[02 R-MALF-01 §2]` lists the
+format only to say so. Everything below is a contract with third-party
+recorders, not with the engine.
+
 This document covers the file envelope, the TA wire-packet encodings
 (XOR/checksum, LZ77 compression), the recorder's "smartpak" re-encoding of
 unit-sync packets, and the subpacket taxonomy. It is the byte-level contract

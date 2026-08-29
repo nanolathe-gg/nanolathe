@@ -225,6 +225,18 @@ palette color at every orientation. See [3do.md](3do.md) "Face shading".
 - Weapon definitions reference beam colors by palette index
   (`color=165;` in [tdf.md](tdf.md)).
 
+## How the engine loads it (2026-08-29, RWU-02-3)
+
+`[02 R-MALF-01 §9]` owns this. The palette loader probes
+`palettes\<name>.PAL`; when the file is **missing or zero-length** it decodes
+`palettes\<name>.PCX` instead (fatal, path as message, if that fails too),
+packs the PCX's 768-byte trailer into 256 four-byte entries with the fourth
+byte 0, **writes the 1,024 bytes back to `palettes\<name>.PAL` on the host
+file system** (relative to the working directory, result ignored) and
+deletes the host files `palettes\PALETTE.ALP`, `.LHT` and `.SHD` so the
+derived tables are regenerated. An existing `.PAL` is read whole with no
+size or content check.
+
 ## Unknowns and caveats
 
 - The fourth PAL byte's intended meaning (flags?) is unknown; it is zero in
@@ -235,8 +247,11 @@ palette color at every orientation. See [3do.md](3do.md) "Face shading".
 - The exact `discByte → LHT level` mapping for the explosion flash and any
   multi-tick fading envelope are presentation tuning; the disc shape and the
   single-consumer binding are established, the level arithmetic is not.
-- Whether the engine ever consults 768-byte 3-byte-entry palettes is
-  unconfirmed; retail archives contain only the 1024-byte form.
+- **Closed (2026-08-29, RWU-02-3).** Previously: "Whether the engine ever
+  consults 768-byte 3-byte-entry palettes is unconfirmed". It does not: a
+  `.PAL` is loaded whole with no size check and read as 256 four-byte
+  entries, so a 768-byte file is misread (entries wrong by one byte each,
+  the last 64 taken from beyond the block). See "How the engine loads it".
 
 ## Sources
 

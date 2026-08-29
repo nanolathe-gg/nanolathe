@@ -396,8 +396,13 @@ dword" of §5 is a constant `1` in the image, so bit 2 is always present) and
 including the `+` — is still sent as ordinary chat; when the returned mask has
 bit 2 the outgoing recipient mode is forced to `0` (everyone), so a cheat is
 broadcast to all players. `Cheat Codes` as a game option is a multiplayer
-lobby word [08 R-SKIR-01 §11]; the single-player path consults no cheat gate
-— every mask-1 and mask-2 command below is live in skirmish and campaign.
+lobby word [08 R-SKIR-01 §11]. *Correction ([08 R-OOS-01 §2], 2026-08-29):*
+this paragraph previously said "the single-player path consults no cheat
+gate — every mask-1 and mask-2 command is live in skirmish and campaign".
+That is wrong for campaign: route bit 2 is supplied by the entry-time cheat
+word (skirmish 1, campaign 0, multiplayer the host's `Cheat Codes` bit), so
+mask-2 commands do **not** dispatch in campaign outside developer mode;
+mask-1 commands are live in every kind.
 **Unknown (out of scope):** how the multiplayer receive path applies the
 lobby bit before re-dispatching a received `+` line.
 
@@ -506,8 +511,10 @@ no gadget ([R-CAM-01 §4]).
 
 **Established fact — slider value mapping.** Every slider callback computes
 its value from the slider's knob position word `pos` and range word `range`
-(the widget model of §4; the range word is the authored `range` key per
-[fmt gui] — *Supported inference* on that identity, the widget unit owns it):
+(the widget model of §4). *Settled 2026-08-29:* the "range" word is the
+slider synthesiser's **computed track length** (`travel`), not the authored
+`range` key — [R-FE-01 §5] traces the read-out and the position writer; the
+earlier *Supported inference* that it was the authored key is withdrawn:
 
 ```
 value = (range < 2) ? 0 : trunc( float(pos) / float(range - 1) * max )     x87 division then multiply, __ftol
@@ -922,7 +929,7 @@ wizard:
 |---|---|---|---|
 | Main | `mainmenu.gui` | `frontendx.pcx`, `mainmenu.gaf`, `commongui.gaf` | `SINGLE` opens `single.gui`; `EXIT` enters the frontend close state |
 | Single-player chooser | `single.gui` | `singlebg.pcx`, `single.gaf`, `commongui.gaf` | `NewCamp` opens `newgame.gui`; `Skirmish` opens `skirmish.gui` directly |
-| Campaign/mission | `newgame.gui` | `newcampaign4.pcx` or `newcampaign4x.pcx`, `newgame.gaf` | Campaign and mission list gadgets are populated from discovered `camps` data; `Side0/Side1`, `Difficulty`, `Start`, and `PrevMenu` retain their authored callbacks |
+| Campaign/mission | `newgame.gui` | `playanygame4.pcx` (see correction), `newgame.gaf` | Campaign and mission list gadgets are populated from discovered `camps` data; `Side0/Side1`, `Difficulty`, `Start`, and `PrevMenu` retain their authored callbacks. **Correction (2026-08-29, [R-FE-01 §4]):** this row said `newcampaign4.pcx` or `newcampaign4x.pcx`; both `NewCamp` and `AnyMsn` open the play-any layout whose background is `playanygame4.pcx`, and the two `newcampaign4` files belong to the unreachable campaign layout |
 | Map selection | `selmap.gui` | `dselectmap2.pcx`, `commongui.gaf`, plus the TNT minimap surface | The map-selection callback opens the window through the window-open routine with flags `0x980`, then hands `DSELECTMAP2` to the bitmap cache, which installs it on the open window through the bitmap-install path. The authored `494×420` record at origin `(84,12)` is a panel window composed over the screen it was reached from; `MAPNAMES`, `SLIDER`, `MAPPIC`, `DESCRIPTION`, `SIZE`, `LOAD`, and `PREVMENU` remain window-local records placed at that origin |
 | Skirmish setup | `skirmish.gui` | `skirmsetup4x.pcx`, `skirmish.gaf`, `commongui.gaf`, `textures/logos.gaf` | `Player%d`, `Side%d`, `Color%d`, `Allies%d`, `Metal%d`, and `Energy%d` are appended by the runtime builder; their row geometry is `step=200/n`, `y=(180-(n-1)*step)/2+79` |
 
@@ -944,7 +951,9 @@ a parser rejection does not enter a caller-level recovery branch. The exact
 process-level symptom of either case is not established; in particular, this
 is not evidence that the screen proceeds with an empty layout. **Unknown** for
 the final missing/malformed-`.GUI` outcome; the absence of a caller check is
-**Established**. [07 §4]
+**Established**. [07 §4] (Refined in [R-FE-01 §12]: the `MSGBOX`, `YESORNO`
+and HUD build-page openers do check the result; every front-end screen opener
+does not.)
 
 The single-player PCX backgrounds in this table — `frontendx`, `singlebg`,
 the `newcampaign4`/`newcampaign4x` choice, `dselectmap2`, and `skirmsetup4x` —
@@ -1050,10 +1059,11 @@ glyph blitter then places a frame at
 `penX-XOffset, penY-normalizedYOffset`; the text loop passes the pen directly
 and does not pre-add either offset. Consequently, stock `hattfont12` glyphs
 whose raw `YOffset` is 11 rasterize one pixel below their pen because the
-capital-I height is 12. TODO(question): the exact text-pen arithmetic
-`y + trunc((height - 1 - fontHeight) / 2) + (stages != 0)` with the capital-I
-height plus two as the metric is not re-verified; the pen site that applies it
-was not located in this pass. The startup context also selects `fonts/COMIX.FNT`
+capital-I height is 12. The button text-pen arithmetic
+`y + trunc((height − 1 − metric) / 2) + (stages ≠ 0)`, with the metric the
+capital-I height plus two, is verified at the button painter's pen site
+([03 R-FONT-01 §6]; closed 2026-08-29, previously `TODO(question)`). The
+startup context also selects `fonts/COMIX.FNT`
 (the active slot of the font registry, chosen by the font-selection routine)
 for the fallback path; `SMLFONT.FNT` is a separate preloaded font slot. [07 §4]
 
@@ -1194,12 +1204,17 @@ horizontal frames. The staged common entries used by this menu are
 
 Campaign and map controls also retain data-driven display behavior. The
 campaign list is rebuilt from the discovered campaign documents and filters
-the `HEADER campaignside` value to the selected side, accepting `ALL`. For
+the `HEADER campaignside` value to the selected side, accepting `ALL`.
+**Correction (2026-08-29, [R-FE-01 §4]).** This paragraph continued: "For
 New Campaign, when the installed campaign set has two or fewer entries, the
 campaign and mission list controls are hidden and the side-specific
-`Arm Campaign` or `Core Campaign` file is selected directly. Play Any uses the
-same `newgame.gui` but exposes the campaign and mission lists and applies the
-retail compressed list rectangles at runtime.
+`Arm Campaign` or `Core Campaign` file is selected directly. Play Any uses
+the same `newgame.gui` but exposes the campaign and mission lists and applies
+the retail compressed list rectangles at runtime." That describes the
+opener's two layouts correctly but attributes the first to `NewCamp`: in the
+retail executable `NewCamp` and `AnyMsn` both open the play-any layout (both
+lists shown, compressed rectangles, `playanygame4` background), and the
+campaign-only layout is never reached.
 
 The `MAPNAMES` items are the OTA file stems the map-census routine collects
 from the `Maps\*.ota` census, kept with the case the archive records; the
@@ -1328,6 +1343,10 @@ resource/economy results, outcome text/art, and a continue/close flow.
 
 #### Chat
 
+Chat lines are posted to the local message ring after the `+` dispatch in
+every session kind; the `0x05` chat packet built first is dropped unsent in
+single player ([08 R-OOS-01 §1]).
+
 **The chat contract is closed.** Character token `0x0D` (Enter) opens chat
 through the battle hotkey dispatcher and plays the `SmallButton` cue. The
 dialog is `TALK.GUI`, except that the expanded `TALK2.GUI` form opens when a
@@ -1377,6 +1396,508 @@ terminator byte) plus the `SENDTO` toggle bit on every exit path. While
 `TALK.GUI` is present, held-arrow camera movement is suppressed; pointer-edge
 scrolling is never suppressed by chat.
 
+### Closed — the front-end controller: phases, substates and the pump [R-FE-01 §1] (2026-08-29)
+
+**Established fact.** The shell controller is one function called once per
+front-end frame by the host-mode-2 pump. At the top of every pass, if the
+*requested* substate byte differs from the *current* substate byte, the
+requested value is copied into the current one; the pass then switches on
+the *phase* byte and, inside most phases, on the current substate. Screen
+callbacks never touch the phase directly: they write a requested substate,
+and the next pass does the transition work. Two helper shapes exist: *set
+phase* (phase := n, both substates := 0) and *set substate* (both := n). The
+phases and their substate vocabularies are:
+
+| Phase | Family | Substate meanings (current byte) |
+|---:|---|---|
+| 0 | startup | one pass: in full-screen, play the logo movie `1.zrb` when `PlayMovie` is set (then clear it and persist the preferences) or when the once-per-process replay flag is clear; then → phase 2 |
+| 1 | intro | play `2.zrb`, → phase 2 |
+| 2 | main menu | 0 open `MAINMENU.GUI` (a pending DirectPlay lobby launch diverts to phase 0x10 first; a command-line multiplayer flag diverts to substate 6) then → 1; 1 idle (clear/present); 5 `SINGLE` → phase 7 (sets the single-player session bit); 6 `MULTI` → mission type 3, phase 0xf; 7 → phase 0; 8 `EXIT` → process quit; 9 `Credits` → phase 3 |
+| 3 | credits movie | play `5.zrb`, → phase 2 |
+| 4 / 5 | campaign-complete movies | 1: play `3.zrb` (Arm) / `4.zrb` (Core) then `5.zrb`, clear the session bit, → phase 2 with host mode 2 |
+| 7 | `SINGLE.GUI` | 0 open, → 1; 1 idle; 3 `PrevMenu` → phase 2; 10 `NewCamp` → open `NEWGAME` (play-any layout), phase 8; 0xb `Skirmish` → reload preferences, mission type 2, phase 9; 0xd → phase 10 and open the options root (no callback requests 0xd: phase 10 is unreachable, and `Options` opens the root as a child window over `SINGLE` instead); 0xe `AnyMsn` → open `NEWGAME` (play-any layout), phase 8 |
+| 8 | `NEWGAME.GUI` | 1 idle; 3 `PrevMenu` → phase 7; 0xf `Start` (campaign layout) → mission type 1, phase 0xb; 0x10 `Start` (play-any layout) → mission type 1, phase 0xc |
+| 9 | `SKIRMISH.GUI` | 0 open → 1; 2 `Start` accepted → raise the battle-start bit; 3 `PrevMenu` → phase 7 |
+| 10 | options (front-end) | 1 idle; 3 → phase 7. Unreachable: nothing requests substate 0xd of phase 7, and the only writer of substate 3 for this phase has no caller |
+| 0xb / 0xc / 0xd / 0xe | briefing (`MSNBRIEF.GUI`) reached from the campaign layout / the play-any layout / the end-mission screen / a between-missions save | 0 open → 1; 2 `Start` → raise the battle-start bit; 3 `PrevMenu`: 0xb → reopen `NEWGAME` (campaign layout), 0xc → reopen `NEWGAME` (play-any layout), 0xd → reopen `ENDMSN` under host mode 7, 0xe → host mode 2, phase 7 |
+| 0xf / 0x10 / 0x11 / 0x14 | multiplayer setup, lobby, network battle host, connection dialogs | out of scope; the edges that enter them are `MULTI` (phase 2 → 0xf) and the lobby-launch detector (phase 2 or 0xf substate 0 → 0x10 substate 0x12) |
+
+The pump that drives this is the host-mode-2 frame handler: it runs the
+controller, then tests the *battle-start bit* of the session word; when set
+it selects host mode 4 for mission type 1 (campaign load) or host mode 5 for
+type 2 (skirmish load) — these are the loading-screen transitions of
+§5 "The loading screen" — and otherwise leaves the front end running. Host
+mode 7 is the post-battle controller (§10). Every phase or substate write is
+preceded by a code-segment checksum probe whose failure text is
+`Code segment checksum error found when switching FE states.` followed by
+the source line and file; the message is a `MSGBOX` and does not abort.
+
+Three helpers recur below. The *CD check* takes 0 (a disc whose
+`TOTALA_ID` `[Contents]` names `Campaign`, reported as "Disc 2") or 1
+(`Multiplayer`, "Disc 1"), walks the drive letters, and returns the drive
+letter or zero; a no-CD build flag short-circuits it. On success every
+caller runs the *archive mount pass* (`rev*.gp3`, `*.ccx`, `*.ufo`, the
+first ten `*.hpi`, then the disc's `*.hpi`). The *mission record* is
+re-allocated with a type word — 1 campaign, 2 skirmish, 3 multiplayer,
+0 none — whenever a family is entered; the loading screen and every
+in-battle menu branch on that word. The cursor is switched to the busy
+shape while a screen opens and back to the arrow when a callback leaves.
+
+### Closed — the single-player transition table [R-FE-01 §2] (2026-08-29)
+
+**Established fact.** Gadget names are authored; the callback association is
+by name through the forward scan of §5 (first match wins). "MSGBOX" means
+the message box of §9 with the quoted text; it returns to the screen it was
+raised over. Every listed cue is the GUI sound played through the sound-cue
+table before the transition.
+
+| Screen | Gadget / key | Effect | Successor |
+|---|---|---|---|
+| `MAINMENU` | `SINGLE` (S) | cue `BigButton`; requested 5 | `SINGLE` |
+| `MAINMENU` | `MULTI` (M) | mount pass; needs the `multiplay` content root, else MSGBOX `Please insert the Multiplayer CD (Disc 1) and try again`; requested 6 | multiplayer (OOS) |
+| `MAINMENU` | `INTRO` (I) | cue `smlButton`; windowed → MSGBOX `Debug:  You must be in full-screen mode to play a movie.`; no disc (check 0 and 1) → MSGBOX `Please insert a Total Annihilation CD and try again`; else remember Shift-held (movie repeats while held), drain input, phase 1 | intro movie, then `MAINMENU` |
+| `MAINMENU` | `EXIT` (E) | requested 8 | process quit |
+| `MAINMENU` | `Credits` | cue `smlButton`; same full-screen and disc gates; requested 9 | credits movie, then `MAINMENU` |
+| `SINGLE` | `NewCamp` (N) | disc check 0 else MSGBOX (Disc 2); mount pass; cue `BigButton`; requested 10 | `NEWGAME` (play-any layout) |
+| `SINGLE` | `AnyMsn` | disc check 0; mount pass; cue `bigButton`; requested 0xe | `NEWGAME` (play-any layout) |
+| `SINGLE` | `Skirmish` (S) | disc check 1 else MSGBOX (Disc 1); mount pass; cue `skirmish`; requested 0xb | `SKIRMISH` |
+| `SINGLE` | `LoadGame` (L) | cue; opens the load dialog over `SINGLE` | `LOADGAME` (load mode) |
+| `SINGLE` | `Options` (O) | cue `options`; opens the options root as a child window over `SINGLE` (phase 7 unchanged; `PREV`/`CANCEL` pop it) | `STARTOPT` |
+| `SINGLE` | `PrevMenu` (P) | cue `Previous`; requested 3 | `MAINMENU` |
+| `NEWGAME` | `Start` (S), or a click in `Missions`, or in `Campaign` (campaign layout) | cue `bigButton`; disc check 0 else MSGBOX; mount pass; select the campaign (§4); load the mission; failure leaves the screen; success: side records fixed (player 0 → 0, player 1 → 1), preferences saved, requested 0xf (campaign layout) / 0x10 (play-any) | `MSNBRIEF` |
+| `NEWGAME` | `PrevMenu` (P) | cue `Previous`; requested 3 | `SINGLE` |
+| `NEWGAME` | `Difficulty` | cue `SmlButton`; cycles the difficulty word 0→1→2→0 | — |
+| `NEWGAME` | `Side0` / `Arm`, `Side1` / `Core` | cue `SideSelect`/`SideSelect2`; side word and the two side records rewritten; campaign (and mission) lists rebuilt | — |
+| `MSNBRIEF` | `Start` (S) | disc check 0 else MSGBOX; mount pass; stop narration; requested 2 | loading screen → battle |
+| `MSNBRIEF` | `PrevMenu` (P) | stop narration; cue `Previous`; requested 3 | `NEWGAME` / `ENDMSN` / `SINGLE` by phase (§1) |
+| `MSNBRIEF` | `SHUTUP` | stage 0 stops narration; stage 1 replays it | — |
+| `MSNBRIEF` | `TextRegion` / `MOREBAR` | cue `More`; next text page | — |
+| `SKIRMISH` | `Start` (S) | preflight of §5; requested 2 | loading screen → battle |
+| `SKIRMISH` | `PrevMenu` (P) | requested 3 | `SINGLE` |
+| `SKIRMISH` | `SelectMap` | opens the map chooser over `SKIRMISH` | `SELMAP` |
+| `SELMAP` (from skirmish) | `LOAD` (S) / `MAPNAMES` | copies the selection into the skirmish map name and loads its OTA; `MapName` label refreshed | `SKIRMISH` (default close) |
+| `SELMAP` | `PREVMENU` (Esc) | cue `Previous` | `SKIRMISH` |
+| `STARTOPT` / `PREFS` | `SOUND` / `MUSIC` / `SPEEDS` / `VISUALS` | cue `Options`; the page is merged into the open options window (§6) | same window |
+| `STARTOPT` / `PREFS` | `PREV` ("OK", Esc/Enter) | cue `Options`; preferences saved to the registry | previous screen |
+| `STARTOPT` / `PREFS` | `CANCEL` | cue `Previous`; every audio, interface and visual value restored from the entry snapshot | previous screen |
+| `ARMOPT` (Esc in battle) | `LOADGAME` / `SAVEGAME` / `PREFS` / `HELP` / `MISSION` / `EXIT` / `OK` | §7 | `LOADGAME` / `LOADGAME` / `PREFS` / `HELP` / `BRIEFING` or `GAMEOPTIONS` / `EXITMENU` / battle |
+| `TABMENU` (Tab) | `OPTIONS` / `SHARE` / `CONTROL` / `ALLIES` / `CANCEL` | §7 | `ARMOPT` / `SHARE` / `CONTROL` / lobby allies (OOS) / battle |
+| `EXITMENU` | `MAINMENU` / `EXITGAME` / `RESTART` / `CANCEL` | §7 | `YESORNO` / `YESORNO` / `RESTART` / battle |
+| `YESORNO` (surrender) | `CHOICE1` "Yes" (Y) | stop sounds; teardown; main-menu variant → host mode 1 → front end; exit variant → quit | `MAINMENU` or process quit |
+| `YESORNO` | `CHOICE2` "No" (N, Enter, Esc) | — | battle |
+| `RESTART` | `RESTART` | disc check by mission type else MSGBOX; mount pass; difficulty := stage; restart flag raised | battle restart (consumer: doc 08) |
+| `RESTART` | `CANCEL` (Esc/Enter) / `Difficulty` | — | battle |
+| `HELP` | `Page` | page loaded (§7) | — |
+| `HELP` / `BRIEFING` / `GAMEOPTIONS` / `MSGBOX` / `CDCHECK` | `OK` | default close | caller |
+| `LOADGAME` (save) | `LOAD` ("OK"/Enter), `GAMES`, `GAMENAME` | writes `SAVEGAME\<name>.SAV` when the name box is non-empty (§8) | — |
+| `LOADGAME` (save) | `DELETE` | deletes the selected `.SAV`, re-enumerates | — |
+| `LOADGAME` (load) | `LOAD` / `GAMES` | validates and applies the save (§8); battle-start bit | loading screen → battle, or `MSNBRIEF` for a between-missions save |
+| `LOADGAME` | `CANCEL` | — | caller |
+| `ENDMSN` | `Start` (S) / `Missions` | disc check 0 else MSGBOX; mount pass; load the chosen mission; phase 0xd | `MSNBRIEF` |
+| `ENDMSN` | `MainMenu` (M) | phase 2, host mode 1 | `MAINMENU` |
+| `ENDMSN` | `LoadGame` / `SaveGame` | dialogs over `ENDMSN` | `LOADGAME` |
+| `ENDMSN` | `Difficulty` | cycles the difficulty word and the skirmish difficulty | — |
+
+Asset failure: every opener in this table goes through the common window
+open of §5 "Frontend asset failure boundaries"; the `MSGBOX` opener and the
+four `YESORNO` openers are the exception and test the returned window for
+null (a missing `MSGBOX.GUI`/`YESORNO.GUI` silently shows nothing and the
+caller continues). The backgrounds named below go through the fatal bitmap
+loader of that section. **Established.**
+
+### Closed — startup, the movies and `MAINMENU` [R-FE-01 §3] (2026-08-29)
+
+**Established fact.** Movies are files `Data\<n>.zrb`; a missing file is
+skipped silently (the player is entered only when the file exists). `1.zrb`
+is the logo, `2.zrb` the intro, `3.zrb`/`4.zrb` the Arm/Core campaign
+endings, `5.zrb` the credits. The logo plays only in full-screen and only
+when the `PlayMovie` preference is set (it is then cleared and the
+preferences persisted, so it plays once per install) or when the
+process-level replay flag is clear; the intro after it is unconditional in
+that pass. Movie playback loops while the "Shift held at `INTRO`" latch is
+set and drains the input queue before returning.
+
+The shell loader closes every open window, clears the display, opens
+`MAINMENU.GUI` with the deferred-fill flag, installs the callback and the
+per-frame shimmer tick (§5 SPARKS), loads `bitmaps\FrontendX.pcx`, starts
+the `BGM` front-end loop ([03 R-AUD-01 §5]), rebuilds the semantic colour
+map from `palettes\guipal.pal`, selects the `COMIX` font, and writes the
+version string `v3.1` into the `DebugString` label (authored inactive;
+shown, and moved left by half its rendered width). Four once-per-process
+prompts follow, in order: `YESORNO` `Close Windows CD Player?` (only when a
+CD-player process is detected; `CHOICE1` closes it), a `MSGBOX` warning
+about the installed DirectX version, `No sound driver is available for
+use.` when the sound device failed, and the `Revision.GPF` version check of
+[02 §6].
+
+`MULTI` requires the `multiplay` content root (a directory/archive probe)
+rather than a disc; `INTRO` and `Credits` require full-screen and either
+disc. The `EXIT` substate quits through the post-shutdown path directly; no
+confirmation is asked.
+
+### Closed — `SINGLE`, `NEWGAME` and the briefing screens [R-FE-01 §4] (2026-08-29)
+
+**Established fact — `SINGLE.GUI`.** Opened with no flags over a cleared
+display, background `singlebg`; the mission record is re-allocated as type 1
+on entry. The registry `side` value (0 Arm, 1 Core) is written into the
+local player's side record and its inverse into the next slot. `AnyMsn` is
+authored inactive and is shown only when the `AllMissions` preference bit
+is set. On a Spanish install the `Skirmish` gadget's text-status byte is
+set to `0x73` (a layout tweak; its consumer is the button text renderer).
+
+**Established fact — `NEWGAME.GUI` has two layouts, and the shell reaches
+only one.** The opener takes a flag: 0 selects the *campaign* layout
+(background `newcampaign4` when more than two `camps\*.tdf` exist, else
+`newcampaign4x` with the campaign list hidden and the side's `Arm Campaign`
+/ `Core Campaign` document selected directly), 1 selects the *play-any*
+layout (background `playanygame4`; `Campaign` and `CampaignKnob` moved to
+y = 308 with height 48, `Missions` height 62; both lists shown and filled).
+Both `NewCamp` and `AnyMsn` reach the opener through controller substates
+whose call sites pass 1 — verified against the raw call sites, not only the
+decompilation. The only call with 0 is the `PrevMenu` return edge of phase
+0xb, and phase 0xb is entered only by a `Start` issued from the flag-0
+layout; the campaign layout is therefore unreachable in this executable and
+`newcampaign4`/`newcampaign4x` are never loaded. **Correction** to the
+"Retail closure for the single-player menu slice" table and to the
+paragraph "For New Campaign, when the installed campaign set has two or
+fewer entries…" above: both described the flag-0 layout as the `NewCamp`
+path. What differs between `NewCamp` and `AnyMsn` is only the sound cue and
+the substate number; the screen, background and lists are identical. The
+same attribution ("new campaign (0) from `NewCamp`") appears in
+[08 R-CAMP-01 §3], whose description of the two layouts is otherwise exact;
+that sentence needs the same correction.
+
+The campaign list is rebuilt for the current side (the campaign-side filter
+of [08 R-CAMP-01 §2]); selecting a `Side0`/`Arm` or `Side1`/`Core` button
+rewrites the side word, both side records, and both lists. `Difficulty` is
+a three-stage button cycling the difficulty word 0→1→2→0, initialised from
+the registry `Difficulty`. `Start` (or a click in `Missions`) loads the
+campaign named by the `Campaign` selection and the mission at the
+`Missions` selection index through the mission loader; failure keeps the
+screen open with no dialog; success writes the two side records (player 0
+side 0, player 1 side 1 — the side *bytes* of the lobby records, distinct
+from the side word), saves the preferences, and requests the briefing.
+
+**Established fact — `MSNBRIEF.GUI`.** Background `mbrief<planet>`, the
+planet tables of "Single-player and campaign" above, the per-mission wind
+draw, `SOLARSYSTEM` hidden, `SHUTUP` stage 1 (narration on), the wrapped
+briefing text paged through `TextRegion`/`MOREBAR` ([R-HUD-03 §10]), and
+narration started through the mission's narration key (skipped under host
+mode 6). `PrevMenu` returns to the screen the briefing was reached from
+(§1, phases 0xb–0xe). The in-battle `BRIEFING.GUI` (`ARMOPT` → `MISSION`
+in a campaign) is the same text and pager over background `igmbrief`, with
+`OK` closing it.
+
+### Closed — `SKIRMISH` start preflight and `SELMAP` [R-FE-01 §5] (2026-08-29)
+
+**Established fact.** The row controller, alliance icons, resource steps and
+colour rules are closed in "Retail closure for the single-player menu
+slice" and [08 R-SKIR-01]; this section adds the edges. On entry the
+difficulty word is loaded from the skirmish record's difficulty, and a map
+name that no longer resolves is replaced by the first map of the census.
+`Start` runs, in order: cue `BigButton`; disc check 1, whose failure raises
+the Disc 1 `MSGBOX` **and then continues** (the check gates nothing here —
+a retail quirk, not a Nanolathe contract to copy); the mount pass; the map
+terrain must load (`The terrain for the selected map does not exist.`); at
+least one `Computer` and at least one `Player` row (`There must be at least
+one player and one computer opponent`); the map's start-position count must
+be at least the row count (`There are too many players enabled for this
+map`); the alliance preflight of that section (`All players may not be in
+the same allied group.`); then the row count is stored, the slots written,
+the preferences saved, and the battle-start substate requested. Each
+failure `MSGBOX` returns to `SKIRMISH`. `LineOfSight` is a three-stage
+cycle over the record's two words (lineofsight, lostype): (0,·)→(1,1)
+"Terrain elevations affect a unit's view.", (1,1)→(1,0) "…do not affect…",
+(1,0)→(0,1) "All mapped terrain is visible."; `CommanderDeath`,
+`StartLocation` and `Mapping` toggle their word and write the matching help
+line into `HELPTEXT`.
+
+`SELMAP.GUI` opened from skirmish uses placement flags `0x880` (the lobby
+opener uses `0x980` and keeps the previous name for `PREVMENU` restore);
+an empty census raises `There are no skirmish maps to choose from` and does
+not open. The map census reads `Maps\*.ota`, keeps maps that pass the
+multiplayer-capable filter, and switches the cursor to busy while scanning.
+
+### Closed — the options family and the slider arithmetic [R-FE-01 §6] (2026-08-29)
+
+**Established fact — window.** The options root is `STARTOPT.GUI`
+(front end, background `options4x`) or `PREFS.GUI` (in battle: the
+options-open bit is set and, outside a multiplayer game, the pause bit).
+Entering copies the current window surface to a `FLIPSURFACE` backup and
+allocates a 300×480 `BKUPSURFACE`; it snapshots the 83-byte preference
+block, the two session mapping/LOS bits, the game speed, the scroll speed,
+the mixer state and the 100-entry CD list — the `CANCEL` and per-page
+`UNDO` sources. `MUSIC` is grayed when no CD device exists. The four page
+buttons open their `.GUI` with the *merge* flag (`0x200`): the page's
+gadgets are appended to the open window (centred inside its `PANEL` when
+one exists); in battle the `…RT.GUI` variants are used, the window is
+widened by 150 and a `PANEL` gadget synthesised, and gadgets whose names
+begin `MAP` or `VID` are hidden. `PREV` ("OK") saves every preference to
+the registry (§11); `CANCEL` restores the snapshot and re-applies gamma and
+volumes. Leaving through the tab-close path writes requested substate 3.
+
+**Established fact — `VISUALS` / `VISUALRT`.** `ANTI`, `BSHADOWS`, `SHADING`
+are two-stage buttons bound to bits 1, 4, 5 of the display option word
+([02 §3]); `BSHADOWS` also copies bit 4 into bit 3 and bit 3 into bit 2,
+so one control drives `FeatureShadows`, `VehicleShadows` and `Shadows`. In
+battle each change relights the terrain. `RESTORE` sets bits 1–5, gamma 12
+and (front end only) 640×480 with `DitheredFog` cleared; `UNDO` restores
+bits 1–6, gamma, and (front end only) the display size from the snapshot;
+both reopen the page. `VIDSLDR` indexes the display-mode table (sorted
+ascending by width then height, modes below 640×480 dropped) and writes
+`DisplaymodeWidth`/`Height`; `VIDVAL` shows `%d X %d`. `SELVMODE.GUI` is
+the stand-alone form of the same slider; its opener branch has no live
+caller (every call site passes the merged-page flag), so it is never shown.
+
+**Established fact — `SPEEDS` / `SPEEDSRT`.** `GAME` (max 21) → game
+speed, applied at once through the speed setter of [R-CAM-01 §3];
+`SCREEN` (max 65) → scroll speed byte; `TXTSCROL` (max 20) → `textscroll`,
+label `%d secs`; `MAXLINES` (max 30) → `textlines`, label `%d` or the
+`0`-text; `LEFTCLICK` two stages → the `Interface Type` word
+([R-CAM-01 §5]); `UNITCHAT` three stages → `unitchattext := stage × 5`.
+`RESTORE` sets textscroll 10, textlines 10, game speed 10, scroll speed 32,
+`LEFTCLICK` 0, unitchat 10, unitchattext 5; `UNDO` restores the snapshot.
+After the page opens every slider's value callback runs once so the labels
+match. Clamps: `GAME` value < 1 → 1; `SCREEN` value ≤ 1 → 1; `MAXLINES`
+value < 0 → 0; the others none.
+
+**Established fact — slider arithmetic** (verified in the raw float code):
+
+* Read-out, on every knob move: `value = trunc(pos / (travel − 1) × max)`
+  where `pos` is the knob position, `travel` the knob travel length the
+  scrollbar synthesiser computes (arrow length − 6 vertical, width − arrow
+  length − 4 horizontal — a computed track length, not the authored
+  `range`), and `max` the per-slider maximum above; `travel < 2` reads 0.
+* Position, on page open: `x = min(value, max) × (travel − 1) × (1/max)`
+  with the reciprocal stored as a single-precision constant (1/20, 1/21,
+  1/65, 1/30; `VIDSLDR` divides instead); then `pos = trunc(x)`, and if
+  `x − pos ≠ 0` the position is `trunc(x + 1)` — a ceiling for non-integral
+  `x`, not a rounding.
+* `GAMMA` (max 20): the stored integer `g` is applied as the palette factor
+  `0.5 + g / 24` (12 → 1.0, 0 → 0.5, 20 → 1.333), and the wave/CD volumes
+  are re-pushed (`v << 10`) whenever it changes.
+
+`SOUND`/`MUSIC` pages: gadget maps and effects are closed in
+[03 R-AUD-01 §2] and [03 R-AUD-01 §4]; nothing here re-traces them.
+
+### Closed — the in-battle menus [R-FE-01 §7] (2026-08-29)
+
+**Established fact.** `ARMOPT.GUI` (Escape; flags `0x800`) grays `SAVEGAME`
+and `LOADGAME` in a multiplayer game, relabels `MISSION` to `Settings` for
+skirmish and multiplayer, sets the pause bit outside multiplayer and pauses
+audio; its close clears both and the options-open bit. Buttons: `LOADGAME`
+/ `SAVEGAME` → the two `LOADGAME.GUI` modes (§8); `PREFS` → the options
+root (§6); `HELP` → `HELP.GUI` (flags `0x1881`, background `dhelp`) whose
+`Page` three-stage button loads page `p` of `gamedata\help.tdf` section
+`[Help]`: keys `Line<n>` for `n = 17p … 17p+16`, each split at `|` into a
+key column (x 40, width 78) and a description column (x 125, width 300),
+rows from y 50 in steps of 18, both localised; `MISSION` → `BRIEFING.GUI`
+in a campaign, else `GAMEOPTIONS.GUI` (flags `0x1881`, background
+`GameSettings`): read-only rows *Commander Death* (`Game Continues` /
+`Game Ends` / `Deathmatch`), *Starting Locations* (`Random`/`Fixed`),
+*Mapping Mode* (`Mapped`/`Unmapped`), *Line of Sight* (one of three
+labels selected by the session's two LOS bits), then in multiplayer
+*Cheat Codes* and *Watching* (`Disallowed`/`Allowed`) and otherwise
+*Difficulty* (`Easy`/`Medium`/`Hard`), then *Map*, *Starting Metal*,
+*Starting Energy* (lobby words × 100 in multiplayer, the skirmish record
+otherwise) and *Max Units*; `EXIT` → `EXITMENU.GUI`; `OK` → close.
+
+`TABMENU.GUI` (Tab) is closed in the chat/menus note above; its `OPTIONS`
+sets the options-open bit and opens `ARMOPT`, `SHARE` opens the transfer
+dialog [R-HUD-03 §9], `CONTROL` opens `CONTROL.GUI` (host-only player
+control: `WATCHING` and `GAMEOPEN` toggles of the lobby word, `LIVEPLYR<n>`
+→ a `YESORNO` "Reject: <name>" that kicks the peer — multiplayer only, edge
+recorded, semantics out of scope), `ALLIES` the lobby alliance panel
+(out of scope).
+
+`EXITMENU.GUI` (flags `0x1800`, centred) shows `RESTART` (authored
+inactive) only for campaign and skirmish, and hides `MAINMENU` when the
+session was launched from a DirectPlay lobby. `MAINMENU` and `EXITGAME` set
+the exit-kind word (0 / 2), close, and open `YESORNO` (flags `0x1000`)
+titled `Surrender this battle and return to main menu?` / `Exit the Battle`
+(lobby-launched) or `Surrender this battle and exit to Windows?`, with both
+Enter and Escape bound to `CHOICE2` ("No") and focus on it. `Yes` stops all
+sounds and, for kind 0/1, tears the battle down, closes every window down
+to the HUD, clears, and selects host mode 1 — the *return to front end* handler:
+phase 2, session bits 0/2/3 cleared, mission record type 0, victory bits
+cleared, then host mode 2 — so the next frame opens `MAINMENU`; for kind
+2 it raises the surrender bit and quits.
+
+`RESTART.GUI` (flags `0x1000`, background `drestart`) wraps the map name
+into `MISSIONNAME`/`MISSIONNAME1` and focuses `Difficulty`; `RESTART` does
+the disc check for the mission type, the mount pass, stores the
+`Difficulty` stage and raises the restart request word (its consumer, the
+restart itself, is described from the campaign side in [08 R-CAMP-01 §8];
+the reader in the battle pump is not cited here · static trace).
+
+### Closed — save and load [R-FE-01 §8] (2026-08-29)
+
+**Established fact.** One `LOADGAME.GUI` serves both directions. *Save*
+(flags `0x880`, background `DSAVEGAME2`, from `ARMOPT`/`ENDMSN`): the pause
+bit is set, `SAVEGAME\` is created, the list is filled with descriptions,
+`DELETE` is hidden when the list is empty, `GAMENAME` becomes the text
+entry with focus, `LoadGame` is hidden. `LOAD`/`GAMES`/`GAMENAME` with a
+non-empty name writes `SAVEGAME\<GAMENAME>.SAV` through the save writer of
+[08 R-SAVE-02] (the name, not the description, is the file stem); `DELETE`
+deletes the selected file and re-enumerates. *Load* (flags `0x980`,
+background `DLOADGAME2`, from `SINGLE`/`ARMOPT`/`ENDMSN`): an empty
+`SAVEGAME\*.SAV` set closes the window and raises `There are no saved games
+to choose from`; `DELETE`, `GAMENAME` and `SaveGame` are hidden. The
+enumerator reads every `.SAV`'s `Description` and drops files without one,
+so the list index is over described saves only. Selecting a row fills
+`GAMENAME` (description), `RADAR` (the `Radar Image` block when present),
+`GAMETYPE` (`???` when `Players` is 0, `Single` for type 1, else
+`Skirmish (%d players)`), `CAMPAIGN` + `CAMPTEXT` (type 1 only),
+`MISSION` (`Mission` or `Map`), `TIME` (`%02d:%02d:%02d` of `Game Time`),
+`SIDE` and `DIFF` (`Easy`/`Medium`/`Hard`).
+
+`LOAD` validates before applying: `Gametype` 1 needs disc 2, 2 needs disc
+1 (each else the matching `MSGBOX`), anything else is `Invalid savegame
+file`; then the mount pass, the arrow cursor, the `summary` section applies
+`Gametype` (mission record), `Campaign`, `Side`, `Difficulty`, the two side
+records (type 1), `Mission` (the map must load — else `Invalid savegame
+file`), `Thumbs` into the 25-byte mission-thumb string (or the `U` reset),
+and for type 2 `Players`, `CommanderDeath`, `Location`, `Mapping`,
+`LineOfSight`, `LineOfSightType` into the skirmish record; the battle-start
+bit is raised under host mode 2. A campaign save flagged `BetweenMissions`
+instead sets the between-missions bit, drops the handle, clears the
+battle-start bit and enters phase 0xe — the briefing of the next mission.
+
+`SAVELIST.GUI` / `LOADLIST.GUI` are the unit-restriction list files
+(`SAVEGAME\*.LST`) of the lobby `RESTRICT2` screen (its `Save`/`Load`
+buttons); they share the enumerator shape and the `There are no saved
+lists to choose from` refusal. Edge recorded; the restriction semantics are
+07-1b's.
+
+### Closed — dialog primitives [R-FE-01 §9] (2026-08-29)
+
+**Established fact — `MSGBOX`.** The opener takes (text, width, showOK,
+autoWidth). The text is localised, wrapped to `width`, and split at `\n`
+into one centred `TEXT` label per line at `y = 20 + n × (fontHeight + 5)`;
+the panel width is `max(line widths) + 20` when `autoWidth`, else `width`;
+the height is `lines × 25 + titleHeight + 40`; the window is centred at
+`((W − w) / 2, (H − h) / 2)`; every label is widened to the panel; `OK`
+(authored Esc/Enter default) is placed at `(w − okW − 15, h − okH − 15)` or
+hidden when `showOK` is 0 (the box then closes only through a caller's
+close). One GUI pass runs immediately so the box paints before the caller
+continues. The call sites in this document use widths 200 (disc prompts),
+320 (map/save refusals), 480 (skirmish preflight), 500 (checksum and sound
+warnings), and the checksum text width `+ 20` for pending lobby errors.
+
+**Established fact — `YESORNO`.** Four openers: the CD-player question
+(§3), the surrender/exit question (§7), the lobby reject question
+(`%s: %s` from `Reject` and the player name, flags `0x100`), and the
+multiplayer `You're out!  Continue Watching?` (flags `0x900`, `Yes` clears
+the watching bit and refreshes the HUD, `No` raises the surrender bit).
+Each writes `Yes`/`No` into `CHOICE1`/`CHOICE2`, tests the window for
+null, and sets the Enter/Escape defaults itself (§12).
+
+`CDCHECK.GUI` is raised only by the post-battle machine (§10) when a
+campaign ends and disc 2 is absent; `OK` re-checks and advances, else the
+Disc 2 `MSGBOX`. `TIMEOUT.GUI` (a lobby peer silent for `timeout × 30`
+ticks) and `REPORT.GUI` (score reporting through `reporter.dll`, with the
+`Unable to initialize scores reporting.` `MSGBOX` over background
+`ReportError`) are multiplayer-only; edges recorded, semantics out of scope.
+
+### Closed — the post-battle machine and `ENDMSN` [R-FE-01 §10] (2026-08-29)
+
+**Established fact.** Host mode 7 is the results controller: its eight
+states, the darkening fade, the glamour fade-in, the `Click to continue.`
+prompt, the outcome-art preparer and the campaign-complete branch are
+closed in [08 R-CAMP-01 §6], and the `ENDMSN.GUI` population, control set,
+next-mission selection and progress write in [08 R-CAMP-01 §8]; nothing
+here re-traces them. This section adds the edges into and out of that
+machine as the transition graph sees them:
+
+* State 4 opens `CDCHECK.GUI` (flags `0x101`, `OK` bound to Enter) only
+  for a campaign whose disc 2 is absent; `OK` re-runs the disc check and,
+  on success, sets state 5, else raises the Disc 2 `MSGBOX` (§9).
+* The campaign-complete branch of state 5 hands control back to the shell
+  controller: windowed → phase 2 (`MAINMENU`); full-screen → phase 5 (Core)
+  or phase 4 (Arm), the ending-movie phases of §1, which play `4.zrb` /
+  `3.zrb` and then `5.zrb` before phase 2. Both leave host mode 7 for host
+  mode 2.
+* `ENDMSN` `Start` / `Missions` enters phase 0xd (substates 0): the next
+  pass opens `MSNBRIEF` for the chosen mission under host mode 2; that
+  briefing's `PrevMenu` (phase 0xd substate 3) reopens `ENDMSN` and returns
+  to host mode 7 at state 7 (the statistics rows re-animate). `MainMenu`
+  enters phase 2 under host mode 1, the *return to front end* handler of
+  §7. `LoadGame` / `SaveGame` open the §8 dialogs over `ENDMSN`.
+* `Difficulty` cycles the difficulty word and the skirmish record's
+  difficulty together, with the `SKirmish` cue.
+* Closing `ENDMSN` frees the palette and fade tables and the frame copy,
+  restores the saved gamma factor, and, when the session was launched from
+  a DirectPlay lobby, returns to it (out of scope).
+
+The `ENDMSN` gadget set is authored entirely inactive; the opener's control
+set of [08 R-CAMP-01 §8] is the only thing that shows any of it. The
+"route" predicate there — campaign and (has a next mission or the mission
+was not won) — is the same test the opener and the gadget-set helper both
+evaluate.
+
+### Closed — registry write census and readers [R-FE-01 §11] (2026-08-29)
+
+**Established fact — who persists.** The preference saver (every DWORD and
+string name of [02 R-KEYS-01 §5], plus `FixedLocations`, which the loader
+never reads and no screen writes — inert) runs at: the logo-movie pass
+(after clearing `PlayMovie`), options `PREV`/"OK", `NEWGAME` `Start`,
+`SKIRMISH` `Start`, the lobby `START` (out of scope), and shutdown. No
+screen writes a value directly; every screen edits the global and relies on
+one of those saves. Consequently `CANCEL` on the options root discards
+unsaved edits made on any page, while edits made on the in-battle pages and
+left by `PREV` persist at the next save point.
+
+**Established fact — screen → value → reader**, for the rows [02 R-KEYS-01
+§5] lists as Unknown:
+
+| Value | Written by | Read by |
+|---|---|---|
+| `DisplaymodeWidth` / `DisplaymodeHeight` | `VISUALS` `VIDSLDR`, `RESTORE` (640×480), `UNDO` | the skirmish/campaign load transitions compare them to the current window size and, when different, resize the window, re-select the mode and re-create the offscreen; the lobby copies them into the session record | 
+| `DisplaymodeDepth` | nothing | loader only: equality with 256 gates the `Games` read ([02 R-KEYS-01 §3]) |
+| `Gamma` | `VISUALS` `GAMMA`, `RESTORE` (12) | applied as the palette factor `0.5 + g/24` at battle init and at every slider move |
+| `DitheredFog` | `VISUALS` `RESTORE` clears it (front end); no gadget sets it | fog presenter (doc 03) — reader not traced here |
+| `SwitchAlt` | nothing | [R-CAM-01 §4] |
+| `screenchat` | nothing | the footer's chat-line filter branches on it: with `screenchat` 0 the lines whose routing class is 1, 4 or 8 take a different branch from the rest — which side draws is not settled here · static trace of the footer line filter |
+| `textlines` | `SPEEDS` `MAXLINES` | the chat line ring: a line is stored only when `textlines ≠ 0`, and when storing one would exceed `textlines` visible lines the oldest visible line is dropped (`(head + 1) mod textlines == tail` advances the tail; both indices wrap at 30) — `textlines` is the on-screen line budget |
+| `textscroll` | `SPEEDS` `TXTSCROL` | line ageing: the oldest visible line expires once `(textscroll + 1) × 30` ticks have passed since it was stored |
+| `mousespeed` | nothing | **nothing** — no reader in the whole export beyond the loader; persisted and inert |
+| `gamespeed` | `SPEEDS` `GAME` (the mirror word too) | the speed setter of [R-CAM-01 §3] |
+| `unitchat` | `SOUND` `SPEECH` gauge × 5 ([03 R-AUD-01 §2]); `SPEEDS` `RESTORE` (10) | voice crowding threshold [03 R-AUD-01 §3] |
+| `unitchattext` | `SPEEDS` `UNITCHAT` stage × 5 | the caption presenter admits a unit caption when `10 − unitchattext < priority` — the same crowding form as the voice gate |
+| `side` | `NEWGAME` side buttons; load-game `summary` | `SINGLE` opener, briefing planet override, briefing font index |
+| `Difficulty` | `NEWGAME` / `ENDMSN` / `RESTART` / `SKIRMISH` `Difficulty` | [08 R-CAMP-01 §3] |
+
+`WindowPositions\` is not a game key: it belongs to the Cavedog library's
+developer overlay windows (`Performance status`, `Memory Status`), under
+`Software\Cavedog Entertainment\Cavedog library\WindowPositions\<title>`
+with `LeftEdge`, `TopEdge`, `Width`, `Height`, `Zoomed`; no game screen
+reads or writes it. `totala.ini` carries only the two `[Preferences]` sound
+switches of [02 §3]; no front-end screen touches it.
+
+### Closed — never-opened GUIs, default bindings and misfiled names [R-FE-01 §12] (2026-08-29)
+
+**Established fact (bounded negative, whole image).** `LOGOSEL.GUI` has no
+reference. `BUILDER.GUI` is only *tested for* by the build-completion path
+(to request a repaint when it is open) and has no opener. `SELVMODE.GUI`'s
+opener branch has no caller (§6). `<side>GEN.GUI` (`ARMGEN`/`CORGEN`) is
+the HUD's general build page selected by the selection-to-page routine of
+[R-HUD-03 §6], not a front-end screen; the ledger's `SGEN.GUI screen`
+cluster is that page.
+
+**Established fact — Enter/Escape defaults.** The panel-header parser
+stores `crdefault`, `escdefault` and `defaultfocus` as three gadget names.
+When a `.GUI` authors an empty `crdefault`, the window-open routine binds
+Enter to the first button whose name begins `OK` or `NEXT`
+(case-insensitive prefix compare); when `escdefault` is empty, Escape to the
+first button beginning `PREV` or `Cancel`. Openers may overwrite both after
+the fact (the `YESORNO` and `MSNBRIEF` openers do). This closes the
+`crdefault` behaviour left unconfirmed in [fmt gui].
+
+**Refinement** to "Frontend asset failure boundaries": the openers that do
+test the returned window are the `MSGBOX` opener (returns 0), the four
+`YESORNO` openers, and the HUD build-page opener; every front-end screen
+opener in this document does not.
+
 ### Supported inference
 
 Front-end state transitions should be represented as explicit named states
@@ -1388,16 +1909,36 @@ validation, and endgame continuation.
 
 Open items only; the decider follows each. The controller phase/substate
 mechanism, the post-battle phase machine, the planet-driven briefing tables,
-and the chat contract are established above.
+the chat contract, and — since [R-FE-01] — the single-player transition
+graph, the movie/intro/credits machine, campaign continuation, load-failure
+dialogs, every single-player error dialog, and the registry write census are
+established above.
 
-- Numeric transition-graph edges for every screen family
-  (successor/cancel/error), the movie/intro state machine, credits timing,
-  campaign transition rules, load-failure restoration, every error dialog, and
-  front-end persistence after an aborted transition · static trace.
-- Process-level outcome of a missing or parser-rejected required `.GUI` file,
-  whose screen callers do not check the open result; likewise malformed
-  HATTFONT and malformed GAF payloads whose decoders return null · static
+**Correction (2026-08-29, RWU-07-1a).** The previous first bullet listed the
+transition-graph edges, the movie state machine, credits timing, campaign
+transition rules, load-failure restoration and the error dialogs as one open
+item; all of those are closed in [R-FE-01 §1]–[R-FE-01 §12] and the bullet
+is replaced by the residuals below.
+
+- The consumer of the restart request word raised by `RESTART.GUI`'s
+  `RESTART` button (the restart control is described from the campaign side
+  in [08 R-CAMP-01 §8]; the word's reader in the battle pump is not cited) ·
+  [R-FE-01 §7], doc 08 · static trace.
+- Which branch of the footer's chat-line filter draws when `screenchat` is 0
+  (routing classes 1, 4, 8 versus the rest) · [R-FE-01 §11], §11 · static
   trace.
+- The `DitheredFog` bit's presenter and the `Gamma` factor's exact palette
+  application beyond the `0.5 + g/24` factor · [R-FE-01 §11], doc 03 ·
+  static trace.
+- Multiplayer-reached screens recorded here as edges only — `CONTROL`,
+  `TIMEOUT`, `REPORT`, `SAVELIST`/`LOADLIST`, `VIEWMAP`/`DVIEWMAP`, `SELGAME`
+  — and the lobby-launched (`DirectPlay`) variants of `ENDMSN`/`EXITMENU` ·
+  RWU-07-1b / out of scope.
+- Process-level outcome of a missing or parser-rejected required `.GUI` file
+  for the openers that do not check the open result (every front-end screen;
+  the `MSGBOX`, `YESORNO` and build-page openers do check) · static trace.
+- Malformed HATTFONT and malformed GAF payloads whose decoders return null ·
+  static trace.
 
 
 ## 6. Battle HUD and side-data interface
@@ -4123,9 +4664,6 @@ section rather than deleted.
   30-frame counters it arms; the reader of the `+BigBrother` companion word;
   the `+MakePoster` argument grammar · §2 [R-CAM-01 §2, §6] · static trace /
   manual retail observation (developer tooling, low priority).
-- Whether the slider range word the interface options read is the authored
-  `range` key or a computed track length · §4 [R-CAM-01 §7] · RWU-07-3 /
-  static trace.
 - How the multiplayer receive path applies the lobby `Cheat Codes` bit before
   re-dispatching a received `+` line · §5 [R-CAM-01 §6] · out of scope.
 - Text-input code page and IME behavior · §2, §7 · presentation-level platform
@@ -4154,13 +4692,15 @@ section rather than deleted.
 - Listbox item-height rules, picture-box binding, and the complete widget
   callback map, including the per-window census of authored gadget association
   ids · §4, doc 02 §6 · static trace.
-- Frontend transition-graph edges per screen family (successor/cancel/error),
-  the movie/intro state machine, credits timing, campaign transition rules,
-  load-failure restoration, every error dialog, and front-end persistence
-  after an aborted transition · §5 · static trace.
+- The restart request word's consumer; the `screenchat` filter polarity; the
+  `DitheredFog` presenter · §5 [R-FE-01 §7, §11] · static trace. (The single-player transition graph,
+  movie machine, campaign continuation, error dialogs and registry write
+  census are closed in [R-FE-01].)
 - Process-level outcome of a missing or parser-rejected required `.GUI` file,
   and of malformed HATTFONT or malformed GAF payloads whose decoders return
-  null; the screen callers do not check the open result · §5 · static trace.
+  null; the front-end screen openers do not check the open result (the
+  `MSGBOX`/`YESORNO`/build-page openers do, [R-FE-01 §12]) · §5 · static
+  trace.
 - Battle HUD optional-asset fallback beyond the closed `intgaf` panel entries,
   side fonts, authored GUI page, page GAF, support GAF, and common-button
   resolution · §6 · static trace.

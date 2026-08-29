@@ -2015,6 +2015,388 @@ either; the mask-2 cancel notification is instead delivered by the node
 cleanup path (section 3.3), whose producers are the ordinary removal paths.
 The mask-8 wake-bit producer must not be invented.
 
+### Closed — the product is cargo: attach at allocation [R-FAC-02 §1] (2026-08-29)
+
+This closure and the six that follow are the RWU-04-10 pass over factory
+egress. They re-read the factory handler's state-2 epilogue, the attach/detach
+commit it calls, the occupancy commit's carried branch, the completion
+transition, the product-side queue, and the placement validator's mode
+argument, and they re-verify the candidate claims of the unmerged
+`ota-fac-01d` / `ota-fac-01e` branches (verdicts in §7). Every claim is a
+direct static trace unless a sentence says otherwise. Vocabulary is that of
+[R-COLL-01 §1] (*cell*, *ground word*, *self identity*, *size pair*, *cached
+cell pair*), of [R-ORD-01 §1] (record fields, deadline setter, goal
+installers) and of §3.3 (the pump).
+
+**Established — the product is attached to the factory as cargo, in the same
+handler visit that allocates it.** [R-ORD-01 §5] recorded the phase-2 step
+"attach it as cargo-style carried product" without a contract; this is it.
+After the nanoframe is created (mode 1, stamped in the ground plane at the
+resolved exit position — [R-COLL-01 §4] "writer census"), the factory handler
+calls the shared **attach/detach commit** that transports use ([R-COB-03 §5])
+with the factory as carrier and the `QueryBuildInfo` piece index as the hang
+piece. The commit's gates are: the cargo is alive and **not building-class**
+(flags bit 29 clear — a product whose definition has `bmcode 0` is never
+attached and simply stands where it was allocated); the cargo carries nothing
+itself; the carrier is alive, is not the cargo, and is not itself carried. It
+then builds a seven-byte kind-10 session event `{kind 10, cargo identity,
+carrier identity, piece, mode}` with piece = the exit piece index truncated to
+one byte and mode = 1, submits it to the session stream, and applies it
+locally at once:
+
+1. the cargo is unlinked from its sector bucket (it is no longer in any
+   bucket; the overlap scan of [R-COLL-01 §4] reaches it through the
+   carrier's cargo list);
+2. the cargo's **hang-piece byte** is set to the event's piece byte, its
+   carrier pointer to the factory, and it is pushed onto the front of the
+   factory's cargo list;
+3. flags bit 17 is set iff the piece byte is `0xff` (the detach sentinel) —
+   so it is **clear** for a factory product;
+4. the cargo mover's mode bits (state byte bits 0–1) are set to the event's
+   mode, i.e. **1, grounded**, for every product including aircraft;
+5. if the owner is in player state 1 or 2 and the carrier's definition lacks
+   `isairbase` (capability bit 9 — the FBI key's only reader on this path), the
+   cargo's primary queue is **flushed** — every record whose static mask lacks
+   bit 2 (`0x4`, §3.1) is unlinked and freed — and a `BeCarried` record is
+   inserted at the **head** of its primary queue. A factory has no
+   `isairbase`, and a freshly allocated product's queue is empty, so the net
+   effect is exactly one `BeCarried` at the head. (`isairbase` carriers skip
+   this, which is how a landed aircraft keeps its orders.)
+6. the cargo's selection bit is dropped under the sweep's selection predicate
+   (presentation only).
+
+The factory handler then copies its standing bits 18–21 onto the product and
+inserts `GetBuilt` **queued** ([R-P0-09]), so the product's primary queue at
+the end of the visit is, front to back, `[BeCarried, GetBuilt]`. The
+`BeCarried` record is the release lane that [R-FAC-01] and [R-FAC-01B §1]
+could not find: it is not a factory-owned node and it is not in the factory
+handler — it is a side effect of the attach event.
+
+**Established — the piece byte is signed on the read side.** The commit's
+carried branch and the orientation copy (§2) read the hang-piece byte back as
+a **signed** 8-bit value. An exit piece index of 128 or more therefore reaches
+the locator as a negative index, which returns the zero offset ([R-REV-02]):
+such a product hangs at the factory origin, not at its pad. Piece 255 is
+indistinguishable from the detach sentinel. Stock models are far below this
+bound ([R-FAC-01B]); the edge is recorded because an implementation that
+widens the byte would place non-stock content differently from retail.
+
+### Closed — where the nanoframe sits, every tick [R-FAC-02 §2] (2026-08-29)
+
+**Established — the carried branch owns the product's position, orientation
+and velocity while it is under construction.** The unit sweep runs both order
+pumps and the mover tick for every live unit of a state-1/2 owner with no
+carried-or-unfinished exemption, so the nanoframe's mover tick runs from the
+tick after allocation. Its commit ([R-COLL-01 §1] "the carried branch") does,
+per tick:
+
+```text
+hang     = factory.xyz + locate(factory, hangPiece)     # [R-REV-02] locator,
+                                                         # the state-2 target formula
+if product definition is a floater (capability bit 19):
+        hang.y = max(hang.y, (waterline·65535 + seaLevel) << 16)   # [R-AIR-01 §9]
+carriedPositionSetter(product, hang, mover.mode)         # [R-COLL-01 §4]
+product.roll    = factory.roll    + a[0](hangPiece)      # 16-bit wrapping adds
+product.heading = factory.heading + a[1](hangPiece)
+product.pitch   = factory.pitch   + a[2](hangPiece)
+product.velocity, speed = factory mover's, or 0          # a building has no mover
+transform-dirty cleared
+```
+
+`a[i](hangPiece)` is the hang piece's **own** runtime angle triple, indexed as
+in [R-REV-02] (`a[0]` about Z, `a[1]` about Y — the heading — `a[2]` about
+X); unlike the position, the orientation copy walks no hierarchy and folds no
+ancestor. A product's release heading is therefore the factory's heading plus
+whatever the script has turned the pad piece by — rotated factory variants
+release rotated products through the same fold [R-REV-02] applies to the
+position.
+
+The carried-position setter is the commit's success branch without the
+validator: same cell and mode → write XYZ only; otherwise clear the old
+footprint, write XYZ, cell pair and mode, **stamp** the new footprint with the
+overlap protocol, and publish LOS. A nanoframe therefore holds its ground-word
+footprint at the pad for the whole build, and follows an animated pad piece
+cell for cell. Because the position is rewritten from the factory every tick,
+nothing the steering step computed for the product survives; a product cannot
+drift, be pushed, or be teleported while carried.
+
+### Closed — release is the detach at completion [R-FAC-02 §3] (2026-08-29)
+
+**Established — the completion transition detaches the product, in this
+order.** The shared work helper's zero-remaining call and the factory's
+state-4 re-invocation both run the completion transition ([R-P0-09]); its
+body, at implementable precision:
+
+1. clear the product's build/weapon auxiliary field ([R-P0-09]); remaining
+   fraction := 0.0; flags bit 13 (complete) set;
+2. if the owner is in state 1 or 2: a **non-building** product with a carrier
+   is detached by the attach/detach commit with carrier null, piece `0xff`,
+   mode 1; a building-class product instead refreshes the builder GUI;
+3. capability bit 18 → raise the product's `Activate` edge;
+4. the local player's queue-count label refresh;
+5. capability bit 24 → cloak/initial-posture byte 7 and flags bit 14;
+6. owner in state 1 or 2 → the kind-18 builder/product link event
+   `{kind 18, product identity, builder identity}` to the owner's event sink;
+7. either unit selected → HUD dirty.
+
+The detach applies the kind-10 event with carrier null: the product is
+unlinked from the factory's cargo list, its hang-piece byte becomes `0xff`,
+flags bit 17 and the carrier pointer are cleared, it is pushed onto the front
+of its **current** sector bucket (the bucket its committed position selects,
+[R-COLL-01 §4]), and its mover mode is set to 1. **No clear, no stamp and no
+position write happen at detach**: the product keeps the cached cell pair and
+the ground-word footprint the carried setter last wrote, at the pad, with the
+orientation of §2. The second invocation from state 4 finds no carrier and
+skips step 2; the other steps re-run idempotently as [R-P0-09] already says.
+The `StopBuilding` falling edge precedes that second call ([R-P0-09]).
+
+**Established — the two abnormal ends.** Cancel-current ([R-ORD-01 §5]) runs
+the same completion transition — so the product is detached — and then kills
+it with damage cause 9. A factory that dies or is freed runs unit
+finalisation, which kills every unit on its cargo list with 30000 damage
+(cause 3 when the death record's kind nibble is 3, else cause 6 — doc 06 owns
+the cause table) and detaches each; a dying factory therefore never leaves a
+free-standing nanoframe on its pad, and a dying carried product is detached
+before its own finalisation continues. A product freed by pool exhaustion or
+limit never existed (the 300-tick retry of [R-P0-09]).
+
+### Closed — the order form after release, and its latency [R-FAC-02 §4] (2026-08-29)
+
+**Established — the product's first order is `BeCarried`, its second is
+`GetBuilt`, and the rally or `Park` is appended by `GetBuilt`.** Neither the
+factory nor the product installs any goal before `GetBuilt` runs; the
+ota-fac-01d claim "no factory or `GetBuilt` writer installs a ground goal
+before the inherited rally" is confirmed for goals, but the queue is not empty
+before the rally — it holds the two records above.
+
+`BeCarried` ([R-ORD-01 §2]): carrier null → complete; phase 0 releases the
+slots and advances; phase 1 sets deadline 10 and holds. `GetBuilt`
+([R-ORD-01 §5]): while the remaining fraction is non-zero, phase 0 sets
+deadline 300, phase 1 deadline 30, phase 2 (on its own expiry) deadline 11
+plus the negative work step; each of those arms ORs `0x8000` into the gate.
+When the remaining fraction is 0.0 on **any** visit, whatever the phase, it
+refreshes the builder interface flag and, if the product has a mover and the
+record's builder reference is live, walks the builder's primary queue from
+the front: a record whose name is `QMove` is resolved as command 2 (move) and
+one named `QPatrol` as command 9 (patrol) against the product with the
+record's goal triple and inserted **queued** on the product, in walk order;
+then the standing-bit copy under the bit-28 / bit-14 guard of §3.8 (with the
+experience word for a computer-owned builder); then, if nothing was inserted,
+`Park` is inserted queued. It returns complete (5). A product without a mover
+(a building-class product) gets nothing.
+
+**Established — the pump gates that set the handoff latency.** The primary
+pump (§3.3) stops its walk at the first record whose gate is non-zero and
+whose satisfied set is empty; a *hold* (code 2) does **not** stop the walk —
+the next record is visited in the same pass. The satisfied set is the
+record's pending bits ORed with the unit's 16-bit pending word, and the only
+writers of that unit word in the whole export OR in bit 2 (the COB set-port
+paths of §4.7); nothing ever raises bit 0 or `0x8000` there. Consequently
+`GetBuilt` is woken **only by its own deadline**, and:
+
+- while carried, `GetBuilt` runs only on a tick on which `BeCarried`'s 10-tick
+  deadline has just expired **and** its own deadline has expired (the walk
+  otherwise stops at `BeCarried`);
+- after detach, `BeCarried` completes on its next expiry — at most 10 ticks
+  later — is unlinked, and the walk continues to `GetBuilt`, which still runs
+  only when its own deadline has expired: at most 300 ticks after its phase-0
+  visit, 30 after phase 1, 11 after phase 2. The rally or `Park` is appended
+  on that visit and, being queued behind a record the pump has just freed, is
+  dispatched in the **same** pass (codes 5/8 continue the walk).
+
+Composing the two direct traces: from the attach tick `t0`, `BeCarried`
+expiries fall on `t0 + 1 + 10k`, `GetBuilt`'s phase-0 and phase-1 deadlines
+on `t0 + 301` and `t0 + 331`, and its phase-2 decay visits every **20** ticks
+from `t0 + 351` (an 11-tick deadline consumed on the next 10-tick `BeCarried`
+expiry). A product whose build finishes inside the first 300 ticks after
+attach therefore stands complete on the pad until `t0 + 301` before it
+receives any movement order; one finishing later waits at most 11 ticks plus
+the `BeCarried` alignment. This composition is Established from the two
+traces; the observable pad dwell it predicts is the natural retail
+confirmation and is listed in §8. It also answers, for factory products, the
+[R-ORD-01 §5] question "what suppresses this decay while a builder is
+working": nothing — the nanoframe decays by `11 / buildcostenergy` of its
+remaining fraction on every 20-tick decay visit from `t0 + 351`, in
+competition with construction, until completion.
+
+**Established — the release target.** With a rally, the product's release
+target is the rally's own goal triple in the resolved move/patrol handler
+(§8.3, [R-ORD-01 §4]) — the factory contributes no offset. Without one, `Park`
+([R-ORD-01 §2]) installs a **rectangle goal** centred on the product's own
+committed cell: with `s = FootPrintX` (from the unit's size pair) plus 3 when
+the product's movement-class `MinWaterDepth` word is non-negative, the
+rectangle's origin is `(cellX − 4s, cellZ − 3s)` and its size `(8s, 6s)` cells,
+where `cellX/Z = position >> 20` (whole units to cells, arithmetic shift, no
+footprint bias); gate `0xE0`; the ground path search treats it as a
+rectangle-perimeter goal (§7.2: the admissible cells are exactly the
+rectangle border, and arrival requires lying on it). A ground product with no
+rally therefore starts at the centre of an `8s × 6s`-cell rectangle and walks
+to its nearest border cell — at least `3s` cells (`48·s` world units) from
+its pad — and completes on arrival, or as soon as any record is queued behind
+it. This border walk is what carries a no-rally product off its factory; it
+is not an egress offset and the factory contributes nothing to it. **Note for
+§3.9's owner:** [R-ORD-01 §2] describes the `+3` condition as "the
+definition's yard-map width word"; the word read is the movement-class
+`MinWaterDepth` (template default −10000, so land classes get no `+3`; ship
+classes with a non-negative minimum depth do).
+
+**Established — aircraft.** For a `canfly` product, `Park` sets the goal to
+the product's own position and re-identifies itself as `VTOL_Move` with a
+*restart*, so the air move handler runs in the same cascade ([R-AIR-01 §6]).
+The aircraft leaves the pad through the ordinary velocity-limited climb of
+§10.1 from mode 1 (the detach sets grounded). There is no factory-specific
+takeoff state; the ota-fac-01e claim to that effect is confirmed. What the
+climb's first-goal geometry is for a zero-length move is §10's contract, not
+this section's.
+
+### Closed — producer/product collision: the yard map is the exemption [R-FAC-02 §5] (2026-08-29)
+
+**Established — the state-2 validator receives mode 1.** The factory handler
+passes its own flags-word mode mirror as the validator's mode argument
+([R-ORD-01 §5]). The allocator sets that mirror from its seventh argument and
+**every** allocation call site in the export (eleven) passes the literal 1
+— the build handlers, the mission spawner, the commander respawn, the unload
+and transfer paths — except the save loader, which passes the saved mode bits
+(doc 08). A building-class unit never
+owns a mover (the allocator constructs one only for `bmcode 1`), and every
+other writer of the mirror is a mover-side path, so a factory's mirror stays
+at 1 for its whole life. The validator's mode-1 arm is therefore the one that
+runs at the exit ([R-COLL-01 §2]): the per-cell ground-word test with self
+identity 0, the feature-blocking test, and the depth/slope gates against the
+**product's** definition. This closes the "caller-mode value the placement
+validator receives at the factory exit-spot call" item that [R-P0-08-A §1]
+and the tail carried as `TODO(question)`, in the direction opposite to that
+paragraph's hope: the depth and slope gates **do** run at the exit, per cell,
+against the product's definition (a Nanolathe placement query that skips them
+at factory exits diverges from retail — see §7).
+
+**Established — no producer/product exemption exists; the yard map does the
+work.** With self identity 0, *any* non-zero ground word blocks the state-2
+test, including the factory's own building stamp. A factory stamps yard cells
+`o`, `f`, `w`, `G` always, `c`/`C` only while its yard is **closed**, and `O`
+only while it is **open** ([R-COLL-01 §4]). So the exit footprint validates
+only when every cell under it is unstamped — `Y`, `y`, `.` cells, or `c`/`C`
+cells released by a yard-open port write (§4.7 port 18) before phase 2. The
+factory handler itself never touches the yard; the script does, and the
+`INBUILDSTANCE` wait of phase 1 is where a stock script's yard-open lands
+(whether every stock factory script opens its yard before entering the build
+stance is authored data, listed in §8). A factory whose pad cells are `c`
+with its yard closed at phase 2 retries silently every 15 ticks until the
+script opens it — the "blocked exit" retry of [R-P0-09] with no timeout.
+
+Once allocated, the product holds those cells itself (creation stamp, then
+the carried setter, §2). The factory's later stamps meet it through the
+**overlap protocol** of [R-COLL-01 §4] — host/intruder bits, the cell keeps
+the product — and never fail. When the product finally commits a cross-cell
+move, its clear runs the overlap scan, and the factory's restamp reclaims any
+released cell its current yard state selects. Nothing compares the producer
+and product identities anywhere on this path; the ota-fac-01d claim "no
+reviewed writer compares producer and product handles" is confirmed, and the
+`TODO(question)` that asked for an exemption is closed negatively.
+
+**Established — the yard-state admission gate.** The yard-open port write is
+refused, with nothing written and no restamp, unless the unit's cached cell
+pair is positive on both axes, the footprint is inside the map, and **every**
+cell that the *requested* state would select (bit 1 or bit 8 of the yard byte
+for open, bit 2 for closed) holds a ground word that is 0 or the factory's
+own identity. A factory therefore cannot close its yard while a released
+product still stands on a `c`/`C` cell, and cannot open it while a foreign
+unit stands on an `O` cell; the script's `set YARD_OPEN` is silently ignored
+in that tick and whether it retries is authored behavior.
+
+### Closed — no-stacking and the blocked exit [R-FAC-02 §6] (2026-08-29)
+
+**Established — two products never stack, and the mechanism is the validator
+seeing the first product's stamp.** The counted node serializes products
+(state 0 → 1 → 2 per product, [R-P0-09]); a second product's phase-2 test runs
+only after the first has been detached (state 4 → restart) and re-enters the
+`INBUILDSTANCE` wait. By then the first product holds the ground words of its
+footprint at the pad (§2, §3). The second test, with self identity 0, finds a
+non-zero word and fails → deadline 15, silent, no counter, no timeout. It
+succeeds on the first 15-tick visit after the first product's cross-cell
+commit has cleared those cells — or, for an aircraft product, after its mode
+change to airborne has moved its stamp to the air plane ([R-COLL-01 §4]). A
+product that never moves (no path, `I can't get there`, a `Park` it completes
+in place because a queued record sits behind it) blocks its factory
+indefinitely; retail has no push, no stacking, no force-placement and no
+allocation elsewhere. The [R-FAC-01B §5] concern that "occupancy is published
+later in the tick and … a second same-pass allocation" could stack is moot:
+the first product is stamped in the allocation call itself, before the
+handler returns.
+
+**Established — a blocked released product is an ordinary blocked mover.**
+After detach the product is a mode-1 ground unit at the pad with a goal (§4).
+A foreign unit on its route is met by the commit's blocked branch — the
+half-`MaxVelocity` speed cap and the half-cell clamp around the old
+footprint centre ([R-COLL-01 §1]) — and by the follower's 60-tick repath
+throttle ([R-MOV-01 §7]); an empty route publishes `I can't get there`
+([R-COLL-01 §6]). There is no release-specific wait, retry cadence or timer.
+While the product stands on `c`/`C` cells the factory's yard cannot close
+(§5); while it stands on any exit cell the next product cannot be allocated
+(above). Those two gates are the whole of retail's blocked-release policy.
+
+### Corrections and branch verdicts [R-FAC-02 §7] (2026-08-29)
+
+* [R-FAC-01] said "No dedicated post-allocation producer/product exemption or
+  blocked-release retry was recovered. Whether a later movement path permits
+  that overlap, and what an indefinitely blocked release does, are
+  **Unknown**." Closed: there is no exemption (§5); the product is carried
+  and holds its own cells; an indefinitely blocked product blocks the factory
+  (§6).
+* [R-FAC-01] and [R-FAC-01B §1] said no release lane, clearance segment or
+  additional order exists "within the reviewed factory-handler call chain".
+  True of the handler; wrong as a conclusion — the attach event inserts
+  `BeCarried` at the head of the product's queue (§1), and that record's
+  10-tick gate sets the handoff latency (§4).
+* [R-FAC-01B §2] "Producer/product collision exemption — Unknown after
+  allocation" → closed negatively (§5).
+* [R-FAC-01B §3] "indefinite blocking of that hypothetical lane and any
+  force-release policy remain Unknown" → closed (§6): no force release.
+* [R-FAC-01B §5] and [R-REV-02] "A same-pass no-stacking guarantee remains
+  Unknown; its decider is a blocked multi-product trace" → closed by static
+  trace (§6); the retail trace is now confirmation, not decider.
+* The `TODO(question)` under [R-FAC-01B] asking for a retail capture "to
+  distinguish a hidden release lane from ordinary `GetBuilt`/VTOL handling"
+  is closed for the ground and rally questions; its aircraft-ordering part
+  survives in §8.
+* [R-P0-08-A §1] (§6.4, Supported inference) explained stock production by
+  "finished buildings never write the stomp shorts" and left the exit mode
+  value `TODO(question)`. [R-COLL-01 §8] already withdrew the first half
+  (the building stamp writes the ground word). The mechanism is §5: the
+  exit's `c`/`C` cells are released by the yard-open port write before phase
+  2 runs, and the mode is 1, so the per-cell terrain gates run at the exit.
+  Nanolathe's `PlacementQuery.SkipTerrainAggregates` at factory exits is
+  therefore a divergence to fix forward (cross-doc need; §6.4's owner).
+* `ota-fac-01d` (doc 05 text): "no factory or `GetBuilt` writer installs a
+  ground goal" — confirmed for goals; "no reviewed writer compares producer
+  and product handles" — confirmed; "no release state" — superseded by the
+  `BeCarried` record it did not see; "product-side link cleanup Unknown" —
+  not traced here, still open.
+* `ota-fac-01e` (doc 04 text): "the locator reads no unit heading and does
+  not apply a factory-heading rotation" — **refuted**; the locator folds the
+  unit's three orientation words into the root node's angles before rotating,
+  as [R-REV-02] on `main` already records (re-verified here, and the same
+  fold is used by the orientation copy of §2). "No factory-specific takeoff
+  state before `GetBuilt`" — confirmed (§4). "Runtime piece-angle
+  initialization for rotated variants Unknown" — not traced here.
+
+### R-FAC-02 §8 — what this unit leaves open
+
+* Whether every stock factory script opens its yard before it enters the
+  build stance (so that the state-2 test never idles on the factory's own
+  `c`/`C` stamp) · authored data · decider: a census of the stock factory
+  COBs' `Activate` / `StartBuilding` bodies for the yard-open port write.
+* The aircraft product's first-goal geometry and climb after `Park` →
+  `VTOL_Move` at its own position · §10 · decider: the `VTOL_Move` zero-length
+  goal path in [R-AIR-01 §6] read for a grounded start.
+* The lifetime and cleanup of the product-side builder link after `GetBuilt`
+  (the kind-18 event's consumer) · §3.8 · decider: trace the event sink's
+  kind-18 handler and the unit finalisation's reference walk.
+* Retail confirmation of the composed handoff latency of §4 (a build finishing
+  under 300 ticks after attach dwells on the pad until tick 301) · §3.8 ·
+  decider: one timed retail observation; the static composition stands
+  regardless.
+
 ### 3.9 Order handler bodies, per visit [R-ORD-01]
 
 This section gives every ground and generic order handler in the descriptor
@@ -9328,9 +9710,6 @@ replacement bullet is needed because the ground path has no vertical term.
 
 ### Simulation and identity
 
-- Caller-mode value the placement validator receives at the factory exit-spot
-  call, i.e. whether the inline aggregate terrain gates run there at all
-  · §6.4 [R-P0-08-A §1] · static trace. Marked `TODO(question)`.
 - Out-of-map and mode behavior of the placement validator outside the
   production path · §6.4 · static trace. Marked `TODO(question)`.
 - Allocator and slot-reuse cleanup when a dead factory slot is reused · §3.8 ·
@@ -9343,12 +9722,21 @@ replacement bullet is needed because the ground path has no vertical term.
   state are established as byte-exact · doc 08 [P1-13] · static trace.
 - Same-tick visibility for unit creation callers other than the factory path —
   slot-relative reuse and order-created units · §3.8 [R-P0-09] · static trace.
-- Factory release and egress: product release target, producer/product
-  collision exemption, blocked-release policy, aircraft takeoff-before-rally
-  transition, and multiple-product no-stacking · §3.8 [R-FAC-01][R-FAC-01B]
-  [R-FAC-01R] · manual retail observation (one run with a blocked exit, a
-  completed ground product, and a completed aircraft product, recording the
-  first movement, occupancy, and rally events). Marked `TODO(question)`.
+- Factory egress residuals: whether every stock factory COB opens its yard
+  before entering the build stance (so the state-2 exit test never idles on
+  the factory's own `c`/`C` stamp) · §3.8 [R-FAC-02 §8] · stock COB census of
+  `Activate`/`StartBuilding` for the yard-open port write.
+- Aircraft product: first-goal geometry and climb after `Park` re-identifies
+  itself as `VTOL_Move` at the product's own position · §10 [R-FAC-02 §8] ·
+  static read of the zero-length `VTOL_Move` path in [R-AIR-01 §6] from a
+  grounded start.
+- Lifetime and cleanup of the product-side builder link after `GetBuilt` (the
+  kind-18 link event's consumer) · §3.8 [R-FAC-02 §8] · static trace of the
+  event sink's kind-18 handler and the finalisation reference walk.
+- Retail confirmation of the composed factory handoff latency (a build that
+  finishes under 300 ticks after attach dwells on the pad until tick 301)
+  · §3.8 [R-FAC-02 §4] · one timed retail observation; the static composition
+  stands regardless.
 - Complete player category, side, ally, autonomy, and strategic-AI semantics
   · doc 08 · static trace.
 

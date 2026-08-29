@@ -346,6 +346,10 @@ file!`, `Old TED format no longer supported!`, and `Hey, joker!  Mission file
   read from exactly one section, see "Which keys the engine reads" above.
 - `Ident` scoping rules (uniqueness, forward references) are inferred from
   examples only.
+- Malformed-input outcomes for an OTA (syntax error fatal, missing
+  `GlobalHeader`, unknown unit name skipped, bad `Player` fatal, unknown
+  feature name fatal, missing TNT fatal) are tabulated in
+  `[02 R-MALF-01 §2]`.
 - The mission open path's six diagnostics, including the misspelled
   `Hey, joker!  There is no mission defintion for this mission: %s`, are
   recorded in the executable spec doc 02 §6 "Mission-file diagnostics".

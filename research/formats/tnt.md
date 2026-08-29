@@ -188,6 +188,15 @@ The load pipeline is `[02 R-MAP-01 §6–§8]`; the per-cell semantics are
   feature TDFs; a name that does not is fatal (`Record "%s" missing from
   feature files`). Names match case-insensitively.
 - The file carries no palette; pixels index the global palette ([pal.md](pal.md)).
+- **No bound is checked anywhere** (`[02 R-MALF-01 §7]`): the ten reads'
+  counts are summed but not compared with the size; every header pointer
+  is biased without a bound; the tile map, attribute array, feature-name
+  table and tile set are copied by their declared counts. A cell's feature
+  index below the void threshold is used as a catalog index **without a
+  comparison against the compiled table's count**. A zero-length file reads
+  its version word from an empty allocation (fatal `Unknown TNT version`
+  in practice). `Width × Height × 13`, `tiles × 1024` and the minimap are
+  plain allocations, so absurd values end in the out-of-memory abort.
 - The map identity hash used by the lobby is computed over the 64-byte
   header, the raw attribute map and the raw feature records
   `[02 R-MAP-01 §3]`.

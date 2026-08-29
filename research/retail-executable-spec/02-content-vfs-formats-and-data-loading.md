@@ -76,9 +76,14 @@ known hard requirements are `MOVEINFO.TDF` and `SIDEDATA.TDF`; a missing
 hard requirement**: the reference install contains no `gamedata.tdf` anywhere
 and boots (see `docs/SPEC_CONFLICTS.md` SC2 — an earlier revision of this
 document listed `GAMEDATA.TDF` as fatal; the fatal resource is the
-`gamedata\` directory, and the "Can't load GAMEDATA.TDF" diagnostic is pushed
-from the side-data loader region but its branch is unreachable when the
-directory exists without the file). The translation table
+`gamedata\` directory). **Correction (2026-08-29, RWU-02-3,
+`[R-MALF-01 §5]`).** The parenthesis previously ended "and the 'Can't load
+GAMEDATA.TDF' diagnostic is pushed from the side-data loader region but its
+branch is unreachable when the directory exists without the file". The
+branch is reachable: it is the failure branch of the `gamedata\sidedata.tdf`
+load, so the box that reads `Can't load GAMEDATA.TDF` is raised by a missing
+or unreadable **`SIDEDATA.TDF`**; no file named `gamedata.tdf` is ever
+opened. The translation table
 `gamedata\translate.tdf` is **not** a hard requirement: missing data leaves an
 empty table and lookup returns the source string unchanged (byte-exact
 compare). Optional animation, sound, and presentation resources can degrade
@@ -313,9 +318,16 @@ stored size per chunk and chunk N's archive offset is the sum of sizes
 decompresses it into a per-handle buffer, and copies the requested slice out.
 The handle keeps that one decompressed chunk and reuses it while the position
 stays inside it, so sequential reads decompress each chunk once. A chunk whose
-stored length does not read back completely, or whose decompression fails,
-aborts the read with the all-ones failure value after reporting a diagnostic
-naming the chunk index, chunk count, length, and file.
+stored length does not read back completely aborts the read with the
+all-ones failure value **silently**; a chunk whose decompression fails is
+**fatal** — the diagnostic naming the failure code, chunk index, chunk count,
+archive, length and file goes to the fatal channel (`[R-MALF-01 §1]`).
+**Correction (2026-08-29, RWU-02-3).** This sentence previously read "A
+chunk whose stored length does not read back completely, or whose
+decompression fails, aborts the read with the all-ones failure value after
+reporting a diagnostic naming the chunk index, chunk count, length, and
+file" — it merged two paths: the short read has no diagnostic and the decode
+failure does not return.
 
 **Chunk wire format (`SQSH`, 19-byte header + payload):**
 
@@ -670,8 +682,8 @@ directly visible; accessor return among variants still needs black-box
 confirmation). Stock content does not rely on that edge case.
 
 **Malformed input and failure behavior.** The tokenizer reports parse errors
-under the exact title `Parse error in .TDF File!`, with detail lines shaped
-` - <name> = '<value>' from file <file>`. Five parse diagnostics exist,
+with the exact prefix `Parse error in .TDF File! ` (trailing space; the
+box title is the application name), followed by one of five diagnostics,
 verbatim:
 
 1. `Data field - '=' not found`
@@ -680,10 +692,21 @@ verbatim:
 4. `Sub-record - opening '{' not found`
 5. `End of file - nextblock not zero`
 
-All five emit through one message-box diagnostic family. A failed load never
-terminates at the parser: the caller receives a valid-but-empty tree, so
-subsequent typed reads return their defaults. The caller decides whether that
-state is fatal for its resource family.
+All five go to the **fatal channel** — the system-modal box titled with the
+application name, then process exit code 1 — so a syntax error anywhere in a
+TDF the executable parses ends the process; no partially-built tree is
+returned. The detail suffix is ` - name = '<section>' from file <path>`
+(the literal word `name`, then the section the parser was inside — `root`
+at the top level — then the logical path). What *is* recoverable is a
+**missing or empty file**: the loader returns no tree, typed reads return
+their defaults, and the resource family decides whether that is fatal
+(`[R-MALF-01 §4]`). **Correction (2026-08-29, RWU-02-3).** This paragraph
+previously read "A failed load never terminates at the parser: the caller
+receives a valid-but-empty tree, so subsequent typed reads return their
+defaults. The caller decides whether that state is fatal for its resource
+family", and gave the detail shape as ` - <name> = '<value>' from file
+<file>`. Both were wrong: the parser's only error exit is the fatal channel,
+and the quoted placeholder is the section name, not a value.
 
 ### Typed accessors
 
@@ -735,8 +758,8 @@ Open items only; the decider follows each.
 
 - Caller-specific duplicate-section merging policies · static trace. The
   first-match section accessor, the enumerator behavior, the duplicate-key
-  winner mechanism, the parse-diagnostics set with its title and empty-tree
-  failure policy, and comment-blanking offset preservation are all established
+  winner mechanism, the parse-diagnostics set with its prefix and fatal
+  failure policy (`[R-MALF-01 §4]`), and comment-blanking offset preservation are all established
   above, as is the floating accessor's CRT `atof` behavior and the absence of
   any tokenizer line limit.
 
@@ -951,7 +974,7 @@ does not abort; each reference family has its own failure outcome:
 | Weapon (`weapon1..3`, `explodeas`, `selfdestructas`) | the name lookup against the weapon record table misses and the slot is filled with a reference to record 0 — the inactive sentinel (R-CONTENT-02); no abort | no | direct |
 | Corpse (`corpse`) | the `0xFFFF` no-corpse sentinel; the unit leaves no wreck | no | direct |
 | Movement class (`movementclass`) | the unit compiler falls back to a scratch record — 255 slopes, depth limits ±10000 — parsed from the unit's own FBI keys (see "Movement class record"); a null profile otherwise | no (degraded) | direct |
-| Model (`objectname`) | the model cache slot stays empty; rendering degrades (no model) | no (degraded) | supported inference |
+| Model (`objectname`) | **fatal**: the model loader's null result is passed to the fatal channel with the path `objects3d\<objectname>.3DO` as the whole message (`[R-MALF-01 §5]`; the same holds for a weapon `model` and a feature `object`). **Correction (2026-08-29, RWU-02-3):** this row previously read "the model cache slot stays empty; rendering degrades (no model) — no (degraded) — supported inference"; the compile path never tolerates a missing model. | yes | direct |
 | Side (`side`) | the build-pick filter compares the authored string; a mismatch rejects the pick — an empty side mismatches every acting side | no, but affects AI builds | direct |
 | Sound category (`soundcategory`) | the category index falls back to a muted placeholder; playback is skipped | no (muted) | supported inference |
 
@@ -3060,7 +3083,9 @@ loader leaves untouched.
 x and y offsets, a color-key byte (constant 9 across the whole retail corpus;
 it is the transparent palette index of the raw-pixel path — the blitter skips
 every source pixel equal to it), a compression flag byte (0 = raw pixels,
-1 = per-row RLE), a 16-bit subframe count, a 4-byte zero field, a 32-bit data
+1 = per-row RLE), a 16-bit subframe-count field of which **only the low
+byte is read** (`[R-MALF-01 §6]`; the high byte selects the table-remapped
+composition path for a subframe), a 4-byte zero field, a 32-bit data
 offset, and a trailing reserved word. The data offset is always biased by the
 file base. (This corrects an earlier description that summed to a 21-byte
 header with a "reserved" byte at offset 8 and a one-byte subframe count: the
@@ -3272,13 +3297,21 @@ first the legacy DIGI container (`DIGI` at offset 0, then `HSHD` at 8 and
 `SDAT` at 0x20), then RIFF (`RIFF` at 0 with `WAVE` at 8), otherwise the
 buffer is raw PCM carrying no header at all.
 
-RIFF parsing walks `fmt ` and `data` chunks with a size-plus-eight stride,
-honors odd-size padding, and extracts PCM format, channel count, sample rate,
-bit depth, block alignment, and data length; the `data` chunk's declared size,
-not the file size, becomes the payload length. Legacy DIGI metadata reads its
-sample-rate word from `HSHD`: a rate of 11,000 is remapped to 11,025, and the
-SDAT payload is trimmed by ten bytes; the sample is treated as 8-bit mono
-thereafter. Raw samples default to 11,025 Hz mono 8-bit.
+RIFF parsing walks `fmt ` and `data` chunks with a size-plus-eight stride
+and **no odd-size padding**, and reads only the channel count, sample rate
+and bits per sample from `fmt ` (the format tag and block-align words are
+never read; block align is recomputed as `bits/8 × channels`); the `data`
+chunk's declared size, not the file size, becomes the payload length. Legacy
+DIGI metadata reads its sample-rate word at byte 22 of `HSHD`: a rate of
+11,000 is remapped to 11,025, and the payload is **everything from byte 40
+to the end of the file** (`size − 40`; the `SDAT` size field is never read);
+the sample is treated as 8-bit mono thereafter. Raw samples default to
+11,025 Hz mono 8-bit. **Correction (2026-08-29, RWU-02-3, `[R-MALF-01
+§10]`).** This paragraph previously said the walk "honors odd-size
+padding", that it "extracts PCM format … block alignment", and that "the
+SDAT payload is trimmed by ten bytes"; the chunk stride is exactly
+`size + 8`, the format tag and block-align words are not read, and the DIGI
+payload starts at byte 40 and runs to end of file.
 
 Decoding serves three allocation modes: a plain memory blob (raw fallback
 fixed at 11,025 Hz mono 8-bit), a preloaded DirectSound buffer, and a
@@ -3320,11 +3353,434 @@ include logical path, winning provider identity, and relevant decode mode.
 This matches retail's reuse while preventing stale data after an overlay or
 save/load transition.
 
+### Closed — the loader malformed-input matrix [R-MALF-01 §1] (2026-08-29)
+
+Status: **Established** (direct static trace of every reader and validator
+named below; asset census over the 958 retail GAFs for §6) unless a cell
+says otherwise. This unit (RWU-02-3) states, for every file type retail
+loads, what a malformed input turns into. Byte-level *what the check reads*
+lives in the format docs; this block owns *what the outcome is*. Doc 04 owns
+what a running COB does with bad operands, doc 08 owns the save-file layout;
+both are cited, not restated.
+
+**The four outcomes, and the channels behind them.**
+
+* **fault** — the process dies through the operating-system handler. Two
+  paths: an unchecked memory access (out-of-blob pointer, wild write during
+  relocation, unbounded recursion) raises the exception the
+  unhandled-exception filter of `[01 R-PLAT-01 §8]` reports to `ErrorLog.txt`
+  before returning continue-search; or the process calls the **fatal
+  channel** — one shared routine that shows a system-modal, stop-icon message
+  box titled with the application name, then calls the C-runtime `exit(1)`
+  (a null message shows no box and exits at once — `[R-MAP-01 §2]` channel
+  (c)). Allocation failure is the third route to the same end: the tagged
+  allocator's null result reaches the out-of-memory hook of
+  `[01 R-PLAT-01 §5]` (log line, modal, abort), so every "huge declared size"
+  cell below that says *fault (out of memory)* means that hook.
+* **skip** — the record or file is dropped. The loader returns null or zero
+  and the caller decides; the non-fatal **`Error` box** (topmost,
+  ok-only, no title text beyond `Error`) is the only visible variant.
+* **default** — a typed read returns the caller's default.
+* **accept-with-garbage** — the reader continues on bytes it did not check:
+  the tail of an allocation the heap left behind (the tagged allocator never
+  clears, `[01 R-PLAT-01 §5]`), the bytes after a short record, or memory
+  reached through an unbounded pointer. Where the garbage is read through a
+  pointer that can leave the address space the cell says *garbage or fault*.
+
+**Shared VFS primitives.** Every loader below sits on the same four
+routines, and their edge behaviour recurs in every row:
+
+* *Open* — loose `fopen` first, then the providers in mount order; a miss
+  returns null with no diagnostic. A compressed record's chunk-size table is
+  read at open with its **read count ignored**.
+* *Whole-file load* (used by GAF, 3DO, COB, FNT, PAL, and the OVR/GUI
+  checksum passes) — a size of **0 or less returns null, indistinguishable
+  from a missing file**; otherwise it allocates exactly the size and reads
+  once; a read count **below 1** frees and returns null, any positive count
+  is accepted, so a short read leaves the block's tail as heap contents.
+* *Read* — a stored record clamps the request to `size − position` and
+  returns whatever the C-runtime read returned (a short read passes through
+  as a smaller count); a compressed record decodes the 64 KiB chunk that
+  contains the position: a chunk whose stored length does not read back
+  completely makes the read return the **all-ones value with no diagnostic**;
+  a chunk whose `SQSH` decode fails is **fatal** — the message is
+  `[HAPI_readfromfile] Decompression Error: <SQUASHERR name>` on one line and
+  `block <n> of <count>`, `base name '<archive>'`, `length = <n>`,
+  `name = '<file>'` on the following lines. **Correction (2026-08-29).** §2
+  "Compression" said the failing chunk "aborts the read with the all-ones
+  failure value after reporting a diagnostic"; the two failures are distinct
+  — a short chunk read is silent all-ones, a decode failure is the fatal
+  box. The sentence is corrected in place.
+* *TDF load* — its own loader: a missing file or a size of 0 or less yields
+  **no tree** (typed reads then return defaults and the resource family
+  decides whether that is fatal); a parse error is **fatal** (§4).
+
+#### The matrix [R-MALF-01 §2]
+
+Columns are the seven malformed-input classes of
+`docs/PLAN_RESEARCH_COMPLETION.md` §6. Each cell names the outcome and the
+check that decides it; "no check" means the reader walks on. Details and
+the exact comparisons are in the numbered sections that follow.
+
+| File | Truncated | Oversize (declared size beyond the file) | Wrong magic / version | Duplicate keys / sections | Bad reference | Zero-length | Integer overflow of a declared size |
+|---|---|---|---|---|---|---|---|
+| **HPI / UFO / CCX / GP3** (§3) | *garbage or fault*: the 20-byte header, 36-byte footer and directory-blob reads ignore their counts — a cut inside the blob leaves heap bytes that the relocation pass biases and writes back; a cut inside a stored record is a short read passed to the caller; a cut inside a chunk is silent all-ones | *garbage or fault*: blob size beyond the file → as truncated; record size beyond the file → short read; chunk stored length beyond the file → silent all-ones; chunk **decompressed** length above 65,536 → the LZ77 and zlib decoders write past the 64 KiB chunk buffer (heap overrun) and then report `SQUASHERR_BADUNPACKSIZE` fatally if the produced length differs | *skip* at mount: tag ≠ `HAPI`, version bytes ≠ `00 00 01 00`, or normalized footer ≠ template → not mounted, no message. *fault (fatal box)* at read: chunk marker ≠ `SQSH` → `SQUASHERR_BADHEADER`; method byte `> 3` → `SQUASHERR_BADUNPACKTYPE` (methods 0 and 3 pass the test, decode nothing and fail as `BADUNPACKSIZE`); byte-sum mismatch → `SQUASHERR_BADCHECKSUM` | *accept*: within one directory the **later** entry wins (backward scan, §2 "Lookup"); across archives the first provider wins (§2) | *fault*: an entry offset outside the blob is biased and written back at mount (write to a wild address); a subdirectory chain that loops recurses without a visited set (stack overflow); no check on any of them | *skip*: an empty archive file fails the tag test; an empty stored record is null to every whole-file consumer (size < 1) | *fault (out of memory)*: blob size or chunk stored length ≥ the address space fails allocation; a blob size below 20 skips the decipher loop (signed test) and relocates through bytes beyond the block; an entry count with the top bit set is treated as **no entries** (signed loop bound); chunk index is `position >> 16`, never bounded against the table |
+| **TDF text** — FBI, OTA, weapon, feature, movement, side, sound, GUI, campaign, `translate`, `version`, `los` (§4) | *fault (fatal box)*: `Parse error in .TDF File! End of file - nextblock not zero` when the cut is inside a section; `Data field - '=' not found` / `Data field - ';' not found` inside a field; a cut between complete top-level items is accepted | n/a (text) | none: any bytes are text; a binary file reaches `Data field - '=' not found` (fatal) at its first non-blank byte, unless that byte is `[` or `}` | *accept*: repeated sections are all retained, the first-match accessor returns the earliest; an identical key spelling replaces the value (last wins); a case-variant spelling coexists as a second sorted entry (§4) | per family, §5 and the §5 cross-reference table; the generic parser has no references | *default*: a file of size 0 or less is treated as absent — no tree, every typed read returns its default; the family decides whether absent is fatal (§5) | *accept*: the integer accessor's conversion has **no overflow test** and wraps modulo 2³²; the fixed-point accessor's `× 65,536` then truncation stores the x87 indefinite integer `0x80000000` for any magnitude ≥ 2¹⁵ authored units; the floating accessor returns whatever the C-runtime decimal conversion produced |
+| **FBI unit record** (§5) | as TDF | n/a | *skip*: the catalog loader reads `Version` and `Copyright` from every unit section; a version newer than the executable's (3.1) or a copyright line that does not match the template drops the unit from the catalog — with the `Error` box `Incompatible units found.  They will be ignored.  Please download the latest version of the game.` for the version case, silently for the copyright case | as TDF | weapon miss → record 0 (inactive); corpse miss → no wreck; movement class miss → scratch record; **model miss → fatal, the box shows the path `objects3d\<objectname>.3DO`** (corrects the cross-reference table's "slot stays empty"); script miss → null script, crash at the first creation `[04 R-COB-04 §8]`; sound category miss → muted placeholder | as TDF (an empty FBI compiles a unit with every default and no name) | as TDF |
+| **OTA map / mission** (§5, `[R-MAP-01]`) | as TDF | n/a | no magic; a parsed file without `GlobalHeader` → status-pane message and failure (`[R-MAP-01 §2]`), battle entry proceeds on the prologue sentinels | as TDF; `Schema <n>` probed by index, a gap ends the probe (`[R-MAP-01 §4]`) | `[units]` name that is no unit → *skip* (slot 0, nothing spawned); `Player` outside 1..10 or a slot without a controller → **fatal** `Player number %d invalid for unit %s`; `[features]` name → **fatal** `Record "%s" missing from feature files`; the TNT named by the OTA missing → **fatal** (path as message); `aiprofile` miss → `ai\default.txt` (`[R-MAP-01 §5]`) | as TDF | as TDF |
+| **Catalog TDFs** — weapons, features, `moveinfo`, `sidedata`, `sound`, `meteor` (§5) | as TDF | n/a | `moveinfo.tdf` absent → **fatal** `Can't load MOVEINFO.TDF`; `sidedata.tdf` absent → **fatal**, and the box reads `Can't load GAMEDATA.TDF` (the text names the wrong file; nothing named `gamedata.tdf` is ever opened — this settles `docs/SPEC_CONFLICTS.md` SC2); `sound.tdf` absent → no categories, silent; `meteor.tdf` absent or without `[Default]` → record untouched (§6) | weapon: a second section with the same `ID` replaces the record (R-CONTENT-02); `CLASS<n>` gaps skipped; feature duplicates: first parsed document wins the name scan | weapon `ID` is **not range-checked**: `table + ID × 277` for any ID, so an ID above 255 or below −1 writes outside the 256-record table (*accept-with-garbage*, into neighbouring session state); weapon `model` miss → **fatal** (path); feature `object` miss → **fatal** (path); feature `filename` GAF miss → null root, every sequence null, silent; `seqname*` entry absent from the GAF → null sequence, silent; side `font` miss → **fatal**; side anchor subsection miss → **fatal** (§6) | as TDF | as TDF |
+| **GUI panel** (§5) | as TDF | n/a | none; a file that is not a panel yields gadgets with default fields | sections are visited **by index in file order**, whatever their names; `totalgadgets` is read and then **overwritten** by the section census (inert) | `[COMMON]` absent → the gadget's common fields are **not written** (whatever the window record held); a kind byte other than 0–8 and 10 reads only `[COMMON]`; art names that resolve to no GAF entry follow the fallback chain of §6 | as TDF (loader returns 0 to its caller; doc 07 owns what a screen does without its panel) | *accept-with-garbage*: gadget records (347 bytes) are written into a fixed 69,463-byte window record with **no count check**; a panel with more than about 199 gadget sections writes past it |
+| **GAF** (§6) | *garbage or fault*: no size is checked; the loader biases every entry, frame, data and subframe offset it finds and **writes the biased values back**, so offsets that leave the block fault at load | same as truncated (offset table, frame count, data offset all trusted) | none: the version word is **never read** | entry names: linear scan, **first** match wins | entry name absent → null (the anims cache makes a missing **file** fatal with the path; a feature `filename` root or a `seqname` that is absent is a silent null) | *skip*: null, treated as missing (fatal or silent per caller as above) | entry count is a **signed 16-bit** field (≥ 0x8000 → no entries); frame count is 16-bit; the subframe count field is 16 bits wide but **only its low byte is read** (a count of 300 composes 44 subframes); a composite canvas of `width × height + 24` bytes and the 16 MiB-class raw frames are allocations, so absurd dimensions fault as out-of-memory |
+| **TNT terrain** (§7) | *garbage or fault*: the file is read whole (counts summed, not checked) and every header pointer is biased without a bound; the tile map, attribute array, feature-name table and tile set are copied by their declared counts | same | **fatal** `Unknown TNT version:  0x%08x` for any header word other than `0x1020` / `0x2000`; the TNT file missing → **fatal** with the path as the whole message | n/a | feature-name table entry that no feature TDF defines → **fatal** `Record "%s" missing from feature files`; a cell feature word below the void threshold but **at or beyond the table count** indexes past the catalog (*garbage*, no bound) | *fault (fatal box)*: a 0-byte allocation's first word is read as the version — the `Unknown TNT version` box for any value but the two accepted ones | `Width × Height × 13`, tile count × 1,024, minimap `w × h` are allocations (out-of-memory fault); negative dimensions skip the per-cell loops (signed tests) |
+| **3DO model** (§8) | *garbage or fault*: whole-load, then unconditional relocation of the name, vertex, primitive, sibling and child offsets and each primitive's three offsets; nothing is bounded | same | none: the version signature is **never read** | piece names: the script's piece-name lookup takes the first match (doc 04) | texture name that no texture GAF holds → the primitive becomes flat colour index 209 (`[03 §2.4]`); the model file missing → **fatal** (path) at unit compile, weapon compile and feature compile alike | *skip*: null → fatal as above | counts drive signed loops; a huge vertex count only walks memory |
+| **COB script** (§8) | *garbage or fault*: whole-load, checksum over the file, then relocation of the five tables by their declared counts, unbounded | same | none: the version word is **never read** | script/piece names: first match (`[04 R-CB-01]`) | piece name absent from the model → doc 04 (`[04 R-COB-01]`); the script file missing → null, and the first unit created from that definition **crashes** (`[04 R-COB-04 §8]`) | *skip*: null → as missing | signed loop bounds; the code array is never bounded (doc 04 owns out-of-range jumps) |
+| **PCX** (§9) | *skip* when the 128-byte header does not read completely; otherwise *accept-with-garbage*: a short read leaves the previous byte in place, so the decoder re-runs the last byte as every further command and value (a stale `0xC0` never advances the row — **hang**) | row runs are clamped to the remaining row width; dimensions come from the header only | *skip*: manufacturer byte ≠ `0x0A` or version ≠ 5 → 0 to the caller, no message; the caller decides (unit pictures blank) | n/a | n/a | *skip* (header read fails) | `width × height` from two 16-bit extents is an allocation (out-of-memory fault); a file shorter than 768 bytes seeks to a negative palette offset, the seek fails and the 768 palette bytes are read from wherever the position was (*garbage*) |
+| **PAL** (§9) | *accept-with-garbage*: the whole block is what the file held, the consumer reads 1,024 bytes | n/a | none | n/a | a `.PAL` that is missing **or zero-length** is rebuilt from `palettes\<name>.PCX`, written back to `palettes\<name>.PAL` on the host, and `palettes\PALETTE.ALP`, `.LHT`, `.SHD` are deleted; the PCX missing too → **fatal** (path of the PCX) | see previous cell | n/a |
+| **FNT** (§9) | *garbage or fault*: no validation of any kind; glyph offsets are used as read (`[03 R-FONT-01 §1]`) | same | none | n/a | a font file missing → **fatal** (path) for the two startup fonts and every side font (§6) | *skip* → fatal as missing | none (offsets are 16-bit) |
+| **WAV** (§10) | *skip*, silent: a RIFF whose `data` size exceeds what can be read → the buffer is released and the sample is null; a RIFF cut before `fmt ` or `data` → null | same | *accept-with-garbage*: anything that is neither `DIGI`+`HSHD`+`SDAT` nor `RIFF`+`WAVE` is played as **raw 8-bit mono 11,025 Hz** from byte 0, header included | first `fmt `/`data` chunk wins | a sample file missing → null; the alias plays nothing, silently | *Unknown* — a zero-length file classifies as raw with length 0; whether the DirectSound buffer creation fails or plays nothing · static trace of the buffer-create wrapper's zero-size path, or manual observation | chunk sizes are compared signed: `fmt ` below 16 bytes or a `data` size ≤ 0 → null; the RIFF walk stops when the next chunk offset ≥ the RIFF size + 8 |
+| **Save (HAPIBANK)** (§11, layout `[08 R-SAVE-02]`) | *garbage or fault*: item tables are trusted | same | tag ≠ `HAPIBANK` or bank version ≠ 1 → the load-game screen's modal `Invalid savegame file`, back to the screen; a compressed directory or account that fails to decode → **fatal** `[HapiBank::OpenBank] Decompression Error: %s` / `[HapiBank::LoadAccount] Decompression Error: %s` + `File: %s` | doc 08 | `Mission` missing or naming no mission, `Gametype` outside 1..2 → `Invalid savegame file`; save `Version` ≠ 0x11 → units skipped (`[08 R-SAVE-02]`) | *skip* (bank open fails) | doc 08 |
+| **TAD demo** | not a retail input — the executable neither reads nor writes `.tad`; `[fmt tad]` documents a third-party recorder | — | — | — | — | — | — |
+
+**Headline.** 16 rows × 7 classes = 112 cells. Counting each cell by its
+dominant outcome: **fault** 21 (fatal box, unchecked access, or
+out-of-memory), **skip** 17, **default** 5, **accept-with-garbage** 24,
+**Unknown** 1; the remaining 44 are not applicable to the format or are
+well-defined acceptances (duplicate rules, clamps) owned by the cited
+section.
+
+#### HPI: what the mount validates, and what the read path does after [R-MALF-01 §3]
+
+Mount-time validation is the three checks §2 states. The details that decide
+the malformed cells: the header read (20 bytes), the footer read (36 bytes)
+and the directory-blob read all **ignore their return counts**, so a short
+file is validated on whatever the stack or heap held; the working key is
+derived and the blob deciphered from byte 20 up to the blob size (a signed
+test — a blob size below 20 deciphers nothing); the root-directory pointer,
+every entry's name and data pointer, and every subdirectory's entry array are
+**biased by the block address and written back in place**, recursively, with
+no bound and no visited set. An offset that leaves the blob is therefore a
+wild *write* at mount time (access-violation fault through the crash
+filter); a subdirectory that points back at an ancestor recurses until the
+stack is exhausted (stack-overflow fault). The entry-count loop runs
+`count − 1 ≥ 0` times as a **signed** test, so a count with the top bit set
+means no entries.
+
+At read time a stored record clamps the request to `size − position` and
+returns the C-runtime count. A compressed record reads its chunk table at
+open (count ignored), then per chunk: allocates the stored length, reads it
+— **a count that differs from the stored length returns all-ones silently**
+— deciphers it with the archive key, and decodes it (§2 "Chunk wire
+format"). The decoder's result codes map to the names `SQUASHERR_OK`,
+`SQUASHERR_BADHEADER` (marker), `SQUASHERR_BADCHECKSUM`,
+`SQUASHERR_BADUNPACKSIZE` (produced ≠ declared), `SQUASHERR_BADUNPACKTYPE`
+(method byte above 3) and every nonzero code is **fatal** with the five-line
+message of §1. Two things the decoder does not check: the method-byte test
+is `> 3`, so methods 0 and 3 pass, decode nothing and fail as
+`BADUNPACKSIZE`; and **neither decoder bounds its output to the 64 KiB chunk
+buffer** — the LZ77 variant stops only at a match whose position is zero
+(and reads past the compressed buffer if the stream has none), the zlib
+variant is given the header's declared length as its output room. A chunk
+declaring more than 65,536 output bytes corrupts the heap before the size
+check can reject it. (`[fmt hpi]` carries the same facts in byte terms.)
+
+#### TDF: a parse error is fatal, and the exact message [R-MALF-01 §4]
+
+**Correction (2026-08-29).** §4 "Malformed input and failure behavior"
+said: "A failed load never terminates at the parser: the caller receives a
+valid-but-empty tree, so subsequent typed reads return their defaults. The
+caller decides whether that state is fatal for its resource family." That is
+true only of a **missing or empty file**. A **syntax error** is fatal: every
+one of the five diagnostics is formatted into one buffer and handed to the
+fatal channel — system-modal box, application title, then `exit(1)`. There
+is no error return from the parser and no partially-filled tree survives.
+The paragraph is corrected in place.
+
+The message is one line: `Parse error in .TDF File! ` (trailing space),
+then the diagnostic, then ` - name = '<section>' from file <path>` — the
+literal word `name`, the **section name** the parser was inside (the
+top-level call passes `root`), and the logical path the loader was given.
+§4's earlier shape ` - <name> = '<value>' from file <file>` is corrected:
+the second placeholder is the section name, not a value.
+
+The parser's decisions, in order, on each non-blank byte: `[` → the closing
+`]` must exist somewhere after it (`Sub-record - closing ']' not found`),
+then, after whitespace, the next byte must be `{` (`Sub-record - opening '{'
+not found`), then the section body is parsed recursively; `}` closes the
+current section — at the **top level a `}` ends the parse and everything
+after it is ignored**; end of text inside a section is `End of file -
+nextblock not zero` (at the top level it is the normal end); any other byte
+starts a field, whose `=` and then `;` are located by a forward scan to the
+end of the text (`Data field - '=' not found`, `Data field - ';' not
+found`), so a missing `;` swallows every following line into the value
+before failing at the file's last field. Keys and values are unbounded
+copies of the source text; only the string accessor bounds them (to the
+caller's buffer, forced terminator).
+
+Numeric edges: the integer accessor's conversion is the C-runtime decimal
+`atol` — whitespace, sign, digits, `total × 10 + digit` with **no overflow
+detection**, so an authored `4294967297` reads as 1 and `2147483648` as
+−2147483648; the fixed-point accessor multiplies the C-runtime `atof` result
+by 65,536 and truncates through the x87 store, which yields the indefinite
+integer `0x80000000` for any product outside the signed 32-bit range —
+i.e. any authored magnitude of 32,768 or more; a decimal beyond the double
+range reads as infinity and takes the same path (*Supported inference* for
+the infinity step, which is C-runtime behaviour, not game code).
+
+#### Catalog-level outcomes not stated elsewhere [R-MALF-01 §5]
+
+* **Unit `Version` and `Copyright` gate (Established).** The unit catalog
+  loader reads two keys from every unit section that the compiler of §5 does
+  not: `Version` with the floating accessor (default 0.0) and `Copyright`
+  with the string accessor (128 bytes; the default is a joke sentence that
+  cannot match). The version is split into `major = trunc(v)` and
+  `minor = trunc((v − major) × 10)` and accepted when `major < 3`, or
+  `major = 3` and `minor ≤ 1` (the executable's own version bytes are 3, 1,
+  1); the copyright is accepted when, after the four characters at the
+  year position are overwritten with `0000`, it equals
+  `Copyright 0000 Humongous Entertainment. All rights reserved.` byte for
+  byte (the same wildcard trick as the archive footer). A unit failing the
+  version test is dropped from the catalog and, once the pass ends, the
+  `Error` box `Incompatible units found.  They will be ignored.  Please
+  download the latest version of the game.` is shown — **unless** any unit
+  also failed the copyright test or a loose-file/session-mode test, which
+  sets a suppress flag and drops **silently**. `[fmt fbi]`'s "community
+  lore" that units without the exact copyright line fail to load is thereby
+  established, with the mechanism: the unit is not rejected by the parser,
+  it is compacted out of the catalog after parsing. `[R-KEYS-01 §5]`'s
+  generated table does not list these two keys; the generator's parser set
+  should gain the catalog loader (cross-doc note for the orchestrator).
+* **Weapon `ID` (Established).** The record parser indexes
+  `table + ID × 277` with **no range check**; R-CONTENT-02's "scratch slot
+  before record 0" for the default −1 is the only sanctioned out-of-table
+  case. Any other ID outside 0..255 writes a 277-byte record into whatever
+  session state neighbours the table.
+* **Unit and weapon models (Established, corrects the cross-reference
+  table).** `objectname` and weapon `model` are loaded at compile time
+  through the shared model loader; a null result is passed to the fatal
+  channel with the **path** (`objects3d\<name>.3DO`) as the entire message.
+  The cross-reference table's row "Model (objectname) — the model cache slot
+  stays empty; rendering degrades — supported inference" is wrong and is
+  corrected in place.
+* **Feature GAF references (Established; closes the tail item "malformed or
+  missing burn sequences").** A feature that names a `filename` GAF which
+  does not exist gets a null root and no diagnostic (this loader, unlike
+  the anims cache used for effects, does not treat a missing file as
+  fatal); every `seqname*` lookup against a null root, or against a root
+  that lacks the entry, stores a null sequence. Burn, death and reclaim
+  sequences that do resolve have their loop byte cleared as §5 states. A
+  feature with a null idle sequence draws nothing; there is no substitute
+  art and no message.
+* **`sidedata.tdf` and the misnamed box (Established; settles SC2).** The
+  catalog compiler loads `gamedata\moveinfo.tdf` and stops with
+  `Can't load MOVEINFO.TDF` when that fails, and later loads
+  `gamedata\sidedata.tdf` and stops with `Can't load GAMEDATA.TDF` when
+  **that** fails. No file named `gamedata.tdf` is opened anywhere. §1's
+  sentence that the diagnostic's "branch is unreachable when the directory
+  exists without the file" is replaced: the branch is reachable, and it
+  guards the side-data file.
+* **GUI panels (Established).** The panel loader parses `guis\<name>.gui`
+  with the shared TDF loader (a missing file returns 0 to the screen; a
+  syntax error is fatal as §4) and then walks the top-level sections **by
+  index, in file order** — the `GADGET<n>` names are not consulted. The
+  header gadget's `totalgadgets` is read and then overwritten with the
+  number of sections minus one. Each gadget's `[COMMON]` is read only when
+  present; the kind byte selects extra keys for kinds 0–8 and 10 (a text
+  box's `maxchars` is capped at 128); any other kind reads nothing more.
+  Gadget records are 347 bytes inside a 69,463-byte window record with no
+  count test, so about 199 gadgets fit before the loader writes past the
+  record (*Supported inference* for the exact capacity — decider: the
+  gadget array's base offset within the window record; *Established* that
+  no count is checked).
+
+#### GAF: what the loader and the blitter check [R-MALF-01 §6]
+
+The loader reads the entry count as a **signed 16-bit** value (the 32-bit
+field's low half; a value with bit 15 set means no entries), then for each
+entry the 16-bit frame count, and for each frame biases the header offset,
+the data offset, and — when the byte at frame offset 10 is nonzero — that
+many subframe pointers and each subframe's data offset. Every bias is
+written back; nothing is bounded, so a truncated or corrupt GAF faults during
+load, not during draw. The version word is never read.
+
+**Correction (2026-08-29).** §6 "Frame header, 24 bytes" (and `[fmt gaf]`)
+describe the subframe count as "a 16-bit subframe count" at offset 10. The
+field is two bytes wide in the file, but **the executable reads only the low
+byte** — in the loader's relocation loop and in the blitter's composition
+loop alike — so a count of 256 composes nothing and 300 composes 44. The
+high byte (frame offset 11) has a separate meaning on a **subframe**: when
+it is nonzero the compositor draws that subframe through the
+light-table-remapped blit path instead of the plain one, and that path draws
+only when the destination window's remap flag is set. Retail data never
+exercises either edge: a census over the 958 GAFs of the reference install
+(123,294 frames including subframes) finds a maximum subframe count of 12
+and no nonzero high byte. The doc 02 sentence stands corrected; `[fmt gaf]`
+carries the byte-level statement.
+
+The RLE blitter decodes each row until it has produced `width` pixels: a
+skip, repeat or literal run that would overshoot is **clamped to the
+remaining width** (the excess is discarded; a literal run still advances the
+source by its full count); a row whose stored payload count is zero is left
+untouched (fully transparent); a row whose commands run out **before**
+`width` pixels is not detected — the decoder continues into the next row's
+count bytes and payload as commands, and only the next row start (computed
+from the stored count) is correct again. Frames wholly outside the clip
+rectangle draw nothing; there is no per-pixel bound beyond the row width.
+
+#### TNT [R-MALF-01 §7]
+
+`[R-MAP-01 §6]` states the open, the ten-read load and the version gate. For
+the matrix: the summed read count is never compared with the size; every
+header pointer is biased without a bound; the tile map is copied as
+`(Width·16/32) × (Height·16/32)` 16-bit entries from wherever the tile-map
+pointer lands, the attribute pass walks `Width × Height` records of 4 (or 8)
+bytes, the feature-name table `count` records of 132 bytes, the tile set
+`count × 1,024` bytes. A cell's feature word is stamped when it is below the
+void threshold (`0xFFFB` canonical, `0xFC` legacy) with **no comparison
+against the compiled table's count**, so an index at or beyond the count
+reads footprint and flags from memory past the catalog. A zero-length TNT
+allocates nothing, reads the version word from the empty block and fails
+the version gate (fatal) unless the heap happens to hold one of the two
+accepted values.
+
+#### 3DO and COB [R-MALF-01 §8]
+
+Both are loaded whole and relocated in place (§6 "Model archive", "Compiled
+script archive"). Neither loader reads the version word. The model relocator
+biases the name and auxiliary offsets when nonzero, the vertex and primitive
+array offsets always, and recurses into the sibling and child offsets when
+nonzero (no visited set); then each primitive's three offsets. The script
+relocator biases the five table pointers and the entries of the script-name,
+piece-name and trailing-record tables by their declared counts. A missing
+model is fatal wherever a definition names one (unit, weapon, feature) with
+the path as the message; a missing script is a null script pointer and the
+crash at creation that `[04 R-COB-04 §8]` establishes. An unresolved
+primitive texture is `[03 §2.4]`'s flat colour 209.
+
+#### PCX, PAL and FNT [R-MALF-01 §9]
+
+**PCX.** The decoder reads 128 bytes and requires the read to be complete,
+the first byte `0x0A` and the second `5`; on failure it returns 0 and the
+caller decides (no message). It takes `width = xmax − xmin + 1`,
+`height = ymax − ymin + 1` from the 16-bit extents, allocates `width ×
+height`, seeks to `size − 768` and reads the palette **without looking for
+the 0x0C marker**, seeks back to 128 and decodes rows of exactly `width`
+pixels: a run is `byte & 0x3F` pixels of the next byte, clamped so the row
+never overflows; a literal is one pixel; **`bytes_per_line` is never read**,
+so a file whose scan lines are padded decodes each row from the previous
+row's padding (visible shear, no failure) — this closes `[fmt pcx]`'s
+"untested" caveat. Each command byte is read through the shared VFS read into
+the same one-byte buffer; at end of file the read returns 0 and leaves the
+previous byte, so a truncated body replays its last byte as every remaining
+command and value: a stale literal fills the rest with that index, a stale
+run fills it with the value byte, and a stale `0xC0` (run of zero) **never
+advances the row and hangs the loader**. On a file shorter than 768 bytes
+the palette seek is negative, the C-runtime seek fails, and the 768 bytes
+are read from the current position (garbage palette).
+
+**PAL.** The palette loader probes `palettes\<name>.PAL`. When the file is
+missing **or zero-length** it allocates a 1,024-byte palette, decodes
+`palettes\<name>.PCX` (fatal, path as message, when that fails) and packs
+its 768-byte trailer into 256 four-byte entries with the fourth byte zero,
+then **writes the 1,024 bytes to `palettes\<name>.PAL` on the host file
+system** (open-for-write relative to the working directory; the result is
+ignored) and deletes the host files `palettes\PALETTE.ALP`,
+`palettes\PALETTE.LHT` and `palettes\PALETTE.SHD` (errors ignored) so the
+derived tables are rebuilt. When the `.PAL` exists it is loaded whole with
+no size check, and the consumer reads 1,024 bytes: a 768-byte three-byte
+palette is read as 256 four-byte entries — the first 192 entries wrong by
+one byte per entry and the last 64 taken from beyond the block. That closes
+`[fmt pal]`'s "whether the engine ever consults 768-byte palettes":
+it does not; it misreads them.
+
+**FNT.** Loaded whole (`[03 R-FONT-01 §1]`), no header or table validation;
+the two startup fonts and every side font are fatal when missing (path as
+message). A truncated font's glyph offsets point past the block and the
+rasterizer reads whatever follows.
+
+#### WAV [R-MALF-01 §10]
+
+The classifier seeks to 0 and reads four bytes, then — **each time into the
+same buffer, so a failed read keeps the previous bytes** — tests `DIGI` at
+0, `HSHD` at 8 and `SDAT` at 32 (legacy), else `RIFF` at 0 and `WAVE` at 8,
+else raw. **Correction (2026-08-29)** to §7 "WAV", three points: (1) the
+legacy payload is not "trimmed by ten bytes" — the loader seeks to byte 40
+and takes **file size − 40** bytes as the sample, i.e. everything after the
+8-byte `SDAT` chunk header, whose size field is never read; the rate is the
+32-bit word at 22, remapped 11,000 → 11,025; (2) the RIFF chunk walk does
+**not** honour odd-size padding — the next chunk is at `offset + 8 + size`
+exactly; (3) the format tag and block-align words of `fmt ` are **never
+read** — only channels (+2), sample rate (+4) and bits per sample (+14) are
+taken, and block align is recomputed as `(bits >> 3) × channels`, so a
+compressed-format file is decoded as PCM of the declared width. The walk
+stops when the next chunk offset reaches the RIFF size + 8; a `fmt ` chunk
+shorter than 16 bytes or a `data` size of zero or less returns null. The
+buffer creator then reads `data size` bytes and requires the count to reach
+the size; a short read releases the buffer and returns null. A null sample
+is silent everywhere: the alias plays nothing and no message is raised. The
+raw path (no recognized header) plays the whole file, header bytes included,
+as 8-bit mono 11,025 Hz.
+
+#### Save file [R-MALF-01 §11]
+
+`[08 R-SAVE-02]` owns the bank layout and the version-0x11 gate. The failure
+edges: the bank opener requires the eight-byte tag `HAPIBANK` and a bank
+version word of 1, else returns failure silently; the load-game screen turns
+that, an unreadable `summary` account, a `Gametype` outside 1..2, or a
+`Mission` name that resolves to no mission into the modal `Invalid savegame
+file` and stays on the screen. A compressed directory or account whose
+`SQSH` decode fails is **fatal** with `[HapiBank::OpenBank] Decompression
+Error: %s` or `[HapiBank::LoadAccount] Decompression Error: %s` plus
+`File: %s` on a second line. Item tables inside an account are walked by
+their declared counts with no bound (garbage or fault when corrupt); a
+missing or type-mismatched item returns the caller's default.
+
+#### Corrections made by this unit, and cross-document needs [R-MALF-01 §12]
+
+Corrected in place in this document: §2 chunk-failure sentence (§1 above);
+§4 malformed-input paragraph and its ` - <name> = '<value>' ` shape (§4
+above); §4 "### Unknown" block's "empty-tree failure policy"; §5
+cross-reference table's model row (§5 above); §1's `GAMEDATA.TDF` sentence
+(§5 above); §6 GAF frame-header subframe count (§6 above); §7 WAV (§10
+above). Format docs corrected: `[fmt hpi]` (validation section added, the
+BANK caveat pointed at doc 08), `[fmt tdf]` (parse errors fatal; duplicate
+rules defined), `[fmt gaf]` (subframe byte, RLE edges), `[fmt tnt]` (bounds),
+`[fmt 3do]`, `[fmt cob]` (version unread), `[fmt fbi]` (`Version`/`Copyright`
+gate established), `[fmt pcx]` (stride caveat closed, truncation), `[fmt pal]`
+(derivation and write-back, 768-byte caveat closed), `[fmt fnt]`, `[fmt gui]`,
+`[fmt wav]`, `[fmt tad]` (not a retail input).
+
+Cross-document needs (not this unit's files): `docs/SPEC_CONFLICTS.md` SC2
+should record the misnamed box (the file is `sidedata.tdf`); `[R-KEYS-01
+§5]`'s generator should add the catalog loader's `Version` and `Copyright`
+reads; `[04 §4]` may cite §8 for the unread COB version word; doc 07 owns
+what a screen does when its panel file is missing (§5 GUI); doc 03 may cite
+§6 for the subframe high-byte remap path. Implementation note for the
+reconciliation pass: Nanolathe's loaders are **stricter** than retail in
+every "garbage or fault" cell (bounded offsets, cycle detection, chunk output
+limits, PCX/GAF row checks, 16 MiB frame limits) and **more lenient** in
+every "fatal" cell (a TDF syntax error, a missing model, a missing side font
+and a bad TNT version are returned as errors, not process exits); neither is
+a research edit.
+
+Remaining Unknowns from this unit (also in the tail): the zero-length WAV
+outcome (§10, decider above); the exact GUI gadget capacity (§5, decider
+above); the C-runtime decimal conversion's overflow result feeding the
+fixed accessor (§4, decider: static check of the runtime's `strtod` overflow
+path).
+
+
 ## Missing and unknown
 
 Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it. Findings that closed an item live in the
 body — several under `R-<id>` headings — and are not restated here.
+
+**Correction (2026-08-29, RWU-02-3).** Two bullets were removed: "Fatal-
+versus-recoverable classification for the resource families not classified
+in §8" (closed by the matrix, `[R-MALF-01 §2]`) and "Behavior for malformed
+or missing burn sequences on non-filename features" (closed in
+`[R-MALF-01 §5]`: a missing GAF or entry is a silent null sequence). Three
+bullets were added for the unit's residual Unknowns.
 
 **Correction (2026-08-28, RWU-00-5).** This tail previously opened with a
 ~70-line recital of everything the document had closed, followed by a "Still
@@ -3341,8 +3797,6 @@ finding they recited remains in the body sections that own it.
   block on any failure) is established.
 * Exact bit consumers of the multiplayer lobby flag words · doc 08 · static
   trace.
-* Fatal-versus-recoverable classification for the resource families not
-  classified in §8 · §8 · static trace.
 * Archive entry-flag bits other than the subdirectory bit and the mutable
   enumeration-visibility bit (bit 1, mask `0x02`) · §2 "HPI-family container
   format" · static trace. Bounded-negative today: no other bit is tested by any
@@ -3352,8 +3806,6 @@ finding they recited remains in the body sections that own it.
 * Caller-specific duplicate-section merging policies · §4 · static trace. The
   first-match section accessor, the enumerator, and the duplicate-key winner
   are established.
-* Behavior for malformed or missing burn sequences on non-filename features
-  · §5 "Feature record" · static trace. Marked `TODO(question)` at the site.
 * Sound alias-cache eviction policy and the DirectSound streaming flags · §5
   "Sound aliases" · static trace. Eviction is bounded-negative (no eviction
   site in the census); both are marked `TODO(question)` at the site.
@@ -3362,6 +3814,17 @@ finding they recited remains in the body sections that own it.
   [06 §6.5] · manual retail observation (a mission authoring one nonzero and
   one zero parameter, tracing which values reach the storm). Marked
   `TODO(question)` at the site.
+* Zero-length WAV sample: the classifier reports raw with length 0; whether
+  the DirectSound buffer creation fails (null sample) or an empty buffer
+  plays nothing · §7 `[R-MALF-01 §10]` · static trace of the buffer-create
+  wrapper's zero-size handling, or manual retail observation.
+* Exact GUI gadget capacity of the fixed window record (about 199 by the
+  allocation size and record stride; the loader checks no count) · §6
+  `[R-MALF-01 §5]` · static trace of the gadget array's base offset in the
+  window record.
+* Overflow result of the C-runtime decimal conversion feeding the fixed-point
+  accessor (infinity → indefinite integer is the expected chain) · §4
+  `[R-MALF-01 §4]` · static check of the runtime `strtod` overflow path.
 * Reader for plot-mask bit 7 · §6 "Map files" · static trace over the
   unrecovered regions. Marked `TODO(T23)` at the site; the mask preserves the
   bit and no isolated reader exists in the bounded census.
