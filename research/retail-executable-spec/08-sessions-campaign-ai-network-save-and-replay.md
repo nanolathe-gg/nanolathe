@@ -325,18 +325,359 @@ The campaign front end consumes titles, descriptions, difficulty choices, planet
 
 Planet values select parallel tables for briefing keys, panorama art, and rotation animation, each table holding the same number of entries and indexed by the same planet comparison. A special lunar branch rewrites the briefing selection when a display flag is set. The briefing controller opens a briefing panel, hides and shows specific interface groups, populates text, and fetches panorama and planet imagery through the same graphic lookup used elsewhere.
 
-Wind for the briefing screen is drawn from the CRT stream before the simulation consumes either value: speed is a uniform integer in the authored minimum to maximum inclusive range, and direction is the low six bits of a CRT draw. The authored wind bounds and the resulting values are stored in the mission object and later initialized for the simulation. Missing wind keys default to zero. [P0-05]
+Wind for the briefing screen is drawn from the CRT stream before the simulation consumes either value: speed is a uniform integer in the authored minimum to maximum inclusive range, and the second draw's low six bits seed the display's jitter countdown (not a direction — corrected in [R-CAMP-01 §2]). The authored wind bounds are stored in the mission object; the two drawn values are briefing-screen display state only [01 §7.3]. Missing wind keys default to zero. [P0-05]
 
-Missing optional media can fall back or suppress presentation without aborting battle entry; missing data required to identify the mission or its terrain is a load error. A missing planet value that matches no table entry leaves the previous art unchanged rather than aborting.
+Missing optional media can fall back or suppress presentation without aborting battle entry; missing data required to identify the mission or its terrain is a load error. A planet value that matches no table entry selects table entry 0, Green planet ([R-CAMP-01 §2]; the earlier "leaves the previous art unchanged" was wrong).
 
 ### Progression — Established with bounded negative and unknown residual [P0-05]
 
-The executable contains campaign selection, mission list, briefing, end-mission, score and report, and between-mission state. The end-of-mission latch is established: the trigger queues are polled once per 30 ticks in the local player's slice only, with victory as an AND across its queue and defeat as an OR, and victory evaluated first so simultaneous completion resolves as victory. When either side completes, the latch arms a countdown at four that decrements roughly once per second before a latch word is written with separate bits for ending, won, and lost; the lose path clears the win bit it would otherwise share. The score helper that writes the campaign result combines kills multiplied by a kill multiplier and elapsed ticks divided by 1800 multiplied by a time multiplier, both truncated and clamped at zero, and stores a W or L character per mission slot. [P0-05]
+The executable contains campaign selection, mission list, briefing, end-mission, score and report, and between-mission state. The end-of-mission latch is established: the trigger queues are polled once per 30 ticks in the local player's slice only, with victory as an AND across its queue and defeat as an OR, and victory evaluated first so simultaneous completion resolves as victory. When either side completes, the latch arms a countdown at four that decrements roughly once per second before a latch word is written with separate bits for ending, won, and lost; the lose path clears the win bit it would otherwise share. The score helper that writes the campaign result combines kills multiplied by a kill multiplier and the global tick divided by 60 multiplied by a time multiplier, both truncated, summed and clamped at zero, and stores a W or L character per mission slot ([R-CAMP-01 §7]; the earlier "divided by 1800" was wrong — the divisor is 60). [P0-05]
 
 Persistence is split. Difficulty, the skirmish lobby fields, and three registry mirrors — difficulty, a games flag, and an all-missions flag — are kept under the installed software registry path and written back immediately when absent so a first run fully populates the registry (the earlier "two registry mirrors" count is corrected: the enumeration below lists three). One mirror holds the difficulty value masked to 16 bits and cycled by the difficulty controls; a second mirror holds a games flag gated on a display mode, and a third holds an all-missions flag as a single bit. The per-mission W and L characters in memory and the between-missions bank account named Summary that carries a BetweenMissions flag are written through the bank system, not the registry. The bank's timing block that persists scheduler state is a 28-byte binary box; larger boxes have trailing bytes ignored, and the bank's string pool, header, and account enumeration are not range-checked. Campaign continuation on load inspects the saved Summary account for the BetweenMissions flag to decide between fresh mission spawning and battle reconstruction — the battle-entry gate routes the flag-present case to the fresh spawner and the flag-absent case to battle restoration, never the reverse. [P0-05] [lane 08 BetweenMissions polarity]
 
 VFS first-win, first-gap termination, language-prefixed names, wind draws from the CRT stream before simulation, the latch bits and scoring arithmetic, and the registry versus bank split are established. The all-missions registry bit's consumer is located: the single-player panel shows its "Any Msn" control and keeps the bit when set, a toggle callback (inert while the panel's text field holds the "DRDEATH" easter-egg string) flips the bit, toggles the control, and writes the bit back to the registry, and a writeback helper persists it. The mission-list build always counts every mission and neither the new-game panel nor the end-mission screen filters the list by the bit — the exact listbox-selection effect of the toggle remains the bounded residual (the earlier "no reader anywhere" is superseded). The provider-specific enumeration order beyond mount order is host-dependent but deterministic for a given filesystem, and the exact narration and glamour fallback beyond silent suppression is not closed. [P0-05] [lane 08 AllMissions]
 
+
+
+### Closed — campaign catalog: file grammar, enumeration and the mission list [R-CAMP-01 §1] (2026-08-29)
+
+**Scope.** RWU-08-3. This section states, at implementable precision, how the
+campaign catalog is enumerated and how a campaign file becomes a mission list.
+Everything below is **Established** by static trace unless marked otherwise;
+the raw trail lives outside the repo.
+
+**The campaign object.** One heap object (the *campaign record*) holds the
+session kind word (1 campaign, 2 skirmish, 3 multiplayer — the discriminant
+[08 "Mission type dispatch"] reads), the selected campaign name (256 bytes),
+nine 256-byte *media slots* numbered 0–8, the parsed campaign TDF, the parsed
+mission TDF, the current mission index and a companion word that every index
+write clears to zero. The slots are:
+
+| Slot | Content | Directory | Extension | Reader |
+|---|---|---|---|---|
+| 0 | campaign file path | `camps` | `TDF` | catalog open |
+| 1 | terrain file path | `Maps` | `TNT` | terrain loader; the slot's byte size is also stored (a missing slot stores 0) |
+| 2 | briefing text | `camps\briefs` | `TXT` | briefing text region (§3) |
+| 3 | narration sound | `camps\briefs` | `WAV` | briefing narration (§3) |
+| 4 | mission hint | `camps\hints` | `TXT` | **no reader in the image** (dead slot) |
+| 5 | outcome glamour | *(empty)* | `PCX` | end-of-mission outcome art (§7) |
+| 6 | use-only units list | `camps\useonly` | `TDF` | build-restriction loader [05] |
+| 7 | AI profile | `ai` | `txt` | computer-player profile loader [08 "Computer-controlled players"]; falls back to `default` when the key is empty |
+| 8 | glamour sound | `camps\briefs` | `WAV` | end-of-mission glamour display (§7) |
+
+**Slot path construction.** A slot is filled by the *media resolver* from
+`(directory, name, extension)`: when `name` is empty the slot is cleared
+(and for slot 1 the byte size is 0). Otherwise the path is
+`<directory>\<name>`, the text from the **last `.`** onward is removed (so an
+authored `Ac01hint0.txt` or `tabtcore.pcx` loses its extension), and
+`.<extension>` is appended. When the language buffer of [02 §3] is non-empty
+the resolver first tries `<directory>-<language>\<name>.<extension>` and keeps
+it only if the VFS can open it; otherwise it falls back to the plain form. The
+stock install carries `camps\briefs-french`, `-german`, `-italian`,
+`-spanish` for exactly this rule (asset census). The general path joiner used
+elsewhere in this unit applies the same language-suffix-then-plain rule with
+`.<extension>` appended after stripping the name's own extension. For slot 5
+the directory is empty, so the slot holds `\<glamour>.PCX`; the outcome-art
+loader (§7) skips the leading separator and re-joins under `bitmaps\glamour`.
+
+**Enumeration of campaigns.** The new-game panel builds its campaign list by
+enumerating `camps\*.TDF` through the VFS (mount order and first-win as in
+"Campaign discovery" above). Two 256-byte-per-entry name arrays are
+allocated for the count; every enumerated file is opened as TDF and admitted
+to the visible list only when it has a `[HEADER]` block whose `campaignside`
+equals, case-insensitively, the local player's side name **or** the literal
+`ALL`. Files without `[HEADER]` are skipped silently. The returned count is
+the number admitted; the list order is the enumeration order.
+
+**Opening a campaign.** The catalog opener copies the requested name into the
+record, resets all nine slots to empty, and — when the name is non-empty —
+resolves slot 0 as `camps\<name>.TDF` and parses it. A parse failure raises
+the message box `The requested campaign file, %s, does not exist.` (`%s` is
+slot 0's path) and re-enters the opener with an empty name, which leaves the
+record with no campaign and no mission list. On success the mission index and
+its companion word are zeroed and the mission loader runs for index 0.
+
+**Mission list.** The list builder counts blocks named `MISSION%d` from 0
+until the first missing index (the earlier text's "Mission zero, Mission one"
+wording is corrected: the block names are `MISSION0`, `MISSION1`, … with no
+space, and the decimal is unpadded). It allocates `count × 256` bytes tagged
+`MissionList` and fills entry *i* with the block's `missionname` read through
+the language-prefixed accessor (`<Language>missionname` first, then
+`missionname`, 256-byte buffer); a block with neither key yields the literal
+`Error -- Unnamed Mission`. A campaign with zero blocks returns count 0 and no
+array. Stock campaign files carry `[HEADER] campaignside=ARM|CORE` and
+`[MISSIONn] missionfile=…; missionname=…; Germanmissionname=…;
+Frenchmissionname=…; Italianmissionname=…; Spanishmissionname=…;` (asset
+census).
+
+**Index helpers.** *Has-mission(i)* is `i < count` with the same contiguous
+count. *Advance* (`next mission`) succeeds only when `count > index + 1`; it
+then increments the index, zeroes the companion word and reloads. *Set(i)*
+stores `i`, zeroes the companion word and reloads. Neither helper tests the
+W/L marks — progression by outcome is decided by the end-mission screen
+(§7), not by the record.
+
+**Look-up by name.** The save loader restores a campaign mission by name: for
+session kind 1 it walks the mission list comparing `missionname` values
+case-insensitively and sets the first match's index; no match leaves the
+record on index 0 and returns failure. For kinds 2 and 3 the name is an OTA
+path handled by the skirmish loader [R-SKIR-01 §1].
+
+**Mission loader, campaign branch (kind 1).** With `MISSION%d` for the current
+index: a missing block raises `The requested mission file, %s, does not
+exist.` (`%s` is the block name). Otherwise `missionname` (language-prefixed)
+is stored as the mission's display name; `missionfile` (plain key) missing
+raises `Old TED format no longer supported!`; the OTA path is joined as
+`Maps\<missionfile>.OTA` (extension replaced); an unparsable OTA raises
+`Hey, joker!  There is no mission defintion for this mission: %s` (sic); a
+parsed OTA without `[GlobalHeader]` raises `Hey, joker!  Mission file %s is
+corrupt`. All four are message boxes at the same 480-pixel width and abort
+the load (return 0). The `maxunits` key of `[GlobalHeader]` is read with
+default 200 into the session's unit-cap word here, and slot 1 becomes
+`Maps\<missionfile>.TNT`.
+
+**Common tail (all kinds).** After `[GlobalHeader]` is selected the loader
+fills the media slots in this order: `brief` → slot 2, whose file is then
+read whole into an allocated `Briefing` buffer (VFS size + 1, NUL-terminated;
+a missing or empty file leaves the buffer null, so the briefing text region
+stays empty); `narration` → slot 3; `missionhint` → slot 4;
+`glamour` → slot 5; `glamoursound` → slot 8; `UseOnlyUnits` → slot 6. Then
+`mapping` (default 0) and `lineofsight` (default 0) are stored in the
+mission's session-option words, the two companion option words are forced to
+1 and 0, and `memory`, `numplayers`, `Planet` (each up to 128 bytes, default
+empty) are copied verbatim into the record. `nomovie` (default 0) is stored
+in the session's outro-suppression word. `missiondescription` (default `No
+description available`) is stored once, as the translation-table entry for
+its upper-cased text when one exists, else as the raw text. Wind, gravity, tidal,
+lava, sea-level, water-damage, `killmul` and `timemul` (floats, default 0.0)
+follow, then the schema selection of [08 "Schema choice"]; its failure path
+is a single message box `No suitable schema type in mission file!` (the
+`Map error` text the string census lists is pushed beside it and never read
+— the box helper takes one argument). The schema branch also reads
+`HumanMetal`, `HumanEnergy`, `ComputerMetal`, `ComputerEnergy` (ints,
+default 0, stored as floats), `SurfaceMetal`, `aiprofile` → slot 7
+(`default` when empty), and the meteor keys [08 "Meteor showers"].
+
+**Confidence.** Established throughout; the slot table, extension replacement,
+language-suffix probe, `ALL` side wildcard and unpadded `MISSION%d` grammar
+are read directly from the code.
+
+### Closed — briefing screen: planet table, panorama, rotation, text, narration [R-CAMP-01 §2] (2026-08-29)
+
+**Correction.** "Planet and briefing selection" above said a planet value that
+matches no table entry "leaves the previous art unchanged rather than
+aborting" and that the wind draws include a "direction" of "the low six bits
+of a CRT draw". Both are wrong: an unmatched planet selects **entry 0 (Green
+planet)**, and the second draw seeds a **countdown**, not a direction (see
+"Wind display" below). Doc 01 §7.3 already records the draws as display-only;
+this section fixes their meaning.
+
+**Planet table.** The briefing screen builder holds four parallel 15-entry
+tables (plus a terminating null). Index order and contents:
+
+| # | `Planet` value (case-insensitive) | briefing GAF | panorama sequence | rotation sequence |
+|---|---|---|---|---|
+| 0 | `Green planet` | `Greenbrief` | `GreenPan` | `GreenRotate` |
+| 1 | `Archipelago` | `Archibrief` | `ArchiPan` | `ArchiRotate` |
+| 2 | `Wet Desert` | `WDesertbrief` | `WDesPan` | `WDesertRotate` |
+| 3 | `Desert` | `Desertbrief` | `DDesPan` | `DDesRotate` |
+| 4 | `Lava` | `Lavabrief` | `LavaPan` | `LavaRotate` |
+| 5 | `Red Planet` | `Marsbrief` | `MarsPan` | `MarsRotate` |
+| 6 | `Lunar` | `Lunarbrief` | `LunarPan` | `LunarRotate` |
+| 7 | `Metal` | `Metalbrief` | `MetalPan` | `MetalRotate` |
+| 8 | `Lunar2` | `Lunar2brief` | `Lunar2Pan` | `Lunar2Rotate` |
+| 9 | `Ice` | `Icebrief` | `IcePan` | `IceRotate` |
+| 10 | `Lush` | `Lushbrief` | `LushPan` | `LushRotate` |
+| 11 | `Slate` | `Slatebrief` | `SlatePan` | `SlateRotate` |
+| 12 | `Water World` | `Waterbrief` | `WaterPan` | `WaterRotate` |
+| 13 | `Acid` | `Acidbrief` | `AcidPan` | `AcidRotate` |
+| 14 | `Crystal` | `Crystalbrief` | `CrystPan` | `CrystalRotate` |
+
+The lookup walks the name column from 0 comparing the mission's `Planet`
+text (the 128-byte record copy) case-insensitively; the first match wins.
+When the walk reaches the null terminator without a match the index is
+**0**. The stock OTA census shows one `planet=Urban` and nine empty values,
+all of which therefore brief as Green planet. Spelling asymmetries
+(`WDesertbrief`/`WDesPan`/`WDesertRotate`, `Desertbrief`/`DDesPan`/`DDesRotate`,
+`Crystalbrief`/`CrystPan`/`CrystalRotate`) are retail's and must be
+reproduced. The stock install carries `anims\<x>brief.gaf` for every row
+(asset census).
+
+**Lunar rewrite.** Before the walk, if the `Planet` text equals `Lunar` and
+the local player's side index (0 Arm, 1 Core) is non-zero, the character `2`
+is appended in place, so a Core player on a `Lunar` mission briefs with row 8
+(`Lunar2`). Nothing else rewrites the planet text.
+
+**What the tables drive.** The briefing GAF (`<x>brief`, resolved by the
+window's animation-directory prefix with extension `GAF`) is loaded as the
+window's animation set; on load failure nothing below happens and the
+previous GAF stays. Then the `PANORAMA` gadget's animation pointer is set to
+the sequence named by the panorama column (frame index 0) and its custom
+draw callback to the *panorama scroller*; the `PLANET` gadget's animation
+pointer is set to the rotation-column sequence (frame index 0) with the
+*planet rotator* callback, and the rotation sequence is registered with the
+frame-advance timer. A missing sequence leaves that gadget without animation.
+
+**Panorama scroller** (per draw): a horizontal strip is drawn by tiling the
+panorama sequence's frames left-to-right starting at `x = gadget.x − scroll`
+and continuing while frame index ≤ frame count (indices wrap modulo the
+count), where `scroll` advances by 1 pixel every time the presentation clock
+passes a deadline of `now + 2` presentation units and wraps to 0 when it
+reaches the sum of all frame widths. The gadget's frame word is set to
+`(now / 3) mod frameCount` before drawing. After the strip, frame
+`localSide` (0 Arm, 1 Core) of the sequence named **`Panmask`** in the same
+GAF is drawn at the window origin (0, 0) — `Panmask` is the per-side
+foreground overlay, which answers its role. The presentation clock is
+`GetTickCount × rate / 1000` where `rate` is the configured presentation
+frame rate; every "unit" in this section is one such tick.
+
+**Planet rotator** (per draw, rate-limited to one step per 25 ms of wall
+clock): when the narration has stopped playing and the `SHUTUP` control is
+visible, it is hidden; then if the current presentation tick differs from the
+last one seen, the rotation sequence advances one frame and the frame is
+blitted centred in the `PLANET` gadget.
+
+**Wind display.** At screen entry two CRT draws are taken (this is the
+[01 §7.3] pair): `speed = rand() % (maxwindspeed − minwindspeed + 1) +
+minwindspeed`, then `countdown = rand() & 0x3F`. Each draw of the
+`SOLARSYSTEM` region decrements the countdown; when it drops below 1 the
+speed changes by `rand() % 5 − 2`, is clamped to
+`[minwindspeed, maxwindspeed]`, and the countdown is re-seeded
+`rand() % 63`. The region shows the label `Wind Speed` (translated) as
+`"%s : %d"` at (x+80, y+20) and `Gravity` as `"%s : %.1f"` at (x+80, y+40).
+These values never reach the mission record or the simulation; they are
+display state only, and every draw here is a **CRT** draw taken while the
+front end runs (no simulation is ticking).
+
+**Briefing text and narration.** After the gadgets are bound, the text
+loader reads slot 2 (`camps\briefs\<brief>.TXT`) into a scrolling text
+region (`TextRegion`, `MOREBAR` pages it); the `SOLARSYSTEM` and `TextRegion`
+gadgets are given font index `localSide + 1`. Slot 3 (narration) is started
+at volume 60 unless the session is in the live-battle state; `SHUTUP` stops
+it (visible while it plays). The `Start` control runs the campaign-CD check
+(§5) and, when it passes, re-mounts the archive set, stops the narration
+and routes the front end into battle entry; on
+failure it shows the campaign-CD message box and stays. `PrevMenu` stops the
+narration and returns to the previous panel. The whole screen is `MSNBRIEF.GUI`
+with background bitmap `mbrief<side>`; the stock GUI's gadgets are exactly
+`PrevMenu`, `Start`, `PLANET`, `PANORAMA`, `MOREBAR`, `TextRegion`, three
+`FONT` entries (`smlfont`, `armfont`, `corefont`), `SOLARSYSTEM`, `SHUTUP`
+(asset census).
+
+**Confidence.** Established. The slot-2 text buffer, the 25 ms rotator gate,
+the scroll and mask arithmetic, and the countdown semantics are read from
+the callbacks.
+
+### Closed — new-game panel: `CampaignKnob`, `MissionsKnob`, `playanygame4`, `newcampaign4x` [R-CAMP-01 §3] (2026-08-29)
+
+The single-player new-game panel is `NEWGAME.GUI` (gadgets `PrevMenu`,
+`Start`, `Campaign`, `CampaignKnob`, `MissionsKnob`, `Missions`, `Side0`,
+`Side1`, `SIDENAME`, `Difficulty`, `Arm`, `Core`, `TEXT`; asset census). The
+front-end router opens it in two modes selected by one argument: **new
+campaign** (0) from the single-player menu's `NewCamp` control, and
+**any mission** (1) from that menu's `AnyMsn` control or from the results
+screen's `Missions`/`Start` route (§7). Both entries run the campaign-CD check
+first (§5).
+
+*Background and knobs.* Mode 0 counts `camps\*.TDF`: more than two files
+loads background `newcampaign4`; two or fewer loads `newcampaign4x` and sets
+a **fixed-campaign** flag. Mode 1 loads `playanygame4` and clears that flag.
+In mode 1 the `Campaign` list and `CampaignKnob` are moved to y = 308 with
+height 48 and the `Missions` list height is set to 62; `CampaignKnob` and
+`MissionsKnob` are the scroll knobs of the two lists and carry no data.
+
+*Population.* The `Side0`/`Side1` sequences have their offsets zeroed; the
+`Difficulty` control's state byte and label (`Easy`/`Medium`/`Hard`) follow
+the difficulty word. When the fixed-campaign flag is clear or the mode is 1:
+`Campaign`/`CampaignKnob` are shown, the campaign list is built by the §1
+enumeration for the local side (a change callback is installed only in mode
+1), and in mode 1 `Missions`/`MissionsKnob` are shown and the mission list is
+built by opening the campaign selected in `Campaign` and running the §1 list
+builder. The initial focus is `Missions` (mode 1), else `Campaign` (flag
+clear), else `Difficulty`.
+
+*Side selection.* `Side0`/`Arm` sets the local side index 0 and the two
+player slots' side bytes to (0, 1); `Side1`/`Core` sets 1 and (1, 0); each
+rebuilds the campaign list for the new side (and the mission list in mode 1)
+and plays the `SideSelect`/`SideSelect2` cue. `Difficulty` cycles
+0 → 1 → 2 → 0 in the difficulty word.
+
+*Start.* `Start` (and, in mode 1, selecting a `Missions` row or, in mode 0,
+selecting a `Campaign` row) runs the campaign-CD check (§5), re-mounts the
+archive set, **resets the progress marks to 25 × `U`** (§7), then chooses the
+campaign name: the `Campaign` selection when the fixed-campaign flag is
+clear, else the literal `Core Campaign` if the local side byte is non-zero,
+else `Arm Campaign`. The mission index is the `Missions` selection in mode 1,
+else 0. Set(index) (§1) runs; on success the player colours are set to (0, 1),
+the registry mirrors are written [R-SKIR-01 §1], and the front end proceeds to
+sub-state 15 (mode 0) or 16 (mode 1) — the briefing. A failed load stays on
+the panel.
+
+*`AnyMsn` bit.* The `AllMissions` registry bit of "Progression" is not read
+by this panel or by the results screen; the **any-mission** mode is entered
+by the `AnyMsn` control regardless of the bit, and its list carries every
+mission of the campaign. Whether anything else reads the bit remains the
+"Progression" residual.
+
+**Confidence.** Established.
+
+### Closed — the developer warp entry is dead code [R-CAMP-01 §4] (2026-08-29)
+
+Two routines read `<module directory>\Warp.ini` through the private-profile
+API: section `WARPLEVELS`, key `warp%dcampaign` (string, default `default`,
+256-byte buffer) and key `warp%dmission` (integer, default 0). Each sets the
+session kind to 1, opens the campaign by that name (§1) and calls Set(mission)
+(§1); on success it sets the front end's *mission-loaded* and *skip-menu*
+flags so the router jumps to the briefing. One routine takes the level number
+as an argument; the other formats the key names with no argument at all
+(whatever is on the stack). **Neither routine has a caller anywhere in the
+image**: the warp entry is unreachable in the retail executable. It bypasses
+nothing because it runs nothing; a reimplementation must not expose it.
+Established (call-graph query, both directions).
+
+### Closed — the CD gate family [R-CAMP-01 §5] (2026-08-29)
+
+**The check.** One *disc check* routine takes a selector — 0 `Campaign`,
+1 `Multiplayer`, anything else fails — and returns a drive letter on success
+or 0 on failure. Its first statement tests a **build-time constant** in the
+initialized data segment; when the constant is non-zero it returns the
+sentinel `'.'` immediately. In the retail image that constant is **1**, so
+in this build every disc check succeeds without touching a drive, and none of
+the message boxes below can appear. The dormant body, for completeness: it
+walks CD-ROM drive letters (`GetDriveType == DRIVE_CDROM`, starting after the
+previously returned letter, `A`..`Z`), parses `<letter>:\TOTALA.ID` as TDF and
+accepts the first drive whose `[Contents]` block has a non-zero integer under
+the selector's key; a companion mode flag replaces the drive walk with the
+fixed letter `h`. The stock install carries no `TOTALA.ID` (asset census), so
+the dormant path would fail on this install.
+
+**Archive re-mount.** Every successful gate is followed by the *archive
+re-mount* routine, which is likewise gated on the same constant: with the
+constant set it re-mounts `rev31.GP3`, then `*.CCX`, then `*.UFO`, then up
+to ten `*.HPI` from the module directory, then `<letter>:\*.hpi` for each
+CD-ROM drive (the directory-scan order of [02] applies). The movie path
+joiner uses the same constant: with it set, movies resolve to
+`.\\<dir>\<file>` (the `'.'` sentinel formatted as the drive letter — a
+relative path), never to a disc.
+
+**Sites and what a failed check would do** (all Established; unreachable in
+this build):
+
+| Site | Selector | On failure |
+|---|---|---|
+| single-player menu `NewCamp`, `AnyMsn` | 0 | message box `Please insert the Campaign CD (Disc 2) and try again` (translated), stay |
+| single-player menu `Skirmish` | 1 | `Please insert the Multiplayer CD (Disc 1) and try again`, stay |
+| new-game panel `Start`/row select | 0 | campaign message, stay |
+| briefing `Start` | 0 | campaign message, stay |
+| in-battle options `RESTART` | 0 (kind 1) / 1 (kind 2) | matching message, stay; in kind 3 the control does nothing at all |
+| results state 4 (campaign only) | 0 | opens `CDCHECK.GUI`; its `OK` re-checks and continues to state 5 on success, else re-shows the campaign message |
+| end-mission `Start`/`Missions` | 0 | shows the campaign message **but continues anyway** — the mission is loaded regardless (retail quirk) |
+| main menu `INTRO`/credits | 0 then 1 | `Please insert a Total Annihilation CD and try again` when both fail |
+| main menu `MULTI` | *(none)* | tests that `maps\multiplay.tdf` (language-suffixed directory first) parses; else the multiplayer message |
+| online-service button | *(online.dll)* | `Please insert the Installation CD (Disc 1) and select%s"%s" again.` is produced by the online library's button handler — out of scope (networking) |
+
+The gate reads no registry value and writes nothing on failure besides the
+message box. Established.
 
 
 ## Mission and map schema selection
@@ -2742,7 +3083,11 @@ The 30-tick strategic refresh ([08 "Strategic state construction and refresh"],
   cleared at the top of the refresh and incremented once for every own live,
   completed unit whose definition has a non-empty build-option list;
 * a **targeting-upgrade present** flag, set when any own unit whose definition
-  carries `istargetingupgrade` is active. Its reader is **Unknown** (§17).
+  carries `istargetingupgrade` is active. Its reader is closed by
+  [04 R-SPEC-01 §8] (2026-08-29): the target-registry rebuild sets a per-player
+  flag from it, and the registry's area enumeration falls back to radar-only
+  contacts only when the visible scan is empty. (Earlier text: "Its reader is
+  **Unknown** (§17)" — superseded by the doc 04 trace.)
 
 The three refresh vectors are also now named by predicate: the first collects
 **non-allied** live units that pass the ordinary visibility predicate and are
@@ -2769,7 +3114,8 @@ the explore task's "centre is unset" test detects (§6).
   and therefore whether the local-viewer-dependent form is reachable in a
   networked session · §7 · static trace from the skirmish option word into the
   world flags word (RWU-08-2 owns the option side).
-* The reader of the refresh's targeting-upgrade flag · §16 · static trace.
+* (Closed 2026-08-29 by [04 R-SPEC-01 §8]; see §16.) ~~The reader of the
+  refresh's targeting-upgrade flag.~~
 * Whether the wave's `engaged` latch is serialized; the save path's task-record
   coverage was not re-read by this unit · doc 08 "Save-file organization" ·
   static trace (RWU-08-4).
@@ -4094,6 +4440,466 @@ accounts (after the human-player byte has already been applied). Before main
 battle init, an independent pre-pass visits all ten player accounts and
 restores `Controller` (default 0) so controller types exist for setup.
 
+### Closed — the Save Game screen: file naming, the slot list, overwrite and delete [R-SAVE-02 §1] (2026-08-29)
+
+**Established — one GUI file, two screens.** Both the save and the load
+dialog are built from `LOADGAME.GUI` with a different backdrop (`DSAVEGAME2`
+for saving, `DLOADGAME2` for loading) and a different set of hidden gadgets.
+The gadget vocabulary is: `GAMES` (the slot list), `GAMENAME` (the name edit),
+`LOAD` (the action button), `DELETE`, `CANCEL`, `TITLE`, and the summary
+panel `RADAR`, `GAMETYPE`, `CAMPAIGN`, `CAMPTEXT`, `MISSION`, `TIME`, `SIDE`,
+`DIFF`, plus two route buttons `SaveGame` and `LoadGame`. The save screen
+sets `TITLE` to the literal `Save Game`, hides `LoadGame`, hides `DELETE`
+when the list is empty, and gives `GAMENAME` the keyboard focus. The load
+screen hides `DELETE`, `GAMENAME` and `SaveGame`. Both are reached from the
+in-game options menu (§4) and from the results screen's `SaveGame` /
+`LoadGame` buttons ([R-CAMP-01 §8]).
+
+**Established — the file name.** The typed `GAMENAME` text is the file base
+name, verbatim: the path builder is called with directory `SAVEGAME`, the
+text, and extension `SAV`, and produces `SAVEGAME\<text>.SAV` by the
+strip-last-dot-then-append rule already stated under "File naming and write
+policy" (a name `v1.2 final` therefore saves as `SAVEGAME\v1.SAV`, because
+the strip acts on the whole assembled path). Before that fallback the builder
+first tries a **language-prefixed** location, `<language>-SAVEGAME\<text>.SAV`,
+where `<language>` is the language directory name (the `language` registry
+value or the bare command-line token, default `english`, [R-CAMP-01 §1]),
+and uses it only when a file already exists there; a fresh save never lands
+there. The string `savegame\%s.sav` present in the image is referenced by
+nothing and is dead. An **empty** name does nothing (no file, no message).
+There is no character-set filter of its own on the save path: whatever the
+edit gadget admits reaches the file system call, and a name the file system
+rejects produces no file while the writer still reports success ("File naming
+and write policy"). The edit gadget's own admitted character set and length
+belong to the GUI edit control (doc 07); **Unknown** here beyond that
+delegation — decider: the edit-gadget key filter in doc 07.
+
+**Established — `Description` and `Game ID`.** The Summary `Description`
+string is the typed name itself, and `Game ID` is the C-library wall-clock
+time at the moment of saving (seconds since the epoch), so the earlier
+inventory wording "when the caller supplies a non-null one" resolves to:
+always present for interface saves.
+
+**Established — the slot list.** The list is built by enumerating
+`SAVEGAME\*.SAV` (the language-prefixed directory first, by the same
+existence rule). Directory entries `.` and `..` are excluded; nothing else
+is filtered by attribute. The enumerator records one 32-bit time word per
+entry and the list is then **bubble-sorted ascending on that word**, so the
+oldest file is first and the newest last (when no time keys are supplied the
+same sorter orders by string compare). Which of the file's timestamps the
+32-bit word derives from is **Unknown** — decider: static trace of the
+enumerator's find-data conversion. Each file's `Summary` account is then
+opened (filtered open, nothing else read) and its `Description` string is
+taken; a file with no readable bank, no `Summary`, or no `Description` is
+**dropped from both the name list and the display list** (the name list is
+compacted in place), so such a file can be neither loaded nor deleted through
+the interface. The `GAMES` gadget displays the descriptions, not the file
+names; selection index `n` maps to the `n`-th surviving file name.
+
+**Established — selection, overwrite and delete.** Selecting a list entry
+refreshes the summary panel (§3) and copies the entry's description into the
+`GAMENAME` edit. Pressing the action button — or the `GAMES` / `GAMENAME`
+activation events, which the handler treats identically — saves under the
+current edit text; because a selected entry has just placed its own name in
+the edit, saving over an existing slot is a silent truncate-overwrite with no
+prompt. `DELETE` removes `SAVEGAME\<selected file name>` through the
+file-delete call, ignores the result, rebuilds the list and refreshes the
+panel; there is no confirmation. `CANCEL` returns to the previous screen and
+frees the name, description, side-name and radar buffers.
+
+### Closed — the Load Game screen and every load diagnostic, verbatim [R-SAVE-02 §2] (2026-08-29)
+
+**Established — the empty list.** When no file survives the list build, the
+load screen is closed again and the message box `There are no saved games to
+choose from` (width 320) is shown; nothing else happens. The save screen
+shows no message for an empty list.
+
+**Established — `Invalid savegame file`, exactly.** The load handler runs on
+the action button or the `GAMES` activation event. It shows the message box
+`Invalid savegame file` (width 320) and returns, having entered no battle
+state, in exactly these cases, tested in this order:
+
+1. the `Summary`-filtered bank open fails (bad magic, version, tag, or an
+   unreadable file);
+2. the `Summary` integer `Gametype` is neither `1` nor `2`;
+3. the unfiltered full reopen of the same file fails;
+4. the `Summary` string `Mission` is absent or empty, or the campaign
+   catalog cannot resolve it ([R-CAMP-01 §1]).
+
+Before case 3 the CD gates run: `Gametype` 1 without the campaign CD shows
+`Please insert the Campaign CD` and returns; `Gametype` 2 without the
+multiplayer CD shows `Please insert the Multiplayer CD` and returns
+([R-CAMP-01 §5]); both stop the load with no diagnostic other than the
+insert-CD box. Every case is a return to the load screen — nothing is
+aborted mid-restore, because no battle state has been touched yet; the
+first mutation is the `Thumbs` copy and the session-record writes that
+follow case 4, after which the load cannot fail through a message.
+
+**Established — no `expected %d units, got %d` on the save path.** The
+string `expected %d units, got %d` (and its sibling `No units_expected sent
+from player`) is produced by the multiplayer lounge's per-peer status text
+— it compares a peer's announced unit count with the units received during
+game start — and is not referenced by any save or load function. The
+question in this unit's brief rested on a misattribution; there is no
+unit-count diagnostic on load. A `Number of Units` larger than the boxes
+present simply ends the enumeration when a numbered box is missing (the
+loader selects box `i`, and a failed select skips that index), and a
+smaller count leaves the extra boxes unread.
+
+**Established — the routes after preflight.** After case 4 passes: the
+mission name is copied into the session record; `Thumbs` is copied with a
+25-byte bounded copy and, when its length is not exactly 25, the thumbs
+array is reset ([R-CAMP-01 §8]); for `Gametype` 2 the `Players` integer and
+the five multiplayer rule integers (`CommanderDeath`, `Location`, `Mapping`,
+`LineOfSight`, `LineOfSightType`, each default `1`) are installed; the
+load-pending flag is raised, the session state becomes the loading state with
+the battle-loading worker, and the list buffers are freed. A campaign save
+(`Gametype` 1) that carries the `BetweenMissions` item instead clears the
+load-pending flag, frees the bank, and enters the new-mission sub-state — the
+continuation route already described under "Summary".
+
+### Closed — the summary panel, exactly [R-SAVE-02 §3] (2026-08-29)
+
+The panel reads only the `Summary` account of the selected file. `RADAR`
+shows the `Radar Image` box when present (8-byte header: `u32` width, `u32`
+height; then `height` rows of `width` palette bytes; a short read yields no
+image). `GAMETYPE` is `???` when `Players` is `0`, `Single` when `Gametype`
+is `1`, otherwise `Skirmish (%d players)` with `Players`. For `Gametype` 1
+the `CAMPAIGN` text is the `Campaign` string (shown, with `CAMPTEXT`), and
+`MISSION` is the `Mission` string; otherwise the campaign gadgets are hidden
+and `MISSION` is the `Map` string. `TIME` formats the `Game Time` integer
+`t` (ticks) as `%02d:%02d:%02d` with hours `t / 108000`, minutes
+`(t / 1800) mod 60`, seconds `(t / 30) mod 60` — signed divisions truncating
+toward zero. `SIDE` is the side-name table entry indexed by `Side`, or `???`
+when the table is absent. `DIFF` is `Easy`, `Medium`, `Hard` indexed by
+`Difficulty`; an out-of-range value indexes past the three-entry table
+(**Unknown** result — decider: trace of the adjacent data). Every panel
+field defaults to the empty string when no entry is selected. [Established]
+
+### Closed — in-game options: when the buttons are greyed [R-SAVE-02 §4] (2026-08-29)
+
+The in-game options window (`ARMOPT.GUI`) routes `LOADGAME` to the load
+screen and `SAVEGAME` to the save screen. When the window is built, both
+gadgets' first control bit is set exactly when the session kind is `3`
+(network multiplayer) and cleared otherwise; that bit is the gadget word the
+interface uses for unavailable buttons (doc 07 owns its rendering —
+Supported inference that it is the greyed/disabled state; the setting
+condition itself is Established). Skirmish (kind 2) and campaign (kind 1)
+sessions may therefore save and load from the options menu; the earlier
+tail item "upstream multiplayer GUI authority and menu enablement" is closed
+by this gate. [Established gate; Supported inference for the visual effect]
+
+### Closed — `SAVELIST` / `LOADLIST` are unit-restriction lists, not save games [R-SAVE-02 §5] (2026-08-29)
+
+`SAVELIST.GUI` and `LOADLIST.GUI` (backdrops `DSaveList`, `DLoadList`; the
+title is again `Save Game`) belong to the unit-restriction editor of the
+game-setup screens ([R-SKIR-01 §10]). They share the `SAVEGAME` directory
+and the same path builder, list enumerator and sorter as §1, but with
+extension `LST`: `SAVEGAME\<name>.LST`. The list shows the file base names
+with their extension stripped (no bank is opened). The writer emits a binary
+file: a `u32` count (one less than the number of loaded definitions), then,
+for each definition index from `1` upward that has a restriction record,
+one `u32` definition id word and one `u32` restriction value. The empty-list message is `There are no saved lists
+to choose from`. Nothing in this family touches a save bank. [Established]
+
+### Closed — the `Units` account, word by word [R-SAVE-02 §6] (2026-08-29)
+
+**Established — writer traversal and account items.** The writer walks the
+unit pool from the **last** slot down to the first and emits every unit
+whose live bit is set, numbering its boxes with a running index `i`
+(0-based, in emission order). Per unit, in this order: the `Script%i` box
+(§9), one `u%04xm%04x` box per order — the front list first, then the rear
+list, sequence numbers continuing across both — then `u%04xmob` (§8) when
+the unit owns a mover, `u%04xacc` (§7), and finally the 184-byte base
+record as numbered box `i`. `Number of Units` and `Version` (= `0x11`) are
+written **after** the loop and **only when at least one unit was written**;
+a battle with no live unit therefore produces a `Units` account with no
+`Version`, and the loader's version gate skips it. `Script%i` is numbered by
+`i` (the numbered-box index), while the three `u%04x…` keys are numbered by
+the unit's stable slot; the two numberings coincide only by accident.
+
+**Established — the base-record words, named.** Every word of the
+R-SAVE-UNIT-01 table that it left opaque is closed here by the writer's
+source field and the reader's destination field (the same runtime field in
+every case), cross-referenced to the consumer that names it. Offsets are
+save-record positions.
+
+| Save bytes | Named meaning | Evidence |
+|---|---|---|
+| `0x27..0x2A` | **Has-mover flag**: `1` when the unit owned a mover at save time, else `0`. The reader restores the `u%04xmob` box only when it is nonzero. It is not `Alive`/`Dying`. | writer tests the mover pointer; reader gates the mover-box read on it |
+| `0x37..0x3A` | Signed roll (low word) and unsigned heading (high word), copied as one 32-bit word; `0x3B..0x3C` pitch. | one 32-bit copy of the adjacent roll/heading pair; [04 §2] |
+| `0x89..0x8A` | Stable slot of the **carrier** the unit is attached to (transport or air base), or `0` when it has none or the carrier is dead. On load a nonzero value is restored recursively and then re-attached through the local attach command (type 10) with the byte at `0x8D` and the mover-mode bits of `0xB4`. | [R-AIR-01], [04 §6] carrier link |
+| `0x8B..0x8C` | Stable slot of the unit's **engagement-target link**, or `0` when absent or dead. Restored recursively as a plain reference; nothing is attached. Its ordinary-play producer is the open item in [04 "Missing and unknown"]. | doc 04 guard handlers (consumer); writer/reader symmetry |
+| `0x8D` | **Carrier attach slot**: the index the carrier's attach-position routine uses for this unit; `0xFF` when the unit has no live carrier. | the carried-position resolver reads it beside the carrier pointer [R-MOV-01 §1] |
+| `0x8E` | Low byte of the unit's relation-domain byte (initialised to `10` at creation and by the per-tick refresh). Its semantic name is not closed — **Unknown**; preserve. Decider: trace of the target-registry comparison that reads it. | writer/reader copy; creation value |
+| `0x8F..0x92` | **Spot-metal yield, `f32`** (not `u32`): the placement-time metal sum for extractors, never resampled. Correction: the earlier row's wire form was `u32`; the bit pattern is a single-precision float. | [R-PROD-01 §6] / doc 04 COB port census |
+| `0x93..0x96` | Committed occupancy cell pair (`i16` x, `i16` z). | [R-COLL-01 §1] |
+| `0x97..0x9A` | Sight-registration cell pair (`i16` x, `i16` z) — the cell the visibility registration record points at. | [R-VIS-01] registration record |
+| `0x9B..0x9E` | Packed footprint size pair (`i16` x size, `i16` z size). | [R-COLL-01 §1] |
+| `0x9F..0xA2` | **AI group index**, `−1` for none: the index of the owner's group record the unit is enrolled in. On load the reader moves the unit out of whatever group it holds and into this one (group-vector append, allocating when full), so this is the one base-record word with a side effect beyond a field copy. | [R-P0-04 §2] group records |
+| `0xA3..0xA6` | **Reveal deadline tick**: the absolute tick until which the unit is exposed to sensors (the sensor phase writes `tick + 90`, a script port `tick + 300`). | [03 sensor phase], doc 04 port census |
+| `0xAB` | **Death-cause byte**: the cause code recorded by the last damage packet and passed to the `Killed` script query. | [06 §9.2] damage packet, [R-COB-04] |
+| `0xAC`, `0xAD` | A current/previous byte pair rotated once per unit tick. Semantic name **Unknown** — decider: trace of the unit tick's byte rotation and its reader. Preserve exactly. | writer/reader copy; unit tick |
+| `0xAE..0xAF` | Order pending-gate mask (the word the order pump masks with `0x83FF`). | [R-ORD-01 §1] |
+| `0xB0` | Stored line-of-sight byte (emitter height in ray mode, shape index in sprite mode). | [R-VIS-01] |
+| `0xB1` | A countdown byte decremented once per unit tick while nonzero. Semantic name **Unknown** — decider: trace of the two readers in the unit tick. Preserve exactly. | writer/reader copy |
+| `0xB2..0xB3` | The state byte zero-extended to a `u16`: bit 0 activated, bit 1 armored, bit 2 cloaked, bit 3 building; `0xB3` is always `0` on write and ignored on read. | [04 §2.4] |
+
+**Established — the packed status word at `0xB4..0xB7`, exactly.** With
+`f` the unit's 32-bit flags word and `s` the second state byte (in-build
+stance bit 0, busy bit 1, yard-open bit 2, bugger-off bit 3):
+
+```
+word = (s & 0xF)
+     | (f & 0x0FFF) << 4          // flags bits 0..11  → word bits 4..15
+     | (f & 0x2000) << 3          // flags bit 13      → word bit 16
+     | (f & 0xFFFFC000) << 6      // flags bits 14..25 → word bits 20..31
+     | (stack residue & 0xE0000)  // word bits 17..19: never written
+```
+
+The reader inverts it bit-for-bit: word bits 0..3 into `s`, 4..15 into flags
+0..11, 16 into flags 13, 20..31 into flags 14..25; flags bit 12 and bits
+26..31 are **not persisted** and keep whatever the allocator set. Named
+flag bits, in word positions: mover-mode mirror at word bits 4–5 (also fed to
+the allocator and to the re-attach command), move-rate tier at 6–7,
+completion marker (flags bit 13) at word bit 16, the auto/initial-posture
+flag (flags bit 14) at 20, standing-move (flags 18–19) at 24–25 and
+standing-fire (flags 20–21) at 26–27 ([R-STANCE-01 §6]). **Correction.** The
+R-SAVE-UNIT-01 row says "the status component carries the authoritative
+alive bit … alive is bit `0x10000000`, dying/death-mark is `0x4000`, and
+construction-complete is `0x2000`". Those are runtime flag values, and the
+live bit (flags bit 28) is **not in the save word at all** — the shift drops
+flags bits 26..31; a loaded unit is alive because the forced-slot allocator
+made it so, and the reader's "allocator live bit and saved live bit must
+agree" sentence has no saved bit to compare. Flags bit 14 is the auto flag,
+not a death mark ([04 R-P0-09]); the completion marker is flags bit 13. The
+"bits 17..19 can contain writer-side uninitialized values" sentence stands.
+
+**Established — what the reader does with the record, in order.** Definition
+lookup by name; forced-slot allocation with the saved owner, position and
+mover-mode bits, with the fresh-unit hooks enabled (so a definition whose
+fresh-unit hook activates it is activated, and a definition carrying the
+flag the hook answers with death-cause `7` plus the auto flag receives them,
+before the saved bytes overwrite them); roll/heading/pitch, health, kill counter,
+position; the carrier reference (recursive load, then local attach command);
+the engagement-target reference (recursive load); the attach slot and
+relation byte; spot metal; the three cell pairs; the AI group move; reveal
+deadline; construction remaining; the five bytes, the gate mask, the state
+byte; the packed word; the `u%04xacc` box; the `u%04xmob` box when
+`0x27` is nonzero; the order boxes in sequence order into the front or rear
+list by descriptor flag `0x40000`, then the front head is pumped once for
+activation; the `Script%i` box; the three weapon-slot records; and, when the
+second state byte's yard-open bit is set, the yard re-stamp
+([R-COLL-01 §4]). A record whose stable slot is already live is skipped
+without reading.
+
+### Closed — `u%04xacc` is the unit's resource account [R-SAVE-02 §7] (2026-08-29)
+
+The component whose two 24-byte halves the box carries is the per-unit
+resource account — the structure the direct two-resource payment and the
+per-tick request/consumption paths debit ([05 "Direct two-resource
+payment"] [R-ECO-01 §7]). The box is the raw image of the 48-byte account:
+the first 24 bytes then the next 24, written unconditionally and read back
+in place only when the box exists. The account's field layout is doc 05's
+(energy half then metal half in the payment helper's argument order); its
+individual words are copied verbatim and none is a pointer. [Established
+identity and copy; the per-word layout is owned by doc 05]
+
+### Closed — `u%04xmob`, the 35-byte mover record, exactly [R-SAVE-02 §8] (2026-08-29)
+
+| Box bytes | Wire form | Field |
+|---|---|---|
+| `0x00..0x0B` | 3 × `i32` 16.16 | velocity X, Y, Z |
+| `0x0C..0x17` | 3 × `i32` 16.16 | lean-residual X, Y, Z (flight only) |
+| `0x18..0x1B` | `i32` 16.16 | scalar speed |
+| `0x1C..0x1D` | `i16` | turn residual |
+| `0x1E..0x21` | `u32` | **last-stamp tick** (the occupant-age clock, [R-COLL-01 §5]) |
+| `0x22` | `u8` | bits 0–1 movement mode, bit 2 blocked flag; bits 3–7 are writer stack residue |
+
+The reader copies the first 34 bytes into the live mover and then merges
+**both** bit groups of the final byte into the live state byte — first the
+mode bits (mask `3`), then the blocked bit (mask `4`) — leaving the state
+byte's other bits untouched. Nothing else of the mover is persisted: the
+last-proposal tick, the follower pointer and the route object are rebuilt
+([R-MOV-01 §1]). The unit's own mover-mode mirror is restored separately from
+the packed status word (§6), so a hand-edited save can disagree between the
+two; the mover's byte wins for the mover, the mirror for the unit.
+
+**Correction to the tail (and to [04 R-COLL-01 §5]'s "second unnamed
+word").** The tail listed the order as "the 16.16 velocity triple, the
+three-component lean residual vector, one unnamed 32-bit word, the scalar
+speed word, the signed 16-bit turn residual, a second unnamed 32-bit word,
+and finally a byte", which sums to 39 bytes; the box is 35. There is no
+unnamed word between the lean vector and the speed, and the single unnamed
+word after the turn residual is the last-stamp tick named above. The
+earlier RWU-04-1 trail counted the lean vector as two components plus one
+unknown; it is three components.
+
+**Verdict on the "route serializer leading bit".** An earlier report claimed
+"the route serializer emits one leading bit (mover blocked flag) before the
+2-bit count". No save serializer does this. The only save record carrying
+the blocked flag is the byte above, where the mode occupies bits 0–1 and the
+blocked flag bit 2 — the blocked bit *follows* the mode bits, and no count
+field exists in the box. The description matches the **network** unit
+stream instead (doc 04 [R-COLL-01 §5] item (4): the follower's stream writer
+copies the blocked bit into the stream, and [R-PATH-01 §1]'s
+`min(count, 3)` two-bit waypoint count) — the claim is retracted for the
+save path and referred to the stream writer, which is out of scope here.
+
+### Closed — the `Script%i` box, byte-exact [R-SAVE-02 §9] (2026-08-29)
+
+The box holds three concatenated images; the reader accepts the box only
+when its length equals exactly `0x528 + 4·S + 0x6C·P` (`S` statics, `P`
+pieces, both from the bound program's header) — any other length skips the
+whole script restore and leaves the freshly bound VM in its post-`Create`
+state.
+
+1. **VM image, `0x528` bytes.** `0x000..0x003`: the program signature word the
+   bind computes for the compiled program; the reader compares it with the
+   live VM's and rejects the box on mismatch (so a save cannot install a
+   different script's threads into a unit). `0x004 + 0xA4·t` for `t = 0..7`:
+   thread record `t` verbatim — status, program counter, depth, sleep timer,
+   wait piece, wait axis, wait-for-caller slot, signal mask, completion
+   receiver and the ten window words, in the layout of [R-COB-01 §1] — except
+   that the word at record offset `0x20` is written as `0` (a thread-record
+   word [R-COB-01 §1] does not name; **Unknown** — it is never restored). `0x524..0x527`: the
+   active-thread count. The reader copies all eight records back in place and
+   restores the count.
+2. **Statics, `4·S` bytes**: the script statics array verbatim.
+3. **Piece states, `0x6C·P` bytes**, one record per piece: 24 words of
+   per-axis animation state — for axis `a` in `0..2` the words at dword
+   positions `a, 3+a, 6+a, 9+a, 12+a, 15+a` are the six per-axis animation
+   words of the piece array (the doc 04 move/turn state: targets, speeds and
+   flags per axis), dword `18+a` is the adapter's *get-position* result and
+   `21+a` the *get-angle* result for that axis — followed by three
+   piece-level dwords 24..26 that the reader feeds to the adapter's
+   show/hide, cache and shade setters ([R-COB-01 §1] adapter slots). On
+   load each piece's first animation word is set to `1` before the setters
+   run, then the six words per axis are copied back and the position/angle
+   are re-committed through the adapter's set-position/set-angle
+   (move-now/turn-now) slots; finally the VM's "script restored" word is set.
+
+The writer's decompilation stores only one of its three piece-level getter
+results inside dwords 24..26 (the other two land in a stack slot the axis
+loop overwrites), which is the origin of the standing "two slots leak old
+stack values" sentence: dwords 24 and 25 carry stack residue and the reader
+installs that residue through the show/hide and cache setters. [Established
+layout and sizes; the exact frame position of the two lost getter results is
+Supported inference from the decompilation — decider: byte-level trace of
+the writer's three indirect calls.] With this, the "script persistence
+remains only partially closed" item under R-SAVE-UNIT-01 is closed: the box
+persists every thread word, every static and every per-axis animation word,
+and nothing else (callbacks are the receiver word inside each thread record;
+there is no separate callback table).
+
+### Closed — the order subtype families, named [R-SAVE-02 §10] (2026-08-29)
+
+The code at `0x04` of the `u%04xm%04x` record is the value returned by the
+order's sub-object through its class slot, and the reader constructs the
+matching class from the `${box}g` box. The five codes are, by the runtime
+constructors that make each class:
+
+| Code | Payload | Class | Constructed by |
+|---:|---:|---|---|
+| `2` | `0x36` | the **path marker** (air work point) — flag word, arrival radius, height offset, side word, owner and target unit links, goal X/Y/Z 16.16 ([R-PATH-01 §9] "Class-D"; [R-AIR-01]) | the VTOL move/patrol/follow order handlers |
+| `3` | `0x2A` | a two-vector work record: owner unit link, two 16.16 triples, three `u16` words | one VTOL-family order handler (which one is **Unknown** — decider: trace of that handler's descriptor) |
+| `4` | `0x10` | the **point goal** handle (relative cell pair, radius parameter, squared threshold) | `Move_Ground`/`Patrol` goal install ([R-ORD-01 §1]) |
+| `5` | `0x18` | the **annulus goal** (outer/inner) | annulus goal install ([R-ORD-01 §1]) |
+| `6` | `0x14` | the **rectangle goal** (packed origin, packed size) | rectangle goal install ([R-ORD-01 §1]) |
+
+Code-2 payload: `0x08` owner-unit stable slot; `0x0A..0x19` the image of
+the marker's embedded 16-byte unit-link helper (discarded; the reader
+re-links the helper to the unit named at `0x1A`); `0x1A` target-unit stable
+slot; `0x1C` flag word (bit 3 height set, bit 4 radius set / altitude
+arrival, bit 5 compute cruise Y); `0x1E` horizontal arrival radius; `0x20`
+height offset; `0x22` one further `u16` (**Unknown** name); `0x24` side word
+(`0xFFFF` = none); `0x26`, `0x2A`, `0x2E` goal X/Y/Z 16.16; `0x32` one
+further `u32` (**Unknown** name — decider: field-isolation trace of the
+marker's arrival test). Code-3 payload: `0x08` owner-unit stable slot;
+`0x0A` `u16`; `0x0C..0x17` first triple; `0x18..0x23` second triple;
+`0x24`, `0x26`, `0x28` three `u16`. Codes 4–6 are the goal handles whose
+words [R-PATH-01 §9] defines. The name side channel is the string item
+`${box}_name`; the `UTYPENAME%4d` string is written only for
+`MobileBuild`, `VTOL_MobileBuild` and `BuildingBuild` records whose
+parameter 1 names a definition index below the loaded count and only when
+that key is not already present. [Established]
+
+### Closed — what is not saved, and the fix-up order that rebuilds it [R-SAVE-02 §11] (2026-08-29)
+
+**Established — the load order, restated from the dispatchers.** Summary
+`maxunits` → Players (human-player byte, 28-byte timing block, per-slot
+scalars, alliances) → Camera → Features → Metal → PlayerFeatures → Mapping
+→ Units (per unit: the §6 sequence) → Meteor → trigger records; then the
+battle-loading worker proceeds as for a fresh battle. Nanolathe's own
+staged/transactional order is the one under R-SAVE-UNIT-01.
+
+**Established — derived state Nanolathe must rebuild, because retail does.**
+The following is absent from every account and is regenerated by the
+ordinary constructors and first ticks:
+
+- both random streams (reseeded from the clock before any restore);
+- the projectile pool, burst scheduler and in-flight effects (zero active);
+- every mover's route object, follower and last-proposal tick; path-search
+  queues and the class layer (rebuilt from the restored occupancy stamps);
+- occupancy stamps themselves (each unit re-stamps from its restored cell
+  pair and footprint at allocation; features re-stamp through placement);
+- visibility/LOS masks and sensor registrations (re-registered per unit; the
+  sight cell pair is restored only so the registration can be re-issued);
+- the AI's strategic state, class vectors and manager tasks (only the unit's
+  group index survives, §6);
+- selection, order-marker presentation, HUD caches, the minimap surface (the
+  `Radar Image` box is presentation for the list only);
+- the COB adapter render tables and piece geometry (rebuilt at bind; only
+  animation words, thread records and statics are restored);
+- weapon aim callbacks and muzzle queries (R-SAVE-WEAPON-01);
+- the per-definition unit counts (recomputed as units are allocated);
+- the unit-type name table's identity mapping (`UTYPENAME%4d` remaps by
+  name);
+- the meteor shower's authored parameters (reinstalled from the map);
+- victory/defeat scratch counts and timer deadlines ([R-TRIG-01 §8]);
+- the scheduler's clock anchor after the first budget pass ("Scheduler and
+  random state in saves").
+
+### Closed — Camera, Metal, PlayerFeatures and Mapping, exactly [R-SAVE-02 §12] (2026-08-29)
+
+`Camera`: two integer items, `X Position` and `Z Position`, the camera's
+world position words; on load both are copied into the camera's current
+*and* target position, one camera state bit is raised and another cleared
+(the camera state word is doc 07's; their names are not closed here), and
+the presentation re-derives everything else.
+`Metal`/`Plotmap`: one byte per plot cell in row-major order, the cell's
+metal byte ([R-TERR-01 §1]); the reader requires the box length to equal
+`width × height` exactly. `PlayerFeatures`/`Plotmap`: `(width × height)/2`
+bytes; each byte packs the **placer nibble** (cell flag byte bits 3..6,
+[R-TERR-01 §1][03 §3.3]) of two consecutive cells — the even cell in the high
+nibble, the odd cell in the low nibble; the reader restores bits 3..6 of each
+cell's flag byte and preserves the others; exact-size gate as for metal.
+`Mapping`: one unnamed box of `(width × height) >> 1` bytes, the mapping
+grid verbatim ([R-SHARE-01 §6]); exact-size gate. `Players`: the writer
+emits a `Player%i` account only for slots whose active byte is set, and the
+per-slot item list is the full "Player records" table plus `Logo` and
+`Side`; the `Human Player` integer's load default is `10` (no human). All
+[Established].
+
+### Closed — corrections to earlier text [R-SAVE-02 §13] (2026-08-29)
+
+1. R-SAVE-UNIT-01's "alive is bit `0x10000000` … dying/death-mark is
+   `0x4000`" for the packed word: wrong — see §6; the live bit is not
+   persisted and flags bit 14 is the auto flag.
+2. R-SAVE-UNIT-01's `0x27` "runtime boolean word, name Unknown": it is the
+   has-mover flag (§6).
+3. R-SAVE-UNIT-01's `0x8F` "`u32`": it is an `f32` (§6).
+4. The "Save and replay" tail's seven-field `u%04xmob` order: wrong (39
+   bytes for a 35-byte box); see §8.
+5. The tail's "the `u%04xacc` … field list is a separate open item": closed
+   by §7 (the resource account's layout is doc 05's).
+6. The "Summary" section's "`Description` when the caller supplies a
+   non-null one": the interface always supplies the typed name (§1).
+7. The account inventory's description of `Script%i` as "per-unit" is right
+   but under-specified: it is numbered by box index, not stable slot (§6).
+8. The brief's premise that `expected %d units, got %d` is a load
+   diagnostic: it is lounge text (§2).
+
 ## Load process
 
 Loading proceeds as reconstruction, not pointer restoration:
@@ -4214,8 +5020,8 @@ difficulty refresh), plays the outro movie, and finally shows the
 score/statistics screen with per-player stat bars (kills, losses, energy and
 metal produced and wasted, score) before returning to the front-end router.
 The score values come from the score helper's display array, which multiplies
-kills by the kill multiplier and elapsed ticks over 1800 by the time multiplier
-with truncation and a zero clamp. Resign and host-loss latch ended-without-win
+kills by the kill multiplier and the global tick over 60 (not 1800 — corrected
+in [R-CAMP-01 §6]) by the time multiplier with truncation and a zero clamp. Resign and host-loss latch ended-without-win
 directly (the end-game dialog callbacks and the peer-loss path, respectively)
 and can override an armed victory, while ordinary victory/defeat run through
 the shared four-count countdown. The exact tick at which simulation stops is
@@ -4228,6 +5034,272 @@ results surface is the authored `ENDMSN.GUI`/`endmsn.gaf` family. Its outcome
 copy is selected from the authored `victory` or `defeat` frame and its
 available route is the authored `Start` control when campaign progression has
 a next mission, otherwise `MainMenu` [07 §11] [08 "Progression"].
+
+### Closed — the results sequence: states, glamour, fade, ending movie [R-CAMP-01 §6] (2026-08-29)
+
+**Correction.** The paragraph above and "Progression" both said the score
+helper uses "elapsed ticks divided by 1800". The divisor is **60** (an
+unsigned magic-multiply by `0x88888889` with a 37-bit shift — exactly `n / 60`
+for the 32-bit tick count). With the 30 Hz global tick this is a two-second
+unit. The rest of that sentence (kills × kill multiplier, truncation, zero
+clamp) stands; the exact expression is in §7.
+
+**Entry.** The battle pump's end transition fires when the latch word of
+[R-TRIG-01 §6] has either the *won* (`0x10`) or *lost* (`0x04`) bit set —
+for a multiplayer session only once a peer-side predicate also holds (out of
+scope). It runs the
+*battle teardown* (which calls the score helper of §7 — the only site that
+writes the W/L mark), stops the battle sound, sets the session state to 7
+(results) and installs the *results handler* as the session pump. Every
+presentation "unit" below is one tick of the presentation clock of §2.
+
+**Results handler states** (a small word, initial 0):
+
+| State | Action |
+|---|---|
+| 0 | Non-multiplayer: clear the frame-copy pointer, go to 2. Multiplayer: copy the last game frame, run the statistics collector with code 7 (§9), go to 1; if the local slot's rejection-reason byte is set and not 2, show its message (`The game is closed`, `You did not have the correct password`, `The game is full`, `You have lost connection with the host`, `You need a unit you don't have for this game`, `You need a newer version of the game`, `No watching is allowed for this game`, `The creator has left the game`, default `You were rejected from the game`) and clear the byte. |
+| 1 | Wait until no `MSGBOX.GUI` is open, then 2 (the frame copy is restored behind the box while it is up). |
+| 2 | Set a countdown of 10, deadline `now + 1`, fade-done flag 0; go to 3. |
+| 3 | Each time `now > deadline`: draw the full-screen rectangle through the rectangle shader with level `countdown − 29`, set deadline `now + 1`, decrement; at 0 set fade-done. When fade-done: stop the music, go to 4. |
+| 4 | Campaign session (kind 1) and the campaign-CD check (§5) fails: open `CDCHECK.GUI` (its `OK` re-checks and, on success, sets state 5), go to 8. Otherwise 5. |
+| 5 | Run the *outcome-art preparer* (below). Let `hasNext` = Has-mission(index + 1). If kind 1 and won and **not** `hasNext` and the mission's `nomovie` is 0: the campaign is complete — windowed display goes straight to the main-menu shell state; full-screen goes to the Core ending-movie state when the local player's side byte is non-zero, else the Arm ending-movie state; session state 2 (front end). Otherwise: if kind 1 and won and a glamour image was loaded: build the fade table with 5 steps, deadline `now + 1`, blit the glamour image at (0, 0), go to 6; else populate `ENDMSN.GUI` (§8), fill the score fields (§7), apply the control set (§8), go to 7. |
+| 6 | While the fade is not done: apply one fade step per unit (below); when the current palette equals the target the fade is done, then the glamour deadline is `now + rate` (one second). Once done: play slot 8 (glamour sound) once; after the deadline, any key press or mouse click populates `ENDMSN.GUI` (§8, §7) and goes to 7; after five further seconds `Click to continue.` (translated) is drawn at the bottom of the screen (y = height − 20). |
+| 7 | `ENDMSN.GUI` is up; the statistic bars are revealed in seven groups (§7). |
+| 8 | Idle with the panel up (used by the CD-check dialog). |
+
+**Outcome-art preparer.** Allocates three 1024-byte palette buffers
+(`currentPalette`, `desiredPalette`, `FadeTable`) and a 1024-byte `Palette`,
+saves the display's gamma word and forces it to 1.0. Then, only for kind 1
+when won and slot 5 is non-empty: the path is `bitmaps\glamour\<slot 5 text
+after its leading separator>` with the extension replaced by `PCX`; when the
+VFS reports a zero size the path is replaced by the literal
+`glamour\Arm01.PCX` (retail's fallback — note it lacks the `bitmaps\` prefix,
+so it also misses on the stock install, which carries
+`bitmaps\glamour\arm01..25`, `core01..25`, `armvict`, `corevict`, `krogvict`,
+`tabtarm`, `tabtcore`). The PCX is decoded into an image plus its palette;
+a decode failure leaves the image null, which sends state 5 down the
+no-glamour branch. In every other case it loads the front-end bitmap
+`Outcome1` (kind 1) or `Outcome0` (kinds 2, 3) as the background instead.
+
+**Fade table.** For each of the 1024 palette bytes `b` (index `i`): with
+`cur = currentPalette[i]` (the decoded image's palette) and
+`dst = desiredPalette[i]` (the display palette at entry), the signed step is
+`0` when equal; `max(1, (dst − cur) / 5)` when `dst > cur`; and
+`min(−1, (dst − cur) / 5)` when `dst < cur` (integer division truncating
+toward zero, steps = 5). **Fade step** (once per unit): each byte becomes
+`cur + step` clamped so it never passes `dst` in the step's direction; when
+all 1024 bytes equal the target the done flag is set; the current palette is
+then pushed to the display. (Presentation of the palette itself is doc 03's.)
+
+**Cleanup.** When `ENDMSN.GUI` closes, the frame copy, glamour image, the four
+palette buffers and the gadget data are freed and the display gamma restored.
+
+**Confidence.** Established, including the `glamour\Arm01.PCX` fallback path
+and its missing prefix (read from the two string constants).
+
+### Closed — the score helper and every statistic's source [R-CAMP-01 §7] (2026-08-29)
+
+**When.** The score helper runs once, from the battle teardown at the end
+transition (§6), before the results handler is installed. It writes:
+
+1. the *won* word = latch bit `0x10` (0 or 1);
+2. for kind 1: the *end-mission index* = the record's current mission index,
+   and `Thumbs[index] = won ? 'W' : 'L'` (bytes `0x57` / `0x4C`) in the
+   25-byte progress-mark array;
+3. seven *column maxima*, initialised to 10, 10, 100, 100, 100, 100, 100
+   (kills, losses, energy produced, metal produced, energy wasted, metal
+   wasted, score);
+4. the *display array*: ten rows of 58 bytes, zeroed, one per player slot in
+   slot order: a 30-byte name copy and seven 32-bit integers.
+
+A slot gets a row when its record exists, its controller is 1, 2 or 3
+(human, local, remote — the [R-SKIR-01 §1] vocabulary), its side is not the
+neutral 10 and its lobby record's watcher bit (`0x40`) is clear — **or** when
+the slot's auxiliary word is non-zero (Unknown meaning; decider: static trace
+of that word's writers) — and, in either case, its rejection-reason byte is
+0. Rows are filled as:
+
+| Column | Source | Conversion |
+|---|---|---|
+| Kills | slot's 16-bit kill counter | sign-extend |
+| Losses | slot's 16-bit loss counter | sign-extend |
+| Energy produced | slot's double `TotalEnergyProduced` | `__ftol` (truncate) |
+| Metal produced | slot's double `TotalMetalProduced` | `__ftol` |
+| Energy wasted | slot's double `EnergyWasted` | `__ftol` |
+| Metal wasted | slot's double `MetalWasted` | `__ftol` |
+| Score | see below | |
+
+`Score = __ftol(float(int64(globalTick / 60)) × timemul) + __ftol(float(Kills)
+× killmul)`, evaluated in that order with `timemul` and `killmul` the
+mission's `[GlobalHeader]` floats (default 0.0; stock missions author
+`killmul=50; timemul=0;`), `globalTick` the 32-bit global tick counter of
+[01 §2] and the division unsigned. A negative sum is stored as 0. Each column
+maximum is raised to the row's value when the value is larger (strict).
+
+**Where the counters are written.** Kills, losses, commander kills and
+losses are the per-slot counters incremented by the death-credit switch of
+[06 §12.1] inside the tick, at the death site. `TotalEnergyProduced`,
+`TotalMetalProduced`, `TotalEnergyConsumed`, `TotalMetalConsumed` (doubles)
+are accumulated by the per-player economy pass [05 "Authoritative settlement
+order"]: after the pass sums this tick's production and consumption over the
+player's units and its base income, `produced += tickProduction` and
+`consumed += tickConsumption` for each resource (float sums widened to
+double). `EnergyWasted` / `MetalWasted` accumulate the **storage overflow**:
+with `pool = stored + tickProduction` (after the split that pays
+consumption), when `pool > capacity` the stored value becomes `capacity` and
+`wasted += pool − capacity` (float, widened). Fixed per-tick order:
+production/consumption sums → the capacity adjustment of [05] → produced/
+consumed totals → overflow clamp and wasted totals. All twelve values are saved and
+restored verbatim under the `Players` account keys of that name [08 "Account
+inventory"], and the network statistics copy carries the same fields as
+floats.
+
+**Screen fields** (the `ENDMSN.GUI` score population, run when the panel is
+populated): for every display-array row in slot order, with `r` the running
+row number (starting 0) and `y = 93 + 20·r`: the gadget `PlayerColor%d` (`%d`
+= r) is created at (16, y, 91×21), its animation set to the logos GAF with
+frame = the slot's colour byte; the slot name is drawn beside it in the small
+font; then seven bar gadgets are created at `x` = 112 `Kills%d`, 186
+`Losses%d`, 260 `EProduced%d`, 334 `MProduced%d`, 408 `EWasted%d`, 482
+`MWasted%d`, 556 `Score%d`, each carrying the row's value, the column maximum,
+and a per-gadget float `max(1.0, value × 0.06666667)` (`value / 15`; its use
+is the bar renderer's fill increment — Supported inference, doc 07's bar
+gadget would settle it). The bar reveal group word is reset to 0.
+
+**Bar reveal** (results state 7). Once the panel is idle, all `Kills%d`,
+`Losses%d`, `EProduced%d`, `MProduced%d`, `EWasted%d`, `MWasted%d` and
+`Score%d` gadgets are hidden and the cue `ActivateAllStatBars` played; then
+every 10 units (or immediately on a key press, except in multiplayer) the
+next group is shown in the order Kills, Losses, EProduced, MProduced,
+EWasted, MWasted, Score, playing the cue `EndGameStatBar` for the first six
+and `EndGameScore` for the seventh. `EndGameStatBar`/`EndGameScore` are
+**sound cue names** looked up in the sound table, not scales.
+
+**The un-numbered `MProduced`, `MWasted`, `EWasted` strings** and the
+`Kills`/`Losses` labels are the `Players` account keys and the in-battle
+score panel's column labels [07 §11]; `Energy Produced`, `Metal Produced`,
+`Excess Energy`, `Excess Metal`, `Commanders Killed`, `Commanders Lost`,
+`I am Winner` are the field names of the network statistics rows (§9).
+
+**Confidence.** Established except the bar-increment inference marked above.
+
+### Closed — `ENDMSN.GUI`: outcome art, mission list, next mission, `AdjustDiff`, progress write [R-CAMP-01 §8] (2026-08-29)
+
+**Population.** Let `route = (kind == 1) && (hasNext || !won)` where
+`hasNext` = Has-mission(endIndex + 1) on the campaign record and `endIndex` is
+the index captured by the score helper. If `route`: Set(endIndex) reloads the
+just-played mission into the record, the background is `outcome1`, and the
+`Start` control's caption is set to the translated `Start`. Otherwise the
+background is `outcome0` and focus goes to `MainMenu`. (So a **won final
+mission** and every non-campaign session get `outcome0`; a lost mission or a
+won mission with a successor gets `outcome1`.)
+
+If `route`: the mission list is built (§1) and rewritten by the *mark
+prefixer*: each entry becomes two bytes plus the name, the first byte being
+`0xFF` for an `L` mark, `0xFE` for `W`, `0xFD` for `U`, the second a space
+(these are glyph codes in the panel font); a 25-slot scan for the first `U` is
+computed and discarded. The list is bound to `Missions`, the list gadget's
+page size is derived from its height, and the selection is set to `endIndex` and
+then to `endIndex + (won ? 1 : 0)`: **the "next mission" is the current index
+plus one on a win, the same index on a loss**, offered as the pre-selected row
+— nothing in the record advances by itself. The `Difficulty` label is
+refreshed from the difficulty word.
+
+The victory/defeat glyph: frame 0 of the front-end *victory* sequence when
+won and the local slot is not a watcher, else of the *defeat* sequence,
+blitted at (width/2, 28). When the session was launched from an external
+lobby (multiplayer, out of scope) the `MainMenu` control is relabelled `OK`.
+
+**Control set.** With `route`: `Start`, `LoadGame`, `SaveGame`, `KNOB`,
+`Missions`, `Difficulty`, `AdjustDiff`, `MainMenu` are shown and `Missions`
+gets focus. Without it only `MainMenu` is shown, moved to y = 416.
+**`AdjustDiff` has no handler**: it is displayed by this set and does nothing
+when clicked (the difficulty is cycled by the `Difficulty` control, which
+writes 0 → 1 → 2 → 0 to both the skirmish record's difficulty field and the
+difficulty word). What `AdjustDiff` "writes" is therefore: nothing.
+
+**Callbacks.** `LoadGame`/`SaveGame` open the load/save dialogs
+[08 "Save-file organization"]. `MainMenu` goes to the main-menu shell state,
+session state 1. `Start` or a `Missions` selection: the campaign-CD check
+(§5) shows its message on failure **and continues**; the archive set is
+re-mounted; Set(`Missions` selection) runs; on success the front-end state is
+reset, the *mission-loaded* flag set, the kind forced to 1, the latch word's
+*won* and *lost* bits cleared, and the shell routed to the briefing-movie
+state with session state 2. A failed load leaves the panel up.
+
+**Progress write.** Campaign progress is three in-memory items: the record's
+mission index, the 25-byte `Thumbs` mark array (`U` unplayed, `W`, `L`) and
+the difficulty word. The marks are initialised to 25 × `U` (plus a trailing
+byte) by the new-game `Start` (§3); one byte is written per battle end (§7).
+They are **not** written to the registry: the registry holds only the
+difficulty, games and all-missions mirrors of "Progression". They persist only
+through the save bank's `Summary` account: `Thumbs` (string, 25 characters),
+`Campaign` (string), `Mission` (string, the mission's display name), `Map`
+(string, same value), `Difficulty` (int), `Side` (int, local slot's side
+byte), `Players`, `Gametype` [08 "Account inventory"]. On load `Thumbs` is
+copied with a 25-byte bound and, when its length is not exactly 25, reset to
+all `U`; `Mission` is resolved by the name look-up of §1.
+
+**Between-missions save quirk.** When the save writer runs outside the live
+battle state (the results screen's `SaveGame`), it calls Advance (§1)
+**before** writing `Mission`/`Map` and `BetweenMissions=1`, then restores the
+end-mission index. A save taken from the results screen therefore names the
+**next** mission whenever one exists — regardless of whether the mission was
+won — and the current mission only when it was the last. A save taken from
+inside a battle names the current mission and omits `BetweenMissions`. The
+restart control [07 §11] re-opens the campaign by name and Set(endIndex)
+without touching the marks.
+
+**Confidence.** Established.
+
+### Closed — elimination announcements and the kill-lead line [R-CAMP-01 §9] (2026-08-29)
+
+**Elimination.** In the central death handler [06 §12.1], after the victim's
+owner's live-unit count is decremented, when it reaches **0**: a multiplayer
+session (kind 3) sends the owner's elimination to the peers; a skirmish
+session (kind 2) draws `CRT rand() % 3` to pick one of the three possessive
+tails — `forces have been obliterated`, `forces have gone to a better place`,
+`vermin have been exterminated` (translated) — formats `"%s %s"` with the
+owner's name and posts it as a status line of class 4 attributed to the
+owner's slot. The eight-entry table (`has been obliterated`, `has been
+liquidated`, `has been eradicated`, `has terminated`, `has bowed out`, `has
+gone to a better place`, `has been shown the door`, `has left the scene`) has
+**no reference in the image** — dead data. **Determinism:** the draw is on
+the **CRT** stream [01 §7.2] and happens inside the tick, so a skirmish
+elimination advances the CRT stream by one draw; the simulation stream is
+untouched. Campaign sessions post nothing.
+
+**Kill lead.** After a kill is credited in a kind 2 or 3 session (the
+credited slot exists, controller 1/2/3, side ≠ 10, and its rank byte is
+non-zero): with `k` the crediting slot's kill counter — or its commander-kill
+counter when the commander-death option word is 2 — the lowest rank among
+non-watcher slots whose counter is strictly below `k` and whose rank is
+below the crediting slot's becomes the new rank; every slot whose rank lies
+in `[new, old)` is shifted down by one; when the new rank is 0 the line
+`%s has taken the lead with %d kills` (translated, then formatted) is posted
+as a status line of class 2 attributed to slot 10. Established.
+
+### Closed — the multiplayer statistics rows (`I am Winner`, `Excess …`) [R-CAMP-01 §10] (2026-08-29)
+
+The *statistics collector* fills, for every slot with a record (controller
+1/2/3, side ≠ 10, or the auxiliary word non-zero), a player row (name pointer,
+record pointer, flags: bit 1 always; bit 2 when the controller is 2, or 3
+with lobby kind 2; bit 3 when the lobby watcher bit `0x40` is set; bit 4 when
+lobby byte flag `0x01` is set; the side name pointer; the ally list of up to
+ten slots whose alliance byte is set) and a score board of nine named
+integers: `Kills`, `Losses` (16-bit counters), `Energy Produced`, `Metal
+Produced`, `Excess Energy`, `Excess Metal` (the four doubles of §7, `__ftol`),
+`Commanders Killed`, `Commanders Lost` (16-bit counters), and `I am Winner` =
+the latch's won bit for the local slot and for every controller-2 slot, 0
+otherwise; the board's total = `__ftol(Energy Produced) + __ftol(Metal
+Produced)`. `ScoreBoard%d`, `PlayerInfo%d`, `Allies%d`, `ppScores%d`,
+`Scores%d`, `ScoreBoardsArray`, `PlayersArray`, `ScoresArray` are the
+allocation tags of these arrays (ten of each). The rows are handed to the
+online-service callback and the DirectPlay lobby report; both are
+**out of scope** (networking) and are named here only so the vocabulary is
+placed. "Excess" is therefore the `EnergyWasted`/`MetalWasted` overflow
+accumulator of §7. Established as to fields; OOS as to consumers.
+
 
 ## Required implementation invariants
 
@@ -4295,8 +5367,12 @@ finding. The recitals are deleted here only; the body sections and the
 - The AnyMsn toggle's exact listbox-selection effect — the last residual of
   the all-missions bit and of campaign progress held outside battle `.sav`
   files · "Progression" · manual retail observation.
-- Planet, panorama, rotation, briefing, narration, glamour, and optional-media
-  fallback rules · "Planet and briefing selection" · static trace.
+- The meaning of the per-slot auxiliary word that admits a slot to the score
+  display and statistics rows even when its controller test fails ·
+  [R-CAMP-01 §7] · static trace of the word's writers.
+- Whether the per-gadget `value / 15` float of the score bars is the bar
+  renderer's fill increment · [R-CAMP-01 §7] · static trace of the bar gadget
+  draw (doc 07).
 - Transport-selection policy beyond generic move orders, and any distinct
   naval or air placement geometry · "Placement root and search helpers"
   [P0-04] · static trace.
@@ -4332,8 +5408,6 @@ finding. The recitals are deleted here only; the body sections and the
   forms, and therefore whether the form that reads the local viewing slot's
   visibility bit is reachable in a networked session · [R-AI-01 §7] · static
   trace from the skirmish option word into the world flags word.
-- Reader of the strategic refresh's targeting-upgrade-present flag
-  · [R-AI-01 §16] · static trace.
 - Whether the attack wave's engaged latch and the rally task's best point,
   drift and best score are serialized · [R-AI-01 §4], [R-AI-01 §7],
   "Save-file organization" · static trace.
@@ -4388,31 +5462,26 @@ recorded to keep the specification exhaustive rather than to gate work.
 
 ### Save and replay
 
-- Remaining semantic mappings inside the bulk binary boxes: order subtype
-  family names, the meanings of opaque subtype words and relations, and retail
-  source names for the unit and order words that must stay opaque rather than
-  be typed by width · "Save-file organization" · static trace. Unit `0xB8`
-  records, the `0x3A` order wire record, feature records, and the radar
-  preview header are closed by R-SAVE-UNIT-01 / R-SAVE-WEAPON-01 /
-  R-SAVE-ORDER-01.
-- Semantic naming of the individual COB snapshot words — local versus static
-  versus control · "Save-file organization", doc 04 §5 · static trace. The
-  persistence layout itself is byte-exact.
-- Retail source names for the two unnamed words of the per-unit mover box
-  `u%04xmob` · "Save-file organization", doc 04 §8.1 · static trace. The box
-  is the mover record and its traversal order is **Established**
-  ([04 §8.1 R-MOV-01 §1]): the 16.16 velocity triple, the three-component lean
-  residual vector, one unnamed 32-bit word, the scalar speed word, the signed
-  16-bit turn residual, a second unnamed 32-bit word, and finally a byte whose
-  low two bits carry the movement mode and whose bit 2 carries the blocked
-  flag — the mode and blocked bits being merged into the live mover's state
-  byte rather than overwriting it. This is also how save-installed mover modes
-  `0` and `3` reach a unit that no runtime writer can produce ([04 §9.1]). The
-  companion key `u%04xacc` is the accessory/attachment box; its field list is
-  a separate open item under the bulk-binary bullet above.
-- Upstream multiplayer GUI authority and menu enablement for saving, and the
-  upstream save-name edit-character policy and code page · "Save-file
-  organization" · static trace.
+- Remaining semantic mappings inside the bulk binary boxes: the two
+  path-marker words (code-2 payload `0x22` and `0x32`), the code-3 record's
+  handler identity and word names, the unit record's relation byte (`0x8E`),
+  current/previous byte pair (`0xAC`/`0xAD`) and countdown byte (`0xB1`), and
+  the per-word layout of the `u%04xacc` resource account (doc 05) ·
+  "Save-file organization" [R-SAVE-02 §6] [R-SAVE-02 §7] [R-SAVE-02 §10] ·
+  static trace (field-isolation of each reader). Everything else in the unit,
+  mover, script, order, feature and player records is named.
+- The exact frame slot of the script writer's two lost piece-level getter
+  results (which of dwords 24/25 is residue is Established; which getter was
+  lost is not) · [R-SAVE-02 §9] · byte-level trace of the writer's three
+  indirect calls.
+- Which file timestamp the save-list enumerator's 32-bit sort key derives
+  from · [R-SAVE-02 §1] · static trace of the enumerator's find-data
+  conversion.
+- The `GAMENAME` edit gadget's admitted character set and length, and the
+  code page of the file name · [R-SAVE-02 §1], doc 07 · static trace of the
+  GUI edit-control key filter.
+- The result of an out-of-range `Difficulty` in the summary panel ·
+  [R-SAVE-02 §3] · static trace of the adjacent data.
 - Framing, initial snapshot, command timing, random state, seek behavior,
   version checks, and UI of a replay path, should one ever be found; the
   whole-image sweep covering dynamically built names, debug modes, and

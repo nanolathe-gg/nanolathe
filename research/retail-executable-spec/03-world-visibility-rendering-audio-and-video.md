@@ -4136,6 +4136,41 @@ without importing presentation details:
 These probes also separate the phase-7 strict countdown predicate from the
 wall-clock cursor path's signed-delta and multi-frame loop. **Established.**
 
+### Closed — named GAF banks and slots, the fog fade families, and the cursor bank [R-FX-01 §1] (2026-08-29)
+
+**Established (direct-static; reader census over the whole decompile
+export).** The startup binder this section summarizes as "wires named
+entries" loads five banks through the animation-bank cache (a bank name
+resolves to `anims\<name>.gaf`; a bank that fails to load ends the process
+with a message box — [06 R-WFX-01 §1]) and looks up fixed entry names in
+each. A name that is absent leaves a null slot; the binder additionally clears
+the loop byte of the explosion-art entries so they play once. The banks, in
+binding order, and every reader found:
+
+| Bank | Entries bound (in order) | Readers |
+|---|---|---|
+| `fx` | `smoke 1`, `smoke 2`, `fire1`, `alfboom1`, `radlogo`, `radlogohigh`, `nuclogo`, `h2oboom2`, `lavasplash`, `cannonshell`, `plasmasm`, `plasmamd`, `ultrashell`, `plasmasm` (bound twice: render-type-4 selector slots 1 and 4), `flamestream`, `explosion`, `explode2`..`explode5`, `nuke1`, `shadow` | itemized in [06 R-WFX-01 §1]; `fire1` and `alfboom1` are bound and read by nothing (dead bindings); `radlogo`/`radlogohigh`/`nuclogo` are HUD (doc 07) |
+| `igtitles` | `igvictory`, `igdefeat`, `igpaused` | the end-of-battle and pause overlays (doc 07) |
+| `vismasks` | `vismask` | the coverage-mask draw family of §3.3 (frame index = the cached nibble, clamped to the entry's last frame) |
+| `fog` | `Black1`..`Black4`, `Gray1`..`Gray4` | the fog overlay composer only (below) |
+| `cursors` | twenty-one entries, listed in [R-FX-01 §5] | the cursor setter and the order-queue icon draw ([R-FX-01 §5]) |
+
+The bank pointers and every slot are cleared by the session teardown; no
+other code writes them.
+
+**The eight "fade strips" are the fog tile families.** `Black1`..`Black4` and
+`Gray1`..`Gray4` (stock `fog.gaf`: 14 frames each — quarter-tile 16×16 frames
+whose placement offsets select the tile corner, then 32×32 full-tile frames;
+every hold word 10; raw, not RLE) are the two four-way variant families §3.3
+describes without naming them. The fog overlay draws frame `value − 1` of
+`Gray<1 + ((cellX + cellY + cameraPhaseSum) & 3)>` for the current-sight
+channel, then the same-indexed `Black` entry for the history channel — the
+Gray slot base plus the variant times the slot stride, and the Black slot base
+likewise. **No other reader exists**: not the shadow pass, not cloak, not the
+nanolathe (which has no fade at all, [R-P0-19-P]), not any palette fade. The
+lane question's three candidate uses are all bounded-negative over the whole
+export. **Established.**
+
 ## 5. World render passes and object presentation
 
 ### 5.1 Terrain and features
@@ -4662,6 +4697,54 @@ emission deadline, so a delayed emitter preserves any owed puffs and a
 trail smoke, and expiry without collision leaves one final trail-style puff for
 timer families without the burn-blow flag.
 
+### Closed — the projectile presentation hand-offs, as doc 03's statement [R-FX-01 §2] (2026-08-29)
+
+The eight-case list above was written before the projectile renderer was
+traced case by case; [06 R-WFX-01 §4] now owns the per-case arithmetic and
+the stock-author census. Four of the case descriptions above are corrected
+here, each quoting the old text. **Established (direct-static)** throughout;
+the CRT/simulation stream attribution is [06 R-WFX-01 §6].
+
+- Case 1 said "common base sprite (frame 0 of the shared projectile GAF)".
+  The sprite is frame 0 of the `fx` bank's **`shadow`** entry ([R-FX-01 §1]),
+  drawn at `(Xword − viewX + 128, (Zword − floor/2) − viewZ + 32)` where
+  `floor` is the record's **cached average floor height** (doc 06 §8.1), not
+  the projectile's own Y — it is the ground shadow. Cases 3, 4 and 6 draw the
+  same shadow the same way; case 4's earlier "shadow" omission is implied by
+  the list and is corrected by the same sentence.
+- Case 1 said "an optional secondary model appears while a definition flag is
+  set and the current tick precedes the record's expiry deadline, with directly
+  computed versus record-stored rotation chosen by that same flag". Wrong on
+  the gate: the child piece is drawn whenever the model **has** one and
+  `currentTick < expiry` (strict). The `propeller` flag only substitutes the
+  record's spinning propeller angle for the first word of the angle block; it
+  does not choose between two rotation sources.
+- Case 4 said "the definition's selector byte picks one of five global GAF
+  sequences". The selector is the authored **`color`** byte ([06 R-WFX-01
+  §1]): 0 `cannonshell`, 1 `plasmasm`, 2 `plasmamd`, 3 `ultrashell`, 4
+  `plasmasm`; 255 (−1) suppresses the case; 5..254 draw nothing.
+- Case 7 said the segment count "derives from the endpoint span divided by the
+  literal constant 327680" and left its units open in the tail. The span is
+  the truncated 16.16 length of the tail→head vector, so `327680 = 5 << 16`
+  and the count is `trunc(dist / 5)` **whole world units per segment, in map
+  space** — closing the tail item. The per-axis jitter `rand·11/0x8000 − 5` is
+  in whole world units added to the point's high word, three CRT draws per
+  generated point, `2·n` points, `6·n` draws per lightning record per
+  **rendered frame** (the renderer runs per present, not per tick).
+- Case 2's "fixed global GAF entry" is the 22×22 **lens frame** built at
+  startup beside the calculated explosion tables ([06 R-WFX-01 §2]); its
+  blitter is [R-FX-01 §4] below.
+
+**The render-transform refresh cache (as doc 03's statement).** Every
+consumer of a unit's cached piece world transforms — the effect opcode's
+origin lookup [04 R-COB-03 §6] is the traced one — calls one refresh helper
+first. The helper recomputes the transforms only when at least one of the
+unit's three orientation words differs from the cached copy by **more than
+7**, absolute value in the 65,536-per-circle domain (`|a − cached| > 7`,
+strict, per word, any of three). Below that tolerance the cached transforms
+(≈0.04° stale at most) are reused, so effect origins computed from piece
+vertices may lag the true orientation by up to that much. **Established.**
+
 ### 5.5 Effects, flashes, nanolathe, and cursors
 
 Impact, smoke, wake, construction, and sequence events append to effect strips
@@ -4746,13 +4829,350 @@ and restores dirty cursor rectangles, changes cursor icon/mode for move, attack,
 repair, patrol, build, and other order states, and uses the same logical-to-
 physical palette mapping. GUI queue lines/icons are also software-drawn.
 
+### Closed — the strip object families, strip by strip [R-FX-01 §3] (2026-08-29)
+
+[R-STRIP-01 §1–§3] gives the producer census, the container lifecycle, the
+sub-record strides and the draw census. This section pins the per-family
+arithmetic the census did not itemize: the two families that had none
+(the flame-stream trail and the impact sprinkle), the identity of every effect
+class the emit-sfx opcode and the debris draw reach (the "effect families
+themselves" hand-off of [04 R-COB-03 §6] and the class-7 hand-off of
+[04 R-COB-04 §4]), and the puff parameters of the remaining producers. Every
+claim is **Established (direct-static)** unless marked; every random draw is
+from the **CRT** stream — the simulation stream is never touched.
+
+**Common mechanics.** A container's base init sets `deadline = tick +
+lifetime`. The spawn-due predicate is `nextSpawn ≤ deadline && nextSpawn ≤
+tick` (both inclusive); every family here sets `nextSpawn = tick + 1` after a
+spawn and spawns once from its init. The per-tick update (phase 11 of [01
+§4.4]) advances every sub-record in order, removes the ones whose expiry test
+passes by stable compaction, then spawns if due. The removal verdict the
+dispatcher tests before the update is "the list is empty". Sub-record draws
+project `sx = Xword − viewX + 128`, `sy = (Zword − Yword/2) − viewZ + 32`
+(16-bit truncated) and pass the one-point coverage gate at tile `(Xword >> 5,
+(Zword − Yword/2) >> 5)` — the viewing player's byte grid when mode bit 1 is
+set, else the word-grid bit — with an off-map tile failing the gate. The
+"root flag byte that disables all strip allocation" (tail item, [R-STRIP-01
+§1]) has **twenty readers and no writer anywhere in the image**: it is a
+zero-initialized static, the disable branch is dead in retail, and the pool
+gate is only the pool itself. **Established (reference census).**
+
+| Strip | Family | Producer events and per-site parameters |
+|---|---|---|
+| 2 | impact sprinkle | COB `emit-sfx` types 2 and 3 (piece vertex 0 → vertex 1, spacing **16** / **8**, colour flag 1) and types 4 and 5 (vertex 1 → vertex 0, spacing 16 / 8, flag 1) [04 R-COB-03 §6] |
+| 5 | teleport flame segments; burning-feature smoke | [R-LAYER §4]; [R-STRIP-01 §1] |
+| 6 | nanolathe emitter | [R-P0-19-P] |
+| 7 | flame-stream trail; impact sprinkle | `emit-sfx` type 0 (VTOL: vertex 0 → vertex 1, lifetime **6**) and type 1 (thrust: lifetime **7**), both hold 1; `emit-sfx` type `0x103` (sub-bubble: sprinkle from the piece's point toward `(X, seaLevel << 16, Z)`, spacing 8, colour flag **0**) |
+| 9 | smoke puff; flame-stream trail | every weapon puff ([06 R-WFX-01 §5]); `emit-sfx` `0x101` white = puff init `(0, 1, 0, 0, 0)` on `smoke 1` and `0x102` black = `(0, 1, 0, 0, 1)` on `smoke 2`; the debris draw's smoke puff `(0, 1, 0, 0, 0)` per rendered frame under engine bit 1 [04 R-COB-04 §2]; the debris draw's **fire particle** (flame-stream trail class, below) per rendered frame under engine bit 0; the corpse column [R-LAYER §3] |
+
+**The "class 7 with parameter 15" flash of [04 R-COB-04 §4]** is not a flash:
+it is the smoke puff emitter with init `(point, frameCap 0, spawnInterval 7,
+frameHold 0 → 7, lifetime 15, selector 0 → smoke 1)` on strip 9 — one puff at
+spawn and one every seventh tick while `nextSpawn ≤ spawn + 15`, three puffs
+in all, each playing all twelve `smoke 1` frames at hold 7 with the CRT
+countdown of [06 R-WFX-01 §5]. It is the land-dust puff every above-sea
+explosion emits. The "calculated frame" wording of that section (a narrow
+window near `0x6f`) should be read as [06 R-WFX-01 §2]: the ramp `0x4f..0x6e`
+with transparency by radius.
+
+**Flame-stream trail family** (emit-sfx types 0/1 on strip 7; the debris fire
+particle on strip 9). Container: source `A`, target `B`, per-axis step
+`((B − A) · trunc(65536 / lifetime)) >> 16` (64-bit product, arithmetic
+shift — slightly short of `(B − A)/lifetime`: the factor is 10922/65536 for
+lifetime 6, 9362/65536 for 7), segment hold = the leading argument (1 at every
+site), `deadline = tick + lifetime`, and the vector's capacity grows by
+`deadline − tick + 1` segments when the spawn needs room. Spawn — at init and
+then once per tick while `nextSpawn ≤ deadline`, so `lifetime + 1` segments
+in all — writes one 60-byte segment: the `flamestream` entry, position = a
+fresh copy of `A` (every segment starts at the source, not at the previous
+segment), target `B`, the step, `lastFrame = frameCount − 1` (19 in stock
+`fx.gaf`), frame 0, phase 0, hold, and `expiry = deadline`. No random draw.
+Update per segment: `pos += step`; `phase = (phase + 1) mod hold`; when the
+phase wraps, `frame = (frame + 1) mod lastFrame` — the entry's **last frame is
+never shown** and with hold 1 the frame advances every tick. Expiry: `expiry <
+tick` (strict), so every segment of one container lives through the deadline
+tick and all of them, then the container, go on the tick after it. Draw: the
+ordinary frame blitter with frame `frame` at the projected position (the
+frame's authored placement offsets apply). Net effect for `emit-sfx` type 0:
+a train of up to seven flame sprites marching from the piece's first vertex
+toward its second at one sixth of the span per tick, a new one born each tick,
+all extinguished together seven ticks after the opcode ran; type 1 the same
+over seven ticks with eight sprites.
+
+The **debris fire particle** (engine bit 0, [04 R-COB-04 §2]) is this class
+with `A = B =` the piece's position jittered per axis by `crtRand · 3 / 0x8000
+− 1` whole units (three CRT draws) and `lifetime = crtRand · 3 / 0x8000 + 1`
+(1..3; a fourth draw), hold 1, strip 9: a stationary flame sprite whose
+container lays `lifetime + 1` coincident segments over as many ticks. The
+four draws are spent **before** the pool is consulted, so a dropped particle
+still costs them; and because the debris draw runs per rendered frame, one
+container is created per frame per burning piece, all overlapping.
+
+**Impact sprinkle family** (strip 2 for emit-sfx 2–5, strip 7 for `0x103`).
+Container init `(A, B, spacing, lifetime 1, colourFlag)`: `deadline = tick +
+1`, so the window closes after one tick and the container spawns exactly
+twice (init, and the next tick's update) — the two puffs of [R-STRIP-01 §1].
+Per-axis step: `len = trunc(sqrt(dx² + dy² + dz²))` in double over the raw
+16.16 deltas (so `len` is the span in 16.16 units), then `step = ((B − A) ·
+trunc(0x80000000 / len)) >> 16` — one **half world unit per tick** along the
+A→B direction, the reciprocal truncated. Edge: `A == B` gives `len = 0` and an
+integer divide fault (the sub-bubble type reaches it when the piece is exactly
+at sea level; a piece whose vertices 0 and 1 coincide reaches it for types
+2–5). Spawn writes one 68-byte puff: the `smoke 1` entry (carried, **never
+drawn** — this family fills rectangles), position = `A` plus per-axis jitter
+`crtRand · 7 / 0x8000 − 3` whole units (three CRT draws), a copy of `B`, the
+step, the ramp ends `0x61` and `0x67`, `colour = flag ? 0x61 : 0x67`, `dir =
+flag ? +1 : −1`, phase 0, `spacing`, and `expiry = tick + spacing · 6` (96
+ticks at spacing 16, 48 at 8). Update: `pos += step`; `phase = (phase + 1) mod
+spacing`; when it wraps `colour += dir`, then `colour > 0x67 → 0x61` and
+`colour < 0x61 → 0x67` — the emit-sfx puffs climb the seven-entry ramp
+`0x61..0x67` one step per `spacing` ticks and wrap to its bottom, the
+sub-bubble puff descends it and wraps to its top. Expiry: removed when `tick >
+expiry` **or** the bilinear terrain height under the puff ([R-TERR-01 §4]; −1
+off-map) is strictly below the sea-level byte — the marks die over water and
+off-map, the "one family" of [R-STRIP-01 §2]. Draw: the coverage gate, then a
+two-by-two rectangle (the inclusive filler of [R-P0-19-P]) written with the
+raw palette index `colour` — like the nano ramp, this byte is **not** passed
+through the logical-to-physical remap that beam and lightning colours use.
+Three CRT draws per puff, six per container.
+
+**Smoke puff family** (strips 5 and 9): [06 R-WFX-01 §5] is the arithmetic
+(init parameters, the `hold − 2` start countdown, the `hold/2 + rand·(hold/2)`
+redraw, the wind ×8 and gravity ×4 drift, removal at the last frame); the
+strip-9 producer parameters are itemized there and in the table above. The
+selector byte chooses the `smoke 1` (0) or `smoke 2` (nonzero) entry; the
+puff draws the selected frame through the ordinary frame blitter after its
+own coverage gate.
+
+**Strip-5 flame segments** ([R-LAYER §4]) and the **nanolathe emitter**
+([R-P0-19-P]) are unchanged by this pass; the nano particle's `0x100` word is
+now bounded-negative over that class's particle advance and particle draw (neither
+reads it) and stays in the tail.
+
+### Closed — the flash and lens blitters, and which families do not use the countdown cursor [R-FX-01 §4] (2026-08-29)
+
+**The flash blitter (Established, direct-static).** The explosion pool's first
+draw walk ([06 R-WFX-01 §2]) hands every record's calculated (secondary) frame
+to a dedicated blitter that is neither the ordinary frame blitter nor a fill.
+It requires a window-state bit to be set (the same readiness gate the other
+software blits test), clips the frame rectangle `(x − x_offset, y − y_offset,
++width − 1, +height − 1)` against the destination's clip rectangle
+(inclusive), and then, for every source pixel that is not the frame's
+transparent key (`0xff` for calculated frames), writes
+
+```
+dst = LHT[(src − 0x4f) · 256 + dst]
+```
+
+— the `LHT` brightening table of §4.3.1, row = the calculated disc's palette
+index minus `0x4f` (`0x4f..0x6e` → rows 0..31), column = the pixel already on
+screen. So the calculated disc is not painted; it **brightens what is under
+it**, weakest (row 0, near identity) at the fuzzy rim and strongest (row 31)
+at the centre index `0x6e`, and the named explosion art then composes over it
+in the second walk. Raw and RLE frames take the same expression (the RLE path
+applies it per literal and per repeat run and skips transparent runs);
+composed frames recurse per subframe. The blit has no coverage gate, matching
+[06 R-WFX-01 §2]. **Established.**
+
+**The lens blitter (Established, direct-static).** The 22×22 lens frame is a
+`w × h` array of signed 16-bit **source offsets** ([06 R-WFX-01 §2]; the
+lane's "displacement/distortion map"), consumed only by render type 2
+(`mindgun`). Per blit: swap the frame's pixel pointer with its scratch
+pointer; copy the framebuffer rectangle under the destination — top-left `(x −
+x_offset, y − y_offset)`, `w × h`, clipped — into the scratch buffer; then for
+every cell `i`, when the offset word is the sentinel `32000` write the frame's
+transparent key (`0xff`), else write `captured[offset]`; the result is
+assembled behind the captured block, the frame's pixel pointer is pointed at it
+for one call of the ordinary frame blitter (which honours the key), and the
+pointers are restored. Each destination pixel thus shows the background pixel
+the lens map points at — a refraction disc with a transparent corner mask —
+and the map is sampled once per blit with no random draw.
+
+**Which presentation families do not use the authored countdown cursor.**
+Every sequence family of §4.4 — feature and model textures (phases 6 and 7),
+the fixed explosion pool ([06 R-WFX-01 §2]; hold word 2 for calculated
+frames), the strip-5/9 smoke puffs (a CRT-drawn per-frame countdown seeded
+from the producer's hold, not the file's), and the cursor (the wall-clock
+delta stepper, [R-FX-01 §5]) — is a countdown of some kind. Three families are
+**not**: the flame-stream trail and impact sprinkle of [R-FX-01 §3] (a modulo
+phase counter per segment, hold from the producer, the file's hold words
+unread); render type 4 (`(tick − creation) mod frames`, hold words unread) and
+render type 5 (lifetime-scaled, [06 R-WFX-01 §4]); and the order-queue icons
+of [R-FX-01 §5] (`tick / (2 · hold0) mod frames`). Their cadences are stated
+at those anchors; none of them reads a frame's own hold word except the queue
+icon, which reads only frame 0's. **Established.**
+
+### Closed — cursors: table, selection data path, hotspot, cadence, and save-under [R-FX-01 §5] (2026-08-29)
+
+**The table (Established).** The `cursors` bank ([R-FX-01 §1]) is bound into
+one contiguous table of sequence pointers indexed 1..21, in this order:
+1 `cursorattack`, 2 `cursorairstrike`, 3 `cursortoofar`, 4 `cursorcapture`,
+5 `cursordefend`, 6 `cursorrepair`, 7 `cursorpatrol`, 8 `cursorpickup`,
+9 `cursorteleport`, 10 `cursorrevive`, 11 `cursorreclamate`, 12 `cursorload`,
+13 `cursorunload`, 14 `cursormove`, 15 `cursorselect`, 16 `cursorfindsite`,
+17 `cursorred`, 18 `cursorgrn`, 19 `cursornormal`, 20 `cursorhourglass`,
+21 `pathicon`. Index 0 is the word before the first slot, which the binder
+never writes and the session-block clear leaves zero: a selector that yields 0
+binds a null sequence (no cursor art). The stock file's twenty-second entry,
+`cursorprotect` (8 frames), is bound by nothing. **Established.**
+
+**Selection data path (Established; the state machine itself is doc 07's).**
+The battle interface keeps one byte, *the current cursor index*, and a
+setter that is a no-op when the requested index equals it; on a change it
+stores the index, binds the mouse object's playback cursor to the table entry
+at frame 0 (the §4.4 binder: clamp, load frame 0's hold, copy the loop byte),
+sets the mouse object's "animated cursor" bit, and hands the frame-0 header to
+the window layer. The producers of the index: the order-cursor resolver, which
+starts from 19 (`cursornormal`) and takes the **minimum** over every selected
+unit of that unit's per-order cursor index (lower index wins: attack over
+move over select), returning 15 (`cursorselect`) for the build-placement
+special case; the hourglass sites, which force 20 while the interface waits;
+and the interface reset, which forces 19. The order descriptor table (doc 04
+§3.1; stride-25 records) carries **one byte per order state naming the cursor
+index** — the same byte the queue-marker draw reads (below), so cursor and
+queue icon for an order are one authored choice. Which order state maps to
+which index is doc 07's contract; the byte's existence and both readers are
+established here.
+
+**Hotspot and placement (Established).** A cursor's hotspot is the current
+frame's `x_offset`/`y_offset` pair (`[fmt gaf]` frame header +4/+6): the frame
+is drawn with its top-left at `(mouseX − x_offset, mouseY − y_offset)`, where
+the mouse position is the OS cursor position read at draw time. There is no
+other hotspot metadata anywhere — no table, no per-entry record, no authored
+key; the placement offsets *are* the hotspots, which is why the arrow
+(`cursornormal`, 10×20) authors `(0, 0)` and the crosshair cursors author
+their centres. `cursorfindsite` authors `(−15, −3)` — its art sits down-right
+of the pointer. **Established (direct-static; stock offsets by asset census).**
+
+**Cadence (Established).** The mouse object's update computes `delta =
+clockNow − clockLast` where `clockNow = GetTickCount() · tickRate / 1000`
+with `tickRate` the 30-per-second rate global — the "30-unit-per-second scaled
+wall-clock delta" of §4.4 — and, while the animated-cursor bit is set, feeds
+the delta to the multi-frame signed-delta stepper; if the frame index changed
+it re-sends the new frame header to the window layer. Hold words are therefore
+**thirtieths of a wall-clock second**, unaffected by game speed or pause.
+Stock holds (asset census, `cursors.gaf`): attack 5 (10 frames), airstrike 1
+(16), toofar 3 (2), capture 2 (13), defend 4 (16), repair 8 (12), patrol 9
+(14), pickup 2 (24), teleport 10 (46), revive 3 (18), reclamate 3 (11), load 3
+(16), unload 10 (16), move 8 (8), select 6 (2), findsite 10 (2), red / grn /
+normal 10 (1 frame each — never stepped), hourglass 5 (8), pathicon 3 (1).
+Every stock cursor entry's loop byte is 1 (looping).
+
+**Save-under and presentation (Established, direct-static).** The window
+layer owns the drawn cursor: the current frame header, three `w × h` scratch
+surfaces sized from it, and the last drawn origin. Each cursor present, in
+order: read the OS cursor position; compute the new origin (position minus
+hotspot); capture the framebuffer under the new rectangle into the *fresh
+background* surface; copy the *old background* surface into it where the two
+rectangles overlap (so the fresh capture holds true background, not the old
+cursor image); build the *composition* surface as the fresh background with
+the cursor frame blitted at its hotspot; restore the old background to the
+screen at the old origin and blit the composition at the new one; keep the
+fresh background as the next old background; and present **both** dirty
+rectangles. A first present (no old rectangle) does the capture and the blit
+only. The fullscreen path instead redraws the frame directly on the primary
+after restoring the saved rectangle, and only while a hide counter is at or
+below zero. None of this draws from any RNG. GUI queue lines and icons are
+software-drawn in the same frame composer, not through this layer.
+
+**Order-queue icons and the path dots (Established, direct-static).** The
+queue marker for an order draws frame `((tick / (2 · hold0)) mod frames)` of
+the cursor entry named by the order state's cursor byte at the order's target
+point, where `hold0` is that entry's **frame-0** hold word (a zero byte means
+no icon) and `tick` is the simulation tick counter — so queue icons animate
+at half the speed the same entry runs as a cursor, and stop when the game is
+paused, unlike the cursor. Along each queue line the composer also lays
+`pathicon` dots every 48 world units, the first at `((tick − issueTick) mod
+30) · 48 / 30` units from the segment start (so the dots slide toward the
+target 1.6 units per tick and repeat every 30 ticks), only when the segment is
+at least one world unit long; each dot steps the entry's frame index by one
+(stock `pathicon` has one frame).
+
+### Closed — `damagebars` and the health-bar raster [R-FX-01 §6] (2026-08-29)
+
+**The option (Established, direct-static).** `damagebars` is a value under the
+game's registry key, read at settings load into **bit 0 of the display-options
+word**: present → the bit takes the value's low bit; absent → the bit is
+cleared and the default is written back to the registry. It is written out
+with the other options, and toggled at runtime by a battle key command (the
+key dispatcher is doc 07's) that flips the bit and immediately rewrites the
+settings.
+
+**Where the bars draw (Established).** The frame composer builds an
+*on-screen unit list* every frame: the units whose definition box, projected,
+intersects the viewport and that are either owned by or visible to the
+viewing player. Between the strip-8 walk and the strip-9 walk ([03 §1]) it
+walks that list and, for each unit that has either the bit set or a nonzero
+group number: computes `sx = Xword − viewX + 128` and `sy0 = Zword − Yword/2
+− viewZ`; when the bit is set **and the unit belongs to the viewing player**
+draws the health bar at `(sx, sy0 + 42)` — ten pixels below the unit's
+anchor row — and, when it also has a group number, the digit `'0' + group`
+as text at `(sx, sy0 + 46)` in the default colour. Other players' units never
+get a bar, whatever the option; strip-9 smoke therefore composes **over** the
+bars and the projectile/explosion passes before them. There is no
+line-of-sight test beyond the list's own admission.
+
+**The raster (Established, direct-static; closes the `[07 §6]` footer's
+geometry).** Given the unit's signed 16-bit current health `hp` and its
+definition's 32-bit `maxdamage`:
+
+```
+if hp <= 0: draw nothing
+outer  = [sx−17 .. sx+17] × [y−2 .. y+2]        filled with dcb[0]
+w      = (hp << 5) / maxdamage                  (unsigned, truncating)
+inner  = [sx−16 .. sx−16+w] × [y−1 .. y+1]      filled with
+             dcb[10] if hp > 2·(maxdamage/3)     (maxdamage/3 unsigned, truncating)
+             dcb[14] if hp > maxdamage/3
+             dcb[12] otherwise
+```
+
+Both fills are the inclusive rectangle filler of [R-P0-19-P], so the outer
+bar is 35 × 5 pixels and the inner fill `w + 1` × 3 — full health fills 33
+pixels and leaves a one-pixel border each side; a unit at 1 of 3000 still
+shows a one-pixel fill; the comparisons are signed and strict. `dcb[n]` is
+entry `n` of the active logical-to-physical table, the same entries [07 §6]
+names for the thresholds. Death (`hp ≤ 0`) hides the bar the same frame.
+
+### Closed — `NoShake`, the named scratch surfaces, and the residuals [R-FX-01 §7] (2026-08-29)
+
+**`NoShake` (Established, direct-static).** The token is an entry of the
+in-battle **typed-command registry** — the table the battle setup registers
+beside `Radar`, `fog`, `Contour`, `ScrollSpeed`, `IFace`, `Give` and `CDPlay`,
+consulted by the text-entry line's command parser (doc 07 owns the line). Its
+handler toggles **bit 4 of the session preference word**, which is exactly the
+"preference bit `0x10`" §5.6 names as the shake request's early return. So
+§5.6's "which authored setting drives that bit is not established" closes:
+no authored setting drives it; it is a per-session typed toggle, off at
+battle start (the word is cleared with the session block) and not persisted.
+
+**The named presentation scratch surfaces (lane question).** The three
+mouse save-under rectangles are the old-background, fresh-background and
+composition surfaces of [R-FX-01 §5]. The "blue table" is the 256-byte `BLUE
+TABLE` slot of §4.3's five-table roster — the submerged tint of [R-REN-03D],
+already closed there. The "lens frame" is render type 2's displacement map,
+[R-FX-01 §4]. The mouse-event buffer and the "loaded surface wrapper" were
+not traced in this pass: **Unknown** (owner doc 07 for the event buffer, §4.1
+for the wrapper; decider: static trace of their allocation sites).
+
+**Residuals closed by citation.** The "derivation of the second effect vertex
+used by the swapped pair" ([R-STRIP-01 §1] `TODO(question)`) is [04 R-COB-03
+§6]: vector effect types read vertices **0 and 1** of the piece's transformed
+vertex list; types 4 and 5 simply pass them in the other order. The
+"physical units of the case-7 segmentation constant" is [R-FX-01 §2]. The
+strip-disable byte is [R-FX-01 §3]. The nano particle's `0x100` word is
+**still Unknown** (bounded-negative over its class's advance and draw;
+decider: static trace of any remaining reader, or acceptance as an unused
+initializer if a full-image reference census over the sub-record offset
+finds none).
+
 ### 5.6 Screen shake
 
 Screen shake is presentation, but it is driven from the authoritative impact
 dispatcher, so every peer requests the same shakes from the same weapon data.
 
 **Request.** If the preference bit `0x10` is set, the request returns with state
-untouched; which authored setting drives that bit is not established. Otherwise
+untouched; that bit is the typed `NoShake` toggle, not an authored setting
+([R-FX-01 §7], 2026-08-29 — the earlier "not established" is closed). Otherwise
 if inactive the two amplitude accumulators are cleared to zero while the
 duration accumulator is left unchanged. The new duration is
 `trunc((duration + authoredDuration)/2)` with signed truncation toward zero,
@@ -5549,12 +5969,8 @@ by the sharper question it turned into.
   blit wrappers is established · §4.2 · static trace.
 - Hidden-panel viewport subrect expansion in both backends; bounded-negative
   for a second subrect writer · §4.1, §4.2 · static trace. Marked `TODO(T23)`.
-- Identity of the root flag byte that disables all strip allocation when set
-  · §1, [R-STRIP-01 §1] · static trace.
 - Semantic strip naming beyond the GAF/asset bindings of [R-STRIP-01 §2]
   · §1 · static trace.
-- Derivation of the second effect vertex used by the swapped pair
-  · [R-STRIP-01 §1] · static trace. Marked `TODO(question)`.
 - The float expression feeding the strip-5 interval's truncating conversion;
   the conversion and the divide-by-five are established · [R-LAYER §4] ·
   static trace. Marked `TODO(question)`.
@@ -5589,9 +6005,12 @@ by the sharper question it turned into.
 - Water wake rectangle interpolation, underwater tint, splash timing, and
   proof that no hidden animated-water surface writer exists · §5 · static
   trace.
-- Cursor hotspot metadata, subframe lifetime, animation speed for families
-  that do not use the authored countdown cursor, and sequence-flag naming
-  · §5.5 · static trace.
+- The mouse-event buffer and the "loaded surface wrapper" named beside the
+  cursor save-under surfaces · [R-FX-01 §7] · static trace of their
+  allocation sites (doc 07 owns the event buffer).
+- Meaning of the window-state bit the flash blitter requires before it
+  writes; it is set in every observed battle present · [R-FX-01 §4] · static
+  trace of its writer.
 - Teardown behavior of the model-player registry — whether a destroyed player
   is cleared, retained as an inactive slot, or removed with compaction
   · §5.6 [R-CRD-005 §1] · static trace. This is the CRD-005 residual, not
@@ -5608,18 +6027,20 @@ by the sharper question it turned into.
 
 ### Projectiles and effects
 
-- Physical units of the case-7 segmentation constant 327680 — map space versus
-  projected space; the constant itself is exact · §5.4 · manual retail
-  observation (lightning-segment calibration map).
-- Semantic of the low 16 bits of the stored projectile orientation fed to the
-  Z rotation slot · §5.4 · static trace.
-- Purpose of the nanolathe particle word set to `0x100` at spawn and read by
-  nothing observed · §5.5 [R-P0-19-P] · static trace. Marked
-  `TODO(question)`.
+- The roll word of the projectile angle block for non-meteor models — drawn
+  from whatever the pool slot last held · §5.4, [06 R-WFX-01 §4] · writer
+  census of that word (doc 06 owns the record).
+- Purpose of the nanolathe particle word set to `0x100` at spawn; read by
+  neither the particle advance nor the particle draw · §5.5 [R-P0-19-P],
+  [R-FX-01 §7] · full-image reference census over the sub-record offset.
+  Marked `TODO(question)`.
 - Beam fixed-point scale and lifetime edge cases, collision ordering at map
   borders, and line-colour remap initialization · §5.4 · static trace.
-- Missile target invalidation, and smoke/effect-strip lifetime and fade · §5.5
-  · static trace.
+- Missile target invalidation and reacquisition · §5.4 · static trace (doc
+  06 owns the homing contract). Strip lifetimes and colour cycles are closed
+  in [R-FX-01 §3].
+- The strip-5 burning-feature smoke producer's puff parameters (variant,
+  life) · §5.5, [R-STRIP-01 §1] · static trace of the phase-6 site.
 
 ### Audio and music
 

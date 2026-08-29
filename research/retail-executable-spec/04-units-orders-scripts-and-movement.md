@@ -2317,7 +2317,12 @@ set only here and read only by this setup.
 patrol-chain setup above; advance. Phase 1: satisfied ∩ `0xE0` → *rotate*.
 Point goal at the goal radius 16; deadline 60; gate |= `0xE0`. Then, only
 when the player's energy is at least 20 % of energy storage: enumerate units
-within `sightdistance` of the unit through the repair-candidate filter, pick
+within `sightdistance` of the unit through the repair-candidate filter — the
+gather helper itself draws `sim(n)` three times for the energy-need list and
+three times for the metal-need list, each triple only when that list is
+non-empty (best-scored of three random picks; corrected 2026-08-29 against
+[01 R-DET-01 §6], the earlier text implied the single pick below was the only
+draw) — then pick
 index `RNG(count)`, and when its owner is **not** hostile to mine (diplomacy
 byte nonzero) resolve command code 8 (assist or repair) against it; when
 resolvable and the issue helper accepts it → *rotate*, else *wait*. Then when
@@ -3617,7 +3622,8 @@ pool: position, an optional named animation, and an optional
 is full. When the caller does not suppress it and the position's whole Y is
 **strictly above** the sea level byte, the allocator also spawns one pooled
 effect of class 7 with parameter 15 at the position — the flash retail draws
-with every above-water explosion (its class identity is doc 03's; the gate
+with every above-water explosion (the class identity is now doc 03's
+[03 R-FX-01 §3]: the strip-9 smoke emitter, three `smoke 1` puffs; the gate
 and parameters are established here). The `explode` bitmap branch passes
 calculated table 2 and does not suppress the flash; the debris and fragment
 ground hits pass table 0; the water splashes pass no table and suppress it.
@@ -4248,11 +4254,11 @@ pair, and the dispatch groups them the same way — 0/1 share one constructor,
 2/3 share another, 4/5 are 2/3 reversed. The pairing structure the old sentence
 described was right; the names attached to each pair were swapped.
 
-**Unknown — the effect families themselves.** Which visual each of the three
-constructors produces, what the selector and magnitude values mean, and the
-lifetime of the pooled effect records are presentation questions and belong to
-document 03. Decider: static trace by lane 03 (RWU-03-4). Reported, not owned
-here.
+**Closed (2026-08-29) — the effect families themselves.** The visual each of
+the three constructors produces, the selector and magnitude meanings, and the
+pooled record lifetimes are stated strip by strip in [03 R-FX-01 §3] (flame-
+stream trail, impact sprinkle, smoke emitters). The earlier text left this
+Unknown pending RWU-03-4.
 
 ### Closed — VM initialization and engine-call frames [R-COB-01 §1] (2026-08-28)
 

@@ -4025,8 +4025,12 @@ its producing predicate:
 **Established — repair's randomness.** The helper itself, every executor's
 work visit, and the `healtime` path draw nothing. Two draws exist in the
 family, both outside the work visit: `RepairUnit` phase 1's out-of-range
-`30 + boundedDraw(30)` retry, and `RepairPatrol`'s single draw to choose a
-candidate from the damaged-unit list it gathers within its sight distance. A
+`30 + boundedDraw(30)` retry, and `RepairPatrol`'s pick draw over the
+damaged-unit list it gathers within its sight distance — **correction
+(2026-08-29, [01 R-DET-01 §6]):** that gather is not draw-free; its helper
+draws three bounded picks per non-empty need list (energy, metal), so a
+`RepairPatrol` scan visit costs up to six draws before the pick, and the
+earlier "single draw" wording undercounted. A
 bounded draw whose bound is below two returns zero **without advancing the
 seed**, so a single-candidate list costs no draw [01 §8].
 

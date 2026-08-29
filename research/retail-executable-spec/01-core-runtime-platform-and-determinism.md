@@ -755,8 +755,17 @@ state. The update uses Schrage constants:
 
 For a positive bound of at least 2, update the state with the Lehmer recurrence,
 add the modulus when the intermediate value is nonpositive, then return the
-unsigned remainder modulo the bound. Bounds below 2 return zero without a
-useful draw. Startup seeds this stream from the sum of the low and high parts
+unsigned remainder modulo the bound. The bound test is a **signed** 32-bit
+compare: a bound below 2 — which includes every bound whose top bit is set —
+returns zero **without advancing the state** (Established; the earlier text
+"bounds below 2 return zero without a useful draw" was correct but did not say
+that the state is untouched, and callers pass computed bounds such as
+`max − min` or a candidate count that can legitimately be 0 or 1, so the
+no-advance property is load-bearing for every draw census in this document —
+see [R-DET-01 §4]). The Lehmer step itself is computed in wrapping 32-bit
+arithmetic as `s × 16807 − (s ÷ 127773) × 2147483647`, which is the Schrage
+form and never leaves the signed range, so the "add the modulus when
+nonpositive" branch is the only correction needed. Startup seeds this stream from the sum of the low and high parts
 of `QueryPerformanceCounter`, XORed with a fixed constant and forced odd; the
 seed setter has exactly one call site in the recovered image — the
 battle-entry orchestrator — so neither startup, loading, nor any packet
@@ -787,7 +796,10 @@ wind-change interval jitter, and UI/media variants, and is also consumed by
 the camera-shake driver inside the tick (two draws per shake step while a
 shake is active); it is not the simulation Park–Miller stream. The wind tick
 consumes both streams for different outputs, making the separation
-observable.
+observable. The complete consumer census — every call site of the CRT draw in
+the image, including the sound-variant picker, the elimination-message picker,
+the victory-timer arm, the effect strips, the lightning renderer and the
+startup explosion frames — is §7.6 [R-DET-01 §5].
 
 Sampling bounds above 32,767 use a chunk-concatenation loop before the final
 modulo: starting with mask and result both `0x7FFF`, while the mask is below
@@ -956,6 +968,136 @@ whoever implements hover presentation; leaving the bob out entirely is the
 other option. Either way the choice belongs in `docs/SPEC_CONFLICTS.md`
 (orchestrator-owned), not in an unmarked implementation decision.
 
+### 7.5 Closed — the per-phase random draw table [R-DET-01 §4] (2026-08-29)
+
+Established by RWU-01-1 from a whole-image census: every call site of the
+simulation sampler (143 static sites in 59 functions) and of the CRT draw
+(66 sites in 29 functions) was read and placed in the phase order of §4.4.
+This is the one table every lane's "draws N" claim is checked against; the
+lane closures cited in the right-hand column own the surrounding arithmetic
+and are not restated here. Cross-lane disagreements are in [R-DET-01 §6].
+
+**Conventions.** `sim(b)` is the bounded simulation draw of §7.1 — remember
+that `b < 2` (signed) returns 0 **without advancing**; `crt()` is one CRT
+draw of §7.2 (0..32767). Draws are listed in execution order within a row.
+"Per visit" means per handler invocation of the owning unit's order in the
+phase-2 pump; a handler that returns before the draw consumes nothing.
+
+#### Before the first tick
+
+| When | Stream | Draws | Consumer and anchor |
+|---|---|---|---|
+| Process startup | CRT | 391,606 (lane 06's count; this census confirms one draw per generated pixel, `trunc((crt()·10)/32768)`, over three strips, and did not recount) | procedural explosion frames [06 R-WFX-01 §6]. Wiped by the battle-entry reseed. |
+| Front end | CRT | unbounded | main-menu spark shimmer (`crt() mod 640` and companions), briefing wind display (2), sound variants, CD track choice — see [R-DET-01 §5] |
+| Battle entry | both | reseed only | [R-CORE-02] |
+| Battle entry, skirmish | CRT | `count − 1` swap draws, plus one 50/50 gate when fewer than three qualifying players | slot shuffle [08 R-SKIR-01 §2] |
+| Battle entry, networked | sim | 2 per placed commander: `sim(mapWidth − 160)`, `sim(mapDepth − 160)` (world units; the result is offset by 80) | commander placement [R-CORE-02] |
+| Every unit allocation (mission spawn, factory completion, builder completion, AI, respawn) | sim | `sim(buildangle)` then `sim(65536)` — the first is skipped without advancing when `buildangle < 2` | common unit initializer [04 §2] |
+| AI player setup | sim | eight, in order: `sim(10)`, `sim(3)`, then two draws bounded by the two region widths just formed from those results, then `sim(20)`, `sim(3)`, then two draws bounded by the second pair of widths | strategic-state constructor [08 R-AI-01] |
+| Battle entry, wind init | — | 0 | the gate does not fire at tick 0 [R-CORE-02] |
+
+#### Inside the sub-tick, by phase
+
+| Phase | Stream | Draws | Consumer and anchor |
+|---|---|---|---|
+| 1 network drain | sim | `sim(sparkTicks ÷ 2)` per fire-start packet applied (multiplayer only; the same ignition routine is reached in single player from the impact path, phase 3) | feature ignition [05 R-FEAT-01 §9] |
+| 2 unit sweep — general update, damage reaction | sim | `sim(300)` once per damage event on an armed or kamikaze unit with a live target | [04 R-SPEC-01 §1, §9] |
+| 2 — weapon update, acquisition | sim | `sim(candidateCount)` for the swap-remove sampler (capped at 50 candidates), then `sim(scoreA + scoreB)` for the two-bucket choice | ordinary acquisition [06 §3.2] |
+| 2 — weapon update, turret executor at fire time | sim | `sim(spread)`, `sim(spread)` — only when the spread width is non-zero; a width of exactly 1 passes the test and draws nothing | [06 R-WPN-03 §4] |
+| 2 — weapon update, line-of-sight executor | — | 0 | [06 R-WPN-03 §2] |
+| 2 — COB drain | sim | `random` opcode: `sim(high − low + 1)`; `explode` opcode: `sim(3000)`×3, `sim(40)`, `sim(10)`, `sim(40)` unless the bitmap-only flag is set | [04 R-COB-01 §2] |
+| 2 — primary and secondary order pumps | sim | `sim(15)` once per pump visit that lands on disposition case 3 (the wait dispositions) | [04 R-P0-01] |
+| 2 — order handlers (ground) | sim | `Wait` `sim(30)` (+150 ticks); `AttackUType` `sim(90)` then `sim(x ÷ 2)`; `SelfDestruct` `sim(15)` when the countdown reaches zero; `Patrol` `sim(30)`; `Suppress` `sim(d ÷ 3)`; `RepairUnit` `sim(30)` (+30) in the out-of-range retry; `Follow_Ground` `sim(65536)`; `Reclaim`/`Resurrect` approach `sim(featureHeight)`; `RepairPatrol` — **scan visit**: the candidate-gather helper draws `sim(n₁)` three times for the energy-need list and `sim(n₂)` three times for the metal-need list, each triple only when its list is non-empty (best-scored of three random picks), then **pick visit**: `sim(count)` | [04 R-ORD-01 §2–§5], [05 R-WORK-01 §8], [R-DET-01 §6] |
+| 2 — order handlers (air) | sim | `VTOL_Standby` `sim(30)`, then `sim(65536)` bearing and `sim(32)` radius (+8), then `sim(15)` (+30) delay; `VTOL_SeekAttack`/`VTOL_SeekGuard`/`VTOL_Follow` `sim(65536)` bearing, `sim(count)` for the damaged-retreat pad, `sim(8192)` orbit angle only when the interrupt bits are set, `sim(30)` deadline; `VTOL_Patrol` `sim(count)`; `AirStrike`-family case bodies `sim(16384)`; `VTOL_Evade` `sim(2)`; further air case bodies `sim(128)`, `sim(2)`, `sim(30)` | [04 R-AIR-01 §7, §8], [04 §10.3] |
+| 2 — movement integration, route follower, path search | — | 0 | [04 R-MOV-01], [04 R-PATH-01 §11] |
+| 2 — death handling | CRT | 1 when the victim's owner's live-unit count reaches zero: skirmish `crt() mod 3`, multiplayer `crt() & 7` (announcement line choice; presentation text, but the draw is inside the tick) | [08 R-CAMP-01 §9], [R-DET-01 §6] |
+| 3 projectiles — burst clone spawn | sim | `sim(randomdecay)` when non-zero, then `sim(sprayangle)` when non-zero, per clone allocated | [06 §4.3] |
+| 3 — impact on a flammable feature | sim | `sim(sparkTicks ÷ 2)` per ignition (countdown = draw + half) | [05 R-FEAT-01 §9] |
+| 3 — meteor motion | — | 0 | [06 §6.5] |
+| 4 effects — shatter | sim | per fragment created: `sim(160)`×3, `sim(1600)`×3, `sim(200)`×2 (eight) | [04 R-COB-04 §3] |
+| 5 per-player — target-registry cadence gate | sim | `sim(30)` once per side every 30 ticks (zero also runs the strategic refresh) | [06 §3.1] |
+| 5 — victory timer arm | CRT | `9000 + (crt()·9000) ÷ 32768` ticks, once, when the timer is unarmed | [08 R-TRIG-01 §6] |
+| 5 — commander respawn (commander-death rule 2) | sim | per trial `sim(W − 2·(W ÷ 10))`, `sim(D − 2·(D ÷ 10))`, up to 9999 trials | [08 R-SKIR-01 §3] |
+| 5 — AI tasks | sim | build roulette `sim(cumulative)` per positive-score candidate; extractor selector `sim(255)`; scatter per trial `sim(radius)`, `sim(65536)`, then the two map-fraction draws; construction repositioning `sim(65536)` per branch taken; explore `sim(900)` then `sim(2)` and the leg/map-edge draws; rally `sim(150)`, `sim(10)`, `sim(65536)`, `sim(incumbentScore)`, `sim(challengerScore)`; eco toggle `sim(5)` per candidate maker; the AI's own order dispatch reaches the acquisition draws of phase 2 | [08 R-AI-01 §2–§8], [05 R-PROD-01 §5, §6] |
+| 6 features | sim | reproduction: `sim(100)` gate, then `sim(b)`, `sim(b)` with `b` the definition's reproduction-range byte; burn spread: `sim(100)` per neighbouring cell tested against the flammability byte (strict `<`) | [05 R-FEAT-01 §10–§13] |
+| 6 features | CRT | 2 per fire-effect emission (position jitter) | [05 R-FEAT-01 §12] |
+| 7 sequences | — | 0 | [R-CORE-01] |
+| 8 wind, when due | CRT, then sim | `crt()` (interval), `sim(max − min)` (0 without advance when `max − min < 2`), `sim(65536)` only when the rolled speed is non-zero | [05 R-PROD-01 §3] |
+| 9 meteor, when due | CRT | 4, then 2 per hit | [R-CORE-01], [06 §6.5] |
+| 10 camera shake, while active | CRT | 2 | [R-CORE-01] |
+| 11 effect strips | CRT | per live object per tick: segment layers 1; particle emitters 5 objects × 6; smoke sprinkles 3 or 1; the nanolathe and beam families 1 | [03 R-STRIP-01 §1–§3] |
+| 12 cadence flip | — | 0 | |
+
+**What is sim-visible (Established).** Every simulation-stream draw above
+writes authoritative state; every CRT draw above writes presentation state
+or a deadline that only presentation reads, with **three exceptions that are
+authoritative and CRT-fed**: the wind interval (phase 8), the meteor
+scheduler and its projectiles (phase 9), and the skirmish victory-timer arm
+(phase 5). A clone that reproduces the simulation stream exactly but not the
+CRT stream reproduces every unit, order, projectile, feature and economy
+outcome except wind timing, meteor strikes and the victory-timer instant.
+
+### 7.6 Closed — the CRT stream's other consumers, exhaustively [R-DET-01 §5] (2026-08-29)
+
+**Established.** The CRT seed helper has exactly two callers (process
+startup and battle entry, [R-CORE-02]). The CRT draw has 29 calling
+functions; the ones not already placed in the tick table above are:
+
+| Consumer | Draws | Note |
+|---|---|---|
+| procedural explosion frames | one per pixel, at startup | [06 R-WFX-01 §6]; all wiped by the battle-entry reseed |
+| main-menu spark shimmer | several per spark per frame (`crt() mod 640` position, lifetime, drift) | front end only |
+| briefing wind display | 2 | [R-CORE-02] |
+| sound-variant picker | `(crt() · variantCount) ÷ 32768` per play, gated by the sound-category record's variant count and the options flags | doc 03 §8 / doc 02 sound category |
+| CD audio track choice | 2 sites | random track mode |
+| minimap/radar preparation | 1 | presentation |
+| fire-effect spawn from debris | 4 (three −1..+1 position jitters and one more) | [04 R-COB-04 §2] |
+| lightning renderer | per rendered frame, two passes, three draws per point: `(crt()·11) ÷ 32768 − 5` on each axis | [06 R-WFX-01 §6]; 6 per point per frame, matching the lane |
+| multiplayer host lobby shuffle | as the skirmish shuffle | out of scope |
+| a packet-path gate `(crt()·101) ÷ 32768 ≤ setting` | 1 | its callers are dead or multiplayer-only; out of scope |
+| a second meteor-scheduler body without the per-hit loop | 4 | unreferenced — dead code |
+
+**Established — the statement of what is sim-visible.** The CRT stream is
+per-thread state seeded from wall-clock time; nothing in the save box
+restores it ([R-CORE-02]). Its only authoritative consumers are the three
+named in §7.5. Everything else it feeds is presentation, front end, audio,
+or a message-string choice. Nanolathe therefore needs a CRT-compatible
+stream only for those three consumers' *positions in the tick*, not for the
+front end.
+
+### 7.7 Closed — lane draw claims re-checked against the census [R-DET-01 §6] (2026-08-29)
+
+Confirmed by the census (draw expression and order match the cited text):
+[04 R-COB-01 §2] (random/explode), [04 R-COB-04 §3] (eight per fragment),
+[04 R-PATH-01 §11] and [04 R-MOV-01] (none), [04 R-AIR-01 §7, §8] including
+the conditional `8192` orbit draw, [05 R-PROD-01 §3, §8] (wind), [05 R-FEAT-01
+§9, §11] (ignition bound `sparkTicks ÷ 2`, burn `sim(100)`), [06 §3.1] (gate
+30), [06 §3.2], [06 §4.3] (randomdecay before sprayangle), [06 R-WPN-03 §4],
+[06 R-WFX-01 §6] (lightning 6 per point per frame; startup site and per-pixel
+rule), [08 R-AI-01] (constructor order 10, 3, widths, 20, 3, widths; task
+bounds), [08 R-SKIR-01 §2, §3], [08 R-TRIG-01 §6], [08 R-CAMP-01 §9] (the
+skirmish `mod 3` draw is inside the tick on the death path).
+
+Contradicted — reported to the owning lanes, not edited here:
+
+1. **[05 R-WORK-01 §8] "RepairPatrol: 1 draw" and
+   [04 R-ORD-01 §4] "two simulation draws at most per visit".** The
+   RepairPatrol and VTOL_RepairPatrol scan visits call a candidate-gather
+   helper that, for each of its two need lists that is non-empty, draws three
+   bounded indices and keeps the best-scored pick — up to **six** draws on the
+   scan visit, before the pick visit's single `sim(count)`. Established (the
+   helper is a direct call from both handlers).
+2. **[08 R-CAMP-01 §9] "the eight-entry table … has no reference in the
+   image — dead data".** The eight-entry table is read by the multiplayer
+   (session kind 3) elimination path of the same death handler: when the local
+   slot is not a plain watcher it draws `crt() & 7`, formats `"%s %s"` and posts
+   a class-4 status line locally. Out of implementation scope, but not dead;
+   the single-player claim (skirmish draws `mod 3`) stands.
+3. **§7.1 of this document** said "bounds below 2 return zero" without the
+   no-advance property and without the signed compare; corrected in place.
+4. **§7.2 of this document** listed the CRT consumers as "meteor, wind
+   jitter, UI/media variants, camera shake"; the full set is §7.6.
+
 ## 8. x87 floating point and integer conversion
 
 The executable uses x87 arithmetic; no SSE simulation path is established.
@@ -994,6 +1136,115 @@ input timestamps. The value 0x27F is the default x87 control word asserted by
 the C-runtime floating-point helpers (they check-and-restore it before FP
 operations). The two values are not the same field; earlier corpus notes read
 both into one display-context field, which is wrong.
+
+### Closed — the float→int conversion census [R-DET-01 §1] (2026-08-29)
+
+Established by RWU-01-1 from a whole-image scan of every x87 integer-store
+instruction and every call of the truncating helper.
+
+**The helper, exactly.** The compiler's truncating helper saves the control
+word, ORs the round-control field to *toward zero* (both bits set), loads the
+modified word, performs one **64-bit signed** integer store, restores the
+saved word, and returns the 64-bit result in the register pair. Every game
+caller keeps only the low 32 bits (a plain `int` cast), and several keep less:
+the weapon-definition time fields are stored as 16-bit words, the metal
+seeding byte and the palette bytes as 8 bits. Consequences an implementer
+must reproduce: the conversion truncates toward zero for both signs; a
+magnitude between 2³¹ and 2⁶³ does **not** saturate — it wraps through the low
+32 bits; a magnitude at or beyond 2⁶³ (or a NaN) produces the x87 indefinite
+integer, whose low 32 bits are zero. No caller range-checks first.
+
+**Site census.** 283 static call sites in 120 functions. The authoritative
+ones — reached from the tick, from battle entry, or from a definition parser
+whose output the tick reads — are listed by subsystem; each row names the
+converted quantity as far as the lane's section states it, and the lane
+anchor that owns the arithmetic. Presentation-only clusters are summarised.
+
+| Subsystem | Sites | Converted quantity (all truncate; width in parentheses when narrower than 32 bits) | Owning anchor |
+|---|---:|---|---|
+| Economy: settlement pass | 1 | the per-tick settlement term on the deadline-due branch | [05 R-ECO-01 §2], [05 R-PROD-01 §2] |
+| Construction step | 2 | the two truncated energy/metal terms | [05 R-WORK-01 §1] |
+| Repair step | 2 | the two truncated terms, then the ≥1 clamp | [05 R-WORK-01 §3] |
+| Work-amount seed | 1 | `max(1, trunc(...))` | [04 R-ORD-01 §10], [05 R-WORK-01 §4] |
+| MobileBuild, HelpBuild, VTOL work fragments | 3 | a build-time-derived count (`buildtime ÷ 30`) and two work terms | [05 R-WORK-01] |
+| Reclaim / Resurrect approach | 2 | the feature-height term | [05 R-WORK-01 §5, §7] |
+| Capture | 1 | capture timer `((kills ÷ 5 + 10) · t · 10) ÷ 100` | [05 "Capture"], [06 R-DMG-01 §2] |
+| Order handlers, ground: Attack_Chase, MobileBuild, RepairUnit and its fragments, BuildingBuild, a target-distance helper | 16 | the **two-argument distance** (`hypot`) of the unit→target world offset for the leash and reach tests, and of the two footprint pairs | [04 R-ORD-01 §3, §5] |
+| Order handlers, air: AirStrike, AirToGround, AirToGroundHover, VTOL_RepairUnit and their case bodies | 17 | `hypot` to target or goal; one lead term; one 16-bit field term | [04 R-AIR-01 §8], [04 R-ORD-01 §7] |
+| Ground steering | 2 | `hypot` to the waypoint and to the goal | [04 R-MOV-01] |
+| Flight integrator | 6 | the speed-scale terms (float × 2⁻¹⁶) and three position terms | [04 R-AIR-01 §1, §2] |
+| Route-follower install | 2 | `hypot` for the terminal-cell and half-distance tests | [04 R-PATH-01 §8] |
+| Group centroid | 2 | `sumX ÷ n`, `sumZ ÷ n` | [04 R-STANCE-01 §5] |
+| Per-unit tick and weapon helpers | 3 | one float field when non-zero; one packet term; one weapon-update term — **value not named** | doc 04 §6, [06 R-DMG-01 §2] |
+| Unit creation | 1 | value not named | [04 R-CB-01 §4] |
+| Weapons: impact dispatch, area impact, impact helper | 4 | value not named (the impact arithmetic is [06 §9.2, §9.3]) | [06 §9.2], [06 §9.3] |
+| Weapons: aim-cone test (45° = 0.7853981633974475 rad), projectile cruise waypoint, projectile and weapon-helper `hypot` sites, line-of-sight executor | 8 | `hypot` of the aim offset; the cruise waypoint height | [06 R-WPN-03 §2, §3] |
+| Target-registry rebuild | 3 | centroid `sum ÷ n` on three axes | [06 §3.1] |
+| AI: strategic constructor, score table, weight clamp (`weight · value` then clamp ≥ 0), candidate score, construction task, extractor placement, distance helper | 21 | score and region terms | [08 R-AI-01 §3, §8, §12] |
+| Tick budget clamp | 1 | the string-to-double budget value | §4.2 |
+| Battle entry: starting stock, metal seeding (8-bit per footprint cell), gravity install, meteor parameters (seconds × 30), mission spawner coordinates (`%f` fields) | 20 | as named | [05 R-ECO-01 §4], [05 R-FEAT-01 §7], [03 R-TERR-01 §1, §6], [R-CORE-01], doc 08 |
+| Definition parsers: weapon TDF (velocity, start velocity, acceleration 32-bit; reloadtime, weapontimer, turnrate, burstrate, duration, randomdecay, smokedelay, flighttime, holdtime and companions **16-bit**), FBI (one key), feature TDF (`sparktime × 30`, 16-bit), catalog `Version` (`int(v)`, `int((v − int(v)) · 10)`), 3DO table, TDF float-getter integer form | 22 | as named | [06 R-WFX-01 §1], [06 R-DMG-01 §1], [05 R-PROD-01 §1], [05 R-FEAT-01 §1], [02 R-CONTENT-01, R-CONTENT-02], [fmt tdf] |
+| Presentation and front end (HUD resource bar, renderer, model bounds, range rings, palette bytes (8-bit), audio tables (clamped to 255), option sliders, score and statistics screens, window placement, startup explosion frames) | ~120 | not authoritative | docs 03, 07, 08 |
+
+**Bounded negative (Established).** No other float→int conversion mechanism
+exists in game code: there is no `fisttp`, no 16-bit integer store, and no
+inlined copy of the helper. The two round-to-nearest sites are §8's next
+closure.
+
+### Closed — the two round-to-nearest sites [R-DET-01 §2] (2026-08-29)
+
+**Established.** Exactly two game routines store an x87 value to an integer
+directly, under the default control word (round to nearest, ties to even),
+into a **32-bit** slot:
+
+1. **The bearing helper.** `bearing(a, b) = round(atan2(a, b) · 65536 ÷ 2π)`;
+   the multiplier is a double constant (10430.378…), the arctangent is the
+   x87 partial-arctangent at extended precision, the result is a 32-bit
+   integer that callers mask to the 16-bit heading domain. Sixteen callers:
+   the ground steering, the per-unit tick, the shared order-handler bearing,
+   the turret and line-of-sight slot executors, the weapon impact dispatch,
+   the projectile tick, four weapon-update helpers, the battle-entry unit
+   placement, one multiplayer helper and one dead helper. This is the
+   round-to-nearest site lane 04's callback trail noted.
+2. **The vector-rotate helper.** Given a 16-bit angle `a` and a pair of
+   32-bit integers `(x, y)`: when `a = 0` nothing is written; otherwise
+   `θ = a · 2π ÷ 65536` (double constant 9.5874e−05), `x' = round(x·cos θ −
+   y·sin θ)`, `y' = round(x·sin θ + y·cos θ)`, both products formed at extended
+   precision. Callers: the ground steering, the per-unit tick, the effect
+   draw pass, and three dead helpers.
+
+A third direct integer store lives in the C runtime's floating-point
+exception raiser (it stores an out-of-range constant to raise *invalid*); it
+is library code with no game caller.
+
+### Closed — control-word mutations reachable from the simulation [R-DET-01 §3] (2026-08-29)
+
+**Established (bounded by a whole-image instruction scan: 53 control-word
+load/store instructions).** The control word is written by:
+
+* the truncating helper (save, set toward-zero, restore) — §8 above;
+* the C-runtime `_control87`-style mask helper, whose ten callers are all
+  library: the **two-argument distance helper** (`hypot`) sets precision to
+  64-bit with all exceptions masked on entry and **restores the caller's word
+  before returning**; its result passes through a 64-bit double memory slot
+  before the return, so the caller — and the truncating helper after it —
+  sees a double, not an 80-bit value; the string-to-double converter used by
+  the content catalog loader (`Version`) and the tick budget clamp
+  (save/restore inside one call); the printf-family float formatter; the
+  runtime's own reset and math-error helpers;
+* an audio-decoder reset pair around the WAV decoder;
+* nothing else: one apparent site is a jump-table data word mis-decoded as an
+  instruction, and the remainder lie in the unrecovered runtime region between
+  the mask helper and the power/exponential family.
+
+So the answer to the tail's standing question is: non-default control words
+are reachable from the simulation **only transiently inside a runtime call**
+(`hypot`, string-to-double), and every such call restores the word before
+returning. No game routine changes precision or rounding and leaves it
+changed; the default (53-bit, nearest) holds at every game instruction, and
+the truncating helper is the only rounding-mode change at a game-visible
+store. The optional `-fpufussy`/`-fpunofussy` switches of §8 are unaffected
+by this census.
 
 ## 9. Diagnostics, anti-tamper, and error paths
 
@@ -1211,8 +1462,18 @@ document.
 - Whether the networked-mode commander placement loop also runs when a saved
   networked game is loaded; the loop is not gated on the save box · §4.4 ·
   static trace. Multiplayer-only, out of implementation scope.
-- Complete list of authoritative `__ftol` callers, and whether any non-default
-  x87 control-word mutation is reachable from simulation · §8 · static trace.
+- The converted quantity at the truncation sites [R-DET-01 §1] marks as
+  "value not named": a few order-handler, unit-creation and weapon-helper
+  sites whose operand the owning lane's section does not yet spell out (the
+  site list is complete; each operand is a lane question) · §8, docs 04 and
+  06 · static trace of the x87 stack at each site.
+- The exact per-object CRT draw count of the effect-strip objects and of the
+  fire-effect spawn's fourth draw (lane 03 owns the object bodies; this census
+  records the sites) · §7.5, §7.6 [R-DET-01 §5], doc 03 · static trace.
+- Whether the 391,606 startup CRT draws of the procedural explosion frames
+  ([06 R-WFX-01 §6]) are exact; this census confirms the site and the
+  one-draw-per-pixel rule but did not recount the three strips · §7.5 ·
+  static recount of the strip parameter sets.
 - Writer and configured value of the rate field scaling the `GetTickCount()`
   animation counter that reaches the authoritative height word of `canhover`
   units · §7.4, doc 04 §9.1 · static trace. The read itself and its write path
