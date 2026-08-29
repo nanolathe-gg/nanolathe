@@ -214,13 +214,13 @@ Field reference (all optional unless the feature type needs them):
 | `hitdensity` | Community-understood as hit-probability weighting. Authored on all 1,645 retail records and **inert** — no string for it exists in the executable. |
 | `damage` | HP before turning into `featuredead` (or vanishing) |
 | `featuredead` | Feature this becomes when destroyed |
-| `metal`, `energy` | Reclaim yield; for metal deposits `metal` is the extraction concentration (~0–255) |
-| `reclaimable`, `autoreclaimable` | Can be reclaimed / auto-reclaimed on patrol |
+| `metal`, `energy` | Reclaim yield; for metal deposits `metal` is the extraction concentration (~0–255). Read as integers, masked to 16 bits, then stored as floats; a deposit's `metal` is copied (low byte) into every plot cell it covers when the deposit is also `indestructible=1` `[R-FEAT-01 §7]` |
+| `reclaimable`, `autoreclaimable` | Can be reclaimed / is a candidate for area reclaim. `autoreclaimable` defaults to **1** and has no other reader `[R-FEAT-01 §6]` |
 | `featurereclamate`, `seqnamereclamate` | Leftover feature and animation when reclaimed |
-| `flamable`, `sparktime`, `spreadchance`, `burnweapon`, `featureburnt`, `seqnameburn`, `seqnameburnshad` | Fire behavior for burnable features. These are the keys the engine reads. |
+| `flamable`, `sparktime`, `spreadchance`, `burnweapon`, `featureburnt`, `seqnameburn`, `seqnameburnshad` | Fire behavior for burnable features. These are the keys the engine reads. `sparktime` is a float in **seconds**, stored as `trunc(sparktime × 30)` ticks (int16); the ignition countdown is `half + random(half)` visits with `half = ticks >> 1` `[R-FEAT-01 §9]`. A feature without `seqnameburn` can never ignite; `object` features never read the `seqname*` keys at all |
 | `burnmin`, `burnmax` | Authored on 9 files (115 records) and **inert** — no string for either exists in the executable, so burn duration is not authored this way. |
 | `geothermal` | `1` = geothermal plants can build here |
-| `indestructible`, `permanent`, `nodisplayinfo` | Misc flags |
+| `indestructible`, `nodisplayinfo`, `nodrawundergray` | Flags. `permanent` is authored but **inert** — no such key string exists in the executable (the only `Permanent` string is a lobby line-of-sight label). `sinktime` is likewise absent; sinking is a fixed rate `[R-FEAT-01 §13]` |
 | `seqnamedie` | Animation/feature left when destroyed |
 | `reproduce`, `reproducearea` | Growth mechanic, authored on 19 files (310 records). Both keys are read by the engine, so it is not unused. |
 

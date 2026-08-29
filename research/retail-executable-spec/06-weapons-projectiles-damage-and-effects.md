@@ -314,6 +314,38 @@ also does not test category, alliance, radar, sonar, cloak, or jammer. Sensor
 state controls list entry; it is not a universal per-shot revelation or
 revalidation rule.
 
+### Closed — the radar elevation bonus never widens the search [R-WPN-03 §5] (2026-08-29)
+
+**Refinement (Established, from the visibility lane's trace of the sensor
+phase, `[03 §3.4]` / `[R-VIS-01 §4]`).** The sentence above — "a local radar
+circle, whose radius is `radardistance + 2 × (unit height in whole world
+units)`" — and the same phrase in `[R-WPN-02 §6]` are incomplete in three
+respects that matter to an implementer:
+
+1. **The bonus enters only the squared test radius, not the search.** The
+   radar pass visits the unit-grid cells within `max(radardistance,
+   sonardistance)` of the emitter — the two **authored** integers, unbonused —
+   and tests each visited unit's planar squared distance **strictly below**
+   `(radardistance + 2 × height)²`. A unit outside the visited rectangle is
+   never examined, so the bonus can enlarge detection only up to the sonar
+   radius. For the ordinary radar unit with `sonardistance = 0` the elevation
+   bonus is **inert**: the radar circle is exactly `radardistance`.
+2. **"Height" is the emitter's world Y whole-unit word** — its elevation on the
+   map, the high 16 bits of its 16.16 world Y — not the model's authored height
+   nor the target's elevation. A radar on a hill reaches further only when its
+   sonar radius leaves room for it.
+3. **Sonar jamming clears the sonar bit** the same way radar jamming clears the
+   seen bit (item 2 above): the sonar-jam pass rewrites the target's status to
+   drop the sonar bit and set the jammed bit, with no owner, stealth or extra
+   distance test.
+
+The sonar test in the same callback is `unit.Y <= seaLevel` (16.16 compare
+against the sea-level byte shifted up) and a strict `d² < sonardistance²`;
+both circle tests are strict even though the visitor's own cell-rectangle
+admission is inclusive. The complete pass order, the stealth rejection, and
+the radar pass's own above-water predicate are doc 03's contract; this
+document only carries the consequences for the secondary candidate list.
+
 ### 3.2 Manual and autonomous targets
 
 **Established fact:** Manual targets and command-fire orders can supply either
@@ -709,6 +741,103 @@ the acquisition-facing half (including the correction that radar jamming does
 clear the bit the secondary list is built from), and doc 03 owns the sensor
 phase itself.
 
+### Closed — the accuracy family has readers: full census [R-WPN-03 §1] (2026-08-29)
+
+**Established fact.** The corpus README's summary line "weapon accuracy,
+tolerance, and pitch-tolerance are parsed but have no gameplay reader in the
+bounded retail image" is **wrong** and this pass retracts it from the doc 06
+side. It descended from the first lane-06 pass, whose reader search was bounded
+to the creator functions; the readers sit one level up, in the slot executors,
+which that search never opened. A whole-image census — every access at each of
+the three record offsets in every recovered function, each non-weapon hit
+classified — gives exactly one reader per key:
+
+| Authored key | Parser | Stored as | Reader (one each) | Where in the tick |
+|---|---|---|---|---|
+| `accuracy` | integer getter, default 0 | signed 16-bit, plain integer | the **turret** executor's spread (§4.4, `[R-WPN-03 §4]`) | unit phase, fire time, after the muzzle query, before the creator |
+| `tolerance` | integer getter, default 0 | 16-bit, **read zero-extended** | the angular-drift gate (`[R-WPN-03 §2]`) | unit phase, fire time, before the muzzle query |
+| `pitchtolerance` | integer getter, default 0 | 16-bit, **read zero-extended** | the angular-drift gate, and only when `tolerance` is nonzero | as above |
+| `sprayangle` | integer getter, default 0 | signed 16-bit | the burst scheduler's spray draw (§4.3) | projectile phase, per successful clone |
+| `aimrate` | **no key** — the spelling occurs nowhere in the image | — | none can exist (`[R-WPN-01 §9]`) | — |
+| `movingaccuracy` | **no key** | — | none can exist (`[R-WPN-01 §9]`) | — |
+
+Every other access at those offsets is a different object: the unit record's
+current-health word shares the third offset (it is the operand the reload and
+spread arithmetic read *from the unit*), the first offset is a floating-point
+field of the unit and of several window objects, and the second is a network
+packet field. None of them is reached through a weapon-definition pointer.
+No reader of any of the three keys exists in target admission, target
+retention, the acquisition scan, projectile launch, projectile motion,
+collision or damage; §4.4's spread and §3.3's drift gate are the whole
+gameplay surface of the family. The `sprayangle` draw is listed because it is
+the only other authored bound handed to the same simulation generator by
+weapon code; it shares the generator, not the site.
+
+**Established fact (a second reader of `range`).** The first slot's `range`
+has one reader outside the weapon code: the air movement lane's follow-unit
+path marker uses it (in 16.16, with a fallback of 100 world units when it is
+zero) as the radial offset about a flying target, and the same value as the
+loiter radius around a landing target `[R-AIR-01 §4]`. It does not alter the
+§3.3 range test; it is listed so that a census of `range` readers is complete.
+
+### Closed — the drift gate at implementable precision [R-WPN-03 §2] (2026-08-29)
+
+**Established fact.** The gate block above is correct; these are the widths,
+edges and callers it left implicit.
+
+* **Widths.** `tolerance` and `pitchtolerance` are loaded as **unsigned**
+  16-bit values and compared as 32-bit signed integers against the absolute
+  value of a signed 16-bit difference. The difference is the 16-bit wrap of
+  `stored − wanted`, sign-extended, then its absolute value — so the largest
+  possible error is 32,768 (the wrap of `0x8000`), and the test is
+  `|(int16)(stored − wanted)| <= gate`, inclusive, yaw first, pitch second,
+  short-circuiting: the pitch difference is not computed when yaw fails.
+* **Negative authored tolerance.** A negatively authored `tolerance` (or
+  `pitchtolerance`) is stored as its 16-bit two's complement and read back
+  unsigned, so `-1` becomes a gate of 65,535 which every error passes. Stock
+  content never authors a negative value.
+* **`pitchtolerance` is inert when `tolerance` is zero.** The zero test is on
+  `tolerance` alone; when it is zero both gates take the movement-tier
+  fallback (150 stationary, 2,000 moving) and an authored `pitchtolerance` is
+  never consulted. When `tolerance` is nonzero and `pitchtolerance` is zero the
+  pitch gate is `tolerance`. This is the only place the two keys interact.
+* **Two callers, two meanings.** The **turret** executor calls the gate with
+  the slot's stored angles (written when the Aim callback was dispatched: the
+  yaw **relative** to the unit heading, the pitch absolute) against the pair
+  it has just re-solved from current geometry in the same form — it therefore
+  measures how far the target has moved, in angle, since the Aim request went
+  out. The **line-of-sight/self-propelled** executor first overwrites the
+  slot's stored angles with the absolute direction from muzzle to target and
+  then calls the gate with the unit's own heading and pitch as the wanted pair
+  — it therefore measures how far off the unit's facing the target sits, and a
+  fixed-forward weapon with `tolerance = 0` fires only when the target is
+  within 150 angle units (about 0.8°) of straight ahead while stationary or
+  2,000 (about 11°) while moving. The vertical-launch and dropped executors do
+  not call the gate.
+* **On failure** the turret executor clears the Aim-issued latch and returns
+  failure without touching the reload timer, the aim-ready word, or the RNG,
+  so its next slot visit re-solves and re-dispatches Aim; the line-of-sight/
+  self-propelled executor simply returns failure (it owns no latch), leaving
+  the absolute angles it just wrote in the slot.
+
+### Closed — there is no moving-accuracy or aim-rate mechanism [R-WPN-03 §3] (2026-08-29)
+
+**Established fact.** Retail has no `movingaccuracy` and no `aimrate` field
+(`[R-WPN-01 §9]`), so the question "whose motion, and by what predicate" has a
+definite answer that is not a field at all. The only aiming term that depends
+on motion is the drift gate's zero-tolerance fallback, and it reads the
+**firer's** movement tier — category 0 of the two-bit tier the movement
+integrator caches from the unit's own scalar speed against its `MoveRate1`/
+`MoveRate2` thresholds `[04 §5.2]` — not the target's motion and not the
+weapon's. The **target's** motion enters the firing solution in exactly one
+place, the pre-fire lead of §3.3 (gated on the shooter's credited kills being
+strictly greater than five and on a nonzero `weaponvelocity`), and never in the
+spread or the gate. The spread bound of §4.4 varies with the shooter's health
+fraction and kill count only. An implementation that scales accuracy by the
+firer's or the target's speed, or that slews a turret at an "aim rate", invents
+behavior; the turret's angular motion is entirely the COB script's, and the
+engine's only angular slew is the projectile guidance of §6.7.
+
 ### 3.4 The weapon-query path [R-P0-07]
 
 **Established fact:** The slot selects its pieces through four query jobs that
@@ -809,15 +938,45 @@ receiver is specified in §3.3. [04 §5.3]
 relative heading as target bearing minus unit heading and stores the ballistic
 pitch; the ballistic no-solution sentinel 0x8000 suppresses the Aim start
 entirely. The fixed-forward form starts with (0, 0) when the weapon's
-fixed-forward flag is set, the issue bit is clear, and there is no live tracked
-target (or the adjacent slot status selects the fixed branch).
+definition flag word selects the vertical-launch family (the `vlaunch` bit set
+and the `turret` bit clear), the issue bit is clear, and — for a `stockpile`
+weapon — the slot's ammunition byte is nonzero; see `[R-WPN-03 §6]` for the
+correction of the earlier wording.
 
-**TODO(question):** Locate the Aim-completion closure writer/consumer at the
-weapon-slot receiver. The zero/nonzero delivery and no-timeout contract is
-established, but the exact closure object installed in the slot record and the
-instruction that consumes its nonzero value were not located in the bounded
-census; the stored-result mutation should remain named as a receiver operation
-until that writer is recovered.
+### Closed — the Aim-completion receiver, the fixed-forward gate, and SweetSpot's script [R-WPN-03 §6] (2026-08-29)
+
+**Established fact (retiring the open marker).** The paragraph that stood
+here read: "*TODO(question): Locate the Aim-completion closure writer/consumer
+at the weapon-slot receiver. The zero/nonzero delivery and no-timeout contract
+is established, but the exact closure object installed in the slot record and
+the instruction that consumes its nonzero value were not located in the
+bounded census.*" The units/COB lane located both `[R-CB-01 §6]`: the
+receiver word in every weapon slot is written once at unit creation with the
+address of a fixed two-entry dispatch table, the interpreter's return path
+calls that table's first entry with the delivered cell, and that entry is a
+two-branch setter that stores the literal `1` into the slot's aim-ready word
+when the delivered value is nonzero and does nothing otherwise. The contract
+stated in §3.3 — zero delivery leaves the slot without permission, nonzero
+grants it, no timeout — is therefore confirmed from the target's own body.
+The turret executor's readiness test reads that word for nonzero together
+with the issue latch; the vertical-launch executor reads the word alone.
+
+**Correction.** The previous sentence "the fixed-forward form starts with
+(0, 0) when the weapon's fixed-forward flag is set, the issue bit is clear, and
+there is no live tracked target (or the adjacent slot status selects the fixed
+branch)" was wrong about the selector: the branch is chosen by the weapon
+**definition's** flag word — the `vlaunch` bit set with the `turret` bit clear
+— not by any slot-record status, and the extra condition is the `stockpile`
+ammunition test, not a tracked-target test `[R-CB-01 §3]`. A tracked target
+is required upstream by the pipeline (the slot is abandoned when no target
+point resolves), which is what the earlier text was describing.
+
+**Established fact.** `SweetSpot` is dispatched on the **target** unit's
+script, not the shooter's `[R-CB-01 §3]`: the target-point resolver runs the
+synchronous query against the target's VM with cell 0 seeded to zero and
+transforms the returned piece through the target's model to a world offset.
+The paragraph above ("SweetSpot is a separate synchronous query…") stands; this
+names whose script answers it.
 
 Regression fixtures: the query path is locked by the [R-P0-07]-citing tests
 around the weapon-slot query/fallback in `internal/combat/service.go` and the
@@ -1105,6 +1264,67 @@ search, not a bounded reader census. Nothing in the firing, readiness, spread,
 drift or projectile-motion paths can consume them. `holdtime` is parsed and is
 read by exactly five sites, all of them the follow-camera hand-off described in
 §7.3; it has no effect on firing, motion, or damage.
+
+### Closed — the accuracy spread at implementable precision [R-WPN-03 §4] (2026-08-29)
+
+**Established fact.** The spread block above is re-derived from the
+disassembly of the spread site; it is correct, with these widths and edges
+made explicit and one description corrected.
+
+```
+healthTerm = (uint32)((int32)(int16)currentHealth << 11) / (uint32)maximumHealth
+                                             ; unsigned 32-bit divide; 2048 at full health
+raw        = (uint16)(accuracy16 - (uint16)healthTerm)     ; 16-bit subtraction, wraps
+bound      = (uint16)(raw + 0x800)                         ; carry into bit 16 discarded
+divisor    = (uint32)(uint16)kills / 12                     ; exact integer quotient
+if (divisor > 1)  bound = (uint16)((int32)bound / (int32)divisor)   ; signed 32-bit divide
+if (bound != 0) {                                           ; 16-bit zero test
+    half = bound >> 1                                       ; 16-bit shift
+    slotYaw   += (int16)(rng(bound) - half)                 ; first draw
+    slotPitch += (int16)(rng(bound) - half)                 ; second draw
+}
+```
+
+* `rng(b)` is the simulation generator of `[01 §7.1]`: for `b >= 2` one
+  Park–Miller step then `state mod b` (unsigned); for `b < 2` it returns zero
+  **without advancing**. A bound of exactly 1 therefore passes the nonzero
+  test, adds zero to both angles, and consumes no draw. Both draws use the same
+  bound; the yaw draw is taken first.
+* **Correction.** The block above says the kill divisor is applied as a
+  "64-bit unsigned" division. The image performs a **signed 32-bit** division
+  of the 16-bit-masked bound by the divisor; since both operands are
+  nonnegative the quotient is the same, so no arithmetic changes — only the
+  description. Ordinary content cannot tell the two apart.
+* **Shape of the bound.** `healthTerm` is `2048 × health/maxhealth`,
+  truncated, so `bound = accuracy + 2048 × (1 − health/maxhealth)` (mod
+  65,536). A full-health shooter with `accuracy = 0` has bound 0 and fires
+  exactly on its solved angles with **no draw**; the same shooter at half
+  health has bound 1,024 (±512 angle units, about ±2.8° on each axis); a
+  shooter near death has bound `accuracy + 2048`. Twenty-four credited kills
+  halve the bound, thirty-six divide it by three, and so on. A health word
+  above the maximum (never authored by stock) makes `healthTerm` exceed 2048
+  and the 16-bit wrap yields a very large bound.
+* **Angle units.** The draw is applied directly to the `uint16`
+  angle-per-circle slot angles, so a bound of 65,536/360 ≈ 182 corresponds to
+  ±0.5°; the authored `accuracy` is in the same units — not degrees, not a
+  percentage.
+* **Retention after a full pool.** When the creator then fails, the executor
+  returns failure **without** clearing the Aim-issued latch or the aim-ready
+  word, and the slot's stored yaw is now absolute-plus-spread while the stored
+  pitch carries its draw. On the next tick the drift gate of §3.3 compares
+  those mutated values against a freshly solved **relative** yaw and unjittered
+  pitch, so the yaw error is the unit heading plus the draw: unless the unit
+  faces heading zero to within the gate, the gate fails, the latch is cleared,
+  and a new Aim request is dispatched on the following slot visit. When the
+  gate does pass (a shooter facing within tolerance of heading zero), the
+  executor adds the heading and a second spread to the already-rewritten
+  angles and fires off-axis by that much. Both outcomes are the code's, not a
+  chosen policy; Nanolathe may bound the second as a sanctioned divergence
+  only after the projectile pool contract is otherwise reproduced.
+* **What is not in the bound.** Neither `tolerance`, `pitchtolerance`, the
+  target's motion, the shooter's motion, the weapon's `range`, nor the
+  distance to the target enters the spread. The angular error is independent
+  of range, so the miss distance grows linearly with it.
 
 ## 5. Projectile pool, identity, and lifetime
 
@@ -2368,15 +2588,16 @@ else                                        -> base = (int32)lo.value
 
 The default is read unsigned 16-bit and an override is signed 32-bit, so an
 authored override may exceed 65,535 or be negative where the default cannot.
-This is a name lookup, not a category lookup. **Unknown:** the behavior of the
-search when the table is not sorted under the same case-insensitive collation
-the parser used, and the parser's handling of duplicate and malformed keys.
-*Decider:* static trace of the weapon-record parser's table construction
-(RWU-06-2 owns the parser side).
+This is a name lookup, not a category lookup. The table's construction — its
+comparator, its duplicate-key and case-variant rules, and the absence of any
+`armor.tdf` — is closed in `[R-DMG-01 §1]` below.
 
-**Supported inference:** A unit's visible "Veteran" label threshold is
-presentation/data behavior; the numeric damage tier is the bounded arithmetic
-contract. Do not conflate the two.
+**Established fact:** A unit's visible "Veteran" label is a presentation
+threshold — the HUD panel prints the kill count while it is below five and the
+word `Veteran` from five upward (`[R-DMG-01 §2]`) — so the label first appears
+exactly when the numeric damage tier first becomes nonzero; the numeric tier
+remains the authoritative arithmetic contract. (This replaces an earlier
+**Supported inference** that the label threshold was unrelated data.)
 
 **Established fact:** The global double and half gates are bits 7 and 8 of one
 16-bit options word, applied in that order (doubling first). A whole-image
@@ -2390,6 +2611,142 @@ defender veterancy reduction belong to this general pipeline. Document 04
 section 9.2 references that funnel for mission water damage specifically; water
 damage is a producer of packets into this pipeline, not a separate scaling
 path.
+
+### Closed — the armor table is the weapon's `[DAMAGE]` block; there is no `armor.tdf` [R-DMG-01 §1] (2026-08-29)
+
+**Established — vocabulary.** A whole-image string census for the `armor`
+substring (case-insensitive) finds exactly one string, the FBI key
+`armoredstate`. There is no `armor.tdf`, no armor-class name, no `armorclass`
+and no `armour`; the only `.tdf` file names the executable carries are the
+`Weapons\*.tdf` family glob, the generic `*.tdf` glob, `GAMEDATA.TDF`,
+`MOVEINFO.TDF`, `SIDEDATA.TDF` and `gamedata\translate.tdf`. Retail has no
+armor-class layer at all: the "armor table" is the per-weapon `[DAMAGE]` block
+of §9.2, keyed by unit definition name, and nothing else. An implementation
+that introduces armor classes invents a mechanism.
+
+**Established — construction.** The weapon-record parser builds the override
+table from the section's `[DAMAGE]` child node exactly as follows. All key
+comparisons below use the C runtime's case-insensitive string compare (ASCII
+case fold, C locale) unless stated otherwise; it is the same comparator the
+§9.2 lookup uses, which is why the "is the table sorted under the lookup's
+collation" question is closed by construction.
+
+```
+node = childSection(record, "DAMAGE")
+if (node absent) { defaultDamage = 0 ; override table left as it was }
+else {
+    defaultDamage = (uint16) intAccessor(node, "default", 0)
+    for each key of node, in the node's own key order:            ; [fmt tdf]
+        if (stricmp(key, "default") == 0) continue                ; any spelling of default
+        value = intAccessor(node, key, 0)                         ; int32
+        if (table == null) table = empty table
+        lo = lowerBound(table, key)                               ; stricmp(entry.key, key) < 0
+        if (lo == end)                       insert (copy of key, value) at lo
+        else if (bytes of lo.key != bytes of key)
+                                             insert (copy of key, value) at lo
+        else                                 lo.value = value      ; overwrite in place
+}
+```
+
+Consequences, each Established from that shape:
+
+* **Absent block.** No `[DAMAGE]` child stores a default of **0** and leaves
+  the table pointer untouched; a block with only `default` allocates no table
+  (the pointer stays null and §9.2 keeps the default for every target).
+* **Width.** `default` is stored as an unsigned 16-bit value (an authored
+  70,000 wraps); every override is a signed 32-bit value. Both go through the
+  TDF integer accessor — absent key yields the default named above, otherwise
+  the value text is converted by the C runtime's decimal conversion (`atoi`
+  semantics: optional leading whitespace and sign, digits up to the first
+  non-digit, zero when there are none). A malformed override therefore
+  stores 0, not an error, and `default=abc` stores 0 [fmt tdf].
+* **Exact-spelling duplicates** (same bytes) in one block collapse at the TDF
+  layer to a single last-write-wins entry [fmt tdf]; the weapon parser then
+  sees one key. Were the same bytes to reach the loop twice, the second visit
+  overwrites the value in place — still last-write-wins.
+* **Case-variant duplicates** (`ARMCOM=50; armcom=60;`) survive as two
+  entries. Insertion places the later-enumerated variant at the lower-bound
+  position, i.e. **before** the earlier one, and the §9.2 lookup — the same
+  lower-bound search — returns the first entry of the equal-under-fold run,
+  so the **later-enumerated variant wins**. Enumeration order is the TDF
+  node's key order, which the format document owns [fmt tdf]; retail data has
+  no such duplicate.
+* **Entries are (key copy, int32)**, eight bytes each, in a growable array
+  whose capacity doubles from one; the parser never sorts after the fact and
+  never removes an entry.
+* **Same-ID re-parse.** The catalog initializer clears each record's name
+  byte and stamps its slot number, but does not clear the override-table
+  pointer, so a later section with the same `ID` appends its keys into the
+  earlier record's table rather than starting a fresh one — the one
+  parser-owned field that does not follow doc 02's same-ID replace-whole
+  rule `[02 §5]`. Stock has no same-ID pair (doc 02's stock corpus census),
+  so this is a third-party-content edge only.
+
+**Reader census.** `default` — two readers: the per-recipient damage routine
+of §9.2 (as the base before the override lookup) and the feature-damage
+accumulator of §13.1 (unscaled). The per-name entries — exactly one reader:
+the lower-bound lookup of §9.2. No other code walks the table.
+
+**Correction.** The previous text of §9.2 said "**Unknown:** the behavior of
+the search when the table is not sorted under the same case-insensitive
+collation the parser used, and the parser's handling of duplicate and
+malformed keys." It was not wrong, only open; it is replaced because the
+parser uses the lookup's own comparator to place every entry, so the
+unsorted case cannot arise, and the duplicate and malformed rules are the
+bullets above.
+
+### Closed — `damagemodifier`, `armoredstate`, and every consumer of the kill count [R-DMG-01 §2] (2026-08-29)
+
+**Established — `damagemodifier`.** Read from the FBI through the fixed-point
+accessor with default **1.0** (65,536 in 16.16) and stored as the
+definition's 16.16 damage modifier. It has exactly one reader: the packet
+builder's armored-state scale in §9.2, `amount = (int32)(((int64)modifier ×
+amount) >> 16)`, applied only when the victim's runtime armored bit is set
+**and** the incoming 32-bit amount is strictly below 30,000 (signed). Order,
+widths and truncation are those already stated in §9.2's listing: name-table
+lookup → single-precision falloff product truncated toward zero → attacker
+veterancy (signed truncating divide by 100) → global double then half gates →
+[builder] armored modifier → defender veterancy (signed truncating divide by
+100) → `(int16)` wrap into the packet. Nothing in that chain reads a float
+after the falloff product.
+
+**Established — `armoredstate` is two different things.** The runtime armored
+bit is bit 1 of the unit's activation-state byte: zero at creation, written
+only by COB port 20 (`ARMORED`) through the shared activation edge machine
+`[04 §4.4]`, which raises `Activate`/`Deactivate` for bit 0,
+`StartBuilding`/`StopBuilding` for bit 3 and the cloak presentation events
+for bit 2 but **nothing** for bit 1 — setting or clearing armor raises no
+callback and no interface event. Its only reader is the packet builder above.
+The FBI key `armoredstate`, by contrast, is parsed by the unit-definition
+loader (integer accessor, bit 0 kept) into a definition flag bit, and a
+whole-corpus reader census of that definition flag word finds **no reader of
+that bit**: the authored key is stored and never consulted. A clone must not
+seed the runtime armored bit from it; retail does not.
+
+**Established — the kill count and every consumer.** A unit's kill count is an
+unsigned 16-bit field, zeroed at spawn `[04 §2]`, incremented only by the
+death handler's full-credit path (§12.1, through the unvalidated attacker
+pointer), and wrapping at 65,536. The complete reader census, from a
+whole-corpus search over the unit record:
+
+| consumer | expression | owner |
+|---|---|---|
+| attacker veterancy (per-recipient damage) | `tier = min(kills / 5, 5)`, `amount = (int)((100 + 6·tier) × amount) / 100` | §9.2 |
+| defender veterancy (packet builder) | `tier = min(kills / 5, 5)`, `amount = (int)((25 − tier) × amount × 4) / 100` | §9.2 |
+| reload after a successful shot | `tier = min(kills / 5, 5)`, reload scaled by `(100 − 6·tier) / 100` | §4.2 |
+| turret spread divisor | `div = kills / 12`, spread width divided by `div` when `div > 1` | `[R-WPN-03 §4]` |
+| pre-fire lead gate | `kills > 5` (strict, unsigned) | §3.3 |
+| capture timer | `((kills / 5) + 10) × t × 10 / 100` on the **target's** kills, no tier cap | `[05 "Capture"]` |
+| HUD unit panel | `kills < 5` → `%d kills`, else the word `Veteran` | doc 07 |
+
+The `kills > 5` strict test of the lead gate is the only `>`-form consumer;
+every other simulation consumer divides. The panel's `< 5` and the divide's
+first nonzero tier coincide at five kills, which is the whole of the "Veteran"
+relationship stated in §9.2. The kill *counters on the player record* are a
+different family: incremented by §12.1, saved and restored under the `Kills`
+key `[08 "Save-file organization"]`, and read by the score and statistics
+screens (doc 07); no
+simulation path reads them except the leaderboard rank of §12.1.
 
 ### 9.3 Area damage
 
@@ -2998,6 +3355,144 @@ state — one with health zero under construction, zero when grounded or normal,
 nonzero while airborne. The gate compares it **equal to 0.0f**, so units still
 under construction do not detonate through this path.
 
+### Closed — the death timeline, `Killed` selection, kill credit, and the absent `Unit destroyed` diagnostic [R-DMG-01 §3] (2026-08-29)
+
+This closure composes contracts that are already Established above and in
+`[R-CB-01 §7]`, `[R-COB-02 §2]` and `[R-WPN-02 §5]`; it adds only what the
+plan's questions asked for and the pieces the earlier passes left implicit.
+Nothing here restates arithmetic — read the cited paragraph for it.
+
+**Established — the timeline of one weapon death, in tick order.**
+
+1. *Projectile phase, tick N.* The central impact (§9.1) computes the amount
+   (§9.2), the packet builder scales it and dispatches synchronously (§9.1):
+   the kind byte is recorded as the future death cause, the attacker pointer
+   and its side snapshot are stored, health is reduced by exact 16-bit
+   modular subtraction, and — for a victim owned by a locally simulated
+   player — a non-positive result sets the death latch and returns **without
+   clamping**. `HitByWeapon`/`TakeDamage` are not emitted on the lethal
+   packet (the return precedes them). Every later packet in this tick is
+   rejected by the latch: no further damage, no re-attribution.
+2. *Unit sweep, tick N+1, the victim's own slot visit* `[R-COB-02 §2]` step
+   6 — the death preamble (above) runs: commander marker, severity from the
+   negative health and the previous 30-tick sample, the cause bypass table,
+   the **synchronous** `Killed(severity, variantCell)` query drained inline
+   (`[R-CB-01 §7]`), the build-fraction override of the variant, the
+   eleven-byte packet, then the central handler in local mode.
+3. *Same visit, the central handler, in this order:* ally locator event;
+   attacker re-resolution from the packet id; the fixed teardown helpers
+   (statistics, order/queue release, audio, occupancy unstamp, burst-anchor
+   sweep); carrier detach; **cargo cascade** (30,000 packets, attacker = the
+   victim's killer, cause 3 or 6); the credit switch; the leaderboard; the
+   cause-5 bounty; the **death explosion** (§12.2) — delivered through the
+   central impact with a null shooter, so its blast is resolved *inside* the
+   unit sweep, before the projectile phase of tick N+1, and any unit it
+   kills is latched now and dies in its own later slot visit (a later slot
+   this tick, or tick N+2 if its slot already passed); then the **corpse**
+   (§12.2); then script/mover teardown, the alive-bit clear and the slot
+   free, which makes the slot reusable by a spawn later in the same sweep.
+
+**Established — which cause codes run `Killed`, and with what.** The query
+runs for every cause except 7 and except 4, 5 and 9, and never while health
+is still positive (§12.1 table). Its two cells are the packet severity (seeded
+with the computed severity; no shipped script writes it) and the corpse-depth
+nibble (uninitialized on entry; every shipped `Killed` body writes it). The
+cause never reaches the script: it is the high nibble of the packet byte,
+taken from the last damage kind, and `Killed` is not told whether the death
+was a weapon (1), self-destruct (3), cargo cascade (6), teardown (8) or
+mission water (11). A script that wants to distinguish them cannot, and a
+clone must not pass the cause as a third argument.
+
+**Established — which weapon fires.** The death explosion selects
+`selfdestructas` only for cause **3** and `explodeas` for every other cause
+that reaches it (§12.2); it fires only when the severity byte is strictly
+positive and the remaining-build fraction is exactly zero. Since causes 4, 5,
+7, 9 and the positive-health case force severity 0, only weapon deaths
+(1), self-destruct (3), cargo cascade (6), teardown (8), water (11) and the
+network-only causes can detonate, and a unit under construction never does.
+
+**Established — self-damage.** There is no `noselfdamage` key
+(`[R-WPN-01 §9]`) and no exemption in the death explosion: the blast record's
+shooter is null, so the shooter-exclusion of §9.3 excludes nobody, and the
+dying unit's own side takes full damage from its explosion. The dying unit
+itself is already latched (and, by the time the corpse is placed, freed), so
+its own blast cannot re-kill it.
+
+**Established — who is credited.** Credit is the cause-gated switch above:
+the **attacker unit** named by the damage-time snapshot gets its wrapping
+kill word incremented, and the **attacker player** its kill counter, only for
+causes 1 and 6 (and 5 when the attacker side is neither neutral nor the
+victim's own), only when the victim's build fraction is exactly zero, only
+when the attacker side differs from the victim's owner, and only when the
+attacker side is not the neutral value 10. A cargo unit killed by its
+carrier's death credits the carrier's killer; a death explosion's victims
+credit nobody (null shooter); a self-destruct (cause 3) credits nobody and
+counts only as a loss. The kills>5 and kills/5 consumers of that word are
+the census of `[R-DMG-01 §2]`.
+
+**Established — there is no `Unit destroyed` diagnostic.** A whole-image
+string census for `destroyed` finds only the two front-end option labels
+`Game ends when commander is destroyed.` and `Game continues after Commander
+is destroyed.`, read by the options screen (doc 07); the death path emits no
+text of its own beyond the localized leader message of §12.1. An
+implementation that logs unit deaths does so as its own diagnostic sink, not
+as a retail message.
+
+### Closed — health clamping, damage on a nanoframe, and resurrection against the death pipeline [R-DMG-01 §4] (2026-08-29)
+
+**Established — the three health writes and their clamps.** Health is a
+signed 16-bit field with three writers in the damage family: (a) the heal
+kind, `h = health + (uint16)amount` clamped **unsigned** to the definition's
+32-bit maximum (§9.1, so a zero maximum heals to zero); (b) the damage kinds,
+`health = (int16)(health − (int16)amount)` with **no** clamp for a
+locally-owned victim (the negative value is preserved for the severity
+computation of §12.1) and a clamp to exactly **0** for a victim whose owner is
+absent or remote, which then continues to the callbacks with health zero and
+never dies through this path; (c) the paralyze kind, which never writes
+health. Construction and repair writes are doc 05's and do not pass through
+the dispatcher.
+
+**Established — damage on a nanoframe.** The dispatcher has no
+build-fraction test: a unit under construction takes damage exactly like a
+finished one, and a non-positive result latches it. Its death then differs
+only downstream: the preamble runs `Killed` normally, the nonzero build
+fraction forces the corpse depth to **0** (no wreck), the explosion gate
+fails (no blast), the credit block's `buildFraction == 0.0` tests fail (no
+kill credit, no veterancy for the attacker, but the victim's player still
+counts the loss under causes 1/6), and the cause-5 bounty is scaled by
+`1 − fraction`. There is no separate "damage reduces build progress" rule;
+build progress and health are distinct fields, and only doc 05's construction
+pump moves the former.
+
+**Established (by composition) — resurrection against death, in the same
+tick.** Resurrection is a builder work order `[05 "Resurrection"]`, and doc
+05's `[R-WORK-01 §7]` states its phases; this document owns only the ordering
+against the death pipeline, which follows from the visit order of
+`[R-COB-02 §2]`:
+
+* A resurrection completes in the **builder's** slot visit, step 4; a death
+  finalizes at step 6 of the **dying unit's** visit; both are inside the unit
+  sweep, which precedes projectile advancement. So within one tick, order is
+  by unit slot.
+* The resurrected unit is created in the resurrector's phase 5 with health
+  **1** and remaining-build fraction **0** — a finished unit at one hit
+  point. Any damage packet reaching it afterward in the same tick (a later
+  slot's death explosion, or the projectile phase) kills it with full credit
+  and a corpse, exactly as any finished unit.
+* Phase 5 re-reads the terrain cell and fails (`Resurrection failed`) when
+  the feature is gone. A corpse consumed by an **earlier-slot** resurrector,
+  reclaimed, or destroyed by the previous tick's projectile phase therefore
+  loses; two resurrectors on one corpse resolve in slot order, the earlier
+  wins, the later fails. A corpse **placed** by a death earlier in the same
+  sweep is visible to a later-slot resurrector in the same tick.
+* A resurrector that dies mid-order loses the order in the teardown's
+  order/queue release; the feature is untouched, and no unit is created.
+* Several reclaimers on one unit: their packets dispatch synchronously in
+  slot order, so the first packet whose modular subtraction is non-positive
+  sets the latch, and the dispatcher rejects every later one; the fatal pulse
+  is the earliest in slot order, and its sender is the credited attacker
+  (cause 5, subject to the side test of the credit switch).
+
 ### 12.2 Wreckage and feature placement
 
 **Established fact:** The corpse step runs when the packet's variant nibble is
@@ -3045,8 +3540,10 @@ severity byte is **strictly positive** and the remaining-build-fraction float
 is exactly zero. It selects between the unit's TWO resolved death-weapon
 fields: the self-destruct field when the cause nibble is 3, the explode field
 otherwise. Both resolve from the authored `selfdestructas` and `explodeas`
-names at catalog load; an unresolved or absent name produces no explosion at
-all (there is no third default candidate in the executable).
+names at catalog load; an unresolved or absent name resolves to weapon
+**record 0**, the inactive sentinel (stock `[noweapon]`), which the explosion
+path then fires like any other weapon — see the correction in
+`[R-DMG-01 §5]` below.
 
 **Established fact:** The explosion is delivered by building a
 projectile-shaped record on the stack and calling the central impact path with
@@ -3072,6 +3569,74 @@ autoreclaimable, and indestructible behavior. Of those, this document owns only 
 two the weapon path reads — the damage capacity the accumulator of §13.1
 compares against, and the flammability and indestructible flags that route it;
 `[05 "Feature catalog and placement"]` and `[fmt tdf]` own the rest.
+
+### Closed — `explodeas`/`selfdestructas` never resolve to nothing, and the `corpse` key [R-DMG-01 §5] (2026-08-29)
+
+**Correction.** The previous text of §12.2 said: "Both resolve from the
+authored `selfdestructas` and `explodeas` names at catalog load; an
+unresolved or absent name produces no explosion at all (there is no third
+default candidate in the executable)." The second clause was wrong about the
+mechanism. The unit-definition loader resolves each of `weapon1..3`,
+`explodeas` and `selfdestructas` by the runtime name lookup — a linear scan of
+the 256-record weapon table comparing catalog names case-insensitively, which
+returns not-found both for a name that matches nothing and for an **empty**
+name — and replaces not-found with a reference to weapon **record 0**
+`[02 §5]`. The two death-weapon fields are therefore never null for any
+definition that went through the loader, and the death explosion's only
+guard (a null test on the selected field) always passes. "No explosion" was
+the observable stock outcome, not the executable's rule.
+
+**Established — what fires instead.** In the stock corpus record 0 is
+`[noweapon]` (`ID=0` in `weapons/weapons.tdf`): `range=16`,
+`[DAMAGE] default=0`, and every other key at its accessor default —
+`areaofeffect` 0, no flags, no explosion art, no sounds. The death explosion
+pushes that record through the central impact with a null shooter and no
+direct unit (§9.1), so retail performs, for every death whose `explodeas` is
+absent or misspelled: the follow-camera freeze with a zero `holdtime` and the
+record's dead bit (no `noexplode` flag); a camera shake of magnitude 0 and
+duration 0; the sound and art selectors of §13.2 handed the sentinel's empty
+names; and the area path with `R = 0`, which enumerates the impact cell's
+neighbourhood (one cell each way), accepts a unit only when its box distance
+is strictly below zero — never, short of the signed 16-bit wrap of §9.3 — and
+accepts no feature for the same reason. No damage results and no credit is
+possible. Whether the empty-name sound and art selectors emit a null
+presentation event or nothing is §13.2's and doc 03's question, not a
+simulation difference. Stock FBIs that name a placeholder explosion not
+present in any parsed weapon file are the sentinel case; doc 02 owns that
+census.
+
+**Established — the second reader of the two names.** The unit-override
+loader also reads `explodeas` and `selfdestructas`, but only to exclusive-or
+the named section's raw-text checksum into the definition-identity word
+(`[02 §5]`, "unit identity contribution"); it resolves no weapon and writes
+neither death-weapon field.
+
+**Established — `corpse`.** The FBI `corpse` key is read as a string (up to
+100 bytes) and resolved once, at catalog load, to a feature-definition index
+by the feature-name lookup; an absent key leaves the index at the all-ones
+value `0xFFFF`, which is at or above the no-feature sentinel `0xFFFB`, so the
+chain walk of §12.2 places nothing at any depth. An authored name that
+resolves to no feature stores whatever the feature-name lookup returns for a
+miss, which is doc 05's contract `[05 "Feature catalog and placement"]`. The
+index has exactly one reader, the chain walk; `featuredead` links are
+followed from the feature table, never re-resolved by name. Wreck-versus-heap
+is therefore never a *choice* the engine makes by cause: the cause reaches
+the corpse step only as the `notify` flag (false for cause 7) and, through
+the `Killed` script's depth nibble, as however deep the script chose to walk
+the `featuredead` chain; land versus water is the bilinear-height test above,
+and lava has no rule of its own at this site (the feature-side sinking and
+lava behaviors are doc 05's).
+
+### Closed — `hitdensity` does not exist, and what is doc 05's [R-DMG-01 §6] (2026-08-29)
+
+**Established.** There is no `hitdensity` string in the image, in any case
+form; the key is not read for features, units or weapons. Feature damage is
+the unscaled `default` damage accumulated against the feature's damage
+capacity (§13.1) with no density, armor, falloff or veterancy term. The
+feature-side residue of this unit's scope — the sinking-rate patch's reader,
+lava cells, `featuredead` chain authoring and the reclaim/resurrect race on a
+freshly placed wreck — is owned by doc 05 and is reported there as a
+cross-document need rather than edited here.
 
 ## 13. Weapon-driven feature, fire, audio, and effect events
 
@@ -3107,7 +3672,7 @@ accumulating there. The comparison against the definition's damage capacity is
 precedence over damage: a flammable feature hit by a weapon with a nonzero
 firestarter never accumulates damage on that hit.
 
-**Established fact:** Ignition allocates burn state, selects a random spark deadline through one draw of `simulationRandom(sparktime / 2) + (sparktime / 2)`, and emits a treeburn/fire event. The feature phase runs every simulation tick; animation advance and burn countdown decrement run every tick; only smoke emission is gated on `globalTick % 3 == 0`.
+**Established fact:** Ignition allocates burn state, selects a random spark deadline through one draw of `simulationRandom(half) + half` where `half = sparktimeTicks >> 1` and `sparktimeTicks` is the parsed `sparktime` **seconds × 30, truncated to a 16-bit integer** — the stock value 5 gives 75..149 visits, not "2 or 3" (corrected 2026-08-29 against [05 R-FEAT-01 §9]; the earlier text read `sparktime / 2` on the raw key), and emits a treeburn/fire event. The feature phase runs every simulation tick; animation advance and burn countdown decrement run every tick; only smoke emission is gated on `globalTick % 3 == 0`.
 
 **Established fact:** Fire spread uses the candidate's spread chance and simulation RNG, scans at most 48 candidates in a 7 by 7 window excluding the origin in row-major order, and makes five cumulative wind-direction attempts that collapse to no draws at zero wind. Drawing occurs only after every cheap legality check (off-map, empty, already attached, not flammable). Spread consults the candidate's own `spreadchance`, never the burning feature's. Burn weapons route back through the ordinary projectile and area-damage subsystem after both spread passes: the burn weapon's impact is built as a synthetic projectile-shaped record with a NULL shooter and a zeroed side byte and pushed through the ordinary area enumeration, so burn-weapon damage awards no veterancy and no kill credit; the friendly/enemy damage-sum classification compares side zero against each recipient. An earlier inference that attribution equals the igniting projectile's side is corrected.
 
@@ -3347,6 +3912,27 @@ earlier bounded search did not cover — so they are replaced here by the two
 residuals that survive. The "cached average-height scratch value" bullet is
 removed: `[R-WPN-02 §7]` names its only reader.
 
+**Correction (2026-08-29, RWU-06-2).** The "Aim-completion closure writer and
+consumer" bullet is removed: `[R-CB-01 §6]` located the receiver's dispatch
+table and its setter, and `[R-WPN-03 §6]` retires the `TODO(question)` that
+stood in §3.4. No accuracy-family item is added: `accuracy`, `tolerance`,
+`pitchtolerance` and `sprayangle` each have exactly one reader with its
+arithmetic in the body (`[R-WPN-03 §1]`–`§4`), and `aimrate`/`movingaccuracy`
+have no key. The corpus README's "no gameplay reader" sentence for this family
+is retracted by `[R-WPN-03 §1]`.
+
+**Correction (2026-08-29, RWU-06-4).** Two bullets of the "Collision and
+damage" group are removed: the damage-override table's collation, duplicate
+and malformed-key bullet is closed by `[R-DMG-01 §1]` (the parser places every
+entry with the lookup's own comparator, so the unsorted case cannot arise),
+and the resurrection-versus-death and concurrent-reclaimer bullet is closed by
+`[R-DMG-01 §4]` (slot-visit order decides both). The §12.2 sentence that an
+unresolved `explodeas` "produces no explosion at all" is corrected by
+`[R-DMG-01 §5]` — the field resolves to weapon record 0 and fires it — and
+that closure leaves one narrower presentation residual, added below. No
+`armor.tdf`, `hitdensity` or `Unit destroyed` item is added: each is shown not
+to exist in the image (`[R-DMG-01 §1]`, `§6`, `§3`).
+
 ### Catalog and targeting
 
 - The authored FBI key behind the definition flag that arms a side's secondary
@@ -3368,10 +3954,6 @@ removed: `[R-WPN-02 §7]` names its only reader.
   resulting unordered angle comparisons really accept and serialize it · §3.3
   · static trace of the runtime `acos` domain path plus a reachability argument
   over the root expression.
-- The Aim-completion closure writer and consumer in the weapon-slot record;
-  the zero/nonzero delivery and the no-timeout contract are established
-  · §3.4 [R-P0-07], doc 04 §5.3 · static trace. Marked `TODO(question)`;
-  the store census belongs to the units/COB lane.
 - Target replacement during an outstanding Aim, and malformed-state
   interactions around the closed family readiness gates · §3.4 · static trace.
 - Boundary between the general muzzle query and the per-family dropped/meteor
@@ -3439,11 +4021,6 @@ removed: `[R-WPN-02 §7]` names its only reader.
   extreme coordinates · §8.2 · static trace.
 - Sign and scale conventions for vertical velocity, terrain height, and sea
   level outside ordinary map ranges · §8.3 · static trace.
-- Whether the weapon damage-override table is always sorted under the same
-  case-insensitive collation its lower-bound search assumes, and the parser's
-  handling of duplicate and malformed keys and of signed overflow in an
-  override value · §9.2 · static trace of the weapon-record parser's table
-  construction (RWU-06-2 owns the parser side).
 - The configuration alias that names the global double/half damage bits; the
   reader is direct and the full-image census found no writer · §9.1 · static
   trace over the unrecovered regions.
@@ -3454,9 +4031,14 @@ removed: `[R-WPN-02 §7]` names its only reader.
 - Practical reachability of signed 16-bit AOE distance wrap, and of more than
   20 unique unit or 64 unique feature-cell candidates, in accepted retail maps
   · §9.3 · asset census over the map corpus (the AOE dedup map probe).
-- Resurrection interaction with the death pipeline, and the ordering among
-  several concurrent reclaimers issuing simultaneous repair and damage
-  packets — which pulse becomes fatal · §12, doc 05 · static trace.
+- Whether the empty-name sound and art selectors, handed the record-0
+  sentinel by a death whose `explodeas` did not resolve, emit a null
+  presentation event or nothing · §12.2, §13.2, doc 03 · static trace of the
+  two selectors on an empty name.
+- The feature-name lookup's return for an authored `corpse` name that
+  resolves to no feature (stored once at catalog load, read only by the
+  chain walk) · §12.2, doc 05 · static trace of the feature-name lookup's
+  miss path (doc 05 owns the lookup).
 
 ### Stockpile and interceptor
 

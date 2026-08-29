@@ -480,6 +480,36 @@ standoff radius. For a mobile build the third is a blocked-area retry counter.
 A unit keeps two queue segments: a front queue and a rear segment, each with
 its own anchor on the unit.
 
+**Established — field roles the handler bodies pin down (2026-08-29,
+RWU-04-11).** The per-visit contracts of §3.9 read and write these fields, and
+reading them across the whole handler set settles four points the list above
+left open:
+
+* The **guard/fight anchor pair** is stored in **whole world units** — the high
+  halves of a 16.16 X and Z — and every consumer sign-extends both terms as
+  16-bit values before subtracting ([R-STANCE-01 §4]). It is written by the
+  auto-engage issuer's maneuver arm and by the guard's admit phase; no handler
+  writes it from a goal position.
+* The **three general parameters** carry more roles than the sentence above
+  lists. The first is also the product definition index for a mobile build, the
+  stance value for the two standing-order writers, the timeout budget in ticks
+  for `Wait`, the stun credit in ticks for `Paralyze`, and the remaining work
+  amount for the reclaim family. The second is also the scan radius for `Wait`,
+  the self-destruct countdown state, and the effect-cadence accumulator for
+  reclaim. The third is also the `MobileBuild` blocked-area retry counter and
+  the pursuit leash of the repair family, which enforces it with exactly the
+  chase attack's arithmetic.
+* The **static-mask copy** carries two runtime bits that no static descriptor
+  mask sets: a one-shot **caption-pending** flag that the shared caption clear
+  tests and clears, and the **StopBuilding-pending** flag of [R-ORDER-02 §2].
+  The auto/default-operation flag is inherited on insertion, and the
+  rear-segment flag selects the segment.
+* The **satisfied/pending word** is a field distinct from the dynamic gate mask:
+  the gate says which bits the record is *waiting for*; the pending word
+  accumulates which have *arrived*. Every goal installer wipes the five
+  movement pending bits as its last act, so a re-armed record always starts a
+  fresh path request with a clean pending word (§3.3).
+
 ### 3.3 Queue pump
 
 **Established fact:** The pump walks the queue from the front head each unit
@@ -536,6 +566,70 @@ between pump visits — a blocked record's gate can be satisfied from outside
 the pump — and an arrival bit set during a unit's movement integration is
 observed by that unit's NEXT pump visit, not the current one (one-tick
 latency; sections 1.1, 8.3).
+
+### Correction — the pending word's bits, and who arms them [R-ORD-01 §0] (2026-08-29)
+
+**What the earlier text said.** This section called the record's accumulated
+word "the accumulated satisfied-gate bits" and named no bit but the pump's own
+bit 0 (deadline expiry). The bit meanings were stated only in passing, in three
+places that did not agree on scope: [R-ORDER-02 §1]'s path-outcome table gave
+`0x20`/`0x40`/`0x80` as movement outcomes; [R-PATH-01 §9] added `0x100`/`0x200`
+as search notifications; [R-UNIT-06 §1] listed `0x08`/`0x10` as guard re-arm
+bits with unlocated producers. Nothing said which handlers *arm* which bits, so
+a reimplementation had no way to know whether a bit it raised would ever be
+consumed. That is the gap this correction closes; nothing previously stated is
+withdrawn.
+
+**Established — the five movement bits, one list.** The goal object holds a
+reference to the order record that created it, and the movement and path layers
+OR these bits into that record's pending word [R-PATH-01 §9]:
+
+| Bit | Raised when | Raised by |
+|---:|---|---|
+| `0x20` | the follower observes the unit has reached the goal | route follower |
+| `0x40` | an empty route is published while the unit is **not** at the goal — the "cannot get there" signal | route publisher |
+| `0x80` | a previous goal object is released | payload installers |
+| `0x100` | the request's start is already satisfied, or the pre-search ray connected | path search |
+| `0x200` | the request's start is out of bounds, or the ray did not connect | path search |
+
+All five live in bits 5 through 9, and **every** goal installer — point,
+annulus, rectangle, and the prebuilt-payload variant — clears exactly those
+five bits on the record as its last act before publishing the new payload. A
+handler that installs a goal therefore cannot see a stale outcome from the
+previous one, and the re-arm loop of [R-ORDER-02 §1] is clean by construction.
+
+**Established — the gate is what makes a bit matter.** A pending bit reaches
+the handler only through the pump's intersection with the record's dynamic gate
+mask (step 2 above). The masks handlers actually arm, across the whole
+descriptor table, are drawn from:
+
+| Gate bit | Consumers observed | Note |
+|---:|---|---|
+| `0x1` | every deadline; the shared deadline setter always ORs it | the pump sets it on expiry |
+| `0x2` | cancel-current notification | producer is a removal path, not a bit writer ([R-ORDER-02 §2]) |
+| `0x4` | the `INBUILDSTANCE` wait of the work orders (§3.9) and the wait/select family | |
+| `0x8` | interrupt/abandon; paired with `0x10` by the guards | producer unlocated |
+| `0x10` | guard re-arm; also the second interrupt bit | producer unlocated |
+| `0x20` `0x40` `0x80` | the movement outcomes above | the move, patrol, park and work families arm `0xE0`; several work handlers arm `0xE8` (adding `0x8`) |
+| `0x100` `0x200` | path-status notifications | **no handler arms them**: they are raised and then masked out of every satisfied set ([R-ORDER-02 §1]) |
+| `0x400` | patrol/suppress waypoint rotate | |
+| `0x800` `0x1000` `0x2000` `0x4000` | the attack family's engage/disengage combination (`0x11808`, `0x13808`, `0x148e8`, `0x100e8`) and the guard's `0x7008` | |
+| `0x8000` | the under-construction wait of `GetBuilt` | |
+| `0x10000` | the pump's three unconditional weapon-slot clears | see below |
+
+**Established — which handlers arm gate bit `0x10000`.** The Missing list asked
+"which handler arms that gate bit". The armers are the combat and work
+families, not one handler: `Standby` and `Standby_Mine` arm it alone on both
+their phases; `Attack_NoMove` arms it inside `0x11808`; `Attack_Chase` inside
+`0x13808`, `0x148e8` and `0x100e8`; `Guard_NoMove` tests it in its own
+pre-check; `ReclaimUnit`, `Reclaim` and their VTOL twins arm it inside
+`0x100e8`/`0x10008`. Every one of those handlers *also* treats the bit as a
+reason to end the order — the pre-checks of §3.9 test `0x10008` or `0x10808`
+and return the completion code — so the pump's slot clear and the handler's
+own exit are two halves of one "this order was interrupted" event. **Still
+Unknown:** what writes bit 16 into the *unit capability word* that the pump
+intersects with. *Decider:* static trace of the writers of that word; the
+bounded census of [R-UNIT-06 §1] found none, and it must not be invented.
 
 **Supported inference and Unknown — queue waits and producer assignment
 [P0-07][P0-08]:** The bodies for interrupt wake bits 2 (cancel-current) and 8
@@ -1912,6 +2006,562 @@ listing (2026-08-26) finds no instruction that ORs bit 2 or bit 8 into
 either; the mask-2 cancel notification is instead delivered by the node
 cleanup path (section 3.3), whose producers are the ordinary removal paths.
 The mask-8 wake-bit producer must not be invented.
+
+### 3.9 Order handler bodies, per visit [R-ORD-01]
+
+This section gives every ground and generic order handler in the descriptor
+table (§3.1) a per-visit contract: the pre-checks it runs before its phase
+switch, what it validates about its target and goal, the distance test it
+applies, what it writes to the unit and to its own record, the code it
+returns, the COB callbacks it arranges, every simulation-RNG draw, and every
+retail diagnostic string it emits. The pump's mapping of return codes is in
+§3.3 and [R-ORDER-02 §1] and is not restated: *complete* below means code 5,
+*abandon* 8, *cancel-all* 7, *wait* 3, *re-arm* 9, *rotate* 6, *hold* 2 or 4,
+*advance* 1, *restart* 0. Handlers already closed elsewhere are cited, not
+re-derived; where a trace contradicts existing text the contradiction is
+written as a Correction quoting the old text. The air-only handlers of batch 3
+are covered by [R-AIR-01 §6–§9] and §10.2–10.3 except the five VTOL work
+twins, which are deferred (see the "Missing and unknown" tail). Everything in
+this section is **Established** by direct trace of the handler bodies unless a
+sentence says otherwise. (2026-08-29, RWU-04-11.)
+
+### Closed — the shared vocabulary every handler body uses [R-ORD-01 §1] (2026-08-29)
+
+**Record fields.** The handler receives the owning unit, its order record, and
+the satisfied combination (§3.3 step 4). It reads and writes the record fields
+of §3.2: the phase byte, the dynamic gate, the deadline, the target
+smart-reference, the goal triple, the anchor pair, the three general
+parameters (called *p1*, *p2*, *p3* below), the static-mask copy, the pending
+word, and the goal payload. The record constructor zeroes the dynamic gate and
+the pending word, so a freshly inserted record is dispatched on its very next
+pump visit with an empty satisfied set.
+
+**The RNG draw.** Every draw below is the simulation RNG (§1.2) taken as
+`state mod n`. The draw helper **returns 0 without advancing the state when
+`n` is below 2**; a handler that computes `n` from a distance or a list length
+therefore consumes no random state when that value collapses to 0 or 1. A
+reimplementation must reproduce this or its draw sequence diverges.
+
+**The deadline setter** stores `current tick + n` and ORs bit 0 into the
+dynamic gate; every "deadline n" below implies that OR (§3.3 step 1 then
+delivers bit 0 on expiry).
+
+**The caption clear.** A record whose static-mask copy carries the runtime
+caption-pending bit (§3.2) has it cleared by a one-shot helper that also emits
+status kind 5 (`ok`) on the owner with an optional text; handlers call it with
+no text ("caption clear") or with a state text ("caption clear with
+*Repairing*").
+
+**The status emitter** takes the unit, a status kind, and an optional text. It
+does nothing unless the unit belongs to the local player, carries the
+alive/building-class bit 28, and does **not** carry the auto flag bit 14. When
+no text is given it substitutes the kind's default display text from a fixed
+table of 23 kinds; kinds with no default text emit no caption (the kind still
+reaches presentation, which owns the sound side — doc 07). The table, kind →
+(sound name, default text), verbatim:
+
+| Kind | Sound | Default text | Kind | Sound | Default text |
+|---:|---|---|---:|---|---|
+| 1 | `select` | — | 13 | `unload` | — |
+| 2 | `underattack` | `Under Attack` | 14 | `cloak` | `Cloaked` |
+| 3 | `activate` | — | 15 | `uncloak` | `Visible` |
+| 4 | `deactivate` | — | 16 | `capture` | — |
+| 5 | `ok` | — | 17 | `count5` | `five` |
+| 6 | `arrived` | `Arrived` | 18 | `count4` | `four` |
+| 7 | `cant` | `Cannot Comply` | 19 | `count3` | `three` |
+| 8 | `unitcomplete` | `Nanolathe Complete` | 20 | `count2` | `two` |
+| 9 | `build` | — | 21 | `count1` | `one` |
+| 10 | `repair` | — | 22 | `count0` | `zero` |
+| 11 | `working` | — | 23 | `canceldestruct` | `Self destruct terminated` |
+| 12 | `load` | — | | | |
+
+Every explicit text a handler passes is quoted verbatim in its contract below
+(including the trailing periods and the misspelling that retail ships).
+
+**Goal installers.** Four helpers install the record's goal payload: a
+**point** goal at a position with an arrival radius, an **annulus** goal at a
+position with outer and inner radii, a **rectangle** goal from a packed
+footprint-cell origin and packed cell size, and a payload release. All four
+first release the previous payload (raising pending `0x80`, [R-ORD-01 §0]),
+skip the install entirely — release only — when the owner's definition has
+the `canfly` bit, and finish by clearing pending bits `0x20`–`0x200`. The
+ground goal-handle arithmetic behind the point goal is [R-P0-01] §8.3; the
+rectangle goal's cell origin is computed by the footprint snap below.
+
+**The footprint snap.** A unit's committed footprint cell for an axis is
+`(pos − foot·2^19 + 2^19) >> 20` (arithmetic shift) where `foot` is the
+definition's footprint size in cells for that axis (`FootPrintX`,
+`FootPrintZ`; the unit keeps a copy of the pair), i.e. the cell containing
+the footprint's minimum edge. The reverse, used to centre a goal on a
+footprint, is `pos = (foot + 2·cell) · 2^19`.
+
+The unit's copied pair is a **size**: the unit constructor copies the
+definition's footprint-size pair into it, and every consumer (the placement
+snap, the reach tests, `Park`'s parking rectangle, the guard's follow radius)
+reads it as cells of footprint. The committed cell pair — "the packed
+half-cell footprint bias" of §8 — is the separate field the occupancy commit
+writes.
+
+**The reach test** shared by `MobileBuild`, `RepairUnit`, `Capture`, and the
+reclaim family is, in whole world units, `trunc(hypot(dx, dz)) −
+trunc(8·hypot(myFootX, myFootZ)) − trunc(8·hypot(theirFootX, theirFootZ))`
+compared with the definition's `builddistance`; `dx`/`dz` are the 16.16
+centre differences, the hypot is computed in double precision and truncated
+toward zero, and the whole-unit part of the first term is taken by shifting.
+"In reach" is `≤ builddistance`; the two footprint terms are the units'
+(for a mobile build, the product definition's) footprint sizes. `ReclaimUnit`
+uses a different test, given in its contract.
+
+**Weapon-slot helpers.** *Inhibit slot k* sets the slot's control-byte bit 4
+and clears its target; *release slot k* clears that bit and clears the
+target; both fire `TargetCleared` under the guard of [R-ORDER-02 §2] and take
+`k = 3` to mean all three slots in order 0, 1, 2. *Bind slot k to unit* stores
+the target's unit id word with the unit-companion marker and clears bits
+10–14 of the unit's slot-status word; *bind slot k to position* stores the
+whole-unit X and Z (a Z of exactly −32768 is nudged to −32767 so it cannot
+read as the empty sentinel) and clears the same bits. *Read slot k target*
+yields the unit only while the companion carries the unit marker and the id
+is nonzero. The default slot pick returns 0 when slot 0's control byte has
+bit 1 set, else 1 when slot 1's has it, else the value of slot 2's bit 1.
+
+**The head insert.** A handler that spawns a new record inserts it at the
+**front** of the segment the record's rear-segment flag selects — the new
+record becomes the head and the old head becomes its next link, inheriting
+the old head's auto flag `0x4000` — so the spawned order runs before the
+spawning one resumes. The insert helper is invoked even when the record
+allocation failed, with a null record, and dereferences it unconditionally;
+retail relies on the record pool never being exhausted at these sites.
+
+**The `INBUILDSTANCE` wait.** The work handlers share a helper that returns
+*advance* (1) when the unit's build-stance byte (the COB `INBUILDSTANCE`
+port, [R-COB-03 §3]) is set, and otherwise writes the dynamic gate to
+`extra | 0x4` and returns *hold* (2). The `extra` per caller is given below.
+
+**The `StartBuilding` emitter** is [R-ORDER-02 §2]'s: it arranges
+`StartBuilding(0, 0, 1, value16, 0, 0, 0)` and sets the StopBuilding-pending
+flag. **Correction to [R-ORDER-02 §2]:** that closure said `value16` "is the
+low 16 bits of the issuing record's identity (Supported inference)". Every
+call site passes `bearing(unit → target) − unit heading` as a 16-bit angle —
+the build heading relative to the unit — which is the value the 49 stock
+scripts consume as an angle ([R-UNIT-06 §4]); the record identity is not
+involved.
+
+**The spray effect.** Work handlers draw the nanolathe spray from the
+owner's `QueryNanoPiece` result (the piece's world position, resolved
+through the script's query port) to the target's bounding box
+(position plus the definition's model minimum and maximum triple, or, for a
+feature, its footprint box), effect kind 6. It is presentation only (doc 03).
+The unit's *nanolathe-active stamp* (a tick value on the unit) is written
+beside it — `tick + 150` by the repair pair, `tick + 300` by the build and
+feature-reclaim family, `tick + 900` by `Capture` and `ReclaimUnit` — and is
+read by presentation, not by any handler.
+
+**The work-amount seed** used by the reclaim family with a scale `k` is
+`max(1, trunc(workertime · ((experience + 5) / 5) · targetMaxDamage · k /
+(max(targetBuildCostMetal, 10) · 300)))` with the division and the `/ 5`
+integer, the product formed in 64-bit, and the final quotient a float
+truncated toward zero.
+
+### Closed — the trivial, standing, and wait handlers [R-ORD-01 §2] (2026-08-29)
+
+| Handler | Contract |
+|---|---|
+| `Stop` | Caption clear; clear the three weapon-slot targets unconditionally (the unconditional entry of [R-ORDER-02 §2]); if the unit's committed mover mode is **airborne** (`2`, [R-MOV-01 §8]) and its definition has `canfly`, spawn `VTOL_LandIfCan` (target none, goal = own position, p1..p3 = 0) at the head. Complete. |
+| `MakeSelectable` | Clear state-word bit 15 and set bit 5. Complete. |
+| `Activate` / `Deactivate` | If the definition has `onoffable`, raise / lower edge bit 0 of the unit's edge byte (which arranges `Activate` / `Deactivate` and emits status 3 / 4, [R-UNIT-06 §2]). Complete either way. |
+| `Cloak_On` / `Cloak_Off` | If the definition's capability word has the *can-cloak* bit — derived by the FBI parser as `cloakcost > 0`, not from `init_cloaked` — set / clear state-word bit 11. Complete either way. No callback, no caption: the *Cloaked* / *Visible* captions come from the edge machine's bit 2, which this handler does not touch. |
+| `Standing_MoveOrder` / `Standing_FireOrder` | [R-STANCE-01 §2]. Complete. |
+| `AttackSpecial` | Resolve command code 3 (attack a unit, §3.4) against the record's target with no position, re-identify **this record** as the resolved descriptor (keeping mask bits `0x600`), set p1 = 2, return *hold* (2). The record runs the resolved attack handler from its next visit with the weapon-slot selection 2. |
+| `QMove` / `QPatrol` | Deadline 60, *rotate*. No goal, no target use: a 60-tick delayed tail rotate ([R-ORDER-02 §1]). |
+| `WaitForAttack` | Target null → complete. Phase 0: gate = `0x18`; advance. Phase 1: complete. Other phase: cancel-all. (Wakes on target loss, bit `0x8`, or on the unlocated bit `0x10`.) |
+| `BeCarried` | If the unit's carrier link is null → complete. Phase 0: release all slots; advance. Phase 1: deadline 10; hold. Other: cancel-all. A carried unit therefore re-checks its carrier link every ~10 ticks. |
+| `Paralyze` | p1 is the stun credit in ticks. p1 = 0 → lower edge bit 4 of the edge byte (stun off); complete. Else clamp p1 to 1800, release all slots, clear the three slot targets unconditionally, release the goal payload, deadline = p1, p1 = 0, raise edge bit 4 (stun on); advance. Phase 1 on expiry sees p1 = 0 and completes. Later paralyzer hits add to p1 of the waiting head record (§2.4; doc 06 owns the packet arithmetic). |
+| `Wait` | p1 = timeout budget in ticks, p2 = scan radius. With p2 ≠ 0 (every phase): enumerate the target registry within p2 of the unit for the unit's side (inclusive `d² ≤ r²` in whole units); any hit → complete; else if p1 < 1 → complete; else draw `r = RNG(30)`, `p1 −= r + 150`, deadline `r + 150`, hold. With p2 = 0: phase 0 deadline = p1, advance; phase 1 complete; other cancel-all. |
+| `SelfDestruct` / `SelfDestructFG` | Shared body. p2's high nibble marks initialisation: when clear, p2 = the definition's `selfdestructcountdown` (3-bit field, default 5) with the marker. If p1 = 0 and the countdown field is nonzero: with the satisfied set lacking bit 1 (cancel-current), let `n` = the remaining count; if n = 0 set p1 = 1 else store n − 1; emit status kind `22 − n` (`five` … `zero`; n ≥ 6 indexes past the six-entry table and is prevented only by the parser's 3-bit field, values 6 and 7 being **Unknown** — decider: the FBI parser's clamp); deadline `RNG(15)` when n was 0, else 30; gate |= `0x2`; advance. With bit 1 present (cancelled): if the unit lacks auto flag 14 emit status 23 (`Self destruct terminated`); complete. Otherwise (countdown finished, or the definition has no countdown): apply 30000 damage to itself with damage cause 3; complete. The record lives on the rear segment ([R-ORDER-02 §1]), so only its own deadline and the cancel path drive it. |
+| `SelfRepair` | Target (the repairer) null → status 7 with `Repair aborted.`; abandon. Phase 0: target definition must have `builder` (else cancel-all); target must be complete (remaining fraction 0.0) and activated (edge bit 0) → release all slots, advance; else abandon. Phase 1: if own health ≥ own `maxdamage` → advance; else stamp nanolathe-active `tick + 150` on itself, run the repair step (doc 05: the repairer's per-tick heal against this unit); when it did work, draw the spray from the **target's** nano piece to **this unit's** box; deadline 1; gate |= `0x8`; hold. Phase 2: status 10 with `Unit repaired`; complete. Other: cancel-all. |
+| `Teleport` | Single visit. For every live unit other than itself whose position lies inside this unit's model bounding box (position plus the definition's min/max triple, inclusive on all three axes): its new position is `goal + (its position − my position)`; emit the teleport effect (kind 5, duration 30) from old to new, then place it there through the position setter (re-registers occupancy when the footprint cell changes). Complete. The teleporter itself never moves. |
+| `Park` | Phase 0: no mover reference → cancel-all. With `canfly`: goal = own position, re-identify the record as `VTOL_Move`, *restart* (the air move runs in the same cascade). Else `s = FootPrintX` (+3 when the definition's yard-map width word is non-negative); install a rectangle goal with origin `(cellX − 4s, cellZ − 3s)` and size `(8s, 6s)` in cells, where cellX/Z are the unit's whole-unit position shifted to cells; gate = `0xE0`; advance. Phase 1: satisfied `0x20` → complete; a record behind it exists → complete; else deadline 30, *restart*. Other: cancel-all. |
+
+### Closed — the combat handlers [R-ORD-01 §3] (2026-08-29)
+
+**`Attack_NoMove`.** Pre-check: target null, or satisfied ∩ `0x10008` (target
+lost, or target cloaked — §6 below) → complete. Phase 0: caption clear;
+advance. Phase 1: release slot 0, bind slot 0 to the target, gate =
+`0x11808`; advance. Phase 2 (reached when any of those bits arrive): inhibit
+all slots; *re-arm* (9). Other: cancel-all. The unit never moves; the weapon
+layer (doc 06) fires from the bound slot.
+
+**`Attack_Chase`.** Pre-checks, in order: satisfied `0x800` → complete;
+target null → complete; satisfied ∩ `0x10008` → complete; when p3 (the leash)
+is nonzero and `trunc(hypot(myWholeX − anchorX, myWholeZ − anchorZ)) ≥ p3`
+→ complete (the return-to-post of [R-STANCE-01 §4]; the anchor pair is the
+whole-unit pair of §3.2). Phase 0: requires a mover reference, no `canfly`,
+and state-word bit 31 (else cancel-all); caption clear; goal = own position;
+p2 = 0; if p1 (the slot) is 0 take the default slot pick; advance. Phase 1:
+release the payload; satisfied ∩ `0x3000` → advance; the shot-admission gate
+(doc 06 §3.1) for slot p1 fails → advance; else release slots 0 and 2, bind
+slot p1 to the target, gate = `0x13808`; hold. Phase 2 (maneuver): let `d` =
+the slot's engagement distance (doc 06). By p2: **0** → point goal at the
+target radius `d`, p2 = 1. **1–4** → if `|myY − targetY| > 8` world units:
+point goal radius `d/2`, p2 = 6; else draw `a = bearing(target → me) − 0x4000
++ RNG(0x8000)` and install a point goal at `target − d·(sin a, 0, cos a)`
+(fixed-point sine/cosine helpers) with radius `d/4` rounded toward zero —
+**p2 unchanged**. **5** → point goal radius `d/2`, p2 = 6. **6** → point goal
+at the target radius 0, p2 = 7. **7** → annulus (outer `d`, inner `d/2`),
+p2 = 8. **8** → annulus (outer `2d`, inner `d`), p2 = 0. **≥ 9** → cancel-all.
+All arms advance. Phase 3: satisfied ∩ `0x40E0` → phase = 1, return 4 (hold
+with the phase already reset); else if the shot gate passes: release slots 0
+and 2, bind slot p1, gate = `0x148E8`, deadline 30, hold; else inhibit all,
+gate = `0x100E8`, deadline 30, hold. Other phase: cancel-all.
+
+**Correction to §3.5's "Attack-chase state machine".** That paragraph
+describes "an eight-state substate machine 0 through 8: approach at standoff
+distance; strafing steps that halve the distance when vertical separation
+exceeds eight units; closer approaches at half and zero standoff; then two
+banded-goal states". The substates exist, but the strafe arm (1–4) never
+increments p2, and nothing else writes p2 but the vertical-separation jump to
+6 and the wrap to 0: the reachable cycle is **0 → 1 (repeated strafes) → 6 →
+7 → 8 → 0**, entered at 6 only through the `> 8`-unit vertical jump.
+Substates 2, 3, 4, and 5 are dead under this handler. The "strict thresholds"
+sentence describes the goal handle's own arrival predicate (§8.3), not a
+handler test.
+
+**`Attack_Kamikaze`.** Pre-check: satisfied ∩ `0x10008` → complete. Every
+visit with a target: goal = target position. Phase 0: carried → cancel-all;
+caption clear; point goal at the goal with radius `max(16,
+kamikazedistance)`; deadline 60; gate |= `0xE0`; advance. Phase 1: satisfied
+`0x20` → status 6 (`Arrived`), spawn `SelfDestruct` with p1 = 1 (no
+countdown: immediate 30000 self-damage, cause 3) at the head, complete;
+satisfied `0x40` → abandon; else phase = 0, hold (the goal is re-issued on
+the next visit — deadline expiry or `0x80`). Other: cancel-all.
+
+**`AttackUType`.** p1 = the definition index to hunt. Phase 0: definition
+must have `canattack` (else cancel-all); deadline `RNG(90) + 1`; advance.
+Phase 1: scan every live unit from the second slot on whose definition index
+equals p1 and whose owner is hostile to mine (my side's diplomacy byte
+toward its owner reads 0); score each as `d² − RNG(d²/2)` with `d²` the
+whole-unit squared planar distance (64-bit squares shifted down); keep the
+lowest score (ties → later unit). None → complete. Else resolve command code
+3 against it, spawn the resolved attack record (target = it) at the head,
+*restart*. The hunt record therefore stays behind the spawned attack and
+re-scans `RNG(90)+1` ticks after each one ends. Other phase: cancel-all.
+Note the per-candidate draw with `n = d²/2`, subject to the `n < 2` rule.
+
+**`Suppress`** (fire at a position). Pre-check: satisfied `0x800` → complete.
+Phase 0: `canfly` → abandon; caption clear; p2 = the engagement distance of
+slot p1; advance. Phase 1: p1 = 2 → release all slots, bind slot 2 to the
+goal position; else release slots 0 and 1 and bind both to the goal; gate =
+`0x1C00`; advance. Phase 2: inhibit all; satisfied `0x400` → phase = 1,
+*rotate*; else with a mover: p2 < 1 → *re-arm*; point goal at the goal
+radius p2, gate = `0xE0`, `p2 −= RNG(engagementDistance(p1) / 3)`, phase = 1,
+return 4 — each wake walks the unit closer by a random fraction of a third of
+its range. No mover → *re-arm*. Other: cancel-all.
+
+**`Guard_NoMove`** (stationary guard). Pre-check: satisfied ∩ `0x10008` →
+phase = 3, hold (jump to the scan). Phase 0: inhibit all; deadline 30;
+advance. Phase 1: read slot 0's target as a unit and bind the record's
+smart-reference to it; if it exists and carries bit 28: goal = its position,
+release slot 0, bind slot 0 to it, p1 = 0, `p2 = RNG(3) + 3`; advance. Else
+deadline 30; hold. Phase 2: `p1 = satisfied has 0x4000 ? 0 : p1 + 1`; if
+`p1 ≤ p2` and the shot gate admits the target: gate |= `0x7008`, hold; else
+draw `RNG(100)`: below 80 → p1 = 0, advance (to the scan); else *restart*.
+Phase 3: enumerate the target registry within 640 world units of the
+record's goal for my side; a hit → pick index `RNG(count)`, bind the
+smart-reference and slot 0 to it, phase = 1, hold; none → *restart*. Other:
+cancel-all. Two draws per wake at most, three per scan.
+
+**`Standby`.** Phase 0: no mover reference → cancel-all; inhibit all; gate |=
+`0x10000`; deadline 1; advance. Phase 1: run the opportunity scan
+([R-STANCE-01 §3]: only while the fire stance is *fire at will*); a target
+found and the auto-engage issuer succeeds → complete; else gate |= `0x10000`,
+deadline `30 + RNG(30)`, hold. Other: cancel-all.
+
+**`Standby_Mine`.** As `Standby` except: phase 0 also requires state-word bit
+29 (else cancel-all); phase 1 requires the scanned target's committed mover
+mode to be **grounded** (`1`) and my own fire stance nonzero, and then spawns
+`SelfDestruct` with p1 = 1 (immediate) at the head and completes.
+
+**`Follow_Ground`** is [R-UNIT-06 §1] as corrected by [R-STANCE-01 §3]; the
+trace here agrees with every gate, the follow-radius arithmetic (both terms
+are the footprint-size words of the correction above), the one `RNG(65536)`
+draw, and the fixed 30-tick deadline. **Correction to [R-UNIT-06 §1].** Its
+branches 1, 3, and 4 say the guard "enqueues it at the queue tail",
+"tail-append[s] the new record", and "enqueue[s] help-build". All three go
+through the head insert of §1 (branch 1 through the auto-engage issuer with
+its force flag set, which bypasses the stance gates and inserts a leash-0
+attack at the head): the spawned order becomes the **front** record and the
+guard record waits behind it, resuming when it is gone. The "queued mode"
+wording for branch 1 describes the force flag, not a queued insertion.
+
+### Closed — the ground movement handlers [R-ORD-01 §4] (2026-08-29)
+
+**`Move_Ground`.** Phase 0: carried → cancel-all; caption clear; point goal
+at the record's goal with radius `(int16)payloadType + 4` — 4 for every
+interface- or AI-issued move; gate = `0xE0`; advance. Phase 1: satisfied
+`0x20` → status 6 (`Arrived`), complete; else *re-arm* (the last record
+rebinds from phase 0 after 30–59 ticks, [R-ORDER-02 §1]). Other: cancel-all.
+
+**`Patrol`.** Phase 0: dead → cancel-all; run the **patrol-chain setup**:
+walk the front segment for a record whose static-mask copy carries bit 15;
+when none does, allocate a record of this same descriptor with goal = the
+unit's current position and append it at the **tail** (the return-to-start
+waypoint); in every case set bit 15 on this record. Deadline 1; advance.
+Phase 1: clear the three slot targets; point goal at the goal with radius 0;
+deadline 15; gate = `0xE0`; advance. Phase 2: satisfied ∩ `0xE0` → phase = 1,
+*rotate*; a next patrol record exists → gate = 0, phase = 1, *wait*; else
+deadline `30 + RNG(30)`, phase = 1, return 4. Other: cancel-all. Bit 15 of
+the static-mask copy is therefore the runtime *patrol-chain member* flag,
+set only here and read only by this setup.
+
+**`RepairPatrol`.** Phase 0: with a target, goal = its position; run the
+patrol-chain setup above; advance. Phase 1: satisfied ∩ `0xE0` → *rotate*.
+Point goal at the goal radius 16; deadline 60; gate |= `0xE0`. Then, only
+when the player's energy is at least 20 % of energy storage: enumerate units
+within `sightdistance` of the unit through the repair-candidate filter, pick
+index `RNG(count)`, and when its owner is **not** hostile to mine (diplomacy
+byte nonzero) resolve command code 8 (assist or repair) against it; when
+resolvable and the issue helper accepts it → *rotate*, else *wait*. Then when
+both energy and metal are at least 20 % of their storages → hold. Otherwise
+scan features within `sightdistance` for the nearest energy-bearing and the
+nearest metal-bearing reclaimable feature (both with their values); none →
+hold. In order: a metal feature exists and metal < 20 % of storage → spawn
+`Reclaim` on it; else if no energy feature or energy ≥ 20 %: a metal feature
+whose value fits under storage → spawn `Reclaim` on it, no metal feature →
+hold, otherwise the energy feature's value does not fit → hold, else spawn
+`Reclaim` on the energy feature; else (energy feature and energy < 20 %) spawn
+`Reclaim` on the energy feature. Every spawn releases this record's payload,
+inserts the reclaim (goal = the feature position) at the head, clears this
+record's gate, and returns *wait*. Other phase: cancel-all. The player
+resource fields are identified by the pairing of the energy gate with the
+repair scan and of the metal gate with the metal-feature reclaim
+(**Supported inference** for the labels; the arithmetic is Established).
+
+### Closed — the work handlers [R-ORD-01 §5] (2026-08-29)
+
+The build family shares one pre-check pair: satisfied bit 1 (cancel-current,
+[R-ORDER-02 §2]) refreshes the builder interface and completes; for
+`MobileBuild` satisfied bit 3 (`0x8`) instead emits status 7 with
+`Construction terminated`, refreshes, and abandons. The work step every build
+handler runs is the shared helper of §3.8 / doc 05 with a quantum of
+`workertime / 30` (integer division, then float). Every handler below emits
+`StartBuilding` exactly once per pass through its in-reach phase; it is
+re-emitted only after a *restart* (code 0) sends the record back through that
+phase, which the out-of-reach arms of `ReclaimUnit`, `RepairUnit`, and
+`Capture` do after their own `StopBuilding` — this settles the "re-arms the
+emitter on later work visits" question of [R-ORDER-02 §2]: not per visit,
+only per restart.
+
+**`MobileBuild`.** p1 = product definition index, p3 = blocked-area retry
+counter. Phase 0: snap the goal X/Z onto the product footprint (§1: `cell =
+snap(goal)`, `goal = (foot + 2·cell)·2^19`); p3 = 0; rectangle goal at that
+cell with the product's footprint size; gate = `0xE0`; advance. Phase 1:
+when satisfied has `0x40`, run the reach test against the product footprint;
+out of reach → status 7 `I can't reach the construction site`, abandon.
+Then validate placement of the product footprint at the snapped cell
+(§6.4): legal → release all slots, prepare the site, create the product as a
+nanoframe (owner = mine, remaining fraction 1.0), bind it as the target;
+created → status 9 with `Starting construction`, refresh the interface,
+insert `GetBuilt` on the product in queued mode, emit `StartBuilding(bearing
+− heading)`, advance; not created → status 7 `Unable to create any more
+units`, deadline 300, hold. Illegal → p3 = 0: status 7 `Waiting for target
+area to clear`; p3 > 10: status 7 `Target area was blocked`, abandon; then
+p3 += 1, deadline 30, hold. Phase 2: `INBUILDSTANCE` wait, extra `0xA`.
+Phase 3: work step; when it did work draw the spray; stamp `tick + 300`;
+product unfinished → deadline 1, gate |= `0xA`, hold; finished → advance.
+Phase 4: status 8 with `Building complete`; complete. Other: cancel-all.
+
+**Correction to [R-ORDER-02 §1]'s retry table.** It says "each blocked
+attempt notifies *Waiting for target area to clear*". The caption is emitted
+only on the **first** blocked attempt (counter 0); attempts 1–10 are silent,
+and the eleventh over-limit visit emits *Target area was blocked*. The
+counts and the fixed 30-tick wait stand.
+
+**`HelpBuild`.** Target null → status 7 `Construction terminated`, abandon.
+Phase 0: mover and `builder` required (else cancel-all); `half = trunc(16 ·
+sqrt(FootPrintX² + 2·FootPrintZ)) / 2` (signed halving) from **my own**
+footprint — the asymmetric radicand is what retail computes; annulus goal at
+the target's position with outer `builddistance + half`, inner `half`; gate
+= `0xE8`; advance. Phase 1: satisfied `0x40` → status 7 `I can't get there`,
+abandon; target complete → complete; release all slots, emit `StartBuilding`,
+refresh; advance. Phase 2: `INBUILDSTANCE` wait, extra `0xA`. Phase 3: work
+step, spray, stamp `tick + 300`; unfinished → deadline 1, gate |= `0xA`,
+hold; else advance. Phase 4: status 8 `Building complete`; gate |= `0x2`;
+complete — the gate bit makes cleanup deliver the cancel-current wake through
+this handler, which is how the builder interface refresh runs on removal.
+
+**`RepairUnit`.** Target null → status 7 `Repairs unsuccessful.`, complete.
+Leash pre-check exactly as `Attack_Chase` (p3, anchor pair; over the leash →
+complete). Target's mover mode not grounded (`≠ 1`) → same caption,
+complete. Phase 0: mover, `builder`, target complete (else cancel-all);
+caption clear with `Repairing`; advance. Phase 1: satisfied `0x40` →
+abandon; reach test against the target; out of reach → rectangle goal on the
+target's footprint, deadline `30 + RNG(30)`, gate |= `0xE8`, hold (the phase
+stays 1, so the goal is re-issued on every wake); in reach → release all
+slots, `StartBuilding`; advance. Phase 2: `INBUILDSTANCE` wait, extra `0x8`.
+Phase 3: target health ≥ maxdamage → advance; target state-word bits 2–3 set
+→ `StopBuilding` (mid-life), deadline 15, *restart*; else stamp `tick + 150`,
+repair step (doc 05), spray on success, deadline 1, gate |= `0x8`, hold.
+Phase 4: status 10 `Unit repaired`; complete. Other: cancel-all.
+
+**`RepairUnitNoMove`.** Target null → status 7 `Repairs unsuccessful.`,
+complete. Phase 0: `builder` required (else cancel-all); target complete and
+**this unit** activated (edge bit 0) → release all slots, advance; else
+abandon. Phase 1: target health ≥ maxdamage → advance; target bits 2–3 set →
+advance; else stamp, repair step, spray, deadline 1, gate |= `0x8`, hold.
+Phase 2: status 10 `Unit repaired`; complete. Other: cancel-all.
+
+**`ReclaimUnit`.** Pre-check: target null or satisfied ∩ `0x10008` →
+complete. Phase 0: mover and `canreclamate` required — else status 7
+`Reclamation failed`, cancel-all; the reclaim-admission test (`canreclamate`
+on me, target's mover mode not airborne, target's definition **without**
+`cancapture` — commanders cannot be reclaimed) → caption clear with
+`Reclaiming`, release all slots, advance; fails → status 7 `That unit cannot
+be reclaimed` then status 7 `Reclamation failed`, abandon. Phase 1: not yet
+arrived (`0x20` absent) → rectangle goal on the target footprint, gate |=
+`0x100E8`, deadline 15, p1 = work-amount seed with k = 15, p2 = 0, hold;
+arrived → advance. Phase 2: satisfied `0x40` → *re-arm*; else `StartBuilding`,
+advance. Phase 3: `INBUILDSTANCE` wait, extra `0x10008`. Phase 4: status 11
+(`working`, no text); advance. Phase 5: reach test `dx² + dz² ≤ (builddistance
++ targetModelRadius)²` in whole units, with the target's model radius the
+whole part of the definition's `(Xextent + Zextent)/3` word, and the
+admission test again: both pass → if p2 > 14 apply p1 damage to the target
+with cause 5 and p2 = 0; stamp `tick + 900`; spray; deadline 2; p2 += 2; hold
+— one reclaim bite every 16 ticks. Either fails → deadline 15,
+`StopBuilding`, *restart*. Other: cancel-all.
+
+**`Reclaim`** (feature). Every visit: resolve the feature at the goal cell
+(the feature grid, with the parent lookup for a multi-cell feature's non-origin
+cells); none → status 7 `Reclamation failed`, abandon; feature not
+reclaimable → abandon. Phase 0: mover and `canreclamate` → rectangle goal on
+the feature's footprint (origin cell, size), gate = `0xE0`, advance; else
+cancel-all. Phase 1: satisfied `0x40` → abandon; `p1 = trunc(15 + (metal +
+energy) / 2)` from the feature definition's values (the remaining work in
+ticks); form the spray target at the footprint centre with `Y = terrain
+height there + RNG(featureHeightByte)` (the byte's TDF key is **Unknown** —
+decider: the feature parser's key list); `StartBuilding(bearing − heading)`
+toward it; advance. Phase 2: `INBUILDSTANCE` wait, extra 0. Phases 3 and 4
+share one body, phase 3 first emitting status 11 (`working`, no text) on
+every visit it stays in: deadline 2; `p1 −= 2`; p1 > 0 → stamp `tick + 300`;
+p1 > 15 → draw the spray twice to the feature box; hold. p1 ≤ 0 → advance.
+Phase 5: finish the reclaim (remove the feature and credit its values —
+doc 05); complete. Other: cancel-all.
+
+**`Resurrect`.** Phases 0–5 begin with the feature lookup of `Reclaim`
+(none → status 7 `Resurrection failed`, abandon; not reclaimable → abandon).
+Phase 0: mover and `canresurrect` → rectangle goal on the footprint, gate =
+`0xE0`, advance; else cancel-all. Phase 1: `0x40` → abandon; `StartBuilding`
+toward the same random-height centre as `Reclaim`; advance. Phase 2:
+`INBUILDSTANCE` wait, extra 0. Phase 3: copy the feature's name up to its
+first `_` and look the unit definition up by that name; found → p1 = its
+index, `p2 = trunc(0.3 · buildtime / (workertime / 30))` with the inner
+division integer (the resurrection spray ticks), status 11; advance. Not
+found → status 7 `Ressurection failed` (retail's spelling), abandon. Phase 4:
+`p2 −= 1`; when it was nonzero: spray to the feature box, stamp `tick + 300`,
+deadline 1, hold; else advance. Phase 5: create the unit (definition p1 at
+the goal, owner = mine) and bind it as the target; null → status 7 `Unable
+to create any more units`, deadline 300, hold. Re-read the feature at the
+goal; gone → abandon. Copy the corpse feature's stored heading pair into the
+new unit's heading fields, remove the feature from the grid, and (in the
+networked session mode) send the feature-removal message; set the new unit's
+remaining fraction to **0.0** and health to **1**; refresh the interface;
+advance. Phase 6: status 8 with `Resurrection complete`; resolve command
+code 8 (repair) against the new unit and, when resolvable, spawn it at the
+head; complete. Other: cancel-all. A resurrected unit is therefore complete
+but at 1 health, and the resurrector immediately starts repairing it.
+
+**`Capture`.** Pre-check: target null or satisfied ∩ `0x10008` → status 7
+`Capture failed`, abandon. Phase 0: mover and `cancapture` (else
+cancel-all); target's definition has `cancapture` → status 7 `That unit
+cannot be captured`, abandon; target unfinished → status 7 `That unit is a
+cloud of vapor and cannot be captured`, abandon; caption clear with
+`Capturing`; the capture budget `p2 = trunc(0.015 · buildcostenergy +
+(30/140) · buildcostmetal + 150)` from the target definition, clamped to
+1800, then `p2 = p2 · (targetHealth + maxdamage) / (2 · maxdamage)`, then
+`p2 = ((targetExperience / 5 + 10) · p2 · 10) / 100`, all integer; release
+all slots; rectangle goal on the target footprint; gate = `0x100E8`; advance.
+Phase 1: `0x40` → abandon (no caption); reach test; in reach →
+`StartBuilding`, advance; else *restart*. Phase 2: `INBUILDSTANCE` wait,
+extra `0x10008`. Phase 3: status 11; advance. Phase 4: target has a mover and
+state bits 2–3 set → `StopBuilding`, deadline 30, *restart*; p1 < p2 → spray,
+stamp `tick + 900`, `p1 += 2`, deadline 2, hold; else advance. Phase 5:
+transfer the target to my player (doc 05 owns the transfer), status 16
+(`capture`); complete. Other: cancel-all. No resource cost and no decay
+(doc 05).
+
+**`BuildingBuild`** is the factory machine of §3.8 [R-P0-09]; the trace
+agrees with it. Per visit: satisfied bit 3 → status 7 `Construction stopped`,
+p2 −= 1, refresh, *restart*; satisfied bit 1 → the cancel-current refund and
+cause-9 kill of §3.3 (skipped when no product is bound), lower edge bits 0
+and 3 together, refresh, complete. Phase 0:
+clear the smart-reference; state bit 29 required (else cancel-all); p2 > 0 →
+raise edge bit 0, advance; else lower it, complete. Phase 1: `INBUILDSTANCE`
+wait, extra `0x2`. Phase 2: `QueryBuildInfo` (cell 0 seeded −1) → exit
+transform → goal; snap to the product footprint; validate with my mover
+mode as the medium argument; illegal → deadline 15, gate |= `0x2`, hold;
+create the nanoframe at the goal; created → status 9 `Starting
+construction`, attach it as cargo-style carried product, copy my standing
+bits 18–21 onto it, insert `GetBuilt` queued, raise edge bit 3
+(`StartBuilding`), refresh, advance; else status 7 `Unable to create any
+more units`, deadline 300, gate |= `0x2`, hold. Phase 3: with a target, work
+step (spray on success); finished → advance; else deadline 1, gate |= `0xA`,
+hold; without a target → cancel-all. Phase 4: status 8 (default text
+`Nanolathe Complete`), lower edge bit 3 (`StopBuilding`), the completion
+transition, clear the reference, p2 −= 1, refresh, *restart*.
+
+**`BuildWeapon`** is doc 05 "Stockpile production"; the trace agrees with
+it. p1 = weapon slot, p2 = remaining count, p3 = progress. Phase 0: p2
+< 1 → complete; the slot's stock byte > 199 → deadline 300, hold; p3 = 0;
+advance. Phase 1: `new = min(p3 + 5, total)` where `total` is the weapon's
+compiled reload-time value; admit `trunc(new·metal/total) −
+trunc(p3·metal/total)` and the same for energy (the weapon's per-shot
+costs); refused → deadline 10, hold; else p3 = new; new < total → deadline 5,
+hold; else advance. Phase 2: stock byte += 1, p2 −= 1, refresh; *restart*.
+Other: cancel-all. No draw anywhere.
+
+**`GetBuilt`** is §3.8 [R-P0-09]; the trace agrees with its 300/30/wake
+states and the rally walk (`QMove`/`QPatrol` records copied in order,
+`PARK` when none; the walk and the standing-bit copy run only when the
+product has a mover reference and a builder reference). Two details the
+earlier text did not have: **(a)** phase 2's wake bit `0x8000` has **no
+located producer** in the bounded set (no direct writer, and the only two
+indirect raisers pass `0x8` and `0x10000`); the phase is instead driven by
+its own deadline — on expiry with `0x8000` absent it sets deadline **11** and
+applies the shared work step with a **negative** quantum, `−(11 · buildtime /
+buildcostenergy)`, i.e. the nanoframe **decays** by `11 / buildcostenergy`
+of its remaining fraction every 11 ticks, with the refund arithmetic of doc
+05 (the work helper's negative arm). **Unknown:** what suppresses this decay
+while a builder is working — a producer of `0x8000` that the bounded trace
+did not find, or nothing (in which case decay competes with construction).
+*Decider:* trace the work helper's callers for a wake into the product's
+`GetBuilt` record, or measure a timed build against the formula. **(b)** the
+standing-bit copy runs only under the double bit-28 / bit-14 guard of §3.8
+and copies the experience word only for a computer-owned builder.
+
+### Closed — two gate-bit producers, located [R-ORD-01 §6] (2026-08-29)
+
+[R-UNIT-06 §1] and [R-ORD-01 §0] left the producers of pending bits `0x8`,
+`0x10`, and `0x10000` unlocated. Two of the three are found:
+
+* **`0x8` — target removed.** A record's target smart-reference is a small
+  header whose first method raises bits into the record's pending word. When
+  a unit is destroyed, the removal path walks every reference registered on
+  that unit and calls the method with `0x8`, then unlinks the reference. This
+  is why the attack, guard, work, and wait pre-checks all treat `0x8` as
+  "target lost".
+* **`0x10000` — target cloaked.** The unit edge machine's bit 2 is the cloak
+  state: on its rising edge it emits status 14 (`Cloaked`) and calls the same
+  method with `0x10000` on every reference registered on the cloaking unit;
+  on its falling edge it emits status 15 (`Visible`). A record whose target
+  cloaks therefore wakes with `0x10000`, and the pump's three unconditional
+  slot clears ([R-ORDER-02 §2]) run for it. The *unit capability word* term of
+  §3.3 step 2 is a separate field; its bit-16 writer remains **Unknown**
+  (decider: static trace of that word's writers).
+* **`0x10`** has no located producer: the two raisers above pass only `0x8`
+  and `0x10000`, and no direct write of the pending word with bit 4 exists in
+  the bounded set. The guards' `0x18` gate is therefore satisfied in practice
+  only by `0x8` and by their own deadlines. **Unknown** whether any path
+  raises it; *decider:* enumerate every call through the reference header's
+  first method (an indirect-call census, not a constant grep).
 
 ## 4. COB loader, VM, threads, and script timing
 
@@ -7470,23 +8120,31 @@ replacement bullet is needed because the ground path has no vertical term.
 - The standoff value bound by the attack-chase orbit substates; it is produced
   by the weapon-slot engagement-distance helper and remains inference · §8.3,
   doc 06 · static trace.
-- Producers of the guard re-arm gate bits `0x08` / `0x10`, the producer pair
-  behind the pump's satisfied-bit-`0x10000` weapon-slot clear, and the
-  semantic name of the weapon-slot control byte's bit 4 · §3.3,
-  [R-UNIT-06 §1] · static trace. One unlocated-writer family.
+- Producer of pending bit `0x10` (the second guard re-arm bit; `0x8` and
+  `0x10000` are located in [R-ORD-01 §6]), the writer of bit 16 in the unit
+  capability word, and the semantic name of the weapon-slot control byte's
+  bit 4 · §3.3, [R-ORD-01 §6] · indirect-call census through the target
+  reference header's first method.
+- Producer of `GetBuilt`'s wake bit `0x8000`, and therefore whether the
+  11-tick nanoframe decay of [R-ORD-01 §5] runs while a builder is working
+  · [R-ORD-01 §5], doc 05 · static trace of the work helper's callers, or a
+  timed build measured against the formula.
+- The five VTOL work twins — `VTOL_HelpBuild`, `VTOL_RepairPatrol`,
+  `VTOL_RepairUnit`, `VTOL_Reclaim`, `VTOL_ReclaimUnit` — have no per-visit
+  contract yet; [R-ORD-01 §0] records only the gates they arm
+  (`0x100E8` / `0x10008`) · §3.9, §10.3 · direct trace of the five bodies
+  against their ground twins in [R-ORD-01 §5].
+- `SelfDestruct` with a `selfdestructcountdown` of 6 or 7 indexes past the
+  six-entry countdown caption table · [R-ORD-01 §2] · the FBI parser's clamp
+  on the 3-bit field.
+- The TDF key behind the feature definition byte that bounds the reclaim and
+  resurrect spray height draw · [R-ORD-01 §5] · the feature parser's key list.
 - Producer that sets a unit's engagement-target link — the ward-side reference
   both guard handlers attack toward · [R-UNIT-06 §1] · static trace. Not found
   in the bounded decompiled set or by instruction-pattern scan.
 - Whether the route-release event fires for a route that was never published
   (unreachable goal as rebind loop versus silent stall) · [R-ORDER-02 §1] ·
   static trace of the movement wrapper's per-tick release-callback states.
-- Whether retail re-arms the nanolathe/assist `StartBuilding` emitter on later
-  work visits; Nanolathe emits once per record activation
-  · [R-ORDER-02 §2] · static trace of one handler's per-visit control flow
-  (Reclaim is the cheapest — a cadence machine visiting every two ticks).
-- A friendly semantic name for the `StartBuilding` first-argument value that
-  49 stock scripts consume as a build-heading angle · [R-UNIT-06 §4] · static
-  trace.
 - Meaning of the unit state word's low two bits, which `Standby_Mine` compares
   against `1` on the scanned target before it self-destructs · §2.4,
   [R-STANCE-01 §3] · static trace of the writers of those two bits.

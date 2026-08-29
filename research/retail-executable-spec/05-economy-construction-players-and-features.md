@@ -790,24 +790,153 @@ completion gate and the non-positive carry gates exactly as `+0.0` does.
 
 ### Completed-unit eligibility
 
-Passive production and storage contribution require the unit to be alive and
-complete. A remaining construction fraction of zero is the direct completion
-gate used by the economy pass.
+There are exactly **three** predicates in the settlement's per-unit path, and
+nothing else gates a contribution:
 
-Operational and activation flags further gate active use and generator paths.
-Transported, dead, disabled, or otherwise ineligible units are skipped or
-handled by their relevant state branch.
+1. **Visit gate (Established).** The unit's status word carries the alive bit.
+   That is the *only* test before the branch selection. There is no
+   transported test, no disabled test, no paralyzed test and no under-attack
+   test anywhere in the pass. *Correction:* the previous text said
+   "Transported, dead, disabled, or otherwise ineligible units are skipped or
+   handled by their relevant state branch." That was wrong. A transported
+   metal maker, a paralyzed solar plant, and a unit in any other non-fatal
+   state all keep contributing for as long as the alive bit stands; only the
+   alive bit, the branch bit, the activated bit and the remaining fraction are
+   read.
+2. **Branch gate (Established).** The building/mobile branch is chosen by the
+   spawn-time `bmcode`-is-zero status bit, and the chosen branch additionally
+   requires the **activated** bit (buildings) or the activated bit **or**
+   non-zero movement-mode bits (mobile units). This gates upkeep, the refund
+   arm and all four generators — never the passive block. [R-ECO-01 §2] owns
+   the branch bodies.
+3. **Completion gate (Established).** The passive-make and storage block runs
+   for every alive unit, on either branch and whatever its activated bit,
+   when its remaining construction fraction **compares equal to zero**. The
+   comparison is a floating-point equality, so `-0.0` passes and a NaN
+   fraction fails.
+
+So a nanoframe (remaining fraction `1` down to any value above zero) produces
+no `energymake`/`metalmake` and adds no storage capacity, while an *activated*
+building nanoframe whose definition authors `windgenerator` **does** contribute
+wind energy, because the generator chain hangs off the branch gate and not the
+completion gate. That asymmetry is retail behavior, not an imprecision here.
+
+#### R-PROD-01 §1 — The economy fields: widths, defaults, and the reader census [R-PROD-01] (2026-08-29)
+
+**Established — parse widths and defaults.** The unit-definition parser reads
+these keys once, in this order, from the FBI `UNITINFO` section (`[fmt fbi]`
+owns the file grammar, `[02 §5]` the typed-read helpers — the integer reader
+is a C `atoi` and the float reader a C `atof`, each returning the stated
+default when the key is absent):
+
+| Key | Reader | Default | Stored as |
+|---|---|---|---|
+| `energymake` | float | `0.0` | single precision |
+| `energyuse` | float | `0.0` | single precision |
+| `metalmake` | float | `0.0` | single precision |
+| `extractsmetal` | float | `0.0` | single precision |
+| `makesmetal` | **integer** | `0` | **one byte** — the parsed integer is truncated to eight bits, so an authored `256` stores `0` and an authored `-1` stores `255` |
+| `windgenerator` | float | `0.0` | single precision |
+| `tidalgenerator` | float | `0.0` | single precision |
+| `energystorage` | float | `0.0` | single precision |
+| `metalstorage` | float | `0.0` | single precision |
+| `cloakcost` | **integer** | `0` | converted to single precision |
+| `cloakcostmoving` | **integer** | **the value just parsed for `cloakcost`** | converted to single precision |
+
+The `cloakcostmoving` default is neither zero nor a constant: the parser
+converts the freshly parsed `cloakcost` to floating point, stores it, converts
+it **back** to an integer through the truncating conversion helper, and passes
+that as the default. A definition authoring `cloakcost=25` and omitting
+`cloakcostmoving` pays 25 while moving too. Because both cloak keys use the
+integer reader, no fraction can reach the settlement's own truncation
+([R-ECO-01 §9]), which is therefore idempotent on any FBI-authored value.
+
+**Established (bounded negative) — `solarstrength` has no reader, and no
+string.** The OTA key `solarstrength` is authored by every retail map. The
+retail image contains **no defined string with that text at all**, so nothing
+can look it up: it is not merely unread, it is unparseable by the shipped
+executable. A solar collector's output is entirely its own `energymake`, and a
+map cannot scale it. The bound is the complete defined-string table plus the
+complete decompiled function set; decider for any reversal is a static trace
+over the regions the export still misses. `[fmt ota]` carries the same finding
+on the format side.
+
+**Established — the gameplay reader census.** Each field was searched across
+the complete decompiled function set. Hits inside the debug text overlay, the
+frame-rate performance block and the DirectDraw cursor blitter are different
+structures at coincident positions and are excluded.
+
+| Field | Gameplay readers |
+|---|---|
+| `energymake`, `metalmake`, `energystorage`, `metalstorage`, `cloakcost`, `cloakcostmoving` | the settlement pass, and nothing else |
+| `energyuse` | the settlement pass; the computer player's net-energy query (below) |
+| `windgenerator` | the settlement pass; the wind-generator script notifier ([R-PROD-01 §3]); the net-energy query; the computer player's build-desirability table |
+| `tidalgenerator` | the settlement pass; the net-energy query |
+| `makesmetal` | the settlement pass; the computer player's metal-maker on/off task; the build-desirability table |
+| `extractsmetal` | the creation-time extraction sampler ([R-PROD-01 §6]); the computer player's extractor placement. **The settlement never reads it** — it reads the rate the creator sampled |
+| the unit's sampled extraction rate | the settlement pass only |
+
+**Established — the computer player's net-energy query.** One shared helper
+answers "what does this definition do to energy". Its result is a signed
+per-settlement-pass rate, positive for consumption:
+
+```
+if (definition.energyuse != 0.0)     return definition.energyuse;
+if (definition.windgenerator > 0.0)  return -(currentWindScalar * definition.windgenerator);
+if (definition.tidalgenerator > 0.0) return -(mapTidalStrength  * definition.tidalgenerator);
+return 0.0;
+```
+
+The first test is inequality against zero, not a sign test, so a definition
+authoring a **negative** `energyuse` short-circuits and its generator terms are
+never reached by this query — while the settlement, which tests the sign, pays
+them anyway. Both callers are computer-player code; doc 08 owns what they do
+with the answer.
+
+#### R-PROD-01 §2 — The activated bit's writers, and what `onoffable` gates [R-PROD-01] (2026-08-29)
+
+Which bit sets the activated bit is authored, and it is worth stating because
+every generator except passive make depends on it (Established):
+
+* the definition's `activatewhenbuilt` flag makes the completion path — and
+  the pre-built creation path — set operational bit 0 immediately; a unit
+  without it is created inactive;
+* the `Activate` and `Deactivate` order handlers set and clear that bit
+  through the transition service of [R-ECO-01 §8], but **each first tests the
+  definition's `onoffable` flag and does nothing without it** (both handlers
+  still report the order complete, so a non-`onoffable` unit silently accepts
+  and discards the order);
+* the COB `ACTIVATION` port and the order handlers of doc 04 write the same
+  bit; that wider writer set is doc 04's (§4.4, §4.7).
+
+`onoffable` therefore gates *toggling*, not producing: a definition that omits
+it and omits `activatewhenbuilt` never activates and never runs any generator,
+and a definition that omits it but authors `activatewhenbuilt` runs its
+generators forever.
+
+**Established — `energyuse` and `metalmake`/`energymake` on a switched-off
+unit.** Because upkeep and all four generators hang off the branch gate and
+the passive block off the completion gate, deactivating an `onoffable` unit
+stops its `energyuse` charge, its extraction, its maker output and its wind or
+tidal output in the same pass, and leaves its `energymake`, `metalmake`,
+`energystorage` and `metalstorage` untouched. A metal maker switched off
+therefore costs nothing and makes nothing; a solar collector switched off
+still makes its full `energymake`, so `onoffable` on a pure passive producer is
+a script-side affordance with no economic effect.
 
 ### Passive energy and metal
 
-A completed eligible unit adds its definition's passive energy and passive
-metal values to its per-pass production buckets. These authored values enter
-the ledger as direct per-settlement-pass deltas, delivered once per
-settlement pass — once per ~30 ticks per player under ordinary play. The
-retail path neither divides nor multiplies ordinary production and use values
-by thirty. When the owner is in the special second state, both passive
-contributions are additionally scaled by the state-2 selector discount
-(above).
+A unit that passes the completion gate adds its definition's `energymake` to
+its own energy-production accumulator and its `metalmake` to its own
+metal-production accumulator, **energy first**, each through the difficulty
+discount of [R-ECO-01 §3] when the owner is a computer player. Neither add is
+gated on the activated bit, on the branch bit, or on the maker-stall rule, and
+`onoffable` has no effect on either: switching a solar collector off does not
+stop its `energymake`.
+
+These authored values are amounts **per settlement pass**, delivered once per
+pass — once per ~30 ticks per player under ordinary play. The retail path
+neither divides nor multiplies ordinary production and use values by thirty.
 
 Negative authored energy use takes a distinct refund/production path. Special
 player states can apply one of two executable-defined discounts through a
@@ -816,58 +945,288 @@ selector value 1 credits seven tenths of it (the engine multiplies the
 negated amount by a negative half or seven-tenths double and subtracts the
 product, so production grows by the scaled credit; an earlier revision that
 described the special modes as subtracting the scaled amount was wrong at
-byte level). The user-facing identity of those player modes remains open
-(state 2 is the computer-policy state per the AI-manager gate inference;
-states 1 and 3 remain unnamed), so a clean-room implementation should
-isolate that adjustment behind a compatibility rule.
+byte level). Both halves of that rule are now named — the special state is the
+computer player and the selector is the difficulty word — in [R-ECO-01 §3];
+the previous sentence here, which said "the user-facing identity of those
+player modes remains open (state 2 is the computer-policy state per the
+AI-manager gate inference)", is superseded by that closure. Control-byte
+values 1 and 3 remain unnamed.
 
 ### Wind generation
 
-The battle holds a current wind strength, a 16-bit wind direction, and a
-normalized scalar. An eligible wind generator contributes:
+The battle holds five wind values, all global and all written only by the wind
+phase: an integer **speed**, a 16-bit **heading**, an X and a Z **vector word**
+(`[R-WIND-01]` owns those two), a single-precision **scalar**, and an integer
+**changed flag**. A sixth value, the scalar's **divisor**, is written once.
+The generator contract is one multiply:
 
-`energy production = current wind scalar × unit wind multiplier`
+```
+energy production += currentWindScalar × definition.windgenerator
+```
 
-The wind-generator output is subject to the state-2 selector discount when
-the owning player is in the special second state. The generation contract is
-closed. At battle setup the briefing seeds strength
-as `CRT() % (max-min+1) + min` and a six-bit direction as `CRT() & 0x3f`.
-The next update is scheduled from another CRT draw as
-`((CRT() * 10) / 0x8000 + 5) * 30` ticks ahead — **150 to 420 ticks**, about five
-to fourteen seconds. At the change, new strength is
-`simRand(maxWind-minWind)+minWind` and the new direction, when strength is
-nonzero, is `simRand(0x10000)` over the full 16-bit angle domain. The change
-takes effect instantly (there is no interpolation), the world X/Z wind vectors
-are recomputed from direction and strength, and the normalized scalar fed to generators is
-strength divided by a fixed 5000 denominator clamped to one. Wind-generator
-units receive `SetDirection`/`SetSpeed` script notifications only on change
-ticks — a burst of callbacks to every wind generator, not continuous polling —
-and the build-assist bonus is disabled when maximum wind is below half its
-denominator. A per-tick jitter phase also nudges particle drift with the same
-field; that consumer is presentation-side.
+formed as one multiply and one add at the working precision of
+[R-ECO-01 §1], through the difficulty discount of [R-ECO-01 §3] when the owner
+is a computer player, and reached only through the strict generator chain of
+[R-ECO-01 §2] — a definition that also authors `extractsmetal` or a non-zero
+`makesmetal` never reaches it. It is **not** gated on the unit's own energy
+admission; only extraction and the metal maker are.
+
+#### R-PROD-01 §3 — The wind phase, its draws, and the generator notification [R-PROD-01] (2026-08-29)
+
+**Established — cadence and the change detector.** The wind phase runs once
+per tick from the phase dispatcher, **after** the unit sweep and after the
+economy phase in the authoritative order of [04 §1.1]. It is a change
+detector, not an updater:
+
+```
+if (windNextChangeTick >= globalTick) {      // unsigned compare; due only when strictly less
+    windChangedFlag = 0
+    return                                    // no draws, nothing else written
+}
+```
+
+Two consequences an implementation must keep. First, the settlement of tick
+*N* reads the scalar published by tick *N−1*'s wind phase, because the economy
+phase precedes the wind phase inside a tick. Second, the unit sweep of tick *N*
+observes the flag the wind phase of tick *N−1* wrote, so a re-roll on tick *N*
+makes every wind generator issue its script pair exactly once during tick
+*N+1*'s sweep, and tick *N+2* clears the flag again.
+
+**Established — the change body, in order, with the draws.** When the deadline
+is due, in exactly this sequence:
+
+1. **Reschedule.** One draw from the **CRT** stream, then
+   `windNextChangeTick += ((crtDraw × 10) / 0x8000 + 5) × 30`. The multiply
+   and divide are signed 64-bit. `crtDraw` is `0 … 0x7fff`, so the quotient is
+   `0 … 9` and the interval is **150 to 420 ticks** — five to fourteen seconds,
+   quantized to 30-tick units.
+2. **Speed.** `windSpeed = minWindSpeed + simRandom(maxWindSpeed − minWindSpeed)`,
+   one draw from the **simulation** stream — but the bounded draw returns zero
+   *without advancing the stream* when its bound is less than two (signed), so
+   a map with `maxwindspeed − minwindspeed ≤ 1`, or an inverted pair, consumes
+   **no simulation draw** and pins the speed at `minWindSpeed`. Doc 01 §7.3's
+   census, which lists this as one draw unconditionally, should carry the
+   exception.
+3. **Heading**, only when the new speed is non-zero: `windHeading =
+   simRandom(65536)`, a second simulation draw, stored into a 16-bit field —
+   the full `0 … 65535` angle domain of [04 §2]. When the speed is zero the
+   previous heading survives unchanged and no draw is taken.
+4. **Vectors.** The X and Z words are recomputed from speed and heading as
+   `−2 ×` the rounded fixed-point sine and cosine; `[R-WIND-01]` owns the axis
+   assignment and the table.
+5. **Scalar.** `windScalar = float32( windSpeed ÷ windDivisor )`, computed as
+   an x87 divide with a 32-bit **integer** divisor operand at the working
+   precision of [R-ECO-01 §1] and narrowed only by the store. Then, and only
+   when the stored single is **strictly greater** than `1.0` (compared against
+   a `1.0` double), the field is overwritten with the bit pattern for `1.0`.
+   The divisor is a compiled-in **5000**, written once at battle entry
+   immediately before the deadline is zeroed; it is not authored and no map
+   can change it.
+6. **Flag.** `windChangedFlag = 1`.
+
+The change takes effect instantly — there is no interpolation and no ramp.
+
+**Established — battle entry consumes no draws.** Battle entry writes the
+divisor, zeroes the deadline, and calls the wind phase directly; the global
+tick is still zero, so `0 >= 0` fails the strict due test and the phase returns
+after clearing the flag. The first real re-roll is the first sub-tick.
+*Correction:* the previous text here said "At battle setup the briefing seeds
+strength as `CRT() % (max-min+1) + min` and a six-bit direction as
+`CRT() & 0x3f`." Those two CRT draws are real, but they are **briefing-screen
+display state** with no battle-side reader; [01 §7.3] retracted the battle
+reading and doc 08's "Wind initialization" scopes them to the front end. The
+battle's initial wind is drawn by the change body above, on the first tick.
+
+**Established — where `minWindSpeed` and `maxWindSpeed` come from.** Both are
+integers written once when the map and mission are applied, each by the same
+rule, independently of the other:
+
+```
+minWindSpeed = (mission.minwindspeed >= 0 && terrainVersion is canonical) ? mission.minwindspeed : fallbackMin
+maxWindSpeed = (mission.maxwindspeed >= 0 && terrainVersion is canonical) ? mission.maxwindspeed : fallbackMax
+```
+
+The mission fields are the OTA keys read by the integer reader with a parse
+default of `0` inside their section and a construction-time sentinel of `−1`
+that survives when the section is never reached ([fmt ota]). The fallback pair
+depends on the terrain version: for the **canonical** version it is the
+compiled constants **100** and **2000**; for the **legacy** version it is two
+words of the legacy terrain header, and the legacy version *always* takes the
+header pair because the version test fails before the OTA value is consulted.
+So an OTA `maxwindspeed=0` on a canonical map is honored as zero (the speed
+roll then pins at `minWindSpeed`, with no simulation draw), while an absent
+settings section yields `100 … 2000`. The header word positions for the legacy
+version are a format finding for `[fmt tnt]` (lane 02); their *meaning* —
+wind range — is established here.
+
+**Supported inference — the heading before the first non-zero roll.** The
+heading, speed, and changed-flag globals have no writer outside the wind
+phase, and the phase writes the heading only on a non-zero speed roll. On a map
+whose first roll lands speed zero, the `SetDirection` argument is whatever the
+global held after allocation. The inference is that it is zero because the
+global block is freshly allocated; the open branch is the block allocator's
+zeroing, and a static trace of that allocator settles it. It is unobservable in
+energy terms (a zero speed yields a zero scalar), only in script arguments.
+
+**Established — the script notification.** During the unit sweep, a unit whose
+definition has `windgenerator > 0.0` **and** for which the global changed flag
+is non-zero starts two deferred script calls back to back:
+
+* `SetDirection` with the global wind heading, zero-extended from 16 bits into
+  the argument word (so `0 … 65535`, never negative);
+* `SetSpeed` with the global wind **speed shifted left by four** — that is,
+  sixteen times the integer speed, not the scalar and not the vector.
+
+Neither is issued on a non-change tick, and the producer has **no null-VM
+guard**: a scriptless definition authoring `windgenerator` faults, the residual
+[04 R-COB-01 §1] records. [04 R-CB-01 §5] owns the callback contract; this
+section owns only the energy arithmetic and the phase.
+
+**Correction — there is no "build-assist bonus".** The previous text ended
+"the build-assist bonus is disabled when maximum wind is below half its
+denominator". There is no such bonus anywhere in the economy. The behavior
+that sentence garbled is a **computer-player** one: the per-definition
+build-desirability table the AI builds zeroes a definition's score when it
+authors a non-zero `windgenerator` and the map's `maxwindspeed` is below the
+divisor divided by two (a signed integer divide of the compiled 5000, so
+`2500`). It suppresses *building* wind generators on low-wind maps; it changes
+no energy. Doc 08 owns the table.
+
+The wind vector words also drive presentation drift (smoke, fire spread); those
+consumers are doc 03's, under [R-WIND-01].
 
 ### Tidal generation
 
 An eligible tidal generator contributes:
 
-`energy production = map tidal strength × unit tidal multiplier`
+```
+energy production += mapTidalStrength × definition.tidalgenerator
+```
 
-Tidal strength is loaded for the battle and does not use the current wind
-scalar. The tidal output is subject to the state-2 selector discount when the
-owning player is in the special second state.
+one multiply and one add at the working precision of [R-ECO-01 §1], through
+the difficulty discount of [R-ECO-01 §3] for a computer player, reached only
+as the **last** arm of the generator chain of [R-ECO-01 §2] — a definition
+that authors `extractsmetal`, a non-zero `makesmetal`, or `windgenerator > 0`
+never reaches its `tidalgenerator`. Like wind, it is not gated on the unit's
+own energy admission.
+
+#### R-PROD-01 §4 — Where tidal strength comes from, and the absent water gate [R-PROD-01] (2026-08-29)
+
+**Established — the value.** `mapTidalStrength` is one global single-precision
+value written once, when the map and mission are applied:
+
+```
+mapTidalStrength = (mission.tidalstrength < 0.0) ? 0.5 : mission.tidalstrength
+```
+
+The comparison is a strict signed float compare against zero, so `0.0` is
+taken as authored and yields **zero tidal energy**, not the fallback. The
+`0.5` fallback is reachable only two ways: the map authors a negative value,
+or the mission object never reaches the OTA section that parses the key, in
+which case its construction-time sentinel of `−1.0` survives. The parse
+default within that section is `0.0` ([fmt ota]). Unlike wind and gravity, the
+tidal value has **no terrain-file fallback** and no version test — the legacy
+and canonical terrain versions take the same path.
+
+**Established (bounded negative) — there is no sea-level, water, or terrain
+gate.** The whole reader census for `tidalgenerator` and for the global tidal
+strength is the settlement's generator chain plus the computer player's
+net-energy query. Neither consults sea level, the cell's water flag, the
+unit's height, or any terrain attribute. A tidal plant placed on dry land by a
+mission or by a map editor produces exactly as much as one in the sea. If
+retail refuses to *place* one on land, that refusal lives in the construction
+placement rules and the definition's own footprint/`bmcode`, not here. Bound:
+the complete decompiled function set; decider for any reversal is a static
+trace over the regions the export still misses.
+
+**Established — related keys the same load path writes.** The same settings
+block, read in one pass, also supplies `minwindspeed`, `maxwindspeed` and
+`gravity`; the wind pair and the gravity value take a version-dependent
+fallback that tidal strength does not — the OTA value wins only when it is
+non-negative *and* the terrain file is the canonical version; otherwise the
+wind pair falls back to `100 … 2000` on a canonical map and to the legacy
+header's own words on a legacy map ([R-PROD-01 §3]), and gravity falls back to
+the legacy header's value or, when that is zero, to the compiled `0x1FDB`
+([R-AIR-01], [03 §2.2]). [03 §2.2]
+lists the tidal fallback beside the gravity one; the two are not parallel —
+gravity's fallback is reached when neither source supplies a value, while the
+tidal fallback is reached only on a negative or never-parsed value, with no
+version test at all.
 
 ### Constant metal makers
 
-The constant metal-maker field is stored as a byte. When it is enabled and
-the unit passes its active-state gates, the economy path converts the byte to
-a floating-point value and contributes that value to metal production (the
-contributing maker's output is subject to the state-2 selector discount and
-to the stall gate). A
-stored value of one therefore contributes one unit of metal per settlement
-pass (once per ~30 ticks per player under ordinary play). Energy consumption
-is a separate authored active-use demand;
-the maker's metal output and energy admission must therefore be evaluated as
-two coupled pieces of unit state rather than as an invented conversion ratio.
+`makesmetal` is stored as one **byte** ([R-PROD-01 §1]). The generator chain's
+second arm tests that byte for **non-zero** — not for a positive float, not for
+a specific value — and, when the unit's own energy demand was admitted this
+pass, converts the byte's numeric value from an unsigned integer to floating
+point and adds it to metal production, through the difficulty discount of
+[R-ECO-01 §3]:
+
+```
+if (definition.makesmetal != 0 && admitted)
+    metal production += (float)(unsigned byte)definition.makesmetal
+```
+
+So `makesmetal=1` contributes one metal per settlement pass — once per ~30
+ticks per player under ordinary play — and `makesmetal=8` contributes eight.
+An earlier revision read this as "a literal one"; [R-ECO-01 §2] records the
+correction. The byte truncation at parse time is the only bound: an authored
+`300` stores `44`.
+
+The arm is reached only when `extractsmetal` is not positive; a definition
+authoring both makes metal only through extraction ([R-ECO-01 §2]).
+
+Energy consumption is a separate authored active-use demand (`energyuse`), and
+the two are coupled through the stall rule below rather than through any
+conversion ratio. The engine has no metal-per-energy constant.
+
+#### R-PROD-01 §5 — Upkeep timing, the maker byte, and the absent `metaluse` key [R-PROD-01] (2026-08-29)
+
+**Established — when `energyuse` is charged.** There is no per-tick upkeep.
+`energyuse` is read exactly once per settlement pass of the owning player —
+at the player's own deadline, once per ~30 ticks under ordinary play, in the
+stable unit-slot order of [R-ECO-01 §2] — and only for a unit on its branch
+gate: an activated building, or a mobile unit that is activated **or** has
+non-zero movement-mode bits. The amount is added to the unit's energy
+*requested* accumulator, and to its *accepted* accumulator only when its energy
+carry is not positive; the arithmetic, the negative-`energyuse` refund arm, and
+the carry semantics are [R-ECO-01 §2]'s and [05 "Resource admission and
+carry"]'s. Nothing is prorated: a unit that is activated for one tick of a
+thirty-tick window pays the whole `energyuse` if it happens to be activated on
+the deadline tick, and nothing if it is not. The same is true of every producer
+in this section — `energymake`, `metalmake`, wind, tidal, maker and extraction
+are all sampled at the deadline tick and never integrated across the window.
+
+**Established (bounded negative) — there is no `metaluse`.** The retail image
+contains no defined string `metaluse` (the only string of that shape is a GUI
+gadget name), the unit-definition parser reads no such key, and the settlement
+has no metal-upkeep arm: the only per-unit metal *demand* the settlement knows
+is construction's, and a unit's own definition cannot author a standing metal
+drain. A negative `metalmake` is the only authored way to make a unit consume
+metal each pass, and it is charged through the passive block (completion gate,
+no branch gate, discounted for a computer player — see [R-ECO-01 §5] for how a
+negative production term settles). Bound: the complete defined-string table
+plus the complete decompiled function set.
+
+**Established — the maker byte is the whole selector.** The generator chain's
+second arm tests the `makesmetal` byte for non-zero only ([R-ECO-01 §2]).
+`makesmetal=1` and `makesmetal=200` differ only in the amount added; neither
+has a different gate, and an authored `256` — which stores `0` — makes the
+definition fall through to the wind and tidal arms as if the key were absent.
+
+**Established — the computer player toggles makers, and it is the only
+automatic toggler.** No engine path switches a metal maker on or off for
+economic reasons. The computer player's economy task does, once every 30 ticks,
+for each alive building it owns whose `makesmetal` byte is non-zero: it clears
+the activated bit when the owner's live **energy stock is at most twice its
+live metal stock**, and otherwise, when the owner's last completed pass had a
+positive net energy (archived produced minus archived requested) **and** a
+simulation draw `random(5)` is non-zero — a four-in-five chance, one draw per
+candidate on that arm only — it sets the activated bit. Both writes go through
+the transition service of [R-ECO-01 §8], so they raise `Activate`/`Deactivate`.
+Doc 08 owns the task; it is recorded here because it is the only automatic
+writer of a maker's activation and because it consumes a simulation draw
+inside a per-30-tick pass.
 
 **Established — the maker stall rule.** A metal maker or an extractor
 contributes nothing for a settlement pass when the owning unit's energy carry
@@ -881,60 +1240,129 @@ the maker stalled across passes, so metal production drops to passive
 
 ### Terrain metal extraction
 
-Terrain attribute cells carry an unsigned metal byte. When the mission
-provides a uniform surface-metal value, map loading initializes the cell metal
-field from it. There is **no per-cell metal raster** in retail: the loader
-copies the uniform scalar into every cell's seed byte and never allocates a
-varying per-cell source (bounded negative over the loader and the shipped
-171-map corpus, whose per-attribute unknown byte is uniformly zero and is not
-read as metal). The only per-cell nuance is the legacy TNT format, whose
-per-attribute byte feeds the same seed field.
+Every plot cell carries one **unsigned metal byte**. Extraction reads it once,
+when the extractor is created, and never again.
 
-When a metal-extracting unit is placed, the engine samples every cell in its
-footprint. For each cell it adds one to the unsigned metal byte before adding
-it to the footprint sum. The placement-time result is:
+#### R-PROD-01 §6 — Seeding the metal byte, sampling the footprint, and the accumulator [R-PROD-01] (2026-08-29)
 
-`sampled metal = extracts-metal multiplier × Σ(cell metal byte + 1)`
+**Established — where the byte comes from.** Map loading allocates the plot
+grid and seeds every cell's metal byte before anything else writes it:
 
-The executable performs the intermediate sum with fixed-point-shaped integer
-arithmetic and then converts it to a single-precision value. The algebraic
-result above is the clean-room contract; an exact compatibility mode must also
-preserve the retail conversion and rounding order.
+```
+seed = (mission.SurfaceMetal >= 0 && terrainVersion is canonical) ? mission.SurfaceMetal : 0
+for every cell:  cell.metalByte = (byte)seed          // narrowing store: 300 seeds 44
+```
 
-The sampled amount is stored on the unit instance. It is not resampled every
-economy pass. While the extractor is eligible and active, that stored amount
-is added directly to its metal-production bucket — subject to the state-2
-selector discount when the owning player is in the special second state, and
-to the maker-stall gate (the extractor's output also requires the owning
-unit's own energy admission, so a positive energy carry stalls extraction
-too).
+The mission field's construction-time sentinel is `−1` and the parse default
+inside its OTA section is `0`, so an absent section leaves the sentinel and
+seeds zero, and a present section with the key absent seeds zero as well.
 
-This produces several important consequences:
+Then the terrain attribute pass runs, and this is the one place the two
+terrain versions differ:
 
-- a cell whose stored metal byte is zero still contributes one unit to the
-  footprint sum before multiplication;
+* **canonical version** — the four-byte attribute record supplies the height
+  byte and the feature reference only. It never touches the metal byte, so
+  every cell keeps the uniform seed. There is **no per-cell metal raster**:
+  bounded negative over the loader and over the shipped 171-map corpus, whose
+  fourth attribute byte is uniformly zero and is never read as metal.
+* **legacy version** — the attribute record is eight bytes and the pass copies
+  its **byte 6** into the cell's metal byte (height from byte 0, feature
+  reference from byte 2). The legacy version is also the one for which the
+  uniform seed was forced to zero above, so on a legacy map the per-cell bytes
+  are the whole story. `[fmt tnt]` documents only the canonical four-byte
+  record; the eight-byte legacy record is a format finding for lane 02.
+
+**Established — the sampling walk.** At unit creation, and only when the
+definition's `extractsmetal` is **strictly greater than zero**, the creator
+walks the unit's stamped footprint rectangle: outer loop over the footprint's
+Z extent starting at the unit's stamped Z cell, inner loop over its X extent
+starting at the stamped X cell. For each coordinate it resolves the plot cell
+through the bounds-checked lookup — `0 ≤ x < mapCellWidth` and
+`0 ≤ z < mapCellHeight`, else no cell — and **off-map coordinates contribute
+nothing at all**, not even the `+1`. For an in-bounds cell:
+
+```
+accumulator = (uint16)( accumulator + cell.metalByte + 1 )
+```
+
+The accumulator is **sixteen bits** and wraps modulo 65536. Practical bound:
+each cell adds at most 256, so wrapping needs Σ(byte + 1) ≥ 32768 — 128 covered
+cells at metal byte 255, or 32768 covered cells at metal byte 0, which is a
+182×182-cell footprint. No shipped definition comes close; the wrap is a stated
+edge, not an observed one, and it is stated because the next step reads the
+accumulator **signed**.
+
+**Established — the rate, and its evaluation order.** The rate is stored on the
+unit as:
+
+```
+unit.extractionRate = float32( ( definition.extractsmetal × (float)(int32)(accumulator << 16) ) × 2⁻¹⁶ )
+```
+
+evaluated left to right at the working precision of [R-ECO-01 §1], with `2⁻¹⁶`
+a double constant and the only narrowing at the store. The shift and the
+reciprocal cancel algebraically, so the value is `extractsmetal × Σ(byte + 1)`
+— but the intermediate is loaded as a **signed** 32-bit integer, so an
+accumulator of `0x8000` or more yields a **negative** rate, and a negative rate
+is a negative metal contribution every pass thereafter. An implementation that
+sums into a wider accumulator, or converts unsigned, diverges only in that
+corner.
+
+**Established — creation-time only.** The sampler's three call sites are
+three unit-creation paths (one of which has no recovered static caller of its
+own); a reference census finds no other caller. The rate is
+computed once and never recomputed. The settlement reads the stored rate, not
+`extractsmetal`. Consequently:
+
+- a cell whose metal byte is zero still contributes one to the footprint sum;
 - a larger footprint samples more cells;
-- two extractors may sample overlapping cells unless the placement and
-  occupancy rules prevent the overlap;
-- later terrain or feature changes do not automatically change an already
-  stored extractor amount;
+- two extractors may sample overlapping cells unless placement and occupancy
+  prevent the overlap;
+- later terrain deformation, feature changes, or a mission rewriting the
+  surface metal do not change an already-sampled rate;
 - feature reclaim metal and terrain extraction metal are unrelated fields.
+
+**Established — the script notification.** Immediately after storing the rate,
+and only when the unit has a script VM, the creator starts a deferred
+`SetSpeed` whose argument is the accumulator **sign-extended from sixteen
+bits** — the summed metal-map value under the footprint, one metal byte plus
+one per covered cell, in metal-map units. That is what stock extractor scripts
+use to size their animation rate. [04 R-CB-01 §5] owns the callback contract.
+Unlike the wind pair, this producer *is* guarded against a missing VM.
+
+**Established — the settlement side.** While the extractor is on the building
+branch, activated, and its own energy demand was admitted this pass, the stored
+rate is added to metal production through the difficulty discount of
+[R-ECO-01 §3] and under the maker-stall rule stated with the metal makers
+above.
 
 ### Storage capacity
 
-At each settlement pass, the engine rebuilds player capacity from scratch by
-summing the energy- and metal-storage contributions of eligible completed
-units. Optional mission/player bonuses are added when their enable flag is set.
-Retail implements this with a capacity helper that applies the storage bonus
-and the per-resource floor: when the bonus enable bit is set, each resource's
-capacity is floored at 200, and the bonus values are converted to
-single-precision and added to the player's live energy and metal capacity
-fields after the unit sum (the economy ledger analysis notes pin the add
-order, §4.1 and §5).
+At each settlement pass the engine rebuilds player capacity from scratch: both
+capacity fields are zeroed at the top of the pass, every alive unit that passes
+the **completion gate** adds its definition's `metalstorage` and
+`energystorage` — metal first, two plain single-precision adds, no integer
+intermediate anywhere — and a bonus term is added once at the end when the
+player's bonus-enable flag is set. [R-ECO-01 §4] states the accumulation, the
+bonus, and where the `200` floor really lives (on the bonus operands at the
+moment they are written, not on capacity), and is the authority for all three.
+
+Two points this section owns:
+
+* **Eligibility is the completion gate and nothing more (Established).** The
+  storage adds sit inside the same block as passive make, so they require only
+  the alive bit and a remaining construction fraction equal to zero. They do
+  **not** require the activated bit, they do not care which branch the unit
+  took, and `onoffable` does not affect them: a deactivated, transported, or
+  paralyzed storage unit still contributes its full capacity.
+* **Reader census (Established).** `energystorage` and `metalstorage` have no
+  gameplay reader outside this accumulation — not the HUD, not the computer
+  player, not the build UI. Everything that displays capacity reads the
+  player's recomputed capacity fields ([R-ECO-01 §6]).
 
 Capacity is single-precision state. It is not an integer total. Destroyed,
-unfinished, or ineligible storage units cease contributing when the next
-player pass recomputes capacity.
+unfinished, or ineligible storage units cease contributing at the next pass
+because that pass rebuilds the sum from zero — capacity is never decremented.
 
 #### R-ECO-01 §4 — Capacity accumulation and the bonus, exactly [R-ECO-01] (2026-08-29)
 
@@ -1026,6 +1454,53 @@ owning player, in the settlement's stable unit-slot order; authored cloak
 costs are per-settlement-pass amounts like every other authored economy
 field.
 
+#### R-PROD-01 §7 — Cost selection, the player gate, the can-cloak capability, and the unconditional transition [R-PROD-01] (2026-08-29)
+
+**Established — the player gate, exactly.** The whole cloak block — gate,
+payment and transition — is skipped for a unit whose owner's **record-exists
+word is non-zero and whose control byte is 3**; it runs for every other
+visited unit. The record-exists clause is inert in practice (a unit is only
+visited through an existing player's slot list) and is recorded so an
+implementation does not add a separate existence test. Control byte 3 remains
+unnamed (tail).
+
+**Established — which units can request cloak at all.** The unit-definition
+parser derives a per-definition *can-cloak* capability bit at parse time as
+`cloakcost > 0.0` — a strict floating-point compare on the value already
+converted from the integer reader, evaluated after both cloak keys are read.
+The `Cloak_On` and `Cloak_Off` order handlers test that bit before writing the
+cloak-requested status bit ([R-ECO-01 §9]). Consequently a definition with
+`cloakcost` absent, zero, or negative can never carry the cloak-requested bit,
+and the settlement's "cost of zero debits nothing" path is reachable only
+through `cloakcostmoving=0` on a definition whose stationary cost is positive
+— the moving unit then cloaks for free while its stationary cost is positive.
+
+**Established — the selection, and why the conversion is a no-op in practice.**
+The cost is `cloakcostmoving` when the unit's movement-mode bits are non-zero
+and `cloakcost` otherwise; the test is on the two runtime movement-mode bits of
+the status word, not on a definition flag, so the same unit switches between
+the two costs as it starts and stops. Both keys are parsed by the **integer**
+reader and only then converted to single precision ([R-PROD-01 §1]), and
+`cloakcostmoving` defaults to the parsed `cloakcost` rather than to zero. The
+settlement's truncation toward zero ([R-ECO-01 §9]) therefore cannot change any
+FBI-authored value: it is there for a fractional cost the FBI reader cannot
+produce. The one behavior it does produce — "a fractional cost below 1
+truncates to zero and debits nothing" — is unreachable from authored content.
+
+**Established — the transition call is unconditional.** Every visited unit that
+passes the player gate above reaches the transition service with the
+cloak bit, whatever the gate decided: the service is called with *set* on a
+successful payment and with *clear* on every other outcome — cloak not
+requested, deadline not due, or payment refused. Because the service suppresses
+notifications when the bit does not change ([R-ECO-01 §8]), this is silent for
+the overwhelming majority of units, but it means a unit that stops being
+cloak-requested has its cloak bit cleared by the next settlement pass without
+any other code doing it.
+
+**Established — no draws, no discount.** The cloak debit consumes no random
+draws from either stream, and the difficulty discount of [R-ECO-01 §3] does not
+apply to it: a computer player pays cloak upkeep in full.
+
 **Established — the full debit predicate.** The debit block runs when the
 unit carries the **cloak-requested** status bit, a second status bit is clear,
 and the unit's per-unit cloak payment deadline is due — the gate is bit set
@@ -1086,6 +1561,27 @@ A fractional authored cloak cost below 1 therefore truncates to zero, is
 always affordable, and debits nothing. The debit reads and writes the player's
 **live stock** directly, mid-pass, so it is visible to every later unit in the
 same slice and to the pool that stage one of [R-ECO-01 §5] later builds.
+
+#### R-PROD-01 §8 — Producer draw census and phase placement [R-PROD-01] (2026-08-29)
+
+**Established.** The complete random-draw census of the producer paths this
+section owns, for the determinism ledger of [01 §7.3]:
+
+| Site | Stream | Draws |
+|---|---|---|
+| wind phase, deadline not due | — | none |
+| wind phase, deadline due | CRT, then simulation | one CRT draw always; one simulation draw only when `maxWindSpeed − minWindSpeed ≥ 2` (signed); one further simulation draw only when the rolled speed is non-zero |
+| extraction sampler (unit creation) | — | none |
+| settlement: upkeep, generator chain, passive block, storage, cloak debit | — | none |
+| computer player's maker toggle task | simulation | one draw per candidate maker that reaches the switch-on arm (doc 08) |
+| computer player's extractor placement | simulation | one draw per placement attempt on an extracting definition (doc 08) |
+
+The producer arithmetic itself is draw-free and discount-only: the only
+non-determinism a producer can introduce is the wind phase's own three draws,
+and the phase order fixes their position — the wind phase runs after the unit
+sweep and after the economy phase of the same tick ([04 §1.1], [R-PROD-01 §3]),
+so within one tick the settlement always sees the previous tick's scalar and
+the sweep always sees the previous tick's changed flag.
 
 ## Resource admission and carry
 
@@ -3379,6 +3875,23 @@ vertical component of the walk target. A height byte below two returns zero
 without advancing the seed [01 §8]. The work visits and the payout draw
 nothing.
 
+#### R-FEAT-01 §15 — The payout guard's two bits, named [R-FEAT-01] (2026-08-29)
+
+**Correction to [R-WORK-01 §5].** Its payout step 1 says the helper "refuses
+outright — returning without paying — when the terrain cell's protection
+bit **and** the feature definition's protection bit are both set", and the
+tail listed the cell bit's meaning as unknown. Both bits are now named: the
+cell bit is the anchor's **instance-attached** bit (set by the stamp for 3D
+definitions and by ignition and the die/reclaim transitions for sprite
+definitions, §3/§5/§9), and the definition bit is flag bit 0, **sprite
+(filename-based) definition**. The conjunction therefore means "a sprite
+feature that currently has a live animation instance" — one that is burning,
+or already playing its death or reclaim animation. The refusal is what
+"burning blocks reclaim" under "Feature burning" describes; it never applies
+to a 3D wreck (its instance bit is always set but its definition bit is
+clear), so a sinking wreck stays reclaimable throughout, as "Feature sinking
+and water interaction" states. The item is closed.
+
 ## Capture
 
 Capture is an order-driven work state with capability and target gates. On
@@ -3688,6 +4201,112 @@ Definitions can select either a 3D object or an animated image sequence.
 Presentation choice does not change the authoritative footprint, blocking,
 reclaim, or damage fields.
 
+#### R-FEAT-01 §1 — The feature parser, exactly: fields, widths, defaults, and the key census [R-FEAT-01] (2026-08-29)
+
+**Established — one parser, one record shape.** Every feature definition is
+compiled by a single parser that takes a section name, finds the section in
+the loaded feature TDF set (a linear scan of every loaded file, first match
+wins), grows the catalog by one fixed-size record, and returns the new
+record's ordinal. The catalog is a reallocated array — there is no fixed
+catalog cap; "catalog exhaustion" is not a retail failure mode. If the name is
+in no loaded file the parser prints `Record "%s" missing from feature files`
+through the diagnostic sink and then continues into the field reads with a
+null section handle; the record is still appended. What the field reads do
+with a null section is **Unknown** (decider: static trace of the TDF getter's
+null-handle path). Nanolathe should treat it as a fault.
+
+The parser reads exactly these keys, in this order, with these widths and
+defaults. Numeric keys go through the integer getter (default shown) unless
+noted; string keys through the string getter with an empty default.
+
+| Key | Stored as | Default | Reader census (who consumes the stored value) |
+|---|---|---|---|
+| section name | 128-byte name | — | successor resolution, save/load name box `[R-SAVE-FEATURE-01]`, the dragons-teeth/fortification name test below |
+| `Description` | 20-byte string | empty | presentation only (hover text); no simulation reader |
+| `footprintx`, `footprintz` | int16 each | 0 | placement, teardown, collision, reclaim box, blast centre, occupancy notify (§3, §4, `[R-WORK-01 §5]`) |
+| `height` | byte | 0 | reclaim walk-target draw bound `[R-WORK-01 §5]`; the projectile feature-collision test `projectileHeight < terrainHeightByte + height` (doc 06); renderer fog-memory rule (`height < 10`, doc 03) |
+| `object` | model handle | — | present ⇒ 3D feature: the flag word's bit 0 is **cleared** and every `seqname*` key below is **skipped** |
+| `filename` | GAF bank handle | — | sprite features only (bit 0 set); the bank is shared: if an earlier catalog record already loaded the same 16-character name the handle is reused (`REUSE`), else `anims\<filename>.gaf` is loaded |
+| `seqname`, `seqnameshad` | sequence handle | 0 | renderer (rest image and shadow); when `animating=1` they also seed the per-definition rest cursors (§10) |
+| `seqnameburn`, `seqnameburnshad` | sequence handle | 0 | ignition (§9): a definition without `seqnameburn` **cannot ignite** |
+| `seqnamedie`, `seqnamedieshad` | sequence handle | 0 | death transition (§5) |
+| `seqnamereclamate`, `seqnamereclamateshad` | sequence handle | 0 | reclaim transition (§5) |
+| `spreadchance` | byte | 0 | burn event, read on the **candidate** (§11) |
+| `reproduce`, `reproducearea` | byte each | 0 | reproduction walk (§12) |
+| `metal`, `energy` | `float(uint16(value))` — the integer is masked to 16 bits, then converted | 0 | reclaim payout `[R-WORK-01 §5]`; metal-byte seeding `[R-PROD-01 §6]`; the area-reclaim candidate scan (§6) |
+| `damage` | int16 | 0 | feature hit points (§8) |
+| `animating` | flag bit 1 | 0 | renderer; per-definition rest-cursor advance (§10) |
+| `animtrans` | flag bit 2 | 0 | renderer only (transparent blit selector) |
+| `shadtrans` | flag bit 3 | 0 | renderer only (shadow blit selector) |
+| `flamable` | flag bit 4 | 0 | damage entry (§8) and burn spread (§11) |
+| `geothermal` | flag bit 5 | 0 | yard-map bit 7 `[04 §6.4]`; steam-strip producer at placement (§3) |
+| `blocking` | flag bit 6 | 0 | the passability classifier `[R-DOC04-B]` and yard-map bit 5 `[04 §6.4]` — **no other reader**; see §6 |
+| `reclaimable` | flag bit 7 | 0 | reclaim executor start gate `[R-WORK-01 §5]`, order-target classification (doc 04 §3), the area-reclaim scan (§6) |
+| `autoreclaimable` | flag bit 8 | **1** | the area-reclaim candidate scan only (§6) — **not** teardown |
+| `indestructible` | flag bit 9 | 0 | damage entry (§8), teardown honor test (§4), yard-map bit 6 `[04 §6.4]`, metal-byte seeding `[R-PROD-01 §6]` |
+| `nodisplayinfo` | flag bit 10 | 0 | presentation only (hover-info suppression) |
+| `nodrawundergray` | flag bit 11 | 0 | renderer fog-memory rule (doc 03); also **forced set** when the section name equals `DragonsTeeth`, `DragonsTeeth_Core`, `Fortification`, or `Fortification_Core` (case-insensitive) |
+| `sparktime` | read through the **float** getter (default `0.0`), truncated toward zero, stored int16 | 0 | ignition countdown (§9) |
+| `burnweapon` | weapon handle by name | 0 | burn event (§11) |
+
+**Established — keys with no reader (reader census: none).** The executable
+contains no string for `permanent`, `hitdensity`, `burnmin`, `burnmax`,
+`sinktime`, `world`, or `category` as a feature key (`category` exists only
+as a unit-FBI key read by the unit parser; the only `Permanent` string is a
+lobby line-of-sight option label). All seven are inert: authoring them
+changes nothing. `burnmin`/`burnmax` in particular do not set burn duration —
+the burn lifetime is the animation length (§10).
+
+**Established — successor keys are read in a separate pass.** `featuredead`,
+`featureburnt` and `featurereclamate` are not read by the parser at all; see
+§2.
+
+**Established — the loop byte is forced.** For each of the six event
+sequences (`seqnameburn`, `seqnameburnshad`, `seqnamedie`, `seqnamedieshad`,
+`seqnamereclamate`, `seqnamereclamateshad`) that resolves, the parser writes
+zero into the sequence's loop byte. `seqname`/`seqnameshad` keep the GAF loop
+byte. A `seqname*` value that is an empty string stores 0 (treated as absent).
+What the bank lookup returns for a name that is **not** in the bank is
+**Unknown** (decider: static trace of the sequence lookup's miss path); the
+shipped corpus has no such case (asset census under "Feature burning").
+
+**Established — the rest cursors.** When `animating=1` and `seqname` resolved,
+the parser initialises a per-**definition** animation cursor from `seqname`
+at frame 0, and a second one from `seqnameshad` when that resolved. These are
+what the feature phase advances every tick (§10); they are shared by every
+placed instance of the definition, so all copies of an animating feature are
+always on the same frame.
+
+#### R-FEAT-01 §2 — Catalog build order and the successor pass [R-FEAT-01] (2026-08-29)
+
+**Established.** At map load the loader allocates the live-instance arena
+(2048 slots of 48 bytes, zero-filled once; three doubly-linked lists — active,
+dormant, free — with the free list initially holding every slot in ascending
+order) and one dummy "feature unit" record that stands in as the owner of
+every feature-fired weapon; it then compiles one definition per entry of the
+map's feature-name table, in table order. The terrain-cell feature words
+reference these ordinals directly.
+
+The successor pass runs later in session start, after all map and mission
+features are already stamped. For every catalog record `i` (re-reading the
+count each iteration, so records appended during the pass are themselves
+processed) it re-finds the section and reads `featuredead`, then
+`featurereclamate`, then `featureburnt`. Each is resolved by a
+case-insensitive scan of the whole catalog; an absent key stores the empty
+sentinel `0xFFFF`; a present key naming a definition not yet compiled calls
+the parser for it **on demand** and stores the new ordinal. Because the pass
+appends while iterating, a chain of successors (`Rock1a → Rock1b → rockgone`)
+is compiled transitively even when only the head is named by the map. A
+missing name at the end of such a chain reaches the parser's diagnostic path
+above. The loading progress byte is advanced per record as `100 × (i + 1) /
+count` (integer division). Nothing consumes the successor words between
+placement and this pass.
+
+**Reader census for the successor words.** `featuredead`: death replacement
+(§5), unit-corpse chain walk (`[05 "Feature sinking and water interaction"]`);
+`featurereclamate`: reclaim replacement (§5); `featureburnt`: burn completion
+(§10). Nothing else reads them.
+
 ### Placement
 
 Feature placement:
@@ -3706,6 +4325,119 @@ when a building placement is validated against covered-cell feature flags
 Features can originate in the terrain file, the mission file, unit death,
 burning, reclaim successor transitions, or other simulation effects. All
 sources converge on the same placement service.
+
+#### R-FEAT-01 §3 — The stamp service, exactly: the dense-pack rule, height snap, and the pool edge [R-FEAT-01] (2026-08-29)
+
+**Established.** Every feature creation — terrain file, mission file, corpse,
+successor, reproduction, save reload — goes through one stamp routine taking
+`(anchorCell, ordinal, position3 or null, orientation3 or null, placerNibble)`
+and returning the live-instance record or 0. In order:
+
+1. `ordinal == 0xFFFF` → return 0 with no effect. `ordinal == 0xFFFC` → write
+   the **void** marker `0xFFFC` into the anchor's feature word and return 0
+   (the terrain loader uses this for cells the TNT marks `-4`).
+2. Resolve the anchor's cell coordinates `(x, z)` from its position in the
+   plot grid. Bounds are **inclusive at the far edge**: the stamp fails when
+   `x + footprintx > mapWidth` or `z + footprintz > mapHeight`
+   (`x + footprintx == mapWidth` passes).
+3. **Dense-pack rule — collision teardown.** For every cell of the footprint
+   (row-major, z outer), if the cell's feature word is not `0xFFFF` the
+   teardown (§4) is called on it **without honor**. If that teardown returns
+   0 the stamp returns 0 **immediately, leaving already-torn cells torn**.
+   Consequences, all established: a new feature replaces any non-indestructible
+   feature it overlaps (walking fringe cells back to their anchor and clearing
+   that whole footprint); an indestructible feature under any covered cell
+   (`RockMetal*`, `Geothermal`, the fortification family) vetoes the stamp; a
+   void cell (`0xFFFC`) vetoes the stamp; a stale fringe whose anchor resolves
+   empty also vetoes it (the teardown's sentinel test). There is no
+   "already occupied" failure other than these — two blocking trees stamped
+   on the same cell do not coexist; the later one wins.
+4. **3D definitions (flag bit 0 clear) take a live slot.** Pop the free list
+   head; if the free list is empty (`-1`) the stamp returns 0 — **after** step
+   3 already tore down whatever was under it. The popped slot is moved to the
+   active list and its burning bit cleared. The slot receives: the ordinal;
+   accumulated damage `:= 0`; anchor `(x, z)`; position — the supplied triple
+   verbatim, or when null the footprint centre with the terrain height snapped
+   under it:
+
+   ```
+   worldX = ((footprintx + 2·x) · 8) << 16          ; 16.16, i.e. (x + footprintx/2) · 16 world units
+   worldZ = ((footprintz + 2·z) · 8) << 16
+   worldY = bilinearHeight(worldX, worldZ) << 16   ; the four-corner query of [03 §2.3], integer result
+   ```
+
+   the orientation triple — the supplied six bytes verbatim, or zero when
+   null; and a fresh model-instance handle for the definition's object. **The
+   velocity triple is not written by the stamp** (see §14 for what that
+   implies). The anchor cell stores the ordinal, the slot index, and sets its
+   instance-attached bit.
+5. **Sprite definitions (bit 0 set)** take no slot: the anchor stores the
+   ordinal, a zero in the slot/accumulator word, and a cleared instance bit.
+6. The anchor's control byte gets the placer nibble: `bits 3..6 :=
+   placerNibble & 0xF`, all other bits preserved. Terrain-file, mission-file,
+   successor, reproduction and reload stamps pass nibble 10; a corpse passes
+   the dying unit's owner player index.
+7. **Fringe stamping.** Every covered cell other than the anchor gets feature
+   word `0xFFFE`, the byte pair `(dz, dx)` = its offset from the anchor, and
+   its instance bit cleared. The anchor itself keeps `(0, 0)` untouched from
+   whatever was there; every reader of a fringe walks back by `dz·mapWidth +
+   dx` cells.
+8. If the definition's geothermal bit is set, the steam-strip producer of
+   `[R-STRIP-01 §1]` is started at the same centre/height position as step
+   4 (computed the same way when no position was supplied).
+9. The occupancy-listener notify is called with the anchor `(x, z)` and the
+   footprint pair. Each registered occupancy map re-classifies the cells
+   `x .. x+footprintx` by `z .. z+footprintz` **inclusive** — one cell of
+   margin beyond the footprint on the +X and +Z sides — through the
+   passability classifier `[R-DOC04-B]`, which reads the blocking bit through
+   the fringe hop. That classifier, not the stamp, is the feature-to-terrain
+   blocking mask; the stamp only triggers it. Buildings are not features and
+   never enter this path.
+
+**Established — map-load placement and anchoring.** The terrain loader
+stamps every TNT feature cell in row-major cell order (`-4` → void marker,
+any ordinal below the table count → stamp with a null position, so the
+Y snap above applies), then the mission file's feature list in file order.
+A mission-file entry names a feature and a cell; for a **3D** definition the
+anchor is `(cellX − footprintx/2, cellZ − footprintz/2)` with truncating
+division (the entry is centre-referenced), for a sprite definition the anchor
+is the cell itself. A mission-file name not yet compiled is compiled on the
+spot. Both loaders pass nibble 10. The reload path is `[R-SAVE-FEATURE-01]`.
+
+#### R-FEAT-01 §4 — Teardown, exactly, and two corrections [R-FEAT-01] (2026-08-29)
+
+**Correction.** The flag table under "Definition flags, teardown, and the
+Great Divide partition" said `autoreclaimable` is a "reuse-suppression;
+protects the cell from being implicitly cleared by a colliding stamp unless
+honored explicitly". That is the wrong bit: the teardown's honor test reads
+the **indestructible** flag (bit 9), and `autoreclaimable` (bit 8) has
+exactly one reader, the area-reclaim candidate scan (§6). The same passage
+also said the cleared fringe cells have "the signed offset bytes poisoned";
+they are not touched — only the feature word and the instance bit are
+written.
+
+**Established — the routine.** `teardown(cell, honor)`:
+
+1. If the cell holds `0xFFFE`, walk back to the anchor.
+2. If the (anchor) word is `≥ 0xFFFB` — empty, void, or any other sentinel —
+   return 0.
+3. If `honor == 0` and the definition is indestructible, return 0. Every
+   caller in the executable passes `honor == 0`; the honoring variant is
+   never used, so **an indestructible feature is never removed by any path**.
+4. If the anchor's instance bit is set: for a 3D definition release the model
+   instance; then move the slot from whichever list holds it to the **head**
+   of the free list (LIFO).
+5. Write `0xFFFF` into the anchor's word and clear its instance bit.
+6. For every cell of the definition's footprint rectangle from the anchor,
+   **only if that cell currently holds `0xFFFE`**, write `0xFFFF` and clear
+   its instance bit. Cells the footprint covers that meanwhile hold something
+   else are left alone.
+7. Notify the occupancy listeners with the same inclusive-margin rectangle
+   as the stamp. Return 1.
+
+The accumulated-damage word of an instance-less anchor is not cleared here;
+the next stamp on that cell overwrites it (§3 step 5), so damage never leaks
+to a successor.
 
 ### Removal and successor replacement
 
@@ -3727,6 +4459,73 @@ instance-less cells against the definition's hit points, and a dead hop
 blocking test lets through. The full precedence ordering when damage, burn
 completion, and reclaim arrive in the same tick beyond those rules is not
 fully closed.
+
+#### R-FEAT-01 §5 — Transition and replacement, exactly, and same-tick precedence closed [R-FEAT-01] (2026-08-29)
+
+**Established — two routines.** A *transition* `(x, z, isReclaim)` is what
+damage death (§8), the reclaim payout `[R-WORK-01 §5]`, the multiplayer
+state commands, and save reload call. A *replacement* `(x, z, isReclaim)` is
+the atomic teardown-plus-stamp. The transition:
+
+1. walks a fringe back to its anchor; a word `≥ 0xFFFB` returns silently;
+2. for a **sprite** definition selects the event sequence: `seqnamedie` (+
+   `seqnamedieshad`) when `isReclaim == 0`, `seqnamereclamate` (+ shadow)
+   when 1; for a **3D** definition the selection is always "none";
+3. **no sequence ⇒ immediate replacement** (step 6);
+4. sequence present and the cell already has an instance attached ⇒
+   **return with no effect** — the death or reclaim is dropped, not queued
+   (see precedence below);
+5. sequence present and no instance ⇒ pop a slot (empty pool ⇒ return, no
+   effect — the feature simply stays), attach it to the cell, start the
+   sequence at frame 0 (and the shadow when named), record the anchor, and
+   set the instance's mode bits: burning `:= 0`, reclaim-animation `:=
+   isReclaim`, plus a separate copy of `isReclaim` in bit 4 (no reader found
+   for that copy — reader census: none). The feature phase (§10) drives it
+   to completion.
+6. Replacement: successor `:= isReclaim ? featurereclamate : featuredead`; if
+   the cell has an instance whose reclaim-animation bit is set the successor
+   is **`featurereclamate` regardless** of the argument. Then
+   `teardown(anchor, 0)`; then `stamp(anchor, successor, instance ? &position
+   : null, instance ? &orientation : null, 10)`. A successor word of `0xFFFF`
+   makes the stamp a no-op, i.e. final removal. Because the teardown pushes
+   the instance's slot on the free list and the stamp pops the head, **the
+   successor of a 3D feature reuses the same slot** and thereby inherits
+   every word the stamp does not write (§14).
+
+An indestructible definition never reaches the replacement's stamp with a
+cleared cell: its teardown returns 0, the stamp's collision loop then calls
+teardown again on the still-occupied anchor and fails. The damage entry
+already rejects indestructible definitions, so in practice this only guards
+the reclaim/reload paths.
+
+**Established — same-tick precedence, closed.** The earlier text left "the
+full precedence ordering when damage, burn completion, and reclaim arrive in
+the same tick" open. It is now closed by construction, because every cause is
+serialized through the anchor's **instance-attached bit** and the phase order
+of `[01 §4.4]`:
+
+* Within a tick, weapon impacts (projectile phase) run before the feature
+  phase; order handlers (reclaim payout) run in the unit phase, also before
+  the feature phase. Multiple impacts on one feature in one tick apply in
+  projectile order, each seeing the previous one's result.
+* **Sprite feature, no instance:** first cause wins. Ignition attaches an
+  instance; a death with a `seqnamedie` attaches one; a death without one, or
+  a reclaim payout, replaces the feature outright, after which the cell holds
+  the successor (or nothing) and later causes act on *that*.
+* **Sprite feature with an instance (burning, dying, or reclaiming):**
+  every further cause is inert — the damage entry has no accumulation branch
+  for it (§8), a second ignition refuses (§9), a death or reclaim transition
+  returns at step 4, and the reclaim executor's payout refuses (§15). Only the
+  animation's end (feature phase, §10) changes the cell.
+* **3D feature:** it always has an instance, so ignition never applies;
+  damage accumulates on the instance until `damage` is reached and then
+  replaces immediately; a reclaim payout replaces immediately; whichever
+  runs first in the tick's phase order wins and the other finds the successor.
+* Burn completion and the reproduction spawn are feature-phase events and
+  therefore always come after every same-tick impact and order.
+
+There is no queue, no priority word, and no deferred resolution anywhere in
+these paths.
 
 ### Definition flags, teardown, and the Great Divide partition
 
@@ -3779,6 +4578,87 @@ not clear the vent feature, so destroying the building leaves the stamp intact
 and another plant can reuse the same cell without a restore step. Feature
 metal at the definition is reclaim reward only and does not drive extraction
 ("Terrain metal extraction").
+
+#### R-FEAT-01 §6 — Flag reader census, and the two flags that do less than their names [R-FEAT-01] (2026-08-29)
+
+**Established — `blocking` has exactly one consumer.** The passability
+classifier of `[R-DOC04-B]` (called from the occupancy notify of §3/§4 and
+from the map-load stamp) and the yard-map validator's bit 5 `[04 §6.4]` read
+flag bit 6 through the fringe hop; nothing else in the executable does.
+`blocking` therefore affects ground pathing and building placement and
+nothing else — it does not affect projectiles, reclaim, damage, fire, or
+which cell a corpse may take. A non-blocking feature (`RockMetal*`, smudges)
+is invisible to movement. An ordinal at or beyond the catalog count, and the
+`0xFFFB..0xFFFD` sentinels, classify as blocking; an empty fringe hop
+classifies as not blocking.
+
+**Established — `autoreclaimable` has exactly one consumer.** The
+area-reclaim candidate scan: given a centre and a radius it walks the square
+of cells `centre ± radius/2`, resolves each cell's feature through the fringe
+hop, and lists the cell as an **energy** candidate when the definition has
+`reclaimable=1` **and** `autoreclaimable=1` and `energy ≠ 0`, and as a
+**metal** candidate under the same two flags when `metal ≠ 0` (a feature with
+both pools appears in both lists). The two lists are consumed by the two
+handlers that own area reclaim — the builder's area-reclaim order body and
+the computer player's — whose identities are a Supported inference (they are
+table-dispatched with no direct caller); the predicate itself is
+established. `autoreclaimable=0` therefore only hides a feature from area
+reclaim; a direct reclaim order on it still works, and it is still cleared
+by a colliding stamp.
+
+**Established — `indestructible` has four consumers**: the damage entry
+(return before anything else, §8), the teardown honor test (§4), yard-map bit
+6 `[04 §6.4]`, and the metal-byte seeding (§7). It does **not** stop
+ignition by itself — but every shipped indestructible feature is also
+non-flammable and the ignition entry is reached only through the damage
+entry or spread, both of which test `flamable`.
+
+**Established — `reclaimable` has three consumers**: the reclaim executor's
+start gate `[R-WORK-01 §5]`, the order-target classifier that decides whether
+a reclaim cursor/command applies to the thing under it (doc 04 §3.4 family),
+and the area-reclaim scan above.
+
+**Established — `geothermal` has two consumers**: yard-map bit 7 `[04 §6.4]`
+and the steam-strip start at placement (§3). No wreck-transition rule reads
+it; see §7 for what happens to a corpse over a vent.
+
+#### R-FEAT-01 §7 — Metal deposits seed the metal byte, and vents versus wrecks [R-FEAT-01] (2026-08-29)
+
+**Correction to [R-PROD-01 §6].** That section said, of the canonical
+terrain version, "It never touches the metal byte, so every cell keeps the
+uniform seed. There is **no per-cell metal raster**". The bounded negative
+over the *terrain loader* stands, but the conclusion does not: a separate
+map-load pass, run after every terrain-file and mission-file feature has
+been stamped, walks every plot cell and, for each **anchor** cell whose
+definition has `metal ≠ 0` **and** `indestructible = 1`, writes
+
+```
+cell.metalByte := (uint8) trunc( definition.metal )      ; float → int, low byte
+```
+
+into every cell of that definition's footprint (bounds-checked per cell;
+off-map cells skipped). This is the only writer of the metal byte after the
+uniform seed, and it is why `RockMetal*` deposits authored `metal=86..223`,
+`indestructible=1` are the extractor economy: the extractor's footprint sum
+`[R-PROD-01 §6]` reads these bytes. A reclaimable rock with `metal=100`
+(`Rock1a`, `indestructible=0`) does **not** seed — its metal is reclaim
+reward only. The sequence is: uniform `SurfaceMetal` seed → feature stamps →
+this pass, so a deposit overrides the uniform seed inside its footprint and
+nowhere else. Removing or replacing a feature later never rewrites the byte
+(the deposit is indestructible anyway), and a mission-placed deposit seeds
+exactly like a terrain-file one because the pass runs after both.
+
+**Established — wrecks at geothermal vents.** There is no vent-specific
+rule. A corpse whose footprint would cover a vent cell fails at the stamp's
+collision teardown (§3 step 3: the vent is indestructible) and the death
+path neither retries nor shifts it — the wreck is silently not created. A
+corpse adjacent to a vent is unaffected. The vent itself is never damaged
+(indestructible), never ignites (`flamable=0`, and the damage entry gates
+ignition on that), never reclaims (`reclaimable=0`), never burns by spread
+(the spread test reads the candidate's `flamable`), and is never torn down by
+any stamp; so its cell's feature word is constant for the whole session and
+the `YardMap 'G'` test is stable. This closes the "wreck transitions at
+geothermal vent cells" item.
 
 ## Wreckage and corpse production
 
@@ -3901,6 +4781,201 @@ distinct lifetimes observed are 46, 56, 58, 70, 84, 92, 114, 120, 122, 126, 141,
 have one. Malformed or missing burn sequences and non-filename object/fire
 combinations remain separate loader edges.
 
+#### R-FEAT-01 §8 — The damage entry, exactly: gates, accumulation, and the network codes [R-FEAT-01] (2026-08-29)
+
+**Established — how impacts reach features.** The projectile impact
+dispatcher walks the cells inside the blast radius; for each cell whose
+feature word resolves (fringe hop included) it measures the distance from the
+impact point to the **instance position** when the cell has an instance,
+otherwise to the definition's footprint centre at that anchor, truncates it,
+and requires it to be **strictly less** than the blast radius. Anchors are
+de-duplicated through a 64-entry list so one blast damages one feature once;
+if more than 64 distinct features fall inside a blast, the 65th and later are
+**not** de-duplicated and can be hit once per covered cell. The entry is then
+called with the **anchor** cell and anchor coordinates. A weapon with
+`unitsonly=1` skips the feature walk entirely (also `[06 §9.3]`).
+
+**Established — the entry `(anchorCell, x, z, weapon)`, in order.**
+
+1. A global settings word's bit 3 must be set. The only writer sets it
+   unconditionally during startup and nothing clears it, so the gate is
+   always open in retail; it is not a lobby or mission option.
+2. Feature word `≥ 0xFFFB` → return.
+3. `indestructible` → return (before any ignition or accumulation).
+4. In a multiplayer session (mission type 3) a client without the
+   authority bit sends a 6-byte feature-damage request `(0x0F, weapon
+   ordinal byte, x, z)` and returns; the authoritative peer performs the
+   steps below and, when the result code exceeds `0xFC`, broadcasts a state
+   command `(0x0F, code, x, z)`. Codes: `0xFD` death transition, `0xFE`
+   ignition (sent by the ignition routine itself), `0xFF` reclaim transition
+   (sent by the payout). Receivers apply the transition or a **remote**
+   ignition directly (§9).
+5. **Ignition test:** `flamable` **and** `weapon.firestarter ≠ 0` (the
+   byte's only reader; no roll). If true and the cell has **no instance**:
+   ignite `(x, z, remote = 0)` and return — no damage is dealt. If true but
+   an instance is attached, fall through to step 7.
+6. **Not an ignition, no instance:** `sum := uint32(weapon.default) +
+   uint32(cell.word)` where `cell.word` is the anchor's accumulator (the
+   same 16-bit field that holds the slot index when an instance is attached;
+   the stamp zeroes it). If `sum < damage` (unsigned 16-bit compare) store
+   `uint16(sum)`; else death transition `(x, z, 0)`, code `0xFD`. `damage = 0`
+   therefore dies on the first hit of any strength, including a zero-damage
+   weapon; return.
+7. **3D definition (an instance is always attached):** if the instance's
+   recorded anchor differs from `(x, z)` return (a sanity guard — callers
+   always pass the anchor); `instance.accumulator (int16) += weapon.default`
+   (16-bit wrap); if `damage ≤ instance.accumulator` (unsigned 16-bit) death
+   transition at the instance's anchor, code `0xFD`.
+8. **Sprite definition with an instance** (burning, dying, or reclaiming):
+   nothing — there is no branch, so the impact is discarded.
+
+`weapon.default` is the `[DAMAGE] default` entry of the weapon definition
+(int16 as stored), not the per-unit-class entries; a feature never selects a
+damage class. No armour, no `edgeeffectiveness` falloff, no minimum: the
+full default value lands regardless of distance inside the radius (the
+falloff computed for units in the same loop is not applied here).
+
+#### R-FEAT-01 §9 — Ignition, exactly, and the spark-time correction [R-FEAT-01] (2026-08-29)
+
+**Correction.** The "Established fact — ignite" paragraph above says the
+countdown is `simulationRandom(sparktime / 2) + (sparktime / 2)` and that
+"the shipped spark time of 5 therefore yields a countdown of 2 or 3". That
+skipped the parser's scaling: `sparktime` is read as a float, **multiplied
+by 30.0** (a double constant), truncated toward zero and stored as int16
+ticks — the same seconds-to-ticks convention as every other authored time
+`[02 "Feature record"]`. The shipped value of 5 stores 150, and the countdown
+below is 75..149 feature-phase visits, i.e. 2.5 to 5 seconds. Everything
+else in that paragraph stands.
+
+**Established — `ignite(x, z, remote)`.**
+
+1. The cell must exist and its word be `< 0xFFFB`; the definition must have a
+   resolved `seqnameburn`; the cell must have **no** instance. Any failure
+   returns silently. There is no `flamable` test here — it is the callers'
+   (§8, §11) — and no indestructible test. A 3D definition never has
+   `seqnameburn` (the parser skips it), so **3D features never burn**.
+2. Pop a free slot (empty pool ⇒ silent return, no broadcast); move it to the
+   active list; clear its burning bit.
+3. Bind: slot ordinal `:= cell.word`; cell slot index `:= slot`; set the
+   cell's instance bit. Start the burn cursor at frame 0; when
+   `seqnameburnshad` resolved start the shadow cursor and set the
+   shadow-present bit, else clear it. Set the burning bit. Record the anchor
+   `(x, z)`.
+4. Countdown, one simulation draw:
+
+   ```
+   half      = sparkTicks >> 1                      ; uint16 shift of trunc(sparktime × 30)
+   countdown = uint8( boundedDraw(half) + half )    ; [01 §7.3]: half < 2 draws nothing and returns 0
+   ```
+
+   stored as a **byte**. Consequences: `sparktime < 1/15 s` (ticks 0 or 1)
+   gives countdown 0, so the burn event never fires and the feature burns
+   without spreading or firing its `burnweapon`; a `sparktime` whose ticks
+   reach 256 or more can wrap the byte (an authored edge, absent from the
+   shipped corpus whose maximum is 150 ticks).
+5. `remote` is stored in the instance's remote bit (bit 3): a remotely
+   commanded ignition never runs the burn event (§10 step 4).
+6. Play the named sound `treeburn` at the tile **corner** `(x·16, z·16)` in
+   16.16 — not the footprint centre.
+7. If `remote == 0`, broadcast the 6-byte state command `(0x0F, 0xFE, x, z)`
+   (only meaningful in a multiplayer session; the send is unconditional).
+
+Save reload re-ignites a saved burning feature through this routine with
+`remote = 0`, so a reloaded burn draws a **fresh** countdown and re-sends the
+command; the saved countdown is not restored (the reload copies the saved
+accumulator word over the instance after ignition) `[R-SAVE-FEATURE-01]`.
+
+#### R-FEAT-01 §10 — The feature phase, in order [R-FEAT-01] (2026-08-29)
+
+**Established.** Phase 6 of `[01 §4.4]` runs, every tick, these four passes
+in this order:
+
+1. **Rest cursors.** For every catalog record, in catalog order, with
+   `animating=1`: advance the definition's rest cursor, then its rest-shadow
+   cursor (the advance is a no-op for a cursor with no sequence). Advance
+   semantics: if the cursor's delay is `< 2`, step the frame; when the frame
+   reaches the sequence's frame count, a loop byte of 0 **clears the
+   cursor's sequence pointer** (the cursor is finished), otherwise the frame
+   wraps to 0; then reload the delay from the new frame's per-frame delay
+   word. Otherwise decrement the delay. Rest sequences keep their GAF loop
+   byte, so a stock vent loops; a rest sequence authored non-looping would
+   stop on its last frame and then vanish from the renderer (its pointer is
+   null) — nothing in the simulation reacts.
+2. **Reproduction walk** (§12) — at most three simulation draws and one stamp.
+3. **Active instance walk**, from the active-list head following each
+   slot's next link (the link is read before the slot is processed, so a
+   slot that moves lists mid-visit does not break the walk). The active
+   list is LIFO: the most recently stamped or ignited instance is visited
+   first. Per slot, by definition class and mode bits:
+   * **3D instance:** if all three velocity words are zero → move to the
+     dormant list (never visited again until re-stamped). Otherwise the
+     sinking/falling integration of "Feature sinking and water interaction"
+     (§13).
+   * **Sprite instance, burning bit clear** (a die or reclaim animation):
+     advance the main cursor, then the shadow cursor if present; if the main
+     cursor's sequence pointer is now null → `replace(anchorX, anchorZ, 0)`
+     (§5 step 6, which promotes to `featurereclamate` through the
+     reclaim-animation bit).
+   * **Sprite instance, burning:**
+     a. if `globalTick % 3 == 0`, emit one smoke particle (`[03 §5.5]` smoke
+        producer) at the footprint centre, terrain height, jittered by two
+        **CRT-stream** draws `[01 §7.2]` scaled by the current burn frame's
+        width and height: `x += (draw·(w/2))/32768 − frame.xoff + w/4`,
+        `y += 2·(frame.yoff − (draw·(h/2))/32768) − 2·(h/4)` (integer parts,
+        16-bit truncation). Presentation-only; no simulation draw.
+     b. advance the burn cursor, then the shadow cursor if present;
+     c. if the burn cursor's sequence pointer is now null: look up the
+        anchor cell; `teardown(anchor, 0)`; if `featureburnt ≠ 0xFFFF`,
+        `stamp(anchor, featureburnt, null, null, 10)`. This is **not** the
+        replacement routine: no position or orientation is carried, and the
+        successor is placed at the snapped footprint centre.
+     d. else if `countdown ≠ 0` and the remote bit is clear: `countdown -= 1`;
+        when it reaches 0, run the burn event (§11) once.
+4. Nothing else — there is no separate sinking pass; it is the 3D branch of
+   pass 3.
+
+**Established — completion is animation-driven, restated with the exact
+trigger.** A burn (or a die/reclaim animation) ends on the visit in which the
+cursor advance clears the sequence pointer, i.e. the visit after the last
+frame's delay expires; the lifetime in visits is Σ over frames of `max(delay, 1)` with the
+per-frame delay words from the GAF entry — the asset census under "Feature
+burning" already lists the shipped totals.
+
+#### R-FEAT-01 §11 — The burn event, exactly, with the wind-probe skip rule [R-FEAT-01] (2026-08-29)
+
+**Correction.** "Wind embers, exactly five steps" above says "Zero wind
+collapses all five probes onto the origin tile, where they are skipped".
+The actual rule is more general: a probe is skipped when it lands on the
+**same tile as the previous probe** (the origin for the first), so with any
+wind slower than half a tile per probe the repeated tiles are skipped and
+draws happen only when the tile changes. The five probes therefore make
+between zero and five draws depending on wind speed, and a fast wind that
+jumps a tile never tests the skipped tile.
+
+**Established — `burnEvent(definition, anchor)`.**
+
+1. **Neighbourhood.** `for dz in −3..+3: for dx in −3..+3:` skip `(0, 0)`;
+   the cell must exist, hold a word `< 0xFFFB`, have **no instance**, and its
+   definition (no fringe hop — a fringe cell's word is `0xFFFE` and is
+   rejected by the sentinel test, so **only anchor cells can catch fire**)
+   must be `flamable`; then one simulation draw `boundedDraw(100)`; ignite
+   when `draw < candidate.spreadchance` (signed compare of the byte). At
+   most 48 draws.
+2. **Wind.** `pos := (x << 16, z << 16)`; five times: `pos += 2·wind` per
+   axis (the global 16.16 wind vector of `[R-WIND-01]`, doubled by a
+   64-bit multiply/shift); `tile := (pos.x >> 16, pos.z >> 16)` as signed
+   16-bit; if `tile == previous` skip, else `previous := tile` and apply the
+   same legality chain and draw rule as step 1 on that tile (the tile may be
+   off-map, which the cell lookup rejects). At most five draws.
+3. **Burn weapon.** If `burnweapon` resolved, fire it at the footprint
+   centre `((footprintx + 2x)·8, (footprintz + 2z)·8)` at the bilinear
+   terrain height, owned by the dummy feature unit (§2), through the
+   ordinary weapon request. Unconditional on the spread results.
+
+The event runs once per burn (the countdown stays 0). Draw order within the
+tick is fixed by the active-list order of pass 3 and, within the event, by
+the loops above, so the simulation stream's advance is fully determined.
+
 ## Feature reproduction
 
 **Established fact — per-tick reproduction walk (RNG-live even though
@@ -3925,6 +5000,42 @@ per tick is consumed regardless. A faithful implementation must keep the
 walk and the draw-before-check order, or every later simulation draw after
 the feature phase shifts. This walk is the sole per-tick feature-phase RNG
 consumer beyond burning and meteors.
+
+#### R-FEAT-01 §12 — The reproduction walk's exact target arithmetic, including its axis defect [R-FEAT-01] (2026-08-29)
+
+**Established.** The paragraph above is correct as far as it goes; the
+target expression it leaves as "offsets in `±reproducearea/2`" is:
+
+```
+cursor    -= 1 ; if cursor < 0 { cursor = W·H − 1 ; return }     ; W, H = map cell width/height
+cell       = plot[cursor]
+if cell.word < 0xFFFB and cell has no instance:
+    if boundedDraw(100) < reproduce                                ; signed compare of the byte; draw always taken
+        area = reproducearea
+        dx = boundedDraw(area) − (area >> 1)                       ; two more draws, in this order
+        dz = boundedDraw(area) − (area >> 1)
+        tx = cursor % W + dx
+        tz = cursor / H + dz                                        ; sic: divided by the map HEIGHT
+        target = plot[tx, tz] (bounds-checked lookup)
+        if target exists and cell.occupancyWord == 0 and target.word == 0xFFFF
+            stamp(target, cell.word, null, null, 10)
+```
+
+The Z of the target is derived from `cursor / mapHeight`, not
+`cursor / mapWidth` — confirmed at instruction level (the two divisions use
+different divisors). On a square map the two agree; on any other map the
+offspring is placed at a Z unrelated to the parent (for a map wider than it
+is tall, `cursor / H` exceeds the parent's row and can run off the bottom,
+where the bounds check rejects it). Because every shipped feature authors
+`reproduce = 0` the defect has no stock effect, but an implementation that
+enables reproduction must reproduce it or declare a sanctioned divergence.
+`boundedDraw(area)` with `area < 2` returns 0 without a draw `[01 §7.3]`, so
+`reproducearea` 0 or 1 costs one draw per eligible visit, not three. The
+source cell's occupancy word is the mobile-occupant word `[R-DOC04-B]`, so a
+unit standing on the parent suppresses the spawn; the target must be
+**exactly** empty — a fringe or void cell rejects. The stamp then applies the
+dense-pack rule of §3 to the offspring's whole footprint (which may tear down
+neighbours since the target anchor was empty but its fringe need not be).
 
 ## Feature sinking and water interaction
 
@@ -3964,6 +5075,103 @@ descent — not a gravity-driven fall**. The state machine is closed:
 Water/lava splash art belongs to debris records and projectile water entry, not
 to sinking wrecks. There is no depth-triggered removal: a settled sunken wreck
 stays forever unless damaged, reclaimed, or replaced by a successor.
+
+#### R-FEAT-01 §13 — Sinking, exactly: the integration step, the two height queries, and lava [R-FEAT-01] (2026-08-29)
+
+**Established — the 3D branch of the feature phase (§10 pass 3).** For an
+active 3D instance whose velocity triple is not all zero:
+
+```
+pos.x += vel.x ; pos.y += vel.y ; pos.z += vel.z            ; 16.16 adds, no clamp
+floor  = coarseHeight(pos)                                   ; the (hmax + hmin) >> 1 query of [03 §2.3] on the cell now under pos, integer
+if (floor << 16) < pos.y                                     ; strictly above the floor
+    if pos.y < (seaLevelByte << 16)                          ; strictly below the water plane
+        vel.x = 0 ; vel.y = −11468 ; vel.z = 0               ; the latch (−0.175 world units per tick)
+    else
+        vel.y −= gravity                                     ; the map's 16.16 per-tick gravity global [06 §5.1]; vel.x, vel.z untouched
+else
+    pos.y = floor << 16 ; vel = (0, 0, 0)                    ; hard snap, fraction discarded
+```
+
+The dormant move (all-zero velocity) is tested **before** the integration on
+each visit, so a snapped instance is retired on the visit after it lands.
+`pos.y == floor << 16` counts as landed (the compare is strict the other
+way). `pos.y == seaLevel << 16` exactly is treated as *above* water, so an
+instance resting on the plane falls under gravity for one tick before the
+latch takes it. Horizontal velocity is preserved while falling in air and
+zeroed only by the water latch or the landing snap; nothing in the corpse
+path sets a horizontal velocity, so this matters only for the slot-reuse
+case in §14.
+
+**Established — the two writers of the velocity, and the reader.** The
+only writers are the corpse creator's submerged branch (`vel.y = −11468,
+vel.z = 0`, when the dying definition lacks `isfeature`; `vel.x` is **not**
+written there) and this branch. The only reader is this branch. Doc 06's
+"sinking-rate patch" is that write; its reader is the block above.
+
+**Established — lava has no rule here.** None of the corpse creator, the
+stamp, the teardown, or the feature phase reads the world's lava flag; the
+only medium test anywhere in the feature paths is `seaLevelByte`, so on a
+lava world a corpse whose terrain is at or below the "sea" level sinks into
+the lava exactly as into water — silently (no splash, no smoke column, no
+sound), at the constant rate, to the coarse floor — and a wreck above it gets
+the ordinary land smoke column `[R-LAYER §3]`. Lava-specific presentation
+(the strip producers' medium selection) is doc 03's; there is no lava-side
+simulation difference for features. `sinktime` is not a key the executable
+knows (reader census: none); the rate is the constant above.
+
+**Established — the corpse creator's chain and stamp** (restating the
+handoff from `[06 §12.2]` at feature precision). The corpse ordinal is the
+unit definition's resolved `corpse` (§2's lookup); the creator follows
+`featuredead` `depth − 1` times (depth from the `Killed` script's result),
+stopping silently on any sentinel; then stamps at the unit's plot cell with
+the unit's exact position triple and orientation triple and the owner's
+player index as the placer nibble. The dense-pack rule applies: the corpse
+tears down every non-indestructible feature under its footprint and is
+silently not created over an indestructible one, a void cell, or when the
+slot pool is empty (§3). There is one attempt.
+
+#### R-FEAT-01 §14 — Slot reuse: what a new 3D instance inherits [R-FEAT-01] (2026-08-29)
+
+**Established.** The stamp writes an instance's ordinal, accumulator,
+anchor, position, orientation and model handle, and nothing else; the pool
+is zero-filled once at session start; the free list is LIFO; teardown pushes
+without clearing. Therefore a newly stamped 3D instance carries, in every
+word the stamp does not write, whatever the slot's previous occupant left:
+
+* **Velocity.** A successor stamped by the replacement routine (§5) or by
+  the burn completion reuses the slot its predecessor just freed and so
+  keeps the predecessor's velocity — this is the mechanism behind the
+  sentence in "Feature sinking and water interaction" that a destroyed
+  sinking wreck "hands its submerged position — and typically its stale
+  downward velocity — to its successor", which stands. A settled (dormant)
+  wreck's successor starts with zero velocity, is retired on its first
+  visit, and rests where the predecessor rested.
+* **Sprite cursors overlap the velocity words.** A burning, dying, or
+  reclaiming sprite instance keeps its main cursor in the bytes a 3D
+  instance uses for the model handle and position X/Y (all rewritten by the
+  stamp), and its shadow cursor in the bytes used for position Z
+  (rewritten), `vel.x` (its loop byte and padding) and `vel.y` (the shadow's
+  sequence pointer); `vel.z` is outside both cursors. A finished shadow cursor has a null pointer; a
+  shadow cursor whose owner was **torn down mid-animation** (a corpse or
+  reproduction stamp colliding with a burning tree) leaves the pointer in
+  place. The colliding stamp pops that very slot. On a land cell the corpse
+  path does not write `vel.y`, so the corpse starts with `vel.y` equal to a
+  code-space pointer value — a large positive 16.16 velocity — and rises
+  under gravity until it falls back and snaps. **Supported inference** as to
+  the observable (a wreck that briefly launches upward when it lands on a
+  burning tree with a shadow sequence); established as to every step of the
+  mechanism. Decider: manual retail observation with an authored probe (a
+  unit killed over a burning `Tree1`), or a static trace showing a writer of
+  those words that this unit did not find. Nanolathe must zero the velocity
+  triple at stamp unless it chooses to reproduce this.
+* **Mode bits.** The stamp clears only the burning bit; the reclaim-animation
+  and remote bits persist from the previous occupant. For a 3D instance the
+  reclaim-animation bit is read by the replacement routine (§5 step 6), so a
+  3D wreck placed into a slot last used by a *reclaim* animation would, on
+  its later death, be replaced by `featurereclamate` instead of
+  `featuredead`. Established mechanism; the observable is a Supported
+  inference with the same deciders.
 
 ## Saving economy, construction, and features
 
@@ -4118,11 +5326,42 @@ signed zero and NaN; all four are stated in [R-ECO-01 §1] and [R-ECO-01 §5],
 and only the untested exponent-range edge survives. One bullet is added: the
 cloak gate's second status bit has no writer anywhere in the recovered image.
 
+**Correction (2026-08-29, RWU-05-2).** The producer questions this unit
+owned — the `solarstrength` reader census, the wind range's source and the
+wind phase's cadence and draws, the tidal source, the exact extraction walk
+and accumulator, the maker byte and `onoffable`, upkeep timing, the cloak
+debit's cost selection and player gate, and storage eligibility — are closed
+under [R-PROD-01 §1]–[R-PROD-01 §8]. Two bullets that would otherwise have
+been added are cross-document handoffs, not unknowns: the legacy terrain
+attribute record's eight-byte layout (metal byte at offset 6) and the legacy
+header's wind-range words belong to `[fmt tnt]`, and the wind speed roll's
+no-draw exception when the range is below two belongs in [01 §7.3]'s census.
+One bullet is added below for the wind heading's pre-roll value.
+
 **Correction (2026-08-29, RWU-05-3).** The reversed-argument repair bullet is
 removed: the variant is the `SelfRepair` order and its malformed-input behavior
 is stated in [R-WORK-01 §3], so nothing about it is open. Four bullets replace
 it, all raised by the work-handler pass and none of them a restatement of a
 closed finding.
+
+**Correction (2026-08-29, RWU-05-5).** Five feature bullets are removed as
+closed under [R-FEAT-01]: the reclaim payout's two "protection" bits are the
+anchor's instance-attached bit and the definition's sprite bit
+[R-FEAT-01 §15]; same-tick precedence is closed by the instance-bit
+serialization and the phase order [R-FEAT-01 §5]; the "malformed burn
+animation" loader question narrows to the bank lookup's miss return (kept
+below) because a definition without `seqnameburn` simply cannot ignite and a
+3D definition never has one [R-FEAT-01 §1][R-FEAT-01 §9]; "catalog
+exhaustion" does not exist (the catalog is reallocated per record) and the
+pool-exhaustion order is established — collision teardown precedes the pool
+check [R-FEAT-01 §3]; and wreck transitions at vents are governed by the
+dense-pack rule alone [R-FEAT-01 §7]. Two claims elsewhere in this document
+were corrected in place: the ignition countdown's spark time is in ticks
+(`sparktime × 30`, truncated), not in authored seconds [R-FEAT-01 §9], and
+`autoreclaimable` is not the teardown honor bit [R-FEAT-01 §4]. One claim in
+[R-PROD-01 §6] was corrected by [R-FEAT-01 §7]: indestructible metal
+features seed the plot metal byte after the uniform seed. The bullets below
+are the residue.
 
 - Whether the build-assist approach radius's summand
   `footprintX × footprintX + footprintZ + footprintZ` is a retail defect or an
@@ -4137,10 +5376,6 @@ closed finding.
   bit unit reclaim and capture treat as terminal · doc 04 §3.1 · static trace
   of that word's writer set. Every handler-side consequence is established in
   [R-WORK-01 §1..§7].
-- Meaning of the terrain-cell protection bit that feature reclaim's payout
-  tests together with the feature definition's own protection bit; only the
-  conjunction's effect (refuse and pay nothing) is established
-  · [R-WORK-01 §5] · static trace of that cell bit's writer set.
 - Response when a malformed factory product node bypasses queue preflight and
   reaches state 2 — cancellation, retry, or termination · "Factory queue" ·
   static trace. The current admission boundary records a bounded diagnostic
@@ -4177,6 +5412,10 @@ closed finding.
   the behavior is unobservable · "Cloak debit" · static trace over the regions
   the export still misses. The rest of the gate, the truncation, and the
   inclusive affordability compare are closed by [R-ECO-01 §9].
+- Value of the global wind heading before the first non-zero speed roll — it
+  reaches wind-generator scripts through `SetDirection` on a map whose first
+  roll is zero; inferred zero from fresh allocation · "Wind generation",
+  [R-PROD-01 §3] · static trace of the global block's allocator zeroing.
 - Whether any settlement intermediate can reach the range where the 53-bit
   precision control's wider exponent differs from a double's: no economy
   magnitude was found that does, and the claim is a stated edge rather than a
@@ -4204,21 +5443,39 @@ closed finding.
   presentation beyond the refresh call · "Stockpile production" · static trace.
 - Meanings of the carried live-record animation fields beyond position and
   velocity in the feature save records · doc 03 · static trace.
-- Full same-tick precedence when several feature damage or successor causes
-  land in one tick; the burning-rejects-reclaim, instance-less blast
-  accumulation, and dead-hop fringe cases are closed · "Removal and successor replacement" ·
-  static trace.
-- Loader behavior for malformed or missing burn animations and for
-  non-filename object/fire combinations · doc 02 §5, "Feature burning" ·
-  static trace. Marked `TODO(question)`.
 - Presentation clipping of sunken wrecks · doc 03 · static trace.
 - Which statistic and UI fields derive from the economy, and which are
   authoritative totals versus presentation-only cached values · doc 07 ·
   static trace. The live-stock and pass-counter HUD readers are partially
   enumerated.
-- Ordering when the feature catalog and the animation pool exhaust in the same
-  tick · "Catalog construction" · static trace. Marked `TODO(question)`;
-  exhaustion itself is an established silent failure with no retry.
-- Wreck transitions at geothermal vent cells · "Geothermal requirement" ·
-  static trace. Marked `TODO(question)`; vent persistence, multi-vent
-  at-least-one satisfaction, and post-destruction persistence are established.
+
+- What the feature parser's field reads do with a null section handle after
+  `Record "%s" missing from feature files` — the record is appended and the
+  parser continues; a fault is the likely outcome but is not traced
+  · "Catalog construction", [R-FEAT-01 §1] · static trace of the TDF getters'
+  null-handle path. Reached by a bad `featuredead`/`featurereclamate`/
+  `featureburnt` name, a bad FBI `corpse` name, or a bad mission-file feature
+  name.
+- What the GAF bank lookup returns for a `seqname*` value naming an entry
+  absent from the bank (zero, which the code treats as "no sequence", or a
+  fault) · "Catalog construction", [R-FEAT-01 §1] · static trace of the
+  sequence lookup's miss path; the shipped corpus has no such case.
+- Identities of the two table-dispatched handlers that consume the
+  area-reclaim candidate scan (the builder's area-reclaim order body and the
+  computer player's) — the scan's predicate is established, the consumers
+  are a Supported inference · [R-FEAT-01 §6] · static trace of the order
+  descriptor table (doc 04 §3.1) and the AI task table (doc 08).
+- The reader of the copy of the reclaim flag the death/reclaim transition
+  stores in the instance's bit 4 — none found · [R-FEAT-01 §5] · static
+  trace over the unrecovered regions.
+- Whether the slot-reuse observables — a land corpse launched upward by a
+  stale shadow-cursor pointer, and a 3D wreck replaced by `featurereclamate`
+  because its slot's previous occupant was a reclaim animation — occur in
+  play; every step of the mechanism is established · [R-FEAT-01 §14] ·
+  manual retail observation with an authored probe (a unit killed over a
+  burning `Tree1` that has `seqnameburnshad`), or a static trace finding a
+  velocity-word writer this unit missed.
+- Meaning of the per-hit feature flag-word copy the projectile hit test
+  stores in a global for the script layer (it is the whole flag word; which
+  bits the consumer reads is a doc 04 COB question) · [R-FEAT-01 §1]
+  `blocking` census · static trace of that global's script-port consumer.

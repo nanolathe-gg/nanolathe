@@ -165,8 +165,11 @@ Important corpus corrections reflected across the category documents include:
 - current pathfinding uses a 16-world-unit grid and the corrected A* roots;
 - the per-unit script drain uses the COB interpreter path, not a small GAF
   allocation helper;
-- weapon accuracy, tolerance, and pitch-tolerance are parsed but have no
-  gameplay reader in the bounded retail image;
+- weapon accuracy is read by the turret executor's fire-time spread and
+  tolerance/pitch-tolerance by the angular-drift gate — one reader each, none
+  in admission, motion or damage `[R-WPN-03 §1]`; `aimrate` and
+  `movingaccuracy` have no key in the image at all (corrected 2026-08-29; the
+  earlier text said they had no gameplay reader);
 - automatic targeting uses randomized preferred/fallback selection, while
   target retention and shot-time physical admission intentionally recheck
   different predicates;
@@ -347,9 +350,9 @@ that are cited but never introduced.
 | `R-CORE-01`, `R-CORE-02`, `R-CORE-03` | doc 01 |
 | `R-CONTENT-01`, `R-CONTENT-02`, `R-CONTENT-03`, `R-P0-03` | doc 02 |
 | `R-CRD-005`, `R-P0-18-A`, `R-P0-18-B`, `R-P0-19`, `R-P0-19-N`, `R-P0-19-P`, `R-REN-02R`, `R-REN-03A`, `R-RR16-A`, `R-SENSOR-01`, `R-STRIP-01`, `R-VIS-01`, `R-WIND-01` | doc 03 |
-| `R-AIR-01`, `R-CB-01`, `R-COB-01`, `R-COB-02`, `R-COB-03`, `R-DOC04-A`, `R-DOC04-B`, `R-DOC04-C`, `R-DOC04-D`, `R-MOV-01`, `R-MOV-02A`, `R-ORDER-02`, `R-P0-01`, `R-P0-02`, `R-P0-08`, `R-P0-08-A`, `R-P0-09`, `R-P0-10`, `R-P0-16-A`, `R-P28-COB-01R`, `R-PATH-01`, `R-REV-02`, `R-STANCE-01`, `R-UNIT-06` | doc 04 |
-| `R-ECO-01`, `R-FAC-01C`, `R-FAC-01R`, `R-P0-06`, `R-WORK-01` | doc 05 |
-| `R-P0-07`, `R-WPN-01`, `R-WPN-02` | doc 06 |
+| `R-AIR-01`, `R-CB-01`, `R-COB-01`, `R-COB-02`, `R-COB-03`, `R-DOC04-A`, `R-DOC04-B`, `R-DOC04-C`, `R-DOC04-D`, `R-MOV-01`, `R-MOV-02A`, `R-ORD-01`, `R-ORDER-02`, `R-P0-01`, `R-P0-02`, `R-P0-08`, `R-P0-08-A`, `R-P0-09`, `R-P0-10`, `R-P0-16-A`, `R-P28-COB-01R`, `R-PATH-01`, `R-REV-02`, `R-STANCE-01`, `R-UNIT-06` | doc 04 |
+| `R-ECO-01`, `R-FAC-01C`, `R-FAC-01R`, `R-FEAT-01`, `R-P0-06`, `R-PROD-01`, `R-WORK-01` | doc 05 |
+| `R-DMG-01`, `R-P0-07`, `R-WPN-01`, `R-WPN-02`, `R-WPN-03` | doc 06 |
 | `R-HUD-02R`, `R-P0-11`, `R-REV-01`, `R-SEL-02B2` | doc 07 |
 | `R-AI-01`, `R-P0-04`, `R-P0-05`, `R-SAVE-FEATURE-01`, `R-SAVE-ORDER-01`, `R-SAVE-UNIT-01`, `R-SAVE-WEAPON-01` | doc 08 |
 | `R-CRD-006` | docs 03 (§2 producer census) and 07 (§1 cadence seam) |
