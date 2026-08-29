@@ -1295,8 +1295,10 @@ contract without relying on visual plausibility:
    separately; absence of a line-break write remains Unknown.
 5. For hover hulls, sample an interior point, each projected edge, and points
    just across each edge with two overlapping units. Capture the stable hot
-   list and winning id. This settles the remaining bounds-extrema mapping and
-   validates strict polygon admission against the pseudocode in [R-SEL-02B2].
+   list and winning id. The bounds extrema, corner mapping and polygon
+   predicate are now traced, so this probe is a confirmation of
+   [R-SEL-02B2][R-REV-01] rather than the decider for them; its remaining
+   value is checking the min-Y ground quad against a tall model.
 
 Whenever the offset is nonzero, the moving strip is blitted at y+offset and
 three translated strings are drawn onto it: `Game Time:` as `hh:mm:ss`,
@@ -1558,10 +1560,16 @@ The four consumers have the following established split:
   inclusive, and all eligible units at the same point are admitted in the
   stable unit-pool walk order.
 * Point click uses the hover id computed before the click. The hover search
-  admits visible eligible units from the sensor-built hot-unit list, projects
-  each unit's transformed hierarchy bounds as a four-corner screen polygon,
-  and retains the smallest score with a strict `<` comparison. Equal scores
-  therefore retain the earlier list member (the lower stable pool position).
+  walks the `HOT UNITS` list, projects each unit's transformed root-piece
+  bounds as a four-corner screen polygon, and retains the smallest score with
+  a strict `<` comparison. Equal scores therefore retain the earlier list
+  member (the lower stable pool position). **Correction (2026-08-28):** this
+  bullet previously read "admits visible eligible units from the sensor-built
+  hot-unit list … transformed hierarchy bounds". All three readings were
+  wrong: the list is rebuilt by a frame/presentation producer rather than by
+  the sensor phase, its membership test is not the §9 eligible-unit
+  predicate, and the projected box comes from the selected root piece alone
+  [R-REV-01].
 * Cursor targeting consumes that same hover/visibility result for its
   target-dependent cursor branches; no authored selection primitive is read.
 
@@ -1571,8 +1579,11 @@ version of this paragraph left the projected-hull edge convention open and
 proposed an edge probe. R-SEL-02B2 now closes that question: the polygon helper
 requires a strictly positive signed cross-product at every edge, so equality
 on an edge is rejected. That strict rule must not be confused with the
-inclusive drag-rectangle rule; only the bounds-extrema-to-corner mapping
-remains open [R-SEL-02B2].
+inclusive drag-rectangle rule. **Further correction (2026-08-28):** the
+sentence that closed this paragraph said "only the bounds-extrema-to-corner
+mapping remains open". That mapping is now closed too, and the sign
+convention printed for the cross-product was the reverse of the traced one;
+both are corrected in [R-REV-01].
 
 **Established layer order and clipping.** World terrain, features, units,
 projectiles, and effects are composed first; the world fog/LOS overlay is
@@ -1611,17 +1622,26 @@ edge equality itself is already closed by R-SEL-02B2.
 #### R-SEL-02B2 — hover hull arithmetic and publication boundary
 
 **Established (direct-static).** The hover finder is a separate point-pick
-pass from the drag selector. In the viewport it walks the sensor-produced
-`HOT UNITS` list, which is populated by an ascending unit-pool walk and retains
-that order. The list contains units only; feature contacts are not candidates
-in this pass. A non-empty unit definition/model reference is required before
-the hull helper is called. The candidate must also pass the shared visible and
+pass from the drag selector. In the viewport it walks the `HOT UNITS` list,
+which is populated by an ascending unit-pool walk and retains that order. The
+list contains units only; feature contacts are not candidates in this pass. A
+non-empty unit definition/model reference is required before the hull helper
+is called. The visibility source is mode-selected: the local player's bit in
+the shared word coverage, or a nonzero byte in the selected per-viewer
+coverage grid. Visibility is resolved when the list is built, so a hidden
+unit cannot win merely by having a nearer hull.
+
+**Correction (2026-08-28) — list producer and membership gates
+[R-REV-01].** The paragraph above previously called the list "sensor-produced"
+and stated that a candidate "must also pass the shared visible and
 eligible-unit gates described in §9: the active state, an exact zero order
-guard, no disqualifying state reference, and the established parent-state gate.
-The visibility source is mode-selected: the local player's bit in the shared
-word coverage, or a nonzero byte in the selected per-viewer coverage grid.
-These gates run before the score reduction, so a hidden, inactive, or
-ineligible unit cannot win merely by having a nearer hull.
+guard, no disqualifying state reference, and the established parent-state
+gate". Both readings were wrong. The list is rebuilt by a frame/presentation
+producer that walks unit memory itself, and neither the producer nor the
+hover consumer evaluates the §9 eligibility predicate; those gates belong to
+their own selection consumers and must not be treated as `HOT UNITS`
+membership requirements. The producer's own admission is stated in
+[R-REV-01].
 
 **Established (direct-static).** For an admitted viewport candidate, retail
 asks the unit's model/piece-hierarchy bounding-box helper for its model-space
@@ -1632,26 +1652,35 @@ For each transformed corner `(x,y,z)`, the screen coordinates are:
 
 ```text
 screenX = int16((x + unitX - cameraX) >> 16) + 128
-screenY = int16((z + unitZ - cameraZ) >> 16)
+screenY = int16(((unitZ - cameraZ) - z) >> 16)
          - (int16((y + unitY) >> 16) >> 1) + 32
 ```
+
+**Correction (2026-08-28) — projected Z sign [R-REV-01].** The second line
+previously read `int16((z + unitZ - cameraZ) >> 16)`. That is wrong: the
+transformed Z is **subtracted** from the camera-relative unit Z, not added.
+The `+z` form contradicted [03 §2.4], which already described this trailing
+sign as a transient negation of Z inside the projection helpers; the
+subtraction here is that negation, folded into the same expression.
 
 The narrowing occurs before the half-height shift and before the view-origin
 addition. The unit's committed position supplies `unitX/unitY/unitZ`, and its
 three committed orientation accumulators supply the hierarchy transform;
-camera X/Z are the current presentation camera values. This is the exact
-projection used by the four-point hover path and is distinct from the
-origin-only drag projection in §9.
+camera X/Z are the current presentation camera values, scaled to 16.16 before
+the subtraction. This is the exact projection used by the four-point hover
+path and is distinct from the origin-only drag projection in §9.
 
-**Unknown (direct-static boundary).** The surviving static record identifies
-the box helper and the four-corner loop, but does not name the helper's six
-independent extrema or expose the final component mapping that constructs the
-four corner records. Consequently the exact corner order and whether each
-corner uses the helper's minimum or maximum on each model axis cannot be
-reproduced from the committed research corpus. The helper's model-space box
-provenance is also not established as either a bind-pose box or a runtime
-piece-state box. A production replacement must not substitute `FootprintX/Z`,
-the authored selection face, or a bind-pose box until that mapping is traced.
+**Correction (2026-08-28) — extrema and corner mapping now closed
+[R-REV-01].** This section previously carried an **Unknown (direct-static
+boundary)** paragraph stating that the static record "does not name the
+helper's six independent extrema or expose the final component mapping that
+constructs the four corner records", and that the helper's model-space box
+provenance was not established as a bind-pose or runtime box. That boundary
+is closed by the re-derivation in [R-REV-01]: the helper's outputs, its
+vertex source, the disabled hierarchy walk, and the exact four-corner
+component mapping are all Established. The prohibition the paragraph attached
+still stands — a production replacement must not substitute `FootprintX/Z`,
+the authored selection face, or a generic bind-pose box.
 
 **Established (direct-static).** The four projected corners are passed to a
 four-point polygon hit helper. The helper's return value is the sole viewport
@@ -1672,17 +1701,28 @@ containsStrictPolygon(point, vertices):
     for i in 0 .. len(vertices)-1:
         prev = vertices[i]
         next = vertices[(i + 1) mod len(vertices)]
-        lhs = signed32((next.x - prev.x) * (point.y - prev.y))
-        rhs = signed32((next.y - prev.y) * (point.x - prev.x))
+        lhs = signed32((next.y - prev.y) * (point.x - prev.x))
+        rhs = signed32((next.x - prev.x) * (point.y - prev.y))
         if lhs <= rhs:
             return false
     return true
 ```
 
+**Correction (2026-08-28) — predicate operand order [R-REV-01].** The two
+products above were previously printed the other way round, with
+`lhs = (next.x - prev.x) * (point.y - prev.y)` and
+`rhs = (next.y - prev.y) * (point.x - prev.x)`. That is the reverse of the
+traced comparison. The strictness was right; the sign convention was
+inverted, which flips which winding of the quad counts as inside. Combined
+with the corner order established in [R-REV-01], the earlier form admitted
+the complement of the retail hull.
+
 For the retail hover path `vertices` has four entries. `signed32` means that
 the low signed 32-bit product is the value compared; it is not a floating
-point cross product and has no epsilon. The corner order and the mapping from
-the box's six extrema into those four entries remain the named residual above.
+point cross product, has no epsilon, and has no overflow guard, so a
+replacement must keep the 32-bit wrap rather than widening silently. The
+corner order and the mapping from the box's six extrema into those four
+entries are established in [R-REV-01].
 
 **Established (direct-static).** Among candidates whose polygon admits the
 pointer, the hover reduction computes the following fixed-point score, using
@@ -1694,10 +1734,16 @@ score = ((((modelHeight * 32768) >> 16) + zSpan) * xSpan) >> 16
 ```
 
 `modelHeight` is the compiled model total-height term, while `xSpan` and
-`zSpan` are the compiled horizontal box spans. Their exact authored-field
-provenance is separate from this reduction and remains subject to the bounds
-helper gap above. The two `>> 16` steps are fixed-point narrowing steps, not
-floating-point rounding. The winner is replaced only when `score < bestScore`.
+`zSpan` are the compiled horizontal box spans. **Correction (2026-08-28):**
+this paragraph previously said their provenance "remains subject to the
+bounds helper gap above". They are not bounds-helper outputs at all — they
+are three compiled definition words read directly by the reduction, and they
+are unrelated to the six hull extrema [R-REV-01]. Both multiplications are
+evaluated as signed 64-bit products and each `>> 16` is an arithmetic shift
+of that 64-bit intermediate before the result is taken as a signed 32-bit
+score; they are fixed-point narrowing steps, not floating-point rounding
+(**Established**, direct-static). The winner is replaced only when
+`score < bestScore`.
 Equal scores retain the earlier `HOT UNITS` member, hence the lower stable pool
 position. The minimap branch uses `HOT RADAR UNITS` instead and admits a
 contact only when planar squared distance is strictly less than four; it also
@@ -1707,18 +1753,20 @@ retains the first member on an equal distance.
 computed by the pointer update; it does not recompute the hull. Cursor target
 shapes consume that same hover/visibility result. Thus cursor and click agree
 for every admitted interior point and reject an edge point under the same
-strict polygon test; only the unresolved corner construction remains a shared
-boundary rather than two independent policies.
+strict polygon test. **Correction (2026-08-28):** this sentence previously
+ended "only the unresolved corner construction remains a shared boundary".
+The corner construction is no longer unresolved [R-REV-01]; what cursor and
+click share is one computed hover result, not an open boundary.
 
 **Presentation publication gap (supported inference from [03 §2.4] and
 [03 §2.5]).** The committed `frame.UnitView` currently publishes the unit
 pose (`X/Y/Z` and heading/pitch/bank), model name and definition id, flags,
 footprint, and per-piece rotation/translation/hidden state. The compiled model
 contains authored hierarchy vertices and parent links, and the renderer can
-derive a bind-pose `ModelBounds`. The frame does not publish the sensor-built
-`HOT UNITS` membership/order, the helper's six runtime hull extrema, or the
-helper's exact definition-term names. It also does not publish the complete
-authoritative eligibility fields as a typed pick record. The current
+derive a bind-pose `ModelBounds`. The frame does not publish the
+`HOT UNITS` membership/order, the producer's viewport/visibility admission
+result, the helper's six runtime hull extrema, or the three score terms as a
+typed pick record. The current
 presentation picker therefore cannot reproduce this hover contract without
 guessing a bounds source, reading live simulation state, or treating the frame
 slice as the hot list. [03 §2.4] forbids the latter class of live read at the
@@ -1727,11 +1775,185 @@ presentation boundary [03 §2.4–§2.5][07 R-SEL-02A].
 The safe implementation boundary is consequently a future committed-frame
 pick record containing, at minimum, hot-list membership/order, the resolved
 four-corner hull inputs (or the six extrema plus their documented mapping),
-visibility/eligibility admission, and the three score terms. Until those
-fields or an equivalently traced pure helper are published, replacing the
-current 16-pixel picker is not established. `TODO(question)`: trace the box
-helper's six-extrema-to-corner mapping and publish those exact inputs at the
-frame boundary. The polygon helper's strict edge rule is closed above.
+the producer's viewport/visibility admission result, and the three score
+terms. Until those fields or an equivalently traced pure helper are
+published, replacing the current 16-pixel picker is not established. The box
+helper's extrema-to-corner mapping and the polygon helper's edge rule are
+both closed in [R-REV-01]; the publication record is the only part of this
+boundary that is still open. `TODO(question)`: publish the ordered candidate
+record described in [R-REV-01 §6] at the committed-frame boundary.
+
+#### R-REV-01 — hover hull extrema, corner mapping, projection sign, polygon predicate, and HOT UNITS producer (2026-08-28)
+
+This section is an independent pre-merge re-derivation of the whole viewport
+hover chain — list producer, foreign-visibility helper, per-candidate hull
+test, model bounds helper, orientation transform, four-point polygon helper,
+and score reduction. It closes the extrema/corner boundary that
+[R-SEL-02B2] recorded as **Unknown** and corrects four statements in that
+section. Nothing here changes the drag-rectangle or minimap contracts.
+
+**1. Model bounds helper — Established (direct-static).** A wrapper
+zero-fills two output triples and a zero base triple, then calls a recursive
+body with the selected model node, the base triple, both outputs, and a
+walk flag. For each visited node the body forms `translated = base + node
+translation`. If the node's vertex count is **strictly greater than two**,
+every vertex contributes `translated + vertex` componentwise: the first
+output keeps the componentwise minimum (replaced when a candidate component
+is strictly less than the stored one) and the second the componentwise
+maximum (replaced when strictly greater). Nodes with two or fewer vertices
+contribute nothing. Because the outputs are zero-seeded rather than
+first-vertex seeded, an axis whose translated vertices are all positive keeps
+zero as its minimum, and an axis whose vertices are all negative keeps zero
+as its maximum; a selected node with two or fewer vertices leaves all six
+values at zero. When the walk flag is nonzero the body recurses into the
+node's child with the translated base and then follows the sibling chain
+with the unchanged base. **The hover caller passes the disabling value**, so
+on this path only the selected root node contributes vertices — children and
+siblings are never visited. The six values are therefore minima and maxima of
+translated authored vertex coordinates, taken from the 3DO node translation
+and vertex arrays described in [03 §2.4]; they are not footprint cells, the
+authored selection face, or sprite bounds.
+
+**2. Four-corner mapping — Established (direct-static).** With
+`min = (minX, minY, minZ)` and `max = (maxX, maxY, maxZ)` from the helper,
+the hover caller writes four contiguous three-component records in this
+order, then transforms and projects them in the same order:
+
+```text
+corner[0] = (minX, minY, minZ)
+corner[1] = (maxX, minY, minZ)
+corner[2] = (maxX, minY, maxZ)
+corner[3] = (minX, minY, maxZ)
+```
+
+`maxY` is computed by the helper but **never loaded by the hover caller**.
+The hull is therefore a horizontal rectangle in the XZ plane at the model's
+minimum Y — a ground-level quad, traversed in a consistent winding — not a
+diagonal slice through the box and not a full projected AABB. When the helper
+returns all zeros (see §1) the four all-zero records still enter the normal
+transform and projection loop; no separate caller-side invalid-model fallback
+exists on this path.
+
+*What the previous text said, and why it was wrong.* [R-SEL-02B2] recorded
+this as **Unknown**, saying the static record "does not name the helper's six
+independent extrema or expose the final component mapping that constructs the
+four corner records", so that "the exact corner order and whether each corner
+uses the helper's minimum or maximum on each model axis cannot be reproduced".
+The mapping is in fact directly readable from the caller's record
+initialization: each of the four records is written from named helper output
+components before the transform loop starts. The conservative reading also
+implied that a maximum-Y corner existed; it does not.
+
+**3. Projection — Established (direct-static).** Each corner record is fed
+through the same three-axis orientation transform the renderer uses, driven
+by the unit's three committed orientation accumulators, and the result is
+projected as:
+
+```text
+screenX = int16((x + unitX - cameraX) >> 16) + 128
+screenY = int16(((unitZ - cameraZ) - z) >> 16)
+         - (int16((y + unitY) >> 16) >> 1) + 32
+```
+
+where `x/y/z` are the transformed corner components, `unitX/unitY/unitZ` the
+unit's committed position, and the camera X/Z values are scaled to 16.16
+before the subtraction. Each `>> 16` narrowing and its truncation to a signed
+16-bit value happen **before** the half-height shear and before the viewport
+bias is added. The transformed Z is subtracted, not added — the correction
+recorded above — which is the same trailing Z sign [03 §2.4] describes for
+the projection helpers.
+
+**4. Four-point polygon predicate — Established (direct-static).** The helper
+returns false for fewer than three points. Otherwise it visits every directed
+edge once — retail indexes `previous = p[i-1]`, `next = p[i mod n]` for
+`i = 1 .. n`, which enumerates the same edge set as `prev = p[i]`,
+`next = p[(i+1) mod n]` for `i = 0 .. n-1` — and admits the point only when
+every edge satisfies
+
+```text
+(next.y - prev.y) * (point.x - prev.x) > (next.x - prev.x) * (point.y - prev.y)
+```
+
+evaluated as two low signed 32-bit integer products compared with a signed
+comparison. Equality rejects, so every exactly collinear point — edge
+interior or vertex — is outside. There is no tolerance, widening, saturation,
+alternate edge path, or overflow guard, and the index wrap is signed integer
+division and remainder. The operand order above is the traced one; the form
+previously printed in [R-SEL-02B2] had the two sides swapped, which inverts
+the accepted winding.
+
+**5. `HOT UNITS` producer and consumer — Established (direct-static), with
+the caller context a Supported inference.** The list is rebuilt from scratch
+by one producer: it takes the stored list base, zeroes its running count,
+walks unit memory from its lower to its upper bound inclusive at the fixed
+unit stride, and appends the stable unit identity of each accepted candidate
+in that ascending order, writing the final count when the walk ends. There is
+no duplicate filter and no producer-side capacity branch. Its admission is
+exactly three tests, in this order:
+
+1. **Non-empty definition/model reference.** The candidate's definition/model
+   index word must be nonzero. This is the same word the hull path uses to
+   select the model, and it is the only per-candidate slot test.
+2. **Projected definition bounds intersect the viewport.** The producer
+   combines the unit's committed position with six compiled definition extent
+   words, applies the same `+128` horizontal and `+32` vertical biases and the
+   same half-height shear as the hover projection in §3, and compares the four
+   resulting bounds against the four viewport bounds. All four comparisons are
+   inclusive, so a candidate whose projected bound exactly touches a viewport
+   edge is retained. Before that comparison, when the candidate's two low
+   movement-mode status bits are not equal to 1, the producer queries the
+   terrain record under the unit's position and, if that query returns a
+   record whose height byte is smaller than the accumulated vertical term,
+   clamps the term to that byte. That the tested bits are the movement-mode
+   bits described in [04] is a **Supported inference**; what would settle it
+   is a writer census of that status word.
+3. **Ownership or foreign visibility.** A candidate whose owner byte equals
+   the local player's owner byte is appended without any visibility query.
+   Otherwise the shared foreign-visibility helper decides: it returns true
+   immediately for a candidate owned by the queried player record; returns
+   false when the candidate's hidden/cloak bit is set; returns false when the
+   candidate's movement flags lack the exempting bit and its derived vertical
+   sample is below the global sea-level byte scaled to 16.16; and otherwise
+   tests up to four samples derived from the unit position plus compiled
+   definition extents. Each sample is resolved through the mode-selected
+   coverage representation — a per-viewer byte grid with bounded, half-open
+   cell coordinates, or the shared word grid tested with the local player's
+   bit — and the **first** sample that reads visible admits the candidate;
+   later samples are evaluated only after an earlier one fails.
+
+The producer body evaluates **no** active-state, zero-order guard,
+parent-state, health, or build-fraction predicate. The viewport hover
+consumer walks the stored identities in producer order, repeats only test 1,
+calls the hull path of §§1–4, applies the score reduction, and replaces the
+winner only on a strictly smaller score — so an equal score retains the
+earlier producer member. The minimap branch reads a separate radar-contact
+list and is not part of this record.
+
+That this producer runs in the frame/presentation update rather than in the
+sensor phase is **Supported inference**: the producer reads only unit memory,
+camera, viewport, and coverage state, and holds no sensor list, but the
+bounded caller census that places it in the frame update was not re-derived
+here. What would settle it is a caller census of the producer taken from the
+frame-update and front-end refresh roots. The prior "sensor-built" /
+"sensor-produced" wording is retracted either way: no sensor product is read.
+
+**6. Remaining boundary — Unknown.** The committed `frame.UnitView` cannot
+represent this result: its `Units` slice is the published unit set, not the
+producer's viewport- and visibility-filtered list, and it carries no list
+membership or rank, no producer admission result, no resolved hull corners or
+extrema, and no score terms. Recomputing them at presentation time would mean
+guessing those inputs or reading live simulation state, which
+[03 §2.4–§2.5] forbids. The smallest evidence-backed publication is one
+committed ordered candidate record whose slice order **is** the producer's
+rank and whose entries carry the stable unit identity, the producer's settled
+admission, the four resolved hull corners (or the six extrema plus the §2
+mapping), and the three score terms or the reduced score. This is a data
+boundary, not a prescribed API. Whether the existing authoritative
+presentation pass can publish it without a new cross-package API is
+**Unknown**; the decider is a design pass over the publication boundary, not
+a further trace. The authored provenance of the three score terms — which
+compiled definition fields they are loaded from — is also **Unknown**; the
+decider is a writer trace from the definition compiler into those words.
 
 ### Supported inference
 
@@ -1741,15 +1963,19 @@ cell, minimap, or GUI control consumes the action.
 
 ### Unknown
 
-The hull's existence, its four-point projection stage, and unit-only hot-list
-scope are established in [R-SEL-02B2]. The exact bounds-helper component
-mapping is not. In particular, the earlier
-wording that called the complete picking hull closed was too broad: it closed
-the high-level shape and polygon arithmetic but did not establish the
-extrema-to-corner mapping needed for a pixel-for-pixel replacement.
-Feature-vs-unit priority remains closed only in
-the narrow sense that features are absent from this unit hover list; reclaim
-families resolve features separately at the pointer.
+The hull's existence, its four-point projection stage, unit-only hot-list
+scope, bounds-helper extrema, extrema-to-corner mapping, projected Z sign,
+polygon predicate, and score reduction are established in
+[R-SEL-02B2][R-REV-01]. **Correction (2026-08-28):** this paragraph
+previously listed the bounds-helper component mapping as still Unknown and
+said the earlier "picking hull closed" wording was too broad; the mapping is
+now closed by [R-REV-01], so what remains open is not the arithmetic but the
+committed publication record. A pixel-for-pixel presentation replacement is
+still blocked on that record and on the authored provenance of the three
+score terms, both listed as Unknown in [R-REV-01 §6]. Feature-vs-unit
+priority remains closed only in the narrow sense that features are absent
+from this unit hover list; reclaim families resolve features separately at
+the pointer.
 
 The visibility gate is the word-grid bit `1 << (localPlayer & 0x1F)` versus the
 per-viewer byte grid selected by a visibility-mode bit. Cursor handle slot 0
@@ -2222,9 +2448,9 @@ Repeated group-recall centering (never centers: negative-bounded over the whole
 image), the writer lifetime of selection
 flag `0x80000000` (reader-only, no writer in the image — the `CTRL_F` filter
 branch is unreachable from retail's own code), hull geometry and jammer versus
-radar-contact picking (hull = projected bounding-box quad over the sensor-built
-hot-unit lists; the word-grid gate bit is the local player's index — both
-established in §8),
+radar-contact picking (hull = the min-Y ground quad projected over the
+frame-produced hot-unit lists [R-REV-01]; the word-grid gate bit is the local
+player's index — both established in §8),
 page rebuild timing versus factory completion (completion sets the HUD dirty
 when the completing or produced unit is selected),
 and the exact arming trigger for the two off-button latch values (MOBILEBUILD
@@ -2720,16 +2946,17 @@ minimum-ping write-back are established above.
   handle slot 0 identity (latch-value table, cursor index table, build-site
   validity cursors, and the queue-overlay color pairs 3/10 and 1/9 are
   established; the overlay color-map entries are closed in [R-P0-11 §3]).
-* Picking is closed through the high-level admission shape, strict polygon
-  arithmetic, and score: the hover path walks the sensor-built unit list,
-  projects a transformed hierarchy box as four points, rejects edge equality
-  in the polygon helper, and applies the strict-score reduction [R-SEL-02B2].
-  The exact bounds-helper component mapping and the provenance of its six
-  extrema remain **Unknown**; the current 16-pixel presentation picker cannot
-  replace this path without a committed hull record or a traced pure helper.
-  The visibility gate is the word-grid bit `1 << (localPlayer & 0x1F)` versus
-  the per-viewer byte grid; the byte-grid writer semantics remain owned by doc
-  03.
+* Picking is closed through the admission shape, the bounds-helper extrema
+  and their extrema-to-corner mapping, the projected Z sign, the strict
+  polygon predicate, and the score reduction: the hover path walks the
+  frame-produced `HOT UNITS` list, projects the transformed selected-root
+  bounds as a min-Y ground quad, rejects edge equality in the polygon helper,
+  and applies the strict-score reduction [R-SEL-02B2][R-REV-01]. The
+  committed pick record and the authored provenance of the three score terms
+  remain **Unknown**; the current 16-pixel presentation picker cannot replace
+  this path without that record. The visibility gate is the word-grid bit
+  `1 << (localPlayer & 0x1F)` versus the per-viewer byte grid; the byte-grid
+  writer semantics remain owned by doc 03.
 * Selection overlap pick order — drag endpoints sorted independently, inclusive
   `min <= x <= max` tested per axis, stable pool sweep with strict `<` distance
   tie-break favoring lower slot [P1-14] — and fog word bit versus byte

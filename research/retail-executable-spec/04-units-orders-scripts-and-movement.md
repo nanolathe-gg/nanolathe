@@ -1285,10 +1285,15 @@ The state-2 target is nevertheless **Established**: `QueryBuildInfo` supplies
 the exit piece index, the piece transform is resolved with the factory origin,
 and that world position is retained for allocation while a separately snapped
 footprint anchor is validated. No independent factory-heading, yard-map,
-model-extent, or fixed-cell offset is read by the factory handler. Rotation
+model-extent, or fixed-cell offset is read by the factory handler.
+**Correction (2026-08-28):** this sentence used to continue "Rotation
 therefore enters through the authored piece transform and its hierarchy; the
-stock authored transform for each rotated factory variant remains **Unknown**
-until the data census in [R-P0-02] is completed.
+stock authored transform for each rotated factory variant remains
+**Unknown**". The premise holds but the conclusion did not: rotation enters
+inside the shared piece locator, which folds the unit's committed orientation
+into the model root node before rotating, so a rotated factory rotates its
+exit point. The complete arithmetic is **Established** in [R-REV-02], and the
+stock authored piece values are established by the census in [R-FAC-01B].
 
 The pre-allocation collision and retry contract is **Established**: the
 validator runs before a product exists, so it cannot be testing a
@@ -1313,8 +1318,10 @@ prove that a second same-pass allocation cannot stack.
 
 These are research boundaries, not replacements for the established factory
 completion contract. Keep the unresolved release, collision, blocked-lane,
-aircraft handoff, rotated-authored-transform, and multi-product questions as
-`TODO(question)` until executable or authored-data evidence closes them.
+aircraft handoff, and multi-product questions as `TODO(question)` until
+executable or authored-data evidence closes them. The
+rotated-authored-transform question that used to appear in this list is
+closed by [R-REV-02].
 
 ### OTA-FAC-01B targeted release-boundary pass [R-FAC-01B] (2026-08-28)
 
@@ -1375,14 +1382,18 @@ The five target boundaries now have these statuses:
    point/follow goal is installed ([04 §10.1]). The reviewed factory-handler
    call chain shows no factory-specific takeoff state before `GetBuilt`; whether
    takeoff precedes rally handoff for an aircraft product is **Unknown**.
-5. **Rotated transform and no-stacking — split Established/Unknown.** The
-   stock authored piece index, name, and local translation are Established by
-   the asset census above. The exact runtime arithmetic that applies a
-   rotated factory heading to those hierarchy translations, and a same-pass
-   no-stacking guarantee, remain **Unknown**. The 3DO format contains
-   hierarchy translations but no authored heading field ([fmt 3do]); a
-   heading-matrix capture or retail rotated-factory trace would settle the
-   remaining arithmetic.
+5. **Rotated transform Established; no-stacking still Unknown.** The stock
+   authored piece index, name, and local translation are Established by the
+   asset census above. **Correction (2026-08-28):** this item previously said
+   "The exact runtime arithmetic that applies a rotated factory heading to
+   those hierarchy translations … remain **Unknown**" and asked for a
+   heading-matrix capture. That arithmetic is now Established in [R-REV-02]:
+   the shared piece locator folds the unit's committed orientation into the
+   model root node's angles before rotating, so no separate heading matrix
+   exists to capture. The 3DO format's lack of an authored heading field
+   ([fmt 3do]) is consistent with this — the heading is runtime unit state,
+   not authored model data. A same-pass no-stacking guarantee remains
+   **Unknown**; its decider is a blocked multi-product trace.
 
 `TODO(question)`: capture a retail run with a blocked exit, a completed ground
 product, and a completed aircraft product while recording the first movement,
@@ -2864,12 +2875,125 @@ ownership (sections 3.8, 4.7).
 The stock callback piece indices, names, and authored local translations are
 now recorded in [R-FAC-01B].
 
-`TODO(question)`: whether the runtime's rotated heading transform applies
-those hierarchy translations with any additional factory-specific arithmetic,
-or whether a stock exit transform coincides with the footprint's geometric
-center after normalization. The allocator preserves the resolved transform
-either way; a heading-matrix capture or retail rotated-factory trace can settle
-the remaining runtime question.
+**Correction — the runtime transform is no longer open [R-REV-02].** This
+subsection previously carried a `TODO(question)` asking "whether the runtime's
+rotated heading transform applies those hierarchy translations with any
+additional factory-specific arithmetic". There is no factory-specific
+arithmetic and no separate heading matrix: the shared piece locator itself
+folds the unit's committed orientation into the model root node before
+rotating. The complete algorithm is stated in [R-REV-02] below. The allocator
+still preserves the resolved transform, and the separately snapped footprint
+anchor remains validation-only.
+
+### 6.3.1 OTA-REV-02 exit-piece locator transform [R-REV-02] (2026-08-28)
+
+This closes the runtime transform that section 6.3, [R-FAC-01B §5] and
+[05 "Rotated factories — split Established/Unknown"] recorded as **Unknown**.
+It is an independent static re-derivation of the synchronous piece-locator
+chain that the factory state-2 handler calls with the `QueryBuildInfo` piece
+index. The same locator serves the other synchronous piece queries, so the
+arithmetic below is not factory-specific.
+
+**Locator algorithm — Established (direct-static).**
+
+```text
+locate(unit, pieceIndex) -> offset from the unit origin
+    if unit is absent, the unit has no loaded model,
+       pieceIndex < 0, or pieceIndex >= model piece count:
+        return (0, 0, 0)
+
+    node = piece[pieceIndex]
+    v    = translation(node) + translation(node.loadedPiece)
+
+    for p = parent(node); p != null; p = parent(p):
+        a = angles(p)                      # three signed 16-bit turn values
+        if parent(p) == null:              # p is the model root
+            a = a + unitOrientation        # componentwise 16-bit wrapping add
+        v = rotate(v, a)
+        v = v + translation(p) + translation(p.loadedPiece)
+
+    return (v.x, v.y, -v.z)
+```
+
+The factory helper then adds the factory unit's committed world X/Y/Z to that
+offset componentwise. The loop starts at the *parent* of the selected piece,
+so the selected piece's own angles never rotate its own translation.
+
+`rotate(v, a)` applies three two-coordinate rotations in this chronological
+order, each writing both coordinates of its pair back before the next runs:
+
+1. `a[0]` on the `(x, y)` pair — rotation about Z
+2. `a[2]` on the `(y, z)` pair — rotation about X
+3. `a[1]` on the `(x, z)` pair — rotation about Y
+
+The subscripts are **element indices into the three-value angle triple**, not
+byte offsets into a record. Each two-coordinate rotation is
+
+```text
+theta = a[i] * 2*pi / 65536
+p' = round(p*cos(theta) - q*sin(theta))
+q' = round(p*sin(theta) + q*cos(theta))
+```
+
+computed in x87 extended precision from a stored double constant whose value
+is exactly `2*pi / 65536`. `round` is an x87 store-to-integer under the
+retail default control word — **round-to-nearest**, not the truncating
+`__ftol` conversion used for ordinary integer casts ([01 §8]). Rounding is
+applied once per axis pass, so the value entering each of the three rotations
+is already an integral 16.16 quantity. A zero angle short-circuits: the pair
+is left exactly unchanged rather than run through sine and cosine.
+
+**Factory heading — Established, and an earlier reading corrected.** Section
+6.3 previously said "No independent factory-heading, yard-map, model-extent,
+or fixed-cell offset is read by the factory handler. Rotation therefore
+enters through the authored piece transform and its hierarchy", and
+[R-FAC-01B §5] recorded "the exact runtime arithmetic that applies a rotated
+factory heading to those hierarchy translations" as **Unknown**. The premise
+was right and the conclusion was wrong. No separate heading term is applied
+*by the factory handler* — but the locator it calls folds the unit's three
+committed orientation words into the model root node's angles before
+rotating. A rotated factory therefore does rotate its exit point, through the
+arithmetic above; no heading matrix is missing.
+
+Because the fold happens only at the root node and the walk begins at the
+selected piece's parent, a unit whose selected exit piece **is** the model
+root never enters the loop and never picks up the unit orientation: its exit
+offset is that piece's translation, unrotated. Among the eight stock rows
+censused in [R-FAC-01B] this applies to CORSY alone (selected piece `/base`);
+the seven rows selecting `/base/pad` or `/base/slip` have the root `base` as
+their parent and do rotate with the factory. Whether any non-stock content
+selects a root piece here is not surveyed.
+
+**Sign convention — Established.** The locator negates accumulated Z exactly
+once, as its output conversion, and passes X and Y through unchanged.
+Combined with the load-time half-turn that negates X and Z of every model
+vertex and every parent translation ([03 §2.4]), an authored translation
+`(x, y, z)` on a root-parented piece reaches the caller as `(-x, y, z)` plus
+the unit origin — the same net signs [03 §2.4] records for its muzzle-flare
+example. This statement is specific to this locator's data flow and must not
+be carried to the renderer's vertex projection or to the hover-pick
+projection, which have their own conventions ([03 §2.4–§2.5],
+[07 R-REV-01 §3]).
+
+**Per-node translation sum — Established, with one Supported inference.**
+Every node in the walk contributes **two** translations, not one: the
+translation stored on the runtime node itself and the translation of the
+loaded model piece that node references. The same pairing applies to the
+selected piece before the walk begins. That the node-side translation and the
+node-side angle triple are the runtime piece offset and rotation written by
+the COB `move`/`turn` opcodes (section 5) is a **Supported inference** — it
+explains why a muzzle query follows an animated turret, and why the unit
+orientation is added into that same triple at the root — but the writer trace
+from those opcodes into these fields was not re-derived here; that trace is
+the decider.
+
+**Still Unknown.** Nothing above establishes a post-completion release
+target, a producer/product collision exemption, an aircraft
+takeoff-before-rally ordering, or a same-pass no-stacking guarantee; those
+remain open exactly as stated in [R-FAC-01] and [R-FAC-01B]. Whether a stock
+rotated producer's exit transform happens to coincide with its footprint's
+geometric center is also still unestablished, and is now a question about the
+authored models rather than about the runtime arithmetic.
 
 ### 6.4 Placement footprint legality [R-P0-08]
 
@@ -3915,10 +4039,13 @@ Function identities that a later re-derivation corrected — in particular the m
   VTOL takeoff, QueryBuildInfo target derivation, primary-queue gating, and
   the pre-allocation retry split are established. The stock exit-piece
   indices, names, and authored 3DO local translations are established by the
-  asset census; exact rotated runtime arithmetic and multiple-product
-  no-stacking remain Unknown. These residuals block only release/egress
-  behavior; the narrower idle-closure path is implementable from the
-  established callback sequence and authored COB waits.
+  asset census, and the exit-piece locator's runtime transform — including
+  the unit-orientation fold at the model root, the rotation order, the
+  round-to-nearest per-axis narrowing, and the single output Z negation — is
+  established in [R-REV-02]. Multiple-product no-stacking remains Unknown.
+  These residuals block only release/egress behavior; the narrower
+  idle-closure path is implementable from the established callback sequence
+  and authored COB waits.
 - Complete player category, side, ally, autonomy, and strategic-AI semantics.
 
 ### Orders and queues

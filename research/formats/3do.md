@@ -241,13 +241,31 @@ Core), then a fallback set, case-insensitively:
 
 At draw time the rasterizer dispatches per primitive on its flag bits:
 
-- **Textured primitives** (flag bit 0) render through the scanline texture
-  mapper for any vertex count.
-- **Untextured (flat-colored) primitives render only when they are quads**
-  (vertex count exactly 4); untextured triangles and n-gons draw nothing.
-  Flat quads fill with the resolved color and take **no SHD shading at all**.
+- **Flat-colored primitives** (`IsColored` bit 0 set) render through the
+  generic edge-table polygon filler **at any vertex count** — lines,
+  triangles, quads and n-gons alike.
+- **Textured primitives** (`IsColored` bit 0 clear) render **only when the
+  vertex count is exactly 4**. The quad mapper is hard-wired to four corners
+  and the dispatcher tests the count before it binds any texture, so a
+  textured triangle or n-gon draws nothing.
 - A flat quad with the team-color flag combination fills through the LOGOS
   frame with a per-player shade byte from the player record.
+
+**Correction (2026-08-28).** The two bullets above previously said the
+opposite — textured at any vertex count, flat quads only. The arities were
+transposed. The stock corpus settles it without ambiguity: across all 608 base
+`objects3d` models and 50,443 primitives, `IsColored` bit 0 is set on exactly
+the 6,598 primitives that carry no texture name and clear on exactly the
+43,845 that do, and **every one of those 43,845 textured primitives is a
+quad**, while the flat ones occur at vertex counts 2, 3, 4, 5, 6, 7, 8, 10,
+12, 13 and 16. The old reading would have discarded 3,312 authored flat
+non-quads (2,402 of them triangles) and kept a textured-n-gon path no stock
+asset reaches. Behavior is owned by
+`research/retail-executable-spec/03` `[R-REN-03A §5]`; this note exists so a
+parser author reading only the format doc is not misled about which field
+gates which path. Authored `IsColored` bit 1 is never set anywhere in the
+stock corpus — the loader writes it, to mark a texture that must be resolved
+per draw (animated entries and the LOGOS team textures).
 
 ### Face shading (SHD rows)
 
@@ -278,9 +296,18 @@ most entries toward black, row 31 saturates, and intermediate rows shift hue
 differently per entry — this is what gives TA structures their per-face color
 variation. COB's `dont-shade` opcode pins a piece to row 15, which stock
 factory scripts use to exempt doors, pads, nano beams and landing plates
-while the rest of the structure stays shaded. Flat-colored
-quads never route through SHD (confirmed by a two-normal 3DO probe: flat
-colors do not vary with orientation).
+while the rest of the structure stays shaded.
+
+**Flat faces shade too, on the shaded path.** This corrects the previous
+sentence "flat-colored quads never route through SHD (confirmed by a
+two-normal 3DO probe: flat colors do not vary with orientation)". The probe
+measurement stands but was generalised past its case. There are two flat span
+writers, one per renderer: the unshaded renderer's stores the color byte raw,
+the shaded renderer's stores `SHD[row*256 + color]` using the same
+Gouraud-interpolated row the textured path uses. A flat face therefore does
+not vary with orientation on a `BMcode=1` unit, or with `Shading` off — which
+is what the probe saw — and does vary on a `BMcode=0` structure with `Shading`
+on. See `[R-REN-03A §5]`.
 
 ### Piece naming conventions
 

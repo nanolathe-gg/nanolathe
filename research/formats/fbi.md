@@ -294,9 +294,9 @@ removes its shading entirely. See
 | --- | --- |
 | `Commander` | Is a commander |
 | `IsFeature` | Becomes its `Corpse` feature immediately when finished (dragon's teeth) |
-| `digger` | Has underground pieces (pop-up guns) — affects rendering below ground level |
+| `digger` | Has underground pieces (pop-up guns). Concretely: it adds `+75` to every vertex's height key, and the unit image is then erased wherever the key is at or below `125` — i.e. everything at or below the model origin is cut away. Authored on exactly three stock units: `ARMAMB`, `CORTOAST`, `CORVIPE`. See `research/retail-executable-spec/03` `[R-REN-03A §8]`. |
 | `NoShadow` | No cast shadow (ships) |
-| `ZBuffer` | Always `1`; read by the engine. |
+| `ZBuffer` | **Selects a per-pixel depth plane on the unit's offscreen composition image.** With it set the unit's image carries a second byte plane holding an interpolated height key, and every span writer admits a pixel only when `storedKey <= incomingKey`, so pieces resolve by world height rather than by draw order; with it clear the image is one plane and composition is pure painter order. 276 of the 278 stock units author `1`; `CORFAV` and `CORTRUCK` author `0`. See `research/retail-executable-spec/03` `[R-REN-03A §2]`. |
 | `ThreeD` | Always `1`; the engine has no string for it. |
 | `SoundCategory` | Category in `gamedata/SOUND.TDF` |
 | `Corpse` | Feature left on death ([tdf.md](tdf.md)); chained via the feature's `featuredead` |

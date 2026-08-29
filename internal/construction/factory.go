@@ -162,8 +162,14 @@ type Service struct {
 	// authoritative (BuilderLinks is C18's "register the builder link on the
 	// product"), it has to survive save/load through one owner, and two worlds
 	// in one process must not share it.
-	builderLinks  map[pool.Handle]pool.Handle         // product -> builder [05 C18]
-	placements    map[pool.Handle]world.FootprintRect // product -> occupancy footprint; save persistence TODO(question)
+	builderLinks map[pool.Handle]pool.Handle // product -> builder [05 C18]
+	// TODO(question): if an in-battle restore boundary is introduced, persist
+	// placements together with the production node phase/count/target, unit
+	// activation/building edges, COB sleep/wait threads, and piece interpolation
+	// so an authored factory close resumes on the identical callback and tick.
+	// The current codebase has no in-battle codec [I13]; do not invent a
+	// factory-only format.
+	placements    map[pool.Handle]world.FootprintRect // product -> occupancy footprint
 	productIndex  map[uint32]string                   // product id -> catalog key, built once
 	getBuiltLinks map[pool.Handle]pool.Handle         // product -> builder until GetBuilt consumes it [R-P0-09]
 	messages      []string                            // verbatim diagnostics [05 C18][05 C21][05 C22]
@@ -1685,6 +1691,11 @@ func (s *Service) handleState1(factory *units.Unit, node *orders.Node, tick uint
 		node.Phase = uint8(State2)
 		node.DynamicGate = 0
 		node.Deadline = -1
+		// The primary pump consumes an advance result immediately. Once the
+		// authored stance handshake is already high, state 2 therefore runs in
+		// this same pass; this is also what permits a counted successor to be
+		// allocated without an invented idle tick [04 §4.7][R-FAC-01R].
+		s.handleState2(factory, node, tick)
 		return
 	}
 	// Otherwise waits with wake bit 2 [05].
@@ -2085,10 +2096,12 @@ func (s *Service) handleState3(factory *units.Unit, node *orders.Node, tick uint
 	// state update have committed [R-P0-06]. Rejected work reaches no query.
 	s.emitAcceptedNano(tick, factory, product)
 	if product.Remaining == 0 {
-		// Advance to completion [05].
+		// The shared work helper owns the first completion transition. It runs
+		// synchronously when the admitted increment stores zero, before the
+		// factory's building edge falls in state 4. State 4 deliberately repeats
+		// this transition idempotently [04 §4.7][R-FAC-01R].
+		s.applyCompletionPosture(product)
 		node.Phase = uint8(State4)
-		// Completion will be handled next pump or immediately? Spec says work loop with remaining zero advances to completion; otherwise retry 1 tick.
-		// For now set to State4 and handle in next call; but we could also handle immediately.
 		s.handleState4(factory, node, tick)
 		return
 	}
@@ -2102,8 +2115,9 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	if node.Target != 0 && s.World != nil {
 		product = s.World.Unit(node.Target)
 	}
-	// StopBuilding precedes the completion helper [P0-14]: the engine lowers the
-	// StartBuilding bit before the helper runs.
+	// State 3's zero-remaining helper has already completed the product (and may
+	// have raised its Activate edge). State 4 now lowers the factory building
+	// edge before repeating the product transition idempotently [R-FAC-01R].
 	// TODO(question): [R-FAC-01C] completion is not established as a separate
 	// factory-release state. Do not add an egress target, producer/product
 	// collision exemption, no-stacking gate, or aircraft takeoff ordering here;
@@ -2112,12 +2126,12 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	// Trigger BuildUnitType only on local 30-tick deadline [P0-14].
 	// Interrupt masks 2/8 bodies known, producers TODO(T25) [P0-14].
 	// Engine prints no text, lowers start-building edge, runs completion transition [05].
-	// Falling edge occurs before the completion transition [R-P0-09].
 	s.stopBuilding(factory)
 	if product != nil {
-		// Completion transition: product remaining to zero, completion flag set, activation per standing-order bits, cloak/init posture, selection refresh [05].
+		// The second transition must not create a duplicate Activate callback.
 		s.applyCompletionPosture(product)
-		// Clear presentation payload [05].
+		// Clear the construction presentation payload before count bookkeeping.
+		node.GoalX, node.GoalY, node.GoalZ = 0, 0, 0
 		// Decrement node's remaining count once [05].
 		if node.Param2 > 0 {
 			node.Param2--
@@ -2132,26 +2146,38 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 			s.OnRefresh(factory)
 			s.OnRefresh(product)
 		}
-		// Return result 0 — state machine restarts at state0 within same pump pass, so coalesced counts build back-to-back [05].
-		// Back-to-back state0 restart count-- per unit, no repeat flag [P0-14].
-		if node.Param2 == 0 {
-			s.removeHead(factory, node)
+		// Result 0 always restarts state 0 in this same primary-pump pass. The
+		// count test there is authoritative: an empty count lowers activation
+		// after StopBuilding, while a successor remains active and can allocate
+		// immediately through the already-high stance gate [R-FAC-01R].
+		node.Phase = uint8(State0)
+		node.DynamicGate = 0
+		node.Deadline = -1
+		node.Target = 0
+		if isMobileBuild(node.ID) {
+			// P28-FAC-01I changes only the building-class factory lifecycle.
+			// Mobile construction has no factory activation/door callback path.
+			if node.Param2 == 0 {
+				s.removeHead(factory, node)
+			}
 		} else {
-			node.Phase = uint8(State0)
-			node.DynamicGate = 0
-			node.Deadline = -1
-			node.Target = 0
+			s.handleState0(factory, node, tick)
 		}
 	} else {
 		// No product? Still decrement and free?
 		if node.Param2 > 0 {
 			node.Param2--
 		}
-		if node.Param2 == 0 {
-			s.removeHead(factory, node)
+		node.Phase = uint8(State0)
+		node.DynamicGate = 0
+		node.Deadline = -1
+		node.Target = 0
+		if isMobileBuild(node.ID) {
+			if node.Param2 == 0 {
+				s.removeHead(factory, node)
+			}
 		} else {
-			node.Phase = uint8(State0)
-			node.Target = 0
+			s.handleState0(factory, node, tick)
 		}
 	}
 }

@@ -482,27 +482,33 @@ const (
 	modelPrimitiveTexture
 )
 
-// modelPrimitiveDispatch preserves the authored IsColored precedence. A
-// missing texture takes the established flat-quad miss path; unsupported
-// flat arities remain suppressed [fmt 3do][03 §2.4.1].
+// modelPrimitiveDispatch reproduces the retail per-primitive dispatch: bit 0
+// of the authored IsColored field selects the flat polygon filler, which takes
+// an explicit vertex count and draws any arity, and only when that bit is
+// clear does the renderer require a quad before it binds a texture
+// [R-REN-03A §5][fmt 3do].
+//
+// Bit 0 is also what makes editor garbage in IsColored harmless: across the
+// 608 stock models it is set on exactly the 6,598 primitives with no texture
+// name and clear on exactly the 43,845 with one, so the garbage values that
+// co-occur with a texture are all even [R-REN-03A §5]. An untextured face with
+// the bit clear is the format's "clear" primitive — it reaches the quad mapper
+// with no texture bound and the mapper draws nothing [fmt 3do].
 func modelPrimitiveDispatch(pr presentationrender.PrimitiveDraw, resolved bool) modelPrimitiveMode {
-	n := len(pr.VertexIndices)
+	if pr.IsColored&1 != 0 {
+		return modelPrimitiveFlat // flat filler, any vertex count [R-REN-03A §5]
+	}
+	if len(pr.VertexIndices) != 4 {
+		return modelPrimitiveSkip // textured faces are quads only [R-REN-03A §5]
+	}
 	if pr.TextureName == "" {
-		if pr.IsColored == 0 || n != 4 {
-			return modelPrimitiveSkip
-		}
-		return modelPrimitiveFlat
+		// The format's "clear" primitive: it reaches the quad mapper with no
+		// texture bound, and the mapper's null guard draws nothing [fmt 3do].
+		return modelPrimitiveSkip
 	}
 	if !resolved {
-		if n != 4 {
-			return modelPrimitiveSkip
-		}
-		return modelPrimitiveFlat
-	}
-	// Only the canonical flag and an in-range color override a resolved
-	// texture. Other nonzero values are editor data and retain texturing
-	// [fmt 3do].
-	if pr.IsColored == 1 && pr.ColorIndex < 256 {
+		// A texture miss is rewritten to the gray placeholder at load; it is
+		// already a quad by the test above [03 §2.4.1].
 		return modelPrimitiveFlat
 	}
 	return modelPrimitiveTexture
@@ -581,7 +587,13 @@ func (c *Client) collectDrawTris(draw *presentationrender.UnitDraw, owner uint8,
 		return nil
 	}
 	var tris []screenTri
-	for pi, piece := range draw.Pieces {
+	// Retail walks the piece list last-to-first. Because the height-key test
+	// admits equal keys, draw order is the tie-break, so this direction is what
+	// makes piece 0 win every tie against every later piece — reversing it
+	// lifts a factory's build plate through its roof and lets an opened solar
+	// collector's panels swallow the column they intersect [R-REN-03A §3].
+	for pi := len(draw.Pieces) - 1; pi >= 0; pi-- {
+		piece := draw.Pieces[pi]
 		if pi >= len(draw.Model.Pieces) {
 			continue
 		}
@@ -628,13 +640,10 @@ func (c *Client) collectDrawTris(draw *presentationrender.UnitDraw, owner uint8,
 					continue
 				}
 			}
-			if mode == modelPrimitiveTexture && n > 4 {
-				// TODO(question): the published PrimitiveDraw has no edge-table
-				// scanline inputs for retail's affine 5–16-gon mapper. Suppress
-				// unsupported authored n-gons rather than inventing fan/bounds UVs
-				// [fmt 3do][03 §2.4.1].
-				continue
-			}
+			// modelPrimitiveDispatch has already rejected any textured face
+			// that is not a quad: retail's quad mapper is hard-wired to four
+			// corners and there is no textured n-gon path [R-REN-03A §5].
+
 			valid := true
 			for _, vi := range pr.VertexIndices {
 				if int(vi) >= len(piece.WorldVertices) {
@@ -835,12 +844,24 @@ func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {
 }
 
 // modelHeightKey computes the per-vertex key shared by completed-model
-// composition and nanoframe reveal. The 125-bias definition bit is not yet
-// identified; all established stock paths use 50, so keep that branch out of
-// presentation state rather than guessing its field [03 §5.2].
+// composition and nanoframe reveal: the whole world height above the unit
+// origin, biased so geometry below the origin still keys non-negative
+// [R-REN-03A §2].
+//
+// This previously halved the height. That was read off the anti-aliased vertex
+// path, which doubles the vertex two steps earlier and divides by two only to
+// undo it; the plain path adds the undivided height. Halving threw away half
+// the depth resolution and roughly doubled how often two faces tie
+// [R-REN-03A §2 "Correction to the key formula"].
+//
+// TODO(R-REN-03A §8): a definition authoring the FBI Digger key adds a further
+// +75 here and then erases the image wherever the key is at or below 125. The
+// erase pass is not implemented, and adding the offset alone would only shift
+// every key uniformly, so both are deferred together. Three stock units are
+// affected: ARMAMB, CORTOAST, CORVIPE.
 func modelHeightKey(relativeY numeric.Fixed) int32 {
 	whole := int32(relativeY.Raw() / (1 << 16)) // __ftol-style truncation [I3]
-	return whole/2 + presentationrender.NanoframeHeightBias
+	return whole + presentationrender.NanoframeHeightBias
 }
 
 // scanlineHeightKey performs the model rasterizer's fixed-point height

@@ -39,11 +39,23 @@ func TestModelPrimitiveDispatch(t *testing.T) {
 	}{
 		{name: "clear untextured", pr: presentationrender.PrimitiveDraw{VertexIndices: []uint16{0, 1, 2, 3}}, want: modelPrimitiveSkip},
 		{name: "flat untextured quad", pr: presentationrender.PrimitiveDraw{IsColored: 1, ColorIndex: 56, VertexIndices: []uint16{0, 1, 2, 3}}, want: modelPrimitiveFlat},
-		{name: "flat untextured triangle suppressed", pr: presentationrender.PrimitiveDraw{IsColored: 1, VertexIndices: []uint16{0, 1, 2}}, want: modelPrimitiveSkip},
+		// Flat faces take the generic polygon filler at any arity; only
+		// textured faces are quad-gated [R-REN-03A §5]. The stock corpus
+		// carries 2,402 flat triangles and 700 flat 5..16-gons.
+		{name: "flat untextured triangle renders", pr: presentationrender.PrimitiveDraw{IsColored: 1, VertexIndices: []uint16{0, 1, 2}}, want: modelPrimitiveFlat},
+		{name: "flat untextured n-gon renders", pr: presentationrender.PrimitiveDraw{IsColored: 1, VertexIndices: []uint16{0, 1, 2, 3, 4, 5}}, want: modelPrimitiveFlat},
 		{name: "resolved texture", pr: presentationrender.PrimitiveDraw{TextureName: "tex", VertexIndices: []uint16{0, 1, 2, 3}}, resolved: true, want: modelPrimitiveTexture},
 		{name: "canonical flat override", pr: presentationrender.PrimitiveDraw{TextureName: "tex", IsColored: 1, ColorIndex: 56, VertexIndices: []uint16{0, 1, 2, 3}}, resolved: true, want: modelPrimitiveFlat},
-		{name: "canonical override requires in-range color", pr: presentationrender.PrimitiveDraw{TextureName: "tex", IsColored: 1, ColorIndex: 300, VertexIndices: []uint16{0, 1, 2, 3}}, resolved: true, want: modelPrimitiveTexture},
-		{name: "editor garbage retains texture", pr: presentationrender.PrimitiveDraw{TextureName: "tex", IsColored: 7, ColorIndex: 0x1234, VertexIndices: []uint16{0, 1, 2, 3}}, resolved: true, want: modelPrimitiveTexture},
+		// The dispatch reads bit 0 alone and masks the colour to a byte; an
+		// out-of-range index does not hand the face back to the texture path
+		// [R-REN-03A §5]. This corrects an earlier in-range qualifier that was
+		// inferred rather than traced.
+		{name: "canonical override ignores out-of-range color", pr: presentationrender.PrimitiveDraw{TextureName: "tex", IsColored: 1, ColorIndex: 300, VertexIndices: []uint16{0, 1, 2, 3}}, resolved: true, want: modelPrimitiveFlat},
+		// Editor garbage that co-occurs with a texture is even in every one of
+		// the 43,845 stock textured primitives, so bit 0 stays clear and the
+		// texture survives [R-REN-03A §5].
+		{name: "even editor garbage retains texture", pr: presentationrender.PrimitiveDraw{TextureName: "tex", IsColored: 1900572, ColorIndex: 0x1234, VertexIndices: []uint16{0, 1, 2, 3}}, resolved: true, want: modelPrimitiveTexture},
+		{name: "odd editor garbage takes the flat filler", pr: presentationrender.PrimitiveDraw{TextureName: "tex", IsColored: 7, ColorIndex: 0x1234, VertexIndices: []uint16{0, 1, 2, 3}}, resolved: true, want: modelPrimitiveFlat},
 		{name: "missing texture flat miss", pr: presentationrender.PrimitiveDraw{TextureName: "missing", VertexIndices: []uint16{0, 1, 2, 3}}, want: modelPrimitiveFlat},
 		{name: "missing texture n-gon suppressed", pr: presentationrender.PrimitiveDraw{TextureName: "missing", VertexIndices: []uint16{0, 1, 2, 3, 4}}, want: modelPrimitiveSkip},
 	}

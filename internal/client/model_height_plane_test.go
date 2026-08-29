@@ -112,10 +112,14 @@ func TestModelHeightPlaneTransparentTextureDoesNotAdmit(t *testing.T) {
 }
 
 func TestModelHeightKeyTruncatesNegativeWholeUnitsTowardZero(t *testing.T) {
-	// -1.5 world units narrows to -1, then halves to zero; arithmetic
-	// shifting would incorrectly produce -2 before the half-height step.
-	if got := modelHeightKey(-98304); got != 50 {
-		t.Fatalf("key for -1.5 world units=%d, want 50", got)
+	// -1.5 world units narrows to -1 and biases to 49; arithmetic shifting
+	// would incorrectly produce -2 and key 48. The key is the whole height,
+	// not half of it [R-REN-03A §2].
+	if got := modelHeightKey(-98304); got != 49 {
+		t.Fatalf("key for -1.5 world units=%d, want 49", got)
+	}
+	if got := modelHeightKey(11 << 16); got != 61 {
+		t.Fatalf("key for +11 world units=%d, want 61 (unhalved)", got)
 	}
 }
 

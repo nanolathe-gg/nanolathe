@@ -497,7 +497,7 @@ remaining primitives from index one upward are then bubble-sorted into ascending
 order of the integer mean of their vertices' second coordinate. A separate
 recursive pass then negates the first and third vertex coordinates and the first
 and third parent translations of every object in the hierarchy, a half-turn about
-the vertical axis applied to the whole model. The trailing sign on Z seen in projection helpers is the `Z - Y/2` orthographic shear — the high word of Z is transiently negated in place, then half of Y is subtracted, with the `+32` viewport bias, and the result is never stored back — not a second model-space sign fixup; the load-time half-turn (negating X and Z of each vertex and each parent translation) remains the sole persistent conversion (`H_A` net `-X,-Z` established, `H_C` net `-X` rejected, `H_B` already rejected). Child `flare` and piece translations queried at muzzle reuse the pristine post-load vectors without a second negation; a flare authored at `(2,1,-30)` appears at `(-2,1,+30)` world plus unit origin (direct-static for `H_A` vs `H_C` via store-path data-flow, bounded-negative for a second store; heading-zero nose mapping remains
+the vertical axis applied to the whole model. The trailing sign on Z seen in projection helpers is the `Z - Y/2` orthographic shear — the high word of Z is transiently negated in place, then half of Y is subtracted, with the `+32` viewport bias, and the result is never stored back (the hover-pick projection in [07 R-REV-01 §3] writes that same negation explicitly as `(unitZ - cameraZ) - z`; an earlier `+ z` form in [07 R-SEL-02B2] contradicted this paragraph and has been corrected) — not a second model-space sign fixup; the load-time half-turn (negating X and Z of each vertex and each parent translation) remains the sole persistent conversion (`H_A` net `-X,-Z` established, `H_C` net `-X` rejected, `H_B` already rejected). Child `flare` and piece translations queried at muzzle reuse the pristine post-load vectors without a second negation; a flare authored at `(2,1,-30)` appears at `(-2,1,+30)` world plus unit origin (direct-static for `H_A` vs `H_C` via store-path data-flow, bounded-negative for a second store; heading-zero nose mapping remains
 supported inference, probe-pending — the `ta_probe_xz` fixture (child
 translation signs at headings 0/90/180/270) is designed to settle it, see
 rr-06 §4). Draw order within a piece is
@@ -549,15 +549,42 @@ projection, then walks pieces and primitives with these established rules:
    primitive (swapped to index 0 at load), the primitive loop starts at
    index 1 — the plate is never drawn as a model face. Unit picking is a 2D
    bounding-box test elsewhere and does not consult the mesh.
-2. **Flat-colored faces are quads only.** An untextured primitive renders
-   solely when its vertex count is exactly 4; untextured triangles and n-gons
-   draw nothing. The fill takes the resolved color byte with **no SHD
-   shading** — flat colors do not vary with face orientation (confirmed by a
-   two-normal 3DO probe). A flat quad carrying the team-color flag
-   combination fills through the unit's LOGOS frame with a per-player shade
-   byte from the player record instead.
-3. **Textured faces** render through the scanline mapper for any vertex
-   count. Everything in this item describes the **shaded** piece renderer,
+2. **Flat-colored faces render at any vertex count; textured faces are quads
+   only.** This **corrects** the previous text of this item and the next,
+   which said "flat-colored faces are quads only — untextured triangles and
+   n-gons draw nothing" and "textured faces render through the scanline
+   mapper for any vertex count". The two arities were transposed. The
+   dispatcher reads the primitive's colored flag first: when it is set the
+   face goes to the **generic edge-table polygon filler**, which takes an
+   explicit vertex count and draws lines, triangles, quads and n-gons alike;
+   when it is clear the dispatcher **requires a vertex count of exactly four**
+   before it binds any texture or calls the quad mapper, and a textured
+   triangle or n-gon therefore draws nothing. The quad mapper is hard-wired to
+   four corners — it has no vertex-count parameter at all. See
+   [R-REN-03A §5] for the dispatch in full and for the stock-asset census that
+   makes the corrected reading unfalsifiable: across all 608 base 3DO models
+   and 50,443 primitives, every one of the 43,845 textured primitives is a
+   quad, while the 6,598 flat primitives occur at vertex counts 2, 3, 4, 5, 6,
+   7, 8, 10, 12, 13 and 16. Under the old reading the engine would have
+   discarded 3,312 authored flat non-quads and retained a textured-n-gon path
+   that no stock asset ever reaches.
+
+   A flat quad carrying the team-color flag combination fills through the
+   unit's LOGOS frame with a per-player shade byte from the player record
+   instead.
+3. **`SHD` applies to flat fills too, in the shaded renderer.** This
+   **corrects** the previous claim that the flat fill "takes the resolved
+   color byte with no SHD shading — flat colors do not vary with face
+   orientation (confirmed by a two-normal 3DO probe)". The probe result is
+   sound but was generalised past its case: it was taken on a renderer that
+   applies no `SHD` to anything. There are two flat span writers, one per
+   renderer. The **unshaded** renderer's flat writer stores the color byte
+   raw. The **shaded** renderer's flat writer stores `SHD[row*256 + color]`
+   with the same Gouraud-interpolated row the textured path uses. So a flat
+   face on a `BMcode=1` unit, or on any unit with `Shading` off, does not vary
+   with orientation — which is what the probe measured — but a flat face on a
+   `BMcode=0` structure with `Shading` on does. Everything in this item
+   describes the **shaded** piece renderer,
    which retail reaches only for a `BMcode=0` unit with the `Shading` display
    option on ([R-RND-02A]); the unshaded renderer that every other unit takes
    maps the same textured faces with no `PALETTE.SHD` step at all. In the
@@ -594,6 +621,497 @@ N = per-vertex smooth normal:
    players ticked once per simulation frame with per-frame delays from the
    GAF table — except exactly-10-frame entries, which are the LOGOS team
    textures: never animated, frame selected by owner player at draw time.
+
+#### R-REN-03A — the per-unit composition image, the height key, and structure anti-aliasing
+
+Retail does not rasterize a unit's pieces straight into the world
+framebuffer. Every unit is composed, whole, into a private indexed image and
+that image is blitted once. This section is the complete contract for that
+image: how it is sized, what its two planes mean, which pieces go into it and
+in what order, how a structure's image is anti-aliased through a 2×
+supersample, and how the result is placed on screen. Everything below is
+**Established (direct-static)** unless a paragraph says otherwise. It
+supersedes nothing in [03 §2.4] (the piece transform chain is unchanged) but
+it does correct [03 §2.4.1], [03 §5.2] and [03 §5.3] where noted.
+
+##### 1. The composition image
+
+Before any piece is drawn the engine measures the model. It walks every
+**visible** piece (draw bit set) and every vertex of those pieces, projects
+each vertex with the ordinary orthographic rule of [03 §2.5] **minus the
+viewport bias** — `sx = trunc(x)`, `sy = trunc(-z) - (trunc(y) >> 1)`, each
+component narrowed to signed 16-bit before use — and tracks the minimum and
+maximum of `sx` and `sy`. The running extrema are **seeded at zero, not at
+the first vertex**, so the box always contains the model origin even for a
+model that lies entirely off to one side. The image is then
+
+```
+width   = (maxX - minX) + 4          origin.x = 2 - minX
+height  = (maxY - minY) + 4          origin.y = 2 - minY
+```
+
+— a two-pixel margin on every side, with the origin recording where the
+model's own `(0,0)` sits inside the image. Both margin terms are literal: the
+minimum is biased by `-2` and the span is then widened by a further `+2`.
+
+The image is a 24-byte header followed by its planes. The header carries
+width, height, the two origin components, a **transparent index**, a
+raw/RLE flag, a sub-image count, and one pointer per plane. For a unit
+composition image the transparent index is always **1** and the RLE flag is
+always clear.
+
+Two allocators exist and the draw path picks between them:
+
+- **One plane.** Colour only; the key-plane pointer is null. The colour plane
+  is prefilled with the transparent index (byte `0x01`).
+- **Two planes.** Colour plane prefilled with `0x01` as above, plus a
+  **height-key plane** of the same dimensions prefilled with `0`.
+
+##### 2. The height key and the `ZBuffer` gate
+
+The key plane is a per-pixel depth buffer whose unit is world height. While
+the model rasterizes, every projected vertex carries a third component beside
+its two screen coordinates:
+
+```
+key = trunc(vertexY) + 50 + (definition authors Digger ? 75 : 0)
+```
+
+where `vertexY` is the vertex's height in whole world units **relative to the
+unit origin** — the piece chain of [03 §2.4] has already been applied, and the
+unit's world position has not (position enters only at the final blit). The
+span writers interpolate the key across each scanline in signed 16.16, narrow
+it to a byte, and admit a pixel only when
+
+```
+storedKey <= incomingKey
+```
+
+writing both the colour and the new key when they do. The comparison is
+non-strict, so **the highest face at each pixel wins and equal keys go to the
+later-drawn face**. When the key-plane pointer is null every span writer falls
+through to an unconditional write and the image is pure painter order.
+
+**Correction to the key formula.** [R-P0-19-N] previously stated
+`key = trunc(vertexY/2) + bias`, with the bias "50, or 125 when one
+unit-definition flag bit is set (`TODO(question)`: the authored name of that
+bit is not identified)". Both halves were wrong, and they were wrong for the
+same reason: the reading was taken from the anti-aliased branch of the vertex
+loop without noticing that that branch has **already doubled the vertex** two
+instructions earlier. The renderer has two vertex paths — plain, and the
+supersampled path of §6 — and they compute
+
+```
+plain:        key = 50 [+75] + trunc(vertexY)
+supersampled: key = 50 [+75] + (2 * trunc(vertexY)) / 2
+```
+
+which are the same number. The `/2` is there to undo the doubling, not to
+halve the height. **The key is the whole world height, not half of it**, and
+implementing the halved form throws away half the depth resolution and
+roughly doubles how often two faces tie. The unidentified definition bit is
+the FBI key **`Digger`**, and its contribution is `+75`, which is what makes
+the documented `125` (`50 + 75`); see §7 for what the raised base is for.
+
+**The `ZBuffer` gate.** Whether a unit's image gets a key plane at all is
+**authored data**. At unit creation the instance copies one bit out of its
+definition's packed flag word, and the FBI key that writes that bit is
+`ZBuffer`. The draw path then allocates the two-plane image when *any* of
+these holds, and the one-plane image otherwise:
+
+- the caller asked for a key plane explicitly (the attached-child path of §4
+  always does), or
+- the unit's definition authors `ZBuffer` nonzero, or
+- the unit's construction fraction is not the completed sentinel (a nanoframe
+  always gets a key plane, because [R-P0-19-N]'s reveal reads it).
+
+The engine's feature-backed pseudo-unit sets the same instance bit
+unconditionally, having no FBI to read.
+
+**Established (asset census, base `totala1.hpi`, 2026-08-28).** All 278 stock
+unit definitions author `ZBuffer`. Exactly two author `0` — `CORFAV` and
+`CORTRUCK` — and the other 276 author `1`. The per-pixel height buffer is
+therefore the normal case for stock content, not an exotic one, and an
+implementation that omits it reproduces retail for two units out of 278.
+`fbi.md`'s note that `ZBuffer` is "always 1; read by the engine" is now
+answered: it selects the key plane.
+
+##### 3. Piece order and the tie rule
+
+The renderer walks the piece list **from the last piece to the first**. Within
+a piece, primitives are drawn in the load-fixed order established in
+[03 §2.4] — the selection primitive swapped to index 0 and skipped, the rest
+bubble-sorted ascending by the integer mean of their vertices' second
+coordinate.
+
+Because the key test admits equal keys, draw order is the tie-break, and the
+reversed piece walk therefore means **piece 0 wins every tie against every
+later piece**, while inside a piece the higher-mean-Y primitive wins. A
+forward piece walk inverts every one of those tie-breaks. This is not a
+cosmetic detail: on stock models whole regions of the silhouette change owner.
+
+**Established (composition experiment against stock geometry, 2026-08-28).**
+Composing `ARMSOLAR` and `ARMLAB` from the base archive under the traced
+policy and under a forward walk, and counting pixels whose owning piece
+differs:
+
+| Model / pose | Pixels covered | Forward walk | Forward walk + halved key |
+|---|---:|---:|---:|
+| `ARMSOLAR` rest | 1,609 | 18 differ | 20 differ |
+| `ARMSOLAR` dishes open | 1,960 | 98 differ, all lost by `base` | 98 differ |
+| `ARMLAB` rest | 6,023 | 194 differ | 194 differ |
+| `ARMSOLAR` rest, reverse walk, halved key | 1,609 | — | 15 differ |
+| `ARMLAB` rest, reverse walk, halved key | 6,023 | — | 38 differ |
+
+Reading the table: the piece walk direction is the dominant term and the
+halved key is a smaller independent one. With the dishes open, `ARMSOLAR`'s
+`base` piece loses 98 pixels — the panels swallow the column and cap they
+should be intersecting. On `ARMLAB` the pieces that lose area under a forward
+walk are `base` (9 px), `stand1` (10), `stand2` (9) and six of the eight door
+pieces — `door1` (47), `door1A` (23), `door2` (16), `door3` (40), `door3A`
+(24), `door4` (16). The piece that takes those pixels is the last-indexed one,
+`pad` — the build plate, which a forward walk lifts out through the roof it
+should sit under.
+
+The experiment is geometry-only: it composes the projected polygons of the
+rest pose (plus, for the open case, each `ARMSOLAR` dish rotated 135 degrees
+about its Z accumulator) and records which piece owns each pixel under the §2
+admission rule. It does not sample textures, so it isolates the ordering and
+key terms from everything else.
+
+##### 4. Cached body, live pieces, and attached units
+
+Each piece carries a **cache bit** beside its draw bit. The draw path uses it
+to split the model in two, and passes a mode selector into the renderer that
+says which half to draw:
+
+- **mode "cached"** — draw only pieces whose cache bit is set;
+- **mode "live"** — draw only pieces whose cache bit is clear;
+- **mode "all"** — draw every visible piece regardless.
+
+A unit under construction overrides the filter: while the construction
+fraction is not the completed sentinel every visible piece is admitted in
+every mode.
+
+The composition image built in §1 is the **cached** half, and it is rebuilt
+only when the unit is first drawn, when the orientation cache of [03 §5.2]
+goes dirty, or when a structure's construction state changes. Presentation
+then proceeds down one of two paths, chosen on whether that cached image has a
+key plane:
+
+**No key plane.** The cached image is blitted to the framebuffer, and then
+every piece whose cache bit is clear is rasterized **directly to the
+framebuffer**, in reverse piece order, with no key plane and therefore in pure
+painter order. Attached child units are drawn the same way.
+
+**Key plane present.** A **staging image** is prepared whose box is the union
+of the unit's own box and the boxes of all its attached child units, offset by
+each child's world position relative to the parent; the cached image is copied
+or re-blitted into it, both planes. Then:
+
+1. the **live** pieces are rasterized into the staging image with the key test
+   — so an animated door or plate resolves against the cached body per pixel,
+   not by draw order. This pass is skipped for a structure under construction,
+   whose cached image already holds every piece;
+2. each attached child unit is composed into its own two-plane image and
+   **composited into the staging image with the key test**, at the child's
+   pixel offset and with the child's world-height difference added to every
+   key it contributes. A child pixel is written when it is not the child
+   image's transparent index and `stagingKey <= childKey + heightDelta`;
+3. the waterline and digger passes of §7 run over the staging image;
+4. the staging image is blitted once.
+
+This closes the `TODO(question)` recorded in [R-RND-02A] about "the unit
+placement path's second, separate invocation of the unshaded piece renderer,
+targeting a different image record than the dispatcher's". It is the live-piece
+pass: same renderer, different target (the staging image, not the cached one),
+different mode selector (live rather than cached), and its guard — "the
+structure-class bit is clear, or the construction fraction equals the completed
+sentinel" — is exactly the "skip for a structure under construction" rule
+above. It is neither a silhouette pass nor a second body pass.
+
+##### 5. Primitive dispatch and the four span writers
+
+Per primitive the dispatcher reads one flag word:
+
+```
+if (colored)                      -> flat polygon filler, explicit vertex count
+else if (vertexCount != 4)        -> draw nothing
+else {
+    if (resolve-at-draw-time) {
+        if (team)  texture = LOGOS entry frame chosen by the owner's shade byte
+        else if (mode != cached-name-resolution) texture = entry frame 0
+        else                                     texture = resolve by authored name
+    } else          texture = the image the loader already resolved
+    -> textured quad mapper
+}
+```
+
+The `colored` flag is the authored 3DO `IsColored` field's bit 0; the
+resolve-at-draw-time and team bits are written by the model loader, not by the
+artist. **Established (asset census):** authored `IsColored` bit 0 is set on
+exactly the 6,598 primitives with no texture name and clear on exactly the
+43,845 with one, across all 608 base models — a perfect partition, so bit 0 is
+a sound flat/textured discriminator on stock content. The resolve-at-draw-time
+bit is **never** authored (0 of 50,443), confirming that the loader owns it.
+
+The textured quad mapper builds the ten-dword edge records of [03 §5.2] and,
+when the caller supplies no UV table, defaults the four corners to
+`(0,0) (w-1,0) (w-1,h-1) (0,h-1)` — the corner-index affine rule of
+[03 §5.2], with the clamp built into the default rather than applied
+afterwards.
+
+There are four span writers, one per (shaded, unshaded) × (textured, flat):
+
+| Renderer | Face | Writes |
+|---|---|---|
+| unshaded | textured quad | the sampled texel, raw |
+| unshaded | flat polygon | the color byte, raw |
+| shaded | textured quad | `SHD[row*256 + texel]` |
+| shaded | flat polygon | `SHD[row*256 + color]` |
+
+All four apply the §2 key test identically and all four fall through to
+unconditional writes when the key plane is absent. **Established
+(bounded-negative):** none of the four tests the sampled texel against a
+transparent or color-key index — within the model raster path a texture is
+fully opaque. This corrects the incidental "transparent holes skip `SHD`"
+remark in [03 §5.2]; transparency in the model path is expressed only by the
+composition image's own background index, which is what the final blit keys
+against.
+
+##### 6. Structure anti-aliasing: the 2× supersample and the ALP downscale
+
+Both renderers — shaded and unshaded, the same code in each — open with the
+same gate. When **all three** of
+
+- the global display option `Anti_Alias` is on,
+- the unit instance's class bit says structure (`BMcode=0`, [R-RND-02A]), and
+- the mode selector is not "live"
+
+hold, the renderer does not rasterize into the caller's image. It takes the
+shared scratch image, sets its width, height and both origin components to
+**exactly twice** the caller's, clears its key plane to `0` and its colour
+plane to the transparent index, and rasterizes the whole model into that.
+Every projected vertex component is shifted left by one before the shear:
+
+```
+sx = 2*trunc(x) + 2*origin.x
+sy = (2*trunc(-z) - ((2*trunc(y)) >> 1)) + 2*origin.y
+```
+
+Note that `(2y) >> 1` is exactly `y`, whereas `2 * (y >> 1)` loses the low
+bit, so the supersampled shear is a half-pixel more accurate than a doubled
+copy of the plain one — reproduce the expression, not a scaled version of the
+1× result. The key is computed as in §2 and comes out on the **same scale** as
+the 1× path.
+
+When the model is finished the scratch image is resolved down 2:1 into the
+caller's image, colour and key by different rules:
+
+**Colour — a three-lookup box filter through `ALP`.** For each destination
+pixel `(x, y)` the four source pixels of the corresponding 2×2 block are
+combined with the 256×256 blend table `ALP` of [03 §4.3]:
+
+```
+top    = ALP[ src[2y  ][2x] * 256 + src[2y  ][2x+1] ]
+bottom = ALP[ src[2y+1][2x] * 256 + src[2y+1][2x+1] ]
+dst[y][x] = ALP[ top * 256 + bottom ]
+```
+
+Three table reads, no arithmetic on the indices, no special case for any
+value. Order matters (`ALP` is not required to be symmetric): left index
+first within a row, top result first between rows.
+
+**Key — nearest sample, no blend.** Only when the destination image actually
+has a key plane, each destination key is copied from the **top-left** source
+sample of its block, `dst[y][x] = srcKey[2y][2x]`. The three other samples are
+discarded.
+
+Two consequences follow directly and both are visible in retail:
+
+- **Mobile units are never anti-aliased.** The gate is the same structure-class
+  bit the shading gate uses, so `BMcode=1` units are rasterized at 1× whatever
+  the `Anti_Alias` setting is. Buildings are smoother than units, and that is
+  authored-data-driven, not an artefact.
+- **Animated pieces are not anti-aliased either.** The live-piece pass of §4
+  runs in "live" mode, which fails the third condition, so a factory's doors,
+  pads and nano beams are rasterized at 1× directly into the staging image
+  over an anti-aliased cached body.
+
+**Unknown.** The shipped default of the `Anti_Alias` option is not
+established; the option word is populated from settings, and no
+compiled-in default write was found. `TODO(question): shipped default of the
+Anti_Alias display option.`
+
+**Bounded-negative residual.** The 2× scratch and the §4 staging image are the
+**same** buffer. Within one unit's presentation they are used in sequence, so
+they do not collide; but the attached-child composition of §4 step 2 asks for
+each child's image *after* the staging image has been built in that buffer,
+and a child that is itself a structure would therefore rasterize over the
+staging image. No stock configuration reaches it — a factory's child is the
+mobile unit on its pad and a transport's child is its cargo, both `BMcode=1`,
+and the gate needs `BMcode=0` — so the case is unreachable on stock content
+rather than handled. Do not reproduce the aliasing; keep the two buffers
+separate. `TODO(question): whether any retail-reachable configuration attaches
+a BMcode=0 child unit.`
+
+##### 7. The red/purple fringe is the downscale blending with palette index 1
+
+This closes [R-REN-02R], which listed "palette or `SHD` lookup" as
+"Established as a mapping stage; the actual row and output index are Unknown"
+and recorded the whole question as a P28 residual blocked on a capture. No
+capture is needed; the mechanism is arithmetic.
+
+The composition image's background is not "nothing". It is the ordinary
+palette index **1**, written into every pixel of the colour plane before
+rasterization and recorded in the header as the index the final blit will skip.
+The downscale of §6 has no notion of that: it feeds all four samples of every
+2×2 block through `ALP` unconditionally. So
+
+- a block wholly outside the model is `ALP[ALP[1,1] * 256 + ALP[1,1]]`, and
+  because `ALP`'s diagonal is exact identity — **Established (measured against
+  the retail `PALETTE.ALP`: all 256 diagonal entries are self-mapping)** —
+  this is `ALP[1*256 + 1] = 1`, the background index again, and the pixel
+  stays transparent;
+- a block wholly inside the model blends four model colours, which is the
+  anti-aliasing the option is for;
+- a block **straddling the silhouette** blends model colour with index 1.
+
+`PALETTE.PAL` entry 1 is `(128, 0, 0)` — dark maroon. Blending any model
+colour halfway toward dark maroon and snapping to the nearest palette entry
+lands, for most of the palette, in the reds and dusty purples: **Established
+(measured against the retail `PALETTE.PAL` and `PALETTE.ALP`)** — of the 256
+possible partners `x`, the entry `ALP[1][x]` is red-dominant (its red channel
+exceeds both green and blue by more than 40) for 169 of them, and
+purple/magenta (red and blue each exceed green by more than 30) for 19. The
+two criteria overlap; they are stated as thresholds so the count can be
+recomputed rather than taken on trust. `ALP[1][255]` (white against the background) is entry 20,
+`(175, 111, 127)`, a dusty pink; `ALP[1][0]` and `ALP[1][240]` are entry 207,
+`(79, 15, 0)`; `ALP[1][208]` is entry 200, `(223, 79, 7)`.
+
+That is the fringe, exactly: a one-pixel border of reds and pinks along the
+outline of every anti-aliased building, absent from mobile units and absent
+from the interior. It is a genuine defect in the retail engine — the
+downscale should either exclude background samples or blend against what is
+actually behind the unit — and the reason the palette makes it lurid is
+incidental: index 1 is the first entry of the classic EGA-order ramp and TA
+never repurposed it.
+
+**We reproduce it.** The engine is a clone; a filter that skips background
+samples would draw cleaner silhouettes than retail and would not match a
+reference screenshot. Implement the three `ALP` lookups verbatim, including
+the background samples.
+
+Note also what this rules out. The fringe is **not** authored texture content
+— the "authored texture fringe" reading offered as a supported inference in
+[R-REN-02R] is not needed and does not explain why the colours appear only on
+edges, only on buildings, and only in one-pixel width. It is not the model
+shadow, not a dither, not a team mapping, and not an outline writer; no
+generic outline writer exists, as [R-REN-02R] already established. The pixels
+`R-REN-02R` could not attribute are downscale outputs, and their neighbours
+inside the silhouette are ordinary blended texture.
+
+##### 8. Waterline, digger clipping, and the model shadow
+
+Three passes run over the finished image before it is blitted, all of them
+keyed on §2's height key. They are the reason the key base is 50 rather than 0:
+the key must stay non-negative for geometry below the model origin.
+
+**Waterline.** With `t = seaLevel - trunc(unitWorldY)`, when `t > 0` part of
+the unit is below the water surface and the threshold `t + 50 [+75 if Digger]`
+selects it. Which pass runs depends on ownership:
+
+- if the unit does not carry one particular runtime status bit **and** its
+  owner is not the local player, every pixel with `key <= threshold` is
+  **erased** — set to the image's transparent index — so a submerged enemy
+  simply is not drawn below the surface;
+- otherwise every pixel with `key <= threshold` whose colour is not already
+  the transparent index is recoloured through a 256-entry **`BLUE TABLE`**, so
+  the local player sees their own submerged hull tinted rather than cut off.
+
+`TODO(question): the authored semantic of the runtime status bit that steers
+the erase-versus-tint choice.`
+
+**Digger clipping.** A definition that authors `Digger` gets `+75` added to
+every key in §2, and after the waterline pass the image is erased wherever
+`key <= 125`. Since `125 = 50 + 75`, that erases exactly the geometry at or
+below the model origin: the buried half of a pop-up defence. **Established
+(asset census):** `Digger=1` on three stock units, `ARMAMB`, `CORTOAST` and
+`CORVIPE`.
+
+**The model shadow is a silhouette copy, not a stencil.** This **corrects**
+[03 §5.3], which said "model shadows build a doubled stencil image and compose
+it over the ground with a per-pixel depth compare … and darken through an
+`SHD` row (near-black row); the dither variant seeds a checker stencil with
+the `0x01010101` pattern and a screen parity term". Every element of that
+sentence belongs to something else. The "doubled stencil" is the anti-alias
+supersample of §6, which is a body pass, not a shadow pass — its option bit is
+`Anti_Alias` because it *is* anti-aliasing. The `0x01010101` fill is the
+composition image's background prefill of §1 — the colour plane is filled with
+the transparent index `1`, four bytes at a time. The per-pixel depth compare is
+the §2 key test, which every body span writer performs. And the `SHD` row is
+the shaded renderer's ordinary face shading.
+
+What actually happens is simpler. The shadow pass copies the unit's **own
+finished composition image** — both planes — into the staging buffer, then
+flattens its colour plane: every pixel that is not the transparent index
+becomes palette index **0**. That silhouette is blitted through the tinted
+blitter, before the body, at
+
+```
+shadowX = trunc(worldX - camX) + 133
+shadowY = trunc(worldZ - camZ) - (groundHeightUnderUnit >> 1) + 32
+```
+
+against the body's own `+128` / `+32`. The shadow is therefore offset **five
+pixels to the right** of the body and sheared by the terrain height under the
+unit rather than by the unit's own height — which is what makes a shadow slide
+across a slope. There is no second rasterization, no stencil, no dither and no
+`SHD` row in this path. Structures whose definition authors `noshadow`, and
+units authoring `canhover` or `floater`, take no model shadow at all; ships
+take a separate cached shadow image instead, gated on the unit being above
+sea level.
+
+**Table roster correction.** [03 §4.3] lists `ALP`, `LHT` and `SHD`. The
+renderer installs **five** tables, and two consumers documented elsewhere were
+attributed to the wrong one. In install order and size: the 65,536-byte
+`ALPHA TABLE` (`ALP`), the 8,192-byte `SHADE TABLE` (`SHD`), the 8,192-byte
+`LIGHT TABLE` (`LHT`), a 256-byte `GRAY TABLE` ([03 §4.3.3]), and a 256-byte
+`BLUE TABLE`. The anti-alias downscale of §6 reads `ALP`; the shaded span
+writers read `SHD`; the submerged tint of this section reads `BLUE TABLE`.
+This supersedes the earlier note that a shadow path "darkens through an `SHD`
+row" reached by way of the fifth table slot — that slot is the blue tint and
+that path is the waterline, not a shadow. It likewise supersedes the earlier
+bounded-negative claim that "`ALP` is not used" in this family: `ALP` is used,
+by the anti-alias downscale, three times per output pixel.
+
+##### 9. Order of operations, in one place
+
+```
+per unit, once its cached image is valid:
+  1. shadow    silhouette copy of the cached image, flattened to index 0,
+               tinted-blitted at (x+133, z - ground/2 + 32)
+  2. staging   union box of the unit and its attached children; cached image
+               copied in, both planes
+  3. live      pieces with the cache bit clear, rasterized into staging with
+               the key test, at 1x (never anti-aliased)
+  4. children  each attached unit composed into its own two-plane image and
+               key-composited into staging with its height delta
+  5. water     erase or blue-tint below the waterline; erase below key 125
+               for a Digger
+  6. blit      staging blitted at (x+128, z - unitY/2 + 32), skipping the
+               transparent index
+
+building the cached image (step 0, on first draw / orientation dirty /
+construction change):
+  a. measure the visible pieces, allocate one- or two-plane image per ZBuffer
+  b. if Anti_Alias and BMcode=0: rasterize into the 2x scratch instead
+  c. walk pieces last-to-first; per piece, primitives in load-fixed order,
+     selection primitive skipped
+  d. per primitive: colored -> flat filler at any arity; else quads only
+  e. per pixel: admit when storedKey <= incomingKey
+  f. if the 2x scratch was used: ALP box-filter colour 2:1, nearest-sample key
+```
 
 #### R-REN-02R — red/purple fringe provenance
 
@@ -653,19 +1171,38 @@ authored texture content after the normal palette/`SHD` mapping. The recurrence
 of those colors across ordinary textures argues against a model-wide red or
 purple outline, but does not establish the final pixel writer.
 
-**Unknown (P28-REN-02R residual).** The available reference screenshots and
-asset census do not provide a synchronized retail source-face/UV/texel and
-pixel-winner trace. Therefore the following remain unknown for each
-representative solar-collector and KBot-lab fringe pixel: final destination
-palette index and neighboring indices; source face, texture coordinate, and
-texel; shade row; height/tie winner; shadow state; whether the sample is inside
-the polygon span, on an included edge, or outside it; and dependence on
-facing, team, camera, or background. The exact retail writer, cross-model
-rule, edge-table inclusion rule, team mapping, shadow/dither contribution, and
-framebuffer-compositing cause are likewise unknown. No implementation of
-fringe pixels, anti-aliasing, or an arbitrary outline is justified. P28-REN-02I
-is blocked until a deterministic capture records those inputs and the winning
-writer.
+**Closed (2026-08-28) — see [R-REN-03A §7].** The residual recorded here is
+answered, and the answer required no capture. The fringe is produced by the
+structure anti-alias downscale: a building is rasterized into a 2x offscreen
+image whose background is palette index 1, and the 2:1 downscale feeds all
+four samples of every 2x2 block through the `ALP` blend table without
+excluding background samples. Blocks that straddle the silhouette therefore
+blend model colour with `PALETTE.PAL` entry 1, `(128, 0, 0)` — dark maroon —
+and land on red or dusty-purple palette entries. The disposition of the
+candidate causes listed above changes accordingly:
+
+- **Palette lookup — now Established, and it is `ALP`, not `SHD`.** The row
+  and output index are given by the three-lookup box filter in
+  [R-REN-03A §6]; the specific outputs for white, black and yellow sources
+  are measured in [R-REN-03A §7].
+- **Authored texture fringe — no longer needed.** The colored source texels
+  catalogued above are real, but they do not explain a one-pixel border that
+  appears only on edges, only on `BMcode=0` units, and only when the
+  `Anti_Alias` option is on. Nothing here demotes the asset census; it simply
+  is not the cause.
+- **Anti-alias writer — Established.** The earlier statement that "no generic
+  anti-alias writer is established … this is not permission to add one" was
+  correct about the *model face mapper*, which indeed has none. The
+  anti-aliasing is not in the mapper; it is the resolve step that runs after
+  the whole model is rasterized.
+- **Team mapping, shadow, dither, colour-key edge — all remain not-the-cause,
+  and are now excluded rather than merely unranked.**
+- **Framebuffer compositing — not involved.** The fringe pixels are already
+  present in the unit's own composition image before it reaches the world
+  surface.
+
+Reproduce the filter verbatim, background samples included: a downscale that
+skipped them would draw cleaner silhouettes than retail.
 
 #### R-SEL-02A — selection geometry, palette, and composition boundary
 
@@ -881,16 +1418,23 @@ clean-room work-unit constraint forbids automating the retail executable, so
 pixel-for-pixel outcomes of that synthetic matrix remain unverified against a
 running retail build. The static contract above does not depend on it.
 
-**Unknown.** The unit placement path contains a second, separate invocation of
-the unshaded piece renderer, targeting a different image record than the
-dispatcher's, guarded by "the structure-class bit is clear, or it is set and
-the construction fraction equals the completed sentinel". Its role — a second
-body pass, a silhouette pass, or a live draw that bypasses the cached image —
-is not established, and nothing in this section depends on it. A capture that
-counts model draws per unit per frame for one mobile unit, one completed
-structure and one structure under construction would settle it.
-`TODO(question): role of the placement path's second unshaded piece-render
-invocation.`
+**Closed (2026-08-28).** This section previously recorded as Unknown "a
+second, separate invocation of the unshaded piece renderer, targeting a
+different image record than the dispatcher's, guarded by 'the structure-class
+bit is clear, or it is set and the construction fraction equals the completed
+sentinel'", and asked whether it was a second body pass, a silhouette pass, or
+a live draw. It is the **live-piece pass** of [R-REN-03A §4]: the same
+renderer, targeting the staging image rather than the cached one, with the
+mode selector set to draw exactly the pieces whose cache bit is clear — the
+animated doors, pads, nano beams and blinkers. Its guard is the "skip for a
+structure under construction" rule, because a structure under construction has
+every visible piece in its cached image already. It is neither a second body
+pass nor a silhouette pass. Note also that the live pass always runs the
+**unshaded** renderer: it is not routed through the `BMcode`/`Shading` class
+gate, so an animated piece on a `BMcode=0` structure takes no `SHD` row even
+when the rest of that structure is shaded. Stock factory scripts clear the
+per-piece shade bit on exactly those pieces anyway (the `DONT_SHADE` census
+below), so the two mechanisms agree rather than compete.
 
 ### 2.5 Orthographic screen projection
 
@@ -2091,6 +2635,13 @@ the physical UI palette. The auxiliary tables are:
 - `LHT`: 8,192 bytes, 32 rows by 256 entries for brightening;
 - `SHD`: 8,192 bytes, 32 rows by 256 entries for shading/darkening.
 
+The renderer installs two further 256-entry tables beside those three, in this
+order: a **gray table** (§4.3.3) built at palette-install time, and a **blue
+table** read only by the submerged-hull tint of [R-REN-03A §8]. Five slots,
+sized 65,536 / 8,192 / 8,192 / 256 / 256. `ALP` has a second consumer besides
+the minimap: the structure anti-alias downscale reads it three times per output
+pixel ([R-REN-03A §6]).
+
 No table has a header; identification is by size alone. Each of `LHT` and
 `SHD` is loaded as a raw 8192-byte block and is retained for the life of the
 session. Only `PALETTE.PAL` participates in the `LOGPALETTE`/`CreatePalette`/
@@ -2598,7 +3149,7 @@ pitch the X slot, each with a constant negative half-circle (180-degree)
 authored model-facing offset — and a propeller-style variant feeds its spin
 angle through the same slot machinery.
 
-Texture mapping is corner-index affine 16.16 (direct-static): quads map index order `0→(0,0) 1→(1,0) 2→(1,1) 3→(0,1)`; n-gons 5–16 are `n`-edge affine polygons through the edge-table scanline mappers (ten-dword edge records) with per-edge `(dx<<16)/dy`, per-scanline `(uR-uL)/width` and `rowStep=(rowR-rowL)/width`, sampling `SHD[row*256+texel]` per pixel; the flat path is quads-only and fills the span directly. No stored UVs, no perspective divide (bounded-negative), clamp to `w-1/h-1`, nearest sample; transparent holes skip `SHD`. Face row is `trunc(dot(N,L)*5.0)&0x1F` with `L=(-0.8,1,0.25)`; a cleared render-piece shade bit (`DONT_SHADE`) pins the identity row `15`; the gouraud row interpolates as `row delta/width` (direct-static); the flat path bypasses `SHD`. The `SHD` steps above belong to the shaded piece renderer only, which retail selects on `BMcode=0` plus the `Shading` display option ([R-RND-02A]); the unshaded renderer maps textured faces with the same affine mapper and no `SHD` lookup. Row `0x0F` is identity, rows `0..14` darken, `16..31` brighten (see §4.3.2).
+Texture mapping is corner-index affine 16.16 (direct-static): quads map index order `0→(0,0) 1→(1,0) 2→(1,1) 3→(0,1)`; n-gons 5–16 are `n`-edge affine polygons through the edge-table scanline mappers (ten-dword edge records) with per-edge `(dx<<16)/dy`, per-scanline `(uR-uL)/width` and `rowStep=(rowR-rowL)/width`, sampling `SHD[row*256+texel]` per pixel; the flat path is quads-only and fills the span directly. No stored UVs, no perspective divide (bounded-negative), clamp to `w-1/h-1`, nearest sample. (The earlier "transparent holes skip `SHD`" clause is withdrawn: no model span writer tests the sampled texel against a transparent or colour-key index — see [R-REN-03A §5]. Model transparency is carried by the composition image's own background index, which the final blit keys against.) Face row is `trunc(dot(N,L)*5.0)&0x1F` with `L=(-0.8,1,0.25)`; a cleared render-piece shade bit (`DONT_SHADE`) pins the identity row `15`; the gouraud row interpolates as `row delta/width` (direct-static); the flat path bypasses `SHD`. The `SHD` steps above belong to the shaded piece renderer only, which retail selects on `BMcode=0` plus the `Shading` display option ([R-RND-02A]); the unshaded renderer maps textured faces with the same affine mapper and no `SHD` lookup. Row `0x0F` is identity, rows `0..14` darken, `16..31` brighten (see §4.3.2).
 
 #### Nanoframe reveal [R-P0-19-N]
 
@@ -2606,17 +3157,23 @@ An unfinished unit is composed exactly like a finished one, into the unit's own
 offscreen indexed image, and then recoloured in place before the image is
 blitted. Everything below is **Established (direct-static)**.
 
-**The height key.** While the model rasterizes, every vertex carries a third
-component beside its two screen coordinates: `key = trunc(vertexY/2) + bias`,
-where `vertexY` is the vertex's whole-world-unit height above the unit origin
-and `bias` is `50`, or `125` when one unit-definition flag bit is set
-(`TODO(question)`: the authored name of that bit is not identified; every stock
-path observed takes the `50` branch). The span filler interpolates the key in
-16.16 across each scanline and writes it, truncated to a byte, into the image's
-second plane — the same plane it uses as the unit's own depth test: a pixel is
-written only when the stored key is less than or equal to the incoming one, so
-the highest face at each pixel wins and ties go to the later face. That second
-plane is what the reveal reads.
+**The height key.** The key plane the reveal reads is the unit composition
+image's ordinary depth plane; its full contract, including which units get one
+at all, is [R-REN-03A §2]. In brief:
+`key = trunc(vertexY) + 50 + (Digger ? 75 : 0)`, where `vertexY` is the
+vertex's whole-world-unit height above the unit origin. The span writers
+interpolate it in 16.16 across each scanline and narrow it to a byte; a pixel
+is admitted only when the stored key is less than or equal to the incoming one,
+so the highest face at each pixel wins and ties go to the later-drawn face.
+
+**Correction.** This paragraph previously read `key = trunc(vertexY/2) + bias`
+with "`bias` is `50`, or `125` when one unit-definition flag bit is set
+(`TODO(question)`: the authored name of that bit is not identified)". The
+halving was a misreading of the anti-aliased vertex path, which doubles the
+vertex before dividing and so cancels out; the key is the whole height. The
+unidentified bit is the FBI key `Digger` and it contributes `+75`, which is
+where `125` came from. See [R-REN-03A §2] for the derivation and
+[R-REN-03A §8] for what the raised base is for.
 
 **The reveal.** With `p = trunc(remaining × 255)` from the construction
 remaining fraction (`1` at request, `0` at completion, so `p` counts down), the
@@ -2704,13 +3261,25 @@ shadow categories share one stencil are not established"):
 - **Two raster families.** (A) GAF sprite shadows (features) blit the shadow
   frame through the opaque or the tinted blitter (the tinted path selected by
   the definition's translucent flag and gated on the Shading bit), clipped by
-  an inclusive-rect intersect. (B) Model shadows build a doubled stencil image
-  and compose it over the ground with a per-pixel depth compare
-  `dstDepth <= srcDepth + bias` — equal-height overlaps coalesce to a single
-  darken rather than double-darkening — and darken through an `SHD` row
-  (`result = SHD[row*256 + groundIndex]`, near-black row); the dither variant
-  seeds a checker stencil with the 0x01010101 pattern and a screen parity
-  term. ALP is not used in either shadow family (bounded-negative).
+  an inclusive-rect intersect. (B) Model shadows copy the unit's own finished
+  composition image, flatten every non-background pixel of it to palette index
+  `0`, and blit that silhouette through the tinted blitter before the body —
+  see [R-REN-03A §8].
+
+  **Correction.** This bullet previously said model shadows "build a doubled
+  stencil image and compose it over the ground with a per-pixel depth compare
+  … and darken through an `SHD` row (near-black row); the dither variant seeds
+  a checker stencil with the 0x01010101 pattern and a screen parity term", and
+  that "ALP is not used in either shadow family". Every clause belonged to a
+  different mechanism. The doubled image is the structure anti-alias
+  supersample, a body pass gated on `Anti_Alias` ([R-REN-03A §6]); the
+  `0x01010101` fill is the composition image's background prefill, the
+  transparent index `1` written four bytes at a time ([R-REN-03A §1]); the
+  depth compare is the body key test every span writer performs
+  ([R-REN-03A §2]); and the `SHD` darken belongs to the submerged-hull tint,
+  which in fact reads a separate 256-entry `BLUE TABLE`, not `SHD`
+  ([R-REN-03A §8]). `ALP` *is* used in this cluster — by the anti-alias
+  downscale, three lookups per output pixel.
 - **Order.** Per bucket row the shadow is drawn before the body for both the
   soft and hard unit traversals, and per feature the shadow GAF precedes the
   body GAF; all shadow work sits between the terrain tiles and the units/
@@ -3710,7 +4279,8 @@ and unknown" without a resolution plan.
    ground-scar/crater authoring mechanism (§3.7 `TODO(question)`).
 - SHD/LHT row/index formula is now established for model `SHD` (`dont-shade→15`, `row=trunc(dot*5)&0x1F`, gouraud `rowStep=(rowR-rowL)/width`) and halo `LHT` (disc precompute verified: per-pixel CRT draw, `q = trunc((R+sqrt(1.33·dx²+dy²))·32)`, byte `0x6F−q` / ring `0x6E` / transparent `0xFF` on the `(0x20−q) mod 256` compare, level `31−q`); remaining open is ALP usage by any non-LOS UI/fade path — bounded-negative over the renderer cluster (ALP loads only in the minimap picture downsample).
 - Model lighting normals (`normalize(cross(b-a,b-c))` over first three indexes, degenerate `(0,1,0)`, per-vertex `avg/cnt` no renormalize) and texture coordinate policy (corner-index affine 16.16 through the edge-table scanline mapper and per-pixel `SHD` sampler, no stored UVs, flat direct-fill only, clamp/nearest/no perspective) and flat-color quads-only are now established (direct-static); remaining open is exact team/logo per-player dimension deltas and pitch/bank naming.
-- P28-REN-02R establishes that representative ARMSOLAR/ARMLAB GAF textures contain authored red/maroon and purple texels, including opaque interiors, and that the bounded model path has no established generic fringe, anti-alias, outline, RGB-blend, or random/dither writer. It does not map any screenshot pixel to a source face/UV/texel or winning writer: final palette indices, neighbouring pixels, shade row, height/tie, edge/span inclusion, shadow state, team/camera/background dependence, and the exact retail writer remain **Unknown**. P28-REN-02I is blocked; do not implement a fringe or outline without a deterministic winner trace.
+- The red/purple building fringe is **closed** ([R-REN-03A §7], superseding the P28-REN-02R residual). Structures — and only structures — are rasterized into a 2x offscreen image and resolved 2:1 through the `ALP` blend table, three lookups per output pixel, with no exclusion of background samples; the composition image's background is palette index 1, `(128,0,0)`, so blocks straddling the silhouette blend toward maroon and land on red or dusty-purple entries. The asset census in P28-REN-02R stands as an observation about authored texels but is not the cause. Reproduce the filter verbatim, background samples included.
+- The per-unit composition image is **established** end to end ([R-REN-03A]): its size and origin, its transparent index 1, the `ZBuffer`-gated height-key plane and the `storedKey <= incomingKey` admission rule, the reverse piece walk and its tie consequences, the cached/live piece split, attached-unit key compositing, the four span writers, the structure anti-alias supersample, and the waterline/digger/shadow passes over the finished image.
 - OTA-RND-02A closes the reported mobile/building shading conflict, and
   closes it the other way round from the first attempt ([R-RND-02A]): the
   piece-draw dispatcher chooses between a shaded and an unshaded piece
@@ -3719,15 +4289,20 @@ and unknown" without a resolution plan.
   `DONT_SHADE` bit is inert on mobile units. The stock FBI/3DO/COB census is
   established for the requested rows, including factory `Create` overrides.
   Still **Unknown**: the identical-model six-variant retail runtime matrix was
-  not run, so its pixel-for-pixel result is unverified, and the role of the
-  placement path's second unshaded piece-render invocation is open.
+  not run, so its pixel-for-pixel result is unverified. The role of the
+  placement path's second unshaded piece-render invocation is **closed** — it
+  is the live-piece pass of [R-REN-03A §4].
 - Shadow presentation is established (option bits, per-unit `noshadow`,
-  projection with the 0x32/0x7D palette base and four-byte terrain average,
-  GAF-sprite versus model-stencil families, inclusive clipping, dither
-  stencil, shadow-before-body order); remaining `TODO(question)`: the exact
-  water-flag bit semantics behind the 0x4B offset, the identity of the SHD
-  darken row, the dither-option/shading-gate interplay, and aircraft altitude
-  versus ground projection.
+  four-byte terrain average, GAF-sprite versus model families, inclusive
+  clipping, shadow-before-body order). **Corrected in [R-REN-03A §8]:** the
+  model family is a flattened silhouette copy of the unit's own composition
+  image blitted at a +5-pixel X offset, not a separately rasterized doubled
+  stencil with an `SHD` darken and a dither checker — the doubled image is the
+  anti-alias supersample, the `0x01010101` pattern is the composition image's
+  background prefill, and the `+75` key offset is the FBI `Digger` flag, not a
+  water flag. Remaining `TODO(question)`: the runtime status bit that steers
+  submerged erase versus blue tint, and aircraft altitude versus ground
+  projection.
 - Water wake rectangle interpolation, underwater tint, splash timing, and proof
   that no hidden animated-water surface writer exists.
 - Cursor hotspot metadata, subframe lifetime, animation speed for families not

@@ -24,11 +24,7 @@ The analyzed input is the retail PE32 executable whose recorded hashes are:
 - MD5: `8e74a1dffa1f5988624c52048f5b20cd`
 - SHA-1: `764dc919c3bd0365751aefba8e9a667299a3ce2e`
 
-At the time of this synthesis, the primary decompiler index contains 2,657
-function starts and 941 exported decompilations. An independent disassembler
-recognizes 3,808 starts. The tools agree on 2,568 starts, disagree on some end
-boundaries, and each recognizes starts that the other misses. Some executable
-regions remain unrecovered by both.
+At the time of this synthesis (re-measured 2026-08-28 after a function-boundary reconciliation pass), the decompiler index contains 4,024 function starts covering 960,488 of the 1,026,560 code bytes (93.6 %), and every one of those functions has an exported decompilation. Code that no function claims is down to 40 bytes; a further 25,061 bytes of the code section remain undecoded, alongside 34,144 bytes of alignment padding and 6,827 bytes of in-code data tables. Of the recognized functions, 883 (158,231 bytes) are identified as compiler runtime, C++ standard library, compression library, or the developer's shared debug and performance library; 500 (60,159 bytes) have no reference of any kind anywhere in the image; the remaining 2,641 functions (742,098 bytes) are game code. A second disassembler, run independently, recognizes 2,608 starts and agrees with 2,480 of them; each tool still finds starts the other misses, and end boundaries differ. (The previous text here — 2,657 starts, 941 exported decompilations, a 3,808-start independent index agreeing on 2,568 — described an earlier, partly lost analysis state and is superseded.)
 
 The specification is self-contained: it does not cite the analysis workspace,
 because that workspace is not distributed with this repository. Where a

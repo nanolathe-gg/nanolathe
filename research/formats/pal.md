@@ -20,6 +20,14 @@ PALETTE.SHD   8192 bytes =  32 rows × 256   shading table
 
 None of these files has a header — they are raw tables identified by size.
 
+The renderer holds five table slots, not four: the three above plus two
+256-entry tables that are **not** shipped as `palettes/` files — a gray table
+built at palette-install time from `PALETTE.PAL` (see
+`research/retail-executable-spec/03` §4.3.3) and a blue table read only by the
+submerged-hull tint (`[R-REN-03A §8]`). `TODO(question): the provenance of the
+retail blue table — whether it is built from PALETTE.PAL like the gray table
+or loaded from somewhere outside palettes/.`
+
 ## Reference
 
 ### PAL — the palette
@@ -56,10 +64,24 @@ value in many places, but a literal stored 0 pixel is drawn black.)
 ### ALP — blend table (256 × 256)
 
 `result_index = ALP[a * 256 + b]` gives the palette index approximating a
-blend of colors `a` and `b`. Used for translucency effects (shadows,
-explosion glow) in the software renderer. Verified structure from retail
-data: row *a* maps each *b* to a mix; `ALP[i][i] = i` does not hold exactly
-(it is a precomputed nearest-color table, not exact math).
+blend of colors `a` and `b`. It is a precomputed nearest-color table, not
+exact math, so it is not required to be symmetric — feed the operands in the
+order the consumer uses them.
+
+**The diagonal is exact.** Measured against the retail `PALETTE.ALP`, all 256
+entries of `ALP[i][i]` map to `i`. This **corrects** the previous sentence
+"`ALP[i][i] = i` does not hold exactly". The distinction matters: the model
+anti-alias downscale relies on it, since a 2x2 block wholly outside the model
+is four copies of the background index and must resolve back to that index or
+every building would acquire an opaque box around it.
+
+Consumers: the minimap's 2x supersample composite, translucency effects, and
+— the largest one — the structure anti-alias downscale, which reads `ALP`
+three times for every output pixel of every `BMcode=0` unit image when the
+`Anti_Alias` display option is on. That last consumer is also the source of
+retail's red/purple building fringe, because it blends silhouette-straddling
+blocks against palette index 1, `(128,0,0)`. See
+`research/retail-executable-spec/03` `[R-REN-03A §6]` and `[R-REN-03A §7]`.
 
 ### LHT — lighting table (32 × 256, brighten-only)
 

@@ -1355,12 +1355,18 @@ The targeted boundaries therefore have the following status:
   point/follow goal is installed. The reviewed factory-handler call chain
   contains no factory-specific takeoff state before `GetBuilt`; whether takeoff
   precedes rally handoff for a product remains **Unknown** ([04 §10.1]).
-- **Rotated transform and no-stacking — split Established/Unknown.** The
-  stock piece indices, names, and authored local translations above are
-  Established data. The exact runtime heading arithmetic for those hierarchy
-  translations, and a same-pass no-stacking guarantee, remain **Unknown**.
-  The 3DO format has hierarchy translations but no authored heading field;
-  a rotated-factory trace or a static heading-matrix capture is needed.
+- **Rotated transform Established; no-stacking Unknown.** The stock piece
+  indices, names, and authored local translations above are Established data.
+  **Correction (2026-08-28):** this item previously said "The exact runtime
+  heading arithmetic for those hierarchy translations … remain **Unknown**"
+  and asked for a heading-matrix capture. That arithmetic is Established in
+  [04 R-REV-02]: the shared piece locator folds the unit's committed
+  orientation into the model root node's angles before rotating, so the
+  factory heading does reach the exit position and there is no separate
+  heading matrix. The 3DO format's lack of an authored heading field is
+  consistent — the heading is runtime unit state. A same-pass no-stacking
+  guarantee remains **Unknown**; its decider is a blocked multi-product
+  trace.
 
 `TODO(question)`: record a retail run with a blocked exit, a completed ground
 product, and a completed aircraft product, including first movement,
@@ -1436,10 +1442,17 @@ Established: for each axis, the snapped cell is
 `(p - (f << 19) + (1 << 19)) >> 20` using a signed arithmetic shift, while the
 product remains at the independently resolved QueryBuildInfo world position
 ([04 §6.3]). The factory handler adds no separate heading, yard-map, model
-extent, or fixed-cell offset. The exact runtime heading transform applied to
-the authored hierarchy translation, including any half-turn normalization,
-remains **Unknown**; the stock piece census in [R-FAC-01B] supplies authored
-local values, not a rotated runtime trace.
+extent, or fixed-cell offset. **Correction (2026-08-28):** the next sentence
+here used to read "The exact runtime heading transform applied to the
+authored hierarchy translation, including any half-turn normalization,
+remains **Unknown**". It is Established in [04 R-REV-02]: the piece locator
+walks the selected piece's parent chain, folds the unit's committed
+orientation into the model root node's angles, applies its rotations in the
+order Rz, Rx, Ry with round-to-nearest narrowing per axis, negates
+accumulated Z once on output, and the factory helper then adds the unit's
+world origin componentwise. The load-time half-turn is a separate, earlier
+conversion owned by [03 §2.4]. The stock piece census in [R-FAC-01B] still
+supplies only authored local values.
 
 **Aircraft boundary — generic Established, factory ordering Unknown.** The
 ordinary VTOL movement family begins its velocity-limited climb when its first
@@ -1624,12 +1637,14 @@ tail-only count coalescing are established above. Each successful product is
 revalidated before allocation, but the same-pass occupancy publication window
 means that a no-stacking guarantee for multiple coalesced products is not
 established. A rotated factory contributes orientation through the resolved
-`QueryBuildInfo` piece transform; no separate product-heading offset is read.
-The product's independent initial heading is the common allocator's
-`buildangle` result, now established in [R-P28-ANG-01R §3]. The remaining
-**Unknown** is narrower: whether a rotated producer's stock exit transform
-coincides with its geometric/model center after the 3DO transform, which does
-not change the product-heading contract.
+`QueryBuildInfo` piece transform — specifically, the locator folds the
+factory's committed orientation into the model root node before rotating
+([04 R-REV-02]) — and no separate product-heading offset is read. The
+product's independent initial heading is the common allocator's `buildangle`
+result, now established in [R-P28-ANG-01R §3]. The remaining **Unknown** is
+narrower still: whether a rotated producer's stock exit transform coincides
+with its geometric/model center, which is a question about the authored
+models and does not change the product-heading contract.
 
 This audit supersedes no established lifecycle text. It narrows the earlier
 release gap: the engine-side production and rally handoff are closed, while a
@@ -2696,10 +2711,13 @@ contract:
   before RequestState(1) drives Stop/CloseYard and the selected COB's authored
   close animation. The post-completion release target/order form,
   producer/product collision exemption, indefinitely blocked release policy,
-  aircraft takeoff-before-rally handoff, exact rotated runtime transform
-  arithmetic, and a no-stacking guarantee for same-pass coalesced products
-  remain Unknown. The factory-side target derivation, stock exit-piece
-  indices/names/authored local translations, primary-queue gate,
+  aircraft takeoff-before-rally handoff, and a no-stacking guarantee for
+  same-pass coalesced products remain Unknown. The exit-piece locator's
+  runtime transform is no longer among them: the unit-orientation fold at the
+  model root, the Rz/Rx/Ry order, the round-to-nearest per-axis narrowing,
+  the single output Z negation, and the componentwise origin add are
+  established in [04 R-REV-02]. The factory-side target derivation, stock
+  exit-piece indices/names/authored local translations, primary-queue gate,
   pre-allocation 15/300-tick retries, completion link clearing, and GetBuilt
   rally sequencing are established in the bounded audits above.
 - Name the semantic meaning of the game-ended flag bits and of the two
