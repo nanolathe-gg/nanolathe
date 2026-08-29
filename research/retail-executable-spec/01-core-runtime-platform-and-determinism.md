@@ -872,7 +872,7 @@ battle determinism (only the seed instants can).
 | Battle entry | both | 0 (reseeds only) | simulation ← QPC sum; CRT ← time-of-day; global tick ← 0 |
 | Battle entry, skirmish setup | CRT | count−1 (Fisher-Yates swap draws), plus one 50/50 gate draw when fewer than three qualifying players | player-slot assignment shuffle (skirmish start positions; skipped entirely when a saved game is being loaded) |
 | Battle entry, networked setup | sim | 2 per placed commander (one per axis of the start point) | commander start placement |
-| Battle entry, campaign/mission setup | sim | 2 per placed unit (X then Y) | initial-mission unit creation |
+| Battle entry, campaign/mission setup | sim | For each successful common allocation: buildangle-bounded heading invocation (bound <2 returns zero without advancing), then one full-domain initialization draw; per-definition-limit/pool refusal returns before both draws (0) | common unit initializer; a successful mission allocation then has its initialized heading overwritten by the authored placement angle |
 | Battle entry, wind initialization | — | 0 | the wind-change routine is called with a zeroed deadline while the global tick is still zero; the strict gate does not fire |
 | First sub-tick (global tick 1) | CRT, then sim | 1 CRT (interval), then 1 sim (speed), then 1 sim (heading) only when speed ≠ 0 | phase 8 wind change, now due (deadline 0 < tick 1) |
 | Sub-tick when a strike is due | CRT | 4 scheduling draws, + 2 per meteor hit (radius, then angle) | phase 9 meteor shower |

@@ -251,8 +251,17 @@ At draw time the rasterizer dispatches per primitive on its flag bits:
 
 ### Face shading (SHD rows)
 
-Textured faces shade through `PALETTE.SHD` (32 rows × 256 entries) with the
-row selected per vertex:
+Shading is not applied to every model. Retail runs its shaded piece renderer
+only for a unit whose FBI authors `BMcode=0` (the structure class) and only
+while the `Shading` display option is on; every other unit is drawn by a
+second piece renderer that maps the same textured faces with no
+`PALETTE.SHD` step and never reads the per-piece `dont-shade` bit. So the
+rest of this section describes how a structure is lit, and mobile units show
+no orientation-dependent shading in retail at all. See
+`research/retail-executable-spec/03` `[R-RND-02A]`.
+
+On that path, textured faces shade through `PALETTE.SHD` (32 rows × 256
+entries) with the row selected per vertex:
 
 ```
 row = trunc( dot(N, L) * 5.0 ) mod 32
@@ -266,8 +275,10 @@ N = per-vertex smooth normal:
 
 Rows are palette remaps, not brightness ramps: row 15 is identity, row 0 maps
 most entries toward black, row 31 saturates, and intermediate rows shift hue
-differently per entry — this is what gives TA units their per-face color
-variation. COB's `dont-shade` opcode pins a piece to row 15. Flat-colored
+differently per entry — this is what gives TA structures their per-face color
+variation. COB's `dont-shade` opcode pins a piece to row 15, which stock
+factory scripts use to exempt doors, pads, nano beams and landing plates
+while the rest of the structure stays shaded. Flat-colored
 quads never route through SHD (confirmed by a two-normal 3DO probe: flat
 colors do not vary with orientation).
 

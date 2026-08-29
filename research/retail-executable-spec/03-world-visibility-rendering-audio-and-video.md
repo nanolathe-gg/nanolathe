@@ -557,8 +557,12 @@ projection, then walks pieces and primitives with these established rules:
    combination fills through the unit's LOGOS frame with a per-player shade
    byte from the player record instead.
 3. **Textured faces** render through the scanline mapper for any vertex
-   count, sampling the texture through `PALETTE.SHD` at a row derived from
-   geometry:
+   count. Everything in this item describes the **shaded** piece renderer,
+   which retail reaches only for a `BMcode=0` unit with the `Shading` display
+   option on ([R-RND-02A]); the unshaded renderer that every other unit takes
+   maps the same textured faces with no `PALETTE.SHD` step at all. In the
+   shaded renderer the texture is sampled through `PALETTE.SHD` at a row
+   derived from geometry:
 
 ```
 row = trunc( dot(N, L) * 5.0 ) mod 32
@@ -576,8 +580,7 @@ N = per-vertex smooth normal:
    render-piece record's shade bit cleared by the COB adapter) forces row
    `0x0F` (15); else `row = trunc(dot*5.0) & 0x1F`
    wrapping negatives to `27..31` (not clamped); the gouraud interpolant is
-   `rowStep = (rowR-rowL)/width` in signed 16.16 fixed point for both the fixed
-   and mobile textured scanline paths, and each pixel samples
+   `rowStep = (rowR-rowL)/width` in signed 16.16 fixed point, and each pixel samples
    `SHD[row*256+texel]`; the flat path fills the span directly with no `SHD`
    lookup (direct-static). The light direction is read from three settings as
    integers scaled by 0.01 and written through a dedicated setter that then
@@ -654,19 +657,79 @@ boundary questions.
 
 ### OTA-RND-02A — model-path shading and stock reachability [R-RND-02A]
 
-The earlier shorthand that treated mobile units as unshaded, or treated
-building pieces as shaded by class, is corrected here. **Established
-(direct-static):** the fixed/mobile model split selects an image-cache/rebuild
-path from runtime draw state (main versus auxiliary draw, the runtime unit
-state bit, and construction fraction). It does not test FBI `BMcode`,
-`CanMove`, or `CanFly`. Both paths use the same per-vertex normal, `SHD` row,
-and Gouraud row interpolation described in section 2.4.1; untextured flat
-faces bypass `SHD` in both paths. The piece-level render flag is independent:
-the model fill starts each geometry-bearing piece shaded, and the script may
-clear that bit for an individual piece with `DONT_SHADE`. There is therefore
-no established class-wide mobile-unshaded rule.
+**Correction.** The previous text of this section said that the model path
+"does not test FBI `BMcode`, `CanMove`, or `CanFly`", that both the fixed and
+mobile paths "use the same per-vertex normal, `SHD` row, and Gouraud row
+interpolation", and that "there is therefore no established class-wide
+mobile-unshaded rule". That is wrong, and it was wrong because it answered a
+different question than the one asked. The unit piece-draw dispatcher makes
+**two independent decisions**, and the earlier trace followed only the first
+of them. The first decision — which image record the piece geometry is
+composed into — is indeed taken from runtime draw state and does test no FBI
+field. The second decision, taken further down the same dispatcher, chooses
+**which of two piece renderers** runs, and it is a class gate: retail shades
+structures and never shades mobile units. A player's report that retail
+shades buildings, or parts of them, and never shades mobile units is
+accurate, and the corrected contract below is what produces it.
 
-The stock asset census below is a bounded check of that separation. Values in
+**Established (direct-static): the two decisions.**
+
+1. *Image source.* The fixed/mobile split selects an image-cache/rebuild path
+   from runtime draw state (main versus auxiliary draw, the runtime unit state
+   bit, and construction fraction). It tests no FBI field. This part of the
+   earlier description stands.
+2. *Rasterizer.* The dispatcher then runs the **shaded** piece renderer if and
+   only if two conditions both hold: the unit instance's class/status word has
+   the structure-class bit set, **and** the global display option named
+   `Shading` is enabled. Otherwise it runs a separate **unshaded** piece
+   renderer. The two renderers take identical arguments and are the only two
+   consumers of this dispatch.
+
+**Established (direct-static): the class bit is `BMcode`.** When a unit
+instance is bound to its definition at creation, the structure-class bit of
+the instance class/status word is written as the truth of *the definition's
+`BMcode` byte is zero* — the same byte, and the same "zero means structure"
+test, that the yard-map parser uses [05 "Geothermal requirement"] and that the
+build-order
+and build-placement paths use [07 §9]. It is not derived from `CanMove`,
+`MaxVelocity`, `MovementClass`, or `CanFly`. The engine's internal
+feature-backed pseudo-unit sets the same bit unconditionally at construction,
+having no FBI to read. So the renderer's class gate reduces to authored data:
+**`BMcode=0` (structures) are shaded; `BMcode=1` (mobile units) are not.**
+
+**Established (direct-static): what the two renderers differ in.** Both walk
+the same piece list, honour the same per-piece draw and cache bits, apply the
+same selection-plate exclusion, the same quads-only rule for untextured
+primitives, and the same team/logo flat-fill treatment. The shaded renderer
+additionally computes face normals and per-vertex smooth normals, derives a
+`SHD` row per vertex, emits a fourth per-vertex component carrying that row,
+and hands textured faces to the Gouraud `SHD` scanline mapper of section
+2.4.1. The unshaded renderer emits three-component vertices with no row at
+all and hands textured faces to a plain texture mapper that performs no `SHD`
+lookup. Untextured flat faces bypass `SHD` in both, as before.
+
+**Established (bounded-negative):** the per-piece shade bit is read **only**
+inside the shaded renderer. The unshaded renderer reads the same piece flags
+byte for the draw bit and the cache bit and never tests the shade bit.
+`SHADE` and `DONT_SHADE` are therefore inert on a `BMcode=1` unit — nothing
+downstream of the script consumes the bit they write.
+
+**Established (direct-static): the `Shading` option.** The display option word
+carries one bit per toggle; the bit the shading gate tests is the one written
+by the handler bound to the name string `Shading`. The Options screen's
+restore-defaults path sets that bit, so shading is on unless the player turns
+it off. With it off, structures take the unshaded renderer too and the game
+draws no model shading at all.
+
+**Established (direct-static): piece-flag polarity is unchanged by this
+correction.** The model fill starts each geometry-bearing piece with the shade
+bit **set**; the interpreter passes one for `SHADE` and zero for `DONT_SHADE`
+into a per-piece setter that writes that value into the bit; and the shaded
+renderer computes the normal-derived row when the bit is set and pins row 15
+when it is clear. See [04 "OTA-RND-02A script-side shading census"].
+
+The stock asset census below is a bounded check of the gate and of the
+script-side overrides. Values in
 the FBI columns are authored values (an absent key is the normal false
 default); `3DO` is `pieces / primitives / textured / flat / clear`, and
 `Create DONT` is the number of `DONT_SHADE` operations found in the named
@@ -722,14 +785,40 @@ gate. **Established (static bytecode census):** no requested script uses
 `Create`/activation callback set, and it addresses the named pieces in the
 table.
 
-The required identical-model six-variant runtime matrix was not run: the
-clean-room work-unit constraint forbids automating the retail executable.
-Thus the renderer-path equivalence above is established from the bounded
-static path and the shared mapper contract, while pixel-for-pixel outcomes of
-that synthetic matrix remain **Unknown**. OTA-RND-02B may use the single
-effective policy “apply the per-piece shade bit in both fixed and mobile
-textured paths; flat faces bypass `SHD`; do not add a `BMcode`/`CanMove`/
-`CanFly` class gate,” but must retain that runtime-matrix limitation.
+The census also reads differently now. Every row with `Create DONT` greater
+than zero is a `BMcode=0` structure, and every `BMcode=1` row has a zero
+count. That is not a coincidence of authoring taste: a `DONT_SHADE` in a
+mobile unit's script would have no observable effect, because the renderer
+that unit reaches never reads the bit. The stock scripts that do use the
+opcode are the animated structures, exempting doors, pads, nano beams,
+landing plates and blinkers from the normal-derived row while the rest of the
+structure stays shaded — which is exactly the "parts of a building are
+shaded" appearance. `ARMSOLAR`, a `BMcode=0` structure with no `DONT_SHADE`
+at all, is fully shaded.
+
+**Effective policy for OTA-RND-02B.** Select the shaded piece renderer when
+the unit's definition authors `BMcode=0` **and** the `Shading` display option
+is on; otherwise select the unshaded renderer. In the shaded renderer, apply
+the per-piece shade bit (set by default, cleared by `DONT_SHADE`, restored by
+`SHADE`), pin row 15 when it is clear, and let untextured flat faces bypass
+`SHD`. In the unshaded renderer, ignore the per-piece shade bit entirely.
+Do **not** gate on `CanMove`, `MaxVelocity`, or `CanFly`.
+
+**Unknown.** The identical-model six-variant runtime matrix was not run: the
+clean-room work-unit constraint forbids automating the retail executable, so
+pixel-for-pixel outcomes of that synthetic matrix remain unverified against a
+running retail build. The static contract above does not depend on it.
+
+**Unknown.** The unit placement path contains a second, separate invocation of
+the unshaded piece renderer, targeting a different image record than the
+dispatcher's, guarded by "the structure-class bit is clear, or it is set and
+the construction fraction equals the completed sentinel". Its role — a second
+body pass, a silhouette pass, or a live draw that bypasses the cached image —
+is not established, and nothing in this section depends on it. A capture that
+counts model draws per unit per frame for one mobile unit, one completed
+structure and one structure under construction would settle it.
+`TODO(question): role of the placement path's second unshaded piece-render
+invocation.`
 
 ### 2.5 Orthographic screen projection
 
@@ -2003,9 +2092,11 @@ replicate. The `SHD` row selection is now established (direct-static):
 the cleared render-piece shade bit (`DONT_SHADE`) pins row `15`, else
 `row = trunc(dot*5.0) & 0x1F` with
 `L=(-0.8,1,0.25)`, wrapping negatives; the row interpolates gouraud-style as
-`(rowR-rowL)/width` for both fixed and mobile textured paths, sampling
+`(rowR-rowL)/width`, sampling
 `SHD[row*256+texel]` per pixel; the flat path bypasses `SHD` and fills the span
-directly. Identity row `15` and the 32-row layout remain direct; the `1=NW`
+directly. All of that lives in the shaded piece renderer, which retail reaches
+only for a `BMcode=0` unit with the `Shading` display option on ([R-RND-02A]);
+the renderer every other unit takes maps textured faces with no `SHD` step. Identity row `15` and the 32-row layout remain direct; the `1=NW`
 corner→bit mapping remains supported inference pending probe.
 
 #### 4.3.3 Gray table construction [R-RR16-A §1]
@@ -2435,7 +2526,7 @@ pitch the X slot, each with a constant negative half-circle (180-degree)
 authored model-facing offset — and a propeller-style variant feeds its spin
 angle through the same slot machinery.
 
-Texture mapping is corner-index affine 16.16 (direct-static): quads map index order `0→(0,0) 1→(1,0) 2→(1,1) 3→(0,1)`; n-gons 5–16 are `n`-edge affine polygons through the edge-table scanline mappers (ten-dword edge records) with per-edge `(dx<<16)/dy`, per-scanline `(uR-uL)/width` and `rowStep=(rowR-rowL)/width`, sampling `SHD[row*256+texel]` per pixel; the flat path is quads-only and fills the span directly. No stored UVs, no perspective divide (bounded-negative), clamp to `w-1/h-1`, nearest sample; transparent holes skip `SHD`. Face row is `trunc(dot(N,L)*5.0)&0x1F` with `L=(-0.8,1,0.25)`; a cleared render-piece shade bit (`DONT_SHADE`) pins the identity row `15`; the gouraud row interpolates as `row delta/width` for both fixed and mobile textured paths (direct-static); the flat path bypasses `SHD`. Row `0x0F` is identity, rows `0..14` darken, `16..31` brighten (see §4.3.2).
+Texture mapping is corner-index affine 16.16 (direct-static): quads map index order `0→(0,0) 1→(1,0) 2→(1,1) 3→(0,1)`; n-gons 5–16 are `n`-edge affine polygons through the edge-table scanline mappers (ten-dword edge records) with per-edge `(dx<<16)/dy`, per-scanline `(uR-uL)/width` and `rowStep=(rowR-rowL)/width`, sampling `SHD[row*256+texel]` per pixel; the flat path is quads-only and fills the span directly. No stored UVs, no perspective divide (bounded-negative), clamp to `w-1/h-1`, nearest sample; transparent holes skip `SHD`. Face row is `trunc(dot(N,L)*5.0)&0x1F` with `L=(-0.8,1,0.25)`; a cleared render-piece shade bit (`DONT_SHADE`) pins the identity row `15`; the gouraud row interpolates as `row delta/width` (direct-static); the flat path bypasses `SHD`. The `SHD` steps above belong to the shaded piece renderer only, which retail selects on `BMcode=0` plus the `Shading` display option ([R-RND-02A]); the unshaded renderer maps textured faces with the same affine mapper and no `SHD` lookup. Row `0x0F` is identity, rows `0..14` darken, `16..31` brighten (see §4.3.2).
 
 #### Nanoframe reveal [R-P0-19-N]
 
@@ -3547,14 +3638,16 @@ and unknown" without a resolution plan.
    ground-scar/crater authoring mechanism (§3.7 `TODO(question)`).
 - SHD/LHT row/index formula is now established for model `SHD` (`dont-shade→15`, `row=trunc(dot*5)&0x1F`, gouraud `rowStep=(rowR-rowL)/width`) and halo `LHT` (disc precompute verified: per-pixel CRT draw, `q = trunc((R+sqrt(1.33·dx²+dy²))·32)`, byte `0x6F−q` / ring `0x6E` / transparent `0xFF` on the `(0x20−q) mod 256` compare, level `31−q`); remaining open is ALP usage by any non-LOS UI/fade path — bounded-negative over the renderer cluster (ALP loads only in the minimap picture downsample).
 - Model lighting normals (`normalize(cross(b-a,b-c))` over first three indexes, degenerate `(0,1,0)`, per-vertex `avg/cnt` no renormalize) and texture coordinate policy (corner-index affine 16.16 through the edge-table scanline mapper and per-pixel `SHD` sampler, no stored UVs, flat direct-fill only, clamp/nearest/no perspective) and flat-color quads-only are now established (direct-static); remaining open is exact team/logo per-player dimension deltas and pitch/bank naming.
-- OTA-RND-02A closes the reported mobile/building shading conflict for the
-  bounded static contract: fixed and mobile textured paths share the same
-  `SHD` mapper, flat faces bypass it, and only the per-piece render flag
-  selects identity versus computed shading. The stock FBI/3DO/COB census is
-  established for the requested rows, including factory `Create` overrides;
-  the identical-model six-variant retail runtime matrix was not run, so its
-  pixel-for-pixel result remains **Unknown**. The semantic name of the
-  runtime selector's unit-state bit is also **Unknown**.
+- OTA-RND-02A closes the reported mobile/building shading conflict, and
+  closes it the other way round from the first attempt ([R-RND-02A]): the
+  piece-draw dispatcher chooses between a shaded and an unshaded piece
+  renderer on the definition's `BMcode` byte and the `Shading` display option,
+  so structures are shaded and mobile units never are, and the per-piece
+  `DONT_SHADE` bit is inert on mobile units. The stock FBI/3DO/COB census is
+  established for the requested rows, including factory `Create` overrides.
+  Still **Unknown**: the identical-model six-variant retail runtime matrix was
+  not run, so its pixel-for-pixel result is unverified, and the role of the
+  placement path's second unshaded piece-render invocation is open.
 - Shadow presentation is established (option bits, per-unit `noshadow`,
   projection with the 0x32/0x7D palette base and four-byte terrain average,
   GAF-sprite versus model-stencil families, inclusive clipping, dither

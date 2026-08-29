@@ -384,10 +384,10 @@ func ResourceStatusFor(f *frame.Frame, player uint8) ResourceStatus {
 		Metal:         StatusBar{Current: metal, Capacity: metalCap, Fraction: ResourceFraction(metal, metalCap)},
 		EnergyCurrent: FormatCurrent(energy), EnergyCapacity: FormatCurrent(energyCap),
 		MetalCurrent: FormatCurrent(metal), MetalCapacity: FormatCurrent(metalCap),
-		EnergyProduced: PaletteRole{Text: FormatEnergyRate(energyProduced), Palette: PaletteProduction},
-		EnergyConsumed: PaletteRole{Text: FormatEnergyRate(-abs32(energyConsumed)), Palette: PaletteConsumption},
-		MetalProduced:  PaletteRole{Text: FormatMetalRate(metalProduced), Palette: PaletteProduction},
-		MetalConsumed:  PaletteRole{Text: FormatMetalRate(-abs32(metalConsumed)), Palette: PaletteConsumption},
+		EnergyProduced: PaletteRole{Text: FormatEnergyProduced(energyProduced), Palette: PaletteProduction},
+		EnergyConsumed: PaletteRole{Text: FormatEnergyConsumed(energyConsumed), Palette: PaletteConsumption},
+		MetalProduced:  PaletteRole{Text: FormatMetalProduced(metalProduced), Palette: PaletteProduction},
+		MetalConsumed:  PaletteRole{Text: FormatMetalConsumed(metalConsumed), Palette: PaletteConsumption},
 		EnergyZero:     PaletteRole{Text: "0", Palette: PaletteNormal},
 		MetalZero:      PaletteRole{Text: "0", Palette: PaletteNormal},
 	}
@@ -400,9 +400,10 @@ func FormatCurrent(value float32) string { return fmt.Sprintf("%d", int(value)) 
 // FormatStock is an alias for the integer stock/capacity formatter.
 func FormatStock(value float32) string { return FormatCurrent(value) }
 
-// FormatEnergyRate formats energy production/consumption as an integer, with
-// a truncated integer K suffix outside the inclusive -99999..99999 range
-// [07 §6]. The sign supplied by the caller is preserved.
+// FormatEnergyRate formats a signed energy value as an integer, with a
+// truncated integer K suffix outside the inclusive -99999..99999 range
+// [07 §6]. It is retained as the generic signed primitive; callers should use
+// FormatEnergyProduced or FormatEnergyConsumed when the value's role is known.
 func FormatEnergyRate(value float32) string {
 	if value > 99999 || value < -99999 {
 		return fmt.Sprintf("%dK", int(value/1000))
@@ -410,10 +411,34 @@ func FormatEnergyRate(value float32) string {
 	return fmt.Sprintf("%d", int(value))
 }
 
-// FormatMetalRate formats metal production/consumption with one fractional
-// digit [07 §6].
+// FormatEnergyProduced formats the produced amount. Production retains the
+// signed input because the energy formatter's normal and suffix forms are
+// signed [07 §6].
+func FormatEnergyProduced(amount float32) string { return FormatEnergyRate(amount) }
+
+// FormatEnergyConsumed formats a consumed magnitude. The panel artwork owns
+// the minus sign, so this text never receives one, including for a negative
+// or negative-zero source value [07 §6].
+func FormatEnergyConsumed(magnitude float32) string {
+	return FormatEnergyRate(abs32(magnitude))
+}
+
+// FormatMetalRate formats a signed metal value with one fractional digit
+// [07 §6]. It remains the generic signed primitive for compatibility with
+// callers that do not yet have a resource role.
 func FormatMetalRate(value float32) string {
 	return fmt.Sprintf("%.1f", float64(value))
+}
+
+// FormatMetalProduced formats the produced amount with one fractional digit
+// [07 §6].
+func FormatMetalProduced(amount float32) string { return FormatMetalRate(amount) }
+
+// FormatMetalConsumed formats a consumed magnitude with one fractional digit.
+// The panel artwork owns the minus sign, so negative input is normalized to a
+// positive magnitude, including negative zero [07 §6].
+func FormatMetalConsumed(magnitude float32) string {
+	return FormatMetalRate(abs32(magnitude))
 }
 
 func abs32(v float32) float32 {

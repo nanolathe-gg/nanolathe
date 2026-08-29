@@ -1061,10 +1061,10 @@ func (h *retailBattleHUD) drawResources(c *client.Client, f *frame.Frame) {
 	h.drawNumberRight(c, hud.AnchorMetalMax, res.MetalCapacity)
 	h.drawTextAt(c, hud.AnchorEnergy0, "0", h.guiColor(15))
 	h.drawTextAt(c, hud.AnchorMetal0, "0", h.guiColor(15))
-	h.drawTextAt(c, hud.AnchorEnergyProduced, formatEnergyRate(rates.EnergyProduced), h.guiColor(10))
-	h.drawTextAt(c, hud.AnchorEnergyConsumed, formatEnergyRate(-rates.EnergyConsumed), h.guiColor(12))
-	h.drawTextAt(c, hud.AnchorMetalProduced, fmt.Sprintf("%.1f", rates.MetalProduced), h.guiColor(10))
-	h.drawTextAt(c, hud.AnchorMetalConsumed, fmt.Sprintf("%.1f", -rates.MetalConsumed), h.guiColor(12))
+	h.drawTextAt(c, hud.AnchorEnergyProduced, hud.FormatEnergyProduced(rates.EnergyProduced), h.guiColor(10))
+	h.drawTextAt(c, hud.AnchorEnergyConsumed, hud.FormatEnergyConsumed(rates.EnergyConsumed), h.guiColor(12))
+	h.drawTextAt(c, hud.AnchorMetalProduced, hud.FormatMetalProduced(rates.MetalProduced), h.guiColor(10))
+	h.drawTextAt(c, hud.AnchorMetalConsumed, hud.FormatMetalConsumed(rates.MetalConsumed), h.guiColor(12))
 }
 
 func (h *retailBattleHUD) drawResourceBar(c *client.Client, r hud.Rect, fraction float32, inner byte) {
@@ -1112,10 +1112,7 @@ func (h *retailBattleHUD) drawTextAt(c *client.Client, index int, text string, c
 }
 
 func formatEnergyRate(value float32) string {
-	if value > 99999 || value < -99999 {
-		return fmt.Sprintf("%dK", int(value/1000))
-	}
-	return fmt.Sprintf("%d", int(value))
+	return hud.FormatEnergyRate(value)
 }
 
 func (h *retailBattleHUD) drawTopStatusValues(c *client.Client, f *frame.Frame) {

@@ -799,6 +799,34 @@ the rest of the session.
 `selfdestructcountdown` is read with the raw accessor, so the record can tell
 an authored value from an absent key.
 
+### Building heading field audit [R-P28-ANG-01R §1]
+
+**Established — authored values.** An asset-backed read with
+`NANOLATHE_TA_ROOT=/path/to/home/TotalAnnihilation` resolved the stock unit
+records through the normal VFS and preserved these source values:
+
+| Unit record | `FootprintX` × `FootprintZ` | `YardMap` | `buildangle` | `Ovradjust` |
+|---|---:|---|---:|---:|
+| `ARMSOLAR` | 5 × 5 | `ooooooooooooooooooooooooooo` | 4096 | 1 |
+| `ARMLAB` | 6 × 6 | `yoccoy ooccoo ooccoo ooccoo ooccoo yoccoy` | 4096 | 1 |
+
+The values above are evidence of authored data only; field names and the
+visual orientation of a screenshot are not semantic evidence.
+
+**Established — `buildangle` reader.** The unit compiler reads `buildangle`
+with the integer accessor (default zero) and stores the resulting low 16 bits
+as an unsigned bound. On each successful unit allocation, the unit
+initialization path invokes the global simulation random sampler once with
+that bound and uses the result to initialize the unit heading. The allocator
+does not read `Ovradjust`/`ovradjust`; the bounded executable census found no
+other reader for that field. Thus `buildangle` is no longer an untyped or
+readerless candidate, while `ovradjust` remains a retained unknown source
+field with no behavior assigned.
+
+The sampler's exact heading arithmetic and lifecycle are owned by [04
+§2.3b] and the factory placement boundary by [05 "Factory production
+lifecycle"].
+
 **Executable-bounded absent fields.** Editor-only fields, unit number and
 designation metadata, `noautofire`, `ovradjust`, `steeringmode`, and several
 alternate transport names have no reader. They must be retained as unknown

@@ -302,3 +302,45 @@ func TestRetailNoSelectionUsesSideGeneralWindow(t *testing.T) {
 		}
 	}
 }
+
+func TestRetailEnergyProductionAnchorFits640Viewport(t *testing.T) {
+	root := os.Getenv("NANOLATHE_TA_ROOT")
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skipf("retail assets unavailable: %v", err)
+		}
+		root = home + "/TotalAnnihilation"
+	}
+	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
+	cs, err := openContent(opts)
+	if err != nil {
+		t.Skipf("retail assets unavailable: %v", err)
+	}
+	defer cs.Close()
+	rng.SeedGlobal(1, 1)
+	sess, cat, err := newBattleSession(opts, cs)
+	if err != nil {
+		t.Skipf("retail assets unavailable: %v", err)
+	}
+	for step := int32(1); step <= 30; step++ {
+		sess.Step(step)
+		if sess.Snapshot.Current() != nil {
+			break
+		}
+	}
+	pal := loadPalette(cs)
+	h, err := loadRetailBattleHUD(cs.fs, sess, cat, pal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor, ok := h.anchors.ByIndex(hud.AnchorEnergyProduced)
+	if !ok {
+		t.Fatal("retail ENERGYPRODUCED anchor is missing")
+	}
+	text := hud.FormatEnergyProduced(99999) // widest normal-range energy form [07 §6]
+	textWidth := client.MeasureText(h.console, text)
+	if anchor.X1 < 0 || anchor.Y1 < 0 || anchor.X1+int32(textWidth) > 640 || anchor.Y1 >= 480 {
+		t.Fatalf("ENERGYPRODUCED text %q at (%d,%d), width %d, escapes 640x480 viewport", text, anchor.X1, anchor.Y1, textWidth)
+	}
+}

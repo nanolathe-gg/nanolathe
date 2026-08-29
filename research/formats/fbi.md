@@ -175,7 +175,7 @@ use a single character (`YardMap=o;`).
 | Key | Meaning |
 | --- | --- |
 | `Builder` | Can construct (`1` for factories, construction units, commander) |
-| `BMcode` | `0` for structures, `1` for mobile units. Perfectly correlated with `YardMap` across the stock corpus: all 126 definitions with a yard map author `0`, all 152 without author `1` (see `docs/SPEC_CONFLICTS.md` SC21). It is not a factory marker — stock factories author `1` for `CanMove` |
+| `BMcode` | `0` for structures, `1` for mobile units. Perfectly correlated with `YardMap` across the stock corpus: all 126 definitions with a yard map author `0`, all 152 without author `1` (see `docs/SPEC_CONFLICTS.md` SC21). It is not a factory marker — stock factories author `1` for `CanMove`. The engine copies "`BMcode` is zero" into the instance's structure-class bit at creation and reads it back for yard-map allocation, build-order placement, and the model shading gate |
 | `WorkerTime` | Nanolathe rate (build effort contributed per unit time) |
 | `Builddistance` | Build/repair reach in pixels (mobile builders) |
 | `MetalMake` | Metal produced while active (also used by builders) |
@@ -233,12 +233,17 @@ The factory itself does not move. Engine systems that need the physical
 stationary/mobile distinction must therefore use actual locomotion data such
 as `MaxVelocity`, not `canmove`.
 
-This distinction is visible in presentation as well as simulation. A
-zero-velocity factory remains on the fixed-structure model-lighting path even
-though its FBI exposes the move command and its COB animates doors, pads, and
-other pieces. In retail, its shaded pieces use the signed, vertex-interpolated
-`PALETTE.SHD` ramp described in [pal.md](pal.md); classifying the same unit as
-mobile incorrectly replaces that gradient with mobile flat-face shading.
+This distinction is visible in presentation as well as simulation, but the
+field that decides it is `BMcode`, not `canmove`. Retail runs its shaded piece
+renderer only for `BMcode=0` definitions (and only while the `Shading` display
+option is on); everything else is drawn by a second piece renderer that maps
+textured faces with no `PALETTE.SHD` step. A zero-velocity factory authors
+`canmove=1` and `BMcode=0`, so it is shaded through the vertex-interpolated
+ramp described in [pal.md](pal.md) even though its FBI exposes the move
+command and its COB animates doors, pads, and other pieces. Classifying that
+unit as mobile — or gating the renderer on `canmove` or `MaxVelocity` —
+removes its shading entirely. See
+`research/retail-executable-spec/03` `[R-RND-02A]`.
 
 ### Combat
 
@@ -287,7 +292,7 @@ mobile incorrectly replaces that gradient with mobile flat-face shading.
 | `SoundCategory` | Category in `gamedata/SOUND.TDF` |
 | `Corpse` | Feature left on death ([tdf.md](tdf.md)); chained via the feature's `featuredead` |
 | `ai_limit`, `ai_weight` | AI directives stored as raw text. **Split (2026-08-26):** `ai_weight` IS consumed — the strategic-AI pass parses its text with the profile grammar; `weight` directives reach the live per-unit-type weight array (default 100, clamped to 0..100) that scales build-candidate scores, and embedded `limit` directives are registered too. `ai_limit` has NO runtime reader — the live per-type limit array is populated only by the `ai/` profile parser's `limit` token, never by this key; do not treat `ai_limit` as the source of the retail candidate limit. |
-| `Ovradjust` | Authored as `1` on 173 retail units. Its name makes legacy 3D overlap adjustment a candidate meaning, but it cannot select a uniform parent/child bias: both `ARMSOLAR` and `ARMAP` set it while their shallow piece intersections resolve differently. Exact semantics remain unconfirmed. |
+| `Ovradjust` | Authored as `1` on 173 retail units. No runtime reader was found in the bounded census, so its semantics remain **Unknown**; the field is retained as authored data and no overlap, heading, or geometry behavior is assigned. |
 | `sortbias` | Read by the engine; effect unconfirmed. |
 | `armoredstate` | Read by the engine and authored by no shipped unit: the starting value of the armored flag that `DamageModifier` scales. |
 | `wacky` | Read by the engine and authored by no shipped unit. Purpose unresolved. |
@@ -301,9 +306,11 @@ mobile incorrectly replaces that gradient with mobile flat-face shading.
   being established by observation.
 - Several flags above carry community-guessed semantics (`BMcode`,
   `MoveRate1`, `PitchScale`, `sortbias`, `Ovradjust`). `BuildAngle`
-  is confirmed to affect built-unit heading, but its exact random distribution
-  is still provisional. `Scale` and `Ovradjust` are now known to be inert:
-  the engine has no string for either.
+  has an established unsigned-bound sampler, signed conversion, heading range,
+  and lifecycle contract [04 §2.3b]. `Scale` is known to be inert: the engine
+  has no string for it. `Ovradjust` has no recovered runtime reader in the
+  bounded census, so its semantics remain **Unknown** and no behavior is
+  assigned.
 - `DamageModifier`'s armored-state reading gained independent support: the
   executable reads an `armoredstate` FBI key that no shipped unit
   authors, which is what a script-toggled armored flag with an authored initial

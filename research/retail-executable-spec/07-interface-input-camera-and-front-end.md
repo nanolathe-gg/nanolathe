@@ -1084,6 +1084,220 @@ outer health rectangle uses entry `dcb[0]`; the inner fill is inset before
 the current/max fraction is truncated toward zero. This is separate from
 the side `DAMAGEBAR` anchor, whose placement remains data-authored.
 
+#### R-HUD-02R — footer state, priority, and formatting boundary
+
+This subsection is the implementation contract for the bottom/status readout.
+It deliberately separates what the executable proves from fields that are only
+suggested by anchor names. The battle composer has a diagnostic path whose
+visible strings include `Unit State Probe`; that path is an optional debug
+overlay, not the ordinary unit-information footer. A previous evidence note
+described that diagnostic output as the operational hover/status footer. That
+description is corrected here: the ordinary footer's state multiplexer and
+field writers are not located in the surviving static corpus.
+
+**Established (direct-static).** Selection and world hover are separate state.
+The pointer update publishes the hover result once per host frame, and click
+and cursor targeting consume that same result [R-SEL-02B2]. A hovered unit can
+therefore coexist with a selected primary or selected group; selecting or
+clearing a unit does not, by itself, establish that the footer replaces the
+hover readout. The side loader does establish the available semantic anchors:
+`UNITNAME`, `DAMAGEBAR`, `UNITMETALMAKE`, `UNITMETALUSE`, `UNITENERGYMAKE`,
+`UNITENERGYUSE`, `MISSIONTEXT`, `UNITNAME2`, `DAMAGEBAR2`, `NAME`, and
+`DESCRIPTION`, along with the reload anchors. It does not establish which
+ordinary footer state writes each anchor.
+
+**Unknown (direct-static boundary).** No reviewed operational path closes the
+priority among status/mission text, build-card hover, world-unit hover,
+selected primary, selected group, and no target. In particular, the following
+are not established by anchor names or by the existence of separate selection
+and hover state:
+
+* whether status/mission suppresses every other source or only supplements it;
+* whether build-card hover precedes or follows world-unit hover;
+* whether world-unit hover replaces selected-unit fields or supplements them;
+* whether a primary selection differs from a one-member group for footer data;
+* which of the `UNITNAME`/`UNITNAME2` and `DAMAGEBAR`/`DAMAGEBAR2` pairs is
+  primary versus secondary; and
+* what the no-target state clears, leaves latched, or renders from the root
+  `MAIN2` page.
+
+The evidence boundary for the requested state-to-anchor mapping is therefore:
+
+| Candidate state | Anchor names suggested by the side record | Confidence for ordinary-footer use |
+| --- | --- | --- |
+| Status or mission text | `MISSIONTEXT` | **Unknown** — status scrollback and mission data are established separately, but this footer writer is not located. |
+| Build-card hover | `NAME`, `DESCRIPTION` | **Unknown** — the build-page product identity is established, not this footer consumer. |
+| World-unit hover | `UNITNAME`, `DAMAGEBAR`, the four unit make/use anchors, and possibly the `2` pair | **Unknown** — hover hull admission is closed; text/bar writes are not. |
+| Selected primary unit | The same unit-information anchor family | **Unknown** — single-selection command-page switching is separate from footer writes. |
+| Selected group | The same unit-information anchor family, or an aggregate subset | **Unknown** — no aggregate footer write is proven. |
+| No target | No dynamic field, or the root `MAIN2` page | **Unknown** — clearing and latching behavior are not proven. |
+
+This table is an anchor census, not a claim that similarly named fields are
+written in those states. The side loader's required-anchor failure behavior and
+the tuple order remain established in §6; only the runtime consumer assignment
+is open.
+
+The safe deterministic API is consequently a candidate-preserving record with
+an explicit unresolved mux result, not a guessed UX order. The retail priority
+and replacement/supplement mode are outputs of the yet-to-be-traced state
+writer. A `retailRank` is useful only after that writer has produced it; an
+unproduced rank must never be treated as a selector:
+
+```text
+collectFooter(record):
+    # Keep every present source; this is not a priority reduction.
+    return FooterCandidates(
+        sources = record.candidates in recorded stable order,
+        muxMode = record.muxMode,              # Replace/Supplement/Unknown
+        ranks = record.retailRanks,            # values may be Unknown
+    )
+
+resolveFooter(candidates):
+    if candidates.muxMode == Unknown:
+        return FooterResolution{mode: Unknown, candidates: candidates}
+    if any present candidate has an Unknown retailRank:
+        return FooterResolution{mode: Unknown, candidates: candidates}
+    if candidates.muxMode == Replace:
+        chosen = stable minimum rank (equal ranks keep earlier candidate)
+        return FooterResolution{mode: Replace, candidates: candidates,
+                                chosen: chosen}
+    # Supplement is known, but its field/anchor render sequence is not.
+    return FooterResolution{mode: Supplement, candidates: candidates,
+                            renderSequence: Unknown}
+```
+
+This shape is deterministic and implementation-facing without dropping any
+candidate. A producer must not publish a hard-coded status > build > hover >
+primary > group order, and a renderer must not compare placeholder ranks. The
+frame record retains every candidate's source, payload, presence bit, and
+optional rank, together with `muxMode`; that makes the unresolved
+replacement/supplement behavior observable without reading live simulation
+state during drawing. `NoTarget` is a source value only when the record says
+there is no present candidate; it does not by itself prove that the previous
+footer pixels are cleared.
+
+**Established (content and text primitives).** A unit display name and
+description come from the language-prefixed authored-field accessor: it tries
+`<language>name`/`<language>description` and then the plain field [02 §6]
+[fmt fbi]. The returned authored capitalization is preserved; no uppercasing
+or canonical-identifier fallback is established for the footer. The bitmap
+text path measures glyph advances, truncates to a supplied maximum width
+before clipping, and then clips to the destination [07 §7]. This is a
+primitive contract only; it does not prove that any particular footer field
+passes a maximum width.
+
+**Unknown (footer field sources).** For a world unit or selected unit/group,
+the value behind each make/use field is not closed. The content meanings are
+closed: `EnergyMake` and `EnergyUse` are authored active-state rates, and
+metal production is `MetalMake`; retail has no `MetalUse` key, so metal upkeep
+is represented by a negative `MetalMake` [fmt fbi]. The top-strip production
+and consumption values are a different, established presentation record: they
+are latched every 30 simulation ticks and use integer energy or one-decimal
+metal formatting [07 §6]. That cadence and formatting must not be copied into
+the unit footer without evidence. The footer may use definition constants,
+active runtime values, accepted ledger values, or the latched presentation
+record; the surviving static path does not distinguish them. A committed
+footer value therefore needs a source tag (`definition`, `runtime`, `ledger`,
+or `latched`) and an explicit unknown value rather than silently borrowing the
+top-strip rate.
+
+**Unknown (damage and build-card formatting).** The health primitive's color
+thresholds and inset fill are established above, but they do not establish the
+footer damage-bar numerator, denominator, rounding, zero/dead visibility, or
+whether `DAMAGEBAR2` is an alternate state. Likewise, `NAME` and `DESCRIPTION`
+are plausible build-card anchors, and authored unit `name`/`description` are
+known inputs, but the build-button callback that supplies them is not traced.
+The exact build-card maximum widths, ellipsis policy, newline handling,
+line-wrap algorithm, and clipping rectangle are therefore Unknown. Until a
+probe records them, a renderer must preserve the source strings and use the
+generic FNT truncate-before-clip operation only when the committed record
+contains a traced maximum width; it must not invent wrapping, ellipses, or a
+second line. Unknown damage bars and unknown resource values remain absent,
+not zero-filled.
+
+The formatter contract below is intentionally total: every source has a
+deterministic result, but unresolved fields remain explicit `Unknown` values
+and cannot acquire behavior from a neighboring state.
+
+```text
+formatFooter(record, layout):
+    candidates = collectFooter(record)
+    resolution = resolveFooter(candidates)
+    if resolution.mode == Unknown:
+        return Footer{mode: Unknown, candidates: candidates,
+                      fields: Unknown, bars: Unknown}
+    if resolution.mode == Supplement:
+        return Footer{mode: Supplement, candidates: candidates,
+                      renderSequence: Unknown}
+    chosen = resolution.chosen
+    if chosen is none:
+        return Footer{mode: Replace, source: NoTarget,
+                      fields: Unknown, bars: Unknown}
+
+    out.source = chosen.source
+    out.statusMission = chosen.statusMission       # only when present
+    out.name = localizedAuthored(chosen.name)      # preserve authored case
+    out.description = localizedAuthored(chosen.description)
+    out.damage = chosen.damage                     # Unknown if not published
+    out.metalMake = rate(chosen.metalMake)          # retain source tag
+    out.metalUse = rate(chosen.metalUse)            # Unknown for retail unit data
+    out.energyMake = rate(chosen.energyMake)
+    out.energyUse = rate(chosen.energyUse)
+
+    for field in [statusMission, name, description, resource text]:
+        if field.maxWidth is present:
+            field.text = fntTruncateBeforeClip(field.text, field.maxWidth)
+        # A line-wrap policy is required before emitting multiple lines.
+        # If it is not in the record, leave the field single-line/unresolved.
+    draw only fields whose presence bit is set, at their traced anchor.
+```
+
+The `rate` formatter must carry the source tag through to presentation. When
+the source is the established top-strip resource record, energy is integer
+text, energy values outside inclusive `-99999..99999` use the truncated
+integer `K` form, consumption strips its sign in the normal range, and metal
+uses one fractional digit with absolute-valued consumption [07 §6]. These
+rules are **not** a claim about unit-footer rates. No-target clearing,
+status/mission replacement, field pairing, damage arithmetic, and build-card
+wrapping remain Unknown until the probes below produce the missing record.
+The `Unknown` result for an unresolved mux is a typed implementation sentinel;
+it is not a retail claim that the previous pixels are cleared or latched. The
+`Replace`/`Supplement` branches become usable only when the committed record
+contains the corresponding traced mode and all ranks/field render order needed
+by that branch. This is the explicit block for P28-HUD-02I: it must carry the
+stable candidates forward rather than inventing a single winner.
+P28-HUD-02I remains blocked on the named residuals: state priority, anchor
+pairing, replacement versus supplement, no-target clearing, footer damage
+source/rounding/visibility, unit make/use provenance and format, and build-card
+`NAME`/`DESCRIPTION` clipping or wrapping.
+
+**Executable probes and evidence.** A focused capture can close the remaining
+contract without relying on visual plausibility:
+
+1. Hold a mission/status message visible while independently hovering a build
+   product, a world unit, and empty terrain; repeat with one selected unit and
+   then a selected group. Record every footer anchor's text and clear/write
+   event per host frame. This resolves priority and replacement versus
+   supplement, including the no-target clear rule.
+2. Use two authored unit definitions whose localized and plain names differ in
+   case and spelling. Compare hover, primary, and group output while changing
+   the active language. This resolves the footer name source and capitalization
+   without treating a canonical unit id as display text.
+3. For one active resource-maker and one builder, hold definition values fixed
+   while changing active state and accepted resource deltas across 29, 30, and
+   31 simulation ticks. Capture the displayed make/use values and damage bar
+   endpoints. This distinguishes definition, runtime, ledger, and 30-tick
+   latched sources and records rounding/visibility at zero and death.
+4. Supply build-card names/descriptions containing spaces, a long unbroken
+   token, explicit newlines, and a localized variant. Capture the `NAME` and
+   `DESCRIPTION` rectangles at widths just below and above each measured line.
+   The result must record clipping, truncation, wrapping, and ellipsis
+   separately; absence of a line-break write remains Unknown.
+5. For hover hulls, sample an interior point, each projected edge, and points
+   just across each edge with two overlapping units. Capture the stable hot
+   list and winning id. This settles the remaining bounds-extrema mapping and
+   validates strict polygon admission against the pseudocode in [R-SEL-02B2].
+
 Whenever the offset is nonzero, the moving strip is blitted at y+offset and
 three translated strings are drawn onto it: `Game Time:` as `hh:mm:ss`,
 `Total Units: %d (Max %d)`, and `Game Speed: %s%s` with a `(+/-n)` suffix
@@ -1116,6 +1330,9 @@ share drawing primitives, but must retain the side-data anchor contract.
 
 All invoked retail anchors and their tuple order are established above; slide/modal
 combinations and per-side fallback for optional presentation remain incomplete.
+The ordinary footer's source priority, replacement/supplement rule, field
+pairing, and no-target clearing remain the explicit R-HUD-02R residual; the
+diagnostic `Unit State Probe` strings are not evidence for those behaviors.
 
 **Battle-rail minimap destination is closed (Established).** The battle composer
 copies the FINAL radar surface to the origin of its fixed 126×126 logical canvas.
@@ -1349,10 +1566,13 @@ The four consumers have the following established split:
   target-dependent cursor branches; no authored selection primitive is read.
 
 The established drag boundary rule is therefore `min <= coordinate <= max`
-after independent endpoint sorting. The exact inclusion convention for a
-point lying on an edge of the projected four-corner hover polygon is not
-visible in the current static corpus; it must not be borrowed from the drag
-rectangle rule.
+after independent endpoint sorting. **Correction (2026-08-28):** the earlier
+version of this paragraph left the projected-hull edge convention open and
+proposed an edge probe. R-SEL-02B2 now closes that question: the polygon helper
+requires a strictly positive signed cross-product at every edge, so equality
+on an edge is rejected. That strict rule must not be confused with the
+inclusive drag-rectangle rule; only the bounds-extrema-to-corner mapping
+remains open [R-SEL-02B2].
 
 **Established layer order and clipping.** World terrain, features, units,
 projectiles, and effects are composed first; the world fog/LOS overlay is
@@ -1385,8 +1605,8 @@ pass, an extra primary-selection wireframe/chrome rule, or an authored plate
 used for cursor targeting. Whether the UI adds primary-only information in a
 separate HUD page is outside this wireframe path. A focused capture with two
 selected units, a single/primary selection, overlapping hover hulls, and
-pointer samples exactly on each hull edge would settle those remaining
-questions.
+pointer samples around the hull corners would settle those remaining questions;
+edge equality itself is already closed by R-SEL-02B2.
 
 #### R-SEL-02B2 — hover hull arithmetic and publication boundary
 
@@ -1435,11 +1655,34 @@ the authored selection face, or a bind-pose box until that mapping is traced.
 
 **Established (direct-static).** The four projected corners are passed to a
 four-point polygon hit helper. The helper's return value is the sole viewport
-hull admission test. The static corpus does not expose whether a point exactly
-on an edge is inside or outside (nor its integer cross-product/rounding
-convention). The inclusive rule documented for drag rectangles therefore does
-not apply to hover hulls. Exact click/cursor edge parity remains blocked until
-an edge probe or the helper body establishes that convention.
+hull admission test. It rejects fewer than three vertices, then visits each
+edge in order and admits the point only when the signed cross-product test is
+strictly positive. Each product is evaluated as a signed 32-bit value (the
+low signed product is retained); equality therefore rejects the point. The
+inclusive rule documented for drag rectangles does not apply to hover hulls.
+This strict edge rule is shared by the precomputed hover id consumed by click
+and cursor paths.
+
+The clean-room form of the tested predicate is:
+
+```text
+containsStrictPolygon(point, vertices):
+    if len(vertices) < 3:
+        return false
+    for i in 0 .. len(vertices)-1:
+        prev = vertices[i]
+        next = vertices[(i + 1) mod len(vertices)]
+        lhs = signed32((next.x - prev.x) * (point.y - prev.y))
+        rhs = signed32((next.y - prev.y) * (point.x - prev.x))
+        if lhs <= rhs:
+            return false
+    return true
+```
+
+For the retail hover path `vertices` has four entries. `signed32` means that
+the low signed 32-bit product is the value compared; it is not a floating
+point cross product and has no epsilon. The corner order and the mapping from
+the box's six extrema into those four entries remain the named residual above.
 
 **Established (direct-static).** Among candidates whose polygon admits the
 pointer, the hover reduction computes the following fixed-point score, using
@@ -1463,8 +1706,9 @@ retains the first member on an equal distance.
 **Established (direct-static).** The click path consumes the hover id already
 computed by the pointer update; it does not recompute the hull. Cursor target
 shapes consume that same hover/visibility result. Thus cursor and click agree
-for every admitted interior point, while the unresolved polygon edge rule is a
-shared unresolved boundary rather than two independent policies.
+for every admitted interior point and reject an edge point under the same
+strict polygon test; only the unresolved corner construction remains a shared
+boundary rather than two independent policies.
 
 **Presentation publication gap (supported inference from [03 §2.4] and
 [03 §2.5]).** The committed `frame.UnitView` currently publishes the unit
@@ -1486,8 +1730,8 @@ four-corner hull inputs (or the six extrema plus their documented mapping),
 visibility/eligibility admission, and the three score terms. Until those
 fields or an equivalently traced pure helper are published, replacing the
 current 16-pixel picker is not established. `TODO(question)`: trace the box
-helper and four-point polygon helper, then publish their exact inputs at the
-frame boundary; an edge probe must settle inclusive/exclusive behavior.
+helper's six-extrema-to-corner mapping and publish those exact inputs at the
+frame boundary. The polygon helper's strict edge rule is closed above.
 
 ### Supported inference
 
@@ -1498,11 +1742,12 @@ cell, minimap, or GUI control consumes the action.
 ### Unknown
 
 The hull's existence, its four-point projection stage, and unit-only hot-list
-scope are established in [R-SEL-02B2]. The exact polygon edge convention and
-the bounds-helper component mapping are not. In particular, the earlier
+scope are established in [R-SEL-02B2]. The exact bounds-helper component
+mapping is not. In particular, the earlier
 wording that called the complete picking hull closed was too broad: it closed
-the high-level shape but did not establish the arithmetic needed for a
-pixel-for-pixel replacement. Feature-vs-unit priority remains closed only in
+the high-level shape and polygon arithmetic but did not establish the
+extrema-to-corner mapping needed for a pixel-for-pixel replacement.
+Feature-vs-unit priority remains closed only in
 the narrow sense that features are absent from this unit hover list; reclaim
 families resolve features separately at the pointer.
 
@@ -2223,7 +2468,8 @@ implementation decision, not a further retail finding.
 ### Established fact
 
 The running display includes live resource bars and numbers, game time/speed
-text, unit hover/selection information, damage and queue indicators,
+text, a unit hover/selection information region (its ordinary footer source
+and field mux remain the R-HUD-02R residual), damage and queue indicators,
 scrollback/status messages, chat, minimap, panel chrome, cursor, and fog.
 
 Chat opens the `TALK.GUI`/`TALK2.GUI` text-entry overlay specified in section
@@ -2453,7 +2699,11 @@ minimum-ping write-back are established above.
   values, production/consumption, and bar fills in the composer's side record
   — the remaining anchors' consumers stay open), and slide/modal combinations
   (anchor list, tuple order, slide animation, and frame-composition passes are
-  established). The malformed non-null GAF payload outcome remains unknown.
+  established). R-HUD-02R narrows the remaining footer gap: state priority,
+  replacement/supplement behavior, ordinary footer anchor pairing, damage-bar
+  source/rounding/visibility, unit make/use source and formatting, and build
+  `NAME`/`DESCRIPTION` clipping or wrapping are Unknown. The malformed
+  non-null GAF payload outcome remains unknown.
 * Exact battle HUD optional-asset fallback behavior beyond the closed
   `intgaf` panel entries, side fonts, authored GUI page, page GAF, support GAF,
   and common-button resolution above.
@@ -2470,15 +2720,16 @@ minimum-ping write-back are established above.
   handle slot 0 identity (latch-value table, cursor index table, build-site
   validity cursors, and the queue-overlay color pairs 3/10 and 1/9 are
   established; the overlay color-map entries are closed in [R-P0-11 §3]).
-* Picking is closed only through the high-level admission shape and score:
-  the hover path walks the sensor-built unit list, projects a transformed
-  hierarchy box as four points, uses a polygon helper, and applies the
-  strict-score reduction [R-SEL-02B2]. The exact bounds-helper component
-  mapping, polygon arithmetic, and edge inclusion remain **Unknown**; the
-  current 16-pixel presentation picker cannot replace this path without a
-  committed hull record or a traced pure helper. The visibility gate is the
-  word-grid bit `1 << (localPlayer & 0x1F)` versus the per-viewer byte grid;
-  the byte-grid writer semantics remain owned by doc 03.
+* Picking is closed through the high-level admission shape, strict polygon
+  arithmetic, and score: the hover path walks the sensor-built unit list,
+  projects a transformed hierarchy box as four points, rejects edge equality
+  in the polygon helper, and applies the strict-score reduction [R-SEL-02B2].
+  The exact bounds-helper component mapping and the provenance of its six
+  extrema remain **Unknown**; the current 16-pixel presentation picker cannot
+  replace this path without a committed hull record or a traced pure helper.
+  The visibility gate is the word-grid bit `1 << (localPlayer & 0x1F)` versus
+  the per-viewer byte grid; the byte-grid writer semantics remain owned by doc
+  03.
 * Selection overlap pick order — drag endpoints sorted independently, inclusive
   `min <= x <= max` tested per axis, stable pool sweep with strict `<` distance
   tie-break favoring lower slot [P1-14] — and fog word bit versus byte

@@ -124,15 +124,19 @@ themselves (row 14 maps 216). Rows below it darken, reaching near-black at
 row 0, which maps only index 0 to itself and drops mean luminance by about
 97. Rows above it *brighten* past identity, up to about +54 mean luminance at
 row 31 — the top rows do not approach identity, they overshoot it. Used for
-shadows, terrain shading, and model face lighting; `dont-shade` COB pieces
-select the identity row directly.
+shadows, terrain shading, and structure model face lighting; `dont-shade` COB
+pieces select the identity row directly.
 
-For model lighting, `canmove` in an FBI cannot by itself select the mobile
-shading path. Retail factories set it so their move order can place an output
-rally point, yet have `MaxVelocity=0` and remain fixed structures. Their
-shaded pieces use fixed-structure vertex interpolation through this full
-signed SHD ramp; actual locomoting units use the mobile flat-face path. See
-[fbi.md](fbi.md) for the source-field distinction.
+**Which models reach this table.** Retail applies model face shading only to
+units whose FBI authors `BMcode=0` — the structure class — and only while the
+`Shading` display option is on. Mobile units (`BMcode=1`) are drawn by a
+separate piece renderer that maps their textured faces with no SHD step, so
+they show no orientation-dependent shading at all; a `dont-shade` in a mobile
+unit's script is inert. `canmove` does not select the path and cannot: retail
+factories author `canmove=1` so their move order can place an output rally
+point, yet have `MaxVelocity=0`, `BMcode=0`, and are shaded like any other
+structure. See [fbi.md](fbi.md) for the field distinction and
+`research/retail-executable-spec/03` `[R-RND-02A]` for the gate.
 
 The two tables overlap in what they can express: LHT covers roughly the same
 brightening range as SHD rows 15–31 at twice the resolution (LHT row 3 and
@@ -146,7 +150,7 @@ binding of `LHT` are confirmed directly against the retail tables. The
 `level` to flash-intensity mapping and any fading envelope across ticks
 are presentation tuning not captured by the file format. Darkening and
 full-range lighting use `SHD`, not `LHT` — see that section for the
-identity row and the mobile vs fixed-structure distinction.
+identity row and the structure-only reach of model face lighting.
 
 The following mean-luminance deltas for `LHT` rows are useful as generation
 oracles or as test fixtures; they were measured against the retail palette
@@ -171,8 +175,8 @@ rather than an 8-bit channel value. An entry of `0` names black; `255`
 names white. The fourth PAL byte is never consulted when building the
 table.
 
-For 3DO model face lighting the row selection is established: the row is
-computed per vertex from the face-averaged smooth normal as
+For 3DO model face lighting — reached only by `BMcode=0` structures, see
+above — the row selection is established: the row is computed per vertex from the face-averaged smooth normal as
 `trunc(dot(N, L) * 5.0) mod 32`, with the shipped default light direction
 `L = (-0.8, 1.0, 0.25)` (user-settable through three settings written via a
 dedicated setter that rebuilds the shadow caches). COB `dont-shade` pieces

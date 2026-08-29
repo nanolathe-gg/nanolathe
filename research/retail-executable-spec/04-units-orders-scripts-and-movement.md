@@ -129,7 +129,12 @@ after cleanup without a generation counter.
 
 **Established fact:** Unit allocation scans for the lowest available slot, while slot zero is reserved as a null sentinel. There is no verified generation number. References represented by slot or pool identity can alias a later unit after reuse. Projectile and order references must follow the retail validation rules rather than assuming generational safety.
 
-**Established fact:** Save reconstruction preserves unit slot identity and repairs cross-unit references after the units are reconstructed. A failed unit allocation can cause the saved record to be skipped.
+**Established fact (retail path, future parity only):** Save reconstruction preserves
+unit slot identity and repairs cross-unit references after the units are
+reconstructed. A failed unit allocation can cause the saved record to be
+skipped. Nanolathe's active boundary is narrower: in-battle restoration is an
+explicitly unsupported result, so this reconstruction behavior does not
+authorize a live restore implementation ([PLAN_14 C10]; [INVARIANTS I13]).
 
 **Established fact — pool capacity [P0-16]:** The physical pool capacity is
 `(u16)catalogDefCount · 10 + 1` records of 0x118 bytes, allocated at battle
@@ -160,6 +165,80 @@ sentinel. A valid order is therefore a total permutation of `0..9`; malformed
 or duplicate values are rejected before allocation. The exact provenance and
 semantic name of `PlayerSortKey` are not needed by the comparator contract and
 remain outside this section's scope. [R-P0-16]
+
+### 2.3b Unit-initialization heading [R-P28-ANG-01R §2]
+
+**Correction (2026-08-28).** A prior bounded allocator note called unit
+allocation RNG-free because it inspected the outer allocation scan only. That
+was incomplete: successful allocation enters the common initializer below,
+which performs the heading draw (and a separate initialization draw). The
+failure result remains RNG-free because it returns before that initializer.
+
+**Established — one allocator initialization draw.** Every successful call to
+the canonical unit allocator reaches the common position/state initializer.
+That initializer reads the compiled `buildangle` value as an unsigned 16-bit
+bound and invokes the global Park–Miller simulation stream once. The stream is
+the single battle-wide state, seeded at battle entry from the low-plus-high
+`QueryPerformanceCounter` value XORed with `0x66e29572` and forced odd; it is
+not reseeded per unit or per player [01 §7.2]. If `b` is the
+bound and `r` is the returned value, the sampler's result is in `[0,b)` for
+`b >= 2`; for `b < 2` the helper returns zero without advancing the stream.
+The heading written by the initializer is:
+
+```text
+r16 = sign_extend_16(r)
+heading = uint16(r16 - 0x8000 - (uint16(buildangle) >> 1))
+```
+
+The signed 16-bit conversion of the random result is part of the arithmetic,
+as is the final conversion to the 16-bit circular heading domain. With the
+stock `buildangle=4096`, the possible initial headings are `30720..34815`
+(inclusive), centered on `32768` (the 180-degree/south direction). With the
+default `buildangle=0` (and likewise with a bound of one), the initialized
+heading is `32768` and no angle draw advances the stream.
+
+The same initializer then performs a separate full-domain simulation draw for
+another unit-state field. That draw is not part of heading selection; callers
+that model the common allocator must preserve its position in the global RNG
+call order even though the field's semantic name is outside this finding.
+
+**Lifecycle and writer census — Established.** The allocator is the only
+heading writer in the common unit-creation path. Mission-unit creation invokes
+the allocator first and then copies the authored mission placement angle over
+the initialized heading [08 "Unit creation and InitialMission timing — Established"].
+Factory products are allocated as nanoframes and retain the initialized
+heading; the factory's `QueryBuildInfo` result supplies a position, not a
+separate product-heading adjustment. Completion, `GetBuilt`, and the factory
+queue do not rewrite that heading. Mobile movement may subsequently update a
+unit's heading through its normal desired-heading integrator, but this is not
+an angle-adjustment read.
+
+The authored mission-placement record's facing angle is a separate writer: it
+is copied over the initializer result after a mission unit is allocated. The
+heading-form `StartBuilding` variant likewise carries the producer's current
+heading to the producer's script as its first argument; it does not write the
+new product's heading. Construction-command placement therefore has no
+additional build-order heading adjustment. A mobile builder's heading toward
+the selected build goal is produced by ordinary movement steering, not by
+`buildangle`.
+
+**Retail save-reconstruction finding (future parity only).** Save
+reconstruction also invokes the allocator (including the forced-slot path),
+consuming the initialization draws, and then restores the saved unit heading.
+Thus a saved heading is authoritative and is not recomputed from `buildangle`;
+a restored unit's RNG position still includes the allocator's draw sequence. A
+failed limit/slot allocation returns before common initialization and consumes
+no angle draw. Nanolathe currently returns an explicit unsupported result for
+in-battle restoration, so this preserves the required future draw ordering but
+does not authorize implementing a live restore path ([PLAN_14 C10];
+[INVARIANTS I13]).
+
+No slope/ground-alignment, construction-completion, renderer-only, or
+`ovradjust` heading writer was found in the bounded census. Placement and
+pathing use the axis-aligned footprint rectangle and do not consume or rotate
+it from this initial heading. The separate producer-model transform question
+at the factory exit remains the [R-P0-02] model/position residual, not an
+additional product-angle rule.
 
 ### 2.4 Unit flags and state transitions
 
@@ -1492,12 +1571,23 @@ callback. `DONT_SHADE` does occur in `Create`, addressing individual pieces:
 none in ARMCOM, CORCOM, ARMPW, CORAK, ARMSTUMP, ARMFIG, or CORVAMP; 10 in
 CORSOLAR; 15 in ARMLAB; 18 in CORLAB; 11 in ARMVP; 15 in CORVP; 11 in
 ARMAAP; and 18 in CORAAP. The stock mobile scripts in this set therefore
-leave their model-fill shade default in place, while factory scripts make
+leave their model-fill shade default in place, while structure scripts make
 explicit per-piece exceptions. **Established (static bytecode census,
 `totala1.hpi`):** no class-wide shade initializer was found in this bounded
 corpus; no `SHADE` or `DONT_SHADE` occurs in the `Activate`/`Deactivate`
-callbacks. The exact runtime fixed/mobile selector remains owned by the
-renderer contract and does not change this piece-flag polarity.
+callbacks.
+
+**The bit only matters on structures.** The renderer contract has since been
+corrected ([R-RND-02A]): retail runs the shaded piece renderer only for a unit
+whose definition authors `BMcode=0`, and only while the `Shading` display
+option is on. The unshaded renderer every other unit takes reads this same
+piece flags byte for the draw bit and the cache bit and **never reads bit 2**.
+So `SHADE` and `DONT_SHADE` in a `BMcode=1` script write a bit that nothing
+consumes — which is why every stock script in the census that uses the opcode
+is a structure, and every mobile row is zero. The polarity above is unchanged
+by that correction; only its reachability is. An implementation should still
+write the bit faithfully from the opcode rather than dropping the write,
+because a unit's `BMcode` is authored data and a mod may set it either way.
 
 **Thread state words.** A thread's status word encodes its state in the high
 byte, with a sub-state in the next nibble for the waiting family: idle,

@@ -1185,6 +1185,45 @@ linked into the node payload. If the allocator refuses (limits or pool
 exhaustion), the handler prints "Unable to create any more units", schedules
 a retry in exactly 300 ticks (not randomized), and stays in state 2.
 
+### Factory product heading [R-P28-ANG-01R §3]
+
+**Established — construction scope.** A successful factory allocation uses the
+common unit initializer's `buildangle` sampler and therefore consumes one
+global simulation-stream angle invocation (plus the initializer's separate
+full-domain draw for another unit-state field). For the stock `ARMSOLAR` and
+`ARMLAB` records, `buildangle=4096`, so the product's initial heading is in the
+inclusive circular range `30720..34815`, centered at `32768`; the exact signed
+conversion and range arithmetic are specified in [04 §2.3b]. The factory's
+`QueryBuildInfo` callback contributes the exit **position** only. No factory
+heading offset, slope alignment, or `Ovradjust` read follows it.
+
+The initialized heading is authoritative through nanoframe work and natural
+completion: neither the completion transition nor `GetBuilt` rewrites it.
+Mobile products can later change heading through ordinary movement integration
+when a rally order is inherited, but that is a movement update rather than a
+second build-angle draw. The footprint anchor, yard-map validation, occupancy,
+and pathing remain axis-aligned and are computed from the authored extents;
+the initial heading does not rotate or enlarge those rectangles.
+
+**Established — failure and persistence boundaries.** The factory validates
+the snapped product rectangle before invoking the allocator. A blocked exit
+therefore consumes no angle draw and retries silently after exactly 15 ticks.
+An allocator refusal (per-definition limit or full slice) also returns before
+common unit initialization, consumes no angle draw, and takes the distinct
+300-tick retry with its diagnostic. No failed placement consumes a speculative
+random angle.
+
+**Retail save-reconstruction finding (future parity only).** When a factory
+product is saved after allocation, its saved heading is the authoritative value
+restored by the unit-save path; restore does not recompute it from `buildangle`.
+A new successful allocation during save reconstruction still enters the common
+initializer and consumes its normal draw sequence before the saved heading is
+copied back. Mission placement has the analogous allocator-then-authored-angle
+overwrite described in [04 §2.3b]. Nanolathe's active boundary currently
+returns an explicit unsupported result for in-battle restoration, so this
+preserves future allocator draw ordering but does not authorize a live restore
+implementation ([PLAN_14 C10]; [INVARIANTS I13]).
+
 **Success epilogue.** Message "Starting construction"; register the builder
 link on the product; copy standing-order bits 18-19 (standing move) and 20-21
 (standing fire) from the factory's class/state word onto the product's;
@@ -1497,9 +1536,12 @@ tail-only count coalescing are established above. Each successful product is
 revalidated before allocation, but the same-pass occupancy publication window
 means that a no-stacking guarantee for multiple coalesced products is not
 established. A rotated factory contributes orientation through the resolved
-`QueryBuildInfo` piece transform; no separate heading offset is read. The
-stock authored result for rotated factory variants remains **Unknown** pending
-the COB/asset census.
+`QueryBuildInfo` piece transform; no separate product-heading offset is read.
+The product's independent initial heading is the common allocator's
+`buildangle` result, now established in [R-P28-ANG-01R §3]. The remaining
+**Unknown** is narrower: whether a rotated producer's stock exit transform
+coincides with its geometric/model center after the 3DO transform, which does
+not change the product-heading contract.
 
 This audit supersedes no established lifecycle text. It narrows the earlier
 release gap: the engine-side production and rally handoff are closed, while a

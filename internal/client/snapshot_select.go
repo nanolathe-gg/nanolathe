@@ -62,10 +62,13 @@ func SnapshotPointVisible(m frame.VisibilityView, x, y, z numeric.Fixed, viewer 
 	return false
 }
 
-// PickSnapshotUnit is the immutable production picker. It returns a copied
+// PickSnapshotUnit is the immutable presentation picker. It returns a copied
 // UnitView value and stable pool handle, never a pointer into the live world.
-// The 16px radius is inclusive; strict '<' winner comparison preserves the
-// lower-slot winner on equal squared distance [07 §9].
+// Keep the current 16px-radius approximation stable and deterministic while
+// the retail hull contract remains unpublished here [07 R-SEL-02B2].
+// TODO(question): replace this approximation only after the bounds-helper
+// component mapping, committed HOT UNITS inputs/order, and polygon edge
+// arithmetic are traced and published at the frame boundary [07 R-SEL-02B2].
 func PickSnapshotUnit(f *frame.Frame, sx, sy int32, cam *camera.Camera, viewer uint8) (pool.Handle, frame.UnitView, bool) {
 	if f == nil || cam == nil {
 		return 0, frame.UnitView{}, false
